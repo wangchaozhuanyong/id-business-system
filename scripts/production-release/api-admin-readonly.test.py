@@ -562,16 +562,14 @@ class WorkspaceSuccessorReceiptTests(unittest.TestCase):
             init_globals={'SCOPE': 'API_ADMIN_WORKSPACE'})
         files = {name: '3' * 64 for name in self.namespace['ONLINE_ORIGIN_FILES']}
         files['release-manifest.json'] = '1' * 64
-        bootstrap = self.namespace['WORKSPACE_BOOTSTRAP_COMMIT']
-        self.origin = {'version': 1, 'commit': PREVIOUS, 'sourceTree': 'd' * 40,
+        self.origin = {'version': 1, 'commit': PREVIOUS,
             'release': f'/opt/id-business-v2/releases/20261009T000000Z-{PREVIOUS[:12]}',
             'manifestSha256': '1' * 64, 'buildProofSha256': '2' * 64, 'files': files,
-            'engineConfigurationSha256': 'c' * 64,
-            'workspaceOrigin': {'release': f'/opt/id-business-v2/releases/20261008T000000Z-{bootstrap[:12]}',
-                'commit': bootstrap, 'recordSha256': '4' * 64,
-                'volume': {'name': 'fixture_auto_registration_data', 'status': 'PRESENT',
-                    'identitySha256': '5' * 64}}}
-        self.marker = self.namespace['online_successor_marker'](self.origin)
+            'migrationState': {'name': '20261009093000_online_recharge',
+                'sha256': '44966182c1bf38290b01f665a4c2c863b052677c5e0024b900137f1d7f11eb95',
+                'status': 'APPLIED', 'schemaVerified': True, 'appliedMigrationsSha256': '3' * 64}}
+        self.volume = {'name': 'fixture_auto_registration_data', 'status': 'PRESENT',
+            'identitySha256': '5' * 64}
         names = ('api', 'admin', 'mysql', 'caddy', 'media-resolver', 'auto-recharge',
             'auto-registration', 'online-recharge')
         self.services = {name: {'image': 'sha256:' + str(index) * 64,
@@ -579,10 +577,15 @@ class WorkspaceSuccessorReceiptTests(unittest.TestCase):
             'containerId': str(index) * 64, 'startedAtSha256': 'a' * 64,
             'environmentSha256': 'b' * 64, 'configurationSha256': 'c' * 64}
             for index, name in enumerate(names, 1)}
+        self.services['online-recharge']['reference'] = f'{REPOSITORY}:{PREVIOUS}-123-1-online-recharge'
+        self.origin['binding'] = {key: self.services['online-recharge'][key] for key in
+            ('image', 'reference', 'environmentSha256', 'configurationSha256', 'containerId', 'startedAtSha256')}
+        self.origin['binding'].update(volumeIdentitySha256='6' * 64,
+            apiContainerId=self.services['api']['containerId'])
+        self.marker = self.namespace['online_marker'](self.origin)
         self.before = {'status': 'API_ADMIN_WORKSPACE_BASELINE_VERIFIED', 'mode': 'preflight',
             'commit': PREVIOUS, 'releaseCandidateCommit': COMMIT, 'workflowRunId': '123',
-            'workflowRunAttempt': '1', 'onlineOrigin': copy.deepcopy(self.origin),
-            'onlineSuccessorVerified': True, 'observedServiceCount': 8,
+            'workflowRunAttempt': '1', 'onlineRechargeOrigin': copy.deepcopy(self.origin),
             'services': copy.deepcopy(self.services)}
         self.migration_origin = {'version': 1, 'commit': self.namespace['MIGRATION_SUCCESSOR_COMMIT'],
             'release': '/opt/id-business-v2/releases/20261008T000000Z-' + self.namespace['MIGRATION_SUCCESSOR_COMMIT'][:12],
@@ -598,21 +601,28 @@ class WorkspaceSuccessorReceiptTests(unittest.TestCase):
         self.before.update(migrationOrigin=copy.deepcopy(self.migration_origin),
             guards=copy.deepcopy(self.migration_origin['guards']), freeBytes=7 * 1024**3)
         after = copy.deepcopy(self.services)
+        after['api'].update(containerId='9' * 64, startedAtSha256='d' * 64)
         after['online-recharge']['containerId'] = 'e' * 64
-        self.receipt = {'onlineSuccessorVerified': True, 'onlineEngineRebound': True,
-            'observedServiceCount': 8, 'migrationPerformed': False,
-            'preservedOnlineOrigin': copy.deepcopy(self.marker), 'services': after}
+        after['online-recharge']['startedAtSha256'] = 'f' * 64
+        binding = {**self.origin['binding'], 'apiContainerId': after['api']['containerId'],
+            'containerId': after['online-recharge']['containerId'],
+            'startedAtSha256': after['online-recharge']['startedAtSha256']}
+        self.receipt = {'servicesRebound': ['online-recharge'], 'migrationPerformed': False,
+            'preservedOnlineRechargeOrigin': copy.deepcopy(self.marker), 'services': after,
+            'onlineNetworkRebind': {'version': 1, 'before': copy.deepcopy(self.origin['binding']),
+                'after': binding, 'businessActions': 0,
+                'sqlFence': {'version': 1, 'busyCount': 0, 'sameConnection': True,
+                    'mysqlIdentitySha256': '7' * 64, 'connectionIdSha256': '8' * 64, 'businessActions': 0}}}
         self.receipt.update(preservedMigrationOrigin=self.namespace['migration_successor_marker'](self.migration_origin),
             migrationPreserved=True, taskHmacMatched=True, windowPreserved=True, registrationWindowRetained=True)
         self.environment = {'RELEASE_COMMIT': COMMIT, 'EXPECTED_CURRENT': PREVIOUS,
             'GITHUB_RUN_ID': '123', 'GITHUB_RUN_ATTEMPT': '1'}
 
     def validate_readback(self, receipt=None, before=None, environment=None):
-        with patch.object(Path, 'is_file', return_value=True), \
-                patch.object(Path, 'read_text', return_value=json.dumps(self.before if before is None else before)), \
-                patch.dict(os.environ, self.environment if environment is None else environment, clear=True):
-            return transport.validate_online_workspace_receipt(self.namespace,
-                self.receipt if receipt is None else receipt, COMMIT, 'readback')
+        return transport.validate_online_workspace_receipt(self.namespace,
+            self.receipt if receipt is None else receipt, COMMIT, 'readback',
+            before=self.before if before is None else before,
+            environment=self.environment if environment is None else environment)
 
     def test_original_workspace_contract_does_not_select_online_successor(self):
         self.assertFalse(transport.validate_online_workspace_receipt(self.namespace,
@@ -622,8 +632,8 @@ class WorkspaceSuccessorReceiptTests(unittest.TestCase):
         self.assertTrue(transport.validate_online_workspace_receipt(self.namespace,
             self.before, PREVIOUS, 'preflight'))
         cases = []
-        for key, value in [('onlineOrigin', None), ('onlineSuccessorVerified', False),
-                ('observedServiceCount', 7), ('observedServiceCount', 8.0)]:
+        for key, value in [('onlineRechargeOrigin', None), ('migrationOrigin', None),
+                ('guards', {}), ('freeBytes', 6 * 1024**3)]:
             cases.append({**copy.deepcopy(self.before), key: value})
         missing = copy.deepcopy(self.before)
         missing['services'].pop('auto-recharge')
@@ -634,6 +644,10 @@ class WorkspaceSuccessorReceiptTests(unittest.TestCase):
         unhealthy = copy.deepcopy(self.before)
         unhealthy['services']['online-recharge']['health'] = 'unhealthy'
         cases.append(unhealthy)
+        for key, value in [('configurationSha256', '9' * 64), ('containerId', None), ('extra', 'unsealed')]:
+            malformed = copy.deepcopy(self.before)
+            malformed['services']['online-recharge'][key] = value
+            cases.append(malformed)
         for value in cases:
             with self.subTest(receipt=value), self.assertRaisesRegex(RuntimeError, 'ONLINE_ORIGIN_RECEIPT_CHANGED'):
                 transport.validate_online_workspace_receipt(self.namespace, value, PREVIOUS, 'preflight')
@@ -642,17 +656,20 @@ class WorkspaceSuccessorReceiptTests(unittest.TestCase):
         self.assertTrue(self.validate_readback())
         for key, value in [('mode', 'readback'), ('commit', '9' * 40),
                 ('releaseCandidateCommit', '9' * 40), ('workflowRunId', '124'),
-                ('workflowRunAttempt', '2'), ('onlineOrigin', None)]:
+                ('workflowRunAttempt', '2'), ('onlineRechargeOrigin', None)]:
             with self.subTest(key=key), self.assertRaises(RuntimeError):
                 self.validate_readback(before={**self.before, key: value})
-        for key, value in [('preservedOnlineOrigin', {}), ('onlineEngineRebound', False),
-                ('migrationPerformed', True), ('onlineSuccessorVerified', False)]:
+        for key, value in [('preservedOnlineRechargeOrigin', {}), ('servicesRebound', []),
+                ('migrationPerformed', True), ('onlineNetworkRebind', {})]:
             with self.subTest(key=key), self.assertRaises(RuntimeError):
                 self.validate_readback({**self.receipt, key: value})
         with self.assertRaises(RuntimeError):
             self.validate_readback(before={})
         with self.assertRaises(RuntimeError):
             self.validate_readback(environment={**self.environment, 'EXPECTED_CURRENT': '9' * 40})
+        for key, value in [('GITHUB_RUN_ID', '124'), ('GITHUB_RUN_ATTEMPT', '2')]:
+            with self.subTest(environment=key), self.assertRaises(RuntimeError):
+                self.validate_readback(environment={**self.environment, key: value})
 
     def test_engine_and_preserved_services_cannot_silently_change(self):
         for name, key, value in [('online-recharge', 'image', 'sha256:' + '9' * 64),
@@ -666,6 +683,17 @@ class WorkspaceSuccessorReceiptTests(unittest.TestCase):
             receipt['services'][name][key] = value
             with self.subTest(name=name, key=key), self.assertRaises(RuntimeError):
                 self.validate_readback(receipt)
+        for side, key, value in [('before', 'apiContainerId', '9' * 64),
+                ('after', 'volumeIdentitySha256', '9' * 64), ('after', 'extra', 'unsealed')]:
+            receipt = copy.deepcopy(self.receipt)
+            receipt['onlineNetworkRebind'][side][key] = value
+            with self.subTest(side=side, key=key), self.assertRaises(RuntimeError):
+                self.validate_readback(receipt)
+        for key, value in [('sameConnection', False), ('busyCount', 1), ('businessActions', True)]:
+            receipt = copy.deepcopy(self.receipt)
+            receipt['onlineNetworkRebind']['sqlFence'][key] = value
+            with self.subTest(fence=key), self.assertRaises(RuntimeError):
+                self.validate_readback(receipt)
 
     def test_omitted_successor_fields_cannot_fall_back_after_online_preflight(self):
         with self.assertRaises(RuntimeError):
@@ -674,14 +702,19 @@ class WorkspaceSuccessorReceiptTests(unittest.TestCase):
     def test_other_valid_first_publication_origin_cannot_enter_this_baseline(self):
         foreign = {**copy.deepcopy(self.origin), 'commit': '9' * 40,
             'release': '/opt/id-business-v2/releases/20261009T000000Z-' + '9' * 12}
-        self.namespace['validate_online_successor_origin'](foreign)
-        before = {**self.before, 'onlineOrigin': foreign}
+        transport.validate_online_origin(self.namespace, foreign)
+        # A later Workspace predecessor legitimately retains the initial online commit.
+        continued = {**self.before, 'commit': '9' * 40}
+        self.assertTrue(transport.validate_online_workspace_receipt(self.namespace,
+            continued, '9' * 40, 'preflight'))
+        self.assertTrue(self.validate_readback(before=continued,
+            environment={**self.environment, 'EXPECTED_CURRENT': '9' * 40}))
+        before = {**self.before, 'onlineRechargeOrigin': foreign}
+        receipt = {**self.receipt, 'preservedOnlineRechargeOrigin': self.namespace['online_marker'](foreign)}
         with self.assertRaisesRegex(RuntimeError, 'ONLINE_ORIGIN_RECEIPT_CHANGED'):
-            transport.validate_online_workspace_receipt(self.namespace, before, PREVIOUS, 'preflight')
-        receipt = {**self.receipt,
-            'preservedOnlineOrigin': self.namespace['online_successor_marker'](foreign)}
+            self.validate_readback(before=before)
         with self.assertRaisesRegex(RuntimeError, 'ONLINE_ORIGIN_RECEIPT_CHANGED'):
-            self.validate_readback(receipt, before)
+            self.validate_readback(receipt)
 
     def full_readback_contract(self):
         acceptance = {'status': 'PASS', 'checks': ['private-health', 'packaged-resources', 'private-sqlite',
@@ -691,16 +724,16 @@ class WorkspaceSuccessorReceiptTests(unittest.TestCase):
             'images': {name: {'reference': f'{REPOSITORY}:{COMMIT}-123-1-{name}',
                 'imageId': 'sha256:' + str(index) * 64, 'fileCount': 1, 'sha256': str(index) * 64}
                 for index, name in enumerate(('api', 'admin'), 1)},
-            'configuration': {'composeSha256': self.namespace['ONLINE_COMPOSE_SEAL'],
+            'configuration': {'composeSha256': 'c' * 64,
                 'caddySha256': self.namespace['WORKSPACE_CADDY_AFTER'],
                 'volume': self.namespace['WORKSPACE_VOLUME'],
                 'containerDirectory': self.namespace['WORKSPACE_DIRECTORY']},
             'acceptance': acceptance}
         receipt = {**copy.deepcopy(self.receipt), 'status': 'API_ADMIN_WORKSPACE_VERIFIED',
             'commit': COMMIT, 'sourceTree': TREE, 'buildProofSha256': self.namespace['fingerprint'](proof),
-            'servicesUpdated': ['api', 'admin', 'caddy', 'online-recharge'], 'preservedServiceCount': 4,
+            'servicesUpdated': list(self.namespace['UPDATED']), 'preservedServiceCount': 4,
             'runningImagesAndContentMatched': True, 'environmentUnchanged': True,
-            'workspaceVolume': copy.deepcopy(self.origin['workspaceOrigin']['volume']),
+            'workspaceVolume': copy.deepcopy(self.volume),
             'volumePreserved': True, 'volumeDeletionPerformed': False, 'registrationHealthChecked': True,
             'offlineAcceptance': acceptance}
         for name, row in proof['images'].items():
@@ -719,16 +752,25 @@ class WorkspaceSuccessorReceiptTests(unittest.TestCase):
             self.assertEqual(transport.validate_receipt(receipt, COMMIT, 'readback',
                 'API_ADMIN_WORKSPACE'), receipt)
             with self.assertRaisesRegex(RuntimeError, 'READBACK_BUILD_CHANGED'):
-                transport.validate_receipt({**receipt, 'servicesUpdated': ['api', 'admin', 'caddy']},
+                transport.validate_receipt({**receipt, 'servicesUpdated': [*self.namespace['UPDATED'], 'online-recharge']},
                     COMMIT, 'readback', 'API_ADMIN_WORKSPACE')
             changed = copy.deepcopy(receipt)
             changed['services']['api']['image'] = 'sha256:' + '9' * 64
             with self.assertRaisesRegex(RuntimeError, 'READBACK_BUILD_CHANGED'):
                 transport.validate_receipt(changed, COMMIT, 'readback', 'API_ADMIN_WORKSPACE')
+            protection = {'backupVerified': True, 'restoreVerified': True,
+                'sqliteProtectionSha256': '1' * 64, 'backupSha256': '2' * 64, 'backupSize': 4096}
+            self.assertEqual(transport.validate_receipt({**receipt, 'sqliteProtection': protection},
+                COMMIT, 'readback', 'API_ADMIN_WORKSPACE')['sqliteProtection'], protection)
+            for key, value in [('backupVerified', False), ('restoreVerified', False),
+                    ('backupSize', 0), ('backupSha256', 'invalid')]:
+                with self.subTest(sqlite=key), self.assertRaisesRegex(RuntimeError, 'SQLITE_RECEIPT_CHANGED'):
+                    transport.validate_receipt({**receipt, 'sqliteProtection': {**protection, key: value}},
+                        COMMIT, 'readback', 'API_ADMIN_WORKSPACE')
 
     def test_coexisting_origins_preflight_refuses_omission_unknown_services_and_wrong_migration(self):
         cases = []
-        for key in ('onlineOrigin', 'migrationOrigin'):
+        for key in ('onlineRechargeOrigin', 'migrationOrigin'):
             omitted = copy.deepcopy(self.before); omitted.pop(key); cases.append((key, omitted))
         unknown = copy.deepcopy(self.before)
         unknown['services']['unapproved-service'] = copy.deepcopy(self.services['mysql'])
@@ -747,10 +789,10 @@ class WorkspaceSuccessorReceiptTests(unittest.TestCase):
     def test_coexisting_origins_readback_refuses_omission_unknown_services_and_wrong_migration(self):
         proof, valid = self.full_readback_contract()
         cases = []
-        for key in ('onlineOrigin', 'migrationOrigin'):
+        for key in ('onlineRechargeOrigin', 'migrationOrigin'):
             before = copy.deepcopy(self.before); before.pop(key)
             cases.append((key, before, copy.deepcopy(valid)))
-        for key in ('preservedOnlineOrigin', 'preservedMigrationOrigin'):
+        for key in ('preservedOnlineRechargeOrigin', 'preservedMigrationOrigin'):
             receipt = copy.deepcopy(valid); receipt.pop(key)
             cases.append((key, copy.deepcopy(self.before), receipt))
         # Removing both migration fields must not fall back to an origin-free path.
@@ -774,7 +816,7 @@ class WorkspaceSuccessorReceiptTests(unittest.TestCase):
 
     def test_original_api_admin_migration_origin_remains_exactly_seven_services(self):
         receipt = copy.deepcopy(self.before); receipt['status'] = 'API_ADMIN_BASELINE_VERIFIED'
-        for key in ('onlineOrigin', 'onlineSuccessorVerified', 'observedServiceCount'):
+        for key in ('onlineRechargeOrigin',):
             receipt.pop(key)
         receipt['services'].pop('online-recharge')
         self.assertEqual(transport.validate_receipt(receipt, PREVIOUS, 'preflight', 'API_ADMIN'), receipt)

@@ -55,6 +55,8 @@ REPOSITORY = '123456789012.dkr.ecr.ap-northeast-1.amazonaws.com/id-business-v2-r
 registration = load('api_registration_scope', 'api-admin-scope.py', 'API_REGISTRATION')
 migration = load('api_admin_migration_scope', 'api-admin-scope.py', 'API_ADMIN_MIGRATION')
 workspace = load('api_workspace_scope', 'api-admin-scope.py', 'API_ADMIN_WORKSPACE')
+PRIVATE_INSPECT_ORIGINAL = workspace.workspace_private_inspect
+SUMMARY_READER_ORIGINAL = workspace.WorkspaceSqliteProtection.summary_reader
 REGISTRATION_FIXTURE_COMMIT = '4042b5f2c673344409e329607bd43a893ba521bb'
 
 
@@ -1027,7 +1029,7 @@ class ReleaseFailureTests(unittest.TestCase):
                     selected_scope=scope, handoff_check=None, idle_check=None, after_api=None, archive_pair_mode=0o664,
                     migration_preapplied=False, migration_failure=None, migration_task_changed=False, migration_window_changed=False,
                     migration_origin=None, migration_origin_guard=None, workspace_busy=False, candidate_workspace=False,
-                    workspace_initialized=False, workspace_stop_error=None, workspace_rollback_error=None, online_lifecycle=None,
+                    sqlite_gate=None, sqlite_prepare_error=False, online_origin_context=None, online_fail=None, workspace_admission_failure=None,
                     pending_origin=None, pending_proof_origin_sha=None, pending_origin_after_build=None):
         scope = selected_scope
         with tempfile.TemporaryDirectory(dir=RUNTIME) as temporary, ExitStack() as stack:
@@ -1045,11 +1047,6 @@ class ReleaseFailureTests(unittest.TestCase):
             for name in scope.CONFIG_FILES:
                 path = previous / name; path.parent.mkdir(parents=True, exist_ok=True)
                 path.write_bytes((WORKSPACE_SOURCE_ROOT / name).read_bytes() if scope.WORKSPACE else b'config')
-            trigger_files = [scope.MIGRATION_ROOT + '/' + name + '/migration.sql' for name in (
-                '20261002123500_routine_audit_retention_exception', '20260830182500_mysql_trigger_service_definers')]
-            if online_lifecycle is not None:
-                for name in trigger_files:
-                    path = previous / name; path.parent.mkdir(parents=True, exist_ok=True); path.write_bytes((ROOT / name).read_bytes())
             (previous / 'compose.release.json').write_text(json.dumps({'services': {name: {'image': 'old'} for name in d.SERVICES}}))
             if scope.MIGRATION_MODE:
                 migration_fixture(previous, old=True)
@@ -1070,6 +1067,9 @@ class ReleaseFailureTests(unittest.TestCase):
                 api_workspace_only=scope.WORKSPACE,
                 commit=COMMIT, source_tree=TREE, expected_current=OLD, repository=REPOSITORY, run_id='123', run_attempt='1', ci_run_id='456')
             before = states()
+            if online_origin_context is not None:
+                before['online-recharge']=copy.deepcopy(before['api'])
+                before['online-recharge'].update(online_origin_context['binding'])
             controller = SimpleNamespace(**vars(d)); controller.BASE = base
             controller.compose = MagicMock(); controller.wait_healthy = MagicMock()
             guards, task = migration_guards(), migration_task() if scope.MIGRATION_MODE else registration_task()
@@ -1107,33 +1107,14 @@ class ReleaseFailureTests(unittest.TestCase):
                         'org.opencontainers.image.revision': COMMIT, 'id-business-v2.source-tree': TREE}}}])
                 return ''
             controller.run = run
-            if online_lifecycle is not None:
-                runtime, _, _, _, _, control, _ = online_lifecycle
-                ordinary_run = controller.run
-                controller.run = lambda *args, **kw: (runtime.run(*args, **kw)
-                    if args[:2] in (('docker', 'inspect'), ('docker', 'exec')) or args[:2] == ('docker', 'volume')
-                    else ordinary_run(*args, **kw))
-                controller.compose = MagicMock(side_effect=runtime.compose)
-                controller.service_state = runtime.service_state
-                controller.current_job_database = runtime.current_job_database
-                controller._workspaceOnlineOrigin = runtime._workspaceOnlineOrigin
-                before['api'].update(image=control.api['Image'], reference=control.api['Config']['Image'])
-                before[scope.ONLINE_ENGINE] = {**before['api'], 'image': control.engine['Image'],
-                    'reference': control.engine['Config']['Image'], 'containerId': control.engine['Id'],
-                    'configurationSha256': runtime._workspaceOnlineOrigin['engineConfigurationSha256']}
-                controller.rollback_service = MagicMock(side_effect=lambda original, candidate, name, before:
-                    runtime.compose(original, 'up', '-d', '--no-deps', '--no-build', '--pull', 'never', '--force-recreate', name))
             archive_data = io.BytesIO()
             with tarfile.open(fileobj=archive_data, mode='w:gz') as archive:
-                for name in ('remote-deploy.py', 'api-admin-scope.py', *(('online-recharge-scope.py',) if online_lifecycle is not None else ()),
+                for name in ('remote-deploy.py', 'api-admin-scope.py',
+                             *(('online-recharge-scope.py',) if online_origin_context is not None else ()),
                              *(('api-admin-pending-projection.py',) if pending_origin is not None else ())):
                     path = Path(__file__).with_name(name)
                     raw = path.read_bytes(); info = tarfile.TarInfo(f'id-business-system-{COMMIT}/scripts/production-release/{name}')
                     info.size = len(raw); archive.addfile(info, io.BytesIO(raw))
-                if online_lifecycle is not None:
-                    for name in trigger_files:
-                        raw = (ROOT / name).read_bytes(); info = tarfile.TarInfo(f'id-business-system-{COMMIT}/' + name)
-                        info.size = len(raw); archive.addfile(info, io.BytesIO(raw))
                 if scope.MIGRATION_MODE:
                     for name in [scope.MIGRATION_SCHEMA, scope.MIGRATION_SEED, *(scope.MIGRATION_ROOT + '/' + name for name in scope.migration_files(d, LEGACY_PRISMA_ROOT))]:
                         raw = (LEGACY_PRISMA_ROOT / name).read_bytes(); info = tarfile.TarInfo(f'id-business-system-{COMMIT}/' + name)
@@ -1174,32 +1155,44 @@ class ReleaseFailureTests(unittest.TestCase):
                 evidence.update(pendingOnlineMigrationOrigin=pending_origin, onlinePublished=False, migrationPerformed=False)
                 controller._pendingOnlineMigrationOrigin = pending_origin
             if scope.WORKSPACE:
+                controller.workspace_admission = SimpleNamespace(acquire=MagicMock(), before_stop=MagicMock(),
+                    check_idle=MagicMock(), stop=MagicMock(), close=MagicMock())
+                if workspace_admission_failure == 'acquire':
+                    controller.workspace_admission.acquire.side_effect=RuntimeError('API_ADMIN_WORKSPACE_AUDIT_GUARD_FAILED')
+                if workspace_admission_failure == 'before-stop':
+                    controller.workspace_admission.before_stop.side_effect=RuntimeError('API_ADMIN_WORKSPACE_GUARD_TIMEOUT')
+                if workspace_admission_failure == 'after-stop':
+                    controller.workspace_admission.check_idle.side_effect=RuntimeError('API_ADMIN_WORKSPACE_AUDIT_GUARD_FAILED')
+                stack.enter_context(patch.object(scope, 'WorkspaceAuditBarrier', return_value=controller.workspace_admission))
+                stack.enter_context(patch.object(scope, 'workspace_database_identity', return_value={'database':'fixture_database'}))
+                stack.enter_context(patch.object(scope, 'workspace_api_metadata', return_value={}))
                 evidence['workspaceVolume'] = {'name': 'fixture_auto_registration_data', 'status': 'ABSENT', 'identitySha256': None}
-                evidence['workspacePreparation'] = {'status': 'ABSENT', 'backupRequired': False}
-                if workspace_initialized:
-                    evidence['workspaceVolume'].update(status='PRESENT', identitySha256='6' * 64)
-                    evidence['workspacePreparation'] = {'status': 'INITIALIZED_UNUSED', 'backupRequired': True,
-                        'origin': {'release': 'fixture-original', 'commit': scope.WORKSPACE_BOOTSTRAP_COMMIT}}
-                    stack.enter_context(patch.object(scope, 'workspace_database_identity', return_value={'database': 'fixture'}))
-                    def backup_stop(controller, original, target, identity, preparation, changed):
-                        changed.append('api')
-                        if workspace_stop_error: raise RuntimeError(workspace_stop_error)
-                        return {'version': 1, 'status': 'ENCRYPTED_VERIFIED'}
-                    if online_lifecycle is None:
-                        stack.enter_context(patch.object(scope, 'workspace_backup_stop', side_effect=backup_stop))
-                    else:
-                        evidence['workspaceVolume'] = online_lifecycle[3]
-                        evidence['workspacePreparation'] = online_lifecycle[4]
-                        evidence['onlineOrigin'] = controller._workspaceOnlineOrigin
-                stack.enter_context(patch.object(scope, 'workspace_prepare', return_value=evidence['workspacePreparation']))
-                stack.enter_context(patch.object(scope, 'workspace_volume', side_effect=lambda controller, path, **kw:
-                    evidence['workspaceVolume'] if path == previous else {
+                stack.enter_context(patch.object(scope, 'workspace_volume', return_value={
                     'name': 'fixture_auto_registration_data', 'status': 'PRESENT', 'identitySha256': '6' * 64}))
-                if online_lifecycle is None:
-                    stack.enter_context(patch.object(scope, 'workspace_rollback_stop',
-                        side_effect=RuntimeError(workspace_rollback_error or 'API_ADMIN_WORKSPACE_TASK_ACTIVE')
-                        if workspace_busy or workspace_rollback_error else None))
-                stack.enter_context(patch.object(scope, 'workspace_idle', side_effect=RuntimeError('API_ADMIN_WORKSPACE_TASK_ACTIVE') if workspace_busy else None))
+                def workspace_task_guard(_controller, directory, **kwargs):
+                    if workspace_busy and directory != previous:
+                        raise RuntimeError('API_ADMIN_WORKSPACE_TASK_ACTIVE')
+                stack.enter_context(patch.object(scope, 'workspace_idle', side_effect=workspace_task_guard))
+                if sqlite_gate is not None:
+                    if sqlite_prepare_error:
+                        error = RuntimeError('API_ADMIN_WORKSPACE_SQLITE_SAFETY_FAILED')
+                        error.sqlite_gate = sqlite_gate
+                        stack.enter_context(patch.object(scope, 'workspace_prepare', side_effect=error))
+                    else:
+                        stack.enter_context(patch.object(scope, 'workspace_prepare', return_value=sqlite_gate))
+                    stack.enter_context(patch.object(scope, 'workspace_private_inspect', return_value={}))
+                if online_origin_context is not None:
+                    evidence['onlineRechargeOrigin']=online_origin_context
+                    stack.enter_context(patch.object(scope,'online_origin_guard'))
+                    stack.enter_context(patch.object(scope,'online_binding',return_value=online_origin_context['binding']))
+                    stack.enter_context(patch.object(scope,'online_idle',side_effect=RuntimeError('API_ADMIN_ONLINE_TASK_ACTIVE') if online_fail=='idle' else None))
+                    controller.online_fence=SimpleNamespace(acquire=MagicMock(side_effect=RuntimeError('API_ADMIN_ONLINE_TASK_ACTIVE') if online_fail=='fence' else None),
+                        stop=MagicMock(),check_idle=MagicMock(),close=MagicMock(),mysql=before['mysql'],connection_id=17)
+                    stack.enter_context(patch.object(scope,'OnlineSqlFence',return_value=controller.online_fence))
+                    controller.online_rebind=stack.enter_context(patch.object(scope,'online_rebind',
+                        side_effect=RuntimeError('API_ADMIN_ONLINE_RUNTIME_CHANGED') if online_fail in ('rebind','rollback-busy') else None))
+                    controller.online_rollback=stack.enter_context(patch.object(scope,'online_rollback_api',
+                        side_effect=RuntimeError('API_ADMIN_ONLINE_TASK_ACTIVE') if online_fail=='rollback-busy' else None))
             if migration_origin is not None:
                 evidence['migrationOrigin'] = migration_origin
                 controller.migration_origin_guard = stack.enter_context(patch.object(scope, 'migration_successor_guard', side_effect=migration_origin_guard))
@@ -1225,15 +1218,6 @@ class ReleaseFailureTests(unittest.TestCase):
             restore = copy.deepcopy(before)
             if preserved_changed: restore['auto-registration']['containerId'] = 'changed'
             stack.enter_context(patch.object(scope, 'snapshot', return_value=restore))
-            if online_lifecycle is not None:
-                def online_snapshot(controller, directory):
-                    result = copy.deepcopy(restore)
-                    result['api']['containerId'] = control.api['Id']
-                    result[scope.ONLINE_ENGINE]['containerId'] = control.engine['Id']
-                    result[scope.ONLINE_ENGINE]['configurationSha256'] = scope.workspace_engine_configuration(
-                        controller, control.engine, control.api['Id'])
-                    return result
-                stack.enter_context(patch.object(scope, 'workspace_online_snapshot', side_effect=online_snapshot))
             stack.enter_context(patch.object(scope, 'workspace_existing', return_value=False))
             if busy_after_switch:
                 idle.side_effect = [None, None, RuntimeError('API_ADMIN_REGISTRATION_BUSY')]
@@ -3443,6 +3427,14 @@ class WorkspaceScopeTests(unittest.TestCase):
             'services': {name: {'image': row['imageId'], 'reference': row['reference']} for name, row in value['images'].items()}}
         with patch.object(Path, 'read_text', return_value=json.dumps(value)):
             transport.validate_receipt(receipt, COMMIT, 'readback', 'API_ADMIN_WORKSPACE')
+            protection={'backupVerified':True,'restoreVerified':True,'sqliteProtectionSha256':'7'*64,
+                'backupSha256':'8'*64,'backupSize':4096}
+            transport.validate_receipt({**receipt,'sqliteProtection':protection},COMMIT,'readback','API_ADMIN_WORKSPACE')
+            for change in ({'backupSize':False},{'restoreVerified':False},{'backupSha256':'not-a-hash'},
+                    {'backupSize':256*1024**2+1},{'privateData':'PRIVATE_SENTINEL'}):
+                with self.subTest(protection=change),self.assertRaisesRegex(RuntimeError,'SQLITE_RECEIPT_CHANGED'):
+                    transport.validate_receipt({**receipt,'sqliteProtection':{**protection,**change}},
+                        COMMIT,'readback','API_ADMIN_WORKSPACE')
             for field, changed in [('preservedServiceCount', 5), ('registrationHealthChecked', False),
                 ('volumeDeletionPerformed', True), ('workspaceVolume', {}), ('offlineAcceptance', {})]:
                 with self.subTest(field=field), self.assertRaises(RuntimeError):
@@ -3508,471 +3500,439 @@ class WorkspaceScopeTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, 'HEALTH_FAILED'): workspace.workspace_health(controller, ROOT)
 
 
-class InitializedWorkspaceGuardTests(unittest.TestCase):
+class WorkspaceSqliteProtectionTests(unittest.TestCase):
     @contextmanager
-    def database(self, *, wal=False):
-        with tempfile.TemporaryDirectory(dir=RUNTIME) as folder:
-            root = Path(folder).resolve()
-            path = root / 'database.db'
-            connection = sqlite3.connect(path)
-            if wal:
-                connection.execute('PRAGMA journal_mode=WAL')
-            for name in workspace.WORKSPACE_BUSINESS_TABLES:
-                connection.execute('CREATE TABLE "' + name + '" (id INTEGER, value TEXT)')
-            connection.execute('CREATE TABLE settings(key TEXT, value TEXT)')
-            connection.execute('INSERT INTO settings VALUES (?,?)', ('health-fixture', 'SYNTHETIC_PRIVATE_SENTINEL'))
-            connection.commit()
-            try:
-                yield root, path, connection
-            finally:
-                connection.close()
-
-    def backup_namespace(self):
-        try:
-            import cryptography  # Reuse the registered local/CI Python runtime.
-        except ImportError:
-            self.skipTest('Run with the existing registration venv for AES-GCM integration checks')
-        if not hasattr(sqlite3.Connection, 'serialize'):
-            self.skipTest('Registration runtime SQLite serialize support required')
-        namespace = {'__name__': 'synthetic_backup_fixture'}
-        exec(workspace.WORKSPACE_BACKUP_SOURCE, namespace)
-        return namespace
-
-    def test_business_guard_requires_all_empty_tables_and_rejects_history_or_unknown_schema(self):
-        for name in workspace.WORKSPACE_BUSINESS_TABLES:
-            with self.database() as (root, path, connection):
-                workspace.workspace_empty_business(d, path)
-                connection.execute('INSERT INTO "' + name + '" VALUES (1,?)', ('SYNTHETIC_PRIVATE_SENTINEL',))
-                connection.commit()
-                with self.subTest(table=name), self.assertRaisesRegex(RuntimeError, 'ALREADY_USED'):
-                    workspace.workspace_empty_business(d, path)
-        with self.database() as (root, path, connection):
-            connection.execute('CREATE TABLE unknown_business(id INTEGER)'); connection.commit()
-            with self.assertRaisesRegex(RuntimeError, 'UNUSED_REQUIRED'):
-                workspace.workspace_empty_business(d, path)
-
-    def test_business_guard_does_not_follow_database_or_wal_symlinks(self):
-        with self.database() as (root, path, connection):
-            link = root / 'linked.db'; link.symlink_to(path)
-            with self.assertRaisesRegex(RuntimeError, 'UNUSED_REQUIRED'):
-                workspace.workspace_empty_business(d, link)
-            wal = root / 'database.db-wal'; wal.symlink_to(path)
-            with self.assertRaisesRegex(RuntimeError, 'UNUSED_REQUIRED'):
-                workspace.workspace_empty_business(d, path)
-
-    def test_real_sqlite_barrier_backup_decrypt_and_restores_wal_and_rollback_modes(self):
-        namespace = self.backup_namespace()
-        from cryptography.hazmat.primitives.ciphers.aead import AESGCM
-        from cryptography.exceptions import InvalidTag
-        for wal in (False, True):
-            with self.database(wal=wal) as (root, path, connection):
-                original = path.read_bytes()
-                fixture_key = 'synthetic-noncredential-test-key-' * 2
-                aad = b'bound-fixture-volume-and-origin'
-                lock, receipt = namespace['backup'](str(path), fixture_key, aad)
-                try:
-                    with sqlite3.connect(path, timeout=0.05) as writer:
-                        with self.assertRaisesRegex(sqlite3.OperationalError, 'locked'):
-                            writer.execute("UPDATE settings SET value='attempt'")
-                    packed = base64.b64decode(receipt['ciphertext'])
-                    self.assertNotIn(b'SYNTHETIC_PRIVATE_SENTINEL', packed)
-                    key = hashlib.sha256(b'id-auto-registration-backup-v1\0' + fixture_key.encode()).digest()
-                    plain = AESGCM(key).decrypt(packed[8:20], packed[20:], aad)
-                    self.assertEqual(hashlib.sha256(plain).hexdigest(), receipt['databaseSha256'])
-                    restored = sqlite3.connect(':memory:'); restored.deserialize(plain)
-                    self.assertEqual(restored.execute('PRAGMA integrity_check').fetchall(), [('ok',)])
-                    self.assertEqual(restored.execute('SELECT COUNT(*) FROM settings').fetchone(), (1,))
-                    restored.close()
-                    for bad_cipher, bad_aad, bad_key in ((packed[:-1] + bytes([packed[-1] ^ 1]), aad, key),
-                            (packed, b'changed-volume', key), (packed, aad, b'0' * 32)):
-                        with self.assertRaises(InvalidTag):
-                            AESGCM(bad_key).decrypt(bad_cipher[8:20], bad_cipher[20:], bad_aad)
-                    self.assertEqual(path.read_bytes(), original)
-                    self.assertEqual(sorted(p.name for p in root.iterdir()),
-                                     ['database.db', 'database.db-shm', 'database.db-wal'] if wal else ['database.db'])
-                finally:
-                    lock.close()
-                connection.execute("UPDATE settings SET value='fixture-after-unlock'"); connection.commit()
-
-    def test_backup_refuses_used_database_and_releases_lock_after_error(self):
-        namespace = self.backup_namespace()
-        with self.database() as (root, path, connection):
-            connection.execute('INSERT INTO registration_tasks VALUES (1,?)', ('cancelled',)); connection.commit()
-            with self.assertRaises(RuntimeError):
-                namespace['backup'](str(path), 'fixture-key' * 4, b'fixture')
-            connection.execute("UPDATE settings SET value='fixture-after-error'"); connection.commit()
-
-    def test_private_pipe_detects_timeout_eof_and_closes_real_process(self):
-        import time
-        commands = ["import sys;sys.exit(0)", "import time;time.sleep(10)"]
-        for source in commands:
-            pipe = workspace.WorkspacePipe([sys.executable, '-u', '-c', source], time.monotonic() + 0.1)
-            with self.assertRaisesRegex(RuntimeError, 'GUARD_(LOST|TIMEOUT)'):
-                pipe.read(timeout=0.1, limit=100)
-            pipe.close()
-            self.assertIsNotNone(pipe.process.poll())
-
-    def test_audit_guard_zero_covers_accepted_batch_before_any_sqlite_row(self):
-        controller = SimpleNamespace(require=d.require, current_job_database=lambda p: 'fixture',
-            compose=MagicMock(return_value='{"connectionId": 12, "auditCount": 1}'))
-        with self.assertRaisesRegex(RuntimeError, 'ALREADY_USED'):
-            workspace.workspace_audit_probe(controller, ROOT)
-        command = controller.compose.call_args.args[-1]
-        self.assertIn('module=CONVERT(', command)
-        self.assertNotIn('action=', command)
-
-    def test_audit_barrier_rejects_reconnected_or_nonzero_connection_and_cleans_up(self):
-        for changed in ({'connectionId': 21, 'auditCount': 0}, {'connectionId': 20, 'auditCount': 1}):
-            pipe = MagicMock()
-            pipe.read.side_effect = [{'connectionId': 20, 'auditCount': 0}, changed]
-            pipe.process.poll.return_value = None
-            controller = SimpleNamespace(require=d.require, current_job_database=lambda p: 'fixture',
-                service_state=lambda *a, **k: {'containerId': 'fixture-mysql'})
-            with patch.object(workspace, 'WorkspacePipe', return_value=pipe) as factory:
-                with self.assertRaisesRegex(RuntimeError, 'AUDIT_GUARD_LOST'):
-                    with workspace.WorkspaceAuditBarrier(controller, ROOT) as guard:
-                        guard.check()
-                self.assertIn('--skip-reconnect', factory.call_args.args[0][-1])
-                self.assertIn('LOCK TABLES `audit_logs` READ', pipe.send.call_args_list[0].args[0])
-                pipe.close.assert_called_once()
-
-    def test_protection_probe_rejects_missing_or_changed_immutable_trigger(self):
-        delete = (ROOT / workspace.MIGRATION_ROOT / '20261002123500_routine_audit_retention_exception/migration.sql').read_text()
-        body = delete.split('FOR EACH ROW', 1)[1].strip().rstrip(';')
-        rows = [{'event': 'DELETE', 'timing': 'BEFORE', 'statement': body},
-                {'event': 'UPDATE', 'timing': 'BEFORE', 'statement': "SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Audit logs are immutable'"}]
-        controller = SimpleNamespace(require=d.require, current_job_database=lambda p: 'fixture',
-            compose=MagicMock(return_value=json.dumps(rows)))
-        self.assertRegex(workspace.workspace_audit_protection(controller, ROOT), '[a-f0-9]{64}')
-        for mutated in ([], rows[:1], [{**row, 'statement': 'BEGIN SELECT 1; END'} for row in rows]):
-            controller.compose.return_value = json.dumps(mutated)
-            with self.assertRaisesRegex(RuntimeError, 'AUDIT_HISTORY_UNPROVEN'):
-                workspace.workspace_audit_protection(controller, ROOT)
-
-    def test_origin_requires_first_absent_record_and_exact_volume_binding(self):
-        with tempfile.TemporaryDirectory(dir=RUNTIME) as folder:
-            base = Path(folder).resolve(); releases = base / 'releases'; releases.mkdir()
-            bootstrap = releases / ('20261009T000000Z-' + workspace.WORKSPACE_BOOTSTRAP_COMMIT[:12]); bootstrap.mkdir()
-            volume = {'name': 'fixture_data', 'status': 'PRESENT', 'identitySha256': '1' * 64}
-            record = {'workspaceVolumeBefore': {'name': 'fixture_data', 'status': 'ABSENT', 'identitySha256': None},
-                      'workspaceVolumeAfter': volume}
-            (bootstrap / 'release-manifest.json').write_text(json.dumps({'commit': workspace.WORKSPACE_BOOTSTRAP_COMMIT}))
-            (bootstrap / workspace.STATE_FILE).write_text(json.dumps(record))
-            controller = SimpleNamespace(require=d.require, BASE=base)
-            origin = workspace.workspace_origin(controller, bootstrap, volume)
-            successor = releases / 'successor'; successor.mkdir()
-            (successor / 'release-manifest.json').write_text(json.dumps({'commit': COMMIT}))
-            (successor / workspace.STATE_FILE).write_text(json.dumps({'workspaceVolumeOrigin': origin}))
-            self.assertEqual(workspace.workspace_origin(controller, successor, volume), origin)
-            for change in ('identity', 'record', 'initial-present'):
-                if change == 'identity': altered = {**volume, 'identitySha256': '2' * 64}
-                else:
-                    altered = volume
-                    record['changed'] = True
-                    if change == 'initial-present': record['workspaceVolumeBefore'] = volume
-                    (bootstrap / workspace.STATE_FILE).write_text(json.dumps(record))
-                with self.subTest(change=change), self.assertRaisesRegex(RuntimeError, 'UNUSED_ORIGIN_REQUIRED'):
-                    workspace.workspace_origin(controller, successor, altered)
-
-    def test_backup_receipt_is_mandatory_and_binds_cipher_aad_origin_and_volume(self):
-        namespace = self.backup_namespace()
-        with self.database() as (root, database, connection):
-            volume = {'name': 'fixture_data', 'status': 'PRESENT', 'identitySha256': '1' * 64}
-            origin = {'release': 'fixture-bootstrap', 'commit': workspace.WORKSPACE_BOOTSTRAP_COMMIT,
-                      'recordSha256': '2' * 64, 'volume': volume}
-            aad = json.dumps({'volume': volume, 'origin': origin, 'release': str(root)}, sort_keys=True, separators=(',', ':'))
-            lock, value = namespace['backup'](str(database), 'fixture-key' * 4, aad.encode()); lock.close()
-            packed = base64.b64decode(value.pop('ciphertext'))
-            value.update(version=1,status='ENCRYPTED_VERIFIED',algorithm='AES-256-GCM',volume=volume,origin=origin,
-                         auditCount=0,businessRows=0,admissionGuard='MYSQL_AUDIT_READ_LOCK',databaseRestored=False)
-            record = {'workspaceBackup': value, 'workspaceVolumeBefore': volume, 'workspaceVolumeAfter': volume,
-                      'workspaceVolumeOrigin': origin}
-            with patch.object(workspace, 'workspace_origin', return_value=origin):
-                with self.assertRaisesRegex(RuntimeError, 'RECEIPT_REQUIRED'):
-                    workspace.workspace_backup_receipt(d, root, record)
-                receipt_path = root / workspace.WORKSPACE_BACKUP_RECEIPT
-                cipher_path = root / workspace.WORKSPACE_BACKUP_FILE
-                receipt_path.write_text(json.dumps(value)); cipher_path.write_bytes(packed)
-                self.assertEqual(workspace.workspace_backup_receipt(d, root, record), value)
-                for field, changed in (('aadSha256', '3' * 64), ('ciphertextSha256', '3' * 64),
-                        ('volume', {**volume, 'identitySha256': '3' * 64}), ('restoreVerified', False)):
-                    bad = {**value, field: changed}; receipt_path.write_text(json.dumps(bad))
-                    with self.subTest(field=field), self.assertRaisesRegex(RuntimeError, 'RECEIPT_CHANGED'):
-                        workspace.workspace_backup_receipt(d, root, {**record, 'workspaceBackup': bad})
-                receipt_path.write_text(json.dumps(value)); cipher_path.write_bytes(packed[:-1] + b'0')
-                with self.assertRaisesRegex(RuntimeError, 'RECEIPT_CHANGED'):
-                    workspace.workspace_backup_receipt(d, root, record)
-
-    def test_empty_receipt_never_claims_encrypted_backup_and_rejects_wrong_initial_state(self):
-        with tempfile.TemporaryDirectory(dir=RUNTIME) as folder:
-            root = Path(folder).resolve()
-            volume = {'name': 'fixture_data', 'status': 'ABSENT', 'identitySha256': None}
-            value = {'version': 1, 'status': 'NOT_REQUIRED_EMPTY', 'volumeBefore': volume, 'databaseRestored': False}
-            record = {'workspaceBackup': value, 'workspaceVolumeBefore': volume,
-                      'workspacePreparation': {'status': 'ABSENT'}}
-            (root / workspace.WORKSPACE_BACKUP_RECEIPT).write_text(json.dumps(value))
-            self.assertEqual(workspace.workspace_backup_receipt(d, root, record), value)
-            record['workspacePreparation']['status'] = 'INITIALIZED_UNUSED'
-            with self.assertRaisesRegex(RuntimeError, 'RECEIPT_CHANGED'):
-                workspace.workspace_backup_receipt(d, root, record)
-
-    def test_rollback_audit_refusal_occurs_before_any_api_stop_or_restore(self):
-        controller = SimpleNamespace(require=d.require, compose=MagicMock())
-        refusal = MagicMock(); refusal.__enter__.side_effect = RuntimeError('API_ADMIN_WORKSPACE_ALREADY_USED')
-        with patch.object(workspace, 'WorkspaceAuditBarrier', return_value=refusal):
-            with self.assertRaisesRegex(RuntimeError, 'ALREADY_USED'):
-                workspace.workspace_rollback_stop(controller, ROOT)
-        controller.compose.assert_not_called()
-
-    def test_release_stop_failure_records_api_and_restores_only_after_guarded_recheck(self):
-        code, result, controller, manifest, persisted = ReleaseFailureTests().run_release(
-            selected_scope=workspace, workspace_initialized=True,
-            workspace_stop_error='API_ADMIN_WORKSPACE_AUDIT_GUARD_LOST')
-        self.assertEqual(code, 1); self.assertTrue(persisted)
-        self.assertEqual(result['status'], 'API_ADMIN_WORKSPACE_FAILED_RESTORED')
-        self.assertEqual(result['servicesAttempted'], ['admin', 'api'])
-        self.assertEqual([call.args[2] for call in controller.rollback_service.call_args_list], ['api', 'admin'])
-        self.assertFalse(result['sqliteRestorePerformed'])
-
-    def test_accepted_batch_during_new_runtime_blocks_automatic_api_rollback(self):
-        code, result, controller, manifest, persisted = ReleaseFailureTests().run_release(
-            selected_scope=workspace, workspace_initialized=True, fail_at='api-health',
-            workspace_rollback_error='API_ADMIN_WORKSPACE_ALREADY_USED')
-        self.assertEqual(code, 1); self.assertTrue(persisted)
-        self.assertEqual(result['status'], 'API_ADMIN_WORKSPACE_PARTIAL_RECOVERY_REQUIRED')
-        self.assertEqual(result['rollback']['api'], 'BLOCKED_OR_FAILED')
-        self.assertEqual([call.args[2] for call in controller.rollback_service.call_args_list], ['admin'])
-        self.assertFalse(result['sqliteRestorePerformed'])
-
-    def test_stop_and_guard_failure_never_claims_restored_or_overwrites_workspace(self):
-        code, result, controller, manifest, persisted = ReleaseFailureTests().run_release(
-            selected_scope=workspace, workspace_initialized=True,
-            workspace_stop_error='API_ADMIN_WORKSPACE_AUDIT_GUARD_LOST',
-            workspace_rollback_error='API_ADMIN_WORKSPACE_DATABASE_IDENTITY_CHANGED')
-        self.assertEqual(code, 1); self.assertTrue(persisted)
-        self.assertEqual(result['status'], 'API_ADMIN_WORKSPACE_PARTIAL_RECOVERY_REQUIRED')
-        self.assertFalse(result['rollbackOk']); self.assertFalse(result['sqliteRestorePerformed'])
-        self.assertNotIn('api', [call.args[2] for call in controller.rollback_service.call_args_list])
-
-    def test_stopped_database_identity_is_bound_to_live_mysql_and_environment_without_api_probe(self):
-        with tempfile.TemporaryDirectory(dir=RUNTIME) as folder:
-            root = Path(folder).resolve(); (root / '.env.aws.production').write_text('SYNTHETIC_ENV=1\n')
-            state = {'status': 'running', 'health': 'healthy', 'containerId': 'mysql-fixture', 'image': 'fixture-image'}
-            controller = SimpleNamespace(require=d.require, current_job_database=MagicMock(return_value='fixture'),
-                service_state=lambda *a, **k: dict(state))
-            identity = workspace.workspace_database_identity(controller, root)
-            controller.current_job_database.side_effect = AssertionError('old API must stay stopped')
-            self.assertEqual(workspace.workspace_database_identity(controller, root, identity), identity)
-            state['containerId'] = 'changed'
-            with self.assertRaisesRegex(RuntimeError, 'DATABASE_IDENTITY_CHANGED'):
-                workspace.workspace_database_identity(controller, root, identity)
-            state['containerId'] = 'mysql-fixture'; (root / '.env.aws.production').write_text('SYNTHETIC_ENV=2\n')
-            with self.assertRaisesRegex(RuntimeError, 'DATABASE_IDENTITY_CHANGED'):
-                workspace.workspace_database_identity(controller, root, identity)
-
-    def test_stopped_identity_keeps_recharge_registration_leases_and_worker_busy_guards(self):
-        controller = SimpleNamespace(require=d.require, compose=MagicMock(return_value='0'),
-            assert_no_active_recharge=MagicMock(side_effect=AssertionError('cannot probe old API')),
-            current_job_database=MagicMock(side_effect=AssertionError('cannot probe old API')),
-            registration_runtime_state=lambda p: {'supported': True, 'registrationBusy': False,
-                                                  'registrationWindowRetained': True})
-        identity = {'database': 'fixture'}
-        with patch.object(workspace, 'workspace_database_identity', return_value=identity):
-            value = workspace.jobs_idle(controller, ROOT, database_identity=identity)
-            self.assertTrue(value['rechargeIdle']); self.assertFalse(value['registrationLeaseActive'])
-            statements = [call.args[-1] for call in controller.compose.call_args_list]
-            self.assertIn('id_business_v2_recharge_jobs', statements[0])
-            self.assertIn('id_business_v2_registration_jobs', statements[1])
-            for bad_result in (['1'], ['0', '1']):
-                controller.compose.side_effect = bad_result
-                with self.assertRaisesRegex(RuntimeError, 'LEASE_ACTIVE'):
-                    workspace.jobs_idle(controller, ROOT, database_identity=identity)
-            controller.compose.side_effect = None; controller.compose.return_value = '0'
-            controller.registration_runtime_state = lambda p: {'supported': True, 'registrationBusy': True,
-                                                               'registrationWindowRetained': True}
-            with self.assertRaisesRegex(RuntimeError, 'REGISTRATION_BUSY'):
-                workspace.jobs_idle(controller, ROOT, database_identity=identity)
-
-    def test_public_origin_only_emits_https_hostname_and_valid_port(self):
-        controller = SimpleNamespace(require=d.require, environment_values=lambda p: {'APP_PUBLIC_URL': url})
-        url = 'https://fixture.example:8443/'
-        self.assertEqual(workspace.workspace_public_origin(controller, ROOT), 'https://fixture.example:8443')
-        for url in ('http://fixture.example', 'https://user:secret@fixture.example',
-                    'https://fixture.example/?credential=fixture', 'https://fixture.example/#fixture',
-                    'https://fixture.example/private', 'https://fixture.example:0'):
-            with self.assertRaises((RuntimeError, ValueError)):
-                workspace.workspace_public_origin(controller, ROOT)
-
-    def test_real_stopped_api_probe_and_rollback_path_never_use_running_api_state(self):
-        with WorkspaceScopeTests().volume_fixture() as (controller, root, value, api, calls):
-            identifier = '5' * 64
-            api.update(Id=identifier, State={'Running': False, 'Pid': 0})
-            api['Config']['Labels']['com.docker.compose.service'] = 'api'
-            with sqlite3.connect(root / 'database.db') as connection:
-                for name in workspace.WORKSPACE_BUSINESS_TABLES:
-                    connection.execute('CREATE TABLE "' + name + '"(id INTEGER)')
-                connection.execute('CREATE TABLE settings(key TEXT, value TEXT)')
-            original_run = controller.run
+    def fixture(self, *, task_status=None, wal=False):
+        with tempfile.TemporaryDirectory(dir=RUNTIME) as temporary, ExitStack() as stack:
+            base = Path(temporary).resolve()
+            volume_root = base / 'source'; volume_root.mkdir(mode=0o700)
+            previous = base / 'previous'; previous.mkdir(mode=0o700)
+            target = base / 'candidate'; target.mkdir(mode=0o700)
+            database = volume_root / 'database.db'
+            tables = ('accounts', 'email_services', 'registration_tasks', 'settings', 'proxies',
+                      'cpa_services', 'sub2api_services', 'tm_services')
+            writer = sqlite3.connect(database)
+            if wal: writer.execute('PRAGMA journal_mode=WAL')
+            for name in tables:
+                writer.execute('CREATE TABLE "' + name + '" (id INTEGER PRIMARY KEY, status TEXT, value TEXT)')
+            writer.execute('INSERT INTO settings VALUES (1,NULL,?)', ('PRIVATE_SENTINEL_CIPHERTEXT',))
+            if task_status is not None:
+                writer.execute('INSERT INTO registration_tasks VALUES (1,?,?)', (task_status, 'PRIVATE_TASK'))
+            writer.commit(); database.chmod(0o600)
+            stack.callback(writer.close)
+            name = 'fixture_auto_registration_data'
+            identity = {'name': name, 'status': 'PRESENT', 'identitySha256': '6' * 64}
+            api = {'Id': 'a' * 64, 'Image': 'sha256:' + '1' * 64,
+                   'State': {'Running': True, 'StartedAt': '2026-10-01T00:00:00.000000000Z'}}
+            state = {'containerId': api['Id'], 'image': api['Image'],
+                     'startedAtSha256': hashlib.sha256(api['State']['StartedAt'].encode()).hexdigest()}
+            calls, volumes = [], {name: {'Name': name, 'Mountpoint': str(volume_root)}}
             def run(*args, **kwargs):
+                calls.append((args, kwargs))
                 if args[:2] == ('docker', 'inspect'): return json.dumps([api])
-                return original_run(*args)
-            controller.run = run
-            controller.service_state = MagicMock(side_effect=AssertionError('must not select only running API'))
-            controller.compose = MagicMock(side_effect=lambda directory, *args, **kwargs:
-                identifier if args == ('ps', '--all', '-q', 'api') else '')
-            barrier = MagicMock(); barrier.__enter__.return_value = MagicMock()
-            with patch.object(workspace, 'WorkspaceAuditBarrier', return_value=barrier):
-                workspace.workspace_rollback_stop(controller, ROOT, {'database': 'fixture'})
-            self.assertIn(('ps', '--all', '-q', 'api'), [call.args[1:] for call in controller.compose.call_args_list])
-            self.assertIn(('stop', '--timeout', '25', 'api'), [call.args[1:] for call in controller.compose.call_args_list])
-            controller.service_state.assert_not_called()
-            barrier.__enter__.return_value.check.assert_called()
+                if args[:3] == ('docker', 'volume', 'inspect'): return json.dumps([volumes[args[-1]]])
+                if args[:3] == ('docker', 'volume', 'ls'): return ''
+                if args[:3] == ('docker', 'volume', 'create'):
+                    root = base / args[-1]; root.mkdir()
+                    volumes[args[-1]] = {'Name': args[-1], 'Mountpoint': str(root),
+                        'Labels': {'id-business-v2.sqlite-restore': '123-1'}}
+                    return args[-1]
+                if args[:3] == ('docker', 'volume', 'rm'): return args[-1]
+                if args[:2] == ('docker', 'stop'):
+                    # A competing writer is still blocked until the exact old process is stopped.
+                    with sqlite3.connect(database, timeout=0.01) as competing:
+                        with self.assertRaises(sqlite3.OperationalError):
+                            competing.execute('INSERT INTO settings VALUES (2,NULL,NULL)')
+                    api['State']['Running'] = False
+                    return args[-1]
+                raise AssertionError(args)
+            controller = SimpleNamespace(require=d.require, run=run, service_state=lambda *a, **kw: dict(state),
+                compose=MagicMock(return_value='{"version":1,"mutationCount":0}'))
+            def summary(connection):
+                task_counts = {key: 0 for key in ('pending','running','completed','failed','cancelled')}
+                for key,count in connection.execute('SELECT status,COUNT(*) FROM registration_tasks GROUP BY status'):
+                    if key not in task_counts: raise RuntimeError('API_ADMIN_WORKSPACE_TASK_STATE_UNAVAILABLE')
+                    task_counts[key] = count
+                counts = {key: connection.execute('SELECT COUNT(*) FROM "' + key + '"').fetchone()[0] for key in tables}
+                return {'schemaSha256': '7'*64,
+                    'logicalSha256': hashlib.sha256('\n'.join(connection.iterdump()).encode()).hexdigest(),
+                    'tableCounts': counts, 'taskCounts': task_counts}
+            stack.enter_context(patch.object(workspace, 'workspace_volume', return_value=identity))
+            stack.enter_context(patch.object(workspace.WorkspaceSqliteProtection, 'summary_reader', return_value=summary))
+            args = SimpleNamespace(run_id='123', run_attempt='1', commit=COMMIT)
+            candidate = {'images': {'api': {'reference':'fixture-image','imageId':'sha256:'+'2'*64}}}
+            gate = workspace.WorkspaceSqliteProtection(controller, previous, target, candidate, args, legacy=True)
+            stack.callback(gate.close)
+            def inspect(_d, _directory, _reference, volume, **kwargs):
+                path = Path(volumes[volume]['Mountpoint']) / 'database.db'
+                with sqlite3.connect(path.as_uri()+'?mode=ro',uri=True) as restored:
+                    value = summary(restored)
+                return {'version':1,'status':'PASS', **value,
+                    'activeAppleLeaseCount':0,'corruptEncryptedValueCount':0,'businessActions':0}
+            inspector = stack.enter_context(patch.object(workspace, 'workspace_private_inspect', side_effect=inspect))
+            yield SimpleNamespace(gate=gate, controller=controller, database=database, root=volume_root,
+                previous=previous, target=target, summary=summary, candidate=candidate,
+                api=api,state=state,calls=calls,volumes=volumes,inspector=inspector,writer=writer)
 
-    def test_stopped_api_probe_rejects_absent_multiple_or_wrong_container(self):
-        identifier = '5' * 64
-        controller = SimpleNamespace(require=d.require, compose=MagicMock(return_value=identifier),
-            run=MagicMock(return_value=json.dumps([{'Id': identifier, 'State': {'Running': False},
-                'Config': {'Labels': {'com.docker.compose.service': 'admin'}}}])))
-        with self.assertRaisesRegex(RuntimeError, 'CONTAINER_UNAVAILABLE'):
-            workspace.workspace_api_metadata(controller, ROOT)
-        controller.run.assert_called_once()
-        for identifiers in ('', identifier + '\n' + '6' * 64):
-            controller.compose.return_value = identifiers
-            with self.assertRaisesRegex(RuntimeError, 'CONTAINER_UNAVAILABLE'):
-                workspace.workspace_api_metadata(controller, ROOT)
+    def test_lock_blocks_new_task_creation_until_exact_old_api_stops(self):
+        with self.fixture() as f:
+            f.gate.lock()
+            with sqlite3.connect(f.database, timeout=0.01) as competing:
+                with self.assertRaises(sqlite3.OperationalError):
+                    competing.execute("INSERT INTO registration_tasks VALUES (9,'pending',NULL)")
+            f.gate.backup_restore(); f.gate.stop_previous()
+            self.assertIsNone(f.gate.connection)
+            with sqlite3.connect(f.database) as competing:
+                competing.execute("INSERT INTO settings VALUES (9,NULL,'AFTER_STOP')")
+            self.assertFalse(f.api['State']['Running'])
+            self.assertTrue((f.root/workspace.WORKSPACE_MAINTENANCE).is_file())
+
+    def test_wal_committed_data_is_in_consistent_backup_and_source_never_replaced(self):
+        with self.fixture(wal=True) as f:
+            original_inode = f.database.stat().st_ino
+            self.assertTrue(Path(str(f.database)+'-wal').exists())
+            f.gate.lock(); value=f.gate.backup_restore()
+            backup=f.target/value['backupName']
+            with sqlite3.connect(backup) as read:
+                self.assertEqual(read.execute('SELECT value FROM settings').fetchone()[0], 'PRIVATE_SENTINEL_CIPHERTEXT')
+                self.assertEqual(f.summary(read),f.gate.summary)
+            self.assertEqual(f.database.stat().st_ino,original_inode)
+            self.assertEqual(backup.stat().st_mode & 0o777,0o600)
+            self.assertEqual(backup.parent.stat().st_mode & 0o777,0o700)
+            removals=[a[-1] for a,k in f.calls if a[:3]==('docker','volume','rm')]
+            self.assertEqual(removals,['id-sqlite-restore-123-1'])
+            self.assertNotIn('PRIVATE_SENTINEL',json.dumps(value))
+
+    def test_legacy_pending_running_cancelled_and_unknown_fail_before_marker(self):
+        for status in ('pending','running','cancelled','unknown'):
+            with self.subTest(status=status), self.fixture(task_status=status) as f:
+                with self.assertRaises(RuntimeError): f.gate.lock()
+                self.assertIsNone(f.gate.connection)
+                self.assertFalse((f.root/workspace.WORKSPACE_MAINTENANCE).exists())
+
+    def test_completed_and_failed_history_remain_intact(self):
+        for status in ('completed','failed'):
+            with self.subTest(status=status), self.fixture(task_status=status) as f:
+                f.gate.lock(); f.gate.backup_restore()
+                self.assertEqual(f.gate.summary['taskCounts'][status],1)
+                self.assertTrue(f.gate.connection.in_transaction)
+
+    def test_legacy_mutation_or_missing_audit_cannot_be_silently_empty(self):
+        for response in ('{"version":1,"mutationCount":1}', '{}','{"version":1,"mutationCount":false}'):
+            with self.subTest(response=response), self.fixture() as f:
+                f.controller.compose.return_value=response
+                with self.assertRaisesRegex(RuntimeError,'LEGACY_MUTATION'): f.gate.lock()
+                self.assertFalse((f.root/workspace.WORKSPACE_MAINTENANCE).exists())
+        with self.fixture() as f:
+            f.controller.compose.side_effect=RuntimeError('PRIVATE_DATABASE_OUTPUT')
+            with self.assertRaisesRegex(RuntimeError,'LEGACY_AUDIT_UNAVAILABLE') as caught: f.gate.lock()
+            self.assertNotIn('PRIVATE_DATABASE_OUTPUT',str(caught.exception))
+
+    def test_new_mutation_before_stop_blocks_without_sending_stop(self):
+        with self.fixture() as f:
+            f.gate.lock(); f.gate.backup_restore()
+            f.controller.compose.return_value='{"version":1,"mutationCount":1}'
+            with self.assertRaisesRegex(RuntimeError,'LEGACY_MUTATION'): f.gate.stop_previous()
+            self.assertFalse(any(a[:2]==('docker','stop') for a,k in f.calls))
+
+    def test_existing_foreign_or_symlink_maintenance_marker_is_never_overwritten(self):
+        for symlink in (False,True):
+            with self.subTest(symlink=symlink),self.fixture() as f:
+                marker=f.root/workspace.WORKSPACE_MAINTENANCE
+                if symlink: marker.symlink_to(f.target/'not-created')
+                else: marker.write_text('FOREIGN_MARKER')
+                with self.assertRaisesRegex(RuntimeError,'MAINTENANCE_EXISTS'): f.gate.lock()
+                if not symlink: self.assertEqual(marker.read_text(),'FOREIGN_MARKER')
+
+    def test_source_sidecar_symlink_and_source_permissions_are_rejected(self):
+        with self.fixture() as f:
+            f.database.chmod(0o644)
+            with self.assertRaisesRegex(RuntimeError,'SOURCE_INVALID'): f.gate.lock()
+        with self.fixture() as f:
+            (f.root/'database.db-wal').symlink_to(f.target/'outside')
+            with self.assertRaisesRegex(RuntimeError,'SOURCE_INVALID'): f.gate.lock()
+
+    def test_marker_changed_or_deadline_passed_blocks_and_preserves_original_database(self):
+        with self.fixture() as f:
+            f.gate.lock(); f.gate.deadline=0
+            with self.assertRaisesRegex(RuntimeError,'FENCE_TIMEOUT'): f.gate.backup_restore()
+            self.assertFalse((f.target/'backups'/'auto-registration').exists())
+        with self.fixture() as f:
+            f.gate.lock(); (f.root/workspace.WORKSPACE_MAINTENANCE).write_text('CHANGED')
+            with self.assertRaisesRegex(RuntimeError,'MAINTENANCE_CHANGED'): f.gate.stop_previous()
+            self.assertTrue(f.api['State']['Running'])
+
+    def test_stop_is_rejected_without_budget_and_docker_timeout_stays_inside_remaining_budget(self):
+        with self.fixture() as f:
+            f.gate.lock(); f.gate.backup_restore()
+            f.gate.deadline=workspace.time.monotonic()+34
+            with self.assertRaisesRegex(RuntimeError,'FENCE_TIMEOUT'): f.gate.stop_previous()
+            self.assertFalse(any(a[:2]==('docker','stop') for a,k in f.calls))
+        with self.fixture() as f:
+            f.gate.lock(); f.gate.backup_restore()
+            f.gate.deadline=workspace.time.monotonic()+40
+            f.gate.stop_previous()
+            timeouts=[k['timeout'] for a,k in f.calls if a[:2]==('docker','stop')]
+            self.assertEqual(len(timeouts),1);self.assertTrue(35<timeouts[0]<40)
+
+    def test_failed_restore_keeps_backup_and_fence_and_cleans_only_own_clone(self):
+        with self.fixture() as f:
+            f.gate.lock(); f.inspector.side_effect=RuntimeError('API_ADMIN_WORKSPACE_SQLITE_SAFETY_FAILED')
+            with self.assertRaisesRegex(RuntimeError,'SAFETY_FAILED'): f.gate.backup_restore()
+            self.assertTrue((f.target/'backups/auto-registration/database.db').is_file())
+            self.assertTrue((f.root/workspace.WORKSPACE_MAINTENANCE).is_file())
+            self.assertEqual([a[-1] for a,k in f.calls if a[:3]==('docker','volume','rm')],['id-sqlite-restore-123-1'])
+            self.assertTrue(f.api['State']['Running'])
+
+    def test_finish_only_removes_owned_fence_after_live_data_matches_verified_backup(self):
+        with self.fixture() as f:
+            f.gate.lock(); f.gate.backup_restore(); f.gate.stop_previous()
+            f.gate.finish()
+            self.assertFalse((f.root/workspace.WORKSPACE_MAINTENANCE).exists())
+            self.assertTrue((f.target/'backups/auto-registration/database.db').exists())
+        with self.fixture() as f:
+            f.gate.lock(); f.gate.backup_restore(); f.gate.stop_previous()
+            with sqlite3.connect(f.database) as changing:
+                changing.execute("INSERT INTO settings VALUES (99,NULL,'AFTER_SNAPSHOT')")
+            with self.assertRaisesRegex(RuntimeError,'SOURCE_CHANGED'): f.gate.finish()
+            self.assertTrue((f.root/workspace.WORKSPACE_MAINTENANCE).exists())
+
+    def test_private_safety_container_is_offline_readonly_and_key_never_in_arguments(self):
+        with self.fixture() as f:
+            value={'version':1,'status':'PASS',**f.summary(f.writer),
+                'activeAppleLeaseCount':0,'corruptEncryptedValueCount':0,'businessActions':0}
+            key='PRIVATE_FIXTURE_KEY_'+'x'*40
+            controller=SimpleNamespace(require=d.require,environment_values=lambda p:{'FIELD_ENCRYPTION_KEY':key},
+                run=MagicMock(return_value=json.dumps(value)))
+            # The fixture patches inspect for other tests; call the original saved function directly.
+            result=PRIVATE_INSPECT_ORIGINAL(controller,f.previous,'fixed-image','controlled-volume')
+            self.assertEqual(result,value)
+            command=controller.run.call_args.args
+            self.assertIn('none',command); self.assertIn('--read-only',command)
+            self.assertIn('no-new-privileges:true',command); self.assertIn('ALL',command)
+            self.assertTrue(command[command.index('--mount')+1].endswith(',readonly'))
+            self.assertNotIn(key,json.dumps(command))
+            self.assertEqual(json.loads(controller.run.call_args.kwargs['input_data'])['encryptionKey'],key)
+
+    def test_prepare_failure_carries_owned_gate_and_safe_abort_removes_only_its_marker(self):
+        with self.fixture() as f:
+            f.inspector.side_effect=RuntimeError('API_ADMIN_WORKSPACE_SQLITE_SAFETY_FAILED')
+            args=SimpleNamespace(run_id='123',run_attempt='1',commit=COMMIT)
+            with self.assertRaisesRegex(RuntimeError,'SAFETY_FAILED') as caught:
+                workspace.workspace_prepare(f.controller,f.previous,f.target,f.candidate,args,
+                    {'workspaceVolume':f.gate.volume},legacy=True)
+            owned=caught.exception.sqlite_gate
+            self.assertIsNone(owned.connection)
+            self.assertTrue((f.root/workspace.WORKSPACE_MAINTENANCE).exists())
+            owned.abort()
+            self.assertFalse((f.root/workspace.WORKSPACE_MAINTENANCE).exists())
+            self.assertTrue((f.target/'backups/auto-registration/database.db').exists())
+
+    def test_abort_after_old_image_restore_checks_new_container_and_clears_owned_marker(self):
+        with self.fixture() as f:
+            f.gate.lock();f.gate.backup_restore();f.gate.stop_previous()
+            f.api['State']['Running']=True
+            f.api['Id']='c'*64;f.state['containerId']=f.api['Id']
+            f.api['State']['StartedAt']='2026-10-02T00:00:00.000000000Z'
+            f.state['startedAtSha256']=hashlib.sha256(f.api['State']['StartedAt'].encode()).hexdigest()
+            f.gate.abort()
+            self.assertFalse((f.root/workspace.WORKSPACE_MAINTENANCE).exists())
+            self.assertIsNone(f.gate.connection)
+
+    def test_abort_keeps_fence_if_new_data_or_original_api_or_audit_cannot_be_proven(self):
+        for failure in ('data','image','audit'):
+            with self.subTest(failure=failure),self.fixture() as f:
+                f.gate.lock();f.gate.backup_restore();f.gate.close()
+                if failure=='data':
+                    f.writer.execute("INSERT INTO settings VALUES (55,NULL,'NEW_DATA')");f.writer.commit()
+                if failure=='image':
+                    f.api['Image']='sha256:'+'3'*64;f.state['image']=f.api['Image']
+                if failure=='audit':f.controller.compose.return_value='{"version":1,"mutationCount":1}'
+                with self.assertRaises(RuntimeError):f.gate.abort()
+                self.assertTrue((f.root/workspace.WORKSPACE_MAINTENANCE).exists())
+                self.assertIsNone(f.gate.connection)
+
+    def fake_release_gate(self):
+        return SimpleNamespace(record={'safeFixture':True},summary={'logicalSha256':'7'*64},
+            volume={'name':'fixture_auto_registration_data'},stop_previous=MagicMock(),finish=MagicMock(),
+            check_marker=MagicMock(),close=MagicMock(),abort=MagicMock())
+
+    def test_release_does_not_discard_prepare_exception_gate_before_cleanup(self):
+        gate=self.fake_release_gate()
+        code,result,controller,manifest,_=ReleaseFailureTests().run_release(selected_scope=workspace,
+            sqlite_gate=gate,sqlite_prepare_error=True)
+        self.assertEqual(code,1);self.assertEqual(result['status'],'API_ADMIN_WORKSPACE_FAILED_RESTORED')
+        self.assertEqual(result['servicesAttempted'],['admin'])
+        gate.abort.assert_called_once();gate.stop_previous.assert_not_called()
+        self.assertEqual([call.args[2] for call in controller.rollback_service.call_args_list],['admin'])
+
+    def test_prepare_failure_does_not_report_unfinished_restore_proof_as_verified(self):
+        gate=self.fake_release_gate();gate.record=None
+        code,result,controller,manifest,_=ReleaseFailureTests().run_release(selected_scope=workspace,
+            sqlite_gate=gate,sqlite_prepare_error=True)
+        self.assertEqual(code,1);self.assertTrue(result['rollbackOk'])
+        self.assertEqual(result['sqliteBackupStatus'],'INCOMPLETE_PROOF')
+
+    def test_release_success_and_rollback_finalize_gate_only_after_validation(self):
+        gate=self.fake_release_gate()
+        code,result,controller,manifest,_=ReleaseFailureTests().run_release(selected_scope=workspace,sqlite_gate=gate)
+        self.assertEqual(code,0);gate.stop_previous.assert_called_once();gate.finish.assert_called_once()
+        gate.abort.assert_not_called()
+        self.assertEqual(manifest['apiWorkspacePublication']['sqliteProtectionSha256'],workspace.fingerprint(gate.record))
+        gate=self.fake_release_gate()
+        code,result,controller,manifest,_=ReleaseFailureTests().run_release(selected_scope=workspace,
+            sqlite_gate=gate,fail_at='caddy-health')
+        self.assertEqual(code,1);self.assertTrue(result['rollbackOk']);gate.abort.assert_called_once()
+        self.assertEqual(result['status'],'API_ADMIN_WORKSPACE_FAILED_RESTORED')
+        self.assertEqual([call.args[2] for call in controller.rollback_service.call_args_list],['caddy','api','admin'])
+
+    def test_uncertain_abort_is_partial_and_never_reported_restored(self):
+        gate=self.fake_release_gate();gate.abort.side_effect=RuntimeError('API_ADMIN_WORKSPACE_SQLITE_SOURCE_CHANGED')
+        code,result,controller,manifest,_=ReleaseFailureTests().run_release(selected_scope=workspace,
+            sqlite_gate=gate,sqlite_prepare_error=True)
+        self.assertEqual(code,1);self.assertFalse(result['rollbackOk'])
+        self.assertEqual(result['status'],'API_ADMIN_WORKSPACE_PARTIAL_RECOVERY_REQUIRED')
+        self.assertFalse(result['currentPointsToCandidate'])
+
+    def test_persisted_restore_receipt_rechecks_binding_and_backup_bytes(self):
+        with self.fixture() as f:
+            f.gate.lock();value=f.gate.backup_restore()
+            digest=workspace.fingerprint(value)
+            record={'sqliteProtectionSha256':digest,'workspaceVolumeBefore':f.gate.volume,
+                'workspaceVolumeAfter':f.gate.volume,'before':{'api':f.state}}
+            manifest={'apiWorkspacePublication':{'sqliteProtectionSha256':digest}}
+            result=workspace.workspace_sqlite_receipt(f.controller,f.target,f.candidate,record,manifest)
+            self.assertTrue(result['restoreVerified']);self.assertTrue(result['backupVerified'])
+            with (f.target/value['backupName']).open('ab') as stream:stream.write(b'CHANGED')
+            with self.assertRaisesRegex(RuntimeError,'BACKUP_CHANGED'):
+                workspace.workspace_sqlite_receipt(f.controller,f.target,f.candidate,record,manifest)
+
+    def test_v4_real_restore_receipt_rejects_resigned_private_restore_hash_identity_and_lease_changes(self):
+        with self.fixture() as f:
+            f.gate.lock();original=f.gate.backup_restore()
+            path=f.target/workspace.WORKSPACE_SQLITE_RECEIPT
+            def bound(value):
+                digest=workspace.fingerprint(value)
+                record={'sqliteProtectionSha256':digest,'workspaceVolumeBefore':f.gate.volume,
+                    'workspaceVolumeAfter':f.gate.volume,'before':{'api':dict(f.state)}}
+                manifest={'apiWorkspacePublication':{'version':4,'sqliteProtectionSha256':digest}}
+                return record,manifest
+            record,manifest=bound(original)
+            result=workspace.workspace_sqlite_receipt(f.controller,f.target,f.candidate,record,manifest)
+            self.assertEqual(set(result),{'backupVerified','restoreVerified','sqliteProtectionSha256','backupSha256','backupSize'})
+            self.assertTrue(result['backupVerified']);self.assertTrue(result['restoreVerified'])
+            for variation in ('private','restore','restore-volume','backup-hash','source-hash','maintenance-hash',
+                    'container','image','started-at','candidate-image','volume','lease','inspection-private','legacy-audit'):
+                value=copy.deepcopy(original)
+                if variation=='private':value['privateData']='PRIVATE_SENTINEL'
+                elif variation=='restore':value['restoreVerified']=False
+                elif variation=='restore-volume':value['temporaryRestoreVolumeRemoved']=False
+                elif variation=='backup-hash':value['backupSha256']='not-a-hash'
+                elif variation=='source-hash':value['sourceDatabaseIdentitySha256']='not-a-hash'
+                elif variation=='maintenance-hash':value['maintenanceSha256']='not-a-hash'
+                elif variation=='container':value['sourceApiIdentity']['containerId']='d'*64
+                elif variation=='image':value['sourceApiIdentity']['image']='sha256:'+'d'*64
+                elif variation=='started-at':value['sourceApiIdentity']['startedAtSha256']='d'*64
+                elif variation=='candidate-image':value['candidateImageId']='sha256:'+'d'*64
+                elif variation=='volume':value['volume']['identitySha256']='d'*64
+                elif variation=='lease':value['inspection']['activeAppleLeaseCount']=1
+                elif variation=='inspection-private':value['inspection']['privateData']='PRIVATE_SENTINEL'
+                else:value['legacyAudit']['legacyMutationCount']=1
+                # Rebind both outer seals so rejection must come from the real
+                # closed receipt/safety checks, not a stale digest alone.
+                path.write_text(json.dumps(value))
+                record,manifest=bound(value)
+                with self.subTest(variation=variation),self.assertRaisesRegex(RuntimeError,'SQLITE_'):
+                    workspace.workspace_sqlite_receipt(f.controller,f.target,f.candidate,record,manifest)
+            path.write_text(json.dumps(original))
+            record,manifest=bound(original)
+            self.assertEqual(workspace.workspace_sqlite_receipt(f.controller,f.target,f.candidate,record,manifest),result)
+
+    def test_v4_real_restore_receipt_rejects_private_file_permission_and_outer_seal_changes(self):
+        with self.fixture() as f:
+            f.gate.lock();value=f.gate.backup_restore()
+            digest=workspace.fingerprint(value)
+            record={'sqliteProtectionSha256':digest,'workspaceVolumeBefore':f.gate.volume,
+                'workspaceVolumeAfter':f.gate.volume,'before':{'api':dict(f.state)}}
+            manifest={'apiWorkspacePublication':{'version':4,'sqliteProtectionSha256':digest}}
+            backup=f.target/value['backupName']
+            for path,mode in ((f.target/workspace.WORKSPACE_SQLITE_RECEIPT,0o644),
+                    (backup,0o644),(backup.parent,0o755),(backup.parent.parent,0o755)):
+                original_mode=path.stat().st_mode & 0o777
+                try:
+                    path.chmod(mode)
+                    with self.subTest(path=path.relative_to(f.target)),self.assertRaisesRegex(RuntimeError,'SQLITE_'):
+                        workspace.workspace_sqlite_receipt(f.controller,f.target,f.candidate,record,manifest)
+                finally:path.chmod(original_mode)
+            for target,key in ((record,'sqliteProtectionSha256'),(manifest['apiWorkspacePublication'],'sqliteProtectionSha256')):
+                original=target[key]
+                try:
+                    target[key]='d'*64
+                    with self.assertRaisesRegex(RuntimeError,'SQLITE_RECEIPT_CHANGED'):
+                        workspace.workspace_sqlite_receipt(f.controller,f.target,f.candidate,record,manifest)
+                finally:target[key]=original
+            self.assertTrue(workspace.workspace_sqlite_receipt(f.controller,f.target,f.candidate,record,manifest)['restoreVerified'])
+
+    def test_pending_v4_producer_binds_sqlite_gate_and_switches_only_api_admin(self):
+        pending_fixtures=load('merged_pending_v4_producer_fixtures','api-admin-pending-online.test.py')
+        pending=pending_fixtures.context()
+        gate=self.fake_release_gate()
+        code,result,controller,manifest,persisted=ReleaseFailureTests().run_release(selected_scope=workspace,
+            pending_origin=pending,sqlite_gate=gate)
+        self.assertEqual(code,0);self.assertFalse(persisted)
+        self.assertEqual(result['status'],'API_ADMIN_WORKSPACE_VERIFIED')
+        self.assertEqual([call.args[-1] for call in controller.compose.call_args_list],['admin','api'])
+        self.assertEqual(manifest['servicesUpdated'],['api','admin'])
+        publication=manifest['apiWorkspacePublication']
+        self.assertEqual(publication['version'],4)
+        self.assertEqual(publication['sqliteProtectionSha256'],workspace.fingerprint(gate.record))
+        self.assertEqual(publication['pendingOnlineMigration'],workspace.pending_online_marker(pending))
+        self.assertIs(publication['onlinePublished'],False);self.assertIs(publication['migrationPerformed'],False)
+        self.assertNotIn('workspaceBackupSha256',publication)
+        self.assertNotIn('workspaceBackup',controller.pending_record)
+        self.assertNotIn('workspacePreparation',controller.pending_record)
+        self.assertEqual(controller.pending_record['sqliteProtectionSha256'],workspace.fingerprint(gate.record))
+        self.assertEqual(controller.pending_record['pendingOnlineMigrationOrigin'],pending)
+        controller.pending_projection.assert_called_once()
+        gate.stop_previous.assert_called_once();gate.finish.assert_called_once();gate.abort.assert_not_called()
+        controller.rollback_service.assert_not_called()
+        # This mock tests producer field binding and switch selection only. The
+        # two real-gate tests above exercise workspace_sqlite_receipt authority.
+
+    def test_safe_receipt_rejects_extra_data_bad_types_or_unproven_lease(self):
+        with self.fixture() as f:
+            original={'version':1,'status':'PASS',**f.summary(f.writer),
+                'activeAppleLeaseCount':0,'corruptEncryptedValueCount':0,'businessActions':0}
+            for key,value in [('privateData','PRIVATE_SENTINEL'),('activeAppleLeaseCount',1),
+                    ('businessActions',False),('schemaSha256','not-a-hash')]:
+                changed={**original,key:value}
+                with self.subTest(key=key),self.assertRaisesRegex(RuntimeError,'SAFETY_FAILED'):
+                    workspace.workspace_safety_result(f.controller,changed)
+            with self.assertRaisesRegex(RuntimeError,'SAFETY_FAILED'):
+                workspace.workspace_safety_result(f.controller,{**original,
+                    'tableCounts':{**original['tableCounts'],'sqlite_sequence':0}})
+
+    def test_frozen_pure_helper_runs_on_host_and_wal_backup_shares_its_algorithm(self):
+        with self.fixture(wal=True) as f:
+            helper=f.target/workspace.WORKSPACE_SAFETY
+            helper.parent.mkdir(parents=True,mode=0o700)
+            helper.write_bytes((ROOT/workspace.WORKSPACE_SAFETY).read_bytes())
+            before_crypto={name for name in sys.modules if name.startswith('cryptography')}
+            summary=SUMMARY_READER_ORIGINAL(f.gate)
+            self.assertEqual(before_crypto,{name for name in sys.modules if name.startswith('cryptography')})
+            with sqlite3.connect(f.database.as_uri()+'?mode=rw',uri=True) as holder:
+                holder.execute('BEGIN IMMEDIATE');original=summary(holder)
+                source=sqlite3.connect(f.database.as_uri()+'?mode=ro',uri=True)
+                destination=sqlite3.connect(f.target/'standalone-proof.db')
+                try:
+                    source.backup(destination);destination.execute('PRAGMA journal_mode=DELETE')
+                    self.assertEqual(summary(destination),original)
+                    self.assertTrue(holder.in_transaction)
+                finally:
+                    source.close();destination.close();holder.rollback()
 
 
-class OnlineRecoveredOriginTests(unittest.TestCase):
-    """Actual recovery/source/backup helpers with isolated Git and SQLite files.
-
-    Reuse the original recovery suite's synthetic failed-receipt boundary; this
-    is local control evidence, never proof of a real completed publication.
-    Docker, S3 and MySQL results are boundaries; no recovery or migration runs.
-    """
-    @classmethod
-    def setUpClass(cls):
-        cls.fixtures = load('workspace_recovered_origin_fixture', 'online-recharge-scope.test.py')
-        cls.fixtures.RecoveryTests.setUpClass()
-        cls.online = cls.fixtures.scope
-        cls.backups = staticmethod(cls.online.recovery_backups)
-
-    @classmethod
-    def tearDownClass(cls):
-        cls.fixtures.RecoveryTests.tearDownClass()
-
-    @contextmanager
-    def recovered(self):
-        import gzip
-        with self.fixtures.RecoveryTests().fixture() as recovered, OnlineSuccessorTests().lifecycle() as current, ExitStack() as stack:
-            _, previous, failed, failure, *_ = recovered
-            controller, _, _, volume, _, control, database = current
-            controller.BASE = previous.parent.parent
-            original = previous.with_name('20261008T000000Z-' + workspace.WORKSPACE_BOOTSTRAP_COMMIT[:12])
-            previous.rename(original)
-            published = original.parent / ('20261009T120002Z-' + COMMIT[:12])
-            shutil.copytree(self.fixtures.RecoveryTests.prepared, published)
-            policy = self.fixtures.RecoveryTests.policy
-            for name in policy['candidateAllowedFiles']:
-                path = published / name; path.parent.mkdir(parents=True, exist_ok=True)
-                path.write_bytes((ROOT / name).read_bytes()); path.chmod((ROOT / name).stat().st_mode & 0o777)
-            # The original API is gone. All attached-volume probes must inspect
-            # only this replacement API, without comparing its ID/image to 0a03.
-            control.api['Id'] = '9' * 64; control.api['Config']['Hostname'] = control.api['Id'][:12]
-            controller.api_admin_scope = lambda selected: (workspace, controller)
-            controller.online_recharge_scope = lambda: (self.online, controller)
-            controller.environment_values = lambda path: {'MYSQL_BACKUP_S3_BUCKET': 'isolated-fixture-bucket'}
-            with sqlite3.connect(database) as connection:
-                connection.execute('ALTER TABLE registration_tasks ADD COLUMN status TEXT')
-            audit = {'ok': True, 'checkCount': 49, 'violationCount': 0,
-                     'checks': [{'code': 'fixture-' + str(i), 'count': 0} for i in range(49)]}
-            (failed / 'before-audit.json').write_text(json.dumps(audit))
-            (original / 'after-audit.json').write_text(json.dumps(audit))
-            mysql_root = controller.BASE / 'backups/mysql'; mysql_root.mkdir(parents=True)
-            mysql = mysql_root / 'id-business-v2-20261009T120001Z.sql.gz'
-            mysql.write_bytes(gzip.compress(b'-- synthetic isolated SQL backup\n', mtime=0))
-            (failed / 'backup-verification.json').write_text(json.dumps({'name': mysql.name,
-                'sha256': self.online.file_digest(mysql), 'size': mysql.stat().st_size, 's3Verified': True}))
-            sqlite_root = controller.BASE / 'backups/registration-workspace'; sqlite_root.mkdir()
-            zipped = sqlite_root / ('id-business-v2-online-recharge-workspace-20261009T120001Z-' + self.online.RECOVERY_COMMIT[:12] + '.sqlite3.gz')
-            zipped.write_bytes(gzip.compress(database.read_bytes(), mtime=0))
-            backup = {'version': 1, 'name': zipped.name, 'sha256': self.online.file_digest(zipped),
-                'size': zipped.stat().st_size, 'workspaceVolume': volume, 'integrityCheck': 'ok',
-                'idleSnapshot': True, 'onlineBackup': True, 's3Verified': True}
-            (failed / self.online.WORKSPACE_BACKUP_FILE).write_text(json.dumps(backup))
-            inspect = controller.run; reads = []
-            def run(*args, **kwargs):
-                reads.append(args)
-                if args[:3] == ('aws', 's3api', 'head-object'):
-                    path = zipped if args[args.index('--key') + 1].endswith(zipped.name) else mysql
-                    return json.dumps({'ContentLength': path.stat().st_size, 'ServerSideEncryption': 'AES256',
-                        'ChecksumSHA256': base64.b64encode(hashlib.sha256(path.read_bytes()).digest()).decode()})
-                return inspect(*args, **kwargs)
-            controller.run = run
-            # Restore the genuine backup chain over synthetic S3/Docker reads;
-            # the reused fixture otherwise isolates backups for its source tests.
-            stack.enter_context(patch.object(self.online, 'recovery_backups', wraps=self.backups))
-            marker = self.online.recovery_marker(policy)
-            manifest = {'migrationRecovery': marker, 'migrationPerformed': False}
-            record = {'baselineEvidence': {'migrationRecovery': marker}, 'migration': {'performed': False}}
-            yield controller, original, failed, published, manifest, record, control, reads, failure
-
-    def test_fixed_policy_and_source_bytes_are_required_and_part_of_origin_seal(self):
-        online, _ = d.online_recharge_scope()
-        self.assertEqual(online.fingerprint(online.recovery_policy(d)), online.RECOVERY_POLICY_SHA256)
-        with tracked_online_source() as directory:
-            workspace.workspace_online_sources(d, directory)
-        self.assertIn('scripts/production-release/online-recharge-recovery.json', workspace.ONLINE_ORIGIN_FILES)
-        with self.recovered() as (controller, original, failed, published, *_):
-            path = published / 'scripts/production-release/online-recharge-recovery.json'
-            path.write_bytes(path.read_bytes() + b'\n')
-            with self.assertRaisesRegex(RuntimeError, 'RECOVERY_POLICY_CHANGED'):
-                workspace.workspace_online_sources(controller, published)
-
-    def test_actual_recovery_origin_source_and_backup_chain_accepts_replaced_api_on_same_volume(self):
-        with self.recovered() as (controller, original, failed, published, manifest, record, control, reads, _):
-            workspace.workspace_online_recovery(controller, self.online, original, published, manifest, record)
-            self.assertTrue(any(args[:3] == ('aws', 's3api', 'head-object') for args in reads))
-            self.assertTrue(any(args[:3] == ('docker', 'inspect', control.api['Id']) for args in reads))
-            self.assertFalse(any(args[:3] == ('docker', 'inspect', '1' * 64) for args in reads))
-            self.assertFalse(control.events)
-            self.assertFalse(list((controller.BASE / 'backups/registration-workspace').glob('*.readback')))
-
-    def test_recovered_origin_rejects_changed_failure_source_policy_marker_or_performed_flag(self):
-        for change in ('failure', 'candidate-source', 'marker', 'performed', 'manifest-performed', 'volume'):
-            with self.subTest(change=change), self.recovered() as fixture:
-                controller, original, failed, published, manifest, record, control, _, failure = fixture
-                if change == 'failure':
-                    failure['servicesAttempted'] = ['api']; (failed / self.online.FAILURE_FILE).write_text(json.dumps(failure))
-                elif change == 'candidate-source':
-                    (published / 'apps/admin/src/v2/features/online-recharge/unapproved.ts').write_text('unapproved')
-                elif change == 'marker': manifest['migrationRecovery'] = {}
-                elif change == 'performed': manifest['migrationPerformed'] = record['migration']['performed'] = True
-                elif change == 'manifest-performed': manifest['migrationPerformed'] = True
-                else: control.volumes['fixture_auto_registration_data']['CreatedAt'] = '2026-10-10T00:00:00Z'
-                with self.assertRaises(RuntimeError):
-                    workspace.workspace_online_recovery(controller, self.online, original, published, manifest, record)
-                self.assertFalse(control.events)
-
-    def test_original_first_publication_cannot_omit_performed_or_claim_unsealed_recovery(self):
-        controller = SimpleNamespace(require=d.require)
-        workspace.workspace_online_recovery(controller, self.online, ROOT, ROOT,
-            {'migrationPerformed': True}, {'baselineEvidence': {}, 'migration': {'performed': True}})
-        for performed in (False, None, 1):
-            with self.subTest(performed=performed), self.assertRaises(RuntimeError):
-                workspace.workspace_online_recovery(controller, self.online, ROOT, ROOT,
-                    {'migrationPerformed': performed}, {'baselineEvidence': {}, 'migration': {'performed': performed}})
-        with self.assertRaises(RuntimeError):
-            workspace.workspace_online_recovery(controller, self.online, ROOT, ROOT,
-                {'migrationPerformed': True, 'migrationRecovery': {}},
-                {'baselineEvidence': {}, 'migration': {'performed': True}})
-
-
-class OnlineSuccessorTests(unittest.TestCase):
-    """Synthetic Docker boundaries; the real controller/SQLite helper runs.
-
-    These fixtures are deliberately NOT evidence of a published online origin.
-    The separate negative proof cases exercise the genuine first-origin reader.
-    """
+class LegacyOnlineSuccessorFixture(unittest.TestCase):
     @contextmanager
     def lifecycle(self):
         import time
@@ -4116,332 +4076,432 @@ class OnlineSuccessorTests(unittest.TestCase):
             finally:
                 for child in control.children: child.close()
 
-    def test_actual_backup_stop_orders_engine_before_api_and_keeps_barrier_until_both_exit(self):
-        if not hasattr(sqlite3.Connection, 'serialize'): self.skipTest('SQLite serialize unavailable')
-        try: import cryptography
-        except ImportError: self.skipTest('Existing cryptography runtime unavailable')
-        with self.lifecycle() as (controller, source, target, volume, preparation, control, database):
-            original = database.read_bytes(); changed = []
-            receipt = workspace.workspace_backup_stop(controller, source, target, volume, preparation, changed)
-            self.assertEqual(changed, [workspace.ONLINE_ENGINE, 'api'])
-            self.assertEqual(control.events, [('stop', workspace.ONLINE_ENGINE), ('stop', 'api')])
-            self.assertEqual(control.api['State'], {'Running': False, 'Pid': 0})
-            self.assertEqual(control.engine['State'], {'Running': False, 'Pid': 0})
-            self.assertFalse(control.barriers[0].active)
-            self.assertEqual(receipt['status'], 'ENCRYPTED_VERIFIED'); self.assertTrue(receipt['restoreVerified'])
-            self.assertEqual(database.read_bytes(), original)
-            self.assertNotIn(b'SYNTHETIC_PRIVATE_SENTINEL', (target / workspace.WORKSPACE_BACKUP_FILE).read_bytes())
-            self.assertTrue(control.children[0].process.stdin.closed); self.assertIsNotNone(control.children[0].process.poll())
 
-    def test_engine_stop_failure_records_attempt_and_no_api_stop_is_started(self):
-        with self.lifecycle() as (controller, source, target, volume, preparation, control, database):
-            control.fail_stop = workspace.ONLINE_ENGINE; changed = []
-            with self.assertRaisesRegex(RuntimeError, 'SYNTHETIC_STOP_FAILURE'):
-                workspace.workspace_backup_stop(controller, source, target, volume, preparation, changed)
-            self.assertEqual(changed, [workspace.ONLINE_ENGINE]); self.assertTrue(control.api['State']['Running'])
-            self.assertFalse(control.barriers[0].active)
-            self.assertEqual(control.events, [('stop', workspace.ONLINE_ENGINE)])
+class OnlineRecoveredOriginTests(unittest.TestCase):
+    """Actual recovery/source/backup helpers with isolated Git and SQLite files.
 
-    def test_actual_release_handler_recovers_paired_services_after_engine_and_old_api_stop_failure(self):
-        if not hasattr(sqlite3.Connection, 'serialize'): self.skipTest('SQLite serialize unavailable')
-        try: import cryptography
-        except ImportError: self.skipTest('Existing cryptography runtime unavailable')
-        with self.lifecycle() as fixture:
-            controller, source, target, volume, preparation, control, database = fixture
-            control.fail_stop = 'api'
-            code, result, release_controller, manifest, persisted = ReleaseFailureTests().run_release(
-                selected_scope=workspace, workspace_initialized=True, online_lifecycle=fixture)
-            self.assertEqual(code, 1); self.assertEqual(result['status'], 'API_ADMIN_WORKSPACE_FAILED_RESTORED')
-            self.assertEqual(result['servicesAttempted'], ['admin', workspace.ONLINE_ENGINE, 'api'])
-            self.assertEqual(result['rollback']['api'], 'RESTORED')
-            self.assertEqual(result['rollback'][workspace.ONLINE_ENGINE], 'RESTORED')
-            self.assertTrue(result['rollbackOk']); self.assertTrue(persisted); self.assertIsNone(manifest)
-            self.assertTrue(control.engine['State']['Running']); self.assertTrue(control.api['State']['Running'])
-            self.assertEqual(control.engine['HostConfig']['NetworkMode'], 'container:' + control.api['Id'])
-            self.assertEqual(control.events.count(('stop', workspace.ONLINE_ENGINE)), 2)
-            self.assertEqual(control.events.count(('stop', 'api')), 2)
-            self.assertTrue(all(not barrier.active for barrier in control.barriers))
+    Reuse the original recovery suite's synthetic failed-receipt boundary; this
+    is local control evidence, never proof of a real completed publication.
+    Docker, S3 and MySQL results are boundaries; no recovery or migration runs.
+    """
+    @classmethod
+    def setUpClass(cls):
+        cls.fixtures = load('workspace_recovered_origin_fixture', 'online-recharge-scope.test.py')
+        cls.fixtures.RecoveryTests.setUpClass()
+        cls.online = cls.fixtures.scope
+        cls.backups = staticmethod(cls.online.recovery_backups)
 
-    def test_actual_release_handler_stops_recovery_after_new_acceptance_following_engine_stop_failure(self):
-        with self.lifecycle() as fixture:
-            controller, source, target, volume, preparation, control, database = fixture
-            original = controller.compose
-            def accepted(directory, *args, **kwargs):
-                try: return original(directory, *args, **kwargs)
-                except RuntimeError:
-                    control.online_audit = 1
-                    raise
-            controller.compose = accepted; control.fail_stop = workspace.ONLINE_ENGINE
-            code, result, release_controller, manifest, persisted = ReleaseFailureTests().run_release(
-                selected_scope=workspace, workspace_initialized=True, online_lifecycle=fixture)
-            self.assertEqual(code, 1); self.assertEqual(result['status'], 'API_ADMIN_WORKSPACE_PARTIAL_RECOVERY_REQUIRED')
-            self.assertFalse(result['rollbackOk']); self.assertTrue(persisted)
-            self.assertEqual(result['servicesAttempted'], ['admin', workspace.ONLINE_ENGINE])
-            self.assertEqual(result['rollback'][workspace.ONLINE_ENGINE], 'BLOCKED_OR_FAILED')
-            self.assertTrue(control.api['State']['Running']); self.assertFalse(control.engine['State']['Running'])
-            self.assertFalse(any(name == 'api' for action, name in control.events if action == 'stop'))
-            release_controller.rollback_service.assert_not_called()
+    @classmethod
+    def tearDownClass(cls):
+        cls.fixtures.RecoveryTests.tearDownClass()
 
-    def test_lost_connection_after_engine_stop_never_starts_api_stop(self):
-        with self.lifecycle() as (controller, source, target, volume, preparation, control, database):
-            control.lost_read = 3; changed = []
-            with self.assertRaisesRegex(RuntimeError, 'AUDIT_GUARD_LOST'):
-                workspace.workspace_backup_stop(controller, source, target, volume, preparation, changed)
-            self.assertEqual(changed, [workspace.ONLINE_ENGINE]); self.assertTrue(control.api['State']['Running'])
-            self.assertFalse(control.engine['State']['Running']); self.assertFalse(control.children)
+    @contextmanager
+    def recovered(self):
+        import gzip
+        with self.fixtures.RecoveryTests().fixture() as recovered, LegacyOnlineSuccessorFixture().lifecycle() as current, ExitStack() as stack:
+            _, previous, failed, failure, *_ = recovered
+            controller, _, _, volume, _, control, database = current
+            controller.BASE = previous.parent.parent
+            original = previous.with_name('20261008T000000Z-' + workspace.WORKSPACE_BOOTSTRAP_COMMIT[:12])
+            previous.rename(original)
+            published = original.parent / ('20261009T120002Z-' + COMMIT[:12])
+            shutil.copytree(self.fixtures.RecoveryTests.prepared, published)
+            policy = self.fixtures.RecoveryTests.policy
+            for name in policy['candidateAllowedFiles']:
+                path = published / name; path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes((ROOT / name).read_bytes()); path.chmod((ROOT / name).stat().st_mode & 0o777)
+            # The original API is gone. All attached-volume probes must inspect
+            # only this replacement API, without comparing its ID/image to 0a03.
+            control.api['Id'] = '9' * 64; control.api['Config']['Hostname'] = control.api['Id'][:12]
+            controller.api_admin_scope = lambda selected: (workspace, controller)
+            controller.online_recharge_scope = lambda: (self.online, controller)
+            controller.environment_values = lambda path: {'MYSQL_BACKUP_S3_BUCKET': 'isolated-fixture-bucket'}
+            with sqlite3.connect(database) as connection:
+                connection.execute('ALTER TABLE registration_tasks ADD COLUMN status TEXT')
+            audit = {'ok': True, 'checkCount': 49, 'violationCount': 0,
+                     'checks': [{'code': 'fixture-' + str(i), 'count': 0} for i in range(49)]}
+            (failed / 'before-audit.json').write_text(json.dumps(audit))
+            (original / 'after-audit.json').write_text(json.dumps(audit))
+            mysql_root = controller.BASE / 'backups/mysql'; mysql_root.mkdir(parents=True)
+            mysql = mysql_root / 'id-business-v2-20261009T120001Z.sql.gz'
+            mysql.write_bytes(gzip.compress(b'-- synthetic isolated SQL backup\n', mtime=0))
+            (failed / 'backup-verification.json').write_text(json.dumps({'name': mysql.name,
+                'sha256': self.online.file_digest(mysql), 'size': mysql.stat().st_size, 's3Verified': True}))
+            sqlite_root = controller.BASE / 'backups/registration-workspace'; sqlite_root.mkdir()
+            zipped = sqlite_root / ('id-business-v2-online-recharge-workspace-20261009T120001Z-' + self.online.RECOVERY_COMMIT[:12] + '.sqlite3.gz')
+            zipped.write_bytes(gzip.compress(database.read_bytes(), mtime=0))
+            backup = {'version': 1, 'name': zipped.name, 'sha256': self.online.file_digest(zipped),
+                'size': zipped.stat().st_size, 'workspaceVolume': volume, 'integrityCheck': 'ok',
+                'idleSnapshot': True, 'onlineBackup': True, 's3Verified': True}
+            (failed / self.online.WORKSPACE_BACKUP_FILE).write_text(json.dumps(backup))
+            inspect = controller.run; reads = []
+            def run(*args, **kwargs):
+                reads.append(args)
+                if args[:3] == ('aws', 's3api', 'head-object'):
+                    path = zipped if args[args.index('--key') + 1].endswith(zipped.name) else mysql
+                    return json.dumps({'ContentLength': path.stat().st_size, 'ServerSideEncryption': 'AES256',
+                        'ChecksumSHA256': base64.b64encode(hashlib.sha256(path.read_bytes()).digest()).decode()})
+                return inspect(*args, **kwargs)
+            controller.run = run
+            # Restore the genuine backup chain over synthetic S3/Docker reads;
+            # the reused fixture otherwise isolates backups for its source tests.
+            stack.enter_context(patch.object(self.online, 'recovery_backups', wraps=self.backups))
+            marker = self.online.recovery_marker(policy)
+            manifest = {'migrationRecovery': marker, 'migrationPerformed': False}
+            record = {'baselineEvidence': {'migrationRecovery': marker}, 'migration': {'performed': False}}
+            yield controller, original, failed, published, manifest, record, control, reads, failure
 
-    def test_accepted_online_notification_or_soft_deleted_history_refuses_rollback_before_stop(self):
-        for accepted in ('audit-only', 'historical-task', 'historical-bill', 'registration-audit'):
-            with self.subTest(accepted=accepted), self.lifecycle() as (controller, source, target, volume, preparation, control, database):
-                if accepted == 'audit-only': control.online_audit = 1
-                elif accepted == 'registration-audit': control.registration_audit = 1
-                else: control.table_counts['online_recharge_' + ('tasks' if accepted == 'historical-task' else 'bills')] = 1
-                with self.assertRaisesRegex(RuntimeError, 'AUDIT_GUARD_LOST'):
-                    workspace.workspace_rollback_stop(controller, target)
-                self.assertFalse(control.events); self.assertFalse(control.barriers[0].active)
-
-    def test_private_health_is_auxiliary_and_active_not_ready_or_disconnected_refuses_stop(self):
-        for field, value in (('activeTasks', 1), ('ready', False), ('rpcConnected', False), ('stopping', True), ('mode', 'disabled')):
-            with self.subTest(field=field), self.lifecycle() as (controller, source, target, volume, preparation, control, database):
-                control.health[field] = value; changed = []
-                with self.assertRaisesRegex(RuntimeError, 'NOT_IDLE'):
-                    workspace.workspace_backup_stop(controller, source, target, volume, preparation, changed)
-                self.assertFalse(changed); self.assertFalse(control.events)
-
-    def test_rollback_after_new_api_created_but_before_engine_rebind_accepts_only_sealed_exited_engine(self):
-        with self.lifecycle() as (controller, source, target, volume, preparation, control, database):
-            control.engine['State'] = {'Running': False, 'Pid': 0}
-            control.api['Id'] = '7' * 64; control.api['Config']['Hostname'] = control.api['Id'][:12]
-            workspace.workspace_rollback_stop(controller, target)
-            self.assertEqual(control.events, [('stop', workspace.ONLINE_ENGINE), ('stop', 'api')])
-            self.assertFalse(control.barriers[0].active)
-            controller.compose(source, 'up', '-d', '--no-deps', '--no-build', '--pull', 'never', '--force-recreate', 'api')
-            # A real online snapshot needs seven running Docker services; supply
-            # only that boundary here, retaining actual inspect/hash/rebind code.
-            def state(d, directory):
-                return {'api': {'containerId': control.api['Id']}, workspace.ONLINE_ENGINE: {
-                    'image': control.engine['Image'], 'reference': control.engine['Config']['Image'],
-                    'configurationSha256': workspace.workspace_engine_configuration(controller, control.engine, control.api['Id'])}}
-            with patch.object(workspace, 'workspace_online_snapshot', side_effect=state):
-                original_run = controller.run
-                controller.run = lambda *args, **kwargs: (json.dumps(control.health) if args[:2] == ('docker', 'exec') else original_run(*args, **kwargs))
-                workspace.workspace_online_rebind(controller, source, controller._workspaceOnlineOrigin)
-            self.assertTrue(control.engine['State']['Running'])
-            self.assertEqual(control.engine['HostConfig']['NetworkMode'], 'container:' + control.api['Id'])
-            self.assertEqual(control.engine['Config']['Hostname'], control.api['Id'][:12])
-            self.assertEqual(control.events[-2:], [('rm', workspace.ONLINE_ENGINE), ('up', workspace.ONLINE_ENGINE)])
-
-    def test_running_engine_bound_to_removed_api_cannot_use_stopped_exception(self):
-        with self.lifecycle() as (controller, source, target, volume, preparation, control, database):
-            control.api['Id'] = '7' * 64; control.api['Config']['Hostname'] = control.api['Id'][:12]
-            with self.assertRaisesRegex(RuntimeError, 'CONFIGURATION_CHANGED'):
-                workspace.workspace_rollback_stop(controller, target)
-            self.assertFalse(control.events)
-
-    def test_normalized_metadata_changes_only_verified_inherited_api_hostname_and_namespace(self):
-        with self.lifecycle() as (controller, source, target, volume, preparation, control, database):
-            expected = controller._workspaceOnlineOrigin['engineConfigurationSha256']
-            control.api['Id'] = '7' * 64; control.api['Config']['Hostname'] = control.api['Id'][:12]
-            control.engine['Id'] = '8' * 64; control.engine['Config']['Hostname'] = control.api['Id'][:12]
-            control.engine['HostConfig']['NetworkMode'] = 'container:' + control.api['Id']
-            # Actual Compose rm/up changes this generated hash because it hashes
-            # the resolved API ID; all behavior-bearing metadata stays equal.
-            control.engine['Config']['Labels']['com.docker.compose.config-hash'] = 'b' * 64
-            self.assertEqual(workspace.workspace_engine_configuration(controller, control.engine, control.api['Id']), expected)
-            for area, field, value in (('Config', 'Cmd', ['node', 'changed.cjs']), ('Config', 'Env', ['WORKER_KEY=CHANGED']),
-                ('HostConfig', 'Privileged', True), ('Config', 'Domainname', 'changed')):
-                metadata = copy.deepcopy(control.engine); metadata[area][field] = value
-                with self.subTest(field=field):
-                    try: actual = workspace.workspace_engine_configuration(controller, metadata, control.api['Id'])
-                    except RuntimeError: actual = None
-                    self.assertNotEqual(actual, expected)
-            control.engine['Config']['Hostname'] = 'custom-unrelated'
-            with self.assertRaisesRegex(RuntimeError, 'CONFIGURATION_CHANGED'):
-                workspace.workspace_engine_configuration(controller, control.engine, control.api['Id'])
-
-    def test_only_typed_compose_generated_hash_may_change_and_other_labels_and_mounts_stay_sealed(self):
-        with self.lifecycle() as (controller, source, target, volume, preparation, control, database):
-            expected = controller._workspaceOnlineOrigin['engineConfigurationSha256']
-            control.engine['Config']['Labels']['com.docker.compose.config-hash'] = 'b' * 64
-            self.assertEqual(workspace.workspace_engine_configuration(controller, control.engine, control.api['Id']), expected)
-            for field, value in (('com.docker.compose.config-hash', None),
-                    ('com.docker.compose.config-hash', 'B' * 64), ('com.docker.compose.config-hash', 'a' * 63),
-                    ('com.docker.compose.depends_on', 'api:service_healthy:false'),
-                    ('com.docker.compose.replace', '2' * 64)):
-                metadata = copy.deepcopy(control.engine); metadata['Config']['Labels'][field] = value
-                with self.subTest(field=field, value=value), self.assertRaisesRegex(RuntimeError, 'CONFIGURATION_CHANGED'):
-                    workspace.workspace_engine_configuration(controller, metadata, control.api['Id'])
-            for mutation in ('user-label', 'compose-path', 'mount-mode', 'mount-source', 'namespace'):
-                metadata = copy.deepcopy(control.engine)
-                if mutation == 'user-label': metadata['Config']['Labels']['user.policy'] = 'CHANGED'
-                elif mutation == 'compose-path': metadata['Config']['Labels']['com.docker.compose.project.working_dir'] = str(target)
-                elif mutation == 'mount-mode': metadata['Mounts'][0]['RW'] = False
-                elif mutation == 'mount-source': metadata['Mounts'][0]['Source'] += '-changed'
-                else: metadata['HostConfig']['NetworkMode'] = 'container:' + '7' * 64
-                with self.subTest(mutation=mutation):
-                    try: actual = workspace.workspace_engine_configuration(controller, metadata, control.api['Id'])
-                    except RuntimeError: actual = None
-                    self.assertNotEqual(actual, expected)
-
-    def test_recreated_named_engine_volume_is_rejected_by_identity_even_if_name_and_mount_match(self):
-        with self.lifecycle() as (controller, source, target, volume, preparation, control, database):
-            expected = controller._workspaceOnlineOrigin['engineConfigurationSha256']
-            control.volumes['fixture_online_recharge_data']['CreatedAt'] = '2026-10-10T00:00:00Z'
-            self.assertNotEqual(workspace.workspace_engine_configuration(controller, control.engine, control.api['Id']), expected)
-            with self.assertRaisesRegex(RuntimeError, 'CONFIGURATION_CHANGED'):
-                workspace.workspace_rollback_stop(controller, source)
-            self.assertFalse(control.events)
-
-    def test_remaining_lock_budget_includes_stop_inspect_and_same_connection_handshake(self):
-        import time
-        for remaining in (51, 54, 65, 66):
-            controller = SimpleNamespace(require=d.require)
-            guard = workspace.WorkspaceAuditBarrier(controller, ROOT, online=True)
-            guard.connection_id = 20
-            guard.pipe = SimpleNamespace(deadline=100 + remaining, send=MagicMock(), read=MagicMock(return_value={
-                'connectionId': 20, 'auditCount': 0, 'onlineAuditCount': 0, 'tables': {n: 0 for n in workspace.ONLINE_TABLES}}),
-                process=SimpleNamespace(poll=lambda: None))
-            with patch.object(workspace.time, 'monotonic', return_value=100):
-                if remaining <= 65:
-                    with self.assertRaisesRegex(RuntimeError, 'GUARD_TIMEOUT'): guard.before_stop()
-                else: guard.before_stop()
-
-    def test_joint_admission_query_references_audit_once_and_lock_statement_acquires_all_ten_once(self):
-        with self.lifecycle() as (controller, source, target, volume, preparation, control, database):
-            with workspace.WorkspaceAuditBarrier(controller, source, online=True) as barrier: barrier.check()
-            first = control.barriers[0].sent[0]
-            self.assertEqual(first.count('LOCK TABLES'), 1); self.assertEqual(workspace.ONLINE_AUDIT_QUERY.count('FROM audit_logs'), 1)
-            self.assertIn('SET SESSION autocommit=0', first); self.assertIn('SET SESSION wait_timeout=240', first)
-            for table in ('audit_logs', *workspace.ONLINE_TABLES):
-                self.assertEqual(first.count('`' + table + '` READ'), 1)
-            self.assertIn('--skip-reconnect', control.barriers[0].command[-1]); self.assertIn('--raw', control.barriers[0].command[-1])
-
-    def test_exited_private_pipe_closes_both_real_parent_descriptors(self):
-        import time
-        pipe = workspace.WorkspacePipe([sys.executable, '-c', 'pass'], time.monotonic() + 5)
-        pipe.process.wait(timeout=3); pipe.close(); pipe.close()
-        self.assertTrue(pipe.process.stdin.closed); self.assertTrue(pipe.process.stdout.closed)
-
-    def test_fixed_online_source_and_migration_seals_match_reviewed_module(self):
-        controller = SimpleNamespace(**vars(d))
+    def test_fixed_policy_and_source_bytes_are_required_and_part_of_origin_seal(self):
+        online, _ = d.online_recharge_scope()
+        self.assertEqual(online.fingerprint(online.recovery_policy(d)), online.RECOVERY_POLICY_SHA256)
         with tracked_online_source() as directory:
-            workspace.workspace_online_sources(controller, directory)
-        self.assertEqual(workspace.workspace_configuration(controller, ROOT, ROOT)['composeSha256'], workspace.ONLINE_COMPOSE_SEAL)
-        # The old workspace contract must not normalize the online addition as
-        # a first bootstrap; publication of online itself is never performed.
-        with self.assertRaisesRegex(RuntimeError, 'ONLINE_CONFIGURATION_CHANGED'):
-            workspace.workspace_configuration(controller, WORKSPACE_SOURCE_ROOT, ROOT)
+            workspace.workspace_online_sources(d, directory)
+        self.assertIn('scripts/production-release/online-recharge-recovery.json', workspace.ONLINE_ORIGIN_FILES)
+        with self.recovered() as (controller, original, failed, published, *_):
+            path = published / 'scripts/production-release/online-recharge-recovery.json'
+            path.write_bytes(path.read_bytes() + b'\n')
+            with self.assertRaisesRegex(RuntimeError, 'RECOVERY_POLICY_CHANGED'):
+                workspace.workspace_online_sources(controller, published)
 
-    def test_online_history_projection_checks_all_new_schema_and_preserves_real_old_source_guard(self):
-        with MigrationSuccessorTests().fixture() as (controller, current, manifest, candidate, before, task, private, handoff, stack):
-            for name in ('MIGRATION_SUCCESSOR_COMMIT', 'MIGRATION_SUCCESSOR_MANIFEST_SHA', 'MIGRATION_SUCCESSOR_PROOF_SHA'):
-                stack.enter_context(patch.object(workspace, name, getattr(scope, name)))
-            context = scope.migration_successor_origin(controller, current)
-            online, _ = d.online_recharge_scope()
-            expectation = online.schema_expectation(controller, ROOT)
-            rows = [{'name': n.split('/')[0], 'checksum': digest, 'finished': 1, 'rolledBack': 0}
-                    for n, digest in workspace.migration_files(controller, ROOT).items() if n.endswith('/migration.sql')]
-            full_online = {'rows': rows, **expectation}
-            previous_compose = controller.compose.side_effect
-            previous_value = controller.compose.return_value
-            def compose(directory, *args, **kwargs):
-                query = kwargs.get('input_data', args[-1] if args else '')
-                if isinstance(query, str) and "'tables'" in query and 'online_recharge_config' in query:
-                    return json.dumps(full_online)
-                raw = previous_compose(directory, *args, **kwargs) if callable(previous_compose) else previous_value
-                if isinstance(query, str) and "TABLE_NAME='id_business_v2_quick_actions'" in query and 'FROM _prisma_migrations' in query:
-                    value = json.loads(raw)
-                    value['rows'].append({'name': online.MIGRATION_NAME, 'checksum': online.MIGRATION_IDENTITY['sha256'],
-                                          'finished': True, 'rolledBack': False})
-                    return json.dumps(value)
-                return raw
-            controller.compose.side_effect = compose
-            controller.online_recharge_scope = lambda: (online, controller)
-            controller._workspaceOnlineOrigin = {'release': str(ROOT), 'workspaceOrigin': {'release': str(current)}}
-            old_source = stack.enter_context(patch.object(migration, 'migration_source_check', wraps=migration.migration_source_check))
-            workspace.migration_successor_guard(controller, ROOT, context)
-            self.assertTrue(any(call.args[1] == current for call in old_source.call_args_list))
-            self.assertFalse(any(call.args[1] == ROOT for call in old_source.call_args_list))
-            # The finite projection never hides a missing, altered or partial
-            # new migration; the complete nine-table check fails first.
-            full_online['columns'][0]['columnType'] = 'changed'
-            with self.assertRaisesRegex(RuntimeError, 'ONLINE_RECHARGE_MIGRATION_SCHEMA_CHANGED'):
-                workspace.migration_successor_guard(controller, ROOT, context)
-            handoff.assert_not_called()
+    def test_actual_recovery_origin_source_and_backup_chain_accepts_replaced_api_on_same_volume(self):
+        with self.recovered() as (controller, original, failed, published, manifest, record, control, reads, _):
+            workspace.workspace_online_recovery(controller, self.online, original, published, manifest, record)
+            self.assertTrue(any(args[:3] == ('aws', 's3api', 'head-object') for args in reads))
+            self.assertTrue(any(args[:3] == ('docker', 'inspect', control.api['Id']) for args in reads))
+            self.assertFalse(any(args[:3] == ('docker', 'inspect', '1' * 64) for args in reads))
+            self.assertFalse(control.events)
+            self.assertFalse(list((controller.BASE / 'backups/registration-workspace').glob('*.readback')))
 
-    def test_candidate_cannot_change_shared_durable_admission_or_transaction_helpers(self):
-        with tempfile.TemporaryDirectory(prefix='online-admission-', dir=RUNTIME) as folder:
-            root = Path(folder); previous, candidate = root / 'previous', root / 'candidate'
-            previous.mkdir(); candidate.mkdir()
-            folders = (*workspace.ONLINE_SOURCE_SEALS, workspace.MIGRATION_ROOT)
-            files = (*workspace.CONFIG_FILES, workspace.MIGRATION_SEED, *workspace.ONLINE_ADMISSION_FILES,
-                     'scripts/production-release/online-recharge-recovery.json')
-            # The source seal covers an immutable tracked tree. Local ignored
-            # executor environments and caches must not enter this fixture.
-            archive = subprocess.check_output(['git', 'archive', 'HEAD', '--', *folders], cwd=ROOT)
-            for directory in (previous, candidate):
-                with tarfile.open(fileobj=io.BytesIO(archive), mode='r:') as tracked:
-                    for member in tracked.getmembers():
-                        path = Path(member.name)
-                        self.assertFalse(path.is_absolute() or '..' in path.parts)
-                        self.assertTrue(member.isdir() or member.isfile())
-                        target = directory / path
-                        if member.isdir():
-                            target.mkdir(parents=True, exist_ok=True)
-                        else:
-                            target.parent.mkdir(parents=True, exist_ok=True)
-                            target.write_bytes(tracked.extractfile(member).read())
-                            target.chmod(member.mode)
-                for name in files:
-                    target = directory / name; target.parent.mkdir(parents=True, exist_ok=True); target.write_bytes((ROOT / name).read_bytes())
-                (directory / '.env.aws.production').write_bytes(b'synthetic-only')
-            controller = SimpleNamespace(**vars(d))
-            before = {**states(), workspace.ONLINE_ENGINE: {}}
-            for name in workspace.ONLINE_ADMISSION_FILES:
-                target = candidate / name; original = target.read_bytes(); target.write_bytes(original + b'\n// changed\n')
-                with self.subTest(name=name), self.assertRaisesRegex(RuntimeError, 'ONLINE_ADMISSION_SOURCE_CHANGED'):
-                    workspace.require_preserved(controller, previous, candidate, before, b'synthetic-only')
-                target.write_bytes(original)
+    def test_recovered_origin_rejects_changed_failure_source_policy_marker_or_performed_flag(self):
+        for change in ('failure', 'candidate-source', 'marker', 'performed', 'manifest-performed', 'volume'):
+            with self.subTest(change=change), self.recovered() as fixture:
+                controller, original, failed, published, manifest, record, control, _, failure = fixture
+                if change == 'failure':
+                    failure['servicesAttempted'] = ['api']; (failed / self.online.FAILURE_FILE).write_text(json.dumps(failure))
+                elif change == 'candidate-source':
+                    (published / 'apps/admin/src/v2/features/online-recharge/unapproved.ts').write_text('unapproved')
+                elif change == 'marker': manifest['migrationRecovery'] = {}
+                elif change == 'performed': manifest['migrationPerformed'] = record['migration']['performed'] = True
+                elif change == 'manifest-performed': manifest['migrationPerformed'] = True
+                else: control.volumes['fixture_auto_registration_data']['CreatedAt'] = '2026-10-10T00:00:00Z'
+                with self.assertRaises(RuntimeError):
+                    workspace.workspace_online_recovery(controller, self.online, original, published, manifest, record)
+                self.assertFalse(control.events)
 
-    def test_unknown_or_incomplete_online_publication_never_passes_real_first_origin_reader(self):
-        with tempfile.TemporaryDirectory(prefix='unknown-online-', dir=RUNTIME) as folder:
-            root = Path(folder); directory = root / 'releases' / ('20261009T000000Z-' + OLD[:12]); directory.mkdir(parents=True)
-            (root / 'current').symlink_to(directory)
-            controller = SimpleNamespace(**vars(d)); controller.BASE = root
-            controller.compose = MagicMock(side_effect=AssertionError('No service operation allowed'))
-            name = workspace.CONFIG_FILES[0]; path = directory / name; path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_bytes((ROOT / name).read_bytes())
-            (directory / 'release-manifest.json').write_text(json.dumps({'commit': OLD}))
-            with self.assertRaisesRegex(RuntimeError, 'ONLINE_FIRST_PUBLICATION_REQUIRED'):
-                workspace.baseline(controller, OLD)
-            controller.compose.assert_not_called()
-            # Genuine online.readback on current source without a publication
-            # proof also fails; supplying a boolean cannot manufacture origin.
-            online, _ = controller.online_recharge_scope()
-            controller.BASE = ROOT / '.deploy' / 'nonexistent-real-publication'
-            with self.assertRaises(RuntimeError): online.readback(controller, OLD)
+    def test_original_first_publication_cannot_omit_performed_or_claim_unsealed_recovery(self):
+        controller = SimpleNamespace(require=d.require)
+        workspace.workspace_online_recovery(controller, self.online, ROOT, ROOT,
+            {'migrationPerformed': True}, {'baselineEvidence': {}, 'migration': {'performed': True}})
+        for performed in (False, None, 1):
+            with self.subTest(performed=performed), self.assertRaises(RuntimeError):
+                workspace.workspace_online_recovery(controller, self.online, ROOT, ROOT,
+                    {'migrationPerformed': performed}, {'baselineEvidence': {}, 'migration': {'performed': performed}})
+        with self.assertRaises(RuntimeError):
+            workspace.workspace_online_recovery(controller, self.online, ROOT, ROOT,
+                {'migrationPerformed': True, 'migrationRecovery': {}},
+                {'baselineEvidence': {}, 'migration': {'performed': True}})
 
-    def test_missing_receipt_or_modified_origin_files_refuse_before_source_or_runtime_reads(self):
-        value = {'version': 1, 'release': '/opt/id-business-v2/releases/20261009T000000Z-' + OLD[:12],
-            'commit': OLD, 'sourceTree': TREE, 'manifestSha256': '1' * 64, 'buildProofSha256': '2' * 64,
-            'engineConfigurationSha256': '3' * 64, 'files': {n: '1' * 64 for n in workspace.ONLINE_ORIGIN_FILES},
-            'workspaceOrigin': {'release': '/opt/id-business-v2/releases/20261009T000000Z-' + workspace.WORKSPACE_BOOTSTRAP_COMMIT[:12],
-                'commit': workspace.WORKSPACE_BOOTSTRAP_COMMIT, 'recordSha256': '4' * 64,
-                'volume': {'name': 'fixture_auto_registration_data', 'status': 'PRESENT', 'identitySha256': '5' * 64}}}
-        workspace.validate_online_successor_origin(value)
-        for mutate in ('missing-backup', 'unknown-predecessor', 'initial-present', 'extra-field', 'manifest-hash', 'wrong-path'):
-            changed = copy.deepcopy(value)
-            if mutate == 'missing-backup': changed['files'].pop('online-recharge-workspace-backup.json')
-            elif mutate == 'unknown-predecessor': changed['workspaceOrigin']['commit'] = OLD
-            elif mutate == 'initial-present': changed['workspaceOrigin']['volume']['status'] = 'ABSENT'
-            elif mutate == 'extra-field': changed['assumePublished'] = True
-            elif mutate == 'manifest-hash': changed['manifestSha256'] = '9' * 64
-            else: changed['release'] += '-other'
-            with self.subTest(mutate=mutate), self.assertRaisesRegex(RuntimeError, 'ONLINE_ORIGIN_CHANGED'):
-                workspace.validate_online_successor_origin(changed)
-        controller = SimpleNamespace(require=d.require, BASE=RUNTIME)
-        with self.assertRaisesRegex(RuntimeError, 'ONLINE_ORIGIN_CHANGED'):
-            workspace.workspace_online_origin(controller, ROOT, value)
+
+class OnlineWorkspaceCompatibilityTests(unittest.TestCase):
+    @contextmanager
+    def fixture(self):
+        with tempfile.TemporaryDirectory(dir=RUNTIME) as temporary:
+            base=Path(temporary).resolve();previous=base/'releases/origin';current=base/'releases/current'
+            for directory in (previous,current):
+                directory.mkdir(parents=True);(directory/workspace.CONFIG_FILES[0]).write_bytes((ROOT/workspace.CONFIG_FILES[0]).read_bytes())
+                (directory/'.env.aws.production').write_text('APP_DOMAIN=fixture.example\n')
+                (directory/'compose.release.json').write_text('{"services":{}}')
+                (directory/workspace.CONFIG_FILES[1]).parent.mkdir(parents=True)
+                (directory/workspace.CONFIG_FILES[1]).write_bytes((ROOT/workspace.CONFIG_FILES[1]).read_bytes())
+            original=states();original['online-recharge']=copy.deepcopy(original['api'])
+            metadata={};calls=[]
+            for index,(name,row) in enumerate(original.items(),1):
+                row['containerId']=hex(index)[2:]*64;row['startedAtSha256']='1'*64
+                metadata[row['containerId']]={'Id':row['containerId'],'Image':row['image'],
+                    'Config':{'Env':['NODE_ENV=production'],'Image':row['reference'],'Labels':{}},
+                    'State':{'Running':True,'StartedAt':'2026-10-09T00:00:00Z'},'HostConfig':{},'Mounts':[]}
+                row['startedAtSha256']=hashlib.sha256(metadata[row['containerId']]['State']['StartedAt'].encode()).hexdigest()
+            engine=metadata[original['online-recharge']['containerId']]
+            engine['Config']['Labels']={'com.docker.compose.project.working_dir':str(previous),
+                'com.docker.compose.project.config_files':str(previous/workspace.CONFIG_FILES[0])+','+str(previous/'compose.release.json'),
+                'com.docker.compose.project.environment_file':str(previous/'.env.aws.production'),
+                'com.docker.compose.service':'online-recharge','com.docker.compose.container-number':'1',
+                'com.docker.compose.project':'fixture','com.docker.compose.image':original['online-recharge']['image'],
+                'com.docker.compose.config-hash':'1'*64,'com.docker.compose.depends_on':'api:service_healthy:true',
+                'protected-label':'fixed'}
+            engine['Config']['Hostname']=original['api']['containerId'][:12]
+            metadata[original['api']['containerId']]['Config'].update(Hostname=engine['Config']['Hostname'],
+                Labels={'com.docker.compose.project':'fixture'})
+            engine['HostConfig']={'NetworkMode':'container:'+original['api']['containerId'],'ReadonlyRootfs':True}
+            volume={'Name':'fixture_online_recharge_data','Driver':'local','CreatedAt':'fixed','Labels':{'owner':'fixture'}}
+            engine['Mounts']=[{'Type':'volume','Name':volume['Name'],'RW':True,'Destination':'/workspace/engine/runtime'}]
+            metadata[original['api']['containerId']]['Mounts']=[{'Type':'volume','Name':volume['Name'],'RW':True,'Destination':'/app/.runtime/online-recharge'}]
+            def run(*args,**kwargs):
+                calls.append((args,kwargs))
+                if args[:3]==('docker','volume','inspect'):return json.dumps([volume])
+                if args[:2]==('docker','inspect'):return json.dumps([metadata[args[-1]]])
+                if args[:2]==('docker','stop'):
+                    metadata[args[-1]]['State']['Running']=False;return args[-1]
+                raise AssertionError(args)
+            controller=SimpleNamespace(BASE=base,require=d.require,ALL_SERVICES=d.ALL_SERVICES,run=run,
+                production_services=lambda folder:d.ALL_SERVICES,service_state=lambda folder,name,**kw:copy.deepcopy(original[name]),
+                current_job_database=lambda folder:'fixture_database',compose=MagicMock(),wait_healthy=MagicMock(),rollback_service=MagicMock())
+            yield SimpleNamespace(base=base,previous=previous,current=current,controller=controller,states=original,
+                metadata=metadata,engine=engine,volume=volume,calls=calls)
+
+    def context(self):
+        return {'version':1,'release':'/opt/id-business-v2/releases/origin','commit':COMMIT,
+            'manifestSha256':'1'*64,'buildProofSha256':'2'*64,
+            'files':{n:'1'*64 for n in workspace.ONLINE_ORIGIN_FILES},
+            'migrationState':{'name':'20261009093000_online_recharge','sha256':'44966182c1bf38290b01f665a4c2c863b052677c5e0024b900137f1d7f11eb95',
+                'status':'APPLIED','schemaVerified':True,'appliedMigrationsSha256':'3'*64},
+            'binding':{'image':'sha256:'+'4'*64,'reference':REPOSITORY+':'+COMMIT+'-123-1-online-recharge',
+                **{n:'5'*64 for n in ('environmentSha256','configurationSha256','volumeIdentitySha256','apiContainerId','containerId','startedAtSha256')}}}
+
+    def test_workspace_eight_services_leave_historical_seven_service_set_unchanged(self):
+        with self.fixture() as f:
+            observed=workspace.snapshot(f.controller,f.previous)
+            self.assertEqual(set(observed),set(d.ALL_SERVICES)|{'online-recharge'})
+            self.assertEqual(tuple(d.ALL_SERVICES),tuple(scope.workspace_service_names(d,ROOT)))
+            self.assertEqual(len(scope.snapshot(f.controller,f.previous)),7)
+
+    def test_compose_projection_preserves_exact_online_bytes_and_rejects_any_configuration_change(self):
+        with self.fixture() as f:
+            workspace.workspace_configuration(f.controller,f.previous,f.current)
+            for old,new in ((b'network_mode: service:api',b'network_mode: host'),
+                    (b'  online_recharge_data:',b'  unrelated_data:'),(b'read_only: true',b'read_only: false')):
+                (f.current/workspace.CONFIG_FILES[0]).write_bytes((f.previous/workspace.CONFIG_FILES[0]).read_bytes().replace(old,new,1))
+                with self.assertRaisesRegex(RuntimeError,'WORKSPACE_CONFIG_CHANGED'):
+                    workspace.workspace_configuration(f.controller,f.previous,f.current)
+
+    def test_binding_normalizes_only_verified_compose_paths_and_network_target(self):
+        with self.fixture() as f:
+            before=workspace.online_binding(f.controller,f.previous,f.states)
+            labels=f.engine['Config']['Labels'];labels['com.docker.compose.project.working_dir']=str(f.current)
+            labels['com.docker.compose.project.config_files']=str(f.current/workspace.CONFIG_FILES[0])+','+str(f.current/'compose.release.json')
+            labels['com.docker.compose.project.environment_file']=str(f.current/'.env.aws.production')
+            labels['com.docker.compose.config-hash']='2'*64
+            labels['com.docker.compose.replace']='online-recharge-1'
+            labels['com.docker.compose.depends_on']=''
+            after=workspace.online_binding(f.controller,f.current,f.states)
+            self.assertEqual(before['configurationSha256'],after['configurationSha256'])
+            labels['protected-label']='changed'
+            self.assertNotEqual(workspace.online_binding(f.controller,f.current,f.states)['configurationSha256'],before['configurationSha256'])
+            labels['com.docker.compose.project.config_files']='unverified-source'
+            with self.assertRaisesRegex(RuntimeError,'COMPOSE_ORIGIN_CHANGED'):
+                workspace.online_binding(f.controller,f.current,f.states)
+
+    def test_rebound_hostname_must_inherit_new_api_and_generated_metadata_cannot_hide_business_drift(self):
+        with self.fixture() as f:
+            before=workspace.online_binding(f.controller,f.previous,f.states)
+            old=f.states['api']['containerId'];new='e'*64
+            f.metadata[new]=copy.deepcopy(f.metadata[old]);f.metadata[new]['Id']=new
+            f.metadata[new]['Config']['Hostname']=new[:12];f.states['api']['containerId']=new
+            f.engine['HostConfig']['NetworkMode']='container:'+new;f.engine['Config']['Hostname']=new[:12]
+            self.assertEqual(workspace.online_binding(f.controller,f.previous,f.states)['configurationSha256'],before['configurationSha256'])
+            f.engine['Config']['Hostname']='wrong'
+            with self.assertRaisesRegex(RuntimeError,'GENERATED_IDENTITY_CHANGED'):
+                workspace.online_binding(f.controller,f.previous,f.states)
+        with self.fixture() as f:
+            before=workspace.online_binding(f.controller,f.previous,f.states)
+            f.engine['HostConfig']['ReadonlyRootfs']=False
+            self.assertNotEqual(workspace.online_binding(f.controller,f.previous,f.states)['configurationSha256'],before['configurationSha256'])
+
+    def test_network_volume_and_engine_image_drift_are_rejected(self):
+        with self.fixture() as f:
+            f.engine['HostConfig']['NetworkMode']='container:'+'9'*64
+            with self.assertRaisesRegex(RuntimeError,'BINDING_CHANGED'):workspace.online_binding(f.controller,f.previous,f.states)
+        with self.fixture() as f:
+            f.engine['Mounts'][0]['Name']='other_online_recharge_data'
+            with self.assertRaisesRegex(RuntimeError,'BINDING_CHANGED'):workspace.online_binding(f.controller,f.previous,f.states)
+        with self.fixture() as f:
+            f.engine['Image']='sha256:'+'9'*64
+            with self.assertRaisesRegex(RuntimeError,'BINDING_CHANGED'):workspace.online_binding(f.controller,f.previous,f.states)
+
+    def test_failed_online_publication_cannot_create_a_successor_origin(self):
+        with self.fixture() as f:
+            reader=SimpleNamespace(readback=MagicMock(return_value={'status':'ONLINE_RECHARGE_FAILED_RESTORED'}))
+            with patch.object(workspace,'online_reader',return_value=reader),self.assertRaisesRegex(RuntimeError,'NOT_PUBLISHED'):
+                workspace.online_origin(f.controller,f.previous,{'commit':COMMIT},f.states)
+
+    def test_successful_online_readback_seals_actual_source_files_and_original_binding(self):
+        with self.fixture() as f:
+            for name in workspace.ONLINE_ORIGIN_FILES:
+                path=f.previous/name
+                path.parent.mkdir(parents=True,exist_ok=True)
+                path.write_text('sealed-fixture')
+            state=self.context()['migrationState']
+            reader=SimpleNamespace(readback=MagicMock(return_value={'status':'ONLINE_RECHARGE_VERIFIED','services':f.states,
+                'migrationApplied':True,'workspaceBackupVerified':True,'backupVerified':True,'buildProofSha256':'2'*64,'migration':state}))
+            with patch.object(workspace,'online_reader',return_value=reader),patch.object(workspace,'online_origin_guard') as guard:
+                context=workspace.online_origin(f.controller,f.previous,{'commit':OLD},f.states)
+            reader.readback.assert_called_once_with(f.controller,OLD)
+            self.assertEqual(context['commit'],OLD);self.assertEqual(context['binding']['image'],f.states['online-recharge']['image'])
+            self.assertEqual(set(context['files']),set(workspace.ONLINE_ORIGIN_FILES));guard.assert_called_once()
+
+    def test_first_and_repeated_workspace_successors_preserve_same_online_origin_or_fail_closed(self):
+        for repeated in (False,True):
+            with self.subTest(repeated=repeated),self.fixture() as f,ExitStack() as stack:
+                context=self.context();context.update(release=str(f.current),commit=OLD)
+                origin_marker=workspace.online_marker(context)
+                predecessor={'commit':OLD,**({'apiWorkspacePublication':{},'preservedOnlineRechargeOrigin':origin_marker}
+                    if repeated else {'onlineRechargePublication':{'scope':'ONLINE_RECHARGE'}})}
+                raw=(json.dumps(predecessor)+'\n').encode();(f.current/'release-manifest.json').write_bytes(raw)
+                (f.current/workspace.STATE_FILE).write_text(json.dumps({'onlineRechargeOrigin':context}))
+                volume={'name':'fixture_auto_registration_data','status':'PRESENT','identitySha256':'6'*64}
+                proof_value=workspace_proof()
+                manifest={'commit':COMMIT,'sourceTree':TREE,'previousCommit':OLD,'previousRelease':str(f.current),
+                    'previousManifestSha256':hashlib.sha256(raw).hexdigest(),'preservedOnlineRechargeOrigin':origin_marker,
+                    'images':{n:{'reference':row['reference'],'digest':row['image'],'sourceCommit':COMMIT} for n,row in f.states.items()},
+                    'apiWorkspacePublication':{'version':1,'scope':'API_ADMIN_WORKSPACE','buildProofSha256':workspace.fingerprint(proof_value),
+                        'workersPublished':False,'cacheStatus':'SKIPPED','configurationChanged':True,'volume':volume,'volumeDeletionPerformed':False}}
+                record={'workspaceVolumeAfter':volume,'onlineRechargeOrigin':context,
+                    'baselineEvidence':{'onlineRechargeOrigin':context,'manifestSha256':hashlib.sha256(raw).hexdigest()}}
+                (f.previous/'release-manifest.json').write_text(json.dumps(manifest));(f.previous/workspace.STATE_FILE).write_text(json.dumps(record))
+                (f.previous/workspace.PROOF_FILE).write_text(json.dumps(proof_value));(f.base/'current').symlink_to(f.previous)
+                f.controller.SERVICES=d.SERVICES;run=f.controller.run
+                def inspect(*args,**kwargs):
+                    if args[:3]==('docker','image','inspect'):
+                        return json.dumps([{'Id':f.states['api']['image'],'Config':{'Labels':{'org.opencontainers.image.revision':COMMIT}}}])
+                    return run(*args,**kwargs)
+                f.controller.run=inspect
+                stack.enter_context(patch.object(workspace,'snapshot',return_value=f.states))
+                stack.enter_context(patch.object(workspace,'validate_proof',return_value=proof_value))
+                stack.enter_context(patch.object(workspace,'verify_running'))
+                stack.enter_context(patch.object(workspace,'workspace_volume',return_value=volume))
+                stack.enter_context(patch.object(workspace,'online_origin_guard'))
+                stack.enter_context(patch.object(workspace.shutil,'disk_usage',return_value=SimpleNamespace(free=20*1024**3)))
+                previous,observed,states_value,evidence=workspace.baseline(f.controller,COMMIT,check_jobs=False)
+                self.assertEqual(evidence['onlineRechargeOrigin'],context)
+                if repeated:
+                    (f.current/workspace.STATE_FILE).write_text(json.dumps({'onlineRechargeOrigin':{**context,'buildProofSha256':'9'*64}}))
+                else:
+                    (f.current/'release-manifest.json').write_text(json.dumps({**predecessor,'commit':'9'*40}))
+                with self.assertRaisesRegex(RuntimeError,'ONLINE_ORIGIN_CHANGED'):
+                    workspace.baseline(f.controller,COMMIT,check_jobs=False)
+
+    def test_origin_receipt_is_closed_and_preserves_known_migration_identity(self):
+        namespace=vars(workspace);context=self.context()
+        self.assertEqual(transport.validate_online_origin(namespace,context),workspace.online_marker(context))
+        for changed in ({'privateData':'SENTINEL'},{'files':{}},{'migrationState':{**context['migrationState'],'status':'PENDING'}},
+                {'binding':{**context['binding'],'image':'sha256:bad'}}):
+            with self.subTest(changed=changed),self.assertRaisesRegex(RuntimeError,'ONLINE_ORIGIN_RECEIPT_CHANGED'):
+                transport.validate_online_origin(namespace,{**context,**changed})
+
+    def test_retained_quick_action_uses_only_verified_online_history_view(self):
+        context=self.context();o=SimpleNamespace(historical_guard=MagicMock())
+        with tempfile.TemporaryDirectory(dir=RUNTIME) as temporary:
+            source=Path(temporary);context['release']=str(source)
+            (source/'release-manifest.json').write_text(json.dumps({'previousRelease':'/opt/id-business-v2/releases/workspace'}))
+            with patch.object(workspace,'online_reader',return_value=o),patch.object(workspace,'migration_successor_guard') as old:
+                workspace.preserved_migration_guard(d,ROOT,{'fixed':'quick-action'},context)
+                old.assert_not_called();o.historical_guard.assert_called_once_with(d,Path('/opt/id-business-v2/releases/workspace'),
+                    {'migrationOrigin':{'fixed':'quick-action'}},source)
+
+    @contextmanager
+    def fence_fixture(self,busy=0,changing_connection=False,lose_after_api=False):
+        with self.fixture() as f:
+            popen=subprocess.Popen
+            script=('import sys,json\ncount=0\nfor line in sys.stdin:\n'
+                ' if "SELECT JSON_OBJECT" in line:\n  count+=1\n  print(json.dumps({"version":1,"connectionId":'
+                +('count' if changing_connection else '(18 if count>2 else 17)' if lose_after_api else '17')+',"busy":'+str(busy)+'}),flush=True)\n')
+            commands=[]
+            def launch(command,**kwargs):
+                commands.append(command);return popen([sys.executable,'-u','-c',script],**kwargs)
+            fence=workspace.OnlineSqlFence(f.controller,f.previous)
+            with patch.object(workspace.subprocess,'Popen',side_effect=launch):
+                try:yield f,fence,commands
+                finally:fence.close()
+
+    def test_fence_uses_same_connection_private_stdin_and_stops_exact_api_then_engine(self):
+        with self.fence_fixture() as (f,fence,commands):
+            fence.acquire();self.assertEqual(fence.connection_id,17)
+            fence.stop(f.states['api'],grace=30);fence.stop(f.states['online-recharge'],grace=45)
+            self.assertEqual([a[-1] for a,k in f.calls if a[:2]==('docker','stop')],
+                [f.states['api']['containerId'],f.states['online-recharge']['containerId']])
+            self.assertIn('--unbuffered',commands[0][-1]);self.assertNotIn('LOCK TABLES',str(commands[0]))
+
+    def test_active_task_or_card_lease_never_stops_any_container(self):
+        with self.fence_fixture(busy=1) as (f,fence,commands):
+            with self.assertRaisesRegex(RuntimeError,'FENCE_UNAVAILABLE'):fence.acquire()
+            self.assertFalse(any(a[:2]==('docker','stop') for a,k in f.calls))
+
+    def test_lost_connection_changed_identity_or_insufficient_budget_prevents_stop(self):
+        with self.fence_fixture(changing_connection=True) as (f,fence,commands):
+            fence.acquire()
+            with self.assertRaisesRegex(RuntimeError,'TASK_ACTIVE'):fence.stop(f.states['api'],grace=30)
+            self.assertFalse(any(a[:2]==('docker','stop') for a,k in f.calls))
+
+    def test_lost_fence_after_api_stop_never_sends_stop_to_original_engine(self):
+        with self.fence_fixture(lose_after_api=True) as (f,fence,commands):
+            fence.acquire()
+            with self.assertRaisesRegex(RuntimeError,'TASK_ACTIVE'):fence.stop(f.states['api'],grace=30)
+            self.assertEqual([a[-1] for a,k in f.calls if a[:2]==('docker','stop')],[f.states['api']['containerId']])
+            self.assertTrue(f.metadata[f.states['online-recharge']['containerId']]['State']['Running'])
+        with self.fence_fixture() as (f,fence,commands):
+            fence.acquire();fence.deadline=workspace.time.monotonic()+20
+            with self.assertRaisesRegex(RuntimeError,'FENCE_TIMEOUT'):fence.stop(f.states['api'],grace=30)
+            self.assertFalse(any(a[:2]==('docker','stop') for a,k in f.calls))
+
+    def test_reverse_switch_stops_idle_owner_before_original_api_and_original_engine_rebind(self):
+        with self.fixture() as f:
+            order=[];fence=SimpleNamespace(acquire=lambda:order.append('lock'),check_idle=lambda:order.append('idle'),
+                stop=lambda row,grace:order.append('stop-api' if row['image']=='api-image' else 'stop-engine'),close=lambda:order.append('unlock'))
+            f.controller.rollback_service.side_effect=lambda *a:order.append('restore-api')
+            with patch.object(workspace,'OnlineSqlFence',return_value=fence),patch.object(workspace,'online_container',
+                    side_effect=[{'image':'api-image'},{'image':'engine-image'}]),patch.object(workspace,'online_rebind',side_effect=lambda *a:order.append('rebind-original')):
+                workspace.online_rollback_api(f.controller,f.previous,f.current,f.states,workspace_proof(),self.context())
+            self.assertEqual(order,['lock','stop-api','idle','stop-engine','unlock','restore-api','rebind-original'])
+
+    def test_busy_reverse_switch_cannot_restore_api_or_interrupt_engine(self):
+        with self.fixture() as f:
+            fence=SimpleNamespace(acquire=MagicMock(side_effect=RuntimeError('API_ADMIN_ONLINE_TASK_ACTIVE')),close=MagicMock())
+            with patch.object(workspace,'OnlineSqlFence',return_value=fence),patch.object(workspace,'online_rebind') as rebind, \
+                    self.assertRaisesRegex(RuntimeError,'TASK_ACTIVE'):
+                workspace.online_rollback_api(f.controller,f.previous,f.current,f.states,workspace_proof(),self.context())
+            f.controller.rollback_service.assert_not_called();rebind.assert_not_called()
+
+    def test_busy_before_any_api_mutation_never_recreates_old_api_or_engine(self):
+        for failure in ('idle','fence'):
+            with self.subTest(failure=failure):
+                code,result,controller,manifest,_=ReleaseFailureTests().run_release(selected_scope=workspace,
+                    online_origin_context=self.context(),online_fail=failure)
+                self.assertEqual(code,1);self.assertEqual(result['servicesAttempted'],['admin'])
+                self.assertEqual([call.args[2] for call in controller.rollback_service.call_args_list],['admin'])
+                controller.online_fence.stop.assert_not_called();controller.online_rebind.assert_not_called()
+                controller.online_rollback.assert_not_called()
+
+    def test_rebind_failure_uses_online_aware_recovery_and_busy_recovery_is_partial(self):
+        for failure in ('rebind','rollback-busy'):
+            with self.subTest(failure=failure):
+                code,result,controller,manifest,_=ReleaseFailureTests().run_release(selected_scope=workspace,
+                    online_origin_context=self.context(),online_fail=failure)
+                self.assertEqual(code,1);controller.online_rollback.assert_called_once()
+                self.assertNotIn('api',[call.args[2] for call in controller.rollback_service.call_args_list])
+                self.assertEqual(result['servicesReboundAttempted'],['online-recharge'])
+                self.assertEqual(result['rollbackOk'],failure!='rollback-busy')
+                if failure=='rollback-busy':self.assertEqual(result['status'],'API_ADMIN_WORKSPACE_PARTIAL_RECOVERY_REQUIRED')
+
+    def test_eight_service_readback_binds_recreated_engine_to_current_api_and_sealed_origin(self):
+        fixtures=load('merged_readonly_fixtures','api-admin-readonly.test.py')
+        case=fixtures.WorkspaceSuccessorReceiptTests();case.setUp()
+        value,receipt=case.full_readback_contract()
+        def read(path,*a,**kw):
+            return json.dumps(case.before if path.name.endswith('preflight-result.json') else value)
+        with patch.object(Path,'read_text',read),patch.object(Path,'is_file',return_value=True), \
+                patch.object(Path,'read_bytes',lambda path:read(path).encode()), \
+                patch.dict(os.environ,case.environment,clear=True):
+            transport.validate_receipt(receipt,fixtures.COMMIT,'readback','API_ADMIN_WORKSPACE')
+            after=receipt['onlineNetworkRebind']['after']
+            for changed in ({'servicesRebound':[]},{'preservedOnlineRechargeOrigin':{}},
+                    {'onlineNetworkRebind':{**receipt['onlineNetworkRebind'],'after':{**after,'apiContainerId':'0'*64}}}):
+                with self.subTest(changed=changed),self.assertRaises(RuntimeError):
+                    transport.validate_receipt({**receipt,**changed},fixtures.COMMIT,'readback','API_ADMIN_WORKSPACE')
+            missing={k:v for k,v in receipt.items() if k not in
+                ('preservedOnlineRechargeOrigin','servicesRebound','onlineNetworkRebind')}
+            missing['services']={k:v for k,v in receipt['services'].items() if k!='online-recharge'}
+            with self.assertRaisesRegex(RuntimeError,'ONLINE_ORIGIN_RECEIPT_CHANGED'):
+                transport.validate_receipt(missing,fixtures.COMMIT,'readback','API_ADMIN_WORKSPACE')
 
 
 class WorkspaceDeclarationProofVersionTests(unittest.TestCase):
@@ -4501,6 +4561,466 @@ class WorkspaceDeclarationProofVersionTests(unittest.TestCase):
                 consumer.validate_proof(controller, value, COMMIT, TREE)
         ordinary = workspace_proof()
         self.assertIs(workspace.validate_proof(controller, ordinary, COMMIT, TREE), ordinary)
+
+
+
+class MergedWorkspaceAdmissionTests(unittest.TestCase):
+
+    def test_stopped_database_identity_is_bound_to_live_mysql_and_environment_without_api_probe(self):
+        with tempfile.TemporaryDirectory(dir=RUNTIME) as folder:
+            root = Path(folder).resolve(); (root / '.env.aws.production').write_text('SYNTHETIC_ENV=1\n')
+            state = {'status': 'running', 'health': 'healthy', 'containerId': 'mysql-fixture', 'image': 'fixture-image'}
+            controller = SimpleNamespace(require=d.require, current_job_database=MagicMock(return_value='fixture'),
+                service_state=lambda *a, **k: dict(state))
+            identity = workspace.workspace_database_identity(controller, root)
+            controller.current_job_database.side_effect = AssertionError('old API must stay stopped')
+            self.assertEqual(workspace.workspace_database_identity(controller, root, identity), identity)
+            state['containerId'] = 'changed'
+            with self.assertRaisesRegex(RuntimeError, 'DATABASE_IDENTITY_CHANGED'):
+                workspace.workspace_database_identity(controller, root, identity)
+            state['containerId'] = 'mysql-fixture'; (root / '.env.aws.production').write_text('SYNTHETIC_ENV=2\n')
+            with self.assertRaisesRegex(RuntimeError, 'DATABASE_IDENTITY_CHANGED'):
+                workspace.workspace_database_identity(controller, root, identity)
+
+    def test_stopped_identity_keeps_recharge_registration_leases_and_worker_busy_guards(self):
+        controller = SimpleNamespace(require=d.require, compose=MagicMock(return_value='0'),
+            assert_no_active_recharge=MagicMock(side_effect=AssertionError('cannot probe old API')),
+            current_job_database=MagicMock(side_effect=AssertionError('cannot probe old API')),
+            registration_runtime_state=lambda p: {'supported': True, 'registrationBusy': False,
+                                                  'registrationWindowRetained': True})
+        identity = {'database': 'fixture'}
+        with patch.object(workspace, 'workspace_database_identity', return_value=identity):
+            value = workspace.jobs_idle(controller, ROOT, database_identity=identity)
+            self.assertTrue(value['rechargeIdle']); self.assertFalse(value['registrationLeaseActive'])
+            statements = [call.args[-1] for call in controller.compose.call_args_list]
+            self.assertIn('id_business_v2_recharge_jobs', statements[0])
+            self.assertIn('id_business_v2_registration_jobs', statements[1])
+            for bad_result in (['1'], ['0', '1']):
+                controller.compose.side_effect = bad_result
+                with self.assertRaisesRegex(RuntimeError, 'LEASE_ACTIVE'):
+                    workspace.jobs_idle(controller, ROOT, database_identity=identity)
+            controller.compose.side_effect = None; controller.compose.return_value = '0'
+            controller.registration_runtime_state = lambda p: {'supported': True, 'registrationBusy': True,
+                                                               'registrationWindowRetained': True}
+            with self.assertRaisesRegex(RuntimeError, 'REGISTRATION_BUSY'):
+                workspace.jobs_idle(controller, ROOT, database_identity=identity)
+
+    def test_public_origin_only_emits_https_hostname_and_valid_port(self):
+        controller = SimpleNamespace(require=d.require, environment_values=lambda p: {'APP_PUBLIC_URL': url})
+        url = 'https://fixture.example:8443/'
+        self.assertEqual(workspace.workspace_public_origin(controller, ROOT), 'https://fixture.example:8443')
+        for url in ('http://fixture.example', 'https://user:secret@fixture.example',
+                    'https://fixture.example/?credential=fixture', 'https://fixture.example/#fixture',
+                    'https://fixture.example/private', 'https://fixture.example:0'):
+            with self.assertRaises((RuntimeError, ValueError)):
+                workspace.workspace_public_origin(controller, ROOT)
+
+    def test_stopped_api_probe_rejects_absent_multiple_or_wrong_container(self):
+        identifier = '5' * 64
+        controller = SimpleNamespace(require=d.require, compose=MagicMock(return_value=identifier),
+            run=MagicMock(return_value=json.dumps([{'Id': identifier, 'State': {'Running': False},
+                'Config': {'Labels': {'com.docker.compose.service': 'admin'}}}])))
+        with self.assertRaisesRegex(RuntimeError, 'CONTAINER_UNAVAILABLE'):
+            workspace.workspace_api_metadata(controller, ROOT)
+        controller.run.assert_called_once()
+        for identifiers in ('', identifier + '\n' + '6' * 64):
+            controller.compose.return_value = identifiers
+            with self.assertRaisesRegex(RuntimeError, 'CONTAINER_UNAVAILABLE'):
+                workspace.workspace_api_metadata(controller, ROOT)
+
+    @contextmanager
+    def audit_fixture(self, *, busy=0, changed_connection=False):
+        with OnlineWorkspaceCompatibilityTests().fixture() as f:
+            popen=subprocess.Popen;commands=[]
+            script=('import sys,json\ncount=0\nfor line in sys.stdin:\n'
+                ' if "SELECT JSON_OBJECT" in line:\n  count+=1\n  print(json.dumps({"version":1,"connectionId":'
+                +('count' if changed_connection else '17')+',"busy":'+str(busy)+'}),flush=True)\n')
+            def launch(command,**kwargs):
+                commands.append(command);return popen([sys.executable,'-u','-c',script],**kwargs)
+            barrier=workspace.WorkspaceAuditBarrier(f.controller,f.previous)
+            with patch.object(workspace,'workspace_audit_protection') as protection, \
+                    patch.object(workspace.subprocess,'Popen',side_effect=launch):
+                try:yield f,barrier,commands,protection
+                finally:barrier.close()
+
+    def test_legacy_admission_uses_private_same_connection_and_since_started_at_mutation_predicate(self):
+        with self.audit_fixture() as (f,barrier,commands,protection):
+            barrier.acquire();barrier.before_stop();barrier.stop(f.states['api'],grace=30)
+            self.assertEqual(barrier.connection_id,17);protection.assert_called_once()
+            self.assertIn('created_at>=CAST(',barrier.QUERY)
+            self.assertIn(' /api/registration',barrier.QUERY);self.assertIn(' /api/ws/',barrier.QUERY)
+            self.assertIn('--skip-reconnect',commands[0][-1]);self.assertNotIn('LOCK TABLES',str(commands[0]))
+            self.assertEqual([a[-1] for a,k in f.calls if a[:2]==('docker','stop')],[f.states['api']['containerId']])
+
+    def test_admitted_legacy_mutation_or_changed_connection_blocks_all_stop_commands(self):
+        with self.audit_fixture(busy=1) as (f,barrier,commands,protection):
+            with self.assertRaisesRegex(RuntimeError,'AUDIT_GUARD_FAILED'):barrier.acquire()
+            self.assertFalse(any(a[:2]==('docker','stop') for a,k in f.calls))
+        with self.audit_fixture(changed_connection=True) as (f,barrier,commands,protection):
+            barrier.acquire()
+            with self.assertRaisesRegex(RuntimeError,'TASK_ACTIVE'):barrier.before_stop()
+            self.assertFalse(any(a[:2]==('docker','stop') for a,k in f.calls))
+
+    def test_audit_timeout_mysql_identity_drift_and_eof_block_stop_and_close_descriptors(self):
+        for failure in ('timeout','identity','eof'):
+            with self.subTest(failure=failure),self.audit_fixture() as (f,barrier,commands,protection):
+                barrier.acquire();process=barrier.process
+                if failure=='timeout':barrier.deadline=workspace.time.monotonic()+20
+                if failure=='identity':f.states['mysql']['containerId']='0'*64
+                if failure=='eof':process.stdin.close();process.wait(timeout=3)
+                with self.assertRaises(Exception):barrier.before_stop()
+                self.assertFalse(any(a[:2]==('docker','stop') for a,k in f.calls))
+                barrier.close();self.assertIsNotNone(process.poll());self.assertTrue(process.stdout.closed)
+
+    def test_legacy_guard_failure_before_api_mutation_restores_only_attempted_admin(self):
+        for failure in ('acquire','before-stop'):
+            gate=WorkspaceSqliteProtectionTests().fake_release_gate()
+            code,result,controller,manifest,_=ReleaseFailureTests().run_release(selected_scope=workspace,
+                sqlite_gate=gate,workspace_admission_failure=failure)
+            self.assertEqual(code,1);self.assertEqual(result['servicesAttempted'],['admin'])
+            self.assertEqual([call.args[2] for call in controller.rollback_service.call_args_list],['admin'])
+            gate.stop_previous.assert_not_called();controller.workspace_admission.close.assert_called()
+
+    def test_lost_legacy_guard_after_old_api_stop_does_not_stop_engine_and_recovers_through_online_path(self):
+        gate=WorkspaceSqliteProtectionTests().fake_release_gate()
+        code,result,controller,manifest,_=ReleaseFailureTests().run_release(selected_scope=workspace,
+            sqlite_gate=gate,online_origin_context=OnlineWorkspaceCompatibilityTests().context(),
+            workspace_admission_failure='after-stop',online_fail='rollback-busy')
+        self.assertEqual(code,1);self.assertFalse(result['rollbackOk'])
+        self.assertEqual(result['status'],'API_ADMIN_WORKSPACE_PARTIAL_RECOVERY_REQUIRED')
+        controller.online_fence.stop.assert_not_called();controller.online_rollback.assert_called_once()
+        self.assertNotIn('api',[call.args[2] for call in controller.rollback_service.call_args_list])
+        gate.abort.assert_not_called()
+
+    def test_audit_history_immutable_trigger_contract_is_required(self):
+        with tempfile.TemporaryDirectory(dir=RUNTIME) as temporary:
+            folder=Path(temporary)
+            for migration_name in ('20261002123500_routine_audit_retention_exception','20260830182500_mysql_trigger_service_definers'):
+                name=workspace.MIGRATION_ROOT+'/'+migration_name+'/migration.sql';path=folder/name
+                path.parent.mkdir(parents=True,exist_ok=True);path.write_bytes((ROOT/name).read_bytes())
+            rows=[]
+            for event,migration_name in (('DELETE','20261002123500_routine_audit_retention_exception'),('UPDATE','20260830182500_mysql_trigger_service_definers')):
+                raw=(folder/workspace.MIGRATION_ROOT/migration_name/'migration.sql').read_text()
+                trigger='idv2_audit_log_no_'+('delete' if event=='DELETE' else 'update')
+                body=raw.split('CREATE TRIGGER `'+trigger+'`',1)[1].split('FOR EACH ROW',1)[1]
+                body=body.split('END;',1)[0]+'END' if event=='DELETE' else body.split(';',1)[0]
+                rows.append({'event':event,'timing':'BEFORE','statement':body})
+            controller=SimpleNamespace(require=d.require,current_job_database=lambda p:'fixture_db',compose=MagicMock(return_value=json.dumps(rows)))
+            digest=workspace.workspace_audit_protection(controller,folder);self.assertRegex(digest,r'^[a-f0-9]{64}$')
+            for value in ([],[rows[0]], [{**rows[0],'statement':'SET @allow=1'},rows[1]], [*rows,rows[0]]):
+                controller.compose.return_value=json.dumps(value)
+                with self.assertRaisesRegex(RuntimeError,'HISTORY_UNPROVEN'):workspace.workspace_audit_protection(controller,folder)
+
+    def test_engine_private_runtime_idle_checks_closed_health_and_active_thread_counter(self):
+        expected={'ready':True,'mode':'enabled','activeTasks':0,'stopping':False,'rpcConnected':True}
+        controller=SimpleNamespace(require=d.require,run=MagicMock(return_value=json.dumps(expected)))
+        workspace.online_engine_idle(controller,{'Id':'1'*64})
+        for change in ({'activeTasks':1},{'activeTasks':False},{'stopping':True},{'rpcConnected':False},{'mode':'disabled'},{'private':'SENTINEL'}):
+            controller.run.return_value=json.dumps({**expected,**change})
+            with self.subTest(change=change),self.assertRaisesRegex(RuntimeError,'ENGINE_NOT_IDLE'):
+                workspace.online_engine_idle(controller,{'Id':'1'*64})
+
+    def test_online_sources_bind_fixed_engine_frontend_schema_compose_and_policy_without_fourteen_receipt_fields(self):
+        online,_=d.online_recharge_scope()
+        self.assertEqual(online.fingerprint(online.recovery_policy(d)),online.RECOVERY_POLICY_SHA256)
+        self.assertIn('scripts/production-release/online-recharge-recovery.json',workspace.ONLINE_ORIGIN_FILES)
+        with patch.object(workspace,'online_reader',return_value=online):
+            with tracked_online_source() as folder:
+                workspace.online_source_guard(d,folder)
+                path=folder/'scripts/production-release'/online.RECOVERY_FILE;path.write_bytes(path.read_bytes()+b'\n')
+                with self.assertRaisesRegex(RuntimeError,'RECOVERY_POLICY_CHANGED'):workspace.online_source_guard(d,folder)
+
+    def test_actual_admission_source_bytes_cannot_change_in_an_online_successor(self):
+        online,_=d.online_recharge_scope()
+        with tempfile.TemporaryDirectory(dir=RUNTIME) as temporary:
+            previous=Path(temporary)/'previous';candidate=Path(temporary)/'candidate'
+            folders=(*workspace.ONLINE_SOURCE_SEALS,workspace.MIGRATION_ROOT)
+            files=(*workspace.CONFIG_FILES,workspace.MIGRATION_SEED,*workspace.ONLINE_ADMISSION_FILES,
+                'scripts/production-release/'+online.RECOVERY_FILE)
+            archive=subprocess.check_output(['git','archive','HEAD','--',*folders],cwd=ROOT)
+            for directory in (previous,candidate):
+                directory.mkdir()
+                with tarfile.open(fileobj=io.BytesIO(archive),mode='r:') as tracked:
+                    for member in tracked.getmembers():
+                        path=Path(member.name)
+                        self.assertFalse(path.is_absolute() or '..' in path.parts)
+                        self.assertTrue(member.isdir() or member.isfile())
+                        target=directory/path
+                        if member.isdir():
+                            target.mkdir(parents=True,exist_ok=True)
+                        else:
+                            target.parent.mkdir(parents=True,exist_ok=True)
+                            target.write_bytes(tracked.extractfile(member).read())
+                            target.chmod(member.mode)
+                for name in files:
+                    path=directory/name;path.parent.mkdir(parents=True,exist_ok=True);path.write_bytes((ROOT/name).read_bytes())
+                (directory/'.env.aws.production').write_bytes(b'synthetic-only')
+            controller=SimpleNamespace(**vars(d))
+            with patch.object(workspace,'online_reader',return_value=online):
+                for name in workspace.ONLINE_ADMISSION_FILES:
+                    path=candidate/name;raw=path.read_bytes();path.write_bytes(raw+b'\n// changed\n')
+                    with self.subTest(name=name),self.assertRaisesRegex(RuntimeError,'ADMISSION_SOURCE_CHANGED'):
+                        workspace.require_preserved(controller,previous,candidate,states(),b'synthetic-only',online_context={})
+                    path.write_bytes(raw)
+
+    def test_stopped_identity_adapter_only_reads_the_previously_verified_database(self):
+        with tempfile.TemporaryDirectory(dir=RUNTIME) as temporary:
+            folder=Path(temporary);(folder/'.env.aws.production').write_bytes(b'synthetic')
+            row={'status':'running','health':'healthy','containerId':'1'*64,'image':'sha256:'+'2'*64,'environmentSha256':'3'*64}
+            controller=SimpleNamespace(require=d.require,service_state=lambda *a,**kw:dict(row),
+                current_job_database=MagicMock(return_value='fixture_database'))
+            identity=workspace.workspace_database_identity(controller,folder)
+            adapter=workspace.workspace_database_controller(controller,folder,identity)
+            controller.current_job_database.side_effect=AssertionError('stopped API cannot be queried')
+            self.assertEqual(adapter.current_job_database(folder),'fixture_database')
+            row['containerId']='4'*64
+            with self.assertRaisesRegex(RuntimeError,'DATABASE_IDENTITY_CHANGED'):adapter.current_job_database(folder)
+
+    def test_original_first_publication_cannot_omit_performed_or_claim_unsealed_recovery(self):
+        online,_=d.online_recharge_scope();controller=SimpleNamespace(require=d.require)
+        workspace.online_recovery_guard(controller,online,ROOT,ROOT,
+            {'migrationPerformed':True},{'baselineEvidence':{},'migration':{'performed':True}})
+        for performed in (False,None,1):
+            with self.subTest(performed=performed),self.assertRaises(RuntimeError):
+                workspace.online_recovery_guard(controller,online,ROOT,ROOT,
+                    {'migrationPerformed':performed},{'baselineEvidence':{},'migration':{'performed':performed}})
+        with self.assertRaises(RuntimeError):
+            workspace.online_recovery_guard(controller,online,ROOT,ROOT,
+                {'migrationPerformed':True,'migrationRecovery':{}},{'baselineEvidence':{},'migration':{'performed':True}})
+
+    def test_recovery_origin_and_candidate_source_are_revalidated_without_runtime_publication(self):
+        fixtures=load('merged_online_recovery_fixtures','online-recharge-scope.test.py')
+        fixtures.RUNTIME=RUNTIME;fixtures.RecoveryTests.setUpClass();fixtures.RestoredRecoveryTests.setUpClass()
+        try:
+            with fixtures.RestoredRecoveryTests().fixture() as restored:
+                controller,previous,second,context,documents,save,*_=restored
+                online=fixtures.scope
+                # The latest official reader requires both ended attempts. Reuse its
+                # actual two immutable source fixtures rather than bypass that reader.
+                with fixtures.RecoveryTests().fixture() as first:
+                    first_controller,_,first_source,failure,*_=first
+                    failed=previous.parent/first_source.name
+                    shutil.copytree(first_source,failed);failed.chmod(0o700)
+                    failure=copy.deepcopy(failure)
+                database=fixtures.database_fixture(failed,True)
+                published=previous.with_name('candidate')
+                shutil.copytree(fixtures.RestoredRecoveryTests.prepared/online.RECOVERY_COMMIT,published)
+                for name in context['policy']['candidateAllowedFiles']:
+                    path=published/name;path.parent.mkdir(parents=True,exist_ok=True)
+                    path.write_bytes((ROOT/name).read_bytes());path.chmod((ROOT/name).stat().st_mode & 0o777)
+                marker=online.recovery_marker(context['policy'])
+                manifest={'migrationRecovery':marker,'migrationPerformed':False}
+                record={'baselineEvidence':{'migrationRecovery':marker},'migration':{'performed':False}}
+                with patch.object(online,'recovery_policy',return_value=context['policy']), \
+                        patch.object(online,'RECOVERY_FAILURE_SHA256',online.fingerprint(failure)), \
+                        patch.object(online,'database_read',return_value=database):
+                    workspace.online_recovery_guard(controller,online,previous,published,manifest,record)
+                    for variation in ('marker','performed','source','first-failure','restored-failure'):
+                        with self.subTest(variation=variation):
+                            bad_manifest=copy.deepcopy(manifest);bad_record=copy.deepcopy(record)
+                            if variation=='marker':bad_manifest['migrationRecovery']={}
+                            if variation=='performed':bad_manifest['migrationPerformed']=bad_record['migration']['performed']=True
+                            extra=published/'apps/admin/src/v2/features/online-recharge/unapproved.ts'
+                            if variation=='source':extra.write_text('unapproved')
+                            if variation=='first-failure':(failed/online.FAILURE_FILE).write_text(json.dumps({**failure,'servicesAttempted':['api']}))
+                            if variation=='restored-failure':
+                                documents[online.FAILURE_FILE]['rollbackOk']=False;save()
+                            with self.assertRaises(RuntimeError):
+                                workspace.online_recovery_guard(controller,online,previous,published,bad_manifest,bad_record)
+                            if variation=='source':extra.unlink()
+                            if variation=='first-failure':(failed/online.FAILURE_FILE).write_text(json.dumps(failure))
+                            if variation=='restored-failure':documents[online.FAILURE_FILE]['rollbackOk']=True;save()
+        finally:
+            fixtures.RestoredRecoveryTests.tearDownClass();fixtures.RecoveryTests.tearDownClass()
+
+
+class PendingWorkspaceColdBridgeTests(unittest.TestCase):
+    """Synthetic acquired-source fixture only; no AWS, real Q, F or publication."""
+    @contextmanager
+    def fixture(self):
+        with tempfile.TemporaryDirectory(dir=RUNTIME) as temporary, ExitStack() as stack:
+            base = Path(temporary).resolve()
+            directory = base / 'releases' / ('20261010T000000Z-' + COMMIT[:12])
+            directory.mkdir(mode=0o700, parents=True)
+            (base / 'current').symlink_to(directory)
+            controller = SimpleNamespace(require=d.require, BASE=base, ALL_SERVICES=d.ALL_SERVICES)
+            original = base / 'releases' / ('20261009T000000Z-' + workspace.WORKSPACE_BOOTSTRAP_COMMIT[:12])
+            context = {'version': 2, 'priorPublications': [], 'baselineRelease': str(original),
+                'baselineManifestSha256': '1' * 64, 'recoveryMarker': {'synthetic': True},
+                'migrationState': {'status': 'APPLIED'}}
+            environment = b'SYNTHETIC_ONLY_NO_CREDENTIALS'
+            volume = {'name': 'synthetic_volume', 'status': 'ABSENT', 'identitySha256': None}
+            acceptance = {'synthetic': True}
+            protection = {'backupVerified': True, 'restoreVerified': True,
+                'sqliteProtectionSha256': '8' * 64, 'backupSha256': '9' * 64, 'backupSize': 4096}
+            rows = states()
+            record = {'pendingOnlineMigrationOrigin': context, 'workspaceVolumeAfter': volume,
+                'environmentSha256': hashlib.sha256(environment).hexdigest()}
+            audit = {'checkCount': 49, 'violationCount': 0, 'mode': 'STRICT_ZERO_49', 'checksSha256': '2' * 64}
+            manifest = {'servicesUpdated': ['api', 'admin'], 'migrationApplied': False, 'newMigrations': [],
+                'backupBeforeRelease': 'synthetic.sql.gz', 'dataAuditBefore': audit, 'dataAuditAfter': audit}
+            producer = {'commit': COMMIT, 'sourceTree': TREE, 'workflowRunId': '123', 'workflowRunAttempt': '1'}
+            inventory = {'synthetic-leaf': {'sha256': '3' * 64}}
+            publication = {name: '4' * 64 for name in ('manifestBytesSha256', 'recordBytesSha256',
+                'buildProofBytesSha256', 'buildProofCanonicalSha256', 'preflightBytesSha256')}
+            publication.update(kind='synthetic-initial-publication', version=1,
+                producer={**producer, 'archiveInventorySha256': workspace.fingerprint(inventory)},
+                preflightCommandId='01234567-89ab-cdef-0123-456789abcdef',
+                archiveInventorySha256=workspace.fingerprint(inventory),
+                configurationEquivalenceSeal={'synthetic': True}, afterServices=rows, configurationAfter={'synthetic': True})
+            marker = {'synthetic-marker': True}
+            summary = {name: publication[name] for name in ('kind', 'version', 'producer', 'preflightCommandId',
+                'preflightBytesSha256', 'manifestBytesSha256', 'recordBytesSha256', 'buildProofBytesSha256',
+                'buildProofCanonicalSha256', 'archiveInventorySha256', 'configurationEquivalenceSeal')}
+            receipt = {'status': 'API_ADMIN_WORKSPACE_VERIFIED', 'commit': COMMIT, 'sourceTree': TREE,
+                'services': rows, 'servicesUpdated': ['api', 'admin'], 'preservedServiceCount': 5,
+                'runningImagesAndContentMatched': True, 'buildProofSha256': publication['buildProofCanonicalSha256'],
+                'environmentUnchanged': True, 'onlinePublished': False, 'migrationPerformed': False,
+                'observedServiceCount': 7, 'volumePreserved': True, 'volumeDeletionPerformed': False,
+                'registrationHealthChecked': True, 'offlineAcceptance': acceptance, 'workspaceVolume': volume,
+                'pendingOnlineMigrationOrigin': context, 'preservedPendingOnlineMigration': marker,
+                'sqliteProtection': protection, 'declarationEquivalencePublication': summary}
+            command = '01234567-89ab-cdef-0123-456789abcdef'
+            def invocation():
+                return {'raw_bytes': json.dumps({'Status': 'Success', 'ResponseCode': 0, 'CommandId': command,
+                    'StandardOutputContent': json.dumps(receipt)}).encode(), 'command_id': command}
+            reader = SimpleNamespace(_declaration_source_bytes=lambda p: p.read_bytes(),
+                closed_recovery_json=lambda _d, raw: json.loads(raw),
+                declaration_equivalence_saved_invocation=MagicMock(side_effect=lambda *_args, **kw: invocation()),
+                archive_inventory=MagicMock(return_value=inventory))
+            materials = {'producer': publication['producer'], 'archive_bytes': b'SYNTHETIC_ARCHIVE', 'historical_files': {}}
+            runtime_names = {'docker-compose.aws-mysql.yml', workspace.MIGRATION_SCHEMA, workspace.MIGRATION_SEED}
+            archive_files = {name: (('SYNTHETIC_ORIGINAL_' + name).encode(), '100644') for name in runtime_names}
+            generated = {name: (('SYNTHETIC_PROJECTED_' + name).encode(), '100644') for name in runtime_names}
+            controller.registration_archive = MagicMock(return_value=archive_files)
+            projection = SimpleNamespace(runtime_config_files=MagicMock(return_value=generated))
+            stack.enter_context(patch.object(workspace, 'pending_projection', return_value=projection))
+            for name in runtime_names:
+                for root, raw in ((directory, generated[name][0]),
+                    (directory / '.deploy/production-release/pending-original-source', archive_files[name][0])):
+                    path = root / name
+                    path.parent.mkdir(parents=True, exist_ok=True)
+                    path.write_bytes(raw)
+            documents = {workspace.STATE_FILE: record, workspace.PROOF_FILE: {'acceptance': acceptance,
+                'pendingOnlineProjection': {'synthetic': True}},
+                'release-manifest.json': manifest,
+                'backup-verification.json': {'name': 'synthetic.sql.gz', 's3Verified': True, 'size': 123, 'sha256': '5' * 64}}
+            def save():
+                for name, value in documents.items():
+                    (directory / name).write_text(json.dumps(value))
+                (directory / '.env.aws.production').write_bytes(environment)
+            save()
+            stack.enter_context(patch.object(workspace, 'pending_online_equivalence', return_value=reader))
+            stack.enter_context(patch.object(workspace, 'validate_pending_online_origin', side_effect=lambda v: v))
+            stack.enter_context(patch.object(workspace, 'pending_online_recovery', return_value=(reader, {})))
+            files = stack.enter_context(patch.object(workspace, 'pending_online_declaration_files',
+                return_value=(reader, materials, publication, marker, record)))
+            stack.enter_context(patch.object(workspace, 'pending_online_declaration_wire',
+                return_value=lambda raw, **kw: json.loads(raw)))
+            original_binding = d.online_recharge_scope()[0].declaration_equivalence_receipt_binding
+            binding = stack.enter_context(patch.object(workspace, 'pending_online_declaration_call',
+                side_effect=lambda _d, name, *args, **kw: original_binding(_d, *args, **kw)))
+            stack.enter_context(patch.object(workspace, 'configuration_hashes', return_value=publication['configurationAfter']))
+            stack.enter_context(patch.object(workspace, 'workspace_sqlite_receipt', return_value=protection))
+            stack.enter_context(patch.object(workspace, 'audit_receipt', return_value=audit))
+            stack.enter_context(patch.object(workspace, 'snapshot', return_value=rows))
+            yield SimpleNamespace(d=controller, directory=directory, context=context, receipt=receipt,
+                reader=reader, publication=publication, documents=documents, save=save, files=files,
+                binding=binding, materials=materials, audit=audit)
+
+    def test_initial_cold_binds_original_ended_receipt_and_keeps_archive_private(self):
+        with self.fixture() as f:
+            bridge = workspace.online_pending_workspace_cold(f.d, f.directory, expected_commit=COMMIT)
+            self.assertEqual(bridge['kind'], workspace.ONLINE_PENDING_WORKSPACE_KIND)
+            self.assertEqual(bridge['readbackInvocationBytesSha256'], bridge['initialReadbackInvocationBytesSha256'])
+            self.assertNotIn('archive_bytes', bridge)
+            self.assertEqual(f.files.call_args.kwargs, {'phase': 'COLD'})
+            self.assertEqual(f.binding.call_args.args[1], 'declaration_equivalence_receipt_binding')
+            self.assertIs(workspace.online_pending_workspace_materials(f.d, f.directory, expected_commit=COMMIT), f.materials)
+            self.assertEqual(f.reader.archive_inventory.call_count, 2)
+
+    def test_runtime_projection_and_preserved_original_are_both_required(self):
+        names = ('docker-compose.aws-mysql.yml', workspace.MIGRATION_SCHEMA, workspace.MIGRATION_SEED)
+        for root in ('', '.deploy/production-release/pending-original-source'):
+            for name in names:
+                with self.subTest(root=root, name=name), self.fixture() as f:
+                    (f.directory / root / name).write_bytes(b'SYNTHETIC_TAMPERED')
+                    with self.assertRaisesRegex(RuntimeError, 'AFTER_BIT_ORIGIN_CHANGED'):
+                        workspace.online_pending_workspace_cold(f.d, f.directory, expected_commit=COMMIT)
+                    self.assertFalse(hasattr(f.d, '_onlinePendingWorkspaceMaterials'))
+
+    def test_preserved_original_rejects_extra_file_and_link(self):
+        for link in (False, True):
+            with self.subTest(link=link), self.fixture() as f:
+                path = f.directory / '.deploy/production-release/pending-original-source' / 'extra'
+                if link:
+                    path.symlink_to(f.directory / 'docker-compose.aws-mysql.yml')
+                else:
+                    path.write_bytes(b'SYNTHETIC_EXTRA')
+                with self.assertRaisesRegex(RuntimeError, 'AFTER_BIT_ORIGIN_CHANGED'):
+                    workspace.online_pending_workspace_cold(f.d, f.directory, expected_commit=COMMIT)
+
+    def test_successor_or_non_declaration_context_cannot_enter_initial_bridge(self):
+        for change in ({'version': 1}, {'priorPublications': [{'synthetic': True}]}):
+            with self.subTest(change=change), self.fixture() as f:
+                f.context.update(change); f.save()
+                with self.assertRaisesRegex(RuntimeError, 'AFTER_BIT_ORIGIN_CHANGED'):
+                    workspace.online_pending_workspace_cold(f.d, f.directory, expected_commit=COMMIT)
+                f.files.assert_not_called()
+                self.assertFalse(hasattr(f.d, '_onlinePendingWorkspaceMaterials'))
+
+    def test_initial_full_receipt_rejects_boolean_counts_wrong_services_and_missing_seal(self):
+        for change in ({'preservedServiceCount': False}, {'observedServiceCount': 8},
+                {'onlinePublished': True}, {'servicesUpdated': ['api', 'admin', 'online-recharge']},
+                {'services': {}}, {'volumePreserved': False}, {'sqliteProtection': {}},
+                {'declarationEquivalencePublication': {}}, {'declarationEquivalenceSuccessorPublication': {}}):
+            with self.subTest(change=change), self.fixture() as f:
+                f.receipt.update(change)
+                with self.assertRaisesRegex(RuntimeError, 'AFTER_BIT_ORIGIN_CHANGED'):
+                    workspace.online_pending_workspace_cold(f.d, f.directory, expected_commit=COMMIT)
+                self.assertFalse(hasattr(f.d, '_onlinePendingWorkspaceMaterials'))
+
+    def test_backup_audit_archive_and_final_source_drift_are_refused(self):
+        for failure in ('backup', 'audit', 'archive', 'source'):
+            with self.subTest(failure=failure), self.fixture() as f:
+                if failure == 'backup':
+                    f.documents['backup-verification.json']['s3Verified'] = False; f.save()
+                if failure == 'audit': f.audit['checksSha256'] = 'f' * 64
+                if failure == 'archive': f.reader.archive_inventory.return_value = {}
+                if failure == 'source':
+                    def drift(*_args, **_kw):
+                        (f.directory / '.env.aws.production').write_bytes(b'SYNTHETIC_CHANGED')
+                        return {'synthetic-leaf': {'sha256': '3' * 64}}
+                    f.reader.archive_inventory.side_effect = drift
+                with self.assertRaisesRegex(RuntimeError, 'AFTER_BIT_ORIGIN_CHANGED'):
+                    workspace.online_pending_workspace_cold(f.d, f.directory, expected_commit=COMMIT)
+
+    def test_measure_before_rechecks_current_pointer_and_exact_services(self):
+        with self.fixture() as f:
+            workspace.online_pending_workspace_measure_before(f.d, f.directory, expected_commit=COMMIT)
+            (f.d.BASE / 'current').unlink(); (f.d.BASE / 'current').symlink_to(f.directory.parent)
+            with self.assertRaisesRegex(RuntimeError, 'AFTER_BIT_BASELINE_MOVED'):
+                workspace.online_pending_workspace_measure_before(f.d, f.directory, expected_commit=COMMIT)
+
+    def test_second_readback_rejects_different_commit_tree_or_reused_run_before_f_hooks(self):
+        for change in ({'commit': 'd' * 40}, {'sourceTree': 'e' * 40}, {'workflowRunId': '123'}):
+            with self.subTest(change=change), self.fixture() as f, ExitStack() as stack:
+                producer = {'commit': COMMIT, 'sourceTree': TREE, 'workflowRunId': '456', 'workflowRunAttempt': '1'}
+                producer.update(change)
+                bridge = {'baselineProducer': {'commit': COMMIT, 'sourceTree': TREE,
+                    'workflowRunId': '123', 'workflowRunAttempt': '1'}}
+                reader = SimpleNamespace(STATE_FILE='synthetic-online-state.json', PROOF_FILE='synthetic-online-proof.json',
+                    _declaration_source_bytes=lambda p: p.read_bytes(), closed_recovery_json=lambda _d, raw: json.loads(raw),
+                    online_pending_workspace_preflight_bytes=MagicMock(side_effect=AssertionError('Must not enter F')))
+                for name, document in ((reader.STATE_FILE, {}), (reader.PROOF_FILE, {}),
+                        ('release-manifest.json', {'previousRelease': str(f.directory), 'previousCommit': COMMIT})):
+                    (f.directory / name).write_text(json.dumps(document))
+                stack.enter_context(patch.object(workspace, 'pending_online_equivalence', return_value=reader))
+                stack.enter_context(patch.object(workspace, 'online_pending_workspace_cold', return_value=bridge))
+                with self.assertRaisesRegex(RuntimeError, 'AFTER_BIT_READBACK_CHANGED'):
+                    workspace.online_pending_workspace_readback_origin(f.d, f.directory,
+                        expected_commit=producer['commit'], producer=producer)
+                reader.online_pending_workspace_preflight_bytes.assert_not_called()
 
 
 if __name__ == '__main__':

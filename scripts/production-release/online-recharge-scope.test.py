@@ -2004,7 +2004,7 @@ class WorkspaceOriginTests(unittest.TestCase):
 
 
 class ReleaseSequenceTests(unittest.TestCase):
-    def execute(self, fail=None, busy=False, recovered=False):
+    def execute(self, fail=None, busy=False, recovered=False, stage2=False):
         temporary = tempfile.TemporaryDirectory(prefix='release-', dir=RUNTIME)
         self.addCleanup(temporary.cleanup)
         base = Path(temporary.name)
@@ -2048,6 +2048,28 @@ class ReleaseSequenceTests(unittest.TestCase):
                     'marker': {'fixed-recovery-fixture': True}}
         if recovered:
             baseline_evidence['migrationRecovery'] = recovery['marker']
+        if stage2:
+            args.expected_current = COMMIT
+            baseline_evidence['onlinePendingWorkspaceOrigin'] = {'syntheticOnly':True}
+            class Fence:
+                def __init__(self,*a,**kw): pass
+                def __enter__(self): events.append('sql-lock'); return self
+                def before_stop(self): events.append('sql-before-stop')
+                def check(self): events.append('sql-check')
+                def __exit__(self,*a): events.append('sql-unlock')
+            class Gate:
+                record={'syntheticOnly':True}
+                def stop_previous(self):
+                    events.append('sqlite-stop-confirmed')
+                    if fail=='sqlite-stop': raise RuntimeError('API_ADMIN_WORKSPACE_OLD_API_NOT_STOPPED')
+                def finish(self): events.append('sqlite-finish')
+                def abort(self): events.append('sqlite-abort')
+                def close(self): events.append('sqlite-close')
+            def prepare(*a,**kw):
+                self.assertIs(kw['legacy'],False)
+                events.append('sqlite-protect'); return Gate()
+            fake_legacy.WorkspaceUnusedAuditBarrier=Fence
+            fake_legacy.workspace_prepare=prepare
         def sqlite_backup(*args):
             events.append('sqlite-backup')
             return {'name': 'synthetic.sqlite3.gz', 's3Verified': True}
@@ -2100,7 +2122,7 @@ class ReleaseSequenceTests(unittest.TestCase):
                 'verify_image_content': MagicMock(), 'verify_running': MagicMock(), 'historical_guard': MagicMock(),
                 'verify_permission_seed': MagicMock(), 'require_fresh_resources': lambda *a: events.append('empty9'),
                 'jobs_idle': idle, 'snapshot': MagicMock(return_value=states()),
-                'workspace_guard': MagicMock(),
+                'workspace_guard': MagicMock(return_value=baseline_evidence['workspaceVolume']),
                 'workspace_origin': origin,
                 'readback': lambda *a: {'status': 'ONLINE_RECHARGE_VERIFIED'},
             }.items():
@@ -2109,7 +2131,9 @@ class ReleaseSequenceTests(unittest.TestCase):
             stack.enter_context(patch.object(scope.shutil, 'disk_usage', return_value=SimpleNamespace(free=10 * 1024**3)))
             stack.enter_context(patch.object(scope.urllib.request, 'urlopen', return_value=response))
             stack.enter_context(redirect_stdout(output))
-            result = scope._release_locked(d, args)
+            if stage2:
+                stack.enter_context(patch.object(scope,'validate_arguments',return_value=candidate))
+            result = (scope._pending_workspace_release_locked if stage2 else scope._release_locked)(d, args)
         return result, json.loads(output.getvalue()), events
 
     def test_audit_backup_migration_grants_and_three_service_order(self):
@@ -2475,7 +2499,12 @@ class DeclarationEquivalencePureTests(unittest.TestCase):
         old_commit = 'd8466a58cc577ed83189503f260a9c914fcac3be'
         old = ast.parse(subprocess.check_output(['git', 'show', old_commit + ':scripts/production-release/online-recharge-scope.py'], cwd=ROOT))
         current = ast.parse((ROOT / 'scripts/production-release/online-recharge-scope.py').read_text())
-        by_name = {n.name: n for n in current.body if isinstance(n, (ast.FunctionDef, ast.ClassDef))}
+        by_name = {}
+        for item in current.body:
+            if isinstance(item, (ast.FunctionDef, ast.ClassDef)):
+                # The initial bodies are retained and captured by the finite
+                # same-candidate adapter; compare these original bodies.
+                by_name.setdefault(item.name,item)
         for node in old.body:
             if isinstance(node, (ast.FunctionDef, ast.ClassDef)):
                 actual = copy.deepcopy(by_name[node.name])
@@ -2980,6 +3009,119 @@ class DeclarationSuccessorPureTests(unittest.TestCase):
         before = json.loads(f['preflight_raw']); before['commandId'] = f['initial_command_id']
         with self.assertRaises(RuntimeError): scope.declaration_equivalence_successor_publication_binding(controller(),
             **{**f, 'preflight_raw': self.pure.raw(before)})
+
+
+
+
+class PendingWorkspaceStageTests(unittest.TestCase):
+    """Synthetic local witnesses never qualify a production F or publication."""
+    def producer(self,run='124'):
+        return {'commit':COMMIT,'sourceTree':TREE,'workflowRunId':run,'workflowRunAttempt':'1'}
+
+    def bridge(self):
+        d=controller(BASE=Path('/opt/id-business-v2'))
+        return {'kind':scope.ONLINE_PENDING_WORKSPACE_KIND,'version':1,
+            'baselineRelease':'/opt/id-business-v2/releases/20261010T120000Z-'+COMMIT[:12],
+            'baselineCommit':COMMIT,'baselineProducer':self.producer('123'),
+            **{n:'1'*64 for n in scope.ONLINE_PENDING_WORKSPACE_FIELDS if n.endswith('Sha256')},
+            'readbackCommandId':'12345678-1234-1234-1234-123456789abc',
+            'originalWorkspace':{'release':'/opt/id-business-v2/releases/20261009T120000Z-'+scope.BASELINE_COMMIT[:12],
+                'manifestSha256':'2'*64},'migrationRecovery':scope.recovery_marker(scope.recovery_policy(d)),
+            'migrationState':{'name':scope.MIGRATION_NAME,'sha256':scope.MIGRATION_IDENTITY['sha256'],
+                'status':'APPLIED','schemaVerified':True,'appliedMigrationsSha256':'3'*64},
+            'services':states(),'configurationAfter':{n:'4'*64 for n in ('docker-compose.aws-mysql.yml',
+                'deploy/caddy/Caddyfile.aws',scope.SCHEMA_FILE,'compose.release.json')}}
+
+    def inventory(self):
+        return {n:{'sha256':hashlib.sha256((ROOT/n).read_bytes()).hexdigest(),'mode':'100644'}
+            for n in scope._PENDING_WORKSPACE_CONTROL_NAMES}
+
+    def test_only_same_source_and_different_real_run_is_admitted(self):
+        b=self.bridge();p=self.producer();inventory=self.inventory()
+        with patch.object(scope,'_pending_workspace_current_source_inventory',return_value=inventory) as acquire:
+            self.assertEqual(scope._pending_workspace_profile(controller(),b,p),inventory)
+            acquire.assert_called_once_with(unittest.mock.ANY,p)
+
+    def test_changed_candidate_and_same_run_rejected_before_source_acquire(self):
+        for key,value in (('commit','9'*40),('sourceTree','9'*40),('workflowRunId','123')):
+            p=self.producer();p[key]=value
+            with self.subTest(key=key),patch.object(scope,'_pending_workspace_current_source_inventory') as acquire:
+                with self.assertRaisesRegex(RuntimeError,'ORIGIN_CHANGED'):
+                    scope._pending_workspace_profile(controller(),self.bridge(),p)
+                acquire.assert_not_called()
+
+    def test_each_executed_helper_still_bound_to_complete_archive(self):
+        for name in scope._PENDING_WORKSPACE_CONTROL_NAMES:
+            rows=self.inventory();rows[name]['sha256']='0'*64
+            with self.subTest(name=name),patch.object(scope,'_pending_workspace_current_source_inventory',return_value=rows):
+                with self.assertRaisesRegex(RuntimeError,'EXECUTOR_SOURCE_CHANGED'):
+                    scope._pending_workspace_profile(controller(),self.bridge(),self.producer())
+
+    def test_only_initial_kind_seven_services_and_applied_state_shape(self):
+        scope.online_pending_workspace_bridge_shape(controller(BASE=Path('/opt/id-business-v2')),self.bridge())
+        for key,value in (('kind','ONLINE_RECHARGE_AFTER_BIT_SUCCESSOR_ORIGIN'),('services',states(True)),
+                ('migrationState',{**self.bridge()['migrationState'],'status':'PENDING'})):
+            b=self.bridge();b[key]=value
+            with self.subTest(key=key),self.assertRaisesRegex(RuntimeError,'ORIGIN_CHANGED'):
+                scope.online_pending_workspace_bridge_shape(controller(BASE=Path('/opt/id-business-v2')),b)
+
+    def test_argv_is_finite_and_does_not_grant_api_readback_entry(self):
+        p=self.producer();encoded=base64.b64encode(json.dumps(p).encode()).decode()
+        argv=['--online-recharge-preflight','--expected-current',COMMIT,'--declaration-producer',encoded]
+        self.assertEqual(scope.online_pending_workspace_argv(argv)['producer'],p)
+        for bad in (argv+['--api-workspace-readback'],['--api-workspace-readback',*argv[1:]],
+                [argv[0],argv[1],COMMIT+';true',*argv[3:]], [*argv[:3],'--arbitrary',encoded]):
+            with self.assertRaisesRegex(RuntimeError,'INPUT_INVALID'):
+                scope.online_pending_workspace_argv(bad)
+
+    def test_projected_predecessor_schema_is_checked_as_pending_not_full(self):
+        b=self.bridge();d=controller(_onlinePendingWorkspaceSession={'bridge':b,'producer':self.producer()})
+        reader=SimpleNamespace(pending_online_migrations=MagicMock(return_value=scope.MIGRATION_FILE))
+        with patch.object(scope,'legacy',return_value=reader),patch.dict(scope._PENDING_WORKSPACE_FIRST,
+                {'migration_source_check':MagicMock()}) as unused:
+            self.assertIsNone(scope.migration_source_check(d,Path(b['baselineRelease']),candidate=False))
+            reader.pending_online_migrations.assert_called_once()
+            reader.pending_online_migrations.return_value=None
+            with self.assertRaisesRegex(RuntimeError,'MIGRATION_SCOPE_CHANGED'):
+                scope.migration_source_check(d,Path(b['baselineRelease']),candidate=False)
+
+    def test_ordinary14_original_bodies_are_exact_and_no_registry_added(self):
+        import ast
+        text=(ROOT/'scripts/production-release/online-recharge-scope.py').read_text()
+        nodes={}
+        for n in ast.parse(text).body:
+            if isinstance(n,ast.FunctionDef):nodes.setdefault(n.name,n)
+        for name,fn in scope._PENDING_WORKSPACE_FIRST.items():
+            self.assertEqual(fn.__code__.co_firstlineno,nodes[name].lineno)
+        added=text[text.index('# Same immutable main candidate:'):]
+        self.assertNotIn('REVIEWED_',added)
+        self.assertNotIn('declaration_equivalence_successor',added)
+        self.assertNotIn('pending_online_declaration_b_files',added)
+
+    def test_stage2_holds_fences_until_old_api_exits_and_never_runs_ddl(self):
+        helper=ReleaseSequenceTests();helper.addCleanup=lambda *a: self.addCleanup(*a)
+        result,receipt,events=helper.execute(recovered=True,stage2=True)
+        self.assertEqual(result,0);self.assertEqual(receipt['status'],'ONLINE_RECHARGE_VERIFIED')
+        self.assertNotIn('migration',events)
+        for before,after in (('backup','sqlite-protect'),('sql-lock','sqlite-protect'),
+                ('sqlite-protect','sqlite-stop-confirmed'),('sqlite-stop-confirmed','sql-unlock'),
+                ('sql-unlock','switch:api'),('switch:api','switch:online-recharge'),
+                ('audit:after-audit.json','sqlite-finish')):
+            self.assertLess(events.index(before),events.index(after))
+
+    def test_failed_old_api_stop_never_starts_new_api_or_engine(self):
+        helper=ReleaseSequenceTests();helper.addCleanup=lambda *a: self.addCleanup(*a)
+        result,receipt,events=helper.execute(recovered=True,stage2=True,fail='sqlite-stop')
+        self.assertEqual(result,1);self.assertFalse(receipt['migrationAttempted'])
+        self.assertFalse(receipt['inverseMigrationPerformed'])
+        self.assertNotIn('switch:api',events);self.assertNotIn('switch:online-recharge',events)
+        self.assertIn('sqlite-abort',events)
+
+    def test_unknown_baseline_has_no_implicit_source_or_live_reader(self):
+        with patch.object(scope,'_pending_workspace_begin') as acquire:
+            with self.assertRaisesRegex(RuntimeError,'BASELINE_NOT_APPROVED'):
+                scope.baseline(controller(),'9'*40)
+            acquire.assert_not_called()
 
 
 if __name__ == '__main__':

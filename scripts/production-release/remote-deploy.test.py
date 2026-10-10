@@ -14177,5 +14177,46 @@ class FixedRechargePricingE7ContractTests(unittest.TestCase):
         self.assertEqual(deployment.REGISTRATION96_MODULE_SHA256, deployment.RECHARGE_PRICING_E7_NATIVE_PINS['registration96ModuleSha256'])
 
 
+class PendingWorkspaceOnlineCallerTests(unittest.TestCase):
+    def invoke(self, flag='--online-recharge-preflight', *, output=None, expected=None):
+        scope, controller=deployment.online_recharge_scope()
+        producer={'commit':'a'*40,'sourceTree':'b'*40,'workflowRunId':'124','workflowRunAttempt':'1'}
+        encoded=base64.b64encode(json.dumps(producer).encode()).decode()
+        arguments=[flag,'--expected-current',expected or producer['commit'],'--declaration-producer',encoded]
+        callback='preflight' if flag.endswith('preflight') else 'readback'
+        with patch.object(deployment,'online_recharge_scope',return_value=(scope,controller)), \
+                patch.object(scope,callback,return_value=output or {'syntheticOnly':True}) as run:
+            result=deployment.online_pending_workspace_read_command(arguments)
+        return result,producer,controller,run
+
+    def test_original_online_preflight_and_readback_call_actual_selected_entry(self):
+        for flag in ('--online-recharge-preflight','--online-recharge-readback'):
+            with self.subTest(flag=flag):
+                raw,producer,controller,run=self.invoke(flag)
+                self.assertEqual(json.loads(raw),{'syntheticOnly':True})
+                self.assertEqual(controller._onlinePendingWorkspaceProducer,producer)
+                run.assert_called_once_with(controller,producer['commit'])
+                self.assertFalse(hasattr(controller,'_apiWorkspaceDeclarationEntry'))
+                self.assertFalse(hasattr(controller,'_apiWorkspaceDeclarationProducer'))
+
+    def test_original_baseline_and_api_stage_entries_do_not_receive_pending_capability(self):
+        for flag in ('--api-workspace-readback','--online-recharge-only'):
+            with self.subTest(flag=flag), self.assertRaisesRegex(RuntimeError,'PENDING_WORKSPACE_INPUT_INVALID'):
+                self.invoke(flag)
+        with self.assertRaisesRegex(RuntimeError,'PENDING_WORKSPACE_INPUT_INVALID'):
+            self.invoke(expected='0a03fa28e6b844a18833d5c63f1de700f091fc64')
+
+    def test_malformed_producer_and_extra_arguments_are_rejected_before_measurement(self):
+        for arguments in (['--online-recharge-preflight'],
+                ['--online-recharge-readback','--expected-current','a'*40,'--declaration-producer','e30='],
+                ['--online-recharge-preflight','--expected-current','a'*40,'--declaration-producer','e30=','extra']):
+            with self.subTest(arguments=arguments), self.assertRaisesRegex(RuntimeError,'PENDING_WORKSPACE_INPUT_INVALID'):
+                deployment.online_pending_workspace_read_command(arguments)
+
+    def test_oversized_measurement_is_rejected_at_transport_boundary(self):
+        with self.assertRaisesRegex(RuntimeError,'ONLINE_RECHARGE_RECEIPT_TOO_LARGE'):
+            self.invoke(output={'syntheticOnly':'x'*24000})
+
+
 if __name__ == '__main__':
     unittest.main()

@@ -5,6 +5,7 @@ import { spawn } from 'node:child_process';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { chromium } from 'playwright';
+import { resolveViteCli } from './lib/vite-cli.mjs';
 
 const root = process.cwd();
 const adminDir = path.join(root, 'apps/admin');
@@ -282,7 +283,7 @@ mkdirSync(outputDir, { recursive: true });
 const server = spawn(
   process.execPath,
   [
-    path.join(root, 'node_modules/vite/bin/vite.js'),
+    resolveViteCli(),
     '--host',
     '127.0.0.1',
     '--port',

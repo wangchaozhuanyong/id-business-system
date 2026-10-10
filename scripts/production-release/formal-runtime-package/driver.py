@@ -107,7 +107,21 @@ DIAGNOSTIC_CODES = frozenset((
     'SOURCE_CLIENT_PARENT_UID',
     'SOURCE_CLIENT_PARENT_WRITABLE',
     'SOURCE_CLIENT_PRIVATE_MODE',
+    'FACTS_FILE_CHANGED','FACTS_INPUT_INVALID','FACTS_NETWORK_CHANGED',
+    'FACTS_OBSERVATION_CHANGED','FACTS_PATH_CHANGED','FACTS_READER_FAILED',
+    'FACTS_READER_INVALID','FACTS_READ_BOUND','FACTS_READ_JSON',
+    'FACTS_RESOURCE_CHANGED','FACTS_ROOT_CAPABILITY_REQUIRED','FACTS_SNAPSHOT_CHANGED',
+    'FACTS_SOURCE_CHANGED','FACTS_UNAPPROVED_COMMAND',
 ))
+
+_FACTS_READER_CODES = frozenset((
+    'FACTS_FILE_CHANGED','FACTS_NETWORK_CHANGED','FACTS_OBSERVATION_CHANGED',
+    'FACTS_PATH_CHANGED','FACTS_READER_FAILED','FACTS_READER_INVALID',
+    'FACTS_READ_BOUND','FACTS_READ_JSON','FACTS_RESOURCE_CHANGED',
+    'FACTS_ROOT_CAPABILITY_REQUIRED','FACTS_SNAPSHOT_CHANGED','FACTS_SOURCE_CHANGED',
+    'FACTS_UNAPPROVED_COMMAND',
+))
+_FACTS_PURE_CODES = frozenset(('FACTS_INPUT_INVALID',))
 
 _SOURCE_FILE_PERMISSION_CODES = {
     ('COMPOSE','PARENT_UID'):'SOURCE_COMPOSE_PARENT_UID',
@@ -319,7 +333,10 @@ def _capabilities(producer_value=None):
         external=package.bind_consumers(producer(producer_value))
         stage='CONFIGURE'
         pure=package.load_leaf('pure.py')
-        reader=package.load_leaf('reader.py');reader._configure(external.online,external.workspace,external.inventory,pure,external.paths['api-admin-scope.py'])
+        bindings.append((pure.FactsRejected,_FACTS_PURE_CODES))
+        reader=package.load_leaf('reader.py')
+        bindings.append((reader.ReaderRejected,_FACTS_READER_CODES))
+        reader._configure(external.online,external.workspace,external.inventory,pure,external.paths['api-admin-scope.py'])
         constructor=package.load_leaf('constructor.py');constructor._configure(external.online,package.contract)
         def factory():
             try:

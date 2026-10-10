@@ -465,6 +465,68 @@ test('API deletion and connector checks retain recharge suites without retired r
   assert.ok(suites.every((name) => !name.startsWith('test_registration')));
 });
 
+test('combined API dispatcher verifies actual Apple adapter and worker suites after setup exactly once', () => {
+  const worker = 'apps/api/src/id-business-v2/auto-registration/worker';
+  const python = '.runtime/auto-registration/venv/bin/python';
+  for (const paths of [
+    [`${worker}/release_safety.py`],
+    [
+      'apps/api/src/id-business-v2/auto-recharge/bank-recharge-finance.service.ts',
+      'apps/api/src/id-business-v2/auto-registration/apple-mailboxes.service.ts',
+      `${worker}/workspace.py`,
+      `${worker}/apple_mailboxes.py`
+    ]
+  ]) {
+    const calls = recordGuardCommands('recharge', paths, 'api');
+    const api = calls.find((call) => call.includes('@apple-business/api') && call.includes('test'));
+    assert.ok(api.includes('src/id-business-v2/auto-recharge'));
+    assert.ok(api.includes('src/id-business-v2/auto-registration'));
+    assert.ok(!api.includes('src/id-business-v2/orders'));
+    const setup = calls.findIndex((call) => call.join(' ') === 'npm run auto-registration:setup');
+    assert.ok(setup >= 0);
+    assert.equal(
+      calls.filter((call) => call.join(' ') === 'npm run auto-registration:setup').length,
+      1
+    );
+    for (const name of ['test_workspace.py', 'test_apple_mailboxes.py', 'test_release_safety.py']) {
+      const expected = [python, '-B', '-m', 'unittest', 'discover', '-s', worker, '-p', name];
+      assert.equal(
+        calls.filter((call) => JSON.stringify(call) === JSON.stringify(expected)).length,
+        1
+      );
+      assert.ok(
+        calls.findIndex((call) => JSON.stringify(call) === JSON.stringify(expected)) > setup
+      );
+    }
+    assert.equal(
+      calls.filter((call) => call.join(' ') === `${python} -B ${worker}/acceptance_runtime.py`)
+        .length,
+      1
+    );
+    assert.ok(
+      calls.every((call) => !call.some((arg) => /financial-integrity|rollback-integrity/.test(arg)))
+    );
+  }
+  const workflow = readFileSync(
+    new URL('../.github/workflows/quality.yml', import.meta.url),
+    'utf8'
+  );
+  for (const name of ['test_workspace.py', 'test_apple_mailboxes.py', 'test_release_safety.py'])
+    assert.ok(workflow.includes(`-p '${name}'`), name);
+});
+
+test('unreviewed registration paths do not receive the Apple scoped worker runner', () => {
+  for (const path of [
+    'apps/api/src/id-business-v2/auto-registration/registration.module.ts',
+    'apps/api/src/id-business-v2/auto-registration/worker/unknown.py',
+    'apps/api/src/id-business-v2/auto-recharge/recharge.service.ts'
+  ]) {
+    const calls = recordGuardCommands('recharge', [path], 'api');
+    assert.ok(calls.every((call) => !call.includes('auto-registration:setup')));
+    assert.ok(calls.every((call) => call[0] !== '.runtime/auto-registration/venv/bin/python'));
+  }
+});
+
 test('removed registration transport paths select retirement checks without executing deleted scripts', () => {
   for (const part of ['guards', 'release-controls']) {
     const calls = recordGuardCommands(

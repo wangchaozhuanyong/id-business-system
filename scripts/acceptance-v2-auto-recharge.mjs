@@ -5,6 +5,7 @@ import { spawn } from 'node:child_process';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { chromium } from 'playwright';
+import { resolveViteCli } from './lib/vite-cli.mjs';
 
 const port = Number(
   process.argv.find((arg) => arg.startsWith('--port='))?.slice('--port='.length) ?? '5397'
@@ -20,7 +21,7 @@ mkdirSync(evidence, { recursive: true });
 const server = spawn(
   process.execPath,
   [
-    resolve('node_modules/vite/bin/vite.js'),
+    resolveViteCli(),
     ...(process.argv.includes('--built') ? ['preview'] : []),
     '--host',
     '127.0.0.1',

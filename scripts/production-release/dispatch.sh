@@ -400,6 +400,10 @@ if api_admin:
 if online_recharge:
     import base64
     from pathlib import Path
+    pending_workspace_online = previous != '0a03fa28e6b844a18833d5c63f1de700f091fc64'
+    if pending_workspace_online:
+        import runpy
+        runpy.run_path('scripts/production-release/online-recharge-readonly.py')['pending_workspace_build_input'](Path('.deploy/production-release'), proof_required=True)
     scope_flag = ' --online-recharge-only --online-recharge-build-proof ' + base64.b64encode(Path('.deploy/production-release/online-recharge-build-proof.json').read_bytes()).decode()
     image_flags = ''
 commands = [
@@ -499,6 +503,7 @@ if api_admin or online_recharge:
     controller_directory = f'/opt/id-business-v2/.staging/oidc-{sha}'
     controller_url = f'https://raw.githubusercontent.com/wangchaozhuanyong/id-business-system/{sha}/scripts/production-release'
     workspace_transport = os.environ.get('RELEASE_OPERATION') == 'release_api_workspace'
+    pending_workspace_transport = online_recharge and previous != '0a03fa28e6b844a18833d5c63f1de700f091fc64'
     controllers = ('remote-deploy.py', 'api-admin-scope.py')
     if online_recharge or os.environ.get('RELEASE_OPERATION') == 'release_api_workspace':
         controllers += ('online-recharge-scope.py', 'online-recharge-recovery.json')
@@ -507,7 +512,7 @@ if api_admin or online_recharge:
                         'online-recharge-declaration-measurement.py', 'api-admin-readonly.py',
                         'online-recharge-daemon-identity.py', 'online-recharge-daemon-listener.py',
                         'online-recharge-daemon-socket.py')
-    if workspace_transport:
+    if workspace_transport or pending_workspace_transport:
         import runpy
         carrier = runpy.run_path('scripts/production-release/api-admin-readonly.py')['formal_runtime_commands']
         commands[2:3] = carrier(controller_directory, sha,
@@ -523,8 +528,10 @@ if online_recharge or history_policy == 'registration-worker-96-20261008':
     assert len(json.dumps({'commands': commands, 'executionTimeout': ['3600']}).encode('utf-8')) < 48 * 1024
 if os.environ.get('RELEASE_OPERATION') == 'release_api_workspace':
     assert len(json.dumps({'commands': commands, 'executionTimeout': ['3600']}, separators=(',', ':')).encode('utf-8')) < 20 * 1024
+if online_recharge and pending_workspace_online:
+    assert len(json.dumps({'commands': commands, 'executionTimeout': ['3600']}, separators=(',', ':')).encode('utf-8')) < 20 * 1024
 with open(sys.argv[1], 'w', encoding='utf-8') as target:
-    options = {'separators': (',', ':')} if os.environ.get('RELEASE_OPERATION') == 'release_api_workspace' else {}
+    options = {'separators': (',', ':')} if os.environ.get('RELEASE_OPERATION') == 'release_api_workspace' or (online_recharge and pending_workspace_online) else {}
     json.dump({'commands': commands, 'executionTimeout': ['3600']}, target, **options)
 PY
 
@@ -542,8 +549,12 @@ for attempt in $(seq 1 360); do
   case "$status" in
     Success)
       if [[ "${RELEASE_OPERATION:-release}" == release_online_recharge ]]; then
+        online_filter_args=(filter-deploy)
+        if [[ "${EXPECTED_CURRENT:-}" != 0a03fa28e6b844a18833d5c63f1de700f091fc64 ]]; then
+          online_filter_args+=("$command_id")
+        fi
         aws ssm get-command-invocation --region "$AWS_REGION" --command-id "$command_id" --instance-id "$PRODUCTION_INSTANCE_ID" --output json \
-          | python3 -B scripts/production-release/online-recharge-readonly.py filter-deploy
+          | python3 -B scripts/production-release/online-recharge-readonly.py "${online_filter_args[@]}"
         exit 0
       fi
       aws ssm get-command-invocation --region "$AWS_REGION" \
@@ -552,8 +563,12 @@ for attempt in $(seq 1 360); do
       exit 0 ;;
     Failed|Cancelled|TimedOut|Cancelling)
       if [[ "${RELEASE_OPERATION:-release}" == release_online_recharge ]]; then
+        online_filter_args=(filter-deploy)
+        if [[ "${EXPECTED_CURRENT:-}" != 0a03fa28e6b844a18833d5c63f1de700f091fc64 ]]; then
+          online_filter_args+=("$command_id")
+        fi
         aws ssm get-command-invocation --region "$AWS_REGION" --command-id "$command_id" --instance-id "$PRODUCTION_INSTANCE_ID" --output json \
-          | python3 -B scripts/production-release/online-recharge-readonly.py filter-deploy
+          | python3 -B scripts/production-release/online-recharge-readonly.py "${online_filter_args[@]}"
         exit 1
       fi
       aws ssm get-command-invocation --region "$AWS_REGION" \

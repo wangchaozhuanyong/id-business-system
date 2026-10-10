@@ -823,6 +823,9 @@ ONLINE_RECHARGE_WORKSPACE_INTEGRITY_FAILED ONLINE_RECHARGE_WORKSPACE_NOT_PUBLISH
 ONLINE_RECHARGE_WORKSPACE_ORIGIN_CHANGED ONLINE_RECHARGE_WORKSPACE_ORIGIN_INVALID
 ONLINE_RECHARGE_WORKSPACE_S3_UNVERIFIED ONLINE_RECHARGE_WORKSPACE_TASK_ACTIVE
 ONLINE_RECHARGE_WORKSPACE_VOLUME_CHANGED
+ONLINE_RECHARGE_PENDING_WORKSPACE_BUILD_PROOF_INVALID ONLINE_RECHARGE_PENDING_WORKSPACE_INPUT_INVALID
+ONLINE_RECHARGE_PENDING_WORKSPACE_ORIGIN_CHANGED ONLINE_RECHARGE_PENDING_WORKSPACE_PREFLIGHT_CHANGED
+ONLINE_RECHARGE_DECLARATION_SOURCE_NOT_MEASURED ONLINE_RECHARGE_RECEIPT_TOO_LARGE
 """.split())
 
 
@@ -13576,6 +13579,31 @@ def api_workspace_declaration_inventory(expected, producer):
             'boundFilesSha256': online.fingerprint(before_files)}
 
 
+def online_pending_workspace_read_command(arguments):
+    """Existing ONLINE argv, distinct from the API independent Q issuer."""
+    require(type(arguments) in (list, tuple) and arguments and arguments[0] in
+        ('--online-recharge-preflight', '--online-recharge-readback'), 'ONLINE_RECHARGE_PENDING_WORKSPACE_INPUT_INVALID')
+    scope, controller = online_recharge_scope()
+    selection = scope.online_pending_workspace_argv(arguments)
+    require(selection['entry'] in ('PREFLIGHT', 'READBACK'), 'ONLINE_RECHARGE_PENDING_WORKSPACE_INPUT_INVALID')
+    require(selection['expectedCommit'] != scope.BASELINE_COMMIT,
+        'ONLINE_RECHARGE_PENDING_WORKSPACE_INPUT_INVALID')
+    controller._onlinePendingWorkspaceProducer = selection['producer']
+    # No _apiWorkspaceDeclarationEntry/Producer and no issuer capability.
+    result = (scope.preflight(controller, selection['expectedCommit']) if selection['entry'] == 'PREFLIGHT'
+        else scope.readback(controller, selection['expectedCommit']))
+    raw = json.dumps(result)
+    require(0 < len(raw.encode()) + 1 < 24000, 'ONLINE_RECHARGE_RECEIPT_TOO_LARGE')
+    return raw
+
+
+def online_pending_workspace_verify_dispatch_input():
+    """Local CI binding before creating any deploy command; no server authority."""
+    namespace = runpy.run_path(str(Path(__file__).with_name('online-recharge-readonly.py')))
+    return namespace['pending_workspace_build_input'](Path('.deploy/production-release'), proof_required=True)
+
+
+
 if __name__ == '__main__':
     try:
         reject_retired_registration_selection(sys.argv[1:])
@@ -13701,6 +13729,10 @@ if __name__ == '__main__':
     if sys.argv[1:2] in (['--write-online-recharge-build-proof'], ['--online-recharge-preflight'], ['--online-recharge-readback'], ['--online-recharge-diagnostic']):
         try:
             scope, controller = online_recharge_scope()
+            if sys.argv[1] in ('--online-recharge-preflight', '--online-recharge-readback') and (
+                    len(sys.argv) == 6 or (len(sys.argv) == 4 and sys.argv[3] != scope.BASELINE_COMMIT)):
+                print(online_pending_workspace_read_command(sys.argv[1:]))
+                raise SystemExit(0)
             if sys.argv[1:] == ['--write-online-recharge-build-proof']:
                 scope.build_proof(controller)
             else:
