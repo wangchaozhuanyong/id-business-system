@@ -41,10 +41,15 @@ HISTORY = (('RECOVERY', '28a3ba4ffd17d36001b1104c97394f5ae871d73d',
 HEX = re.compile(r'[a-f0-9]{64}\Z')
 UUID = re.compile(r'[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}\Z')
 ARTIFACT = Path('.deploy/production-release/online-backup-source-recovery-result.json')
+DIRECTORY_ROLES = frozenset(('ROOT', 'BASE_PARENT', 'BASE', 'RELEASES', 'CURRENT_RELEASE',
+                             'BACKUPS', 'MYSQL', 'HISTORY_RECOVERY', 'HISTORY_RESTORED'))
 TRANSPORT_CODES = frozenset(('OK', 'INPUT_INVALID', 'ANCESTOR_INVALID', 'CURRENT_INVALID',
                             'SOURCE_INVALID', 'FAILURE_CHANGED', 'RECEIPT_CHANGED',
                             'ENVIRONMENT_INVALID', 'AUTHORITY_CHANGED', 'SERVICES_CHANGED',
-                            'CORE_REJECTED', 'IO_FAILURE'))
+                            'CORE_REJECTED', 'IO_FAILURE')) | frozenset(
+                                'ANCESTOR_' + role + '_' + reason
+                                for role in DIRECTORY_ROLES
+                                for reason in ('TYPE', 'OWNER', 'WRITABLE', 'IDENTITY'))
 REMOTE_FIELDS = frozenset(('kind', 'operation', 'producer', 'origin', 'source21Sha256',
                           'coreSha256', 'snapshotSourceSha256', 'status', 'code',
                           'currentUnchanged', 'servicesUnchanged', 'servicesBeforeSha256',
@@ -118,9 +123,11 @@ def directory_identity(row):
     return (row.st_dev, row.st_ino, row.st_mode, row.st_uid, row.st_gid)
 
 
-def directory_safe(row):
-    need(stat.S_ISDIR(row.st_mode) and row.st_uid == ROOT_UID
-         and stat.S_IMODE(row.st_mode) & 0o022 == 0, 'ANCESTOR_INVALID')
+def directory_safe(row, role):
+    need(role in DIRECTORY_ROLES)
+    need(stat.S_ISDIR(row.st_mode), 'ANCESTOR_' + role + '_TYPE')
+    need(row.st_uid == ROOT_UID, 'ANCESTOR_' + role + '_OWNER')
+    need(stat.S_IMODE(row.st_mode) & 0o022 == 0, 'ANCESTOR_' + role + '_WRITABLE')
 
 
 class Authority:
@@ -129,29 +136,30 @@ class Authority:
         self.fds, self.directories, self.files = [], [], []
         try:
             root = os.open('/', os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC)
-            self.fds.append(root); directory_safe(os.fstat(root))
+            self.fds.append(root); directory_safe(os.fstat(root), 'ROOT')
             fd = root
-            for part in BASE.parts[1:]:
-                fd = self.child(fd, part)
+            for index, part in enumerate(BASE.parts[1:]):
+                role = 'BASE' if index == len(BASE.parts) - 2 else 'BASE_PARENT'
+                fd = self.child(fd, part, role=role)
             self.base = fd
-            self.releases = self.child(fd, 'releases')
+            self.releases = self.child(fd, 'releases', role='RELEASES')
             self.current, self.current_anchor = self.current_read()
-            self.current_fd = self.child(self.releases, self.current.name)
-            self.backups = self.child(fd, 'backups')
-            self.mysql = self.child(self.backups, 'mysql')
+            self.current_fd = self.child(self.releases, self.current.name, role='CURRENT_RELEASE')
+            self.backups = self.child(fd, 'backups', role='BACKUPS')
+            self.mysql = self.child(self.backups, 'mysql', role='MYSQL')
         except BaseException:
             self.close()
             raise
 
-    def child(self, parent, name, private=False):
+    def child(self, parent, name, private=False, *, role):
         visible = os.stat(name, dir_fd=parent, follow_symlinks=False)
-        directory_safe(visible)
+        directory_safe(visible, role)
         if private:
             need(stat.S_IMODE(visible.st_mode) & 0o077 == 0, 'SOURCE_INVALID')
         fd = os.open(name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC, dir_fd=parent)
         self.fds.append(fd)
-        opened = os.fstat(fd); directory_safe(opened)
-        need(directory_identity(visible) == directory_identity(opened), 'ANCESTOR_INVALID')
+        opened = os.fstat(fd); directory_safe(opened, role)
+        need(directory_identity(visible) == directory_identity(opened), 'ANCESTOR_' + role + '_IDENTITY')
         self.directories.append((parent, name, fd, directory_identity(opened)))
         return fd
 
@@ -216,7 +224,7 @@ class Authority:
             matches = [n for n in names if n.endswith('-' + commit[:12])]
             need(len(matches) == 1 and re.fullmatch('[0-9]{8}T[0-9]{6}Z-' + commit[:12], matches[0]),
                  'SOURCE_INVALID')
-            fd = self.child(self.releases, matches[0], private=True)
+            fd = self.child(self.releases, matches[0], private=True, role='HISTORY_' + role)
             failure = closed(self.read(fd, 'online-recharge-failure.json'))
             need(type(failure) is dict and sha(canonical(failure)) == failure_sha
                  and failure.get('candidateCommit') == commit and failure.get('previousCommit') == BASELINE
@@ -449,7 +457,7 @@ def parameters(operation, producer, source=None, core_path=None):
     own = Path(__file__).read_text(); own_lines = own.splitlines(keepends=True)
     own_nodes = {n.name: n for n in ast.parse(own).body if isinstance(n, (ast.FunctionDef, ast.ClassDef))}
     body += 'import selectors,subprocess,tempfile,time\n'
-    for name in ('BASE', 'ROOT_UID', 'BASELINE', 'OPERATIONS', 'PREFIX', 'CORE_NAME', 'ORIGIN', 'HISTORY', 'TRANSPORT_CODES'):
+    for name in ('BASE', 'ROOT_UID', 'BASELINE', 'OPERATIONS', 'PREFIX', 'CORE_NAME', 'ORIGIN', 'HISTORY', 'DIRECTORY_ROLES', 'TRANSPORT_CODES'):
         value = globals()[name]
         body += name + '=' + ('Path(' + repr(str(value)) + ')' if name == 'BASE' else
             'frozenset(' + repr(tuple(sorted(value))) + ')' if type(value) is frozenset else repr(value)) + '\n'

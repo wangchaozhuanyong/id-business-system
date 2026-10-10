@@ -13,6 +13,7 @@ import stat
 import subprocess
 import sys
 import tempfile
+from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
@@ -66,7 +67,7 @@ class FixtureTests(unittest.TestCase):
             if role == 'RESTORED':
                 (source / 'release-manifest.json').write_bytes(t.canonical({
                     'commit': commit, 'previousCommit': t.BASELINE, 'backupBeforeRelease': name}))
-        def fixture_directory(row):
+        def fixture_directory(row, role):
             t.need(stat.S_ISDIR(row.st_mode) and row.st_uid in (0, os.getuid())
                    and stat.S_IMODE(row.st_mode) & 0o022 == 0, 'ANCESTOR_INVALID')
         self.stack = [patch.object(t, 'BASE', self.base), patch.object(t, 'ROOT_UID', os.getuid()),
@@ -230,6 +231,60 @@ class FixtureTests(unittest.TestCase):
         self.assertEqual(list(self.mysql.iterdir()), [])
 
 
+class DirectoryDiagnosticTests(unittest.TestCase):
+    def test_each_fixed_role_keeps_type_owner_and_write_rejections(self):
+        valid = {'st_mode': stat.S_IFDIR | 0o700, 'st_uid': t.ROOT_UID}
+        for role in t.DIRECTORY_ROLES:
+            t.directory_safe(SimpleNamespace(**valid), role)
+            invalid = (({'st_mode': stat.S_IFLNK | 0o777}, 'TYPE'),
+                       ({'st_uid': t.ROOT_UID + 1}, 'OWNER'),
+                       ({'st_mode': stat.S_IFDIR | 0o720}, 'WRITABLE'),
+                       ({'st_mode': stat.S_IFDIR | 0o702}, 'WRITABLE'))
+            for changed, reason in invalid:
+                with self.subTest(role=role, reason=reason), self.assertRaises(t.Rejected) as failure:
+                    t.directory_safe(SimpleNamespace(**{**valid, **changed}), role)
+                self.assertEqual(failure.exception.args, ('ANCESTOR_' + role + '_' + reason,))
+                self.assertIn(failure.exception.args[0], t.TRANSPORT_CODES)
+
+    def test_unknown_role_is_rejected_without_including_input(self):
+        with self.assertRaises(t.Rejected) as failure:
+            t.directory_safe(SimpleNamespace(st_mode=stat.S_IFDIR | 0o700, st_uid=t.ROOT_UID),
+                             'untrusted-path-or-owner')
+        self.assertEqual(failure.exception.args, ('INPUT_INVALID',))
+
+    def test_directory_failure_stops_before_snapshot_core_or_network(self):
+        for code in ('ANCESTOR_BASE_OWNER', 'ANCESTOR_MYSQL_WRITABLE', 'ANCESTOR_RELEASES_IDENTITY'):
+            with self.subTest(code=code), patch.object(t, 'Authority', side_effect=t.Rejected(code)), \
+                    patch.object(t.os, 'getuid', return_value=t.ROOT_UID), \
+                    patch.object(t.os, 'geteuid', return_value=t.ROOT_UID), \
+                    patch.object(t, 'head_read', side_effect=AssertionError('network')), \
+                    patch.object(core, 'recover', side_effect=AssertionError('core')):
+                value = t.execute_action('diagnose_online_backup_source', core,
+                                         lambda unused: self.fail('snapshot'))
+            self.assertEqual(value['code'], code)
+            self.assertEqual(value['backups'], [])
+            self.assertFalse(value['mutationAttempted'])
+            self.assertEqual(value['servicesBeforeSha256'], 'NOT_MEASURED')
+
+    def test_child_identity_change_remains_rejected_without_extra_reads(self):
+        visible = SimpleNamespace(st_mode=stat.S_IFDIR | 0o700, st_uid=t.ROOT_UID,
+                                  st_dev=1, st_ino=2, st_gid=0)
+        opened = SimpleNamespace(**{**vars(visible), 'st_ino': 3})
+        authority = t.Authority.__new__(t.Authority)
+        authority.fds, authority.directories, authority.files = [], [], []
+        with patch.object(t.os, 'stat', return_value=visible) as read_visible, \
+                patch.object(t.os, 'open', return_value=731) as open_directory, \
+                patch.object(t.os, 'fstat', return_value=opened) as read_opened, \
+                self.assertRaises(t.Rejected) as failure:
+            authority.child(730, 'fixture-only', role='MYSQL')
+        self.assertEqual(failure.exception.args, ('ANCESTOR_MYSQL_IDENTITY',))
+        self.assertEqual(read_visible.call_count, 1)
+        self.assertEqual(open_directory.call_count, 1)
+        self.assertEqual(read_opened.call_count, 1)
+        self.assertEqual(authority.fds, [731])
+        self.assertEqual(authority.directories, [])
+
+
 class WireTests(unittest.TestCase):
     def test_selection_is_two_exact_operations_and_fixed_baseline(self):
         env = {'RELEASE_OPERATION': 'diagnose_online_backup_source', 'EXPECTED_CURRENT': t.BASELINE,
@@ -272,6 +327,7 @@ class WireTests(unittest.TestCase):
             self.assertEqual(len(binding['packagePins']), 10)
             self.assertNotIn(t.CORE_NAME, binding['controllerPins'])
             body = unpack(payload['commands'][-1]).decode(); ast.parse(body)
+            self.assertIn('DIRECTORY_ROLES=frozenset(', body)
             snapshot_source = (SOURCE / t.SNAPSHOT_NAME).read_text()
             for name in ('read_fixed', 'literal_module'):
                 node = next(n for n in ast.parse(snapshot_source).body if isinstance(n, ast.FunctionDef) and n.name == name)
