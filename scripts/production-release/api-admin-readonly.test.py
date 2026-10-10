@@ -447,7 +447,9 @@ raise SystemExit(1)
             if path.as_posix() == f'.deploy/production-release/{proof_name}-build-proof.json':
                 return proof_bytes
             return original_read(path)
-        environment = {'RELEASE_COMMIT': COMMIT, 'SOURCE_TREE': TREE, 'EXPECTED_CURRENT': PREVIOUS,
+        expected_current = (json.loads((ROOT / 'scripts/production-release/online-recharge-recovery.json').read_text())['previousCommit']
+            if operation == 'release_online_recharge' else PREVIOUS)
+        environment = {'RELEASE_COMMIT': COMMIT, 'SOURCE_TREE': TREE, 'EXPECTED_CURRENT': expected_current,
             'RELEASE_REPOSITORY': REPOSITORY, 'GITHUB_RUN_ID': '123', 'GITHUB_RUN_ATTEMPT': '1',
             'QUALITY_RUN_ID': '456', 'RELEASE_OPERATION': operation, 'HISTORICAL_EXCEPTION': 'none'}
         RUNTIME.mkdir(parents=True, exist_ok=True)
