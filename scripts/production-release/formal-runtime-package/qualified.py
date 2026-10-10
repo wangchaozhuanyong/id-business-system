@@ -5,7 +5,7 @@ import hashlib
 import json
 from pathlib import Path
 import re
-from types import MappingProxyType,SimpleNamespace,ModuleType,MethodType
+from types import MappingProxyType,SimpleNamespace,ModuleType,MethodType,FunctionType
 import uuid
 
 HERE=Path(__file__).resolve().parent
@@ -177,6 +177,9 @@ class Rejected(RuntimeError):pass
 # They never authorize a source, inspect a message, or alter a rejected argument.
 DIAGNOSTIC_STAGES=frozenset(('QUALIFIER_PROFILE', 'FACTORY', 'SESSION', 'INSTALL', 'VFS_SOURCE', 'CLIENT_DIRECTORY', 'CLIENT_CONFIG', 'RUNTIME_VFS', 'COLLECTION_TOOLS', 'NATIVE_PERMISSIONS', 'NATIVE_TOOLS', 'DAEMON_INFO', 'STABILITY', 'YIELD', 'CLEANUP'))
 DIAGNOSTIC_CODES=frozenset(('ACTUAL_IDENTITY', 'ACTUAL_IDENTITY_CHANGED', 'ACTUAL_INSPECT_CHANGED', 'ACTUAL_NETWORK_ADDRESS', 'ACTUAL_NETWORK_DECLARATION', 'ACTUAL_NETWORK_ID_OR_MEMBERS', 'ACTUAL_NETWORK_INSPECT_CHANGED', 'ACTUAL_NETWORK_MEMBERS', 'ACTUAL_NETWORK_SET', 'ACTUAL_PRIMARY_NETWORK', 'ACTUAL_STATE_OR_ENV', 'ACTUAL_VOLUME_INSPECT_CHANGED', 'ATTRIBUTE_ERROR', 'BASE_SOURCE_UNMEASURED', 'BINDING_REPORT_INVALID', 'BOUND_LABEL', 'CLEANUP_FAILED', 'CLEANUP_REMAINING', 'CLEANUP_SEAL_CHANGED', 'CLIENT_DEFAULT_INJECTION', 'CLIENT_SOURCE_CHANGED', 'CLI_SOURCE_CHANGED', 'CMDLINE_INVALID', 'COMPLETE_CONFIGURATION_DIFFERENCE', 'CONFIGURATION_INVALID', 'CONFIG_INVALID', 'DAEMON_CHANGED', 'DAEMON_FD_MISSING', 'DAEMON_SOURCE_NOT_MEASURED', 'DEPENDENCY_LABEL', 'ENV_INVALID', 'EXECUTABLE_INVALID', 'EXISTING_REFERENCE_REFUSED', 'FD_INVALID', 'FILE_EXISTS_ERROR', 'FILE_NOT_FOUND_ERROR', 'GENERATOR_SOURCE_CHANGED', 'HOST_MOUNTS_SHAPE', 'IMAGE_INSPECT_CHANGED', 'LISTENER_INVALID', 'MEASUREMENT_FAILED', 'MOUNT_BINDING', 'NAMESPACE_MISMATCH', 'NATIVE_TOOL_CHANGED', 'ORIGIN_CHANGED', 'OS_ERROR', 'PACKAGE_ARCHIVE_CHANGED', 'PACKAGE_BINARY_MISMATCH', 'PACKAGE_DIGEST_UNSUPPORTED', 'PACKAGE_FILE_CHANGED', 'PACKAGE_INPUT_INVALID', 'PACKAGE_INVALID', 'PACKAGE_SCHEMA_CHANGED', 'PACKAGE_SOURCE_CHANGED', 'PACK_IMAGE_OR_NATIVE_IDENTITY', 'PACK_INVALID', 'PATH_INVALID', 'PERMISSIONS_INVALID', 'PERMISSION_ERROR', 'POOL_SOURCE_CHANGED', 'PRIMARY_NETWORK', 'PRIMARY_NETWORK_OR_IMAGE', 'PROCESS_INVALID', 'PROC_ALIAS_INVALID', 'QUALIFIER_FROZEN_INPUT_CHANGED', 'QUALIFIER_UNAVAILABLE', 'RUNTIME_ERROR', 'REFERENCE_ID_CHANGED', 'REFERENCE_MODEL_CHANGED', 'REFERENCE_NETWORK_OVERLAP', 'REFERENCE_NETWORK_SET', 'REFERENCE_PATH_INVALID', 'REFERENCE_PENDING_ENDPOINT', 'REFERENCE_RESOURCE_CHANGED', 'REFERENCE_STARTED_OR_OWNER_CHANGED', 'REFERENCE_STATE_OWNER_OR_ENV', 'REPLACE_LABEL', 'REPORT_INVALID', 'RESOURCE_DEFAULT_POOL_INVALID', 'RESOURCE_INVENTORY_INVALID', 'RESOURCE_IPAM_INVALID', 'RESOURCE_OWNER_OR_MEMBERS_INVALID', 'RESOURCE_PROPERTIES_INVALID', 'RESOURCE_READ_INVALID', 'RESOURCE_SCHEMA_INVALID', 'RESOURCE_VOLUME_INVALID', 'RUNTIME_BINARY_CHANGED', 'RUNTIME_CAPABILITY_REQUIRED', 'RUNTIME_DRIFT', 'RUNTIME_IDENTITY_INVALID', 'RUNTIME_PACKAGE_CHANGED', 'RUNTIME_UNAVAILABLE', 'SERVICE_INVALID', 'SOCKET_BINDING_CHANGED', 'SOCKET_BINDING_DRIFT', 'SOCKET_BINDING_INVALID', 'SOCKET_BINDING_UNAVAILABLE', 'SOCKET_PATH_INVALID', 'SOCKET_PERMISSIONS_INVALID', 'SOURCE_DECLARATION_INVALID', 'SOURCE_ENV_INVALID', 'SOURCE_ENV_SEAL_CHANGED', 'SOURCE_FILES_CHANGED', 'SOURCE_FILE_INVALID', 'SOURCE_FILE_PERMISSIONS', 'SOURCE_IMAGE_INVALID', 'SOURCE_MODEL_HASH_INVALID', 'SOURCE_NETWORK_DECLARATION', 'SOURCE_NOT_MEASURED', 'SOURCE_PATH_INVALID', 'SOURCE_PROFILE_INVALID', 'SOURCE_PROJECT_INVALID', 'SOURCE_REPLACE_ANCHOR_INVALID', 'SOURCE_SEAL_INVALID', 'SOURCE_VOLUME_DECLARATION', 'TYPE_ERROR', 'UNKNOWN', 'VFS_BINDING_UNAVAILABLE', 'VFS_BOUND_CAPABILITY_REQUIRED', 'VFS_DIAG_UNAVAILABLE', 'VFS_DRIFT', 'VFS_NODE_MISMATCH', 'VFS_QUERY_INVALID', 'VFS_REPORT_INVALID', 'VFS_SOURCE_UNMEASURED', 'VFS_WIRE_INVALID'))
+_NATIVE_PERMISSION_CODES = {('DOCKER', 'NOT_REGULAR'): 'CLI_DOCKER_NOT_REGULAR', ('DOCKER', 'LEAF_SYMLINK'): 'CLI_DOCKER_LEAF_SYMLINK', ('DOCKER', 'UID'): 'CLI_DOCKER_UID', ('DOCKER', 'NLINK'): 'CLI_DOCKER_NLINK', ('DOCKER', 'OWNER_EXEC'): 'CLI_DOCKER_OWNER_EXEC', ('DOCKER', 'SPECIAL_MODE'): 'CLI_DOCKER_SPECIAL_MODE', ('DOCKER', 'WRITABLE'): 'CLI_DOCKER_WRITABLE', ('COMPOSE', 'NOT_REGULAR'): 'CLI_COMPOSE_NOT_REGULAR', ('COMPOSE', 'LEAF_SYMLINK'): 'CLI_COMPOSE_LEAF_SYMLINK', ('COMPOSE', 'UID'): 'CLI_COMPOSE_UID', ('COMPOSE', 'NLINK'): 'CLI_COMPOSE_NLINK', ('COMPOSE', 'OWNER_EXEC'): 'CLI_COMPOSE_OWNER_EXEC', ('COMPOSE', 'SPECIAL_MODE'): 'CLI_COMPOSE_SPECIAL_MODE', ('COMPOSE', 'WRITABLE'): 'CLI_COMPOSE_WRITABLE'}
+DIAGNOSTIC_CODES = DIAGNOSTIC_CODES | frozenset(_NATIVE_PERMISSION_CODES.values())
+
 _DIAGNOSTIC_BUILTINS=((RuntimeError,'RUNTIME_ERROR'),(TypeError,'TYPE_ERROR'),(AttributeError,'ATTRIBUTE_ERROR'),
     (PermissionError,'PERMISSION_ERROR'),(OSError,'OS_ERROR'),
     (FileNotFoundError,'FILE_NOT_FOUND_ERROR'),(FileExistsError,'FILE_EXISTS_ERROR'),
@@ -209,9 +212,9 @@ def _diagnostic_binding(module,codes_name='CODES'):
 
 
 class _DiagnosticState:
-    __slots__=('stage','first','cleanup','bindings')
+    __slots__=('stage','first','cleanup','bindings','native_binding')
     def __init__(self):
-        self.stage='QUALIFIER_PROFILE';self.first=None;self.cleanup=None;self.bindings=[(Rejected,CODES)]
+        self.stage='QUALIFIER_PROFILE';self.first=None;self.cleanup=None;self.bindings=[(Rejected,CODES)];self.native_binding=None
         if _EXTERNAL is not None:
             for name in ('identity','listener','socket'):
                 row=_diagnostic_binding(getattr(_EXTERNAL,name,None))
@@ -226,6 +229,10 @@ class _DiagnosticState:
     def bind_base(self,base):
         row=_diagnostic_binding(base,'ERROR_CODES')
         if row is not None:self.bindings.append(row)
+        getter=vars(base).get('native_permission_failure') if type(base) is ModuleType else None
+        if (row is not None and type(getter) is FunctionType and getter.__globals__ is vars(base)
+                and getter.__name__ == 'native_permission_failure'):
+            self.native_binding=(row[0],getter)
     def capture(self,error,*,cleanup=False):
         code=None
         for cls,codes in self.bindings:
@@ -233,6 +240,13 @@ class _DiagnosticState:
                 values=BaseException.args.__get__(error)
                 if type(values) is tuple and len(values)==1 and type(values[0]) is str and values[0] in codes:
                     code=values[0];break
+        if (self.stage=='NATIVE_PERMISSIONS' and code=='CLI_SOURCE_CHANGED'
+                and self.native_binding is not None and type(error) is self.native_binding[0]):
+            try:row=self.native_binding[1](error)
+            except Exception:row=None
+            if (type(row) is tuple and len(row)==2 and all(type(v) is str for v in row)
+                    and row in _NATIVE_PERMISSION_CODES):
+                code=_NATIVE_PERMISSION_CODES[row]
         if code is None:
             for cls,literal in _DIAGNOSTIC_BUILTINS:
                 if type(error) is cls:code=literal;break

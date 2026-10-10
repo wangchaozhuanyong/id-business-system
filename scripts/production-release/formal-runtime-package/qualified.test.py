@@ -704,6 +704,67 @@ class InternalQualificationDiagnosticTests(unittest.TestCase):
         self.driver.run.assert_not_called()
     def test_native_permissions_bound_collector_code(self):
         self.rejected('NATIVE_PERMISSIONS','CLI_SOURCE_CHANGED',patch.object(self.base,'native_permissions',side_effect=self.base.Rejected('CLI_SOURCE_CHANGED')))
+
+    def test_native_permission_real_issuer_both_roles_and_real_client_cleanup(self):
+        import stat
+        from unittest.mock import Mock
+        original_path=self.base.Path
+        native=self.patches[3].temp_original
+        for role,path in (('DOCKER',self.profile['spec']['dockerPath']),('COMPOSE',self.profile['spec']['composePath'])):
+            with self.subTest(role=role):
+                paths={literal:Mock() for literal in (self.profile['spec']['dockerPath'],self.profile['spec']['composePath'])}
+                for item in paths.values():
+                    item.is_file.return_value=True;item.is_symlink.return_value=False
+                    item.stat.return_value=SimpleNamespace(st_mode=stat.S_IFREG|0o755,st_uid=0,st_nlink=1)
+                paths[path].stat.return_value=SimpleNamespace(st_mode=stat.S_IFREG|0o755,st_uid=501,st_nlink=1)
+                def selected(literal):
+                    return paths[literal] if type(literal) is str and literal in paths else original_path(literal)
+                with patch.object(self.base,'Path',side_effect=selected):
+                    error=self.rejected('NATIVE_PERMISSIONS','CLI_'+role+'_UID',patch.object(self.base,'native_permissions',native))
+                self.assertEqual(self.base.native_permission_failure(self.base._NATIVE_CLI_FAILURE[0]),(role,'UID'))
+                self.assertEqual(BaseException.args.__get__(error),('QUALIFIER_UNAVAILABLE',))
+    def test_native_alias_attrs_subclasses_and_unknown_never_gain_detail(self):
+        state=self.q._DiagnosticState();state.bind_base(self.base);state.stage='NATIVE_PERMISSIONS'
+        error=self.base.Rejected('CLI_SOURCE_CHANGED');error._native_cli_failure=('DOCKER','UID')
+        error._qualified_failure=('NATIVE_PERMISSIONS','CLI_DOCKER_UID')
+        state.capture(error);self.assertEqual(state.first,('NATIVE_PERMISSIONS','CLI_SOURCE_CHANGED'))
+        class Subclass(self.base.Rejected):pass
+        for error in (Subclass('CLI_SOURCE_CHANGED'),self.base.Rejected('SYNTHETIC_DIAGNOSTIC_SECRET_NEVER_PUBLISHED')):
+            state=self.q._DiagnosticState();state.bind_base(self.base);state.stage='NATIVE_PERMISSIONS';state.capture(error)
+            self.assertEqual(state.first,('NATIVE_PERMISSIONS','UNKNOWN'))
+    def test_native_getter_cannot_be_error_or_driver_provided(self):
+        from unittest.mock import Mock
+        rogue=Mock(side_effect=AssertionError('UNTRUSTED_GETTER_EXECUTED'))
+        self.driver.native_permission_failure=rogue
+        error=self.base.Rejected('CLI_SOURCE_CHANGED');error.native_permission_failure=rogue
+        state=self.q._DiagnosticState();state.bind_base(self.base);state.stage='NATIVE_PERMISSIONS';state.capture(error)
+        self.assertEqual(state.first,('NATIVE_PERMISSIONS','CLI_SOURCE_CHANGED'));rogue.assert_not_called()
+        with patch.object(self.base,'native_permission_failure',lambda error:('DOCKER','UID')):
+            state=self.q._DiagnosticState();state.bind_base(self.base);state.stage='NATIVE_PERMISSIONS';state.capture(error)
+            self.assertIsNone(state.native_binding);self.assertEqual(state.first,('NATIVE_PERMISSIONS','CLI_SOURCE_CHANGED'))
+    def test_native_trusted_getter_raise_or_unknown_tuple_retains_generic(self):
+        namespace=dict(self.base.__dict__)
+        for body in ("raise RuntimeError('SYNTHETIC_DIAGNOSTIC_SECRET_NEVER_PUBLISHED')",
+                "return ('DOCKER','SYNTHETIC_DIAGNOSTIC_SECRET_NEVER_PUBLISHED')", "return ['DOCKER','UID']"):
+            exec('def native_permission_failure(error):\n    '+body+'\n',self.base.__dict__)
+            try:
+                state=self.q._DiagnosticState();state.bind_base(self.base);state.stage='NATIVE_PERMISSIONS'
+                state.capture(self.base.Rejected('CLI_SOURCE_CHANGED'))
+                self.assertEqual(state.first,('NATIVE_PERMISSIONS','CLI_SOURCE_CHANGED'))
+            finally:self.base.native_permission_failure=namespace['native_permission_failure']
+    def test_native_issued_marker_is_only_used_at_original_stage(self):
+        import stat
+        from unittest.mock import Mock
+        paths={literal:Mock() for literal in (self.profile['spec']['dockerPath'],self.profile['spec']['composePath'])}
+        for item in paths.values():
+            item.is_file.return_value=True;item.is_symlink.return_value=False
+            item.stat.return_value=SimpleNamespace(st_mode=stat.S_IFREG|0o755,st_uid=501,st_nlink=1)
+        with patch.object(self.base,'Path',side_effect=lambda literal:paths[literal]):
+            with self.assertRaises(self.base.Rejected) as found:self.patches[3].temp_original(self.profile['spec'])
+        for stage,expected in (('NATIVE_PERMISSIONS','CLI_DOCKER_UID'),('NATIVE_TOOLS','CLI_SOURCE_CHANGED')):
+            state=self.q._DiagnosticState();state.bind_base(self.base);state.stage=stage;state.capture(found.exception)
+            self.assertEqual(state.first,(stage,expected))
+
     def test_native_tools_exact_os_error(self):
         self.rejected('NATIVE_TOOLS','FILE_NOT_FOUND_ERROR',patch.object(self.q._Session,'native_tools',side_effect=FileNotFoundError('SYNTHETIC_DIAGNOSTIC_SECRET_NEVER_PUBLISHED')))
     def test_daemon_info_exact_type_error(self):
