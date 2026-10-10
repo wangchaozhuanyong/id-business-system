@@ -52,7 +52,10 @@ REMOTE_FIELDS = frozenset(('kind', 'operation', 'producer', 'origin', 'coreSha25
                           'helperPinsSha256', 'clientCleanupVerified', 'receipt', 'snapshotDiagnostic'))
 SNAPSHOT_FIELDS = frozenset(('status', 'stage', 'code', 'currentAnchorCount', 'retainedServiceCount', 'rawOutputSuppressed'))
 SNAPSHOT_STAGES = ('NOT_MEASURED', 'CURRENT_IDS', 'CURRENT_ANCHORS', 'PROJECT_IDS', 'PROJECT_ROLES', 'ORIGINAL_SNAPSHOT', 'COMPLETE', 'UNKNOWN')
-SNAPSHOT_CODES = ('NONE', 'NATIVE_EXECUTION', 'NATIVE_OUTPUT', 'IDS_INVALID', 'LABELS_INVALID', 'ANCHOR_MISSING',
+SNAPSHOT_CODES = ('NONE', 'NATIVE_EXECUTION', 'NATIVE_OUTPUT', 'IDS_INVALID', 'LABELS_INVALID',
+                  'LABELS_JSON_INVALID', 'LABELS_SHAPE_INVALID', 'LABELS_ID_INVALID', 'LABELS_TYPES_INVALID',
+                  'LABELS_PROJECT_INVALID', 'LABELS_ROLE_INVALID', 'LABELS_PARENT_INVALID', 'LABELS_BASENAME_INVALID',
+                  'LABELS_LITERAL_INVALID', 'LABELS_FILES_INVALID', 'ANCHOR_MISSING',
                   'ANCHOR_AMBIGUOUS', 'ROLE_DUPLICATE', 'ROLES_INCOMPLETE', 'ROLES_EXTRA', 'SEED_CHANGED', 'SET_CHANGED',
                   'ORIGINAL_SNAPSHOT', 'SNAPSHOT_FIELDS', 'UNKNOWN')
 PUBLIC_LABEL_FORMAT = ('{"id":{{json .Id}},"project":{{json (index .Config.Labels "com.docker.compose.project")}},'
@@ -254,15 +257,18 @@ class NativeSnapshotDriver:
             value = closed_json(raw, 2 * 1024**2)
         except Exception as error:
             if self.diagnostic.owns(error): raise
-            self.diagnostic.fail('LABELS_INVALID')
-        self.diagnostic.require(type(value) is dict and set(value) == {'id', 'project', 'role', 'directory', 'files'}
-                                and value['id'] == cid and all(type(value[n]) is str for n in value), 'LABELS_INVALID')
+            self.diagnostic.fail('LABELS_JSON_INVALID')
+        self.diagnostic.require(type(value) is dict and set(value) == {'id', 'project', 'role', 'directory', 'files'}, 'LABELS_SHAPE_INVALID')
+        self.diagnostic.require(value['id'] == cid, 'LABELS_ID_INVALID')
+        self.diagnostic.require(all(type(value[n]) is str for n in value), 'LABELS_TYPES_INVALID')
         directory = Path(value['directory'])
-        self.diagnostic.require(re.fullmatch('[a-z0-9][a-z0-9_-]{0,127}', value['project'])
-            and value['role'] in ROLES and directory.parent == BASE / 'releases'
-            and re.fullmatch('[0-9]{8}T[0-9]{6}Z-[a-f0-9]{12}', directory.name)
-            and str(directory) == value['directory'] and value['files'] == ','.join(
-                str(directory / n) for n in ('docker-compose.aws-mysql.yml', 'compose.release.json')), 'LABELS_INVALID')
+        self.diagnostic.require(re.fullmatch('[a-z0-9][a-z0-9_-]{0,127}', value['project']), 'LABELS_PROJECT_INVALID')
+        self.diagnostic.require(value['role'] in ROLES, 'LABELS_ROLE_INVALID')
+        self.diagnostic.require(directory.parent == BASE / 'releases', 'LABELS_PARENT_INVALID')
+        self.diagnostic.require(re.fullmatch('[0-9]{8}T[0-9]{6}Z-[a-f0-9]{12}', directory.name), 'LABELS_BASENAME_INVALID')
+        self.diagnostic.require(str(directory) == value['directory'], 'LABELS_LITERAL_INVALID')
+        self.diagnostic.require(value['files'] == ','.join(
+                str(directory / n) for n in ('docker-compose.aws-mysql.yml', 'compose.release.json')), 'LABELS_FILES_INVALID')
         return value
 
     def list_ids(self, *filters):
