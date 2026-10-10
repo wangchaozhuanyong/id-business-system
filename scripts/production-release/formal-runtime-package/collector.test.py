@@ -48,6 +48,96 @@ class CollectorTests(unittest.TestCase):
             'adminProjection':{},'configurationFiles':{},'workspaceFiles':{},'environmentFileSha256':a.sha(b''),
             'stableObservation':result['facts']['stableBefore'],'sourceArchiveBytesSha256':a.sha(b'SYNTHETIC ARCHIVE'),
             'generatorRulesSha256':a.fingerprint(FIX['policy']())}
+    def oom_comparison_packs(self):
+        captured=[];original_compare=a.compare
+        def capture(source,reference,spec):
+            captured.append((copy.deepcopy(source),copy.deepcopy(reference),copy.deepcopy(spec)))
+            return original_compare(source,reference,spec)
+        with patch.object(a,'compare',side_effect=capture):result=self.measure()
+        return (*captured[0],result)
+    def test_oom_enabled_default_exact_direction_keeps_original_raw_hashes(self):
+        source,reference,spec,_=self.oom_comparison_packs()
+        self.assertIsNone(source['metadata']['HostConfig']['OomKillDisable'])
+        self.assertIs(reference['metadata']['HostConfig']['OomKillDisable'],False)
+        before_source=copy.deepcopy(source);before_reference=copy.deepcopy(reference)
+        for value in (None,False):
+            source['metadata']['HostConfig']['OomKillDisable']=value
+            result=a.compare(source,reference,spec)
+            self.assertTrue(result['matched']);self.assertEqual(result['reason'],'COMPLETE_EQUAL')
+            self.assertEqual(result['actualRawConfigurationSha256'],a.fingerprint(a.configuration(source['metadata'])))
+            self.assertEqual(result['referenceRawConfigurationSha256'],a.fingerprint(a.configuration(reference['metadata'])))
+            self.assertEqual(result['actualDeclarationNormalizedSha256'],result['referenceDeclarationNormalizedSha256'])
+            self.assertFalse(result['authority']);self.assertFalse(result['productionEligible'])
+            self.assertEqual(reference,before_reference)
+        source['metadata']['HostConfig']['OomKillDisable']=None
+        self.assertEqual(source,before_source)
+    def test_oom_enabled_default_missing_reverse_and_nonbool_values_are_refused(self):
+        source,reference,spec,_=self.oom_comparison_packs()
+        for side in ('source','reference'):
+            for value in (True,0,1,'',[],{},'false','null','MISSING'):
+                actual=copy.deepcopy(source);ref=copy.deepcopy(reference)
+                target=(actual if side=='source' else ref)['metadata']['HostConfig']
+                if value=='MISSING':target.pop('OomKillDisable')
+                else:target['OomKillDisable']=value
+                with self.subTest(side=side,value=value),self.assertRaisesRegex(a.Rejected,'^COMPLETE_HOSTCONFIG_OOMKILLDISABLE$'):
+                    a.compare(actual,ref,spec)
+        for actual_value in (None,False):
+            source['metadata']['HostConfig']['OomKillDisable']=actual_value
+            reference['metadata']['HostConfig']['OomKillDisable']=None
+            with self.subTest(actual=actual_value),self.assertRaisesRegex(a.Rejected,'^COMPLETE_HOSTCONFIG_OOMKILLDISABLE$'):
+                a.compare(source,reference,spec)
+    def test_oom_enabled_projection_never_adds_source_overrides_or_generator_qualification(self):
+        source,reference,spec,_=self.oom_comparison_packs()
+        for key,value in (('oom_kill_disable',False),('oom_kill_disable',True),('mem_limit',0),
+                          ('mem_swappiness',0),('pids_limit',0),('cpus',0),('deploy',{})):
+            actual=copy.deepcopy(source);actual['api'][key]=value
+            with self.subTest(key=key,value=value),self.assertRaisesRegex(a.Rejected,'^SOURCE_DECLARATION_INVALID$'):
+                a.compare(actual,reference,spec)
+        for key,value,code in (('engineVersion','25.0.15','COMPLETE_HOSTCONFIG_OOMKILLDISABLE'),
+                              ('engineApiVersion','1.45','REFERENCE_PENDING_ENDPOINT'),
+                              ('composeVersion','5.4.0','BOUND_LABEL')):
+            changed=copy.deepcopy(spec);changed[key]=value
+            with self.subTest(key=key),self.assertRaisesRegex(a.Rejected,'^'+code+'$'):
+                a.compare(source,reference,changed)
+            with self.assertRaisesRegex(a.Rejected,'^COMPLETE_HOSTCONFIG_OOMKILLDISABLE$'):
+                a.oom_default_projection(source,a.configuration(source['metadata']),
+                    a.configuration(reference['metadata']),changed)
+        self.assertEqual(a.REVIEWED_GENERATORS,{})
+    def test_oom_projection_preserves_all_other_host_configuration_differences(self):
+        source,reference,spec,_=self.oom_comparison_packs()
+        for key,code in dict(a.CONFIGURATION_DIFFERENCE_FIELDS)['HostConfig']:
+            if key=='OomKillDisable':continue
+            actual=copy.deepcopy(source);ref=copy.deepcopy(reference)
+            # Earlier binding protects native mount/name references directly.
+            if key in ('Binds','NetworkMode','Mounts'):continue
+            ref['metadata']['HostConfig'][key]={'SYNTHETIC_CHANGED':FIX['PRIVATE']}
+            result=a.compare(actual,ref,spec)
+            with self.subTest(key=key):
+                self.assertFalse(result['matched']);self.assertEqual(result['reason'],code)
+                self.assertNotEqual(result['actualDeclarationNormalizedSha256'],result['referenceDeclarationNormalizedSha256'])
+                self.assertNotIn(FIX['PRIVATE'],json.dumps(result))
+    def test_oom_actual_projection_complete_measurement_preserves_source_and_cleanup(self):
+        original=copy.deepcopy(self.d.actual);model=copy.deepcopy(self.d.source_model)
+        source,reference,_,result=self.oom_comparison_packs()
+        self.assertIsNone(source['metadata']['HostConfig']['OomKillDisable'])
+        self.assertIs(reference['metadata']['HostConfig']['OomKillDisable'],False)
+        self.assertEqual(self.calls,3);self.assertEqual(len(self.d.removed),6)
+        self.assertFalse(self.d.created_networks);self.assertIsNone(self.d.created_container);self.assertIsNone(self.d.created_volume)
+        self.assertEqual(self.d.actual,original);self.assertEqual(self.d.source_model,model)
+        self.assertTrue(result['measured']['matched']);self.assertEqual(result['measured']['reason'],'COMPLETE_EQUAL')
+        C['validate_facts'](result['measured'],result['facts'],self.validation_root(result))
+        self.assertFalse(result['measured']['authority']);self.assertFalse(result['measured']['productionEligible'])
+        original_run=self.d.run;changed=False
+        def drift(*args,**kwargs):
+            nonlocal changed
+            raw=original_run(*args,**kwargs)
+            if not changed and args[0]==FIX['policy']()['composePath'] and 'create' in args:
+                changed=True;self.d.actual['HostConfig']['OomKillDisable']=False
+            return raw
+        self.d.run=drift
+        with self.assertRaisesRegex(a.Rejected,'^ACTUAL_INSPECT_CHANGED$'):self.measure()
+        self.assertTrue(changed);self.assertFalse(self.d.created_networks)
+        self.assertIsNone(self.d.created_container);self.assertIsNone(self.d.created_volume)
     def test_complete_difference_fixed_fields_are_closed_through_all_diagnostics(self):
         driver=FIX['load']('complete_difference_driver',HERE/'driver.py')
         qualified=FIX['load']('complete_difference_qualified',HERE/'qualified.py')
