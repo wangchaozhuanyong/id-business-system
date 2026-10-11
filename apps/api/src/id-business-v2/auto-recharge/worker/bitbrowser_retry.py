@@ -14,12 +14,12 @@ from browser_session import SessionBudget, RETRYABLE_NETWORK_CODES, session_fail
 from checkout_core import Stop
 
 
-async def close_profile_id(job, client, profile_id, *, cancelling=False):
+async def close_profile_id(job, client, profile_id, *, cancelling=False, finishing=False):
     if not re.fullmatch(r"[a-fA-F0-9]{32}", profile_id or ""):
         raise Stop("bitbrowser_cleanup_unverified")
     previous_deadline = getattr(client, "deadline", None)
     deadline = time.monotonic() + 15
-    if not cancelling and isinstance(previous_deadline, (int, float)):
+    if not cancelling and not finishing and isinstance(previous_deadline, (int, float)):
         deadline = min(deadline, previous_deadline)
     client.deadline = deadline
     try:
@@ -98,6 +98,7 @@ async def execute_profiles(job, client, target, playwright):
         result = await _execute_profiles(job, client, target, playwright, owned)
     except Stop as exc:
         if not job.cancelled:
+            await close_terminal_window(job, client, owned, exc.report)
             raise
         result = exc.report
     if job.cancelled and job.payload["mode"] == "payment" and not job.payment_request_sent:
@@ -109,32 +110,87 @@ async def execute_profiles(job, client, target, playwright):
                 job.context = None
                 # Existing callbacks use "completed" to mean profile deletion.
                 # A confirmed close keeps the profile available for manual reuse.
-                cleanup = "not_needed"
-        except Stop:
-            cleanup = "failed"
+                cleanup = "closed"
+        except Exception:
+            cleanup = "close_failed"
         return {**result, **job.profile_rebuild_info, "status": "cancelled", "cancellation_confirmed": True,
-                "reason": "bitbrowser_cleanup_unverified" if cleanup == "failed" else "operation_cancelled",
+                "reason": "bitbrowser_cleanup_unverified" if cleanup == "close_failed" else "operation_cancelled",
                 "browser_cleanup_status": cleanup, "payment_requests_sent": 0,
                 "payment_attempted": False, "browser_profile_id": job.profile_id or ""}
-    if terminal_cleanup_allowed(job, result):
-        original_reason = result.get("reason")
-        try:
-            await cleanup_profile(job, client, owned)
-            result.update(browser_cleanup_status="completed", browser_profile_id="")
-        except Stop:
-            result.update(reason="bitbrowser_cleanup_unverified",
-                          last_reason=original_reason,
-                          browser_cleanup_status="failed",
-                          browser_profile_id=job.profile_id or "")
+    await close_terminal_window(job, client, owned, result)
     if "browser_profile_id" not in result:
         result["browser_profile_id"] = job.profile_id or ""
     result.update(job.profile_rebuild_info)
     return result
 
 
-def terminal_cleanup_allowed(job, result):
-    """充值不成功不自动关闭比特浏览器窗口，保留现场供操作人排查原因。"""
-    return False
+def terminal_window_close_allowed(job, result, owned):
+    """Close only a verified terminal recharge window, retaining its profile."""
+    if (job.payload["mode"] not in {"payment", "recheck"}
+            or job.waiting_for_user or job.waiting_for_code
+            or job.pending_confirmation is not None
+            or result.get("user_action_required") is True
+            or result.get("http_status") == 403
+            or result.get("reason") in {
+                "bitbrowser_cleanup_unverified", "owned_recharge_window_unverified",
+                "owned_recharge_window_unavailable", "owned_recharge_profile_conflict",
+                "official_account_mismatch", "official_user_mismatch",
+                "previous_payment_attempt_exists", "account_has_other_payment_attempt",
+                "durable_state_unavailable"}
+            or not re.fullmatch(r"[a-fA-F0-9]{32}", job.profile_id or "")):
+        return False
+    owned_profile = job.owned_profile
+    if (job.profile_id not in owned and not (
+            isinstance(owned_profile, dict) and owned_profile.get("profileId") == job.profile_id
+            and owned_profile.get("accountKey") == job.account_key
+            and result.get("account_matched") is True)):
+        return False
+    if result.get("status") == "subscription_activated":
+        # A normal payment binds to its current quote. A recheck can arrive at
+        # the homepage without a new quote, retaining the validated original
+        # ledger binding instead; never invent a current quote for that result.
+        evidence, quote = result.get("payment_evidence"), result.get("quote")
+        today = quote.get("today") if isinstance(quote, dict) else None
+        bound_amount = today.get("amount_minor") if isinstance(today, dict) else None
+        bound_currency = today.get("currency") if isinstance(today, dict) else None
+        if (quote is None and job.payload["mode"] == "recheck"
+                and result.get("stage") == "original_payment_recheck" and isinstance(evidence, dict)
+                and getattr(job, "verified_recheck_payment", None) == tuple(
+                    evidence.get(key) for key in ("kind", "identifier", "amount_minor", "currency"))):
+            bound_amount, bound_currency = job.verified_recheck_payment[2:]
+        return (result.get("payment_status") == "paid" and result.get("account_matched") is True
+                and isinstance(evidence, dict)
+                and evidence.get("kind") in {"checkout_session", "payment_intent", "invoice"}
+                and type(evidence.get("amount_minor")) is int and evidence["amount_minor"] > 0
+                and evidence["amount_minor"] == bound_amount
+                and isinstance(evidence.get("currency"), str)
+                and re.fullmatch(r"[A-Z]{3}", evidence["currency"]) is not None
+                and evidence["currency"] == bound_currency
+                and isinstance(evidence.get("identifier"), str)
+                and re.fullmatch(r"(?:cs|oaics|pi|in)_[A-Za-z0-9_]{1,200}", evidence["identifier"]) is not None)
+    if result.get("status") == "payment_failed" and result.get("payment_status") == "declined":
+        return result.get("account_matched") is True
+    return (result.get("status") in {"blocked", "interrupted", "cancelled", "already_subscribed"}
+            and result.get("payment_attempted") is False
+            and result.get("payment_requests_sent") == 0
+            and result.get("confirmation_requests_sent", 0) == 0
+            and result.get("payment_status") not in {"unknown", "requires_action", "paid"}
+            and not job.payment_request_sent and not job.confirmation_consumed)
+
+
+async def close_terminal_window(job, client, owned, result):
+    if not terminal_window_close_allowed(job, result, owned):
+        return
+    try:
+        await close_profile_id(job, client, job.profile_id, finishing=True)
+        job.context = None
+        # "completed" means deletion to the API. "closed" retains the same ID,
+        # account ownership and original payment ledger for the next execution.
+        result["browser_cleanup_status"] = "closed"
+    except Exception:
+        # Window close uncertainty must not change verified payment results.
+        result["browser_cleanup_status"] = "close_failed"
+    result["browser_profile_id"] = job.profile_id
 
 
 async def cancellable_flow(job, target, **kwargs):
@@ -582,6 +638,7 @@ async def _execute_profile_flow(job, target, budget, original_checkout=None):
             raise Stop("owned_recharge_profile_conflict", user_action_required=True)
         job.progress("login_verified", account_matched=True, current_plan=identity["current_plan"])
     if job.payload["mode"] == "recheck":
+        job.verified_recheck_payment = None
         if job.payload.get("upgradeIdentifier"):
             return target, await subscription_upgrade.recheck_upgrade_in_context(
                 job.context, target, job.root, job.payload["plan"], job.payload["upgradeIdentifier"])
@@ -589,7 +646,15 @@ async def _execute_profile_flow(job, target, budget, original_checkout=None):
                                          target_plan=job.payload["plan"]) as ledger:
             result = await payment_recovery.recheck_in_context(
                 job.context, target, ledger, timeout=25, poll_count=6, poll_interval=20)
-            return target, pay.include_payment_record(result, ledger)
+            result = pay.include_payment_record(result, ledger)
+            evidence = result.get("payment_evidence")
+            if evidence and ledger.record:
+                # __enter__ validates account/order, canonical quote and digest;
+                # include_payment_record validates this exact evidence again.
+                today = ledger.record["quote"]["today"]
+                job.verified_recheck_payment = (evidence["kind"], evidence["identifier"],
+                                                today["amount_minor"], today["currency"])
+            return target, result
     if job.payload["mode"] == "open_browser":
         from browser_checkout import (install_session_cookies,
                                       restore_session_with_refresh, synchronize_login_page)
