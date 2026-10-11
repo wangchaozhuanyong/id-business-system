@@ -201,9 +201,11 @@ class WorkspaceTests(unittest.TestCase):
 
     def test_health_rejects_missing_packaged_resources(self):
         original = Path.is_file
-        with patch.object(Path, "is_file", lambda path: False if path == workspace.WORKER_DIR / "id-workspace.css" else original(path)):
-            response = self.client.get("/health", headers=self.headers)
-            self.assertEqual(response.status_code, 503)
+        for name in ("id-workspace.css", "apple_closed_loop.py", "apple_registration_diagnostics.py", "upload_compat.py"):
+            with self.subTest(resource=name), patch.object(Path, "is_file",
+                lambda path: False if path == workspace.WORKER_DIR / name else original(path)):
+                response = self.client.get("/health", headers=self.headers)
+                self.assertEqual(response.status_code, 503)
 
     def test_health_has_no_persistent_write_side_effect(self):
         with sqlite3.connect(Path(self.runtime.name) / "database.db") as db:

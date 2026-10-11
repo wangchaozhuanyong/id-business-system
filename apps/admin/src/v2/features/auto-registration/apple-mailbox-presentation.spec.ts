@@ -8,7 +8,12 @@ import {
   appleMailboxSourceLabel,
   appleMailboxStatusLabel,
   appleMailboxTaskLabel,
-  isAppleMailboxIp
+  isAppleMailboxIp,
+  appleMailboxSyncLabel,
+  appleMailboxCanSync,
+  appleMailboxDiagnostic,
+  appleMailboxSelectionLabel,
+  appleMailboxCanSaveLocal
 } from './apple-mailbox-presentation';
 
 const row: AppleMailboxRow = {
@@ -32,6 +37,73 @@ const row: AppleMailboxRow = {
 };
 
 describe('苹果隐藏邮箱注册边界与中文展示', () => {
+  it('显示首次失败快照，不把前序成功或当前同步步骤当成失败位置', () => {
+    const text = appleMailboxDiagnostic({
+      stage: 'sync',
+      reason: 'identity_missing',
+      firstFailure: {
+        stage: 'create_account',
+        errorKind: 'account_creation_failed',
+        httpStatus: 400,
+        elapsedMs: 1500,
+        observedAt: '2026-10-11T00:00:00Z'
+      }
+    });
+    expect(text).toContain('首次失败：创建官网账号');
+    expect(text).toContain('响应状态 400');
+    expect(text).toContain('耗时 1.5 秒');
+    expect(text).toContain('当前：ChatGPT 账号同步');
+    expect(text).not.toContain('account_creation_failed');
+  });
+  it('授权网络异常明确没有响应状态，工作区步骤中文显示', () => {
+    const text = appleMailboxDiagnostic({
+      firstFailure: {
+        stage: 'select_workspace',
+        errorKind: 'network_error',
+        httpStatus: null,
+        elapsedMs: 0,
+        observedAt: '2026-10-11T00:00:00Z'
+      }
+    });
+    expect(text).toContain('首次失败：选择账号工作区');
+    expect(text).toContain('未取得响应状态');
+    expect(text).not.toContain('200');
+    expect(appleMailboxDiagnostic({ stage: 'redirect' })).toBe('授权跳转');
+  });
+  it('选择来源仅显示安全的代理目录编号，旧记录不补造来源', () => {
+    expect(
+      appleMailboxSelectionLabel({
+        mailboxSelection: 'automatic',
+        proxySource: 'system',
+        proxyId: 'proxy-1'
+      })
+    ).toBe('自动选择邮箱 · 系统代理（编号 proxy-1）');
+    expect(
+      appleMailboxSelectionLabel({
+        mailboxSelection: 'specified',
+        proxySource: 'default',
+        proxyId: null
+      })
+    ).toBe('指定邮箱 · 系统默认代理配置');
+    expect(appleMailboxSelectionLabel({})).toBe('');
+  });
+  it('同步和注册事实独立，待身份核验不显示成功或自动重注册入口', () => {
+    expect(appleMailboxSyncLabel('saved')).toContain('已同步');
+    expect(appleMailboxSyncLabel('awaiting_identity')).toBe('等待身份核验');
+    expect(appleMailboxSyncLabel('quarantined')).toContain('隔离');
+    expect(appleMailboxCanSync('awaiting_identity')).toBe(true);
+    expect(appleMailboxCanSync('conflict')).toBe(false);
+    expect(appleMailboxCanSync('saved')).toBe(false);
+    expect(appleMailboxCanSync('failed')).toBe(true);
+    expect(appleMailboxCanSaveLocal('failed', 'running')).toBe(false);
+    expect(appleMailboxCanSaveLocal('failed', 'failed')).toBe(true);
+    expect(
+      appleMailboxDiagnostic({ stage: 'create_account', reason: 'account_creation_failed' })
+    ).toContain('官网返回账号创建失败');
+    expect(
+      appleMailboxDiagnostic({ stage: 'identity', reason: 'existing_account_suspected' })
+    ).toContain('等待身份核验');
+  });
   it('自有页签不加入上游 iframe 页面白名单', () => {
     expect(appleMailboxPage.title).toBe('苹果隐藏邮箱');
     expect(isAutoRegistrationPage(appleMailboxPage.path)).toBe(false);

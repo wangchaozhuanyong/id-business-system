@@ -30,15 +30,54 @@ export type AppleMailboxTaskStatus =
   | 'completed'
   | 'failed'
   | 'cancelled'
-  | 'interrupted';
+  | 'interrupted'
+  | 'awaiting_review';
 export type AppleMailboxResultKind = 'new_registration' | 'existing_account' | 'failed' | null;
+export type AppleMailboxSyncStatus =
+  | 'not_ready'
+  | 'not_started'
+  | 'awaiting_identity'
+  | 'blocked'
+  | 'quarantined'
+  | 'pending'
+  | 'syncing'
+  | 'saved'
+  | 'failed'
+  | 'conflict';
+
+export type AppleMailboxRegistrationStage =
+  | 'queued'
+  | 'signup'
+  | 'password'
+  | 'verification_code'
+  | 'verification_validate'
+  | 'create_account'
+  | 'workspace'
+  | 'select_workspace'
+  | 'redirect'
+  | 'oauth'
+  | 'identity'
+  | 'account_save'
+  | 'sync';
+export interface AppleMailboxFailure {
+  stage: AppleMailboxRegistrationStage;
+  errorKind:
+    | 'http_rejected'
+    | 'network_error'
+    | 'unknown'
+    | 'account_creation_failed'
+    | 'user_exists';
+  httpStatus: number | null;
+  elapsedMs: number;
+  observedAt: string;
+}
 
 export interface AppleMailboxRecord {
   revision: number;
   registrationStatus: AppleMailboxRegistrationStatus;
   registrationIp: string | null;
   registrationIpSource: 'manual' | 'observed' | null;
-  source: 'manual' | 'automatic' | null;
+  source: 'manual' | 'automatic' | 'account_history' | null;
   note: string | null;
   markedAt: string | null;
   operatorId: string | null;
@@ -46,6 +85,28 @@ export interface AppleMailboxRecord {
   lastTaskUuid: string | null;
   lastResultKind: AppleMailboxResultKind;
   taskStatus: AppleMailboxTaskStatus | null;
+  syncStatus?: AppleMailboxSyncStatus;
+  localSaveStatus?: 'not_ready' | 'not_started' | 'pending' | 'saved' | 'failed';
+  identityStatus?: 'not_verified' | 'awaiting_identity' | 'verified' | 'mismatch';
+  passwordStatus?: 'not_started' | 'saved' | 'submitted';
+  syncErrorKind?: string | null;
+  stage?: AppleMailboxRegistrationStage | null;
+  reason?:
+    | 'account_creation_failed'
+    | 'identity_missing'
+    | 'identity_mismatch'
+    | 'password_missing'
+    | 'email_conflict'
+    | 'local_save_failed'
+    | 'existing_account_suspected'
+    | null;
+  lastHttpStatus?: number | null;
+  proxySource?: 'system' | 'explicit' | 'default';
+  proxyId?: string | null;
+  mailboxSelection?: 'specified' | 'automatic';
+  firstFailure?: AppleMailboxFailure | null;
+  systemAccountId?: string | null;
+  errorKind?: string | null;
 }
 
 export interface AppleMailboxRow {
@@ -59,13 +120,23 @@ export interface AppleMailboxRow {
   registrationIp: string | null;
   registrationIpSource: 'manual' | 'observed' | null;
   note: string | null;
-  source: 'manual' | 'automatic' | null;
+  source: 'manual' | 'automatic' | 'account_history' | null;
   updatedAt: string | null;
   revision: number;
   taskUuid: string | null;
   taskStatus: AppleMailboxTaskStatus | null;
   canRegister: boolean;
   blockedReason: string | null;
+  syncStatus?: AppleMailboxSyncStatus;
+  localSaveStatus?: AppleMailboxRecord['localSaveStatus'];
+  identityStatus?: AppleMailboxRecord['identityStatus'];
+  stage?: AppleMailboxRecord['stage'];
+  reason?: AppleMailboxRecord['reason'];
+  syncErrorKind?: AppleMailboxRecord['syncErrorKind'];
+  proxySource?: AppleMailboxRecord['proxySource'];
+  proxyId?: AppleMailboxRecord['proxyId'];
+  mailboxSelection?: AppleMailboxRecord['mailboxSelection'];
+  firstFailure?: AppleMailboxRecord['firstFailure'];
 }
 
 export interface AppleMailboxListQuery {
@@ -88,6 +159,43 @@ export interface AppleMailboxTarget {
   aliasId: string;
   revision: number;
 }
+export interface AppleMailboxRegistrationOptions {
+  proxyId?: string;
+  auto_upload_cpa?: boolean;
+  cpa_service_ids?: number[];
+  auto_upload_sub2api?: boolean;
+  sub2api_service_ids?: number[];
+  auto_upload_tm?: boolean;
+  tm_service_ids?: number[];
+}
+export interface AppleMailboxStartInput extends AppleMailboxRegistrationOptions {
+  aliasId?: string;
+  revision?: number;
+}
+export interface AppleMailboxBatchInput extends AppleMailboxRegistrationOptions {
+  targets?: AppleMailboxTarget[];
+  count: number;
+  concurrency: number;
+  mode: 'pipeline' | 'parallel';
+  interval_min: number;
+  interval_max: number;
+}
+export interface AppleMailboxConsoleOptions {
+  items: AppleMailboxRow[];
+  proxies: Array<{ id: string; label: string; countryCode?: string | null }>;
+  total: number;
+  available: number;
+}
+export interface AppleMailboxBatch {
+  batchId: string;
+  status?: AppleMailboxTaskStatus;
+  taskUuids: string[];
+  records: AppleMailboxRecord[];
+  accepted: number;
+  requested: number;
+  skipped: Array<{ aliasId: string; reason: string }>;
+  tasks?: AppleMailboxTask[];
+}
 export interface AppleMailboxMarkInput {
   items: AppleMailboxTarget[];
   registrationStatus: AppleMailboxRegistrationStatus;
@@ -100,12 +208,29 @@ export interface AppleMailboxTask {
   logs: string[];
   record: AppleMailboxRecord;
   resultKind: AppleMailboxResultKind;
+  syncStatus?: AppleMailboxSyncStatus;
 }
 export type AutoRegistrationDraft = Record<string, string | boolean>;
 
 export type AutoRegistrationChildMessage =
   | { type: 'id-registration:ready'; page: AutoRegistrationPage }
-  | { type: 'id-registration:draft'; page: AutoRegistrationPage; values: unknown };
+  | { type: 'id-registration:draft'; page: AutoRegistrationPage; values: unknown }
+  | {
+      type: 'id-registration:apple-request';
+      page: '/';
+      requestId: string;
+      action: AppleMailboxBridgeAction;
+      payload: Record<string, unknown>;
+    };
+
+export type AppleMailboxBridgeAction =
+  | 'candidates'
+  | 'start'
+  | 'batch'
+  | 'task'
+  | 'batch-status'
+  | 'cancel-task'
+  | 'cancel-batch';
 
 export interface AutoRegistrationParentState {
   type: 'id-registration:state';
