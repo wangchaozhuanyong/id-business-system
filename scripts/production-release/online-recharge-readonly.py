@@ -250,6 +250,24 @@ def _pending_workspace_artifact_unpack(payload, expected, length):
     return raw
 
 
+def _pending_workspace_artifact_unpack_pair(payload, expected, lengths):
+    _pending_workspace_artifact_need(type(payload) is str and payload.isascii() and 0 < len(payload) < 180000
+        and type(expected) is tuple and len(expected) == 2
+        and all(type(digest) is str and re.fullmatch('[a-f0-9]{64}', digest) for digest in expected)
+        and type(lengths) is tuple and len(lengths) == 2
+        and all(type(length) is int and 0 < length < _PENDING_WORKSPACE_ARTIFACT_LIMIT for length in lengths))
+    packed = base64.b64decode(payload, validate=True)
+    _pending_workspace_artifact_need(base64.b64encode(packed).decode('ascii') == payload)
+    inflater = zlib.decompressobj(31)
+    raw = inflater.decompress(packed, 2 * _PENDING_WORKSPACE_ARTIFACT_LIMIT)
+    _pending_workspace_artifact_need(len(raw) == sum(lengths) and len(raw) < 2 * _PENDING_WORKSPACE_ARTIFACT_LIMIT
+        and inflater.eof and not inflater.unconsumed_tail and not inflater.unused_data)
+    values = (raw[:lengths[0]], raw[lengths[0]:])
+    _pending_workspace_artifact_need(all(len(value) == length and hashlib.sha256(value).hexdigest() == digest
+        for value, digest, length in zip(values, expected, lengths)))
+    return values
+
+
 
 def _pending_workspace_artifact_store(root, uid, producer, kind, raw):
     """Descriptor-relative writer; production always supplies fixed ROOT/uid0."""
@@ -328,16 +346,18 @@ def _pending_workspace_artifact_store(root, uid, producer, kind, raw):
 def _pending_workspace_artifact_program(producer, preflight_raw, invocation_raw, root, uid):
     f, unused = _pending_workspace_artifact_payload(producer, preflight_raw, invocation_raw)
     functions = (_pending_workspace_artifact_need, _pending_workspace_artifact_json, _pending_workspace_artifact_producer,
-        _pending_workspace_artifact_directory, _pending_workspace_artifact_payload, _pending_workspace_artifact_unpack,
+        _pending_workspace_artifact_directory, _pending_workspace_artifact_payload, _pending_workspace_artifact_unpack_pair,
         _pending_workspace_artifact_store)
     program = 'import base64,hashlib,json,os,re,stat,zlib\nfrom pathlib import Path\n'
     for key in ('_PENDING_WORKSPACE_ARTIFACT_ERROR', '_PENDING_WORKSPACE_ARTIFACT_LIMIT', '_PENDING_WORKSPACE_ARTIFACT_FILES'):
         program += key + '=' + repr(globals()[key]) + '\n'
     program += '\n'.join(inspect.getsource(function) for function in functions)
     program += '\ntry:\n p=' + repr(producer) + '\n'
-    for variable, raw in (('fraw', preflight_raw), ('qraw', invocation_raw)):
-        payload = base64.b64encode(gzip.compress(raw, mtime=0)).decode('ascii')
-        program += ' ' + variable + '=_pending_workspace_artifact_unpack(' + repr(payload) + ',' + repr(hashlib.sha256(raw).hexdigest()) + ',' + str(len(raw)) + ')\n'
+    originals = (preflight_raw, invocation_raw)
+    payload = base64.b64encode(gzip.compress(b''.join(originals), mtime=0)).decode('ascii')
+    program += ' fraw,qraw=_pending_workspace_artifact_unpack_pair(' + repr(payload) + ','
+    program += repr(tuple(hashlib.sha256(raw).hexdigest() for raw in originals)) + ','
+    program += repr(tuple(len(raw) for raw in originals)) + ')\n'
     program += ' _pending_workspace_artifact_payload(p,fraw,qraw)\n'
     program += ' _pending_workspace_artifact_store(' + repr(root) + ',' + str(uid) + ',p,"preflight-invocation",qraw)\n'
     program += ' _pending_workspace_artifact_store(' + repr(root) + ',' + str(uid) + ',p,"preflight",fraw)\n'
