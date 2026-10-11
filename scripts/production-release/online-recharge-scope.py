@@ -3688,6 +3688,11 @@ _PENDING_WORKSPACE_CONTROL_NAMES = (*DECLARATION_EQUIVALENCE_HELPERS,
     'scripts/production-release/online-recharge-daemon-identity.py',
     'scripts/production-release/online-recharge-daemon-listener.py',
     'scripts/production-release/online-recharge-daemon-socket.py')
+_PENDING_WORKSPACE_RECEIPT_COMPATIBILITY_FILES = frozenset((
+    'scripts/production-release/online-recharge-scope.py',
+    'scripts/production-release/online-recharge-scope.test.py',
+    'scripts/production-release/online-recharge-readonly.py',
+    'scripts/production-release/online-recharge-readonly.test.py'))
 _PENDING_WORKSPACE_FIRST = {n: globals()[n] for n in ('baseline','validate_arguments','validate_proof','build_proof',
     'readback','validate_receipt','release_recovery','workspace_origin','historical_guard',
     'candidate_recovery_source','migration_source_check','require_preserved','_release_locked','preflight')}
@@ -3734,12 +3739,24 @@ def _pending_workspace_current_source_inventory(d,producer):
 
 
 def _pending_workspace_profile(d, bridge, producer):
-    """The two real runs must publish the identical complete immutable source."""
+    """Keep the actual predecessor; admit only the receipt-control repair.
+
+    Both immutable archives still undergo complete Git tree verification. Every
+    application, configuration and migration entry must remain byte/mode exact.
+    """
     initial=bridge['baselineProducer']
-    d.require(producer['commit']==initial['commit'] and producer['sourceTree']==initial['sourceTree']
-        and producer['workflowRunId']!=initial['workflowRunId'],
+    d.require(producer['workflowRunId']!=initial['workflowRunId'],
         'ONLINE_RECHARGE_PENDING_WORKSPACE_ORIGIN_CHANGED')
     inventory=_pending_workspace_current_source_inventory(d,producer)
+    if producer['commit']!=initial['commit'] or producer['sourceTree']!=initial['sourceTree']:
+        original=_pending_workspace_current_source_inventory(d,initial)
+        d.require(set(original)==set(inventory)
+            and _PENDING_WORKSPACE_RECEIPT_COMPATIBILITY_FILES.issubset(inventory)
+            and all(original[name]==inventory[name] for name in inventory
+                if name not in _PENDING_WORKSPACE_RECEIPT_COMPATIBILITY_FILES)
+            and all(original[name]['mode']==inventory[name]['mode']
+                for name in _PENDING_WORKSPACE_RECEIPT_COMPATIBILITY_FILES),
+            'ONLINE_RECHARGE_PENDING_WORKSPACE_APPLICATION_SOURCE_CHANGED')
     for name in _PENDING_WORKSPACE_CONTROL_NAMES:
         raw=_declaration_source_bytes(Path(__file__).with_name(Path(name).name),
             limit=2*1024*1024 if name.endswith('/remote-deploy.py') else 1024*1024)
@@ -3762,12 +3779,14 @@ def _pending_workspace_session(d, *, expected=None, producer=None):
 
 
 def _pending_workspace_begin(d, expected, producer, *, live):
-    d.require(hasattr(d,'BASE') and expected==producer['commit'], 'ONLINE_RECHARGE_PENDING_WORKSPACE_INPUT_INVALID')
+    d.require(hasattr(d,'BASE') and type(expected) is str and re.fullmatch('[a-f0-9]{40}',expected),
+              'ONLINE_RECHARGE_PENDING_WORKSPACE_INPUT_INVALID')
     previous=(d.BASE/'current').resolve()
     reader=_pending_workspace_reader(d)
     bridge=(reader.online_pending_workspace_measure_before if live else reader.online_pending_workspace_cold)(
         d,previous,expected_commit=expected)
     online_pending_workspace_bridge_shape(d,bridge)
+    d.require(bridge['baselineCommit']==expected, 'ONLINE_RECHARGE_PENDING_WORKSPACE_ORIGIN_CHANGED')
     _pending_workspace_profile(d,bridge,producer)
     d._onlinePendingWorkspaceProducer=producer
     d._onlinePendingWorkspaceSession={'bridge':bridge,'producer':producer}
@@ -3789,7 +3808,9 @@ def baseline(d, expected):
     reader.verify_running(d,previous,proof)
     volume=workspace_guard(d,previous,record.get('workspaceVolumeAfter'))
     reader.workspace_health(d,previous)
-    reader.workspace_backup_receipt(d,previous,record)
+    protection=reader.workspace_sqlite_receipt(d,previous,proof,record,manifest)
+    if protection is None:
+        reader.workspace_backup_receipt(d,previous,record)
     guards=jobs_idle(d,previous,migrated=True)
     recovery=release_recovery(d,previous)
     verify_permission_seed(d,recovery['source']);require_fresh_resources(d,recovery['source'])
@@ -3963,6 +3984,53 @@ def _release_locked(d,args):
     return _pending_workspace_release_locked(d,args)
 
 
+def _pending_workspace_compatibility_readback_origin(d,directory,*,expected_commit,producer):
+    """Retain every actual origin check when only receipt controls changed.
+
+    The API reader's same-tree entry remains unchanged. This entry binds its
+    original cold Workspace Q to the new actual ONLINE F/proof and validates
+    complete old/new archives instead of claiming they have the same Git tree.
+    """
+    code='ONLINE_RECHARGE_AFTER_BIT_READBACK_CHANGED'
+    try:
+        reader=_pending_workspace_reader(d)
+        d.require(reader.WORKSPACE and directory.parent==d.BASE/'releases' and directory.resolve()==directory
+            and directory.is_dir() and not directory.is_symlink()
+            and directory.stat().st_uid==os.geteuid() and stat.S_IMODE(directory.stat().st_mode)&0o077==0
+            and (d.BASE/'current').resolve()==directory and expected_commit==producer['commit'],code)
+        files=(STATE_FILE,PROOF_FILE,'release-manifest.json')
+        raw={name:_declaration_source_bytes(directory/name) for name in files}
+        record,proof,manifest=(closed_recovery_json(d,raw[name]) for name in files)
+        previous=Path(manifest.get('previousRelease',''))
+        bridge=reader.online_pending_workspace_cold(d,previous,expected_commit=manifest.get('previousCommit'))
+        online_pending_workspace_bridge_shape(d,bridge)
+        _pending_workspace_profile(d,bridge,producer)
+        before_raw=online_pending_workspace_preflight_bytes(d,producer=producer,
+            expected_sha256=proof.get('preflightBytesSha256'))
+        online_pending_workspace_preflight_binding(d,before_raw,producer=producer,bridge=bridge)
+        online_pending_workspace_build_shape(d,proof,producer=producer,bridge=bridge,preflight_raw=before_raw)
+        states=snapshot(d,directory,include_engine=True)
+        d.require(record.get('baselineEvidence',{}).get('onlinePendingWorkspaceOrigin')==bridge
+            and record.get('before')==bridge['services']
+            and record.get('buildProofSha256')==fingerprint(proof)
+            and record.get('configurationBefore')==bridge['configurationAfter']
+            and record.get('configurationAfter')==configuration_hashes(directory)
+            and manifest.get('commit')==expected_commit and manifest.get('sourceTree')==producer['sourceTree']
+            and manifest.get('previousManifestSha256')==bridge['manifestBytesSha256']
+            and manifest.get('migrationPerformed') is False and record.get('migration',{}).get('performed') is False
+            and record.get('migration')=={**bridge['migrationState'],'performed':False}
+            and set(states)==set((*PRESERVED,*UPDATED)) and record.get('after')==states
+            and all(states[name]==bridge['services'][name] for name in PRESERVED)
+            and all(states[name]['image']==proof['images'][name]['imageId']
+                and states[name]['reference']==proof['images'][name]['reference'] for name in UPDATED),code)
+        d.require({name:_declaration_source_bytes(directory/name) for name in files}==raw
+            and (d.BASE/'current').resolve()==directory
+            and snapshot(d,directory,include_engine=True)==states,code)
+        return bridge
+    except Exception:
+        raise RuntimeError(code) from None
+
+
 def readback(d,expected):
     if not hasattr(d,'_onlinePendingWorkspaceProducer'):
         return _PENDING_WORKSPACE_FIRST['readback'](d,expected)
@@ -3972,7 +4040,11 @@ def readback(d,expected):
     if 'onlinePendingWorkspaceOrigin' not in evidence:
         return _PENDING_WORKSPACE_FIRST['readback'](d,expected)
     producer=_pending_workspace_producer(d)
-    bridge=_pending_workspace_reader(d).online_pending_workspace_readback_origin(d,directory,expected_commit=expected,producer=producer)
+    initial=evidence['onlinePendingWorkspaceOrigin']['baselineProducer']
+    if all(producer[n]==initial[n] for n in ('commit','sourceTree')):
+        bridge=_pending_workspace_reader(d).online_pending_workspace_readback_origin(d,directory,expected_commit=expected,producer=producer)
+    else:
+        bridge=_pending_workspace_compatibility_readback_origin(d,directory,expected_commit=expected,producer=producer)
     _pending_workspace_profile(d,bridge,producer)
     d._onlinePendingWorkspaceSession={'bridge':bridge,'producer':producer}
     return _pending_workspace_readback(d,expected)

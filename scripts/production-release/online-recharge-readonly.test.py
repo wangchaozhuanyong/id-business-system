@@ -242,5 +242,133 @@ class PendingWorkspaceTransportTests(unittest.TestCase):
                 transport._pending_workspace_artifact_unpack(payload,digest,size)
 
 
+class PendingWorkspaceFailureTransportTests(unittest.TestCase):
+    def fixture(self):
+        existing = PendingWorkspaceTransportTests()
+        environment = {**existing.env(), 'EXPECTED_CURRENT': 'c' * 40}
+        unused, raw = existing.fixture()
+        invocation = json.loads(raw)
+        invocation.update(Status='Failed', ResponseCode=1,
+            StandardOutputContent=json.dumps({'status': 'ONLINE_RECHARGE_VERIFICATION_FAILED',
+                'code': 'API_ADMIN_WORKSPACE_BACKUP_RECEIPT_REQUIRED', 'errorType': 'RuntimeError',
+                'private': 'SYNTHETIC_RAW_STDOUT_SECRET'}),
+            StandardErrorContent='SYNTHETIC_RAW_STDERR_SECRET')
+        return existing.producer(), environment, invocation
+
+    def test_actual_failed_preflight_preserves_bound_code_and_diagnostic_never_sends(self):
+        producer, environment, invocation = self.fixture()
+        raw = json.dumps(invocation).encode()
+        with tempfile.TemporaryDirectory(dir=RUNTIME) as folder, patch.dict(os.environ, environment, clear=True), \
+                patch.object(transport, 'pending_workspace_parameters', return_value={'commands': []}), \
+                patch.object(transport, '_pending_workspace_send', return_value=invocation['CommandId']) as send, \
+                patch.object(transport, '_pending_workspace_command_raw', return_value=raw) as get, \
+                patch.object(transport, '_pending_workspace_modules', return_value=(None, None, None)), \
+                redirect_stdout(io.StringIO()) as stdout:
+            output = Path(folder)
+            self.assertEqual(transport.pending_workspace_main('preflight', output), 1)
+            send.assert_called_once();get.assert_called_once()
+            path = output / 'online-recharge-pending-workspace-preflight-failure.json'
+            saved = json.loads(path.read_bytes())
+            self.assertEqual(saved['producer'], producer)
+            self.assertEqual(saved['expectedCurrent'], environment['EXPECTED_CURRENT'])
+            self.assertEqual(saved['commandId'], invocation['CommandId'])
+            self.assertEqual(saved['failure']['code'], 'API_ADMIN_WORKSPACE_BACKUP_RECEIPT_REQUIRED')
+            self.assertEqual(path.stat().st_mode & 0o777, 0o600)
+            self.assertEqual(set(p.name for p in output.iterdir()), {path.name})
+            self.assertNotIn('SYNTHETIC_RAW', path.read_text() + stdout.getvalue())
+            self.assertFalse(json.loads(stdout.getvalue())['qualificationGranted'])
+            with patch.object(transport, '_pending_workspace_send') as diagnostic_send, \
+                    patch.object(transport, '_pending_workspace_command_raw') as diagnostic_get, \
+                    patch.object(transport, '_pending_workspace_modules') as modules, \
+                    redirect_stdout(io.StringIO()) as diagnostic_stdout:
+                before = (path.stat().st_ino, path.read_bytes())
+                self.assertEqual(transport.pending_workspace_main('diagnostic', output), 0)
+                result = json.loads(diagnostic_stdout.getvalue())
+                self.assertEqual(result['code'], saved['failure']['code'])
+                self.assertEqual(result['producer'], producer)
+                self.assertFalse(result['qualificationGranted'])
+                diagnostic_send.assert_not_called();diagnostic_get.assert_not_called();modules.assert_not_called()
+                self.assertEqual((path.stat().st_ino, path.read_bytes()), before)
+
+    def test_failed_binding_refuses_foreign_id_instance_document_plugin_end_and_exit_code(self):
+        producer, environment, invocation = self.fixture()
+        changes = ({'CommandId': '87654321-1234-1234-1234-123456789abc'},
+            {'InstanceId': 'i-11111111111111111'}, {'DocumentName': 'OtherDocument'}, {'PluginName': 'other'},
+            {'ExecutionEndDateTime': '2999-01-01T00:00:00Z'}, {'ResponseCode': True}, {'ResponseCode': 0})
+        with patch.dict(os.environ, environment, clear=True):
+            for change in changes:
+                with self.subTest(change=tuple(change)), \
+                        patch.object(transport, '_pending_workspace_command_raw',
+                            return_value=json.dumps({**invocation, **change}).encode()), \
+                        self.assertRaisesRegex(RuntimeError, 'TRANSPORT_INVALID'):
+                    transport._pending_workspace_wait(invocation['CommandId'], allow_preflight_failure=True)
+
+    def test_timeout_and_raw_errors_only_produce_finite_suppressed_failure(self):
+        producer, environment, invocation = self.fixture()
+        variants = ({'Status': 'TimedOut', 'ResponseCode': -1, 'StandardOutputContent': ''},
+            {'StandardOutputContent': 'SYNTHETIC_ARBITRARY_ERROR_SECRET'},
+            {'StandardOutputContent': json.dumps({'status': 'ONLINE_RECHARGE_VERIFICATION_FAILED',
+                'code': 'SYNTHETIC_ARBITRARY_ERROR_SECRET', 'errorType': 'SECRET with spaces'})},
+            {'StandardOutputContent': json.dumps({'status': 'ONLINE_RECHARGE_VERIFICATION_FAILED',
+                'code': 123, 'errorType': ['SYNTHETIC_SECRET']})})
+        with patch.dict(os.environ, environment, clear=True):
+            for change in variants:
+                with self.subTest(change=tuple(change)):
+                    value = transport._pending_workspace_failed(json.dumps({**invocation, **change}).encode(),
+                        invocation['CommandId'], producer, environment['EXPECTED_CURRENT'])
+                    self.assertEqual(value['failure'], {'status': 'ONLINE_RECHARGE_VERIFICATION_FAILED',
+                        'code': 'ONLINE_RECHARGE_REMOTE_VERIFICATION_FAILED'})
+                    self.assertNotIn('SECRET', json.dumps(value))
+            value = transport._pending_workspace_failed(json.dumps({**invocation,
+                'StandardOutputContent': json.dumps({'status': 'ONLINE_RECHARGE_VERIFICATION_FAILED',
+                    'code': 'API_ADMIN_WORKSPACE_BACKUP_RECEIPT_REQUIRED', 'errorType': ['SYNTHETIC_SECRET']})}).encode(),
+                invocation['CommandId'], producer, environment['EXPECTED_CURRENT'])
+            self.assertEqual(set(value['failure']), {'status', 'code'})
+
+    def test_non_preflight_failure_cannot_enter_success_or_artifact_path(self):
+        unused, environment, invocation = self.fixture()
+        with patch.dict(os.environ, environment, clear=True), \
+                patch.object(transport, '_pending_workspace_command_raw', return_value=json.dumps(invocation).encode()), \
+                self.assertRaisesRegex(RuntimeError, 'TRANSPORT_INVALID'):
+            transport._pending_workspace_wait(invocation['CommandId'])
+
+    def test_diagnostic_absence_is_not_measured_without_native_or_source_import(self):
+        producer, environment, unused = self.fixture()
+        with tempfile.TemporaryDirectory(dir=RUNTIME) as folder, patch.dict(os.environ, environment, clear=True), \
+                patch.object(transport, '_pending_workspace_send') as send, \
+                patch.object(transport, '_pending_workspace_command_raw') as get, \
+                patch.object(transport, '_pending_workspace_modules') as modules, redirect_stdout(io.StringIO()) as stdout:
+            self.assertEqual(transport.pending_workspace_main('diagnostic', Path(folder)), 0)
+            value = json.loads(stdout.getvalue())
+            self.assertEqual(value['status'], 'ONLINE_RECHARGE_DIAGNOSTIC_NOT_MEASURED')
+            self.assertEqual(value['producer'], producer)
+            self.assertFalse(value['qualificationGranted'])
+            send.assert_not_called();get.assert_not_called();modules.assert_not_called()
+            self.assertEqual(list(Path(folder).iterdir()), [])
+
+    def test_diagnostic_rejects_foreign_producer_expected_instance_unknown_keys_and_unsafe_code(self):
+        producer, environment, invocation = self.fixture()
+        with tempfile.TemporaryDirectory(dir=RUNTIME) as folder, patch.dict(os.environ, environment, clear=True):
+            output = Path(folder)
+            value = transport._pending_workspace_failed(json.dumps(invocation).encode(),
+                invocation['CommandId'], producer, environment['EXPECTED_CURRENT'])
+            path = output / 'online-recharge-pending-workspace-preflight-failure.json'
+            changes = ({'producer': {**producer, 'workflowRunId': '125'}},
+                {'producer': {**producer, 'sourceTree': 'd' * 40}}, {'expectedCurrent': 'e' * 40},
+                {'instanceId': 'i-11111111111111111'}, {'unknown': 'SYNTHETIC_SECRET'}, {'version': True},
+                {'failure': {**value['failure'], 'code': 'SYNTHETIC_SECRET'}},
+                {'failure': {**value['failure'], 'errorType': 'SECRET with spaces'}})
+            for change in changes:
+                path.write_bytes(json.dumps({**value, **change}).encode());path.chmod(0o600)
+                with self.subTest(change=tuple(change)), self.assertRaisesRegex(RuntimeError, 'FAILURE_CHANGED'):
+                    transport._pending_workspace_failure_diagnostic(output, producer, environment['EXPECTED_CURRENT'])
+            path.write_bytes(json.dumps(value).encode());path.chmod(0o644)
+            with self.assertRaisesRegex(RuntimeError, 'FAILURE_CHANGED'):
+                transport._pending_workspace_failure_diagnostic(output, producer, environment['EXPECTED_CURRENT'])
+            path.unlink();path.symlink_to(output / 'missing')
+            with self.assertRaisesRegex(RuntimeError, 'FAILURE_CHANGED'):
+                transport._pending_workspace_failure_diagnostic(output, producer, environment['EXPECTED_CURRENT'])
+
+
 if __name__ == '__main__':
     unittest.main()
