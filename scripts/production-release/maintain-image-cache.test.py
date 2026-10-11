@@ -1217,6 +1217,129 @@ class FixedBootstrapCacheTests(unittest.TestCase):
                 value={**row,'repoTags':row['repoTags']+[tag]}
                 self.assertEqual(cache.cache_filter_inventory(self.binding(),[value],set())[0],[])
 
+    def test_excluded_source_diagnostics_classify_aliases_without_secret_or_untrusted_hex_output(self):
+        import io
+        secret='PRIVATE_LABEL_AND_ALIAS_DO_NOT_PRINT';b='b'*40;c='c'*40;d='d'*40
+        tag=lambda source,attempt=1:cache.REPOSITORY+':'+source+'-1-'+str(attempt)+'-api'
+        cases=[(None,[],'UNTAGGED','MISSING',None,None),
+            (None,[tag(b),secret+':secret'],'FOREIGN_OR_MIXED_REPOSITORY','MISSING',None,None),
+            (secret,[cache.REPOSITORY+':'+secret],'PROJECT_NON_RELEASE_TAG','INVALID',None,None),
+            (b,[tag(b),tag(c)],'PROJECT_RELEASE_SOURCE_MISMATCH','UNVERIFIED_HEX',None,None),
+            (b,[tag(b),tag(b,2)],'PROJECT_RELEASE','CANONICAL_TAG_MATCH',b,b),
+            (None,[tag(b)],'PROJECT_RELEASE','MISSING',None,b),
+            (d,[tag(b)],'PROJECT_RELEASE','RELEASE_TAG_MISMATCH',None,b),
+            (b,['foreign:'+secret],'FOREIGN_OR_MIXED_REPOSITORY','UNVERIFIED_HEX',None,None)]
+        rows=[{'id':'sha256:'+f'{n+1:064x}','sourceCommit':source,'repoTags':tags,'sizeBytesEstimate':n}
+            for n,(source,tags,*unused) in enumerate(cases)]
+        protected='sha256:'+f'{99:064x}'
+        rows.append({'id':protected,'sourceCommit':secret,'repoTags':[secret+':secret'],'sizeBytesEstimate':2**63-1})
+        rows.append({'id':'sha256:'+f'{100:064x}','sourceCommit':self.old,'repoTags':['foreign:'+secret],'sizeBytesEstimate':1})
+        stream=io.StringIO()
+        with contextlib.redirect_stdout(stream):diagnostic=cache.cache_source_diagnostics(self.binding(),rows,{protected})
+        self.assertEqual((diagnostic['totalCount'],diagnostic['truncated'],len(diagnostic['items'])),(8,False,8))
+        self.assertEqual(stream.getvalue(),'');self.assertNotIn(secret,cache.cache_canonical(diagnostic).decode())
+        self.assertNotIn(d,cache.cache_canonical(diagnostic).decode());self.assertNotIn(protected,cache.cache_canonical(diagnostic).decode())
+        for row,(_,_,alias,claim,source,tag_source) in zip(diagnostic['items'],cases):
+            self.assertEqual((row['aliasClass'],row['sourceClaimClass'],row['sourceCommit'],row['tagSourceCommit']),
+                (alias,claim,source,tag_source))
+            self.assertEqual(set(row),{'imageId','sourceCommit','sourceClaimClass','sizeBytesEstimate','tagCount','aliasClass','tagSourceCommit'})
+        allowed,excluded=cache.cache_filter_inventory(self.binding(),rows,{protected})
+        self.assertEqual(allowed,[]);self.assertEqual(excluded['SOURCE_NOT_PROVEN_OLD'],8)
+
+    def test_excluded_source_diagnostics_are_sorted_bounded_and_omit_all_protected(self):
+        for count in (0,8,9,128):
+            rows=[{'id':'sha256:'+f'{n+1:064x}','sourceCommit':None,'repoTags':[],'sizeBytesEstimate':1}
+                for n in range(count)]
+            diagnostic=cache.cache_source_diagnostics(self.binding(),list(reversed(rows)),set())
+            self.assertEqual(diagnostic['totalCount'],count);self.assertEqual(diagnostic['truncated'],count>8)
+            self.assertEqual([r['imageId'] for r in diagnostic['items']],[r['id'] for r in rows[:8]])
+            self.assertEqual(cache.cache_source_diagnostics(self.binding(),rows,{r['id'] for r in rows}),
+                {'totalCount':0,'truncated':False,'items':[]})
+
+    def test_excluded_source_diagnostic_validator_rejects_extra_raw_fields_and_inconsistent_shapes(self):
+        import copy
+        value=self.safe_plan();plan=value['plan'];unknown={'id':'sha256:'+'2'*64,'sourceCommit':'b'*40,
+            'repoTags':[cache.REPOSITORY+':'+('b'*40)+'-1-1-api'],'sizeBytesEstimate':10}
+        plan['excludedSources']=cache.cache_source_diagnostics(self.binding(),[unknown],set())
+        plan['excludedCounts']['SOURCE_NOT_PROVEN_OLD']=1;value['planSha256']=cache.plan_digest(plan)
+        cache.validate_result(value,self.binding())
+        changes=[('diagnostic-extra',lambda p:p['excludedSources'].update(raw='private')),
+            ('boolean-count',lambda p:p['excludedSources'].update(totalCount=True)),
+            ('huge-count',lambda p:p['excludedSources'].update(totalCount=129)),
+            ('wrong-count',lambda p:p['excludedCounts'].update(SOURCE_NOT_PROVEN_OLD=0)),
+            ('wrong-truncation',lambda p:p['excludedSources'].update(truncated=True)),
+            ('missing-row',lambda p:p['excludedSources'].update(items=[])),
+            ('duplicate-row',lambda p:(p['excludedSources'].update(totalCount=2),p['excludedCounts'].update(SOURCE_NOT_PROVEN_OLD=2),
+                p['excludedSources']['items'].append(copy.deepcopy(p['excludedSources']['items'][0]))))]
+        fields=[('RepoTags',['private']),('sourceCommit','private'),('sourceCommit',self.old),('sourceCommit','c'*40),
+            ('sourceCommit',None),('imageId',self.kept),('imageId',plan['items'][0]['imageId']),('imageId','private'),
+            ('sizeBytesEstimate',True),('sizeBytesEstimate',-1),('sizeBytesEstimate',2**63),
+            ('tagCount',True),('tagCount',0),('tagCount',33),('aliasClass','private'),
+            ('aliasClass','UNTAGGED'),('aliasClass','FOREIGN_OR_MIXED_REPOSITORY'),
+            ('sourceClaimClass','private'),('sourceClaimClass','UNVERIFIED_HEX'),('tagSourceCommit','private')]
+        changes.extend((field,lambda p,k=field,v=value:p['excludedSources']['items'][0].update({k:v})) for field,value in fields)
+        for name,change in changes:
+            with self.subTest(change=name):
+                revised=copy.deepcopy(value);change(revised['plan']);revised['planSha256']=cache.plan_digest(revised['plan'])
+                with self.assertRaises(cache.CacheRejected):cache.validate_result(revised,self.binding())
+        unordered=copy.deepcopy(value);second=copy.deepcopy(unordered['plan']['excludedSources']['items'][0]);second['imageId']='sha256:'+'3'*64
+        unordered['plan']['excludedSources'].update(totalCount=2,items=[second,unordered['plan']['excludedSources']['items'][0]])
+        unordered['plan']['excludedCounts']['SOURCE_NOT_PROVEN_OLD']=2;unordered['planSha256']=cache.plan_digest(unordered['plan'])
+        with self.assertRaises(cache.CacheRejected):cache.validate_result(unordered,self.binding())
+
+    def test_excluded_source_diagnostics_are_plan_bound_and_never_add_cleanup_candidates(self):
+        unknown=[{'id':'sha256:'+f'{n+20:064x}','sourceCommit':None,
+            'repoTags':[cache.REPOSITORY+':'+('b'*40)+'-1-'+str(n+1)+'-api'],'sizeBytesEstimate':2**63-1}
+            for n in range(8)]
+        inventory=[self.inventory()[0],*unknown]
+        with patch.object(self,'inventory',return_value=inventory):
+            planned,removed,commands,_=self.run_host(self.binding(),count=len(inventory))
+            self.assertEqual((planned['status'],planned['candidateCount'],removed),('PLANNED',1,[]))
+            self.assertEqual(planned['plan']['excludedSources']['totalCount'],8)
+            self.assertFalse(planned['plan']['excludedSources']['truncated'])
+            approved=self.binding('cleanup_unused_cache',planned['planSha256'])
+            applied,removed,_,_=self.run_host(approved,count=len(inventory))
+            self.assertEqual((applied['status'],applied['planSha256']),('APPLIED',planned['planSha256']))
+            self.assertEqual(removed,[inventory[0]['repoTags'][0]])
+        import copy
+        changed=copy.deepcopy(inventory);changed[1]['sourceCommit']='private-new-label'
+        with patch.object(self,'inventory',return_value=changed):
+            revised,_,_,_=self.run_host(self.binding(),count=len(changed))
+            self.assertNotEqual(revised['planSha256'],planned['planSha256'])
+            rejected,removed,_,_=self.run_host(approved,count=len(changed))
+            self.assertEqual((rejected['status'],rejected['code'],removed),('FAILED','PLAN_CHANGED',[]))
+            self.assertNotIn('private-new-label',cache.cache_canonical(rejected).decode())
+
+    def test_excluded_source_diagnostics_fit_real_plan_apply_partial_and_journal_budgets(self):
+        binding=self.binding(producer={**self.producer,'workflowRunId':'9'*20,'workflowRunAttempt':'9'*20})
+        binding['provenOldSourceCommits']=sorted([self.old,*[f'{n:040x}' for n in range(1,128)]])
+        eligible=[{'id':'sha256:'+f'{n+1:064x}','sourceCommit':self.old,'sizeBytesEstimate':1000,
+            'repoTags':[cache.REPOSITORY+':'+self.old+'-'+str(n+1)+'-'+str(alias+1)+'-api' for alias in range(3)]}
+            for n in range(10)]
+        unknown=[{'id':'sha256:'+f'{n+100:064x}','sourceCommit':'b'*40,'sizeBytesEstimate':2**63-1,
+            'repoTags':[cache.REPOSITORY+':'+('b'*40)+'-'+str(n+1)+'-'+str(alias+1)+'-api' for alias in range(32)]}
+            for n in range(118)]
+        inventory=[*eligible,*unknown]
+        with patch.object(self,'inventory',return_value=inventory):
+            planned,_,_,_=self.run_host(binding,count=len(inventory));self.assertEqual(planned['status'],'PLANNED')
+            plan=planned['plan'];count=planned['candidateCount'];self.assertGreater(count,0);self.assertEqual(count%3,0)
+            diagnostic=plan['excludedSources'];self.assertEqual(diagnostic['totalCount'],118);self.assertTrue(diagnostic['truncated'])
+            self.assertEqual(len(diagnostic['items']),8)
+            self.assertTrue(all(row['sourceCommit']==row['tagSourceCommit']=='b'*40 and row['tagCount']==32
+                and row['sizeBytesEstimate']==2**63-1 for row in diagnostic['items']))
+            self.assertTrue(cache.cache_plan_budget(plan,binding));self.assertLessEqual(len(cache.cache_canonical(plan)),12000)
+            approved={**binding,'operation':'cleanup_unused_cache','approvedPlanSha256':planned['planSha256']}
+            for fail in (None,count):
+                result,_,_,journals=self.run_host(approved,count=len(inventory),fail_remove=fail)
+                self.assertEqual(result['status'],'APPLIED' if fail is None else 'FAILED_MUTATED_UNVERIFIED')
+                self.assertLess(len(cache.cache_canonical(result)),23500)
+                artifact={'kind':'CACHE_RECOVERY_ARTIFACT_V1','operation':'cleanup_unused_cache','producer':approved['producer'],
+                    'expectedCurrent':cache.CACHE_BASELINE,'commandId':'12345678-1234-1234-1234-123456789abc',
+                    'status':'OPERATION_COMPLETED' if fail is None else 'OPERATION_FAILED','code':result['code'],'result':result}
+                cache.validate_artifact(artifact,approved['producer'],approved);self.assertLess(len(cache.cache_canonical(artifact)),24000)
+                self.assertLess(len(journals[0]),4*1024**2)
+                for line in journals[0].splitlines():self.assertLess(len(line),24000)
+
     def test_inventory_read_failures_are_finite_and_suppress_raw_exception(self):
         for stage,code in (('LIST','INVENTORY_LIST_EXEC'),('INSPECT','INVENTORY_INSPECT_EXEC')):
             def read(*args):
@@ -1728,11 +1851,47 @@ class FixedBootstrapCacheTests(unittest.TestCase):
 
     def test_old_function_ast_and_six_gib_release_threshold_unchanged(self):
         import ast,subprocess
-        raw=subprocess.check_output(['git','show','HEAD:scripts/production-release/maintain-image-cache.py'],cwd=self.project).decode()
+        raw=subprocess.check_output(['git','show','272ecffba15502ccec0effbef5ed2dee35336462:scripts/production-release/maintain-image-cache.py'],cwd=self.project).decode()
         current=(DIRECTORY/'maintain-image-cache.py').read_text()
         original={n.name:ast.dump(n,include_attributes=False) for n in ast.parse(raw).body if isinstance(n,(ast.FunctionDef,ast.ClassDef))}
-        revised={n.name:ast.dump(n,include_attributes=False) for n in ast.parse(current).body if isinstance(n,(ast.FunctionDef,ast.ClassDef))}
-        self.assertTrue(all(revised[name]==value for name,value in original.items() if name!='parameters'))
+        # Project away exactly four authorized diagnostic additions, preserving
+        # the prior AST assertion for every original callable, including inputs.
+        counts={'metadata':0,'fields':0,'validator':0,'capture':0}
+        owner=self
+        class PriorDiagnostics(ast.NodeTransformer):
+            function=None
+            def visit_FunctionDef(unused,node):
+                before=unused.function;unused.function=node.name
+                value=unused.generic_visit(node);unused.function=before;return value
+            def visit_Dict(unused,node):
+                for index,key in enumerate(node.keys):
+                    if isinstance(key,ast.Constant) and key.value=='excludedSources':
+                        owner.assertEqual(unused.function,'cache_plan')
+                        owner.assertEqual(ast.dump(node.values[index],include_attributes=False),
+                            ast.dump(ast.parse('cache_source_diagnostics(binding,inventory,protected)',mode='eval').body,include_attributes=False))
+                        del node.keys[index];del node.values[index];counts['metadata']+=1;break
+                return unused.generic_visit(node)
+            def visit_Set(unused,node):
+                before=len(node.elts);node.elts=[value for value in node.elts
+                    if not isinstance(value,ast.Constant) or value.value!='excludedSources']
+                if before!=len(node.elts):owner.assertEqual(unused.function,'validate_result')
+                counts['fields']+=before-len(node.elts);return unused.generic_visit(node)
+            def visit_Expr(unused,node):
+                if isinstance(node.value,ast.Call) and isinstance(node.value.func,ast.Name) and node.value.func.id=='cache_validate_source_diagnostics':
+                    owner.assertEqual(unused.function,'validate_result')
+                    owner.assertEqual(ast.dump(node.value,include_attributes=False),
+                        ast.dump(ast.parse('cache_validate_source_diagnostics(plan,binding)',mode='eval').body,include_attributes=False))
+                    counts['validator']+=1;return None
+                return unused.generic_visit(node)
+            def visit_Tuple(unused,node):
+                before=len(node.elts);node.elts=[value for value in node.elts
+                    if not isinstance(value,ast.Constant) or value.value!='cache_source_diagnostics']
+                if before!=len(node.elts):owner.assertEqual(unused.function,'parameters')
+                counts['capture']+=before-len(node.elts);return unused.generic_visit(node)
+        tree=PriorDiagnostics().visit(ast.parse(current))
+        self.assertEqual(counts,dict.fromkeys(counts,1))
+        revised={n.name:ast.dump(n,include_attributes=False) for n in tree.body if isinstance(n,(ast.FunctionDef,ast.ClassDef))}
+        self.assertTrue(all(revised[name]==value for name,value in original.items()))
         ordinary={n.name:ast.dump(n,include_attributes=False) for n in ast.parse(raw.split('# Independent fixed-bootstrap plan/apply transport.',1)[0]).body if isinstance(n,(ast.FunctionDef,ast.ClassDef))}
         ordinary['main']=original['main']
         self.assertEqual(len(ordinary),24);self.assertTrue(all(revised[name]==value for name,value in ordinary.items()))
