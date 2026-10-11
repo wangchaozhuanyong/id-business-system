@@ -1123,7 +1123,7 @@ class FixedBootstrapCacheTests(unittest.TestCase):
 
     def run_host(self, binding, *, count=1, fail_remove=None, change_after_remove=False,
                  wrong_services=False, wrong_baseline=False, dependencies_failure=False, inventory_drift=False,
-                 dangling=False, recovery_failure=False, root_override=None):
+                 dangling=False, recovery_failure=False, root_override=None, inventory_failure=None):
         import copy
         import os
         import stat
@@ -1151,8 +1151,11 @@ class FixedBootstrapCacheTests(unittest.TestCase):
                 commands.append(args)
                 if args==('ps','-a','-q'): return '7'*64
                 if args[:3]==('inspect','--format','{{.Image}}'): return self.kept
-                if args==('image','ls','--no-trunc','--quiet'): return '\n'.join(r['id'] for r in state['inventory'])
+                if args==('image','ls','--no-trunc','--quiet'):
+                    if inventory_failure=='LIST': raise RuntimeError('private-inventory-error')
+                    return '\n'.join(r['id'] for r in state['inventory'])
                 if args[:3]==('image','inspect','--format'):
+                    if inventory_failure=='INSPECT': raise RuntimeError('private-inventory-error')
                     row=next(r for r in state['inventory'] if r['id']==args[-1]);state['inspectCount']+=1
                     if inventory_drift and state['inspectCount']>count: row['sizeBytesEstimate']+=1
                     return cache.cache_canonical(row).decode()
@@ -1211,6 +1214,90 @@ class FixedBootstrapCacheTests(unittest.TestCase):
             with self.subTest(tag=tag):
                 value={**row,'repoTags':row['repoTags']+[tag]}
                 self.assertEqual(cache.cache_filter_inventory(self.binding(),[value],set())[0],[])
+
+    def test_inventory_read_failures_are_finite_and_suppress_raw_exception(self):
+        for stage,code in (('LIST','INVENTORY_LIST_EXEC'),('INSPECT','INVENTORY_INSPECT_EXEC')):
+            def read(*args):
+                if stage=='LIST' or args[:3]==('docker','image','inspect'):
+                    raise RuntimeError('private-inventory-error')
+                return self.candidate
+            with self.subTest(stage=stage),patch.object(cache,'read',side_effect=read):
+                with self.assertRaisesRegex(cache.CacheRejected,'^'+code+'$'):cache.cache_inventory()
+
+    def test_inventory_list_deadline_remains_controlled(self):
+        for rejected in (cache.CacheRejected,cache.StorageRejected):
+            error=rejected('DEADLINE_EXCEEDED')
+            with self.subTest(kind=rejected.__name__),patch.object(cache,'read',side_effect=error):
+                with self.assertRaises(rejected) as actual:cache.cache_inventory()
+                self.assertIs(actual.exception,error)
+        with patch.object(cache,'read',side_effect=RuntimeError('DEADLINE_EXCEEDED')):
+            with self.assertRaisesRegex(cache.CacheRejected,'^INVENTORY_LIST_EXEC$'):cache.cache_inventory()
+
+    def test_inventory_inspect_deadline_remains_controlled(self):
+        for rejected in (cache.CacheRejected,cache.StorageRejected):
+            error=rejected('DEADLINE_EXCEEDED')
+            with self.subTest(kind=rejected.__name__),patch.object(cache,'read',side_effect=[self.candidate,error]):
+                with self.assertRaises(rejected) as actual:cache.cache_inventory()
+                self.assertIs(actual.exception,error)
+        with patch.object(cache,'read',side_effect=[self.candidate,RuntimeError('DEADLINE_EXCEEDED')]):
+            with self.assertRaisesRegex(cache.CacheRejected,'^INVENTORY_INSPECT_EXEC$'):cache.cache_inventory()
+
+    def test_inventory_list_bound_remains_before_dedup_and_ids_stay_strict(self):
+        row=self.inventory()[0]
+        with patch.object(cache,'read',side_effect=['\n'.join([row['id']]*128),cache.cache_canonical(row)] ) as read:
+            self.assertEqual(cache.cache_inventory(),[row]);self.assertEqual(read.call_count,2)
+        for raw,code in (('\n'.join([row['id']]*129),'INVENTORY_LIST_COUNT'),
+                ('a'*64,'INVENTORY_LIST_ID'),(row['id']+'\n\ninvalid','INVENTORY_LIST_ID'),
+                (row['id'].encode(),'INVENTORY_LIST_ID')):
+            with self.subTest(code=code),patch.object(cache,'read',return_value=raw) as read:
+                with self.assertRaisesRegex(cache.CacheRejected,'^'+code+'$'):cache.cache_inventory()
+                self.assertEqual(read.call_count,1)
+
+    def test_inventory_json_failure_covers_invalid_duplicate_nonfinite_and_bound(self):
+        for raw in ('not-json','{"id":1,"id":2}','{"size":NaN}',' '*(2*1024**2),None):
+            with self.subTest(raw_type=type(raw).__name__),patch.object(cache,'read',side_effect=[self.candidate,raw]):
+                with self.assertRaisesRegex(cache.CacheRejected,'^INVENTORY_JSON$'):cache.cache_inventory()
+
+    def test_inventory_row_shape_rejects_unknown_wrong_id_types_and_size(self):
+        row=self.inventory()[0]
+        for value in (None,[],{**row,'unknown':'private'}, {**row,'id':self.kept},
+                {**row,'sizeBytesEstimate':True},{**row,'sizeBytesEstimate':-1},
+                {**row,'sizeBytesEstimate':2**63},{**row,'sourceCommit':False},{**row,'repoTags':False}):
+            with self.subTest(value_type=type(value).__name__),patch.object(cache,'read',side_effect=[row['id'],cache.cache_canonical(value)]):
+                with self.assertRaisesRegex(cache.CacheRejected,'^INVENTORY_SHAPE$'):cache.cache_inventory()
+
+    def test_inventory_dense_aliases_and_malformed_tags_keep_original_limits(self):
+        row=self.inventory()[0];tags=['public:'+str(n) for n in range(32)]
+        dense={**row,'repoTags':tags}
+        with patch.object(cache,'read',side_effect=[row['id'],cache.cache_canonical(dense)]):
+            self.assertEqual(cache.cache_inventory(),[{**dense,'repoTags':sorted(tags)}])
+        for values in (tags+['public:32'],['same','same'],[''],['x'*513],[False],[{}],['\ud800']):
+            with self.subTest(tag_count=len(values)),patch.object(cache,'read',side_effect=[row['id'],cache.cache_canonical({**row,'repoTags':values})]):
+                with self.assertRaisesRegex(cache.CacheRejected,'^INVENTORY_TAGS$'):cache.cache_inventory()
+
+    def test_inventory_without_source_label_remains_non_candidate(self):
+        row=self.inventory()[0]
+        for source in (None,''):
+            with self.subTest(source=source),patch.object(cache,'read',side_effect=[row['id'],cache.cache_canonical({**row,'sourceCommit':source,'repoTags':None})]):
+                inventory=cache.cache_inventory();self.assertEqual(inventory[0]['repoTags'],[])
+                candidates,excluded=cache.cache_filter_inventory(self.binding(),inventory,set())
+                self.assertEqual(candidates,[]);self.assertEqual(excluded['SOURCE_NOT_PROVEN_OLD'],1)
+        self.assertIn('{{if eq .Config nil}}null{{else}}',cache.CACHE_IMAGE_FORMAT)
+        self.assertIn('{{if eq (index .Config "Labels") nil}}null{{else}}',cache.CACHE_IMAGE_FORMAT)
+
+    def test_inventory_subcodes_survive_host_and_artifact_with_no_mutation(self):
+        for operation,approval in (('verify_unused_cache',None),('cleanup_unused_cache','a'*64)):
+            for stage,code in (('LIST','INVENTORY_LIST_EXEC'),('INSPECT','INVENTORY_INSPECT_EXEC')):
+                binding=self.binding(operation,approval)
+                with self.subTest(operation=operation,stage=stage):
+                    value,removals,commands,saved=self.run_host(binding,inventory_failure=stage)
+                    self.assertEqual((value['status'],value['code'],value['phase']),('FAILED',code,'INVENTORY'))
+                    self.assertFalse(value['mutationAttempted']);self.assertIsNone(value['plan'])
+                    self.assertEqual((removals,saved),([],[]));self.assertNotIn('private-inventory-error',json.dumps(value))
+                    record={'kind':'CACHE_RECOVERY_ARTIFACT_V1','operation':operation,'producer':binding['producer'],
+                        'expectedCurrent':cache.CACHE_BASELINE,'commandId':'12345678-1234-1234-1234-123456789abc',
+                        'status':'OPERATION_FAILED','code':code,'result':value}
+                    cache.validate_artifact(record,binding['producer'],binding)
 
     def test_plan_canonical_excludes_run_and_deduplicates_size_estimate(self):
         first=self.safe_plan();second=self.safe_plan(self.binding(producer={**self.producer,'workflowRunId':'456'}))
@@ -1445,7 +1532,10 @@ class FixedBootstrapCacheTests(unittest.TestCase):
         current=(DIRECTORY/'maintain-image-cache.py').read_text()
         original={n.name:ast.dump(n,include_attributes=False) for n in ast.parse(raw).body if isinstance(n,(ast.FunctionDef,ast.ClassDef))}
         revised={n.name:ast.dump(n,include_attributes=False) for n in ast.parse(current).body if isinstance(n,(ast.FunctionDef,ast.ClassDef))}
-        self.assertTrue(all(revised[name]==value for name,value in original.items()))
+        self.assertTrue(all(revised[name]==value for name,value in original.items() if name!='cache_inventory'))
+        ordinary={n.name:ast.dump(n,include_attributes=False) for n in ast.parse(raw.split('# Independent fixed-bootstrap plan/apply transport.',1)[0]).body if isinstance(n,(ast.FunctionDef,ast.ClassDef))}
+        ordinary['main']=original['main']
+        self.assertEqual(len(ordinary),24);self.assertTrue(all(revised[name]==value for name,value in ordinary.items()))
 
 
 if __name__ == '__main__':

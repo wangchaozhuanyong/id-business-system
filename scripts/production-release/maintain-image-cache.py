@@ -594,6 +594,8 @@ CACHE_OPERATIONS = ('verify_unused_cache', 'cleanup_unused_cache')
 CACHE_STATUSES = ('PLANNED', 'APPLIED', 'FAILED', 'FAILED_MUTATED_UNVERIFIED')
 CACHE_CODES = ('OK', 'INPUT_INVALID', 'ROOT_REQUIRED', 'BASELINE_INVALID', 'STATE_CHANGED',
     'SERVICES_CHANGED', 'DEPENDENCY_INVALID', 'INVENTORY_INVALID', 'RECOVERY_INVALID',
+    'INVENTORY_LIST_EXEC', 'INVENTORY_LIST_COUNT', 'INVENTORY_LIST_ID',
+    'INVENTORY_INSPECT_EXEC', 'INVENTORY_JSON', 'INVENTORY_SHAPE', 'INVENTORY_TAGS',
     'PLAN_CHANGED', 'OUTPUT_BOUND', 'DEADLINE_EXCEEDED', 'IO_FAILURE')
 CACHE_PHASES = ('INPUT','BASELINE','SERVICES_BEFORE','DEPENDENCIES','INVENTORY','RECOVERY','PLAN_BINDING','APPLY_GUARD','APPLY_RECOVERY','APPLY_IMAGE','SERVICES_AFTER','COMPLETE')
 CACHE_BINDING_FIELDS = {'producer', 'expectedCurrent', 'operation', 'approvedPlanSha256',
@@ -606,7 +608,8 @@ CACHE_RESULT_FIELDS = {'kind', 'version', 'operation', 'mode', 'producer', 'sour
 CACHE_ARTIFACT_FIELDS = {'kind', 'operation', 'producer', 'expectedCurrent', 'commandId', 'status', 'code', 'result'}
 CACHE_EXCLUSIONS = ('PROTECTED', 'SOURCE_NOT_PROVEN_OLD', 'FOREIGN_OR_MIXED_ALIAS', 'SOURCE_TAG_MISMATCH')
 CACHE_IMAGE_FORMAT = ('{"id":{{json .Id}},"repoTags":{{json .RepoTags}},'
-    '"sourceCommit":{{json (index .Config.Labels "org.opencontainers.image.revision")}},'
+    '"sourceCommit":{{if eq .Config nil}}null{{else}}{{if eq (index .Config "Labels") nil}}null{{else}}'
+    '{{json (index (index .Config "Labels") "org.opencontainers.image.revision")}}{{end}}{{end}},'
     '"sizeBytesEstimate":{{json .Size}}}')
 
 
@@ -662,19 +665,33 @@ def cache_binding(value):
 
 
 def cache_inventory():
-    ids = read('docker','image','ls','--no-trunc','--quiet').splitlines()
-    cache_need(len(ids) <= 128 and all(IMAGE_ID.fullmatch(i) for i in ids),'INVENTORY_INVALID')
+    try: raw_ids = read('docker','image','ls','--no-trunc','--quiet')
+    except Exception as error:
+        if str(error)=='DEADLINE_EXCEEDED' and isinstance(error,(CacheRejected,globals().get('StorageRejected',CacheRejected))): raise
+        raise CacheRejected('INVENTORY_LIST_EXEC') from None
+    cache_need(type(raw_ids) is str,'INVENTORY_LIST_ID')
+    ids = raw_ids.splitlines()
+    cache_need(len(ids) <= 128,'INVENTORY_LIST_COUNT')
+    cache_need(all(IMAGE_ID.fullmatch(i) for i in ids),'INVENTORY_LIST_ID')
     rows = []
     for image in sorted(set(ids)):
-        row = cache_closed(read('docker','image','inspect','--format',CACHE_IMAGE_FORMAT,image), 2*1024**2)
+        try: raw = read('docker','image','inspect','--format',CACHE_IMAGE_FORMAT,image)
+        except Exception as error:
+            if str(error)=='DEADLINE_EXCEEDED' and isinstance(error,(CacheRejected,globals().get('StorageRejected',CacheRejected))): raise
+            raise CacheRejected('INVENTORY_INSPECT_EXEC') from None
+        try: row = cache_closed(raw, 2*1024**2)
+        except Exception: raise CacheRejected('INVENTORY_JSON') from None
         cache_need(type(row) is dict and set(row) == {'id','repoTags','sourceCommit','sizeBytesEstimate'}
             and row['id'] == image and type(row['sizeBytesEstimate']) is int
             and 0 <= row['sizeBytesEstimate'] <= 2**63-1
             and (row['sourceCommit'] is None or type(row['sourceCommit']) is str)
-            and (row['repoTags'] is None or type(row['repoTags']) is list),'INVENTORY_INVALID')
+            and (row['repoTags'] is None or type(row['repoTags']) is list),'INVENTORY_SHAPE')
         tags = row['repoTags'] or []
-        cache_need(type(tags) is list and len(tags) <= 32 and len(tags) == len(set(tags))
-            and all(type(tag) is str and 0 < len(tag.encode()) <= 512 for tag in tags),'INVENTORY_INVALID')
+        try:
+            cache_need(type(tags) is list and len(tags) <= 32
+                and all(type(tag) is str and 0 < len(tag.encode()) <= 512 for tag in tags)
+                and len(tags) == len(set(tags)),'INVENTORY_TAGS')
+        except Exception: raise CacheRejected('INVENTORY_TAGS') from None
         rows.append({**row, 'repoTags':sorted(tags)})
     return rows
 
