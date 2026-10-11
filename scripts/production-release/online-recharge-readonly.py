@@ -55,9 +55,11 @@ def safe_failure(receipt):
                'ONLINE_RECHARGE_PARTIAL_RECOVERY_REQUIRED')
     result = {'status': 'ONLINE_RECHARGE_VERIFICATION_FAILED', 'code': 'ONLINE_RECHARGE_REMOTE_VERIFICATION_FAILED'}
     if (isinstance(receipt, dict) and receipt.get('status') in allowed
+            and isinstance(receipt.get('code'), str) and len(receipt['code']) <= 128
             and re.fullmatch(r'(?:ONLINE_RECHARGE|API_ADMIN)_[A-Z0-9_]+', receipt.get('code', ''))):
         result = {'status': receipt['status'], 'code': receipt['code']}
-        if re.fullmatch(r'[A-Za-z][A-Za-z0-9]{0,63}', receipt.get('errorType', '')):
+        if (isinstance(receipt.get('errorType'), str)
+                and re.fullmatch(r'[A-Za-z][A-Za-z0-9]{0,63}', receipt['errorType'])):
             result['errorType'] = receipt['errorType']
     return result
 
@@ -441,7 +443,86 @@ def _pending_workspace_ended(raw, command_id):
         raise RuntimeError('ONLINE_RECHARGE_PENDING_WORKSPACE_TRANSPORT_INVALID') from None
 
 
-def _pending_workspace_wait(command_id):
+def _pending_workspace_failure_record(value, producer, expected):
+    import datetime
+    try:
+        _pending_workspace_artifact_producer(producer)
+        _pending_workspace_artifact_need(producer == _pending_workspace_metadata()
+            and type(expected) is str and re.fullmatch('[a-f0-9]{40}', expected))
+        fields = {'kind', 'version', 'mode', 'commandId', 'instanceId', 'nativeStatus',
+            'responseCode', 'executionEndDateTime', 'producer', 'expectedCurrent', 'failure'}
+        _pending_workspace_artifact_need(type(value) is dict and set(value) == fields
+            and value['kind'] == 'ONLINE_RECHARGE_PENDING_WORKSPACE_PREFLIGHT_FAILURE'
+            and type(value['version']) is int and value['version'] == 1 and value['mode'] == 'preflight'
+            and value['producer'] == producer and value['expectedCurrent'] == expected
+            and value['instanceId'] == os.environ['PRODUCTION_INSTANCE_ID']
+            and type(value['instanceId']) is str and re.fullmatch('i-[a-f0-9]{8}(?:[a-f0-9]{9})?', value['instanceId'])
+            and type(value['commandId']) is str
+            and re.fullmatch('[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}', value['commandId'])
+            and value['nativeStatus'] in ('Failed', 'TimedOut')
+            and type(value['responseCode']) is int and -1 <= value['responseCode'] <= 255
+            and value['responseCode'] != 0 and type(value['executionEndDateTime']) is str)
+        end = datetime.datetime.fromisoformat(value['executionEndDateTime'].replace('Z', '+00:00'))
+        failure = value['failure']
+        _pending_workspace_artifact_need(end.tzinfo is not None and end.utcoffset() == datetime.timedelta(0)
+            and end <= datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(minutes=5)
+            and type(failure) is dict and set(failure) in ({'status', 'code'}, {'status', 'code', 'errorType'})
+            and safe_failure(failure) == failure)
+        return value
+    except Exception:
+        raise RuntimeError('ONLINE_RECHARGE_PENDING_WORKSPACE_FAILURE_CHANGED') from None
+
+
+def _pending_workspace_failed(raw, command_id, producer, expected):
+    try:
+        _pending_workspace_artifact_need(type(raw) is bytes and 0 < len(raw) < 65536)
+        value = _pending_workspace_artifact_json(raw)
+        _pending_workspace_artifact_need(type(command_id) is str and value.get('CommandId') == command_id
+            and value.get('InstanceId') == os.environ['PRODUCTION_INSTANCE_ID']
+            and value.get('DocumentName') == 'AWS-RunShellScript' and value.get('PluginName') == 'aws:runShellScript'
+            and type(value.get('StandardOutputContent')) is str
+            and len(value['StandardOutputContent'].encode()) < 24000
+            and type(value.get('StandardErrorContent')) is str
+            and len(value['StandardErrorContent'].encode()) < 24000)
+        try:
+            receipt = _pending_workspace_artifact_json(value['StandardOutputContent'])
+        except (ValueError, TypeError, RuntimeError):
+            receipt = {}
+        return _pending_workspace_failure_record({
+            'kind': 'ONLINE_RECHARGE_PENDING_WORKSPACE_PREFLIGHT_FAILURE', 'version': 1, 'mode': 'preflight',
+            'commandId': command_id, 'instanceId': value['InstanceId'], 'nativeStatus': value.get('Status'),
+            'responseCode': value.get('ResponseCode'), 'executionEndDateTime': value.get('ExecutionEndDateTime'),
+            'producer': producer, 'expectedCurrent': expected, 'failure': safe_failure(receipt)}, producer, expected)
+    except Exception:
+        raise RuntimeError('ONLINE_RECHARGE_PENDING_WORKSPACE_TRANSPORT_INVALID') from None
+
+
+def _pending_workspace_failure_diagnostic(output, producer, expected):
+    _pending_workspace_artifact_producer(producer)
+    _pending_workspace_artifact_need(type(expected) is str and re.fullmatch('[a-f0-9]{40}', expected))
+    path = output / 'online-recharge-pending-workspace-preflight-failure.json'
+    if not path.exists() and not path.is_symlink():
+        return {'status': 'ONLINE_RECHARGE_DIAGNOSTIC_NOT_MEASURED',
+            'code': 'ONLINE_RECHARGE_PENDING_WORKSPACE_FAILURE_NOT_MEASURED',
+            'producer': producer, 'expectedCurrent': expected, 'qualificationGranted': False}
+    try:
+        descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+        with os.fdopen(descriptor, 'rb') as source:
+            info = os.fstat(source.fileno())
+            _pending_workspace_artifact_need(stat.S_ISREG(info.st_mode) and info.st_uid == os.geteuid()
+                and stat.S_IMODE(info.st_mode) == 0o600 and 0 < info.st_size < 4096)
+            raw = source.read(4096)
+            named = path.lstat()
+            _pending_workspace_artifact_need((named.st_dev, named.st_ino) == (info.st_dev, info.st_ino)
+                and stat.S_ISREG(named.st_mode) and len(raw) == info.st_size)
+        value = _pending_workspace_failure_record(_pending_workspace_artifact_json(raw), producer, expected)
+        return {**value, 'status': 'ONLINE_RECHARGE_PENDING_WORKSPACE_FAILURE_OBSERVED',
+            'code': value['failure']['code'], 'qualificationGranted': False, 'rawOutputSuppressed': True}
+    except Exception:
+        raise RuntimeError('ONLINE_RECHARGE_PENDING_WORKSPACE_FAILURE_CHANGED') from None
+
+
+def _pending_workspace_wait(command_id, *, allow_preflight_failure=False):
     deadline = time.monotonic() + 330
     while time.monotonic() < deadline:
         try:
@@ -457,6 +538,9 @@ def _pending_workspace_wait(command_id):
         if provisional.get('Status') in ('Pending', 'InProgress', 'Delayed'):
             time.sleep(5)
             continue
+        if allow_preflight_failure and provisional.get('Status') in ('Failed', 'TimedOut'):
+            _pending_workspace_failed(raw, command_id, _pending_workspace_metadata(), os.environ['EXPECTED_CURRENT'])
+            return raw
         _pending_workspace_ended(raw, command_id)
         return raw
     raise RuntimeError('ONLINE_RECHARGE_READONLY_TIMEOUT')
@@ -530,9 +614,12 @@ def pending_workspace_build_input(output, *, proof_required):
 
 
 def pending_workspace_main(mode, output):
-    _pending_workspace_artifact_need(_pending_workspace_selected() and mode in ('preflight', 'readback', 'filter-deploy',
+    _pending_workspace_artifact_need(_pending_workspace_selected() and mode in ('preflight', 'readback', 'diagnostic', 'filter-deploy',
         'pending-workspace-build-input', 'pending-workspace-build-proof'))
     producer = _pending_workspace_metadata()
+    if mode == 'diagnostic':
+        print(json.dumps(_pending_workspace_failure_diagnostic(output, producer, os.environ['EXPECTED_CURRENT'])))
+        return 0
     if mode.startswith('pending-workspace-build-'):
         _pending_workspace_artifact_need(os.environ['RELEASE_OPERATION'] == 'release_online_recharge')
         print(json.dumps(pending_workspace_build_input(output, proof_required=mode == 'pending-workspace-build-proof')))
@@ -546,7 +633,13 @@ def pending_workspace_main(mode, output):
         expected = producer['commit'] if mode == 'readback' else os.environ['EXPECTED_CURRENT']
         command_id = _pending_workspace_send(pending_workspace_parameters(producer['commit'], expected, mode, producer),
             'Online recharge independent ' + mode)
-        raw = _pending_workspace_wait(command_id)
+        raw = _pending_workspace_wait(command_id, allow_preflight_failure=mode == 'preflight')
+    if mode == 'preflight' and _pending_workspace_artifact_json(raw).get('Status') in ('Failed', 'TimedOut'):
+        failure = _pending_workspace_failed(raw, command_id, producer, os.environ['EXPECTED_CURRENT'])
+        _pending_workspace_local_bytes(output / 'online-recharge-pending-workspace-preflight-failure.json',
+            (json.dumps(failure, sort_keys=True) + '\n').encode())
+        print(json.dumps({**failure, **failure['failure'], 'qualificationGranted': False, 'rawOutputSuppressed': True}))
+        return 1
     invocation = _pending_workspace_ended(raw, command_id)
     receipt = decoder(invocation['StandardOutputContent'], scope='ONLINE_RECHARGE')
     summary = pending_workspace_client_binding(receipt, 'readback' if mode == 'filter-deploy' else mode, producer, output)

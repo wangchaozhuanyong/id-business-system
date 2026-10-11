@@ -3034,7 +3034,11 @@ class PendingWorkspaceStageTests(unittest.TestCase):
 
     def inventory(self):
         return {n:{'sha256':hashlib.sha256((ROOT/n).read_bytes()).hexdigest(),'mode':'100644'}
-            for n in scope._PENDING_WORKSPACE_CONTROL_NAMES}
+            for n in (*scope._PENDING_WORKSPACE_CONTROL_NAMES,
+                *scope._PENDING_WORKSPACE_RECEIPT_COMPATIBILITY_FILES,
+                'apps/api/src/id-business-v2/online-recharge/online-recharge.service.ts',
+                'apps/admin/src/v2/features/online-recharge/OnlineRechargePage.vue',
+                'docker-compose.aws-mysql.yml','prisma/schema.prisma') if (ROOT/n).is_file()}
 
     def test_only_same_source_and_different_real_run_is_admitted(self):
         b=self.bridge();p=self.producer();inventory=self.inventory()
@@ -3042,13 +3046,106 @@ class PendingWorkspaceStageTests(unittest.TestCase):
             self.assertEqual(scope._pending_workspace_profile(controller(),b,p),inventory)
             acquire.assert_called_once_with(unittest.mock.ANY,p)
 
-    def test_changed_candidate_and_same_run_rejected_before_source_acquire(self):
-        for key,value in (('commit','9'*40),('sourceTree','9'*40),('workflowRunId','123')):
-            p=self.producer();p[key]=value
-            with self.subTest(key=key),patch.object(scope,'_pending_workspace_current_source_inventory') as acquire:
-                with self.assertRaisesRegex(RuntimeError,'ORIGIN_CHANGED'):
+    def test_same_run_rejected_before_source_acquire(self):
+        with patch.object(scope,'_pending_workspace_current_source_inventory') as acquire:
+            with self.assertRaisesRegex(RuntimeError,'ORIGIN_CHANGED'):
+                scope._pending_workspace_profile(controller(),self.bridge(),self.producer('123'))
+            acquire.assert_not_called()
+
+    def compatibility(self, mutate=None):
+        current=self.inventory();original=copy.deepcopy(current)
+        for name in scope._PENDING_WORKSPACE_RECEIPT_COMPATIBILITY_FILES:
+            original[name]['sha256']='0'*64
+        if mutate:mutate(original,current)
+        p={**self.producer(),'commit':'9'*40,'sourceTree':'8'*40}
+        return p,original,current
+
+    def test_only_four_control_files_may_differ_between_real_source_trees(self):
+        p,original,current=self.compatibility()
+        with patch.object(scope,'_pending_workspace_current_source_inventory',side_effect=[current,original]) as acquire:
+            self.assertEqual(scope._pending_workspace_profile(controller(),self.bridge(),p),current)
+            self.assertEqual([c.args[1] for c in acquire.call_args_list],[p,self.bridge()['baselineProducer']])
+
+    def test_application_config_migration_and_other_controls_cannot_change(self):
+        for name in ('apps/api/src/id-business-v2/online-recharge/online-recharge.service.ts',
+                'apps/admin/src/v2/features/online-recharge/OnlineRechargePage.vue',
+                'docker-compose.aws-mysql.yml','prisma/schema.prisma',
+                'prisma/migrations/not-an-approved-migration/migration.sql',
+                'scripts/production-release/api-admin-scope.py'):
+            p,original,current=self.compatibility()
+            original[name]={'sha256':'1'*64,'mode':'100644'}
+            current[name]={'sha256':'2'*64,'mode':'100644'}
+            with self.subTest(name=name),patch.object(scope,'_pending_workspace_current_source_inventory',side_effect=[current,original]):
+                with self.assertRaisesRegex(RuntimeError,'APPLICATION_SOURCE_CHANGED'):
                     scope._pending_workspace_profile(controller(),self.bridge(),p)
-                acquire.assert_not_called()
+
+    def test_added_deleted_and_executable_mode_changes_are_rejected(self):
+        for case in ('added','deleted','application-mode','control-mode'):
+            p,original,current=self.compatibility()
+            if case=='added':current['new-file']={'sha256':'1'*64,'mode':'100644'}
+            elif case=='deleted':current.pop('scripts/production-release/api-admin-scope.py')
+            else:
+                name=('docker-compose.aws-mysql.yml' if case=='application-mode'
+                    else next(iter(scope._PENDING_WORKSPACE_RECEIPT_COMPATIBILITY_FILES)))
+                original[name]['mode']='100755'
+            with self.subTest(case=case),patch.object(scope,'_pending_workspace_current_source_inventory',side_effect=[current,original]):
+                with self.assertRaisesRegex(RuntimeError,'APPLICATION_SOURCE_CHANGED'):
+                    scope._pending_workspace_profile(controller(),self.bridge(),p)
+
+    def test_invalid_candidate_or_predecessor_archive_is_never_accepted(self):
+        p,original,current=self.compatibility()
+        for outcomes in ([RuntimeError('ONLINE_RECHARGE_ARCHIVE_INVALID')],
+                [current,RuntimeError('ONLINE_RECHARGE_ARCHIVE_INVALID')]):
+            with self.subTest(count=len(outcomes)),patch.object(scope,'_pending_workspace_current_source_inventory',side_effect=outcomes):
+                with self.assertRaisesRegex(RuntimeError,'ARCHIVE_INVALID'):
+                    scope._pending_workspace_profile(controller(),self.bridge(),p)
+
+    def test_baseline_keeps_actual_current_commit_with_control_repair_candidate(self):
+        p,original,current=self.compatibility();b=self.bridge()
+        with directories() as (old,new):
+            base=old.parent;(base/'current').symlink_to(old)
+            reader=SimpleNamespace(online_pending_workspace_measure_before=MagicMock(return_value=b))
+            d=controller(BASE=base)
+            with patch.object(scope,'_pending_workspace_reader',return_value=reader),patch.object(scope,'online_pending_workspace_bridge_shape'),patch.object(scope,'_pending_workspace_profile'):
+                self.assertEqual(scope._pending_workspace_begin(d,COMMIT,p,live=True),(old,b))
+                reader.online_pending_workspace_measure_before.assert_called_once_with(d,old,expected_commit=COMMIT)
+                b['baselineCommit']='f'*40
+                with self.assertRaisesRegex(RuntimeError,'ORIGIN_CHANGED'):
+                    scope._pending_workspace_begin(d,COMMIT,p,live=True)
+
+    def test_new_sqlite_receipt_is_checked_before_legacy_fallback_and_jobs(self):
+        for case in ('new','legacy','invalid'):
+            with self.subTest(case=case),directories() as (old,new),ExitStack() as stack:
+                b=self.bridge();b['baselineRelease']=str(old)
+                events=[];protection={'backupVerified':True,'restoreVerified':True}
+                def sqlite_receipt(*args):
+                    events.append('sqlite')
+                    if case=='invalid':raise RuntimeError('API_ADMIN_WORKSPACE_SQLITE_RECEIPT_INVALID')
+                    return None if case=='legacy' else protection
+                reader=SimpleNamespace(STATE_FILE='state.json',PROOF_FILE='proof.json',
+                    validate_proof=MagicMock(return_value=proof()),verify_running=MagicMock(),workspace_health=MagicMock(),
+                    workspace_sqlite_receipt=MagicMock(side_effect=sqlite_receipt),
+                    workspace_backup_receipt=MagicMock(side_effect=lambda *a:events.append('legacy')))
+                for name,value in (('release-manifest.json',{}),('state.json',{'baselineEvidence':{}}),('proof.json',{})):
+                    (old/name).write_text(json.dumps(value))
+                d=controller(BASE=old.parent,_onlinePendingWorkspaceProducer=self.producer())
+                (old.parent/'current').symlink_to(old)
+                stack.enter_context(patch.object(scope,'_pending_workspace_begin',return_value=(old,b)))
+                stack.enter_context(patch.object(scope,'legacy',return_value=reader))
+                for name in ('workspace_guard','release_recovery','verify_permission_seed','require_fresh_resources',
+                        'workspace_files','workspace_origin'):
+                    stack.enter_context(patch.object(scope,name,return_value={'source':old}))
+                stack.enter_context(patch.object(scope,'snapshot',return_value=b['services']))
+                stack.enter_context(patch.object(scope.shutil,'disk_usage',return_value=SimpleNamespace(free=7*1024**3)))
+                jobs=stack.enter_context(patch.object(scope,'jobs_idle',side_effect=lambda *a,**k:events.append('jobs') or {}))
+                if case=='invalid':
+                    with self.assertRaisesRegex(RuntimeError,'SQLITE_RECEIPT_INVALID'):scope.baseline(d,COMMIT)
+                    jobs.assert_not_called();reader.workspace_backup_receipt.assert_not_called()
+                    self.assertEqual(events,['sqlite'])
+                else:
+                    scope.baseline(d,COMMIT)
+                    self.assertEqual(events,['sqlite','legacy','jobs'] if case=='legacy' else ['sqlite','jobs'])
+                reader.workspace_sqlite_receipt.assert_called_once_with(d,old,proof(),{'baselineEvidence':{}},{})
 
     def test_each_executed_helper_still_bound_to_complete_archive(self):
         for name in scope._PENDING_WORKSPACE_CONTROL_NAMES:
@@ -3056,6 +3153,69 @@ class PendingWorkspaceStageTests(unittest.TestCase):
             with self.subTest(name=name),patch.object(scope,'_pending_workspace_current_source_inventory',return_value=rows):
                 with self.assertRaisesRegex(RuntimeError,'EXECUTOR_SOURCE_CHANGED'):
                     scope._pending_workspace_profile(controller(),self.bridge(),self.producer())
+
+    def compatibility_readback(self,mutation=None):
+        with tempfile.TemporaryDirectory(prefix='compat-origin-',dir=RUNTIME) as name,ExitStack() as stack:
+            base=Path(name);directory=base/'releases'/'new';directory.mkdir(parents=True,mode=0o700)
+            (base/'current').symlink_to(directory)
+            p={**self.producer(),'commit':'9'*40,'sourceTree':'8'*40};b=self.bridge()
+            b['baselineRelease']=str(base/'releases'/('20261010T120000Z-'+COMMIT[:12]))
+            image_states=states(True)
+            images={n:{'imageId':image_states[n]['image'],'reference':image_states[n]['reference']} for n in scope.UPDATED}
+            build={'images':images,'preflightBytesSha256':'6'*64}
+            record={'baselineEvidence':{'onlinePendingWorkspaceOrigin':copy.deepcopy(b)},'before':copy.deepcopy(b['services']),
+                'buildProofSha256':scope.fingerprint(build),'configurationBefore':copy.deepcopy(b['configurationAfter']),
+                'configurationAfter':copy.deepcopy(b['configurationAfter']),'migration':{**b['migrationState'],'performed':False},
+                'after':image_states}
+            manifest={'commit':p['commit'],'sourceTree':p['sourceTree'],'previousRelease':b['baselineRelease'],
+                'previousCommit':COMMIT,'previousManifestSha256':b['manifestBytesSha256'],'migrationPerformed':False}
+            if mutation:mutation(record,build,manifest,image_states)
+            for n,value in ((scope.STATE_FILE,record),(scope.PROOF_FILE,build),('release-manifest.json',manifest)):
+                path=directory/n;path.write_text(json.dumps(value));path.chmod(0o600)
+            reader=SimpleNamespace(WORKSPACE=True,online_pending_workspace_cold=MagicMock(return_value=b))
+            stack.enter_context(patch.object(scope,'_pending_workspace_reader',return_value=reader))
+            profile=stack.enter_context(patch.object(scope,'_pending_workspace_profile'))
+            before=stack.enter_context(patch.object(scope,'online_pending_workspace_preflight_bytes',return_value=b'original actual F'))
+            binding=stack.enter_context(patch.object(scope,'online_pending_workspace_preflight_binding'))
+            shape=stack.enter_context(patch.object(scope,'online_pending_workspace_build_shape'))
+            stack.enter_context(patch.object(scope,'snapshot',return_value=image_states))
+            stack.enter_context(patch.object(scope,'configuration_hashes',return_value=b['configurationAfter']))
+            result=scope._pending_workspace_compatibility_readback_origin(controller(BASE=base),directory,
+                expected_commit=p['commit'],producer=p)
+            self.assertEqual(result,b)
+            profile.assert_called_once_with(unittest.mock.ANY,b,p)
+            reader.online_pending_workspace_cold.assert_called_once_with(unittest.mock.ANY,Path(b['baselineRelease']),expected_commit=COMMIT)
+            before.assert_called_once_with(unittest.mock.ANY,producer=p,expected_sha256=build['preflightBytesSha256'])
+            binding.assert_called_once_with(unittest.mock.ANY,b'original actual F',producer=p,bridge=b)
+            shape.assert_called_once_with(unittest.mock.ANY,build,producer=p,bridge=b,preflight_raw=b'original actual F')
+
+    def test_control_repair_readback_keeps_old_actual_q_and_new_actual_f_proof(self):
+        self.compatibility_readback()
+
+    def test_control_repair_readback_rejects_changed_record_manifest_and_runtime(self):
+        changes=(lambda r,p,m,s:r['before'].clear(),lambda r,p,m,s:r.update(buildProofSha256='0'*64),
+            lambda r,p,m,s:r['configurationBefore'].clear(),lambda r,p,m,s:r['configurationAfter'].clear(),
+            lambda r,p,m,s:m.update(commit=COMMIT),lambda r,p,m,s:m.update(sourceTree=TREE),
+            lambda r,p,m,s:m.update(previousManifestSha256='0'*64),lambda r,p,m,s:m.update(migrationPerformed=True),
+            lambda r,p,m,s:r['migration'].update(performed=True),
+            lambda r,p,m,s:r['migration'].update(sha256='0'*64),
+            lambda r,p,m,s:s[next(iter(scope.PRESERVED))].update(image='sha256:'+'0'*64),
+            lambda r,p,m,s:p['images']['api'].update(imageId='sha256:'+'0'*64),
+            lambda r,p,m,s:p['images']['admin'].update(reference='unrelated-image'))
+        for i,change in enumerate(changes):
+            with self.subTest(case=i),self.assertRaisesRegex(RuntimeError,'AFTER_BIT_READBACK_CHANGED'):
+                self.compatibility_readback(change)
+
+    def test_readback_keeps_original_reader_for_same_source(self):
+        with directories() as (old,new):
+            (old.parent/'current').symlink_to(new)
+            (new/scope.STATE_FILE).write_text(json.dumps({'baselineEvidence':{'onlinePendingWorkspaceOrigin':self.bridge()}}))
+            reader=SimpleNamespace(online_pending_workspace_readback_origin=MagicMock(return_value=self.bridge()))
+            d=controller(BASE=old.parent,_onlinePendingWorkspaceProducer=self.producer())
+            with patch.object(scope,'_pending_workspace_reader',return_value=reader),patch.object(scope,'_pending_workspace_profile'),patch.object(scope,'_pending_workspace_readback',return_value={'actual':'Q'}),patch.object(scope,'_pending_workspace_compatibility_readback_origin') as compat:
+                self.assertEqual(scope.readback(d,COMMIT),{'actual':'Q'})
+                compat.assert_not_called()
+                reader.online_pending_workspace_readback_origin.assert_called_once_with(d,new,expected_commit=COMMIT,producer=self.producer())
 
     def test_only_initial_kind_seven_services_and_applied_state_shape(self):
         scope.online_pending_workspace_bridge_shape(controller(BASE=Path('/opt/id-business-v2')),self.bridge())
