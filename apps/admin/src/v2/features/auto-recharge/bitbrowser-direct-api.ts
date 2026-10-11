@@ -27,7 +27,7 @@ const messages = {
     '官网会话已登录，但页面登录状态尚未就绪，请检查原窗口；本次未付款。',
   bitbrowser_recovery_timeout: '加载恢复已达到时间上限，请检查原窗口后重试。',
   bitbrowser_owned_profile_missing:
-    '原比特窗口已删除或无法核对，本次未新建窗口，请检查原窗口资料。',
+    '无法确认原比特窗口已删除，本次未重建，请检查比特浏览器连接和窗口资料。',
   bitbrowser_owned_profile_unverified: '无法确认原比特窗口属于本次账号，本次已停止。',
   proxy_probe_unverified: '无法确认代理可正常访问官网，本次已停止，请检查原窗口。',
   bitbrowser_profile_close_unverified: '无法确认失败窗口已关闭，本次已停止，未重新打开窗口。',
@@ -109,6 +109,54 @@ function catalogRows(value: unknown): Record<string, unknown>[] {
     if (!value || typeof value !== 'object') break;
     const document = value as Record<string, unknown>;
     value = document.list ?? document.data;
+  }
+  throw new DirectBrowserError('bitbrowser_direct_protocol');
+}
+export async function directBrowserProfileExists(
+  api: ReturnType<typeof directBrowserApi>,
+  profileId: string,
+  remaining: () => number
+) {
+  const seen = new Set<string>();
+  let expectedTotal: number | undefined;
+  for (let page = 0; page <= 20; page++) {
+    const response = await api.post('/browser/list', { page, pageSize: 100 }, remaining());
+    let metadata: unknown = response;
+    for (let depth = 0; depth < 4 && metadata && typeof metadata === 'object'; depth++) {
+      const document = metadata as Record<string, unknown>;
+      if (document.total !== undefined) {
+        const total = document.total;
+        if (
+          typeof total !== 'number' ||
+          !Number.isSafeInteger(total) ||
+          total < 0 ||
+          total > 2000 ||
+          (expectedTotal !== undefined && total !== expectedTotal)
+        )
+          throw new DirectBrowserError('bitbrowser_direct_protocol');
+        expectedTotal = total;
+      }
+      metadata = document.data;
+    }
+    const rows = catalogRows(response);
+    if (rows.length > 100) throw new DirectBrowserError('bitbrowser_direct_protocol');
+    for (const row of rows) {
+      if (
+        !row ||
+        typeof row.id !== 'string' ||
+        !/^[a-fA-F0-9]{32}$/.test(row.id) ||
+        seen.has(row.id)
+      )
+        throw new DirectBrowserError('bitbrowser_direct_protocol');
+      seen.add(row.id);
+      if (row.id === profileId) return true;
+    }
+    if (seen.size > 2000) throw new DirectBrowserError('bitbrowser_direct_protocol');
+    if (rows.length < 100) {
+      if (expectedTotal !== undefined && seen.size !== expectedTotal)
+        throw new DirectBrowserError('bitbrowser_direct_protocol');
+      return false;
+    }
   }
   throw new DirectBrowserError('bitbrowser_direct_protocol');
 }

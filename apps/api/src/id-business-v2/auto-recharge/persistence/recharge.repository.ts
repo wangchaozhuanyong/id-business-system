@@ -66,7 +66,8 @@ export class RechargeRepository {
     tx: V2CommandTransaction,
     ownerId: string,
     accountKey: string,
-    excludeId: string
+    excludeId: string,
+    allowDeletedProfile = false
   ) {
     let cursor: string | undefined;
     // 窗口归属不受列表的30条限制。查询有界，未查完时拒绝把未知当作可新建。
@@ -83,7 +84,12 @@ export class RechargeRepository {
         take: 30,
         ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {})
       });
-      const profile = findRetainedRechargeBrowserProfile(jobs, ownerId, accountKey);
+      const profile = findRetainedRechargeBrowserProfile(
+        jobs,
+        ownerId,
+        accountKey,
+        allowDeletedProfile
+      );
       if (profile) return profile;
       if (jobs.length < 30) return undefined;
       cursor = jobs.at(-1)!.id;

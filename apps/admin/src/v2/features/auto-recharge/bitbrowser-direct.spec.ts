@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   directBrowserApi,
   directBrowserCatalog,
+  directBrowserProfileExists,
   directProfileOptions,
   localBrowserUrl
 } from './bitbrowser-direct-api';
@@ -98,20 +99,103 @@ describe('直连验证码只用于明确的身份验证器挑战', () => {
     expect(click).not.toHaveBeenCalled();
   });
 });
+describe('原窗口不存在的完整列表证明', () => {
+  const profileId = 'a'.repeat(32);
+  const remaining = () => 10_000;
+  it('读取完整分页，目标在下一页时不误判已删除', async () => {
+    const post = vi
+      .fn()
+      .mockResolvedValueOnce({
+        data: {
+          list: Array.from({ length: 100 }, (_, i) => ({ id: i.toString(16).padStart(32, '0') }))
+        }
+      })
+      .mockResolvedValueOnce({ data: { list: [{ id: profileId }] } });
+    expect(await directBrowserProfileExists({ post }, profileId, remaining)).toBe(true);
+    expect(post).toHaveBeenLastCalledWith('/browser/list', { page: 1, pageSize: 100 }, 10_000);
+  });
+  it('只有完整列表不含原ID才允许重建', async () => {
+    const post = vi.fn().mockResolvedValue({ data: { list: [] } });
+    expect(await directBrowserProfileExists({ post }, profileId, remaining)).toBe(false);
+  });
+  it.each([{}, { data: null }, { data: { list: [{ id: 'invalid' }] } }])(
+    '不明确列表不当作删除证明 %j',
+    async (response) => {
+      const post = vi.fn().mockResolvedValue(response);
+      await expect(directBrowserProfileExists({ post }, profileId, remaining)).rejects.toThrow();
+    }
+  );
+  it('分页忽略页号重复返回时停止，不能误判不存在', async () => {
+    const post = vi.fn().mockResolvedValue({
+      data: {
+        list: Array.from({ length: 100 }, (_, i) => ({ id: i.toString(16).padStart(32, '0') }))
+      }
+    });
+    await expect(directBrowserProfileExists({ post }, profileId, remaining)).rejects.toThrow();
+    expect(post).toHaveBeenCalledTimes(2);
+  });
+  it.each([1, '0', null, 2001])('窗口总数与清单不一致时不能认定不存在：%s', async (total) => {
+    const post = vi.fn().mockResolvedValue({ data: { list: [], total } });
+    await expect(directBrowserProfileExists({ post }, profileId, remaining)).rejects.toThrow();
+  });
+  it('网络失败保留错误，不能当作窗口不存在', async () => {
+    const post = vi.fn().mockRejectedValue(new Error('synthetic-offline'));
+    await expect(directBrowserProfileExists({ post }, profileId, remaining)).rejects.toThrow(
+      'synthetic-offline'
+    );
+  });
+});
 describe('官网已登录页面与真实代理的独立证据', () => {
-  function official(controls: object[] = [], title = 'ChatGPT') {
+  function official(
+    controls: object[] = [],
+    title = 'ChatGPT',
+    composers: object[] = [composer()]
+  ) {
     vi.stubGlobal('location', { protocol: 'https:', hostname: 'chatgpt.com' });
-    vi.stubGlobal('document', { readyState: 'loading', title, querySelectorAll: () => controls });
-    vi.stubGlobal('getComputedStyle', () => ({ visibility: 'visible' }));
+    vi.stubGlobal('document', {
+      readyState: 'loading',
+      title,
+      querySelectorAll: (selector: string) =>
+        selector.includes('accounts-profile-button') ? controls : composers
+    });
+    vi.stubGlobal('getComputedStyle', () => ({
+      visibility: 'visible',
+      display: 'block',
+      pointerEvents: 'auto'
+    }));
   }
   function control(visible = true, disabled = false) {
     return {
       getClientRects: () => (visible ? [{}] : []),
+      closest: () => null,
       matches: (selector: string) => (selector.includes(':disabled') ? disabled : true)
     };
   }
-  it('观察到的多个个人资料菜单均可作为正向登录态，资源未完成不阻塞', () => {
+  function composer(editable = true, busy = false, hidden = false) {
+    const region = { querySelectorAll: () => (busy ? [control()] : []) };
+    return {
+      getClientRects: () => [{}],
+      isContentEditable: editable,
+      closest: (selector: string) => (selector === 'form' ? region : hidden ? {} : null),
+      matches: () => false,
+      parentElement: region
+    };
+  }
+  it('账号和输入框均可用才交付，无关资源未完成不阻塞', () => {
     official([control(), control()]);
+    expect(inspectLoggedInPage()).toEqual({ kind: 'page_ready' });
+  });
+  it.each([
+    { composers: [] },
+    { composers: [composer(false)] },
+    { composers: [composer(true, true)] },
+    { composers: [composer(true, false, true)] }
+  ])('账号菜单出现但输入框缺失、不可编辑、转圈或被弹窗遮挡时继续等待', ({ composers }) => {
+    official([control()], 'ChatGPT', composers);
+    expect(inspectLoggedInPage()).toEqual({ kind: 'page_loading' });
+  });
+  it('输入框可编辑时，空输入的禁用发送按钮不阻止就绪', () => {
+    official([control()], 'ChatGPT', [composer()]);
     expect(inspectLoggedInPage()).toEqual({ kind: 'page_ready' });
   });
   it.each([{ controls: [] }, { controls: [control(false)] }, { controls: [control(true, true)] }])(

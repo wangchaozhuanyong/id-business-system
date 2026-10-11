@@ -1020,7 +1020,10 @@ export function useAutoRecharge(options: { clearPaymentValidation?: () => void }
       launch = await rechargeApi.startBitBrowserOpen({
         id,
         windowName: windowName.value.trim(),
-        directMode: true
+        directMode: true,
+        ...(loginMethod.value === 'password'
+          ? { chatgptAccountId: selectedBankAccountId.value }
+          : {})
       });
       currentId.value = id;
       await directOpen.start(launch, credential, windowName.value.trim());

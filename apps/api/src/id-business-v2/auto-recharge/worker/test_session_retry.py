@@ -891,6 +891,7 @@ class WindowRetryTests(unittest.IsolatedAsyncioTestCase):
         self.job.original_checkout_identifier = 'oaics_previous_job'
         self.job.owned_profile = {'profileId': 'a' * 32, 'accountKey': 'c' * 64,
                                   'sourceJobId': '22222222-2222-4222-8222-222222222222'}
+        self.client.list_profile_ids.return_value = {'a' * 32}
         self.client.post.return_value = {'id': 'a' * 32}
         with patch.object(bitbrowser_retry, 'reuse_owned_profile', AsyncMock(return_value=self.target)):
             result, flow, resumed = await self.execute([], continuation=[{
@@ -1132,8 +1133,39 @@ class WindowRetryTests(unittest.IsolatedAsyncioTestCase):
         restore.assert_awaited_once()
         sync.assert_awaited_once_with(page, self.target, identity, budget=restore.call_args.kwargs['budget'])
         self.assertEqual(self.context.add_cookies.await_count, 1)
+        self.context.route_web_socket.assert_not_awaited()
         flow.assert_not_awaited()
         self.assert_same_profile(1)
+
+    async def test_open_browser_allows_bootstrap_session_writes_and_keeps_payment_blocked(self):
+        self.job.payload['mode'] = 'open_browser'
+        page = MagicMock(url='about:blank')
+        self.context.pages = [page]
+        identity = {'session_status': 'restored', 'account_matched': True, 'current_plan': 'plus'}
+        async def restored(*args, **kwargs):
+            login_guard = self.context.route.await_args_list[-1].args[1]
+            for method, url, blocked in (
+                    ('POST', 'https://chatgpt.com/api/auth/session', False),
+                    ('POST', 'https://chatgpt.com/backend-api/sentinel/req', False),
+                    ('POST', 'https://chatgpt.com/backend-api/payments/checkout', True),
+                    ('POST', 'https://api.stripe.com/v1/payment_methods', True)):
+                route = AsyncMock()
+                route.request = SimpleNamespace(method=method, url=url)
+                await login_guard(route)
+                if blocked:
+                    route.abort.assert_awaited_once_with('blockedbyclient')
+                    route.fallback.assert_not_awaited()
+                else:
+                    route.fallback.assert_awaited_once()
+                    route.abort.assert_not_awaited()
+            return None, identity
+        with (patch('browser_checkout.restore_session_with_refresh', AsyncMock(side_effect=restored)),
+              patch('browser_checkout.synchronize_login_page', AsyncMock(return_value=(None, identity)))):
+            result, flow, _ = await self.execute([])
+        self.assertEqual(result['status'], 'session_ready')
+        self.context.route_web_socket.assert_not_awaited()
+        self.context.unroute.assert_awaited_once()
+        flow.assert_not_awaited()
 
     async def test_open_browser_ui_failure_is_distinct_and_never_rotates_ip(self):
         self.job.payload['mode'] = 'open_browser'
@@ -1230,6 +1262,7 @@ class WindowRetryTests(unittest.IsolatedAsyncioTestCase):
     async def test_manual_owned_window_network_recovery_keeps_bound_id(self):
         profile = 'd' * 32
         self.job.owned_profile = {'profileId': profile, 'accountKey': 'c' * 64}
+        self.client.list_profile_ids.return_value = {profile}
         def post(path, body):
             return {'id': profile} if path == '/browser/detail' else {}
         self.client.post.side_effect = post

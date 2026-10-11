@@ -390,6 +390,33 @@ class BitBrowserConnectorTests(unittest.TestCase):
         with self.assertRaises(Stop):
             client.list_profile_ids()
 
+    def test_profile_inventory_rejects_incomplete_counts_duplicates_and_non_hex_ids(self):
+        client = connector.BitBrowserClient("http://127.0.0.1:54345", "b" * 32)
+        for data in ({"list": [], "total": 1},
+                     {"list": [{"id": "a" * 32}, {"id": "a" * 32}]},
+                     {"list": [{"id": "z" * 32}]},
+                     {"list": [], "total": True},
+                     {"list": [], "total": 2001}):
+            with self.subTest(data=data), self.assertRaises(Stop):
+                client.post = MagicMock(return_value=data)
+                client.list_profile_ids()
+        rows = [{"id": format(i, "032x")} for i in range(100)]
+        client.post = MagicMock(side_effect=[{"list": rows, "total": 100},
+                                            {"list": [], "total": 101}])
+        with self.assertRaises(Stop):
+            client.list_profile_ids()
+        client.post = MagicMock(return_value={"list": rows})
+        with self.assertRaises(Stop):
+            client.list_profile_ids()
+
+    def test_profile_inventory_checks_all_pages_before_confirming_absence(self):
+        client = connector.BitBrowserClient("http://127.0.0.1:54345", "b" * 32)
+        rows = [{"id": format(i, "032x")} for i in range(100)]
+        client.post = MagicMock(side_effect=[{"list": rows, "total": 101},
+                                            {"list": [{"id": "a" * 32}], "total": 101}])
+        self.assertIn("a" * 32, client.list_profile_ids())
+        self.assertEqual([call.args[1]["page"] for call in client.post.call_args_list], [0, 1])
+
     def test_currency_amount_and_tax_guards_run_before_payment(self):
         job = connector.LocalJob(payload())
         job.progress = MagicMock()

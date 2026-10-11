@@ -645,4 +645,83 @@ describe('本机任务持久化边界', () => {
       })
     );
   });
+
+  it.each([true, false])('密码仅登录绑定所选账号，原窗口提示可有可无（%s）', async (hasProfile) => {
+    const accountId = '44444444-4444-4444-8444-444444444444';
+    const accountKey = 'a'.repeat(64);
+    const profile = { sourceJobId, profileId: 'b'.repeat(32), accountKey };
+    const repository = {
+      lock: vi.fn(),
+      findJob: vi.fn().mockResolvedValue(null),
+      findRunningJob: vi.fn().mockResolvedValue(null),
+      retainedProfileForAccount: vi.fn().mockResolvedValue(hasProfile ? profile : undefined),
+      createJob: vi.fn(async (_tx, data) => data)
+    };
+    const accounts = {
+      requireRechargeInspection: vi.fn().mockResolvedValue({
+        id: accountId,
+        officialAccountKey: accountKey
+      })
+    };
+    const service = new RechargeLocalService(
+      repository as never,
+      {} as never,
+      {
+        runtime: vi.fn().mockResolvedValue({
+          connectorUrl: 'http://127.0.0.1:55322',
+          connectorToken: '',
+          localApiUrl: 'http://127.0.0.1:54345',
+          localApiToken: '',
+          groupName: 'synthetic',
+          tagName: 'synthetic',
+          proxyType: 'http',
+          dynamicProxyUrl: ''
+        })
+      } as never,
+      {} as never,
+      { execute: vi.fn(async (work) => work({})) } as never,
+      { append: vi.fn() } as never,
+      accounts as never
+    );
+    const launch = await service.startOpen(
+      { id, windowName: '测试', chatgptAccountId: accountId },
+      operator
+    );
+    expect(accounts.requireRechargeInspection).toHaveBeenCalledWith({}, accountId);
+    expect(repository.retainedProfileForAccount).toHaveBeenCalledWith(
+      {},
+      operator.id,
+      accountKey,
+      id,
+      true
+    );
+    expect(repository.createJob).toHaveBeenCalledWith(
+      {},
+      expect.objectContaining({
+        accountKey,
+        chatgptAccountId: accountId,
+        result: expect.objectContaining({ mode: 'open_browser', payment_requests_sent: 0 })
+      })
+    );
+    expect(launch.accountKey).toBe(accountKey);
+    expect(launch.ownedProfile).toEqual(hasProfile ? profile : undefined);
+  });
+
+  it('仅登录所选账号编号严格校验，不接收邮箱或敏感资料', () => {
+    expect(
+      validateRechargeBitBrowserOpenStart({ id, windowName: '测试', chatgptAccountId: sourceJobId })
+    ).toEqual({ id, windowName: '测试', chatgptAccountId: sourceJobId });
+    for (const accountId of ['', 'invalid', null, 123]) {
+      expect(() =>
+        validateRechargeBitBrowserOpenStart({ id, windowName: '测试', chatgptAccountId: accountId })
+      ).toThrow('请求参数无效');
+    }
+    expect(() =>
+      validateRechargeBitBrowserOpenStart({
+        id,
+        windowName: '测试',
+        email: 'synthetic@example.invalid'
+      })
+    ).toThrow('请求参数无效');
+  });
 });

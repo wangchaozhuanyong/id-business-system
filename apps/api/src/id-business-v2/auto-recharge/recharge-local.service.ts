@@ -16,6 +16,7 @@ import {
 import { RechargeAddressRepository } from './persistence/recharge-address.repository';
 import { RechargeRepository } from './persistence/recharge.repository';
 import { RechargeService } from './recharge.service';
+import { startRechargeOpenProfile } from './recharge-profile-recovery';
 import { localBitBrowserLaunchOptions } from './recharge-browser-options';
 import { RechargeSettingsService } from './recharge-settings.service';
 import { RechargeProxyService } from './recharge-proxy.service';
@@ -110,7 +111,13 @@ export class RechargeLocalService {
             : null;
         const accountKey = account?.officialAccountKey;
         const ownedProfile = accountKey
-          ? await this.repository.retainedProfileForAccount(tx, operator.id, accountKey, input.id)
+          ? await this.repository.retainedProfileForAccount(
+              tx,
+              operator.id,
+              accountKey,
+              input.id,
+              true
+            )
           : undefined;
         const job = await this.repository.createJob(tx, {
           cardId: card?.id ?? null,
@@ -224,43 +231,22 @@ export class RechargeLocalService {
     const input = validateRechargeBitBrowserOpenStart(value);
     const runtime = await this.settings.runtime(operator.id, false, input.directMode === true);
     const agentToken = randomBytes(32).toString('hex');
-    await this.transactions.execute(
+    const result = await this.transactions.execute(
       async (tx) => {
         await this.repository.lock(tx);
         const previous = await this.repository.findJob(tx, input.id);
         if (previous) throw new ConflictException('本次连接凭据已失效，请重新开始');
         const active = await this.repository.findRunningJob(tx);
         if (active) throw new ConflictException('已有一笔充值任务执行中');
-        const job = await this.repository.createJob(tx, {
-          id: input.id,
+        return startRechargeOpenProfile({
+          tx,
+          request: input,
           ownerId: operator.id,
-          plan: 'plus',
-          action: 'bitbrowser',
-          state: 'running',
           nonceHash: hash(agentToken),
-          leaseUntil: new Date(Date.now() + 45 * 60000),
-          result: toV2JsonDocument({
-            status: 'waiting_local_connector',
-            stage: 'connector_dispatch',
-            mode: 'open_browser',
-            ...(input.directMode ? { transport: 'web_direct' } : {}),
-            window_name: input.windowName,
-            payment_requests_sent: 0
-          })
+          repository: this.repository,
+          accounts: this.bankAccounts,
+          audit: this.audit
         });
-        await this.audit.append(tx, {
-          userId: operator.id,
-          module: 'id_business_v2',
-          action: 'id_business_v2.auto_recharge.bitbrowser.open_window',
-          objectType: 'recharge_job',
-          objectId: job.id,
-          afterData: {
-            windowName: input.windowName,
-            mode: 'open_browser'
-          },
-          remark: '创建本机比特浏览器仅登录窗口任务'
-        });
-        return { job };
       },
       {
         changedScopes: ['auto-recharge'],
@@ -272,6 +258,8 @@ export class RechargeLocalService {
     return {
       id: input.id,
       mode: 'open_browser' as const,
+      ...(result.accountKey ? { accountKey: result.accountKey } : {}),
+      ...(result.ownedProfile ? { ownedProfile: result.ownedProfile } : {}),
       connectorUrl: normalizeV2RechargeConnectorUrl(runtime.connectorUrl),
       connectorToken: runtime.connectorToken,
       agentToken,

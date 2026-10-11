@@ -136,7 +136,7 @@
         {{ job.result.session_refresh_count }} 次；{{
           job.action === 'server'
             ? '恢复期间沿用原窗口和代理，仍失败时停止本次任务。'
-            : '刷新仍失败才会清理并重建窗口。'
+            : '网络恢复沿用原窗口；确认原窗口不存在且尚未付款时才重建。'
         }}
       </p>
       <p v-if="job.result.quote_refresh_count" class="recharge-note" role="status">
