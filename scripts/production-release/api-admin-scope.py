@@ -1265,10 +1265,12 @@ def pending_online_candidate_guard(d, directory, context, candidate):
     d.require(type(candidate) is tuple and len(candidate) == 5,
               'API_ADMIN_PENDING_ONLINE_RECOVERY_REQUIRED')
     target, previous, producer, proof, proof_sha = candidate
-    d.require(WORKSPACE and context['version'] == 2 and not context['priorPublications']
+    predecessor = (Path(context['priorPublications'][0]['release']) if context['priorPublications']
+                   else Path(context['baselineRelease']))
+    d.require(WORKSPACE and context['version'] == 2
               and pending_online_declaration_entry(d) == 'STAGE'
               and pending_online_declaration_producer(d) == producer
-              and directory == target and previous == Path(context['baselineRelease'])
+              and directory == target and previous == predecessor
               and target.parent == d.BASE / 'releases' and target.resolve() == target
               and target.is_dir() and not target.is_symlink()
               and stat.S_IMODE(target.stat().st_mode) == 0o700
@@ -1285,11 +1287,27 @@ def pending_online_candidate_guard(d, directory, context, candidate):
     d.require((d.BASE / 'current').resolve() == previous,
               'API_ADMIN_PENDING_ONLINE_ORIGIN_CHANGED')
     recovery = pending_online_guard(d, previous, context)
-    seal = getattr(d, '_apiWorkspaceDeclarationDeploymentSeal', None)
-    d.require(type(seal) is dict and proof.get('pendingOnlinePreflightSha256') == seal.get('preflightBytesSha256')
-              and proof.get('declarationEquivalenceSeal') == {name: seal.get(name) for name in
-                  ('kind', 'version', 'preflightProofSha256', 'semanticSha256')},
-              'API_ADMIN_PENDING_ONLINE_ORIGIN_CHANGED')
+    if context['priorPublications']:
+        d.require(getattr(d, '_apiWorkspaceDeclarationDeploymentMeasurement', None) is None
+                  and getattr(d, '_apiWorkspaceDeclarationDeploymentSeal', None) is None,
+                  'API_ADMIN_PENDING_ONLINE_CHAIN_CHANGED')
+        _before, saved, raw = pending_online_declaration_stage_preflight(d)
+        _reader, _materials, _previous, inputs = pending_online_declaration_b_inputs(d, context, recovery,
+            producer, phase='LIVE')
+        seal = pending_online_declaration_call(d, 'declaration_equivalence_successor_seal', raw,
+            current_services=context['services'], **inputs)
+        first = context['restoredConfigurationProof']
+        d.require(saved == context and _previous == previous
+                  and proof.get('pendingOnlinePreflightSha256') == seal['preflightBytesSha256']
+                  and proof.get('declarationEquivalenceSeal') == {'kind': first['kind'], 'version': first['version'],
+                      'preflightProofSha256': fingerprint(first), 'semanticSha256': fingerprint(first['semantic'])},
+                  'API_ADMIN_PENDING_ONLINE_ORIGIN_CHANGED')
+    else:
+        seal = getattr(d, '_apiWorkspaceDeclarationDeploymentSeal', None)
+        d.require(type(seal) is dict and proof.get('pendingOnlinePreflightSha256') == seal.get('preflightBytesSha256')
+                  and proof.get('declarationEquivalenceSeal') == {name: seal.get(name) for name in
+                      ('kind', 'version', 'preflightProofSha256', 'semanticSha256')},
+                  'API_ADMIN_PENDING_ONLINE_ORIGIN_CHANGED')
     projection = pending_projection()
     runtime = {'docker-compose.aws-mysql.yml', MIGRATION_SCHEMA, MIGRATION_SEED}
     original = '.deploy/production-release/pending-original-source/'
@@ -5176,7 +5194,7 @@ def _release_locked(d, args):
         for name in IMAGE_SERVICES:
             override['services'][name] = {'image': proof['images'][name]['reference'], 'pull_policy': 'never'}
         (target / 'compose.release.json').write_text(json.dumps(override, indent=2) + '\n')
-        if pending is not None and pending['version'] == 2 and not pending['priorPublications']:
+        if pending is not None and pending['version'] == 2:
             pending_candidate = (target, previous, {'commit': args.commit, 'sourceTree': args.source_tree,
                 'workflowRunId': args.run_id, 'workflowRunAttempt': args.run_attempt}, proof, fingerprint(proof))
         require_preserved(d, previous, target, before, environment, all_services=True, online_context=retained_online)
