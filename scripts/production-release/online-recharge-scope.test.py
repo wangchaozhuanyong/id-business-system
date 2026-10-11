@@ -12,6 +12,7 @@ from pathlib import Path
 import shutil
 import sqlite3
 import subprocess
+import sys
 import tarfile
 import tempfile
 from types import SimpleNamespace
@@ -2088,7 +2089,7 @@ class ReleaseSequenceTests(unittest.TestCase):
             baseline_evidence['migrationRecovery'] = recovery['marker']
         if stage2:
             args.expected_current = COMMIT
-            baseline_evidence['onlinePendingWorkspaceOrigin'] = {'syntheticOnly':True}
+            baseline_evidence['onlinePendingWorkspaceOrigin'] = {'kind':scope.ONLINE_PENDING_WORKSPACE_KIND,'syntheticOnly':True}
             class Fence:
                 def __init__(self,*a,**kw): pass
                 def __enter__(self): events.append('sql-lock'); return self
@@ -3347,8 +3348,8 @@ class PendingWorkspaceStageTests(unittest.TestCase):
             acquire.assert_not_called()
 
 
-_AFTER_BIT_REVIEWED_COMMIT = '34a2ad26def934dcaed6bdd1e3188ca977fcdc30'
-_AFTER_BIT_REVIEWED_TREE = '32ac27855285d6f539a0fb45d34067360b601839'
+_AFTER_BIT_REVIEWED_COMMIT = '08419dcbe85212a203906c86c98e5c3ae0695d72'
+_AFTER_BIT_REVIEWED_TREE = 'b6fd81cc0c94a8e5971c5df8b2570716a13fa042'
 _AFTER_BIT_ORIGINAL_COMMIT = '31d2c6885a45817cd40d23fce8d6145bc9f18af2'
 
 
@@ -3684,7 +3685,11 @@ class AfterBitFormalTests(unittest.TestCase):
     def test_formal_b_policy_group_stage_readback_and_client(self):
         self.formal_stage(policy=True)
 
-    def formal_stage(self,policy=False):
+    def test_formal_b_guard_sqlite_stop_and_final_proof_failures_release_fences_before_any_new_api(self):
+        for failure in ('fence', 'sqlite-prepare', 'before-stop', 'stop', 'after-stop', 'confirm'):
+            with self.subTest(failure=failure): self.formal_stage(failure=failure)
+
+    def formal_stage(self,policy=False,failure=None,confirmation=None):
         with self.fixture(policy=policy) as f:
             result,raw,path=self.preflight_and_f(f);bridge=result['onlineAfterBitOrigin'];events=[]
             build=proof();build.update(kind='ONLINE_RECHARGE_AFTER_BIT_BUILD_PROOF',version=2,baselineCommit=COMMIT,
@@ -3716,18 +3721,35 @@ class AfterBitFormalTests(unittest.TestCase):
             def point(target,name):
                 events.append('point');(f.base/'current').unlink();(f.base/'current').symlink_to(target)
             class Fence:
-                def __init__(self,*a,**k):pass
-                def __enter__(self):events.append('fence');return self
-                def before_stop(self):events.append('before-stop')
-                def check(self):pass
+                def __init__(self,*a,**k):self.query=f.reader.ONLINE_AUDIT_QUERY
+                def __enter__(self):
+                    events.append('fence')
+                    if failure=='fence':raise RuntimeError('SYNTHETIC_GUARD_FAILED')
+                    return self
+                def before_stop(self):
+                    events.append('before-stop')
+                    if failure=='before-stop':raise RuntimeError('SYNTHETIC_GUARD_FAILED')
+                def check(self):
+                    if failure=='after-stop' and 'old-api-stopped' in events:raise RuntimeError('SYNTHETIC_GUARD_FAILED')
+                def confirm_stopped(self,gate):
+                    events.append('stopped-proof')
+                    if confirmation is not None:return confirmation()
+                    if failure=='confirm':raise RuntimeError('SYNTHETIC_GUARD_FAILED')
+                    return {'synthetic':True}
                 def __exit__(self,*a):events.append('unfence')
             class Gate:
                 record={'synthetic':True}
-                def stop_previous(self):events.append('old-api-stopped')
+                def stop_previous(self):
+                    events.append('old-api-stopped')
+                    if failure=='stop':raise RuntimeError('SYNTHETIC_STOP_FAILED')
                 def finish(self):events.append('finish')
-                def close(self):pass
+                def close(self):events.append('sqlite-close')
                 def abort(self):events.append('abort')
             f.reader.WorkspaceUnusedAuditBarrier=Fence;f.reader.workspace_prepare=MagicMock(return_value=Gate())
+            if failure=='sqlite-prepare':f.reader.workspace_prepare.side_effect=RuntimeError('SYNTHETIC_SQLITE_FAILED')
+            if failure is not None:
+                def rollback(*a,**k):events.append('rollback');return True,{}
+                f.stack.enter_context(patch.object(scope,'rollback',side_effect=rollback))
             f.reader.source_tree=MagicMock(return_value=f.producer['sourceTree']);f.reader.audit_receipt=MagicMock(return_value=f.audit)
             f.d.__file__=str(ROOT/'scripts/production-release/remote-deploy.py');f.d.environment_values=env_values
             f.d.fresh_backup=MagicMock(return_value={'s3Verified':True,'name':'synthetic.sql.gz'})
@@ -3741,6 +3763,10 @@ class AfterBitFormalTests(unittest.TestCase):
                     'migration_database_state':MagicMock(return_value=f.recovery['state']),
                     'require_preserved':lambda *a,**k:(after if k.get('include_engine') else bridge['services'],{}),
                     'backup_receipt':MagicMock(),'workspace_backup_receipt':MagicMock(),'_pending_workspace_sqlite_receipt':MagicMock(),
+                    '_online_after_bit_unused_audit_barrier':lambda *a:Fence(),
+                    '_online_after_bit_audit_receipt':lambda d,directory,bridge,proof,manifest,record:{
+                        'afterBitAuditProtectionSha256':scope.fingerprint(record['afterBitAuditProtection']),
+                        'preservedRegistrationAuditCount':9,'auditHistoryCutoff':'2026-10-11 00:00:01.000001'},
                     'workspace_backup':MagicMock(return_value={'name':'synthetic.sqlite3.gz','s3Verified':True}),
                     'extend_environment':lambda d,old,new:(new/'.env.aws.production').write_bytes((old/'.env.aws.production').read_bytes()),
                     'snapshot':lambda *a,**k:after if k.get('include_engine') else bridge['services'],
@@ -3751,11 +3777,25 @@ class AfterBitFormalTests(unittest.TestCase):
             f.stack.enter_context(patch.object(scope.urllib.request,'urlopen',return_value=response))
             output=io.StringIO()
             with redirect_stdout(output):code=scope._release_locked(f.d,args)
+            if failure is not None:
+                self.assertEqual(code,1,output.getvalue())
+                self.assertNotIn('switch:api',events);self.assertNotIn('switch:online-recharge',events)
+                self.assertIn('unfence',events)
+                if failure not in ('fence','sqlite-prepare'):
+                    self.assertLess(events.index('unfence'),events.index('sqlite-close'))
+                    self.assertLess(events.index('sqlite-close'),events.index('rollback'))
+                    self.assertLess(events.index('rollback'),events.index('abort'))
+                self.assertNotIn('finish',events)
+                return
             self.assertEqual(code,0,output.getvalue());q=json.loads(output.getvalue())
             self.assertEqual(q['onlineAfterBitOrigin'],bridge);self.assertNotIn('onlinePendingWorkspaceOrigin',q)
             self.assertFalse(q['migrationPerformed']);self.assertEqual(q['checkCount'],49)
             self.assertEqual([e for e in events if e.startswith('switch:')],['switch:admin','switch:api','switch:online-recharge'])
             self.assertLess(events.index('old-api-stopped'),events.index('switch:api'));self.assertIn('finish',events)
+            self.assertLess(events.index('old-api-stopped'),events.index('stopped-proof'))
+            self.assertLess(events.index('stopped-proof'),events.index('unfence'))
+            self.assertEqual(q['preservedRegistrationAuditCount'],9)
+            self.assertEqual(q['afterBitAuditProtectionSha256'],scope.fingerprint({'synthetic':True}))
             f.a_reader.assert_not_called();f.d.compose.assert_any_call(unittest.mock.ANY,'up','-d','--no-deps','--no-build','--pull','never','--force-recreate','api',timeout=300)
             f.d.sync_new_table_grants.assert_called_once();self.assertEqual(f.d.point_current.call_count,1)
             # Independent Q re-enters the existing API B origin and ordinary ONLINE body.
@@ -3775,6 +3815,406 @@ class AfterBitFormalTests(unittest.TestCase):
             self.assertEqual(client_q['onlineAfterBitOrigin'],bridge)
             self.assertNotIn('onlinePendingWorkspaceOrigin',client_q);f.a_reader.assert_not_called()
 
+
+
+class AfterBitUnusedAuditBarrierTests(unittest.TestCase):
+    """Real immutable API pipe/lock factory; only external acquisition is synthetic."""
+    @contextmanager
+    def fixture(self, *, eof=False, malformed=False):
+        with tempfile.TemporaryDirectory(prefix='b-audit-', dir=RUNTIME) as temporary, ExitStack() as stack:
+            base = Path(temporary)
+            directory = base / 'releases' / ('20261011T000000Z-' + COMMIT[:12])
+            directory.mkdir(parents=True)
+            for migration in ('20261002123500_routine_audit_retention_exception', '20260830182500_mysql_trigger_service_definers'):
+                name = shared.MIGRATION_ROOT + '/' + migration + '/migration.sql'
+                dest = directory / name; dest.parent.mkdir(parents=True, exist_ok=True); dest.write_bytes((ROOT / name).read_bytes())
+            stamp = '2026-10-11T00:00:00.123456789Z'
+            identity = {'containerId': 'a' * 64, 'image': 'sha256:' + 'c' * 64, 'startedAt': stamp,
+                'startedAtSha256': hashlib.sha256(stamp.encode()).hexdigest()}
+            before = states()
+            before['api'].update({n: identity[n] for n in ('containerId', 'image', 'startedAtSha256')})
+            mysql_stamp, environment = '2026-10-10T00:00:00.000000000Z', ['SAFE_FIXTURE=1']
+            before['mysql'].update(startedAtSha256=hashlib.sha256(mysql_stamp.encode()).hexdigest(),
+                environmentSha256=scope.fingerprint(environment))
+            holder = SimpleNamespace(stopped=False, pid=0, mysql=copy.deepcopy(before['mysql']))
+            def inspect(*args, **kw):
+                cid = args[-1]
+                if cid == identity['containerId']:
+                    return json.dumps([{'Id': cid, 'Image': identity['image'], 'State': {'StartedAt': stamp,
+                        'Running': not holder.stopped, 'Pid': holder.pid}}])
+                row = holder.mysql
+                return json.dumps([{'Id': row['containerId'], 'Image': row['image'],
+                    'Config': {'Image': row['reference'], 'Env': environment}, 'State': {'StartedAt': mysql_stamp,
+                        'Status': row['status'], 'Health': {'Status': row['health']}}}])
+            d = controller(BASE=base, current_job_database=MagicMock(return_value='fixture'), run=MagicMock(side_effect=inspect),
+                service_state=MagicMock(side_effect=lambda folder, name, **kw: before[name]))
+            bridge = {name: '1' * 64 for name in scope.ONLINE_PENDING_WORKSPACE_FIELDS if name.endswith('Sha256')}
+            bridge.update(kind=scope.ONLINE_AFTER_BIT_KIND, version=1, baselineRelease=str(directory), baselineCommit=COMMIT,
+                baselineProducer={'commit': COMMIT, 'sourceTree': TREE, 'workflowRunId': '123', 'workflowRunAttempt': '1'},
+                readbackCommandId='00000000-0000-0000-0000-000000000002', initialReadbackInvocationBytesSha256='2' * 64,
+                originalWorkspace={'release': '/opt/id-business-v2/releases/20261009T000000Z-' + scope.BASELINE_COMMIT[:12], 'manifestSha256': '3' * 64},
+                migrationRecovery=scope.recovery_marker(scope.recovery_policy(d)),
+                migrationState={'name': scope.MIGRATION_NAME, 'sha256': scope.MIGRATION_IDENTITY['sha256'], 'status': 'APPLIED',
+                    'schemaVerified': True, 'appliedMigrationsSha256': '4' * 64}, services=before,
+                configurationAfter={name: '5' * 64 for name in ('docker-compose.aws-mysql.yml', 'deploy/caddy/Caddyfile.aws', scope.SCHEMA_FILE, 'compose.release.json')})
+            scope.online_after_bit_bridge_shape(d, bridge)
+            producer = {'commit': COMMIT, 'sourceTree': TREE, 'workflowRunId': '124', 'workflowRunAttempt': '1'}
+            raw = b'SYNTHETIC_OWNED_F_O'
+            build = proof(); build.update(kind='ONLINE_RECHARGE_AFTER_BIT_BUILD_PROOF', version=2,
+                baselineCommit=COMMIT, baselineOriginSha256=scope.fingerprint(bridge), preflightBytesSha256=hashlib.sha256(raw).hexdigest())
+            plan = scope._online_after_bit_audit_queries(d, shared, directory, identity)
+            rows = [{'event': event, 'timing': 'BEFORE', 'statement': statement} for event, statement in plan['expectedTriggers'].items()]
+            d.compose = MagicMock(side_effect=lambda folder, *args, **kw: holder.mysql['containerId'] if args[:3] == ('ps', '-q', 'mysql') else json.dumps(rows))
+            cutoff = '2026-10-11 00:00:01.000001'
+            frame = {'connectionId': 47, 'historicalRegistrationAuditCount': 9, 'historicalRegistrationPrefixCount': 9,
+                'historyCutoff': cutoff, 'clockBeforeCutoff': 0, 'registrationMutationCount': 0, 'onlineAuditCount': 0,
+                'tables': {name: 0 for name in shared.ONLINE_TABLES}, 'triggers': copy.deepcopy(rows)}
+            prefix = {n: copy.deepcopy(frame[n]) for n in ('connectionId', 'historicalRegistrationPrefixCount', 'historyCutoff', 'clockBeforeCutoff', 'triggers')}
+            frames_path, captured = base / 'frames.json', base / 'stdin.sql'
+            def save(): frames_path.write_text(json.dumps({'publication': frame, 'prefix': prefix}))
+            save()
+            child = ('import json,sys\n'
+                'for line in sys.stdin:\n'
+                '    with open(sys.argv[1], "a") as output: output.write(line)\n'
+                + ('    sys.exit(1)\n' if eof else '    print("{broken", flush=True)\n' if malformed else
+                   '    with open(sys.argv[2]) as source: frames=json.load(source)\n'
+                   '    key="publication" if "registrationMutationCount" in line else "prefix"\n'
+                   '    print(json.dumps(frames[key]), flush=True)\n'))
+            native, calls, processes = subprocess.Popen, [], []
+            def spawn(command, **kwargs):
+                calls.append((command, kwargs)); process = native([sys.executable, '-u', '-c', child, str(captured), str(frames_path)], **kwargs)
+                processes.append(process); return process
+            stack.enter_context(patch.object(shared.subprocess, 'Popen', side_effect=spawn))
+            stack.enter_context(patch.object(scope, '_pending_workspace_session', return_value=(bridge, producer)))
+            stack.enter_context(patch.object(scope, 'online_after_bit_preflight_bytes', return_value=raw))
+            stack.enter_context(patch.object(scope, 'online_after_bit_build_shape', return_value=build))
+            online_idle = stack.enter_context(patch.object(shared, 'online_idle'))
+            workspace_idle = stack.enter_context(patch.object(shared, 'workspace_idle'))
+            sqlite_record = {'sourceApiIdentity': {n: identity[n] for n in ('containerId', 'image', 'startedAtSha256')}, 'synthetic': True}
+            sqlite = SimpleNamespace(record=sqlite_record)
+            try:
+                yield SimpleNamespace(d=d, directory=directory, bridge=bridge, identity=identity, holder=holder, proof=build,
+                    plan=plan, frame=frame, prefix=prefix, save=save, captured=captured, calls=calls, processes=processes,
+                    stack=stack, sqlite=sqlite, online_idle=online_idle, workspace_idle=workspace_idle)
+            finally:
+                for process in processes:
+                    if not process.stdin.closed: process.stdin.close()
+                    if process.poll() is None: process.wait(timeout=3)
+                    if not process.stdout.closed: process.stdout.close()
+
+    def barrier(self, f):
+        return scope._online_after_bit_unused_audit_barrier(f.d, f.directory, f.bridge, f.proof)
+
+    def publication(self, f):
+        with self.barrier(f) as barrier:
+            barrier.before_stop(); f.holder.stopped = True; barrier.check(); receipt = barrier.confirm_stopped(f.sqlite)
+        path = f.directory / shared.WORKSPACE_SQLITE_RECEIPT
+        path.write_text(json.dumps(f.sqlite.record)); path.chmod(0o600)
+        # Production serializes the record; keep the trusted fixture session separate.
+        receipt = json.loads(json.dumps(receipt))
+        record = {'afterBitAuditProtection': receipt, 'sqliteProtectionSha256': scope.fingerprint(f.sqlite.record)}
+        manifest = {'deployedAt': '2026-10-11T00:00:02Z', 'onlineRechargePublication': {'afterBitAuditProtectionSha256': scope.fingerprint(receipt)}}
+        return manifest, record
+
+    def test_cutoff_parser_accepts_docker_nanoseconds_and_preserves_exact_time_boundary(self):
+        with self.fixture() as f:
+            def plan(stamp, cutoff):
+                identity = dict(f.identity, startedAt=stamp, startedAtSha256=hashlib.sha256(stamp.encode()).hexdigest())
+                return scope._online_after_bit_audit_queries(f.d, shared, f.directory, identity, history_cutoff=cutoff)
+            actual = plan('2026-10-11T13:37:28.606112575Z', '2026-10-11 16:42:07.011897')
+            self.assertIn('CAST(CONVERT(0x', actual['frameQuery'])
+            for fraction in ('1','12','123','1234','12345','123456','123456000'):
+                cutoff = '2026-10-11 00:00:00.' + fraction[:6].ljust(6, '0')
+                plan('2026-10-11T00:00:00.' + fraction + 'Z', cutoff)
+            for stamp, floor, ceil in (
+                    ('2026-10-11T00:00:00.123456789Z','2026-10-11 00:00:00.123456','2026-10-11 00:00:00.123457'),
+                    ('2026-10-11T00:00:00.999999999Z','2026-10-11 00:00:00.999999','2026-10-11 00:00:01.000000')):
+                with self.assertRaises(RuntimeError): plan(stamp, floor)
+                plan(stamp, ceil)
+            plan('2026-10-11T00:00:00Z', '2026-10-11 00:00:00.000000')
+            for stamp, cutoff in (
+                    ('2026-02-30T00:00:00.123456789Z','2026-10-11 00:00:00.123457'),
+                    ('2026-10-11T00:00:00.123456789Z','2026-02-30 00:00:00.123457'),
+                    ('2026-10-11T00:00:00.123456789Z','2026-10-11 00:00:00.123456789')):
+                with self.assertRaises(RuntimeError): plan(stamp, cutoff)
+
+    def test_real_first_frame_fixed_cutoff_history_and_exact_read_locks(self):
+        with self.fixture() as f:
+            barrier = self.barrier(f)
+            self.assertIs(type(barrier).__mro__[1], shared.WorkspaceUnusedAuditBarrier)
+            initial = f.plan['frameQuery']
+            with barrier:
+                self.assertIs(type(barrier.pipe), shared.WorkspacePipe)
+                self.assertEqual(barrier.connection_id, 47)
+                self.assertEqual(barrier.before['historicalRegistrationAuditCount'], 9)
+                bound = scope._online_after_bit_audit_queries(f.d, shared, f.directory, f.identity, history_cutoff=f.frame['historyCutoff'])
+                self.assertEqual(barrier.query, bound['frameQuery'])
+                barrier.check(); barrier.before_stop(); barrier.check()
+            self.assertEqual(f.captured.read_text().splitlines(), ['SET SESSION autocommit=0; SET SESSION lock_wait_timeout=10; '
+                'SET SESSION wait_timeout=240; LOCK TABLES ' + ','.join('`' + name + '` READ' for name in ('audit_logs', *shared.ONLINE_TABLES))
+                + '; ' + initial + ';', *([bound['frameQuery'] + ';'] * 3)])
+            self.assertEqual(len(f.calls), 1)
+            command, kwargs = f.calls[0]
+            self.assertEqual(command[:7], ['docker', 'exec', '-i', '-e', 'MYSQL_DATABASE=fixture', 'd' * 64, 'sh'])
+            self.assertIn('--skip-reconnect', command[-1])
+            self.assertEqual(kwargs, {'stdin': subprocess.PIPE, 'stdout': subprocess.PIPE, 'stderr': subprocess.DEVNULL})
+            self.assertTrue(barrier.pipe.process.stdin.closed and barrier.pipe.process.stdout.closed)
+            self.assertIsNotNone(barrier.pipe.process.poll())
+
+    def test_first_frame_eof_and_invalid_json_close_original_transport(self):
+        for mode in ('eof', 'malformed'):
+            with self.subTest(mode=mode), self.fixture(**{mode: True}) as f:
+                barrier = self.barrier(f)
+                with self.assertRaises((RuntimeError, ValueError)): barrier.__enter__()
+                self.assertTrue(barrier.pipe.process.stdin.closed and barrier.pipe.process.stdout.closed)
+                self.assertIsNotNone(barrier.pipe.process.poll())
+
+    def test_current_mutation_online_audit_and_every_new_business_table_reject(self):
+        for item in ('registrationMutationCount', 'onlineAuditCount', *shared.ONLINE_TABLES):
+            with self.subTest(item=item), self.fixture() as f:
+                if item in f.frame: f.frame[item] = 1
+                else: f.frame['tables'][item] = 1
+                f.save(); barrier = self.barrier(f)
+                with self.assertRaisesRegex(RuntimeError, '^ONLINE_RECHARGE_AFTER_BIT_AUDIT_GUARD_LOST$'): barrier.__enter__()
+                self.assertTrue(barrier.pipe.process.stdin.closed and barrier.pipe.process.stdout.closed)
+
+    def test_arbitrary_actual_nonzero_history_is_preserved_without_a_fixed_accepted_count(self):
+        for count in (1, 9, 137):
+            with self.subTest(count=count), self.fixture() as f:
+                f.frame.update(historicalRegistrationAuditCount=count, historicalRegistrationPrefixCount=count)
+                f.prefix['historicalRegistrationPrefixCount'] = count; f.save()
+                manifest, record = self.publication(f)
+                self.assertEqual(record['afterBitAuditProtection']['before']['historicalRegistrationAuditCount'], count)
+                self.assertEqual(scope._online_after_bit_audit_receipt(f.d, f.directory, f.bridge, f.proof, manifest, record)
+                    ['preservedRegistrationAuditCount'], count)
+
+    def test_same_connection_history_cutoff_shape_and_process_drift_reject(self):
+        for mutation in ('connection', 'history', 'prefix', 'cutoff', 'clock', 'bool', 'extra', 'dead', 'mysql'):
+            with self.subTest(mutation=mutation), self.fixture() as f, self.barrier(f) as barrier, ExitStack() as changes:
+                value = copy.deepcopy(f.frame)
+                if mutation == 'connection': value['connectionId'] += 1
+                elif mutation == 'history': value['historicalRegistrationAuditCount'] += 1
+                elif mutation == 'prefix': value['historicalRegistrationPrefixCount'] += 1
+                elif mutation == 'cutoff': value['historyCutoff'] = '2026-10-11 00:00:02.000001'
+                elif mutation == 'clock': value['clockBeforeCutoff'] = 1
+                elif mutation == 'bool': value['tables'][shared.ONLINE_TABLES[0]] = False
+                elif mutation == 'extra': value['tables']['unknown'] = 0
+                elif mutation == 'dead': changes.enter_context(patch.object(barrier.pipe.process, 'poll', return_value=1))
+                else: f.holder.mysql['containerId'] = 'e' * 64
+                with self.assertRaises(RuntimeError): barrier.check(value)
+
+    def test_future_dated_old_rows_bad_cutoff_and_changed_triggers_close_the_first_guard(self):
+        for mutation in ('future-row', 'before-boot', 'malformed', 'trigger-delete', 'trigger-update', 'trigger-extra'):
+            with self.subTest(mutation=mutation), self.fixture() as f:
+                if mutation == 'future-row': f.frame['historicalRegistrationPrefixCount'] -= 1
+                elif mutation == 'before-boot': f.frame['historyCutoff'] = '2026-10-11 00:00:00.123456'
+                elif mutation == 'malformed': f.frame['historyCutoff'] = '2026-10-11 00:00:01'
+                elif mutation == 'trigger-extra': f.frame['triggers'].append(copy.deepcopy(f.frame['triggers'][0]))
+                else: f.frame['triggers'][0 if mutation == 'trigger-delete' else 1]['statement'] += ' changed'
+                f.save(); barrier = self.barrier(f)
+                with self.assertRaises(RuntimeError): barrier.__enter__()
+                self.assertTrue(barrier.pipe.process.stdin.closed and barrier.pipe.process.stdout.closed)
+        with self.fixture() as f:
+            f.d.compose.side_effect = None; f.d.compose.return_value = '[]'
+            with self.assertRaisesRegex(RuntimeError, '^API_ADMIN_WORKSPACE_AUDIT_HISTORY_UNPROVEN$'): self.barrier(f)
+            self.assertEqual(f.calls, [])
+
+    def test_before_stop_rechecks_original_api_identity_and_stronger_deadline(self):
+        with self.fixture() as f, self.barrier(f) as barrier:
+            barrier.pipe.deadline = shared.time.monotonic() + 169
+            with self.assertRaisesRegex(RuntimeError, '^API_ADMIN_WORKSPACE_GUARD_TIMEOUT$'): barrier.before_stop()
+        with self.fixture() as f, self.barrier(f) as barrier:
+            now=shared.time.monotonic();barrier.pipe.deadline=now+170
+            with patch.object(shared.time,'monotonic',return_value=now):
+                with self.assertRaisesRegex(RuntimeError, '^API_ADMIN_WORKSPACE_GUARD_TIMEOUT$'):barrier.before_stop()
+        with self.fixture() as f, self.barrier(f) as barrier:
+            now=shared.time.monotonic();barrier.pipe.deadline=now+170.001
+            with patch.object(shared.time,'monotonic',return_value=now):barrier.before_stop()
+        with self.fixture() as f, self.barrier(f) as barrier:
+            f.holder.stopped = True
+            with self.assertRaises(RuntimeError): barrier.before_stop()
+
+    def test_stop_pid_identity_and_sqlite_bindings_are_required_before_release(self):
+        for mutation in ('running', 'pid', 'sqlite'):
+            with self.subTest(mutation=mutation), self.fixture() as f, self.barrier(f) as barrier:
+                barrier.before_stop()
+                f.holder.stopped = mutation != 'running'
+                if mutation == 'pid': f.holder.pid = 1
+                if mutation == 'sqlite': f.sqlite.record['sourceApiIdentity']['containerId'] = 'f' * 64
+                barrier.check()
+                with self.assertRaisesRegex(RuntimeError, '^ONLINE_RECHARGE_AFTER_BIT_AUDIT_GUARD_LOST$'): barrier.confirm_stopped(f.sqlite)
+                self.assertIsNone(barrier.receipt)
+
+    def test_child_exit_or_frame_drift_during_stopped_inspect_never_issues_receipt_or_starts_new_api(self):
+        original = {n:getattr(scope,n) for n in ('_pending_workspace_session','online_after_bit_preflight_bytes','online_after_bit_build_shape')}
+        for mutation in ('child-exit', 'history-drift', 'connection-drift'):
+            with self.subTest(mutation=mutation), self.fixture() as f, self.barrier(f) as barrier:
+                barrier.before_stop(); f.holder.stopped=True; barrier.check()
+                inspect = f.d.run.side_effect
+                def stopped_inspect(*args,**kw):
+                    result=inspect(*args,**kw)
+                    if args[-1]==f.identity['containerId']:
+                        if mutation=='child-exit':
+                            barrier.pipe.process.terminate();barrier.pipe.process.wait(timeout=3)
+                        elif mutation=='history-drift':
+                            f.frame['historicalRegistrationAuditCount']+=1;f.save()
+                        else:
+                            f.frame['connectionId']+=1;f.save()
+                    return result
+                f.d.run.side_effect=stopped_inspect
+                # The real guard failure reaches the existing release caller;
+                # other external release acquisition remains explicitly synthetic.
+                helper=AfterBitFormalTests();helper.addCleanup=self.addCleanup
+                with patch.multiple(scope,**original):
+                    helper.formal_stage(failure='confirm-live-guard',confirmation=lambda:barrier.confirm_stopped(f.sqlite))
+                self.assertIsNone(barrier.receipt)
+
+    def test_unknown_query_tables_legacy_predicate_and_captured_factory_query_reject_before_transport(self):
+        original, anchor = shared.ONLINE_AUDIT_QUERY, 'CONVERT(0xe887aae58aa8e6b3a8e5868c USING utf8mb4)'
+        queries = (original.replace(anchor, "'different'"), original + anchor, original.replace(anchor, anchor + ' COLLATE utf8mb4_unicode_ci'),
+            original.replace("module='online_recharge'", "module='changed'"), original + ' ')
+        for query in queries:
+            with self.subTest(query=query), self.fixture() as f, patch.object(shared, 'ONLINE_AUDIT_QUERY', query):
+                with self.assertRaises(RuntimeError): self.barrier(f)
+                self.assertEqual(f.calls, [])
+        with self.fixture() as f, patch.object(shared, 'ONLINE_TABLES', (*shared.ONLINE_TABLES, 'unknown')):
+            with self.assertRaises(RuntimeError): self.barrier(f)
+            self.assertEqual(f.calls, [])
+        with self.fixture() as f, patch.object(shared, 'WorkspaceAuditBarrier', return_value=SimpleNamespace(api_identity=f.identity, QUERY=f.plan['legacyRegistrationQuery']+' ')):
+            with self.assertRaises(RuntimeError): self.barrier(f)
+            self.assertEqual(f.calls, [])
+        globals_ = shared.WorkspaceUnusedAuditBarrier.__init__.__globals__
+        with self.fixture() as f, patch.dict(globals_, ONLINE_AUDIT_QUERY=original+' '):
+            with self.assertRaises(RuntimeError): self.barrier(f)
+            self.assertEqual(f.calls, [])
+
+    def test_future_clock_and_original_millisecond_predicate_are_exact(self):
+        with self.fixture() as f:
+            actual = shared.WorkspaceAuditBarrier(f.d, f.directory).QUERY
+            self.assertEqual(actual, f.plan['legacyRegistrationQuery'])
+            self.assertEqual(f.plan['frameQuery'].count('FROM audit_logs'), 1)
+            stamp = '2026-10-11 00:00:00.123'.encode().hex()
+            self.assertIn('IF(UTC_TIMESTAMP(6)<CAST(CONVERT(0x'+stamp+' USING utf8mb4) AS DATETIME(6)),1,', f.plan['frameQuery'])
+            f.frame['registrationMutationCount'] = 1; f.save(); barrier = self.barrier(f)
+            with self.assertRaises(RuntimeError): barrier.__enter__()
+
+    def test_independent_readback_preserves_prefix_and_permits_legitimate_later_rows(self):
+        with self.fixture() as f:
+            manifest, record = self.publication(f)
+            f.frame.update(historicalRegistrationAuditCount=21, historicalRegistrationPrefixCount=9,
+                registrationMutationCount=4, onlineAuditCount=7, tables={n: 3 for n in shared.ONLINE_TABLES}); f.save()
+            result = scope._online_after_bit_audit_receipt(f.d, f.directory, f.bridge, f.proof, manifest, record)
+            self.assertEqual(result['preservedRegistrationAuditCount'], 9)
+            self.assertEqual(result['auditHistoryCutoff'], f.frame['historyCutoff'])
+            self.assertEqual(result['afterBitAuditProtectionSha256'], scope.fingerprint(record['afterBitAuditProtection']))
+            self.assertEqual(f.online_idle.call_count, 2); self.assertEqual(f.workspace_idle.call_count, 2)
+            final = f.captured.read_text().splitlines()[-1]
+            self.assertNotIn('registrationMutationCount', final); self.assertNotIn('online_recharge_cards', final)
+            self.assertIn('historicalRegistrationPrefixCount', final)
+
+    def test_readback_history_deletion_clock_trigger_or_connection_drift_still_reject(self):
+        for mutation in ('history', 'clock', 'trigger', 'connection'):
+            with self.subTest(mutation=mutation), self.fixture() as f:
+                manifest, record = self.publication(f)
+                if mutation == 'history': f.prefix['historicalRegistrationPrefixCount'] -= 1
+                elif mutation == 'clock': f.prefix['clockBeforeCutoff'] = 1
+                elif mutation == 'trigger': f.prefix['triggers'][0]['statement'] += ' altered'
+                else: f.prefix['connectionId'] = 0
+                f.save()
+                with self.assertRaises(RuntimeError): scope._online_after_bit_audit_receipt(f.d, f.directory, f.bridge, f.proof, manifest, record)
+                self.assertTrue(f.processes[-1].stdin.closed and f.processes[-1].stdout.closed)
+
+    def test_readback_current_online_or_workspace_activity_rejects_without_fake_zeros(self):
+        for guard in ('online_idle', 'workspace_idle'):
+            with self.subTest(guard=guard), self.fixture() as f:
+                manifest, record = self.publication(f)
+                getattr(f, guard).side_effect = RuntimeError('CURRENT_TASK_ACTIVE')
+                before = len(f.calls)
+                with self.assertRaisesRegex(RuntimeError, 'CURRENT_TASK_ACTIVE'):
+                    scope._online_after_bit_audit_receipt(f.d, f.directory, f.bridge, f.proof, manifest, record)
+                self.assertEqual(len(f.calls), before)
+
+    def test_readback_real_idle_guards_accept_completed_rows_and_reject_each_active_state(self):
+        online_idle, workspace_idle = shared.online_idle, shared.workspace_idle
+        for active in (None, 'queued', 'running', 'task-lease', 'card-lease', 'engine-active', 'pending-registration', 'running-registration'):
+            with self.subTest(active=active), self.fixture() as f, ExitStack() as checks:
+                manifest, record = self.publication(f)
+                volume = f.directory / 'sqlite'; volume.mkdir()
+                with sqlite3.connect(volume/'database.db') as db:
+                    db.execute('CREATE TABLE registration_tasks (status TEXT)')
+                    db.executemany('INSERT INTO registration_tasks VALUES (?)', [('completed',),('cancelled',),('failed',)])
+                    if active in ('pending-registration', 'running-registration'):
+                        db.execute('INSERT INTO registration_tasks VALUES (?)', (active.split('-')[0],))
+                run = f.d.run.side_effect
+                f.d.run.side_effect = lambda *args,**kw: (json.dumps([{'Mountpoint':str(volume)}])
+                    if args[:3] == ('docker','volume','inspect') else run(*args,**kw))
+                state = f.d.service_state.side_effect
+                f.d.service_state.side_effect = lambda folder,name,**kw: (states(True)[name]
+                    if name == shared.ONLINE_SERVICE else state(folder,name,**kw))
+                checks.enter_context(patch.dict(workspace_idle.__globals__,workspace_volume=MagicMock(return_value={'status':'PRESENT','name':'fixture'})))
+                checks.enter_context(patch.object(shared,'online_idle',online_idle))
+                checks.enter_context(patch.object(shared,'workspace_idle',workspace_idle))
+                checks.enter_context(patch.dict(online_idle.__globals__,online_reader=MagicMock(return_value=scope)))
+                checks.enter_context(patch.object(shared,'jobs_idle',return_value={}))
+                checks.enter_context(patch.object(scope,'workspace_guard',return_value={}))
+                checks.enter_context(patch.object(scope,'database_read',side_effect=lambda d,folder,query:{'busy':int(
+                    active in ('queued','running','task-lease') if 'FROM online_recharge_tasks' in query else active=='card-lease')}))
+                engine = shared.online_engine_idle
+                def engine_check(d,metadata):
+                    with patch.object(d,'run',return_value=json.dumps({'ready':True,'mode':'enabled',
+                            'activeTasks':int(active=='engine-active'),'stopping':False,'rpcConnected':True})):
+                        engine(d,metadata)
+                checks.enter_context(patch.dict(online_idle.__globals__,online_engine_idle=engine_check))
+                # This is a successor with legitimate rows, not first-C qualification.
+                f.frame.update(historicalRegistrationAuditCount=21,registrationMutationCount=4,
+                    onlineAuditCount=7,tables={n:3 for n in shared.ONLINE_TABLES}); f.save()
+                before = len(f.calls)
+                if active is None:
+                    self.assertEqual(scope._online_after_bit_audit_receipt(f.d,f.directory,f.bridge,f.proof,manifest,record)
+                        ['preservedRegistrationAuditCount'],9)
+                else:
+                    with self.assertRaises(RuntimeError):
+                        scope._online_after_bit_audit_receipt(f.d,f.directory,f.bridge,f.proof,manifest,record)
+                    self.assertEqual(len(f.calls),before)
+
+    def test_readback_missing_cross_producer_query_sqlite_or_boolean_after_receipt_rejects(self):
+        for mutation in ('missing', 'producer', 'source', 'query', 'history-query', 'initial-query', 'sqlite', 'pid', 'after-bool', 'cutoff', 'late-cutoff', 'digest'):
+            with self.subTest(mutation=mutation), self.fixture() as f:
+                manifest, record = self.publication(f)
+                value = record['afterBitAuditProtection']
+                if mutation == 'missing': value.pop('before')
+                elif mutation == 'producer': value['basis']['producer']['workflowRunId'] = '999'
+                elif mutation == 'source': value['basis']['sourceHelpers']['api-admin-scope.py'] = '0'*64
+                elif mutation in ('query','history-query','initial-query'): value[{'query':'querySha256','history-query':'historyQuerySha256','initial-query':'initialQuerySha256'}[mutation]] = '0'*64
+                elif mutation == 'sqlite': value['sqliteProtectionSha256'] = '0'*64
+                elif mutation == 'pid': value['oldApiStop']['pid'] = 1
+                elif mutation == 'after-bool': value['after']['tables'][shared.ONLINE_TABLES[0]] = False
+                elif mutation == 'cutoff': value['before']['historyCutoff'] = value['after']['historyCutoff'] = '2026-10-11 00:00:00.123456'
+                elif mutation == 'late-cutoff': value['before']['historyCutoff'] = value['after']['historyCutoff'] = '2026-10-11 00:00:03.000000'
+                if mutation != 'digest': manifest['onlineRechargePublication']['afterBitAuditProtectionSha256'] = scope.fingerprint(value)
+                else: manifest['onlineRechargePublication']['afterBitAuditProtectionSha256'] = '0'*64
+                with self.assertRaises(RuntimeError): scope._online_after_bit_audit_receipt(f.d, f.directory, f.bridge, f.proof, manifest, record)
+
+    def test_a_bridge_rejects_b_factory_and_reused_factories_constants_remain_exact_ast(self):
+        import ast
+        source = 'scripts/production-release/api-admin-scope.py'
+        immutable = ast.parse(subprocess.check_output(['git', 'show', '34a2ad26def934dcaed6bdd1e3188ca977fcdc30:'+source], cwd=ROOT))
+        actual = ast.parse((ROOT/source).read_text())
+        names = {'WorkspacePipe', 'WorkspaceUnusedAuditBarrier', 'WorkspaceAuditBarrier', 'workspace_api_identity', 'workspace_audit_protection'}
+        before = {n.name: ast.dump(n) for n in immutable.body if isinstance(n,(ast.FunctionDef,ast.ClassDef)) and n.name in names}
+        after = {n.name: ast.dump(n) for n in actual.body if isinstance(n,(ast.FunctionDef,ast.ClassDef)) and n.name in names}
+        self.assertEqual(before,after)
+        constants = {'ONLINE_TABLES','ONLINE_AUDIT_QUERY','WORKSPACE_AUDIT_QUERY'}
+        for name in constants:
+            nodes = [next(n for n in tree.body if isinstance(n,ast.Assign) and any(isinstance(v,ast.Name) and v.id==name for v in n.targets)) for tree in (immutable,actual)]
+            self.assertEqual(ast.dump(nodes[0]),ast.dump(nodes[1]))
+        with self.fixture() as f:
+            a = copy.deepcopy(f.bridge); a['kind'] = scope.ONLINE_PENDING_WORKSPACE_KIND
+            scope.online_pending_workspace_bridge_shape(f.d,a)
+            with self.assertRaises(RuntimeError): scope._online_after_bit_unused_audit_barrier(f.d,f.directory,a,f.proof)
+            for online,query in ((True,shared.ONLINE_AUDIT_QUERY),(False,shared.WORKSPACE_AUDIT_QUERY)):
+                self.assertEqual(shared.WorkspaceUnusedAuditBarrier(f.d,f.directory,online=online).query,query)
+            self.assertEqual(f.calls, [])
 
 
 class AfterBitReceiptCISourceTests(unittest.TestCase):

@@ -2512,6 +2512,16 @@ def online_origin_guard(d, directory, context, *, runtime=True):
             'sqliteProtectionSha256': record.get('sqliteProtectionSha256'), 'scope': o.SCOPE,
             'buildProofSha256': fingerprint(proof), 'migration': dict(o.MIGRATION_IDENTITY),
             'legacyWorkersPublished': False, 'configurationScope': 'ONLINE_RECHARGE_VOLUME_LOOPBACK_ONLY'}
+        after_bit_audit_reader = getattr(o, '_online_after_bit_audit_receipt', None)
+        if callable(after_bit_audit_reader):
+            d.require(type(record.get('afterBitAuditProtection')) is dict,
+                      'API_ADMIN_ONLINE_ORIGIN_CHANGED')
+            publication['afterBitAuditProtectionSha256'] = fingerprint(record['afterBitAuditProtection'])
+        else:
+            d.require(not hasattr(o, '_online_after_bit_audit_receipt')
+                      and 'afterBitAuditProtection' not in record
+                      and 'afterBitAuditProtectionSha256' not in manifest['onlineRechargePublication'],
+                      'API_ADMIN_ONLINE_ORIGIN_CHANGED')
         previous_commit, migrations = bridge['baselineCommit'], []
     else:
         proof = o.validate_proof(d, raw_proof, context['commit'], manifest['sourceTree'])
@@ -2560,6 +2570,16 @@ def online_origin_guard(d, directory, context, *, runtime=True):
     o.workspace_backup_receipt(d, origin, previous, record['baselineEvidence'], manifest, record)
     if after_bit:
         o._pending_workspace_sqlite_receipt(d, origin, manifest, record)
+        if callable(after_bit_audit_reader):
+            # Reuse only C's archived reader and owned proof. Its fixed historical
+            # prefix/trigger fence permits later business while checking current idle.
+            protection = after_bit_audit_reader(d, origin, bridge, proof, manifest, record)
+            before = record['afterBitAuditProtection'].get('before', {})
+            d.require(type(protection) is dict and type(protection.get('preservedRegistrationAuditCount')) is int
+                and type(protection.get('auditHistoryCutoff')) is str and protection == {
+                'afterBitAuditProtectionSha256': publication['afterBitAuditProtectionSha256'],
+                'preservedRegistrationAuditCount': before.get('historicalRegistrationAuditCount'),
+                'auditHistoryCutoff': before.get('historyCutoff')}, 'API_ADMIN_ONLINE_ORIGIN_CHANGED')
     o.workspace_origin(d, previous, origin, record['baselineEvidence'], record['before'])
     o.historical_guard(d, previous, record['baselineEvidence'], origin)
     for service in o.IMAGE_SERVICES:

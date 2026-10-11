@@ -5127,6 +5127,105 @@ class AfterBitWorkspaceOriginTests(unittest.TestCase):
     synthetic. No network, Docker or production business operation is executed.
     """
     @contextmanager
+    def archived_online_source(self, fixtures):
+        """Keep the producer's complete control group separate from successor bytes."""
+        fixtures.after_bit_reviewed_tree()
+        with tempfile.TemporaryDirectory(prefix='first-online-source-', dir=RUNTIME) as temporary:
+            archive = Path(temporary)
+            controls = {}
+            for name in (*fixtures.scope._PENDING_WORKSPACE_CONTROL_NAMES,
+                    'scripts/production-release/online-recharge-recovery.json'):
+                metadata = subprocess.check_output(['git', 'ls-tree', '-z',
+                    fixtures._AFTER_BIT_REVIEWED_COMMIT, '--', name], cwd=ROOT)
+                self.assertEqual(metadata.count(b'\0'), 1)
+                self.assertTrue(metadata.split(b'\t', 1)[0].startswith(b'100644 blob '))
+                raw = subprocess.check_output(['git', 'show',
+                    fixtures._AFTER_BIT_REVIEWED_COMMIT + ':' + name], cwd=ROOT)
+                path = archive / name; path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(raw); path.chmod(0o644)
+                controls[name] = {'sha256': hashlib.sha256(raw).hexdigest(), 'mode': '100644'}
+            path = archive / 'scripts/production-release/online-recharge-scope.py'
+            self.assertEqual(path.read_bytes(), (ROOT / 'scripts/production-release/online-recharge-scope.py').read_bytes())
+            spec = importlib.util.spec_from_file_location('original_first_online', path)
+            original = importlib.util.module_from_spec(spec); spec.loader.exec_module(original)
+            original_inventory = fixtures.PendingWorkspaceStageTests.inventory
+            def inventory(*args, **kwargs):
+                return {**original_inventory(*args, **kwargs), **controls}
+            with patch.object(fixtures, 'scope', new=original), \
+                    patch.object(fixtures.PendingWorkspaceStageTests, 'inventory', new=inventory):
+                yield original
+
+    def original_audit_fixture(self, fixtures, f, online, bridge, proof, origin):
+        """Execute C's Git-blob reader; only external SQL/inspect acquisition is synthetic."""
+        original = online
+        f.stack.enter_context(patch.object(original.urllib.request, 'urlopen',
+            side_effect=AssertionError('Synthetic acquisition must never use the network')))
+        stamp = '2026-10-11T00:00:00.123456789Z'
+        identity = {n: bridge['services']['api'][n] for n in ('containerId', 'image', 'startedAtSha256')}
+        identity['startedAt'] = stamp
+        self.assertEqual(identity['startedAtSha256'], hashlib.sha256(stamp.encode()).hexdigest())
+        for migration in ('20261002123500_routine_audit_retention_exception',
+                '20260830182500_mysql_trigger_service_definers'):
+            relative = f.reader.MIGRATION_ROOT + '/' + migration + '/migration.sql'
+            raw = subprocess.check_output(['git', 'show',
+                fixtures._AFTER_BIT_REVIEWED_COMMIT + ':' + relative], cwd=ROOT)
+            for directory in (f.old, origin):
+                path = directory / relative
+                path.parent.mkdir(parents=True, exist_ok=True); path.write_bytes(raw)
+        cutoff = '2026-10-11 00:00:01.000001'
+        initial = original._online_after_bit_audit_queries(f.d, f.reader, f.old, identity)
+        plan = original._online_after_bit_audit_queries(f.d, f.reader, f.old, identity,
+            history_cutoff=cutoff)
+        rows = [{'event': event, 'timing': 'BEFORE', 'statement': statement}
+            for event, statement in plan['expectedTriggers'].items()]
+        before = {'historicalRegistrationAuditCount': 9, 'historicalRegistrationPrefixCount': 9,
+            'historyCutoff': cutoff, 'clockBeforeCutoff': 0, 'registrationMutationCount': 0,
+            'onlineAuditCount': 0, 'tables': {name: 0 for name in online.TABLES},
+            'triggerDefinitionsSha256': plan['expectedTriggersSha256']}
+        sqlite = {'sourceApiIdentity': {n: identity[n]
+            for n in ('containerId', 'image', 'startedAtSha256')}, 'synthetic': True}
+        sqlite_path = origin / f.reader.WORKSPACE_SQLITE_RECEIPT
+        sqlite_path.write_text(json.dumps(sqlite)); sqlite_path.chmod(0o600)
+        protection = {'version': 1, 'kind': 'ONLINE_RECHARGE_AFTER_BIT_AUDIT_PROTECTION',
+            'basis': original._online_after_bit_audit_binding(f.d, bridge, proof),
+            'sourceApiIdentity': identity, 'mysqlIdentitySha256': online.fingerprint(bridge['services']['mysql']),
+            'initialQuerySha256': hashlib.sha256(initial['frameQuery'].encode()).hexdigest(),
+            'querySha256': hashlib.sha256(plan['frameQuery'].encode()).hexdigest(),
+            'historyQuerySha256': hashlib.sha256(plan['historyQuery'].encode()).hexdigest(),
+            'triggerDefinitionsSha256': plan['expectedTriggersSha256'], 'connectionIdSha256': online.fingerprint(47),
+            'before': before, 'after': copy.deepcopy(before),
+            'oldApiStop': {'identity': sqlite['sourceApiIdentity'], 'running': False, 'pid': 0},
+            'sqliteProtectionSha256': online.fingerprint(sqlite)}
+        # The original transport validates this prefix through one real child pipe.
+        prefix = {n: before[n] for n in ('historicalRegistrationPrefixCount', 'historyCutoff', 'clockBeforeCutoff')}
+        prefix.update(connectionId=47, triggers=rows)
+        captured = f.base / 'audit-history-queries.sql'
+        child = ('import sys\nfor line in sys.stdin:\n'
+            '    with open(sys.argv[1], "a") as output: output.write(line)\n'
+            '    print(sys.argv[2], flush=True)\n')
+        native = subprocess.Popen
+        def acquire(command, **kwargs):
+            if command[:3] == ['docker', 'exec', '-i']:
+                return native([sys.executable, '-u', '-c', child, str(captured), json.dumps(prefix)], **kwargs)
+            return native(command, **kwargs)
+        f.stack.enter_context(patch.object(f.reader.subprocess, 'Popen', side_effect=acquire))
+        f.d.current_job_database = MagicMock(return_value='fixture')
+        f.d.service_state = MagicMock(return_value=bridge['services']['mysql'])
+        f.d.compose.side_effect = lambda directory, *args, **kwargs: (
+            bridge['services']['mysql']['containerId'] if args[:3] == ('ps', '-q', 'mysql') else json.dumps(rows))
+        mysql = bridge['services']['mysql']
+        def inspect(*args, **kwargs):
+            self.assertEqual(args, ('docker', 'inspect', mysql['containerId']))
+            return json.dumps([{'Id': mysql['containerId'], 'Image': mysql['image'],
+                'Config': {'Image': mysql['reference'], 'Env': ['SAFE_FIXTURE=1']},
+                'State': {'StartedAt': '2026-10-10T00:00:00.000000000Z', 'Status': 'running',
+                    'Health': {'Status': 'healthy'}}}])
+        f.d.run.side_effect = inspect
+        f.stack.enter_context(patch.object(f.reader, 'online_idle'))
+        f.stack.enter_context(patch.object(f.reader, 'workspace_idle'))
+        return protection, captured
+
+    @contextmanager
     def fixture(self):
         online = workspace.online_reader(d)
         spec = importlib.util.spec_from_file_location('online_after_bit_fixture',
@@ -5137,7 +5236,15 @@ class AfterBitWorkspaceOriginTests(unittest.TestCase):
         fixtures.RUNTIME.mkdir(parents=True, exist_ok=True)
         online = fixtures.scope
         helper = fixtures.AfterBitFormalTests()
-        with helper.fixture() as f:
+        original_states = fixtures.states
+        def audit_states(*args, **kwargs):
+            rows = original_states(*args, **kwargs)
+            rows['api']['startedAtSha256'] = hashlib.sha256(b'2026-10-11T00:00:00.123456789Z').hexdigest()
+            rows['mysql'].update(startedAtSha256=hashlib.sha256(b'2026-10-10T00:00:00.000000000Z').hexdigest(),
+                environmentSha256=online.fingerprint(['SAFE_FIXTURE=1']))
+            return rows
+        with self.archived_online_source(fixtures) as online, \
+                patch.object(fixtures, 'states', side_effect=audit_states), helper.fixture() as f:
             _, raw_f, f_path = helper.preflight_and_f(f)
             bridge = json.loads(raw_f)['baseline']
             origin = f.base / 'releases' / ('20261011T010000Z-' + fixtures.COMMIT[:12])
@@ -5145,7 +5252,7 @@ class AfterBitWorkspaceOriginTests(unittest.TestCase):
             for name in online._PENDING_WORKSPACE_CONTROL_NAMES:
                 path = origin / name
                 path.parent.mkdir(parents=True, exist_ok=True)
-                path.write_bytes((fixtures.ROOT / name).read_bytes())
+                path.write_bytes((Path(online.__file__).resolve().parents[2] / name).read_bytes())
             engine = origin / online.ENGINE_ROOT
             engine.mkdir(parents=True)
             (engine / 'fixture.cjs').write_text('synthetic retained engine source')
@@ -5175,7 +5282,10 @@ class AfterBitWorkspaceOriginTests(unittest.TestCase):
                 'configurationAfter': f.config, 'buildProofSha256': online.fingerprint(proof),
                 'migration': {**bridge['migrationState'], 'performed': False}, 'sqliteProtectionSha256': '9' * 64,
                 'preservation': preservation, 'workspaceVolumeBefore': f.volume, 'workspaceVolumeAfter': f.volume}
+            protection, audit_queries = self.original_audit_fixture(fixtures, f, online, bridge, proof, origin)
+            record.update(afterBitAuditProtection=protection, sqliteProtectionSha256=protection['sqliteProtectionSha256'])
             manifest = {'commit': fixtures.COMMIT, 'sourceTree': fixtures.TREE, 'previousRelease': str(f.old),
+                'deployedAt': '2026-10-11T00:00:02Z',
                 'previousCommit': bridge['baselineCommit'], 'previousManifestSha256': bridge['manifestBytesSha256'],
                 'deploymentRun': 'github-actions-124-1', 'imageBuildRun': 'github-actions-124-1',
                 'servicesUpdated': list(online.UPDATED), 'newMigrations': [], 'migrationApplied': True,
@@ -5184,6 +5294,7 @@ class AfterBitWorkspaceOriginTests(unittest.TestCase):
                 'onlineRechargePublication': {'version': 2, 'baselineOriginSha256': online.fingerprint(bridge),
                     'sqliteProtectionSha256': record['sqliteProtectionSha256'], 'scope': online.SCOPE,
                     'buildProofSha256': online.fingerprint(proof), 'migration': dict(online.MIGRATION_IDENTITY),
+                    'afterBitAuditProtectionSha256': online.fingerprint(protection),
                     'legacyWorkersPublished': False, 'configurationScope': 'ONLINE_RECHARGE_VOLUME_LOOPBACK_ONLY'}}
             (origin / '.env.aws.production').write_bytes((f.old / '.env.aws.production').read_bytes())
             for name in workspace.ONLINE_ORIGIN_FILES:
@@ -5202,6 +5313,8 @@ class AfterBitWorkspaceOriginTests(unittest.TestCase):
             calls = []
             def archived(raw, path, selected=None):
                 calls.append((raw, path, selected))
+                original_path = Path(f.reader.__file__) if selected else Path(online.__file__)
+                self.assertEqual(raw, original_path.read_bytes())
                 return f.reader if selected else online
             f.stack.enter_context(patch.object(workspace, 'online_after_bit_archived_module', side_effect=archived))
             f.stack.enter_context(patch.object(online, 'configuration_hashes', return_value=f.config))
@@ -5214,7 +5327,7 @@ class AfterBitWorkspaceOriginTests(unittest.TestCase):
                 f.stack.enter_context(patch.object(online, name, return_value=result))
             yield SimpleNamespace(source=f, d=f.d, online=online, origin=origin, proof=proof,
                 manifest=manifest, record=record, after=after, bridge=bridge, f_path=f_path,
-                save=save, calls=calls)
+                save=save, calls=calls, audit_queries=audit_queries)
 
     def test_archive_loader_executes_acquired_bytes_without_reopening_path(self):
         module = workspace.online_after_bit_archived_module(b'value = 7\n', Path('/missing/source.py'), 'API_ADMIN_WORKSPACE')
@@ -5233,6 +5346,7 @@ class AfterBitWorkspaceOriginTests(unittest.TestCase):
             self.assertEqual(f.d._onlinePendingWorkspaceProducer, f.source.producer)
             f.source.a_reader.assert_not_called()
             f.online.verify_running.assert_called_once()
+            self.assertIn('historicalRegistrationPrefixCount', f.audit_queries.read_text())
             f.online._pending_workspace_sqlite_receipt.assert_called_once()
 
     def test_missing_q_a_q_b_f_source_and_wrong_producer_reject_before_live_readback(self):
@@ -5275,6 +5389,7 @@ class AfterBitWorkspaceOriginTests(unittest.TestCase):
             guard.assert_not_called()
             f.online.verify_running.assert_not_called()
             f.source.a_reader.assert_not_called()
+            self.assertFalse(f.audit_queries.exists())
 
     def test_immutable_origin_revalidates_actual_f_and_qs_after_current_advances(self):
         with self.fixture() as f:
@@ -5320,6 +5435,7 @@ class AfterBitWorkspaceOriginTests(unittest.TestCase):
             self.assertEqual((f.source.base / 'current').resolve(), successor)
             f.online.verify_running.assert_not_called()
             f.source.a_reader.assert_not_called()
+            self.assertIn('historicalRegistrationPrefixCount', f.audit_queries.read_text())
 
     def test_successor_guard_rejects_origin_receipt_engine_and_live_binding_drift(self):
         for mutation in ('manifest', 'record', 'engine', 'binding', 'migration'):
@@ -5351,6 +5467,102 @@ class AfterBitWorkspaceOriginTests(unittest.TestCase):
             self.assertEqual(args[0]._onlinePendingWorkspaceProducer, f.source.producer)
             f.online.verify_running.assert_not_called()
             f.source.a_reader.assert_not_called()
+
+    @contextmanager
+    def audit_protection(self, f):
+        f.record['afterBitAuditProtection'] = {'before': {
+            'historicalRegistrationAuditCount': 9, 'historyCutoff': '2026-10-11 00:00:01.000001'},
+            'synthetic': 'original C owned audit protection'}
+        result = {'afterBitAuditProtectionSha256': f.online.fingerprint(f.record['afterBitAuditProtection']),
+            'preservedRegistrationAuditCount': 9, 'auditHistoryCutoff': '2026-10-11 00:00:01.000001'}
+        f.manifest['onlineRechargePublication']['afterBitAuditProtectionSha256'] = result['afterBitAuditProtectionSha256']
+        f.save()
+        with patch.object(f.online, '_online_after_bit_audit_receipt', create=True, return_value=result) as reader:
+            yield reader, result
+
+    def test_successor_audit_reuses_original_c_source_producer_and_history_reader(self):
+        with self.fixture() as f, self.audit_protection(f) as (reader, result), \
+                self.successor_guard(f) as (successor, context, _, _):
+            self.assertEqual(workspace.online_origin_guard(f.d, successor, context), context)
+            args = reader.call_args.args
+            self.assertEqual(args[1:], (f.origin, f.bridge, f.proof, f.manifest, f.record))
+            self.assertEqual(args[0]._onlinePendingWorkspaceProducer, f.source.producer)
+            self.assertEqual(result['preservedRegistrationAuditCount'], 9)
+            self.assertEqual((f.source.base / 'current').resolve(), successor)
+            f.online._pending_workspace_sqlite_receipt.assert_called_once()
+            f.online.verify_running.assert_not_called()
+            f.source.a_reader.assert_not_called()
+
+    def test_new_archived_audit_reader_cannot_drop_or_forge_owned_receipt(self):
+        for mutation in ('record-missing', 'record-null', 'record-list', 'manifest-missing', 'manifest-hash', 'manifest-extra'):
+            with self.subTest(mutation=mutation), self.fixture() as f, self.audit_protection(f) as (reader, _):
+                if mutation == 'record-missing':
+                    del f.record['afterBitAuditProtection']
+                elif mutation == 'record-null':
+                    f.record['afterBitAuditProtection'] = None
+                elif mutation == 'record-list':
+                    f.record['afterBitAuditProtection'] = []
+                elif mutation == 'manifest-missing':
+                    del f.manifest['onlineRechargePublication']['afterBitAuditProtectionSha256']
+                elif mutation == 'manifest-hash':
+                    f.manifest['onlineRechargePublication']['afterBitAuditProtectionSha256'] = '0' * 64
+                else:
+                    f.manifest['onlineRechargePublication']['trustedAudit'] = True
+                f.save()
+                with self.successor_guard(f) as (successor, context, _, _):
+                    with self.assertRaisesRegex(RuntimeError, '^API_ADMIN_ONLINE_ORIGIN_CHANGED$'):
+                        workspace.online_origin_guard(f.d, successor, context)
+                reader.assert_not_called()
+                f.online.verify_running.assert_not_called()
+
+    def test_old_archived_c_cannot_accept_new_audit_fields_without_original_validator(self):
+        for mutation in ('record', 'manifest', 'both', 'noncallable', 'empty-source'):
+            with self.subTest(mutation=mutation), self.fixture() as f:
+                if mutation in ('record', 'both', 'noncallable'):
+                    f.record['afterBitAuditProtection'] = {'before': {'historicalRegistrationAuditCount': 9}}
+                if mutation in ('manifest', 'both', 'noncallable'):
+                    f.manifest['onlineRechargePublication']['afterBitAuditProtectionSha256'] = '9' * 64
+                f.save()
+                with ExitStack() as stack:
+                    if mutation in ('noncallable', 'empty-source'):
+                        stack.enter_context(patch.object(f.online, '_online_after_bit_audit_receipt', create=True,
+                            new=True if mutation == 'noncallable' else None))
+                    with self.successor_guard(f) as (successor, context, _, _):
+                        with self.assertRaisesRegex(RuntimeError, '^API_ADMIN_ONLINE_ORIGIN_CHANGED$'):
+                            workspace.online_origin_guard(f.d, successor, context)
+                f.online.verify_running.assert_not_called()
+
+    def test_original_audit_history_trigger_or_current_idle_failure_rejects_successor(self):
+        for reason in ('HISTORY_PREFIX_CHANGED', 'TRIGGER_CHANGED', 'CURRENT_TASK_ACTIVE', 'TYPED_PRODUCER_CHANGED'):
+            with self.subTest(reason=reason), self.fixture() as f, self.audit_protection(f) as (reader, _), \
+                    self.successor_guard(f) as (successor, context, _, _):
+                reader.side_effect = RuntimeError(reason)
+                with self.assertRaisesRegex(RuntimeError, '^' + reason + '$'):
+                    workspace.online_origin_guard(f.d, successor, context)
+                f.online.verify_running.assert_not_called()
+                f.source.a_reader.assert_not_called()
+
+    def test_original_audit_reader_result_is_closed_and_matches_owned_history(self):
+        for mutation in ('digest', 'history', 'cutoff', 'extra', 'missing', 'list'):
+            with self.subTest(mutation=mutation), self.fixture() as f, self.audit_protection(f) as (reader, result), \
+                    self.successor_guard(f) as (successor, context, _, _):
+                changed = dict(result)
+                if mutation == 'digest':
+                    changed['afterBitAuditProtectionSha256'] = '0' * 64
+                elif mutation == 'history':
+                    changed['preservedRegistrationAuditCount'] = 0
+                elif mutation == 'cutoff':
+                    changed['auditHistoryCutoff'] = '2026-10-12 00:00:01.000001'
+                elif mutation == 'extra':
+                    changed['trusted'] = True
+                elif mutation == 'missing':
+                    del changed['auditHistoryCutoff']
+                else:
+                    changed = []
+                reader.return_value = changed
+                with self.assertRaisesRegex(RuntimeError, '^API_ADMIN_ONLINE_ORIGIN_CHANGED$'):
+                    workspace.online_origin_guard(f.d, successor, context)
+                f.online.verify_running.assert_not_called()
 
 
 if __name__ == '__main__':
