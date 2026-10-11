@@ -2794,7 +2794,7 @@ class WorkspaceSqliteProtection:
         self.d.require(path.is_file() and not path.is_symlink(), 'API_ADMIN_WORKSPACE_SQLITE_HELPER_MISSING')
         spec = importlib.util.spec_from_file_location('id_release_sqlite_safety', path)
         module = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(module)
+        exec(compile(path.read_bytes(), str(path), 'exec', dont_inherit=True), module.__dict__)
         return module.logical_summary
 
     def lock(self):

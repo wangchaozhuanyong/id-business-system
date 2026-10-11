@@ -3931,6 +3931,97 @@ class WorkspaceSqliteProtectionTests(unittest.TestCase):
                 finally:
                     source.close();destination.close();holder.rollback()
 
+    def test_real_source_loader_reproduces_cache_but_reader_preserves_source_and_summary(self):
+        with self.fixture(wal=True) as f, patch.object(sys, 'dont_write_bytecode', False), patch.object(
+                sys, 'pycache_prefix', None):
+            raw = (ROOT / workspace.WORKSPACE_SAFETY).read_bytes()
+            helper = f.target / workspace.WORKSPACE_SAFETY
+            helper.parent.mkdir(parents=True); helper.write_bytes(raw)
+            legacy_root = f.target.parent / 'legacy-reader'
+            legacy = legacy_root / workspace.WORKSPACE_SAFETY
+            legacy.parent.mkdir(parents=True); legacy.write_bytes(raw)
+            def snapshot(directory):
+                return {path.relative_to(directory).as_posix():
+                    (path.read_bytes(), path.stat().st_mode & 0o777)
+                    for path in directory.rglob('*') if path.is_file()}
+            before = snapshot(f.target)
+            old_before = snapshot(legacy_root)
+            spec = importlib.util.spec_from_file_location('id_release_sqlite_safety', legacy)
+            old_module = importlib.util.module_from_spec(spec); spec.loader.exec_module(old_module)
+            self.assertTrue(Path(importlib.util.cache_from_source(str(legacy))).is_file())
+            self.assertNotEqual(snapshot(legacy_root), old_before)
+            expected = old_module.logical_summary(f.writer)
+            for _ in range(3):
+                reader = SUMMARY_READER_ORIGINAL(f.gate)
+                self.assertEqual(reader(f.writer), expected)
+                self.assertEqual(reader.__annotations__, old_module.logical_summary.__annotations__)
+                self.assertEqual(reader.__globals__['__file__'], str(helper))
+                self.assertEqual(reader.__globals__['__name__'], old_module.__name__)
+                self.assertEqual(reader.__globals__['__package__'], old_module.__package__)
+                self.assertEqual(reader.__globals__['__spec__'].name, spec.name)
+                self.assertEqual(type(reader.__globals__['__loader__']), type(spec.loader))
+                self.assertEqual(reader.__globals__['__cached__'], importlib.util.cache_from_source(str(helper)))
+            self.assertEqual(snapshot(f.target), before)
+            self.assertFalse(any(path.name == '__pycache__' for path in f.target.rglob('*')))
+            self.assertFalse(sys.dont_write_bytecode); self.assertIsNone(sys.pycache_prefix)
+
+    def test_real_reader_locked_wal_backup_restores_same_summary_without_candidate_cache(self):
+        with self.fixture(wal=True) as f, patch.object(sys, 'dont_write_bytecode', False), patch.object(
+                sys, 'pycache_prefix', None), patch.object(
+                workspace.WorkspaceSqliteProtection, 'summary_reader', SUMMARY_READER_ORIGINAL):
+            helper = f.target / workspace.WORKSPACE_SAFETY
+            helper.parent.mkdir(parents=True); helper.write_bytes((ROOT / workspace.WORKSPACE_SAFETY).read_bytes())
+            reader = SUMMARY_READER_ORIGINAL(f.gate)
+            expected = reader(f.writer)
+            inode = f.database.stat().st_ino
+            def inspect(_d, _directory, _reference, volume, **kwargs):
+                path = Path(f.volumes[volume]['Mountpoint']) / 'database.db'
+                with sqlite3.connect(path.as_uri() + '?mode=ro', uri=True) as restored:
+                    return {'version': 1, 'status': 'PASS', **reader(restored),
+                        'activeAppleLeaseCount': 0, 'corruptEncryptedValueCount': 0, 'businessActions': 0}
+            f.inspector.side_effect = inspect
+            f.gate.lock(); f.gate.check_locked()
+            record = f.gate.backup_restore()
+            self.assertEqual(f.gate.summary, expected)
+            self.assertEqual(record['sourceSummary'], expected)
+            self.assertTrue(record['restoreVerified']); self.assertTrue(record['temporaryRestoreVolumeRemoved'])
+            self.assertTrue(f.gate.connection.in_transaction)
+            self.assertEqual(f.database.stat().st_ino, inode)
+            with sqlite3.connect(f.target / record['backupName']) as restored:
+                self.assertEqual(reader(restored), expected)
+            self.assertFalse(any(path.name == '__pycache__' for path in f.target.rglob('*')))
+
+    def test_real_candidate_guard_survives_reader_and_rejects_actual_cache_or_source_drift(self):
+        pending = load('summary_reader_candidate_fixture', 'api-admin-pending-online.test.py')
+        pending.UnpublishedCandidateLifecycle.setUpClass()
+        lifecycle = pending.UnpublishedCandidateLifecycle()
+        with lifecycle.fixture() as f, patch.object(sys, 'dont_write_bytecode', False), patch.object(
+                sys, 'pycache_prefix', None):
+            expected = pending.s.pending_online_candidate_guard(f.d, f.directory, f.context, f.candidate)
+            gate = SimpleNamespace(target=f.directory, d=f.d)
+            reader = SUMMARY_READER_ORIGINAL(gate)
+            with sqlite3.connect(':memory:') as database:
+                for name in (*workspace.WORKSPACE_BUSINESS_TABLES, 'settings'):
+                    database.execute('CREATE TABLE "' + name + '" (id INTEGER PRIMARY KEY, status TEXT, value TEXT)')
+                summary = reader(database)
+                self.assertEqual(summary['tableCounts'], {name: 0 for name in summary['tableCounts']})
+                self.assertEqual(SUMMARY_READER_ORIGINAL(gate)(database), summary)
+            self.assertEqual(pending.s.pending_online_candidate_guard(f.d, f.directory, f.context, f.candidate), expected)
+            self.assertFalse(any(path.name == '__pycache__' for path in f.directory.rglob('*')))
+            helper = f.directory / workspace.WORKSPACE_SAFETY
+            spec = importlib.util.spec_from_file_location('id_release_sqlite_safety', helper)
+            module = importlib.util.module_from_spec(spec); spec.loader.exec_module(module)
+            self.assertTrue(Path(importlib.util.cache_from_source(str(helper))).is_file())
+            with self.assertRaisesRegex(RuntimeError, '^API_ADMIN_SOURCE_TREE_CHANGED$'):
+                pending.s.pending_online_candidate_guard(f.d, f.directory, f.context, f.candidate)
+            f.d.run.assert_not_called()
+        with lifecycle.fixture() as f:
+            helper = f.directory / workspace.WORKSPACE_SAFETY
+            helper.write_bytes(helper.read_bytes() + b'\n# SYNTHETIC_SOURCE_DRIFT\n')
+            with self.assertRaisesRegex(RuntimeError, '^API_ADMIN_SOURCE_TREE_CHANGED$'):
+                pending.s.pending_online_candidate_guard(f.d, f.directory, f.context, f.candidate)
+            f.d.run.assert_not_called()
+
 
 class LegacyOnlineSuccessorFixture(unittest.TestCase):
     @contextmanager
