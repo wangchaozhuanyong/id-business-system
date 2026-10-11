@@ -241,6 +241,85 @@ class PendingWorkspaceTransportTests(unittest.TestCase):
             with self.assertRaises(RuntimeError):
                 transport._pending_workspace_artifact_unpack(payload,digest,size)
 
+    def test_joint_carrier_restores_real_lengths_high_entropy_receipts_below_cap(self):
+        f, q = self.fixture()
+        ordinary = {'syntheticOnly': True, 'hashes': [hashlib.sha256(('ordinary-' + str(i)).encode()).hexdigest()
+            for i in range(160)]}
+        preflight, invocation = json.loads(f), json.loads(q)
+        preflight.update(ordinaryPreflight=ordinary, baseline={'hashes': [
+            hashlib.sha256(('baseline-' + str(i)).encode()).hexdigest() for i in range(80)]})
+        invocation['StandardOutputContent'] = json.dumps(ordinary)
+        f, q = json.dumps(preflight).encode(), json.dumps(invocation).encode()
+        self.assertLess(len(f), 34754)
+        self.assertLess(len(q), 19988)
+        f, q = f + b' ' * (34754 - len(f)), q + b' ' * (19988 - len(q))
+        parameters = transport.online_pending_workspace_artifact_parameters(self.producer(), f, q)
+        self.assertLess(len(json.dumps(parameters).encode()), 20480)
+        with tempfile.TemporaryDirectory(dir=RUNTIME) as folder:
+            root = Path(folder); root.chmod(0o700)
+            program = transport._pending_workspace_artifact_program(self.producer(), f, q, str(root), os.geteuid())
+            parsed = ast.parse(program)
+            pair_calls = [node for node in ast.walk(parsed) if isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Name) and node.func.id == '_pending_workspace_artifact_unpack_pair']
+            self.assertEqual(len(pair_calls), 1)
+            with redirect_stdout(io.StringIO()) as output:
+                exec(compile(program, '<synthetic-joint-private-artifact>', 'exec'), {})
+            ack = json.loads(output.getvalue())
+            transport.online_pending_workspace_validate_artifact_ack(ack, self.producer(), f, q)
+            directory = root / transport._pending_workspace_artifact_directory(self.producer())
+            self.assertEqual((directory / transport._PENDING_WORKSPACE_ARTIFACT_FILES['preflight']).read_bytes(), f)
+            self.assertEqual((directory / transport._PENDING_WORKSPACE_ARTIFACT_FILES['preflight-invocation']).read_bytes(), q)
+
+    def test_joint_unpack_rejects_wrong_boundary_hash_type_and_trailing_data(self):
+        originals = (b'first synthetic bytes', b'second synthetic bytes')
+        packed = base64.b64encode(gzip.compress(b''.join(originals), mtime=0)).decode()
+        expected = tuple(hashlib.sha256(raw).hexdigest() for raw in originals)
+        lengths = tuple(len(raw) for raw in originals)
+        self.assertEqual(transport._pending_workspace_artifact_unpack_pair(packed, expected, lengths), originals)
+        cases = [
+            (packed, ('0' * 64, expected[1]), lengths),
+            (packed, expected, (lengths[0] + 1, lengths[1] - 1)),
+            (packed, expected, (lengths[0], lengths[1] + 1)),
+            (packed, expected, (True, lengths[1])),
+            (packed, expected, (lengths[0],)),
+            (packed, list(expected), lengths),
+            (packed + '=', expected, lengths),
+            (base64.b64encode(gzip.compress(b''.join(originals)) + b'x').decode(), expected, lengths),
+            (base64.b64encode(gzip.compress(b''.join(originals)) + gzip.compress(b'x')).decode(), expected, lengths),
+            (base64.b64encode(gzip.compress(b''.join(originals))[:-1]).decode(), expected, lengths),
+        ]
+        for payload, digests, sizes in cases:
+            with self.subTest(payloadBytes=len(payload), lengths=sizes), self.assertRaises((RuntimeError, ValueError)):
+                transport._pending_workspace_artifact_unpack_pair(payload, digests, sizes)
+
+    def test_joint_unpack_preserves_individual_limits_and_rejects_zipbomb(self):
+        originals = (b'f' * 65535, b'q' * 65535)
+        expected = tuple(hashlib.sha256(raw).hexdigest() for raw in originals)
+        packed = base64.b64encode(gzip.compress(b''.join(originals), mtime=0)).decode()
+        self.assertEqual(transport._pending_workspace_artifact_unpack_pair(packed, expected, (65535, 65535)), originals)
+        for lengths in ((65536, 65534), (0, 65535), (65535, False)):
+            with self.subTest(lengths=lengths), self.assertRaises(RuntimeError):
+                transport._pending_workspace_artifact_unpack_pair(packed, expected, lengths)
+        for raw in (b'f' * 131072, b'f' * (1024 * 1024)):
+            with self.subTest(rawBytes=len(raw)), self.assertRaises(RuntimeError):
+                transport._pending_workspace_artifact_unpack_pair(
+                    base64.b64encode(gzip.compress(raw, mtime=0)).decode(), expected, (65535, 65535))
+
+    def test_high_entropy_joint_carrier_cannot_bypass_ssm_parameter_limit(self):
+        f, q = self.fixture()
+        preflight, invocation = json.loads(f), json.loads(q)
+        ordinary = {'syntheticOnly': True, 'hashes': [hashlib.sha256(('ordinary-' + str(i)).encode()).hexdigest()
+            for i in range(256)]}
+        preflight.update(ordinaryPreflight=ordinary, baseline={'hashes': [
+            hashlib.sha256(('disjoint-baseline-' + str(i)).encode()).hexdigest() for i in range(400)]})
+        invocation['StandardOutputContent'] = json.dumps(ordinary)
+        f, q = json.dumps(preflight).encode(), json.dumps(invocation).encode()
+        transport._pending_workspace_artifact_payload(self.producer(), f, q)
+        self.assertLess(len(f), 65536)
+        self.assertLess(len(q), 65536)
+        with self.assertRaisesRegex(RuntimeError, 'ONLINE_RECHARGE_PENDING_WORKSPACE_ARTIFACT_INVALID'):
+            transport.online_pending_workspace_artifact_parameters(self.producer(), f, q)
+
 
 class PendingWorkspaceFailureTransportTests(unittest.TestCase):
     def fixture(self):
