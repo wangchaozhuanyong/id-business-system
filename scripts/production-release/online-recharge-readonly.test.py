@@ -157,6 +157,73 @@ class PendingWorkspaceTransportTests(unittest.TestCase):
             'SOURCE_TREE':p['sourceTree'],'GITHUB_RUN_ID':p['workflowRunId'],'GITHUB_RUN_ATTEMPT':p['workflowRunAttempt'],
             'EXPECTED_CURRENT':p['commit'],'PRODUCTION_INSTANCE_ID':'i-12345678901234567','AWS_REGION':'ap-northeast-1'}
 
+    def test_relative_runpy_pending_profile_reads_real_absolute_controller_sources(self):
+        project=Path(__file__).absolute().parents[2]
+        previous=Path.cwd()
+        try:
+            os.chdir(project)
+            entry=transport.runpy.run_path('scripts/production-release/online-recharge-readonly.py')
+            controller,scope,decoder=entry['_pending_workspace_modules']()
+            for path in (controller.__file__,scope.__file__,decoder.__globals__['__file__']):
+                self.assertTrue(Path(path).is_absolute())
+            inventory={}
+            for name in scope._PENDING_WORKSPACE_CONTROL_NAMES:
+                path=Path(scope.__file__).with_name(Path(name).name)
+                limit=2*1024*1024 if name.endswith('/remote-deploy.py') else 1024*1024
+                raw=scope._declaration_source_bytes(path,limit=limit)
+                self.assertEqual(raw,path.read_bytes())
+                self.assertEqual(path.stat().st_uid,os.geteuid())
+                self.assertIn(path.stat().st_mode&0o777,(0o600,0o644,0o664))
+                inventory[name]={'mode':'100644','sha256':hashlib.sha256(raw).hexdigest()}
+            producer=self.producer()
+            bridge={'baselineProducer':{**producer,'workflowRunId':'123'}}
+            # Synthetic archive inventory isolates the same source-reader callsite;
+            # it cannot provide an actual immutable archive or production proof.
+            with patch.dict(scope._pending_workspace_profile.__globals__,
+                    _pending_workspace_current_source_inventory=lambda *args:inventory), \
+                    patch('urllib.request.urlopen',side_effect=AssertionError('no network')):
+                self.assertEqual(scope._pending_workspace_profile(controller,bridge,producer),inventory)
+                name=next(iter(inventory))
+                inventory[name]={**inventory[name],'sha256':'0'*64}
+                with self.assertRaisesRegex(RuntimeError,'ONLINE_RECHARGE_EXECUTOR_SOURCE_CHANGED'):
+                    scope._pending_workspace_profile(controller,bridge,producer)
+        finally:
+            os.chdir(previous)
+
+    def test_relative_runpy_keeps_source_symlink_owner_and_mode_rejections(self):
+        project=Path(__file__).absolute().parents[2]
+        previous=Path.cwd()
+        try:
+            os.chdir(project)
+            entry=transport.runpy.run_path('scripts/production-release/online-recharge-readonly.py')
+            unused,scope,unused_decoder=entry['_pending_workspace_modules']()
+            with self.assertRaisesRegex(RuntimeError,'DECLARATION_PROOF_INVALID'):
+                scope._declaration_source_bytes(Path('scripts/production-release/remote-deploy.py'))
+            with tempfile.TemporaryDirectory(dir=RUNTIME) as folder:
+                root=Path(folder)
+                source=root/'ordinary.py';source.write_bytes(b'ordinary source');source.chmod(0o600)
+                self.assertEqual(scope._declaration_source_bytes(source),b'ordinary source')
+                source.chmod(0o666)
+                with self.assertRaisesRegex(RuntimeError,'DECLARATION_PROOF_INVALID'):
+                    scope._declaration_source_bytes(source)
+                source.chmod(0o600)
+                with patch.object(scope.os,'geteuid',return_value=source.stat().st_uid+1), \
+                        self.assertRaisesRegex(RuntimeError,'DECLARATION_PROOF_INVALID'):
+                    scope._declaration_source_bytes(source)
+                link=root/'source-link.py';link.symlink_to(source)
+                with self.assertRaisesRegex(RuntimeError,'DECLARATION_PROOF_INVALID'):
+                    scope._declaration_source_bytes(link)
+                control=root/'control';control.symlink_to(project/'scripts/production-release')
+                aliased=transport.runpy.run_path(os.path.relpath(control/'online-recharge-readonly.py',project))
+                unused,linked_scope,unused_decoder=aliased['_pending_workspace_modules']()
+                linked_path=Path(linked_scope.__file__).with_name('remote-deploy.py')
+                self.assertTrue(linked_path.is_absolute())
+                self.assertNotEqual(linked_path.parent.resolve(),linked_path.parent)
+                with self.assertRaisesRegex(RuntimeError,'DECLARATION_PROOF_INVALID'):
+                    linked_scope._declaration_source_bytes(linked_path,limit=2*1024*1024)
+        finally:
+            os.chdir(previous)
+
     def test_real_carrier_retains_all_original_pins_under_20480_bytes(self):
         with patch.dict(os.environ,self.env(),clear=True):
             value=transport.pending_workspace_parameters('a'*40,'a'*40,'preflight',self.producer())
