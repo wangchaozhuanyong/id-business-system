@@ -4198,9 +4198,12 @@ class OnlineRecoveredOriginTests(unittest.TestCase):
             published = original.parent / ('20261009T120002Z-' + COMMIT[:12])
             shutil.copytree(self.fixtures.RecoveryTests.prepared, published)
             policy = self.fixtures.RecoveryTests.policy
+            grant_after = self.fixtures.RecoveryTests.grant_after
+            self.assertEqual(hashlib.sha256(grant_after).hexdigest(), policy['sharedGrant']['afterSha256'])
             for name in policy['candidateAllowedFiles']:
                 path = published / name; path.parent.mkdir(parents=True, exist_ok=True)
-                path.write_bytes((ROOT / name).read_bytes()); path.chmod((ROOT / name).stat().st_mode & 0o777)
+                path.write_bytes(grant_after if name == self.online.GRANT_SOURCE else (ROOT / name).read_bytes())
+                path.chmod((ROOT / name).stat().st_mode & 0o777)
             # The original API is gone. All attached-volume probes must inspect
             # only this replacement API, without comparing its ID/image to 0a03.
             control.api['Id'] = '9' * 64; control.api['Config']['Hostname'] = control.api['Id'][:12]
@@ -4896,9 +4899,12 @@ class MergedWorkspaceAdmissionTests(unittest.TestCase):
                 database=fixtures.database_fixture(failed,True)
                 published=previous.with_name('candidate')
                 shutil.copytree(fixtures.RestoredRecoveryTests.prepared/online.RECOVERY_COMMIT,published)
+                grant_after=fixtures.RecoveryTests.grant_after
+                self.assertEqual(hashlib.sha256(grant_after).hexdigest(),context['policy']['sharedGrant']['afterSha256'])
                 for name in context['policy']['candidateAllowedFiles']:
                     path=published/name;path.parent.mkdir(parents=True,exist_ok=True)
-                    path.write_bytes((ROOT/name).read_bytes());path.chmod((ROOT/name).stat().st_mode & 0o777)
+                    path.write_bytes(grant_after if name==online.GRANT_SOURCE else (ROOT/name).read_bytes())
+                    path.chmod((ROOT/name).stat().st_mode & 0o777)
                 marker=online.recovery_marker(context['policy'])
                 manifest={'migrationRecovery':marker,'migrationPerformed':False}
                 record={'baselineEvidence':{'migrationRecovery':marker},'migration':{'performed':False}}

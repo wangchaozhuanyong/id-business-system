@@ -9,6 +9,8 @@ export const onlineRechargeRecoveryPolicy =
   'scripts/production-release/online-recharge-recovery.json';
 export const productionDatabaseAccessHelper = 'scripts/lib/v2-production-database-access.mjs';
 export const productionDatabaseAccessTest = 'scripts/production-database-access.test.mjs';
+export const productionDatabaseAccessAcceptance =
+  'scripts/acceptance-v2-production-database-access.mjs';
 export const formalRuntimePackageControlPaths = Object.freeze([
   'scripts/production-release/formal-runtime-package.test.py',
   'scripts/production-release/formal-runtime-package/driver.py',
@@ -68,6 +70,82 @@ function hasOnlineRechargeDeleteGrantProof(snapshot) {
     snapshot.after === snapshot.before.replace(anchor, anchor + added) &&
     digest(snapshot.after) === '7ece1de5cbba89b26615d749a671d32a380f4dc377548071746d14f1f2e2a546'
   );
+}
+
+export function hasBankCardDeletePolicyProof(paths, snapshot) {
+  if (
+    !paths.includes(productionDatabaseAccessHelper) ||
+    !paths.includes(productionDatabaseAccessAcceptance) ||
+    !paths.every(
+      (path) =>
+        path === productionDatabaseAccessHelper ||
+        path === productionDatabaseAccessAcceptance ||
+        isCiOnly([path])
+    )
+  )
+    return false;
+  const digest = (source) => createHash('sha256').update(source).digest('hex');
+  const matches = (source, before, after) =>
+    typeof source?.before === 'string' &&
+    typeof source?.after === 'string' &&
+    source.beforeMode === '100644' &&
+    source.afterMode === '100644' &&
+    digest(source.before) === before &&
+    digest(source.after) === after;
+  if (
+    !matches(
+      snapshot,
+      '7ece1de5cbba89b26615d749a671d32a380f4dc377548071746d14f1f2e2a546',
+      '36bfe57d9fd802fc647d09dd8871f1af4cee6cd03a68bf05a2509dd0e554570d'
+    ) ||
+    !matches(
+      snapshot.acceptance,
+      '15adadb670cdbd7645761b161f487b74550b271455289e60a97108e9e4ac46f1',
+      'd39b620aa33ac21cecc0b9229dc0cc59967af1e890ea65c4e61d20fb1dbe269e'
+    )
+  )
+    return false;
+  const anchor = 'export const V2_RUNTIME_DELETE_TABLES = Object.freeze([\n';
+  return (
+    snapshot.before.split(anchor).length === 2 &&
+    snapshot.after ===
+      snapshot.before.replace(anchor, anchor + "  'id_business_v2_bank_recharge_cards',\n")
+  );
+}
+
+export function readProductionDatabaseAccessSnapshot(base, paths) {
+  if (
+    !/^[a-f0-9]{40}$/.test(base) ||
+    !paths.some((path) =>
+      [productionDatabaseAccessHelper, productionDatabaseAccessAcceptance].includes(path)
+    )
+  )
+    return undefined;
+  const read = (path) => {
+    const source = (revision) =>
+      execFileSync('git', ['show', `${revision}:${path}`], { encoding: 'utf8' });
+    const mode = (revision) =>
+      execFileSync('git', ['ls-tree', revision, '--', path], { encoding: 'utf8' })
+        .trim()
+        .split(/\s+/)[0];
+    return {
+      before: source(base),
+      after: source('HEAD'),
+      beforeMode: mode(base),
+      afterMode: mode('HEAD')
+    };
+  };
+  try {
+    return {
+      ...read(productionDatabaseAccessHelper),
+      ...(paths.includes(productionDatabaseAccessAcceptance)
+        ? { acceptance: read(productionDatabaseAccessAcceptance) }
+        : {})
+    };
+  } catch {
+    // Missing Git bytes or modes must retain the full check mode.
+    return undefined;
+  }
 }
 export const auditRetentionMigration =
   'apps/api/prisma-mysql/migrations/20261002123500_routine_audit_retention_exception/migration.sql';
@@ -544,6 +622,7 @@ export function checkMode(paths, oldSchema, newSchema, grantHelperSnapshot) {
     paths.every((path) => path === auditRetentionMigration || isCiOnly([path]))
   )
     return 'audit-retention';
+  if (hasBankCardDeletePolicyProof(paths, grantHelperSnapshot)) return 'ci-only';
   if (paths.includes(productionDatabaseAccessHelper))
     return hasOnlineRechargeDeleteGrantProof(grantHelperSnapshot) &&
       paths.every((path) => path === productionDatabaseAccessHelper || isCiOnly([path]))
@@ -785,7 +864,8 @@ export function isTargetedOnly(paths, oldSchema, newSchema) {
       ))
   );
 }
-export function selectedParts(paths) {
+export function selectedParts(paths, grantHelperSnapshot) {
+  if (hasBankCardDeletePolicyProof(paths, grantHelperSnapshot)) return ['guards', 'security'];
   if (isRechargePricingOnly(paths))
     return paths.some((path) => rechargePricingSources.has(path))
       ? ['guards', 'connector']
@@ -896,21 +976,7 @@ async function main() {
   const base = process.env.BASE_SHA;
   ensureCommit(base);
   const paths = git('diff', '--name-only', base, 'HEAD').split('\n').filter(Boolean);
-  let grantHelperSnapshot;
-  if (paths.includes(productionDatabaseAccessHelper)) {
-    try {
-      grantHelperSnapshot = {
-        before: execFileSync('git', ['show', `${base}:${productionDatabaseAccessHelper}`], {
-          encoding: 'utf8'
-        }),
-        after: execFileSync('git', ['show', `HEAD:${productionDatabaseAccessHelper}`], {
-          encoding: 'utf8'
-        })
-      };
-    } catch {
-      // Missing source snapshots must retain the full check mode.
-    }
-  }
+  const grantHelperSnapshot = readProductionDatabaseAccessSnapshot(base, paths);
   const mode = checkMode(
     paths,
     git('show', `${base}:${schema}`),
@@ -997,13 +1063,15 @@ async function main() {
     }
   }
   const checkParts =
-    mode === 'ci-only' || mode === 'audit-retention'
-      ? ['guards']
-      : mode === 'admin'
-        ? ['guards', 'admin']
-        : mode === 'mailbox'
-          ? ['guards', 'admin', 'api']
-          : selectedParts(paths);
+    mode === 'ci-only' && hasBankCardDeletePolicyProof(paths, grantHelperSnapshot)
+      ? selectedParts(paths, grantHelperSnapshot)
+      : mode === 'ci-only' || mode === 'audit-retention'
+        ? ['guards']
+        : mode === 'admin'
+          ? ['guards', 'admin']
+          : mode === 'mailbox'
+            ? ['guards', 'admin', 'api']
+            : selectedParts(paths);
   const result = { mode, reuseMain, reusedParts: [...reused], checkParts, base, evidence };
   const adminAcceptance =
     checkParts.includes('admin') &&

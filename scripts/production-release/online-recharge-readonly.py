@@ -175,6 +175,10 @@ _PENDING_WORKSPACE_ARTIFACT_ERROR = 'ONLINE_RECHARGE_PENDING_WORKSPACE_ARTIFACT_
 _PENDING_WORKSPACE_ARTIFACT_LIMIT = 65536
 _PENDING_WORKSPACE_ARTIFACT_FILES = {'preflight': 'online-recharge-pending-workspace-preflight-result.json',
     'preflight-invocation': 'online-recharge-pending-workspace-preflight-invocation.json'}
+_WORKSPACE_ARTIFACT_TYPES = {
+    'ONLINE_RECHARGE_PENDING_WORKSPACE': ('ONLINE_RECHARGE_PENDING_WORKSPACE_ORIGIN', 'onlinePendingWorkspaceOrigin'),
+    'ONLINE_RECHARGE_AFTER_BIT': ('ONLINE_RECHARGE_AFTER_BIT_SUCCESSOR_ORIGIN', 'onlineAfterBitOrigin'),
+}
 
 
 def _pending_workspace_artifact_need(ok):
@@ -214,13 +218,20 @@ def _pending_workspace_artifact_payload(producer, preflight_raw, invocation_raw)
     _pending_workspace_artifact_need(all(type(raw) is bytes and 0 < len(raw) < _PENDING_WORKSPACE_ARTIFACT_LIMIT
         for raw in (preflight_raw, invocation_raw)))
     f = _pending_workspace_artifact_json(preflight_raw)
+    namespace = next((n for n in _WORKSPACE_ARTIFACT_TYPES if f.get('kind') == n + '_PREFLIGHT'), None)
+    _pending_workspace_artifact_need(namespace is not None)
+    origin_kind, origin_field = _WORKSPACE_ARTIFACT_TYPES[namespace]
     _pending_workspace_artifact_need(set(f) == {'kind', 'version', 'mode', 'status', 'commandId',
         'releaseCandidateCommit', 'workflowRunId', 'workflowRunAttempt', 'sourceTree',
-        'baseline', 'services', 'ordinaryPreflight'} and f['kind'] == 'ONLINE_RECHARGE_PENDING_WORKSPACE_PREFLIGHT'
+        'baseline', 'services', 'ordinaryPreflight'}
         and type(f['version']) is int and f['version'] == 2 and f['mode'] == 'preflight'
-        and f['status'] == 'ONLINE_RECHARGE_PENDING_WORKSPACE_BASELINE_VERIFIED'
+        and f['status'] == namespace + '_BASELINE_VERIFIED'
         and f['releaseCandidateCommit'] == producer['commit'] and f['sourceTree'] == producer['sourceTree']
-        and f['workflowRunId'] == producer['workflowRunId'] and f['workflowRunAttempt'] == producer['workflowRunAttempt'])
+        and f['workflowRunId'] == producer['workflowRunId'] and f['workflowRunAttempt'] == producer['workflowRunAttempt']
+        and (namespace == 'ONLINE_RECHARGE_PENDING_WORKSPACE' or (
+            type(f['baseline']) is dict and f['baseline'].get('kind') == origin_kind
+            and type(f['ordinaryPreflight']) is dict and f['ordinaryPreflight'].get(origin_field) == f['baseline']
+            and 'onlinePendingWorkspaceOrigin' not in f['ordinaryPreflight'])))
     q = _pending_workspace_artifact_json(invocation_raw)
     required = {'CommandId', 'InstanceId', 'DocumentName', 'PluginName', 'ResponseCode', 'Status',
         'ExecutionEndDateTime', 'StandardOutputContent', 'StandardErrorContent'}
@@ -349,7 +360,8 @@ def _pending_workspace_artifact_program(producer, preflight_raw, invocation_raw,
         _pending_workspace_artifact_directory, _pending_workspace_artifact_payload, _pending_workspace_artifact_unpack_pair,
         _pending_workspace_artifact_store)
     program = 'import base64,hashlib,json,os,re,stat,zlib\nfrom pathlib import Path\n'
-    for key in ('_PENDING_WORKSPACE_ARTIFACT_ERROR', '_PENDING_WORKSPACE_ARTIFACT_LIMIT', '_PENDING_WORKSPACE_ARTIFACT_FILES'):
+    for key in ('_PENDING_WORKSPACE_ARTIFACT_ERROR', '_PENDING_WORKSPACE_ARTIFACT_LIMIT', '_PENDING_WORKSPACE_ARTIFACT_FILES',
+                '_WORKSPACE_ARTIFACT_TYPES'):
         program += key + '=' + repr(globals()[key]) + '\n'
     program += '\n'.join(inspect.getsource(function) for function in functions)
     program += '\ntry:\n p=' + repr(producer) + '\n'
@@ -587,7 +599,7 @@ def pending_workspace_client_binding(receipt, mode, producer, output):
     controller, scope, unused = _pending_workspace_modules()
     expected = os.environ['EXPECTED_CURRENT'] if mode == 'preflight' else producer['commit']
     summary = scope.validate_receipt(controller, receipt, mode, producer['commit'], expected)
-    bridge = scope.online_pending_workspace_bridge_shape(controller, receipt.get('onlinePendingWorkspaceOrigin'))
+    bridge = scope._workspace_evidence_origin(controller, receipt)
     controller.require(bridge['baselineCommit'] == os.environ['EXPECTED_CURRENT'],
         'ONLINE_RECHARGE_PENDING_WORKSPACE_ORIGIN_CHANGED')
     # Same complete candidate source is mandatory; actual immutable archive
@@ -601,7 +613,7 @@ def pending_workspace_client_binding(receipt, mode, producer, output):
         _pending_workspace_ended(qraw, f['commandId'])
         _pending_workspace_artifact_payload(producer, raw, qraw)
         proof = scope.closed_recovery_json(controller, scope._declaration_source_bytes((output / 'online-recharge-build-proof.json').absolute(), limit=23999))
-        scope.online_pending_workspace_build_shape(controller, proof, producer=producer, bridge=bridge, preflight_raw=raw)
+        scope._workspace_typed_build(controller, proof, producer=producer, bridge=bridge, preflight_raw=raw)
         controller.require(summary['buildProofSha256'] == scope.fingerprint(proof)
             and summary['sourceTree'] == producer['sourceTree'] and summary.get('migrationPerformed') is False
             and summary.get('migrationRecovery') == f['ordinaryPreflight'].get('migrationRecovery')
@@ -618,7 +630,8 @@ def pending_workspace_build_input(output, *, proof_required):
     controller, scope, unused = _pending_workspace_modules()
     raw = scope._declaration_source_bytes((output / 'online-recharge-pending-workspace-preflight-result.json').absolute(), limit=65535)
     f = scope.closed_recovery_json(controller, raw)
-    bridge = scope.online_pending_workspace_bridge_shape(controller, f.get('baseline'))
+    bridge = f.get('baseline')
+    unused, namespace = scope._workspace_origin_type(controller, bridge)
     controller.require(bridge['baselineCommit'] == os.environ['EXPECTED_CURRENT'], 'ONLINE_RECHARGE_PENDING_WORKSPACE_ORIGIN_CHANGED')
     scope._pending_workspace_complete_preflight(controller, raw, producer=producer, bridge=bridge)
     qraw = scope._declaration_source_bytes((output / 'online-recharge-pending-workspace-preflight-invocation.json').absolute(), limit=65535)
@@ -627,10 +640,10 @@ def pending_workspace_build_input(output, *, proof_required):
     scope._pending_workspace_profile(controller, bridge, producer)
     if proof_required:
         proof = scope.closed_recovery_json(controller, scope._declaration_source_bytes((output / 'online-recharge-build-proof.json').absolute(), limit=23999))
-        scope.online_pending_workspace_build_shape(controller, proof, producer=producer, bridge=bridge, preflight_raw=raw)
+        scope._workspace_typed_build(controller, proof, producer=producer, bridge=bridge, preflight_raw=raw)
         for service in scope.IMAGE_SERVICES:
             scope.verify_image_content(controller, Path.cwd(), proof, service)
-    return {'status': 'ONLINE_RECHARGE_PENDING_WORKSPACE_BUILD_INPUT_VERIFIED', 'producer': producer,
+    return {'status': namespace + '_BUILD_INPUT_VERIFIED', 'producer': producer,
         'preflightBytesSha256': hashlib.sha256(raw).hexdigest(), 'baselineOriginSha256': scope.fingerprint(bridge)}
 
 
@@ -683,6 +696,8 @@ def pending_workspace_main(mode, output):
 
 
 def after_bit_build_input(output, *, proof_required):
+    # Existing build/push commands use this compatibility name for both A/B.
+    # The actual immutable F and origin determine the strict proof type.
     return pending_workspace_build_input(output, proof_required=proof_required)
 
 if __name__ == '__main__':

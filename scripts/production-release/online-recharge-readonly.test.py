@@ -516,5 +516,104 @@ class PendingWorkspaceFailureTransportTests(unittest.TestCase):
                 transport._pending_workspace_failure_diagnostic(output, producer, environment['EXPECTED_CURRENT'])
 
 
+class AfterBitFormalTransportTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        source=importlib.util.spec_from_file_location('formal_b_transport_fixture',
+            Path(__file__).with_name('online-recharge-scope.test.py'))
+        cls.fixture_module=importlib.util.module_from_spec(source);source.loader.exec_module(cls.fixture_module)
+
+    def prepare(self,f,*,initial=False):
+        module=self.fixture_module;helper=module.AfterBitFormalTests()
+        receipt,raw,unused=helper.preflight_and_f(f)
+        if initial:
+            # Synthetic A carrier preserves the already supported compatibility
+            # name. It grants no archive, API acquisition, or production authority.
+            value=json.loads(raw);bridge=value['baseline'];bridge['kind']=module.scope.ONLINE_PENDING_WORKSPACE_KIND
+            value.update(kind='ONLINE_RECHARGE_PENDING_WORKSPACE_PREFLIGHT',
+                status='ONLINE_RECHARGE_PENDING_WORKSPACE_BASELINE_VERIFIED')
+            value['ordinaryPreflight']['onlinePendingWorkspaceOrigin']=value['ordinaryPreflight'].pop('onlineAfterBitOrigin')
+            value['ordinaryPreflight']['onlinePendingWorkspaceOrigin']['kind']=module.scope.ONLINE_PENDING_WORKSPACE_KIND
+            raw=json.dumps(value).encode();receipt=value['ordinaryPreflight']
+        bridge=json.loads(raw)['baseline'];namespace='ONLINE_RECHARGE_PENDING_WORKSPACE' if initial else 'ONLINE_RECHARGE_AFTER_BIT'
+        proof=module.proof();proof.update(kind=namespace+'_BUILD_PROOF',version=2,baselineCommit=module.COMMIT,
+            commit=f.producer['commit'],sourceTree=f.producer['sourceTree'],
+            baselineOriginSha256=module.scope.fingerprint(bridge),preflightBytesSha256=hashlib.sha256(raw).hexdigest())
+        for name in proof['images']:proof['images'][name]['reference']=f"{module.REPOSITORY}:{f.producer['commit']}-124-1-{name}"
+        invocation={'CommandId':json.loads(raw)['commandId'],'InstanceId':'i-12345678901234567',
+            'DocumentName':'AWS-RunShellScript','PluginName':'aws:runShellScript','Status':'Success','ResponseCode':0,
+            'ExecutionEndDateTime':'2026-01-01T00:00:00Z','StandardErrorContent':'','StandardOutputContent':json.dumps(receipt)}
+        output=f.base/'.deploy/production-release';output.mkdir(parents=True,mode=0o700)
+        for name,data in {'online-recharge-pending-workspace-preflight-result.json':raw,
+                'online-recharge-pending-workspace-preflight-invocation.json':json.dumps(invocation).encode(),
+                'online-recharge-build-proof.json':json.dumps(proof).encode()}.items():
+            path=output/name;path.write_bytes(data);path.chmod(0o600)
+        return receipt,raw,json.dumps(invocation).encode(),output,namespace
+
+    def test_actual_b_client_and_existing_cli_alias_select_strict_f_type(self):
+        module=self.fixture_module
+        for initial in (False,True):
+            with self.subTest(initial=initial),module.AfterBitFormalTests().fixture() as f:
+                receipt,raw,qraw,output,namespace=self.prepare(f,initial=initial)
+                environment={**PendingWorkspaceTransportTests().env(),'EXPECTED_CURRENT':module.COMMIT}
+                old=Path.cwd()
+                try:
+                    os.chdir(f.base)
+                    with patch.dict(os.environ,environment,clear=True), \
+                            patch.object(transport,'_pending_workspace_modules',return_value=(f.d,module.scope,None)), \
+                            patch.object(module.scope,'verify_image_content') as image:
+                        summary=transport.pending_workspace_client_binding(receipt,'preflight',f.producer,output)
+                        self.assertIn('onlinePendingWorkspaceOrigin' if initial else 'onlineAfterBitOrigin',summary)
+                        for name in ('after-bit-build-input','after-bit-build-proof'):
+                            with patch.object(transport.sys,'argv',['readonly.py',name]),redirect_stdout(io.StringIO()) as stream:
+                                self.assertEqual(transport.main(),0)
+                            result=json.loads(stream.getvalue());self.assertEqual(result['status'],namespace+'_BUILD_INPUT_VERIFIED')
+                        self.assertEqual(image.call_count,4)
+                        f.d.compose.assert_not_called();f.d.sync_new_table_grants.assert_not_called();f.d.point_current.assert_not_called()
+                finally:os.chdir(old)
+
+    def test_b_installer_and_typed_client_refuse_a_relabel_or_missing_actual_f(self):
+        module=self.fixture_module
+        with module.AfterBitFormalTests().fixture() as f:
+            receipt,raw,qraw,output,unused=self.prepare(f)
+            transport._pending_workspace_artifact_payload(f.producer,raw,qraw)
+            root=f.base/'installer';root.mkdir(mode=0o700)
+            program=transport._pending_workspace_artifact_program(f.producer,raw,qraw,str(root),os.geteuid())
+            with redirect_stdout(io.StringIO()) as stream:exec(compile(program,'<synthetic-formal-b-installer>','exec'),{})
+            transport.online_pending_workspace_validate_artifact_ack(json.loads(stream.getvalue()),f.producer,raw,qraw)
+            for mutation in ('field','kind','version'):
+                value=json.loads(raw)
+                if mutation=='field':value['ordinaryPreflight']['onlinePendingWorkspaceOrigin']=value['ordinaryPreflight'].pop('onlineAfterBitOrigin')
+                elif mutation=='kind':value['baseline']['kind']=module.scope.ONLINE_PENDING_WORKSPACE_KIND
+                else:value['version']=1
+                inv=json.loads(qraw);inv['StandardOutputContent']=json.dumps(value['ordinaryPreflight'])
+                with self.subTest(mutation=mutation),self.assertRaises(RuntimeError):
+                    transport._pending_workspace_artifact_payload(f.producer,json.dumps(value).encode(),json.dumps(inv).encode())
+            (output/'online-recharge-pending-workspace-preflight-result.json').unlink()
+            with patch.dict(os.environ,PendingWorkspaceTransportTests().env(),clear=True), \
+                    patch.object(transport,'_pending_workspace_modules',return_value=(f.d,module.scope,None)), \
+                    patch.object(module.scope,'verify_image_content') as image,self.assertRaises((RuntimeError,OSError)):
+                transport.pending_workspace_build_input(output,proof_required=True)
+            image.assert_not_called();f.d.compose.assert_not_called();f.d.point_current.assert_not_called()
+
+    def test_reviewed_b_policy_build_client_is_source_pure_and_partial_group_rejected(self):
+        module=self.fixture_module
+        with module.AfterBitFormalTests().fixture(policy=True) as f:
+            receipt,raw,qraw,output,namespace=self.prepare(f)
+            environment={**PendingWorkspaceTransportTests().env(),'RELEASE_COMMIT':f.producer['commit'],
+                'SOURCE_TREE':f.producer['sourceTree'],'EXPECTED_CURRENT':module.COMMIT}
+            with patch.dict(os.environ,environment,clear=True), \
+                    patch.object(transport,'_pending_workspace_modules',return_value=(f.d,module.scope,None)), \
+                    patch.object(f.reader,'online_after_bit_cold',side_effect=AssertionError('CI client cannot read server private B')) as cold, \
+                    patch.object(module.scope,'verify_image_content') as image:
+                summary=transport.pending_workspace_client_binding(receipt,'preflight',f.producer,output)
+                self.assertIn('onlineAfterBitOrigin',summary)
+                self.assertEqual(transport.pending_workspace_build_input(output,proof_required=True)['status'],namespace+'_BUILD_INPUT_VERIFIED')
+                self.assertEqual(image.call_count,4);cold.assert_not_called()
+                f.candidate_inventory[module.scope.GRANT_SOURCE]=dict(f.inventory[module.scope.GRANT_SOURCE])
+                with self.assertRaises(RuntimeError):transport.pending_workspace_build_input(output,proof_required=False)
+            f.d.compose.assert_not_called();f.d.sync_new_table_grants.assert_not_called();f.d.point_current.assert_not_called()
+
+
 if __name__ == '__main__':
     unittest.main()

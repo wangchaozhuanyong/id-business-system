@@ -11,7 +11,10 @@ import {
   hasAppleMailboxScope,
   onlineRechargeRecoveryPolicy,
   productionDatabaseAccessHelper,
-  productionDatabaseAccessTest
+  productionDatabaseAccessTest,
+  productionDatabaseAccessAcceptance,
+  hasBankCardDeletePolicyProof,
+  readProductionDatabaseAccessSnapshot
 } from './ci-recharge-scope.mjs';
 
 const [part, base] = process.argv.slice(2);
@@ -584,7 +587,22 @@ if (part === 'guards') {
     workerOptions
   );
 } else if (part === 'security') {
-  run('python3', ['-B', 'scripts/audit-python-dependencies.test.py']);
-  run('node', ['--test', 'scripts/container-hardening.test.mjs']);
-  run('sh', ['-n', 'scripts/start-auto-recharge-connector.sh']);
+  if (
+    mode === 'ci-only' &&
+    changed.some((path) =>
+      [productionDatabaseAccessHelper, productionDatabaseAccessAcceptance].includes(path)
+    )
+  ) {
+    if (!hasBankCardDeletePolicyProof(changed, readProductionDatabaseAccessSnapshot(base, changed)))
+      throw new Error('Missing exact bank-card policy source proof');
+    // The security matrix job has no workspace dependencies. Prepare only the
+    // locked client needed by the existing disposable-database permission test.
+    npm('ci', '--no-audit');
+    npm('run', 'prisma:mysql:generate');
+    npm('run', 'acceptance:v2-production-database-access');
+  } else {
+    run('python3', ['-B', 'scripts/audit-python-dependencies.test.py']);
+    run('node', ['--test', 'scripts/container-hardening.test.mjs']);
+    run('sh', ['-n', 'scripts/start-auto-recharge-connector.sh']);
+  }
 } else throw new Error('Unknown recharge check part');

@@ -7,7 +7,8 @@ import { fileURLToPath } from 'node:url';
 import {
   onlineRechargeRecoveryPolicy,
   productionDatabaseAccessHelper,
-  productionDatabaseAccessTest
+  productionDatabaseAccessTest,
+  productionDatabaseAccessAcceptance
 } from './ci-recharge-scope.mjs';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
@@ -48,6 +49,110 @@ function recordGuardCommands(mode, paths, part = 'guards') {
     })
   );
 }
+
+function recordBankSecurityCommands(drift = '') {
+  // Source-byte/hash enforcement is tested with actual sealed bytes in scope
+  // tests. Here Git acquisition and digests are synthetic to isolate dispatch;
+  // every external command, including the disposable database, is recorded.
+  const script = `
+    import childProcess from 'node:child_process';
+    import crypto from 'node:crypto';
+    import { syncBuiltinESMExports } from 'node:module';
+    const helper = process.env.BANK_TEST_HELPER;
+    const acceptance = process.env.BANK_TEST_ACCEPTANCE;
+    const drift = process.env.BANK_TEST_DRIFT;
+    const before = 'export const V2_RUNTIME_DELETE_TABLES = Object.freeze([\\n';
+    const after = before + "  'id_business_v2_bank_recharge_cards',\\n";
+    const hashes = {
+      [before]: '7ece1de5cbba89b26615d749a671d32a380f4dc377548071746d14f1f2e2a546',
+      [after]: '36bfe57d9fd802fc647d09dd8871f1af4cee6cd03a68bf05a2509dd0e554570d',
+      'acceptance-before': '15adadb670cdbd7645761b161f487b74550b271455289e60a97108e9e4ac46f1',
+      'acceptance-after': 'd39b620aa33ac21cecc0b9229dc0cc59967af1e890ea65c4e61d20fb1dbe269e'
+    };
+    crypto.createHash = () => ({
+      update(value) { this.value = value; return this; },
+      digest() { return hashes[this.value] ?? '0'.repeat(64); }
+    });
+    const calls = [];
+    childProcess.execFileSync = (file, args) => {
+      if (file !== 'git') { calls.push([file, ...args]); return ''; }
+      if (args[0] === 'diff') return [helper, acceptance, ...(drift === 'mixed-app' ? ['apps/api/src/auth/auth.service.ts'] : [])].join('\\n');
+      if (args[0] === 'ls-tree') {
+        const changedMode = args[1] === 'HEAD' && ((args[3] === helper && drift === 'helper-mode') || (args[3] === acceptance && drift === 'acceptance-mode'));
+        return (changedMode ? '100755' : '100644') + ' blob ' + 'e'.repeat(40) + '\\t' + args[3];
+      }
+      if (args[0] === 'show') {
+        const isAfter = args[1].startsWith('HEAD:');
+        if (args[1].endsWith(':' + helper)) return isAfter ? after + (drift === 'helper-bytes' ? 'extra' : '') : before;
+        if (args[1].endsWith(':' + acceptance)) {
+          if (drift === 'missing-acceptance') throw new Error('synthetic missing source');
+          return (isAfter ? 'acceptance-after' : 'acceptance-before') + (isAfter && drift === 'acceptance-bytes' ? 'extra' : '');
+        }
+      }
+      throw new Error('Unexpected Git command');
+    };
+    syncBuiltinESMExports();
+    process.argv = ['node', 'scripts/ci-recharge-check.mjs', 'security', 'a'.repeat(40)];
+    let error = null;
+    try { await import('./scripts/ci-recharge-check.mjs'); } catch (failure) { error = failure.message; }
+    process.stdout.write(JSON.stringify({calls, error}));
+  `;
+  return JSON.parse(
+    execFileSync(process.execPath, ['--input-type=module', '-e', script], {
+      cwd: root,
+      encoding: 'utf8',
+      env: {
+        ...process.env,
+        CHECK_MODE: 'ci-only',
+        BANK_TEST_HELPER: productionDatabaseAccessHelper,
+        BANK_TEST_ACCEPTANCE: productionDatabaseAccessAcceptance,
+        BANK_TEST_DRIFT: drift
+      }
+    })
+  );
+}
+
+test('bank-card controls keep unit checks in guards and run only the disposable permission acceptance in security', () => {
+  const paths = [productionDatabaseAccessHelper, productionDatabaseAccessAcceptance];
+  const guards = recordGuardCommands('ci-only', paths);
+  assert.equal(guards.filter((call) => call.includes(productionDatabaseAccessTest)).length, 1);
+  assert.equal(
+    guards.some((call) => call.includes('acceptance:v2-production-database-access')),
+    false
+  );
+  const { calls, error } = recordBankSecurityCommands();
+  assert.equal(error, null);
+  assert.deepEqual(calls, [
+    ['npm', 'ci', '--no-audit'],
+    ['npm', 'run', 'prisma:mysql:generate'],
+    ['npm', 'run', 'acceptance:v2-production-database-access']
+  ]);
+});
+
+test('bank-card security dispatch refuses source or mode drift before installing or touching a database', () => {
+  for (const drift of [
+    'helper-bytes',
+    'acceptance-bytes',
+    'helper-mode',
+    'acceptance-mode',
+    'missing-acceptance',
+    'mixed-app'
+  ]) {
+    const { calls, error } = recordBankSecurityCommands(drift);
+    assert.match(error, /Missing exact bank-card policy source proof/);
+    assert.deepEqual(calls, [], drift);
+  }
+  const ordinary = recordGuardCommands(
+    'recharge',
+    ['scripts/container-hardening.test.mjs'],
+    'security'
+  );
+  assert.equal(
+    ordinary.some((call) => call.some((arg) => /(?:prisma:|acceptance:)/.test(arg))),
+    false
+  );
+  assert.ok(ordinary.some((call) => call.includes('scripts/container-hardening.test.mjs')));
+});
 
 test('recovery controls execute database grants and every existing online release suite in both dispatchers', () => {
   const commands = [
