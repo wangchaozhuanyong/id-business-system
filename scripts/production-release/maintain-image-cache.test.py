@@ -1891,12 +1891,17 @@ class FixedBootstrapCacheTests(unittest.TestCase):
         tree=PriorDiagnostics().visit(ast.parse(current))
         self.assertEqual(counts,dict.fromkeys(counts,1))
         revised={n.name:ast.dump(n,include_attributes=False) for n in tree.body if isinstance(n,(ast.FunctionDef,ast.ClassDef))}
-        # Only the four authorized generic capacity callables changed. Freeze
-        # their complete new ASTs, then retain the original whole-source witness
-        # for every other callable, including the separate current0a protocol.
-        capacity_asts = {'collect_dependencies': '617f3716d9d650ebf3a2544884160a1dc2ba10f9fb4ab27e86af215884652141', 'make_plan': '91be10cd98c59ee941c5fef352e861157a2c8a28fd822d56d5a8ff62c998c530', 'apply_plan': '452316b1158739c937134fe4aa098314a49d1b5edb5d4cd760bd32200923d471', 'maintain': '39ef534248a973754d44857d7e5df99b8b02888ea7db7e901aba2c541839bd2c'}
-        for name, digest in capacity_asts.items():
-            self.assertEqual(__import__('hashlib').sha256(revised[name].encode()).hexdigest(), digest, name)
+        # Freeze the exact reviewed source bytes, then parse both witnesses with
+        # this interpreter: AST fields such as Python 3.12's empty type_params
+        # must match exactly, without a version-dependent ast.dump digest.
+        capacity_source = subprocess.check_output(['git', 'show',
+            '4f328816c91e6bcf1d3ba82f6d2e9b24e1c16d73:scripts/production-release/maintain-image-cache.py'], cwd=self.project)
+        self.assertEqual(__import__('hashlib').sha256(capacity_source).hexdigest(),
+            '5bfa7a087d8d59400064402e2596ee481eb445a8374ac30546a00a01e9e8bf3f')
+        capacity_asts = {n.name: ast.dump(n, include_attributes=False) for n in ast.parse(capacity_source).body
+            if isinstance(n, (ast.FunctionDef, ast.ClassDef))}
+        for name in ('collect_dependencies', 'make_plan', 'apply_plan', 'maintain'):
+            self.assertEqual(revised[name], capacity_asts[name], name)
             revised[name] = original[name]
         self.assertTrue(all(revised[name]==value for name,value in original.items()))
         ordinary={n.name:ast.dump(n,include_attributes=False) for n in ast.parse(raw.split('# Independent fixed-bootstrap plan/apply transport.',1)[0]).body if isinstance(n,(ast.FunctionDef,ast.ClassDef))}
