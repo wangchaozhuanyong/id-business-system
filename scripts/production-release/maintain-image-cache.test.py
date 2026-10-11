@@ -1894,8 +1894,10 @@ class FixedBootstrapCacheTests(unittest.TestCase):
         # Freeze the exact reviewed source bytes, then parse both witnesses with
         # this interpreter: AST fields such as Python 3.12's empty type_params
         # must match exactly, without a version-dependent ast.dump digest.
-        capacity_source = subprocess.check_output(['git', 'show',
-            '4f328816c91e6bcf1d3ba82f6d2e9b24e1c16d73:scripts/production-release/maintain-image-cache.py'], cwd=self.project)
+        # This exact blob remains reachable from main after its required linear
+        # merge and temporary-branch cleanup; a temporary commit need not survive.
+        capacity_source = subprocess.check_output(['git', 'cat-file', 'blob',
+            'a18f8f39541d4117a701ac8d1e4ad7b63e39b39b'], cwd=self.project)
         self.assertEqual(__import__('hashlib').sha256(capacity_source).hexdigest(),
             '5bfa7a087d8d59400064402e2596ee481eb445a8374ac30546a00a01e9e8bf3f')
         capacity_asts = {n.name: ast.dump(n, include_attributes=False) for n in ast.parse(capacity_source).body
