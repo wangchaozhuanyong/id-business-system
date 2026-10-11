@@ -1259,6 +1259,81 @@ def apply_pending_runtime_projection(d, target, proof):
     pending_online_migrations(d, target)
 
 
+def pending_online_candidate_guard(d, directory, context, candidate):
+    """A local, unpublished stage capability; published readers never receive it."""
+    validate_pending_online_origin(context)
+    d.require(type(candidate) is tuple and len(candidate) == 5,
+              'API_ADMIN_PENDING_ONLINE_RECOVERY_REQUIRED')
+    target, previous, producer, proof, proof_sha = candidate
+    d.require(WORKSPACE and context['version'] == 2 and not context['priorPublications']
+              and pending_online_declaration_entry(d) == 'STAGE'
+              and pending_online_declaration_producer(d) == producer
+              and directory == target and previous == Path(context['baselineRelease'])
+              and target.parent == d.BASE / 'releases' and target.resolve() == target
+              and target.is_dir() and not target.is_symlink()
+              and stat.S_IMODE(target.stat().st_mode) == 0o700
+              and re.fullmatch(r'[0-9]{8}T[0-9]{6}Z-' + producer['commit'][:12], target.name)
+              and fingerprint(proof) == proof_sha
+              and all(proof.get(name) == producer[name] for name in ('commit', 'sourceTree'))
+              and proof.get('pendingOnlineOriginSha256') == fingerprint(context),
+              'API_ADMIN_PENDING_ONLINE_ORIGIN_CHANGED')
+    # Any partial publication revokes the source capability, too. Missing or
+    # malformed published evidence must fail through the original full reader.
+    if any((target / name).exists() or (target / name).is_symlink()
+           for name in (STATE_FILE, PROOF_FILE, 'release-manifest.json')):
+        return pending_online_guard(d, directory, context)
+    d.require((d.BASE / 'current').resolve() == previous,
+              'API_ADMIN_PENDING_ONLINE_ORIGIN_CHANGED')
+    recovery = pending_online_guard(d, previous, context)
+    seal = getattr(d, '_apiWorkspaceDeclarationDeploymentSeal', None)
+    d.require(type(seal) is dict and proof.get('pendingOnlinePreflightSha256') == seal.get('preflightBytesSha256')
+              and proof.get('declarationEquivalenceSeal') == {name: seal.get(name) for name in
+                  ('kind', 'version', 'preflightProofSha256', 'semanticSha256')},
+              'API_ADMIN_PENDING_ONLINE_ORIGIN_CHANGED')
+    projection = pending_projection()
+    runtime = {'docker-compose.aws-mysql.yml', MIGRATION_SCHEMA, MIGRATION_SEED}
+    original = '.deploy/production-release/pending-original-source/'
+    # Only exact files written by this release stage are outside the Git tree.
+    generated = {'.env.aws.production', 'compose.release.json', 'before-audit.json',
+        'after-audit.json', 'backup-verification.json', WORKSPACE_BACKUP_FILE,
+        WORKSPACE_BACKUP_RECEIPT, WORKSPACE_SQLITE_RECEIPT, 'backups/auto-registration/database.db'}
+    files, preserved = {}, {}
+    for path in target.rglob('*'):
+        d.require(not path.is_symlink(), 'API_ADMIN_SOURCE_ENTRY_INVALID')
+        if path.is_dir():
+            continue
+        d.require(path.is_file(), 'API_ADMIN_SOURCE_ENTRY_INVALID')
+        name = path.relative_to(target).as_posix()
+        if name in generated:
+            continue
+        d.require(path.stat().st_size <= 8 * 1024**2, 'API_ADMIN_SOURCE_TOO_LARGE')
+        if name.startswith(original):
+            relative = name[len(original):]
+            d.require(relative in runtime and stat.S_IMODE(path.stat().st_mode) == 0o600,
+                      'API_ADMIN_PENDING_ONLINE_PROJECTION_CHANGED')
+            preserved[relative] = path.read_bytes()
+        else:
+            files[name] = (path.read_bytes(), '100755' if path.stat().st_mode & 0o111 else '100644')
+    d.require(set(preserved) == runtime and runtime <= set(files),
+              'API_ADMIN_PENDING_ONLINE_PROJECTION_CHANGED')
+    projected = {name: files[name] for name in runtime}
+    record = proof['pendingOnlineProjection']
+    for name in runtime:
+        files[name] = (preserved[name], record['generatedFiles'][name]['before']['mode'])
+    d.require(projection.source_tree(files) == producer['sourceTree'], 'API_ADMIN_SOURCE_TREE_CHANGED')
+    d.require(projection.runtime_config_files(d, files, record) == projected,
+              'API_ADMIN_PENDING_ONLINE_PROJECTION_CHANGED')
+    require_preserved(d, previous, target, context['services'], (previous / '.env.aws.production').read_bytes())
+    d.require(proof['configuration'] == workspace_configuration(d, previous, target),
+              'API_ADMIN_WORKSPACE_CONFIG_PROOF_CHANGED')
+    override = json.loads((previous / 'compose.release.json').read_text())
+    for name in IMAGE_SERVICES:
+        override['services'][name] = {'image': proof['images'][name]['reference'], 'pull_policy': 'never'}
+    d.require(json.loads((target / 'compose.release.json').read_text()) == override,
+              'API_ADMIN_PRESERVED_IMAGE_REFERENCE_CHANGED')
+    return recovery
+
+
 class WorkspaceBaselineError(RuntimeError):
     def __init__(self, code, diagnostic):
         super().__init__(code)
@@ -2402,9 +2477,10 @@ def online_origin(d, directory, manifest, states):
     online_origin_guard(d, directory, context)
     return context
 
-def preserved_migration_guard(d, directory, context, online=None):
+def preserved_migration_guard(d, directory, context, online=None, *, pending_candidate=None):
     if online is None:
-        return migration_successor_guard(d, directory, context)
+        return migration_successor_guard(d, directory, context, **({'pending_candidate': pending_candidate}
+            if pending_candidate is not None else {}))
     o = online_reader(d); origin = Path(online['release'])
     manifest = json.loads((origin / 'release-manifest.json').read_text())
     o.historical_guard(d, Path(manifest['previousRelease']), {'migrationOrigin': context}, origin)
@@ -2587,7 +2663,11 @@ def workspace_database_controller(d, directory, identity):
             return getattr(d, name)
         def current_job_database(self, selected):
             return workspace_database_identity(d, directory, identity)['database']
-    return Controller()
+    controller = Controller()
+    current_database = controller.current_job_database
+    controller.__dict__.update(vars(d))
+    controller.current_job_database = current_database
+    return controller
 
 def online_rollback_api(d, previous, target, before, proof, context, *, database_identity=None):
     controller = workspace_database_controller(d, previous, database_identity) if database_identity is not None else d
@@ -3152,11 +3232,12 @@ def migration_successor_origin(d, directory):
     return context
 
 
-def migration_successor_guard(d, directory, context):
+def migration_successor_guard(d, directory, context, *, pending_candidate=None):
     pending = getattr(d, '_pendingOnlineMigrationOrigin', None)
     if pending is not None and not getattr(d, '_pendingOnlineHistoryProjected', False):
         online, _ = d.online_recharge_scope()
-        recovery = pending_online_guard(d, directory, pending)
+        recovery = (pending_online_candidate_guard(d, directory, pending, pending_candidate)
+                    if pending_candidate is not None else pending_online_guard(d, directory, pending))
         projected = online.historical_controller(d, directory, recovery['source'])
         projected._pendingOnlineHistoryProjected = True
         return migration_successor_guard(projected, Path(pending['baselineRelease']), context)
@@ -5046,6 +5127,7 @@ def _release_locked(d, args):
     d.require(not target.exists(), 'API_ADMIN_RELEASE_EXISTS')
     target.mkdir(mode=0o700)
     changed, step = [], 'source'
+    pending_candidate = None
     sqlite_gate = None
     workspace_admission = None
     workspace_database = None
@@ -5092,6 +5174,9 @@ def _release_locked(d, args):
         for name in IMAGE_SERVICES:
             override['services'][name] = {'image': proof['images'][name]['reference'], 'pull_policy': 'never'}
         (target / 'compose.release.json').write_text(json.dumps(override, indent=2) + '\n')
+        if pending is not None and pending['version'] == 2 and not pending['priorPublications']:
+            pending_candidate = (target, previous, {'commit': args.commit, 'sourceTree': args.source_tree,
+                'workflowRunId': args.run_id, 'workflowRunAttempt': args.run_attempt}, proof, fingerprint(proof))
         require_preserved(d, previous, target, before, environment, all_services=True, online_context=retained_online)
         if WORKSPACE:
             d.require(proof['configuration'] == workspace_configuration(d, previous, target),
@@ -5108,7 +5193,7 @@ def _release_locked(d, args):
             except RuntimeError:
                 raise RuntimeError('API_ADMIN_WORKSPACE_CADDY_VALIDATION_FAILED') from None
         if retained_origin is not None:
-            preserved_migration_guard(d, target, retained_origin, retained_online)
+            preserved_migration_guard(d, target, retained_origin, retained_online, pending_candidate=pending_candidate)
         step = 'images'
         d.require(shutil.disk_usage(d.BASE).free > 6 * 1024**3, 'API_ADMIN_DISK_LOW_BEFORE_PULL')
         password = d.run('aws', 'ecr', 'get-login-password', '--region', 'ap-northeast-1')
@@ -5142,7 +5227,7 @@ def _release_locked(d, args):
         if WORKSPACE:
             workspace_idle(d, previous, legacy='sqliteProtectionSha256' not in old.get('apiWorkspacePublication', {}))
         if retained_origin is not None:
-            preserved_migration_guard(d, target, retained_origin, retained_online)
+            preserved_migration_guard(d, target, retained_origin, retained_online, pending_candidate=pending_candidate)
         if MIGRATION_MODE:
             step = 'migration'
             migration_task_guard(d, previous, original_task, evidence['guards'])
@@ -5154,7 +5239,7 @@ def _release_locked(d, args):
         for name in (('admin', 'api') if pending is not None else SWITCH_ORDER):
             require_preserved(d, previous, target, before, environment, online_context=retained_online)
             if retained_origin is not None:
-                preserved_migration_guard(d, target, retained_origin, retained_online)
+                preserved_migration_guard(d, target, retained_origin, retained_online, pending_candidate=pending_candidate)
             if MIGRATION_MODE:
                 migration_task_guard(d, previous, original_task, evidence['guards'])
             if name == 'api' or REGISTRATION:
@@ -5239,7 +5324,7 @@ def _release_locked(d, args):
             migration_task_guard(d, target, original_task, evidence['guards'])
             record.update(registrationGuards=evidence['guards'], migration=migration_result)
         if retained_origin is not None:
-            preserved_migration_guard(d, target, retained_origin, retained_online)
+            preserved_migration_guard(d, target, retained_origin, retained_online, pending_candidate=pending_candidate)
             record['migrationOrigin'] = retained_origin
         if retained_online is not None:
             online_origin_guard(d, target, retained_online)
@@ -5331,7 +5416,8 @@ def _release_locked(d, args):
         for name in reversed(changed):
             try:
                 if retained_origin is not None:
-                    preserved_migration_guard(rollback_controller, target, retained_origin, retained_online)
+                    preserved_migration_guard(rollback_controller, target, retained_origin, retained_online,
+                        pending_candidate=pending_candidate)
                 if name == 'api' or REGISTRATION or MIGRATION_MODE:
                     jobs_idle(d, target, **({'database_identity': workspace_database}
                         if WORKSPACE and workspace_database is not None else {}))
