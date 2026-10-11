@@ -685,6 +685,21 @@ def compare(source, reference, spec):
         raise Rejected(bounded_error(error)) from None
 
 
+def oom_default_projection(source, actual, reference, spec):
+    # Fixed create verify->adapt defaults to false; normal API 1.44 start
+    # verifies again and may clear the unsupported pointer without re-adapting.
+    # Both forms keep OOM killing enabled for this closed, override-free API.
+    source_api_validate(source['api'],Path(source['directory']),spec)
+    left,right=actual['HostConfig'],reference['HostConfig']
+    check(spec['engineVersion']=='25.0.16' and spec['engineApiVersion']=='1.44'
+          and spec['composeVersion']=='5.5.0'
+          and 'OomKillDisable' in left and 'OomKillDisable' in right
+          and right['OomKillDisable'] is False
+          and (left['OomKillDisable'] is None or left['OomKillDisable'] is False),
+          'COMPLETE_HOSTCONFIG_OOMKILLDISABLE')
+    if left['OomKillDisable'] is None:right['OomKillDisable']=None
+
+
 def _compare(source, reference, spec):
     merged, dep, role = bind_pack(source,spec)
     _, _, ref_role = bind_pack(reference,spec,reference=True,source=source)
@@ -707,6 +722,7 @@ def _compare(source, reference, spec):
     r['Mounts'][0]['Name'],r['Mounts'][0]['Source'] = source['volume']['Name'],source['volume']['Mountpoint']
     check(('Mounts' in a['HostConfig']) is ('Mounts' in r['HostConfig'])
           and type(a['HostConfig'].get('Mounts')) is type(r['HostConfig'].get('Mounts')), 'HOST_MOUNTS_SHAPE')
+    oom_default_projection(source,a,r,spec)
     normalized_a, normalized_r = fingerprint(a), fingerprint(r)
     matched = normalized_a == normalized_r
     return {'matched':matched,'reason':'COMPLETE_EQUAL' if matched else configuration_difference(a,r),
