@@ -26,6 +26,49 @@ beforeEach(() => {
   mock.callback.mockResolvedValue({ ok: true });
 });
 describe('网页直连登录任务生命周期', () => {
+  it('密码登录携带服务端账号绑定，重建回执及后续终态统一使用新ID', async () => {
+    const current = launch();
+    current.accountKey = 'c'.repeat(64);
+    current.ownedProfile = {
+      sourceJobId: 'source-job',
+      profileId: 'a'.repeat(32),
+      accountKey: current.accountKey
+    };
+    mock.run.mockImplementation(async (_settings, _credential, _name, _signal, hooks) => {
+      expect(hooks.accountKey).toBe(current.accountKey);
+      expect(hooks.ownedProfile).toEqual(current.ownedProfile);
+      await hooks.progress('owned_profile_check', {
+        browser_profile_id: current.ownedProfile!.profileId
+      });
+      await hooks.progress('bitbrowser_profile_created', {
+        browser_profile_id: 'b'.repeat(32),
+        replaced_browser_profile_id: current.ownedProfile!.profileId,
+        browser_profile_missing_confirmed: true
+      });
+      return { status: 'session_ready', account_matched: true };
+    });
+    const scope = effectScope();
+    const controller = scope.run(() => useBitBrowserDirectOpen(async () => undefined, vi.fn()))!;
+    await controller.start(
+      current,
+      { login: { email: 'fixture@example.com', password: 'fixture-password' } },
+      '窗口'
+    );
+    await vi.waitFor(() => expect(controller.running.value).toBe(false));
+    expect(mock.callback.mock.calls.at(-1)?.[2]).toMatchObject({
+      type: 'finished',
+      result: { browser_profile_id: 'b'.repeat(32), payment_requests_sent: 0 }
+    });
+    expect(
+      mock.callback.mock.calls.find(
+        ([, , input]) => input.result?.stage === 'bitbrowser_profile_created'
+      )?.[2].result
+    ).toMatchObject({
+      replaced_browser_profile_id: 'a'.repeat(32),
+      browser_profile_missing_confirmed: true
+    });
+    scope.stop();
+  });
   it('自动验证码的有效期沿原任务传递给官网提交执行器', async () => {
     const scope = effectScope();
     const controller = scope.run(() => useBitBrowserDirectOpen(async () => undefined, vi.fn()))!;

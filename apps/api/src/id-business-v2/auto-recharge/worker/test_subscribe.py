@@ -371,12 +371,12 @@ class LedgerGuardTests(unittest.TestCase):
             self.assertEqual(guard.classify("POST", url), "payment")
         self.assertEqual(guard.classify("POST", "https://unknown.example/execute"), "unknown_write")
 
-    def test_session_diagnostics_preserve_write_and_payment_blocking(self):
+    def test_session_diagnostics_allow_exact_auth_write_but_preserve_payment_blocking(self):
         async def exercise():
             guard = NetworkGuard(self.target)
             requests = (
                 ("GET", "https://chatgpt.com/api/auth/session", False),
-                ("POST", "https://chatgpt.com/api/auth/session", True),
+                ("POST", "https://chatgpt.com/api/auth/session", False),
                 ("POST", "https://chatgpt.com/backend-api/payments/checkout/confirm", True),
                 ("POST", "https://unknown.example/api/auth/session", True),
             )
@@ -395,11 +395,39 @@ class LedgerGuardTests(unittest.TestCase):
                     route.fallback.assert_awaited_once()
                     route.abort.assert_not_awaited()
             result = guard.summary()
-            self.assertEqual(result["auth_session_writes_blocked"], 1)
-            self.assertEqual(result["other_writes_blocked"], 2)
+            self.assertEqual(result["auth_session_writes_blocked"], 0)
+            self.assertEqual(result["other_writes_blocked"], 1)
             self.assertEqual(result["payment_requests_blocked"], 1)
             self.assertEqual(result["payment_requests_sent"], 0)
             self.assertEqual(result["checkout_requests_sent"], 0)
+        asyncio.run(exercise())
+
+    def test_auth_session_post_exception_never_allows_other_origins_or_adjacent_writes(self):
+        async def exercise():
+            guard = NetworkGuard(self.target)
+            for url in (
+                    'http://chatgpt.com/api/auth/session',
+                    'https://chatgpt.com.evil.example/api/auth/session',
+                    'https://sub.chatgpt.com/api/auth/session',
+                    'https://chatgpt.com/api/auth/session/refresh',
+                    'https://chatgpt.com/api/auth/session-extra',
+                    'https://chatgpt.com:444/api/auth/session',
+                    'https://fixture@chatgpt.com/api/auth/session'):
+                with self.subTest(url=url):
+                    self.assertEqual(guard.classify('POST', url), 'unknown_write')
+                    route = AsyncMock()
+                    route.request.method, route.request.url = 'POST', url
+                    route.request.post_data = None
+                    route.request.headers = {}
+                    with patch.object(guard, 'route_hcaptcha', return_value=False):
+                        await guard.route(route)
+                    route.abort.assert_awaited_once_with('blockedbyclient')
+                    route.fallback.assert_not_awaited()
+            for method in ('PUT', 'PATCH', 'DELETE'):
+                self.assertEqual(guard.classify(method, 'https://chatgpt.com/api/auth/session'), 'unknown_write')
+            self.assertEqual(guard.classify('POST', 'https://chatgpt.com/backend-api/payments/checkout'), 'unknown_write')
+            self.assertEqual(guard.classify('POST', 'https://api.stripe.com/v1/payment_methods'), 'payment')
+            self.assertEqual(guard.sent, 0)
         asyncio.run(exercise())
 
     def test_only_verified_original_checkout_initialization_is_allowed(self):

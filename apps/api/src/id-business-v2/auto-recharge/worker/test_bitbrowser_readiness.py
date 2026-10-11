@@ -1,9 +1,14 @@
 """原窗口代理预检和登录页面同步；仅合成数据，不访问外网。"""
 from types import SimpleNamespace
+import json
+from pathlib import Path
+import shutil
+import subprocess
 import unittest
 from unittest.mock import AsyncMock, patch
 
 import browser_checkout
+import browser_password_login
 from browser_session import SessionBudget
 from checkout_core import BrowserCredential, Credential, Stop
 
@@ -121,6 +126,115 @@ class LoginReadinessTests(unittest.IsolatedAsyncioTestCase):
             await browser_checkout.synchronize_login_page(page, target, identity, budget=budget)
         self.assertEqual(error.exception.report['reason'], 'operation_cancelled')
         page.reload.assert_not_awaited()
+
+
+class LoginComposerDOMTests(unittest.TestCase):
+    """Execute the real readiness expression in a local, fully stubbed browser."""
+    @classmethod
+    def setUpClass(cls):
+        node = shutil.which('node')
+        if not node:
+            raise unittest.SkipTest('Node runtime unavailable for the DOM fixture')
+        root = Path(__file__).resolve().parents[6]
+        available = subprocess.run([node, '-e',
+            "require('fs').accessSync(require('playwright').chromium.executablePath())"],
+            cwd=root, text=True, capture_output=True, timeout=10)
+        if available.returncode != 0:
+            raise unittest.SkipTest('Local Playwright browser unavailable for the DOM fixture')
+        script = r"""
+const {chromium} = require('playwright');
+const {expression, modes} = JSON.parse(require('fs').readFileSync(0, 'utf8'));
+(async () => {
+    const browser = await chromium.launch({headless: true});
+    try {
+        const page = await browser.newPage();
+        await page.routeWebSocket('wss://chatgpt.com/synthetic-boot', ws =>
+            ws.onMessage(() => ws.send('ready')));
+        const account = '<button data-testid="accounts-profile-button" aria-haspopup="menu">Account</button>';
+        await page.route('**/*', route => route.fulfill({status: 200, contentType: 'text/html', body: account}));
+        await page.goto('https://chatgpt.com/');
+        const variants = {
+            menu_only: '',
+            textarea_disabled: '<form><textarea id="prompt-textarea" disabled></textarea></form>',
+            textarea_readonly: '<form><textarea id="prompt-textarea" readonly></textarea></form>',
+            form_busy: '<form aria-busy="true"><textarea id="prompt-textarea"></textarea></form>',
+            spinner: '<form><textarea id="prompt-textarea"></textarea><span class="animate-spin">Loading</span></form>',
+            progressbar: '<form><textarea id="prompt-textarea"></textarea><span role="progressbar">Loading</span></form>',
+            hidden_composer: '<form aria-hidden="true"><textarea id="prompt-textarea"></textarea></form>',
+            inert_composer: '<form inert><textarea id="prompt-textarea"></textarea></form>',
+            pointer_blocked: '<form><div id="prompt-textarea" contenteditable="true" style="pointer-events:none">Prompt</div></form>',
+            textarea_empty_send_disabled: '<form><textarea id="prompt-textarea"></textarea><button disabled>Send</button></form>',
+            prose_mirror: '<form><div id="prompt-textarea" class="ProseMirror" contenteditable="true" role="textbox" aria-multiline="true"><p><br></p></div></form>',
+            editable_false: '<form><div id="prompt-textarea" contenteditable="false" role="textbox">Prompt</div></form>',
+            hidden_spinner: '<form><textarea data-testid="prompt-textarea"></textarea><span class="animate-spin" style="display:none">Loading</span></form>'
+        };
+        const results = {};
+        for (const [name, markup] of Object.entries(variants)) {
+            await page.setContent(account + markup);
+            results[name] = await page.evaluate('(' + expression + ')()');
+        }
+        // A genuine local boot waits for both an official session POST and a
+        // WebSocket handshake. Every HTTP response and socket is intercepted;
+        // this test never reaches ChatGPT or any payment service.
+        for (const [mode, sessionAllowed] of Object.entries(modes)) {
+            await page.unroute('**/*');
+            await page.route('**/*', route => {
+                if (sessionAllowed && route.request().method() === 'POST' &&
+                    route.request().url() === 'https://chatgpt.com/api/auth/session')
+                    return route.fulfill({status: 200, contentType: 'application/json', body: '{"initialized":true}'});
+                return route.abort('blockedbyclient');
+            });
+            await page.setContent(account + '<form aria-busy="true"><textarea id="prompt-textarea" disabled></textarea><button disabled>Send</button></form>');
+            results[mode + '_boot_before'] = await page.evaluate('(' + expression + ')()');
+            results[mode + '_session_post'] = await page.evaluate(async () => {
+                const session = await fetch('/api/auth/session', {method: 'POST', credentials: 'include'});
+                const initialized = (await session.json()).initialized;
+                await new Promise((resolve, reject) => {
+                    const socket = new WebSocket('wss://chatgpt.com/synthetic-boot');
+                    const timer = setTimeout(() => { socket.close(); reject(new Error('local socket timeout')); }, 5000);
+                    socket.onopen = () => socket.send('boot');
+                    socket.onmessage = () => { clearTimeout(timer); socket.close(); resolve(); };
+                });
+                document.querySelector('form').removeAttribute('aria-busy');
+                document.querySelector('textarea').disabled = false;
+                return initialized;
+            });
+            results[mode + '_boot_after'] = await page.evaluate('(' + expression + ')()');
+        }
+        process.stdout.write(JSON.stringify(results));
+    } finally { await browser.close(); }
+})().catch(error => { process.stderr.write(error.name + ': ' + error.message); process.exitCode = 1; });
+"""
+        completed = subprocess.run([node, '-e', script], cwd=root,
+                                   input=json.dumps({'expression': browser_checkout.LOGIN_PAGE_READY_EXPRESSION,
+                                       'modes': {
+                                           'login': not browser_password_login.login_payment_write(
+                                               'POST', 'https://chatgpt.com/api/auth/session'),
+                                           'recharge': browser_checkout.NetworkGuard(None).classify(
+                                               'POST', 'https://chatgpt.com/api/auth/session') == 'read'}}),
+                                   text=True, capture_output=True, timeout=30)
+        if completed.returncode != 0:
+            raise AssertionError('Local DOM fixture failed: ' + completed.stderr)
+        cls.results = json.loads(completed.stdout)
+
+    def test_menu_visible_with_busy_or_uneditable_composer_is_not_ready(self):
+        for name in ('menu_only', 'textarea_disabled', 'textarea_readonly', 'form_busy',
+                     'spinner', 'progressbar', 'hidden_composer', 'inert_composer',
+                     'pointer_blocked', 'editable_false'):
+            with self.subTest(name=name):
+                self.assertIs(self.results[name], False)
+
+    def test_writable_composer_is_ready_with_empty_disabled_send(self):
+        for name in ('textarea_empty_send_disabled', 'prose_mirror', 'hidden_spinner'):
+            with self.subTest(name=name):
+                self.assertIs(self.results[name], True)
+
+    def test_session_post_and_socket_boot_finish_before_readiness(self):
+        for mode in ('login', 'recharge'):
+            with self.subTest(mode=mode):
+                self.assertIs(self.results[mode + '_boot_before'], False)
+                self.assertIs(self.results[mode + '_session_post'], True)
+                self.assertIs(self.results[mode + '_boot_after'], True)
 
 
 if __name__ == '__main__':

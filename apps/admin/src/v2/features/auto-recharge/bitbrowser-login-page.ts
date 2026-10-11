@@ -255,18 +255,56 @@ export function inspectLoggedInPage() {
     return { kind: 'page_loading' as const };
   if (/Just a moment|Verify.*human|安全验证|请稍候/i.test(document.title))
     return { kind: 'manual' as const };
+  const visible = (node: HTMLElement) => {
+    const style = getComputedStyle(node);
+    return (
+      node.getClientRects().length > 0 &&
+      style.visibility !== 'hidden' &&
+      style.display !== 'none' &&
+      !node.closest('[inert], [aria-hidden="true"]')
+    );
+  };
   const controls = Array.from(
     document.querySelectorAll<HTMLElement>(
       '[data-testid="accounts-profile-button"][aria-haspopup="menu"]'
     )
   ).filter(
     (node) =>
-      node.getClientRects().length > 0 &&
-      getComputedStyle(node).visibility !== 'hidden' &&
+      visible(node) &&
       node.matches('button, [role="button"]') &&
       !node.matches(':disabled, [aria-disabled="true"]')
   );
-  return { kind: controls.length > 0 ? ('page_ready' as const) : ('page_loading' as const) };
+  const composers = Array.from(
+    document.querySelectorAll<HTMLElement>(
+      '#prompt-textarea, textarea[data-testid="prompt-textarea"]'
+    )
+  );
+  const ready =
+    controls.length > 0 &&
+    composers.some((node) => {
+      if (
+        !visible(node) ||
+        node.closest('[aria-busy="true"], [data-loading="true"], [aria-disabled="true"]') ||
+        getComputedStyle(node).pointerEvents === 'none' ||
+        node.matches(':disabled, [readonly], [aria-disabled="true"]') ||
+        !(node.matches('textarea') || node.isContentEditable)
+      )
+        return false;
+      const region =
+        node.closest('[data-testid="composer"], [data-type="unified-composer"], form') ??
+        node.parentElement;
+      return (
+        region !== null &&
+        !Array.from(
+          region.querySelectorAll<HTMLElement>(
+            '[aria-busy="true"], [data-loading="true"], [role="progressbar"], .animate-spin, ' +
+              '[data-testid*="loading"], [data-testid*="spinner"], ' +
+              '[aria-label="Loading"], [aria-label="加载中"], [aria-label="正在加载"]'
+          )
+        ).some(visible)
+      );
+    });
+  return { kind: ready ? ('page_ready' as const) : ('page_loading' as const) };
 }
 
 export function loggedInPageExpression() {

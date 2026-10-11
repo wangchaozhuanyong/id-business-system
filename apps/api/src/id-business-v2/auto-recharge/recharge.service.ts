@@ -13,6 +13,7 @@ import {
   toV2JsonDocument
 } from '../runtime/public-api';
 import { RechargeRepository } from './persistence/recharge.repository';
+import { retainOrReplaceRechargeBrowserProfile } from './recharge-profile-recovery';
 import { completeCancellation } from './recharge-cancellation';
 import { RechargeAddressRepository } from './persistence/recharge-address.repository';
 import { consumeRechargeAddress } from './recharge-address-consumption';
@@ -31,6 +32,7 @@ import {
 } from './recharge-validation';
 import { completeUnknownPaymentResolution } from './recharge-resolution';
 import {
+  canRecreateRechargeBrowserProfile,
   isBrowserProfileId,
   rechargeCheckoutIdentifier,
   staleProfile
@@ -227,15 +229,21 @@ export class RechargeService {
           if (job.chatgptAccountId && this.bankAccounts) {
             await this.bankAccounts.assertOfficialAccount(tx, job.chatgptAccountId, accountKey);
           }
-          const ownedProfile =
+          const currentResult = object(job.result);
+          let ownedProfile =
             job.action === 'bitbrowser'
-              ? await this.repository.retainedProfileForAccount(tx, job.ownerId, accountKey, job.id)
+              ? await this.repository.retainedProfileForAccount(
+                  tx,
+                  job.ownerId,
+                  accountKey,
+                  job.id,
+                  canRecreateRechargeBrowserProfile(currentResult)
+                )
               : undefined;
           const finished =
             job.action === 'bitbrowser'
               ? []
               : await this.repository.finishedJobsForAccount(tx, job.ownerId, accountKey, job.id);
-          const currentResult = object(job.result);
           const originalCheckoutIdentifier =
             job.action === 'bitbrowser' &&
             currentResult.mode !== 'open_browser' &&
@@ -255,8 +263,14 @@ export class RechargeService {
             ownedProfile &&
             isBrowserProfileId(currentResult.browser_profile_id) &&
             currentResult.browser_profile_id !== ownedProfile.profileId
-          )
-            throw new ConflictException('本次任务已绑定另一比特窗口，不能覆盖原窗口');
+          ) {
+            if (
+              currentResult.browser_profile_missing_confirmed !== true ||
+              currentResult.replaced_browser_profile_id !== ownedProfile.profileId
+            )
+              throw new ConflictException('本次任务已绑定另一比特窗口，不能覆盖原窗口');
+            ownedProfile = { ...ownedProfile, profileId: currentResult.browser_profile_id };
+          }
           const staleProfiles =
             job.action === 'bitbrowser'
               ? []
@@ -371,18 +385,14 @@ export class RechargeService {
           throw new ConflictException('已结束任务不能再写入执行事件');
         }
         const report = safeDocument(input.result);
-        if (job.action === 'bitbrowser') {
-          const originalProfileId = object(job.result).browser_profile_id;
-          if (isBrowserProfileId(originalProfileId)) {
-            if (
-              report.browser_profile_id !== undefined &&
-              report.browser_profile_id !== '' &&
-              report.browser_profile_id !== originalProfileId
-            )
-              throw new ConflictException('本次任务已绑定原比特窗口，不能更换窗口');
-            report.browser_profile_id = originalProfileId;
-          }
-        }
+        await retainOrReplaceRechargeBrowserProfile({
+          tx,
+          job,
+          eventType: input.type,
+          report,
+          repository: this.repository,
+          audit: this.audit
+        });
         await bindSavedChatgptAccount(tx, job, report, this.bankAccounts);
         const verifiedAt =
           input.type === 'progress'

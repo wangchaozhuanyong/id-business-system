@@ -875,6 +875,23 @@ describe('比特浏览器充值入口', () => {
     expect(mock.startBitBrowser).not.toHaveBeenCalled();
     expect(mock.connectorStart).not.toHaveBeenCalled();
   });
+  it('账号密码辅助登录传已选账号引用以恢复所属窗口，不向启动接口传密码', async () => {
+    await choosePasswordAccount(true, false);
+    flow.operationMode.value = 'open_browser';
+    await flow.startOpen();
+    expect(mock.startBitBrowserOpen).toHaveBeenCalledOnce();
+    const input = mock.startBitBrowserOpen.mock.calls[0]![0];
+    expect(input).toMatchObject({
+      directMode: true,
+      chatgptAccountId: flow.selectedBankAccountId.value
+    });
+    expect(input).not.toHaveProperty('login');
+    expect(input).not.toHaveProperty('password');
+    expect(mock.directStart.mock.calls[0]?.[1]).toMatchObject({
+      login: { email: expect.any(String) }
+    });
+    expect(mock.connectorStart).not.toHaveBeenCalled();
+  });
   it('人工验证码只发向所选原任务，自动 2FA 只提交一次', async () => {
     await choosePasswordAccount(true, true);
     jobs.value.items = [job('awaiting_human_verification', { stage: 'login_code_required' })];

@@ -50,6 +50,60 @@ export function isBrowserProfileId(value: unknown): value is string {
   return typeof value === 'string' && browserProfilePattern.test(value);
 }
 
+/** 已发付款或已消耗确认的任务不能靠更换窗口重新执行。未付款原结算仍可恢复。 */
+export function rechargeProfileHasPaymentRisk(result: Record<string, unknown>) {
+  const zero = (value: unknown) => value === undefined || value === null || value === 0;
+  return (
+    (result.payment_attempted !== undefined && result.payment_attempted !== false) ||
+    !zero(result.payment_requests_sent) ||
+    !zero(result.confirmation_requests_sent) ||
+    result.manual_confirmation_accepted === true ||
+    Boolean(result.payment_evidence) ||
+    (result.payment_status !== undefined &&
+      result.payment_status !== null &&
+      result.payment_status !== 'not_attempted') ||
+    ['unknown', 'succeeded', 'subscription_activated'].includes(String(result.payment_outcome)) ||
+    result.checkout_outcome === 'unknown' ||
+    (Number(result.checkout_requests_sent ?? 0) > 0 &&
+      !/^(?:cs|oaics)_[A-Za-z0-9_]{1,200}$/.test(String(result.checkout_identifier ?? '')))
+  );
+}
+
+export function canRecreateRechargeBrowserProfile(result: Record<string, unknown>) {
+  return (
+    result.recheck_only !== true &&
+    result.resolution_only !== true &&
+    result.handoff_kind !== 'bank' &&
+    (result.three_ds_status === undefined || result.three_ds_status === 'not_required') &&
+    !rechargeProfileHasPaymentRisk(result)
+  );
+}
+
+export function rechargeProfileRecordsHavePaymentRisk(
+  records: { ownerId: string; fileKey: string; document: unknown }[],
+  ownerId: string,
+  accountKey: string,
+  plan: string,
+  previous: Record<string, unknown>
+) {
+  const identifier = previous.checkout_identifier ?? previous.upgrade_identifier;
+  const checkoutFile = `${accountKey}${plan === 'plus' ? '' : `-${plan}`}.json`;
+  return records.some((record) => {
+    if (record.ownerId !== ownerId) return true;
+    if (!record.document || typeof record.document !== 'object' || Array.isArray(record.document))
+      return record.fileKey === checkoutFile || record.fileKey.startsWith('payments/');
+    const document = record.document as Record<string, unknown>;
+    const bound =
+      typeof identifier === 'string' &&
+      (document.checkout_identifier === identifier || document.upgrade_identifier === identifier);
+    const unresolved =
+      record.fileKey.startsWith('payments/') &&
+      ['unknown', 'requires_action'].includes(String(document.payment_status));
+    const currentCheckout = previous.mode !== 'open_browser' && record.fileKey === checkoutFile;
+    return (bound || unresolved || currentCheckout) && rechargeProfileHasPaymentRisk(document);
+  });
+}
+
 export function staleProfile(job: FinishedRechargeJob, includeCompleted = false) {
   if (!job.result || typeof job.result !== 'object' || Array.isArray(job.result)) return null;
   const result = job.result as Record<string, unknown>;
@@ -130,7 +184,8 @@ export function findOwnedRechargeBrowserProfile(
 export function findRetainedRechargeBrowserProfile(
   jobs: OwnedRechargeJob[],
   ownerId: string,
-  accountKey: string
+  accountKey: string,
+  allowDeletedProfile = false
 ): V2RechargeOwnedBrowserProfile | undefined {
   if (!/^[a-f0-9]{64}$/.test(accountKey)) return undefined;
   for (const job of jobs) {
@@ -147,8 +202,11 @@ export function findRetainedRechargeBrowserProfile(
       continue;
     const result = job.result as Record<string, unknown>;
     if (result.recheck_only === true) continue;
-    // 原窗口被删除后必须停下，不能跳到更旧窗口或让执行端新建。
-    if (result.browser_cleanup_status === 'completed')
+    // 返回已删除原ID供正常登录核实；复查仍停止，也绝不回退到更旧窗口。
+    if (
+      result.browser_cleanup_status === 'completed' &&
+      (!allowDeletedProfile || !isBrowserProfileId(result.browser_profile_id))
+    )
       throw new ConflictException('原比特浏览器资料已被删除，请恢复原资料后重试');
     if (!isBrowserProfileId(result.browser_profile_id)) continue;
     return { sourceJobId: job.id, profileId: result.browser_profile_id, accountKey };

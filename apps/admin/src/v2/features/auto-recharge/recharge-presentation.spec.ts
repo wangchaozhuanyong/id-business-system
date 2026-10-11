@@ -28,6 +28,11 @@ const job = (overrides: Partial<V2RechargeJob> = {}): V2RechargeJob => ({
   ...overrides
 });
 describe('recharge stage presentation', () => {
+  it('重建与读取失败分别显示中文说明，不再把已删除窗口一律提示不能新建', () => {
+    expect(statusLabel('bitbrowser_profile_missing_confirmed')).toContain('重建窗口');
+    expect(failureReasonLabel('bitbrowser_owned_profile_missing')).toContain('无法确认');
+    expect(failureReasonLabel('owned_recharge_window_unavailable')).not.toContain('本次未新建窗口');
+  });
   it('付款核验展示官网币种和报价，旧金额限制错误不再提示设置上限', () => {
     expect(statusLabel('payment_guard_passed')).toBe('币种和官网报价已核对');
     for (const reason of [

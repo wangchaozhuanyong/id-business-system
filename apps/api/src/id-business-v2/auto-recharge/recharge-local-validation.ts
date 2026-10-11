@@ -151,12 +151,14 @@ export function validateRechargeBitBrowserRecheckStart(value: unknown) {
 
 export function validateRechargeBitBrowserOpenStart(value: unknown): V2RechargeBitBrowserOpenStart {
   const input = object(value);
-  const allowedKeys = new Set(['id', 'windowName', 'directMode']);
+  const allowedKeys = new Set(['id', 'windowName', 'directMode', 'chatgptAccountId']);
   if (
     Object.keys(input).some((key) => !allowedKeys.has(key)) ||
     typeof input.id !== 'string' ||
     !uuidPattern.test(input.id) ||
-    (input.directMode !== undefined && typeof input.directMode !== 'boolean')
+    (input.directMode !== undefined && typeof input.directMode !== 'boolean') ||
+    (input.chatgptAccountId !== undefined &&
+      (typeof input.chatgptAccountId !== 'string' || !uuidPattern.test(input.chatgptAccountId)))
   ) {
     throw new BadRequestException('开启浏览器请求参数无效');
   }
@@ -167,6 +169,7 @@ export function validateRechargeBitBrowserOpenStart(value: unknown): V2RechargeB
   return {
     id: input.id,
     windowName,
+    ...(input.chatgptAccountId ? { chatgptAccountId: input.chatgptAccountId as string } : {}),
     ...(input.directMode !== undefined ? { directMode: input.directMode as boolean } : {})
   };
 }

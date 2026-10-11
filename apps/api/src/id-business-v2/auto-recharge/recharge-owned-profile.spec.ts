@@ -74,8 +74,8 @@ function restoreFixture(history = [retained()]) {
     byId: vi.fn().mockResolvedValue(job),
     records: vi.fn().mockResolvedValue([]),
     finishedJobsForAccount: vi.fn().mockResolvedValue(history),
-    retainedProfileForAccount: vi.fn(async () =>
-      findRetainedRechargeBrowserProfile(history, ownerId, accountKey)
+    retainedProfileForAccount: vi.fn(async (_tx, _owner, _account, _id, allowDeleted = false) =>
+      findRetainedRechargeBrowserProfile(history, ownerId, accountKey, allowDeleted)
     ),
     originalCheckoutForAccount: vi.fn(async () =>
       findOriginalRechargeCheckout(history, ownerId, accountKey, job.plan)
@@ -84,11 +84,12 @@ function restoreFixture(history = [retained()]) {
     updateJob: vi.fn(async (_tx, _id, change) => Object.assign(job, change))
   };
   const transactions = { execute: vi.fn(async (work) => work({})) };
+  const audit = { append: vi.fn() };
   const service = new RechargeService(
     repository as never,
     {} as never,
     transactions as never,
-    { append: vi.fn() } as never
+    audit as never
   );
   const local = new RechargeLocalService(
     repository as never,
@@ -98,7 +99,7 @@ function restoreFixture(history = [retained()]) {
     transactions as never,
     {} as never
   );
-  return { job, repository, service, local, agentToken };
+  return { job, repository, service, local, agentToken, audit };
 }
 
 describe('同账号原比特窗口保留', () => {
@@ -385,17 +386,19 @@ describe('同账号原比特窗口保留', () => {
       result: { browser_profile_id: profileId, payment_requests_sent: 0 }
     });
     repository.createJob.mockClear();
-    repository.retainedProfileForAccount.mockImplementation(async () =>
-      findRetainedRechargeBrowserProfile(
-        [
-          {
-            ...retained(),
-            result: { ...retained().result, browser_cleanup_status: 'completed' }
-          }
-        ],
-        ownerId,
-        accountKey
-      )
+    repository.retainedProfileForAccount.mockImplementation(
+      async (_tx, _owner, _key, _id, allowDeleted) =>
+        findRetainedRechargeBrowserProfile(
+          [
+            {
+              ...retained(),
+              result: { ...retained().result, browser_cleanup_status: 'completed' }
+            }
+          ],
+          ownerId,
+          accountKey,
+          allowDeleted
+        )
     );
     await expect(
       service.start(input, {
@@ -405,11 +408,221 @@ describe('同账号原比特窗口保留', () => {
         permissions: [],
         displayName: '测试'
       })
-    ).rejects.toThrow('原比特浏览器资料已被删除');
-    expect(repository.createJob).not.toHaveBeenCalled();
+    ).resolves.toMatchObject({ ownedProfile: owned });
+    expect(repository.createJob).toHaveBeenCalled();
   });
 });
 const owned = { sourceJobId: sourceId, profileId, accountKey };
+const replacementId = 'd'.repeat(32);
+const replacement = () => ({
+  stage: 'bitbrowser_profile_created',
+  browser_profile_id: replacementId,
+  replaced_browser_profile_id: profileId,
+  browser_profile_missing_confirmed: true,
+  payment_attempted: false,
+  payment_requests_sent: 0
+});
+
+describe('确认原窗口不存在后的重建绑定', () => {
+  it.each([
+    { mode: 'open_browser', transport: 'web_direct' },
+    { mode: 'open_browser' },
+    { transport: 'web_direct' },
+    {}
+  ])('正常登录与充值均可换窗，恢复和结束仍保留新绑定 %j', async (mode) => {
+    const f = restoreFixture();
+    await f.service.callback(currentId, { type: 'restore', accountKey });
+    f.job.result = { browser_profile_id: profileId, payment_requests_sent: 0, ...mode };
+    await f.local.callback(currentId, f.agentToken, {
+      type: 'progress',
+      result: { ...replacement(), account_matched: true }
+    });
+    expect(f.job).toMatchObject({
+      accountKey,
+      result: {
+        browser_profile_id: replacementId,
+        account_matched: false,
+        replaced_browser_profile_id: profileId,
+        browser_profile_missing_confirmed: true
+      }
+    });
+    expect(f.audit.append).toHaveBeenCalledWith(
+      {},
+      expect.objectContaining({
+        action: 'id_business_v2.auto_recharge.bitbrowser.recreate_missing_window',
+        afterData: { previousProfileId: profileId, browserProfileId: replacementId }
+      })
+    );
+    expect(await f.service.callback(currentId, { type: 'restore', accountKey })).toMatchObject({
+      ownedProfile: { sourceJobId: sourceId, profileId: replacementId, accountKey }
+    });
+    await f.service.callback(currentId, {
+      type: 'finished',
+      result: { status: 'blocked', payment_requests_sent: 0 }
+    });
+    expect(f.job.result.browser_profile_id).toBe(replacementId);
+    expect(findRetainedRechargeBrowserProfile([f.job], ownerId, accountKey)).toEqual({
+      sourceJobId: currentId,
+      profileId: replacementId,
+      accountKey
+    });
+  });
+
+  it.each([
+    { stage: 'session_restoring' },
+    { replaced_browser_profile_id: 'e'.repeat(32) },
+    { browser_profile_missing_confirmed: false },
+    { browser_profile_missing_confirmed: 'true' },
+    { browser_profile_id: 'invalid' },
+    { payment_attempted: true },
+    { payment_requests_sent: 1 }
+  ])('拒绝未经完整证明的换窗 %j', async (patch) => {
+    const f = restoreFixture();
+    await f.service.callback(currentId, { type: 'restore', accountKey });
+    f.repository.updateJob.mockClear();
+    await expect(
+      f.service.callback(currentId, {
+        type: 'progress',
+        result: { ...replacement(), ...patch }
+      })
+    ).rejects.toThrow('不能更换窗口');
+    expect(f.repository.updateJob).not.toHaveBeenCalled();
+    expect(f.audit.append).not.toHaveBeenCalled();
+  });
+
+  it('结束回执、未绑定账号和二次换窗都不能替换', async () => {
+    const f = restoreFixture();
+    await f.service.callback(currentId, { type: 'restore', accountKey });
+    await expect(
+      f.service.callback(currentId, { type: 'finished', result: replacement() })
+    ).rejects.toThrow('不能更换窗口');
+    f.job.accountKey = null;
+    await expect(
+      f.service.callback(currentId, { type: 'progress', result: replacement() })
+    ).rejects.toThrow('不能更换窗口');
+    f.job.accountKey = accountKey;
+    await f.service.callback(currentId, { type: 'progress', result: replacement() });
+    await expect(
+      f.service.callback(currentId, {
+        type: 'progress',
+        result: {
+          ...replacement(),
+          replaced_browser_profile_id: replacementId,
+          browser_profile_id: 'e'.repeat(32)
+        }
+      })
+    ).rejects.toThrow('不能更换窗口');
+  });
+
+  it.each([
+    { payment_attempted: true },
+    { payment_requests_sent: 1 },
+    { confirmation_requests_sent: 1 },
+    { payment_status: 'unknown' },
+    { manual_confirmation_accepted: true },
+    { checkout_outcome: 'unknown' },
+    { recheck_only: true },
+    { resolution_only: true },
+    { three_ds_status: 'awaiting_user' },
+    { handoff_kind: 'bank' }
+  ])('付款风险与付款恢复任务拒绝重建 %j', async (patch) => {
+    const f = restoreFixture();
+    await f.service.callback(currentId, { type: 'restore', accountKey });
+    Object.assign(f.job.result, patch);
+    await expect(
+      f.service.callback(currentId, { type: 'progress', result: replacement() })
+    ).rejects.toThrow('不能更换窗口');
+  });
+
+  it('未付款原结算换窗后编号保持不变，不能附带新单', async () => {
+    const f = restoreFixture();
+    await f.service.callback(currentId, { type: 'restore', accountKey });
+    const original = {
+      ownerId,
+      fileKey: `${accountKey}.json`,
+      revision: 1,
+      document: {
+        checkout_identifier: 'cs_original',
+        checkout_outcome: 'created',
+        checkout_requests_sent: 1,
+        payment_attempted: false,
+        confirmation_requests_sent: 0,
+        payment_requests_sent: 0,
+        payment_status: 'not_attempted'
+      }
+    };
+    delete f.job.result.mode;
+    Object.assign(f.job.result, original.document);
+    f.repository.records.mockResolvedValue([original]);
+    await expect(
+      f.service.callback(currentId, {
+        type: 'progress',
+        result: {
+          ...replacement(),
+          checkout_identifier: 'cs_other'
+        }
+      })
+    ).rejects.toThrow('不能更换窗口');
+    await f.service.callback(currentId, { type: 'progress', result: replacement() });
+    expect(f.job.result.checkout_identifier).toBe('cs_original');
+    expect(await f.service.callback(currentId, { type: 'restore', accountKey })).toMatchObject({
+      originalCheckoutIdentifier: 'cs_original',
+      ownedProfile: { profileId: replacementId }
+    });
+    expect(original.document.payment_attempted).toBe(false);
+  });
+
+  it.each([
+    { payment_attempted: true, payment_status: 'unknown' },
+    { confirmation_requests_sent: 1 },
+    { payment_status: 'paid', payment_attempted: true }
+  ])('持久化原单付款事实不能被零付款回执绕过 %j', async (patch) => {
+    const f = restoreFixture();
+    await f.service.callback(currentId, { type: 'restore', accountKey });
+    f.job.result.checkout_identifier = 'cs_original';
+    f.repository.records.mockResolvedValue([
+      {
+        ownerId,
+        fileKey: 'payments/synthetic.json',
+        document: {
+          checkout_identifier: 'cs_original',
+          ...patch
+        }
+      }
+    ]);
+    await expect(
+      f.service.callback(currentId, { type: 'progress', result: replacement() })
+    ).rejects.toThrow('原单付款状态未安全核实');
+    expect(f.job.result.browser_profile_id).toBe(profileId);
+  });
+
+  it('普通进度不能伪造重建证明，终结历史付款不阻断纯登录', async () => {
+    const f = restoreFixture();
+    await f.service.callback(currentId, { type: 'restore', accountKey });
+    await f.service.callback(currentId, {
+      type: 'progress',
+      result: {
+        ...replacement(),
+        browser_profile_id: profileId
+      }
+    });
+    expect(f.job.result).not.toHaveProperty('browser_profile_missing_confirmed');
+    f.repository.records.mockResolvedValue([
+      {
+        ownerId,
+        fileKey: 'payments/synthetic.json',
+        document: {
+          checkout_identifier: 'cs_historical',
+          payment_status: 'paid',
+          payment_attempted: true
+        }
+      }
+    ]);
+    await f.service.callback(currentId, { type: 'progress', result: replacement() });
+    expect(f.job.result.browser_profile_id).toBe(replacementId);
+  });
+});
+
 describe('同账号成功比特窗口归属', () => {
   it('只使用真实成功源任务记录，不按窗口名字猜测，旧 Go 可以供后续 Plus 核对', () => {
     expect(
@@ -534,7 +747,8 @@ describe('同账号成功比特窗口归属', () => {
       {},
       ownerId,
       accountKey,
-      currentId
+      currentId,
+      true
     );
     await expect(
       service.callback(currentId, { type: 'restore', accountKey: 'd'.repeat(64) })
