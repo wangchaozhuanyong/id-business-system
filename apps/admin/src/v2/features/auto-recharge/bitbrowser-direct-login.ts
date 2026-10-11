@@ -2,6 +2,7 @@ import { BrowserCdp } from './bitbrowser-cdp';
 import {
   directBrowserApi,
   directBrowserCatalog,
+  directBrowserProfileExists,
   directProfileOptions,
   verifyDirectProfileConfiguration,
   DirectBrowserError,
@@ -26,6 +27,8 @@ export interface DirectLoginHooks {
   progress: (stage: string, extra?: Record<string, unknown>) => Promise<void>;
   code: () => Promise<DirectLoginCode>;
   restore?: (accountKey: string) => Promise<{ ownedProfile?: V2RechargeOwnedBrowserProfile }>;
+  accountKey?: string;
+  ownedProfile?: V2RechargeOwnedBrowserProfile;
 }
 export function isLoginPaymentWrite(method: string, rawUrl: string) {
   if (['GET', 'HEAD', 'OPTIONS'].includes(method)) return false;
@@ -101,7 +104,8 @@ export async function runDirectLogin(
     | undefined;
   try {
     let ownedProfile: V2RechargeOwnedBrowserProfile | undefined;
-    if (expected.accountId && hooks.restore) {
+    let expectedAccountKey = hooks.accountKey ?? hooks.ownedProfile?.accountKey;
+    if (expected.accountId && (hooks.restore || expectedAccountKey)) {
       const digest = await crypto.subtle.digest(
         'SHA-256',
         new TextEncoder().encode(expected.accountId)
@@ -109,10 +113,17 @@ export async function runDirectLogin(
       const accountKey = Array.from(new Uint8Array(digest), (part) =>
         part.toString(16).padStart(2, '0')
       ).join('');
-      ownedProfile = (await hooks.restore(accountKey)).ownedProfile;
+      if (expectedAccountKey && expectedAccountKey !== accountKey)
+        throw new DirectBrowserError('bitbrowser_owned_profile_unverified');
+      expectedAccountKey = accountKey;
+    }
+    if (expectedAccountKey && hooks.restore) {
+      if (!/^[a-f0-9]{64}$/.test(expectedAccountKey))
+        throw new DirectBrowserError('bitbrowser_owned_profile_unverified');
+      ownedProfile = (await hooks.restore(expectedAccountKey)).ownedProfile;
       if (
         ownedProfile &&
-        (ownedProfile.accountKey !== accountKey ||
+        (ownedProfile.accountKey !== expectedAccountKey ||
           !/^[a-f0-9]{32}$/.test(ownedProfile.profileId) ||
           typeof ownedProfile.sourceJobId !== 'string' ||
           !ownedProfile.sourceJobId)
@@ -121,6 +132,31 @@ export async function runDirectLogin(
     }
     remaining();
     let profileId: unknown = ownedProfile?.profileId;
+    let detail: Record<string, unknown> | undefined;
+    let replacedProfileId: string | undefined;
+    if (ownedProfile) {
+      await hooks.progress('owned_profile_check', { browser_profile_id: profileId });
+      try {
+        detail = (await api.post('/browser/detail', { id: profileId }, remaining())).data as
+          | Record<string, unknown>
+          | undefined;
+      } catch (error) {
+        if (!(error instanceof DirectBrowserError) || error.reason !== 'bitbrowser_direct_rejected')
+          throw error;
+      }
+      if (detail?.id !== profileId) {
+        if (detail?.id !== undefined && detail?.id !== null)
+          throw new DirectBrowserError('bitbrowser_owned_profile_unverified');
+        if (await directBrowserProfileExists(api, ownedProfile.profileId, remaining))
+          throw new DirectBrowserError('bitbrowser_owned_profile_missing');
+        replacedProfileId = ownedProfile.profileId;
+        await hooks.progress('bitbrowser_profile_missing_confirmed', {
+          browser_profile_id: replacedProfileId
+        });
+        ownedProfile = undefined;
+        detail = undefined;
+      }
+    }
     if (!ownedProfile) {
       const catalog = await directBrowserCatalog(
         settings.localApiUrl,
@@ -156,7 +192,17 @@ export async function runDirectLogin(
       profileId = (created.data as Record<string, unknown>)?.id;
       if (typeof profileId !== 'string' || !/^[A-Za-z0-9_-]{32}$/.test(profileId))
         throw new DirectBrowserError('bitbrowser_direct_protocol');
-      await hooks.progress('bitbrowser_profile_created', { browser_profile_id: profileId });
+      if (profileId === replacedProfileId)
+        throw new DirectBrowserError('bitbrowser_direct_protocol');
+      await hooks.progress('bitbrowser_profile_created', {
+        browser_profile_id: profileId,
+        ...(replacedProfileId
+          ? {
+              replaced_browser_profile_id: replacedProfileId,
+              browser_profile_missing_confirmed: true
+            }
+          : {})
+      });
       await api.post(
         '/browserTag/updateRelation',
         {
@@ -166,28 +212,15 @@ export async function runDirectLogin(
         },
         remaining()
       );
-    } else {
-      await hooks.progress('owned_profile_check', { browser_profile_id: profileId });
     }
     if (typeof profileId !== 'string' || !/^[A-Za-z0-9_-]{32}$/.test(profileId))
       throw new DirectBrowserError('bitbrowser_direct_protocol');
-    let detail: Record<string, unknown>;
-    try {
+    if (!detail) {
       detail = (await api.post('/browser/detail', { id: profileId }, remaining())).data as Record<
         string,
         unknown
       >;
-    } catch (error) {
-      if (
-        ownedProfile &&
-        error instanceof DirectBrowserError &&
-        error.reason === 'bitbrowser_direct_rejected'
-      )
-        throw new DirectBrowserError('bitbrowser_owned_profile_missing');
-      throw error;
     }
-    if (ownedProfile && detail?.id !== profileId)
-      throw new DirectBrowserError('bitbrowser_owned_profile_missing');
     if (
       detail?.id !== profileId ||
       ['syncTabs', 'syncCookies', 'syncLocalStorage', 'syncIndexedDb', 'syncAuthorization'].some(
@@ -364,7 +397,13 @@ export async function runDirectLogin(
       });
       await cdp.command(
         'Fetch.enable',
-        { patterns: [{ urlPattern: '*', requestStage: 'Request' }] },
+        {
+          patterns: [
+            { urlPattern: '*://stripe.com/*', requestStage: 'Request' },
+            { urlPattern: '*://*.stripe.com/*', requestStage: 'Request' },
+            { urlPattern: '*://chatgpt.com/backend-api/payments/*', requestStage: 'Request' }
+          ]
+        },
         sessionId
       );
       await cdp.command('Network.enable', {}, sessionId);
@@ -419,7 +458,10 @@ export async function runDirectLogin(
       automaticDeadline = Math.min(deadline, automaticDeadline + paused);
       proxyDeadline = Math.min(deadline, proxyDeadline + paused);
       if (pageReadyDeadline !== undefined)
-        pageReadyDeadline = Math.min(automaticDeadline, pageReadyDeadline + paused);
+        pageReadyDeadline = Math.min(
+          credential.login ? deadline : automaticDeadline,
+          pageReadyDeadline + paused
+        );
       if (expiredDeadline !== undefined)
         expiredDeadline = Math.min(automaticDeadline, expiredDeadline + paused);
       manualStarted = undefined;
@@ -606,7 +648,32 @@ export async function runDirectLogin(
           (expected.accountId && state.accountId !== expected.accountId)
         )
           throw new DirectBrowserError('official_login_email_mismatch');
-        if (!credential.login) {
+        if (credential.login && (expectedAccountKey || hooks.restore)) {
+          const digest = await crypto.subtle.digest(
+            'SHA-256',
+            new TextEncoder().encode(state.accountId)
+          );
+          const accountKey = Array.from(new Uint8Array(digest), (part) =>
+            part.toString(16).padStart(2, '0')
+          ).join('');
+          if (expectedAccountKey && accountKey !== expectedAccountKey)
+            throw new DirectBrowserError('official_login_email_mismatch');
+          if (!expectedAccountKey && hooks.restore) {
+            const restored = (await hooks.restore(accountKey)).ownedProfile;
+            if (
+              restored &&
+              (restored.accountKey !== accountKey || restored.profileId !== profileId)
+            )
+              throw new DirectBrowserError('bitbrowser_owned_profile_unverified');
+            expectedAccountKey = accountKey;
+          }
+        }
+        {
+          if (credential.login && manualReported) {
+            leaveManualWait();
+            manualReported = false;
+          }
+          const pageBudgetDeadline = () => (credential.login ? deadline : automaticDeadline);
           assertJsonPhase();
           canInjectOnUnauthenticated = false;
           let ui: ReturnType<typeof inspectLoggedInPage>;
@@ -616,7 +683,7 @@ export async function runDirectLogin(
               loggedInPageExpression(),
               Math.min(
                 remaining(),
-                manualStarted === undefined ? automaticDeadline - Date.now() : Infinity
+                manualStarted === undefined ? pageBudgetDeadline() - Date.now() : Infinity
               )
             );
           } catch (error) {
@@ -653,7 +720,7 @@ export async function runDirectLogin(
           }
           assertJsonPhase(true);
           if (ui.kind !== 'page_ready') {
-            pageReadyDeadline ??= Math.min(automaticDeadline, Date.now() + 10_000);
+            pageReadyDeadline ??= Math.min(pageBudgetDeadline(), Date.now() + 10_000);
             if (Date.now() >= pageReadyDeadline) {
               if (pageReloaded) throw new DirectBrowserError('official_login_page_not_ready');
               pageReloaded = true;
@@ -664,7 +731,7 @@ export async function runDirectLogin(
               });
               await activeCdp.command('Page.reload', { ignoreCache: true }, sessionId, remaining());
               // Every following poll must re-read and compare the authoritative identity.
-              pageReadyDeadline = automaticDeadline;
+              pageReadyDeadline = pageBudgetDeadline();
             }
             await waitDirectLogin(signal);
             continue;

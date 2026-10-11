@@ -98,6 +98,50 @@ describe('原窗口归属历史查询', () => {
     expect(jobs.findMany).toHaveBeenCalledTimes(2);
   });
 
+  it('正常登录返回30条之后已删除原ID，不回退旧历史；无效删除ID仍停止', async () => {
+    const deleted = {
+      ...source(30),
+      result: {
+        browser_profile_id: profileId,
+        browser_cleanup_status: 'completed'
+      }
+    };
+    const jobs = {
+      findMany: vi
+        .fn()
+        .mockResolvedValueOnce(rechecks())
+        .mockResolvedValueOnce([
+          deleted,
+          {
+            ...source(31),
+            result: { browser_profile_id: 'c'.repeat(32) }
+          }
+        ])
+    };
+    const repository = new RechargeRepository({} as never);
+    expect(
+      await repository.retainedProfileForAccount(
+        { idBusinessV2RechargeJob: jobs } as never,
+        ownerId,
+        accountKey,
+        currentId,
+        true
+      )
+    ).toEqual({ sourceJobId: deleted.id, profileId, accountKey });
+    jobs.findMany.mockResolvedValueOnce([
+      { ...deleted, result: { ...deleted.result, browser_profile_id: '' } }
+    ]);
+    await expect(
+      repository.retainedProfileForAccount(
+        { idBusinessV2RechargeJob: jobs } as never,
+        ownerId,
+        accountKey,
+        currentId,
+        true
+      )
+    ).rejects.toThrow('原比特浏览器资料已被删除');
+  });
+
   it('达到有界查询上限仍未查完时明确停止，不能把未知当作无绑定', async () => {
     const jobs = { findMany: vi.fn().mockResolvedValue(rechecks()) };
     const repository = new RechargeRepository({} as never);

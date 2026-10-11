@@ -344,7 +344,9 @@ for (const key of [
   'resolved_at',
   'resolution_job_id',
   'source_job_id',
-  'verification_job_id'
+  'verification_job_id',
+  'replaced_browser_profile_id',
+  'browser_profile_missing_confirmed'
 ]) {
   scalarKeys.add(key);
 }

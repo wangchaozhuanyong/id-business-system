@@ -478,6 +478,7 @@ export interface V2RechargeBitBrowserOpenStart {
   id: string;
   windowName: string;
   directMode?: boolean;
+  chatgptAccountId?: string;
 }
 
 export interface V2RechargeBitBrowserOpenLaunch {
@@ -486,6 +487,8 @@ export interface V2RechargeBitBrowserOpenLaunch {
   connectorUrl: string;
   connectorToken: string;
   agentToken: string;
+  accountKey?: string;
+  ownedProfile?: V2RechargeOwnedBrowserProfile;
   bitBrowser: V2RechargeBitBrowserLaunch['bitBrowser'];
 }
 

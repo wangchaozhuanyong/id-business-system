@@ -24,6 +24,38 @@ from plans import PLANS, PRO_GROUP, checkout_option_plan, checkout_text_plan, pl
 
 ORIGIN = "https://chatgpt.com"
 
+LOGIN_PAGE_READY_EXPRESSION = """() => {
+    if (location.protocol !== 'https:' || location.hostname !== 'chatgpt.com') return false;
+    const visible = node => !!node && node.getClientRects().length > 0 &&
+        getComputedStyle(node).visibility !== 'hidden' &&
+        getComputedStyle(node).display !== 'none';
+    const accounts = Array.from(document.querySelectorAll(
+        '[data-testid="accounts-profile-button"][aria-haspopup="menu"]'
+    )).some(node => visible(node) && node.matches('button,[role="button"]') &&
+        !node.matches(':disabled,[aria-disabled="true"]'));
+    if (!accounts) return false;
+    return Array.from(document.querySelectorAll(
+        '#prompt-textarea,textarea[data-testid="prompt-textarea"]'
+    )).some(input => {
+        if (!visible(input) || input.matches(':disabled,[readonly],[aria-disabled="true"]') ||
+            input.closest('[inert],[aria-hidden="true"],[aria-disabled="true"],' +
+                          '[aria-busy="true"],[data-loading="true"]') ||
+            getComputedStyle(input).pointerEvents === 'none' ||
+            !(input.matches('textarea') || input.isContentEditable)) return false;
+        const composer = input.closest('[data-testid="composer"],[data-type="unified-composer"],form') ||
+            input.parentElement;
+        if (!composer || !visible(composer)) return false;
+        const busy = Array.from(composer.querySelectorAll(
+            '[aria-busy="true"],[data-loading="true"],[role="progressbar"],' +
+            '[data-testid*="loading"],[data-testid*="spinner"],.animate-spin,' +
+            '[aria-label="Loading"],[aria-label="加载中"],[aria-label="正在加载"]'
+        )).some(visible);
+        // An empty composer normally disables Send. Only editing and actual
+        // initialization indicators determine readiness, never Send's state.
+        return !busy;
+    });
+}"""
+
 
 async def install_session_cookies(context, target, *, budget=None):
     """Replace only official session-token fragments; preserve every other cookie."""
@@ -466,6 +498,13 @@ class NetworkGuard:
             return "checkout_init"
         if method in SAFE_METHODS:
             return "read"
+        # The official app may refresh/update its own authentication session
+        # during initialization. This exact endpoint carries no checkout or
+        # payment capability; the live account is still verified afterwards.
+        if (method == "POST" and p.scheme == "https" and p.hostname == "chatgpt.com"
+                and p.port in (None, 443) and p.username is None and p.password is None
+                and p.path == "/api/auth/session"):
+            return "read"
         if p.hostname == "chatgpt.com" and p.scheme == "https" and p.path == CHECKOUT_PATH:
             if not isinstance(data, dict):
                 return "unknown_write"
@@ -880,15 +919,7 @@ async def synchronize_login_page(page, target, identity, *, budget):
         try:
             budget.remaining_ms()
             refreshed, identity = await check_session(page, target, budget=budget)
-            ready = await budget.run(lambda: page.evaluate("""() => {
-                if (location.protocol !== 'https:' || location.hostname !== 'chatgpt.com') return false;
-                return Array.from(document.querySelectorAll(
-                    '[data-testid="accounts-profile-button"][role="button"][aria-haspopup="menu"]'
-                )).some(node => node.getClientRects().length &&
-                    getComputedStyle(node).visibility !== 'hidden' &&
-                    getComputedStyle(node).display !== 'none' &&
-                    !node.matches(':disabled,[aria-disabled="true"]'));
-            }"""), "page_ui_sync")
+            ready = await budget.run(lambda: page.evaluate(LOGIN_PAGE_READY_EXPRESSION), "page_ui_sync")
             if ready:
                 return BrowserCredential("", target.account_id, target.user_id, refreshed.token), identity
             if not refreshed_once and budget.clock() - ui_started >= 10:

@@ -147,6 +147,13 @@ describe('仅登录窗口失败不会转成长时间的假验证等待', () => {
     const methods = mock.command.mock.calls.map(([method]) => method);
     expect(methods.indexOf('Fetch.enable')).toBeLessThan(methods.indexOf('Network.setCookies'));
     expect(methods.indexOf('Network.setCookies')).toBeLessThan(methods.indexOf('Page.navigate'));
+    const patterns = mock.command.mock.calls.find(([method]) => method === 'Fetch.enable')![1]
+      .patterns;
+    expect(patterns).toEqual([
+      { urlPattern: '*://stripe.com/*', requestStage: 'Request' },
+      { urlPattern: '*://*.stripe.com/*', requestStage: 'Request' },
+      { urlPattern: '*://chatgpt.com/backend-api/payments/*', requestStage: 'Request' }
+    ]);
     expect(mock.command.mock.calls.find(([method]) => method === 'Page.navigate')![1]).toEqual({
       url: 'https://chatgpt.com/'
     });
@@ -280,6 +287,48 @@ describe('JSON会话核实后同步官网登录界面', () => {
       progress: vi.fn(),
       code: vi.fn()
     });
+  it('页面真人验证结束后重新读取延长后的预算，不用旧截止时间提前终止', async () => {
+    vi.useFakeTimers();
+    const started = Date.now();
+    mock.evaluate.mockResolvedValue(identity);
+    mock.ui.mockImplementation(async () => ({
+      kind:
+        Date.now() - started < 130_000
+          ? 'manual'
+          : Date.now() - started < 145_000
+            ? 'page_loading'
+            : 'page_ready'
+    }));
+    const result = run();
+    await vi.advanceTimersByTimeAsync(146_000);
+    expect(await result).toMatchObject({ status: 'session_ready', account_matched: true });
+    expect(mock.command.mock.calls.filter(([method]) => method === 'Page.reload')).toHaveLength(1);
+    expect(mock.post.mock.calls.some(([path]) => path === '/browser/close')).toBe(false);
+  });
+  it.each(['json', 'password'])('%s身份核实后仍等待输入框就绪，不提前结束', async (kind) => {
+    vi.useFakeTimers();
+    mock.evaluate.mockResolvedValue(identity);
+    mock.ui.mockResolvedValue({ kind: 'page_loading' });
+    let finished = false;
+    const result = runDirectLogin(
+      settings,
+      kind === 'password'
+        ? { login: { email: identity.email, password: 'synthetic-only' } }
+        : credential(),
+      '测试窗口',
+      new AbortController().signal,
+      { progress: vi.fn(), code: vi.fn() }
+    ).then((value) => {
+      finished = true;
+      return value;
+    });
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(finished).toBe(false);
+    mock.ui.mockResolvedValue({ kind: 'page_ready' });
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(await result).toMatchObject({ status: 'session_ready', payment_requests_sent: 0 });
+    expect(mock.post.mock.calls.some(([path]) => path === '/browser/close')).toBe(false);
+  });
   it('会话正确但页面匿名时等待10秒，再只刷新原标签一次并重新核对身份', async () => {
     vi.useFakeTimers();
     mock.evaluate.mockResolvedValue(identity);
@@ -479,11 +528,77 @@ describe('API原窗口归属与当前官网身份双核验', () => {
     ).toHaveLength(1);
     expect(mock.post.mock.calls.some(([path]) => path === '/browser/update')).toBe(false);
   });
-  it('原窗口被删除明确报错，不回退新建', async () => {
+  it.each(['json', 'password'] as const)(
+    '原窗口确认删除后重建一次并继续同账号登录：%s',
+    async (method) => {
+      const ownedProfile = await owned();
+      const newId = 'b'.repeat(32);
+      const original = mock.post.getMockImplementation()!;
+      mock.post.mockImplementation(async (path, body, ...args) => {
+        if (path === '/browser/list') return { data: { list: [] } };
+        if (path === '/browser/update') return { data: { id: newId } };
+        if (path === '/browser/detail' && body.id === ownedProfile.profileId) return { data: null };
+        const value = await original(path, body, ...args);
+        if (path === '/browser/detail') value.data.id = newId;
+        return value;
+      });
+      mock.evaluate.mockResolvedValue(identity);
+      const progress = vi.fn();
+      const input =
+        method === 'json'
+          ? credential()
+          : { login: { email: identity.email, password: 'fixture-password' } };
+      expect(
+        await runDirectLogin(settings, input, '测试窗口', new AbortController().signal, {
+          accountKey: ownedProfile.accountKey,
+          restore: async () => ({ ownedProfile }),
+          progress,
+          code: vi.fn()
+        })
+      ).toMatchObject({
+        status: 'session_ready',
+        account_matched: true,
+        browser_profile_id: newId,
+        payment_requests_sent: 0
+      });
+      expect(mock.post.mock.calls.filter(([path]) => path === '/browser/update')).toHaveLength(1);
+      expect(mock.post.mock.calls.find(([path]) => path === '/browser/open')?.[1].id).toBe(newId);
+      expect(progress).toHaveBeenCalledWith('bitbrowser_profile_created', {
+        browser_profile_id: newId,
+        replaced_browser_profile_id: ownedProfile.profileId,
+        browser_profile_missing_confirmed: true
+      });
+      const methods = mock.command.mock.calls.map(([method]) => method);
+      if (method === 'json') {
+        expect(methods.indexOf('Fetch.enable')).toBeLessThan(methods.indexOf('Network.setCookies'));
+        expect(methods.indexOf('Network.setCookies')).toBeLessThan(
+          methods.indexOf('Page.navigate')
+        );
+      }
+      expect(mock.post.mock.calls.some(([path]) => path === '/browser/delete')).toBe(false);
+    }
+  );
+  it.each(['bitbrowser_direct_unreachable', 'bitbrowser_direct_token_invalid'] as const)(
+    '无法读取原窗口时保留错误，不新建：%s',
+    async (reason) => {
+      const ownedProfile = await owned();
+      mock.post.mockRejectedValue(new DirectBrowserError(reason));
+      await expect(
+        runDirectLogin(settings, credential(), '测试窗口', new AbortController().signal, {
+          restore: async () => ({ ownedProfile }),
+          progress: vi.fn(),
+          code: vi.fn()
+        })
+      ).rejects.toMatchObject({ reason });
+      expect(mock.post).toHaveBeenCalledOnce();
+    }
+  );
+  it('详情为空但窗口列表仍存在原ID时停止，不创建重复窗口', async () => {
     const ownedProfile = await owned();
-    const original = mock.post.getMockImplementation()!;
-    mock.post.mockImplementation(async (path, ...args) =>
-      path === '/browser/detail' ? { data: null } : original(path, ...args)
+    mock.post.mockImplementation(async (path) =>
+      path === '/browser/detail'
+        ? { data: null }
+        : { data: { list: [{ id: ownedProfile.profileId }] } }
     );
     await expect(
       runDirectLogin(settings, credential(), '测试窗口', new AbortController().signal, {
@@ -495,6 +610,46 @@ describe('API原窗口归属与当前官网身份双核验', () => {
     expect(
       mock.post.mock.calls.some(([path]) => ['/browser/update', '/browser/open'].includes(path))
     ).toBe(false);
+  });
+  it('重建新窗口绑定回执失败时不打开窗口或注入授权', async () => {
+    const ownedProfile = await owned();
+    const original = mock.post.getMockImplementation()!;
+    mock.post.mockImplementation(async (path, body, ...args) => {
+      if (path === '/browser/detail' && body.id === ownedProfile.profileId) return { data: null };
+      if (path === '/browser/list') return { data: { list: [] } };
+      if (path === '/browser/update') return { data: { id: 'b'.repeat(32) } };
+      return original(path, body, ...args);
+    });
+    await expect(
+      runDirectLogin(settings, credential(), '测试窗口', new AbortController().signal, {
+        restore: async () => ({ ownedProfile }),
+        progress: async (stage) => {
+          if (stage === 'bitbrowser_profile_created') throw new Error('synthetic-callback-failure');
+        },
+        code: vi.fn()
+      })
+    ).rejects.toThrow('synthetic-callback-failure');
+    expect(mock.post.mock.calls.some(([path]) => path === '/browser/open')).toBe(false);
+    expect(mock.command.mock.calls.some(([method]) => method === 'Network.setCookies')).toBe(false);
+  });
+  it('密码登录同邮箱但官网账户不符时停止，不能写成功', async () => {
+    const ownedProfile = await owned();
+    mock.evaluate.mockResolvedValue({ ...identity, accountId: 'other-account' });
+    await expect(
+      runDirectLogin(
+        settings,
+        { login: { email: identity.email, password: 'fixture-password' } },
+        '测试窗口',
+        new AbortController().signal,
+        {
+          accountKey: ownedProfile.accountKey,
+          restore: async () => ({ ownedProfile }),
+          progress: vi.fn(),
+          code: vi.fn()
+        }
+      )
+    ).rejects.toMatchObject({ reason: 'official_login_email_mismatch' });
+    expect(mock.post.mock.calls.some(([path]) => path === '/browser/update')).toBe(false);
   });
   it.each([
     {

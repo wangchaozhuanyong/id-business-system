@@ -88,6 +88,8 @@ export function useBitBrowserDirectOpen(
           windowName,
           task.controller.signal,
           {
+            accountKey: launch.accountKey,
+            ownedProfile: launch.ownedProfile,
             progress: async (stage, extra = {}) => {
               if (extra.browser_profile_id) profileId = extra.browser_profile_id;
               await callback('progress', { status: 'running', stage, ...extra });

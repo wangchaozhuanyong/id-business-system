@@ -56,6 +56,7 @@ SAFE_PUBLIC_KEYS = set(
     "session_elapsed_seconds session_wait_seconds session_step session_phase session_refresh_count cancellation_confirmed browser_cleanup_status "
     "quote_elapsed_seconds quote_wait_seconds quote_refresh_count page_state stale_profiles_cleaned "
     "checkout_replacement_performed browser_profile_reused "
+    "replaced_browser_profile_id browser_profile_missing_confirmed "
     "resolution_only operator_resolution resolved_at resolution_job_id source_job_id verification_job_id".split()
 )
 SAFE_PUBLIC_KEYS.update("quote_digest confirmation_expires_at manual_confirmation_accepted "
@@ -89,6 +90,13 @@ def callback_url(value, job_id):
 
 def public_result(value):
     result = {key: item for key, item in value.items() if key in SAFE_PUBLIC_KEYS}
+    for key in ("replaced_browser_profile_id", "browser_profile_missing_confirmed"):
+        result.pop(key, None)
+    replaced = value.get("replaced_browser_profile_id")
+    if isinstance(replaced, str) and re.fullmatch(r"[a-fA-F0-9]{32}", replaced):
+        result["replaced_browser_profile_id"] = replaced
+    if type(value.get("browser_profile_missing_confirmed")) is bool:
+        result["browser_profile_missing_confirmed"] = value["browser_profile_missing_confirmed"]
     # Keep bounded session diagnostics without exposing Cookie/JWT values.
     for key in ("session_cookie_sent", "official_session_user_present",
                 "official_session_access_token_present"):
@@ -215,19 +223,35 @@ class BitBrowserClient:
 
     def list_profile_ids(self):
         result = set()
+        expected_total = None
         for page in range(21):
-            rows = bitbrowser_catalog.rows_from(
-                self.post("/browser/list", {"page": page, "pageSize": 100})
-            )
+            data = self.post("/browser/list", {"page": page, "pageSize": 100})
+            metadata = data
+            for _ in range(3):
+                if not isinstance(metadata, dict):
+                    break
+                if "total" in metadata:
+                    total = metadata["total"]
+                    if (type(total) is not int or not 0 <= total <= 2000
+                            or expected_total is not None and total != expected_total):
+                        raise Stop("bitbrowser_catalog_invalid")
+                    expected_total = total
+                metadata = metadata.get("data")
+            rows = bitbrowser_catalog.rows_from(data)
             if len(rows) > 100:
                 raise Stop("bitbrowser_catalog_limit")
             for row in rows:
                 profile_id = row.get("id") if isinstance(row, dict) else None
-                if not isinstance(profile_id, str) or not PROFILE_ID.fullmatch(profile_id) \
-                        or len(profile_id) != 32:
+                if (not isinstance(profile_id, str)
+                        or not re.fullmatch(r"[a-fA-F0-9]{32}", profile_id)
+                        or profile_id in result):
                     raise Stop("bitbrowser_catalog_invalid")
                 result.add(profile_id)
+            if len(result) > 2000:
+                raise Stop("bitbrowser_catalog_limit")
             if len(rows) < 100:
+                if expected_total is not None and len(result) != expected_total:
+                    raise Stop("bitbrowser_catalog_invalid")
                 return result
         raise Stop("bitbrowser_catalog_limit")
 
@@ -291,6 +315,12 @@ def validate_payload(value):
     if "ownedProfile" in value:
         allowed.add("ownedProfile")
         validate_owned_profile(value["ownedProfile"], value.get("id"))
+    if "accountKey" in value:
+        allowed.add("accountKey")
+        if (not isinstance(value["accountKey"], str)
+                or not re.fullmatch(r"[a-f0-9]{64}", value["accountKey"])
+                or "ownedProfile" in value and value["ownedProfile"]["accountKey"] != value["accountKey"]):
+            raise Stop("invalid_owned_recharge_profile")
     if set(value) != allowed:
         raise Stop("invalid_connector_payload")
     job_id = value.get("id")
@@ -403,6 +433,7 @@ class LocalJob:
         self.cancelled = False
         self.done = False
         self.account_key = None
+        self.expected_account_key = self.payload.get("accountKey")
         self.root = None
         self.revisions = {}
         self.context = None
@@ -413,6 +444,8 @@ class LocalJob:
         self.session_info = {}
         self.resolution_committed = False
         self.owned_profile = self.payload.get("ownedProfile")
+        self.replaced_owned_profile = None
+        self.profile_rebuild_info = {}
         self.stale_profiles = []
         self.stale_profiles_cleaned = 0
         self.checkout_replacement_performed = False
@@ -496,6 +529,7 @@ class LocalJob:
             "reason": None,
             "user_action_required": False,
             **self.session_info,
+            **self.profile_rebuild_info,
             "browser_profile_id": self.profile_id,
             "payment_attempted": self.payment_request_sent,
             "payment_requests_sent": 1 if self.payment_request_sent else 0,
@@ -687,6 +721,8 @@ class LocalJob:
     def restore_account(self, target):
         import hashlib
         account_key = hashlib.sha256(target.account_id.encode()).hexdigest()
+        if self.expected_account_key is not None and account_key != self.expected_account_key:
+            raise Stop("official_account_mismatch", account_matched=False)
         initial = self.callback.send({"type": "restore", "accountKey": account_key})
         self.account_key = account_key
         records = initial.get("records")
@@ -842,6 +878,7 @@ class LocalJob:
             result.setdefault("payment_status", "unknown")
         result = {
             **result,
+            **self.profile_rebuild_info,
             "browser_profile_id": self.profile_id or result.get("browser_profile_id", ""),
             "locked_currency": self.payload.get("safety", {}).get("lockedCurrency"),
         }

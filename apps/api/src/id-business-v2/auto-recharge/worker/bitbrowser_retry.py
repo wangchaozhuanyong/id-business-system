@@ -112,7 +112,7 @@ async def execute_profiles(job, client, target, playwright):
                 cleanup = "not_needed"
         except Stop:
             cleanup = "failed"
-        return {**result, "status": "cancelled", "cancellation_confirmed": True,
+        return {**result, **job.profile_rebuild_info, "status": "cancelled", "cancellation_confirmed": True,
                 "reason": "bitbrowser_cleanup_unverified" if cleanup == "failed" else "operation_cancelled",
                 "browser_cleanup_status": cleanup, "payment_requests_sent": 0,
                 "payment_attempted": False, "browser_profile_id": job.profile_id or ""}
@@ -128,6 +128,7 @@ async def execute_profiles(job, client, target, playwright):
                           browser_profile_id=job.profile_id or "")
     if "browser_profile_id" not in result:
         result["browser_profile_id"] = job.profile_id or ""
+    result.update(job.profile_rebuild_info)
     return result
 
 
@@ -216,6 +217,111 @@ def proxy_reopen_allowed(job, target, result, options, owned):
         and result.get("session_step") in {"account_read", "proxy_prepare", "proxy_probe", "proxy_home"})
     return bool(explicit_network or transport_timeout
                 or result.get("reason") in {"proxy_network_error", "proxy_country_mismatch"})
+
+
+def historical_payment_completed(record):
+    """Past, fully bound success can precede a new login without reusing payment."""
+    from plans import PLANS, subscription_match
+    target_plan = record.get("target_plan", "plus")
+    if (target_plan not in PLANS or record.get("payment_status") != "paid"
+            or record.get("status") != "subscription_activated"
+            or record.get("subscription_status") != target_plan
+            or record.get("payment_attempted") is not True
+            or type(record.get("confirmation_requests_sent")) is not int
+            or record["confirmation_requests_sent"] != 1
+            or subscription_match(target_plan, record.get("current_plan"), record.get("current_tier")) != "matched"
+            or not record.get("payment_evidence")):
+        return False
+    try:
+        if record.get("operation") == "subscription_upgrade":
+            subscription_upgrade.validate_upgrade_record(record, record["account_key"], target_plan)
+        else:
+            checkout_id = record.get("checkout_identifier")
+            if (not isinstance(checkout_id, str)
+                    or not re.fullmatch(r"(?:cs|oaics)_[A-Za-z0-9_]{1,200}", checkout_id)
+                    or record.get("quote", {}).get("plan") != target_plan
+                    or payment_state.quote_digest(record["quote"]) != record.get("quote_digest")):
+                return False
+            payment_state.validate_evidence(record["payment_evidence"], checkout_id, record["quote"])
+    except (Stop, KeyError, TypeError, AttributeError, ValueError):
+        return False
+    return True
+
+
+def missing_profile_rebuild_allowed(job, target):
+    """A missing browser does not invalidate payment or identity guards."""
+    source = job.owned_profile
+    if (not isinstance(source, dict) or set(source) != {"sourceJobId", "profileId", "accountKey"}
+            or not re.fullmatch(r"[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}",
+                                str(source.get("sourceJobId", "")))
+            or source["sourceJobId"] == job.id
+            or not re.fullmatch(r"[a-fA-F0-9]{32}", str(source.get("profileId", "")))
+            or not re.fullmatch(r"[a-f0-9]{64}", str(source.get("accountKey", "")))
+            or job.payload["mode"] not in {"payment", "open_browser"}
+            or job.replaced_owned_profile is not None or job.payment_request_sent
+            or job.confirmation_consumed or job.pending_confirmation is not None
+            or job.waiting_for_user or job.waiting_for_code
+            or job.result.get("status") in {"awaiting_human_verification", "awaiting_confirmation"}
+            or job.result.get("payment_attempted") is True
+            or job.result.get("payment_requests_sent", 0) != 0
+            or job.result.get("confirmation_requests_sent", 0) != 0
+            or job.result.get("payment_status") in {"paid", "unknown", "requires_action"}):
+        return False
+    if target is not None and hashlib.sha256(target.account_id.encode()).hexdigest() != source["accountKey"]:
+        raise Stop("official_account_mismatch", account_matched=False)
+    # JSON has already restored its authoritative records. Password credentials
+    # restore only after login; its creation callback independently checks the
+    # launch account/source against the API's durable state before browser open.
+    from pathlib import Path
+    from checkout_core import unique_object
+    import json
+    root = Path(job.root)
+    for path in (*root.glob("*.json"), *(root / "payments").glob("*.json")):
+        if path.is_symlink() or path.stat().st_size > 65536:
+            raise Stop("invalid_payment_record")
+        try:
+            record = json.loads(path.read_bytes(), object_pairs_hook=unique_object)
+        except (ValueError, TypeError):
+            raise Stop("invalid_payment_record") from None
+        if not isinstance(record, dict):
+            raise Stop("invalid_payment_record")
+        bound_original = (
+            job.original_checkout_identifier is not None
+            and record.get("checkout_identifier") == job.original_checkout_identifier
+            or job.payload.get("upgradeIdentifier") is not None
+            and record.get("upgrade_identifier") == job.payload["upgradeIdentifier"])
+        if (record.get("account_key") == source["accountKey"] and not bound_original
+                and historical_payment_completed(record)):
+            continue
+        if record.get("account_key") == source["accountKey"] and (
+                record.get("payment_attempted") is True
+                or record.get("confirmation_requests_sent", 0) not in (None, 0)
+                or record.get("payment_status") in {"paid", "unknown", "requires_action"}):
+            return False
+    return True
+
+
+async def rebuild_missing_owned_profile(job, client, bit, preparation, owned, target):
+    if not missing_profile_rebuild_allowed(job, target):
+        raise Stop("owned_recharge_window_unavailable", user_action_required=True)
+    source = dict(job.owned_profile)
+    profile_id = await preparation.run(lambda: asyncio.to_thread(
+        client.create_profile, bit, job.payload["windowName"].strip()), "profile_create")
+    if (not isinstance(profile_id, str) or not re.fullmatch(r"[a-fA-F0-9]{32}", profile_id)
+            or profile_id == source["profileId"]):
+        raise Stop("bitbrowser_profile_unverified")
+    owned.add(profile_id)
+    job.profile_id = profile_id
+    job.replaced_owned_profile = source
+    job.owned_profile = None
+    job.profile_rebuild_info = {
+        "replaced_browser_profile_id": source["profileId"],
+        "browser_profile_missing_confirmed": True,
+    }
+    # A rejected/lost receipt stops the job before opening the profile, restoring
+    # cookies or password login. The API records the new binding atomically.
+    job.progress("bitbrowser_profile_created", payment_attempted=False, payment_requests_sent=0)
+    return profile_id
 
 
 async def reuse_owned_profile(job, client, playwright, target, options, expected_email=None, *,
@@ -360,12 +466,19 @@ async def _execute_profiles(job, client, target, playwright, owned):
                     job, client, playwright, job.profile_id, options, extract_ip=True), "profile_open")
             elif job.owned_profile is not None:
                 job.profile_id = job.owned_profile["profileId"]
-                # Validate existence before open; a deleted bound profile is an
-                # explicit error rather than permission to create a replacement.
-                detail = await preparation.run(lambda: asyncio.to_thread(
-                    client.post, "/browser/detail", {"id": job.profile_id}), "profile_detail")
-                if not isinstance(detail, dict) or detail.get("id") != job.profile_id:
+                # Only the complete bounded inventory proves absence. API or
+                # pagination errors never authorize a replacement window.
+                available = await preparation.run(lambda: asyncio.to_thread(
+                    client.list_profile_ids), "profile_inventory")
+                if not isinstance(available, set):
                     raise Stop("owned_recharge_window_unavailable", user_action_required=True)
+                if job.profile_id not in available:
+                    await rebuild_missing_owned_profile(job, client, bit, preparation, owned, target)
+                else:
+                    detail = await preparation.run(lambda: asyncio.to_thread(
+                        client.post, "/browser/detail", {"id": job.profile_id}), "profile_detail")
+                    if not isinstance(detail, dict) or detail.get("id") != job.profile_id:
+                        raise Stop("owned_recharge_window_unavailable", user_action_required=True)
                 await preparation.run(lambda: attach_profile(
                     job, client, playwright, job.profile_id, options), "profile_open")
             else:
@@ -445,16 +558,26 @@ async def _execute_profile_flow(job, target, budget, original_checkout=None):
         page = page or await job.context.new_page()
         page.set_default_timeout(20000)
         login = job.payload.pop("login")
+        async def wait_for_login_code(seconds):
+            return await budget.human_wait(lambda: job.wait_for_code(seconds))
+        async def wait_for_login_user(reason, seconds):
+            return await budget.human_wait(lambda: job.wait_for_user(reason, seconds))
         try:
             target, identity = await browser_password_login.login_with_password(
-                page, login["email"], login["password"], job.wait_for_code,
-                job.wait_for_user, job.progress)
+                page, login["email"], login["password"], wait_for_login_code,
+                wait_for_login_user, job.progress)
         finally:
             await browser_password_login.clear_visible_secrets(page)
             login.clear()
             await job.context.unroute("**/*", login_guard)
         job.check_cancelled()
+        replaced = job.replaced_owned_profile
+        if replaced is not None and hashlib.sha256(target.account_id.encode()).hexdigest() != replaced["accountKey"]:
+            raise Stop("official_account_mismatch", account_matched=False)
         job.restore_account(target)
+        if replaced is not None and job.owned_profile != {
+                **replaced, "profileId": job.profile_id}:
+            raise Stop("owned_recharge_profile_conflict", user_action_required=True)
         if job.owned_profile is not None and job.owned_profile["profileId"] != job.profile_id:
             raise Stop("owned_recharge_profile_conflict", user_action_required=True)
         job.progress("login_verified", account_matched=True, current_plan=identity["current_plan"])
@@ -468,12 +591,16 @@ async def _execute_profile_flow(job, target, budget, original_checkout=None):
                 job.context, target, ledger, timeout=25, poll_count=6, poll_interval=20)
             return target, pay.include_payment_record(result, ledger)
     if job.payload["mode"] == "open_browser":
-        from browser_checkout import (NetworkGuard, install_session_cookies,
+        from browser_checkout import (install_session_cookies,
                                       restore_session_with_refresh, synchronize_login_page)
         from urllib.parse import urlsplit
-        guard = NetworkGuard(target)
-        await job.context.route("**/*", guard.route)
-        await job.context.route_web_socket("**/*", lambda ws: ws.close())
+        async def login_guard(route):
+            request = route.request
+            if browser_password_login.login_payment_write(request.method, request.url):
+                await route.abort("blockedbyclient")
+            else:
+                await route.fallback()
+        await job.context.route("**/*", login_guard)
         try:
             if target.session_token:
                 await install_session_cookies(job.context, target, budget=budget)
@@ -493,7 +620,7 @@ async def _execute_profile_flow(job, target, budget, original_checkout=None):
                             "payment_attempted": False, "payment_requests_sent": 0,
                             "checkout_requests_sent": 0, **identity}
         finally:
-            await job.context.unroute("**/*", guard.route)
+            await job.context.unroute("**/*", login_guard)
     restored_checkout = job.original_checkout_identifier
     if original_checkout and restored_checkout and original_checkout != restored_checkout:
         raise Stop("checkout_identifier_changed")
