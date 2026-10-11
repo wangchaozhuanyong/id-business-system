@@ -607,6 +607,9 @@ CACHE_RESULT_FIELDS = {'kind', 'version', 'operation', 'mode', 'producer', 'sour
     'removedCount', 'authority', 'productionEligible', 'cleanupEligible', 'rawOutputSuppressed'}
 CACHE_ARTIFACT_FIELDS = {'kind', 'operation', 'producer', 'expectedCurrent', 'commandId', 'status', 'code', 'result'}
 CACHE_EXCLUSIONS = ('PROTECTED', 'SOURCE_NOT_PROVEN_OLD', 'FOREIGN_OR_MIXED_ALIAS', 'SOURCE_TAG_MISMATCH')
+CACHE_SOURCE_ALIAS_CLASSES = ('UNTAGGED','FOREIGN_OR_MIXED_REPOSITORY','PROJECT_NON_RELEASE_TAG',
+    'PROJECT_RELEASE_SOURCE_MISMATCH','PROJECT_RELEASE')
+CACHE_SOURCE_CLAIM_CLASSES = ('MISSING','INVALID','UNVERIFIED_HEX','RELEASE_TAG_MISMATCH','CANONICAL_TAG_MATCH')
 CACHE_IMAGE_FORMAT = ('{"id":{{json .Id}},"repoTags":{{json .RepoTags}},'
     '"sourceCommit":{{if eq .Config nil}}null{{else}}{{if eq (index .Config "Labels") nil}}null{{else}}'
     '{{json (index (index .Config "Labels") "org.opencontainers.image.revision")}}{{end}}{{end}},'
@@ -711,6 +714,63 @@ def cache_filter_inventory(binding, inventory, protected):
     return allowed, exclusions
 
 
+def cache_source_diagnostics(binding, inventory, protected):
+    rows=sorted((row for row in inventory if row['id'] not in protected
+        and row['sourceCommit'] not in binding['provenOldSourceCommits']),key=lambda row:row['id'])
+    items=[]
+    for row in rows[:8]:
+        tags=row['repoTags']; tag_source=None
+        if not tags: alias='UNTAGGED'
+        elif any(not tag.startswith(REPOSITORY+':') for tag in tags): alias='FOREIGN_OR_MIXED_REPOSITORY'
+        elif any(not TAG.fullmatch(tag[len(REPOSITORY)+1:]) for tag in tags): alias='PROJECT_NON_RELEASE_TAG'
+        else:
+            sources={tag[len(REPOSITORY)+1:][:40] for tag in tags}
+            alias='PROJECT_RELEASE' if len(sources)==1 else 'PROJECT_RELEASE_SOURCE_MISMATCH'
+            if len(sources)==1:tag_source=next(iter(sources))
+        source=row['sourceCommit']
+        if source is None: claim='MISSING'
+        elif not re.fullmatch('[a-f0-9]{40}',source): claim='INVALID'
+        elif source==tag_source: claim='CANONICAL_TAG_MATCH'
+        else: claim='RELEASE_TAG_MISMATCH' if tag_source is not None else 'UNVERIFIED_HEX'
+        items.append({'imageId':row['id'],'sourceCommit':source if claim=='CANONICAL_TAG_MATCH' else None,
+            'sourceClaimClass':claim,'sizeBytesEstimate':row['sizeBytesEstimate'],
+            'tagCount':len(tags),'aliasClass':alias,'tagSourceCommit':tag_source})
+    return {'totalCount':len(rows),'truncated':len(rows)>8,'items':items}
+
+
+def cache_validate_source_diagnostics(plan, binding):
+    diagnostic=plan['excludedSources']
+    cache_need(type(diagnostic) is dict and set(diagnostic)=={'totalCount','truncated','items'}
+        and type(diagnostic['totalCount']) is int and 0<=diagnostic['totalCount']<=128
+        and diagnostic['totalCount']==plan['excludedCounts']['SOURCE_NOT_PROVEN_OLD']
+        and type(diagnostic['truncated']) is bool and diagnostic['truncated']==(diagnostic['totalCount']>8)
+        and type(diagnostic['items']) is list and len(diagnostic['items'])==min(diagnostic['totalCount'],8))
+    ids=[]
+    for row in diagnostic['items']:
+        cache_need(type(row) is dict and set(row)=={'imageId','sourceCommit','sourceClaimClass','sizeBytesEstimate','tagCount','aliasClass','tagSourceCommit'}
+            and type(row['imageId']) is str and IMAGE_ID.fullmatch(row['imageId'])
+            and row['imageId'] not in plan['protectedImageIds'] and row['imageId'] not in {item['imageId'] for item in plan['items']}
+            and (row['sourceCommit'] is None or type(row['sourceCommit']) is str
+                and re.fullmatch('[a-f0-9]{40}',row['sourceCommit']) and row['sourceCommit'] not in binding['provenOldSourceCommits'])
+            and type(row['sizeBytesEstimate']) is int and 0<=row['sizeBytesEstimate']<=2**63-1
+            and type(row['tagCount']) is int and 0<=row['tagCount']<=32
+            and type(row['aliasClass']) is str and row['aliasClass'] in CACHE_SOURCE_ALIAS_CLASSES
+            and type(row['sourceClaimClass']) is str and row['sourceClaimClass'] in CACHE_SOURCE_CLAIM_CLASSES)
+        alias=row['aliasClass']; source=row['tagSourceCommit']
+        cache_need((alias=='PROJECT_RELEASE' and row['tagCount']>0 and type(source) is str
+                and re.fullmatch('[a-f0-9]{40}',source)) or
+            (alias!='PROJECT_RELEASE' and source is None and
+                (row['tagCount']==0 if alias=='UNTAGGED' else row['tagCount']>0)
+                and (alias!='PROJECT_RELEASE_SOURCE_MISMATCH' or row['tagCount']>=2)))
+        claim=row['sourceClaimClass']
+        cache_need((claim=='CANONICAL_TAG_MATCH' and alias=='PROJECT_RELEASE' and row['sourceCommit']==source) or
+            (claim!='CANONICAL_TAG_MATCH' and row['sourceCommit'] is None
+                and (claim!='RELEASE_TAG_MISMATCH' or alias=='PROJECT_RELEASE')
+                and (claim!='UNVERIFIED_HEX' or alias!='PROJECT_RELEASE')))
+        ids.append(row['imageId'])
+    cache_need(ids==sorted(set(ids)))
+
+
 def cache_recovery(plan, holder):
     holder['recovery'] = {}
     verify_remote(plan)
@@ -766,7 +826,8 @@ def cache_plan(binding, manifest, previous, dependencies, containers, inventory,
         'servicesSha256':CACHE_SERVICES_SHA,'containerImageIds':sorted(containers),
         'inventorySha256':cache_sha(cache_canonical(inventory)),
         'provenOldSourceCommitsSha256':cache_sha(cache_canonical(binding['provenOldSourceCommits'])),
-        'pendingCandidateCommit':binding['producer']['commit'],'excludedCounts':excluded}
+        'pendingCandidateCommit':binding['producer']['commit'],'excludedCounts':excluded,
+        'excludedSources':cache_source_diagnostics(binding,inventory,protected)}
     budget = {'policy':POLICY,'expectedCurrent':CACHE_BASELINE,'expectedPrevious':previous['commit'],
         'repository':REPOSITORY,'protectedImageIds':sorted(protected),'items':[],'dependencies':compact,**metadata}
     cache_need(cache_plan_budget(budget,binding),'OUTPUT_BOUND')
@@ -990,7 +1051,7 @@ def validate_result(value,binding):
     else:
         plan=value['plan']; fields={'policy','expectedCurrent','expectedPrevious','repository','protectedImageIds','items','dependencies',
             'sourceCommit','sourceTree','sourcePinsSha256','currentManifestSha256','previousManifestSha256','servicesSha256',
-            'containerImageIds','inventorySha256','provenOldSourceCommitsSha256','pendingCandidateCommit','excludedCounts'}
+            'containerImageIds','inventorySha256','provenOldSourceCommitsSha256','pendingCandidateCommit','excludedCounts','excludedSources'}
         cache_need(type(plan) is dict and set(plan)==fields and plan['policy']==POLICY and plan['expectedCurrent']==CACHE_BASELINE
             and plan['expectedPrevious']==CACHE_PREVIOUS and plan['repository']==REPOSITORY
             and plan['sourceCommit']==plan['pendingCandidateCommit']==binding['producer']['commit'] and plan['sourceTree']==binding['producer']['sourceTree']
@@ -1024,6 +1085,7 @@ def validate_result(value,binding):
                 and row['imageId'] not in plan['protectedImageIds'] and type(row['sizeBytesEstimate']) is int and 0<=row['sizeBytesEstimate']<=2**63-1
                 and type(row['remoteManifestDigest']) is str and IMAGE_ID.fullmatch(row['remoteManifestDigest'])
                 and row['remoteManifestSha256']==row['remoteManifestDigest'][7:] and row['recoveryVerified'] is True)
+        cache_validate_source_diagnostics(plan,binding)
         cache_need(value['planSha256']==plan_digest(plan) and len(cache_canonical(plan))<=12000
             and value['candidateSizeBytesEstimateSum']==sum({i['imageId']:i['sizeBytesEstimate'] for i in items}.values()))
         expected={(i['tag'],i['imageId']) for i in items}; seen=set()
@@ -1215,7 +1277,7 @@ def parameters(producer, *, source=None, expected_current=CACHE_BASELINE,
     old_names=('require','current','active_images','protected_images','dependency_file','release_metadata','literal_dependency',
         'fixed_dependencies','collect_dependencies','make_plan','plan_digest','verify_remote')
     new_names=('CacheRejected','cache_need','cache_sha','cache_canonical','cache_closed','cache_producer','cache_binding','cache_inventory','cache_plan_budget',
-        'cache_filter_inventory','cache_recovery','cache_plan','cache_save_receipt','cache_execute')
+        'cache_filter_inventory','cache_source_diagnostics','cache_recovery','cache_plan','cache_save_receipt','cache_execute')
     selected=module.storage_selected(raw[CACHE_PINS[1]],old_names+new_names)
     body=header+selected
     body+=module.storage_selected(raw[CACHE_PINS[2]],('StorageRejected','storage_need','storage_sha','storage_identity','StorageGuard'))
