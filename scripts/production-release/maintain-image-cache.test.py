@@ -1068,5 +1068,385 @@ class DependencyRetentionTests(unittest.TestCase):
         self.assertEqual((result['mode'], calls), ('APPLIED', 1))
 
 
+class FixedBootstrapCacheTests(unittest.TestCase):
+    """All host, ECR and mutation calls are synthetic; files stay in project runtime."""
+    @classmethod
+    def setUpClass(cls):
+        cls.project = DIRECTORY.parents[1]
+        cls.output = cls.project / '.runtime/cache-recovery-0a-20261011/fixtures'
+        cls.output.mkdir(parents=True, exist_ok=True)
+        storage_spec = importlib.util.spec_from_file_location('cache_test_storage', DIRECTORY / 'storage-maintenance.py')
+        cls.storage = importlib.util.module_from_spec(storage_spec); storage_spec.loader.exec_module(cls.storage)
+        for name in ('StorageGuard','StorageRejected','storage_identity'):
+            setattr(cache,name,getattr(cls.storage,name))
+        cls.producer = {'commit':'c'*40,'sourceTree':'d'*40,'workflowRunId':'123','workflowRunAttempt':'1'}
+        cls.old = 'a'*40
+        cls.candidate = 'sha256:'+'a'*64
+        cls.kept = 'sha256:'+'b'*64
+
+    @classmethod
+    def binding(cls, operation='verify_unused_cache', approval=None, producer=None):
+        return {'producer':producer or cls.producer.copy(),'expectedCurrent':cache.CACHE_BASELINE,
+            'operation':operation,'approvedPlanSha256':approval,
+            'sourcePins':{p:{'bytes':10,'sha256':'e'*64} for p in cache.CACHE_PINS},
+            'provenOldSourceCommits':[cls.old],'capturedProgramBytes':10,'capturedProgramSha256':'f'*64}
+
+    @classmethod
+    def inventory(cls, count=1):
+        return [{'id':'sha256:'+str(n+1)*64,'repoTags':[cache.REPOSITORY+':'+cls.old+'-1-1-api'],
+            'sourceCommit':cls.old,'sizeBytesEstimate':1000} for n in range(count)]
+
+    @classmethod
+    def safe_plan(cls, binding=None):
+        binding=binding or cls.binding(); inventory=cls.inventory(); candidate=inventory[0]['id']
+        deps={'version':1,'imageIds':[cls.kept],'serviceRollback':{'migrate':{
+            'status':'RETAINED','commit':'b'*40,'imageId':cls.kept}},'evidenceSha256':{}}
+        holder={'recovery':{}}
+        def recover(plan):
+            holder['recovery']={i['tag']:{'remoteImageId':i['imageId'],'remoteManifestDigest':'sha256:'+'9'*64,
+                'remoteManifestSha256':'9'*64,'recoveryVerified':True} for i in plan['items']}
+        with patch.object(cache,'verify_remote',side_effect=recover):
+            plan=cache.cache_plan(binding,{'images':{'api':{'digest':cls.kept}}},
+                {'commit':cache.CACHE_PREVIOUS,'images':{}},deps,{cls.kept},inventory,holder)
+        value={'kind':'CACHE_RECOVERY_RESULT_V1','version':1,'operation':'verify_unused_cache','mode':'PLAN_ONLY',
+            'producer':binding['producer'],'sourceBinding':binding,'status':'PLANNED','code':'OK','phase':'COMPLETE',
+            'baseline':{'currentCommit':cache.CACHE_BASELINE,'currentManifestSha256':cache.CACHE_CURRENT_SHA,
+                'previousCommit':cache.CACHE_PREVIOUS,'previousManifestSha256':cache.CACHE_PREVIOUS_SHA},
+            'plan':plan,'planSha256':cache.plan_digest(plan),'candidateCount':1,'candidateSizeBytesEstimateSum':1000,
+            'exclusiveBytesReclaimable':None,'freeBytesBefore':100,'freeBytesAfter':100,
+            'guards':{**dict.fromkeys(('currentUnchanged','servicesUnchanged','dependenciesUnchanged',
+                'containerImagesUnchanged','inventoryVerified','clientCleanupVerified','remoteRecoveryVerified'),True),
+                'servicesBeforeSha256':cache.CACHE_SERVICES_SHA,'servicesAfterSha256':cache.CACHE_SERVICES_SHA},
+            'mutationAttempted':False,'itemReceipts':[],'receiptSha256':None,'removedCount':0,
+            'authority':False,'productionEligible':False,'cleanupEligible':False,'rawOutputSuppressed':True}
+        return cache.validate_result(value,binding)
+
+    def run_host(self, binding, *, count=1, fail_remove=None, change_after_remove=False,
+                 wrong_services=False, wrong_baseline=False, dependencies_failure=False, inventory_drift=False,
+                 dangling=False, recovery_failure=False, root_override=None):
+        import copy
+        import os
+        import stat
+        directory=tempfile.TemporaryDirectory(dir=self.output) if root_override is None else None; root=Path(directory.name) if directory else Path(root_override)
+        (root/'.staging').mkdir(exist_ok=True);(root/'maintenance/docker-cache-retention').mkdir(parents=True,exist_ok=True)
+        if not (root/'.deploy.lock').exists():(root/'.deploy.lock').write_bytes(b'');(root/'.deploy.lock').chmod(0o600)
+        inventory=copy.deepcopy(self.inventory(count)); removals=[]; commands=[]; snapshots=[]
+        state={'inventory':inventory,'inspectCount':0}
+        manifest={'commit':cache.CACHE_BASELINE,'previousCommit':cache.CACHE_PREVIOUS,
+            'images':{'api':{'digest':self.kept}}}
+        previous={'commit':cache.CACHE_PREVIOUS,'images':{}}
+        deps={'version':1,'imageIds':[self.kept],'serviceRollback':{},'evidenceSha256':{}}
+        class Guard:
+            def __init__(unused,deadline): unused.fds=[];unused.nodes=[]; unused.current=root/'releases/20261008T000000Z-0a03fa28e6b8'; unused.manifests=[manifest,previous]; unused.previous_sha=cache.CACHE_PREVIOUS_SHA
+            def open(unused): unused.base=os.open(root,os.O_RDONLY|os.O_DIRECTORY);unused.fds.append(unused.base)
+            def verify(unused):
+                if wrong_baseline: raise cache.StorageRejected('BASELINE_INVALID')
+            def remaining(unused): pass
+            def child(unused,parent,name):
+                fd=os.open(name,os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW,dir_fd=parent);unused.fds.append(fd);return fd
+            def close(unused):
+                for fd in reversed(unused.fds): os.close(fd)
+        class Driver:
+            def native(unused,*args,timeout=30):
+                commands.append(args)
+                if args==('ps','-a','-q'): return '7'*64
+                if args[:3]==('inspect','--format','{{.Image}}'): return self.kept
+                if args==('image','ls','--no-trunc','--quiet'): return '\n'.join(r['id'] for r in state['inventory'])
+                if args[:3]==('image','inspect','--format'):
+                    row=next(r for r in state['inventory'] if r['id']==args[-1]);state['inspectCount']+=1
+                    if inventory_drift and state['inspectCount']>count: row['sizeBytesEstimate']+=1
+                    return cache.cache_canonical(row).decode()
+                if args[:3]==('image','rm','--no-prune'):
+                    removals.append(args[-1])
+                    if fail_remove==len(removals): raise OSError('secret-error-must-not-escape')
+                    row=next(r for r in state['inventory'] if args[-1] in r['repoTags']);row['repoTags'].remove(args[-1])
+                    if not row['repoTags'] and not dangling:state['inventory'].remove(row)
+                    return 'raw-docker-secret-must-not-escape'
+                raise AssertionError(args)
+            def snapshot(unused,current):
+                snapshots.append(current)
+                return '0'*64 if wrong_services or change_after_remove and removals else cache.CACHE_SERVICES_SHA
+        def ecr(args,**kwargs):
+            self.assertEqual(kwargs['stderr'],cache.subprocess.DEVNULL);self.assertLessEqual(kwargs['timeout'],30)
+            self.assertEqual(args[:3],['aws','ecr','batch-get-image'])
+            rows=[]
+            for text in args[8:-2]:
+                tag=text[9:]; image=next(r for r in inventory if cache.REPOSITORY+':'+tag in r['repoTags'])
+                raw=cache.cache_canonical({'config':{'digest':image['id']}}).decode()
+                rows.append({'imageId':{'imageTag':tag,'imageDigest':'sha256:'+cache.cache_sha(raw.encode())},'imageManifest':raw})
+            return SimpleNamespace(returncode=0,stdout=cache.cache_canonical({'images':rows,'failures':['REJECT'] if recovery_failure else []}))
+        original_fstat,original_stat=os.fstat,os.stat
+        class Owned:
+            def __init__(unused,info):unused.info=info
+            def __getattr__(unused,name):return 0 if name=='st_uid' else getattr(unused.info,name)
+        with contextlib.ExitStack() as stack:
+            for name,value in (('BASE',root),('StorageGuard',Guard)):
+                stack.enter_context(patch.object(cache,name,value))
+            stack.enter_context(patch.object(cache.os,'getuid',return_value=0));stack.enter_context(patch.object(cache.os,'geteuid',return_value=0))
+            stack.enter_context(patch.object(cache.os,'fstat',side_effect=lambda fd:Owned(original_fstat(fd))))
+            stack.enter_context(patch.object(cache.os,'stat',side_effect=lambda *a,**kw:Owned(original_stat(*a,**kw))))
+            stack.enter_context(patch.object(cache,'current',return_value=(manifest,previous)))
+            stack.enter_context(patch.object(cache,'collect_dependencies',side_effect=RuntimeError('raw-private-path') if dependencies_failure else lambda *unused:deps))
+            stack.enter_context(patch.object(cache.subprocess,'run',side_effect=ecr))
+            value=cache.cache_execute(binding,lambda *unused:Driver())
+            cache.validate_result(value,binding)
+        receipts=list((root/'maintenance/docker-cache-retention').glob('*.json')) if (root/'maintenance/docker-cache-retention').exists() else []
+        saved=[p.read_bytes() for p in receipts]
+        if directory:directory.cleanup()
+        return value,removals,commands,saved
+
+    def test_plan_protects_current_previous_all_containers_dependencies_and_pending(self):
+        binding=self.binding();rows=self.inventory()
+        protected={rows[0]['id']}
+        self.assertEqual(cache.cache_filter_inventory(binding,rows,protected)[0],[])
+        for commit in (cache.CACHE_BASELINE,cache.CACHE_PREVIOUS,self.producer['commit'],'0'*40,None):
+            with self.subTest(commit=commit):
+                row={**rows[0],'sourceCommit':commit}
+                self.assertEqual(cache.cache_filter_inventory(binding,[row],set())[0],[])
+        self.assertIn(self.kept,self.safe_plan()['plan']['protectedImageIds'])
+
+    def test_unknown_alias_foreign_repo_new_service_wrong_source_never_candidate(self):
+        row=self.inventory()[0]
+        for tag in ('other:tag',cache.REPOSITORY+':'+self.old+'-1-1-auto-registration',cache.REPOSITORY+':'+('b'*40)+'-1-1-api'):
+            with self.subTest(tag=tag):
+                value={**row,'repoTags':row['repoTags']+[tag]}
+                self.assertEqual(cache.cache_filter_inventory(self.binding(),[value],set())[0],[])
+
+    def test_plan_canonical_excludes_run_and_deduplicates_size_estimate(self):
+        first=self.safe_plan();second=self.safe_plan(self.binding(producer={**self.producer,'workflowRunId':'456'}))
+        self.assertEqual(first['planSha256'],second['planSha256']);self.assertIsNone(first['exclusiveBytesReclaimable'])
+        for field in ('sourceTree','pendingCandidateCommit','inventorySha256','sourcePinsSha256'):
+            changed=json.loads(json.dumps(first['plan']));changed[field]='1'*len(changed[field]);self.assertNotEqual(cache.plan_digest(changed),first['planSha256'])
+
+    def test_binding_requires_explicit_exact_approval_and_closed_source_pins(self):
+        for binding in (self.binding('cleanup_unused_cache'),self.binding(approval='f'*64),
+                {**self.binding(),'unexpected':'raw'}, {**self.binding(),'provenOldSourceCommits':[cache.CACHE_BASELINE]}):
+            with self.subTest(binding=binding):
+                with self.assertRaises(cache.CacheRejected):cache.cache_binding(binding)
+        cache.cache_binding(self.binding('cleanup_unused_cache','f'*64))
+
+    def test_readonly_actual_execute_has_no_mutations_receipts_and_proves_ecr(self):
+        value,removals,commands,saved=self.run_host(self.binding())
+        self.assertEqual((value['status'],value['candidateCount']),('PLANNED',1));self.assertEqual(removals,[]);self.assertEqual(saved,[])
+        self.assertTrue(value['plan']['items'][0]['recoveryVerified']);self.assertNotIn('raw-docker',json.dumps(value))
+
+    def test_services_baseline_dependencies_inventory_and_remote_failure_stop_without_mutation(self):
+        for options,code,phase in (({'wrong_services':True},'SERVICES_CHANGED','SERVICES_BEFORE'),
+                ({'wrong_baseline':True},'BASELINE_INVALID','SERVICES_BEFORE'),
+                ({'dependencies_failure':True},'DEPENDENCY_INVALID','DEPENDENCIES'),
+                ({'inventory_drift':True},'STATE_CHANGED','PLAN_BINDING'),
+                ({'recovery_failure':True},'RECOVERY_INVALID','RECOVERY')):
+            with self.subTest(options=options):
+                value,removals,_,_=self.run_host(self.binding(),**options)
+                self.assertEqual((value['status'],value['code'],value['phase']),('FAILED',code,phase));self.assertEqual(removals,[])
+                self.assertNotIn('raw-private',json.dumps(value))
+
+    def test_wrong_approved_plan_stops_before_receipt_or_removal(self):
+        value,removals,_,saved=self.run_host(self.binding('cleanup_unused_cache','0'*64))
+        self.assertEqual(value['code'],'PLAN_CHANGED');self.assertEqual(removals,[]);self.assertEqual(saved,[])
+
+    def test_exact_plan_apply_only_removes_one_approved_reference_and_persists_receipts(self):
+        planned,_,_,_=self.run_host(self.binding());binding=self.binding('cleanup_unused_cache',planned['planSha256'])
+        value,removals,commands,saved=self.run_host(binding)
+        self.assertEqual((value['status'],value['removedCount']),('APPLIED',1));self.assertEqual(len(removals),1)
+        self.assertTrue(all(args[:3]==('image','rm','--no-prune') for args in commands if args[:2]==('image','rm')))
+        self.assertEqual(cache.cache_sha(saved[0]),value['receiptSha256'])
+        self.assertEqual(json.loads(saved[0].splitlines()[-1])['itemReceipts'][0]['state'],'REMOVED')
+
+    def test_successful_untag_can_leave_known_dangling_image_without_touching_it(self):
+        planned,_,_,_=self.run_host(self.binding())
+        value,removals,commands,_=self.run_host(self.binding('cleanup_unused_cache',planned['planSha256']),dangling=True)
+        self.assertEqual(value['status'],'APPLIED');self.assertEqual(len(removals),1)
+        self.assertFalse(any(args[-1].startswith('sha256:') for args in commands if args[:2]==('image','rm')))
+
+    def test_partial_failure_retains_attempt_and_removed_identities_no_rollback(self):
+        # Two distinct image IDs use different run tags to avoid duplicate references.
+        original=self.inventory
+        def rows(count=1):
+            values=original(count)
+            for index,row in enumerate(values):row['repoTags']=[cache.REPOSITORY+':'+self.old+'-'+str(index+1)+'-1-api']
+            return values
+        with patch.object(self,'inventory',side_effect=rows):
+            planned,_,_,_=self.run_host(self.binding(),count=2)
+            value,removals,commands,saved=self.run_host(self.binding('cleanup_unused_cache',planned['planSha256']),count=2,fail_remove=2)
+        self.assertEqual((value['status'],value['removedCount']),('FAILED_MUTATED_UNVERIFIED',1))
+        self.assertEqual([r['state'] for r in value['itemReceipts']],['REMOVED','FAILED_MUTATED_UNVERIFIED'])
+        self.assertEqual(len(removals),2);self.assertNotIn('secret-error',json.dumps(value))
+        self.assertEqual(json.loads(saved[0].splitlines()[-1])['removedCount'],1)
+
+    def test_service_drift_after_mutation_does_not_undo_or_start_anything(self):
+        planned,_,_,_=self.run_host(self.binding());value,removals,commands,_=self.run_host(
+            self.binding('cleanup_unused_cache',planned['planSha256']),change_after_remove=True)
+        self.assertEqual(value['status'],'FAILED_MUTATED_UNVERIFIED');self.assertEqual(len(removals),1)
+        self.assertFalse(any(args[0] in ('start','restart','compose','system','builder') for args in commands))
+
+    def test_safe_validator_accepts_migrate_dependency_but_rejects_unknown_or_unprotected(self):
+        for mutate in (lambda p:p['dependencies']['serviceRollback'].update(unknown={'status':'NO_DISTINCT_PREDECESSOR'}),
+                lambda p:p['dependencies']['imageIds'].clear(),lambda p:p['protectedImageIds'].clear()):
+            value=self.safe_plan();mutate(value['plan']);value['planSha256']=cache.plan_digest(value['plan'])
+            with self.assertRaises(cache.CacheRejected):cache.validate_result(value,self.binding())
+
+    def test_result_and_artifact_reject_raw_fields_status_lie_and_transport_null_misuse(self):
+        value=self.safe_plan();binding=self.binding();uuid='12345678-1234-1234-1234-123456789abc'
+        record={'kind':'CACHE_RECOVERY_ARTIFACT_V1','operation':'verify_unused_cache','producer':self.producer,
+            'expectedCurrent':cache.CACHE_BASELINE,'commandId':uuid,'status':'OPERATION_COMPLETED','code':'OK','result':value}
+        cache.validate_artifact(record,self.producer,binding)
+        for change in ({'raw':'secret'}, {'status':'OPERATION_FAILED'}, {'result':None}, {'commandId':None}):
+            with self.subTest(change=change):
+                with self.assertRaises(cache.CacheRejected):cache.validate_artifact({**record,**change},self.producer,binding)
+        cache.validate_artifact({**record,'status':'OPERATION_FAILED','code':'TRANSPORT_UNAVAILABLE','result':None},self.producer,binding)
+        with self.assertRaises(cache.CacheRejected):cache.validate_result({**value,'operation':'cleanup_unused_cache','mode':'APPLY_EXACT_APPROVED','sourceBinding':self.binding('cleanup_unused_cache','f'*64)},self.binding('cleanup_unused_cache','f'*64))
+        for raw in ('{"a":1,"a":2}','{"a":NaN}'):
+            with self.assertRaises(cache.CacheRejected):cache.cache_closed(raw)
+
+    @classmethod
+    def parameter_git(cls,args,**kwargs):
+        if args[:2]==['git','rev-parse']:return SimpleNamespace(returncode=0,stdout=cls.producer['sourceTree'].encode())
+        if args[:2]==['git','rev-list']:return SimpleNamespace(returncode=0,stdout=(cache.CACHE_BASELINE+'\n'+cls.old+'\n').encode())
+        if args[:2]==['git','show']:
+            path=args[2].split(':',1)[1];return SimpleNamespace(returncode=0,stdout=(cls.project/path).read_bytes())
+        raise AssertionError(args)
+
+    def test_actual_carrier_compiles_sha_binds_every_source_and_keeps_original_snapshot_ast(self):
+        import ast,base64,lzma,shlex
+        with patch.object(cache.subprocess,'run',side_effect=self.parameter_git):
+            payload,binding=cache.parameters(self.producer,source=self.project)
+        self.assertEqual(set(payload),{'stages','execute'});self.assertIn(len(payload['stages']),(2,3))
+        self.assertEqual(payload['execute']['executionTimeout'],['600'])
+        chunks=[]
+        for stage in payload['stages']:
+            self.assertLess(len(cache.cache_canonical(stage['parameters'])),20480)
+            tree=ast.parse(shlex.split(stage['parameters']['commands'][-1])[2]);compile(tree,'<stage>','exec')
+            spec=next(ast.literal_eval(n.value) for n in tree.body if isinstance(n,ast.Assign) and any(isinstance(t,ast.Name) and t.id=='SPEC' for t in n.targets))
+            chunks.append(spec['fragment']);cache.validate_stage_ack(stage['ack'],spec['ack'])
+        self.assertLess(len(cache.cache_canonical(payload['execute'])),20480)
+        frame=cache.cache_closed(lzma.decompress(base64.b85decode(''.join(chunks))),262145)
+        captured=cache.cache_canonical({'program':frame['program'],'modules':frame['modules']})
+        self.assertEqual(cache.cache_sha(captured),binding['capturedProgramSha256']);compile(frame['program'],'<synthetic-cache>','exec')
+        def original_ast(text,name):return ast.dump(next(n for n in ast.parse(text).body if isinstance(n,(ast.FunctionDef,ast.ClassDef)) and n.name==name),include_attributes=False)
+        original=(self.project/cache.CACHE_PINS[1]).read_text()
+        for name in ('current','collect_dependencies','fixed_dependencies','make_plan','verify_remote','cache_execute'):
+            self.assertEqual(original_ast(original,name),original_ast(frame['program'],name))
+        snapshot=(self.project/cache.CACHE_PINS[3]).read_text()
+        for name in ('NativeSnapshotDriver','snapshot_state','snapshot_validate','closed_json'):
+            self.assertEqual(original_ast(snapshot,name),original_ast(frame['modules']['snapshot'],name))
+        for path,row in binding['sourcePins'].items():self.assertEqual(row['sha256'],cache.cache_sha((self.project/path).read_bytes()))
+        # Execute only definitions: no factory/host/SSM operation. Exercise the actual closed labels helper.
+        namespace={};tree=ast.parse(frame['program']);tree.body=[n for n in tree.body if not (isinstance(n,ast.Assign) and any(isinstance(t,ast.Name) and t.id=='VALUE' for t in n.targets)) and not (isinstance(n,ast.Expr) and isinstance(n.value,ast.Call) and isinstance(n.value.func,ast.Name) and n.value.func.id=='print') and not isinstance(n,ast.Raise)]
+        namespace.update(BINDING=binding,MODULES=frame['modules']);exec(compile(tree,'<synthetic-cache-defs>','exec'),namespace)
+        directory=Path('/opt/id-business-v2/releases/20261008T000000Z-0a03fa28e6b8');driver=namespace['factory'](directory,Path('/synthetic/client'))
+        cid='1'*64;driver.native=lambda *unused:cache.cache_canonical({'id':cid,'project':'id-business-v2','role':'api','directory':str(directory),'files':','.join(str(directory/n) for n in ('docker-compose.aws-mysql.yml','compose.release.json'))}).decode()
+        self.assertEqual(driver.public_labels(cid)['role'],'api')
+        self.assertIn('APPLY_EXACT_APPROVED',frame['program'])
+
+    def test_both_operations_all_stages_fit_cap_with_128_old_proofs_and_twenty_digit_producer(self):
+        import ast,shlex
+        producer={**self.producer,'workflowRunId':'9'*20,'workflowRunAttempt':'9'*20}
+        commits=[f'{number:040x}' for number in range(1,129)]
+        def git(args,**kwargs):
+            if args[:2]==['git','rev-list']:return SimpleNamespace(returncode=0,stdout=('\n'.join([cache.CACHE_BASELINE,*commits])+'\n').encode())
+            return self.parameter_git(args,**kwargs)
+        for operation,approval in (('verify_unused_cache',None),('cleanup_unused_cache','a'*64)):
+            with self.subTest(operation=operation),patch.object(cache.subprocess,'run',side_effect=git):
+                bundle,binding=cache.parameters(producer,source=self.project,operation=operation,approved_plan_sha256=approval)
+                self.assertEqual(len(binding['provenOldSourceCommits']),128)
+                for payload in [s['parameters'] for s in bundle['stages']]+[bundle['execute']]:
+                    self.assertLess(len(cache.cache_canonical(payload)),20480);compile(ast.parse(shlex.split(payload['commands'][-1])[2]),'<synthetic-stage>','exec')
+
+    def test_source_stage_ack_rejects_extra_wrong_hash_order_and_boolean_index(self):
+        with patch.object(cache.subprocess,'run',side_effect=self.parameter_git):bundle,_=cache.parameters(self.producer,source=self.project)
+        expected=bundle['stages'][0]['ack'];cache.validate_stage_ack(expected,expected)
+        for change in ({'index':False},{'index':1},{'partSha256':'0'*64},{'raw':'secret'}):
+            with self.subTest(change=change):
+                with self.assertRaises(cache.CacheRejected):cache.validate_stage_ack({**expected,**change},expected)
+
+    def test_source_stages_joint_merge_cleanup_and_unknown_replacement_preserved(self):
+        import ast,copy,os,shlex,hashlib
+        with patch.object(cache.subprocess,'run',side_effect=self.parameter_git):bundle,binding=cache.parameters(self.producer,source=self.project)
+        specs=[]
+        for payload in [s['parameters'] for s in bundle['stages']]+[bundle['execute']]:
+            tree=ast.parse(shlex.split(payload['commands'][-1])[2])
+            specs.append(next(ast.literal_eval(n.value) for n in tree.body if isinstance(n,ast.Assign) and any(isinstance(t,ast.Name) and t.id=='SPEC' for t in n.targets)))
+        original_open,original_stat,original_fstat=os.open,os.stat,os.fstat
+        class Owned:
+            def __init__(unused,info):unused.info=info
+            def __getattr__(unused,name):return 0 if name=='st_uid' else getattr(unused.info,name)
+        for drift in ('NONE','PRE_EXEC_UNKNOWN','POST_EXEC_UNKNOWN'):
+            with self.subTest(drift=drift),tempfile.TemporaryDirectory(dir=self.output) as directory,contextlib.ExitStack() as stack:
+                root=Path(directory);(root/'opt/id-business-v2/.staging').mkdir(parents=True)
+                stack.enter_context(patch.object(cache.os,'open',side_effect=lambda path,*args,**kw:original_open(root if path=='/' else path,*args,**kw)))
+                stack.enter_context(patch.object(cache.os,'getuid',return_value=0));stack.enter_context(patch.object(cache.os,'geteuid',return_value=0))
+                stack.enter_context(patch.object(cache.os,'fstat',side_effect=lambda fd:Owned(original_fstat(fd))))
+                stack.enter_context(patch.object(cache.os,'stat',side_effect=lambda *a,**kw:Owned(original_stat(*a,**kw))))
+                for spec in specs[:-1]:self.assertEqual(cache.cache_source_stage(spec),spec['ack'])
+                scratch=next((root/'opt/id-business-v2/.staging').iterdir());calls=[]
+                if drift=='PRE_EXEC_UNKNOWN':(scratch/'part-0').write_bytes(b'unknown-WIP')
+                def execute(raw):
+                    calls.append(raw)
+                    self.assertEqual(hashlib.sha256(__import__('lzma').decompress(__import__('base64').b85decode(raw))).hexdigest(),specs[-1]['frameSha256'])
+                    if drift=='POST_EXEC_UNKNOWN':(scratch/'part-0').write_bytes(b'unknown-WIP')
+                    return self.safe_plan(binding)
+                if drift=='PRE_EXEC_UNKNOWN':
+                    with self.assertRaisesRegex(RuntimeError,'SOURCE_STAGE_REJECTED'):cache.cache_source_stage(specs[-1],execute)
+                    self.assertEqual(calls,[]);self.assertEqual((scratch/'part-0').read_bytes(),b'unknown-WIP')
+                else:
+                    value,_=cache.cache_source_stage(specs[-1],execute)
+                    self.assertEqual(len(calls),1);cache.validate_result(value,binding)
+                    if drift=='NONE':self.assertFalse(scratch.exists());self.assertTrue(value['guards']['clientCleanupVerified'])
+                    else:self.assertTrue(scratch.exists());self.assertEqual((scratch/'part-0').read_bytes(),b'unknown-WIP');self.assertEqual(value['status'],'FAILED')
+
+    def test_full_source_stage_to_exact_apply_same_base_has_no_directory_creation_drift(self):
+        import ast,os,shlex
+        planned,_,_,_=self.run_host(self.binding());binding=self.binding('cleanup_unused_cache',planned['planSha256'])
+        with patch.object(cache.subprocess,'run',side_effect=self.parameter_git):bundle,_=cache.parameters(self.producer,source=self.project,operation='cleanup_unused_cache',approved_plan_sha256=planned['planSha256'])
+        specs=[]
+        for payload in [s['parameters'] for s in bundle['stages']]+[bundle['execute']]:
+            tree=ast.parse(shlex.split(payload['commands'][-1])[2]);specs.append(next(ast.literal_eval(n.value) for n in tree.body if isinstance(n,ast.Assign) and any(isinstance(t,ast.Name) and t.id=='SPEC' for t in n.targets)))
+        original_open,original_stat,original_fstat=os.open,os.stat,os.fstat
+        class Owned:
+            def __init__(unused,info):unused.info=info
+            def __getattr__(unused,name):return 0 if name=='st_uid' else getattr(unused.info,name)
+        with tempfile.TemporaryDirectory(dir=self.output) as directory,contextlib.ExitStack() as stack:
+            root=Path(directory);base=root/'opt/id-business-v2';(base/'.staging').mkdir(parents=True)
+            (base/'maintenance/docker-cache-retention').mkdir(parents=True);(base/'.deploy.lock').write_bytes(b'');(base/'.deploy.lock').chmod(0o600)
+            stack.enter_context(patch.object(cache.os,'open',side_effect=lambda path,*args,**kw:original_open(root if path=='/' else path,*args,**kw)))
+            stack.enter_context(patch.object(cache.os,'getuid',return_value=0));stack.enter_context(patch.object(cache.os,'geteuid',return_value=0))
+            stack.enter_context(patch.object(cache.os,'fstat',side_effect=lambda fd:Owned(original_fstat(fd))))
+            stack.enter_context(patch.object(cache.os,'stat',side_effect=lambda *a,**kw:Owned(original_stat(*a,**kw))))
+            for spec in specs[:-1]:cache.cache_source_stage(spec)
+            result,_=cache.cache_source_stage(specs[-1],lambda unused:self.run_host(binding,root_override=base)[0])
+            cache.validate_result(result,binding);self.assertEqual(result['status'],'APPLIED')
+            self.assertTrue(result['guards']['clientCleanupVerified']);self.assertEqual(list((base/'.staging').iterdir()),[])
+
+    def test_source_staging_unknown_directory_and_out_of_order_never_overwritten(self):
+        import ast,os,shlex
+        with patch.object(cache.subprocess,'run',side_effect=self.parameter_git):bundle,_=cache.parameters(self.producer,source=self.project)
+        tree=ast.parse(shlex.split(bundle['stages'][0]['parameters']['commands'][-1])[2])
+        spec=next(ast.literal_eval(n.value) for n in tree.body if isinstance(n,ast.Assign) and any(isinstance(t,ast.Name) and t.id=='SPEC' for t in n.targets))
+        with tempfile.TemporaryDirectory(dir=self.output) as directory:
+            path=Path(directory)/'opt/id-business-v2/.staging';path.mkdir(parents=True)
+            target=path/('cache-recovery-'+self.producer['workflowRunId']+'-'+self.producer['workflowRunAttempt']+'-'+spec['frameSha256']);target.mkdir();(target/'existing').write_bytes(b'unknown-WIP')
+            original=os.open
+            with patch.object(cache.os,'getuid',return_value=0),patch.object(cache.os,'geteuid',return_value=0),patch.object(cache.os,'open',side_effect=lambda path,*a,**kw:original(Path(directory) if path=='/' else path,*a,**kw)):
+                with self.assertRaises(Exception):cache.cache_source_stage(spec)
+            self.assertEqual((target/'existing').read_bytes(),b'unknown-WIP')
+
+    def test_git_source_drift_refused_before_packaging(self):
+        def changed(args,**kwargs):
+            result=self.parameter_git(args,**kwargs)
+            if args[:2]==['git','show'] and args[2].endswith('storage-maintenance.py'):result.stdout+=b'\n'
+            return result
+        with patch.object(cache.subprocess,'run',side_effect=changed):
+            with self.assertRaisesRegex(cache.CacheRejected,'STATE_CHANGED'):cache.parameters(self.producer,source=self.project)
+
+    def test_old_function_ast_and_six_gib_release_threshold_unchanged(self):
+        import ast,subprocess
+        raw=subprocess.check_output(['git','show','HEAD:scripts/production-release/maintain-image-cache.py'],cwd=self.project).decode()
+        current=(DIRECTORY/'maintain-image-cache.py').read_text()
+        original={n.name:ast.dump(n,include_attributes=False) for n in ast.parse(raw).body if isinstance(n,(ast.FunctionDef,ast.ClassDef))}
+        revised={n.name:ast.dump(n,include_attributes=False) for n in ast.parse(current).body if isinstance(n,(ast.FunctionDef,ast.ClassDef))}
+        self.assertTrue(all(revised[name]==value for name,value in original.items()))
+
+
 if __name__ == '__main__':
     unittest.main()
