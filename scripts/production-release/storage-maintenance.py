@@ -734,6 +734,386 @@ def cleanup_legacy_cache(expected, plan_json, apply=False):
         return receipt
 
 
+
+# Independent readonly evidence for the permanent workspace bootstrap. Cleanup
+# baselines and the ordinary diagnose implementation above remain unchanged.
+STORAGE_BASELINE = '0a03fa28e6b844a18833d5c63f1de700f091fc64'
+STORAGE_CURRENT_SHA = '317fbcd0e307789539009a2798b7017ff5b977041cc1b8ab617f5f3f2dc5efa3'
+STORAGE_SERVICES_SHA = '4100d5c9098b9fee8b42bfde9e0aa3447068d3c76f715479c3eab49f2394d9b4'
+STORAGE_COMPOSE_SHA = '953c6264f157b00218f2a019d5e2c0b6bc4a34f687f2ec42ad782e0009e7672c'
+STORAGE_PREFIX = 'STORAGE_READONLY_SAFE '
+STORAGE_SOURCES = ('.github/workflows/production-release.yml',
+    'scripts/production-release/storage-maintenance.py',
+    'scripts/production-release/online-recharge-source-permission-repair-transport.py',
+    'scripts/production-release/online-recharge-scope.py',
+    'scripts/production-release/api-admin-scope.py', 'scripts/production-release/remote-deploy.py')
+STORAGE_DIRECTORIES = (('PROJECT_ROOT', '/opt/id-business-v2'),
+    ('ARTIFACTS', '/opt/id-business-v2/artifacts'), ('BACKUPS', '/opt/id-business-v2/backups'),
+    ('RELEASES', '/opt/id-business-v2/releases'), ('STAGING', '/opt/id-business-v2/.staging'),
+    ('LOGS', '/opt/id-business-v2/logs'), ('DOCKER', '/var/lib/docker'), ('VAR_LOG', '/var/log'))
+STORAGE_CACHE_ROLES = ('IMAGES', 'CONTAINERS', 'VOLUMES', 'BUILD_CACHE')
+STORAGE_CODES = frozenset(('OK', 'INPUT_INVALID', 'ROOT_REQUIRED', 'BASELINE_INVALID',
+    'CURRENT_CHANGED', 'SOURCE_CHANGED', 'SERVICES_CHANGED', 'SNAPSHOT_INVALID',
+    'DISK_INVALID', 'DEADLINE_EXCEEDED', 'IO_FAILURE'))
+STORAGE_BINDING_FIELDS = {'producer', 'expectedCurrent', 'sourcePins',
+    'capturedProgramBytes', 'capturedProgramSha256'}
+STORAGE_RESULT_FIELDS = {'kind', 'version', 'operation', 'producer', 'sourceBinding',
+    'status', 'code', 'baseline', 'disk', 'directories', 'cache', 'guards',
+    'authority', 'productionEligible', 'rawOutputSuppressed'}
+STORAGE_ARTIFACT_FIELDS = {'kind', 'operation', 'producer', 'expectedCurrent',
+    'commandId', 'status', 'code', 'result'}
+
+
+class StorageRejected(RuntimeError):
+    pass
+
+
+def storage_need(ok, code='INPUT_INVALID'):
+    if not ok: raise StorageRejected(code)
+
+
+def storage_sha(raw): return hashlib.sha256(raw).hexdigest()
+
+
+def storage_canonical(value):
+    return json.dumps(value, sort_keys=True, separators=(',', ':'), allow_nan=False).encode()
+
+
+def storage_closed(raw):
+    storage_need(type(raw) in (bytes, str) and 0 < len(raw if type(raw) is bytes else raw.encode()) < 24000)
+    def unique(rows):
+        value = {}
+        for key, item in rows:
+            storage_need(key not in value); value[key] = item
+        return value
+    def invalid(unused): storage_need(False)
+    return json.loads(raw, object_pairs_hook=unique, parse_constant=invalid)
+
+
+def storage_producer(value):
+    storage_need(type(value) is dict and set(value) == {'commit', 'sourceTree', 'workflowRunId', 'workflowRunAttempt'})
+    storage_need(all(type(value[k]) is str and re.fullmatch('[a-f0-9]{40}', value[k]) for k in ('commit', 'sourceTree')))
+    storage_need(all(type(value[k]) is str and re.fullmatch('[1-9][0-9]{0,19}', value[k]) for k in ('workflowRunId', 'workflowRunAttempt')))
+    return value
+
+
+def storage_binding(value):
+    storage_need(type(value) is dict and set(value) == STORAGE_BINDING_FIELDS)
+    storage_producer(value['producer'])
+    storage_need(value['expectedCurrent'] == STORAGE_BASELINE and type(value['sourcePins']) is dict
+        and set(value['sourcePins']) == set(STORAGE_SOURCES))
+    for row in value['sourcePins'].values():
+        storage_need(type(row) is dict and set(row) == {'bytes', 'sha256'}
+            and type(row['bytes']) is int and 0 < row['bytes'] < 2*1024**2
+            and type(row['sha256']) is str and re.fullmatch('[a-f0-9]{64}', row['sha256']))
+    storage_need(type(value['capturedProgramBytes']) is int and 0 < value['capturedProgramBytes'] <= 131072
+        and type(value['capturedProgramSha256']) is str and re.fullmatch('[a-f0-9]{64}', value['capturedProgramSha256']))
+    return value
+
+
+def storage_identity(row, leaf=False):
+    result = (row.st_dev, row.st_ino, row.st_mode, row.st_uid, row.st_gid, row.st_nlink)
+    return result + ((row.st_size, row.st_mtime_ns, row.st_ctime_ns) if leaf else ())
+
+
+def storage_root(): return os.getuid() == 0 and os.geteuid() == 0
+
+
+class StorageGuard:
+    def __init__(self, deadline):
+        self.deadline, self.fds, self.nodes = deadline, [], []
+        self.link = None; self.current = None; self.manifests = None
+    def remaining(self):
+        storage_need(time.monotonic() < self.deadline, 'DEADLINE_EXCEEDED')
+    def child(self, parent, name, directory=True):
+        self.remaining()
+        fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC
+            | (os.O_DIRECTORY if directory else os.O_NONBLOCK), dir_fd=parent)
+        self.fds.append(fd); info = os.fstat(fd)
+        storage_need((stat.S_ISDIR(info.st_mode) if directory else stat.S_ISREG(info.st_mode))
+            and info.st_uid == 0 and not stat.S_IMODE(info.st_mode) & 0o022
+            and (directory or info.st_nlink == 1 and 0 < info.st_size <= 2*1024**2), 'BASELINE_INVALID')
+        visible = os.stat(name, dir_fd=parent, follow_symlinks=False)
+        identity = storage_identity(info, not directory)
+        storage_need(identity == storage_identity(visible, not directory), 'CURRENT_CHANGED')
+        self.nodes.append((parent, name, fd, identity, not directory))
+        return fd
+    def bytes(self, fd, expected=None):
+        self.remaining(); os.lseek(fd, 0, os.SEEK_SET); raw = b''
+        while len(raw) <= 2*1024**2:
+            part = os.read(fd, min(65536, 2*1024**2 + 1 - len(raw)))
+            if not part: break
+            raw += part; self.remaining()
+        storage_need(expected is None or storage_sha(raw) == expected, 'BASELINE_INVALID')
+        return raw
+    def current_link(self):
+        info = os.stat('current', dir_fd=self.base, follow_symlinks=False)
+        storage_need(stat.S_ISLNK(info.st_mode) and info.st_uid == 0 and info.st_nlink == 1
+            and 0 < info.st_size <= 512, 'BASELINE_INVALID')
+        value = os.readlink('current', dir_fd=self.base)
+        names = [value[len(prefix):] for prefix in (str(BASE)+'/releases/', 'releases/') if value.startswith(prefix)]
+        storage_need(len(names) == 1 and re.fullmatch('[0-9]{8}T[0-9]{6}Z-'+STORAGE_BASELINE[:12], names[0]), 'BASELINE_INVALID')
+        identity = storage_identity(info, True)
+        storage_need(identity == storage_identity(os.stat('current', dir_fd=self.base, follow_symlinks=False), True), 'CURRENT_CHANGED')
+        return names[0], (value, identity)
+    def open(self):
+        root = os.open('/', os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC)
+        self.fds.append(root); self.root = root; self.root_identity = storage_identity(os.fstat(root))
+        parent = root
+        for part in BASE.parts[1:]: parent = self.child(parent, part)
+        self.base = parent; name, self.link = self.current_link(); self.current = BASE/'releases'/name
+        releases = self.child(parent, 'releases'); current = self.child(releases, name)
+        self.current_manifest = self.child(current, 'release-manifest.json', False)
+        manifest = json.loads(self.bytes(self.current_manifest, STORAGE_CURRENT_SHA))
+        previous_commit, previous_path = manifest.get('previousCommit'), manifest.get('previousRelease')
+        storage_need(manifest.get('commit') == STORAGE_BASELINE
+            and type(previous_commit) is str and re.fullmatch('[a-f0-9]{40}', previous_commit)
+            and type(previous_path) is str, 'BASELINE_INVALID')
+        previous_path = Path(previous_path)
+        storage_need(previous_path.parent == BASE/'releases'
+            and str(previous_path) == manifest['previousRelease']
+            and re.fullmatch('[0-9]{8}T[0-9]{6}Z-'+previous_commit[:12], previous_path.name), 'BASELINE_INVALID')
+        previous = self.child(releases, previous_path.name)
+        self.previous_manifest = self.child(previous, 'release-manifest.json', False)
+        previous_raw = self.bytes(self.previous_manifest)
+        previous_manifest = json.loads(previous_raw)
+        storage_need(previous_manifest.get('commit') == previous_commit, 'BASELINE_INVALID')
+        self.previous_sha = storage_sha(previous_raw)
+        self.compose = self.child(current, 'docker-compose.aws-mysql.yml', False)
+        self.manifests = [manifest, previous_manifest]; self.verify()
+    def verify(self):
+        self.remaining()
+        storage_need(storage_identity(os.fstat(self.root)) == self.root_identity
+            and self.current_link() == (self.current.name, self.link), 'CURRENT_CHANGED')
+        for parent, name, fd, identity, leaf in self.nodes:
+            storage_need(storage_identity(os.fstat(fd), leaf) == identity
+                == storage_identity(os.stat(name, dir_fd=parent, follow_symlinks=False), leaf), 'CURRENT_CHANGED')
+        self.bytes(self.current_manifest, STORAGE_CURRENT_SHA)
+        self.bytes(self.previous_manifest, self.previous_sha)
+        self.bytes(self.compose, STORAGE_COMPOSE_SHA)
+    def close(self):
+        for fd in reversed(self.fds): os.close(fd)
+        self.fds = []
+
+
+def storage_directory_usage(role, path, deadline):
+    row = {'role': role, 'status': 'UNAVAILABLE', 'allocatedBytes': None}
+    fd = None
+    try:
+        info = os.stat(path, follow_symlinks=False)
+        if not stat.S_ISDIR(info.st_mode): return row
+        fd = os.open(path, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC)
+        storage_need(storage_identity(os.fstat(fd)) == storage_identity(info), 'CURRENT_CHANGED')
+        remaining = deadline-time.monotonic(); storage_need(remaining > 0, 'DEADLINE_EXCEEDED')
+        public = '/proc/self/fd/'+str(fd)
+        result = subprocess.run(['/usr/bin/du', '-x', '-s', '-B1', '-H', '--', public],
+            env={'PATH': '/usr/bin:/bin', 'LC_ALL': 'C'}, pass_fds=(fd,),
+            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=min(30, remaining))
+        if result.returncode or len(result.stdout) > 128: return row
+        match = re.fullmatch(rb'([0-9]{1,20})\s+'+re.escape(public.encode())+rb'\n?', result.stdout)
+        if not match: return row
+        storage_need(storage_identity(os.fstat(fd)) == storage_identity(info)
+            == storage_identity(os.stat(path, follow_symlinks=False)), 'CURRENT_CHANGED')
+        number = int(match[1]); storage_need(number <= 2**63-1, 'INPUT_INVALID')
+        row.update(status='MEASURED', allocatedBytes=number)
+    except FileNotFoundError: row['status'] = 'MISSING'
+    except (OSError, subprocess.TimeoutExpired): pass
+    finally:
+        if fd is not None: os.close(fd)
+    return row
+
+
+def storage_cache(driver):
+    # Formatted aggregate sizes are estimates; no image/tag/environment values
+    # or arbitrary labels are included in this diagnostic or authorize removal.
+    from decimal import Decimal
+    roles = {'Images': 'IMAGES', 'Containers': 'CONTAINERS', 'Local Volumes': 'VOLUMES', 'Build Cache': 'BUILD_CACHE'}
+    result = {'status': 'UNAVAILABLE', 'rows': []}
+    try:
+        lines = driver.native('system', 'df', '--format', '{{json .}}').splitlines()
+        storage_need(len(lines) == 4)
+        rows = {}
+        def size(value):
+            storage_need(type(value) is str)
+            match = re.fullmatch(r'([0-9]+(?:\.[0-9]{1,3})?)(B|kB|KB|MB|GB|TB)(?: \([0-9]{1,3}%\))?', value)
+            storage_need(match is not None)
+            number = int(Decimal(match[1]) * {'B':1,'kB':1000,'KB':1000,'MB':1000**2,'GB':1000**3,'TB':1000**4}[match[2]])
+            storage_need(0 <= number <= 2**63-1); return number
+        for line in lines:
+            value = storage_closed(line)
+            storage_need(type(value) is dict and set(value) == {'Type','TotalCount','Active','Size','Reclaimable'}
+                and value['Type'] in roles and roles[value['Type']] not in rows)
+            def count(value):
+                storage_need(type(value) in (str,int) and not isinstance(value,bool)
+                    and re.fullmatch('[0-9]{1,12}', str(value)) is not None); return int(value)
+            role = roles[value['Type']]; total, active = count(value['TotalCount']), count(value['Active'])
+            storage_need(active <= total)
+            rows[role] = {'role':role,'count':total,'activeCount':active,
+                'sizeBytesEstimate':size(value['Size']),'reclaimableBytesEstimate':size(value['Reclaimable'])}
+        result = {'status':'MEASURED','rows':[rows[role] for role in STORAGE_CACHE_ROLES]}
+    except Exception: pass
+    return result
+
+
+def storage_execute(binding, driver_factory):
+    storage_binding(binding)
+    value = {'kind':'STORAGE_READONLY_RESULT_V1','version':1,'operation':'diagnose_storage',
+        'producer':binding['producer'],'sourceBinding':binding,'status':'FAILED','code':'IO_FAILURE',
+        'baseline':{'currentCommit':STORAGE_BASELINE,'currentManifestSha256':STORAGE_CURRENT_SHA,
+            'previousCommit':None,'previousManifestSha256':None},
+        'disk':{'totalBytes':None,'usedBytes':None,'freeBytes':None},
+        'directories':[{'role':role,'status':'NOT_MEASURED','allocatedBytes':None} for role, _ in STORAGE_DIRECTORIES],
+        'cache':{'status':'NOT_MEASURED','rows':[]},
+        'guards':{'currentUnchanged':False,'servicesUnchanged':False,'servicesBeforeSha256':None,
+            'servicesAfterSha256':None,'clientCleanupVerified':False},
+        'authority':False,'productionEligible':False,'rawOutputSuppressed':True}
+    deadline = time.monotonic()+570; guard = StorageGuard(deadline); temporary = None
+    try:
+        storage_need(storage_root(), 'ROOT_REQUIRED'); guard.open()
+        value['baseline'].update(previousCommit=guard.manifests[0]['previousCommit'], previousManifestSha256=guard.previous_sha)
+        import tempfile
+        temporary = tempfile.TemporaryDirectory(prefix='storage-readonly-client-', dir=BASE/'.staging')
+        client = Path(temporary.name); client.chmod(0o700)
+        fd = os.open(client/'config.json', os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW, 0o600)
+        try: storage_need(os.write(fd,b'{}\n') == 3)
+        finally: os.close(fd)
+        driver = driver_factory(guard.current,client)
+        native = driver.native
+        def bounded(*args,timeout=30):
+            guard.remaining(); return native(*args,timeout=min(30,max(1,int(deadline-time.monotonic()))))
+        driver.native = bounded
+        before = driver.snapshot(guard.current); value['guards']['servicesBeforeSha256'] = before
+        storage_need(before == STORAGE_SERVICES_SHA, 'SERVICES_CHANGED'); guard.verify()
+        disk = shutil.disk_usage(BASE)
+        storage_need(all(type(n) is int and n >= 0 for n in disk) and disk.total > 0
+            and disk.used<=disk.total and disk.free<=disk.total
+            and disk.used+disk.free <= disk.total, 'DISK_INVALID')
+        value['disk'] = dict(zip(('totalBytes','usedBytes','freeBytes'),disk))
+        value['directories'] = [storage_directory_usage(role,Path(path),deadline) for role,path in STORAGE_DIRECTORIES]
+        value['cache'] = storage_cache(driver)
+        guard.verify(); after = driver.snapshot(guard.current); value['guards']['servicesAfterSha256'] = after
+        storage_need(before == after, 'SERVICES_CHANGED'); guard.verify()
+        value['guards'].update(currentUnchanged=True,servicesUnchanged=True)
+        value.update(status='DIAGNOSED',code='OK')
+    except Exception as error:
+        value['code'] = str(error) if type(error) is StorageRejected and str(error) in STORAGE_CODES else 'IO_FAILURE'
+    finally:
+        try:
+            guard.close()
+            if temporary is not None: temporary.cleanup()
+            value['guards']['clientCleanupVerified'] = True
+        except Exception: value.update(status='FAILED',code='IO_FAILURE')
+    return validate_result(value,binding)
+
+
+def validate_result(value,binding):
+    storage_binding(binding)
+    storage_need(type(value) is dict and set(value) == STORAGE_RESULT_FIELDS
+        and value['kind'] == 'STORAGE_READONLY_RESULT_V1' and type(value['version']) is int and value['version'] == 1
+        and value['operation'] == 'diagnose_storage' and value['producer'] == binding['producer']
+        and value['sourceBinding'] == binding and value['status'] in ('DIAGNOSED','FAILED')
+        and value['code'] in STORAGE_CODES and (value['status']=='DIAGNOSED') == (value['code']=='OK')
+        and value['authority'] is False and value['productionEligible'] is False and value['rawOutputSuppressed'] is True)
+    baseline=value['baseline']
+    storage_need(type(baseline) is dict and set(baseline)=={'currentCommit','currentManifestSha256','previousCommit','previousManifestSha256'}
+        and baseline['currentCommit']==STORAGE_BASELINE and baseline['currentManifestSha256']==STORAGE_CURRENT_SHA
+        and (baseline['previousCommit'] is None and baseline['previousManifestSha256'] is None
+            or type(baseline['previousCommit']) is str and re.fullmatch('[a-f0-9]{40}',baseline['previousCommit'])
+            and type(baseline['previousManifestSha256']) is str and re.fullmatch('[a-f0-9]{64}',baseline['previousManifestSha256'])))
+    disk = value['disk']; storage_need(type(disk) is dict and set(disk)=={'totalBytes','usedBytes','freeBytes'}
+        and (all(n is None for n in disk.values()) or all(type(n) is int and 0<=n<=2**63-1 for n in disk.values())
+            and disk['totalBytes']>0 and disk['usedBytes']<=disk['totalBytes'] and disk['freeBytes']<=disk['totalBytes']
+            and disk['usedBytes']+disk['freeBytes']<=disk['totalBytes']))
+    rows=value['directories']; storage_need(type(rows) is list and len(rows)==len(STORAGE_DIRECTORIES))
+    for (role,_),row in zip(STORAGE_DIRECTORIES,rows):
+        storage_need(type(row) is dict and set(row)=={'role','status','allocatedBytes'} and row['role']==role
+            and row['status'] in ('NOT_MEASURED','MEASURED','MISSING','UNAVAILABLE')
+            and ((type(row['allocatedBytes']) is int and 0<=row['allocatedBytes']<=2**63-1) if row['status']=='MEASURED' else row['allocatedBytes'] is None))
+    cache=value['cache']; storage_need(type(cache) is dict and set(cache)=={'status','rows'}
+        and cache['status'] in ('NOT_MEASURED','MEASURED','UNAVAILABLE') and type(cache['rows']) is list)
+    storage_need(len(cache['rows'])==(4 if cache['status']=='MEASURED' else 0))
+    for role,row in zip(STORAGE_CACHE_ROLES,cache['rows']):
+        storage_need(type(row) is dict and set(row)=={'role','count','activeCount','sizeBytesEstimate','reclaimableBytesEstimate'}
+            and row['role']==role and all(type(n) is int and 0<=n<=2**63-1 for k,n in row.items() if k!='role')
+            and row['activeCount']<=row['count'])
+    guards=value['guards']; storage_need(type(guards) is dict and set(guards)=={'currentUnchanged','servicesUnchanged',
+        'servicesBeforeSha256','servicesAfterSha256','clientCleanupVerified'}
+        and all(type(guards[k]) is bool for k in ('currentUnchanged','servicesUnchanged','clientCleanupVerified'))
+        and all(guards[k] is None or type(guards[k]) is str and re.fullmatch('[a-f0-9]{64}',guards[k])
+            for k in ('servicesBeforeSha256','servicesAfterSha256')))
+    if value['status']=='DIAGNOSED':
+        storage_need(guards['currentUnchanged'] and guards['servicesUnchanged'] and guards['clientCleanupVerified']
+            and guards['servicesBeforeSha256']==guards['servicesAfterSha256']==STORAGE_SERVICES_SHA
+            and disk['totalBytes'] is not None and baseline['previousCommit'] is not None)
+    storage_need(len(storage_canonical(value))<24000)
+    return value
+
+
+def validate_artifact(record,producer,binding):
+    storage_producer(producer); storage_binding(binding)
+    storage_need(type(record) is dict and set(record)==STORAGE_ARTIFACT_FIELDS
+        and record['kind']=='STORAGE_READONLY_ARTIFACT_V1' and record['operation']=='diagnose_storage'
+        and record['producer']==producer==binding['producer'] and record['expectedCurrent']==STORAGE_BASELINE
+        and record['status'] in ('OPERATION_COMPLETED','OPERATION_FAILED'))
+    if record['result'] is None:
+        storage_need(record['status']=='OPERATION_FAILED' and record['code']=='TRANSPORT_UNAVAILABLE'
+            and (record['commandId'] is None or type(record['commandId']) is str and re.fullmatch('[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}',record['commandId'])))
+    else:
+        value=validate_result(record['result'],binding)
+        storage_need(type(record['commandId']) is str and re.fullmatch('[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}',record['commandId'])
+            and record['code']==value['code'] and (record['status']=='OPERATION_COMPLETED')==(value['status']=='DIAGNOSED'))
+    storage_need(len(storage_canonical(record))<24000); return record
+
+
+def storage_selected(raw,names):
+    import ast
+    parsed=ast.parse(raw); selected={n.name:n for n in parsed.body if isinstance(n,(ast.FunctionDef,ast.ClassDef)) and n.name in names}
+    storage_need(set(selected)==set(names))
+    return '\n'.join(ast.get_source_segment(raw.decode(),selected[name]) for name in names)+'\n'
+
+
+def parameters(producer, *, source=None, expected_current=STORAGE_BASELINE):
+    import ast
+    import shlex
+    storage_producer(producer); storage_need(expected_current==STORAGE_BASELINE)
+    project=Path(source) if source is not None else Path(__file__).resolve().parents[2]
+    sources={path:(project/path).read_bytes() for path in STORAGE_SOURCES}
+    pins={path:{'bytes':len(raw),'sha256':storage_sha(raw)} for path,raw in sources.items()}
+    binding={'producer':producer,'expectedCurrent':expected_current,'sourcePins':pins,
+        'capturedProgramBytes':1,'capturedProgramSha256':'0'*64}
+    snapshot_raw=sources[STORAGE_SOURCES[2]]
+    snapshot_names=('need','sha','canonical','closed_json','snapshot_validate','snapshot_state','NativeSnapshotDriver')
+    snapshot_header='import hashlib,json,os,re,subprocess,types\nfrom pathlib import Path\n'
+    snapshot_tree=ast.parse(snapshot_raw)
+    for name in ('BASELINE','DOCKER','SOCKET','ROLES','SERVICE_FIELDS','SNAPSHOT_FIELDS','SNAPSHOT_STAGES','SNAPSHOT_CODES','PUBLIC_LABEL_FORMAT'):
+        node=next(n for n in snapshot_tree.body if isinstance(n,ast.Assign) and any(isinstance(t,ast.Name) and t.id==name for t in n.targets))
+        snapshot_header+=ast.get_source_segment(snapshot_raw.decode(),node)+'\n'
+    snapshot_header+="BASE=Path('/opt/id-business-v2')\nHEX=re.compile(r'[a-f0-9]{64}\\Z')\n"
+    modules={
+        'snapshot':snapshot_header+storage_selected(snapshot_raw,snapshot_names),
+        'online':'import hashlib,json,re\n'+storage_selected(sources[STORAGE_SOURCES[3]],('fingerprint','legacy','snapshot')),
+        'workspace':"import hashlib,json\nWORKSPACE=True\nCONFIG_FILES=('docker-compose.aws-mysql.yml',)\nONLINE_SERVICE='online-recharge'\n"+storage_selected(sources[STORAGE_SOURCES[4]],('fingerprint','workspace_service_names','snapshot')),
+        'remote':'import hashlib,json,re\n'+storage_selected(sources[STORAGE_SOURCES[5]],('require','historical_fingerprint','service_state'))}
+    own=sources[STORAGE_SOURCES[1]];own_tree=ast.parse(own)
+    header='import hashlib,json,os,re,shutil,stat,subprocess,time,types\nfrom pathlib import Path\nBASE=Path("/opt/id-business-v2")\n'
+    for node in own_tree.body:
+        if isinstance(node,ast.Assign) and any(isinstance(t,ast.Name) and t.id.startswith('STORAGE_') for t in node.targets):
+            header+=ast.get_source_segment(own.decode(),node)+'\n'
+    names=('StorageRejected','storage_need','storage_sha','storage_canonical','storage_closed','storage_producer',
+        'storage_binding','storage_identity','storage_root','StorageGuard','storage_directory_usage',
+        'storage_cache','storage_execute','validate_result')
+    body=header+storage_selected(own,names)
+    body+='modules='+repr(modules)+'\nloaded={}\nfor name,raw in modules.items():\n m=types.ModuleType(name);exec(compile(raw,"<readonly-snapshot>" ,"exec"),m.__dict__);loaded[name]=m\n'
+    body+='def factory(directory,client):\n return loaded["snapshot"].NativeSnapshotDriver(directory,client,loaded["online"],loaded["workspace"],loaded["remote"])\n'
+    body+='value=storage_execute(BINDING,factory)\nprint(STORAGE_PREFIX+storage_canonical(value).decode())\nraise SystemExit(0 if value["status"]=="DIAGNOSED" else 1)\n'
+    captured=body.encode(); binding['capturedProgramBytes']=len(captured);binding['capturedProgramSha256']=storage_sha(captured);storage_binding(binding)
+    encoded=base64.b64encode(gzip.compress(captured,mtime=0)).decode()
+    # BINDING is outside the captured code hash to avoid self-referential digests.
+    bootstrap='import base64,hashlib,zlib;d=zlib.decompressobj(31);r=d.decompress(base64.b64decode('+repr(encoded)+',validate=True),131073);assert 0<len(r)<=131072 and d.eof and not d.unused_data and not d.unconsumed_tail;assert hashlib.sha256(r).hexdigest()=='+repr(binding['capturedProgramSha256'])+';BINDING='+repr(binding)+';exec(compile(r,"<storage-readonly>","exec"))'
+    payload={'commands':['set -eu','umask 077','python3 -c '+shlex.quote(bootstrap)],'executionTimeout':['600']}
+    storage_need(len(storage_canonical(payload))<20480);return payload,binding
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--operation', choices=('diagnose', 'cleanup-audit', 'verify-legacy-cache',

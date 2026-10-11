@@ -796,8 +796,121 @@ jobs:
           aws ssm get-command-invocation --command-id "$command_id" \
             --instance-id "$PRODUCTION_INSTANCE_ID" --query StandardOutputContent --output text
 
+      - name: Diagnose current storage without changing production
+        if: inputs.operation == 'diagnose_storage' && inputs.expected_current == '0a03fa28e6b844a18833d5c63f1de700f091fc64'
+        run: |
+          set -Eeuo pipefail
+          mkdir -p .deploy/production-release
+          python3 - <<'PY_CURRENT_STORAGE'
+          import importlib.util
+          import json
+          import os
+          from pathlib import Path
+          import re
+          import subprocess
+          import sys
+          import time
+          spec = importlib.util.spec_from_file_location('storage_current', 'scripts/production-release/storage-maintenance.py')
+          storage = importlib.util.module_from_spec(spec)
+          spec.loader.exec_module(storage)
+          producer = {'commit': os.environ['RELEASE_COMMIT'], 'sourceTree': os.environ['SOURCE_TREE'],
+              'workflowRunId': os.environ['GITHUB_RUN_ID'], 'workflowRunAttempt': os.environ['GITHUB_RUN_ATTEMPT']}
+          payload, binding = storage.parameters(producer, expected_current=os.environ['EXPECTED_CURRENT'])
+          directory = Path('.deploy/production-release')
+          parameters = directory / 'storage-readonly-parameters.json'
+          parameters.write_text(json.dumps(payload))
+          parameters.chmod(0o600)
+          deadline = time.monotonic() + 660
+          command_id = None
+          result = None
+          def aws(*arguments):
+              remaining = deadline - time.monotonic()
+              if remaining <= 0:
+                  raise RuntimeError('TRANSPORT_UNAVAILABLE')
+              response = subprocess.run(['aws', 'ssm', *arguments], capture_output=True,
+                  timeout=min(30, remaining))
+              if (response.returncode and arguments[0] == 'get-command-invocation'
+                      and len(response.stderr) < 16384 and b'(InvocationDoesNotExist)' in response.stderr):
+                  return None
+              if response.returncode or len(response.stdout) > 128 * 1024:
+                  raise RuntimeError('TRANSPORT_UNAVAILABLE')
+              return response.stdout.decode('utf-8', errors='strict')
+          def unique(rows):
+              value = {}
+              for key, item in rows:
+                  if key in value:
+                      raise ValueError('Duplicate field')
+                  value[key] = item
+              return value
+          def closed(raw):
+              return json.loads(raw, object_pairs_hook=unique,
+                  parse_constant=lambda unused: (_ for _ in ()).throw(ValueError('Invalid constant')))
+          try:
+              command_id = aws('send-command', '--instance-ids', os.environ['PRODUCTION_INSTANCE_ID'],
+                  '--document-name', 'AWS-RunShellScript', '--parameters', 'file://' + str(parameters),
+                  '--query', 'Command.CommandId', '--output', 'text').strip()
+              if not re.fullmatch(r'[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}', command_id):
+                  command_id = None
+                  raise RuntimeError('TRANSPORT_UNAVAILABLE')
+              while True:
+                  raw_invocation = aws('get-command-invocation', '--command-id', command_id,
+                      '--instance-id', os.environ['PRODUCTION_INSTANCE_ID'], '--output', 'json')
+                  if raw_invocation is None:
+                      time.sleep(min(10, max(0, deadline - time.monotonic())))
+                      continue
+                  invocation = closed(raw_invocation)
+                  if (type(invocation) is not dict or invocation.get('CommandId') != command_id
+                          or invocation.get('InstanceId') != os.environ['PRODUCTION_INSTANCE_ID']
+                          or invocation.get('DocumentName') != 'AWS-RunShellScript'
+                          or invocation.get('PluginName') != 'aws:runShellScript'):
+                      raise RuntimeError('TRANSPORT_UNAVAILABLE')
+                  status = invocation.get('Status')
+                  if status in ('Success', 'Failed', 'Cancelled', 'TimedOut'):
+                      raw = invocation.get('StandardOutputContent')
+                      prefix = 'STORAGE_READONLY_SAFE '
+                      if (type(raw) is not str or not 0 < len(raw.encode('utf-8')) < 24000
+                              or len(raw.rstrip('\r\n').splitlines()) != 1 or not raw.startswith(prefix)):
+                          raise RuntimeError('TRANSPORT_UNAVAILABLE')
+                      result = storage.validate_result(closed(raw[len(prefix):]), binding)
+                      if ((result['status'] == 'DIAGNOSED') != (status == 'Success')
+                              or type(invocation.get('ResponseCode')) is not int
+                              or (status == 'Success' and (invocation['ResponseCode'] != 0
+                                  or invocation.get('StandardErrorContent') != ''))):
+                          result = None
+                          raise RuntimeError('TRANSPORT_UNAVAILABLE')
+                      break
+                  if status not in ('Pending', 'InProgress', 'Delayed', 'Cancelling'):
+                      raise RuntimeError('TRANSPORT_UNAVAILABLE')
+                  remaining = deadline - time.monotonic()
+                  if remaining <= 0:
+                      raise RuntimeError('TRANSPORT_UNAVAILABLE')
+                  time.sleep(min(10, remaining))
+          except Exception:
+              result = None
+          success = result is not None and result['status'] == 'DIAGNOSED'
+          record = {'kind': 'STORAGE_READONLY_ARTIFACT_V1', 'operation': 'diagnose_storage',
+              'producer': producer, 'expectedCurrent': os.environ['EXPECTED_CURRENT'], 'commandId': command_id,
+              'status': 'OPERATION_COMPLETED' if success else 'OPERATION_FAILED',
+              'code': result['code'] if result is not None else 'TRANSPORT_UNAVAILABLE', 'result': result}
+          storage.validate_artifact(record, producer, binding)
+          destination = directory / 'storage-readonly-result.json'
+          destination.write_text(json.dumps(record, sort_keys=True) + '\n')
+          destination.chmod(0o600)
+          print(record['status'] + ' ' + record['code'])
+          raise SystemExit(0 if success else 1)
+          PY_CURRENT_STORAGE
+
+      - name: Save current storage read-only evidence
+        if: always() && inputs.operation == 'diagnose_storage' && inputs.expected_current == '0a03fa28e6b844a18833d5c63f1de700f091fc64'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: storage-readonly-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .deploy/production-release/storage-readonly-result.json
+          include-hidden-files: true
+          retention-days: 14
+
       - name: Diagnose storage or clean approved routine audit records
-        if: inputs.operation == 'diagnose_storage' || inputs.operation == 'cleanup_audit' || inputs.operation == 'verify_legacy_cache' || inputs.operation == 'cleanup_legacy_cache' || inputs.operation == 'verify_release_archive_cache' || inputs.operation == 'archive_release_cache'
+        if: (inputs.operation == 'diagnose_storage' || inputs.operation == 'cleanup_audit' || inputs.operation == 'verify_legacy_cache' || inputs.operation == 'cleanup_legacy_cache' || inputs.operation == 'verify_release_archive_cache' || inputs.operation == 'archive_release_cache') && !(inputs.operation == 'diagnose_storage' && inputs.expected_current == '0a03fa28e6b844a18833d5c63f1de700f091fc64')
         env:
           STORAGE_OPERATION: ${{ inputs.operation }}
           CACHE_PLAN_SHA256: ${{ inputs.cache_plan_sha256 }}

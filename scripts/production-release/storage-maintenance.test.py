@@ -601,5 +601,319 @@ class StorageSafetyTests(unittest.TestCase):
         self.assertNotIn('inputs.command', workflow)
 
 
+
+class StorageCurrentReadonlyTests(unittest.TestCase):
+    PRODUCER = {'commit':'c'*40,'sourceTree':'d'*40,'workflowRunId':'9','workflowRunAttempt':'1'}
+    UUID = '12345678-1234-1234-1234-123456789abc'
+
+    @classmethod
+    def setUpClass(cls):
+        cls.project = Path(__file__).resolve().parents[2]
+        cls.runtime = cls.project/'.runtime/storage-readonly-0a-20261011/tests'
+        cls.runtime.mkdir(parents=True,exist_ok=True)
+        cls.payload,cls.binding = storage.parameters(cls.PRODUCER,source=cls.project)
+
+    def successful(self):
+        class Guard:
+            current=Path('/opt/id-business-v2/releases/20261009T000000Z-0a03fa28e6b8')
+            manifests=[{'previousCommit':'a'*40}]
+            previous_sha='b'*64
+            def __init__(self,deadline): self.deadline=deadline
+            def open(self): pass
+            def verify(self): pass
+            def remaining(self): pass
+            def close(self): pass
+        driver=SimpleNamespace(native=lambda *args,**kwargs:'',snapshot=lambda current:storage.STORAGE_SERVICES_SHA)
+        with tempfile.TemporaryDirectory(dir=self.runtime) as directory:
+            root=Path(directory);(root/'.staging').mkdir()
+            with patch.object(storage,'BASE',root),patch.object(storage,'StorageGuard',Guard), \
+                 patch.object(storage,'storage_root',return_value=True), \
+                 patch.object(storage.shutil,'disk_usage',return_value=SimpleNamespace(total=100,used=60,free=35)), \
+                 patch.object(storage,'storage_directory_usage',side_effect=lambda role,path,deadline:{'role':role,'status':'MISSING','allocatedBytes':None}), \
+                 patch.object(storage,'storage_cache',return_value={'status':'UNAVAILABLE','rows':[]}):
+                # shutil.disk_usage returns a tuple-compatible namedtuple.
+                from collections import namedtuple
+                with patch.object(storage.shutil,'disk_usage',return_value=namedtuple('Usage','total used free')(100,60,35)):
+                    return storage.storage_execute(self.binding,lambda current,client:driver)
+
+    @contextmanager
+    def real_guard(self, previous='a'*40):
+        with tempfile.TemporaryDirectory(dir=self.runtime) as directory,ExitStack() as stack:
+            base=Path(directory);releases=base/'releases';releases.mkdir()
+            current=releases/('20261009T000000Z-'+storage.STORAGE_BASELINE[:12]);current.mkdir()
+            prior=releases/('20261008T000000Z-'+previous[:12]);prior.mkdir()
+            (base/'current').symlink_to(current)
+            (current/'release-manifest.json').write_text(json.dumps({'commit':storage.STORAGE_BASELINE,
+                'previousCommit':previous,'previousRelease':str(prior)}))
+            (prior/'release-manifest.json').write_text(json.dumps({'commit':previous}))
+            (current/'docker-compose.aws-mysql.yml').write_text('services: {}\n')
+            for path in (current/'release-manifest.json',prior/'release-manifest.json',current/'docker-compose.aws-mysql.yml'):path.chmod(0o600)
+            original_stat,original_fstat=os.stat,os.fstat
+            def root_metadata(row):
+                return SimpleNamespace(**{name:(0 if name=='st_uid' else getattr(row,name)) for name in
+                    ('st_dev','st_ino','st_mode','st_uid','st_gid','st_nlink','st_size','st_mtime_ns','st_ctime_ns')})
+            stack.enter_context(patch.object(storage,'BASE',base))
+            stack.enter_context(patch.object(storage,'STORAGE_CURRENT_SHA',storage.storage_sha((current/'release-manifest.json').read_bytes())))
+            stack.enter_context(patch.object(storage,'STORAGE_COMPOSE_SHA',storage.storage_sha((current/'docker-compose.aws-mysql.yml').read_bytes())))
+            stack.enter_context(patch.object(storage.os,'stat',side_effect=lambda *args,**kwargs:root_metadata(original_stat(*args,**kwargs))))
+            stack.enter_context(patch.object(storage.os,'fstat',side_effect=lambda fd:root_metadata(original_fstat(fd))))
+            guard=storage.StorageGuard(storage.time.monotonic()+60)
+            try:yield guard,base,current,prior
+            finally:guard.close()
+
+    def artifact(self,result):
+        return {'kind':'STORAGE_READONLY_ARTIFACT_V1','operation':'diagnose_storage','producer':self.PRODUCER,
+            'expectedCurrent':storage.STORAGE_BASELINE,'commandId':self.UUID,
+            'status':'OPERATION_COMPLETED' if result and result['status']=='DIAGNOSED' else 'OPERATION_FAILED',
+            'code':result['code'] if result else 'TRANSPORT_UNAVAILABLE','result':result}
+
+    def test_parameters_project_root_default_and_six_source_seals(self):
+        payload,binding=storage.parameters(self.PRODUCER)
+        self.assertEqual(payload,self.payload);self.assertEqual(binding,self.binding)
+        self.assertEqual(set(binding['sourcePins']),set(storage.STORAGE_SOURCES))
+        for path,row in binding['sourcePins'].items():
+            raw=(self.project/path).read_bytes();self.assertEqual(row,{'bytes':len(raw),'sha256':hashlib.sha256(raw).hexdigest()})
+        self.assertLess(len(storage.storage_canonical(payload)),20480)
+        self.assertEqual(payload['executionTimeout'],['600'])
+
+    def test_captured_only_original_snapshot_and_readonly_body(self):
+        import ast,shlex,zlib
+        command=shlex.split(self.payload['commands'][-1]);self.assertEqual(command[:2],['python3','-c'])
+        tree=ast.parse(command[2]);encoded=next(n.args[0].value for n in ast.walk(tree) if isinstance(n,ast.Call)
+            and isinstance(n.func,ast.Attribute) and n.func.attr=='b64decode')
+        raw=zlib.decompress(base64.b64decode(encoded),31)
+        self.assertEqual(hashlib.sha256(raw).hexdigest(),self.binding['capturedProgramSha256'])
+        self.assertEqual(len(raw),self.binding['capturedProgramBytes']);ast.parse(raw)
+        for forbidden in ('formal_runtime_commands','stopped_orchestrator','cleanup_audit','cleanup_legacy_cache','database_read','MYSQL_PWD'):
+            self.assertNotIn(forbidden,raw.decode())
+        self.assertIn('servicesBeforeSha256',raw.decode())
+        snapshot_text=(self.project/storage.STORAGE_SOURCES[2]).read_text()
+        self.assertIn('class NativeSnapshotDriver',snapshot_text)
+
+    def test_captured_native_dependency_closure_and_original_seven_service_snapshot(self):
+        import ast,builtins,dis,shlex,types,zlib
+        tree=ast.parse(shlex.split(self.payload['commands'][-1])[2])
+        encoded=next(n.args[0].value for n in ast.walk(tree) if isinstance(n,ast.Call)
+            and isinstance(n.func,ast.Attribute) and n.func.attr=='b64decode')
+        raw=zlib.decompress(base64.b64decode(encoded),31);program=ast.parse(raw)
+        self.assertEqual([type(n).__name__ for n in program.body[-3:]],['Assign','Expr','Raise'])
+        program.body=program.body[:-3];namespace={}
+        exec(compile(program,'<synthetic-captured-dependencies>','exec'),namespace)
+        modules=namespace['loaded'];snapshot=modules['snapshot']
+        # Check global dependencies throughout the unchanged captured native driver,
+        # including the nested snapshot diagnostic closures.
+        def check(code):
+            for instruction in dis.get_instructions(code):
+                if instruction.opname=='LOAD_GLOBAL':
+                    self.assertTrue(instruction.argval in snapshot.__dict__ or hasattr(builtins,instruction.argval),instruction.argval)
+            for value in code.co_consts:
+                if isinstance(value,types.CodeType):check(value)
+        for value in snapshot.__dict__.values():
+            if isinstance(value,types.FunctionType):check(value.__code__)
+        for value in snapshot.NativeSnapshotDriver.__dict__.values():
+            function=value.__func__ if isinstance(value,staticmethod) else value
+            if isinstance(function,types.FunctionType):check(function.__code__)
+        directory=snapshot.BASE/'releases'/('20261009T000000Z-'+snapshot.BASELINE[:12])
+        driver=namespace['factory'](directory,Path('/synthetic/private-client'));rows={};calls=[]
+        for role in snapshot.ROLES:
+            cid=hashlib.sha256(role.encode()).hexdigest()
+            rows[cid]={'Id':cid,'Image':'sha256:'+hashlib.sha256((role+'-image').encode()).hexdigest(),
+                'Config':{'Image':'fixture/'+role+':local','Env':['PRIVATE_FIXTURE=only_in_RAM'],
+                    'Labels':{}},'HostConfig':{},'Mounts':[],
+                'State':{'Status':'running','StartedAt':'2026-10-09T00:00:00Z',
+                    **({'Health':{'Status':'healthy'}} if role!='caddy' else {})}}
+        def native(*args,**kwargs):
+            calls.append(args)
+            if args[:2]==('container','ls'):return '\n'.join(rows)
+            self.assertEqual(args[0],'inspect')
+            if args[1:3]==('--format',snapshot.PUBLIC_LABEL_FORMAT):
+                cid=args[-1];role=next(role for role in snapshot.ROLES if hashlib.sha256(role.encode()).hexdigest()==cid)
+                return json.dumps({'id':cid,'project':'synthetic_project','role':role,'directory':str(directory),
+                    'files':','.join(str(directory/name) for name in ('docker-compose.aws-mysql.yml','compose.release.json'))})
+            return json.dumps([rows[args[-1]]])
+        output=io.StringIO()
+        with patch.object(driver,'native',side_effect=native),patch.object(Path,'is_file',return_value=False),redirect_stdout(output):
+            label=driver.public_labels(next(iter(rows)))
+            digest=driver.snapshot(directory)
+            full=modules['online'].snapshot(driver,directory)
+        self.assertEqual(label['project'],'synthetic_project');self.assertEqual(output.getvalue(),'')
+        self.assertEqual(set(full),set(snapshot.ROLES));self.assertTrue(all(set(row)==snapshot.SERVICE_FIELDS for row in full.values()))
+        self.assertEqual(digest,hashlib.sha256(snapshot.canonical(full)).hexdigest())
+        self.assertNotIn('only_in_RAM',json.dumps(full));self.assertFalse(any('compose' in call or '--env-file' in call for call in calls))
+        self.assertEqual(driver.diagnostic.get()['status'],'PASSED')
+
+    def test_fixed_baseline_and_producer_validation(self):
+        with self.assertRaises(storage.StorageRejected):storage.parameters(self.PRODUCER,expected_current='e'*40)
+        for key,value in [('commit','bad'),('sourceTree','bad'),('workflowRunId',True),('workflowRunAttempt','0')]:
+            with self.subTest(key=key),self.assertRaises(storage.StorageRejected):storage.parameters({**self.PRODUCER,key:value})
+
+    def test_dynamic_previous_from_sealed_current_is_not_guessed_e7(self):
+        with self.real_guard() as (guard,base,current,prior):
+            guard.open();self.assertEqual(guard.manifests[0]['previousCommit'],'a'*40)
+            self.assertEqual(guard.previous_sha,hashlib.sha256((prior/'release-manifest.json').read_bytes()).hexdigest())
+            guard.verify()
+
+    def test_previous_public_read_mode_matches_original_source_read_boundary(self):
+        with self.real_guard() as (guard,base,current,prior):
+            (prior/'release-manifest.json').chmod(0o644);guard.open();guard.verify()
+        with self.real_guard() as (guard,base,current,prior):
+            (prior/'release-manifest.json').chmod(0o664)
+            with self.assertRaises(storage.StorageRejected):guard.open()
+
+    def test_guard_rejects_current_and_previous_content_changes(self):
+        for which in ('current','previous'):
+            with self.subTest(which=which),self.real_guard() as (guard,base,current,prior):
+                guard.open();((current if which=='current' else prior)/'release-manifest.json').write_text('{}')
+                with self.assertRaises(storage.StorageRejected):guard.verify()
+
+    def test_guard_rejects_previous_path_escape_and_symlink(self):
+        with self.real_guard() as (guard,base,current,prior):
+            manifest=json.loads((current/'release-manifest.json').read_bytes());manifest['previousRelease']=str(base/'outside')
+            (current/'release-manifest.json').write_text(json.dumps(manifest))
+            with patch.object(storage,'STORAGE_CURRENT_SHA',storage.storage_sha((current/'release-manifest.json').read_bytes())),self.assertRaises(storage.StorageRejected):guard.open()
+        with self.real_guard() as (guard,base,current,prior):
+            moved=prior.with_name('saved');prior.rename(moved);prior.symlink_to(moved)
+            with self.assertRaises((storage.StorageRejected,OSError)):guard.open()
+
+    def test_guard_rejects_wrong_previous_commit_and_public_write(self):
+        with self.real_guard() as (guard,base,current,prior):
+            (prior/'release-manifest.json').write_text(json.dumps({'commit':'b'*40}))
+            with self.assertRaises(storage.StorageRejected):guard.open()
+        with self.real_guard() as (guard,base,current,prior):
+            (current/'release-manifest.json').chmod(0o666)
+            with self.assertRaises(storage.StorageRejected):guard.open()
+
+    def test_guard_rejects_current_symlink_retarget(self):
+        with self.real_guard() as (guard,base,current,prior):
+            guard.open();(base/'current').unlink();(base/'current').symlink_to(prior)
+            with self.assertRaises(storage.StorageRejected):guard.verify()
+
+    def test_root_required_before_guard_or_native_activity(self):
+        with patch.object(storage,'storage_root',return_value=False),patch.object(storage.StorageGuard,'open') as opened:
+            result=storage.storage_execute(self.binding,lambda *args:self.fail('native called'))
+        self.assertEqual(result['code'],'ROOT_REQUIRED');opened.assert_not_called()
+
+    def test_reserved_blocks_legitimate_and_overtotal_rejected(self):
+        result=self.successful();self.assertEqual(result['status'],'DIAGNOSED')
+        self.assertEqual(result['disk'],{'totalBytes':100,'usedBytes':60,'freeBytes':35})
+        for changed in ({'totalBytes':100,'usedBytes':70,'freeBytes':35},
+                        {'totalBytes':100,'usedBytes':101,'freeBytes':0},
+                        {'totalBytes':100,'usedBytes':False,'freeBytes':35}):
+            import copy
+            bad=copy.deepcopy(result);bad['disk']=changed
+            with self.subTest(disk=changed),self.assertRaises(storage.StorageRejected):storage.validate_result(bad,self.binding)
+
+    def test_directory_roles_fixed_eight_include_artifacts(self):
+        self.assertEqual([role for role,_ in storage.STORAGE_DIRECTORIES],
+            ['PROJECT_ROOT','ARTIFACTS','BACKUPS','RELEASES','STAGING','LOGS','DOCKER','VAR_LOG'])
+        result=self.successful();self.assertTrue(all(row['status']=='MISSING' for row in result['directories']))
+        self.assertIs(storage.validate_result(result,self.binding),result)
+
+    def test_directory_du_held_fd_no_contents_and_command_budget(self):
+        with tempfile.TemporaryDirectory(dir=self.runtime) as directory:
+            def command(argv,**kwargs):
+                self.assertEqual(argv[:7],['/usr/bin/du','-x','-s','-B1','-H','--',argv[6]])
+                self.assertEqual(argv[6],'/proc/self/fd/'+str(kwargs['pass_fds'][0]))
+                self.assertLessEqual(kwargs['timeout'],30);self.assertIs(kwargs['stderr'],subprocess.DEVNULL)
+                return SimpleNamespace(returncode=0,stdout=('123\t'+argv[6]+'\n').encode())
+            with patch.object(storage.subprocess,'run',side_effect=command),patch.object(Path,'read_bytes',side_effect=AssertionError('file content read')):
+                row=storage.storage_directory_usage('ARTIFACTS',Path(directory),storage.time.monotonic()+60)
+            self.assertEqual(row,{'role':'ARTIFACTS','status':'MEASURED','allocatedBytes':123})
+            with patch.object(storage.subprocess,'run',side_effect=subprocess.TimeoutExpired('du',30)):
+                row=storage.storage_directory_usage('ARTIFACTS',Path(directory),storage.time.monotonic()+60)
+            self.assertEqual(row['status'],'UNAVAILABLE');self.assertIsNone(row['allocatedBytes'])
+
+    def test_directory_missing_and_symlink_do_not_follow(self):
+        with tempfile.TemporaryDirectory(dir=self.runtime) as directory:
+            root=Path(directory);(root/'alias').symlink_to(root)
+            with patch.object(storage.subprocess,'run') as run:
+                self.assertEqual(storage.storage_directory_usage('ARTIFACTS',root/'absent',storage.time.monotonic()+60)['status'],'MISSING')
+                self.assertEqual(storage.storage_directory_usage('ARTIFACTS',root/'alias',storage.time.monotonic()+60)['status'],'UNAVAILABLE')
+            run.assert_not_called()
+
+    def test_cache_only_four_finite_public_aggregate_roles(self):
+        rows=[{'Type':role,'TotalCount':'7','Active':'2','Size':'1.25GB','Reclaimable':'250MB (20%)'}
+            for role in ('Images','Containers','Local Volumes','Build Cache')]
+        driver=SimpleNamespace(native=lambda *args:'\n'.join(json.dumps(row) for row in rows))
+        value=storage.storage_cache(driver);self.assertEqual(value['status'],'MEASURED')
+        self.assertEqual(value['rows'][0]['sizeBytesEstimate'],1250000000)
+        for change in ({'Type':'PRIVATE_SENTINEL'},{'Size':'SECRET_VALUE'},{'Active':'8'},{'TotalCount':True}):
+            bad=[{**rows[0],**change},*rows[1:]]
+            output=storage.storage_cache(SimpleNamespace(native=lambda *args:'\n'.join(json.dumps(row) for row in bad)))
+            self.assertEqual(output,{'status':'UNAVAILABLE','rows':[]});self.assertNotIn('PRIVATE_SENTINEL',json.dumps(output))
+
+    def test_result_closed_nested_fields_and_non_authorizing(self):
+        import copy
+        result=self.successful()
+        for mutate in (lambda x:x.update(extra='PRIVATE_SENTINEL'),lambda x:x['guards'].update(extra=True),
+                       lambda x:x.update(authority=True),lambda x:x.update(productionEligible=True),
+                       lambda x:x['sourceBinding']['sourcePins'].update(extra={'bytes':1,'sha256':'a'*64}),
+                       lambda x:x['directories'][0].update(role='OTHER')):
+            bad=copy.deepcopy(result);mutate(bad)
+            with self.assertRaises(storage.StorageRejected):storage.validate_result(bad,self.binding)
+        self.assertLess(len(storage.storage_canonical(self.artifact(result))),24000)
+
+    def test_artifact_success_failure_transport_and_actual_uuid(self):
+        result=self.successful();self.assertIs(storage.validate_artifact(self.artifact(result),self.PRODUCER,self.binding)['result'],result)
+        with patch.object(storage,'storage_root',return_value=False):failed=storage.storage_execute(self.binding,lambda *args:None)
+        self.assertEqual(storage.validate_artifact(self.artifact(failed),self.PRODUCER,self.binding)['code'],'ROOT_REQUIRED')
+        empty=self.artifact(None);self.assertIs(storage.validate_artifact(empty,self.PRODUCER,self.binding),empty)
+        for change in ({'commandId':'bad'},{'status':'OPERATION_COMPLETED'},{'code':'OK'},{'result':{}}):
+            with self.subTest(change=change),self.assertRaises(storage.StorageRejected):storage.validate_artifact({**empty,**change},self.PRODUCER,self.binding)
+
+    def test_duplicate_nan_and_output_caps_rejected(self):
+        for raw in ('{"a":1,"a":2}','{"a":NaN}','{"a":Infinity}',' ' * 24000):
+            with self.subTest(raw=raw[:30]),self.assertRaises((storage.StorageRejected,ValueError)):storage.storage_closed(raw)
+
+    def workflow(self, host=None, prefix='STORAGE_READONLY_SAFE ', transport=False):
+        import textwrap
+        workflow=(self.project/'.github/workflows/production-release.yml').read_text()
+        start=workflow.index("<<'PY_CURRENT_STORAGE'")+len("<<'PY_CURRENT_STORAGE'")
+        end=workflow.index('\n          PY_CURRENT_STORAGE',start)
+        program=textwrap.dedent(workflow[start:end])
+        invocation={'CommandId':self.UUID,'InstanceId':'i-1234567890abcdef0','DocumentName':'AWS-RunShellScript',
+            'PluginName':'aws:runShellScript','Status':'Success' if host and host['status']=='DIAGNOSED' else 'Failed',
+            'ResponseCode':0 if host and host['status']=='DIAGNOSED' else 1,'StandardErrorContent':'',
+            'StandardOutputContent':prefix+json.dumps(host) if host else 'PRIVATE_SENTINEL'}
+        calls=[]
+        def command(argv,**kwargs):
+            self.assertEqual(argv[:2],['aws','ssm']);self.assertLessEqual(kwargs['timeout'],30)
+            calls.append(argv[2])
+            if transport:return SimpleNamespace(returncode=1,stdout=b'',stderr=b'PRIVATE_SENTINEL')
+            raw=(self.UUID+'\n') if argv[2]=='send-command' else json.dumps(invocation)
+            return SimpleNamespace(returncode=0,stdout=raw.encode(),stderr=b'')
+        with tempfile.TemporaryDirectory(dir=self.runtime) as directory,ExitStack() as stack:
+            previous=Path.cwd();os.chdir(directory);stack.callback(os.chdir,previous)
+            Path('.deploy/production-release').mkdir(parents=True)
+            stack.enter_context(patch.dict(os.environ,{'RELEASE_COMMIT':self.PRODUCER['commit'],'SOURCE_TREE':self.PRODUCER['sourceTree'],
+                'GITHUB_RUN_ID':'9','GITHUB_RUN_ATTEMPT':'1','EXPECTED_CURRENT':storage.STORAGE_BASELINE,'PRODUCTION_INSTANCE_ID':invocation['InstanceId']}))
+            stack.enter_context(patch.object(importlib.util,'spec_from_file_location',return_value=SimpleNamespace(loader=SimpleNamespace(exec_module=lambda unused:None))))
+            stack.enter_context(patch.object(importlib.util,'module_from_spec',return_value=storage))
+            stack.enter_context(patch.object(storage,'parameters',return_value=(self.payload,self.binding)))
+            stack.enter_context(patch.object(subprocess,'run',side_effect=command))
+            output=io.StringIO()
+            with redirect_stdout(output),self.assertRaises(SystemExit) as ended:exec(compile(program,'<synthetic-workflow>','exec'),{})
+            result=json.loads(Path('.deploy/production-release/storage-readonly-result.json').read_bytes())
+            self.assertNotIn('PRIVATE_SENTINEL',output.getvalue());return result,ended.exception.code,calls
+
+    def test_actual_workflow_python_success_finite_failure_and_transport(self):
+        success,exit_code,calls=self.workflow(self.successful());self.assertEqual(exit_code,0)
+        self.assertEqual(success['status'],'OPERATION_COMPLETED');self.assertEqual(calls,['send-command','get-command-invocation'])
+        with patch.object(storage,'storage_root',return_value=False):failed=storage.storage_execute(self.binding,lambda *args:None)
+        failure,exit_code,_=self.workflow(failed);self.assertEqual(exit_code,1);self.assertEqual(failure['code'],'ROOT_REQUIRED')
+        for kwargs in ({'host':self.successful(),'prefix':'UNKNOWN '},{'transport':True}):
+            receipt,exit_code,_=self.workflow(**kwargs);self.assertEqual(exit_code,1)
+            self.assertEqual(receipt['code'],'TRANSPORT_UNAVAILABLE');self.assertIsNone(receipt['result'])
+
+    def test_new_workflow_gate_does_not_enable_cleanup(self):
+        workflow=(self.project/'.github/workflows/production-release.yml').read_text()
+        start=workflow.index('      - name: Diagnose current storage without changing production')
+        end=workflow.index('      - name: Diagnose storage or clean approved routine audit records',start)
+        steps=workflow[start:end]
+        self.assertIn("inputs.operation == 'diagnose_storage' && inputs.expected_current == '"+storage.STORAGE_BASELINE+"'",steps)
+        self.assertNotIn('cleanup_',steps);self.assertNotIn('archive_release_cache',steps)
+        self.assertNotIn('sys.stdout.write',steps);self.assertNotIn('print(raw',steps)
+
+
 if __name__ == '__main__':
     unittest.main()
