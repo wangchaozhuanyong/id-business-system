@@ -12,6 +12,7 @@ import sys
 import time
 import unittest
 import uuid
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from lib.native_mysql_fixture import NativeMysqlFixture, add_fixture_arguments, validate_fixture_arguments
@@ -84,9 +85,11 @@ class RetentionMysqlTests(unittest.TestCase):
                 raise AssertionError('MySQL fixture readiness timed out')
             cls.execute("CREATE TABLE audit_logs (id CHAR(36) PRIMARY KEY,module VARCHAR(100) NOT NULL,"
                 "action VARCHAR(100) NOT NULL,user_id CHAR(36),after_data JSON,created_at DATETIME(6) NOT NULL,"
-                "object_type VARCHAR(100),before_data JSON,remark TEXT);"
+                "object_type VARCHAR(100),before_data JSON,remark TEXT) "
+                "DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;"
                 "CREATE TABLE audit_refs (id INT PRIMARY KEY,audit_id CHAR(36),"
-                "FOREIGN KEY (audit_id) REFERENCES audit_logs(id) ON DELETE RESTRICT);"
+                "FOREIGN KEY (audit_id) REFERENCES audit_logs(id) ON DELETE RESTRICT) "
+                "DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;"
                 "CREATE USER 'retention_runtime'@'localhost' IDENTIFIED BY '" + cls.password + "';"
                 "GRANT SELECT,INSERT,DELETE ON storage_retention_test.* TO 'retention_runtime'@'localhost';"
                 "CREATE USER 'retention_readonly'@'localhost' IDENTIFIED BY '" + cls.password + "';"
@@ -181,6 +184,43 @@ class RetentionMysqlTests(unittest.TestCase):
         self.assertEqual(self.execute('SELECT COUNT(*) FROM audit_logs a WHERE ' + where), '0')
         self.assertEqual(self.execute("SELECT COUNT(*) FROM audit_logs WHERE id='" + referenced + "'"), '1')
         self.assertEqual(self.execute("SELECT COUNT(*) FROM audit_logs WHERE action='maintenance.audit_log.cleanup'"), '1')
+
+    def workspace_admission_query(self, started_at):
+        # Execute the production query against the baseline column collation;
+        # a prebuilt JSON response cannot detect MySQL error 1267.
+        spec = importlib.util.spec_from_file_location('workspace_audit_sql',
+            Path(__file__).with_name('api-admin-scope.py'))
+        workspace = importlib.util.module_from_spec(spec)
+        workspace.SCOPE = 'API_ADMIN_WORKSPACE'
+        spec.loader.exec_module(workspace)
+        with patch.object(workspace.OnlineSqlFence, '__init__', return_value=None), \
+                patch.object(workspace, 'workspace_api_identity',
+                    return_value={'startedAt': started_at}):
+            query = workspace.WorkspaceAuditBarrier(None, None).QUERY
+        raw = self.execute('SET SESSION autocommit=0; SET SESSION lock_wait_timeout=5; '
+            'SET SESSION wait_timeout=210; LOCK TABLES audit_logs READ;\n' + query + 'UNLOCK TABLES;')
+        result = json.loads(raw)
+        self.assertEqual(set(result), {'version', 'connectionId', 'busy'})
+        self.assertEqual(result['version'], 1)
+        self.assertIs(type(result['connectionId']), int)
+        self.assertGreater(result['connectionId'], 0)
+        self.assertIs(type(result['busy']), int)
+        return result['busy']
+
+    def test_workspace_admission_allows_idle_and_blocks_matching_mutation(self):
+        started = '2000-01-01T00:00:00.123456789Z'
+        self.assertEqual(self.workspace_admission_query(started), 0)
+        self.execute("INSERT INTO audit_logs (id,module,action,object_type,remark,created_at) "
+            "VALUES ('workspace-nonmatching','自动注册','操作请求','开源注册模块',"
+            "'POST /api/mailbox',UTC_TIMESTAMP(6))")
+        self.assertEqual(self.workspace_admission_query(started), 0)
+        self.execute("INSERT INTO audit_logs (id,module,action,object_type,remark,created_at) "
+            "VALUES ('workspace-matching','自动注册','操作请求','开源注册模块',"
+            "'POST /api/registration/tasks',UTC_TIMESTAMP(6))")
+        self.assertEqual(self.workspace_admission_query(started), 1)
+
+    def test_workspace_admission_blocks_database_clock_before_api_start(self):
+        self.assertEqual(self.workspace_admission_query('2099-01-01T00:00:00.123456789Z'), 1)
 
 
 if __name__ == '__main__':

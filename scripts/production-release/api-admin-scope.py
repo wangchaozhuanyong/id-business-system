@@ -2604,7 +2604,9 @@ class WorkspaceAuditBarrier(OnlineSqlFence):
             since = first + '.' + fraction[:3].ljust(3, '0')
         stamp = 'CONVERT(0x' + since.encode().hex() + ' USING utf8mb4)'
         def literal(value):
-            return 'CONVERT(0x' + value.encode().hex() + ' USING utf8mb4)'
+            # Match the baseline audit_logs column collation, not MySQL's
+            # connection default (which can be utf8mb4_0900_ai_ci).
+            return 'CONVERT(0x' + value.encode().hex() + ' USING utf8mb4) COLLATE utf8mb4_unicode_ci'
         self.QUERY = ("SELECT JSON_OBJECT('version',1,'connectionId',CONNECTION_ID(),'busy',"
             "IF(UTC_TIMESTAMP(6)<CAST(" + stamp + " AS DATETIME(6)),1,(SELECT COUNT(*) FROM audit_logs "
             "WHERE created_at>=CAST(" + stamp + " AS DATETIME(6)) AND module=" + literal('自动注册')
