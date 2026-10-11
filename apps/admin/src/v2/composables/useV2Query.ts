@@ -28,6 +28,7 @@ export interface V2QueryContext {
 export interface UseV2QueryOptions<T> {
   scope: V2DataScope;
   key: string | (() => string);
+  moduleKey?: V2ModuleKey;
   enabled?: boolean | (() => boolean);
   freshnessPolicy?: V2FreshnessPolicy;
   query: (context: V2QueryContext) => Promise<T>;
@@ -48,6 +49,7 @@ export type V2QueryPhase =
 export interface PrimeV2QueryOptions<T> {
   scope: V2DataScope;
   key: string | (() => string);
+  moduleKey?: V2ModuleKey;
   data: T;
   updatedAt?: number;
 }
@@ -135,10 +137,10 @@ function resolveKeyValue(key: string | (() => string)) {
   return typeof key === 'function' ? key() : key;
 }
 
-function resolveKey(scope: V2DataScope, key: string | (() => string)) {
+function resolveKey(scope: V2DataScope, key: string | (() => string), moduleKey?: V2ModuleKey) {
   ensureCacheIdentity();
   const value = resolveKeyValue(key);
-  return `${cacheIdentityEpoch}:${scope}:${value}`;
+  return JSON.stringify([cacheIdentityEpoch, scope, moduleKey ?? null, value]);
 }
 
 function getEntry<T>(cacheKey: string, scope: V2DataScope) {
@@ -432,7 +434,7 @@ export function useV2Query<T>(options: UseV2QueryOptions<T>): UseV2QueryResult<T
     requestedKey.value = nextKey;
     if (!enabled.value) return data.value;
 
-    const cacheKey = resolveKey(options.scope, nextKey);
+    const cacheKey = resolveKey(options.scope, nextKey, options.moduleKey);
     const entry = getEntry<T>(cacheKey, options.scope);
     subscribe(entry, nextKey);
     syncFromEntry(entry, true, nextKey);
@@ -481,7 +483,7 @@ export function useV2Query<T>(options: UseV2QueryOptions<T>): UseV2QueryResult<T
   }
 
   if (enabled.value) {
-    const initialCacheKey = resolveKey(options.scope, requestedKey.value);
+    const initialCacheKey = resolveKey(options.scope, requestedKey.value, options.moduleKey);
     const initialEntry = getEntry<T>(initialCacheKey, options.scope);
     subscribe(initialEntry, requestedKey.value);
     syncFromEntry(initialEntry);
@@ -575,7 +577,7 @@ export function useV2ModuleRefresh(options: {
 }
 
 export function useV2ModuleQuery<T>(
-  options: Omit<UseV2QueryOptions<T>, 'freshnessPolicy'> & {
+  options: Omit<UseV2QueryOptions<T>, 'freshnessPolicy' | 'moduleKey'> & {
     moduleKey: V2ModuleKey;
     trackRouteData?: boolean | (() => boolean);
   }
@@ -586,6 +588,7 @@ export function useV2ModuleQuery<T>(
   }
 
   const query = useV2Query({
+    moduleKey: options.moduleKey,
     scope: options.scope,
     key: options.key,
     enabled: options.enabled,
@@ -667,7 +670,7 @@ export async function fetchV2Query<T>(
   options: UseV2QueryOptions<T>,
   controls: { force?: boolean } = {}
 ) {
-  const cacheKey = resolveKey(options.scope, options.key);
+  const cacheKey = resolveKey(options.scope, options.key, options.moduleKey);
   const entry = getEntry<T>(cacheKey, options.scope);
   if (!controls.force && isFresh(entry)) return entry.data as T;
   if (entry.inFlight && !entry.controller?.signal.aborted) return entry.inFlight;
@@ -683,9 +686,9 @@ export async function fetchV2Query<T>(
 export function getV2QueryData<T>(
   scope: V2DataScope,
   key: string | (() => string),
-  controls: { includeInvalidated?: boolean } = {}
+  controls: { includeInvalidated?: boolean; moduleKey?: V2ModuleKey } = {}
 ) {
-  const cacheKey = resolveKey(scope, key);
+  const cacheKey = resolveKey(scope, key, controls.moduleKey);
   const entry = queryCache.get(cacheKey) as V2QueryEntry<T> | undefined;
   if (!entry?.hasData) return undefined;
   if (!controls.includeInvalidated && entry.invalidated) return undefined;
@@ -694,7 +697,7 @@ export function getV2QueryData<T>(
 }
 
 export function primeV2Query<T>(options: PrimeV2QueryOptions<T>) {
-  const cacheKey = resolveKey(options.scope, options.key);
+  const cacheKey = resolveKey(options.scope, options.key, options.moduleKey);
   const entry = getEntry<T>(cacheKey, options.scope);
   clearEntryDeadline(entry);
   entry.revision += 1;

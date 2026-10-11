@@ -164,7 +164,8 @@ export function useAppleMailboxes() {
     const input = markPayload();
     const error = appleMailboxMarkError(input);
     if (error) {
-      actionError.value = error;
+      // 字段错误只显示在对应控件旁，避免在备注下方重复显示 IP 错误。
+      actionError.value = error.includes('IPv4') || error.includes('500') ? '' : error;
       return;
     }
     const finishSave = markDraft.beginSave();

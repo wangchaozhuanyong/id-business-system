@@ -319,10 +319,31 @@ describe('苹果隐藏邮箱草稿、CAS 和任务生命周期', () => {
     page.markDraft.form.registrationIp = 'bad-ip';
     await page.saveMark();
     expect(mocks.mark).not.toHaveBeenCalled();
-    expect(page.actionError.value).toContain('IPv4');
+    expect(page.markValidation.value).toContain('IPv4');
+    expect(page.actionError.value).toBe('');
     page.markDraft.form.registrationIp = '2001:db8::1';
     await page.saveMark();
     expect(mocks.mark).toHaveBeenCalledOnce();
+  });
+  it.each(['', '菲律宾'])('IP 可留空，备注可为空或填写地区：%s', async (note) => {
+    const page = createPage();
+    page.openMark([row]);
+    page.markDraft.form.registrationStatus = 'registered';
+    page.markDraft.form.registrationIp = '菲律宾';
+    await page.saveMark();
+    expect(mocks.mark).not.toHaveBeenCalled();
+    page.markDraft.form.registrationIp = '';
+    page.markDraft.form.note = note;
+    expect(page.markValidation.value).toBe('');
+    expect(page.actionError.value).toBe('');
+    await page.saveMark();
+    expect(mocks.mark).toHaveBeenCalledWith({
+      items: [{ aliasId: row.aliasId, revision: row.revision }],
+      registrationStatus: 'registered',
+      registrationIp: null,
+      note
+    });
+    expect(page.markOpen.value).toBe(false);
   });
   it('有效状态已计算后编辑无效 IP 会即时更新字段错误，修正后清除', () => {
     const page = createPage();

@@ -122,6 +122,70 @@ test('runtime grants protect migration and audit records while limiting physical
   assert.equal(V2_RUNTIME_DELETE_TABLES.includes('id_business_v2_orders'), false);
 });
 
+test('bank card deletion is granted while recharge and name history remain protected', () => {
+  const cardTable = 'id_business_v2_bank_recharge_cards';
+  const retainedTables = [
+    'id_business_v2_bank_recharge_orders',
+    'id_business_v2_recharge_jobs',
+    'id_business_v2_recharge_names',
+    'id_business_v2_recharge_card_names'
+  ];
+  const tables = [cardTable, ...retainedTables];
+  const grants = buildV2RuntimeTableGrantStatements(databaseName, tables);
+  const cardGrant =
+    `GRANT SELECT, INSERT, UPDATE, DELETE ON \`${databaseName}\`.\`${cardTable}\` ` +
+    "TO 'id_business_app'@'%'";
+  assert.ok(grants.includes(cardGrant));
+  assert.ok(V2_RUNTIME_DELETE_TABLES.includes(cardTable));
+  for (const table of retainedTables) {
+    assert.equal(V2_RUNTIME_DELETE_TABLES.includes(table), false);
+    assert.ok(
+      grants.includes(
+        `GRANT SELECT, INSERT, UPDATE ON \`${databaseName}\`.\`${table}\` TO 'id_business_app'@'%'`
+      )
+    );
+  }
+
+  const input = {
+    databaseName,
+    tableNames: tables,
+    backupGrants: [
+      {
+        grant: `GRANT SELECT, SHOW VIEW, TRIGGER ON \`${databaseName}\`.* TO 'id_business_backup'@'%'`
+      }
+    ],
+    migrationGrants: [
+      { grant: `GRANT ALL PRIVILEGES ON \`${databaseName}\`.* TO 'id_business_migrator'@'%'` }
+    ],
+    runtimeGrants: grants.map((grant) => ({ grant }))
+  };
+  assert.doesNotThrow(() => assertV2ProductionDatabaseGrants(input));
+  assert.throws(
+    () =>
+      assertV2ProductionDatabaseGrants({
+        ...input,
+        runtimeGrants: input.runtimeGrants.map(({ grant }) => ({
+          grant: grant === cardGrant ? grant.replace(', DELETE', '') : grant
+        }))
+      }),
+    new RegExp(cardTable)
+  );
+  for (const table of retainedTables) {
+    assert.throws(
+      () =>
+        assertV2ProductionDatabaseGrants({
+          ...input,
+          runtimeGrants: input.runtimeGrants.map(({ grant }) => ({
+            grant: grant.includes(`.\`${table}\` `)
+              ? grant.replace('SELECT, INSERT, UPDATE', 'SELECT, INSERT, UPDATE, DELETE')
+              : grant
+          }))
+        }),
+      new RegExp(table)
+    );
+  }
+});
+
 test('online recharge grants DELETE only to its three existing physical-delete tables', () => {
   const tables = [...onlineHardDeleteTables, ...onlineRetainedTables];
   const grants = buildV2RuntimeTableGrantStatements(databaseName, tables);
