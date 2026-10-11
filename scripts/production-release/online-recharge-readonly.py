@@ -10,6 +10,9 @@ import sys
 import time
 from types import SimpleNamespace
 
+# Keep relative runpy entry points absolute without resolving source symlinks.
+__file__ = str(Path(__file__).absolute())
+
 
 def closed_json(raw):
     if not isinstance(raw, str) or not 0 < len(raw.encode()) <= 256 * 1024:
