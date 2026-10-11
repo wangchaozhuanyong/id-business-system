@@ -1470,11 +1470,129 @@ class FixedBootstrapCacheTests(unittest.TestCase):
 
     @classmethod
     def parameter_git(cls,args,**kwargs):
-        if args[:2]==['git','rev-parse']:return SimpleNamespace(returncode=0,stdout=cls.producer['sourceTree'].encode())
+        if args[:2]==['git','rev-parse']:
+            return SimpleNamespace(returncode=0,stdout=b'false\n' if args[2]=='--is-shallow-repository' else cls.producer['sourceTree'].encode())
         if args[:2]==['git','rev-list']:return SimpleNamespace(returncode=0,stdout=(cache.CACHE_BASELINE+'\n'+cls.old+'\n').encode())
         if args[:2]==['git','show']:
-            path=args[2].split(':',1)[1];return SimpleNamespace(returncode=0,stdout=(cls.project/path).read_bytes())
+            path=args[2].split(':',1)[1]
+            if path.startswith('deploy/aws/cache-cleanup-'):
+                return SimpleNamespace(returncode=0,stdout=cache.cache_canonical({'items':[{'tag':cls.old+'-1-1-api'}]}))
+            return SimpleNamespace(returncode=0,stdout=(cls.project/path).read_bytes())
         raise AssertionError(args)
+
+    def history_git(self,ancestry,items=None,*,calls=None):
+        def git(args,**kwargs):
+            if calls is not None:calls.append(args)
+            if args[:2]==['git','rev-list']:
+                self.assertEqual(args,['git','rev-list',cache.CACHE_BASELINE])
+                return SimpleNamespace(returncode=0,stdout=('\n'.join(ancestry)+'\n').encode())
+            if args[:2]==['git','show'] and ':deploy/aws/cache-cleanup-' in args[2] and items is not None:
+                self.assertTrue(args[2].startswith(self.producer['commit']+':'))
+                return SimpleNamespace(returncode=0,stdout=cache.cache_canonical({'items':items}))
+            return self.parameter_git(args,**kwargs)
+        return git
+
+    def test_complete_ancestry_prioritizes_reviewed_source_beyond_recent_129(self):
+        recent=[f'{n:040x}' for n in range(1,372)];old=recent[220]
+        ancestry=[cache.CACHE_BASELINE,cache.CACHE_PREVIOUS,*recent]
+        with patch.object(cache.subprocess,'run',side_effect=self.history_git(ancestry,[{'tag':old+'-1-1-api'}])):
+            bundle,binding=cache.parameters(self.producer,source=self.project)
+        proofs=binding['provenOldSourceCommits']
+        self.assertEqual(len(proofs),128);self.assertEqual(proofs,sorted(set(proofs)))
+        self.assertIn(old,proofs);self.assertIn(recent[0],proofs);self.assertNotIn(recent[-1],proofs)
+        self.assertFalse(set(proofs)&{cache.CACHE_BASELINE,cache.CACHE_PREVIOUS,self.producer['commit']})
+        self.assertTrue(all(len(cache.cache_canonical(p['parameters']))<20480 for p in bundle['stages']))
+
+    def test_historical_sources_require_ancestry_and_exclude_all_three_live_sources(self):
+        future='e'*40;ancestor=[cache.CACHE_BASELINE,cache.CACHE_PREVIOUS,self.producer['commit'],self.old]
+        items=[{'tag':commit+'-1-1-api'} for commit in (*ancestor,future)]
+        with patch.object(cache.subprocess,'run',side_effect=self.history_git(ancestor,items)):
+            _,binding=cache.parameters(self.producer,source=self.project)
+        self.assertEqual(binding['provenOldSourceCommits'],[self.old])
+        inventory=[{'id':'sha256:'+'1'*64,'repoTags':[cache.REPOSITORY+':'+future+'-1-1-api'],
+            'sourceCommit':future,'sizeBytesEstimate':1}]
+        allowed,excluded=cache.cache_filter_inventory(binding,inventory,set())
+        self.assertEqual(allowed,[]);self.assertEqual(excluded['SOURCE_NOT_PROVEN_OLD'],1)
+
+    def test_historical_plan_reads_exact_git_tree_and_never_mixed_worktree(self):
+        original=Path.read_bytes;outside='b'*40;calls=[]
+        def protected_read(path):
+            if path.name.startswith('cache-cleanup-'):
+                raise AssertionError('Mixed working tree historical plan read')
+            return original(path)
+        ancestry=[cache.CACHE_BASELINE,self.old,outside]
+        with patch.object(Path,'read_bytes',autospec=True,side_effect=protected_read), \
+                patch.object(cache.subprocess,'run',side_effect=self.history_git(ancestry,[{'tag':outside+'-1-1-api'}],calls=calls)):
+            _,binding=cache.parameters(self.producer,source=self.project)
+        history=[args[2] for args in calls if args[:2]==['git','show'] and ':deploy/aws/cache-cleanup-' in args[2]]
+        self.assertEqual(len(history),8);self.assertEqual(len(set(history)),8)
+        self.assertTrue(all(path.startswith(self.producer['commit']+':deploy/aws/') for path in history))
+        self.assertFalse(any('legacy' in path for path in history));self.assertIn(outside,binding['provenOldSourceCommits'])
+
+    def test_historical_plan_missing_oversize_malformed_or_legacy_tag_fails_closed(self):
+        valid=cache.cache_canonical({'items':[{'tag':self.old+'-1-1-api'}]})
+        cases=[(1,valid),(0,b' '*4096),(0,b'{"items":[],"items":[]}'),(0,b'{"items":[]}'),
+            (0,b'{"items":[{}]}'),(0,cache.cache_canonical({'items':[{'tag':'id-business-v2-api:'+self.old}]}))]
+        for code,raw in cases:
+            with self.subTest(code=code,rawSize=len(raw)):
+                def git(args,**kwargs):
+                    if args[:2]==['git','show'] and ':deploy/aws/cache-cleanup-' in args[2]:
+                        return SimpleNamespace(returncode=code,stdout=raw)
+                    return self.parameter_git(args,**kwargs)
+                with patch.object(cache.subprocess,'run',side_effect=git):
+                    with self.assertRaises(Exception):cache.parameters(self.producer,source=self.project)
+
+    def test_shallow_or_incomplete_ancestry_fails_before_historical_source_reads(self):
+        for shallow,history in [('true',[cache.CACHE_BASELINE,self.old]),('false',[]),
+                ('false',[self.old]),('false',[cache.CACHE_BASELINE,self.old,self.old]),
+                ('false',[cache.CACHE_BASELINE,'unknown'])]:
+            with self.subTest(shallow=shallow,history=history):
+                calls=[]
+                def git(args,**kwargs):
+                    calls.append(args)
+                    if args==['git','rev-parse','--is-shallow-repository']:
+                        return SimpleNamespace(returncode=0,stdout=shallow.encode())
+                    return self.history_git(history)(args,**kwargs)
+                with patch.object(cache.subprocess,'run',side_effect=git):
+                    with self.assertRaises(cache.CacheRejected):cache.parameters(self.producer,source=self.project)
+                self.assertFalse(any(args[:2]==['git','show'] for args in calls))
+
+    def test_historical_selection_is_deterministic_bounded_and_keeps_two_known_candidates(self):
+        known='23c5841b9b7e60be715250cbb985fc0966c0bce3';old='b'*40
+        recent=[f'{n:040x}' for n in range(1,372)]
+        ancestry=[cache.CACHE_BASELINE,known,*recent,old]
+        items=[{'tag':old+'-1-1-api'},{'tag':known+'-1-1-admin'}]
+        outputs=[]
+        for rows in (items,list(reversed(items))):
+            with patch.object(cache.subprocess,'run',side_effect=self.history_git(ancestry,rows)):
+                outputs.append(cache.parameters(self.producer,source=self.project))
+        self.assertEqual(outputs[0],outputs[1]);bundle,binding=outputs[0]
+        self.assertEqual(len(binding['provenOldSourceCommits']),128)
+        inventory=[{'id':image,'sourceCommit':known,'repoTags':[cache.REPOSITORY+':'+known+'-37819347936-1-'+role],
+            'sizeBytesEstimate':size} for image,role,size in (
+                ('sha256:ce5a6eae235159d475dc78e1c1cfee7f775a6f110d6efe9043d0bd578cb39380','admin',51560224),
+                ('sha256:a01832a35a95075d810bd8cad61313ffc177a8bc2e8a1f3d272107bc86321823','api',381783671))]
+        allowed,_=cache.cache_filter_inventory(binding,inventory,set());self.assertEqual(allowed,inventory)
+        for payload in [s['parameters'] for s in bundle['stages']]+[bundle['execute']]:
+            self.assertLess(len(cache.cache_canonical(payload)),20480)
+
+    def test_more_than_128_priority_sources_or_oversize_full_history_are_refused(self):
+        sources=[f'{n:040x}' for n in range(1,130)]
+        ancestry=[cache.CACHE_BASELINE,*sources];counter=0
+        def git(args,**kwargs):
+            nonlocal counter
+            if args[:2]==['git','show'] and ':deploy/aws/cache-cleanup-' in args[2]:
+                start=counter*17;counter+=1
+                return SimpleNamespace(returncode=0,stdout=cache.cache_canonical({'items':[
+                    {'tag':commit+'-1-1-api'} for commit in sources[start:start+17]]}))
+            return self.history_git(ancestry)(args,**kwargs)
+        with patch.object(cache.subprocess,'run',side_effect=git):
+            with self.assertRaises(cache.CacheRejected):cache.parameters(self.producer,source=self.project)
+        def huge_history(args,**kwargs):
+            if args[:2]==['git','rev-list']:return SimpleNamespace(returncode=0,stdout=b'x'*65536)
+            return self.parameter_git(args,**kwargs)
+        with patch.object(cache.subprocess,'run',side_effect=huge_history):
+            with self.assertRaises(cache.CacheRejected):cache.parameters(self.producer,source=self.project)
 
     def test_actual_carrier_compiles_sha_binds_every_source_and_keeps_original_snapshot_ast(self):
         import ast,base64,lzma,shlex
@@ -1614,7 +1732,7 @@ class FixedBootstrapCacheTests(unittest.TestCase):
         current=(DIRECTORY/'maintain-image-cache.py').read_text()
         original={n.name:ast.dump(n,include_attributes=False) for n in ast.parse(raw).body if isinstance(n,(ast.FunctionDef,ast.ClassDef))}
         revised={n.name:ast.dump(n,include_attributes=False) for n in ast.parse(current).body if isinstance(n,(ast.FunctionDef,ast.ClassDef))}
-        self.assertTrue(all(revised[name]==value for name,value in original.items() if name not in ('cache_plan','validate_result','parameters')))
+        self.assertTrue(all(revised[name]==value for name,value in original.items() if name!='parameters'))
         ordinary={n.name:ast.dump(n,include_attributes=False) for n in ast.parse(raw.split('# Independent fixed-bootstrap plan/apply transport.',1)[0]).body if isinstance(n,(ast.FunctionDef,ast.ClassDef))}
         ordinary['main']=original['main']
         self.assertEqual(len(ordinary),24);self.assertTrue(all(revised[name]==value for name,value in ordinary.items()))

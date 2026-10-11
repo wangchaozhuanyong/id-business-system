@@ -1162,12 +1162,29 @@ def parameters(producer, *, source=None, expected_current=CACHE_BASELINE,
     import base64,lzma,shlex,types
     cache_producer(producer); cache_need(expected_current==CACHE_BASELINE and operation in CACHE_OPERATIONS)
     project=Path(source) if source is not None else Path(__file__).resolve().parents[2]
-    def git(*args):
+    def git(*args, limit=65536, raw=False):
         response=subprocess.run(['git',*args],cwd=project,stdout=subprocess.PIPE,stderr=subprocess.DEVNULL,timeout=30)
-        cache_need(response.returncode==0 and len(response.stdout)<65536); return response.stdout.decode().strip()
+        cache_need(response.returncode==0 and len(response.stdout)<limit)
+        return response.stdout if raw else response.stdout.decode().strip()
     cache_need(git('rev-parse',producer['commit']+'^{tree}')==producer['sourceTree'])
-    ancestry=git('rev-list','--max-count=129',CACHE_BASELINE).splitlines()
-    commits=sorted(set(ancestry)-{CACHE_BASELINE,CACHE_PREVIOUS,producer['commit']})
+    cache_need(git('rev-parse','--is-shallow-repository')=='false')
+    ancestry=git('rev-list',CACHE_BASELINE).splitlines()
+    cache_need(ancestry and ancestry[0]==CACHE_BASELINE and len(ancestry)==len(set(ancestry))
+        and all(re.fullmatch('[a-f0-9]{40}',commit) for commit in ancestry))
+    # Older release sources are read from this exact Git tree, never mixed WIP.
+    historical=set()
+    for name in ('cache-cleanup-20261001.json','cache-cleanup-fx-subscription-20261002.json',
+            'cache-cleanup-recharge-names-20261002.json','cache-cleanup-unified-20261002.json',
+            'cache-cleanup-unified-recovery-20261002.json','cache-cleanup-storage-20261002.json',
+            'cache-cleanup-recharge-execution-20261002.json','cache-cleanup-bitbrowser-direct-20261003.json'):
+        plan=cache_closed(git('show',producer['commit']+':deploy/aws/'+name,limit=4096,raw=True),4096)
+        cache_need(type(plan) is dict and type(plan.get('items')) is list and 0<len(plan['items'])<=128)
+        for item in plan['items']:
+            cache_need(type(item) is dict and type(item.get('tag')) is str and TAG.fullmatch(item['tag']))
+            historical.add(item['tag'][:40])
+    excluded={CACHE_BASELINE,CACHE_PREVIOUS,producer['commit']}
+    priority=sorted((historical & set(ancestry))-excluded); cache_need(len(priority)<=128)
+    commits=sorted((priority+[commit for commit in ancestry if commit not in excluded and commit not in historical])[:128])
     raw={path:(project/path).read_bytes() for path in CACHE_PINS}
     binding={'producer':producer,'expectedCurrent':expected_current,'operation':operation,'approvedPlanSha256':approved_plan_sha256,
         'sourcePins':{path:{'bytes':len(data),'sha256':cache_sha(data)} for path,data in raw.items()},
