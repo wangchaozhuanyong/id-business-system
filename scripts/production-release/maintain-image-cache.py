@@ -718,22 +718,76 @@ def cache_recovery(plan, holder):
     return holder['recovery'].copy()
 
 
+def cache_plan_budget(plan, binding):
+    """Upper bounds only; these placeholders never become evidence or output."""
+    items = plan['items']; count = len(items)
+    if count > 128 or len(cache_canonical(plan)) > 12000: return False
+    if sum({i['imageId']:i['sizeBytesEstimate'] for i in items}.values()) > 2**63-1: return False
+    producer = {**binding['producer'],'workflowRunId':'9'*20,'workflowRunAttempt':'9'*20}
+    source = {**binding,'producer':producer,'operation':'cleanup_unused_cache',
+        'approvedPlanSha256':'f'*64,'capturedProgramBytes':131072}
+    receipts = [{'tag':i['tag'],'imageId':i['imageId'],'state':'FAILED_MUTATED_UNVERIFIED'} for i in items]
+    worst = {'kind':'CACHE_RECOVERY_RESULT_V1','version':1,'operation':'cleanup_unused_cache',
+        'mode':'APPLY_EXACT_APPROVED','producer':producer,'sourceBinding':source,
+        'status':'FAILED_MUTATED_UNVERIFIED','code':max(CACHE_CODES,key=len),'phase':max(CACHE_PHASES,key=len),
+        'baseline':{'currentCommit':CACHE_BASELINE,'currentManifestSha256':CACHE_CURRENT_SHA,
+            'previousCommit':CACHE_PREVIOUS,'previousManifestSha256':CACHE_PREVIOUS_SHA},
+        'plan':plan,'planSha256':'f'*64,'candidateCount':count,'candidateSizeBytesEstimateSum':2**63-1,
+        'exclusiveBytesReclaimable':None,'freeBytesBefore':2**63-1,'freeBytesAfter':2**63-1,
+        'guards':{**dict.fromkeys(('currentUnchanged','servicesUnchanged','dependenciesUnchanged',
+            'containerImagesUnchanged','inventoryVerified','clientCleanupVerified','remoteRecoveryVerified'),False),
+            'servicesBeforeSha256':'f'*64,'servicesAfterSha256':'f'*64},
+        'mutationAttempted':False,'itemReceipts':receipts,'receiptSha256':'f'*64,'removedCount':count,
+        'authority':False,'productionEligible':False,'cleanupEligible':False,'rawOutputSuppressed':True}
+    artifact = {'kind':'CACHE_RECOVERY_ARTIFACT_V1','operation':'cleanup_unused_cache','producer':producer,
+        'expectedCurrent':CACHE_BASELINE,'commandId':'ffffffff-ffff-ffff-ffff-ffffffffffff',
+        'status':'OPERATION_COMPLETED','code':worst['code'],'result':worst}
+    journal = {'kind':'CACHE_RECOVERY_ITEM_RECEIPTS_V1','producer':producer,'planSha256':'f'*64,
+        'plan':plan,'mutationAttempted':False,'itemReceipts':receipts,'removedCount':count}
+    journal_bytes = len(cache_canonical(journal))+1
+    return len(cache_canonical(worst)) < 23500 and len(cache_canonical(artifact)) < 24000 \
+        and journal_bytes < 24000 and journal_bytes*(2*count+2) < 4*1024**2
+
+
 def cache_plan(binding, manifest, previous, dependencies, containers, inventory, holder):
     protected = protected_images(manifest, previous, containers, dependencies)
     allowed, excluded = cache_filter_inventory(binding,inventory,protected)
-    plan = make_plan(CACHE_BASELINE,previous,protected,allowed,dependencies)
+    evidence = dependencies['evidenceSha256']
+    cache_need(type(evidence) is dict and len(evidence)<=500,'DEPENDENCY_INVALID')
+    for path,digest in evidence.items():
+        cache_need(type(path) is str and not Path(path).is_absolute() and not set(Path(path).parts)&{'.','..'}
+            and (path.startswith('releases/') or path==ORDER_ARCHIVE_SEAL_RELATIVE)
+            and type(digest) is str and re.fullmatch('[a-f0-9]{64}',digest),'DEPENDENCY_INVALID')
+    compact = {'version':2,'imageIds':dependencies['imageIds'],'serviceRollback':dependencies['serviceRollback'],
+        'evidenceSha256':cache_sha(cache_canonical(evidence)),'evidenceCount':len(evidence)}
+    metadata = {'sourceCommit':binding['producer']['commit'],'sourceTree':binding['producer']['sourceTree'],
+        'sourcePinsSha256':cache_sha(cache_canonical(binding['sourcePins'])),
+        'currentManifestSha256':CACHE_CURRENT_SHA,'previousManifestSha256':CACHE_PREVIOUS_SHA,
+        'servicesSha256':CACHE_SERVICES_SHA,'containerImageIds':sorted(containers),
+        'inventorySha256':cache_sha(cache_canonical(inventory)),
+        'provenOldSourceCommitsSha256':cache_sha(cache_canonical(binding['provenOldSourceCommits'])),
+        'pendingCandidateCommit':binding['producer']['commit'],'excludedCounts':excluded}
+    budget = {'policy':POLICY,'expectedCurrent':CACHE_BASELINE,'expectedPrevious':previous['commit'],
+        'repository':REPOSITORY,'protectedImageIds':sorted(protected),'items':[],'dependencies':compact,**metadata}
+    cache_need(cache_plan_budget(budget,binding),'OUTPUT_BOUND')
+    selected = []
+    for row in sorted(allowed,key=lambda item:item['id']):
+        group = [{'tag':tag[len(REPOSITORY)+1:],'imageId':row['id'],'sourceCommit':row['sourceCommit'],
+            'sizeBytesEstimate':row['sizeBytesEstimate'],'remoteImageId':row['id'],
+            'remoteManifestDigest':'sha256:'+'f'*64,'remoteManifestSha256':'f'*64,'recoveryVerified':True}
+            for tag in row['repoTags']]
+        candidate = {**budget,'items':sorted([*budget['items'],*group],key=lambda item:item['tag'])}
+        if not cache_plan_budget(candidate,binding): continue
+        budget=candidate; selected.append(row)
+    cache_need(not allowed or selected,'OUTPUT_BOUND')
+    # Qualification uses the original complete dependencies and original helpers.
+    plan = make_plan(CACHE_BASELINE,previous,protected,selected)
     recovery = cache_recovery(plan,holder)
-    rows = {row['id']:row for row in allowed}
+    rows = {row['id']:row for row in selected}
     plan['items'] = [{**item, 'sourceCommit':rows[item['imageId']]['sourceCommit'],
         'sizeBytesEstimate':rows[item['imageId']]['sizeBytesEstimate'], **recovery[item['tag']]} for item in plan['items']]
-    plan.update(sourceCommit=binding['producer']['commit'],sourceTree=binding['producer']['sourceTree'],
-        sourcePinsSha256=cache_sha(cache_canonical(binding['sourcePins'])),
-        currentManifestSha256=CACHE_CURRENT_SHA,previousManifestSha256=CACHE_PREVIOUS_SHA,
-        servicesSha256=CACHE_SERVICES_SHA,containerImageIds=sorted(containers),
-        inventorySha256=cache_sha(cache_canonical(inventory)),
-        provenOldSourceCommitsSha256=cache_sha(cache_canonical(binding['provenOldSourceCommits'])),
-        pendingCandidateCommit=binding['producer']['commit'],excludedCounts=excluded)
-    cache_need(len(cache_canonical(plan)) <= 12000,'OUTPUT_BOUND')
+    plan.update(dependencies=compact,**metadata)
+    cache_need(cache_plan_budget(plan,binding),'OUTPUT_BOUND')
     return plan
 
 
@@ -949,14 +1003,12 @@ def validate_result(value,binding):
         for key in ('protectedImageIds','containerImageIds'):
             cache_need(type(plan[key]) is list and plan[key]==sorted(set(plan[key])) and len(plan[key])<=500
                 and all(type(i) is str and IMAGE_ID.fullmatch(i) for i in plan[key]))
-        deps=plan['dependencies']; cache_need(type(deps) is dict and set(deps)=={'version','imageIds','serviceRollback','evidenceSha256'}
-            and type(deps['version']) is int and deps['version']==1 and type(deps['imageIds']) is list
+        deps=plan['dependencies']; cache_need(type(deps) is dict and set(deps)=={'version','imageIds','serviceRollback','evidenceSha256','evidenceCount'}
+            and type(deps['version']) is int and deps['version']==2 and type(deps['imageIds']) is list
             and deps['imageIds']==sorted(set(deps['imageIds'])) and all(type(i) is str and IMAGE_ID.fullmatch(i) for i in deps['imageIds'])
             and type(deps['serviceRollback']) is dict and set(deps['serviceRollback'])<=set(('api','admin','mysql','caddy','auto-recharge','auto-registration','media-resolver','migrate'))
-            and type(deps['evidenceSha256']) is dict and len(deps['evidenceSha256'])<=500)
-        for path,digest in deps['evidenceSha256'].items():
-            cache_need(type(path) is str and not Path(path).is_absolute() and not set(Path(path).parts)&{'.','..'}
-                and (path.startswith('releases/') or path==ORDER_ARCHIVE_SEAL_RELATIVE) and type(digest) is str and re.fullmatch('[a-f0-9]{64}',digest))
+            and type(deps['evidenceSha256']) is str and re.fullmatch('[a-f0-9]{64}',deps['evidenceSha256'])
+            and type(deps['evidenceCount']) is int and 0<=deps['evidenceCount']<=500)
         for row in deps['serviceRollback'].values():
             cache_need(type(row) is dict and (row=={'status':'NO_EARLIER_SERVICE_VERSION'} or row=={'status':'NO_DISTINCT_PREDECESSOR'}
                 or set(row)=={'status','commit','imageId'} and row['status']=='RETAINED' and type(row['commit']) is str
@@ -1145,7 +1197,7 @@ def parameters(producer, *, source=None, expected_current=CACHE_BASELINE,
         if isinstance(node,ast.Assign) and any(isinstance(t,ast.Name) and t.id in ('STORAGE_BASELINE','STORAGE_CURRENT_SHA','STORAGE_COMPOSE_SHA') for t in node.targets): header+=ast.get_source_segment(storage,node)+'\n'
     old_names=('require','current','active_images','protected_images','dependency_file','release_metadata','literal_dependency',
         'fixed_dependencies','collect_dependencies','make_plan','plan_digest','verify_remote')
-    new_names=('CacheRejected','cache_need','cache_sha','cache_canonical','cache_closed','cache_producer','cache_binding','cache_inventory',
+    new_names=('CacheRejected','cache_need','cache_sha','cache_canonical','cache_closed','cache_producer','cache_binding','cache_inventory','cache_plan_budget',
         'cache_filter_inventory','cache_recovery','cache_plan','cache_save_receipt','cache_execute')
     selected=module.storage_selected(raw[CACHE_PINS[1]],old_names+new_names)
     body=header+selected
