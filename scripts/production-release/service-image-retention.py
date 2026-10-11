@@ -4,19 +4,64 @@ import ast
 import base64
 import hashlib
 import json
+import lzma
 import os
 from pathlib import Path
 import re
-import shlex
 import subprocess
 import time
-import zlib
 
 DIRECTORY = Path(__file__).resolve().parent
 REPOSITORY = DIRECTORY.parents[1]
 POLICY = 'current-service-rollback-explicit-dependencies-ecr-cache-v2'
+WIRE = r'''
+def retention_closed(raw):
+    def pairs(rows):
+        result = {}
+        for key, value in rows:
+            require(key not in result)
+            result[key] = value
+        return result
+    def constant(unused):
+        require(False)
+    return json.loads(raw, object_pairs_hook=pairs, parse_constant=constant)
+
+def retention_output(value):
+    raw = json.dumps(value, sort_keys=True, separators=(',', ':'), allow_nan=False).encode()
+    require(0 < len(raw) <= 512 * 1024)
+    if len(raw) > 18000:
+        value = {'kind':'SERVICE_IMAGE_RETENTION_COMPLETE_RESULT_V1','version':1,
+            'encoding':'lzma-base64','uncompressedBytes':len(raw),
+            'uncompressedSha256':hashlib.sha256(raw).hexdigest(),
+            'payload':base64.b64encode(lzma.compress(raw, preset=6)).decode('ascii')}
+    line = 'SAFE_RETENTION_RESULT ' + json.dumps(value, sort_keys=True, separators=(',', ':'), allow_nan=False)
+    require(len(line.encode()) <= 23500)
+    return line
+
+def retention_readback(output):
+    require(type(output) is str and 0 < len(output.encode()) <= 24000)
+    lines = output.strip().splitlines()
+    require(len(lines) == 1 and lines[0].startswith('SAFE_RETENTION_RESULT '))
+    value = retention_closed(lines[0][len('SAFE_RETENTION_RESULT '):])
+    require(type(value) is dict)
+    require('kind' not in value or value['kind'] == 'SERVICE_IMAGE_RETENTION_COMPLETE_RESULT_V1')
+    if value.get('kind') == 'SERVICE_IMAGE_RETENTION_COMPLETE_RESULT_V1':
+        require(set(value) == {'kind','version','encoding','uncompressedBytes','uncompressedSha256','payload'}
+            and type(value['version']) is int and value['version'] == 1 and value['encoding'] == 'lzma-base64'
+            and type(value['uncompressedBytes']) is int and 0 < value['uncompressedBytes'] <= 512 * 1024
+            and type(value['uncompressedSha256']) is str and re.fullmatch('[a-f0-9]{64}', value['uncompressedSha256'])
+            and type(value['payload']) is str)
+        decoder = lzma.LZMADecompressor(memlimit=64 * 1024 * 1024)
+        raw = decoder.decompress(base64.b64decode(value['payload'], validate=True), max_length=value['uncompressedBytes'] + 1)
+        require(len(raw) == value['uncompressedBytes'] and decoder.eof and not decoder.unused_data
+            and hashlib.sha256(raw).hexdigest() == value['uncompressedSha256'])
+        value = retention_closed(raw)
+        require(type(value) is dict and 'kind' not in value)
+    return value
+'''
+exec(compile(WIRE, '<service-image-retention-wire>', 'exec'))
 REMOTE = r'''
-import hashlib, json, os, re, stat, subprocess
+import base64, hashlib, json, lzma, os, re, stat, subprocess
 from pathlib import Path
 BASE = Path('/opt/id-business-v2')
 
@@ -41,6 +86,10 @@ def baseline():
 result = {'status':'FAILED_CLOSED','phase':MODE,'rawErrorSuppressed':True}
 try:
     require(MODE in ('PLAN','APPLY'))
+    require(hashlib.sha256(MAINTAIN_SOURCE.encode()).hexdigest() == MAINTAIN_SOURCE_SHA256)
+    protocol = {'__name__':'service_retention_maintainer_protocol'}
+    exec(compile(MAINTAIN_SOURCE, '<retention-maintainer-protocol>', 'exec'), protocol)
+    require(protocol['POLICY'] == POLICY)
     manifest_sha = baseline()
     if MODE == 'APPLY': require(manifest_sha == EXPECTED_MANIFEST_SHA)
     arguments = ['python3','-B','-c',MAINTAIN_SOURCE,'--expected-current',EXPECTED]
@@ -48,7 +97,7 @@ try:
         arguments += ['--apply','--approved-policy',POLICY,'--approved-plan-sha256',PLAN_SHA]
     p = subprocess.run(arguments, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=1200)
     require(p.returncode == 0 and len(p.stdout.encode()) <= 24000)
-    value = json.loads(p.stdout.strip().splitlines()[-1])
+    value = protocol['generic_cache_result_readback'](p.stdout)
     require(value.get('policy') == POLICY and value.get('currentCommit') == EXPECTED
         and type(value.get('candidateCount')) is int and 0 <= value['candidateCount'] <= 500
         and isinstance(value.get('removed'),list) and all(isinstance(x,str) for x in value['removed'])
@@ -70,9 +119,11 @@ try:
             'policy':POLICY,'manifestSha256':manifest_sha,'planSha256':PLAN_SHA,
             'candidateCount':value['candidateCount'],'removed':value['removed'],
             'freeBytesBefore':value['freeBytesBefore'],'freeBytesAfter':value['freeBytesAfter']}
+    line = retention_output(result)
 except BaseException:
     result = {'status':'FAILED_CLOSED','phase':MODE,'rawErrorSuppressed':True}
-print('SAFE_RETENTION_RESULT ' + json.dumps(result,separators=(',',':')),flush=True)
+    line = retention_output(result)
+print(line,flush=True)
 if result['status'] == 'FAILED_CLOSED': raise SystemExit(1)
 '''
 
@@ -99,15 +150,26 @@ def maintainer_source():
 
 
 def remote_command(mode, expected, deployment, source, plan_sha=None, manifest_sha=None):
+    require(type(source) is str and 0 < len(source.encode()) <= 2 * 1024 * 1024)
     values = {'MODE':mode,'EXPECTED':expected,'DEPLOYMENT':deployment,'POLICY':POLICY,
-        'MAINTAIN_SOURCE':source,'PLAN_SHA':plan_sha,'EXPECTED_MANIFEST_SHA':manifest_sha}
-    code = '\n'.join(k + ' = ' + repr(v) for k, v in values.items()) + '\n' + REMOTE
+        'MAINTAIN_SOURCE':source,'MAINTAIN_SOURCE_SHA256':hashlib.sha256(source.encode()).hexdigest(),
+        'PLAN_SHA':plan_sha,'EXPECTED_MANIFEST_SHA':manifest_sha}
+    code = '\n'.join(k + ' = ' + repr(v) for k, v in values.items()) + '\n' + WIRE + REMOTE
     compile(code, '<service-image-retention>', 'exec')
-    packed = base64.b64encode(zlib.compress(code.encode(), 9)).decode()
-    runner = 'import base64,zlib;exec(compile(zlib.decompress(base64.b64decode(' + repr(packed) + ')),"<service-image-retention>","exec"))'
-    command = 'python3 -B -c ' + shlex.quote(runner)
-    require(len(command.encode()) <= 32 * 1024)
-    return command
+    raw = code.encode()
+    require(len(raw) <= 4 * 1024 * 1024)
+    packed = base64.b64encode(lzma.compress(raw, preset=6)).decode('ascii')
+    commands = ["python3 -B - <<'SERVICE_IMAGE_RETENTION'", 'import base64,hashlib,lzma\npayload = (']
+    commands += [repr(packed[index:index + 24000]) for index in range(0, len(packed), 24000)]
+    commands += [')\ndecoder=lzma.LZMADecompressor(memlimit=64*1024*1024)\n'
+        'source=decoder.decompress(base64.b64decode(payload,validate=True),max_length=' + str(len(raw) + 1) + ')\n'
+        'if len(source)!=' + str(len(raw)) + ' or not decoder.eof or decoder.unused_data '
+        'or hashlib.sha256(source).hexdigest()!=' + repr(hashlib.sha256(raw).hexdigest()) + ':\n'
+        ' raise SystemExit("retention_transport_binding_failed")\n'
+        'exec(compile(source,"<service-image-retention>","exec"))', 'SERVICE_IMAGE_RETENTION']
+    require(all(0 < len(command.encode()) <= 32 * 1024 for command in commands)
+        and len(json.dumps({'commands':commands,'executionTimeout':['1500']}).encode()) <= 60 * 1024)
+    return commands
 
 
 class SsmClient:
@@ -125,11 +187,15 @@ class SsmClient:
         return json.loads(p.stdout)
 
     def execute(self, command):
-        require(isinstance(command,str) and len(command.encode()) <= 32 * 1024)
+        commands = [command] if isinstance(command,str) else command
+        require(type(commands) is list and 0 < len(commands) <= 16
+            and all(type(item) is str and 0 < len(item.encode()) <= 32 * 1024 for item in commands))
+        parameters = {'commands':commands,'executionTimeout':['1500']}
+        require(len(json.dumps(parameters).encode()) <= 60 * 1024)
         dispatch = self.call(['ssm','send-command','--cli-input-json',json.dumps({
             'InstanceIds':[self.instance],'DocumentName':'AWS-RunShellScript',
             'Comment':'Independent service rollback image retention',
-            'Parameters':{'commands':[command],'executionTimeout':['1500']}})])
+            'Parameters':parameters})])
         accepted = dispatch['Command']
         command_id = accepted['CommandId']
         require(isinstance(command_id, str) and re.fullmatch(r'[0-9a-f-]{36}', command_id)
@@ -150,10 +216,7 @@ class SsmClient:
                 and response.get('PluginName') == 'aws:runShellScript')
             stdout = response.get('StandardOutputContent', '')
             require(isinstance(stdout,str) and len(stdout.encode()) <= 24000)
-            lines = [line.removeprefix('SAFE_RETENTION_RESULT ') for line in stdout.splitlines()
-                if line.startswith('SAFE_RETENTION_RESULT ')]
-            require(len(lines) == 1)
-            result = json.loads(lines[0]); result['commandId'] = command_id
+            result = retention_readback(stdout); result['commandId'] = command_id
             require(result.get('status') != 'FAILED_CLOSED')
             return result
         raise RetentionFailure('Service image retention timed out; raw output suppressed')

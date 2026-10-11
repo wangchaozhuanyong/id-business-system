@@ -2631,14 +2631,32 @@ jobs:
           set -Eeuo pipefail
           mkdir -p .deploy/production-release
           python3 - <<'PY'
+          import base64
+          import hashlib
           import json
+          import lzma
           import os
           from pathlib import Path
           import re
           import shlex
           operation = os.environ['CACHE_OPERATION']
           expected = os.environ['RELEASE_COMMIT'] if operation == 'release' else os.environ['EXPECTED_CURRENT']
-          command = 'python3 -c ' + shlex.quote(Path('scripts/production-release/maintain-image-cache.py').read_text())
+          source = Path('scripts/production-release/maintain-image-cache.py').read_bytes()
+          if not 0 < len(source) <= 2 * 1024 * 1024:
+              raise SystemExit('Unused image cache source exceeds transfer bound')
+          source_sha256 = hashlib.sha256(source).hexdigest()
+          payload = base64.b64encode(lzma.compress(source, preset=6)).decode('ascii')
+          if lzma.decompress(base64.b64decode(payload, validate=True)) != source:
+              raise SystemExit('Unused image cache source roundtrip failed')
+          decoder = ('import base64,hashlib,lzma\n'
+              'decoder=lzma.LZMADecompressor(memlimit=64*1024*1024)\n'
+              'source=decoder.decompress(base64.b64decode(' + repr(payload) + ',validate=True),max_length='
+              + str(len(source) + 1) + ')\n'
+              'if len(source)!=' + str(len(source)) + ' or not decoder.eof or decoder.unused_data '
+              'or hashlib.sha256(source).hexdigest()!=' + repr(source_sha256) + ':\n'
+              ' raise SystemExit("Unused image cache source binding failed")\n'
+              'exec(compile(source,"<unused-image-cache>","exec"))\n')
+          command = 'python3 -c ' + shlex.quote(decoder)
           command += ' --expected-current ' + shlex.quote(expected)
           if operation in ('verify_unused_builder_cache', 'cleanup_unused_builder_cache'):
               command += ' --legacy-builder-cache'
@@ -2663,23 +2681,114 @@ jobs:
               deployment = 'github-actions-' + os.environ['GITHUB_RUN_ID'] + '-' + os.environ['GITHUB_RUN_ATTEMPT']
               command += ' --apply --approved-policy current-service-rollback-explicit-dependencies-ecr-cache-v2 --deployment-run ' + shlex.quote(deployment)
           parameters = {'commands': [command], 'executionTimeout': ['1200']}
+          if len(json.dumps(parameters).encode('utf-8')) > 60 * 1024:
+              raise SystemExit('Unused image cache command exceeds transfer bound')
           Path('.deploy/production-release/unused-image-cache.json').write_text(json.dumps(parameters))
           PY
           command_id="$(aws ssm send-command --instance-ids "$PRODUCTION_INSTANCE_ID" \
             --document-name AWS-RunShellScript \
             --parameters file://.deploy/production-release/unused-image-cache.json \
             --query 'Command.CommandId' --output text)"
+          CACHE_COMMAND_ID="$command_id" python3 - <<'PY_CACHE_ACCEPTED'
+          import hashlib
+          import json
+          import os
+          from pathlib import Path
+          import re
+          command_id = os.environ['CACHE_COMMAND_ID']
+          if not re.fullmatch('[a-f0-9]{8}-(?:[a-f0-9]{4}-){3}[a-f0-9]{12}', command_id):
+              raise SystemExit('Cache accepted command identity unavailable')
+          source = Path('scripts/production-release/maintain-image-cache.py').read_bytes()
+          parameters = Path('.deploy/production-release/unused-image-cache.json').read_bytes()
+          operation = os.environ['CACHE_OPERATION']
+          record = {'kind': 'UNUSED_IMAGE_CACHE_ACCEPTED_COMMAND_V1', 'status': 'ACCEPTED_RESULT_UNKNOWN',
+              'commandId': command_id, 'instanceId': os.environ['PRODUCTION_INSTANCE_ID'], 'operation': operation,
+              'expectedCurrent': os.environ['RELEASE_COMMIT'] if operation == 'release' else os.environ['EXPECTED_CURRENT'],
+              'sourceBytes': len(source), 'sourceSha256': hashlib.sha256(source).hexdigest(),
+              'parametersSha256': hashlib.sha256(parameters).hexdigest(),
+              'producer': {'workflowRunId': os.environ['GITHUB_RUN_ID'], 'workflowRunAttempt': os.environ['GITHUB_RUN_ATTEMPT']}}
+          destination = Path('.deploy/production-release/unused-image-cache-accepted-command.json')
+          descriptor = os.open(destination, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+          with os.fdopen(descriptor, 'w') as stream:
+              json.dump(record, stream, sort_keys=True, separators=(',', ':')); stream.flush(); os.fsync(stream.fileno())
+          PY_CACHE_ACCEPTED
+          save_cache_result() {
+            aws ssm get-command-invocation --command-id "$command_id" \
+              --instance-id "$PRODUCTION_INSTANCE_ID" \
+              --query '{CommandId:CommandId,Status:Status,ResponseCode:ResponseCode,ExecutionStartDateTime:ExecutionStartDateTime,ExecutionEndDateTime:ExecutionEndDateTime,StandardOutputContent:StandardOutputContent}' \
+              --output json > .deploy/production-release/unused-image-cache-invocation.json
+            CACHE_COMMAND_ID="$command_id" python3 - <<'PY_CACHE_RESULT'
+          import hashlib
+          import importlib.util
+          import json
+          import os
+          from pathlib import Path
+          import stat
+          spec = importlib.util.spec_from_file_location('cache_readback', 'scripts/production-release/maintain-image-cache.py')
+          cache = importlib.util.module_from_spec(spec)
+          spec.loader.exec_module(cache)
+          path = Path('.deploy/production-release/unused-image-cache-invocation.json')
+          native = cache.generic_cache_closed(path.read_bytes())
+          cache.require(type(native) is dict and set(native) == {'CommandId', 'Status', 'ResponseCode',
+              'ExecutionStartDateTime', 'ExecutionEndDateTime', 'StandardOutputContent'}
+              and native['CommandId'] == os.environ['CACHE_COMMAND_ID']
+              and native['Status'] in ('Success', 'Failed', 'Cancelled', 'TimedOut', 'Cancelling')
+              and type(native['ResponseCode']) is int
+              and (native['Status'] != 'Success' or native['ResponseCode'] == 0), 'Cache native result changed')
+          accepted_path = Path('.deploy/production-release/unused-image-cache-accepted-command.json')
+          accepted = cache.generic_cache_closed(accepted_path.read_bytes())
+          cache.require(type(accepted) is dict and accepted.get('kind') == 'UNUSED_IMAGE_CACHE_ACCEPTED_COMMAND_V1'
+              and accepted.get('status') == 'ACCEPTED_RESULT_UNKNOWN' and accepted.get('commandId') == native['CommandId']
+              and accepted.get('instanceId') == os.environ['PRODUCTION_INSTANCE_ID']
+              and accepted.get('operation') == os.environ['CACHE_OPERATION']
+              and accepted.get('sourceSha256') == hashlib.sha256(Path('scripts/production-release/maintain-image-cache.py').read_bytes()).hexdigest()
+              and accepted.get('parametersSha256') == hashlib.sha256(Path('.deploy/production-release/unused-image-cache.json').read_bytes()).hexdigest()
+              and accepted.get('producer') == {'workflowRunId': os.environ['GITHUB_RUN_ID'], 'workflowRunAttempt': os.environ['GITHUB_RUN_ATTEMPT']},
+              'Cache accepted request binding changed')
+          value = cache.generic_cache_result_readback(native['StandardOutputContent'])
+          operation = os.environ['CACHE_OPERATION']
+          expected = os.environ['RELEASE_COMMIT'] if operation == 'release' else os.environ['EXPECTED_CURRENT']
+          cache.require(accepted.get('expectedCurrent') == expected, 'Cache accepted baseline changed')
+          policy = (cache.LEGACY_POLICY if operation in ('verify_unused_legacy_cache', 'cleanup_unused_legacy_cache')
+              else cache.BUILDER_POLICY if operation in ('verify_unused_builder_cache', 'cleanup_unused_builder_cache') else cache.POLICY)
+          if 'mode' in value:
+              cache.require(value['policy'] == policy and (value.get('currentCommit') or value.get('plan', {}).get('expectedCurrent')) == expected,
+                  'Cache operation result binding changed')
+              if operation.startswith('cleanup_'):
+                  cache.require(value['planSha256'] == os.environ['CACHE_PLAN_SHA256'], 'Cache approved result digest changed')
+          if native['Status'] == 'Success':
+              cache.require(value.get('mode') == ('PLAN_ONLY' if operation.startswith('verify_') else 'APPLIED')
+                  and (policy == cache.POLICY or operation.startswith('verify_') or value.get('status') == 'COMPLETE'),
+                  'Cache success receipt changed')
+          raw = json.dumps(value, sort_keys=True, separators=(',', ':'), allow_nan=False).encode()
+          destination = Path('.deploy/production-release/unused-image-cache-result.json')
+          descriptor = os.open(destination, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+          with os.fdopen(descriptor, 'wb') as stream:
+              stream.write(raw); stream.flush(); os.fsync(stream.fileno())
+          evidence = {'kind': 'UNUSED_IMAGE_CACHE_ARTIFACT_BINDING_V1', 'commandId': native['CommandId'],
+              'operation': operation, 'expectedCurrent': expected,
+              'producer': {'workflowRunId': os.environ['GITHUB_RUN_ID'], 'workflowRunAttempt': os.environ['GITHUB_RUN_ATTEMPT']},
+              'nativeStatus': native['Status'], 'responseCode': native['ResponseCode'],
+              'nativeInvocationSha256': hashlib.sha256(path.read_bytes()).hexdigest(),
+              'acceptedCommandSha256': hashlib.sha256(accepted_path.read_bytes()).hexdigest(),
+              'stdoutSha256': hashlib.sha256(native['StandardOutputContent'].encode()).hexdigest(),
+              'completeResultSha256': hashlib.sha256(raw).hexdigest(), 'completeResultBytes': len(raw),
+              **{name: value[name] for name in ('mode', 'planSha256', 'candidateCount', 'freeBytesBefore', 'freeBytesAfter') if name in value}}
+          Path('.deploy/production-release/unused-image-cache-artifact-binding.json').write_text(
+              json.dumps(evidence, sort_keys=True, separators=(',', ':')))
+          path.chmod(0o600)
+          print(json.dumps(evidence, sort_keys=True, separators=(',', ':')))
+          PY_CACHE_RESULT
+          }
           for attempt in $(seq 1 120); do
             status="$(aws ssm get-command-invocation --command-id "$command_id" \
               --instance-id "$PRODUCTION_INSTANCE_ID" --query Status --output text 2>/dev/null || true)"
             case "$status" in
               Success)
-                aws ssm get-command-invocation --command-id "$command_id" \
-                  --instance-id "$PRODUCTION_INSTANCE_ID" --query StandardOutputContent --output text
+                save_cache_result
                 exit 0 ;;
               Failed|Cancelled|TimedOut|Cancelling)
-                aws ssm get-command-invocation --command-id "$command_id" \
-                  --instance-id "$PRODUCTION_INSTANCE_ID" --query StandardOutputContent --output text
+                save_cache_result
                 echo 'Unused image cache maintenance failed; running release is retained' >&2
                 exit 1 ;;
             esac
@@ -2687,6 +2796,19 @@ jobs:
           done
           echo 'Unused image cache maintenance timed out; running release is retained' >&2
           exit 1
+
+      - name: Preserve complete unused image cache evidence
+        if: always() && (inputs.operation == 'verify_unused_cache' || inputs.operation == 'cleanup_unused_cache' || inputs.operation == 'verify_unused_legacy_cache' || inputs.operation == 'cleanup_unused_legacy_cache' || inputs.operation == 'verify_unused_builder_cache' || inputs.operation == 'cleanup_unused_builder_cache' || inputs.operation == 'release')
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: unused-image-cache-evidence
+          path: |
+            .deploy/production-release/unused-image-cache-result.json
+            .deploy/production-release/unused-image-cache-artifact-binding.json
+            .deploy/production-release/unused-image-cache-invocation.json
+            .deploy/production-release/unused-image-cache-accepted-command.json
+          if-no-files-found: ignore
+          retention-days: 14
 
       - name: Verify fixed recharge deployment independently
         if: inputs.operation == 'verify_recharge_release' || (inputs.operation == 'release' && (inputs.historical_exception == 'recharge-pro-menu-b8-20261005' || inputs.historical_exception == 'recharge-pro-menu-7f-20261005' || inputs.historical_exception == 'recharge-pro-main80-20261006' || inputs.historical_exception == 'recharge-pro-974-20261007' || inputs.historical_exception == 'recharge-pro-2f-20261007' || inputs.historical_exception == 'recharge-pro-4c-20261008' || inputs.historical_exception == 'recharge-pro-6f5-20261008' || inputs.historical_exception == 'recharge-pro-pricing-045-20261008'))
