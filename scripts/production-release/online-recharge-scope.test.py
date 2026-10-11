@@ -4775,19 +4775,41 @@ class RestoredEntryTests(unittest.TestCase):
     def test_capacity_control_missing_policy_is_empty_and_atomic_exact_mapping_required(self):
         witness=scope._RESTORED_B_WITNESS
         bridge=scope.closed_recovery_json(controller(),witness['failedPreflight'].encode())['baseline']
-        path='scripts/production-release/maintain.py'
-        before={'sha256':'a'*64,'mode':'100644'};after={'sha256':'b'*64,'mode':'100644'}
-        original={path:before};inventory={path:after}
-        self.assertEqual(scope._workspace_capacity_control_inventory(controller(),bridge,original,inventory),frozenset())
-        policy={'kind':'ONLINE_RECHARGE_FIXED_CAPACITY_CONTROL_MAPPING','version':1,
-            'baselineOriginSha256':scope.fingerprint(bridge),'files':{path:{'before':before,'after':after}}}
-        d=controller(BASE=Path('/opt/id-business-v2'))
+        policy=copy.deepcopy(scope._WORKSPACE_CAPACITY_CONTROL_POLICY)
+        names=frozenset(policy['files'])
+        # The reviewed capacity source producer is separate from this ONLINE
+        # checkout, whose unchanged capacity group correctly grants no exception.
+        producer={'commit':'9e2ab11c065bd786d359191cae163e137f232c05',
+            'sourceTree':'93be945bc8eecaa6e0c4399668e4076b8a147fa9',
+            'workflowRunId':'123','workflowRunAttempt':'1'}
+        cached={}
+        for source in (bridge['baselineProducer'],producer):
+            commit=source['commit']
+            cached[commit,source['sourceTree']]=subprocess.check_output(['git','archive','--format=tar.gz',
+                '--prefix=id-business-system-'+commit+'/',commit],cwd=ROOT)
+        d=controller(BASE=Path('/opt/id-business-v2'),_onlinePendingWorkspaceProducer=producer,
+            _onlinePendingWorkspaceArchiveBytes=cached)
+        # Both complete archives are independently Git-tree checked; this only
+        # tests the fixed control mapping, without claiming native qualification.
+        original=scope._pending_workspace_current_source_inventory(d,bridge['baselineProducer'])
+        inventory=scope._pending_workspace_current_source_inventory(d,producer)
+        with patch.object(scope,'_WORKSPACE_CAPACITY_CONTROL_POLICY',None):
+            self.assertEqual(scope._workspace_capacity_control_inventory(d,bridge,original,inventory),frozenset())
         with patch.object(scope,'_WORKSPACE_CAPACITY_CONTROL_POLICY',policy):
-            self.assertEqual(scope._workspace_capacity_control_inventory(d,bridge,original,inventory),frozenset((path,)))
-            for changed in ({path:{'sha256':'c'*64,'mode':'100644'}},{path:{'sha256':'b'*64,'mode':'100755'}}):
+            self.assertEqual(scope._workspace_capacity_control_inventory(d,bridge,original,original),frozenset())
+            self.assertEqual(scope._workspace_capacity_control_inventory(d,bridge,original,inventory),names)
+            path='scripts/production-release/maintain-image-cache.py'
+            for replacement in ({'sha256':'c'*64,'mode':'100644'},
+                {'sha256':inventory[path]['sha256'],'mode':'100755'},original[path]):
+                changed={**inventory,path:replacement}
                 with self.assertRaises(RuntimeError):
                     scope._workspace_capacity_control_inventory(d,bridge,original,changed)
-            policy['files']['scripts/production-release/other.py']={'before':None,'after':after}
+            key=(producer['commit'],producer['sourceTree'])
+            raw=cached.pop(key)
+            with self.assertRaises(RuntimeError):
+                scope._workspace_capacity_control_inventory(d,bridge,original,inventory)
+            cached[key]=raw
+            policy['files']['scripts/production-release/other.py']=copy.deepcopy(policy['files'][path])
             with self.assertRaises(RuntimeError):
                 scope._workspace_capacity_control_inventory(d,bridge,original,inventory)
 
