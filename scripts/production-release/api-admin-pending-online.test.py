@@ -2113,5 +2113,190 @@ class DeclarationReadbackTransportContract(unittest.TestCase):
             b.d.run.assert_not_called()
 
 
+class UnpublishedCandidateLifecycle(unittest.TestCase):
+    """Real Git tree/projection and F/P2 consumer; no production capabilities."""
+    @classmethod
+    def setUpClass(cls):
+        DeclarationPublicationConsumers.setUpClass()
+        cls.consumer = DeclarationPublicationConsumers()
+        cls.projection = load('candidate_projection', 'api-admin-pending-projection.py')
+        cls.remote = load('candidate_archive_reader', 'remote-deploy.py')
+        cls.existing = load('candidate_release_fixture', 'api-admin-scope.test.py')
+        cls.runner = cls.existing.ReleaseFailureTests()
+        cls.commit = cls.consumer.pure.commit; cls.tree = cls.consumer.pure.tree
+        def archive(commit):
+            return subprocess.check_output(['git', 'archive', '--format=tar.gz',
+                '--prefix=id-business-system-' + commit + '/', commit], cwd=ROOT)
+        cls.references = tuple(cls.remote.registration_archive(archive(commit), commit)
+            for commit in (cls.projection.BASELINE_COMMIT, cls.projection.ONLINE_COMMIT))
+        cls.files = cls.remote.registration_archive(cls.consumer.pure.archive, cls.commit)
+        cls.projected, cls.projection_record = cls.projection.project_files(
+            cls.files, *cls.references, cls.commit, cls.tree)
+
+    @contextmanager
+    def fixture(self):
+        with self.consumer.fixture('STAGE') as f, ExitStack() as stack:
+            shutil.rmtree(f.directory); f.directory.mkdir(mode=0o700)
+            for name, (raw, mode) in self.files.items():
+                path = f.directory / name; path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(raw); path.chmod(0o755 if mode == '100755' else 0o644)
+            for name in self.projection.RUNTIME_FILES:
+                raw, mode = self.projected[name]
+                original = f.directory / '.deploy/production-release/pending-original-source' / name
+                original.parent.mkdir(parents=True, exist_ok=True)
+                original.write_bytes(self.files[name][0]); original.chmod(0o600)
+                (f.directory / name).write_bytes(raw)
+                (f.directory / name).chmod(0o755 if mode == '100755' else 0o644)
+                previous = f.original / name; previous.parent.mkdir(parents=True, exist_ok=True)
+                previous.write_bytes(raw)
+            (f.original / s.CONFIG_FILES[1]).write_bytes((f.directory / s.CONFIG_FILES[1]).read_bytes())
+            for folder in (f.original, f.directory):
+                (folder / '.env.aws.production').write_bytes(b'LOCAL_SYNTHETIC_NO_SECRET')
+                (folder / '.env.aws.production').chmod(0o600)
+            old = {'services': {name: {'image': row['reference']} for name, row in f.context['services'].items()}}
+            new = copy.deepcopy(old)
+            for name in s.IMAGE_SERVICES:
+                new['services'][name] = {'image': f.proof['images'][name]['reference'], 'pull_policy': 'never'}
+            (f.original / 'compose.release.json').write_text(json.dumps(old))
+            (f.directory / 'compose.release.json').write_text(json.dumps(new))
+            (f.d.BASE / 'current').unlink(); (f.d.BASE / 'current').symlink_to(f.original)
+            f.proof['pendingOnlineProjection'] = copy.deepcopy(self.projection_record)
+            f.proof['configuration'] = s.workspace_configuration(f.d, f.original, f.directory)
+            f.d._pendingOnlineMigrationOrigin = f.context
+            f.d._apiAdminPendingProjectionReferences = self.references
+            f.d.migration_plan = MagicMock(return_value=[])
+            f.d.online_recharge_scope = MagicMock(return_value=(f.module, f.d))
+            stack.enter_context(patch.object(s, 'pending_projection', return_value=self.projection))
+            f.candidate = (f.directory, f.original, copy.deepcopy(f.d._apiWorkspaceDeclarationProducer),
+                           f.proof, s.fingerprint(f.proof))
+            yield f
+
+    def test_fresh_stage_recomputes_real_git_projection_without_future_publication_or_new_images(self):
+        with self.fixture() as f, patch.object(self.projection, 'runtime_config_files',
+                wraps=self.projection.runtime_config_files) as projector:
+            self.assertEqual(s.pending_online_candidate_guard(f.d, f.directory, f.context, f.candidate), f.recovery)
+            self.assertFalse(any((f.directory / name).exists() for name in
+                (s.STATE_FILE, s.PROOF_FILE, 'release-manifest.json')))
+            projector.assert_called_once()
+            f.module.declaration_equivalence_preflight_bytes.assert_called()
+            f.d.run.assert_not_called()
+
+    def test_actual_source_call_chain_still_executes_old_migration_guard(self):
+        with self.fixture() as f:
+            def historical(d, directory, source):
+                self.assertEqual((directory, source), (f.directory, f.recovery['source']))
+                return SimpleNamespace(**vars(d))
+            f.module.historical_controller = MagicMock(side_effect=historical)
+            with patch.object(s, 'pending_online_candidate_guard', wraps=s.pending_online_candidate_guard) as guard:
+                with self.assertRaisesRegex(RuntimeError, '^API_ADMIN_MIGRATION_ORIGIN_CHANGED$'):
+                    s.preserved_migration_guard(f.d, f.directory, {'invalid-old-origin': True},
+                                               pending_candidate=f.candidate)
+                guard.assert_called_once(); f.module.historical_controller.assert_called_once()
+            f.d.run.assert_not_called()
+
+    def test_real_rollback_wrapper_and_historical_projection_keep_trusted_database_and_context(self):
+        with self.fixture() as f, ExitStack() as stack:
+            f.d.current_job_database = MagicMock(side_effect=AssertionError('OLD_API_MUST_NOT_BE_READ'))
+            f.d.compose = MagicMock()
+            identity = {'database': 'LOCAL_SYNTHETIC_PINNED_DATABASE'}
+            database = stack.enter_context(patch.object(s, 'workspace_database_identity', return_value=identity))
+            stack.enter_context(patch.object(online, 'migration_database_state'))
+            rollback = s.workspace_database_controller(f.d, f.directory, identity)
+            projected = online.historical_controller(rollback, f.directory, f.recovery['source'])
+            self.assertIs(projected.require, f.d.require)
+            self.assertEqual(projected.BASE, f.d.BASE)
+            self.assertEqual(projected._pendingOnlineMigrationOrigin, f.context)
+            self.assertEqual(projected.current_job_database(f.original), identity['database'])
+            database.assert_called_once_with(f.d, f.directory, identity)
+            f.d.current_job_database.assert_not_called()
+            f.module.historical_controller = online.historical_controller
+            with self.assertRaisesRegex(RuntimeError, '^API_ADMIN_MIGRATION_ORIGIN_CHANGED$'):
+                s.preserved_migration_guard(rollback, f.directory, {'invalid-old-origin': True},
+                                           pending_candidate=f.candidate)
+            f.d.run.assert_not_called(); f.d.current_job_database.assert_not_called()
+
+    def test_every_source_projection_configuration_reference_and_producer_drift_rejects(self):
+        for change in ('source', 'extra-source', 'projected', 'projected-mode', 'preserved', 'preserved-extra',
+                       'preserved-mode', 'symlink', 'env', 'caddy', 'override', 'proof', 'producer', 'tree',
+                       'f', 'p2', 'seal', 'origin', 'current', 'directory', 'PREFLIGHT', 'READBACK'):
+            with self.subTest(change=change), self.fixture() as f:
+                if change == 'source': (f.directory / 'package.json').write_bytes(b'LOCAL_CHANGED')
+                elif change == 'extra-source': (f.directory / 'unexpected.py').write_bytes(b'LOCAL_CHANGED')
+                elif change == 'projected': (f.directory / s.MIGRATION_SCHEMA).write_bytes(b'LOCAL_CHANGED')
+                elif change == 'projected-mode': (f.directory / s.MIGRATION_SCHEMA).chmod(0o755)
+                elif change.startswith('preserved'):
+                    path = f.directory / '.deploy/production-release/pending-original-source' / s.MIGRATION_SCHEMA
+                    if change == 'preserved': path.write_bytes(b'LOCAL_CHANGED')
+                    elif change == 'preserved-mode': path.chmod(0o644)
+                    else: (path.parent / 'unexpected.txt').write_bytes(b'LOCAL_CHANGED')
+                elif change == 'symlink': (f.directory / 'unexpected-link').symlink_to(f.original)
+                elif change == 'env': (f.directory / '.env.aws.production').write_bytes(b'LOCAL_CHANGED')
+                elif change == 'caddy': (f.directory / s.CONFIG_FILES[1]).write_bytes(b'LOCAL_CHANGED')
+                elif change == 'override': (f.directory / 'compose.release.json').write_text('{}')
+                elif change == 'proof': f.proof['images']['api']['reference'] += '-changed'
+                elif change in ('producer', 'tree'): f.d._apiWorkspaceDeclarationProducer[
+                    'workflowRunId' if change == 'producer' else 'sourceTree'] = '9' if change == 'producer' else '0' * 40
+                elif change == 'f': f.module.declaration_equivalence_preflight_bytes.return_value += b'\n'
+                elif change == 'p2': f.d._apiWorkspaceDeclarationDeploymentMeasurement = f.context['restoredConfigurationProof']
+                elif change == 'seal': f.d._apiWorkspaceDeclarationDeploymentSeal = {}
+                elif change == 'origin': f.context['baselineManifestSha256'] = '0' * 64
+                elif change == 'current': (f.d.BASE / 'current').unlink(); (f.d.BASE / 'current').symlink_to(f.directory)
+                elif change == 'directory': f.candidate = (f.original, *f.candidate[1:])
+                else:
+                    f.d._apiWorkspaceDeclarationEntry = change
+                    f.d.sys.argv = ['remote.py', '--api-workspace-' + ('preflight' if change == 'PREFLIGHT' else 'readback')]
+                with self.assertRaises((RuntimeError, ValueError, KeyError)):
+                    s.pending_online_candidate_guard(f.d, f.directory, f.context, f.candidate)
+                f.d.run.assert_not_called()
+
+    def test_published_partial_and_late_readback_never_use_source_capability(self):
+        for name in (s.STATE_FILE, s.PROOF_FILE, 'release-manifest.json'):
+            for broken in (False, True):
+                with self.subTest(name=name, broken=broken), self.fixture() as f, patch.object(
+                        self.projection, 'runtime_config_files', wraps=self.projection.runtime_config_files) as projector:
+                    path = f.directory / name
+                    if broken: path.symlink_to(f.directory / 'missing-publication')
+                    else: path.write_bytes(b'{}')
+                    with self.assertRaises(Exception):
+                        s.pending_online_candidate_guard(f.d, f.directory, f.context, f.candidate)
+                    projector.assert_not_called()
+        with self.consumer.fixture('READBACK') as f:
+            (f.directory / s.STATE_FILE).unlink()
+            with self.assertRaises(RuntimeError): s.pending_online_guard(f.d, f.directory, f.context)
+
+    def test_release_passes_one_local_capability_through_source_switch_record_and_rollback(self):
+        scope = self.existing.workspace
+        for failure in (None, 'api-health'):
+            seen = []
+            value = declaration_context(); value['restoredConfigurationProof']['semantic']['producer'].update(
+                commit=self.existing.COMMIT, sourceTree=self.existing.TREE, workflowRunId='123', workflowRunAttempt='1')
+            def migration_guard(d, directory, origin, *, pending_candidate=None):
+                if pending_candidate is None:
+                    self.assertEqual(directory.name, 'previous')
+                    return
+                self.assertFalse(any((directory / name).exists() for name in
+                    (scope.STATE_FILE, scope.PROOF_FILE, 'release-manifest.json')))
+                self.assertEqual((pending_candidate[0], pending_candidate[1]), (directory, d.BASE / 'releases/previous'))
+                self.assertEqual(pending_candidate[2], {'commit': self.existing.COMMIT,
+                    'sourceTree': self.existing.TREE, 'workflowRunId': '123', 'workflowRunAttempt': '1'})
+                self.assertEqual(pending_candidate[4], scope.fingerprint(pending_candidate[3]))
+                seen.append(pending_candidate)
+            with patch.object(scope, 'pending_online_declaration_stage_record', side_effect=lambda d, origin, record, proof:
+                    scope.pending_online_marker(origin)):
+                code, result, controller, manifest, receipt = self.runner.run_release(selected_scope=scope,
+                    pending_origin=value, migration_origin={'commit': '0' * 40,
+                        'manifestSha256': '1' * 64, 'buildProofSha256': '2' * 64},
+                    migration_origin_guard=migration_guard, fail_at=failure, sqlite_gate=SimpleNamespace(
+                        record={}, stop_previous=MagicMock(), finish=MagicMock(), close=MagicMock(),
+                        abort=MagicMock(), check_marker=MagicMock(), volume={'name': 'fixture'}, summary={'logicalSha256': '0' * 64}))
+            self.assertEqual(code, 0 if failure is None else 1, result)
+            self.assertGreaterEqual(len(seen), 5)
+            self.assertTrue(all(item is seen[0] for item in seen))
+            self.assertEqual([call.args[-1] for call in controller.compose.call_args_list], ['admin', 'api'])
+            if failure:
+                self.assertTrue(receipt); self.assertEqual(result['rollback'], {'api': 'RESTORED', 'admin': 'RESTORED'})
+            else: self.assertIsNotNone(manifest)
+
+
 if __name__ == '__main__':
     unittest.main()
