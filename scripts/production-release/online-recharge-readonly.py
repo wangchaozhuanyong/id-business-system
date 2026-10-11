@@ -10,6 +10,9 @@ import sys
 import time
 from types import SimpleNamespace
 
+# Keep relative runpy entry points absolute without resolving source symlinks.
+__file__ = str(Path(__file__).absolute())
+
 
 def closed_json(raw):
     if not isinstance(raw, str) or not 0 < len(raw.encode()) <= 256 * 1024:
@@ -218,13 +221,15 @@ def _pending_workspace_artifact_payload(producer, preflight_raw, invocation_raw)
     _pending_workspace_artifact_need(all(type(raw) is bytes and 0 < len(raw) < _PENDING_WORKSPACE_ARTIFACT_LIMIT
         for raw in (preflight_raw, invocation_raw)))
     f = _pending_workspace_artifact_json(preflight_raw)
+    if f.get('version')==3:
+        f={**f,'ordinaryPreflight':_restored_wire_decode(json.dumps(f['ordinaryPreflight']))}
     namespace = next((n for n in _WORKSPACE_ARTIFACT_TYPES if f.get('kind') == n + '_PREFLIGHT'), None)
     _pending_workspace_artifact_need(namespace is not None)
     origin_kind, origin_field = _WORKSPACE_ARTIFACT_TYPES[namespace]
     _pending_workspace_artifact_need(set(f) == {'kind', 'version', 'mode', 'status', 'commandId',
         'releaseCandidateCommit', 'workflowRunId', 'workflowRunAttempt', 'sourceTree',
-        'baseline', 'services', 'ordinaryPreflight'}
-        and type(f['version']) is int and f['version'] == 2 and f['mode'] == 'preflight'
+        'baseline', 'services', 'ordinaryPreflight',*(('restoration',) if f.get('version')==3 else ())}
+        and type(f['version']) is int and f['version'] in (2,3) and (f['version']==2 or namespace=='ONLINE_RECHARGE_AFTER_BIT') and f['mode'] == 'preflight'
         and f['status'] == namespace + '_BASELINE_VERIFIED'
         and f['releaseCandidateCommit'] == producer['commit'] and f['sourceTree'] == producer['sourceTree']
         and f['workflowRunId'] == producer['workflowRunId'] and f['workflowRunAttempt'] == producer['workflowRunAttempt']
@@ -232,6 +237,10 @@ def _pending_workspace_artifact_payload(producer, preflight_raw, invocation_raw)
             type(f['baseline']) is dict and f['baseline'].get('kind') == origin_kind
             and type(f['ordinaryPreflight']) is dict and f['ordinaryPreflight'].get(origin_field) == f['baseline']
             and 'onlinePendingWorkspaceOrigin' not in f['ordinaryPreflight'])))
+    if f['version']==3:
+        _pending_workspace_artifact_need(type(f['restoration']) is dict
+            and f['ordinaryPreflight'].get('afterBitRestoration')==f['restoration']
+            and f['ordinaryPreflight'].get('services')==f['services'])
     q = _pending_workspace_artifact_json(invocation_raw)
     required = {'CommandId', 'InstanceId', 'DocumentName', 'PluginName', 'ResponseCode', 'Status',
         'ExecutionEndDateTime', 'StandardOutputContent', 'StandardErrorContent'}
@@ -244,7 +253,7 @@ def _pending_workspace_artifact_payload(producer, preflight_raw, invocation_raw)
         and q['StandardErrorContent'] == '' and type(q['StandardOutputContent']) is str
         and 0 < len(q['StandardOutputContent'].encode()) < 24000)
     # ONLINE has its own ordinary finite receipt, never the API Q wire envelope.
-    _pending_workspace_artifact_need(_pending_workspace_artifact_json(q['StandardOutputContent']) == f['ordinaryPreflight'])
+    _pending_workspace_artifact_need((_restored_wire_decode(q['StandardOutputContent']) if f['version']==3 else _pending_workspace_artifact_json(q['StandardOutputContent'])) == f['ordinaryPreflight'])
     return f, q
 
 
@@ -428,6 +437,13 @@ def _pending_workspace_modules():
     controller = SimpleNamespace(**runpy.run_path(str(source.with_name('remote-deploy.py'))))
     scope = controller.online_recharge_scope()[0]
     decoder = runpy.run_path(str(source.with_name('api-admin-pending-receipt-wire.py')))['decode_receipt_output']
+    ordinary_decoder=decoder
+    def decoder(output,*,scope):
+        value=_pending_workspace_artifact_json(output)
+        if value.get('kind')=='ONLINE_RECHARGE_B_RESTORED_RECEIPT':
+            _restored_wire_need(scope=='ONLINE_RECHARGE')
+            return _restored_wire_decode(output)
+        return ordinary_decoder(output,scope=scope)
     return controller, scope, decoder
 
 
@@ -710,3 +726,66 @@ if __name__ == '__main__':
             code = 'ONLINE_RECHARGE_TRANSPORT_UNAVAILABLE'
         print(json.dumps({'status': 'ONLINE_RECHARGE_VERIFICATION_FAILED', 'code': code}))
         raise SystemExit(1) from None
+
+"""Only restored-B complete receipts use bounded framing; old output is exact."""
+
+
+def _restored_wire_need(condition):
+    if not condition:raise RuntimeError('ONLINE_RECHARGE_B_RESTORED_WIRE_INVALID')
+
+
+def _restored_wire_json(raw):
+    _restored_wire_need(type(raw) in (str,bytes) and 0<len(raw)<65536)
+    def pairs(items):
+        value={}
+        for key,item in items:
+            _restored_wire_need(key not in value);value[key]=item
+        return value
+    value=json.loads(raw,object_pairs_hook=pairs,parse_constant=lambda unused:_restored_wire_need(False))
+    _restored_wire_need(type(value) is dict)
+    return value
+
+
+def _restored_wire_selected(value):
+    if type(value) is not dict or 'afterBitRestoration' not in value:return False
+    side=value['afterBitRestoration'];origin=value.get('onlineAfterBitOrigin')
+    _restored_wire_need(type(origin) is dict and origin.get('kind')=='ONLINE_RECHARGE_AFTER_BIT_SUCCESSOR_ORIGIN'
+        and origin.get('baselineCommit')=='31d2c6885a45817cd40d23fce8d6145bc9f18af2'
+        and type(side) is dict and side.get('kind')=='ONLINE_RECHARGE_B_RESTORE_COMPLETE_MATERIAL'
+        and type(side.get('version')) is int and side['version']==2 and side.get('publicationQualified') is False
+        and type(side.get('apiDeclarationQualification')) is dict
+        and side['apiDeclarationQualification'].get('kind')=='ONLINE_RECHARGE_B_RESTORED_SOURCE_QUALIFICATION')
+    return True
+
+
+def _restored_wire_encode(value):
+    if not _restored_wire_selected(value):return value
+    import gzip,base64
+    raw=json.dumps(value,separators=(',',':'),allow_nan=False).encode()
+    _restored_wire_json(raw)
+    envelope={'kind':'ONLINE_RECHARGE_B_RESTORED_RECEIPT','version':1,'encoding':'gzip-base64',
+        'decodedLength':len(raw),'decodedSha256':hashlib.sha256(raw).hexdigest(),
+        'payload':base64.b64encode(gzip.compress(raw,compresslevel=9,mtime=0)).decode('ascii')}
+    _restored_wire_need(len(json.dumps(envelope).encode())+1<24000)
+    return envelope
+
+
+def _restored_wire_decode(output):
+    import base64,zlib
+    _restored_wire_need(type(output) is str and 0<len(output.encode())<24000)
+    value=_restored_wire_json(output)
+    _restored_wire_need(set(value)=={'kind','version','encoding','decodedLength','decodedSha256','payload'}
+        and value['kind']=='ONLINE_RECHARGE_B_RESTORED_RECEIPT'
+        and type(value['version']) is int and value['version']==1 and value['encoding']=='gzip-base64'
+        and type(value['decodedLength']) is int and 0<value['decodedLength']<65536
+        and type(value['decodedSha256']) is str and re.fullmatch('[a-f0-9]{64}',value['decodedSha256'])
+        and type(value['payload']) is str and value['payload'].isascii() and 0<len(value['payload'])<24000)
+    packed=base64.b64decode(value['payload'],validate=True)
+    _restored_wire_need(base64.b64encode(packed).decode('ascii')==value['payload'])
+    inflater=zlib.decompressobj(31);raw=inflater.decompress(packed,65536)
+    _restored_wire_need(0<len(raw)<65536 and len(raw)==value['decodedLength']
+        and hashlib.sha256(raw).hexdigest()==value['decodedSha256'] and inflater.eof
+        and not inflater.unused_data and not inflater.unconsumed_tail)
+    decoded=_restored_wire_json(raw)
+    _restored_wire_need(_restored_wire_selected(decoded) and decoded.get('kind')!='ONLINE_RECHARGE_B_RESTORED_RECEIPT')
+    return decoded
