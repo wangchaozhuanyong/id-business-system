@@ -1123,7 +1123,8 @@ class FixedBootstrapCacheTests(unittest.TestCase):
 
     def run_host(self, binding, *, count=1, fail_remove=None, change_after_remove=False,
                  wrong_services=False, wrong_baseline=False, dependencies_failure=False, inventory_drift=False,
-                 dangling=False, recovery_failure=False, root_override=None, inventory_failure=None):
+                 dangling=False, recovery_failure=False, root_override=None, inventory_failure=None,
+                 dependencies_override=None, inventory_out=None):
         import copy
         import os
         import stat
@@ -1135,7 +1136,7 @@ class FixedBootstrapCacheTests(unittest.TestCase):
         manifest={'commit':cache.CACHE_BASELINE,'previousCommit':cache.CACHE_PREVIOUS,
             'images':{'api':{'digest':self.kept}}}
         previous={'commit':cache.CACHE_PREVIOUS,'images':{}}
-        deps={'version':1,'imageIds':[self.kept],'serviceRollback':{},'evidenceSha256':{}}
+        deps=dependencies_override if dependencies_override is not None else {'version':1,'imageIds':[self.kept],'serviceRollback':{},'evidenceSha256':{}}
         class Guard:
             def __init__(unused,deadline): unused.fds=[];unused.nodes=[]; unused.current=root/'releases/20261008T000000Z-0a03fa28e6b8'; unused.manifests=[manifest,previous]; unused.previous_sha=cache.CACHE_PREVIOUS_SHA
             def open(unused): unused.base=os.open(root,os.O_RDONLY|os.O_DIRECTORY);unused.fds.append(unused.base)
@@ -1195,6 +1196,7 @@ class FixedBootstrapCacheTests(unittest.TestCase):
             cache.validate_result(value,binding)
         receipts=list((root/'maintenance/docker-cache-retention').glob('*.json')) if (root/'maintenance/docker-cache-retention').exists() else []
         saved=[p.read_bytes() for p in receipts]
+        if inventory_out is not None:inventory_out.extend(copy.deepcopy(state['inventory']))
         if directory:directory.cleanup()
         return value,removals,commands,saved
 
@@ -1298,6 +1300,86 @@ class FixedBootstrapCacheTests(unittest.TestCase):
                         'expectedCurrent':cache.CACHE_BASELINE,'commandId':'12345678-1234-1234-1234-123456789abc',
                         'status':'OPERATION_FAILED','code':code,'result':value}
                     cache.validate_artifact(record,binding['producer'],binding)
+
+    def test_compact_dependencies_seal_every_path_and_digest_without_omitting_protection(self):
+        import copy
+        evidence={'releases/20261001T000000Z-'+f'{n:012x}'+'/manifest.json':'a'*64 for n in range(100)}
+        dependencies={'version':1,'imageIds':[self.kept],'serviceRollback':{'api':{'status':'RETAINED','commit':self.old,'imageId':self.kept}},'evidenceSha256':evidence}
+        original=copy.deepcopy(dependencies)
+        planned,_,_,_=self.run_host(self.binding(),dependencies_override=dependencies)
+        self.assertEqual(planned['status'],'PLANNED');compact=planned['plan']['dependencies']
+        self.assertEqual(compact,{'version':2,'imageIds':dependencies['imageIds'],'serviceRollback':dependencies['serviceRollback'],
+            'evidenceSha256':cache.cache_sha(cache.cache_canonical(evidence)),'evidenceCount':100})
+        self.assertEqual(dependencies,original);self.assertIn(self.kept,planned['plan']['protectedImageIds'])
+        for change in ('PATH','DIGEST','ORDER'):
+            changed=copy.deepcopy(dependencies);key=next(iter(evidence))
+            if change=='PATH':changed['evidenceSha256'][key.replace('manifest.json','release-source.json')]=changed['evidenceSha256'].pop(key)
+            if change=='DIGEST':changed['evidenceSha256'][key]='b'*64
+            if change=='ORDER':changed['evidenceSha256']=dict(reversed(list(evidence.items())))
+            value,_,_,_=self.run_host(self.binding(),dependencies_override=changed)
+            self.assertEqual(value['status'],'PLANNED')
+            self.assertEqual(value['planSha256']==planned['planSha256'],change=='ORDER')
+        self.assertGreater(len(cache.cache_canonical(evidence)),12000)
+        self.assertLess(len(cache.cache_canonical(compact)),12000)
+
+    def test_compact_dependencies_validator_rejects_old_shape_bad_hash_count_and_extra(self):
+        for change in ({'version':1},{'version':True},{'evidenceSha256':{}},{'evidenceSha256':'z'*64},
+                {'evidenceCount':True},{'evidenceCount':-1},{'evidenceCount':501},{'extra':'private'}):
+            value=self.safe_plan();value['plan']['dependencies'].update(change);value['planSha256']=cache.plan_digest(value['plan'])
+            with self.subTest(change=change),self.assertRaises(cache.CacheRejected):cache.validate_result(value,self.binding())
+        for evidence in ({'/outside/file':'a'*64},{'releases/../file':'a'*64},{'releases/public':'invalid'}):
+            with patch.object(cache,'verify_remote') as remote,self.assertRaisesRegex(cache.CacheRejected,'^DEPENDENCY_INVALID$'):
+                cache.cache_plan(self.binding(),{'images':{}},{'commit':cache.CACHE_PREVIOUS,'images':{}},
+                    {'version':1,'imageIds':[],'serviceRollback':{},'evidenceSha256':evidence},set(),self.inventory(),{'recovery':{}})
+            remote.assert_not_called()
+
+    def test_batches_select_only_complete_groups_and_both_operations_fit_worst_outputs(self):
+        binding=self.binding();binding['provenOldSourceCommits']=sorted([self.old,*[f'{n:040x}' for n in range(1,128)]])
+        def rows(count=1):
+            return [{'id':'sha256:'+f'{n+1:064x}','repoTags':[cache.REPOSITORY+':'+self.old+'-'+str(n+1)+'-'+str(alias+1)+'-api' for alias in range(3)],
+                'sourceCommit':self.old,'sizeBytesEstimate':1000} for n in range(count)]
+        with patch.object(self,'inventory',side_effect=rows):
+            planned,_,_,_=self.run_host(binding,count=10)
+            self.assertEqual(planned['status'],'PLANNED');plan=planned['plan'];items=plan['items']
+            self.assertGreater(len(items),0);self.assertLess(len(items),30)
+            selected={i['imageId'] for i in items};self.assertEqual(len(items),len(selected)*3)
+            self.assertEqual(selected,{r['id'] for r in rows(10)[:len(selected)]})
+            self.assertTrue(cache.cache_plan_budget(plan,binding));self.assertLessEqual(len(cache.cache_canonical(plan)),12000)
+            after=[];apply_binding={**binding,'operation':'cleanup_unused_cache','approvedPlanSha256':planned['planSha256']}
+            applied,removed,_,saved=self.run_host(apply_binding,count=10,inventory_out=after)
+            self.assertEqual((applied['status'],applied['planSha256']),('APPLIED',planned['planSha256']))
+            self.assertEqual({r['id'] for r in after},{r['id'] for r in rows(10)}-selected)
+            self.assertEqual(len(removed),len(items));self.assertLess(len(cache.cache_canonical(applied)),23500)
+            record={'kind':'CACHE_RECOVERY_ARTIFACT_V1','operation':'cleanup_unused_cache','producer':apply_binding['producer'],
+                'expectedCurrent':cache.CACHE_BASELINE,'commandId':'12345678-1234-1234-1234-123456789abc',
+                'status':'OPERATION_COMPLETED','code':'OK','result':applied}
+            cache.validate_artifact(record,apply_binding['producer'],apply_binding);self.assertLess(len(cache.cache_canonical(record)),24000)
+            self.assertLess(len(saved[0]),4*1024**2)
+            for line in saved[0].splitlines():self.assertLess(len(line),24000)
+            failed,_,_,saved_failure=self.run_host(apply_binding,count=10,fail_remove=len(items))
+            self.assertEqual(failed['status'],'FAILED_MUTATED_UNVERIFIED');cache.validate_result(failed,apply_binding)
+            self.assertLess(len(cache.cache_canonical(failed)),23500);self.assertLess(len(saved_failure[0]),4*1024**2)
+
+    def test_oversized_first_group_is_skipped_without_splitting_or_removing_it(self):
+        def rows(count=1):
+            return [{'id':'sha256:'+f'{n+1:064x}','repoTags':[cache.REPOSITORY+':'+self.old+'-'+str(n+1)+'-'+str(alias+1)+'-api' for alias in range(32 if n==0 else 2)],
+                'sourceCommit':self.old,'sizeBytesEstimate':1000} for n in range(count)]
+        with patch.object(self,'inventory',side_effect=rows):
+            planned,_,_,_=self.run_host(self.binding(),count=3)
+            self.assertEqual(planned['status'],'PLANNED');self.assertEqual(planned['candidateCount'],4)
+            self.assertNotIn(rows(3)[0]['id'],{i['imageId'] for i in planned['plan']['items']})
+            after=[];applied,_,_,_=self.run_host(self.binding('cleanup_unused_cache',planned['planSha256']),count=3,inventory_out=after)
+            self.assertEqual(applied['status'],'APPLIED');self.assertEqual(after,[rows(3)[0]])
+            rejected,removed,_,_=self.run_host(self.binding(),count=1)
+            self.assertEqual((rejected['status'],rejected['code']),('FAILED','OUTPUT_BOUND'))
+            self.assertEqual(removed,[]);self.assertIsNone(rejected['plan'])
+
+    def test_unavoidably_oversized_fixed_metadata_rejects_before_remote_or_mutation(self):
+        images={'sha256:'+f'{n:064x}' for n in range(500)}
+        with patch.object(cache,'verify_remote') as remote,self.assertRaisesRegex(cache.CacheRejected,'^OUTPUT_BOUND$'):
+            cache.cache_plan(self.binding(),{'images':{}},{'commit':cache.CACHE_PREVIOUS,'images':{}},
+                {'version':1,'imageIds':sorted(images),'serviceRollback':{},'evidenceSha256':{}},images,[],{'recovery':{}})
+        remote.assert_not_called()
 
     def test_plan_canonical_excludes_run_and_deduplicates_size_estimate(self):
         first=self.safe_plan();second=self.safe_plan(self.binding(producer={**self.producer,'workflowRunId':'456'}))
@@ -1532,7 +1614,7 @@ class FixedBootstrapCacheTests(unittest.TestCase):
         current=(DIRECTORY/'maintain-image-cache.py').read_text()
         original={n.name:ast.dump(n,include_attributes=False) for n in ast.parse(raw).body if isinstance(n,(ast.FunctionDef,ast.ClassDef))}
         revised={n.name:ast.dump(n,include_attributes=False) for n in ast.parse(current).body if isinstance(n,(ast.FunctionDef,ast.ClassDef))}
-        self.assertTrue(all(revised[name]==value for name,value in original.items() if name!='cache_inventory'))
+        self.assertTrue(all(revised[name]==value for name,value in original.items() if name not in ('cache_plan','validate_result','parameters')))
         ordinary={n.name:ast.dump(n,include_attributes=False) for n in ast.parse(raw.split('# Independent fixed-bootstrap plan/apply transport.',1)[0]).body if isinstance(n,(ast.FunctionDef,ast.ClassDef))}
         ordinary['main']=original['main']
         self.assertEqual(len(ordinary),24);self.assertTrue(all(revised[name]==value for name,value in ordinary.items()))
