@@ -383,7 +383,7 @@ class RetentionTests(unittest.TestCase):
                                      '--approved-plan-sha256', cache.plan_digest(self.plan)])
         self.assertEqual(result['mode'], 'APPLIED')
         self.assertEqual(calls, 1)
-        self.assertNotIn('plan', result)
+        self.assertEqual(result['plan'], self.plan)
 
     def test_failed_or_other_deployment_cannot_trigger_automatic_deletion(self):
         with self.assertRaisesRegex(RuntimeError, 'successful release'):
@@ -1891,10 +1891,451 @@ class FixedBootstrapCacheTests(unittest.TestCase):
         tree=PriorDiagnostics().visit(ast.parse(current))
         self.assertEqual(counts,dict.fromkeys(counts,1))
         revised={n.name:ast.dump(n,include_attributes=False) for n in tree.body if isinstance(n,(ast.FunctionDef,ast.ClassDef))}
+        # Only the four authorized generic capacity callables changed. Freeze
+        # their complete new ASTs, then retain the original whole-source witness
+        # for every other callable, including the separate current0a protocol.
+        capacity_asts = {'collect_dependencies': '617f3716d9d650ebf3a2544884160a1dc2ba10f9fb4ab27e86af215884652141', 'make_plan': '91be10cd98c59ee941c5fef352e861157a2c8a28fd822d56d5a8ff62c998c530', 'apply_plan': '452316b1158739c937134fe4aa098314a49d1b5edb5d4cd760bd32200923d471', 'maintain': '39ef534248a973754d44857d7e5df99b8b02888ea7db7e901aba2c541839bd2c'}
+        for name, digest in capacity_asts.items():
+            self.assertEqual(__import__('hashlib').sha256(revised[name].encode()).hexdigest(), digest, name)
+            revised[name] = original[name]
         self.assertTrue(all(revised[name]==value for name,value in original.items()))
         ordinary={n.name:ast.dump(n,include_attributes=False) for n in ast.parse(raw.split('# Independent fixed-bootstrap plan/apply transport.',1)[0]).body if isinstance(n,(ast.FunctionDef,ast.ClassDef))}
         ordinary['main']=original['main']
         self.assertEqual(len(ordinary),24);self.assertTrue(all(revised[name]==value for name,value in ordinary.items()))
+
+
+class GenericCacheTransportTests(unittest.TestCase):
+    def constructor(self):
+        workflow=(DIRECTORY.parents[1]/'.github/workflows/production-release.yml').read_text()
+        block=workflow.split('      - name: Verify or maintain recoverable unused project image cache\n',1)[1]
+        return '\n'.join(line[10:] for line in block.split("          python3 - <<'PY'\n",1)[1].split('\n          PY\n',1)[0].splitlines())
+
+    @contextlib.contextmanager
+    def build(self, operation='verify_unused_cache', digest='d'*64, source=None):
+        import os
+        root=DIRECTORY.parents[1];runtime=root/'.runtime/central-capacity-control-20261012'
+        runtime.mkdir(parents=True,exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=runtime) as folder:
+            directory=Path(folder);program=directory/'scripts/production-release/maintain-image-cache.py'
+            program.parent.mkdir(parents=True);program.write_bytes(source if source is not None else (DIRECTORY/'maintain-image-cache.py').read_bytes())
+            legacy=directory/'deploy/aws/cache-cleanup-unused-legacy-20261003.json'
+            legacy.parent.mkdir(parents=True);legacy.write_bytes((root/'deploy/aws/cache-cleanup-unused-legacy-20261003.json').read_bytes())
+            (directory/'.deploy/production-release').mkdir(parents=True)
+            previous=Path.cwd()
+            try:
+                os.chdir(directory)
+                with patch.dict(os.environ,{'CACHE_OPERATION':operation,'CACHE_PLAN_SHA256':digest,
+                        'EXPECTED_CURRENT':'a'*40,'RELEASE_COMMIT':'b'*40,'GITHUB_RUN_ID':'123','GITHUB_RUN_ATTEMPT':'2'}):
+                    exec(compile(self.constructor(),'<actual-cache-workflow>','exec'),{})
+                parameters=json.loads((directory/'.deploy/production-release/unused-image-cache.json').read_bytes())
+                yield parameters,program.read_bytes()
+            finally:os.chdir(previous)
+
+    def decode(self, parameters, mutate=None):
+        import shlex
+        args=shlex.split(parameters['commands'][0]);self.assertEqual(args[:2],['python3','-c'])
+        captured=[];program=args[2] if mutate is None else mutate(args[2])
+        exec(compile(program,'<actual-cache-decoder>','exec'),{'compile':lambda raw,*unused:raw,
+            'exec':lambda raw:captured.append(raw)})
+        self.assertEqual(len(captured),1)
+        return captured[0],args[3:]
+
+    def test_actual_source_roundtrip_and_all_original_operation_arguments_fit_safe_bound(self):
+        for operation in ('verify_unused_cache','cleanup_unused_cache','verify_unused_builder_cache',
+                'cleanup_unused_builder_cache','verify_unused_legacy_cache','cleanup_unused_legacy_cache','release'):
+            with self.subTest(operation=operation),self.build(operation) as (parameters,source):
+                raw,args=self.decode(parameters);self.assertEqual(raw,source)
+                self.assertEqual(parameters['executionTimeout'],['1200'])
+                self.assertLessEqual(len(json.dumps(parameters).encode()),60*1024)
+                self.assertEqual(args[:2],['--expected-current',('b' if operation=='release' else 'a')*40])
+                self.assertEqual('--apply' in args,operation.startswith('cleanup_') or operation=='release')
+                self.assertEqual('--legacy-builder-cache' in args,'builder' in operation)
+                self.assertEqual('--legacy-plan-json' in args,'legacy_cache' in operation)
+                if operation.startswith('cleanup_'):
+                    self.assertEqual(args[-2:],['--approved-plan-sha256','d'*64])
+                if operation=='release':self.assertEqual(args[-2:],['--deployment-run','github-actions-123-2'])
+
+    def test_wrong_hash_size_truncated_or_trailing_source_never_executes(self):
+        import base64,hashlib,lzma
+        with self.build() as (parameters,source):
+            original=base64.b64encode(lzma.compress(source,preset=6)).decode()
+            for replacement in (base64.b64encode(lzma.compress(source,preset=6)[:-4]).decode(),
+                    base64.b64encode(lzma.compress(source,preset=6)+lzma.compress(b'bad')).decode()):
+                with self.subTest(case='payload'),self.assertRaises((SystemExit,ValueError,lzma.LZMAError)):
+                    self.decode(parameters,lambda text:text.replace(repr(original),repr(replacement),1))
+            for mutate in (lambda text:text.replace(hashlib.sha256(source).hexdigest(),'0'*64,1),
+                    lambda text:text.replace('len(source)!='+str(len(source)),'len(source)!='+str(len(source)+1),1)):
+                with self.subTest(case='binding'),self.assertRaises(SystemExit):self.decode(parameters,mutate)
+
+    def test_invalid_approval_and_excessive_or_empty_source_never_generate_parameters(self):
+        for source in (b'',b'x'*(2*1024*1024+1)):
+            with self.subTest(size=len(source)),self.assertRaises(SystemExit):
+                with self.build(source=source):pass
+        with self.assertRaises(SystemExit):
+            with self.build('cleanup_unused_cache',digest='invalid'):pass
+
+
+class CompleteGenericCacheEvidenceTests(unittest.TestCase):
+    def large_result(self):
+        import hashlib
+        identity=lambda value:hashlib.sha256(str(value).encode()).hexdigest()
+        dependencies={'version':1,'imageIds':['sha256:'+identity('dependency')],
+            'serviceRollback':{'api':{'status':'RETAINED','commit':'c'*40,'imageId':'sha256:'+identity('dependency')}},
+            'evidenceSha256':{'releases/20261001T000000Z-'+identity(i)[:12]+'/release-manifest.json':identity('metadata'+str(i)) for i in range(100)}}
+        inventory=[{'id':'sha256:'+identity('image'+str(i)),
+            'repoTags':[cache.REPOSITORY+':'+identity('source'+str(i))[:40]+'-123-1-api']} for i in range(60)]
+        plan=cache.make_plan('a'*40,{'commit':'b'*40},{'sha256:'+identity('protected')},inventory,dependencies)
+        return {'mode':'PLAN_ONLY','policy':cache.POLICY,'currentCommit':'a'*40,'planSha256':cache.plan_digest(plan),
+            'candidateCount':len(plan['items']),'removed':[],'freeBytesBefore':100,'freeBytesAfter':100,'plan':plan}
+
+    def test_complete_plan_over_old_18k_limit_preserves_every_item_dependency_and_canonical_sha(self):
+        value=self.large_result();self.assertGreater(len(json.dumps(value['plan']).encode()),18000)
+        output=cache.generic_cache_result_output(value)
+        self.assertLessEqual(len(output.encode()),23500)
+        decoded=cache.generic_cache_result_readback(output)
+        self.assertEqual(decoded,value)
+        self.assertEqual(decoded['planSha256'],cache.plan_digest(decoded['plan']))
+        self.assertEqual(len(decoded['plan']['dependencies']['evidenceSha256']),100)
+        self.assertEqual(len(decoded['plan']['items']),60)
+
+    def test_every_reachable_partial_prefix_has_fixed_compressed_plan_and_bounded_metadata(self):
+        import copy
+        value=self.large_result();payload=json.loads(cache.generic_cache_result_output(value))['payload']
+        for count in range(len(value['plan']['items'])+1):
+            for phase in ('VERIFY_ALL_REMOTE','CHECK_CURRENT','CHECK_DEPENDENCIES','CHECK_PROTECTED','CHECK_LOCAL',
+                          'VERIFY_ITEM_REMOTE','REMOVE_ITEM','ITEM_REMOVED','FINALIZE'):
+                current=(value['plan']['items'][count] if count<len(value['plan']['items']) else None)
+                state='ATTEMPTED_RESULT_UNCONFIRMED' if phase=='REMOVE_ITEM' else 'NOT_ATTEMPTED'
+                if phase=='ITEM_REMOVED':
+                    if count==0:continue
+                    current=value['plan']['items'][count-1];state='REMOVED'
+                if phase in ('VERIFY_ALL_REMOTE','FINALIZE'):current=None
+                result=copy.deepcopy(value);result.update(mode='FAILED',errorType='CACHE_RETENTION_CONTROL_FAILURE',
+                    removed=[item['tag'] for item in value['plan']['items'][:count]],freeBytesAfter=2**63-1,
+                    progressReceiptPersisted=False,failureReceiptPersisted=False,
+                    applyState={'phase':phase,'mutationAttempted':bool(count) or phase=='REMOVE_ITEM',
+                        'currentItem':{**current,'state':state} if current is not None else None,'removedCount':count})
+                output=cache.generic_cache_result_output(result)
+                self.assertLessEqual(len(output.encode()),23500)
+                self.assertEqual(json.loads(output)['payload'],payload)
+                self.assertEqual(cache.generic_cache_result_readback(output),result)
+
+    def test_bad_digest_size_truncation_tail_duplicate_or_plan_drift_rejects_complete_envelope(self):
+        import base64,copy,lzma
+        envelope=json.loads(cache.generic_cache_result_output(self.large_result()))
+        for kind in ('hash','size','bool-size','truncated','tail','extra','plan-drift'):
+            value=copy.deepcopy(envelope)
+            if kind=='hash':value['uncompressedSha256']='0'*64
+            elif kind=='size':value['uncompressedBytes']=cache.GENERIC_CACHE_RESULT_LIMIT+1
+            elif kind=='bool-size':value['uncompressedBytes']=True
+            elif kind=='truncated':value['payload']=base64.b64encode(base64.b64decode(value['payload'])[:-4]).decode()
+            elif kind=='tail':value['payload']=base64.b64encode(base64.b64decode(value['payload'])+lzma.compress(b'bad')).decode()
+            elif kind=='extra':value['trusted']=True
+            else:
+                changed=self.large_result();changed['plan']['items'].pop()
+                value=json.loads(cache.generic_cache_result_output(changed))
+            with self.subTest(kind=kind),self.assertRaises(RuntimeError):cache.generic_cache_result_readback(json.dumps(value))
+        with self.assertRaises(RuntimeError):cache.generic_cache_result_readback('{"mode":"PLAN_ONLY","mode":"APPLIED"}')
+
+    def test_original_small_json_and_small_applied_without_plan_remain_readable(self):
+        value=self.large_result();value['plan']['items']=[];value['plan']['dependencies']['evidenceSha256']={}
+        value.update(candidateCount=0,planSha256=cache.plan_digest(value['plan']))
+        output=cache.generic_cache_result_output(value);self.assertNotIn('payload',json.loads(output))
+        self.assertEqual(cache.generic_cache_result_readback(output),value)
+        value.update(mode='APPLIED');value.pop('plan')
+        self.assertEqual(cache.generic_cache_result_readback(json.dumps(value)),value)
+
+    def test_output_cannot_fit_refuses_before_apply_or_any_remote_mutation(self):
+        import hashlib
+        value=self.large_result()
+        value['plan']['dependencies']['evidenceSha256']={hashlib.sha256(str(i).encode()).hexdigest():hashlib.sha256(('x'+str(i)).encode()).hexdigest() for i in range(500)}
+        value['plan']['items']*=3;value.update(candidateCount=180,planSha256=cache.plan_digest(value['plan']))
+        with self.assertRaisesRegex(RuntimeError,'safe transport bound'):cache.generic_cache_result_output(value)
+        fixture=RetentionTests();fixture.setUp()
+        runtime=DIRECTORY.parents[1]/'.runtime/central-capacity-control-20261012';runtime.mkdir(parents=True,exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=runtime) as directory,patch.object(cache,'BASE',Path(directory)), \
+                patch.object(cache,'current',return_value=(fixture.manifest,fixture.previous)), \
+                patch.object(cache,'collect_dependencies',return_value=value['plan']['dependencies']), \
+                patch.object(cache,'active_images',return_value=set()),patch.object(cache,'read',return_value='') as command, \
+                patch.object(cache,'make_plan',return_value=value['plan']),patch.object(cache,'apply_plan') as apply, \
+                patch.object(cache,'verify_remote') as remote,patch.object(cache.shutil,'disk_usage',return_value=SimpleNamespace(free=100)):
+            args=SimpleNamespace(expected_current=value['currentCommit'],apply=True,approved_policy=cache.POLICY,
+                deployment_run=None,approved_plan_sha256=value['planSha256'])
+            with self.assertRaisesRegex(RuntimeError,'safe transport bound'):cache.maintain(args)
+            apply.assert_not_called();remote.assert_not_called()
+            self.assertTrue(all(call.args[:3]!=('docker','image','rm') for call in command.call_args_list))
+            self.assertFalse((Path(directory)/'maintenance').exists())
+
+    def test_process_interruption_during_atomic_progress_update_keeps_last_complete_prefix_and_plan(self):
+        fixture=RetentionTests();fixture.setUp();fixture.plan['protectedImageIds']=[]
+        runtime=DIRECTORY.parents[1]/'.runtime/central-capacity-control-20261012';runtime.mkdir(parents=True,exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=runtime) as directory:
+            original_replace=cache.os.replace
+            def replace(source,destination):
+                value=json.loads(Path(source).read_bytes())
+                if value['removed'] and value['applyState']['phase']=='CHECK_DEPENDENCIES':
+                    previous=json.loads(Path(destination).read_bytes())
+                    self.assertEqual(previous['plan'],fixture.plan);self.assertEqual(previous['removed'],[fixture.tags[0]])
+                    self.assertEqual(previous['applyState']['phase'],'CHECK_CURRENT')
+                    raise SystemExit(77)  # Emulate abrupt exit before replace, not an ordinary caught command failure.
+                return original_replace(source,destination)
+            def command(*args):
+                if args[:3]==('docker','image','ls'):return ''
+                return fixture.run_command(*args)
+            args=SimpleNamespace(expected_current=fixture.expected,apply=True,approved_policy=cache.POLICY,
+                deployment_run=None,approved_plan_sha256=cache.plan_digest(fixture.plan))
+            with patch.object(cache,'BASE',Path(directory)),patch.object(cache,'current',return_value=(fixture.manifest,fixture.previous)), \
+                    patch.object(cache,'collect_dependencies',return_value=fixture.dependencies),patch.object(cache,'active_images',return_value=set()), \
+                    patch.object(cache,'make_plan',return_value=fixture.plan),patch.object(cache,'read',side_effect=command), \
+                    patch.object(cache.shutil,'disk_usage',return_value=SimpleNamespace(free=100)),patch.object(cache.os,'replace',side_effect=replace), \
+                    contextlib.redirect_stdout(io.StringIO()) as output:
+                with self.assertRaises(SystemExit) as caught:cache.maintain(args)
+            self.assertEqual(caught.exception.code,77);self.assertEqual(output.getvalue(),'')
+            progress=list(Path(directory).rglob('*.progress.json'));self.assertEqual(len(progress),1)
+            self.assertEqual(json.loads(progress[0].read_bytes())['removed'],[fixture.tags[0]])
+            self.assertEqual(len(fixture.removals()),1)
+
+    def test_finalize_disk_failure_keeps_all_removed_and_unknown_capacity_in_complete_receipt(self):
+        fixture=RetentionTests();fixture.setUp();fixture.plan['protectedImageIds']=[]
+        runtime=DIRECTORY.parents[1]/'.runtime/central-capacity-control-20261012';runtime.mkdir(parents=True,exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=runtime) as directory:
+            def command(*args):
+                if args[:3]==('docker','image','ls'):return ''
+                return fixture.run_command(*args)
+            args=SimpleNamespace(expected_current=fixture.expected,apply=True,approved_policy=cache.POLICY,
+                deployment_run=None,approved_plan_sha256=cache.plan_digest(fixture.plan))
+            with patch.object(cache,'BASE',Path(directory)),patch.object(cache,'current',return_value=(fixture.manifest,fixture.previous)), \
+                    patch.object(cache,'collect_dependencies',return_value=fixture.dependencies),patch.object(cache,'active_images',return_value=set()), \
+                    patch.object(cache,'make_plan',return_value=fixture.plan),patch.object(cache,'read',side_effect=command), \
+                    patch.object(cache.shutil,'disk_usage',side_effect=[SimpleNamespace(free=100),OSError('private'),OSError('private')]), \
+                    contextlib.redirect_stdout(io.StringIO()) as output:
+                with self.assertRaises(SystemExit):cache.maintain(args)
+            value=cache.generic_cache_result_readback(output.getvalue());self.assertEqual(value['mode'],'FAILED')
+            self.assertEqual(value['removed'],fixture.tags);self.assertIsNone(value['freeBytesAfter'])
+            self.assertEqual(value['applyState']['phase'],'FINALIZE');self.assertIsNone(value['applyState']['currentItem'])
+            self.assertEqual(value['plan'],fixture.plan);self.assertNotIn('private',output.getvalue())
+
+    def test_real_successful_apply_exports_complete_exact_plan_progress_and_disk_result(self):
+        fixture=RetentionTests();fixture.setUp();fixture.plan['protectedImageIds']=[]
+        runtime=DIRECTORY.parents[1]/'.runtime/central-capacity-control-20261012';runtime.mkdir(parents=True,exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=runtime) as directory:
+            def command(*args):
+                if args[:3]==('docker','image','ls'):return ''
+                return fixture.run_command(*args)
+            args=SimpleNamespace(expected_current=fixture.expected,apply=True,approved_policy=cache.POLICY,
+                deployment_run=None,approved_plan_sha256=cache.plan_digest(fixture.plan))
+            with patch.object(cache,'BASE',Path(directory)),patch.object(cache,'current',return_value=(fixture.manifest,fixture.previous)), \
+                    patch.object(cache,'collect_dependencies',return_value=fixture.dependencies),patch.object(cache,'active_images',return_value=set()), \
+                    patch.object(cache,'make_plan',return_value=fixture.plan),patch.object(cache,'read',side_effect=command), \
+                    patch.object(cache.shutil,'disk_usage',side_effect=[SimpleNamespace(free=100),SimpleNamespace(free=200)]), \
+                    contextlib.redirect_stdout(io.StringIO()) as output:
+                cache.maintain(args)
+            value=cache.generic_cache_result_readback(output.getvalue());self.assertEqual(value['mode'],'APPLIED')
+            self.assertEqual(value['removed'],fixture.tags);self.assertEqual(value['plan'],fixture.plan)
+            self.assertEqual(value['applyState'],{'phase':'COMPLETE','mutationAttempted':True,'currentItem':None,'removedCount':2})
+            self.assertEqual(value['freeBytesAfter'],200)
+            progress=list(Path(directory).rglob('*.progress.json'));self.assertEqual(json.loads(progress[0].read_bytes()),value)
+            self.assertEqual(len(fixture.removals()),2)
+
+    def test_failed_receipt_write_never_makes_last_progress_claim_an_unwritten_receipt(self):
+        fixture=RetentionTests();fixture.setUp();fixture.plan['protectedImageIds']=[]
+        runtime=DIRECTORY.parents[1]/'.runtime/central-capacity-control-20261012';runtime.mkdir(parents=True,exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=runtime) as directory:
+            original_open=Path.open
+            def open_path(path,*args,**kwargs):
+                if path.name.endswith('.failed.receipt.json'):raise PermissionError('private')
+                return original_open(path,*args,**kwargs)
+            def command(*args):
+                if args[:3]==('docker','image','ls'):return ''
+                if args[:3]==('docker','image','rm') and args[-1].endswith(fixture.tags[1]):raise RuntimeError('private')
+                return fixture.run_command(*args)
+            args=SimpleNamespace(expected_current=fixture.expected,apply=True,approved_policy=cache.POLICY,
+                deployment_run=None,approved_plan_sha256=cache.plan_digest(fixture.plan))
+            with patch.object(cache,'BASE',Path(directory)),patch.object(cache,'current',return_value=(fixture.manifest,fixture.previous)), \
+                    patch.object(cache,'collect_dependencies',return_value=fixture.dependencies),patch.object(cache,'active_images',return_value=set()), \
+                    patch.object(cache,'make_plan',return_value=fixture.plan),patch.object(cache,'read',side_effect=command), \
+                    patch.object(cache.shutil,'disk_usage',return_value=SimpleNamespace(free=100)),patch.object(Path,'open',open_path), \
+                    contextlib.redirect_stdout(io.StringIO()) as output:
+                with self.assertRaises(SystemExit):cache.maintain(args)
+            value=cache.generic_cache_result_readback(output.getvalue());self.assertIs(value['failureReceiptPersisted'],False)
+            progress=list(Path(directory).rglob('*.progress.json'));self.assertEqual(json.loads(progress[0].read_bytes()),value)
+            self.assertEqual(value['removed'],[fixture.tags[0]]);self.assertEqual(len(fixture.removals()),1)
+            self.assertFalse(list(Path(directory).rglob('*.failed.receipt.json')))
+            self.assertNotIn('private',output.getvalue())
+
+    def test_partial_delete_failure_keeps_complete_plan_exact_removed_and_unknown_attempt_receipt(self):
+        fixture=RetentionTests();fixture.setUp();fixture.plan['protectedImageIds']=[]
+        runtime=DIRECTORY.parents[1]/'.runtime/central-capacity-control-20261012';runtime.mkdir(parents=True,exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=runtime) as directory:
+            def command(*args):
+                if args[:3]==('docker','image','ls'):return ''
+                if args[:3]==('docker','image','rm') and args[-1].endswith(fixture.plan['items'][1]['tag']):
+                    raise RuntimeError('SYNTHETIC_PRIVATE_STDERR')
+                return fixture.run_command(*args)
+            args=SimpleNamespace(expected_current=fixture.expected,apply=True,approved_policy=cache.POLICY,
+                deployment_run=None,approved_plan_sha256=cache.plan_digest(fixture.plan))
+            with patch.object(cache,'BASE',Path(directory)),patch.object(cache,'current',return_value=(fixture.manifest,fixture.previous)), \
+                    patch.object(cache,'collect_dependencies',return_value=fixture.dependencies),patch.object(cache,'active_images',return_value=set()), \
+                    patch.object(cache,'make_plan',return_value=fixture.plan),patch.object(cache,'read',side_effect=command), \
+                    patch.object(cache.shutil,'disk_usage',return_value=SimpleNamespace(free=100)),contextlib.redirect_stdout(io.StringIO()) as output:
+                with self.assertRaises(SystemExit) as caught:cache.maintain(args)
+            self.assertEqual(caught.exception.code,1)
+            value=cache.generic_cache_result_readback(output.getvalue())
+            self.assertEqual(value['mode'],'FAILED');self.assertEqual(value['plan'],fixture.plan)
+            self.assertEqual(value['planSha256'],cache.plan_digest(fixture.plan))
+            self.assertEqual(value['removed'],[fixture.plan['items'][0]['tag']])
+            self.assertEqual(value['applyState']['phase'],'REMOVE_ITEM')
+            self.assertEqual(value['applyState']['currentItem'],{**fixture.plan['items'][1],'state':'ATTEMPTED_RESULT_UNCONFIRMED'})
+            self.assertNotIn('SYNTHETIC_PRIVATE',output.getvalue())
+            receipts=list(Path(directory).rglob('*.failed.receipt.json'));self.assertEqual(len(receipts),1)
+            self.assertEqual(json.loads(receipts[0].read_text()),value)
+            progress=list(Path(directory).rglob('*.progress.json'));self.assertEqual(len(progress),1)
+            self.assertEqual(json.loads(progress[0].read_text()),value)
+
+
+class FailedOnlineRecoveryDependencyTests(unittest.TestCase):
+    def setUp(self):
+        import base64, copy, hashlib
+        self.policy=copy.deepcopy(cache.FAILED_ONLINE_RECOVERY_DEPENDENCY)
+        self.native=json.loads(base64.b64decode(self.policy['nativeInvocationBase64']))
+        self.proof=json.loads(base64.b64decode(self.policy['buildProofBase64']))
+        self.failure=(json.dumps(json.loads(self.native['StandardOutputContent']),indent=2)+'\n').encode()
+        self.assertEqual(hashlib.sha256(self.failure).hexdigest(),'a1174623f13b3801b8fbea6b03387b03531f8164755a34fb785561006193d160')
+        runtime=DIRECTORY.parents[1]/'.runtime/central-capacity-control-20261012';runtime.mkdir(parents=True,exist_ok=True)
+        temporary=tempfile.TemporaryDirectory(dir=runtime);self.addCleanup(temporary.cleanup)
+        self.base=Path(temporary.name).resolve()
+        patcher=patch.object(cache,'BASE',self.base);patcher.start();self.addCleanup(patcher.stop)
+        self.target=self.base/'releases/20261011T174625Z-08419dcbe852';self.target.mkdir(parents=True)
+        self.old=self.base/'releases/20261011T132910Z-31d2c6885a45';self.old.mkdir()
+        (self.base/'current').symlink_to(self.old)
+        self.old_compose={'services':{'api':{'image':'original-api','pull_policy':'never'},'mysql':{'image':'mysql:8.4'}}}
+        (self.old/'compose.release.json').write_text(json.dumps(self.old_compose))
+        self.compose=copy.deepcopy(self.old_compose)
+        self.compose['services'].update({name:{'image':image['reference'],'pull_policy':'never'} for name,image in self.proof['images'].items()})
+        (self.target/'compose.release.json').write_text(json.dumps(self.compose))
+        (self.target/'online-recharge-failure.json').write_bytes(self.failure)
+        # A synthetic complete compose fixture is explicit; it grants no production qualification.
+        self.policy['composeSha256']=hashlib.sha256((self.target/'compose.release.json').read_bytes()).hexdigest()
+        self.commands=[]
+    def command(self,*args):
+        self.commands.append(args)
+        self.assertEqual(args[:5],('docker','image','inspect','--format','{{.Id}}'))
+        return next(image['imageId'] for image in self.proof['images'].values() if image['reference']==args[-1])
+    def collect(self):
+        evidence={}
+        with patch.object(cache,'FAILED_ONLINE_RECOVERY_DEPENDENCY',self.policy),patch.object(cache,'read',side_effect=self.command):
+            images=cache.failed_online_recovery_dependencies(evidence)
+        return images,evidence
+    def test_exact_official_four_images_protected_with_complete_unchanged_failure_and_original_compose(self):
+        import hashlib
+        images,evidence=self.collect()
+        self.assertEqual(images,{image['imageId'] for image in self.proof['images'].values()})
+        self.assertEqual(len(images),4);self.assertEqual(len(self.commands),4)
+        self.assertEqual(evidence[str((self.target/'online-recharge-failure.json').relative_to(self.base))],hashlib.sha256(self.failure).hexdigest())
+        self.assertEqual(evidence[str((self.target/'compose.release.json').relative_to(self.base))],self.policy['composeSha256'])
+        inventory=[{'id':image['imageId'],'repoTags':[image['reference']]} for image in self.proof['images'].values()]
+        self.assertEqual(cache.make_plan('a'*40,{'commit':'b'*40},images,inventory,{'version':1,'imageIds':sorted(images),'serviceRollback':{},'evidenceSha256':evidence})['items'],[])
+    def test_missing_policy_wrong_native_proof_compose_failure_or_claim_rejects_before_docker(self):
+        import base64,copy
+        original=copy.deepcopy(self.policy)
+        for kind in ('none','native','proof','compose','failure','claim','version-bool','wrong-old'):
+            self.policy=copy.deepcopy(original)
+            (self.target/'online-recharge-failure.json').write_bytes(self.failure)
+            (self.old/'compose.release.json').write_text(json.dumps(self.old_compose))
+            if kind=='none':self.policy=None
+            elif kind=='native':self.policy['nativeInvocationBase64']=base64.b64encode(b'{}').decode()
+            elif kind=='proof':self.policy['buildProofBase64']=base64.b64encode(b'{}').decode()
+            elif kind=='compose':self.policy['composeSha256']='0'*64
+            elif kind=='failure':(self.target/'online-recharge-failure.json').write_bytes(self.failure+b'\n')
+            elif kind=='claim':self.policy['imageIds']=['sha256:'+'f'*64]
+            elif kind=='version-bool':self.policy['version']=True
+            elif kind=='wrong-old':(self.old/'compose.release.json').write_text(json.dumps({'services':{}}))
+            with self.subTest(kind=kind),self.assertRaises(RuntimeError):self.collect()
+            self.assertEqual(self.commands,[])
+    def test_absent_exact_target_does_not_require_policy_or_block_unaffected_metadata(self):
+        (self.target/'online-recharge-failure.json').unlink();(self.target/'compose.release.json').unlink();self.target.rmdir()
+        with self.assertRaisesRegex(RuntimeError,'Declared failed ONLINE recovery evidence unavailable'):self.collect()
+        self.policy=None
+        self.assertEqual(self.collect(),(set(),{}));self.assertEqual(self.commands,[])
+        fixture=DependencyRetentionTests();fixture.setUp();self.addCleanup(fixture.doCleanups)
+        with patch.object(cache,'failed_online_recovery_dependencies',side_effect=AssertionError('wrong baseline')):
+            result=fixture.collect()
+        self.assertEqual(set(result['imageIds']),{fixture.ids[1],fixture.ids[3]})
+    def test_missing_or_changed_local_pending_image_rejects_without_mutation(self):
+        with patch.object(cache,'FAILED_ONLINE_RECOVERY_DEPENDENCY',self.policy),patch.object(cache,'read',return_value='sha256:'+'f'*64) as command:
+            with self.assertRaisesRegex(RuntimeError,'Required failed ONLINE recovery image'):cache.failed_online_recovery_dependencies({})
+        self.assertEqual(command.call_count,1)
+    def test_pending_compose_drift_blocks_before_first_delete_even_with_unchanged_containers(self):
+        fixture=RetentionTests();fixture.setUp()
+        fixture.dependencies['evidenceSha256']={'releases/20261011T174625Z-08419dcbe852/compose.release.json':self.policy['composeSha256']}
+        fixture.plan=cache.make_plan(fixture.expected,fixture.previous,{'live'},fixture.inventory,fixture.dependencies)
+        drift=json.loads(json.dumps(fixture.dependencies));drift['evidenceSha256'][next(iter(drift['evidenceSha256']))]='f'*64
+        with patch.object(cache,'current',return_value=(fixture.manifest,fixture.previous)),patch.object(cache,'active_images',return_value=set()), \
+                patch.object(cache,'collect_dependencies',return_value=drift),patch.object(cache,'read',side_effect=fixture.run_command):
+            with self.assertRaisesRegex(RuntimeError,'Reviewed image dependencies changed'):cache.apply_plan(fixture.plan)
+        self.assertEqual(fixture.removals(),[])
+
+
+class GenericWorkflowResultTests(unittest.TestCase):
+    def accepted_program(self):
+        workflow=(DIRECTORY.parents[1]/'.github/workflows/production-release.yml').read_text()
+        source=workflow.split("python3 - <<'PY_CACHE_ACCEPTED'\n",1)[1].split('          PY_CACHE_ACCEPTED',1)[0]
+        return '\n'.join(line[10:] if line.startswith(' '*10) else line for line in source.splitlines())
+    def result_program(self):
+        workflow=(DIRECTORY.parents[1]/'.github/workflows/production-release.yml').read_text()
+        source=workflow.split("python3 - <<'PY_CACHE_RESULT'\n",1)[1].split('          PY_CACHE_RESULT',1)[0]
+        return '\n'.join(line[10:] if line.startswith(' '*10) else line for line in source.splitlines())
+    def save(self,stdout,status='Success',code=0,operation='verify_unused_cache'):
+        import os
+        runtime=DIRECTORY.parents[1]/'.runtime/central-capacity-control-20261012';runtime.mkdir(parents=True,exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=runtime) as temporary:
+            root=Path(temporary);(root/'scripts/production-release').mkdir(parents=True);(root/'.deploy/production-release').mkdir(parents=True)
+            (root/'scripts/production-release/maintain-image-cache.py').write_bytes((DIRECTORY/'maintain-image-cache.py').read_bytes())
+            native={'CommandId':'11111111-1111-1111-1111-111111111111','Status':status,'ResponseCode':code,'ExecutionStartDateTime':'2026-10-12T00:00:00Z','ExecutionEndDateTime':'2026-10-12T00:00:01Z','StandardOutputContent':stdout}
+            (root/'.deploy/production-release/unused-image-cache-invocation.json').write_text(json.dumps(native))
+            (root/'.deploy/production-release/unused-image-cache.json').write_bytes(b'{"fixtureRequest":true}')
+            before=Path.cwd()
+            try:
+                os.chdir(root)
+                try:value=cache.generic_cache_result_readback(stdout)
+                except Exception:value={}  # Let the real workflow decoder reject the already accepted fixture.
+                expected=value.get('currentCommit') or value.get('plan',{}).get('expectedCurrent')
+                with patch.dict(os.environ,{'CACHE_COMMAND_ID':native['CommandId'],'CACHE_OPERATION':operation,
+                        'EXPECTED_CURRENT':expected or 'a'*40,'RELEASE_COMMIT':expected or 'a'*40,'CACHE_PLAN_SHA256':value.get('planSha256',''),
+                        'GITHUB_RUN_ID':'123','GITHUB_RUN_ATTEMPT':'1','PRODUCTION_INSTANCE_ID':'i-synthetic'}),contextlib.redirect_stdout(io.StringIO()) as output:
+                    exec(compile(self.accepted_program(),'<actual-workflow-accepted>','exec'),{})
+                    accepted=root/'.deploy/production-release/unused-image-cache-accepted-command.json'
+                    record=json.loads(accepted.read_bytes());self.assertEqual(record['commandId'],native['CommandId'])
+                    self.assertEqual(record['status'],'ACCEPTED_RESULT_UNKNOWN')
+                    self.assertEqual(record['sourceSha256'],cache.hashlib.sha256((DIRECTORY/'maintain-image-cache.py').read_bytes()).hexdigest())
+                    try:exec(compile(self.result_program(),'<actual-workflow-save>','exec'),{})
+                    except Exception:
+                        self.assertTrue(accepted.is_file())
+                        self.assertTrue((root/'.deploy/production-release/unused-image-cache-invocation.json').is_file())
+                        raise
+                return json.loads((root/'.deploy/production-release/unused-image-cache-result.json').read_bytes()),json.loads(output.getvalue())
+            finally:os.chdir(before)
+    def test_actual_legacy_cleanup_stdout_is_saved_by_real_workflow_decoder_without_changing_executor(self):
+        fixture=ObsoleteCacheTests();fixture.setUp();fixture.args.apply=True
+        runtime=DIRECTORY.parents[1]/'.runtime/central-capacity-control-20261012';runtime.mkdir(parents=True,exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=runtime) as directory,patch.object(cache,'BASE',Path(directory)), \
+                patch.object(cache,'current',return_value=(fixture.live,fixture.previous)),patch.object(cache,'active_images',return_value=set()), \
+                patch.object(cache,'read',side_effect=fixture.command),contextlib.redirect_stdout(io.StringIO()) as output:
+            cache.maintain_legacy(fixture.args)
+        value,binding=self.save(output.getvalue(),operation='cleanup_unused_legacy_cache');self.assertEqual(value['policy'],cache.LEGACY_POLICY)
+        self.assertEqual(value['removed'],[command[-1] for command in fixture.removals()])
+        self.assertEqual(binding['nativeStatus'],'Success');self.assertEqual(binding['responseCode'],0)
+        for changed in (output.getvalue().replace('OBSOLETE_CACHE_REMOVED ','CACHE_IMAGE_REMOVED ',1),
+                        'ARBITRARY_PRIVATE_LOG\n'+output.getvalue(),output.getvalue().replace('OBSOLETE_CACHE_REMOVED ', 'OBSOLETE_CACHE_REMOVED foreign:',1)):
+            with self.subTest(case=changed[:30]),self.assertRaises(RuntimeError):self.save(changed,operation='cleanup_unused_legacy_cache')
+    def test_complete_plan_envelope_failure_and_native_mismatch_are_saved_or_rejected_exactly(self):
+        value=CompleteGenericCacheEvidenceTests().large_result()
+        decoded,binding=self.save(cache.generic_cache_result_output(value));self.assertEqual(decoded,value)
+        self.assertEqual(binding['completeResultSha256'],cache.plan_digest(value))
+        for bad in ('','{truncated'):
+            with self.subTest(stdout=bad),self.assertRaises((RuntimeError,ValueError)):self.save(bad,'Failed',1)
+        for status,code in [('Success',1),('InProgress',-1)]:
+            with self.subTest(status=status),self.assertRaises(RuntimeError):self.save(cache.generic_cache_result_output(value),status,code)
 
 
 if __name__ == '__main__':
