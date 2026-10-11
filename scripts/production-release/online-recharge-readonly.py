@@ -412,9 +412,10 @@ def _pending_workspace_selected():
 
 
 def _pending_workspace_modules():
-    controller = SimpleNamespace(**runpy.run_path(str(Path(__file__).with_name('remote-deploy.py'))))
+    source = Path(__file__).absolute()
+    controller = SimpleNamespace(**runpy.run_path(str(source.with_name('remote-deploy.py'))))
     scope = controller.online_recharge_scope()[0]
-    decoder = runpy.run_path(str(Path(__file__).with_name('api-admin-pending-receipt-wire.py')))['decode_receipt_output']
+    decoder = runpy.run_path(str(source.with_name('api-admin-pending-receipt-wire.py')))['decode_receipt_output']
     return controller, scope, decoder
 
 
