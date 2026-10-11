@@ -1,9 +1,11 @@
 """Retain live/rollback images and remove recoverable project release caches only."""
 import argparse
 import ast
+import base64
 import fcntl
 import hashlib
 import json
+import lzma
 import os
 from pathlib import Path
 import re
@@ -15,6 +17,10 @@ import time
 BASE = Path('/opt/id-business-v2')
 REPOSITORY = '079740175286.dkr.ecr.ap-northeast-1.amazonaws.com/id-business-v2-release'
 POLICY = 'current-service-rollback-explicit-dependencies-ecr-cache-v2'
+GENERIC_CACHE_RESULT_LIMIT = 512 * 1024
+GENERIC_CACHE_OUTPUT_LIMIT = 23500
+# Filled only from this failed release's official native/proof and actual compose bytes.
+FAILED_ONLINE_RECOVERY_DEPENDENCY = {'kind': 'FAILED_ONLINE_C_RECOVERY_DEPENDENCY_V1', 'version': 1, 'nativeInvocationBase64': 'ewogICJJbnN0YW5jZUlkIjogImktMDU4MzZkYTM4NjA2ZTYzM2MiLAogICJFeGVjdXRpb25FbmREYXRlVGltZSI6ICIyMDI2LTEwLTExVDE3OjU4OjExLjk0MloiLAogICJFeGVjdXRpb25TdGFydERhdGVUaW1lIjogIjIwMjYtMTAtMTFUMTc6NDI6NDIuOTQyWiIsCiAgIlJlc3BvbnNlQ29kZSI6IDEsCiAgIlN0YXR1c0RldGFpbHMiOiAiRmFpbGVkIiwKICAiU3RhdHVzIjogIkZhaWxlZCIsCiAgIkNvbW1hbmRJZCI6ICJjMDNmZGM4YS05ZjM5LTQwZTUtODE4MS0wMDcxYjNiYzhmODkiLAogICJFeGVjdXRpb25FbGFwc2VkVGltZSI6ICJQVDE1TTI5Ljc0MVMiLAogICJTdGFuZGFyZE91dHB1dENvbnRlbnQiOiAie1wic3RhdHVzXCI6IFwiT05MSU5FX1JFQ0hBUkdFX0ZBSUxFRF9SRVNUT1JFRFwiLCBcInN0ZXBcIjogXCJzd2l0Y2hcIiwgXCJjb2RlXCI6IFwiQVBJX0FETUlOX1dPUktTUEFDRV9HVUFSRF9USU1FT1VUXCIsIFwiZXJyb3JUeXBlXCI6IFwiUnVudGltZUVycm9yXCIsIFwicm9sbGJhY2tPa1wiOiB0cnVlLCBcInJvbGxiYWNrXCI6IHtcImFwaVwiOiBcIlJFU1RPUkVEXCIsIFwiYWRtaW5cIjogXCJSRVNUT1JFRFwifSwgXCJzZXJ2aWNlc0F0dGVtcHRlZFwiOiBbXCJhZG1pblwiLCBcImFwaVwiXSwgXCJjYW5kaWRhdGVDb21taXRcIjogXCIwODQxOWRjYmU4NTIxMmEyMDM5MDZjODZjOThlNWMzYWUwNjk1ZDcyXCIsIFwicHJldmlvdXNDb21taXRcIjogXCIzMWQyYzY4ODVhNDU4MTdjZDQwZDIzZmNlOGQ2MTQ1YmM5ZjE4YWYyXCIsIFwibWlncmF0aW9uXCI6IHtcIm5hbWVcIjogXCIyMDI2MTAwOTA5MzAwMF9vbmxpbmVfcmVjaGFyZ2VcIiwgXCJzaGEyNTZcIjogXCI0NDk2NjE4MmMxYmYzODI5MGIwMWY2NjVhNGMyYzg2M2IwNTI2NzdjNWUwMDI0YjkwMDEzN2YxZDdmMTFlYjk1XCIsIFwic3RhdHVzXCI6IFwiQVBQTElFRFwiLCBcInNjaGVtYVZlcmlmaWVkXCI6IHRydWUsIFwiYXBwbGllZE1pZ3JhdGlvbnNTaGEyNTZcIjogXCI3OTJlZDYyZTM1YTMxMTBhZTFhMGU0ZGVjOWQxZDhhNjc0MzA5NzJkOGJkOWY3YjljMmY3ZmYxZDBhNjc5MDg4XCIsIFwicGVyZm9ybWVkXCI6IGZhbHNlfSwgXCJtaWdyYXRpb25BdHRlbXB0ZWRcIjogZmFsc2UsIFwiaW52ZXJzZU1pZ3JhdGlvblBlcmZvcm1lZFwiOiBmYWxzZSwgXCJtZWRpYVZvbHVtZURlbGV0ZWRcIjogZmFsc2UsIFwiY3VycmVudFBvaW50c1RvQ2FuZGlkYXRlXCI6IGZhbHNlLCBcInJlY2VpcHRQZXJzaXN0ZWRcIjogdHJ1ZX1cbiIsCiAgInN0YW5kYXJkRXJyb3JCeXRlcyI6IDM3LAogICJzdGFuZGFyZEVycm9yU2hhMjU2IjogIjA4MDI1YWRhN2I5MjdmMmIxZTNkNDFiMWE2NGM5ZDZiZmU1ODgwYTM3NTY0NWYzNDBhNDIxMzdhM2QzZGUzYjMiCn0K', 'buildProofBase64': 'ewogICJiYXNlbGluZUNvbW1pdCI6ICIzMWQyYzY4ODVhNDU4MTdjZDQwZDIzZmNlOGQ2MTQ1YmM5ZjE4YWYyIiwKICAiYmFzZWxpbmVPcmlnaW5TaGEyNTYiOiAiNGI4MWIwZDM5OGRlMGM0YjAxOTg4MDM5NTAzNTRjMjg2ZjcxMDdhOGExOWI5OWU1MTlkNTQwNDAwN2IwYzFjYSIsCiAgImNvbW1pdCI6ICIwODQxOWRjYmU4NTIxMmEyMDM5MDZjODZjOThlNWMzYWUwNjk1ZDcyIiwKICAiY29tcG9zZVNvdXJjZVNoYTI1NiI6ICI4MjUwYjBiNzRkYTkyNzFlNDI1NDQ0OGRkOTdjNTNiMzAxMjlmNmUzN2U5ZmM1MjAzY2NkMWEwMTIwMGMyNzkyIiwKICAiZW5naW5lU291cmNlU2hhMjU2IjogIjMwOWFkMzE2OTQwNDVkNDlkMjU3N2I5YmFmZTc0ZDZlNTk4ZTExMTA4NGIyYWRhN2Y5ZDFkMWJlYmEyMGVkNzMiLAogICJpbWFnZXMiOiB7CiAgICAiYWRtaW4iOiB7CiAgICAgICJmaWxlQ291bnQiOiAyNTcsCiAgICAgICJpbWFnZUlkIjogInNoYTI1Njo0Zjc3YTdmMzgzMTg3Zjk2ZWRjNTk5MDFhOWY0ZTU4OTViNTNiODYyMzM1NTdhNDFkZmEyYzRmNjhiNmEzNzFkIiwKICAgICAgInJlZmVyZW5jZSI6ICIwNzk3NDAxNzUyODYuZGtyLmVjci5hcC1ub3J0aGVhc3QtMS5hbWF6b25hd3MuY29tL2lkLWJ1c2luZXNzLXYyLXJlbGVhc2U6MDg0MTlkY2JlODUyMTJhMjAzOTA2Yzg2Yzk4ZTVjM2FlMDY5NWQ3Mi0zODE2MDEyNzM0My0xLWFkbWluIiwKICAgICAgInNoYTI1NiI6ICIzYjA1MTA0MjdkMzZiODBjMDZkMzE0NmUyZjBlZTIwN2RkODA3MDY2YmMzNDgyMmExMmY4YTBiOTY4MjZhOGJkIgogICAgfSwKICAgICJhcGkiOiB7CiAgICAgICJmaWxlQ291bnQiOiA0MzQzLAogICAgICAiaW1hZ2VJZCI6ICJzaGEyNTY6Mjk1MzllYjc4MjU4NzdlMmUzMDNjMzU2N2E0ZjRmMDBiOGRiYTg3NzMwMDFlNmRlMTcwZGU0NWYwZTM5ODdkNyIsCiAgICAgICJyZWZlcmVuY2UiOiAiMDc5NzQwMTc1Mjg2LmRrci5lY3IuYXAtbm9ydGhlYXN0LTEuYW1hem9uYXdzLmNvbS9pZC1idXNpbmVzcy12Mi1yZWxlYXNlOjA4NDE5ZGNiZTg1MjEyYTIwMzkwNmM4NmM5OGU1YzNhZTA2OTVkNzItMzgxNjAxMjczNDMtMS1hcGkiLAogICAgICAic2hhMjU2IjogIjBlOTE1NDQwMmZhZTNmNjc2MDQyN2U4NWRjMWYzNjU4MDUwYTZkMDU5YmViOTAwOWIxNDU5NTIyZDY1ZDE0NjciCiAgICB9LAogICAgIm1pZ3JhdGUiOiB7CiAgICAgICJmaWxlQ291bnQiOiA1MCwKICAgICAgImltYWdlSWQiOiAic2hhMjU2OmFhMGNkYWQ0NjFkZWQzYmI2ZDc1YzcxNmMwNTdiNWZmYzJlNzg1NDM4NTA5MzEwNzQ0YzEyMzBiODM1NDdkZDciLAogICAgICAicmVmZXJlbmNlIjogIjA3OTc0MDE3NTI4Ni5ka3IuZWNyLmFwLW5vcnRoZWFzdC0xLmFtYXpvbmF3cy5jb20vaWQtYnVzaW5lc3MtdjItcmVsZWFzZTowODQxOWRjYmU4NTIxMmEyMDM5MDZjODZjOThlNWMzYWUwNjk1ZDcyLTM4MTYwMTI3MzQzLTEtbWlncmF0ZSIsCiAgICAgICJzaGEyNTYiOiAiNDJlNWQ2N2ZhYzYyZTU0ODg5NTkxYzg1Yjk1YjdhZDI2ZDU1MmU5MTk0MjdjOTA1NzQzY2EzMTI1NDc3YjFjOSIKICAgIH0sCiAgICAib25saW5lLXJlY2hhcmdlIjogewogICAgICAiZmlsZUNvdW50IjogNjIsCiAgICAgICJpbWFnZUlkIjogInNoYTI1NjpiN2FmMzRkNjM1MTg3MTE3YjEzMzZmM2I4NzUwNWExN2IwODIwMDZiMjc1YzI4MzgwMjgwNmMzNjJlODRhNTVkIiwKICAgICAgInJlZmVyZW5jZSI6ICIwNzk3NDAxNzUyODYuZGtyLmVjci5hcC1ub3J0aGVhc3QtMS5hbWF6b25hd3MuY29tL2lkLWJ1c2luZXNzLXYyLXJlbGVhc2U6MDg0MTlkY2JlODUyMTJhMjAzOTA2Yzg2Yzk4ZTVjM2FlMDY5NWQ3Mi0zODE2MDEyNzM0My0xLW9ubGluZS1yZWNoYXJnZSIsCiAgICAgICJzaGEyNTYiOiAiNTZjZDA3YjYxYmZjYzZmOTkzZThkYzQxN2M1MTViMjRmMWVjZWM5NjM4OTQyMTg1YWVmZjk3NTY2NjRhMDY2YiIKICAgIH0KICB9LAogICJraW5kIjogIk9OTElORV9SRUNIQVJHRV9BRlRFUl9CSVRfQlVJTERfUFJPT0YiLAogICJtaWdyYXRpb24iOiB7CiAgICAiYmFzZWxpbmVGaWxlQ291bnQiOiA0NywKICAgICJiYXNlbGluZUZpbGVzU2hhMjU2IjogIjNiYWVmNGIyZTFmY2MxYjExOTRkNWZmYTAxOTdkYWJkMDllZTAxYTc1N2FiZTc0NzhlMWYzNDg4ZjgwMTlhMTQiLAogICAgIm5hbWUiOiAiMjAyNjEwMDkwOTMwMDBfb25saW5lX3JlY2hhcmdlIiwKICAgICJzY2hlbWFBZnRlclNoYTI1NiI6ICI4YWUwOWU4ODNlNzliZmI4NWNkNjVlZGJmNjMwZjJlYzAzYjZiMzk3ZWI0NmQxNzJiNGM0ZjA1NTE0YjcxNWE3IiwKICAgICJzY2hlbWFCZWZvcmVTaGEyNTYiOiAiODAwNmQzY2U2ZjBiNDRjZjYyZjNiNDdiYjdiNGEwYjE0ZDBkZGMxOGRkZjExM2E1ZGEzNGE5MDFiNjJmYjE5NyIsCiAgICAic2VlZEFmdGVyU2hhMjU2IjogIjJhN2JlY2JlOGRhMTg5YWRhZDczYjMwZDdiZmUzNjA3MGZkNDRhZTRmNjgzZjdlNGEwMTE3OGQxNGFlMDhiNWIiLAogICAgInNlZWRCZWZvcmVTaGEyNTYiOiAiYWM5OTQwYTc5NzdkZWYxZWQ2ZWFhZDM4ZWQxNTRkODE5NjNjZTZlODc3ZjAyZmZjMDcyMzRmYTYxNTkxMDk2YiIsCiAgICAic2hhMjU2IjogIjQ0OTY2MTgyYzFiZjM4MjkwYjAxZjY2NWE0YzJjODYzYjA1MjY3N2M1ZTAwMjRiOTAwMTM3ZjFkN2YxMWViOTUiCiAgfSwKICAicHJlZmxpZ2h0Qnl0ZXNTaGEyNTYiOiAiYWJhNjE0NDg0NWJlMzgzNmM0ZmU1NmExZGVmOWE3NTUwMTg2MzRmMjY3MTBiOGQxN2VjNzRiMmQyNjYwYzRkYiIsCiAgInNjb3BlIjogIk9OTElORV9SRUNIQVJHRSIsCiAgInNvdXJjZVRyZWUiOiAiYjZmZDgxY2MwYzk0YThlNTk3MWM1ZGY4YjI1NzA3MTZhMTNmYTA0MiIsCiAgInZlcnNpb24iOiAyCn0K', 'composeSha256': 'bcd2a9a6c69111c2a2fd88e82ad4d0b0e33d832f4c96f000e43fc63b209398a7'}
 IMAGE_ID = re.compile(r'sha256:[0-9a-f]{64}')
 FIXED_REGISTRATION_IDS = frozenset({
     'registration-worker-956-20261006', 'registration-worker-b8-80-20261006',
@@ -200,6 +206,72 @@ def fixed_dependencies(directory, manifest, evidence):
     return set(images.values()) | {image['digest']}
 
 
+def failed_online_recovery_dependencies(evidence):
+    """Only the exact failed C may add protections; no image claims or directory scan."""
+    directory = BASE / 'releases/20261011T174625Z-08419dcbe852'
+    if not directory.exists() and not directory.is_symlink():
+        require(FAILED_ONLINE_RECOVERY_DEPENDENCY is None, 'Declared failed ONLINE recovery evidence unavailable')
+        return set()
+    require(directory.is_dir() and directory.resolve() == directory and not directory.is_symlink(),
+            'Failed ONLINE recovery dependency path changed')
+    policy = FAILED_ONLINE_RECOVERY_DEPENDENCY
+    require(type(policy) is dict and set(policy) == {'kind', 'version', 'nativeInvocationBase64',
+        'buildProofBase64', 'composeSha256'} and policy['kind'] == 'FAILED_ONLINE_C_RECOVERY_DEPENDENCY_V1'
+        and type(policy['version']) is int and policy['version'] == 1
+        and type(policy['composeSha256']) is str and re.fullmatch('[a-f0-9]{64}', policy['composeSha256']),
+        'Failed ONLINE recovery dependency requires complete observed evidence')
+    def bound(name, digest):
+        require(type(policy[name]) is str and len(policy[name]) <= 64000, 'Failed ONLINE dependency source changed')
+        raw = base64.b64decode(policy[name], validate=True)
+        require(0 < len(raw) <= 48000 and hashlib.sha256(raw).hexdigest() == digest,
+                'Failed ONLINE dependency source changed')
+        return generic_cache_closed(raw)
+    native = bound('nativeInvocationBase64', 'fca48659f3c2e978c9e122b69ccbbff78429a98fdfc575fd0cdedc8d0d6f489b')
+    proof = bound('buildProofBase64', 'bd93b455be03da9d39dd27547abafb3a760f53a5d4b4f2809918bab2f0eb7f37')
+    failure = dependency_file(directory / 'online-recharge-failure.json', evidence, limit=16384)
+    require(hashlib.sha256(failure).hexdigest() == 'a1174623f13b3801b8fbea6b03387b03531f8164755a34fb785561006193d160',
+            'Failed ONLINE recovery receipt changed')
+    value = generic_cache_closed(failure)
+    require(type(native) is dict and native.get('CommandId') == 'c03fdc8a-9f39-40e5-8181-0071b3bc8f89'
+        and native.get('Status') == 'Failed' and type(native.get('ResponseCode')) is int and native['ResponseCode'] == 1
+        and type(native.get('StandardOutputContent')) is str
+        and plan_digest(generic_cache_closed(native['StandardOutputContent'])) == plan_digest(value)
+        == '11ebbf13b670afc207ab6268b297293e99792aadd625276acd05003c987a8bae'
+        and value.get('candidateCommit') == '08419dcbe85212a203906c86c98e5c3ae0695d72'
+        and value.get('previousCommit') == '31d2c6885a45817cd40d23fce8d6145bc9f18af2'
+        and value.get('status') == 'ONLINE_RECHARGE_FAILED_RESTORED' and value.get('step') == 'switch'
+        and value.get('migrationAttempted') is False and value.get('currentPointsToCandidate') is False,
+        'Failed ONLINE recovery native source changed')
+    require(type(proof) is dict and proof.get('kind') == 'ONLINE_RECHARGE_AFTER_BIT_BUILD_PROOF'
+        and type(proof.get('version')) is int and proof['version'] == 2
+        and proof.get('commit') == '08419dcbe85212a203906c86c98e5c3ae0695d72'
+        and proof.get('sourceTree') == 'b6fd81cc0c94a8e5971c5df8b2570716a13fa042'
+        and proof.get('baselineCommit') == value['previousCommit'] and type(proof.get('images')) is dict
+        and set(proof['images']) == {'admin', 'api', 'migrate', 'online-recharge'}, 'Failed ONLINE build proof changed')
+    compose_raw = dependency_file(directory / 'compose.release.json', evidence, limit=128 * 1024)
+    require(hashlib.sha256(compose_raw).hexdigest() == policy['composeSha256'], 'Failed ONLINE compose changed')
+    compose = generic_cache_closed(compose_raw)
+    require(type(compose) is dict and type(compose.get('services')) is dict, 'Failed ONLINE compose changed')
+    old = generic_cache_closed(dependency_file((BASE / 'current').resolve() / 'compose.release.json',
+        evidence, limit=128 * 1024))
+    require(type(old) is dict and type(old.get('services')) is dict, 'Failed ONLINE original compose changed')
+    expected = generic_cache_closed(json.dumps(old))
+    for service, image in proof['images'].items():
+        expected['services'][service] = {'image': image['reference'], 'pull_policy': 'never'}
+    require(compose == expected, 'Failed ONLINE compose differs from original plus official images')
+    images = set()
+    for service, image in proof['images'].items():
+        reference = REPOSITORY + ':08419dcbe85212a203906c86c98e5c3ae0695d72-38160127343-1-' + service
+        require(type(image) is dict and image.get('reference') == reference
+            and type(image.get('imageId')) is str and IMAGE_ID.fullmatch(image['imageId'])
+            and compose['services'].get(service) == {'image': reference, 'pull_policy': 'never'},
+            'Failed ONLINE pending image binding changed')
+        require(read('docker', 'image', 'inspect', '--format', '{{.Id}}', reference) == image['imageId'],
+                'Required failed ONLINE recovery image is unavailable')
+        images.add(image['imageId'])
+    return images
+
+
 def collect_dependencies(manifest, previous):
     evidence, rollback, images = {}, {}, set()
     directory = (BASE / 'current').resolve()
@@ -239,6 +311,8 @@ def collect_dependencies(manifest, previous):
         require(not missing, 'Rollback dependency chain exceeds reviewed bound')
     for service in missing:
         rollback[service] = {'status': 'NO_DISTINCT_PREDECESSOR'}
+    if manifest['commit'] == '31d2c6885a45817cd40d23fce8d6145bc9f18af2':
+        images |= failed_online_recovery_dependencies(evidence)
     for image in sorted(images):
         require(read('docker', 'image', 'inspect', '--format', '{{.Id}}', image) == image,
             'Required rollback or fixed dependency image is unavailable')
@@ -266,12 +340,163 @@ def make_plan(expected, previous, protected, inventory, dependencies=None):
             'protectedImageIds': sorted(protected), 'items': sorted(items, key=lambda item: item['tag'])}
     if dependencies is not None:
         plan['dependencies'] = dependencies
-    require(len(json.dumps(plan).encode()) <= 18000, 'Cache plan exceeds diagnostic output bound')
+    require(len(json.dumps(plan, sort_keys=True, separators=(',', ':'), allow_nan=False).encode())
+            <= 256 * 1024, 'Cache plan exceeds complete evidence bound')
     return plan
 
 
 def plan_digest(plan):
     return hashlib.sha256(json.dumps(plan, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
+
+
+def generic_cache_closed(raw):
+    def pairs(rows):
+        value = {}
+        for name, item in rows:
+            require(name not in value, 'Duplicate cache evidence key')
+            value[name] = item
+        return value
+    def constant(_):
+        raise RuntimeError('Non-finite cache evidence number')
+    return json.loads(raw, object_pairs_hook=pairs, parse_constant=constant)
+
+
+def generic_cache_result_output(value):
+    raw = json.dumps(value, sort_keys=True, separators=(',', ':'), allow_nan=False).encode()
+    require(0 < len(raw) <= GENERIC_CACHE_RESULT_LIMIT, 'Complete cache result exceeds evidence bound')
+    if len(raw) <= 18000:
+        return raw.decode()
+    # The immutable plan is compressed independently. Removal is always a
+    # prefix of its exact sorted items, so the wire count is lossless and bounded.
+    plan = value['plan']
+    require(value['removed'] == [item['tag'] for item in plan['items'][:len(value['removed'])]],
+            'Cache removal prefix changed')
+    plan_raw = json.dumps(plan, sort_keys=True, separators=(',', ':'), allow_nan=False).encode()
+    require(0 < len(plan_raw) <= 256 * 1024, 'Complete cache plan exceeds evidence bound')
+    envelope = {'kind': 'UNUSED_IMAGE_CACHE_COMPLETE_RESULT_V1', 'version': 1,
+        'encoding': 'lzma-base64-plan-prefix', 'uncompressedBytes': len(raw),
+        'uncompressedSha256': hashlib.sha256(raw).hexdigest(),
+        'planBytes': len(plan_raw), 'planSha256': hashlib.sha256(plan_raw).hexdigest(),
+        'payload': base64.b64encode(lzma.compress(plan_raw, preset=6)).decode('ascii'),
+        'result': {name: item for name, item in value.items() if name not in ('plan', 'removed')},
+        'removedCount': len(value['removed'])}
+    output = json.dumps(envelope, sort_keys=True, separators=(',', ':'))
+    require(len(output.encode()) <= GENERIC_CACHE_OUTPUT_LIMIT, 'Complete cache result exceeds safe transport bound')
+    return output
+
+
+def generic_cache_result_readback(output):
+    require(type(output) is str and 0 < len(output.encode()) <= 24000, 'Cache evidence output unavailable')
+    lines = output.strip().splitlines()
+    require(lines and all(line.startswith(('CACHE_IMAGE_REMOVED ', 'OBSOLETE_CACHE_REMOVED '))
+        for line in lines[:-1]), 'Cache evidence output framing changed')
+    value = generic_cache_closed(lines[-1])
+    if type(value) is dict and value.get('kind') == 'UNUSED_IMAGE_CACHE_COMPLETE_RESULT_V1':
+        require(set(value) == {'kind', 'version', 'encoding', 'uncompressedBytes', 'uncompressedSha256',
+                'planBytes', 'planSha256', 'payload', 'result', 'removedCount'}
+            and type(value['version']) is int and value['version'] == 1 and value['encoding'] == 'lzma-base64-plan-prefix'
+            and type(value['uncompressedBytes']) is int and 0 < value['uncompressedBytes'] <= GENERIC_CACHE_RESULT_LIMIT
+            and type(value['planBytes']) is int and 0 < value['planBytes'] <= 256 * 1024
+            and type(value['removedCount']) is int and 0 <= value['removedCount'] <= 500
+            and all(type(value[name]) is str and re.fullmatch('[a-f0-9]{64}', value[name])
+                for name in ('uncompressedSha256', 'planSha256'))
+            and type(value['payload']) is str and type(value['result']) is dict
+            and not {'plan', 'removed'} & set(value['result']), 'Cache evidence envelope changed')
+        try:
+            decoder = lzma.LZMADecompressor(memlimit=64 * 1024 * 1024)
+            raw = decoder.decompress(base64.b64decode(value['payload'], validate=True), max_length=value['planBytes'] + 1)
+            require(len(raw) == value['planBytes'] and decoder.eof and not decoder.unused_data
+                and hashlib.sha256(raw).hexdigest() == value['planSha256'], 'Cache evidence envelope binding changed')
+            plan = generic_cache_closed(raw)
+            require(type(plan) is dict and type(plan.get('items')) is list
+                and value['removedCount'] <= len(plan['items']), 'Cache evidence removal prefix changed')
+            result = {**value['result'], 'plan': plan,
+                'removed': [item['tag'] for item in plan['items'][:value['removedCount']]]}
+            complete = json.dumps(result, sort_keys=True, separators=(',', ':'), allow_nan=False).encode()
+            require(len(complete) == value['uncompressedBytes']
+                and hashlib.sha256(complete).hexdigest() == value['uncompressedSha256'], 'Cache evidence complete result changed')
+            value = result
+        except Exception:
+            raise RuntimeError('Cache evidence envelope binding changed') from None
+    require(type(value) is dict, 'Cache result shape changed')
+    if value.get('policy') == POLICY and value.get('mode') in ('PLAN_ONLY', 'APPLIED', 'FAILED'):
+        allowed = {'mode', 'policy', 'currentCommit', 'planSha256', 'candidateCount', 'removed',
+            'freeBytesBefore', 'freeBytesAfter', 'plan', 'applyState', 'errorType',
+            'progressReceiptPersisted', 'failureReceiptPersisted'}
+        require(set(value) <= allowed and set(value) >= allowed - {'applyState', 'errorType', 'plan', 'progressReceiptPersisted', 'failureReceiptPersisted'}
+            and type(value['candidateCount']) is int and 0 <= value['candidateCount'] <= 500
+            and type(value['removed']) is list and len(value['removed']) <= value['candidateCount']
+            and all(type(tag) is str and TAG.fullmatch(tag) for tag in value['removed'])
+            and len(set(value['removed'])) == len(value['removed'])
+            and type(value['currentCommit']) is str and re.fullmatch('[a-f0-9]{40}', value['currentCommit'])
+            and type(value['planSha256']) is str and re.fullmatch('[a-f0-9]{64}', value['planSha256'])
+            and type(value['freeBytesBefore']) is int and 0 <= value['freeBytesBefore'] <= 2**63 - 1
+            and (type(value['freeBytesAfter']) is int and 0 <= value['freeBytesAfter'] <= 2**63 - 1
+                or value['mode'] == 'FAILED' and value['freeBytesAfter'] is None), 'Cache result shape changed')
+        if 'plan' in value:
+            plan = value['plan']
+            require(type(plan) is dict and set(plan) <= {'policy', 'expectedCurrent', 'expectedPrevious', 'repository',
+                'protectedImageIds', 'items', 'dependencies'} and set(plan) >= {'policy', 'expectedCurrent',
+                'expectedPrevious', 'repository', 'protectedImageIds', 'items'}
+                and plan['policy'] == POLICY and plan['repository'] == REPOSITORY
+                and plan['expectedCurrent'] == value['currentCommit'] and plan_digest(plan) == value['planSha256']
+                and type(plan['items']) is list and len(plan['items']) == value['candidateCount']
+                and all(type(item) is dict and set(item) == {'tag', 'imageId'} and type(item['tag']) is str
+                    and TAG.fullmatch(item['tag']) and type(item['imageId']) is str and IMAGE_ID.fullmatch(item['imageId'])
+                    for item in plan['items'])
+                and len({item['tag'] for item in plan['items']}) == len(plan['items'])
+                and type(plan['expectedPrevious']) is str and re.fullmatch('[a-f0-9]{40}', plan['expectedPrevious'])
+                and type(plan['protectedImageIds']) is list and all(type(image) is str
+                    and IMAGE_ID.fullmatch(image) for image in plan['protectedImageIds'])
+                and len(set(plan['protectedImageIds'])) == len(plan['protectedImageIds'])
+                and set(value['removed']) <= {item['tag'] for item in plan['items']}, 'Complete cache plan binding changed')
+            if 'dependencies' in plan:
+                dependencies = plan['dependencies']
+                require(type(dependencies) is dict and set(dependencies) == {'version', 'imageIds', 'serviceRollback', 'evidenceSha256'}
+                    and type(dependencies['version']) is int and dependencies['version'] == 1
+                    and type(dependencies['imageIds']) is list and all(type(image) is str and IMAGE_ID.fullmatch(image)
+                        for image in dependencies['imageIds']) and len(set(dependencies['imageIds'])) == len(dependencies['imageIds'])
+                    and type(dependencies['serviceRollback']) is dict and type(dependencies['evidenceSha256']) is dict
+                    and all(type(name) is str and type(digest) is str and re.fullmatch('[a-f0-9]{64}', digest)
+                        for name, digest in dependencies['evidenceSha256'].items()), 'Cache dependency evidence changed')
+        else:
+            require(value['mode'] == 'APPLIED', 'Complete cache plan missing')  # Original small APPLIED receipt.
+        require(value['mode'] != 'FAILED' or set(value) >= {'plan', 'applyState', 'errorType'},
+                'Complete cache failure evidence missing')
+        if 'applyState' in value:
+            state = value['applyState']
+            require(type(state) is dict and set(state) == {'phase', 'mutationAttempted', 'currentItem', 'removedCount'}
+                and state['phase'] in ('INPUT', 'VERIFY_ALL_REMOTE', 'CHECK_CURRENT', 'CHECK_DEPENDENCIES',
+                    'CHECK_PROTECTED', 'CHECK_LOCAL', 'VERIFY_ITEM_REMOTE', 'REMOVE_ITEM', 'ITEM_REMOVED', 'FINALIZE', 'COMPLETE')
+                and type(state['mutationAttempted']) is bool and type(state['removedCount']) is int
+                and state['removedCount'] == len(value['removed']), 'Cache apply progress changed')
+            item = state['currentItem']
+            require(item is None or type(item) is dict and set(item) == {'tag', 'imageId', 'state'}
+                and {name: item[name] for name in ('tag', 'imageId')} in value['plan']['items']
+                and item['state'] in ('NOT_ATTEMPTED', 'ATTEMPTED_RESULT_UNCONFIRMED', 'REMOVED'),
+                'Cache apply item changed')
+            if value['mode'] == 'APPLIED':
+                require(state['phase'] == 'COMPLETE' and item is None
+                    and len(value['removed']) == value['candidateCount'], 'Cache completion changed')
+            if value['mode'] == 'FAILED':
+                require(state['phase'] != 'COMPLETE' and 'errorType' in value
+                    and value['errorType'] == 'CACHE_RETENTION_CONTROL_FAILURE',
+                    'Cache partial failure changed')
+        require(all(type(value[name]) is bool for name in ('progressReceiptPersisted', 'failureReceiptPersisted') if name in value),
+                'Cache evidence persistence changed')
+    elif value.get('status') == 'CACHE_RETENTION_FAILED':
+        require(set(value) == {'status', 'errorType', 'reason'} and all(type(v) is str for v in value.values()),
+                'Cache failure receipt changed')
+    else:
+        # Legacy/builder scopes retain their original, uncompressed dictionaries.
+        require(value.get('policy') in (LEGACY_POLICY, BUILDER_POLICY)
+            and value.get('mode') in ('PLAN_ONLY', 'APPLIED'), 'Cache result policy changed')
+    if lines[:-1]:
+        prefix = 'OBSOLETE_CACHE_REMOVED ' if value.get('policy') == LEGACY_POLICY else 'CACHE_IMAGE_REMOVED '
+        require(value.get('mode') == 'APPLIED' and value.get('policy') in (POLICY, LEGACY_POLICY)
+            and lines[:-1] == [prefix + item for item in value.get('removed', [])],
+            'Cache evidence output removal framing changed')
+    return value
 
 
 def verify_remote(plan):
@@ -379,24 +604,41 @@ def verify_deployment(manifest, deployment_run):
             'Post-release financial audit is missing or failed')
 
 
-def apply_plan(plan):
-    removed = []
+def apply_plan(plan, *, journal=None):
+    removed = [] if journal is None else journal['removed']
+    def phase(name, item=None, state=None):
+        if journal is not None:
+            journal['applyState'].update(phase=name, currentItem=({**item, 'state': state} if item is not None else None),
+                removedCount=len(removed))
+            journal['save']()
     # Remote recovery for the entire plan is checked before the first deletion.
+    phase('VERIFY_ALL_REMOTE')
     verify_remote(plan)
     for item in plan['items']:
+        phase('CHECK_CURRENT', item, 'NOT_ATTEMPTED')
         live, previous = current(plan['expectedCurrent'])
         require(live['previousCommit'] == plan['expectedPrevious'], 'Rollback baseline changed')
+        phase('CHECK_DEPENDENCIES', item, 'NOT_ATTEMPTED')
         dependencies = collect_dependencies(live, previous)
         require(dependencies == plan.get('dependencies'), 'Reviewed image dependencies changed')
+        phase('CHECK_PROTECTED', item, 'NOT_ATTEMPTED')
         protected = protected_images(live, previous, active_images(), dependencies)
         require(item['imageId'] not in protected, 'Cache became used or protected')
         reference = REPOSITORY + ':' + item['tag']
+        phase('CHECK_LOCAL', item, 'NOT_ATTEMPTED')
         require(read('docker', 'image', 'inspect', '--format', '{{.Id}}', reference) == item['imageId'],
                 'Local image identity changed')
+        phase('VERIFY_ITEM_REMOTE', item, 'NOT_ATTEMPTED')
         verify_remote({**plan, 'items': [item]})
+        if journal is not None:
+            journal['applyState']['mutationAttempted'] = True
+        phase('REMOVE_ITEM', item, 'ATTEMPTED_RESULT_UNCONFIRMED')
         read('docker', 'image', 'rm', '--no-prune', reference)
         removed.append(item['tag'])
-        print('CACHE_IMAGE_REMOVED ' + item['tag'], flush=True)
+        phase('ITEM_REMOVED', item, 'REMOVED')
+        if journal is None:
+            print('CACHE_IMAGE_REMOVED ' + item['tag'], flush=True)
+    phase('COMPLETE')
     return removed
 
 
@@ -486,6 +728,23 @@ def maintain(args):
     digest = plan_digest(plan)
     removed = []
     before = shutil.disk_usage(BASE).free
+    result = {'mode': 'APPLIED' if args.apply else 'PLAN_ONLY', 'policy': POLICY,
+        'currentCommit': args.expected_current, 'planSha256': digest, 'candidateCount': len(plan['items']),
+        'removed': removed, 'freeBytesBefore': before, 'freeBytesAfter': before, 'plan': plan}
+    if args.apply:
+        result['applyState'] = {'phase': 'INPUT', 'mutationAttempted': False, 'currentItem': None, 'removedCount': 0}
+    # Reserve enough output for every removed tag and a failure at any item before
+    # the first mutation. The complete plan and dependency evidence stay intact.
+    worst = {**result, 'mode': 'FAILED', 'freeBytesBefore': 2**63 - 1, 'freeBytesAfter': 2**63 - 1,
+        'removed': [item['tag'] for item in plan['items']], 'errorType': 'CACHE_RETENTION_CONTROL_FAILURE',
+        'progressReceiptPersisted': False, 'failureReceiptPersisted': False,
+        'applyState': {'phase': 'VERIFY_ITEM_REMOTE', 'mutationAttempted': True,
+            'currentItem': {**(max(plan['items'], key=lambda item: len(json.dumps(item))) if plan['items'] else {'tag': '', 'imageId': ''}),
+                'state': 'ATTEMPTED_RESULT_UNCONFIRMED'}, 'removedCount': len(plan['items'])}}
+    reserved_output = generic_cache_result_output(worst)
+    # Payload is fixed across all phases; maximum digits, longest item/phase/state
+    # and false booleans reserve every variable metadata field before any delete.
+    require(len(reserved_output.encode()) <= GENERIC_CACHE_OUTPUT_LIMIT - 64, 'Cache result reserve exceeds safe transport bound')
     if args.apply:
         require(args.approved_policy == POLICY, 'Explicit cache policy approval required')
         if args.deployment_run:
@@ -502,20 +761,78 @@ def maintain(args):
         with plan_path.open('x') as target:
             json.dump(plan, target, indent=2)
         plan_path.chmod(0o600)
-        removed = apply_plan(plan)
+        progress = directory / (name + '.progress.json')
+        descriptor = os.open(progress, os.O_RDWR | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+        with os.fdopen(descriptor, 'w+', encoding='utf-8') as stream:
+            identity = (os.fstat(stream.fileno()).st_dev, os.fstat(stream.fileno()).st_ino)
+            def save():
+                nonlocal identity
+                require(directory.resolve() == directory and not directory.is_symlink()
+                    and not progress.is_symlink() and (progress.stat().st_dev, progress.stat().st_ino) == identity,
+                    'Cache progress receipt changed')
+                temporary = directory / (name + '.progress-next-' + str(time.time_ns()) + '.json')
+                next_descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+                with os.fdopen(next_descriptor, 'wb') as target:
+                    next_identity = (os.fstat(target.fileno()).st_dev, os.fstat(target.fileno()).st_ino)
+                    try:
+                        target.write(json.dumps(result, sort_keys=True, separators=(',', ':'), allow_nan=False).encode())
+                        target.flush(); os.fsync(target.fileno())
+                        require(not progress.is_symlink() and (progress.stat().st_dev, progress.stat().st_ino) == identity
+                            and not temporary.is_symlink() and (temporary.stat().st_dev, temporary.stat().st_ino) == next_identity,
+                            'Cache progress receipt changed')
+                        os.replace(temporary, progress)
+                        identity = next_identity
+                        parent = os.open(directory, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+                        try:
+                            os.fsync(parent)
+                        finally:
+                            os.close(parent)
+                    finally:
+                        if temporary.exists() and not temporary.is_symlink() and (temporary.stat().st_dev, temporary.stat().st_ino) == next_identity:
+                            temporary.unlink()
+            journal = {'removed': removed, 'applyState': result['applyState'], 'save': save}
+            try:
+                result['removed'] = apply_plan(plan, journal=journal)
+                result['applyState'].update(phase='FINALIZE', currentItem=None)
+                save()
+                result['freeBytesAfter'] = shutil.disk_usage(BASE).free
+                result['applyState']['phase'] = 'COMPLETE'
+                path = directory / (name + '.receipt.json')
+                with path.open('x') as target:
+                    json.dump(result, target, indent=2)
+                path.chmod(0o600)
+                save()
+            except Exception:
+                if result['applyState']['phase'] == 'COMPLETE':
+                    result['applyState']['phase'] = 'FINALIZE'
+                result.update(mode='FAILED', errorType='CACHE_RETENTION_CONTROL_FAILURE',
+                    progressReceiptPersisted=True, failureReceiptPersisted=False)
+                try:
+                    result['freeBytesAfter'] = shutil.disk_usage(BASE).free
+                except Exception:
+                    result['freeBytesAfter'] = None
+                try:
+                    save()
+                except Exception:
+                    result['progressReceiptPersisted'] = False
+                failed = directory / (name + '.failed.receipt.json')
+                result['failureReceiptPersisted'] = True
+                try:
+                    with failed.open('x') as target:
+                        json.dump(result, target, sort_keys=True, separators=(',', ':'), allow_nan=False)
+                    failed.chmod(0o600)
+                except Exception:
+                    result['failureReceiptPersisted'] = False
+                try:
+                    save()
+                except Exception:
+                    result['progressReceiptPersisted'] = False
+                print(generic_cache_result_output(result), flush=True)
+                raise SystemExit(1) from None
     else:
         verify_remote(plan)
-    result = {'mode': 'APPLIED' if args.apply else 'PLAN_ONLY', 'policy': POLICY,
-              'currentCommit': args.expected_current, 'planSha256': digest,
-              'candidateCount': len(plan['items']), 'removed': removed,
-              'freeBytesBefore': before, 'freeBytesAfter': shutil.disk_usage(BASE).free,
-              'plan': plan}
-    if args.apply:
-        path = directory / (name + '.receipt.json')
-        with path.open('x') as target:
-            json.dump(result, target, indent=2)
-        path.chmod(0o600)
-    print(json.dumps({key: value for key, value in result.items() if key != 'plan' or not args.apply}))
+        result['freeBytesAfter'] = shutil.disk_usage(BASE).free
+    print(generic_cache_result_output(result), flush=True)
 
 
 def builder_plan(expected):
