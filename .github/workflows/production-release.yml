@@ -910,7 +910,7 @@ jobs:
           retention-days: 14
 
       - name: Diagnose storage or clean approved routine audit records
-        if: (inputs.operation == 'diagnose_storage' || inputs.operation == 'cleanup_audit' || inputs.operation == 'verify_legacy_cache' || inputs.operation == 'cleanup_legacy_cache' || inputs.operation == 'verify_release_archive_cache' || inputs.operation == 'archive_release_cache') && !(inputs.operation == 'diagnose_storage' && inputs.expected_current == '0a03fa28e6b844a18833d5c63f1de700f091fc64')
+        if: (inputs.operation == 'diagnose_storage' || inputs.operation == 'cleanup_audit' || inputs.operation == 'verify_legacy_cache' || inputs.operation == 'cleanup_legacy_cache' || inputs.operation == 'verify_release_archive_cache' || inputs.operation == 'archive_release_cache') && (inputs.operation != 'diagnose_storage' || inputs.expected_current != '0a03fa28e6b844a18833d5c63f1de700f091fc64')
         env:
           STORAGE_OPERATION: ${{ inputs.operation }}
           CACHE_PLAN_SHA256: ${{ inputs.cache_plan_sha256 }}
