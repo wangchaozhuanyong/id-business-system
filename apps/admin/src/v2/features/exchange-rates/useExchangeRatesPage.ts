@@ -198,6 +198,7 @@ export function useExchangeRatesPage() {
           { signal }
         );
         primeV2Query<ExchangeRatePageSnapshot>({
+          moduleKey: 'exchange-rates',
           scope: 'exchange-rates',
           key: getPageKey('manual'),
           data: {
@@ -209,6 +210,7 @@ export function useExchangeRatesPage() {
           }
         });
         primeV2Query<ExchangeRatePageSnapshot>({
+          moduleKey: 'exchange-rates',
           scope: 'exchange-rates',
           key: getPageKey('purchase'),
           data: {

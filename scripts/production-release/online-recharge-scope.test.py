@@ -2566,6 +2566,28 @@ class DeclarationEquivalencePureTests(unittest.TestCase):
                             for name in ('online-recharge-daemon-identity.py', 'online-recharge-daemon-listener.py',
                                          'online-recharge-daemon-socket.py')])
                     current_names.value = previous_names.value
+                if node.name == 'protected_source':
+                    # The B-only bank source adapter wraps the original grant
+                    # check. Admit exactly this guard, then compare every
+                    # historical predicate and fallback body unchanged.
+                    expected_guard = ast.parse(
+                        'if not _workspace_bank_policy_protected(d, previous, target):\n'
+                        '    grant_source_change(d, previous, target)\n').body[0]
+                    guards = [item for item in ast.walk(actual)
+                        if isinstance(item, ast.If) and isinstance(item.test, ast.UnaryOp)
+                        and isinstance(item.test.operand, ast.Call)
+                        and isinstance(item.test.operand.func, ast.Name)
+                        and item.test.operand.func.id == '_workspace_bank_policy_protected']
+                    self.assertEqual(len(guards), 1)
+                    guard = guards[0]
+                    self.assertEqual(ast.dump(guard), ast.dump(expected_guard))
+                    replacements = 0
+                    for parent in ast.walk(actual):
+                        for _, items in ast.iter_fields(parent):
+                            if isinstance(items, list) and guard in items:
+                                items[items.index(guard)] = copy.deepcopy(guard.body[0])
+                                replacements += 1
+                    self.assertEqual(replacements, 1)
                 self.assertEqual(ast.dump(node), ast.dump(actual))
         old_assigns = [ast.dump(n) for n in old.body if isinstance(n, ast.Assign)]
         current_assigns = [ast.dump(n) for n in current.body if isinstance(n, ast.Assign)

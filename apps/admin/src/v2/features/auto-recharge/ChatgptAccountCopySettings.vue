@@ -92,7 +92,12 @@ async function save() {
   try {
     const result = await bankRechargeApi.updateAccountCopySettings(submittedSuffix);
     if (sessionCoordinator.identityEpoch.value !== identityEpoch) return;
-    primeV2Query({ scope: 'auto-recharge', key: 'chatgpt-account-copy-settings', data: result });
+    primeV2Query({
+      moduleKey: 'chatgpt-accounts',
+      scope: 'auto-recharge',
+      key: 'chatgpt-account-copy-settings',
+      data: result
+    });
     if (finish()) {
       draft.open('settings', { suffix: result.suffix });
       open.value = false;

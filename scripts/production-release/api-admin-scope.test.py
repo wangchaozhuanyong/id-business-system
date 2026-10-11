@@ -5120,5 +5120,238 @@ class PendingWorkspaceColdBridgeTests(unittest.TestCase):
                 reader.online_pending_workspace_preflight_bytes.assert_not_called()
 
 
+class AfterBitWorkspaceOriginTests(unittest.TestCase):
+    """Actual B cold/F/proof/readback bodies over isolated acquisition fixtures.
+
+    Archive acquisition, historical recovery, database, images and backups are
+    synthetic. No network, Docker or production business operation is executed.
+    """
+    @contextmanager
+    def fixture(self):
+        online = workspace.online_reader(d)
+        spec = importlib.util.spec_from_file_location('online_after_bit_fixture',
+            Path(online.__file__).with_name('online-recharge-scope.test.py'))
+        fixtures = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(fixtures)
+        fixtures.RUNTIME = RUNTIME / 'online-after-bit-origin'
+        fixtures.RUNTIME.mkdir(parents=True, exist_ok=True)
+        online = fixtures.scope
+        helper = fixtures.AfterBitFormalTests()
+        with helper.fixture() as f:
+            _, raw_f, f_path = helper.preflight_and_f(f)
+            bridge = json.loads(raw_f)['baseline']
+            origin = f.base / 'releases' / ('20261011T010000Z-' + fixtures.COMMIT[:12])
+            origin.mkdir(mode=0o700)
+            for name in online._PENDING_WORKSPACE_CONTROL_NAMES:
+                path = origin / name
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes((fixtures.ROOT / name).read_bytes())
+            engine = origin / online.ENGINE_ROOT
+            engine.mkdir(parents=True)
+            (engine / 'fixture.cjs').write_text('synthetic retained engine source')
+            compose = origin / workspace.CONFIG_FILES[0]
+            compose.write_bytes((f.old / workspace.CONFIG_FILES[0]).read_bytes())
+            proof = {'kind': 'ONLINE_RECHARGE_AFTER_BIT_BUILD_PROOF', 'version': 2,
+                'scope': online.SCOPE, 'commit': fixtures.COMMIT, 'sourceTree': fixtures.TREE,
+                'baselineCommit': bridge['baselineCommit'], 'migration': dict(online.MIGRATION_IDENTITY),
+                'engineSourceSha256': online.fingerprint(online.file_inventory(f.d, engine)),
+                'composeSourceSha256': hashlib.sha256(compose.read_bytes()).hexdigest(),
+                'baselineOriginSha256': online.fingerprint(bridge),
+                'preflightBytesSha256': hashlib.sha256(raw_f).hexdigest(),
+                'images': {n: {'reference': fixtures.REPOSITORY + ':' + fixtures.COMMIT + '-124-1-' + n,
+                    'imageId': 'sha256:' + str(i) * 64, 'fileCount': 1, 'sha256': str(i) * 64}
+                    for i, n in enumerate(online.IMAGE_SERVICES, 1)}}
+            after = copy.deepcopy(bridge['services'])
+            for name in online.UPDATED:
+                after[name] = copy.deepcopy(after.get(name, after['api']))
+                after[name].update(image=proof['images'][name]['imageId'], reference=proof['images'][name]['reference'])
+            preservation = {'environment': 'synthetic', 'compose': 'synthetic', 'caddy': 'synthetic'}
+            record = {'baselineEvidence': {'onlineAfterBitOrigin': bridge,
+                    'manifestSha256': bridge['manifestBytesSha256'], 'workspaceVolume': f.volume,
+                    'workspaceOriginFiles': online.workspace_files(f.d, f.old),
+                    'workspaceBuildProofSha256': bridge['buildProofCanonicalSha256'],
+                    'migrationRecovery': bridge['migrationRecovery']},
+                'before': bridge['services'], 'after': after, 'configurationBefore': bridge['configurationAfter'],
+                'configurationAfter': f.config, 'buildProofSha256': online.fingerprint(proof),
+                'migration': {**bridge['migrationState'], 'performed': False}, 'sqliteProtectionSha256': '9' * 64,
+                'preservation': preservation, 'workspaceVolumeBefore': f.volume, 'workspaceVolumeAfter': f.volume}
+            manifest = {'commit': fixtures.COMMIT, 'sourceTree': fixtures.TREE, 'previousRelease': str(f.old),
+                'previousCommit': bridge['baselineCommit'], 'previousManifestSha256': bridge['manifestBytesSha256'],
+                'deploymentRun': 'github-actions-124-1', 'imageBuildRun': 'github-actions-124-1',
+                'servicesUpdated': list(online.UPDATED), 'newMigrations': [], 'migrationApplied': True,
+                'migrationPerformed': False, 'migrationRecovery': bridge['migrationRecovery'],
+                'dataAuditBefore': f.audit, 'dataAuditAfter': f.audit,
+                'onlineRechargePublication': {'version': 2, 'baselineOriginSha256': online.fingerprint(bridge),
+                    'sqliteProtectionSha256': record['sqliteProtectionSha256'], 'scope': online.SCOPE,
+                    'buildProofSha256': online.fingerprint(proof), 'migration': dict(online.MIGRATION_IDENTITY),
+                    'legacyWorkersPublished': False, 'configurationScope': 'ONLINE_RECHARGE_VOLUME_LOOPBACK_ONLY'}}
+            (origin / '.env.aws.production').write_bytes((f.old / '.env.aws.production').read_bytes())
+            for name in workspace.ONLINE_ORIGIN_FILES:
+                path = origin / name
+                path.parent.mkdir(parents=True, exist_ok=True)
+                if not path.exists():
+                    path.write_text('synthetic-sealed-source')
+            def save():
+                for name, value in ((online.STATE_FILE, record), (online.PROOF_FILE, proof), ('release-manifest.json', manifest)):
+                    path = origin / name
+                    path.write_text(json.dumps(value))
+                    path.chmod(0o600)
+            save()
+            (f.base / 'current').unlink(); (f.base / 'current').symlink_to(origin)
+            f.d.online_recharge_scope = lambda: (online, None)
+            calls = []
+            def archived(raw, path, selected=None):
+                calls.append((raw, path, selected))
+                return f.reader if selected else online
+            f.stack.enter_context(patch.object(workspace, 'online_after_bit_archived_module', side_effect=archived))
+            f.stack.enter_context(patch.object(online, 'configuration_hashes', return_value=f.config))
+            f.stack.enter_context(patch.object(online, 'snapshot', return_value=after))
+            f.stack.enter_context(patch.object(online, 'require_preserved', return_value=(after, preservation)))
+            for name, result in {'protected_source': None, 'candidate_recovery_source': None,
+                    'historical_guard': None, 'migration_database_state': bridge['migrationState'],
+                    'backup_receipt': None, 'workspace_backup_receipt': None, 'verify_running': None,
+                    'verify_image_content': None, '_pending_workspace_sqlite_receipt': {'backupVerified': True}}.items():
+                f.stack.enter_context(patch.object(online, name, return_value=result))
+            yield SimpleNamespace(source=f, d=f.d, online=online, origin=origin, proof=proof,
+                manifest=manifest, record=record, after=after, bridge=bridge, f_path=f_path,
+                save=save, calls=calls)
+
+    def test_archive_loader_executes_acquired_bytes_without_reopening_path(self):
+        module = workspace.online_after_bit_archived_module(b'value = 7\n', Path('/missing/source.py'), 'API_ADMIN_WORKSPACE')
+        self.assertEqual(module.value, 7)
+        self.assertEqual(module.SCOPE, 'API_ADMIN_WORKSPACE')
+
+    def test_actual_b_source_q_a_q_b_f_and_original_online_producer_reach_full_live_readback(self):
+        with self.fixture() as f:
+            with patch.object(workspace, 'online_origin_guard') as guard, \
+                    patch.object(workspace, 'online_binding', return_value=OnlineWorkspaceCompatibilityTests().context()['binding']):
+                context = workspace.online_origin(f.d, f.origin, f.manifest, f.after)
+            self.assertEqual(context['commit'], f.manifest['commit'])
+            self.assertEqual(set(context), set(OnlineWorkspaceCompatibilityTests().context()))
+            guard.assert_called_once()
+            self.assertEqual(len(f.calls), 2)
+            self.assertEqual(f.d._onlinePendingWorkspaceProducer, f.source.producer)
+            f.source.a_reader.assert_not_called()
+            f.online.verify_running.assert_called_once()
+            f.online._pending_workspace_sqlite_receipt.assert_called_once()
+
+    def test_missing_q_a_q_b_f_source_and_wrong_producer_reject_before_live_readback(self):
+        for mutation in ('q-a', 'q-b', 'f', 'source', 'run', 'producer', 'mixed-origin', 'proof-type', 'archive'):
+            with self.subTest(mutation=mutation), self.fixture() as f:
+                if mutation in ('q-a', 'q-b'):
+                    (f.source.qa if mutation == 'q-a' else f.source.qb).unlink()
+                elif mutation == 'f':
+                    f.f_path.unlink()
+                elif mutation == 'source':
+                    (f.origin / 'scripts/production-release/api-admin-scope.py').write_text('raise Exception()')
+                elif mutation == 'run':
+                    f.proof['images']['api']['reference'] = f.proof['images']['api']['reference'].replace('-124-', '-125-')
+                    f.save()
+                elif mutation == 'producer':
+                    for image in f.proof['images'].values():
+                        image['reference'] = image['reference'].replace('-124-', '-125-')
+                    f.manifest['deploymentRun'] = f.manifest['imageBuildRun'] = 'github-actions-125-1'
+                    f.save()
+                elif mutation == 'mixed-origin':
+                    f.record['baselineEvidence']['onlinePendingWorkspaceOrigin'] = f.bridge; f.save()
+                elif mutation == 'proof-type':
+                    f.proof['kind'] = 'ONLINE_RECHARGE_PENDING_WORKSPACE_BUILD_PROOF'; f.save()
+                else:
+                    f.source.inventory['scripts/production-release/api-admin-scope.py']['sha256'] = '0' * 64
+                with self.assertRaises((RuntimeError, FileNotFoundError)):
+                    workspace.online_after_bit_archived_reader(f.d, f.origin, f.manifest, f.proof)
+                f.online.verify_running.assert_not_called()
+                f.source.a_reader.assert_not_called()
+
+    def test_first_workspace_origin_requires_original_online_still_current(self):
+        with self.fixture() as f:
+            successor = f.origin.parent / ('20261011T020000Z-' + 'e' * 12)
+            successor.mkdir(mode=0o700)
+            for name in (f.online.STATE_FILE, f.online.PROOF_FILE, 'release-manifest.json'):
+                shutil.copyfile(f.origin / name, successor / name)
+            (f.source.base / 'current').unlink(); (f.source.base / 'current').symlink_to(successor)
+            with self.assertRaises(RuntimeError), patch.object(workspace, 'online_origin_guard') as guard:
+                workspace.online_origin(f.d, f.origin, f.manifest, f.after)
+            guard.assert_not_called()
+            f.online.verify_running.assert_not_called()
+            f.source.a_reader.assert_not_called()
+
+    def test_immutable_origin_revalidates_actual_f_and_qs_after_current_advances(self):
+        with self.fixture() as f:
+            successor = f.origin.parent / ('20261011T020000Z-' + 'e' * 12)
+            successor.mkdir(mode=0o700)
+            (f.source.base / 'current').unlink(); (f.source.base / 'current').symlink_to(successor)
+            reader, observed, _, _, bridge = workspace.online_after_bit_archived_reader(
+                f.d, f.origin, f.manifest, f.proof)
+            self.assertEqual(bridge, f.bridge)
+            self.assertEqual(observed._onlinePendingWorkspaceProducer['workflowRunId'], '124')
+            self.assertIs(reader, f.online)
+            self.assertEqual((f.source.base / 'current').resolve(), successor)
+            f.source.a_reader.assert_not_called()
+            f.f_path.unlink()
+            with self.assertRaises(RuntimeError):
+                workspace.online_after_bit_archived_reader(f.d, f.origin, f.manifest, f.proof)
+
+    @contextmanager
+    def successor_guard(self, f):
+        successor = f.origin.parent / ('20261011T020000Z-' + 'e' * 12)
+        shutil.copytree(f.origin, successor)
+        (f.source.base / 'current').unlink(); (f.source.base / 'current').symlink_to(successor)
+        binding = OnlineWorkspaceCompatibilityTests().context()['binding']
+        context = {'version': 1, 'release': str(f.origin), 'commit': f.manifest['commit'],
+            'manifestSha256': hashlib.sha256((f.origin / 'release-manifest.json').read_bytes()).hexdigest(),
+            'buildProofSha256': f.online.fingerprint(f.proof), 'migrationState': f.bridge['migrationState'],
+            'files': {n: hashlib.sha256((f.origin / n).read_bytes()).hexdigest()
+                for n in workspace.ONLINE_ORIGIN_FILES}, 'binding': binding}
+        with ExitStack() as stack:
+            source_guard = stack.enter_context(patch.object(workspace, 'online_source_guard', return_value=f.online))
+            stack.enter_context(patch.object(workspace, 'audit_receipt', return_value=f.source.audit))
+            stack.enter_context(patch.object(workspace, 'online_binding', return_value=binding))
+            for name, value in (('verify_environment', 'environment'), ('verify_compose', 'compose'),
+                    ('verify_caddy_projection', 'caddy')):
+                stack.enter_context(patch.object(f.online, name, return_value=f.record['preservation'][value]))
+            yield successor, context, binding, source_guard
+
+    def test_successor_guard_revalidates_original_b_without_retired_online_live_readback(self):
+        with self.fixture() as f, self.successor_guard(f) as (successor, context, _, sources):
+            self.assertEqual(workspace.online_origin_guard(f.d, successor, context), context)
+            self.assertEqual(sources.call_args_list, [unittest.mock.call(unittest.mock.ANY, f.origin),
+                unittest.mock.call(unittest.mock.ANY, successor)])
+            self.assertEqual((f.source.base / 'current').resolve(), successor)
+            f.online.verify_running.assert_not_called()
+            f.source.a_reader.assert_not_called()
+
+    def test_successor_guard_rejects_origin_receipt_engine_and_live_binding_drift(self):
+        for mutation in ('manifest', 'record', 'engine', 'binding', 'migration'):
+            with self.subTest(mutation=mutation), self.fixture() as f, \
+                    self.successor_guard(f) as (successor, context, binding, _), ExitStack() as mutations:
+                if mutation in ('manifest', 'record'):
+                    path = f.origin / ('release-manifest.json' if mutation == 'manifest' else f.online.STATE_FILE)
+                    path.write_bytes(path.read_bytes() + b'\n')
+                elif mutation == 'engine':
+                    (successor / f.online.ENGINE_ROOT / 'fixture.cjs').write_text('changed retained engine')
+                elif mutation == 'binding':
+                    observed = {**binding, 'configurationSha256': '0' * 64}
+                    mutations.enter_context(patch.object(workspace, 'online_binding', return_value=observed))
+                else:
+                    f.online.migration_database_state.return_value = {**f.bridge['migrationState'],
+                        'appliedMigrationsSha256': '0' * 64}
+                with self.assertRaisesRegex(RuntimeError, 'API_ADMIN_ONLINE_(ORIGIN|SOURCE|RUNTIME|MIGRATION)_CHANGED'):
+                    workspace.online_origin_guard(f.d, successor, context)
+                f.online.verify_running.assert_not_called()
+                f.source.a_reader.assert_not_called()
+
+    def test_retained_quick_action_rebinds_only_original_b_history_without_current_check(self):
+        with self.fixture() as f, self.successor_guard(f) as (successor, context, _, _):
+            quick_action = {'synthetic': 'existing closed quick-action context'}
+            workspace.preserved_migration_guard(f.d, successor, quick_action, context)
+            args = f.online.historical_guard.call_args.args
+            self.assertEqual(args[1:], (f.source.old,
+                {'migrationOrigin': quick_action, 'onlineAfterBitOrigin': f.bridge}, f.origin))
+            self.assertEqual(args[0]._onlinePendingWorkspaceProducer, f.source.producer)
+            f.online.verify_running.assert_not_called()
+            f.source.a_reader.assert_not_called()
+
+
 if __name__ == '__main__':
     unittest.main()

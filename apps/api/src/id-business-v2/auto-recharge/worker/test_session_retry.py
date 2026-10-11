@@ -783,6 +783,238 @@ class CookieInstallationTests(unittest.IsolatedAsyncioTestCase):
         context.add_cookies.assert_not_awaited()
 
 
+class TerminalWindowCloseTests(unittest.IsolatedAsyncioTestCase):
+    profile_id = 'a' * 32
+
+    def job(self, mode='payment'):
+        value = payload()
+        value['mode'] = mode
+        if mode != 'payment':
+            for key in ('details', 'address', 'safety', 'authorizeSinglePayment'):
+                value.pop(key)
+        job = connector.LocalJob(value)
+        job.profile_id = self.profile_id
+        job.account_key = 'b' * 64
+        job.context = object()
+        return job
+
+    def success(self):
+        return {'status': 'subscription_activated', 'payment_status': 'paid',
+                'account_matched': True, 'payment_attempted': True, 'payment_requests_sent': 1,
+                'quote': {'today': {'amount_minor': 2000, 'currency': 'PHP'}},
+                'payment_evidence': {'kind': 'checkout_session', 'identifier': 'cs_Synthetic',
+                                     'amount_minor': 2000, 'currency': 'PHP'}}
+
+    async def test_paid_recharge_and_recheck_close_process_but_keep_profile_and_result(self):
+        for mode in ('payment', 'recheck'):
+            with self.subTest(mode=mode):
+                job, result = self.job(mode), self.success()
+                job.owned_profile = {'profileId': self.profile_id, 'accountKey': job.account_key}
+                client = MagicMock(deadline=0)
+                client.post.return_value = {}
+                await bitbrowser_retry.close_terminal_window(job, client, set(), result)
+                self.assertEqual([call.args[0] for call in client.post.call_args_list],
+                                 ['/browser/close', '/browser/pids/alive'])
+                self.assertEqual(result['browser_cleanup_status'], 'closed')
+                self.assertEqual(result['status'], 'subscription_activated')
+                self.assertEqual(result['payment_status'], 'paid')
+                self.assertEqual(result['browser_profile_id'], self.profile_id)
+                self.assertEqual(job.profile_id, self.profile_id)
+                self.assertIsNotNone(job.owned_profile)
+                self.assertIsNone(job.context)
+                self.assertEqual(client.deadline, 0)
+
+    async def test_one_hundred_completed_owned_windows_close_without_profile_deletion(self):
+        client = MagicMock(deadline=0)
+        client.post.return_value = {}
+        for number in range(1, 101):
+            job, result = self.job(), self.success()
+            job.profile_id = f'{number:032x}'
+            await bitbrowser_retry.close_terminal_window(job, client, {job.profile_id}, result)
+            self.assertEqual(result['browser_profile_id'], job.profile_id)
+            self.assertEqual(result['browser_cleanup_status'], 'closed')
+        paths = [call.args[0] for call in client.post.call_args_list]
+        self.assertEqual(paths.count('/browser/close'), 100)
+        self.assertEqual(paths.count('/browser/pids/alive'), 100)
+        self.assertNotIn('/browser/delete', paths)
+
+    async def test_real_recheck_shape_closes_with_validated_original_amount_without_new_quote(self):
+        import hashlib
+        import tempfile
+        from pathlib import Path
+        from attempt_ledger import AttemptLedger
+        from browser_checkout import quote_from_text
+        from payment_state import PaymentLedger, quote_digest
+
+        runtime = Path(connector.__file__).resolve().parents[6] / '.runtime' / 'bitbrowser-recharge-assistant' / 'state'
+        runtime.mkdir(mode=0o700, parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(prefix='recheck-', dir=runtime) as folder:
+            job, client = self.job('recheck'), MagicMock(deadline=0)
+            client.post.return_value = {}
+            job.root = Path(folder)
+            target = SimpleNamespace(account_id='synthetic-account', user_id='synthetic-user', session_token='')
+            job.account_key = hashlib.sha256(target.account_id.encode()).hexdigest()
+            job.owned_profile = {'profileId': self.profile_id, 'accountKey': job.account_key}
+            quote = quote_from_text('ChatGPT Plus\nTotal due today\nMYR 92.50\nTax\nMYR 0.00\nRenews MYR 92.50 / month')
+            with AttemptLedger(job.root, target.account_id) as checkout:
+                checkout.begin()
+                checkout.finish({'checkout_identifier': 'cs_Synthetic', 'processor_entity': 'openai_ie',
+                                 'returned_currency': 'MYR', 'checkout_outcome': 'created'})
+            evidence = {'kind': 'checkout_session', 'identifier': 'cs_Synthetic',
+                        'amount_minor': 9250, 'currency': 'MYR'}
+            with PaymentLedger(job.root, target.account_id) as ledger:
+                ledger.begin(quote, confirmed_digest=quote_digest(quote), card_last4='4242')
+                ledger.update(payment_status='paid', evidence=evidence, current_plan='plus')
+            page = MagicMock(goto=AsyncMock())
+            job.context = MagicMock(route=AsyncMock(), route_web_socket=AsyncMock(),
+                                    new_page=AsyncMock(return_value=page), add_cookies=AsyncMock())
+            identity = {'session_status': 'restored', 'account_matched': True, 'current_plan': 'plus'}
+            with (patch.object(bitbrowser_retry.payment_recovery, 'check_session', AsyncMock(return_value=(None, identity))),
+                  patch.object(bitbrowser_retry.pay, 'verify_identity_again', AsyncMock(return_value=identity))):
+                _, result = await bitbrowser_retry._execute_profile_flow(job, target, SessionBudget(120))
+            self.assertEqual(result['status'], 'subscription_activated')
+            self.assertEqual(result['stage'], 'original_payment_recheck')
+            self.assertEqual(result['payment_requests_sent'], 0)
+            self.assertNotIn('quote', result)
+            self.assertEqual(job.verified_recheck_payment, ('checkout_session', 'cs_Synthetic', 9250, 'MYR'))
+            await bitbrowser_retry.close_terminal_window(job, client, set(), result)
+            self.assertEqual(result['browser_cleanup_status'], 'closed')
+            self.assertEqual(result['payment_evidence'], evidence)
+            self.assertNotIn('quote', result)
+            self.assertEqual([call.args[0] for call in client.post.call_args_list],
+                             ['/browser/close', '/browser/pids/alive'])
+            job.release_resources()
+            self.assertIsNone(job.verified_recheck_payment)
+
+    async def test_quote_less_recheck_without_exact_original_binding_keeps_window(self):
+        original = ('checkout_session', 'cs_Synthetic', 2000, 'PHP')
+        for mode, binding, changed in (
+                ('recheck', None, {}),
+                ('recheck', ('checkout_session', 'cs_Other', 2000, 'PHP'), {}),
+                ('recheck', ('checkout_session', 'cs_Synthetic', 2100, 'PHP'), {}),
+                ('recheck', ('checkout_session', 'cs_Synthetic', 2000, 'MYR'), {}),
+                ('payment', original, {}),
+                ('recheck', original, {'stage': 'payment_result'}),
+                ('recheck', original, {'account_matched': False}),
+                ('recheck', original, {'quote': {'today': {'amount_minor': 2100, 'currency': 'PHP'}}})):
+            with self.subTest(mode=mode, binding=binding, changed=changed):
+                job, client, result = self.job(mode), MagicMock(), self.success()
+                result.pop('quote')
+                result.update({'stage': 'original_payment_recheck', **changed})
+                job.verified_recheck_payment = binding
+                await bitbrowser_retry.close_terminal_window(job, client, {self.profile_id}, result)
+                client.post.assert_not_called()
+                self.assertNotIn('browser_cleanup_status', result)
+
+    async def test_cancel_before_window_exists_reports_no_cleanup_needed(self):
+        job, client = self.job(), MagicMock()
+        job.profile_id = None
+        job.signal_cancel()
+        with patch.object(bitbrowser_retry, '_execute_profiles', AsyncMock(side_effect=Stop('operation_cancelled'))):
+            result = await bitbrowser_retry.execute_profiles(job, client, None, None)
+        self.assertEqual(result['browser_cleanup_status'], 'not_needed')
+        self.assertEqual(result['browser_profile_id'], '')
+        self.assertTrue(result['cancellation_confirmed'])
+        client.post.assert_not_called()
+
+    async def test_execute_profiles_integrates_close_only_without_changing_paid_result(self):
+        job, client = self.job(), MagicMock(deadline=0)
+        client.post.return_value = {}
+        async def execute(_job, _client, _target, _playwright, owned):
+            owned.add(self.profile_id)
+            return self.success()
+        with patch.object(bitbrowser_retry, '_execute_profiles', execute):
+            result = await bitbrowser_retry.execute_profiles(job, client, None, None)
+        self.assertEqual(result['status'], 'subscription_activated')
+        self.assertEqual(result['browser_profile_id'], self.profile_id)
+        self.assertEqual(result['browser_cleanup_status'], 'closed')
+        self.assertEqual([call.args[0] for call in client.post.call_args_list],
+                         ['/browser/close', '/browser/pids/alive'])
+
+    async def test_only_login_human_verification_and_unknown_payment_keep_window(self):
+        cases = [
+            ('open_browser', {'status': 'session_ready', 'account_matched': True}),
+            ('payment', {'status': 'verification_required', 'user_action_required': True}),
+            ('payment', {'status': 'payment_result_unknown', 'payment_attempted': True,
+                         'payment_status': 'unknown', 'payment_requests_sent': 1}),
+            ('payment', {'status': 'blocked', 'payment_attempted': False,
+                         'payment_status': 'unknown', 'payment_requests_sent': 0}),
+            ('payment', {'status': 'blocked'}),
+            ('payment', {'status': 'blocked', 'reason': 'bitbrowser_cleanup_unverified',
+                         'payment_attempted': False, 'payment_requests_sent': 0}),
+            ('payment', {'status': 'blocked', 'reason': 'official_account_mismatch',
+                         'payment_attempted': False, 'payment_requests_sent': 0}),
+            ('payment', {**self.success(), 'payment_evidence': None}),
+            ('payment', {**self.success(), 'payment_evidence': {
+                **self.success()['payment_evidence'], 'amount_minor': 2100}}),
+        ]
+        for mode, result in cases:
+            with self.subTest(mode=mode, status=result['status']):
+                job, client = self.job(mode), MagicMock()
+                await bitbrowser_retry.close_terminal_window(job, client, {self.profile_id}, result)
+                client.post.assert_not_called()
+                self.assertIsNotNone(job.context)
+
+    async def test_unowned_or_mismatched_account_profile_is_never_closed(self):
+        for ownership in (None, {'profileId': self.profile_id, 'accountKey': 'c' * 64}):
+            with self.subTest(ownership=ownership):
+                job, client, result = self.job(), MagicMock(), self.success()
+                job.owned_profile = ownership
+                await bitbrowser_retry.close_terminal_window(job, client, set(), result)
+                client.post.assert_not_called()
+
+    async def test_explicit_no_payment_failure_and_decline_close_only_owned_process(self):
+        for result in (
+                {'status': 'blocked', 'reason': 'session_network_error', 'payment_attempted': False,
+                 'payment_requests_sent': 0},
+                {'status': 'already_subscribed', 'payment_attempted': False, 'payment_requests_sent': 0},
+                {'status': 'payment_failed', 'account_matched': True, 'payment_status': 'declined',
+                 'payment_attempted': True, 'payment_requests_sent': 1}):
+            with self.subTest(status=result['status']):
+                job, client = self.job(), MagicMock(deadline=0)
+                client.post.return_value = {}
+                original = dict(result)
+                await bitbrowser_retry.close_terminal_window(job, client, {self.profile_id}, result)
+                self.assertEqual(result['browser_cleanup_status'], 'closed')
+                self.assertEqual({key: result[key] for key in original}, original)
+
+    async def test_window_close_failure_does_not_replace_verified_payment_success(self):
+        for failure in (Stop('bitbrowser_local_api_unavailable'), RuntimeError('synthetic-private')):
+            with self.subTest(error_type=type(failure).__name__):
+                job, result = self.job(), self.success()
+                client = MagicMock(deadline=0)
+                client.post.side_effect = failure
+                original = dict(result)
+                await bitbrowser_retry.close_terminal_window(job, client, {self.profile_id}, result)
+                self.assertEqual(result['browser_cleanup_status'], 'close_failed')
+                self.assertEqual({key: result[key] for key in original}, original)
+                self.assertEqual(result['browser_profile_id'], self.profile_id)
+                self.assertNotIn('synthetic-private', json.dumps(result))
+
+    async def test_running_pid_is_polled_and_unconfirmed_exit_is_reported_separately(self):
+        for confirmed in (True, False):
+            with self.subTest(confirmed=confirmed):
+                job, result = self.job(), self.success()
+                clock = Clock()
+                client = MagicMock(deadline=0)
+                polls = []
+                def post(path, _body):
+                    if path == '/browser/pids/alive':
+                        polls.append(path)
+                        if confirmed and len(polls) == 2:
+                            return {}
+                        clock.now += 8
+                        return {self.profile_id: 12345}
+                    return {}
+                client.post.side_effect = post
+                with (patch.object(bitbrowser_retry, 'time', SimpleNamespace(monotonic=clock)),
+                      patch.object(bitbrowser_retry.asyncio, 'sleep', AsyncMock())):
+                    await bitbrowser_retry.close_terminal_window(job, client, {self.profile_id}, result)
+                self.assertEqual(result['browser_cleanup_status'], 'closed' if confirmed else 'close_failed')
+                self.assertEqual(result['status'], 'subscription_activated')
+                self.assertEqual(client.deadline, 0)
+
+
 class WindowRetryTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
         from bitbrowser_options import DEFAULTS
@@ -974,7 +1206,8 @@ class WindowRetryTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(result['reason'], report['reason'])
                 self.assertEqual(flow.await_count, 1)
                 self.assert_same_profile(1)
-                self.assertEqual(self.paths(), [])
+                self.assertEqual(self.paths(), ['/browser/close', '/browser/pids/alive'])
+                self.assertEqual(result['browser_cleanup_status'], 'closed')
 
     async def test_auth_verification_unknown_writes_and_confirmation_never_rotate(self):
         for changed in ({'reason': 'access_token_expired'}, {'reason': 'json_session_not_restored'},
@@ -991,7 +1224,9 @@ class WindowRetryTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(result['reason'], report['reason'])
                 self.assert_same_profile(1)
                 self.assertEqual(flow.await_count, 1)
-                self.assertEqual(self.paths(), [])
+                safely_closed = (changed.get('reason') in {'access_token_expired', 'json_session_not_restored'}
+                                 or 'checkout_requests_sent' in changed)
+                self.assertEqual(self.paths(), ['/browser/close', '/browser/pids/alive'] if safely_closed else [])
 
     async def test_zero_retries_retains_first_network_failure(self):
         self.job.payload['bitBrowser']['browserOptions']['sessionRetryLimit'] = 0
@@ -1004,7 +1239,8 @@ class WindowRetryTests(unittest.IsolatedAsyncioTestCase):
         result, _, _ = await self.execute([self.network()])
         self.assertEqual(result['session_attempt_limit'], 1)
         self.assert_same_profile(1)
-        self.assertEqual(self.paths(), [])
+        self.assertEqual(self.paths(), ['/browser/close', '/browser/pids/alive'])
+        self.assertEqual(result['browser_cleanup_status'], 'closed')
 
     async def test_failed_preflight_reextracts_before_session_or_checkout(self):
         self.probe.side_effect = [Stop('proxy_network_error'), {'observed_country': 'US'}]
@@ -1063,7 +1299,7 @@ class WindowRetryTests(unittest.IsolatedAsyncioTestCase):
         result, flow, _ = await self.execute(pending)
         self.assertTrue(stopped.is_set())
         self.assertEqual(flow.await_count, 1)
-        self.assertEqual(result['browser_cleanup_status'], 'not_needed')
+        self.assertEqual(result['browser_cleanup_status'], 'closed')
         self.assertTrue(result['cancellation_confirmed'])
         self.assert_same_profile(1)
         self.assertEqual(result['browser_profile_id'], 'a' * 32)
@@ -1082,7 +1318,7 @@ class WindowRetryTests(unittest.IsolatedAsyncioTestCase):
             return failure(reason='operation_cancelled')
         self.client.post.side_effect = Stop('bitbrowser_local_api_unavailable')
         result, _, _ = await self.execute(cancelled)
-        self.assertEqual(result['browser_cleanup_status'], 'failed')
+        self.assertEqual(result['browser_cleanup_status'], 'close_failed')
         self.assertEqual(result['reason'], 'bitbrowser_cleanup_unverified')
         self.assert_same_profile(1)
 

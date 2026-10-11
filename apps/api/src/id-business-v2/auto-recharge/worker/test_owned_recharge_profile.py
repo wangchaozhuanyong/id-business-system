@@ -104,7 +104,7 @@ class OwnedRechargeProfileTests(unittest.IsolatedAsyncioTestCase):
         self.client.post.return_value = {}
         with patch.object(retry, '_execute_profiles', AsyncMock(side_effect=Stop('operation_cancelled'))):
             result = await retry.execute_profiles(self.job, self.client, self.target, self.playwright)
-        self.assertEqual(result['browser_cleanup_status'], 'not_needed')
+        self.assertEqual(result['browser_cleanup_status'], 'closed')
         self.assertEqual([call.args[0] for call in self.client.post.call_args_list],
                          ['/browser/close', '/browser/pids/alive'])
         self.assertEqual(self.job.profile_id, self.profile['profileId'])

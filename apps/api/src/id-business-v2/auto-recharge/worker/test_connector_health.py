@@ -4,6 +4,7 @@ import unittest
 from unittest.mock import MagicMock, patch
 
 import bitbrowser_connector as connector
+from test_bitbrowser_connector import payload
 from checkout_core import Stop
 
 
@@ -35,12 +36,19 @@ class ConnectorHealthTests(unittest.TestCase):
             start.assert_not_called()
 
     def test_health_reports_disallowed_origin_and_busy_job(self):
-        handler = self.handler()
-        handler.headers = {'Origin': 'https://other.example'}
-        with patch.object(connector.REGISTRY, 'jobs', {'fixture': MagicMock(done=False)}):
-            handler.do_GET()
-        self.assertFalse(handler.reply.call_args.args[1]['originAllowed'])
-        self.assertTrue(handler.reply.call_args.args[1]['busy'])
+        # A full job stays busy until its run wrapper has retired it, including
+        # the interval between done=True and the finished callback returning.
+        for done in (False, True):
+            with self.subTest(done=done):
+                handler = self.handler()
+                handler.headers = {'Origin': 'https://other.example'}
+                job = connector.LocalJob(payload())
+                job.done = done
+                with patch.object(connector.REGISTRY, 'jobs', {job.id: job}):
+                    handler.do_GET()
+                self.assertFalse(handler.reply.call_args.args[1]['originAllowed'])
+                self.assertTrue(handler.reply.call_args.args[1]['busy'])
+                job.release_resources()
 
     def test_origin_and_token_rejections_never_start_a_job_or_echo_credentials(self):
         for origin, reason in [('https://other.example', 'connector_origin_not_allowed'),

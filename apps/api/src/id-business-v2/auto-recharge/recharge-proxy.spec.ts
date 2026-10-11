@@ -31,6 +31,34 @@ function setup() {
 }
 
 describe('充值代理 IP', () => {
+  it('隐藏邮箱注册复用目录连接方式并使用独立审计，不公开完整代理', async () => {
+    const f = setup();
+    f.repository.findInTransaction.mockResolvedValue({
+      id,
+      countryCode: 'US',
+      kind: 'mobile',
+      active: true,
+      protocol: 'socks5',
+      connectionMode: 'direct',
+      urlHash: 'masked-hash',
+      urlEncrypted: 'encrypted:socks5://fixture-user:fixture-pass@proxy.example.test:1080'
+    });
+    expect(await f.service.forRegistration(id, operator)).toMatchObject({
+      mode: 'static',
+      type: 'socks5',
+      host: 'proxy.example.test',
+      port: 1080,
+      username: 'fixture-user',
+      password: 'fixture-pass'
+    });
+    expect(f.audit.append).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ action: 'id_business_v2.auto_registration.proxy.use' })
+    );
+    expect(JSON.stringify(f.audit.append.mock.calls)).not.toContain('fixture-pass');
+    f.repository.findInTransaction.mockResolvedValue(null);
+    await expect(f.service.forRegistration(id, operator)).rejects.toThrow('已停用');
+  });
   it('提取链接可指定 SOCKS5，直连链接拒绝不一致的协议', async () => {
     const f = setup();
     await f.service.create(

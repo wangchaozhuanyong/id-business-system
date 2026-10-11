@@ -6,9 +6,11 @@ import io
 import contextlib
 import subprocess
 import sys
+import gc
+import weakref
 from pathlib import Path
 import unittest
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import bitbrowser_connector as connector
 from checkout_core import Stop
@@ -672,6 +674,217 @@ assert bitbrowser_connector.Registry('recharge').role == 'recharge'
                         "session_cookie_format")}), {})
         self.assertEqual(connector.public_result({"official_session_http_status": True,
                          "auth_session_writes_blocked": -1, "credential_checked_at": 0}), {})
+
+
+class CompletedJobResourceTests(unittest.TestCase):
+    class InertThread:
+        def __init__(self, **_kwargs):
+            pass
+
+        def start(self):
+            pass
+
+    def next_payload(self, number):
+        value = payload()
+        value['id'] = f'{number:08x}-1111-4111-8111-111111111111'
+        value['callbackUrl'] = 'https://admin.example/api/id-business-v2/auto-recharge/local/' + value['id']
+        return value
+
+    def test_one_thousand_completed_calls_release_full_objects_and_real_temporary_state(self):
+        registry, refs, folders = connector.Registry(), [], []
+        statuses = ('subscription_activated', 'blocked', 'cancelled', 'payment_result_unknown')
+
+        async def inert_execute(job):
+            job.context = object()
+            job.revisions['fixture'] = 1
+            folders.append(job.root)
+            (job.root / 'fixture-public-state').write_text('synthetic-public-state')
+            status = statuses[int(job.id[:8], 16) % len(statuses)]
+            job.payment_request_sent = status in {'subscription_activated', 'payment_result_unknown'}
+            return {'status': status, 'payment_status': 'paid' if status == 'subscription_activated'
+                    else 'unknown' if job.payment_request_sent else 'not_attempted'}
+
+        with (patch.object(connector.threading, 'Thread', self.InertThread),
+              patch.object(connector.LocalJob, 'execute', inert_execute),
+              patch.object(connector.CallbackClient, 'send', return_value={'ok': True}) as callback,
+              patch.object(connector, 'BitBrowserClient') as browser):
+            for number in range(1, 1001):
+                job = registry.start(self.next_payload(number))
+                refs.append(weakref.ref(job))
+                registry._run(job)
+                self.assertEqual(job.payload, {})
+                self.assertIsNone(job.root)
+                self.assertIsNone(job.context)
+                self.assertEqual(job.revisions, {})
+                self.assertEqual(job.callback.token, '')
+                self.assertEqual(job.callback.url, '')
+                if number in (100, 1000):
+                    self.assertLessEqual(len(registry.jobs), connector.MAX_COMPLETED_JOBS)
+                    self.assertTrue(all(isinstance(item, connector.CompletedJob)
+                                        for item in registry.jobs.values()))
+                    self.assertFalse(registry.busy())
+            self.assertEqual(callback.call_count, 1000)
+            browser.assert_not_called()
+        del job
+        gc.collect()
+        self.assertTrue(all(ref() is None for ref in refs))
+        self.assertTrue(all(not folder.exists() for folder in folders))
+
+    def test_completed_snapshot_is_scalar_bounded_and_drops_quotes_nonces_and_credentials(self):
+        job = connector.LocalJob(payload())
+        job.result = {'status': 'blocked', 'reason': 'public_reason', 'nonce': 'synthetic-private',
+                      'password': 'synthetic-private', 'quote': {'nested': 'synthetic-private'},
+                      'payment_evidence': {'nested': 'synthetic-private'},
+                      'stage': 'x' * 221, 'browser_profile_id': 'b' * 32,
+                      'payment_requests_sent': 1, 'payment_status': 'unknown'}
+        completed = connector.CompletedJob(job, 100)
+        self.assertEqual(completed.state()['result'], {
+            'status': 'blocked', 'reason': 'public_reason', 'browser_profile_id': 'b' * 32,
+            'payment_requests_sent': 1, 'payment_status': 'unknown'})
+        self.assertFalse(hasattr(completed, 'payload'))
+        self.assertFalse(hasattr(completed, 'context'))
+        self.assertFalse(hasattr(completed, 'callback'))
+
+    def test_duplicate_completed_id_returns_snapshot_without_starting_a_thread(self):
+        registry = connector.Registry()
+        job = connector.LocalJob(payload())
+        job.done = True
+        job.finished_callback_acknowledged = True
+        job.result = {'status': 'subscription_activated'}
+        completed = connector.CompletedJob(job, time.monotonic())
+        registry.jobs[job.id] = completed
+        with patch.object(connector.threading, 'Thread') as thread:
+            self.assertIs(registry.start(payload()), completed)
+            thread.assert_not_called()
+
+    def test_finished_callback_failure_keeps_only_protected_summary_until_lease_has_expired(self):
+        registry = connector.Registry()
+        value = self.next_payload(1)
+
+        async def inert_execute(job):
+            job.payment_request_sent = True
+            return {'status': 'payment_result_unknown', 'payment_status': 'unknown'}
+
+        with (patch.object(connector.threading, 'Thread', self.InertThread),
+              patch.object(connector.LocalJob, 'execute', inert_execute),
+              patch.object(connector.CallbackClient, 'send', side_effect=Stop('durable_state_unavailable')),
+              patch.object(connector.time, 'monotonic', return_value=100)):
+            job = registry.start(value)
+            registry._run(job)
+            completed = registry.get(job.id)
+            self.assertIsInstance(completed, connector.CompletedJob)
+            self.assertFalse(completed.acknowledged)
+            self.assertEqual(completed.state()['result']['payment_status'], 'unknown')
+            self.assertEqual(job.payload, {})
+        with patch.object(connector.time, 'monotonic', return_value=100 + 45 * 60):
+            self.assertIs(registry.start(self.next_payload(1)), completed)
+        with patch.object(connector.time, 'monotonic', return_value=completed.expires_at):
+            self.assertIsNone(registry.get(job.id))
+
+    def test_unconfirmed_capacity_never_evicts_uncertain_ids_to_make_room(self):
+        registry = connector.Registry()
+        with patch.object(connector.time, 'monotonic', return_value=100):
+            for number in range(1, connector.MAX_COMPLETED_JOBS + 1):
+                job = connector.LocalJob(self.next_payload(number))
+                registry.jobs[job.id] = connector.CompletedJob(job, 100)
+            self.assertTrue(registry.busy())
+            with self.assertRaises(Stop) as stopped:
+                registry.start(self.next_payload(connector.MAX_COMPLETED_JOBS + 1))
+            self.assertEqual(stopped.exception.report['reason'], 'another_local_job_is_running')
+            self.assertEqual(len(registry.jobs), connector.MAX_COMPLETED_JOBS)
+            self.assertIs(registry.start(self.next_payload(1)), registry.get(self.next_payload(1)['id']))
+
+    def test_done_during_final_callback_is_still_busy_until_run_returns(self):
+        registry, entered, released = connector.Registry(), threading.Event(), threading.Event()
+
+        def finish(job):
+            job.done = True
+            job.result = {'status': 'blocked'}
+            entered.set()
+            released.wait(2)
+            job.finished_callback_acknowledged = True
+
+        with patch.object(connector.LocalJob, 'run', finish):
+            job = registry.start(self.next_payload(1))
+            try:
+                self.assertTrue(entered.wait(1))
+                self.assertTrue(registry.busy())
+                with self.assertRaises(Stop):
+                    registry.start(self.next_payload(2))
+            finally:
+                released.set()
+            for _ in range(100):
+                if isinstance(registry.get(job.id), connector.CompletedJob):
+                    break
+                time.sleep(.005)
+            self.assertIsInstance(registry.get(job.id), connector.CompletedJob)
+            self.assertFalse(registry.busy())
+
+    def test_terminal_http_actions_cannot_resume_confirm_cancel_or_supply_codes(self):
+        registry = connector.Registry()
+        job = connector.LocalJob(payload())
+        registry.jobs[job.id] = connector.CompletedJob(job, time.monotonic())
+        handler = object.__new__(connector.Handler)
+        handler.headers = {'Origin': 'https://admin.example', 'X-Auto-Recharge-Connector': 'fixture'}
+        handler.allowed_origins = {'https://admin.example'}
+        handler.connector_token = 'fixture'
+        handler.reply = MagicMock()
+        with patch.object(connector, 'REGISTRY', registry):
+            handler.path = '/jobs/' + job.id
+            handler.do_GET()
+            self.assertTrue(handler.reply.call_args.args[1]['done'])
+            for action in ('resume', 'cancel', 'code', 'confirm'):
+                handler.path = '/jobs/' + job.id + '/' + action
+                handler.headers['Content-Length'] = '2'
+                handler.rfile = io.BytesIO(b'{}')
+                handler.do_POST()
+                self.assertEqual(handler.reply.call_args.args[0], 409)
+
+
+class ConnectorLeaseGateTests(unittest.IsolatedAsyncioTestCase):
+    async def test_evicted_terminal_id_checks_api_before_json_or_password_browser_actions(self):
+        for method in ('json', 'password'):
+            for mode in ('payment', 'recheck', 'open_browser'):
+                with self.subTest(method=method, mode=mode):
+                    value = payload()
+                    value['mode'] = mode
+                    if mode != 'payment':
+                        for key in ('details', 'address', 'safety', 'authorizeSinglePayment'):
+                            value.pop(key)
+                    if method == 'password':
+                        value.pop('sessionJson')
+                        value['login'] = {'email': 'test@example.invalid', 'password': 'synthetic-password'}
+                    job = connector.LocalJob(value)
+                    job.callback.send = MagicMock(side_effect=Stop('durable_state_unavailable'))
+                    with (patch.object(connector, 'parse_browser_credential') as parse,
+                          patch.object(connector, 'BitBrowserClient') as browser,
+                          patch.object(connector.bitbrowser_retry, 'execute_profiles', AsyncMock()) as execute):
+                        with self.assertRaises(Stop):
+                            await job.execute()
+                        self.assertEqual(job.callback.send.call_args.args[0]['type'], 'progress')
+                        self.assertEqual(job.callback.send.call_args.args[0]['result']['stage'], 'connector_dispatch')
+                        parse.assert_not_called()
+                        browser.assert_not_called()
+                        execute.assert_not_awaited()
+
+    async def test_invalid_progress_acknowledgement_does_not_start_browser(self):
+        job = connector.LocalJob(payload())
+        job.callback.send = MagicMock(return_value={})
+        with patch.object(connector, 'BitBrowserClient') as browser:
+            with self.assertRaises(Stop):
+                await job.execute()
+            browser.assert_not_called()
+
+    async def test_resolution_reuses_original_short_lease_callback_and_never_opens_browser(self):
+        job = connector.LocalJob(resolution_payload())
+        job.callback.send = MagicMock(return_value={'ok': True})
+        with patch.object(connector, 'BitBrowserClient') as browser:
+            result = await job.execute()
+        self.assertEqual(job.callback.send.call_count, 1)
+        self.assertEqual(job.callback.send.call_args.args[0]['type'], 'resolve_unknown_payment')
+        self.assertEqual(result['status'], 'payment_unknown_resolved')
+        self.assertTrue(connector.CompletedJob(job, time.monotonic()).acknowledged)
+        browser.assert_not_called()
 
 
 if __name__ == "__main__":

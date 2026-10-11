@@ -2396,6 +2396,101 @@ def online_source_guard(d, directory):
                       for name, digest in ONLINE_SOURCE_SEALS.items()), 'API_ADMIN_ONLINE_SOURCE_CHANGED')
     return online
 
+def online_after_bit_archived_module(raw, path, selected=None):
+    """Execute already acquired bytes without reopening a verified source path."""
+    from types import SimpleNamespace
+    namespace = {'__file__': str(path), '__name__': '_online_preserved_executor'}
+    if selected is not None:
+        namespace['SCOPE'] = selected
+    exec(compile(raw, str(path), 'exec'), namespace)
+    return SimpleNamespace(**namespace)
+
+
+def online_after_bit_archived_reader(d, directory, manifest, raw_proof):
+    """Reacquire the published ONLINE executor; a successor is never its producer.
+
+    The complete immutable Git archive binds every loaded helper. The original
+    B cold reader reopens Q_A/Q_B, and the original owned F_O binds the typed
+    ONLINE proof. This reader performs no retired-container inspection.
+    """
+    from types import SimpleNamespace
+    code = 'API_ADMIN_ONLINE_ORIGIN_CHANGED'
+    current = online_reader(d)
+    d.require(WORKSPACE and directory.parent == d.BASE / 'releases'
+              and directory.resolve() == directory and directory.is_dir()
+              and not directory.is_symlink() and directory.stat().st_uid == os.geteuid()
+              and stat.S_IMODE(directory.stat().st_mode) & 0o077 == 0
+              and type(raw_proof) is dict
+              and raw_proof.get('kind') == 'ONLINE_RECHARGE_AFTER_BIT_BUILD_PROOF'
+              and type(raw_proof.get('version')) is int and raw_proof['version'] == 2
+              and all(type(raw_proof.get(n)) is str and re.fullmatch(r'[a-f0-9]{40}', raw_proof[n])
+                      for n in ('commit', 'sourceTree'))
+              and manifest.get('commit') == raw_proof['commit']
+              and manifest.get('sourceTree') == raw_proof['sourceTree']
+              and re.fullmatch(r'[0-9]{8}T[0-9]{6}Z-' + raw_proof['commit'][:12], directory.name), code)
+    images = raw_proof.get('images')
+    d.require(type(images) is dict and set(images) == set(current.IMAGE_SERVICES), code)
+    runs = set()
+    for name, image in images.items():
+        reference = image.get('reference') if type(image) is dict else None
+        match = re.fullmatch(r'[0-9]{12}\.dkr\.ecr\.ap-northeast-1\.amazonaws\.com/id-business-v2-release:'
+                            + raw_proof['commit'] + r'-([1-9][0-9]*)-([1-9][0-9]*)-' + name,
+                            reference or '')
+        d.require(match is not None, code)
+        runs.add(match.groups())
+    d.require(len(runs) == 1, code)
+    run_id, attempt = runs.pop()
+    producer = {n: raw_proof[n] for n in ('commit', 'sourceTree')} | {
+        'workflowRunId': run_id, 'workflowRunAttempt': attempt}
+    d.require(manifest.get('deploymentRun') == manifest.get('imageBuildRun')
+              == 'github-actions-' + run_id + '-' + attempt, code)
+    inventory = current._pending_workspace_current_source_inventory(d, producer)
+    raw = {}
+    for name in current._PENDING_WORKSPACE_CONTROL_NAMES:
+        path = directory / name
+        value = current._declaration_source_bytes(path,
+            limit=2 * 1024**2 if name.endswith('/remote-deploy.py') else 1024**2)
+        d.require(inventory.get(name, {}).get('sha256') == hashlib.sha256(value).hexdigest(), code)
+        raw[name] = value
+    api_name = 'scripts/production-release/api-admin-scope.py'
+    online_name = 'scripts/production-release/online-recharge-scope.py'
+    api = online_after_bit_archived_module(raw[api_name], directory / api_name, 'API_ADMIN_WORKSPACE')
+    online = online_after_bit_archived_module(raw[online_name], directory / online_name)
+    proxy = SimpleNamespace(**vars(d))
+    original_api = d.api_admin_scope
+    proxy.api_admin_scope = lambda selected='API_ADMIN_WORKSPACE': (
+        (api, None) if selected == 'API_ADMIN_WORKSPACE' else original_api(selected))
+    proxy.online_recharge_scope = lambda: (online, None)
+    proxy._onlinePendingWorkspaceProducer = producer
+    previous = Path(manifest.get('previousRelease', ''))
+    bridge = api.online_after_bit_cold(proxy, previous, expected_commit=manifest.get('previousCommit'))
+    online.online_after_bit_bridge_shape(proxy, bridge)
+    record = online.closed_recovery_json(proxy, online._declaration_source_bytes(directory / online.STATE_FILE))
+    evidence = record.get('baselineEvidence', {})
+    d.require(type(evidence) is dict and evidence.get('onlineAfterBitOrigin') == bridge
+              and 'onlinePendingWorkspaceOrigin' not in evidence
+              and record.get('before') == bridge['services']
+              and record.get('configurationBefore') == bridge['configurationAfter'], code)
+    online._pending_workspace_profile(proxy, bridge, producer)
+    proxy._onlinePendingWorkspaceSession = {'bridge': bridge, 'producer': producer}
+    before = online.online_after_bit_preflight_bytes(proxy, producer=producer,
+        expected_sha256=raw_proof.get('preflightBytesSha256'))
+    online.online_after_bit_preflight_binding(proxy, before, producer=producer, bridge=bridge)
+    proof = online.online_after_bit_build_shape(proxy, raw_proof, producer=producer,
+        bridge=bridge, preflight_raw=before)
+    after = record.get('after')
+    d.require(type(after) is dict and set(after) == set((*online.PRESERVED, *online.UPDATED))
+              and all(after[n] == bridge['services'][n] for n in online.PRESERVED)
+              and all(type(after[n]) is dict and after[n].get('image') == proof['images'][n]['imageId']
+                  and after[n].get('reference') == proof['images'][n]['reference'] for n in online.UPDATED)
+              and record.get('buildProofSha256') == fingerprint(proof)
+              and record.get('configurationAfter') == online.configuration_hashes(directory)
+              and manifest.get('previousCommit') == bridge['baselineCommit']
+              and manifest.get('previousManifestSha256') == bridge['manifestBytesSha256']
+              and manifest.get('migrationPerformed') is False
+              and record.get('migration') == {**bridge['migrationState'], 'performed': False}, code)
+    return online, proxy, proof, record, bridge
+
 def online_origin_guard(d, directory, context, *, runtime=True):
     fields = {'version', 'release', 'commit', 'manifestSha256', 'buildProofSha256', 'files',
               'migrationState', 'binding'}
@@ -2409,17 +2504,30 @@ def online_origin_guard(d, directory, context, *, runtime=True):
                   and hashlib.sha256((origin / n).read_bytes()).hexdigest() == digest
                   for n, digest in context['files'].items()), 'API_ADMIN_ONLINE_ORIGIN_CHANGED')
     manifest = json.loads((origin / 'release-manifest.json').read_text())
-    proof = o.validate_proof(d, json.loads((origin / o.PROOF_FILE).read_text()), context['commit'], manifest['sourceTree'])
-    record = json.loads((origin / o.STATE_FILE).read_text()); previous = Path(manifest['previousRelease'])
-    d.require(manifest.get('commit') == context['commit'] and manifest.get('previousCommit') == o.BASELINE_COMMIT
+    raw_proof = json.loads((origin / o.PROOF_FILE).read_text())
+    after_bit = manifest.get('onlineRechargePublication', {}).get('version') == 2
+    if after_bit:
+        o, d, proof, record, bridge = online_after_bit_archived_reader(d, origin, manifest, raw_proof)
+        publication = {'version': 2, 'baselineOriginSha256': fingerprint(bridge),
+            'sqliteProtectionSha256': record.get('sqliteProtectionSha256'), 'scope': o.SCOPE,
+            'buildProofSha256': fingerprint(proof), 'migration': dict(o.MIGRATION_IDENTITY),
+            'legacyWorkersPublished': False, 'configurationScope': 'ONLINE_RECHARGE_VOLUME_LOOPBACK_ONLY'}
+        previous_commit, migrations = bridge['baselineCommit'], []
+    else:
+        proof = o.validate_proof(d, raw_proof, context['commit'], manifest['sourceTree'])
+        record = json.loads((origin / o.STATE_FILE).read_text())
+        publication = {'version': 1, 'scope': o.SCOPE, 'buildProofSha256': fingerprint(proof),
+            'migration': dict(o.MIGRATION_IDENTITY), 'legacyWorkersPublished': False,
+            'configurationScope': 'ONLINE_RECHARGE_VOLUME_LOOPBACK_ONLY'}
+        previous_commit, migrations = o.BASELINE_COMMIT, [o.MIGRATION_FILE]
+    previous = Path(manifest['previousRelease'])
+    d.require(manifest.get('commit') == context['commit'] and manifest.get('previousCommit') == previous_commit
               and context['manifestSha256'] == context['files']['release-manifest.json']
               and fingerprint(proof) == context['buildProofSha256'] == record['buildProofSha256']
               and manifest.get('servicesUpdated') == list(o.UPDATED)
-              and manifest.get('newMigrations') == [o.MIGRATION_FILE]
+              and manifest.get('newMigrations') == migrations
               and manifest.get('migrationApplied') is True
-              and manifest.get('onlineRechargePublication') == {'version': 1, 'scope': o.SCOPE,
-                  'buildProofSha256': fingerprint(proof), 'migration': dict(o.MIGRATION_IDENTITY),
-                  'legacyWorkersPublished': False, 'configurationScope': 'ONLINE_RECHARGE_VOLUME_LOOPBACK_ONLY'}
+              and manifest.get('onlineRechargePublication') == publication
               and previous.parent == d.BASE / 'releases' and previous.is_dir() and not previous.is_symlink()
               and hashlib.sha256((previous / 'release-manifest.json').read_bytes()).hexdigest()
                   == manifest.get('previousManifestSha256') == record['baselineEvidence']['manifestSha256']
@@ -2450,6 +2558,8 @@ def online_origin_guard(d, directory, context, *, runtime=True):
               'API_ADMIN_ONLINE_ORIGIN_CHANGED')
     o.backup_receipt(d, origin, manifest)
     o.workspace_backup_receipt(d, origin, previous, record['baselineEvidence'], manifest, record)
+    if after_bit:
+        o._pending_workspace_sqlite_receipt(d, origin, manifest, record)
     o.workspace_origin(d, previous, origin, record['baselineEvidence'], record['before'])
     o.historical_guard(d, previous, record['baselineEvidence'], origin)
     for service in o.IMAGE_SERVICES:
@@ -2479,7 +2589,17 @@ def online_recovery_guard(d, online, previous, origin, manifest, record):
                   'API_ADMIN_ONLINE_ORIGIN_CHANGED')
 
 def online_origin(d, directory, manifest, states):
-    o = online_reader(d); receipt = o.readback(d, manifest['commit'])
+    o = online_reader(d)
+    if manifest.get('onlineRechargePublication', {}).get('version') == 2:
+        d.require(json.loads((directory / 'release-manifest.json').read_text()) == manifest,
+                  'API_ADMIN_ONLINE_ORIGIN_CHANGED')
+        o, observed, _, _, _ = online_after_bit_archived_reader(d, directory, manifest,
+            json.loads((directory / o.PROOF_FILE).read_text()))
+        # The original executor supplies the full ordinary live readback. Its
+        # existing B reader requires this ONLINE to remain the actual current.
+        receipt = o.readback(observed, manifest['commit'])
+    else:
+        receipt = o.readback(d, manifest['commit'])
     # Its independent reader verified the raw inspect record. Only the verified
     # generated-identity normalization differs in this successor's snapshot.
     if receipt.get('status') == 'ONLINE_RECHARGE_VERIFIED' and ONLINE_SERVICE in receipt.get('services', {}):
@@ -2501,7 +2621,12 @@ def preserved_migration_guard(d, directory, context, online=None, *, pending_can
             if pending_candidate is not None else {}))
     o = online_reader(d); origin = Path(online['release'])
     manifest = json.loads((origin / 'release-manifest.json').read_text())
-    o.historical_guard(d, Path(manifest['previousRelease']), {'migrationOrigin': context}, origin)
+    evidence = {'migrationOrigin': context}
+    if manifest.get('onlineRechargePublication', {}).get('version') == 2:
+        o, d, _, _, bridge = online_after_bit_archived_reader(d, origin, manifest,
+            json.loads((origin / o.PROOF_FILE).read_text()))
+        evidence['onlineAfterBitOrigin'] = bridge
+    o.historical_guard(d, Path(manifest['previousRelease']), evidence, origin)
 
 def online_engine_idle(d, metadata):
     script = ("require('/workspace/engine/healthcheck.cjs').check().then(v=>{"

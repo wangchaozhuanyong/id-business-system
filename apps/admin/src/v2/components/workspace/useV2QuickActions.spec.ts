@@ -120,6 +120,7 @@ describe('database quick reply order', () => {
       expectedQuickActionIds: [a, b]
     });
     expect(mock.prime).toHaveBeenCalledWith({
+      moduleKey: 'profile',
       scope: 'workspace',
       key: 'quick-actions:user-a',
       data: list([b, a], true)

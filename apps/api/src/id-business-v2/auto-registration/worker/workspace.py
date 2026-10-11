@@ -30,6 +30,7 @@ from fastapi.templating import Jinja2Templates
 from sqlalchemy import Text, text
 from sqlalchemy.types import TypeDecorator
 from release_safety import maintenance_active
+from upload_compat import install_upload_compatibility
 
 WORKER_DIR = Path(__file__).resolve().parent
 UPSTREAM_DIR = WORKER_DIR.parent / "upstream"
@@ -179,6 +180,7 @@ def install_upstream_adapters(encryption_key: str, runtime_dir: Path) -> tuple[A
         return original_update(**{key: value for key, value in kwargs.items() if key not in fixed_settings})
 
     config.update_settings = update_settings
+    install_upload_compatibility()
     registration = importlib.import_module("src.core.register")
     original_log = registration.RegistrationEngine._log
 
@@ -387,7 +389,10 @@ def create_workspace_app(config: dict[str, Any]) -> FastAPI:
     def verify_resources() -> None:
         required = [
             WORKER_DIR / "apple_mailboxes.py",
+            WORKER_DIR / "apple_closed_loop.py",
+            WORKER_DIR / "apple_registration_diagnostics.py",
             WORKER_DIR / "release_safety.py",
+            WORKER_DIR / "upload_compat.py",
             WORKER_DIR / "id-workspace.js",
             WORKER_DIR / "id-workspace.css",
             PROJECT_ROOT / "apps/admin/src/v2/styles/base.css",
