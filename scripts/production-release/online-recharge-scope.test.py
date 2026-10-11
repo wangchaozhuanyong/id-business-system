@@ -2,6 +2,7 @@ import base64
 import gzip
 import copy
 from contextlib import ExitStack, contextmanager, redirect_stdout
+from functools import lru_cache
 import hashlib
 import importlib.util
 import io
@@ -3346,6 +3347,36 @@ class PendingWorkspaceStageTests(unittest.TestCase):
             acquire.assert_not_called()
 
 
+_AFTER_BIT_REVIEWED_COMMIT = '34a2ad26def934dcaed6bdd1e3188ca977fcdc30'
+_AFTER_BIT_REVIEWED_TREE = '32ac27855285d6f539a0fb45d34067360b601839'
+_AFTER_BIT_ORIGINAL_COMMIT = '31d2c6885a45817cd40d23fce8d6145bc9f18af2'
+
+
+@lru_cache(maxsize=1)
+def after_bit_reviewed_tree():
+    tree = subprocess.check_output(['git', 'rev-parse', _AFTER_BIT_REVIEWED_COMMIT + '^{tree}'], cwd=ROOT).decode().strip()
+    require(tree == _AFTER_BIT_REVIEWED_TREE, 'HISTORICAL_AFTER_BIT_TREE_CHANGED')
+
+
+@lru_cache(maxsize=32)
+def after_bit_reviewed_source(name, *, before=False):
+    """Read only the reviewed first ONLINE group, never the successor checkout."""
+    after_bit_reviewed_tree()
+    pairs = {**scope._AFTER_BIT_BANK_POLICY_FILES, **scope._AFTER_BIT_RELEASE_CI_FILES}
+    require(name in pairs, 'HISTORICAL_AFTER_BIT_SOURCE_NOT_REVIEWED')
+    commit = _AFTER_BIT_ORIGINAL_COMMIT if before else _AFTER_BIT_REVIEWED_COMMIT
+    row = subprocess.check_output(['git', 'ls-tree', '-z', commit, '--', name], cwd=ROOT)
+    require(row.count(b'\0') == 1, 'HISTORICAL_AFTER_BIT_SOURCE_CHANGED')
+    metadata, actual_name = row[:-1].split(b'\t', 1)
+    mode, kind, unused_blob = metadata.decode().split()
+    require(actual_name.decode() == name and mode == '100644' and kind == 'blob',
+        'HISTORICAL_AFTER_BIT_SOURCE_MODE_CHANGED')
+    raw = subprocess.check_output(['git', 'show', commit + ':' + name], cwd=ROOT)
+    require(hashlib.sha256(raw).hexdigest() == pairs[name][0 if before else 1],
+        'HISTORICAL_AFTER_BIT_SOURCE_CHANGED')
+    return raw, mode
+
+
 class AfterBitFormalTests(unittest.TestCase):
     """Real A/B type and API cold/binding bodies; external acquisition is synthetic."""
     @contextmanager
@@ -3361,15 +3392,17 @@ class AfterBitFormalTests(unittest.TestCase):
                 inventory[name]={'sha256':hashlib.sha256((ROOT/name).read_bytes()).hexdigest(),'mode':'100644'}
             candidate_inventory=inventory
             if policy:
-                for name,(before_hash,after_hash) in scope._AFTER_BIT_BANK_POLICY_FILES.items():
-                    inventory[name]={'sha256':before_hash,'mode':'100644'}
+                for name in scope._AFTER_BIT_BANK_POLICY_FILES:
+                    raw,mode=after_bit_reviewed_source(name,before=True)
+                    inventory[name]={'sha256':hashlib.sha256(raw).hexdigest(),'mode':mode}
                 candidate_inventory=copy.deepcopy(inventory)
-                for name,(before_hash,after_hash) in scope._AFTER_BIT_BANK_POLICY_FILES.items():
-                    candidate_inventory[name]={'sha256':after_hash,'mode':'100644'}
+                for name in scope._AFTER_BIT_BANK_POLICY_FILES:
+                    raw,mode=after_bit_reviewed_source(name)
+                    candidate_inventory[name]={'sha256':hashlib.sha256(raw).hexdigest(),'mode':mode}
                 candidate.update(commit='e'*40,sourceTree='f'*40)
                 for name in scope._AFTER_BIT_BANK_POLICY_FILES:
                     path=old/name;path.parent.mkdir(parents=True,exist_ok=True)
-                    path.write_bytes(subprocess.check_output(['git','show','31d2c6885a45817cd40d23fce8d6145bc9f18af2:'+name],cwd=ROOT));path.chmod(0o644)
+                    path.write_bytes(after_bit_reviewed_source(name,before=True)[0]);path.chmod(0o644)
                 for name in ('apps/api/src/id-business-v2/auto-recharge/worker/fixture.cjs',
                         'apps/api/src/id-business-v2/auto-registration/fixture.cjs',
                         'scripts/v2-data-integrity-audit.mjs','scripts/lib/v2-data-integrity-audit.mjs',
@@ -3568,9 +3601,11 @@ class AfterBitFormalTests(unittest.TestCase):
         self.assertEqual(len(scope._AFTER_BIT_BANK_POLICY_FILES),5)
         self.assertEqual(len(set(scope._AFTER_BIT_BANK_POLICY_FILES)-scope._PENDING_WORKSPACE_RECEIPT_COMPATIBILITY_FILES),4)
         for name,(before_hash,after_hash) in scope._AFTER_BIT_BANK_POLICY_FILES.items():
-            before=subprocess.check_output(['git','show','31d2c6885a45817cd40d23fce8d6145bc9f18af2:'+name],cwd=ROOT)
+            before,before_mode=after_bit_reviewed_source(name,before=True)
+            after,after_mode=after_bit_reviewed_source(name)
             self.assertEqual(hashlib.sha256(before).hexdigest(),before_hash)
-            self.assertEqual(hashlib.sha256((ROOT/name).read_bytes()).hexdigest(),after_hash)
+            self.assertEqual(hashlib.sha256(after).hexdigest(),after_hash)
+            self.assertEqual((before_mode,after_mode),('100644','100644'))
 
     def test_policy_group_source_test_mode_partial_and_other_source_drift_reject(self):
         for mutation in ('library','permission-test','acceptance-test','historical-test','online-test',
@@ -3602,7 +3637,7 @@ class AfterBitFormalTests(unittest.TestCase):
         with self.fixture(policy=True) as f:
             self.preflight_and_f(f);target=f.base/'policy-candidate';target.mkdir(mode=0o700)
             for name in scope._AFTER_BIT_BANK_POLICY_FILES:
-                dest=target/name;dest.parent.mkdir(parents=True,exist_ok=True);dest.write_bytes((ROOT/name).read_bytes());dest.chmod(0o644)
+                dest=target/name;dest.parent.mkdir(parents=True,exist_ok=True);dest.write_bytes(after_bit_reviewed_source(name)[0]);dest.chmod(0o644)
             protected=('apps/api/src/id-business-v2/auto-recharge/worker/fixture.cjs',
                 'apps/api/src/id-business-v2/auto-registration/fixture.cjs',
                 'scripts/v2-data-integrity-audit.mjs','scripts/lib/v2-data-integrity-audit.mjs','scripts/sync-v2-new-table-grants.mjs')
@@ -3617,6 +3652,31 @@ class AfterBitFormalTests(unittest.TestCase):
             f.qb.unlink()
             with self.assertRaises((RuntimeError,OSError)):scope.protected_source(f.d,f.old,target)
             f.a_reader.assert_not_called();f.d.compose.assert_not_called();f.d.sync_new_table_grants.assert_not_called();f.d.point_current.assert_not_called()
+
+    def test_successor_policy_test_bytes_cannot_replace_first_online_protected_source(self):
+        with self.fixture(policy=True) as f:
+            self.preflight_and_f(f);target=f.base/'historical-policy-candidate';target.mkdir(mode=0o700)
+            for name in scope._AFTER_BIT_BANK_POLICY_FILES:
+                dest=target/name;dest.parent.mkdir(parents=True,exist_ok=True)
+                dest.write_bytes(after_bit_reviewed_source(name)[0]);dest.chmod(0o644)
+            for name in ('apps/api/src/id-business-v2/auto-recharge/worker/fixture.cjs',
+                    'apps/api/src/id-business-v2/auto-registration/fixture.cjs',
+                    'scripts/v2-data-integrity-audit.mjs','scripts/lib/v2-data-integrity-audit.mjs',
+                    'scripts/sync-v2-new-table-grants.mjs'):
+                dest=target/name;dest.parent.mkdir(parents=True,exist_ok=True)
+                dest.write_bytes((f.old/name).read_bytes());dest.chmod(0o644)
+            scope.protected_source(f.d,f.old,target)
+            for name in ('scripts/production-release/api-admin-scope.test.py',
+                    'scripts/production-release/online-recharge-scope.test.py'):
+                with self.subTest(name=name):
+                    reviewed=after_bit_reviewed_source(name)[0];successor=(ROOT/name).read_bytes()
+                    self.assertNotEqual(successor,reviewed)
+                    (target/name).write_bytes(successor)
+                    with self.assertRaisesRegex(RuntimeError,'SHARED_GATE_SOURCE_CHANGED'):
+                        scope.protected_source(f.d,f.old,target)
+                    (target/name).write_bytes(reviewed)
+            f.a_reader.assert_not_called();f.d.compose.assert_not_called()
+            f.d.sync_new_table_grants.assert_not_called();f.d.point_current.assert_not_called()
 
     def test_formal_b_stage_existing_api_origin_and_ordinary_readback(self):
         self.formal_stage()
@@ -3646,7 +3706,7 @@ class AfterBitFormalTests(unittest.TestCase):
                 (target/'docker-compose.aws-mysql.yml').write_bytes(b'synthetic-compose')
                 if policy:
                     for name in scope._AFTER_BIT_BANK_POLICY_FILES:
-                        dest=target/name;dest.parent.mkdir(parents=True,exist_ok=True);dest.write_bytes((ROOT/name).read_bytes());dest.chmod(0o644)
+                        dest=target/name;dest.parent.mkdir(parents=True,exist_ok=True);dest.write_bytes(after_bit_reviewed_source(name)[0]);dest.chmod(0o644)
                     for name in ('apps/api/src/id-business-v2/auto-recharge/worker/fixture.cjs',
                             'apps/api/src/id-business-v2/auto-registration/fixture.cjs',
                             'scripts/v2-data-integrity-audit.mjs','scripts/lib/v2-data-integrity-audit.mjs',
@@ -3723,9 +3783,11 @@ class AfterBitReceiptCISourceTests(unittest.TestCase):
         helper = AfterBitFormalTests()
         with helper.fixture(policy=True) as value:
             self.assertEqual(len(scope._AFTER_BIT_RELEASE_CI_FILES), 4)
-            for name, (before, after) in scope._AFTER_BIT_RELEASE_CI_FILES.items():
-                value.inventory[name] = {'sha256': before, 'mode': '100644'}
-                value.candidate_inventory[name] = {'sha256': after, 'mode': '100644'}
+            for name in scope._AFTER_BIT_RELEASE_CI_FILES:
+                before, before_mode = after_bit_reviewed_source(name, before=True)
+                after, after_mode = after_bit_reviewed_source(name)
+                value.inventory[name] = {'sha256': hashlib.sha256(before).hexdigest(), 'mode': before_mode}
+                value.candidate_inventory[name] = {'sha256': hashlib.sha256(after).hexdigest(), 'mode': after_mode}
             inventory_hash = scope.fingerprint(value.inventory)
             value.publication['producer']['archiveInventorySha256'] = inventory_hash
             value.publication['archiveInventorySha256'] = inventory_hash
@@ -3783,10 +3845,27 @@ class AfterBitReceiptCISourceTests(unittest.TestCase):
     def test_ci_hash_group_is_the_exact_checked_source_and_mode(self):
         self.assertEqual(len(scope._AFTER_BIT_RELEASE_CI_FILES), 4)
         for name, (before, after) in scope._AFTER_BIT_RELEASE_CI_FILES.items():
-            raw = subprocess.check_output(['git', 'show', '31d2c6885a45817cd40d23fce8d6145bc9f18af2:' + name], cwd=ROOT)
+            raw, before_mode = after_bit_reviewed_source(name, before=True)
+            reviewed, after_mode = after_bit_reviewed_source(name)
             self.assertEqual(hashlib.sha256(raw).hexdigest(), before)
-            self.assertEqual(hashlib.sha256((ROOT / name).read_bytes()).hexdigest(), after)
-            self.assertFalse((ROOT / name).stat().st_mode & 0o111)
+            self.assertEqual(hashlib.sha256(reviewed).hexdigest(), after)
+            self.assertEqual((before_mode, after_mode), ('100644', '100644'))
+
+    def test_successor_bank_and_ci_source_cannot_impersonate_first_online_group(self):
+        names = (*scope._AFTER_BIT_BANK_POLICY_FILES, *scope._AFTER_BIT_RELEASE_CI_FILES)
+        successors = {name: (ROOT / name).read_bytes() for name in names
+            if (ROOT / name).read_bytes() != after_bit_reviewed_source(name)[0]}
+        self.assertTrue({'scripts/production-release/api-admin-scope.test.py',
+            'scripts/production-release/online-recharge-scope.test.py',
+            'scripts/ci-recharge-check.mjs', 'scripts/ci-recharge-check.test.mjs'} <= set(successors))
+        for name, raw in successors.items():
+            with self.subTest(name=name), self.fixture() as (helper, value):
+                bridge = value.reader.online_after_bit_cold(value.d, value.old, expected_commit=COMMIT)
+                value.candidate_inventory[name] = {'sha256': hashlib.sha256(raw).hexdigest(), 'mode': '100644'}
+                with self.assertRaisesRegex(RuntimeError, 'APPLICATION_SOURCE_CHANGED'):
+                    scope._pending_workspace_profile(value.d, bridge, value.producer)
+                value.a_reader.assert_not_called();value.d.compose.assert_not_called()
+                value.d.sync_new_table_grants.assert_not_called();value.d.point_current.assert_not_called()
 
 
 if __name__ == '__main__':
