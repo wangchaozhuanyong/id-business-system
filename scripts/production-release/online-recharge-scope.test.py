@@ -257,6 +257,11 @@ class RecoveryTests(unittest.TestCase):
                 path.write_bytes(archive.extractfile(member).read())
                 path.chmod(0o755 if member.mode & 0o111 else 0o644)
         cls.policy = scope.recovery_policy(controller())
+        # Recovery verifies the sealed three-table patch, not the mutable main
+        # helper (which can contain independently authorised later repairs).
+        cls.grant_before = (cls.prepared / scope.GRANT_SOURCE).read_bytes()
+        cls.grant_after = cls.grant_before.replace(b"  'ip_whitelists',\n",
+            b"  'ip_whitelists',\n  'online_recharge_bills',\n  'online_recharge_cards',\n  'online_recharge_proxies',\n", 1)
 
     @classmethod
     def tearDownClass(cls):
@@ -370,12 +375,14 @@ class RecoveryTests(unittest.TestCase):
             images.assert_not_called()
 
     def test_only_exact_three_delete_lines_and_control_changes_are_allowed(self):
+        self.assertEqual(hashlib.sha256(self.grant_before).hexdigest(), self.policy['sharedGrant']['beforeSha256'])
+        self.assertEqual(hashlib.sha256(self.grant_after).hexdigest(), self.policy['sharedGrant']['afterSha256'])
         with self.fixture() as (d, previous, source, *_):
             target = previous.parent / 'new-candidate'
             shutil.copytree(self.prepared, target)
             for name in self.policy['candidateAllowedFiles']:
                 path = target / name; path.parent.mkdir(parents=True, exist_ok=True)
-                path.write_bytes((ROOT / name).read_bytes())
+                path.write_bytes(self.grant_after if name == scope.GRANT_SOURCE else (ROOT / name).read_bytes())
                 path.chmod(0o755 if (ROOT / name).stat().st_mode & 0o111 else 0o644)
             context = {'policy': self.policy, 'source': source}
             scope.candidate_recovery_source(d, target, context)
@@ -383,11 +390,41 @@ class RecoveryTests(unittest.TestCase):
             helper.write_bytes(helper.read_bytes().replace(b"  'online_recharge_bills',\n", b"  'online_recharge_bills',\n  'online_recharge_tasks',\n"))
             with self.assertRaisesRegex(RuntimeError, 'SHARED_GATE_SOURCE_CHANGED'):
                 scope.candidate_recovery_source(d, target, context)
-            helper.write_bytes((ROOT / scope.GRANT_SOURCE).read_bytes())
+            helper.write_bytes(self.grant_after)
             path = target / 'apps/admin/src/v2/features/online-recharge/unapproved.ts'
             path.write_text('unapproved UI change')
             with self.assertRaisesRegex(RuntimeError, 'BUILD_SOURCE_CHANGED'):
                 scope.candidate_recovery_source(d, target, context)
+
+    def test_historical_grant_rejects_bank_and_other_unsealed_source_changes(self):
+        anchor = b'export const V2_RUNTIME_DELETE_TABLES = Object.freeze([\n'
+        cases = {
+            'later-bank-repair': self.grant_after.replace(anchor,
+                anchor + b"  'id_business_v2_bank_recharge_cards',\n", 1),
+            'fourth-online-table': self.grant_after.replace(b"  'online_recharge_bills',\n",
+                b"  'online_recharge_bills',\n  'online_recharge_tasks',\n", 1),
+            'duplicate-table': self.grant_after.replace(b"  'online_recharge_bills',\n",
+                b"  'online_recharge_bills',\n  'online_recharge_bills',\n", 1),
+            'reordered-tables': self.grant_after.replace(
+                b"  'online_recharge_bills',\n  'online_recharge_cards',\n",
+                b"  'online_recharge_cards',\n  'online_recharge_bills',\n", 1),
+            'surrounding-source': self.grant_after + b'// unsealed change\n',
+        }
+        with self.fixture() as (d, previous, source, *_):
+            target = previous.parent / 'new-candidate'; target.mkdir()
+            helper = target / scope.GRANT_SOURCE; helper.parent.mkdir(parents=True)
+            helper.write_bytes(self.grant_after)
+            scope.grant_source_change(d, source, target, self.policy)
+            for case, content in cases.items():
+                with self.subTest(case=case):
+                    self.assertNotEqual(content, self.grant_after)
+                    helper.write_bytes(content)
+                    with self.assertRaisesRegex(RuntimeError, 'SHARED_GATE_SOURCE_CHANGED'):
+                        scope.grant_source_change(d, source, target, self.policy)
+            helper.write_bytes(self.grant_after)
+            (source / scope.GRANT_SOURCE).write_bytes(self.grant_before + b'// changed predecessor\n')
+            with self.assertRaisesRegex(RuntimeError, 'SHARED_GATE_SOURCE_CHANGED'):
+                scope.grant_source_change(d, source, target, self.policy)
 
     def test_current_seven_services_and_complete_predecessor_are_verified_through_projection(self):
         with self.fixture() as (d, previous, source, *_):
@@ -2133,6 +2170,7 @@ class ReleaseSequenceTests(unittest.TestCase):
             stack.enter_context(redirect_stdout(output))
             if stage2:
                 stack.enter_context(patch.object(scope,'validate_arguments',return_value=candidate))
+                stack.enter_context(patch.object(scope,'_workspace_evidence_origin',return_value=baseline_evidence['onlinePendingWorkspaceOrigin']))
             result = (scope._pending_workspace_release_locked if stage2 else scope._release_locked)(d, args)
         return result, json.loads(output.getvalue()), events
 
@@ -2528,6 +2566,28 @@ class DeclarationEquivalencePureTests(unittest.TestCase):
                             for name in ('online-recharge-daemon-identity.py', 'online-recharge-daemon-listener.py',
                                          'online-recharge-daemon-socket.py')])
                     current_names.value = previous_names.value
+                if node.name == 'protected_source':
+                    # The B-only bank source adapter wraps the original grant
+                    # check. Admit exactly this guard, then compare every
+                    # historical predicate and fallback body unchanged.
+                    expected_guard = ast.parse(
+                        'if not _workspace_bank_policy_protected(d, previous, target):\n'
+                        '    grant_source_change(d, previous, target)\n').body[0]
+                    guards = [item for item in ast.walk(actual)
+                        if isinstance(item, ast.If) and isinstance(item.test, ast.UnaryOp)
+                        and isinstance(item.test.operand, ast.Call)
+                        and isinstance(item.test.operand.func, ast.Name)
+                        and item.test.operand.func.id == '_workspace_bank_policy_protected']
+                    self.assertEqual(len(guards), 1)
+                    guard = guards[0]
+                    self.assertEqual(ast.dump(guard), ast.dump(expected_guard))
+                    replacements = 0
+                    for parent in ast.walk(actual):
+                        for _, items in ast.iter_fields(parent):
+                            if isinstance(items, list) and guard in items:
+                                items[items.index(guard)] = copy.deepcopy(guard.body[0])
+                                replacements += 1
+                    self.assertEqual(replacements, 1)
                 self.assertEqual(ast.dump(node), ast.dump(actual))
         old_assigns = [ast.dump(n) for n in old.body if isinstance(n, ast.Assign)]
         current_assigns = [ast.dump(n) for n in current.body if isinstance(n, ast.Assign)
@@ -3106,7 +3166,7 @@ class PendingWorkspaceStageTests(unittest.TestCase):
             base=old.parent;(base/'current').symlink_to(old)
             reader=SimpleNamespace(online_pending_workspace_measure_before=MagicMock(return_value=b))
             d=controller(BASE=base)
-            with patch.object(scope,'_pending_workspace_reader',return_value=reader),patch.object(scope,'online_pending_workspace_bridge_shape'),patch.object(scope,'_pending_workspace_profile'):
+            with patch.object(scope,'_pending_workspace_reader',return_value=reader),patch.object(scope,'_workspace_baseline_kind',return_value=scope.ONLINE_PENDING_WORKSPACE_KIND),patch.object(scope,'_workspace_bridge_shape'),patch.object(scope,'_pending_workspace_profile'):
                 self.assertEqual(scope._pending_workspace_begin(d,COMMIT,p,live=True),(old,b))
                 reader.online_pending_workspace_measure_before.assert_called_once_with(d,old,expected_commit=COMMIT)
                 b['baselineCommit']='f'*40
@@ -3131,6 +3191,7 @@ class PendingWorkspaceStageTests(unittest.TestCase):
                 d=controller(BASE=old.parent,_onlinePendingWorkspaceProducer=self.producer())
                 (old.parent/'current').symlink_to(old)
                 stack.enter_context(patch.object(scope,'_pending_workspace_begin',return_value=(old,b)))
+                stack.enter_context(patch.object(scope,'_workspace_origin_type',return_value=('onlinePendingWorkspaceOrigin','ONLINE_RECHARGE_PENDING_WORKSPACE')))
                 stack.enter_context(patch.object(scope,'legacy',return_value=reader))
                 for name in ('workspace_guard','release_recovery','verify_permission_seed','require_fresh_resources',
                         'workspace_files','workspace_origin'):
@@ -3212,7 +3273,7 @@ class PendingWorkspaceStageTests(unittest.TestCase):
             (new/scope.STATE_FILE).write_text(json.dumps({'baselineEvidence':{'onlinePendingWorkspaceOrigin':self.bridge()}}))
             reader=SimpleNamespace(online_pending_workspace_readback_origin=MagicMock(return_value=self.bridge()))
             d=controller(BASE=old.parent,_onlinePendingWorkspaceProducer=self.producer())
-            with patch.object(scope,'_pending_workspace_reader',return_value=reader),patch.object(scope,'_pending_workspace_profile'),patch.object(scope,'_pending_workspace_readback',return_value={'actual':'Q'}),patch.object(scope,'_pending_workspace_compatibility_readback_origin') as compat:
+            with patch.object(scope,'_pending_workspace_reader',return_value=reader),patch.object(scope,'_workspace_bridge_shape'),patch.object(scope,'_pending_workspace_profile'),patch.object(scope,'_pending_workspace_readback',return_value={'actual':'Q'}),patch.object(scope,'_pending_workspace_compatibility_readback_origin') as compat:
                 self.assertEqual(scope.readback(d,COMMIT),{'actual':'Q'})
                 compat.assert_not_called()
                 reader.online_pending_workspace_readback_origin.assert_called_once_with(d,new,expected_commit=COMMIT,producer=self.producer())
@@ -3256,7 +3317,8 @@ class PendingWorkspaceStageTests(unittest.TestCase):
         added=text[text.index('# Same immutable main candidate:'):]
         self.assertNotIn('REVIEWED_',added)
         self.assertNotIn('declaration_equivalence_successor',added)
-        self.assertNotIn('pending_online_declaration_b_files',added)
+        self.assertEqual(added.count('reader.pending_online_declaration_b_files('),1)
+        self.assertNotIn('sync_new_table_grants',scope._workspace_after_bit_materials.__code__.co_names)
 
     def test_stage2_holds_fences_until_old_api_exits_and_never_runs_ddl(self):
         helper=ReleaseSequenceTests();helper.addCleanup=lambda *a: self.addCleanup(*a)
@@ -3282,6 +3344,449 @@ class PendingWorkspaceStageTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError,'BASELINE_NOT_APPROVED'):
                 scope.baseline(controller(),'9'*40)
             acquire.assert_not_called()
+
+
+class AfterBitFormalTests(unittest.TestCase):
+    """Real A/B type and API cold/binding bodies; external acquisition is synthetic."""
+    @contextmanager
+    def fixture(self,policy=False):
+        with tempfile.TemporaryDirectory(prefix='formal-b-',dir=RUNTIME) as temporary,ExitStack() as stack:
+            base=Path(temporary);old=base/'releases'/('20261011T000000Z-'+COMMIT[:12]);old.mkdir(parents=True,mode=0o700)
+            (base/'current').symlink_to(old)
+            reader=scope._load_legacy();g=reader.online_after_bit_cold.__globals__
+            p={'commit':COMMIT,'sourceTree':TREE,'workflowRunId':'123','workflowRunAttempt':'1'}
+            candidate={**p,'workflowRunId':'124'}
+            inventory=PendingWorkspaceStageTests().inventory()
+            for name in ('scripts/lib/v2-production-database-access.mjs','scripts/sync-v2-new-table-grants.mjs'):
+                inventory[name]={'sha256':hashlib.sha256((ROOT/name).read_bytes()).hexdigest(),'mode':'100644'}
+            candidate_inventory=inventory
+            if policy:
+                for name,(before_hash,after_hash) in scope._AFTER_BIT_BANK_POLICY_FILES.items():
+                    inventory[name]={'sha256':before_hash,'mode':'100644'}
+                candidate_inventory=copy.deepcopy(inventory)
+                for name,(before_hash,after_hash) in scope._AFTER_BIT_BANK_POLICY_FILES.items():
+                    candidate_inventory[name]={'sha256':after_hash,'mode':'100644'}
+                candidate.update(commit='e'*40,sourceTree='f'*40)
+                for name in scope._AFTER_BIT_BANK_POLICY_FILES:
+                    path=old/name;path.parent.mkdir(parents=True,exist_ok=True)
+                    path.write_bytes(subprocess.check_output(['git','show','31d2c6885a45817cd40d23fce8d6145bc9f18af2:'+name],cwd=ROOT));path.chmod(0o644)
+                for name in ('apps/api/src/id-business-v2/auto-recharge/worker/fixture.cjs',
+                        'apps/api/src/id-business-v2/auto-registration/fixture.cjs',
+                        'scripts/v2-data-integrity-audit.mjs','scripts/lib/v2-data-integrity-audit.mjs',
+                        'scripts/sync-v2-new-table-grants.mjs'):
+                    path=old/name;path.parent.mkdir(parents=True,exist_ok=True);path.write_bytes(b'SYNTHETIC_PROTECTED');path.chmod(0o644)
+            before=states();config={n:'4'*64 for n in ('docker-compose.aws-mysql.yml','deploy/caddy/Caddyfile.aws',scope.SCHEMA_FILE,'compose.release.json')}
+            hashes={n:'1'*64 for n in ('preflightBytesSha256','manifestBytesSha256','recordBytesSha256','buildProofBytesSha256','buildProofCanonicalSha256')}
+            producer={**p,'archiveInventorySha256':scope.fingerprint(inventory),
+                'helpers':{n:inventory[n]['sha256'] for n in scope.DECLARATION_EQUIVALENCE_HELPERS}}
+            pair={'kind':scope.DECLARATION_EQUIVALENCE_KIND,'version':3,
+                **{n:'2'*64 for n in ('preflightBytesSha256','preflightProofSha256','deploymentProofSha256','semanticSha256')}}
+            initial={'kind':scope.DECLARATION_EQUIVALENCE_KIND,'version':3,
+                'producer':{**producer,'commit':'c'*40,'sourceTree':'d'*40,'workflowRunId':'121'},
+                'preflightCommandId':'00000000-0000-0000-0000-000000000001',**hashes,
+                'archiveInventorySha256':producer['archiveInventorySha256'],'configurationEquivalenceSeal':pair}
+            qa={'CommandId':'00000000-0000-0000-0000-000000000002','Status':'Success','ResponseCode':0,
+                'StandardOutputContent':json.dumps({'status':'API_ADMIN_WORKSPACE_VERIFIED','declarationEquivalencePublication':initial})}
+            qa_path=base/'qa.json';qa_path.write_text(json.dumps(qa));qa_path.chmod(0o600)
+            initial_issued={**initial,'readbackCommandId':qa['CommandId']}
+            seal={'kind':scope.DECLARATION_SUCCESSOR_KIND,'version':1,'initialProofSha256':pair['preflightProofSha256'],
+                'preflightBytesSha256':'1'*64,'currentProducer':producer,'currentServicesSha256':scope.fingerprint(before),
+                'initialPublication':initial_issued,'initialReadbackInvocationBytesSha256':hashlib.sha256(qa_path.read_bytes()).hexdigest(),
+                'preflightCommandId':'00000000-0000-0000-0000-000000000003','currentConfigurationSha256':scope.fingerprint(config)}
+            migration={'name':scope.MIGRATION_NAME,'sha256':scope.MIGRATION_IDENTITY['sha256'],'status':'APPLIED',
+                'schemaVerified':True,'appliedMigrationsSha256':'3'*64}
+            context={'version':2,'priorPublications':[{'release':'/synthetic/A'}],
+                'baselineRelease':'/opt/id-business-v2/releases/20261009T000000Z-'+scope.BASELINE_COMMIT[:12],
+                'baselineManifestSha256':'2'*64,'recoveryMarker':scope.recovery_marker(scope.recovery_policy(controller())),
+                'migrationState':migration}
+            audit={'checkCount':49,'violationCount':0,'mode':'STRICT_ZERO_49','checksSha256':'5'*64}
+            env=b'APP_PUBLIC_URL=https://fixture.invalid\n';volume={'status':'PRESENT','name':'fixture','identitySha256':'6'*64}
+            api_record={'pendingOnlineMigrationOrigin':context,'workspaceVolumeAfter':volume,
+                'environmentSha256':hashlib.sha256(env).hexdigest(),'baselineEvidence':{}}
+            api_proof={'pendingOnlineProjection':{'synthetic':True}}
+            manifest={'commit':COMMIT,'sourceTree':TREE,'images':{},'dataAuditBefore':audit,'dataAuditAfter':audit}
+            for n,value in ((reader.STATE_FILE,api_record),(reader.PROOF_FILE,api_proof),('release-manifest.json',manifest)):
+                path=old/n;path.write_text(json.dumps(value));path.chmod(0o600)
+            (old/'.env.aws.production').write_bytes(env);(old/'.env.aws.production').chmod(0o600)
+            pub={'kind':scope.DECLARATION_SUCCESSOR_KIND,'version':1,'producer':producer,
+                'preflightCommandId':seal['preflightCommandId'],**hashes,'originSha256':scope.fingerprint(context),
+                'archiveInventorySha256':producer['archiveInventorySha256'],'successorConfigurationSeal':seal,
+                'afterServices':before,'configurationAfter':config}
+            for key,name in (('manifestBytesSha256','release-manifest.json'),('recordBytesSha256',reader.STATE_FILE),('buildProofBytesSha256',reader.PROOF_FILE)):
+                pub[key]=hashlib.sha256((old/name).read_bytes()).hexdigest()
+            pub['buildProofCanonicalSha256']=scope.fingerprint(api_proof)
+            issued=scope.declaration_equivalence_successor_issuer_binding(controller(),pub,
+                live_services=before,live_configuration=config,execution_producer=producer)
+            receipt={'status':'API_ADMIN_WORKSPACE_VERIFIED','commit':COMMIT,'sourceTree':TREE,'services':before,
+                'servicesUpdated':['api','admin'],'preservedServiceCount':5,'runningImagesAndContentMatched':True,
+                'buildProofSha256':pub['buildProofCanonicalSha256'],'environmentUnchanged':True,'onlinePublished':False,
+                'migrationPerformed':False,'observedServiceCount':7,'volumePreserved':True,'volumeDeletionPerformed':False,
+                'registrationHealthChecked':True,'workspaceVolume':volume,'pendingOnlineMigrationOrigin':context,
+                'preservedPendingOnlineMigration':{'synthetic':True},'declarationEquivalenceSuccessorPublication':issued}
+            qb={'CommandId':'00000000-0000-0000-0000-000000000004','Status':'Success','ResponseCode':0,
+                'StandardOutputContent':json.dumps(receipt)}
+            qb_path=base/'qb.json';qb_path.write_text(json.dumps(qb));qb_path.chmod(0o600)
+            materials={'producer':producer,'archive_bytes':b'SYNTHETIC_ACQUIRED_ARCHIVE','historical_files':{}}
+            material_reader=SimpleNamespace(archive_inventory=MagicMock(return_value=inventory),
+                _declaration_source_bytes=scope._declaration_source_bytes,
+                declaration_equivalence_saved_invocation=lambda *a,**k:{'raw_bytes':qb_path.read_bytes(),'command_id':qb['CommandId']})
+            runtime_names=('docker-compose.aws-mysql.yml',reader.MIGRATION_SCHEMA,reader.MIGRATION_SEED)
+            archive_files={n:(('SYNTHETIC_ORIGINAL_'+n).encode(),'100644') for n in runtime_names}
+            projected={n:(('SYNTHETIC_PROJECTED_'+n).encode(),'100644') for n in runtime_names}
+            for root,rows in ((old,projected),(old/'.deploy/production-release/pending-original-source',archive_files)):
+                for n,(raw,mode) in rows.items():
+                    path=root/n;path.parent.mkdir(parents=True,exist_ok=True);path.write_bytes(raw);path.chmod(0o644)
+            def files(*a,**k):
+                scope.declaration_equivalence_receipt_binding(controller(),initial,qa_path.read_bytes(),
+                    command_id=qa['CommandId'],wire_decoder=lambda raw,**unused:json.loads(raw))
+                require(hashlib.sha256(qa_path.read_bytes()).hexdigest()==seal['initialReadbackInvocationBytesSha256'],'SYNTHETIC_Q_A_CHANGED')
+                return material_reader,materials,pub,{'synthetic':True},api_record
+            recovery={'source':old,'marker':context['recoveryMarker'],'state':migration}
+            changes={'pending_online_equivalence':lambda:scope,'validate_pending_online_origin':lambda v:v,
+                'pending_online_recovery':lambda *a:(scope,recovery),'pending_online_declaration_b_files':files,
+                'pending_online_declaration_wire':lambda *a:lambda raw,**unused:json.loads(raw),
+                'pending_online_declaration_call':lambda d,name,*a,**k:getattr(scope,name)(d,*a,**k),
+                'configuration_hashes':lambda path:config,'audit_receipt':lambda *a:audit,'snapshot':lambda *a:before,
+                'pending_projection':lambda:SimpleNamespace(runtime_config_files=lambda *a:projected)}
+            stack.enter_context(patch.dict(g,changes));stack.enter_context(patch.multiple(reader,**changes))
+            a_reader=MagicMock(side_effect=AssertionError('B must never fall back to A'))
+            for name in ('online_pending_workspace_cold','online_pending_workspace_measure_before','online_pending_workspace_readback_origin'):
+                stack.enter_context(patch.object(reader,name,a_reader))
+            reader.validate_proof=MagicMock(return_value=api_proof);reader.verify_running=MagicMock();reader.workspace_health=MagicMock()
+            reader.workspace_sqlite_receipt=MagicMock(return_value={'backupVerified':True,'restoreVerified':True})
+            reader.strict_audit=MagicMock(return_value=audit);reader.pending_online_migrations=MagicMock(return_value=scope.MIGRATION_FILE)
+            d=controller(BASE=base,_onlinePendingWorkspaceProducer=candidate,
+                run=MagicMock(),compose=MagicMock(),sync_new_table_grants=MagicMock(),point_current=MagicMock())
+            d.registration_archive=MagicMock(return_value=archive_files)
+            # Controller factory's API selector is replaced explicitly below.
+            d.api_admin_scope=lambda selected:(reader,None)
+            stack.enter_context(patch.object(scope,'_pending_workspace_current_source_inventory',
+                side_effect=lambda d,p:candidate_inventory if policy and p['commit']==candidate['commit'] else inventory))
+            stack.enter_context(patch.dict(scope._PENDING_WORKSPACE_FIRST,release_recovery=lambda *a:recovery,migration_source_check=lambda *a,**k:None))
+            for name,value in {'workspace_guard':volume,'jobs_idle':{'rechargeIdle':True,'registrationBusy':False,
+                    'registrationLeaseActive':False,'registrationWindowRetained':False},'verify_permission_seed':None,
+                    'require_fresh_resources':None,'workspace_files':{n:'7'*64 for n in ('release-manifest.json',reader.STATE_FILE,
+                    reader.PROOF_FILE,'backup-verification.json','before-audit.json','after-audit.json')}}.items():
+                stack.enter_context(patch.object(scope,name,return_value=value))
+            stack.enter_context(patch.object(scope,'snapshot',return_value=before))
+            stack.enter_context(patch.object(scope.shutil,'disk_usage',return_value=SimpleNamespace(free=8*1024**3)))
+            yield SimpleNamespace(d=d,base=base,old=old,reader=reader,producer=candidate,context=context,publication=pub,
+                qa=qa_path,qb=qb_path,inventory=inventory,materials=materials,material_reader=material_reader,
+                a_reader=a_reader,audit=audit,recovery=recovery,volume=volume,stack=stack,config=config,
+                candidate_inventory=candidate_inventory)
+
+    def preflight_and_f(self,f):
+        result=scope.preflight(f.d,COMMIT)
+        self.assertIn('onlineAfterBitOrigin',result);self.assertNotIn('onlinePendingWorkspaceOrigin',result)
+        invocation={'CommandId':'00000000-0000-0000-0000-000000000005','InstanceId':'i-12345678901234567',
+            'DocumentName':'AWS-RunShellScript','PluginName':'aws:runShellScript','Status':'Success','ResponseCode':0,
+            'ExecutionEndDateTime':'2026-01-01T00:00:00Z','StandardErrorContent':'','StandardOutputContent':json.dumps(result)}
+        bound=scope.online_pending_workspace_ended_preflight(f.d,json.dumps(invocation).encode(),
+            command_id=invocation['CommandId'],instance_id=invocation['InstanceId'],producer=f.producer,
+            wire_decoder=lambda raw,**unused:json.loads(raw))
+        raw=bound['preflight_raw'];self.assertEqual(json.loads(raw)['kind'],'ONLINE_RECHARGE_AFTER_BIT_PREFLIGHT')
+        folder=f.base/'.staging'/('online-recharge-pending-workspace-preflight-'+f.producer['commit']+'-124-1')
+        folder.mkdir(parents=True,mode=0o700);path=folder/'online-recharge-pending-workspace-preflight-result.json'
+        path.write_bytes(raw);path.chmod(0o600)
+        return result,raw,path
+
+    def test_actual_b_begin_full_preflight_f_and_four_image_build_contract(self):
+        with self.fixture() as f:
+            result,raw,path=self.preflight_and_f(f);bridge=result['onlineAfterBitOrigin']
+            build=proof();build.update(kind='ONLINE_RECHARGE_AFTER_BIT_BUILD_PROOF',version=2,baselineCommit=COMMIT,
+                baselineOriginSha256=scope.fingerprint(bridge),preflightBytesSha256=hashlib.sha256(raw).hexdigest())
+            for name in build['images']:build['images'][name]['reference']=f'{REPOSITORY}:{COMMIT}-124-1-{name}'
+            args=SimpleNamespace(online_recharge_only=True,commit=COMMIT,source_tree=TREE,expected_current=COMMIT,
+                repository=REPOSITORY,run_id='124',run_attempt='1',ci_run_id='234',
+                online_recharge_build_proof=base64.b64encode(json.dumps(build).encode()).decode())
+            self.assertEqual(scope.validate_arguments(f.d,args),build)
+            self.assertEqual(set(build['images']),set(scope.IMAGE_SERVICES));f.a_reader.assert_not_called()
+            f.reader.verify_running.assert_called();f.reader.workspace_health.assert_called();f.reader.strict_audit.assert_called()
+            f.d.compose.assert_not_called();f.d.sync_new_table_grants.assert_not_called();f.d.point_current.assert_not_called()
+
+    def test_q_a_q_b_state_and_producer_drift_stop_before_mutable_stage(self):
+        for mutation in ('q-a','q-b','state-third','bool-version','producer','source-lib'):
+            with self.subTest(mutation=mutation),self.fixture() as f:
+                if mutation in ('q-a','q-b'):
+                    path=f.qa if mutation=='q-a' else f.qb;value=json.loads(path.read_text());value['Status']='Failed';path.write_text(json.dumps(value))
+                elif mutation in ('state-third','bool-version'):
+                    path=f.old/f.reader.STATE_FILE;value=json.loads(path.read_text())
+                    if mutation=='state-third':value['pendingOnlineMigrationOrigin']['priorPublications']*=2
+                    else:value['pendingOnlineMigrationOrigin']['version']=True
+                    path.write_text(json.dumps(value))
+                elif mutation=='producer':f.d._onlinePendingWorkspaceProducer={**f.producer,'workflowRunId':'123'}
+                else:
+                    original=copy.deepcopy(f.inventory);original['scripts/lib/v2-production-database-access.mjs']['sha256']='0'*64
+                    f.producer.update(commit='e'*40,sourceTree='f'*40)
+                    f.stack.enter_context(patch.object(scope,'_pending_workspace_current_source_inventory',side_effect=[f.inventory,original]))
+                with self.assertRaises(RuntimeError):scope.preflight(f.d,COMMIT)
+                f.a_reader.assert_not_called();f.d.compose.assert_not_called();f.d.sync_new_table_grants.assert_not_called();f.d.point_current.assert_not_called()
+
+    def test_b_f_cannot_be_relabelled_as_a_or_cross_run(self):
+        with self.fixture() as f:
+            result,raw,path=self.preflight_and_f(f);bridge=result['onlineAfterBitOrigin']
+            for mutation in ('kind','origin-field','q-a','run','extra'):
+                value=json.loads(raw)
+                if mutation=='kind':value['kind']='ONLINE_RECHARGE_PENDING_WORKSPACE_PREFLIGHT'
+                elif mutation=='origin-field':value['ordinaryPreflight']['onlinePendingWorkspaceOrigin']=value['ordinaryPreflight'].pop('onlineAfterBitOrigin')
+                elif mutation=='q-a':value['baseline']['readbackInvocationBytesSha256']=bridge['initialReadbackInvocationBytesSha256']
+                elif mutation=='run':value['workflowRunId']='125'
+                else:value['trusted']=True
+                with self.subTest(mutation=mutation),self.assertRaises(RuntimeError):
+                    scope.online_after_bit_preflight_binding(f.d,json.dumps(value).encode(),producer=f.producer,bridge=bridge)
+
+    def test_b_materials_reacquire_qs_archive_and_both_runtime_originals(self):
+        with self.fixture() as f:
+            result,raw,path=self.preflight_and_f(f);bridge=result['onlineAfterBitOrigin']
+            self.assertIs(scope._workspace_after_bit_materials(f.d,f.old,bridge=bridge),f.materials)
+            f.material_reader.archive_inventory.assert_called_once_with(f.d,f.materials['archive_bytes'],COMMIT,TREE)
+            f.a_reader.assert_not_called()
+            for root in (f.old,f.old/'.deploy/production-release/pending-original-source'):
+                path=root/f.reader.MIGRATION_SCHEMA;original=path.read_bytes();path.write_bytes(b'DRIFT')
+                with self.subTest(root=root),self.assertRaises(RuntimeError):scope._workspace_after_bit_materials(f.d,f.old,bridge=bridge)
+                path.write_bytes(original)
+            f.material_reader.archive_inventory.return_value={}
+            with self.assertRaises(RuntimeError):scope._workspace_after_bit_materials(f.d,f.old,bridge=bridge)
+
+    def test_missing_q_a_q_b_f_and_source_do_not_start_stage(self):
+        for missing in ('q-a','q-b','f','source'):
+            with self.subTest(missing=missing),self.fixture() as f:
+                result,raw,path=self.preflight_and_f(f);bridge=result['onlineAfterBitOrigin']
+                build=proof();build.update(kind='ONLINE_RECHARGE_AFTER_BIT_BUILD_PROOF',version=2,baselineCommit=COMMIT,
+                    baselineOriginSha256=scope.fingerprint(bridge),preflightBytesSha256=hashlib.sha256(raw).hexdigest())
+                for name in build['images']:build['images'][name]['reference']=f'{REPOSITORY}:{COMMIT}-124-1-{name}'
+                args=SimpleNamespace(online_recharge_only=True,commit=COMMIT,source_tree=TREE,expected_current=COMMIT,
+                    repository=REPOSITORY,run_id='124',run_attempt='1',ci_run_id='234',
+                    online_recharge_build_proof=base64.b64encode(json.dumps(build).encode()).decode())
+                if missing=='f':path.unlink()
+                elif missing=='source':f.stack.enter_context(patch.object(scope,'_pending_workspace_current_source_inventory',side_effect=RuntimeError('SOURCE_UNAVAILABLE')))
+                else:(f.qa if missing=='q-a' else f.qb).unlink()
+                with self.assertRaises((RuntimeError,OSError)):scope._release_locked(f.d,args)
+                f.a_reader.assert_not_called();f.d.compose.assert_not_called();f.d.sync_new_table_grants.assert_not_called();f.d.point_current.assert_not_called()
+
+    def test_policy_group_hashes_are_the_actual_reviewed_five_files(self):
+        self.assertEqual(len(scope._AFTER_BIT_BANK_POLICY_FILES),5)
+        self.assertEqual(len(set(scope._AFTER_BIT_BANK_POLICY_FILES)-scope._PENDING_WORKSPACE_RECEIPT_COMPATIBILITY_FILES),4)
+        for name,(before_hash,after_hash) in scope._AFTER_BIT_BANK_POLICY_FILES.items():
+            before=subprocess.check_output(['git','show','31d2c6885a45817cd40d23fce8d6145bc9f18af2:'+name],cwd=ROOT)
+            self.assertEqual(hashlib.sha256(before).hexdigest(),before_hash)
+            self.assertEqual(hashlib.sha256((ROOT/name).read_bytes()).hexdigest(),after_hash)
+
+    def test_policy_group_source_test_mode_partial_and_other_source_drift_reject(self):
+        for mutation in ('library','permission-test','acceptance-test','historical-test','online-test',
+                'mode','partial','source-extra','worker-extra','original','cross-a','q-a','q-b'):
+            with self.subTest(mutation=mutation),self.fixture(policy=True) as f:
+                if mutation in ('q-a','q-b'):
+                    (f.qa if mutation=='q-a' else f.qb).unlink()
+                elif mutation=='original':f.inventory[scope.GRANT_SOURCE]['sha256']='0'*64
+                elif mutation in ('source-extra','worker-extra'):
+                    name='apps/api/src/id-business-v2/'+('online-recharge/unsealed.ts' if mutation=='source-extra' else 'auto-recharge/worker/unsealed.cjs')
+                    f.candidate_inventory[name]={'sha256':'0'*64,'mode':'100644'}
+                else:
+                    name={'library':scope.GRANT_SOURCE,'permission-test':'scripts/production-database-access.test.mjs',
+                        'acceptance-test':'scripts/acceptance-v2-production-database-access.mjs',
+                        'historical-test':'scripts/production-release/api-admin-scope.test.py',
+                        'online-test':'scripts/production-release/online-recharge-scope.test.py'}.get(mutation,scope.GRANT_SOURCE)
+                    if mutation=='mode':f.candidate_inventory[name]['mode']='100755'
+                    elif mutation=='partial':f.candidate_inventory[name]=copy.deepcopy(f.inventory[name])
+                    elif mutation!='cross-a':f.candidate_inventory[name]['sha256']='0'*64
+                if mutation=='cross-a':
+                    bridge=f.reader.online_after_bit_cold(f.d,f.old,expected_commit=COMMIT)
+                    bridge['kind']=scope.ONLINE_PENDING_WORKSPACE_KIND
+                    with self.assertRaises(RuntimeError):scope._pending_workspace_profile(f.d,bridge,f.producer)
+                else:
+                    with self.assertRaises((RuntimeError,OSError)):scope.preflight(f.d,COMMIT)
+                f.a_reader.assert_not_called();f.d.compose.assert_not_called();f.d.sync_new_table_grants.assert_not_called();f.d.point_current.assert_not_called()
+
+    def test_actual_policy_protected_gate_rechecks_cold_group_original_and_workers(self):
+        with self.fixture(policy=True) as f:
+            self.preflight_and_f(f);target=f.base/'policy-candidate';target.mkdir(mode=0o700)
+            for name in scope._AFTER_BIT_BANK_POLICY_FILES:
+                dest=target/name;dest.parent.mkdir(parents=True,exist_ok=True);dest.write_bytes((ROOT/name).read_bytes());dest.chmod(0o644)
+            protected=('apps/api/src/id-business-v2/auto-recharge/worker/fixture.cjs',
+                'apps/api/src/id-business-v2/auto-registration/fixture.cjs',
+                'scripts/v2-data-integrity-audit.mjs','scripts/lib/v2-data-integrity-audit.mjs','scripts/sync-v2-new-table-grants.mjs')
+            for name in protected:
+                dest=target/name;dest.parent.mkdir(parents=True,exist_ok=True);dest.write_bytes((f.old/name).read_bytes());dest.chmod(0o644)
+            scope.protected_source(f.d,f.old,target)
+            for name in (*scope._AFTER_BIT_BANK_POLICY_FILES,*protected):
+                for directory in ((f.old,target) if name in scope._AFTER_BIT_BANK_POLICY_FILES else (target,)):
+                    dest=directory/name;raw=dest.read_bytes();dest.write_bytes(raw+b'UNSEALED')
+                    with self.subTest(name=name,original=directory==f.old),self.assertRaises(RuntimeError):scope.protected_source(f.d,f.old,target)
+                    dest.write_bytes(raw)
+            f.qb.unlink()
+            with self.assertRaises((RuntimeError,OSError)):scope.protected_source(f.d,f.old,target)
+            f.a_reader.assert_not_called();f.d.compose.assert_not_called();f.d.sync_new_table_grants.assert_not_called();f.d.point_current.assert_not_called()
+
+    def test_formal_b_stage_existing_api_origin_and_ordinary_readback(self):
+        self.formal_stage()
+
+    def test_formal_b_policy_group_stage_readback_and_client(self):
+        self.formal_stage(policy=True)
+
+    def formal_stage(self,policy=False):
+        with self.fixture(policy=policy) as f:
+            result,raw,path=self.preflight_and_f(f);bridge=result['onlineAfterBitOrigin'];events=[]
+            build=proof();build.update(kind='ONLINE_RECHARGE_AFTER_BIT_BUILD_PROOF',version=2,baselineCommit=COMMIT,
+                commit=f.producer['commit'],sourceTree=f.producer['sourceTree'],
+                baselineOriginSha256=scope.fingerprint(bridge),preflightBytesSha256=hashlib.sha256(raw).hexdigest(),
+                engineSourceSha256=scope.fingerprint({'worker.cjs':hashlib.sha256(b'synthetic').hexdigest()}),
+                composeSourceSha256=hashlib.sha256(b'synthetic-compose').hexdigest())
+            for n in build['images']:build['images'][n]['reference']=f"{REPOSITORY}:{f.producer['commit']}-124-1-{n}"
+            after=states(True)
+            for n in scope.UPDATED:after[n].update(image=build['images'][n]['imageId'],reference=build['images'][n]['reference'])
+            args=SimpleNamespace(online_recharge_only=True,commit=f.producer['commit'],source_tree=f.producer['sourceTree'],expected_current=COMMIT,
+                repository=REPOSITORY,run_id='124',run_attempt='1',ci_run_id='234',
+                online_recharge_build_proof=base64.b64encode(json.dumps(build).encode()).decode())
+            (f.old/'compose.release.json').write_text(json.dumps({'services':{n:{'image':r['reference']} for n,r in bridge['services'].items()}}))
+            def extract(d,commit,target):
+                for name in scope.CONTROL_FILES:
+                    dest=target/name;dest.parent.mkdir(parents=True,exist_ok=True);dest.write_bytes((ROOT/name).read_bytes())
+                engine=target/scope.ENGINE_ROOT;engine.mkdir(parents=True);(engine/'worker.cjs').write_bytes(b'synthetic')
+                (target/'docker-compose.aws-mysql.yml').write_bytes(b'synthetic-compose')
+                if policy:
+                    for name in scope._AFTER_BIT_BANK_POLICY_FILES:
+                        dest=target/name;dest.parent.mkdir(parents=True,exist_ok=True);dest.write_bytes((ROOT/name).read_bytes());dest.chmod(0o644)
+                    for name in ('apps/api/src/id-business-v2/auto-recharge/worker/fixture.cjs',
+                            'apps/api/src/id-business-v2/auto-registration/fixture.cjs',
+                            'scripts/v2-data-integrity-audit.mjs','scripts/lib/v2-data-integrity-audit.mjs',
+                            'scripts/sync-v2-new-table-grants.mjs'):
+                        dest=target/name;dest.parent.mkdir(parents=True,exist_ok=True);dest.write_bytes(b'SYNTHETIC_PROTECTED');dest.chmod(0o644)
+                return b'SYNTHETIC_ARCHIVE'
+            def point(target,name):
+                events.append('point');(f.base/'current').unlink();(f.base/'current').symlink_to(target)
+            class Fence:
+                def __init__(self,*a,**k):pass
+                def __enter__(self):events.append('fence');return self
+                def before_stop(self):events.append('before-stop')
+                def check(self):pass
+                def __exit__(self,*a):events.append('unfence')
+            class Gate:
+                record={'synthetic':True}
+                def stop_previous(self):events.append('old-api-stopped')
+                def finish(self):events.append('finish')
+                def close(self):pass
+                def abort(self):events.append('abort')
+            f.reader.WorkspaceUnusedAuditBarrier=Fence;f.reader.workspace_prepare=MagicMock(return_value=Gate())
+            f.reader.source_tree=MagicMock(return_value=f.producer['sourceTree']);f.reader.audit_receipt=MagicMock(return_value=f.audit)
+            f.d.__file__=str(ROOT/'scripts/production-release/remote-deploy.py');f.d.environment_values=env_values
+            f.d.fresh_backup=MagicMock(return_value={'s3Verified':True,'name':'synthetic.sql.gz'})
+            f.d.run=MagicMock(return_value='SYNTHETIC_ECR_LOGIN');f.d.wait_healthy=MagicMock()
+            f.d.point_current=MagicMock(side_effect=point)
+            f.d.compose=MagicMock(side_effect=lambda folder,*a,**k:events.append('switch:'+a[-1]))
+            f.d.sync_new_table_grants=MagicMock(return_value={'ok':True,'newTableCount':9})
+            f.stack.enter_context(patch.dict(scope._PENDING_WORKSPACE_FIRST,historical_guard=lambda *a:None))
+            for name,value in {'extract_source':extract,**({} if policy else {'protected_source':MagicMock()}),'verify_image_content':MagicMock(),
+                    'verify_running':MagicMock(),'configuration_hashes':MagicMock(return_value=f.config),
+                    'migration_database_state':MagicMock(return_value=f.recovery['state']),
+                    'require_preserved':lambda *a,**k:(after if k.get('include_engine') else bridge['services'],{}),
+                    'backup_receipt':MagicMock(),'workspace_backup_receipt':MagicMock(),'_pending_workspace_sqlite_receipt':MagicMock(),
+                    'workspace_backup':MagicMock(return_value={'name':'synthetic.sqlite3.gz','s3Verified':True}),
+                    'extend_environment':lambda d,old,new:(new/'.env.aws.production').write_bytes((old/'.env.aws.production').read_bytes()),
+                    'snapshot':lambda *a,**k:after if k.get('include_engine') else bridge['services'],
+                    'release_source_inventory':MagicMock(return_value=f.candidate_inventory),'fixed_recovery_inventory':MagicMock(return_value=f.inventory)}.items():
+                f.stack.enter_context(patch.object(scope,name,value))
+            response=MagicMock();response.__enter__.return_value.status=200
+            f.stack.enter_context(patch.object(scope.subprocess,'run',return_value=SimpleNamespace(returncode=0)))
+            f.stack.enter_context(patch.object(scope.urllib.request,'urlopen',return_value=response))
+            output=io.StringIO()
+            with redirect_stdout(output):code=scope._release_locked(f.d,args)
+            self.assertEqual(code,0,output.getvalue());q=json.loads(output.getvalue())
+            self.assertEqual(q['onlineAfterBitOrigin'],bridge);self.assertNotIn('onlinePendingWorkspaceOrigin',q)
+            self.assertFalse(q['migrationPerformed']);self.assertEqual(q['checkCount'],49)
+            self.assertEqual([e for e in events if e.startswith('switch:')],['switch:admin','switch:api','switch:online-recharge'])
+            self.assertLess(events.index('old-api-stopped'),events.index('switch:api'));self.assertIn('finish',events)
+            f.a_reader.assert_not_called();f.d.compose.assert_any_call(unittest.mock.ANY,'up','-d','--no-deps','--no-build','--pull','never','--force-recreate','api',timeout=300)
+            f.d.sync_new_table_grants.assert_called_once();self.assertEqual(f.d.point_current.call_count,1)
+            # Independent Q re-enters the existing API B origin and ordinary ONLINE body.
+            self.assertEqual(scope.readback(f.d,f.producer['commit'])['onlineAfterBitOrigin'],bridge)
+            transport=load('formal_b_readonly_client','online-recharge-readonly.py')
+            client=f.base/'client';client.mkdir(mode=0o700)
+            invocation={'CommandId':json.loads(raw)['commandId'],'InstanceId':'i-12345678901234567',
+                'DocumentName':'AWS-RunShellScript','PluginName':'aws:runShellScript','Status':'Success','ResponseCode':0,
+                'ExecutionEndDateTime':'2026-01-01T00:00:00Z','StandardErrorContent':'','StandardOutputContent':json.dumps(result)}
+            for name,data in {'online-recharge-pending-workspace-preflight-result.json':raw,
+                    'online-recharge-pending-workspace-preflight-invocation.json':json.dumps(invocation).encode(),
+                    'online-recharge-build-proof.json':json.dumps(build).encode()}.items():
+                item=client/name;item.write_bytes(data);item.chmod(0o600)
+            with patch.dict(os.environ,EXPECTED_CURRENT=COMMIT,PRODUCTION_INSTANCE_ID=invocation['InstanceId']), \
+                    patch.object(transport,'_pending_workspace_modules',return_value=(f.d,scope,None)):
+                client_q=transport.pending_workspace_client_binding(q,'readback',f.producer,client)
+            self.assertEqual(client_q['onlineAfterBitOrigin'],bridge)
+            self.assertNotIn('onlinePendingWorkspaceOrigin',client_q);f.a_reader.assert_not_called()
+
+
+
+class AfterBitReceiptCISourceTests(unittest.TestCase):
+    @contextmanager
+    def fixture(self):
+        helper = AfterBitFormalTests()
+        with helper.fixture(policy=True) as value:
+            self.assertEqual(len(scope._AFTER_BIT_RELEASE_CI_FILES), 4)
+            for name, (before, after) in scope._AFTER_BIT_RELEASE_CI_FILES.items():
+                value.inventory[name] = {'sha256': before, 'mode': '100644'}
+                value.candidate_inventory[name] = {'sha256': after, 'mode': '100644'}
+            inventory_hash = scope.fingerprint(value.inventory)
+            value.publication['producer']['archiveInventorySha256'] = inventory_hash
+            value.publication['archiveInventorySha256'] = inventory_hash
+            issued = scope.declaration_equivalence_successor_issuer_binding(controller(), value.publication,
+                live_services=value.publication['afterServices'],
+                live_configuration=value.publication['configurationAfter'],
+                execution_producer=value.publication['producer'])
+            invocation = json.loads(value.qb.read_text())
+            receipt = json.loads(invocation['StandardOutputContent'])
+            receipt['declarationEquivalenceSuccessorPublication'] = issued
+            invocation['StandardOutputContent'] = json.dumps(receipt)
+            value.qb.write_text(json.dumps(invocation))
+            yield helper, value
+
+    def test_exact_ci_group_and_bank_policy_bind_real_b_preflight(self):
+        with self.fixture() as (helper, value):
+            result, raw, path = helper.preflight_and_f(value)
+            bridge = result['onlineAfterBitOrigin']
+            inventory = scope._pending_workspace_profile(value.d, bridge, value.producer)
+            self.assertIs(inventory, value.candidate_inventory)
+            self.assertEqual(scope._workspace_bank_policy_inventory(value.d, bridge,
+                value.inventory, inventory), set(scope._AFTER_BIT_BANK_POLICY_FILES)
+                - scope._PENDING_WORKSPACE_RECEIPT_COMPATIBILITY_FILES)
+            value.a_reader.assert_not_called()
+            value.d.compose.assert_not_called()
+            value.d.sync_new_table_grants.assert_not_called()
+            value.d.point_current.assert_not_called()
+
+    def test_partial_ci_wrong_hash_mode_source_and_a_relabel_are_rejected(self):
+        mutations = ('partial', 'candidate-hash', 'original-hash', 'mode', 'unrelated-source', 'cross-a')
+        for name in scope._AFTER_BIT_RELEASE_CI_FILES:
+            for mutation in mutations:
+                with self.subTest(name=name, mutation=mutation), self.fixture() as (helper, value):
+                    bridge = value.reader.online_after_bit_cold(value.d, value.old, expected_commit=COMMIT)
+                    if mutation == 'partial':
+                        value.candidate_inventory[name] = copy.deepcopy(value.inventory[name])
+                    elif mutation == 'candidate-hash':
+                        value.candidate_inventory[name]['sha256'] = '0' * 64
+                    elif mutation == 'original-hash':
+                        value.inventory[name]['sha256'] = '0' * 64
+                    elif mutation == 'mode':
+                        value.candidate_inventory[name]['mode'] = '100755'
+                    elif mutation == 'unrelated-source':
+                        key = 'apps/api/src/id-business-v2/online-recharge/unapproved.ts'
+                        value.inventory[key] = {'sha256': '1' * 64, 'mode': '100644'}
+                        value.candidate_inventory[key] = {'sha256': '2' * 64, 'mode': '100644'}
+                    else:
+                        bridge['kind'] = scope.ONLINE_PENDING_WORKSPACE_KIND
+                    with self.assertRaises(RuntimeError):
+                        scope._pending_workspace_profile(value.d, bridge, value.producer)
+                    value.d.compose.assert_not_called()
+                    value.d.sync_new_table_grants.assert_not_called()
+                    value.d.point_current.assert_not_called()
+
+    def test_ci_hash_group_is_the_exact_checked_source_and_mode(self):
+        self.assertEqual(len(scope._AFTER_BIT_RELEASE_CI_FILES), 4)
+        for name, (before, after) in scope._AFTER_BIT_RELEASE_CI_FILES.items():
+            raw = subprocess.check_output(['git', 'show', '31d2c6885a45817cd40d23fce8d6145bc9f18af2:' + name], cwd=ROOT)
+            self.assertEqual(hashlib.sha256(raw).hexdigest(), before)
+            self.assertEqual(hashlib.sha256((ROOT / name).read_bytes()).hexdigest(), after)
+            self.assertFalse((ROOT / name).stat().st_mode & 0o111)
 
 
 if __name__ == '__main__':

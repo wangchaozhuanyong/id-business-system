@@ -88,6 +88,9 @@ function createAcceptanceSchema() {
     CREATE TABLE \`sensitive_access_logs\` (id INT PRIMARY KEY, payload VARCHAR(80) NOT NULL);
     CREATE TABLE \`ip_whitelists\` (id INT PRIMARY KEY, cidr VARCHAR(40) NOT NULL);
     CREATE TABLE \`id_business_v2_orders\` (id INT PRIMARY KEY, status VARCHAR(20) NOT NULL);
+    CREATE TABLE \`id_business_v2_bank_recharge_cards\` (id INT PRIMARY KEY);
+    CREATE TABLE \`id_business_v2_bank_recharge_orders\` (id INT PRIMARY KEY);
+    CREATE TABLE \`id_business_v2_recharge_jobs\` (id INT PRIMARY KEY);
   `;
   const result = spawnSync(
     'docker',
@@ -145,6 +148,25 @@ async function verifyRuntimeEnforcement(databaseUrl) {
       "INSERT INTO `ip_whitelists` (`id`, `cidr`) VALUES (1, '203.0.113.0/24')"
     );
     await client.$executeRawUnsafe('DELETE FROM `ip_whitelists` WHERE `id` = 1');
+    await client.$executeRawUnsafe(
+      'INSERT INTO `id_business_v2_bank_recharge_cards` (`id`) VALUES (1)'
+    );
+    assert.equal(
+      await client.$executeRawUnsafe(
+        'DELETE FROM `id_business_v2_bank_recharge_cards` WHERE `id` = 1'
+      ),
+      1
+    );
+    for (const table of ['id_business_v2_bank_recharge_orders', 'id_business_v2_recharge_jobs']) {
+      await client.$executeRawUnsafe(`INSERT INTO \`${table}\` (\`id\`) VALUES (1)`);
+      await assert.rejects(
+        client.$executeRawUnsafe(`DELETE FROM \`${table}\` WHERE \`id\` = 1`),
+        /denied|command denied/i
+      );
+      assert.deepEqual(await client.$queryRawUnsafe(`SELECT \`id\` FROM \`${table}\``), [
+        { id: 1 }
+      ]);
+    }
     await assert.rejects(
       client.$executeRawUnsafe('CREATE TABLE `runtime_must_not_create` (`id` INT)'),
       /denied|command denied|privilege/i

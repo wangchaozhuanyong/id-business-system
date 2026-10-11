@@ -23,7 +23,9 @@ import {
   hasAppleMailboxScope,
   onlineRechargeRecoveryPolicy,
   productionDatabaseAccessHelper,
-  productionDatabaseAccessTest
+  productionDatabaseAccessTest,
+  productionDatabaseAccessAcceptance,
+  hasBankCardDeletePolicyProof
 } from './ci-recharge-scope.mjs';
 import { matchesSourceEvidence } from './ci-recharge-evidence.mjs';
 
@@ -40,6 +42,66 @@ const grantAdditions =
   "  'online_recharge_bills',\n  'online_recharge_cards',\n  'online_recharge_proxies',\n";
 const grantHelperAfter = grantHelperBefore.replace(grantAnchor, grantAnchor + grantAdditions);
 const grantProof = { before: grantHelperBefore, after: grantHelperAfter };
+const bankAnchor = 'export const V2_RUNTIME_DELETE_TABLES = Object.freeze([\n';
+const bankHelperAfter = grantHelperAfter.replace(
+  bankAnchor,
+  bankAnchor + "  'id_business_v2_bank_recharge_cards',\n"
+);
+const bankAcceptanceBefore = execFileSync(
+  'git',
+  ['show', '31d2c6885a45817cd40d23fce8d6145bc9f18af2:' + productionDatabaseAccessAcceptance],
+  { cwd: root, encoding: 'utf8' }
+);
+// Reconstruct the sealed fixture from its ancestor; do not depend on an open PR
+// object or mutable HEAD after this finite exception has been used.
+const bankAcceptanceAfter = bankAcceptanceBefore
+  .replace(
+    '  `;\n  const result = spawnSync(',
+    [
+      '    CREATE TABLE \\`id_business_v2_bank_recharge_cards\\` (id INT PRIMARY KEY);',
+      '    CREATE TABLE \\`id_business_v2_bank_recharge_orders\\` (id INT PRIMARY KEY);',
+      '    CREATE TABLE \\`id_business_v2_recharge_jobs\\` (id INT PRIMARY KEY);',
+      '  `;\n  const result = spawnSync('
+    ].join('\n')
+  )
+  .replace(
+    "    await client.$executeRawUnsafe('DELETE FROM `ip_whitelists` WHERE `id` = 1');\n",
+    [
+      "    await client.$executeRawUnsafe('DELETE FROM `ip_whitelists` WHERE `id` = 1');",
+      '    await client.$executeRawUnsafe(',
+      "      'INSERT INTO `id_business_v2_bank_recharge_cards` (`id`) VALUES (1)'",
+      '    );',
+      '    assert.equal(',
+      '      await client.$executeRawUnsafe(',
+      "        'DELETE FROM `id_business_v2_bank_recharge_cards` WHERE `id` = 1'",
+      '      ),',
+      '      1',
+      '    );',
+      "    for (const table of ['id_business_v2_bank_recharge_orders', 'id_business_v2_recharge_jobs']) {",
+      '      await client.$executeRawUnsafe(`INSERT INTO \\`${table}\\` (\\`id\\`) VALUES (1)`);',
+      '      await assert.rejects(',
+      '        client.$executeRawUnsafe(`DELETE FROM \\`${table}\\` WHERE \\`id\\` = 1`),',
+      '        /denied|command denied/i',
+      '      );',
+      '      assert.deepEqual(await client.$queryRawUnsafe(`SELECT \\`id\\` FROM \\`${table}\\``), [',
+      '        { id: 1 }',
+      '      ]);',
+      '    }\n'
+    ].join('\n')
+  );
+const bankProof = {
+  before: grantHelperAfter,
+  after: bankHelperAfter,
+  beforeMode: '100644',
+  afterMode: '100644',
+  acceptance: {
+    before: bankAcceptanceBefore,
+    after: bankAcceptanceAfter,
+    beforeMode: '100644',
+    afterMode: '100644'
+  }
+};
+const bankPolicyPaths = [productionDatabaseAccessHelper, productionDatabaseAccessAcceptance];
 
 function recordScopeClassification(paths, snapshot, eventName = 'pull_request') {
   // Exercise the real CLI with synthetic Git snapshots and successful same-tree PR evidence.
@@ -72,6 +134,16 @@ function recordScopeClassification(paths, snapshot, eventName = 'pull_request') 
           const source = args[1].startsWith('HEAD:') ? snapshot?.after : snapshot?.before;
           if (typeof source !== 'string') throw new Error('synthetic missing Git blob');
           return source;
+        }
+        if (args[0] === 'show' && args[1].endsWith(':' + process.env.SCOPE_TEST_ACCEPTANCE)) {
+          const source = args[1].startsWith('HEAD:') ? snapshot?.acceptance?.after : snapshot?.acceptance?.before;
+          if (typeof source !== 'string') throw new Error('synthetic missing acceptance blob');
+          return source;
+        }
+        if (args[0] === 'ls-tree') {
+          const source = args[3] === process.env.SCOPE_TEST_HELPER ? snapshot : snapshot?.acceptance;
+          const mode = args[1] === 'HEAD' ? source?.afterMode : source?.beforeMode;
+          return (mode ?? '100644') + ' blob ' + 'e'.repeat(40) + '\\t' + args[3] + '\\n';
         }
         if (args[0] === 'show' && args[1].endsWith(':apps/api/prisma-mysql/schema.prisma'))
           return process.env.SCOPE_TEST_SCHEMA;
@@ -119,11 +191,98 @@ function recordScopeClassification(paths, snapshot, eventName = 'pull_request') 
         SCOPE_TEST_PATHS: JSON.stringify(paths),
         SCOPE_TEST_SNAPSHOT: JSON.stringify(snapshot),
         SCOPE_TEST_HELPER: productionDatabaseAccessHelper,
+        SCOPE_TEST_ACCEPTANCE: productionDatabaseAccessAcceptance,
         SCOPE_TEST_SCHEMA: schema
       }
     })
   );
 }
+
+test('bank-card policy controls require the exact paired source hashes and regular Git modes', () => {
+  const paths = [
+    ...bankPolicyPaths,
+    productionDatabaseAccessTest,
+    'scripts/production-release/online-recharge-scope.py',
+    'scripts/production-release/online-recharge-scope.test.py',
+    'scripts/ci-recharge-scope.mjs',
+    'scripts/ci-recharge-check.mjs'
+  ];
+  assert.equal(isCiOnly(paths), false);
+  assert.equal(hasBankCardDeletePolicyProof(paths, bankProof), true);
+  assert.equal(checkMode(paths, schema, schema, bankProof), 'ci-only');
+  assert.deepEqual(selectedParts(paths, bankProof), ['guards', 'security']);
+  for (const only of bankPolicyPaths) {
+    assert.equal(hasBankCardDeletePolicyProof([only], bankProof), false);
+    assert.equal(checkMode([only], schema, schema, bankProof), 'full');
+  }
+});
+
+test('bank-card proof rejects either source drift, unknown modes and mixed business paths', () => {
+  const invalid = [
+    undefined,
+    grantProof,
+    { ...bankProof, before: bankProof.before + '\n' },
+    { ...bankProof, after: bankProof.after + '\n' },
+    { ...bankProof, beforeMode: undefined },
+    { ...bankProof, beforeMode: '100755' },
+    { ...bankProof, afterMode: '120000' },
+    { ...bankProof, acceptance: undefined },
+    { ...bankProof, acceptance: { ...bankProof.acceptance, before: '' } },
+    {
+      ...bankProof,
+      acceptance: { ...bankProof.acceptance, after: bankProof.acceptance.after + '\n' }
+    },
+    { ...bankProof, acceptance: { ...bankProof.acceptance, beforeMode: '100755' } },
+    { ...bankProof, acceptance: { ...bankProof.acceptance, afterMode: undefined } },
+    {
+      ...bankProof,
+      after: bankProof.after.replace(
+        'id_business_v2_bank_recharge_cards',
+        'id_business_v2_bank_recharge_orders'
+      )
+    }
+  ];
+  for (const snapshot of invalid) {
+    assert.equal(hasBankCardDeletePolicyProof(bankPolicyPaths, snapshot), false);
+    assert.equal(checkMode(bankPolicyPaths, schema, schema, snapshot), 'full');
+  }
+  for (const other of [
+    productionDatabaseAccessAcceptance + '.backup',
+    'scripts/acceptance-v2-financial-integrity.mjs',
+    'scripts/lib/v2-production-database-access-other.mjs',
+    'scripts/provision-v2-production-database-access.mjs',
+    'apps/api/src/auth/auth.service.ts',
+    'apps/api/prisma-mysql/schema.prisma',
+    'apps/admin/src/v2/features/auto-registration/useAppleMailboxes.ts'
+  ]) {
+    const paths = [...bankPolicyPaths, other];
+    assert.equal(hasBankCardDeletePolicyProof(paths, bankProof), false, other);
+    assert.equal(checkMode(paths, schema, schema, bankProof), 'full', other);
+  }
+});
+
+test('bank-card PR and identical-tree main CLI select guards and disposable database security', () => {
+  for (const eventName of ['pull_request', 'push']) {
+    const { result, gitCalls } = recordScopeClassification(bankPolicyPaths, bankProof, eventName);
+    assert.equal(result.mode, 'ci-only');
+    assert.deepEqual(result.checkParts, ['guards', 'security']);
+    assert.equal(result.reuseMain, eventName === 'push');
+    for (const path of bankPolicyPaths) {
+      assert.ok(gitCalls.some((args) => args.join(' ') === 'show ' + 'a'.repeat(40) + ':' + path));
+      assert.ok(gitCalls.some((args) => args.join(' ') === 'show HEAD:' + path));
+      assert.ok(
+        gitCalls.some((args) => args.join(' ') === 'ls-tree ' + 'a'.repeat(40) + ' -- ' + path)
+      );
+      assert.ok(gitCalls.some((args) => args.join(' ') === 'ls-tree HEAD -- ' + path));
+    }
+  }
+  for (const snapshot of [
+    { ...bankProof, acceptance: {} },
+    { ...bankProof, afterMode: '100755' },
+    { ...bankProof, acceptance: { ...bankProof.acceptance, after: '' } }
+  ])
+    assert.equal(recordScopeClassification(bankPolicyPaths, snapshot).result.mode, 'full');
+});
 
 test('online recovery accepts only the reviewed three-line grant change with exact source proof', () => {
   assert.equal(
