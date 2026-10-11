@@ -3308,7 +3308,7 @@ class PendingWorkspaceStageTests(unittest.TestCase):
                 scope.migration_source_check(d,Path(b['baselineRelease']),candidate=False)
 
     def test_ordinary14_original_bodies_are_exact_and_no_registry_added(self):
-        import ast
+        import ast, re
         text=(ROOT/'scripts/production-release/online-recharge-scope.py').read_text()
         nodes={}
         for n in ast.parse(text).body:
@@ -3316,7 +3316,10 @@ class PendingWorkspaceStageTests(unittest.TestCase):
         for name,fn in scope._PENDING_WORKSPACE_FIRST.items():
             self.assertEqual(fn.__code__.co_firstlineno,nodes[name].lineno)
         added=text[text.index('# Same immutable main candidate:'):]
-        self.assertNotIn('REVIEWED_',added)
+        # Only the immutable qualification profile and its existing pool mode
+        # may use this prefix; no new review registry or exception is admitted.
+        self.assertEqual(sorted(re.findall(r'REVIEWED_[A-Z0-9_]+',added)),
+            ['REVIEWED_BUILTIN_ZERO_INPUTS','REVIEWED_PROFILE_CANONICAL_SHA256'])
         self.assertNotIn('declaration_equivalence_successor',added)
         self.assertEqual(added.count('reader.pending_online_declaration_b_files('),1)
         self.assertNotIn('sync_new_table_grants',scope._workspace_after_bit_materials.__code__.co_names)
@@ -3661,10 +3664,13 @@ class AfterBitFormalTests(unittest.TestCase):
             def point(target,name):
                 events.append('point');(f.base/'current').unlink();(f.base/'current').symlink_to(target)
             class Fence:
-                def __init__(self,*a,**k):self.query=f.reader.ONLINE_AUDIT_QUERY
+                def __init__(self,*a,**k):
+                    self.query=f.reader.ONLINE_AUDIT_QUERY
+                    self.source_api_identity={n:bridge['services']['api'][n] for n in ('containerId','image','startedAtSha256')}
                 def __enter__(self):
                     events.append('fence')
-                    if failure=='fence':raise RuntimeError('SYNTHETIC_GUARD_FAILED')
+                    if failure=='fence':
+                        events.append('unfence');raise RuntimeError('SYNTHETIC_GUARD_FAILED')
                     return self
                 def before_stop(self):
                     events.append('before-stop')
@@ -3678,14 +3684,23 @@ class AfterBitFormalTests(unittest.TestCase):
                     return {'synthetic':True}
                 def __exit__(self,*a):events.append('unfence')
             class Gate:
+                d=f.d
+                deadline=scope.time.monotonic()+150
+                api_identity={n:bridge['services']['api'][n] for n in ('containerId','image','startedAtSha256')}
                 record={'synthetic':True}
                 def stop_previous(self):
+                    self.d.run('docker','stop','--time','30',bridge['services']['api']['containerId'],timeout=45)
                     events.append('old-api-stopped')
                     if failure=='stop':raise RuntimeError('SYNTHETIC_STOP_FAILED')
                 def finish(self):events.append('finish')
                 def close(self):events.append('sqlite-close')
                 def abort(self):events.append('abort')
             f.reader.WorkspaceUnusedAuditBarrier=Fence;f.reader.workspace_prepare=MagicMock(return_value=Gate())
+            f.reader.workspace_database_identity=MagicMock(return_value={'database':'fixture',
+                'environmentSha256':hashlib.sha256((f.old/'.env.aws.production').read_bytes()).hexdigest(),
+                'mysql':bridge['services']['mysql']})
+            f.reader.jobs_idle=MagicMock(return_value={'rechargeIdle':True,'registrationBusy':False,
+                'registrationLeaseActive':False,'registrationWindowRetained':False})
             if failure=='sqlite-prepare':f.reader.workspace_prepare.side_effect=RuntimeError('SYNTHETIC_SQLITE_FAILED')
             if failure is not None:
                 def rollback(*a,**k):events.append('rollback');return True,{}
@@ -3720,13 +3735,15 @@ class AfterBitFormalTests(unittest.TestCase):
             if failure is not None:
                 self.assertEqual(code,1,output.getvalue())
                 self.assertNotIn('switch:api',events);self.assertNotIn('switch:online-recharge',events)
-                self.assertIn('unfence',events)
+                if failure=='sqlite-prepare':
+                    self.assertNotIn('fence',events);self.assertNotIn('unfence',events)
+                else:self.assertIn('unfence',events)
                 if failure not in ('fence','sqlite-prepare'):
                     self.assertLess(events.index('unfence'),events.index('sqlite-close'))
                     self.assertLess(events.index('sqlite-close'),events.index('rollback'))
                     self.assertLess(events.index('rollback'),events.index('abort'))
                 self.assertNotIn('finish',events)
-                return
+                return json.loads(output.getvalue()),events
             self.assertEqual(code,0,output.getvalue());q=json.loads(output.getvalue())
             self.assertEqual(q['onlineAfterBitOrigin'],bridge);self.assertNotIn('onlinePendingWorkspaceOrigin',q)
             self.assertFalse(q['migrationPerformed']);self.assertEqual(q['checkCount'],49)
@@ -4157,6 +4174,279 @@ class AfterBitUnusedAuditBarrierTests(unittest.TestCase):
             self.assertEqual(f.calls, [])
 
 
+class AfterBitSwitchControlTests(unittest.TestCase):
+    """Real B pipe and immutable API stop body; external SQLite acquisition is synthetic."""
+    @contextmanager
+    def fixture(self, failure=None, admin_seconds=120, sqlite_seconds=60, actual_before=None, source_seconds=0):
+        helper = AfterBitUnusedAuditBarrierTests()
+        with helper.fixture() as f, ExitStack() as stack:
+            f.base = f.d.BASE
+            if actual_before is True:
+                actual_before = copy.deepcopy(f.bridge['services'])
+                actual_before['api']['containerId'] = 'b' * 64
+            events, changed, timing, clock = [], [], {}, [1000.0]
+            (f.directory / '.env.aws.production').write_bytes(b'SAFE_FIXTURE=1\n')
+            stack.enter_context(patch.object(scope.time, 'monotonic', side_effect=lambda: clock[0]))
+            gate = object.__new__(shared.WorkspaceSqliteProtection)
+            gate.d, gate.previous, gate.api_identity, gate.record = f.d, f.directory, f.identity, f.sqlite.record
+            gate.close = MagicMock(side_effect=lambda: events.append('sqlite-close'))
+            gate.abort = MagicMock(side_effect=lambda: events.append('sqlite-abort'))
+            gate.finish = MagicMock()
+            def check_locked():
+                events.append('sqlite-check')
+                require(clock[0] < gate.deadline, 'API_ADMIN_WORKSPACE_SQLITE_FENCE_TIMEOUT')
+                if failure == 'sqlite-check': raise RuntimeError('API_ADMIN_WORKSPACE_SQLITE_FENCE_TIMEOUT')
+                if failure in ('wrong-cid', 'wrong-time', 'extra-stop-arg', 'bool-timeout', 'duplicate-stop'):
+                    command = ['docker', 'stop', '--time', '30', f.identity['containerId']]
+                    kwargs = {'timeout': 45}
+                    if failure == 'wrong-cid': command[-1] = 'f' * 64
+                    elif failure == 'wrong-time': command[3] = '31'
+                    elif failure == 'extra-stop-arg': command.append('unexpected')
+                    elif failure == 'bool-timeout': kwargs['timeout'] = True
+                    gate.d.run(*command, **kwargs)
+            gate.check_locked = MagicMock(side_effect=check_locked)
+            inspect, compose = f.d.run.side_effect, f.d.compose.side_effect
+            def run(*command, **kwargs):
+                if command[:2] == ('docker', 'stop'):
+                    self.assertEqual(command, ('docker', 'stop', '--time', '30',
+                        f.identity['containerId'] if actual_before is None else actual_before['api']['containerId']))
+                    self.assertEqual(changed, ['admin', 'api'])
+                    events.append('docker-stop'); clock[0] += 2
+                    f.holder.stopped = True
+                    if failure == 'partial-stop': raise RuntimeError('SYNTHETIC_SECRET_STOP_OUTPUT')
+                    return ''
+                if command[-1] == f.identity['containerId'] and f.holder.stopped:
+                    events.append('old-api-pid-inspect')
+                    if failure == 'stop-inspect': raise RuntimeError('SYNTHETIC_SECRET_INSPECT_OUTPUT')
+                return inspect(*command, **kwargs)
+            f.d.run.side_effect = run
+            def switch(directory, *command, **kwargs):
+                if command[0] == 'up':
+                    events.append('switch:' + command[-1])
+                    self.assertEqual(len(f.processes), 0 if command[-1] == 'admin' else 1)
+                    if failure == 'admin' and command[-1] == 'admin': raise RuntimeError('SYNTHETIC_SECRET_ADMIN_OUTPUT')
+                    if command[-1] != 'admin': self.assertIsNotNone(f.processes[0].poll())
+                    return ''
+                if command[:2] == ('exec', '-e') and 'SELECT COUNT(*) FROM id_business_v2_' in command[-1]:
+                    self.assertLessEqual(kwargs['timeout'], 5)
+                    kind = 'recharge' if 'id_business_v2_recharge_jobs' in command[-1] else 'registration'
+                    events.append('lease:' + kind)
+                    if failure == 'idle-' + kind: return '1'
+                    if failure == 'idle-query-timeout': raise subprocess.TimeoutExpired('SYNTHETIC_PRIVATE_COMMAND', kwargs['timeout'])
+                    return '0'
+                return compose(directory, *command, **kwargs)
+            f.d.compose.side_effect = switch
+            def runtime(directory):
+                events.append('worker-idle')
+                if failure == 'idle-worker-timeout': raise subprocess.TimeoutExpired('SYNTHETIC_PRIVATE_COMMAND', 15)
+                return {'supported':True,'registrationBusy':failure == 'idle-worker', 'registrationWindowRetained':False}
+            f.d.registration_runtime_state = MagicMock(side_effect=runtime)
+            def healthy(directory, service):
+                events.append('health:' + service)
+                if service == 'admin': clock[0] += admin_seconds
+            f.d.wait_healthy = MagicMock(side_effect=healthy)
+            f.d.rollback_service = MagicMock(side_effect=lambda previous, target, service, before: events.append('restore:' + service))
+            def prepare(*args, **kwargs):
+                self.assertIs(kwargs['legacy'], False)
+                self.assertEqual(f.processes, [])
+                self.assertIn('health:admin', events)
+                events.append('sqlite-prepare')
+                gate.deadline = clock[0] + 150
+                clock[0] += sqlite_seconds
+                if failure == 'sqlite-prepare':
+                    error = RuntimeError('API_ADMIN_WORKSPACE_SQLITE_PREPARATION_FAILED'); error.sqlite_gate = gate
+                    raise error
+                if failure == 'gate-identity': gate.api_identity = {**f.identity, 'containerId': 'f' * 64}
+                if failure == 'idle-mysql-drift': f.holder.mysql['image'] = 'sha256:' + 'f' * 64
+                return gate
+            original_factory = scope._online_after_bit_unused_audit_barrier
+            def factory(*args):
+                self.assertIn('health:admin', events)
+                events.append('audit-prepare')
+                if actual_before is None:
+                    barrier = original_factory(*args)
+                else:
+                    # Recovery qualification belongs to the caller. Here only
+                    # its separately supplied source identity is synthetic.
+                    identity = {**f.identity, **{name: actual_before['api'][name]
+                        for name in ('containerId', 'image', 'startedAtSha256')}}
+                    gate.api_identity = identity
+                    barrier = scope._online_after_bit_audit_transport(f.d, f.directory, f.bridge, shared,
+                        identity, f.plan, scope._online_after_bit_audit_binding(f.d, f.bridge, f.proof),
+                        first_api_check=lambda deadline: None)
+                if failure == 'factory-identity': barrier.source_api_identity['containerId'] = 'f' * 64
+                enter, before_stop, check, confirm, close = (getattr(barrier, name)
+                    for name in ('__enter__', 'before_stop', 'check', 'confirm_stopped', '__exit__'))
+                def locked():
+                    self.assertIn('sqlite-prepare', events)
+                    events.append('mysql-lock')
+                    result = enter()
+                    if failure == 'reserve': clock[0] += 41
+                    return result
+                def guard():
+                    events.append('before-stop'); return before_stop()
+                def checked(*args):
+                    events.append('mysql-check'); return check(*args)
+                def confirmed(sqlite):
+                    self.assertTrue(f.holder.stopped)
+                    events.append('stopped-proof'); return confirm(sqlite)
+                def closed(*args):
+                    events.append('mysql-unlock'); return close(*args)
+                barrier.__enter__, barrier.before_stop, barrier.check = locked, guard, checked
+                barrier.confirm_stopped, barrier.__exit__ = confirmed, closed
+                return barrier
+            for name in ('require_preserved', 'jobs_idle', 'historical_guard', 'require_fresh_resources'):
+                def checked(*args, _name=name, **kwargs):
+                    events.append(_name)
+                    self.assertFalse(any(p.poll() is None for p in f.processes), 'full prechecks must run outside MySQL lock')
+                    if failure == 'api-precheck' and events.count('health:admin') and _name == 'jobs_idle':
+                        raise RuntimeError('ONLINE_RECHARGE_TASKS_BUSY')
+                    if _name == 'historical_guard' and events.count('historical_guard') == 2:
+                        self.assertFalse(hasattr(gate, 'deadline'), 'complete source checks must precede SQLite lock')
+                        clock[0] += source_seconds
+                stack.enter_context(patch.object(scope, name, side_effect=checked))
+            stack.enter_context(patch.object(scope, '_online_after_bit_unused_audit_barrier', side_effect=factory))
+            stack.enter_context(patch.object(shared, 'workspace_prepare', side_effect=prepare))
+            f.changed, f.timing, f.events, f.clock, f.gate = changed, timing, events, clock, gate
+            f.actual_before = actual_before
+            f.switch = lambda: scope._online_after_bit_switch(f.d, f.directory, f.base / 'target',
+                f.bridge['services'] if actual_before is None else actual_before,
+                b'SAFE_FIXTURE', {}, f.proof, SimpleNamespace(), f.bridge, changed, timing)
+            yield f
+
+    def test_slow_admin_and_sqlite_preparation_leave_fresh_210_second_guard_and_original_150_sqlite_deadline(self):
+        with self.fixture() as f:
+            gate, receipt = f.switch()
+            self.assertIs(gate, f.gate); self.assertIs(gate.d, f.d)
+            self.assertEqual(receipt['oldApiStop']['pid'], 0)
+            self.assertGreater(f.timing['elapsedSeconds'], 170)
+            self.assertLess(f.timing['mysqlLockElapsedSeconds'], 40)
+            self.assertGreater(f.timing['mysqlLockRemainingSeconds'], 170)
+            self.assertEqual(f.gate.deadline, 1270)
+            self.assertEqual([e for e in f.events if e.startswith('switch:')], ['switch:admin', 'switch:api', 'switch:online-recharge'])
+            self.assertEqual(f.events.count('docker-stop'), 1)
+            self.assertLess(f.events.index('health:admin'), f.events.index('sqlite-prepare'))
+            self.assertLess(f.events.index('sqlite-prepare'), f.events.index('mysql-lock'))
+            self.assertLess(f.events.index('stopped-proof'), f.events.index('mysql-unlock'))
+            self.assertLess(f.events.index('mysql-unlock'), f.events.index('switch:api'))
+            captured = f.captured.read_text()
+            self.assertIn('wait_timeout=240', captured)
+            self.assertEqual(captured.count('LOCK TABLES'), 1)
+            self.assertTrue(f.timing['apiStopAttempted']); self.assertTrue(f.timing['apiStopCompleted'])
+
+    def test_slow_full_api_source_prechecks_do_not_consume_sqlite_150_seconds(self):
+        with self.fixture(source_seconds=100) as f:
+            gate, receipt = f.switch()
+            self.assertEqual(gate.deadline, 1370)
+            self.assertEqual(f.clock[0], 1282)
+            self.assertEqual(f.timing['mysqlLockElapsedSeconds'], 2)
+            self.assertEqual(receipt['oldApiStop']['pid'], 0)
+            self.assertLess(f.events.index('audit-prepare'), f.events.index('sqlite-prepare'))
+            self.assertLess(f.events.index('sqlite-prepare'), f.events.index('lease:recharge'))
+            self.assertLess(f.events.index('lease:registration'), f.events.index('mysql-lock'))
+            self.assertEqual(f.events.count('historical_guard'), 3)
+            self.assertEqual(f.events.count('docker-stop'), 1)
+
+    def test_fresh_original_activity_predicates_and_database_drift_refuse_before_mysql_lock(self):
+        for failure, expected in (('idle-recharge', 'API_ADMIN_RECHARGE_LEASE_ACTIVE'),
+                ('idle-registration', 'API_ADMIN_REGISTRATION_LEASE_ACTIVE'),
+                ('idle-worker', 'API_ADMIN_REGISTRATION_BUSY'),
+                ('idle-mysql-drift', 'ONLINE_RECHARGE_AFTER_BIT_MYSQL_CHANGED'),
+                ('idle-query-timeout', None), ('idle-worker-timeout', None)):
+            with self.subTest(failure=failure), self.fixture(failure=failure) as f:
+                with self.assertRaises((RuntimeError, subprocess.TimeoutExpired)) as caught: f.switch()
+                if expected is not None: self.assertEqual(str(caught.exception), expected)
+                self.assertEqual(f.timing['phase'], 'API_IDLE')
+                self.assertEqual(f.changed, ['admin'])
+                self.assertEqual(f.processes, [])
+                self.assertFalse(f.timing['apiStopAttempted'])
+                self.assertNotIn('switch:api', f.events)
+                self.assertNotIn('SYNTHETIC_PRIVATE', json.dumps(f.timing))
+
+    def test_fresh_worker_probe_refuses_insufficient_sqlite_deadline_without_extending_it(self):
+        with self.fixture(sqlite_seconds=136) as f:
+            with self.assertRaisesRegex(RuntimeError, '^API_ADMIN_WORKSPACE_SQLITE_FENCE_TIMEOUT$'): f.switch()
+            self.assertEqual(f.gate.deadline, 1270)
+            self.assertEqual(f.timing['phase'], 'API_IDLE')
+            f.d.registration_runtime_state.assert_not_called()
+            self.assertEqual(f.processes, [])
+            self.assertFalse(f.timing['apiStopAttempted'])
+
+    def test_preparation_guard_and_sqlite_check_failures_never_dispatch_or_recreate_api(self):
+        phases = {'admin': 'ADMIN_SWITCH', 'api-precheck': 'API_PRECHECKS', 'sqlite-prepare': 'SQLITE_PREPARE',
+            'reserve': 'API_STOP_GUARD', 'sqlite-check': 'API_STOP_CHECK',
+            'factory-identity': 'AUDIT_PREPARE', 'gate-identity': 'SQLITE_PREPARE'}
+        for failure, phase in phases.items():
+            with self.subTest(failure=failure), self.fixture(failure=failure) as f:
+                with self.assertRaises(RuntimeError): f.switch()
+                self.assertEqual(f.changed, ['admin'])
+                self.assertNotIn('docker-stop', f.events); self.assertNotIn('switch:api', f.events)
+                self.assertEqual(f.timing['phase'], phase)
+                self.assertFalse(f.timing['apiStopAttempted']); self.assertFalse(f.timing['apiStopCompleted'])
+                self.assertIs(f.gate.d, f.d)
+                okay, restored = scope.rollback(f.d, f.directory, f.base / 'target', f.changed, f.bridge['services'], migrated=True)
+                self.assertEqual(okay, failure != 'api-precheck')
+                self.assertEqual(restored, {'admin': 'BLOCKED_OR_FAILED' if failure == 'api-precheck' else 'RESTORED'})
+                self.assertNotIn('restore:api', f.events)
+                if failure == 'reserve':
+                    self.assertEqual(f.timing['mysqlLockElapsedSeconds'], 41)
+                    self.assertEqual(f.timing['mysqlLockRemainingSeconds'], 169)
+
+    def test_partial_stop_and_confirmation_failure_are_marked_before_dispatch_and_restore_api_once(self):
+        for failure, phase in (('partial-stop', 'API_STOP_DISPATCH'), ('stop-inspect', 'API_STOP_CONFIRM')):
+            with self.subTest(failure=failure), self.fixture(failure=failure) as f:
+                with self.assertRaises(RuntimeError) as caught: f.switch()
+                self.assertIs(caught.exception.sqlite_gate, f.gate)
+                self.assertEqual(f.changed, ['admin', 'api']); self.assertEqual(f.events.count('docker-stop'), 1)
+                self.assertTrue(f.timing['apiStopAttempted']); self.assertFalse(f.timing['apiStopCompleted'])
+                self.assertEqual(f.timing['phase'], phase); self.assertIs(f.gate.d, f.d)
+                self.assertNotIn('switch:api', f.events); self.assertNotIn('switch:online-recharge', f.events)
+                self.assertIsNotNone(f.processes[0].poll())
+                okay, restored = scope.rollback(f.d, f.directory, f.base / 'target', f.changed, f.bridge['services'], migrated=True)
+                self.assertTrue(okay); self.assertEqual(restored, {'api': 'RESTORED', 'admin': 'RESTORED'})
+                self.assertEqual(f.events.count('restore:api'), 1)
+                self.assertNotIn('SYNTHETIC_SECRET', json.dumps(f.timing))
+
+    def test_wrong_stop_command_timeout_or_duplicate_dispatch_is_fail_closed(self):
+        for failure in ('wrong-cid', 'wrong-time', 'extra-stop-arg', 'bool-timeout', 'duplicate-stop'):
+            with self.subTest(failure=failure), self.fixture(failure=failure) as f:
+                with self.assertRaisesRegex(RuntimeError, '^ONLINE_RECHARGE_AFTER_BIT_STOP_DISPATCH_INVALID$'): f.switch()
+                calls = 1 if failure == 'duplicate-stop' else 0
+                self.assertEqual(f.events.count('docker-stop'), calls)
+                self.assertEqual(f.changed, ['admin', 'api'] if calls else ['admin'])
+                self.assertNotIn('switch:api', f.events); self.assertIs(f.gate.d, f.d)
+
+    def test_immutable_bridge_cid_cannot_replace_the_explicit_actual_before_stop_cid(self):
+        with self.fixture(failure='partial-stop', actual_before=True) as f:
+            self.assertNotEqual(f.actual_before['api']['containerId'], f.bridge['services']['api']['containerId'])
+            with self.assertRaisesRegex(RuntimeError, '^SYNTHETIC_SECRET_STOP_OUTPUT$'): f.switch()
+            self.assertEqual(f.events.count('docker-stop'), 1)
+            self.assertTrue(f.timing['apiStopAttempted'])
+            self.assertEqual(f.bridge['services']['api']['containerId'], 'a' * 64)
+            self.assertIs(f.gate.d, f.d)
+
+    def test_original_sqlite_150_second_fence_can_refuse_stop_without_marking_api(self):
+        with self.fixture(sqlite_seconds=116) as f:
+            with self.assertRaisesRegex(RuntimeError, '^API_ADMIN_WORKSPACE_SQLITE_FENCE_TIMEOUT$'): f.switch()
+            self.assertEqual(f.gate.deadline, 1270)
+            self.assertEqual(f.changed, ['admin'])
+            self.assertFalse(f.timing['apiStopAttempted'])
+            self.assertNotIn('docker-stop', f.events); self.assertNotIn('switch:api', f.events)
+
+    def test_failure_receipt_exposes_only_safe_phase_seconds_and_booleans(self):
+        helper = AfterBitFormalTests(); helper.addCleanup = self.addCleanup
+        receipt, events = helper.formal_stage(failure='before-stop')
+        timing = receipt['afterBitControlTiming']
+        self.assertEqual(receipt['servicesAttempted'], ['admin'])
+        self.assertEqual(timing['phase'], 'API_STOP_GUARD')
+        self.assertEqual(set(timing), {'phase', 'phaseElapsedSeconds', 'elapsedSeconds', 'completedPhases',
+            'mysqlFenceEntered', 'mysqlFenceClosed', 'mysqlLockElapsedSeconds', 'mysqlLockRemainingSeconds',
+            'apiStopAttempted', 'apiStopCompleted'})
+        self.assertFalse(timing['apiStopAttempted']); self.assertFalse(timing['apiStopCompleted'])
+        self.assertNotIn('SYNTHETIC_SECRET', json.dumps(receipt))
+        self.assertNotIn('switch:api', events)
+
+
 class AfterBitReceiptCISourceTests(unittest.TestCase):
     @contextmanager
     def fixture(self):
@@ -4227,6 +4517,894 @@ class AfterBitReceiptCISourceTests(unittest.TestCase):
             self.assertEqual(hashlib.sha256(raw).hexdigest(), before)
             self.assertEqual(hashlib.sha256((ROOT / name).read_bytes()).hexdigest(), after)
             self.assertFalse((ROOT / name).stat().st_mode & 0o111)
+
+
+
+
+_RestoreCfg = SimpleNamespace(**{'IDENTITY_KEYS': scope._restore_cfg_IDENTITY_KEYS,'HASH': scope._restore_cfg_HASH,'need': scope._restore_cfg_need,'complete_configuration_material': scope._restore_cfg_complete_configuration_material,'require_finite_restore_policy': scope._restore_cfg_require_finite_restore_policy,'fingerprint': scope._restore_cfg_fingerprint,'original_boot_identity': scope._restore_cfg_original_boot_identity,'FINITE_RESTORE_WITNESS': scope._restore_cfg_FINITE_RESTORE_WITNESS})
+_RestoreMaterial = SimpleNamespace(**{'IDENTITY_KEYS': scope._restore_pure_IDENTITY_KEYS,'closed': scope._restore_pure_closed,'restored_build_shape': scope._restore_pure_restored_build_shape,'service_shape': scope._restore_pure_service_shape,'fingerprint': scope._restore_pure_fingerprint,'SERVICES': scope._restore_pure_SERVICES,'utc': scope._restore_pure_utc,'complete_restore_material': scope._restore_pure_complete_restore_material,'require_reviewed_restore_policy': scope._restore_pure_require_reviewed_restore_policy,'validate_observation_material': scope._restore_pure_validate_observation_material,'need': scope._restore_pure_need,'restored_before_and_stop_shape': scope._restore_pure_restored_before_and_stop_shape,'restored_f_shape': scope._restore_pure_restored_f_shape,'QR_KEYS': scope._restore_pure_QR_KEYS,'POLICY_KEYS': scope._restore_pure_POLICY_KEYS,'FINITE_RESTORE_POLICY': scope._restore_pure_FINITE_RESTORE_POLICY})
+def _restore_draft_fixture(service='api', old_replace='b' * 64, actual_replace='a' * 64):
+    (original_cid, actual_cid) = ('a' * 64, 'c' * 64)
+    reference = 'example.invalid/id:' + service
+    config = {'Hostname': original_cid[:12], 'Image': reference, 'Env': ['EXAMPLE_LABEL=测试'], 'Cmd': ['node', 'main.js'], 'Labels': {'com.docker.compose.service': service, 'com.docker.compose.project': 'id-test', 'com.docker.compose.container-number': '1'}}
+    if old_replace is not None:
+        config['Labels']['com.docker.compose.replace'] = old_replace
+    complete = {'Config': config, 'HostConfig': {'Privileged': False, 'ReadonlyRootfs': True, 'PortBindings': {'3000/tcp': [{'HostIp': '127.0.0.1', 'HostPort': '3000'}]}}, 'Mounts': [{'Destination': '/app/data', 'Type': 'volume', 'Name': 'example-data', 'RW': True}, {'Destination': '/app/logs', 'Type': 'volume', 'Name': 'example-logs', 'RW': True}]}
+    (boot_old, boot_new) = ('2026-10-11T13:37:28.606112575Z', '2026-10-11T18:00:00.000000001Z')
+    original = {'image': 'sha256:' + 'd' * 64, 'reference': reference, 'status': 'running', 'health': 'healthy', 'containerId': original_cid, 'startedAtSha256': hashlib.sha256(boot_old.encode()).hexdigest(), 'environmentSha256': _RestoreCfg.fingerprint(sorted(config['Env'])), 'configurationSha256': _RestoreCfg.fingerprint(complete)}
+    actual_config = copy.deepcopy(complete)
+    actual_config['Config']['Hostname'] = actual_cid[:12]
+    actual_config['Config']['Labels']['com.docker.compose.replace'] = actual_replace
+    actual = {**original, 'containerId': actual_cid, 'startedAtSha256': hashlib.sha256(boot_new.encode()).hexdigest(), 'configurationSha256': _RestoreCfg.fingerprint(actual_config)}
+    metadata = {**actual_config, 'Id': actual_cid, 'Image': actual['image'], 'Name': '/id-test-' + service + '-1', 'State': {'StartedAt': boot_new, 'Status': 'running', 'Health': {'Status': 'healthy'}}}
+    return (metadata, actual, original, boot_old, boot_new)
+
+def _restore_draft_material(f, service='api'):
+    (metadata, actual, original, unused, unused2) = f
+    return _RestoreCfg.complete_configuration_material(service, metadata, actual, original, original_before_container_id='b' * 64, acquired_actual_replace_anchors=('a' * 64,))
+
+def _restore_draft_rebuild(metadata, actual):
+    actual['configurationSha256'] = _RestoreCfg.fingerprint({n: metadata[n] for n in ('Config', 'HostConfig', 'Mounts')})
+
+class RestoredCompleteConfigurationDraftTests(unittest.TestCase):
+
+    def test_full_native_identity_mapping_matches_original_and_no_raw_config_output(self):
+        value = _restore_draft_material(_restore_draft_fixture())
+        self.assertEqual(value['reconstructedConfigurationSha256'], value['originalConfigurationSha256'])
+        self.assertNotIn('Config', value)
+        self.assertNotIn('测试', json.dumps(value, ensure_ascii=False))
+
+    def test_original_four_replace_forms_are_unique_and_supported(self):
+        for old in ('b' * 64, 'id-test-api-1', 'api-1', None):
+            with self.subTest(old=old):
+                _restore_draft_material(_restore_draft_fixture(old_replace=old))
+
+    def test_actual_stable_native_names_do_not_need_an_unknown_cid(self):
+        for actual in ('id-test-api-1', 'api-1'):
+            with self.subTest(actual=actual):
+                _restore_draft_material(_restore_draft_fixture(actual_replace=actual))
+
+    def test_unknown_actual_replace_candidate_is_not_accepted(self):
+        with self.assertRaises(RuntimeError):
+            _restore_draft_material(_restore_draft_fixture(actual_replace='f' * 64))
+
+    def test_complete_config_env_cmd_and_other_labels_cannot_be_normalized_away(self):
+        mutations = (lambda m: m['Config']['Env'].append('EXAMPLE_EXTRA=changed'), lambda m: m['Config']['Cmd'].append('changed'), lambda m: m['Config']['Labels'].update({'example-extra': 'changed'}))
+        for mutate in mutations:
+            with self.subTest(mutate=mutate):
+                f = _restore_draft_fixture()
+                mutate(f[0])
+                _restore_draft_rebuild(f[0], f[1])
+                with self.assertRaises(RuntimeError):
+                    _restore_draft_material(f)
+
+    def test_complete_host_config_privilege_port_and_readonly_changes_reject(self):
+        for (key, value) in (('Privileged', True), ('ReadonlyRootfs', False), ('PortBindings', {})):
+            with self.subTest(key=key):
+                f = _restore_draft_fixture()
+                f[0]['HostConfig'][key] = value
+                _restore_draft_rebuild(f[0], f[1])
+                with self.assertRaises(RuntimeError):
+                    _restore_draft_material(f)
+
+    def test_mount_destination_name_type_permission_change_reject(self):
+        for (key, value) in (('Destination', '/different'), ('Name', 'different'), ('Type', 'bind'), ('RW', False)):
+            with self.subTest(key=key):
+                f = _restore_draft_fixture()
+                f[0]['Mounts'][0][key] = value
+                f[0]['Mounts'].sort(key=lambda row: row['Destination'])
+                _restore_draft_rebuild(f[0], f[1])
+                with self.assertRaises(RuntimeError):
+                    _restore_draft_material(f)
+
+    def test_mount_order_only_is_non_semantic(self):
+        f = _restore_draft_fixture()
+        f[0]['Mounts'].reverse()
+        _restore_draft_material(f)
+
+    def test_duplicate_mount_destination_rejects(self):
+        f = _restore_draft_fixture()
+        f[0]['Mounts'][1]['Destination'] = f[0]['Mounts'][0]['Destination']
+        _restore_draft_rebuild(f[0], f[1])
+        with self.assertRaises(RuntimeError):
+            _restore_draft_material(f)
+
+    def test_wrong_hostname_image_reference_identity_or_started_hash_reject(self):
+        for key in ('Hostname', 'image', 'reference', 'containerId', 'startedAtSha256'):
+            with self.subTest(key=key):
+                f = _restore_draft_fixture()
+                if key == 'Hostname':
+                    f[0]['Config']['Hostname'] = 'incorrect'
+                    _restore_draft_rebuild(f[0], f[1])
+                else:
+                    f[1][key] = 'e' * 64
+                with self.assertRaises(RuntimeError):
+                    _restore_draft_material(f)
+
+    def test_original_boot_binding_never_uses_current_boot_as_history_origin(self):
+        f = _restore_draft_fixture()
+        bridge = {'services': {'api': f[2]}}
+        self.assertEqual(_RestoreCfg.original_boot_identity(bridge, f[3])['containerId'], f[2]['containerId'])
+        with self.assertRaises(RuntimeError):
+            _RestoreCfg.original_boot_identity(bridge, f[4])
+
+    def test_missing_reviewed_policy_is_fail_closed(self):
+        with self.assertRaisesRegex(RuntimeError, 'WITNESS_UNAVAILABLE'):
+            _RestoreCfg.require_finite_restore_policy()
+        with self.assertRaisesRegex(RuntimeError, 'WITNESS_UNAVAILABLE'):
+            _RestoreMaterial.require_reviewed_restore_policy()
+
+class RestoredBindingDraftTests(unittest.TestCase):
+
+    def setUp(self):
+        (self.api, self.admin) = (_restore_draft_fixture(), _restore_draft_fixture(service='admin'))
+        self.original = {name: copy.deepcopy(self.api[2]) for name in _RestoreMaterial.SERVICES}
+        self.original['admin'] = copy.deepcopy(self.admin[2])
+        self.original['caddy']['health'] = None
+        self.actual = copy.deepcopy(self.original)
+        self.actual['api'] = copy.deepcopy(self.api[1])
+        self.actual['admin'] = copy.deepcopy(self.admin[1])
+        self.bridge = {'kind': 'ONLINE_RECHARGE_AFTER_BIT_SUCCESSOR_ORIGIN', 'services': self.original}
+        self.policy = dict.fromkeys(_RestoreMaterial.POLICY_KEYS, 'e' * 64)
+        self.policy.update(kind='ONLINE_RECHARGE_B_RESTORE_FINITE_OBSERVATION', version=1, baselineBridgeSha256=_RestoreMaterial.fingerprint(self.bridge), originalBootStartedAt=self.api[3], failedProducer={'commit': '1' * 40, 'sourceTree': '2' * 40, 'workflowRunId': '123', 'workflowRunAttempt': '1'}, failedCommandId='22222222-2222-2222-2222-222222222222', failedNativeEnd='2026-10-11T17:58:11.942Z', failedRelease='/opt/id-business-v2/releases/20261011T174300Z-' + '1' * 12, instanceId='i-11111111111111111', readbackCommandId='11111111-1111-1111-1111-111111111111', failedSourceHelpers={'api-admin-scope.py': 'a' * 64, 'online-recharge-scope.py': 'b' * 64})
+        self.receipt = dict.fromkeys(_RestoreMaterial.QR_KEYS, False)
+        self.receipt.update(version=1, readOnlyObservation=True, measurementsComplete=True, nativeGrantSyncReached=True, inputBindingSha256=self.policy['readbackInputBindingSha256'], currentIsOriginalB=True, originalManifestBytesMatch=True, originalEnvironmentAndConfigurationFilesMatch=True, originalManifestNewMigrationCount=0, runtimeContentMatchesOriginal={'api': True, 'admin': True}, apiCurrentStartedAt=self.api[4], apiCurrentStartedAtSha256=self.api[1]['startedAtSha256'], failedTarget={'uniqueTargetKnown': True, 'targetSourceBound': True, 'actualReleasePath': self.policy['failedRelease'], 'failureCanonicalSha256': self.policy['failureCanonicalSha256'], 'sourceHelpersSha256': self.policy['failedSourceHelpers']}, currentServices=self.actual, twoRuntimeFramesStable=True, currentPointerStable=True, preservedFullIdentityCount=5, apiAdminImageReferenceEnvironmentContentMatchesOriginal=True, apiAdminRuntimeConfigurationProof={'formalConfigurationQualificationMeasured': False, 'services': {name: {'configSha256': 'a' * 64, 'hostConfigSha256': 'b' * 64, 'destinationSortedMountsSha256': 'c' * 64, 'completeConfigurationSha256': self.actual[name]['configurationSha256'], 'mountCount': 2} for name in ('api', 'admin')}})
+        self.invocation = {'CommandId': self.policy['readbackCommandId'], 'InstanceId': self.policy['instanceId'], 'DocumentName': 'AWS-RunShellScript', 'PluginName': 'aws:runShellScript', 'Status': 'Success', 'ResponseCode': 0, 'ExecutionStartDateTime': '2026-10-11T18:01:00Z', 'ExecutionEndDateTime': '2026-10-11T18:02:00Z', 'StandardErrorContent': '', 'StandardOutputContent': json.dumps(self.receipt)}
+        self.raw = json.dumps(self.invocation).encode()
+        self.repin()
+
+    def repin(self):
+        self.policy['readbackInvocationBytesSha256'] = hashlib.sha256(self.raw).hexdigest()
+
+    def observe(self):
+        return _RestoreMaterial.validate_observation_material(self.bridge, self.raw, self.policy)
+
+    def complete(self):
+        return _RestoreMaterial.complete_restore_material(self.bridge, self.observe(), {'api': _restore_draft_material(self.api), 'admin': _restore_draft_material(self.admin, 'admin')})
+
+    def test_observation_binding_cannot_claim_full_config_or_publication(self):
+        value = self.observe()
+        self.assertFalse(value['formalConfigurationQualificationMeasured'])
+        self.assertFalse(value['publicationQualified'])
+
+    def test_raw_wrong_native_uuid_instance_status_time_or_stderr_rejects(self):
+        for (key, value) in (('CommandId', 'changed'), ('InstanceId', 'changed'), ('Status', 'Failed'), ('ResponseCode', 1), ('ExecutionStartDateTime', '2026-10-11T17:00:00Z'), ('StandardErrorContent', 'changed')):
+            with self.subTest(key=key):
+                saved = self.raw
+                changed = copy.deepcopy(self.invocation)
+                changed[key] = value
+                self.raw = json.dumps(changed).encode()
+                self.repin()
+                with self.assertRaises(RuntimeError):
+                    self.observe()
+                self.raw = saved
+                self.repin()
+
+    def test_replacing_original_b_identity_or_qr_digest_rejects(self):
+        altered = copy.deepcopy(self.bridge)
+        altered['services']['api'] = self.actual['api']
+        with self.assertRaises(RuntimeError):
+            _RestoreMaterial.validate_observation_material(altered, self.raw, self.policy)
+        with self.assertRaises(RuntimeError):
+            _RestoreMaterial.validate_observation_material(self.bridge, self.raw + b' ', self.policy)
+
+    def test_complete_config_material_required_for_both_services(self):
+        with self.assertRaises(RuntimeError):
+            _RestoreMaterial.complete_restore_material(self.bridge, self.observe(), {'api': _restore_draft_material(self.api)})
+
+    def test_two_identities_are_distinct_and_history_remains_old(self):
+        complete = self.complete()
+        self.assertEqual(complete['historyApiIdentity']['startedAt'], self.api[3])
+        self.assertEqual(complete['stopApiIdentity']['startedAt'], self.api[4])
+        self.assertNotEqual(complete['historyApiIdentity']['containerId'], complete['stopApiIdentity']['containerId'])
+        self.assertFalse(complete['publicationQualified'])
+
+    def test_restored_f_v3_does_not_replace_immutable_bridge_services(self):
+        complete = self.complete()
+        producer = self.policy['failedProducer']
+        receipt = {'onlineAfterBitOrigin': self.bridge, 'services': self.actual, 'afterBitRestoration': complete, 'migrationPerformed': False}
+        f = {'kind': 'ONLINE_RECHARGE_AFTER_BIT_PREFLIGHT', 'version': 3, 'mode': 'preflight', 'status': 'ONLINE_RECHARGE_AFTER_BIT_BASELINE_VERIFIED', 'commandId': 'id', 'releaseCandidateCommit': producer['commit'], 'workflowRunId': producer['workflowRunId'], 'workflowRunAttempt': producer['workflowRunAttempt'], 'sourceTree': producer['sourceTree'], 'baseline': self.bridge, 'services': self.actual, 'ordinaryPreflight': receipt, 'restoration': complete}
+        _RestoreMaterial.restored_f_shape(f, self.bridge, producer, complete)
+        with self.assertRaises(RuntimeError):
+            _RestoreMaterial.restored_f_shape({**f, 'version': 2}, self.bridge, producer, complete)
+        with self.assertRaises(RuntimeError):
+            _RestoreMaterial.restored_f_shape({**f, 'services': self.original}, self.bridge, producer, complete)
+
+    def test_actual_stop_identity_and_sqlite_required_original_identity_cannot_masquerade(self):
+        complete = self.complete()
+        f = {'restoration': complete, 'services': self.actual, 'baseline': self.bridge}
+        record = {'before': self.actual, 'baselineEvidence': {'onlineAfterBitOrigin': self.bridge, 'restoration': complete}}
+        identity = {n: complete['stopApiIdentity'][n] for n in ('containerId', 'image', 'startedAtSha256')}
+        sqlite = {'sourceApiIdentity': identity}
+        audit = {'version': 2, 'historyApiIdentity': complete['historyApiIdentity'], 'sourceApiIdentity': complete['stopApiIdentity'], 'oldApiStop': {'identity': identity, 'running': False, 'pid': 0}, 'restorationSha256': _RestoreMaterial.fingerprint(complete)}
+        _RestoreMaterial.restored_before_and_stop_shape(record, f, sqlite, audit)
+        old = {n: complete['historyApiIdentity'][n] for n in identity}
+        with self.assertRaises(RuntimeError):
+            _RestoreMaterial.restored_before_and_stop_shape(record, f, {'sourceApiIdentity': old}, audit)
+
+class RestoredEntryTests(unittest.TestCase):
+    def test_actual_failed_source_and_material_are_full_archive_bound_without_native_paths(self):
+        witness=scope._RESTORED_B_WITNESS
+        bridge=scope.closed_recovery_json(controller(),witness['failedPreflight'].encode())['baseline']
+        cached={}
+        for producer in (bridge['baselineProducer'],witness['policy']['failedProducer']):
+            commit=producer['commit']
+            cached[commit,producer['sourceTree']]=subprocess.check_output(['git','archive','--format=tar.gz',
+                '--prefix=id-business-system-'+commit+'/',commit],cwd=ROOT)
+        d=controller(BASE=Path('/opt/id-business-v2'),_onlinePendingWorkspaceArchiveBytes=cached)
+        # A CI consumer validates the full immutable source archives and original
+        # F/build/failure material. It must not open a fabricated /opt directory.
+        with patch.object(scope,'_declaration_source_bytes',side_effect=AssertionError('CI must not read native files')):
+            observed,proof=scope._restored_workspace_materials(d,bridge)
+        self.assertEqual(observed['currentServices']['api']['containerId'],
+            'cfaf13170d1f631583747dd4daa5bcf7185c017039f3ebe4683a6bc7f3d3dec4')
+        self.assertEqual(scope.fingerprint(proof),witness['policy']['failedBuildProofSha256'])
+        self.assertFalse(observed['publicationQualified'])
+        key=(witness['policy']['failedProducer']['commit'],witness['policy']['failedProducer']['sourceTree'])
+        original=cached[key]
+        # Rebuilding an actual archive with one changed business source retains
+        # the claimed producer but fails the independently calculated Git tree.
+        with tarfile.open(fileobj=io.BytesIO(original),mode='r:gz') as archive:
+            files=[(member,archive.extractfile(member).read() if member.isfile() else None)
+                for member in archive.getmembers()]
+        output=io.BytesIO()
+        with tarfile.open(fileobj=output,mode='w:gz') as archive:
+            for member,raw in files:
+                if raw is not None and member.name.endswith('/apps/api/src/main.ts'):
+                    raw+=b'\n';member.size=len(raw)
+                archive.addfile(member,io.BytesIO(raw) if raw is not None else None)
+        cached[key]=output.getvalue()
+        with self.assertRaisesRegex(RuntimeError,'SOURCE_TREE_CHANGED'):
+            scope._restored_workspace_materials(d,bridge)
+
+    def test_failed_online_source_exact_314958_boundary_and_one_byte_overflow(self):
+        name='scripts/production-release/online-recharge-scope.py'
+        raw=subprocess.check_output(['git','show','08419dcbe85212a203906c86c98e5c3ae0695d72:'+name],cwd=ROOT)
+        self.assertEqual(len(raw),314958)
+        self.assertEqual(hashlib.sha256(raw).hexdigest(),'93992e3258c015bcf1f1b9943fa9cd37149e995748433988cc4d1367d4f1b5d8')
+        with tempfile.TemporaryDirectory(dir=RUNTIME) as folder:
+            directory=Path(folder);path=directory/name;path.parent.mkdir(parents=True)
+            path.write_bytes(raw)
+            self.assertEqual(scope._restored_workspace_failed_helper_bytes(controller(),directory,name),raw)
+            path.write_bytes(raw+b'\n')
+            with self.assertRaises(RuntimeError):
+                scope._restored_workspace_failed_helper_bytes(controller(),directory,name)
+            path.write_bytes(raw[:-1])
+            with self.assertRaises(RuntimeError):
+                scope._restored_workspace_failed_helper_bytes(controller(),directory,name)
+    def test_capacity_control_missing_policy_is_empty_and_atomic_exact_mapping_required(self):
+        witness=scope._RESTORED_B_WITNESS
+        bridge=scope.closed_recovery_json(controller(),witness['failedPreflight'].encode())['baseline']
+        path='scripts/production-release/maintain.py'
+        before={'sha256':'a'*64,'mode':'100644'};after={'sha256':'b'*64,'mode':'100644'}
+        original={path:before};inventory={path:after}
+        self.assertEqual(scope._workspace_capacity_control_inventory(controller(),bridge,original,inventory),frozenset())
+        policy={'kind':'ONLINE_RECHARGE_FIXED_CAPACITY_CONTROL_MAPPING','version':1,
+            'baselineOriginSha256':scope.fingerprint(bridge),'files':{path:{'before':before,'after':after}}}
+        d=controller(BASE=Path('/opt/id-business-v2'))
+        with patch.object(scope,'_WORKSPACE_CAPACITY_CONTROL_POLICY',policy):
+            self.assertEqual(scope._workspace_capacity_control_inventory(d,bridge,original,inventory),frozenset((path,)))
+            for changed in ({path:{'sha256':'c'*64,'mode':'100644'}},{path:{'sha256':'b'*64,'mode':'100755'}}):
+                with self.assertRaises(RuntimeError):
+                    scope._workspace_capacity_control_inventory(d,bridge,original,changed)
+            policy['files']['scripts/production-release/other.py']={'before':None,'after':after}
+            with self.assertRaises(RuntimeError):
+                scope._workspace_capacity_control_inventory(d,bridge,original,inventory)
+
+    def test_real_observation_diagnostic_bools_and_preserved_mysql_cannot_grant_restoration(self):
+        witness=scope._RESTORED_B_WITNESS
+        bridge=scope.closed_recovery_json(controller(),witness['failedPreflight'].encode())['baseline']
+        changes=(lambda body:body.update(publicationQualified=True),
+            lambda body:body['apiAdminRuntimeConfigurationProof'].update(formalConfigurationQualificationMeasured=True),
+            lambda body:body['apiAdminRuntimeConfigurationProof']['services']['admin'].update(matched=True),
+            lambda body:body['currentServices']['mysql'].update(startedAtSha256='0'*64))
+        for change in changes:
+            q=json.loads(witness['observationInvocation']);body=json.loads(q['StandardOutputContent']);change(body)
+            q['StandardOutputContent']=json.dumps(body);raw=json.dumps(q).encode()
+            policy={**witness['policy'],'readbackInvocationBytesSha256':hashlib.sha256(raw).hexdigest()}
+            with self.assertRaises(RuntimeError):
+                scope._restore_pure_validate_observation_material(bridge,raw,policy)
+
+    def test_actual_independent_observation_preserves_not_measured_and_original_bridge(self):
+        witness=scope._RESTORED_B_WITNESS
+        original=scope.closed_recovery_json(controller(),witness['failedPreflight'].encode())['baseline']
+        before=copy.deepcopy(original)
+        observed=scope._restore_pure_validate_observation_material(original,witness['observationInvocation'].encode(),witness['policy'])
+        self.assertEqual(original,before)
+        self.assertFalse(observed['formalConfigurationQualificationMeasured'])
+        self.assertFalse(observed['publicationQualified'])
+        self.assertNotEqual(observed['currentServices']['api']['containerId'],original['services']['api']['containerId'])
+        self.assertEqual(observed['originalApiStartedAt'],'2026-10-11T13:37:28.606112575Z')
+
+    def test_invalid_failed_v2_observation_cannot_become_restored_f(self):
+        witness=copy.deepcopy(scope._RESTORED_B_WITNESS)
+        b=scope.closed_recovery_json(controller(),witness['failedPreflight'].encode())['baseline']
+        q=json.loads(witness['observationInvocation']);q['Status']='Failed';q['ResponseCode']=1
+        raw=json.dumps(q).encode();witness['policy']['readbackInvocationBytesSha256']=hashlib.sha256(raw).hexdigest()
+        with self.assertRaises(RuntimeError):
+            scope._restore_pure_validate_observation_material(b,raw,witness['policy'])
+
+    def test_current_boot_cannot_replace_original_b_history_anchor(self):
+        witness=copy.deepcopy(scope._RESTORED_B_WITNESS)
+        b=scope.closed_recovery_json(controller(),witness['failedPreflight'].encode())['baseline']
+        q=json.loads(witness['observationInvocation']);r=json.loads(q['StandardOutputContent'])
+        witness['policy']['originalBootStartedAt']=r['apiCurrentStartedAt']
+        with self.assertRaises(RuntimeError):
+            scope._restore_pure_validate_observation_material(b,witness['observationInvocation'].encode(),witness['policy'])
+
+    def test_unavailable_witness_keeps_stage_a_and_unrestored_b_on_old_path(self):
+        with patch.object(scope,'_RESTORED_B_WITNESS',None),patch.object(scope,'_pending_workspace_reader',side_effect=AssertionError('must not read')):
+            self.assertFalse(scope._restored_workspace_selected(controller(),scope.BASELINE_COMMIT))
+            self.assertFalse(scope._restored_workspace_selected(controller(),'31d2c6885a45817cd40d23fce8d6145bc9f18af2'))
+        with self.assertRaisesRegex(RuntimeError,'WITNESS_UNAVAILABLE'),patch.object(scope,'_RESTORED_B_WITNESS',None):
+            scope._restored_workspace_materials(controller(),{})
+
+    def test_v3_never_enters_stage_a_preflight_or_build_shape(self):
+        d=controller()
+        with self.assertRaises(RuntimeError):
+            scope._workspace_preflight_binding(d,b'{"version":3}',producer={},bridge={},kind=scope.ONLINE_PENDING_WORKSPACE_KIND)
+        with self.assertRaises(RuntimeError):
+            scope._workspace_build_shape(d,{'version':3},producer={},bridge={},preflight_raw=b'{}',kind=scope.ONLINE_PENDING_WORKSPACE_KIND)
+
+    def test_real_restore_transport_uses_original_b_sql_for_new_stop_identity(self):
+        witness=scope._RESTORED_B_WITNESS
+        bridge=scope.closed_recovery_json(controller(),witness['failedPreflight'].encode())['baseline']
+        obs=scope._restore_pure_validate_observation_material(bridge,witness['observationInvocation'].encode(),witness['policy'])
+        history=scope._restore_cfg_original_boot_identity(bridge,obs['originalApiStartedAt'])
+        source={**{n:obs['currentServices']['api'][n] for n in ('containerId','image','startedAtSha256')},'startedAt':obs['sourceApiStartedAt']}
+        # Use actual planner and actual transport.check body. Only fixed native
+        # migration bytes, connection/deadline and live MySQL observation are fixtures.
+        from unittest.mock import mock_open
+        migration="CREATE TRIGGER `idv2_audit_log_no_delete` BEFORE DELETE ON audit_logs FOR EACH ROW BEGIN END;\nCREATE TRIGGER `idv2_audit_log_no_update` BEFORE UPDATE ON audit_logs FOR EACH ROW SET NEW.id=OLD.id;"
+        reader=SimpleNamespace(ONLINE_TABLES=scope.TABLES,ONLINE_AUDIT_QUERY=shared.ONLINE_AUDIT_QUERY,
+            MIGRATION_ROOT=shared.MIGRATION_ROOT,WorkspaceUnusedAuditBarrier=shared.WorkspaceUnusedAuditBarrier)
+        with patch.object(Path,'read_text',return_value=migration):
+            plan=scope._online_after_bit_audit_queries(controller(),reader,Path('/original-b'),history)
+            current_plan=scope._online_after_bit_audit_queries(controller(),reader,Path('/original-b'),source)
+            self.assertNotEqual(plan['frameQuery'],current_plan['frameQuery'])
+            barrier=scope._restored_workspace_audit_transport(controller(),Path('/original-b'),bridge,reader,history,source,plan,{},restore={},first_api_check=lambda deadline:None)
+            self.assertEqual(barrier.source_api_identity,source)
+            self.assertEqual(barrier.query,plan['frameQuery'])
+            barrier.connection_id=7
+            barrier.pipe=SimpleNamespace(process=SimpleNamespace(poll=lambda:None),deadline=scope.time.monotonic()+210)
+            frame={'connectionId':7,'historicalRegistrationAuditCount':1,'historicalRegistrationPrefixCount':1,
+                'historyCutoff':'2026-10-11 18:44:51.000000','clockBeforeCutoff':0,'registrationMutationCount':1,
+                'onlineAuditCount':0,'tables':{n:0 for n in scope.TABLES},'triggers':[
+                    {'event':event,'timing':'BEFORE','statement':statement} for event,statement in plan['expectedTriggers'].items()]}
+            # This row could fall after original B boot and before current boot.
+            # The actual first frame must reject, instead of resetting the window.
+            with self.assertRaisesRegex(RuntimeError,'AUDIT_GUARD_LOST'):
+                barrier.check(frame)
+            frame['registrationMutationCount']=0
+            with patch.object(scope,'_online_after_bit_mysql_check',return_value=None):
+                barrier.check(frame)
+            self.assertEqual(barrier.query,scope._online_after_bit_audit_queries(controller(),reader,Path('/original-b'),history,history_cutoff=frame['historyCutoff'])['frameQuery'])
+
+    def test_restore_transport_stopped_current_api_and_sqlite_must_match(self):
+        source={'containerId':'c'*64,'image':'sha256:'+'d'*64,'startedAtSha256':hashlib.sha256(b'2026-10-11T17:56:28Z').hexdigest(),'startedAt':'2026-10-11T17:56:28Z'}
+        history={**source,'containerId':'a'*64,'startedAt':'2026-10-11T13:37:28Z','startedAtSha256':hashlib.sha256(b'2026-10-11T13:37:28Z').hexdigest()}
+        d=controller(run=lambda *args,**kwargs:json.dumps([{'Id':source['containerId'],'Image':source['image'],
+            'State':{'StartedAt':source['startedAt'],'Running':False,'Pid':0}}]))
+        plan={'originalOnlineQuery':shared.ONLINE_AUDIT_QUERY,'frameQuery':'before','historyQuery':'history','expectedTriggers':{},'expectedTriggersSha256':'f'*64}
+        barrier=scope._restored_workspace_audit_transport(d,Path('/original-b'),{'services':{'mysql':{}}},shared,history,source,plan,{},restore={},first_api_check=lambda deadline:None)
+        barrier.before=barrier.after={}
+        barrier.pipe=SimpleNamespace(process=SimpleNamespace(poll=lambda:None),deadline=scope.time.monotonic()+210)
+        old={n:history[n] for n in ('containerId','image','startedAtSha256')}
+        with self.assertRaisesRegex(RuntimeError,'AUDIT_GUARD_LOST'):
+            barrier.confirm_stopped(SimpleNamespace(record={'sourceApiIdentity':old}))
+        actual={n:source[n] for n in ('containerId','image','startedAtSha256')}
+        with patch.object(barrier,'check',return_value=None):
+            value=barrier.confirm_stopped(SimpleNamespace(record={'sourceApiIdentity':actual}))
+        self.assertEqual(value['version'],2)
+        self.assertEqual(value['historyApiIdentity'],history)
+        self.assertEqual(value['oldApiStop']['identity'],actual)
+
+    def test_event_anchor_rejects_unknown_removed_admin_and_non_native_commands(self):
+        witness=scope._RESTORED_B_WITNESS; proof=json.loads(witness['failedBuildProof'])
+        calls=[]
+        def run(*args,**kwargs):
+            calls.append(args)
+            if args[:3]==('docker','image','inspect'): return json.dumps([{'Id':proof['images']['admin']['imageId']}])
+            return ''
+        with self.assertRaisesRegex(RuntimeError,'EVENT_ANCHOR_UNPROVEN'):
+            scope._restore_events_failed_candidate_event_anchor(controller(run=run),'admin',proof,witness['policy']['failedRelease'])
+        self.assertTrue(calls)
+        self.assertTrue(all(command[:2] in (('docker','image'),('docker','events')) for command in calls))
+        command=calls[-1]
+        self.assertIn('2026-10-11T17:42:42.942Z',command)
+        self.assertIn('2026-10-11T17:58:11.942Z',command)
+        self.assertIn('image='+proof['images']['admin']['reference'],command)
+
+
+class RestoredQualifiedTests(unittest.TestCase):
+    """Offline closed-schema checks only; these do not claim native qualification."""
+    def fixture(self,nonce='1'*32):
+        import stat
+        root=Path(scope.__file__).with_name('formal-runtime-package')
+        def leaf(name):
+            spec=importlib.util.spec_from_file_location('_restore_test_'+name,root/(name+'.py'))
+            module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module);return module
+        pure=leaf('pure');q=leaf('qualified');c=leaf('constructor');r=leaf('reader')
+        q.DERIVE=pure;q._SOURCE_TABLE_BYTES=(root/'reviewed-source-table.json').read_bytes()
+        q.IDENTITY=load('_restore_test_identity','online-recharge-daemon-identity.py')
+        c._configure(scope,json.loads((root/'contract.json').read_text()))
+        profile=q._reviewed_profile();h=lambda v:hashlib.sha256(v.encode()).hexdigest();fp=scope.fingerprint
+        producer={'commit':COMMIT,'sourceTree':TREE,'workflowRunId':'123','workflowRunAttempt':'1'}
+        d=controller(_onlinePendingWorkspaceProducer=producer)
+        bridge=json.loads(scope._RESTORED_B_WITNESS['failedPreflight'])['baseline']
+        observed=scope._restore_pure_validate_observation_material(bridge,
+            scope._RESTORED_B_WITNESS['observationInvocation'].encode(),scope._RESTORED_B_WITNESS['policy'])
+        services=observed['currentServices'];summary=scope._RESTORED_B_HISTORY_VOLUME
+        workspace={n:h(n) for n in r.WORKSPACE_FILES}
+        workspace.update({'release-manifest.json':bridge['manifestBytesSha256'],
+            'api-workspace-preservation.json':bridge['recordBytesSha256'],
+            'api-workspace-build-proof.json':bridge['buildProofBytesSha256']})
+        source={'docker-compose.aws-mysql.yml':bridge['configurationAfter']['docker-compose.aws-mysql.yml'],
+            'compose.release.json':bridge['configurationAfter']['compose.release.json'],
+            '.env.aws.production':bridge['environmentFileSha256']}
+        stable={'snapshotSha256':fp(services),'sourceFilesSha256':fp({'configurationFiles':source,'workspaceFiles':workspace}),
+            'workspaceVolumeSha256':fp(summary),'actualResourceSha256':h('actual resource')}
+        def tools(expected,native=False):
+            result={}
+            for path,digest in expected.items():
+                identity={'file':[1,2,stat.S_IFREG|0o755,0,0,1024,6,7,1],
+                    'parents':[[1,2,stat.S_IFDIR|0o755,0,0] for _ in range(6 if path.endswith('/docker-compose') else 3)]}
+                result[path]={'sha256' if native else 'bytesSha256':digest,'identity':identity}
+            return result
+        collection=tools(profile['reviewedCollectionToolSha256'])
+        runtime={'version':1,'kind':'DOCKERD_RUNTIME_IDENTITY','status':'RUNTIME_BOUND','authority':False,
+            'productionEligible':False,'proofConstructed':False,'rawOutputSuppressed':True,
+            'effectivePoolRulesStatus':'SOURCE_NOT_MEASURED',
+            'runtime':{**{k:h(k) for k in ('pidSha256','starttimeSha256','processSha256','executableIdentitySha256',
+                'installedIdentitySha256','runtimeIdentitySha256')},'binarySha256':profile['dockerdBinarySha256'],
+                'collectionToolsSha256':fp(collection),'executablePathKind':'FIXED_USR_BIN_DOCKERD',
+                'rootIdentity':'OBSERVED_ROOT','installedBinding':'SAME_INODE_AND_SHA256'},
+            'cmdline':{'sha256':h('args'),'argumentCount':1,'configFileEncoding':'DEFAULT_FIXED',
+                'defaultAddressPoolCount':0,'defaultAddressPoolSha256':fp([])},
+            'configuration':{'status':'ABSENT','sourceSha256':h('config'),'defaultAddressPoolsEncoding':'ABSENT',
+                'defaultAddressPoolCount':0,'defaultAddressPoolSha256':fp(None),'effectiveRulesStatus':'SOURCE_NOT_MEASURED'},
+            'package':{'name':'docker','nevraSha256':fp(q.RPM),'sourceRpmSha256':q.sha(q.SRPM_NAME),
+                'fileDigestAlgorithm':'SHA256','fileDigest':profile['dockerdBinarySha256'],'querySha256':h('rpm'),
+                'signatureStatus':'NOT_MEASURED','sourceRpmRetrieved':False,'patchesStatus':'NOT_MEASURED'}}
+        listener={'version':1,'kind':'DOCKERD_FIXED_UNIX_SOCKET_BINDING','status':'LISTENER_HELD_BY_RUNTIME_DAEMON',
+            'authority':False,'productionEligible':False,'proofConstructed':False,'rawOutputSuppressed':True,
+            'unixHost':q.UNIX_HOST,'runtimeIdentity':runtime,'daemonListenerFdCount':1,'listenerRowCount':1,
+            'socketActivationCreatorStatus':'NOT_MEASURED','exclusiveAcceptingProcessStatus':'NOT_MEASURED',
+            **{k:h(k) for k in ('socketNodeSha256','networkNamespaceSha256','listenerSha256','daemonFdSha256','observationSha256')}}
+        binding={'version':2,'kind':'DOCKERD_FIXED_UNIX_VFS_BINDING','status':'VFS_BOUND_TO_RUNTIME_DAEMON',
+            'authority':False,'productionEligible':False,'proofConstructed':False,'rawOutputSuppressed':True,
+            'unixHost':q.UNIX_HOST,'listenerBinding':listener,'vfsBinding':{
+                **{k:h(k) for k in q.VFS_HASHES},'protocol':'AF_NETLINK_NETLINK_SOCK_DIAG_UNIX_DIAG_VFS','status':'EXACT_VFS_MATCH'}}
+        rules={'spec':profile['spec'],'rulesSha256':fp(profile['spec']),'sourceInputsSha256':fp(profile['sourceInputs']),
+            'sourceReviewReportSha256':profile['sourceReviewReportSha256']}
+        capsule={'binding':binding,'nativeTools':tools({profile['spec']['dockerPath']:q.DOCKER_SHA,
+            profile['spec']['composePath']:q.COMPOSE_SHA},True),'collectionTools':collection,
+            'daemonSha256':h('daemon'),'profileSha256':q.REVIEWED_PROFILE_CANONICAL_SHA256,'rules':rules}
+        state={'status':'created','running':False,'pid':0,'startedAtSha256':hashlib.sha256(b'0001-01-01T00:00:00Z').hexdigest(),
+            'restartCount':0};project='online-recharge-reference-'+nonce
+        def row(tag):return {'owner':nonce,'createdAtSha256':h(nonce+tag+'created'),
+            'creationMetadataSha256':h(nonce+tag+'meta'),'preCleanupMetadataSha256':h(nonce+tag+'meta')}
+        registry={'container':{**row('c'),'id':h(nonce+'c'),'name':'/'+project+'-api-1',
+            'stateAtCreate':copy.deepcopy(state),'stateBeforeCleanup':copy.deepcopy(state)},
+            'networks':{role:{**row(role),'id':h(nonce+role),'name':project+'_'+role} for role in c.ROLES},
+            'volume':{**row('v'),'name':project+'_auto_registration_data'}}
+        facts={'version':1,'formalTableSha256':c.FORMAL_TABLE_SHA,'sourceFileSealsSha256':fp({n:{'sha256':v,'identitySha256':h(n+' identity')} for n,v in source.items()}),
+            'generator':{'engineVersion':'25.0.16','composeVersion':'5.5.0','rulesSha256':rules['rulesSha256']},
+            'source':{k:h(k) for k in c.SOURCE_FACT_KEYS},'referenceRegistry':registry,
+            'referenceInputs':{'modelCanonicalSha256':h(nonce+'model'),'surrogateEnvironmentSha256':h('reference env'),
+                'emptyEnvironmentBytesSha256':hashlib.sha256(b'').hexdigest(),
+                'emptyDockerConfigBytesSha256':hashlib.sha256(b'{}\n').hexdigest(),
+                'beforeFileSealsSha256':h(nonce+'files'),'afterFileSealsSha256':h(nonce+'files')},
+            'stableBefore':stable,'stableAfter':copy.deepcopy(stable)}
+        facts['source']['expectedEnvironmentSha256']=services['api']['environmentSha256']
+        facts['source']['referenceEnvironmentSha256']=h('reference env')
+        measured={k:h(k) for k in c.MEASURED_KEYS if k.endswith('Sha256')}
+        measured.update(matched=True,reason='COMPLETE_EQUAL',status='CONTROL_ONLY_DECLARATION_MEASURED',
+            historicalRawHashMatchClaimed=False,authority=False,productionEligible=False,
+            actualRawConfigurationSha256=services['api']['configurationSha256'],
+            referenceRawConfigurationSha256=h(nonce+'raw'),actualDeclarationNormalizedSha256=h('normalized'),
+            referenceDeclarationNormalizedSha256=h('normalized'),actualResourceSha256=stable['actualResourceSha256'],
+            sourceFileSealsSha256=facts['sourceFileSealsSha256'],referenceResourceSha256=fp(c.adapter42_registered(registry)),
+            referenceModelSha256=facts['referenceInputs']['modelCanonicalSha256'],sourceUnchangedBeforeAndAfter=True,
+            referenceNeverStarted=True,cleanup={'ownedContainersRemaining':0,'ownedNetworksRemaining':0,
+                'ownedVolumesRemaining':0,'exactOwnerCreationSealsVerified':True,'existingResourcesMutated':False})
+        admin={'kind':'ONLINE_RECHARGE_B_RESTORE_COMPLETE_CONFIGURATION_MATERIAL','version':1,'service':'admin',
+            'actualServiceSha256':fp(services['admin']),'originalServiceSha256':fp(bridge['services']['admin']),
+            'actualConfigurationSha256':services['admin']['configurationSha256'],
+            'originalConfigurationSha256':bridge['services']['admin']['configurationSha256'],
+            'reconstructedConfigurationSha256':bridge['services']['admin']['configurationSha256'],
+            'changedIdentityPaths':['Config.Hostname','Config.Labels.com.docker.compose.replace'],
+            'hostnameMappingSha256':fp({'actual':services['admin']['containerId'][:12],
+                'original':bridge['services']['admin']['containerId'][:12]}),
+            'replaceMappingSha256':h('offline replace mapping'),'acquiredReplaceAnchorsSha256':h('offline anchor')}
+        proof={'kind':'ONLINE_RECHARGE_B_RESTORED_SOURCE_QUALIFICATION','version':1,'purpose':'INDEPENDENT_PREFLIGHT',
+            'preflightQualificationSha256':None,'preflightBytesSha256':None,'preflightReferenceRegistrySha256':None,'producer':producer,'baselineOriginSha256':fp(bridge),
+            'observationSha256':scope._RESTORED_B_WITNESS['policy']['readbackInvocationBytesSha256'],
+            'diagnosticInvocationSha256':scope._RESTORED_B_OOM_WITNESS['bytesSha256'],
+            'sourceSeal':{'baselineCommit':scope.BASELINE_COMMIT,'directory':bridge['baselineRelease'],'files':source,
+                'servicesSha256':fp(services),'stabilitySha256':fp(stable),
+                'replaceAnchors':{'candidateAfterContainerId':bridge['services']['api']['containerId'],
+                    'stableName':'20260821t095106z-api-1'}},'configurationFiles':bridge['configurationAfter'],
+            'workspaceFiles':workspace,'workspaceVolume':summary,'stableObservation':stable,'sourceFileSeals':{n:{'sha256':v,'identitySha256':h(n+' identity')} for n,v in source.items()},'qualification':capsule,
+            'measured':measured,'facts':facts,'adminMaterialSha256':fp(admin),
+            'historicalApiConfigurationSha256':bridge['services']['api']['configurationSha256'],
+            'actualApiConfigurationSha256':services['api']['configurationSha256'],'historicalRawHashMatchClaimed':False}
+        caps=SimpleNamespace(qualified=q,constructor=c,reader=r)
+        r.INVENTORY=SimpleNamespace(BASELINE=scope.BASELINE_COMMIT)
+        return d,caps,proof,bridge,services,admin
+
+    def test_new_b_closed_schema_preserves_history_and_current_full_hash_separately(self):
+        args=self.fixture();self.assertEqual(scope._restored_qualified_proof(*args), '1'*32)
+        self.assertNotEqual(args[2]['historicalApiConfigurationSha256'],args[2]['actualApiConfigurationSha256'])
+        self.assertFalse(args[2]['measured']['productionEligible'])
+        scope._restored_qualified_oom_history(args[0],{'currentServices':args[4]})
+
+    def test_new_b_qualification_rejects_bool_only_missing_extra_and_source_config_tampering(self):
+        for path,value in ((('measured','matched'),False),(('measured','authority'),True),
+            (('measured','actualRawConfigurationSha256'),'f'*64),(('measured','referenceDeclarationNormalizedSha256'),'e'*64),
+            (('facts','source','expectedEnvironmentSha256'),'e'*64),(('sourceSeal','files','docker-compose.aws-mysql.yml'),'e'*64),
+            (('sourceSeal','replaceAnchors','candidateAfterContainerId'),'e'*64),
+            (('workspaceVolume','identitySha256'),'e'*64),(('qualification','profileSha256'),'e'*64),
+            (('qualification','binding','vfsBinding','protocol'),'OTHER'),
+            (('qualification','binding','listenerBinding','runtimeIdentity','package','nevraSha256'),'e'*64),
+            (('qualification','rules','sourceInputsSha256'),'e'*64),
+            (('qualification','rules','spec','renderedDependencies','media-resolver','required'),1),
+            (('facts','referenceInputs','afterFileSealsSha256'),'e'*64),
+            (('measured','cleanup','ownedContainersRemaining'),False),
+            (('facts','referenceRegistry','container','stateBeforeCleanup','pid'),True)):
+            args=self.fixture();v=args[2]
+            for part in path[:-1]:v=v[part]
+            v[path[-1]]=value
+            with self.subTest(path=path),self.assertRaises(RuntimeError):scope._restored_qualified_proof(*args)
+        for node in ('measured','facts','qualification'):
+            args=self.fixture();args[2][node]['extra']=True
+            with self.assertRaises(RuntimeError):scope._restored_qualified_proof(*args)
+        args=self.fixture();del args[2]['measured']['referenceRawConfigurationSha256']
+        with self.assertRaises(RuntimeError):scope._restored_qualified_proof(*args)
+
+    def test_new_b_second_reference_has_distinct_owned_resources_and_same_complete_semantics(self):
+        d,caps,one,bridge,services,admin=self.fixture();two=self.fixture('2'*32)[2]
+        two['purpose']='DEPLOYMENT_REMEASURE';two['preflightQualificationSha256']=scope.fingerprint(one)
+        d._restoredWorkspacePreflightRaw=b'OFFLINE ENTRY FIXTURE ONLY'
+        two['preflightBytesSha256']=hashlib.sha256(d._restoredWorkspacePreflightRaw).hexdigest()
+        two['preflightReferenceRegistrySha256']=scope.fingerprint(one['facts']['referenceRegistry'])
+        two['qualification']['binding']['listenerBinding']['networkNamespaceSha256']='e'*64
+        two['qualification']['binding']['listenerBinding']['observationSha256']='f'*64
+        scope._restored_qualified_pair(d,caps,one,two,bridge,services,admin)
+        for row in ('container','volume','networks'):
+            changed=copy.deepcopy(two);changed['facts']['referenceRegistry'][row]=copy.deepcopy(one['facts']['referenceRegistry'][row])
+            changed['measured']['referenceResourceSha256']=scope.fingerprint(caps.constructor.adapter42_registered(changed['facts']['referenceRegistry']))
+            with self.assertRaises(RuntimeError):scope._restored_qualified_pair(d,caps,one,changed,bridge,services,admin)
+        for field in ('preflightQualificationSha256','preflightBytesSha256','preflightReferenceRegistrySha256'):
+            for value in (None,'0'*64):
+                changed=copy.deepcopy(two);changed[field]=value
+                with self.subTest(field=field,value=value),self.assertRaises(RuntimeError):
+                    scope._restored_qualified_pair(d,caps,one,changed,bridge,services,admin)
+        for path in (('qualification','daemonSha256'),('qualification','binding','listenerBinding','socketNodeSha256'),
+            ('qualification','binding','listenerBinding','listenerSha256'),('facts','source','renderedDeclarationSha256'),('facts','sourceFileSealsSha256')):
+            changed=copy.deepcopy(two);v=changed
+            for part in path[:-1]:v=v[part]
+            v[path[-1]]='e'*64
+            with self.assertRaises(RuntimeError):scope._restored_qualified_pair(d,caps,one,changed,bridge,services,admin)
+
+    def acquisition_fixture(self,events,*,exit_error=None):
+        """Fake native edges, real measure orchestration and complete proof validators."""
+        d,caps,proof,bridge,services,admin=self.fixture()
+        previous=Path(bridge['baselineRelease']);d.BASE=previous.parent.parent
+        workspace=proof['workspaceFiles'];source=proof['sourceSeal']['files'];fp=scope.fingerprint
+        volume={'Name':proof['workspaceVolume']['name'],'Driver':'local','Scope':'local','Mountpoint':'/fixture',
+            'Labels':{},'CreatedAt':'fixture','Options':None}
+        summary={'name':volume['Name'],'status':'PRESENT','identitySha256':fp(volume)}
+        # The synthetic full inspect has its own real full hash; no historical
+        # production hash is reconstructed or treated as native evidence here.
+        project='20260821t095106z';roles=caps.constructor.ROLES
+        networks={role:{'Id':hashlib.sha256(role.encode()).hexdigest()} for role in roles}
+        api={'Name':'/'+project+'-api-1','Config':{'Labels':{'com.docker.compose.project':project}},
+            'NetworkSettings':{'Networks':{project+'_'+role:{'NetworkID':value['Id']} for role,value in networks.items()}}}
+        raw={'snapshot':services,'sourceFiles':{'configurationFiles':source,'workspaceFiles':workspace},
+            'workspaceVolume':volume,'actualResource':{'networks':networks,'volume':volume}}
+        stable=caps.qualified.DERIVE.observation(raw,services,source,raw['actualResource'])
+        identity={'device':1,'inode':2,'uid':0,'gid':0,'mode':0o100600,'size':32,'links':1}
+        seals={name:{'sha256':digest,'identitySha256':fp(identity)} for name,digest in source.items()}
+        proof['workspaceVolume']=summary;proof['stableObservation']=stable;proof['sourceFileSeals']=seals
+        proof['facts'].update(stableBefore=stable,stableAfter=stable,sourceFileSealsSha256=fp(seals))
+        proof['measured'].update(actualResourceSha256=stable['actualResourceSha256'],sourceFileSealsSha256=fp(seals))
+        next_proof=self.fixture('2'*32)[2]
+        next_proof['facts'].update(stableBefore=stable,stableAfter=stable,sourceFileSealsSha256=fp(seals))
+        next_proof['measured'].update(actualResourceSha256=stable['actualResourceSha256'],sourceFileSealsSha256=fp(seals))
+        class Session:
+            runner=object()
+            def __enter__(self):events.append('acquisition-enter');return self
+            def __exit__(self,*unused):
+                events.extend(('context-final-stability','context-owned-cleanup'))
+                if exit_error:raise RuntimeError(exit_error)
+            def assert_stable(self):events.append('session-stability')
+            def measure(self,directory,**kwargs):
+                events.append('native-reference-measure')
+                require(directory==previous and kwargs['services']==services
+                    and kwargs['stability_reader']()==raw,'BAD_OFFLINE_DISPATCH')
+                round_proof=proof if events.count('native-reference-measure')==1 else next_proof
+                return {k:copy.deepcopy(round_proof[k]) for k in ('measured','facts')}
+        caps.package=SimpleNamespace(assert_stable=lambda:events.append('package-stability'))
+        caps.workspace=SimpleNamespace(STATE_FILE='api-workspace-preservation.json',
+            workspace_volume=lambda *args,**kwargs:summary)
+        caps.reader.INVENTORY.NETWORK_ROLES=roles;caps.reader.WORKSPACE={'WORKSPACE_VOLUME':'auto_registration_data'}
+        caps.reader.DERIVE=caps.qualified.DERIVE
+        def inspect(reader,runner,*args):
+            if args[:2]==('docker','network'):return next(v for v in networks.values() if v['Id']==args[-1])
+            if args[:2]==('docker','volume'):return volume
+            return api if args[-1]==services['api']['containerId'] else {'fixtureAdmin':True}
+        driver=SimpleNamespace(BASELINE=scope.BASELINE_COMMIT,_SourceReadDriver=lambda runner:runner,
+            _ArchiveBoundController=lambda actual,cap:actual,_inspect=inspect,
+            _capabilities=lambda producer:(events.append('archive-bound-capabilities') or caps))
+        original_resolve=Path.resolve
+        stack=ExitStack()
+        for target,name,value in ((scope,'_declaration_runtime_driver',lambda:driver),
+            (scope,'_restored_qualified_capture',lambda actual,cap,session:copy.deepcopy(proof['qualification'])),
+            (caps.qualified,'acquisition_session',lambda owner:Session()),
+            (caps.reader,'files',lambda *args,**kwargs:{n:{'sha256':source.get(n,workspace.get(n,
+                bridge['configurationAfter'].get(n))),'identity':identity} for n in args[1]}),
+            (caps.reader,'make_reader',lambda *args,**kwargs:lambda:copy.deepcopy(raw)),
+            (caps.reader,'volume_summary',lambda value:summary),(scope,'configuration_hashes',lambda unused:bridge['configurationAfter']),
+            (scope,'workspace_files',lambda *args:workspace),(scope,'snapshot',lambda *args,**kwargs:services),
+            (scope,'_declaration_source_bytes',lambda *args,**kwargs:json.dumps({'before':{'admin':{'containerId':'a'*64}}}).encode()),
+            (scope,'_restore_cfg_complete_configuration_material',lambda *args,**kwargs:admin),
+            (scope,'_RESTORED_B_HISTORY_VOLUME',summary),(os,'geteuid',lambda:0),
+            (Path,'resolve',lambda path,*args,**kwargs:previous if path==d.BASE/'current' else original_resolve(path,*args,**kwargs))):
+            stack.enter_context(patch.object(target,name,value))
+        return stack,d,caps,bridge,services,admin,previous
+
+    def test_new_b_actual_measure_dispatch_closes_context_before_issuance_and_cleanup_error_blocks_return(self):
+        for failure in (None,'CONTEXT_FINAL_STABILITY_FAILED','CONTEXT_OWNED_CLEANUP_FAILED'):
+            events=[];stack,d,caps,bridge,services,admin,previous=self.acquisition_fixture(events,exit_error=failure)
+            with stack:
+                if failure:
+                    with self.assertRaisesRegex(RuntimeError,failure):
+                        scope._restored_qualified_measure(d,previous,bridge,services,admin)
+                    self.assertEqual(events[-1],'context-owned-cleanup')
+                else:
+                    result=scope._restored_qualified_measure(d,previous,bridge,services,admin)
+                    events.append('proof-issued')
+                    self.assertEqual(result['purpose'],'INDEPENDENT_PREFLIGHT')
+                    self.assertLess(events.index('context-owned-cleanup'),events.index('proof-issued'))
+                    self.assertIs(scope._restored_qualified_capabilities(d),caps)
+                    with patch.object(caps.package,'assert_stable',side_effect=RuntimeError('PACKAGE_SOURCE_CHANGED')):
+                        with self.assertRaisesRegex(RuntimeError,'PACKAGE_SOURCE_CHANGED'):
+                            scope._restored_qualified_capabilities(d)
+                    profile=caps.qualified._reviewed_profile()
+                    with patch.object(caps.qualified,'_reviewed_profile',return_value={**profile,'changedSource':True}):
+                        with self.assertRaises(RuntimeError):scope._restored_qualified_capabilities(d)
+                    d._onlinePendingWorkspaceProducer={**d._onlinePendingWorkspaceProducer,'workflowRunId':'124'}
+                    with self.assertRaises(RuntimeError):scope._restored_qualified_capabilities(d)
+                self.assertEqual(events.count('native-reference-measure'),1)
+                self.assertEqual(events.count('archive-bound-capabilities'),1)
+
+    def test_new_b_stage_owned_f_precedes_one_remeasure_and_checks_do_not_reacquire(self):
+        events=[];stack,d,caps,bridge,services,admin,previous=self.acquisition_fixture(events)
+        with stack:
+            original=json.loads(scope._RESTORED_B_WITNESS['failedPreflight']);held=[]
+            def preflight_baseline(actual,expected):
+                require(actual is d and expected==bridge['baselineCommit'],'BAD_OFFLINE_PREFLIGHT')
+                events.append('original-preflight-baseline')
+                held.append(scope._restored_qualified_measure(d,previous,bridge,services,admin))
+                return previous,{},services,original['ordinaryPreflight']
+            with patch.object(scope,'baseline',side_effect=preflight_baseline),\
+                patch.object(scope,'migration_source_check',side_effect=lambda *a,**kw:events.append('original-migration-source-check')),\
+                patch.object(scope,'release_recovery',return_value={'state':original['ordinaryPreflight']['migrationState']}),\
+                patch.object(scope,'legacy',return_value=SimpleNamespace(strict_audit=lambda *a:original['ordinaryPreflight']['audit'])):
+                scope._PENDING_WORKSPACE_FIRST['preflight'](d,bridge['baselineCommit'])
+            first=held[0]
+            self.assertEqual(events.count('original-preflight-baseline'),1)
+            self.assertEqual(events.count('native-reference-measure'),1)
+            observed=scope._restore_pure_validate_observation_material(bridge,
+                scope._RESTORED_B_WITNESS['observationInvocation'].encode(),scope._RESTORED_B_WITNESS['policy'])
+            side={'kind':'ONLINE_RECHARGE_B_RESTORE_COMPLETE_MATERIAL','version':2,'publicationQualified':False,
+                'baselineOriginSha256':scope.fingerprint(bridge),'observationSha256':scope.fingerprint(observed),
+                'actualServicesSha256':scope.fingerprint(services),'configurationProofSha256':scope.fingerprint({'admin':admin,'api':first}),
+                'historyApiIdentity':{**{k:bridge['services']['api'][k] for k in ('containerId','image','startedAtSha256')},
+                    'startedAt':observed['originalApiStartedAt']},
+                'stopApiIdentity':{**{k:services['api'][k] for k in ('containerId','image','startedAtSha256')},
+                    'startedAt':observed['sourceApiStartedAt']},'configurationMaterials':{'admin':admin},
+                'apiDeclarationQualification':first}
+            receipt={**original['ordinaryPreflight'],'services':services,'afterBitRestoration':side}
+            producer=d._onlinePendingWorkspaceProducer
+            f={**original,'version':3,'releaseCandidateCommit':producer['commit'],'sourceTree':producer['sourceTree'],
+                'workflowRunId':producer['workflowRunId'],'workflowRunAttempt':producer['workflowRunAttempt'],
+                'ordinaryPreflight':scope._restored_wire_encode(receipt),'restoration':side,'services':services}
+            fraw=(json.dumps(f,separators=(',',':'))+'\n').encode()
+            build={**proof(),'kind':'ONLINE_RECHARGE_AFTER_BIT_BUILD_PROOF','version':3,
+                'commit':producer['commit'],'sourceTree':producer['sourceTree'],'baselineCommit':bridge['baselineCommit'],
+                'baselineOriginSha256':scope.fingerprint(bridge),'preflightBytesSha256':hashlib.sha256(fraw).hexdigest(),
+                'restorationSha256':scope.fingerprint(side),'beforeServicesSha256':scope.fingerprint(services)}
+            args=SimpleNamespace(online_recharge_only=True,expected_current=bridge['baselineCommit'],
+                commit=producer['commit'],source_tree=producer['sourceTree'],run_id=producer['workflowRunId'],
+                run_attempt=producer['workflowRunAttempt'],repository=REPOSITORY,ci_run_id='123',
+                online_recharge_build_proof=base64.b64encode(json.dumps(build).encode()).decode())
+            reader=SimpleNamespace(**vars(shared));reader.online_after_bit_cold=lambda *a,**kw:copy.deepcopy(bridge)
+            reader.STATE_FILE='api-workspace-preservation.json';reader.PROOF_FILE='api-workspace-build-proof.json'
+            reader.validate_proof=lambda *a:build;reader.verify_running=lambda *a:events.append('old-B-running-check')
+            reader.workspace_health=lambda *a:events.append('old-B-health-check')
+            reader.workspace_sqlite_receipt=lambda *a:{'fixture':'existing protected backup'}
+            old={'before':{'admin':{'containerId':'a'*64}},'baselineEvidence':{},'workspaceVolumeAfter':first['workspaceVolume']}
+            def source_bytes(path,**kwargs):return json.dumps(old).encode()
+            def owned(*a,**kw):events.append('owned-F-acquired');return fraw
+            def receipt_check(actual,value,mode,commit,expected):
+                require(value==receipt and mode=='preflight' and expected==bridge['baselineCommit'],'BAD_OFFLINE_RECEIPT')
+                events.append('complete-F-receipt-checked')
+            with ExitStack() as edges:
+                for name,value in (('_pending_workspace_reader',lambda actual:reader),('legacy',lambda actual:reader),
+                    ('_workspace_baseline_reader',lambda *a,**kw:(scope.ONLINE_AFTER_BIT_KIND,reader.online_after_bit_cold)),
+                    ('_pending_workspace_profile',lambda *a:events.append('full-source-profile-check')),
+                    ('_workspace_owned_preflight',owned),('online_after_bit_preflight_bytes',owned),
+                    ('_pending_workspace_validate_receipt',receipt_check),
+                    ('_restored_workspace_materials',lambda *a:(observed,{})),
+                    ('_restored_workspace_native_failure_anchor',lambda *a:'closed failed-C fixture'),
+                    ('_workspace_after_bit_materials',lambda *a,**kw:{'fixture':'closed immutable B'}),
+                    ('_declaration_source_bytes',source_bytes),('workspace_guard',lambda *a:first['workspaceVolume']),
+                    ('jobs_idle',lambda *a,**kw:receipt['guards']),
+                    ('release_recovery',lambda *a:{'source':previous,'marker':bridge['migrationRecovery'],'state':{'status':'APPLIED'}}),
+                    ('verify_permission_seed',lambda *a:events.append('permission-seed-checked')),
+                    ('require_fresh_resources',lambda *a:events.append('fresh-resource-checked')),
+                    ('workspace_origin',lambda *a:events.append('full-origin-check'))):
+                    edges.enter_context(patch.object(scope,name,value))
+                edges.enter_context(patch.object(scope.shutil,'disk_usage',return_value=SimpleNamespace(free=7*1024**3)))
+                d.run=lambda *a,**kw:json.dumps([{'fixtureAdmin':True}])
+                mark=len(events)
+                scope.validate_arguments(d,args)
+                self.assertEqual(events[mark:].count('native-reference-measure'),0)
+                self.assertEqual(d._restoredWorkspacePreflightRaw,fraw)
+                before_baseline=len(events)
+                scope.baseline(d,bridge['baselineCommit'])
+                self.assertEqual(events[before_baseline:].count('native-reference-measure'),1)
+                self.assertEqual(events.count('native-reference-measure'),2)
+                self.assertLess(events.index('owned-F-acquired'),before_baseline)
+                self.assertEqual(d._onlinePendingWorkspaceSession['restoration'],side)
+                deployment=d._onlinePendingWorkspaceSession['deploymentQualification']
+                self.assertEqual(deployment['purpose'],'DEPLOYMENT_REMEASURE')
+                checks_start=len(events)
+                scope._pending_workspace_session(d)
+                scope._restored_workspace_audit_binding(d,bridge,build)
+                self.assertEqual(events[checks_start:].count('native-reference-measure'),0)
+                self.assertEqual(events.count('archive-bound-capabilities'),1)
+                self.assertEqual(events.count('context-owned-cleanup'),2)
+                target=d.BASE/'releases'/('20261012T200000Z-'+producer['commit'][:12])
+                after=copy.deepcopy(services)
+                for service in scope.UPDATED:
+                    after[service]={**services.get(service,services['api']),
+                        'image':build['images'][service]['imageId'],'reference':build['images'][service]['reference']}
+                record={'baselineEvidence':{'onlineAfterBitOrigin':bridge,'afterBitRestoration':side},
+                    'before':services,'after':after,'buildProofSha256':scope.fingerprint(build),
+                    'configurationBefore':bridge['configurationAfter'],'configurationAfter':bridge['configurationAfter'],
+                    'migration':{**bridge['migrationState'],'performed':False},
+                    'afterBitAuditProtection':{'basis':{'deploymentQualification':deployment}}}
+                manifest={'previousRelease':str(previous),'previousCommit':bridge['baselineCommit'],
+                    'commit':producer['commit'],'sourceTree':producer['sourceTree'],
+                    'previousManifestSha256':bridge['manifestBytesSha256'],'migrationPerformed':False}
+                rawfiles={scope.STATE_FILE:record,scope.PROOF_FILE:build,'release-manifest.json':manifest}
+                cold=controller(BASE=d.BASE,_onlinePendingWorkspaceProducer=copy.deepcopy(producer))
+                for name in ('_restoredWorkspaceCapabilities','_onlinePendingWorkspaceSession',
+                        '_restoredWorkspacePreflight','_restoredWorkspacePreflightRaw'):
+                    self.assertFalse(hasattr(cold,name))
+                original_resolve=Path.resolve;original_stat=Path.stat
+                with patch.object(Path,'resolve',lambda path,*a,**kw:target if path==d.BASE/'current'
+                        else (target if path==target else original_resolve(path,*a,**kw))),\
+                    patch.object(Path,'is_dir',return_value=True),patch.object(Path,'is_symlink',return_value=False),\
+                    patch.object(Path,'stat',lambda path,*a,**kw:SimpleNamespace(st_uid=0,st_mode=0o40700)
+                        if path==target else original_stat(path,*a,**kw)),\
+                    patch.object(scope,'snapshot',side_effect=lambda *a,**kw:after if kw.get('include_engine') else services),\
+                    patch.object(scope,'_declaration_source_bytes',side_effect=lambda path,**kw:json.dumps(rawfiles[path.name]).encode()):
+                    readback_start=len(events)
+                    self.assertEqual(scope._restored_workspace_readback_origin(cold,target,producer['commit'],producer,bridge),bridge)
+                    self.assertEqual(events[readback_start:].count('native-reference-measure'),0)
+                    self.assertEqual(events[readback_start:].count('owned-F-acquired'),1)
+                    self.assertEqual(events[readback_start:].count('archive-bound-capabilities'),1)
+                    self.assertEqual(cold._restoredWorkspacePreflightRaw,fraw)
+                    self.assertEqual(cold._onlinePendingWorkspaceSession['deploymentQualification'],deployment)
+
+    def test_new_b_fixed_identity_serialization_rejects_permission_and_tuple_shape_changes(self):
+        d,caps,proof,*unused=self.fixture();row=proof['qualification']['nativeTools'];expected={k:v['sha256'] for k,v in row.items()}
+        raw=copy.deepcopy(row)
+        for value in raw.values():
+            value['identity']['file']=tuple(value['identity']['file'])
+            value['identity']['parents']=[tuple(v) for v in value['identity']['parents']]
+        self.assertEqual(scope._restored_qualified_tools(d,raw,expected,native=True,capture=True),row)
+        raw['/usr/bin/docker']['identity']['file']=raw['/usr/bin/docker']['identity']['file'][:-1]
+        with self.assertRaises(RuntimeError):scope._restored_qualified_tools(d,raw,expected,native=True,capture=True)
+        row=copy.deepcopy(row);row['/usr/bin/docker']['identity']['file'][2]|=0o002
+        with self.assertRaises(RuntimeError):scope._restored_qualified_tools(d,row,expected,native=True)
+
+    def test_new_b_acquisition_entry_is_original_measure_and_issues_after_successful_context_close(self):
+        source=Path(scope.__file__).read_text();import ast
+        node=next(n for n in ast.parse(source).body if isinstance(n,ast.FunctionDef) and n.name=='_restored_qualified_measure')
+        body=ast.get_source_segment(source,node)
+        self.assertIn('caps.qualified.acquisition_session(driver._ArchiveBoundController(d,caps))',body)
+        self.assertIn('session.measure(previous,services=services',body)
+        self.assertIn('caps.reader.make_reader(runner,previous',body)
+        self.assertNotIn('construct_preview',body);self.assertNotIn('driver.acquire(',body)
+        self.assertGreater(body.rfind('return proof'),body.rfind('    caps.package.assert_stable()'))
+        validate=[n for n in ast.parse(source).body if isinstance(n,ast.FunctionDef) and n.name=='validate_arguments'][-1]
+        self.assertIn('live=not restored',ast.get_source_segment(source,validate))
+
+    def test_new_b_fixed_capacity_and_docs_mapping_exact_five_and_two_groups(self):
+        self.assertEqual(set(scope._WORKSPACE_CAPACITY_CONTROL_POLICY['files']),{
+            '.github/workflows/production-release.yml','scripts/production-release/maintain-image-cache.py',
+            'scripts/production-release/maintain-image-cache.test.py',
+            'scripts/production-release/service-image-retention.py',
+            'scripts/production-release/service-image-retention.test.py'})
+        self.assertEqual(set(scope._WORKSPACE_RELEASE_RULES_POLICY['files']),{'AGENTS.md','docs/CENTRAL_RELEASE_20261002.md'})
+        self.assertEqual(scope._WORKSPACE_CAPACITY_CONTROL_POLICY['files']['scripts/production-release/maintain-image-cache.test.py']['after']['sha256'],
+            '8756e5792a1188b420c6c3cb7cb3cae6612654b1a1ed88e0e1046e5bb6daf182')
+        for policy in (scope._WORKSPACE_CAPACITY_CONTROL_POLICY,scope._WORKSPACE_RELEASE_RULES_POLICY):
+            for pair in policy['files'].values():
+                for value in pair.values():
+                    self.assertEqual(set(value),{'mode','bytes','sha256'});self.assertEqual(value['mode'],'100644')
+        args=self.fixture();d=args[0]
+        original={n:{k:p['before'][k] for k in ('sha256','mode')} for n,p in scope._WORKSPACE_CAPACITY_CONTROL_POLICY['files'].items()}
+        inventory={n:{k:p['after'][k] for k in ('sha256','mode')} for n,p in scope._WORKSPACE_CAPACITY_CONTROL_POLICY['files'].items()}
+        inventory['scripts/production-release/maintain-image-cache.py']['sha256']='f'*64
+        with self.assertRaises(RuntimeError):scope._workspace_capacity_control_inventory(d,args[3],original,inventory)
+
+    def test_new_b_complete_f_and_native_receipt_fit_original_wire_budgets(self):
+        d,caps,proof,bridge,services,admin=self.fixture()
+        # Complete ordinary F fixture preserves original unchanged evidence.
+        original=json.loads(scope._RESTORED_B_WITNESS['failedPreflight'])
+        observed=scope._restore_pure_validate_observation_material(bridge,
+            scope._RESTORED_B_WITNESS['observationInvocation'].encode(),scope._RESTORED_B_WITNESS['policy'])
+        side={'kind':'ONLINE_RECHARGE_B_RESTORE_COMPLETE_MATERIAL','version':2,'publicationQualified':False,
+            'baselineOriginSha256':scope.fingerprint(bridge),'observationSha256':scope.fingerprint(observed),
+            'actualServicesSha256':scope.fingerprint(services),'configurationProofSha256':scope.fingerprint({'admin':admin,'api':proof}),
+            'apiDeclarationQualification':proof,'historyApiIdentity':{**{k:bridge['services']['api'][k]
+                for k in ('containerId','image','startedAtSha256')},'startedAt':observed['originalApiStartedAt']},
+            'stopApiIdentity':{**{k:services['api'][k] for k in ('containerId','image','startedAtSha256')},
+                'startedAt':observed['sourceApiStartedAt']},'configurationMaterials':{'admin':admin}}
+        receipt={**original['ordinaryPreflight'],'afterBitRestoration':side,'services':services}
+        wire=scope._restored_wire_encode(receipt)
+        self.assertLess(len(json.dumps(wire))+1,24000)
+        self.assertEqual(scope._restored_wire_decode(json.dumps(wire)),receipt)
+        f={**original,'version':3,'ordinaryPreflight':wire,'restoration':side,'services':services}
+        raw=(json.dumps(f,separators=(',',':'))+'\n').encode()
+        self.assertLess(len(raw),65535)
+        self.assertEqual(scope._restored_workspace_f_value(d,raw)['ordinaryPreflight'],receipt)
+        native=json.loads(scope._RESTORED_B_WITNESS['observationInvocation'])
+        native['StandardOutputContent']=json.dumps(wire)+'\n'
+        self.assertLess(len(json.dumps(native).encode()),65535)
+        readback={**receipt,'status':scope.SCOPE+'_VERIFIED','sourceTree':TREE,'servicesUpdated':list(scope.UPDATED),
+            'preservedServiceCount':len(scope.PRESERVED),'runningImagesAndContentMatched':True,
+            'buildProofSha256':'a'*64,'migrationApplied':True,'existingEnvironmentPreserved':True,'credentialsLoopback':True,
+            'dedicatedVolume':scope.MEDIA_VOLUME,'backupVerified':True,'workspaceBackupVerified':True,
+            'workspaceVolumePreserved':True,'checkCount':49,'violationCount':0,
+            'legacyWorkersPublished':False,'externalAcceptancePerformed':False,
+            'afterBitAuditProtectionSha256':'b'*64,'preservedRegistrationAuditCount':0,
+            'auditHistoryCutoff':'2026-10-12 20:00:00.000000'}
+        self.assertLess(len(json.dumps(scope._restored_wire_encode(readback)).encode())+1,24000)
+        changed=copy.deepcopy(f);changed['restoration']['publicationQualified']=True
+        with self.assertRaises(RuntimeError):scope._restored_workspace_f_value(d,json.dumps(changed).encode())
+
+    def test_new_b_compressed_wire_rejects_truncation_concat_bomb_and_wrong_scope(self):
+        import zlib
+        d,caps,proof,bridge,services,admin=self.fixture()
+        receipt={'onlineAfterBitOrigin':bridge,'afterBitRestoration':{'kind':'ONLINE_RECHARGE_B_RESTORE_COMPLETE_MATERIAL',
+            'version':2,'publicationQualified':False,'apiDeclarationQualification':proof}}
+        envelope=scope._restored_wire_encode(receipt)
+        for field,value in (('version',True),('decodedLength',False),('decodedSha256','f'*64),('encoding','gzip'),('extra',True)):
+            changed={**envelope,field:value}
+            with self.assertRaises(RuntimeError):scope._restored_wire_decode(json.dumps(changed))
+        packed=base64.b64decode(envelope['payload'])
+        for raw in (packed[:-1],packed+b'junk',packed+packed,gzip.compress(b'x'*65536,mtime=0)):
+            changed={**envelope,'payload':base64.b64encode(raw).decode()}
+            with self.assertRaises(RuntimeError):scope._restored_wire_decode(json.dumps(changed))
+        boundary={**receipt,'offlineCodecPadding':''}
+        boundary['offlineCodecPadding']='x'*(65535-len(json.dumps(boundary,separators=(',',':')).encode()))
+        self.assertEqual(len(json.dumps(boundary,separators=(',',':')).encode()),65535)
+        self.assertEqual(scope._restored_wire_decode(json.dumps(scope._restored_wire_encode(boundary))),boundary)
+        boundary['offlineCodecPadding']+='x'
+        with self.assertRaises(RuntimeError):scope._restored_wire_encode(boundary)
+        for raw in ('{"duplicate":1,"duplicate":2}','{"notFinite":NaN}'):
+            with self.assertRaises(RuntimeError):scope._restored_wire_json(raw)
+        legacy={'status':'ONLINE_RECHARGE_BASELINE_VERIFIED','ordinary':True}
+        self.assertIs(scope._restored_wire_encode(legacy),legacy)
+        wrong=copy.deepcopy(receipt);wrong['onlineAfterBitOrigin']['baselineCommit']=scope.BASELINE_COMMIT
+        with self.assertRaises(RuntimeError):scope._restored_wire_encode(wrong)
 
 
 if __name__ == '__main__':

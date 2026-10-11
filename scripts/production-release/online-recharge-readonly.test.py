@@ -615,5 +615,56 @@ class AfterBitFormalTransportTests(unittest.TestCase):
             f.d.compose.assert_not_called();f.d.sync_new_table_grants.assert_not_called();f.d.point_current.assert_not_called()
 
 
+class RestoredArtifactTests(unittest.TestCase):
+    def fixture(self):
+        producer={'commit':'a'*40,'sourceTree':'b'*40,'workflowRunId':'123','workflowRunAttempt':'1'}
+        bridge={'kind':'ONLINE_RECHARGE_AFTER_BIT_SUCCESSOR_ORIGIN'}
+        receipt={'onlineAfterBitOrigin':bridge,'services':{'api':{'containerId':'c'*64}}}
+        f={'kind':'ONLINE_RECHARGE_AFTER_BIT_PREFLIGHT','version':2,'mode':'preflight',
+            'status':'ONLINE_RECHARGE_AFTER_BIT_BASELINE_VERIFIED','commandId':'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee',
+            'releaseCandidateCommit':producer['commit'],'sourceTree':producer['sourceTree'],
+            'workflowRunId':producer['workflowRunId'],'workflowRunAttempt':producer['workflowRunAttempt'],
+            'baseline':bridge,'services':receipt['services'],'ordinaryPreflight':receipt}
+        q={'CommandId':f['commandId'],'InstanceId':'i-0123456789abcdef0','DocumentName':'AWS-RunShellScript',
+            'PluginName':'aws:runShellScript','Status':'Success','ResponseCode':0,'ExecutionEndDateTime':'2026-10-12T00:00:00Z',
+            'StandardOutputContent':json.dumps(receipt),'StandardErrorContent':''}
+        return producer,f,q
+
+    def test_v3_artifact_has_explicit_schema_and_original_native_output_pair(self):
+        producer,f,q=self.fixture()
+        self.assertEqual(transport._pending_workspace_artifact_payload(producer,json.dumps(f).encode(),json.dumps(q).encode())[0]['version'],2)
+        restore={'kind':'ONLINE_RECHARGE_B_RESTORE_COMPLETE_MATERIAL','version':2,'publicationQualified':False,
+            'apiDeclarationQualification':{'kind':'ONLINE_RECHARGE_B_RESTORED_SOURCE_QUALIFICATION'}}
+        f.update(version=3,restoration=restore)
+        f['ordinaryPreflight']['afterBitRestoration']=restore
+        receipt=f['ordinaryPreflight']
+        receipt['onlineAfterBitOrigin']['baselineCommit']='31d2c6885a45817cd40d23fce8d6145bc9f18af2'
+        receipt['onlineAfterBitOrigin']['kind']='ONLINE_RECHARGE_AFTER_BIT_SUCCESSOR_ORIGIN'
+        f['ordinaryPreflight']=transport._restored_wire_encode(receipt)
+        q['StandardOutputContent']=json.dumps(f['ordinaryPreflight'])
+        result=transport._pending_workspace_artifact_payload(producer,json.dumps(f).encode(),json.dumps(q).encode())
+        self.assertEqual(result[0]['version'],3)
+        q['StandardOutputContent']=json.dumps({**f['ordinaryPreflight'],'version':99})
+        with self.assertRaises(RuntimeError):
+            transport._pending_workspace_artifact_payload(producer,json.dumps(f).encode(),json.dumps(q).encode())
+
+    def test_v3_stage_a_and_v2_with_restore_extra_are_rejected(self):
+        producer,f,q=self.fixture()
+        f['restoration']={}
+        with self.assertRaises(RuntimeError):
+            transport._pending_workspace_artifact_payload(producer,json.dumps(f).encode(),json.dumps(q).encode())
+        f.update(version=3,kind='ONLINE_RECHARGE_PENDING_WORKSPACE_PREFLIGHT',status='ONLINE_RECHARGE_PENDING_WORKSPACE_BASELINE_VERIFIED')
+        with self.assertRaises(RuntimeError):
+            transport._pending_workspace_artifact_payload(producer,json.dumps(f).encode(),json.dumps(q).encode())
+
+    def test_v3_services_must_equal_actual_native_receipt_not_old_bridge(self):
+        producer,f,q=self.fixture();f.update(version=3,restoration={})
+        f['ordinaryPreflight']['afterBitRestoration']={}
+        f['services']={'unbound':'identity'}
+        q['StandardOutputContent']=json.dumps(f['ordinaryPreflight'])
+        with self.assertRaises(RuntimeError):
+            transport._pending_workspace_artifact_payload(producer,json.dumps(f).encode(),json.dumps(q).encode())
+
+
 if __name__ == '__main__':
     unittest.main()

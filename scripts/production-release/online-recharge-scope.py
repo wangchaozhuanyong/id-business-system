@@ -3316,6 +3316,7 @@ def _online_after_bit_audit_transport(d, directory, bridge, reader, identity, pl
             self.query = plan['frameQuery'] if history_record is None else plan['historyQuery']
             self.initial_query = self.query
             self.before, self.after, self.receipt = None, None, None
+            self.source_api_identity = dict(identity)
 
         def check(self, value=None):
             if value is None:
@@ -3397,6 +3398,8 @@ def _online_after_bit_audit_transport(d, directory, bridge, reader, identity, pl
 
 
 def _online_after_bit_unused_audit_barrier(d, directory, bridge, proof):
+    if 'restoration' in getattr(d,'_onlinePendingWorkspaceSession',{}):
+        return _restored_workspace_unused_audit_barrier(d,directory,bridge,proof)
     online_after_bit_bridge_shape(d, bridge)
     d.require(str(directory) == bridge['baselineRelease'], 'ONLINE_RECHARGE_AFTER_BIT_ORIGIN_CHANGED')
     basis = _online_after_bit_audit_binding(d, bridge, proof)
@@ -3419,6 +3422,8 @@ def _online_after_bit_unused_audit_barrier(d, directory, bridge, proof):
 
 def _online_after_bit_audit_receipt(d, directory, bridge, proof, manifest, record):
     """Rebind the original publication proof, preserve its prefix and allow later business."""
+    if 'restoration' in getattr(d,'_onlinePendingWorkspaceSession',{}):
+        return _restored_workspace_audit_receipt(d,directory,bridge,proof,manifest,record)
     code = 'ONLINE_RECHARGE_AFTER_BIT_AUDIT_RECEIPT_CHANGED'
     value = record.get('afterBitAuditProtection')
     d.require(type(value) is dict and set(value) == {'version', 'kind', 'basis', 'sourceApiIdentity',
@@ -3516,6 +3521,8 @@ def online_pending_workspace_argv(argv):
 
 def _workspace_preflight_binding(d, raw, *, producer, bridge, kind):
     """Pure same-run F_O binding, not a trusted-file authority or live measurement."""
+    if kind==ONLINE_AFTER_BIT_KIND and closed_recovery_json(d,raw).get('version')==3:
+        return _restored_workspace_preflight_binding(d,raw,producer,bridge)
     try:
         _workspace_bridge_shape(d, bridge, kind)
         field, namespace = _WORKSPACE_ORIGIN_TYPES[kind]
@@ -3594,6 +3601,8 @@ def _workspace_owned_preflight(d, *, producer, expected_sha256, bridge):
 
 def _workspace_build_shape(d, proof, *, producer, bridge, preflight_raw, kind):
     """An explicit different proof kind, not a normalized legacy v1 proof."""
+    if kind==ONLINE_AFTER_BIT_KIND and type(proof) is dict and proof.get('version')==3:
+        return _restored_workspace_build_shape(d,proof,producer,bridge,preflight_raw)
     try:
         _workspace_bridge_shape(d, bridge, kind)
         namespace = _WORKSPACE_ORIGIN_TYPES[kind][1]
@@ -3658,6 +3667,156 @@ def _pending_workspace_preserved(d, previous, target, before, original, *, all_s
               'ONLINE_RECHARGE_PRESERVED_IMAGE_REFERENCE_CHANGED')
     return states, {'environment': env, 'compose': infrastructure, 'caddy': caddy}
 
+
+def _online_after_bit_switch(d, previous, target, before, environment, evidence, proof, args, bridge, changed, timing):
+    """Prepare outside the MySQL fence; mark API rollback only at actual stop dispatch."""
+    phases = ('ADMIN_PRECHECKS', 'ADMIN_SWITCH', 'ADMIN_HEALTH', 'API_PRECHECKS', 'AUDIT_PREPARE',
+        'SQLITE_PREPARE', 'API_IDLE', 'MYSQL_LOCK', 'API_STOP_GUARD', 'API_STOP_CHECK', 'API_STOP_DISPATCH',
+        'API_STOP_CONFIRM', 'MYSQL_AFTER_STOP', 'API_STOP_PROOF', 'MYSQL_UNLOCK', 'API_SWITCH',
+        'API_HEALTH', 'ENGINE_PRECHECKS', 'ENGINE_SWITCH', 'ENGINE_HEALTH', 'COMPLETE')
+    started = phase_started = time.monotonic()
+    phase, completed = phases[0], []
+    audit, gate, entered, stop_attempted, stop_completed = None, None, False, False, False
+    mysql_entered, mysql_closed = False, None
+    source_api = {name: before['api'][name] for name in ('containerId', 'image', 'startedAtSha256')}
+
+    def save():
+        now = time.monotonic()
+        pipe = getattr(audit, 'pipe', None)
+        deadline = getattr(pipe, 'deadline', None)
+        timing.clear()
+        timing.update(phase=phase, phaseElapsedSeconds=round(max(0, now - phase_started), 3),
+            elapsedSeconds=round(max(0, now - started), 3), completedPhases=list(completed),
+            mysqlFenceEntered=mysql_entered, mysqlFenceClosed=mysql_closed is not None,
+            mysqlLockElapsedSeconds=round(max(0, (mysql_closed if mysql_closed is not None else now) - (deadline - 210)), 3)
+                if deadline is not None else 0.0,
+            mysqlLockRemainingSeconds=round(max(0, deadline - (mysql_closed if mysql_closed is not None else now)), 3)
+                if deadline is not None else 0.0,
+            apiStopAttempted=stop_attempted, apiStopCompleted=stop_completed)
+
+    def mark(value):
+        nonlocal phase, phase_started
+        d.require(value in phases, 'ONLINE_RECHARGE_AFTER_BIT_SWITCH_PHASE_INVALID')
+        now = time.monotonic()
+        completed.append({'phase': phase, 'elapsedSeconds': round(max(0, now - phase_started), 3)})
+        phase, phase_started = value, now
+        save()
+
+    def prechecks():
+        require_preserved(d, previous, target, before, environment)
+        jobs_idle(d, previous, migrated=True)
+        historical_guard(d, previous, evidence, target)
+        require_fresh_resources(d, target)
+
+    def fresh_jobs(reader, database_identity):
+        # Reuse the original running-worker/lease predicates without repeating
+        # cold source proofs or API database discovery inside SQLite's 150s fence.
+        deadline = min(gate.deadline, time.monotonic() + 40)
+        class Controller:
+            def __getattr__(self, name):
+                return getattr(d, name)
+
+            def compose(self, directory, *command, **kwargs):
+                remaining = min(5, deadline - time.monotonic())
+                d.require(directory == previous and command[:7] == ('exec', '-e',
+                    'MYSQL_DATABASE=' + database_identity['database'], '-T', 'mysql', 'sh', '-c')
+                    and len(command) == 8 and not kwargs and remaining > 0,
+                    'API_ADMIN_WORKSPACE_SQLITE_FENCE_TIMEOUT')
+                value = d.compose(directory, *command, timeout=remaining)
+                d.require(time.monotonic() < deadline, 'API_ADMIN_WORKSPACE_SQLITE_FENCE_TIMEOUT')
+                return value
+
+            def service_state(self, directory, service, **kwargs):
+                d.require(directory == previous and service == 'mysql'
+                    and kwargs == {'include_container_id': True, 'include_environment_hash': True},
+                    'API_ADMIN_WORKSPACE_DATABASE_IDENTITY_CHANGED')
+                _online_after_bit_mysql_check(d, directory, database_identity['mysql'], deadline)
+                return dict(database_identity['mysql'])
+
+            def registration_runtime_state(self, directory):
+                d.require(directory == previous and time.monotonic() + 15 < deadline,
+                    'API_ADMIN_WORKSPACE_SQLITE_FENCE_TIMEOUT')
+                value = d.registration_runtime_state(directory)  # Original fixed 15s command.
+                d.require(time.monotonic() < deadline, 'API_ADMIN_WORKSPACE_SQLITE_FENCE_TIMEOUT')
+                return value
+        reader.jobs_idle(Controller(), previous, database_identity=database_identity)
+        d.require(time.monotonic() < gate.deadline, 'API_ADMIN_WORKSPACE_SQLITE_FENCE_TIMEOUT')
+
+    class StopController:
+        def __getattr__(self, name):
+            return getattr(d, name)
+
+        def run(self, *command, **kwargs):
+            nonlocal stop_attempted
+            if command[:2] == ('docker', 'stop'):
+                # Only the original fixed helper's first actual stop may change rollback scope.
+                d.require(command == ('docker', 'stop', '--time', '30', source_api['containerId'])
+                    and set(kwargs) == {'timeout'} and type(kwargs['timeout']) in (int, float)
+                    and 0 < kwargs['timeout'] <= 45 and phase == 'API_STOP_CHECK'
+                    and entered and not stop_attempted and 'api' not in changed,
+                    'ONLINE_RECHARGE_AFTER_BIT_STOP_DISPATCH_INVALID')
+                stop_attempted = True
+                changed.append('api')
+                mark('API_STOP_DISPATCH')
+                result = d.run(*command, **kwargs)
+                mark('API_STOP_CONFIRM')
+                return result
+            return d.run(*command, **kwargs)
+
+    try:
+        prechecks()
+        mark('ADMIN_SWITCH')
+        changed.append('admin')
+        d.compose(target, 'up', '-d', '--no-deps', '--no-build', '--pull', 'never', '--force-recreate', 'admin', timeout=300)
+        mark('ADMIN_HEALTH'); d.wait_healthy(target, 'admin')
+        mark('API_PRECHECKS'); prechecks()
+        mark('AUDIT_PREPARE')
+        audit = _online_after_bit_unused_audit_barrier(d, previous, bridge, proof)
+        d.require(type(audit.source_api_identity) is dict
+            and all(audit.source_api_identity.get(name) == value for name, value in source_api.items()),
+            'ONLINE_RECHARGE_AFTER_BIT_API_CHANGED')
+        reader = legacy(d)
+        database_identity = reader.workspace_database_identity(d, previous)
+        mark('SQLITE_PREPARE')
+        gate = reader.workspace_prepare(d, previous, target, proof, args, evidence, legacy=False)
+        d.require(gate is not None and gate.d is d and type(gate.api_identity) is dict
+            and all(gate.api_identity.get(name) == value for name, value in source_api.items()),
+            'ONLINE_RECHARGE_WORKSPACE_DATABASE_INVALID')
+        mark('API_IDLE'); fresh_jobs(reader, database_identity)
+        # BEGIN IMMEDIATE, the maintenance marker and verified backup/restore now
+        # protect SQLite. The first MySQL frame closes any mutation race before stop.
+        mark('MYSQL_LOCK'); audit.__enter__(); entered = mysql_entered = True
+        mark('API_STOP_GUARD'); audit.before_stop()
+        gate.d = StopController()
+        mark('API_STOP_CHECK')
+        try:
+            gate.stop_previous()
+        finally:
+            gate.d = d
+        d.require(stop_attempted, 'ONLINE_RECHARGE_AFTER_BIT_STOP_DISPATCH_INVALID')
+        stop_completed = True
+        mark('MYSQL_AFTER_STOP'); audit.check()
+        mark('API_STOP_PROOF'); protection = audit.confirm_stopped(gate)
+        mark('MYSQL_UNLOCK'); audit.__exit__(None, None, None); entered = False; mysql_closed = time.monotonic()
+        mark('API_SWITCH')
+        d.compose(target, 'up', '-d', '--no-deps', '--no-build', '--pull', 'never', '--force-recreate', 'api', timeout=300)
+        mark('API_HEALTH'); d.wait_healthy(target, 'api')
+        mark('ENGINE_PRECHECKS'); prechecks()
+        mark('ENGINE_SWITCH'); changed.append('online-recharge')
+        d.compose(target, 'up', '-d', '--no-deps', '--no-build', '--pull', 'never', '--force-recreate', 'online-recharge', timeout=300)
+        mark('ENGINE_HEALTH'); d.wait_healthy(target, 'online-recharge')
+        mark('COMPLETE'); save()
+        return gate, protection
+    except Exception as error:
+        save()
+        if gate is not None:
+            error.sqlite_gate = gate
+        raise
+    finally:
+        if entered:
+            audit.__exit__(None, None, None)
+
+
 def _pending_workspace_release_locked(d, args):
     proof = validate_arguments(d, args)
     previous, old, before, evidence = baseline(d, args.expected_current)
@@ -3677,6 +3836,7 @@ def _pending_workspace_release_locked(d, args):
     sqlite_gate = None
     audit_barrier = None
     after_bit_audit_protection = None
+    after_bit_control_timing = {}
     try:
         workspace_origin(d, previous, previous, evidence, before)
         archive = extract_source(d, args.commit, target)
@@ -3742,30 +3902,31 @@ def _pending_workspace_release_locked(d, args):
         historical_guard(d, previous, evidence, target)
         step = 'workspace-protection'
         bridge = _workspace_evidence_origin(d, evidence)
-        audit_barrier = (_online_after_bit_unused_audit_barrier(d, previous, bridge, proof)
-                         if bridge['kind'] == ONLINE_AFTER_BIT_KIND
-                         else legacy(d).WorkspaceUnusedAuditBarrier(d, previous, online=True))
-        audit_barrier.__enter__()
-        sqlite_gate = legacy(d).workspace_prepare(d, previous, target, proof, args, evidence, legacy=False)
-        d.require(sqlite_gate is not None, 'ONLINE_RECHARGE_WORKSPACE_DATABASE_INVALID')
-        step = 'switch'
-        for service in SWITCH_ORDER:
-            require_preserved(d, previous, target, before, environment)
-            jobs_idle(d, previous, migrated=True)
-            historical_guard(d, previous, evidence, target)
-            # The first executor publication accepts no imported cards/CDKs/tasks.
-            require_fresh_resources(d, target)
-            changed.append(service)
-            if service == 'api':
-                audit_barrier.before_stop()
-                sqlite_gate.stop_previous()
-                audit_barrier.check()
-                if bridge['kind'] == ONLINE_AFTER_BIT_KIND:
-                    after_bit_audit_protection = audit_barrier.confirm_stopped(sqlite_gate)
-                audit_barrier.__exit__(None,None,None)
-                audit_barrier = None
-            d.compose(target, 'up', '-d', '--no-deps', '--no-build', '--pull', 'never', '--force-recreate', service, timeout=300)
-            d.wait_healthy(target, service)
+        if bridge['kind'] == ONLINE_AFTER_BIT_KIND:
+            step = 'switch'
+            sqlite_gate, after_bit_audit_protection = _online_after_bit_switch(d, previous, target, before,
+                environment, evidence, proof, args, bridge, changed, after_bit_control_timing)
+        else:
+            audit_barrier = legacy(d).WorkspaceUnusedAuditBarrier(d, previous, online=True)
+            audit_barrier.__enter__()
+            sqlite_gate = legacy(d).workspace_prepare(d, previous, target, proof, args, evidence, legacy=False)
+            d.require(sqlite_gate is not None, 'ONLINE_RECHARGE_WORKSPACE_DATABASE_INVALID')
+            step = 'switch'
+            for service in SWITCH_ORDER:
+                require_preserved(d, previous, target, before, environment)
+                jobs_idle(d, previous, migrated=True)
+                historical_guard(d, previous, evidence, target)
+                # The first executor publication accepts no imported cards/CDKs/tasks.
+                require_fresh_resources(d, target)
+                changed.append(service)
+                if service == 'api':
+                    audit_barrier.before_stop()
+                    sqlite_gate.stop_previous()
+                    audit_barrier.check()
+                    audit_barrier.__exit__(None,None,None)
+                    audit_barrier = None
+                d.compose(target, 'up', '-d', '--no-deps', '--no-build', '--pull', 'never', '--force-recreate', service, timeout=300)
+                d.wait_healthy(target, service)
         step = 'audit-after'
         second = legacy(d).strict_audit(d, target, target / 'after-audit.json')
         d.require(first['checksSha256'] == second['checksSha256'], 'ONLINE_RECHARGE_AUDIT_RULES_CHANGED')
@@ -3871,6 +4032,8 @@ def _pending_workspace_release_locked(d, args):
                   'migration': migration, 'migrationAttempted': migration_attempted,
                   'inverseMigrationPerformed': False, 'mediaVolumeDeleted': False,
                   'currentPointsToCandidate': (d.BASE / 'current').resolve() == target, 'receiptPersisted': True}
+        if after_bit_control_timing:
+            result['afterBitControlTiming'] = after_bit_control_timing
         try:
             (target / FAILURE_FILE).write_text(json.dumps(result, indent=2) + '\n')
         except Exception:
@@ -3977,6 +4140,14 @@ def _pending_workspace_validate_receipt(d, value, mode, commit, expected):
     bridge = _workspace_evidence_origin(d,value)
     origin_field = _workspace_origin_type(d,bridge)[0]
     services = value['services']
+    restored=value.get(_RESTORED_B_FIELD)
+    if _RESTORED_B_FIELD in value:
+        d.require(bridge['kind']==ONLINE_AFTER_BIT_KIND,_RESTORED_B_CODE)
+        if mode=='preflight':
+            _restored_workspace_sidecar(d,bridge,restored,services)
+        else:
+            observed,unused=_restored_workspace_materials(d,bridge)
+            _restored_workspace_sidecar(d,bridge,restored,observed['currentServices'])
     expected_services = set((*PRESERVED, 'api', 'admin', *(() if mode == 'preflight' else ('online-recharge',))))
     d.require(set(services) == expected_services
               and all(isinstance(r, dict) and r.get('status') == 'running'
@@ -4002,7 +4173,7 @@ def _pending_workspace_validate_receipt(d, value, mode, commit, expected):
                   and re.fullmatch(r'[a-f0-9]{64}', value.get('workspaceVolume', {}).get('identitySha256', ''))
                   and re.fullmatch(r'[a-f0-9]{64}', value.get('workspaceBuildProofSha256', '')),
                   'ONLINE_RECHARGE_RECEIPT_BASELINE_CHANGED')
-        resumed = {origin_field: bridge}
+        resumed = {origin_field: bridge,**({_RESTORED_B_FIELD:restored} if restored is not None else {})}
         if value.get('migrationRecovery') is not None:
             d.require(value['migrationRecovery'] == recovery_marker(recovery_policy(d))
                       and value.get('migrationPerformed', False) is False
@@ -4033,7 +4204,7 @@ def _pending_workspace_validate_receipt(d, value, mode, commit, expected):
               and re.fullmatch(r'[a-f0-9]{40}', value.get('sourceTree', ''))
               and re.fullmatch(r'[a-f0-9]{64}', value.get('buildProofSha256', '')),
               'ONLINE_RECHARGE_RECEIPT_READBACK_CHANGED')
-    resumed = {origin_field: bridge}
+    resumed = {origin_field: bridge,**({_RESTORED_B_FIELD:restored} if restored is not None else {})}
     if bridge['kind'] == ONLINE_AFTER_BIT_KIND:
         d.require(_declaration_hash(value.get('afterBitAuditProtectionSha256'))
             and type(value.get('preservedRegistrationAuditCount')) is int
@@ -4094,7 +4265,7 @@ _AFTER_BIT_BANK_POLICY_FILES = {
         'bec32298136ff61d8e69820179b8c3f51f8e5221f4e6b449aaf5f5ec8f7d4625'),
     'scripts/production-release/online-recharge-scope.test.py': (
         '4aa063af4054ff98d2bb622056556ab643ed39abb3d373facc636509ff98ad8e',
-        '59f3221f1326865a958f6f50fd0fb5211c3f2ee29ca915884f05202d426cf5d2'),
+        '1640127e0034b26fe28d5fff74a6a5c0f56b867cd415cf125f0ec489c94d566e'),
 }
 _AFTER_BIT_RELEASE_CI_FILES = {
     'scripts/ci-recharge-scope.mjs': ('3fe9c33ea883b7e2ad15305d1c7fe26873ddf648645b7a05acc8aecd5f858cfd', '04c8451b64ebf75755a108761a1a73430e4f31e807f7bb4f356b790417ee7ec1'),
@@ -4210,7 +4381,8 @@ def _workspace_release_ci_inventory(d, bridge, original, inventory):
     code = 'ONLINE_RECHARGE_PENDING_WORKSPACE_APPLICATION_SOURCE_CHANGED'
     d.require(type(bridge) is dict and bridge.get('kind') == ONLINE_AFTER_BIT_KIND, code)
     _workspace_bridge_shape(d, bridge, ONLINE_AFTER_BIT_KIND)
-    d.require(set(original) == set(inventory) and changed == names
+    capacity=_workspace_capacity_control_inventory(d,bridge,original,inventory)|_workspace_release_rules_inventory(d,bridge,original,inventory)
+    d.require((set(original)^set(inventory))<=capacity and changed == names
         and all(original.get(name) == {'sha256': before, 'mode': '100644'}
             and inventory.get(name) == {'sha256': after, 'mode': '100644'}
             for name, (before, after) in _AFTER_BIT_RELEASE_CI_FILES.items()), code)
@@ -4224,9 +4396,10 @@ def _workspace_bank_policy_inventory(d, bridge, original, inventory):
     _workspace_bridge_shape(d,bridge,ONLINE_AFTER_BIT_KIND)
     extra=frozenset(_AFTER_BIT_BANK_POLICY_FILES)-_PENDING_WORKSPACE_RECEIPT_COMPATIBILITY_FILES
     ci = _workspace_release_ci_inventory(d, bridge, original, inventory)
-    d.require(set(original)==set(inventory)
+    capacity=_workspace_capacity_control_inventory(d,bridge,original,inventory)|_workspace_release_rules_inventory(d,bridge,original,inventory)
+    d.require((set(original)^set(inventory))<=capacity
         and {n for n in inventory if original[n]!=inventory[n]
-             and n not in _PENDING_WORKSPACE_RECEIPT_COMPATIBILITY_FILES and n not in ci}==extra
+             and n not in _PENDING_WORKSPACE_RECEIPT_COMPATIBILITY_FILES and n not in ci and n not in capacity}==extra
         and all(original.get(n)=={'sha256':before,'mode':'100644'}
             and inventory.get(n)=={'sha256':after,'mode':'100644'}
             for n,(before,after) in _AFTER_BIT_BANK_POLICY_FILES.items()),code)
@@ -4246,12 +4419,13 @@ def _pending_workspace_profile(d, bridge, producer):
     if producer['commit']!=initial['commit'] or producer['sourceTree']!=initial['sourceTree']:
         original=_pending_workspace_current_source_inventory(d,initial)
         compatible=_PENDING_WORKSPACE_RECEIPT_COMPATIBILITY_FILES
-        d.require(set(original)==set(inventory),
+        capacity=_workspace_capacity_control_inventory(d,bridge,original,inventory)|_workspace_release_rules_inventory(d,bridge,original,inventory)
+        d.require((set(original)^set(inventory))<=capacity,
             'ONLINE_RECHARGE_PENDING_WORKSPACE_APPLICATION_SOURCE_CHANGED')
-        compatible = compatible | _workspace_release_ci_inventory(d, bridge, original, inventory)
+        compatible = compatible | capacity | _workspace_release_ci_inventory(d, bridge, original, inventory)
         if any(original[name]!=inventory[name] for name in inventory if name not in compatible):
             compatible=compatible|_workspace_bank_policy_inventory(d,bridge,original,inventory)
-        d.require(set(original)==set(inventory)
+        d.require((set(original)^set(inventory))<=capacity
             and _PENDING_WORKSPACE_RECEIPT_COMPATIBILITY_FILES.issubset(inventory)
             and all(original[name]==inventory[name] for name in inventory
                 if name not in compatible)
@@ -4296,6 +4470,8 @@ def _workspace_bank_policy_protected(d, previous, target):
 
 def _pending_workspace_session(d, *, expected=None, producer=None):
     saved=getattr(d,'_onlinePendingWorkspaceSession',None)
+    if type(saved) is dict and 'restoration' in saved:
+        return _restored_workspace_session(d,saved,expected,_pending_workspace_producer(d) if producer is None else producer)
     d.require(type(saved) is dict and set(saved)=={'bridge','producer'},'ONLINE_RECHARGE_PENDING_WORKSPACE_ORIGIN_CHANGED')
     producer=_pending_workspace_producer(d) if producer is None else producer
     reader=_pending_workspace_reader(d)
@@ -4312,6 +4488,8 @@ def _pending_workspace_session(d, *, expected=None, producer=None):
 def _pending_workspace_begin(d, expected, producer, *, live):
     d.require(hasattr(d,'BASE') and type(expected) is str and re.fullmatch('[a-f0-9]{40}',expected),
               'ONLINE_RECHARGE_PENDING_WORKSPACE_INPUT_INVALID')
+    if live and _restored_workspace_selected(d,expected):
+        return _restored_workspace_begin(d,expected,producer)
     previous=(d.BASE/'current').resolve()
     reader=_pending_workspace_reader(d)
     kind, measure = _workspace_baseline_reader(d, reader, previous, live=live)
@@ -4328,6 +4506,8 @@ def baseline(d, expected):
     if expected==BASELINE_COMMIT:
         return _PENDING_WORKSPACE_FIRST['baseline'](d,expected)
     d.require(type(getattr(d,'_onlinePendingWorkspaceProducer',None)) is dict, 'ONLINE_RECHARGE_BASELINE_NOT_APPROVED')
+    if _restored_workspace_selected(d,expected):
+        return _restored_workspace_baseline(d,expected)
     previous,bridge=_pending_workspace_begin(d,expected,_pending_workspace_producer(d),live=True)
     reader=legacy(d)
     manifest=closed_recovery_json(d,_declaration_source_bytes(previous/'release-manifest.json'))
@@ -4375,8 +4555,11 @@ def workspace_origin(d, previous, directory, evidence, before):
     if not any(n in evidence for n, unused in _WORKSPACE_ORIGIN_TYPES.values()):
         return _PENDING_WORKSPACE_FIRST['workspace_origin'](d,previous,directory,evidence,before)
     bridge,_producer=_pending_workspace_session(d)
+    saved=d._onlinePendingWorkspaceSession
+    expected_before=saved['beforeServices'] if 'restoration' in saved else bridge['services']
+    d.require((evidence.get(_RESTORED_B_FIELD)==saved['restoration'] if 'restoration' in saved else _RESTORED_B_FIELD not in evidence),_RESTORED_B_CODE)
     d.require(_workspace_evidence_origin(d,evidence)==bridge and str(previous)==bridge['baselineRelease']
-        and before==bridge['services'] and workspace_files(d,previous)==evidence['workspaceOriginFiles']
+        and before==expected_before and workspace_files(d,previous)==evidence['workspaceOriginFiles']
         and evidence['workspaceBuildProofSha256']==bridge['buildProofCanonicalSha256'],
         'ONLINE_RECHARGE_WORKSPACE_ORIGIN_CHANGED')
     # Cold actual initial Q evidence establishes retired owner provenance. The current
@@ -4446,7 +4629,8 @@ def validate_arguments(d, args):
          'image_commit','image_run_id','image_run_attempt','post_cleanup_seal_sha256',
          'order_archive_seal_sha256','order_archive_prepared_images_sha256')), 'ONLINE_RECHARGE_SCOPE_CONFLICT')
     producer=_pending_workspace_producer(d,args)
-    _previous,bridge=_pending_workspace_begin(d,args.expected_current,producer,live=True)
+    restored=_restored_workspace_selected(d,args.expected_current)
+    _previous,bridge=_pending_workspace_begin(d,args.expected_current,producer,live=not restored)
     encoded=getattr(args,'online_recharge_build_proof','')
     d.require(type(encoded) is str and len(encoded)<32768,'ONLINE_RECHARGE_BUILD_PROOF_TOO_LARGE')
     raw=base64.b64decode(encoded,validate=True)
@@ -4496,6 +4680,8 @@ def build_proof(d):
         'migration':dict(MIGRATION_IDENTITY),'images':{},'engineSourceSha256':fingerprint(file_inventory(d,directory/ENGINE_ROOT)),
         'composeSourceSha256':file_digest(directory/'docker-compose.aws-mysql.yml'),
         'baselineOriginSha256':fingerprint(bridge),'preflightBytesSha256':hashlib.sha256(raw).hexdigest()}
+    if before.get('version')==3:
+        proof.update(version=3,restorationSha256=fingerprint(before['restoration']),beforeServicesSha256=fingerprint(before['services']))
     for service in IMAGE_SERVICES:
         reference=os.environ['RELEASE_REPOSITORY']+':'+producer['commit']+'-'+producer['workflowRunId']+'-'+producer['workflowRunAttempt']+'-'+service
         metadata=json.loads(d.run('docker','image','inspect',reference))[0]
@@ -4575,7 +4761,9 @@ def readback(d,expected):
     producer=_pending_workspace_producer(d)
     recorded = _workspace_evidence_origin(d,evidence)
     initial=recorded['baselineProducer']
-    if recorded['kind'] == ONLINE_AFTER_BIT_KIND:
+    if _RESTORED_B_FIELD in evidence:
+        bridge=_restored_workspace_readback_origin(d,directory,expected,producer,recorded)
+    elif recorded['kind'] == ONLINE_AFTER_BIT_KIND:
         reader = _pending_workspace_reader(d)
         d.require(callable(getattr(reader,'online_after_bit_readback_origin',None)),
             'ONLINE_RECHARGE_DECLARATION_SOURCE_NOT_MEASURED')
@@ -4588,8 +4776,9 @@ def readback(d,expected):
     else:
         bridge=_pending_workspace_compatibility_readback_origin(d,directory,expected_commit=expected,producer=producer)
     _pending_workspace_profile(d,bridge,producer)
-    d._onlinePendingWorkspaceSession={'bridge':bridge,'producer':producer}
-    return _pending_workspace_readback(d,expected)
+    if _RESTORED_B_FIELD not in evidence:
+        d._onlinePendingWorkspaceSession={'bridge':bridge,'producer':producer}
+    return _restored_wire_encode(_pending_workspace_readback(d,expected))
 
 
 def validate_receipt(d,value,mode,commit,expected):
@@ -4612,11 +4801,13 @@ def preflight(d,expected):
     result={**result,_workspace_origin_type(d,bridge)[0]:bridge,'migrationPerformed':False}
     _pending_workspace_pref_fields(d,result)
     _pending_workspace_validate_receipt(d,result,'preflight',producer['commit'],expected)
-    return result
+    return _restored_wire_encode(result)
 
 
 def _pending_workspace_complete_preflight(d,raw,*,producer,bridge):
     value=closed_recovery_json(d,raw)
+    if value.get('version')==3:
+        return _restored_workspace_preflight_binding(d,raw,producer,bridge)
     d.require(value.get('version')==2 and type(value.get('version')) is int,
               'ONLINE_RECHARGE_PENDING_WORKSPACE_PREFLIGHT_CHANGED')
     _workspace_origin_type(d,bridge)
@@ -4655,7 +4846,9 @@ def online_pending_workspace_ended_preflight(d,invocation_raw,*,command_id,insta
             'releaseCandidateCommit':producer['commit'],'workflowRunId':producer['workflowRunId'],
             'workflowRunAttempt':producer['workflowRunAttempt'],'sourceTree':producer['sourceTree'],
             'baseline':bridge,'services':bridge['services'],'ordinaryPreflight':receipt}
-        raw=(json.dumps(f,indent=2)+'\n').encode()
+        if _RESTORED_B_FIELD in receipt:
+            f.update(version=3,services=receipt['services'],restoration=receipt[_RESTORED_B_FIELD],ordinaryPreflight=_restored_wire_encode(receipt))
+        raw=(json.dumps(f,separators=(',',':') if f['version']==3 else None,indent=None if f['version']==3 else 2)+'\n').encode()
         _pending_workspace_complete_preflight(d,raw,producer=producer,bridge=bridge)
         return {'preflight_raw':raw,'invocation_raw':invocation_raw,
             'command_id':command_id,'invocation_bytes_sha256':hashlib.sha256(invocation_raw).hexdigest()}
@@ -4671,6 +4864,10 @@ def _pending_workspace_pref_fields(d,value):
     required={'status','commit','services','manifestSha256','environmentSha256','apiSource','guards','freeBytes',
         'workspaceIdle','workspaceVolume','workspaceOriginFiles','workspaceBuildProofSha256','migrationRecovery',
         origin_field,'audit','migration','migrationState','workersPreserved','requiresWindowHandoff','migrationPerformed'}
+    if _RESTORED_B_FIELD in value:
+        d.require(bridge['kind']==ONLINE_AFTER_BIT_KIND,_RESTORED_B_CODE)
+        _restored_workspace_sidecar(d,bridge,value[_RESTORED_B_FIELD],value['services'])
+        required.add(_RESTORED_B_FIELD)
     d.require(type(value) is dict and required<=set(value) and set(value)<=required|{'migrationOrigin'},
               'ONLINE_RECHARGE_PENDING_WORKSPACE_PREFLIGHT_CHANGED')
     d.require(value['apiSource']=={'imageId':bridge['services']['api']['image'],'revision':bridge['baselineCommit'],
@@ -4681,3 +4878,1274 @@ def _pending_workspace_pref_fields(d,value):
             {'release-manifest.json','api-workspace-preservation.json','api-workspace-build-proof.json','backup-verification.json','before-audit.json','after-audit.json'}
         and all(_declaration_hash(v) for v in value['workspaceOriginFiles'].values()),
         'ONLINE_RECHARGE_PENDING_WORKSPACE_PREFLIGHT_CHANGED')
+
+
+"""Local candidate only; this pure material check is not a release authority.
+
+The caller must acquire old B/Q_A/Q_B and the actual fixed Q_R invocation,
+bind native anchors to the failed C operation, and validate their immutable
+source carriers before consuming this result. No production command is run.
+"""
+import copy
+import hashlib
+import json
+import re
+_restore_cfg_IDENTITY_KEYS = frozenset(('status', 'health', 'image', 'reference', 'containerId', 'startedAtSha256', 'environmentSha256', 'configurationSha256'))
+_restore_cfg_HASH = re.compile('[a-f0-9]{64}')
+
+def _restore_cfg_fingerprint(value):
+    return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
+
+def _restore_cfg_need(ok):
+    if not ok:
+        raise RuntimeError('ONLINE_RECHARGE_B_RESTORE_CONFIGURATION_UNPROVEN')
+
+def _restore_cfg_complete_configuration_material(service, metadata, actual, original, *, original_before_container_id, acquired_actual_replace_anchors):
+    """Prove full configuration equality under two specific native identities.
+
+    acquired_actual_replace_anchors is supplied only by the native caller after
+    it has verified fixed B / failed C timeline material. It is never trusted
+    when read from a Q/F/proof claim. Every unmatched field fails the complete
+    original configuration hash comparison. Secret values stay in memory.
+    """
+    _restore_cfg_need(service in ('api', 'admin') and type(metadata) is dict)
+    for row in (actual, original):
+        _restore_cfg_need(type(row) is dict and set(row) == _restore_cfg_IDENTITY_KEYS and all((type(row[n]) is str and _restore_cfg_HASH.fullmatch(row[n]) for n in ('containerId', 'startedAtSha256', 'environmentSha256', 'configurationSha256'))))
+    _restore_cfg_need(all((actual[n] == original[n] for n in ('status', 'health', 'image', 'reference', 'environmentSha256'))))
+    _restore_cfg_need(type(original_before_container_id) is str and _restore_cfg_HASH.fullmatch(original_before_container_id) and (type(acquired_actual_replace_anchors) in (tuple, list)) and (len(acquired_actual_replace_anchors) <= 4) and all((type(v) is str and _restore_cfg_HASH.fullmatch(v) for v in acquired_actual_replace_anchors)) and (len(set(acquired_actual_replace_anchors)) == len(acquired_actual_replace_anchors)))
+    (config, host, mounts, state) = (metadata.get(n) for n in ('Config', 'HostConfig', 'Mounts', 'State'))
+    _restore_cfg_need(type(config) is dict and type(host) is dict and (type(state) is dict) and (type(mounts) is list) and all((type(v) is dict and type(v.get('Destination')) is str and v['Destination'].startswith('/') for v in mounts)) and (len({v['Destination'] for v in mounts}) == len(mounts)) and (type(config.get('Env')) is list) and bool(config['Env']) and all((type(v) is str for v in config['Env'])) and (metadata.get('Id') == actual['containerId']) and (metadata.get('Image') == actual['image']) and (config.get('Image') == actual['reference']) and (state.get('Status') == actual['status']) and ((state.get('Health') or {}).get('Status') == actual['health']) and (type(state.get('StartedAt')) is str) and (hashlib.sha256(state['StartedAt'].encode()).hexdigest() == actual['startedAtSha256']) and (_restore_cfg_fingerprint(sorted(config['Env'])) == actual['environmentSha256']))
+    _restore_cfg_need(config.get('Hostname') == actual['containerId'][:12])
+    complete = {'Config': config, 'HostConfig': host, 'Mounts': sorted(mounts, key=lambda v: v['Destination'])}
+    _restore_cfg_need(_restore_cfg_fingerprint(complete) == actual['configurationSha256'])
+    labels = config.get('Labels')
+    _restore_cfg_need(type(labels) is dict and all((type(k) is str and type(v) is str for (k, v) in labels.items())) and (labels.get('com.docker.compose.service') == service) and (labels.get('com.docker.compose.container-number') == '1') and (type(labels.get('com.docker.compose.project')) is str) and re.fullmatch('[a-z0-9][a-z0-9_-]{0,62}', labels['com.docker.compose.project']))
+    project = labels['com.docker.compose.project']
+    names = tuple((separator.join((project, service, '1')) for separator in ('-', '_')))
+    _restore_cfg_need(type(metadata.get('Name')) is str and metadata['Name'] in tuple(('/' + n for n in names)))
+    (stable_name, native_slot) = (metadata['Name'][1:], service + '-1')
+    replace_key = 'com.docker.compose.replace'
+    actual_replace = labels.get(replace_key)
+    _restore_cfg_need(actual_replace in (*acquired_actual_replace_anchors, stable_name, native_slot))
+    matches = []
+    for old_replace in (original_before_container_id, stable_name, native_slot, None):
+        projected = copy.deepcopy(complete)
+        projected['Config']['Hostname'] = original['containerId'][:12]
+        if old_replace is None:
+            projected['Config']['Labels'].pop(replace_key, None)
+        else:
+            projected['Config']['Labels'][replace_key] = old_replace
+        if _restore_cfg_fingerprint(projected) == original['configurationSha256']:
+            matches.append(old_replace)
+    _restore_cfg_need(len(matches) == 1)
+    old_replace = matches[0]
+    return {'kind': 'ONLINE_RECHARGE_B_RESTORE_COMPLETE_CONFIGURATION_MATERIAL', 'version': 1, 'service': service, 'actualServiceSha256': _restore_cfg_fingerprint(actual), 'originalServiceSha256': _restore_cfg_fingerprint(original), 'actualConfigurationSha256': actual['configurationSha256'], 'originalConfigurationSha256': original['configurationSha256'], 'reconstructedConfigurationSha256': original['configurationSha256'], 'changedIdentityPaths': ['Config.Hostname', 'Config.Labels.com.docker.compose.replace'], 'hostnameMappingSha256': _restore_cfg_fingerprint({'actual': config['Hostname'], 'original': original['containerId'][:12]}), 'replaceMappingSha256': _restore_cfg_fingerprint({'actual': actual_replace, 'original': old_replace}), 'acquiredReplaceAnchorsSha256': _restore_cfg_fingerprint(acquired_actual_replace_anchors)}
+
+def _restore_cfg_original_boot_identity(bridge, started_at):
+    row = bridge['services']['api']
+    _restore_cfg_need(type(started_at) is str and re.fullmatch('20[0-9]{2}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(?:\\.[0-9]{1,9})?Z', started_at) and (hashlib.sha256(started_at.encode()).hexdigest() == row['startedAtSha256']))
+    return {**{n: row[n] for n in ('containerId', 'image', 'startedAtSha256')}, 'startedAt': started_at}
+_restore_cfg_FINITE_RESTORE_WITNESS = None
+
+def _restore_cfg_require_finite_restore_policy():
+    if _restore_cfg_FINITE_RESTORE_WITNESS is None:
+        raise RuntimeError('ONLINE_RECHARGE_B_RESTORE_WITNESS_UNAVAILABLE')
+    raise RuntimeError('ONLINE_RECHARGE_B_RESTORE_DRAFT_NOT_INSTALLED')
+
+"""Local pure prototype: safe material binding, never a native authority issuer.
+
+To integrate, copy reviewed bodies into ONLINE scope, execute original API cold
+and unchanged source qualification, acquire root-private pinned materials, and
+bind the independent native F. There is no deployment or command capability.
+"""
+import datetime
+import hashlib
+import json
+import re
+_restore_pure_SERVICES = frozenset(('api', 'admin', 'mysql', 'caddy', 'media-resolver', 'auto-recharge', 'auto-registration'))
+_restore_pure_IDENTITY_KEYS = frozenset(('status', 'health', 'image', 'reference', 'containerId', 'startedAtSha256', 'environmentSha256', 'configurationSha256'))
+_restore_pure_QR_KEYS = frozenset(('version', 'readOnlyObservation', 'measurementsComplete', 'publicationQualified', 'productionMutationCommandsInvoked', 'databaseFreshlyMeasured', 'nativeGrantSyncReached', 'nativeMigrationAttempted', 'inputBindingSha256', 'currentIsOriginalB', 'originalManifestBytesMatch', 'originalEnvironmentAndConfigurationFilesMatch', 'originalManifestNewMigrationCount', 'runtimeContentMatchesOriginal', 'apiAdminRuntimeConfigurationProof', 'apiCurrentStartedAt', 'apiCurrentStartedAtSha256', 'failedTarget', 'workspaceObservation', 'originalStoppedApiObservation', 'currentServices', 'services', 'disk', 'twoRuntimeFramesStable', 'currentPointerStable', 'preservedFullIdentityCount', 'apiAdminImageReferenceEnvironmentContentMatchesOriginal', 'deadlineExceeded'))
+_restore_pure_POLICY_KEYS = frozenset(('kind', 'version', 'baselineBridgeSha256', 'originalBootStartedAt', 'failedProducer', 'failedCommandId', 'failedNativeEnd', 'failedRelease', 'failureCanonicalSha256', 'failedPreflightBytesSha256', 'failedBuildProofSha256', 'failedSourceHelpers', 'instanceId', 'readbackCommandId', 'readbackInvocationBytesSha256', 'readbackBodySha256', 'readbackInputBindingSha256'))
+_restore_pure_FINITE_RESTORE_POLICY = None
+
+def _restore_pure_need(ok):
+    if not ok:
+        raise RuntimeError('ONLINE_RECHARGE_B_RESTORE_MATERIAL_CHANGED')
+
+def _restore_pure_fingerprint(value):
+    return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
+
+def _restore_pure_closed(raw):
+
+    def pairs(rows):
+        result = {}
+        for (key, value) in rows:
+            _restore_pure_need(key not in result)
+            result[key] = value
+        return result
+    _restore_pure_need(type(raw) in (str, bytes))
+    result = json.loads(raw, object_pairs_hook=pairs, parse_constant=lambda unused: _restore_pure_need(False))
+    _restore_pure_need(type(result) is dict)
+    return result
+
+def _restore_pure_utc(value):
+    _restore_pure_need(type(value) is str)
+    result = datetime.datetime.fromisoformat(value.replace('Z', '+00:00'))
+    _restore_pure_need(result.utcoffset() == datetime.timedelta(0))
+    return result
+
+def _restore_pure_service_shape(states):
+    _restore_pure_need(type(states) is dict and set(states) == _restore_pure_SERVICES)
+    for (service, row) in states.items():
+        _restore_pure_need(type(row) is dict and set(row) == _restore_pure_IDENTITY_KEYS and (row['status'] == 'running') and (row['health'] == 'healthy' or (service == 'caddy' and row['health'] is None)) and (type(row['image']) is str) and re.fullmatch('sha256:[a-f0-9]{64}', row['image']) and (type(row['reference']) is str) and (0 < len(row['reference']) < 512) and all((type(row[n]) is str and re.fullmatch('[a-f0-9]{64}', row[n]) for n in ('containerId', 'startedAtSha256', 'environmentSha256', 'configurationSha256'))))
+
+def _restore_pure_validate_observation_material(bridge, invocation_raw, policy):
+    """A fixed observation remains explicitly non-qualifying after validation.
+
+    The root-reviewed policy is not a producer/F/UUID claim supplied by users.
+    Pure binding of actually acquired invocation bytes cannot create native
+    transport authority, complete configuration equivalence, or a release F.
+    """
+    _restore_pure_need(type(policy) is dict and set(policy) == _restore_pure_POLICY_KEYS and (policy['kind'] == 'ONLINE_RECHARGE_B_RESTORE_FINITE_OBSERVATION') and (policy['version'] == 1) and (type(invocation_raw) is bytes) and (0 < len(invocation_raw) < 65536) and (hashlib.sha256(invocation_raw).hexdigest() == policy['readbackInvocationBytesSha256']) and (_restore_pure_fingerprint(bridge) == policy['baselineBridgeSha256']) and (bridge['kind'] == 'ONLINE_RECHARGE_AFTER_BIT_SUCCESSOR_ORIGIN'))
+    _restore_pure_service_shape(bridge['services'])
+    q = _restore_pure_closed(invocation_raw)
+    required = {'CommandId', 'InstanceId', 'DocumentName', 'PluginName', 'Status', 'ResponseCode', 'ExecutionStartDateTime', 'ExecutionEndDateTime', 'StandardOutputContent', 'StandardErrorContent'}
+    allowed = required | {'Comment', 'DocumentVersion', 'ExecutionElapsedTime', 'StatusDetails', 'StandardOutputUrl', 'StandardErrorUrl', 'CloudWatchOutputConfig'}
+    _restore_pure_need(required <= set(q) <= allowed and q['CommandId'] == policy['readbackCommandId'] and (q['InstanceId'] == policy['instanceId']) and (q['DocumentName'] == 'AWS-RunShellScript') and (q['PluginName'] == 'aws:runShellScript') and (q['Status'] == 'Success') and (type(q['ResponseCode']) is int) and (q['ResponseCode'] == 0) and (q['StandardErrorContent'] == '') and (_restore_pure_utc(policy['failedNativeEnd']) < _restore_pure_utc(q['ExecutionStartDateTime'])) and (_restore_pure_utc(q['ExecutionStartDateTime']) <= _restore_pure_utc(q['ExecutionEndDateTime'])))
+    r = _restore_pure_closed(q['StandardOutputContent'])
+    _restore_pure_need(set(r) == _restore_pure_QR_KEYS and type(r['version']) is int and (r['version'] == 1) and (r['inputBindingSha256'] == policy['readbackInputBindingSha256']) and all((r[n] is True for n in ('readOnlyObservation', 'measurementsComplete', 'currentIsOriginalB', 'originalManifestBytesMatch', 'originalEnvironmentAndConfigurationFilesMatch', 'twoRuntimeFramesStable', 'currentPointerStable', 'apiAdminImageReferenceEnvironmentContentMatchesOriginal', 'nativeGrantSyncReached'))) and all((r[n] is False for n in ('publicationQualified', 'productionMutationCommandsInvoked', 'databaseFreshlyMeasured', 'nativeMigrationAttempted', 'deadlineExceeded'))) and (type(r['preservedFullIdentityCount']) is int) and (r['preservedFullIdentityCount'] == 5) and (type(r['originalManifestNewMigrationCount']) is int) and (r['originalManifestNewMigrationCount'] == 0) and (r['runtimeContentMatchesOriginal'] == {'api': True, 'admin': True}))
+    actual = r['currentServices']
+    _restore_pure_service_shape(actual)
+    _restore_pure_need(all((actual[n] == bridge['services'][n] for n in _restore_pure_SERVICES - {'api', 'admin'})) and all((actual[n][k] == bridge['services'][n][k] for n in ('api', 'admin') for k in ('status', 'health', 'image', 'reference', 'environmentSha256'))) and (type(r['apiCurrentStartedAt']) is str) and (hashlib.sha256(r['apiCurrentStartedAt'].encode()).hexdigest() == r['apiCurrentStartedAtSha256'] == actual['api']['startedAtSha256']))
+    _restore_pure_need(hashlib.sha256(policy['originalBootStartedAt'].encode()).hexdigest() == bridge['services']['api']['startedAtSha256'])
+    target = r['failedTarget']
+    _restore_pure_need(type(target) is dict and target.get('uniqueTargetKnown') is True and (target.get('targetSourceBound') is True) and (target.get('actualReleasePath') == policy['failedRelease']) and (target.get('failureCanonicalSha256') == policy['failureCanonicalSha256']) and (target.get('sourceHelpersSha256') == policy['failedSourceHelpers']))
+    cfg = r['apiAdminRuntimeConfigurationProof']
+    _restore_pure_need(type(cfg) is dict and set(cfg) == {'formalConfigurationQualificationMeasured', 'services'} and (cfg['formalConfigurationQualificationMeasured'] is False) and (type(cfg['services']) is dict) and (set(cfg['services']) == {'api', 'admin'}))
+    for (name, material) in cfg['services'].items():
+        _restore_pure_need(type(material) is dict and set(material) == {'configSha256', 'hostConfigSha256', 'destinationSortedMountsSha256', 'completeConfigurationSha256', 'mountCount'} and (material['completeConfigurationSha256'] == actual[name]['configurationSha256']) and (type(material['mountCount']) is int) and (0 <= material['mountCount'] < 64) and all((type(material[n]) is str and re.fullmatch('[a-f0-9]{64}', material[n]) for n in material if n.endswith('Sha256'))))
+    return {'kind': 'ONLINE_RECHARGE_B_RESTORE_BOUND_OBSERVATION', 'version': 1, 'baselineOriginSha256': _restore_pure_fingerprint(bridge), 'invocationBytesSha256': hashlib.sha256(invocation_raw).hexdigest(), 'commandId': policy['readbackCommandId'], 'bodySha256': policy['readbackBodySha256'], 'currentServices': actual, 'configurationSummaries': cfg['services'], 'sourceApiStartedAt': r['apiCurrentStartedAt'], 'originalApiStartedAt': policy['originalBootStartedAt'], 'failureCanonicalSha256': policy['failureCanonicalSha256'], 'formalConfigurationQualificationMeasured': False, 'publicationQualified': False}
+
+def _restore_pure_complete_restore_material(bridge, observed, native_configuration_materials):
+    """Combine native re-reading full-config hash proofs; not a Q/F issuer.
+
+    In the actual native F this must run on complete_configuration_material()
+    results produced from live docker inspect, not on F/Q caller claims.
+    """
+    _restore_pure_need(type(observed) is dict and observed.get('kind') == 'ONLINE_RECHARGE_B_RESTORE_BOUND_OBSERVATION' and (observed.get('formalConfigurationQualificationMeasured') is False) and (observed.get('publicationQualified') is False) and (observed.get('baselineOriginSha256') == _restore_pure_fingerprint(bridge)) and (type(native_configuration_materials) is dict) and (set(native_configuration_materials) == {'api', 'admin'}))
+    for (service, proof) in native_configuration_materials.items():
+        _restore_pure_need(type(proof) is dict and proof.get('kind') == 'ONLINE_RECHARGE_B_RESTORE_COMPLETE_CONFIGURATION_MATERIAL' and (proof.get('version') == 1) and (proof.get('service') == service) and (proof.get('actualServiceSha256') == _restore_pure_fingerprint(observed['currentServices'][service])) and (proof.get('originalServiceSha256') == _restore_pure_fingerprint(bridge['services'][service])) and (proof.get('actualConfigurationSha256') == observed['currentServices'][service]['configurationSha256']) and (proof.get('originalConfigurationSha256') == proof.get('reconstructedConfigurationSha256') == bridge['services'][service]['configurationSha256']) and (proof.get('changedIdentityPaths') == ['Config.Hostname', 'Config.Labels.com.docker.compose.replace']))
+    return {'kind': 'ONLINE_RECHARGE_B_RESTORE_COMPLETE_MATERIAL', 'version': 1, 'baselineOriginSha256': _restore_pure_fingerprint(bridge), 'observationSha256': _restore_pure_fingerprint(observed), 'actualServicesSha256': _restore_pure_fingerprint(observed['currentServices']), 'configurationProofSha256': _restore_pure_fingerprint(native_configuration_materials), 'historyApiIdentity': {**{n: bridge['services']['api'][n] for n in ('containerId', 'image', 'startedAtSha256')}, 'startedAt': observed['originalApiStartedAt']}, 'stopApiIdentity': {**{n: observed['currentServices']['api'][n] for n in ('containerId', 'image', 'startedAtSha256')}, 'startedAt': observed['sourceApiStartedAt']}, 'publicationQualified': False}
+
+def _restore_pure_restored_f_shape(f, bridge, producer, complete):
+    """Explicit v3 schema; no normalization into original v2 before identity."""
+    _restore_pure_need(type(f) is dict and set(f) == {'kind', 'version', 'mode', 'status', 'commandId', 'releaseCandidateCommit', 'workflowRunId', 'workflowRunAttempt', 'sourceTree', 'baseline', 'services', 'ordinaryPreflight', 'restoration'} and (f['kind'] == 'ONLINE_RECHARGE_AFTER_BIT_PREFLIGHT') and (type(f['version']) is int) and (f['version'] == 3) and (f['mode'] == 'preflight') and (f['status'] == 'ONLINE_RECHARGE_AFTER_BIT_BASELINE_VERIFIED') and (f['baseline'] == bridge) and (f['restoration'] == complete) and (f['releaseCandidateCommit'] == producer['commit']) and (f['sourceTree'] == producer['sourceTree']) and (f['workflowRunId'] == producer['workflowRunId']) and (f['workflowRunAttempt'] == producer['workflowRunAttempt']) and (_restore_pure_fingerprint(f['services']) == complete['actualServicesSha256']))
+    _restore_pure_service_shape(f['services'])
+    receipt = f['ordinaryPreflight']
+    _restore_pure_need(type(receipt) is dict and receipt.get('onlineAfterBitOrigin') == bridge and (receipt.get('afterBitRestoration') == complete) and (receipt.get('services') == f['services']) and (receipt.get('migrationPerformed') is False))
+    return {'kind': 'ONLINE_RECHARGE_AFTER_BIT_RESTORED_PREFLIGHT_SEAL', 'version': 3, 'baselineOriginSha256': _restore_pure_fingerprint(bridge), 'restorationSha256': _restore_pure_fingerprint(complete), 'actualServicesSha256': complete['actualServicesSha256']}
+
+def _restore_pure_restored_build_shape(proof, f, producer):
+    _restore_pure_need(type(proof) is dict and proof.get('version') == 3 and (proof.get('kind') == 'ONLINE_RECHARGE_AFTER_BIT_BUILD_PROOF') and (proof.get('commit') == producer['commit']) and (proof.get('sourceTree') == producer['sourceTree']) and (proof.get('baselineOriginSha256') == _restore_pure_fingerprint(f['baseline'])) and (proof.get('restorationSha256') == _restore_pure_fingerprint(f['restoration'])) and (proof.get('beforeServicesSha256') == _restore_pure_fingerprint(f['services'])))
+    return proof
+
+def _restore_pure_restored_before_and_stop_shape(record, f, sqlite_receipt, audit_receipt):
+    restore = f['restoration']
+    _restore_pure_need(record.get('before') == f['services'] and record.get('baselineEvidence', {}).get('onlineAfterBitOrigin') == f['baseline'] and (record.get('baselineEvidence', {}).get('restoration') == restore) and (sqlite_receipt.get('sourceApiIdentity') == {n: restore['stopApiIdentity'][n] for n in ('containerId', 'image', 'startedAtSha256')}) and (audit_receipt.get('version') == 2) and (audit_receipt.get('historyApiIdentity') == restore['historyApiIdentity']) and (audit_receipt.get('sourceApiIdentity') == restore['stopApiIdentity']) and (audit_receipt.get('oldApiStop') == {'identity': sqlite_receipt['sourceApiIdentity'], 'running': False, 'pid': 0}) and (audit_receipt.get('restorationSha256') == _restore_pure_fingerprint(restore)))
+    return True
+
+def _restore_pure_require_reviewed_restore_policy():
+    if _restore_pure_FINITE_RESTORE_POLICY is None:
+        raise RuntimeError('ONLINE_RECHARGE_B_RESTORE_WITNESS_UNAVAILABLE')
+    raise RuntimeError('ONLINE_RECHARGE_B_RESTORE_DRAFT_NOT_INSTALLED')
+
+"""Project-local read-only failed-C event material; no dispatch or create call.
+
+Docker retains a bounded event history. Missing/ambiguous events are UNPROVEN,
+never permission to accept an unbound com.docker.compose.replace container ID.
+Caller first validates the failed C's own full four-image proof and source tree.
+"""
+import datetime
+import hashlib
+import json
+import re
+_restore_events_FAILED_PRODUCER = {'commit': '08419dcbe85212a203906c86c98e5c3ae0695d72', 'sourceTree': 'b6fd81cc0c94a8e5971c5df8b2570716a13fa042', 'workflowRunId': '38160127343', 'workflowRunAttempt': '1'}
+_restore_events_FAILED_START = '2026-10-11T17:42:42.942Z'
+_restore_events_FAILED_END = '2026-10-11T17:58:11.942Z'
+_restore_events_FAILED_PROOF_SHA = 'eaa990d402ef921c816c561de4d2b2f1aee7a554ac30fa284fc079293f8a7483'
+
+def _restore_events_need(ok):
+    if not ok:
+        raise RuntimeError('ONLINE_RECHARGE_B_RESTORE_EVENT_ANCHOR_UNPROVEN')
+
+def _restore_events_fingerprint(value):
+    return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
+
+def _restore_events_nanoseconds(stamp):
+    value = datetime.datetime.fromisoformat(stamp.replace('Z', '+00:00'))
+    _restore_events_need(value.utcoffset() == datetime.timedelta(0))
+    elapsed = value - datetime.datetime(1970, 1, 1, tzinfo=datetime.timezone.utc)
+    return (elapsed.days * 86400 + elapsed.seconds) * 1000000000 + elapsed.microseconds * 1000
+
+def _restore_events_failed_candidate_event_anchor(d, service, proof, failed_release):
+    """Only fixed run/image/service/working-directory create/start/destroy."""
+    _restore_events_need(service in ('api', 'admin') and _restore_events_fingerprint(proof) == _restore_events_FAILED_PROOF_SHA and (proof.get('commit') == _restore_events_FAILED_PRODUCER['commit']) and (proof.get('sourceTree') == _restore_events_FAILED_PRODUCER['sourceTree']) and (type(proof.get('images')) is dict) and (set(proof['images']) == {'api', 'admin', 'migrate', 'online-recharge'}) and (type(failed_release) is str) and re.fullmatch('/opt/id-business-v2/releases/[0-9]{8}T[0-9]{6}Z-' + _restore_events_FAILED_PRODUCER['commit'][:12], failed_release))
+    image = proof['images'][service]
+    _restore_events_need(type(image) is dict and type(image.get('reference')) is str and re.fullmatch('[0-9]{12}\\.dkr\\.ecr\\.ap-northeast-1\\.amazonaws\\.com/id-business-v2-release:' + _restore_events_FAILED_PRODUCER['commit'] + '-38160127343-1-' + service, image['reference']) and re.fullmatch('sha256:[a-f0-9]{64}', image.get('imageId', '')))
+    metadata = json.loads(d.run('docker', 'image', 'inspect', image['reference'], timeout=5))
+    _restore_events_need(type(metadata) is list and len(metadata) == 1 and (metadata[0].get('Id') == image['imageId']))
+    output = d.run('docker', 'events', '--since', _restore_events_FAILED_START, '--until', _restore_events_FAILED_END, '--filter', 'type=container', '--filter', 'label=com.docker.compose.service=' + service, '--filter', 'image=' + image['reference'], '--filter', 'event=create', '--filter', 'event=start', '--filter', 'event=destroy', '--format', '{{json .}}', timeout=8)
+    _restore_events_need(type(output) is str and 0 < len(output.encode()) <= 65535)
+    rows = [json.loads(line) for line in output.splitlines() if line]
+    _restore_events_need(0 < len(rows) < 128)
+    (events, ids) = ([], set())
+    for row in rows:
+        (actor, attributes) = (row.get('Actor', {}), row.get('Actor', {}).get('Attributes', {}))
+        (cid, stamp, action) = (actor.get('ID'), row.get('timeNano'), row.get('Action'))
+        _restore_events_need(row.get('Type') == 'container' and type(cid) is str and re.fullmatch('[a-f0-9]{64}', cid) and (type(stamp) is int) and (_restore_events_nanoseconds(_restore_events_FAILED_START) <= stamp <= _restore_events_nanoseconds(_restore_events_FAILED_END)) and (action in ('create', 'start', 'destroy')) and (type(attributes) is dict) and (attributes.get('com.docker.compose.service') == service) and (attributes.get('com.docker.compose.container-number') == '1') and (attributes.get('image') == image['reference']) and (attributes.get('com.docker.compose.project.working_dir') == failed_release))
+        ids.add(cid)
+        events.append({'containerId': cid, 'timeNano': stamp, 'action': action})
+    _restore_events_need(len(ids) == 1 and events == sorted(events, key=lambda value: value['timeNano']))
+    actions = [row['action'] for row in events]
+    _restore_events_need(actions.count('create') == actions.count('start') == actions.count('destroy') == 1 and actions.index('create') < actions.index('start') < actions.index('destroy'))
+    return {'kind': 'ONLINE_RECHARGE_B_RESTORE_FAILED_C_EVENT_ANCHOR', 'version': 1, 'service': service, 'containerId': next(iter(ids)), 'failedProducer': _restore_events_FAILED_PRODUCER, 'failedBuildProofSha256': _restore_events_FAILED_PROOF_SHA, 'failedRelease': failed_release, 'nativeInterval': {'start': _restore_events_FAILED_START, 'end': _restore_events_FAILED_END}, 'image': image, 'events': events, 'eventMaterialSha256': _restore_events_fingerprint(events)}
+
+"""New restored-B acquisition uses the original sealed complete comparison.
+
+Only safe public facts and qualification reports leave the native session.
+Config/HostConfig/Env/full resource inspect remain in memory. No old raw hash
+is manufactured; the old B API hash remains explicitly historical only.
+"""
+
+_RESTORED_B_OOM_WITNESS = {'raw': '{\n  "CommandId": "0a3d27f7-9d86-400c-9c8e-c578cbca3342",\n  "InstanceId": "i-05836da38606e633c",\n  "Status": "Success",\n  "ResponseCode": 0,\n  "ExecutionStartDateTime": "2026-10-11T19:43:11.831Z",\n  "ExecutionEndDateTime": "2026-10-11T19:43:14.831Z",\n  "StandardOutputContent": "{\\"currentPointerStable\\": true, \\"databaseFreshlyMeasured\\": false, \\"diagnosticPredicates\\": {\\"admin\\": {\\"actualOomKillDisable\\": \\"NULL\\", \\"currentCompleteConfigurationSha256\\": \\"dcc6ae6ce35fb2771b9f14e8ae2191d68cba9a4e32c98cf6a46257687ce8fe00\\", \\"expectedCurrentCompleteConfigurationSha256\\": \\"dcc6ae6ce35fb2771b9f14e8ae2191d68cba9a4e32c98cf6a46257687ce8fe00\\", \\"failedPredicates\\": [], \\"finiteOomCandidates\\": [{\\"candidateCompleteConfigurationSha256\\": \\"7131dc83741efea394a61c43a5f3c6da6f17631f82ff137c2726a6c1d46f4509\\", \\"matchesOriginalCompleteConfiguration\\": false, \\"oldOomKillDisable\\": \\"NULL\\", \\"oldReplaceBasis\\": \\"ORIGINAL_BEFORE_CID\\"}, {\\"candidateCompleteConfigurationSha256\\": \\"1865e3234428fd0a799b88fb5cd9d5eb3b9e1f46b33691accace3549cef7d1bd\\", \\"matchesOriginalCompleteConfiguration\\": false, \\"oldOomKillDisable\\": \\"FALSE\\", \\"oldReplaceBasis\\": \\"ORIGINAL_BEFORE_CID\\"}, {\\"candidateCompleteConfigurationSha256\\": \\"466ecc2a33faba4825f6215a724f393f4f970ab7fc874b1f17cf5dae4dfd5ba1\\", \\"matchesOriginalCompleteConfiguration\\": false, \\"oldOomKillDisable\\": \\"NULL\\", \\"oldReplaceBasis\\": \\"OBSERVED_CONTAINER_NAME\\"}, {\\"candidateCompleteConfigurationSha256\\": \\"2290c67a0023fb6b588a7e978534e3ff6ffb52b8ae92d61d2e1bad19a48015c2\\", \\"matchesOriginalCompleteConfiguration\\": false, \\"oldOomKillDisable\\": \\"FALSE\\", \\"oldReplaceBasis\\": \\"OBSERVED_CONTAINER_NAME\\"}, {\\"candidateCompleteConfigurationSha256\\": \\"be8b5cdfbe02bb3b7863d52151ce2ec904ac4a41ef8d0d8741b2098608069571\\", \\"matchesOriginalCompleteConfiguration\\": true, \\"oldOomKillDisable\\": \\"NULL\\", \\"oldReplaceBasis\\": \\"NATIVE_SERVICE_SLOT\\"}, {\\"candidateCompleteConfigurationSha256\\": \\"0a928c0762145dac94cc6aaae9dce28260dd83c0998e2ac070c39e4626e6c211\\", \\"matchesOriginalCompleteConfiguration\\": false, \\"oldOomKillDisable\\": \\"FALSE\\", \\"oldReplaceBasis\\": \\"NATIVE_SERVICE_SLOT\\"}, {\\"candidateCompleteConfigurationSha256\\": \\"4139072f72abf35fca31d3a01b1595e30b5d39d8904c623aff16600870723665\\", \\"matchesOriginalCompleteConfiguration\\": false, \\"oldOomKillDisable\\": \\"NULL\\", \\"oldReplaceBasis\\": \\"ABSENT\\"}, {\\"candidateCompleteConfigurationSha256\\": \\"68e22decc14f349b52779244292e3bce18ef7a76682b359b9e6de2e1d836abd7\\", \\"matchesOriginalCompleteConfiguration\\": false, \\"oldOomKillDisable\\": \\"FALSE\\", \\"oldReplaceBasis\\": \\"ABSENT\\"}], \\"finiteOomMatchCount\\": 1, \\"fixedPredicateBooleans\\": {\\"CFG_BEFORE_CID\\": true, \\"CFG_COMPLETE_CURRENT_SHA\\": true, \\"CFG_COMPOSE_PROJECT\\": true, \\"CFG_COMPOSE_SERVICE_SLOT\\": true, \\"CFG_ENV_SHA\\": true, \\"CFG_ENV_VALID\\": true, \\"CFG_HOSTNAME_CURRENT_CID\\": true, \\"CFG_LABELS_STRING_MAP\\": true, \\"CFG_NATIVE_CID_IMAGE_REFERENCE\\": true, \\"CFG_NATIVE_STATUS_HEALTH\\": true, \\"CFG_NATIVE_STRUCTURES\\": true, \\"CFG_OLD_ACTUAL_STABLE_FIELDS\\": true, \\"CFG_REPLACE_ORIGINAL_B_OR_STABLE\\": true, \\"CFG_SERVICE_SHAPE\\": true, \\"CFG_STABLE_CONTAINER_NAME\\": true, \\"CFG_STARTED_SHA\\": true, \\"CFG_UNIQUE_TWO_FIELD_OLD_MATCH\\": true}, \\"originalCompleteConfigurationSha256\\": \\"be8b5cdfbe02bb3b7863d52151ce2ec904ac4a41ef8d0d8741b2098608069571\\", \\"priorFrozenSourceSha256\\": \\"2e50ff8907862f5ea0b600707d5046642f34c2afc1f6280cc654610749a618a0\\", \\"priorSourceNeedChecks\\": [{\\"line\\": 144, \\"matched\\": true}, {\\"line\\": 146, \\"matched\\": true}, {\\"line\\": 149, \\"matched\\": true}, {\\"line\\": 151, \\"matched\\": true}, {\\"line\\": 158, \\"matched\\": true}, {\\"line\\": 170, \\"matched\\": true}, {\\"line\\": 173, \\"matched\\": true}, {\\"line\\": 175, \\"matched\\": true}, {\\"line\\": 182, \\"matched\\": true}, {\\"line\\": 186, \\"matched\\": true}, {\\"line\\": 197, \\"matched\\": true}], \\"safeNativeFields\\": {\\"composeProject\\": {\\"safeValue\\": \\"20260821t095106z\\", \\"sha256\\": \\"534a241e408178fa37b56c6f07f2ec087b0f81520ec426557390505bb81e2421\\"}, \\"composeReplace\\": {\\"safeValue\\": \\"admin-1\\", \\"sha256\\": \\"90b1b286043f1b7612e423c74608f5ea2f676340507f0b67219b20d09fc4777b\\"}, \\"containerName\\": {\\"safeValue\\": \\"20260821t095106z-admin-1\\", \\"sha256\\": \\"a617ea16ad05d0684e6a815b6f33a9a355e00161b07edbb3fc1a5c1744c36fef\\"}, \\"hostname\\": {\\"safeValue\\": \\"bddd1b41836c\\", \\"sha256\\": \\"108d7e7f0725b073a4de36ae58cb771a935778ee0aad4658bfb0dce5a59e3744\\"}}, \\"twoFieldMappingCandidates\\": [{\\"candidateConfigurationSha256\\": \\"7131dc83741efea394a61c43a5f3c6da6f17631f82ff137c2726a6c1d46f4509\\", \\"matchesOriginalCompleteConfiguration\\": false, \\"oldReplaceBasis\\": \\"ORIGINAL_BEFORE_CID\\", \\"originalHostnameBasis\\": \\"ORIGINAL_B_CID_PREFIX\\"}, {\\"candidateConfigurationSha256\\": \\"466ecc2a33faba4825f6215a724f393f4f970ab7fc874b1f17cf5dae4dfd5ba1\\", \\"matchesOriginalCompleteConfiguration\\": false, \\"oldReplaceBasis\\": \\"OBSERVED_CONTAINER_NAME\\", \\"originalHostnameBasis\\": \\"ORIGINAL_B_CID_PREFIX\\"}, {\\"candidateConfigurationSha256\\": \\"be8b5cdfbe02bb3b7863d52151ce2ec904ac4a41ef8d0d8741b2098608069571\\", \\"matchesOriginalCompleteConfiguration\\": true, \\"oldReplaceBasis\\": \\"NATIVE_SERVICE_SLOT\\", \\"originalHostnameBasis\\": \\"ORIGINAL_B_CID_PREFIX\\"}, {\\"candidateConfigurationSha256\\": \\"4139072f72abf35fca31d3a01b1595e30b5d39d8904c623aff16600870723665\\", \\"matchesOriginalCompleteConfiguration\\": false, \\"oldReplaceBasis\\": \\"ABSENT\\", \\"originalHostnameBasis\\": \\"ORIGINAL_B_CID_PREFIX\\"}]}, \\"api\\": {\\"actualOomKillDisable\\": \\"NULL\\", \\"currentCompleteConfigurationSha256\\": \\"394d782259b5384f071204bc9232fa88778a4f2d668384ebbd8a68fe27ebc0b8\\", \\"expectedCurrentCompleteConfigurationSha256\\": \\"394d782259b5384f071204bc9232fa88778a4f2d668384ebbd8a68fe27ebc0b8\\", \\"failedPredicates\\": [\\"CFG_UNIQUE_TWO_FIELD_OLD_MATCH\\"], \\"finiteOomCandidates\\": [{\\"candidateCompleteConfigurationSha256\\": \\"578309899a22a177330c9875909160d50f1d3468635b52fae516d5c44c26be42\\", \\"matchesOriginalCompleteConfiguration\\": false, \\"oldOomKillDisable\\": \\"NULL\\", \\"oldReplaceBasis\\": \\"ORIGINAL_BEFORE_CID\\"}, {\\"candidateCompleteConfigurationSha256\\": \\"caa5d0f6173ae96313cb7be82f514ea19985845e9f108bf02718f0f1c608232f\\", \\"matchesOriginalCompleteConfiguration\\": false, \\"oldOomKillDisable\\": \\"FALSE\\", \\"oldReplaceBasis\\": \\"ORIGINAL_BEFORE_CID\\"}, {\\"candidateCompleteConfigurationSha256\\": \\"87f2ab2a50305f008012411cb57026a82973a025ebf8c86e469420d44c8f0ae7\\", \\"matchesOriginalCompleteConfiguration\\": false, \\"oldOomKillDisable\\": \\"NULL\\", \\"oldReplaceBasis\\": \\"OBSERVED_CONTAINER_NAME\\"}, {\\"candidateCompleteConfigurationSha256\\": \\"22db7696caf00b8f805edd6ff3123a1c9e19ff193daceed4fbf343c3f7510ea2\\", \\"matchesOriginalCompleteConfiguration\\": false, \\"oldOomKillDisable\\": \\"FALSE\\", \\"oldReplaceBasis\\": \\"OBSERVED_CONTAINER_NAME\\"}, {\\"candidateCompleteConfigurationSha256\\": \\"4191e4299ded8a1ebcd57a9626319fa22d2a60af62e46c16b6053bb1d1b27330\\", \\"matchesOriginalCompleteConfiguration\\": false, \\"oldOomKillDisable\\": \\"NULL\\", \\"oldReplaceBasis\\": \\"NATIVE_SERVICE_SLOT\\"}, {\\"candidateCompleteConfigurationSha256\\": \\"31c5810ca491da1a29ed2a58d95191847b66075e36ef85bf2dea1b956d3ab82e\\", \\"matchesOriginalCompleteConfiguration\\": false, \\"oldOomKillDisable\\": \\"FALSE\\", \\"oldReplaceBasis\\": \\"NATIVE_SERVICE_SLOT\\"}, {\\"candidateCompleteConfigurationSha256\\": \\"65d5b0201470a63ca028e97b96574d30a6db7e0e1d3c82df534d019fcf793bbe\\", \\"matchesOriginalCompleteConfiguration\\": false, \\"oldOomKillDisable\\": \\"NULL\\", \\"oldReplaceBasis\\": \\"ABSENT\\"}, {\\"candidateCompleteConfigurationSha256\\": \\"7f517662dbb395bcc6edc7edcb58f6a964ac7d837ec7f3be5b77b3ffdd2ff6fb\\", \\"matchesOriginalCompleteConfiguration\\": false, \\"oldOomKillDisable\\": \\"FALSE\\", \\"oldReplaceBasis\\": \\"ABSENT\\"}], \\"finiteOomMatchCount\\": 0, \\"fixedPredicateBooleans\\": {\\"CFG_BEFORE_CID\\": true, \\"CFG_COMPLETE_CURRENT_SHA\\": true, \\"CFG_COMPOSE_PROJECT\\": true, \\"CFG_COMPOSE_SERVICE_SLOT\\": true, \\"CFG_ENV_SHA\\": true, \\"CFG_ENV_VALID\\": true, \\"CFG_HOSTNAME_CURRENT_CID\\": true, \\"CFG_LABELS_STRING_MAP\\": true, \\"CFG_NATIVE_CID_IMAGE_REFERENCE\\": true, \\"CFG_NATIVE_STATUS_HEALTH\\": true, \\"CFG_NATIVE_STRUCTURES\\": true, \\"CFG_OLD_ACTUAL_STABLE_FIELDS\\": true, \\"CFG_REPLACE_ORIGINAL_B_OR_STABLE\\": true, \\"CFG_SERVICE_SHAPE\\": true, \\"CFG_STABLE_CONTAINER_NAME\\": true, \\"CFG_STARTED_SHA\\": true, \\"CFG_UNIQUE_TWO_FIELD_OLD_MATCH\\": false}, \\"originalCompleteConfigurationSha256\\": \\"f28dcf5a382376c898c462fa0d86c6a28f37f6a1ba0bc4ba66a7c4a467a972c8\\", \\"priorFrozenSourceSha256\\": \\"2e50ff8907862f5ea0b600707d5046642f34c2afc1f6280cc654610749a618a0\\", \\"priorSourceNeedChecks\\": [{\\"line\\": 144, \\"matched\\": true}, {\\"line\\": 146, \\"matched\\": true}, {\\"line\\": 149, \\"matched\\": true}, {\\"line\\": 151, \\"matched\\": true}, {\\"line\\": 158, \\"matched\\": true}, {\\"line\\": 170, \\"matched\\": true}, {\\"line\\": 173, \\"matched\\": true}, {\\"line\\": 175, \\"matched\\": true}, {\\"line\\": 182, \\"matched\\": true}, {\\"line\\": 186, \\"matched\\": true}, {\\"line\\": 197, \\"matched\\": false}], \\"safeNativeFields\\": {\\"composeProject\\": {\\"safeValue\\": \\"20260821t095106z\\", \\"sha256\\": \\"534a241e408178fa37b56c6f07f2ec087b0f81520ec426557390505bb81e2421\\"}, \\"composeReplace\\": {\\"safeValue\\": \\"api-1\\", \\"sha256\\": \\"f9811b73ac5d1a8db842634fc0f871e03207ae44105fc9c2b7f1985e70f90d5a\\"}, \\"containerName\\": {\\"safeValue\\": \\"20260821t095106z-api-1\\", \\"sha256\\": \\"e8edc4ff94d2838975a9661e2abb37c9c33abe41f23cf10fc90d023b338f1023\\"}, \\"hostname\\": {\\"safeValue\\": \\"cfaf13170d1f\\", \\"sha256\\": \\"b740561a8840005698e384547e8a9ca629bba222932882dff49ea8d30526d0a9\\"}}, \\"twoFieldMappingCandidates\\": [{\\"candidateConfigurationSha256\\": \\"578309899a22a177330c9875909160d50f1d3468635b52fae516d5c44c26be42\\", \\"matchesOriginalCompleteConfiguration\\": false, \\"oldReplaceBasis\\": \\"ORIGINAL_BEFORE_CID\\", \\"originalHostnameBasis\\": \\"ORIGINAL_B_CID_PREFIX\\"}, {\\"candidateConfigurationSha256\\": \\"87f2ab2a50305f008012411cb57026a82973a025ebf8c86e469420d44c8f0ae7\\", \\"matchesOriginalCompleteConfiguration\\": false, \\"oldReplaceBasis\\": \\"OBSERVED_CONTAINER_NAME\\", \\"originalHostnameBasis\\": \\"ORIGINAL_B_CID_PREFIX\\"}, {\\"candidateConfigurationSha256\\": \\"4191e4299ded8a1ebcd57a9626319fa22d2a60af62e46c16b6053bb1d1b27330\\", \\"matchesOriginalCompleteConfiguration\\": false, \\"oldReplaceBasis\\": \\"NATIVE_SERVICE_SLOT\\", \\"originalHostnameBasis\\": \\"ORIGINAL_B_CID_PREFIX\\"}, {\\"candidateConfigurationSha256\\": \\"65d5b0201470a63ca028e97b96574d30a6db7e0e1d3c82df534d019fcf793bbe\\", \\"matchesOriginalCompleteConfiguration\\": false, \\"oldReplaceBasis\\": \\"ABSENT\\", \\"originalHostnameBasis\\": \\"ORIGINAL_B_CID_PREFIX\\"}]}}, \\"existingOomValueRuleMatched\\": true, \\"existingVersionRuleMatched\\": true, \\"formalConfigurationMaterialMeasured\\": false, \\"generatorVersions\\": {\\"composeVersion\\": \\"5.5.0\\", \\"engineApiVersion\\": \\"1.44\\", \\"engineVersion\\": \\"25.0.16\\"}, \\"inputBindingSha256\\": \\"3f0e236cea6b772691fd9a6ddfeaabafd798821049d32c9e5da71d3523384231\\", \\"measurementsComplete\\": true, \\"originalSourceApiValidateMatched\\": true, \\"productionMutationCommandsInvoked\\": false, \\"publicationQualified\\": false, \\"pureSourceCarriersBound\\": true, \\"readOnlyObservation\\": true, \\"sourceErrorNamespace\\": \\"OOM_FINITE_CANDIDATE\\", \\"twoRuntimeFramesStable\\": true, \\"version\\": 1}\\n",\n  "StandardErrorContent": ""\n}\n', 'bytesSha256': '01bf7acab289e2e4a7a0c82e8783eef54bf971c76a2f0792356a9a7b52d953be', 'sourceSha256': '6e1bd38b3b8978075a8ff04c989eca31c89081290e7fa1c383163f20121171ff', 'parametersSha256': '46d90424d68dd26fbf5f945b07b59cd992de4d9ca3bb97a9a1695c13d2eb558d', 'inputBindingSha256': '3f0e236cea6b772691fd9a6ddfeaabafd798821049d32c9e5da71d3523384231'}
+_RESTORED_B_HISTORY_VOLUME = {'name': '20260821t095106z_auto_registration_data', 'status': 'PRESENT', 'identitySha256': 'cc39b3f3777d1e53f9b332994ed22af58fdf15daf72779a482d86272f9eb61e1'}
+_RESTORED_B_QUALIFIED_CODE = 'ONLINE_RECHARGE_B_RESTORE_DECLARATION_UNPROVEN'
+
+
+def _restored_qualified_capabilities(d):
+    """One unchanged source-bound package instance in this controller lifetime."""
+    producer=_pending_workspace_producer(d)
+    saved=getattr(d,'_restoredWorkspaceCapabilities',None)
+    if saved is None:
+        caps=_declaration_runtime_driver()._capabilities(producer)
+        profile=fingerprint(caps.qualified._reviewed_profile())
+        d._restoredWorkspaceCapabilities={'producer':copy.deepcopy(producer),'caps':caps,'profileSha256':profile}
+    else:
+        d.require(type(saved) is dict and set(saved)=={'producer','caps','profileSha256'}
+            and fingerprint(saved['producer'])==fingerprint(producer),
+            _RESTORED_B_QUALIFIED_CODE)
+        caps=saved['caps']
+    caps.package.assert_stable()
+    d.require(fingerprint(caps.qualified._reviewed_profile())==d._restoredWorkspaceCapabilities['profileSha256'],
+        _RESTORED_B_QUALIFIED_CODE)
+    return caps
+
+
+def _restored_qualified_exact(d, value, fields):
+    d.require(type(value) is dict and set(value)==set(fields),_RESTORED_B_QUALIFIED_CODE)
+    return value
+
+
+def _restored_qualified_hashes(d, value, fields):
+    _restored_qualified_exact(d,value,fields)
+    d.require(all(_declaration_hash(v) for v in value.values()),_RESTORED_B_QUALIFIED_CODE)
+    return value
+
+
+def _restored_qualified_tools(d, rows, expected, *, native=False, capture=False):
+    """Only the original reader's fixed inode tuple schema becomes JSON lists."""
+    _restored_qualified_exact(d,rows,expected)
+    result=copy.deepcopy(rows)
+    for name,row in result.items():
+        key='sha256' if native else 'bytesSha256'
+        _restored_qualified_exact(d,row,(key,'identity'))
+        d.require(row[key]==expected[name],_RESTORED_B_QUALIFIED_CODE)
+        identity=_restored_qualified_exact(d,row['identity'],('file','parents'))
+        for field,size in (('file',9),):
+            value=identity[field]
+            d.require(type(value) is (tuple if capture else list) and len(value)==size
+                and all(type(v) is int for v in value),_RESTORED_B_QUALIFIED_CODE)
+            identity[field]=list(value)
+        parents=identity['parents']
+        d.require(type(parents) is list and len(parents)==(6 if name.endswith('/docker-compose') else 3),
+            _RESTORED_B_QUALIFIED_CODE)
+        for i,value in enumerate(parents):
+            d.require(type(value) is (tuple if capture else list) and len(value)==5
+                and all(type(v) is int for v in value),_RESTORED_B_QUALIFIED_CODE)
+            parents[i]=list(value)
+        f=identity['file']
+        d.require(f[3]==0 and f[8]==1 and stat.S_ISREG(f[2]) and f[2]&0o111
+            and f[2]&0o022==0 and f[2]&0o6000==0 and 4<f[5]<=128*1024**2
+            and all(v[3]==0 and stat.S_ISDIR(v[2]) and v[2]&0o022==0 for v in parents),
+            _RESTORED_B_QUALIFIED_CODE)
+    return result
+
+
+def _restored_qualified_binding(d, q, value):
+    """Exact original VFS/listener predicates without their source-file I/O."""
+    _restored_qualified_exact(d,value,q.VFS_KEYS)
+    d.require(type(value['version']) is int and value['version']==2
+        and value['kind']=='DOCKERD_FIXED_UNIX_VFS_BINDING' and value['status']=='VFS_BOUND_TO_RUNTIME_DAEMON'
+        and value['unixHost']==q.UNIX_HOST and value['rawOutputSuppressed'] is True
+        and all(value[k] is False for k in ('authority','productionEligible','proofConstructed')),
+        _RESTORED_B_QUALIFIED_CODE)
+    row=_restored_qualified_exact(d,value['vfsBinding'],(*q.VFS_HASHES,'protocol','status'))
+    d.require(row['protocol']=='AF_NETLINK_NETLINK_SOCK_DIAG_UNIX_DIAG_VFS'
+        and row['status']=='EXACT_VFS_MATCH' and all(_declaration_hash(row[k]) for k in q.VFS_HASHES),
+        _RESTORED_B_QUALIFIED_CODE)
+    listener=_restored_qualified_exact(d,value['listenerBinding'],q.BINDING_KEYS)
+    d.require(type(listener['version']) is int and listener['version']==1
+        and listener['kind']=='DOCKERD_FIXED_UNIX_SOCKET_BINDING'
+        and listener['status']=='LISTENER_HELD_BY_RUNTIME_DAEMON' and listener['unixHost']==q.UNIX_HOST
+        and listener['rawOutputSuppressed'] is True
+        and all(listener[k] is False for k in ('authority','productionEligible','proofConstructed'))
+        and type(listener['listenerRowCount']) is int and listener['listenerRowCount']==1
+        and type(listener['daemonListenerFdCount']) is int and 1<=listener['daemonListenerFdCount']<=8
+        and listener['socketActivationCreatorStatus']=='NOT_MEASURED'
+        and listener['exclusiveAcceptingProcessStatus']=='NOT_MEASURED'
+        and all(_declaration_hash(listener[k]) for k in ('socketNodeSha256','networkNamespaceSha256',
+            'listenerSha256','daemonFdSha256','observationSha256')),_RESTORED_B_QUALIFIED_CODE)
+    q.IDENTITY.validate_runtime_identity(listener['runtimeIdentity'])
+    return listener['runtimeIdentity']
+
+
+def _restored_qualified_capsule(d, caps, value):
+    q=caps.qualified
+    q.DERIVE.canonical(value)
+    _restored_qualified_exact(d,value,('binding','nativeTools','collectionTools','daemonSha256','profileSha256','rules'))
+    profile=q._reviewed_profile()
+    d.require(value['profileSha256']==q.REVIEWED_PROFILE_CANONICAL_SHA256==fingerprint(profile)
+        and _declaration_hash(value['daemonSha256']),_RESTORED_B_QUALIFIED_CODE)
+    expected={'spec':profile['spec'],'rulesSha256':fingerprint(profile['spec']),
+        'sourceInputsSha256':fingerprint(profile['sourceInputs']),
+        'sourceReviewReportSha256':profile['sourceReviewReportSha256']}
+    _restored_qualified_exact(d,value['rules'],expected)
+    d.require(value['rules']==expected and fingerprint(value['rules'])==fingerprint(expected),_RESTORED_B_QUALIFIED_CODE)
+    runtime=_restored_qualified_binding(d,q,value['binding'])
+    _restored_qualified_tools(d,value['nativeTools'],{profile['spec']['dockerPath']:q.DOCKER_SHA,
+        profile['spec']['composePath']:q.COMPOSE_SHA},native=True)
+    _restored_qualified_tools(d,value['collectionTools'],profile['reviewedCollectionToolSha256'])
+    d.require(runtime['runtime']['binarySha256']==profile['dockerdBinarySha256']
+        and runtime['runtime']['collectionToolsSha256']==fingerprint(value['collectionTools'])
+        and runtime['package']['name']=='docker' and runtime['package']['nevraSha256']==fingerprint(q.RPM)
+        and runtime['package']['sourceRpmSha256']==q.sha(q.SRPM_NAME)
+        and runtime['package']['fileDigest']==q.DOCKERD_SHA,_RESTORED_B_QUALIFIED_CODE)
+    # Original complete pool/flag semantics, using the reviewed immutable row.
+    q._Session.pools(SimpleNamespace(profile=profile),
+        {'status':profile['spec']['defaultPoolsStatement'],
+            'pools':[] if profile['poolMode']=='REVIEWED_BUILTIN_ZERO_INPUTS' else profile['spec']['defaultPools']},runtime)
+    return value
+
+
+def _restored_qualified_capture(d, caps, session):
+    q=caps.qualified;s=session._session
+    d.require(type(session) is q._AcquiredSession and type(s) is q._Session
+        and session.runner is s.runner and s.runner.session is s,_RESTORED_B_QUALIFIED_CODE)
+    profile=s.profile
+    value={'binding':copy.deepcopy(s.initial_binding),
+        'nativeTools':_restored_qualified_tools(d,s.initial_tools,
+            {profile['spec']['dockerPath']:q.DOCKER_SHA,profile['spec']['composePath']:q.COMPOSE_SHA},
+            native=True,capture=True),
+        'collectionTools':_restored_qualified_tools(d,s.initial_collection_tools,
+            profile['reviewedCollectionToolSha256'],capture=True),
+        'daemonSha256':s.daemon_sha,'profileSha256':s.profile_sha,'rules':session.reviewed_rules()}
+    return _restored_qualified_capsule(d,caps,value)
+
+
+def _restored_qualified_proof(d, caps, value, bridge, services, admin_material):
+    """Typed complete result, never an admission from matched/diagnostic bool."""
+    caps.qualified.DERIVE.canonical(value)
+    fields=('kind','version','purpose','preflightQualificationSha256','preflightBytesSha256',
+        'preflightReferenceRegistrySha256','producer','baselineOriginSha256',
+        'observationSha256','diagnosticInvocationSha256','sourceSeal','configurationFiles','workspaceFiles',
+        'workspaceVolume','stableObservation','sourceFileSeals','qualification','measured','facts','adminMaterialSha256',
+        'historicalApiConfigurationSha256','actualApiConfigurationSha256','historicalRawHashMatchClaimed')
+    _restored_qualified_exact(d,value,fields)
+    d.require(value['kind']=='ONLINE_RECHARGE_B_RESTORED_SOURCE_QUALIFICATION'
+        and type(value['version']) is int and value['version']==1
+        and value['purpose'] in ('INDEPENDENT_PREFLIGHT','DEPLOYMENT_REMEASURE')
+        and (value['preflightQualificationSha256'] is None if value['purpose']=='INDEPENDENT_PREFLIGHT'
+            else _declaration_hash(value['preflightQualificationSha256']))
+        and all(value[k] is None if value['purpose']=='INDEPENDENT_PREFLIGHT' else _declaration_hash(value[k])
+            for k in ('preflightBytesSha256','preflightReferenceRegistrySha256'))
+        and value['producer']==_pending_workspace_producer(d)
+        and value['baselineOriginSha256']==fingerprint(bridge)
+        and value['observationSha256']==_RESTORED_B_WITNESS['policy']['readbackInvocationBytesSha256']
+        and value['diagnosticInvocationSha256']==_RESTORED_B_OOM_WITNESS['bytesSha256']
+        and value['configurationFiles']==bridge['configurationAfter']
+        and value['workspaceVolume']==_RESTORED_B_HISTORY_VOLUME
+        and value['adminMaterialSha256']==fingerprint(admin_material)
+        and value['historicalApiConfigurationSha256']==bridge['services']['api']['configurationSha256']
+        and value['actualApiConfigurationSha256']==services['api']['configurationSha256']
+        and value['historicalRawHashMatchClaimed'] is False,_RESTORED_B_QUALIFIED_CODE)
+    _restored_qualified_hashes(d,value['workspaceFiles'],caps.reader.WORKSPACE_FILES)
+    _restored_qualified_hashes(d,value['configurationFiles'],caps.reader.CONFIG_FILES)
+    volume=_restored_qualified_exact(d,value['workspaceVolume'],('name','status','identitySha256'))
+    d.require(type(volume['name']) is str and volume['status']=='PRESENT' and _declaration_hash(volume['identitySha256'])
+        and fingerprint(volume)==fingerprint(_RESTORED_B_HISTORY_VOLUME),_RESTORED_B_QUALIFIED_CODE)
+    d.require(all(value['workspaceFiles'][name]==bridge[key] for name,key in (
+        ('release-manifest.json','manifestBytesSha256'),('api-workspace-preservation.json','recordBytesSha256'),
+        ('api-workspace-build-proof.json','buildProofBytesSha256'))),_RESTORED_B_QUALIFIED_CODE)
+    seal=_restored_qualified_exact(d,value['sourceSeal'],caps.reader.SEAL_KEYS)
+    d.require(seal['baselineCommit']==caps.reader.INVENTORY.BASELINE
+        and seal['directory']==bridge['baselineRelease'] and seal['files']=={
+            'docker-compose.aws-mysql.yml':bridge['configurationAfter']['docker-compose.aws-mysql.yml'],
+            'compose.release.json':bridge['configurationAfter']['compose.release.json'],
+            '.env.aws.production':bridge['environmentFileSha256']}
+        and seal['servicesSha256']==fingerprint(services)
+        and seal['stabilitySha256']==fingerprint(value['stableObservation']),_RESTORED_B_QUALIFIED_CODE)
+    anchors=_restored_qualified_exact(d,seal['replaceAnchors'],('candidateAfterContainerId','stableName'))
+    d.require(anchors['candidateAfterContainerId']==bridge['services']['api']['containerId']
+        and type(anchors['stableName']) is str and caps.reader.NAME.fullmatch(anchors['stableName']),
+        _RESTORED_B_QUALIFIED_CODE)
+    stable=_restored_qualified_hashes(d,value['stableObservation'],
+        ('snapshotSha256','sourceFilesSha256','workspaceVolumeSha256','actualResourceSha256'))
+    d.require(stable['snapshotSha256']==fingerprint(services)
+        and stable['sourceFilesSha256']==fingerprint({'configurationFiles':seal['files'],
+            'workspaceFiles':value['workspaceFiles']})
+        and stable['workspaceVolumeSha256']==fingerprint(value['workspaceVolume']),_RESTORED_B_QUALIFIED_CODE)
+    capsule=_restored_qualified_capsule(d,caps,value['qualification'])
+    seals=_restored_qualified_exact(d,value['sourceFileSeals'],caps.reader.SOURCE_FILES)
+    for name,row in seals.items():
+        _restored_qualified_hashes(d,row,('sha256','identitySha256'))
+        d.require(row['sha256']==seal['files'][name],_RESTORED_B_QUALIFIED_CODE)
+    c=caps.constructor;m=_restored_qualified_exact(d,value['measured'],c.MEASURED_KEYS)
+    f=_restored_qualified_exact(d,value['facts'],c.FACT_KEYS)
+    d.require(m['matched'] is True and m['reason']=='COMPLETE_EQUAL'
+        and m['status']=='CONTROL_ONLY_DECLARATION_MEASURED'
+        and all(m[k] is False for k in ('historicalRawHashMatchClaimed','authority','productionEligible'))
+        and all(_declaration_hash(v) for k,v in m.items() if k.endswith('Sha256'))
+        and m['actualRawConfigurationSha256']==services['api']['configurationSha256']
+        and m['actualDeclarationNormalizedSha256']==m['referenceDeclarationNormalizedSha256']
+        and m['actualResourceSha256']==stable['actualResourceSha256']
+        and m['sourceUnchangedBeforeAndAfter'] is True and m['referenceNeverStarted'] is True,
+        _RESTORED_B_QUALIFIED_CODE)
+    d.require(type(f['version']) is int and f['version']==1 and f['formalTableSha256']==c.FORMAL_TABLE_SHA
+        and f['sourceFileSealsSha256']==m['sourceFileSealsSha256']==fingerprint(seals)
+        and f['generator']=={'engineVersion':'25.0.16','composeVersion':'5.5.0',
+            'rulesSha256':capsule['rules']['rulesSha256']}
+        and f['stableBefore']==f['stableAfter']==stable,_RESTORED_B_QUALIFIED_CODE)
+    source=_restored_qualified_hashes(d,f['source'],c.SOURCE_FACT_KEYS)
+    d.require(source['normalizedModelSha256']!=m['referenceModelSha256']
+        and source['expectedEnvironmentSha256']==services['api']['environmentSha256'],_RESTORED_B_QUALIFIED_CODE)
+    owner=c.registry(f['referenceRegistry'])
+    d.require(fingerprint(c.adapter42_registered(f['referenceRegistry']))==m['referenceResourceSha256'],
+        _RESTORED_B_QUALIFIED_CODE)
+    inputs=_restored_qualified_hashes(d,f['referenceInputs'],c.INPUT_KEYS)
+    d.require(inputs['modelCanonicalSha256']==m['referenceModelSha256']
+        and inputs['surrogateEnvironmentSha256']==source['referenceEnvironmentSha256']
+        and inputs['emptyEnvironmentBytesSha256']==hashlib.sha256(b'').hexdigest()
+        and inputs['emptyDockerConfigBytesSha256']==hashlib.sha256(b'{}\n').hexdigest()
+        and inputs['beforeFileSealsSha256']==inputs['afterFileSealsSha256'],_RESTORED_B_QUALIFIED_CODE)
+    cleanup=_restored_qualified_exact(d,m['cleanup'],('ownedContainersRemaining','ownedNetworksRemaining',
+        'ownedVolumesRemaining','exactOwnerCreationSealsVerified','existingResourcesMutated'))
+    d.require(all(type(cleanup[k]) is int and cleanup[k]==0 for k in ('ownedContainersRemaining',
+        'ownedNetworksRemaining','ownedVolumesRemaining')) and cleanup['exactOwnerCreationSealsVerified'] is True
+        and cleanup['existingResourcesMutated'] is False
+        and f['referenceRegistry']['container']['id'] not in {r['containerId'] for r in services.values()}
+        and f['referenceRegistry']['volume']['name']!=value['workspaceVolume']['name'],_RESTORED_B_QUALIFIED_CODE)
+    return owner
+
+
+def _restored_qualified_pair(d,caps,first,second,bridge,services,admin_material):
+    owners=[_restored_qualified_proof(d,caps,v,bridge,services,admin_material) for v in (first,second)]
+    def semantic(v):
+        # Every omitted value is validated above in its UUID-specific round.
+        qualification=copy.deepcopy(v['qualification'])
+        listener=qualification['binding']['listenerBinding']
+        # These exact two complete hashes stay in BOTH sealed round capsules.
+        # b4ca705b listener.proc_namespace proves collector namespace==daemon
+        # namespace; cba4b373 VFS+02fe3e qualified original successful session
+        # bind the observation to that round's different collector PID. Neither
+        # raw namespace nor an old hash is fabricated. All other fields compare.
+        del listener['networkNamespaceSha256'];del listener['observationSha256']
+        return {'qualification':qualification,**{k:v[k] for k in ('producer','baselineOriginSha256','observationSha256','diagnosticInvocationSha256',
+            'sourceSeal','configurationFiles','workspaceFiles','workspaceVolume','stableObservation','sourceFileSeals',
+            'adminMaterialSha256','historicalApiConfigurationSha256','actualApiConfigurationSha256',
+            'historicalRawHashMatchClaimed')},
+            'measured':{k:v['measured'][k] for k in ('actualRawConfigurationSha256','actualDeclarationNormalizedSha256',
+                'referenceDeclarationNormalizedSha256','actualResourceSha256','sourceFileSealsSha256')},
+            'facts':{k:v['facts'][k] for k in ('version','formalTableSha256','sourceFileSealsSha256','generator',
+                'source','stableBefore','stableAfter')}}
+    a,b=(v['facts']['referenceRegistry'] for v in (first,second))
+    d.require(first['purpose']=='INDEPENDENT_PREFLIGHT' and second['purpose']=='DEPLOYMENT_REMEASURE'
+        and second['preflightQualificationSha256']==fingerprint(first) and semantic(first)==semantic(second)
+        and type(getattr(d,'_restoredWorkspacePreflightRaw',None)) is bytes
+        and second['preflightBytesSha256']==hashlib.sha256(d._restoredWorkspacePreflightRaw).hexdigest()
+        and second['preflightReferenceRegistrySha256']==fingerprint(first['facts']['referenceRegistry'])
+        and len(set(owners))==2 and a['container']['id']!=b['container']['id']
+        and a['volume']['name']!=b['volume']['name']
+        and not({r['id'] for r in a['networks'].values()} & {r['id'] for r in b['networks'].values()}),
+        _RESTORED_B_QUALIFIED_CODE)
+
+
+def _restored_qualified_measure(d,previous,bridge,services,admin_material,*,first=None):
+    """One original owned acquisition lifetime; no raw inspect persistence."""
+    driver=_declaration_runtime_driver();producer=_pending_workspace_producer(d)
+    caps=_restored_qualified_capabilities(d)
+    d.require(os.geteuid()==0 and (d.BASE/'current').resolve()==previous==Path(bridge['baselineRelease'])
+        and snapshot(d,previous)==services,_RESTORED_B_QUALIFIED_CODE)
+    with caps.qualified.acquisition_session(driver._ArchiveBoundController(d,caps)) as session:
+        runner=driver._SourceReadDriver(session.runner);session.assert_stable();caps.package.assert_stable()
+        before_capsule=_restored_qualified_capture(d,caps,session)
+        files=caps.reader.files(previous,tuple(dict.fromkeys((*caps.reader.CONFIG_FILES,
+            *caps.reader.SOURCE_FILES,*caps.reader.WORKSPACE_FILES))),0)
+        seals={n:{'sha256':files[n]['sha256'],'identitySha256':fingerprint({
+            k:files[n]['identity'][k] for k in ('device','inode','uid','gid','mode','size','links')})}
+            for n in caps.reader.SOURCE_FILES}
+        configuration=configuration_hashes(previous);workspace=workspace_files(runner,previous)
+        source={n:files[n]['sha256'] for n in caps.reader.SOURCE_FILES}
+        d.require(configuration==bridge['configurationAfter'] and all(workspace[name]==bridge[key] for name,key in (
+            ('release-manifest.json','manifestBytesSha256'),('api-workspace-preservation.json','recordBytesSha256'),
+            ('api-workspace-build-proof.json','buildProofBytesSha256'))),
+            _RESTORED_B_QUALIFIED_CODE)
+        api=driver._inspect(caps.reader,runner,'docker','inspect',services['api']['containerId'])
+        project=api['Config']['Labels']['com.docker.compose.project']
+        d.require(type(project) is str and caps.reader.NAME.fullmatch(project),_RESTORED_B_QUALIFIED_CODE)
+        endpoints=api['NetworkSettings']['Networks']
+        d.require(set(endpoints)=={project+'_'+r for r in caps.reader.INVENTORY.NETWORK_ROLES},
+            _RESTORED_B_QUALIFIED_CODE)
+        networks={r:driver._inspect(caps.reader,runner,'docker','network','inspect',
+            endpoints[project+'_'+r]['NetworkID']) for r in caps.reader.INVENTORY.NETWORK_ROLES}
+        volume=driver._inspect(caps.reader,runner,'docker','volume','inspect',project+'_'+caps.reader.WORKSPACE['WORKSPACE_VOLUME'])
+        summary=caps.workspace.workspace_volume(runner,previous,attached=True,api_metadata=api)
+        d.require(summary==caps.reader.volume_summary(volume)==_RESTORED_B_HISTORY_VOLUME,_RESTORED_B_QUALIFIED_CODE)
+        raw={'snapshot':services,'sourceFiles':{'configurationFiles':source,'workspaceFiles':workspace},
+            'workspaceVolume':volume,'actualResource':{'networks':networks,'volume':volume}}
+        stable=caps.reader.DERIVE.observation(raw,services,source,raw['actualResource'])
+        seal={'baselineCommit':driver.BASELINE,'directory':str(previous),'files':source,
+            'servicesSha256':fingerprint(services),'stabilitySha256':fingerprint(stable),
+            'replaceAnchors':{'candidateAfterContainerId':bridge['services']['api']['containerId'],
+                'stableName':api['Name'].lstrip('/')}}
+        callback=caps.reader.make_reader(runner,previous,source_seal=seal,services=services,
+            configuration=configuration,workspace_files=workspace,workspace_volume=summary)
+        d.require(callback()==raw,_RESTORED_B_QUALIFIED_CODE)
+        d.require((d.BASE/'current').resolve()==previous,_RESTORED_B_QUALIFIED_CODE)
+        result=session.measure(previous,services=services,image_reference=services['api']['reference'],
+            image_id=services['api']['image'],source_seal=seal,stability_reader=callback)
+        _restored_qualified_exact(d,result,('measured','facts'))
+        d.require(callback()==raw and snapshot(d,previous)==services and (d.BASE/'current').resolve()==previous,
+            _RESTORED_B_QUALIFIED_CODE)
+        # Admin is not the API reference model: preserve its strict old full proof.
+        admin=driver._inspect(caps.reader,runner,'docker','inspect',services['admin']['containerId'])
+        old=closed_recovery_json(d,_declaration_source_bytes(previous/caps.workspace.STATE_FILE))
+        repeated=_restore_cfg_complete_configuration_material('admin',admin,services['admin'],bridge['services']['admin'],
+            original_before_container_id=old['before']['admin']['containerId'],
+            acquired_actual_replace_anchors=[bridge['services']['admin']['containerId']])
+        d.require(repeated==admin_material,_RESTORED_B_QUALIFIED_CODE)
+        session.assert_stable();caps.package.assert_stable()
+        capsule=_restored_qualified_capture(d,caps,session)
+        d.require(capsule==before_capsule,_RESTORED_B_QUALIFIED_CODE)
+        proof={'kind':'ONLINE_RECHARGE_B_RESTORED_SOURCE_QUALIFICATION','version':1,
+            'purpose':'INDEPENDENT_PREFLIGHT' if first is None else 'DEPLOYMENT_REMEASURE',
+            'preflightQualificationSha256':None if first is None else fingerprint(first),'producer':producer,
+            'preflightBytesSha256':None if first is None else hashlib.sha256(d._restoredWorkspacePreflightRaw).hexdigest(),
+            'preflightReferenceRegistrySha256':None if first is None else fingerprint(first['facts']['referenceRegistry']),
+            'baselineOriginSha256':fingerprint(bridge),
+            'observationSha256':_RESTORED_B_WITNESS['policy']['readbackInvocationBytesSha256'],
+            'diagnosticInvocationSha256':_RESTORED_B_OOM_WITNESS['bytesSha256'],
+            'sourceSeal':seal,'configurationFiles':configuration,'workspaceFiles':workspace,'workspaceVolume':summary,
+            'stableObservation':stable,'sourceFileSeals':seals,'qualification':capsule,'measured':copy.deepcopy(result['measured']),
+            'facts':copy.deepcopy(result['facts']),'adminMaterialSha256':fingerprint(admin_material),
+            'historicalApiConfigurationSha256':bridge['services']['api']['configurationSha256'],
+            'actualApiConfigurationSha256':services['api']['configurationSha256'],'historicalRawHashMatchClaimed':False}
+        _restored_qualified_proof(d,caps,proof,bridge,services,admin_material)
+        d.require(not({r['id'] for r in proof['facts']['referenceRegistry']['networks'].values()}
+            & {r['Id'] for r in networks.values()}),_RESTORED_B_QUALIFIED_CODE)
+        if first is not None:_restored_qualified_pair(d,caps,first,proof,bridge,services,admin_material)
+    # Successful original session final stability+cleanup is mandatory before issuance.
+    caps.package.assert_stable()
+    return proof
+
+
+def _restored_qualified_oom_history(d,observed):
+    witness=_RESTORED_B_OOM_WITNESS
+    _restored_qualified_exact(d,witness,('raw','bytesSha256','sourceSha256','parametersSha256','inputBindingSha256'))
+    d.require(type(witness['raw']) is str and hashlib.sha256(witness['raw'].encode()).hexdigest()==witness['bytesSha256']
+        and witness['bytesSha256']=='01bf7acab289e2e4a7a0c82e8783eef54bf971c76a2f0792356a9a7b52d953be'
+        and witness['sourceSha256']=='6e1bd38b3b8978075a8ff04c989eca31c89081290e7fa1c383163f20121171ff'
+        and witness['parametersSha256']=='46d90424d68dd26fbf5f945b07b59cd992de4d9ca3bb97a9a1695c13d2eb558d',
+        _RESTORED_B_QUALIFIED_CODE)
+    q=closed_recovery_json(d,witness['raw'].encode());body=closed_recovery_json(d,q['StandardOutputContent'].encode())
+    d.require(q['CommandId']=='0a3d27f7-9d86-400c-9c8e-c578cbca3342' and q['InstanceId']=='i-05836da38606e633c'
+        and q['Status']=='Success' and type(q['ResponseCode']) is int and q['ResponseCode']==0
+        and q['ExecutionStartDateTime']=='2026-10-11T19:43:11.831Z'
+        and q['ExecutionEndDateTime']=='2026-10-11T19:43:14.831Z'
+        and hashlib.sha256(q['StandardOutputContent'].encode()).hexdigest()=='77cba24803b4e766dd53edc991b842c9dbacfec28e05aeba9c078c0ec358e6ac'
+        and body['inputBindingSha256']==witness['inputBindingSha256']=='3f0e236cea6b772691fd9a6ddfeaabafd798821049d32c9e5da71d3523384231'
+        and all(body[k] is False for k in ('databaseFreshlyMeasured','formalConfigurationMaterialMeasured',
+            'productionMutationCommandsInvoked','publicationQualified'))
+        and all(body['diagnosticPredicates'][n]['currentCompleteConfigurationSha256']==
+            observed['currentServices'][n]['configurationSha256'] for n in ('api','admin')),
+        _RESTORED_B_QUALIFIED_CODE)
+    return witness['bytesSha256']
+
+"""Only restored-B complete receipts use bounded framing; old output is exact."""
+
+
+def _restored_wire_need(condition):
+    if not condition:raise RuntimeError('ONLINE_RECHARGE_B_RESTORED_WIRE_INVALID')
+
+
+def _restored_wire_json(raw):
+    _restored_wire_need(type(raw) in (str,bytes) and 0<len(raw)<65536)
+    def pairs(items):
+        value={}
+        for key,item in items:
+            _restored_wire_need(key not in value);value[key]=item
+        return value
+    value=json.loads(raw,object_pairs_hook=pairs,parse_constant=lambda unused:_restored_wire_need(False))
+    _restored_wire_need(type(value) is dict)
+    return value
+
+
+def _restored_wire_selected(value):
+    if type(value) is not dict or 'afterBitRestoration' not in value:return False
+    side=value['afterBitRestoration'];origin=value.get('onlineAfterBitOrigin')
+    _restored_wire_need(type(origin) is dict and origin.get('kind')=='ONLINE_RECHARGE_AFTER_BIT_SUCCESSOR_ORIGIN'
+        and origin.get('baselineCommit')=='31d2c6885a45817cd40d23fce8d6145bc9f18af2'
+        and type(side) is dict and side.get('kind')=='ONLINE_RECHARGE_B_RESTORE_COMPLETE_MATERIAL'
+        and type(side.get('version')) is int and side['version']==2 and side.get('publicationQualified') is False
+        and type(side.get('apiDeclarationQualification')) is dict
+        and side['apiDeclarationQualification'].get('kind')=='ONLINE_RECHARGE_B_RESTORED_SOURCE_QUALIFICATION')
+    return True
+
+
+def _restored_wire_encode(value):
+    if not _restored_wire_selected(value):return value
+    import gzip,base64
+    raw=json.dumps(value,separators=(',',':'),allow_nan=False).encode()
+    _restored_wire_json(raw)
+    envelope={'kind':'ONLINE_RECHARGE_B_RESTORED_RECEIPT','version':1,'encoding':'gzip-base64',
+        'decodedLength':len(raw),'decodedSha256':hashlib.sha256(raw).hexdigest(),
+        'payload':base64.b64encode(gzip.compress(raw,compresslevel=9,mtime=0)).decode('ascii')}
+    _restored_wire_need(len(json.dumps(envelope).encode())+1<24000)
+    return envelope
+
+
+def _restored_wire_decode(output):
+    import base64,zlib
+    _restored_wire_need(type(output) is str and 0<len(output.encode())<24000)
+    value=_restored_wire_json(output)
+    _restored_wire_need(set(value)=={'kind','version','encoding','decodedLength','decodedSha256','payload'}
+        and value['kind']=='ONLINE_RECHARGE_B_RESTORED_RECEIPT'
+        and type(value['version']) is int and value['version']==1 and value['encoding']=='gzip-base64'
+        and type(value['decodedLength']) is int and 0<value['decodedLength']<65536
+        and type(value['decodedSha256']) is str and re.fullmatch('[a-f0-9]{64}',value['decodedSha256'])
+        and type(value['payload']) is str and value['payload'].isascii() and 0<len(value['payload'])<24000)
+    packed=base64.b64decode(value['payload'],validate=True)
+    _restored_wire_need(base64.b64encode(packed).decode('ascii')==value['payload'])
+    inflater=zlib.decompressobj(31);raw=inflater.decompress(packed,65536)
+    _restored_wire_need(0<len(raw)<65536 and len(raw)==value['decodedLength']
+        and hashlib.sha256(raw).hexdigest()==value['decodedSha256'] and inflater.eof
+        and not inflater.unused_data and not inflater.unconsumed_tail)
+    decoded=_restored_wire_json(raw)
+    _restored_wire_need(_restored_wire_selected(decoded) and decoded.get('kind')!='ONLINE_RECHARGE_B_RESTORED_RECEIPT')
+    return decoded
+
+
+def _restored_workspace_f_value(d,raw):
+    value=closed_recovery_json(d,raw)
+    if value.get('version')==3:
+        d.require(type(value['version']) is int and value.get('kind')=='ONLINE_RECHARGE_AFTER_BIT_PREFLIGHT',
+            'ONLINE_RECHARGE_B_RESTORED_WIRE_INVALID')
+        value={**value,'ordinaryPreflight':_restored_wire_decode(json.dumps(value['ordinaryPreflight']))}
+        d.require(value['ordinaryPreflight'].get('afterBitRestoration')==value.get('restoration'),
+            'ONLINE_RECHARGE_B_RESTORED_WIRE_INVALID')
+    return value
+
+"""Append-only helper bodies for the four-file ONLINE recovery path draft.
+
+The generated candidate wires these helpers into the existing ONLINE overrides.
+Original API504 and the fourteen ordinary first-stage bodies remain unchanged.
+This file itself grants no native invocation, deployment or restored admission.
+"""
+
+_RESTORED_B_WITNESS = {'policy': {'kind': 'ONLINE_RECHARGE_B_RESTORE_FINITE_OBSERVATION', 'version': 1, 'baselineBridgeSha256': '4b81b0d398de0c4b0198803950354c286f7107a8a19b99e519d5404007b0c1ca', 'originalBootStartedAt': '2026-10-11T13:37:28.606112575Z', 'failedProducer': {'commit': '08419dcbe85212a203906c86c98e5c3ae0695d72', 'sourceTree': 'b6fd81cc0c94a8e5971c5df8b2570716a13fa042', 'workflowRunId': '38160127343', 'workflowRunAttempt': '1'}, 'failedCommandId': 'c03fdc8a-9f39-40e5-8181-0071b3bc8f89', 'failedNativeEnd': '2026-10-11T17:58:11.942Z', 'failedRelease': '/opt/id-business-v2/releases/20261011T174625Z-08419dcbe852', 'failureCanonicalSha256': '11ebbf13b670afc207ab6268b297293e99792aadd625276acd05003c987a8bae', 'failedPreflightBytesSha256': 'aba6144845be3836c4fe56a1def9a755018634f26710b8d17ec74b2d2660c4db', 'failedBuildProofSha256': 'eaa990d402ef921c816c561de4d2b2f1aee7a554ac30fa284fc079293f8a7483', 'failedSourceHelpers': {'scripts/production-release/api-admin-scope.py': '50446ab528a288ca1c2129c84f1bf4a90f59fa313a92bcff0058a258c8b8e925', 'scripts/production-release/online-recharge-scope.py': '93992e3258c015bcf1f1b9943fa9cd37149e995748433988cc4d1367d4f1b5d8', 'scripts/production-release/remote-deploy.py': '889aedb75bbcb53863a55dc2a4c40a84e06dea1d64d493f6a4fca6dc233f855c'}, 'instanceId': 'i-05836da38606e633c', 'readbackCommandId': '5c5827d6-b67d-4e84-acec-75e102534d14', 'readbackInvocationBytesSha256': '593476978b87c2fda0a69f9df08d27550524e918a38ff6a603c6a33f5f7b5231', 'readbackBodySha256': 'e630d1917b4d32865649f22e5c9a87c24b3fa27ca5e925912d53a06fa644389c', 'readbackInputBindingSha256': 'f7ca11611426a8283872f43accdc056f4b01506515d67bd88b58d0f30d4f1dfc'}, 'observationInvocation': '{"CloudWatchOutputConfig":{"CloudWatchLogGroupName":"","CloudWatchOutputEnabled":false},"CommandId":"5c5827d6-b67d-4e84-acec-75e102534d14","Comment":"ID root readonly recovery observation 38160127343 v3 precise source bounds","DocumentName":"AWS-RunShellScript","DocumentVersion":"$DEFAULT","ExecutionElapsedTime":"PT6.534S","ExecutionEndDateTime":"2026-10-11T18:44:51.880Z","ExecutionStartDateTime":"2026-10-11T18:44:45.880Z","InstanceId":"i-05836da38606e633c","PluginName":"aws:runShellScript","ResponseCode":0,"StandardErrorContent":"","StandardErrorUrl":"","StandardOutputContent":"{\\"apiAdminImageReferenceEnvironmentContentMatchesOriginal\\":true,\\"apiAdminRuntimeConfigurationProof\\":{\\"formalConfigurationQualificationMeasured\\":false,\\"services\\":{\\"admin\\":{\\"completeConfigurationSha256\\":\\"dcc6ae6ce35fb2771b9f14e8ae2191d68cba9a4e32c98cf6a46257687ce8fe00\\",\\"configSha256\\":\\"f426d3db677db193d604faabdf46200db1cc134fe3b6e37925bbd110c8343f5c\\",\\"destinationSortedMountsSha256\\":\\"4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945\\",\\"hostConfigSha256\\":\\"e6c9300ac7256d92422bfda869f12d565de48b3b0b009bde7b3b47556221d0f0\\",\\"mountCount\\":0},\\"api\\":{\\"completeConfigurationSha256\\":\\"394d782259b5384f071204bc9232fa88778a4f2d668384ebbd8a68fe27ebc0b8\\",\\"configSha256\\":\\"85fa58b5118b426ae13d4d78474aa97331e2d0cd7f5351a489df2b064a586c70\\",\\"destinationSortedMountsSha256\\":\\"c5455f18bda298aa776a83b898709421838c70452e8df5b3b204b8e31a2a5a6d\\",\\"hostConfigSha256\\":\\"542c591a4a49212a1876ef0aaf1a8bef801f1c646d05434eae975b1ef9f897e2\\",\\"mountCount\\":1}}},\\"apiCurrentStartedAt\\":\\"2026-10-11T17:56:28.727522656Z\\",\\"apiCurrentStartedAtSha256\\":\\"4da45a6e44d66105e94098ad93143bc6f162c0869251ad1de342d89e6ac269ca\\",\\"currentIsOriginalB\\":true,\\"currentPointerStable\\":true,\\"currentServices\\":{\\"admin\\":{\\"configurationSha256\\":\\"dcc6ae6ce35fb2771b9f14e8ae2191d68cba9a4e32c98cf6a46257687ce8fe00\\",\\"containerId\\":\\"bddd1b41836c082273f95f4559caffe4a91b65f092bdc4f32b6ab95e8351ac47\\",\\"environmentSha256\\":\\"03ddab553858482dcbcc4a93d989902d31b41753eb155fb8162011e218bc0ad4\\",\\"health\\":\\"healthy\\",\\"image\\":\\"sha256:f3a6b231e914f087722b87f704b7583f93ba0a462444afe6a0b68e8580917eab\\",\\"reference\\":\\"079740175286.dkr.ecr.ap-northeast-1.amazonaws.com/id-business-v2-release:31d2c6885a45817cd40d23fce8d6145bc9f18af2-38142818370-1-admin\\",\\"startedAtSha256\\":\\"76d073e207e21d2ba7ae771edb45a9349f8be1677fcf9064c2060c822d576048\\",\\"status\\":\\"running\\"},\\"api\\":{\\"configurationSha256\\":\\"394d782259b5384f071204bc9232fa88778a4f2d668384ebbd8a68fe27ebc0b8\\",\\"containerId\\":\\"cfaf13170d1f631583747dd4daa5bcf7185c017039f3ebe4683a6bc7f3d3dec4\\",\\"environmentSha256\\":\\"9f88452817b9343fb1751d8bfbee6e70b82d4098be9ee5034d9b3dbfc80d705c\\",\\"health\\":\\"healthy\\",\\"image\\":\\"sha256:74c28d510a434d599b86188ec7a38d5830b1a4e39b615d92b960963c14aac379\\",\\"reference\\":\\"079740175286.dkr.ecr.ap-northeast-1.amazonaws.com/id-business-v2-release:31d2c6885a45817cd40d23fce8d6145bc9f18af2-38142818370-1-api\\",\\"startedAtSha256\\":\\"4da45a6e44d66105e94098ad93143bc6f162c0869251ad1de342d89e6ac269ca\\",\\"status\\":\\"running\\"},\\"auto-recharge\\":{\\"configurationSha256\\":\\"1c341043b62969f855cc1f5852181c949b8ea7831f8c82f15cd7364ee7767120\\",\\"containerId\\":\\"0190045c800bd6cda576b66ccce0986de6792390d01cf19fe19e02cd16316f97\\",\\"environmentSha256\\":\\"5169582dea47a65076d5f7a3a3defbc824fa4f772b2dc0904eb64659209757ae\\",\\"health\\":\\"healthy\\",\\"image\\":\\"sha256:5bd2ab25ebcadcd99f8d339d604e0268cec3fc2cfdac54e2a215f085e3fac00e\\",\\"reference\\":\\"079740175286.dkr.ecr.ap-northeast-1.amazonaws.com/id-business-v2-release:04570d75c779fd91a0933ef9416f6d62698b6b91-37694009463-1-auto-recharge\\",\\"startedAtSha256\\":\\"b54ae0f7bbf6ae90e14b78e4d86fa39ae8d5fef49c5f3a95cd4bd811e3645eda\\",\\"status\\":\\"running\\"},\\"auto-registration\\":{\\"configurationSha256\\":\\"0da1fad093493de7997af6d9c2c855e1e4272711eb63a3a0f36f4a3fea1fb0c8\\",\\"containerId\\":\\"16de5229289255cd47c3f9336e24aa611c0f9bbc76af2fcdfc5e5e1928d68add\\",\\"environmentSha256\\":\\"de69bd06209b17619f8cb7ae38bace36c27dc4203c67e09fd1b8d21023fbcb17\\",\\"health\\":\\"healthy\\",\\"image\\":\\"sha256:759f60543c2fc5661c5d21644fdc1e9cb0e5cb39c930e9c400f869e0c72be568\\",\\"reference\\":\\"079740175286.dkr.ecr.ap-northeast-1.amazonaws.com/id-business-v2-release:18e23ee1ab1a8d5c988ff6ba24149e1c741d62f8-37788833835-1-auto-recharge\\",\\"startedAtSha256\\":\\"463587855c649edc70eb7ce82744c1caf57a49d7fbbfb10206bf1531443bb229\\",\\"status\\":\\"running\\"},\\"caddy\\":{\\"configurationSha256\\":\\"3662db0efe0d9d7854a52da2c4fe71e626ebc9a122d9c2da76ed497b403815a0\\",\\"containerId\\":\\"0ee2a1ea26eec74fef64362fd77a69894e3dc4dddd412c38ebd59c747aa6e203\\",\\"environmentSha256\\":\\"33ea62b4e1f4de93e333bdbbea4ec88904661f1cb616907b185fce31b22b7181\\",\\"health\\":null,\\"image\\":\\"sha256:aac61abc4024c323602ccb9ee38bd68b147601f518626b2a055e06944e01c510\\",\\"reference\\":\\"caddy:2.10-alpine@sha256:4c6e91c6ed0e2fa03efd5b44747b625fec79bc9cd06ac5235a779726618e530d\\",\\"startedAtSha256\\":\\"8c855d6048304bfcba4e29cbde6443070cdbbf778fe722648b491c763f285d24\\",\\"status\\":\\"running\\"},\\"media-resolver\\":{\\"configurationSha256\\":\\"88cfc4c67adc0d0fe78e5434d8c1ebfcaeaef7e2726f3f2b30b0d4c85e0c70cb\\",\\"containerId\\":\\"0c4fd25ba8fbf2fdab7639e680c3a3433d814cdb2d71ebd7ad39531aaa639471\\",\\"environmentSha256\\":\\"8473962ae5df6f8e5553ab658ccce662a8816f83631b221484daf5fa42e3b163\\",\\"health\\":\\"healthy\\",\\"image\\":\\"sha256:34c25f5474f9fdd043cfb39a838762cab9e87f88db9987d9cb9ad6706c331a56\\",\\"reference\\":\\"079740175286.dkr.ecr.ap-northeast-1.amazonaws.com/id-business-v2-release:b8d643450ffa9012ccc09ead15e4681e3dee98d0-37302661631-1-media-resolver\\",\\"startedAtSha256\\":\\"8814f073adf9a0964f3beaf17b261fea765db8d0059e2425ee39fe0afdf31d1f\\",\\"status\\":\\"running\\"},\\"mysql\\":{\\"configurationSha256\\":\\"47f62efcca224ee71466bf71a0337d791b9f6d8b42b024208cc3a29c6585beaf\\",\\"containerId\\":\\"7e5a5abe42c5503e6196f736d532793aaec3796b7eb518f02db614d4025d0074\\",\\"environmentSha256\\":\\"bb8d63d18769016c14d8664a551d2b3da9e251701ed62f87b04cba964fc9e299\\",\\"health\\":\\"healthy\\",\\"image\\":\\"sha256:bced325a4ab7aec848f4688371c7433351dcb5dba26fbcc29c67727d898ae5cb\\",\\"reference\\":\\"mysql:8.4@sha256:b3b90af2a6552ae30c266fdb7d5dd55f3afb72404bb78d37fe8a23eb857fd3fb\\",\\"startedAtSha256\\":\\"de8aff8d3d7634b524828ded3df29bba37d7ef4cf817deff61402fdfcf767ec7\\",\\"status\\":\\"running\\"}},\\"databaseFreshlyMeasured\\":false,\\"deadlineExceeded\\":false,\\"disk\\":{\\"aboveSixGiB\\":false,\\"aboveTenGiB\\":false,\\"freeBytes\\":2698186752,\\"totalBytes\\":68639764480},\\"failedTarget\\":{\\"actualReleasePath\\":\\"/opt/id-business-v2/releases/20261011T174625Z-08419dcbe852\\",\\"candidateManifest\\":{\\"exists\\":false,\\"fileSha256\\":\\"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\\"},\\"candidateProof\\":{\\"exists\\":false,\\"fileSha256\\":\\"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\\"},\\"canonicalMatchingDirectoryCount\\":1,\\"directoryReadErrorCount\\":0,\\"eligibleDirectoryCount\\":1,\\"failureCanonicalSha256\\":\\"11ebbf13b670afc207ab6268b297293e99792aadd625276acd05003c987a8bae\\",\\"failureReceiptSha256\\":\\"a1174623f13b3801b8fbea6b03387b03531f8164755a34fb785561006193d160\\",\\"onlineProtectionRecord\\":{\\"exists\\":false,\\"fileSha256\\":\\"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\\"},\\"sourceHelpersSha256\\":{\\"scripts/production-release/api-admin-scope.py\\":\\"50446ab528a288ca1c2129c84f1bf4a90f59fa313a92bcff0058a258c8b8e925\\",\\"scripts/production-release/online-recharge-scope.py\\":\\"93992e3258c015bcf1f1b9943fa9cd37149e995748433988cc4d1367d4f1b5d8\\",\\"scripts/production-release/remote-deploy.py\\":\\"889aedb75bbcb53863a55dc2a4c40a84e06dea1d64d493f6a4fca6dc233f855c\\"},\\"sqliteProtection\\":{\\"backupBytes\\":61440,\\"boundReceiptObserved\\":true,\\"exists\\":true,\\"fileSha256\\":\\"c5f35e921ef44ab01cbe327d019a857f05456b1d3a76ee4e1684055a7ad45445\\",\\"maintenanceSha256\\":\\"d7cd87a94c708125356c61b3ef083a643ab66a6b24aa448a7027db28fb021a30\\",\\"receiptCanonicalSha256\\":\\"d95becc7e692f09d940b60021b4bd7d4a2bd8dd16ebe1ca52b38005d9be6b827\\"},\\"targetDirectorySha256\\":\\"a48665a80da2ea143ca612041957ebeb0aeaeb0b3dc6e6d297e3c905b62f6ef4\\",\\"targetSourceBound\\":true,\\"uniqueTargetKnown\\":true},\\"inputBindingSha256\\":\\"f7ca11611426a8283872f43accdc056f4b01506515d67bd88b58d0f30d4f1dfc\\",\\"measurementsComplete\\":true,\\"nativeGrantSyncReached\\":true,\\"nativeMigrationAttempted\\":false,\\"originalEnvironmentAndConfigurationFilesMatch\\":true,\\"originalManifestBytesMatch\\":true,\\"originalManifestNewMigrationCount\\":0,\\"originalStoppedApiObservation\\":{\\"identityMatchesOriginal\\":false,\\"metadataAvailable\\":false,\\"stoppedPidZeroObserved\\":false},\\"preservedFullIdentityCount\\":5,\\"productionMutationCommandsInvoked\\":false,\\"publicationQualified\\":false,\\"readOnlyObservation\\":true,\\"runtimeContentMatchesOriginal\\":{\\"admin\\":true,\\"api\\":true},\\"services\\":{\\"admin\\":{\\"containerIdentityChanged\\":true,\\"currentConfigurationSha256\\":\\"dcc6ae6ce35fb2771b9f14e8ae2191d68cba9a4e32c98cf6a46257687ce8fe00\\",\\"currentIdentitySha256\\":\\"2c28c50bdda4d3e7aac18511494d2ef4ee5bbcff1c9dfb34ec368d33700d6285\\",\\"environmentMatchesOriginal\\":true,\\"fullConfigurationMatchesOriginal\\":false,\\"fullIdentityMatchesOriginal\\":false,\\"healthyRunning\\":true,\\"imageAndReferenceMatchOriginal\\":true,\\"startedIdentityChanged\\":true},\\"api\\":{\\"containerIdentityChanged\\":true,\\"currentConfigurationSha256\\":\\"394d782259b5384f071204bc9232fa88778a4f2d668384ebbd8a68fe27ebc0b8\\",\\"currentIdentitySha256\\":\\"bc2700d2cf9e686ffb8ffa3201ab19193dd5f66bde4e5804ab40cd9cccfe3d5d\\",\\"environmentMatchesOriginal\\":true,\\"fullConfigurationMatchesOriginal\\":false,\\"fullIdentityMatchesOriginal\\":false,\\"healthyRunning\\":true,\\"imageAndReferenceMatchOriginal\\":true,\\"startedIdentityChanged\\":true},\\"auto-recharge\\":{\\"containerIdentityChanged\\":false,\\"currentConfigurationSha256\\":\\"1c341043b62969f855cc1f5852181c949b8ea7831f8c82f15cd7364ee7767120\\",\\"currentIdentitySha256\\":\\"264db89a71af5a8af88f58d1eb717ae64948754ad08441146143918c45d859dc\\",\\"environmentMatchesOriginal\\":true,\\"fullConfigurationMatchesOriginal\\":true,\\"fullIdentityMatchesOriginal\\":true,\\"healthyRunning\\":true,\\"imageAndReferenceMatchOriginal\\":true,\\"startedIdentityChanged\\":false},\\"auto-registration\\":{\\"containerIdentityChanged\\":false,\\"currentConfigurationSha256\\":\\"0da1fad093493de7997af6d9c2c855e1e4272711eb63a3a0f36f4a3fea1fb0c8\\",\\"currentIdentitySha256\\":\\"d32a18a6537e18d94fb05a755a7d5d550d5fa7e2b4c7517e66817de44dc07f10\\",\\"environmentMatchesOriginal\\":true,\\"fullConfigurationMatchesOriginal\\":true,\\"fullIdentityMatchesOriginal\\":true,\\"healthyRunning\\":true,\\"imageAndReferenceMatchOriginal\\":true,\\"startedIdentityChanged\\":false},\\"caddy\\":{\\"containerIdentityChanged\\":false,\\"currentConfigurationSha256\\":\\"3662db0efe0d9d7854a52da2c4fe71e626ebc9a122d9c2da76ed497b403815a0\\",\\"currentIdentitySha256\\":\\"10e9f0e654eba2fbb0e8a20758298d0e681e63caf115ebcfa43d8a218a94e876\\",\\"environmentMatchesOriginal\\":true,\\"fullConfigurationMatchesOriginal\\":true,\\"fullIdentityMatchesOriginal\\":true,\\"healthyRunning\\":true,\\"imageAndReferenceMatchOriginal\\":true,\\"startedIdentityChanged\\":false},\\"media-resolver\\":{\\"containerIdentityChanged\\":false,\\"currentConfigurationSha256\\":\\"88cfc4c67adc0d0fe78e5434d8c1ebfcaeaef7e2726f3f2b30b0d4c85e0c70cb\\",\\"currentIdentitySha256\\":\\"4dc31bb448725c629cfed048882125846f53f9260b56a5058f28ebbf8223bbea\\",\\"environmentMatchesOriginal\\":true,\\"fullConfigurationMatchesOriginal\\":true,\\"fullIdentityMatchesOriginal\\":true,\\"healthyRunning\\":true,\\"imageAndReferenceMatchOriginal\\":true,\\"startedIdentityChanged\\":false},\\"mysql\\":{\\"containerIdentityChanged\\":false,\\"currentConfigurationSha256\\":\\"47f62efcca224ee71466bf71a0337d791b9f6d8b42b024208cc3a29c6585beaf\\",\\"currentIdentitySha256\\":\\"4e5ceb53bcfc877d298eedf15e6eb102037dac6508e457f47a3b7206b66fbbc9\\",\\"environmentMatchesOriginal\\":true,\\"fullConfigurationMatchesOriginal\\":true,\\"fullIdentityMatchesOriginal\\":true,\\"healthyRunning\\":true,\\"imageAndReferenceMatchOriginal\\":true,\\"startedIdentityChanged\\":false}},\\"twoRuntimeFramesStable\\":true,\\"version\\":1,\\"workspaceObservation\\":{\\"databaseBytes\\":61440,\\"databaseFileObserved\\":true,\\"databaseIdentitySha256\\":\\"8cba2658730149199c8e5dc99ab609843399102ab6786db34fd64d679db040cf\\",\\"markerBindsFailedRun\\":false,\\"markerObserved\\":false,\\"volumeIdentityMatchesOriginal\\":true}}\\n","StandardOutputUrl":"","Status":"Success","StatusDetails":"Success"}\n', 'failedPreflight': '{\n  "kind": "ONLINE_RECHARGE_AFTER_BIT_PREFLIGHT",\n  "version": 2,\n  "mode": "preflight",\n  "status": "ONLINE_RECHARGE_AFTER_BIT_BASELINE_VERIFIED",\n  "commandId": "49a863bb-8bb8-4fe3-8f53-4741c8cfa6b8",\n  "releaseCandidateCommit": "08419dcbe85212a203906c86c98e5c3ae0695d72",\n  "workflowRunId": "38160127343",\n  "workflowRunAttempt": "1",\n  "sourceTree": "b6fd81cc0c94a8e5971c5df8b2570716a13fa042",\n  "baseline": {\n    "kind": "ONLINE_RECHARGE_AFTER_BIT_SUCCESSOR_ORIGIN",\n    "version": 1,\n    "baselineRelease": "/opt/id-business-v2/releases/20261011T132910Z-31d2c6885a45",\n    "baselineCommit": "31d2c6885a45817cd40d23fce8d6145bc9f18af2",\n    "baselineProducer": {\n      "commit": "31d2c6885a45817cd40d23fce8d6145bc9f18af2",\n      "sourceTree": "8cd7679461682d9c103e3130852431508c5e812c",\n      "workflowRunId": "38142818370",\n      "workflowRunAttempt": "1"\n    },\n    "manifestBytesSha256": "84936d13d8cd241d62e606a13faf1a0d5d8fd4fa1abdfb21fb091c4298bfc382",\n    "recordBytesSha256": "9387de0d7f4b093a93a87c8ac5ca7300142699cbf0cc5f05a29832c283114545",\n    "buildProofBytesSha256": "097721f049b91eb5abe4ca09f909858a131b93ac9de4c3b49225d60c0e76da65",\n    "buildProofCanonicalSha256": "68636f115875f628a54d64229b4aed43cf86dac0704a8807f51c99475ea8e250",\n    "environmentFileSha256": "a812aef2a536de5b18a31824cdac09e195672f158429a423643232134b1108af",\n    "publicationSha256": "5ec9ef3e4426e0bbd08782462254dbd845b99349bb5a7b617c1a41974a62052f",\n    "pendingOriginSha256": "2f4bb4397bedf82e85330ddc2d157757aae8868b625febe426fe1fc3f2907aa3",\n    "readbackCommandId": "a1209a57-f27a-4fe7-8595-7c9ae2138ee8",\n    "readbackInvocationBytesSha256": "f023c717552727b06a817ec775adb48955d5934cb3b40243279c33af4ec90bf2",\n    "initialReadbackInvocationBytesSha256": "332925aa8524ec54394d7f7561a02c3063a6b2c23a5ccbdc16dd9146b22cbbaf",\n    "originalWorkspace": {\n      "release": "/opt/id-business-v2/releases/20261009T103426Z-0a03fa28e6b8",\n      "manifestSha256": "317fbcd0e307789539009a2798b7017ff5b977041cc1b8ab617f5f3f2dc5efa3"\n    },\n    "migrationRecovery": {\n      "version": 1,\n      "failedCommit": "28a3ba4ffd17d36001b1104c97394f5ae871d73d",\n      "failedSourceTree": "014959a59519da585928adaa7f76f7236e1786d1",\n      "failedWorkflowRunId": "37933246605",\n      "failedWorkflowRunAttempt": "1",\n      "failedCommandId": "ab33d2e0-6135-47ed-8f20-e2defd7c82cd",\n      "failureReceiptSha256": "1959377acd78e7160fec0f85666982d4ea4efbb40dab199b7dcc04ba288ddd5a",\n      "buildProofSha256": "ae6a32418e0a0d4ff3d799e3416cf27a150fd1bd925dd91cfa09b56c30e0ffff",\n      "preflightSha256": "212b6c36d98e003d551284342ddd1c4e468018ff0febc85caff4aee6481e83d4",\n      "policySha256": "641fe690c62224eb3d22d69e94493e08b9a2a9309ce04c588627c4aaea7c8f35",\n      "restoredAttempt": {\n        "version": 1,\n        "commit": "296c096af7c4c79a8ffc2f57d9a15ea75684f431",\n        "sourceTree": "472947076a5b5fb73d6777413505d60ac2379fb1",\n        "workflowRunId": "37944613453",\n        "workflowRunAttempt": "1",\n        "commandId": "ac5c9f85-e813-499c-8e90-92c1ce011bfa",\n        "failureReceiptSha256": "f04e9356221bc10a33c774ce9e692b40db6afa23fd2a3bde23caf096a4f07485",\n        "buildProofSha256": "f3eabbd5962011d238ba7323814fb8c14d0007228f9bbb21f02c755fe0171825",\n        "preflightSha256": "b3ff3b000e5b8824e7422cf7eaf2323444d1467361efabc84767a3f21b1e8df7"\n      }\n    },\n    "migrationState": {\n      "name": "20261009093000_online_recharge",\n      "sha256": "44966182c1bf38290b01f665a4c2c863b052677c5e0024b900137f1d7f11eb95",\n      "status": "APPLIED",\n      "schemaVerified": true,\n      "appliedMigrationsSha256": "792ed62e35a3110ae1a0e4dec9d1d8a67430972d8bd9f7b9c2f7ff1d0a679088"\n    },\n    "services": {\n      "media-resolver": {\n        "image": "sha256:34c25f5474f9fdd043cfb39a838762cab9e87f88db9987d9cb9ad6706c331a56",\n        "reference": "079740175286.dkr.ecr.ap-northeast-1.amazonaws.com/id-business-v2-release:b8d643450ffa9012ccc09ead15e4681e3dee98d0-37302661631-1-media-resolver",\n        "status": "running",\n        "health": "healthy",\n        "containerId": "0c4fd25ba8fbf2fdab7639e680c3a3433d814cdb2d71ebd7ad39531aaa639471",\n        "startedAtSha256": "8814f073adf9a0964f3beaf17b261fea765db8d0059e2425ee39fe0afdf31d1f",\n        "environmentSha256": "8473962ae5df6f8e5553ab658ccce662a8816f83631b221484daf5fa42e3b163",\n        "configurationSha256": "88cfc4c67adc0d0fe78e5434d8c1ebfcaeaef7e2726f3f2b30b0d4c85e0c70cb"\n      },\n      "auto-recharge": {\n        "image": "sha256:5bd2ab25ebcadcd99f8d339d604e0268cec3fc2cfdac54e2a215f085e3fac00e",\n        "reference": "079740175286.dkr.ecr.ap-northeast-1.amazonaws.com/id-business-v2-release:04570d75c779fd91a0933ef9416f6d62698b6b91-37694009463-1-auto-recharge",\n        "status": "running",\n        "health": "healthy",\n        "containerId": "0190045c800bd6cda576b66ccce0986de6792390d01cf19fe19e02cd16316f97",\n        "startedAtSha256": "b54ae0f7bbf6ae90e14b78e4d86fa39ae8d5fef49c5f3a95cd4bd811e3645eda",\n        "environmentSha256": "5169582dea47a65076d5f7a3a3defbc824fa4f772b2dc0904eb64659209757ae",\n        "configurationSha256": "1c341043b62969f855cc1f5852181c949b8ea7831f8c82f15cd7364ee7767120"\n      },\n      "auto-registration": {\n        "image": "sha256:759f60543c2fc5661c5d21644fdc1e9cb0e5cb39c930e9c400f869e0c72be568",\n        "reference": "079740175286.dkr.ecr.ap-northeast-1.amazonaws.com/id-business-v2-release:18e23ee1ab1a8d5c988ff6ba24149e1c741d62f8-37788833835-1-auto-recharge",\n        "status": "running",\n        "health": "healthy",\n        "containerId": "16de5229289255cd47c3f9336e24aa611c0f9bbc76af2fcdfc5e5e1928d68add",\n        "startedAtSha256": "463587855c649edc70eb7ce82744c1caf57a49d7fbbfb10206bf1531443bb229",\n        "environmentSha256": "de69bd06209b17619f8cb7ae38bace36c27dc4203c67e09fd1b8d21023fbcb17",\n        "configurationSha256": "0da1fad093493de7997af6d9c2c855e1e4272711eb63a3a0f36f4a3fea1fb0c8"\n      },\n      "api": {\n        "image": "sha256:74c28d510a434d599b86188ec7a38d5830b1a4e39b615d92b960963c14aac379",\n        "reference": "079740175286.dkr.ecr.ap-northeast-1.amazonaws.com/id-business-v2-release:31d2c6885a45817cd40d23fce8d6145bc9f18af2-38142818370-1-api",\n        "status": "running",\n        "health": "healthy",\n        "containerId": "e6ed2826edac1e6bee03683735de798330d3c880d3fe6d84b216334c18fce429",\n        "startedAtSha256": "ecb84a9b0a89d49fead5ea7f1ace52f7f79db66091e818dc81d52bbd2233c14c",\n        "environmentSha256": "9f88452817b9343fb1751d8bfbee6e70b82d4098be9ee5034d9b3dbfc80d705c",\n        "configurationSha256": "f28dcf5a382376c898c462fa0d86c6a28f37f6a1ba0bc4ba66a7c4a467a972c8"\n      },\n      "admin": {\n        "image": "sha256:f3a6b231e914f087722b87f704b7583f93ba0a462444afe6a0b68e8580917eab",\n        "reference": "079740175286.dkr.ecr.ap-northeast-1.amazonaws.com/id-business-v2-release:31d2c6885a45817cd40d23fce8d6145bc9f18af2-38142818370-1-admin",\n        "status": "running",\n        "health": "healthy",\n        "containerId": "eefe5933f6ee04ffe02f532beb57b017710edc523cd82c5ce8e85229e319ca85",\n        "startedAtSha256": "f3d8e4752110a0a7579a845414e07b0125b9eed76f8eb8ef27b10122b0e61e93",\n        "environmentSha256": "03ddab553858482dcbcc4a93d989902d31b41753eb155fb8162011e218bc0ad4",\n        "configurationSha256": "be8b5cdfbe02bb3b7863d52151ce2ec904ac4a41ef8d0d8741b2098608069571"\n      },\n      "mysql": {\n        "image": "sha256:bced325a4ab7aec848f4688371c7433351dcb5dba26fbcc29c67727d898ae5cb",\n        "reference": "mysql:8.4@sha256:b3b90af2a6552ae30c266fdb7d5dd55f3afb72404bb78d37fe8a23eb857fd3fb",\n        "status": "running",\n        "health": "healthy",\n        "containerId": "7e5a5abe42c5503e6196f736d532793aaec3796b7eb518f02db614d4025d0074",\n        "startedAtSha256": "de8aff8d3d7634b524828ded3df29bba37d7ef4cf817deff61402fdfcf767ec7",\n        "environmentSha256": "bb8d63d18769016c14d8664a551d2b3da9e251701ed62f87b04cba964fc9e299",\n        "configurationSha256": "47f62efcca224ee71466bf71a0337d791b9f6d8b42b024208cc3a29c6585beaf"\n      },\n      "caddy": {\n        "image": "sha256:aac61abc4024c323602ccb9ee38bd68b147601f518626b2a055e06944e01c510",\n        "reference": "caddy:2.10-alpine@sha256:4c6e91c6ed0e2fa03efd5b44747b625fec79bc9cd06ac5235a779726618e530d",\n        "status": "running",\n        "health": null,\n        "containerId": "0ee2a1ea26eec74fef64362fd77a69894e3dc4dddd412c38ebd59c747aa6e203",\n        "startedAtSha256": "8c855d6048304bfcba4e29cbde6443070cdbbf778fe722648b491c763f285d24",\n        "environmentSha256": "33ea62b4e1f4de93e333bdbbea4ec88904661f1cb616907b185fce31b22b7181",\n        "configurationSha256": "3662db0efe0d9d7854a52da2c4fe71e626ebc9a122d9c2da76ed497b403815a0"\n      }\n    },\n    "configurationAfter": {\n      "docker-compose.aws-mysql.yml": "953c6264f157b00218f2a019d5e2c0b6bc4a34f687f2ec42ad782e0009e7672c",\n      "deploy/caddy/Caddyfile.aws": "f3d253904be6acbe24184b6a317eb3c9ded71636d9622dc9636c196dd7a56674",\n      "apps/api/prisma-mysql/schema.prisma": "8006d3ce6f0b44cf62f3b47bb7b4a0b14d0ddc18ddf113a5da34a901b62fb197",\n      "compose.release.json": "9a7e58f648528dc989e07b4004553138b39c79613aedc0717f7b5a4005740403"\n    }\n  },\n  "services": {\n    "media-resolver": {\n      "image": "sha256:34c25f5474f9fdd043cfb39a838762cab9e87f88db9987d9cb9ad6706c331a56",\n      "reference": "079740175286.dkr.ecr.ap-northeast-1.amazonaws.com/id-business-v2-release:b8d643450ffa9012ccc09ead15e4681e3dee98d0-37302661631-1-media-resolver",\n      "status": "running",\n      "health": "healthy",\n      "containerId": "0c4fd25ba8fbf2fdab7639e680c3a3433d814cdb2d71ebd7ad39531aaa639471",\n      "startedAtSha256": "8814f073adf9a0964f3beaf17b261fea765db8d0059e2425ee39fe0afdf31d1f",\n      "environmentSha256": "8473962ae5df6f8e5553ab658ccce662a8816f83631b221484daf5fa42e3b163",\n      "configurationSha256": "88cfc4c67adc0d0fe78e5434d8c1ebfcaeaef7e2726f3f2b30b0d4c85e0c70cb"\n    },\n    "auto-recharge": {\n      "image": "sha256:5bd2ab25ebcadcd99f8d339d604e0268cec3fc2cfdac54e2a215f085e3fac00e",\n      "reference": "079740175286.dkr.ecr.ap-northeast-1.amazonaws.com/id-business-v2-release:04570d75c779fd91a0933ef9416f6d62698b6b91-37694009463-1-auto-recharge",\n      "status": "running",\n      "health": "healthy",\n      "containerId": "0190045c800bd6cda576b66ccce0986de6792390d01cf19fe19e02cd16316f97",\n      "startedAtSha256": "b54ae0f7bbf6ae90e14b78e4d86fa39ae8d5fef49c5f3a95cd4bd811e3645eda",\n      "environmentSha256": "5169582dea47a65076d5f7a3a3defbc824fa4f772b2dc0904eb64659209757ae",\n      "configurationSha256": "1c341043b62969f855cc1f5852181c949b8ea7831f8c82f15cd7364ee7767120"\n    },\n    "auto-registration": {\n      "image": "sha256:759f60543c2fc5661c5d21644fdc1e9cb0e5cb39c930e9c400f869e0c72be568",\n      "reference": "079740175286.dkr.ecr.ap-northeast-1.amazonaws.com/id-business-v2-release:18e23ee1ab1a8d5c988ff6ba24149e1c741d62f8-37788833835-1-auto-recharge",\n      "status": "running",\n      "health": "healthy",\n      "containerId": "16de5229289255cd47c3f9336e24aa611c0f9bbc76af2fcdfc5e5e1928d68add",\n      "startedAtSha256": "463587855c649edc70eb7ce82744c1caf57a49d7fbbfb10206bf1531443bb229",\n      "environmentSha256": "de69bd06209b17619f8cb7ae38bace36c27dc4203c67e09fd1b8d21023fbcb17",\n      "configurationSha256": "0da1fad093493de7997af6d9c2c855e1e4272711eb63a3a0f36f4a3fea1fb0c8"\n    },\n    "api": {\n      "image": "sha256:74c28d510a434d599b86188ec7a38d5830b1a4e39b615d92b960963c14aac379",\n      "reference": "079740175286.dkr.ecr.ap-northeast-1.amazonaws.com/id-business-v2-release:31d2c6885a45817cd40d23fce8d6145bc9f18af2-38142818370-1-api",\n      "status": "running",\n      "health": "healthy",\n      "containerId": "e6ed2826edac1e6bee03683735de798330d3c880d3fe6d84b216334c18fce429",\n      "startedAtSha256": "ecb84a9b0a89d49fead5ea7f1ace52f7f79db66091e818dc81d52bbd2233c14c",\n      "environmentSha256": "9f88452817b9343fb1751d8bfbee6e70b82d4098be9ee5034d9b3dbfc80d705c",\n      "configurationSha256": "f28dcf5a382376c898c462fa0d86c6a28f37f6a1ba0bc4ba66a7c4a467a972c8"\n    },\n    "admin": {\n      "image": "sha256:f3a6b231e914f087722b87f704b7583f93ba0a462444afe6a0b68e8580917eab",\n      "reference": "079740175286.dkr.ecr.ap-northeast-1.amazonaws.com/id-business-v2-release:31d2c6885a45817cd40d23fce8d6145bc9f18af2-38142818370-1-admin",\n      "status": "running",\n      "health": "healthy",\n      "containerId": "eefe5933f6ee04ffe02f532beb57b017710edc523cd82c5ce8e85229e319ca85",\n      "startedAtSha256": "f3d8e4752110a0a7579a845414e07b0125b9eed76f8eb8ef27b10122b0e61e93",\n      "environmentSha256": "03ddab553858482dcbcc4a93d989902d31b41753eb155fb8162011e218bc0ad4",\n      "configurationSha256": "be8b5cdfbe02bb3b7863d52151ce2ec904ac4a41ef8d0d8741b2098608069571"\n    },\n    "mysql": {\n      "image": "sha256:bced325a4ab7aec848f4688371c7433351dcb5dba26fbcc29c67727d898ae5cb",\n      "reference": "mysql:8.4@sha256:b3b90af2a6552ae30c266fdb7d5dd55f3afb72404bb78d37fe8a23eb857fd3fb",\n      "status": "running",\n      "health": "healthy",\n      "containerId": "7e5a5abe42c5503e6196f736d532793aaec3796b7eb518f02db614d4025d0074",\n      "startedAtSha256": "de8aff8d3d7634b524828ded3df29bba37d7ef4cf817deff61402fdfcf767ec7",\n      "environmentSha256": "bb8d63d18769016c14d8664a551d2b3da9e251701ed62f87b04cba964fc9e299",\n      "configurationSha256": "47f62efcca224ee71466bf71a0337d791b9f6d8b42b024208cc3a29c6585beaf"\n    },\n    "caddy": {\n      "image": "sha256:aac61abc4024c323602ccb9ee38bd68b147601f518626b2a055e06944e01c510",\n      "reference": "caddy:2.10-alpine@sha256:4c6e91c6ed0e2fa03efd5b44747b625fec79bc9cd06ac5235a779726618e530d",\n      "status": "running",\n      "health": null,\n      "containerId": "0ee2a1ea26eec74fef64362fd77a69894e3dc4dddd412c38ebd59c747aa6e203",\n      "startedAtSha256": "8c855d6048304bfcba4e29cbde6443070cdbbf778fe722648b491c763f285d24",\n      "environmentSha256": "33ea62b4e1f4de93e333bdbbea4ec88904661f1cb616907b185fce31b22b7181",\n      "configurationSha256": "3662db0efe0d9d7854a52da2c4fe71e626ebc9a122d9c2da76ed497b403815a0"\n    }\n  },\n  "ordinaryPreflight": {\n    "status": "ONLINE_RECHARGE_BASELINE_VERIFIED",\n    "commit": "31d2c6885a45817cd40d23fce8d6145bc9f18af2",\n    "services": {\n      "media-resolver": {\n        "image": "sha256:34c25f5474f9fdd043cfb39a838762cab9e87f88db9987d9cb9ad6706c331a56",\n        "reference": "079740175286.dkr.ecr.ap-northeast-1.amazonaws.com/id-business-v2-release:b8d643450ffa9012ccc09ead15e4681e3dee98d0-37302661631-1-media-resolver",\n        "status": "running",\n        "health": "healthy",\n        "containerId": "0c4fd25ba8fbf2fdab7639e680c3a3433d814cdb2d71ebd7ad39531aaa639471",\n        "startedAtSha256": "8814f073adf9a0964f3beaf17b261fea765db8d0059e2425ee39fe0afdf31d1f",\n        "environmentSha256": "8473962ae5df6f8e5553ab658ccce662a8816f83631b221484daf5fa42e3b163",\n        "configurationSha256": "88cfc4c67adc0d0fe78e5434d8c1ebfcaeaef7e2726f3f2b30b0d4c85e0c70cb"\n      },\n      "auto-recharge": {\n        "image": "sha256:5bd2ab25ebcadcd99f8d339d604e0268cec3fc2cfdac54e2a215f085e3fac00e",\n        "reference": "079740175286.dkr.ecr.ap-northeast-1.amazonaws.com/id-business-v2-release:04570d75c779fd91a0933ef9416f6d62698b6b91-37694009463-1-auto-recharge",\n        "status": "running",\n        "health": "healthy",\n        "containerId": "0190045c800bd6cda576b66ccce0986de6792390d01cf19fe19e02cd16316f97",\n        "startedAtSha256": "b54ae0f7bbf6ae90e14b78e4d86fa39ae8d5fef49c5f3a95cd4bd811e3645eda",\n        "environmentSha256": "5169582dea47a65076d5f7a3a3defbc824fa4f772b2dc0904eb64659209757ae",\n        "configurationSha256": "1c341043b62969f855cc1f5852181c949b8ea7831f8c82f15cd7364ee7767120"\n      },\n      "auto-registration": {\n        "image": "sha256:759f60543c2fc5661c5d21644fdc1e9cb0e5cb39c930e9c400f869e0c72be568",\n        "reference": "079740175286.dkr.ecr.ap-northeast-1.amazonaws.com/id-business-v2-release:18e23ee1ab1a8d5c988ff6ba24149e1c741d62f8-37788833835-1-auto-recharge",\n        "status": "running",\n        "health": "healthy",\n        "containerId": "16de5229289255cd47c3f9336e24aa611c0f9bbc76af2fcdfc5e5e1928d68add",\n        "startedAtSha256": "463587855c649edc70eb7ce82744c1caf57a49d7fbbfb10206bf1531443bb229",\n        "environmentSha256": "de69bd06209b17619f8cb7ae38bace36c27dc4203c67e09fd1b8d21023fbcb17",\n        "configurationSha256": "0da1fad093493de7997af6d9c2c855e1e4272711eb63a3a0f36f4a3fea1fb0c8"\n      },\n      "api": {\n        "image": "sha256:74c28d510a434d599b86188ec7a38d5830b1a4e39b615d92b960963c14aac379",\n        "reference": "079740175286.dkr.ecr.ap-northeast-1.amazonaws.com/id-business-v2-release:31d2c6885a45817cd40d23fce8d6145bc9f18af2-38142818370-1-api",\n        "status": "running",\n        "health": "healthy",\n        "containerId": "e6ed2826edac1e6bee03683735de798330d3c880d3fe6d84b216334c18fce429",\n        "startedAtSha256": "ecb84a9b0a89d49fead5ea7f1ace52f7f79db66091e818dc81d52bbd2233c14c",\n        "environmentSha256": "9f88452817b9343fb1751d8bfbee6e70b82d4098be9ee5034d9b3dbfc80d705c",\n        "configurationSha256": "f28dcf5a382376c898c462fa0d86c6a28f37f6a1ba0bc4ba66a7c4a467a972c8"\n      },\n      "admin": {\n        "image": "sha256:f3a6b231e914f087722b87f704b7583f93ba0a462444afe6a0b68e8580917eab",\n        "reference": "079740175286.dkr.ecr.ap-northeast-1.amazonaws.com/id-business-v2-release:31d2c6885a45817cd40d23fce8d6145bc9f18af2-38142818370-1-admin",\n        "status": "running",\n        "health": "healthy",\n        "containerId": "eefe5933f6ee04ffe02f532beb57b017710edc523cd82c5ce8e85229e319ca85",\n        "startedAtSha256": "f3d8e4752110a0a7579a845414e07b0125b9eed76f8eb8ef27b10122b0e61e93",\n        "environmentSha256": "03ddab553858482dcbcc4a93d989902d31b41753eb155fb8162011e218bc0ad4",\n        "configurationSha256": "be8b5cdfbe02bb3b7863d52151ce2ec904ac4a41ef8d0d8741b2098608069571"\n      },\n      "mysql": {\n        "image": "sha256:bced325a4ab7aec848f4688371c7433351dcb5dba26fbcc29c67727d898ae5cb",\n        "reference": "mysql:8.4@sha256:b3b90af2a6552ae30c266fdb7d5dd55f3afb72404bb78d37fe8a23eb857fd3fb",\n        "status": "running",\n        "health": "healthy",\n        "containerId": "7e5a5abe42c5503e6196f736d532793aaec3796b7eb518f02db614d4025d0074",\n        "startedAtSha256": "de8aff8d3d7634b524828ded3df29bba37d7ef4cf817deff61402fdfcf767ec7",\n        "environmentSha256": "bb8d63d18769016c14d8664a551d2b3da9e251701ed62f87b04cba964fc9e299",\n        "configurationSha256": "47f62efcca224ee71466bf71a0337d791b9f6d8b42b024208cc3a29c6585beaf"\n      },\n      "caddy": {\n        "image": "sha256:aac61abc4024c323602ccb9ee38bd68b147601f518626b2a055e06944e01c510",\n        "reference": "caddy:2.10-alpine@sha256:4c6e91c6ed0e2fa03efd5b44747b625fec79bc9cd06ac5235a779726618e530d",\n        "status": "running",\n        "health": null,\n        "containerId": "0ee2a1ea26eec74fef64362fd77a69894e3dc4dddd412c38ebd59c747aa6e203",\n        "startedAtSha256": "8c855d6048304bfcba4e29cbde6443070cdbbf778fe722648b491c763f285d24",\n        "environmentSha256": "33ea62b4e1f4de93e333bdbbea4ec88904661f1cb616907b185fce31b22b7181",\n        "configurationSha256": "3662db0efe0d9d7854a52da2c4fe71e626ebc9a122d9c2da76ed497b403815a0"\n      }\n    },\n    "migrationOrigin": {\n      "version": 1,\n      "release": "/opt/id-business-v2/releases/20261008T175148Z-23c5841b9b7e",\n      "commit": "23c5841b9b7e60be715250cbb985fc0966c0bce3",\n      "manifestSha256": "117ca444e81623f372a2d9c34ecc16effd52141dcfb5e511f74624280092f639",\n      "buildProofSha256": "6208643f01babb412956fe43f537990adf951c14447645e7f56303d03a6b1d6c",\n      "migration": {\n        "name": "20261008180000_quick_action_user_order",\n        "sha256": "2617684e1c9c4f7ecf5cc40009239c2972d9569c3c1cea1324ecfe5d58871678",\n        "schemaBeforeSha256": "c70cbcb110bb48c395b7e7284dedc0486a9afc125d940c455c0bafc1cffc701d",\n        "schemaAfterSha256": "8006d3ce6f0b44cf62f3b47bb7b4a0b14d0ddc18ddf113a5da34a901b62fb197",\n        "baselineFilesSha256": "c2179090dd600b3b33a56fe8384e8a7020a4e0cb6eb9a97f509352ee22f4df0a"\n      },\n      "migrationState": {\n        "name": "20261008180000_quick_action_user_order",\n        "sha256": "2617684e1c9c4f7ecf5cc40009239c2972d9569c3c1cea1324ecfe5d58871678",\n        "status": "APPLIED",\n        "schemaVerified": true,\n        "appliedMigrationsSha256": "4d69ef3bc2c189ab93527abd6cf80d3b4d64b53a61b645026c476d70bcd99fae"\n      },\n      "task": {\n        "taskId": "252ab243-d96b-4928-8116-b83dedc1d240",\n        "attempt": 12,\n        "registered": true,\n        "passwordVerified": false,\n        "mfaVerified": false,\n        "leaseActive": false,\n        "noncePresent": false,\n        "passwordCandidatePresent": true,\n        "binding": {\n          "accountSha256": "4764c0440ec5bde3d20c74064096b3720a3d7d6ac637361452b9f544b9287ba5",\n          "profileSha256": "052ad861dc0da2f8611d422bd384e328e1d856a126bc86434846861f90728f00",\n          "ownerSha256": "ed198d0daf9ef5910f54dc16b3a7a6f4db0cf55c1935309f838071365ab7196d"\n        },\n        "emailHashHmac": "99e7d0edf61acf0d0228c67fa52bdf3065e86dda2356d06b8dc6f44125a3429b",\n        "jobHmac": "78bc1a85e9857512b534e8b23d6beae677f15cd45bbc76253812bc65396003f9",\n        "accountHmac": "763310b009d8c2c099ac94d2265570d9ca9d2886dcd6eb31d3133556571f3e9a",\n        "auditHmac": "500789997c0d6f006b7c70a07f21be06b1785b355eba2c36e10f3eb37d75edac",\n        "state": "partial",\n        "step": "password",\n        "reason": "session_load_timeout",\n        "updatedAt": "2026-10-08T14:18:32.726Z",\n        "auditCount": 5\n      },\n      "guards": {\n        "rechargeIdle": true,\n        "registrationBusy": false,\n        "registrationLeaseActive": false,\n        "registrationWindowRetained": true\n      }\n    },\n    "manifestSha256": "84936d13d8cd241d62e606a13faf1a0d5d8fd4fa1abdfb21fb091c4298bfc382",\n    "environmentSha256": "a812aef2a536de5b18a31824cdac09e195672f158429a423643232134b1108af",\n    "apiSource": {\n      "imageId": "sha256:74c28d510a434d599b86188ec7a38d5830b1a4e39b615d92b960963c14aac379",\n      "revision": "31d2c6885a45817cd40d23fce8d6145bc9f18af2",\n      "kind": "API_WORKSPACE_BUILD_PROVEN"\n    },\n    "guards": {\n      "rechargeIdle": true,\n      "registrationBusy": false,\n      "registrationLeaseActive": false,\n      "registrationWindowRetained": true\n    },\n    "workspaceIdle": true,\n    "workspaceVolume": {\n      "name": "20260821t095106z_auto_registration_data",\n      "status": "PRESENT",\n      "identitySha256": "cc39b3f3777d1e53f9b332994ed22af58fdf15daf72779a482d86272f9eb61e1"\n    },\n    "workspaceOriginFiles": {\n      "release-manifest.json": "84936d13d8cd241d62e606a13faf1a0d5d8fd4fa1abdfb21fb091c4298bfc382",\n      "api-workspace-build-proof.json": "097721f049b91eb5abe4ca09f909858a131b93ac9de4c3b49225d60c0e76da65",\n      "api-workspace-preservation.json": "9387de0d7f4b093a93a87c8ac5ca7300142699cbf0cc5f05a29832c283114545",\n      "backup-verification.json": "f93fc3c8a4549478aeda54cb6c7175c4bd13ab5bb50a654185118656696e6a5a",\n      "before-audit.json": "da59b8dbe78e2ecd669303082d12db47e34898a57edd5cbb629894100260979a",\n      "after-audit.json": "16e9a830d57385119a79c6f7c039c6b74b464d6fe57b3bbff78f1ba280dc9ca3"\n    },\n    "workspaceBuildProofSha256": "68636f115875f628a54d64229b4aed43cf86dac0704a8807f51c99475ea8e250",\n    "migrationRecovery": {\n      "version": 1,\n      "failedCommit": "28a3ba4ffd17d36001b1104c97394f5ae871d73d",\n      "failedSourceTree": "014959a59519da585928adaa7f76f7236e1786d1",\n      "failedWorkflowRunId": "37933246605",\n      "failedWorkflowRunAttempt": "1",\n      "failedCommandId": "ab33d2e0-6135-47ed-8f20-e2defd7c82cd",\n      "failureReceiptSha256": "1959377acd78e7160fec0f85666982d4ea4efbb40dab199b7dcc04ba288ddd5a",\n      "buildProofSha256": "ae6a32418e0a0d4ff3d799e3416cf27a150fd1bd925dd91cfa09b56c30e0ffff",\n      "preflightSha256": "212b6c36d98e003d551284342ddd1c4e468018ff0febc85caff4aee6481e83d4",\n      "policySha256": "641fe690c62224eb3d22d69e94493e08b9a2a9309ce04c588627c4aaea7c8f35",\n      "restoredAttempt": {\n        "version": 1,\n        "commit": "296c096af7c4c79a8ffc2f57d9a15ea75684f431",\n        "sourceTree": "472947076a5b5fb73d6777413505d60ac2379fb1",\n        "workflowRunId": "37944613453",\n        "workflowRunAttempt": "1",\n        "commandId": "ac5c9f85-e813-499c-8e90-92c1ce011bfa",\n        "failureReceiptSha256": "f04e9356221bc10a33c774ce9e692b40db6afa23fd2a3bde23caf096a4f07485",\n        "buildProofSha256": "f3eabbd5962011d238ba7323814fb8c14d0007228f9bbb21f02c755fe0171825",\n        "preflightSha256": "b3ff3b000e5b8824e7422cf7eaf2323444d1467361efabc84767a3f21b1e8df7"\n      }\n    },\n    "onlineAfterBitOrigin": {\n      "kind": "ONLINE_RECHARGE_AFTER_BIT_SUCCESSOR_ORIGIN",\n      "version": 1,\n      "baselineRelease": "/opt/id-business-v2/releases/20261011T132910Z-31d2c6885a45",\n      "baselineCommit": "31d2c6885a45817cd40d23fce8d6145bc9f18af2",\n      "baselineProducer": {\n        "commit": "31d2c6885a45817cd40d23fce8d6145bc9f18af2",\n        "sourceTree": "8cd7679461682d9c103e3130852431508c5e812c",\n        "workflowRunId": "38142818370",\n        "workflowRunAttempt": "1"\n      },\n      "manifestBytesSha256": "84936d13d8cd241d62e606a13faf1a0d5d8fd4fa1abdfb21fb091c4298bfc382",\n      "recordBytesSha256": "9387de0d7f4b093a93a87c8ac5ca7300142699cbf0cc5f05a29832c283114545",\n      "buildProofBytesSha256": "097721f049b91eb5abe4ca09f909858a131b93ac9de4c3b49225d60c0e76da65",\n      "buildProofCanonicalSha256": "68636f115875f628a54d64229b4aed43cf86dac0704a8807f51c99475ea8e250",\n      "environmentFileSha256": "a812aef2a536de5b18a31824cdac09e195672f158429a423643232134b1108af",\n      "publicationSha256": "5ec9ef3e4426e0bbd08782462254dbd845b99349bb5a7b617c1a41974a62052f",\n      "pendingOriginSha256": "2f4bb4397bedf82e85330ddc2d157757aae8868b625febe426fe1fc3f2907aa3",\n      "readbackCommandId": "a1209a57-f27a-4fe7-8595-7c9ae2138ee8",\n      "readbackInvocationBytesSha256": "f023c717552727b06a817ec775adb48955d5934cb3b40243279c33af4ec90bf2",\n      "initialReadbackInvocationBytesSha256": "332925aa8524ec54394d7f7561a02c3063a6b2c23a5ccbdc16dd9146b22cbbaf",\n      "originalWorkspace": {\n        "release": "/opt/id-business-v2/releases/20261009T103426Z-0a03fa28e6b8",\n        "manifestSha256": "317fbcd0e307789539009a2798b7017ff5b977041cc1b8ab617f5f3f2dc5efa3"\n      },\n      "migrationRecovery": {\n        "version": 1,\n        "failedCommit": "28a3ba4ffd17d36001b1104c97394f5ae871d73d",\n        "failedSourceTree": "014959a59519da585928adaa7f76f7236e1786d1",\n        "failedWorkflowRunId": "37933246605",\n        "failedWorkflowRunAttempt": "1",\n        "failedCommandId": "ab33d2e0-6135-47ed-8f20-e2defd7c82cd",\n        "failureReceiptSha256": "1959377acd78e7160fec0f85666982d4ea4efbb40dab199b7dcc04ba288ddd5a",\n        "buildProofSha256": "ae6a32418e0a0d4ff3d799e3416cf27a150fd1bd925dd91cfa09b56c30e0ffff",\n        "preflightSha256": "212b6c36d98e003d551284342ddd1c4e468018ff0febc85caff4aee6481e83d4",\n        "policySha256": "641fe690c62224eb3d22d69e94493e08b9a2a9309ce04c588627c4aaea7c8f35",\n        "restoredAttempt": {\n          "version": 1,\n          "commit": "296c096af7c4c79a8ffc2f57d9a15ea75684f431",\n          "sourceTree": "472947076a5b5fb73d6777413505d60ac2379fb1",\n          "workflowRunId": "37944613453",\n          "workflowRunAttempt": "1",\n          "commandId": "ac5c9f85-e813-499c-8e90-92c1ce011bfa",\n          "failureReceiptSha256": "f04e9356221bc10a33c774ce9e692b40db6afa23fd2a3bde23caf096a4f07485",\n          "buildProofSha256": "f3eabbd5962011d238ba7323814fb8c14d0007228f9bbb21f02c755fe0171825",\n          "preflightSha256": "b3ff3b000e5b8824e7422cf7eaf2323444d1467361efabc84767a3f21b1e8df7"\n        }\n      },\n      "migrationState": {\n        "name": "20261009093000_online_recharge",\n        "sha256": "44966182c1bf38290b01f665a4c2c863b052677c5e0024b900137f1d7f11eb95",\n        "status": "APPLIED",\n        "schemaVerified": true,\n        "appliedMigrationsSha256": "792ed62e35a3110ae1a0e4dec9d1d8a67430972d8bd9f7b9c2f7ff1d0a679088"\n      },\n      "services": {\n        "media-resolver": {\n          "image": "sha256:34c25f5474f9fdd043cfb39a838762cab9e87f88db9987d9cb9ad6706c331a56",\n          "reference": "079740175286.dkr.ecr.ap-northeast-1.amazonaws.com/id-business-v2-release:b8d643450ffa9012ccc09ead15e4681e3dee98d0-37302661631-1-media-resolver",\n          "status": "running",\n          "health": "healthy",\n          "containerId": "0c4fd25ba8fbf2fdab7639e680c3a3433d814cdb2d71ebd7ad39531aaa639471",\n          "startedAtSha256": "8814f073adf9a0964f3beaf17b261fea765db8d0059e2425ee39fe0afdf31d1f",\n          "environmentSha256": "8473962ae5df6f8e5553ab658ccce662a8816f83631b221484daf5fa42e3b163",\n          "configurationSha256": "88cfc4c67adc0d0fe78e5434d8c1ebfcaeaef7e2726f3f2b30b0d4c85e0c70cb"\n        },\n        "auto-recharge": {\n          "image": "sha256:5bd2ab25ebcadcd99f8d339d604e0268cec3fc2cfdac54e2a215f085e3fac00e",\n          "reference": "079740175286.dkr.ecr.ap-northeast-1.amazonaws.com/id-business-v2-release:04570d75c779fd91a0933ef9416f6d62698b6b91-37694009463-1-auto-recharge",\n          "status": "running",\n          "health": "healthy",\n          "containerId": "0190045c800bd6cda576b66ccce0986de6792390d01cf19fe19e02cd16316f97",\n          "startedAtSha256": "b54ae0f7bbf6ae90e14b78e4d86fa39ae8d5fef49c5f3a95cd4bd811e3645eda",\n          "environmentSha256": "5169582dea47a65076d5f7a3a3defbc824fa4f772b2dc0904eb64659209757ae",\n          "configurationSha256": "1c341043b62969f855cc1f5852181c949b8ea7831f8c82f15cd7364ee7767120"\n        },\n        "auto-registration": {\n          "image": "sha256:759f60543c2fc5661c5d21644fdc1e9cb0e5cb39c930e9c400f869e0c72be568",\n          "reference": "079740175286.dkr.ecr.ap-northeast-1.amazonaws.com/id-business-v2-release:18e23ee1ab1a8d5c988ff6ba24149e1c741d62f8-37788833835-1-auto-recharge",\n          "status": "running",\n          "health": "healthy",\n          "containerId": "16de5229289255cd47c3f9336e24aa611c0f9bbc76af2fcdfc5e5e1928d68add",\n          "startedAtSha256": "463587855c649edc70eb7ce82744c1caf57a49d7fbbfb10206bf1531443bb229",\n          "environmentSha256": "de69bd06209b17619f8cb7ae38bace36c27dc4203c67e09fd1b8d21023fbcb17",\n          "configurationSha256": "0da1fad093493de7997af6d9c2c855e1e4272711eb63a3a0f36f4a3fea1fb0c8"\n        },\n        "api": {\n          "image": "sha256:74c28d510a434d599b86188ec7a38d5830b1a4e39b615d92b960963c14aac379",\n          "reference": "079740175286.dkr.ecr.ap-northeast-1.amazonaws.com/id-business-v2-release:31d2c6885a45817cd40d23fce8d6145bc9f18af2-38142818370-1-api",\n          "status": "running",\n          "health": "healthy",\n          "containerId": "e6ed2826edac1e6bee03683735de798330d3c880d3fe6d84b216334c18fce429",\n          "startedAtSha256": "ecb84a9b0a89d49fead5ea7f1ace52f7f79db66091e818dc81d52bbd2233c14c",\n          "environmentSha256": "9f88452817b9343fb1751d8bfbee6e70b82d4098be9ee5034d9b3dbfc80d705c",\n          "configurationSha256": "f28dcf5a382376c898c462fa0d86c6a28f37f6a1ba0bc4ba66a7c4a467a972c8"\n        },\n        "admin": {\n          "image": "sha256:f3a6b231e914f087722b87f704b7583f93ba0a462444afe6a0b68e8580917eab",\n          "reference": "079740175286.dkr.ecr.ap-northeast-1.amazonaws.com/id-business-v2-release:31d2c6885a45817cd40d23fce8d6145bc9f18af2-38142818370-1-admin",\n          "status": "running",\n          "health": "healthy",\n          "containerId": "eefe5933f6ee04ffe02f532beb57b017710edc523cd82c5ce8e85229e319ca85",\n          "startedAtSha256": "f3d8e4752110a0a7579a845414e07b0125b9eed76f8eb8ef27b10122b0e61e93",\n          "environmentSha256": "03ddab553858482dcbcc4a93d989902d31b41753eb155fb8162011e218bc0ad4",\n          "configurationSha256": "be8b5cdfbe02bb3b7863d52151ce2ec904ac4a41ef8d0d8741b2098608069571"\n        },\n        "mysql": {\n          "image": "sha256:bced325a4ab7aec848f4688371c7433351dcb5dba26fbcc29c67727d898ae5cb",\n          "reference": "mysql:8.4@sha256:b3b90af2a6552ae30c266fdb7d5dd55f3afb72404bb78d37fe8a23eb857fd3fb",\n          "status": "running",\n          "health": "healthy",\n          "containerId": "7e5a5abe42c5503e6196f736d532793aaec3796b7eb518f02db614d4025d0074",\n          "startedAtSha256": "de8aff8d3d7634b524828ded3df29bba37d7ef4cf817deff61402fdfcf767ec7",\n          "environmentSha256": "bb8d63d18769016c14d8664a551d2b3da9e251701ed62f87b04cba964fc9e299",\n          "configurationSha256": "47f62efcca224ee71466bf71a0337d791b9f6d8b42b024208cc3a29c6585beaf"\n        },\n        "caddy": {\n          "image": "sha256:aac61abc4024c323602ccb9ee38bd68b147601f518626b2a055e06944e01c510",\n          "reference": "caddy:2.10-alpine@sha256:4c6e91c6ed0e2fa03efd5b44747b625fec79bc9cd06ac5235a779726618e530d",\n          "status": "running",\n          "health": null,\n          "containerId": "0ee2a1ea26eec74fef64362fd77a69894e3dc4dddd412c38ebd59c747aa6e203",\n          "startedAtSha256": "8c855d6048304bfcba4e29cbde6443070cdbbf778fe722648b491c763f285d24",\n          "environmentSha256": "33ea62b4e1f4de93e333bdbbea4ec88904661f1cb616907b185fce31b22b7181",\n          "configurationSha256": "3662db0efe0d9d7854a52da2c4fe71e626ebc9a122d9c2da76ed497b403815a0"\n        }\n      },\n      "configurationAfter": {\n        "docker-compose.aws-mysql.yml": "953c6264f157b00218f2a019d5e2c0b6bc4a34f687f2ec42ad782e0009e7672c",\n        "deploy/caddy/Caddyfile.aws": "f3d253904be6acbe24184b6a317eb3c9ded71636d9622dc9636c196dd7a56674",\n        "apps/api/prisma-mysql/schema.prisma": "8006d3ce6f0b44cf62f3b47bb7b4a0b14d0ddc18ddf113a5da34a901b62fb197",\n        "compose.release.json": "9a7e58f648528dc989e07b4004553138b39c79613aedc0717f7b5a4005740403"\n      }\n    },\n    "freeBytes": 7854866432,\n    "audit": {\n      "checkCount": 49,\n      "violationCount": 0,\n      "mode": "STRICT_ZERO_49",\n      "checksSha256": "65c2813269458f1eb2f84516969e8b81520f9f86beb36a2dc0b5179e4dfbbefa"\n    },\n    "migration": {\n      "name": "20261009093000_online_recharge",\n      "sha256": "44966182c1bf38290b01f665a4c2c863b052677c5e0024b900137f1d7f11eb95",\n      "baselineFileCount": 47,\n      "baselineFilesSha256": "3baef4b2e1fcc1b1194d5ffa0197dabd09ee01a757abe7478e1f3488f8019a14",\n      "schemaBeforeSha256": "8006d3ce6f0b44cf62f3b47bb7b4a0b14d0ddc18ddf113a5da34a901b62fb197",\n      "schemaAfterSha256": "8ae09e883e79bfb85cd65edbf630f2ec03b6b397eb46d172b4c4f05514b715a7",\n      "seedBeforeSha256": "ac9940a7977def1ed6eaad38ed154d81963ce6e877f02ffc07234fa61591096b",\n      "seedAfterSha256": "2a7becbe8da189adad73b30d7bfe36070fd44ae4f683f7e4a01178d14ae08b5b"\n    },\n    "migrationState": {\n      "name": "20261009093000_online_recharge",\n      "sha256": "44966182c1bf38290b01f665a4c2c863b052677c5e0024b900137f1d7f11eb95",\n      "status": "APPLIED",\n      "schemaVerified": true,\n      "appliedMigrationsSha256": "792ed62e35a3110ae1a0e4dec9d1d8a67430972d8bd9f7b9c2f7ff1d0a679088"\n    },\n    "workersPreserved": true,\n    "requiresWindowHandoff": false,\n    "migrationPerformed": false\n  }\n}\n', 'failedBuildProof': '{\n  "baselineCommit": "31d2c6885a45817cd40d23fce8d6145bc9f18af2",\n  "baselineOriginSha256": "4b81b0d398de0c4b0198803950354c286f7107a8a19b99e519d5404007b0c1ca",\n  "commit": "08419dcbe85212a203906c86c98e5c3ae0695d72",\n  "composeSourceSha256": "8250b0b74da9271e4254448dd97c53b30129f6e37e9fc5203ccd1a01200c2792",\n  "engineSourceSha256": "309ad31694045d49d2577b9bafe74d6e598e111084b2ada7f9d1d1beba20ed73",\n  "images": {\n    "admin": {\n      "fileCount": 257,\n      "imageId": "sha256:4f77a7f383187f96edc59901a9f4e5895b53b86233557a41dfa2c4f68b6a371d",\n      "reference": "079740175286.dkr.ecr.ap-northeast-1.amazonaws.com/id-business-v2-release:08419dcbe85212a203906c86c98e5c3ae0695d72-38160127343-1-admin",\n      "sha256": "3b0510427d36b80c06d3146e2f0ee207dd807066bc34822a12f8a0b96826a8bd"\n    },\n    "api": {\n      "fileCount": 4343,\n      "imageId": "sha256:29539eb7825877e2e303c3567a4f4f00b8dba8773001e6de170de45f0e3987d7",\n      "reference": "079740175286.dkr.ecr.ap-northeast-1.amazonaws.com/id-business-v2-release:08419dcbe85212a203906c86c98e5c3ae0695d72-38160127343-1-api",\n      "sha256": "0e9154402fae3f6760427e85dc1f3658050a6d059beb9009b1459522d65d1467"\n    },\n    "migrate": {\n      "fileCount": 50,\n      "imageId": "sha256:aa0cdad461ded3bb6d75c716c057b5ffc2e785438509310744c1230b83547dd7",\n      "reference": "079740175286.dkr.ecr.ap-northeast-1.amazonaws.com/id-business-v2-release:08419dcbe85212a203906c86c98e5c3ae0695d72-38160127343-1-migrate",\n      "sha256": "42e5d67fac62e54889591c85b95b7ad26d552e919427c905743ca3125477b1c9"\n    },\n    "online-recharge": {\n      "fileCount": 62,\n      "imageId": "sha256:b7af34d635187117b1336f3b87505a17b082006b275c283802806c362e84a55d",\n      "reference": "079740175286.dkr.ecr.ap-northeast-1.amazonaws.com/id-business-v2-release:08419dcbe85212a203906c86c98e5c3ae0695d72-38160127343-1-online-recharge",\n      "sha256": "56cd07b61bfcc6f993e8dc417c515b24f1ecec9638942185aeff9756664a066b"\n    }\n  },\n  "kind": "ONLINE_RECHARGE_AFTER_BIT_BUILD_PROOF",\n  "migration": {\n    "baselineFileCount": 47,\n    "baselineFilesSha256": "3baef4b2e1fcc1b1194d5ffa0197dabd09ee01a757abe7478e1f3488f8019a14",\n    "name": "20261009093000_online_recharge",\n    "schemaAfterSha256": "8ae09e883e79bfb85cd65edbf630f2ec03b6b397eb46d172b4c4f05514b715a7",\n    "schemaBeforeSha256": "8006d3ce6f0b44cf62f3b47bb7b4a0b14d0ddc18ddf113a5da34a901b62fb197",\n    "seedAfterSha256": "2a7becbe8da189adad73b30d7bfe36070fd44ae4f683f7e4a01178d14ae08b5b",\n    "seedBeforeSha256": "ac9940a7977def1ed6eaad38ed154d81963ce6e877f02ffc07234fa61591096b",\n    "sha256": "44966182c1bf38290b01f665a4c2c863b052677c5e0024b900137f1d7f11eb95"\n  },\n  "preflightBytesSha256": "aba6144845be3836c4fe56a1def9a755018634f26710b8d17ec74b2d2660c4db",\n  "scope": "ONLINE_RECHARGE",\n  "sourceTree": "b6fd81cc0c94a8e5971c5df8b2570716a13fa042",\n  "version": 2\n}\n', 'failedNativeFailure': '{\n  "InstanceId": "i-05836da38606e633c",\n  "ExecutionEndDateTime": "2026-10-11T17:58:11.942Z",\n  "ExecutionStartDateTime": "2026-10-11T17:42:42.942Z",\n  "ResponseCode": 1,\n  "StatusDetails": "Failed",\n  "Status": "Failed",\n  "CommandId": "c03fdc8a-9f39-40e5-8181-0071b3bc8f89",\n  "ExecutionElapsedTime": "PT15M29.741S",\n  "StandardOutputContent": "{\\"status\\": \\"ONLINE_RECHARGE_FAILED_RESTORED\\", \\"step\\": \\"switch\\", \\"code\\": \\"API_ADMIN_WORKSPACE_GUARD_TIMEOUT\\", \\"errorType\\": \\"RuntimeError\\", \\"rollbackOk\\": true, \\"rollback\\": {\\"api\\": \\"RESTORED\\", \\"admin\\": \\"RESTORED\\"}, \\"servicesAttempted\\": [\\"admin\\", \\"api\\"], \\"candidateCommit\\": \\"08419dcbe85212a203906c86c98e5c3ae0695d72\\", \\"previousCommit\\": \\"31d2c6885a45817cd40d23fce8d6145bc9f18af2\\", \\"migration\\": {\\"name\\": \\"20261009093000_online_recharge\\", \\"sha256\\": \\"44966182c1bf38290b01f665a4c2c863b052677c5e0024b900137f1d7f11eb95\\", \\"status\\": \\"APPLIED\\", \\"schemaVerified\\": true, \\"appliedMigrationsSha256\\": \\"792ed62e35a3110ae1a0e4dec9d1d8a67430972d8bd9f7b9c2f7ff1d0a679088\\", \\"performed\\": false}, \\"migrationAttempted\\": false, \\"inverseMigrationPerformed\\": false, \\"mediaVolumeDeleted\\": false, \\"currentPointsToCandidate\\": false, \\"receiptPersisted\\": true}\\n",\n  "standardErrorBytes": 37,\n  "standardErrorSha256": "08025ada7b927f2b1e3d41b1a64c9d6bfe5880a375645f340a42137a3d3de3b3"\n}\n'}
+_RESTORED_B_FIELD = 'afterBitRestoration'
+_RESTORED_B_CODE = 'ONLINE_RECHARGE_B_RESTORE_MATERIAL_CHANGED'
+_WORKSPACE_CAPACITY_CONTROL_POLICY = {'kind': 'ONLINE_RECHARGE_FIXED_CAPACITY_CONTROL_MAPPING', 'version': 1, 'baselineOriginSha256': '4b81b0d398de0c4b0198803950354c286f7107a8a19b99e519d5404007b0c1ca', 'files': {'.github/workflows/production-release.yml': {'before': {'mode': '100644', 'bytes': 270930, 'sha256': '22f57d24c7b5712cf454cde428e9e09f86d29ce63de4a2b7309ea9c483b0a95f'}, 'after': {'mode': '100644', 'bytes': 280322, 'sha256': 'cc839f9555051b5b103050e9ea0a0243fa600d0f401a86a60ddd51f56c348324'}}, 'scripts/production-release/maintain-image-cache.py': {'before': {'mode': '100644', 'bytes': 95264, 'sha256': '696099662a0ef6d2b646fa67d3949e3a8633b2f4c90478c895e8af4055d0bf3f'}, 'after': {'mode': '100644', 'bytes': 123997, 'sha256': '5bfa7a087d8d59400064402e2596ee481eb445a8374ac30546a00a01e9e8bf3f'}}, 'scripts/production-release/maintain-image-cache.test.py': {'before': {'mode': '100644', 'bytes': 132058, 'sha256': '48ecd690afffce133dae9a9da8012d2afd9e9646728eeb9da7c58a59f6d7d67e'}, 'after': {'mode': '100644', 'bytes': 169580, 'sha256': '8756e5792a1188b420c6c3cb7cb3cae6612654b1a1ed88e0e1046e5bb6daf182'}}, 'scripts/production-release/service-image-retention.py': {'before': {'mode': '100644', 'bytes': 12921, 'sha256': '0e4b8e4fd6ce0cc3928e8e938a50847ccb1953fd6f0fddc9a176171b8d557e1d'}, 'after': {'mode': '100644', 'bytes': 16748, 'sha256': '72f8932cc4f29e24071439286aa6f7e5125876789cab95904dddde6b1c2ba198'}}, 'scripts/production-release/service-image-retention.test.py': {'before': {'mode': '100644', 'bytes': 12111, 'sha256': 'c34f27e6c822828b0a75445c100aa12d23a1fa85f47b722ffa327504fff954f6'}, 'after': {'mode': '100644', 'bytes': 24682, 'sha256': '427440c40ff9288291234f4bae89f0b15445a01808e563754732522846ebe1fe'}}}}
+_WORKSPACE_RELEASE_RULES_POLICY = {'kind': 'ONLINE_RECHARGE_FIXED_RELEASE_RULES_MAPPING', 'version': 1, 'baselineOriginSha256': '4b81b0d398de0c4b0198803950354c286f7107a8a19b99e519d5404007b0c1ca', 'files': {'AGENTS.md': {'after': {'bytes': 11154, 'mode': '100644', 'sha256': 'ca02346af72d53f166aadb76c221c8aefbc11755f9f758946c426cc2855e4f18'}, 'before': {'bytes': 10224, 'mode': '100644', 'sha256': '4095fddefee98a6b8b3f67f80f31496e4fc3cc42e2b3846b3c464a23e467c06c'}}, 'docs/CENTRAL_RELEASE_20261002.md': {'after': {'bytes': 4413, 'mode': '100644', 'sha256': 'f4e9a287e319f2d1a1702f123b7b0b726310ff4954c92c7aa90b5019b02f22e4'}, 'before': {'bytes': 3812, 'mode': '100644', 'sha256': '643f1beba19afbb616ad421cd2d93cb789142478f5cb7135bf315faa68f968f6'}}}}
+_RESTORED_FAILED_C_BANK_SOURCE_PAIRS = {'scripts/lib/v2-production-database-access.mjs': ('7ece1de5cbba89b26615d749a671d32a380f4dc377548071746d14f1f2e2a546', '36bfe57d9fd802fc647d09dd8871f1af4cee6cd03a68bf05a2509dd0e554570d'), 'scripts/production-database-access.test.mjs': ('eb2ea9b434ea744589ce2210fcbd501b54bedcda05e614521aab9b30be002590', 'd914b4646ced503e432697b410b9dcbbf07d9087375ba0e6ea41df8b7a9c5000'), 'scripts/acceptance-v2-production-database-access.mjs': ('15adadb670cdbd7645761b161f487b74550b271455289e60a97108e9e4ac46f1', 'd39b620aa33ac21cecc0b9229dc0cc59967af1e890ea65c4e61d20fb1dbe269e'), 'scripts/production-release/api-admin-scope.test.py': ('551b052262643dc8b9ccb9cd56a08bc0b566dab03e634643517fe3ce3c168b06', 'bec32298136ff61d8e69820179b8c3f51f8e5221f4e6b449aaf5f5ec8f7d4625'), 'scripts/production-release/online-recharge-scope.test.py': ('4aa063af4054ff98d2bb622056556ab643ed39abb3d373facc636509ff98ad8e', '59f3221f1326865a958f6f50fd0fb5211c3f2ee29ca915884f05202d426cf5d2')}
+
+
+def _restored_workspace_failed_source_inventory(d,bridge,producer):
+    """Complete authentic failed-C Git archive, usable by native F and CI.
+
+    No fabricated private path or snapshot permits this archived source proof.
+    Original failed five-file mapping is distinct from the later candidate's
+    updated ONLINE test after pin and capacity mapping.
+    """
+    code='ONLINE_RECHARGE_B_RESTORE_FAILED_SOURCE_CHANGED'
+    original=_pending_workspace_current_source_inventory(d,bridge['baselineProducer'])
+    inventory=_pending_workspace_current_source_inventory(d,producer)
+    bank=_RESTORED_FAILED_C_BANK_SOURCE_PAIRS
+    d.require(type(bank) is dict and set(bank)==set(_AFTER_BIT_BANK_POLICY_FILES),code)
+    ci=_workspace_release_ci_inventory(d,bridge,original,inventory)
+    compatible=_PENDING_WORKSPACE_RECEIPT_COMPATIBILITY_FILES|frozenset(bank)|ci
+    d.require(set(original)==set(inventory)
+        and all(original.get(name)=={'sha256':before,'mode':'100644'}
+            and inventory.get(name)=={'sha256':after,'mode':'100644'}
+            for name,(before,after) in bank.items())
+        and all(original[name]==inventory[name] for name in original if name not in compatible)
+        and all(original[name]['mode']==inventory[name]['mode']
+            for name in _PENDING_WORKSPACE_RECEIPT_COMPATIBILITY_FILES),code)
+    return inventory
+
+
+def _restored_workspace_native_failure_anchor(d):
+    policy=_RESTORED_B_WITNESS['policy'];directory=Path(policy['failedRelease'])
+    d.require(directory.parent==d.BASE/'releases' and directory.resolve()==directory and not directory.is_symlink(),
+        _RESTORED_B_CODE)
+    for name,sha in policy['failedSourceHelpers'].items():
+        _restored_workspace_failed_helper_bytes(d,directory,name)
+    failure=_declaration_source_bytes(directory/'online-recharge-failure.json',limit=16384)
+    expected=closed_recovery_json(d,closed_recovery_json(d,_RESTORED_B_WITNESS['failedNativeFailure'].encode())['StandardOutputContent'].encode())
+    d.require(closed_recovery_json(d,failure)==expected and fingerprint(expected)==policy['failureCanonicalSha256']
+        and hashlib.sha256(failure).hexdigest()=='a1174623f13b3801b8fbea6b03387b03531f8164755a34fb785561006193d160',
+        _RESTORED_B_CODE)
+    return fingerprint({'sourceHelpers':policy['failedSourceHelpers'],'failureBytesSha256':hashlib.sha256(failure).hexdigest()})
+
+
+def _restored_workspace_failed_helper_bytes(d,directory,name):
+    sizes={'scripts/production-release/api-admin-scope.py':402206,
+        'scripts/production-release/online-recharge-scope.py':314958,
+        'scripts/production-release/remote-deploy.py':1136742}
+    hashes=_RESTORED_B_WITNESS['policy']['failedSourceHelpers']
+    d.require(name in sizes and name in hashes,_RESTORED_B_CODE)
+    raw=_declaration_source_bytes(directory/name,limit=sizes[name])
+    d.require(len(raw)==sizes[name] and (directory/name).stat().st_size==sizes[name]
+        and hashlib.sha256(raw).hexdigest()==hashes[name],_RESTORED_B_CODE)
+    return raw
+
+
+def _workspace_fixed_mapping_inventory(d,bridge,original,inventory,policy,kind,names):
+    if policy is None:return frozenset()
+    code='ONLINE_RECHARGE_FIXED_CONTROL_SOURCE_CHANGED'
+    d.require(type(policy) is dict and set(policy)=={'kind','version','baselineOriginSha256','files'}
+        and policy['kind']==kind and type(policy['version']) is int and policy['version']==1
+        and type(policy['files']) is dict and set(policy['files'])==set(names),code)
+    files=policy['files'];changed={n for n in files if original.get(n)!=inventory.get(n)}
+    if not changed:return frozenset()
+    # An unchanged group grants no exception; retain the ordinary bank-only path.
+    d.require(policy['baselineOriginSha256']==fingerprint(bridge) and bridge['kind']==ONLINE_AFTER_BIT_KIND,code)
+    _workspace_bridge_shape(d,bridge,ONLINE_AFTER_BIT_KIND)
+    d.require(changed==set(files),code)
+    for side,values,producer in (('before',original,bridge['baselineProducer']),
+        ('after',inventory,_pending_workspace_producer(d))):
+        # The caller acquired each complete archive and verified its real Git tree.
+        raw=getattr(d,'_onlinePendingWorkspaceArchiveBytes',{}).get((producer['commit'],producer['sourceTree']))
+        d.require(type(raw) is bytes,code)
+        prefix='id-business-system-'+producer['commit']+'/'
+        with tarfile.open(fileobj=io.BytesIO(raw),mode='r:gz') as archive:
+            for name,pair in files.items():
+                d.require(type(pair) is dict and set(pair)=={'before','after'},code)
+                expected=pair[side]
+                d.require(type(expected) is dict and set(expected)=={'sha256','mode','bytes'}
+                    and _declaration_hash(expected['sha256']) and expected['mode']=='100644'
+                    and type(expected['bytes']) is int and 0<expected['bytes']<512*1024
+                    and values.get(name)=={k:expected[k] for k in ('sha256','mode')},code)
+                row=archive.getmember(prefix+name)
+                data=archive.extractfile(row).read(expected['bytes']+1)
+                d.require(row.isfile() and row.size==len(data)==expected['bytes'] and row.mode&0o111==0
+                    and hashlib.sha256(data).hexdigest()==expected['sha256'],code)
+    return frozenset(files)
+
+
+def _workspace_capacity_control_inventory(d,bridge,original,inventory):
+    return _workspace_fixed_mapping_inventory(d,bridge,original,inventory,_WORKSPACE_CAPACITY_CONTROL_POLICY,
+        'ONLINE_RECHARGE_FIXED_CAPACITY_CONTROL_MAPPING',('.github/workflows/production-release.yml',
+        'scripts/production-release/maintain-image-cache.py','scripts/production-release/maintain-image-cache.test.py',
+        'scripts/production-release/service-image-retention.py','scripts/production-release/service-image-retention.test.py'))
+
+
+def _workspace_release_rules_inventory(d,bridge,original,inventory):
+    return _workspace_fixed_mapping_inventory(d,bridge,original,inventory,_WORKSPACE_RELEASE_RULES_POLICY,
+        'ONLINE_RECHARGE_FIXED_RELEASE_RULES_MAPPING',('AGENTS.md','docs/CENTRAL_RELEASE_20261002.md'))
+
+
+def _restored_workspace_materials(d, bridge):
+    """Source-pinned, single failure / independent observation; no UUID issuer."""
+    witness = _RESTORED_B_WITNESS
+    d.require(type(witness) is dict and set(witness) == {'policy', 'observationInvocation',
+        'failedPreflight', 'failedBuildProof', 'failedNativeFailure'},
+        'ONLINE_RECHARGE_B_RESTORE_WITNESS_UNAVAILABLE')
+    policy = witness['policy']
+    raw = {n: witness[n].encode() for n in ('observationInvocation', 'failedPreflight',
+        'failedBuildProof', 'failedNativeFailure')}
+    d.require(all(type(witness[n]) is str and 0 < len(raw[n]) < 65536 for n in raw), _RESTORED_B_CODE)
+    observed = _restore_pure_validate_observation_material(bridge, raw['observationInvocation'], policy)
+    _restored_qualified_oom_history(d,observed)
+    failed = policy['failedProducer']
+    d.require(failed == _restore_events_FAILED_PRODUCER
+        and policy['failedCommandId'] == 'c03fdc8a-9f39-40e5-8181-0071b3bc8f89'
+        and policy['failedNativeEnd'] == _restore_events_FAILED_END
+        and policy['originalBootStartedAt'] == '2026-10-11T13:37:28.606112575Z', _RESTORED_B_CODE)
+    # Full original B/Q_A/Q_B cold validation and full failed-C source archive
+    # qualification remain mandatory. These are not diagnostic summary bools.
+    inventory = _restored_workspace_failed_source_inventory(d,bridge,failed)
+    d.require(all(inventory[name]['sha256'] == sha for name, sha in policy['failedSourceHelpers'].items()),
+        _RESTORED_B_CODE)
+    d.require(hashlib.sha256(raw['failedPreflight']).hexdigest() == policy['failedPreflightBytesSha256'],
+        _RESTORED_B_CODE)
+    _workspace_preflight_binding(d, raw['failedPreflight'], producer=failed, bridge=bridge, kind=ONLINE_AFTER_BIT_KIND)
+    proof = closed_recovery_json(d, raw['failedBuildProof'])
+    _workspace_build_shape(d, proof, producer=failed, bridge=bridge,
+        preflight_raw=raw['failedPreflight'], kind=ONLINE_AFTER_BIT_KIND)
+    d.require(fingerprint(proof) == policy['failedBuildProofSha256'] == _restore_events_FAILED_PROOF_SHA,
+        _RESTORED_B_CODE)
+    failure = closed_recovery_json(d, raw['failedNativeFailure'])
+    receipt = closed_recovery_json(d, failure.get('StandardOutputContent', '').encode())
+    d.require(failure.get('CommandId') == policy['failedCommandId']
+        and failure.get('InstanceId') == policy['instanceId'] and failure.get('Status') == 'Failed'
+        and type(failure.get('ResponseCode')) is int and failure['ResponseCode'] == 1
+        and failure.get('ExecutionStartDateTime') == _restore_events_FAILED_START
+        and failure.get('ExecutionEndDateTime') == _restore_events_FAILED_END
+        and hashlib.sha256(failure['StandardOutputContent'].encode()).hexdigest()
+            == 'a973effc90e3b0d6e68489bd2f0472f0309ee2feb78344ea07e2c28c6bc1fef6'
+        and receipt.get('status') == 'ONLINE_RECHARGE_FAILED_RESTORED'
+        and receipt.get('candidateCommit') == failed['commit'] and receipt.get('previousCommit') == bridge['baselineCommit']
+        and receipt.get('code') == 'API_ADMIN_WORKSPACE_GUARD_TIMEOUT' and receipt.get('step') == 'switch'
+        and receipt.get('rollback') == {'api': 'RESTORED', 'admin': 'RESTORED'}
+        and receipt.get('rollbackOk') is True and receipt.get('currentPointsToCandidate') is False
+        and all(receipt.get(n) is False for n in ('migrationAttempted', 'inverseMigrationPerformed', 'mediaVolumeDeleted'))
+        and receipt.get('migration') == {**bridge['migrationState'], 'performed': False}, _RESTORED_B_CODE)
+    return observed, proof
+
+
+def _restored_workspace_sidecar(d, bridge, value, services):
+    """New typed B path: historical API hash stays historical, full source match separate."""
+    observed, unused = _restored_workspace_materials(d, bridge)
+    fields = {'kind','version','baselineOriginSha256','observationSha256','actualServicesSha256',
+        'configurationProofSha256','historyApiIdentity','stopApiIdentity','publicationQualified',
+        'configurationMaterials','apiDeclarationQualification'}
+    d.require(type(value) is dict and set(value)==fields
+        and value['kind']=='ONLINE_RECHARGE_B_RESTORE_COMPLETE_MATERIAL'
+        and type(value['version']) is int and value['version']==2 and value['publicationQualified'] is False
+        and services==observed['currentServices'] and value['baselineOriginSha256']==fingerprint(bridge)
+        and value['observationSha256']==fingerprint(observed) and value['actualServicesSha256']==fingerprint(services)
+        and type(value['configurationMaterials']) is dict and set(value['configurationMaterials'])=={'admin'},
+        _RESTORED_B_CODE)
+    m=value['configurationMaterials']['admin']
+    d.require(type(m) is dict and set(m)=={'kind','version','service','actualServiceSha256',
+        'originalServiceSha256','actualConfigurationSha256','originalConfigurationSha256',
+        'reconstructedConfigurationSha256','changedIdentityPaths','hostnameMappingSha256',
+        'replaceMappingSha256','acquiredReplaceAnchorsSha256'} and m['kind']=='ONLINE_RECHARGE_B_RESTORE_COMPLETE_CONFIGURATION_MATERIAL'
+        and type(m['version']) is int and m['version']==1 and m['service']=='admin'
+        and all(_declaration_hash(v) for k,v in m.items() if k.endswith('Sha256'))
+        and m['actualServiceSha256']==fingerprint(services['admin'])
+        and m['originalServiceSha256']==fingerprint(bridge['services']['admin'])
+        and m['actualConfigurationSha256']==services['admin']['configurationSha256']
+        and m['reconstructedConfigurationSha256']==m['originalConfigurationSha256']==bridge['services']['admin']['configurationSha256']
+        and m['changedIdentityPaths']==['Config.Hostname','Config.Labels.com.docker.compose.replace']
+        and m['hostnameMappingSha256']==fingerprint({'actual':services['admin']['containerId'][:12],
+            'original':bridge['services']['admin']['containerId'][:12]}),_RESTORED_B_CODE)
+    proof=value['apiDeclarationQualification'];caps=_restored_qualified_capabilities(d)
+    _restored_qualified_proof(d,caps,proof,bridge,services,m)
+    d.require(proof['purpose']=='INDEPENDENT_PREFLIGHT'
+        and value['configurationProofSha256']==fingerprint({'admin':m,'api':proof})
+        and value['historyApiIdentity']=={**{n:bridge['services']['api'][n] for n in
+            ('containerId','image','startedAtSha256')},'startedAt':observed['originalApiStartedAt']}
+        and value['stopApiIdentity']=={**{n:services['api'][n] for n in
+            ('containerId','image','startedAtSha256')},'startedAt':observed['sourceApiStartedAt']},_RESTORED_B_CODE)
+    return value
+
+
+def _restored_workspace_native_before(d, previous, bridge):
+    """Original complete qualified reference comparison; only Admin maps old full hash."""
+    observed, failed_proof = _restored_workspace_materials(d, bridge)
+    failure_anchor=_restored_workspace_native_failure_anchor(d)
+    _workspace_after_bit_materials(d, previous, bridge=bridge)
+    reader = legacy(d);services=observed['currentServices']
+    d.require((d.BASE/'current').resolve()==previous and str(previous)==bridge['baselineRelease']
+        and snapshot(d,previous)==services and configuration_hashes(previous)==bridge['configurationAfter'],
+        'ONLINE_RECHARGE_BASELINE_MOVED')
+    old_record=closed_recovery_json(d,_declaration_source_bytes(previous/reader.STATE_FILE))
+    meta=closed_recovery_json_list(d,d.run('docker','inspect',services['admin']['containerId'],timeout=5).encode())
+    d.require(len(meta)==1,_RESTORED_B_CODE)
+    admin=_restore_cfg_complete_configuration_material('admin',meta[0],services['admin'],bridge['services']['admin'],
+        original_before_container_id=old_record['before']['admin']['containerId'],
+        acquired_actual_replace_anchors=[bridge['services']['admin']['containerId']])
+    seed=getattr(d,'_restoredWorkspacePreflight',None)
+    first=None if seed is None else seed['restoration']['apiDeclarationQualification']
+    proof=_restored_qualified_measure(d,previous,bridge,services,admin,first=first)
+    if seed is None:
+        sidecar={'kind':'ONLINE_RECHARGE_B_RESTORE_COMPLETE_MATERIAL','version':2,
+            'baselineOriginSha256':fingerprint(bridge),'observationSha256':fingerprint(observed),
+            'actualServicesSha256':fingerprint(services),'configurationProofSha256':fingerprint({'admin':admin,'api':proof}),
+            'historyApiIdentity':{**{n:bridge['services']['api'][n] for n in ('containerId','image','startedAtSha256')},
+                'startedAt':observed['originalApiStartedAt']},
+            'stopApiIdentity':{**{n:services['api'][n] for n in ('containerId','image','startedAtSha256')},
+                'startedAt':observed['sourceApiStartedAt']},'publicationQualified':False,
+            'configurationMaterials':{'admin':admin},'apiDeclarationQualification':proof}
+    else:
+        d.require(seed['services']==services and seed['baseline']==bridge
+            and seed['restoration']['configurationMaterials']['admin']==admin,_RESTORED_B_CODE)
+        sidecar=seed['restoration'];d._restoredWorkspaceDeploymentQualification=proof
+    _restored_workspace_sidecar(d,bridge,sidecar,services)
+    d.require(snapshot(d,previous)==services and (d.BASE/'current').resolve()==previous
+        and _restored_workspace_native_failure_anchor(d)==failure_anchor,_RESTORED_B_CODE)
+    return sidecar,services
+
+
+def closed_recovery_json_list(d, raw):
+    # Dedicated native inspect list parser; original object parser is unchanged.
+    def pairs(items):
+        result={}
+        for key,value in items:
+            d.require(key not in result,_RESTORED_B_CODE);result[key]=value
+        return result
+    value=json.loads(raw,object_pairs_hook=pairs,parse_constant=lambda unused:d.require(False,_RESTORED_B_CODE))
+    d.require(type(value) is list and all(type(row) is dict for row in value),_RESTORED_B_CODE)
+    return value
+
+
+def _restored_workspace_begin(d, expected, producer):
+    previous = (d.BASE/'current').resolve()
+    reader = _pending_workspace_reader(d)
+    kind, cold = _workspace_baseline_reader(d, reader, previous, live=False)
+    d.require(kind == ONLINE_AFTER_BIT_KIND, _RESTORED_B_CODE)
+    bridge = cold(d, previous, expected_commit=expected)
+    online_after_bit_bridge_shape(d, bridge)
+    _pending_workspace_profile(d, bridge, producer)
+    d._onlinePendingWorkspaceProducer = producer
+    sidecar, services = _restored_workspace_native_before(d, previous, bridge)
+    d._onlinePendingWorkspaceSession = {'bridge': bridge, 'producer': producer,
+        'restoration': sidecar, 'beforeServices': services,
+        **({'deploymentQualification':d._restoredWorkspaceDeploymentQualification}
+            if getattr(d,'_restoredWorkspacePreflight',None) is not None else {})}
+    return previous, bridge
+
+
+def _restored_workspace_session(d, saved, expected, producer):
+    d.require(type(saved) is dict and set(saved) in ({'bridge','producer','restoration','beforeServices'},
+        {'bridge','producer','restoration','beforeServices','deploymentQualification'}),
+        _RESTORED_B_CODE)
+    reader = _pending_workspace_reader(d)
+    bridge = reader.online_after_bit_cold(d, Path(saved['bridge']['baselineRelease']),
+        expected_commit=saved['bridge']['baselineCommit'])
+    d.require(bridge == saved['bridge'] and producer == saved['producer']
+        and (expected is None or expected == bridge['baselineCommit']), _RESTORED_B_CODE)
+    _pending_workspace_profile(d, bridge, producer)
+    _restored_workspace_sidecar(d, bridge, saved['restoration'], saved['beforeServices'])
+    if 'deploymentQualification' in saved:
+        caps=_restored_qualified_capabilities(d)
+        _restored_qualified_pair(d,caps,saved['restoration']['apiDeclarationQualification'],
+            saved['deploymentQualification'],bridge,saved['beforeServices'],saved['restoration']['configurationMaterials']['admin'])
+    return bridge, producer
+
+
+def _restored_workspace_baseline(d, expected):
+    previous, bridge = _restored_workspace_begin(d, expected, _pending_workspace_producer(d))
+    reader = legacy(d)
+    saved = d._onlinePendingWorkspaceSession
+    before = saved['beforeServices']
+    manifest = closed_recovery_json(d, _declaration_source_bytes(previous/'release-manifest.json'))
+    record = closed_recovery_json(d, _declaration_source_bytes(previous/reader.STATE_FILE))
+    proof = reader.validate_proof(d, closed_recovery_json(d, _declaration_source_bytes(previous/reader.PROOF_FILE)),
+        expected, bridge['baselineProducer']['sourceTree'])
+    reader.verify_running(d, previous, proof)
+    volume = workspace_guard(d, previous, record.get('workspaceVolumeAfter'))
+    reader.workspace_health(d, previous)
+    protection = reader.workspace_sqlite_receipt(d, previous, proof, record, manifest)
+    if protection is None:
+        reader.workspace_backup_receipt(d, previous, record)
+    guards = jobs_idle(d, previous, migrated=True)
+    recovery = release_recovery(d, previous)
+    verify_permission_seed(d, recovery['source']); require_fresh_resources(d, recovery['source'])
+    evidence = {**({'migrationOrigin': record['baselineEvidence']['migrationOrigin']}
+        if record['baselineEvidence'].get('migrationOrigin') is not None else {}),
+        'manifestSha256': bridge['manifestBytesSha256'], 'environmentSha256': bridge['environmentFileSha256'],
+        'apiSource': {'imageId': bridge['services']['api']['image'], 'revision': expected, 'kind': 'API_WORKSPACE_BUILD_PROVEN'},
+        'guards': guards, 'workspaceIdle': True, 'workspaceVolume': volume,
+        'workspaceOriginFiles': workspace_files(d, previous),
+        'workspaceBuildProofSha256': bridge['buildProofCanonicalSha256'], 'migrationRecovery': bridge['migrationRecovery'],
+        'onlineAfterBitOrigin': bridge, _RESTORED_B_FIELD: saved['restoration'], 'freeBytes': shutil.disk_usage(d.BASE).free}
+    workspace_origin(d, previous, previous, evidence, before)
+    d.require(evidence['freeBytes'] > 6*1024**3 and snapshot(d, previous) == before
+        and (d.BASE/'current').resolve() == previous, 'ONLINE_RECHARGE_BASELINE_MOVED')
+    return previous, manifest, before, evidence
+
+
+def _restored_workspace_selected(d, expected):
+    if expected != '31d2c6885a45817cd40d23fce8d6145bc9f18af2' or _RESTORED_B_WITNESS is None:
+        return False
+    reader = _pending_workspace_reader(d)
+    directory = (d.BASE/'current').resolve()
+    kind, cold = _workspace_baseline_reader(d, reader, directory, live=False)
+    if kind != ONLINE_AFTER_BIT_KIND:
+        return False
+    bridge = cold(d, directory, expected_commit=expected)
+    # Unrestored B keeps its original live/identity path byte-for-byte.
+    return snapshot(d, directory) != bridge['services']
+
+
+def _restored_workspace_preflight_binding(d, raw, producer, bridge):
+    value = _restored_workspace_f_value(d, raw)
+    _workspace_bridge_shape(d, bridge, ONLINE_AFTER_BIT_KIND)
+    d.require(type(value) is dict and value.get('baseline') == bridge, _RESTORED_B_CODE)
+    d._onlinePendingWorkspaceProducer=producer
+    restore = _restored_workspace_sidecar(d, bridge, value.get('restoration'), value.get('services'))
+    _restore_pure_restored_f_shape(value, bridge, producer, restore)
+    _pending_workspace_pref_fields(d, value['ordinaryPreflight'])
+    _pending_workspace_validate_receipt(d, value['ordinaryPreflight'], 'preflight', producer['commit'], bridge['baselineCommit'])
+    d.require(value['ordinaryPreflight'].get(_RESTORED_B_FIELD) == restore
+        and type(value['commandId']) is str and re.fullmatch('[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}', value['commandId']),
+        _RESTORED_B_CODE)
+    d._restoredWorkspacePreflight=value
+    d._restoredWorkspacePreflightRaw=raw
+    return {'kind': 'ONLINE_RECHARGE_AFTER_BIT_RESTORED_PREFLIGHT_SEAL', 'version': 3,
+        'bytesSha256': hashlib.sha256(raw).hexdigest(), 'commandId': value['commandId'],
+        'baselineSha256': fingerprint(bridge), 'producer': producer, 'restorationSha256': fingerprint(restore)}
+
+
+def _restored_workspace_build_shape(d, proof, producer, bridge, raw):
+    _restored_workspace_preflight_binding(d, raw, producer, bridge)
+    f = _restored_workspace_f_value(d, raw)
+    fields = {'kind','version','scope','commit','sourceTree','baselineCommit','migration','images',
+        'engineSourceSha256','composeSourceSha256','baselineOriginSha256','preflightBytesSha256',
+        'restorationSha256','beforeServicesSha256'}
+    d.require(type(proof) is dict and set(proof) == fields and type(proof['version']) is int and proof['version'] == 3
+        and proof['kind'] == 'ONLINE_RECHARGE_AFTER_BIT_BUILD_PROOF' and proof['scope'] == SCOPE
+        and proof['commit'] == producer['commit'] and proof['sourceTree'] == producer['sourceTree']
+        and proof['baselineCommit'] == bridge['baselineCommit'] and proof['migration'] == MIGRATION_IDENTITY
+        and proof['baselineOriginSha256'] == fingerprint(bridge)
+        and proof['preflightBytesSha256'] == hashlib.sha256(raw).hexdigest()
+        and proof['restorationSha256'] == fingerprint(f['restoration'])
+        and proof['beforeServicesSha256'] == fingerprint(f['services'])
+        and _declaration_hash(proof['engineSourceSha256']) and _declaration_hash(proof['composeSourceSha256'])
+        and type(proof['images']) is dict and set(proof['images']) == set(IMAGE_SERVICES), _RESTORED_B_CODE)
+    for name, row in proof['images'].items():
+        d.require(type(row) is dict and set(row) == {'reference','imageId','fileCount','sha256'}
+            and type(row['reference']) is str and re.fullmatch(
+                '[0-9]{12}\\.dkr\\.ecr\\.ap-northeast-1\\.amazonaws\\.com/id-business-v2-release:'
+                +producer['commit']+'-'+producer['workflowRunId']+'-'+producer['workflowRunAttempt']+'-'+name, row['reference'])
+            and type(row['imageId']) is str and re.fullmatch('sha256:[a-f0-9]{64}', row['imageId'])
+            and type(row['fileCount']) is int and 0 < row['fileCount'] < 30000 and _declaration_hash(row['sha256']),
+            _RESTORED_B_CODE)
+    return proof
+
+
+def _restored_workspace_readback_origin(d, directory, expected, producer, recorded):
+    """Explicit recovered-B origin: original API reader remains unmodified."""
+    code = 'ONLINE_RECHARGE_AFTER_BIT_READBACK_CHANGED'
+    reader = _pending_workspace_reader(d)
+    d.require(directory.parent == d.BASE/'releases' and directory.resolve() == directory and directory.is_dir()
+        and not directory.is_symlink() and directory.stat().st_uid == os.geteuid()
+        and stat.S_IMODE(directory.stat().st_mode)&0o077 == 0
+        and (d.BASE/'current').resolve() == directory and expected == producer['commit'], code)
+    files = (STATE_FILE, PROOF_FILE, 'release-manifest.json')
+    raw = {n: _declaration_source_bytes(directory/n) for n in files}
+    record, proof, manifest = (closed_recovery_json(d, raw[n]) for n in files)
+    bridge = reader.online_after_bit_cold(d, Path(manifest.get('previousRelease', '')),
+        expected_commit=manifest.get('previousCommit'))
+    d.require(bridge == recorded, code)
+    _pending_workspace_profile(d, bridge, producer)
+    fraw = online_after_bit_preflight_bytes(d, producer=producer, expected_sha256=proof.get('preflightBytesSha256'))
+    _restored_workspace_build_shape(d, proof, producer, bridge, fraw)
+    f = _restored_workspace_f_value(d, fraw)
+    restore = f['restoration']; before = f['services']
+    states = snapshot(d, directory, include_engine=True)
+    d.require(record.get('baselineEvidence', {}).get('onlineAfterBitOrigin') == bridge
+        and record['baselineEvidence'].get(_RESTORED_B_FIELD) == restore and record.get('before') == before
+        and record.get('buildProofSha256') == fingerprint(proof)
+        and record.get('configurationBefore') == bridge['configurationAfter']
+        and record.get('configurationAfter') == configuration_hashes(directory)
+        and manifest.get('commit') == expected and manifest.get('sourceTree') == producer['sourceTree']
+        and manifest.get('previousManifestSha256') == bridge['manifestBytesSha256']
+        and manifest.get('migrationPerformed') is False and record.get('migration') == {**bridge['migrationState'], 'performed': False}
+        and set(states) == set((*PRESERVED,*UPDATED)) and record.get('after') == states
+        and all(states[n] == before[n] == bridge['services'][n] for n in PRESERVED)
+        and all(states[n]['image'] == proof['images'][n]['imageId']
+            and states[n]['reference'] == proof['images'][n]['reference'] for n in UPDATED), code)
+    d.require({n: _declaration_source_bytes(directory/n) for n in files} == raw
+        and (d.BASE/'current').resolve() == directory and snapshot(d, directory, include_engine=True) == states, code)
+    deployment=record.get('afterBitAuditProtection',{}).get('basis',{}).get('deploymentQualification')
+    caps=_restored_qualified_capabilities(d)
+    _restored_qualified_pair(d,caps,restore['apiDeclarationQualification'],deployment,bridge,before,
+        restore['configurationMaterials']['admin'])
+    d._onlinePendingWorkspaceSession = {'bridge':bridge,'producer':producer,
+        'restoration':restore,'beforeServices':before,'deploymentQualification':deployment}
+    return bridge
+
+
+def _restored_workspace_audit_binding(d, bridge, proof):
+    actual, producer = _pending_workspace_session(d)
+    saved = d._onlinePendingWorkspaceSession
+    d.require(actual == bridge and 'restoration' in saved, _RESTORED_B_CODE)
+    raw = online_after_bit_preflight_bytes(d, producer=producer, expected_sha256=proof.get('preflightBytesSha256'))
+    _restored_workspace_build_shape(d, proof, producer, bridge, raw)
+    d.require(closed_recovery_json(d, raw)['restoration'] == saved['restoration'], _RESTORED_B_CODE)
+    d.require('deploymentQualification' in saved,_RESTORED_B_QUALIFIED_CODE)
+    caps=_restored_qualified_capabilities(d)
+    _restored_qualified_pair(d,caps,saved['restoration']['apiDeclarationQualification'],saved['deploymentQualification'],
+        bridge,saved['beforeServices'],saved['restoration']['configurationMaterials']['admin'])
+    return {'deploymentQualification':saved['deploymentQualification'],'baselineOriginSha256': fingerprint(bridge), 'baselineProducer': bridge['baselineProducer'],
+        'producer': producer, 'preflightBytesSha256': hashlib.sha256(raw).hexdigest(), 'buildProofSha256': fingerprint(proof),
+        'restorationSha256': fingerprint(saved['restoration']), 'sourceHelpers': {name: hashlib.sha256(
+            _declaration_source_bytes(Path(__file__).with_name(name), limit=512*1024)).hexdigest()
+            for name in ('api-admin-scope.py', 'online-recharge-scope.py')}}
+
+
+def _restored_workspace_unused_audit_barrier(d, directory, bridge, proof):
+    saved = d._onlinePendingWorkspaceSession
+    restore = _restored_workspace_sidecar(d, bridge, saved['restoration'], saved['beforeServices'])
+    d.require(str(directory) == bridge['baselineRelease'], _RESTORED_B_CODE)
+    reader = legacy(d)
+    history, source = restore['historyApiIdentity'], restore['stopApiIdentity']
+    d.require(reader.workspace_api_identity(d, directory, expected=source, timeout=5) == source, _RESTORED_B_CODE)
+    plan = _online_after_bit_audit_queries(d, reader, directory, history)
+    d.require(reader.workspace_audit_protection(d, directory) == plan['expectedTriggersSha256'],
+        'API_ADMIN_WORKSPACE_AUDIT_HISTORY_UNPROVEN')
+    basis = _restored_workspace_audit_binding(d, bridge, proof)
+    def api_check(deadline):
+        remaining = min(5, deadline-time.monotonic())
+        d.require(remaining > 0, 'API_ADMIN_WORKSPACE_GUARD_TIMEOUT')
+        d.require(reader.workspace_api_identity(d, directory, expected=source, timeout=remaining) == source, _RESTORED_B_CODE)
+    return _restored_workspace_audit_transport(d, directory, bridge, reader, history, source, plan, basis,
+        restore=restore, first_api_check=api_check)
+
+
+def _restored_workspace_audit_receipt(d, directory, bridge, proof, manifest, record):
+    code = 'ONLINE_RECHARGE_AFTER_BIT_AUDIT_RECEIPT_CHANGED'
+    saved = d._onlinePendingWorkspaceSession
+    restore = saved['restoration']; value = record.get('afterBitAuditProtection')
+    d.require(type(value) is dict and set(value) == {'version','kind','basis','historyApiIdentity','sourceApiIdentity',
+        'restorationSha256','mysqlIdentitySha256','initialQuerySha256','querySha256','historyQuerySha256',
+        'triggerDefinitionsSha256','connectionIdSha256','before','after','oldApiStop','sqliteProtectionSha256'}
+        and type(value['version']) is int and value['version'] == 2
+        and value['kind'] == 'ONLINE_RECHARGE_AFTER_BIT_RESTORED_AUDIT_PROTECTION'
+        and value['historyApiIdentity'] == restore['historyApiIdentity']
+        and value['sourceApiIdentity'] == restore['stopApiIdentity']
+        and value['restorationSha256'] == fingerprint(restore)
+        and value['basis'] == _restored_workspace_audit_binding(d, bridge, proof), code)
+    before = value['before']; reader = legacy(d); history = restore['historyApiIdentity']
+    d.require(type(before) is dict and set(before) == {'historicalRegistrationAuditCount','historicalRegistrationPrefixCount',
+        'historyCutoff','clockBeforeCutoff','registrationMutationCount','onlineAuditCount','tables','triggerDefinitionsSha256'}
+        and type(before['historicalRegistrationAuditCount']) is int and 0 <= before['historicalRegistrationAuditCount'] < 2**63
+        and type(before['historicalRegistrationPrefixCount']) is int
+        and before['historicalRegistrationPrefixCount'] == before['historicalRegistrationAuditCount']
+        and all(type(before[n]) is int and before[n] == 0 for n in ('clockBeforeCutoff','registrationMutationCount','onlineAuditCount'))
+        and before['tables'] == {n:0 for n in TABLES} and all(type(v) is int for v in before['tables'].values())
+        and fingerprint(value['after']) == fingerprint(before), code)
+    initial = _online_after_bit_audit_queries(d, reader, Path(bridge['baselineRelease']), history)
+    plan = _online_after_bit_audit_queries(d, reader, Path(bridge['baselineRelease']), history, history_cutoff=before['historyCutoff'])
+    from datetime import datetime, timedelta
+    try:
+        bounded = datetime.fromisoformat(before['historyCutoff']) < datetime.strptime(manifest.get('deployedAt',''), '%Y-%m-%dT%H:%M:%SZ') + timedelta(seconds=1)
+    except ValueError:
+        bounded = False
+    source3 = {n:restore['stopApiIdentity'][n] for n in ('containerId','image','startedAtSha256')}
+    d.require(bounded and before['triggerDefinitionsSha256'] == plan['expectedTriggersSha256']
+        and value['mysqlIdentitySha256'] == fingerprint(bridge['services']['mysql'])
+        and value['initialQuerySha256'] == hashlib.sha256(initial['frameQuery'].encode()).hexdigest()
+        and value['querySha256'] == hashlib.sha256(plan['frameQuery'].encode()).hexdigest()
+        and value['historyQuerySha256'] == hashlib.sha256(plan['historyQuery'].encode()).hexdigest()
+        and value['triggerDefinitionsSha256'] == plan['expectedTriggersSha256'] and _declaration_hash(value['connectionIdSha256'])
+        and value['oldApiStop'] == {'identity':source3, 'running':False, 'pid':0}
+        and type(value['oldApiStop']['pid']) is int and value['sqliteProtectionSha256'] == record.get('sqliteProtectionSha256')
+        and manifest.get('onlineRechargePublication',{}).get('afterBitAuditProtectionSha256') == fingerprint(value), code)
+    sqlite = closed_recovery_json(d, _declaration_source_bytes(directory/reader.WORKSPACE_SQLITE_RECEIPT))
+    d.require(fingerprint(sqlite) == value['sqliteProtectionSha256'] and sqlite.get('sourceApiIdentity') == source3, code)
+    d.require(reader.workspace_audit_protection(d, directory) == plan['expectedTriggersSha256'], code)
+    reader.online_idle(d,directory); reader.workspace_idle(d,directory,legacy=False)
+    barrier = _restored_workspace_audit_transport(d,directory,bridge,reader,history,restore['stopApiIdentity'],plan,
+        value['basis'],restore=restore,history_record=before)
+    with barrier:
+        barrier.check()
+    reader.online_idle(d,directory); reader.workspace_idle(d,directory,legacy=False)
+    return {'afterBitAuditProtectionSha256':fingerprint(value),
+        'preservedRegistrationAuditCount':before['historicalRegistrationAuditCount'], 'auditHistoryCutoff':before['historyCutoff'],
+        _RESTORED_B_FIELD:restore}
+
+def _restored_workspace_audit_transport(d, directory, bridge, reader, history, identity, plan, basis, *, restore, history_record=None, first_api_check=None):
+    """Private verified B publication or sealed historical-prefix readback fence."""
+    code = 'ONLINE_RECHARGE_AFTER_BIT_AUDIT_GUARD_LOST'
+    class Barrier(reader.WorkspaceUnusedAuditBarrier):
+        def __init__(self):
+            super().__init__(d, directory, online=True)
+            d.require(self.query == plan['originalOnlineQuery'], 'ONLINE_RECHARGE_AFTER_BIT_AUDIT_QUERY_CHANGED')
+            self.source_api_identity = json.loads(json.dumps(identity))
+            self.plan = plan
+            self.query = plan['frameQuery'] if history_record is None else plan['historyQuery']
+            self.initial_query = self.query
+            self.before, self.after, self.receipt = None, None, None
+
+        def check(self, value=None):
+            if value is None:
+                self.pipe.send(self.query + ';\n')
+                value = self.pipe.read(limit=4096)
+            fields = {'connectionId', 'historicalRegistrationPrefixCount', 'historyCutoff', 'clockBeforeCutoff', 'triggers'}
+            if history_record is None:
+                fields |= {'historicalRegistrationAuditCount', 'registrationMutationCount', 'onlineAuditCount', 'tables'}
+            d.require(type(value) is dict and set(value) == fields
+                and type(self.connection_id) is int and self.connection_id > 0
+                and type(value['connectionId']) is int and value['connectionId'] == self.connection_id
+                and type(value['historicalRegistrationPrefixCount']) is int and 0 <= value['historicalRegistrationPrefixCount'] < 2**63
+                and type(value['clockBeforeCutoff']) is int and value['clockBeforeCutoff'] == 0
+                and self.pipe.process.poll() is None and time.monotonic() < self.pipe.deadline, code)
+            bound = _online_after_bit_audit_queries(d, reader, directory, history, history_cutoff=value['historyCutoff'])
+            if history_record is None:
+                d.require(type(value['historicalRegistrationAuditCount']) is int
+                    and value['historicalRegistrationAuditCount'] == value['historicalRegistrationPrefixCount']
+                    and type(value['registrationMutationCount']) is int and value['registrationMutationCount'] == 0
+                    and type(value['onlineAuditCount']) is int and value['onlineAuditCount'] == 0
+                    and type(value['tables']) is dict and value['tables'] == {n: 0 for n in TABLES}
+                    and all(type(v) is int for v in value['tables'].values()), code)
+            else:
+                d.require(value['historyCutoff'] == history_record['historyCutoff']
+                    and value['historicalRegistrationPrefixCount'] == history_record['historicalRegistrationAuditCount'], code)
+            rows = value['triggers']
+            d.require(type(rows) is list and len(rows) == 2 and all(type(row) is dict
+                and set(row) == {'event', 'timing', 'statement'} and row['timing'] == 'BEFORE'
+                and type(row['statement']) is str for row in rows)
+                and {row['event']: ' '.join(row['statement'].split()).rstrip(';') for row in rows} == self.plan['expectedTriggers'], code)
+            summary = {n: value[n] for n in fields - {'connectionId', 'triggers'}}
+            summary['triggerDefinitionsSha256'] = self.plan['expectedTriggersSha256']
+            d.require(self.before is None or fingerprint(summary) == fingerprint(self.before), code)
+            _online_after_bit_mysql_check(d, directory, bridge['services']['mysql'], self.pipe.deadline)
+            if self.before is None and first_api_check is not None:
+                first_api_check(self.pipe.deadline)
+            d.require(self.pipe.process.poll() is None and time.monotonic() < self.pipe.deadline, code)
+            if self.before is None:
+                self.before = json.loads(json.dumps(summary))
+                self.plan = bound
+                if history_record is None:
+                    self.query = bound['frameQuery']
+            self.after = summary
+
+        def before_stop(self):
+            d.require(first_api_check is not None and history_record is None, code)
+            first_api_check(self.pipe.deadline)
+            super().before_stop()
+            # API identity 30s + stop 45s + inspect 15s, two SQL/MySQL checks
+            # 44s, final inspect 5s and transport close 9s, with bounded slack.
+            d.require(time.monotonic() + 170 < self.pipe.deadline, 'API_ADMIN_WORKSPACE_GUARD_TIMEOUT')
+
+        def confirm_stopped(self, sqlite_gate):
+            remaining = min(5, self.pipe.deadline - time.monotonic())
+            d.require(remaining > 0 and history_record is None and self.before is not None
+                and fingerprint(self.before) == fingerprint(self.after) and self.pipe.process.poll() is None, code)
+            metadata = json.loads(d.run('docker', 'inspect', identity['containerId'], timeout=remaining))[0]
+            state = metadata.get('State', {})
+            d.require(metadata.get('Id') == identity['containerId'] and metadata.get('Image') == identity['image']
+                and type(state.get('StartedAt')) is str and hashlib.sha256(state['StartedAt'].encode()).hexdigest() == identity['startedAtSha256']
+                and state.get('Running') is False and type(state.get('Pid')) is int and state['Pid'] == 0
+                and self.pipe.process.poll() is None and time.monotonic() < self.pipe.deadline
+                and type(sqlite_gate.record) is dict and sqlite_gate.record.get('sourceApiIdentity') == {
+                    n: identity[n] for n in ('containerId', 'image', 'startedAtSha256')}, code)
+            # Seal one final unchanged frame after the actual old PID reached zero.
+            self.check()
+            d.require(self.pipe.process.poll() is None and time.monotonic() < self.pipe.deadline, code)
+            self.receipt = {'version': 2, 'kind': 'ONLINE_RECHARGE_AFTER_BIT_RESTORED_AUDIT_PROTECTION', 'basis': basis,
+                'historyApiIdentity': history, 'restorationSha256': fingerprint(restore),
+                'sourceApiIdentity': identity, 'mysqlIdentitySha256': fingerprint(bridge['services']['mysql']),
+                'initialQuerySha256': hashlib.sha256(self.initial_query.encode()).hexdigest(),
+                'querySha256': hashlib.sha256(self.query.encode()).hexdigest(),
+                'historyQuerySha256': hashlib.sha256(self.plan['historyQuery'].encode()).hexdigest(),
+                'triggerDefinitionsSha256': self.plan['expectedTriggersSha256'],
+                'connectionIdSha256': fingerprint(self.connection_id), 'before': self.before, 'after': self.after,
+                'oldApiStop': {'identity': {n: identity[n] for n in ('containerId', 'image', 'startedAtSha256')}, 'running': False, 'pid': 0},
+                'sqliteProtectionSha256': fingerprint(sqlite_gate.record)}
+            return self.receipt
+    return Barrier()
