@@ -257,6 +257,11 @@ class RecoveryTests(unittest.TestCase):
                 path.write_bytes(archive.extractfile(member).read())
                 path.chmod(0o755 if member.mode & 0o111 else 0o644)
         cls.policy = scope.recovery_policy(controller())
+        # Recovery verifies the sealed three-table patch, not the mutable main
+        # helper (which can contain independently authorised later repairs).
+        cls.grant_before = (cls.prepared / scope.GRANT_SOURCE).read_bytes()
+        cls.grant_after = cls.grant_before.replace(b"  'ip_whitelists',\n",
+            b"  'ip_whitelists',\n  'online_recharge_bills',\n  'online_recharge_cards',\n  'online_recharge_proxies',\n", 1)
 
     @classmethod
     def tearDownClass(cls):
@@ -370,12 +375,14 @@ class RecoveryTests(unittest.TestCase):
             images.assert_not_called()
 
     def test_only_exact_three_delete_lines_and_control_changes_are_allowed(self):
+        self.assertEqual(hashlib.sha256(self.grant_before).hexdigest(), self.policy['sharedGrant']['beforeSha256'])
+        self.assertEqual(hashlib.sha256(self.grant_after).hexdigest(), self.policy['sharedGrant']['afterSha256'])
         with self.fixture() as (d, previous, source, *_):
             target = previous.parent / 'new-candidate'
             shutil.copytree(self.prepared, target)
             for name in self.policy['candidateAllowedFiles']:
                 path = target / name; path.parent.mkdir(parents=True, exist_ok=True)
-                path.write_bytes((ROOT / name).read_bytes())
+                path.write_bytes(self.grant_after if name == scope.GRANT_SOURCE else (ROOT / name).read_bytes())
                 path.chmod(0o755 if (ROOT / name).stat().st_mode & 0o111 else 0o644)
             context = {'policy': self.policy, 'source': source}
             scope.candidate_recovery_source(d, target, context)
@@ -383,11 +390,41 @@ class RecoveryTests(unittest.TestCase):
             helper.write_bytes(helper.read_bytes().replace(b"  'online_recharge_bills',\n", b"  'online_recharge_bills',\n  'online_recharge_tasks',\n"))
             with self.assertRaisesRegex(RuntimeError, 'SHARED_GATE_SOURCE_CHANGED'):
                 scope.candidate_recovery_source(d, target, context)
-            helper.write_bytes((ROOT / scope.GRANT_SOURCE).read_bytes())
+            helper.write_bytes(self.grant_after)
             path = target / 'apps/admin/src/v2/features/online-recharge/unapproved.ts'
             path.write_text('unapproved UI change')
             with self.assertRaisesRegex(RuntimeError, 'BUILD_SOURCE_CHANGED'):
                 scope.candidate_recovery_source(d, target, context)
+
+    def test_historical_grant_rejects_bank_and_other_unsealed_source_changes(self):
+        anchor = b'export const V2_RUNTIME_DELETE_TABLES = Object.freeze([\n'
+        cases = {
+            'later-bank-repair': self.grant_after.replace(anchor,
+                anchor + b"  'id_business_v2_bank_recharge_cards',\n", 1),
+            'fourth-online-table': self.grant_after.replace(b"  'online_recharge_bills',\n",
+                b"  'online_recharge_bills',\n  'online_recharge_tasks',\n", 1),
+            'duplicate-table': self.grant_after.replace(b"  'online_recharge_bills',\n",
+                b"  'online_recharge_bills',\n  'online_recharge_bills',\n", 1),
+            'reordered-tables': self.grant_after.replace(
+                b"  'online_recharge_bills',\n  'online_recharge_cards',\n",
+                b"  'online_recharge_cards',\n  'online_recharge_bills',\n", 1),
+            'surrounding-source': self.grant_after + b'// unsealed change\n',
+        }
+        with self.fixture() as (d, previous, source, *_):
+            target = previous.parent / 'new-candidate'; target.mkdir()
+            helper = target / scope.GRANT_SOURCE; helper.parent.mkdir(parents=True)
+            helper.write_bytes(self.grant_after)
+            scope.grant_source_change(d, source, target, self.policy)
+            for case, content in cases.items():
+                with self.subTest(case=case):
+                    self.assertNotEqual(content, self.grant_after)
+                    helper.write_bytes(content)
+                    with self.assertRaisesRegex(RuntimeError, 'SHARED_GATE_SOURCE_CHANGED'):
+                        scope.grant_source_change(d, source, target, self.policy)
+            helper.write_bytes(self.grant_after)
+            (source / scope.GRANT_SOURCE).write_bytes(self.grant_before + b'// changed predecessor\n')
+            with self.assertRaisesRegex(RuntimeError, 'SHARED_GATE_SOURCE_CHANGED'):
+                scope.grant_source_change(d, source, target, self.policy)
 
     def test_current_seven_services_and_complete_predecessor_are_verified_through_projection(self):
         with self.fixture() as (d, previous, source, *_):
