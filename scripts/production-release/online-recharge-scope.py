@@ -3193,6 +3193,290 @@ def online_after_bit_bridge_shape(d, value):
     return _workspace_bridge_shape(d, value, ONLINE_AFTER_BIT_KIND)
 
 
+def _online_after_bit_audit_queries(d, reader, directory, api_identity, *, history_cutoff=None):
+    """Pure fixed SQL generation; the caller must bind this original API to real B."""
+    code = 'ONLINE_RECHARGE_AFTER_BIT_AUDIT_QUERY_CHANGED'
+    anchor = 'CONVERT(0xe887aae58aa8e6b3a8e5868c USING utf8mb4)'
+    original = ("SELECT JSON_OBJECT('connectionId',CONNECTION_ID(),'auditCount',"
+        "CAST(COALESCE(SUM(module=" + anchor + "),0) AS UNSIGNED),"
+        "'onlineAuditCount',CAST(COALESCE(SUM(module='online_recharge'),0) AS UNSIGNED),'tables',JSON_OBJECT("
+        + ','.join("'" + name + "',(SELECT COUNT(*) FROM `" + name + "`)" for name in TABLES)
+        + ")) FROM audit_logs")
+    d.require(getattr(reader, 'ONLINE_TABLES', None) == TABLES
+              and getattr(reader, 'ONLINE_AUDIT_QUERY', None) == original
+              and original.count(anchor) == 1, code)
+    d.require(type(api_identity) is dict and set(api_identity) == {
+        'containerId', 'image', 'startedAtSha256', 'startedAt'}
+        and type(api_identity['startedAt']) is str and re.fullmatch(
+            r'20[0-9]{2}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(?:\.[0-9]{1,9})?Z', api_identity['startedAt'])
+        and hashlib.sha256(api_identity['startedAt'].encode()).hexdigest() == api_identity['startedAtSha256'], code)
+    # Exact original WorkspaceAuditBarrier Date/Prisma boundary and predicate.
+    since = api_identity['startedAt'].replace('T', ' ').rstrip('Z')
+    if '.' in since:
+        first, fraction = since.split('.', 1)
+        since = first + '.' + fraction[:3].ljust(3, '0')
+    stamp = 'CONVERT(0x' + since.encode().hex() + ' USING utf8mb4)'
+    if history_cutoff is not None:
+        from datetime import datetime, timedelta
+        d.require(type(history_cutoff) is str and re.fullmatch(
+            r'20[0-9]{2}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]{6}', history_cutoff), code)
+        try:
+            seconds, _, fraction = api_identity['startedAt'][:-1].partition('.')
+            boot = datetime.fromisoformat(seconds + '.' + fraction[:6].ljust(6, '0'))
+            if len(fraction) > 6 and any(v != '0' for v in fraction[6:]):
+                boot += timedelta(microseconds=1)
+            valid = datetime.fromisoformat(history_cutoff) >= boot
+        except ValueError:
+            valid = False
+        d.require(valid, code)
+    cutoff = ('UTC_TIMESTAMP(6)' if history_cutoff is None else
+              'CAST(CONVERT(0x' + history_cutoff.encode().hex() + ' USING utf8mb4) AS DATETIME(6))')
+    cutoff_text = "DATE_FORMAT(" + cutoff + ",'%Y-%m-%d %H:%i:%s.%f')"
+    literal = lambda value: 'CONVERT(0x' + value.encode().hex() + ' USING utf8mb4) COLLATE utf8mb4_unicode_ci'
+    predicate = ('created_at>=CAST(' + stamp + ' AS DATETIME(6)) AND module=' + literal('自动注册')
+        + ' AND action=' + literal('操作请求') + ' AND object_type=' + literal('开源注册模块')
+        + " AND (remark LIKE '% /api/registration%' OR remark LIKE '% /api/ws/%')")
+    legacy_query = ("SELECT JSON_OBJECT('version',1,'connectionId',CONNECTION_ID(),'busy',"
+        'IF(UTC_TIMESTAMP(6)<CAST(' + stamp + ' AS DATETIME(6)),1,(SELECT COUNT(*) FROM audit_logs '
+        'WHERE ' + predicate + ')));\n')
+    metadata = ("(SELECT JSON_ARRAYAGG(JSON_OBJECT('event',EVENT_MANIPULATION,'timing',ACTION_TIMING,"
+        "'statement',ACTION_STATEMENT)) FROM information_schema.TRIGGERS WHERE TRIGGER_SCHEMA=DATABASE() "
+        "AND EVENT_OBJECT_TABLE='audit_logs')")
+    query = ("SELECT JSON_OBJECT('connectionId',CONNECTION_ID(),'historicalRegistrationAuditCount',"
+        'CAST(COALESCE(SUM(module=' + literal('自动注册') + '),0) AS UNSIGNED),'
+        "'historicalRegistrationPrefixCount',CAST(COALESCE(SUM(module=" + literal('自动注册')
+        + ' AND created_at<=' + cutoff + "),0) AS UNSIGNED),'historyCutoff'," + cutoff_text
+        + ",'clockBeforeCutoff',IF(UTC_TIMESTAMP(6)<" + cutoff + ',1,0),'
+        "'registrationMutationCount',IF(UTC_TIMESTAMP(6)<CAST(" + stamp + ' AS DATETIME(6)),1,'
+        'CAST(COALESCE(SUM(' + predicate + '),0) AS UNSIGNED)),'
+        "'onlineAuditCount',CAST(COALESCE(SUM(module='online_recharge'),0) AS UNSIGNED),'tables',JSON_OBJECT("
+        + ','.join("'" + name + "',(SELECT COUNT(*) FROM `" + name + "`)" for name in TABLES)
+        + "),'triggers'," + metadata + ') FROM audit_logs')
+    history_query = ("SELECT JSON_OBJECT('connectionId',CONNECTION_ID(),'historicalRegistrationPrefixCount',"
+        'CAST(COALESCE(SUM(module=' + literal('自动注册') + ' AND created_at<=' + cutoff
+        + "),0) AS UNSIGNED),'historyCutoff'," + cutoff_text
+        + ",'clockBeforeCutoff',IF(UTC_TIMESTAMP(6)<" + cutoff + ",1,0),'triggers'," + metadata + ') FROM audit_logs')
+    expected = {}
+    for event, migration in (('DELETE', '20261002123500_routine_audit_retention_exception'),
+                              ('UPDATE', '20260830182500_mysql_trigger_service_definers')):
+        raw = (directory / reader.MIGRATION_ROOT / migration / 'migration.sql').read_text()
+        name = 'idv2_audit_log_no_' + ('delete' if event == 'DELETE' else 'update')
+        body = raw.split('CREATE TRIGGER `' + name + '`', 1)[1].split('FOR EACH ROW', 1)[1]
+        body = body.split('END;', 1)[0] + 'END' if event == 'DELETE' else body.split(';', 1)[0]
+        expected[event] = ' '.join(body.split()).rstrip(';')
+    return {'frameQuery': query, 'historyQuery': history_query,
+        'metadataQuery': "SELECT JSON_OBJECT('connectionId',CONNECTION_ID(),'triggers'," + metadata + ')',
+        'expectedTriggers': expected, 'expectedTriggersSha256': fingerprint(expected),
+        'legacyRegistrationQuery': legacy_query, 'originalOnlineQuery': original}
+
+
+def _online_after_bit_audit_binding(d, bridge, proof):
+    actual, producer = _pending_workspace_session(d)
+    d.require(actual == bridge and bridge['kind'] == ONLINE_AFTER_BIT_KIND,
+              'ONLINE_RECHARGE_AFTER_BIT_ORIGIN_CHANGED')
+    raw = online_after_bit_preflight_bytes(d, producer=producer, expected_sha256=proof.get('preflightBytesSha256'))
+    online_after_bit_build_shape(d, proof, producer=producer, bridge=bridge, preflight_raw=raw)
+    return {'baselineOriginSha256': fingerprint(bridge), 'baselineProducer': bridge['baselineProducer'],
+        'producer': producer, 'preflightBytesSha256': hashlib.sha256(raw).hexdigest(),
+        'buildProofSha256': fingerprint(proof), 'sourceHelpers': {name: hashlib.sha256(
+            _declaration_source_bytes(Path(__file__).with_name(name), limit=512 * 1024)).hexdigest()
+            for name in ('api-admin-scope.py', 'online-recharge-scope.py')}}
+
+
+def _online_after_bit_mysql_check(d, directory, expected, deadline):
+    code = 'ONLINE_RECHARGE_AFTER_BIT_MYSQL_CHANGED'
+    def remaining():
+        value = min(5, deadline - time.monotonic())
+        d.require(value > 0, 'API_ADMIN_WORKSPACE_GUARD_TIMEOUT')
+        return value
+    identifier = d.compose(directory, 'ps', '-q', 'mysql', timeout=remaining()).strip()
+    d.require(identifier == expected['containerId'], code)
+    metadata = json.loads(d.run('docker', 'inspect', identifier, timeout=remaining()))[0]
+    environment = metadata.get('Config', {}).get('Env')
+    d.require(type(environment) is list and environment and all(type(v) is str for v in environment), code)
+    state = metadata.get('State', {})
+    d.require(metadata.get('Id') == expected['containerId'] and metadata.get('Image') == expected['image']
+        and metadata.get('Config', {}).get('Image') == expected['reference']
+        and state.get('Status') == expected['status'] == 'running'
+        and state.get('Health', {}).get('Status') == expected['health'] == 'healthy'
+        and type(state.get('StartedAt')) is str
+        and hashlib.sha256(state['StartedAt'].encode()).hexdigest() == expected['startedAtSha256']
+        and fingerprint(sorted(environment)) == expected['environmentSha256']
+        and time.monotonic() < deadline, code)
+
+
+def _online_after_bit_audit_transport(d, directory, bridge, reader, identity, plan, basis, *, history_record=None, first_api_check=None):
+    """Private verified B publication or sealed historical-prefix readback fence."""
+    code = 'ONLINE_RECHARGE_AFTER_BIT_AUDIT_GUARD_LOST'
+    class Barrier(reader.WorkspaceUnusedAuditBarrier):
+        def __init__(self):
+            super().__init__(d, directory, online=True)
+            d.require(self.query == plan['originalOnlineQuery'], 'ONLINE_RECHARGE_AFTER_BIT_AUDIT_QUERY_CHANGED')
+            self.plan = plan
+            self.query = plan['frameQuery'] if history_record is None else plan['historyQuery']
+            self.initial_query = self.query
+            self.before, self.after, self.receipt = None, None, None
+
+        def check(self, value=None):
+            if value is None:
+                self.pipe.send(self.query + ';\n')
+                value = self.pipe.read(limit=4096)
+            fields = {'connectionId', 'historicalRegistrationPrefixCount', 'historyCutoff', 'clockBeforeCutoff', 'triggers'}
+            if history_record is None:
+                fields |= {'historicalRegistrationAuditCount', 'registrationMutationCount', 'onlineAuditCount', 'tables'}
+            d.require(type(value) is dict and set(value) == fields
+                and type(self.connection_id) is int and self.connection_id > 0
+                and type(value['connectionId']) is int and value['connectionId'] == self.connection_id
+                and type(value['historicalRegistrationPrefixCount']) is int and 0 <= value['historicalRegistrationPrefixCount'] < 2**63
+                and type(value['clockBeforeCutoff']) is int and value['clockBeforeCutoff'] == 0
+                and self.pipe.process.poll() is None and time.monotonic() < self.pipe.deadline, code)
+            bound = _online_after_bit_audit_queries(d, reader, directory, identity, history_cutoff=value['historyCutoff'])
+            if history_record is None:
+                d.require(type(value['historicalRegistrationAuditCount']) is int
+                    and value['historicalRegistrationAuditCount'] == value['historicalRegistrationPrefixCount']
+                    and type(value['registrationMutationCount']) is int and value['registrationMutationCount'] == 0
+                    and type(value['onlineAuditCount']) is int and value['onlineAuditCount'] == 0
+                    and type(value['tables']) is dict and value['tables'] == {n: 0 for n in TABLES}
+                    and all(type(v) is int for v in value['tables'].values()), code)
+            else:
+                d.require(value['historyCutoff'] == history_record['historyCutoff']
+                    and value['historicalRegistrationPrefixCount'] == history_record['historicalRegistrationAuditCount'], code)
+            rows = value['triggers']
+            d.require(type(rows) is list and len(rows) == 2 and all(type(row) is dict
+                and set(row) == {'event', 'timing', 'statement'} and row['timing'] == 'BEFORE'
+                and type(row['statement']) is str for row in rows)
+                and {row['event']: ' '.join(row['statement'].split()).rstrip(';') for row in rows} == self.plan['expectedTriggers'], code)
+            summary = {n: value[n] for n in fields - {'connectionId', 'triggers'}}
+            summary['triggerDefinitionsSha256'] = self.plan['expectedTriggersSha256']
+            d.require(self.before is None or fingerprint(summary) == fingerprint(self.before), code)
+            _online_after_bit_mysql_check(d, directory, bridge['services']['mysql'], self.pipe.deadline)
+            if self.before is None and first_api_check is not None:
+                first_api_check(self.pipe.deadline)
+            d.require(self.pipe.process.poll() is None and time.monotonic() < self.pipe.deadline, code)
+            if self.before is None:
+                self.before = json.loads(json.dumps(summary))
+                self.plan = bound
+                if history_record is None:
+                    self.query = bound['frameQuery']
+            self.after = summary
+
+        def before_stop(self):
+            d.require(first_api_check is not None and history_record is None, code)
+            first_api_check(self.pipe.deadline)
+            super().before_stop()
+            # API identity 30s + stop 45s + inspect 15s, two SQL/MySQL checks
+            # 44s, final inspect 5s and transport close 9s, with bounded slack.
+            d.require(time.monotonic() + 170 < self.pipe.deadline, 'API_ADMIN_WORKSPACE_GUARD_TIMEOUT')
+
+        def confirm_stopped(self, sqlite_gate):
+            remaining = min(5, self.pipe.deadline - time.monotonic())
+            d.require(remaining > 0 and history_record is None and self.before is not None
+                and fingerprint(self.before) == fingerprint(self.after) and self.pipe.process.poll() is None, code)
+            metadata = json.loads(d.run('docker', 'inspect', identity['containerId'], timeout=remaining))[0]
+            state = metadata.get('State', {})
+            d.require(metadata.get('Id') == identity['containerId'] and metadata.get('Image') == identity['image']
+                and type(state.get('StartedAt')) is str and hashlib.sha256(state['StartedAt'].encode()).hexdigest() == identity['startedAtSha256']
+                and state.get('Running') is False and type(state.get('Pid')) is int and state['Pid'] == 0
+                and self.pipe.process.poll() is None and time.monotonic() < self.pipe.deadline
+                and type(sqlite_gate.record) is dict and sqlite_gate.record.get('sourceApiIdentity') == {
+                    n: identity[n] for n in ('containerId', 'image', 'startedAtSha256')}, code)
+            # Seal one final unchanged frame after the actual old PID reached zero.
+            self.check()
+            d.require(self.pipe.process.poll() is None and time.monotonic() < self.pipe.deadline, code)
+            self.receipt = {'version': 1, 'kind': 'ONLINE_RECHARGE_AFTER_BIT_AUDIT_PROTECTION', 'basis': basis,
+                'sourceApiIdentity': identity, 'mysqlIdentitySha256': fingerprint(bridge['services']['mysql']),
+                'initialQuerySha256': hashlib.sha256(self.initial_query.encode()).hexdigest(),
+                'querySha256': hashlib.sha256(self.query.encode()).hexdigest(),
+                'historyQuerySha256': hashlib.sha256(self.plan['historyQuery'].encode()).hexdigest(),
+                'triggerDefinitionsSha256': self.plan['expectedTriggersSha256'],
+                'connectionIdSha256': fingerprint(self.connection_id), 'before': self.before, 'after': self.after,
+                'oldApiStop': {'identity': {n: identity[n] for n in ('containerId', 'image', 'startedAtSha256')}, 'running': False, 'pid': 0},
+                'sqliteProtectionSha256': fingerprint(sqlite_gate.record)}
+            return self.receipt
+    return Barrier()
+
+
+def _online_after_bit_unused_audit_barrier(d, directory, bridge, proof):
+    online_after_bit_bridge_shape(d, bridge)
+    d.require(str(directory) == bridge['baselineRelease'], 'ONLINE_RECHARGE_AFTER_BIT_ORIGIN_CHANGED')
+    basis = _online_after_bit_audit_binding(d, bridge, proof)
+    reader = legacy(d)
+    admission = reader.WorkspaceAuditBarrier(d, directory)
+    identity = admission.api_identity
+    d.require(all(identity[n] == bridge['services']['api'][n] for n in ('containerId', 'image', 'startedAtSha256')),
+              'ONLINE_RECHARGE_AFTER_BIT_API_CHANGED')
+    plan = _online_after_bit_audit_queries(d, reader, directory, identity)
+    d.require(admission.QUERY == plan['legacyRegistrationQuery'], 'ONLINE_RECHARGE_AFTER_BIT_AUDIT_QUERY_CHANGED')
+    d.require(reader.workspace_audit_protection(d, directory) == plan['expectedTriggersSha256'],
+              'API_ADMIN_WORKSPACE_AUDIT_HISTORY_UNPROVEN')
+    def api_check(deadline):
+        remaining = min(5, deadline - time.monotonic())
+        d.require(remaining > 0, 'API_ADMIN_WORKSPACE_GUARD_TIMEOUT')
+        d.require(reader.workspace_api_identity(d, directory, expected=identity, timeout=remaining) == identity,
+                  'ONLINE_RECHARGE_AFTER_BIT_API_CHANGED')
+    return _online_after_bit_audit_transport(d, directory, bridge, reader, identity, plan, basis, first_api_check=api_check)
+
+
+def _online_after_bit_audit_receipt(d, directory, bridge, proof, manifest, record):
+    """Rebind the original publication proof, preserve its prefix and allow later business."""
+    code = 'ONLINE_RECHARGE_AFTER_BIT_AUDIT_RECEIPT_CHANGED'
+    value = record.get('afterBitAuditProtection')
+    d.require(type(value) is dict and set(value) == {'version', 'kind', 'basis', 'sourceApiIdentity',
+        'mysqlIdentitySha256', 'initialQuerySha256', 'querySha256', 'historyQuerySha256', 'triggerDefinitionsSha256',
+        'connectionIdSha256', 'before', 'after', 'oldApiStop', 'sqliteProtectionSha256'}
+        and type(value['version']) is int and value['version'] == 1
+        and value['kind'] == 'ONLINE_RECHARGE_AFTER_BIT_AUDIT_PROTECTION', code)
+    basis = _online_after_bit_audit_binding(d, bridge, proof)
+    reader = legacy(d)
+    identity = value['sourceApiIdentity']
+    d.require(type(identity) is dict and set(identity) == {'containerId', 'image', 'startedAtSha256', 'startedAt'}
+        and all(identity[n] == bridge['services']['api'][n] for n in ('containerId', 'image', 'startedAtSha256')), code)
+    before = value['before']
+    d.require(type(before) is dict and set(before) == {'historicalRegistrationAuditCount', 'historicalRegistrationPrefixCount',
+        'historyCutoff', 'clockBeforeCutoff', 'registrationMutationCount', 'onlineAuditCount', 'tables', 'triggerDefinitionsSha256'}
+        and type(before['historicalRegistrationAuditCount']) is int and 0 <= before['historicalRegistrationAuditCount'] < 2**63
+        and type(before['historicalRegistrationPrefixCount']) is int
+        and before['historicalRegistrationPrefixCount'] == before['historicalRegistrationAuditCount']
+        and all(type(before[n]) is int and before[n] == 0 for n in ('clockBeforeCutoff', 'registrationMutationCount', 'onlineAuditCount'))
+        and type(before['tables']) is dict and before['tables'] == {n: 0 for n in TABLES}
+        and all(type(v) is int for v in before['tables'].values())
+        and type(value['after']) is dict and fingerprint(value['after']) == fingerprint(before), code)
+    initial = _online_after_bit_audit_queries(d, reader, Path(bridge['baselineRelease']), identity)
+    plan = _online_after_bit_audit_queries(d, reader, Path(bridge['baselineRelease']), identity, history_cutoff=before['historyCutoff'])
+    from datetime import datetime, timedelta
+    try:
+        published = datetime.strptime(manifest.get('deployedAt', ''), '%Y-%m-%dT%H:%M:%SZ')
+        cutoff_bounded = datetime.fromisoformat(before['historyCutoff']) < published + timedelta(seconds=1)
+    except ValueError:
+        cutoff_bounded = False
+    d.require(cutoff_bounded and before['triggerDefinitionsSha256'] == plan['expectedTriggersSha256']
+        and value['basis'] == basis and value['mysqlIdentitySha256'] == fingerprint(bridge['services']['mysql'])
+        and value['initialQuerySha256'] == hashlib.sha256(initial['frameQuery'].encode()).hexdigest()
+        and value['querySha256'] == hashlib.sha256(plan['frameQuery'].encode()).hexdigest()
+        and value['historyQuerySha256'] == hashlib.sha256(plan['historyQuery'].encode()).hexdigest()
+        and value['triggerDefinitionsSha256'] == plan['expectedTriggersSha256'] and _declaration_hash(value['connectionIdSha256'])
+        and type(value['oldApiStop']) is dict and set(value['oldApiStop']) == {'identity', 'running', 'pid'}
+        and value['oldApiStop']['identity'] == {n: identity[n] for n in ('containerId', 'image', 'startedAtSha256')}
+        and value['oldApiStop']['running'] is False and type(value['oldApiStop']['pid']) is int and value['oldApiStop']['pid'] == 0
+        and value['sqliteProtectionSha256'] == record.get('sqliteProtectionSha256')
+        and manifest.get('onlineRechargePublication', {}).get('afterBitAuditProtectionSha256') == fingerprint(value), code)
+    sqlite = closed_recovery_json(d, _declaration_source_bytes(directory / reader.WORKSPACE_SQLITE_RECEIPT))
+    d.require(fingerprint(sqlite) == value['sqliteProtectionSha256']
+        and sqlite.get('sourceApiIdentity') == value['oldApiStop']['identity'], code)
+    d.require(reader.workspace_audit_protection(d, directory) == plan['expectedTriggersSha256'], code)
+    # Old B may have been removed. Current C activity uses its existing idle guards;
+    # legitimate newer rows are not reclassified as first-publication qualification.
+    reader.online_idle(d, directory)
+    reader.workspace_idle(d, directory, legacy=False)
+    barrier = _online_after_bit_audit_transport(d, directory, bridge, reader, identity, plan, basis, history_record=before)
+    with barrier:
+        barrier.check()
+    reader.online_idle(d, directory)
+    reader.workspace_idle(d, directory, legacy=False)
+    return {'afterBitAuditProtectionSha256': fingerprint(value),
+        'preservedRegistrationAuditCount': before['historicalRegistrationAuditCount'], 'auditHistoryCutoff': before['historyCutoff']}
+
+
 def _workspace_origin_type(d, bridge):
     kind = bridge.get('kind') if type(bridge) is dict else None
     d.require(kind in _WORKSPACE_ORIGIN_TYPES, 'ONLINE_RECHARGE_PENDING_WORKSPACE_ORIGIN_CHANGED')
@@ -3392,6 +3676,7 @@ def _pending_workspace_release_locked(d, args):
     migration_attempted = False
     sqlite_gate = None
     audit_barrier = None
+    after_bit_audit_protection = None
     try:
         workspace_origin(d, previous, previous, evidence, before)
         archive = extract_source(d, args.commit, target)
@@ -3456,7 +3741,10 @@ def _pending_workspace_release_locked(d, args):
         require_preserved(d, previous, target, before, environment, all_services=True)
         historical_guard(d, previous, evidence, target)
         step = 'workspace-protection'
-        audit_barrier = legacy(d).WorkspaceUnusedAuditBarrier(d, previous, online=True)
+        bridge = _workspace_evidence_origin(d, evidence)
+        audit_barrier = (_online_after_bit_unused_audit_barrier(d, previous, bridge, proof)
+                         if bridge['kind'] == ONLINE_AFTER_BIT_KIND
+                         else legacy(d).WorkspaceUnusedAuditBarrier(d, previous, online=True))
         audit_barrier.__enter__()
         sqlite_gate = legacy(d).workspace_prepare(d, previous, target, proof, args, evidence, legacy=False)
         d.require(sqlite_gate is not None, 'ONLINE_RECHARGE_WORKSPACE_DATABASE_INVALID')
@@ -3472,6 +3760,8 @@ def _pending_workspace_release_locked(d, args):
                 audit_barrier.before_stop()
                 sqlite_gate.stop_previous()
                 audit_barrier.check()
+                if bridge['kind'] == ONLINE_AFTER_BIT_KIND:
+                    after_bit_audit_protection = audit_barrier.confirm_stopped(sqlite_gate)
                 audit_barrier.__exit__(None,None,None)
                 audit_barrier = None
             d.compose(target, 'up', '-d', '--no-deps', '--no-build', '--pull', 'never', '--force-recreate', service, timeout=300)
@@ -3493,6 +3783,9 @@ def _pending_workspace_release_locked(d, args):
                   'sqliteProtectionSha256': fingerprint(sqlite_gate.record),
                   'workspaceVolumeBefore': evidence['workspaceVolume'],
                   'workspaceVolumeAfter': workspace_guard(d,target,evidence['workspaceVolume'])}
+        if bridge['kind'] == ONLINE_AFTER_BIT_KIND:
+            d.require(type(after_bit_audit_protection) is dict, 'ONLINE_RECHARGE_AFTER_BIT_AUDIT_RECEIPT_CHANGED')
+            record['afterBitAuditProtection'] = after_bit_audit_protection
         (target / STATE_FILE).write_text(json.dumps(record, indent=2) + '\n')
         (target / PROOF_FILE).write_text(json.dumps(proof, indent=2) + '\n')
         manifest = {'commit': args.commit, 'sourceBranch': 'main', 'sourceTree': args.source_tree,
@@ -3516,6 +3809,8 @@ def _pending_workspace_release_locked(d, args):
                 'sqliteProtectionSha256': fingerprint(sqlite_gate.record), 'scope': SCOPE, 'buildProofSha256': fingerprint(proof),
                 'migration': dict(MIGRATION_IDENTITY), 'legacyWorkersPublished': False,
                 'configurationScope': 'ONLINE_RECHARGE_VOLUME_LOOPBACK_ONLY'}}
+        if bridge['kind'] == ONLINE_AFTER_BIT_KIND:
+            manifest['onlineRechargePublication']['afterBitAuditProtectionSha256'] = fingerprint(after_bit_audit_protection)
         if evidence.get('migrationOrigin') is not None:
             manifest['preservedMigrationOrigin'] = legacy(d).migration_successor_marker(evidence['migrationOrigin'])
         if recovery is not None:
@@ -3607,7 +3902,9 @@ def _pending_workspace_readback(d, expected):
                   'version': 2, 'baselineOriginSha256': fingerprint(bridge),
                   'sqliteProtectionSha256': record.get('sqliteProtectionSha256'), 'scope': SCOPE, 'buildProofSha256': fingerprint(proof),
                   'migration': dict(MIGRATION_IDENTITY), 'legacyWorkersPublished': False,
-                  'configurationScope': 'ONLINE_RECHARGE_VOLUME_LOOPBACK_ONLY'}
+                  'configurationScope': 'ONLINE_RECHARGE_VOLUME_LOOPBACK_ONLY',
+                  **({'afterBitAuditProtectionSha256': fingerprint(record.get('afterBitAuditProtection'))}
+                     if bridge['kind'] == ONLINE_AFTER_BIT_KIND else {})}
               and record.get('buildProofSha256') == fingerprint(proof)
               and hashlib.sha256((previous / 'release-manifest.json').read_bytes()).hexdigest()
                   == manifest.get('previousManifestSha256') == record['baselineEvidence']['manifestSha256'],
@@ -3651,6 +3948,8 @@ def _pending_workspace_readback(d, expected):
     backup_receipt(d, directory, manifest)
     workspace_backup_receipt(d, directory, previous, record['baselineEvidence'], manifest, record)
     _pending_workspace_sqlite_receipt(d,directory,manifest,record)
+    protection = (_online_after_bit_audit_receipt(d, directory, bridge, proof, manifest, record)
+                  if bridge['kind'] == ONLINE_AFTER_BIT_KIND else {})
     verify_running(d, directory, proof)
     verify_image_content(d, directory, proof, 'migrate')
     d.require(snapshot(d, directory, include_engine=True) == states and (d.BASE / 'current').resolve() == directory
@@ -3664,7 +3963,7 @@ def _pending_workspace_readback(d, expected):
             'existingEnvironmentPreserved': True, 'credentialsLoopback': True, 'dedicatedVolume': MEDIA_VOLUME,
             'backupVerified': True, 'workspaceBackupVerified': True, 'workspaceVolumePreserved': True,
             'checkCount': 49, 'violationCount': 0,
-            'legacyWorkersPublished': False, 'externalAcceptancePerformed': False, origin_field: bridge, **recovered}
+            'legacyWorkersPublished': False, 'externalAcceptancePerformed': False, origin_field: bridge, **recovered, **protection}
 
 def _pending_workspace_validate_receipt(d, value, mode, commit, expected):
     """Bounded public summary; never return raw remote output or credentials."""
@@ -3735,6 +4034,14 @@ def _pending_workspace_validate_receipt(d, value, mode, commit, expected):
               and re.fullmatch(r'[a-f0-9]{64}', value.get('buildProofSha256', '')),
               'ONLINE_RECHARGE_RECEIPT_READBACK_CHANGED')
     resumed = {origin_field: bridge}
+    if bridge['kind'] == ONLINE_AFTER_BIT_KIND:
+        d.require(_declaration_hash(value.get('afterBitAuditProtectionSha256'))
+            and type(value.get('preservedRegistrationAuditCount')) is int
+            and 0 <= value['preservedRegistrationAuditCount'] < 2**63
+            and type(value.get('auditHistoryCutoff')) is str and re.fullmatch(
+                r'20[0-9]{2}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]{6}', value['auditHistoryCutoff']),
+            'ONLINE_RECHARGE_AFTER_BIT_AUDIT_RECEIPT_CHANGED')
+        resumed.update({n: value[n] for n in ('afterBitAuditProtectionSha256', 'preservedRegistrationAuditCount', 'auditHistoryCutoff')})
     if value.get('migrationRecovery') is not None:
         d.require(value['migrationRecovery'] == recovery_marker(recovery_policy(d))
                   and value['migrationPerformed'] is False, 'ONLINE_RECHARGE_RECEIPT_READBACK_CHANGED')
@@ -3787,7 +4094,7 @@ _AFTER_BIT_BANK_POLICY_FILES = {
         'bec32298136ff61d8e69820179b8c3f51f8e5221f4e6b449aaf5f5ec8f7d4625'),
     'scripts/production-release/online-recharge-scope.test.py': (
         '4aa063af4054ff98d2bb622056556ab643ed39abb3d373facc636509ff98ad8e',
-        'b448923c33bd5ee8dfd37910605c5fa93f4735841aa9b524bc252b69e8a022a4'),
+        '59f3221f1326865a958f6f50fd0fb5211c3f2ee29ca915884f05202d426cf5d2'),
 }
 _AFTER_BIT_RELEASE_CI_FILES = {
     'scripts/ci-recharge-scope.mjs': ('3fe9c33ea883b7e2ad15305d1c7fe26873ddf648645b7a05acc8aecd5f858cfd', '04c8451b64ebf75755a108761a1a73430e4f31e807f7bb4f356b790417ee7ec1'),
