@@ -6408,5 +6408,229 @@ class RestoredQualificationFailureTests(unittest.TestCase):
             self.assertIs(raised.exception, error)
 
 
+class ReviewedApplicationMappingTests(unittest.TestCase):
+    """Real closed Git archives; synthetic metadata never publishes or grants F."""
+    @classmethod
+    def setUpClass(cls):
+        cls.bridge=json.loads(scope._RESTORED_B_WITNESS['failedPreflight'])['baseline']
+        cls.policy_name=scope._BITBROWSER_SCOPE_POLICY_FILE
+        cls.policy_raw=(ROOT/cls.policy_name).read_bytes()
+        cls.policy=json.loads(cls.policy_raw)
+        cls.candidate_scope=(ROOT/'scripts/production-release/online-recharge-scope.py').read_bytes()
+        cls.template_commit=subprocess.check_output(['git','rev-parse','HEAD'],cwd=ROOT).decode().strip()
+        cls.template_prefix='id-business-system-'+cls.template_commit+'/'
+        raw=subprocess.check_output(['git','archive','--format=tar.gz','--prefix='+cls.template_prefix,cls.template_commit],cwd=ROOT)
+        with tarfile.open(fileobj=io.BytesIO(raw),mode='r:gz') as archive:
+            cls.rows=[(copy.copy(row),archive.extractfile(row).read() if row.isfile() else None) for row in archive.getmembers()]
+        p=cls.bridge['baselineProducer']
+        cls.before_raw=subprocess.check_output(['git','archive','--format=tar.gz','--prefix=id-business-system-'+p['commit']+'/',p['commit']],cwd=ROOT)
+        cls.full=cls.build()
+        cls.before=scope._pending_workspace_current_source_inventory(cls.full[0],p)
+        cls.after=scope._pending_workspace_current_source_inventory(cls.full[0],cls.full[1])
+        assert scope.fingerprint(cls.bridge)==cls.policy['baselineOriginSha256']
+        assert len(cls.policy['files'])==40
+
+    @classmethod
+    def build(cls,replacements=None,deletions=(),modes=None):
+        own={'scripts/production-release/online-recharge-scope.py':cls.candidate_scope,
+            'scripts/production-release/online-recharge-scope.test.py':(ROOT/'scripts/production-release/online-recharge-scope.test.py').read_bytes(),
+            cls.policy_name:cls.policy_raw}
+        own.update(replacements or {})
+        modes=modes or {};deleted=set(deletions)
+        synthetic_commit='e'*40;prefix='id-business-system-'+synthetic_commit+'/'
+        data_by_name={row.name[len(cls.template_prefix):]:data for row,data in cls.rows if row.isfile()}
+        data_by_name.update(own)
+        for name in deleted:data_by_name.pop(name,None)
+        with tempfile.TemporaryDirectory(prefix='reviewed-index-',dir=RUNTIME) as folder:
+            environment={**os.environ,'GIT_INDEX_FILE':str(Path(folder)/'index')}
+            subprocess.run(['git','read-tree',cls.template_commit],cwd=ROOT,env=environment,check=True)
+            for name in deleted:
+                subprocess.run(['git','update-index','--force-remove',name],cwd=ROOT,env=environment,check=True)
+            for name in set(own)|set(modes):
+                if name in deleted:continue
+                blob=subprocess.check_output(['git','hash-object','-w','--stdin'],input=data_by_name[name],cwd=ROOT).decode().strip()
+                subprocess.run(['git','update-index','--add','--cacheinfo',modes.get(name,'100644'),blob,name],cwd=ROOT,env=environment,check=True)
+            tree=subprocess.check_output(['git','write-tree'],cwd=ROOT,env=environment).decode().strip()
+        output=io.BytesIO();written=set()
+        with tarfile.open(fileobj=output,mode='w:gz',compresslevel=1) as archive:
+            for old,data in cls.rows:
+                row=copy.copy(old);relative=row.name[len(cls.template_prefix):] if row.name.startswith(cls.template_prefix) else ''
+                row.name=prefix+relative if relative else prefix.rstrip('/')
+                if relative in deleted:continue
+                if row.isfile():
+                    data=data_by_name[relative];row.size=len(data)
+                    if relative in own or relative in modes:row.mode=0o755 if modes.get(relative)=='100755' else 0o644
+                    written.add(relative)
+                archive.addfile(row,io.BytesIO(data) if data is not None else None)
+            for relative in sorted(set(data_by_name)-written):
+                data=data_by_name[relative];row=tarfile.TarInfo(prefix+relative);row.size=len(data)
+                row.mode=0o755 if modes.get(relative)=='100755' else 0o644
+                archive.addfile(row,io.BytesIO(data))
+        producer={'commit':synthetic_commit,'sourceTree':tree,'workflowRunId':'124','workflowRunAttempt':'1'}
+        before_source=cls.bridge['baselineProducer']
+        cached={(before_source['commit'],before_source['sourceTree']):cls.before_raw,(synthetic_commit,tree):output.getvalue()}
+        d=controller(BASE=Path('/opt/id-business-v2'),_onlinePendingWorkspaceProducer=producer,_onlinePendingWorkspaceArchiveBytes=cached)
+        return d,producer,output.getvalue()
+
+    @contextmanager
+    def carrier(self):
+        with patch.object(scope.urllib.request,'urlopen',side_effect=AssertionError('no new network')):
+            yield
+
+    def inventory_for(self,fixture):
+        d,producer,raw=fixture
+        return scope._pending_workspace_current_source_inventory(d,producer)
+
+    def test_complete_forty_files_and_added_policy_pass_all_three_active_gates(self):
+        d,p,raw=self.full
+        names=frozenset(self.policy['files'])|{self.policy_name}
+        with self.carrier():
+            self.assertEqual(scope._workspace_reviewed_application_inventory(d,self.bridge,self.before,self.after,p),names)
+            self.assertEqual(scope._workspace_release_ci_inventory(d,self.bridge,self.before,self.after),frozenset(scope._AFTER_BIT_RELEASE_CI_FILES))
+            self.assertEqual(scope._workspace_bank_policy_inventory(d,self.bridge,self.before,self.after),frozenset(scope._AFTER_BIT_BANK_POLICY_FILES)-scope._PENDING_WORKSPACE_RECEIPT_COMPATIBILITY_FILES)
+            self.assertEqual(scope._pending_workspace_profile(d,self.bridge,p),self.after)
+        self.assertEqual(len(self.policy['files']),40)
+        self.assertEqual(sum(pair['before'] is None for pair in self.policy['files'].values()),1)
+
+    def test_each_reviewed_file_hash_revert_delete_or_executable_mode_is_rejected(self):
+        d,p,raw=self.full
+        for name,pair in self.policy['files'].items():
+            for variation in ('hash','revert','delete','executable'):
+                changed=copy.deepcopy(self.after)
+                if variation=='hash':changed[name]['sha256']='0'*64
+                elif variation=='revert':
+                    if pair['before'] is None:changed.pop(name)
+                    else:changed[name]=copy.deepcopy(self.before[name])
+                elif variation=='delete':changed.pop(name)
+                else:changed[name]['mode']='100755'
+                with self.subTest(name=name,variation=variation):
+                    with self.assertRaisesRegex(RuntimeError,'APPLICATION_SOURCE_CHANGED'):
+                        scope._workspace_reviewed_application_inventory(d,self.bridge,self.before,changed,p)
+
+    def test_real_archive_deleted_reviewed_file_is_rejected_after_successful_tree_validation(self):
+        name=next(iter(self.policy['files']))
+        d,p,raw=self.build(deletions=(name,))
+        inventory=self.inventory_for((d,p,raw))
+        self.assertNotIn(name,inventory)
+        with self.assertRaisesRegex(RuntimeError,'APPLICATION_SOURCE_CHANGED'):
+            scope._workspace_reviewed_application_inventory(d,self.bridge,self.before,inventory,p)
+
+    def test_real_archive_single_application_byte_drift_is_rejected(self):
+        name='apps/api/src/id-business-v2/auto-recharge/worker/server.py'
+        data=subprocess.check_output(['git','show',self.template_commit+':'+name],cwd=ROOT)+b'\n'
+        d,p,raw=self.build({name:data});inventory=self.inventory_for((d,p,raw))
+        with self.assertRaisesRegex(RuntimeError,'APPLICATION_SOURCE_CHANGED'):
+            scope._workspace_reviewed_application_inventory(d,self.bridge,self.before,inventory,p)
+
+    def test_real_archive_executable_application_mode_is_rejected(self):
+        name='apps/api/src/id-business-v2/auto-recharge/worker/server.py'
+        d,p,raw=self.build(modes={name:'100755'});inventory=self.inventory_for((d,p,raw))
+        with self.assertRaisesRegex(RuntimeError,'APPLICATION_SOURCE_CHANGED'):
+            scope._workspace_reviewed_application_inventory(d,self.bridge,self.before,inventory,p)
+
+    def test_added_doc_cannot_have_a_fabricated_before_entry(self):
+        d,p,raw=self.full;before=copy.deepcopy(self.before)
+        before['docs/BITBROWSER_FLOW_RELEASE_20261012.md']=copy.deepcopy(self.after['docs/BITBROWSER_FLOW_RELEASE_20261012.md'])
+        with self.assertRaisesRegex(RuntimeError,'APPLICATION_SOURCE_CHANGED'):
+            scope._workspace_reviewed_application_inventory(d,self.bridge,before,self.after,p)
+
+    def test_policy_missing_unknown_hash_executable_or_preexisting_is_rejected(self):
+        d,p,raw=self.full
+        for variation in ('missing','hash','mode','preexisting'):
+            before=copy.deepcopy(self.before);after=copy.deepcopy(self.after)
+            if variation=='missing':after.pop(self.policy_name)
+            elif variation=='hash':after[self.policy_name]['sha256']='f'*64
+            elif variation=='mode':after[self.policy_name]['mode']='100755'
+            else:before[self.policy_name]=copy.deepcopy(after[self.policy_name])
+            with self.subTest(variation=variation),self.carrier():
+                with self.assertRaises(RuntimeError):
+                    if variation=='missing':
+                        with patch.object(scope,'_pending_workspace_current_source_inventory',side_effect=[after,before]):scope._pending_workspace_profile(d,self.bridge,p)
+                    else:scope._workspace_reviewed_application_inventory(d,self.bridge,before,after,p)
+
+    def test_changed_policy_in_a_valid_new_tree_is_not_accepted(self):
+        raw=self.policy_raw.replace(b'"pullRequest": 446',b'"pullRequest": 447')
+        self.assertNotEqual(raw,self.policy_raw)
+        self.assertEqual(len(raw),len(self.policy_raw))
+        d,p,source=self.build({self.policy_name:raw});inventory=self.inventory_for((d,p,source))
+        with self.assertRaisesRegex(RuntimeError,'APPLICATION_SOURCE_CHANGED'):
+            scope._workspace_reviewed_application_inventory(d,self.bridge,self.before,inventory,p)
+
+    def test_policy_after_none_and_boolean_bytes_fail_schema_even_with_test_only_digest_pin(self):
+        for variation in ('after-none','bytes-bool','before-identity','partial-files'):
+            policy=copy.deepcopy(self.policy);name=next(iter(policy['files']))
+            if variation=='after-none':policy['files'][name]['after']=None
+            elif variation=='bytes-bool':policy['files'][name]['after']['bytes']=True
+            elif variation=='before-identity':policy['baselineProducer']['workflowRunId']='125'
+            else:policy['files'].pop(name)
+            encoded=json.dumps(policy,sort_keys=True,separators=(',',':')).encode()
+            self.assertLessEqual(len(encoded),len(self.policy_raw))
+            raw=encoded+b' '*(len(self.policy_raw)-len(encoded))
+            d,p,source=self.build({self.policy_name:raw});inventory=self.inventory_for((d,p,source))
+            # This isolated schema test supplies an explicit test-only digest;
+            # production remains pinned to the immutable approved JSON bytes.
+            with self.subTest(variation=variation),patch.object(scope,'_BITBROWSER_SCOPE_POLICY_SHA256',hashlib.sha256(raw).hexdigest()):
+                with self.assertRaisesRegex(RuntimeError,'APPLICATION_SOURCE_CHANGED'):
+                    scope._workspace_reviewed_application_inventory(d,self.bridge,self.before,inventory,p)
+
+    def test_only_exact_actual_b_bridge_and_controller_producer_are_accepted(self):
+        d,p,raw=self.full
+        for variation in ('kind','baseline','fingerprint'):
+            bridge=copy.deepcopy(self.bridge)
+            if variation=='kind':bridge['kind']=scope.ONLINE_PENDING_WORKSPACE_KIND
+            elif variation=='baseline':bridge['baselineProducer']['workflowRunId']='125'
+            else:bridge['publicationSha256']='f'*64
+            with self.subTest(variation=variation):
+                with self.assertRaises(RuntimeError):scope._workspace_reviewed_application_inventory(d,bridge,self.before,self.after,p)
+        with self.assertRaisesRegex(RuntimeError,'APPLICATION_SOURCE_CHANGED'):
+            scope._workspace_reviewed_application_inventory(d,self.bridge,self.before,self.after,{**p,'workflowRunId':'125'})
+
+    def test_missing_cached_archives_and_changed_cache_bytes_do_not_grant_mapping(self):
+        d,p,raw=self.full
+        for producer in (p,self.bridge['baselineProducer']):
+            key=(producer['commit'],producer['sourceTree']);saved=d._onlinePendingWorkspaceArchiveBytes.pop(key)
+            try:
+                with self.assertRaisesRegex(RuntimeError,'APPLICATION_SOURCE_CHANGED'):
+                    scope._workspace_reviewed_application_inventory(d,self.bridge,self.before,self.after,p)
+            finally:d._onlinePendingWorkspaceArchiveBytes[key]=saved
+        name=next(iter(self.policy['files']))
+        changed=subprocess.check_output(['git','show',self.template_commit+':'+name],cwd=ROOT)+b'\n'
+        other,unused,changed_raw=self.build({name:changed});key=(p['commit'],p['sourceTree'])
+        saved=d._onlinePendingWorkspaceArchiveBytes[key];d._onlinePendingWorkspaceArchiveBytes[key]=changed_raw
+        try:
+            with self.assertRaisesRegex(RuntimeError,'APPLICATION_SOURCE_CHANGED'):
+                scope._workspace_reviewed_application_inventory(d,self.bridge,self.before,self.after,p)
+            with self.assertRaisesRegex(RuntimeError,'SOURCE_TREE_CHANGED'):
+                scope._pending_workspace_current_source_inventory(d,p)
+        finally:d._onlinePendingWorkspaceArchiveBytes[key]=saved
+
+    def test_additional_application_config_migration_and_unknown_policy_still_fail_profile(self):
+        paths=('apps/api/src/main.ts','docker-compose.aws-mysql.yml','prisma/schema.prisma',
+            'prisma/migrations/unauthorized/migration.sql','deploy/aws/unknown-reviewed-policy.json')
+        for name in paths:
+            raw=(subprocess.check_output(['git','show',self.template_commit+':'+name],cwd=ROOT)+b'\n') if name in self.after else b'unapproved\n'
+            d,p,source=self.build({name:raw});inventory=self.inventory_for((d,p,source))
+            with self.subTest(name=name),self.carrier():
+                with self.assertRaisesRegex(RuntimeError,'APPLICATION_SOURCE_CHANGED'):
+                    scope._pending_workspace_profile(d,self.bridge,p)
+
+    def test_unrelated_deleted_file_still_fails_profile(self):
+        name='apps/api/src/main.ts'
+        d,p,raw=self.build(deletions=(name,));self.inventory_for((d,p,raw))
+        with self.carrier(),self.assertRaisesRegex(RuntimeError,'APPLICATION_SOURCE_CHANGED'):
+            scope._pending_workspace_profile(d,self.bridge,p)
+
+    def test_historical_failed_c_mapping_has_no_reviewed_application_exception(self):
+        d,p,raw=self.full
+        historical=scope._RESTORED_B_WITNESS['policy']['failedProducer']
+        archive=subprocess.check_output(['git','archive','--format=tar.gz','--prefix=id-business-system-'+historical['commit']+'/',historical['commit']],cwd=ROOT)
+        other=controller(BASE=Path('/opt/id-business-v2'),_onlinePendingWorkspaceProducer=p,
+            _onlinePendingWorkspaceArchiveBytes={**d._onlinePendingWorkspaceArchiveBytes,(historical['commit'],historical['sourceTree']):archive})
+        result=scope._restored_workspace_failed_source_inventory(other,self.bridge,historical)
+        self.assertEqual(scope._workspace_reviewed_application_inventory(other,self.bridge,self.before,result),frozenset())
+        self.assertNotIn(self.policy_name,result)
+
+
+
 if __name__ == '__main__':
     unittest.main()
