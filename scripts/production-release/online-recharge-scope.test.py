@@ -6558,6 +6558,58 @@ class RestoredQualificationFailureTests(unittest.TestCase):
                     caps=SimpleNamespace(qualified=self.qualified))
             self.assertIs(raised.exception, error)
 
+    def masked_body_error(self, stage='STABILITY'):
+        try:
+            scope._restored_qualified_exact(controller(), {}, ('required',))
+        except RuntimeError:
+            error = self.qualified.Rejected('QUALIFIER_UNAVAILABLE')
+            error._qualified_failure = (stage, 'UNKNOWN')
+            error.private_value = 'OFFLINE_DIAGNOSTIC_SECRET_MUST_NOT_BE_PUBLISHED'
+            raise error from None
+
+    def test_unknown_stability_failure_retains_actual_source_location_after_context_closes(self):
+        events=[]
+        @contextmanager
+        def session():
+            events.append('enter')
+            try:yield
+            finally:events.append('closed')
+        def operation():
+            with session():self.masked_body_error()
+        with self.assertRaises(scope.DeclarationDriverError) as raised:
+            scope._restored_workspace_qualification_call(operation,
+                caps=SimpleNamespace(qualified=self.qualified))
+        self.assertRegex(str(raised.exception),
+            r'^ONLINE_RECHARGE_DECLARATION_STABILITY_UNKNOWN_AT_EXACT_L[0-9]+_RUNTIMEERROR$')
+        self.assertNotIn('SECRET',str(raised.exception))
+        self.assertEqual(raised.exception._declaration_failure,('STABILITY','UNKNOWN'))
+        self.assertEqual(events,['enter','closed'])
+
+    def test_cleanup_failure_still_takes_precedence_over_body_location(self):
+        with self.assertRaises(scope.DeclarationDriverError) as raised:
+            scope._restored_workspace_qualification_call(lambda:self.masked_body_error('CLEANUP'),
+                caps=SimpleNamespace(qualified=self.qualified))
+        self.assertEqual(str(raised.exception),'ONLINE_RECHARGE_DECLARATION_CLEANUP_UNKNOWN')
+
+    def test_matching_filename_and_function_name_cannot_forge_trusted_location(self):
+        namespace={}
+        exec(compile("def _restored_qualified_exact():\n raise RuntimeError('OFFLINE_PRIVATE_VALUE')\n",
+            scope.__file__,'exec'),namespace)
+        try:namespace['_restored_qualified_exact']()
+        except RuntimeError as cause:
+            self.assertIsNone(scope._restored_workspace_qualification_location(cause,None))
+
+    def test_failure_location_does_not_access_subclass_messages_or_attributes(self):
+        class PrivateError(RuntimeError):
+            def __str__(self):raise AssertionError('must not stringify')
+            def __getattribute__(self,name):raise AssertionError('must not inspect custom attributes')
+        self.assertIsNone(scope._restored_workspace_qualification_location(PrivateError('SECRET'),None))
+
+    def test_failure_location_traversal_stops_on_context_cycle(self):
+        one,two=RuntimeError('SECRET_ONE'),RuntimeError('SECRET_TWO')
+        one.__context__=two;two.__context__=one
+        self.assertIsNone(scope._restored_workspace_qualification_location(one,None))
+
     def test_existing_cache_and_restore_codes_remain_original(self):
         for code in ('ONLINE_RECHARGE_HISTORICAL_IMAGE_CACHE_ECR_AUTH_FAILED',
                 'ONLINE_RECHARGE_B_RESTORE_DECLARATION_UNPROVEN', 'API_ADMIN_CONTAINER_CHANGED'):
