@@ -39,6 +39,19 @@ from payment_form import PaymentDetails, validate_details
 from plans import PLANS
 
 MAX_BODY = 180_000
+MAX_COMPLETED_JOBS = 128
+COMPLETED_JOB_TTL_SECONDS = 1800
+# Progress callbacks can renew the existing API lease for 45 minutes. Keep a
+# failed/unknown completion acknowledgement beyond that lease before eviction.
+UNCONFIRMED_JOB_TTL_SECONDS = 45 * 60 + 120
+TERMINAL_RESULT_KEYS = set(
+    "status reason stage account_matched current_plan current_tier target_plan "
+    "payment_status payment_outcome payment_attempted payment_requests_sent "
+    "confirmation_requests_sent checkout_requests_sent payment_requests_blocked "
+    "browser_profile_id browser_cleanup_status cancellation_confirmed recheck_only "
+    "user_action_required payment_record_write_failed resolution_only operator_resolution "
+    "resolved_at resolution_job_id source_job_id verification_job_id "
+    "replaced_browser_profile_id browser_profile_missing_confirmed".split())
 JOB_ID_TEXT = r"[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}"
 JOB_ID = re.compile(r"^" + JOB_ID_TEXT + r"$")
 PROFILE_ID = re.compile(r"^[A-Za-z0-9_-]{8,100}$")
@@ -459,15 +472,20 @@ class LocalJob:
         self.confirmation_approved = None
         self.confirmation_consumed = False
         self.result = {}
+        self.finished_callback_acknowledged = False
 
     def check_cancelled(self):
         if self.cancelled:
             raise Stop("operation_cancelled")
 
     def signal_resume(self):
+        if self.done:
+            raise Stop("local_job_finished")
         self.resume_event.set()
 
     def signal_cancel(self):
+        if self.done:
+            raise Stop("local_job_finished")
         if self.payment_request_sent:
             raise Stop("previous_payment_attempt_exists")
         self.cancelled = True
@@ -539,7 +557,7 @@ class LocalJob:
             **details,
         })
         self.result = report
-        self.callback.send({"type": "progress", "result": report})
+        return self.callback.send({"type": "progress", "result": report})
 
     async def wait_for_user(self, reason, seconds):
         self.resume_event.clear()
@@ -781,6 +799,10 @@ class LocalJob:
             return {"status": "payment_unknown_resolved",
                     "stage": "payment_unknown_resolution",
                     "payment_attempted": False, "payment_requests_sent": 0}
+        # An evicted completed ID must fail its existing API nonce/lease check
+        # before parsing credentials, password login or any BitBrowser action.
+        if self.progress("connector_dispatch").get("ok") is not True:
+            raise Stop("durable_state_unavailable")
         target = None
         if "sessionJson" in self.payload:
             raw = self.payload.pop("sessionJson")
@@ -886,10 +908,63 @@ class LocalJob:
         self.result = public_result(result)
         if not self.resolution_committed:
             try:
-                self.callback.send({"type": "finished", "result": public_result(result)})
+                acknowledgement = self.callback.send({"type": "finished", "result": public_result(result)})
+                self.finished_callback_acknowledged = acknowledgement.get("ok") is True
             except Stop:
                 pass
         self.callback.token = ""
+
+    def release_resources(self):
+        """Called only after run() returns, never while a browser flow is live."""
+        for key in ("details", "login", "bitBrowser", "address", "safety"):
+            value = self.payload.get(key)
+            if isinstance(value, dict):
+                value.clear()
+        self.payload.clear()
+        self.callback.token = ""
+        self.callback.url = ""
+        self.context = None
+        self.root = None
+        self.account_key = None
+        self.owned_profile = None
+        self.replaced_owned_profile = None
+        self.expected_account_key = None
+        self.profile_id = None
+        self.original_checkout_identifier = None
+        self.login_code = None
+        self.waiting_for_code = False
+        self.waiting_for_user = False
+        self.revisions.clear()
+        self.stale_profiles.clear()
+        self.session_info.clear()
+        self.profile_rebuild_info.clear()
+        with self.confirmation_lock:
+            self.pending_confirmation = None
+            self.confirmation_approved = None
+        self.result.clear()
+
+
+class CompletedJob:
+    """Bounded public status only; no credentials, browser or callback objects."""
+    __slots__ = ("id", "result", "acknowledged", "expires_at")
+    done = True
+    waiting_for_user = False
+
+    def __init__(self, job, completed_at):
+        self.id = job.id
+        self.result = {
+            key: value for key, value in job.result.items()
+            if key in TERMINAL_RESULT_KEYS and (
+                value is None or type(value) is bool
+                or type(value) is int and -1000000 <= value <= 1000000
+                or isinstance(value, str) and re.fullmatch(r"[A-Za-z0-9_ .:/-]{0,220}", value))}
+        self.acknowledged = job.finished_callback_acknowledged or job.resolution_committed
+        self.expires_at = completed_at + (
+            COMPLETED_JOB_TTL_SECONDS if self.acknowledged else UNCONFIRMED_JOB_TTL_SECONDS)
+
+    def state(self):
+        return {"ok": True, "done": True, "waitingForUser": False,
+                "status": self.result.get("status", "blocked"), "result": dict(self.result)}
 
 
 class Registry:
@@ -900,24 +975,88 @@ class Registry:
         self.lock = threading.Lock()
         self.jobs = {}
 
+    def _prune(self):
+        now = time.monotonic()
+        for job_id, job in list(self.jobs.items()):
+            if isinstance(job, CompletedJob) and job.expires_at <= now:
+                del self.jobs[job_id]
+
+    def _make_room(self):
+        if len(self.jobs) < MAX_COMPLETED_JOBS:
+            return True
+        for job_id, job in self.jobs.items():
+            if isinstance(job, CompletedJob) and job.acknowledged:
+                del self.jobs[job_id]
+                return True
+        return False
+
+    def busy(self):
+        with self.lock:
+            self._prune()
+            return (any(isinstance(job, LocalJob) for job in self.jobs.values())
+                    or len(self.jobs) >= MAX_COMPLETED_JOBS and not any(
+                        isinstance(job, CompletedJob) and job.acknowledged
+                        for job in self.jobs.values()))
+
+    def _run(self, job):
+        try:
+            job.run()
+        except Exception:
+            # A callback/cleanup programming failure must neither retain the
+            # full object nor emit an exception body containing local secrets.
+            if not job.result or job.result.get("status") in {"running", "awaiting_confirmation"}:
+                job.done = False
+        finally:
+            with self.lock:
+                if not job.done:
+                    job.done = True
+                    job.result = {"status": "blocked", "reason": "local_browser_operation_failed",
+                                  "payment_attempted": job.payment_request_sent,
+                                  "payment_requests_sent": 1 if job.payment_request_sent else 0,
+                                  "payment_status": "unknown" if job.payment_request_sent else "not_attempted"}
+                completed = CompletedJob(job, time.monotonic())
+                job.release_resources()
+                if self.jobs.get(job.id) is job:
+                    self.jobs[job.id] = completed
+                self._prune()
+
     def start(self, payload):
         if not isinstance(payload, dict) or payload.get('mode') not in {
                 'payment', 'recheck', 'open_browser', 'resolve_unknown_payment'}:
             raise Stop('invalid_connector_payload')
         with self.lock:
+            self._prune()
             job_id = payload.get("id")
             if job_id in self.jobs:
                 return self.jobs[job_id]
-            if any(not job.done for job in self.jobs.values()):
+            # done becomes true before the final callback returns. The wrapper
+            # retires the full object only after the thread restores all globals.
+            if any(isinstance(job, LocalJob) for job in self.jobs.values()) or not self._make_room():
                 raise Stop("another_local_job_is_running")
             job = LocalJob(payload)
             self.jobs[job.id] = job
-            threading.Thread(target=job.run, name=f"bitbrowser-{job.id[:8]}", daemon=True).start()
+            try:
+                threading.Thread(target=lambda: self._run(job), name=f"bitbrowser-{job.id[:8]}", daemon=True).start()
+            except Exception:
+                del self.jobs[job.id]
+                job.release_resources()
+                raise Stop("local_browser_operation_failed") from None
             return job
 
     def get(self, job_id):
         with self.lock:
+            self._prune()
             return self.jobs.get(job_id)
+
+    def state(self, job_id):
+        with self.lock:
+            self._prune()
+            job = self.jobs.get(job_id)
+            if isinstance(job, (LocalJob, CompletedJob)):
+                return job.state()
+            if job is not None:
+                return {"ok": True, "done": job.done, "waitingForUser": job.waiting_for_user}
+            return None
 
 
 REGISTRY = Registry()
@@ -979,17 +1118,14 @@ class Handler(BaseHTTPRequestHandler):
                                     "service": "id-business-v2-auto-recharge-connector",
                                     "role": REGISTRY.role, "capabilities": capabilities,
                                     "originAllowed": bool(self.allowed_origin()),
-                                    "busy": any(not job.done for job in REGISTRY.jobs.values())})
+                                    "busy": REGISTRY.busy()})
         match = re.fullmatch(r"/jobs/(" + JOB_ID_TEXT + r")", self.path)
         if not match or not self.authorized():
             return self.reply(404, {"ok": False})
-        job = REGISTRY.get(match.group(1))
-        if not job:
+        state = REGISTRY.state(match.group(1))
+        if state is None:
             return self.reply(404, {"ok": False})
-        if isinstance(job, LocalJob):
-            return self.reply(200, job.state())
-        return self.reply(200, {"ok": True, "done": job.done,
-                                "waitingForUser": job.waiting_for_user})
+        return self.reply(200, state)
 
     def do_POST(self):
         if not self.allowed_origin():
@@ -1019,6 +1155,8 @@ class Handler(BaseHTTPRequestHandler):
             job = REGISTRY.get(match.group(1))
             if not job:
                 return self.reply(404, {"ok": False})
+            if isinstance(job, CompletedJob):
+                raise Stop("local_job_finished")
             if match.group(2) == "confirm":
                 if (not isinstance(job, LocalJob) or not isinstance(body, dict)
                         or set(body) != {"nonce", "quoteDigest"}):
