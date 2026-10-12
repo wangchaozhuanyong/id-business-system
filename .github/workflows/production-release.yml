@@ -2387,6 +2387,161 @@ jobs:
         if: inputs.operation == 'release_admin' || inputs.operation == 'release_online_recharge' || inputs.operation == 'release_api_workspace' || inputs.operation == 'release' || inputs.operation == 'release_api_admin' || inputs.operation == 'release_api_admin_migration' || inputs.operation == 'release_api_registration'
         run: bash scripts/production-release/dispatch.sh
 
+      - name: Independently read back Admin publication and preserved services
+        id: admin_readback
+        if: inputs.operation == 'release_admin'
+        run: |
+          python3 -B - <<'PY_ADMIN_READBACK'
+          import hashlib, json, os, re, shlex, subprocess, time
+          from pathlib import Path
+
+          commit, tree = os.environ['RELEASE_COMMIT'], os.environ['SOURCE_TREE']
+          if not all(re.fullmatch(r'[a-f0-9]{40}', value) for value in (commit, tree)):
+              raise SystemExit('Admin readback source identity unavailable')
+          directory = Path('.deploy/production-release')
+          directory.mkdir(parents=True, exist_ok=True)
+          invocation = directory / 'admin-independent-readback-invocation.json'
+          result = directory / 'admin-independent-readback-result.json'
+          metadata = {'commit': commit, 'sourceTree': tree, 'commandId': None,
+                      'status': 'NOT_DISPATCHED', 'readbackVerified': False}
+
+          def save_status():
+              invocation.write_text(json.dumps(metadata, sort_keys=True) + '\n')
+
+          def aws(*args):
+              response = subprocess.run(['aws', *args], capture_output=True, text=True, timeout=30)
+              if response.returncode:
+                  if 'InvocationDoesNotExist' in response.stderr and args[:2] == ('ssm', 'get-command-invocation'):
+                      return None
+                  raise RuntimeError('Admin readback AWS response unavailable')
+              if len(response.stdout.encode()) > 65536:
+                  raise RuntimeError('Admin readback AWS response unavailable')
+              return json.loads(response.stdout)
+
+          try:
+              proof_raw = (directory / 'admin-pending-online-build-proof.json').read_bytes()
+              if not 0 < len(proof_raw) < 32768:
+                  raise RuntimeError('Admin readback build proof unavailable')
+              proof = json.loads(proof_raw)
+              if (proof.get('scope') != 'ADMIN_PENDING_ONLINE_BUILD' or proof.get('commit') != commit
+                      or proof.get('sourceTree') != tree or proof.get('runId') != os.environ['GITHUB_RUN_ID']
+                      or proof.get('runAttempt') != os.environ['GITHUB_RUN_ATTEMPT']
+                      or proof.get('qualityRunId') != os.environ['QUALITY_RUN_ID']):
+                  raise RuntimeError('Admin readback build identity changed')
+              expected_projection = proof['projection']['projectionSha256']
+              if not isinstance(expected_projection, str) or not re.fullmatch(r'[a-f0-9]{64}', expected_projection):
+                  raise RuntimeError('Admin readback build projection unavailable')
+              staged = '/opt/id-business-v2/.staging/oidc-' + commit
+              names = ('remote-deploy.py', 'api-admin-pending-projection.py', 'admin-pending-online-release.py')
+              seals = {}
+              for name in names:
+                  raw = Path('scripts/production-release', name).read_bytes()
+                  if not 0 < len(raw) <= 4 * 1024 * 1024:
+                      raise RuntimeError('Admin readback helper unavailable')
+                  seals[name] = hashlib.sha256(raw).hexdigest()
+              guard = '''import hashlib, os, stat
+          from pathlib import Path
+          identity = lambda row: (row.st_dev, row.st_ino, row.st_mode, row.st_nlink, row.st_uid, row.st_gid, row.st_size, row.st_mtime_ns, row.st_ctime_ns)
+          for name, expected in SEALS.items():
+              path = Path(STAGED) / name
+              if path.is_symlink() or path.resolve() != path or path.parent.resolve() != path.parent:
+                  raise RuntimeError('Admin readback helper path changed')
+              initial = path.lstat()
+              with os.fdopen(os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK), 'rb') as stream:
+                  before = os.fstat(stream.fileno())
+                  if (identity(initial) != identity(before) or not stat.S_ISREG(before.st_mode)
+                          or before.st_nlink != 1 or stat.S_IMODE(before.st_mode) & 0o022
+                          or not 0 < before.st_size <= 4 * 1024 * 1024):
+                      raise RuntimeError('Admin readback helper identity changed')
+                  raw = stream.read(4 * 1024 * 1024 + 1)
+                  if (len(raw) != before.st_size or identity(before) != identity(os.fstat(stream.fileno()))
+                          or identity(before) != identity(path.lstat()) or hashlib.sha256(raw).hexdigest() != expected):
+                      raise RuntimeError('Admin readback helper changed')
+          '''.replace('SEALS', repr(seals)).replace('STAGED', repr(staged))
+              parameters = {'commands': ['set -eu', 'python3 -B -c ' + shlex.quote(guard),
+                  'python3 -B ' + staged + '/admin-pending-online-release.py readback --commit ' + commit],
+                  'executionTimeout': ['600']}
+              metadata['status'] = 'DISPATCH_REQUESTED'
+              save_status()
+              command = aws('ssm', 'send-command', '--region', os.environ['AWS_REGION'],
+                  '--instance-ids', os.environ['PRODUCTION_INSTANCE_ID'], '--document-name', 'AWS-RunShellScript',
+                  '--parameters', json.dumps(parameters), '--timeout-seconds', '600',
+                  '--comment', 'Independent Admin readback ' + commit, '--output', 'json')
+              command_id = command['Command']['CommandId']
+              if not isinstance(command_id, str) or not re.fullmatch(r'[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}', command_id):
+                  raise RuntimeError('Admin readback command identity unavailable')
+              metadata.update(commandId=command_id, status='Pending')
+              save_status()
+              deadline = time.monotonic() + 660
+              terminal = {'Success', 'Cancelled', 'TimedOut', 'Failed'}
+              while True:
+                  if time.monotonic() >= deadline:
+                      metadata['status'] = 'LOCAL_WAIT_EXHAUSTED'
+                      raise RuntimeError('Admin readback wait exhausted')
+                  value = aws('ssm', 'get-command-invocation', '--region', os.environ['AWS_REGION'],
+                      '--command-id', command_id, '--instance-id', os.environ['PRODUCTION_INSTANCE_ID'], '--output', 'json')
+                  if value is None:
+                      time.sleep(5)
+                      continue
+                  if value.get('CommandId') != command_id or value.get('InstanceId') != os.environ['PRODUCTION_INSTANCE_ID']:
+                      metadata['status'] = 'INVALID_INVOCATION'
+                      raise RuntimeError('Admin readback invocation identity unavailable')
+                  status = value.get('Status')
+                  if status not in terminal | {'Pending', 'InProgress', 'Delayed', 'Cancelling'}:
+                      metadata['status'] = 'INVALID_STATUS'
+                      raise RuntimeError('Admin readback command status unavailable')
+                  metadata['status'] = status
+                  save_status()
+                  if status in terminal:
+                      if status != 'Success' or type(value.get('ResponseCode')) is not int or value['ResponseCode'] != 0:
+                          raise RuntimeError('Admin readback command failed')
+                      if value.get('StandardErrorContent') != '':
+                          raise RuntimeError('Admin readback command returned an error')
+                      break
+                  time.sleep(5)
+
+              def unique(rows):
+                  output = {}
+                  for key, item in rows:
+                      if key in output:
+                          raise ValueError('Duplicate Admin readback field')
+                      output[key] = item
+                  return output
+
+              raw = value.get('StandardOutputContent')
+              if not isinstance(raw, str) or not 0 < len(raw.encode()) < 8192:
+                  raise RuntimeError('Admin readback receipt unavailable')
+              receipt = json.loads(raw, object_pairs_hook=unique)
+              fields = {'status', 'commit', 'apiComponentBaseline', 'servicesUpdated',
+                        'preservedServiceCount', 'onlinePublished', 'projectionSha256'}
+              if (not isinstance(receipt, dict) or set(receipt) != fields
+                      or receipt['status'] != 'ADMIN_ONLY_READBACK_VERIFIED' or receipt['commit'] != commit
+                      or receipt['apiComponentBaseline'] != os.environ['EXPECTED_CURRENT']
+                      or receipt['servicesUpdated'] != ['admin'] or receipt['onlinePublished'] is not False
+                      or type(receipt['preservedServiceCount']) is not int or receipt['preservedServiceCount'] != 6
+                      or receipt['projectionSha256'] != expected_projection):
+                  raise RuntimeError('Admin readback receipt rejected')
+              result.write_text(json.dumps(receipt, sort_keys=True) + '\n')
+              metadata['readbackVerified'] = True
+              save_status()
+              print(json.dumps(receipt, sort_keys=True))
+          except Exception:
+              save_status()
+              raise SystemExit('Independent Admin readback failed; raw output suppressed') from None
+          PY_ADMIN_READBACK
+
+      - name: Save only independent Admin readback safe evidence
+        if: always() && inputs.operation == 'release_admin'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: admin-readback-evidence-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            .deploy/production-release/admin-independent-readback-invocation.json
+            .deploy/production-release/admin-independent-readback-result.json
+          if-no-files-found: warn
+          include-hidden-files: true
+          retention-days: 14
+
       - name: Independently read back API Admin running images and preserved services
         if: inputs.operation == 'release_api_workspace' || inputs.operation == 'release_api_admin' || inputs.operation == 'release_api_admin_migration' || inputs.operation == 'release_api_registration'
         run: python3 -B scripts/production-release/api-admin-readonly.py readback

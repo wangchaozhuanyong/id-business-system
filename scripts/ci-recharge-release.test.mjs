@@ -1,7 +1,15 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync
+} from 'node:fs';
 import { join } from 'node:path';
 import test from 'node:test';
 import { gzipSync } from 'node:zlib';
@@ -554,6 +562,211 @@ test('independent Admin operation retains source QA and skips API ONLINE and wor
     assert.equal(workflowPredicate(step.if)(inputs), false, name);
   }
   assert.equal(workflow.concurrency['cancel-in-progress'], false);
+});
+
+const adminReadbackStep = workflowSteps.find((step) => step.id === 'admin_readback');
+
+test('independent Admin readback runs after successful deployment and saves only its safe evidence', () => {
+  const deploy = workflowSteps.find(
+    (step) => step.name === 'Deploy through the production instance'
+  );
+  assert.ok(workflowSteps.indexOf(adminReadbackStep) > workflowSteps.indexOf(deploy));
+  assert.equal(adminReadbackStep['continue-on-error'], undefined);
+  assert.equal(adminReadbackStep.if, "inputs.operation == 'release_admin'");
+  for (const operation of workflowInputs.operation.options)
+    assert.equal(
+      workflowPredicate(adminReadbackStep.if)({ operation }),
+      operation === 'release_admin'
+    );
+  const evidence = workflowSteps.find(
+    (step) => step.name === 'Save only independent Admin readback safe evidence'
+  );
+  assert.deepEqual(evidence.with.path.trim().split('\n'), [
+    '.deploy/production-release/admin-independent-readback-invocation.json',
+    '.deploy/production-release/admin-independent-readback-result.json'
+  ]);
+  const enabled = new Function('inputs', 'always', 'steps', `return (${evidence.if});`);
+  for (const outcome of ['success', 'failure', 'cancelled', 'skipped'])
+    assert.equal(
+      enabled({ operation: 'release_admin' }, () => true, { admin_readback: { outcome } }),
+      true
+    );
+  assert.equal(
+    enabled({ operation: 'release_online_recharge' }, () => true, {
+      admin_readback: { outcome: 'success' }
+    }),
+    false
+  );
+});
+
+function adminReadbackFixture(run, options = {}) {
+  fixture(({ root, env, log }) => {
+    const selected = independentAdminEnv(env);
+    adminProjectionFixture(root, selected, log);
+    const python = execFileSync('python3', ['-c', 'import sys;print(sys.executable)'], {
+      encoding: 'utf8'
+    }).trim();
+    const receipt = {
+      status: 'ADMIN_ONLY_READBACK_VERIFIED',
+      commit: selected.RELEASE_COMMIT,
+      apiComponentBaseline: selected.EXPECTED_CURRENT,
+      servicesUpdated: ['admin'],
+      preservedServiceCount: 6,
+      onlinePublished: false,
+      projectionSha256: 'e'.repeat(64),
+      ...options.receipt
+    };
+    const commandId = '12345678-1234-1234-1234-123456789abc';
+    const parametersFile = join(root, 'readback-parameters.json');
+    const responseFile = join(root, 'readback-response.json');
+    writeFileSync(
+      responseFile,
+      JSON.stringify({
+        CommandId: commandId,
+        InstanceId: 'i-test-fixture-only',
+        Status: 'Success',
+        ResponseCode: 0,
+        StandardOutputContent: JSON.stringify(receipt),
+        StandardErrorContent: '',
+        ...options.response
+      })
+    );
+    writeFileSync(
+      join(root, 'bin/aws'),
+      `#!${python}
+import json,os,sys
+from pathlib import Path
+args=sys.argv[1:]
+with Path(os.environ['TASK_DOCKER_LOG']).open('a') as stream: stream.write(' '.join(args[:2])+'\\n')
+if args[:2]==['ssm','send-command']:
+    Path(os.environ['TASK_ADMIN_PARAMETERS']).write_text(args[args.index('--parameters')+1])
+    print(json.dumps({'Command':{'CommandId':'${commandId}'}}))
+elif args[:2]==['ssm','get-command-invocation']:
+    print(Path(os.environ['TASK_ADMIN_RESPONSE']).read_text())
+else: raise SystemExit(9)
+`,
+      { mode: 0o755 }
+    );
+    const execute = () =>
+      execFileSync('bash', ['-c', adminReadbackStep.run], {
+        cwd: root,
+        env: {
+          ...selected,
+          PRODUCTION_INSTANCE_ID: 'i-test-fixture-only',
+          TASK_ADMIN_PARAMETERS: parametersFile,
+          TASK_ADMIN_RESPONSE: responseFile
+        },
+        stdio: 'pipe'
+      });
+    const invocation = join(
+      root,
+      '.deploy/production-release/admin-independent-readback-invocation.json'
+    );
+    const result = join(root, '.deploy/production-release/admin-independent-readback-result.json');
+    run({ execute, selected, root, log, parametersFile, invocation, result, receipt, commandId });
+  });
+}
+
+test('independent Admin actual readback pins all staged helpers and binds its safe receipt to this source', () => {
+  adminReadbackFixture(
+    ({ execute, selected, root, log, parametersFile, invocation, result, receipt, commandId }) => {
+      execute();
+      assert.deepEqual(JSON.parse(readFileSync(result, 'utf8')), receipt);
+      assert.deepEqual(JSON.parse(readFileSync(invocation, 'utf8')), {
+        commit: selected.RELEASE_COMMIT,
+        sourceTree: selected.SOURCE_TREE,
+        commandId,
+        status: 'Success',
+        readbackVerified: true
+      });
+      assert.deepEqual(readFileSync(log, 'utf8').trim().split('\n'), [
+        'ssm send-command',
+        'ssm get-command-invocation'
+      ]);
+      const parameters = JSON.parse(readFileSync(parametersFile, 'utf8'));
+      assert.equal(parameters.commands.length, 3);
+      assert.equal(parameters.commands[0], 'set -eu');
+      assert.deepEqual(parameters.executionTimeout, ['600']);
+      const staged = '/opt/id-business-v2/.staging/oidc-' + selected.RELEASE_COMMIT;
+      assert.equal(
+        parameters.commands[2],
+        `python3 -B ${staged}/admin-pending-online-release.py readback --commit ${selected.RELEASE_COMMIT}`
+      );
+      const decoded = JSON.parse(
+        execFileSync(
+          'python3',
+          [
+            '-B',
+            '-c',
+            'import json,shlex,sys;print(json.dumps(shlex.split(sys.argv[1])))',
+            parameters.commands[1]
+          ],
+          { encoding: 'utf8' }
+        )
+      );
+      assert.deepEqual(decoded.slice(0, 3), ['python3', '-B', '-c']);
+      const localStage = join(root, 'scripts/production-release');
+      const guard = decoded[3].replaceAll(staged, localStage);
+      for (const name of [
+        'remote-deploy.py',
+        'api-admin-pending-projection.py',
+        'admin-pending-online-release.py'
+      ]) {
+        const hash = createHash('sha256')
+          .update(readFileSync(join(localStage, name)))
+          .digest('hex');
+        assert.ok(decoded[3].includes(hash), name);
+      }
+      assert.equal(/curl|chmod|unlink|\.env|write_text|send-command/.test(guard), false);
+      execFileSync('python3', ['-B', '-c', guard], { stdio: 'pipe' });
+      const controller = join(localStage, 'admin-pending-online-release.py');
+      const original = readFileSync(controller);
+      writeFileSync(controller, Buffer.concat([original, Buffer.from('\n# changed fixture\n')]));
+      assert.throws(() => execFileSync('python3', ['-B', '-c', guard], { stdio: 'pipe' }));
+      writeFileSync(controller, original);
+      const target = join(root, 'controller-copy.py');
+      writeFileSync(target, original);
+      rmSync(controller);
+      symlinkSync(target, controller);
+      assert.throws(() => execFileSync('python3', ['-B', '-c', guard], { stdio: 'pipe' }));
+    }
+  );
+});
+
+test('independent Admin actual readback rejects stale incomplete extra and ambiguous success receipts', () => {
+  for (const options of [
+    { receipt: { commit: 'd'.repeat(40) } },
+    { receipt: { apiComponentBaseline: 'd'.repeat(40) } },
+    { receipt: { preservedServiceCount: true } },
+    { receipt: { preservedServiceCount: 5 } },
+    { receipt: { servicesUpdated: ['admin', 'api'] } },
+    { receipt: { onlinePublished: true } },
+    { receipt: { projectionSha256: 'fixture-private-extra-must-never-be-saved' } },
+    { receipt: { projectionSha256: 'd'.repeat(64) } },
+    { receipt: { privateExtra: 'fixture-private-extra-must-never-be-saved' } },
+    { response: { StandardOutputContent: '{"status":"ok","status":"duplicate"}' } },
+    { response: { StandardOutputContent: 'fixture-private-raw-must-never-be-saved' } },
+    { response: { StandardErrorContent: 'fixture-private-error-must-never-be-saved' } },
+    { response: { ResponseCode: 1 } },
+    { response: { ResponseCode: false } },
+    { response: { CommandId: '87654321-1234-1234-1234-123456789abc' } },
+    { response: { InstanceId: 'i-unrelated-fixture' } },
+    { response: { Status: 'Failed' } },
+    { response: { Status: 'fixture-private-status-must-never-be-saved' } }
+  ]) {
+    adminReadbackFixture(({ execute, invocation, result }) => {
+      assert.throws(execute, (error) => {
+        assert.equal(error.status, 1);
+        assert.equal(String(error.stdout).includes('fixture-private'), false);
+        assert.equal(String(error.stderr).includes('fixture-private'), false);
+        return true;
+      });
+      assert.equal(existsSync(result), false);
+      const safe = readFileSync(invocation, 'utf8');
+      assert.equal(safe.includes('fixture-private'), false);
+      assert.equal(JSON.parse(safe).readbackVerified, false);
+    }, options);
+  }
 });
 
 function adminProjectionFixture(root, env, log) {
