@@ -16,6 +16,10 @@ import {
 import { RechargeAddressRepository } from './persistence/recharge-address.repository';
 import { RechargeRepository } from './persistence/recharge.repository';
 import { RechargeService } from './recharge.service';
+import {
+  assertOriginalRechargeConnection,
+  readRechargeConnectionAccess
+} from './recharge-connection-access';
 import { startRechargeOpenProfile } from './recharge-profile-recovery';
 import { localBitBrowserLaunchOptions } from './recharge-browser-options';
 import { RechargeSettingsService } from './recharge-settings.service';
@@ -63,15 +67,20 @@ export class RechargeLocalService {
       ? await this.proxies?.forCharge(input.proxyId, operator, input.proxyCountryCode)
       : null;
     if (input.proxyId && !selectedProxy) throw new ConflictException('所选代理 IP 不可用');
-    const runtime = await this.settings.runtime(operator.id, Boolean(selectedProxy));
+    const runtime = await this.settings.runtime(
+      operator.id,
+      Boolean(selectedProxy),
+      false,
+      input.connectionProfileId
+    );
     const agentToken = randomBytes(32).toString('hex');
     const result = await this.transactions.execute(
       async (tx) => {
         await this.repository.lock(tx);
         const previous = await this.repository.findJob(tx, input.id);
         if (previous) throw new ConflictException('本次连接凭据已失效，请重新开始');
-        const active = await this.repository.findRunningJob(tx);
-        if (active) throw new ConflictException('已有一笔充值任务执行中');
+        const active = await this.repository.findRunningJob(tx, operator.id);
+        if (active) throw new ConflictException('本人已有一笔充值任务执行中，请先处理原任务');
         const address = await this.addressRepository.requireAvailable(
           tx,
           operator.id,
@@ -116,7 +125,9 @@ export class RechargeLocalService {
               operator.id,
               accountKey,
               input.id,
-              true
+              true,
+              runtime.connectionMetadata?.connection_api_key,
+              runtime.connectionMetadata?.connection_profile_id as string | null | undefined
             )
           : undefined;
         const job = await this.repository.createJob(tx, {
@@ -135,6 +146,7 @@ export class RechargeLocalService {
           nonceHash: hash(agentToken),
           leaseUntil: new Date(Date.now() + 45 * 60000),
           result: toV2JsonDocument({
+            ...runtime.connectionMetadata,
             status: 'waiting_local_connector',
             stage: 'connector_dispatch',
             addressId: address.id,
@@ -229,20 +241,26 @@ export class RechargeLocalService {
 
   async startOpen(value: unknown, operator: AuthenticatedUser) {
     const input = validateRechargeBitBrowserOpenStart(value);
-    const runtime = await this.settings.runtime(operator.id, false, input.directMode === true);
+    const runtime = await this.settings.runtime(
+      operator.id,
+      false,
+      input.directMode === true,
+      input.connectionProfileId
+    );
     const agentToken = randomBytes(32).toString('hex');
     const result = await this.transactions.execute(
       async (tx) => {
         await this.repository.lock(tx);
         const previous = await this.repository.findJob(tx, input.id);
         if (previous) throw new ConflictException('本次连接凭据已失效，请重新开始');
-        const active = await this.repository.findRunningJob(tx);
-        if (active) throw new ConflictException('已有一笔充值任务执行中');
+        const active = await this.repository.findRunningJob(tx, operator.id);
+        if (active) throw new ConflictException('本人已有一笔充值任务执行中，请先处理原任务');
         return startRechargeOpenProfile({
           tx,
           request: input,
           ownerId: operator.id,
           nonceHash: hash(agentToken),
+          connectionMetadata: runtime.connectionMetadata,
           repository: this.repository,
           accounts: this.bankAccounts,
           audit: this.audit
@@ -269,7 +287,12 @@ export class RechargeLocalService {
 
   async recheck(value: unknown, operator: AuthenticatedUser) {
     const input = validateRechargeBitBrowserRecheckStart(value);
-    const runtime = await this.settings.runtime(operator.id);
+    const runtime = await this.settings.runtime(
+      operator.id,
+      false,
+      false,
+      input.connectionProfileId
+    );
     const agentToken = randomBytes(32).toString('hex');
     const job = await this.transactions.execute(
       async (tx) => {
@@ -277,8 +300,8 @@ export class RechargeLocalService {
         if (await this.repository.findJob(tx, input.id)) {
           throw new ConflictException('本次连接凭据已失效，请重新开始');
         }
-        if (await this.repository.findRunningJob(tx)) {
-          throw new ConflictException('已有一笔充值任务执行中');
+        if (await this.repository.findRunningJob(tx, operator.id)) {
+          throw new ConflictException('本人已有一笔充值任务执行中，请先处理原任务');
         }
         const source = await this.repository.findJob(tx, input.sourceJobId);
         const sourceResult = await recoverLocalRechargePaymentFacts(tx, this.repository, source);
@@ -300,6 +323,7 @@ export class RechargeLocalService {
         ) {
           throw new ConflictException('该记录不能只读复查原订单');
         }
+        assertOriginalRechargeConnection(sourceResult, runtime.connectionMetadata);
         const upgrade = rechargeUpgradeRecheckBinding(sourceResult, source.plan);
         if (sourceResult.operation === 'subscription_upgrade' && !upgrade)
           throw new ConflictException('原升级操作绑定不完整，不能复查');
@@ -315,6 +339,7 @@ export class RechargeLocalService {
           nonceHash: hash(agentToken),
           leaseUntil: new Date(Date.now() + 45 * 60000),
           result: toV2JsonDocument({
+            ...runtime.connectionMetadata,
             status: 'waiting_local_connector',
             stage: 'connector_dispatch',
             window_name: input.windowName,
@@ -381,8 +406,8 @@ export class RechargeLocalService {
         if (!unknownPaymentCanBeResolved(source)) {
           throw new ConflictException('该记录不是可处理的付款结果未知记录');
         }
-        if (await this.repository.findRunningJob(tx)) {
-          throw new ConflictException('已有一笔充值任务执行中');
+        if (await this.repository.findRunningJob(tx, operator.id)) {
+          throw new ConflictException('本人已有一笔充值任务执行中，请先处理原任务');
         }
         const verification = await this.repository.findJob(tx, input.verificationJobId);
         if (!verification || !isFreeAccountVerification(source, verification)) {
@@ -390,6 +415,7 @@ export class RechargeLocalService {
         }
         const sourceResult = object(source.result);
         const checkoutIdentifier = String(sourceResult.checkout_identifier);
+        assertOriginalRechargeConnection(object(source.result), runtime.connectionMetadata);
         const created = await this.repository.createJob(tx, {
           id,
           ownerId: operator.id,
@@ -400,6 +426,7 @@ export class RechargeLocalService {
           nonceHash: hash(agentToken),
           leaseUntil: new Date(Date.now() + 5 * 60000),
           result: toV2JsonDocument({
+            ...runtime.connectionMetadata,
             status: 'waiting_local_connector',
             stage: 'connector_dispatch',
             resolution_only: true,
@@ -409,7 +436,8 @@ export class RechargeLocalService {
             target_plan: source.plan,
             payment_attempted: false,
             confirmation_requests_sent: 0,
-            payment_requests_sent: 0
+            payment_requests_sent: 0,
+            ...runtime.connectionMetadata
           })
         });
         await this.audit.append(tx, {
@@ -472,14 +500,7 @@ export class RechargeLocalService {
   async access(id: string, operator: AuthenticatedUser) {
     if (!uuidPattern.test(id)) throw new BadRequestException('任务编号无效');
     const job = await this.repository.owned(id, operator.id);
-    if (job.action !== 'bitbrowser' || job.state === 'finished') {
-      throw new ConflictException('本次本机任务已结束');
-    }
-    const runtime = await this.settings.runtime(operator.id);
-    return {
-      connectorUrl: normalizeV2RechargeConnectorUrl(runtime.connectorUrl),
-      connectorToken: runtime.connectorToken
-    };
+    return readRechargeConnectionAccess(job, this.settings);
   }
 
   async abandonUnreceived(id: string, operator: AuthenticatedUser) {

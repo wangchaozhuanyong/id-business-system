@@ -654,6 +654,31 @@ export function rechargeIssueFeedback(job: V2RechargeJob): RechargeIssueFeedback
   }
   const reason = typeof job.result.reason === 'string' ? job.result.reason : undefined;
   if (reason) {
+    if (
+      reason === 'durable_state_unavailable' &&
+      job.result.payment_attempted !== true &&
+      Number(job.result.payment_requests_sent ?? 0) <= 0 &&
+      Number(job.result.confirmation_requests_sent ?? 0) <= 0 &&
+      !job.result.payment_evidence &&
+      job.state !== 'unknown' &&
+      job.state !== 'confirming' &&
+      ![
+        'payment_result_unknown',
+        'upgrade_result_unknown',
+        'subscription_activated',
+        'paid_pending_activation',
+        'paid_tier_pending_verification'
+      ].includes(String(job.result.status)) &&
+      (!job.result.payment_status || job.result.payment_status === 'not_attempted') &&
+      (!job.result.payment_outcome || job.result.payment_outcome === 'not_attempted')
+    ) {
+      return {
+        title: '执行记录未确认',
+        message: '本机助手与服务器的执行记录尚未确认，已暂停本次操作。',
+        action:
+          '请先检查本机助手与服务器的记录接口，并保留本次执行记录供排查。历史订单的付款情况仍需单独核实。'
+      };
+    }
     const pageMessages: Record<string, string> = {
       blank: '报价页等待满本轮时间并自动刷新后，仍没有返回有效内容',
       official_error: '官网返回了结算错误页，未取得可用报价',

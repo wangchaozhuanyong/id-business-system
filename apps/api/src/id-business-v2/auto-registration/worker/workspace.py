@@ -22,6 +22,7 @@ import sqlite3
 import sys
 import types
 from typing import Any
+from urllib.parse import urlsplit
 
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from fastapi import FastAPI, HTTPException, Request
@@ -30,6 +31,7 @@ from fastapi.templating import Jinja2Templates
 from sqlalchemy import Text, text
 from sqlalchemy.types import TypeDecorator
 from release_safety import maintenance_active
+from upload_compat import install_upload_compatibility
 
 WORKER_DIR = Path(__file__).resolve().parent
 UPSTREAM_DIR = WORKER_DIR.parent / "upstream"
@@ -179,6 +181,7 @@ def install_upstream_adapters(encryption_key: str, runtime_dir: Path) -> tuple[A
         return original_update(**{key: value for key, value in kwargs.items() if key not in fixed_settings})
 
     config.update_settings = update_settings
+    install_upload_compatibility()
     registration = importlib.import_module("src.core.register")
     original_log = registration.RegistrationEngine._log
 
@@ -225,6 +228,11 @@ def transform_asset(source: str, *, html: bool = False, asset_name: str = "") ->
     if asset_name == "utils.js":
         # Extend only the served display map; retain the upstream stored value.
         source += "\nstatusMap.service.apple_hidden = '苹果隐藏邮箱';\n"
+    if asset_name == "payment.js":
+        # The original payment page calls ui.showToast, while its shared utils
+        # exports toast.show. Adapt only that served UI method name.
+        source = source.replace("ui.showToast(", "toast.show(")
+        source += "\n" + _PAYMENT_BROWSER_BRIDGE
     if asset_name in {"accounts.js", "app.js"}:
         source = source.replace('data-pwd="${escapeHtml(account.password)}"', 'data-account-id="${account.id}"')
         source = source.replace("copyToClipboard(btn.dataset.pwd);", "window.idWorkspaceCopyPassword(btn.dataset.accountId);")
@@ -233,10 +241,103 @@ def transform_asset(source: str, *, html: bool = False, asset_name: str = "") ->
             source = source.replace('<span class="password-hidden" title="点击查看">', '<span class="password-hidden" data-account-id="${account.id}" onclick="window.idWorkspaceTogglePassword(this, this.dataset.accountId)" title="点击查看">')
         source += "\n" + _PASSWORD_BRIDGE
     if html:
+        source = source.replace('onclick="openIncognito()">无痕打开浏览器', 'onclick="openIncognito()">在当前浏览器打开')
+        source = source.replace('<p class="hint" id="open-status"></p>', '<p class="hint" id="open-status" role="status"></p><p class="hint">使用当前浏览器的登录状态；如需隔离账号，请复制链接后手动打开无痕窗口。</p>')
         source = source.replace('<html lang="zh-CN">', '<html lang="zh-CN" data-v2-registration-workspace>')
         source = source.replace("<head>", '<head>\n<script src="' + WORKSPACE_PREFIX + '/static/id-workspace.js"></script>', 1)
         source = source.replace("</head>", '<link rel="stylesheet" href="' + WORKSPACE_PREFIX + '/static/id-system-skin.css">\n<link rel="stylesheet" href="' + WORKSPACE_PREFIX + '/static/id-workspace.css">\n</head>', 1)
     return source
+
+
+def payment_browser_url(value: Any) -> str:
+    """Accept only the checkout URL produced by the frozen payment engine."""
+    if not isinstance(value, str) or len(value) > 8192 or any(ord(char) <= 32 for char in value) or "\\" in value:
+        raise HTTPException(status_code=400, detail="支付链接不在允许范围内")
+    try:
+        parts = urlsplit(value)
+        valid = (parts.scheme == "https" and parts.hostname == "chatgpt.com"
+                 and parts.username is None and parts.password is None
+                 and parts.port in (None, 443) and not parts.query and not parts.fragment
+                 and re.fullmatch(r"/checkout/openai_llc/[A-Za-z0-9_-]+", parts.path))
+    except ValueError:
+        valid = False
+    if not valid:
+        raise HTTPException(status_code=400, detail="支付链接不在允许范围内")
+    return value
+
+
+def install_payment_browser_adapter(app: FastAPI) -> None:
+    payment = importlib.import_module("src.web.routes.payment")
+
+    def generate_link(request):
+        # Generating the original link is unchanged. A cloud worker must never
+        # launch its own GUI browser or expose saved account cookies to a client.
+        result = payment.generate_payment_link(request.model_copy(update={"auto_open": False}))
+        if result.get("success") and result.get("link"):
+            payment_browser_url(result["link"])
+        return {**result, "auto_opened": False, "client_open_required": request.auto_open}
+
+    def open_link(request):
+        payment_browser_url(request.url)
+        return {"success": False, "client_open_required": True,
+                "message": "请在当前浏览器打开链接；无痕模式需要手动开启。"}
+
+    generate_link.__annotations__ = {"request": payment.GenerateLinkRequest}
+    open_link.__annotations__ = {"request": payment.OpenIncognitoRequest}
+    app.add_api_route("/api/payment/generate-link", generate_link, methods=["POST"])
+    app.add_api_route("/api/payment/open-incognito", open_link, methods=["POST"])
+
+
+_PAYMENT_BROWSER_BRIDGE = """
+(() => {
+    function checkoutUrl(value) {
+        if (typeof value !== 'string' || value.length > 8192 || /[\\x00-\\x20\\\\]/.test(value))
+            throw new Error('支付链接不在允许范围内');
+        let url;
+        try { url = new URL(value); } catch { throw new Error('支付链接不在允许范围内'); }
+        if (url.protocol !== 'https:' || url.hostname !== 'chatgpt.com' || url.username || url.password ||
+            (url.port && url.port !== '443') || url.search || url.hash ||
+            !/^\\/checkout\\/openai_llc\\/[A-Za-z0-9_-]+$/.test(value.replace(/^https:\\/\\/[^/]+/i, '')))
+            throw new Error('支付链接不在允许范围内');
+        return value;
+    }
+    window.openIncognito = function() {
+        const status = document.getElementById('open-status');
+        let url;
+        try { url = checkoutUrl(generatedLink); }
+        catch (error) { status.textContent = error.message; toast.show(error.message, 'warning'); return false; }
+        let tab;
+        try {
+            // Open synchronously in the user click. A blank tab lets us detect
+            // blocked popups before navigating without retaining an opener.
+            tab = window.open('about:blank', '_blank');
+            if (!tab) throw new Error('浏览器阻止了新窗口，请复制链接后手动打开。');
+            tab.opener = null;
+            const policy = tab.document.createElement('meta');
+            policy.name = 'referrer'; policy.content = 'no-referrer';
+            tab.document.head.appendChild(policy);
+            const link = tab.document.createElement('a');
+            link.href = url; link.rel = 'noopener noreferrer'; link.referrerPolicy = 'no-referrer';
+            tab.document.body.appendChild(link);
+            link.click(); link.remove();
+            status.textContent = '已在当前浏览器打开链接；如需无痕模式，请复制链接后手动开启。';
+            toast.show('已在当前浏览器打开链接', 'success');
+            return true;
+        } catch (error) {
+            try { if (tab) tab.close(); } catch { /* No account data is retained. */ }
+            status.textContent = '浏览器阻止了新窗口，请复制链接后手动打开。';
+            toast.show(status.textContent, 'warning');
+            return false;
+        }
+    };
+    const originalCopy = window.copyLink;
+    window.copyLink = function() {
+        try { checkoutUrl(generatedLink); }
+        catch (error) { toast.show(error.message, 'warning'); return; }
+        return originalCopy();
+    };
+})();
+"""
 
 
 _PASSWORD_BRIDGE = """
@@ -387,7 +488,10 @@ def create_workspace_app(config: dict[str, Any]) -> FastAPI:
     def verify_resources() -> None:
         required = [
             WORKER_DIR / "apple_mailboxes.py",
+            WORKER_DIR / "apple_closed_loop.py",
+            WORKER_DIR / "apple_registration_diagnostics.py",
             WORKER_DIR / "release_safety.py",
+            WORKER_DIR / "upload_compat.py",
             WORKER_DIR / "id-workspace.js",
             WORKER_DIR / "id-workspace.css",
             PROJECT_ROOT / "apps/admin/src/v2/styles/base.css",
@@ -443,6 +547,7 @@ def create_workspace_app(config: dict[str, Any]) -> FastAPI:
         os.chmod(backup_path, 0o600)
         return {"success": True, "message": "数据库备份成功", "backup_path": str(backup_path)}
 
+    install_payment_browser_adapter(app)
     app.include_router(api_router, prefix="/api")
     app.include_router(ws_router, prefix="/api")
     templates = Jinja2Templates(directory=str(UPSTREAM_DIR / "templates"))

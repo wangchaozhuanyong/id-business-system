@@ -36,6 +36,7 @@
     <V2AsyncRegion
       variant="section"
       :phase="settingsQuery.phase.value"
+      :previous-data="settingsQuery.isParameterTransition.value"
       :error="settingsQuery.error.value ? getApiErrorMessage(settingsQuery.error.value) : ''"
       skeleton="form"
       loading-title="正在读取代理与窗口设置"
@@ -61,8 +62,43 @@
         label-width="148px"
         require-asterisk-position="right"
         scroll-to-error
-        :disabled="settingsSaving"
+        :disabled="settingsSaving || settingsQuery.isParameterTransition.value"
       >
+        <fieldset v-if="!serverMode && !registration">
+          <legend>本人的连接配置</legend>
+          <el-form-item label="连接配置">
+            <el-select v-model="connectionProfileChoice" aria-label="选择本人的连接配置">
+              <el-option label="原连接配置" value="default" />
+              <el-option
+                v-for="item in settingsQuery.data.value?.connectionProfiles ?? []"
+                :key="item.id"
+                :label="item.name"
+                :value="item.id"
+              />
+              <el-option label="新增连接配置" value="new" />
+            </el-select>
+          </el-form-item>
+          <el-form-item
+            v-if="settingsForm.newConnectionProfile || settingsForm.connectionProfileId"
+            label="配置名称"
+            prop="connectionProfileName"
+            required
+          >
+            <el-input
+              v-model="settingsForm.connectionProfileName"
+              maxlength="80"
+              placeholder="例如：办公室电脑／比特账号 A"
+            />
+          </el-form-item>
+          <div class="recharge-settings-connection">
+            <AppButton :disabled="settingsForm.newConnectionProfile" @click="restoreSavedSettings"
+              >恢复已保存配置</AppButton
+            >
+          </div>
+          <p class="recharge-settings-note">
+            配置仅归本人使用。不同员工可在不同电脑同时执行；同一本机助手每次执行一笔任务。
+          </p>
+        </fieldset>
         <RechargeProxyOptions
           v-model="settingsForm"
           :stored="stored"
@@ -273,6 +309,9 @@ const {
   settingsError,
   settingsForm,
   settingsQuery,
+  storedSettings,
+  connectionProfileChoice,
+  restoreSavedSettings,
   connectorStatus,
   connectorMessage,
   setSettingsOpen,
@@ -286,11 +325,15 @@ const {
   directMode,
   proxyCatalog
 } = props.settings;
-const stored = computed(() => settingsQuery.data.value);
+const stored = computed(() => storedSettings.value);
 const summary = computed(() => browserSettingsSummary(stored.value));
 const formRef = ref<FormInstance>();
 const rules = computed<FormRules>(() => ({
   ...browserOptionRules(settingsForm.value),
+  connectionProfileName:
+    settingsForm.value.newConnectionProfile || settingsForm.value.connectionProfileId
+      ? [{ required: true, message: '请填写连接配置名称', max: 80, trigger: 'blur' }]
+      : [],
   connectorUrl: [{ required: true, message: '请填写本机连接器地址', trigger: 'blur' }],
   localApiUrl: [{ required: true, message: '请填写比特接口地址', trigger: 'blur' }],
   groupName: props.serverMode

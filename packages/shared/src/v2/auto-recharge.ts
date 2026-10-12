@@ -352,6 +352,9 @@ export interface V2RechargeServerProxySettings {
 }
 
 export interface V2RechargeBitBrowserSettings {
+  connectionProfileId?: string | null;
+  connectionProfileName?: string;
+  connectionProfiles?: { id: string; name: string }[];
   proxyId?: string | null;
   connectorUrl: string;
   localApiUrl: string;
@@ -382,6 +385,10 @@ export interface V2RechargeBrowserCatalogAccess {
 }
 
 export interface UpdateV2RechargeBitBrowserSettingsInput {
+  connectionProfileId?: string | null;
+  newConnectionProfile?: boolean;
+  connectionProfileName?: string;
+  expectedUpdatedAt?: string | null;
   proxyId?: string | null;
   serverMode?: boolean;
   directMode?: boolean;
@@ -399,6 +406,7 @@ export interface UpdateV2RechargeBitBrowserSettingsInput {
 }
 
 export interface V2RechargeBitBrowserStart {
+  connectionProfileId?: string | null;
   cardId?: string;
   billingName?: string;
   id: string;
@@ -416,6 +424,7 @@ export interface V2RechargeBitBrowserStart {
 }
 
 export interface V2RechargeBitBrowserRecheckStart {
+  connectionProfileId?: string | null;
   id: string;
   sourceJobId: string;
   plan: V2RechargePlan;
@@ -475,6 +484,7 @@ export function normalizeV2RechargeConnectorUrl(value: string) {
 }
 
 export interface V2RechargeBitBrowserOpenStart {
+  connectionProfileId?: string | null;
   id: string;
   windowName: string;
   directMode?: boolean;

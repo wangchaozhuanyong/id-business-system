@@ -121,6 +121,7 @@ const AUDIT_ACTION_LABELS: Record<string, string> = {
 const AUDIT_OBJECT_LABELS: Record<string, string> = {
   vendure_mailbox: '邮件验证码查询',
   recharge_job: '自动充值任务',
+  recharge_browser_settings: '比特连接设置',
   registration_job: '注册任务',
   registration_mailbox: '注册邮箱',
   registration_name: '名字资料',

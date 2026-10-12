@@ -32,18 +32,29 @@ export const rechargeApi = {
       http.get(base, { signal: options.signal })
     );
   },
-  getBitBrowserSettings(options: ApiRequestOptions = {}) {
+  getBitBrowserSettings(options: ApiRequestOptions = {}, connectionProfileId?: string | null) {
     return request<V2RechargeBitBrowserSettings>(
       http.get('/id-business-v2/auto-recharge/bitbrowser-settings', {
-        signal: options.signal
+        signal: options.signal,
+        params:
+          connectionProfileId === undefined
+            ? undefined
+            : { connectionProfileId: connectionProfileId ?? 'default' }
       })
     );
   },
-  browserCatalogAccess(options: ApiRequestOptions = {}, directMode = false) {
+  browserCatalogAccess(
+    options: ApiRequestOptions = {},
+    directMode = false,
+    connectionProfileId?: string | null
+  ) {
     return request<V2RechargeBrowserCatalogAccess>(
       http.post(
         '/id-business-v2/auto-recharge/bitbrowser-catalog-access',
-        directMode ? { directMode: true } : {},
+        {
+          ...(directMode ? { directMode: true } : {}),
+          ...(connectionProfileId === undefined ? {} : { connectionProfileId })
+        },
         { signal: options.signal }
       )
     );

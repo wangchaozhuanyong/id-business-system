@@ -1,6 +1,15 @@
-import { BadRequestException, Injectable, ServiceUnavailableException } from '@nestjs/common';
-import { type V2RechargeServerProxySettings } from '@apple-business/shared';
+import {
+  BadRequestException,
+  ConflictException,
+  Injectable,
+  ServiceUnavailableException
+} from '@nestjs/common';
+import {
+  normalizeV2RechargeConnectorUrl,
+  type V2RechargeServerProxySettings
+} from '@apple-business/shared';
 import { randomUUID } from 'node:crypto';
+import { hash, object, uuidPattern } from './recharge-validation';
 import type { AuthenticatedUser } from '../../auth/auth.types';
 import { FieldEncryptionService } from '../../common/crypto/field-encryption.service';
 import {
@@ -24,6 +33,11 @@ const defaults = {
   proxyType: 'http' as const
 };
 
+const canonicalLocalUrl = (value: string) => {
+  const url = new URL(value);
+  url.hostname = '127.0.0.1';
+  return url.origin;
+};
 const maskSecret = (value: string) => `已保存 ····${value.slice(-4)}`;
 const maskUrl = (value: string) => {
   const url = new URL(value);
@@ -46,8 +60,23 @@ export class RechargeSettingsService {
     private readonly proxies: RechargeProxyRepository
   ) {}
 
-  async get(operator: AuthenticatedUser) {
-    return this.response(await this.repository.find(operator.id));
+  async get(operator: AuthenticatedUser, profileId?: string | null) {
+    if (
+      profileId !== undefined &&
+      profileId !== null &&
+      (typeof profileId !== 'string' || !uuidPattern.test(profileId))
+    )
+      throw new BadRequestException('连接配置编号无效');
+    const base = await this.repository.find(operator.id);
+    const selected = profileId ?? object(base?.browserOptions ?? {}).selectedConnectionProfileId;
+    const row =
+      profileId === null || !selected
+        ? base
+        : await this.repository.effective(operator.id, profileId);
+    return {
+      ...this.response(row),
+      connectionProfiles: await this.repository.listProfiles(operator.id)
+    };
   }
 
   async getServerProxySettings(
@@ -93,6 +122,12 @@ export class RechargeSettingsService {
           browserOptions: toV2JsonDocument({
             ...storedBrowserOptions(before?.browserOptions),
             ...accountCopyMetadata(before?.browserOptions),
+            ...(object(before?.browserOptions ?? {}).selectedConnectionProfileId
+              ? {
+                  selectedConnectionProfileId: object(before?.browserOptions ?? {})
+                    .selectedConnectionProfileId
+                }
+              : {}),
             serverDefaultProxyId: proxyId
           })
         });
@@ -115,13 +150,26 @@ export class RechargeSettingsService {
   async catalogAccess(operator: AuthenticatedUser, value: unknown = {}) {
     const input = bankRechargeObject(value);
     if (
-      Object.keys(input).some((key) => key !== 'directMode') ||
+      Object.keys(input).some((key) => !['directMode', 'connectionProfileId'].includes(key)) ||
       (input.directMode !== undefined && typeof input.directMode !== 'boolean')
     )
       throw new BadRequestException('比特浏览器连接模式无效');
     return this.transactions.execute(
       async (tx) => {
-        const row = await this.repository.findInTransaction(tx, operator.id);
+        const base = await this.repository.findInTransaction(tx, operator.id);
+        const selected =
+          input.connectionProfileId === undefined
+            ? object(base?.browserOptions ?? {}).selectedConnectionProfileId
+            : input.connectionProfileId;
+        if (
+          selected !== undefined &&
+          selected !== null &&
+          (typeof selected !== 'string' || !uuidPattern.test(selected))
+        )
+          throw new BadRequestException('连接配置编号无效');
+        const row = selected
+          ? await this.repository.effective(operator.id, String(selected), tx)
+          : base;
         const localApiToken = this.encryption.decrypt(row?.localApiTokenEncrypted);
         const connectorToken = input.directMode
           ? ''
@@ -158,7 +206,54 @@ export class RechargeSettingsService {
     const input = validateRechargeBitBrowserSettings(value);
     const row = await this.transactions.execute(
       async (tx) => {
-        const before = await this.repository.findInTransaction(tx, operator.id);
+        await this.repository.lock(tx);
+        const base = await this.repository.findInTransaction(tx, operator.id);
+        const selected =
+          input.connectionProfileId === undefined
+            ? object(base?.browserOptions ?? {}).selectedConnectionProfileId
+            : input.connectionProfileId;
+        const effective =
+          !input.serverMode && selected
+            ? await this.repository.effective(operator.id, String(selected), tx)
+            : base;
+        if (
+          !input.newConnectionProfile &&
+          input.expectedUpdatedAt !== undefined &&
+          (effective?.updatedAt.toISOString() ?? null) !== input.expectedUpdatedAt
+        )
+          throw new ConflictException('连接配置已被修改，请重新读取后核对');
+        if (base?.connectorTokenEncrypted) {
+          const connectorToken = this.encryption.decrypt(base.connectorTokenEncrypted)!;
+          const localApiToken = this.encryption.decrypt(base.localApiTokenEncrypted);
+          await this.repository.pinLegacyConnections(tx, operator.id, {
+            connection_profile_id: null,
+            ...(localApiToken
+              ? {
+                  connection_api_key: hash(
+                    canonicalLocalUrl(base.localApiUrl) + '\0' + localApiToken
+                  )
+                }
+              : {}),
+            connection_connector_key: hash(
+              canonicalLocalUrl(normalizeV2RechargeConnectorUrl(base.connectorUrl)) +
+                '\0' +
+                connectorToken
+            ),
+            connection_snapshot_encrypted: this.encryption.encrypt(
+              JSON.stringify({ connectorUrl: base.connectorUrl, connectorToken })
+            )
+          });
+        }
+        const before =
+          input.newConnectionProfile && effective
+            ? {
+                ...effective,
+                localApiTokenEncrypted: null,
+                localApiTokenMask: null,
+                connectorTokenEncrypted: null,
+                connectorTokenMask: null
+              }
+            : effective;
         let browserOptions = input.browserOptions ?? storedBrowserOptions(before?.browserOptions);
         const proxyId =
           input.proxyId === undefined
@@ -185,16 +280,16 @@ export class RechargeSettingsService {
           ? null
           : input.staticProxyCredentials
             ? this.encryption.encrypt(JSON.stringify(input.staticProxyCredentials))
-            : before?.staticProxyCredentialsEncrypted;
+            : (before?.staticProxyCredentialsEncrypted ?? null);
         const localApiTokenEncrypted = input.localApiToken
           ? this.encryption.encrypt(input.localApiToken)
-          : before?.localApiTokenEncrypted;
+          : (before?.localApiTokenEncrypted ?? null);
         const connectorTokenEncrypted = input.connectorToken
           ? this.encryption.encrypt(input.connectorToken)
-          : before?.connectorTokenEncrypted;
+          : (before?.connectorTokenEncrypted ?? null);
         const dynamicProxyUrlEncrypted = input.dynamicProxyUrl
           ? this.encryption.encrypt(input.dynamicProxyUrl)
-          : before?.dynamicProxyUrlEncrypted;
+          : (before?.dynamicProxyUrlEncrypted ?? null);
         if (
           (!input.serverMode &&
             (!localApiTokenEncrypted || (!input.directMode && !connectorTokenEncrypted))) ||
@@ -207,17 +302,17 @@ export class RechargeSettingsService {
           if (!extractionUrl || new URL(extractionUrl).protocol !== 'https:')
             throw new BadRequestException('服务器动态 IP 提取链接必须使用 HTTPS');
         }
-        const updated = await this.repository.upsert(tx, operator.id, {
+        const configuration = {
           connectorUrl: input.connectorUrl,
           localApiUrl: input.localApiUrl,
           localApiTokenEncrypted,
           localApiTokenMask: input.localApiToken
             ? maskSecret(input.localApiToken)
-            : before?.localApiTokenMask,
+            : (before?.localApiTokenMask ?? null),
           connectorTokenEncrypted,
           connectorTokenMask: input.connectorToken
             ? maskSecret(input.connectorToken)
-            : before?.connectorTokenMask,
+            : (before?.connectorTokenMask ?? null),
           groupName: input.groupName,
           tagName: input.tagName,
           proxyType: input.proxyType,
@@ -230,16 +325,57 @@ export class RechargeSettingsService {
           dynamicProxyUrlEncrypted,
           dynamicProxyUrlMask: input.dynamicProxyUrl
             ? maskUrl(input.dynamicProxyUrl)
-            : before?.dynamicProxyUrlMask
-        });
+            : (before?.dynamicProxyUrlMask ?? null)
+        };
+        let updated: Awaited<ReturnType<RechargeSettingsRepository['effective']>>;
+        if (!input.serverMode && (input.newConnectionProfile || selected)) {
+          const profile = await this.repository.saveProfile(tx, {
+            id: input.newConnectionProfile ? randomUUID() : String(selected),
+            ownerId: operator.id,
+            name:
+              input.connectionProfileName ??
+              (effective && 'connectionProfileName' in effective
+                ? String(effective.connectionProfileName)
+                : undefined) ??
+              '连接配置',
+            configuration: toV2JsonDocument(configuration),
+            create: input.newConnectionProfile === true,
+            expectedUpdatedAt: input.expectedUpdatedAt
+          });
+          await this.repository.upsert(tx, operator.id, {
+            browserOptions: toV2JsonDocument({
+              ...object(base?.browserOptions ?? {}),
+              selectedConnectionProfileId: profile.id
+            })
+          });
+          updated = {
+            ...configuration,
+            ownerId: operator.id,
+            createdAt: profile.createdAt,
+            updatedAt: profile.updatedAt,
+            connectionProfileId: profile.id,
+            connectionProfileName: profile.name
+          };
+        } else {
+          updated = await this.repository.upsert(tx, operator.id, {
+            ...configuration,
+            updatedAt: new Date(Math.max(Date.now(), (base?.updatedAt?.getTime() ?? 0) + 1)),
+            browserOptions: toV2JsonDocument({
+              ...object(configuration.browserOptions ?? {}),
+              ...(object(base?.browserOptions ?? {}).selectedConnectionProfileId
+                ? { selectedConnectionProfileId: null }
+                : {})
+            })
+          });
+        }
         await this.audit.append(tx, {
           userId: operator.id,
           module: 'id_business_v2',
           action: 'id_business_v2.auto_recharge.bitbrowser_settings.update',
           objectType: 'recharge_browser_settings',
-          objectId: operator.id,
+          objectId: updated?.connectionProfileId ?? operator.id,
           beforeData: before ? toV2JsonDocument(this.auditSnapshot(before)) : undefined,
-          afterData: toV2JsonDocument(this.auditSnapshot(updated)),
+          afterData: toV2JsonDocument(this.auditSnapshot(updated!)),
           remark: input.serverMode
             ? '更新服务器充值代理设置'
             : input.directMode
@@ -255,11 +391,24 @@ export class RechargeSettingsService {
         retryMode: 'none'
       }
     );
-    return this.response(row);
+    return {
+      ...this.response(row),
+      connectionProfiles: await this.repository.listProfiles(operator.id)
+    };
   }
 
-  async runtime(ownerId: string, selectedProxy = false, directMode = false) {
-    const row = await this.repository.find(ownerId);
+  async runtime(
+    ownerId: string,
+    selectedProxy = false,
+    directMode = false,
+    profileId?: string | null
+  ) {
+    const base = await this.repository.find(ownerId);
+    const selected =
+      profileId === undefined
+        ? object(base?.browserOptions ?? {}).selectedConnectionProfileId
+        : profileId;
+    const row = selected ? await this.repository.effective(ownerId, String(selected)) : base;
     const localApiToken = this.encryption.decrypt(row?.localApiTokenEncrypted);
     const connectorToken = directMode ? '' : this.encryption.decrypt(row?.connectorTokenEncrypted);
     let browserOptions = storedBrowserOptions(row?.browserOptions);
@@ -308,6 +457,25 @@ export class RechargeSettingsService {
     }
     return {
       ...row,
+      connectionMetadata: {
+        connection_profile_id: selected ?? null,
+        connection_api_key: hash(canonicalLocalUrl(row.localApiUrl) + '\0' + localApiToken),
+        ...(directMode
+          ? {}
+          : {
+              connection_connector_key: hash(
+                canonicalLocalUrl(normalizeV2RechargeConnectorUrl(row.connectorUrl)) +
+                  '\0' +
+                  connectorToken
+              ),
+              connection_snapshot_encrypted: this.encryption.encrypt(
+                JSON.stringify({
+                  connectorUrl: row.connectorUrl,
+                  connectorToken
+                })
+              )
+            })
+      },
       proxyType,
       browserOptions,
       staticProxyCredentials,
@@ -342,8 +510,19 @@ export class RechargeSettingsService {
     };
   }
 
-  private response(row: Awaited<ReturnType<RechargeSettingsRepository['find']>>) {
+  connectionAccess(snapshot: unknown) {
+    if (typeof snapshot !== 'string') throw new ServiceUnavailableException('原任务连接配置未保存');
+    const value = object(JSON.parse(this.encryption.decrypt(snapshot)!));
+    if (typeof value.connectorUrl !== 'string' || typeof value.connectorToken !== 'string')
+      throw new ServiceUnavailableException('原任务连接配置无效');
+    return { connectorUrl: value.connectorUrl, connectorToken: value.connectorToken };
+  }
+
+  private response(row: Awaited<ReturnType<RechargeSettingsRepository['effective']>>) {
     return {
+      connectionProfileId: row && 'connectionProfileId' in row ? row.connectionProfileId : null,
+      connectionProfileName:
+        row && 'connectionProfileName' in row ? row.connectionProfileName : '原连接配置',
       proxyId: serverDefaultProxyId(row?.browserOptions),
       connectorUrl: row?.connectorUrl ?? defaults.connectorUrl,
       localApiUrl: row?.localApiUrl ?? defaults.localApiUrl,
@@ -363,6 +542,8 @@ export class RechargeSettingsService {
   }
 
   private auditSnapshot(row: {
+    connectionProfileId?: string;
+    connectionProfileName?: string;
     connectorUrl: string;
     localApiUrl: string;
     localApiTokenMask: string | null;
@@ -375,6 +556,8 @@ export class RechargeSettingsService {
     staticProxyCredentialsEncrypted?: string | null;
   }) {
     return {
+      connectionProfileId: row.connectionProfileId ?? null,
+      connectionProfileName: row.connectionProfileName ?? '原连接配置',
       proxyId: serverDefaultProxyId(row.browserOptions),
       connectorUrl: row.connectorUrl,
       localApiUrl: row.localApiUrl,

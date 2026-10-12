@@ -11,10 +11,12 @@ export async function readBrowserCatalog(
   signal: AbortSignal,
   directMode = false
 ) {
+  if (form.newConnectionProfile && (!form.localApiToken || (!directMode && !form.connectorToken)))
+    throw new Error('请填写新连接配置的接口密钥和本机连接密钥');
   if (directMode) {
     const access = form.localApiToken
       ? { localApiUrl: form.localApiUrl, localApiToken: form.localApiToken, connectorToken: '' }
-      : await rechargeApi.browserCatalogAccess({ signal }, true);
+      : await rechargeApi.browserCatalogAccess({ signal }, true, form.connectionProfileId);
     try {
       if (!form.localApiToken && form.localApiUrl !== access.localApiUrl)
         throw new Error('连接地址已更换，请填写该地址对应的密钥后刷新列表');
@@ -34,7 +36,7 @@ export async function readBrowserCatalog(
           connectorToken: form.connectorToken,
           localApiToken: form.localApiToken
         }
-      : await rechargeApi.browserCatalogAccess({ signal });
+      : await rechargeApi.browserCatalogAccess({ signal }, false, form.connectionProfileId);
   try {
     if (
       (!form.connectorToken &&
@@ -93,6 +95,8 @@ export function useRechargeBrowserCatalog(
       form.value.localApiUrl,
       form.value.connectorToken,
       form.value.localApiToken,
+      form.value.connectionProfileId,
+      form.value.newConnectionProfile,
       stored.value?.updatedAt
     ],
     () => {

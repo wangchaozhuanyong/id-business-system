@@ -6,6 +6,10 @@ import { bankRechargeId } from './bank-recharge-validation';
 
 const proxyTypes = ['http', 'https', 'socks5'] as const;
 const allowedKeys = new Set([
+  'connectionProfileId',
+  'connectionProfileName',
+  'newConnectionProfile',
+  'expectedUpdatedAt',
   'proxyId',
   'serverMode',
   'directMode',
@@ -99,6 +103,27 @@ export function validateRechargeBitBrowserSettings(
   if (Object.keys(input).some((key) => !allowedKeys.has(key))) {
     throw new BadRequestException('比特浏览器设置包含不支持的字段');
   }
+  const connectionProfileId =
+    input.connectionProfileId === undefined || input.connectionProfileId === null
+      ? input.connectionProfileId
+      : bankRechargeId(input.connectionProfileId, '连接配置编号');
+  if (input.newConnectionProfile !== undefined && typeof input.newConnectionProfile !== 'boolean')
+    throw new BadRequestException('新增连接配置选项无效');
+  if (input.newConnectionProfile && (connectionProfileId || input.serverMode))
+    throw new BadRequestException('新增连接配置不能覆盖已有配置');
+  if (
+    input.expectedUpdatedAt !== undefined &&
+    input.expectedUpdatedAt !== null &&
+    (typeof input.expectedUpdatedAt !== 'string' ||
+      !Number.isFinite(Date.parse(input.expectedUpdatedAt)))
+  )
+    throw new BadRequestException('连接配置版本无效');
+  const connectionProfileName =
+    input.connectionProfileName === undefined
+      ? undefined
+      : plainText(input.connectionProfileName, '连接配置名称', 80);
+  if (input.newConnectionProfile && !connectionProfileName)
+    throw new BadRequestException('请填写连接配置名称');
   if (input.serverMode !== undefined && typeof input.serverMode !== 'boolean') {
     throw new BadRequestException('服务器代理设置模式无效');
   }
@@ -122,6 +147,10 @@ export function validateRechargeBitBrowserSettings(
       ? input.proxyId
       : bankRechargeId(input.proxyId, '代理编号');
   return {
+    connectionProfileId,
+    newConnectionProfile: input.newConnectionProfile as boolean | undefined,
+    connectionProfileName,
+    expectedUpdatedAt: input.expectedUpdatedAt as string | null | undefined,
     proxyId,
     serverMode: input.serverMode as boolean | undefined,
     directMode: input.directMode as boolean | undefined,

@@ -52,6 +52,18 @@ html[data-v2-registration-workspace] .form-row {
   grid-template-columns: minmax(0, 1fr);
 }
 
+/* The original mode toggles use display:block. Keep the added service's
+   visible form groups in the shared left-label layout. */
+html[data-v2-registration-workspace][data-apple-registration='true']
+  .form-group[style*='display: block'] {
+  display: grid !important;
+}
+
+html[data-v2-registration-workspace] #id-apple-targets {
+  height: auto;
+  min-height: 160px;
+}
+
 html[data-v2-registration-workspace] .table-container,
 html[data-v2-registration-workspace] .recent-accounts-table {
   overflow-x: auto;

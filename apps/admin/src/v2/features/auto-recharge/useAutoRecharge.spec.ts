@@ -504,6 +504,51 @@ describe('比特浏览器充值入口', () => {
     flow.updateJsonInput('not-json');
     expect(flow.sessionJson.value).toBe('');
   });
+  it('银行卡和地址通过校验后显示就绪，不再要求重复补齐', async () => {
+    fillForm();
+    await nextTick();
+    expect(flow.canStart.value).toBe(true);
+    expect(flow.workflowMessage.value).toContain('资料已就绪');
+    expect(flow.workflowMessage.value).not.toContain('补齐');
+    expect(mock.startBitBrowser).not.toHaveBeenCalled();
+  });
+  it('已选地址时只指出无效卡号和缺少姓名，不回显敏感资料', async () => {
+    fillForm();
+    await nextTick();
+    flow.details.value.number = '5555555555554445';
+    flow.details.value.name = '';
+    expect(flow.canStart.value).toBe(false);
+    expect(flow.workflowMessage.value).toContain('银行卡号校验未通过');
+    expect(flow.workflowMessage.value).toContain('请填写持卡人姓名');
+    expect(flow.workflowMessage.value).not.toContain('账单地址');
+    expect(flow.workflowMessage.value).not.toContain(flow.details.value.number);
+    expect(flow.workflowMessage.value).not.toContain(flow.details.value.cvc);
+    expect(flow.workflowMessage.value).not.toContain(flow.details.value.email);
+  });
+  it('选中地址也检查地址内的必填资料，并指出具体字段', async () => {
+    fillForm();
+    await nextTick();
+    addresses.value.items = [{ ...address, postalCode: '' }];
+    expect(flow.selectedAddress.value?.id).toBe(address.id);
+    expect(flow.canStart.value).toBe(false);
+    expect(flow.workflowMessage.value).toContain('账单地址：请填写邮编');
+  });
+  it('银行卡和地址校验通过但未授权时准确提示勾选，不改变启动条件', async () => {
+    fillForm();
+    await nextTick();
+    flow.authorizeSinglePayment.value = false;
+    expect(flow.canStart.value).toBe(false);
+    expect(flow.workflowMessage.value).toContain('请勾选本次单次付款授权');
+    expect(flow.workflowMessage.value).not.toContain('补齐');
+  });
+  it('仅登录模式无需银行卡或账单地址，继续显示原登录提示', () => {
+    flow.updateJsonInput(directSessionJson());
+    flow.operationMode.value = 'open_browser';
+    flow.details.value.number = '';
+    flow.details.value.name = '';
+    expect(flow.canStartOpen.value).toBe(true);
+    expect(flow.workflowMessage.value).toBe('核对窗口名称后，点击即可打开比特浏览器并自动登录。');
+  });
   it('格式不完整和真正超出大小分别提示，不把平板复制的短 JSON 当成超限', () => {
     flow.updateJsonInput('{"user":{"email":"registered@example.com"');
     expect(flow.jsonError.value).toContain('格式不完整');

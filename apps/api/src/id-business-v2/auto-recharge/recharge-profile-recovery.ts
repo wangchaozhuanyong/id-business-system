@@ -20,6 +20,7 @@ export async function startRechargeOpenProfile(input: {
   request: V2RechargeBitBrowserOpenStart;
   ownerId: string;
   nonceHash: string;
+  connectionMetadata?: Record<string, unknown>;
   repository: RechargeRepository;
   accounts?: BankRechargeAccountService;
   audit: V2TransactionalAuditService;
@@ -32,7 +33,15 @@ export async function startRechargeOpenProfile(input: {
     throw new BadRequestException('所选 ChatGPT 账号不可用');
   const accountKey = account?.officialAccountKey;
   const ownedProfile = accountKey
-    ? await repository.retainedProfileForAccount(tx, ownerId, accountKey, request.id, true)
+    ? await repository.retainedProfileForAccount(
+        tx,
+        ownerId,
+        accountKey,
+        request.id,
+        true,
+        input.connectionMetadata?.connection_api_key as string | undefined,
+        input.connectionMetadata?.connection_profile_id as string | null | undefined
+      )
     : undefined;
   const job = await repository.createJob(tx, {
     id: request.id,
@@ -45,6 +54,7 @@ export async function startRechargeOpenProfile(input: {
     nonceHash: input.nonceHash,
     leaseUntil: new Date(Date.now() + 45 * 60000),
     result: toV2JsonDocument({
+      ...input.connectionMetadata,
       status: 'waiting_local_connector',
       stage: 'connector_dispatch',
       mode: 'open_browser',

@@ -31,12 +31,12 @@ describe('V2 table column semantics', () => {
     });
   });
 
-  it('lets every unpinned data column share spare width by its minimum width', () => {
-    expect(getV2TableColumnWidthProps('text', 'wide')).toEqual({ minWidth: 160 });
-    expect(getV2TableColumnWidthProps('numeric', 'standard')).toEqual({ minWidth: 128 });
-    expect(getV2TableColumnWidthProps('identifier', 'identifier')).toEqual({ minWidth: 192 });
-    expect(getV2TableColumnWidthProps('index', 'index')).toEqual({ width: 72 });
-    expect(getV2TableColumnWidthProps('text', 'compact', true)).toEqual({ width: 112 });
+  it('keeps startup widths explicit so short columns never stretch before measurement', () => {
+    expect(getV2TableColumnWidthProps('wide')).toEqual({ width: 160 });
+    expect(getV2TableColumnWidthProps('standard')).toEqual({ width: 128 });
+    expect(getV2TableColumnWidthProps('identifier')).toEqual({ width: 192 });
+    expect(getV2TableColumnWidthProps('index')).toEqual({ width: 72 });
+    expect(getV2TableColumnWidthProps('compact')).toEqual({ width: 112 });
   });
 
   it('returns stable semantic classes for cells and headers', () => {
