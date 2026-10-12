@@ -5133,11 +5133,13 @@ class RestoredEntryTests(unittest.TestCase):
         original=scope._pending_workspace_current_source_inventory(d,before_source)
         inventory=scope._pending_workspace_current_source_inventory(d,producer)
         self.assertEqual(scope._workspace_capacity_control_inventory(d,bridge,original,inventory),frozenset(owned))
-        # The actual later workflow must still fail this historical mapping,
-        # even in a complete archive with its own independently verified tree.
+        # Use the actual later workflow when it differs; on the reviewed source
+        # itself, mutate only the fixture. Both must fail this historical mapping
+        # in a complete archive with an independently verified source tree.
         name='.github/workflows/production-release.yml'
         current=(ROOT/name).read_bytes()
-        self.assertNotEqual(current,owned[name])
+        if current==owned[name]:
+            current+=b'\n# unreviewed fixture workflow\n'
         unreviewed={**owned,name:current}
         unreviewed_tree=git_tree(unreviewed)
         unreviewed_producer={**producer,'sourceTree':unreviewed_tree}
