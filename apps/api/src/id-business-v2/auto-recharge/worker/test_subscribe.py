@@ -371,7 +371,7 @@ class LedgerGuardTests(unittest.TestCase):
             self.assertEqual(guard.classify("POST", url), "payment")
         self.assertEqual(guard.classify("POST", "https://unknown.example/execute"), "unknown_write")
 
-    def test_session_diagnostics_allow_exact_auth_write_but_preserve_payment_blocking(self):
+    def test_session_diagnostics_observe_without_blocking_browser_traffic(self):
         async def exercise():
             guard = NetworkGuard(self.target)
             requests = (
@@ -388,21 +388,17 @@ class LedgerGuardTests(unittest.TestCase):
                 route.request.headers = {}
                 with patch.object(guard, "route_hcaptcha", return_value=False):
                     await guard.route(route)
-                if blocked:
-                    route.abort.assert_awaited_once_with("blockedbyclient")
-                    route.fallback.assert_not_awaited()
-                else:
-                    route.fallback.assert_awaited_once()
-                    route.abort.assert_not_awaited()
+                route.fallback.assert_awaited_once()
+                route.abort.assert_not_awaited()
             result = guard.summary()
             self.assertEqual(result["auth_session_writes_blocked"], 0)
-            self.assertEqual(result["other_writes_blocked"], 1)
-            self.assertEqual(result["payment_requests_blocked"], 1)
+            self.assertEqual(result["other_writes_blocked"], 0)
+            self.assertEqual(result["payment_requests_blocked"], 0)
             self.assertEqual(result["payment_requests_sent"], 0)
             self.assertEqual(result["checkout_requests_sent"], 0)
         asyncio.run(exercise())
 
-    def test_auth_session_post_exception_never_allows_other_origins_or_adjacent_writes(self):
+    def test_unknown_origins_never_become_account_evidence_but_are_not_intercepted(self):
         async def exercise():
             guard = NetworkGuard(self.target)
             for url in (
@@ -421,8 +417,8 @@ class LedgerGuardTests(unittest.TestCase):
                     route.request.headers = {}
                     with patch.object(guard, 'route_hcaptcha', return_value=False):
                         await guard.route(route)
-                    route.abort.assert_awaited_once_with('blockedbyclient')
-                    route.fallback.assert_not_awaited()
+                    route.abort.assert_not_awaited()
+                    route.fallback.assert_awaited_once()
             for method in ('PUT', 'PATCH', 'DELETE'):
                 self.assertEqual(guard.classify(method, 'https://chatgpt.com/api/auth/session'), 'unknown_write')
             self.assertEqual(guard.classify('POST', 'https://chatgpt.com/backend-api/payments/checkout'), 'unknown_write')
@@ -463,23 +459,17 @@ class LedgerGuardTests(unittest.TestCase):
             self.assertNotIn(secret, saved)
         self.assertEqual(self.marker.stat().st_mode & 0o777, 0o600)
 
-    def test_marker_failure_aborts_before_sending(self):
-        async def exercise():
-            with AttemptLedger(self.state, self.target.account_id) as ledger:
-                guard = NetworkGuard(self.target, ledger)
-                guard.armed = True
-                route = AsyncMock()
-                route.request.method = "POST"
-                route.request.url = "https://chatgpt.com" + c.CHECKOUT_PATH
-                route.request.post_data = json.dumps(self.body)
-                route.request.post_data_json = self.body
-                route.request.headers = self.headers
-                with patch.object(ledger, "begin", side_effect=OSError()):
-                    await guard.route(route)
-                route.fallback.assert_not_awaited()
-                route.abort.assert_awaited_once()
-                self.assertEqual(guard.sent, 0)
-        asyncio.run(exercise())
+    def test_marker_failure_stops_automation_before_click_without_intercepting(self):
+        with AttemptLedger(self.state, self.target.account_id) as ledger:
+            observer = NetworkGuard(self.target, ledger)
+            observer.account_verified = True
+            with patch.object(ledger, 'begin', side_effect=OSError()):
+                with self.assertRaises(c.Stop) as error:
+                    observer.begin_checkout()
+            self.assertEqual(error.exception.report["reason"], "checkout_marker_write_failed")
+            self.assertFalse(observer.armed)
+            self.assertEqual(observer.sent, 0)
+            self.assertFalse(self.marker.exists())
 
 
 class PauseTests(unittest.IsolatedAsyncioTestCase):

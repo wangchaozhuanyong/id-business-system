@@ -202,20 +202,6 @@ async def prepare_browser(config, launch_browser, *, expected_country, target_ur
     retryable = {"server_proxy_unavailable", "proxy_network_unconfirmed",
                  "proxy_country_mismatch", "proxy_ip_not_rotated"}
 
-    async def prepare_guard(route):
-        request = route.request
-        parsed = urlsplit(request.url)
-        business_write = request.method not in {"GET", "HEAD", "OPTIONS"} and (
-            parsed.hostname == 'pay.openai.com' or (parsed.hostname == 'chatgpt.com' and
-            re.search(r'/(payments?|billing|checkout|subscriptions?|subscribe|purchase)(?:/|$)', parsed.path)))
-        account_write = request.method not in {"GET", "HEAD", "OPTIONS"} and (
-            request.is_navigation_request() or (official_login_page(request.url) and
-            re.search(r'/(login|sign-in|signin|signup|sign-up|register|registration|authenticate|authorize)(?:/|$)', parsed.path, re.I)))
-        # 空白Context不注入账号Cookie、不输入账号资料；允许官网匿名页面初始化。
-        if account_write or login_payment_write(request.method, request.url) or business_write:
-            await route.abort("blockedbyclient")
-        else:
-            await route.fallback()
 
     for attempt in range(1, limit + 1):
         if cancelled():
@@ -234,8 +220,7 @@ async def prepare_browser(config, launch_browser, *, expected_country, target_ur
             progress("proxy_verifying", **details)
             budget = SessionBudget(PREPARE_TIMEOUT_SECONDS, cancelled=cancelled)
             context = await budget.run(lambda: browser.new_context(
-                proxy=proxy, service_workers="block", accept_downloads=False), "proxy_context_create")
-            await budget.run(lambda: context.route("**/*", prepare_guard), "proxy_readonly_guard")
+                proxy=proxy, accept_downloads=False), "proxy_context_create")
             network = await observe_exit(context, cancelled=cancelled, budget=budget, attempts=1)
             if network["country"] != expected_country:
                 raise Stop("proxy_country_mismatch")
@@ -252,8 +237,6 @@ async def prepare_browser(config, launch_browser, *, expected_country, target_ur
             if response.status >= 400 and response.status != 403:
                 raise Stop("http_error", http_status=response.status)
             # 403/本人验证不是连接超时，不通过换IP重试验证挑战。
-            if not await finish_cleanup(lambda: context.unroute("**/*", prepare_guard)):
-                raise Stop("proxy_cleanup_failed")
             budget.check_cancelled()
             return {"browser": browser, "context": context, "page": page,
                     "proxy": proxy, "network": network}

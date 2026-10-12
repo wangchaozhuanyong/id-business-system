@@ -136,24 +136,17 @@ function pendingCode() {
 }
 
 describe('仅登录窗口失败不会转成长时间的假验证等待', () => {
-  it('启动时不打开匿名官网，先装拦截与会话再导航', async () => {
+  it('窗口默认打开官网，应用 JSON 会话后导航且不安装请求拦截', async () => {
     mock.evaluate.mockResolvedValue(identity);
     await runDirectLogin(settings, credential(), '测试窗口', new AbortController().signal, {
       progress: vi.fn(),
       code: vi.fn()
     });
     const created = mock.post.mock.calls.find(([path]) => path === '/browser/update')![1];
-    expect(created).toMatchObject({ platform: '', url: 'about:blank', cookie: '' });
+    expect(created).toMatchObject({ platform: '', url: 'https://chatgpt.com/', cookie: '' });
     const methods = mock.command.mock.calls.map(([method]) => method);
-    expect(methods.indexOf('Fetch.enable')).toBeLessThan(methods.indexOf('Network.setCookies'));
+    expect(methods.some((method) => method.startsWith('Fetch.'))).toBe(false);
     expect(methods.indexOf('Network.setCookies')).toBeLessThan(methods.indexOf('Page.navigate'));
-    const patterns = mock.command.mock.calls.find(([method]) => method === 'Fetch.enable')![1]
-      .patterns;
-    expect(patterns).toEqual([
-      { urlPattern: '*://stripe.com/*', requestStage: 'Request' },
-      { urlPattern: '*://*.stripe.com/*', requestStage: 'Request' },
-      { urlPattern: '*://chatgpt.com/backend-api/payments/*', requestStage: 'Request' }
-    ]);
     expect(mock.command.mock.calls.find(([method]) => method === 'Page.navigate')![1]).toEqual({
       url: 'https://chatgpt.com/'
     });
@@ -302,7 +295,7 @@ describe('JSON会话核实后同步官网登录界面', () => {
     const result = run();
     await vi.advanceTimersByTimeAsync(146_000);
     expect(await result).toMatchObject({ status: 'session_ready', account_matched: true });
-    expect(mock.command.mock.calls.filter(([method]) => method === 'Page.reload')).toHaveLength(1);
+    expect(mock.command.mock.calls.filter(([method]) => method === 'Page.reload')).toHaveLength(0);
     expect(mock.post.mock.calls.some(([path]) => path === '/browser/close')).toBe(false);
   });
   it.each(['json', 'password'])('%s身份核实后仍等待输入框就绪，不提前结束', async (kind) => {
@@ -329,13 +322,12 @@ describe('JSON会话核实后同步官网登录界面', () => {
     expect(await result).toMatchObject({ status: 'session_ready', payment_requests_sent: 0 });
     expect(mock.post.mock.calls.some(([path]) => path === '/browser/close')).toBe(false);
   });
-  it('会话正确但页面匿名时等待10秒，再只刷新原标签一次并重新核对身份', async () => {
+  it('会话正确但页面匿名时只读等待就绪，不刷新操作员的标签页', async () => {
     vi.useFakeTimers();
     mock.evaluate.mockResolvedValue(identity);
     mock.ui.mockResolvedValue({ kind: 'page_loading' });
     const original = mock.command.getMockImplementation()!;
     mock.command.mockImplementation(async (method, ...args) => {
-      if (method === 'Page.reload') mock.ui.mockResolvedValue({ kind: 'page_ready' });
       return original(method, ...args);
     });
     let finished = false;
@@ -346,35 +338,28 @@ describe('JSON会话核实后同步官网登录界面', () => {
     await vi.advanceTimersByTimeAsync(9999);
     expect(finished).toBe(false);
     expect(mock.command.mock.calls.filter(([method]) => method === 'Page.reload')).toHaveLength(0);
+    mock.ui.mockResolvedValue({ kind: 'page_ready' });
     await vi.advanceTimersByTimeAsync(2001);
     expect(await result).toMatchObject({
       status: 'session_ready',
       account_matched: true,
       payment_requests_sent: 0
     });
-    expect(mock.command.mock.calls.filter(([method]) => method === 'Page.reload')).toEqual([
-      ['Page.reload', { ignoreCache: true }, 'session', expect.any(Number)]
-    ]);
+    expect(mock.command.mock.calls.filter(([method]) => method === 'Page.reload')).toEqual([]);
     expect(
       mock.evaluate.mock.calls.filter(([, expression]) => expression.includes('"sessionOnly":true'))
         .length
     ).toBeGreaterThan(1);
     expect(mock.post.mock.calls.filter(([path]) => path === '/browser/open')).toHaveLength(1);
   });
-  it('刷新后身份变化立即拒绝，旧账号界面控件不能覆盖账号核验', async () => {
+  it('等待期间身份变化立即停止自动操作，旧账号界面控件不能覆盖账号核验', async () => {
     vi.useFakeTimers();
     mock.evaluate.mockResolvedValue(identity);
     mock.ui.mockResolvedValue({ kind: 'page_loading' });
-    const original = mock.command.getMockImplementation()!;
-    mock.command.mockImplementation(async (method, ...args) => {
-      if (method === 'Page.reload') {
-        mock.ui.mockResolvedValue({ kind: 'page_ready' });
-        mock.evaluate.mockResolvedValue({ ...identity, userId: 'another-user' });
-      }
-      return original(method, ...args);
-    });
     const result = run().catch((error: unknown) => error);
-    await vi.advanceTimersByTimeAsync(12_000);
+    await vi.advanceTimersByTimeAsync(1000);
+    mock.evaluate.mockResolvedValue({ ...identity, userId: 'another-user' });
+    await vi.advanceTimersByTimeAsync(1000);
     expect(await result).toMatchObject({ reason: 'official_login_email_mismatch' });
   });
   it('页面持续未就绪有限结束，保留窗口，不误判过期、不换IP', async () => {
@@ -384,12 +369,12 @@ describe('JSON会话核实后同步官网登录界面', () => {
     const result = run().catch((error: unknown) => error);
     await vi.advanceTimersByTimeAsync(121_000);
     expect(await result).toMatchObject({ reason: 'official_login_page_not_ready' });
-    expect(mock.command.mock.calls.filter(([method]) => method === 'Page.reload')).toHaveLength(1);
+    expect(mock.command.mock.calls.filter(([method]) => method === 'Page.reload')).toHaveLength(0);
     expect(
       mock.post.mock.calls.some(([path]) => ['/browser/close', '/browser/delete'].includes(path))
     ).toBe(false);
   });
-  it('刷新后资源耗时60秒仍沿用原120秒阶段余量，不在20秒提前结束', async () => {
+  it('资源耗时60秒仍沿用原120秒阶段余量，不在20秒提前结束', async () => {
     vi.useFakeTimers();
     const readyAt = Date.now() + 60_000;
     mock.evaluate.mockResolvedValue(identity);
@@ -399,7 +384,7 @@ describe('JSON会话核实后同步官网登录界面', () => {
     const result = run();
     await vi.advanceTimersByTimeAsync(61_000);
     expect(await result).toMatchObject({ status: 'session_ready', account_matched: true });
-    expect(mock.command.mock.calls.filter(([method]) => method === 'Page.reload')).toHaveLength(1);
+    expect(mock.command.mock.calls.filter(([method]) => method === 'Page.reload')).toHaveLength(0);
     expect(mock.post.mock.calls.filter(([path]) => path === '/browser/open')).toHaveLength(1);
   });
   it('普通身份检查跨过原阶段截止后不能接受迟到成功，也不换IP', async () => {
@@ -445,7 +430,7 @@ describe('JSON会话核实后同步官网登录界面', () => {
     expect(mock.ui.mock.calls[0]?.[2]).toBe(1000);
     expect(mock.post.mock.calls.filter(([path]) => path === '/browser/open')).toHaveLength(1);
   });
-  it('等待页面同步可立即取消，未完成前不释放付款拦截', async () => {
+  it('等待页面同步可立即取消，全程不安装付款拦截或刷新页面', async () => {
     vi.useFakeTimers();
     mock.evaluate.mockResolvedValue(identity);
     mock.ui.mockResolvedValue({ kind: 'page_loading' });
@@ -470,8 +455,23 @@ describe('API原窗口归属与当前官网身份双核验', () => {
       ).join('')
     };
   }
-  it('同账号原窗口直接复用，不创建资料或重新注入JSON', async () => {
+  it('同账号原窗口使用相同授权时直接复用，不创建资料或重新注入JSON', async () => {
     mock.evaluate.mockResolvedValue(identity);
+    const command = mock.command.getMockImplementation()!;
+    mock.command.mockImplementation((method, ...args) =>
+      method === 'Network.getCookies'
+        ? Promise.resolve({
+            cookies: [
+              {
+                name: '__Secure-next-auth.session-token',
+                domain: '.chatgpt.com',
+                path: '/',
+                value: 'fixture-session'
+              }
+            ]
+          })
+        : command(method, ...args)
+    );
     const ownedProfile = await owned();
     const restore = vi.fn().mockResolvedValue({ ownedProfile });
     expect(
@@ -489,11 +489,53 @@ describe('API原窗口归属与当前官网身份双核验', () => {
     ).toBe(false);
     expect(mock.command.mock.calls.some(([method]) => method === 'Network.setCookies')).toBe(false);
     expect(
-      mock.command.mock.calls.some(([method]) =>
-        ['Network.getCookies', 'Network.deleteCookies'].includes(method)
-      )
-    ).toBe(false);
+      mock.command.mock.calls.filter(([method]) => method === 'Network.getCookies')
+    ).toHaveLength(1);
+    expect(mock.command.mock.calls.some(([method]) => method === 'Network.deleteCookies')).toBe(
+      false
+    );
   });
+  it.each(['identity', 'expired'])(
+    '核对原窗口账号后使用新 JSON 替换旧会话并只刷新一次：%s',
+    async (kind) => {
+      vi.useFakeTimers();
+      const ownedProfile = await owned();
+      mock.evaluate.mockResolvedValueOnce({ ...identity, kind }).mockResolvedValue(identity);
+      const progress = vi.fn();
+      const result = runDirectLogin(
+        settings,
+        credential(),
+        '测试窗口',
+        new AbortController().signal,
+        {
+          restore: async () => ({ ownedProfile }),
+          progress,
+          code: vi.fn()
+        }
+      );
+      await vi.waitFor(() =>
+        expect(mock.command.mock.calls.some(([method]) => method === 'Page.reload')).toBe(true)
+      );
+      await vi.advanceTimersByTimeAsync(2000);
+      expect(await result).toMatchObject({ account_matched: true, payment_requests_sent: 0 });
+      expect(
+        mock.command.mock.calls.filter(([method]) => method === 'Network.setCookies')
+      ).toHaveLength(1);
+      expect(mock.command.mock.calls.filter(([method]) => method === 'Page.reload')).toHaveLength(
+        1
+      );
+      expect(mock.evaluate.mock.calls.length).toBeGreaterThan(1);
+      expect(
+        mock.post.mock.calls.some(([path]) =>
+          ['/browser/update', '/browser/close', '/browser/delete'].includes(path)
+        )
+      ).toBe(false);
+      expect(progress).toHaveBeenCalledWith(
+        'session_restore',
+        expect.objectContaining({ session_refresh_count: 1 })
+      );
+    }
+  );
   it('原窗口已切换到其他账号时不覆盖会话', async () => {
     mock.evaluate.mockResolvedValue({ ...identity, accountId: 'other-account' });
     const ownedProfile = await owned();
@@ -526,6 +568,8 @@ describe('API原窗口归属与当前官网身份双核验', () => {
     expect(
       mock.command.mock.calls.filter(([method]) => method === 'Network.setCookies')
     ).toHaveLength(1);
+    expect(mock.command.mock.calls.some(([method]) => method.startsWith('Fetch.'))).toBe(false);
+    expect(mock.command.mock.calls.some(([method]) => method === 'Page.reload')).toBe(false);
     expect(mock.post.mock.calls.some(([path]) => path === '/browser/update')).toBe(false);
   });
   it.each(['json', 'password'] as const)(
@@ -570,7 +614,7 @@ describe('API原窗口归属与当前官网身份双核验', () => {
       });
       const methods = mock.command.mock.calls.map(([method]) => method);
       if (method === 'json') {
-        expect(methods.indexOf('Fetch.enable')).toBeLessThan(methods.indexOf('Network.setCookies'));
+        expect(methods.some((method) => method.startsWith('Fetch.'))).toBe(false);
         expect(methods.indexOf('Network.setCookies')).toBeLessThan(
           methods.indexOf('Page.navigate')
         );
@@ -778,6 +822,47 @@ describe('API原窗口归属与当前官网身份双核验', () => {
 });
 
 describe('动态代理网络故障有限恢复同一窗口', () => {
+  it('单次会话读取断线而当前出口仍可用时保留窗口，重新核对身份后交付', async () => {
+    vi.useFakeTimers();
+    let inspected = false;
+    mock.evaluate.mockImplementation(async () => {
+      if (inspected) return identity;
+      inspected = true;
+      const handler = mock.onEvent.mock.calls[0]![0];
+      handler(
+        'Network.requestWillBeSent',
+        {
+          requestId: 'transient-read',
+          type: 'Fetch',
+          frameId: 'main-frame',
+          request: { method: 'GET', url: 'https://chatgpt.com/api/auth/session' }
+        },
+        'session'
+      );
+      handler(
+        'Network.loadingFailed',
+        { requestId: 'transient-read', errorText: 'net::ERR_CONNECTION_RESET' },
+        'session'
+      );
+      return { kind: 'loading' };
+    });
+    const pending = runDirectLogin(
+      settings,
+      credential(),
+      '测试窗口',
+      new AbortController().signal,
+      { progress: vi.fn(), code: vi.fn() }
+    );
+    await vi.waitFor(() => expect(mock.proxy).toHaveBeenCalledTimes(2));
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(await pending).toMatchObject({ account_matched: true, payment_requests_sent: 0 });
+    expect(mock.evaluate.mock.calls.length).toBeGreaterThan(1);
+    expect(mock.post.mock.calls.filter(([path]) => path === '/browser/open')).toHaveLength(1);
+    expect(
+      mock.post.mock.calls.some(([path]) => ['/browser/close', '/browser/delete'].includes(path))
+    ).toBe(false);
+    expect(mock.command.mock.calls.some(([method]) => method === 'Page.reload')).toBe(false);
+  });
   function networkNavigation(errors: string[]) {
     const original = mock.command.getMockImplementation()!;
     let index = 0;
@@ -1081,6 +1166,7 @@ describe('动态代理网络故障有限恢复同一窗口', () => {
         { requestId: 'identity-read', errorText: 'net::ERR_CONNECTION_CLOSED' },
         'session'
       );
+      mock.proxy.mockResolvedValueOnce({ kind: 'proxy_network_failed' });
       return { kind: 'loading' };
     });
     expect(await run()).toMatchObject({ account_matched: true, payment_requests_sent: 0 });
@@ -1115,6 +1201,7 @@ describe('动态代理网络故障有限恢复同一窗口', () => {
             { requestId: 'ui-identity-read', errorText: 'net::ERR_CONNECTION_RESET' },
             'session'
           );
+          mock.proxy.mockResolvedValueOnce({ kind: 'proxy_network_failed' });
           if (outcome === 'command_failed')
             throw new DirectBrowserError('bitbrowser_direct_command_failed');
         }
@@ -1157,6 +1244,7 @@ describe('动态代理网络故障有限恢复同一窗口', () => {
         { requestId: 'ui-identity-read', errorText: 'net::ERR_CONNECTION_CLOSED' },
         'session'
       );
+      mock.proxy.mockResolvedValueOnce({ kind: 'proxy_network_failed' });
       return { kind: 'page_ready' };
     });
     await expect(
@@ -1193,6 +1281,7 @@ describe('动态代理网络故障有限恢复同一窗口', () => {
         { requestId: 'ui-identity-read', errorText: 'net::ERR_CONNECTION_RESET' },
         'session'
       );
+      mock.proxy.mockResolvedValueOnce({ kind: 'proxy_network_failed' });
       return { kind: 'page_ready' };
     });
     await expect(
@@ -1287,6 +1376,27 @@ describe('动态代理网络故障有限恢复同一窗口', () => {
       method: 'GET',
       url: 'https://chatgpt.com/backend-api/me',
       type: 'XHR',
+      frameId: 'main-frame',
+      session: 'session'
+    },
+    {
+      method: 'GET',
+      url: 'https://chatgpt.com/backend-api/payments/subscriptions',
+      type: 'XHR',
+      frameId: 'main-frame',
+      session: 'session'
+    },
+    {
+      method: 'POST',
+      url: 'https://api.stripe.com/v1/payment_pages/cs_fixture/update',
+      type: 'Fetch',
+      frameId: 'child-frame',
+      session: 'session'
+    },
+    {
+      method: 'GET',
+      url: 'wss://chatgpt.com/ws',
+      type: 'WebSocket',
       frameId: 'main-frame',
       session: 'session'
     },

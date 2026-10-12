@@ -102,6 +102,7 @@ class UpgradeResponseObservers:
         self.context, self.guard = context, guard
         self.tasks = set()
         self.attached = True
+        context.on('request', guard.observe_request)
         context.on('response', self.observe)
 
     def observe(self, response):
@@ -115,6 +116,7 @@ class UpgradeResponseObservers:
         if getattr(self.guard, 'card_change', None) is not None:
             self.guard.card_change.close()
         if self.attached:
+            self.context.remove_listener('request', self.guard.observe_request)
             self.context.remove_listener('response', self.observe)
             self.attached = False
         await drain_upgrade_responses(self.tasks)
@@ -126,8 +128,7 @@ async def route_upgrade_card_change(guard, route):
         return False
     if decision and guard.operation_cancelled():
         decision = False
-    guard.blocked_unknown_writes += int(not decision and route.request.method not in {'GET', 'HEAD', 'OPTIONS'})
-    await (route.fallback() if decision else route.abort('blockedbyclient'))
+    await route.fallback()
     return True
 
 

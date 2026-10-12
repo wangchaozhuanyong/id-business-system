@@ -1,4 +1,4 @@
-"""已确认报价的一次官方表单付款；未知请求默认拒绝。"""
+"""监听原官网结算与付款结果；自动操作由任务控制层授权。"""
 from __future__ import annotations
 
 import asyncio
@@ -39,6 +39,9 @@ class PaymentGuard(NetworkGuard):
         self.three_ds = ThreeDSAuthentication()
         self.three_ds_ready = asyncio.Event()
         self.three_ds_closed = False
+        self.observed_requests = set()
+        self.quote_requests = {}
+        self.quote_request_version = 0
 
     def finish_three_ds(self):
         self.three_ds_closed = True
@@ -72,90 +75,70 @@ class PaymentGuard(NetworkGuard):
         self.approved = True
         self.payment_state = "unknown"
 
-    async def route(self, route):
-        if self.operation_cancelled():
-            await route.abort('blockedbyclient')
+    def observe_request(self, request):
+        if request in self.observed_requests:
             return
-        if await self.route_hcaptcha(route):
-            return
-        request = route.request
+        super().observe_request(request)
         p = urlsplit(request.url)
-        if (self.approved and not self.read_only and not self.three_ds_closed and self.confirmation_sent == 1
-                and self.payment_state in {'unknown', 'requires_action'} and not self.three_ds_ready.is_set()
-                and (p.hostname == 'api.stripe.com' and p.path in AUTH_PATHS
-                     and p.path not in self.three_ds.requests.values()
-                     or request.method in {'GET', 'HEAD'} and request.is_navigation_request()
-                     and p.hostname != 'chatgpt.com')):
-            # The browser can consume original confirm/authentication JSON before
-            # our body observer binds the action. Wait without sending a request.
+        if p.scheme != "https" or p.hostname != "api.stripe.com" or not self.checkout_id:
+            return
+        base = f"/v1/payment_pages/{self.checkout_id}"
+        if p.path in {base, base + "/init", base + "/update"} and self.account_verified:
+            self.quote_request_version += 1
+            self.quote_requests[request] = self.quote_request_version
+            self.official_quote_binding = None
+            self.checkout_initializations_allowed += int(p.path == base + "/init")
+        if (self.read_only or self.operation_cancelled() or not self.payment_ledger
+                or not (self.payment_ledger.record or {}).get("payment_attempted")):
+            return
+        if request.method == "POST" and p.path == "/v1/payment_methods":
+            self.tokenization_sent += 1
+            self.token_request = request
+        if request.method == "POST" and p.path == base + "/confirm":
+            self.confirmation_sent += 1
+            self.confirmation_reserved = True
+            if self.confirm_request is None:
+                self.confirm_request = request
+                try:
+                    self.payment_ledger.mark_confirmation_sent()
+                except (OSError, Stop):
+                    self.persistence_error = True
+            else:
+                self.payment_error = "official_payment_evidence_not_observed"
+            progress("payment_request_sending", attempt=self.confirmation_sent)
+
+    async def observe_authentication_request(self, request):
+        if request in self.three_ds.requests:
+            return True
+        if self.read_only or self.three_ds_closed or self.confirmation_sent != 1:
+            return False
+        parsed = urlsplit(request.url)
+        if (parsed.hostname == "api.stripe.com" and parsed.path in AUTH_PATHS
+                and not self.three_ds_ready.is_set()):
             try:
                 await asyncio.wait_for(self.three_ds_ready.wait(), timeout=5)
             except asyncio.TimeoutError:
-                await route.abort('blockedbyclient')
-                return
-        if (self.approved and not self.read_only and not self.three_ds_closed and self.confirmation_sent == 1
-                and self.payment_state == 'requires_action'):
-            decision = await self.three_ds.decision(request, self.target, self.checkout_id)
-            if decision is None and not checkout_resource_url(request.url):
-                decision = False
-            if decision is not None:
-                if decision and not self.operation_cancelled():
-                    if p.hostname == 'api.stripe.com' and p.path in AUTH_PATHS and request.method == 'POST':
-                        self.three_ds_ready.clear()
-                    await route.fallback()
-                else:
-                    self.blocked_unknown_writes += int(request.method not in {'GET', 'HEAD', 'OPTIONS'})
-                    await route.abort('blockedbyclient')
-                return
-        exact_stripe = p.scheme == "https" and p.hostname == "api.stripe.com" and request.method == "POST"
-        if self.approved and not self.read_only and self.payment_state == "unknown" and exact_stripe:
-            if p.path == "/v1/payment_methods" and not self.tokenization_sent and not self.confirmation_sent:
-                # 只允许官网自身生成的 card PaymentMethod，不改写原始请求。
-                try:
-                    body = request.post_data or ""
-                    parsed = json.loads(body) if body.lstrip().startswith("{") else parse_qs(body)
-                    kind = parsed.get("type")
-                    if kind not in ("card", ["card"]):
-                        raise ValueError()
-                except (TypeError, ValueError):
-                    await route.abort("blockedbyclient")
-                    return
-                self.tokenization_sent = 1
-                self.token_request = request
-                if self.operation_cancelled():
-                    await route.abort('blockedbyclient')
-                    return
-                await route.fallback()
-                return
-            if p.path == f"/v1/payment_pages/{self.checkout_id}/confirm" and not self.confirmation_reserved:
-                # 在第一个 await 之前预留唯一提交，第二个请求不能参与预检或污染结果。
-                self.confirmation_reserved = True
-                try:
-                    if self.validate_before_confirm:
-                        await self.validate_before_confirm()
-                    if self.operation_cancelled():
-                        raise Stop('operation_cancelled')
-                    self.payment_ledger.mark_confirmation_sent()
-                except Exception:
-                    self.payment_error = "payment_request_precheck_failed"
-                    self.payment_done.set()
-                    await route.abort("blockedbyclient")
-                    return
-                self.confirmation_sent = 1
-                self.confirm_request = request
-                progress("payment_request_sending", attempt=1)
-                await route.fallback()
-                return
-        await super().route(route)
+                return False
+        if self.payment_state != "requires_action":
+            return False
+        verified = await self.three_ds.decision(request, self.target, self.checkout_id)
+        if verified is False:
+            self.three_ds.requests.pop(request, None)
+        return verified
+
+    async def route(self, route):
+        self.observe_request(route.request)
+        await route.fallback()
 
     async def response(self, response):
+        self.observe_request(response.request)
+        await self.observe_authentication_request(response.request)
         await super().response(response)
         await self.three_ds.observe_redirect(response)
         p = urlsplit(response.url)
         if p.scheme != "https" or p.hostname != "api.stripe.com" or not self.checkout_id:
             return
-        initialization = (p.path == f"/v1/payment_pages/{self.checkout_id}/init"
-                          and response.request.method == "POST" and self.account_verified)
+        initialization = response.request in self.quote_requests and self.account_verified
         confirmation = response.request is self.confirm_request
         authentication = self.three_ds.requests.get(response.request) in AUTH_PATHS
         linked_read = (self.linked_intent and response.request.method == "GET"
@@ -190,13 +173,17 @@ class PaymentGuard(NetworkGuard):
                     self.three_ds.close('failed')
                     self.payment_done.set()
                 return
-            if initialization:
+            if initialization and self.quote_requests[response.request] == self.quote_request_version:
                 summary = data.get("total_summary")
                 due = (data.get("amount_total") if "amount_total" in data else
                        summary.get("due") if isinstance(summary, dict) else None)
                 currency = str(data.get("currency", "")).upper()
-                if (type(due) is int and due > 0 and re.fullmatch(r"[A-Z]{3}", currency)):
+                if (200 <= response.status < 300 and type(due) is int and due > 0
+                        and re.fullmatch(r"[A-Z]{3}", currency)):
                     self.official_quote_binding = {"amount_minor": due, "currency": currency}
+                    details = data.get("total_details")
+                    if isinstance(details, dict) and type(details.get("amount_tax")) is int and details["amount_tax"] >= 0:
+                        self.official_quote_binding["tax_minor"] = details["amount_tax"]
                     self.official_binding_version += 1
             # 同一结算响应中确实返回的 PaymentIntent 才能作为证据关联。
             intent = data if data.get('object') == 'payment_intent' else data.get("payment_intent")
@@ -208,7 +195,7 @@ class PaymentGuard(NetworkGuard):
                         self.payment_done.set()
                     return
                 self.linked_intent = intent_id
-            # Revoking input/writes must not discard an in-flight original payment
+            # Ending automation must not discard an in-flight original payment
             # receipt. It grants observation only; confirmation stays reserved.
             original_in_flight = (self.read_only and self.confirmation_sent == 1
                 and self.payment_ledger is not None

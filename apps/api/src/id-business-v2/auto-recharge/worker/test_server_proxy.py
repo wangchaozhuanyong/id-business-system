@@ -225,25 +225,14 @@ class ProxyPrepareTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(stopped.exception.report['reason'], 'proxy_cleanup_failed')
         resolve.assert_awaited_once()
 
-    async def test_preflight_blocks_business_writes_allows_anonymous_bootstrap_and_does_not_rotate_challenges(self):
+    async def test_preflight_preserves_native_requests_and_does_not_rotate_challenges(self):
         browser, context, page = self.window(); page.goto.return_value.status = 403
         with (patch.object(server_proxy, 'resolve', AsyncMock(return_value={'server': 'http://proxy.example.invalid:8080'})) as resolve,
               patch.object(server_proxy, 'observe_exit', AsyncMock(return_value={'ip': '8.8.8.8', 'country': 'US'}))):
             await self.prepare(AsyncMock(return_value=browser))
         resolve.assert_awaited_once()
-        blocker = context.route.await_args.args[1]
-        for url in ('https://api.stripe.com/v1/payment_pages/cs_test/confirm',
-                    'https://chatgpt.com/backend-api/payments/checkout', 'https://pay.openai.com/checkout',
-                    'https://auth.openai.com/u/login/identifier', 'https://auth.openai.com/u/signup/password'):
-            route = MagicMock(request=MagicMock(method='POST', url=url, is_navigation_request=lambda: False), abort=AsyncMock(), fallback=AsyncMock())
-            await blocker(route); route.abort.assert_awaited_once(); route.fallback.assert_not_awaited()
-        bootstrap = MagicMock(request=MagicMock(method='POST', url='https://chatgpt.com/fixture/bootstrap', is_navigation_request=lambda: False),
-                              abort=AsyncMock(), fallback=AsyncMock())
-        await blocker(bootstrap); bootstrap.fallback.assert_awaited_once(); bootstrap.abort.assert_not_awaited()
-        navigation = MagicMock(request=MagicMock(method='POST', url='https://chatgpt.com/fixture/submit', is_navigation_request=lambda: True),
-                               abort=AsyncMock(), fallback=AsyncMock())
-        await blocker(navigation); navigation.abort.assert_awaited_once(); navigation.fallback.assert_not_awaited()
-        context.unroute.assert_awaited_once_with('**/*', blocker)
+        context.route.assert_not_awaited()
+        context.unroute.assert_not_awaited()
         browser.close.assert_not_awaited()
 
     async def test_invalid_extraction_and_probe_verification_challenge_never_rotate(self):

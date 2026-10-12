@@ -8,6 +8,9 @@ import subprocess
 import sys
 from pathlib import Path
 import unittest
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from urllib.error import HTTPError
+from urllib.request import Request, build_opener
 from unittest.mock import MagicMock, patch
 
 import bitbrowser_connector as connector
@@ -90,6 +93,43 @@ def resolution_payload():
 
 
 class BitBrowserConnectorTests(unittest.TestCase):
+    def test_local_api_never_uses_environment_proxy(self):
+        class LocalApi(BaseHTTPRequestHandler):
+            def do_POST(self):
+                self.send_response(200)
+                self.end_headers()
+                self.wfile.write(b'{"success":true,"data":{"list":[]}}')
+
+            def log_message(self, *_):
+                pass
+
+        with ThreadingHTTPServer(('127.0.0.1', 0), LocalApi) as server:
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            origin = 'http://127.0.0.1:%d' % server.server_port
+            try:
+                with patch.dict('os.environ', {'http_proxy': 'http://127.0.0.1:1'}, clear=True), \
+                        patch('urllib.request.proxy_bypass', return_value=False):
+                    # The previous transport sends even loopback through the proxy.
+                    with self.assertRaises(Exception):
+                        build_opener(connector.NoRedirect).open(Request(origin, data=b'{}'), timeout=1)
+                    client = connector.BitBrowserClient(origin, 'synthetic-token-123456')
+                    self.assertEqual(client.post('/group/list', {}), {'list': []})
+            finally:
+                server.shutdown()
+                thread.join(timeout=2)
+
+    def test_local_api_http_rejections_preserve_auth_vs_connection_reason(self):
+        client = connector.BitBrowserClient('http://127.0.0.1:54345', 'synthetic-token-123456')
+        for status, reason in ((401, 'bitbrowser_api_token_invalid'), (403, 'bitbrowser_api_token_invalid'),
+                               (500, 'bitbrowser_local_api_rejected')):
+            with self.subTest(status=status), patch.object(connector, 'build_opener') as opener:
+                opener.return_value.open.side_effect = HTTPError(client.base_url, status, 'synthetic', {}, None)
+                with self.assertRaises(Stop) as error:
+                    client.post('/group/list', {})
+                self.assertEqual(error.exception.report['reason'], reason)
+                self.assertNotIn('synthetic-token', str(error.exception.report))
+
     def test_restore_binds_only_valid_callback_original_checkout_and_never_changes_it(self):
         from types import SimpleNamespace
         for checkout_id in ('oaics_existing', 'cs_existing'):
@@ -350,7 +390,7 @@ class BitBrowserConnectorTests(unittest.TestCase):
 
         self.assertEqual(profile_id, "b" * 32)
         body = calls[2][1]
-        self.assertEqual(body["url"], "about:blank")
+        self.assertEqual(body["url"], "https://chatgpt.com/")
         self.assertEqual(body["platform"], "")
         self.assertEqual(body["name"], "申请gpt-001")
         self.assertEqual(body["remark"], "申请gpt")

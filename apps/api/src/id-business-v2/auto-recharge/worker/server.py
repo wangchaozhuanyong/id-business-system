@@ -565,16 +565,10 @@ class Job:
         if not isinstance(login, dict) or not isinstance(login.get("email"), str) or not isinstance(login.get("password"), str):
             raise Stop("invalid_login_credentials")
         budget = SessionBudget(60, cancelled=lambda: self.cancelled)
-        page, routed, verified = initial_page, False, False
+        page, verified = initial_page, False
         mail_prepared = False
         offered_mail_id = None
 
-        async def block_payment_during_login(route):
-            request = route.request
-            if browser_password_login.login_payment_write(request.method, request.url):
-                await route.abort("blockedbyclient")
-            else:
-                await route.fallback()
 
         async def wait_for_code(_):
             if not login.get("totp"):
@@ -639,9 +633,6 @@ class Job:
         try:
             if page is None:
                 page = await budget.run(context.new_page, "page_load")
-            await budget.run(lambda: context.route("**/*", block_payment_during_login),
-                             "page_load")
-            routed = True
             target, identity = await browser_password_login.login_with_password(
                 page, login["email"], login["password"], wait_for_code,
                 wait_for_user, self.progress, initial_loaded=initial_page is not None,
@@ -656,10 +647,6 @@ class Job:
             if page is not None:
                 cleaned = await server_proxy.finish_cleanup(
                     lambda: browser_password_login.clear_visible_secrets(page))
-            if routed:
-                unrouted = await server_proxy.finish_cleanup(
-                    lambda: context.unroute("**/*", block_payment_during_login))
-                cleaned = cleaned and unrouted
             if page is not None:
                 closed = await server_proxy.close_resource(page)
                 cleaned = cleaned and closed
@@ -676,43 +663,15 @@ class Job:
             self.progress("session_restore", **{**details, "session_refresh_count": refresh_count})
         budget = SessionBudget(60, cancelled=lambda: self.cancelled,
                                report=report_session, phase="initial_login")
-        page, routed, verified = initial_page, False, False
-        async def block_payment(route):
-            request = route.request
-            if browser_password_login.login_payment_write(request.method, request.url):
-                await route.abort("blockedbyclient")
-            else:
-                await route.fallback()
+        page, verified = initial_page, False
         try:
             await budget.run(lambda: context.add_cookies(session_cookies(target)), "session_read")
             if page is None:
                 page = await budget.run(context.new_page, "page_load")
-            await budget.run(lambda: context.route("**/*", block_payment), "page_load")
-            routed = True
             if initial_page is None:
                 await load_session_page(page, browser_checkout.ORIGIN, budget)
-            while True:
-                try:
-                    observed = await browser_password_login.official_identity(
-                        page, expected_email, budget=budget, strict=True)
-                    break
-                except Exception as error:
-                    retryable = (error.report.get("reason") in {"session_load_timeout", "session_network_error"}
-                                 and not error.report.get("user_action_required")
-                                 and error.report.get("http_status") is None) if isinstance(error, Stop) else (
-                                     browser_checkout.retryable_page_load_error(error))
-                    if refresh_count or not retryable:
-                        raise
-                    budget.remaining_ms()
-                    refresh_count = 1
-                    budget.refresh_count = 1
-                    # 固定官网首页 GET，只恢复同一窗口；不重放登录、建单或付款。
-                    response = await budget.run(lambda: page.goto(
-                        browser_checkout.ORIGIN + "/", wait_until="commit", timeout=0), "page_refresh")
-                    status = getattr(response, "status", None)
-                    if type(status) is int and status >= 400:
-                        raise Stop("verification_required" if status == 403 else "http_error",
-                                   http_status=status, user_action_required=status == 403)
+            observed = await browser_password_login.official_identity(
+                page, expected_email, budget=budget, strict=True)
             if not observed:
                 raise Stop("official_session_not_verified", account_matched=False)
             official_target, identity = observed
@@ -729,9 +688,6 @@ class Job:
             raise error from None
         finally:
             cleaned = True
-            if routed:
-                cleaned = await server_proxy.finish_cleanup(
-                    lambda: context.unroute("**/*", block_payment))
             if page is not None:
                 closed = await server_proxy.close_resource(page)
                 cleaned = cleaned and closed
@@ -785,7 +741,7 @@ class Job:
                 try:
                     context = (self.prepared_browser["context"] if self.prepared_browser else
                                await budget.run(lambda: browser.new_context(
-                                   proxy=proxy, service_workers="block", accept_downloads=False),
+                                   proxy=proxy, accept_downloads=False),
                                    "proxy_context_create"))
                 except Stop as error:
                     if error.report.get("reason") == "session_load_timeout":
@@ -870,7 +826,6 @@ class Job:
                                       confirmer=self.confirm, wait_seconds=120, browser=browser)
         if action == "recheck" and self.payload.get("upgradeIdentifier"):
             async def dispatch(page, guard, identity):
-                await page.context.unroute("**/*", guard.route)
                 return await subscription_upgrade.run_upgrade_in_context(
                     page, target, self.root, plan, upgrade_id=self.payload["upgradeIdentifier"])
             return await browser_checkout.run_browser(target, state_dir=self.root,

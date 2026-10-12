@@ -109,7 +109,7 @@ class SessionBudgetTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(budget.elapsed, 119)
         self.assertEqual(report.call_args.kwargs['session_elapsed_seconds'], 119)
 
-    async def test_network_failure_refreshes_same_page_before_window_rebuild(self):
+    async def test_network_failure_preserves_page_without_forced_refresh(self):
         budget = SessionBudget(120)
         page = MagicMock(url='https://chatgpt.com/')
         page.goto = AsyncMock(side_effect=RuntimeError('net::ERR_TUNNEL_CONNECTION_FAILED'))
@@ -135,13 +135,10 @@ class SessionBudgetTests(unittest.IsolatedAsyncioTestCase):
                 context, SimpleNamespace(), session_budget=budget
             )
         page.goto.assert_awaited_once()
-        page.reload.assert_awaited_once_with(wait_until='commit', timeout=0)
-        self.assertEqual(result['status'], 'session_verified')
-        self.assertTrue(any(
-            call.args == ('session_page_refreshing',)
-            and call.kwargs.get('session_refresh_count') == 1
-            for call in progress.call_args_list
-        ))
+        page.reload.assert_not_awaited()
+        self.assertEqual(result['reason'], 'session_network_error')
+        self.assertFalse(any(call.args == ('session_page_refreshing',)
+                             for call in progress.call_args_list))
 
     async def test_deadline_is_shared_and_expires_at_120(self):
         clock = Clock()
@@ -559,33 +556,31 @@ class QuoteRecoveryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(meta['quote_refresh_count'], 0)
         page.reload.assert_not_awaited()
 
-    async def test_blank_page_refreshes_once_at_half_budget_then_succeeds(self):
+    async def test_blank_page_waits_without_refresh_then_succeeds(self):
         clock, page, guard, empty, valid = self.setup_quote()
         quote, _, meta = await self.run_quote(
-            clock, page, guard, lambda *_: valid if page.reload.await_count else empty,
+            clock, page, guard, lambda *_: valid if clock.now >= 61 else empty,
         )
         self.assertEqual(quote['plan'], 'plus')
         self.assertGreaterEqual(meta['quote_elapsed_seconds'], 60)
-        self.assertEqual(meta['quote_refresh_count'], 1)
-        page.reload.assert_awaited_once_with(wait_until='domcontentloaded', timeout=0)
+        self.assertEqual(meta['quote_refresh_count'], 0)
+        page.reload.assert_not_awaited()
 
-    async def test_blank_page_waits_full_120_seconds_after_one_refresh(self):
+    async def test_blank_page_waits_full_120_seconds_without_refresh(self):
         clock, page, guard, empty, _ = self.setup_quote()
         quote, _, meta = await self.run_quote(clock, page, guard, lambda *_: empty)
         self.assertIsNone(quote['today'])
         self.assertEqual(meta['quote_elapsed_seconds'], 120)
-        self.assertEqual(meta['quote_refresh_count'], 1)
+        self.assertEqual(meta['quote_refresh_count'], 0)
         self.assertEqual(meta['page_state'], 'blank')
 
-    async def test_explicit_proxy_error_refreshes_immediately(self):
+    async def test_explicit_proxy_error_is_reported_without_refreshing_the_window(self):
         clock, page, guard, empty, valid = self.setup_quote()
-        page.locator.return_value.inner_text = AsyncMock(
-            side_effect=[RuntimeError('net::ERR_TUNNEL_CONNECTION_FAILED'), '']
-        )
-        quote, _, meta = await self.run_quote(clock, page, guard, lambda *_: valid)
-        self.assertEqual(quote['plan'], 'plus')
-        self.assertEqual(meta['quote_refresh_count'], 1)
-        self.assertEqual(meta['quote_elapsed_seconds'], 0)
+        page.locator.return_value.inner_text = AsyncMock(side_effect=RuntimeError('net::ERR_TUNNEL_CONNECTION_FAILED'))
+        with self.assertRaises(Stop) as stopped:
+            await self.run_quote(clock, page, guard, lambda *_: valid)
+        self.assertEqual(stopped.exception.report['reason'], 'checkout_page_network_error')
+        page.reload.assert_not_awaited()
 
     async def test_body_title_and_quote_reads_cannot_accept_results_after_phase_deadline(self):
         for delayed in ('body', 'title', 'quote'):
@@ -794,7 +789,7 @@ class WindowRetryTests(unittest.IsolatedAsyncioTestCase):
         self.client.create_profile.return_value = 'a' * 32
         self.client.open_profile.return_value = 'http://127.0.0.1:12345'
         self.client.post.return_value = {}
-        self.context = MagicMock(pages=[], route=AsyncMock(), unroute=AsyncMock(),
+        self.context = MagicMock(pages=[], set_extra_http_headers=AsyncMock(), route=AsyncMock(), unroute=AsyncMock(),
                                  route_web_socket=AsyncMock(), add_cookies=AsyncMock(), clear_cookies=AsyncMock())
         self.playwright = SimpleNamespace(chromium=SimpleNamespace(connect_over_cdp=AsyncMock(
             return_value=SimpleNamespace(contexts=[self.context], version='152.0.0'))))
@@ -1076,14 +1071,15 @@ class WindowRetryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result['reason'], 'operation_cancelled')
         self.assert_same_profile(1)
 
-    async def test_failed_cancel_close_retains_profile_and_reports_uncertainty(self):
+    async def test_cancel_preserves_window_without_attempting_cleanup(self):
         async def cancelled(*args, **kwargs):
             self.job.signal_cancel()
             return failure(reason='operation_cancelled')
         self.client.post.side_effect = Stop('bitbrowser_local_api_unavailable')
         result, _, _ = await self.execute(cancelled)
-        self.assertEqual(result['browser_cleanup_status'], 'failed')
-        self.assertEqual(result['reason'], 'bitbrowser_cleanup_unverified')
+        self.assertEqual(result['browser_cleanup_status'], 'not_needed')
+        self.assertEqual(result['reason'], 'operation_cancelled')
+        self.client.post.assert_not_called()
         self.assert_same_profile(1)
 
     async def test_cancel_close_has_its_own_fifteen_second_budget_after_human_wait(self):
@@ -1137,34 +1133,18 @@ class WindowRetryTests(unittest.IsolatedAsyncioTestCase):
         flow.assert_not_awaited()
         self.assert_same_profile(1)
 
-    async def test_open_browser_allows_bootstrap_session_writes_and_keeps_payment_blocked(self):
+    async def test_open_browser_never_installs_http_or_websocket_interception(self):
         self.job.payload['mode'] = 'open_browser'
         page = MagicMock(url='about:blank')
         self.context.pages = [page]
         identity = {'session_status': 'restored', 'account_matched': True, 'current_plan': 'plus'}
-        async def restored(*args, **kwargs):
-            login_guard = self.context.route.await_args_list[-1].args[1]
-            for method, url, blocked in (
-                    ('POST', 'https://chatgpt.com/api/auth/session', False),
-                    ('POST', 'https://chatgpt.com/backend-api/sentinel/req', False),
-                    ('POST', 'https://chatgpt.com/backend-api/payments/checkout', True),
-                    ('POST', 'https://api.stripe.com/v1/payment_methods', True)):
-                route = AsyncMock()
-                route.request = SimpleNamespace(method=method, url=url)
-                await login_guard(route)
-                if blocked:
-                    route.abort.assert_awaited_once_with('blockedbyclient')
-                    route.fallback.assert_not_awaited()
-                else:
-                    route.fallback.assert_awaited_once()
-                    route.abort.assert_not_awaited()
-            return None, identity
-        with (patch('browser_checkout.restore_session_with_refresh', AsyncMock(side_effect=restored)),
+        with (patch('browser_checkout.restore_session_with_refresh', AsyncMock(return_value=(None, identity))),
               patch('browser_checkout.synchronize_login_page', AsyncMock(return_value=(None, identity)))):
             result, flow, _ = await self.execute([])
         self.assertEqual(result['status'], 'session_ready')
+        self.context.route.assert_not_awaited()
         self.context.route_web_socket.assert_not_awaited()
-        self.context.unroute.assert_awaited_once()
+        self.context.unroute.assert_not_awaited()
         flow.assert_not_awaited()
 
     async def test_open_browser_ui_failure_is_distinct_and_never_rotates_ip(self):
@@ -1200,6 +1180,16 @@ class WindowRetryTests(unittest.IsolatedAsyncioTestCase):
                 self.setUp(); setattr(self.job, flag, True)
                 await self.execute([self.network()])
                 self.assert_same_profile(1)
+
+    async def test_active_manual_wait_preserves_window_even_when_network_failed(self):
+        self.job.waiting_for_user = True
+        result, flow, _ = await self.execute([self.network()])
+        self.assertEqual(result['reason'], 'session_network_error')
+        self.assert_same_profile(1)
+        self.assertEqual(flow.await_count, 1)
+        self.assertEqual(self.paths(), [])
+        self.context.route.assert_not_awaited()
+        self.context.route_web_socket.assert_not_awaited()
 
     async def test_unavailable_bound_profile_never_creates_another(self):
         self.job.owned_profile = {'profileId': 'd' * 32, 'accountKey': 'c' * 64}
@@ -1338,7 +1328,7 @@ class SessionFailureReceiptTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn('synthetic-secret', json.dumps(result))
         return result, navigation, budget, progress
 
-    async def test_firefox_and_chromium_restore_once_in_same_budget(self):
+    async def test_firefox_and_chromium_errors_do_not_force_second_navigation(self):
         codes = ['NS_ERROR_NET_RESET', 'NS_ERROR_NET_TIMEOUT', 'NS_ERROR_NET_INTERRUPT',
                  'NS_ERROR_CONNECTION_REFUSED', 'NS_ERROR_PROXY_CONNECTION_REFUSED',
                  'NS_ERROR_UNKNOWN_HOST', 'NS_ERROR_UNKNOWN_PROXY_HOST',
@@ -1347,23 +1337,23 @@ class SessionFailureReceiptTests(unittest.IsolatedAsyncioTestCase):
             with self.subTest(code=code):
                 result, navigation, budget, progress = await self.execute_failure(
                     RuntimeError(code + ' synthetic-secret'))
-                self.assertEqual(result['status'], 'session_verified')
-                self.assertEqual(len(navigation), 2)
-                self.assertEqual(budget.elapsed, 17)
-                self.assertEqual(budget.refresh_count, 1)
+                self.assertEqual(result['reason'], 'session_network_error')
+                self.assertEqual(len(navigation), 1)
+                self.assertEqual(budget.elapsed, 7)
+                self.assertEqual(budget.refresh_count, 0)
                 self.assertTrue(any(c.args == ('session_restore',) and
                                     c.kwargs.get('account_matched') is False
                                     for c in progress.call_args_list))
 
-    async def test_continuous_failure_returns_final_refresh_snapshot(self):
+    async def test_network_failure_returns_original_load_snapshot(self):
         result, navigation, _, _ = await self.execute_failure(
             RuntimeError('NS_ERROR_PROXY_CONNECTION_REFUSED synthetic-secret'), repeat=True)
-        self.assertEqual(len(navigation), 2)
+        self.assertEqual(len(navigation), 1)
         self.assertEqual(result['reason'], 'session_network_error')
         self.assertEqual(result['browser_error_code'], 'NS_ERROR_PROXY_CONNECTION_REFUSED')
-        self.assertEqual(result['session_step'], 'page_refresh')
-        self.assertEqual(result['session_elapsed_seconds'], 14)
-        self.assertEqual(result['session_refresh_count'], 1)
+        self.assertEqual(result['session_step'], 'page_load')
+        self.assertEqual(result['session_elapsed_seconds'], 7)
+        self.assertEqual(result['session_refresh_count'], 0)
         self.assertEqual(result['session_wait_seconds'], 60)
         self.assertEqual(result['session_phase'], 'subscription_check')
         self.assertFalse(result['account_matched'])

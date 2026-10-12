@@ -267,73 +267,56 @@ class UpgradeGuard(NetworkGuard):
         self.update_request = None
         self.done = asyncio.Event()
         self.error = None
-        self.preflight = None
         self.method_id = None
         self.read_only = ledger.record is not None
         self.three_ds = UpgradeAuthentication(origin_frame)
         self.card_change = UpgradeCardChange(target, origin_frame, read_only=self.read_only)
 
-    async def route(self, route):
-        if self.operation_cancelled():
-            await route.abort('blockedbyclient')
-            return
-        if await self.route_hcaptcha(route):
-            return
-        request = route.request
+    def observe_request(self, request):
         p = urlsplit(request.url)
-        if request.method == 'POST' and p.scheme == 'https' and p.hostname == 'chatgpt.com' and p.path == UPGRADE_PATH:
-            if self.reserved or self.sent:
-                self.blocked_duplicates += 1
-                await route.abort('blockedbyclient')
-                return
-            try:
-                body = request.post_data_json
-                allowed_keys = {'account_id', 'updated_plan', 'payment_method_id'}
-                if (not isinstance(body, dict) or set(body) - allowed_keys
-                        or body.get('account_id') != self.target.account_id
-                        or body.get('updated_plan') != plan_spec(self.target_plan)['official_name']
-                        or not isinstance(self.method_id, str)
-                        or body.get('payment_method_id') != self.method_id
-                        or not self.three_ds.original_frame_matches(getattr(request, 'frame', None))
-                        or not request_account(request.headers, self.target)):
-                    raise Stop('upgrade_request_mismatch')
-                if not self.approved or self.sent:
-                    raise Stop('duplicate_payment_blocked' if self.sent else 'upgrade_not_authorized')
-                self.reserved = True  # 第一个 await 前预留；并发第二次 update 不能通过。
-                await self.preflight()
-                if not self.approved or self.three_ds.closed or self.operation_cancelled():
-                    raise Stop('operation_cancelled')
-                self.upgrade_ledger.update(confirmation_requests_sent=1, stage='upgrade_request_sending')
-                self.sent, self.approved, self.update_request = 1, False, request
-                await route.fallback()
-                return
-            except Exception as exc:
-                self.approved = False
-                self.error = exc if isinstance(exc, Stop) else Stop('upgrade_marker_write_failed')
-                self.done.set()
-                await route.abort('blockedbyclient')
-                return
-        if await route_upgrade_card_change(self, route):
+        if (not self.approved or self.operation_cancelled() or not self.upgrade_ledger.record or request.method != 'POST'
+                or p.scheme != 'https' or p.hostname != 'chatgpt.com' or p.path != UPGRADE_PATH):
             return
-        decision = await self.three_ds.original_request_decision(request, self.target, sent=self.sent,
-            read_only=self.read_only, payment_status=lambda: (self.upgrade_ledger.record or {}).get('payment_status'))
-        if decision is not None:
-            if decision and not self.operation_cancelled():
-                await route.fallback()
-            else:
-                self.blocked_unknown_writes += int(request.method not in {'GET', 'HEAD', 'OPTIONS'})
-                await route.abort('blockedbyclient')
+        if request in self.observed_requests:
             return
-        if request.method in {'GET', 'HEAD'} and p.hostname == 'api.stripe.com':
-            pi = self.upgrade_ledger.record.get('upgrade_payment_intent_identifier') if self.upgrade_ledger.record else None
-            if not pi or p.path != '/v1/payment_intents/' + pi:
-                await route.abort('blockedbyclient')
-                return
-        # new checkout、追加confirm/绑卡/续订/取消等所有写均继承默认拒绝。
-        await super().route(route)
+        self.observed_requests.add(request)
+        self.sent += 1
+        if self.update_request is not None:
+            self.error = Stop('upgrade_result_unknown')
+            self.done.set()
+            return
+        self.reserved = True
+        try:
+            body = request.post_data_json
+            if (not isinstance(body, dict) or body.get('account_id') != self.target.account_id
+                    or body.get('updated_plan') != plan_spec(self.target_plan)['official_name']
+                    or body.get('payment_method_id') != self.method_id
+                    or not self.three_ds.original_frame_matches(getattr(request, 'frame', None))
+                    or not request_account(request.headers, self.target)):
+                raise Stop('upgrade_request_mismatch')
+        except (Stop, TypeError, ValueError, AttributeError) as error:
+            self.error = error if isinstance(error, Stop) else Stop('upgrade_request_mismatch')
+            self.done.set()
+            return
+        self.update_request = request
+        try:
+            self.upgrade_ledger.update(confirmation_requests_sent=1, stage='upgrade_request_sending')
+        except (OSError, Stop):
+            self.error = Stop('upgrade_marker_write_failed')
+        progress('upgrade_request_sending', attempt=self.sent)
+
+    async def route(self, route):
+        self.observe_request(route.request)
+        await route.fallback()
 
     async def response(self, response):
+        self.observe_request(response.request)
         await self.card_change.response(response)
+        if response.request not in self.three_ds.requests:
+            verified = await self.three_ds.original_request_decision(response.request, self.target, sent=self.sent,
+                read_only=self.read_only, payment_status=lambda: (self.upgrade_ledger.record or {}).get("payment_status"))
+            if verified is False:
+                self.three_ds.requests.pop(response.request, None)
         await self.three_ds.observe_redirect(response)
         p = urlsplit(response.url)
         update = response.request is self.update_request
@@ -528,7 +511,6 @@ async def run_upgrade_in_context(page, target, state_dir, target_plan, *, detail
         guard.hcaptcha_enabled = server_handoff
         guard.operation_cancelled = lambda: controller_cancelled(controller)
         context = page.context
-        await context.route('**/*', guard.route)
         observers = UpgradeResponseObservers(context, guard)
         details = None
         def cancelled():
@@ -594,7 +576,7 @@ async def run_upgrade_in_context(page, target, state_dir, target_plan, *, detail
                 cancelled()
             await preflight()
             ledger.begin(quote, details.last4)
-            guard.preflight, guard.method_id, guard.approved = lambda: preflight(network_request=True), method_id, True
+            guard.method_id, guard.approved = method_id, True
             cancelled()
             await button.click()
             if server_handoff:
@@ -625,7 +607,6 @@ async def run_upgrade_in_context(page, target, state_dir, target_plan, *, detail
             return result
         finally:
             await observers.finish()
-            await context.unroute('**/*', guard.route)
             if details is not None:
                 details.clear()
 
@@ -633,7 +614,6 @@ async def run_upgrade_in_context(page, target, state_dir, target_plan, *, detail
 async def recheck_upgrade_in_context(context, target, state_dir, target_plan, upgrade_id):
     from browser_checkout import run_browser
     async def dispatch(page, guard, identity):
-        await context.unroute('**/*', guard.route)
         return await run_upgrade_in_context(page, target, state_dir, target_plan, upgrade_id=upgrade_id)
     return await run_browser(target, state_dir=state_dir, target_plan=target_plan,
                              browser_context=context, session_handler=dispatch)

@@ -90,7 +90,8 @@ async def verified_quote_once(page, guard):
     if (not today or quote.get("tax") is None or not quote.get("renewal")
             or quote.get("renewal_interval") != "monthly"
             or today.get("currency") != binding["currency"]
-            or today.get("amount_minor") != binding["amount_minor"]):
+            or today.get("amount_minor") != binding["amount_minor"]
+            or "tax_minor" in binding and quote["tax"].get("amount_minor") != binding["tax_minor"]):
         return None
     try:
         quote_digest(quote)
@@ -141,13 +142,6 @@ async def current_quote(page, guard, minimum_binding_version=0, *, wait_seconds=
             return quote
         previous = digest
         elapsed = time.monotonic() - started
-        if refresh_handler and not refreshed and elapsed >= wait_seconds / 2:
-            refreshed = True
-            progress("quote_page_refreshing", quote_elapsed_seconds=int(elapsed),
-                     quote_wait_seconds=wait_seconds, quote_refresh_count=1,
-                     page_state="quote_incomplete", last_reason="payment_quote_not_ready")
-            await remaining_call(refresh_handler)
-            previous = None
         await remaining_call(lambda: asyncio.sleep(.3))
     raise not_ready()
 
@@ -162,7 +156,6 @@ async def verify_identity_again(page, target):
         return identity
     finally:
         await check_page.close()
-        await page.bring_to_front()
 
 
 async def payment_handler(page, guard, identity, ledger, target, *, pay, details_reader, confirmer,
@@ -183,15 +176,10 @@ async def payment_handler(page, guard, identity, ledger, target, *, pay, details
         binding_before = guard.official_binding_version
         prepared = await fill_official_form(page, details)
 
-        async def refresh_and_refill():
-            await page.reload(wait_until="domcontentloaded", timeout=0)
-            prepared.update(await fill_official_form(page, details))
-
-        # 若地址改变了金额，页面新值与旧初始化回执不同会自动阻断；
-        # 免税地址前后总额相同时，不强迫官网重复发送同一 init 请求。
+        # A changed address must agree with the latest response for this checkout.
+        # Reading and calculating tax must never refresh the form or reuse old totals.
         quote = await current_quote(page, guard, max(1, binding_before),
-                                    wait_seconds=quote_wait_seconds,
-                                    refresh_handler=refresh_and_refill)
+                                    wait_seconds=quote_wait_seconds)
         if quote["plan"] != selected_plan:
             raise Stop("payment_quote_plan_mismatch")
         await verify_billing_fields(page, details, prepared["billing_fields_filled"])
@@ -228,12 +216,16 @@ async def payment_handler(page, guard, identity, ledger, target, *, pay, details
                     or quote_digest(current_quote_value) != fingerprint):
                 raise Stop("payment_quote_changed")
 
+        await preflight()
         guard.validate_before_confirm = preflight
         ledger.begin(quote, confirmed_digest=fingerprint, card_last4=details.last4)
         guard.approve(quote)
         if guard.operation_cancelled():
             raise Stop('operation_cancelled')
-        # 请求与 UI 重复点击均由单次 guard 和落盘标记保护。
+        # Persisted task ownership permits one automatic click, without network interception.
+        if guard.confirmation_reserved:
+            raise Stop("duplicate_payment_blocked")
+        guard.confirmation_reserved = True
         await button.click()
         progress("payment_submitted_or_pending", repeated_payment="blocked")
         deadline = time.monotonic() + (300 if server_handoff else wait_seconds)
@@ -327,7 +319,7 @@ async def run_flow(target, state_dir, target_plan, *, details_reader, confirmer,
                     "payment_requests_sent": 0, **identity}
         operation = subscription_transition(identity["current_plan"], target_plan)
         # 选择实际订阅路径后，移除仅供前置只读核验的拦截器。
-        await page.context.unroute("**/*", guard.route)
+        pass  # Browser traffic is observed, never intercepted.
         if operation == "subscription_upgrade":
             return await run_upgrade_in_context(
                 page, verified_target, state_dir, target_plan, details_reader=details_reader,
