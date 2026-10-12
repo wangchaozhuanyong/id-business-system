@@ -21,6 +21,7 @@ import time
 
 BASELINE = '31d2c6885a45817cd40d23fce8d6145bc9f18af2'
 BASELINE_MANIFEST_SHA256 = '84936d13d8cd241d62e606a13faf1a0d5d8fd4fa1abdfb21fb091c4298bfc382'
+ORIGINAL_RUNTIME_SOURCE_LIMIT = 1024 * 1024
 CONTEXT = '.deploy/production-release/admin-pending-online-build-context'
 RECORD = '.deploy/production-release/admin-pending-online-build-projection.json'
 PROOF = '.deploy/production-release/admin-pending-online-build-proof.json'
@@ -320,10 +321,14 @@ def publish(d, args, proof):
         before = snapshot(d, previous)
         bind_baseline_images(d, previous, manifest, before)
         volume = volume_state(d, previous, manifest)
+        need(set(runtime) == set(projection_module().RUNTIME_FILES), 'ORIGINAL_RUNTIME_SOURCE_SET_CHANGED')
         for name, (raw, _mode) in runtime.items():
             need((previous / name).read_bytes() == raw, 'RUNTIME_CONFIGURATION_CHANGED')
             source = previous / '.deploy/production-release/pending-original-source' / name
-            need(private_bytes(source) == candidate[name][0], 'ORIGINAL_RUNTIME_SOURCE_CHANGED')
+            original_source = candidate[name][0]
+            need(isinstance(original_source, bytes) and 0 < len(original_source) <= ORIGINAL_RUNTIME_SOURCE_LIMIT,
+                 'ORIGINAL_RUNTIME_SOURCE_SIZE_INVALID')
+            need(private_bytes(source, cap=len(original_source)) == original_source, 'ORIGINAL_RUNTIME_SOURCE_CHANGED')
         stamp = time.strftime('%Y%m%dT%H%M%SZ', time.gmtime())
         target = d.BASE / 'releases' / f'{stamp}-{args.commit[:12]}'
         changed = False
