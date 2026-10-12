@@ -344,7 +344,7 @@
     <V2FormDrawer
       v-model="page.markOpen"
       :title="page.markTitle"
-      description="登记已知的历史注册状态。IP 不清楚时留空；人工填写与任务检测会分别显示。"
+      description="登记已知的历史注册状态。注册 IP 和备注均可留空。"
       :confirm-loading="page.busy"
       @confirm="saveMark"
     >
@@ -372,13 +372,16 @@
               v-model="page.markDraft.form.registrationIp"
               :disabled="!page.registrationIpEditable"
               clearable
-              placeholder="历史出口 IP，不清楚可留空"
+              placeholder="可留空，例如 203.0.113.10"
               aria-label="历史注册出口 IP"
-            /><small>仅已注册邮箱可补录 IPv4 或 IPv6；留空表示未记录，不使用当前 IP 推测。</small>
+            /><small
+              >仅已注册邮箱可补录 IPv4 或 IPv6
+              地址；不清楚时留空。国家或地区请写在备注中，不使用当前 IP 推测。</small
+            >
           </div></el-form-item
         >
         <el-form-item
-          label="备注"
+          label="备注（可选）"
           :error="page.markValidation.includes('500') ? page.markValidation : undefined"
           ><el-input
             ref="noteInput"
@@ -387,6 +390,7 @@
             :rows="3"
             maxlength="500"
             show-word-limit
+            placeholder="可留空；国家、地区等补充信息可写在这里"
             aria-label="注册标记备注"
         /></el-form-item>
         <p v-if="page.markDraft.form.items.length > 1">
