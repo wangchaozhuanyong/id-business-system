@@ -122,7 +122,7 @@ export function useV2QuickActions(options: {
       if (!isCurrent(userId, epoch)) throw cancelled();
       if (updated.hasCustomOrder !== true) throw new Error('服务器尚未确认顺序，请刷新后重试');
       legacyMigrationConfirmed = true;
-      primeV2Query({ scope: 'workspace', key: key(), data: updated });
+      primeV2Query({ moduleKey: 'profile', scope: 'workspace', key: key(), data: updated });
       clearLegacyQuickActionOrder(userId);
       migrationError.value = '';
     } catch (error) {

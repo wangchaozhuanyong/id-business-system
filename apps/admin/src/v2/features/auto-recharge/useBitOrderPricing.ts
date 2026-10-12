@@ -76,7 +76,12 @@ export function useBitOrderPricing() {
     try {
       const result = await bankRechargeApi.updateOrderPricingSettings(input);
       if (identityEpoch !== sessionCoordinator.identityEpoch.value) return;
-      primeV2Query({ scope: 'auto-recharge', key: 'bit-orders-pricing-settings', data: result });
+      primeV2Query({
+        moduleKey: 'bank-recharge-orders',
+        scope: 'auto-recharge',
+        key: 'bit-orders-pricing-settings',
+        data: result
+      });
       if (finish()) {
         draft.open('settings', result, result.updatedAt ?? undefined);
         open.value = false;
@@ -101,7 +106,12 @@ export function useBitOrderPricing() {
     try {
       const result = await bankRechargeApi.orderPricingSettings();
       if (identityEpoch !== sessionCoordinator.identityEpoch.value) return;
-      primeV2Query({ scope: 'auto-recharge', key: 'bit-orders-pricing-settings', data: result });
+      primeV2Query({
+        moduleKey: 'bank-recharge-orders',
+        scope: 'auto-recharge',
+        key: 'bit-orders-pricing-settings',
+        data: result
+      });
       if (finish()) draft.open('settings', result, result.updatedAt ?? undefined);
       else error.value = '加载期间有新输入，已保留；再次点击重新载入可恢复已保存设置';
     } catch (reason) {

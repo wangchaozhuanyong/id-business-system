@@ -179,7 +179,7 @@ export function useAppleMailboxes() {
     const input = markPayload();
     const error = appleMailboxMarkError(input);
     if (error) {
-      // 字段错误留在对应控件，避免在备注下方重复显示 IP 错误。
+      // 字段错误只显示在对应控件旁，避免在备注下方重复显示 IP 错误。
       actionError.value = error.includes('IPv4') || error.includes('500') ? '' : error;
       return;
     }

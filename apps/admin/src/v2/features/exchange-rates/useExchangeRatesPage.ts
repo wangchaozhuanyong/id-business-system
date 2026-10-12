@@ -2,6 +2,7 @@ import { useV2FormDraft, useV2SessionDraft } from '@/v2/composables/useV2Session
 import { computed, ref, watch } from 'vue';
 import { getApiErrorMessage } from '@/api/client';
 import { useAuthStore } from '@/stores/auth';
+import { sessionCoordinator } from '@/auth/sessionCoordinator';
 import { hasUserPermission } from '@/utils/permissions';
 import { idBusinessV2ExchangeRatesApi } from './api';
 import { createV2QueryKey, primeV2Query, useV2ModuleQuery } from '@/v2/composables/useV2Query';
@@ -165,27 +166,30 @@ export function useExchangeRatesPage() {
     );
   }
 
+  function getSnapshotRevalidateAt(snapshot: ExchangeRatePageSnapshot) {
+    const deadlines = [
+      snapshot.overview.effective.expiresAt,
+      snapshot.overview.lastSuccess?.expiresAt,
+      ...(snapshot.purchaseQuotes?.items
+        .map((quote) => quote.latestSnapshot)
+        .filter((item) => item && !item.stale)
+        .map((item) => item!.staleAt) ?? [])
+    ]
+      .filter(Boolean)
+      .map((value) => new Date(value!).getTime())
+      .filter((value) => Number.isFinite(value) && value > Date.now());
+    return deadlines.length ? Math.min(...deadlines) : null;
+  }
+
   const exchangeRateQuery = useV2ModuleQuery<ExchangeRatePageSnapshot>({
     moduleKey: 'exchange-rates',
     scope: 'exchange-rates',
     key: () => getPageKey(),
     keepPreviousData: true,
-    getRevalidateAt: (snapshot) => {
-      const deadlines = [
-        snapshot.overview.effective.expiresAt,
-        snapshot.overview.lastSuccess?.expiresAt,
-        ...(snapshot.purchaseQuotes?.items
-          .map((quote) => quote.latestSnapshot)
-          .filter((item) => item && !item.stale)
-          .map((item) => item!.staleAt) ?? [])
-      ]
-        .filter(Boolean)
-        .map((value) => new Date(value!).getTime())
-        .filter((value) => Number.isFinite(value) && value > Date.now());
-      return deadlines.length ? Math.min(...deadlines) : null;
-    },
+    getRevalidateAt: getSnapshotRevalidateAt,
     query: async ({ signal }) => {
       if (isDefaultAutomaticRequest()) {
+        const identityEpoch = sessionCoordinator.identityEpoch.value;
         const result = await idBusinessV2ExchangeRatesApi.bootstrap(
           {
             runPage: 1,
@@ -197,8 +201,14 @@ export function useExchangeRatesPage() {
           },
           { signal }
         );
+        if (signal.aborted || identityEpoch !== sessionCoordinator.identityEpoch.value) {
+          throw new DOMException('汇率读取已取消', 'AbortError');
+        }
+        const revalidateAt = getSnapshotRevalidateAt(result);
         primeV2Query<ExchangeRatePageSnapshot>({
+          moduleKey: 'exchange-rates',
           scope: 'exchange-rates',
+          revalidateAt,
           key: getPageKey('manual'),
           data: {
             overview: result.overview,
@@ -209,7 +219,9 @@ export function useExchangeRatesPage() {
           }
         });
         primeV2Query<ExchangeRatePageSnapshot>({
+          moduleKey: 'exchange-rates',
           scope: 'exchange-rates',
+          revalidateAt,
           key: getPageKey('purchase'),
           data: {
             overview: result.overview,
