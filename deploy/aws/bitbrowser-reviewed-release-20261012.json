@@ -1,0 +1,494 @@
+{
+  "baselineOriginSha256": "4b81b0d398de0c4b0198803950354c286f7107a8a19b99e519d5404007b0c1ca",
+  "baselineProducer": {
+    "commit": "31d2c6885a45817cd40d23fce8d6145bc9f18af2",
+    "sourceTree": "8cd7679461682d9c103e3130852431508c5e812c",
+    "workflowRunAttempt": "1",
+    "workflowRunId": "38142818370"
+  },
+  "files": {
+    "apps/admin/src/v2/features/auto-recharge/bitbrowser-direct-login.spec.ts": {
+      "after": {
+        "bytes": 78856,
+        "mode": "100644",
+        "sha256": "d9631b91bedae95971c1b2e78ca91e02fc1e09d5298adcc5992e30a277ea540d"
+      },
+      "before": {
+        "bytes": 74923,
+        "mode": "100644",
+        "sha256": "1c75e295227d8c4e4af33d2590e2466e24458f7a9c46845bc1ba4c1c92f0dc8b"
+      }
+    },
+    "apps/admin/src/v2/features/auto-recharge/bitbrowser-direct-login.ts": {
+      "after": {
+        "bytes": 39804,
+        "mode": "100644",
+        "sha256": "3e748b048da9260687c56b1b7ee0b90c300e875e456e67a49a5c67b669092c82"
+      },
+      "before": {
+        "bytes": 37691,
+        "mode": "100644",
+        "sha256": "be520607e609718a6aad767b9909f06e9e5a1d4e8df86cc4292c73208619dc67"
+      }
+    },
+    "apps/admin/src/v2/features/auto-recharge/bitbrowser-direct.spec.ts": {
+      "after": {
+        "bytes": 21150,
+        "mode": "100644",
+        "sha256": "630125ee9d6971eda47b75f52138c1ba7cad38ac9054571c60db2318844001e5"
+      },
+      "before": {
+        "bytes": 21163,
+        "mode": "100644",
+        "sha256": "f2febdb68c5ae2db2a2487f17aaa0068d6afc65aff29e2920ab78c23b0afbba0"
+      }
+    },
+    "apps/admin/src/v2/features/auto-recharge/bitbrowser-login-page.ts": {
+      "after": {
+        "bytes": 15351,
+        "mode": "100644",
+        "sha256": "c475a5c8b594a974b33c75e0e7a830fe51ceefdd1273401266cb714f9e87e1b1"
+      },
+      "before": {
+        "bytes": 15214,
+        "mode": "100644",
+        "sha256": "0933bfa4ccc6765aecc119e958846995e48873ea1f260c7656ca4d1151446f48"
+      }
+    },
+    "apps/admin/src/v2/features/auto-recharge/connector-transport.spec.ts": {
+      "after": {
+        "bytes": 4797,
+        "mode": "100644",
+        "sha256": "3712cd0dc4306a7484dfe9497c2c4edbb91c64d4feb5f70236c246fda1fcac14"
+      },
+      "before": {
+        "bytes": 4663,
+        "mode": "100644",
+        "sha256": "da3cd86580bd5c69071d4747d6fa58336425ee6ee8f6dabc82a68a2602ee4fb1"
+      }
+    },
+    "apps/admin/src/v2/features/auto-recharge/connector-transport.ts": {
+      "after": {
+        "bytes": 5758,
+        "mode": "100644",
+        "sha256": "bc3652cfd3459ef3809a467714960caca0381aabcec7a0ec6982750c9170ab01"
+      },
+      "before": {
+        "bytes": 5452,
+        "mode": "100644",
+        "sha256": "ccbddb6ef260c6f6a5bfb702b9ead342dea9de0527036c0a4c0549751922f69c"
+      }
+    },
+    "apps/admin/src/v2/features/auto-recharge/useAutoRecharge.spec.ts": {
+      "after": {
+        "bytes": 44986,
+        "mode": "100644",
+        "sha256": "c81dc74db39e08812c413bdc7b56eb84ea753649858b17175e4ed4cd80e865a9"
+      },
+      "before": {
+        "bytes": 42404,
+        "mode": "100644",
+        "sha256": "05889f75edfe387491597c0f5fe12e0700a2f1d4ee9a1e230523bc7fe99cebbf"
+      }
+    },
+    "apps/admin/src/v2/features/auto-recharge/useAutoRecharge.ts": {
+      "after": {
+        "bytes": 57089,
+        "mode": "100644",
+        "sha256": "7cfaefe5e5a6f57861aae3dcc540016d3b28f232b614cb0ca5ccc9fda31787a8"
+      },
+      "before": {
+        "bytes": 56541,
+        "mode": "100644",
+        "sha256": "f42eb2c1d6d917ef83f0317d4092b1cad0bb6f91149b1706b457489c8b84ba19"
+      }
+    },
+    "apps/admin/src/v2/features/auto-recharge/useBitBrowserDirectOpen.spec.ts": {
+      "after": {
+        "bytes": 14059,
+        "mode": "100644",
+        "sha256": "d66b82bea5bd816045ade9001f69642add79079d0f08af8116addad27d621dae"
+      },
+      "before": {
+        "bytes": 13846,
+        "mode": "100644",
+        "sha256": "e87966c06db8c89259dc8210b823966fff48922a857dd73c6156c40cadd93bdd"
+      }
+    },
+    "apps/admin/src/v2/features/auto-recharge/useBitBrowserDirectOpen.ts": {
+      "after": {
+        "bytes": 7354,
+        "mode": "100644",
+        "sha256": "588b515ae679f3ce2b6514ba5493b4ebd1b86cfc30bfed3ec8572b79aa1d2a00"
+      },
+      "before": {
+        "bytes": 6974,
+        "mode": "100644",
+        "sha256": "fc0d60cbea59d3dab12382b46f6ee4aa749a8f3e6aa8636308001e0a9ce7cb3d"
+      }
+    },
+    "apps/admin/src/v2/features/auto-recharge/useRechargeBrowserSettings.ts": {
+      "after": {
+        "bytes": 8647,
+        "mode": "100644",
+        "sha256": "b62b4f1bf92d94f472db4537fca468afef809922e6ace7e6abd971a2d04c1278"
+      },
+      "before": {
+        "bytes": 8320,
+        "mode": "100644",
+        "sha256": "d96c1a933a60b0cd6501c359d6ae7565a7e95efbfa0c51472e84d299e3ac38c8"
+      }
+    },
+    "apps/api/src/id-business-v2/auto-recharge/recharge-owned-profile.spec.ts": {
+      "after": {
+        "bytes": 27451,
+        "mode": "100644",
+        "sha256": "d3d3086890130bb32be4feaa3f9745ebf89efa85afffc8abcba81325de389295"
+      },
+      "before": {
+        "bytes": 26456,
+        "mode": "100644",
+        "sha256": "297a96283c718ba45434c8a51b852721b4526df932cd1f727cea41979891e4b6"
+      }
+    },
+    "apps/api/src/id-business-v2/auto-recharge/recharge-profile-recovery.ts": {
+      "after": {
+        "bytes": 5244,
+        "mode": "100644",
+        "sha256": "fd353cac75fa48aa138b7b1f1149d76971ba0230bb760612c7ba85945d8141e0"
+      },
+      "before": {
+        "bytes": 5204,
+        "mode": "100644",
+        "sha256": "6f60ca8d4e7f56aeec9400183ec2efc842ea06874164a205f3c3a05a07ff854a"
+      }
+    },
+    "apps/api/src/id-business-v2/auto-recharge/worker/bitbrowser_connector.py": {
+      "after": {
+        "bytes": 54148,
+        "mode": "100644",
+        "sha256": "bf2b82f681b2e3eec0b2e0120714707302e793b174b4d13187e303f9d6d674f3"
+      },
+      "before": {
+        "bytes": 54059,
+        "mode": "100644",
+        "sha256": "2fce70a105b55dd3f6c0718f302213364b98d04a89b92806e372e87d60bd0015"
+      }
+    },
+    "apps/api/src/id-business-v2/auto-recharge/worker/bitbrowser_retry.py": {
+      "after": {
+        "bytes": 33388,
+        "mode": "100644",
+        "sha256": "b264b4b26c2698f0e53b1dced4552f359af3d8a95717649355624a4c9622c8d5"
+      },
+      "before": {
+        "bytes": 35544,
+        "mode": "100644",
+        "sha256": "8014acfe11c753b190a8c47bcce9bb50a58d0f66a30e4393c98fad1dfb6faef4"
+      }
+    },
+    "apps/api/src/id-business-v2/auto-recharge/worker/browser_checkout.py": {
+      "after": {
+        "bytes": 56484,
+        "mode": "100644",
+        "sha256": "fdd7042f8964a089bd0694ef69da08e602858e22b2034148676bc22f2de24fc5"
+      },
+      "before": {
+        "bytes": 62802,
+        "mode": "100644",
+        "sha256": "d47db87cc6aee4af74db08e69bc82b8258622fde83438622d11ae600fbadd951"
+      }
+    },
+    "apps/api/src/id-business-v2/auto-recharge/worker/browser_session.py": {
+      "after": {
+        "bytes": 7895,
+        "mode": "100644",
+        "sha256": "dc481a99c436ce4a9f439667d62af41838e1b8cdc04f48eaf8e3986782a220f7"
+      },
+      "before": {
+        "bytes": 8393,
+        "mode": "100644",
+        "sha256": "da502478f1de8befa9f788bf8be1bd3869c2a8e1e02dd4957fd2f1e67e0741d4"
+      }
+    },
+    "apps/api/src/id-business-v2/auto-recharge/worker/pay.py": {
+      "after": {
+        "bytes": 28621,
+        "mode": "100644",
+        "sha256": "477c7804e022b2ab675e16750fe22a2d90b155c4a20704dc65a03b659d2c236d"
+      },
+      "before": {
+        "bytes": 29083,
+        "mode": "100644",
+        "sha256": "07e808835f0e09ddce310e1a0a9e03ba3ea0ee24dbf51797c23e4c098b42dda8"
+      }
+    },
+    "apps/api/src/id-business-v2/auto-recharge/worker/payment_network.py": {
+      "after": {
+        "bytes": 14424,
+        "mode": "100644",
+        "sha256": "3d36f0248d91b3cfb01785111f0f8eb84c6c8dacc7fd0f17b44b0512f90e8a83"
+      },
+      "before": {
+        "bytes": 15565,
+        "mode": "100644",
+        "sha256": "109579fffede89c7c5bc4e15b815df44f7f14eca9f7fad704ecc6236767bf887"
+      }
+    },
+    "apps/api/src/id-business-v2/auto-recharge/worker/payment_recovery.py": {
+      "after": {
+        "bytes": 5281,
+        "mode": "100644",
+        "sha256": "4fe5d1847ff96802f7dd807a28801fd19b973f1e73d4bd9d42a64058f304d8ed"
+      },
+      "before": {
+        "bytes": 5417,
+        "mode": "100644",
+        "sha256": "18815675c48b8240dd0f44b1cfe29690a085b71a404007d208147cc5020f3372"
+      }
+    },
+    "apps/api/src/id-business-v2/auto-recharge/worker/server.py": {
+      "after": {
+        "bytes": 52946,
+        "mode": "100644",
+        "sha256": "23b1e29abe027186c02447d292f2884dad9ba8de1902a2315cdf1d4686b3431c"
+      },
+      "before": {
+        "bytes": 55586,
+        "mode": "100644",
+        "sha256": "55817f7358e3070bb971ab4098a60c75dd50d20df77a1e2337aadbec165eaead"
+      }
+    },
+    "apps/api/src/id-business-v2/auto-recharge/worker/server_proxy.py": {
+      "after": {
+        "bytes": 12693,
+        "mode": "100644",
+        "sha256": "103fa8f796fd49309352385b77b6099b8865cdd9dc006ae3a1ef2bd57c2eddca"
+      },
+      "before": {
+        "bytes": 13949,
+        "mode": "100644",
+        "sha256": "699262e2bac0f719f36c5a745f4fa913f94a049c9117f37a90c5eaa3e9be7ded"
+      }
+    },
+    "apps/api/src/id-business-v2/auto-recharge/worker/subscription_upgrade.py": {
+      "after": {
+        "bytes": 36638,
+        "mode": "100644",
+        "sha256": "9326b60b6d7efb75a26e2bb84ca4e258ffbc82b7c4732d487a2145425f392b4a"
+      },
+      "before": {
+        "bytes": 38042,
+        "mode": "100644",
+        "sha256": "d6dccbd403c09dbc2bc70d9177424b6194c1d90c10d2c3824320ea64f89313b7"
+      }
+    },
+    "apps/api/src/id-business-v2/auto-recharge/worker/test_bitbrowser_connector.py": {
+      "after": {
+        "bytes": 36324,
+        "mode": "100644",
+        "sha256": "1f3de9f10f05920a6f5baac20f64875969fc6eeca42b52297bb95a31d013cb56"
+      },
+      "before": {
+        "bytes": 34032,
+        "mode": "100644",
+        "sha256": "27b74ed3e603567850be0d7cbc9196e383f9bf98f0b89f817d708501ca7f1e2f"
+      }
+    },
+    "apps/api/src/id-business-v2/auto-recharge/worker/test_bitbrowser_readiness.py": {
+      "after": {
+        "bytes": 15329,
+        "mode": "100644",
+        "sha256": "9e07b11f198b7c35ce0432df91f21a8b50268ffde9c775f3581b8e95f7c9f3ee"
+      },
+      "before": {
+        "bytes": 14928,
+        "mode": "100644",
+        "sha256": "f44a94e8cd8074d8e7b445a1802fcfa8d614bbc4dfa20a46e494232bda7b15f7"
+      }
+    },
+    "apps/api/src/id-business-v2/auto-recharge/worker/test_bitbrowser_upgrade.py": {
+      "after": {
+        "bytes": 10614,
+        "mode": "100644",
+        "sha256": "7aa0eabe3f3d7b30a7160ec809839de6b99eabcc95522c19fc1a5329fefd5f3b"
+      },
+      "before": {
+        "bytes": 10851,
+        "mode": "100644",
+        "sha256": "3114d8cf56082c1148eec2f6ce5cacf5cad59c4161d122d0365d2f8ddf4eac4b"
+      }
+    },
+    "apps/api/src/id-business-v2/auto-recharge/worker/test_owned_recharge_profile.py": {
+      "after": {
+        "bytes": 11272,
+        "mode": "100644",
+        "sha256": "1dd0002a510a968e5332f25729d18ebecd055a389d5d70467e30d953e0a70df9"
+      },
+      "before": {
+        "bytes": 11266,
+        "mode": "100644",
+        "sha256": "13d893f528f033fc9184dbd96fbb4416238227778c3d803557ff567dfe8c5d65"
+      }
+    },
+    "apps/api/src/id-business-v2/auto-recharge/worker/test_password_login.py": {
+      "after": {
+        "bytes": 17862,
+        "mode": "100644",
+        "sha256": "0c6d730a95522a1090f5113ba367b57ae5bad55bded2ab5b7489ac37401354eb"
+      },
+      "before": {
+        "bytes": 15578,
+        "mode": "100644",
+        "sha256": "c54fd495053a8b12fb04e112849163e60cf338956b7afd050decba5a3001ccbf"
+      }
+    },
+    "apps/api/src/id-business-v2/auto-recharge/worker/test_payment.py": {
+      "after": {
+        "bytes": 71633,
+        "mode": "100644",
+        "sha256": "f300f4b7080c2c70063518caf48c72a881585cb68b65f5ebf8f795fd65da30d8"
+      },
+      "before": {
+        "bytes": 69659,
+        "mode": "100644",
+        "sha256": "a9b3874418a04669bef3fd20ff8aa5553f07065ec21dd4283c2698fe3872a2ce"
+      }
+    },
+    "apps/api/src/id-business-v2/auto-recharge/worker/test_payment_3ds.py": {
+      "after": {
+        "bytes": 42478,
+        "mode": "100644",
+        "sha256": "6b98f25b2a96a328801896ddf4ac5838dd1516eba282bb57b27f40f202901c87"
+      },
+      "before": {
+        "bytes": 42720,
+        "mode": "100644",
+        "sha256": "a0702cc92ae22b9feb8e1aa41e4e28fb848f377555d84aa9d7c4346da010c5e6"
+      }
+    },
+    "apps/api/src/id-business-v2/auto-recharge/worker/test_payment_handoff.py": {
+      "after": {
+        "bytes": 40134,
+        "mode": "100644",
+        "sha256": "1f050eb15901e58aade68e009336356966f047108fa0650582e276110abcf90c"
+      },
+      "before": {
+        "bytes": 40157,
+        "mode": "100644",
+        "sha256": "73cf4f3097d0406d9397464f0d22eb7fc4a1d163949bd839c9cb2de68db83641"
+      }
+    },
+    "apps/api/src/id-business-v2/auto-recharge/worker/test_server.py": {
+      "after": {
+        "bytes": 82457,
+        "mode": "100644",
+        "sha256": "19eaaf335da6f2d050a6f3c3e0a1c1cd9241f841808db2fbf5aef4c20dc57e37"
+      },
+      "before": {
+        "bytes": 84976,
+        "mode": "100644",
+        "sha256": "4471015a0aa5ecbecd14833e721be741766099f4004c91b3d51095f47b25583a"
+      }
+    },
+    "apps/api/src/id-business-v2/auto-recharge/worker/test_server_proxy.py": {
+      "after": {
+        "bytes": 26648,
+        "mode": "100644",
+        "sha256": "8d4c92e9f23bfaaae2d96f6d6f4ef2f37ad21eff53bc02b963b1fb51fdd35275"
+      },
+      "before": {
+        "bytes": 27917,
+        "mode": "100644",
+        "sha256": "aca77be46615949fcdee0eb7e464b9682d953f87e94dba9e6a0821e475f1542e"
+      }
+    },
+    "apps/api/src/id-business-v2/auto-recharge/worker/test_session_retry.py": {
+      "after": {
+        "bytes": 80999,
+        "mode": "100644",
+        "sha256": "8e0e62074cae937b4afc55f70630c661b66b30b32f760836a11e6367418f5286"
+      },
+      "before": {
+        "bytes": 81526,
+        "mode": "100644",
+        "sha256": "5075bde001e57754ee392f17c2159f4436637a140f4e0dfd797f63e43e1d098e"
+      }
+    },
+    "apps/api/src/id-business-v2/auto-recharge/worker/test_subscribe.py": {
+      "after": {
+        "bytes": 29114,
+        "mode": "100644",
+        "sha256": "a8d75396ad55560712ce81b878b786a70f9d3e1efffb739d2da0b2faf54a34b7"
+      },
+      "before": {
+        "bytes": 29560,
+        "mode": "100644",
+        "sha256": "c11472378ef20b22bea46f0cc047ac67084950aac843d381b02d4d4e5b7701a9"
+      }
+    },
+    "apps/api/src/id-business-v2/auto-recharge/worker/test_subscription_upgrade.py": {
+      "after": {
+        "bytes": 59975,
+        "mode": "100644",
+        "sha256": "c9a09d94d396985fb56c77f61b133830ed61da05e5080e628fa4a3ecf5123872"
+      },
+      "before": {
+        "bytes": 59409,
+        "mode": "100644",
+        "sha256": "6400e084ce24d68aad0b9dfa8753267deaf3e05abe8e09f2ead665d97e06122f"
+      }
+    },
+    "apps/api/src/id-business-v2/auto-recharge/worker/upgrade_authentication.py": {
+      "after": {
+        "bytes": 6251,
+        "mode": "100644",
+        "sha256": "3b816de6229e805ed420fca254c660a385a3c077ccf4afee0f4888f186aeb62d"
+      },
+      "before": {
+        "bytes": 6281,
+        "mode": "100644",
+        "sha256": "53c42dd9f5daf4053a81e7eb54286020292ec589a0311dfedaf1d41be47506f5"
+      }
+    },
+    "apps/api/src/id-business-v2/auto-recharge/worker/upgrade_card_network.py": {
+      "after": {
+        "bytes": 16932,
+        "mode": "100644",
+        "sha256": "dde0b69955ffba4c27b7f0506652e96b03e43ab0ae4f1b2b70027702f9c34222"
+      },
+      "before": {
+        "bytes": 16731,
+        "mode": "100644",
+        "sha256": "b0ade78a203c7b0f83982a817c171271d961c3cb4c99fd27682f63019605ce6a"
+      }
+    },
+    "docs/BITBROWSER_FLOW_RELEASE_20261012.md": {
+      "after": {
+        "bytes": 2539,
+        "mode": "100644",
+        "sha256": "19cae7d32edfb9c42d410f1519f92ed0f79b1d5d994f50d2f128c94c43c61007"
+      },
+      "before": null
+    },
+    "scripts/acceptance-v2-auto-recharge.mjs": {
+      "after": {
+        "bytes": 28830,
+        "mode": "100644",
+        "sha256": "c6ad7399c91712edf1d20f264560a19508e9f500a8b31b01b7538d753dda28f6"
+      },
+      "before": {
+        "bytes": 28602,
+        "mode": "100644",
+        "sha256": "482a492d61bdbb7c36239e5780afcd934721ba752ef53147e939352019976de9"
+      }
+    }
+  },
+  "kind": "ONLINE_RECHARGE_FIXED_BITBROWSER_SCOPE_MAPPING",
+  "reviewedProducer": {
+    "commit": "b61ea7ea5a1903ecd6ebfe01cb7b7b0b770bc390",
+    "pullRequest": 446,
+    "sourceTree": "119c8e069e8c1d94f15462e54e2ab2b1f3c30ba0"
+  },
+  "version": 1
+}

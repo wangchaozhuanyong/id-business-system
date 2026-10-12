@@ -52,7 +52,8 @@ export const formalRuntimePackageControlPaths = Object.freeze([
 ]);
 const onlineRecoveryControls = new Set([
   onlineRechargeRecoveryPolicy,
-  productionDatabaseAccessTest
+  productionDatabaseAccessTest,
+  'deploy/aws/bitbrowser-reviewed-release-20261012.json'
 ]);
 
 function hasOnlineRechargeDeleteGrantProof(snapshot) {
