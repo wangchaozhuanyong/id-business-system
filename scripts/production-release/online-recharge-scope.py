@@ -1389,7 +1389,8 @@ def protected_source(d, previous, target):
         return rows
     for worker in ('apps/api/src/id-business-v2/auto-recharge/worker',
                    'apps/api/src/id-business-v2/auto-registration'):
-        d.require(inventory(previous, worker) == inventory(target, worker), 'ONLINE_RECHARGE_LEGACY_SOURCE_CHANGED')
+        if not _workspace_reviewed_worker_protected(d, previous, target, worker):
+            d.require(inventory(previous, worker) == inventory(target, worker), 'ONLINE_RECHARGE_LEGACY_SOURCE_CHANGED')
     for name in ('scripts/v2-data-integrity-audit.mjs', 'scripts/lib/v2-data-integrity-audit.mjs',
                  'scripts/sync-v2-new-table-grants.mjs', 'scripts/lib/v2-production-database-access.mjs'):
         d.require((previous / name).is_file() and (target / name).is_file()
@@ -1989,6 +1990,9 @@ def extract_source(d, commit, target):
                   and all((m.name == prefix[:-1] or m.name.startswith(prefix))
                           and '..' not in Path(m.name).parts and (m.isfile() or m.isdir()) for m in entries),
                   'ONLINE_RECHARGE_SOURCE_ARCHIVE_INVALID')
+        # Preserve archive content and executable/read-only bits while sealing staged source.
+        for member in entries:
+            member.mode &= ~0o022
         archive.extractall(target)
     extracted = target / prefix[:-1]
     for item in extracted.iterdir():
@@ -4267,11 +4271,11 @@ _AFTER_BIT_BANK_POLICY_FILES = {
         'bec32298136ff61d8e69820179b8c3f51f8e5221f4e6b449aaf5f5ec8f7d4625'),
     'scripts/production-release/online-recharge-scope.test.py': (
         '4aa063af4054ff98d2bb622056556ab643ed39abb3d373facc636509ff98ad8e',
-        'a7ef425f05343525f49def15a49dd889a311b13283e2cab63bbe28209971126f'),
+        '4a8e005636e0b8a7ff858be24beb626e2c59900fc57d7560855866447288c026'),
 }
 _AFTER_BIT_RELEASE_CI_FILES = {
-    'scripts/ci-recharge-scope.mjs': ('3fe9c33ea883b7e2ad15305d1c7fe26873ddf648645b7a05acc8aecd5f858cfd', '04c8451b64ebf75755a108761a1a73430e4f31e807f7bb4f356b790417ee7ec1'),
-    'scripts/ci-recharge-scope.test.mjs': ('f7df520b417f7d681050073e5e8b9cd882effebd10a458a7afc620a39ab17550', 'b487febe298fd3934dfe7c02d3fd610e99300f17712463daa958660aa2e51934'),
+    'scripts/ci-recharge-scope.mjs': ('3fe9c33ea883b7e2ad15305d1c7fe26873ddf648645b7a05acc8aecd5f858cfd', 'c066be2f8811237e6fd82448d79c9fbd93aace6457033984c4fb1a2457eb892c'),
+    'scripts/ci-recharge-scope.test.mjs': ('f7df520b417f7d681050073e5e8b9cd882effebd10a458a7afc620a39ab17550', 'dee5bb67add0563539d5ca181a8712cd30082637cb4a941a8d55c878da897302'),
     'scripts/ci-recharge-check.mjs': ('8863a78075b234faa0b048c56277bff81f7df88ad72d6261bc5493f08d525932', '96153e6f010d7a6c9b1028ea3d95d91ad1b321f5ab04768011fddb9819790ff7'),
     'scripts/ci-recharge-check.test.mjs': ('53e1376a2e36d3f492075547d4a0ceb8e65a915cec0c572ac6952356b045ea04', '0ff6dca9335d102fcdacfd7c0a9ad2ecafc245aa086d2cbda4655f58ff1b6767'),
 }
@@ -4374,6 +4378,62 @@ def _pending_workspace_current_source_inventory(d,producer):
     return result
 
 
+
+_BITBROWSER_SCOPE_POLICY_FILE = 'deploy/aws/bitbrowser-reviewed-release-20261012.json'
+_BITBROWSER_SCOPE_POLICY_SHA256 = 'b2221e6c2cfe3eece93c1492c1ddd1df0e8aa8a572805ce1c841682478b12852'
+
+
+def _workspace_reviewed_application_inventory(d,bridge,original,inventory,producer=None):
+    """The complete reviewed #446 group, from the already tree-verified archive."""
+    name=_BITBROWSER_SCOPE_POLICY_FILE
+    if name not in original and name not in inventory:return frozenset()
+    code='ONLINE_RECHARGE_PENDING_WORKSPACE_APPLICATION_SOURCE_CHANGED'
+    d.require(name not in original and inventory.get(name)=={
+        'sha256':_BITBROWSER_SCOPE_POLICY_SHA256,'mode':'100644'}
+        and type(bridge) is dict and bridge.get('kind')==ONLINE_AFTER_BIT_KIND,code)
+    _workspace_bridge_shape(d,bridge,ONLINE_AFTER_BIT_KIND)
+    actual=_pending_workspace_producer(d)
+    d.require(producer is None or producer==actual,code)
+    raw=getattr(d,'_onlinePendingWorkspaceArchiveBytes',{}).get((actual['commit'],actual['sourceTree']))
+    d.require(type(raw) is bytes,code)
+    with tarfile.open(fileobj=io.BytesIO(raw),mode='r:gz') as archive:
+        row=archive.getmember('id-business-system-'+actual['commit']+'/'+name)
+        data=archive.extractfile(row).read(16668)
+        d.require(row.isfile() and row.mode&0o111==0 and row.size==len(data)==16667
+            and hashlib.sha256(data).hexdigest()==_BITBROWSER_SCOPE_POLICY_SHA256,code)
+    policy=closed_recovery_json(d,data)
+    d.require(type(policy) is dict and set(policy)=={'kind','version','baselineOriginSha256',
+        'baselineProducer','reviewedProducer','files'}
+        and policy['kind']=='ONLINE_RECHARGE_FIXED_BITBROWSER_SCOPE_MAPPING'
+        and type(policy['version']) is int and policy['version']==1
+        and policy['baselineOriginSha256']==fingerprint(bridge)
+        and policy['baselineProducer']==bridge['baselineProducer']
+        and policy['reviewedProducer']=={'commit':'b61ea7ea5a1903ecd6ebfe01cb7b7b0b770bc390',
+            'sourceTree':'119c8e069e8c1d94f15462e54e2ab2b1f3c30ba0','pullRequest':446}
+        and type(policy['files']) is dict and len(policy['files'])==40,code)
+    files=policy['files']
+    for side,values,p in (('before',original,bridge['baselineProducer']),('after',inventory,actual)):
+        source=getattr(d,'_onlinePendingWorkspaceArchiveBytes',{}).get((p['commit'],p['sourceTree']))
+        d.require(type(source) is bytes,code)
+        with tarfile.open(fileobj=io.BytesIO(source),mode='r:gz') as archive:
+            for n,pair in files.items():
+                d.require(type(pair) is dict and set(pair)=={'before','after'}
+                    and pair['before']!=pair['after'],code)
+                expected=pair[side]
+                if expected is None:
+                    d.require(side=='before' and n not in values,code)
+                    continue
+                d.require(type(expected) is dict and set(expected)=={'sha256','mode','bytes'}
+                    and _declaration_hash(expected['sha256']) and expected['mode']=='100644'
+                    and type(expected['bytes']) is int and 0<expected['bytes']<512*1024
+                    and values.get(n)=={k:expected[k] for k in ('sha256','mode')},code)
+                row=archive.getmember('id-business-system-'+p['commit']+'/'+n)
+                data=archive.extractfile(row).read(expected['bytes']+1)
+                d.require(row.isfile() and row.mode&0o111==0 and row.size==len(data)==expected['bytes']
+                    and hashlib.sha256(data).hexdigest()==expected['sha256'],code)
+    return frozenset(files)|frozenset((name,))
+
+
 def _workspace_release_ci_inventory(d, bridge, original, inventory):
     """Admit only the complete reviewed B receipt-checker source group."""
     names = frozenset(_AFTER_BIT_RELEASE_CI_FILES)
@@ -4383,7 +4443,7 @@ def _workspace_release_ci_inventory(d, bridge, original, inventory):
     code = 'ONLINE_RECHARGE_PENDING_WORKSPACE_APPLICATION_SOURCE_CHANGED'
     d.require(type(bridge) is dict and bridge.get('kind') == ONLINE_AFTER_BIT_KIND, code)
     _workspace_bridge_shape(d, bridge, ONLINE_AFTER_BIT_KIND)
-    capacity=_workspace_capacity_control_inventory(d,bridge,original,inventory)|_workspace_release_rules_inventory(d,bridge,original,inventory)
+    capacity=_workspace_capacity_control_inventory(d,bridge,original,inventory)|_workspace_release_rules_inventory(d,bridge,original,inventory)|_workspace_reviewed_application_inventory(d,bridge,original,inventory)
     d.require((set(original)^set(inventory))<=capacity and changed == names
         and all(original.get(name) == {'sha256': before, 'mode': '100644'}
             and inventory.get(name) == {'sha256': after, 'mode': '100644'}
@@ -4398,9 +4458,9 @@ def _workspace_bank_policy_inventory(d, bridge, original, inventory):
     _workspace_bridge_shape(d,bridge,ONLINE_AFTER_BIT_KIND)
     extra=frozenset(_AFTER_BIT_BANK_POLICY_FILES)-_PENDING_WORKSPACE_RECEIPT_COMPATIBILITY_FILES
     ci = _workspace_release_ci_inventory(d, bridge, original, inventory)
-    capacity=_workspace_capacity_control_inventory(d,bridge,original,inventory)|_workspace_release_rules_inventory(d,bridge,original,inventory)
+    capacity=_workspace_capacity_control_inventory(d,bridge,original,inventory)|_workspace_release_rules_inventory(d,bridge,original,inventory)|_workspace_reviewed_application_inventory(d,bridge,original,inventory)
     d.require((set(original)^set(inventory))<=capacity
-        and {n for n in inventory if original[n]!=inventory[n]
+        and {n for n in inventory if original.get(n)!=inventory[n]
              and n not in _PENDING_WORKSPACE_RECEIPT_COMPATIBILITY_FILES and n not in ci and n not in capacity}==extra
         and all(original.get(n)=={'sha256':before,'mode':'100644'}
             and inventory.get(n)=={'sha256':after,'mode':'100644'}
@@ -4411,8 +4471,8 @@ def _workspace_bank_policy_inventory(d, bridge, original, inventory):
 def _pending_workspace_profile(d, bridge, producer):
     """Keep the actual predecessor; admit only the receipt-control repair.
 
-    Both immutable archives still undergo complete Git tree verification. Every
-    application, configuration and migration entry must remain byte/mode exact.
+    Both immutable archives still undergo complete Git tree verification. Only
+    complete fixed reviewed mappings can differ; all other entries stay exact.
     """
     initial=bridge['baselineProducer']
     d.require(producer['workflowRunId']!=initial['workflowRunId'],
@@ -4421,11 +4481,12 @@ def _pending_workspace_profile(d, bridge, producer):
     if producer['commit']!=initial['commit'] or producer['sourceTree']!=initial['sourceTree']:
         original=_pending_workspace_current_source_inventory(d,initial)
         compatible=_PENDING_WORKSPACE_RECEIPT_COMPATIBILITY_FILES
-        capacity=_workspace_capacity_control_inventory(d,bridge,original,inventory)|_workspace_release_rules_inventory(d,bridge,original,inventory)
+        capacity=_workspace_capacity_control_inventory(d,bridge,original,inventory)|_workspace_release_rules_inventory(d,bridge,original,inventory)|_workspace_reviewed_application_inventory(d,bridge,original,inventory)
         d.require((set(original)^set(inventory))<=capacity,
             'ONLINE_RECHARGE_PENDING_WORKSPACE_APPLICATION_SOURCE_CHANGED')
+        _workspace_reviewed_application_inventory(d,bridge,original,inventory,producer)
         compatible = compatible | capacity | _workspace_release_ci_inventory(d, bridge, original, inventory)
-        if any(original[name]!=inventory[name] for name in inventory if name not in compatible):
+        if any(original.get(name)!=inventory[name] for name in inventory if name not in compatible):
             compatible=compatible|_workspace_bank_policy_inventory(d,bridge,original,inventory)
         d.require((set(original)^set(inventory))<=capacity
             and _PENDING_WORKSPACE_RECEIPT_COMPATIBILITY_FILES.issubset(inventory)
@@ -4440,6 +4501,62 @@ def _pending_workspace_profile(d, bridge, producer):
         d.require(inventory.get(name,{}).get('sha256')==hashlib.sha256(raw).hexdigest(),
                   'ONLINE_RECHARGE_EXECUTOR_SOURCE_CHANGED')
     return inventory
+
+
+def _workspace_reviewed_worker_protected(d, previous, target, worker):
+    """Carry the complete reviewed N source; never replace the retained B worker."""
+    saved=getattr(d,'_onlinePendingWorkspaceSession',None)
+    if worker!='apps/api/src/id-business-v2/auto-recharge/worker' or type(saved) is not dict \
+            or type(saved.get('bridge')) is not dict or saved['bridge'].get('kind')!=ONLINE_AFTER_BIT_KIND \
+            or previous!=Path(saved['bridge'].get('baselineRelease','')):
+        return False
+    bridge,producer=_pending_workspace_session(d)
+    inventory=_pending_workspace_current_source_inventory(d,producer)
+    original=_pending_workspace_current_source_inventory(d,bridge['baselineProducer'])
+    reviewed=_workspace_reviewed_application_inventory(d,bridge,original,inventory,producer)
+    names=frozenset(n for n in reviewed if n.startswith(worker+'/'))
+    if not names:return False
+    code='ONLINE_RECHARGE_LEGACY_SOURCE_CHANGED'
+    d.require(len(names)==25 and previous==Path(bridge['baselineRelease'])
+        and previous.resolve()==previous and target.parent==d.BASE/'releases'
+        and target.resolve()==target and target.is_dir() and not target.is_symlink()
+        and re.fullmatch('[0-9]{8}T[0-9]{6}Z-'+producer['commit'][:12],target.name),code)
+    materials=_workspace_after_bit_materials(d,previous,bridge=bridge)
+    d.require(fingerprint(original)==materials['producer']['archiveInventorySha256'],code)
+    current=(d.BASE/'current').resolve()
+    if current==previous:
+        d.require(not any((target/n).exists() or (target/n).is_symlink() for n in
+            (STATE_FILE,PROOF_FILE,'release-manifest.json','.env.aws.production','compose.release.json')),code)
+    else:
+        d.require(current==target,code)
+        manifest=closed_recovery_json(d,_declaration_source_bytes(target/'release-manifest.json'))
+        for name in (STATE_FILE,PROOF_FILE):
+            _declaration_source_bytes(target/name)
+        d.require(all(manifest.get(n)==v for n,v in {'commit':producer['commit'],
+            'sourceTree':producer['sourceTree'],'previousRelease':str(previous),
+            'previousCommit':bridge['baselineCommit'],
+            'previousManifestSha256':bridge['manifestBytesSha256']}.items()),code)
+    for directory,source in ((previous,original),(target,inventory)):
+        for name in reviewed-names:
+            path=directory/name
+            if name not in source:
+                d.require(not path.exists() and not path.is_symlink(),code)
+            else:
+                raw=_declaration_source_bytes(path,limit=512*1024)
+                d.require(source[name]=={'sha256':hashlib.sha256(raw).hexdigest(),'mode':'100644'},code)
+        folder=directory/worker
+        d.require(folder.is_dir() and folder.resolve()==folder and not folder.is_symlink(),code)
+        paths=list(folder.rglob('*'));actual={}
+        for path in paths:
+            d.require(not path.is_symlink(),code)
+            if path.is_dir():continue
+            raw=_declaration_source_bytes(path,limit=512*1024)
+            actual[path.relative_to(directory).as_posix()]={'sha256':hashlib.sha256(raw).hexdigest(),
+                'mode':'100755' if path.stat().st_mode&0o111 else '100644'}
+        d.require(actual=={n:v for n,v in source.items() if n.startswith(worker+'/')}
+            and set(folder.rglob('*'))==set(paths),code)
+    d.require((d.BASE/'current').resolve()==current,code)
+    return True
 
 
 def _workspace_bank_policy_protected(d, previous, target):
@@ -5631,6 +5748,13 @@ _WORKSPACE_RELEASE_RULES_POLICY = {'kind': 'ONLINE_RECHARGE_FIXED_RELEASE_RULES_
 _RESTORED_FAILED_C_BANK_SOURCE_PAIRS = {'scripts/lib/v2-production-database-access.mjs': ('7ece1de5cbba89b26615d749a671d32a380f4dc377548071746d14f1f2e2a546', '36bfe57d9fd802fc647d09dd8871f1af4cee6cd03a68bf05a2509dd0e554570d'), 'scripts/production-database-access.test.mjs': ('eb2ea9b434ea744589ce2210fcbd501b54bedcda05e614521aab9b30be002590', 'd914b4646ced503e432697b410b9dcbbf07d9087375ba0e6ea41df8b7a9c5000'), 'scripts/acceptance-v2-production-database-access.mjs': ('15adadb670cdbd7645761b161f487b74550b271455289e60a97108e9e4ac46f1', 'd39b620aa33ac21cecc0b9229dc0cc59967af1e890ea65c4e61d20fb1dbe269e'), 'scripts/production-release/api-admin-scope.test.py': ('551b052262643dc8b9ccb9cd56a08bc0b566dab03e634643517fe3ce3c168b06', 'bec32298136ff61d8e69820179b8c3f51f8e5221f4e6b449aaf5f5ec8f7d4625'), 'scripts/production-release/online-recharge-scope.test.py': ('4aa063af4054ff98d2bb622056556ab643ed39abb3d373facc636509ff98ad8e', '59f3221f1326865a958f6f50fd0fb5211c3f2ee29ca915884f05202d426cf5d2')}
 
 
+_RESTORED_FAILED_C_RELEASE_CI_FILES = {
+    'scripts/ci-recharge-scope.mjs': ('3fe9c33ea883b7e2ad15305d1c7fe26873ddf648645b7a05acc8aecd5f858cfd', '04c8451b64ebf75755a108761a1a73430e4f31e807f7bb4f356b790417ee7ec1'),
+    'scripts/ci-recharge-scope.test.mjs': ('f7df520b417f7d681050073e5e8b9cd882effebd10a458a7afc620a39ab17550', 'b487febe298fd3934dfe7c02d3fd610e99300f17712463daa958660aa2e51934'),
+    'scripts/ci-recharge-check.mjs': ('8863a78075b234faa0b048c56277bff81f7df88ad72d6261bc5493f08d525932', '96153e6f010d7a6c9b1028ea3d95d91ad1b321f5ab04768011fddb9819790ff7'),
+    'scripts/ci-recharge-check.test.mjs': ('53e1376a2e36d3f492075547d4a0ceb8e65a915cec0c572ac6952356b045ea04', '0ff6dca9335d102fcdacfd7c0a9ad2ecafc245aa086d2cbda4655f58ff1b6767'),
+}
+
 def _restored_workspace_failed_source_inventory(d,bridge,producer):
     """Complete authentic failed-C Git archive, usable by native F and CI.
 
@@ -5642,8 +5766,13 @@ def _restored_workspace_failed_source_inventory(d,bridge,producer):
     original=_pending_workspace_current_source_inventory(d,bridge['baselineProducer'])
     inventory=_pending_workspace_current_source_inventory(d,producer)
     bank=_RESTORED_FAILED_C_BANK_SOURCE_PAIRS
-    d.require(type(bank) is dict and set(bank)==set(_AFTER_BIT_BANK_POLICY_FILES),code)
-    ci=_workspace_release_ci_inventory(d,bridge,original,inventory)
+    ci=frozenset(_RESTORED_FAILED_C_RELEASE_CI_FILES)
+    d.require(producer==_RESTORED_B_WITNESS['policy']['failedProducer']
+        and type(bank) is dict and set(bank)==set(_AFTER_BIT_BANK_POLICY_FILES)
+        and ci==frozenset(_AFTER_BIT_RELEASE_CI_FILES)
+        and all(original.get(n)=={'sha256':before,'mode':'100644'}
+            and inventory.get(n)=={'sha256':after,'mode':'100644'}
+            for n,(before,after) in _RESTORED_FAILED_C_RELEASE_CI_FILES.items()),code)
     compatible=_PENDING_WORKSPACE_RECEIPT_COMPATIBILITY_FILES|frozenset(bank)|ci
     d.require(set(original)==set(inventory)
         and all(original.get(name)=={'sha256':before,'mode':'100644'}
