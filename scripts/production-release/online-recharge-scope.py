@@ -3283,7 +3283,8 @@ def _online_after_bit_audit_binding(d, bridge, proof):
     return {'baselineOriginSha256': fingerprint(bridge), 'baselineProducer': bridge['baselineProducer'],
         'producer': producer, 'preflightBytesSha256': hashlib.sha256(raw).hexdigest(),
         'buildProofSha256': fingerprint(proof), 'sourceHelpers': {name: hashlib.sha256(
-            _declaration_source_bytes(Path(__file__).with_name(name), limit=512 * 1024)).hexdigest()
+            _declaration_source_bytes(Path(__file__).with_name(name),
+                limit=(1024 if name == 'online-recharge-scope.py' else 512) * 1024)).hexdigest()
             for name in ('api-admin-scope.py', 'online-recharge-scope.py')}}
 
 
@@ -4271,7 +4272,7 @@ _AFTER_BIT_BANK_POLICY_FILES = {
         'bec32298136ff61d8e69820179b8c3f51f8e5221f4e6b449aaf5f5ec8f7d4625'),
     'scripts/production-release/online-recharge-scope.test.py': (
         '4aa063af4054ff98d2bb622056556ab643ed39abb3d373facc636509ff98ad8e',
-        '4a8e005636e0b8a7ff858be24beb626e2c59900fc57d7560855866447288c026'),
+        '2ea5dc9f740def0dd5dd67c6ab3f2cde9ce86dc500c7fbad9d90c5d54c9f82f7'),
 }
 _AFTER_BIT_RELEASE_CI_FILES = {
     'scripts/ci-recharge-scope.mjs': ('3fe9c33ea883b7e2ad15305d1c7fe26873ddf648645b7a05acc8aecd5f858cfd', 'c066be2f8811237e6fd82448d79c9fbd93aace6457033984c4fb1a2457eb892c'),
@@ -5241,6 +5242,41 @@ _RESTORED_B_HISTORY_VOLUME = {'name': '20260821t095106z_auto_registration_data',
 _RESTORED_B_QUALIFIED_CODE = 'ONLINE_RECHARGE_B_RESTORE_DECLARATION_UNPROVEN'
 
 
+def _restored_workspace_qualification_location(error, caps):
+    """Locate a source-owned body failure without reading exception values."""
+    from types import FunctionType, ModuleType
+    namespaces = [globals()]
+    online = vars(caps).get('online') if type(caps) is SimpleNamespace else None
+    if type(online) is ModuleType and vars(online).get('__file__') == __file__:
+        namespaces.append(vars(online))
+    names = ('_restored_qualified_measure', '_restored_qualified_capture',
+        '_restored_qualified_capsule', '_restored_qualified_tools',
+        '_restored_qualified_binding', '_restored_qualified_proof',
+        '_restored_qualified_pair', '_restored_qualified_exact', '_restored_qualified_hashes')
+    trusted = {}
+    for namespace in namespaces:
+        for name in names:
+            function = namespace.get(name)
+            if (type(function) is FunctionType and function.__globals__ is namespace
+                    and function.__code__.co_filename == __file__):
+                trusted[id(function.__code__)] = (namespace, name.removeprefix('_restored_qualified_').upper())
+    seen = set(); current = error; location = None
+    for unused in range(8):
+        if current is None or id(current) in seen:
+            break
+        seen.add(id(current))
+        if type(current) in (RuntimeError, ValueError, TypeError, KeyError, AttributeError, NameError):
+            frame = BaseException.__traceback__.__get__(current)
+            while frame is not None:
+                bound = trusted.get(id(frame.tb_frame.f_code))
+                if (bound is not None and frame.tb_frame.f_globals is bound[0]
+                        and type(frame.tb_lineno) is int and 0 < frame.tb_lineno < 100000):
+                    location = bound[1] + '_L' + str(frame.tb_lineno) + '_' + type(current).__name__.upper()
+                frame = frame.tb_next
+        current = BaseException.__context__.__get__(current)
+    return location
+
+
 def _restored_workspace_qualification_call(operation, *, driver=None, caps=None, owner=None, stage='PACKAGE_BIND'):
     """Preserve fixed rejected diagnostics; never grant or weaken qualification."""
     try:
@@ -5290,6 +5326,10 @@ def _restored_workspace_qualification_call(operation, *, driver=None, caps=None,
                 and type(details['stage']) is str and details['stage'] in DECLARATION_DIAGNOSTIC_STAGES
                 and type(details['code']) is str and details['code'] in DECLARATION_DIAGNOSTIC_CODES):
             message = 'ONLINE_RECHARGE_DECLARATION_' + details['stage'] + '_' + details['code']
+            if details == {'stage': 'STABILITY', 'code': 'UNKNOWN'}:
+                location = _restored_workspace_qualification_location(error, caps)
+                if location is not None:
+                    message += '_AT_' + location
             if len(message) <= 128:
                 raise _declaration_driver_failure(message, details) from None
         # Unrecognized classes, attributes and messages remain rejected without
@@ -6425,7 +6465,8 @@ def _restored_workspace_audit_binding(d, bridge, proof):
     return {'deploymentQualification':saved['deploymentQualification'],'baselineOriginSha256': fingerprint(bridge), 'baselineProducer': bridge['baselineProducer'],
         'producer': producer, 'preflightBytesSha256': hashlib.sha256(raw).hexdigest(), 'buildProofSha256': fingerprint(proof),
         'restorationSha256': fingerprint(saved['restoration']), 'sourceHelpers': {name: hashlib.sha256(
-            _declaration_source_bytes(Path(__file__).with_name(name), limit=512*1024)).hexdigest()
+            _declaration_source_bytes(Path(__file__).with_name(name),
+                limit=(1024 if name == 'online-recharge-scope.py' else 512)*1024)).hexdigest()
             for name in ('api-admin-scope.py', 'online-recharge-scope.py')}}
 
 
