@@ -23,7 +23,11 @@ function fixture(run, outputDirectory = '.deploy') {
   mkdirSync(bin);
   const log = join(root, 'docker.log');
   writeFileSync(log, '');
-  writeFileSync(join(bin, 'git'), '#!/bin/sh\ncat "$TASK_CHANGED_PATHS"\n', { mode: 0o755 });
+  writeFileSync(
+    join(bin, 'git'),
+    '#!/bin/sh\nif [ "$1 $2" = "diff --quiet" ]; then exit "${TASK_ADMIN_SCOPE_CHANGED:-0}"; fi\nif [ "$1 $2 $3" = "ls-remote origin refs/heads/main" ]; then printf "%s\\trefs/heads/main\\n" "${TASK_REMOTE_MAIN:-$RELEASE_COMMIT}"; exit 0; fi\ncat "$TASK_CHANGED_PATHS"\n',
+    { mode: 0o755 }
+  );
   writeFileSync(
     join(bin, 'docker'),
     '#!/bin/sh\nprintf "%s\\n" "$*" >> "$TASK_DOCKER_LOG"\nif [ "$1" = login ]; then cat >/dev/null; fi\nif [ "$1" = image ]; then printf "%s\\n" "$RELEASE_COMMIT"; fi\n',
@@ -153,6 +157,7 @@ function guardCommands(
     failPrepared = false,
     failFormalPackage = false,
     failBackupRetention = false,
+    failAdminPending = false,
     part = 'guards'
   } = {}
 ) {
@@ -168,7 +173,7 @@ function guardCommands(
           file === 'node'
             ? 'if [ "$TASK_FAIL_HISTORY" = true ] && [ "$*" = "--test scripts/v2-release-history-policy.test.mjs" ]; then exit 23; fi\nif [ "$TASK_FAIL_MAINTENANCE" = true ] && [ "$*" = "--test scripts/v2-release-maintenance-policy.test.mjs" ]; then exit 24; fi\nif [ "$TASK_FAIL_MAILBOX" = true ] && [ "$*" = "--test scripts/v2-release-mailbox-audit.test.mjs" ]; then exit 27; fi\nif [ "$TASK_FAIL_ARCHIVE_POLICY" = true ] && [ "$*" = "--test scripts/v2-order-archive-release-policy.test.mjs" ]; then exit 26; fi\n'
             : file === 'python3'
-              ? 'if [ "$TASK_FAIL_RETIREMENT" = true ] && [ "$*" = "-B scripts/production-release/retire-orphan-retention.test.py" ]; then exit 24; fi\nif [ "$TASK_FAIL_PREPARED" = true ] && [ "$*" = "-B scripts/production-release/prepared-images.test.py" ]; then exit 25; fi\nif [ "$TASK_FAIL_FORMAL_PACKAGE" = true ] && [ "$*" = "-B scripts/production-release/formal-runtime-package.test.py" ]; then exit 28; fi\nif [ "$TASK_FAIL_BACKUP_RETENTION" = true ]; then case "$*" in "-B scripts/backup-retention-protection.test.py"|"-B scripts/production-release/backup-retention-install.test.py") exit 29 ;; esac; fi\n'
+              ? 'if [ "$TASK_FAIL_ADMIN_PENDING" = true ] && [ "$*" = "-B scripts/production-release/admin-pending-online-release.test.py" ]; then exit 30; fi\nif [ "$TASK_FAIL_RETIREMENT" = true ] && [ "$*" = "-B scripts/production-release/retire-orphan-retention.test.py" ]; then exit 24; fi\nif [ "$TASK_FAIL_PREPARED" = true ] && [ "$*" = "-B scripts/production-release/prepared-images.test.py" ]; then exit 25; fi\nif [ "$TASK_FAIL_FORMAL_PACKAGE" = true ] && [ "$*" = "-B scripts/production-release/formal-runtime-package.test.py" ]; then exit 28; fi\nif [ "$TASK_FAIL_BACKUP_RETENTION" = true ]; then case "$*" in "-B scripts/backup-retention-protection.test.py"|"-B scripts/production-release/backup-retention-install.test.py") exit 29 ;; esac; fi\n'
               : ''
         }`,
         { mode: 0o755 }
@@ -189,7 +194,8 @@ function guardCommands(
           TASK_FAIL_RETIREMENT: String(failRetirement),
           TASK_FAIL_PREPARED: String(failPrepared),
           TASK_FAIL_FORMAL_PACKAGE: String(failFormalPackage),
-          TASK_FAIL_BACKUP_RETENTION: String(failBackupRetention)
+          TASK_FAIL_BACKUP_RETENTION: String(failBackupRetention),
+          TASK_FAIL_ADMIN_PENDING: String(failAdminPending)
         },
         stdio: 'pipe'
       }
@@ -226,6 +232,8 @@ function dispatchFixture(historyPolicy, current, run, extraEnv = {}) {
         },
         stdio: 'pipe'
       });
+    if (extraEnv.RELEASE_OPERATION === 'release_admin')
+      adminProjectionFixture(root, { ...env, ...extraEnv }, awsLog);
     run({ execute, parametersFile, awsLog, root, env });
   });
 }
@@ -485,6 +493,355 @@ const fixtureSeal = 'e'.repeat(64);
 const workflow = loadYaml(readFileSync('.github/workflows/production-release.yml', 'utf8'));
 const workflowInputs = workflow.on.workflow_dispatch.inputs;
 const workflowSteps = workflow.jobs.release.steps;
+
+test('independent Admin CI registers exactly its finite controls and runs its actual suite once in both gates', () => {
+  const paths = [
+    'scripts/production-release/admin-pending-online-release.py',
+    'scripts/production-release/admin-pending-online-release.test.py'
+  ];
+  for (const path of paths) {
+    assert.equal(isCiOnly([path]), true);
+    for (const part of ['guards', 'release-controls']) {
+      const commands = guardCommands([path], { part });
+      assert.equal(
+        commands.filter(
+          (command) =>
+            command === 'python3 -B scripts/production-release/admin-pending-online-release.test.py'
+        ).length,
+        1
+      );
+    }
+  }
+  assert.equal(isCiOnly(['scripts/production-release/admin-pending-online-unreviewed.py']), false);
+});
+
+test('independent Admin CI stops either gate when its publication suite fails', () => {
+  for (const part of ['guards', 'release-controls'])
+    assert.throws(
+      () =>
+        guardCommands(['scripts/production-release/admin-pending-online-release.py'], {
+          part,
+          failAdminPending: true
+        }),
+      (error) => error.status !== 0
+    );
+});
+
+test('independent Admin operation retains source QA and skips API ONLINE and worker build preflights', () => {
+  assert.ok(workflowInputs.operation.options.includes('release_admin'));
+  const inputs = { operation: 'release_admin', historical_exception: 'none', reuse_image_run: '' };
+  for (const name of [
+    'Build images on the GitHub runner',
+    'Push immutable images',
+    'Deploy through the production instance'
+  ]) {
+    const step = workflowSteps.find((value) => value.name === name);
+    assert.equal(workflowPredicate(step.if)(inputs), true, name);
+  }
+  const source = workflowSteps.find(
+    (step) => step.run === 'bash scripts/production-release/check-source.sh'
+  );
+  assert.equal(source.if, undefined);
+  for (const name of [
+    'Verify online recharge predecessor and idle workers before building',
+    'Verify API Admin baseline and idle workers before building',
+    'Resolve reviewed immutable browser dependency cache',
+    'Verify reusable build and unchanged application source',
+    'Independently read back API Admin running images and preserved services',
+    'Independently read back online recharge runtime and preserved services'
+  ]) {
+    const step = workflowSteps.find((value) => value.name === name);
+    assert.equal(workflowPredicate(step.if)(inputs), false, name);
+  }
+  assert.equal(workflow.concurrency['cancel-in-progress'], false);
+});
+
+function adminProjectionFixture(root, env, log) {
+  const directory = join(root, '.deploy/production-release');
+  mkdirSync(directory, { recursive: true });
+  const projection = { projectionSha256: 'e'.repeat(64) };
+  writeFileSync(
+    join(directory, 'admin-pending-online-build-projection.json'),
+    JSON.stringify(projection)
+  );
+  writeFileSync(
+    join(directory, 'admin-pending-online-build-proof.json'),
+    JSON.stringify({
+      scope: 'ADMIN_PENDING_ONLINE_BUILD',
+      commit: env.RELEASE_COMMIT,
+      sourceTree: env.SOURCE_TREE,
+      runId: env.GITHUB_RUN_ID,
+      runAttempt: env.GITHUB_RUN_ATTEMPT,
+      qualityRunId: env.QUALITY_RUN_ID,
+      projection
+    })
+  );
+  for (const name of [
+    'remote-deploy.py',
+    'api-admin-pending-projection.py',
+    'admin-pending-online-release.py'
+  ]) {
+    mkdirSync(join(root, 'scripts/production-release'), { recursive: true });
+    writeFileSync(
+      join(root, 'scripts/production-release', name),
+      readFileSync(join(process.cwd(), 'scripts/production-release', name))
+    );
+  }
+  const python = execFileSync('python3', ['-c', 'import sys;print(sys.executable)'], {
+    encoding: 'utf8'
+  }).trim();
+  writeFileSync(
+    join(root, 'bin/python3'),
+    `#!/bin/sh\nif [ "$1" = -B ] && [ "$2" = scripts/production-release/admin-pending-online-release.py ]; then printf "projection %s\\n" "$3" >> "${log}"; exit 0; fi\nexec "${python}" "$@"\n`,
+    { mode: 0o755 }
+  );
+}
+
+function independentAdminEnv(env, overrides = {}) {
+  return {
+    ...env,
+    EXPECTED_CURRENT: '31d2c6885a45817cd40d23fce8d6145bc9f18af2',
+    QUALITY_RUN_ID: '111',
+    RELEASE_OPERATION: 'release_admin',
+    RELEASE_ADMIN_ONLY: 'true',
+    SOURCE_TREE: 'c'.repeat(40),
+    GITHUB_REF: 'refs/heads/main',
+    ...overrides
+  };
+}
+
+test('independent Admin builds and verifies only a fresh exact-source image despite carried backend changes', () => {
+  fixture(({ root, env, log }) => {
+    writeFileSync(
+      env.TASK_CHANGED_PATHS,
+      'apps/api/src/id-business-v2/auto-recharge/recharge.service.ts\napps/admin/src/v2/styles/base.css'
+    );
+    writeFileSync(
+      join(root, 'bin', 'docker'),
+      '#!/bin/sh\nprintf "%s\\n" "$*" >> "$TASK_DOCKER_LOG"\nif [ "$1" = login ]; then cat >/dev/null; fi\nif [ "$1" = image ]; then case "$*" in *id-business-v2.admin-pending-projection-sha256*) printf "%s\\n" "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee" ;; *id-business-v2.source-tree*) printf "%s\\n" "${TASK_ADMIN_IMAGE_TREE:-$SOURCE_TREE}" ;; *) printf "%s\\n" "$RELEASE_COMMIT" ;; esac; fi\n',
+      { mode: 0o755 }
+    );
+    const selectedEnv = independentAdminEnv(env);
+    adminProjectionFixture(root, selectedEnv, log);
+    execFileSync('bash', [join(process.cwd(), 'scripts/production-release/build-images.sh')], {
+      env: selectedEnv,
+      cwd: root
+    });
+    assert.equal(readFileSync(env.GITHUB_ENV, 'utf8'), 'RELEASE_ADMIN_ONLY=true\n');
+    execFileSync('bash', [join(process.cwd(), 'scripts/production-release/push-images.sh')], {
+      env: selectedEnv,
+      cwd: root
+    });
+    const lines = readFileSync(log, 'utf8').trim().split('\n');
+    const built = lines.filter((line) => line.startsWith('build '));
+    assert.equal(built.length, 1);
+    assert.ok(built[0].includes('--label org.opencontainers.image.revision=' + env.RELEASE_COMMIT));
+    assert.ok(built[0].includes('--label id-business-v2.source-tree=' + selectedEnv.SOURCE_TREE));
+    assert.ok(built[0].includes('--build-arg V2_BUILD_ID=v2-' + env.RELEASE_COMMIT));
+    assert.ok(
+      built[0].endsWith('-admin .deploy/production-release/admin-pending-online-build-context')
+    );
+    assert.ok(
+      built[0].includes('--label id-business-v2.admin-pending-projection-sha256=' + 'e'.repeat(64))
+    );
+    assert.ok(built[0].includes('--target runtime'));
+    assert.deepEqual(
+      lines.filter((line) => line.startsWith('push ')),
+      ['push ' + env.RELEASE_REPOSITORY + ':' + env.RELEASE_COMMIT + '-999999-1-admin']
+    );
+    writeFileSync(log, '');
+    assert.throws(() =>
+      execFileSync('bash', [join(process.cwd(), 'scripts/production-release/push-images.sh')], {
+        env: { ...selectedEnv, TASK_ADMIN_IMAGE_TREE: 'd'.repeat(40) },
+        stdio: 'pipe'
+      })
+    );
+    assert.equal(
+      readFileSync(log, 'utf8')
+        .split('\n')
+        .some((line) => line.startsWith('push ')),
+      false
+    );
+  });
+});
+
+test('independent Admin dispatch carries the same commit tree QA and immutable image into admin-only transport', () => {
+  dispatchFixture(
+    'none',
+    '31d2c6885a45817cd40d23fce8d6145bc9f18af2',
+    ({ execute, parametersFile, awsLog }) => {
+      execute();
+      const parameters = JSON.parse(readFileSync(parametersFile, 'utf8'));
+      const command = parameters.commands.find(
+        (value) => value.startsWith('python3 ') && value.includes('--commit')
+      );
+      assert.ok(command.includes('--commit ' + 'b'.repeat(40)));
+      assert.ok(command.includes('--source-tree ' + 'c'.repeat(40)));
+      assert.ok(command.includes('--expected-current 31d2c6885a45817cd40d23fce8d6145bc9f18af2'));
+      assert.ok(command.includes('--ci-run-id 111 --build-proof '));
+      assert.ok(command.includes('/admin-pending-online-release.py release '));
+      assert.equal(command.includes('--admin-only'), false);
+      assert.ok(command.includes('--run-id 999999 --run-attempt 1'));
+      assert.equal(
+        parameters.commands.some((value) =>
+          /online-recharge|api-admin-scope|api-workspace/.test(value)
+        ),
+        false
+      );
+      const calls = readFileSync(awsLog, 'utf8').trim().split('\n');
+      assert.equal(calls.filter((line) => line.startsWith('ssm send-command ')).length, 1);
+    },
+    independentAdminEnv({})
+  );
+});
+
+test('independent Admin rejects a main commit advanced after build immediately before SSM dispatch', () => {
+  dispatchFixture(
+    'none',
+    '31d2c6885a45817cd40d23fce8d6145bc9f18af2',
+    ({ execute, awsLog }) => {
+      assert.throws(
+        () => execute({ TASK_REMOTE_MAIN: 'd'.repeat(40) }),
+        (error) =>
+          error.status === 1 &&
+          /target is no longer the latest main commit/.test(String(error.stderr))
+      );
+      assert.equal(readFileSync(awsLog, 'utf8'), '');
+      execute({ TASK_REMOTE_MAIN: 'b'.repeat(40) });
+      assert.equal(
+        readFileSync(awsLog, 'utf8')
+          .split('\n')
+          .filter((line) => line.startsWith('ssm send-command ')).length,
+        1
+      );
+    },
+    independentAdminEnv({})
+  );
+});
+
+test('independent Admin rejects mixed release inputs or changed production schema and service configuration before any effects', () => {
+  fixture(({ root, env, log }) => {
+    const selectedEnv = independentAdminEnv(env);
+    const invalid = [
+      { HISTORICAL_EXCEPTION: 'historical-finance-20261005' },
+      { RELEASE_ADMIN_ONLY: 'false' },
+      { GITHUB_REF: 'refs/heads/develop' },
+      { SOURCE_TREE: 'not-a-tree' },
+      { RELEASE_COMMIT: 'not-a-commit' },
+      { EXPECTED_CURRENT: 'not-a-commit' },
+      ...[
+        'REUSE_IMAGE_RUN',
+        'REUSE_IMAGE_COMMIT',
+        'REUSE_IMAGE_RUN_ID',
+        'REUSE_IMAGE_RUN_ATTEMPT',
+        'POST_CLEANUP_SEAL_SHA256',
+        'ORDER_ARCHIVE_SEAL_SHA256',
+        'ORDER_ARCHIVE_PREPARED_IMAGES_SHA256',
+        'RELEASE_BROWSER_CACHE_IMAGE',
+        'RELEASE_BROWSER_CACHE_IMAGE_ID',
+        'CACHE_PLAN_SHA256',
+        'DIAGNOSTIC_COMMAND_ID'
+      ].map((key) => ({ [key]: 'not-empty' })),
+      { TASK_ADMIN_SCOPE_CHANGED: '1' }
+    ];
+    for (const overrides of invalid) {
+      for (const script of [
+        'validate-release-selection.sh',
+        'build-images.sh',
+        'push-images.sh',
+        'dispatch.sh'
+      ]) {
+        assert.throws(
+          () =>
+            execFileSync('bash', ['scripts/production-release/' + script], {
+              env: { ...selectedEnv, ...overrides },
+              stdio: 'pipe'
+            }),
+          `${script}: ${JSON.stringify(overrides)}`
+        );
+      }
+    }
+    assert.equal(readFileSync(log, 'utf8'), '');
+    assert.equal(existsSync(env.GITHUB_ENV), false);
+    assert.equal(existsSync(join(root, '.deploy/production-release/ssm-999999.json')), false);
+  });
+});
+
+test('independent Admin checks actual Git diffs and refuses each production configuration change', () => {
+  fixture(({ root, env, log }) => {
+    const source = join(root, 'source');
+    mkdirSync(source);
+    const git = (...args) =>
+      execFileSync('/usr/bin/git', args, { cwd: source, encoding: 'utf8' }).trim();
+    git('init', '-q');
+    const paths = [
+      'apps/api/prisma-mysql/schema.prisma',
+      'apps/api/prisma-mysql/migrations/20261001_base/migration.sql',
+      'docker-compose.aws-mysql.yml',
+      'deploy/caddy/Caddyfile.aws',
+      'apps/api/src/id-business-v2/auto-recharge/recharge.service.ts'
+    ];
+    for (const path of paths) {
+      const target = join(source, path);
+      mkdirSync(join(target, '..'), { recursive: true });
+      writeFileSync(target, 'fixture baseline\n');
+    }
+    git('add', '--', ...paths);
+    const commit = () => {
+      git(
+        '-c',
+        'user.name=Release Fixture',
+        '-c',
+        'user.email=fixture@invalid.local',
+        'commit',
+        '-qm',
+        'Synthetic source fixture'
+      );
+      return git('rev-parse', 'HEAD');
+    };
+    const baseline = commit();
+    const check = (candidate, expectedPass) => {
+      const selectedEnv = independentAdminEnv(env, {
+        EXPECTED_CURRENT: baseline,
+        RELEASE_COMMIT: candidate,
+        SOURCE_TREE: git('rev-parse', 'HEAD^{tree}'),
+        PATH: process.env.PATH
+      });
+      const script = join(source, 'fixture-selection.sh');
+      writeFileSync(
+        script,
+        readFileSync(
+          join(process.cwd(), 'scripts/production-release/validate-release-selection.sh'),
+          'utf8'
+        ).replace('31d2c6885a45817cd40d23fce8d6145bc9f18af2', baseline)
+      );
+      const execute = () =>
+        execFileSync('bash', [script], { cwd: source, env: selectedEnv, stdio: 'pipe' });
+      if (expectedPass) execute();
+      else
+        assert.throws(
+          execute,
+          (error) =>
+            error.status === 1 &&
+            /unchanged schema, migrations, Compose and edge/.test(String(error.stderr))
+        );
+    };
+    const backend = paths.at(-1);
+    writeFileSync(join(source, backend), 'fixture carried backend\n');
+    git('add', '--', backend);
+    check(commit(), true);
+    for (const path of paths.slice(0, -1)) {
+      writeFileSync(join(source, path), 'fixture changed configuration\n');
+      git('add', '--', path);
+      check(commit(), false);
+      writeFileSync(join(source, path), 'fixture baseline\n');
+      git('add', '--', path);
+      check(commit(), true);
+    }
+    assert.equal(readFileSync(log, 'utf8'), '');
+    assert.equal(existsSync(env.GITHUB_ENV), false);
+  });
+});
 
 test('retired API registration operations stop before build proof Docker AWS or dispatch', () => {
   const first = workflowSteps[0];
@@ -1261,6 +1618,7 @@ test('workflow wires a separate empty-by-default seal and rejects all non-releas
             'install_backup_retention_protection',
             'verify_api_admin',
             'release_api_admin',
+            'release_admin',
             'verify_api_admin_migration',
             'release_api_admin_migration',
             'verify_api_registration',
@@ -5513,7 +5871,16 @@ function recharge6f5PollFixture(statuses, run) {
         interpreter,
         [
           '-c',
-          'import sys,time; clock=[0.0];time.monotonic=lambda:clock[0];advance=float(sys.argv[2]);time.sleep=lambda value:clock.__setitem__(0,clock[0]+advance);code=sys.argv[1];sys.argv=["actual-6f5-poller","11111111-1111-4111-8111-111111111111","i-0123456789abcdef0"];exec(compile(code,"actual-6f5-poller","exec"),{"__name__":"__main__"})',
+          // Fake only the poller's clock; subprocess waits must keep real time.
+          `import builtins,sys,types
+clock=[0.0];advance=float(sys.argv[2]);code=sys.argv[1]
+clock_module=types.SimpleNamespace(monotonic=lambda:clock[0],sleep=lambda value:clock.__setitem__(0,clock[0]+advance))
+original_import=builtins.__import__
+def poller_import(name,*args,**kwargs):
+ return clock_module if name=='time' else original_import(name,*args,**kwargs)
+namespace={'__name__':'__main__','__builtins__':{**vars(builtins),'__import__':poller_import}}
+sys.argv=['actual-6f5-poller','11111111-1111-4111-8111-111111111111','i-0123456789abcdef0']
+exec(compile(code,'actual-6f5-poller','exec'),namespace)`,
           recharge6f5ReadbackPoller(),
           String(sleepAdvance)
         ],

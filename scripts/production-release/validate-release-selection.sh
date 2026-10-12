@@ -266,6 +266,21 @@ validate_release_selection() {
       echo 'Automatic registration has been removed; registration releases are disabled' >&2
       return 1 ;;
   esac
+  if [[ "${RELEASE_OPERATION:-release}" == release_admin ]]; then
+    [[ "${HISTORICAL_EXCEPTION:-none}" == none && "${RELEASE_ADMIN_ONLY:-true}" == true ]] || return 1
+    [[ "${RELEASE_COMMIT:-}" =~ ^[a-f0-9]{40}$ && "${EXPECTED_CURRENT:-}" == 31d2c6885a45817cd40d23fce8d6145bc9f18af2
+      && "${SOURCE_TREE:-}" =~ ^[a-f0-9]{40}$ && "${GITHUB_REF:-}" == refs/heads/main ]] || return 1
+    [[ -z "${REUSE_IMAGE_RUN:-}${REUSE_IMAGE_COMMIT:-}${REUSE_IMAGE_RUN_ID:-}${REUSE_IMAGE_RUN_ATTEMPT:-}${POST_CLEANUP_SEAL_SHA256:-}${ORDER_ARCHIVE_SEAL_SHA256:-}${ORDER_ARCHIVE_PREPARED_IMAGES_SHA256:-}${RELEASE_BROWSER_CACHE_IMAGE:-}${RELEASE_BROWSER_CACHE_IMAGE_ID:-}${CACHE_PLAN_SHA256:-}${DIAGNOSTIC_COMMAND_ID:-}" ]] || return 1
+    # Undeployed backend source may be carried on main, but Admin publication
+    # must preserve the running database, service configuration and edge.
+    git diff --quiet "$EXPECTED_CURRENT" "$RELEASE_COMMIT" -- \
+      apps/api/prisma-mysql/schema.prisma apps/api/prisma-mysql/migrations \
+      docker-compose.aws-mysql.yml deploy/caddy/Caddyfile.aws || {
+      echo 'Admin publication requires unchanged schema, migrations, Compose and edge configuration' >&2
+      return 1
+    }
+    return 0
+  fi
   if [[ "${RELEASE_OPERATION:-release}" == verify_release_archive_cache || "${RELEASE_OPERATION:-release}" == archive_release_cache ]]; then
     [[ "${HISTORICAL_EXCEPTION:-none}" == none && "${RELEASE_ADMIN_ONLY:-false}" == false ]] || return 1
     [[ "${EXPECTED_CURRENT:-}" == e7c9862d58599995954883f1c1f6038283afffab ]] || return 1
