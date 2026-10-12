@@ -7,8 +7,13 @@ import {
   backendArchitectureGuardChecks,
   auditRetentionMigration,
   historicalReleaseControlPaths,
+  unpublishedComponentSuccessorControlPaths,
+  unpublishedComponentSuccessorEntryPaths,
+  ownedMysqlTestControlPaths,
   hasRegistrationOnboardingScope,
   hasAppleMailboxScope,
+  hasRegistrationMirrorScope,
+  hasRechargeConnectionMigrationScope,
   onlineRechargeRecoveryPolicy,
   productionDatabaseAccessHelper,
   productionDatabaseAccessTest,
@@ -67,6 +72,30 @@ const preparedControlPaths = [
   'scripts/production-release/reuse-images.py',
   'scripts/production-release/prepared-images.test.py'
 ];
+const unpublishedComponentSuccessorControls = () => {
+  if (
+    changed.some(
+      (path) =>
+        unpublishedComponentSuccessorControlPaths.includes(path) ||
+        unpublishedComponentSuccessorEntryPaths.includes(path)
+    )
+  ) {
+    run('python3', ['-B', 'scripts/production-release/unpublished-component-successor.test.py']);
+    run('python3', [
+      '-B',
+      'scripts/production-release/unpublished-component-successor-readonly.test.py'
+    ]);
+    run('node', ['--test', 'scripts/production-release/unpublished-component-entry.test.mjs']);
+  }
+};
+const ownedMysqlTestControls = () => {
+  if (
+    changed.some((path) => ownedMysqlTestControlPaths.includes(path)) ||
+    hasRechargeConnectionMigrationScope(changed) ||
+    hasRegistrationMirrorScope(changed)
+  )
+    run('node', ['--test', 'scripts/lib/owned-mysql-test-instance.test.mjs']);
+};
 const registrationControlPaths = [
   'deploy/aws/registration-worker-96-20261008.json',
   'deploy/aws/registration-baseline-96-20261008.json',
@@ -346,6 +375,8 @@ if (part === 'guards') {
     run('node', ['--test', 'scripts/production-release/online-recharge-entry.test.mjs']);
   }
   adminPendingReleaseControls();
+  unpublishedComponentSuccessorControls();
+  ownedMysqlTestControls();
   releaseMaintenanceControls();
   archiveReleaseControls();
   onlineSourcePermissionRepairControls();
@@ -495,6 +526,8 @@ if (part === 'guards') {
     run('node', ['--test', 'scripts/production-release/online-recharge-entry.test.mjs']);
   }
   adminPendingReleaseControls();
+  unpublishedComponentSuccessorControls();
+  ownedMysqlTestControls();
   releaseMaintenanceControls();
   archiveReleaseControls();
   onlineSourcePermissionRepairControls();
@@ -549,8 +582,14 @@ if (part === 'guards') {
     npm('run', 'auto-registration:setup');
     const python = '.runtime/auto-registration/venv/bin/python';
     const worker = 'apps/api/src/id-business-v2/auto-registration/worker';
-    for (const name of ['test_workspace.py', 'test_apple_mailboxes.py', 'test_release_safety.py'])
+    for (const name of [
+      'test_workspace.py',
+      'test_apple_mailboxes.py',
+      'test_release_safety.py',
+      'test_upload_compat.py'
+    ])
       run(python, ['-B', '-m', 'unittest', 'discover', '-s', worker, '-p', name]);
+    run('node', ['--test', worker + '/test_payment_browser.mjs']);
     run(python, ['-B', worker + '/acceptance_runtime.py']);
   }
   if (changed.some((p) => p.startsWith('apps/api/src/id-business-v2/online-recharge/')))
@@ -559,7 +598,24 @@ if (part === 'guards') {
   if (changed.some((p) => p.startsWith('apps/api/src/id-business-v2/online-recharge/')))
     onlineEngine();
 } else if (part === 'migration') {
-  run('python3', ['scripts/ci-recharge-migration.py']);
+  const connections = hasRechargeConnectionMigrationScope(changed);
+  const mirror = hasRegistrationMirrorScope(changed);
+  if (connections || mirror) {
+    npm('run', 'prisma:mysql:generate');
+    npm('run', 'prisma:mysql:validate');
+    shared();
+    npm('run', 'build', '--workspace', '@apple-business/api');
+    if (connections)
+      run('node', ['scripts/acceptance-v2-recharge-employee-concurrency.mjs', '--runtime=docker']);
+    if (mirror) {
+      npm('run', 'auto-registration:setup');
+      run('node', [
+        'scripts/acceptance-v2-registration-mirror-mysql.mjs',
+        '--runtime=docker',
+        '--python=' + resolve('.runtime/auto-registration/venv/bin/python')
+      ]);
+    }
+  } else run('python3', ['scripts/ci-recharge-migration.py']);
 } else if (part === 'connector') {
   const workerDirectory = 'apps/api/src/id-business-v2/auto-recharge/worker';
   const fullPro = changed.some((path) =>

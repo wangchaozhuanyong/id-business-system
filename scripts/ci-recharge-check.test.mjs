@@ -8,7 +8,11 @@ import {
   onlineRechargeRecoveryPolicy,
   productionDatabaseAccessHelper,
   productionDatabaseAccessTest,
-  productionDatabaseAccessAcceptance
+  productionDatabaseAccessAcceptance,
+  unpublishedComponentSuccessorControlPaths,
+  unpublishedComponentSuccessorEntryPaths,
+  ownedMysqlTestControlPaths,
+  rechargeConnectionProfileMigration
 } from './ci-recharge-scope.mjs';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
@@ -179,6 +183,132 @@ test('recovery controls execute database grants and every existing online releas
       assert.ok(calls.every((call) => !call.includes('online-engine')));
     }
   }
+});
+
+test('unpublished successor controls execute narrow suites once in either dispatcher', () => {
+  const commands = [
+    ['python3', '-B', 'scripts/production-release/unpublished-component-successor.test.py'],
+    [
+      'python3',
+      '-B',
+      'scripts/production-release/unpublished-component-successor-readonly.test.py'
+    ],
+    ['node', '--test', 'scripts/production-release/unpublished-component-entry.test.mjs']
+  ];
+  for (const part of ['guards', 'release-controls']) {
+    for (const paths of [
+      ...[
+        ...unpublishedComponentSuccessorControlPaths,
+        ...unpublishedComponentSuccessorEntryPaths
+      ].map((path) => [path]),
+      [...unpublishedComponentSuccessorControlPaths]
+    ]) {
+      const calls = recordGuardCommands('ci-only', paths, part);
+      for (const command of commands)
+        assert.equal(
+          calls.filter((call) => JSON.stringify(call) === JSON.stringify(command)).length,
+          1
+        );
+      assert.ok(calls.every((call) => !call.some((arg) => /(?:prisma:|acceptance:)/.test(arg))));
+    }
+    for (const path of [
+      'docs/V2_TASKS.md',
+      'scripts/production-release/unpublished-component-successor.py.backup',
+      'scripts/production-release/unpublished-component-successor-other.py'
+    ]) {
+      const calls = recordGuardCommands('ci-only', [path], part);
+      assert.ok(
+        calls.every(
+          (call) => !commands.some((command) => JSON.stringify(call) === JSON.stringify(command))
+        )
+      );
+    }
+  }
+});
+
+test('owned MySQL helper edits run boundary tests without starting any database', () => {
+  const suite = 'scripts/lib/owned-mysql-test-instance.test.mjs';
+  for (const part of ['guards', 'release-controls']) {
+    for (const path of ownedMysqlTestControlPaths) {
+      const calls = recordGuardCommands('ci-only', [path], part);
+      assert.equal(calls.filter((call) => call.join(' ') === `node --test ${suite}`).length, 1);
+      assert.ok(
+        calls.every(
+          (call) => !call.some((arg) => /(?:prisma:|acceptance:|financial-integrity)/.test(arg))
+        )
+      );
+    }
+  }
+});
+
+test('connection migration and registration mirror use only their disposable Docker acceptances', () => {
+  const mirror =
+    'apps/api/src/id-business-v2/auto-recharge/bank-recharge-registration-mirror.service.ts';
+  for (const paths of [
+    [rechargeConnectionProfileMigration],
+    [mirror],
+    [rechargeConnectionProfileMigration, mirror]
+  ]) {
+    const calls = recordGuardCommands('recharge', paths, 'migration');
+    const employeeCommand = [
+      'node',
+      'scripts/acceptance-v2-recharge-employee-concurrency.mjs',
+      '--runtime=docker'
+    ];
+    const mirrorCommand = [
+      'node',
+      'scripts/acceptance-v2-registration-mirror-mysql.mjs',
+      '--runtime=docker',
+      '--python=' + resolve(root, '.runtime/auto-registration/venv/bin/python')
+    ];
+    assert.equal(
+      calls.filter((call) => JSON.stringify(call) === JSON.stringify(employeeCommand)).length,
+      paths.includes(rechargeConnectionProfileMigration) ? 1 : 0
+    );
+    assert.equal(
+      calls.filter((call) => JSON.stringify(call) === JSON.stringify(mirrorCommand)).length,
+      paths.includes(mirror) ? 1 : 0
+    );
+    for (const expected of [
+      ['npm', 'run', 'prisma:mysql:generate'],
+      ['npm', 'run', 'prisma:mysql:validate'],
+      ['npm', 'run', 'build', '--workspace', '@apple-business/shared'],
+      ['npm', 'run', 'build', '--workspace', '@apple-business/api']
+    ])
+      assert.equal(
+        calls.filter((call) => JSON.stringify(call) === JSON.stringify(expected)).length,
+        1
+      );
+    assert.equal(
+      calls.filter((call) => call.join(' ') === 'npm run auto-registration:setup').length,
+      paths.includes(mirror) ? 1 : 0
+    );
+    assert.ok(
+      calls.every(
+        (call) =>
+          !call.some((arg) =>
+            /financial-integrity|rollback-integrity|ci-recharge-migration|mysql-bin/.test(arg)
+          )
+      )
+    );
+  }
+  assert.deepEqual(
+    recordGuardCommands(
+      'recharge',
+      [
+        'apps/api/prisma-mysql/migrations/20260913100000_auto_recharge_browser_options/migration.sql'
+      ],
+      'migration'
+    ),
+    [['python3', 'scripts/ci-recharge-migration.py']]
+  );
+  const workflow = readFileSync(
+    new URL('../.github/workflows/quality.yml', import.meta.url),
+    'utf8'
+  );
+  assert.ok(
+    workflow.includes(`contains(fromJSON('["guards","admin","api","migration"]'), matrix.part)`)
+  );
 });
 
 test('unrelated control edits do not execute database grant tests', () => {
@@ -626,7 +756,12 @@ test('combined API dispatcher verifies actual Apple adapter and worker suites af
       calls.filter((call) => call.join(' ') === 'npm run auto-registration:setup').length,
       1
     );
-    for (const name of ['test_workspace.py', 'test_apple_mailboxes.py', 'test_release_safety.py']) {
+    for (const name of [
+      'test_workspace.py',
+      'test_apple_mailboxes.py',
+      'test_release_safety.py',
+      'test_upload_compat.py'
+    ]) {
       const expected = [python, '-B', '-m', 'unittest', 'discover', '-s', worker, '-p', name];
       assert.equal(
         calls.filter((call) => JSON.stringify(call) === JSON.stringify(expected)).length,
@@ -641,6 +776,13 @@ test('combined API dispatcher verifies actual Apple adapter and worker suites af
         .length,
       1
     );
+    const browser = `node --test ${worker}/test_payment_browser.mjs`;
+    assert.equal(calls.filter((call) => call.join(' ') === browser).length, 1);
+    assert.ok(calls.findIndex((call) => call.join(' ') === browser) > setup);
+    assert.ok(
+      calls.findIndex((call) => call.join(' ') === browser) <
+        calls.findIndex((call) => call.join(' ') === `${python} -B ${worker}/acceptance_runtime.py`)
+    );
     assert.ok(
       calls.every((call) => !call.some((arg) => /financial-integrity|rollback-integrity/.test(arg)))
     );
@@ -649,8 +791,25 @@ test('combined API dispatcher verifies actual Apple adapter and worker suites af
     new URL('../.github/workflows/quality.yml', import.meta.url),
     'utf8'
   );
-  for (const name of ['test_workspace.py', 'test_apple_mailboxes.py', 'test_release_safety.py'])
-    assert.ok(workflow.includes(`-p '${name}'`), name);
+  const full = workflow.slice(workflow.indexOf('  full-quality:'), workflow.indexOf('  recharge:'));
+  const setup = full.indexOf('npm run auto-registration:setup');
+  const acceptance = full.indexOf(`${python} -B ${worker}/acceptance_runtime.py`);
+  assert.ok(setup >= 0);
+  for (const name of [
+    'test_workspace.py',
+    'test_apple_mailboxes.py',
+    'test_release_safety.py',
+    'test_upload_compat.py'
+  ]) {
+    const command = `${python} -B -m unittest discover -s ${worker} -p '${name}'`;
+    assert.equal(full.split('\n').filter((line) => line.trim() === command).length, 1, name);
+    assert.ok(full.indexOf(command) > setup, name);
+    assert.ok(acceptance > full.indexOf(command), name);
+  }
+  const browser = `node --test ${worker}/test_payment_browser.mjs`;
+  assert.equal(full.split('\n').filter((line) => line.trim() === browser).length, 1);
+  assert.ok(full.indexOf(browser) > setup);
+  assert.ok(acceptance > full.indexOf(browser));
 });
 
 test('unreviewed registration paths do not receive the Apple scoped worker runner', () => {
@@ -662,7 +821,50 @@ test('unreviewed registration paths do not receive the Apple scoped worker runne
     const calls = recordGuardCommands('recharge', [path], 'api');
     assert.ok(calls.every((call) => !call.includes('auto-registration:setup')));
     assert.ok(calls.every((call) => call[0] !== '.runtime/auto-registration/venv/bin/python'));
+    assert.ok(
+      calls.every(
+        (call) =>
+          !call.includes(
+            'apps/api/src/id-business-v2/auto-registration/worker/test_payment_browser.mjs'
+          )
+      )
+    );
   }
+});
+
+test('payment browser check failure stops the actual Apple dispatcher before runtime acceptance', () => {
+  const worker = 'apps/api/src/id-business-v2/auto-registration/worker';
+  const script = `
+    import childProcess from 'node:child_process';
+    import { syncBuiltinESMExports } from 'node:module';
+    const calls = [];
+    childProcess.execFileSync = (file, args) => {
+      if (file === 'git') return '${worker}/workspace.py';
+      calls.push([file, ...args]);
+      if (file === 'node' && args.includes('${worker}/test_payment_browser.mjs'))
+        throw new Error('synthetic-payment-browser-check-failed');
+      return '';
+    };
+    syncBuiltinESMExports();
+    process.argv = ['node', 'scripts/ci-recharge-check.mjs', 'api', 'a'.repeat(40)];
+    let error = null;
+    try { await import('./scripts/ci-recharge-check.mjs'); }
+    catch (failure) { error = failure.message; }
+    process.stdout.write(JSON.stringify({ calls, error }));
+  `;
+  const { calls, error } = JSON.parse(
+    execFileSync(process.execPath, ['--input-type=module', '-e', script], {
+      cwd: root,
+      encoding: 'utf8',
+      env: { ...process.env, CHECK_MODE: 'recharge' }
+    })
+  );
+  assert.equal(error, 'synthetic-payment-browser-check-failed');
+  assert.equal(
+    calls.filter((call) => call.includes(`${worker}/test_payment_browser.mjs`)).length,
+    1
+  );
+  assert.ok(calls.every((call) => !call.includes(`${worker}/acceptance_runtime.py`)));
 });
 
 test('exact Vite runner classification keeps joint UI and backend guards without business execution', () => {

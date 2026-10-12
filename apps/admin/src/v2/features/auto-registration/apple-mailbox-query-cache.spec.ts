@@ -23,6 +23,7 @@ vi.mock('@/auth/sessionCoordinator', async () => {
 });
 vi.mock('./api', () => ({
   autoRegistrationApi: {
+    resumeAppleMailboxTasks: vi.fn().mockResolvedValue({ resumed: 0, synchronized: 0 }),
     appleMailboxes: mocks.list,
     markAppleMailboxes: mocks.mark,
     startAppleMailbox: mocks.start,
@@ -281,7 +282,13 @@ describe('苹果隐藏邮箱真实分页缓存失效', () => {
   it('解除中断占用成功后返回其他已缓存分页重新取当前结果', async () => {
     const page = mountPage();
     await cacheFirstAndLastPage(page);
-    await page.recover({ ...page.items.value[0]!, taskStatus: 'interrupted' });
+    page.openRecovery({
+      ...page.items.value[0]!,
+      taskUuid: 'task-1',
+      activeTaskUuid: 'task-1',
+      taskStatus: 'interrupted'
+    });
+    await page.recover();
     expect(mocks.recover).toHaveBeenCalledOnce();
     await returnToFirstPage(page);
   });

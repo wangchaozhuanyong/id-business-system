@@ -25,12 +25,28 @@ import {
   productionDatabaseAccessHelper,
   productionDatabaseAccessTest,
   productionDatabaseAccessAcceptance,
-  hasBankCardDeletePolicyProof
+  hasBankCardDeletePolicyProof,
+  rechargeConnectionProfileMigration,
+  unpublishedComponentSuccessorControlPaths,
+  ownedMysqlTestControlPaths
 } from './ci-recharge-scope.mjs';
 import { matchesSourceEvidence } from './ci-recharge-evidence.mjs';
 
 const schema =
   'model Other { id String }\nmodel IdBusinessV2RechargeBrowserSetting { ownerId String }\n';
+const connectionProfileModel = `model IdBusinessV2RechargeConnectionProfile {
+  id            String   @id @db.Char(36)
+  ownerId       String   @map("owner_id") @db.VarChar(191)
+  name          String   @db.VarChar(80)
+  configuration Json
+  createdAt     DateTime @default(now()) @map("created_at")
+  updatedAt     DateTime @updatedAt @map("updated_at")
+
+  @@unique([ownerId, name])
+  @@index([ownerId, createdAt], map: "id_business_v2_recharge_connection_profiles_owner_id_created_idx")
+  @@map("id_business_v2_recharge_connection_profiles")
+}`;
+const connectionProfileSchema = connectionProfileModel + '\n\n' + schema;
 const root = fileURLToPath(new URL('../', import.meta.url));
 const grantHelperBefore = execFileSync(
   'git',
@@ -1339,6 +1355,147 @@ test('Apple worker-only scope selects API worker verification while frontend-onl
     assert.equal(hasAppleMailboxScope([path]), false);
     assert.equal(checkMode([path], schema, schema), 'full');
   }
+});
+
+test('reviewed table, employee connections and closed-loop mailbox batch keeps every affected scoped check', () => {
+  const changed = [
+    '.github/workflows/quality.yml',
+    'scripts/ci-recharge-check.mjs',
+    'apps/admin/src/v2/components/tableContentWidth.ts',
+    'apps/admin/src/v2/composables/useV2TableContentWidths.ts',
+    'apps/admin/src/v2/features/auto-recharge/useRechargeBrowserSettings.ts',
+    'apps/admin/src/v2/features/auto-registration/V2AutoRegistrationView.vue',
+    'apps/admin/src/v2/features/audit-logs/audit-change-labels.ts',
+    'apps/admin/src/v2/features/audit-logs/audit-log-presentation.ts',
+    'apps/api/src/id-business-v2/auto-recharge/recharge-connection-access.ts',
+    'apps/api/src/id-business-v2/auto-recharge/bank-recharge-registration-mirror.service.ts',
+    'apps/api/src/id-business-v2/auto-registration/apple-mailboxes-task-bridge.service.ts',
+    'apps/api/src/id-business-v2/auto-registration/worker/apple_closed_loop.py',
+    'apps/api/src/id-business-v2/auto-registration/worker/apple_registration_diagnostics.py',
+    'apps/api/src/id-business-v2/auto-registration/worker/id-workspace.js',
+    'apps/api/src/id-business-v2/auto-registration/worker/upload_compat.py',
+    'scripts/fixtures/registration-closed-loop-worker.py',
+    'scripts/acceptance-v2-recharge-employee-concurrency.mjs',
+    'scripts/acceptance-v2-registration-mirror-mysql.mjs',
+    'scripts/check-v2-table-standard.mjs',
+    'scripts/acceptance-v2-table-layout.mjs',
+    'packages/shared/src/v2/auto-recharge.ts',
+    'apps/api/prisma-mysql/schema.prisma',
+    rechargeConnectionProfileMigration,
+    ...unpublishedComponentSuccessorControlPaths
+  ];
+  assert.equal(checkMode(changed, schema, connectionProfileSchema), 'recharge');
+  assert.deepEqual(selectedParts(changed), [
+    'guards',
+    'admin',
+    'api',
+    'connector',
+    'migration',
+    'security'
+  ]);
+  for (const name of [
+    'check:admin-ui',
+    'check:v2-ui-language',
+    'check:v2-color-contrast',
+    'check:v2-table-standard',
+    'check:v2-loading-standard',
+    'check:v2-module-architecture',
+    'check:v2-isolation'
+  ])
+    assert.ok(adminUiGuardChecks('recharge', changed).includes(name), name);
+  assert.deepEqual(backendArchitectureGuardChecks('recharge', changed), [
+    'check:v2-module-architecture',
+    'check:v2-prisma-runtime-boundary',
+    'check:v2-concurrency-standard'
+  ]);
+  for (const unknown of [
+    'apps/api/src/id-business-v2/auto-registration/unknown.service.ts',
+    'apps/api/src/id-business-v2/auto-registration/worker/apple_closed_loop.py.backup',
+    'apps/api/src/id-business-v2/auto-registration/worker/upstream/src/core/register.py',
+    'apps/api/prisma-mysql/migrations/unknown/migration.sql',
+    'scripts/fixtures/registration-closed-loop-worker-other.py',
+    'scripts/acceptance-v2-registration-mirror-mysql-other.mjs',
+    'apps/api/src/id-business-v2/orders/order.service.ts',
+    'package-lock.json'
+  ])
+    assert.equal(
+      checkMode([...changed, unknown], schema, connectionProfileSchema),
+      'full',
+      unknown
+    );
+  for (const driftedSchema of [
+    connectionProfileSchema.replace('configuration Json', 'configuration String'),
+    connectionProfileSchema.replace('id String', 'id Int'),
+    connectionProfileModel + '\n\n' + connectionProfileSchema,
+    connectionProfileSchema + 'model Foreign { id String }\n'
+  ])
+    assert.equal(checkMode(changed, schema, driftedSchema), 'full');
+  assert.equal(
+    checkMode(
+      changed.filter((path) => path !== rechargeConnectionProfileMigration),
+      schema,
+      connectionProfileSchema
+    ),
+    'full'
+  );
+});
+
+test('employee connection schema proof works without a mailbox change and rejects unrelated models', () => {
+  const changed = [
+    'apps/admin/src/v2/components/V2Table.vue',
+    'apps/api/src/id-business-v2/auto-recharge/recharge-connection-access.ts',
+    'apps/api/prisma-mysql/schema.prisma',
+    rechargeConnectionProfileMigration,
+    'scripts/acceptance-v2-recharge-employee-concurrency.mjs'
+  ];
+  assert.equal(checkMode(changed, schema, connectionProfileSchema), 'recharge');
+  assert.equal(isRechargeOnly(changed, schema, connectionProfileSchema), true);
+  assert.equal(
+    checkMode(changed, schema, connectionProfileSchema.replace('id String', 'id Int')),
+    'full'
+  );
+  assert.equal(checkMode(changed, undefined, connectionProfileSchema), 'full');
+  assert.equal(checkMode(changed, schema, undefined), 'full');
+  assert.equal(checkMode(changed, connectionProfileSchema, connectionProfileSchema), 'full');
+});
+
+test('finite unpublished successor controls do not admit adjacent scripts or business files', () => {
+  for (const path of [
+    ...unpublishedComponentSuccessorControlPaths,
+    ...ownedMysqlTestControlPaths
+  ]) {
+    assert.equal(isCiOnly([path]), true);
+    assert.equal(checkMode([path], schema, schema), 'ci-only');
+  }
+  for (const unknown of [
+    'scripts/production-release/unpublished-component-successor.py.backup',
+    'scripts/production-release/unpublished-component-successor-other.py',
+    'scripts/production-release/unpublished-component-successor-readonly-other.py',
+    'scripts/lib/owned-mysql-test-instance.mjs.backup',
+    'scripts/lib/owned-mysql-test-instance-other.mjs',
+    'apps/api/src/id-business-v2/auto-registration/unknown.service.ts'
+  ])
+    assert.equal(
+      checkMode([...unpublishedComponentSuccessorControlPaths, unknown], schema, schema),
+      'full'
+    );
+});
+
+test('mirror and employee MySQL acceptance inputs select migration without a schema edit', () => {
+  for (const path of [
+    'apps/api/src/id-business-v2/auto-recharge/bank-recharge-registration-mirror.service.ts',
+    'scripts/acceptance-v2-registration-mirror-mysql.mjs',
+    'scripts/acceptance-v2-recharge-employee-concurrency.mjs'
+  ]) {
+    assert.equal(checkMode([path], schema, schema), 'recharge');
+    assert.deepEqual(
+      selectedParts([path]),
+      path.startsWith('apps/api/') ? ['guards', 'api', 'migration'] : ['guards', 'migration']
+    );
+    assert.equal(affectsPart('migration', [path]), true);
+  }
+  for (const path of ownedMysqlTestControlPaths)
+    assert.equal(affectsPart('migration', [path]), true);
 });
 
 test('image reuse requires unchanged complete inputs of that service', () => {

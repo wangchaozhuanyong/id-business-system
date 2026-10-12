@@ -138,55 +138,66 @@ try {
   bitSettings.browserOptions.coreVersion = /Chrome\/(\d+)\./.exec(controlledVersion.Browser)[1];
   controlledContext = await controlled.newContext();
   // Every official URL is fulfilled locally. No login, proxy or payment network is contacted.
-  await controlledContext.route('**/*', async (route) => {
-    const url = new URL(route.request().url());
-    if (url.hostname === 'chatgpt.com' && url.pathname === '/api/auth/session') {
-      const claims = { 'https://api.openai.com/auth': { chatgpt_account_id: 'account-fixture' } };
-      return route.fulfill({
-        json: authenticated
-          ? {
-              user: {
-                id: 'user-fixture',
-                email: identityMismatch ? 'other@example.com' : fixtureEmail
-              },
-              accessToken: `fixture.${Buffer.from(JSON.stringify(claims)).toString('base64url')}.fixture`
+  const installOfficial = async (targetContext) =>
+    targetContext.route('**/*', async (route) => {
+      const url = new URL(route.request().url());
+      if (url.hostname === 'chatgpt.com' && url.pathname === '/cdn-cgi/trace')
+        return route.fulfill({ contentType: 'text/plain', body: 'ip=8.8.8.8\nloc=US\n' });
+      if (url.hostname === 'chatgpt.com' && url.pathname === '/api/auth/session') {
+        const claims = { 'https://api.openai.com/auth': { chatgpt_account_id: 'account-fixture' } };
+        return route.fulfill({
+          json: authenticated
+            ? {
+                user: {
+                  id: 'user-fixture',
+                  email: identityMismatch ? 'other@example.com' : fixtureEmail
+                },
+                accessToken: `fixture.${Buffer.from(JSON.stringify(claims)).toString('base64url')}.fixture`
+              }
+            : {}
+        });
+      }
+      if (url.hostname === 'chatgpt.com' && url.pathname.startsWith('/backend-api/accounts/check/'))
+        return route.fulfill({
+          json: {
+            accounts: {
+              'account-fixture': { account: { account_id: 'account-fixture', plan_type: 'free' } }
             }
-          : {}
-      });
-    }
-    if (url.hostname === 'chatgpt.com' && url.pathname.startsWith('/backend-api/accounts/check/'))
-      return route.fulfill({
-        json: {
-          accounts: {
-            'account-fixture': { account: { account_id: 'account-fixture', plan_type: 'free' } }
           }
-        }
-      });
-    if (url.hostname === 'chatgpt.com' && url.pathname === '/auth/login')
-      return route.fulfill({
-        contentType: 'text/html',
-        body: form('email', 'https://auth.openai.com/password')
-      });
-    if (url.hostname === 'auth.openai.com' && url.pathname === '/password')
-      return route.fulfill({
-        contentType: 'text/html',
-        body: form('password', 'https://auth.openai.com/code')
-      });
-    if (url.hostname === 'auth.openai.com' && url.pathname === '/code')
-      return route.fulfill({
-        contentType: 'text/html',
-        body: form('code', 'https://chatgpt.com/fixture-success')
-      });
-    if (url.hostname === 'chatgpt.com' && url.pathname === '/fixture-success') authenticated = true;
-    if (url.hostname === 'chatgpt.com')
-      return route.fulfill({
-        contentType: 'text/html',
-        body: manualVerification
-          ? '<!doctype html><title>Just a moment</title><p>模拟人工验证窗口</p>'
-          : '<!doctype html><title>模拟 ChatGPT</title><p>模拟登录窗口</p>'
-      });
-    return route.abort();
-  });
+        });
+      if (url.hostname === 'chatgpt.com' && url.pathname === '/auth/login')
+        return route.fulfill({
+          contentType: 'text/html',
+          body: form('email', 'https://auth.openai.com/password')
+        });
+      if (url.hostname === 'auth.openai.com' && url.pathname === '/password')
+        return route.fulfill({
+          contentType: 'text/html',
+          body: form('password', 'https://auth.openai.com/code')
+        });
+      if (url.hostname === 'auth.openai.com' && url.pathname === '/code')
+        return route.fulfill({
+          contentType: 'text/html',
+          body:
+            '<p>Authenticator code</p>' +
+            form('code', 'https://chatgpt.com/fixture-success')
+              .replace('<form', '<form aria-label="Authenticator code"')
+              .replace('<button', '<span>Authenticator code</span><button')
+        });
+      if (url.hostname === 'chatgpt.com' && url.pathname === '/fixture-success')
+        authenticated = true;
+      if (url.hostname === 'chatgpt.com')
+        return route.fulfill({
+          contentType: 'text/html',
+          body: manualVerification
+            ? '<!doctype html><title>Just a moment</title><p>模拟人工验证窗口</p>'
+            : authenticated
+              ? '<!doctype html><title>模拟 ChatGPT</title><button data-testid="accounts-profile-button" aria-haspopup="menu">模拟账号</button><form data-testid="composer"><textarea id="prompt-textarea"></textarea></form>'
+              : '<!doctype html><title>模拟 ChatGPT</title><a href="https://chatgpt.com/auth/login">登录</a>'
+        });
+      return route.abort();
+    });
+  await installOfficial(controlledContext);
   bitServer = http.createServer(async (request, response) => {
     if (request.method === 'OPTIONS') return json(response, {});
     let text = '';
@@ -350,11 +361,21 @@ try {
         if (path.endsWith('/auto-recharge/jobs/bitbrowser-open')) {
           const input = request.postDataJSON();
           assert.equal(input.directMode, true);
-          assert.deepEqual(Object.keys(input).sort(), ['directMode', 'id', 'windowName']);
+          assert.deepEqual(
+            Object.keys(input).sort(),
+            [
+              'connectionProfileId',
+              'directMode',
+              'id',
+              'windowName',
+              ...(input.chatgptAccountId ? ['chatgptAccountId'] : [])
+            ].sort()
+          );
           apiStarts++;
           jobs = [
             {
               id: input.id,
+              chatgptAccountId: input.chatgptAccountId ?? null,
               action: 'bitbrowser',
               plan: 'plus',
               state: 'running',
@@ -395,6 +416,7 @@ try {
           assert.equal(request.headers()['x-recharge-local'], 'fixture-only-agent');
           const input = request.postDataJSON();
           const job = jobs[0];
+          if (input.type === 'restore') return success(route, { records: [], staleProfiles: [] });
           assert.equal(input.result.payment_requests_sent, 0);
           assert.ok(!JSON.stringify(input).includes('fixture-only-password'));
           if (job.state === 'finished')
@@ -439,11 +461,14 @@ try {
     }
   };
   await page.goto(origin + '/v2/auto-recharge');
-  await page.getByText('仅登录窗口', { exact: true }).click();
-  await page.getByText('已保存账号', { exact: true }).click();
-  const select = page.getByRole('combobox', { name: '选择已保存的 ChatGPT 账号' });
+  await page.getByText('仅登录账号', { exact: true }).click();
+  await page.getByText('账号密码', { exact: true }).click();
+  const select = page
+    .getByRole('combobox', { name: /ChatGPT 账号/ })
+    .locator('xpath=ancestor::div[contains(@class,"el-select__wrapper")]');
   await select.click();
-  await page.getByRole('option', { name: fixtureEmail, exact: true }).click();
+  await page.getByRole('option', { name: fixtureEmail, exact: false }).click();
+  await page.getByLabel('窗口名称', { exact: true }).fill('直连合成验收');
   await page.getByRole('button', { name: '打开比特浏览器并登录', exact: true }).click();
   await waitFor(() => jobs[0]?.state === 'finished', 35_000).catch(async (error) => {
     const diagnostic = {
@@ -647,7 +672,7 @@ try {
   authenticated = false;
   const expiredSourceId = jobs[0].id;
   await page.getByRole('button', { name: '打开比特浏览器并登录', exact: true }).click();
-  await waitFor(() => jobs[0]?.id !== expiredSourceId && jobs[0]?.state === 'finished');
+  await waitFor(() => jobs[0]?.id !== expiredSourceId && jobs[0]?.state === 'finished', 90_000);
   assert.equal(jobs[0].result.reason, 'official_login_not_verified');
   assert.equal(jobs[0].result.stage, 'session_restore');
   await waitFor(async () => await jsonInput.isEnabled());
@@ -755,7 +780,7 @@ try {
   await page.getByText('本次登录已停止', { exact: false }).waitFor();
   assert.equal(jobs[0].state, 'finished');
   assert.equal(jobs[0].result.status, 'cancelled');
-  await page.getByText('仅登录窗口', { exact: true }).first().click();
+  await page.getByText('仅登录账号', { exact: true }).first().click();
   await page.getByPlaceholder(/粘贴完整授权 JSON|授权已自动载入/).fill(fixtureSession);
   manualVerification = false;
   authenticated = true;
@@ -767,19 +792,44 @@ try {
   results.push({ scenario: '失去原控制器的任务停止成功后可再次登录', ok: true });
   manualCode = true;
   authenticated = false;
+  // Reset the isolated official DOM as well as its synthetic session before the next login.
+  await controlledContext.close();
+  controlledContext = await controlled.newContext();
+  await installOfficial(controlledContext);
   await page.setViewportSize({ width: 1440, height: 1000 });
   await page.reload();
-  await page.getByText('仅登录窗口', { exact: true }).click();
-  await page.getByText('已保存账号', { exact: true }).click();
+  await page.getByText('仅登录账号', { exact: true }).click();
+  await page.getByText('账号密码', { exact: true }).click();
   await select.click();
-  await page.getByRole('option', { name: fixtureEmail, exact: true }).click();
+  await page.getByRole('option', { name: fixtureEmail, exact: false }).click();
+  await page.getByLabel('窗口名称', { exact: true }).fill('直连合成验收');
   const previousJobId = jobs[0].id;
   const previousCodeRequests = codeRequests;
   await page.getByRole('button', { name: '打开比特浏览器并登录', exact: true }).click();
   await waitFor(
     () => jobs[0]?.id !== previousJobId && jobs[0]?.result.stage === 'login_code_required',
     35_000
-  );
+  ).catch((error) => {
+    console.log(
+      JSON.stringify({
+        phase: 'manual-code',
+        apiStarts,
+        codeRequests,
+        previousJobId,
+        jobs: jobs.map((job) => ({
+          id: job.id,
+          state: job.state,
+          stage: job.result.stage,
+          reason: job.result.reason,
+          account: job.chatgptAccountId
+        })),
+        windows: controlledContext
+          .pages()
+          .map((page) => new URL(page.url()).origin + new URL(page.url()).pathname)
+      })
+    );
+    throw error;
+  });
   const manualJobId = jobs[0].id;
   const officialPage = controlledContext
     .pages()

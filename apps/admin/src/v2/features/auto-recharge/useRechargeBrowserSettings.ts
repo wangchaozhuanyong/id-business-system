@@ -6,7 +6,7 @@ import type {
 } from './contracts';
 import { getApiErrorMessage } from '@/api/client';
 import { useV2ModuleQuery } from '@/v2/composables/useV2Query';
-import { useV2SessionDraft } from '@/v2/composables/useV2SessionDraft';
+import { useV2FormDraft, useV2SessionDraft } from '@/v2/composables/useV2SessionDraft';
 import { rechargeApi } from './api';
 import { readBrowserCatalog, useRechargeBrowserCatalog } from './useRechargeBrowserCatalog';
 import { useManagedBrowserProxy } from './useManagedBrowserProxy';
@@ -24,6 +24,9 @@ export interface BitBrowserSettingsForm extends UpdateV2RechargeBitBrowserSettin
 }
 
 const formFromSettings = (settings?: V2RechargeBitBrowserSettings): BitBrowserSettingsForm => ({
+  connectionProfileId: settings?.connectionProfileId ?? null,
+  connectionProfileName: settings?.connectionProfileName ?? '',
+  newConnectionProfile: false,
   proxyId: settings?.proxyId ?? '',
   connectorUrl: settings?.connectorUrl ?? 'http://127.0.0.1:55321',
   localApiUrl: settings?.localApiUrl ?? 'http://127.0.0.1:54345',
@@ -46,30 +49,28 @@ export function useRechargeBrowserSettings(
   directMode: Ref<boolean> = ref(false)
 ) {
   const settingsOpen = ref(false);
-  const { settingsError, settingsSaving, settingsForm, savedSnapshot } = useV2SessionDraft(
-    'recharge-browser-settings',
-    () => {
-      const settingsForm = ref(formFromSettings());
-      return {
-        settingsForm,
-        settingsError: ref(''),
-        settingsSaving: ref(false),
-        savedSnapshot: ref(JSON.stringify(settingsForm.value))
-      };
-    }
+  const { settingsError, settingsSaving, selectedProfile, editingNewProfile } = useV2SessionDraft(
+    'recharge-browser-settings-selection',
+    () => ({
+      settingsError: ref(''),
+      settingsSaving: ref(false),
+      selectedProfile: ref<string | null | undefined>(undefined),
+      editingNewProfile: ref(false)
+    })
   );
-  const wasDirty = JSON.stringify(settingsForm.value) !== savedSnapshot.value;
-  settingsForm.value.browserOptions = normalizeV2RechargeBrowserOptions(
-    settingsForm.value.browserOptions
-  );
-  if (!wasDirty) savedSnapshot.value = JSON.stringify(settingsForm.value);
+  const formDraft = useV2FormDraft('recharge-browser-settings-profiles', () => formFromSettings());
+  if (editingNewProfile.value)
+    formDraft.open('new', { ...formFromSettings(), newConnectionProfile: true });
+  const settingsForm = computed(() => formDraft.form);
+  const savedSnapshot = formDraft.original;
   const settingsDirty = computed(() => JSON.stringify(settingsForm.value) !== savedSnapshot.value);
   const settingsQuery = useV2ModuleQuery<V2RechargeBitBrowserSettings>({
     moduleKey: 'auto-recharge',
     scope: 'auto-recharge',
-    key: () => 'auto-recharge-bitbrowser-settings',
+    key: () =>
+      `auto-recharge-bitbrowser-settings:${selectedProfile.value === undefined ? 'selected' : (selectedProfile.value ?? 'default')}`,
     keepPreviousData: true,
-    query: ({ signal }) => rechargeApi.getBitBrowserSettings({ signal })
+    query: ({ signal }) => rechargeApi.getBitBrowserSettings({ signal }, selectedProfile.value)
   });
   const browserCatalog = useRechargeBrowserCatalog(
     settingsForm,
@@ -92,17 +93,69 @@ export function useRechargeBrowserSettings(
   );
 
   function resetSettings() {
-    settingsForm.value = formFromSettings(settingsQuery.data.value);
-    savedSnapshot.value = JSON.stringify(settingsForm.value);
+    const data = settingsQuery.data.value;
+    if (editingNewProfile.value) return;
+    formDraft.open(data?.connectionProfileId ?? 'default', formFromSettings(data), data?.updatedAt);
     settingsError.value = '';
   }
 
   watch(
     () => settingsQuery.data.value,
     () => {
-      if (!settingsSaving.value && !settingsDirty.value) resetSettings();
+      const data = settingsQuery.data.value;
+      if (
+        editingNewProfile.value ||
+        !data ||
+        (selectedProfile.value !== undefined &&
+          (data.connectionProfileId ?? null) !== selectedProfile.value)
+      )
+        return;
+      if (
+        !settingsSaving.value &&
+        (!settingsDirty.value ||
+          settingsForm.value.connectionProfileId !== (data.connectionProfileId ?? null))
+      )
+        resetSettings();
     },
     { immediate: true }
+  );
+
+  const connectionProfileChoice = computed({
+    get: () =>
+      editingNewProfile.value ? 'new' : (settingsForm.value.connectionProfileId ?? 'default'),
+    set: (id: string) => {
+      if (settingsSaving.value) return;
+      connectionCheck?.abort();
+      connectorStatus.value = 'unknown';
+      connectorMessage.value = '';
+      settingsError.value = '';
+      editingNewProfile.value = id === 'new';
+      if (id === 'new') {
+        const seed = formFromSettings(settingsQuery.data.value);
+        formDraft.open('new', {
+          ...seed,
+          connectionProfileId: null,
+          connectionProfileName: '',
+          newConnectionProfile: true
+        });
+      } else {
+        selectedProfile.value = id === 'default' ? null : id;
+        // Each configuration has its own registered draft; a delayed read cannot replace another draft.
+        formDraft.open(id, { ...formFromSettings(), connectionProfileId: selectedProfile.value });
+        void settingsQuery.refresh();
+      }
+    }
+  });
+  const storedSettings = computed(() =>
+    editingNewProfile.value && settingsQuery.data.value
+      ? {
+          ...settingsQuery.data.value,
+          localApiTokenConfigured: false,
+          connectorTokenConfigured: false,
+          localApiTokenMask: null,
+          connectorTokenMask: null
+        }
+      : settingsQuery.data.value
   );
 
   function setSettingsOpen(open: boolean) {
@@ -141,6 +194,26 @@ export function useRechargeBrowserSettings(
     }
   }
 
+  async function restoreSavedSettings() {
+    if (settingsSaving.value || editingNewProfile.value) return;
+    const id = connectionProfileChoice.value;
+    const beforeRead = JSON.stringify(settingsForm.value);
+    const complete = formDraft.beginSave();
+    try {
+      await settingsQuery.refresh();
+      if (
+        id === connectionProfileChoice.value &&
+        !settingsQuery.error.value &&
+        beforeRead === JSON.stringify(settingsForm.value)
+      ) {
+        complete();
+        resetSettings();
+      }
+    } catch (cause) {
+      settingsError.value = getApiErrorMessage(cause);
+    }
+  }
+
   async function testConnector() {
     try {
       await checkConnection({ ...settingsForm.value });
@@ -152,6 +225,12 @@ export function useRechargeBrowserSettings(
   async function checkSavedConnection() {
     const settings = settingsQuery.data.value;
     if (!settings) throw new Error('请先读取并保存比特浏览器设置。');
+    if (
+      settingsQuery.phase.value !== 'ready' ||
+      (selectedProfile.value !== undefined &&
+        selectedProfile.value !== (settings.connectionProfileId ?? null))
+    )
+      throw new Error('连接配置正在读取，请稍后再开始任务。');
     await checkConnection(formFromSettings(settings));
   }
 
@@ -165,7 +244,7 @@ export function useRechargeBrowserSettings(
       settingsError.value = browserCatalog.selectionError.value;
       return;
     }
-    const stored = settingsQuery.data.value;
+    const stored = storedSettings.value;
     if (
       (!serverMode && !stored?.localApiTokenConfigured && !settingsForm.value.localApiToken) ||
       (!serverMode &&
@@ -182,12 +261,16 @@ export function useRechargeBrowserSettings(
     }
     settingsSaving.value = true;
     settingsError.value = '';
+    const submitted = JSON.stringify(settingsForm.value);
+    const completeSave = formDraft.beginSave();
     try {
       const { staticProxyUsername, staticProxyPassword, ...input } = settingsForm.value;
       const updated = await rechargeApi.updateBitBrowserSettings({
         ...input,
         proxyId: settingsForm.value.proxyId || undefined,
         serverMode,
+        expectedUpdatedAt: formDraft.version.value,
+        connectionProfileName: input.connectionProfileName || undefined,
         ...(directMode.value && !serverMode ? { directMode: true } : {}),
         localApiToken: settingsForm.value.localApiToken || undefined,
         connectorToken: settingsForm.value.connectorToken || undefined,
@@ -202,9 +285,14 @@ export function useRechargeBrowserSettings(
             ? { username: staticProxyUsername, password: staticProxyPassword }
             : undefined
       });
-      settingsQuery.data.value = updated;
-      resetSettings();
-      settingsOpen.value = false;
+      completeSave();
+      if (JSON.stringify(settingsForm.value) === submitted) {
+        editingNewProfile.value = false;
+        selectedProfile.value = updated.connectionProfileId ?? null;
+        settingsQuery.data.value = updated;
+        resetSettings();
+        settingsOpen.value = false;
+      }
     } catch (cause) {
       settingsError.value = getApiErrorMessage(cause);
     } finally {
@@ -219,6 +307,9 @@ export function useRechargeBrowserSettings(
   return {
     ...browserCatalog,
     proxyCatalog,
+    storedSettings,
+    connectionProfileChoice,
+    restoreSavedSettings,
     settingsQuery,
     settingsOpen,
     settingsSaving,

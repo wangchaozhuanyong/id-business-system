@@ -11,6 +11,24 @@ export const productionDatabaseAccessHelper = 'scripts/lib/v2-production-databas
 export const productionDatabaseAccessTest = 'scripts/production-database-access.test.mjs';
 export const productionDatabaseAccessAcceptance =
   'scripts/acceptance-v2-production-database-access.mjs';
+export const unpublishedComponentSuccessorControlPaths = Object.freeze([
+  'scripts/production-release/unpublished-component-successor.py',
+  'scripts/production-release/unpublished-component-successor.test.py',
+  'scripts/production-release/unpublished-component-successor-readonly.py',
+  'scripts/production-release/unpublished-component-successor-readonly.test.py',
+  'scripts/production-release/unpublished-component-entry.test.mjs'
+]);
+export const ownedMysqlTestControlPaths = Object.freeze([
+  'scripts/lib/owned-mysql-test-instance.mjs',
+  'scripts/lib/owned-mysql-test-instance.test.mjs'
+]);
+export const unpublishedComponentSuccessorEntryPaths = Object.freeze([
+  '.github/workflows/production-release.yml',
+  'scripts/production-release/validate-release-selection.sh',
+  'scripts/production-release/build-images.sh',
+  'scripts/production-release/push-images.sh',
+  'scripts/production-release/dispatch.sh'
+]);
 export const formalRuntimePackageControlPaths = Object.freeze([
   'scripts/production-release/formal-runtime-package.test.py',
   'scripts/production-release/formal-runtime-package/driver.py',
@@ -511,6 +529,8 @@ export function isCiOnly(paths) {
     paths.every(
       (p) =>
         historicalReleaseControlPaths.includes(p) ||
+        unpublishedComponentSuccessorControlPaths.includes(p) ||
+        ownedMysqlTestControlPaths.includes(p) ||
         onlineRecoveryControls.has(p) ||
         /^(?:\.github\/workflows\/(?:quality|production-release)\.yml|scripts\/ci-(?:recharge|change)-[\w.-]+|scripts\/check-v2-(?:module-architecture|prisma-runtime-boundary|concurrency-standard)(?:\.test)?\.mjs|scripts\/production-release\/online-recharge-entry\.test\.mjs|scripts\/production-release\/mailbox-diagnostic(?:\.test)?\.(?:mjs|py)|scripts\/production-release\/(?:cleanup-reviewed-cache|cleanup-verified-backups|maintain-image-cache|remote-deploy|reuse-images|storage-maintenance|api-admin-scope|api-admin-readonly|online-recharge-scope|online-recharge-readonly)(?:\.test)?\.py|scripts\/production-release\/audit-retention-mysql\.test\.py|scripts\/production-release\/(?:build-images|push-images|dispatch|check-source)\.sh|deploy\/aws\/cache-cleanup-(?:legacy-20261002|unused-legacy-20261003|storage-20261002|bitbrowser-direct-20261003|20261001|fx-subscription-20261002|unified(?:-recovery)?-20261002|recharge-(?:names|execution)-20261002)\.json|docs\/.*\.md|(?:README|AGENTS)\.md)$/.test(
           p
@@ -758,9 +778,63 @@ export function adminCheckCommands(mode, paths) {
 const migration =
   'apps/api/prisma-mysql/migrations/20260913100000_auto_recharge_browser_options/migration.sql';
 const schema = 'apps/api/prisma-mysql/schema.prisma';
+export const rechargeConnectionProfileMigration =
+  'apps/api/prisma-mysql/migrations/20261012143000_recharge_connection_profiles/migration.sql';
+const rechargeConnectionAcceptancePaths = new Set([
+  'scripts/acceptance-v2-recharge-employee-concurrency.mjs',
+  'scripts/acceptance-v2-registration-mirror-mysql.mjs'
+]);
+export const hasRechargeConnectionMigrationScope = (paths) =>
+  paths.some(
+    (path) =>
+      path === rechargeConnectionProfileMigration ||
+      path === 'scripts/acceptance-v2-recharge-employee-concurrency.mjs'
+  );
+const registrationMirrorSourcePaths = new Set([
+  'apps/api/src/id-business-v2/auto-recharge/bank-recharge-registration-mirror.service.ts',
+  'apps/api/src/id-business-v2/auto-recharge/bank-recharge-registration-mirror.service.spec.ts',
+  'scripts/fixtures/registration-closed-loop-worker.py',
+  'scripts/acceptance-v2-registration-mirror-mysql.mjs'
+]);
+export const hasRegistrationMirrorScope = (paths) =>
+  paths.some((path) => registrationMirrorSourcePaths.has(path));
+const sharedTableSourcePaths = new Set([
+  'apps/admin/src/v2/components/V2Table.vue',
+  'apps/admin/src/v2/components/V2TableActionColumn.vue',
+  'apps/admin/src/v2/components/V2TableColumn.vue',
+  'apps/admin/src/v2/components/tableColumn.spec.ts',
+  'apps/admin/src/v2/components/tableColumn.ts',
+  'apps/admin/src/v2/components/tableContentWidth.spec.ts',
+  'apps/admin/src/v2/components/tableContentWidth.ts',
+  'apps/admin/src/v2/components/tableVisibility.ts',
+  'apps/admin/src/v2/composables/useV2TableContentWidths.ts',
+  'scripts/check-v2-table-standard.mjs'
+]);
+
+function hasRechargeConnectionSchemaProof(paths, before, after) {
+  if (!paths.includes(schema)) return true;
+  if (
+    !paths.includes(rechargeConnectionProfileMigration) ||
+    typeof before !== 'string' ||
+    typeof after !== 'string' ||
+    before.includes('model IdBusinessV2RechargeConnectionProfile ')
+  )
+    return false;
+  const model = /model IdBusinessV2RechargeConnectionProfile \{[^}]*\}/g;
+  const matches = [...after.matchAll(model)];
+  if (matches.length !== 1) return false;
+  const block = matches[0][0];
+  return (
+    createHash('sha256').update(block).digest('hex') ===
+      'c90f01a51b3648cffebc3e7d852b5c8a53a060e95b7cf4c35ad05133a5d60d0a' &&
+    after.replace(block + '\n\n', '') === before
+  );
+}
 const allowed =
   /^(?:apps\/admin\/src\/v2\/features\/auto-recharge\/|apps\/api\/src\/id-business-v2\/auto-recharge\/|packages\/shared\/src\/v2\/auto-recharge\.ts$|docs\/|scripts\/ci-recharge-[\w.-]+$|scripts\/check-v2-(?:decimal-standard|ui-language)\.mjs$|scripts\/acceptance-v2-auto-recharge\.mjs$|\.github\/workflows\/quality\.yml$)/;
 const appleMailboxApiPaths = new Set([
+  'apps/api/src/id-business-v2/auto-registration/apple-mailbox-pool.ts',
+  'apps/api/src/id-business-v2/auto-registration/apple-mailboxes-task-bridge.service.ts',
   'apps/api/src/id-business-v2/auto-registration/apple-mailboxes.controller.ts',
   'apps/api/src/id-business-v2/auto-registration/apple-mailboxes.service.spec.ts',
   'apps/api/src/id-business-v2/auto-registration/apple-mailboxes.service.ts',
@@ -768,10 +842,19 @@ const appleMailboxApiPaths = new Set([
   'apps/api/src/id-business-v2/auto-registration/auto-registration.module.ts',
   'apps/api/src/id-business-v2/auto-registration/auto-registration.service.ts',
   'apps/api/src/id-business-v2/auto-registration/worker/apple_mailboxes.py',
+  'apps/api/src/id-business-v2/auto-registration/worker/apple_closed_loop.py',
+  'apps/api/src/id-business-v2/auto-registration/worker/apple_registration_diagnostics.py',
+  'apps/api/src/id-business-v2/auto-registration/worker/id-workspace.css',
+  'apps/api/src/id-business-v2/auto-registration/worker/id-workspace.js',
   'apps/api/src/id-business-v2/auto-registration/worker/release_safety.py',
   'apps/api/src/id-business-v2/auto-registration/worker/test_apple_mailboxes.py',
   'apps/api/src/id-business-v2/auto-registration/worker/test_release_safety.py',
-  'apps/api/src/id-business-v2/auto-registration/worker/workspace.py'
+  'apps/api/src/id-business-v2/auto-registration/worker/test_workspace.py',
+  'apps/api/src/id-business-v2/auto-registration/worker/test_upload_compat.py',
+  'apps/api/src/id-business-v2/auto-registration/worker/test_payment_browser.mjs',
+  'apps/api/src/id-business-v2/auto-registration/worker/upload_compat.py',
+  'apps/api/src/id-business-v2/auto-registration/worker/workspace.py',
+  'scripts/fixtures/registration-closed-loop-worker.py'
 ]);
 const bitOrdersAcceptancePaths = new Set([
   'scripts/acceptance-v2-bank-recharge-ui.mjs',
@@ -811,19 +894,32 @@ export function isRechargeOnly(paths, oldSchema, newSchema) {
       isRegistrationProfileObservationOnly(paths) &&
       paths.some((path) => registrationProfileObservationSources.has(path))
     );
-  if (!paths.length || !paths.some((p) => p.includes('auto-recharge') || p === migration))
+  if (
+    !paths.length ||
+    !paths.some(
+      (p) =>
+        p.includes('auto-recharge') || p === migration || rechargeConnectionAcceptancePaths.has(p)
+    )
+  )
     return false;
   if (
     !paths.every(
       (p) =>
         allowed.test(p) ||
         historicalReleaseControlPaths.includes(p) ||
+        unpublishedComponentSuccessorControlPaths.includes(p) ||
+        ownedMysqlTestControlPaths.includes(p) ||
+        sharedTableSourcePaths.has(p) ||
+        rechargeConnectionAcceptancePaths.has(p) ||
+        p === rechargeConnectionProfileMigration ||
         p === schema ||
         p === migration
     )
   )
     return false;
   if (!paths.includes(schema)) return true;
+  if (paths.includes(rechargeConnectionProfileMigration))
+    return hasRechargeConnectionSchemaProof(paths, oldSchema, newSchema);
   const model = /model IdBusinessV2RechargeBrowserSetting \{[^}]*\}\s*/;
   return (
     typeof oldSchema === 'string' &&
@@ -850,13 +946,20 @@ export function isTargetedOnly(paths, oldSchema, newSchema) {
   if (paths.includes(registrationProfileObservationProfile))
     return isRechargeOnly(paths, oldSchema, newSchema);
   if (hasAppleMailboxScope(paths))
-    return paths.every(
-      (path) =>
-        appleMailboxApiPaths.has(path) ||
-        allowed.test(path) ||
-        isAdminOnly([path]) ||
-        isCiOnly([path]) ||
-        bitOrdersAcceptancePaths.has(path)
+    return (
+      hasRechargeConnectionSchemaProof(paths, oldSchema, newSchema) &&
+      paths.every(
+        (path) =>
+          appleMailboxApiPaths.has(path) ||
+          allowed.test(path) ||
+          isAdminOnly([path]) ||
+          isCiOnly([path]) ||
+          bitOrdersAcceptancePaths.has(path) ||
+          sharedTableSourcePaths.has(path) ||
+          rechargeConnectionAcceptancePaths.has(path) ||
+          path === rechargeConnectionProfileMigration ||
+          path === schema
+      )
     );
   return (
     isRegistrationHydrationOnly(paths) ||
@@ -915,7 +1018,9 @@ export function selectedParts(paths, grantHelperSnapshot) {
       : ['guards'];
   return parts.filter((part) =>
     part === 'migration'
-      ? paths.some((p) => p.startsWith('apps/api/prisma-mysql/'))
+      ? hasRegistrationMirrorScope(paths) ||
+        hasRechargeConnectionMigrationScope(paths) ||
+        paths.some((p) => p.startsWith('apps/api/prisma-mysql/'))
       : part === 'security'
         ? paths.some((p) => securityPaths.test(p))
         : affectsPart(part, paths)
@@ -924,6 +1029,14 @@ export function selectedParts(paths, grantHelperSnapshot) {
 
 export function affectsPart(part, paths) {
   if (part === 'guards') return paths.length > 0;
+  if (part === 'api' && hasAppleMailboxScope(paths)) return true;
+  if (part === 'migration' && hasRegistrationMirrorScope(paths)) return true;
+  if (
+    part === 'migration' &&
+    (hasRechargeConnectionMigrationScope(paths) ||
+      paths.some((path) => ownedMysqlTestControlPaths.includes(path)))
+  )
+    return true;
   if (part === 'admin' && paths.some((path) => adminInteractionAcceptance.has(path))) return true;
   const common =
     /^(?:package(?:-lock)?\.json$|\.github\/workflows\/quality\.yml$|scripts\/ci-recharge-check\.mjs$|scripts\/ci-change-scope|tsconfig|eslint\.config|\.npmrc$)/;

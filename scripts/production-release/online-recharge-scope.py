@@ -3283,7 +3283,8 @@ def _online_after_bit_audit_binding(d, bridge, proof):
     return {'baselineOriginSha256': fingerprint(bridge), 'baselineProducer': bridge['baselineProducer'],
         'producer': producer, 'preflightBytesSha256': hashlib.sha256(raw).hexdigest(),
         'buildProofSha256': fingerprint(proof), 'sourceHelpers': {name: hashlib.sha256(
-            _declaration_source_bytes(Path(__file__).with_name(name), limit=512 * 1024)).hexdigest()
+            _declaration_source_bytes(Path(__file__).with_name(name),
+                limit=(1024 if name == 'online-recharge-scope.py' else 512) * 1024)).hexdigest()
             for name in ('api-admin-scope.py', 'online-recharge-scope.py')}}
 
 
@@ -5241,6 +5242,41 @@ _RESTORED_B_HISTORY_VOLUME = {'name': '20260821t095106z_auto_registration_data',
 _RESTORED_B_QUALIFIED_CODE = 'ONLINE_RECHARGE_B_RESTORE_DECLARATION_UNPROVEN'
 
 
+def _restored_workspace_qualification_location(error, caps):
+    """Locate a source-owned body failure without reading exception values."""
+    from types import FunctionType, ModuleType
+    namespaces = [globals()]
+    online = vars(caps).get('online') if type(caps) is SimpleNamespace else None
+    if type(online) is ModuleType and vars(online).get('__file__') == __file__:
+        namespaces.append(vars(online))
+    names = ('_restored_qualified_measure', '_restored_qualified_capture',
+        '_restored_qualified_capsule', '_restored_qualified_tools',
+        '_restored_qualified_binding', '_restored_qualified_proof',
+        '_restored_qualified_pair', '_restored_qualified_exact', '_restored_qualified_hashes')
+    trusted = {}
+    for namespace in namespaces:
+        for name in names:
+            function = namespace.get(name)
+            if (type(function) is FunctionType and function.__globals__ is namespace
+                    and function.__code__.co_filename == __file__):
+                trusted[id(function.__code__)] = (namespace, name.removeprefix('_restored_qualified_').upper())
+    seen = set(); current = error; location = None
+    for unused in range(8):
+        if current is None or id(current) in seen:
+            break
+        seen.add(id(current))
+        if type(current) in (RuntimeError, ValueError, TypeError, KeyError, AttributeError, NameError):
+            frame = BaseException.__traceback__.__get__(current)
+            while frame is not None:
+                bound = trusted.get(id(frame.tb_frame.f_code))
+                if (bound is not None and frame.tb_frame.f_globals is bound[0]
+                        and type(frame.tb_lineno) is int and 0 < frame.tb_lineno < 100000):
+                    location = bound[1] + '_L' + str(frame.tb_lineno) + '_' + type(current).__name__.upper()
+                frame = frame.tb_next
+        current = BaseException.__context__.__get__(current)
+    return location
+
+
 def _restored_workspace_qualification_call(operation, *, driver=None, caps=None, owner=None, stage='PACKAGE_BIND'):
     """Preserve fixed rejected diagnostics; never grant or weaken qualification."""
     try:
@@ -5290,6 +5326,10 @@ def _restored_workspace_qualification_call(operation, *, driver=None, caps=None,
                 and type(details['stage']) is str and details['stage'] in DECLARATION_DIAGNOSTIC_STAGES
                 and type(details['code']) is str and details['code'] in DECLARATION_DIAGNOSTIC_CODES):
             message = 'ONLINE_RECHARGE_DECLARATION_' + details['stage'] + '_' + details['code']
+            if details == {'stage': 'STABILITY', 'code': 'UNKNOWN'}:
+                location = _restored_workspace_qualification_location(error, caps)
+                if location is not None:
+                    message += '_AT_' + location
             if len(message) <= 128:
                 raise _declaration_driver_failure(message, details) from None
         # Unrecognized classes, attributes and messages remain rejected without
@@ -6425,7 +6465,8 @@ def _restored_workspace_audit_binding(d, bridge, proof):
     return {'deploymentQualification':saved['deploymentQualification'],'baselineOriginSha256': fingerprint(bridge), 'baselineProducer': bridge['baselineProducer'],
         'producer': producer, 'preflightBytesSha256': hashlib.sha256(raw).hexdigest(), 'buildProofSha256': fingerprint(proof),
         'restorationSha256': fingerprint(saved['restoration']), 'sourceHelpers': {name: hashlib.sha256(
-            _declaration_source_bytes(Path(__file__).with_name(name), limit=512*1024)).hexdigest()
+            _declaration_source_bytes(Path(__file__).with_name(name),
+                limit=(1024 if name == 'online-recharge-scope.py' else 512)*1024)).hexdigest()
             for name in ('api-admin-scope.py', 'online-recharge-scope.py')}}
 
 

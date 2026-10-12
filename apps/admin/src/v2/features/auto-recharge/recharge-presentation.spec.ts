@@ -439,6 +439,62 @@ describe('recharge stage presentation', () => {
       'private_internal_error'
     );
   });
+  it.each([
+    [
+      '本次零请求',
+      { payment_attempted: false, payment_requests_sent: 0, confirmation_requests_sent: 0 }
+    ],
+    ['旧记录缺失计数', {}],
+    ['明确未尝试付款', { payment_status: 'not_attempted', payment_outcome: 'not_attempted' }],
+    ['受控错误元数据', { http_status: 409, error_type: 'HTTPError' }]
+  ])('记录服务未确认且没有本次付款证据时先检查记录接口：%s', (_name, result) => {
+    const feedback = rechargeIssueFeedback(
+      job({
+        action: 'bitbrowser',
+        result: { status: 'blocked', reason: 'durable_state_unavailable', ...result }
+      })
+    );
+    expect(feedback?.title).toBe('执行记录未确认');
+    expect(feedback?.message).toContain('本机助手与服务器的执行记录尚未确认');
+    expect(feedback?.action).toContain('检查本机助手与服务器的记录接口');
+    expect(feedback?.action).toContain('历史订单的付款情况仍需单独核实');
+    expect(JSON.stringify(feedback)).not.toMatch(
+      /只读复查|历史付款锁|未提交付款|未扣款|HTTPError|409/
+    );
+  });
+  it.each([
+    ['尝试过付款', { payment_attempted: true }],
+    ['发出付款请求', { payment_requests_sent: 1 }],
+    ['消耗确认请求', { confirmation_requests_sent: 1 }],
+    [
+      '已保存付款证据',
+      { payment_evidence: { kind: 'checkout_session', identifier: 'cs_synthetic' } }
+    ],
+    ['付款状态未知', { payment_status: 'unknown' }],
+    ['付款结果未知', { status: 'payment_result_unknown' }],
+    ['升级结果未知', { status: 'upgrade_result_unknown' }],
+    ['付款结论未知', { payment_outcome: 'unknown' }],
+    ['已付款待开通', { payment_status: 'paid' }],
+    ['已核实开通', { status: 'subscription_activated' }],
+    ['计数无法核实', { payment_requests_sent: 'unverified' }]
+  ])('记录服务未确认且存在付款证据或未知结果时保留原单保护：%s', (_name, result) => {
+    const feedback = rechargeIssueFeedback(
+      job({ action: 'bitbrowser', result: { reason: 'durable_state_unavailable', ...result } })
+    );
+    expect(feedback?.action).toContain('只读复查原订单');
+    expect(feedback?.action).toContain('历史付款锁');
+    expect(feedback?.title).not.toBe('执行记录未确认');
+  });
+  it.each(['unknown', 'confirming'] as const)(
+    '记录服务未确认但任务状态为%s时仍保守保留原单核验',
+    (state) => {
+      const feedback = rechargeIssueFeedback(
+        job({ action: 'bitbrowser', state, result: { reason: 'durable_state_unavailable' } })
+      );
+      expect(feedback?.action).toContain('只读复查原订单');
+      expect(feedback?.title).not.toBe('执行记录未确认');
+    }
+  );
   it('付款结果未知时明确提示只读复查', () => {
     const pending = job({
       action: 'bitbrowser',

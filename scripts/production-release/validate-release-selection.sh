@@ -260,7 +260,44 @@ PY_REGISTRATION96_PROJECTION
 }
 
 # Selection only; the remote policy still verifies the reviewed source proof.
+read_unpublished_component_projection() {
+  python3 -B - <<'PY_UNPUBLISHED_COMPONENT_PROJECTION'
+import importlib.util, os
+from pathlib import Path
+path = Path('scripts/production-release/unpublished-component-successor.py')
+spec = importlib.util.spec_from_file_location('successor_image_selection', path)
+module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(module)
+record = module.closed_json(module.private_bytes(Path(module.PROJECTION).absolute()))
+module.projection_module().validate_record(record)
+module.need(record['candidateCommit'] == os.environ['RELEASE_COMMIT']
+            and record['candidateTree'] == os.environ['SOURCE_TREE'], 'PROJECTION_CHANGED')
+print(module.fingerprint(record))
+PY_UNPUBLISHED_COMPONENT_PROJECTION
+}
+
 validate_release_selection() {
+  if [[ "${RELEASE_OPERATION:-release}" == *_unpublished_components* && "${RELEASE_OPERATION:-release}" != verify_unpublished_components && "${RELEASE_OPERATION:-release}" != release_unpublished_components ]]; then
+    return 1
+  fi
+  if [[ "${API_FAULT_RESTORE_APPROVED:-false}" != false && "${RELEASE_OPERATION:-release}" != release_unpublished_components ]]; then
+    echo 'API fault restoration approval is scoped to the component successor release' >&2
+    return 1
+  fi
+  if [[ "${RELEASE_OPERATION:-release}" == verify_unpublished_components || "${RELEASE_OPERATION:-release}" == release_unpublished_components ]]; then
+    [[ "${HISTORICAL_EXCEPTION:-none}" == none && "${RELEASE_ADMIN_ONLY:-false}" == false ]] || return 1
+    [[ "${RELEASE_COMMIT:-}" =~ ^[a-f0-9]{40}$ && "${EXPECTED_CURRENT:-}" =~ ^[a-f0-9]{40}$
+      && "${SOURCE_TREE:-}" =~ ^[a-f0-9]{40}$ && "${GITHUB_REF:-}" == refs/heads/main ]] || return 1
+    [[ "${API_FAULT_RESTORE_APPROVED:-false}" == false || "${API_FAULT_RESTORE_APPROVED:-false}" == true ]] || return 1
+    if [[ "$RELEASE_OPERATION" == release_unpublished_components ]]; then
+      [[ "${API_FAULT_RESTORE_APPROVED:-false}" == true ]] || {
+        echo 'Component publication requires separately approved API fault restoration protection' >&2
+        return 1
+      }
+    fi
+    [[ -z "${REUSE_IMAGE_RUN:-}${REUSE_IMAGE_COMMIT:-}${REUSE_IMAGE_RUN_ID:-}${REUSE_IMAGE_RUN_ATTEMPT:-}${POST_CLEANUP_SEAL_SHA256:-}${ORDER_ARCHIVE_SEAL_SHA256:-}${ORDER_ARCHIVE_PREPARED_IMAGES_SHA256:-}${RELEASE_BROWSER_CACHE_IMAGE:-}${RELEASE_BROWSER_CACHE_IMAGE_ID:-}${CACHE_PLAN_SHA256:-}${DIAGNOSTIC_COMMAND_ID:-}" ]] || return 1
+    return 0
+  fi
   case "${RELEASE_OPERATION:-release}" in
     *_api_registration|*_registration_business|*_registration_handoff)
       echo 'Automatic registration has been removed; registration releases are disabled' >&2

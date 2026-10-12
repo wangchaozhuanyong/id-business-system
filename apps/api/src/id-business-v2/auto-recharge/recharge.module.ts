@@ -24,6 +24,7 @@ import { BankRechargeController } from './bank-recharge.controller';
 import { BankRechargeAccountDeliveryService } from './bank-recharge-account-delivery.service';
 import { IdBusinessV2WorkspaceModule } from '../workspace/public-api';
 import { BankRechargeAccountService } from './bank-recharge-account.service';
+import { BankRechargeRegistrationMirrorService } from './bank-recharge-registration-mirror.service';
 import { BankRechargeCardService } from './bank-recharge-card.service';
 import { BankRechargeCardRepository } from './persistence/bank-recharge-card.repository';
 import { BankRechargeOrderService } from './bank-recharge-order.service';
@@ -45,7 +46,7 @@ import { BankRechargePricingService } from './bank-recharge-pricing.service';
     RechargeProxyController,
     RechargeNameController
   ],
-  exports: [RechargeSettingsService, RechargeProxyService],
+  exports: [RechargeSettingsService, RechargeProxyService, BankRechargeRegistrationMirrorService],
   providers: [
     BankRechargeSubscriptionReviewService,
     BankRechargeLifecycleService,
@@ -60,6 +61,7 @@ import { BankRechargePricingService } from './bank-recharge-pricing.service';
     BankRechargePricingService,
     FieldEncryptionService,
     BankRechargeAccountService,
+    BankRechargeRegistrationMirrorService,
     BankRechargeAccountDeliveryService,
     BankRechargeCardService,
     BankRechargeCardRepository,

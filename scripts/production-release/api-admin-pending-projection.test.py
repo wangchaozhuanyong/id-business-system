@@ -55,7 +55,9 @@ class PendingProjectionTests(unittest.TestCase):
     def setUpClass(cls):
         cls.baseline = archive_files(git_archive(projection.BASELINE_COMMIT))
         cls.online = archive_files(git_archive(projection.ONLINE_COMMIT))
-        cls.commit = subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=ROOT).decode().strip()
+        # This fixed projection predates later independent business batches.
+        cls.commit = subprocess.check_output(['git', 'rev-parse',
+            '31d2c6885a45817cd40d23fce8d6145bc9f18af2'], cwd=ROOT).decode().strip()
         cls.candidate = archive_files(git_archive(cls.commit))
         cls.tree = subprocess.check_output(['git', 'rev-parse', cls.commit + '^{tree}'], cwd=ROOT).decode().strip()
         cls.output, cls.record = projection.project_files(cls.candidate, cls.baseline,

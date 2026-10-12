@@ -68,7 +68,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { getApiErrorMessage } from '@/api/client';
 import { sessionCoordinator } from '@/auth/sessionCoordinator';
 import AppButton from '@/components/ui/AppButton.vue';
@@ -84,7 +84,10 @@ import {
   type AutoRegistrationDraft,
   type AutoRegistrationPage,
   type AutoRegistrationParentPage,
-  type AutoRegistrationStatus
+  type AutoRegistrationStatus,
+  type AutoRegistrationChildMessage,
+  type AppleMailboxStartInput,
+  type AppleMailboxBatchInput
 } from './contracts';
 import {
   readRegistrationChildMessage,
@@ -150,6 +153,11 @@ const activePageTitle = computed(
   () => parentPages.find((page) => page.path === activePage.value)?.title ?? '自动注册'
 );
 let themeObserver: MutationObserver | undefined;
+const bridgeRequests = new Set<string>();
+const bridgeReads = new Set<AbortController>();
+watch([activePage, canAccess], () => bridgeReads.forEach((controller) => controller.abort()), {
+  flush: 'sync'
+});
 
 function navigateWorkspace(page: AutoRegistrationParentPage) {
   if (!canAccess.value || activePage.value === page) return;
@@ -189,6 +197,78 @@ function receiveWorkspaceMessage(event: MessageEvent) {
   if (message?.type === 'id-registration:draft') {
     pageDrafts.set(message.page, sanitizeRegistrationDraft(message.values));
   }
+  if (message?.type === 'id-registration:apple-request') void handleAppleRequest(message);
+}
+
+async function handleAppleRequest(
+  message: Extract<AutoRegistrationChildMessage, { type: 'id-registration:apple-request' }>
+) {
+  if (!canAccess.value || bridgeRequests.has(message.requestId) || bridgeRequests.size >= 64)
+    return;
+  const frame = workspaceFrame.value?.contentWindow;
+  if (!frame) return;
+  const controller = new AbortController();
+  bridgeRequests.add(message.requestId);
+  bridgeReads.add(controller);
+  const isCurrentRequest = () =>
+    !controller.signal.aborted &&
+    canAccess.value &&
+    activePage.value === '/' &&
+    workspaceFrame.value?.contentWindow === frame;
+  try {
+    const payload = message.payload;
+    let data: unknown;
+    switch (message.action) {
+      case 'candidates':
+        await autoRegistrationApi.resumeAppleMailboxTasks({ signal: controller.signal });
+        if (!isCurrentRequest()) return;
+        data = await autoRegistrationApi.appleMailboxCandidates({ signal: controller.signal });
+        break;
+      case 'start':
+        data = await autoRegistrationApi.startAppleMailbox(payload as AppleMailboxStartInput);
+        break;
+      case 'batch':
+        data = await autoRegistrationApi.startAppleMailboxBatch(
+          payload as unknown as AppleMailboxBatchInput
+        );
+        break;
+      case 'task':
+        data = await autoRegistrationApi.appleMailboxTask(String(payload.taskUuid), {
+          signal: controller.signal
+        });
+        break;
+      case 'batch-status':
+        data = await autoRegistrationApi.appleMailboxBatch(String(payload.batchId), {
+          signal: controller.signal
+        });
+        break;
+      case 'cancel-task':
+        data = await autoRegistrationApi.cancelAppleMailboxTask(String(payload.taskUuid));
+        break;
+      case 'cancel-batch':
+        data = await autoRegistrationApi.cancelAppleMailboxBatch(String(payload.batchId));
+        break;
+    }
+    if (isCurrentRequest())
+      frame.postMessage(
+        { type: 'id-registration:apple-response', requestId: message.requestId, ok: true, data },
+        window.location.origin
+      );
+  } catch (error) {
+    if (isCurrentRequest())
+      frame.postMessage(
+        {
+          type: 'id-registration:apple-response',
+          requestId: message.requestId,
+          ok: false,
+          error: getApiErrorMessage(error)
+        },
+        window.location.origin
+      );
+  } finally {
+    bridgeRequests.delete(message.requestId);
+    bridgeReads.delete(controller);
+  }
 }
 
 onMounted(() => {
@@ -203,6 +283,7 @@ onBeforeUnmount(() => {
   window.removeEventListener('message', receiveWorkspaceMessage);
   themeObserver?.disconnect();
   unsubscribeIdentity();
+  bridgeReads.forEach((controller) => controller.abort());
 });
 </script>
 

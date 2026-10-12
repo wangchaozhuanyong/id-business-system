@@ -20,12 +20,21 @@ const hasControlCharacter = (value: string) =>
     return code <= 31 || code === 127;
   });
 
+function connectionSelection(input: Record<string, unknown>) {
+  if (input.connectionProfileId === undefined) return {};
+  if (input.connectionProfileId === null) return { connectionProfileId: null };
+  if (typeof input.connectionProfileId !== 'string' || !uuidPattern.test(input.connectionProfileId))
+    throw new BadRequestException('连接配置编号无效');
+  return { connectionProfileId: input.connectionProfileId };
+}
+
 export function validateRechargeBitBrowserStart(value: unknown) {
   const input = { ...object(value) };
   // 兼容旧客户端；历史上限不参与本次授权，也不进入新任务。
   delete input.maxAmount;
   const allowedKeys = new Set([
     'id',
+    'connectionProfileId',
     'plan',
     'addressId',
     'windowName',
@@ -102,6 +111,7 @@ export function validateRechargeBitBrowserStart(value: unknown) {
     throw new BadRequestException('请选择有效的代理国家和代理 IP');
   }
   return {
+    ...connectionSelection(input),
     cardId: input.cardId as string | undefined,
     billingName: input.billingName as string | undefined,
     id: input.id,
@@ -125,7 +135,7 @@ export function validateRechargeBitBrowserStart(value: unknown) {
 
 export function validateRechargeBitBrowserRecheckStart(value: unknown) {
   const input = object(value);
-  const allowedKeys = new Set(['id', 'sourceJobId', 'plan', 'windowName']);
+  const allowedKeys = new Set(['id', 'connectionProfileId', 'sourceJobId', 'plan', 'windowName']);
   if (
     Object.keys(input).some((key) => !allowedKeys.has(key)) ||
     typeof input.id !== 'string' ||
@@ -142,6 +152,7 @@ export function validateRechargeBitBrowserRecheckStart(value: unknown) {
     throw new BadRequestException('比特浏览器窗口名称格式无效');
   }
   return {
+    ...connectionSelection(input),
     id: input.id,
     sourceJobId: input.sourceJobId,
     plan: input.plan,
@@ -151,7 +162,13 @@ export function validateRechargeBitBrowserRecheckStart(value: unknown) {
 
 export function validateRechargeBitBrowserOpenStart(value: unknown): V2RechargeBitBrowserOpenStart {
   const input = object(value);
-  const allowedKeys = new Set(['id', 'windowName', 'directMode', 'chatgptAccountId']);
+  const allowedKeys = new Set([
+    'id',
+    'connectionProfileId',
+    'windowName',
+    'directMode',
+    'chatgptAccountId'
+  ]);
   if (
     Object.keys(input).some((key) => !allowedKeys.has(key)) ||
     typeof input.id !== 'string' ||
@@ -167,6 +184,7 @@ export function validateRechargeBitBrowserOpenStart(value: unknown): V2RechargeB
     throw new BadRequestException('比特浏览器窗口名称格式无效');
   }
   return {
+    ...connectionSelection(input),
     id: input.id,
     windowName,
     ...(input.chatgptAccountId ? { chatgptAccountId: input.chatgptAccountId as string } : {}),

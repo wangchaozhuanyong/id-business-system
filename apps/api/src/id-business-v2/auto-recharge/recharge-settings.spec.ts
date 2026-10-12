@@ -20,8 +20,16 @@ function fixture(configured = true) {
     localApiTokenEncrypted: 'api-ciphertext',
     dynamicProxyUrlEncrypted: 'unused-proxy-ciphertext'
   };
-  const repository = { findInTransaction: vi.fn().mockResolvedValue(configured ? row : null) };
-  const encryption = { decrypt: vi.fn((value) => (value ? `fixture-${value}` : '')) };
+  const repository = {
+    lock: vi.fn(),
+    pinLegacyConnections: vi.fn(),
+    listProfiles: vi.fn().mockResolvedValue([]),
+    findInTransaction: vi.fn().mockResolvedValue(configured ? row : null)
+  };
+  const encryption = {
+    encrypt: vi.fn(() => 'snapshot-ciphertext'),
+    decrypt: vi.fn((value) => (value ? `fixture-${value}` : ''))
+  };
   const tx = {};
   const transactions = { execute: vi.fn((work) => work(tx)) };
   const audit = { append: vi.fn() };
@@ -110,6 +118,9 @@ describe('网页直连设置与运行凭据', () => {
   it('新窗口配置保存在当前管理员的数据库设置，并由新服务实例读取和执行', async () => {
     let saved = { ...row };
     const repository = {
+      lock: vi.fn(),
+      pinLegacyConnections: vi.fn(),
+      listProfiles: vi.fn().mockResolvedValue([]),
       find: vi.fn().mockImplementation(() => Promise.resolve(saved)),
       findInTransaction: vi.fn().mockImplementation(() => Promise.resolve(saved)),
       upsert: vi
@@ -120,7 +131,10 @@ describe('网页直连设置与运行凭据', () => {
           return Promise.resolve(saved);
         })
     };
-    const encryption = { decrypt: vi.fn((value) => (value ? `fixture-${value}` : '')) };
+    const encryption = {
+      encrypt: vi.fn(() => 'snapshot-ciphertext'),
+      decrypt: vi.fn((value) => (value ? `fixture-${value}` : ''))
+    };
     const transactions = { execute: vi.fn((work) => work({})) };
     const audit = { append: vi.fn() };
     const service = new RechargeSettingsService(
@@ -173,6 +187,9 @@ describe('网页直连设置与运行凭据', () => {
       delete (legacy as Partial<typeof legacy>)[key];
     const before = { ...legacy };
     const repository = {
+      lock: vi.fn(),
+      pinLegacyConnections: vi.fn(),
+      listProfiles: vi.fn().mockResolvedValue([]),
       find: vi.fn().mockResolvedValue({ ...row, browserOptions: legacy }),
       upsert: vi.fn()
     };
@@ -196,6 +213,9 @@ describe('网页直连设置与运行凭据', () => {
   });
   it('直连允许首次保存接口密钥而没有连接器密钥，保存仍加密并写审计', async () => {
     const repository = {
+      lock: vi.fn(),
+      pinLegacyConnections: vi.fn(),
+      listProfiles: vi.fn().mockResolvedValue([]),
       findInTransaction: vi.fn().mockResolvedValue(null),
       upsert: vi.fn().mockImplementation((_, ownerId, input) => ({ ...row, ...input, ownerId }))
     };
@@ -237,8 +257,16 @@ describe('网页直连设置与运行凭据', () => {
     expect(repository.upsert).toHaveBeenCalledOnce();
   });
   it('运行凭据只在显式直连时跳过连接器校验，仍要求接口密钥和有效代理', async () => {
-    const repository = { find: vi.fn().mockResolvedValue({ ...row }) };
-    const encryption = { decrypt: vi.fn((value) => (value ? `fixture-${value}` : '')) };
+    const repository = {
+      lock: vi.fn(),
+      pinLegacyConnections: vi.fn(),
+      listProfiles: vi.fn().mockResolvedValue([]),
+      find: vi.fn().mockResolvedValue({ ...row })
+    };
+    const encryption = {
+      encrypt: vi.fn(() => 'snapshot-ciphertext'),
+      decrypt: vi.fn((value) => (value ? `fixture-${value}` : ''))
+    };
     const service = new RechargeSettingsService(
       repository as never,
       encryption as never,

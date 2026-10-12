@@ -18,7 +18,12 @@ import { useV2ModuleQuery } from '@/v2/composables/useV2Query';
 import { useV2FormDraft, useV2SessionDraft } from '@/v2/composables/useV2SessionDraft';
 import { rechargeApi, rechargeCallbackUrl, rechargeConnectorApi } from './api';
 import { RechargeConnectorError } from './connector-transport';
-import { rechargeDetailsReady } from './recharge-form';
+import {
+  rechargeDetailsReady,
+  rechargeFieldError,
+  rechargeFields,
+  rechargePaymentFields
+} from './recharge-form';
 import { useRechargeBrowserSettings, type ConnectorStatus } from './useRechargeBrowserSettings';
 import { useRechargeNameMatch } from './useRechargeNameMatch';
 import { bankRechargeApi } from './bank-recharge-api';
@@ -670,7 +675,29 @@ export function useAutoRecharge(options: { clearPaymentValidation?: () => void }
         : '请从 ChatGPT 账号资料中选择已保存登录密码的账号。';
     if (operationMode.value === 'open_browser')
       return '核对窗口名称后，点击即可打开比特浏览器并自动登录。';
-    return '补齐银行卡与账单地址，核实官网币种和金额后等待你确认本次付款。';
+    const fieldErrors = rechargeFields.flatMap((field) => {
+      const cardField = rechargePaymentFields.includes(field);
+      const addressField = !cardField && field.key !== 'email';
+      if (addressField && !selectedAddress.value) return [];
+      const message = rechargeFieldError(field.key, details.value[field.key]);
+      return message ? [addressField ? `账单地址：${message}` : message] : [];
+    });
+    if (!selectedAddress.value) fieldErrors.push('请选择可用的账单地址');
+    if (fieldErrors.length) return `请修正以下资料：${fieldErrors.join('；')}。`;
+    if (nameMatch.error.value) return '银行卡姓名匹配失败，请在持卡人姓名处重试。';
+    if (!authorizeSinglePayment.value)
+      return '银行卡与账单地址已通过校验，请勾选本次单次付款授权。';
+    if (!windowName.value.trim()) return '银行卡与账单地址已通过校验，请填写窗口名称。';
+    if (
+      !/^[A-Z]{3}$/.test(lockedCurrency.value) ||
+      !availableCurrencyOptions.value.some((item) => item.value === lockedCurrency.value)
+    )
+      return '银行卡与账单地址已通过校验，请选择可用的锁定币种。';
+    if (!proxySelectionReady.value || loginCountryRestriction.value)
+      return '银行卡与账单地址已通过校验，请核对代理国家与可用的代理 IP。';
+    return canStart.value
+      ? '资料已就绪，点击“在比特浏览器执行”核实官网币种和金额后，等待你确认本次付款。'
+      : '银行卡与账单地址已通过校验，正在确认任务状态，请稍候。';
   });
 
   watch(loginMethod, () => {
@@ -937,6 +964,7 @@ export function useAutoRecharge(options: { clearPaymentValidation?: () => void }
       if (disposed) return;
       launch = await rechargeApi.startBitBrowser({
         id,
+        connectionProfileId: settingsQuery.data.value?.connectionProfileId ?? null,
         plan: plan.value,
         addressId: selectedAddress.value.id,
         windowName: windowName.value.trim(),
@@ -1032,6 +1060,7 @@ export function useAutoRecharge(options: { clearPaymentValidation?: () => void }
       if (disposed) return;
       launch = await rechargeApi.startBitBrowserOpen({
         id,
+        connectionProfileId: settingsQuery.data.value?.connectionProfileId ?? null,
         windowName: windowName.value.trim(),
         directMode: true,
         ...(loginMethod.value === 'password'
@@ -1083,6 +1112,7 @@ export function useAutoRecharge(options: { clearPaymentValidation?: () => void }
       if (disposed) return;
       launch = await rechargeApi.recheckBitBrowser({
         id,
+        connectionProfileId: settingsQuery.data.value?.connectionProfileId ?? null,
         sourceJobId: source.id,
         plan: source.plan,
         windowName: windowName.value.trim()

@@ -1639,9 +1639,9 @@ class DeclarationPublicationConsumers(unittest.TestCase):
     authority. The real closed generator and normal v1 suites remain separate.
     """
     @classmethod
-    def setUpClass(cls):
+    def setUpClass(cls, *, candidate_commit='HEAD'):
         cls.pure_module = load('consumer_pure_fixture', 'online-recharge-scope.test.py')
-        cls.pure_module.DeclarationEquivalencePureTests.setUpClass()
+        cls.pure_module.DeclarationEquivalencePureTests.setUpClass(candidate_commit=candidate_commit)
         cls.pure = cls.pure_module.DeclarationEquivalencePureTests()
         cls.output = ROOT / '.runtime/online-recharge-release-20261009/build/declaration-consumer-implementation'
         cls.output.mkdir(parents=True, exist_ok=True)
@@ -1883,8 +1883,8 @@ class DeclarationSuccessorConsumers(unittest.TestCase):
     complete_readback = DeclarationPublicationConsumers.complete_readback
 
     @classmethod
-    def setUpClass(cls):
-        DeclarationPublicationConsumers.setUpClass()
+    def setUpClass(cls, *, candidate_commit='HEAD'):
+        DeclarationPublicationConsumers.setUpClass(candidate_commit=candidate_commit)
         cls.pure = DeclarationPublicationConsumers.pure
         cls.wire = DeclarationPublicationConsumers.wire
         cls.output = ROOT / '.runtime/online-recharge-release-20261009/build/declaration-successor-consumer-implementation'
@@ -2117,7 +2117,10 @@ class UnpublishedCandidateLifecycle(unittest.TestCase):
     """Real Git tree/projection and F/P2 consumer; no production capabilities."""
     @classmethod
     def setUpClass(cls):
-        DeclarationPublicationConsumers.setUpClass()
+        # This lifecycle exercises the reviewed historical B candidate, not a
+        # later independent business batch. Its real commit/tree/archive agree.
+        DeclarationPublicationConsumers.setUpClass(
+            candidate_commit='31d2c6885a45817cd40d23fce8d6145bc9f18af2')
         cls.consumer = DeclarationPublicationConsumers()
         cls.projection = load('candidate_projection', 'api-admin-pending-projection.py')
         cls.remote = load('candidate_archive_reader', 'remote-deploy.py')
@@ -2303,7 +2306,7 @@ class SuccessorUnpublishedCandidateLifecycle(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         UnpublishedCandidateLifecycle.setUpClass.__func__(cls)
-        DeclarationSuccessorConsumers.setUpClass()
+        DeclarationSuccessorConsumers.setUpClass(candidate_commit=cls.commit)
 
     @contextmanager
     def fixture(self):

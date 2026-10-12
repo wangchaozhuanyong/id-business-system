@@ -26,8 +26,11 @@ export class RechargeController {
   ) {}
   @Get('bitbrowser-settings')
   @Header('Cache-Control', 'no-store')
-  getBitBrowserSettings(@CurrentUser() operator: AuthenticatedUser) {
-    return this.settings.get(operator);
+  getBitBrowserSettings(
+    @CurrentUser() operator: AuthenticatedUser,
+    @Query('connectionProfileId') profileId?: string
+  ) {
+    return this.settings.get(operator, profileId === 'default' ? null : profileId);
   }
   @Get('server-proxy-settings')
   @Header('Cache-Control', 'no-store')

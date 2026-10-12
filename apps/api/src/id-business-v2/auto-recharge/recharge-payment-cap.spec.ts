@@ -37,6 +37,7 @@ describe('付款金额上限退役合同', () => {
     const settings = { findUnique: vi.fn().mockResolvedValue(null) };
     const repository = new RechargeSettingsRepository({
       idBusinessV2RechargeBrowserSetting: settings,
+      idBusinessV2RechargeConnectionProfile: { findMany: vi.fn().mockResolvedValue([]) },
       idBusinessV2RechargePaymentCap: legacy
     } as never);
     const service = new RechargeSettingsService(

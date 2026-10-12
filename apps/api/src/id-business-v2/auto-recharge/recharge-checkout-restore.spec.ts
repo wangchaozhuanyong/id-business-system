@@ -55,6 +55,8 @@ function fixture(history = [source()], records = [originalRecord()]) {
     result: { mode: 'payment', payment_requests_sent: 0 } as Record<string, unknown>
   };
   const table = {
+    findUnique: vi.fn(async () => job),
+    findFirst: vi.fn().mockResolvedValue(null),
     findMany: vi.fn(async (query) => (query.where.plan ? history : [latestLogin, ...history])),
     update: vi.fn(async ({ data }) => Object.assign(job, data))
   };

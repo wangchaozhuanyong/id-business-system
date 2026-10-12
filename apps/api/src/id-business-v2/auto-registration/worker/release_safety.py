@@ -26,6 +26,7 @@ HEALTH_KEY = "id.integration.health"
 HEALTH_VALUE = "id-auto-registration-encryption-v1"
 APPLE_PREFIX = "id.apple-mailbox."
 APPLE_TASK_PREFIX = "id.apple-task."
+APPLE_BATCH_PREFIX = "id.apple-batch."
 BUSINESS_TABLES = ("accounts", "cpa_services", "email_services", "proxies", "registration_tasks", "settings", "sub2api_services", "tm_services")
 TASK_STATUSES = ("pending", "running", "completed", "failed", "cancelled")
 ENCRYPTED_COLUMNS = {
@@ -36,7 +37,29 @@ ENCRYPTED_COLUMNS = {
 }
 JSON_COLUMNS = {("accounts", "extra_data"), ("email_services", "config"), ("registration_tasks", "result")}
 RECORD_FIELDS = {"email", "aliasId", "registrationStatus", "revision", "registrationIp", "registrationIpSource", "source", "markedAt", "operatorId", "note", "activeTaskUuid", "attemptIp", "attemptCountry", "registrationCountry", "lastTaskUuid", "lastResultKind", "taskStatus"}
-OPTIONAL_RECORD_FIELDS = {"lastMailId", "consumedMailIds"}
+PUBLIC_FACT_FIELDS = {"localSaveStatus", "syncStatus", "systemAccountId", "syncErrorKind", "identityStatus", "passwordStatus", "stage", "reason", "lastHttpStatus", "proxySource", "proxyId", "mailboxSelection", "firstFailure"}
+OPTIONAL_RECORD_FIELDS = {"lastMailId", "consumedMailIds", "registrationEvidenceTaskUuid"} | PUBLIC_FACT_FIELDS
+TASK_FIELDS = {"email", "aliasId", "resultKind"}
+OPTIONAL_TASK_FIELDS = {"operatorId", "mirrorAccountId", "attempt", "sideEffectPossible", "batchId", "startedAt", "configurationCheckpoint", "passwordCheckpoint", "passwordSavedAt", "creationConfirmed", "existingAccountIndication", "verifiedExistingAccount", "rawResult", "identityEvidence", "upstreamAccountId", "syncPayload", "syncedAt", "needsReview", "lateFacts"} | PUBLIC_FACT_FIELDS
+RESULT_FIELDS = {"success", "email", "password", "account_id", "workspace_id", "access_token", "refresh_token", "id_token", "session_token", "source", "metadata"}
+RESULT_METADATA_FIELDS = {"email_service", "proxy_used", "registered_at", "is_existing_account", "idSourceTaskUuid"}
+IDENTITY_FIELDS = {"source", "emailMatched", "officialUserIdHash", "observedAt"}
+SYNC_FIELDS = {"accountId", "sourceTaskUuid", "upstreamAccountId", "operatorId", "aliasId", "email", "password", "registrationCountry", "source", "identityStatus", "identityEvidence", "fingerprint"}
+BATCH_FIELDS = {"batchId", "operatorId", "taskUuids", "cancelled", "createdAt", "mode", "concurrency", "interval_min", "interval_max", "skipped"}
+SYNC_ERRORS = {"email_conflict", "deleted_account", "storage_unavailable", "sync_failed", "identity_missing", "identity_mismatch", "local_save_failed", "payload_invalid"}
+FACT_ENUMS = {
+    "localSaveStatus": {"not_started", "pending", "saved", "failed"},
+    "syncStatus": {"not_started", "awaiting_identity", "blocked", "quarantined", "pending", "saved", "failed", "conflict"},
+    "identityStatus": {"not_verified", "awaiting_identity", "mismatch", "verified"},
+    "passwordStatus": {"not_started", "saved", "submitted"},
+    "stage": {"queued", "signup", "password", "verification_code", "verification_validate", "create_account", "workspace", "select_workspace", "redirect", "oauth", "identity", "account_save", "sync"},
+    "reason": {None, "existing_account_suspected", "account_creation_failed", "identity_missing", "identity_mismatch", "password_missing", "email_conflict", "local_save_failed", "deleted_account"},
+    "syncErrorKind": {None} | SYNC_ERRORS,
+    "proxySource": {"default", "explicit", "system"},
+    "mailboxSelection": {"specified", "automatic"},
+}
+FAILURE_FIELDS = {"stage", "errorKind", "httpStatus", "elapsedMs", "observedAt"}
+FAILURE_CODES = {"http_rejected", "network_error", "unknown", "account_creation_failed", "user_exists"}
 
 
 class SafetyError(Exception):
@@ -199,6 +222,145 @@ def controlled(value: Any, choices: set[Any]) -> bool:
     return (value is None or isinstance(value, str)) and value in choices
 
 
+def bounded_text(value: Any, maximum: int, *, nullable=False, empty=True) -> bool:
+    return ((nullable and value is None) or (isinstance(value, str) and len(value) <= maximum
+            and (empty or bool(value)) and "\x00" not in value))
+
+
+def validate_public_facts(value: dict[str, Any]) -> None:
+    if (any(field in value and not controlled(value[field], choices) for field, choices in FACT_ENUMS.items())
+            or ("systemAccountId" in value and not nullable_id(value["systemAccountId"]))
+            or ("lastHttpStatus" in value and value["lastHttpStatus"] is not None
+                and (type(value["lastHttpStatus"]) is not int or not 100 <= value["lastHttpStatus"] <= 599))):
+        raise SafetyError("APPLE_RECORD_INVALID")
+    if "proxyId" in value or value.get("proxySource") == "system":
+        proxy_id = value.get("proxyId")
+        if ((value.get("proxySource") == "system" and (not isinstance(proxy_id, str)
+                or not re.fullmatch(r"[a-zA-Z0-9_-]{1,191}", proxy_id)))
+                or (value.get("proxySource") != "system" and proxy_id is not None)):
+            raise SafetyError("APPLE_RECORD_INVALID")
+    failure = value.get("firstFailure")
+    if failure is not None and (not isinstance(failure, dict) or set(failure) != FAILURE_FIELDS
+            or not controlled(failure.get("stage"), FACT_ENUMS["stage"])
+            or not controlled(failure.get("errorKind"), FAILURE_CODES)
+            or (failure.get("httpStatus") is not None and (type(failure["httpStatus"]) is not int
+                or not 100 <= failure["httpStatus"] <= 599))
+            or type(failure.get("elapsedMs")) is not int or not 0 <= failure["elapsedMs"] <= 9007199254740991
+            or failure.get("observedAt") is None or not nullable_date(failure["observedAt"])):
+        raise SafetyError("APPLE_RECORD_INVALID")
+
+
+def validate_identity(value: Any) -> None:
+    if value is None:
+        return
+    if (not isinstance(value, dict) or set(value) != IDENTITY_FIELDS
+            or not controlled(value.get("source"), {"official_session_response", "official_me_response"})
+            or value.get("emailMatched") is not True
+            or not isinstance(value.get("officialUserIdHash"), str)
+            or not re.fullmatch(r"[0-9a-f]{64}", value["officialUserIdHash"])
+            or value.get("observedAt") is None or not nullable_date(value["observedAt"])):
+        raise SafetyError("APPLE_RECORD_INVALID")
+
+
+def validate_result(value: Any, task_uuid: str) -> None:
+    if (not isinstance(value, dict) or set(value) != RESULT_FIELDS
+            or type(value.get("success")) is not bool
+            or not controlled(value.get("source"), {"register", "login"})
+            or any(not bounded_text(value.get(field), 1048576, nullable=True)
+                   for field in RESULT_FIELDS - {"success", "source", "metadata"})):
+        raise SafetyError("APPLE_RECORD_INVALID")
+    metadata = value["metadata"]
+    if (not isinstance(metadata, dict) or set(metadata) - RESULT_METADATA_FIELDS
+            or metadata.get("idSourceTaskUuid") != task_uuid
+            or ("is_existing_account" in metadata and type(metadata["is_existing_account"]) is not bool)
+            or any(field in metadata and not bounded_text(metadata[field], 16384, nullable=True)
+                   for field in ("email_service", "proxy_used", "registered_at"))):
+        raise SafetyError("APPLE_RECORD_INVALID")
+    # Frozen upstream stores registered_at using datetime.now().isoformat().
+    if metadata.get("registered_at") is not None:
+        try:
+            datetime.fromisoformat(metadata["registered_at"].replace("Z", "+00:00"))
+        except ValueError:
+            raise SafetyError("APPLE_RECORD_INVALID") from None
+
+
+def validate_sync(value: Any, task_uuid: str, binding: dict[str, Any]) -> None:
+    if (not isinstance(value, dict) or set(value) != SYNC_FIELDS
+            or value.get("sourceTaskUuid") != task_uuid
+            or any(value.get(field) != binding.get(field) for field in ("email", "aliasId", "operatorId", "upstreamAccountId"))
+            or value.get("accountId") != binding.get("mirrorAccountId")
+            or value.get("accountId") is None or not nullable_id(value["accountId"])
+            or value.get("upstreamAccountId") is None or not nullable_id(value["upstreamAccountId"])
+            or not bounded_text(value.get("password"), 255)
+            or not controlled(value.get("source"), {"register", "login"})
+            or not controlled(value.get("identityStatus"), FACT_ENUMS["identityStatus"])
+            or (value.get("registrationCountry") is not None and (not isinstance(value["registrationCountry"], str)
+                or not re.fullmatch(r"[A-Z]{2}", value["registrationCountry"])))):
+        raise SafetyError("APPLE_RECORD_INVALID")
+    validate_identity(value["identityEvidence"])
+    fields = {field: value[field] for field in ("accountId", "sourceTaskUuid", "upstreamAccountId", "email", "registrationCountry", "source")}
+    expected = hashlib.sha256(json.dumps(fields, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()).hexdigest()
+    if value.get("fingerprint") != expected:
+        raise SafetyError("APPLE_RECORD_INVALID")
+
+
+def validate_task(task_uuid: str, value: Any, *, late=False) -> None:
+    required = {"observedAt"} if late else TASK_FIELDS
+    allowed = (OPTIONAL_TASK_FIELDS - {"lateFacts", "syncPayload"}) | {"observedAt"} if late else TASK_FIELDS | OPTIONAL_TASK_FIELDS
+    if (not nullable_uuid(task_uuid) or not isinstance(value, dict) or not required.issubset(value)
+            or set(value) - allowed or (not late and (not normalized_email(value.get("email"))
+                or value.get("aliasId") is None or not nullable_id(value["aliasId"])
+                or not controlled(value.get("resultKind"), {None, "new_registration", "existing_account", "failed"})))):
+        raise SafetyError("APPLE_RECORD_INVALID")
+    validate_public_facts(value)
+    if (any(field in value and not nullable_id(value[field]) for field in ("operatorId", "upstreamAccountId"))
+            or any(field in value and not nullable_uuid(value[field]) for field in ("mirrorAccountId", "batchId"))
+            or any(field in value and (value[field] is None or not nullable_date(value[field])) for field in ("startedAt", "passwordSavedAt", "observedAt"))
+            or ("syncedAt" in value and not nullable_date(value["syncedAt"]))
+            or ("attempt" in value and (type(value["attempt"]) is not int or value["attempt"] < 1))
+            or any(field in value and type(value[field]) is not bool for field in ("sideEffectPossible", "creationConfirmed", "existingAccountIndication", "verifiedExistingAccount", "needsReview"))
+            or ("passwordCheckpoint" in value and not bounded_text(value["passwordCheckpoint"], 255, empty=False))):
+        raise SafetyError("APPLE_RECORD_INVALID")
+    if "configurationCheckpoint" in value:
+        checkpoint = value["configurationCheckpoint"]
+        if (not isinstance(checkpoint, dict) or set(checkpoint) != {"clientId", "proxyUsed"}
+                or not bounded_text(checkpoint.get("clientId"), 255, empty=False)
+                or not bounded_text(checkpoint.get("proxyUsed"), 16384, nullable=True)):
+            raise SafetyError("APPLE_RECORD_INVALID")
+    if "identityEvidence" in value:
+        validate_identity(value["identityEvidence"])
+    if "rawResult" in value:
+        validate_result(value["rawResult"], task_uuid)
+    if "syncPayload" in value:
+        validate_sync(value["syncPayload"], task_uuid, value)
+    if "lateFacts" in value:
+        facts = value["lateFacts"]
+        if not isinstance(facts, list) or len(facts) > 4:
+            raise SafetyError("APPLE_RECORD_INVALID")
+        for fact in facts:
+            validate_task(task_uuid, fact, late=True)
+
+
+def validate_batch(batch_id: str, value: Any) -> None:
+    if (not nullable_uuid(batch_id) or not isinstance(value, dict) or set(value) != BATCH_FIELDS
+            or value.get("batchId") != batch_id or value.get("operatorId") is None or not nullable_id(value["operatorId"])
+            or type(value.get("cancelled")) is not bool
+            or value.get("createdAt") is None or not nullable_date(value["createdAt"])
+            or not controlled(value.get("mode"), {"pipeline", "parallel"})
+            or type(value.get("concurrency")) is not int or not 1 <= value["concurrency"] <= 50
+            or any(type(value.get(field)) is not int or not 0 <= value[field] <= 3600 for field in ("interval_min", "interval_max"))
+            or value["interval_max"] < value["interval_min"]):
+        raise SafetyError("APPLE_RECORD_INVALID")
+    tasks, skipped = value.get("taskUuids"), value.get("skipped")
+    if (not isinstance(tasks, list) or not 1 <= len(tasks) <= 100
+            or any(item is None or not nullable_uuid(item) for item in tasks) or len(set(tasks)) != len(tasks)
+            or not isinstance(skipped, list) or len(skipped) > 100
+            or any(not isinstance(item, dict) or set(item) != {"aliasId", "reason"}
+                or item.get("aliasId") is None or not nullable_id(item["aliasId"])
+                or item.get("reason") != "mailbox_unavailable" for item in skipped)):
+        raise SafetyError("APPLE_RECORD_INVALID")
+
+
 def validate_record(key: str, value: Any) -> None:
     if (not isinstance(value, dict) or not RECORD_FIELDS.issubset(value)
             or set(value) - RECORD_FIELDS - OPTIONAL_RECORD_FIELDS
@@ -207,13 +369,14 @@ def validate_record(key: str, value: Any) -> None:
             or not controlled(value.get("registrationStatus"), {"unknown", "unregistered", "registered"})
             or type(value.get("revision")) is not int or value["revision"] < 1
             or not controlled(value.get("registrationIpSource"), {None, "manual", "observed"})
-            or not controlled(value.get("source"), {None, "manual", "automatic"})
+            or not controlled(value.get("source"), {None, "manual", "automatic", "account_history"})
             or not controlled(value.get("lastResultKind"), {None, "new_registration", "existing_account", "failed"})
-            or not controlled(value.get("taskStatus"), set(TASK_STATUSES) | {None, "interrupted"})
+            or not controlled(value.get("taskStatus"), set(TASK_STATUSES) | {None, "interrupted", "awaiting_review"})
             or not isinstance(value.get("note"), str) or len(value["note"]) > 500):
         raise SafetyError("APPLE_RECORD_INVALID")
+    validate_public_facts(value)
     if (any(not nullable_id(value.get(field)) for field in ("aliasId", "operatorId", "lastMailId"))
-            or any(not nullable_uuid(value.get(field)) for field in ("activeTaskUuid", "lastTaskUuid"))
+            or any(not nullable_uuid(value.get(field)) for field in ("activeTaskUuid", "lastTaskUuid", "registrationEvidenceTaskUuid"))
             or any(not nullable_ip(value.get(field)) for field in ("registrationIp", "attemptIp"))
             or not nullable_date(value.get("markedAt"))
             or any(item is not None and (not isinstance(item, str) or not re.fullmatch(r"[A-Z]{2}", item)) for item in (value.get("attemptCountry"), value.get("registrationCountry")))):
@@ -254,32 +417,46 @@ def encrypted_proof(connection: sqlite3.Connection, encryption_key: str) -> int:
                         raise SafetyError("ENCRYPTED_VALUES_INVALID") from None
     records = {}
     bindings = {}
+    batches = {}
     for key, value in connection.execute("SELECT key,value FROM settings"):
         if not isinstance(key, str):
             raise SafetyError("DATABASE_SCHEMA_INVALID")
-        if not key.startswith((APPLE_PREFIX, APPLE_TASK_PREFIX)):
+        if not key.startswith((APPLE_PREFIX, APPLE_TASK_PREFIX, APPLE_BATCH_PREFIX)):
             continue
         payload = strict_json(decrypt_value(value, encryption_key))
         if key.startswith(APPLE_PREFIX):
             validate_record(key, payload)
             records[payload["email"]] = payload
-        else:
+        elif key.startswith(APPLE_TASK_PREFIX):
             task_uuid = key[len(APPLE_TASK_PREFIX):]
-            if (not nullable_uuid(task_uuid) or not isinstance(payload, dict)
-                    or set(payload) != {"email", "aliasId", "resultKind"}
-                    or not normalized_email(payload.get("email"))
-                    or payload.get("aliasId") is None or not nullable_id(payload.get("aliasId"))
-                    or not controlled(payload.get("resultKind"), {None, "new_registration", "existing_account", "failed"})):
-                raise SafetyError("APPLE_RECORD_INVALID")
+            validate_task(task_uuid, payload)
             bindings[task_uuid] = payload
-    for binding in bindings.values():
+        else:
+            batch_id = key[len(APPLE_BATCH_PREFIX):]
+            validate_batch(batch_id, payload)
+            batches[batch_id] = payload
+    for task_uuid, binding in bindings.items():
         if binding["email"] not in records:
+            raise SafetyError("APPLE_RECORD_INVALID")
+        batch_id = binding.get("batchId")
+        if batch_id is not None and (batch_id not in batches or task_uuid not in batches[batch_id]["taskUuids"]
+                or binding.get("operatorId") != batches[batch_id]["operatorId"]):
+            raise SafetyError("APPLE_RECORD_INVALID")
+    for batch_id, batch in batches.items():
+        if any(task_uuid not in bindings or bindings[task_uuid].get("batchId") != batch_id for task_uuid in batch["taskUuids"]):
             raise SafetyError("APPLE_RECORD_INVALID")
     leases = 0
     for record in records.values():
         last = record["lastTaskUuid"]
         if last is not None and (last not in bindings or bindings[last]["email"] != record["email"]):
             raise SafetyError("APPLE_RECORD_INVALID")
+        evidence = record.get("registrationEvidenceTaskUuid")
+        if evidence is not None:
+            fact = bindings.get(evidence, {})
+            if (fact.get("email") != record["email"] or not (fact.get("creationConfirmed") is True
+                    or fact.get("resultKind") == "new_registration" or fact.get("verifiedExistingAccount") is True
+                    or (fact.get("identityStatus") == "verified" and (fact.get("rawResult") or {}).get("source") == "login"))):
+                raise SafetyError("APPLE_RECORD_INVALID")
         leases += record["activeTaskUuid"] is not None
         if record["activeTaskUuid"] is None and record["taskStatus"] in {"pending", "running"}:
             raise SafetyError("REGISTRATION_TASK_ACTIVE")

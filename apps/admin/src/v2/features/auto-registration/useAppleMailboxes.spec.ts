@@ -1,14 +1,18 @@
 import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest';
-import { effectScope, nextTick, type Ref, type EffectScope } from 'vue';
+import { effectScope, nextTick, reactive, type Ref, type EffectScope } from 'vue';
 import type { AppleMailboxRow, AppleMailboxTask } from './contracts';
 
 const mocks = vi.hoisted(() => ({
   list: vi.fn(),
+  resume: vi.fn(),
   mark: vi.fn(),
   start: vi.fn(),
   task: vi.fn(),
   cancel: vi.fn(),
   recover: vi.fn(),
+  batch: vi.fn(),
+  sync: vi.fn(),
+  localSave: vi.fn(),
   invalidate: vi.fn(),
   queries: [] as Array<Record<string, unknown>>,
   auth: { writesAllowed: true, user: { roles: ['admin'] } }
@@ -21,12 +25,16 @@ vi.mock('@/auth/sessionCoordinator', async () => {
 });
 vi.mock('./api', () => ({
   autoRegistrationApi: {
+    resumeAppleMailboxTasks: mocks.resume,
     appleMailboxes: mocks.list,
     markAppleMailboxes: mocks.mark,
     startAppleMailbox: mocks.start,
     appleMailboxTask: mocks.task,
     cancelAppleMailboxTask: mocks.cancel,
-    recoverAppleMailbox: mocks.recover
+    recoverAppleMailbox: mocks.recover,
+    startAppleMailboxBatch: mocks.batch,
+    syncAppleMailboxTask: mocks.sync,
+    saveAppleMailboxLocalAccount: mocks.localSave
   }
 }));
 vi.mock('@/v2/composables/useV2Query', async () => {
@@ -111,11 +119,21 @@ beforeEach(() => {
   mocks.queries.length = 0;
   clearV2SessionDrafts();
   mocks.auth.writesAllowed = true;
+  mocks.auth.user.roles = ['admin'];
   (sessionCoordinator.identityEpoch as Ref<number>).value = 0;
   mocks.mark.mockResolvedValue({ updated: 1 });
+  mocks.resume.mockResolvedValue({ resumed: 0, synchronized: 0 });
   mocks.start.mockResolvedValue({ taskUuid: 'task-1', record });
   mocks.recover.mockResolvedValue(record);
   mocks.cancel.mockResolvedValue({ accepted: true });
+  mocks.batch.mockResolvedValue({
+    batchId: 'batch-1',
+    taskUuids: ['task-1'],
+    accepted: 1,
+    skipped: []
+  });
+  mocks.sync.mockResolvedValue({ accountId: 'account-1', syncStatus: 'saved' });
+  mocks.localSave.mockResolvedValue({ localSaveStatus: 'saved' });
   vi.spyOn(console, 'warn').mockImplementation(() => {});
 });
 afterEach(() => {
@@ -125,6 +143,108 @@ afterEach(() => {
 });
 
 describe('苹果隐藏邮箱草稿、CAS 和任务生命周期', () => {
+  it('旧身份恢复请求迟到后不继续读取邮箱列表', async () => {
+    const pending = deferred<{ resumed: number; synchronized: number }>();
+    mocks.resume.mockReturnValueOnce(pending.promise);
+    const page = createPage();
+    const options = mocks.queries[0]!.options as {
+      query: (context: { signal: AbortSignal }) => Promise<unknown>;
+    };
+    const read = options.query({ signal: new AbortController().signal });
+    const rejected = expect(read).rejects.toMatchObject({ name: 'AbortError' });
+    (sessionCoordinator.identityEpoch as Ref<number>).value += 1;
+    pending.resolve({ resumed: 0, synchronized: 0 });
+    await rejected;
+    expect(mocks.list).not.toHaveBeenCalled();
+    expect(page.feedback.value).toBe('');
+  });
+  it.each(['batch', 'sync', 'localSave'] as const)(
+    '%s 的迟到响应不更新新身份的选中任务、反馈或列表',
+    async (action) => {
+      const pending = deferred<unknown>();
+      mocks[action].mockReturnValueOnce(pending.promise);
+      const page = createPage();
+      page.setSelection([row]);
+      page.taskUuid.value = 'original-task';
+      const write =
+        action === 'batch'
+          ? page.startBatch()
+          : action === 'sync'
+            ? page.syncTask()
+            : page.saveLocalAccount();
+      expect(mocks[action]).toHaveBeenCalledOnce();
+      (sessionCoordinator.identityEpoch as Ref<number>).value += 1;
+      pending.resolve(
+        action === 'batch'
+          ? { taskUuids: ['late-task'], accepted: 1, skipped: [] }
+          : action === 'sync'
+            ? { accountId: 'late-account', syncStatus: 'saved' }
+            : { localSaveStatus: 'saved' }
+      );
+      await write;
+      expect(page.taskUuid.value).toBe('original-task');
+      expect(page.feedback.value).toBe('');
+      expect(page.query.refresh).not.toHaveBeenCalled();
+      expect(page.taskQuery.refresh).not.toHaveBeenCalled();
+    }
+  );
+  it.each(['readonly', 'non-admin'] as const)(
+    '%s 禁止批量注册、补同步和补存本地账号',
+    async (reason) => {
+      if (reason === 'readonly') mocks.auth.writesAllowed = false;
+      else mocks.auth.user.roles = [];
+      const page = createPage();
+      page.setSelection([row]);
+      page.taskUuid.value = 'task-1';
+      await page.startBatch();
+      await page.syncTask();
+      await page.saveLocalAccount();
+      expect(mocks.batch).not.toHaveBeenCalled();
+      expect(mocks.sync).not.toHaveBeenCalled();
+      expect(mocks.localSave).not.toHaveBeenCalled();
+    }
+  );
+  it('批量仅提交选中的可用未注册邮箱，绑定各自原始版本', async () => {
+    const page = createPage();
+    const second = { ...row, aliasId: 'alias-2', revision: 9 };
+    const registered = { ...row, aliasId: 'registered', registrationStatus: 'registered' as const };
+    page.query.data.value!.items = [row, second, registered];
+    page.setSelection([row, second, registered]);
+    await page.startBatch();
+    expect(mocks.batch).toHaveBeenCalledWith({
+      targets: [
+        { aliasId: 'alias-1', revision: 3 },
+        { aliasId: 'alias-2', revision: 9 }
+      ],
+      count: 2,
+      concurrency: 3,
+      mode: 'pipeline',
+      interval_min: 5,
+      interval_max: 30
+    });
+    expect(page.taskUuid.value).toBe('task-1');
+    expect(page.feedback.value).toContain('跳过 1 个');
+  });
+  it('同步恢复只补主系统同步，不触发注册、批量或标记', async () => {
+    const page = createPage();
+    page.taskUuid.value = 'task-1';
+    await page.syncTask();
+    expect(mocks.sync).toHaveBeenCalledWith('task-1');
+    expect(mocks.start).not.toHaveBeenCalled();
+    expect(mocks.batch).not.toHaveBeenCalled();
+    expect(mocks.mark).not.toHaveBeenCalled();
+    expect(page.feedback.value).toContain('ChatGPT');
+  });
+  it('补存本地账号使用原任务标识，不触发注册或主系统同步', async () => {
+    const page = createPage();
+    page.taskUuid.value = 'task-1';
+    await page.saveLocalAccount();
+    expect(mocks.localSave).toHaveBeenCalledWith('task-1');
+    expect(mocks.start).not.toHaveBeenCalled();
+    expect(mocks.batch).not.toHaveBeenCalled();
+    expect(mocks.sync).not.toHaveBeenCalled();
+    expect(page.feedback.value).toContain('补存');
+  });
   it('批量标记可用性仅取决于当前结果中的选择，不把字段有效性作为选择条件', () => {
     const page = createPage();
     expect(page.hasSelection.value).toBe(false);
@@ -241,12 +361,167 @@ describe('苹果隐藏邮箱草稿、CAS 和任务生命周期', () => {
     expect(mocks.start).toHaveBeenCalledWith({ aliasId: row.aliasId, revision: row.revision });
     expect(page.taskUuid.value).toBe('task-1');
   });
-  it('恢复仅允许中断任务，沿用原始 CAS 版本', async () => {
+  it('人工核对只打开确认框，确认后才解除待核对占用并沿用原始 CAS 版本', async () => {
     const page = createPage();
-    await page.recover({ ...row, taskStatus: 'running' });
+    page.openRecovery({ ...row, taskUuid: 'task-1', taskStatus: 'running' });
+    await page.recover();
     expect(mocks.recover).not.toHaveBeenCalled();
-    await page.recover({ ...row, taskStatus: 'interrupted' });
+    page.openRecovery({
+      ...row,
+      taskUuid: 'task-1',
+      activeTaskUuid: 'task-1',
+      taskStatus: 'awaiting_review'
+    });
+    expect(page.recoverOpen.value).toBe(true);
+    expect(mocks.recover).not.toHaveBeenCalled();
+    page.recoverOpen.value = false;
+    await page.recover();
+    expect(mocks.recover).not.toHaveBeenCalled();
+    page.openRecovery({
+      ...row,
+      taskUuid: 'task-1',
+      activeTaskUuid: 'task-1',
+      taskStatus: 'awaiting_review'
+    });
+    await page.recover();
     expect(mocks.recover).toHaveBeenCalledWith({ aliasId: row.aliasId, revision: row.revision });
+    expect(page.recoverOpen.value).toBe(false);
+    expect(mocks.start).not.toHaveBeenCalled();
+  });
+  it('已解除占用的历史中断记录可标记，待确认状态仍不能直接重新注册', async () => {
+    const page = createPage();
+    const released = {
+      ...row,
+      registrationStatus: 'unknown' as const,
+      taskUuid: 'task-1',
+      activeTaskUuid: null,
+      taskStatus: 'interrupted' as const,
+      revision: 4,
+      canRegister: false
+    };
+    page.query.data.value = { items: [released], total: 1, page: 1, pageSize: 20 };
+    page.openMark([released]);
+    expect(page.markOpen.value).toBe(true);
+    await page.start(released);
+    expect(mocks.start).not.toHaveBeenCalled();
+    page.markDraft.form.registrationStatus = 'registered';
+    page.markDraft.form.registrationIp = '203.0.113.9';
+    await page.saveMark();
+    expect(mocks.mark).toHaveBeenCalledWith({
+      items: [{ aliasId: row.aliasId, revision: 4 }],
+      registrationStatus: 'registered',
+      registrationIp: '203.0.113.9',
+      note: ''
+    });
+  });
+  it('核对失败和关闭重开保留原始版本，只有明确刷新才更新核对依据', async () => {
+    const page = createPage();
+    const reviewing = {
+      ...row,
+      taskUuid: 'task-1',
+      activeTaskUuid: 'task-1',
+      taskStatus: 'interrupted' as const
+    };
+    page.openRecovery(reviewing);
+    mocks.recover.mockRejectedValueOnce(new Error('版本已变化'));
+    await page.recover();
+    expect(page.recoverOpen.value).toBe(true);
+    expect(page.recoverDraft.form.target?.revision).toBe(3);
+    page.recoverOpen.value = false;
+    page.openRecovery({ ...reviewing, revision: 7 });
+    expect(page.recoverDraft.form.target?.revision).toBe(3);
+    page.query.data.value = {
+      items: [{ ...reviewing, revision: 7 }],
+      total: 1,
+      page: 1,
+      pageSize: 20
+    };
+    await page.refreshRecovery();
+    await page.recover();
+    expect(mocks.recover).toHaveBeenLastCalledWith({ aliasId: row.aliasId, revision: 7 });
+  });
+  it('身份切换后的解除回执不收起原确认框、不刷新或显示成功', async () => {
+    const page = createPage();
+    page.openRecovery({
+      ...row,
+      taskUuid: 'task-1',
+      activeTaskUuid: 'task-1',
+      taskStatus: 'awaiting_review'
+    });
+    const pending = deferred<typeof record>();
+    mocks.recover.mockReturnValueOnce(pending.promise);
+    const saving = page.recover();
+    (sessionCoordinator.identityEpoch as Ref<number>).value += 1;
+    pending.resolve(record);
+    await saving;
+    expect(page.feedback.value).toBe('');
+    expect(page.recoverOpen.value).toBe(true);
+    expect(page.query.refresh).not.toHaveBeenCalled();
+  });
+  it('刷新目标缺失或读取失败时禁止确认，明确重读成功才可继续', async () => {
+    const page = createPage();
+    const reviewing = {
+      ...row,
+      taskUuid: 'task-1',
+      activeTaskUuid: 'task-1',
+      taskStatus: 'awaiting_review' as const
+    };
+    page.openRecovery(reviewing);
+    page.query.data.value = { items: [], total: 0, page: 1, pageSize: 20 };
+    await page.refreshRecovery();
+    expect(page.recoverDisabledReason.value).toContain('找不到');
+    await page.recover();
+    expect(mocks.recover).not.toHaveBeenCalled();
+    const refresh = mocks.queries[0]!.refresh as ReturnType<typeof vi.fn>;
+    refresh.mockRejectedValueOnce(new Error('读取失败'));
+    await page.refreshRecovery();
+    expect(page.recoverDisabledReason.value).not.toBe('');
+    await page.recover();
+    expect(mocks.recover).not.toHaveBeenCalled();
+    page.query.data.value = {
+      items: [{ ...reviewing, revision: 8 }],
+      total: 1,
+      page: 1,
+      pageSize: 20
+    };
+    await page.refreshRecovery();
+    expect(page.recoverDisabledReason.value).toBe('');
+    await page.recover();
+    expect(mocks.recover).toHaveBeenCalledWith({ aliasId: row.aliasId, revision: 8 });
+  });
+  it('实际查询保留旧内容但报告刷新错误时禁止确认', async () => {
+    const page = createPage();
+    page.openRecovery({
+      ...row,
+      taskUuid: 'task-1',
+      activeTaskUuid: 'task-1',
+      taskStatus: 'awaiting_review'
+    });
+    page.query.error.value = new Error('刷新失败');
+    await page.refreshRecovery();
+    expect(page.recoverDisabledReason.value).not.toBe('');
+    await page.recover();
+    expect(mocks.recover).not.toHaveBeenCalled();
+  });
+  it('含首次失败对象的响应式邮箱行关闭重开时不复制嵌套代理或丢失核对快照', () => {
+    const page = createPage();
+    const reviewing = reactive<AppleMailboxRow>({
+      ...row,
+      taskUuid: 'task-1',
+      activeTaskUuid: 'task-1',
+      taskStatus: 'awaiting_review',
+      firstFailure: {
+        stage: 'create_account',
+        errorKind: 'network_error',
+        httpStatus: null,
+        elapsedMs: 50,
+        observedAt: '2026-10-12T00:00:00Z'
+      }
+    });
+    expect(() => page.openRecovery(reviewing)).not.toThrow();
+    page.recoverOpen.value = false;
+    expect(() => page.openRecovery({ ...reviewing, revision: 8 })).not.toThrow();
+    expect(page.recoverDraft.form.target?.revision).toBe(3);
   });
   it('筛选、分页和排序在同一身份切页后恢复', async () => {
     const page = createPage();
@@ -311,6 +586,13 @@ describe('苹果隐藏邮箱草稿、CAS 和任务生命周期', () => {
     page.openMark([row, { ...row, aliasId: 'busy', taskStatus: 'running' }]);
     expect(page.markOpen.value).toBe(false);
     expect(page.actionError.value).toContain('解除占用');
+  });
+  it('占用中的结果待核对任务阻止直接标记，提示人工核对后解除', () => {
+    const page = createPage();
+    page.openMark([{ ...row, taskStatus: 'awaiting_review' }]);
+    expect(page.markOpen.value).toBe(false);
+    expect(page.actionError.value).toContain('查看任务');
+    expect(page.actionError.value).toContain('人工核对后解除占用');
   });
   it('非法 IP 不提交，错误显示后修正即可保存', async () => {
     const page = createPage();

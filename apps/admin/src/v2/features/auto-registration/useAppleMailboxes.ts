@@ -12,7 +12,9 @@ import { autoRegistrationApi } from './api';
 import {
   appleMailboxMarkError,
   appleMailboxRegisterReason,
-  appleMailboxTaskActive
+  appleMailboxTaskActive,
+  appleMailboxBusy,
+  appleMailboxCanRecover
 } from './apple-mailbox-presentation';
 import type {
   AppleMailboxListQuery,
@@ -21,6 +23,22 @@ import type {
   AppleMailboxRow,
   AppleMailboxTask
 } from './contracts';
+
+type AppleMailboxRecoveryTarget = Pick<
+  AppleMailboxRow,
+  'aliasId' | 'email' | 'revision' | 'taskUuid' | 'activeTaskUuid' | 'taskStatus'
+>;
+
+function recoveryTarget(row: AppleMailboxRow): AppleMailboxRecoveryTarget {
+  return {
+    aliasId: row.aliasId,
+    email: row.email,
+    revision: row.revision,
+    taskUuid: row.taskUuid,
+    activeTaskUuid: row.activeTaskUuid,
+    taskStatus: row.taskStatus
+  };
+}
 
 export function useAppleMailboxes() {
   const auth = useAuthStore();
@@ -47,12 +65,20 @@ export function useAppleMailboxes() {
     ref<string[]>([])
   );
   const taskUuid = useV2SessionDraft('auto-registration:apple:task', () => ref(''));
+  let restoredTasks = false;
   const query = useV2ModuleQuery<AppleMailboxPageResult>({
     moduleKey: 'auto-registration',
     scope: 'auto-registration',
     key: () => createV2QueryKey({ appleMailboxes: filters }),
     enabled: () => canAccess.value,
-    query: ({ signal }) => autoRegistrationApi.appleMailboxes({ ...filters }, { signal })
+    query: async ({ signal }) => {
+      if (!restoredTasks) {
+        await autoRegistrationApi.resumeAppleMailboxTasks({ signal });
+        if (!canAccess.value || signal.aborted) throw new DOMException('操作已取消', 'AbortError');
+        restoredTasks = true;
+      }
+      return autoRegistrationApi.appleMailboxes({ ...filters }, { signal });
+    }
   });
   const items = computed(() => query.data.value?.items ?? []);
   const selected = computed(() =>
@@ -90,6 +116,21 @@ export function useAppleMailboxes() {
   const feedback = ref('');
   const busy = ref(false);
   const markOpen = ref(false);
+  const recoverOpen = ref(false);
+  const recoverDraft = useV2FormDraft<{ target: AppleMailboxRecoveryTarget | null }>(
+    'auto-registration:apple:recover',
+    () => ({ target: null })
+  );
+  const recoverReadError = ref('');
+  const recoverDisabledReason = computed(() => {
+    if (!canWrite.value) return '当前列表或登录状态尚未确认，请先刷新';
+    if (query.error.value) return '当前状态读取失败，请先刷新';
+    if (recoverReadError.value) return recoverReadError.value;
+    const target = recoverDraft.form.target;
+    return !target || !appleMailboxCanRecover(target)
+      ? '原占用已变化，请关闭后查看最新邮箱状态'
+      : '';
+  });
   const markDraft = useV2FormDraft<AppleMailboxMarkInput>('auto-registration:apple:mark', () => ({
     items: [],
     registrationStatus: 'unknown',
@@ -118,10 +159,8 @@ export function useAppleMailboxes() {
   }
   function openMark(rows: AppleMailboxRow[]) {
     if (!canWrite.value || !rows.length || busy.value) return;
-    if (
-      rows.some((row) => appleMailboxTaskActive(row.taskStatus) || row.taskStatus === 'interrupted')
-    ) {
-      actionError.value = '所选邮箱包含执行中或中断待核对的任务，请先核对任务并解除占用';
+    if (rows.some(appleMailboxBusy)) {
+      actionError.value = '所选邮箱包含被占用的任务，请先查看任务；待核对任务需人工核对后解除占用';
       return;
     }
     const first = rows[0]!;
@@ -207,8 +246,49 @@ export function useAppleMailboxes() {
       busy.value = false;
     }
   }
-  async function recover(row: AppleMailboxRow) {
-    if (!canWrite.value || busy.value || row.taskStatus !== 'interrupted') return;
+  function openRecovery(row: AppleMailboxRow) {
+    if (!canWrite.value || busy.value || !appleMailboxCanRecover(row)) return;
+    const restored = recoverDraft.open(row.aliasId, { target: recoveryTarget(row) });
+    // 确认框没有输入字段，仍登记首次快照，让关闭重开保留原始 CAS 依据。
+    if (!restored) recoverDraft.form.target = recoveryTarget(row);
+    recoverOpen.value = true;
+    recoverReadError.value = '';
+    actionError.value = '';
+  }
+  async function refreshRecovery() {
+    const target = recoverDraft.form.target;
+    if (!canAccess.value || busy.value || !target) return;
+    busy.value = true;
+    actionError.value = '';
+    try {
+      await refreshMailboxes();
+      if (!canAccess.value || recoverDraft.form.target?.aliasId !== target.aliasId) return;
+      if (query.error.value) {
+        recoverReadError.value = '刷新状态失败，请重试刷新后再确认';
+        return;
+      }
+      const fresh = items.value.find((item) => item.aliasId === target.aliasId);
+      if (fresh) {
+        recoverDraft.form.target = recoveryTarget(fresh);
+        recoverReadError.value = '';
+      } else recoverReadError.value = '当前列表已找不到该邮箱，请关闭后重新选择';
+    } catch (error) {
+      if (canAccess.value) recoverReadError.value = getApiErrorMessage(error);
+    } finally {
+      busy.value = false;
+    }
+  }
+  async function recover() {
+    const row = recoverDraft.form.target;
+    if (
+      recoverDisabledReason.value ||
+      busy.value ||
+      !recoverOpen.value ||
+      !row ||
+      !appleMailboxCanRecover(row)
+    )
+      return;
+    const finishSave = recoverDraft.beginSave();
     busy.value = true;
     actionError.value = '';
     try {
@@ -217,7 +297,77 @@ export function useAppleMailboxes() {
         revision: row.revision
       });
       if (!canAccess.value) return;
-      feedback.value = '中断任务占用已解除，请核对邮箱注册状态';
+      if (finishSave()) recoverOpen.value = false;
+      feedback.value = '任务占用已解除，原注册事实已保留；请用“标记”登记核实的注册状态';
+      await refreshMailboxes();
+    } catch (error) {
+      if (canAccess.value) actionError.value = getApiErrorMessage(error);
+    } finally {
+      busy.value = false;
+    }
+  }
+  async function startBatch() {
+    if (!canWrite.value || busy.value || !selected.value.length) return;
+    const selectedCount = selected.value.length;
+    const candidates = selected.value.filter((row) => !appleMailboxRegisterReason(row));
+    if (!candidates.length) {
+      actionError.value = '所选邮箱中没有可注册的未注册邮箱';
+      return;
+    }
+    busy.value = true;
+    actionError.value = '';
+    try {
+      const result = await autoRegistrationApi.startAppleMailboxBatch({
+        targets: candidates.map(({ aliasId, revision }) => ({ aliasId, revision })),
+        count: candidates.length,
+        concurrency: 3,
+        mode: 'pipeline',
+        interval_min: 5,
+        interval_max: 30
+      });
+      if (!canAccess.value) return;
+      taskUuid.value = result.taskUuids[0] ?? '';
+      feedback.value = `批量已接收 ${result.accepted} 个邮箱，跳过 ${selectedCount - candidates.length + result.skipped.length} 个；并发为 3，间隔为 5～30 秒。其他设置可在注册控制台调整。`;
+      await refreshMailboxes();
+    } catch (error) {
+      if (canAccess.value) actionError.value = getApiErrorMessage(error);
+    } finally {
+      busy.value = false;
+    }
+  }
+  async function syncTask(row?: AppleMailboxRow) {
+    const id = row?.taskUuid ?? taskUuid.value;
+    if (!canAccess.value || busy.value || !id) return;
+    busy.value = true;
+    actionError.value = '';
+    try {
+      const result = await autoRegistrationApi.syncAppleMailboxTask(id);
+      if (!canAccess.value) return;
+      feedback.value =
+        result.syncStatus === 'saved'
+          ? '已同步到 ChatGPT 账号列表'
+          : '账号同步尚未完成，请查看任务记录';
+      if (id === taskUuid.value) await taskQuery.refresh();
+      await refreshMailboxes();
+    } catch (error) {
+      if (canAccess.value) actionError.value = getApiErrorMessage(error);
+    } finally {
+      busy.value = false;
+    }
+  }
+  async function saveLocalAccount(row?: AppleMailboxRow) {
+    const id = row?.taskUuid ?? taskUuid.value;
+    if (!canAccess.value || busy.value || !id) return;
+    busy.value = true;
+    actionError.value = '';
+    try {
+      const result = await autoRegistrationApi.saveAppleMailboxLocalAccount(id);
+      if (!canAccess.value) return;
+      feedback.value =
+        result.localSaveStatus === 'saved'
+          ? '已补存自动注册本地账号，可继续核对主账号同步'
+          : '本地账号尚未保存，请查看任务记录';
+      if (id === taskUuid.value) await taskQuery.refresh();
       await refreshMailboxes();
     } catch (error) {
       if (canAccess.value) actionError.value = getApiErrorMessage(error);
@@ -317,6 +467,9 @@ export function useAppleMailboxes() {
     actionError,
     feedback,
     markOpen,
+    recoverOpen,
+    recoverDraft,
+    recoverDisabledReason,
     markDraft,
     markTitle,
     registrationIpEditable,
@@ -330,7 +483,12 @@ export function useAppleMailboxes() {
     resetMark,
     saveMark,
     start,
+    startBatch,
+    syncTask,
+    saveLocalAccount,
     recover,
+    openRecovery,
+    refreshRecovery,
     cancelTask,
     changePage,
     changePageSize,

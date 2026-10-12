@@ -1,13 +1,22 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/validate-release-selection.sh"
-[[ "${RELEASE_OPERATION:-release}" == release_admin || "${RELEASE_OPERATION:-release}" == release_online_recharge || "${RELEASE_OPERATION:-release}" == release_api_workspace || "${RELEASE_OPERATION:-release}" == release || "${RELEASE_OPERATION:-release}" == release_api_admin || "${RELEASE_OPERATION:-release}" == release_api_admin_migration || "${RELEASE_OPERATION:-release}" == release_api_registration ]] || exit 1
+[[ "${RELEASE_OPERATION:-release}" == release_unpublished_components || "${RELEASE_OPERATION:-release}" == release_admin || "${RELEASE_OPERATION:-release}" == release_online_recharge || "${RELEASE_OPERATION:-release}" == release_api_workspace || "${RELEASE_OPERATION:-release}" == release || "${RELEASE_OPERATION:-release}" == release_api_admin || "${RELEASE_OPERATION:-release}" == release_api_admin_migration || "${RELEASE_OPERATION:-release}" == release_api_registration ]] || exit 1
 
 [[ "$RELEASE_COMMIT" =~ ^[0-9a-f]{40}$ ]] || exit 1
 [[ "$EXPECTED_CURRENT" =~ ^[0-9a-f]{40}$ ]] || exit 1
 [[ "$SOURCE_TREE" =~ ^[0-9a-f]{40}$ ]] || exit 1
 [[ "$QUALITY_RUN_ID" =~ ^[1-9][0-9]*$ ]] || exit 1
 [[ "$RELEASE_REPOSITORY" =~ ^[0-9]{12}\.dkr\.ecr\.ap-northeast-1\.amazonaws\.com/id-business-v2-release$ ]] || exit 1
+
+if [[ "${RELEASE_OPERATION:-release}" == release_unpublished_components ]]; then
+  [[ "$(git ls-remote origin refs/heads/main | cut -f1)" == "$RELEASE_COMMIT" ]] || {
+    echo 'Component publication target is no longer the latest main commit; deployment was not dispatched' >&2
+    exit 1
+  }
+  python3 -B scripts/production-release/unpublished-component-successor-readonly.py release
+  exit 0
+fi
 
 if [[ "${HISTORICAL_EXCEPTION:-none}" == registration-worker-92-20261007 ]]; then
   test "$EXPECTED_CURRENT" = 974c62cc1681012ecff897aefc90d2cd9900004a
