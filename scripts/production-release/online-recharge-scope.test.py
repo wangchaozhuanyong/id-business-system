@@ -5558,7 +5558,7 @@ class RestoredColdCacheTests(unittest.TestCase):
             for tag,row in retention.items()))
 
     @contextmanager
-    def fixture(self, present=False):
+    def fixture(self, present=False, *, real_snapshot=False):
         with tempfile.TemporaryDirectory(prefix='cold-cache-', dir=RUNTIME) as temporary, ExitStack() as stack:
             base = Path(temporary).resolve()
             directory = base / 'releases' / '20261011T132910Z-31d2c6885a45'
@@ -5620,7 +5620,8 @@ class RestoredColdCacheTests(unittest.TestCase):
                 return json.dumps(state.remote)
 
             d = controller(BASE=base, run=run, compose=MagicMock(side_effect=AssertionError('no service commands')))
-            snapshot = stack.enter_context(patch.object(scope, 'snapshot', return_value=states()))
+            snapshot = None if real_snapshot else stack.enter_context(
+                patch.object(scope, 'snapshot', return_value=states()))
             stack.enter_context(patch.object(scope, '_RESTORED_B_WITNESS', witness))
             stack.enter_context(patch.object(scope.shutil, 'disk_usage', side_effect=lambda unused: SimpleNamespace(free=state.free)))
             stack.enter_context(patch.object(scope.time, 'monotonic', side_effect=lambda: clock.now))
@@ -5766,6 +5767,156 @@ class RestoredColdCacheTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, 'HISTORICAL_IMAGE_CACHE_CHANGED'):
                 scope._restored_workspace_cold_cache(value.d, value.directory, value.expected)
             self.assertEqual(len(value.events), count)
+
+
+class RestoredColdSnapshotDeadlineTests(unittest.TestCase):
+    """Original remote functions and API snapshot, with only their I/O stubbed."""
+    @contextmanager
+    def fixture(self, expire=None):
+        cache = RestoredColdCacheTests('test_existing_exact_images_are_inspected_and_never_pulled')
+        with cache.fixture(present=True, real_snapshot=True) as value:
+            remote = load('cold_snapshot_deadline_remote_tests', 'remote-deploy.py')
+            (value.directory / 'docker-compose.aws-mysql.yml').write_text(
+                'services:\n  auto-registration:\n    image: synthetic-only\n')
+            value.d.ALL_SERVICES = remote.ALL_SERVICES
+            value.d.production_services = remote.production_services
+            value.d.service_state = remote.service_state
+            metadata, expected = {}, {}
+            for service in remote.ALL_SERVICES:
+                container = hashlib.sha256(('offline-container-' + service).encode()).hexdigest()
+                started = '2026-10-12T00:00:00.000000000Z'
+                row = {'Id': container,
+                    'Image': 'sha256:' + hashlib.sha256(('offline-image-' + service).encode()).hexdigest(),
+                    'Config': {'Image': 'synthetic-only:' + service,
+                        'Env': ['SYNTHETIC_ONLY=two', 'OFFLINE_ONLY=one']},
+                    'State': {'Status': 'running', 'StartedAt': started,
+                        **({} if service == 'caddy' else {'Health': {'Status': 'healthy'}})},
+                    'HostConfig': {'NetworkMode': 'synthetic-only'},
+                    'Mounts': [{'Destination': '/z', 'Source': 'synthetic-z', 'Type': 'volume'},
+                               {'Destination': '/a', 'Source': 'synthetic-a', 'Type': 'volume'}]}
+                metadata[container] = row
+                expected[service] = {'image': row['Image'], 'reference': row['Config']['Image'],
+                    'status': 'running', 'health': None if service == 'caddy' else 'healthy',
+                    'containerId': container, 'startedAtSha256': hashlib.sha256(started.encode()).hexdigest(),
+                    'environmentSha256': scope.fingerprint(sorted(row['Config']['Env'])),
+                    'configurationSha256': scope.fingerprint({'Config': row['Config'],
+                        'HostConfig': row['HostConfig'],
+                        'Mounts': sorted(row['Mounts'], key=lambda mount: mount['Destination'])})}
+            image_run = value.d.run
+            io_events, snapshots, function_calls = [], [], []
+            counts = SimpleNamespace(compose=0, inspect=0)
+            original_globals = remote.service_state.__globals__
+            original_bindings = (original_globals['run'], original_globals['compose'])
+
+            def complete(kind, command, kwargs, result):
+                self.assertEqual(set(kwargs), {'timeout'})
+                self.assertGreater(kwargs['timeout'], 0)
+                self.assertLessEqual(kwargs['timeout'], 60)
+                self.assertLessEqual(kwargs['timeout'], 120 - value.clock.now)
+                io_events.append((kind, command, dict(kwargs), value.clock.now))
+                # A fake monotonic clock makes the complete 120-second budget
+                # observable without waiting or executing Docker/AWS commands.
+                value.clock.now += 2
+                if (expire == 'first-snapshot' and counts.compose == 1
+                        or expire == 'last-snapshot' and counts.inspect == 4 * len(remote.ALL_SERVICES)):
+                    value.clock.now = 120
+                return result
+
+            def run(*command, **kwargs):
+                if command[:2] == ('docker', 'inspect'):
+                    self.assertEqual(len(command), 3)
+                    self.assertIn(command[2], metadata)
+                    counts.inspect += 1
+                    result = json.dumps([metadata[command[2]]])
+                    return complete('snapshot-inspect', command, kwargs, result)
+                result = image_run(*command, **kwargs)
+                return complete('image-cache', command, kwargs, result)
+
+            def compose(directory, *command, **kwargs):
+                self.assertEqual(directory, value.directory)
+                self.assertEqual(command[:2], ('ps', '-q'))
+                self.assertEqual(len(command), 3)
+                self.assertIn(command[2], expected)
+                counts.compose += 1
+                return complete('snapshot-compose', command, kwargs, expected[command[2]]['containerId'])
+
+            value.d.run, value.d.compose = run, compose
+            prior_profile = sys.getprofile()
+
+            def observe_original_functions(frame, event, result):
+                # Observe real return values without replacing snapshot or any
+                # service-state/production-services implementation.
+                if event == 'return' and frame.f_code is shared.snapshot.__code__ and result is not None:
+                    snapshots.append(copy.deepcopy(result))
+                if event == 'call' and frame.f_code in (remote.service_state.__code__,
+                                                        remote.production_services.__code__):
+                    function_calls.append((frame.f_code, frame.f_globals))
+
+            # A regression back to the original unbounded globals must fail
+            # locally instead of invoking real Docker through subprocess.run.
+            with patch.object(remote.subprocess, 'run', side_effect=AssertionError('native commands forbidden')) as native:
+                sys.setprofile(observe_original_functions)
+                try:
+                    yield SimpleNamespace(cache=value, remote=remote, expected=expected,
+                        io_events=io_events, snapshots=snapshots, function_calls=function_calls, counts=counts)
+                finally:
+                    sys.setprofile(prior_profile)
+                    native.assert_not_called()
+                    self.assertIs(remote.service_state.__globals__, original_globals)
+                    self.assertIs(remote.production_services.__globals__, original_globals)
+                    self.assertIs(original_globals['run'], original_bindings[0])
+                    self.assertIs(original_globals['compose'], original_bindings[1])
+                    for unused, namespace in function_calls:
+                        self.assertIsNot(namespace, original_globals)
+                        self.assertIsNot(namespace['run'], original_bindings[0])
+                        self.assertIsNot(namespace['compose'], original_bindings[1])
+                        self.assertIs(namespace['run'].__self__, namespace['compose'].__self__)
+
+    def test_both_original_snapshots_share_bounded_io_and_preserve_all_eight_identity_fields(self):
+        with self.fixture() as value:
+            cache = value.cache
+            scope._restored_workspace_cold_cache(cache.d, cache.directory, cache.expected)
+            self.assertEqual(value.snapshots, [value.expected, value.expected])
+            self.assertEqual(len(value.expected), 7)
+            self.assertTrue(all(len(row) == 8 for row in value.snapshots[0].values()))
+            self.assertEqual(value.counts.compose, 14)
+            self.assertEqual(value.counts.inspect, 28)
+            self.assertEqual(len(value.io_events), 58)
+            self.assertEqual(cache.clock.now, 116)
+            self.assertTrue(any(kwargs['timeout'] < 60 for _, _, kwargs, _ in value.io_events))
+            self.assertEqual(sum(code is value.remote.service_state.__code__
+                for code, _ in value.function_calls), 14)
+            self.assertEqual(sum(code is value.remote.production_services.__code__
+                for code, _ in value.function_calls), 2)
+            self.assertEqual(cache.d._restoredWorkspaceColdCacheReady, scope.fingerprint(cache.images))
+            self.assertFalse(RestoredColdCacheTests.pulls(cache))
+
+    def test_original_first_snapshot_exhausting_budget_prevents_image_operations_and_readiness(self):
+        with self.fixture(expire='first-snapshot') as value:
+            cache = value.cache
+            with self.assertRaisesRegex(RuntimeError, 'HISTORICAL_IMAGE_CACHE_TIMEOUT'):
+                scope._restored_workspace_cold_cache(cache.d, cache.directory, cache.expected)
+            self.assertEqual(value.counts.compose, 1)
+            self.assertEqual(value.counts.inspect, 0)
+            self.assertEqual(len(value.io_events), 1)
+            self.assertFalse(cache.events)
+            self.assertFalse(value.snapshots)
+            self.assertEqual(cache.clock.now, 120)
+            self.assertFalse(hasattr(cache.d, '_restoredWorkspaceColdCacheReady'))
+
+    def test_original_last_snapshot_finishing_at_budget_boundary_cannot_mark_cache_ready(self):
+        with self.fixture(expire='last-snapshot') as value:
+            cache = value.cache
+            with self.assertRaisesRegex(RuntimeError, 'HISTORICAL_IMAGE_CACHE_TIMEOUT'):
+                scope._restored_workspace_cold_cache(cache.d, cache.directory, cache.expected)
+            self.assertEqual(value.snapshots, [value.expected])
+            self.assertEqual(value.counts.compose, 14)
+            self.assertEqual(value.counts.inspect, 28)
+            self.assertEqual(len(value.io_events), 58)
+            self.assertEqual(cache.clock.now, 120)
+            self.assertEqual(value.io_events[-1][0], 'snapshot-inspect')
+            self.assertFalse(RestoredColdCacheTests.pulls(cache))
+            self.assertFalse(hasattr(cache.d, '_restoredWorkspaceColdCacheReady'))
 
 
 class RestoredColdOriginTests(unittest.TestCase):

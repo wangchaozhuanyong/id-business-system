@@ -4267,7 +4267,7 @@ _AFTER_BIT_BANK_POLICY_FILES = {
         'bec32298136ff61d8e69820179b8c3f51f8e5221f4e6b449aaf5f5ec8f7d4625'),
     'scripts/production-release/online-recharge-scope.test.py': (
         '4aa063af4054ff98d2bb622056556ab643ed39abb3d373facc636509ff98ad8e',
-        '4ce7347ea96a9c6885ee7c2cefbbda028592b918bce3fa8fa0866ce0b5831921'),
+        '935c3156e3549ebd2e362cbef1fc3f71af55c8bba57e621d3c92fc6d8272685b'),
 }
 _AFTER_BIT_RELEASE_CI_FILES = {
     'scripts/ci-recharge-scope.mjs': ('3fe9c33ea883b7e2ad15305d1c7fe26873ddf648645b7a05acc8aecd5f858cfd', '04c8451b64ebf75755a108761a1a73430e4f31e807f7bb4f356b790417ee7ec1'),
@@ -5828,12 +5828,43 @@ def _restored_workspace_cold_cache(d, directory, expected):
         return
     repository = '079740175286.dkr.ecr.ap-northeast-1.amazonaws.com/id-business-v2-release'
     deadline = time.monotonic() + 120
-    before = snapshot(d, directory)
 
-    def run(*command):
+    def bounded(method, *command, **kwargs):
         remaining = min(60, deadline-time.monotonic())
         d.require(remaining > 0, 'ONLINE_RECHARGE_HISTORICAL_IMAGE_CACHE_TIMEOUT')
-        return d.run(*command, timeout=remaining)
+        requested = kwargs.get('timeout', remaining)
+        d.require(type(requested) in (int, float) and requested > 0, code)
+        kwargs['timeout'] = min(requested, remaining)
+        value = method(*command, **kwargs)
+        d.require(time.monotonic() < deadline, 'ONLINE_RECHARGE_HISTORICAL_IMAGE_CACHE_TIMEOUT')
+        return value
+
+    def run(*command):
+        return bounded(d.run, *command)
+
+    class TimedSnapshotController:
+        def run(self, *command, **kwargs):
+            return bounded(d.run, *command, **kwargs)
+
+        def compose(self, *command, **kwargs):
+            return bounded(d.compose, *command, **kwargs)
+
+        def __getattr__(self, name):
+            original = getattr(d, name)
+            if name not in ('production_services', 'service_state'):
+                return original
+            # Keep the original implementations without their unbounded globals.
+            from types import FunctionType
+            d.require(type(original) is FunctionType, code)
+            namespace = {**original.__globals__, 'run': self.run, 'compose': self.compose}
+            copied = FunctionType(original.__code__, namespace, original.__name__,
+                original.__defaults__, original.__closure__)
+            copied.__kwdefaults__ = original.__kwdefaults__
+            return copied
+
+    timed = TimedSnapshotController()
+    before = snapshot(timed, directory)
+    d.require(time.monotonic() < deadline, 'ONLINE_RECHARGE_HISTORICAL_IMAGE_CACHE_TIMEOUT')
 
     def guard():
         d.require((d.BASE/'current').resolve() == directory
@@ -5883,7 +5914,8 @@ def _restored_workspace_cold_cache(d, directory, expected):
             d.require(shutil.disk_usage(d.BASE).free > 6 * 1024**3,
                 'ONLINE_RECHARGE_HISTORICAL_IMAGE_CACHE_DISK_TOO_LOW')
     guard()
-    d.require(snapshot(d, directory) == before, code)
+    d.require(snapshot(timed, directory) == before, code)
+    d.require(time.monotonic() < deadline, 'ONLINE_RECHARGE_HISTORICAL_IMAGE_CACHE_TIMEOUT')
     d._restoredWorkspaceColdCacheReady = key
 
 
