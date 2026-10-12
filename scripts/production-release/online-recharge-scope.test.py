@@ -5583,20 +5583,26 @@ class RestoredColdCacheTests(unittest.TestCase):
                     'config': {'digest': image}})} for tag, (image, _) in images.items()]}
             events = []
             clock = SimpleNamespace(now=0)
-            state = SimpleNamespace(free=7 * 1024**3, remote=remote, hook=None)
+            state = SimpleNamespace(free=7 * 1024**3, remote=remote, hook=None,
+                password='offline-synthetic-registry-password', http_status=200,
+                body=b'{"status":"Pulling image"}\n{"status":"Pull complete"}\n',
+                advertised_length=None, chunked=False, recv_size=8192, socket_hook=None, sockets=[],
+                requests=[], io_events=[], command_error=None)
 
             def run(*command, **kwargs):
                 # Any service command, shell, image deletion, volume command or
                 # unexpected AWS operation makes this synthetic fixture fail.
                 self.assertTrue(command[:3] in (('docker', 'image', 'ls'),
-                    ('docker', 'image', 'inspect'), ('aws', 'ecr', 'batch-get-image'))
-                    or command[:2] == ('docker', 'pull'))
+                    ('docker', 'image', 'inspect'), ('aws', 'ecr', 'batch-get-image'),
+                    ('aws', 'ecr', 'get-login-password')))
                 self.assertEqual(set(kwargs), {'timeout'})
                 self.assertGreater(kwargs['timeout'], 0)
                 self.assertLessEqual(kwargs['timeout'], 60)
                 events.append((command, kwargs))
                 if state.hook is not None:
                     state.hook(command)
+                if state.command_error is not None:
+                    state.command_error(command)
                 if command[:3] == ('docker', 'image', 'ls'):
                     self.assertEqual(command[3:5], ('--no-trunc', '--filter'))
                     self.assertEqual(command[6:], ('--format', '{{.ID}}'))
@@ -5606,18 +5612,118 @@ class RestoredColdCacheTests(unittest.TestCase):
                     self.assertEqual(len(command), 4)
                     tag = command[3].split(repository + ':', 1)[1]
                     return json.dumps([metadata[tag]])
-                if command[:2] == ('docker', 'pull'):
-                    self.assertEqual(len(command), 3)
-                    tag = command[2].split(repository + ':', 1)[1]
-                    self.assertIn(tag, images)
-                    local[tag] = images[tag][0]
-                    return 'synthetic-pull-complete'
+                if command[:3] == ('aws', 'ecr', 'get-login-password'):
+                    self.assertEqual(command, ('aws', 'ecr', 'get-login-password', '--region', 'ap-northeast-1'))
+                    return state.password
                 self.assertEqual(command[:8], ('aws', 'ecr', 'batch-get-image', '--region',
                     'ap-northeast-1', '--repository-name', 'id-business-v2-release', '--image-ids'))
                 self.assertEqual(command[-2:], ('--output', 'json'))
                 requested = [value.removeprefix('imageTag=') for value in command[8:-2]]
                 self.assertEqual(set(requested), set(images) - set(local))
                 return json.dumps(state.remote)
+
+            import socket
+            from urllib.parse import parse_qs, urlsplit
+
+            class SocketReader(io.RawIOBase):
+                def __init__(self, transport):
+                    super().__init__()
+                    self.transport = transport
+
+                def readable(self):
+                    return True
+
+                def readinto(self, buffer):
+                    return self.transport.recv_into(buffer)
+
+            class MemorySocket:
+                """Real HTTPConnection/HTTPResponse run over this offline socket."""
+                def __init__(self, family, kind):
+                    self.created = clock.now
+                    self.deadline = min(120, self.created + 60)
+                    self.timeout = None
+                    self.sent = bytearray()
+                    self.response = None
+                    self.offset = 0
+                    self.closed = False
+                    self.readers = []
+                    self.tag = None
+                    self.test.assertEqual((family, kind), (socket.AF_UNIX, socket.SOCK_STREAM))
+                    state.sockets.append(self)
+
+                def settimeout(self, seconds):
+                    self.test.assertGreater(seconds, 0)
+                    self.test.assertLessEqual(seconds, 60)
+                    self.test.assertLessEqual(seconds, self.deadline - clock.now)
+                    self.timeout = seconds
+
+                def step(self, operation):
+                    state.io_events.append((operation, self.timeout, clock.now))
+                    if state.socket_hook is not None:
+                        state.socket_hook(self, operation)
+
+                def connect(self, address):
+                    self.test.assertEqual(address, '/var/run/docker.sock')
+                    self.step('connect')
+
+                def sendall(self, data, flags=0):
+                    self.test.assertEqual(flags, 0)
+                    self.sent.extend(data)
+                    self.step('sendall')
+                    if b'\r\n\r\n' not in self.sent:
+                        return
+                    header, unused_body = bytes(self.sent).split(b'\r\n\r\n', 1)
+                    rows = header.decode('ascii').split('\r\n')
+                    method, target, version = rows[0].split(' ')
+                    self.test.assertEqual((method, version), ('POST', 'HTTP/1.1'))
+                    parsed = urlsplit(target)
+                    self.test.assertEqual(parsed.path, '/images/create')
+                    query = parse_qs(parsed.query, strict_parsing=True)
+                    self.test.assertEqual(set(query), {'fromImage', 'tag'})
+                    self.test.assertEqual(query['fromImage'], [repository])
+                    self.test.assertEqual(len(query['tag']), 1)
+                    self.tag = query['tag'][0]
+                    self.test.assertIn(self.tag, images)
+                    headers = dict(row.split(': ', 1) for row in rows[1:])
+                    authentication = json.loads(base64.urlsafe_b64decode(headers['X-Registry-Auth']))
+                    self.test.assertEqual(authentication, {'username': 'AWS',
+                        'password': state.password.strip(), 'serveraddress': repository.split('/')[0]})
+                    self.test.assertNotIn(state.password.strip(), rows[0])
+                    state.requests.append({'method': method, 'path': parsed.path, 'tag': self.tag,
+                        'authentication': authentication, 'headers': headers})
+                    # This is an in-memory Docker API event, never a CLI pull.
+                    event = ('docker-socket', 'image-create', repository + ':' + self.tag)
+                    events.append((event, {'timeout': self.timeout}))
+                    if state.hook is not None:
+                        state.hook(event)
+                    length = len(state.body) if state.advertised_length is None else state.advertised_length
+                    framing = 'Transfer-Encoding: chunked' if state.chunked else 'Content-Length: ' + str(length)
+                    self.response = ('HTTP/1.1 ' + str(state.http_status) + ' Offline\r\n'
+                        + framing + '\r\n\r\n').encode() + state.body
+
+                def recv_into(self, buffer, nbytes=0, flags=0):
+                    self.test.assertEqual(flags, 0)
+                    self.test.assertIsNotNone(self.response)
+                    self.step('recv_into')
+                    count = min(len(buffer), nbytes or len(buffer), state.recv_size,
+                        len(self.response) - self.offset)
+                    buffer[:count] = self.response[self.offset:self.offset + count]
+                    self.offset += count
+                    if self.offset == len(self.response) and state.http_status == 200:
+                        local[self.tag] = images[self.tag][0]
+                    return count
+
+                def makefile(self, mode):
+                    self.test.assertEqual(mode, 'rb')
+                    reader = io.BufferedReader(SocketReader(self))
+                    self.readers.append(reader)
+                    return reader
+
+                def close(self):
+                    self.closed = True
+
+            MemorySocket.test = self
+            stack.enter_context(patch.object(socket, 'socket', MemorySocket))
 
             d = controller(BASE=base, run=run, compose=MagicMock(side_effect=AssertionError('no service commands')))
             snapshot = None if real_snapshot else stack.enter_context(
@@ -5631,17 +5737,18 @@ class RestoredColdCacheTests(unittest.TestCase):
 
     @staticmethod
     def pulls(value):
-        return [command for command, _ in value.events if command[:2] == ('docker', 'pull')]
+        return [command for command, _ in value.events if command[:2] == ('docker-socket', 'image-create')]
 
     def test_all_eight_missing_images_are_digest_bound_before_any_pull(self):
         with self.fixture() as value:
             scope._restored_workspace_cold_cache(value.d, value.directory, value.expected)
             self.assertEqual(len(value.images), 8)
-            self.assertEqual(self.pulls(value), [('docker', 'pull', value.repository + ':' + tag)
+            self.assertEqual(self.pulls(value), [('docker-socket', 'image-create', value.repository + ':' + tag)
                 for tag in value.images])
-            aws = [index for index, (command, _) in enumerate(value.events) if command[0] == 'aws']
+            aws = [index for index, (command, _) in enumerate(value.events)
+                if command[:3] == ('aws', 'ecr', 'batch-get-image')]
             first_pull = next(index for index, (command, _) in enumerate(value.events)
-                if command[:2] == ('docker', 'pull'))
+                if command[:2] == ('docker-socket', 'image-create'))
             self.assertEqual(len(aws), 1)
             self.assertLess(aws[0], first_pull)
             self.assertEqual(sum(command[:3] == ('docker', 'image', 'inspect')
@@ -5664,7 +5771,7 @@ class RestoredColdCacheTests(unittest.TestCase):
             value.state.remote['images'] = [row for row in value.state.remote['images']
                 if row['imageId']['imageTag'] not in present]
             scope._restored_workspace_cold_cache(value.d, value.directory, value.expected)
-            self.assertEqual(self.pulls(value), [('docker', 'pull', value.repository + ':' + tag)
+            self.assertEqual(self.pulls(value), [('docker-socket', 'image-create', value.repository + ':' + tag)
                 for tag in value.images if tag not in present])
             self.assertEqual(len(value.local), 8)
 
@@ -5729,7 +5836,7 @@ class RestoredColdCacheTests(unittest.TestCase):
                 if variation == 'below': value.state.free = 6 * 1024**3 - 1
                 if variation == 'post-pull':
                     def consume_space(command):
-                        if command[:2] == ('docker', 'pull'): value.state.free = 6 * 1024**3
+                        if command[:2] == ('docker-socket', 'image-create'): value.state.free = 6 * 1024**3
                     value.state.hook = consume_space
                 with self.assertRaisesRegex(RuntimeError, 'HISTORICAL_IMAGE_CACHE_DISK_TOO_LOW'):
                     scope._restored_workspace_cold_cache(value.d, value.directory, value.expected)
@@ -5858,7 +5965,8 @@ class RestoredColdSnapshotDeadlineTests(unittest.TestCase):
                 sys.setprofile(observe_original_functions)
                 try:
                     yield SimpleNamespace(cache=value, remote=remote, expected=expected,
-                        io_events=io_events, snapshots=snapshots, function_calls=function_calls, counts=counts)
+                        io_events=io_events, snapshots=snapshots, function_calls=function_calls,
+                        counts=counts, metadata=metadata)
                 finally:
                     sys.setprofile(prior_profile)
                     native.assert_not_called()
@@ -5917,6 +6025,209 @@ class RestoredColdSnapshotDeadlineTests(unittest.TestCase):
             self.assertEqual(value.io_events[-1][0], 'snapshot-inspect')
             self.assertFalse(RestoredColdCacheTests.pulls(cache))
             self.assertFalse(hasattr(cache.d, '_restoredWorkspaceColdCacheReady'))
+
+
+class RestoredColdRegistryTransportTests(unittest.TestCase):
+    @contextmanager
+    def fixture(self, **kwargs):
+        cache = RestoredColdCacheTests('test_existing_exact_images_are_inspected_and_never_pulled')
+        with cache.fixture(**kwargs) as value:
+            yield value
+
+    @staticmethod
+    def auth_events(value):
+        return [command for command, unused in value.events
+            if command[:3] == ('aws', 'ecr', 'get-login-password')]
+
+    def assert_closed(self, value):
+        self.assertTrue(all(transport.closed for transport in value.state.sockets))
+        self.assertTrue(all(reader.closed for transport in value.state.sockets for reader in transport.readers))
+
+    def assert_sanitized_failure(self, value, expected):
+        import traceback
+        from contextlib import redirect_stderr
+        output, errors = io.StringIO(), io.StringIO()
+        with redirect_stdout(output), redirect_stderr(errors), self.assertRaises(RuntimeError) as raised:
+            scope._restored_workspace_cold_cache(value.d, value.directory, value.expected)
+        self.assertEqual(raised.exception.args, ('ONLINE_RECHARGE_HISTORICAL_IMAGE_CACHE_' + expected,))
+        rendered = ''.join(traceback.format_exception(type(raised.exception), raised.exception,
+            raised.exception.__traceback__))
+        for text in (output.getvalue(), errors.getvalue(), rendered):
+            self.assertNotIn(value.state.password, text)
+            self.assertNotIn('offline-private-error-detail', text)
+        for path in value.d.BASE.rglob('*'):
+            if path.is_file():
+                self.assertNotIn(value.state.password.encode(), path.read_bytes())
+        self.assertFalse(hasattr(value.d, '_restoredWorkspaceColdCacheReady'))
+        self.assert_closed(value)
+
+    def test_single_memory_only_auth_follows_all_digest_checks_and_actual_http_streams_close(self):
+        with self.fixture() as value:
+            scope._restored_workspace_cold_cache(value.d, value.directory, value.expected)
+            self.assertEqual(len(self.auth_events(value)), 1)
+            batch = next(index for index, (command, unused) in enumerate(value.events)
+                if command[:3] == ('aws', 'ecr', 'batch-get-image'))
+            auth = next(index for index, (command, unused) in enumerate(value.events)
+                if command[:3] == ('aws', 'ecr', 'get-login-password'))
+            first_pull = next(index for index, (command, unused) in enumerate(value.events)
+                if command[:2] == ('docker-socket', 'image-create'))
+            self.assertLess(batch, auth)
+            self.assertLess(auth, first_pull)
+            self.assertEqual([request['tag'] for request in value.state.requests], list(value.images))
+            self.assertEqual(len(value.state.sockets), 8)
+            self.assertTrue(all(transport.offset == len(transport.response) for transport in value.state.sockets))
+            self.assertTrue(all(operation in ('connect', 'sendall', 'recv_into')
+                and 0 < timeout <= 60 for operation, timeout, unused in value.state.io_events))
+            self.assert_closed(value)
+            self.assertFalse((value.d.BASE / '.docker').exists())
+            self.assertFalse(any(value.state.password in str(command) for command, unused in value.events))
+            for path in value.d.BASE.rglob('*'):
+                if path.is_file(): self.assertNotIn(value.state.password.encode(), path.read_bytes())
+
+    def test_all_present_images_never_request_auth_or_open_a_socket(self):
+        with self.fixture(present=True) as value:
+            scope._restored_workspace_cold_cache(value.d, value.directory, value.expected)
+            self.assertFalse(self.auth_events(value))
+            self.assertFalse(value.state.sockets)
+
+    def test_last_remote_digest_failure_rejects_before_auth_and_socket_creation(self):
+        with self.fixture() as value:
+            value.state.remote['images'][-1]['imageManifest'] = json.dumps(
+                {'schemaVersion': 2, 'config': {'digest': 'sha256:' + '0' * 64}})
+            self.assert_sanitized_failure(value, 'CHANGED')
+            self.assertFalse(self.auth_events(value))
+            self.assertFalse(value.state.sockets)
+
+    def test_empty_or_multiline_auth_rejects_without_transport(self):
+        for password in ('', '  ', 'offline\nsynthetic', 'offline\rsynthetic'):
+            with self.subTest(password_kind=repr(password)), self.fixture() as value:
+                value.state.password = password
+                with self.assertRaisesRegex(RuntimeError, 'HISTORICAL_IMAGE_CACHE_ECR_AUTH_FAILED'):
+                    scope._restored_workspace_cold_cache(value.d, value.directory, value.expected)
+                self.assertFalse(value.state.sockets)
+                self.assertEqual(len(self.auth_events(value)), 1)
+                self.assertFalse(hasattr(value.d, '_restoredWorkspaceColdCacheReady'))
+
+    def test_http_error_statuses_are_sanitized_and_always_close_transport(self):
+        for status in (401, 403, 500):
+            with self.subTest(status=status), self.fixture() as value:
+                value.state.http_status = status
+                value.state.body = (value.state.password + ' offline-private-error-detail').encode()
+                self.assert_sanitized_failure(value, 'IMAGE_PULL_FAILED')
+                self.assertEqual(len(value.state.sockets), 1)
+                self.assertFalse(any(command[:3] == ('docker', 'image', 'inspect')
+                    for command, unused in value.events))
+
+    def test_empty_invalid_oversized_and_late_error_streams_reject(self):
+        progress = b'{"status":"Pulling"}\n'
+        bodies = (b'', b'[]\n', b'{"status":', b'\xff\n', b'{"status":"a","status":"b"}\n',
+            b'{"status":"' + b'x' * 65536 + b'"}\n',
+            progress + b'{"error":"offline-private-error-detail"}\n',
+            progress + b'{"errorDetail":{"message":"offline-private-error-detail"}}\n')
+        for index, body in enumerate(bodies):
+            with self.subTest(stream=index), self.fixture() as value:
+                value.state.body = body
+                self.assert_sanitized_failure(value, 'IMAGE_PULL_FAILED')
+                self.assertEqual(len(value.state.sockets), 1)
+                self.assertFalse(any(command[:3] == ('docker', 'image', 'inspect')
+                    for command, unused in value.events))
+
+    def test_http_body_ending_before_advertised_length_rejects_even_when_json_rows_are_valid(self):
+        with self.fixture() as value:
+            value.state.advertised_length = len(value.state.body) + 100
+            self.assert_sanitized_failure(value, 'IMAGE_PULL_FAILED')
+            self.assertEqual(len(value.state.sockets), 1)
+
+    def test_real_chunked_http_stream_requires_complete_chunks_and_terminal_zero_chunk(self):
+        progress = b'{"status":"Pull complete"}\n'
+        chunk = format(len(progress), 'x').encode() + b'\r\n' + progress + b'\r\n'
+        with self.fixture() as value:
+            value.state.chunked = True
+            value.state.body = chunk + b'0\r\n\r\n'
+            scope._restored_workspace_cold_cache(value.d, value.directory, value.expected)
+            self.assertEqual(len(value.state.requests), 8)
+            self.assert_closed(value)
+        for body in (chunk, chunk[:-2], b'not-hex\r\n' + progress, b'100\r\n' + progress):
+            with self.subTest(chunked_body=body[:10]), self.fixture() as value:
+                value.state.chunked = True
+                value.state.body = body
+                self.assert_sanitized_failure(value, 'IMAGE_PULL_FAILED')
+                self.assertEqual(len(value.state.sockets), 1)
+
+    def test_continuous_progress_cannot_extend_single_pull_or_shared_deadline(self):
+        for variation in ('pull', 'shared'):
+            with self.subTest(budget=variation), self.fixture() as value:
+                value.state.body = b'{"status":"Pulling image"}\n' * 200
+                value.state.recv_size = 64
+                if variation == 'shared':
+                    def consume_before_pull(command):
+                        if command[:3] == ('aws', 'ecr', 'get-login-password'): value.clock.now = 90
+                    value.state.hook = consume_before_pull
+                def progress(transport, operation):
+                    if operation == 'recv_into': value.clock.now += 10
+                value.state.socket_hook = progress
+                self.assert_sanitized_failure(value, 'TIMEOUT')
+                self.assertEqual(value.clock.now, 60 if variation == 'pull' else 120)
+                self.assertEqual(len(value.state.sockets), 1)
+                reads = [(timeout, instant) for operation, timeout, instant in value.state.io_events
+                    if operation == 'recv_into']
+                self.assertGreater(len(reads), 1)
+                self.assertTrue(all(timeout <= (60 if variation == 'pull' else 30) for timeout, unused in reads))
+                self.assertLess(reads[-1][0], reads[0][0])
+
+    def test_each_socket_operation_checks_deadline_after_return_and_sanitizes_io_errors(self):
+        for operation in ('connect', 'sendall', 'recv_into'):
+            for failure in ('deadline', 'error', 'socket-timeout'):
+                with self.subTest(operation=operation, failure=failure), self.fixture() as value:
+                    def fail(transport, current):
+                        if current == operation:
+                            if failure == 'deadline': value.clock.now = 60
+                            elif failure == 'socket-timeout':
+                                raise TimeoutError(value.state.password + ' offline-private-error-detail')
+                            else: raise OSError(value.state.password + ' offline-private-error-detail')
+                    value.state.socket_hook = fail
+                    self.assert_sanitized_failure(value,
+                        'IMAGE_PULL_FAILED' if failure == 'error' else 'TIMEOUT')
+                    self.assertEqual(len(value.state.sockets), 1)
+
+    def test_command_failures_have_phase_codes_and_only_timeout_expired_maps_to_timeout(self):
+        commands = (('aws', 'ecr', 'batch-get-image'), ('aws', 'ecr', 'get-login-password'),
+                    ('docker', 'image', 'ls'), ('docker', 'image', 'inspect'))
+        phases = ('ECR_READ_FAILED', 'ECR_AUTH_FAILED', 'IMAGE_INSPECT_FAILED', 'IMAGE_INSPECT_FAILED')
+        for prefix, phase in zip(commands, phases):
+            for timeout in (False, True):
+                with self.subTest(command=prefix, timeout=timeout), self.fixture(
+                        present=prefix == ('docker', 'image', 'inspect')) as value:
+                    def fail(command):
+                        if command[:3] == prefix:
+                            if timeout: raise subprocess.TimeoutExpired(command, 60,
+                                output=value.state.password, stderr='offline-private-error-detail')
+                            raise RuntimeError(value.state.password + ' offline-private-error-detail')
+                    value.state.command_error = fail
+                    self.assert_sanitized_failure(value, 'TIMEOUT' if timeout else phase)
+
+    def test_real_snapshot_command_and_identity_failures_are_sanitized(self):
+        helper = RestoredColdSnapshotDeadlineTests('test_both_original_snapshots_share_bounded_io_and_preserve_all_eight_identity_fields')
+        for variation in ('compose', 'inspect', 'unhealthy', 'timeout'):
+            with self.subTest(snapshot=variation), helper.fixture() as real:
+                value = real.cache
+                if variation == 'unhealthy':
+                    next(iter(real.metadata.values()))['State']['Health']['Status'] = 'unhealthy'
+                elif variation in ('compose', 'timeout'):
+                    def fail_compose(*command, **kwargs):
+                        if variation == 'timeout': raise subprocess.TimeoutExpired(command, 60,
+                            output=value.state.password, stderr='offline-private-error-detail')
+                        raise RuntimeError(value.state.password + ' offline-private-error-detail')
+                    value.d.compose = fail_compose
+                else:
+                    previous = value.d.run
+                    def fail_inspect(*command, **kwargs):
+                        if command[:2] == ('docker', 'inspect'):
+                            raise RuntimeError(value.state.password + ' offline-private-error-detail')
+                        return previous(*command, **kwargs)
+                    value.d.run = fail_inspect
+                self.assert_sanitized_failure(value, 'TIMEOUT' if variation == 'timeout' else 'SERVICE_SNAPSHOT_FAILED')
+                self.assertFalse(value.state.sockets)
 
 
 class RestoredColdOriginTests(unittest.TestCase):
