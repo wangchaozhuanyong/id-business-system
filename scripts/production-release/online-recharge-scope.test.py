@@ -1852,6 +1852,91 @@ class ReceiptTests(unittest.TestCase):
                 scope.extract_source(controller(), COMMIT, target)
 
 
+class ExtractSourcePermissionTests(unittest.TestCase):
+    def archive(self, entries):
+        data = io.BytesIO()
+        with tarfile.open(fileobj=data, mode='w:gz') as archive:
+            root = tarfile.TarInfo(f'id-business-system-{COMMIT}/')
+            root.type = tarfile.DIRTYPE; root.mode = 0o775
+            root.uid = 21; root.gid = 22
+            archive.addfile(root)
+            for name, raw, mode in entries:
+                item = tarfile.TarInfo(f'id-business-system-{COMMIT}/' + name)
+                item.mode = mode; item.uid = 21; item.gid = 22
+                if raw is None:
+                    item.type = tarfile.DIRTYPE
+                    archive.addfile(item)
+                else:
+                    item.size = len(raw)
+                    archive.addfile(item, io.BytesIO(raw))
+        return data.getvalue()
+
+    def extract(self, raw, target):
+        response = MagicMock()
+        response.__enter__.return_value.read.return_value = raw
+        with patch.object(scope.urllib.request, 'urlopen', return_value=response):
+            return scope.extract_source(controller(), COMMIT, target)
+
+    def test_archive_write_bits_are_removed_without_changing_content_or_git_execution(self):
+        entries = (('deploy/', None, 0o775), ('deploy/caddy/', None, 0o775),
+                   ('deploy/caddy/Caddyfile.aws', b'fixed-caddy-content\n', 0o664),
+                   ('plain.txt', b'fixed-ordinary-content\n', 0o664),
+                   ('bin/', None, 0o775), ('bin/worker.sh', b'#!/bin/sh\nexit 0\n', 0o775))
+        raw = self.archive(entries)
+        with directories() as (previous, target):
+            target.chmod(0o700)
+            retained = previous / 'retained.txt'; retained.write_bytes(b'previous-untouched\n')
+            retained.chmod(0o664)
+            self.assertEqual(self.extract(raw, target), raw)
+            self.assertEqual(target.stat().st_mode & 0o7777, 0o700)
+            for name, content, mode in entries:
+                path = target / name
+                self.assertEqual(path.stat().st_mode & 0o7777, mode & ~0o022)
+                self.assertEqual(bool(path.stat().st_mode & 0o111), bool(mode & 0o111))
+                if content is not None:
+                    self.assertEqual(path.read_bytes(), content)
+            self.assertEqual(retained.read_bytes(), b'previous-untouched\n')
+            self.assertEqual(retained.stat().st_mode & 0o7777, 0o664)
+        # Returned bytes preserve the original member UID/GID and tar modes.
+        with tarfile.open(fileobj=io.BytesIO(raw), mode='r:gz') as archive:
+            for member in archive.getmembers():
+                self.assertEqual((member.uid, member.gid), (21, 22))
+            self.assertEqual(archive.getmember(f'id-business-system-{COMMIT}/plain.txt').mode, 0o664)
+
+    def test_existing_private_and_read_only_modes_are_preserved(self):
+        entries = (('private/', None, 0o700), ('private/config', b'private-fixture\n', 0o600),
+                   ('read-only.txt', b'read-only-fixture\n', 0o400),
+                   ('owner-exec.sh', b'#!/bin/sh\nexit 0\n', 0o740))
+        with directories() as (_, target):
+            self.extract(self.archive(entries), target)
+            for name, content, mode in entries:
+                self.assertEqual((target / name).stat().st_mode & 0o7777, mode)
+                if content is not None:
+                    self.assertEqual((target / name).read_bytes(), content)
+
+    def test_invalid_entries_are_rejected_before_any_extraction(self):
+        for kind in ('symlink', 'hardlink', 'traversal', 'foreign-root'):
+            data = io.BytesIO()
+            with tarfile.open(fileobj=data, mode='w:gz') as archive:
+                valid = tarfile.TarInfo(f'id-business-system-{COMMIT}/valid.txt')
+                valid.size = 4; valid.mode = 0o664
+                archive.addfile(valid, io.BytesIO(b'safe'))
+                invalid = tarfile.TarInfo(f'id-business-system-{COMMIT}/invalid')
+                if kind in ('symlink', 'hardlink'):
+                    invalid.type = tarfile.SYMTYPE if kind == 'symlink' else tarfile.LNKTYPE
+                    invalid.linkname = 'valid.txt'
+                elif kind == 'traversal':
+                    invalid.name = f'id-business-system-{COMMIT}/../escaped.txt'
+                else:
+                    invalid.name = 'foreign-root/invalid.txt'
+                archive.addfile(invalid)
+            with self.subTest(kind=kind), directories() as (_, target):
+                with self.assertRaisesRegex(RuntimeError, 'SOURCE_ARCHIVE_INVALID'):
+                    self.extract(data.getvalue(), target)
+                self.assertEqual(list(target.iterdir()), [])
+                self.assertFalse((target.parent / 'escaped.txt').exists())
+
+
 class WorkspaceOriginTests(unittest.TestCase):
     def fixture(self, previous):
         managed = ('media-resolver', 'auto-recharge', 'auto-registration', 'api', 'admin')
@@ -2531,6 +2616,60 @@ class DeclarationEquivalencePureTests(unittest.TestCase):
             else:values['initial_invocation_raw'] = None
             with self.assertRaises(RuntimeError):scope.declaration_equivalence_successor_preflight_binding(controller(), self.raw(x), **values)
 
+    def assert_extract_source_permission_hardening(self, original, current):
+        import ast
+        # The only admitted delta is this exact loop after archive validation
+        # and immediately before extraction. All original predicates, limits,
+        # arguments, relocation and returned archive bytes remain exact.
+        expected = copy.deepcopy(original)
+        archives = [node for node in ast.walk(expected) if isinstance(node, ast.With)
+            and any(isinstance(item.optional_vars, ast.Name) and item.optional_vars.id == 'archive'
+                    for item in node.items)]
+        self.assertEqual(len(archives), 1)
+        extraction = ast.dump(ast.parse('archive.extractall(target)').body[0])
+        positions = [index for index, node in enumerate(archives[0].body) if ast.dump(node) == extraction]
+        self.assertEqual(len(positions), 1)
+        archives[0].body.insert(positions[0], ast.parse(
+            'for member in entries:\n'
+            '    member.mode &= ~0o022\n').body[0])
+        self.assertEqual(ast.dump(expected), ast.dump(current))
+
+    def test_extract_source_permission_witness_rejects_other_semantic_changes(self):
+        import ast
+        old_commit = 'd8466a58cc577ed83189503f260a9c914fcac3be'
+        old = ast.parse(subprocess.check_output(['git', 'show',
+            old_commit + ':scripts/production-release/online-recharge-scope.py'], cwd=ROOT))
+        original = next(node for node in old.body if isinstance(node, ast.FunctionDef)
+                        and node.name == 'extract_source')
+        source = (ROOT / 'scripts/production-release/online-recharge-scope.py').read_text()
+        current = next(node for node in ast.parse(source).body if isinstance(node, ast.FunctionDef)
+                       and node.name == 'extract_source')
+        self.assert_extract_source_permission_hardening(original, current)
+        source = ast.get_source_segment(source, current)
+        loop = '        for member in entries:\n            member.mode &= ~0o022\n'
+        mutations = (
+            ('wider-mask', '~0o022', '0o755'),
+            ('group-write-retained', '~0o022', '~0o002'),
+            ('wrong-member-field', 'member.mode &=', 'member.uid &='),
+            ('wrong-operation', 'member.mode &=', 'member.mode |='),
+            ('partial-members', 'for member in entries:', 'for member in entries[:1]:'),
+            ('missing-loop', loop, ''),
+            ('duplicate-loop', loop, loop + loop),
+            ('late-loop', loop + '        archive.extractall(target)\n',
+                '        archive.extractall(target)\n' + loop),
+            ('extra-loop-body', 'member.mode &= ~0o022', 'member.mode &= ~0o022\n            member.uid = 0'),
+            ('size-limit', 'len(data) <= 128 * 1024 * 1024', 'len(data) <= 256 * 1024 * 1024'),
+            ('entry-type-guard', '(m.isfile() or m.isdir())', 'True'),
+            ('extraction-target', 'archive.extractall(target)', 'archive.extractall(target.parent)'),
+            ('returned-bytes', 'return data', 'return b""'),
+        )
+        for role, before, after in mutations:
+            with self.subTest(role=role):
+                self.assertEqual(source.count(before), 1)
+                mutated = ast.parse(source.replace(before, after)).body[0]
+                with self.assertRaises(AssertionError):
+                    self.assert_extract_source_permission_hardening(original, mutated)
+
     def test_old_all_functions_classes_and_constants_remain_exact_ast(self):
         import ast
         # The preservation witness is the reviewed pre-capability baseline.
@@ -2547,6 +2686,9 @@ class DeclarationEquivalencePureTests(unittest.TestCase):
         for node in old.body:
             if isinstance(node, (ast.FunctionDef, ast.ClassDef)):
                 actual = copy.deepcopy(by_name[node.name])
+                if node.name == 'extract_source':
+                    self.assert_extract_source_permission_hardening(node, actual)
+                    continue
                 if node.name == 'measure_declaration_equivalence':
                     # This previously closed stub is the sole replaced entry.
                     # Its ABI and two purpose/input guards remain exact; the
@@ -2568,6 +2710,24 @@ class DeclarationEquivalencePureTests(unittest.TestCase):
                                          'online-recharge-daemon-socket.py')])
                     current_names.value = previous_names.value
                 if node.name == 'protected_source':
+                    expected_worker = ast.parse(
+                        'if not _workspace_reviewed_worker_protected(d, previous, target, worker):\n'
+                        '    d.require(inventory(previous, worker) == inventory(target, worker), '\
+                        "'ONLINE_RECHARGE_LEGACY_SOURCE_CHANGED')\n").body[0]
+                    workers = [item for item in ast.walk(actual)
+                        if isinstance(item, ast.If) and isinstance(item.test, ast.UnaryOp)
+                        and isinstance(item.test.operand, ast.Call)
+                        and isinstance(item.test.operand.func, ast.Name)
+                        and item.test.operand.func.id == '_workspace_reviewed_worker_protected']
+                    self.assertEqual(len(workers), 1)
+                    self.assertEqual(ast.dump(workers[0]), ast.dump(expected_worker))
+                    replacements = 0
+                    for parent in ast.walk(actual):
+                        for _, items in ast.iter_fields(parent):
+                            if isinstance(items, list) and workers[0] in items:
+                                items[items.index(workers[0])] = copy.deepcopy(workers[0].body[0])
+                                replacements += 1
+                    self.assertEqual(replacements, 1)
                     # The B-only bank source adapter wraps the original grant
                     # check. Admit exactly this guard, then compare every
                     # historical predicate and fallback body unchanged.
@@ -6406,6 +6566,414 @@ class RestoredQualificationFailureTests(unittest.TestCase):
                 scope._restored_workspace_qualification_call(lambda:self.fail(error),
                     driver=self.driver, caps=SimpleNamespace(qualified=self.qualified))
             self.assertIs(raised.exception, error)
+
+
+class ReviewedApplicationMappingTests(unittest.TestCase):
+    """Real closed Git archives; synthetic metadata never publishes or grants F."""
+    @classmethod
+    def setUpClass(cls):
+        cls.bridge=json.loads(scope._RESTORED_B_WITNESS['failedPreflight'])['baseline']
+        cls.policy_name=scope._BITBROWSER_SCOPE_POLICY_FILE
+        cls.policy_raw=(ROOT/cls.policy_name).read_bytes()
+        cls.policy=json.loads(cls.policy_raw)
+        cls.candidate_scope=(ROOT/'scripts/production-release/online-recharge-scope.py').read_bytes()
+        cls.template_commit=subprocess.check_output(['git','rev-parse','HEAD'],cwd=ROOT).decode().strip()
+        cls.template_prefix='id-business-system-'+cls.template_commit+'/'
+        raw=subprocess.check_output(['git','archive','--format=tar.gz','--prefix='+cls.template_prefix,cls.template_commit],cwd=ROOT)
+        with tarfile.open(fileobj=io.BytesIO(raw),mode='r:gz') as archive:
+            cls.rows=[(copy.copy(row),archive.extractfile(row).read() if row.isfile() else None) for row in archive.getmembers()]
+        p=cls.bridge['baselineProducer']
+        cls.before_raw=subprocess.check_output(['git','archive','--format=tar.gz','--prefix=id-business-system-'+p['commit']+'/',p['commit']],cwd=ROOT)
+        cls.full=cls.build()
+        cls.before=scope._pending_workspace_current_source_inventory(cls.full[0],p)
+        cls.after=scope._pending_workspace_current_source_inventory(cls.full[0],cls.full[1])
+        assert scope.fingerprint(cls.bridge)==cls.policy['baselineOriginSha256']
+        assert len(cls.policy['files'])==40
+
+    @classmethod
+    def build(cls,replacements=None,deletions=(),modes=None):
+        own={'scripts/production-release/online-recharge-scope.py':cls.candidate_scope,
+            'scripts/production-release/online-recharge-scope.test.py':(ROOT/'scripts/production-release/online-recharge-scope.test.py').read_bytes(),
+            cls.policy_name:cls.policy_raw}
+        own.update(replacements or {})
+        modes=modes or {};deleted=set(deletions)
+        synthetic_commit='e'*40;prefix='id-business-system-'+synthetic_commit+'/'
+        data_by_name={row.name[len(cls.template_prefix):]:data for row,data in cls.rows if row.isfile()}
+        data_by_name.update(own)
+        for name in deleted:data_by_name.pop(name,None)
+        with tempfile.TemporaryDirectory(prefix='reviewed-index-',dir=RUNTIME) as folder:
+            environment={**os.environ,'GIT_INDEX_FILE':str(Path(folder)/'index')}
+            subprocess.run(['git','read-tree',cls.template_commit],cwd=ROOT,env=environment,check=True)
+            for name in deleted:
+                subprocess.run(['git','update-index','--force-remove',name],cwd=ROOT,env=environment,check=True)
+            for name in set(own)|set(modes):
+                if name in deleted:continue
+                blob=subprocess.check_output(['git','hash-object','-w','--stdin'],input=data_by_name[name],cwd=ROOT).decode().strip()
+                subprocess.run(['git','update-index','--add','--cacheinfo',modes.get(name,'100644'),blob,name],cwd=ROOT,env=environment,check=True)
+            tree=subprocess.check_output(['git','write-tree'],cwd=ROOT,env=environment).decode().strip()
+        output=io.BytesIO();written=set()
+        with tarfile.open(fileobj=output,mode='w:gz',compresslevel=1) as archive:
+            for old,data in cls.rows:
+                row=copy.copy(old);relative=row.name[len(cls.template_prefix):] if row.name.startswith(cls.template_prefix) else ''
+                row.name=prefix+relative if relative else prefix.rstrip('/')
+                if relative in deleted:continue
+                if row.isfile():
+                    data=data_by_name[relative];row.size=len(data)
+                    if relative in own or relative in modes:row.mode=0o755 if modes.get(relative)=='100755' else 0o644
+                    written.add(relative)
+                archive.addfile(row,io.BytesIO(data) if data is not None else None)
+            for relative in sorted(set(data_by_name)-written):
+                data=data_by_name[relative];row=tarfile.TarInfo(prefix+relative);row.size=len(data)
+                row.mode=0o755 if modes.get(relative)=='100755' else 0o644
+                archive.addfile(row,io.BytesIO(data))
+        producer={'commit':synthetic_commit,'sourceTree':tree,'workflowRunId':'124','workflowRunAttempt':'1'}
+        before_source=cls.bridge['baselineProducer']
+        cached={(before_source['commit'],before_source['sourceTree']):cls.before_raw,(synthetic_commit,tree):output.getvalue()}
+        d=controller(BASE=Path('/opt/id-business-v2'),_onlinePendingWorkspaceProducer=producer,_onlinePendingWorkspaceArchiveBytes=cached)
+        return d,producer,output.getvalue()
+
+    @contextmanager
+    def carrier(self):
+        with patch.object(scope.urllib.request,'urlopen',side_effect=AssertionError('no new network')):
+            yield
+
+    def inventory_for(self,fixture):
+        d,producer,raw=fixture
+        return scope._pending_workspace_current_source_inventory(d,producer)
+
+    @contextmanager
+    def physical_workers(self,published=False):
+        # Actual B/N Git archives and all 40 fixed hashes; only the preceding
+        # cold B/Q acquisition is synthetic. Never touch a production path.
+        with tempfile.TemporaryDirectory(prefix='reviewed-workers-',dir=RUNTIME) as folder, ExitStack() as stack:
+            base=Path(folder);bridge=copy.deepcopy(self.bridge)
+            previous=base/'releases'/('20261011T000000Z-'+bridge['baselineCommit'][:12])
+            previous.mkdir(parents=True,mode=0o700);bridge['baselineRelease']=str(previous)
+            policy=copy.deepcopy(self.policy);policy['baselineOriginSha256']=scope.fingerprint(bridge)
+            encoded=json.dumps(policy,separators=(',',':')).encode()
+            raw=encoded+b' '*(len(self.policy_raw)-len(encoded))
+            stack.enter_context(patch.object(scope,'_BITBROWSER_SCOPE_POLICY_SHA256',hashlib.sha256(raw).hexdigest()))
+            for key in ('_WORKSPACE_CAPACITY_CONTROL_POLICY','_WORKSPACE_RELEASE_RULES_POLICY'):
+                value=copy.deepcopy(getattr(scope,key));value['baselineOriginSha256']=scope.fingerprint(bridge)
+                stack.enter_context(patch.object(scope,key,value))
+            d,p,after_raw=self.build({self.policy_name:raw});d.BASE=base
+            target=base/'releases'/('20261012T000000Z-'+p['commit'][:12]);target.mkdir(mode=0o700)
+            d._onlinePendingWorkspaceSession={'bridge':bridge,'producer':p}
+            reader=SimpleNamespace(online_after_bit_cold=MagicMock(return_value=bridge))
+            stack.enter_context(patch.object(scope,'_pending_workspace_reader',return_value=reader))
+            stack.enter_context(patch.object(scope,'_workspace_baseline_reader',return_value=(scope.ONLINE_AFTER_BIT_KIND,reader.online_after_bit_cold)))
+            stack.enter_context(patch.object(scope,'_workspace_after_bit_materials',return_value={
+                'producer':{'archiveInventorySha256':scope.fingerprint(self.before)}}))
+            stack.enter_context(self.carrier())
+            worker='apps/api/src/id-business-v2/auto-recharge/worker'
+            roots=(worker+'/', 'apps/api/src/id-business-v2/auto-registration/')
+            shared_names=('scripts/v2-data-integrity-audit.mjs','scripts/lib/v2-data-integrity-audit.mjs',
+                'scripts/sync-v2-new-table-grants.mjs',scope.GRANT_SOURCE)
+            for directory,producer,archive_raw in ((previous,bridge['baselineProducer'],self.before_raw),(target,p,after_raw)):
+                prefix='id-business-system-'+producer['commit']+'/'
+                with tarfile.open(fileobj=io.BytesIO(archive_raw),mode='r:gz') as archive:
+                    for row in archive.getmembers():
+                        name=row.name[len(prefix):]
+                        if row.isfile() and (name.startswith(roots) or name in shared_names
+                                or name in self.policy['files'] or name==self.policy_name
+                                or name in scope._AFTER_BIT_BANK_POLICY_FILES):
+                            path=directory/name;path.parent.mkdir(parents=True,exist_ok=True)
+                            path.write_bytes(archive.extractfile(row).read());path.chmod(0o644)
+            (base/'current').symlink_to(target if published else previous)
+            manifest={'commit':p['commit'],'sourceTree':p['sourceTree'],'previousRelease':str(previous),
+                'previousCommit':bridge['baselineCommit'],'previousManifestSha256':bridge['manifestBytesSha256']}
+            if published:
+                for name,value in (('release-manifest.json',manifest),(scope.STATE_FILE,{}),(scope.PROOF_FILE,{})):
+                    path=target/name;path.write_text(json.dumps(value)+'\n');path.chmod(0o600)
+            yield SimpleNamespace(d=d,p=p,bridge=bridge,previous=previous,target=target,base=base,
+                worker=worker,manifest=manifest,reader=reader)
+
+    def test_reviewed_worker_source_carry_passes_stage_and_published_without_rewriting_b(self):
+        for published in (False,True):
+            with self.subTest(published=published),self.physical_workers(published) as f:
+                name=f.worker+'/server.py';before=(f.previous/name).read_bytes();after=(f.target/name).read_bytes()
+                self.assertNotEqual(before,after)
+                scope.protected_source(f.d,f.previous,f.target)
+                self.assertEqual((f.previous/name).read_bytes(),before)
+                self.assertEqual((f.target/name).read_bytes(),after)
+                self.assertEqual((f.base/'current').resolve(),f.target if published else f.previous)
+                self.assertGreater(f.reader.online_after_bit_cold.call_count,0)
+
+    def test_physical_worker_mapped_unmapped_bytes_modes_and_complete_sets_are_closed(self):
+        for side in ('before','after'):
+            for variation in ('mapped-byte','unmapped-byte','delete','mode','extra','symlink','hardlink','fifo'):
+                with self.subTest(side=side,variation=variation),self.physical_workers() as f:
+                    root=f.previous if side=='before' else f.target
+                    name=f.worker+('/attempt_ledger.py' if variation=='unmapped-byte' else '/server.py')
+                    path=root/name
+                    if variation.endswith('byte'):path.write_bytes(path.read_bytes()+b'UNSEALED')
+                    elif variation=='delete':path.unlink()
+                    elif variation=='mode':path.chmod(0o755)
+                    elif variation=='extra':(root/f.worker/'unreviewed.py').write_bytes(b'UNSEALED')
+                    elif variation=='symlink':path.unlink();path.symlink_to('attempt_ledger.py')
+                    elif variation=='hardlink':os.link(path,root/f.worker/'unreviewed.py')
+                    else:path.unlink();os.mkfifo(path)
+                    with self.assertRaises((RuntimeError,OSError)):
+                        scope.protected_source(f.d,f.previous,f.target)
+
+    def test_worker_carry_requires_complete_mapping_and_fresh_old_materials(self):
+        with self.physical_workers() as f:
+            actual=scope._pending_workspace_current_source_inventory(f.d,f.p)
+            name=next(n for n in self.policy['files'] if not n.startswith(f.worker+'/'))
+            actual.pop(name)
+            with patch.object(scope,'_pending_workspace_profile',return_value=actual):
+                with self.assertRaisesRegex(RuntimeError,'APPLICATION_SOURCE_CHANGED'):
+                    scope.protected_source(f.d,f.previous,f.target)
+        with self.physical_workers() as f,patch.object(scope,'_workspace_after_bit_materials',
+                side_effect=RuntimeError('ONLINE_RECHARGE_AFTER_BIT_ORIGIN_CHANGED')):
+            with self.assertRaisesRegex(RuntimeError,'AFTER_BIT_ORIGIN_CHANGED'):
+                scope.protected_source(f.d,f.previous,f.target)
+
+    def test_reviewed_nonworker_physical_files_and_before_absence_remain_exact(self):
+        name=next(n for n,pair in self.policy['files'].items()
+            if n.startswith('apps/admin/') and pair['before'] is not None)
+        for side in ('before','after'):
+            for variation in ('byte','mode','delete'):
+                with self.subTest(side=side,variation=variation),self.physical_workers() as f:
+                    path=(f.previous if side=='before' else f.target)/name
+                    if variation=='byte':path.write_bytes(path.read_bytes()+b'UNSEALED')
+                    elif variation=='mode':path.chmod(0o755)
+                    else:path.unlink()
+                    with self.assertRaises((RuntimeError,OSError)):
+                        scope.protected_source(f.d,f.previous,f.target)
+        for name in (self.policy_name,'docs/BITBROWSER_FLOW_RELEASE_20261012.md'):
+            with self.subTest(added_before=name),self.physical_workers() as f:
+                path=f.previous/name;path.parent.mkdir(parents=True,exist_ok=True);path.write_bytes(b'UNSEALED')
+                with self.assertRaisesRegex(RuntimeError,'LEGACY_SOURCE_CHANGED'):
+                    scope.protected_source(f.d,f.previous,f.target)
+
+    def test_worker_carry_stage_and_published_phase_bindings_are_closed(self):
+        for published,variation in ((False,'old-current-moved'),(False,'stage-receipt'),
+                (False,'wrong-target-name'),(True,'manifest-commit'),(True,'manifest-tree'),
+                (True,'manifest-previous'),(True,'manifest-previous-commit'),
+                (True,'manifest-old-sha'),(True,'proof-missing')):
+            with self.subTest(published=published,variation=variation),self.physical_workers(published) as f:
+                if variation=='old-current-moved':
+                    (f.base/'current').unlink();(f.base/'current').symlink_to(f.base)
+                elif variation=='stage-receipt':(f.target/scope.STATE_FILE).write_text('{}\n')
+                elif variation=='wrong-target-name':
+                    other=f.base/'releases'/'unbound-candidate';f.target.rename(other);f.target=other
+                elif variation=='proof-missing':(f.target/scope.PROOF_FILE).unlink()
+                else:
+                    key={'manifest-commit':'commit','manifest-tree':'sourceTree','manifest-previous':'previousRelease',
+                        'manifest-previous-commit':'previousCommit',
+                        'manifest-old-sha':'previousManifestSha256'}[variation]
+                    f.manifest[key]='unbound';(f.target/'release-manifest.json').write_text(json.dumps(f.manifest)+'\n')
+                with self.assertRaises((RuntimeError,OSError)):
+                    scope.protected_source(f.d,f.previous,f.target)
+
+    def test_worker_carry_source_scan_rejects_current_pointer_drift(self):
+        with self.physical_workers() as f:
+            read=scope._declaration_source_bytes
+            def moved(path,**kwargs):
+                result=read(path,**kwargs)
+                if path==f.target/(f.worker+'/server.py'):
+                    (f.base/'current').unlink();(f.base/'current').symlink_to(f.target)
+                return result
+            with patch.object(scope,'_declaration_source_bytes',side_effect=moved):
+                with self.assertRaisesRegex(RuntimeError,'LEGACY_SOURCE_CHANGED'):
+                    scope.protected_source(f.d,f.previous,f.target)
+
+    def test_worker_carry_accepts_actual_restoration_session_dispatch(self):
+        for published in (False,True):
+            with self.subTest(published=published),self.physical_workers(published) as f:
+                f.d._onlinePendingWorkspaceSession.update(restoration={},beforeServices={})
+                with patch.object(scope,'_restored_workspace_sidecar',return_value={}) as sidecar:
+                    scope.protected_source(f.d,f.previous,f.target)
+                    self.assertGreater(sidecar.call_count,0)
+
+    def test_registration_and_historical_or_ordinary_worker_paths_keep_original_equality(self):
+        with self.physical_workers() as f:
+            path=next((f.target/'apps/api/src/id-business-v2/auto-registration').rglob('*.ts'))
+            path.write_bytes(path.read_bytes()+b'UNSEALED')
+            with self.assertRaisesRegex(RuntimeError,'LEGACY_SOURCE_CHANGED'):
+                scope.protected_source(f.d,f.previous,f.target)
+        for historical in (False,True):
+            with self.subTest(historical=historical),self.physical_workers() as f:
+                if historical:f.d._onlinePendingWorkspaceSession['bridge']['baselineRelease']=str(f.base/'historical-b')
+                else:del f.d._onlinePendingWorkspaceSession
+                with patch.object(scope,'_pending_workspace_session',side_effect=AssertionError('no source exception')):
+                    with self.assertRaisesRegex(RuntimeError,'LEGACY_SOURCE_CHANGED'):
+                        scope.protected_source(f.d,f.previous,f.target)
+
+    def test_complete_forty_files_and_added_policy_pass_all_three_active_gates(self):
+        d,p,raw=self.full
+        names=frozenset(self.policy['files'])|{self.policy_name}
+        with self.carrier():
+            self.assertEqual(scope._workspace_reviewed_application_inventory(d,self.bridge,self.before,self.after,p),names)
+            self.assertEqual(scope._workspace_release_ci_inventory(d,self.bridge,self.before,self.after),frozenset(scope._AFTER_BIT_RELEASE_CI_FILES))
+            self.assertEqual(scope._workspace_bank_policy_inventory(d,self.bridge,self.before,self.after),frozenset(scope._AFTER_BIT_BANK_POLICY_FILES)-scope._PENDING_WORKSPACE_RECEIPT_COMPATIBILITY_FILES)
+            self.assertEqual(scope._pending_workspace_profile(d,self.bridge,p),self.after)
+        self.assertEqual(len(self.policy['files']),40)
+        self.assertEqual(sum(pair['before'] is None for pair in self.policy['files'].values()),1)
+
+    def test_each_reviewed_file_hash_revert_delete_or_executable_mode_is_rejected(self):
+        d,p,raw=self.full
+        for name,pair in self.policy['files'].items():
+            for variation in ('hash','revert','delete','executable'):
+                changed=copy.deepcopy(self.after)
+                if variation=='hash':changed[name]['sha256']='0'*64
+                elif variation=='revert':
+                    if pair['before'] is None:changed.pop(name)
+                    else:changed[name]=copy.deepcopy(self.before[name])
+                elif variation=='delete':changed.pop(name)
+                else:changed[name]['mode']='100755'
+                with self.subTest(name=name,variation=variation):
+                    with self.assertRaisesRegex(RuntimeError,'APPLICATION_SOURCE_CHANGED'):
+                        scope._workspace_reviewed_application_inventory(d,self.bridge,self.before,changed,p)
+
+    def test_real_archive_deleted_reviewed_file_is_rejected_after_successful_tree_validation(self):
+        name=next(iter(self.policy['files']))
+        d,p,raw=self.build(deletions=(name,))
+        inventory=self.inventory_for((d,p,raw))
+        self.assertNotIn(name,inventory)
+        with self.assertRaisesRegex(RuntimeError,'APPLICATION_SOURCE_CHANGED'):
+            scope._workspace_reviewed_application_inventory(d,self.bridge,self.before,inventory,p)
+
+    def test_real_archive_single_application_byte_drift_is_rejected(self):
+        name='apps/api/src/id-business-v2/auto-recharge/worker/server.py'
+        data=subprocess.check_output(['git','show',self.template_commit+':'+name],cwd=ROOT)+b'\n'
+        d,p,raw=self.build({name:data});inventory=self.inventory_for((d,p,raw))
+        with self.assertRaisesRegex(RuntimeError,'APPLICATION_SOURCE_CHANGED'):
+            scope._workspace_reviewed_application_inventory(d,self.bridge,self.before,inventory,p)
+
+    def test_real_archive_executable_application_mode_is_rejected(self):
+        name='apps/api/src/id-business-v2/auto-recharge/worker/server.py'
+        d,p,raw=self.build(modes={name:'100755'});inventory=self.inventory_for((d,p,raw))
+        with self.assertRaisesRegex(RuntimeError,'APPLICATION_SOURCE_CHANGED'):
+            scope._workspace_reviewed_application_inventory(d,self.bridge,self.before,inventory,p)
+
+    def test_added_doc_cannot_have_a_fabricated_before_entry(self):
+        d,p,raw=self.full;before=copy.deepcopy(self.before)
+        before['docs/BITBROWSER_FLOW_RELEASE_20261012.md']=copy.deepcopy(self.after['docs/BITBROWSER_FLOW_RELEASE_20261012.md'])
+        with self.assertRaisesRegex(RuntimeError,'APPLICATION_SOURCE_CHANGED'):
+            scope._workspace_reviewed_application_inventory(d,self.bridge,before,self.after,p)
+
+    def test_policy_missing_unknown_hash_executable_or_preexisting_is_rejected(self):
+        d,p,raw=self.full
+        for variation in ('missing','hash','mode','preexisting'):
+            before=copy.deepcopy(self.before);after=copy.deepcopy(self.after)
+            if variation=='missing':after.pop(self.policy_name)
+            elif variation=='hash':after[self.policy_name]['sha256']='f'*64
+            elif variation=='mode':after[self.policy_name]['mode']='100755'
+            else:before[self.policy_name]=copy.deepcopy(after[self.policy_name])
+            with self.subTest(variation=variation),self.carrier():
+                with self.assertRaises(RuntimeError):
+                    if variation=='missing':
+                        with patch.object(scope,'_pending_workspace_current_source_inventory',side_effect=[after,before]):scope._pending_workspace_profile(d,self.bridge,p)
+                    else:scope._workspace_reviewed_application_inventory(d,self.bridge,before,after,p)
+
+    def test_changed_policy_in_a_valid_new_tree_is_not_accepted(self):
+        raw=self.policy_raw.replace(b'"pullRequest": 446',b'"pullRequest": 447')
+        self.assertNotEqual(raw,self.policy_raw)
+        self.assertEqual(len(raw),len(self.policy_raw))
+        d,p,source=self.build({self.policy_name:raw});inventory=self.inventory_for((d,p,source))
+        with self.assertRaisesRegex(RuntimeError,'APPLICATION_SOURCE_CHANGED'):
+            scope._workspace_reviewed_application_inventory(d,self.bridge,self.before,inventory,p)
+
+    def test_policy_after_none_and_boolean_bytes_fail_schema_even_with_test_only_digest_pin(self):
+        for variation in ('after-none','bytes-bool','before-identity','partial-files'):
+            policy=copy.deepcopy(self.policy);name=next(iter(policy['files']))
+            if variation=='after-none':policy['files'][name]['after']=None
+            elif variation=='bytes-bool':policy['files'][name]['after']['bytes']=True
+            elif variation=='before-identity':policy['baselineProducer']['workflowRunId']='125'
+            else:policy['files'].pop(name)
+            encoded=json.dumps(policy,sort_keys=True,separators=(',',':')).encode()
+            self.assertLessEqual(len(encoded),len(self.policy_raw))
+            raw=encoded+b' '*(len(self.policy_raw)-len(encoded))
+            d,p,source=self.build({self.policy_name:raw});inventory=self.inventory_for((d,p,source))
+            # This isolated schema test supplies an explicit test-only digest;
+            # production remains pinned to the immutable approved JSON bytes.
+            with self.subTest(variation=variation),patch.object(scope,'_BITBROWSER_SCOPE_POLICY_SHA256',hashlib.sha256(raw).hexdigest()):
+                with self.assertRaisesRegex(RuntimeError,'APPLICATION_SOURCE_CHANGED'):
+                    scope._workspace_reviewed_application_inventory(d,self.bridge,self.before,inventory,p)
+
+    def test_only_exact_actual_b_bridge_and_controller_producer_are_accepted(self):
+        d,p,raw=self.full
+        for variation in ('kind','baseline','fingerprint'):
+            bridge=copy.deepcopy(self.bridge)
+            if variation=='kind':bridge['kind']=scope.ONLINE_PENDING_WORKSPACE_KIND
+            elif variation=='baseline':bridge['baselineProducer']['workflowRunId']='125'
+            else:bridge['publicationSha256']='f'*64
+            with self.subTest(variation=variation):
+                with self.assertRaises(RuntimeError):scope._workspace_reviewed_application_inventory(d,bridge,self.before,self.after,p)
+        with self.assertRaisesRegex(RuntimeError,'APPLICATION_SOURCE_CHANGED'):
+            scope._workspace_reviewed_application_inventory(d,self.bridge,self.before,self.after,{**p,'workflowRunId':'125'})
+
+    def test_missing_cached_archives_and_changed_cache_bytes_do_not_grant_mapping(self):
+        d,p,raw=self.full
+        for producer in (p,self.bridge['baselineProducer']):
+            key=(producer['commit'],producer['sourceTree']);saved=d._onlinePendingWorkspaceArchiveBytes.pop(key)
+            try:
+                with self.assertRaisesRegex(RuntimeError,'APPLICATION_SOURCE_CHANGED'):
+                    scope._workspace_reviewed_application_inventory(d,self.bridge,self.before,self.after,p)
+            finally:d._onlinePendingWorkspaceArchiveBytes[key]=saved
+        name=next(iter(self.policy['files']))
+        changed=subprocess.check_output(['git','show',self.template_commit+':'+name],cwd=ROOT)+b'\n'
+        other,unused,changed_raw=self.build({name:changed});key=(p['commit'],p['sourceTree'])
+        saved=d._onlinePendingWorkspaceArchiveBytes[key];d._onlinePendingWorkspaceArchiveBytes[key]=changed_raw
+        try:
+            with self.assertRaisesRegex(RuntimeError,'APPLICATION_SOURCE_CHANGED'):
+                scope._workspace_reviewed_application_inventory(d,self.bridge,self.before,self.after,p)
+            with self.assertRaisesRegex(RuntimeError,'SOURCE_TREE_CHANGED'):
+                scope._pending_workspace_current_source_inventory(d,p)
+        finally:d._onlinePendingWorkspaceArchiveBytes[key]=saved
+
+    def test_additional_application_config_migration_and_unknown_policy_still_fail_profile(self):
+        paths=('apps/api/src/main.ts','docker-compose.aws-mysql.yml','prisma/schema.prisma',
+            'prisma/migrations/unauthorized/migration.sql','deploy/aws/unknown-reviewed-policy.json')
+        for name in paths:
+            raw=(subprocess.check_output(['git','show',self.template_commit+':'+name],cwd=ROOT)+b'\n') if name in self.after else b'unapproved\n'
+            d,p,source=self.build({name:raw});inventory=self.inventory_for((d,p,source))
+            with self.subTest(name=name),self.carrier():
+                with self.assertRaisesRegex(RuntimeError,'APPLICATION_SOURCE_CHANGED'):
+                    scope._pending_workspace_profile(d,self.bridge,p)
+
+    def test_unrelated_deleted_file_still_fails_profile(self):
+        name='apps/api/src/main.ts'
+        d,p,raw=self.build(deletions=(name,));self.inventory_for((d,p,raw))
+        with self.carrier(),self.assertRaisesRegex(RuntimeError,'APPLICATION_SOURCE_CHANGED'):
+            scope._pending_workspace_profile(d,self.bridge,p)
+
+    def test_historical_ci_mapping_is_exact_and_rejects_current_or_partial_pins(self):
+        historical=scope._RESTORED_B_WITNESS['policy']['failedProducer']
+        archive=subprocess.check_output(['git','archive','--format=tar.gz',
+            '--prefix=id-business-system-'+historical['commit']+'/',historical['commit']],cwd=ROOT)
+        other=controller(BASE=Path('/opt/id-business-v2'),
+            _onlinePendingWorkspaceArchiveBytes={(historical['commit'],historical['sourceTree']):archive})
+        genuine=scope._pending_workspace_current_source_inventory(other,historical)
+        for mutation in ('current','partial','mode','extra'):
+            altered=copy.deepcopy(genuine)
+            key='scripts/ci-recharge-scope.mjs'
+            if mutation=='current':
+                altered[key]={'sha256':scope._AFTER_BIT_RELEASE_CI_FILES[key][1],'mode':'100644'}
+            elif mutation=='partial':altered[key]=copy.deepcopy(self.before[key])
+            elif mutation=='mode':altered[key]['mode']='100755'
+            else:altered[self.policy_name]=copy.deepcopy(self.after[self.policy_name])
+            with self.subTest(mutation=mutation),patch.object(scope,'_pending_workspace_current_source_inventory',
+                    side_effect=[self.before,altered]):
+                with self.assertRaisesRegex(RuntimeError,'B_RESTORE_FAILED_SOURCE_CHANGED'):
+                    scope._restored_workspace_failed_source_inventory(other,self.bridge,historical)
+        with patch.object(scope,'_pending_workspace_current_source_inventory',
+                side_effect=[self.before,genuine]):
+            with self.assertRaisesRegex(RuntimeError,'B_RESTORE_FAILED_SOURCE_CHANGED'):
+                scope._restored_workspace_failed_source_inventory(other,self.bridge,self.full[1])
+
+    def test_historical_failed_c_mapping_has_no_reviewed_application_exception(self):
+        d,p,raw=self.full
+        historical=scope._RESTORED_B_WITNESS['policy']['failedProducer']
+        archive=subprocess.check_output(['git','archive','--format=tar.gz','--prefix=id-business-system-'+historical['commit']+'/',historical['commit']],cwd=ROOT)
+        other=controller(BASE=Path('/opt/id-business-v2'),_onlinePendingWorkspaceProducer=p,
+            _onlinePendingWorkspaceArchiveBytes={**d._onlinePendingWorkspaceArchiveBytes,(historical['commit'],historical['sourceTree']):archive})
+        result=scope._restored_workspace_failed_source_inventory(other,self.bridge,historical)
+        self.assertEqual(scope._workspace_reviewed_application_inventory(other,self.bridge,self.before,result),frozenset())
+        self.assertNotIn(self.policy_name,result)
+
 
 
 if __name__ == '__main__':
