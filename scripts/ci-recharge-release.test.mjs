@@ -1990,6 +1990,7 @@ test('actual full-mode release controls select each missing suite once without r
     'python3 -B scripts/production-release/api-workspace-declaration-artifacts.test.py',
     'python3 -B scripts/production-release/formal-runtime-package.test.py',
     ...onlineReleaseRegressionCommands,
+    'python3 -B scripts/production-release/admin-pending-online-release.test.py',
     'python3 -B scripts/production-release/retire-orphan-retention.test.py',
     'python3 -B scripts/production-release/prepared-images.test.py',
     'python3 -B scripts/production-release/build-image-cache.test.py',
@@ -2051,6 +2052,9 @@ test('actual full-mode release controls preserve exact maintenance selection and
             'python3 -B scripts/production-release/formal-runtime-package.test.py'
           ]),
       ...(path === 'scripts/ci-recharge-check.mjs' ? onlineReleaseRegressionCommands : []),
+      ...(path === 'scripts/ci-recharge-check.mjs'
+        ? ['python3 -B scripts/production-release/admin-pending-online-release.test.py']
+        : []),
       'node --test scripts/v2-order-archive-release-policy.test.mjs',
       ...(path === 'scripts/ci-recharge-check.mjs'
         ? [
