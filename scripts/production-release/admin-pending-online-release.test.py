@@ -228,6 +228,52 @@ class PublicationTests(unittest.TestCase):
                 self.assertEqual(f.rollback,[])
                 self.assertFalse(any(row[0]=='compose'and row[1][:2]==('up','-d')for row in f.actions))
 
+    def test_original_runtime_schema_at_real_source_size_publishes_without_relaxing_other_private_reads(self):
+        name='apps/api/prisma-mysql/schema.prisma'
+        raw=subprocess.check_output(['git','show','e98eb0b1cab5102204e6b51950e2572ac2fc028f:'+name],cwd=ROOT)
+        self.assertEqual(len(raw),182527)
+        with tempfile.TemporaryDirectory(dir=RUNTIME)as root:
+            f=self.fixture(root);f.candidate[name]=(raw,'100644')
+            source=f.previous/'.deploy/production-release/pending-original-source'/name
+            source.write_bytes(raw)
+            with self.assertRaisesRegex(RuntimeError,'PRIVATE_FILE_CHANGED'):
+                a.private_bytes(source)
+            self.assertEqual(self.execute(f)['status'],'ADMIN_ONLY_PUBLISHED')
+            current=(f.base/'current').resolve()
+            self.assertEqual((current/'.deploy/production-release/pending-original-source'/name).read_bytes(),raw)
+            with patch.object(a,'BASELINE_MANIFEST_SHA256',a.digest((f.previous/'release-manifest.json').read_bytes())):
+                self.assertEqual(a.readback(f.controller,f.args.commit)['status'],'ADMIN_ONLY_READBACK_VERIFIED')
+
+    def test_original_runtime_source_bounds_and_identity_fail_before_release_files_or_service_changes(self):
+        name='apps/api/prisma-mysql/schema.prisma'
+        for fault in ('shorter','longer','bytes','mode','link','hardlink','oversize','empty','extra','missing'):
+            with self.subTest(fault=fault),tempfile.TemporaryDirectory(dir=RUNTIME)as root:
+                f=self.fixture(root);raw=b's' * 182527
+                if fault=='oversize':raw=b's' * (a.ORIGINAL_RUNTIME_SOURCE_LIMIT+1)
+                if fault=='empty':raw=b''
+                f.candidate[name]=(raw,'100644')
+                source=f.previous/'.deploy/production-release/pending-original-source'/name
+                source.write_bytes(raw)
+                expected='ORIGINAL_RUNTIME_SOURCE_CHANGED'
+                if fault=='shorter':source.write_bytes(raw[:-1])
+                if fault=='longer':source.write_bytes(raw+b'x');expected='PRIVATE_FILE_CHANGED'
+                if fault=='bytes':source.write_bytes(b'x'+raw[1:])
+                if fault=='mode':source.chmod(0o644);expected='PRIVATE_FILE_CHANGED'
+                if fault=='link':
+                    target=f.base/'linked-source';target.write_bytes(raw);target.chmod(0o600)
+                    source.unlink();source.symlink_to(target);expected='PRIVATE_PATH_CHANGED'
+                if fault=='hardlink':os.link(source,f.base/'linked-source');expected='PRIVATE_FILE_CHANGED'
+                if fault in ('oversize','empty'):expected='ORIGINAL_RUNTIME_SOURCE_SIZE_INVALID'
+                if fault=='extra':f.runtime['unreviewed-source']=(b'extra','100644')
+                if fault=='missing':del f.runtime[name]
+                if fault in ('extra','missing'):expected='ORIGINAL_RUNTIME_SOURCE_SET_CHANGED'
+                with self.assertRaisesRegex(RuntimeError,expected):self.execute(f)
+                self.assertEqual(f.rollback,[])
+                self.assertEqual(list((f.base/'releases').iterdir()),[f.previous])
+                self.assertEqual((f.base/'current').resolve(),f.previous)
+                self.assertFalse(any(row[0]=='compose'and row[1][:2]==('up','-d')for row in f.actions))
+                self.assertFalse(any(row[:2]==('docker','pull')for row in f.actions))
+
     def test_historical_digest_only_caddy_row_publishes_and_reads_back(self):
         with tempfile.TemporaryDirectory(dir=RUNTIME)as root:
             f=self.fixture(root)
