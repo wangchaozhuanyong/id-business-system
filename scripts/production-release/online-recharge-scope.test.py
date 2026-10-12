@@ -3517,6 +3517,24 @@ class PendingWorkspaceStageTests(unittest.TestCase):
 
 class AfterBitFormalTests(unittest.TestCase):
     """Real A/B type and API cold/binding bodies; external acquisition is synthetic."""
+    @classmethod
+    def setUpClass(cls):
+        # All five approved policy blobs come from the retained main commit.
+        # This test file and the Admin adapter tests may change independently.
+        tree=subprocess.check_output(['git','rev-parse',REVIEWED_APPLICATION_TEMPLATE_COMMIT+'^{tree}'],cwd=ROOT).decode().strip()
+        if tree != REVIEWED_APPLICATION_TEMPLATE_TREE:
+            raise AssertionError('reviewed ONLINE policy fixture tree changed')
+        cls.reviewed_policy_sources={}
+        cls.reviewed_policy_modes={}
+        for name,(before_hash,after_hash) in scope._AFTER_BIT_BANK_POLICY_FILES.items():
+            raw=subprocess.check_output(['git','show',REVIEWED_APPLICATION_TEMPLATE_COMMIT+':'+name],cwd=ROOT)
+            entry=subprocess.check_output(['git','ls-tree',REVIEWED_APPLICATION_TEMPLATE_COMMIT,'--',name],cwd=ROOT).decode().split()
+            if (hashlib.sha256(raw).hexdigest()!=after_hash or len(entry)!=4
+                    or entry[0]!='100644' or entry[1]!='blob' or entry[3]!=name):
+                raise AssertionError('reviewed ONLINE policy fixture bytes or mode changed')
+            cls.reviewed_policy_sources[name]=raw
+            cls.reviewed_policy_modes[name]=entry[0]
+
     @contextmanager
     def fixture(self,policy=False):
         with tempfile.TemporaryDirectory(prefix='formal-b-',dir=RUNTIME) as temporary,ExitStack() as stack:
@@ -3739,7 +3757,8 @@ class AfterBitFormalTests(unittest.TestCase):
         for name,(before_hash,after_hash) in scope._AFTER_BIT_BANK_POLICY_FILES.items():
             before=subprocess.check_output(['git','show','31d2c6885a45817cd40d23fce8d6145bc9f18af2:'+name],cwd=ROOT)
             self.assertEqual(hashlib.sha256(before).hexdigest(),before_hash)
-            self.assertEqual(hashlib.sha256((ROOT/name).read_bytes()).hexdigest(),after_hash)
+            self.assertEqual(hashlib.sha256(self.reviewed_policy_sources[name]).hexdigest(),after_hash)
+            self.assertEqual(self.reviewed_policy_modes[name],'100644')
 
     def test_policy_group_source_test_mode_partial_and_other_source_drift_reject(self):
         for mutation in ('library','permission-test','acceptance-test','historical-test','online-test',
@@ -3771,7 +3790,7 @@ class AfterBitFormalTests(unittest.TestCase):
         with self.fixture(policy=True) as f:
             self.preflight_and_f(f);target=f.base/'policy-candidate';target.mkdir(mode=0o700)
             for name in scope._AFTER_BIT_BANK_POLICY_FILES:
-                dest=target/name;dest.parent.mkdir(parents=True,exist_ok=True);dest.write_bytes((ROOT/name).read_bytes());dest.chmod(0o644)
+                dest=target/name;dest.parent.mkdir(parents=True,exist_ok=True);dest.write_bytes(self.reviewed_policy_sources[name]);dest.chmod(0o644)
             protected=('apps/api/src/id-business-v2/auto-recharge/worker/fixture.cjs',
                 'apps/api/src/id-business-v2/auto-registration/fixture.cjs',
                 'scripts/v2-data-integrity-audit.mjs','scripts/lib/v2-data-integrity-audit.mjs','scripts/sync-v2-new-table-grants.mjs')
@@ -3786,6 +3805,24 @@ class AfterBitFormalTests(unittest.TestCase):
             f.qb.unlink()
             with self.assertRaises((RuntimeError,OSError)):scope.protected_source(f.d,f.old,target)
             f.a_reader.assert_not_called();f.d.compose.assert_not_called();f.d.sync_new_table_grants.assert_not_called();f.d.point_current.assert_not_called()
+
+    def test_unreviewed_current_policy_test_file_cannot_enter_fixed_group(self):
+        name='scripts/production-release/online-recharge-scope.test.py'
+        current=(ROOT/name).read_bytes()
+        self.assertNotEqual(current,self.reviewed_policy_sources[name])
+        with self.fixture(policy=True) as f:
+            self.preflight_and_f(f);target=f.base/'unreviewed-policy-candidate';target.mkdir(mode=0o700)
+            for path,raw in self.reviewed_policy_sources.items():
+                dest=target/path;dest.parent.mkdir(parents=True,exist_ok=True);dest.write_bytes(raw);dest.chmod(0o644)
+            for path in ('apps/api/src/id-business-v2/auto-recharge/worker/fixture.cjs',
+                    'apps/api/src/id-business-v2/auto-registration/fixture.cjs',
+                    'scripts/v2-data-integrity-audit.mjs','scripts/lib/v2-data-integrity-audit.mjs',
+                    'scripts/sync-v2-new-table-grants.mjs'):
+                dest=target/path;dest.parent.mkdir(parents=True,exist_ok=True);dest.write_bytes((f.old/path).read_bytes());dest.chmod(0o644)
+            (target/name).write_bytes(current)
+            with self.assertRaisesRegex(RuntimeError,'SHARED_GATE_SOURCE_CHANGED'):
+                scope.protected_source(f.d,f.old,target)
+            f.d.compose.assert_not_called();f.d.point_current.assert_not_called()
 
     def test_formal_b_stage_existing_api_origin_and_ordinary_readback(self):
         self.formal_stage()
@@ -3819,7 +3856,7 @@ class AfterBitFormalTests(unittest.TestCase):
                 (target/'docker-compose.aws-mysql.yml').write_bytes(b'synthetic-compose')
                 if policy:
                     for name in scope._AFTER_BIT_BANK_POLICY_FILES:
-                        dest=target/name;dest.parent.mkdir(parents=True,exist_ok=True);dest.write_bytes((ROOT/name).read_bytes());dest.chmod(0o644)
+                        dest=target/name;dest.parent.mkdir(parents=True,exist_ok=True);dest.write_bytes(self.reviewed_policy_sources[name]);dest.chmod(0o644)
                     for name in ('apps/api/src/id-business-v2/auto-recharge/worker/fixture.cjs',
                             'apps/api/src/id-business-v2/auto-registration/fixture.cjs',
                             'scripts/v2-data-integrity-audit.mjs','scripts/lib/v2-data-integrity-audit.mjs',
