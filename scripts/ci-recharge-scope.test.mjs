@@ -391,6 +391,45 @@ test('the fixed recovery policy and grant test are bounded controls and never au
     );
 });
 
+test('the exact BitBrowser source mapping and its five control files retain only guards', () => {
+  const policy = 'deploy/aws/bitbrowser-reviewed-release-20261012.json';
+  const controls = [
+    policy,
+    'scripts/production-release/online-recharge-scope.py',
+    'scripts/production-release/online-recharge-scope.test.py',
+    'scripts/ci-recharge-scope.mjs',
+    'scripts/ci-recharge-scope.test.mjs'
+  ];
+  for (const paths of [[policy], controls]) {
+    assert.equal(isCiOnly(paths), true);
+    assert.equal(checkMode(paths, schema, schema), 'ci-only');
+    assert.deepEqual(selectedParts(paths), ['guards']);
+    for (const eventName of ['pull_request', 'push']) {
+      const { result } = recordScopeClassification(paths, {}, eventName);
+      assert.equal(result.mode, 'ci-only');
+      assert.deepEqual(result.checkParts, ['guards']);
+      assert.equal(result.reuseMain, eventName === 'push');
+    }
+  }
+  for (const outside of [
+    policy + '.backup',
+    policy.replace('20261012', '20261013'),
+    policy.replace('reviewed-release', 'unreviewed-release'),
+    policy.replace('deploy/aws/', 'deploy/'),
+    'apps/api/src/main.ts',
+    'apps/admin/src/App.vue',
+    'apps/api/prisma-mysql/schema.prisma',
+    'apps/api/prisma-mysql/migrations/unreviewed/migration.sql'
+  ]) {
+    for (const paths of [[outside], [...controls, outside]]) {
+      assert.equal(isCiOnly(paths), false, outside);
+      assert.equal(checkMode(paths, schema, schema), 'full', outside);
+      for (const eventName of ['pull_request', 'push'])
+        assert.equal(recordScopeClassification(paths, {}, eventName).result.mode, 'full', outside);
+    }
+  }
+});
+
 test('PR and same-tree main CLI classification both read raw BASE_SHA and HEAD helper snapshots', () => {
   const paths = [
     onlineRechargeRecoveryPolicy,
