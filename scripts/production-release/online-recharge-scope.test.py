@@ -19,6 +19,11 @@ import unittest
 from unittest.mock import MagicMock, patch
 
 ROOT = Path(__file__).resolve().parents[2]
+# The first ONLINE admission is a fixed reviewed source contract. Later
+# independent business batches must not become its positive test fixture.
+# This commit is an existing main ancestor, retained after branch cleanup.
+REVIEWED_APPLICATION_TEMPLATE_COMMIT = '4a35c9c9d8f4a2df9e28503ffe491d4af5d8052e'
+REVIEWED_APPLICATION_TEMPLATE_TREE = '1aee6c41c593ede8869b07757bc2d69f6de2c3f5'
 RUNTIME = ROOT / '.runtime/online-recharge/release-tests'
 RUNTIME.mkdir(parents=True, exist_ok=True)
 
@@ -4709,11 +4714,17 @@ class AfterBitReceiptCISourceTests(unittest.TestCase):
 
     def test_ci_hash_group_is_the_exact_checked_source_and_mode(self):
         self.assertEqual(len(scope._AFTER_BIT_RELEASE_CI_FILES), 4)
+        tree = subprocess.check_output(['git', 'rev-parse', REVIEWED_APPLICATION_TEMPLATE_COMMIT + '^{tree}'], cwd=ROOT).decode().strip()
+        self.assertEqual(tree, REVIEWED_APPLICATION_TEMPLATE_TREE)
         for name, (before, after) in scope._AFTER_BIT_RELEASE_CI_FILES.items():
             raw = subprocess.check_output(['git', 'show', '31d2c6885a45817cd40d23fce8d6145bc9f18af2:' + name], cwd=ROOT)
             self.assertEqual(hashlib.sha256(raw).hexdigest(), before)
-            self.assertEqual(hashlib.sha256((ROOT / name).read_bytes()).hexdigest(), after)
-            self.assertFalse((ROOT / name).stat().st_mode & 0o111)
+            reviewed = subprocess.check_output(['git', 'show', REVIEWED_APPLICATION_TEMPLATE_COMMIT + ':' + name], cwd=ROOT)
+            self.assertEqual(hashlib.sha256(reviewed).hexdigest(), after)
+            entry = subprocess.check_output(['git', 'ls-tree', REVIEWED_APPLICATION_TEMPLATE_COMMIT, '--', name], cwd=ROOT).decode().split()
+            self.assertEqual(entry[0], '100644')
+            self.assertEqual(entry[1], 'blob')
+            self.assertEqual(entry[3], name)
 
 
 
@@ -6577,7 +6588,11 @@ class ReviewedApplicationMappingTests(unittest.TestCase):
         cls.policy_raw=(ROOT/cls.policy_name).read_bytes()
         cls.policy=json.loads(cls.policy_raw)
         cls.candidate_scope=(ROOT/'scripts/production-release/online-recharge-scope.py').read_bytes()
-        cls.template_commit=subprocess.check_output(['git','rev-parse','HEAD'],cwd=ROOT).decode().strip()
+        cls.template_commit=REVIEWED_APPLICATION_TEMPLATE_COMMIT
+        template_tree=subprocess.check_output(['git','rev-parse',cls.template_commit+'^{tree}'],cwd=ROOT).decode().strip()
+        if template_tree != REVIEWED_APPLICATION_TEMPLATE_TREE:
+            raise AssertionError('reviewed ONLINE application fixture tree changed')
+        cls.template_test=subprocess.check_output(['git','show',cls.template_commit+':scripts/production-release/online-recharge-scope.test.py'],cwd=ROOT)
         cls.template_prefix='id-business-system-'+cls.template_commit+'/'
         raw=subprocess.check_output(['git','archive','--format=tar.gz','--prefix='+cls.template_prefix,cls.template_commit],cwd=ROOT)
         with tarfile.open(fileobj=io.BytesIO(raw),mode='r:gz') as archive:
@@ -6593,7 +6608,7 @@ class ReviewedApplicationMappingTests(unittest.TestCase):
     @classmethod
     def build(cls,replacements=None,deletions=(),modes=None):
         own={'scripts/production-release/online-recharge-scope.py':cls.candidate_scope,
-            'scripts/production-release/online-recharge-scope.test.py':(ROOT/'scripts/production-release/online-recharge-scope.test.py').read_bytes(),
+            'scripts/production-release/online-recharge-scope.test.py':cls.template_test,
             cls.policy_name:cls.policy_raw}
         own.update(replacements or {})
         modes=modes or {};deleted=set(deletions)
@@ -6939,6 +6954,21 @@ class ReviewedApplicationMappingTests(unittest.TestCase):
         d,p,raw=self.build(deletions=(name,));self.inventory_for((d,p,raw))
         with self.carrier(),self.assertRaisesRegex(RuntimeError,'APPLICATION_SOURCE_CHANGED'):
             scope._pending_workspace_profile(d,self.bridge,p)
+
+    def test_later_mailbox_batch_and_ci_source_do_not_enter_first_online_mapping(self):
+        paths=('apps/api/src/id-business-v2/auto-registration/worker/apple_closed_loop.py',
+            'apps/api/src/id-business-v2/auto-registration/worker/apple_mailboxes.py',
+            'scripts/ci-recharge-check.mjs')
+        for name in paths:
+            with self.subTest(name=name):
+                current=(ROOT/name).read_bytes() if (ROOT/name).is_file() else b'unreviewed-independent-batch\n'
+                if name in self.after:
+                    original=subprocess.check_output(['git','show',self.template_commit+':'+name],cwd=ROOT)
+                    if current == original:
+                        current += b'\nunreviewed-independent-batch\n'
+                d,p,raw=self.build({name:current})
+                with self.carrier(),self.assertRaisesRegex(RuntimeError,'APPLICATION_SOURCE_CHANGED'):
+                    scope._pending_workspace_profile(d,self.bridge,p)
 
     def test_historical_ci_mapping_is_exact_and_rejects_current_or_partial_pins(self):
         historical=scope._RESTORED_B_WITNESS['policy']['failedProducer']
