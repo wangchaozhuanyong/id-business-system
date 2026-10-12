@@ -4967,6 +4967,23 @@ class RestoredBindingDraftTests(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             _RestoreMaterial.restored_before_and_stop_shape(record, f, {'sourceApiIdentity': old}, audit)
 
+def reviewed_capacity_sources():
+    # Capacity admission is a fixed five-file mapping, independent of later
+    # legitimate workflow changes. Retain its reviewed main bytes and modes.
+    tree=subprocess.check_output(['git','rev-parse',REVIEWED_APPLICATION_TEMPLATE_COMMIT+'^{tree}'],cwd=ROOT).decode().strip()
+    if tree != REVIEWED_APPLICATION_TEMPLATE_TREE:
+        raise AssertionError('reviewed capacity fixture tree changed')
+    sources={}
+    for name,pair in scope._WORKSPACE_CAPACITY_CONTROL_POLICY['files'].items():
+        raw=subprocess.check_output(['git','show',REVIEWED_APPLICATION_TEMPLATE_COMMIT+':'+name],cwd=ROOT)
+        entry=subprocess.check_output(['git','ls-tree',REVIEWED_APPLICATION_TEMPLATE_COMMIT,'--',name],cwd=ROOT).decode().split()
+        if (len(entry)!=4 or entry[0]!='100644' or entry[1]!='blob' or entry[3]!=name
+                or pair['after']!={'mode':entry[0],'bytes':len(raw),'sha256':hashlib.sha256(raw).hexdigest()}):
+            raise AssertionError('reviewed capacity fixture bytes or mode changed')
+        sources[name]=raw
+    return sources
+
+
 class RestoredEntryTests(unittest.TestCase):
     def test_actual_failed_source_and_material_are_full_archive_bound_without_native_paths(self):
         witness=scope._RESTORED_B_WITNESS
@@ -5067,11 +5084,10 @@ class RestoredEntryTests(unittest.TestCase):
         witness=scope._RESTORED_B_WITNESS
         bridge=json.loads(witness['failedPreflight'])['baseline']
         policy=copy.deepcopy(scope._WORKSPACE_CAPACITY_CONTROL_POLICY)
-        owned={name:(ROOT/name).read_bytes() for name in policy['files']}
+        owned=reviewed_capacity_sources()
         for name,data in owned.items():
             self.assertEqual(policy['files'][name]['after'],{
                 'mode':'100644','bytes':len(data),'sha256':hashlib.sha256(data).hexdigest()})
-            self.assertFalse((ROOT/name).stat().st_mode&0o111)
         base_commit='caf6c440324f83fb76e03eea8e9f2dd2f5ee5a20'
         synthetic_commit='e'*40
         base_prefix='id-business-system-'+base_commit+'/'
@@ -5095,14 +5111,16 @@ class RestoredEntryTests(unittest.TestCase):
             return output.getvalue()
         # An isolated temporary index lets Git itself calculate the complete
         # source tree. This synthetic producer is never a run or publication.
-        with tempfile.TemporaryDirectory(prefix='capacity-index-',dir=RUNTIME) as temporary:
-            environment={**os.environ,'GIT_INDEX_FILE':str(Path(temporary)/'index')}
-            subprocess.run(['git','read-tree',base_commit],cwd=ROOT,env=environment,check=True)
-            for name,data in owned.items():
-                blob=subprocess.check_output(['git','hash-object','-w','--stdin'],input=data,cwd=ROOT).decode().strip()
-                subprocess.run(['git','update-index','--add','--cacheinfo','100644',blob,name],
-                    cwd=ROOT,env=environment,check=True)
-            tree=subprocess.check_output(['git','write-tree'],cwd=ROOT,env=environment).decode().strip()
+        def git_tree(replacements):
+            with tempfile.TemporaryDirectory(prefix='capacity-index-',dir=RUNTIME) as temporary:
+                environment={**os.environ,'GIT_INDEX_FILE':str(Path(temporary)/'index')}
+                subprocess.run(['git','read-tree',base_commit],cwd=ROOT,env=environment,check=True)
+                for name,data in replacements.items():
+                    blob=subprocess.check_output(['git','hash-object','-w','--stdin'],input=data,cwd=ROOT).decode().strip()
+                    subprocess.run(['git','update-index','--add','--cacheinfo','100644',blob,name],
+                        cwd=ROOT,env=environment,check=True)
+                return subprocess.check_output(['git','write-tree'],cwd=ROOT,env=environment).decode().strip()
+        tree=git_tree(owned)
         producer={'commit':synthetic_commit,'sourceTree':tree,'workflowRunId':'123','workflowRunAttempt':'1'}
         before_source=bridge['baselineProducer']
         before_raw=subprocess.check_output(['git','archive','--format=tar.gz',
@@ -5115,6 +5133,21 @@ class RestoredEntryTests(unittest.TestCase):
         original=scope._pending_workspace_current_source_inventory(d,before_source)
         inventory=scope._pending_workspace_current_source_inventory(d,producer)
         self.assertEqual(scope._workspace_capacity_control_inventory(d,bridge,original,inventory),frozenset(owned))
+        # The actual later workflow must still fail this historical mapping,
+        # even in a complete archive with its own independently verified tree.
+        name='.github/workflows/production-release.yml'
+        current=(ROOT/name).read_bytes()
+        self.assertNotEqual(current,owned[name])
+        unreviewed={**owned,name:current}
+        unreviewed_tree=git_tree(unreviewed)
+        unreviewed_producer={**producer,'sourceTree':unreviewed_tree}
+        unreviewed_d=controller(BASE=d.BASE,_onlinePendingWorkspaceProducer=unreviewed_producer,
+            _onlinePendingWorkspaceArchiveBytes={
+                (before_source['commit'],before_source['sourceTree']):before_raw,
+                (synthetic_commit,unreviewed_tree):rebuilt(unreviewed)})
+        unreviewed_inventory=scope._pending_workspace_current_source_inventory(unreviewed_d,unreviewed_producer)
+        with self.assertRaisesRegex(RuntimeError,'^ONLINE_RECHARGE_FIXED_CONTROL_SOURCE_CHANGED$'):
+            scope._workspace_capacity_control_inventory(unreviewed_d,bridge,original,unreviewed_inventory)
         for name in owned:
             for bad in ({'sha256':'0'*64,'mode':'100644'},
                 {'sha256':inventory[name]['sha256'],'mode':'100755'},original[name]):
@@ -5673,7 +5706,7 @@ class RestoredQualifiedTests(unittest.TestCase):
             'scripts/production-release/service-image-retention.test.py'})
         self.assertEqual(set(scope._WORKSPACE_RELEASE_RULES_POLICY['files']),{'AGENTS.md','docs/CENTRAL_RELEASE_20261002.md'})
         self.assertEqual(scope._WORKSPACE_CAPACITY_CONTROL_POLICY['files']['scripts/production-release/maintain-image-cache.test.py']['after']['sha256'],
-            hashlib.sha256((ROOT/'scripts/production-release/maintain-image-cache.test.py').read_bytes()).hexdigest())
+            hashlib.sha256(reviewed_capacity_sources()['scripts/production-release/maintain-image-cache.test.py']).hexdigest())
         for policy in (scope._WORKSPACE_CAPACITY_CONTROL_POLICY,scope._WORKSPACE_RELEASE_RULES_POLICY):
             for pair in policy['files'].values():
                 for value in pair.values():
@@ -5751,7 +5784,7 @@ class RestoredColdCacheTests(unittest.TestCase):
     """Offline cache acquisition with synthetic files and command responses only."""
     def test_download_and_retention_tables_match_the_frozen_actual_gap_tuple(self):
         import ast
-        source=(ROOT/'scripts/production-release/maintain-image-cache.py').read_text()
+        source=reviewed_capacity_sources()['scripts/production-release/maintain-image-cache.py'].decode()
         retention=next(ast.literal_eval(node.value) for node in ast.parse(source).body
             if isinstance(node,ast.Assign) and any(isinstance(target,ast.Name)
                 and target.id=='HISTORICAL_ONLINE_COLD_DEPENDENCIES' for target in node.targets))
