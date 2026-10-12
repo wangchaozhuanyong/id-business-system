@@ -1737,6 +1737,13 @@ class FixedBootstrapCacheTests(unittest.TestCase):
         original=(self.project/cache.CACHE_PINS[1]).read_text()
         for name in ('current','collect_dependencies','fixed_dependencies','make_plan','verify_remote','cache_execute'):
             self.assertEqual(original_ast(original,name),original_ast(frame['program'],name))
+        for name in ('historical_online_cold_dependencies','failed_online_recovery_dependencies','generic_cache_closed'):
+            self.assertEqual(original_ast(original,name),original_ast(frame['program'],name))
+        for name in ('HISTORICAL_ONLINE_COLD_DEPENDENCIES','HISTORICAL_ONLINE_COLD_POLICY_SHA256','FAILED_ONLINE_RECOVERY_DEPENDENCY'):
+            self.assertEqual(cache.literal_dependency(ast.parse(original),name) if name!='HISTORICAL_ONLINE_COLD_POLICY_SHA256'
+                else cache.HISTORICAL_ONLINE_COLD_POLICY_SHA256,
+                next(ast.literal_eval(n.value) for n in ast.parse(frame['program']).body if isinstance(n,ast.Assign)
+                    and any(isinstance(t,ast.Name) and t.id==name for t in n.targets)))
         snapshot=(self.project/cache.CACHE_PINS[3]).read_text()
         for name in ('NativeSnapshotDriver','snapshot_state','snapshot_validate','closed_json'):
             self.assertEqual(original_ast(snapshot,name),original_ast(frame['modules']['snapshot'],name))
@@ -1890,6 +1897,26 @@ class FixedBootstrapCacheTests(unittest.TestCase):
                 counts['capture']+=before-len(node.elts);return unused.generic_visit(node)
         tree=PriorDiagnostics().visit(ast.parse(current))
         self.assertEqual(counts,dict.fromkeys(counts,1))
+        # Project away only the reviewed permanent cold-dependency additions.
+        # The existing collector and transport must otherwise retain their AST.
+        collector=next(n for n in tree.body if isinstance(n,ast.FunctionDef) and n.name=='collect_dependencies')
+        addition=ast.parse('images |= historical_online_cold_dependencies(directory, observed, evidence)').body[0]
+        matches=[n for n in collector.body if ast.dump(n,include_attributes=False)==ast.dump(addition,include_attributes=False)]
+        self.assertEqual(len(matches),1);collector.body.remove(matches[0])
+        constructor=next(n for n in tree.body if isinstance(n,ast.FunctionDef) and n.name=='parameters')
+        projected=set()
+        for node in constructor.body:
+            if not isinstance(node,ast.Assign) or len(node.targets)!=1 or not isinstance(node.targets[0],ast.Name):continue
+            name=node.targets[0].id
+            if name=='header':
+                self.assertEqual(node.value.value,'import ast,base64,fcntl,hashlib,json,os,re,shutil,stat,subprocess,time,types\nfrom pathlib import Path\n')
+                node.value.value=node.value.value.replace('ast,base64,','ast,');projected.add(name)
+            elif name in ('constants','old_names'):
+                added=('FAILED_ONLINE_RECOVERY_DEPENDENCY','HISTORICAL_ONLINE_COLD_DEPENDENCIES','HISTORICAL_ONLINE_COLD_POLICY_SHA256') \
+                    if name=='constants' else ('historical_online_cold_dependencies','failed_online_recovery_dependencies','generic_cache_closed')
+                self.assertEqual([value.value for value in node.value.elts if value.value in added],list(added))
+                node.value.elts=[value for value in node.value.elts if value.value not in added];projected.add(name)
+        self.assertEqual(projected,{'header','constants','old_names'})
         revised={n.name:ast.dump(n,include_attributes=False) for n in tree.body if isinstance(n,(ast.FunctionDef,ast.ClassDef))}
         # Freeze the exact reviewed source bytes, then parse both witnesses with
         # this interpreter: AST fields such as Python 3.12's empty type_params
@@ -2281,6 +2308,152 @@ class FailedOnlineRecoveryDependencyTests(unittest.TestCase):
                 patch.object(cache,'collect_dependencies',return_value=drift),patch.object(cache,'read',side_effect=fixture.run_command):
             with self.assertRaisesRegex(RuntimeError,'Reviewed image dependencies changed'):cache.apply_plan(fixture.plan)
         self.assertEqual(fixture.removals(),[])
+
+
+class HistoricalOnlineColdDependencyTests(unittest.TestCase):
+    def setUp(self):
+        import copy
+        runtime=DIRECTORY.parents[1]/'.runtime/central-online-fixed-release-20261012/pre-switch-review'
+        runtime.mkdir(parents=True,exist_ok=True)
+        temporary=tempfile.TemporaryDirectory(dir=runtime);self.addCleanup(temporary.cleanup)
+        self.base=Path(temporary.name).resolve()
+        patcher=patch.object(cache,'BASE',self.base);patcher.start();self.addCleanup(patcher.stop)
+        self.images=copy.deepcopy(cache.HISTORICAL_ONLINE_COLD_DEPENDENCIES)
+        self.workspace=self.base/'releases/20261009T103426Z-0a03fa28e6b8'
+        origin_rows={image['service']:{'reference':cache.REPOSITORY+':'+tag,'digest':image['imageId']}
+            for tag,image in self.images.items() if tag.startswith('0a03')}
+        self.origin={'commit':'0a03fa28e6b844a18833d5c63f1de700f091fc64',
+            'sourceTree':'668ca1570a8e4898e7f473198087ec549c270239','images':origin_rows}
+        self.proof={**self.origin,'images':{name:{'reference':row['reference'],'imageId':row['digest']}
+            for name,row in origin_rows.items()}}
+        self.write(self.workspace/'release-manifest.json',self.origin)
+        self.write(self.workspace/'api-workspace-build-proof.json',self.proof)
+        self.previous_directory=self.base/'releases/20261011T000000Z-111111111111'
+        self.previous={'commit':'1'*40,'sourceTree':'2'*40,'images':{'api':{'digest':'sha256:'+'3'*64}}}
+        self.write(self.previous_directory/'release-manifest.json',self.previous)
+        # Only metadata is synthetic: the eight immutable tag/digest/source rows
+        # and both failed-attempt build proofs remain the original fixed values.
+        self.policy=json.loads((DIRECTORY/'online-recharge-recovery.json').read_text())
+        self.policy['preflight']['manifestSha256']=cache.plan_digest(self.origin)
+        self.policy['preflight']['workspaceBuildProofSha256']=cache.plan_digest(self.proof)
+        patcher=patch.object(cache,'HISTORICAL_ONLINE_COLD_POLICY_SHA256',cache.plan_digest(self.policy))
+        patcher.start();self.addCleanup(patcher.stop)
+        self.current('31d2c6885a45817cd40d23fce8d6145bc9f18af2')
+        self.commands=[]
+        failed=patch.object(cache,'failed_online_recovery_dependencies',return_value=set())
+        self.failed=failed.start();self.addCleanup(failed.stop)
+
+    def write(self,path,value):
+        path.parent.mkdir(parents=True,exist_ok=True);path.write_text(json.dumps(value))
+
+    def current(self,commit,**markers):
+        self.directory=self.base/('releases/20261012T000000Z-'+commit[:12])
+        self.manifest={'commit':commit,'sourceTree':'4'*40,'previousCommit':self.previous['commit'],
+            'previousRelease':str(self.previous_directory),'images':{'api':{'digest':'sha256:'+'5'*64}},**markers}
+        self.write(self.directory/'release-manifest.json',self.manifest)
+        self.policy_path=self.directory/'scripts/production-release/online-recharge-recovery.json'
+        self.write(self.policy_path,self.policy)
+        current=self.base/'current'
+        if current.is_symlink():current.unlink()
+        current.symlink_to(self.directory)
+
+    def command(self,*args):
+        self.commands.append(args)
+        self.assertEqual(args[:5],('docker','image','inspect','--format','{{.Id}}'))
+        value=args[-1]
+        if value.startswith(cache.REPOSITORY+':'):
+            return self.images[value[len(cache.REPOSITORY)+1:]]['imageId']
+        return value
+
+    def collect(self,command=None):
+        with patch.object(cache,'read',side_effect=command or self.command):
+            return cache.collect_dependencies(self.manifest,self.previous)
+
+    def test_current31d_retains_only_exact_eight_cold_images_with_file_evidence(self):
+        import hashlib
+        result=self.collect();ids={row['imageId'] for row in self.images.values()}
+        self.assertEqual(set(result['imageIds']),ids|{'sha256:'+'3'*64})
+        self.assertEqual(len([c for c in self.commands if c[-1].startswith(cache.REPOSITORY+':')]),8)
+        self.failed.assert_called_once()
+        for path in (self.policy_path,self.workspace/'release-manifest.json',self.workspace/'api-workspace-build-proof.json'):
+            self.assertEqual(result['evidenceSha256'][str(path.relative_to(self.base))],hashlib.sha256(path.read_bytes()).hexdigest())
+        inventory=[{'id':row['imageId'],'repoTags':[cache.REPOSITORY+':'+tag]} for tag,row in self.images.items()]
+        unrelated='f'*40+'-999-1-api';inventory.append({'id':'sha256:'+'6'*64,'repoTags':[cache.REPOSITORY+':'+unrelated]})
+        plan=cache.make_plan(self.manifest['commit'],self.previous,set(result['imageIds']),inventory,result)
+        self.assertEqual([row['tag'] for row in plan['items']],[unrelated])
+
+    def test_online_and_preserving_api_successors_keep_original_cold_dependencies(self):
+        markers=({'onlineRechargePublication':{'version':2,'scope':'ONLINE_RECHARGE'}},
+            {'preservedOnlineRechargeOrigin':{'version':1,'commit':'a'*40,
+                'manifestSha256':'b'*64,'buildProofSha256':'c'*64,'preservationSha256':'d'*64}})
+        for marker in markers:
+            with self.subTest(marker=next(iter(marker))):
+                self.current('7'*40,**marker);self.commands.clear()
+                self.assertEqual(set(self.collect()['imageIds']),{row['imageId'] for row in self.images.values()}|{'sha256:'+'3'*64})
+        self.failed.assert_not_called()
+
+    def test_unaffected_manifest_does_not_load_or_protect_historical_dependencies(self):
+        self.current('7'*40);self.policy_path.unlink()
+        result=self.collect();self.assertEqual(result['imageIds'],['sha256:'+'3'*64])
+        self.assertFalse(any(c[-1].startswith(cache.REPOSITORY+':') for c in self.commands))
+        self.failed.assert_not_called()
+
+    def test_each_missing_or_changed_exact_tag_blocks_without_delete_or_pull(self):
+        for tag in self.images:
+            with self.subTest(tag=tag):
+                self.commands.clear()
+                def unavailable(*args):
+                    value=self.command(*args)
+                    return 'sha256:'+'f'*64 if args[-1]==cache.REPOSITORY+':'+tag else value
+                with self.assertRaisesRegex(RuntimeError,'Required historical ONLINE cold dependency image is unavailable'):
+                    self.collect(unavailable)
+                self.assertTrue(self.commands)
+                self.assertTrue(all(c[:3]==('docker','image','inspect') for c in self.commands))
+                self.failed.assert_not_called()
+
+    def test_changed_policy_workspace_manifest_or_proof_rejects_before_inspect(self):
+        for path in (self.policy_path,self.workspace/'release-manifest.json',self.workspace/'api-workspace-build-proof.json'):
+            with self.subTest(file=path.name):
+                raw=path.read_bytes();row=json.loads(raw);row['sourceTree']='f'*40
+                self.write(path,row)
+                with self.assertRaisesRegex(RuntimeError,'Historical ONLINE .* changed'):self.collect()
+                self.assertEqual(self.commands,[]);path.write_bytes(raw)
+
+    def test_symlinked_dependency_evidence_rejects_before_inspect(self):
+        original=self.workspace/'api-workspace-build-proof.json'
+        other=self.workspace/'synthetic-other.json';original.rename(other);original.symlink_to(other)
+        with self.assertRaisesRegex(RuntimeError,'Dependency evidence path is not a regular project file'):self.collect()
+        self.assertEqual(self.commands,[])
+
+    def test_duplicate_proof_or_policy_key_rejects_before_inspect(self):
+        for path in (self.policy_path,self.workspace/'api-workspace-build-proof.json'):
+            with self.subTest(file=path.name):
+                raw=path.read_bytes();row=json.loads(raw);key=next(iter(row))
+                path.write_text('{'+json.dumps(key)+':'+json.dumps(row[key])+','+raw.decode()[1:])
+                with self.assertRaisesRegex(RuntimeError,'Duplicate cache evidence key'):self.collect()
+                self.assertEqual(self.commands,[]);path.write_bytes(raw)
+
+    def test_malformed_successor_marker_rejects_before_inspect(self):
+        for marker in ({'onlineRechargePublication':{'version':True,'scope':'ONLINE_RECHARGE'}},
+                {'onlineRechargePublication':{'version':2,'scope':'FOREIGN'}},
+                {'preservedOnlineRechargeOrigin':{'version':1,'imageIds':['sha256:'+'f'*64]}}):
+            with self.subTest(marker=marker):
+                self.current('7'*40,**marker)
+                with self.assertRaisesRegex(RuntimeError,'Historical ONLINE .* dependency changed'):self.collect()
+                self.assertEqual(self.commands,[])
+
+    def test_fixed_literal_and_proof_bindings_reject_arbitrary_tag_digest_or_source(self):
+        import copy
+        self.assertEqual(cache.plan_digest(cache.HISTORICAL_ONLINE_COLD_DEPENDENCIES),
+            'df190b221061b96d107d2ab32f409bee2e0938000015b1e00beb6bcd92585d71')
+        for name,value in (('imageId','sha256:'+'f'*64),('sourceCommit','f'*40),('sourceTree','f'*40),('service','foreign')):
+            mapping=copy.deepcopy(self.images);tag=next(iter(mapping));mapping[tag][name]=value
+            with self.subTest(field=name),patch.object(cache,'HISTORICAL_ONLINE_COLD_DEPENDENCIES',mapping):
+                self.commands.clear()
+                with self.assertRaisesRegex(RuntimeError,'Historical ONLINE dependency .* changed'):self.collect()
+                self.assertEqual(self.commands,[])
+        mapping=copy.deepcopy(self.images);row=mapping.pop(next(iter(mapping)));mapping['f'*40+'-1-1-admin']=row
+        with patch.object(cache,'HISTORICAL_ONLINE_COLD_DEPENDENCIES',mapping),self.assertRaises(RuntimeError):self.collect()
 
 
 class GenericWorkflowResultTests(unittest.TestCase):
