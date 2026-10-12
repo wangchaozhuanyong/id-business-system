@@ -2616,6 +2616,60 @@ class DeclarationEquivalencePureTests(unittest.TestCase):
             else:values['initial_invocation_raw'] = None
             with self.assertRaises(RuntimeError):scope.declaration_equivalence_successor_preflight_binding(controller(), self.raw(x), **values)
 
+    def assert_extract_source_permission_hardening(self, original, current):
+        import ast
+        # The only admitted delta is this exact loop after archive validation
+        # and immediately before extraction. All original predicates, limits,
+        # arguments, relocation and returned archive bytes remain exact.
+        expected = copy.deepcopy(original)
+        archives = [node for node in ast.walk(expected) if isinstance(node, ast.With)
+            and any(isinstance(item.optional_vars, ast.Name) and item.optional_vars.id == 'archive'
+                    for item in node.items)]
+        self.assertEqual(len(archives), 1)
+        extraction = ast.dump(ast.parse('archive.extractall(target)').body[0])
+        positions = [index for index, node in enumerate(archives[0].body) if ast.dump(node) == extraction]
+        self.assertEqual(len(positions), 1)
+        archives[0].body.insert(positions[0], ast.parse(
+            'for member in entries:\n'
+            '    member.mode &= ~0o022\n').body[0])
+        self.assertEqual(ast.dump(expected), ast.dump(current))
+
+    def test_extract_source_permission_witness_rejects_other_semantic_changes(self):
+        import ast
+        old_commit = 'd8466a58cc577ed83189503f260a9c914fcac3be'
+        old = ast.parse(subprocess.check_output(['git', 'show',
+            old_commit + ':scripts/production-release/online-recharge-scope.py'], cwd=ROOT))
+        original = next(node for node in old.body if isinstance(node, ast.FunctionDef)
+                        and node.name == 'extract_source')
+        source = (ROOT / 'scripts/production-release/online-recharge-scope.py').read_text()
+        current = next(node for node in ast.parse(source).body if isinstance(node, ast.FunctionDef)
+                       and node.name == 'extract_source')
+        self.assert_extract_source_permission_hardening(original, current)
+        source = ast.get_source_segment(source, current)
+        loop = '        for member in entries:\n            member.mode &= ~0o022\n'
+        mutations = (
+            ('wider-mask', '~0o022', '0o755'),
+            ('group-write-retained', '~0o022', '~0o002'),
+            ('wrong-member-field', 'member.mode &=', 'member.uid &='),
+            ('wrong-operation', 'member.mode &=', 'member.mode |='),
+            ('partial-members', 'for member in entries:', 'for member in entries[:1]:'),
+            ('missing-loop', loop, ''),
+            ('duplicate-loop', loop, loop + loop),
+            ('late-loop', loop + '        archive.extractall(target)\n',
+                '        archive.extractall(target)\n' + loop),
+            ('extra-loop-body', 'member.mode &= ~0o022', 'member.mode &= ~0o022\n            member.uid = 0'),
+            ('size-limit', 'len(data) <= 128 * 1024 * 1024', 'len(data) <= 256 * 1024 * 1024'),
+            ('entry-type-guard', '(m.isfile() or m.isdir())', 'True'),
+            ('extraction-target', 'archive.extractall(target)', 'archive.extractall(target.parent)'),
+            ('returned-bytes', 'return data', 'return b""'),
+        )
+        for role, before, after in mutations:
+            with self.subTest(role=role):
+                self.assertEqual(source.count(before), 1)
+                mutated = ast.parse(source.replace(before, after)).body[0]
+                with self.assertRaises(AssertionError):
+                    self.assert_extract_source_permission_hardening(original, mutated)
+
     def test_old_all_functions_classes_and_constants_remain_exact_ast(self):
         import ast
         # The preservation witness is the reviewed pre-capability baseline.
@@ -2632,6 +2686,9 @@ class DeclarationEquivalencePureTests(unittest.TestCase):
         for node in old.body:
             if isinstance(node, (ast.FunctionDef, ast.ClassDef)):
                 actual = copy.deepcopy(by_name[node.name])
+                if node.name == 'extract_source':
+                    self.assert_extract_source_permission_hardening(node, actual)
+                    continue
                 if node.name == 'measure_declaration_equivalence':
                     # This previously closed stub is the sole replaced entry.
                     # Its ABI and two purpose/input guards remain exact; the
@@ -2653,6 +2710,24 @@ class DeclarationEquivalencePureTests(unittest.TestCase):
                                          'online-recharge-daemon-socket.py')])
                     current_names.value = previous_names.value
                 if node.name == 'protected_source':
+                    expected_worker = ast.parse(
+                        'if not _workspace_reviewed_worker_protected(d, previous, target, worker):\n'
+                        '    d.require(inventory(previous, worker) == inventory(target, worker), '\
+                        "'ONLINE_RECHARGE_LEGACY_SOURCE_CHANGED')\n").body[0]
+                    workers = [item for item in ast.walk(actual)
+                        if isinstance(item, ast.If) and isinstance(item.test, ast.UnaryOp)
+                        and isinstance(item.test.operand, ast.Call)
+                        and isinstance(item.test.operand.func, ast.Name)
+                        and item.test.operand.func.id == '_workspace_reviewed_worker_protected']
+                    self.assertEqual(len(workers), 1)
+                    self.assertEqual(ast.dump(workers[0]), ast.dump(expected_worker))
+                    replacements = 0
+                    for parent in ast.walk(actual):
+                        for _, items in ast.iter_fields(parent):
+                            if isinstance(items, list) and workers[0] in items:
+                                items[items.index(workers[0])] = copy.deepcopy(workers[0].body[0])
+                                replacements += 1
+                    self.assertEqual(replacements, 1)
                     # The B-only bank source adapter wraps the original grant
                     # check. Admit exactly this guard, then compare every
                     # historical predicate and fallback body unchanged.
@@ -6565,6 +6640,166 @@ class ReviewedApplicationMappingTests(unittest.TestCase):
     def inventory_for(self,fixture):
         d,producer,raw=fixture
         return scope._pending_workspace_current_source_inventory(d,producer)
+
+    @contextmanager
+    def physical_workers(self,published=False):
+        # Actual B/N Git archives and all 40 fixed hashes; only the preceding
+        # cold B/Q acquisition is synthetic. Never touch a production path.
+        with tempfile.TemporaryDirectory(prefix='reviewed-workers-',dir=RUNTIME) as folder, ExitStack() as stack:
+            base=Path(folder);bridge=copy.deepcopy(self.bridge)
+            previous=base/'releases'/('20261011T000000Z-'+bridge['baselineCommit'][:12])
+            previous.mkdir(parents=True,mode=0o700);bridge['baselineRelease']=str(previous)
+            policy=copy.deepcopy(self.policy);policy['baselineOriginSha256']=scope.fingerprint(bridge)
+            encoded=json.dumps(policy,separators=(',',':')).encode()
+            raw=encoded+b' '*(len(self.policy_raw)-len(encoded))
+            stack.enter_context(patch.object(scope,'_BITBROWSER_SCOPE_POLICY_SHA256',hashlib.sha256(raw).hexdigest()))
+            for key in ('_WORKSPACE_CAPACITY_CONTROL_POLICY','_WORKSPACE_RELEASE_RULES_POLICY'):
+                value=copy.deepcopy(getattr(scope,key));value['baselineOriginSha256']=scope.fingerprint(bridge)
+                stack.enter_context(patch.object(scope,key,value))
+            d,p,after_raw=self.build({self.policy_name:raw});d.BASE=base
+            target=base/'releases'/('20261012T000000Z-'+p['commit'][:12]);target.mkdir(mode=0o700)
+            d._onlinePendingWorkspaceSession={'bridge':bridge,'producer':p}
+            reader=SimpleNamespace(online_after_bit_cold=MagicMock(return_value=bridge))
+            stack.enter_context(patch.object(scope,'_pending_workspace_reader',return_value=reader))
+            stack.enter_context(patch.object(scope,'_workspace_baseline_reader',return_value=(scope.ONLINE_AFTER_BIT_KIND,reader.online_after_bit_cold)))
+            stack.enter_context(patch.object(scope,'_workspace_after_bit_materials',return_value={
+                'producer':{'archiveInventorySha256':scope.fingerprint(self.before)}}))
+            stack.enter_context(self.carrier())
+            worker='apps/api/src/id-business-v2/auto-recharge/worker'
+            roots=(worker+'/', 'apps/api/src/id-business-v2/auto-registration/')
+            shared_names=('scripts/v2-data-integrity-audit.mjs','scripts/lib/v2-data-integrity-audit.mjs',
+                'scripts/sync-v2-new-table-grants.mjs',scope.GRANT_SOURCE)
+            for directory,producer,archive_raw in ((previous,bridge['baselineProducer'],self.before_raw),(target,p,after_raw)):
+                prefix='id-business-system-'+producer['commit']+'/'
+                with tarfile.open(fileobj=io.BytesIO(archive_raw),mode='r:gz') as archive:
+                    for row in archive.getmembers():
+                        name=row.name[len(prefix):]
+                        if row.isfile() and (name.startswith(roots) or name in shared_names
+                                or name in self.policy['files'] or name==self.policy_name
+                                or name in scope._AFTER_BIT_BANK_POLICY_FILES):
+                            path=directory/name;path.parent.mkdir(parents=True,exist_ok=True)
+                            path.write_bytes(archive.extractfile(row).read());path.chmod(0o644)
+            (base/'current').symlink_to(target if published else previous)
+            manifest={'commit':p['commit'],'sourceTree':p['sourceTree'],'previousRelease':str(previous),
+                'previousCommit':bridge['baselineCommit'],'previousManifestSha256':bridge['manifestBytesSha256']}
+            if published:
+                for name,value in (('release-manifest.json',manifest),(scope.STATE_FILE,{}),(scope.PROOF_FILE,{})):
+                    path=target/name;path.write_text(json.dumps(value)+'\n');path.chmod(0o600)
+            yield SimpleNamespace(d=d,p=p,bridge=bridge,previous=previous,target=target,base=base,
+                worker=worker,manifest=manifest,reader=reader)
+
+    def test_reviewed_worker_source_carry_passes_stage_and_published_without_rewriting_b(self):
+        for published in (False,True):
+            with self.subTest(published=published),self.physical_workers(published) as f:
+                name=f.worker+'/server.py';before=(f.previous/name).read_bytes();after=(f.target/name).read_bytes()
+                self.assertNotEqual(before,after)
+                scope.protected_source(f.d,f.previous,f.target)
+                self.assertEqual((f.previous/name).read_bytes(),before)
+                self.assertEqual((f.target/name).read_bytes(),after)
+                self.assertEqual((f.base/'current').resolve(),f.target if published else f.previous)
+                self.assertGreater(f.reader.online_after_bit_cold.call_count,0)
+
+    def test_physical_worker_mapped_unmapped_bytes_modes_and_complete_sets_are_closed(self):
+        for side in ('before','after'):
+            for variation in ('mapped-byte','unmapped-byte','delete','mode','extra','symlink','hardlink','fifo'):
+                with self.subTest(side=side,variation=variation),self.physical_workers() as f:
+                    root=f.previous if side=='before' else f.target
+                    name=f.worker+('/attempt_ledger.py' if variation=='unmapped-byte' else '/server.py')
+                    path=root/name
+                    if variation.endswith('byte'):path.write_bytes(path.read_bytes()+b'UNSEALED')
+                    elif variation=='delete':path.unlink()
+                    elif variation=='mode':path.chmod(0o755)
+                    elif variation=='extra':(root/f.worker/'unreviewed.py').write_bytes(b'UNSEALED')
+                    elif variation=='symlink':path.unlink();path.symlink_to('attempt_ledger.py')
+                    elif variation=='hardlink':os.link(path,root/f.worker/'unreviewed.py')
+                    else:path.unlink();os.mkfifo(path)
+                    with self.assertRaises((RuntimeError,OSError)):
+                        scope.protected_source(f.d,f.previous,f.target)
+
+    def test_worker_carry_requires_complete_mapping_and_fresh_old_materials(self):
+        with self.physical_workers() as f:
+            actual=scope._pending_workspace_current_source_inventory(f.d,f.p)
+            name=next(n for n in self.policy['files'] if not n.startswith(f.worker+'/'))
+            actual.pop(name)
+            with patch.object(scope,'_pending_workspace_profile',return_value=actual):
+                with self.assertRaisesRegex(RuntimeError,'APPLICATION_SOURCE_CHANGED'):
+                    scope.protected_source(f.d,f.previous,f.target)
+        with self.physical_workers() as f,patch.object(scope,'_workspace_after_bit_materials',
+                side_effect=RuntimeError('ONLINE_RECHARGE_AFTER_BIT_ORIGIN_CHANGED')):
+            with self.assertRaisesRegex(RuntimeError,'AFTER_BIT_ORIGIN_CHANGED'):
+                scope.protected_source(f.d,f.previous,f.target)
+
+    def test_reviewed_nonworker_physical_files_and_before_absence_remain_exact(self):
+        name=next(n for n,pair in self.policy['files'].items()
+            if n.startswith('apps/admin/') and pair['before'] is not None)
+        for side in ('before','after'):
+            for variation in ('byte','mode','delete'):
+                with self.subTest(side=side,variation=variation),self.physical_workers() as f:
+                    path=(f.previous if side=='before' else f.target)/name
+                    if variation=='byte':path.write_bytes(path.read_bytes()+b'UNSEALED')
+                    elif variation=='mode':path.chmod(0o755)
+                    else:path.unlink()
+                    with self.assertRaises((RuntimeError,OSError)):
+                        scope.protected_source(f.d,f.previous,f.target)
+        for name in (self.policy_name,'docs/BITBROWSER_FLOW_RELEASE_20261012.md'):
+            with self.subTest(added_before=name),self.physical_workers() as f:
+                path=f.previous/name;path.parent.mkdir(parents=True,exist_ok=True);path.write_bytes(b'UNSEALED')
+                with self.assertRaisesRegex(RuntimeError,'LEGACY_SOURCE_CHANGED'):
+                    scope.protected_source(f.d,f.previous,f.target)
+
+    def test_worker_carry_stage_and_published_phase_bindings_are_closed(self):
+        for published,variation in ((False,'old-current-moved'),(False,'stage-receipt'),
+                (False,'wrong-target-name'),(True,'manifest-commit'),(True,'manifest-tree'),
+                (True,'manifest-previous'),(True,'manifest-previous-commit'),
+                (True,'manifest-old-sha'),(True,'proof-missing')):
+            with self.subTest(published=published,variation=variation),self.physical_workers(published) as f:
+                if variation=='old-current-moved':
+                    (f.base/'current').unlink();(f.base/'current').symlink_to(f.base)
+                elif variation=='stage-receipt':(f.target/scope.STATE_FILE).write_text('{}\n')
+                elif variation=='wrong-target-name':
+                    other=f.base/'releases'/'unbound-candidate';f.target.rename(other);f.target=other
+                elif variation=='proof-missing':(f.target/scope.PROOF_FILE).unlink()
+                else:
+                    key={'manifest-commit':'commit','manifest-tree':'sourceTree','manifest-previous':'previousRelease',
+                        'manifest-previous-commit':'previousCommit',
+                        'manifest-old-sha':'previousManifestSha256'}[variation]
+                    f.manifest[key]='unbound';(f.target/'release-manifest.json').write_text(json.dumps(f.manifest)+'\n')
+                with self.assertRaises((RuntimeError,OSError)):
+                    scope.protected_source(f.d,f.previous,f.target)
+
+    def test_worker_carry_source_scan_rejects_current_pointer_drift(self):
+        with self.physical_workers() as f:
+            read=scope._declaration_source_bytes
+            def moved(path,**kwargs):
+                result=read(path,**kwargs)
+                if path==f.target/(f.worker+'/server.py'):
+                    (f.base/'current').unlink();(f.base/'current').symlink_to(f.target)
+                return result
+            with patch.object(scope,'_declaration_source_bytes',side_effect=moved):
+                with self.assertRaisesRegex(RuntimeError,'LEGACY_SOURCE_CHANGED'):
+                    scope.protected_source(f.d,f.previous,f.target)
+
+    def test_worker_carry_accepts_actual_restoration_session_dispatch(self):
+        for published in (False,True):
+            with self.subTest(published=published),self.physical_workers(published) as f:
+                f.d._onlinePendingWorkspaceSession.update(restoration={},beforeServices={})
+                with patch.object(scope,'_restored_workspace_sidecar',return_value={}) as sidecar:
+                    scope.protected_source(f.d,f.previous,f.target)
+                    self.assertGreater(sidecar.call_count,0)
+
+    def test_registration_and_historical_or_ordinary_worker_paths_keep_original_equality(self):
+        with self.physical_workers() as f:
+            path=next((f.target/'apps/api/src/id-business-v2/auto-registration').rglob('*.ts'))
+            path.write_bytes(path.read_bytes()+b'UNSEALED')
+            with self.assertRaisesRegex(RuntimeError,'LEGACY_SOURCE_CHANGED'):
+                scope.protected_source(f.d,f.previous,f.target)
+        for historical in (False,True):
+            with self.subTest(historical=historical),self.physical_workers() as f:
+                if historical:f.d._onlinePendingWorkspaceSession['bridge']['baselineRelease']=str(f.base/'historical-b')
+                else:del f.d._onlinePendingWorkspaceSession
+                with patch.object(scope,'_pending_workspace_session',side_effect=AssertionError('no source exception')):
+                    with self.assertRaisesRegex(RuntimeError,'LEGACY_SOURCE_CHANGED'):
+                        scope.protected_source(f.d,f.previous,f.target)
 
     def test_complete_forty_files_and_added_policy_pass_all_three_active_gates(self):
         d,p,raw=self.full

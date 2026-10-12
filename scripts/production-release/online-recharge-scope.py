@@ -1389,7 +1389,8 @@ def protected_source(d, previous, target):
         return rows
     for worker in ('apps/api/src/id-business-v2/auto-recharge/worker',
                    'apps/api/src/id-business-v2/auto-registration'):
-        d.require(inventory(previous, worker) == inventory(target, worker), 'ONLINE_RECHARGE_LEGACY_SOURCE_CHANGED')
+        if not _workspace_reviewed_worker_protected(d, previous, target, worker):
+            d.require(inventory(previous, worker) == inventory(target, worker), 'ONLINE_RECHARGE_LEGACY_SOURCE_CHANGED')
     for name in ('scripts/v2-data-integrity-audit.mjs', 'scripts/lib/v2-data-integrity-audit.mjs',
                  'scripts/sync-v2-new-table-grants.mjs', 'scripts/lib/v2-production-database-access.mjs'):
         d.require((previous / name).is_file() and (target / name).is_file()
@@ -4270,7 +4271,7 @@ _AFTER_BIT_BANK_POLICY_FILES = {
         'bec32298136ff61d8e69820179b8c3f51f8e5221f4e6b449aaf5f5ec8f7d4625'),
     'scripts/production-release/online-recharge-scope.test.py': (
         '4aa063af4054ff98d2bb622056556ab643ed39abb3d373facc636509ff98ad8e',
-        '040231332e348b139fa827bc48ea83c9ff974366d5999681660ad6b79eb62127'),
+        '4a8e005636e0b8a7ff858be24beb626e2c59900fc57d7560855866447288c026'),
 }
 _AFTER_BIT_RELEASE_CI_FILES = {
     'scripts/ci-recharge-scope.mjs': ('3fe9c33ea883b7e2ad15305d1c7fe26873ddf648645b7a05acc8aecd5f858cfd', 'c066be2f8811237e6fd82448d79c9fbd93aace6457033984c4fb1a2457eb892c'),
@@ -4500,6 +4501,62 @@ def _pending_workspace_profile(d, bridge, producer):
         d.require(inventory.get(name,{}).get('sha256')==hashlib.sha256(raw).hexdigest(),
                   'ONLINE_RECHARGE_EXECUTOR_SOURCE_CHANGED')
     return inventory
+
+
+def _workspace_reviewed_worker_protected(d, previous, target, worker):
+    """Carry the complete reviewed N source; never replace the retained B worker."""
+    saved=getattr(d,'_onlinePendingWorkspaceSession',None)
+    if worker!='apps/api/src/id-business-v2/auto-recharge/worker' or type(saved) is not dict \
+            or type(saved.get('bridge')) is not dict or saved['bridge'].get('kind')!=ONLINE_AFTER_BIT_KIND \
+            or previous!=Path(saved['bridge'].get('baselineRelease','')):
+        return False
+    bridge,producer=_pending_workspace_session(d)
+    inventory=_pending_workspace_current_source_inventory(d,producer)
+    original=_pending_workspace_current_source_inventory(d,bridge['baselineProducer'])
+    reviewed=_workspace_reviewed_application_inventory(d,bridge,original,inventory,producer)
+    names=frozenset(n for n in reviewed if n.startswith(worker+'/'))
+    if not names:return False
+    code='ONLINE_RECHARGE_LEGACY_SOURCE_CHANGED'
+    d.require(len(names)==25 and previous==Path(bridge['baselineRelease'])
+        and previous.resolve()==previous and target.parent==d.BASE/'releases'
+        and target.resolve()==target and target.is_dir() and not target.is_symlink()
+        and re.fullmatch('[0-9]{8}T[0-9]{6}Z-'+producer['commit'][:12],target.name),code)
+    materials=_workspace_after_bit_materials(d,previous,bridge=bridge)
+    d.require(fingerprint(original)==materials['producer']['archiveInventorySha256'],code)
+    current=(d.BASE/'current').resolve()
+    if current==previous:
+        d.require(not any((target/n).exists() or (target/n).is_symlink() for n in
+            (STATE_FILE,PROOF_FILE,'release-manifest.json','.env.aws.production','compose.release.json')),code)
+    else:
+        d.require(current==target,code)
+        manifest=closed_recovery_json(d,_declaration_source_bytes(target/'release-manifest.json'))
+        for name in (STATE_FILE,PROOF_FILE):
+            _declaration_source_bytes(target/name)
+        d.require(all(manifest.get(n)==v for n,v in {'commit':producer['commit'],
+            'sourceTree':producer['sourceTree'],'previousRelease':str(previous),
+            'previousCommit':bridge['baselineCommit'],
+            'previousManifestSha256':bridge['manifestBytesSha256']}.items()),code)
+    for directory,source in ((previous,original),(target,inventory)):
+        for name in reviewed-names:
+            path=directory/name
+            if name not in source:
+                d.require(not path.exists() and not path.is_symlink(),code)
+            else:
+                raw=_declaration_source_bytes(path,limit=512*1024)
+                d.require(source[name]=={'sha256':hashlib.sha256(raw).hexdigest(),'mode':'100644'},code)
+        folder=directory/worker
+        d.require(folder.is_dir() and folder.resolve()==folder and not folder.is_symlink(),code)
+        paths=list(folder.rglob('*'));actual={}
+        for path in paths:
+            d.require(not path.is_symlink(),code)
+            if path.is_dir():continue
+            raw=_declaration_source_bytes(path,limit=512*1024)
+            actual[path.relative_to(directory).as_posix()]={'sha256':hashlib.sha256(raw).hexdigest(),
+                'mode':'100755' if path.stat().st_mode&0o111 else '100644'}
+        d.require(actual=={n:v for n,v in source.items() if n.startswith(worker+'/')}
+            and set(folder.rglob('*'))==set(paths),code)
+    d.require((d.BASE/'current').resolve()==current,code)
+    return True
 
 
 def _workspace_bank_policy_protected(d, previous, target):
