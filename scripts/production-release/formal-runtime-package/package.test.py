@@ -11,6 +11,7 @@ import os
 from pathlib import Path
 import runpy
 import stat
+import subprocess
 import tempfile
 import tarfile
 from types import SimpleNamespace
@@ -1038,7 +1039,13 @@ class LiveMaterialsAdapterTests(unittest.TestCase):
             'restoredBuildProofBytesSha256':m.canonical(self.policy['restoredAttempt']['buildProof']),
             'recoveryPolicy':(ROOT/'scripts/production-release/online-recharge-recovery.json').read_bytes()})
         repo=HERE.parents[2]
-        completed={p.parent.name:m.byte_sha(p.read_bytes()) for p in (repo/'apps/api/prisma-mysql/migrations').glob('*/migration.sql')}
+        # Ended failure records retain the original approved migration history.
+        historical=subprocess.check_output(['git','archive','--format=tar',
+            self.online.RECOVERY_COMMIT,self.online.MIGRATION_ROOT],cwd=repo)
+        with tarfile.open(fileobj=io.BytesIO(historical),mode='r:') as archive:
+            completed={Path(member.name).parent.name:m.byte_sha(archive.extractfile(member).read())
+                for member in archive.getmembers() if member.isfile()
+                and member.name.startswith(self.online.MIGRATION_ROOT+'/') and member.name.endswith('/migration.sql')}
         self.assertEqual(len(completed),47)
         state={'name':self.online.MIGRATION_NAME,'sha256':self.online.MIGRATION_IDENTITY['sha256'],
             'status':'APPLIED','schemaVerified':True,'appliedMigrationsSha256':m.digest(completed)}

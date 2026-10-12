@@ -1883,8 +1883,8 @@ class DeclarationSuccessorConsumers(unittest.TestCase):
     complete_readback = DeclarationPublicationConsumers.complete_readback
 
     @classmethod
-    def setUpClass(cls):
-        DeclarationPublicationConsumers.setUpClass()
+    def setUpClass(cls, *, candidate_commit='HEAD'):
+        DeclarationPublicationConsumers.setUpClass(candidate_commit=candidate_commit)
         cls.pure = DeclarationPublicationConsumers.pure
         cls.wire = DeclarationPublicationConsumers.wire
         cls.output = ROOT / '.runtime/online-recharge-release-20261009/build/declaration-successor-consumer-implementation'
@@ -2306,7 +2306,7 @@ class SuccessorUnpublishedCandidateLifecycle(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         UnpublishedCandidateLifecycle.setUpClass.__func__(cls)
-        DeclarationSuccessorConsumers.setUpClass()
+        DeclarationSuccessorConsumers.setUpClass(candidate_commit=cls.commit)
 
     @contextmanager
     def fixture(self):
