@@ -9,49 +9,63 @@ import { isIP } from 'node:net';
 import { AuditLogsService } from '../../audit-logs/audit-logs.service';
 import type { AuthenticatedUser } from '../../auth/auth.types';
 import { IdBusinessV2VendureMailboxService } from '../workspace/public-api';
+import { FieldEncryptionService } from '../../common/crypto/field-encryption.service';
+import {
+  BankRechargeRegistrationMirrorService,
+  RechargeProxyService
+} from '../auto-recharge/public-api';
 import { AutoRegistrationService } from './auto-registration.service';
+import { AppleMailboxTaskBridgeService } from './apple-mailboxes-task-bridge.service';
+import {
+  appleMailboxAlias,
+  appleMailboxRow,
+  appleMailboxExecutionOptions,
+  appleMailboxProxyOptions,
+  appleMailboxUploadKeys
+} from './apple-mailbox-pool';
 import type {
-  AppleMailboxCodeRequest,
+  AppleMailboxBatch,
   AppleMailboxRecord,
   AppleMailboxRegistrationStatus,
-  AppleMailboxRow,
-  AppleMailboxSummary,
-  AppleMailboxTask
+  AppleMailboxTask,
+  AppleMailboxSyncPayload
 } from './apple-mailboxes.types';
 
 const privateBase = '/internal/apple-mailboxes';
 const statuses = new Set(['unknown', 'unregistered', 'registered']);
-const terminal = new Set(['completed', 'failed', 'cancelled', 'interrupted']);
 const normalizeEmail = (email: string) => email.trim().toLowerCase();
 type Input = Record<string, unknown>;
-type TaskContext = {
-  aliasId: string;
-  email: string;
-  operator: AuthenticatedUser;
-  revalidate: () => Promise<boolean>;
-  startedAt: number;
-  expiresAt: number;
-  previousId: string | null;
-  lastCheckedAt: number;
-};
 
 @Injectable()
 export class AppleMailboxesService implements OnModuleDestroy {
-  private readonly tasks = new Map<string, TaskContext>();
-  private timer: ReturnType<typeof setInterval> | undefined;
-  private pumping = false;
-  private destroyed = false;
+  private readonly syncing = new Map<
+    string,
+    Promise<{ accountId: string | null; syncStatus: 'saved' | 'failed' | 'conflict' }>
+  >();
 
   constructor(
     private readonly worker: AutoRegistrationService,
     private readonly mailboxes: IdBusinessV2VendureMailboxService,
-    private readonly audit: AuditLogsService
-  ) {}
+    private readonly audit: AuditLogsService,
+    private readonly accounts: BankRechargeRegistrationMirrorService,
+    private readonly proxies: RechargeProxyService,
+    private readonly encryption: FieldEncryptionService,
+    private readonly bridge: AppleMailboxTaskBridgeService
+  ) {
+    this.bridge.onTerminal = async (id, result, context) => {
+      if (
+        ['pending', 'failed'].includes(result.record.syncStatus ?? '') &&
+        (await context.revalidate().catch(() => false))
+      )
+        await this.syncTask(id, context.operator);
+    };
+  }
 
   onModuleDestroy() {
-    this.destroyed = true;
-    if (this.timer) clearInterval(this.timer);
-    this.tasks.clear();
+    this.bridge.onModuleDestroy();
+  }
+  pump() {
+    return this.bridge.pump();
   }
 
   async list(query: Input, operator: AuthenticatedUser) {
@@ -65,21 +79,7 @@ export class AppleMailboxesService implements OnModuleDestroy {
     const sortOrder = query.sortOrder ?? 'desc';
     if (!['email', 'updatedAt'].includes(String(sortBy))) this.invalid();
     if (!['asc', 'desc'].includes(String(sortOrder))) this.invalid();
-    const aliases = await this.mailboxes.registrationMailboxSummaries(operator);
-    // IP records remain admin-only, with a read audit that contains no mailbox or IP.
-    await this.log(operator, '查看邮箱注册状态');
-    const records: AppleMailboxRecord[] = [];
-    for (let offset = 0; offset < aliases.length; offset += 500) {
-      const batch = await this.worker.appleMailboxRequest<{ records: AppleMailboxRecord[] }>(
-        `${privateBase}/records`,
-        'POST',
-        { emails: aliases.slice(offset, offset + 500).map((item) => item.email) }
-      );
-      records.push(...batch.records);
-    }
-    const byEmail = new Map(records.map((item) => [normalizeEmail(item.email), item]));
-    const items = aliases
-      .map((alias) => this.row(alias, byEmail.get(normalizeEmail(alias.email))))
+    const items = (await this.rows(operator))
       .filter(
         (row) =>
           (!status || row.registrationStatus === status) &&
@@ -100,6 +100,46 @@ export class AppleMailboxesService implements OnModuleDestroy {
     };
   }
 
+  async candidates(operator: AuthenticatedUser) {
+    this.admin(operator);
+    const items = await this.rows(operator);
+    const proxies = await appleMailboxProxyOptions(this.proxies);
+    return {
+      items,
+      total: items.length,
+      available: items.filter((item) => item.canRegister).length,
+      proxies
+    };
+  }
+
+  private async rows(operator: AuthenticatedUser) {
+    const aliases = await this.mailboxes.registrationMailboxSummaries(operator);
+    await this.log(operator, '查看邮箱注册状态');
+    const records: AppleMailboxRecord[] = [];
+    const registered = new Set<string>();
+    for (let offset = 0; offset < aliases.length; offset += 500) {
+      const emails = aliases.slice(offset, offset + 500).map((item) => normalizeEmail(item.email));
+      const [batch, hashes] = await Promise.all([
+        this.worker.appleMailboxRequest<{ records: AppleMailboxRecord[] }>(
+          `${privateBase}/records`,
+          'POST',
+          { emails }
+        ),
+        this.accounts.registeredEmailHashes(emails, operator)
+      ]);
+      records.push(...batch.records);
+      for (const hash of hashes) registered.add(hash);
+    }
+    const byEmail = new Map(records.map((item) => [normalizeEmail(item.email), item]));
+    return aliases.map((alias) =>
+      appleMailboxRow(
+        alias,
+        byEmail.get(normalizeEmail(alias.email)),
+        registered.has(this.encryption.hash(normalizeEmail(alias.email))!)
+      )
+    );
+  }
+
   async mark(value: unknown, operator: AuthenticatedUser) {
     this.admin(operator);
     const input = this.object(value);
@@ -118,7 +158,7 @@ export class AppleMailboxesService implements OnModuleDestroy {
     const items = input.items.map((raw: unknown) => {
       const item = this.object(raw);
       this.only(item, ['aliasId', 'revision']);
-      const alias = this.alias(aliases, this.id(item.aliasId));
+      const alias = appleMailboxAlias(aliases, this.id(item.aliasId));
       const email = normalizeEmail(alias.email);
       if (seen.has(email)) throw new BadRequestException('同一邮箱不能重复标记');
       seen.add(email);
@@ -139,13 +179,34 @@ export class AppleMailboxesService implements OnModuleDestroy {
   async start(value: unknown, operator: AuthenticatedUser, revalidate: () => Promise<boolean>) {
     this.admin(operator);
     const input = this.object(value);
-    this.only(input, ['aliasId', 'revision']);
-    if (this.tasks.size >= 64) throw new ConflictException('当前注册任务较多，请稍后重试');
-    const aliasId = this.id(input.aliasId);
-    const revision = this.revision(input.revision);
-    const mailbox = await this.mailboxes.registrationMailbox(aliasId, operator);
+    this.only(input, ['aliasId', 'revision', 'proxyId', ...appleMailboxUploadKeys]);
+    if (this.bridge.size >= 64) throw new ConflictException('当前注册任务较多，请稍后重试');
     if (!(await revalidate())) throw new ForbiddenException('登录状态已变化，请重新登录');
+    if ((input.aliasId === undefined) !== (input.revision === undefined)) this.invalid();
+    const requestedId = input.aliasId === undefined ? undefined : this.id(input.aliasId);
+    const requestedRevision = requestedId === undefined ? undefined : this.revision(input.revision);
+    const options = await appleMailboxExecutionOptions(
+      input,
+      this.proxies,
+      operator,
+      requestedId === undefined ? 'automatic' : 'specified'
+    );
+    const rows = await this.rows(operator);
+    const row =
+      requestedId === undefined
+        ? rows.find((item) => item.canRegister)
+        : rows.find((item) => item.aliasId === requestedId);
+    if (!row) throw new ConflictException('没有可注册的隐藏邮箱，请新增邮箱或刷新状态');
+    if (!row.canRegister) throw new ConflictException(row.blockedReason ?? '所选邮箱不可用');
+    if (requestedRevision !== undefined && requestedRevision !== row.revision)
+      throw new ConflictException('邮箱登记已更新，请刷新后重试');
+    const aliasId = row.aliasId;
+    const revision = row.revision;
+    const mailbox = await this.mailboxes.registrationMailbox(aliasId, operator);
+    if (normalizeEmail(mailbox.email) !== normalizeEmail(row.email))
+      throw new ConflictException('邮箱地址已变化，请刷新后重试');
     await this.log(operator, '发起隐藏邮箱注册', aliasId);
+    if (!(await revalidate())) throw new ForbiddenException('登录状态已变化，请重新登录');
     const startedAt = Date.now();
     const result = await this.worker.appleMailboxRequest<{
       taskUuid: string;
@@ -154,9 +215,10 @@ export class AppleMailboxesService implements OnModuleDestroy {
       aliasId,
       email: normalizeEmail(mailbox.email),
       revision,
-      operatorId: operator.id
+      operatorId: operator.id,
+      options
     });
-    this.tasks.set(this.uuid(result.taskUuid), {
+    this.bridge.remember(this.uuid(result.taskUuid), {
       aliasId,
       email: normalizeEmail(mailbox.email),
       operator,
@@ -166,7 +228,267 @@ export class AppleMailboxesService implements OnModuleDestroy {
       previousId: null,
       lastCheckedAt: 0
     });
-    this.ensurePump();
+    return result;
+  }
+
+  async batch(value: unknown, operator: AuthenticatedUser, revalidate: () => Promise<boolean>) {
+    this.admin(operator);
+    const input = this.object(value);
+    this.only(input, [
+      'targets',
+      'count',
+      'concurrency',
+      'mode',
+      'interval_min',
+      'interval_max',
+      'proxyId',
+      ...appleMailboxUploadKeys
+    ]);
+    const count = this.integer(input.count ?? 1, 1, 100);
+    const concurrency = this.integer(input.concurrency ?? 1, 1, 50);
+    const intervalMin = this.integer(input.interval_min ?? 5, 0, 3600);
+    const intervalMax = this.integer(input.interval_max ?? 30, intervalMin, 3600);
+    const mode = input.mode ?? 'pipeline';
+    if (mode !== 'pipeline' && mode !== 'parallel') this.invalid();
+    let targets: { aliasId: string; revision: number }[] | undefined;
+    if (input.targets !== undefined) {
+      if (!Array.isArray(input.targets) || !input.targets.length || input.targets.length > 100)
+        this.invalid();
+      targets = input.targets.map((raw: unknown) => {
+        const item = this.object(raw);
+        this.only(item, ['aliasId', 'revision']);
+        return { aliasId: this.id(item.aliasId), revision: this.revision(item.revision) };
+      });
+      if (new Set(targets.map((item) => item.aliasId)).size !== targets.length)
+        throw new BadRequestException('同一邮箱不能重复加入批次');
+    }
+    if (!(await revalidate())) throw new ForbiddenException('登录状态已变化，请重新登录');
+    const options = await appleMailboxExecutionOptions(
+      input,
+      this.proxies,
+      operator,
+      targets === undefined ? 'automatic' : 'specified'
+    );
+    const rows = await this.rows(operator);
+    const wanted =
+      targets?.slice(0, count) ??
+      rows
+        .filter((item) => item.canRegister)
+        .slice(0, count)
+        .map((item) => ({ aliasId: item.aliasId, revision: item.revision }));
+    const skipped: { aliasId: string; reason: string }[] = [];
+    const items: { aliasId: string; email: string; revision: number }[] = [];
+    const seenEmails = new Set<string>();
+    for (const target of wanted) {
+      const row = rows.find((item) => item.aliasId === target.aliasId);
+      if (
+        !row?.canRegister ||
+        row.revision !== target.revision ||
+        seenEmails.has(normalizeEmail(row.email))
+      ) {
+        skipped.push({
+          aliasId: target.aliasId,
+          reason: row?.blockedReason ?? '邮箱状态已变化或地址重复，请刷新'
+        });
+        continue;
+      }
+      try {
+        const mailbox = await this.mailboxes.registrationMailbox(row.aliasId, operator);
+        const email = normalizeEmail(mailbox.email);
+        if (email !== normalizeEmail(row.email)) throw new ConflictException();
+        seenEmails.add(email);
+        items.push({ aliasId: row.aliasId, email, revision: row.revision });
+      } catch {
+        skipped.push({ aliasId: row.aliasId, reason: '邮箱已停用、授权失效或地址变化' });
+      }
+    }
+    if (!items.length) throw new ConflictException('没有可注册的隐藏邮箱，批次未启动');
+    if (this.bridge.size + items.length > 100)
+      throw new ConflictException('当前注册任务较多，请减少本批数量');
+    if (!(await revalidate())) throw new ForbiddenException('登录状态已变化，请重新登录');
+    await this.log(operator, '发起隐藏邮箱批量注册', `请求 ${count}，候选 ${items.length}`);
+    if (!(await revalidate())) throw new ForbiddenException('登录状态已变化，请重新登录');
+    const startedAt = Date.now();
+    const result = await this.worker.appleMailboxRequest<AppleMailboxBatch>(
+      `${privateBase}/batch`,
+      'POST',
+      {
+        items,
+        operatorId: operator.id,
+        concurrency,
+        mode,
+        interval_min: intervalMin,
+        interval_max: intervalMax,
+        options
+      }
+    );
+    if (!result.taskUuids.length)
+      throw new ConflictException('候选邮箱已被占用或状态变化，批次未启动');
+    for (const record of result.records) {
+      const id = record.activeTaskUuid;
+      if (!id || !result.taskUuids.includes(id) || !record.aliasId) continue;
+      this.bridge.remember(this.uuid(id), {
+        aliasId: record.aliasId,
+        email: normalizeEmail(record.email),
+        operator,
+        revalidate,
+        startedAt,
+        expiresAt: startedAt + 24 * 60 * 60_000,
+        previousId: null,
+        lastCheckedAt: 0
+      });
+    }
+    return {
+      ...result,
+      accepted: result.taskUuids.length,
+      skipped: [...skipped, ...result.skipped],
+      requested: count
+    };
+  }
+
+  async batchTask(id: string, operator: AuthenticatedUser) {
+    this.admin(operator);
+    await this.log(operator, '查看隐藏邮箱批次', this.uuid(id));
+    return this.worker.appleMailboxRequest<AppleMailboxBatch>(
+      `${privateBase}/batches/${this.uuid(id)}`
+    );
+  }
+
+  async cancelBatch(id: string, operator: AuthenticatedUser) {
+    this.admin(operator);
+    await this.log(operator, '请求取消隐藏邮箱批次', this.uuid(id));
+    return this.worker.appleMailboxRequest(
+      `${privateBase}/batches/${this.uuid(id)}/cancel`,
+      'POST',
+      {}
+    );
+  }
+
+  async sync(id: string, operator: AuthenticatedUser) {
+    this.admin(operator);
+    const taskUuid = this.uuid(id);
+    await this.log(operator, '补存隐藏邮箱主账号', taskUuid);
+    // Only the persisted result is read. No registration or upload is started here.
+    await this.worker.appleMailboxRequest(
+      `${privateBase}/tasks/${taskUuid}/sync-retry`,
+      'POST',
+      {}
+    );
+    return this.syncTask(taskUuid, operator);
+  }
+
+  async localSave(id: string, operator: AuthenticatedUser) {
+    this.admin(operator);
+    const taskUuid = this.uuid(id);
+    await this.log(operator, '补存隐藏邮箱本地账号', taskUuid);
+    const result = await this.worker.appleMailboxRequest<{ task: AppleMailboxTask }>(
+      `${privateBase}/tasks/${taskUuid}/local-save-retry`,
+      'POST',
+      {}
+    );
+    return { localSaveStatus: result.task.record.localSaveStatus };
+  }
+
+  async resume(operator: AuthenticatedUser, revalidate: () => Promise<boolean>) {
+    this.admin(operator);
+    if (!(await revalidate())) throw new ForbiddenException('登录状态已变化，请重新登录');
+    await this.log(operator, '重新连接已登记的隐藏邮箱任务');
+    const active = await this.worker.appleMailboxRequest<{
+      tasks: {
+        taskUuid: string;
+        aliasId: string;
+        email: string;
+        operatorId: string;
+        startedAt: string;
+        previousId: string | null;
+      }[];
+    }>(`${privateBase}/tasks-active`);
+    let resumed = 0;
+    for (const task of active.tasks.slice(0, 100)) {
+      const startedAt = Date.parse(task.startedAt);
+      if (!Number.isFinite(startedAt) || startedAt > Date.now() + 1000) continue;
+      try {
+        const mailbox = await this.mailboxes.registrationMailbox(this.id(task.aliasId), operator);
+        if (normalizeEmail(mailbox.email) !== normalizeEmail(task.email)) continue;
+        this.bridge.remember(this.uuid(task.taskUuid), {
+          aliasId: task.aliasId,
+          email: normalizeEmail(task.email),
+          operator,
+          revalidate,
+          startedAt,
+          expiresAt: Date.now() + 30 * 60_000,
+          previousId: task.previousId,
+          lastCheckedAt: 0
+        });
+        resumed += 1;
+      } catch {
+        // An unavailable alias cannot be rebound to another mailbox.
+      }
+    }
+    const pending = await this.worker.appleMailboxRequest<{ tasks: { taskUuid: string }[] }>(
+      `${privateBase}/sync-pending`
+    );
+    let synchronized = 0;
+    for (const task of pending.tasks.slice(0, 100)) {
+      if (!(await revalidate())) break;
+      try {
+        if ((await this.syncTask(this.uuid(task.taskUuid), operator)).syncStatus === 'saved')
+          synchronized += 1;
+      } catch {
+        /* Persisted pending facts remain available after a transport failure. */
+      }
+    }
+    return { resumed, synchronized };
+  }
+
+  private syncTask(taskUuid: string, operator: AuthenticatedUser) {
+    const existing = this.syncing.get(taskUuid);
+    if (existing) return existing;
+    const work = this.saveMirror(taskUuid, operator).finally(() => this.syncing.delete(taskUuid));
+    this.syncing.set(taskUuid, work);
+    return work;
+  }
+
+  private async saveMirror(taskUuid: string, operator: AuthenticatedUser) {
+    const payload = await this.worker.appleMailboxRequest<AppleMailboxSyncPayload>(
+      `${privateBase}/tasks/${taskUuid}/sync-payload`
+    );
+    if (payload.sourceTaskUuid !== taskUuid)
+      throw new ConflictException('账号来源与任务不匹配，请核对原结果');
+    let result: { accountId: string | null; syncStatus: 'saved' | 'failed' | 'conflict' };
+    try {
+      const saved = await this.accounts.mirrorRegistration(
+        {
+          accountId: payload.accountId,
+          sourceTaskUuid: taskUuid,
+          upstreamAccountId: payload.upstreamAccountId,
+          email: payload.email,
+          ...(payload.password ? { password: payload.password } : {}),
+          registrationCountryCode: payload.registrationCountry,
+          source: payload.source,
+          fingerprint: payload.fingerprint
+        },
+        operator
+      );
+      result = { accountId: saved.accountId, syncStatus: 'saved' };
+    } catch (error) {
+      result = {
+        accountId: null,
+        syncStatus: error instanceof ConflictException ? 'conflict' : 'failed'
+      };
+    }
+    // On lost MySQL/SQLite receipts the stable account UUID and same-transaction source audit
+    // permit a later exact replay; raw exception messages must never cross the private bridge.
+    await this.worker.appleMailboxRequest(`${privateBase}/tasks/${taskUuid}/sync-ack`, 'POST', {
+      accountId: payload.accountId,
+      status: result.syncStatus,
+      ...(result.syncStatus === 'saved'
+        ? {}
+        : {
+            errorKind: result.syncStatus === 'conflict' ? 'email_conflict' : 'storage_unavailable'
+          })
+    });
+    await this.log(operator, '隐藏邮箱主账号同步结果', `${taskUuid} · ${result.syncStatus}`);
     return result;
   }
 
@@ -193,7 +515,7 @@ export class AppleMailboxesService implements OnModuleDestroy {
     this.admin(operator);
     const input = this.object(value);
     this.only(input, ['aliasId', 'revision']);
-    const alias = this.alias(
+    const alias = appleMailboxAlias(
       await this.mailboxes.registrationMailboxSummaries(operator),
       this.id(input.aliasId)
     );
@@ -211,146 +533,6 @@ export class AppleMailboxesService implements OnModuleDestroy {
     return result.record;
   }
 
-  private ensurePump() {
-    if (this.timer || this.destroyed) return;
-    this.timer = setInterval(() => void this.pump(), 1000);
-    this.timer.unref();
-  }
-
-  /** Private pull bridge: neither worker nor browser ever receives the system JWT/query code. */
-  async pump() {
-    if (this.pumping || this.destroyed || !this.tasks.size) return;
-    this.pumping = true;
-    try {
-      const pending = await this.worker.appleMailboxRequest<{
-        requests: AppleMailboxCodeRequest[];
-      }>(`${privateBase}/requests`);
-      const requests = pending.requests.slice(0, 16);
-      for (let offset = 0; offset < requests.length; offset += 4) {
-        if (this.destroyed) break;
-        await Promise.all(
-          requests.slice(offset, offset + 4).map((request) => this.answer(request))
-        );
-      }
-      for (const [id, context] of this.tasks) {
-        if (Date.now() - context.lastCheckedAt < 5000) continue;
-        context.lastCheckedAt = Date.now();
-        const result = await this.worker.appleMailboxRequest<AppleMailboxTask>(
-          `${privateBase}/tasks/${id}`
-        );
-        if (terminal.has(result.status)) {
-          await this.log(context.operator, '隐藏邮箱任务结束', `${id} · ${result.status}`);
-          this.tasks.delete(id);
-        }
-      }
-      if (!this.tasks.size && this.timer) {
-        clearInterval(this.timer);
-        this.timer = undefined;
-      }
-    } catch {
-      // Only retry private transport. Provider timeouts and leases remain bounded and persistent.
-    } finally {
-      this.pumping = false;
-    }
-  }
-
-  private async answer(request: AppleMailboxCodeRequest) {
-    const context = this.tasks.get(request.taskUuid);
-    const since = Date.parse(request.since);
-    let answer: { code: string | null; mailId: string | null; error?: string } = {
-      code: null,
-      mailId: null
-    };
-    try {
-      if (
-        !context ||
-        context.expiresAt <= Date.now() ||
-        request.aliasId !== context.aliasId ||
-        normalizeEmail(request.email) !== context.email ||
-        !Number.isFinite(since) ||
-        since < context.startedAt - 1000 ||
-        since > Date.now() + 60_000 ||
-        request.previousId !== context.previousId ||
-        !(await context.revalidate())
-      ) {
-        answer.error = 'session_invalid';
-      } else {
-        const task = await this.worker.appleMailboxRequest<AppleMailboxTask>(
-          `${privateBase}/tasks/${this.uuid(request.taskUuid)}`
-        );
-        if (
-          task.status !== 'running' ||
-          task.record.activeTaskUuid !== request.taskUuid ||
-          normalizeEmail(task.record.email) !== context.email ||
-          task.record.aliasId !== context.aliasId
-        ) {
-          answer.error = 'mailbox_unavailable';
-          await this.worker.appleMailboxRequest(
-            `${privateBase}/requests/${this.uuid(request.id)}`,
-            'POST',
-            answer
-          );
-          return;
-        }
-        const mail = await this.mailboxes.registrationCode(
-          context.aliasId,
-          new Date(since),
-          context.previousId,
-          context.operator,
-          context.email
-        );
-        if (mail && /^\d{6}$/.test(mail.code) && mail.mailId !== context.previousId) {
-          answer = { mailId: mail.mailId, code: mail.code };
-        }
-      }
-    } catch {
-      answer = { code: null, mailId: null, error: 'mail_query_failed' };
-    }
-    // Await delivery before consuming a mail; retries never advance the previous-mail boundary.
-    await this.worker.appleMailboxRequest(
-      `${privateBase}/requests/${this.uuid(request.id)}`,
-      'POST',
-      answer
-    );
-    if (context && answer.mailId) context.previousId = answer.mailId;
-  }
-
-  private row(alias: AppleMailboxSummary, record?: AppleMailboxRecord): AppleMailboxRow {
-    const registrationStatus = record?.registrationStatus ?? 'unknown';
-    const blockedReason = record?.activeTaskUuid
-      ? '邮箱已被任务占用，请查看进度或核对中断任务'
-      : registrationStatus === 'unknown'
-        ? '请先确认该邮箱是否已经注册'
-        : registrationStatus === 'registered'
-          ? '该邮箱已标记为已注册'
-          : alias.status !== 'ACTIVE'
-            ? '隐藏邮箱未启用'
-            : !alias.primaryAvailable
-              ? '所属主邮箱不可用'
-              : !alias.authorizationValid
-                ? '邮箱查询授权已失效'
-                : null;
-    return {
-      aliasId: alias.id,
-      email: alias.email,
-      primaryEmail: alias.primaryEmail,
-      mailboxStatus: alias.status,
-      authorizationValid: alias.authorizationValid,
-      primaryAvailable: alias.primaryAvailable,
-      registrationStatus,
-      registrationIp: record?.registrationIp ?? null,
-      registrationIpSource: record?.registrationIpSource ?? null,
-      source: record?.source ?? null,
-      note: record?.note || alias.note,
-      updatedAt: record?.markedAt ?? alias.updatedAt,
-      revision: record?.revision ?? 0,
-      taskUuid: record?.activeTaskUuid ?? record?.lastTaskUuid ?? null,
-      taskStatus: record?.taskStatus ?? null,
-      canRegister: blockedReason === null,
-      blockedReason
-    };
-  }
-
   private admin(operator: AuthenticatedUser) {
     if (!operator?.roles?.includes('admin')) throw new ForbiddenException('请使用管理员账号');
   }
@@ -363,12 +545,6 @@ export class AppleMailboxesService implements OnModuleDestroy {
       objectType: '隐藏邮箱注册记录',
       remark
     });
-  }
-
-  private alias(aliases: AppleMailboxSummary[], id: string) {
-    const alias = aliases.find((item) => item.id === id);
-    if (!alias) throw new ConflictException('隐藏邮箱不存在或已移除，请刷新列表');
-    return alias;
   }
 
   private object(value: unknown): Input {

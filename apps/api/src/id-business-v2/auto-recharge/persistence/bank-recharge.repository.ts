@@ -211,6 +211,29 @@ export class BankRechargeRepository {
       })) > 0
     );
   }
+  accountEmailHashes(emailHashes: string[]) {
+    return this.prisma.idBusinessV2ChatgptAccount.findMany({
+      where: { emailHash: { in: emailHashes } },
+      select: { emailHash: true }
+    });
+  }
+  registrationMirrorAccounts(tx: V2CommandTransaction, accountId: string, emailHash: string) {
+    return tx.idBusinessV2ChatgptAccount.findMany({
+      where: { OR: [{ id: accountId }, { emailHash }] },
+      select: { id: true, emailHash: true, deletedAt: true }
+    });
+  }
+  registrationMirrorAudit(tx: V2CommandTransaction, input: { accountId: string; action: string }) {
+    return tx.auditLog.findMany({
+      where: {
+        module: 'id_business_v2',
+        action: input.action,
+        objectType: 'chatgpt_account',
+        objectId: input.accountId
+      },
+      select: { afterData: true }
+    });
+  }
   findAccountByEmailHash(tx: V2CommandTransaction, emailHash: string) {
     return tx.idBusinessV2ChatgptAccount.findUnique({ where: { emailHash } });
   }

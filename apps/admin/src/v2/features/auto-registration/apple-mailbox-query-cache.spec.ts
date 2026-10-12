@@ -23,6 +23,7 @@ vi.mock('@/auth/sessionCoordinator', async () => {
 });
 vi.mock('./api', () => ({
   autoRegistrationApi: {
+    resumeAppleMailboxTasks: vi.fn().mockResolvedValue({ resumed: 0, synchronized: 0 }),
     appleMailboxes: mocks.list,
     markAppleMailboxes: mocks.mark,
     startAppleMailbox: mocks.start,

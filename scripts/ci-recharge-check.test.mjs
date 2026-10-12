@@ -626,7 +626,12 @@ test('combined API dispatcher verifies actual Apple adapter and worker suites af
       calls.filter((call) => call.join(' ') === 'npm run auto-registration:setup').length,
       1
     );
-    for (const name of ['test_workspace.py', 'test_apple_mailboxes.py', 'test_release_safety.py']) {
+    for (const name of [
+      'test_workspace.py',
+      'test_apple_mailboxes.py',
+      'test_release_safety.py',
+      'test_upload_compat.py'
+    ]) {
       const expected = [python, '-B', '-m', 'unittest', 'discover', '-s', worker, '-p', name];
       assert.equal(
         calls.filter((call) => JSON.stringify(call) === JSON.stringify(expected)).length,
@@ -649,8 +654,21 @@ test('combined API dispatcher verifies actual Apple adapter and worker suites af
     new URL('../.github/workflows/quality.yml', import.meta.url),
     'utf8'
   );
-  for (const name of ['test_workspace.py', 'test_apple_mailboxes.py', 'test_release_safety.py'])
-    assert.ok(workflow.includes(`-p '${name}'`), name);
+  const full = workflow.slice(workflow.indexOf('  full-quality:'), workflow.indexOf('  recharge:'));
+  const setup = full.indexOf('npm run auto-registration:setup');
+  const acceptance = full.indexOf(`${python} -B ${worker}/acceptance_runtime.py`);
+  assert.ok(setup >= 0);
+  for (const name of [
+    'test_workspace.py',
+    'test_apple_mailboxes.py',
+    'test_release_safety.py',
+    'test_upload_compat.py'
+  ]) {
+    const command = `${python} -B -m unittest discover -s ${worker} -p '${name}'`;
+    assert.equal(full.split('\n').filter((line) => line.trim() === command).length, 1, name);
+    assert.ok(full.indexOf(command) > setup, name);
+    assert.ok(acceptance > full.indexOf(command), name);
+  }
 });
 
 test('unreviewed registration paths do not receive the Apple scoped worker runner', () => {

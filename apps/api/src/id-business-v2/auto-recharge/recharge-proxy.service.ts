@@ -329,6 +329,19 @@ export class RechargeProxyService {
   }
 
   async forCharge(id: string, operator: AuthenticatedUser, countryCode?: string) {
+    return this.forUse(id, operator, 'charge', countryCode);
+  }
+
+  async forRegistration(id: string, operator: AuthenticatedUser) {
+    return this.forUse(id, operator, 'registration');
+  }
+
+  private async forUse(
+    id: string,
+    operator: AuthenticatedUser,
+    purpose: 'charge' | 'registration',
+    countryCode?: string
+  ) {
     bankRechargeId(id, '代理编号');
     const item = await this.transactions.execute(
       async (tx) => {
@@ -340,11 +353,17 @@ export class RechargeProxyService {
         await this.audit.append(tx, {
           userId: operator.id,
           module: 'id_business_v2',
-          action: 'id_business_v2.auto_recharge.proxy.use',
+          action:
+            purpose === 'registration'
+              ? 'id_business_v2.auto_registration.proxy.use'
+              : 'id_business_v2.auto_recharge.proxy.use',
           objectType: 'recharge_proxy',
           objectId: id,
           afterData: { countryCode: row.countryCode, kind: row.kind },
-          remark: '单笔充值使用已保存代理 IP'
+          remark:
+            purpose === 'registration'
+              ? '隐藏邮箱注册使用已保存代理 IP'
+              : '单笔充值使用已保存代理 IP'
         });
         return row;
       },

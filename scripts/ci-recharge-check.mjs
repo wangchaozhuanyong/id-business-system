@@ -529,7 +529,12 @@ if (part === 'guards') {
     npm('run', 'auto-registration:setup');
     const python = '.runtime/auto-registration/venv/bin/python';
     const worker = 'apps/api/src/id-business-v2/auto-registration/worker';
-    for (const name of ['test_workspace.py', 'test_apple_mailboxes.py', 'test_release_safety.py'])
+    for (const name of [
+      'test_workspace.py',
+      'test_apple_mailboxes.py',
+      'test_release_safety.py',
+      'test_upload_compat.py'
+    ])
       run(python, ['-B', '-m', 'unittest', 'discover', '-s', worker, '-p', name]);
     run(python, ['-B', worker + '/acceptance_runtime.py']);
   }

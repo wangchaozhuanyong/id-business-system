@@ -4,11 +4,15 @@ import type { AppleMailboxRow, AppleMailboxTask } from './contracts';
 
 const mocks = vi.hoisted(() => ({
   list: vi.fn(),
+  resume: vi.fn(),
   mark: vi.fn(),
   start: vi.fn(),
   task: vi.fn(),
   cancel: vi.fn(),
   recover: vi.fn(),
+  batch: vi.fn(),
+  sync: vi.fn(),
+  localSave: vi.fn(),
   invalidate: vi.fn(),
   queries: [] as Array<Record<string, unknown>>,
   auth: { writesAllowed: true, user: { roles: ['admin'] } }
@@ -21,12 +25,16 @@ vi.mock('@/auth/sessionCoordinator', async () => {
 });
 vi.mock('./api', () => ({
   autoRegistrationApi: {
+    resumeAppleMailboxTasks: mocks.resume,
     appleMailboxes: mocks.list,
     markAppleMailboxes: mocks.mark,
     startAppleMailbox: mocks.start,
     appleMailboxTask: mocks.task,
     cancelAppleMailboxTask: mocks.cancel,
-    recoverAppleMailbox: mocks.recover
+    recoverAppleMailbox: mocks.recover,
+    startAppleMailboxBatch: mocks.batch,
+    syncAppleMailboxTask: mocks.sync,
+    saveAppleMailboxLocalAccount: mocks.localSave
   }
 }));
 vi.mock('@/v2/composables/useV2Query', async () => {
@@ -111,11 +119,21 @@ beforeEach(() => {
   mocks.queries.length = 0;
   clearV2SessionDrafts();
   mocks.auth.writesAllowed = true;
+  mocks.auth.user.roles = ['admin'];
   (sessionCoordinator.identityEpoch as Ref<number>).value = 0;
   mocks.mark.mockResolvedValue({ updated: 1 });
+  mocks.resume.mockResolvedValue({ resumed: 0, synchronized: 0 });
   mocks.start.mockResolvedValue({ taskUuid: 'task-1', record });
   mocks.recover.mockResolvedValue(record);
   mocks.cancel.mockResolvedValue({ accepted: true });
+  mocks.batch.mockResolvedValue({
+    batchId: 'batch-1',
+    taskUuids: ['task-1'],
+    accepted: 1,
+    skipped: []
+  });
+  mocks.sync.mockResolvedValue({ accountId: 'account-1', syncStatus: 'saved' });
+  mocks.localSave.mockResolvedValue({ localSaveStatus: 'saved' });
   vi.spyOn(console, 'warn').mockImplementation(() => {});
 });
 afterEach(() => {
@@ -125,6 +143,108 @@ afterEach(() => {
 });
 
 describe('苹果隐藏邮箱草稿、CAS 和任务生命周期', () => {
+  it('旧身份恢复请求迟到后不继续读取邮箱列表', async () => {
+    const pending = deferred<{ resumed: number; synchronized: number }>();
+    mocks.resume.mockReturnValueOnce(pending.promise);
+    const page = createPage();
+    const options = mocks.queries[0]!.options as {
+      query: (context: { signal: AbortSignal }) => Promise<unknown>;
+    };
+    const read = options.query({ signal: new AbortController().signal });
+    const rejected = expect(read).rejects.toMatchObject({ name: 'AbortError' });
+    (sessionCoordinator.identityEpoch as Ref<number>).value += 1;
+    pending.resolve({ resumed: 0, synchronized: 0 });
+    await rejected;
+    expect(mocks.list).not.toHaveBeenCalled();
+    expect(page.feedback.value).toBe('');
+  });
+  it.each(['batch', 'sync', 'localSave'] as const)(
+    '%s 的迟到响应不更新新身份的选中任务、反馈或列表',
+    async (action) => {
+      const pending = deferred<unknown>();
+      mocks[action].mockReturnValueOnce(pending.promise);
+      const page = createPage();
+      page.setSelection([row]);
+      page.taskUuid.value = 'original-task';
+      const write =
+        action === 'batch'
+          ? page.startBatch()
+          : action === 'sync'
+            ? page.syncTask()
+            : page.saveLocalAccount();
+      expect(mocks[action]).toHaveBeenCalledOnce();
+      (sessionCoordinator.identityEpoch as Ref<number>).value += 1;
+      pending.resolve(
+        action === 'batch'
+          ? { taskUuids: ['late-task'], accepted: 1, skipped: [] }
+          : action === 'sync'
+            ? { accountId: 'late-account', syncStatus: 'saved' }
+            : { localSaveStatus: 'saved' }
+      );
+      await write;
+      expect(page.taskUuid.value).toBe('original-task');
+      expect(page.feedback.value).toBe('');
+      expect(page.query.refresh).not.toHaveBeenCalled();
+      expect(page.taskQuery.refresh).not.toHaveBeenCalled();
+    }
+  );
+  it.each(['readonly', 'non-admin'] as const)(
+    '%s 禁止批量注册、补同步和补存本地账号',
+    async (reason) => {
+      if (reason === 'readonly') mocks.auth.writesAllowed = false;
+      else mocks.auth.user.roles = [];
+      const page = createPage();
+      page.setSelection([row]);
+      page.taskUuid.value = 'task-1';
+      await page.startBatch();
+      await page.syncTask();
+      await page.saveLocalAccount();
+      expect(mocks.batch).not.toHaveBeenCalled();
+      expect(mocks.sync).not.toHaveBeenCalled();
+      expect(mocks.localSave).not.toHaveBeenCalled();
+    }
+  );
+  it('批量仅提交选中的可用未注册邮箱，绑定各自原始版本', async () => {
+    const page = createPage();
+    const second = { ...row, aliasId: 'alias-2', revision: 9 };
+    const registered = { ...row, aliasId: 'registered', registrationStatus: 'registered' as const };
+    page.query.data.value!.items = [row, second, registered];
+    page.setSelection([row, second, registered]);
+    await page.startBatch();
+    expect(mocks.batch).toHaveBeenCalledWith({
+      targets: [
+        { aliasId: 'alias-1', revision: 3 },
+        { aliasId: 'alias-2', revision: 9 }
+      ],
+      count: 2,
+      concurrency: 3,
+      mode: 'pipeline',
+      interval_min: 5,
+      interval_max: 30
+    });
+    expect(page.taskUuid.value).toBe('task-1');
+    expect(page.feedback.value).toContain('跳过 1 个');
+  });
+  it('同步恢复只补主系统同步，不触发注册、批量或标记', async () => {
+    const page = createPage();
+    page.taskUuid.value = 'task-1';
+    await page.syncTask();
+    expect(mocks.sync).toHaveBeenCalledWith('task-1');
+    expect(mocks.start).not.toHaveBeenCalled();
+    expect(mocks.batch).not.toHaveBeenCalled();
+    expect(mocks.mark).not.toHaveBeenCalled();
+    expect(page.feedback.value).toContain('ChatGPT');
+  });
+  it('补存本地账号使用原任务标识，不触发注册或主系统同步', async () => {
+    const page = createPage();
+    page.taskUuid.value = 'task-1';
+    await page.saveLocalAccount();
+    expect(mocks.localSave).toHaveBeenCalledWith('task-1');
+    expect(mocks.start).not.toHaveBeenCalled();
+    expect(mocks.batch).not.toHaveBeenCalled();
+    expect(mocks.sync).not.toHaveBeenCalled();
+    expect(page.feedback.value).toContain('补存');
+  });
   it('批量标记可用性仅取决于当前结果中的选择，不把字段有效性作为选择条件', () => {
     const page = createPage();
     expect(page.hasSelection.value).toBe(false);
@@ -312,6 +432,13 @@ describe('苹果隐藏邮箱草稿、CAS 和任务生命周期', () => {
     expect(page.markOpen.value).toBe(false);
     expect(page.actionError.value).toContain('解除占用');
   });
+  it('结果待核对任务阻止人工标记，提示核对结果且不指向解除中断', () => {
+    const page = createPage();
+    page.openMark([{ ...row, taskStatus: 'awaiting_review' }]);
+    expect(page.markOpen.value).toBe(false);
+    expect(page.actionError.value).toContain('查看任务');
+    expect(page.actionError.value).not.toContain('解除占用');
+  });
   it('非法 IP 不提交，错误显示后修正即可保存', async () => {
     const page = createPage();
     page.openMark([row]);
@@ -319,10 +446,31 @@ describe('苹果隐藏邮箱草稿、CAS 和任务生命周期', () => {
     page.markDraft.form.registrationIp = 'bad-ip';
     await page.saveMark();
     expect(mocks.mark).not.toHaveBeenCalled();
-    expect(page.actionError.value).toContain('IPv4');
+    expect(page.markValidation.value).toContain('IPv4');
+    expect(page.actionError.value).toBe('');
     page.markDraft.form.registrationIp = '2001:db8::1';
     await page.saveMark();
     expect(mocks.mark).toHaveBeenCalledOnce();
+  });
+  it.each(['', '菲律宾'])('IP 可留空，备注可为空或填写地区：%s', async (note) => {
+    const page = createPage();
+    page.openMark([row]);
+    page.markDraft.form.registrationStatus = 'registered';
+    page.markDraft.form.registrationIp = '菲律宾';
+    await page.saveMark();
+    expect(mocks.mark).not.toHaveBeenCalled();
+    page.markDraft.form.registrationIp = '';
+    page.markDraft.form.note = note;
+    expect(page.markValidation.value).toBe('');
+    expect(page.actionError.value).toBe('');
+    await page.saveMark();
+    expect(mocks.mark).toHaveBeenCalledWith({
+      items: [{ aliasId: row.aliasId, revision: row.revision }],
+      registrationStatus: 'registered',
+      registrationIp: null,
+      note
+    });
+    expect(page.markOpen.value).toBe(false);
   });
   it('有效状态已计算后编辑无效 IP 会即时更新字段错误，修正后清除', () => {
     const page = createPage();

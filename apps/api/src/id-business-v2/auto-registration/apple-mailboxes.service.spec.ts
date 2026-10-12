@@ -1,8 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { ConflictException, ForbiddenException } from '@nestjs/common';
 import type { AuditLogsService } from '../../audit-logs/audit-logs.service';
 import type { AuthenticatedUser } from '../../auth/auth.types';
 import type { IdBusinessV2VendureMailboxService } from '../workspace/public-api';
 import { AppleMailboxesService } from './apple-mailboxes.service';
+import { AppleMailboxTaskBridgeService } from './apple-mailboxes-task-bridge.service';
 import type { AutoRegistrationService } from './auto-registration.service';
 import type {
   AppleMailboxCodeRequest,
@@ -63,6 +65,9 @@ describe('苹果隐藏邮箱：权限、登记与私有取码桥', () => {
     registrationCode: vi.fn()
   };
   const worker = { appleMailboxRequest: vi.fn() };
+  const accounts = { registeredEmailHashes: vi.fn(), mirrorRegistration: vi.fn() };
+  const proxies = { list: vi.fn(), forRegistration: vi.fn() };
+  const encryption = { hash: vi.fn((email: string) => `hash:${email}`) };
 
   beforeEach(() => {
     vi.useFakeTimers();
@@ -74,6 +79,18 @@ describe('苹果隐藏邮箱：权限、登记与私有取码桥', () => {
     state = 'running';
     revalidate.mockResolvedValue(true);
     audit.create.mockResolvedValue({});
+    accounts.registeredEmailHashes.mockResolvedValue(new Set());
+    accounts.mirrorRegistration.mockResolvedValue({ accountId: requestId, replayed: false });
+    proxies.list.mockResolvedValue({ items: [], total: 0, page: 1, pageSize: 100 });
+    proxies.forRegistration.mockResolvedValue({
+      mode: 'static',
+      type: 'http',
+      host: 'proxy.example.test',
+      port: 8080,
+      username: 'fixture-user',
+      password: 'fixture-password'
+    });
+    encryption.hash.mockImplementation((email: string) => `hash:${email}`);
     mailboxes.registrationMailboxSummaries.mockImplementation(async () => aliases);
     mailboxes.registrationMailbox.mockResolvedValue({
       email: 'ALIAS@example.test',
@@ -104,7 +121,11 @@ describe('苹果隐藏邮箱：权限、登记与私有取码桥', () => {
     service = new AppleMailboxesService(
       worker as unknown as AutoRegistrationService,
       mailboxes as unknown as IdBusinessV2VendureMailboxService,
-      audit as unknown as AuditLogsService
+      audit as unknown as AuditLogsService,
+      accounts as never,
+      proxies as never,
+      encryption as never,
+      new AppleMailboxTaskBridgeService(worker as never, mailboxes as never, audit as never)
     );
   });
 
@@ -133,15 +154,16 @@ describe('苹果隐藏邮箱：权限、登记与私有取码桥', () => {
     )?.[2];
   }
 
-  it('旧邮箱没有登记时为待确认，不能默认作为未注册候选', async () => {
+  it('新邮箱没有登记时默认未注册并自动进入候选，已有历史unknown保留', async () => {
     records = [];
     const result = await service.list({}, actor);
     expect(result.items[0]).toMatchObject({
-      registrationStatus: 'unknown',
-      canRegister: false,
+      registrationStatus: 'unregistered',
+      canRegister: true,
       registrationIp: null
     });
-    expect(result.items[0]?.blockedReason).toContain('先确认');
+    records = [{ ...baseRecord(), registrationStatus: 'unknown' }];
+    expect((await service.list({}, actor)).items[0]?.blockedReason).toContain('先确认');
   });
 
   it('注册IP只来自专用记录，不从邮箱列表的其他网络字段推断', async () => {
@@ -157,6 +179,295 @@ describe('苹果隐藏邮箱：权限、登记与私有取码桥', () => {
       registrationIpSource: 'manual',
       canRegister: false
     });
+  });
+
+  it('主系统已有账号即使自动登记缺失也排除候选，保留软删除注册事实', async () => {
+    records = [];
+    accounts.registeredEmailHashes.mockResolvedValue(new Set([`hash:${alias.email}`]));
+    expect((await service.list({}, actor)).items[0]).toMatchObject({
+      registrationStatus: 'registered',
+      canRegister: false
+    });
+    await expect(service.start({}, actor, revalidate)).rejects.toThrow('没有可注册');
+    expect(worker.appleMailboxRequest.mock.calls.some((call) => call[0].endsWith('/start'))).toBe(
+      false
+    );
+  });
+
+  it('自动选择固定服务器邮箱；零候选或旧版本不会改用临时邮箱', async () => {
+    await service.start({}, actor, revalidate);
+    expect(worker.appleMailboxRequest).toHaveBeenCalledWith(
+      '/internal/apple-mailboxes/start',
+      'POST',
+      expect.objectContaining({
+        aliasId: alias.id,
+        email: alias.email,
+        revision: 1,
+        options: expect.objectContaining({
+          mailboxSelection: 'automatic',
+          proxySource: 'default',
+          proxyId: null
+        })
+      })
+    );
+    await expect(
+      service.start({ aliasId: alias.id, revision: 0 }, actor, revalidate)
+    ).rejects.toThrow('占用');
+    records = [];
+    aliases = [];
+    await expect(service.start({}, actor, revalidate)).rejects.toThrow('没有可注册');
+  });
+
+  it('系统代理与原上传参数完整交给私网，不接受浏览器proxy凭据或任意options', async () => {
+    await service.start(
+      {
+        aliasId: alias.id,
+        revision: 1,
+        proxyId: requestId,
+        auto_upload_cpa: true,
+        cpa_service_ids: [1, 2],
+        auto_upload_sub2api: true,
+        sub2api_service_ids: [3],
+        auto_upload_tm: true,
+        tm_service_ids: [4]
+      },
+      actor,
+      revalidate
+    );
+    expect(proxies.forRegistration).toHaveBeenCalledWith(requestId, actor);
+    const payload = worker.appleMailboxRequest.mock.calls.find((call) =>
+      call[0].endsWith('/start')
+    )?.[2];
+    expect(payload).toMatchObject({
+      options: {
+        proxySource: 'system',
+        proxyId: requestId,
+        mailboxSelection: 'specified',
+        auto_upload_cpa: true,
+        cpa_service_ids: [1, 2],
+        auto_upload_sub2api: true,
+        sub2api_service_ids: [3],
+        auto_upload_tm: true,
+        tm_service_ids: [4],
+        system_proxy: { host: 'proxy.example.test', port: 8080 }
+      }
+    });
+    expect(JSON.stringify(audit.create.mock.calls)).not.toContain('fixture-password');
+    await expect(
+      service.start({ proxy: 'http://user:secret@proxy.test' }, actor, revalidate)
+    ).rejects.toThrow('参数无效');
+    await expect(service.start({ options: {} }, actor, revalidate)).rejects.toThrow('参数无效');
+    await expect(
+      service.start({ proxySource: 'system', proxyId: requestId }, actor, revalidate)
+    ).rejects.toThrow('参数无效');
+  });
+
+  it('批量只绑定不同可用邮箱并返回不足数量，不重复邮箱凑数', async () => {
+    aliases = [
+      alias,
+      { ...alias, id: 'alias-two', email: 'other@example.test' },
+      { ...alias, id: 'alias-three', email: alias.email }
+    ];
+    mailboxes.registrationMailbox.mockImplementation(async (id: string) => ({
+      email: aliases.find((item) => item.id === id)!.email
+    }));
+    const second = {
+      ...baseRecord(),
+      email: 'other@example.test',
+      aliasId: 'alias-two',
+      activeTaskUuid: requestId
+    };
+    worker.appleMailboxRequest.mockImplementation(
+      async (path: string, _method?: string, body?: unknown) => {
+        if (path.endsWith('/records')) return { records: [baseRecord()] };
+        if (path.endsWith('/batch')) {
+          expect(body).toMatchObject({
+            items: [
+              { aliasId: alias.id, email: alias.email, revision: 1 },
+              { aliasId: 'alias-two', email: second.email, revision: 0 }
+            ],
+            concurrency: 2,
+            mode: 'parallel',
+            interval_min: 0,
+            interval_max: 0
+          });
+          return {
+            batchId: actor.id,
+            taskUuids: [taskId, requestId],
+            records: [{ ...baseRecord(), activeTaskUuid: taskId }, second],
+            skipped: []
+          };
+        }
+        return { requests: [] };
+      }
+    );
+    const result = await service.batch(
+      { count: 10, concurrency: 2, mode: 'parallel', interval_min: 0, interval_max: 0 },
+      actor,
+      revalidate
+    );
+    expect(result).toMatchObject({ accepted: 2, requested: 10 });
+    expect(result.skipped).toHaveLength(1);
+    expect(result.taskUuids).toEqual([taskId, requestId]);
+    await expect(
+      service.batch(
+        {
+          count: 1,
+          targets: [
+            { aliasId: alias.id, revision: 1 },
+            { aliasId: alias.id, revision: 1 }
+          ]
+        },
+        actor,
+        revalidate
+      )
+    ).rejects.toThrow('重复');
+    await expect(
+      service.batch({ count: 1, interval_min: 5, interval_max: 4 }, actor, revalidate)
+    ).rejects.toThrow('参数无效');
+  });
+
+  it('候选在批次占用时全部失效则拒绝启动，不登记空任务', async () => {
+    worker.appleMailboxRequest.mockImplementation(async (path: string) => {
+      if (path.endsWith('/records')) return { records: [baseRecord()] };
+      if (path.endsWith('/batch'))
+        return {
+          batchId: null,
+          taskUuids: [],
+          records: [],
+          skipped: [{ aliasId: alias.id, reason: 'mailbox_unavailable' }]
+        };
+      return { requests: [] };
+    });
+    await expect(service.batch({ count: 1 }, actor, revalidate)).rejects.toThrow('批次未启动');
+    await service.pump();
+    expect(worker.appleMailboxRequest.mock.calls.some(([path]) => path.endsWith('/requests'))).toBe(
+      false
+    );
+    expect(accounts.mirrorRegistration).not.toHaveBeenCalled();
+  });
+
+  it.each(['saved', 'failed', 'conflict'] as const)(
+    '只补同步 %s，不调用注册或上传，错误正文不外泄',
+    async (status) => {
+      const payload = {
+        accountId: requestId,
+        sourceTaskUuid: taskId,
+        upstreamAccountId: '7',
+        operatorId: actor.id,
+        aliasId: alias.id,
+        email: alias.email,
+        password: 'synthetic-password',
+        registrationCountry: 'US',
+        source: 'register',
+        fingerprint: 'a'.repeat(64)
+      };
+      worker.appleMailboxRequest.mockImplementation(async (path: string) =>
+        path.endsWith('/sync-payload') ? payload : {}
+      );
+      if (status !== 'saved')
+        accounts.mirrorRegistration.mockRejectedValue(
+          status === 'conflict'
+            ? new ConflictException('sensitive conflict')
+            : new Error('sensitive token text')
+        );
+      expect(await service.sync(taskId, actor)).toMatchObject({ syncStatus: status });
+      expect(accounts.mirrorRegistration).toHaveBeenCalledWith(
+        expect.objectContaining({ registrationCountryCode: 'US', sourceTaskUuid: taskId }),
+        actor
+      );
+      expect(worker.appleMailboxRequest.mock.calls.map((call) => call[0])).toEqual([
+        `/internal/apple-mailboxes/tasks/${taskId}/sync-retry`,
+        `/internal/apple-mailboxes/tasks/${taskId}/sync-payload`,
+        `/internal/apple-mailboxes/tasks/${taskId}/sync-ack`
+      ]);
+      expect(JSON.stringify(audit.create.mock.calls)).not.toContain('synthetic-password');
+      expect(JSON.stringify(worker.appleMailboxRequest.mock.calls)).not.toContain('sensitive');
+    }
+  );
+
+  it('主账号提交后SQLite回执丢失，重试仍使用同一登记编号并由主服务核对来源', async () => {
+    const payload = {
+      accountId: requestId,
+      sourceTaskUuid: taskId,
+      upstreamAccountId: '7',
+      operatorId: actor.id,
+      aliasId: alias.id,
+      email: alias.email,
+      registrationCountry: null,
+      source: 'login',
+      fingerprint: 'b'.repeat(64)
+    };
+    let acknowledgements = 0;
+    worker.appleMailboxRequest.mockImplementation(async (path: string) => {
+      if (path.endsWith('/sync-payload')) return payload;
+      if (path.endsWith('/sync-ack') && ++acknowledgements === 1) throw new Error('lost ack');
+      return {};
+    });
+    await expect(service.sync(taskId, actor)).rejects.toThrow('lost ack');
+    expect(await service.sync(taskId, actor)).toEqual({
+      accountId: requestId,
+      syncStatus: 'saved'
+    });
+    expect(accounts.mirrorRegistration.mock.calls.map((call) => call[0].accountId)).toEqual([
+      requestId,
+      requestId
+    ]);
+    expect(accounts.mirrorRegistration.mock.calls[0]?.[0]).not.toHaveProperty('password');
+  });
+
+  it('重新连接从已登记任务恢复取码边界及待同步队列，不重新选择邮箱或发起注册', async () => {
+    const payload = {
+      accountId: requestId,
+      sourceTaskUuid: taskId,
+      upstreamAccountId: '8',
+      operatorId: actor.id,
+      aliasId: alias.id,
+      email: alias.email,
+      registrationCountry: null,
+      source: 'login',
+      fingerprint: 'c'.repeat(64)
+    };
+    worker.appleMailboxRequest.mockImplementation(async (path: string) => {
+      if (path.endsWith('/tasks-active'))
+        return {
+          tasks: [
+            {
+              taskUuid: taskId,
+              aliasId: alias.id,
+              email: alias.email,
+              operatorId: actor.id,
+              startedAt: new Date(Date.now() - 60_000).toISOString(),
+              previousId: 'consumed-mail'
+            }
+          ]
+        };
+      if (path.endsWith('/sync-pending')) return { tasks: [{ taskUuid: taskId }] };
+      if (path.endsWith('/sync-payload')) return payload;
+      return {};
+    });
+    expect(await service.resume(actor, revalidate)).toEqual({ resumed: 1, synchronized: 1 });
+    expect(
+      worker.appleMailboxRequest.mock.calls.some((call) => /\/(start|batch)$/.test(call[0]))
+    ).toBe(false);
+    expect(mailboxes.registrationCode).not.toHaveBeenCalled();
+    revalidate.mockResolvedValue(false);
+    await expect(service.resume(actor, revalidate)).rejects.toThrow('重新登录');
+  });
+
+  it('补存本地账号只调用保存恢复，不请求官网注册、验证码或上传', async () => {
+    worker.appleMailboxRequest.mockResolvedValue({
+      task: { record: { localSaveStatus: 'saved', syncStatus: 'pending' } }
+    });
+    expect(await service.localSave(taskId, actor)).toEqual({ localSaveStatus: 'saved' });
+    expect(worker.appleMailboxRequest).toHaveBeenCalledExactlyOnceWith(
+      `/internal/apple-mailboxes/tasks/${taskId}/local-save-retry`,
+      'POST',
+      {}
+    );
+    expect(mailboxes.registrationCode).not.toHaveBeenCalled();
+    expect(accounts.mirrorRegistration).not.toHaveBeenCalled();
+    expect(JSON.stringify(audit.create.mock.calls)).not.toContain(alias.email);
   });
 
   it.each([{ status: 'DISABLED' }, { authorizationValid: false }, { primaryAvailable: false }])(
@@ -212,7 +523,9 @@ describe('苹果隐藏邮箱：权限、登记与私有取码桥', () => {
     const employee = { ...actor, roles: ['employee'] };
     await expect(service.list({}, employee)).rejects.toThrow('管理员');
     await expect(service.mark({}, employee)).rejects.toThrow('管理员');
-    expect(worker.appleMailboxRequest).not.toHaveBeenCalled();
+    expect(worker.appleMailboxRequest.mock.calls.some((call) => call[0].endsWith('/start'))).toBe(
+      false
+    );
   });
 
   it.each(['10.1.1', 'http://127.0.0.1', 'user:password@proxy.test', ''])(
@@ -291,6 +604,23 @@ describe('苹果隐藏邮箱：权限、登记与私有取码桥', () => {
     expect(worker.appleMailboxRequest).not.toHaveBeenCalled();
   });
 
+  it.each(['start', 'batch'] as const)('等待候选或审计期间撤销会话时禁止 %s 提交', async (mode) => {
+    audit.create.mockImplementation(async ({ action }: { action: string }) => {
+      if (action.startsWith('发起隐藏邮箱')) revalidate.mockResolvedValue(false);
+      return {};
+    });
+    await expect(
+      mode === 'start'
+        ? service.start({ aliasId: alias.id, revision: 1 }, actor, revalidate)
+        : service.batch({ count: 1 }, actor, revalidate)
+    ).rejects.toThrow('重新登录');
+    expect(
+      worker.appleMailboxRequest.mock.calls.some(
+        ([path]) => path.endsWith('/start') || path.endsWith('/batch')
+      )
+    ).toBe(false);
+  });
+
   it('启动只交给Python指定邮箱与任务，JWT和查询码不会透传', async () => {
     await start();
     expect(JSON.stringify(worker.appleMailboxRequest.mock.calls)).not.toContain(
@@ -299,14 +629,30 @@ describe('苹果隐藏邮箱：权限、登记与私有取码桥', () => {
     expect(worker.appleMailboxRequest).toHaveBeenCalledWith(
       '/internal/apple-mailboxes/start',
       'POST',
-      { aliasId: alias.id, email: alias.email, revision: 1, operatorId: actor.id }
+      {
+        aliasId: alias.id,
+        email: alias.email,
+        revision: 1,
+        operatorId: actor.id,
+        options: {
+          proxySource: 'default',
+          proxyId: null,
+          mailboxSelection: 'specified',
+          auto_upload_cpa: false,
+          cpa_service_ids: [],
+          auto_upload_sub2api: false,
+          sub2api_service_ids: [],
+          auto_upload_tm: false,
+          tm_service_ids: []
+        }
+      }
     );
   });
 
   it('每次取码重验会话、活动任务、邮箱与收件时间，只返回6位数字', async () => {
     await start();
     await service.pump();
-    expect(revalidate).toHaveBeenCalledTimes(2);
+    expect(revalidate).toHaveBeenCalledTimes(4);
     expect(mailboxes.registrationCode).toHaveBeenCalledWith(
       alias.id,
       new Date(),
@@ -316,6 +662,41 @@ describe('苹果隐藏邮箱：权限、登记与私有取码桥', () => {
     );
     expect(delivered()).toEqual({ mailId: 'mail-one', code: '123456' });
     expect(JSON.stringify(audit.create.mock.calls)).not.toContain('123456');
+  });
+
+  it('读取邮件期间会话撤销时丢弃验证码并保留未消费边界', async () => {
+    await start();
+    mailboxes.registrationCode.mockImplementation(async () => {
+      revalidate.mockResolvedValue(false);
+      return { mailId: 'mail-one', code: '123456' };
+    });
+    await service.pump();
+    expect(delivered()).toEqual({ mailId: null, code: null, error: 'session_invalid' });
+  });
+
+  it('读取邮件期间原任务结束时不交付验证码', async () => {
+    await start();
+    mailboxes.registrationCode.mockImplementation(async () => {
+      state = 'failed';
+      return { mailId: 'mail-one', code: '123456' };
+    });
+    await service.pump();
+    expect(delivered()).toEqual({ mailId: null, code: null, error: 'mailbox_unavailable' });
+  });
+
+  it('任务结束时认证复验抛错也释放内存上下文，保留持久化待同步结果', async () => {
+    await start();
+    requests = [];
+    state = 'completed';
+    records[0] = { ...records[0]!, syncStatus: 'pending' };
+    revalidate.mockRejectedValue(new ForbiddenException('synthetic revoked session'));
+    await service.pump();
+    const calls = worker.appleMailboxRequest.mock.calls.length;
+    vi.advanceTimersByTime(5000);
+    await service.pump();
+    expect(worker.appleMailboxRequest).toHaveBeenCalledTimes(calls);
+    expect(accounts.mirrorRegistration).not.toHaveBeenCalled();
+    expect(records[0]!.syncStatus).toBe('pending');
   });
 
   it.each(['12345678', 'https://auth.openai.com/verify?code=fixture'])(

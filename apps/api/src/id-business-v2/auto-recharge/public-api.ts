@@ -1,4 +1,9 @@
 export { RechargeModule } from './recharge.module';
 export { RechargeSettingsService } from './recharge-settings.service';
 export { RechargeProxyService } from './recharge-proxy.service';
+export {
+  BankRechargeRegistrationMirrorService,
+  type RegistrationMirrorInput,
+  type RegistrationMirrorResult
+} from './bank-recharge-registration-mirror.service';
 export { bankRechargeCountryCode } from './bank-recharge-validation';
