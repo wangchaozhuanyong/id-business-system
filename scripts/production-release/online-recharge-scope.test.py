@@ -4261,8 +4261,12 @@ class AfterBitSwitchControlTests(unittest.TestCase):
                 return gate
             original_factory = scope._online_after_bit_unused_audit_barrier
             def factory(*args):
-                self.assertIn('health:admin', events)
+                self.assertNotIn('switch:admin', events)
+                self.assertEqual(changed, [])
+                self.assertFalse(hasattr(gate, 'deadline'))
+                self.assertEqual(f.processes, [])
                 events.append('audit-prepare')
+                if failure == 'factory-prepare': raise RuntimeError('API_ADMIN_WORKSPACE_AUDIT_HISTORY_UNPROVEN')
                 if actual_before is None:
                     barrier = original_factory(*args)
                 else:
@@ -4305,6 +4309,17 @@ class AfterBitSwitchControlTests(unittest.TestCase):
                         self.assertFalse(hasattr(gate, 'deadline'), 'complete source checks must precede SQLite lock')
                         clock[0] += source_seconds
                 stack.enter_context(patch.object(scope, name, side_effect=checked))
+            original_database_identity = shared.workspace_database_identity
+            def database_identity(directory_controller, directory, identity=None):
+                if identity is None:
+                    self.assertNotIn('switch:admin', events)
+                    self.assertEqual(changed, [])
+                    self.assertFalse(hasattr(gate, 'deadline'))
+                    self.assertEqual(f.processes, [])
+                    events.append('database-identity')
+                    if failure == 'database-identity': raise RuntimeError('API_ADMIN_WORKSPACE_DATABASE_IDENTITY_CHANGED')
+                return original_database_identity(directory_controller, directory, identity)
+            stack.enter_context(patch.object(shared, 'workspace_database_identity', side_effect=database_identity))
             stack.enter_context(patch.object(scope, '_online_after_bit_unused_audit_barrier', side_effect=factory))
             stack.enter_context(patch.object(shared, 'workspace_prepare', side_effect=prepare))
             f.changed, f.timing, f.events, f.clock, f.gate = changed, timing, events, clock, gate
@@ -4325,6 +4340,8 @@ class AfterBitSwitchControlTests(unittest.TestCase):
             self.assertEqual(f.gate.deadline, 1270)
             self.assertEqual([e for e in f.events if e.startswith('switch:')], ['switch:admin', 'switch:api', 'switch:online-recharge'])
             self.assertEqual(f.events.count('docker-stop'), 1)
+            self.assertLess(f.events.index('audit-prepare'), f.events.index('database-identity'))
+            self.assertLess(f.events.index('database-identity'), f.events.index('switch:admin'))
             self.assertLess(f.events.index('health:admin'), f.events.index('sqlite-prepare'))
             self.assertLess(f.events.index('sqlite-prepare'), f.events.index('mysql-lock'))
             self.assertLess(f.events.index('stopped-proof'), f.events.index('mysql-unlock'))
@@ -4372,10 +4389,30 @@ class AfterBitSwitchControlTests(unittest.TestCase):
             self.assertEqual(f.processes, [])
             self.assertFalse(f.timing['apiStopAttempted'])
 
+    def test_audit_preparation_and_database_identity_failures_do_not_switch_or_restore_services(self):
+        for failure, code in (('factory-prepare', 'API_ADMIN_WORKSPACE_AUDIT_HISTORY_UNPROVEN'),
+                ('factory-identity', 'ONLINE_RECHARGE_AFTER_BIT_API_CHANGED'),
+                ('database-identity', 'API_ADMIN_WORKSPACE_DATABASE_IDENTITY_CHANGED')):
+            with self.subTest(failure=failure), self.fixture(failure=failure) as f:
+                with self.assertRaisesRegex(RuntimeError, '^' + code + '$'): f.switch()
+                self.assertEqual(f.changed, [])
+                self.assertEqual(f.timing['phase'], 'AUDIT_PREPARE')
+                self.assertEqual(f.processes, [])
+                self.assertFalse(hasattr(f.gate, 'deadline'))
+                self.assertFalse(f.timing['mysqlFenceEntered'])
+                self.assertFalse(f.timing['apiStopAttempted'])
+                self.assertFalse(f.timing['apiStopCompleted'])
+                self.assertFalse(any(event.startswith(('switch:', 'restore:')) for event in f.events))
+                okay, restored = scope.rollback(f.d, f.directory, f.base / 'target', f.changed,
+                    f.bridge['services'], migrated=True)
+                self.assertTrue(okay); self.assertEqual(restored, {})
+                f.d.rollback_service.assert_not_called()
+                f.gate.abort.assert_not_called(); f.gate.close.assert_not_called()
+
     def test_preparation_guard_and_sqlite_check_failures_never_dispatch_or_recreate_api(self):
         phases = {'admin': 'ADMIN_SWITCH', 'api-precheck': 'API_PRECHECKS', 'sqlite-prepare': 'SQLITE_PREPARE',
             'reserve': 'API_STOP_GUARD', 'sqlite-check': 'API_STOP_CHECK',
-            'factory-identity': 'AUDIT_PREPARE', 'gate-identity': 'SQLITE_PREPARE'}
+            'gate-identity': 'SQLITE_PREPARE'}
         for failure, phase in phases.items():
             with self.subTest(failure=failure), self.fixture(failure=failure) as f:
                 with self.assertRaises(RuntimeError): f.switch()
@@ -4773,14 +4810,19 @@ class RestoredEntryTests(unittest.TestCase):
             with self.assertRaises(RuntimeError):
                 scope._restored_workspace_failed_helper_bytes(controller(),directory,name)
     def test_capacity_control_missing_policy_is_empty_and_atomic_exact_mapping_required(self):
+        import ast
         witness=scope._RESTORED_B_WITNESS
         bridge=scope.closed_recovery_json(controller(),witness['failedPreflight'].encode())['baseline']
-        policy=copy.deepcopy(scope._WORKSPACE_CAPACITY_CONTROL_POLICY)
+        frozen_main='caf6c440324f83fb76e03eea8e9f2dd2f5ee5a20'
+        frozen_source=subprocess.check_output(['git','show',frozen_main+':scripts/production-release/online-recharge-scope.py'],cwd=ROOT)
+        policy=next(ast.literal_eval(node.value) for node in ast.parse(frozen_source).body
+            if isinstance(node,ast.Assign) and any(isinstance(target,ast.Name)
+                and target.id=='_WORKSPACE_CAPACITY_CONTROL_POLICY' for target in node.targets))
         names=frozenset(policy['files'])
-        # The reviewed capacity source producer is separate from this ONLINE
-        # checkout, whose unchanged capacity group correctly grants no exception.
-        producer={'commit':'9e2ab11c065bd786d359191cae163e137f232c05',
-            'sourceTree':'93be945bc8eecaa6e0c4399668e4076b8a147fa9',
+        # Historical V5 remains checked against its permanent real main source;
+        # a later maintenance change must not rewrite this historical fixture.
+        producer={'commit':frozen_main,
+            'sourceTree':'b35b80e65b4dd63cd9143c3ca59ec1cec2391eff',
             'workflowRunId':'123','workflowRunAttempt':'1'}
         cached={}
         for source in (bridge['baselineProducer'],producer):
@@ -4812,6 +4854,73 @@ class RestoredEntryTests(unittest.TestCase):
             policy['files']['scripts/production-release/other.py']=copy.deepcopy(policy['files'][path])
             with self.assertRaises(RuntimeError):
                 scope._workspace_capacity_control_inventory(d,bridge,original,inventory)
+
+    def test_current_capacity_mapping_binds_all_five_owned_files_and_closed_full_archive(self):
+        witness=scope._RESTORED_B_WITNESS
+        bridge=json.loads(witness['failedPreflight'])['baseline']
+        policy=copy.deepcopy(scope._WORKSPACE_CAPACITY_CONTROL_POLICY)
+        owned={name:(ROOT/name).read_bytes() for name in policy['files']}
+        for name,data in owned.items():
+            self.assertEqual(policy['files'][name]['after'],{
+                'mode':'100644','bytes':len(data),'sha256':hashlib.sha256(data).hexdigest()})
+            self.assertFalse((ROOT/name).stat().st_mode&0o111)
+        base_commit='caf6c440324f83fb76e03eea8e9f2dd2f5ee5a20'
+        synthetic_commit='e'*40
+        base_prefix='id-business-system-'+base_commit+'/'
+        prefix='id-business-system-'+synthetic_commit+'/'
+        raw=subprocess.check_output(['git','archive','--format=tar.gz','--prefix='+base_prefix,base_commit],cwd=ROOT)
+        with tarfile.open(fileobj=io.BytesIO(raw),mode='r:gz') as archive:
+            entries=[(copy.copy(row),archive.extractfile(row).read() if row.isfile() else None)
+                for row in archive.getmembers()]
+        def rebuilt(replacements):
+            output=io.BytesIO()
+            with tarfile.open(fileobj=output,mode='w:gz') as archive:
+                for row,old in entries:
+                    row=copy.copy(row)
+                    relative=row.name[len(base_prefix):] if row.name.startswith(base_prefix) else ''
+                    row.name=prefix+relative if relative else prefix.rstrip('/')
+                    data=replacements.get(relative,old)
+                    if data is not None:
+                        row.size=len(data)
+                        if relative in replacements:row.mode=0o644
+                    archive.addfile(row,io.BytesIO(data) if data is not None else None)
+            return output.getvalue()
+        # An isolated temporary index lets Git itself calculate the complete
+        # source tree. This synthetic producer is never a run or publication.
+        with tempfile.TemporaryDirectory(prefix='capacity-index-',dir=RUNTIME) as temporary:
+            environment={**os.environ,'GIT_INDEX_FILE':str(Path(temporary)/'index')}
+            subprocess.run(['git','read-tree',base_commit],cwd=ROOT,env=environment,check=True)
+            for name,data in owned.items():
+                blob=subprocess.check_output(['git','hash-object','-w','--stdin'],input=data,cwd=ROOT).decode().strip()
+                subprocess.run(['git','update-index','--add','--cacheinfo','100644',blob,name],
+                    cwd=ROOT,env=environment,check=True)
+            tree=subprocess.check_output(['git','write-tree'],cwd=ROOT,env=environment).decode().strip()
+        producer={'commit':synthetic_commit,'sourceTree':tree,'workflowRunId':'123','workflowRunAttempt':'1'}
+        before_source=bridge['baselineProducer']
+        before_raw=subprocess.check_output(['git','archive','--format=tar.gz',
+            '--prefix=id-business-system-'+before_source['commit']+'/',before_source['commit']],cwd=ROOT)
+        after_raw=rebuilt(owned)
+        cached={(before_source['commit'],before_source['sourceTree']):before_raw,
+            (synthetic_commit,tree):after_raw}
+        d=controller(BASE=Path('/opt/id-business-v2'),_onlinePendingWorkspaceProducer=producer,
+            _onlinePendingWorkspaceArchiveBytes=cached)
+        original=scope._pending_workspace_current_source_inventory(d,before_source)
+        inventory=scope._pending_workspace_current_source_inventory(d,producer)
+        self.assertEqual(scope._workspace_capacity_control_inventory(d,bridge,original,inventory),frozenset(owned))
+        for name in owned:
+            for bad in ({'sha256':'0'*64,'mode':'100644'},
+                {'sha256':inventory[name]['sha256'],'mode':'100755'},original[name]):
+                with self.subTest(path=name,variation=bad):
+                    with self.assertRaises(RuntimeError):
+                        scope._workspace_capacity_control_inventory(d,bridge,original,{**inventory,name:bad})
+        key=(synthetic_commit,tree)
+        cached.pop(key)
+        with self.assertRaises(RuntimeError):scope._workspace_capacity_control_inventory(d,bridge,original,inventory)
+        cached[key]=rebuilt({**owned,next(iter(owned)):owned[next(iter(owned))]+b'\n'})
+        with self.assertRaises(RuntimeError):scope._workspace_capacity_control_inventory(d,bridge,original,inventory)
+        cached[key]=after_raw
+        with self.assertRaisesRegex(RuntimeError,'SOURCE_TREE_CHANGED'):
+            scope.archive_inventory(d,after_raw,synthetic_commit,'0'*40)
 
     def test_real_observation_diagnostic_bools_and_preserved_mysql_cannot_grant_restoration(self):
         witness=scope._RESTORED_B_WITNESS
@@ -5256,6 +5365,7 @@ class RestoredQualifiedTests(unittest.TestCase):
             with ExitStack() as edges:
                 for name,value in (('_pending_workspace_reader',lambda actual:reader),('legacy',lambda actual:reader),
                     ('_workspace_baseline_reader',lambda *a,**kw:(scope.ONLINE_AFTER_BIT_KIND,reader.online_after_bit_cold)),
+                    ('_restored_workspace_cold_cache',lambda *a:events.append('offline-historical-cache-checked')),
                     ('_pending_workspace_profile',lambda *a:events.append('full-source-profile-check')),
                     ('_workspace_owned_preflight',owned),('online_after_bit_preflight_bytes',owned),
                     ('_pending_workspace_validate_receipt',receipt_check),
@@ -5355,7 +5465,7 @@ class RestoredQualifiedTests(unittest.TestCase):
             'scripts/production-release/service-image-retention.test.py'})
         self.assertEqual(set(scope._WORKSPACE_RELEASE_RULES_POLICY['files']),{'AGENTS.md','docs/CENTRAL_RELEASE_20261002.md'})
         self.assertEqual(scope._WORKSPACE_CAPACITY_CONTROL_POLICY['files']['scripts/production-release/maintain-image-cache.test.py']['after']['sha256'],
-            '8756e5792a1188b420c6c3cb7cb3cae6612654b1a1ed88e0e1046e5bb6daf182')
+            hashlib.sha256((ROOT/'scripts/production-release/maintain-image-cache.test.py').read_bytes()).hexdigest())
         for policy in (scope._WORKSPACE_CAPACITY_CONTROL_POLICY,scope._WORKSPACE_RELEASE_RULES_POLICY):
             for pair in policy['files'].values():
                 for value in pair.values():
@@ -5427,6 +5537,285 @@ class RestoredQualifiedTests(unittest.TestCase):
         self.assertIs(scope._restored_wire_encode(legacy),legacy)
         wrong=copy.deepcopy(receipt);wrong['onlineAfterBitOrigin']['baselineCommit']=scope.BASELINE_COMMIT
         with self.assertRaises(RuntimeError):scope._restored_wire_encode(wrong)
+
+
+class RestoredColdCacheTests(unittest.TestCase):
+    """Offline cache acquisition with synthetic files and command responses only."""
+    def test_download_and_retention_tables_match_the_frozen_actual_gap_tuple(self):
+        import ast
+        source=(ROOT/'scripts/production-release/maintain-image-cache.py').read_text()
+        retention=next(ast.literal_eval(node.value) for node in ast.parse(source).body
+            if isinstance(node,ast.Assign) and any(isinstance(target,ast.Name)
+                and target.id=='HISTORICAL_ONLINE_COLD_DEPENDENCIES' for target in node.targets))
+        # Frozen from the reviewed gap report's eight tag/image/source/service
+        # tuples; CI does not need an untracked runtime report or any AWS access.
+        self.assertEqual(scope.fingerprint(retention),
+            'df190b221061b96d107d2ab32f409bee2e0938000015b1e00beb6bcd92585d71')
+        self.assertEqual(len(retention),8)
+        self.assertEqual(scope._RESTORED_B_COLD_IMAGE_CACHE,
+            {tag:(row['imageId'],row['sourceTree']) for tag,row in retention.items()})
+        self.assertTrue(all(row['sourceCommit']==tag[:40] and row['service']==tag.rsplit('-1-',1)[1]
+            for tag,row in retention.items()))
+
+    @contextmanager
+    def fixture(self, present=False):
+        with tempfile.TemporaryDirectory(prefix='cold-cache-', dir=RUNTIME) as temporary, ExitStack() as stack:
+            base = Path(temporary).resolve()
+            directory = base / 'releases' / '20261011T132910Z-31d2c6885a45'
+            directory.mkdir(parents=True, mode=0o700)
+            (base / 'current').symlink_to(directory)
+            manifest = directory / 'release-manifest.json'
+            manifest.write_bytes(b'{"offlineSyntheticManifest":true}\n')
+            manifest.chmod(0o600)
+            witness = copy.deepcopy(scope._RESTORED_B_WITNESS)
+            before = json.loads(witness['failedPreflight'])
+            before['baseline']['baselineRelease'] = str(directory)
+            before['baseline']['manifestBytesSha256'] = hashlib.sha256(manifest.read_bytes()).hexdigest()
+            witness['failedPreflight'] = json.dumps(before)
+            images = copy.deepcopy(scope._RESTORED_B_COLD_IMAGE_CACHE)
+            repository = '079740175286.dkr.ecr.ap-northeast-1.amazonaws.com/id-business-v2-release'
+            local = {tag: image for tag, (image, _) in images.items()} if present else {}
+            metadata = {tag: {'Id': image, 'Architecture': 'amd64', 'Config': {'Labels': {
+                'org.opencontainers.image.revision': tag[:40], 'id-business-v2.source-tree': tree}}}
+                for tag, (image, tree) in images.items()}
+            remote = {'failures': [], 'images': [{'repositoryName': 'id-business-v2-release',
+                'imageId': {'imageTag': tag}, 'imageManifest': json.dumps({'schemaVersion': 2,
+                    'config': {'digest': image}})} for tag, (image, _) in images.items()]}
+            events = []
+            clock = SimpleNamespace(now=0)
+            state = SimpleNamespace(free=7 * 1024**3, remote=remote, hook=None)
+
+            def run(*command, **kwargs):
+                # Any service command, shell, image deletion, volume command or
+                # unexpected AWS operation makes this synthetic fixture fail.
+                self.assertTrue(command[:3] in (('docker', 'image', 'ls'),
+                    ('docker', 'image', 'inspect'), ('aws', 'ecr', 'batch-get-image'))
+                    or command[:2] == ('docker', 'pull'))
+                self.assertEqual(set(kwargs), {'timeout'})
+                self.assertGreater(kwargs['timeout'], 0)
+                self.assertLessEqual(kwargs['timeout'], 60)
+                events.append((command, kwargs))
+                if state.hook is not None:
+                    state.hook(command)
+                if command[:3] == ('docker', 'image', 'ls'):
+                    self.assertEqual(command[3:5], ('--no-trunc', '--filter'))
+                    self.assertEqual(command[6:], ('--format', '{{.ID}}'))
+                    tag = command[5].split('reference=' + repository + ':', 1)[1]
+                    return local.get(tag, '')
+                if command[:3] == ('docker', 'image', 'inspect'):
+                    self.assertEqual(len(command), 4)
+                    tag = command[3].split(repository + ':', 1)[1]
+                    return json.dumps([metadata[tag]])
+                if command[:2] == ('docker', 'pull'):
+                    self.assertEqual(len(command), 3)
+                    tag = command[2].split(repository + ':', 1)[1]
+                    self.assertIn(tag, images)
+                    local[tag] = images[tag][0]
+                    return 'synthetic-pull-complete'
+                self.assertEqual(command[:8], ('aws', 'ecr', 'batch-get-image', '--region',
+                    'ap-northeast-1', '--repository-name', 'id-business-v2-release', '--image-ids'))
+                self.assertEqual(command[-2:], ('--output', 'json'))
+                requested = [value.removeprefix('imageTag=') for value in command[8:-2]]
+                self.assertEqual(set(requested), set(images) - set(local))
+                return json.dumps(state.remote)
+
+            d = controller(BASE=base, run=run, compose=MagicMock(side_effect=AssertionError('no service commands')))
+            snapshot = stack.enter_context(patch.object(scope, 'snapshot', return_value=states()))
+            stack.enter_context(patch.object(scope, '_RESTORED_B_WITNESS', witness))
+            stack.enter_context(patch.object(scope.shutil, 'disk_usage', side_effect=lambda unused: SimpleNamespace(free=state.free)))
+            stack.enter_context(patch.object(scope.time, 'monotonic', side_effect=lambda: clock.now))
+            yield SimpleNamespace(d=d, directory=directory, manifest=manifest, images=images, local=local,
+                metadata=metadata, events=events, state=state, clock=clock, snapshot=snapshot,
+                expected=before['baseline']['baselineCommit'], repository=repository)
+
+    @staticmethod
+    def pulls(value):
+        return [command for command, _ in value.events if command[:2] == ('docker', 'pull')]
+
+    def test_all_eight_missing_images_are_digest_bound_before_any_pull(self):
+        with self.fixture() as value:
+            scope._restored_workspace_cold_cache(value.d, value.directory, value.expected)
+            self.assertEqual(len(value.images), 8)
+            self.assertEqual(self.pulls(value), [('docker', 'pull', value.repository + ':' + tag)
+                for tag in value.images])
+            aws = [index for index, (command, _) in enumerate(value.events) if command[0] == 'aws']
+            first_pull = next(index for index, (command, _) in enumerate(value.events)
+                if command[:2] == ('docker', 'pull'))
+            self.assertEqual(len(aws), 1)
+            self.assertLess(aws[0], first_pull)
+            self.assertEqual(sum(command[:3] == ('docker', 'image', 'inspect')
+                for command, _ in value.events), 8)
+            self.assertEqual(value.d._restoredWorkspaceColdCacheReady, scope.fingerprint(value.images))
+            self.assertEqual(value.snapshot.call_count, 2)
+            value.d.compose.assert_not_called()
+
+    def test_existing_exact_images_are_inspected_and_never_pulled(self):
+        with self.fixture(present=True) as value:
+            scope._restored_workspace_cold_cache(value.d, value.directory, value.expected)
+            self.assertFalse(self.pulls(value))
+            self.assertTrue(all(command[:2] == ('docker', 'image') for command, _ in value.events))
+            self.assertEqual(len(value.events), 16)
+
+    def test_mixed_local_cache_requests_and_pulls_only_missing_exact_tags(self):
+        with self.fixture() as value:
+            present = list(value.images)[::2]
+            value.local.update({tag: value.images[tag][0] for tag in present})
+            value.state.remote['images'] = [row for row in value.state.remote['images']
+                if row['imageId']['imageTag'] not in present]
+            scope._restored_workspace_cold_cache(value.d, value.directory, value.expected)
+            self.assertEqual(self.pulls(value), [('docker', 'pull', value.repository + ':' + tag)
+                for tag in value.images if tag not in present])
+            self.assertEqual(len(value.local), 8)
+
+    def test_every_remote_digest_failure_blocks_all_pulls(self):
+        for index in range(8):
+            with self.subTest(image=index), self.fixture() as value:
+                row = value.state.remote['images'][index]
+                row['imageManifest'] = json.dumps({'schemaVersion': 2, 'config': {'digest': 'sha256:' + '0' * 64}})
+                with self.assertRaisesRegex(RuntimeError, 'HISTORICAL_IMAGE_CACHE_CHANGED'):
+                    scope._restored_workspace_cold_cache(value.d, value.directory, value.expected)
+                self.assertFalse(self.pulls(value))
+                self.assertFalse(hasattr(value.d, '_restoredWorkspaceColdCacheReady'))
+
+    def test_missing_duplicate_foreign_repository_and_ecr_failure_block_all_pulls(self):
+        for variation in ('missing', 'duplicate', 'foreign', 'failure', 'schema', 'extra'):
+            with self.subTest(variation=variation), self.fixture() as value:
+                remote = value.state.remote
+                if variation == 'missing': remote['images'].pop()
+                if variation == 'duplicate': remote['images'][-1] = copy.deepcopy(remote['images'][0])
+                if variation == 'foreign': remote['images'][-1]['repositoryName'] = 'other-project'
+                if variation == 'failure': remote['failures'] = [{'failureCode': 'ImageNotFound'}]
+                if variation == 'schema':
+                    remote['images'][-1]['imageManifest'] = json.dumps({'schemaVersion': 1})
+                if variation == 'extra': remote['images'].append(copy.deepcopy(remote['images'][0]))
+                with self.assertRaisesRegex(RuntimeError, 'HISTORICAL_IMAGE_CACHE_CHANGED'):
+                    scope._restored_workspace_cold_cache(value.d, value.directory, value.expected)
+                self.assertFalse(self.pulls(value))
+
+    def test_wrong_local_tag_or_configuration_is_never_overwritten(self):
+        for variation in ('id', 'architecture', 'revision', 'tree'):
+            with self.subTest(variation=variation), self.fixture(present=True) as value:
+                tag = next(iter(value.images))
+                if variation == 'id': value.local[tag] = 'sha256:' + '0' * 64
+                if variation == 'architecture': value.metadata[tag]['Architecture'] = 'arm64'
+                if variation == 'revision': value.metadata[tag]['Config']['Labels']['org.opencontainers.image.revision'] = '0' * 40
+                if variation == 'tree': value.metadata[tag]['Config']['Labels']['id-business-v2.source-tree'] = '0' * 40
+                with self.assertRaisesRegex(RuntimeError, 'HISTORICAL_IMAGE_CACHE_CHANGED'):
+                    scope._restored_workspace_cold_cache(value.d, value.directory, value.expected)
+                self.assertFalse(self.pulls(value))
+                self.assertFalse(any(command[0] == 'aws' for command, _ in value.events))
+
+    def test_baseline_manifest_or_current_pointer_drift_blocks_image_mutation(self):
+        for variation in ('manifest', 'pointer', 'before-pull'):
+            with self.subTest(variation=variation), self.fixture() as value:
+                if variation == 'manifest': value.manifest.write_bytes(b'{"offlineChanged":true}')
+                if variation == 'pointer':
+                    (value.d.BASE / 'current').unlink()
+                    (value.d.BASE / 'current').symlink_to(value.d.BASE)
+                if variation == 'before-pull':
+                    def change_after_ecr(command):
+                        if command[0] == 'aws': value.manifest.write_bytes(b'{"offlineChanged":true}')
+                    value.state.hook = change_after_ecr
+                with self.assertRaisesRegex(RuntimeError, 'HISTORICAL_IMAGE_CACHE_CHANGED'):
+                    scope._restored_workspace_cold_cache(value.d, value.directory, value.expected)
+                self.assertFalse(self.pulls(value))
+                if variation != 'before-pull': self.assertFalse(value.events)
+
+    def test_capacity_at_or_below_threshold_blocks_pull_and_post_pull_drop_blocks_readiness(self):
+        for variation in ('at', 'below', 'post-pull'):
+            with self.subTest(variation=variation), self.fixture() as value:
+                if variation == 'at': value.state.free = 6 * 1024**3
+                if variation == 'below': value.state.free = 6 * 1024**3 - 1
+                if variation == 'post-pull':
+                    def consume_space(command):
+                        if command[:2] == ('docker', 'pull'): value.state.free = 6 * 1024**3
+                    value.state.hook = consume_space
+                with self.assertRaisesRegex(RuntimeError, 'HISTORICAL_IMAGE_CACHE_DISK_TOO_LOW'):
+                    scope._restored_workspace_cold_cache(value.d, value.directory, value.expected)
+                self.assertEqual(len(self.pulls(value)), 1 if variation == 'post-pull' else 0)
+                self.assertFalse(hasattr(value.d, '_restoredWorkspaceColdCacheReady'))
+
+    def test_shared_120_second_budget_exhaustion_stops_before_pull(self):
+        with self.fixture() as value:
+            def expire_after_ecr(command):
+                if command[0] == 'aws': value.clock.now = 120
+            value.state.hook = expire_after_ecr
+            with self.assertRaisesRegex(RuntimeError, 'HISTORICAL_IMAGE_CACHE_TIMEOUT'):
+                scope._restored_workspace_cold_cache(value.d, value.directory, value.expected)
+            self.assertFalse(self.pulls(value))
+            self.assertFalse(hasattr(value.d, '_restoredWorkspaceColdCacheReady'))
+
+    def test_service_snapshot_change_prevents_cache_readiness(self):
+        with self.fixture(present=True) as value:
+            before, after = states(), states()
+            after['api']['containerId'] = '0' * 64
+            value.snapshot.side_effect = [before, after]
+            with self.assertRaisesRegex(RuntimeError, 'HISTORICAL_IMAGE_CACHE_CHANGED'):
+                scope._restored_workspace_cold_cache(value.d, value.directory, value.expected)
+            self.assertFalse(hasattr(value.d, '_restoredWorkspaceColdCacheReady'))
+            self.assertFalse(self.pulls(value))
+
+    def test_successful_session_reuses_cache_but_rechecks_original_baseline(self):
+        with self.fixture() as value:
+            scope._restored_workspace_cold_cache(value.d, value.directory, value.expected)
+            count = len(value.events)
+            scope._restored_workspace_cold_cache(value.d, value.directory, value.expected)
+            self.assertEqual(len(value.events), count)
+            self.assertEqual(value.snapshot.call_count, 2)
+            value.manifest.write_bytes(b'{"offlineChanged":true}')
+            with self.assertRaisesRegex(RuntimeError, 'HISTORICAL_IMAGE_CACHE_CHANGED'):
+                scope._restored_workspace_cold_cache(value.d, value.directory, value.expected)
+            self.assertEqual(len(value.events), count)
+
+
+class RestoredColdOriginTests(unittest.TestCase):
+    """Real API loader integration; no native files, commands or credentials."""
+    def test_real_api_cold_loader_preserves_context_and_reports_location_without_secret_value(self):
+        reader = scope._load_legacy()
+        api_path = Path(scope.__file__).with_name('api-admin-scope.py')
+        self.assertEqual(hashlib.sha256(api_path.read_bytes()).hexdigest(),
+            '50446ab528a288ca1c2129c84f1bf4a90f59fa313a92bcff0058a258c8b8e925')
+        namespace = reader.online_after_bit_cold.__globals__
+        original = namespace['pending_online_equivalence']
+        secret_fixture = 'offline-exception-value-must-never-be-emitted'
+        def reject(condition, unused):
+            if not condition: raise RuntimeError(secret_fixture)
+        with tempfile.TemporaryDirectory(prefix='cold-origin-', dir=RUNTIME) as temporary:
+            base = Path(temporary).resolve()
+            d = SimpleNamespace(BASE=base, require=reject,
+                run=MagicMock(side_effect=AssertionError('no native commands')))
+            bad = base / 'wrong-parent'
+            # Wrap the original loader rather than substituting its namespace.
+            with patch.dict(namespace, pending_online_equivalence=MagicMock(wraps=original)):
+                with self.assertRaises(RuntimeError) as raised:
+                    scope._restored_workspace_cold_origin(d, reader.online_after_bit_cold, bad, 'a' * 40)
+                namespace['pending_online_equivalence'].assert_called_once_with()
+            message = str(raised.exception)
+            self.assertRegex(message,
+                r'^ONLINE_RECHARGE_AFTER_BIT_ORIGIN_CHANGED_AT_ONLINE_AFTER_BIT_COLD_L[0-9]+_RUNTIMEERROR$')
+            self.assertLess(len(message), 128)
+            self.assertNotIn(secret_fixture, message)
+            self.assertNotIn(str(base), message)
+            self.assertTrue(raised.exception.__suppress_context__)
+            cause = raised.exception
+            while cause.__context__ is not None: cause = cause.__context__
+            self.assertEqual(cause.args, (secret_fixture,))
+            d.run.assert_not_called()
+
+    def test_success_returns_original_result_without_rewriting_it(self):
+        original = {'offline': {'unchanged': True}}
+        cold = MagicMock(return_value=original)
+        d = controller()
+        directory = ROOT / '.runtime' / 'synthetic-not-read'
+        self.assertIs(scope._restored_workspace_cold_origin(d, cold, directory, 'a' * 40), original)
+        cold.assert_called_once_with(d, directory, expected_commit='a' * 40)
+
+    def test_unrelated_error_and_unrecognized_source_location_are_not_reclassified(self):
+        for error in (RuntimeError('OTHER_OFFLINE_CODE'), RuntimeError('ONLINE_RECHARGE_AFTER_BIT_ORIGIN_CHANGED')):
+            cold = MagicMock(side_effect=error)
+            with self.subTest(code=error.args[0]), self.assertRaises(RuntimeError) as raised:
+                scope._restored_workspace_cold_origin(controller(), cold, ROOT, 'a' * 40)
+            self.assertIs(raised.exception, error)
 
 
 if __name__ == '__main__':

@@ -21,6 +21,58 @@ GENERIC_CACHE_RESULT_LIMIT = 512 * 1024
 GENERIC_CACHE_OUTPUT_LIMIT = 23500
 # Filled only from this failed release's official native/proof and actual compose bytes.
 FAILED_ONLINE_RECOVERY_DEPENDENCY = {'kind': 'FAILED_ONLINE_C_RECOVERY_DEPENDENCY_V1', 'version': 1, 'nativeInvocationBase64': 'ewogICJJbnN0YW5jZUlkIjogImktMDU4MzZkYTM4NjA2ZTYzM2MiLAogICJFeGVjdXRpb25FbmREYXRlVGltZSI6ICIyMDI2LTEwLTExVDE3OjU4OjExLjk0MloiLAogICJFeGVjdXRpb25TdGFydERhdGVUaW1lIjogIjIwMjYtMTAtMTFUMTc6NDI6NDIuOTQyWiIsCiAgIlJlc3BvbnNlQ29kZSI6IDEsCiAgIlN0YXR1c0RldGFpbHMiOiAiRmFpbGVkIiwKICAiU3RhdHVzIjogIkZhaWxlZCIsCiAgIkNvbW1hbmRJZCI6ICJjMDNmZGM4YS05ZjM5LTQwZTUtODE4MS0wMDcxYjNiYzhmODkiLAogICJFeGVjdXRpb25FbGFwc2VkVGltZSI6ICJQVDE1TTI5Ljc0MVMiLAogICJTdGFuZGFyZE91dHB1dENvbnRlbnQiOiAie1wic3RhdHVzXCI6IFwiT05MSU5FX1JFQ0hBUkdFX0ZBSUxFRF9SRVNUT1JFRFwiLCBcInN0ZXBcIjogXCJzd2l0Y2hcIiwgXCJjb2RlXCI6IFwiQVBJX0FETUlOX1dPUktTUEFDRV9HVUFSRF9USU1FT1VUXCIsIFwiZXJyb3JUeXBlXCI6IFwiUnVudGltZUVycm9yXCIsIFwicm9sbGJhY2tPa1wiOiB0cnVlLCBcInJvbGxiYWNrXCI6IHtcImFwaVwiOiBcIlJFU1RPUkVEXCIsIFwiYWRtaW5cIjogXCJSRVNUT1JFRFwifSwgXCJzZXJ2aWNlc0F0dGVtcHRlZFwiOiBbXCJhZG1pblwiLCBcImFwaVwiXSwgXCJjYW5kaWRhdGVDb21taXRcIjogXCIwODQxOWRjYmU4NTIxMmEyMDM5MDZjODZjOThlNWMzYWUwNjk1ZDcyXCIsIFwicHJldmlvdXNDb21taXRcIjogXCIzMWQyYzY4ODVhNDU4MTdjZDQwZDIzZmNlOGQ2MTQ1YmM5ZjE4YWYyXCIsIFwibWlncmF0aW9uXCI6IHtcIm5hbWVcIjogXCIyMDI2MTAwOTA5MzAwMF9vbmxpbmVfcmVjaGFyZ2VcIiwgXCJzaGEyNTZcIjogXCI0NDk2NjE4MmMxYmYzODI5MGIwMWY2NjVhNGMyYzg2M2IwNTI2NzdjNWUwMDI0YjkwMDEzN2YxZDdmMTFlYjk1XCIsIFwic3RhdHVzXCI6IFwiQVBQTElFRFwiLCBcInNjaGVtYVZlcmlmaWVkXCI6IHRydWUsIFwiYXBwbGllZE1pZ3JhdGlvbnNTaGEyNTZcIjogXCI3OTJlZDYyZTM1YTMxMTBhZTFhMGU0ZGVjOWQxZDhhNjc0MzA5NzJkOGJkOWY3YjljMmY3ZmYxZDBhNjc5MDg4XCIsIFwicGVyZm9ybWVkXCI6IGZhbHNlfSwgXCJtaWdyYXRpb25BdHRlbXB0ZWRcIjogZmFsc2UsIFwiaW52ZXJzZU1pZ3JhdGlvblBlcmZvcm1lZFwiOiBmYWxzZSwgXCJtZWRpYVZvbHVtZURlbGV0ZWRcIjogZmFsc2UsIFwiY3VycmVudFBvaW50c1RvQ2FuZGlkYXRlXCI6IGZhbHNlLCBcInJlY2VpcHRQZXJzaXN0ZWRcIjogdHJ1ZX1cbiIsCiAgInN0YW5kYXJkRXJyb3JCeXRlcyI6IDM3LAogICJzdGFuZGFyZEVycm9yU2hhMjU2IjogIjA4MDI1YWRhN2I5MjdmMmIxZTNkNDFiMWE2NGM5ZDZiZmU1ODgwYTM3NTY0NWYzNDBhNDIxMzdhM2QzZGUzYjMiCn0K', 'buildProofBase64': 'ewogICJiYXNlbGluZUNvbW1pdCI6ICIzMWQyYzY4ODVhNDU4MTdjZDQwZDIzZmNlOGQ2MTQ1YmM5ZjE4YWYyIiwKICAiYmFzZWxpbmVPcmlnaW5TaGEyNTYiOiAiNGI4MWIwZDM5OGRlMGM0YjAxOTg4MDM5NTAzNTRjMjg2ZjcxMDdhOGExOWI5OWU1MTlkNTQwNDAwN2IwYzFjYSIsCiAgImNvbW1pdCI6ICIwODQxOWRjYmU4NTIxMmEyMDM5MDZjODZjOThlNWMzYWUwNjk1ZDcyIiwKICAiY29tcG9zZVNvdXJjZVNoYTI1NiI6ICI4MjUwYjBiNzRkYTkyNzFlNDI1NDQ0OGRkOTdjNTNiMzAxMjlmNmUzN2U5ZmM1MjAzY2NkMWEwMTIwMGMyNzkyIiwKICAiZW5naW5lU291cmNlU2hhMjU2IjogIjMwOWFkMzE2OTQwNDVkNDlkMjU3N2I5YmFmZTc0ZDZlNTk4ZTExMTA4NGIyYWRhN2Y5ZDFkMWJlYmEyMGVkNzMiLAogICJpbWFnZXMiOiB7CiAgICAiYWRtaW4iOiB7CiAgICAgICJmaWxlQ291bnQiOiAyNTcsCiAgICAgICJpbWFnZUlkIjogInNoYTI1Njo0Zjc3YTdmMzgzMTg3Zjk2ZWRjNTk5MDFhOWY0ZTU4OTViNTNiODYyMzM1NTdhNDFkZmEyYzRmNjhiNmEzNzFkIiwKICAgICAgInJlZmVyZW5jZSI6ICIwNzk3NDAxNzUyODYuZGtyLmVjci5hcC1ub3J0aGVhc3QtMS5hbWF6b25hd3MuY29tL2lkLWJ1c2luZXNzLXYyLXJlbGVhc2U6MDg0MTlkY2JlODUyMTJhMjAzOTA2Yzg2Yzk4ZTVjM2FlMDY5NWQ3Mi0zODE2MDEyNzM0My0xLWFkbWluIiwKICAgICAgInNoYTI1NiI6ICIzYjA1MTA0MjdkMzZiODBjMDZkMzE0NmUyZjBlZTIwN2RkODA3MDY2YmMzNDgyMmExMmY4YTBiOTY4MjZhOGJkIgogICAgfSwKICAgICJhcGkiOiB7CiAgICAgICJmaWxlQ291bnQiOiA0MzQzLAogICAgICAiaW1hZ2VJZCI6ICJzaGEyNTY6Mjk1MzllYjc4MjU4NzdlMmUzMDNjMzU2N2E0ZjRmMDBiOGRiYTg3NzMwMDFlNmRlMTcwZGU0NWYwZTM5ODdkNyIsCiAgICAgICJyZWZlcmVuY2UiOiAiMDc5NzQwMTc1Mjg2LmRrci5lY3IuYXAtbm9ydGhlYXN0LTEuYW1hem9uYXdzLmNvbS9pZC1idXNpbmVzcy12Mi1yZWxlYXNlOjA4NDE5ZGNiZTg1MjEyYTIwMzkwNmM4NmM5OGU1YzNhZTA2OTVkNzItMzgxNjAxMjczNDMtMS1hcGkiLAogICAgICAic2hhMjU2IjogIjBlOTE1NDQwMmZhZTNmNjc2MDQyN2U4NWRjMWYzNjU4MDUwYTZkMDU5YmViOTAwOWIxNDU5NTIyZDY1ZDE0NjciCiAgICB9LAogICAgIm1pZ3JhdGUiOiB7CiAgICAgICJmaWxlQ291bnQiOiA1MCwKICAgICAgImltYWdlSWQiOiAic2hhMjU2OmFhMGNkYWQ0NjFkZWQzYmI2ZDc1YzcxNmMwNTdiNWZmYzJlNzg1NDM4NTA5MzEwNzQ0YzEyMzBiODM1NDdkZDciLAogICAgICAicmVmZXJlbmNlIjogIjA3OTc0MDE3NTI4Ni5ka3IuZWNyLmFwLW5vcnRoZWFzdC0xLmFtYXpvbmF3cy5jb20vaWQtYnVzaW5lc3MtdjItcmVsZWFzZTowODQxOWRjYmU4NTIxMmEyMDM5MDZjODZjOThlNWMzYWUwNjk1ZDcyLTM4MTYwMTI3MzQzLTEtbWlncmF0ZSIsCiAgICAgICJzaGEyNTYiOiAiNDJlNWQ2N2ZhYzYyZTU0ODg5NTkxYzg1Yjk1YjdhZDI2ZDU1MmU5MTk0MjdjOTA1NzQzY2EzMTI1NDc3YjFjOSIKICAgIH0sCiAgICAib25saW5lLXJlY2hhcmdlIjogewogICAgICAiZmlsZUNvdW50IjogNjIsCiAgICAgICJpbWFnZUlkIjogInNoYTI1NjpiN2FmMzRkNjM1MTg3MTE3YjEzMzZmM2I4NzUwNWExN2IwODIwMDZiMjc1YzI4MzgwMjgwNmMzNjJlODRhNTVkIiwKICAgICAgInJlZmVyZW5jZSI6ICIwNzk3NDAxNzUyODYuZGtyLmVjci5hcC1ub3J0aGVhc3QtMS5hbWF6b25hd3MuY29tL2lkLWJ1c2luZXNzLXYyLXJlbGVhc2U6MDg0MTlkY2JlODUyMTJhMjAzOTA2Yzg2Yzk4ZTVjM2FlMDY5NWQ3Mi0zODE2MDEyNzM0My0xLW9ubGluZS1yZWNoYXJnZSIsCiAgICAgICJzaGEyNTYiOiAiNTZjZDA3YjYxYmZjYzZmOTkzZThkYzQxN2M1MTViMjRmMWVjZWM5NjM4OTQyMTg1YWVmZjk3NTY2NjRhMDY2YiIKICAgIH0KICB9LAogICJraW5kIjogIk9OTElORV9SRUNIQVJHRV9BRlRFUl9CSVRfQlVJTERfUFJPT0YiLAogICJtaWdyYXRpb24iOiB7CiAgICAiYmFzZWxpbmVGaWxlQ291bnQiOiA0NywKICAgICJiYXNlbGluZUZpbGVzU2hhMjU2IjogIjNiYWVmNGIyZTFmY2MxYjExOTRkNWZmYTAxOTdkYWJkMDllZTAxYTc1N2FiZTc0NzhlMWYzNDg4ZjgwMTlhMTQiLAogICAgIm5hbWUiOiAiMjAyNjEwMDkwOTMwMDBfb25saW5lX3JlY2hhcmdlIiwKICAgICJzY2hlbWFBZnRlclNoYTI1NiI6ICI4YWUwOWU4ODNlNzliZmI4NWNkNjVlZGJmNjMwZjJlYzAzYjZiMzk3ZWI0NmQxNzJiNGM0ZjA1NTE0YjcxNWE3IiwKICAgICJzY2hlbWFCZWZvcmVTaGEyNTYiOiAiODAwNmQzY2U2ZjBiNDRjZjYyZjNiNDdiYjdiNGEwYjE0ZDBkZGMxOGRkZjExM2E1ZGEzNGE5MDFiNjJmYjE5NyIsCiAgICAic2VlZEFmdGVyU2hhMjU2IjogIjJhN2JlY2JlOGRhMTg5YWRhZDczYjMwZDdiZmUzNjA3MGZkNDRhZTRmNjgzZjdlNGEwMTE3OGQxNGFlMDhiNWIiLAogICAgInNlZWRCZWZvcmVTaGEyNTYiOiAiYWM5OTQwYTc5NzdkZWYxZWQ2ZWFhZDM4ZWQxNTRkODE5NjNjZTZlODc3ZjAyZmZjMDcyMzRmYTYxNTkxMDk2YiIsCiAgICAic2hhMjU2IjogIjQ0OTY2MTgyYzFiZjM4MjkwYjAxZjY2NWE0YzJjODYzYjA1MjY3N2M1ZTAwMjRiOTAwMTM3ZjFkN2YxMWViOTUiCiAgfSwKICAicHJlZmxpZ2h0Qnl0ZXNTaGEyNTYiOiAiYWJhNjE0NDg0NWJlMzgzNmM0ZmU1NmExZGVmOWE3NTUwMTg2MzRmMjY3MTBiOGQxN2VjNzRiMmQyNjYwYzRkYiIsCiAgInNjb3BlIjogIk9OTElORV9SRUNIQVJHRSIsCiAgInNvdXJjZVRyZWUiOiAiYjZmZDgxY2MwYzk0YThlNTk3MWM1ZGY4YjI1NzA3MTZhMTNmYTA0MiIsCiAgInZlcnNpb24iOiAyCn0K', 'composeSha256': 'bcd2a9a6c69111c2a2fd88e82ad4d0b0e33d832f4c96f000e43fc63b209398a7'}
+# Exact immutable cold-verification dependencies; no caller-supplied image exceptions.
+HISTORICAL_ONLINE_COLD_DEPENDENCIES = {
+    "0a03fa28e6b844a18833d5c63f1de700f091fc64-37918150573-1-admin": {
+        "imageId": "sha256:9e2092779d6c7acb9a854011d09040f8927cb010216cce4be65138a2a6471a30",
+        "sourceCommit": "0a03fa28e6b844a18833d5c63f1de700f091fc64",
+        "sourceTree": "668ca1570a8e4898e7f473198087ec549c270239",
+        "service": "admin"
+    },
+    "0a03fa28e6b844a18833d5c63f1de700f091fc64-37918150573-1-api": {
+        "imageId": "sha256:74fdce6e4f05c10bd7f52f94fb9a53a36349bafd8ca8e2637d047f62a92bee42",
+        "sourceCommit": "0a03fa28e6b844a18833d5c63f1de700f091fc64",
+        "sourceTree": "668ca1570a8e4898e7f473198087ec549c270239",
+        "service": "api"
+    },
+    "28a3ba4ffd17d36001b1104c97394f5ae871d73d-37933246605-1-admin": {
+        "imageId": "sha256:d3bd11533809817405a2b23e177ee3f22c08825f920db0102248996a188999e9",
+        "sourceCommit": "28a3ba4ffd17d36001b1104c97394f5ae871d73d",
+        "sourceTree": "014959a59519da585928adaa7f76f7236e1786d1",
+        "service": "admin"
+    },
+    "28a3ba4ffd17d36001b1104c97394f5ae871d73d-37933246605-1-api": {
+        "imageId": "sha256:e2e2db4fdf3b39ac1742d816ff943630765c22ef7260730c86762f1de2229cfe",
+        "sourceCommit": "28a3ba4ffd17d36001b1104c97394f5ae871d73d",
+        "sourceTree": "014959a59519da585928adaa7f76f7236e1786d1",
+        "service": "api"
+    },
+    "28a3ba4ffd17d36001b1104c97394f5ae871d73d-37933246605-1-migrate": {
+        "imageId": "sha256:0f98d36ae15ae80efe9a09609f826b5aa8ebaee2b851c386d8260b67aa144140",
+        "sourceCommit": "28a3ba4ffd17d36001b1104c97394f5ae871d73d",
+        "sourceTree": "014959a59519da585928adaa7f76f7236e1786d1",
+        "service": "migrate"
+    },
+    "296c096af7c4c79a8ffc2f57d9a15ea75684f431-37944613453-1-admin": {
+        "imageId": "sha256:fe78934db0a717dfc5dd5752d6a96118d72662e994f7d418fa6ae43afce0ac85",
+        "sourceCommit": "296c096af7c4c79a8ffc2f57d9a15ea75684f431",
+        "sourceTree": "472947076a5b5fb73d6777413505d60ac2379fb1",
+        "service": "admin"
+    },
+    "296c096af7c4c79a8ffc2f57d9a15ea75684f431-37944613453-1-api": {
+        "imageId": "sha256:34ba5b3a31bf4d82900d481a9f5d7b061834400adcab1458f1c0bbbb8b7eca5e",
+        "sourceCommit": "296c096af7c4c79a8ffc2f57d9a15ea75684f431",
+        "sourceTree": "472947076a5b5fb73d6777413505d60ac2379fb1",
+        "service": "api"
+    },
+    "296c096af7c4c79a8ffc2f57d9a15ea75684f431-37944613453-1-migrate": {
+        "imageId": "sha256:51f80ed0fd62cfd767e31dd52ef53dcafa8565531c950d66d4c52962df89617a",
+        "sourceCommit": "296c096af7c4c79a8ffc2f57d9a15ea75684f431",
+        "sourceTree": "472947076a5b5fb73d6777413505d60ac2379fb1",
+        "service": "migrate"
+    }
+}
+HISTORICAL_ONLINE_COLD_POLICY_SHA256 = '641fe690c62224eb3d22d69e94493e08b9a2a9309ce04c588627c4aaea7c8f35'
 IMAGE_ID = re.compile(r'sha256:[0-9a-f]{64}')
 FIXED_REGISTRATION_IDS = frozenset({
     'registration-worker-956-20261006', 'registration-worker-b8-80-20261006',
@@ -272,11 +324,71 @@ def failed_online_recovery_dependencies(evidence):
     return images
 
 
+def historical_online_cold_dependencies(directory, manifest, evidence):
+    """Protect the exact original cold proof, including ONLINE-preserving successors."""
+    publication = manifest.get('onlineRechargePublication')
+    preserved = manifest.get('preservedOnlineRechargeOrigin')
+    if manifest['commit'] != '31d2c6885a45817cd40d23fce8d6145bc9f18af2' \
+            and publication is None and preserved is None:
+        return set()
+    if publication is not None:
+        require(type(publication) is dict and type(publication.get('version')) is int
+            and publication['version'] in (1, 2) and publication.get('scope') == 'ONLINE_RECHARGE',
+            'Historical ONLINE publication dependency changed')
+    if preserved is not None:
+        require(type(preserved) is dict and set(preserved) == {'version', 'commit',
+            'manifestSha256', 'buildProofSha256', 'preservationSha256'}
+            and type(preserved['version']) is int and preserved['version'] == 1
+            and type(preserved['commit']) is str and re.fullmatch('[a-f0-9]{40}', preserved['commit'])
+            and all(type(preserved[name]) is str and re.fullmatch('[a-f0-9]{64}', preserved[name])
+                for name in ('manifestSha256', 'buildProofSha256', 'preservationSha256')),
+            'Historical ONLINE preservation dependency changed')
+    policy = generic_cache_closed(dependency_file(directory / 'scripts/production-release/online-recharge-recovery.json',
+        evidence, limit=256 * 1024))
+    require(plan_digest(policy) == HISTORICAL_ONLINE_COLD_POLICY_SHA256,
+            'Historical ONLINE recovery dependency policy changed')
+    workspace = BASE / 'releases/20261009T103426Z-0a03fa28e6b8'
+    origin = release_metadata(workspace, evidence)
+    proof = generic_cache_closed(dependency_file(workspace / 'api-workspace-build-proof.json', evidence, limit=256 * 1024))
+    require(plan_digest(origin) == policy['preflight']['manifestSha256']
+        and plan_digest(proof) == policy['preflight']['workspaceBuildProofSha256'],
+        'Historical ONLINE workspace dependency proof changed')
+    proofs = {'0a03fa28e6b844a18833d5c63f1de700f091fc64': proof,
+        '28a3ba4ffd17d36001b1104c97394f5ae871d73d': policy['buildProof'],
+        '296c096af7c4c79a8ffc2f57d9a15ea75684f431': policy['restoredAttempt']['buildProof']}
+    require(type(HISTORICAL_ONLINE_COLD_DEPENDENCIES) is dict
+        and len(HISTORICAL_ONLINE_COLD_DEPENDENCIES) == 8, 'Historical ONLINE dependency map changed')
+    images = set()
+    for tag, image in sorted(HISTORICAL_ONLINE_COLD_DEPENDENCIES.items()):
+        require(type(image) is dict and set(image) == {'imageId', 'sourceCommit', 'sourceTree', 'service'}
+            and type(tag) is str and TAG.fullmatch(tag)
+            and type(image['imageId']) is str and IMAGE_ID.fullmatch(image['imageId'])
+            and image['sourceCommit'] in proofs and tag.startswith(image['sourceCommit'] + '-')
+            and image['service'] in ('admin', 'api', 'migrate') and tag.endswith('-' + image['service']),
+            'Historical ONLINE dependency identity changed')
+        source = proofs[image['sourceCommit']]
+        row = source.get('images', {}).get(image['service'], {})
+        reference = REPOSITORY + ':' + tag
+        require(source.get('commit') == image['sourceCommit'] and source.get('sourceTree') == image['sourceTree']
+            and row.get('imageId') == image['imageId'] and row.get('reference') == reference,
+            'Historical ONLINE dependency build proof changed')
+        if image['sourceCommit'] == proof.get('commit'):
+            original = origin['images'].get(image['service'], {})
+            require(origin.get('commit') == image['sourceCommit'] and origin.get('sourceTree') == image['sourceTree']
+                and original.get('digest') == image['imageId'] and original.get('reference') == reference,
+                'Historical ONLINE dependency manifest changed')
+        require(read('docker', 'image', 'inspect', '--format', '{{.Id}}', reference) == image['imageId'],
+                'Required historical ONLINE cold dependency image is unavailable')
+        images.add(image['imageId'])
+    return images
+
+
 def collect_dependencies(manifest, previous):
     evidence, rollback, images = {}, {}, set()
     directory = (BASE / 'current').resolve()
     observed = release_metadata(directory, evidence)
     require(observed == manifest, 'Current dependency metadata changed')
+    images |= historical_online_cold_dependencies(directory, observed, evidence)
     images |= fixed_dependencies(directory, observed, evidence)
     prior_directory = Path(manifest['previousRelease'])
     require(release_metadata(prior_directory, evidence) == previous, 'Previous dependency metadata changed')
@@ -1584,15 +1696,17 @@ def parameters(producer, *, source=None, expected_current=CACHE_BASELINE,
         'online':'import hashlib,json,re\n'+module.storage_selected(raw[CACHE_PINS[4]],('fingerprint','legacy','snapshot')),
         'workspace':"import hashlib,json\nWORKSPACE=True\nCONFIG_FILES=('docker-compose.aws-mysql.yml',)\nONLINE_SERVICE='online-recharge'\n"+module.storage_selected(raw[CACHE_PINS[5]],('fingerprint','workspace_service_names','snapshot')),
         'remote':'import hashlib,json,re\n'+module.storage_selected(raw[CACHE_PINS[6]],('require','historical_fingerprint','service_state'))}
-    header='import ast,fcntl,hashlib,json,os,re,shutil,stat,subprocess,time,types\nfrom pathlib import Path\n'
+    header='import ast,base64,fcntl,hashlib,json,os,re,shutil,stat,subprocess,time,types\nfrom pathlib import Path\n'
     own=raw[CACHE_PINS[1]].decode(); storage=raw[CACHE_PINS[2]].decode()
-    constants=('BASE','REPOSITORY','POLICY','IMAGE_ID','TAG','FIXED_REGISTRATION_IDS','FIXED_RECHARGE_IDS','ORDER_ARCHIVE_SEAL_RELATIVE')
+    constants=('BASE','REPOSITORY','POLICY','IMAGE_ID','TAG','FIXED_REGISTRATION_IDS','FIXED_RECHARGE_IDS','ORDER_ARCHIVE_SEAL_RELATIVE',
+        'FAILED_ONLINE_RECOVERY_DEPENDENCY','HISTORICAL_ONLINE_COLD_DEPENDENCIES','HISTORICAL_ONLINE_COLD_POLICY_SHA256')
     for node in ast.parse(own).body:
         if isinstance(node,ast.Assign) and any(isinstance(t,ast.Name) and (t.id in constants or t.id.startswith('CACHE_') and t.id not in ('CACHE_RESULT_FIELDS','CACHE_ARTIFACT_FIELDS')) for t in node.targets): header+=ast.get_source_segment(own,node)+'\n'
     for node in ast.parse(storage).body:
         if isinstance(node,ast.Assign) and any(isinstance(t,ast.Name) and t.id in ('STORAGE_BASELINE','STORAGE_CURRENT_SHA','STORAGE_COMPOSE_SHA') for t in node.targets): header+=ast.get_source_segment(storage,node)+'\n'
     old_names=('require','current','active_images','protected_images','dependency_file','release_metadata','literal_dependency',
-        'fixed_dependencies','collect_dependencies','make_plan','plan_digest','verify_remote')
+        'fixed_dependencies','historical_online_cold_dependencies','failed_online_recovery_dependencies',
+        'collect_dependencies','make_plan','plan_digest','verify_remote','generic_cache_closed')
     new_names=('CacheRejected','cache_need','cache_sha','cache_canonical','cache_closed','cache_producer','cache_binding','cache_inventory','cache_plan_budget',
         'cache_filter_inventory','cache_source_diagnostics','cache_recovery','cache_plan','cache_save_receipt','cache_execute')
     selected=module.storage_selected(raw[CACHE_PINS[1]],old_names+new_names)
