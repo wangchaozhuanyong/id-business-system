@@ -4267,7 +4267,7 @@ _AFTER_BIT_BANK_POLICY_FILES = {
         'bec32298136ff61d8e69820179b8c3f51f8e5221f4e6b449aaf5f5ec8f7d4625'),
     'scripts/production-release/online-recharge-scope.test.py': (
         '4aa063af4054ff98d2bb622056556ab643ed39abb3d373facc636509ff98ad8e',
-        '231e484639e0094d86fd08f19864f1a89e938ff73f6aa1fee6db3f10b34392ff'),
+        'a7ef425f05343525f49def15a49dd889a311b13283e2cab63bbe28209971126f'),
 }
 _AFTER_BIT_RELEASE_CI_FILES = {
     'scripts/ci-recharge-scope.mjs': ('3fe9c33ea883b7e2ad15305d1c7fe26873ddf648645b7a05acc8aecd5f858cfd', '04c8451b64ebf75755a108761a1a73430e4f31e807f7bb4f356b790417ee7ec1'),
@@ -5124,21 +5124,81 @@ _RESTORED_B_HISTORY_VOLUME = {'name': '20260821t095106z_auto_registration_data',
 _RESTORED_B_QUALIFIED_CODE = 'ONLINE_RECHARGE_B_RESTORE_DECLARATION_UNPROVEN'
 
 
+def _restored_workspace_qualification_call(operation, *, driver=None, caps=None, owner=None, stage='PACKAGE_BIND'):
+    """Preserve fixed rejected diagnostics; never grant or weaken qualification."""
+    try:
+        return operation()
+    except Exception as error:
+        args = BaseException.args.__get__(error)
+        if (len(args) == 1 and type(args[0]) is str
+                and re.fullmatch(r'(?:ONLINE_RECHARGE|API_ADMIN)_[A-Z0-9_]+', args[0])):
+            raise
+        from types import FunctionType, ModuleType
+        if caps is None and owner is not None:
+            saved = vars(owner).get('_restoredWorkspaceCapabilities')
+            if type(saved) is dict:
+                caps = saved.get('caps')
+        details = None
+        qualified = vars(caps).get('qualified') if type(caps) is SimpleNamespace else None
+        for module, leaf in ((driver, 'driver.py'), (qualified, 'qualified.py')):
+            if type(module) is not ModuleType:
+                continue
+            namespace = vars(module); getter = namespace.get('failure_diagnostic')
+            if (type(getter) is FunctionType and getter.__globals__ is namespace
+                    and getter.__name__ == 'failure_diagnostic'
+                    and getter.__code__.co_filename == str(Path(__file__).with_name('formal-runtime-package') / leaf)
+                    and type(error) is namespace.get('Rejected')):
+                try:
+                    details = getter(error)
+                except Exception:
+                    details = None
+                # The profile getter has no session annotation: only its exact
+                # owned exception class and fixed literal may supply this stage.
+                codes = namespace.get('CODES')
+                if (details is None and stage == 'SOURCE_PROFILE' and type(codes) is frozenset
+                        and len(args) == 1 and type(args[0]) is str and args[0] in codes):
+                    details = {'stage': stage, 'code': args[0]}
+                if details is not None:
+                    break
+        if details is None and type(caps) is SimpleNamespace:
+            package = vars(caps).get('package')
+            stable = vars(type(package)).get('assert_stable')
+            if (type(stable) is FunctionType and stable.__code__.co_filename
+                    == str(Path(__file__).with_name('formal-runtime-package') / 'package_io.py')):
+                namespace = stable.__globals__; codes = namespace.get('CODES')
+                if (type(error) is namespace.get('Rejected') and type(codes) is frozenset
+                        and len(args) == 1 and type(args[0]) is str and args[0] in codes):
+                    details = {'stage': 'PACKAGE_BIND', 'code': args[0]}
+        if (type(details) is dict and set(details) == {'stage', 'code'}
+                and type(details['stage']) is str and details['stage'] in DECLARATION_DIAGNOSTIC_STAGES
+                and type(details['code']) is str and details['code'] in DECLARATION_DIAGNOSTIC_CODES):
+            message = 'ONLINE_RECHARGE_DECLARATION_' + details['stage'] + '_' + details['code']
+            if len(message) <= 128:
+                raise _declaration_driver_failure(message, details) from None
+        # Unrecognized classes, attributes and messages remain rejected without
+        # being copied into a public diagnostic or replaced by invented evidence.
+        raise
+
+
 def _restored_qualified_capabilities(d):
     """One unchanged source-bound package instance in this controller lifetime."""
     producer=_pending_workspace_producer(d)
     saved=getattr(d,'_restoredWorkspaceCapabilities',None)
     if saved is None:
-        caps=_declaration_runtime_driver()._capabilities(producer)
-        profile=fingerprint(caps.qualified._reviewed_profile())
+        driver=_declaration_runtime_driver()
+        caps=_restored_workspace_qualification_call(lambda:driver._capabilities(producer),driver=driver)
+        profile=_restored_workspace_qualification_call(lambda:fingerprint(caps.qualified._reviewed_profile()),
+            caps=caps,stage='SOURCE_PROFILE')
         d._restoredWorkspaceCapabilities={'producer':copy.deepcopy(producer),'caps':caps,'profileSha256':profile}
     else:
         d.require(type(saved) is dict and set(saved)=={'producer','caps','profileSha256'}
             and fingerprint(saved['producer'])==fingerprint(producer),
             _RESTORED_B_QUALIFIED_CODE)
         caps=saved['caps']
-    caps.package.assert_stable()
-    d.require(fingerprint(caps.qualified._reviewed_profile())==d._restoredWorkspaceCapabilities['profileSha256'],
+    _restored_workspace_qualification_call(caps.package.assert_stable,caps=caps)
+    profile=_restored_workspace_qualification_call(lambda:fingerprint(caps.qualified._reviewed_profile()),
+        caps=caps,stage='SOURCE_PROFILE')
+    d.require(profile==d._restoredWorkspaceCapabilities['profileSha256'],
         _RESTORED_B_QUALIFIED_CODE)
     return caps
 
@@ -5770,7 +5830,9 @@ def _restored_workspace_native_before(d, previous, bridge):
         acquired_actual_replace_anchors=[bridge['services']['admin']['containerId']])
     seed=getattr(d,'_restoredWorkspacePreflight',None)
     first=None if seed is None else seed['restoration']['apiDeclarationQualification']
-    proof=_restored_qualified_measure(d,previous,bridge,services,admin,first=first)
+    proof=_restored_workspace_qualification_call(
+        lambda:_restored_qualified_measure(d,previous,bridge,services,admin,first=first),
+        owner=d)
     if seed is None:
         sidecar={'kind':'ONLINE_RECHARGE_B_RESTORE_COMPLETE_MATERIAL','version':2,
             'baselineOriginSha256':fingerprint(bridge),'observationSha256':fingerprint(observed),

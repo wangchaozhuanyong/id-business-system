@@ -6280,5 +6280,133 @@ class RestoredColdOriginTests(unittest.TestCase):
             self.assertIs(raised.exception, error)
 
 
+class RestoredQualificationFailureTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.driver = scope._declaration_runtime_driver()
+        def leaf(name):
+            path = ROOT / 'scripts/production-release/formal-runtime-package' / (name + '.py')
+            spec = importlib.util.spec_from_file_location('offline_qualified_failure_' + name, path)
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+            return module
+        cls.qualified, cls.package = leaf('qualified'), leaf('package_io')
+
+    @staticmethod
+    def fail(error):
+        raise error
+
+    def assert_public_failure(self, operation, expected, **kwargs):
+        import traceback
+        from contextlib import redirect_stderr
+        out, err = io.StringIO(), io.StringIO()
+        with redirect_stdout(out), redirect_stderr(err), self.assertRaises(scope.DeclarationDriverError) as raised:
+            scope._restored_workspace_qualification_call(operation, **kwargs)
+        self.assertEqual(raised.exception.args, ('ONLINE_RECHARGE_DECLARATION_' + expected[0] + '_' + expected[1],))
+        self.assertEqual(scope.declaration_failure_diagnostic(raised.exception), {'stage': expected[0], 'code': expected[1]})
+        self.assertLessEqual(len(raised.exception.args[0]), 128)
+        self.assertTrue(raised.exception.__suppress_context__)
+        rendered = ''.join(traceback.format_exception(type(raised.exception), raised.exception,
+            raised.exception.__traceback__))
+        self.assertNotIn('OFFLINE_DIAGNOSTIC_SECRET_MUST_NOT_BE_PUBLISHED', rendered)
+        self.assertEqual((out.getvalue(), err.getvalue()), ('', ''))
+        return raised.exception
+
+    def test_actual_driver_getter_preserves_archive_and_profile_reasons(self):
+        import urllib.error
+        http = urllib.error.HTTPError('https://offline.invalid', 403,
+            'OFFLINE_DIAGNOSTIC_SECRET_MUST_NOT_BE_PUBLISHED', {}, None)
+        cases = ((self.driver._rejected(http, 'ARCHIVE_BIND'), ('ARCHIVE_BIND', 'HTTP_ERROR')),
+            (self.driver._rejected(self.qualified.Rejected('SOURCE_NOT_MEASURED'), 'SOURCE_PROFILE',
+                [(self.qualified.Rejected, self.qualified.CODES)]), ('SOURCE_PROFILE', 'SOURCE_NOT_MEASURED')))
+        for error, expected in cases:
+            with self.subTest(stage=expected[0]):
+                self.assert_public_failure(lambda:self.fail(error), expected, driver=self.driver)
+
+    def test_capabilities_uses_the_same_actual_driver_exception_identity(self):
+        producer = {'commit': 'a' * 40, 'sourceTree': 'b' * 40,
+                    'workflowRunId': '123', 'workflowRunAttempt': '1'}
+        error = self.driver._rejected(self.qualified.Rejected('SOURCE_NOT_MEASURED'), 'SOURCE_PROFILE',
+            [(self.qualified.Rejected, self.qualified.CODES)])
+        with patch.object(scope, '_pending_workspace_producer', return_value=producer), \
+                patch.object(scope, '_declaration_runtime_driver', return_value=self.driver) as loader, \
+                patch.object(self.driver, '_capabilities', side_effect=error) as acquire:
+            with self.assertRaises(scope.DeclarationDriverError) as raised:
+                scope._restored_qualified_capabilities(controller())
+            self.assertEqual(raised.exception.args, ('ONLINE_RECHARGE_DECLARATION_SOURCE_PROFILE_SOURCE_NOT_MEASURED',))
+            loader.assert_called_once_with()
+            acquire.assert_called_once_with(producer)
+
+    def test_actual_qualified_getter_is_resolved_after_first_acquisition_and_context_closes(self):
+        owner, events = controller(), []
+        error = self.qualified.Rejected('QUALIFIER_UNAVAILABLE')
+        error._qualified_failure = ('RUNTIME_VFS', 'SOCKET_BINDING_UNAVAILABLE')
+        error.unknown_private_field = 'OFFLINE_DIAGNOSTIC_SECRET_MUST_NOT_BE_PUBLISHED'
+        @contextmanager
+        def session():
+            events.append('enter')
+            try: yield object()
+            finally: events.append('closed')
+        def operation():
+            owner._restoredWorkspaceCapabilities = {'caps': SimpleNamespace(qualified=self.qualified)}
+            with session(): self.fail(error)
+        self.assert_public_failure(operation, ('RUNTIME_VFS', 'SOCKET_BINDING_UNAVAILABLE'), owner=owner)
+        self.assertEqual(events, ['enter', 'closed'])
+
+    def test_real_package_assert_stable_rejection_uses_its_own_class_and_literal(self):
+        package = object.__new__(self.package.Package)
+        package.directory = RUNTIME / 'synthetic-no-package-io'
+        caps = SimpleNamespace(package=package, qualified=self.qualified)
+        with patch.object(self.package, 'read_owned', side_effect=self.package.Rejected('PACKAGE_FILE_CHANGED')):
+            self.assert_public_failure(package.assert_stable, ('PACKAGE_BIND', 'PACKAGE_FILE_CHANGED'), caps=caps)
+
+    def test_real_unannotated_profile_error_keeps_only_fixed_profile_literal(self):
+        caps = SimpleNamespace(qualified=self.qualified)
+        self.assert_public_failure(self.qualified._reviewed_profile,
+            ('SOURCE_PROFILE', 'SOURCE_NOT_MEASURED'), caps=caps, stage='SOURCE_PROFILE')
+
+    def test_success_returns_same_object_and_preserves_single_context_close(self):
+        marker, events = object(), []
+        @contextmanager
+        def session():
+            events.append('enter')
+            try: yield marker
+            finally: events.append('closed')
+        def operation():
+            with session() as value: return value
+        self.assertIs(scope._restored_workspace_qualification_call(operation), marker)
+        self.assertEqual(events, ['enter', 'closed'])
+
+    def test_spoofed_class_and_attrs_are_never_treated_as_actual_qualified_exceptions(self):
+        class Rejected(RuntimeError):pass
+        for error in (Rejected('QUALIFIER_UNAVAILABLE'), RuntimeError('offline-unknown-private-value')):
+            error._qualified_failure = ('RUNTIME_VFS', 'SOCKET_BINDING_UNAVAILABLE')
+            error._declaration_failure = ('ARCHIVE_BIND', 'HTTP_ERROR')
+            with self.subTest(error_class=type(error).__name__), self.assertRaises(type(error)) as raised:
+                scope._restored_workspace_qualification_call(lambda:self.fail(error),
+                    driver=self.driver, caps=SimpleNamespace(qualified=self.qualified))
+            self.assertIs(raised.exception, error)
+
+    def test_unknown_annotation_shapes_and_codes_preserve_original_failure(self):
+        for detail in (None, {'stage':'RUNTIME_VFS','code':'SOCKET_BINDING_UNAVAILABLE'},
+                ('RUNTIME_VFS', 'OFFLINE_DIAGNOSTIC_SECRET_MUST_NOT_BE_PUBLISHED'),
+                ('UNKNOWN_PRIVATE_STAGE', 'UNKNOWN'), ('RUNTIME_VFS', 'UNKNOWN', 'extra')):
+            error = self.qualified.Rejected('QUALIFIER_UNAVAILABLE')
+            error._qualified_failure = detail
+            with self.subTest(annotation_type=type(detail).__name__), self.assertRaises(self.qualified.Rejected) as raised:
+                scope._restored_workspace_qualification_call(lambda:self.fail(error),
+                    caps=SimpleNamespace(qualified=self.qualified))
+            self.assertIs(raised.exception, error)
+
+    def test_existing_cache_and_restore_codes_remain_original(self):
+        for code in ('ONLINE_RECHARGE_HISTORICAL_IMAGE_CACHE_ECR_AUTH_FAILED',
+                'ONLINE_RECHARGE_B_RESTORE_DECLARATION_UNPROVEN', 'API_ADMIN_CONTAINER_CHANGED'):
+            error = RuntimeError(code)
+            with self.subTest(code=code), self.assertRaises(RuntimeError) as raised:
+                scope._restored_workspace_qualification_call(lambda:self.fail(error),
+                    driver=self.driver, caps=SimpleNamespace(qualified=self.qualified))
+            self.assertIs(raised.exception, error)
+
+
 if __name__ == '__main__':
     unittest.main()
