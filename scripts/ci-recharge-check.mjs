@@ -233,6 +233,24 @@ const onlineRecoveryGrantControls = () => {
     run('node', ['--test', productionDatabaseAccessTest]);
 };
 
+const adminPendingReleaseControls = () => {
+  if (
+    changed.some((path) =>
+      [
+        'scripts/production-release/admin-pending-online-release.py',
+        'scripts/production-release/admin-pending-online-release.test.py',
+        'scripts/production-release/build-images.sh',
+        'scripts/production-release/push-images.sh',
+        'scripts/production-release/dispatch.sh',
+        'scripts/production-release/validate-release-selection.sh',
+        '.github/workflows/production-release.yml',
+        'scripts/ci-recharge-check.mjs'
+      ].includes(path)
+    )
+  )
+    run('python3', ['-B', 'scripts/production-release/admin-pending-online-release.test.py']);
+};
+
 if (part === 'guards') {
   if (!/^[a-f0-9]{40}$/.test(base)) throw new Error('Missing diff base');
   const existing = changed.filter((p) => existsSync(p));
@@ -327,6 +345,7 @@ if (part === 'guards') {
     run('python3', ['-B', 'scripts/production-release/online-recharge-readonly.test.py']);
     run('node', ['--test', 'scripts/production-release/online-recharge-entry.test.mjs']);
   }
+  adminPendingReleaseControls();
   releaseMaintenanceControls();
   archiveReleaseControls();
   onlineSourcePermissionRepairControls();
@@ -475,6 +494,7 @@ if (part === 'guards') {
     run('python3', ['-B', 'scripts/production-release/online-recharge-readonly.test.py']);
     run('node', ['--test', 'scripts/production-release/online-recharge-entry.test.mjs']);
   }
+  adminPendingReleaseControls();
   releaseMaintenanceControls();
   archiveReleaseControls();
   onlineSourcePermissionRepairControls();

@@ -3,7 +3,10 @@ set -Eeuo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/validate-release-selection.sh"
 [[ "${RELEASE_OPERATION:-release}" != verify_api_admin_migration && "${RELEASE_OPERATION:-release}" != verify_online_recharge && "${RELEASE_OPERATION:-release}" != verify_api_workspace ]] || exit 1
 
-if [[ "${RELEASE_OPERATION:-release}" == release_online_recharge ]]; then
+if [[ "${RELEASE_OPERATION:-release}" == release_admin ]]; then
+  [[ "${RELEASE_ADMIN_ONLY:-}" == true ]] || exit 1
+  services=(admin)
+elif [[ "${RELEASE_OPERATION:-release}" == release_online_recharge ]]; then
   if [[ "${EXPECTED_CURRENT:-}" != 0a03fa28e6b844a18833d5c63f1de700f091fc64 ]]; then
     python3 -B scripts/production-release/online-recharge-readonly.py after-bit-build-proof
   fi
@@ -247,6 +250,12 @@ for service in "${services[@]}"; do
   image_tag="${RELEASE_COMMIT}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${service}"
   reference="${RELEASE_REPOSITORY}:${image_tag}"
   test "$(docker image inspect "$reference" --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}')" = "$RELEASE_COMMIT"
+  if [[ "${RELEASE_OPERATION:-release}" == release_admin ]]; then
+    test "$(docker image inspect "$reference" --format '{{ index .Config.Labels "id-business-v2.source-tree" }}')" = "$SOURCE_TREE"
+    admin_pending_projection="$(python3 -c 'import json; from pathlib import Path; print(json.loads(Path(".deploy/production-release/admin-pending-online-build-projection.json").read_text())["projectionSha256"])')"
+    [[ "$admin_pending_projection" =~ ^[a-f0-9]{64}$ ]] || exit 1
+    test "$(docker image inspect "$reference" --format '{{ index .Config.Labels "id-business-v2.admin-pending-projection-sha256" }}')" = "$admin_pending_projection"
+  fi
   if [[ "${HISTORICAL_EXCEPTION:-none}" == registration-worker-90-20261007 && "$service" == admin ]]; then
     test "$(docker image inspect "$reference" --format '{{ index .Config.Labels "id-business-v2.admin-projection-sha256" }}')" = "$registration_admin_projection"
   fi

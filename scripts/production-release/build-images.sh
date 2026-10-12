@@ -63,7 +63,7 @@ build_image() {
   local service="$1" dockerfile="$2" target="$3" context="${4:-.}"
   local reference="${RELEASE_REPOSITORY}:${RELEASE_COMMIT}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${service}"
   local -a options=(--platform linux/amd64 --label "org.opencontainers.image.revision=$RELEASE_COMMIT")
-  if [[ "${RELEASE_OPERATION:-release}" == release_online_recharge || "${RELEASE_OPERATION:-release}" == release_api_workspace || "${RELEASE_OPERATION:-release}" == release_api_admin || "${RELEASE_OPERATION:-release}" == release_api_admin_migration || "${RELEASE_OPERATION:-release}" == release_api_registration ]]; then
+  if [[ "${RELEASE_OPERATION:-release}" == release_admin || "${RELEASE_OPERATION:-release}" == release_online_recharge || "${RELEASE_OPERATION:-release}" == release_api_workspace || "${RELEASE_OPERATION:-release}" == release_api_admin || "${RELEASE_OPERATION:-release}" == release_api_admin_migration || "${RELEASE_OPERATION:-release}" == release_api_registration ]]; then
     options+=(--label "id-business-v2.source-tree=$SOURCE_TREE")
   fi
   if [[ "${RELEASE_OPERATION:-release}" == release_api_workspace && -n "${pending_online_record_sha256:-}" ]]; then
@@ -78,6 +78,11 @@ build_image() {
   fi
   if [[ "$service" == admin ]]; then
     options+=(--build-arg AUTH_PROVIDER=local --build-arg VITE_API_BASE_URL=/api)
+    if [[ "${RELEASE_OPERATION:-release}" == release_admin ]]; then
+      [[ "${admin_pending_projection:-}" =~ ^[a-f0-9]{64}$ ]] || exit 1
+      options+=(--label "id-business-v2.admin-pending-projection-sha256=$admin_pending_projection")
+      options+=(--build-arg "V2_BUILD_ID=v2-$RELEASE_COMMIT")
+    fi
     if [[ "${HISTORICAL_EXCEPTION:-none}" == registration-worker-90-20261007 ]]; then
       [[ "${registration_admin_projection:-}" =~ ^[a-f0-9]{64}$ ]] || exit 1
       options+=(--label "id-business-v2.admin-projection-sha256=$registration_admin_projection")
@@ -136,6 +141,16 @@ build_image() {
   fi
   echo "Built image: $service"
 }
+
+if [[ "${RELEASE_OPERATION:-release}" == release_admin ]]; then
+  python3 -B scripts/production-release/admin-pending-online-release.py prepare
+  admin_context=.deploy/production-release/admin-pending-online-build-context
+  admin_pending_projection="$(python3 -c 'import json; from pathlib import Path; print(json.loads(Path(".deploy/production-release/admin-pending-online-build-projection.json").read_text())["projectionSha256"])')"
+  echo 'RELEASE_ADMIN_ONLY=true' >> "$GITHUB_ENV"
+  build_image admin "$admin_context/apps/admin/Dockerfile" runtime "$admin_context"
+  python3 -B scripts/production-release/admin-pending-online-release.py proof
+  exit 0
+fi
 
 if [[ "${RELEASE_OPERATION:-release}" == release_online_recharge ]]; then
   if [[ "${EXPECTED_CURRENT:-}" != 0a03fa28e6b844a18833d5c63f1de700f091fc64 ]]; then

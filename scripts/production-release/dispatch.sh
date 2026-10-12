@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/validate-release-selection.sh"
-[[ "${RELEASE_OPERATION:-release}" == release_online_recharge || "${RELEASE_OPERATION:-release}" == release_api_workspace || "${RELEASE_OPERATION:-release}" == release || "${RELEASE_OPERATION:-release}" == release_api_admin || "${RELEASE_OPERATION:-release}" == release_api_admin_migration || "${RELEASE_OPERATION:-release}" == release_api_registration ]] || exit 1
+[[ "${RELEASE_OPERATION:-release}" == release_admin || "${RELEASE_OPERATION:-release}" == release_online_recharge || "${RELEASE_OPERATION:-release}" == release_api_workspace || "${RELEASE_OPERATION:-release}" == release || "${RELEASE_OPERATION:-release}" == release_api_admin || "${RELEASE_OPERATION:-release}" == release_api_admin_migration || "${RELEASE_OPERATION:-release}" == release_api_registration ]] || exit 1
 
 [[ "$RELEASE_COMMIT" =~ ^[0-9a-f]{40}$ ]] || exit 1
 [[ "$EXPECTED_CURRENT" =~ ^[0-9a-f]{40}$ ]] || exit 1
@@ -173,6 +173,8 @@ quality_run = os.environ['QUALITY_RUN_ID']
 admin_only = os.environ.get('RELEASE_ADMIN_ONLY', 'false')
 assert admin_only in ('true', 'false')
 scope_flag = ' --admin-only' if admin_only == 'true' else ''
+if os.environ.get('RELEASE_OPERATION') == 'release_admin':
+    assert admin_only == 'true'
 history_policy = os.environ.get('HISTORICAL_EXCEPTION', 'none')
 assert history_policy in ('none', 'historical-finance-20261005',
                          'historical-finance-20261005-registration-continuation',
@@ -497,6 +499,26 @@ if history_policy == 'registration-worker-95-20261008':
         f'curl -fsSL --retry 3 --max-time 30 https://raw.githubusercontent.com/wangchaozhuanyong/id-business-system/{sha}/deploy/aws/{profile_name} -o {profile_target}',
         f'curl -fsSL --retry 3 --max-time 30 https://raw.githubusercontent.com/wangchaozhuanyong/id-business-system/{sha}/scripts/production-release/{module_name} -o {module_target}',
         f'chmod 0644 {script_path} {profile_target} {module_target}','python3 -c '+shlex.quote(verify)]
+if os.environ.get('RELEASE_OPERATION') == 'release_admin':
+    import base64, hashlib, shlex
+    from pathlib import Path
+    proof_raw = Path('.deploy/production-release/admin-pending-online-build-proof.json').read_bytes()
+    assert 0 < len(proof_raw) < 32768
+    proof = json.loads(proof_raw)
+    assert proof['commit'] == sha and proof['sourceTree'] == tree
+    assert proof['runId'] == run_id and proof['runAttempt'] == attempt and proof['qualityRunId'] == quality_run
+    assert proof['scope'] == 'ADMIN_PENDING_ONLINE_BUILD'
+    carrier = []
+    for name in ('remote-deploy.py', 'api-admin-pending-projection.py', 'admin-pending-online-release.py'):
+        local = Path('scripts/production-release', name)
+        target = f'/opt/id-business-v2/.staging/oidc-{sha}/{name}'
+        digest = hashlib.sha256(local.read_bytes()).hexdigest()
+        carrier.extend([f'curl -fsSL --retry 3 --max-time 30 https://raw.githubusercontent.com/wangchaozhuanyong/id-business-system/{sha}/scripts/production-release/{name} -o {target}',
+                        f'echo "{digest}  {target}" | sha256sum -c - >/dev/null'])
+    encoded = base64.b64encode(proof_raw).decode('ascii')
+    commands = ['set -eu', f'mkdir -p /opt/id-business-v2/.staging/oidc-{sha}', *carrier,
+        f'python3 /opt/id-business-v2/.staging/oidc-{sha}/admin-pending-online-release.py release --commit {sha} --source-tree {tree} --repository {repo} --expected-current {previous} --run-id {run_id} --run-attempt {attempt} --ci-run-id {quality_run} --build-proof ' + shlex.quote(encoded)]
+    assert len(json.dumps({'commands': commands, 'executionTimeout': ['3600']}).encode()) < 48 * 1024
 if api_admin or online_recharge:
     import hashlib, shlex
     pinned = []
@@ -534,6 +556,13 @@ with open(sys.argv[1], 'w', encoding='utf-8') as target:
     options = {'separators': (',', ':')} if os.environ.get('RELEASE_OPERATION') == 'release_api_workspace' or (online_recharge and pending_workspace_online) else {}
     json.dump({'commands': commands, 'executionTimeout': ['3600']}, target, **options)
 PY
+
+if [[ "${RELEASE_OPERATION:-release}" == release_admin ]]; then
+  [[ "$(git ls-remote origin refs/heads/main | cut -f1)" == "$RELEASE_COMMIT" ]] || {
+    echo 'Admin publication target is no longer the latest main commit; deployment was not dispatched' >&2
+    exit 1
+  }
+fi
 
 command_id="$(aws ssm send-command --region "$AWS_REGION" \
   --instance-ids "$PRODUCTION_INSTANCE_ID" --document-name AWS-RunShellScript \

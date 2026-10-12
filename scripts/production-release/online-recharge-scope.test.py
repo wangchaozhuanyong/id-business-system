@@ -19,6 +19,11 @@ import unittest
 from unittest.mock import MagicMock, patch
 
 ROOT = Path(__file__).resolve().parents[2]
+# The first ONLINE admission is a fixed reviewed source contract. Later
+# independent business batches must not become its positive test fixture.
+# This commit is an existing main ancestor, retained after branch cleanup.
+REVIEWED_APPLICATION_TEMPLATE_COMMIT = '4a35c9c9d8f4a2df9e28503ffe491d4af5d8052e'
+REVIEWED_APPLICATION_TEMPLATE_TREE = '1aee6c41c593ede8869b07757bc2d69f6de2c3f5'
 RUNTIME = ROOT / '.runtime/online-recharge/release-tests'
 RUNTIME.mkdir(parents=True, exist_ok=True)
 
@@ -3512,6 +3517,24 @@ class PendingWorkspaceStageTests(unittest.TestCase):
 
 class AfterBitFormalTests(unittest.TestCase):
     """Real A/B type and API cold/binding bodies; external acquisition is synthetic."""
+    @classmethod
+    def setUpClass(cls):
+        # All five approved policy blobs come from the retained main commit.
+        # This test file and the Admin adapter tests may change independently.
+        tree=subprocess.check_output(['git','rev-parse',REVIEWED_APPLICATION_TEMPLATE_COMMIT+'^{tree}'],cwd=ROOT).decode().strip()
+        if tree != REVIEWED_APPLICATION_TEMPLATE_TREE:
+            raise AssertionError('reviewed ONLINE policy fixture tree changed')
+        cls.reviewed_policy_sources={}
+        cls.reviewed_policy_modes={}
+        for name,(before_hash,after_hash) in scope._AFTER_BIT_BANK_POLICY_FILES.items():
+            raw=subprocess.check_output(['git','show',REVIEWED_APPLICATION_TEMPLATE_COMMIT+':'+name],cwd=ROOT)
+            entry=subprocess.check_output(['git','ls-tree',REVIEWED_APPLICATION_TEMPLATE_COMMIT,'--',name],cwd=ROOT).decode().split()
+            if (hashlib.sha256(raw).hexdigest()!=after_hash or len(entry)!=4
+                    or entry[0]!='100644' or entry[1]!='blob' or entry[3]!=name):
+                raise AssertionError('reviewed ONLINE policy fixture bytes or mode changed')
+            cls.reviewed_policy_sources[name]=raw
+            cls.reviewed_policy_modes[name]=entry[0]
+
     @contextmanager
     def fixture(self,policy=False):
         with tempfile.TemporaryDirectory(prefix='formal-b-',dir=RUNTIME) as temporary,ExitStack() as stack:
@@ -3734,7 +3757,8 @@ class AfterBitFormalTests(unittest.TestCase):
         for name,(before_hash,after_hash) in scope._AFTER_BIT_BANK_POLICY_FILES.items():
             before=subprocess.check_output(['git','show','31d2c6885a45817cd40d23fce8d6145bc9f18af2:'+name],cwd=ROOT)
             self.assertEqual(hashlib.sha256(before).hexdigest(),before_hash)
-            self.assertEqual(hashlib.sha256((ROOT/name).read_bytes()).hexdigest(),after_hash)
+            self.assertEqual(hashlib.sha256(self.reviewed_policy_sources[name]).hexdigest(),after_hash)
+            self.assertEqual(self.reviewed_policy_modes[name],'100644')
 
     def test_policy_group_source_test_mode_partial_and_other_source_drift_reject(self):
         for mutation in ('library','permission-test','acceptance-test','historical-test','online-test',
@@ -3766,7 +3790,7 @@ class AfterBitFormalTests(unittest.TestCase):
         with self.fixture(policy=True) as f:
             self.preflight_and_f(f);target=f.base/'policy-candidate';target.mkdir(mode=0o700)
             for name in scope._AFTER_BIT_BANK_POLICY_FILES:
-                dest=target/name;dest.parent.mkdir(parents=True,exist_ok=True);dest.write_bytes((ROOT/name).read_bytes());dest.chmod(0o644)
+                dest=target/name;dest.parent.mkdir(parents=True,exist_ok=True);dest.write_bytes(self.reviewed_policy_sources[name]);dest.chmod(0o644)
             protected=('apps/api/src/id-business-v2/auto-recharge/worker/fixture.cjs',
                 'apps/api/src/id-business-v2/auto-registration/fixture.cjs',
                 'scripts/v2-data-integrity-audit.mjs','scripts/lib/v2-data-integrity-audit.mjs','scripts/sync-v2-new-table-grants.mjs')
@@ -3781,6 +3805,24 @@ class AfterBitFormalTests(unittest.TestCase):
             f.qb.unlink()
             with self.assertRaises((RuntimeError,OSError)):scope.protected_source(f.d,f.old,target)
             f.a_reader.assert_not_called();f.d.compose.assert_not_called();f.d.sync_new_table_grants.assert_not_called();f.d.point_current.assert_not_called()
+
+    def test_unreviewed_current_policy_test_file_cannot_enter_fixed_group(self):
+        name='scripts/production-release/online-recharge-scope.test.py'
+        current=(ROOT/name).read_bytes()
+        self.assertNotEqual(current,self.reviewed_policy_sources[name])
+        with self.fixture(policy=True) as f:
+            self.preflight_and_f(f);target=f.base/'unreviewed-policy-candidate';target.mkdir(mode=0o700)
+            for path,raw in self.reviewed_policy_sources.items():
+                dest=target/path;dest.parent.mkdir(parents=True,exist_ok=True);dest.write_bytes(raw);dest.chmod(0o644)
+            for path in ('apps/api/src/id-business-v2/auto-recharge/worker/fixture.cjs',
+                    'apps/api/src/id-business-v2/auto-registration/fixture.cjs',
+                    'scripts/v2-data-integrity-audit.mjs','scripts/lib/v2-data-integrity-audit.mjs',
+                    'scripts/sync-v2-new-table-grants.mjs'):
+                dest=target/path;dest.parent.mkdir(parents=True,exist_ok=True);dest.write_bytes((f.old/path).read_bytes());dest.chmod(0o644)
+            (target/name).write_bytes(current)
+            with self.assertRaisesRegex(RuntimeError,'SHARED_GATE_SOURCE_CHANGED'):
+                scope.protected_source(f.d,f.old,target)
+            f.d.compose.assert_not_called();f.d.point_current.assert_not_called()
 
     def test_formal_b_stage_existing_api_origin_and_ordinary_readback(self):
         self.formal_stage()
@@ -3814,7 +3856,7 @@ class AfterBitFormalTests(unittest.TestCase):
                 (target/'docker-compose.aws-mysql.yml').write_bytes(b'synthetic-compose')
                 if policy:
                     for name in scope._AFTER_BIT_BANK_POLICY_FILES:
-                        dest=target/name;dest.parent.mkdir(parents=True,exist_ok=True);dest.write_bytes((ROOT/name).read_bytes());dest.chmod(0o644)
+                        dest=target/name;dest.parent.mkdir(parents=True,exist_ok=True);dest.write_bytes(self.reviewed_policy_sources[name]);dest.chmod(0o644)
                     for name in ('apps/api/src/id-business-v2/auto-recharge/worker/fixture.cjs',
                             'apps/api/src/id-business-v2/auto-registration/fixture.cjs',
                             'scripts/v2-data-integrity-audit.mjs','scripts/lib/v2-data-integrity-audit.mjs',
@@ -4709,11 +4751,17 @@ class AfterBitReceiptCISourceTests(unittest.TestCase):
 
     def test_ci_hash_group_is_the_exact_checked_source_and_mode(self):
         self.assertEqual(len(scope._AFTER_BIT_RELEASE_CI_FILES), 4)
+        tree = subprocess.check_output(['git', 'rev-parse', REVIEWED_APPLICATION_TEMPLATE_COMMIT + '^{tree}'], cwd=ROOT).decode().strip()
+        self.assertEqual(tree, REVIEWED_APPLICATION_TEMPLATE_TREE)
         for name, (before, after) in scope._AFTER_BIT_RELEASE_CI_FILES.items():
             raw = subprocess.check_output(['git', 'show', '31d2c6885a45817cd40d23fce8d6145bc9f18af2:' + name], cwd=ROOT)
             self.assertEqual(hashlib.sha256(raw).hexdigest(), before)
-            self.assertEqual(hashlib.sha256((ROOT / name).read_bytes()).hexdigest(), after)
-            self.assertFalse((ROOT / name).stat().st_mode & 0o111)
+            reviewed = subprocess.check_output(['git', 'show', REVIEWED_APPLICATION_TEMPLATE_COMMIT + ':' + name], cwd=ROOT)
+            self.assertEqual(hashlib.sha256(reviewed).hexdigest(), after)
+            entry = subprocess.check_output(['git', 'ls-tree', REVIEWED_APPLICATION_TEMPLATE_COMMIT, '--', name], cwd=ROOT).decode().split()
+            self.assertEqual(entry[0], '100644')
+            self.assertEqual(entry[1], 'blob')
+            self.assertEqual(entry[3], name)
 
 
 
@@ -4919,6 +4967,23 @@ class RestoredBindingDraftTests(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             _RestoreMaterial.restored_before_and_stop_shape(record, f, {'sourceApiIdentity': old}, audit)
 
+def reviewed_capacity_sources():
+    # Capacity admission is a fixed five-file mapping, independent of later
+    # legitimate workflow changes. Retain its reviewed main bytes and modes.
+    tree=subprocess.check_output(['git','rev-parse',REVIEWED_APPLICATION_TEMPLATE_COMMIT+'^{tree}'],cwd=ROOT).decode().strip()
+    if tree != REVIEWED_APPLICATION_TEMPLATE_TREE:
+        raise AssertionError('reviewed capacity fixture tree changed')
+    sources={}
+    for name,pair in scope._WORKSPACE_CAPACITY_CONTROL_POLICY['files'].items():
+        raw=subprocess.check_output(['git','show',REVIEWED_APPLICATION_TEMPLATE_COMMIT+':'+name],cwd=ROOT)
+        entry=subprocess.check_output(['git','ls-tree',REVIEWED_APPLICATION_TEMPLATE_COMMIT,'--',name],cwd=ROOT).decode().split()
+        if (len(entry)!=4 or entry[0]!='100644' or entry[1]!='blob' or entry[3]!=name
+                or pair['after']!={'mode':entry[0],'bytes':len(raw),'sha256':hashlib.sha256(raw).hexdigest()}):
+            raise AssertionError('reviewed capacity fixture bytes or mode changed')
+        sources[name]=raw
+    return sources
+
+
 class RestoredEntryTests(unittest.TestCase):
     def test_actual_failed_source_and_material_are_full_archive_bound_without_native_paths(self):
         witness=scope._RESTORED_B_WITNESS
@@ -5019,11 +5084,10 @@ class RestoredEntryTests(unittest.TestCase):
         witness=scope._RESTORED_B_WITNESS
         bridge=json.loads(witness['failedPreflight'])['baseline']
         policy=copy.deepcopy(scope._WORKSPACE_CAPACITY_CONTROL_POLICY)
-        owned={name:(ROOT/name).read_bytes() for name in policy['files']}
+        owned=reviewed_capacity_sources()
         for name,data in owned.items():
             self.assertEqual(policy['files'][name]['after'],{
                 'mode':'100644','bytes':len(data),'sha256':hashlib.sha256(data).hexdigest()})
-            self.assertFalse((ROOT/name).stat().st_mode&0o111)
         base_commit='caf6c440324f83fb76e03eea8e9f2dd2f5ee5a20'
         synthetic_commit='e'*40
         base_prefix='id-business-system-'+base_commit+'/'
@@ -5047,14 +5111,16 @@ class RestoredEntryTests(unittest.TestCase):
             return output.getvalue()
         # An isolated temporary index lets Git itself calculate the complete
         # source tree. This synthetic producer is never a run or publication.
-        with tempfile.TemporaryDirectory(prefix='capacity-index-',dir=RUNTIME) as temporary:
-            environment={**os.environ,'GIT_INDEX_FILE':str(Path(temporary)/'index')}
-            subprocess.run(['git','read-tree',base_commit],cwd=ROOT,env=environment,check=True)
-            for name,data in owned.items():
-                blob=subprocess.check_output(['git','hash-object','-w','--stdin'],input=data,cwd=ROOT).decode().strip()
-                subprocess.run(['git','update-index','--add','--cacheinfo','100644',blob,name],
-                    cwd=ROOT,env=environment,check=True)
-            tree=subprocess.check_output(['git','write-tree'],cwd=ROOT,env=environment).decode().strip()
+        def git_tree(replacements):
+            with tempfile.TemporaryDirectory(prefix='capacity-index-',dir=RUNTIME) as temporary:
+                environment={**os.environ,'GIT_INDEX_FILE':str(Path(temporary)/'index')}
+                subprocess.run(['git','read-tree',base_commit],cwd=ROOT,env=environment,check=True)
+                for name,data in replacements.items():
+                    blob=subprocess.check_output(['git','hash-object','-w','--stdin'],input=data,cwd=ROOT).decode().strip()
+                    subprocess.run(['git','update-index','--add','--cacheinfo','100644',blob,name],
+                        cwd=ROOT,env=environment,check=True)
+                return subprocess.check_output(['git','write-tree'],cwd=ROOT,env=environment).decode().strip()
+        tree=git_tree(owned)
         producer={'commit':synthetic_commit,'sourceTree':tree,'workflowRunId':'123','workflowRunAttempt':'1'}
         before_source=bridge['baselineProducer']
         before_raw=subprocess.check_output(['git','archive','--format=tar.gz',
@@ -5067,6 +5133,23 @@ class RestoredEntryTests(unittest.TestCase):
         original=scope._pending_workspace_current_source_inventory(d,before_source)
         inventory=scope._pending_workspace_current_source_inventory(d,producer)
         self.assertEqual(scope._workspace_capacity_control_inventory(d,bridge,original,inventory),frozenset(owned))
+        # Use the actual later workflow when it differs; on the reviewed source
+        # itself, mutate only the fixture. Both must fail this historical mapping
+        # in a complete archive with an independently verified source tree.
+        name='.github/workflows/production-release.yml'
+        current=(ROOT/name).read_bytes()
+        if current==owned[name]:
+            current+=b'\n# unreviewed fixture workflow\n'
+        unreviewed={**owned,name:current}
+        unreviewed_tree=git_tree(unreviewed)
+        unreviewed_producer={**producer,'sourceTree':unreviewed_tree}
+        unreviewed_d=controller(BASE=d.BASE,_onlinePendingWorkspaceProducer=unreviewed_producer,
+            _onlinePendingWorkspaceArchiveBytes={
+                (before_source['commit'],before_source['sourceTree']):before_raw,
+                (synthetic_commit,unreviewed_tree):rebuilt(unreviewed)})
+        unreviewed_inventory=scope._pending_workspace_current_source_inventory(unreviewed_d,unreviewed_producer)
+        with self.assertRaisesRegex(RuntimeError,'^ONLINE_RECHARGE_FIXED_CONTROL_SOURCE_CHANGED$'):
+            scope._workspace_capacity_control_inventory(unreviewed_d,bridge,original,unreviewed_inventory)
         for name in owned:
             for bad in ({'sha256':'0'*64,'mode':'100644'},
                 {'sha256':inventory[name]['sha256'],'mode':'100755'},original[name]):
@@ -5625,7 +5708,7 @@ class RestoredQualifiedTests(unittest.TestCase):
             'scripts/production-release/service-image-retention.test.py'})
         self.assertEqual(set(scope._WORKSPACE_RELEASE_RULES_POLICY['files']),{'AGENTS.md','docs/CENTRAL_RELEASE_20261002.md'})
         self.assertEqual(scope._WORKSPACE_CAPACITY_CONTROL_POLICY['files']['scripts/production-release/maintain-image-cache.test.py']['after']['sha256'],
-            hashlib.sha256((ROOT/'scripts/production-release/maintain-image-cache.test.py').read_bytes()).hexdigest())
+            hashlib.sha256(reviewed_capacity_sources()['scripts/production-release/maintain-image-cache.test.py']).hexdigest())
         for policy in (scope._WORKSPACE_CAPACITY_CONTROL_POLICY,scope._WORKSPACE_RELEASE_RULES_POLICY):
             for pair in policy['files'].values():
                 for value in pair.values():
@@ -5703,7 +5786,7 @@ class RestoredColdCacheTests(unittest.TestCase):
     """Offline cache acquisition with synthetic files and command responses only."""
     def test_download_and_retention_tables_match_the_frozen_actual_gap_tuple(self):
         import ast
-        source=(ROOT/'scripts/production-release/maintain-image-cache.py').read_text()
+        source=reviewed_capacity_sources()['scripts/production-release/maintain-image-cache.py'].decode()
         retention=next(ast.literal_eval(node.value) for node in ast.parse(source).body
             if isinstance(node,ast.Assign) and any(isinstance(target,ast.Name)
                 and target.id=='HISTORICAL_ONLINE_COLD_DEPENDENCIES' for target in node.targets))
@@ -6577,7 +6660,11 @@ class ReviewedApplicationMappingTests(unittest.TestCase):
         cls.policy_raw=(ROOT/cls.policy_name).read_bytes()
         cls.policy=json.loads(cls.policy_raw)
         cls.candidate_scope=(ROOT/'scripts/production-release/online-recharge-scope.py').read_bytes()
-        cls.template_commit=subprocess.check_output(['git','rev-parse','HEAD'],cwd=ROOT).decode().strip()
+        cls.template_commit=REVIEWED_APPLICATION_TEMPLATE_COMMIT
+        template_tree=subprocess.check_output(['git','rev-parse',cls.template_commit+'^{tree}'],cwd=ROOT).decode().strip()
+        if template_tree != REVIEWED_APPLICATION_TEMPLATE_TREE:
+            raise AssertionError('reviewed ONLINE application fixture tree changed')
+        cls.template_test=subprocess.check_output(['git','show',cls.template_commit+':scripts/production-release/online-recharge-scope.test.py'],cwd=ROOT)
         cls.template_prefix='id-business-system-'+cls.template_commit+'/'
         raw=subprocess.check_output(['git','archive','--format=tar.gz','--prefix='+cls.template_prefix,cls.template_commit],cwd=ROOT)
         with tarfile.open(fileobj=io.BytesIO(raw),mode='r:gz') as archive:
@@ -6593,7 +6680,7 @@ class ReviewedApplicationMappingTests(unittest.TestCase):
     @classmethod
     def build(cls,replacements=None,deletions=(),modes=None):
         own={'scripts/production-release/online-recharge-scope.py':cls.candidate_scope,
-            'scripts/production-release/online-recharge-scope.test.py':(ROOT/'scripts/production-release/online-recharge-scope.test.py').read_bytes(),
+            'scripts/production-release/online-recharge-scope.test.py':cls.template_test,
             cls.policy_name:cls.policy_raw}
         own.update(replacements or {})
         modes=modes or {};deleted=set(deletions)
@@ -6939,6 +7026,21 @@ class ReviewedApplicationMappingTests(unittest.TestCase):
         d,p,raw=self.build(deletions=(name,));self.inventory_for((d,p,raw))
         with self.carrier(),self.assertRaisesRegex(RuntimeError,'APPLICATION_SOURCE_CHANGED'):
             scope._pending_workspace_profile(d,self.bridge,p)
+
+    def test_later_mailbox_batch_and_ci_source_do_not_enter_first_online_mapping(self):
+        paths=('apps/api/src/id-business-v2/auto-registration/worker/apple_closed_loop.py',
+            'apps/api/src/id-business-v2/auto-registration/worker/apple_mailboxes.py',
+            'scripts/ci-recharge-check.mjs')
+        for name in paths:
+            with self.subTest(name=name):
+                current=(ROOT/name).read_bytes() if (ROOT/name).is_file() else b'unreviewed-independent-batch\n'
+                if name in self.after:
+                    original=subprocess.check_output(['git','show',self.template_commit+':'+name],cwd=ROOT)
+                    if current == original:
+                        current += b'\nunreviewed-independent-batch\n'
+                d,p,raw=self.build({name:current})
+                with self.carrier(),self.assertRaisesRegex(RuntimeError,'APPLICATION_SOURCE_CHANGED'):
+                    scope._pending_workspace_profile(d,self.bridge,p)
 
     def test_historical_ci_mapping_is_exact_and_rejects_current_or_partial_pins(self):
         historical=scope._RESTORED_B_WITNESS['policy']['failedProducer']

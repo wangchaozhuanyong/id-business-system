@@ -22,6 +22,7 @@ on:
           - verify_api_workspace
           - release_api_workspace
           - release_api_admin
+          - release_admin
           - verify_api_admin_migration
           - release_api_admin_migration
           - verify_recharge_release
@@ -487,7 +488,7 @@ jobs:
           aws ecr get-login-password --region "$AWS_REGION" | docker login --username AWS --password-stdin "$registry" >/dev/null
 
       - name: Build images on the GitHub runner
-        if: inputs.operation == 'release_online_recharge' || inputs.operation == 'release_api_workspace' || inputs.operation == 'release_api_admin' || inputs.operation == 'release_api_admin_migration' || inputs.operation == 'release_api_registration' || (inputs.operation == 'release' && inputs.reuse_image_run == '') || inputs.operation == 'prepare_post_cleanup_release' || inputs.operation == 'prepare_order_archive_release'
+        if: inputs.operation == 'release_admin' || inputs.operation == 'release_online_recharge' || inputs.operation == 'release_api_workspace' || inputs.operation == 'release_api_admin' || inputs.operation == 'release_api_admin_migration' || inputs.operation == 'release_api_registration' || (inputs.operation == 'release' && inputs.reuse_image_run == '') || inputs.operation == 'prepare_post_cleanup_release' || inputs.operation == 'prepare_order_archive_release'
         run: bash scripts/production-release/build-images.sh
 
       - name: Verify reusable build and unchanged application source
@@ -552,7 +553,7 @@ jobs:
           aws ecr describe-repositories --repository-names id-business-v2-release --query 'repositories[0].repositoryUri' --output text | grep -Fx "$RELEASE_REPOSITORY"
 
       - name: Push immutable images
-        if: inputs.operation == 'release_online_recharge' || inputs.operation == 'release_api_workspace' || inputs.operation == 'release_api_admin' || inputs.operation == 'release_api_admin_migration' || inputs.operation == 'release_api_registration' || (inputs.operation == 'release' && inputs.reuse_image_run == '') || inputs.operation == 'prepare_post_cleanup_release' || inputs.operation == 'prepare_order_archive_release'
+        if: inputs.operation == 'release_admin' || inputs.operation == 'release_online_recharge' || inputs.operation == 'release_api_workspace' || inputs.operation == 'release_api_admin' || inputs.operation == 'release_api_admin_migration' || inputs.operation == 'release_api_registration' || (inputs.operation == 'release' && inputs.reuse_image_run == '') || inputs.operation == 'prepare_post_cleanup_release' || inputs.operation == 'prepare_order_archive_release'
         run: bash scripts/production-release/push-images.sh
 
       - name: Save fixed registration Worker build projection
@@ -2383,7 +2384,7 @@ jobs:
           PY
 
       - name: Deploy through the production instance
-        if: inputs.operation == 'release_online_recharge' || inputs.operation == 'release_api_workspace' || inputs.operation == 'release' || inputs.operation == 'release_api_admin' || inputs.operation == 'release_api_admin_migration' || inputs.operation == 'release_api_registration'
+        if: inputs.operation == 'release_admin' || inputs.operation == 'release_online_recharge' || inputs.operation == 'release_api_workspace' || inputs.operation == 'release' || inputs.operation == 'release_api_admin' || inputs.operation == 'release_api_admin_migration' || inputs.operation == 'release_api_registration'
         run: bash scripts/production-release/dispatch.sh
 
       - name: Independently read back API Admin running images and preserved services
