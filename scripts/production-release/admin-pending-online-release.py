@@ -241,13 +241,31 @@ def volume_state(d, directory, manifest):
     return fingerprint({'volume': rows[0], 'apiContainerId': api_id, 'mount': mounts[0]})
 
 
-def bind_baseline_images(manifest, states):
+def bind_baseline_images(d, directory, manifest, states):
     images = manifest.get('images')
     need(isinstance(images, dict) and {'api', 'admin'} <= set(images), 'BASELINE_IMAGES_UNAVAILABLE')
     for name, image in images.items():
         if name in states:
-            need(isinstance(image, dict) and states[name]['image'] == image.get('digest')
-                 and states[name]['reference'] == image.get('reference'), 'BASELINE_IMAGE_CHANGED')
+            need(isinstance(image, dict) and states[name]['image'] == image.get('digest'),
+                 'BASELINE_IMAGE_CHANGED')
+            if name == 'caddy' and set(image) == {'digest'}:
+                # The sealed B manifest inherits the original digest-only edge row.
+                # Bind its live reference through the unchanged Compose declaration
+                # and local immutable image metadata instead of inventing a field.
+                config = json.loads(d.compose(directory, 'config', '--format', 'json'))
+                reference = config.get('services', {}).get('caddy', {}).get('image')
+                need(isinstance(reference, str) and reference == states[name]['reference']
+                     and re.fullmatch(r'caddy:2\.10-alpine@sha256:[a-f0-9]{64}', reference),
+                     'BASELINE_IMAGE_CHANGED')
+                metadata = json.loads(d.run('docker', 'image', 'inspect', reference))
+                repository_digest = 'caddy@' + reference.split('@', 1)[1]
+                need(isinstance(metadata, list) and len(metadata) == 1
+                     and metadata[0].get('Id') == image['digest']
+                     and any(value in (metadata[0].get('RepoDigests') or []) for value in (
+                         repository_digest, 'docker.io/library/' + repository_digest)),
+                     'BASELINE_IMAGE_CHANGED')
+            else:
+                need(states[name]['reference'] == image.get('reference'), 'BASELINE_IMAGE_CHANGED')
 
 
 def preserve(d, previous, target, manifest, manifest_sha, before, environment, runtime, volume):
@@ -300,7 +318,7 @@ def publish(d, args, proof):
              and manifest['apiWorkspacePublication']['migrationPerformed'] is False, 'BASELINE_CHANGED')
         environment = private_bytes(previous / '.env.aws.production')
         before = snapshot(d, previous)
-        bind_baseline_images(manifest, before)
+        bind_baseline_images(d, previous, manifest, before)
         volume = volume_state(d, previous, manifest)
         for name, (raw, _mode) in runtime.items():
             need((previous / name).read_bytes() == raw, 'RUNTIME_CONFIGURATION_CHANGED')

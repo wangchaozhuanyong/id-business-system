@@ -121,6 +121,8 @@ class PublicationTests(unittest.TestCase):
         def compose(directory,*parts,**kw):
             actions.append(('compose',parts))
             if parts==('ps','-q','api'):return states['api']['containerId']
+            if parts==('config','--format','json'):
+                return json.dumps({'services':{'caddy':{'image':original['caddy']['reference']}}})
             if parts[:2]==('up','-d'):
                 self.assertEqual(parts[-1],'admin');states['admin'].update(image=image['imageId'],reference=image['reference'],containerId='3'*64)
                 if fault=='preserved_env':states['api']['environmentSha256']='4'*64
@@ -136,6 +138,8 @@ class PublicationTests(unittest.TestCase):
             if parts[:3]==('aws','ecr','get-login-password'):return 'synthetic-only'
             if parts[:2]==('docker','pull'):return ''
             if parts[:3]==('docker','image','inspect'):
+                if parts[3]==original['caddy']['reference']:
+                    return json.dumps([{'Id':original['caddy']['image'],'RepoDigests':['caddy@'+original['caddy']['reference'].split('@',1)[1]]}])
                 return json.dumps([{'Id':image['imageId'],'Architecture':'amd64','Config':{'Labels':{'org.opencontainers.image.revision':args.commit,'id-business-v2.source-tree':args.source_tree,'id-business-v2.admin-pending-projection-sha256':expected['projectionSha256']}}}])
             raise AssertionError(parts)
         def audit(directory,receipt,**kw):
@@ -222,6 +226,50 @@ class PublicationTests(unittest.TestCase):
                 if fault=='proof':f.proof['commit']='f'*40
                 with self.assertRaises(RuntimeError):self.execute(f)
                 self.assertEqual(f.rollback,[])
+                self.assertFalse(any(row[0]=='compose'and row[1][:2]==('up','-d')for row in f.actions))
+
+    def test_historical_digest_only_caddy_row_publishes_and_reads_back(self):
+        with tempfile.TemporaryDirectory(dir=RUNTIME)as root:
+            f=self.fixture(root)
+            reference='caddy:2.10-alpine@sha256:'+'4'*64
+            f.states['caddy']['reference']=f.original['caddy']['reference']=reference
+            f.manifest['images']['caddy']={'digest':f.original['caddy']['image']}
+            (f.previous/'release-manifest.json').write_text(json.dumps(f.manifest))
+            result=self.execute(f)
+            self.assertEqual(result['status'],'ADMIN_ONLY_PUBLISHED')
+            current=(f.base/'current').resolve()
+            self.assertEqual(a.read_json(current/'release-manifest.json')['images']['caddy'],f.manifest['images']['caddy'])
+            with patch.object(a,'BASELINE_MANIFEST_SHA256',a.digest((f.previous/'release-manifest.json').read_bytes())):
+                self.assertEqual(a.readback(f.controller,f.args.commit)['status'],'ADMIN_ONLY_READBACK_VERIFIED')
+
+    def test_digest_only_compatibility_rejects_managed_services_and_caddy_drift_before_effects(self):
+        for fault in ('managed','digest','reference','compose','metadata','repo_digest','extra'):
+            with self.subTest(fault=fault),tempfile.TemporaryDirectory(dir=RUNTIME)as root:
+                f=self.fixture(root)
+                reference='caddy:2.10-alpine@sha256:'+'4'*64
+                f.states['caddy']['reference']=f.original['caddy']['reference']=reference
+                f.manifest['images']['caddy']={'digest':f.original['caddy']['image']}
+                if fault=='managed':del f.manifest['images']['api']['reference']
+                if fault=='digest':f.states['caddy']['image']='sha256:'+'d'*64
+                if fault=='reference':f.states['caddy']['reference']='caddy:changed'
+                if fault=='extra':f.manifest['images']['caddy']['unexpected']=True
+                (f.previous/'release-manifest.json').write_text(json.dumps(f.manifest))
+                compose=f.controller.compose
+                def config_changed(directory,*parts,**kw):
+                    if parts==('config','--format','json')and fault=='compose':
+                        return json.dumps({'services':{'caddy':{'image':'caddy:changed'}}})
+                    return compose(directory,*parts,**kw)
+                f.controller.compose=config_changed
+                run=f.controller.run
+                def changed(*parts,**kw):
+                    if parts==('docker','image','inspect',reference)and fault in ('metadata','repo_digest'):
+                        return json.dumps([{'Id':'sha256:'+'d'*64 if fault=='metadata'else f.original['caddy']['image'],
+                            'RepoDigests':[]if fault=='repo_digest'else['caddy@'+reference.split('@',1)[1]]}])
+                    return run(*parts,**kw)
+                f.controller.run=changed
+                with self.assertRaisesRegex(RuntimeError,'BASELINE_IMAGE_CHANGED'):self.execute(f)
+                self.assertEqual(f.rollback,[])
+                self.assertEqual([p for p in (f.base/'releases').iterdir()],[f.previous])
                 self.assertFalse(any(row[0]=='compose'and row[1][:2]==('up','-d')for row in f.actions))
 
 
