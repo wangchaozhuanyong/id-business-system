@@ -293,6 +293,26 @@ class AppleMailboxTests(unittest.TestCase):
             "revision": self.read()["revision"], "operatorId": "offline-admin"})
         self.assertEqual(response.json()["record"]["registrationStatus"], "registered")
 
+    def test_unknown_result_requires_manual_recovery_before_mark_and_keeps_cas_and_live_guard(self):
+        context, _, reserved = self.reservation()
+        self.store.update_task(context["taskUuid"], sideEffectPossible=True)
+        self.store.finish(self.email, context["taskUuid"], False)
+        unknown = self.read()
+        self.assertEqual(unknown["taskStatus"], "awaiting_review")
+        self.assertEqual(self.marked(status="registered").status_code, 409)
+        request = {"aliasId": self.alias, "email": self.email, "revision": unknown["revision"], "operatorId": "offline-admin"}
+        self.assertEqual(self.post("recover", request).status_code, 409)
+        self.integration.jobs.pop(context["taskUuid"])
+        self.assertEqual(self.post("recover", {**request, "revision": reserved["revision"]}).status_code, 409)
+        response = self.post("recover", request)
+        self.assertEqual(response.status_code, 200)
+        released = response.json()["record"]
+        self.assertIsNone(released["activeTaskUuid"])
+        self.assertEqual(released["registrationStatus"], "unknown")
+        self.assertEqual(released["lastTaskUuid"], context["taskUuid"])
+        self.assertEqual(self.marked(status="registered", address="203.0.113.9").status_code, 200)
+        self.assertEqual(self.read()["registrationIp"], "203.0.113.9")
+
     def test_recovery_rejects_live_async_job_or_actual_thread(self):
         context, _, _ = self.reservation()
         request = {"aliasId": self.alias, "email": self.email,

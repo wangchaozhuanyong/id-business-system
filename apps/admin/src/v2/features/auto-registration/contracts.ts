@@ -124,6 +124,7 @@ export interface AppleMailboxRow {
   updatedAt: string | null;
   revision: number;
   taskUuid: string | null;
+  activeTaskUuid?: string | null;
   taskStatus: AppleMailboxTaskStatus | null;
   canRegister: boolean;
   blockedReason: string | null;

@@ -13,7 +13,9 @@ import {
   appleMailboxCanSync,
   appleMailboxDiagnostic,
   appleMailboxSelectionLabel,
-  appleMailboxCanSaveLocal
+  appleMailboxCanSaveLocal,
+  appleMailboxBusy,
+  appleMailboxCanRecover
 } from './apple-mailbox-presentation';
 
 const row: AppleMailboxRow = {
@@ -104,11 +106,29 @@ describe('苹果隐藏邮箱注册边界与中文展示', () => {
       appleMailboxDiagnostic({ stage: 'identity', reason: 'existing_account_suspected' })
     ).toContain('等待身份核验');
   });
-  it('结果待核对提示查看任务，不指向仅中断任务可用的解除占用操作', () => {
-    expect(appleMailboxRegisterReason({ ...row, taskStatus: 'awaiting_review' })).toBe(
-      '请先查看任务并核对注册、账号保存与同步结果'
+  it('结果待核对提示人工核对后解除；旧接口保持保护，释放后的历史状态不再阻止标记', () => {
+    expect(appleMailboxRegisterReason({ ...row, taskStatus: 'awaiting_review' })).toContain(
+      '人工核对后解除占用'
     );
     expect(appleMailboxRegisterReason({ ...row, taskStatus: 'interrupted' })).toContain('解除占用');
+    for (const taskStatus of ['interrupted', 'awaiting_review'] as const) {
+      const reviewing = { ...row, taskUuid: 'task-1', taskStatus };
+      expect(appleMailboxBusy(reviewing)).toBe(true);
+      expect(appleMailboxCanRecover(reviewing)).toBe(true);
+      expect(appleMailboxBusy({ ...reviewing, activeTaskUuid: null })).toBe(false);
+      expect(appleMailboxCanRecover({ ...reviewing, activeTaskUuid: null })).toBe(false);
+      expect(appleMailboxRegisterReason({ ...reviewing, activeTaskUuid: null })).toBe('');
+    }
+    expect(
+      appleMailboxCanRecover({
+        ...row,
+        taskUuid: 'task-1',
+        activeTaskUuid: 'task-1',
+        taskStatus: 'running'
+      })
+    ).toBe(false);
+    expect(appleMailboxBusy({ ...row, activeTaskUuid: 'task-1' })).toBe(true);
+    expect(appleMailboxRegisterReason({ ...row, activeTaskUuid: 'task-1' })).not.toBe('');
   });
   it('自有页签不加入上游 iframe 页面白名单', () => {
     expect(appleMailboxPage.title).toBe('苹果隐藏邮箱');

@@ -12,7 +12,9 @@ import { autoRegistrationApi } from './api';
 import {
   appleMailboxMarkError,
   appleMailboxRegisterReason,
-  appleMailboxTaskActive
+  appleMailboxTaskActive,
+  appleMailboxBusy,
+  appleMailboxCanRecover
 } from './apple-mailbox-presentation';
 import type {
   AppleMailboxListQuery,
@@ -21,6 +23,22 @@ import type {
   AppleMailboxRow,
   AppleMailboxTask
 } from './contracts';
+
+type AppleMailboxRecoveryTarget = Pick<
+  AppleMailboxRow,
+  'aliasId' | 'email' | 'revision' | 'taskUuid' | 'activeTaskUuid' | 'taskStatus'
+>;
+
+function recoveryTarget(row: AppleMailboxRow): AppleMailboxRecoveryTarget {
+  return {
+    aliasId: row.aliasId,
+    email: row.email,
+    revision: row.revision,
+    taskUuid: row.taskUuid,
+    activeTaskUuid: row.activeTaskUuid,
+    taskStatus: row.taskStatus
+  };
+}
 
 export function useAppleMailboxes() {
   const auth = useAuthStore();
@@ -98,6 +116,21 @@ export function useAppleMailboxes() {
   const feedback = ref('');
   const busy = ref(false);
   const markOpen = ref(false);
+  const recoverOpen = ref(false);
+  const recoverDraft = useV2FormDraft<{ target: AppleMailboxRecoveryTarget | null }>(
+    'auto-registration:apple:recover',
+    () => ({ target: null })
+  );
+  const recoverReadError = ref('');
+  const recoverDisabledReason = computed(() => {
+    if (!canWrite.value) return '当前列表或登录状态尚未确认，请先刷新';
+    if (query.error.value) return '当前状态读取失败，请先刷新';
+    if (recoverReadError.value) return recoverReadError.value;
+    const target = recoverDraft.form.target;
+    return !target || !appleMailboxCanRecover(target)
+      ? '原占用已变化，请关闭后查看最新邮箱状态'
+      : '';
+  });
   const markDraft = useV2FormDraft<AppleMailboxMarkInput>('auto-registration:apple:mark', () => ({
     items: [],
     registrationStatus: 'unknown',
@@ -126,17 +159,8 @@ export function useAppleMailboxes() {
   }
   function openMark(rows: AppleMailboxRow[]) {
     if (!canWrite.value || !rows.length || busy.value) return;
-    if (
-      rows.some(
-        (row) =>
-          appleMailboxTaskActive(row.taskStatus) ||
-          row.taskStatus === 'interrupted' ||
-          row.taskStatus === 'awaiting_review'
-      )
-    ) {
-      actionError.value = rows.some((row) => row.taskStatus === 'awaiting_review')
-        ? '所选邮箱包含结果待核对的任务，请先查看任务并核对注册、账号保存与同步结果'
-        : '所选邮箱包含执行中或中断待核对的任务，请先核对任务并解除占用';
+    if (rows.some(appleMailboxBusy)) {
+      actionError.value = '所选邮箱包含被占用的任务，请先查看任务；待核对任务需人工核对后解除占用';
       return;
     }
     const first = rows[0]!;
@@ -222,8 +246,49 @@ export function useAppleMailboxes() {
       busy.value = false;
     }
   }
-  async function recover(row: AppleMailboxRow) {
-    if (!canWrite.value || busy.value || row.taskStatus !== 'interrupted') return;
+  function openRecovery(row: AppleMailboxRow) {
+    if (!canWrite.value || busy.value || !appleMailboxCanRecover(row)) return;
+    const restored = recoverDraft.open(row.aliasId, { target: recoveryTarget(row) });
+    // 确认框没有输入字段，仍登记首次快照，让关闭重开保留原始 CAS 依据。
+    if (!restored) recoverDraft.form.target = recoveryTarget(row);
+    recoverOpen.value = true;
+    recoverReadError.value = '';
+    actionError.value = '';
+  }
+  async function refreshRecovery() {
+    const target = recoverDraft.form.target;
+    if (!canAccess.value || busy.value || !target) return;
+    busy.value = true;
+    actionError.value = '';
+    try {
+      await refreshMailboxes();
+      if (!canAccess.value || recoverDraft.form.target?.aliasId !== target.aliasId) return;
+      if (query.error.value) {
+        recoverReadError.value = '刷新状态失败，请重试刷新后再确认';
+        return;
+      }
+      const fresh = items.value.find((item) => item.aliasId === target.aliasId);
+      if (fresh) {
+        recoverDraft.form.target = recoveryTarget(fresh);
+        recoverReadError.value = '';
+      } else recoverReadError.value = '当前列表已找不到该邮箱，请关闭后重新选择';
+    } catch (error) {
+      if (canAccess.value) recoverReadError.value = getApiErrorMessage(error);
+    } finally {
+      busy.value = false;
+    }
+  }
+  async function recover() {
+    const row = recoverDraft.form.target;
+    if (
+      recoverDisabledReason.value ||
+      busy.value ||
+      !recoverOpen.value ||
+      !row ||
+      !appleMailboxCanRecover(row)
+    )
+      return;
+    const finishSave = recoverDraft.beginSave();
     busy.value = true;
     actionError.value = '';
     try {
@@ -232,7 +297,8 @@ export function useAppleMailboxes() {
         revision: row.revision
       });
       if (!canAccess.value) return;
-      feedback.value = '中断任务占用已解除，请核对邮箱注册状态';
+      if (finishSave()) recoverOpen.value = false;
+      feedback.value = '任务占用已解除，原注册事实已保留；请用“标记”登记核实的注册状态';
       await refreshMailboxes();
     } catch (error) {
       if (canAccess.value) actionError.value = getApiErrorMessage(error);
@@ -401,6 +467,9 @@ export function useAppleMailboxes() {
     actionError,
     feedback,
     markOpen,
+    recoverOpen,
+    recoverDraft,
+    recoverDisabledReason,
     markDraft,
     markTitle,
     registrationIpEditable,
@@ -418,6 +487,8 @@ export function useAppleMailboxes() {
     syncTask,
     saveLocalAccount,
     recover,
+    openRecovery,
+    refreshRecovery,
     cancelTask,
     changePage,
     changePageSize,

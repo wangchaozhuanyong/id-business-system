@@ -62,7 +62,9 @@
     </V2PageContext>
 
     <p v-if="page.feedback" role="status">{{ page.feedback }}</p>
-    <p v-if="page.actionError && !page.markOpen" role="alert">{{ page.actionError }}</p>
+    <p v-if="page.actionError && !page.markOpen && !page.recoverOpen" role="alert">
+      {{ page.actionError }}
+    </p>
     <V2AsyncRegion
       skeleton="table"
       :phase="page.query.phase"
@@ -191,8 +193,8 @@
                       >补存本地账号</el-dropdown-item
                     ><el-dropdown-item
                       command="recover"
-                      :disabled="!page.canWrite || page.busy || row.taskStatus !== 'interrupted'"
-                      >解除中断占用</el-dropdown-item
+                      :disabled="!page.canWrite || page.busy || !appleMailboxCanRecover(row)"
+                      >核对后解除占用</el-dropdown-item
                     ></el-dropdown-menu
                   ></template
                 ></el-dropdown
@@ -326,8 +328,8 @@
                       >补存本地账号</el-dropdown-item
                     ><el-dropdown-item
                       command="recover"
-                      :disabled="!page.canWrite || page.busy || row.taskStatus !== 'interrupted'"
-                      >解除中断占用</el-dropdown-item
+                      :disabled="!page.canWrite || page.busy || !appleMailboxCanRecover(row)"
+                      >核对后解除占用</el-dropdown-item
                     ></el-dropdown-menu
                   ></template
                 ></el-dropdown
@@ -411,6 +413,9 @@
         <p v-else-if="page.taskQuery.data?.status === 'interrupted'">
           任务已中断，请先核对账号是否注册，再解除占用并修正标记。
         </p>
+        <p v-else-if="page.taskQuery.data?.status === 'awaiting_review'">
+          注册结果尚未确认。请先核对官网及已有账号记录，再从邮箱的“更多操作”选择“核对后解除占用”；结果仍不明时保留占用。
+        </p>
         <p v-if="page.taskQuery.data?.record.syncStatus">
           {{ appleMailboxSyncLabel(page.taskQuery.data.record.syncStatus) }}
         </p>
@@ -432,6 +437,27 @@
         }}</pre>
       </section>
     </V2AsyncRegion>
+
+    <V2ConfirmDialog
+      v-model="page.recoverOpen"
+      title="人工核对后解除占用"
+      message=""
+      confirm-text="已核对，解除占用"
+      :confirm-loading="page.busy"
+      :confirm-disabled-reason="page.recoverDisabledReason"
+      @confirm="page.recover"
+    >
+      <p>邮箱：{{ page.recoverDraft.form.target?.email }}</p>
+      <p>请先核对官网及已有账号记录，确认原任务已经结束。结果仍不明时请取消，继续保留占用。</p>
+      <p>
+        解除后保留已有注册事实和账号资料；没有已注册事实的邮箱仍为待确认，不会自动重新注册。随后可用“标记”登记已核实的注册状态和历史
+        IP。
+      </p>
+      <p v-if="page.actionError" role="alert">{{ page.actionError }}</p>
+      <AppButton variant="soft" :disabled="page.busy" @click="page.refreshRecovery"
+        >刷新核对状态</AppButton
+      >
+    </V2ConfirmDialog>
 
     <V2FormDrawer
       v-model="page.markOpen"
@@ -502,6 +528,7 @@
 import { reactive, ref } from 'vue';
 import AppButton from '@/components/ui/AppButton.vue';
 import V2AsyncRegion from '@/v2/components/V2AsyncRegion.vue';
+import V2ConfirmDialog from '@/v2/components/V2ConfirmDialog.vue';
 import V2FormDrawer from '@/v2/components/V2FormDrawer.vue';
 import V2PageContext from '@/v2/components/V2PageContext.vue';
 import V2Table from '@/v2/components/V2Table.vue';
@@ -520,6 +547,8 @@ import {
   appleMailboxIpSourceLabel,
   appleMailboxRegisterReason,
   appleMailboxTaskActive,
+  appleMailboxBusy,
+  appleMailboxCanRecover,
   appleMailboxSyncLabel,
   appleMailboxCanSync,
   appleMailboxCanSaveLocal,
@@ -547,15 +576,11 @@ function showDate(value: string | null) {
   return value ? formatV2DateTime(value) : '未记录';
 }
 function mailboxBusy(row: AppleMailboxRow) {
-  return (
-    appleMailboxTaskActive(row.taskStatus) ||
-    row.taskStatus === 'interrupted' ||
-    row.taskStatus === 'awaiting_review'
-  );
+  return appleMailboxBusy(row);
 }
 function command(row: AppleMailboxRow, value: string) {
   if (value === 'task') page.viewTask(row);
-  if (value === 'recover') void page.recover(row);
+  if (value === 'recover') page.openRecovery(row);
   if (value === 'sync') void page.syncTask(row);
   if (value === 'local-save') void page.saveLocalAccount(row);
 }

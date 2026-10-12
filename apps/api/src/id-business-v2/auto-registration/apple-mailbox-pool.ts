@@ -50,6 +50,7 @@ export function appleMailboxRow(
     updatedAt: record?.markedAt ?? alias.updatedAt,
     revision: record?.revision ?? 0,
     taskUuid: record?.activeTaskUuid ?? record?.lastTaskUuid ?? null,
+    activeTaskUuid: record?.activeTaskUuid ?? null,
     taskStatus: record?.taskStatus ?? null,
     canRegister: blockedReason === null,
     blockedReason,

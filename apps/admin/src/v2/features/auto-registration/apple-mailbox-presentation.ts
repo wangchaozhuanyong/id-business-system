@@ -178,10 +178,34 @@ export function appleMailboxTaskActive(status: AppleMailboxTaskStatus | null) {
   return status === 'pending' || status === 'running';
 }
 
+export function appleMailboxNeedsReview(
+  row: Pick<AppleMailboxRow, 'activeTaskUuid' | 'taskStatus'>
+) {
+  // 旧接口未返回占用编号时仍保留保护；已解除占用的历史状态不再阻止人工标记。
+  return (
+    row.activeTaskUuid !== null &&
+    (row.taskStatus === 'interrupted' || row.taskStatus === 'awaiting_review')
+  );
+}
+
+export function appleMailboxCanRecover(
+  row: Pick<AppleMailboxRow, 'taskUuid' | 'activeTaskUuid' | 'taskStatus'>
+) {
+  return Boolean(row.taskUuid) && appleMailboxNeedsReview(row);
+}
+
+export function appleMailboxBusy(row: AppleMailboxRow) {
+  return (
+    appleMailboxTaskActive(row.taskStatus) ||
+    Boolean(row.activeTaskUuid) ||
+    appleMailboxNeedsReview(row)
+  );
+}
+
 export function appleMailboxRegisterReason(row: AppleMailboxRow) {
   if (appleMailboxTaskActive(row.taskStatus)) return '该邮箱已有执行中的任务';
-  if (row.taskStatus === 'interrupted') return '请先核对中断任务并解除占用';
-  if (row.taskStatus === 'awaiting_review') return '请先查看任务并核对注册、账号保存与同步结果';
+  if (appleMailboxNeedsReview(row)) return '请先查看任务，人工核对后解除占用并标记注册状态';
+  if (row.activeTaskUuid) return '邮箱仍被原任务占用，请先核对任务状态';
   if (row.registrationStatus === 'registered') return '该邮箱已注册，不能再次注册';
   if (row.registrationStatus !== 'unregistered') return '请先确认并标记为未注册';
   if (row.mailboxStatus !== 'ACTIVE') return '隐藏邮箱已停用';

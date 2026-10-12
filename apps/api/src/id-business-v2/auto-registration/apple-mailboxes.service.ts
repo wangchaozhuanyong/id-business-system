@@ -519,7 +519,7 @@ export class AppleMailboxesService implements OnModuleDestroy {
       await this.mailboxes.registrationMailboxSummaries(operator),
       this.id(input.aliasId)
     );
-    await this.log(operator, '确认中断任务并解除占用', alias.id);
+    await this.log(operator, '确认待核对任务并请求解除占用', alias.id);
     const result = await this.worker.appleMailboxRequest<{ record: AppleMailboxRecord }>(
       `${privateBase}/recover`,
       'POST',

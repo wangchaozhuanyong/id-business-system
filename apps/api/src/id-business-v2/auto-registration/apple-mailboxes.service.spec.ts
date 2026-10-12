@@ -519,6 +519,29 @@ describe('苹果隐藏邮箱：权限、登记与私有取码桥', () => {
     expect(result.items[0]?.aliasId).toBe(alias.id);
   });
 
+  it.each([taskId, null])(
+    '公开列表区分实际占用 %s 和已解除后的历史任务',
+    async (activeTaskUuid) => {
+      records = [
+        {
+          ...baseRecord(),
+          registrationStatus: 'unknown',
+          activeTaskUuid,
+          lastTaskUuid: taskId,
+          taskStatus: 'interrupted'
+        }
+      ];
+      const result = await service.list({}, actor);
+      expect(result.items[0]).toMatchObject({
+        activeTaskUuid,
+        taskUuid: taskId,
+        taskStatus: 'interrupted',
+        registrationStatus: 'unknown',
+        canRegister: false
+      });
+    }
+  );
+
   it('员工不能读取IP登记或变更邮箱标记', async () => {
     const employee = { ...actor, roles: ['employee'] };
     await expect(service.list({}, employee)).rejects.toThrow('管理员');
