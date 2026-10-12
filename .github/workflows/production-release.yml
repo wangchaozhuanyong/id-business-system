@@ -2531,7 +2531,7 @@ jobs:
           PY_ADMIN_READBACK
 
       - name: Save only independent Admin readback safe evidence
-        if: always() && inputs.operation == 'release_admin' && steps.admin_readback.outcome != 'skipped'
+        if: always() && inputs.operation == 'release_admin'
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: admin-readback-evidence-${{ github.run_id }}-${{ github.run_attempt }}

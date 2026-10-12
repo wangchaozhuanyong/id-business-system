@@ -589,7 +589,7 @@ test('independent Admin readback runs after successful deployment and saves only
   for (const outcome of ['success', 'failure', 'cancelled', 'skipped'])
     assert.equal(
       enabled({ operation: 'release_admin' }, () => true, { admin_readback: { outcome } }),
-      outcome !== 'skipped'
+      true
     );
   assert.equal(
     enabled({ operation: 'release_online_recharge' }, () => true, {
