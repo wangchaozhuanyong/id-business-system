@@ -4270,8 +4270,8 @@ _AFTER_BIT_BANK_POLICY_FILES = {
         'c3e6eef0cf8bccd90317dd946be6348f7ea742f0ba991f30cbc7043463d7a4a7'),
 }
 _AFTER_BIT_RELEASE_CI_FILES = {
-    'scripts/ci-recharge-scope.mjs': ('3fe9c33ea883b7e2ad15305d1c7fe26873ddf648645b7a05acc8aecd5f858cfd', '04c8451b64ebf75755a108761a1a73430e4f31e807f7bb4f356b790417ee7ec1'),
-    'scripts/ci-recharge-scope.test.mjs': ('f7df520b417f7d681050073e5e8b9cd882effebd10a458a7afc620a39ab17550', 'b487febe298fd3934dfe7c02d3fd610e99300f17712463daa958660aa2e51934'),
+    'scripts/ci-recharge-scope.mjs': ('3fe9c33ea883b7e2ad15305d1c7fe26873ddf648645b7a05acc8aecd5f858cfd', 'c066be2f8811237e6fd82448d79c9fbd93aace6457033984c4fb1a2457eb892c'),
+    'scripts/ci-recharge-scope.test.mjs': ('f7df520b417f7d681050073e5e8b9cd882effebd10a458a7afc620a39ab17550', 'dee5bb67add0563539d5ca181a8712cd30082637cb4a941a8d55c878da897302'),
     'scripts/ci-recharge-check.mjs': ('8863a78075b234faa0b048c56277bff81f7df88ad72d6261bc5493f08d525932', '96153e6f010d7a6c9b1028ea3d95d91ad1b321f5ab04768011fddb9819790ff7'),
     'scripts/ci-recharge-check.test.mjs': ('53e1376a2e36d3f492075547d4a0ceb8e65a915cec0c572ac6952356b045ea04', '0ff6dca9335d102fcdacfd7c0a9ad2ecafc245aa086d2cbda4655f58ff1b6767'),
 }
