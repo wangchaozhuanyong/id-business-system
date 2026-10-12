@@ -4267,7 +4267,7 @@ _AFTER_BIT_BANK_POLICY_FILES = {
         'bec32298136ff61d8e69820179b8c3f51f8e5221f4e6b449aaf5f5ec8f7d4625'),
     'scripts/production-release/online-recharge-scope.test.py': (
         '4aa063af4054ff98d2bb622056556ab643ed39abb3d373facc636509ff98ad8e',
-        '935c3156e3549ebd2e362cbef1fc3f71af55c8bba57e621d3c92fc6d8272685b'),
+        '231e484639e0094d86fd08f19864f1a89e938ff73f6aa1fee6db3f10b34392ff'),
 }
 _AFTER_BIT_RELEASE_CI_FILES = {
     'scripts/ci-recharge-scope.mjs': ('3fe9c33ea883b7e2ad15305d1c7fe26873ddf648645b7a05acc8aecd5f858cfd', '04c8451b64ebf75755a108761a1a73430e4f31e807f7bb4f356b790417ee7ec1'),
@@ -5835,7 +5835,16 @@ def _restored_workspace_cold_cache(d, directory, expected):
         requested = kwargs.get('timeout', remaining)
         d.require(type(requested) in (int, float) and requested > 0, code)
         kwargs['timeout'] = min(requested, remaining)
-        value = method(*command, **kwargs)
+        try:
+            value = method(*command, **kwargs)
+        except subprocess.TimeoutExpired:
+            raise RuntimeError('ONLINE_RECHARGE_HISTORICAL_IMAGE_CACHE_TIMEOUT') from None
+        except Exception:
+            phase = ('ECR_AUTH' if command[:3] == ('aws', 'ecr', 'get-login-password') else
+                'ECR_READ' if command[:3] == ('aws', 'ecr', 'batch-get-image') else
+                'IMAGE_INSPECT' if command[:3] in (('docker', 'image', 'ls'), ('docker', 'image', 'inspect'))
+                else 'SERVICE_SNAPSHOT')
+            raise RuntimeError('ONLINE_RECHARGE_HISTORICAL_IMAGE_CACHE_' + phase + '_FAILED') from None
         d.require(time.monotonic() < deadline, 'ONLINE_RECHARGE_HISTORICAL_IMAGE_CACHE_TIMEOUT')
         return value
 
@@ -5863,7 +5872,17 @@ def _restored_workspace_cold_cache(d, directory, expected):
             return copied
 
     timed = TimedSnapshotController()
-    before = snapshot(timed, directory)
+
+    def service_snapshot():
+        try:
+            return snapshot(timed, directory)
+        except Exception as error:
+            if type(error) is RuntimeError and len(error.args) == 1 and type(error.args[0]) is str \
+                    and error.args[0].startswith('ONLINE_RECHARGE_HISTORICAL_IMAGE_CACHE_'):
+                raise
+            raise RuntimeError('ONLINE_RECHARGE_HISTORICAL_IMAGE_CACHE_SERVICE_SNAPSHOT_FAILED') from None
+
+    before = service_snapshot()
     d.require(time.monotonic() < deadline, 'ONLINE_RECHARGE_HISTORICAL_IMAGE_CACHE_TIMEOUT')
 
     def guard():
@@ -5905,16 +5924,96 @@ def _restored_workspace_cold_cache(d, directory, expected):
                 == _RESTORED_B_COLD_IMAGE_CACHE[tag][0], code)
             found[tag] = True
         d.require(set(found) == set(missing), code)
+        # Registry credentials stay in memory; never write Docker configuration
+        # or pass a token through command arguments, environment or receipts.
+        password = run('aws', 'ecr', 'get-login-password', '--region', 'ap-northeast-1').strip()
+        d.require(bool(password) and '\n' not in password and '\r' not in password,
+            'ONLINE_RECHARGE_HISTORICAL_IMAGE_CACHE_ECR_AUTH_FAILED')
+        authentication = base64.urlsafe_b64encode(json.dumps({'username': 'AWS', 'password': password,
+            'serveraddress': repository.split('/')[0]}, separators=(',', ':')).encode()).decode()
+        password = None
+
+        def pull(tag):
+            import http.client
+            import socket
+            from urllib.parse import urlencode
+            pull_deadline = min(deadline, time.monotonic() + 60)
+
+            def remaining():
+                seconds = pull_deadline - time.monotonic()
+                d.require(seconds > 0, 'ONLINE_RECHARGE_HISTORICAL_IMAGE_CACHE_TIMEOUT')
+                return seconds
+
+            class TimedSocket(socket.socket):
+                def connect(self, address):
+                    self.settimeout(remaining())
+                    result = super().connect(address)
+                    remaining()
+                    return result
+
+                def sendall(self, data, flags=0):
+                    self.settimeout(remaining())
+                    result = super().sendall(data, flags)
+                    remaining()
+                    return result
+
+                def recv_into(self, buffer, nbytes=0, flags=0):
+                    self.settimeout(remaining())
+                    result = super().recv_into(buffer, nbytes, flags)
+                    remaining()
+                    return result
+
+            class LocalDockerConnection(http.client.HTTPConnection):
+                def connect(self):
+                    self.sock = TimedSocket(socket.AF_UNIX, socket.SOCK_STREAM)
+                    self.sock.connect('/var/run/docker.sock')
+
+            connection = LocalDockerConnection('localhost', timeout=remaining())
+            response = None
+            try:
+                connection.request('POST', '/images/create?' + urlencode({'fromImage': repository, 'tag': tag}),
+                    headers={'X-Registry-Auth': authentication})
+                response = connection.getresponse()
+                remaining()
+                d.require(response.status == 200, 'ONLINE_RECHARGE_HISTORICAL_IMAGE_CACHE_IMAGE_PULL_FAILED')
+                progress = False
+                while True:
+                    remaining()
+                    line = response.readline(65537)
+                    remaining()
+                    if not line:
+                        break
+                    d.require(len(line) <= 65536, 'ONLINE_RECHARGE_HISTORICAL_IMAGE_CACHE_IMAGE_PULL_FAILED')
+                    row = closed_recovery_json(d, line)
+                    d.require(not row.get('error') and not row.get('errorDetail'),
+                        'ONLINE_RECHARGE_HISTORICAL_IMAGE_CACHE_IMAGE_PULL_FAILED')
+                    progress = True
+                d.require(progress and response.length in (None, 0)
+                    and (not response.chunked or response.chunk_left is None),
+                    'ONLINE_RECHARGE_HISTORICAL_IMAGE_CACHE_IMAGE_PULL_FAILED')
+            except Exception as error:
+                if isinstance(error, TimeoutError) or (type(error) is RuntimeError
+                        and error.args == ('ONLINE_RECHARGE_HISTORICAL_IMAGE_CACHE_TIMEOUT',)):
+                    raise RuntimeError('ONLINE_RECHARGE_HISTORICAL_IMAGE_CACHE_TIMEOUT') from None
+                raise RuntimeError('ONLINE_RECHARGE_HISTORICAL_IMAGE_CACHE_IMAGE_PULL_FAILED') from None
+            finally:
+                try:
+                    if response is not None:
+                        response.close()
+                finally:
+                    connection.close()
+
         for tag in missing:
             guard()
             d.require(shutil.disk_usage(d.BASE).free > 6 * 1024**3,
                 'ONLINE_RECHARGE_HISTORICAL_IMAGE_CACHE_DISK_TOO_LOW')
-            run('docker', 'pull', repository + ':' + tag)
+            pull(tag)
             inspect(tag, *_RESTORED_B_COLD_IMAGE_CACHE[tag])
             d.require(shutil.disk_usage(d.BASE).free > 6 * 1024**3,
                 'ONLINE_RECHARGE_HISTORICAL_IMAGE_CACHE_DISK_TOO_LOW')
+        authentication = None
     guard()
-    d.require(snapshot(timed, directory) == before, code)
+    d.require(service_snapshot() == before, code)
     d.require(time.monotonic() < deadline, 'ONLINE_RECHARGE_HISTORICAL_IMAGE_CACHE_TIMEOUT')
     d._restoredWorkspaceColdCacheReady = key
 
