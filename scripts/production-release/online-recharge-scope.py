@@ -3283,7 +3283,8 @@ def _online_after_bit_audit_binding(d, bridge, proof):
     return {'baselineOriginSha256': fingerprint(bridge), 'baselineProducer': bridge['baselineProducer'],
         'producer': producer, 'preflightBytesSha256': hashlib.sha256(raw).hexdigest(),
         'buildProofSha256': fingerprint(proof), 'sourceHelpers': {name: hashlib.sha256(
-            _declaration_source_bytes(Path(__file__).with_name(name), limit=512 * 1024)).hexdigest()
+            _declaration_source_bytes(Path(__file__).with_name(name),
+                limit=(1024 if name == 'online-recharge-scope.py' else 512) * 1024)).hexdigest()
             for name in ('api-admin-scope.py', 'online-recharge-scope.py')}}
 
 
@@ -6464,7 +6465,8 @@ def _restored_workspace_audit_binding(d, bridge, proof):
     return {'deploymentQualification':saved['deploymentQualification'],'baselineOriginSha256': fingerprint(bridge), 'baselineProducer': bridge['baselineProducer'],
         'producer': producer, 'preflightBytesSha256': hashlib.sha256(raw).hexdigest(), 'buildProofSha256': fingerprint(proof),
         'restorationSha256': fingerprint(saved['restoration']), 'sourceHelpers': {name: hashlib.sha256(
-            _declaration_source_bytes(Path(__file__).with_name(name), limit=512*1024)).hexdigest()
+            _declaration_source_bytes(Path(__file__).with_name(name),
+                limit=(1024 if name == 'online-recharge-scope.py' else 512)*1024)).hexdigest()
             for name in ('api-admin-scope.py', 'online-recharge-scope.py')}}
 
 
