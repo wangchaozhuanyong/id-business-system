@@ -155,7 +155,7 @@ class WidgetNetworkTests(unittest.IsolatedAsyncioTestCase):
         self.guard = PaymentGuard(self.target)
         self.guard.account_verified = self.guard.hcaptcha_enabled = True
 
-    async def test_widget_initial_navigation_and_requests_only_in_official_ancestry(self):
+    async def test_widget_requests_are_not_intercepted(self):
         root = Frame()
         blank = Frame('about:blank', root)
         widget = Frame('https://newassets.hcaptcha.com/captcha.html', root)
@@ -177,10 +177,10 @@ class WidgetNetworkTests(unittest.IsolatedAsyncioTestCase):
             for request in rejected:
                 route = Route(request)
                 await self.guard.route(route)
-                self.assertTrue(route.blocked)
-                self.assertFalse(route.passed)
+                self.assertFalse(route.blocked)
+                self.assertTrue(route.passed)
 
-    async def test_cancel_denies_late_first_confirm_and_bank_authentication(self):
+    async def test_cancel_stops_automatic_tracking_and_preserves_native_requests(self):
         ledger = SimpleNamespace(record={'payment_attempted': True}, target_plan='plus', checkout_id='cs_synthetic',
                                  mark_confirmation_sent=MagicMock())
         self.guard.payment_ledger, self.guard.checkout_id = ledger, 'cs_synthetic'
@@ -189,8 +189,8 @@ class WidgetNetworkTests(unittest.IsolatedAsyncioTestCase):
         for path in ('/v1/payment_pages/cs_synthetic/confirm', '/v1/3ds2/challenge_complete'):
             route = Route(Request('https://api.stripe.com' + path))
             await self.guard.route(route)
-            self.assertTrue(route.blocked)
-            self.assertFalse(route.passed)
+            self.assertFalse(route.blocked)
+            self.assertTrue(route.passed)
         ledger.mark_confirmation_sent.assert_not_called()
         self.assertEqual(self.guard.confirmation_sent, 0)
 
@@ -200,8 +200,8 @@ class WidgetNetworkTests(unittest.IsolatedAsyncioTestCase):
         self.guard.approved = True
         route = Route(Request('https://api.stripe.com/v1/payment_pages/cs_synthetic/confirm'))
         await self.guard.route(route)
-        self.assertTrue(route.blocked)
-        self.assertFalse(route.passed)
+        self.assertFalse(route.blocked)
+        self.assertTrue(route.passed)
         self.assertEqual(self.guard.confirmation_sent, 0)
 
     async def test_revoked_handoff_keeps_late_original_paid_evidence_read_only(self):
@@ -220,7 +220,7 @@ class WidgetNetworkTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.guard.evidence['identifier'], 'cs_synthetic')
         route = Route(Request('https://api.stripe.com/v1/payment_pages/cs_synthetic/confirm'))
         await self.guard.route(route)
-        self.assertTrue(route.blocked)
+        self.assertFalse(route.blocked)
 
     async def test_upgrade_handoff_wait_observes_original_order_without_reconfirm(self):
         guard = SimpleNamespace(done=asyncio.Event(), error=None, three_ds=SimpleNamespace(needs_user=True, status='awaiting_user'),

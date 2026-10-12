@@ -100,32 +100,10 @@ async def execute_profiles(job, client, target, playwright):
         if not job.cancelled:
             raise
         result = exc.report
-    if job.cancelled and job.payload["mode"] == "payment" and not job.payment_request_sent:
-        cleanup = "not_needed"
-        try:
-            if job.profile_id and (job.profile_id in owned or job.owned_profile is not None
-                                   and job.owned_profile["profileId"] == job.profile_id):
-                await close_profile_id(job, client, job.profile_id, cancelling=True)
-                job.context = None
-                # Existing callbacks use "completed" to mean profile deletion.
-                # A confirmed close keeps the profile available for manual reuse.
-                cleanup = "not_needed"
-        except Stop:
-            cleanup = "failed"
-        return {**result, **job.profile_rebuild_info, "status": "cancelled", "cancellation_confirmed": True,
-                "reason": "bitbrowser_cleanup_unverified" if cleanup == "failed" else "operation_cancelled",
-                "browser_cleanup_status": cleanup, "payment_requests_sent": 0,
-                "payment_attempted": False, "browser_profile_id": job.profile_id or ""}
-    if terminal_cleanup_allowed(job, result):
-        original_reason = result.get("reason")
-        try:
-            await cleanup_profile(job, client, owned)
-            result.update(browser_cleanup_status="completed", browser_profile_id="")
-        except Stop:
-            result.update(reason="bitbrowser_cleanup_unverified",
-                          last_reason=original_reason,
-                          browser_cleanup_status="failed",
-                          browser_profile_id=job.profile_id or "")
+    # Ending automation leaves the owned window and its manual controls available.
+    if job.cancelled:
+        result.update(status="cancelled", cancellation_confirmed=True, reason="operation_cancelled")
+    result["browser_cleanup_status"] = "not_needed"
     if "browser_profile_id" not in result:
         result["browser_profile_id"] = job.profile_id or ""
     result.update(job.profile_rebuild_info)
@@ -177,6 +155,8 @@ async def attach_profile(job, client, playwright, profile_id, options, *, extrac
     if not browser.contexts:
         raise Stop("bitbrowser_context_missing")
     job.context = browser.contexts[0]
+    language = options.get("language", "zh-CN")
+    await job.context.set_extra_http_headers({"Accept-Language": language + "," + language.split("-")[0] + ";q=0.9"})
     return browser
 
 
@@ -188,7 +168,7 @@ def proxy_reopen_allowed(job, target, result, options, owned):
     if (not profile_owned or options["proxyMode"] != "dynamic"
             or options["sessionRetryLimit"] == 0
             or job.payload["mode"] not in {"payment", "open_browser"}
-            or job.payment_request_sent or job.confirmation_consumed
+            or job.waiting_for_user or job.payment_request_sent or job.confirmation_consumed
             or result.get("payment_attempted") is True
             or result.get("payment_requests_sent", 0) != 0
             or result.get("confirmation_requests_sent", 0) != 0
@@ -344,13 +324,6 @@ async def reuse_owned_profile(job, client, playwright, target, options, expected
         raise Stop("owned_recharge_window_unavailable", user_action_required=True)
     if not attached:
         await attach_profile(job, client, playwright, profile_id, options)
-    async def read_guard(route):
-        request = route.request
-        if browser_password_login.login_payment_write(request.method, request.url):
-            await route.abort("blockedbyclient")
-        else:
-            await route.fallback()
-    await job.context.route("**/*", read_guard)
     page = next((p for p in job.context.pages if urlsplit(p.url).hostname == "chatgpt.com"), None)
     page = page or await job.context.new_page()
     page.set_default_timeout(20000)
@@ -415,8 +388,6 @@ async def reuse_owned_profile(job, client, playwright, target, options, expected
             raise
         raise Stop("owned_recharge_window_login_required", user_action_required=True,
                    browser_profile_id=profile_id) from None
-    finally:
-        await job.context.unroute("**/*", read_guard)
     job.progress("owned_recharge_window_verified", account_matched=True,
                  current_plan=identity["current_plan"], browser_profile_reused=True)
     # Preserve the verified live session; never replace it with the older JSON cookie.
@@ -544,14 +515,6 @@ async def _execute_profiles(job, client, target, playwright, owned):
 
 async def _execute_profile_flow(job, target, budget, original_checkout=None):
     if target is None:
-        async def login_guard(route):
-            request = route.request
-            if browser_password_login.login_payment_write(request.method, request.url):
-                await route.abort("blockedbyclient")
-            else:
-                await route.fallback()
-
-        await job.context.route("**/*", login_guard)
         from urllib.parse import urlsplit
         page = next((p for p in job.context.pages if p.url == "about:blank" or
                      urlsplit(p.url).hostname == "chatgpt.com"), None)
@@ -569,7 +532,6 @@ async def _execute_profile_flow(job, target, budget, original_checkout=None):
         finally:
             await browser_password_login.clear_visible_secrets(page)
             login.clear()
-            await job.context.unroute("**/*", login_guard)
         job.check_cancelled()
         replaced = job.replaced_owned_profile
         if replaced is not None and hashlib.sha256(target.account_id.encode()).hexdigest() != replaced["accountKey"]:
@@ -591,36 +553,29 @@ async def _execute_profile_flow(job, target, budget, original_checkout=None):
                 job.context, target, ledger, timeout=25, poll_count=6, poll_interval=20)
             return target, pay.include_payment_record(result, ledger)
     if job.payload["mode"] == "open_browser":
-        from browser_checkout import (install_session_cookies,
+        from browser_checkout import (check_session, install_session_cookies,
                                       restore_session_with_refresh, synchronize_login_page)
         from urllib.parse import urlsplit
-        async def login_guard(route):
-            request = route.request
-            if browser_password_login.login_payment_write(request.method, request.url):
-                await route.abort("blockedbyclient")
-            else:
-                await route.fallback()
-        await job.context.route("**/*", login_guard)
-        try:
-            if target.session_token:
-                await install_session_cookies(job.context, target, budget=budget)
-            job.progress("session_restore")
-            page = next((p for p in job.context.pages if p.url == "about:blank" or
-                         (urlsplit(p.url).hostname == "chatgpt.com"
-                          and (urlsplit(p.url).path in ("", "/")
-                               or urlsplit(p.url).path.startswith("/checkout/")))), None)
-            page = page or await job.context.new_page()
-            page.set_default_timeout(20000)
+        if target.session_token:
+            await install_session_cookies(job.context, target, budget=budget)
+        job.progress("session_restore")
+        page = next((p for p in job.context.pages if p.url == "about:blank" or
+                     (urlsplit(p.url).hostname == "chatgpt.com"
+                      and (urlsplit(p.url).path in ("", "/")
+                           or urlsplit(p.url).path.startswith("/checkout/")))), None)
+        page = page or await job.context.new_page()
+        page.set_default_timeout(20000)
+        if not target.session_token and urlsplit(page.url).hostname == "chatgpt.com":
+            _, identity = await check_session(page, target, wait_seconds=1800, budget=budget)
+        else:
             _, identity = await restore_session_with_refresh(page, target, wait_seconds=1800, budget=budget)
-            _, identity = await synchronize_login_page(page, target, identity, budget=budget)
-            job.progress("session_ready", **identity)
-            return target, {"status": "session_ready", "stage": "session_ready", "account_matched": True,
-                            "browser_profile_id": job.profile_id,
-                            "current_plan": identity.get("current_plan", "unknown"),
-                            "payment_attempted": False, "payment_requests_sent": 0,
-                            "checkout_requests_sent": 0, **identity}
-        finally:
-            await job.context.unroute("**/*", login_guard)
+        _, identity = await synchronize_login_page(page, target, identity, budget=budget)
+        job.progress("session_ready", **identity)
+        return target, {"status": "session_ready", "stage": "session_ready", "account_matched": True,
+                        "browser_profile_id": job.profile_id,
+                        "current_plan": identity.get("current_plan", "unknown"),
+                        "payment_attempted": False, "payment_requests_sent": 0,
+                        "checkout_requests_sent": 0, **identity}
     restored_checkout = job.original_checkout_identifier
     if original_checkout and restored_checkout and original_checkout != restored_checkout:
         raise Stop("checkout_identifier_changed")

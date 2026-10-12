@@ -142,18 +142,19 @@ class ServerTests(unittest.TestCase):
                     await asyncio.wait_for(operation, timeout=0.3)
             self.assertEqual(stopped.exception.report['reason'],
                              'verification_required' if original_failure else 'browser_operation_failed')
-            context.unroute.assert_awaited_once()
+            context.unroute.assert_not_awaited()
             page.close.assert_awaited_once()
             if mode == 'password':
                 self.assertEqual(login, {})
                 clear.assert_awaited_once()
 
         for mode in ('password', 'json'):
-            for waiting_at in (('secrets', 'unroute', 'close') if mode == 'password' else
-                               ('unroute', 'close')):
+            for waiting_at in (('secrets', 'close') if mode == 'password' else
+                               ('close',)):
                 for original_failure in (False, True):
                     with self.subTest(mode=mode, waiting_at=waiting_at, original_failure=original_failure):
                         asyncio.run(exercise(mode, waiting_at, original_failure))
+
 
     def test_session_preparation_hang_stops_before_identity_read(self):
         async def never(*args, **kwargs):
@@ -261,37 +262,19 @@ class ServerTests(unittest.TestCase):
         with self.assertRaises(Stop):
             asyncio.run(exercise((mismatched, {'current_plan': 'free'})))
 
-    def test_json_navigation_recovers_once_in_the_same_context_before_identity(self):
+    def test_json_navigation_failure_does_not_retry_or_intercept_before_identity(self):
         async def exercise():
-            job = server.Job('test', {'plan': 'pro-500'})
-            job.progress = MagicMock()
-            target = type('Target', (), {
-                'session_token': 'synthetic', 'account_id': 'account-1', 'user_id': 'user-1'
-            })()
-            page = MagicMock(url='https://chatgpt.com/')
-            page.goto = AsyncMock(side_effect=[TimeoutError('private URL'), type('Response', (), {'status': 200})()])
-            page.close = AsyncMock()
-            context = MagicMock(new_page=AsyncMock(return_value=page), add_cookies=AsyncMock(),
-                                route=AsyncMock(), unroute=AsyncMock())
-            with patch.object(server.browser_password_login, 'official_identity',
-                              new=AsyncMock(return_value=(target, {'current_plan': 'free'}))) as identity:
-                result = await job.verify_json_target(context, target, 'test@example.invalid')
-            self.assertEqual(result, {'current_plan': 'free'})
-            self.assertEqual(page.goto.await_count, 2)
-            self.assertTrue(all(call.kwargs['wait_until'] == 'commit' for call in page.goto.await_args_list))
-            self.assertTrue(all(call.kwargs['timeout'] == 0 for call in page.goto.await_args_list))
-            identity.assert_awaited_once()
-            self.assertTrue(identity.await_args.kwargs['strict'])
-            self.assertEqual(identity.await_args.kwargs['budget'].seconds, 60)
-            context.add_cookies.assert_awaited_once()
-            blocker = context.route.await_args.args[1]
-            route = MagicMock(request=MagicMock(method='POST', url='https://api.stripe.com/v1/payment_pages/cs_test/confirm'),
-                              abort=AsyncMock(), fallback=AsyncMock())
-            await blocker(route)
-            route.abort.assert_awaited_once()
-            route.fallback.assert_not_awaited()
-            context.unroute.assert_awaited_once_with('**/*', blocker)
-            page.close.assert_awaited_once()
+            job, target, page, context = self.json_identity_fixture()
+            page.goto.side_effect = TimeoutError('private URL')
+            with patch.object(server.browser_password_login, 'official_identity', AsyncMock()) as identity:
+                with self.assertRaises(Stop) as stopped:
+                    await job.verify_json_target(context, target, 'test@example.invalid')
+            self.assertEqual(stopped.exception.report['reason'], 'session_load_timeout')
+            self.assertEqual(stopped.exception.report['session_refresh_count'], 0)
+            page.goto.assert_awaited_once_with(server.browser_checkout.ORIGIN, wait_until='commit', timeout=0)
+            identity.assert_not_awaited()
+            self.assertNotIn('private', json.dumps(stopped.exception.report))
+            self.assert_json_identity_cleanup(page, context)
         asyncio.run(exercise())
 
     def test_json_navigation_stops_on_403_or_after_two_timeouts(self):
@@ -313,14 +296,15 @@ class ServerTests(unittest.TestCase):
                     await job.verify_json_target(context, target, 'test@example.invalid')
             self.assertEqual(stopped.exception.report['reason'],
                              'verification_required' if blocked else 'session_load_timeout')
-            self.assertEqual(page.goto.await_count, 1 if blocked else 2)
+            self.assertEqual(page.goto.await_count, 1)
             identity.assert_not_awaited()
             self.assertNotIn('private', json.dumps(stopped.exception.report))
-            context.unroute.assert_awaited_once()
+            context.unroute.assert_not_awaited()
             page.close.assert_awaited_once()
         for blocked in (True, False):
             with self.subTest(blocked=blocked):
                 asyncio.run(exercise(blocked))
+
 
     def json_identity_fixture(self):
         job = server.Job('test', {'plan': 'pro-500'})
@@ -337,34 +321,26 @@ class ServerTests(unittest.TestCase):
 
     def assert_json_identity_cleanup(self, page, context):
         context.add_cookies.assert_awaited_once()
-        context.route.assert_awaited_once()
-        context.unroute.assert_awaited_once_with('**/*', context.route.await_args.args[1])
+        context.route.assert_not_awaited()
+        context.unroute.assert_not_awaited()
         page.close.assert_awaited_once()
         page.reload.assert_not_awaited()
 
-    def test_preloaded_json_identity_recovers_once_by_fixed_home_get(self):
+
+    def test_preloaded_json_identity_failure_does_not_navigate_or_retry(self):
         async def exercise(error):
             job, target, page, context = self.json_identity_fixture()
-            official = AsyncMock(side_effect=[error, (target, {'current_plan': 'free'})])
-            with patch.object(server.browser_password_login, 'official_identity', official):
-                result = await job.verify_json_target(context, target, 'test@example.invalid', initial_page=page)
-            self.assertEqual(result, {'current_plan': 'free'})
-            page.goto.assert_awaited_once_with('https://chatgpt.com/', wait_until='commit', timeout=0)
-            context.new_page.assert_not_awaited()
-            self.assertEqual(official.await_count, 2)
-            first, second = official.await_args_list
-            self.assertEqual(first.args, (page, 'test@example.invalid'))
-            self.assertEqual(second.args, first.args)
-            self.assertTrue(first.kwargs['strict'])
-            self.assertTrue(second.kwargs['strict'])
-            self.assertIs(first.kwargs['budget'], second.kwargs['budget'])
-            self.assertEqual(first.kwargs['budget'].seconds, 60)
+            with patch.object(server.browser_password_login, 'official_identity', AsyncMock(side_effect=error)) as official:
+                with self.assertRaises(Stop) as stopped:
+                    await job.verify_json_target(context, target, 'test@example.invalid', initial_page=page)
+            self.assertEqual(stopped.exception.report['session_refresh_count'], 0)
+            self.assertIn(stopped.exception.report['reason'], {'session_network_error','session_load_timeout'})
+            official.assert_awaited_once()
+            page.goto.assert_not_awaited()
             self.assert_json_identity_cleanup(page, context)
-
         for error in (Stop('session_network_error'), Stop('session_load_timeout'),
-                      TimeoutError('synthetic private URL'),
-                      RuntimeError('net::ERR_CONNECTION_RESET synthetic private URL')):
-            with self.subTest(error=type(error).__name__, reason=str(error).split()[0]):
+                      TimeoutError('synthetic private URL'), RuntimeError('net::ERR_CONNECTION_RESET synthetic private URL')):
+            with self.subTest(error=type(error).__name__):
                 asyncio.run(exercise(error))
 
     def test_preloaded_json_identity_first_read_success_does_not_refresh(self):
@@ -400,15 +376,16 @@ class ServerTests(unittest.TestCase):
                     await job.verify_json_target(context, target, 'test@example.invalid', initial_page=page)
             self.assertEqual(stopped.exception.report['reason'], reason)
             self.assertEqual(stopped.exception.report['session_step'], 'session_read')
-            self.assertEqual(stopped.exception.report['session_elapsed_seconds'], 6)
+            self.assertEqual(stopped.exception.report['session_elapsed_seconds'], 3)
             self.assertEqual(stopped.exception.report['session_wait_seconds'], 60)
-            self.assertEqual(stopped.exception.report['session_refresh_count'], 1)
-            self.assertEqual(official.await_count, 2)
-            page.goto.assert_awaited_once()
+            self.assertEqual(stopped.exception.report['session_refresh_count'], 0)
+            self.assertEqual(official.await_count, 1)
+            page.goto.assert_not_awaited()
             self.assert_json_identity_cleanup(page, context)
         for reason in ('session_network_error', 'session_load_timeout'):
             with self.subTest(reason=reason):
                 asyncio.run(exercise(reason))
+
 
     def test_json_identity_exhausted_budget_never_refreshes_or_restarts(self):
         async def exercise():
@@ -473,9 +450,10 @@ class ServerTests(unittest.TestCase):
                 context.unroute.assert_not_awaited()
             else:
                 self.assert_json_identity_cleanup(page, context)
-        for cancel_at in ('before_setup', 'first_read', 'refresh'):
+        for cancel_at in ('before_setup', 'first_read'):
             with self.subTest(cancel_at=cancel_at):
                 asyncio.run(exercise(cancel_at))
+
 
     def test_json_identity_controlled_nontransport_failure_never_refreshes(self):
         async def exercise(error):
@@ -500,28 +478,29 @@ class ServerTests(unittest.TestCase):
             with self.subTest(reason=error.report['reason'], details=error.report):
                 asyncio.run(exercise(error))
 
-    def test_json_identity_refresh_http_failure_stops_before_second_read(self):
+    def test_json_initial_http_failure_stops_before_identity(self):
         async def exercise(status):
             job, target, page, context = self.json_identity_fixture()
             page.goto.return_value = type('Response', (), {'status': status})()
             with patch.object(server.browser_password_login, 'official_identity',
                               AsyncMock(side_effect=Stop('session_network_error'))) as official:
                 with self.assertRaises(Stop) as stopped:
-                    await job.verify_json_target(context, target, 'test@example.invalid', initial_page=page)
+                    await job.verify_json_target(context, target, 'test@example.invalid')
             report = stopped.exception.report
             self.assertEqual(report['reason'], 'verification_required' if status == 403 else 'http_error')
             self.assertEqual(report['http_status'], status)
             self.assertEqual(report['user_action_required'], status == 403)
-            self.assertEqual(report['session_step'], 'page_refresh')
-            self.assertEqual(report['session_refresh_count'], 1)
-            official.assert_awaited_once()
-            page.goto.assert_awaited_once_with('https://chatgpt.com/', wait_until='commit', timeout=0)
+            self.assertEqual(report['session_step'], 'page_load')
+            self.assertEqual(report['session_refresh_count'], 0)
+            official.assert_not_awaited()
+            page.goto.assert_awaited_once_with(server.browser_checkout.ORIGIN, wait_until='commit', timeout=0)
             self.assert_json_identity_cleanup(page, context)
         for status in (403, 401, 429, 500):
             with self.subTest(status=status):
                 asyncio.run(exercise(status))
 
-    def test_json_identity_does_not_refresh_again_after_initial_navigation_recovery(self):
+
+    def test_json_first_navigation_failure_keeps_original_error(self):
         async def exercise():
             job, target, page, context = self.json_identity_fixture()
             page.goto.side_effect = [TimeoutError('synthetic private URL'),
@@ -530,38 +509,24 @@ class ServerTests(unittest.TestCase):
                               AsyncMock(side_effect=Stop('session_network_error'))) as official:
                 with self.assertRaises(Stop) as stopped:
                     await job.verify_json_target(context, target, 'test@example.invalid')
-            self.assertEqual(stopped.exception.report['reason'], 'session_network_error')
-            self.assertEqual(stopped.exception.report['session_refresh_count'], 1)
-            official.assert_awaited_once()
-            self.assertEqual(page.goto.await_count, 2)
+            self.assertEqual(stopped.exception.report['reason'], 'session_load_timeout')
+            self.assertEqual(stopped.exception.report['session_refresh_count'], 0)
+            official.assert_not_awaited()
+            self.assertEqual(page.goto.await_count, 1)
             context.new_page.assert_awaited_once()
             self.assert_json_identity_cleanup(page, context)
         asyncio.run(exercise())
 
-    def test_json_identity_recovery_keeps_payment_writes_blocked_until_cleanup(self):
+
+    def test_json_identity_has_no_request_interceptors_during_or_after_login(self):
         async def exercise():
             job, target, page, context = self.json_identity_fixture()
-            payment = MagicMock(request=MagicMock(
-                method='POST', url='https://api.stripe.com/v1/payment_pages/cs_test/confirm'),
-                abort=AsyncMock(), fallback=AsyncMock())
-            home = MagicMock(request=MagicMock(method='GET', url='https://chatgpt.com/'),
-                             abort=AsyncMock(), fallback=AsyncMock())
-
-            async def refresh(*args, **kwargs):
+            async def inspect(*args, **kwargs):
+                context.route.assert_not_awaited()
                 context.unroute.assert_not_awaited()
-                blocker = context.route.await_args.args[1]
-                await blocker(payment)
-                await blocker(home)
-                return type('Response', (), {'status': 200})()
-
-            page.goto.side_effect = refresh
-            with patch.object(server.browser_password_login, 'official_identity', AsyncMock(
-                    side_effect=[Stop('session_network_error'), (target, {'current_plan': 'free'})])):
+                return target, {'current_plan': 'free'}
+            with patch.object(server.browser_password_login, 'official_identity', AsyncMock(side_effect=inspect)):
                 await job.verify_json_target(context, target, 'test@example.invalid', initial_page=page)
-            payment.abort.assert_awaited_once_with('blockedbyclient')
-            payment.fallback.assert_not_awaited()
-            home.abort.assert_not_awaited()
-            home.fallback.assert_awaited_once()
             self.assert_json_identity_cleanup(page, context)
         asyncio.run(exercise())
 
@@ -579,15 +544,15 @@ class ServerTests(unittest.TestCase):
             setattr(observed, field, 'different-synthetic-account')
             with (patch.object(server, 'parse_browser_credential', return_value=target),
                   patch.object(server.browser_password_login, 'official_identity', AsyncMock(
-                      side_effect=[Stop('session_network_error'), (observed, {'current_plan': 'free'})])) as official,
+                      return_value=(observed, {'current_plan': 'free'}))) as official,
                   patch.object(server.server_proxy, 'observe_exit', AsyncMock()) as observe,
                   patch.object(server.pay, 'run_flow', AsyncMock()) as pay):
                 with self.assertRaises(Stop) as stopped:
                     await job.execute()
             self.assertEqual(stopped.exception.report['reason'], 'official_account_mismatch')
             self.assertFalse(stopped.exception.report['account_matched'])
-            self.assertEqual(official.await_count, 2)
-            page.goto.assert_awaited_once()
+            self.assertEqual(official.await_count, 1)
+            page.goto.assert_not_awaited()
             job.restore_target.assert_not_called()
             observe.assert_not_awaited()
             pay.assert_not_awaited()
@@ -599,30 +564,32 @@ class ServerTests(unittest.TestCase):
             with self.subTest(field=field):
                 asyncio.run(exercise(field))
 
+
     def test_json_identity_recovery_cleanup_failure_preserves_the_original_stop(self):
         async def never(*args, **kwargs):
             await asyncio.Event().wait()
 
         async def exercise(final_failure):
             job, target, page, context = self.json_identity_fixture()
-            context.unroute.side_effect = never
+            page.close.side_effect = never
             second = Stop('session_network_error') if final_failure else (target, {'current_plan': 'free'})
             with (patch.object(server.server_proxy, 'CLEANUP_TIMEOUT_SECONDS', 0.01),
                   patch.object(server.browser_password_login, 'official_identity', AsyncMock(
-                      side_effect=[Stop('session_network_error'), second])) as official):
+                      side_effect=Stop('session_network_error') if final_failure else None, return_value=second)) as official):
                 with self.assertRaises(Stop) as stopped:
                     await asyncio.wait_for(job.verify_json_target(
                         context, target, 'test@example.invalid', initial_page=page), timeout=0.3)
             self.assertEqual(stopped.exception.report['reason'],
                              'session_network_error' if final_failure else 'browser_operation_failed')
             if final_failure:
-                self.assertEqual(stopped.exception.report['session_refresh_count'], 1)
-            self.assertEqual(official.await_count, 2)
-            page.goto.assert_awaited_once()
+                self.assertEqual(stopped.exception.report['session_refresh_count'], 0)
+            self.assertEqual(official.await_count, 1)
+            page.goto.assert_not_awaited()
             self.assert_json_identity_cleanup(page, context)
         for final_failure in (True, False):
             with self.subTest(final_failure=final_failure):
                 asyncio.run(exercise(final_failure))
+
 
     def test_job_failure_keeps_last_stage_and_controlled_error_without_retry(self):
         for stage in ('session_restore', 'payment_request_sending'):
@@ -704,7 +671,7 @@ class ServerTests(unittest.TestCase):
         self.assertEqual(code, fresh)
         self.assertNotEqual(code, '94287082')
 
-    def test_server_login_drops_password_and_blocks_payment_writes(self):
+    def test_server_login_drops_password_without_intercepting_payment_writes(self):
         async def exercise():
             job = server.Job('11111111-1111-4111-8111-111111111111', {'plan': 'plus'})
             job.progress = MagicMock()
@@ -724,10 +691,11 @@ class ServerTests(unittest.TestCase):
             self.assertIs(result[0], target)
             self.assertEqual(result[1]['current_plan'], 'free')
             self.assertEqual(login, {})
-            context.route.assert_awaited_once()
-            context.unroute.assert_awaited_once()
+            context.route.assert_not_awaited()
+            context.unroute.assert_not_awaited()
             page.close.assert_awaited_once()
         asyncio.run(exercise())
+
 
     def test_saved_totp_is_generated_and_filled_at_the_login_challenge(self):
         async def exercise():

@@ -113,7 +113,8 @@ def checkout_page_state(url, text, quote, checkout_id):
     """只输出受控页面状态，不保存官网正文。"""
     if PAGE_NETWORK_ERROR.search(text):
         return "network_error"
-    if is_unavailable_existing_checkout(text):
+    if is_unavailable_existing_checkout(text) or re.search(
+            r"无法(?:加载|载入)账单|(?:unable|failed|could not|couldn.t) to load (?:your )?billing", text, re.I):
         return "official_error"
     if quote and quote.get("plan"):
         return "checkout" if quote.get("today") else "quote_incomplete"
@@ -124,7 +125,7 @@ def checkout_page_state(url, text, quote, checkout_id):
 
 async def quote_with_page_recovery(page, guard, target_plan, plan_family, quote_handler,
                                    existing, session_budget, quote_timeout):
-    """报价阶段独立等待；过半仍无有效内容时在当前窗口刷新一次。"""
+    """独立等待官网报价；不刷新或替换操作员正在使用的页面。"""
     wait_seconds = session_budget.seconds if session_budget else quote_timeout
     quote_budget = session_budget.restart(report=lambda **_: None) if session_budget else None
     started = time.monotonic()
@@ -161,36 +162,6 @@ async def quote_with_page_recovery(page, guard, target_plan, plan_family, quote_
                        quote_wait_seconds=int(wait_seconds), quote_refresh_count=refresh_count,
                        page_state="loading") from None
 
-    async def refresh_page(reason):
-        nonlocal refresh_count
-        progress("quote_page_refreshing", quote_elapsed_seconds=int(elapsed()),
-                 quote_wait_seconds=wait_seconds, quote_refresh_count=1,
-                 page_state=page_state, last_reason=reason)
-        refresh_count = 1
-        operation = (lambda: page.reload(wait_until="domcontentloaded", timeout=0))
-        if expected_url and not checkout_page_matches(page.url, guard.checkout_id):
-            operation = lambda: page.goto(expected_url, wait_until="domcontentloaded", timeout=0)
-        try:
-            if quote_budget:
-                await quote_budget.run(operation, "quote_refresh")
-            else:
-                await asyncio.wait_for(operation(), timeout=max(1, wait_seconds - elapsed()))
-        except Stop as exc:
-            if exc.report.get("reason") == "operation_cancelled":
-                raise
-            reason = ("checkout_page_load_timeout" if exc.report.get("reason") == "session_load_timeout"
-                      else "checkout_page_network_error")
-            raise Stop(reason, quote_elapsed_seconds=min(int(elapsed()), int(wait_seconds)),
-                       quote_wait_seconds=int(wait_seconds), quote_refresh_count=refresh_count,
-                       page_state="loading" if reason == "checkout_page_load_timeout"
-                       else "network_error") from None
-        except Exception as exc:
-            code = PAGE_NETWORK_ERROR.search(str(exc))
-            raise Stop("checkout_page_network_error", browser_error_code=(code.group(0).upper()
-                       if code else None), quote_elapsed_seconds=int(elapsed()),
-                       quote_wait_seconds=wait_seconds, quote_refresh_count=refresh_count,
-                       page_state="network_error") from None
-
     if existing and expected_url and not checkout_page_matches(page.url, guard.checkout_id):
         try:
             operation = lambda: page.goto(expected_url, wait_until="domcontentloaded",
@@ -203,12 +174,12 @@ async def quote_with_page_recovery(page, guard, target_plan, plan_family, quote_
             if isinstance(exc, Stop) and exc.report.get("reason") == "operation_cancelled":
                 raise
             page_state = "loading"
-            await refresh_page("official_checkout_navigation_not_observed")
+            raise Stop("checkout_page_load_timeout", quote_refresh_count=0, page_state="loading") from None
         except Exception as exc:
             code = PAGE_NETWORK_ERROR.search(str(exc))
             if code or retryable_page_load_error(exc):
                 page_state = "network_error"
-                await refresh_page("checkout_page_network_error")
+                raise Stop("checkout_page_network_error", quote_refresh_count=0, page_state="network_error") from None
             else:
                 raise
 
@@ -220,10 +191,6 @@ async def quote_with_page_recovery(page, guard, target_plan, plan_family, quote_
             title = await read_quote_operation(page.title, "quote_title")
         except Exception as exc:
             code = PAGE_NETWORK_ERROR.search(str(exc))
-            if refresh_count == 0 and (code or retryable_page_load_error(exc)):
-                page_state = "network_error"
-                await refresh_page("checkout_page_network_error")
-                continue
             if code:
                 raise Stop("checkout_page_network_error", browser_error_code=code.group(0).upper(),
                            quote_elapsed_seconds=int(elapsed()), quote_wait_seconds=wait_seconds,
@@ -248,10 +215,6 @@ async def quote_with_page_recovery(page, guard, target_plan, plan_family, quote_
         else:
             partial_quote_since = None
         if page_state in {"network_error", "official_error"}:
-            if refresh_count == 0:
-                await refresh_page("existing_checkout_unavailable" if page_state == "official_error"
-                                   else "checkout_page_network_error")
-                continue
             if page_state == "official_error":
                 raise Stop("existing_checkout_unavailable", quote=quote,
                            quote_elapsed_seconds=int(elapsed()), quote_wait_seconds=wait_seconds,
@@ -259,9 +222,6 @@ async def quote_with_page_recovery(page, guard, target_plan, plan_family, quote_
             raise Stop("checkout_page_network_error", quote=quote,
                        quote_elapsed_seconds=int(elapsed()), quote_wait_seconds=wait_seconds,
                        quote_refresh_count=refresh_count, page_state=page_state)
-        if refresh_count == 0 and now >= refresh_at:
-            await refresh_page("checkout_page_incomplete")
-            continue
         try:
             await read_quote_operation(
                 lambda: asyncio.sleep(min(.3, max(.001, wait_seconds - elapsed()))), "quote_wait")
@@ -278,48 +238,15 @@ async def quote_with_page_recovery(page, guard, target_plan, plan_family, quote_
 
 
 async def restore_session_with_refresh(page, target, wait_seconds, budget):
-    """Load once, then refresh the same page once while the window budget remains."""
-    for load_attempt in range(2):
-        try:
-            budget.refresh_count = load_attempt
-            if load_attempt == 0:
-                operation = lambda: page.goto(
-                    ORIGIN + "/", wait_until="commit", timeout=0
-                )
-                step = "page_load"
-            elif page.url == "about:blank":
-                operation = lambda: page.goto(
-                    ORIGIN + "/", wait_until="commit", timeout=0
-                )
-                step = "page_refresh"
-            else:
-                operation = lambda: page.reload(wait_until="commit", timeout=0)
-                step = "page_refresh"
-            response = await budget.run(operation, step)
-            status = getattr(response, "status", None)
-            if type(status) is int and status >= 400:
-                raise Stop("verification_required" if status == 403 else "http_error",
-                           http_status=status, user_action_required=status == 403)
-            return await check_session(page, target, wait_seconds, budget, initial_restore=True)
-        except Exception as exc:
-            if load_attempt or not retryable_page_load_error(exc):
-                raise
-            try:
-                budget.remaining_ms()
-            except Stop:
-                raise exc
-            reason = (
-                exc.report.get("reason")
-                if isinstance(exc, Stop)
-                else "browser_operation_failed"
-            )
-            progress(
-                "session_page_refreshing",
-                session_step="page_refresh",
-                session_refresh_count=1,
-                last_reason=reason,
-            )
-    raise Stop("session_network_error")
+    """Apply the supplied session with one navigation; leave failures for diagnosis."""
+    budget.refresh_count = 0
+    response = await budget.run(
+        lambda: page.goto(ORIGIN + "/", wait_until="commit", timeout=0), "page_load")
+    status = getattr(response, "status", None)
+    if type(status) is int and status >= 400:
+        raise Stop("verification_required" if status == 403 else "http_error",
+                   http_status=status, user_action_required=status == 403)
+    return await check_session(page, target, wait_seconds, budget, initial_restore=True)
 
 
 def money(text: str, currency_hint=None):
@@ -462,13 +389,14 @@ def is_payment_endpoint(url: str) -> bool:
 
 
 class NetworkGuard:
-    """只允许已核对账户、已选套餐的一次官网建单；付款相关写入默认拒绝。"""
+    """记录自动任务建单和官网结果，不控制浏览器流量。"""
     def __init__(self, target: BrowserCredential, ledger=None):
         self.target, self.ledger = target, ledger
         self.operation_cancelled = lambda: False
         self.hcaptcha_enabled = False
         self.target_plan = getattr(ledger, "target_plan", "plus")
         self.armed = False
+        self.observed_requests = set()
         self.sent = 0
         self.blocked_duplicates = 0
         self.blocked_payment_requests = 0
@@ -539,80 +467,49 @@ class NetworkGuard:
         return "unknown_write"
 
     async def route_hcaptcha(self, route):
-        from payment_handoff import hcaptcha_resource_allowed
-        decision = await hcaptcha_resource_allowed(route.request, self.target,
-            enabled=self.hcaptcha_enabled and self.account_verified and not getattr(self, 'read_only', False))
-        if decision is None:
-            return False
-        if decision and not self.operation_cancelled():
-            await route.fallback()
-        else:
-            await route.abort('blockedbyclient')
-        return True
+        return False
 
-    async def route(self, route):
+    def begin_checkout(self):
+        """Reserve the automation attempt before its only checkout click."""
         if self.operation_cancelled():
-            await route.abort('blockedbyclient')
+            raise Stop("operation_cancelled")
+        if not self.account_verified or self.ledger is None or self.armed or self.sent:
+            raise Stop("checkout_unarmed")
+        try:
+            self.ledger.begin()
+        except (OSError, ValueError):
+            raise Stop("checkout_marker_write_failed", stage="checkout_create") from None
+        self.armed = True
+
+    def observe_request(self, request):
+        """Observe original traffic without pausing, rewriting or rejecting it."""
+        if request in self.observed_requests:
             return
-        if await self.route_hcaptcha(route):
+        self.observed_requests.add(request)
+        parts = urlsplit(request.url)
+        if (not self.armed or request.method != "POST" or parts.scheme != "https"
+                or parts.hostname != "chatgpt.com" or parts.path != CHECKOUT_PATH):
             return
-        request = route.request
-        if os.environ.get("AUTO_RECHARGE_CALLBACK_URL"):
-            parts = urlsplit(request.url)
-            host = parts.hostname or ""
-            trusted = host in {"chatgpt.com", "challenges.cloudflare.com", "js.stripe.com", "api.stripe.com", "checkout.stripe.com", "m.stripe.network"} or any(
-                host.endswith("." + domain) for domain in ("oaistatic.com", "oaiusercontent.com", "stripe.com", "stripe.network"))
-            if parts.scheme != "https" or not trusted:
-                await route.abort("blockedbyclient")
-                return
         try:
             data = request.post_data_json if request.post_data else None
         except Exception:
             data = None
         decision = self.classify(request.method, request.url, data, request.headers)
-        if decision in ("read", "checkout_init"):
-            if decision == "checkout_init":
-                self.checkout_initializations_allowed += 1
-            await route.fallback()
+        if decision == "read":
             return
-        if decision == "create":
-            try:
-                self.ledger.begin()  # fsync 成功之后才让浏览器发送原始请求。
-            except (OSError, ValueError, Stop):
-                self.error = Stop("checkout_marker_write_failed", stage="checkout_create")
-                self.response_done.set()
-                await route.abort("blockedbyclient")
-                return
-            self.sent = 1
-            self.armed = False
-            self.request_object = request
-            progress("checkout_request_sending", attempt=1)
-            await route.fallback()
+        self.sent += 1
+        if decision != "create":
+            self.error = Stop("checkout_result_unknown" if self.sent > 1 else "checkout_" + decision,
+                              stage="checkout_create", checkout_attempted=True)
+            self.response_done.set()
             return
-        if decision == "duplicate":
-            self.blocked_duplicates += 1
-        elif decision == "payment":
-            self.blocked_payment_requests += 1
-            parts = urlsplit(request.url)
-            if parts.hostname and (parts.hostname == "chatgpt.com" or parts.hostname.endswith(".stripe.com")):
-                path = safe_text(re.sub(r"/[A-Za-z0-9_-]{20,}", "/[id]", parts.path))
-                key = parts.hostname + " " + request.method + " " + path if path else None
-                if key and (key in self.blocked_payment_paths or len(self.blocked_payment_paths) < 12):
-                    self.blocked_payment_paths[key] = self.blocked_payment_paths.get(key, 0) + 1
-        else:
-            self.blocked_unknown_writes += 1
-            parts = urlsplit(request.url)
-            if parts.hostname == "chatgpt.com" and parts.path == "/api/auth/session":
-                self.auth_session_writes_blocked += 1
-            if parts.hostname == "chatgpt.com" and parts.path.startswith(("/api/", "/backend-api/")):
-                path = re.sub(r"/[A-Za-z0-9_-]{20,}", "/[id]", parts.path)
-                path = safe_text(path)
-                if path and (path in self.blocked_official_paths or len(self.blocked_official_paths) < 12):
-                    self.blocked_official_paths[path] = self.blocked_official_paths.get(path, 0) + 1
-            if decision in ("account_mismatch", "unarmed", "plan_mismatch"):
-                self.error = Stop("checkout_" + decision, stage="checkout_create")
-                self.response_done.set()
-        await route.abort("blockedbyclient")
+        self.request_object = request
+        progress("checkout_request_sending", attempt=self.sent)
+
+    async def route(self, route):
+        # Compatibility for existing fixtures; runtime uses request/response events.
+        self.observe_request(route.request)
+        await route.fallback()
 
     async def response(self, response):
         parts = urlsplit(response.url)
@@ -660,7 +557,7 @@ class NetworkGuard:
             return "created"
         if self.error and self.error.report.get("http_status") in (400, 401, 403, 422):
             return "rejected"
-        return "unknown" if self.sent else "not_attempted"
+        return "unknown" if self.sent or self.armed or self.ledger and self.ledger.record else "not_attempted"
 
 
 @contextmanager
@@ -864,7 +761,7 @@ async def prepare_proxy_in_context(context, expected_country=None, *, budget):
     probe = SessionBudget(20, cancelled=budget.cancelled, report=budget.report, parent=budget)
     guard = NetworkGuard(None)
     guard.operation_cancelled = budget.cancelled
-    await probe.run(lambda: context.route("**/*", guard.route), "proxy_probe")
+    pass  # Browser traffic is observed, never intercepted.
     try:
         page = next((item for item in context.pages if item.url == "about:blank"
                      or urlsplit(item.url).hostname == "chatgpt.com"), None)
@@ -906,15 +803,13 @@ async def prepare_proxy_in_context(context, expected_country=None, *, budget):
     finally:
         # Route removal cannot extend an exhausted preparation phase indefinitely.
         try:
-            await asyncio.wait_for(context.unroute("**/*", guard.route), timeout=5)
+            pass  # Browser traffic is observed, never intercepted.
         except Exception:
             raise Stop("bitbrowser_guard_cleanup_unverified") from None
 
 
 async def synchronize_login_page(page, target, identity, *, budget):
-    """身份核对和官网应用呈现分别验收；同一标签页最多同步刷新一次。"""
-    ui_started = budget.clock()
-    refreshed_once = False
+    """只读等待官网应用就绪，不干扰当前标签页。"""
     while True:
         try:
             budget.remaining_ms()
@@ -922,18 +817,6 @@ async def synchronize_login_page(page, target, identity, *, budget):
             ready = await budget.run(lambda: page.evaluate(LOGIN_PAGE_READY_EXPRESSION), "page_ui_sync")
             if ready:
                 return BrowserCredential("", target.account_id, target.user_id, refreshed.token), identity
-            if not refreshed_once and budget.clock() - ui_started >= 10:
-                refreshed_once = True
-                budget.refresh_count += 1
-                progress("session_page_refreshing", session_step="page_ui_sync", account_matched=True)
-                response = await budget.run(lambda: page.reload(
-                    wait_until="commit", timeout=0), "page_ui_sync")
-                status = getattr(response, "status", None)
-                if status == 403:
-                    raise Stop("verification_required", http_status=403, user_action_required=True)
-                if type(status) is int and status >= 400:
-                    raise Stop("http_error", http_status=status)
-                continue
             await budget.run(lambda: asyncio.sleep(0.5), "page_ui_sync")
         except Stop as exc:
             if (exc.report.get("reason") == "session_load_timeout"
@@ -970,13 +853,12 @@ async def workflow(context, target, *, ledger=None, existing=None, wait_seconds=
             "returned_currency": existing.get("returned_currency"),
             "processor_entity": existing.get("processor_entity"),
         }
-    await context.route("**/*", guard.route)
-    await context.route_web_socket("**/*", lambda ws: ws.close())
     tasks = set()
     def response_callback(response):
         task = asyncio.create_task(guard.response(response))
         tasks.add(task)
         task.add_done_callback(tasks.discard)
+    context.on("request", guard.observe_request)
     context.on("response", response_callback)
     # 本机比特已打开首页；复用并在注入 Cookie 后加载，避免留下游客标签页。
     page = next((p for p in context.pages if p.url == "about:blank" or
@@ -1030,13 +912,13 @@ async def workflow(context, target, *, ledger=None, existing=None, wait_seconds=
             await verify_selected_plan(page, target_plan)
             stage = "checkout_create"
             progress(stage)
-            guard.armed = True
+            guard.begin_checkout()
             await button.click()
             progress("checkout_wait")
             try:
                 await asyncio.wait_for(guard.response_done.wait(), timeout=45)
             except asyncio.TimeoutError:
-                raise Stop("checkout_result_unknown" if guard.sent else "checkout_request_not_observed", checkout_attempted=bool(guard.sent)) from None
+                raise Stop("checkout_result_unknown", checkout_attempted=True) from None
             if guard.error:
                 raise guard.error
             if not guard.checkout_id:
@@ -1127,6 +1009,7 @@ async def workflow(context, target, *, ledger=None, existing=None, wait_seconds=
         return result
     finally:
         guard.armed = False
+        context.remove_listener("request", guard.observe_request)
         context.remove_listener("response", response_callback)
         if tasks:
             if asyncio.current_task().cancelling():
@@ -1137,7 +1020,7 @@ async def workflow(context, target, *, ledger=None, existing=None, wait_seconds=
             # 迟到的官方付款回包在清理阶段仍可能确认成功；返回快照必须包含这些证据。
             result.update(guard.summary())
         # 同一窗口更换失效旧结算时，不能叠加上一轮的建单/付款拦截器。
-        await context.unroute("**/*", guard.route)
+        # Observation ends; the original browser window remains unrestricted.
 
 
 async def run_browser(target, *, create=False, inspect_existing=False, retry_rejected=False,
@@ -1160,7 +1043,7 @@ async def run_browser(target, *, create=False, inspect_existing=False, retry_rej
 
     async def execute(active_browser=None, active_context=None):
         context = active_context or await active_browser.new_context(
-            service_workers="block", accept_downloads=False)
+            accept_downloads=False)
         try:
             return await workflow(context, target, ledger=ledger, existing=existing,
                                   wait_seconds=wait_seconds, review_seconds=review_seconds,

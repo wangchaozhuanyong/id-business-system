@@ -132,29 +132,22 @@ def retryable_page_load_error(error):
 
 
 async def load_session_page(page, url, budget):
-    """同一登录窗口最多两次只读导航；页面响应与账号核实使用同一预算。"""
-    for attempt in range(2):
-        step = "page_refresh" if attempt else "page_load"
-        budget.step = step
-        budget.refresh_count = attempt
-        budget.report(**budget.snapshot())
-        try:
-            response = await budget.run(lambda: page.goto(
-                url, wait_until="commit", timeout=0), step)
-            status = getattr(response, "status", None)
-            if type(status) is int and status >= 400:
-                raise Stop("verification_required" if status == 403 else "http_error",
-                           http_status=status, user_action_required=status == 403)
-            return
-        except Stop:
-            raise
-        except Exception as error:
-            result = session_failure(error)
-            if attempt or result["reason"] not in {"session_load_timeout", "session_network_error"}:
-                raise Stop(result.pop("reason"), **result) from None
-            # 只有首页 GET 的明确超时/传输失败才再尝试；从不重放登录提交或付款。
-            budget.remaining_ms()
-    raise Stop("session_load_timeout", error_type="TimeoutError")
+    """只加载一次官网；传输失败保留原页面和具体错误。"""
+    budget.step = "page_load"
+    budget.refresh_count = 0
+    budget.report(**budget.snapshot())
+    try:
+        response = await budget.run(lambda: page.goto(
+            url, wait_until="commit", timeout=0), "page_load")
+        status = getattr(response, "status", None)
+        if type(status) is int and status >= 400:
+            raise Stop("verification_required" if status == 403 else "http_error",
+                       http_status=status, user_action_required=status == 403)
+    except Stop:
+        raise
+    except Exception as error:
+        result = session_failure(error)
+        raise Stop(result.pop("reason"), **result) from None
 
 
 def retryable_session_result(result):

@@ -38,6 +38,8 @@ describe('本机连接错误识别', () => {
     [403, 'connector_origin_not_allowed', 'origin'],
     [403, 'connector_token_invalid', 'credentials'],
     [409, 'bitbrowser_local_api_unavailable', 'bitbrowser'],
+    [409, 'bitbrowser_api_token_invalid', 'bitbrowserCredentials'],
+    [409, 'bitbrowser_local_api_rejected', 'bitbrowserRejected'],
     [409, 'another_local_job_is_running', 'busy'],
     [409, 'unknown-fixture-secret', 'rejected'],
     [409, 'login_code_expired', 'codeExpired'],

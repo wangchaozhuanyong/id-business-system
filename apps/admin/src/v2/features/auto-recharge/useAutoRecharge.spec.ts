@@ -464,6 +464,27 @@ async function choosePasswordAccount(hasPassword = true, hasTotp = false) {
 }
 
 describe('比特浏览器充值入口', () => {
+  it('切换模式清除另一种连接结果，迟到检测不能覆盖新模式状态', async () => {
+    flow.operationMode.value = 'open_browser';
+    await flow.testConnector();
+    expect(flow.connectorStatus.value).toBe('online');
+    flow.operationMode.value = 'payment';
+    expect(flow.connectorStatus.value).toBe('unknown');
+    let complete!: (value: unknown) => void;
+    mock.connectorCatalog.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          complete = resolve;
+        })
+    );
+    const check = flow.testConnector();
+    expect(flow.connectorStatus.value).toBe('checking');
+    flow.operationMode.value = 'open_browser';
+    complete({ groups: [{ name: settings.groupName }], tags: [{ name: settings.tagName }] });
+    await check;
+    expect(flow.connectorStatus.value).toBe('unknown');
+    expect(flow.connectorMessage.value).toBe('尚未检测比特浏览器本地接口');
+  });
   it('默认仅为比特充值，载入 JSON 自动识别邮箱、窗名与可复用地址', () => {
     expect(flow.operationMode.value).toBe('payment');
     flow.updateJsonInput(sessionJson());
@@ -481,6 +502,23 @@ describe('比特浏览器充值入口', () => {
     expect(flow.canStart.value).toBe(false);
     expect(flow.jsonError.value).not.toContain('sensitive-fixture');
     flow.updateJsonInput('not-json');
+    expect(flow.sessionJson.value).toBe('');
+  });
+  it('格式不完整和真正超出大小分别提示，不把平板复制的短 JSON 当成超限', () => {
+    flow.updateJsonInput('{"user":{"email":"registered@example.com"');
+    expect(flow.jsonError.value).toContain('格式不完整');
+    expect(flow.jsonError.value).not.toContain('65 KB');
+    flow.updateJsonInput(
+      JSON.stringify({
+        ...JSON.parse(directSessionJson()),
+        device: 'tablet',
+        extra: 'x'.repeat(7000)
+      })
+    );
+    expect(flow.jsonError.value).toBe('');
+    expect(flow.details.value.email).toBe('registered@example.com');
+    flow.updateJsonInput('x'.repeat(65_001));
+    expect(flow.jsonError.value).toContain('超过 65 KB');
     expect(flow.sessionJson.value).toBe('');
   });
   it('直接粘贴第二个 JSON 替换第一个账号，提交只使用新授权，无需刷新', async () => {
@@ -503,6 +541,19 @@ describe('比特浏览器充值入口', () => {
     expect(flow.canStartOpen.value).toBe(true);
     await flow.startOpen();
     expect(mock.directStart.mock.calls[0]![1]).toEqual({ sessionJson: replacement });
+  });
+  it('替换 JSON 保留手工窗口名，文件替换也更新自动窗口名', async () => {
+    flow.updateJsonInput(directSessionJson('first@example.com'));
+    flow.updateJsonInput(directSessionJson('replacement@example.com'));
+    expect(flow.windowName.value).toBe('ChatGPT-replacement');
+    const file = pendingJsonFile();
+    const importing = flow.importJson(file.event);
+    file.complete(directSessionJson('second@example.com'));
+    await importing;
+    expect(flow.windowName.value).toBe('ChatGPT-second');
+    flow.windowName.value = '客户手工窗口名';
+    flow.updateJsonInput(directSessionJson('third@example.com'));
+    expect(flow.windowName.value).toBe('客户手工窗口名');
   });
   it.each(['not-json', '{"user":{"email":"first@example.com"', '{"token":"synthetic-only"}'])(
     '无效替换不能继续提交旧账号授权，并提示错误（%s）',
@@ -573,22 +624,23 @@ describe('比特浏览器充值入口', () => {
     expect(flow.sessionJson.value).toBe('');
     expect(flow.jsonInput.value).toBe('');
   });
-  it('读取文件后原任务锁定时不回写新授权，锁定时粘贴和导入也无效', async () => {
+  it('原任务运行时可替换下一次授权，但不能同时启动第二次任务', async () => {
     fillForm();
     const file = pendingJsonFile();
     const importing = flow.importJson(file.event);
     jobs.value.items = [job('running')];
-    expect(flow.formLocked.value).toBe(true);
+    expect(flow.formLocked.value).toBe(false);
+    expect(flow.canStart.value).toBe(false);
+    expect(flow.canStartOpen.value).toBe(false);
     file.complete(directSessionJson('file@example.com'));
     await importing;
-    expect(flow.jsonInput.value).toBe('');
-    expect(flow.sessionJson.value).toBe('');
+    expect(flow.sessionJson.value).toContain('file@example.com');
     flow.updateJsonInput(directSessionJson('replacement@example.com'));
-    const blocked = pendingJsonFile();
-    await flow.importJson(blocked.event);
-    expect(blocked.text).not.toHaveBeenCalled();
-    expect(flow.sessionJson.value).toBe('');
-    expect(flow.details.value.email).toBe('');
+    expect(flow.sessionJson.value).toContain('replacement@example.com');
+    await flow.start();
+    await flow.startOpen();
+    expect(mock.startBitBrowser).not.toHaveBeenCalled();
+    expect(mock.startBitBrowserOpen).not.toHaveBeenCalled();
   });
   it('单次付款授权和安全码必须本次填写，不需要填写最高付款金额', () => {
     fillForm();
@@ -742,9 +794,11 @@ describe('比特浏览器充值入口', () => {
     expect(flow.canRecheck.value).toBe(true);
     expect(flow.workflowMessage.value).toContain('禁止重新付款');
   });
-  it('确认暂停状态保持原任务锁定并继续拉取状态', () => {
+  it('确认暂停时允许编辑草稿，保留原任务确认并禁止重复启动', () => {
     jobs.value.items = [job('awaiting_confirmation', { quote_digest: 'fixture-digest' })];
-    expect(flow.formLocked.value).toBe(true);
+    expect(flow.formLocked.value).toBe(false);
+    expect(flow.canStart.value).toBe(false);
+    expect(flow.canStartOpen.value).toBe(false);
     expect(mock.jobOptions?.getRevalidateAt?.(jobs.value)).toBeGreaterThan(Date.now());
     expect(flow.workflowMessage.value).toContain('核对金额');
   });

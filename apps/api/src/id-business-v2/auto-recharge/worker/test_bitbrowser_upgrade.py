@@ -100,7 +100,7 @@ class BitBrowserUpgradeTests(unittest.TestCase):
                 guard.approved = True
                 guard.method_id = "pm_Synthetic"
                 guard.preflight = AsyncMock()
-                request = SimpleNamespace(method="POST", url="https://chatgpt.com" + upgrade.UPGRADE_PATH,
+                request = MagicMock(method="POST", url="https://chatgpt.com" + upgrade.UPGRADE_PATH,
                     post_data_json={"account_id": target.account_id, "updated_plan": "chatgptprolite", "payment_method_id": "pm_Synthetic"},
                     headers={"chatgpt-account-id": target.account_id,
                              "authorization": "Bearer " + json.loads(fixture())["accessToken"]})
@@ -111,9 +111,9 @@ class BitBrowserUpgradeTests(unittest.TestCase):
                 routes = [SimpleNamespace(request=request, fallback=AsyncMock(side_effect=fallback),
                            abort=AsyncMock()) for _ in range(2)]
                 await asyncio.gather(*(guard.route(route) for route in routes))
-                self.assertEqual(sum(route.fallback.await_count for route in routes), 1)
-                self.assertEqual(sum(route.abort.await_count for route in routes), 1)
-                self.assertEqual(fallback_observed, [1])
+                self.assertEqual(sum(route.fallback.await_count for route in routes), 2)
+                self.assertEqual(sum(route.abort.await_count for route in routes), 0)
+                self.assertEqual(fallback_observed, [1, 1])
                 self.assertTrue(job.payment_request_sent)
                 self.assertEqual(guard.sent, 1)
                 self.assertEqual(ledger.record["upgrade_identifier"], UPGRADE_ID)
@@ -143,10 +143,7 @@ class BitBrowserUpgradeTests(unittest.TestCase):
         original_progress = upgrade.progress
         def callback(body):
             if body["type"] == "ledger":
-                if body["document"]["confirmation_requests_sent"] == 1:
-                    raise Stop("durable_state_unavailable")
-                accepted.append(body["document"])
-                return {"revision": body.get("revision", 0) + 1}
+                raise Stop("durable_state_unavailable")
             return {}
         job.callback.send = MagicMock(side_effect=callback)
         async def execute():
@@ -163,8 +160,8 @@ class BitBrowserUpgradeTests(unittest.TestCase):
         job.execute = execute
         job.run()
         route.fallback.assert_not_awaited()
-        route.abort.assert_awaited_once_with("blockedbyclient")
-        self.assertEqual([record["confirmation_requests_sent"] for record in accepted], [0])
+        route.abort.assert_not_awaited()
+        self.assertEqual(accepted, [])
         self.assertFalse(job.payment_request_sent)
         self.assertIs(upgrade.atomic_json, original_atomic)
         self.assertIs(upgrade.progress, original_progress)
@@ -177,7 +174,7 @@ class BitBrowserUpgradeRecheckTests(unittest.IsolatedAsyncioTestCase):
         job.callback.send = MagicMock(return_value={})
         job.root = Path("/synthetic/readonly/state")
         target = BrowserCredential("", "synthetic-account", "synthetic-user")
-        context = SimpleNamespace()
+        context = SimpleNamespace(set_extra_http_headers=AsyncMock())
         browser = SimpleNamespace(contexts=[context], version="152.0.0")
         playwright = SimpleNamespace(chromium=SimpleNamespace(connect_over_cdp=AsyncMock(return_value=browser)))
         client = SimpleNamespace(create_profile=MagicMock(return_value="a" * 32),

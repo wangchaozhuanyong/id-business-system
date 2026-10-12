@@ -259,6 +259,9 @@ class UpgradeCardChange:
         return True
 
     async def response(self, response):
+        # Classification binds evidence only; it never controls browser traffic.
+        if response.request not in self.requests and not self.closed:
+            await self.decision(response.request)
         await self.auth.observe_redirect(response)
         name = self.requests.get(response.request)
         authentication = self.auth.requests.get(response.request) in AUTH_PATHS

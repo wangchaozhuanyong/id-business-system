@@ -425,8 +425,6 @@ export function useAutoRecharge(options: { clearPaymentValidation?: () => void }
     () =>
       busy.value ||
       resettingPaymentFields.value ||
-      active.value ||
-      directOpen.running.value ||
       paymentCardLoading.value ||
       Boolean(paymentJobId.value && !jobs.value.some((job) => job.id === paymentJobId.value))
   );
@@ -479,6 +477,8 @@ export function useAutoRecharge(options: { clearPaymentValidation?: () => void }
         currentSettingsReady.value
       ) &&
       !formLocked.value &&
+      !active.value &&
+      !directOpen.running.value &&
       !paymentRetryBlocked.value &&
       query.phase.value === 'ready'
   );
@@ -486,6 +486,8 @@ export function useAutoRecharge(options: { clearPaymentValidation?: () => void }
     () =>
       Boolean(credentialReady.value && windowName.value.trim() && currentSettingsReady.value) &&
       !formLocked.value &&
+      !active.value &&
+      !directOpen.running.value &&
       query.phase.value === 'ready'
   );
   const canCancel = computed(() => {
@@ -818,7 +820,7 @@ export function useAutoRecharge(options: { clearPaymentValidation?: () => void }
     return { sessionJson: sessionJson.value };
   }
 
-  function acceptSession(reportInvalid = true) {
+  function acceptSession(reportInvalid = true, previousEmail = details.value.email) {
     if (formLocked.value || loginMethod.value !== 'json') return;
     importGeneration++;
     importing.value = false;
@@ -828,8 +830,11 @@ export function useAutoRecharge(options: { clearPaymentValidation?: () => void }
       if (reportInvalid) jsonError.value = '请粘贴完整的单账户授权 JSON';
       return;
     }
+    if (new TextEncoder().encode(jsonInput.value).length > 65_000) {
+      if (reportInvalid) jsonError.value = '授权 JSON 超过 65 KB，请提供单账户授权文件';
+      return;
+    }
     try {
-      if (new TextEncoder().encode(jsonInput.value).length > 65_000) throw new Error();
       const value = JSON.parse(jsonInput.value);
       if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error();
       const email = registrationEmail(value);
@@ -839,19 +844,23 @@ export function useAutoRecharge(options: { clearPaymentValidation?: () => void }
       }
       sessionJson.value = jsonInput.value;
       details.value.email = email;
-      if (!windowName.value.trim()) {
+      if (
+        !windowName.value.trim() ||
+        (previousEmail && windowName.value === `ChatGPT-${previousEmail.split('@')[0]}`)
+      ) {
         const prefix = email.split('@')[0] || 'account';
         windowName.value = `ChatGPT-${prefix}`;
       }
       jsonInput.value = '';
       jsonError.value = '';
     } catch {
-      if (reportInvalid) jsonError.value = '请提供有效的单账户 JSON（不超过 65 KB）';
+      if (reportInvalid) jsonError.value = '授权 JSON 格式不完整或无效，请重新复制完整的单账户授权';
     }
   }
 
   function updateJsonInput(value: string) {
     if (formLocked.value || loginMethod.value !== 'json') return;
+    const previousEmail = details.value.email;
     importGeneration++;
     importing.value = false;
     jsonInput.value = value;
@@ -861,13 +870,14 @@ export function useAutoRecharge(options: { clearPaymentValidation?: () => void }
       jsonError.value = '';
       return;
     }
-    acceptSession();
+    acceptSession(true, previousEmail);
   }
 
   async function importJson(event: Event) {
     const input = event.target as HTMLInputElement;
     const file = input.files?.[0];
     if (!file || formLocked.value || loginMethod.value !== 'json') return;
+    const previousEmail = details.value.email;
     const generation = ++importGeneration;
     jsonInput.value = '';
     sessionJson.value = '';
@@ -875,7 +885,10 @@ export function useAutoRecharge(options: { clearPaymentValidation?: () => void }
     jsonError.value = '';
     importing.value = true;
     try {
-      if (file.size > 65_000) throw new Error();
+      if (file.size > 65_000) {
+        jsonError.value = '授权文件超过 65 KB，请选择单账户授权文件';
+        return;
+      }
       const value = await file.text();
       if (!disposed && generation === importGeneration) {
         if (formLocked.value || loginMethod.value !== 'json') {
@@ -883,11 +896,11 @@ export function useAutoRecharge(options: { clearPaymentValidation?: () => void }
           return;
         }
         jsonInput.value = value;
-        acceptSession();
+        acceptSession(true, previousEmail);
       }
     } catch {
       if (!disposed && generation === importGeneration)
-        jsonError.value = '文件读取失败，请选择不超过 65 KB 的 JSON 或文本文件';
+        jsonError.value = '文件读取失败，请重新选择 JSON 或文本文件';
     } finally {
       if (generation === importGeneration) importing.value = false;
       input.value = '';

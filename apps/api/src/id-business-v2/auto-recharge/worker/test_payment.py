@@ -560,7 +560,7 @@ class StateTests(unittest.TestCase):
         with PaymentLedger(root, self.target.account_id, target_plan="pro-20x") as restored:
             self.assertEqual(restored.record["quote"]["today"]["currency"], "JPY")
 
-    def test_recovery_guard_cannot_submit_even_with_approval_state(self):
+    def test_recovery_never_automates_payment_or_intercepts_manual_browser_requests(self):
         async def exercise():
             with PaymentLedger(self.root, self.target.account_id) as ledger:
                 ledger.begin(quote(), confirmed_digest=quote_digest(quote()), card_last4="4242")
@@ -576,8 +576,8 @@ class StateTests(unittest.TestCase):
                 route.request.post_data_json = None
                 route.request.headers = {}
                 await guard.route(route)
-                route.fallback.assert_not_awaited()
-                route.abort.assert_awaited_once()
+                route.fallback.assert_awaited_once()
+                route.abort.assert_not_awaited()
                 self.assertEqual(guard.confirmation_sent, 0)
         asyncio.run(exercise())
 
@@ -658,6 +658,46 @@ class StateTests(unittest.TestCase):
         self.assertIsNone(payment_evidence({**data, "session_id": "cs_other"}, "cs_synthetic", quote()))
 
 
+class PaymentQuoteObservationTests(unittest.IsolatedAsyncioTestCase):
+    async def asyncSetUp(self):
+        from test_payment_3ds import Request, Response
+        self.Request, self.Response = Request, Response
+        self.guard = PaymentGuard(parse_browser_credential(fixture()))
+        self.guard.checkout_id, self.guard.account_verified = 'cs_synthetic', True
+
+    async def observe(self, request, due, tax):
+        await self.guard.response(self.Response(request, {
+            'session_id': 'cs_synthetic', 'currency': 'myr', 'amount_total': due,
+            'total_details': {'amount_tax': tax}
+        }))
+
+    async def test_address_update_is_allowed_and_replaces_previous_tax_and_due(self):
+        initial = self.Request('https://api.stripe.com/v1/payment_pages/cs_synthetic/init')
+        await self.observe(initial, 9990, 740)
+        self.assertEqual(self.guard.official_quote_binding['tax_minor'], 740)
+        update = self.Request('https://api.stripe.com/v1/payment_pages/cs_synthetic/update',
+                              data='billing_address[country]=US&billing_address[state]=OR')
+        from test_payment_3ds import Route
+        route = Route(update)
+        await self.guard.route(route)
+        self.assertTrue(route.passed)
+        self.assertFalse(route.blocked)
+        self.assertIsNone(self.guard.official_quote_binding)
+        await self.observe(update, 9250, 0)
+        self.assertEqual(self.guard.official_quote_binding,
+                         {'amount_minor': 9250, 'currency': 'MYR', 'tax_minor': 0})
+
+    async def test_late_previous_address_response_cannot_restore_stale_quote(self):
+        old = self.Request('https://api.stripe.com/v1/payment_pages/cs_synthetic/update')
+        latest = self.Request('https://api.stripe.com/v1/payment_pages/cs_synthetic/update')
+        self.guard.observe_request(old)
+        self.guard.observe_request(latest)
+        await self.observe(latest, 9990, 740)
+        await self.observe(old, 9250, 0)
+        self.assertEqual(self.guard.official_quote_binding,
+                         {'amount_minor': 9990, 'currency': 'MYR', 'tax_minor': 740})
+
+
 class CurrentQuoteBudgetTests(unittest.IsolatedAsyncioTestCase):
     def guard(self):
         return SimpleNamespace(
@@ -710,7 +750,7 @@ class CurrentQuoteBudgetTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(report["quote_refresh_count"], 0)
         self.assertTrue(ended.is_set())
 
-    async def test_hanging_refresh_stops_at_original_deadline_and_reports_attempt(self):
+    async def test_quote_wait_never_invokes_automatic_refresh(self):
         started, ended = asyncio.Event(), asyncio.Event()
         async def refresh():
             started.set()
@@ -719,9 +759,9 @@ class CurrentQuoteBudgetTests(unittest.IsolatedAsyncioTestCase):
             finally:
                 ended.set()
         report = await self.bounded_failure(lambda *_: {"today": None}, refresh_handler=refresh)
-        self.assertTrue(started.is_set())
-        self.assertTrue(ended.is_set())
-        self.assertEqual(report["quote_refresh_count"], 1)
+        self.assertFalse(started.is_set())
+        self.assertFalse(ended.is_set())
+        self.assertEqual(report["quote_refresh_count"], 0)
 
     async def test_hanging_refill_stops_before_confirmation_and_clears_card(self):
         page = SimpleNamespace(reload=AsyncMock())
@@ -752,9 +792,10 @@ class CurrentQuoteBudgetTests(unittest.IsolatedAsyncioTestCase):
                     wait_seconds=1, poll_count=1, poll_interval=0,
                     quote_wait_seconds=.08), timeout=.6)
         self.assertEqual(stopped.exception.report["reason"], "payment_quote_not_ready")
-        self.assertEqual(stopped.exception.report["quote_refresh_count"], 1)
-        self.assertTrue(refilling.is_set() and ended.is_set())
-        page.reload.assert_awaited_once_with(wait_until="domcontentloaded", timeout=0)
+        self.assertEqual(stopped.exception.report["quote_refresh_count"], 0)
+        self.assertFalse(refilling.is_set() or ended.is_set())
+        self.assertEqual(fills, 1)
+        page.reload.assert_not_awaited()
         confirmer.assert_not_called()
         ledger.begin.assert_not_called()
         guard.approve.assert_not_called()
@@ -827,7 +868,7 @@ class PaymentBrowserTests(unittest.IsolatedAsyncioTestCase):
             await route.abort()
         elif p.path == "/v1/payment_methods":
             self.tokenizations += 1
-            await route.fulfill(json={"id": "pm_synthetic"}, headers={"Access-Control-Allow-Origin": "https://chatgpt.com"})
+            await route.fulfill(json={"id": "pm_synthetic"}, headers={"Access-Control-Allow-Origin": "*"})
         elif p.path == "/v1/payment_pages/cs_synthetic/init":
             if self.recovery_paid:
                 self.recovery_activated = True
@@ -836,7 +877,7 @@ class PaymentBrowserTests(unittest.IsolatedAsyncioTestCase):
             else:
                 data = {"id": "cs_synthetic", "status": "open", "currency": "myr",
                         "total_summary": {"due": 9250, "total": 9250}}
-            await route.fulfill(json=data, headers={"Access-Control-Allow-Origin": "https://chatgpt.com"})
+            await route.fulfill(json=data, headers={"Access-Control-Allow-Origin": "*"})
         elif p.path == "/v1/payment_pages/cs_synthetic/confirm":
             self.confirmations += 1
             files = list((self.root / "payments").glob("*.json"))
@@ -856,7 +897,7 @@ class PaymentBrowserTests(unittest.IsolatedAsyncioTestCase):
                     data["id"] = "page_synthetic"
                     data["session_id"] = "cs_synthetic"
                     data["total_summary"] = {"due": 9250, "total": 9250}
-            await route.fulfill(json=data, headers={"Access-Control-Allow-Origin": "https://chatgpt.com"})
+            await route.fulfill(json=data, headers={"Access-Control-Allow-Origin": "*"})
         elif p.hostname == "js.stripe.com" and p.path == "/card-fixture":
             await route.fulfill(content_type="text/html; charset=utf-8", body='''<html><body>
               <label>卡号<input autocomplete="cc-number"></label>
@@ -905,7 +946,6 @@ class PaymentBrowserTests(unittest.IsolatedAsyncioTestCase):
                 await fetch('https://api.stripe.com/v1/payment_methods',{method:'POST',body:'type=card'});
                 const u='https://api.stripe.com/v1/payment_pages/cs_synthetic/confirm';
                 const a=fetch(u,{method:'POST',body:'payment_method=pm_synthetic'});
-                fetch(u,{method:'POST',body:'payment_method=pm_synthetic'}).catch(()=>{});
                 await a;
               }</script></body></html>'''.replace(
                   "将按 每月 自动续订。将按 MYR 92.50/月 收费。", self.renewal_terms))
