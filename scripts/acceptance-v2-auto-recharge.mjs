@@ -103,6 +103,7 @@ const quoted = (plan) => ({
   renewal: { amount: '1100.00', amount_minor: 110000, currency: 'PHP' },
   renewal_interval: 'monthly'
 });
+const connectionAcceptance = process.argv.includes('--connections');
 const report = {
   scope: 'OFFLINE_SYNTHETIC_ONLY',
   builtPreview: process.argv.includes('--built'),
@@ -127,6 +128,24 @@ try {
       forbidden = [],
       jobs = [],
       local = new Map();
+    const profileA = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+    const profileB = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
+    const profiles = [
+      { id: profileA, name: '办公室电脑' },
+      { id: profileB, name: '另一台电脑' }
+    ];
+    const profileSettings = new Map(
+      profiles.map((item) => [
+        item.id,
+        {
+          ...settings,
+          connectionProfileId: item.id,
+          connectionProfileName: item.name,
+          connectionProfiles: profiles
+        }
+      ])
+    );
+    let profileSaves = 0;
     let version = 4,
       apiStarts = 0,
       starts = 0,
@@ -220,7 +239,37 @@ try {
             pageSize: 2000,
             totals: { unused: 0, used: 1, disabled: 0 }
           });
-        if (path.endsWith('/auto-recharge/bitbrowser-settings')) return success(route, settings);
+        if (path.endsWith('/auto-recharge/bitbrowser-settings')) {
+          if (!connectionAcceptance) return success(route, settings);
+          if (request.method() === 'PUT') {
+            const input = request.postDataJSON();
+            profileSaves += 1;
+            const saved = {
+              ...settings,
+              ...input,
+              connectionProfileId: input.newConnectionProfile
+                ? 'cccccccc-cccc-4ccc-8ccc-cccccccccccc'
+                : input.connectionProfileId,
+              localApiToken: undefined,
+              connectorToken: undefined,
+              connectionProfiles: profiles
+            };
+            if (input.newConnectionProfile)
+              profiles.push({ id: saved.connectionProfileId, name: input.connectionProfileName });
+            profileSettings.set(saved.connectionProfileId, saved);
+            return success(route, saved);
+          }
+          const selected = url.searchParams.get('connectionProfileId');
+          return success(
+            route,
+            profileSettings.get(selected) ?? {
+              ...settings,
+              connectionProfileId: null,
+              connectionProfileName: '原连接配置',
+              connectionProfiles: profiles
+            }
+          );
+        }
         if (path.endsWith('/auto-recharge/bitbrowser-catalog-access'))
           return success(route, {
             connectorUrl: connector,
@@ -648,6 +697,75 @@ try {
             };
           }, theme)
       );
+      if (connectionAcceptance) {
+        await page.getByRole('button', { name: '本机充值助手设置', exact: true }).click();
+        const drawer = page
+          .getByRole('dialog')
+          .filter({ has: page.getByRole('combobox', { name: '选择本人的连接配置' }) });
+        const choose = async (label) => {
+          await drawer
+            .getByRole('combobox', { name: '选择本人的连接配置' })
+            .locator('xpath=ancestor::div[contains(@class,"el-select__wrapper")]')
+            .click();
+          await page.getByRole('option', { name: label, exact: true }).click();
+          await waitFor(() =>
+            drawer
+              .getByLabel('配置名称', { exact: true })
+              .inputValue()
+              .then((value) => value === label)
+          );
+        };
+        if (theme === 'light') {
+          await choose('办公室电脑');
+          await drawer.getByLabel('配置名称', { exact: true }).fill('办公室未保存输入');
+          await choose('另一台电脑');
+          await drawer.getByLabel('配置名称', { exact: true }).fill('另一台未保存输入');
+          await drawer
+            .getByRole('combobox', { name: '选择本人的连接配置' })
+            .locator('xpath=ancestor::div[contains(@class,"el-select__wrapper")]')
+            .click();
+          await page.getByRole('option', { name: '办公室电脑', exact: true }).click();
+          await waitFor(() =>
+            drawer
+              .getByLabel('配置名称', { exact: true })
+              .inputValue()
+              .then((value) => value === '办公室未保存输入')
+          );
+          assert.equal(profileSaves, 0, '切换配置不会覆盖任何已保存配置');
+        }
+        await drawer.getByText('本人的连接配置', { exact: true }).click();
+        await drawer.getByRole('button', { name: '检测完整连接', exact: true }).click();
+        await drawer.getByText('连接器、比特接口和分组／标签检测通过', { exact: true }).waitFor();
+        assert.equal(
+          await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth + 1),
+          false
+        );
+        const aligned = await drawer.locator('.el-form-item:visible').evaluateAll((items) =>
+          items.every((item) => {
+            const label = item.querySelector('.el-form-item__label')?.getBoundingClientRect();
+            const content = item.querySelector('.el-form-item__content')?.getBoundingClientRect();
+            return (
+              !label ||
+              !content ||
+              (label.left < content.left && Math.abs(label.top - content.top) < 8)
+            );
+          })
+        );
+        assert.equal(aligned, true, '连接配置表单保持左侧标签和首行对齐');
+        await page.screenshot({
+          path: resolve(evidence, 'connections-' + theme + '-' + width + '.png'),
+          fullPage: true
+        });
+        await drawer.getByRole('button', { name: '恢复已保存配置', exact: true }).click();
+        await waitFor(() =>
+          drawer
+            .getByLabel('配置名称', { exact: true })
+            .inputValue()
+            .then((value) => value === '办公室电脑')
+        );
+        await drawer.getByRole('button', { name: '关闭', exact: true }).last().click();
+        await page.getByRole('dialog').waitFor({ state: 'hidden' });
+      }
       if (width < 900) {
         await page.locator('.recharge-status-panel').scrollIntoViewIfNeeded();
         await page.screenshot({ path: resolve(evidence, theme + '-' + width + '-result.png') });
@@ -690,6 +808,7 @@ try {
       invalidJsonClearsOldSession: 'PASS',
       sensitiveInputMaskAndReveal: 'PASS',
       countrySelectionReadonly: 'PASS',
+      connectionProfileDraftIsolation: connectionAcceptance ? 'PASS' : 'NOT_RUN',
       result: 'PASS'
     });
     await context.close();

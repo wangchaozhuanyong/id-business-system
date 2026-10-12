@@ -909,7 +909,7 @@ async function verifyRouteScrollRestoration(page) {
   assert.ok(initialScrollTop >= 279, '路由滚动恢复验收未能设置初始位置');
 
   await page.evaluate(async () => {
-    const { v2Router } = await import('/src/v2-router.ts');
+    const v2Router = document.getElementById('app').__vue_app__.config.globalProperties.$router;
     await v2Router.push({ path: '/v2/customers', query: { scrollAcceptance: '1' } });
   });
   await settleLayout(page);
@@ -917,7 +917,7 @@ async function verifyRouteScrollRestoration(page) {
   assert.ok(newRouteScrollTop <= 1, '新路由没有从顶部开始');
 
   await page.evaluate(async () => {
-    const { v2Router } = await import('/src/v2-router.ts');
+    const v2Router = document.getElementById('app').__vue_app__.config.globalProperties.$router;
     await v2Router.push('/v2/customers');
   });
   await settleLayout(page);
@@ -1298,12 +1298,12 @@ function assertSemanticColumnLayout(measurement, label) {
     status: 'center'
   };
   const minimumWidths = {
-    text: 160,
-    identifier: 192,
+    text: 80,
+    identifier: 112,
     index: 72,
-    numeric: 128,
+    numeric: 72,
     date: 165,
-    status: 112
+    status: 64
   };
   const expectedPadding = Math.min(12, Math.max(8, measurement.tableWidth / 100));
   assert.equal(measurement.columns.length, 6, `${label} 未渲染全部六种语义列`);
@@ -1327,7 +1327,7 @@ function assertSemanticColumnLayout(measurement, label) {
     } else {
       assert.ok(
         column.width >= minimumWidths[column.kind] - 1,
-        `${label} ${column.kind} 小于 schema 最小宽度`
+        `${label} ${column.kind} 小于共享内容宽度下限`
       );
     }
     if (['identifier', 'index', 'numeric', 'date'].includes(column.kind)) {
@@ -1339,32 +1339,12 @@ function assertSemanticColumnLayout(measurement, label) {
     }
   }
 
-  const flexibleColumns = measurement.columns.filter((column) => column.kind !== 'index');
-  const flexibleMinimumTotal = flexibleColumns.reduce(
-    (total, column) => total + minimumWidths[column.kind],
-    0
-  );
-  const flexibleActualTotal = flexibleColumns.reduce((total, column) => total + column.width, 0);
-  const hasHorizontalOverflow =
-    measurement.scrollerScrollWidth > measurement.scrollerClientWidth + 1;
-
-  if (hasHorizontalOverflow) {
-    for (const column of flexibleColumns) {
-      assert.ok(
-        Math.abs(column.width - minimumWidths[column.kind]) <= 1,
-        `${label} ${column.kind} 内部滚动时未保持 schema 最小宽度`
-      );
-    }
-  } else {
-    const proportionalScale = flexibleActualTotal / flexibleMinimumTotal;
-    for (const column of flexibleColumns) {
-      const expectedWidth = minimumWidths[column.kind] * proportionalScale;
-      const actualScale = column.width / minimumWidths[column.kind];
-      assert.ok(
-        Math.abs(actualScale - proportionalScale) <= 0.03,
-        `${label} ${column.kind} 未按 schema 最小宽度同比例分配剩余空间（实际 ${column.width.toFixed(2)}，期望 ${expectedWidth.toFixed(2)}，实际比例 ${actualScale.toFixed(4)}，整体比例 ${proportionalScale.toFixed(4)}）`
-      );
-    }
+  const maximumWidths = { text: 160, identifier: 192, numeric: 128, date: 165, status: 112 };
+  for (const column of measurement.columns.filter((value) => value.kind !== 'index')) {
+    assert.ok(
+      column.width <= maximumWidths[column.kind] + 1,
+      `${label} ${column.kind} 超出共享内容上限，短列不得按比例拉伸`
+    );
   }
 }
 

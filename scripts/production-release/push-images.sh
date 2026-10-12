@@ -1,9 +1,12 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/validate-release-selection.sh"
-[[ "${RELEASE_OPERATION:-release}" != verify_api_admin_migration && "${RELEASE_OPERATION:-release}" != verify_online_recharge && "${RELEASE_OPERATION:-release}" != verify_api_workspace ]] || exit 1
+[[ "${RELEASE_OPERATION:-release}" != verify_unpublished_components && "${RELEASE_OPERATION:-release}" != verify_api_admin_migration && "${RELEASE_OPERATION:-release}" != verify_online_recharge && "${RELEASE_OPERATION:-release}" != verify_api_workspace ]] || exit 1
 
-if [[ "${RELEASE_OPERATION:-release}" == release_admin ]]; then
+if [[ "${RELEASE_OPERATION:-release}" == release_unpublished_components ]]; then
+  services=(api admin migrate)
+  unpublished_component_projection="$(read_unpublished_component_projection)"
+elif [[ "${RELEASE_OPERATION:-release}" == release_admin ]]; then
   [[ "${RELEASE_ADMIN_ONLY:-}" == true ]] || exit 1
   services=(admin)
 elif [[ "${RELEASE_OPERATION:-release}" == release_online_recharge ]]; then
@@ -250,6 +253,11 @@ for service in "${services[@]}"; do
   image_tag="${RELEASE_COMMIT}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${service}"
   reference="${RELEASE_REPOSITORY}:${image_tag}"
   test "$(docker image inspect "$reference" --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}')" = "$RELEASE_COMMIT"
+  if [[ "${RELEASE_OPERATION:-release}" == release_unpublished_components ]]; then
+    test "$(docker image inspect "$reference" --format '{{ index .Config.Labels "id-business-v2.source-tree" }}')" = "$SOURCE_TREE"
+    [[ "$unpublished_component_projection" =~ ^[a-f0-9]{64}$ ]] || exit 1
+    test "$(docker image inspect "$reference" --format '{{ index .Config.Labels "id-business-v2.unpublished-component-successor-projection-sha256" }}')" = "$unpublished_component_projection"
+  fi
   if [[ "${RELEASE_OPERATION:-release}" == release_admin ]]; then
     test "$(docker image inspect "$reference" --format '{{ index .Config.Labels "id-business-v2.source-tree" }}')" = "$SOURCE_TREE"
     admin_pending_projection="$(python3 -c 'import json; from pathlib import Path; print(json.loads(Path(".deploy/production-release/admin-pending-online-build-projection.json").read_text())["projectionSha256"])')"

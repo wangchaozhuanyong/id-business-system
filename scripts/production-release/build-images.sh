@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/validate-release-selection.sh"
-[[ "${RELEASE_OPERATION:-release}" != verify_api_admin_migration && "${RELEASE_OPERATION:-release}" != verify_online_recharge && "${RELEASE_OPERATION:-release}" != verify_api_workspace ]] || exit 1
+[[ "${RELEASE_OPERATION:-release}" != verify_unpublished_components && "${RELEASE_OPERATION:-release}" != verify_api_admin_migration && "${RELEASE_OPERATION:-release}" != verify_online_recharge && "${RELEASE_OPERATION:-release}" != verify_api_workspace ]] || exit 1
 
 validate_browser_cache_reference() {
   local reference="${RELEASE_BROWSER_CACHE_IMAGE:-}" image_id="${RELEASE_BROWSER_CACHE_IMAGE_ID:-}" tag
@@ -63,6 +63,12 @@ build_image() {
   local service="$1" dockerfile="$2" target="$3" context="${4:-.}"
   local reference="${RELEASE_REPOSITORY}:${RELEASE_COMMIT}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${service}"
   local -a options=(--platform linux/amd64 --label "org.opencontainers.image.revision=$RELEASE_COMMIT")
+  if [[ "${RELEASE_OPERATION:-release}" == release_unpublished_components ]]; then
+    [[ "$service" == api || "$service" == admin || "$service" == migrate ]] || exit 1
+    [[ "${unpublished_component_projection:-}" =~ ^[a-f0-9]{64}$ ]] || exit 1
+    options+=(--label "id-business-v2.source-tree=$SOURCE_TREE"
+      --label "id-business-v2.unpublished-component-successor-projection-sha256=$unpublished_component_projection")
+  fi
   if [[ "${RELEASE_OPERATION:-release}" == release_admin || "${RELEASE_OPERATION:-release}" == release_online_recharge || "${RELEASE_OPERATION:-release}" == release_api_workspace || "${RELEASE_OPERATION:-release}" == release_api_admin || "${RELEASE_OPERATION:-release}" == release_api_admin_migration || "${RELEASE_OPERATION:-release}" == release_api_registration ]]; then
     options+=(--label "id-business-v2.source-tree=$SOURCE_TREE")
   fi
@@ -78,6 +84,9 @@ build_image() {
   fi
   if [[ "$service" == admin ]]; then
     options+=(--build-arg AUTH_PROVIDER=local --build-arg VITE_API_BASE_URL=/api)
+    if [[ "${RELEASE_OPERATION:-release}" == release_unpublished_components ]]; then
+      options+=(--build-arg "V2_BUILD_ID=v2-$RELEASE_COMMIT")
+    fi
     if [[ "${RELEASE_OPERATION:-release}" == release_admin ]]; then
       [[ "${admin_pending_projection:-}" =~ ^[a-f0-9]{64}$ ]] || exit 1
       options+=(--label "id-business-v2.admin-pending-projection-sha256=$admin_pending_projection")
@@ -141,6 +150,18 @@ build_image() {
   fi
   echo "Built image: $service"
 }
+
+if [[ "${RELEASE_OPERATION:-release}" == release_unpublished_components ]]; then
+  python3 -B scripts/production-release/unpublished-component-successor.py prepare
+  unpublished_component_context=.deploy/production-release/unpublished-component-successor-build-context
+  unpublished_component_projection="$(read_unpublished_component_projection)"
+  echo 'RELEASE_ADMIN_ONLY=false' >> "$GITHUB_ENV"
+  build_image api "$unpublished_component_context/apps/api/Dockerfile.mysql" runtime "$unpublished_component_context"
+  build_image admin "$unpublished_component_context/apps/admin/Dockerfile" runtime "$unpublished_component_context"
+  build_image migrate "$unpublished_component_context/apps/api/Dockerfile.mysql" migration "$unpublished_component_context"
+  python3 -B scripts/production-release/unpublished-component-successor.py proof
+  exit 0
+fi
 
 if [[ "${RELEASE_OPERATION:-release}" == release_admin ]]; then
   python3 -B scripts/production-release/admin-pending-online-release.py prepare
