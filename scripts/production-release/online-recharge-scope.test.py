@@ -1852,6 +1852,91 @@ class ReceiptTests(unittest.TestCase):
                 scope.extract_source(controller(), COMMIT, target)
 
 
+class ExtractSourcePermissionTests(unittest.TestCase):
+    def archive(self, entries):
+        data = io.BytesIO()
+        with tarfile.open(fileobj=data, mode='w:gz') as archive:
+            root = tarfile.TarInfo(f'id-business-system-{COMMIT}/')
+            root.type = tarfile.DIRTYPE; root.mode = 0o775
+            root.uid = 21; root.gid = 22
+            archive.addfile(root)
+            for name, raw, mode in entries:
+                item = tarfile.TarInfo(f'id-business-system-{COMMIT}/' + name)
+                item.mode = mode; item.uid = 21; item.gid = 22
+                if raw is None:
+                    item.type = tarfile.DIRTYPE
+                    archive.addfile(item)
+                else:
+                    item.size = len(raw)
+                    archive.addfile(item, io.BytesIO(raw))
+        return data.getvalue()
+
+    def extract(self, raw, target):
+        response = MagicMock()
+        response.__enter__.return_value.read.return_value = raw
+        with patch.object(scope.urllib.request, 'urlopen', return_value=response):
+            return scope.extract_source(controller(), COMMIT, target)
+
+    def test_archive_write_bits_are_removed_without_changing_content_or_git_execution(self):
+        entries = (('deploy/', None, 0o775), ('deploy/caddy/', None, 0o775),
+                   ('deploy/caddy/Caddyfile.aws', b'fixed-caddy-content\n', 0o664),
+                   ('plain.txt', b'fixed-ordinary-content\n', 0o664),
+                   ('bin/', None, 0o775), ('bin/worker.sh', b'#!/bin/sh\nexit 0\n', 0o775))
+        raw = self.archive(entries)
+        with directories() as (previous, target):
+            target.chmod(0o700)
+            retained = previous / 'retained.txt'; retained.write_bytes(b'previous-untouched\n')
+            retained.chmod(0o664)
+            self.assertEqual(self.extract(raw, target), raw)
+            self.assertEqual(target.stat().st_mode & 0o7777, 0o700)
+            for name, content, mode in entries:
+                path = target / name
+                self.assertEqual(path.stat().st_mode & 0o7777, mode & ~0o022)
+                self.assertEqual(bool(path.stat().st_mode & 0o111), bool(mode & 0o111))
+                if content is not None:
+                    self.assertEqual(path.read_bytes(), content)
+            self.assertEqual(retained.read_bytes(), b'previous-untouched\n')
+            self.assertEqual(retained.stat().st_mode & 0o7777, 0o664)
+        # Returned bytes preserve the original member UID/GID and tar modes.
+        with tarfile.open(fileobj=io.BytesIO(raw), mode='r:gz') as archive:
+            for member in archive.getmembers():
+                self.assertEqual((member.uid, member.gid), (21, 22))
+            self.assertEqual(archive.getmember(f'id-business-system-{COMMIT}/plain.txt').mode, 0o664)
+
+    def test_existing_private_and_read_only_modes_are_preserved(self):
+        entries = (('private/', None, 0o700), ('private/config', b'private-fixture\n', 0o600),
+                   ('read-only.txt', b'read-only-fixture\n', 0o400),
+                   ('owner-exec.sh', b'#!/bin/sh\nexit 0\n', 0o740))
+        with directories() as (_, target):
+            self.extract(self.archive(entries), target)
+            for name, content, mode in entries:
+                self.assertEqual((target / name).stat().st_mode & 0o7777, mode)
+                if content is not None:
+                    self.assertEqual((target / name).read_bytes(), content)
+
+    def test_invalid_entries_are_rejected_before_any_extraction(self):
+        for kind in ('symlink', 'hardlink', 'traversal', 'foreign-root'):
+            data = io.BytesIO()
+            with tarfile.open(fileobj=data, mode='w:gz') as archive:
+                valid = tarfile.TarInfo(f'id-business-system-{COMMIT}/valid.txt')
+                valid.size = 4; valid.mode = 0o664
+                archive.addfile(valid, io.BytesIO(b'safe'))
+                invalid = tarfile.TarInfo(f'id-business-system-{COMMIT}/invalid')
+                if kind in ('symlink', 'hardlink'):
+                    invalid.type = tarfile.SYMTYPE if kind == 'symlink' else tarfile.LNKTYPE
+                    invalid.linkname = 'valid.txt'
+                elif kind == 'traversal':
+                    invalid.name = f'id-business-system-{COMMIT}/../escaped.txt'
+                else:
+                    invalid.name = 'foreign-root/invalid.txt'
+                archive.addfile(invalid)
+            with self.subTest(kind=kind), directories() as (_, target):
+                with self.assertRaisesRegex(RuntimeError, 'SOURCE_ARCHIVE_INVALID'):
+                    self.extract(data.getvalue(), target)
+                self.assertEqual(list(target.iterdir()), [])
+                self.assertFalse((target.parent / 'escaped.txt').exists())
+
+
 class WorkspaceOriginTests(unittest.TestCase):
     def fixture(self, previous):
         managed = ('media-resolver', 'auto-recharge', 'auto-registration', 'api', 'admin')

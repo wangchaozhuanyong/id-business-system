@@ -1989,6 +1989,9 @@ def extract_source(d, commit, target):
                   and all((m.name == prefix[:-1] or m.name.startswith(prefix))
                           and '..' not in Path(m.name).parts and (m.isfile() or m.isdir()) for m in entries),
                   'ONLINE_RECHARGE_SOURCE_ARCHIVE_INVALID')
+        # Preserve archive content and executable/read-only bits while sealing staged source.
+        for member in entries:
+            member.mode &= ~0o022
         archive.extractall(target)
     extracted = target / prefix[:-1]
     for item in extracted.iterdir():
@@ -4267,7 +4270,7 @@ _AFTER_BIT_BANK_POLICY_FILES = {
         'bec32298136ff61d8e69820179b8c3f51f8e5221f4e6b449aaf5f5ec8f7d4625'),
     'scripts/production-release/online-recharge-scope.test.py': (
         '4aa063af4054ff98d2bb622056556ab643ed39abb3d373facc636509ff98ad8e',
-        '378a98cc98568a8f6664655a3625a7848c34a0fad0df026d582bc23370f4aec1'),
+        '040231332e348b139fa827bc48ea83c9ff974366d5999681660ad6b79eb62127'),
 }
 _AFTER_BIT_RELEASE_CI_FILES = {
     'scripts/ci-recharge-scope.mjs': ('3fe9c33ea883b7e2ad15305d1c7fe26873ddf648645b7a05acc8aecd5f858cfd', 'c066be2f8811237e6fd82448d79c9fbd93aace6457033984c4fb1a2457eb892c'),
