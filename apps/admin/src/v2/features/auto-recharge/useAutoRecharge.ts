@@ -937,6 +937,7 @@ export function useAutoRecharge(options: { clearPaymentValidation?: () => void }
       if (disposed) return;
       launch = await rechargeApi.startBitBrowser({
         id,
+        connectionProfileId: settingsQuery.data.value?.connectionProfileId ?? null,
         plan: plan.value,
         addressId: selectedAddress.value.id,
         windowName: windowName.value.trim(),
@@ -1032,6 +1033,7 @@ export function useAutoRecharge(options: { clearPaymentValidation?: () => void }
       if (disposed) return;
       launch = await rechargeApi.startBitBrowserOpen({
         id,
+        connectionProfileId: settingsQuery.data.value?.connectionProfileId ?? null,
         windowName: windowName.value.trim(),
         directMode: true,
         ...(loginMethod.value === 'password'
@@ -1083,6 +1085,7 @@ export function useAutoRecharge(options: { clearPaymentValidation?: () => void }
       if (disposed) return;
       launch = await rechargeApi.recheckBitBrowser({
         id,
+        connectionProfileId: settingsQuery.data.value?.connectionProfileId ?? null,
         sourceJobId: source.id,
         plan: source.plan,
         windowName: windowName.value.trim()

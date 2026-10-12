@@ -3125,6 +3125,19 @@ model IdBusinessV2RechargeAddressUse {
 }
 
 // 本机比特浏览器默认值；密钥与动态提取链接加密保存。
+model IdBusinessV2RechargeConnectionProfile {
+  id            String   @id @db.Char(36)
+  ownerId       String   @map("owner_id") @db.VarChar(191)
+  name          String   @db.VarChar(80)
+  configuration Json
+  createdAt     DateTime @default(now()) @map("created_at")
+  updatedAt     DateTime @updatedAt @map("updated_at")
+
+  @@unique([ownerId, name])
+  @@index([ownerId, createdAt])
+  @@map("id_business_v2_recharge_connection_profiles")
+}
+
 model IdBusinessV2RechargeBrowserSetting {
   ownerId                  String   @id @map("owner_id") @db.VarChar(191)
   connectorUrl             String   @default("http://127.0.0.1:55321") @map("connector_url") @db.VarChar(160)

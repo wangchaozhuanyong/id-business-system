@@ -34,6 +34,9 @@ function fixture() {
     urlEncrypted: 'encrypted:https://proxy.example.test/extract'
   };
   const repository = {
+    lock: vi.fn(),
+    pinLegacyConnections: vi.fn(),
+    listProfiles: vi.fn().mockResolvedValue([]),
     find: vi.fn(async () => row),
     findInTransaction: vi.fn(async () => row),
     upsert: vi.fn(async (_tx, _owner, input) => {
@@ -96,7 +99,13 @@ describe('代理目录共用默认代理', () => {
     });
     expect(saved.dynamicProxyUrlEncrypted).toBeNull();
     expect(saved.staticProxyCredentialsEncrypted).toBeNull();
-    expect(f.encryption.encrypt).not.toHaveBeenCalled();
+    expect(f.encryption.encrypt).toHaveBeenCalledWith(
+      JSON.stringify({
+        connectorUrl: 'http://127.0.0.1:55321',
+        connectorToken: 'fixture-connector'
+      })
+    );
+    expect(f.encryption.encrypt).not.toHaveBeenCalledWith('https://proxy.example/private-token');
     expect(await f.service.getServerProxySettings(operator)).toMatchObject({ proxyId });
     expect(JSON.stringify(f.audit.append.mock.calls)).not.toContain('https://proxy.example.test');
   });

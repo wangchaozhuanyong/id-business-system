@@ -2,6 +2,8 @@ export const auditChangeFieldLabels: Record<string, string> = {
   restoredFieldLabels: '恢复项目',
   restoreReason: '恢复原因',
   name: '名称',
+  connectionProfileId: '连接配置',
+  connectionProfileName: '连接配置名称',
   displayName: '员工姓名',
   username: '登录账号',
   account: '账号',

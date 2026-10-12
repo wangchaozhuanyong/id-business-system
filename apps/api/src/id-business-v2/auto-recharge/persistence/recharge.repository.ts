@@ -36,6 +36,7 @@ export class RechargeRepository {
     return job;
   }
 
+  // Serializes short bookkeeping transactions, never the lifetime of browser tasks.
   async lock(tx: V2CommandTransaction) {
     await acquireMysqlTransactionLock(tx, 'auto-recharge-single-worker');
   }
@@ -67,7 +68,9 @@ export class RechargeRepository {
     ownerId: string,
     accountKey: string,
     excludeId: string,
-    allowDeletedProfile = false
+    allowDeletedProfile = false,
+    connectionApiKey?: string,
+    connectionProfileId?: string | null
   ) {
     let cursor: string | undefined;
     // 窗口归属不受列表的30条限制。查询有界，未查完时拒绝把未知当作可新建。
@@ -85,7 +88,15 @@ export class RechargeRepository {
         ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {})
       });
       const profile = findRetainedRechargeBrowserProfile(
-        jobs,
+        jobs.filter((job) => {
+          const metadata = job.result as Record<string, unknown>;
+          return (
+            !connectionApiKey ||
+            (metadata.connection_api_key
+              ? metadata.connection_api_key === connectionApiKey
+              : !connectionProfileId)
+          );
+        }),
         ownerId,
         accountKey,
         allowDeletedProfile
@@ -165,9 +176,9 @@ export class RechargeRepository {
     return identifier;
   }
 
-  findRunningJob(tx: V2CommandTransaction) {
+  findRunningJob(tx: V2CommandTransaction, ownerId: string) {
     return tx.idBusinessV2RechargeJob.findFirst({
-      where: { state: { not: 'finished' }, leaseUntil: { gt: new Date() } }
+      where: { ownerId, state: { not: 'finished' }, leaseUntil: { gt: new Date() } }
     });
   }
 
@@ -176,15 +187,69 @@ export class RechargeRepository {
     data: Prisma.IdBusinessV2RechargeJobUncheckedCreateInput
   ) {
     await assertEmployeeBusinessWriter(tx, data.ownerId);
+    await this.assertExecutionResources(tx, data.id!, data);
     return tx.idBusinessV2RechargeJob.create({ data });
   }
 
-  updateJob(
+  async updateJob(
     tx: V2CommandTransaction,
     id: string,
     data: Prisma.IdBusinessV2RechargeJobUncheckedUpdateInput
   ) {
+    if (data.state !== 'finished' && (typeof data.accountKey === 'string' || data.result)) {
+      const current = await this.findJob(tx, id);
+      if (current && current.action === 'bitbrowser') {
+        await this.assertExecutionResources(tx, id, {
+          ...current,
+          ...data,
+          ownerId: current.ownerId,
+          accountKey: typeof data.accountKey === 'string' ? data.accountKey : current.accountKey,
+          chatgptAccountId: current.chatgptAccountId,
+          result: data.result ?? current.result
+        } as Prisma.IdBusinessV2RechargeJobUncheckedCreateInput);
+      }
+    }
     return tx.idBusinessV2RechargeJob.update({ where: { id }, data });
+  }
+
+  private async assertExecutionResources(
+    tx: V2CommandTransaction,
+    id: string,
+    data: Prisma.IdBusinessV2RechargeJobUncheckedCreateInput
+  ) {
+    if (data.action !== 'bitbrowser') return;
+    const result = data.result as Record<string, unknown> | undefined;
+    const checks: Prisma.IdBusinessV2RechargeJobWhereInput[] = [{ ownerId: data.ownerId }];
+    if (data.accountKey) checks.push({ accountKey: data.accountKey });
+    if (data.chatgptAccountId) checks.push({ chatgptAccountId: data.chatgptAccountId });
+    if (typeof result?.connection_connector_key === 'string')
+      checks.push({
+        result: { path: '$.connection_connector_key', equals: result.connection_connector_key }
+      });
+    if (
+      typeof result?.connection_api_key === 'string' &&
+      typeof result.browser_profile_id === 'string'
+    )
+      checks.push({
+        AND: [
+          { result: { path: '$.connection_api_key', equals: result.connection_api_key } },
+          { result: { path: '$.browser_profile_id', equals: result.browser_profile_id } }
+        ]
+      });
+    const conflict = await tx.idBusinessV2RechargeJob.findFirst({
+      where: {
+        id: { not: id },
+        state: { not: 'finished' },
+        leaseUntil: { gt: new Date() },
+        OR: checks
+      }
+    });
+    if (conflict)
+      throw new ConflictException(
+        conflict.ownerId === data.ownerId
+          ? '本人已有任务执行中，请先处理原任务'
+          : '该账号、比特窗口或本机助手已有任务执行中，请使用独立资源'
+      );
   }
 
   records(tx: V2CommandTransaction, accountKey: string) {

@@ -38,6 +38,9 @@ function fixture() {
     staticProxyCredentialsEncrypted: null
   };
   const repository = {
+    lock: vi.fn(),
+    pinLegacyConnections: vi.fn(),
+    listProfiles: vi.fn().mockResolvedValue([]),
     find: vi.fn(async () => row),
     findInTransaction: vi.fn(async () => row),
     upsert: vi.fn(async (_tx, _id, data) => (row = { ...row, ...data }))

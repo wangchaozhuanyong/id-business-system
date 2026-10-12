@@ -237,7 +237,9 @@ export class RechargeService {
                   job.ownerId,
                   accountKey,
                   job.id,
-                  canRecreateRechargeBrowserProfile(currentResult)
+                  canRecreateRechargeBrowserProfile(currentResult),
+                  currentResult.connection_api_key as string | undefined,
+                  currentResult.connection_profile_id as string | null | undefined
                 )
               : undefined;
           const finished =
@@ -385,6 +387,8 @@ export class RechargeService {
           throw new ConflictException('已结束任务不能再写入执行事件');
         }
         const report = safeDocument(input.result);
+        for (const key of Object.keys(report))
+          if (key.startsWith('connection_')) delete report[key];
         await retainOrReplaceRechargeBrowserProfile({
           tx,
           job,

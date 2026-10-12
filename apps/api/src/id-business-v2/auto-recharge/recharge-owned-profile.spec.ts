@@ -779,7 +779,9 @@ describe('同账号成功比特窗口归属', () => {
       ownerId,
       accountKey,
       currentId,
-      true
+      true,
+      undefined,
+      undefined
     );
     await expect(
       service.callback(currentId, { type: 'restore', accountKey: 'd'.repeat(64) })

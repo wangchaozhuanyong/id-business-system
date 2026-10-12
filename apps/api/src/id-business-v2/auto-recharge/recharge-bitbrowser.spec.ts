@@ -606,7 +606,7 @@ describe('本机任务持久化边界', () => {
     );
 
     const launch = await service.startOpen({ id, windowName: 'ChatGPT登录-01' }, operator);
-    expect(settings.runtime).toHaveBeenCalledWith(operator.id, false, false);
+    expect(settings.runtime).toHaveBeenCalledWith(operator.id, false, false, undefined);
     expect(launch).toMatchObject({
       id,
       mode: 'open_browser',
@@ -635,7 +635,7 @@ describe('本机任务持久化边界', () => {
       { id, windowName: 'ChatGPT登录-01', directMode: true },
       operator
     );
-    expect(settings.runtime).toHaveBeenLastCalledWith(operator.id, false, true);
+    expect(settings.runtime).toHaveBeenLastCalledWith(operator.id, false, true, undefined);
     expect(directLaunch.connectorToken).toBe('');
     expect(repository.createJob).toHaveBeenLastCalledWith(
       tx,
@@ -693,7 +693,9 @@ describe('本机任务持久化边界', () => {
       operator.id,
       accountKey,
       id,
-      true
+      true,
+      undefined,
+      undefined
     );
     expect(repository.createJob).toHaveBeenCalledWith(
       {},

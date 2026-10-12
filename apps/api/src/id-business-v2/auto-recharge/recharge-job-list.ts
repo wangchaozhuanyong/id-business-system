@@ -31,7 +31,10 @@ export async function listRechargeJobs(
         job.action === 'server' && object(job.result).recheck_only !== true
           ? recoverRechargePaymentResult(job, records)
           : object(job.result);
-      const result = resultWithConfirmation({ ...job, result: storedResult }, workerToken);
+      const publicResult = { ...storedResult };
+      for (const key of Object.keys(publicResult))
+        if (key.startsWith('connection_')) delete publicResult[key];
+      const result = resultWithConfirmation({ ...job, result: publicResult }, workerToken);
       return {
         ...job,
         nonceHash: undefined,
