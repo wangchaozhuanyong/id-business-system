@@ -4272,7 +4272,7 @@ _AFTER_BIT_BANK_POLICY_FILES = {
         'bec32298136ff61d8e69820179b8c3f51f8e5221f4e6b449aaf5f5ec8f7d4625'),
     'scripts/production-release/online-recharge-scope.test.py': (
         '4aa063af4054ff98d2bb622056556ab643ed39abb3d373facc636509ff98ad8e',
-        '5df083671e54431adf0c8e06a17efe0000af365b2bfbf935c66d506633deae70'),
+        '2ea5dc9f740def0dd5dd67c6ab3f2cde9ce86dc500c7fbad9d90c5d54c9f82f7'),
 }
 _AFTER_BIT_RELEASE_CI_FILES = {
     'scripts/ci-recharge-scope.mjs': ('3fe9c33ea883b7e2ad15305d1c7fe26873ddf648645b7a05acc8aecd5f858cfd', 'c066be2f8811237e6fd82448d79c9fbd93aace6457033984c4fb1a2457eb892c'),

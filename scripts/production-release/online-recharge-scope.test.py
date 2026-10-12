@@ -6629,7 +6629,10 @@ class ReviewedApplicationMappingTests(unittest.TestCase):
         cls.policy_raw=(ROOT/cls.policy_name).read_bytes()
         cls.policy=json.loads(cls.policy_raw)
         cls.candidate_scope=(ROOT/'scripts/production-release/online-recharge-scope.py').read_bytes()
-        cls.template_commit=subprocess.check_output(['git','rev-parse','HEAD'],cwd=ROOT).decode().strip()
+        # This is the closed reviewed application fixture, not the moving PR
+        # merge checkout. Later ordinary worker releases must not silently enter
+        # its forty-file mapping; the candidate controller is overlaid below.
+        cls.template_commit='4a35c9c9d8f4a2df9e28503ffe491d4af5d8052e'
         cls.template_prefix='id-business-system-'+cls.template_commit+'/'
         raw=subprocess.check_output(['git','archive','--format=tar.gz','--prefix='+cls.template_prefix,cls.template_commit],cwd=ROOT)
         with tarfile.open(fileobj=io.BytesIO(raw),mode='r:gz') as archive:
