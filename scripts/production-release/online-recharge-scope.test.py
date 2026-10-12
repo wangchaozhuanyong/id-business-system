@@ -6620,6 +6620,30 @@ class ReviewedApplicationMappingTests(unittest.TestCase):
         with self.carrier(),self.assertRaisesRegex(RuntimeError,'APPLICATION_SOURCE_CHANGED'):
             scope._pending_workspace_profile(d,self.bridge,p)
 
+    def test_historical_ci_mapping_is_exact_and_rejects_current_or_partial_pins(self):
+        historical=scope._RESTORED_B_WITNESS['policy']['failedProducer']
+        archive=subprocess.check_output(['git','archive','--format=tar.gz',
+            '--prefix=id-business-system-'+historical['commit']+'/',historical['commit']],cwd=ROOT)
+        other=controller(BASE=Path('/opt/id-business-v2'),
+            _onlinePendingWorkspaceArchiveBytes={(historical['commit'],historical['sourceTree']):archive})
+        genuine=scope._pending_workspace_current_source_inventory(other,historical)
+        for mutation in ('current','partial','mode','extra'):
+            altered=copy.deepcopy(genuine)
+            key='scripts/ci-recharge-scope.mjs'
+            if mutation=='current':
+                altered[key]={'sha256':scope._AFTER_BIT_RELEASE_CI_FILES[key][1],'mode':'100644'}
+            elif mutation=='partial':altered[key]=copy.deepcopy(self.before[key])
+            elif mutation=='mode':altered[key]['mode']='100755'
+            else:altered[self.policy_name]=copy.deepcopy(self.after[self.policy_name])
+            with self.subTest(mutation=mutation),patch.object(scope,'_pending_workspace_current_source_inventory',
+                    side_effect=[self.before,altered]):
+                with self.assertRaisesRegex(RuntimeError,'B_RESTORE_FAILED_SOURCE_CHANGED'):
+                    scope._restored_workspace_failed_source_inventory(other,self.bridge,historical)
+        with patch.object(scope,'_pending_workspace_current_source_inventory',
+                side_effect=[self.before,genuine]):
+            with self.assertRaisesRegex(RuntimeError,'B_RESTORE_FAILED_SOURCE_CHANGED'):
+                scope._restored_workspace_failed_source_inventory(other,self.bridge,self.full[1])
+
     def test_historical_failed_c_mapping_has_no_reviewed_application_exception(self):
         d,p,raw=self.full
         historical=scope._RESTORED_B_WITNESS['policy']['failedProducer']

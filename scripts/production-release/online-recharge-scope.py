@@ -4267,7 +4267,7 @@ _AFTER_BIT_BANK_POLICY_FILES = {
         'bec32298136ff61d8e69820179b8c3f51f8e5221f4e6b449aaf5f5ec8f7d4625'),
     'scripts/production-release/online-recharge-scope.test.py': (
         '4aa063af4054ff98d2bb622056556ab643ed39abb3d373facc636509ff98ad8e',
-        'c3e6eef0cf8bccd90317dd946be6348f7ea742f0ba991f30cbc7043463d7a4a7'),
+        '378a98cc98568a8f6664655a3625a7848c34a0fad0df026d582bc23370f4aec1'),
 }
 _AFTER_BIT_RELEASE_CI_FILES = {
     'scripts/ci-recharge-scope.mjs': ('3fe9c33ea883b7e2ad15305d1c7fe26873ddf648645b7a05acc8aecd5f858cfd', 'c066be2f8811237e6fd82448d79c9fbd93aace6457033984c4fb1a2457eb892c'),
@@ -5688,6 +5688,13 @@ _WORKSPACE_RELEASE_RULES_POLICY = {'kind': 'ONLINE_RECHARGE_FIXED_RELEASE_RULES_
 _RESTORED_FAILED_C_BANK_SOURCE_PAIRS = {'scripts/lib/v2-production-database-access.mjs': ('7ece1de5cbba89b26615d749a671d32a380f4dc377548071746d14f1f2e2a546', '36bfe57d9fd802fc647d09dd8871f1af4cee6cd03a68bf05a2509dd0e554570d'), 'scripts/production-database-access.test.mjs': ('eb2ea9b434ea744589ce2210fcbd501b54bedcda05e614521aab9b30be002590', 'd914b4646ced503e432697b410b9dcbbf07d9087375ba0e6ea41df8b7a9c5000'), 'scripts/acceptance-v2-production-database-access.mjs': ('15adadb670cdbd7645761b161f487b74550b271455289e60a97108e9e4ac46f1', 'd39b620aa33ac21cecc0b9229dc0cc59967af1e890ea65c4e61d20fb1dbe269e'), 'scripts/production-release/api-admin-scope.test.py': ('551b052262643dc8b9ccb9cd56a08bc0b566dab03e634643517fe3ce3c168b06', 'bec32298136ff61d8e69820179b8c3f51f8e5221f4e6b449aaf5f5ec8f7d4625'), 'scripts/production-release/online-recharge-scope.test.py': ('4aa063af4054ff98d2bb622056556ab643ed39abb3d373facc636509ff98ad8e', '59f3221f1326865a958f6f50fd0fb5211c3f2ee29ca915884f05202d426cf5d2')}
 
 
+_RESTORED_FAILED_C_RELEASE_CI_FILES = {
+    'scripts/ci-recharge-scope.mjs': ('3fe9c33ea883b7e2ad15305d1c7fe26873ddf648645b7a05acc8aecd5f858cfd', '04c8451b64ebf75755a108761a1a73430e4f31e807f7bb4f356b790417ee7ec1'),
+    'scripts/ci-recharge-scope.test.mjs': ('f7df520b417f7d681050073e5e8b9cd882effebd10a458a7afc620a39ab17550', 'b487febe298fd3934dfe7c02d3fd610e99300f17712463daa958660aa2e51934'),
+    'scripts/ci-recharge-check.mjs': ('8863a78075b234faa0b048c56277bff81f7df88ad72d6261bc5493f08d525932', '96153e6f010d7a6c9b1028ea3d95d91ad1b321f5ab04768011fddb9819790ff7'),
+    'scripts/ci-recharge-check.test.mjs': ('53e1376a2e36d3f492075547d4a0ceb8e65a915cec0c572ac6952356b045ea04', '0ff6dca9335d102fcdacfd7c0a9ad2ecafc245aa086d2cbda4655f58ff1b6767'),
+}
+
 def _restored_workspace_failed_source_inventory(d,bridge,producer):
     """Complete authentic failed-C Git archive, usable by native F and CI.
 
@@ -5699,8 +5706,13 @@ def _restored_workspace_failed_source_inventory(d,bridge,producer):
     original=_pending_workspace_current_source_inventory(d,bridge['baselineProducer'])
     inventory=_pending_workspace_current_source_inventory(d,producer)
     bank=_RESTORED_FAILED_C_BANK_SOURCE_PAIRS
-    d.require(type(bank) is dict and set(bank)==set(_AFTER_BIT_BANK_POLICY_FILES),code)
-    ci=_workspace_release_ci_inventory(d,bridge,original,inventory)
+    ci=frozenset(_RESTORED_FAILED_C_RELEASE_CI_FILES)
+    d.require(producer==_RESTORED_B_WITNESS['policy']['failedProducer']
+        and type(bank) is dict and set(bank)==set(_AFTER_BIT_BANK_POLICY_FILES)
+        and ci==frozenset(_AFTER_BIT_RELEASE_CI_FILES)
+        and all(original.get(n)=={'sha256':before,'mode':'100644'}
+            and inventory.get(n)=={'sha256':after,'mode':'100644'}
+            for n,(before,after) in _RESTORED_FAILED_C_RELEASE_CI_FILES.items()),code)
     compatible=_PENDING_WORKSPACE_RECEIPT_COMPATIBILITY_FILES|frozenset(bank)|ci
     d.require(set(original)==set(inventory)
         and all(original.get(name)=={'sha256':before,'mode':'100644'}
