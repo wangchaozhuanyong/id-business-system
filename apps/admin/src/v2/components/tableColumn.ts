@@ -24,13 +24,8 @@ export const V2_TABLE_COLUMN_ALIGNMENT: Record<V2TableColumnKind, V2TableColumnA
   status: 'center'
 };
 
-export function getV2TableColumnWidthProps(
-  kind: V2TableColumnKind,
-  widthPreset: V2TableColumnWidthPreset,
-  pinned = false
-) {
-  const width = V2_TABLE_COLUMN_WIDTH[widthPreset];
-  return kind === 'index' || pinned ? { width } : { minWidth: width };
+export function getV2TableColumnWidthProps(widthPreset: V2TableColumnWidthPreset) {
+  return { width: V2_TABLE_COLUMN_WIDTH[widthPreset] };
 }
 
 export function getV2TableColumnClass(kind: V2TableColumnKind) {

@@ -8,7 +8,8 @@ import {
   provide,
   ref,
   watch,
-  type PropType
+  type PropType,
+  type StyleValue
 } from 'vue';
 import { ElTable } from 'element-plus/es/components/table/index.mjs';
 import 'element-plus/es/components/table/style/css';
@@ -19,10 +20,12 @@ import {
   isV2TableColumnVisible
 } from '@/v2/composables/useV2TablePreferences';
 import V2TableColumnSettings from './V2TableColumnSettings.vue';
+import { useV2TableContentWidths } from '@/v2/composables/useV2TableContentWidths';
 import type { V2TableSchema } from './tableSystem';
 import { V2_TABLE_VISIBILITY_CONTEXT } from './tableVisibility';
 
 type ElementTableExpose = {
+  doLayout?: () => void;
   setScrollLeft?: (left: number) => void;
   scrollTo?: (
     options:
@@ -61,6 +64,14 @@ export default defineComponent({
     const authStore = useAuthStore();
     const tableRef = ref<ElementTableExpose>();
     const shellRef = ref<HTMLElement>();
+    const { tableWidth } = useV2TableContentWidths(
+      () => props.schema,
+      () => props.viewKey,
+      () => shellRef.value,
+      () => {
+        void nextTick(() => tableRef.value?.doLayout?.());
+      }
+    );
     const toolbarHeight = ref(0);
     const headerHeight = ref<number>();
     let toolbarObserver: ResizeObserver | undefined;
@@ -170,6 +181,10 @@ export default defineComponent({
             {
               ...tableAttrs,
               ref: tableRef,
+              style: [
+                tableAttrs.style as StyleValue,
+                tableWidth.value ? { width: `${tableWidth.value}px` } : {}
+              ],
               fit: true,
               flexible: true,
               tableLayout: 'fixed',

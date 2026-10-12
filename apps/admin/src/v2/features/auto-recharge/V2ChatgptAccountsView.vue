@@ -57,6 +57,7 @@
         </header>
         <V2Table
           :schema="v2TableSchemas.chatgptAccounts.main"
+          :view-key="deletedFilter"
           :show-column-settings="false"
           :data="accounts"
           class="v2-records-table bank-recharge-nowrap"

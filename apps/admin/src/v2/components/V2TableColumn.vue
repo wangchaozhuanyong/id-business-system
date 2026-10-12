@@ -7,7 +7,8 @@ import {
   getV2TableColumnWidthProps,
   V2_TABLE_COLUMN_ALIGNMENT
 } from './tableColumn';
-import { V2_TABLE_VISIBILITY_CONTEXT } from './tableVisibility';
+import { getV2TableColumnKeyClass } from './tableContentWidth';
+import { V2_TABLE_CONTENT_WIDTH_CONTEXT, V2_TABLE_VISIBILITY_CONTEXT } from './tableVisibility';
 
 export default defineComponent({
   name: 'V2TableColumn',
@@ -20,6 +21,7 @@ export default defineComponent({
   },
   setup(props, { attrs, slots }) {
     const visibility = inject(V2_TABLE_VISIBILITY_CONTEXT, null);
+    const contentWidths = inject(V2_TABLE_CONTENT_WIDTH_CONTEXT, null);
 
     return () => {
       if (
@@ -32,8 +34,10 @@ export default defineComponent({
       const columnAttrs = { ...attrs } as Record<string, unknown>;
       const existingClassName = columnAttrs.className ?? columnAttrs['class-name'];
       const existingLabelClassName = columnAttrs.labelClassName ?? columnAttrs['label-class-name'];
-      const semanticClass = getV2TableColumnClass(props.definition.kind);
-      const pinned = props.definition.pin !== undefined;
+      const semanticClass = [
+        getV2TableColumnClass(props.definition.kind),
+        getV2TableColumnKeyClass(props.definition.key)
+      ].join(' ');
 
       delete columnAttrs['class-name'];
       delete columnAttrs['label-class-name'];
@@ -49,11 +53,9 @@ export default defineComponent({
         ElTableColumn,
         {
           ...columnAttrs,
-          ...getV2TableColumnWidthProps(
-            props.definition.kind,
-            props.definition.widthPreset,
-            pinned
-          ),
+          ...(contentWidths
+            ? { width: contentWidths.columnWidth(props.definition) }
+            : getV2TableColumnWidthProps(props.definition.widthPreset)),
           label: props.definition.label,
           columnKey: props.definition.key,
           fixed:

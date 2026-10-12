@@ -121,7 +121,7 @@ if (issues.length) {
       registeredSchemas: schemaByExpression.size,
       actionColumns: actionColumnCount,
       layout: 'fixed',
-      responsiveColumns: 'proportional-min-width',
+      responsiveColumns: 'content-width-with-capped-text-growth',
       mobileBreakpoint: 900
     })
   );
@@ -467,6 +467,7 @@ function validateSharedImplementation() {
     [/showOverflowTooltip:\s*true/, 'V2Table 必须统一溢出提示'],
     [/V2TableColumnSettings/, 'V2Table 必须统一提供列显示设置入口'],
     [/V2_TABLE_VISIBILITY_CONTEXT/, 'V2Table 必须提供共享列可见性上下文'],
+    [/useV2TableContentWidths/, 'V2Table 必须复用共享内容列宽与生命周期'],
     [/matchMedia\('\(max-width: 900px\)'\)/, '共享表格必须统一使用 900px 窄屏断点'],
     [/fixedColumnsEnabled:\s*\(\) => !isMobile\.value/, '窄屏固定列必须在共享表格层统一解除'],
     [
@@ -479,6 +480,9 @@ function validateSharedImplementation() {
   }
   if (!/columnKey:\s*props\.definition\.key/.test(columnSource)) {
     issues.push(`${tableColumnPath}: 数据列必须传递 schema columnKey`);
+  }
+  if (!/contentWidths\.columnWidth\(props\.definition\)/.test(columnSource)) {
+    issues.push(`${tableColumnPath}: 数据列必须使用共享内容宽度，禁止比例拉伸短列`);
   }
   for (const [source, projectPath] of [
     [columnSource, tableColumnPath],
