@@ -93,7 +93,7 @@ def source_fixture(old, new):
     for name in (scope.SCHEMA_FILE, scope.SEED_FILE, scope.MIGRATION_ROOT + '/' + scope.MIGRATION_FILE):
         target = new / name
         target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_bytes((ROOT / name).read_bytes())
+        target.write_bytes(subprocess.check_output(['git', 'show', scope.RECOVERY_COMMIT + ':' + name], cwd=ROOT))
 
 
 def database_fixture(directory, applied):
@@ -2332,16 +2332,22 @@ class DeclarationEquivalencePureTests(unittest.TestCase):
     No producer/run/payment/production equivalence is claimed by these fixtures.
     """
     @classmethod
-    def setUpClass(cls):
-        cls.commit = subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=ROOT).decode().strip()
-        cls.tree = subprocess.check_output(['git', 'rev-parse', 'HEAD^{tree}'], cwd=ROOT).decode().strip()
+    def setUpClass(cls, *, candidate_commit='HEAD'):
+        cls.commit = subprocess.check_output(['git', 'rev-parse', candidate_commit], cwd=ROOT).decode().strip()
+        cls.tree = subprocess.check_output(['git', 'rev-parse', candidate_commit + '^{tree}'], cwd=ROOT).decode().strip()
         cls.archive = subprocess.check_output(['git', 'archive', '--format=tar.gz',
             '--prefix=id-business-system-' + cls.commit + '/', cls.commit], cwd=ROOT)
         cls.inventory = scope.archive_inventory(controller(), cls.archive, cls.commit, cls.tree)
         cls.policy_raw = (ROOT / 'scripts/production-release/online-recharge-recovery.json').read_bytes()
         cls.policy = scope.closed_recovery_json(controller(), cls.policy_raw)
-        cls.completed = {name.split('/')[-2]: row['sha256'] for name, row in cls.inventory.items()
-                         if name.startswith(scope.MIGRATION_ROOT + '/') and name.endswith('/migration.sql')}
+        # The ended failures describe the original migration history, while the
+        # producer archive and helper bindings above belong to the current source.
+        historical = subprocess.check_output(['git', 'archive', '--format=tar',
+            scope.RECOVERY_COMMIT, scope.MIGRATION_ROOT], cwd=ROOT)
+        with tarfile.open(fileobj=io.BytesIO(historical), mode='r:') as archive:
+            cls.completed = {member.name.split('/')[-2]: hashlib.sha256(archive.extractfile(member).read()).hexdigest()
+                for member in archive.getmembers() if member.isfile()
+                and member.name.startswith(scope.MIGRATION_ROOT + '/') and member.name.endswith('/migration.sql')}
 
     @staticmethod
     def raw(value):

@@ -62,26 +62,48 @@ REGISTRATION_FIXTURE_COMMIT = '4042b5f2c673344409e329607bd43a893ba521bb'
 
 @contextmanager
 def tracked_online_source():
-    """Use real tracked bytes; ignored local executor installs are not source."""
+    """Keep the reviewed ONLINE source independent of later checkout changes."""
+    online, _ = d.online_recharge_scope()
     paths = (*workspace.ONLINE_SOURCE_SEALS, workspace.MIGRATION_ROOT,
              *workspace.CONFIG_FILES, workspace.MIGRATION_SEED,
-             'scripts/production-release/online-recharge-recovery.json')
-    names = subprocess.check_output(['git', 'ls-files', '-z', '--', *paths], cwd=ROOT)
+             *workspace.ONLINE_ADMISSION_FILES)
+    archive = subprocess.check_output(['git', 'archive', online.RECOVERY_COMMIT,
+                                      '--', *paths], cwd=ROOT)
     with tempfile.TemporaryDirectory(prefix='tracked-online-source-', dir=RUNTIME) as temporary:
         directory = Path(temporary)
-        for name in names.decode().split('\0'):
-            if not name:
-                continue
-            relative = Path(name)
-            if relative.is_absolute() or '..' in relative.parts:
-                raise RuntimeError('INVALID_TRACKED_FIXTURE')
-            original = ROOT / relative
-            if not original.is_file() or original.is_symlink():
-                raise RuntimeError('INVALID_TRACKED_FIXTURE')
-            target = directory / relative
-            target.parent.mkdir(parents=True, exist_ok=True)
-            target.write_bytes(original.read_bytes())
+        with tarfile.open(fileobj=io.BytesIO(archive), mode='r:') as tracked:
+            for member in tracked:
+                relative = Path(member.name)
+                if relative.is_absolute() or '..' in relative.parts or not (
+                        member.isdir() or member.isfile()):
+                    raise RuntimeError('INVALID_TRACKED_FIXTURE')
+                target = directory / relative
+                if member.isdir():
+                    target.mkdir(parents=True, exist_ok=True)
+                else:
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    target.write_bytes(tracked.extractfile(member).read())
+                    target.chmod(member.mode)
+        # Recovery metadata has its own fixed seal, separate from the original
+        # ONLINE business/configuration tree. It is never learned from a fixture.
+        if online.fingerprint(online.recovery_policy(d)) != online.RECOVERY_POLICY_SHA256:
+            raise RuntimeError('INVALID_TRACKED_FIXTURE_POLICY')
+        policy = directory / 'scripts/production-release' / online.RECOVERY_FILE
+        policy.parent.mkdir(parents=True, exist_ok=True)
+        policy.write_bytes(Path(online.__file__).with_name(online.RECOVERY_FILE).read_bytes())
+        workspace.workspace_online_sources(d, directory)
         yield directory
+
+
+def legacy_pending_lifecycle(pending):
+    """Initialize the real projection fixture from the immutable published B."""
+    commit = '31d2c6885a45817cd40d23fce8d6145bc9f18af2'
+    tree = '8cd7679461682d9c103e3130852431508c5e812c'
+    pending.UnpublishedCandidateLifecycle.setUpClass()
+    lifecycle = pending.UnpublishedCandidateLifecycle()
+    if (lifecycle.commit, lifecycle.tree) != (commit, tree):
+        raise RuntimeError('INVALID_LEGACY_PENDING_FIXTURE')
+    return lifecycle
 
 # Workspace publication has its own reviewed historical Compose and edge seal.
 # New checkout services must not redefine that scope. Keep only its configuration
@@ -3993,8 +4015,7 @@ class WorkspaceSqliteProtectionTests(unittest.TestCase):
 
     def test_real_candidate_guard_survives_reader_and_rejects_actual_cache_or_source_drift(self):
         pending = load('summary_reader_candidate_fixture', 'api-admin-pending-online.test.py')
-        pending.UnpublishedCandidateLifecycle.setUpClass()
-        lifecycle = pending.UnpublishedCandidateLifecycle()
+        lifecycle = legacy_pending_lifecycle(pending)
         with lifecycle.fixture() as f, patch.object(sys, 'dont_write_bytecode', False), patch.object(
                 sys, 'pycache_prefix', None):
             expected = pending.s.pending_online_candidate_guard(f.d, f.directory, f.context, f.candidate)
@@ -4826,28 +4847,10 @@ class MergedWorkspaceAdmissionTests(unittest.TestCase):
 
     def test_actual_admission_source_bytes_cannot_change_in_an_online_successor(self):
         online,_=d.online_recharge_scope()
-        with tempfile.TemporaryDirectory(dir=RUNTIME) as temporary:
+        with tracked_online_source() as historical, tempfile.TemporaryDirectory(dir=RUNTIME) as temporary:
             previous=Path(temporary)/'previous';candidate=Path(temporary)/'candidate'
-            folders=(*workspace.ONLINE_SOURCE_SEALS,workspace.MIGRATION_ROOT)
-            files=(*workspace.CONFIG_FILES,workspace.MIGRATION_SEED,*workspace.ONLINE_ADMISSION_FILES,
-                'scripts/production-release/'+online.RECOVERY_FILE)
-            archive=subprocess.check_output(['git','archive','HEAD','--',*folders],cwd=ROOT)
             for directory in (previous,candidate):
-                directory.mkdir()
-                with tarfile.open(fileobj=io.BytesIO(archive),mode='r:') as tracked:
-                    for member in tracked.getmembers():
-                        path=Path(member.name)
-                        self.assertFalse(path.is_absolute() or '..' in path.parts)
-                        self.assertTrue(member.isdir() or member.isfile())
-                        target=directory/path
-                        if member.isdir():
-                            target.mkdir(parents=True,exist_ok=True)
-                        else:
-                            target.parent.mkdir(parents=True,exist_ok=True)
-                            target.write_bytes(tracked.extractfile(member).read())
-                            target.chmod(member.mode)
-                for name in files:
-                    path=directory/name;path.parent.mkdir(parents=True,exist_ok=True);path.write_bytes((ROOT/name).read_bytes())
+                shutil.copytree(historical,directory)
                 (directory/'.env.aws.production').write_bytes(b'synthetic-only')
             controller=SimpleNamespace(**vars(d))
             with patch.object(workspace,'online_reader',return_value=online):
