@@ -26,8 +26,6 @@ async def recheck_in_context(context, target, ledger, *, timeout=25, poll_count=
         task = asyncio.create_task(guard.response(response))
         tasks.add(task)
         task.add_done_callback(tasks.discard)
-    await context.route("**/*", guard.route)
-    await context.route_web_socket("**/*", lambda ws: ws.close())
     context.on("response", observe)
     identity = {"session_status": "not_verified", "account_matched": False, "current_plan": None}
     failure = {}
@@ -38,7 +36,7 @@ async def recheck_in_context(context, target, ledger, *, timeout=25, poll_count=
         await page.goto(ORIGIN, wait_until="domcontentloaded", timeout=45000)
         _, identity = await check_session(page, target, 0)
         guard.account_verified = True
-        guard.approved = True  # 只启用原单证据解析，read_only 禁止所有付款。
+        guard.approved = True  # 只启用原单证据解析，read_only 禁止自动付款。
         if not guard.evidence:
             progress("rechecking_original_payment", new_payments="blocked")
             await page.goto(ORIGIN + "/checkout/" + ledger.checkout["processor_entity"] + "/" + ledger.checkout_id,
@@ -89,7 +87,7 @@ async def recheck_payment(target, ledger, *, timeout=25, browser=None):
     for key in ("DEBUG", "PWDEBUG", "PW_TRACE_DIR", "PLAYWRIGHT_TRACE_DIR"):
         os.environ.pop(key, None)
     async def execute(active_browser):
-        context = await active_browser.new_context(service_workers="block", accept_downloads=False)
+        context = await active_browser.new_context(accept_downloads=False)
         try:
             return await recheck_in_context(context, target, ledger, timeout=timeout)
         finally:

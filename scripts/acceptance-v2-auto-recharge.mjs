@@ -450,12 +450,16 @@ try {
     await form.getByText('replacement@example.test', { exact: true }).waitFor();
     assert.equal(await jsonInput.inputValue(), '', '第二份授权载入后清空粘贴框');
     await jsonInput.fill('{"sessionToken":');
-    await page.getByText('请提供有效的单账户 JSON（不超过 65 KB）', { exact: true }).waitFor();
+    await page
+      .getByText('授权 JSON 格式不完整或无效，请重新复制完整的单账户授权', { exact: true })
+      .waitFor();
     assert.equal(
       await form.getByText('replacement@example.test', { exact: true }).count(),
       0,
       '错误授权不能保留旧账号'
     );
+    await jsonInput.fill(JSON.stringify({ padding: 'x'.repeat(65_001) }));
+    await page.getByText('授权 JSON 超过 65 KB，请提供单账户授权文件', { exact: true }).waitFor();
     await loadJson();
     assert.equal(await jsonInput.getAttribute('type'), 'text');
     assert.equal(

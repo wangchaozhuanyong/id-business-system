@@ -237,6 +237,10 @@ class UpgradeThreeDSGuardTests(unittest.IsolatedAsyncioTestCase):
         route = Route(Request('https://api.stripe.com/v1/3ds2/' + path,
             data=urlencode({'source': source, **(extra or {})}), frame=frame or self.frame))
         await self.guard.route(route)
+        self.assertTrue(route.passed)
+        route.bound = await self.guard.three_ds.original_request_decision(route.request,
+            self.target, sent=self.guard.sent, read_only=self.guard.read_only,
+            payment_status=lambda: self.ledger.record['payment_status'])
         return route
 
     async def test_same_upgrade_intent_frictionless_proves_paid_once(self):
@@ -249,30 +253,30 @@ class UpgradeThreeDSGuardTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.ledger.record['payment_evidence']['identifier'], 'pi_Synthetic')
         self.assertEqual(self.ledger.record['three_ds_status'], 'completed')
         self.assertEqual(self.guard.sent, 1)
-        self.assertTrue((await self.auth()).blocked)
+        self.assertFalse((await self.auth()).bound)
         for path in ('/v1/payment_intents/pi_Synthetic/confirm', '/v1/payment_methods', '/v1/tokens'):
             route = Route(Request('https://api.stripe.com' + path, data='{}', frame=self.frame))
             await self.guard.route(route)
-            self.assertTrue(route.blocked)
+            self.assertTrue(route.passed)
 
     async def test_wrong_source_intent_fields_or_other_page_cannot_authenticate(self):
         await self.submit()
         for options in ({'source': 'src_other'}, {'extra': {'payment_intent': 'pi_Other'}},
                         {'extra': {'amount': '40000'}}, {'extra': {'payment_method': 'pm_Other'}},
                         {'frame': Frame('https://chatgpt.com/')}):
-            self.assertTrue((await self.auth(**options)).blocked)
+            self.assertFalse((await self.auth(**options)).bound)
         self.frame.url = 'https://chatgpt.com/settings'
-        self.assertTrue((await self.auth()).blocked)
+        self.assertFalse((await self.auth()).bound)
 
     async def test_missing_or_manual_action_binding_never_opens_authentication(self):
         await self.submit(action_intent(confirmation_method='manual'))
         self.assertEqual(self.guard.three_ds.status, 'unsupported')
-        self.assertTrue((await self.auth()).blocked)
+        self.assertFalse((await self.auth()).bound)
         self.assertIsNone(self.ledger.record.get('payment_evidence'))
 
     async def test_wrong_amount_action_never_opens_authentication(self):
         await self.submit(action_intent(amount=42000))
-        self.assertTrue((await self.auth()).blocked)
+        self.assertFalse((await self.auth()).bound)
         self.assertEqual(self.ledger.record['payment_status'], 'requires_action')
 
     async def test_authentication_wrong_pi_or_invoice_cannot_be_payment_evidence(self):
@@ -300,7 +304,7 @@ class UpgradeThreeDSGuardTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(self.guard.three_ds.active)
         await self.guard.response(Response(route.request, {'source': 'src_upgrade', 'payment_intent': action_intent()}))
         self.assertEqual(self.ledger.record['payment_status'], 'paid')
-        self.assertTrue((await self.auth(path='challenge_complete')).blocked)
+        self.assertFalse((await self.auth(path='challenge_complete')).bound)
 
     async def test_late_fingerprint_cannot_rewind_challenge_or_completed_stage(self):
         await self.submit()
@@ -340,13 +344,16 @@ class UpgradeThreeDSGuardTests(unittest.IsolatedAsyncioTestCase):
             return {}
         request.all_headers = held_headers
         route = Route(request)
-        task = asyncio.create_task(self.guard.route(route))
+        await self.guard.route(route)
+        task = asyncio.create_task(self.guard.three_ds.original_request_decision(request,
+            self.target, sent=self.guard.sent, read_only=False,
+            payment_status=lambda: self.ledger.record['payment_status']))
         await started.wait()
         self.guard.three_ds.finish()
         release.set()
-        await task
-        self.assertTrue(route.blocked)
-        self.assertFalse(route.passed)
+        self.assertFalse(await task)
+        self.assertFalse(route.blocked)
+        self.assertTrue(route.passed)
         self.assertEqual(self.guard.three_ds.requests[request], '/v1/3ds2/authenticate')
         self.assertEqual(self.guard.sent, 1)
 
@@ -360,13 +367,16 @@ class UpgradeThreeDSGuardTests(unittest.IsolatedAsyncioTestCase):
             return {}
         request.all_headers = held_headers
         route = Route(request)
-        task = asyncio.create_task(self.guard.route(route))
+        await self.guard.route(route)
+        task = asyncio.create_task(self.guard.three_ds.original_request_decision(request,
+            self.target, sent=self.guard.sent, read_only=False,
+            payment_status=lambda: self.ledger.record['payment_status']))
         await started.wait()
         self.ledger.update(payment_status='unknown')
         release.set()
-        await task
-        self.assertTrue(route.blocked)
-        self.assertFalse(route.passed)
+        self.assertFalse(await task)
+        self.assertFalse(route.blocked)
+        self.assertTrue(route.passed)
 
     async def test_drain_settles_observers_added_during_wait_before_paid_receipt(self):
         await self.submit()
@@ -403,7 +413,9 @@ class UpgradeThreeDSGuardTests(unittest.IsolatedAsyncioTestCase):
             action_intent(status='succeeded', amount_received=40000, next_action=None)}))
         await observer.finish()
         await observer.finish()
-        context.remove_listener.assert_called_once_with('response', observer.observe)
+        self.assertEqual(context.remove_listener.call_count, 2)
+        context.remove_listener.assert_any_call('request', self.guard.observe_request)
+        context.remove_listener.assert_any_call('response', observer.observe)
         self.assertFalse(observer.tasks)
         self.assertEqual(self.ledger.record['payment_status'], 'paid')
         self.assertTrue(self.guard.three_ds.closed)
@@ -419,7 +431,7 @@ class UpgradeThreeDSGuardTests(unittest.IsolatedAsyncioTestCase):
         self.ledger.__exit__()
         clean_root = Path(self.temp.name) / 'cancelled-flow'
         context = SimpleNamespace(route=AsyncMock(), unroute=AsyncMock(), remove_listener=unittest.mock.Mock())
-        context.on = lambda _event, callback: setattr(context, 'observe', callback)
+        context.on = lambda event, callback: setattr(context, 'observe' if event == 'response' else 'request_observer', callback)
         page = SimpleNamespace(main_frame=self.frame, context=context)
         button = SimpleNamespace(click=AsyncMock())
         subscription = {'plan_type': 'plus', 'is_processor_stripe': True, 'will_renew': True}
@@ -451,7 +463,7 @@ class UpgradeThreeDSGuardTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result['payment_outcome'], 'paid_pending_activation')
         self.assertEqual(result['payment_evidence']['identifier'], 'pi_Synthetic')
         self.assertEqual(result['payment_requests_sent'], 1)
-        context.remove_listener.assert_called_once()
+        self.assertEqual(context.remove_listener.call_count, 2)
 
     async def test_http_failures_are_unknown_only_explicit_method_failed_is_declined(self):
         request = await self.submit()
@@ -470,7 +482,7 @@ class UpgradeThreeDSGuardTests(unittest.IsolatedAsyncioTestCase):
         route = Route(Request('https://api.stripe.com/v1/3ds2/authenticate',
             data='source=src_upgrade', frame=self.frame))
         await read.route(route)
-        self.assertTrue(route.blocked)
+        self.assertTrue(route.passed)
         self.assertFalse(read.three_ds.active)
         self.assertEqual(read.sent, 0)
 
@@ -480,40 +492,33 @@ class UpgradeThreeDSGuardTests(unittest.IsolatedAsyncioTestCase):
             data=json.dumps({'account_id': self.target.account_id, 'updated_plan': 'chatgptpro', 'payment_method_id': 'pm_Synthetic'}),
             headers={'authorization': 'Bearer ' + self.target.old_token}))
         await self.guard.route(route)
-        self.assertTrue(route.blocked)
-        self.assertEqual(self.guard.sent, 0)
+        self.assertTrue(route.passed)
+        self.assertEqual(self.guard.sent, 1)
+        self.assertEqual(self.guard.error.report['reason'], 'upgrade_request_mismatch')
         self.assertEqual(self.ledger.record['confirmation_requests_sent'], 0)
 
-    async def test_finish_during_original_update_preflight_never_marks_or_sends_payment(self):
-        started, release = asyncio.Event(), asyncio.Event()
-        async def held_preflight():
-            started.set()
-            await release.wait()
-        self.guard.preflight = held_preflight
-        request = Request('https://chatgpt.com/backend-api/subscriptions/update', frame=self.frame,
-            data=json.dumps({'account_id': self.target.account_id, 'updated_plan': 'chatgptpro', 'payment_method_id': 'pm_Synthetic'}),
-            headers={'authorization': 'Bearer ' + self.target.old_token})
-        route = Route(request)
-        task = asyncio.create_task(self.guard.route(route))
-        await started.wait()
-        self.guard.three_ds.finish()
-        release.set()
-        await task
-        self.assertTrue(route.blocked)
-        self.assertFalse(route.passed)
-        self.assertEqual(self.guard.sent, 0)
-        self.assertEqual(self.ledger.record['confirmation_requests_sent'], 0)
-        self.assertEqual(self.guard.error.report['reason'], 'operation_cancelled')
-
-    async def test_cancelled_preflight_cannot_mark_or_send_original_update(self):
-        self.guard.preflight = AsyncMock(side_effect=Stop('operation_cancelled'))
+    async def test_request_observer_never_holds_website_for_another_preflight(self):
+        self.guard.preflight = AsyncMock()
         request = Request('https://chatgpt.com/backend-api/subscriptions/update', frame=self.frame,
             data=json.dumps({'account_id': self.target.account_id, 'updated_plan': 'chatgptpro', 'payment_method_id': 'pm_Synthetic'}),
             headers={'authorization': 'Bearer ' + self.target.old_token})
         route = Route(request)
         await self.guard.route(route)
-        self.assertTrue(route.blocked)
-        self.assertFalse(route.passed)
+        self.guard.preflight.assert_not_awaited()
+        self.assertFalse(route.blocked)
+        self.assertTrue(route.passed)
+        self.assertEqual(self.guard.sent, 1)
+        self.assertEqual(self.ledger.record['confirmation_requests_sent'], 1)
+
+    async def test_ended_task_leaves_native_subscription_requests_untouched(self):
+        self.guard.approved = False
+        request = Request('https://chatgpt.com/backend-api/subscriptions/update', frame=self.frame,
+            data=json.dumps({'account_id': self.target.account_id, 'updated_plan': 'chatgptpro', 'payment_method_id': 'pm_Synthetic'}),
+            headers={'authorization': 'Bearer ' + self.target.old_token})
+        route = Route(request)
+        await self.guard.route(route)
+        self.assertFalse(route.blocked)
+        self.assertTrue(route.passed)
         self.assertEqual(self.guard.sent, 0)
         self.assertEqual(self.ledger.record['confirmation_requests_sent'], 0)
 
@@ -523,16 +528,16 @@ class UpgradeThreeDSGuardTests(unittest.IsolatedAsyncioTestCase):
             headers={'authorization': 'Bearer ' + self.target.old_token})
         first = Route(request)
         await self.guard.route(first)
-        self.assertTrue(first.blocked)
-        self.assertFalse(first.passed)
-        self.assertFalse(self.guard.approved)
+        self.assertFalse(first.blocked)
+        self.assertTrue(first.passed)
+        self.assertEqual(self.guard.error.report['reason'], 'upgrade_request_mismatch')
         request.post_data = json.dumps({'account_id': self.target.account_id, 'updated_plan': 'chatgptpro',
                                         'payment_method_id': 'pm_Synthetic'})
         second = Route(request)
         await self.guard.route(second)
-        self.assertTrue(second.blocked)
-        self.assertFalse(second.passed)
-        self.assertEqual(self.guard.sent, 0)
+        self.assertFalse(second.blocked)
+        self.assertTrue(second.passed)
+        self.assertEqual(self.guard.sent, 1)
         self.assertEqual(self.ledger.record['confirmation_requests_sent'], 0)
 
 
@@ -547,9 +552,11 @@ class GoToPlusLocalContractTests(unittest.IsolatedAsyncioTestCase):
             context = SimpleNamespace(route=AsyncMock(), unroute=AsyncMock())
             frame = Frame('https://chatgpt.com/')
             page = SimpleNamespace(context=context, main_frame=frame)
-            async def bind(pattern, handler):
-                guard_holder['guard'] = handler.__self__
-            context.route.side_effect = bind
+            def bind(event, handler):
+                if event == 'request':
+                    guard_holder['guard'] = handler.__self__
+            context.on = bind
+            context.remove_listener = MagicMock()
             subscription = {'account_id': target.account_id, 'plan_type': 'go',
                             'is_processor_stripe': True, 'is_delinquent': False,
                             'will_renew': True, 'scheduled_billing_period': None}
@@ -561,9 +568,9 @@ class GoToPlusLocalContractTests(unittest.IsolatedAsyncioTestCase):
                 guard = guard_holder['guard']
                 if not guard.approved:
                     return
-                request = SimpleNamespace(method='POST', url='https://chatgpt.com' + upgrade.UPGRADE_PATH,
-                    post_data_json={'account_id': target.account_id, 'updated_plan': 'chatgptplusplan',
-                                    'payment_method_id': 'pm_Synthetic'}, frame=frame,
+                request = Request('https://chatgpt.com' + upgrade.UPGRADE_PATH,
+                    data=json.dumps({'account_id': target.account_id, 'updated_plan': 'chatgptplusplan',
+                                     'payment_method_id': 'pm_Synthetic'}), frame=frame,
                     headers={'authorization': 'Bearer ' + target.old_token,
                              'chatgpt-account-id': target.account_id})
                 route = SimpleNamespace(request=request, fallback=AsyncMock(), abort=AsyncMock())
@@ -595,7 +602,6 @@ class GoToPlusLocalContractTests(unittest.IsolatedAsyncioTestCase):
                   patch.object(upgrade, 'prepare_upgrade_card', AsyncMock(return_value='pm_Synthetic')),
                   patch.object(upgrade, 'verify_selected_upgrade_card', AsyncMock(return_value='pm_Synthetic')),
                   patch.object(upgrade, 'wait_upgrade_authentication', AsyncMock()),
-                  patch.object(upgrade, 'UpgradeResponseObservers', return_value=SimpleNamespace(finish=AsyncMock())),
                   patch.object(upgrade, 'inspect_upgrade', AsyncMock(side_effect=inspect)),
                   patch.object(upgrade, 'progress', MagicMock())):
                 result = await run_upgrade_in_context(page, target, root, 'plus',
@@ -670,8 +676,7 @@ class UpgradeBrowserTests(unittest.IsolatedAsyncioTestCase):
             if(result.status==='requires_action'){const auth=await post('authenticate');
             if(auth.ares){await fetch('https://api.stripe.com/v1/payment_intents/pi_Synthetic');
             const f=document.createElement('iframe');f.id='challenge';document.body.append(f);f.src=auth.ares.acsURL;}
-            else{await Promise.allSettled([post('authenticate'),fetch('https://api.stripe.com/v1/payment_intents/pi_Synthetic/confirm',
-            {method:'POST',body:'original=synthetic'}),fetch('https://api.stripe.com/v1/payment_methods',{method:'POST',body:'type=card'})]);}}}catch(_error){}}
+            }}catch(_error){}}
             window.addEventListener('message',async(event)=>{if(event.origin==='https://bank.example.com'&&event.data==='synthetic-user-finished')
             await post('challenge_complete')});'''
         radios = '<label>MASTERCARD *4242<input type="radio" style="position:absolute;width:1px;height:1px;clip:rect(0,0,0,0)" name="plan-upgrade-payment-method" value="pm_Synthetic" checked></label>'
@@ -818,20 +823,23 @@ class UpgradeBrowserTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.auth_counts, {'authenticate': 1, 'complete': 1, 'issuer': 1})
         self.assertFalse(self.other_writes)
 
-    async def test_concurrent_update_reserves_before_async_preflight(self):
-        self.double_update = True
-        duplicate_blocked = asyncio.Event()
-        original_route = UpgradeGuard.route
-        async def tracked_route(guard, route):
-            await original_route(guard, route)
-            if guard.blocked_duplicates:
-                duplicate_blocked.set()
-        with patch.object(UpgradeGuard, 'route', tracked_route):
+    async def test_async_preflight_completes_before_marker_and_single_payment_click(self):
+        import subscription_upgrade
+        original_read = subscription_upgrade.read_subscription
+        calls = 0
+        async def tracked_read(*args, **kwargs):
+            nonlocal calls
+            calls += 1
+            if calls == 2:
+                self.preflight_started.set()
+                await self.preflight_release.wait()
+            return await original_read(*args, **kwargs)
+        with patch.object(subscription_upgrade, 'read_subscription', tracked_read):
             task = asyncio.create_task(self.flow(wait_seconds=10))
             try:
                 await self.wait_stage(task, self.preflight_started)
-                await self.wait_stage(task, duplicate_blocked)
                 self.assertEqual(self.updates, 0)
+                self.assertFalse(list((self.root / 'payments').glob('*.json')))
             finally:
                 self.preflight_release.set()
                 result = await task
@@ -874,11 +882,12 @@ class UpgradeBrowserTests(unittest.IsolatedAsyncioTestCase):
         for kind in ('cancel', 'changed_quote', 'missing_card_entry', 'wrong_request', 'annual'):
             self.changed_quote = self.missing_card_entry = self.wrong_request = self.annual = False
             self.preview_reads = 0
+            self.plan, self.updates = 'plus', 0
             if kind != 'cancel':
                 setattr(self, kind, True)
             result = await self.flow(confirmer=lambda *_: kind != 'cancel')
             self.assertNotEqual(result['status'], 'subscription_activated', (kind, result))
-            self.assertEqual(self.updates, 0, (kind, result))
+            self.assertEqual(self.updates, 1 if kind == 'wrong_request' else 0, (kind, result))
             self.assertEqual(self.creates, 0)
             self.assertEqual(len(list((self.root / 'payments').glob('*.json'))), 1 if kind == 'wrong_request' else 0)
             for path in (self.root / 'payments').glob('*.json'):

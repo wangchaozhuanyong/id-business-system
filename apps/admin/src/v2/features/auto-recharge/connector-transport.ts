@@ -8,7 +8,10 @@ const failureMessages = {
   protocol: '该地址返回的不是可用的自动充值连接器，请核对连接器地址与端口。',
   busy: '本机充值助手还有充值任务未结束，请先处理原充值任务。',
   bitbrowser:
-    '连接器已连通，但比特浏览器接口不可用。请检查比特浏览器是否启动、接口地址和接口密钥。',
+    '充值助手已连通，但无法访问比特接口。请确认比特客户端已启动并登录、本地接口已开启且地址正确。',
+  bitbrowserCredentials: '充值助手已连通，但比特接口密钥不匹配，请更新当前电脑的比特接口密钥。',
+  bitbrowserRejected:
+    '充值助手已连通，但比特接口拒绝了请求。请确认比特客户端已登录并检查接口设置。',
   rejected: '本机连接器拒绝了请求，请检查连接配置。',
   missing: '本机连接器中没有此任务。',
   codeExpiryUnsupported:
@@ -27,9 +30,9 @@ export class RechargeConnectorError extends Error {
 const reasons: Record<string, FailureCode> = {
   connector_origin_not_allowed: 'origin',
   connector_token_invalid: 'credentials',
-  bitbrowser_api_token_invalid: 'bitbrowser',
+  bitbrowser_api_token_invalid: 'bitbrowserCredentials',
   bitbrowser_local_api_unavailable: 'bitbrowser',
-  bitbrowser_local_api_rejected: 'bitbrowser',
+  bitbrowser_local_api_rejected: 'bitbrowserRejected',
   another_local_job_is_running: 'busy',
   recharge_process_required: 'version',
   confirmation_nonce_invalid: 'rejected',

@@ -424,6 +424,36 @@ const replacement = () => ({
 });
 
 describe('确认原窗口不存在后的重建绑定', () => {
+  it('仅登录任务重建不受历史付款待核对记录影响，也不改写原单', async () => {
+    const f = restoreFixture();
+    await f.service.callback(currentId, { type: 'restore', accountKey });
+    const original = {
+      ownerId,
+      fileKey: `${accountKey}.json`,
+      revision: 1,
+      document: {
+        checkout_identifier: 'cs_original',
+        payment_attempted: true,
+        payment_status: 'unknown',
+        payment_requests_sent: 1,
+        confirmation_requests_sent: 1
+      }
+    };
+    const snapshot = structuredClone(original);
+    f.repository.records.mockResolvedValue([original]);
+    await f.local.callback(currentId, f.agentToken, {
+      type: 'progress',
+      result: replacement()
+    });
+    expect(f.job.result).toMatchObject({
+      mode: 'open_browser',
+      browser_profile_id: replacementId,
+      account_matched: false,
+      payment_requests_sent: 0
+    });
+    expect(original).toEqual(snapshot);
+  });
+
   it.each([
     { mode: 'open_browser', transport: 'web_direct' },
     { mode: 'open_browser' },
@@ -578,6 +608,7 @@ describe('确认原窗口不存在后的重建绑定', () => {
     { payment_status: 'paid', payment_attempted: true }
   ])('持久化原单付款事实不能被零付款回执绕过 %j', async (patch) => {
     const f = restoreFixture();
+    delete f.job.result.mode;
     await f.service.callback(currentId, { type: 'restore', accountKey });
     f.job.result.checkout_identifier = 'cs_original';
     f.repository.records.mockResolvedValue([

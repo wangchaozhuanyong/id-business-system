@@ -178,10 +178,15 @@ export async function inspectLoginPage(
         const claims = JSON.parse(
           atob(session.accessToken.split('.')[1].replace(/-/g, '+').replace(/_/g, '/'))
         );
-        if (Number.isSafeInteger(claims.exp) && claims.exp <= Math.floor(Date.now() / 1000) + 30)
-          return { kind: 'expired' as const };
         const accountId = claims['https://api.openai.com/auth']?.chatgpt_account_id;
         if (typeof accountId !== 'string') return { kind: 'manual' as const };
+        if (Number.isSafeInteger(claims.exp) && claims.exp <= Math.floor(Date.now() / 1000) + 30)
+          return {
+            kind: 'expired' as const,
+            email: String(session.user.email),
+            userId: String(session.user.id),
+            accountId
+          };
         if (Date.now() >= readDeadline) return { kind: 'loading' as const };
         const check = await fetch('/backend-api/accounts/check/v4-2023-04-27', {
           cache: 'no-store',

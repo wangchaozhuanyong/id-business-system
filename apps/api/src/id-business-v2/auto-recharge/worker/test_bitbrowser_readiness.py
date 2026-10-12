@@ -30,11 +30,8 @@ class ProxyPreparationTests(unittest.IsolatedAsyncioTestCase):
                          ['https://chatgpt.com/cdn-cgi/trace', 'https://chatgpt.com/'])
         self.assertIs(probe.await_args.args[0], page)
         self.assertEqual(probe.await_args.args[1].seconds, 20)
-        context.route.assert_awaited_once()
-        context.unroute.assert_awaited_once()
-        guard = context.route.await_args.args[1].__self__
-        self.assertEqual(guard.classify('POST', 'https://api.stripe.com/v1/payment_methods'), 'payment')
-        self.assertEqual(guard.sent, 0)
+        context.route.assert_not_awaited()
+        context.unroute.assert_not_awaited()
 
     async def test_wrong_country_stops_before_home(self):
         context, page = self.make_context()
@@ -51,7 +48,7 @@ class ProxyPreparationTests(unittest.IsolatedAsyncioTestCase):
                 await browser_checkout.prepare_proxy_in_context(context, budget=SessionBudget(600))
             self.assertEqual(error.exception.report['reason'], reason)
             self.assertEqual(page.goto.await_count, 1)
-            context.unroute.assert_awaited_once()
+            context.unroute.assert_not_awaited()
 
     async def test_explicit_transport_failure_is_redacted_and_bounded(self):
         context, page = self.make_context()
@@ -60,10 +57,19 @@ class ProxyPreparationTests(unittest.IsolatedAsyncioTestCase):
             await browser_checkout.prepare_proxy_in_context(context, budget=SessionBudget(600))
         self.assertEqual(error.exception.report['reason'], 'proxy_network_error')
         self.assertNotIn('secret-url', str(error.exception.report))
-        context.unroute.assert_awaited_once()
+        context.unroute.assert_not_awaited()
 
 
 class LoginReadinessTests(unittest.IsolatedAsyncioTestCase):
+    async def test_restore_refresh_and_ui_sync_share_one_refresh_allowance(self):
+        page, target, refreshed, identity, budget = self.make([False] * 10, seconds=25)
+        budget.refresh_count = 1
+        with patch.object(browser_checkout, 'check_session', AsyncMock(return_value=(refreshed, identity))), \
+                patch.object(browser_checkout.asyncio, 'sleep', AsyncMock()), self.assertRaises(Stop) as error:
+            await browser_checkout.synchronize_login_page(page, target, identity, budget=budget)
+        self.assertEqual(error.exception.report['reason'], 'official_login_page_not_ready')
+        page.reload.assert_not_awaited()
+
     def make(self, sequence, seconds=30):
         self.now = 0
         target = BrowserCredential('synthetic-session', 'synthetic-account', 'synthetic-user', '')
@@ -80,13 +86,13 @@ class LoginReadinessTests(unittest.IsolatedAsyncioTestCase):
         budget = SessionBudget(seconds, clock=lambda: self.now)
         return page, target, refreshed, identity, budget
 
-    async def test_identity_alone_is_not_ready_and_refreshes_original_tab_once(self):
+    async def test_identity_alone_waits_for_page_without_refreshing(self):
         page, target, refreshed, identity, budget = self.make([False, False, True])
         with patch.object(browser_checkout, 'check_session', AsyncMock(return_value=(refreshed, identity))) as check, \
                 patch.object(browser_checkout.asyncio, 'sleep', AsyncMock()):
             result_target, result_identity = await browser_checkout.synchronize_login_page(
                 page, target, identity, budget=budget)
-        page.reload.assert_awaited_once_with(wait_until='commit', timeout=0)
+        page.reload.assert_not_awaited()
         self.assertEqual(check.await_count, 3)
         self.assertEqual(result_identity, identity)
         self.assertEqual(result_target.account_id, target.account_id)
@@ -107,7 +113,7 @@ class LoginReadinessTests(unittest.IsolatedAsyncioTestCase):
             await browser_checkout.synchronize_login_page(page, target, identity, budget=budget)
         self.assertEqual(error.exception.report['reason'], 'official_login_page_not_ready')
         self.assertTrue(error.exception.report['account_matched'])
-        page.reload.assert_awaited_once()
+        page.reload.assert_not_awaited()
 
     async def test_identity_change_or_expiration_after_refresh_is_not_ui_failure(self):
         for reason in ('official_user_mismatch', 'access_token_expired', 'verification_required'):
@@ -117,7 +123,7 @@ class LoginReadinessTests(unittest.IsolatedAsyncioTestCase):
                     patch.object(browser_checkout.asyncio, 'sleep', AsyncMock()), self.assertRaises(Stop) as error:
                 await browser_checkout.synchronize_login_page(page, target, identity, budget=budget)
             self.assertEqual(error.exception.report['reason'], reason)
-            page.reload.assert_awaited_once()
+            page.reload.assert_not_awaited()
 
     async def test_cancel_stops_without_refresh(self):
         page, target, _, identity, _ = self.make([False])

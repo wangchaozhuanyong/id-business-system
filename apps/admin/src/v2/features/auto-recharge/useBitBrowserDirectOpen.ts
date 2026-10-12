@@ -146,8 +146,19 @@ export function useBitBrowserDirectOpen(
             ...(cancelled ? { cancellation_confirmed: true } : {})
           });
         } catch {
-          if (!disposed && !task.endedRemotely)
-            reportError('网页直连已停止，但执行结果未能保存，请刷新原任务核对；不要重复启动。');
+          try {
+            await rechargeApi.cancelBitBrowser(launch.id);
+            task.endedRemotely = true;
+            if (!disposed) {
+              await refresh();
+              reportError(
+                '本次登录未完成，原登录任务已停止，资料已解锁；请核对比特连接和窗口状态。'
+              );
+            }
+          } catch {
+            if (!disposed && !task.endedRemotely)
+              reportError('网页登录已停止，原任务结束结果待核对；请停止原任务后重试。');
+          }
         }
       } finally {
         clearCredentials();

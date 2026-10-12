@@ -296,7 +296,7 @@ describe('网页直连比特浏览器的输入和读取边界', () => {
       )
     );
     vi.stubGlobal('fetch', fetch);
-    expect(await inspectLoginPage('inspect')).toEqual({ kind: 'expired' });
+    expect(await inspectLoginPage('inspect')).toMatchObject({ kind: 'expired' });
     expect(fetch).toHaveBeenCalledOnce();
   });
   it('JSON只读核验在资源仍加载时读取有效会话和官方套餐，不依赖表单DOM', async () => {
@@ -511,11 +511,11 @@ describe('网页直连比特浏览器的输入和读取边界', () => {
         '授权 JSON'
       );
   });
-  it('仅登录窗口阻止付款写请求，不拦截官网会话读取或登录提交', () => {
+  it('仅登录窗口不阻止官网、付款组件和登录请求', () => {
     expect(isLoginPaymentWrite('POST', 'https://chatgpt.com/backend-api/payments/checkout')).toBe(
-      true
+      false
     );
-    expect(isLoginPaymentWrite('POST', 'https://api.stripe.com/v1/payment_intents')).toBe(true);
+    expect(isLoginPaymentWrite('POST', 'https://api.stripe.com/v1/payment_intents')).toBe(false);
     expect(isLoginPaymentWrite('GET', 'https://chatgpt.com/api/auth/session')).toBe(false);
     expect(isLoginPaymentWrite('POST', 'https://auth.openai.com/login')).toBe(false);
   });

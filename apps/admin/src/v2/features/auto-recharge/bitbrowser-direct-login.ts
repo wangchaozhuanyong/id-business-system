@@ -31,13 +31,10 @@ export interface DirectLoginHooks {
   ownedProfile?: V2RechargeOwnedBrowserProfile;
 }
 export function isLoginPaymentWrite(method: string, rawUrl: string) {
-  if (['GET', 'HEAD', 'OPTIONS'].includes(method)) return false;
-  const url = new URL(rawUrl);
-  return (
-    url.hostname === 'stripe.com' ||
-    url.hostname.endsWith('.stripe.com') ||
-    (url.hostname === 'chatgpt.com' && url.pathname.startsWith('/backend-api/payments/'))
-  );
+  // Kept for callers using the existing helper; browser requests are never blocked.
+  void method;
+  void rawUrl;
+  return false;
 }
 function isProxyNetworkError(value: unknown) {
   return (
@@ -91,7 +88,6 @@ export async function runDirectLogin(
   const api = directBrowserApi(settings.localApiUrl, settings.localApiToken, signal);
   let cdp: BrowserCdp | undefined;
   let sessionId = '';
-  let guardError: unknown;
   let removeGuard: (() => void) | undefined;
   let pendingSubmission:
     | {
@@ -177,7 +173,7 @@ export async function runDirectLogin(
           groupId,
           platform: '',
           platformIcon: 'chatgpt.com',
-          url: 'about:blank',
+          url: 'https://chatgpt.com/',
           name: windowName,
           remark: settings.tagName,
           userName: '',
@@ -231,6 +227,7 @@ export async function runDirectLogin(
     }
     verifyDirectProfileConfiguration(detail, settings);
     let networkFailed = false;
+    let networkReadNeedsProbe = false;
     let attempts = 0;
     const attemptLimit = Math.min(
       10,
@@ -240,12 +237,12 @@ export async function runDirectLogin(
     let proxyDeadline = 0;
     let canInjectOnUnauthenticated = Boolean(ownedProfile);
     let pageReadyDeadline: number | undefined;
-    let pageReloaded = false;
     let expiredDeadline: number | undefined;
     let sessionRefreshRequested = false;
+    let suppliedSessionChecked = false;
     let officialTargetId = '';
-    const injectCookies = async () => {
-      if (!expected.token || !cdp) return;
+    const injectCookies = async (onlyIfChanged = false) => {
+      if (!expected.token || !cdp) return false;
       const cookies = (
         await cdp.command(
           'Network.getCookies',
@@ -255,6 +252,35 @@ export async function runDirectLogin(
         )
       ).cookies;
       if (!Array.isArray(cookies)) throw new DirectBrowserError('bitbrowser_direct_protocol');
+      if (onlyIfChanged) {
+        const current = cookies.filter(
+          (cookie) =>
+            cookie &&
+            typeof cookie.name === 'string' &&
+            /^__Secure-next-auth\.session-token(?:\.\d+)?$/.test(cookie.name) &&
+            typeof cookie.domain === 'string' &&
+            cookie.domain.replace(/^\./, '') === 'chatgpt.com' &&
+            cookie.path === '/' &&
+            typeof cookie.value === 'string'
+        );
+        const plain = current.filter(
+          (cookie) => cookie.name === '__Secure-next-auth.session-token'
+        );
+        const chunks = current.filter(
+          (cookie) => cookie.name !== '__Secure-next-auth.session-token'
+        );
+        chunks.sort((a, b) => Number(a.name.split('.').at(-1)) - Number(b.name.split('.').at(-1)));
+        if (
+          (plain.length === 1 && !chunks.length && plain[0].value === expected.token) ||
+          (!plain.length &&
+            chunks.length > 0 &&
+            chunks.every(
+              (cookie, index) => cookie.name === `__Secure-next-auth.session-token.${index}`
+            ) &&
+            chunks.map((cookie) => cookie.value).join('') === expected.token)
+        )
+          return false;
+      }
       for (const cookie of cookies) {
         if (
           cookie &&
@@ -289,11 +315,13 @@ export async function runDirectLogin(
         sessionId,
         remaining()
       );
+      return true;
     };
     const openSession = async (extractIp = false) => {
       remaining();
       attempts++;
       networkFailed = false;
+      networkReadNeedsProbe = false;
       proxyReady = false;
       pageReadyDeadline = undefined;
       const opened = await api.post(
@@ -339,7 +367,6 @@ export async function runDirectLogin(
       sessionId = String(
         (await cdp.command('Target.attachToTarget', { targetId, flatten: true })).sessionId
       );
-      const activeCdp = cdp;
       const activeSession = sessionId;
       const frameTree = (await cdp.command('Page.getFrameTree', {}, sessionId)).frameTree as
         | { frame?: { id?: string } }
@@ -347,6 +374,7 @@ export async function runDirectLogin(
       const mainFrameId = frameTree?.frame?.id;
       if (!mainFrameId) throw new DirectBrowserError('bitbrowser_direct_protocol');
       const criticalRequests = new Set<string>();
+      const identityRequests = new Set<string>();
       removeGuard = cdp.onEvent((method, params, eventSession) => {
         if (eventSession !== activeSession) return;
         if (method === 'Network.requestWillBeSent' && params.frameId === mainFrameId) {
@@ -365,8 +393,10 @@ export async function runDirectLogin(
               !url.password &&
               (params.type === 'Document' || identityRead) &&
               typeof params.requestId === 'string'
-            )
+            ) {
               criticalRequests.add(params.requestId);
+              if (identityRead) identityRequests.add(params.requestId);
+            }
           } catch {
             // Unrelated or malformed resources cannot trigger a proxy change.
           }
@@ -378,38 +408,27 @@ export async function runDirectLogin(
           !params.blockedReason &&
           !params.corsErrorStatus &&
           isProxyNetworkError(params.errorText)
-        )
+        ) {
           networkFailed = true;
-        if (method === 'Network.loadingFailed' || method === 'Network.loadingFinished')
+          networkReadNeedsProbe = identityRequests.has(String(params.requestId));
+        }
+        if (method === 'Network.loadingFailed' || method === 'Network.loadingFinished') {
           criticalRequests.delete(String(params.requestId));
-        if (method !== 'Fetch.requestPaused') return;
-        const request = params.request as { method: string; url: string };
-        const blocked = isLoginPaymentWrite(request.method, request.url);
-        void activeCdp
-          .command(
-            blocked ? 'Fetch.failRequest' : 'Fetch.continueRequest',
-            { requestId: params.requestId, ...(blocked ? { errorReason: 'BlockedByClient' } : {}) },
-            activeSession
-          )
-          .catch((error) => {
-            if (cdp === activeCdp) guardError = error;
-          });
+          identityRequests.delete(String(params.requestId));
+        }
       });
+      await cdp.command('Network.enable', {}, sessionId);
+      const language = String(directProfileOptions(settings).browserFingerPrint.languages);
       await cdp.command(
-        'Fetch.enable',
-        {
-          patterns: [
-            { urlPattern: '*://stripe.com/*', requestStage: 'Request' },
-            { urlPattern: '*://*.stripe.com/*', requestStage: 'Request' },
-            { urlPattern: '*://chatgpt.com/backend-api/payments/*', requestStage: 'Request' }
-          ]
-        },
+        'Network.setExtraHTTPHeaders',
+        { headers: { 'Accept-Language': `${language},${language.split('-')[0]};q=0.9` } },
         sessionId
       );
-      await cdp.command('Network.enable', {}, sessionId);
       if (expected.token && !ownedProfile && attempts === 1) await injectCookies();
       const navigation =
-        page && /^https:\/\/chatgpt\.com(?:\/|$)/.test(page.url)
+        page &&
+        /^https:\/\/chatgpt\.com(?:\/|$)/.test(page.url) &&
+        !(expected.token && !ownedProfile && attempts === 1)
           ? {}
           : await cdp.command(
               'Page.navigate',
@@ -468,6 +487,30 @@ export async function runDirectLogin(
       armAutomaticTimer();
     };
     const recoverProxy = async () => {
+      if (networkReadNeedsProbe && cdp) {
+        networkReadNeedsProbe = false;
+        const probe = await cdp.evaluate<Awaited<ReturnType<typeof inspectOfficialProxy>>>(
+          sessionId,
+          officialProxyExpression(Math.min(5000, remaining()), settings.expectedCountryCode),
+          Math.min(5000, remaining())
+        );
+        if (probe.kind === 'proxy_ready') {
+          networkFailed = false;
+          await waitDirectLogin(signal);
+          return;
+        }
+        if (probe.kind === 'manual') {
+          networkFailed = false;
+          enterManualWait();
+          if (!manualReported)
+            await hooks.progress('verification_required', { user_action_required: true });
+          manualReported = true;
+          manualState = 'manual';
+          return;
+        }
+        if (probe.kind !== 'proxy_network_failed')
+          throw new DirectBrowserError('proxy_probe_unverified');
+      }
       if (
         credential.login ||
         directProfileOptions(settings).proxyMethod !== 3 ||
@@ -523,7 +566,6 @@ export async function runDirectLogin(
     };
     while (Date.now() < hardDeadline && (manualStarted !== undefined || Date.now() < deadline)) {
       remaining();
-      if (guardError) throw guardError;
       if (networkFailed && manualStarted !== undefined) networkFailed = false;
       if (networkFailed) {
         await recoverProxy();
@@ -610,7 +652,6 @@ export async function runDirectLogin(
       } catch (error) {
         if (
           signal.aborted ||
-          guardError ||
           (error instanceof DirectBrowserError &&
             ['bitbrowser_direct_cancelled', 'bitbrowser_direct_debug_unavailable'].includes(
               error.reason
@@ -626,6 +667,33 @@ export async function runDirectLogin(
         continue;
       }
       const observedKind = state.kind;
+      if (
+        expected.token &&
+        ownedProfile &&
+        !suppliedSessionChecked &&
+        (state.kind === 'identity' || (state.kind === 'expired' && typeof state.email === 'string'))
+      ) {
+        if (
+          state.email?.toLowerCase() !== expected.email ||
+          state.userId !== expected.userId ||
+          state.accountId !== expected.accountId
+        )
+          throw new DirectBrowserError('official_login_email_mismatch');
+        suppliedSessionChecked = true;
+        if (await injectCookies(true)) {
+          canInjectOnUnauthenticated = false;
+          pageReadyDeadline = automaticDeadline;
+          expiredDeadline = undefined;
+          await hooks.progress('session_restore', {
+            account_matched: true,
+            session_step: 'page_refresh',
+            session_refresh_count: 1
+          });
+          await activeCdp.command('Page.reload', {}, sessionId, remaining());
+          await waitDirectLogin(signal);
+          continue;
+        }
+      }
       if (
         manualStarted === undefined &&
         expiredDeadline !== undefined &&
@@ -689,7 +757,6 @@ export async function runDirectLogin(
           } catch (error) {
             if (
               signal.aborted ||
-              guardError ||
               (error instanceof DirectBrowserError &&
                 ['bitbrowser_direct_cancelled', 'bitbrowser_direct_debug_unavailable'].includes(
                   error.reason
@@ -720,24 +787,14 @@ export async function runDirectLogin(
           }
           assertJsonPhase(true);
           if (ui.kind !== 'page_ready') {
-            pageReadyDeadline ??= Math.min(pageBudgetDeadline(), Date.now() + 10_000);
+            pageReadyDeadline ??= pageBudgetDeadline();
             if (Date.now() >= pageReadyDeadline) {
-              if (pageReloaded) throw new DirectBrowserError('official_login_page_not_ready');
-              pageReloaded = true;
-              await hooks.progress('session_restore', {
-                account_matched: true,
-                session_status: 'restored',
-                session_step: 'page_refresh'
-              });
-              await activeCdp.command('Page.reload', { ignoreCache: true }, sessionId, remaining());
-              // Every following poll must re-read and compare the authoritative identity.
-              pageReadyDeadline = pageBudgetDeadline();
+              throw new DirectBrowserError('official_login_page_not_ready');
             }
             await waitDirectLogin(signal);
             continue;
           }
         }
-        if (guardError) throw guardError;
         remaining();
         return {
           status: 'session_ready',
@@ -753,6 +810,7 @@ export async function runDirectLogin(
       if (!credential.login && state.kind === 'unauthenticated' && canInjectOnUnauthenticated) {
         canInjectOnUnauthenticated = false;
         await injectCookies();
+        suppliedSessionChecked = true;
         await activeCdp.command(
           'Page.navigate',
           { url: 'https://chatgpt.com/' },
@@ -942,7 +1000,6 @@ export async function runDirectLogin(
     if (cdp && sessionId && !signal.aborted) {
       try {
         await cdp.evaluate(sessionId, loginPageExpression('clear'));
-        await cdp.command('Fetch.disable', {}, sessionId);
       } catch {
         /* Window remains available for manual inspection. */
       }

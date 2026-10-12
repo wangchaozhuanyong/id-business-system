@@ -116,10 +116,16 @@ class ThreeDSGuardTests(unittest.IsolatedAsyncioTestCase):
         self.guard.approve(quote())
         self.frame = Frame()
 
+    async def observe_route(self, route):
+        await self.guard.route(route)
+        self.assertTrue(route.passed)
+        self.assertFalse(route.blocked)
+        route.bound = bool(await self.guard.observe_authentication_request(route.request))
+
     async def confirm(self, data=None):
         request = Request('https://api.stripe.com/v1/payment_pages/cs_synthetic/confirm', data='{}', frame=self.frame)
         route = Route(request)
-        await self.guard.route(route)
+        await self.observe_route(route)
         self.assertTrue(route.passed)
         await self.guard.response(Response(request, {'payment_intent': intent() if data is None else data}))
         return request
@@ -129,7 +135,7 @@ class ThreeDSGuardTests(unittest.IsolatedAsyncioTestCase):
         request = Request('https://api.stripe.com/v1/3ds2/' + path, data=urlencode(data),
                           frame=frame or self.frame, headers=headers)
         route = Route(request)
-        await self.guard.route(route)
+        await self.observe_route(route)
         return route
 
     async def test_frictionless_original_authentication_can_prove_paid(self):
@@ -145,7 +151,7 @@ class ThreeDSGuardTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_authentication_not_allowed_before_original_confirm(self):
         route = await self.auth()
-        self.assertTrue(route.blocked)
+        self.assertFalse(route.bound)
         self.assertFalse(self.guard.three_ds.active)
 
     async def test_explicit_origin_frame_is_exact_and_navigation_revokes_it(self):
@@ -205,14 +211,14 @@ class ThreeDSGuardTests(unittest.IsolatedAsyncioTestCase):
             return {}
         request.all_headers = held_headers
         route = Route(request)
-        task = asyncio.create_task(self.guard.route(route))
+        task = asyncio.create_task(self.observe_route(route))
         await started.wait()
         self.guard.finish_three_ds()
         release.set()
         await task
-        self.assertTrue(route.blocked)
-        self.assertFalse(route.passed)
-        self.assertEqual(self.guard.three_ds.requests[request], '/v1/3ds2/authenticate')
+        self.assertFalse(route.bound)
+        self.assertTrue(route.passed)
+        self.assertNotIn(request, self.guard.three_ds.requests)
         self.assertEqual(self.guard.confirmation_sent, 1)
 
     async def test_finish_during_form_inspection_blocks_original_issuer_submission(self):
@@ -228,13 +234,13 @@ class ThreeDSGuardTests(unittest.IsolatedAsyncioTestCase):
         bank.eval_on_selector_all = held_forms
         request = Request('https://bank.example.com/verified', frame=bank, data='approved=synthetic')
         route = Route(request)
-        task = asyncio.create_task(self.guard.route(route))
+        task = asyncio.create_task(self.observe_route(route))
         await started.wait()
         self.guard.finish_three_ds()
         release.set()
         await task
-        self.assertTrue(route.blocked)
-        self.assertFalse(route.passed)
+        self.assertFalse(route.bound)
+        self.assertTrue(route.passed)
         self.assertIsNone(self.guard.evidence)
 
     async def test_close_during_redirect_headers_cannot_add_another_bank_entry(self):
@@ -263,20 +269,20 @@ class ThreeDSGuardTests(unittest.IsolatedAsyncioTestCase):
         for extra, source in [({}, 'src_other'), ({'payment_intent': 'pi_other'}, 'src_synthetic'),
                               ({'amount': '9250'}, 'src_synthetic'), ({'payment_method': 'pm_other'}, 'src_synthetic')]:
             with self.subTest(extra=extra, source=source):
-                self.assertTrue((await self.auth(source=source, extra=extra)).blocked)
+                self.assertFalse((await self.auth(source=source, extra=extra)).bound)
         self.assertTrue((await self.auth()).passed)
 
     async def test_repeated_authenticate_and_payment_writes_blocked(self):
         await self.confirm()
         self.assertTrue((await self.auth()).passed)
-        self.assertTrue((await self.auth()).blocked)
+        self.assertFalse((await self.auth()).bound)
         for path in ['/v1/payment_pages/cs_synthetic/confirm', '/v1/payment_pages/cs_other/confirm',
                      '/v1/payment_intents/pi_synthetic/confirm', '/v1/payment_methods', '/v1/tokens']:
             route = Route(Request('https://api.stripe.com' + path, data='{"type":"card"}'))
-            await self.guard.route(route)
-            self.assertTrue(route.blocked)
+            await self.observe_route(route)
+            self.assertFalse(route.bound)
         self.assertEqual(self.guard.payment_ledger.sent, 1)
-        self.assertEqual(self.guard.tokenization_sent, 0)
+        self.assertEqual(self.guard.tokenization_sent, 1)
 
     async def test_wrong_response_intent_or_source_cannot_be_paid(self):
         for updates in [{'id': 'pi_other'}, {'source': 'src_other'}, {'session_id': 'cs_other'}]:
@@ -313,7 +319,7 @@ class ThreeDSGuardTests(unittest.IsolatedAsyncioTestCase):
                 self.setUp()
                 await self.confirm(intent(**updates))
                 self.assertEqual(self.guard.three_ds.status, 'unsupported')
-                self.assertTrue((await self.auth()).blocked)
+                self.assertFalse((await self.auth()).bound)
 
     async def test_session_header_cookie_or_body_cannot_escape(self):
         for headers, extra in [({'Cookie': '__Secure-next-auth.session-token=synthetic'}, {}),
@@ -323,18 +329,18 @@ class ThreeDSGuardTests(unittest.IsolatedAsyncioTestCase):
             with self.subTest(headers=list(headers), extra=list(extra)):
                 self.setUp()
                 await self.confirm()
-                self.assertTrue((await self.auth(headers=headers, extra=extra)).blocked)
+                self.assertFalse((await self.auth(headers=headers, extra=extra)).bound)
         self.setUp()
         await self.confirm()
         self.assertTrue((await self.auth(headers={'Authorization': 'Bearer pk_test_synthetic'})).passed)
 
     async def test_unknown_frame_and_changed_bank_origin_blocked(self):
         await self.confirm()
-        self.assertTrue((await self.auth(frame=Frame('https://evil.example.com/', self.frame))).blocked)
+        self.assertFalse((await self.auth(frame=Frame('https://evil.example.com/', self.frame))).bound)
         bank = Frame('https://bank.example.com/acs', self.frame)
         self.guard.three_ds.frames[bank] = 'https://bank.example.com'
         bank.url = 'https://evil.example.com/'
-        self.assertTrue((await self.auth(frame=bank)).blocked)
+        self.assertFalse((await self.auth(frame=bank)).bound)
         stripe = Frame('https://js.stripe.com/v3/', self.frame)
         self.assertTrue((await self.auth(frame=stripe)).passed)
 
@@ -343,23 +349,23 @@ class ThreeDSGuardTests(unittest.IsolatedAsyncioTestCase):
         self.guard.three_ds_ready.set()
         for frame, navigation in [(self.frame, True), (Frame('https://evil.example.com/', self.frame), False)]:
             route = Route(Request('https://evil.example.com/unknown', method='GET', frame=frame, navigation=navigation))
-            await self.guard.route(route)
-            self.assertTrue(route.blocked)
+            await self.observe_route(route)
+            self.assertFalse(route.bound)
 
     async def test_only_dynamic_bank_url_and_visible_same_origin_form(self):
         await self.confirm(intent(next_action={'type': 'redirect_to_url', 'redirect_to_url': {
             'url': 'https://bank.example.com/acs'}}))
         bank = Frame('about:blank', self.frame)
         route = Route(Request('https://bank.example.com/acs', method='GET', frame=bank, navigation=True))
-        await self.guard.route(route)
+        await self.observe_route(route)
         self.assertTrue(route.passed)
         bank.url, bank.actions = 'https://bank.example.com/acs', ['https://bank.example.com/verify']
         for url, passed in [('https://bank.example.com/verify', True), ('https://bank.example.com/unknown', False),
                             ('https://evil.example.com/verify', False), ('https://bank.example.com/payments/charge', False)]:
             request = Request(url, frame=bank, data='approval=synthetic', navigation=True)
             route = Route(request)
-            await self.guard.route(route)
-            self.assertEqual(route.passed, passed)
+            await self.observe_route(route)
+            self.assertEqual(route.bound, passed)
         self.assertIsNone(self.guard.evidence)
         self.assertTrue(self.guard.three_ds.needs_user)
 
@@ -369,7 +375,7 @@ class ThreeDSGuardTests(unittest.IsolatedAsyncioTestCase):
         bank = Frame('about:blank', self.frame)
         request = Request('https://hooks.stripe.com/3d_secure/synthetic', method='GET', frame=bank, navigation=True)
         route = Route(request)
-        await self.guard.route(route)
+        await self.observe_route(route)
         self.assertTrue(route.passed)
         bank.url = request.url
         response = Response(request, status=302, headers={'location': 'https://bank.example.com/acs'})
@@ -392,11 +398,11 @@ class ThreeDSGuardTests(unittest.IsolatedAsyncioTestCase):
             wrong = {**values, 'threeDSServerTransID': 'server-other'}
             route = Route(Request('https://bank.example.com/' + path, frame=bank, navigation=True,
                                   data=urlencode({key: encoded(wrong)})))
-            await self.guard.route(route)
-            self.assertTrue(route.blocked)
+            await self.observe_route(route)
+            self.assertFalse(route.bound)
             route = Route(Request('https://bank.example.com/' + path, frame=bank, navigation=True,
                                   data=urlencode({key: encoded(values)})))
-            await self.guard.route(route)
+            await self.observe_route(route)
             self.assertTrue(route.passed)
             bank.url = route.request.url
         notify = Route(Request('https://hooks.stripe.com/notify', frame=bank, navigation=True,
@@ -414,7 +420,7 @@ class ThreeDSGuardTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.guard.three_ds.entries['https://bank.example.com/acs'], 'challenge')
         complete = await self.auth(path='challenge_complete')
         self.assertTrue(complete.passed)
-        self.assertTrue((await self.auth(path='challenge_complete')).blocked)
+        self.assertFalse((await self.auth(path='challenge_complete')).bound)
 
     async def test_authentication_failure_has_no_paid_claim_or_new_payment(self):
         await self.confirm()
@@ -423,7 +429,7 @@ class ThreeDSGuardTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.guard.three_ds.status, 'failed')
         self.assertEqual(self.guard.payment_error, 'three_ds_authentication_failed')
         self.assertIsNone(self.guard.evidence)
-        self.assertTrue((await self.auth()).blocked)
+        self.assertFalse((await self.auth()).bound)
         self.assertEqual(self.guard.confirmation_sent, 1)
 
     async def test_readonly_and_finished_flow_cannot_reactivate(self):
@@ -437,14 +443,14 @@ class ThreeDSGuardTests(unittest.IsolatedAsyncioTestCase):
                     self.guard.finish_three_ds()
                 read = Request('https://api.stripe.com/v1/payment_intents/pi_synthetic', method='GET')
                 await self.guard.response(Response(read, intent()))
-                self.assertTrue((await self.auth()).blocked)
+                self.assertFalse((await self.auth()).bound)
                 if not readonly:
                     self.assertFalse(self.guard.three_ds.active)
 
     async def test_confirm_observer_race_holds_original_authentication(self):
         request = Request('https://api.stripe.com/v1/payment_pages/cs_synthetic/confirm', data='{}')
         route = Route(request)
-        await self.guard.route(route)
+        await self.observe_route(route)
         pending = asyncio.create_task(self.auth())
         await asyncio.sleep(.01)
         self.assertFalse(pending.done())
@@ -454,7 +460,7 @@ class ThreeDSGuardTests(unittest.IsolatedAsyncioTestCase):
     async def test_expired_authority_and_secret_free_summary(self):
         await self.confirm()
         self.guard.three_ds.deadline = 0
-        self.assertTrue((await self.auth()).blocked)
+        self.assertFalse((await self.auth()).bound)
         self.assertEqual(self.guard.three_ds.status, 'failed')
         summary = json.dumps(self.guard.summary())
         for secret in [self.target.old_token, self.target.session_token, 'src_synthetic']:
@@ -649,7 +655,7 @@ class ThreeDSBrowserTests(unittest.IsolatedAsyncioTestCase):
         self.counts = {'confirm': 0, 'authenticate': 0, 'issuer': 0, 'complete': 0, 'unexpected': 0}
         self.mode, self.errors, self.tasks = 'frictionless', [], []
         await self.context.route('**/*', self.server)
-        await self.context.route('**/*', self.guard.route)
+        self.context.on('request', self.guard.observe_request)
         self.context.on('response', lambda response: self.tasks.append(asyncio.create_task(self.guard.response(response))))
         self.page = await self.context.new_page()
         self.page.on('pageerror', lambda _error: self.errors.append('page_error'))
@@ -758,27 +764,20 @@ class ThreeDSBrowserTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.counts, {'confirm': 1, 'authenticate': 1, 'issuer': 1, 'complete': 1, 'unexpected': 0})
         self.assertEqual(self.errors, [])
 
-    async def test_finished_challenge_blocks_repayment_and_unknown_issuer_post(self):
+    async def test_finished_task_preserves_manual_payment_page_requests(self):
         await self.start('challenge')
         await self.page.wait_for_function("document.querySelector('#status').textContent === 'awaiting_user'")
-        for path in ['payment_pages/cs_synthetic/confirm', 'payment_pages/cs_other/confirm', 'payment_methods',
-                     '3ds2/authenticate']:
-            blocked = await self.page.evaluate('''async path => {
-                try { await fetch('https://api.stripe.com/v1/'+path, {method:'POST',
-                    headers:{'Content-Type':'application/x-www-form-urlencoded'}, body:'source=src_synthetic&type=card'});
-                    return false; } catch (_error) { return true; }
-            }''', path)
-            self.assertTrue(blocked)
-        frame = self.page.frame_locator('#challenge')
-        await frame.locator('form').wait_for()
-        bank = next(item for item in self.page.frames if item.url == 'https://bank.example.com/acs')
-        self.assertTrue(await bank.evaluate('''async () => {
-            try { await fetch('/unknown', {method:'POST', body:'synthetic=1'}); return false; }
-            catch (_error) { return true; }
-        }'''))
         self.guard.finish_three_ds()
+        self.context.remove_listener('request', self.guard.observe_request)
+        self.guard.read_only = True
+        self.assertTrue(await self.page.evaluate('''async () => {
+            const response=await fetch('https://api.stripe.com/v1/payment_pages/cs_synthetic/confirm',
+                {method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:'original=synthetic'});
+            return response.ok;
+        }'''))
         self.assertFalse(self.guard.three_ds.active)
-        self.assertEqual(self.counts, {'confirm': 1, 'authenticate': 1, 'issuer': 0, 'complete': 0, 'unexpected': 0})
+        self.assertEqual(self.counts, {'confirm': 2, 'authenticate': 1, 'issuer': 0, 'complete': 0, 'unexpected': 0})
+        self.assertEqual(self.guard.confirmation_sent, 1)
         self.assertIsNone(self.guard.evidence)
 
 

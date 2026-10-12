@@ -116,6 +116,7 @@ export async function retainOrReplaceRechargeBrowserProfile(input: {
     throw new ConflictException('本次任务已绑定原比特窗口，不能更换窗口');
   const records = await repository.records(tx, job.accountKey);
   if (
+    previous.mode !== 'open_browser' &&
     rechargeProfileRecordsHavePaymentRisk(records, job.ownerId, job.accountKey, job.plan, previous)
   )
     throw new ConflictException('原单付款状态未安全核实，不能更换比特窗口');

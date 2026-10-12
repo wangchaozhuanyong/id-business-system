@@ -3,9 +3,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { useBitBrowserDirectOpen } from './useBitBrowserDirectOpen';
 import { DirectBrowserError } from './bitbrowser-direct-api';
 import type { V2RechargeBitBrowserOpenLaunch } from './contracts';
-const mock = vi.hoisted(() => ({ run: vi.fn(), callback: vi.fn() }));
+const mock = vi.hoisted(() => ({ run: vi.fn(), callback: vi.fn(), cancel: vi.fn() }));
 vi.mock('./bitbrowser-direct-login', () => ({ runDirectLogin: mock.run }));
-vi.mock('./api', () => ({ rechargeApi: { directBrowserCallback: mock.callback } }));
+vi.mock('./api', () => ({
+  rechargeApi: { directBrowserCallback: mock.callback, cancelBitBrowser: mock.cancel }
+}));
 const launch = (): V2RechargeBitBrowserOpenLaunch => ({
   id: 'job-fixture',
   mode: 'open_browser',
@@ -24,6 +26,7 @@ const launch = (): V2RechargeBitBrowserOpenLaunch => ({
 beforeEach(() => {
   vi.clearAllMocks();
   mock.callback.mockResolvedValue({ ok: true });
+  mock.cancel.mockResolvedValue({ id: 'job-fixture', cancellationConfirmed: true });
 });
 describe('网页直连登录任务生命周期', () => {
   it('密码登录携带服务端账号绑定，重建回执及后续终态统一使用新ID', async () => {
@@ -275,12 +278,13 @@ describe('仅登录窗口控制器收尾', () => {
     expect(credential.sessionJson).toBe('');
     expect(current.agentToken).toBe('');
     expect(current.bitBrowser.localApiToken).toBe('');
-    expect(error).toHaveBeenLastCalledWith(expect.stringContaining('执行结果未能保存'));
+    expect(error).toHaveBeenLastCalledWith(expect.stringContaining('资料已解锁'));
     scope.stop();
   });
 
   it('另一页面已结束任务时中止本地执行，不再用旧凭据回传或报失败', async () => {
     mock.callback.mockResolvedValue({ ok: true });
+    mock.cancel.mockResolvedValue({ id: 'job-fixture', cancellationConfirmed: true });
     mock.run.mockImplementation(
       (_settings, _credential, _name, signal: AbortSignal) =>
         new Promise((_resolve, reject) =>

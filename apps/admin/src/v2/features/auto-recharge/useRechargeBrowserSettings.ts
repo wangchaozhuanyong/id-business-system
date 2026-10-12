@@ -80,6 +80,16 @@ export function useRechargeBrowserSettings(
   );
   const proxyCatalog = useManagedBrowserProxy(settingsForm, settingsOpen);
   let connectionCheck: AbortController | undefined;
+  watch(
+    directMode,
+    (direct) => {
+      connectionCheck?.abort();
+      connectionCheck = undefined;
+      connectorStatus.value = 'unknown';
+      connectorMessage.value = direct ? '尚未检测比特浏览器本地接口' : '尚未检测本机充值助手';
+    },
+    { immediate: true, flush: 'sync' }
+  );
 
   function resetSettings() {
     settingsForm.value = formFromSettings(settingsQuery.data.value);
@@ -104,19 +114,20 @@ export function useRechargeBrowserSettings(
     connectionCheck?.abort();
     const check = new AbortController();
     connectionCheck = check;
+    const direct = directMode.value;
     connectorStatus.value = 'checking';
-    connectorMessage.value = directMode.value
+    connectorMessage.value = direct
       ? '正在检测比特接口和窗口分组／标签'
       : '正在检测连接器、比特接口和窗口分组／标签';
     try {
-      const catalog = await readBrowserCatalog(form, check.signal, directMode.value);
+      const catalog = await readBrowserCatalog(form, check.signal, direct);
       if (check.signal.aborted) throw new Error('本次连接检测已取消。');
       if (catalog.groups.filter((item) => item.name === form.groupName).length !== 1)
         throw new Error('比特接口已连通，但所选窗口分组不存在或重名，请重新选择。');
       if (catalog.tags.filter((item) => item.name === form.tagName).length !== 1)
         throw new Error('比特接口已连通，但所选窗口标签不存在或重名，请重新选择。');
       connectorStatus.value = 'online';
-      connectorMessage.value = directMode.value
+      connectorMessage.value = direct
         ? '比特浏览器直连、分组／标签检测通过'
         : '连接器、比特接口和分组／标签检测通过';
     } catch (cause) {

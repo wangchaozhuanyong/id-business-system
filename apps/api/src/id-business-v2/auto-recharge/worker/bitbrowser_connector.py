@@ -20,7 +20,8 @@ import stat
 import tempfile
 import threading
 from urllib.parse import urlsplit
-from urllib.request import Request, build_opener, HTTPRedirectHandler
+from urllib.error import HTTPError
+from urllib.request import Request, build_opener, HTTPRedirectHandler, ProxyHandler
 
 import bitbrowser_catalog
 import bitbrowser_options
@@ -170,8 +171,13 @@ class BitBrowserClient:
             method="POST",
         )
         try:
-            with build_opener(NoRedirect).open(request, timeout=timeout) as response:
+            # Local control traffic must not follow a system/PAC/environment proxy.
+            with build_opener(ProxyHandler({}), NoRedirect).open(request, timeout=timeout) as response:
                 result = json.loads(response.read(MAX_BODY), object_pairs_hook=unique_object)
+        except HTTPError as error:
+            reason = ("bitbrowser_api_token_invalid" if error.code in (401, 403)
+                      else "bitbrowser_local_api_rejected")
+            raise Stop(reason, stage=path.strip("/").replace("/", "_")) from None
         except Exception:
             raise Stop("bitbrowser_local_api_unavailable", stage=path.strip("/").replace("/", "_")) from None
         if result.get("success") is not True:
@@ -191,13 +197,10 @@ class BitBrowserClient:
         tag_id = bitbrowser_catalog.selected_id(catalog["tags"], settings["tagName"], "tag")
         data = self.post("/browser/update", {
             "groupId": group_id,
-            # BitBrowser opens the platform URL as well as the extra URL.
-            # Leave it empty so no anonymous official tab can race injection.
+            # Use one official startup tab, including manual BitBrowser reopening.
             "platform": "",
             "platformIcon": "chatgpt.com",
-            # The workflow installs its guard and session cookies before the
-            # first official navigation; an anonymous startup can race them.
-            "url": "about:blank",
+            "url": "https://chatgpt.com/",
             "name": window_name,
             "remark": settings["tagName"],
             "userName": "",
@@ -539,8 +542,6 @@ class LocalJob:
         self.callback.send({"type": "progress", "result": report})
 
     async def wait_for_user(self, reason, seconds):
-        if self.context and self.context.pages:
-            await self.context.pages[-1].bring_to_front()
         self.resume_event.clear()
         self.waiting_for_user = True
         try:

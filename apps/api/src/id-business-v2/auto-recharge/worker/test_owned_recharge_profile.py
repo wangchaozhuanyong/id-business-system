@@ -105,8 +105,9 @@ class OwnedRechargeProfileTests(unittest.IsolatedAsyncioTestCase):
         with patch.object(retry, '_execute_profiles', AsyncMock(side_effect=Stop('operation_cancelled'))):
             result = await retry.execute_profiles(self.job, self.client, self.target, self.playwright)
         self.assertEqual(result['browser_cleanup_status'], 'not_needed')
-        self.assertEqual([call.args[0] for call in self.client.post.call_args_list],
-                         ['/browser/close', '/browser/pids/alive'])
+        self.client.post.assert_not_called()
+        self.assertEqual(result['status'], 'cancelled')
+        self.assertTrue(result['cancellation_confirmed'])
         self.assertEqual(self.job.profile_id, self.profile['profileId'])
 
     async def test_other_user_with_session_error_is_rejected_before_error_or_cookie_restore(self):

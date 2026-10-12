@@ -203,7 +203,8 @@ class PasswordLoginTests(unittest.IsolatedAsyncioTestCase):
         client = MagicMock(create_profile=MagicMock(return_value="a" * 32),
                            open_profile=MagicMock(return_value="http://127.0.0.1:12345"))
         page = MagicMock(url="about:blank", set_default_timeout=MagicMock())
-        context = MagicMock(pages=[page], route=AsyncMock(), unroute=AsyncMock())
+        context = MagicMock(pages=[page], route=AsyncMock(), unroute=AsyncMock(),
+                            set_extra_http_headers=AsyncMock())
         playwright = SimpleNamespace(chromium=SimpleNamespace(connect_over_cdp=AsyncMock(
             return_value=SimpleNamespace(contexts=[context], version="152.0.0"))))
         target = BrowserCredential("", "account_fixture", "user_fixture")
@@ -222,8 +223,41 @@ class PasswordLoginTests(unittest.IsolatedAsyncioTestCase):
         job.restore_account.assert_called_once_with(target)
         self.assertIs(payment.await_args.args[1], target)
         self.assertNotIn("login", job.payload)
-        context.route.assert_awaited_once()
-        context.unroute.assert_awaited_once()
+        context.route.assert_not_awaited()
+        context.unroute.assert_not_awaited()
+
+    async def test_password_login_only_preserves_ready_home_without_another_navigation(self):
+        data = payload()
+        data.pop('sessionJson')
+        data['mode'] = 'open_browser'
+        for key in ('details', 'address', 'safety', 'authorizeSinglePayment'):
+            data.pop(key, None)
+        data['login'] = {'email': 'test@example.invalid', 'password': 'local-password'}
+        job = connector.LocalJob(data)
+        job.callback, job.restore_account = MagicMock(), MagicMock()
+        client = MagicMock(create_profile=MagicMock(return_value='a' * 32),
+                           open_profile=MagicMock(return_value='http://127.0.0.1:12345'))
+        page = MagicMock(url='https://chatgpt.com/', goto=AsyncMock(), reload=AsyncMock())
+        context = MagicMock(pages=[page], route=AsyncMock(), route_web_socket=AsyncMock(),
+                            set_extra_http_headers=AsyncMock())
+        playwright = SimpleNamespace(chromium=SimpleNamespace(connect_over_cdp=AsyncMock(
+            return_value=SimpleNamespace(contexts=[context], version='152.0.0'))))
+        target = BrowserCredential('', 'account_fixture', 'user_fixture')
+        verified = (target, {'account_matched': True, 'current_plan': 'free'})
+        with (patch.object(login, 'login_with_password', AsyncMock(return_value=verified)),
+              patch.object(login, 'clear_visible_secrets', AsyncMock()),
+              patch('browser_checkout.prepare_proxy_in_context', AsyncMock(return_value={'country': 'US'})),
+              patch('browser_checkout.check_session', AsyncMock(return_value=verified)),
+              patch('browser_checkout.synchronize_login_page', AsyncMock(return_value=verified)),
+              patch.object(bitbrowser_retry, 'cancellable_flow', AsyncMock()) as payment):
+            result = await bitbrowser_retry.execute_profiles(job, client, None, playwright)
+        self.assertEqual(result['status'], 'session_ready', result)
+        self.assertEqual(result['payment_requests_sent'], 0)
+        page.goto.assert_not_awaited()
+        page.reload.assert_not_awaited()
+        context.route.assert_not_awaited()
+        context.route_web_socket.assert_not_awaited()
+        payment.assert_not_awaited()
 
     async def test_missing_or_different_running_kernel_stops_before_login_and_payment(self):
         for version, reason in ((None, "bitbrowser_profile_configuration_unverified"),
