@@ -51,12 +51,144 @@ import {
   rechargeFlowSuccessorControlPaths,
   hasRechargeFlowBusinessReuseProof,
   ownedMysqlTestControlPaths,
-  hasCombinedComponentScope
+  hasCombinedComponentScope,
+  combinedMigrationBinding,
+  validateCombinedMigrationNative
 } from './ci-recharge-scope.mjs';
 import { matchesSourceEvidence } from './ci-recharge-evidence.mjs';
 
 const schema =
   'model Other { id String }\nmodel IdBusinessV2RechargeBrowserSetting { ownerId String }\n';
+
+test('finite combined migration reuse requires native source and all 25 actual assertions', () => {
+  const b = combinedMigrationBinding;
+  const report = {
+    numTotalTestSuites: 6,
+    success: true,
+    numTotalTests: 25,
+    numPassedTests: 25,
+    numFailedTests: 0,
+    numPendingTests: 0,
+    numTodoTests: 0,
+    numFailedTestSuites: 0,
+    numPendingTestSuites: 0,
+    testResults: [
+      ['recharge-callback-receipts.mysql.integration.spec.ts', 4],
+      ['recharge-employee-concurrency.mysql.integration.spec.ts', 16],
+      ['recharge-subscription-cycle.mysql.integration.spec.ts', 5]
+    ].map(([file, count]) => ({
+      name: '/fixture/apps/api/src/id-business-v2/auto-recharge/' + file,
+      status: 'passed',
+      assertionResults: Array.from({ length: count }, () => ({ status: 'passed' }))
+    }))
+  };
+  const fixture = () => ({
+    run: {
+      id: b.runId,
+      run_attempt: 1,
+      event: 'pull_request',
+      path: '.github/workflows/quality.yml',
+      status: 'completed',
+      head_sha: b.head,
+      pull_requests: [{ number: 463, base: { sha: b.base } }]
+    },
+    jobs: [
+      {
+        id: b.jobId,
+        run_id: b.runId,
+        name: 'recharge (migration)',
+        status: 'completed',
+        conclusion: 'success',
+        steps: ['Checkout', 'Check affected recharge part'].map((name) => ({
+          name,
+          status: 'completed',
+          conclusion: 'success'
+        }))
+      }
+    ],
+    checkout: {
+      sha: b.checkout,
+      tree: { sha: b.tree },
+      parents: [b.base, b.head].map((sha) => ({ sha }))
+    },
+    log:
+      'Checkout\tgit log -1 --format=%H\nCheckout\t' + b.checkout + '\n' + JSON.stringify(report),
+    changed: ['scripts/acceptance-v2-workspace-dock.mjs', 'scripts/ci-recharge-release.test.mjs']
+  });
+  assert.equal(validateCombinedMigrationNative(fixture()).testsPassed, 25);
+  for (const path of [
+    'apps/api/src/id-business-v2/auto-recharge/recharge.service.ts',
+    'apps/api/prisma-mysql/schema.prisma',
+    'packages/shared/src/v2/auto-recharge.ts',
+    'package-lock.json',
+    '.github/workflows/quality.yml',
+    'scripts/ci-recharge-check.mjs',
+    'scripts/acceptance-v2-recharge-employee-concurrency.mjs',
+    'scripts/lib/owned-mysql-test-instance.mjs',
+    'unknown.txt'
+  ]) {
+    const input = fixture();
+    input.changed.push(path);
+    assert.equal(validateCombinedMigrationNative(input), undefined, path);
+  }
+  for (const change of [
+    (v) => {
+      v.run.run_attempt = 2;
+    },
+    (v) => {
+      v.run.head_sha = 'a'.repeat(40);
+    },
+    (v) => {
+      v.run.pull_requests[0].number = 464;
+    },
+    (v) => {
+      v.run.pull_requests[0].base.sha = 'b'.repeat(40);
+    },
+    (v) => {
+      v.checkout.tree.sha = 'c'.repeat(40);
+    },
+    (v) => {
+      v.checkout.parents.reverse();
+    },
+    (v) => {
+      v.jobs[0].id++;
+    },
+    (v) => {
+      v.jobs[0].conclusion = 'failure';
+    },
+    (v) => {
+      v.jobs[0].steps[1].conclusion = 'skipped';
+    },
+    (v) => {
+      v.log = '';
+    },
+    (v) => {
+      v.log += '\n' + JSON.stringify(report);
+    },
+    (v) => {
+      v.log = v.log.replace(b.checkout, 'd'.repeat(40));
+    },
+    (v) => {
+      v.log = v.log.replace('"numPendingTests":0', '"numPendingTests":1');
+    },
+    (v) => {
+      v.log = v.log.replace('"numTodoTests":0', '"numTodoTests":1');
+    },
+    (v) => {
+      v.log = v.log.replace('"status":"passed"', '"status":"skipped"');
+    },
+    (v) => {
+      v.log = v.log.replace(
+        'recharge-subscription-cycle.mysql.integration.spec.ts',
+        'recharge-employee-concurrency.mysql.integration.spec.ts'
+      );
+    }
+  ]) {
+    const input = fixture();
+    change(input);
+    assert.equal(validateCombinedMigrationNative(input), undefined);
+  }
+});
 
 test('combined component acceptance remains finite and ordinary Admin edits do not acquire database checks', () => {
   const paths = [

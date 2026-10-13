@@ -1160,6 +1160,145 @@ export function canReuseMain(testedSourceTree, currentSourceTree, jobs) {
   );
 }
 
+// One completed migration job survived this candidate's unrelated guard/UI failure.
+// Its native checkout and all remaining bytes must still match; never reuse overall quality.
+export const combinedMigrationBinding = Object.freeze({
+  repository: 'wangchaozhuanyong/id-business-system',
+  pullRequest: 463,
+  runId: 38410495070,
+  runAttempt: 1,
+  jobId: 115341331843,
+  head: '40ad028a5ddc6aedd9f8e43d3dd33907e4c9faad',
+  base: 'dbec7e0b08c989b9b4e7ba02ef5eae2bfc728746',
+  checkout: '9e80c3ba50d5069603955fd52a2cf7116c2433a0',
+  tree: '7f4cab0ac137726c71a955cbfa8903585d11ebb4'
+});
+const combinedMigrationRepairPaths = new Set([
+  'scripts/acceptance-v2-workspace-dock.mjs',
+  'scripts/ci-recharge-release.test.mjs',
+  'scripts/ci-recharge-scope.mjs',
+  'scripts/ci-recharge-scope.test.mjs'
+]);
+export function validateCombinedMigrationNative({ run, jobs, checkout, log, changed }) {
+  const b = combinedMigrationBinding;
+  if (
+    run.id !== b.runId ||
+    run.run_attempt !== b.runAttempt ||
+    !matchingRun(run, b.pullRequest, b.head) ||
+    !run.pull_requests.some((pr) => pr.number === b.pullRequest && pr.base.sha === b.base) ||
+    checkout.sha !== b.checkout ||
+    checkout.tree?.sha !== b.tree ||
+    JSON.stringify(checkout.parents?.map((parent) => parent.sha)) !==
+      JSON.stringify([b.base, b.head]) ||
+    !changed.every((path) => combinedMigrationRepairPaths.has(path))
+  )
+    return undefined;
+  const job = jobs.find((row) => row.id === b.jobId);
+  if (
+    !job ||
+    job.run_id !== b.runId ||
+    job.name !== 'recharge (migration)' ||
+    job.status !== 'completed' ||
+    job.conclusion !== 'success' ||
+    !['Checkout', 'Check affected recharge part'].every(
+      (name) =>
+        job.steps.filter(
+          (step) =>
+            step.name === name && step.status === 'completed' && step.conclusion === 'success'
+        ).length === 1
+    )
+  )
+    return undefined;
+  const lines = log.split('\n');
+  const marker = lines.findIndex((line) => line.includes('git log -1 --format=%H'));
+  if (marker < 0 || !lines[marker + 1]?.endsWith(b.checkout)) return undefined;
+  const rows = lines.filter((line) => line.includes('{"numTotalTestSuites":'));
+  if (rows.length !== 1) return undefined;
+  let report;
+  try {
+    report = JSON.parse(rows[0].slice(rows[0].indexOf('{"numTotalTestSuites":')));
+  } catch {
+    return undefined;
+  }
+  const files = new Map([
+    ['recharge-callback-receipts.mysql.integration.spec.ts', 4],
+    ['recharge-employee-concurrency.mysql.integration.spec.ts', 16],
+    ['recharge-subscription-cycle.mysql.integration.spec.ts', 5]
+  ]);
+  if (
+    report.success !== true ||
+    report.numTotalTests !== 25 ||
+    report.numPassedTests !== 25 ||
+    ![
+      'numFailedTests',
+      'numPendingTests',
+      'numTodoTests',
+      'numFailedTestSuites',
+      'numPendingTestSuites'
+    ].every((key) => report[key] === 0) ||
+    !Array.isArray(report.testResults) ||
+    report.testResults.length !== 3
+  )
+    return undefined;
+  for (const row of report.testResults) {
+    const name = row.name?.split('/').at(-1);
+    if (
+      !files.has(name) ||
+      row.status !== 'passed' ||
+      row.assertionResults?.length !== files.get(name) ||
+      row.assertionResults.some((assertion) => assertion.status !== 'passed')
+    )
+      return undefined;
+    files.delete(name);
+  }
+  return files.size === 0
+    ? {
+        part: 'migration',
+        run: b.runId,
+        attempt: b.runAttempt,
+        job: b.jobId,
+        checkout: b.checkout,
+        tree: b.tree,
+        testsPassed: 25,
+        testsSkipped: 0
+      }
+    : undefined;
+}
+
+function reuseCombinedMigration(repo, event, mode, paths, currentTree) {
+  const b = combinedMigrationBinding;
+  if (
+    repo !== b.repository ||
+    event.pull_request.number !== b.pullRequest ||
+    mode !== 'admin' ||
+    !hasCombinedComponentScope(paths) ||
+    event.pull_request.base.sha !== b.base
+  )
+    return undefined;
+  ensureCommit(b.head);
+  if (git('rev-parse', `${b.head}^{tree}`) !== b.tree)
+    throw new Error('Migration source tree changed');
+  const changed = git('diff', '--name-only', b.head, currentTree).split('\n').filter(Boolean);
+  const run = gh(`repos/${repo}/actions/runs/${b.runId}`);
+  const { jobs } = gh(
+    `repos/${repo}/actions/runs/${b.runId}/attempts/${b.runAttempt}/jobs?per_page=100`
+  );
+  const checkout = gh(`repos/${repo}/git/commits/${b.checkout}`);
+  const log = execFileSync(
+    'gh',
+    ['run', 'view', String(b.runId), '--repo', repo, '--job', String(b.jobId), '--log'],
+    { encoding: 'utf8', maxBuffer: 4 * 1024 * 1024 }
+  );
+  const evidence = validateCombinedMigrationNative({ run, jobs, checkout, log, changed });
+  if (!evidence)
+    throw new Error('Original migration evidence or unchanged input proof is unavailable');
+  const unchanged = git('ls-tree', '-r', b.head)
+    .split('\n')
+    .filter((line) => !combinedMigrationRepairPaths.has(line.split('\t')[1]));
+  evidence.inputSha256 = createHash('sha256').update(unchanged.join('\n')).digest('hex');
+  return evidence;
+}
+
 const git = (...args) => execFileSync('git', args, { encoding: 'utf8' }).trim();
 const gh = (endpoint) => JSON.parse(execFileSync('gh', ['api', endpoint], { encoding: 'utf8' }));
 function ensureCommit(sha) {
@@ -1326,6 +1465,13 @@ async function main() {
         }
       }
       if (reused.size === parts.length) break;
+    }
+  }
+  if (process.env.GITHUB_EVENT_NAME === 'pull_request') {
+    const migrationEvidence = reuseCombinedMigration(repo, event, mode, paths, currentTree);
+    if (migrationEvidence) {
+      reused.add('migration');
+      evidence.push(migrationEvidence);
     }
   }
   const checkParts =

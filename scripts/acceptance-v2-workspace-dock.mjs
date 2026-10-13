@@ -172,6 +172,14 @@ async function verifyShortcutSettingsLifecycle(page, theme) {
   assert.deepEqual(await settingTitles.allTextContents(), initialTitles);
   checks.push({ label: `${theme}-窄屏网址保存失败保留输入与原列表`, passed: true });
   await editor.getByRole('button', { name: '添加', exact: true }).click();
+  const savedNotice = page
+    .locator('.el-message.el-message--success.is-closable')
+    .filter({ hasText: '快捷网址已添加' });
+  await savedNotice.waitFor({ state: 'visible' });
+  assert.equal(await savedNotice.locator('.el-message__content').innerText(), '快捷网址已添加');
+  await savedNotice.locator('.el-message__closeBtn').click();
+  await savedNotice.waitFor({ state: 'hidden' });
+  checks.push({ label: `${theme}-保存成功提示可通过关闭按钮收起`, passed: true });
   await editor.waitFor({ state: 'hidden' });
   const refreshError = settings.locator('.v2-async-region__refresh-error');
   await refreshError.getByText('验收模拟网址回读失败，请重试', { exact: true }).waitFor();

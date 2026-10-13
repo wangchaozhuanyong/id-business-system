@@ -2213,6 +2213,7 @@ test('actual full-mode release controls select each missing suite once without r
     'python3 -B scripts/production-release/unpublished-component-successor-readonly.test.py',
     'node --test scripts/production-release/unpublished-component-entry.test.mjs',
     'python3 -B scripts/production-release/unpublished-component-runtime-diagnostic.test.py',
+    'python3 -B scripts/production-release/unified-component-source.test.py',
     'python3 -B scripts/production-release/recharge-flow-successor.test.py',
     'python3 -B scripts/production-release/recharge-flow-successor-projection.test.py',
     'python3 -B scripts/production-release/recharge-flow-successor-readonly.test.py',
