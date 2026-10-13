@@ -73,6 +73,30 @@ HISTORICAL_ONLINE_COLD_DEPENDENCIES = {
     }
 }
 HISTORICAL_ONLINE_COLD_POLICY_SHA256 = '641fe690c62224eb3d22d69e94493e08b9a2a9309ce04c588627c4aaea7c8f35'
+# Additional retention only, observed in the read-only cache inventory. These
+# are recovery/cold and failed-candidate dependencies, not a qualified release
+# or permission to reuse their images. H has no ONLINE preservation marker.
+H_RECOVERY_DEPENDENCIES = {
+    'kind': 'OBSERVED_H_RECOVERY_IMAGE_PROTECTIONS_V1',
+    'version': 1,
+    'basis': 'READONLY_CACHE_INVENTORY',
+    'observedWorkflowRun': '38395633731',
+    'publicationQualified': False,
+    'currentDirectory': 'releases/20261012T182211Z-60e164b75d1e',
+    'currentCommit': '60e164b75d1eedaab440c17139bf9ba55de08c61',
+    'currentManifestSha256': '7b081bbde167ebed1a9b94312036540471f16bb682d1f1e7ba9ff96822e4153c',
+    'images': {
+        '08419dcbe85212a203906c86c98e5c3ae0695d72-38160127343-1-admin': 'sha256:4f77a7f383187f96edc59901a9f4e5895b53b86233557a41dfa2c4f68b6a371d',
+        '08419dcbe85212a203906c86c98e5c3ae0695d72-38160127343-1-api': 'sha256:29539eb7825877e2e303c3567a4f4f00b8dba8773001e6de170de45f0e3987d7',
+        '08419dcbe85212a203906c86c98e5c3ae0695d72-38160127343-1-migrate': 'sha256:aa0cdad461ded3bb6d75c716c057b5ffc2e785438509310744c1230b83547dd7',
+        '0a03fa28e6b844a18833d5c63f1de700f091fc64-37918150573-1-admin': 'sha256:9e2092779d6c7acb9a854011d09040f8927cb010216cce4be65138a2a6471a30',
+        '0a03fa28e6b844a18833d5c63f1de700f091fc64-37918150573-1-api': 'sha256:74fdce6e4f05c10bd7f52f94fb9a53a36349bafd8ca8e2637d047f62a92bee42',
+        '42e8eab5ef696159c7cd6f91204213011c0cb3be-38392307348-1-admin': 'sha256:0ccbf5da92813671892c1d7a2c3bd5b0d0efa267781037e847d7a4f725f27428',
+        '42e8eab5ef696159c7cd6f91204213011c0cb3be-38392307348-1-api': 'sha256:b21389f1a67909512a25099d2dd21c5c0ca4a14d7f9d14bd1281272e8de9188c',
+        '42e8eab5ef696159c7cd6f91204213011c0cb3be-38392307348-1-migrate': 'sha256:528eb18f14e2a675599bdccb6a7d743c1e9d610a1fca788571ebad6569c65f7a',
+    },
+}
+H_RECOVERY_DEPENDENCIES_SHA256 = '084306aa18f7cb49933f075164cd888b89384b678714ea60389ddff5a90989ef'
 IMAGE_ID = re.compile(r'sha256:[0-9a-f]{64}')
 FIXED_REGISTRATION_IDS = frozenset({
     'registration-worker-956-20261006', 'registration-worker-b8-80-20261006',
@@ -383,15 +407,41 @@ def historical_online_cold_dependencies(directory, manifest, evidence):
     return images
 
 
+def observed_h_recovery_dependencies(directory, manifest, evidence):
+    """Keep eight exact observed images without reinterpreting B's native seal."""
+    if directory != BASE / 'releases/20261012T182211Z-60e164b75d1e':
+        return set()
+    policy = H_RECOVERY_DEPENDENCIES
+    require(type(policy) is dict and plan_digest(policy) == H_RECOVERY_DEPENDENCIES_SHA256,
+        'Observed H recovery dependency policy changed')
+    raw = dependency_file(directory / 'release-manifest.json', evidence, limit=128 * 1024)
+    require(hashlib.sha256(raw).hexdigest() == policy['currentManifestSha256']
+        and generic_cache_closed(raw) == manifest and manifest['commit'] == policy['currentCommit']
+        and directory == BASE / policy['currentDirectory'], 'Observed H recovery baseline changed')
+    # "literal/" explicitly identifies source metadata, not an SSM receipt or
+    # a production file. The plan binds it along with each actual local tag ID.
+    evidence['literal/H_RECOVERY_DEPENDENCIES'] = H_RECOVERY_DEPENDENCIES_SHA256
+    images = set()
+    for tag, image in sorted(policy['images'].items()):
+        require(TAG.fullmatch(tag) and IMAGE_ID.fullmatch(image), 'Observed H recovery image identity changed')
+        actual = read('docker', 'image', 'inspect', '--format', '{{.Id}}', REPOSITORY + ':' + tag)
+        require(actual == image, 'Required observed H recovery image is unavailable')
+        evidence['docker-image-inspect/' + tag] = hashlib.sha256(actual.encode()).hexdigest()
+        images.add(image)
+    return images
+
+
 def collect_dependencies(manifest, previous):
     evidence, rollback, images = {}, {}, set()
     directory = (BASE / 'current').resolve()
     observed = release_metadata(directory, evidence)
     require(observed == manifest, 'Current dependency metadata changed')
+    images |= observed_h_recovery_dependencies(directory, observed, evidence)
     images |= historical_online_cold_dependencies(directory, observed, evidence)
     images |= fixed_dependencies(directory, observed, evidence)
     prior_directory = Path(manifest['previousRelease'])
     require(release_metadata(prior_directory, evidence) == previous, 'Previous dependency metadata changed')
+    images |= observed_h_recovery_dependencies(prior_directory, previous, evidence)
     images |= fixed_dependencies(prior_directory, previous, evidence)
     # A global previous release may update only registration. Find one different
     # predecessor per service without protecting every image in the history.
@@ -1699,13 +1749,14 @@ def parameters(producer, *, source=None, expected_current=CACHE_BASELINE,
     header='import ast,base64,fcntl,hashlib,json,os,re,shutil,stat,subprocess,time,types\nfrom pathlib import Path\n'
     own=raw[CACHE_PINS[1]].decode(); storage=raw[CACHE_PINS[2]].decode()
     constants=('BASE','REPOSITORY','POLICY','IMAGE_ID','TAG','FIXED_REGISTRATION_IDS','FIXED_RECHARGE_IDS','ORDER_ARCHIVE_SEAL_RELATIVE',
-        'FAILED_ONLINE_RECOVERY_DEPENDENCY','HISTORICAL_ONLINE_COLD_DEPENDENCIES','HISTORICAL_ONLINE_COLD_POLICY_SHA256')
+        'FAILED_ONLINE_RECOVERY_DEPENDENCY','HISTORICAL_ONLINE_COLD_DEPENDENCIES','HISTORICAL_ONLINE_COLD_POLICY_SHA256',
+        'H_RECOVERY_DEPENDENCIES','H_RECOVERY_DEPENDENCIES_SHA256')
     for node in ast.parse(own).body:
         if isinstance(node,ast.Assign) and any(isinstance(t,ast.Name) and (t.id in constants or t.id.startswith('CACHE_') and t.id not in ('CACHE_RESULT_FIELDS','CACHE_ARTIFACT_FIELDS')) for t in node.targets): header+=ast.get_source_segment(own,node)+'\n'
     for node in ast.parse(storage).body:
         if isinstance(node,ast.Assign) and any(isinstance(t,ast.Name) and t.id in ('STORAGE_BASELINE','STORAGE_CURRENT_SHA','STORAGE_COMPOSE_SHA') for t in node.targets): header+=ast.get_source_segment(storage,node)+'\n'
     old_names=('require','current','active_images','protected_images','dependency_file','release_metadata','literal_dependency',
-        'fixed_dependencies','historical_online_cold_dependencies','failed_online_recovery_dependencies',
+        'fixed_dependencies','historical_online_cold_dependencies','failed_online_recovery_dependencies','observed_h_recovery_dependencies',
         'collect_dependencies','make_plan','plan_digest','verify_remote','generic_cache_closed')
     new_names=('CacheRejected','cache_need','cache_sha','cache_canonical','cache_closed','cache_producer','cache_binding','cache_inventory','cache_plan_budget',
         'cache_filter_inventory','cache_source_diagnostics','cache_recovery','cache_plan','cache_save_receipt','cache_execute')

@@ -4,6 +4,25 @@ import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import test from 'node:test';
+
+test('Admin successor diagnostics have a finite control scope', () => {
+  const paths = [
+    'scripts/production-release/admin-successor-diagnostic.py',
+    'scripts/production-release/admin-successor-diagnostic.test.py'
+  ];
+  assert.equal(isCiOnly(paths), true);
+  assert.equal(checkMode(paths, '', ''), 'ci-only');
+  assert.equal(
+    checkMode([...paths, 'apps/admin/src/v2/components/workspace/V2WorkspaceDock.vue'], '', ''),
+    'admin'
+  );
+  for (const other of [
+    'scripts/production-release/admin-successor-diagnostic.py.backup',
+    'scripts/production-release/admin-successor-diagnostic-write.py',
+    'apps/api/src/auth/unknown.ts'
+  ])
+    assert.equal(checkMode([...paths, other], '', ''), 'full');
+});
 import { fileURLToPath } from 'node:url';
 import {
   affectsPart,
@@ -31,12 +50,34 @@ import {
   unpublishedComponentSuccessorControlPaths,
   rechargeFlowSuccessorControlPaths,
   hasRechargeFlowBusinessReuseProof,
-  ownedMysqlTestControlPaths
+  ownedMysqlTestControlPaths,
+  hasCombinedComponentScope
 } from './ci-recharge-scope.mjs';
 import { matchesSourceEvidence } from './ci-recharge-evidence.mjs';
 
 const schema =
   'model Other { id String }\nmodel IdBusinessV2RechargeBrowserSetting { ownerId String }\n';
+
+test('combined component acceptance remains finite and ordinary Admin edits do not acquire database checks', () => {
+  const paths = [
+    'apps/admin/src/v2/components/workspace/V2WorkspaceDock.vue',
+    'scripts/production-release/unpublished-component-successor.py',
+    'scripts/acceptance-v2-workspace-dock.mjs',
+    'scripts/acceptance-v2-recharge-employee-concurrency.mjs',
+    'scripts/acceptance-v2-recharge-employee-concurrency.test.mjs'
+  ];
+  assert.equal(hasCombinedComponentScope(paths), true);
+  assert.equal(checkMode(paths, schema, schema), 'admin');
+  assert.equal(checkMode([...paths, 'apps/api/src/auth/unknown.ts'], schema, schema), 'full');
+  assert.equal(
+    hasCombinedComponentScope(['apps/admin/src/v2/components/workspace/V2WorkspaceDock.vue']),
+    false
+  );
+  assert.equal(
+    hasCombinedComponentScope(paths.filter((path) => !path.endsWith('successor.py'))),
+    false
+  );
+});
 const connectionProfileModel = `model IdBusinessV2RechargeConnectionProfile {
   id            String   @id @db.Char(36)
   ownerId       String   @map("owner_id") @db.VarChar(191)
@@ -1114,6 +1155,107 @@ test('direct login and workspace browser acceptance stay in exact admin scope', 
   ])
     assert.equal(checkMode([...paths, other], schema, schema), 'full', other);
 });
+test('workspace dock acceptance stays in exact admin scope and retains every shared UI guard', () => {
+  const acceptance = 'scripts/acceptance-v2-workspace-dock.mjs';
+  const paths = [
+    acceptance,
+    'apps/admin/src/v2/components/workspace/V2WorkspaceDock.vue',
+    'apps/admin/src/v2/components/workspace/V2QuickActions.vue',
+    'apps/admin/src/v2/layouts/V2AdminLayout.vue',
+    'apps/admin/src/v2/styles/v2.css',
+    'apps/admin/src/v2/testing/workspace-design-fixture.ts',
+    'scripts/ci-recharge-scope.mjs',
+    'scripts/ci-recharge-scope.test.mjs',
+    'docs/V2_TASKS.md'
+  ];
+  for (const changed of [[acceptance], paths]) {
+    assert.equal(isCiOnly(changed), false);
+    assert.equal(isAdminOnly(changed), true);
+    assert.equal(checkMode(changed, schema, schema), 'admin');
+    assert.deepEqual(selectedParts(changed), ['guards', 'admin']);
+    for (const part of ['api', 'connector', 'migration', 'security'])
+      assert.equal(affectsPart(part, changed), false, part);
+    for (const guard of [
+      'check:admin-ui',
+      'check:v2-ui-language',
+      'check:v2-color-contrast',
+      'check:v2-table-standard',
+      'check:v2-loading-standard',
+      'check:v2-module-architecture',
+      'check:v2-isolation'
+    ])
+      assert.ok(adminUiGuardChecks('admin', changed).includes(guard), guard);
+  }
+  for (const outside of [
+    'scripts/acceptance-v2-workspace-dock-other.mjs',
+    'scripts/acceptance-v2-workspace-dock.mjs.backup',
+    'scripts/acceptance-v2-workspace.mjs',
+    'apps/api/src/id-business-v2/workspace/example.ts',
+    'apps/admin/src/auth/login.ts',
+    'apps/api/prisma-mysql/schema.prisma',
+    'package-lock.json'
+  ]) {
+    assert.equal(checkMode([outside], schema, schema), 'full', outside);
+    assert.equal(checkMode([...paths, outside], schema, schema), 'full', outside);
+  }
+});
+
+test('workspace sources and acceptance script select one complete browser acceptance command', () => {
+  const acceptance = 'scripts/acceptance-v2-workspace-dock.mjs';
+  const sources = [
+    acceptance,
+    'apps/admin/src/v2/components/workspace/V2WorkspaceDock.vue',
+    'apps/admin/src/v2/components/workspace/V2WorkspaceLauncher.vue',
+    'apps/admin/src/v2/components/workspace/V2QuickActions.vue',
+    'apps/admin/src/v2/components/workspace/V2QuickActionsDrawer.vue',
+    'apps/admin/src/v2/components/workspace/useV2QuickActions.ts',
+    'apps/admin/src/v2/layouts/V2AdminLayout.vue',
+    ...['base', 'layout', 'records', 'v2'].map((name) => `apps/admin/src/v2/styles/${name}.css`),
+    'apps/admin/src/v2/testing/V2WorkspaceDesignFixture.vue',
+    'apps/admin/src/v2/testing/workspace-design-fixture.ts'
+  ];
+  for (const changed of [...sources.map((source) => [source]), sources]) {
+    const selected = adminCheckCommands('admin', changed).filter((args) =>
+      args.includes(acceptance)
+    );
+    assert.deepEqual(selected, [['exec', '--', 'node', acceptance]], changed.join(', '));
+  }
+  for (const unrelated of [
+    'docs/V2_TASKS.md',
+    'scripts/ci-recharge-scope.mjs',
+    'apps/admin/src/v2/features/orders/Orders.vue',
+    'apps/admin/src/v2/components/workspace-other/V2WorkspaceDock.vue',
+    'apps/admin/src/v2/testing/workspace-design-fixture-other.ts',
+    'apps/admin/src/v2/styles/v2.css.backup'
+  ])
+    assert.equal(
+      adminCheckCommands('admin', [unrelated]).some((args) => args.includes(acceptance)),
+      false,
+      unrelated
+    );
+});
+
+test('workspace-only PR and main CLI output require browser installation for admin acceptance', () => {
+  for (const eventName of ['pull_request', 'push']) {
+    const { result, writes } = recordScopeClassification(
+      ['scripts/acceptance-v2-workspace-dock.mjs'],
+      {},
+      eventName
+    );
+    assert.equal(result.mode, 'admin');
+    assert.deepEqual(result.checkParts, ['guards', 'admin']);
+    assert.ok(writes.some(({ contents }) => /(?:^|\n)admin_acceptance=true\n/.test(contents)));
+  }
+  const unrelated = recordScopeClassification(
+    ['apps/admin/src/v2/features/customers/V2CustomersView.vue'],
+    {},
+    'pull_request'
+  );
+  assert.ok(
+    unrelated.writes.some(({ contents }) => /(?:^|\n)admin_acceptance=false\n/.test(contents))
+  );
+});
+
 test('exact Vite acceptance runners preserve the existing joint Apple and recharge scope', () => {
   const runners = [
     'scripts/acceptance-v2-auto-recharge.mjs',
@@ -1686,13 +1828,23 @@ test('reviewed dispatcher bytes reuse only unchanged Admin/API business evidence
       cwd: root,
       encoding: 'utf8'
     }),
-    after: readFileSync(new URL('./ci-recharge-check.mjs', import.meta.url), 'utf8'),
+    after: execFileSync('git', ['show', `957afa4e7d9c776b0109bf7f217150fd3c545e04:${path}`], {
+      cwd: root,
+      encoding: 'utf8'
+    }),
     beforeMode: '100644',
     afterMode: '100644'
   };
   const changed = [path, ...rechargeFlowSuccessorControlPaths];
   for (const part of ['admin', 'api']) {
     assert.equal(hasRechargeFlowBusinessReuseProof(part, changed, snapshot), true);
+    assert.equal(
+      hasRechargeFlowBusinessReuseProof(part, changed, {
+        ...snapshot,
+        after: readFileSync(new URL('./ci-recharge-check.mjs', import.meta.url), 'utf8')
+      }),
+      false
+    );
     for (const patch of [
       { before: snapshot.before + 'drift' },
       { after: snapshot.after + 'drift' },

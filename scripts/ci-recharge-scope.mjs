@@ -238,6 +238,8 @@ export const historicalReleaseControlPaths = Object.freeze([
   'scripts/production-release/build-images.sh',
   'scripts/production-release/admin-pending-online-release.py',
   'scripts/production-release/admin-pending-online-release.test.py',
+  'scripts/production-release/admin-successor-diagnostic.py',
+  'scripts/production-release/admin-successor-diagnostic.test.py',
   'scripts/production-release/build-image-cache.test.py',
   'scripts/production-release/browser-cache-input.py',
   'scripts/production-release/browser-cache-input.test.py',
@@ -570,14 +572,28 @@ function isRegistrationHydrationOnly(paths) {
   );
 }
 
+const workspaceDockAcceptance = 'scripts/acceptance-v2-workspace-dock.mjs';
+const combinedComponentAcceptancePaths = new Set([
+  'scripts/acceptance-v2-recharge-employee-concurrency.mjs',
+  'scripts/acceptance-v2-recharge-employee-concurrency.test.mjs'
+]);
+export function hasCombinedComponentScope(paths) {
+  return (
+    paths.includes('scripts/production-release/unpublished-component-successor.py') &&
+    paths.includes(workspaceDockAcceptance) &&
+    paths.includes('scripts/acceptance-v2-recharge-employee-concurrency.mjs')
+  );
+}
 const adminInteractionAcceptance = new Set([
   'scripts/acceptance-v2-bitbrowser-direct.mjs',
   'scripts/acceptance-v2-refresh-interaction.mjs',
   'scripts/acceptance-v2-auto-recharge.mjs',
   'scripts/acceptance-v2-bank-recharge-ui.mjs',
+  workspaceDockAcceptance,
   'scripts/lib/vite-cli.mjs'
 ]);
 export function isAdminOnly(paths) {
+  const combined = hasCombinedComponentScope(paths);
   return (
     paths.some(
       (p) =>
@@ -602,6 +618,7 @@ export function isAdminOnly(paths) {
         ) ||
         p === 'apps/admin/layout-contract-fixture.html' ||
         p === 'scripts/check-v2-table-standard.mjs' ||
+        (combined && combinedComponentAcceptancePaths.has(p)) ||
         isCiOnly([p])
     )
   );
@@ -747,6 +764,17 @@ export function adminCheckCommands(mode, paths) {
         ])
   ]);
   commands.push(['run', 'build', '--workspace', '@apple-business/admin']);
+  if (
+    paths.some(
+      (path) =>
+        path === workspaceDockAcceptance ||
+        path.startsWith('apps/admin/src/v2/components/workspace/') ||
+        /^apps\/admin\/src\/v2\/(?:layouts\/V2AdminLayout\.vue|styles\/(?:base|layout|records|v2)\.css|testing\/(?:V2WorkspaceDesignFixture\.vue|workspace-design-fixture\.ts))$/.test(
+          path
+        )
+    )
+  )
+    commands.push(['exec', '--', 'node', workspaceDockAcceptance]);
   if (
     paths.some(
       (path) =>
@@ -1305,7 +1333,7 @@ async function main() {
       : mode === 'ci-only' || mode === 'audit-retention'
         ? ['guards']
         : mode === 'admin'
-          ? ['guards', 'admin']
+          ? ['guards', 'admin', ...(hasCombinedComponentScope(paths) ? ['migration'] : [])]
           : mode === 'mailbox'
             ? ['guards', 'admin', 'api']
             : selectedParts(paths);
@@ -1316,7 +1344,8 @@ async function main() {
       args.some(
         (arg) =>
           /^acceptance:v2-(?:auto-recharge|table-layout|online-recharge-ui)$/.test(arg) ||
-          arg === 'scripts/acceptance-v2-order-archive-ui.mjs'
+          arg === 'scripts/acceptance-v2-order-archive-ui.mjs' ||
+          arg === workspaceDockAcceptance
       )
     );
   appendFileSync(

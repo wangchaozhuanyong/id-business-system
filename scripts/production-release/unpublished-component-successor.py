@@ -182,6 +182,13 @@ HELPERS = ('remote-deploy.py', 'api-admin-scope.py', 'api-admin-pending-projecti
            'online-recharge-scope.py', 'online-recharge-recovery.json',
            'admin-pending-online-release.py', 'unpublished-component-successor.py',
            'unpublished-component-successor-readonly.py')
+BACKUP_SERVICE = 'id-business-v2-mysql-backup.service'
+BACKUP_TIMER = 'id-business-v2-mysql-backup.timer'
+BACKUP_DROPIN = Path('/etc/systemd/system') / (BACKUP_SERVICE + '.d') / '20-release-retention.conf'
+BACKUP_OLD_NAMESPACE = 'mysql-backup-238df700399e027b'
+BACKUP_SCRIPT_SHA256 = '9b91e0891574f1452cbed91fc6fd00e98296121fc0db61b0c6e1551b7fe2bd76'
+BACKUP_OLD_HELPER_SHA256 = '2b58df24f93c091ee8a34d2ac664bd2b9eee23833ae858f381fa217c84d82d1d'
+BACKUP_DROPIN_SHA256 = 'fb3cadff9793566cb87d7d93675f5b8b87632be30999517a95b85b949aa248cf'
 
 
 class Producer(TypedDict):
@@ -1123,6 +1130,286 @@ def migration_image_content(projection, files):
     return {'fileCount': len(lines), 'sha256': digest(('\n'.join(lines) + '\n').encode())}
 
 
+class BackupMaintenanceAuthority:
+    """Held root-owned ancestors and exact leaves; no permission repair or old writes."""
+    def __init__(self):
+        self.fds, self.directories, self.leaves = [], [], []
+
+    @staticmethod
+    def identity(row):
+        return (row.st_dev, row.st_ino, row.st_mode, row.st_uid, row.st_gid,
+                row.st_nlink, row.st_size, row.st_mtime_ns, row.st_ctime_ns)
+
+    @staticmethod
+    def directory_identity(row):
+        return row.st_dev, row.st_ino, row.st_mode, row.st_uid, row.st_gid
+
+    def directory(self, path):
+        need(path.is_absolute() and '..' not in path.parts, 'BACKUP_AUTHORITY_INVALID')
+        fd = os.open('/', os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC)
+        self.fds.append(fd)
+        root = os.fstat(fd)
+        need(stat.S_ISDIR(root.st_mode) and root.st_uid == 0
+             and not stat.S_IMODE(root.st_mode) & 0o022, 'BACKUP_AUTHORITY_INVALID')
+        for part in path.parts[1:]:
+            initial = os.stat(part, dir_fd=fd, follow_symlinks=False)
+            need(stat.S_ISDIR(initial.st_mode) and initial.st_uid == 0
+                 and not stat.S_IMODE(initial.st_mode) & 0o022, 'BACKUP_AUTHORITY_INVALID')
+            child = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC, dir_fd=fd)
+            self.fds.append(child)
+            need(self.directory_identity(initial) == self.directory_identity(os.fstat(child)),
+                 'BACKUP_AUTHORITY_CHANGED')
+            self.directories.append((fd, part, child, self.directory_identity(initial)))
+            fd = child
+        return fd
+
+    def read(self, path, *, mode, cap=1024 * 1024, empty=False):
+        parent = self.directory(path.parent)
+        initial = os.stat(path.name, dir_fd=parent, follow_symlinks=False)
+        need(stat.S_ISREG(initial.st_mode) and initial.st_uid == 0 and initial.st_nlink == 1
+             and stat.S_IMODE(initial.st_mode) == mode
+             and (0 if empty else 1) <= initial.st_size < cap, 'BACKUP_FILE_INVALID')
+        fd = os.open(path.name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC, dir_fd=parent)
+        self.fds.append(fd)
+        need(self.identity(initial) == self.identity(os.fstat(fd)), 'BACKUP_FILE_CHANGED')
+        raw = b''
+        while len(raw) < cap:
+            part = os.read(fd, min(65536, cap - len(raw)))
+            if not part:
+                break
+            raw += part
+        expected = self.identity(initial)
+        need(len(raw) == initial.st_size and expected == self.identity(os.fstat(fd))
+             == self.identity(os.stat(path.name, dir_fd=parent, follow_symlinks=False)), 'BACKUP_FILE_CHANGED')
+        self.leaves.append((parent, path.name, fd, expected))
+        return raw, fd
+
+    def check(self):
+        for parent, name, fd, expected in self.directories:
+            need(expected == self.directory_identity(os.fstat(fd))
+                 == self.directory_identity(os.stat(name, dir_fd=parent, follow_symlinks=False)),
+                 'BACKUP_AUTHORITY_CHANGED')
+        for parent, name, fd, expected in self.leaves:
+            need(expected == self.identity(os.fstat(fd))
+                 == self.identity(os.stat(name, dir_fd=parent, follow_symlinks=False)), 'BACKUP_FILE_CHANGED')
+
+    def close(self):
+        for fd in reversed(self.fds):
+            os.close(fd)
+        self.fds = []
+
+
+def backup_native(d, arguments, *, pass_fds=()):
+    result = d.subprocess.run(arguments, stdin=d.subprocess.DEVNULL, stdout=d.subprocess.PIPE,
+        stderr=d.subprocess.DEVNULL, timeout=30, pass_fds=pass_fds,
+        env={'PATH': '/usr/sbin:/usr/bin:/sbin:/bin'})
+    need(result.returncode == 0 and type(result.stdout) is bytes and len(result.stdout) < 65536,
+         'BACKUP_NATIVE_FAILED')
+    return result.stdout.decode().strip()
+
+
+def backup_entry_matches(value, path):
+    # Only compare the fixed public entry; never return systemd's raw arguments.
+    return (type(value) is str and value.count('path=') == 1 and value.count('argv[]=') == 1
+            and 'path=' + str(path) + ' ;' in value and 'argv[]=' + str(path) + ' ;' in value)
+
+
+def backup_limits(raw):
+    values = {}
+    for line in raw.decode().splitlines():
+        key, separator, value = line.partition('=')
+        if separator and key in ('MYSQL_BACKUP_LOCAL_RETENTION_COUNT', 'MYSQL_BACKUP_LOCAL_MAX_BYTES'):
+            need(key not in values, 'BACKUP_LIMITS_INVALID')
+            values[key] = value
+    count = values.get('MYSQL_BACKUP_LOCAL_RETENTION_COUNT') or '48'
+    maximum = values.get('MYSQL_BACKUP_LOCAL_MAX_BYTES') or '1073741824'
+    need(re.fullmatch('[1-9][0-9]{0,19}', count) and 2 <= int(count) <= 336
+         and re.fullmatch('[1-9][0-9]{0,19}', maximum) and int(maximum) >= 67108864,
+         'BACKUP_LIMITS_INVALID')
+    return count, maximum
+
+
+def backup_plan(d, helper_fd, lock_fd, limits):
+    # Execute the exact held source FD and inherit the service's existing lock.
+    raw = backup_native(d, ['/usr/bin/python3', '-B', '/proc/self/fd/' + str(helper_fd),
+        '--backup-lock-fd', str(lock_fd), '--retention-count', limits[0], '--max-bytes', limits[1]],
+        pass_fds=(helper_fd, lock_fd))
+    value = closed_json(raw.encode())
+    fields = {'kind', 'status', 'code', 'protectedCount', 'countBefore', 'candidateCount',
+              'removedCount', 'countAfter', 'retainedBytes', 'rawOutputSuppressed'}
+    counts = ('protectedCount', 'countBefore', 'candidateCount', 'removedCount', 'countAfter', 'retainedBytes')
+    need(set(value) == fields and value['kind'] == 'MYSQL_BACKUP_RETENTION_V1'
+         and value['status'] == 'PLAN_ONLY' and value['code'] == 'OK'
+         and value['rawOutputSuppressed'] is True
+         and all(type(value[n]) is int and value[n] >= 0 for n in counts)
+         and value['removedCount'] == 0 and value['countAfter'] == value['countBefore']
+         and value['candidateCount'] <= value['countBefore'] <= 4096, 'BACKUP_PLAN_INVALID')
+    return value
+
+
+def upgrade_backup_maintenance(d, scope, previous, target, evidence, files):
+    """CAS the single fixed maintenance entry after a non-deleting protected plan."""
+    need(os.getuid() == 0 and os.geteuid() == 0, 'BACKUP_ROOT_REQUIRED')
+    script_names = ('backup-aws-mysql.sh', 'backup-retention-protection.py')
+    scripts = {}
+    for name in script_names:
+        row = files.get('scripts/' + name)
+        need(type(row) is tuple and len(row) == 2 and type(row[0]) is bytes
+             and 0 < len(row[0]) < 1024 * 1024
+             and row[1] == ('100755' if name.endswith('.sh') else '100644'), 'BACKUP_SOURCE_INVALID')
+        scripts[name] = row[0]
+    need(digest(scripts['backup-aws-mysql.sh']) == BACKUP_SCRIPT_SHA256, 'BACKUP_SCRIPT_CHANGED')
+    pins = {name: digest(raw) for name, raw in scripts.items()}
+    namespace_sha = fingerprint(pins)
+    destination = d.BASE / 'maintenance' / ('mysql-backup-' + namespace_sha[:16])
+    entry = destination / 'backup-aws-mysql.sh'
+    old_entry = d.BASE / 'maintenance' / BACKUP_OLD_NAMESPACE / 'backup-aws-mysql.sh'
+    old_configuration = ('[Service]\nExecStart=\nExecStart=' + str(old_entry) + '\n').encode()
+    configuration = ('[Service]\nExecStart=\nExecStart=' + str(entry) + '\n').encode()
+    authority = BackupMaintenanceAuthority()
+    lock_fd = None
+    def control(*arguments):
+        return backup_native(d, ['/usr/bin/systemctl', *arguments])
+    def idle():
+        need(control('show', BACKUP_SERVICE, '--property=ActiveState', '--value') in ('inactive', 'failed'),
+             'BACKUP_SERVICE_BUSY')
+    def unit_matches(path):
+        need(backup_entry_matches(control('show', BACKUP_SERVICE, '--property=ExecStart', '--value'), path)
+             and control('show', BACKUP_SERVICE, '--property=DropInPaths', '--value') == str(BACKUP_DROPIN),
+             'BACKUP_ENTRY_CHANGED')
+    try:
+        need(previous == d.BASE / 'releases' / Path(BASELINE_CONTRACT['currentRelease']).name
+             and evidence['currentManifestBytesSha256'] == BASELINE_CONTRACT['manifestSha256'],
+             'BACKUP_BASELINE_CHANGED')
+        base_fd = authority.directory(d.BASE)
+        pointer = os.stat('current', dir_fd=base_fd, follow_symlinks=False)
+        need(stat.S_ISLNK(pointer.st_mode) and pointer.st_uid == 0 and pointer.st_nlink == 1,
+             'BACKUP_CURRENT_INVALID')
+        pointer_identity = authority.identity(pointer)
+        pointer_text = os.readlink('current', dir_fd=base_fd)
+        need(pointer_text in (str(previous), 'releases/' + previous.name), 'BACKUP_CURRENT_INVALID')
+        manifest, _fd = authority.read(previous / 'release-manifest.json', mode=0o600)
+        need(digest(manifest) == evidence['currentManifestBytesSha256'], 'BACKUP_BASELINE_CHANGED')
+        environment, _fd = authority.read(previous / '.env.aws.production', mode=0o600)
+        need(digest(environment) == evidence['environmentFileSha256'], 'BACKUP_ENVIRONMENT_CHANGED')
+        limits = backup_limits(environment)
+        before = scope.snapshot(d, previous)
+        need(before == evidence['services'], 'BACKUP_SERVICES_CHANGED')
+        helper_fd = None
+        for name, raw in scripts.items():
+            actual, source_fd = authority.read(target / 'scripts' / name, mode=0o755 if name.endswith('.sh') else 0o644)
+            need(actual == raw, 'BACKUP_SOURCE_CHANGED')
+            if name == 'backup-retention-protection.py':
+                helper_fd = source_fd
+        # The two prior files remain immutable even after the new namespace is installed.
+        old_script, _fd = authority.read(old_entry, mode=0o700)
+        old_helper, _fd = authority.read(old_entry.with_name('backup-retention-protection.py'), mode=0o600)
+        need(digest(old_script) == BACKUP_SCRIPT_SHA256 and digest(old_helper) == BACKUP_OLD_HELPER_SHA256,
+             'BACKUP_OLD_SOURCE_CHANGED')
+        dropin, dropin_fd = authority.read(BACKUP_DROPIN, mode=0o600)
+        already_installed = dropin == configuration
+        need(already_installed or (dropin == old_configuration and digest(dropin) == BACKUP_DROPIN_SHA256),
+             'BACKUP_DROPIN_CHANGED')
+        unit_matches(entry if already_installed else old_entry)
+        timer = control('show', BACKUP_TIMER, '--property=ActiveState', '--value')
+        need(timer in ('active', 'inactive'), 'BACKUP_TIMER_CHANGED')
+        idle()
+        lock_parent = authority.directory(d.BASE / 'backups/mysql')
+        lock_stat = os.stat('.backup.lock', dir_fd=lock_parent, follow_symlinks=False)
+        need(stat.S_ISREG(lock_stat.st_mode) and lock_stat.st_uid == 0 and lock_stat.st_nlink == 1
+             and stat.S_IMODE(lock_stat.st_mode) == 0o600, 'BACKUP_LOCK_INVALID')
+        lock_fd = os.open('.backup.lock', os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC,
+                          dir_fd=lock_parent)
+        need(authority.identity(lock_stat) == authority.identity(os.fstat(lock_fd)), 'BACKUP_LOCK_CHANGED')
+        try:
+            fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            raise RuntimeError('UNPUBLISHED_COMPONENT_BACKUP_LOCK_BUSY') from None
+        def guard():
+            authority.check()
+            need(authority.identity(os.stat('current', dir_fd=base_fd, follow_symlinks=False)) == pointer_identity
+                 and os.readlink('current', dir_fd=base_fd) == pointer_text, 'BACKUP_CURRENT_CHANGED')
+            need(scope.snapshot(d, previous) == before, 'BACKUP_SERVICES_CHANGED')
+            held = os.fstat(lock_fd)
+            visible = os.stat('.backup.lock', dir_fd=lock_parent, follow_symlinks=False)
+            need((held.st_dev, held.st_ino, held.st_mode, held.st_uid, held.st_nlink)
+                 == (visible.st_dev, visible.st_ino, visible.st_mode, visible.st_uid, visible.st_nlink),
+                 'BACKUP_LOCK_CHANGED')
+            need(control('show', BACKUP_TIMER, '--property=ActiveState', '--value') == timer,
+                 'BACKUP_TIMER_CHANGED')
+            idle()
+        guard()
+        plan = backup_plan(d, helper_fd, lock_fd, limits)
+        guard()
+        result = {'version': 1, 'scope': 'UNPUBLISHED_COMPONENT_BACKUP_MAINTENANCE',
+            'status': 'ALREADY_VERIFIED' if already_installed else 'UPGRADED',
+            'maintenanceSourceSha256': namespace_sha, 'scriptPins': pins, 'entry': str(entry),
+            'dropInPath': str(BACKUP_DROPIN), 'originalDropInSha256': BACKUP_DROPIN_SHA256,
+            'dropInSha256': digest(configuration), 'plan': plan, 'timerState': timer,
+            'servicesSha256': fingerprint(before), 'currentManifestSha256': digest(manifest),
+            'oldSourcePreserved': True, 'backupDeleted': False, 'businessActions': 0,
+            'rawOutputSuppressed': True}
+        if already_installed:
+            need(set(os.listdir(authority.directory(destination))) == set(script_names), 'BACKUP_NAMESPACE_CHANGED')
+            for name, raw in scripts.items():
+                actual, _fd = authority.read(destination / name, mode=0o700 if name.endswith('.sh') else 0o600)
+                need(actual == raw, 'BACKUP_NAMESPACE_CHANGED')
+            guard()
+            unit_matches(entry)
+            return result
+        # No maintenance/drop-in writes are reachable until the protected PLAN_ONLY passed.
+        maintenance = authority.directory(destination.parent)
+        try:
+            os.mkdir(destination.name, 0o700, dir_fd=maintenance)
+        except FileExistsError:
+            pass
+        new_parent = authority.directory(destination)
+        need(stat.S_IMODE(os.fstat(new_parent).st_mode) == 0o700
+             and set(os.listdir(new_parent)) <= set(script_names), 'BACKUP_NAMESPACE_CHANGED')
+        for name, raw in scripts.items():
+            guard()
+            try:
+                fd = os.open(name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC,
+                             0o700 if name.endswith('.sh') else 0o600, dir_fd=new_parent)
+            except FileExistsError:
+                pass
+            else:
+                with os.fdopen(fd, 'wb') as stream:
+                    stream.write(raw); stream.flush(); os.fsync(stream.fileno())
+            actual, _fd = authority.read(destination / name, mode=0o700 if name.endswith('.sh') else 0o600)
+            need(actual == raw, 'BACKUP_NAMESPACE_CHANGED')
+        os.fsync(new_parent)
+        guard()
+        # Retain the exact old public configuration in the candidate private record.
+        write_private(target / (PREFIX + '-backup-entry-original.json'), {
+            'path': str(BACKUP_DROPIN), 'sha256': digest(dropin),
+            'rawBase64': base64.b64encode(dropin).decode(), 'identity': list(authority.identity(os.fstat(dropin_fd)))})
+        parent = authority.directory(BACKUP_DROPIN.parent)
+        pending = '.unpublished-backup-' + namespace_sha + '.tmp'
+        fd = os.open(pending, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600, dir_fd=parent)
+        with os.fdopen(fd, 'wb') as stream:
+            stream.write(configuration); stream.flush(); os.fsync(stream.fileno())
+        pending_raw, pending_fd = authority.read(BACKUP_DROPIN.parent / pending, mode=0o600)
+        need(pending_raw == configuration, 'BACKUP_DROPIN_CHANGED')
+        guard()
+        unit_matches(old_entry)
+        guard()
+        # This is the sole replacement, guarded by original bytes and held inode identity.
+        os.replace(pending, BACKUP_DROPIN.name, src_dir_fd=parent, dst_dir_fd=parent)
+        authority.leaves = [row for row in authority.leaves if row[2] not in (dropin_fd, pending_fd)]
+        os.fsync(parent)
+        actual, _fd = authority.read(BACKUP_DROPIN, mode=0o600)
+        need(actual == configuration, 'BACKUP_DROPIN_CHANGED')
+        control('daemon-reload')
+        unit_matches(entry)
+        guard()
+        return result
+    finally:
+        if lock_fd is not None:
+            os.close(lock_fd)
+        authority.close()
+
+
 def stop_failed_api(d, scope, target, proof, evidence, gate, database_identity):
     """A stopped, known container needs no signal; live tasks always forbid stop."""
     scope.jobs_idle(d, target, **({'database_identity': database_identity} if database_identity else {}))
@@ -1211,6 +1498,8 @@ def release(d, args, proof, transport):
             first = scope.strict_audit(d, target, target / 'before-audit.json')
             audit_guard(first)
             phase = 'backup'
+            maintenance = upgrade_backup_maintenance(d, scope, previous, target, evidence, files)
+            write_private(target / (PREFIX + '-backup-maintenance.json'), maintenance)
             backup = d.fresh_backup(previous)
             backup_guard(backup)
             write_private(target / 'backup-verification.json', backup)

@@ -125,7 +125,7 @@ async function verifyQuickActionMigration(theme, width, databaseConfirmed) {
   const user = {
     id: '11111111-1111-4111-8111-111111111111',
     username: 'quick-action-fixture',
-    displayName: '便捷操作验收管理员',
+    displayName: '话术文案验收管理员',
     roles: ['admin'],
     permissions: [],
     mustResetPassword: false
@@ -142,8 +142,21 @@ async function verifyQuickActionMigration(theme, width, databaseConfirmed) {
   const legacyKey = `id-business-v2:quick-action-order:${encodeURIComponent(user.id)}`;
   await page.addInitScript(
     ({ user, theme, legacyKey, ids }) => {
-      localStorage.setItem('apple_business_access_token', 'local-quick-action-fixture');
-      localStorage.setItem('apple_business_current_user', JSON.stringify(user));
+      sessionStorage.setItem(
+        'apple_business_auth_v2',
+        JSON.stringify({
+          credentialId: 'quick-action-fixture-credential',
+          schemaVersion: 2,
+          token: 'local-quick-action-fixture',
+          tokenRevision: 1,
+          updatedAt: Date.now(),
+          userCache: user
+        })
+      );
+      localStorage.setItem(
+        'apple_business_browser_session_marker',
+        JSON.stringify({ credentialId: 'quick-action-fixture-credential', signedOut: false })
+      );
       localStorage.setItem('id-business-v2-theme', theme);
       localStorage.setItem(legacyKey, JSON.stringify([...ids].reverse()));
     },
@@ -159,14 +172,14 @@ async function verifyQuickActionMigration(theme, width, databaseConfirmed) {
     const request = route.request();
     const url = new URL(request.url());
     if (url.origin !== baseUrl.origin) {
-      errors.push('便捷操作验收禁止访问外部系统');
+      errors.push('话术文案验收禁止访问外部系统');
       return route.abort();
     }
     if (!url.pathname.startsWith('/api/')) return route.continue();
     let data = { items: [], total: 0, page: 1, pageSize: 20 };
     if (request.method() !== 'GET') {
       assert.equal(request.method(), 'PUT', '仅允许拦截排序保存');
-      assert.ok(url.pathname.endsWith('/quick-actions/order'), '仅允许模拟便捷操作排序');
+      assert.ok(url.pathname.endsWith('/quick-actions/order'), '仅允许模拟话术文案排序');
       assert.deepEqual(request.postDataJSON(), {
         quickActionIds: [...ids].reverse(),
         expectedQuickActionIds: ids,
@@ -185,7 +198,9 @@ async function verifyQuickActionMigration(theme, width, databaseConfirmed) {
       data = { items: [...rows].reverse(), hasCustomOrder: true };
     } else if (url.pathname.endsWith('/quick-actions'))
       data = { items: customOrder ? [...rows].reverse() : rows, hasCustomOrder: customOrder };
-    else if (/\/auth\/(me|session)$/.test(url.pathname)) data = user;
+    else if (url.pathname.endsWith('/auth/me')) data = user;
+    else if (url.pathname.endsWith('/auth/session'))
+      data = { accessToken: 'local-quick-action-fixture', user };
     else if (url.pathname.endsWith('/branding/public'))
       data = { appName: 'ID 业务管理', logoText: 'ID', logoUrl: '/brand/default-logo.svg' };
     else if (url.pathname.endsWith('/time')) data = { now, timezone: 'Asia/Shanghai' };
@@ -208,22 +223,29 @@ async function verifyQuickActionMigration(theme, width, databaseConfirmed) {
   await page.goto(new URL('/v2/system/roles', baseUrl).href, { waitUntil: 'domcontentloaded' });
   await phase(page, 'ready', '.v2-roles-page .v2-async-region');
   assert.equal(await page.evaluate(() => document.documentElement.dataset.v2Theme), theme);
-  const drawer = page.locator('.v2-quick-actions-drawer.el-drawer');
-  const entry = page.getByRole('button', { name: '便捷操作', exact: true });
-  await entry.click();
+  const panel = page.locator('.v2-quick-actions-panel');
+  const region = '.v2-quick-actions-panel > .v2-async-region';
+  async function openCopyPanel() {
+    const railEntry = page.getByRole('button', { name: '打开话术文案', exact: true });
+    if (await railEntry.isVisible()) await railEntry.click();
+    else await page.getByRole('tab', { name: '话术文案', exact: true }).click();
+    await panel.waitFor({ state: 'visible' });
+    await settleWorkspace(panel);
+  }
+  await openCopyPanel();
   const deadline = Date.now() + 10_000;
   while (writeCount === 0) {
     assert.ok(Date.now() < deadline, '首次旧顺序同步请求未启动');
     await new Promise((resolve) => setTimeout(resolve, 20));
   }
-  await drawer.locator('.el-drawer__close-btn').click();
-  await drawer.waitFor({ state: 'hidden' });
-  record('actual-drawer-closes-during-legacy-initialization');
+  await page.getByRole('button', { name: '收起工作区', exact: true }).click();
+  await panel.waitFor({ state: 'hidden' });
+  record('actual-workspace-collapses-during-legacy-initialization');
   if (databaseConfirmed) {
     customOrder = true;
-    await entry.click();
-    await phase(page, 'ready', '.v2-quick-actions-drawer .v2-async-region');
-    await settleDrawer(drawer);
+    await openCopyPanel();
+    await phase(page, 'ready', region);
+    await settleWorkspace(panel);
   }
   const finished = page.waitForEvent('requestfinished', {
     predicate: (request) => request.url().endsWith('/quick-actions/order')
@@ -231,12 +253,12 @@ async function verifyQuickActionMigration(theme, width, databaseConfirmed) {
   releaseWrite();
   await finished;
   await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(resolve)));
-  const retry = drawer.getByRole('button', { name: '重试同步', exact: true });
+  const retry = panel.getByRole('button', { name: '重试同步', exact: true });
   if (databaseConfirmed) {
     assert.equal(await retry.count(), 0);
     assert.deepEqual(
-      await drawer
-        .locator('[data-sort-id]:visible')
+      await panel
+        .locator('.v2-quick-actions-panel__item [data-sort-id]:visible')
         .evaluateAll((nodes) => nodes.map((node) => node.getAttribute('data-sort-id'))),
       [...ids].reverse()
     );
@@ -244,10 +266,10 @@ async function verifyQuickActionMigration(theme, width, databaseConfirmed) {
     assert.equal(writeCount, 1);
     record('database-confirmation-ignores-cancelled-write-late-failure');
   } else {
-    await entry.click();
-    await phase(page, 'ready', '.v2-quick-actions-drawer .v2-async-region');
+    await openCopyPanel();
+    await phase(page, 'ready', region);
     await retry.waitFor();
-    await settleDrawer(drawer);
+    await settleWorkspace(panel);
     assert.equal(await retry.isEnabled(), true);
     assert.equal(writeCount, 1, '重开不得自动重发失败 PUT');
     assert.notEqual(await page.evaluate((key) => localStorage.getItem(key), legacyKey), null);
@@ -260,7 +282,7 @@ async function verifyQuickActionMigration(theme, width, databaseConfirmed) {
     await page.screenshot({ path: path.join(output, `${theme}-${width}-retry-notice.png`) });
     await retry.click();
     await retry.waitFor({ state: 'hidden' });
-    await phase(page, 'ready', '.v2-quick-actions-drawer .v2-async-region');
+    await phase(page, 'ready', region);
     assert.equal(writeCount, 2, '只有明确重试才发送第二次 PUT');
     assert.equal(await page.evaluate((key) => localStorage.getItem(key), legacyKey), null);
     record('explicit-retry-confirms-database-order-and-removes-legacy-storage');
@@ -280,8 +302,8 @@ async function verifyQuickActionMigration(theme, width, databaseConfirmed) {
   await page.close();
 }
 
-async function settleDrawer(drawer) {
-  await drawer.evaluate(async (node) => {
+async function settleWorkspace(panel) {
+  await panel.evaluate(async (node) => {
     const transitions = node
       .getAnimations({ subtree: true })
       .filter((animation) => animation.effect?.getComputedTiming().iterations !== Infinity);

@@ -90,10 +90,6 @@
           </div>
         </section>
       </nav>
-      <V2WorkspaceLauncher
-        :sidebar-collapsed="sidebarCollapsed"
-        @request-close-navigation="closeMobileMenu"
-      />
     </aside>
 
     <div class="v2-workspace">
@@ -408,7 +404,7 @@
       </main>
       <p class="v2-live-region" aria-live="polite" aria-atomic="true">{{ liveMessage }}</p>
     </div>
-    <V2QuickActions />
+    <V2WorkspaceDock @expand="closeMobileMenu" />
   </div>
 </template>
 
@@ -443,8 +439,7 @@ import { bankRechargeApi } from '@/v2/features/auto-recharge/public-api';
 import type { BankRechargeRenewalWarnings } from '@/v2/features/auto-recharge/public-api';
 import { idBusinessV2SensitiveAccessApi } from '@/v2/api/sensitiveAccess';
 import V2BrandLogo from '@/v2/components/V2BrandLogo.vue';
-import V2WorkspaceLauncher from '@/v2/components/workspace/V2WorkspaceLauncher.vue';
-import V2QuickActions from '@/v2/components/workspace/V2QuickActions.vue';
+import V2WorkspaceDock from '@/v2/components/workspace/V2WorkspaceDock.vue';
 import type { V2RenewalWarningSummary } from '@/v2/types/renewals';
 import type { V2SensitiveAccessApprovalSummary } from '@/v2/types/sensitiveAccess';
 import { ElMessage } from '@/v2/services/elementPlusMessage';

@@ -490,15 +490,44 @@ const always = () => true;
 const startsWith = (v, p) => v.startsWith(p);
 const steps = current.jobs.release.steps;
 const stepContext = new Proxy({}, {get: () => ({outcome: 'failure'})});
-const enabled = steps.filter(s => !s.if || Function('inputs', 'always', 'startsWith', 'failure', 'steps', 'return (' + s.if + ')')(inputs, always, startsWith, () => true, stepContext));
+const enabledFor = values => steps.filter(s => !s.if || Function('inputs', 'always', 'startsWith', 'failure', 'steps', 'return (' + s.if + ')')(values, always, startsWith, () => true, stepContext));
+const enabled = enabledFor(inputs);
 const oldEnabled = old.jobs.release.steps.filter(s => !s.if || Function('inputs', 'always', 'startsWith', 'failure', 'steps', 'return (' + s.if + ')')(inputs, always, startsWith, () => true, stepContext));
 const changed = steps.filter(s => old.jobs.release.steps.some(o => o.name === s.name && JSON.stringify(o) !== JSON.stringify(s))).map(s => s.name);
+const byName = (list, name) => list.find(s => s.name === name);
+const without = (step, key) => Object.fromEntries(Object.entries(step).filter(([name]) => name !== key));
+const legacyName = 'Read production release diagnostics';
+const readbackName = 'Independently read back Admin publication and preserved services';
+const oldReadback = byName(old.jobs.release.steps, readbackName);
+const readback = byName(steps, readbackName);
+// These two Admin changes are reviewed independently. Bind their exact delta;
+// do not permit arbitrary modifications to existing publication steps.
+const apiOriginSelection = [
+ "    expected_api_origin = proof['projection'].get('apiComponentBaseline')",
+ "    if expected_api_origin is None and os.environ['EXPECTED_CURRENT'] == '31d2c6885a45817cd40d23fce8d6145bc9f18af2':",
+ "        expected_api_origin = '31d2c6885a45817cd40d23fce8d6145bc9f18af2'",
+ "    if expected_api_origin != '31d2c6885a45817cd40d23fce8d6145bc9f18af2':",
+ "        raise RuntimeError('Admin readback API origin unavailable')", ''
+].join('\n');
+const expectedReadback = oldReadback.run.replace('    staged = ', apiOriginSelection + '    staged = ')
+ .replace("receipt['apiComponentBaseline'] != os.environ['EXPECTED_CURRENT']", "receipt['apiComponentBaseline'] != expected_api_origin");
+const adminNames = ['Read finite Admin successor baseline facts', 'Save finite Admin successor read-only evidence', legacyName, readbackName];
+const runtimeByBaseline = ['', '60e164b75d1eedaab440c17139bf9ba55de08c61', '31d2c6885a45817cd40d23fce8d6145bc9f18af2'].map(expected_current => {
+ const selected = new Proxy({...inputs, expected_current}, {get: (v, k) => v[k] ?? ''});
+ return enabledFor(selected).map(s => s.name);
+});
 console.log(JSON.stringify({concurrency: current.concurrency, oldConcurrency: old.concurrency,
  jobIf: current.jobs.release.if, permissions: current.permissions, oldPermissions: old.permissions,
  jobEnv: current.jobs.release.env, oldJobEnv: old.jobs.release.env,
  options: current.on.workflow_dispatch.inputs.operation.options.filter(o => !['verify_recharge_flow', 'release_recharge_flow'].includes(o)),
  oldOptions: old.on.workflow_dispatch.inputs.operation.options,
  oldStepsRetained: old.jobs.release.steps.every(o => steps.some(s => s.name === o.name)), changed,
+ legacyOnlyGateChanged: JSON.stringify(without(byName(steps, legacyName), 'if')) === JSON.stringify(without(byName(old.jobs.release.steps, legacyName), 'if')),
+ readbackOnlyApiOriginChanged: JSON.stringify(without(readback, 'run')) === JSON.stringify(without(oldReadback, 'run')) && readback.run === expectedReadback,
+ rechargeOnlyGateChanged: ['Build images on the GitHub runner', 'Push immutable images', 'Deploy through the production instance'].every(name => JSON.stringify(without(byName(steps, name), 'if')) === JSON.stringify(without(byName(old.jobs.release.steps, name), 'if'))),
+ diagnostic: byName(steps, 'Diagnose the fixed unpublished component runtime without publication'),
+ diagnosticArtifact: byName(steps, 'Save only credential-free unpublished component diagnostic evidence'),
+ adminGates: Object.fromEntries(adminNames.map(name => [name, byName(steps, name).if])), runtimeByBaseline,
  added: steps.filter(s => !old.jobs.release.steps.some(o => o.name === s.name)), enabled, oldEnabled}));
 """
         result = subprocess.run(['node', '-e', script], cwd=ROOT, capture_output=True, text=True, timeout=30)
@@ -514,6 +543,28 @@ console.log(JSON.stringify({concurrency: current.concurrency, oldConcurrency: ol
         self.assertIn(m.OPERATION, value['options'])
         self.assertTrue(value['oldStepsRetained'])
         self.assertEqual(value['enabled'], value['oldEnabled'])
+        self.assertEqual(value['changed'], ['Build images on the GitHub runner', 'Push immutable images',
+            'Read production release diagnostics', 'Deploy through the production instance',
+            'Independently read back Admin publication and preserved services'])
+        self.assertTrue(value['rechargeOnlyGateChanged'])
+        self.assertTrue(value['legacyOnlyGateChanged'])
+        self.assertTrue(value['readbackOnlyApiOriginChanged'])
+        admin_current = '60e164b75d1eedaab440c17139bf9ba55de08c61'
+        self.assertEqual(value['adminGates'], {
+            'Read finite Admin successor baseline facts': "inputs.operation == 'verify_access' && inputs.expected_current == '" + admin_current + "'",
+            'Save finite Admin successor read-only evidence': "always() && inputs.operation == 'verify_access' && inputs.expected_current == '" + admin_current + "'",
+            'Read production release diagnostics': "inputs.operation == 'verify_access' && inputs.expected_current != '" + admin_current + "'",
+            'Independently read back Admin publication and preserved services': "inputs.operation == 'release_admin'"})
+        added = {step['name']: step for step in value['added']}
+        self.assertEqual(set(added), {'Verify recharge flow predecessor and idle workers before building',
+            'Independently read back recharge flow images and preserved services',
+            'Save recharge flow build and independent runtime evidence',
+            'Read finite Admin successor baseline facts', 'Save finite Admin successor read-only evidence'})
+        self.assertEqual(added['Read finite Admin successor baseline facts']['run'],
+                         'python3 -B scripts/production-release/admin-successor-diagnostic.py')
+        admin_artifact = added['Save finite Admin successor read-only evidence']
+        self.assertEqual(admin_artifact['uses'], 'actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02')
+        self.assertEqual(admin_artifact['with']['path'], '.deploy/production-release/admin-successor-diagnostic-*.json')
         names = [step['name'] for step in value['enabled']]
         self.assertIn('Verify exact source and passing Quality Gate', names)
         self.assertIn('Validate release policy and reviewed seal selection', names)
@@ -521,11 +572,15 @@ console.log(JSON.stringify({concurrency: current.concurrency, oldConcurrency: ol
         self.assertIn('Check AWS identity and production target', names)
         self.assertNotIn('Verify read-only SSM command access', names)
         self.assertEqual(len(value['enabled']), 8, names)
-        diagnostic = next(step for step in value['enabled'] if step.get('run') ==
-                          'python3 -B scripts/production-release/' + m.NAME + ' diagnose')
+        for selected in value['runtimeByBaseline']:
+            self.assertEqual(selected, names)
+            self.assertFalse(set(selected).intersection(value['adminGates']))
+        diagnostic = value['diagnostic']
+        self.assertEqual(diagnostic['if'], "inputs.operation == '" + m.OPERATION + "'")
         self.assertEqual(diagnostic['run'], 'python3 -B scripts/production-release/' + m.NAME + ' diagnose')
         self.assertEqual(diagnostic['timeout-minutes'], 18)
-        artifact = next(step for step in value['enabled'] if step.get('uses', '').startswith('actions/upload-artifact@'))
+        artifact = value['diagnosticArtifact']
+        self.assertEqual(artifact['if'], "always() && inputs.operation == '" + m.OPERATION + "'")
         self.assertEqual(artifact['uses'], 'actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02')
         self.assertEqual(len(artifact['with']['path'].splitlines()), 8)
         self.assertTrue(all(line.startswith('.deploy/production-release/' + m.PREFIX + '-')

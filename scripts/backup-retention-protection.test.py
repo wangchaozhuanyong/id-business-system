@@ -129,6 +129,135 @@ class RetentionTests(unittest.TestCase):
         fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
         return fd
 
+    def inherited_h_fixture(self):
+        # Synthetic source-bound records exercise the actual held reader and
+        # compatibility guard; they never stand in for production native proof.
+        binding = dict(M.INHERITED_H_BACKUP)
+        inherited = {'name': binding['inheritedBackup'], 'size': 26513807,
+            'sha256': '4856bdda21852354f5b1581e853cfda8823430b20dfdeeb39dc968f548af5a13',
+            's3Verified': True}
+        previous = self.releases / binding['previousRelease']; previous.mkdir(mode=0o700)
+        self.document(previous / 'release-manifest.json', {'commit': '6' * 40,
+            'backupBeforeRelease': binding['inheritedBackup'], 'previousRelease': str(self.previous)})
+        self.document(previous / 'backup-verification.json', inherited)
+        current = self.releases / binding['release']; current.mkdir(mode=0o700)
+        previous_sha = hashlib.sha256((previous / 'release-manifest.json').read_bytes()).hexdigest()
+        self.document(current / 'release-manifest.json', {'commit': '6' * 40,
+            'backupBeforeRelease': binding['manifestBackup'], 'previousRelease': str(previous),
+            'previousManifestSha256': previous_sha, 'apiHotfixPublication': {'fixture': 'NO_PRODUCTION_AUTHORITY'}})
+        self.document(current / 'backup-verification.json', inherited)
+        binding.update(manifestSha256=hashlib.sha256((current / 'release-manifest.json').read_bytes()).hexdigest(),
+            backupRecordSha256=hashlib.sha256((current / 'backup-verification.json').read_bytes()).hexdigest(),
+            previousManifestSha256=previous_sha)
+        control = patch.object(M, 'INHERITED_H_BACKUP', binding); control.start(); self.addCleanup(control.stop)
+        (self.base / 'current').unlink(); (self.base / 'current').symlink_to(current)
+        self.current, self.previous = current, previous
+        for index in (1, 2): self.backup(index)
+        for name in (binding['manifestBackup'], binding['inheritedBackup'], 'id-business-v2-20261012T170000Z.sql.gz'):
+            self.write(self.mysql / name, b'offline backup content never read')
+        return current, previous, binding
+
+    def test_exact_inherited_hotfix_exception_retains_both_backups_and_original_records(self):
+        current, previous, binding = self.inherited_h_fixture()
+        originals = {(d, n): (d / n).read_bytes() for d in (current, previous)
+                     for n in ('release-manifest.json', 'backup-verification.json')}
+        result = M.prune(4, 67108864, apply=True)
+        self.assertEqual(result['protectedCount'], 4)
+        self.assertEqual(result['removedCount'], 1)
+        self.assertEqual(self.names(), sorted((self.name(1), self.name(2), binding['manifestBackup'], binding['inheritedBackup'])))
+        for (directory, name), raw in originals.items(): self.assertEqual((directory / name).read_bytes(), raw)
+
+    def test_inherited_hotfix_unexpected_directory_or_parent_pointer_rejects(self):
+        current, previous, _binding = self.inherited_h_fixture()
+        original = (current / 'release-manifest.json').read_bytes()
+        changed = current.with_name('20261012T182212Z-60e164b75d1e')
+        current.rename(changed); (self.base / 'current').unlink(); (self.base / 'current').symlink_to(changed)
+        self.reject('REFERENCE_INVALID', count=4)
+        changed.rename(current); (self.base / 'current').unlink(); (self.base / 'current').symlink_to(current)
+        for field, value in (('previousRelease', str(self.releases / 'unexpected-D')),
+                             ('previousManifestSha256', '0' * 64)):
+            manifest = json.loads(original); manifest[field] = value
+            self.document(current / 'release-manifest.json', manifest)
+            self.reject('REFERENCE_INVALID', count=4)
+        self.write(current / 'release-manifest.json', original)
+        alias = previous.with_name('unexpected-D'); previous.rename(alias)
+        before = self.names()
+        with self.assertRaises(M.Rejected) as error: M.prune(4, 67108864, apply=True)
+        self.assertEqual(error.exception.removed_count, 0)
+        self.assertEqual(self.names(), before)
+
+    def test_inherited_hotfix_all_four_original_byte_seals_are_required(self):
+        current, previous, _binding = self.inherited_h_fixture()
+        for directory in (current, previous):
+            for name in ('release-manifest.json', 'backup-verification.json'):
+                path = directory / name; raw = path.read_bytes()
+                # Whitespace preserves JSON meaning but changes the original bytes.
+                self.write(path, raw + b'\n')
+                with self.subTest(directory=directory.name, file=name): self.reject('REFERENCE_INVALID', count=4)
+                self.write(path, raw)
+
+    def test_inherited_hotfix_wrong_names_or_receipt_fields_do_not_gain_exception(self):
+        current, _previous, _binding = self.inherited_h_fixture()
+        manifest_raw = (current / 'release-manifest.json').read_bytes()
+        receipt_raw = (current / 'backup-verification.json').read_bytes()
+        manifest = json.loads(manifest_raw); manifest['backupBeforeRelease'] = self.name(99)
+        self.document(current / 'release-manifest.json', manifest)
+        self.reject('REFERENCE_INVALID', count=4)
+        self.write(current / 'release-manifest.json', manifest_raw)
+        for field, value in (('name', self.name(99)), ('size', True), ('sha256', '0' * 64), ('s3Verified', False)):
+            receipt = json.loads(receipt_raw); receipt[field] = value
+            self.document(current / 'backup-verification.json', receipt)
+            with self.subTest(field=field): self.reject('REFERENCE_INVALID', count=4)
+        self.write(current / 'backup-verification.json', receipt_raw)
+
+    def test_inherited_hotfix_private_modes_links_and_parent_permissions_reject(self):
+        current, previous, _binding = self.inherited_h_fixture()
+        for directory in (current, previous):
+            for name in ('release-manifest.json', 'backup-verification.json'):
+                path = directory / name
+                for mode in (0o644, 0o666):
+                    path.chmod(mode)
+                    with self.subTest(directory=directory.name, file=name, mode=mode): self.reject('REFERENCE_INVALID', count=4)
+                path.chmod(0o600)
+                alias = directory / 'hardlink-alias'; os.link(path, alias)
+                self.reject('REFERENCE_INVALID', count=4); alias.unlink()
+                raw = path.read_bytes(); path.unlink(); path.symlink_to(current / 'release-manifest.json')
+                self.reject('REFERENCE_INVALID', count=4); path.unlink(); self.write(path, raw)
+            directory.chmod(0o770)
+            self.reject('REFERENCE_INVALID', count=4); directory.chmod(0o700)
+
+    def test_inherited_hotfix_sealed_d_relationship_is_checked_after_matching_h(self):
+        current, previous, binding = self.inherited_h_fixture()
+        original = (previous / 'release-manifest.json').read_bytes()
+        manifest = json.loads(original); manifest['backupBeforeRelease'] = self.name(99)
+        self.document(previous / 'release-manifest.json', manifest)
+        changed_sha = hashlib.sha256((previous / 'release-manifest.json').read_bytes()).hexdigest()
+        changed_h = json.loads((current / 'release-manifest.json').read_bytes()); changed_h['previousManifestSha256'] = changed_sha
+        self.document(current / 'release-manifest.json', changed_h)
+        synthetic = {**binding, 'previousManifestSha256': changed_sha,
+            'manifestSha256': hashlib.sha256((current / 'release-manifest.json').read_bytes()).hexdigest()}
+        with patch.object(M, 'INHERITED_H_BACKUP', synthetic): self.reject('REFERENCE_INVALID', count=4)
+
+    def test_inherited_hotfix_held_records_race_rejects_before_any_deletion(self):
+        current, previous, _binding = self.inherited_h_fixture()
+        original_read = FixtureAuthority.read
+        changed = []
+        def read_then_change(authority, parent, name, *args, **kwargs):
+            value = original_read(authority, parent, name, *args, **kwargs)
+            if name == 'backup-verification.json' and not changed \
+                    and os.fstat(parent).st_ino == previous.stat().st_ino:
+                changed.append(True)
+                path = current / 'release-manifest.json'; self.write(path, path.read_bytes() + b'\n')
+            return value
+        with patch.object(FixtureAuthority, 'read', read_then_change): self.reject('AUTHORITY_CHANGED', count=4)
+
+    def test_generic_matching_receipts_do_not_load_h_exception_or_require_private_mode(self):
+        for directory in (self.current, self.previous):
+            (directory / 'release-manifest.json').chmod(0o644)
+            (directory / 'backup-verification.json').chmod(0o644)
+        with patch.object(M.Authority, 'inherited_hotfix_backup', side_effect=AssertionError('ordinary matching receipts need no exception')):
+            self.assertEqual(M.prune(48, 67108864)['protectedCount'], 4)
+
     def test_count_prunes_only_oldest_unprotected_and_keeps_latest(self):
         for index in range(1, 9):
             self.backup(index)

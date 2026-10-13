@@ -7,7 +7,10 @@ from datetime import datetime, timezone
 import importlib.util
 import io
 import json
+import fcntl
+import os
 from pathlib import Path
+import stat
 import subprocess
 import tarfile
 import tempfile
@@ -427,6 +430,258 @@ class PreservationTests(unittest.TestCase):
             a.preserve(d, scope, previous, target, evidence, pointer=previous, images=images)
 
 
+class BackupMaintenanceTests(unittest.TestCase):
+    setUp_root = SuccessorTests.setUp
+    tearDown = SuccessorTests.tearDown
+
+    def setUp(self):
+        self.setUp_root()
+        self.previous = self.root / 'releases/20261012T182211Z-60e164b75d1e'
+        self.previous.mkdir(parents=True, mode=0o700)
+        self.target = self.root / 'releases/20261013T000000Z-aaaaaaaaaaaa'
+        (self.target / 'scripts').mkdir(parents=True, mode=0o700)
+        self.target.chmod(0o700)
+        (self.root / 'current').symlink_to(self.previous)
+        self.manifest = b'{"immutable":"H"}\n'
+        self.environment = b'UNRELATED_SECRET=synthetic-never-print\n'
+        for name, raw in (('release-manifest.json', self.manifest), ('.env.aws.production', self.environment)):
+            path = self.previous / name; path.write_bytes(raw); path.chmod(0o600)
+        self.script = (ROOT / 'scripts/backup-aws-mysql.sh').read_bytes()
+        self.old_helper = b'# immutable original retention fixture\n'
+        self.new_helper = b'# protected new retention fixture\n'
+        old_namespace = self.root / 'maintenance' / a.BACKUP_OLD_NAMESPACE
+        old_namespace.mkdir(parents=True, mode=0o700)
+        self.old_entry = old_namespace / 'backup-aws-mysql.sh'
+        for name, raw in (('backup-aws-mysql.sh', self.script), ('backup-retention-protection.py', self.old_helper)):
+            path = old_namespace / name; path.write_bytes(raw); path.chmod(0o700 if name.endswith('.sh') else 0o600)
+        self.files = {'scripts/backup-aws-mysql.sh': (self.script, '100755'),
+                      'scripts/backup-retention-protection.py': (self.new_helper, '100644')}
+        for name, (raw, mode) in self.files.items():
+            path = self.target / name; path.write_bytes(raw); path.chmod(0o755 if mode == '100755' else 0o644)
+        self.dropin = self.root / 'systemd' / (a.BACKUP_SERVICE + '.d') / '20-release-retention.conf'
+        self.dropin.parent.mkdir(parents=True, mode=0o700)
+        self.original_configuration = ('[Service]\nExecStart=\nExecStart=' + str(self.old_entry) + '\n').encode()
+        self.dropin.write_bytes(self.original_configuration); self.dropin.chmod(0o600)
+        self.namespace = self.root / 'maintenance' / ('mysql-backup-' + a.fingerprint(
+            {Path(name).name: a.digest(raw) for name, (raw, _mode) in self.files.items()})[:16])
+        self.entry = self.namespace / 'backup-aws-mysql.sh'
+        self.new_configuration = ('[Service]\nExecStart=\nExecStart=' + str(self.entry) + '\n').encode()
+        self.lock_path = self.root / 'backups/mysql/.backup.lock'
+        self.lock_path.parent.mkdir(parents=True, mode=0o700)
+        self.lock_path.touch(mode=0o600)
+        self.states = {'api': {'container': 'synthetic-immutable'}}
+        self.evidence = {'currentManifestBytesSha256': a.digest(self.manifest),
+                         'environmentFileSha256': a.digest(self.environment), 'services': copy.deepcopy(self.states)}
+        self.scope = SimpleNamespace(snapshot=lambda *_: copy.deepcopy(self.states))
+        self.d = SimpleNamespace(BASE=self.root)
+        self.timer = 'active'; self.service = 'failed'; self.running_entry = self.old_entry
+        self.calls = []; self.native_hook = None; self.reload_fail = False; self.reload_wrong = False
+        real_stat, real_fstat = os.stat, os.fstat
+        class Owner:
+            def __init__(self, row): self.row = row; self.st_uid = 0
+            def __getattr__(self, key): return getattr(self.row, key)
+        for control in (patch.object(os, 'stat', side_effect=lambda *args, **kw: Owner(real_stat(*args, **kw))),
+                        patch.object(os, 'fstat', side_effect=lambda *args, **kw: Owner(real_fstat(*args, **kw))),
+                        patch.object(os, 'getuid', return_value=0), patch.object(os, 'geteuid', return_value=0),
+                        patch.object(a, 'BACKUP_DROPIN', self.dropin),
+                        patch.object(a, 'BACKUP_OLD_HELPER_SHA256', a.digest(self.old_helper)),
+                        patch.object(a, 'BACKUP_DROPIN_SHA256', a.digest(self.original_configuration)),
+                        patch.dict(a.BASELINE_CONTRACT, {'currentRelease': str(self.previous),
+                            'manifestSha256': a.digest(self.manifest)}),
+                        patch.object(a, 'backup_native', self.native)):
+            control.start(); self.addCleanup(control.stop)
+
+    def plan(self):
+        return {'kind': 'MYSQL_BACKUP_RETENTION_V1', 'status': 'PLAN_ONLY', 'code': 'OK',
+                'protectedCount': 2, 'countBefore': 3, 'candidateCount': 1, 'removedCount': 0,
+                'countAfter': 3, 'retainedBytes': 42, 'rawOutputSuppressed': True}
+
+    def native(self, d, arguments, *, pass_fds=()):
+        self.assertIs(d, self.d); self.calls.append(tuple(arguments))
+        if self.native_hook:
+            self.native_hook(arguments)
+        if arguments[0] == '/usr/bin/python3':
+            self.assertNotIn('--apply', arguments)
+            helper_fd = int(arguments[2].rsplit('/', 1)[1])
+            lock_fd = int(arguments[4])
+            self.assertEqual(pass_fds, (helper_fd, lock_fd))
+            self.assertEqual(os.pread(helper_fd, 1024 * 1024, 0), self.new_helper)
+            descriptor = os.open(self.lock_path, os.O_RDONLY)
+            try:
+                with self.assertRaises(BlockingIOError):
+                    fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            finally:
+                os.close(descriptor)
+            self.assertEqual(arguments[-4:], ['--retention-count', '48', '--max-bytes', '1073741824'])
+            return json.dumps(self.plan())
+        self.assertEqual(arguments[0], '/usr/bin/systemctl')
+        self.assertNotIn('start', arguments); self.assertNotIn('stop', arguments)
+        if arguments[1:] == ['daemon-reload']:
+            if self.reload_fail:
+                raise RuntimeError('UNPUBLISHED_COMPONENT_BACKUP_NATIVE_FAILED')
+            if not self.reload_wrong:
+                self.running_entry = self.entry
+            return ''
+        self.assertEqual(arguments[1], 'show')
+        unit, prop = arguments[2], arguments[3]
+        if unit == a.BACKUP_TIMER:
+            return self.timer
+        self.assertEqual(unit, a.BACKUP_SERVICE)
+        if prop == '--property=ActiveState': return self.service
+        if prop == '--property=DropInPaths': return str(self.dropin)
+        if prop == '--property=ExecStart':
+            return '{ path=' + str(self.running_entry) + ' ; argv[]=' + str(self.running_entry) + ' ; ignore_errors=no ; }'
+        self.fail('Unrecognized synthetic control')
+
+    def upgrade(self):
+        return a.upgrade_backup_maintenance(self.d, self.scope, self.previous, self.target, self.evidence, self.files)
+
+    def assert_unchanged(self):
+        self.assertEqual(self.dropin.read_bytes(), self.original_configuration)
+        self.assertFalse(any(row[1:] == ('daemon-reload',) for row in self.calls))
+
+    def test_exact_upgrade_holds_lock_and_preserves_immutable_H_and_old_source(self):
+        value = self.upgrade()
+        self.assertEqual(value['status'], 'UPGRADED')
+        self.assertFalse(value['backupDeleted']); self.assertEqual(value['businessActions'], 0)
+        self.assertEqual(self.dropin.read_bytes(), self.new_configuration)
+        self.assertEqual(self.old_entry.read_bytes(), self.script)
+        self.assertEqual(self.old_entry.with_name('backup-retention-protection.py').read_bytes(), self.old_helper)
+        self.assertEqual((self.previous / 'release-manifest.json').read_bytes(), self.manifest)
+        self.assertEqual((self.root / 'current').resolve(), self.previous)
+        saved = json.loads((self.target / (a.PREFIX + '-backup-entry-original.json')).read_bytes())
+        self.assertEqual(base64.b64decode(saved['rawBase64']), self.original_configuration)
+        self.assertNotIn('UNRELATED_SECRET', json.dumps(value)); self.assertNotIn('synthetic-never-print', json.dumps(saved))
+        for name, (raw, _mode) in self.files.items():
+            self.assertEqual((self.namespace / Path(name).name).read_bytes(), raw)
+
+    def test_existing_exact_entry_is_readonly_and_does_not_reload_or_add_records(self):
+        self.upgrade()
+        before = {path: (path.stat().st_ino, path.stat().st_mtime_ns, path.read_bytes())
+                  for path in (self.dropin, self.namespace / 'backup-aws-mysql.sh',
+                               self.namespace / 'backup-retention-protection.py')}
+        self.calls.clear()
+        value = self.upgrade()
+        self.assertEqual(value['status'], 'ALREADY_VERIFIED')
+        self.assertFalse(any(row[1:] == ('daemon-reload',) for row in self.calls))
+        self.assertEqual(before, {path: (path.stat().st_ino, path.stat().st_mtime_ns, path.read_bytes()) for path in before})
+
+    def test_busy_service_cannot_plan_or_mutate(self):
+        self.service = 'activating'
+        with self.assertRaisesRegex(RuntimeError, 'BACKUP_SERVICE_BUSY'): self.upgrade()
+        self.assert_unchanged(); self.assertFalse(self.namespace.exists())
+        self.assertFalse(any(row[0] == '/usr/bin/python3' for row in self.calls))
+
+    def test_existing_backup_lock_busy_blocks_plan_and_mutation(self):
+        descriptor = os.open(self.lock_path, os.O_RDONLY)
+        try:
+            fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            with self.assertRaisesRegex(RuntimeError, 'BACKUP_LOCK_BUSY'): self.upgrade()
+        finally:
+            os.close(descriptor)
+        self.assert_unchanged(); self.assertFalse(self.namespace.exists())
+
+    def test_plan_failure_and_mutated_or_unclosed_output_never_change_entry(self):
+        for changes in ({'status': 'APPLIED'}, {'removedCount': 1}, {'unexpected': 1}, {'candidateCount': True}):
+            with self.subTest(changes=changes), patch.object(self, 'plan', return_value={**self.plan(), **changes}):
+                with self.assertRaisesRegex(RuntimeError, 'BACKUP_PLAN_INVALID'): self.upgrade()
+                self.assert_unchanged(); self.assertFalse(self.namespace.exists())
+
+    def test_plan_execution_failure_never_creates_namespace(self):
+        def fail(arguments):
+            if arguments[0] == '/usr/bin/python3': raise RuntimeError('UNPUBLISHED_COMPONENT_BACKUP_NATIVE_FAILED')
+        self.native_hook = fail
+        with self.assertRaisesRegex(RuntimeError, 'BACKUP_NATIVE_FAILED'): self.upgrade()
+        self.assert_unchanged(); self.assertFalse(self.namespace.exists())
+
+    def test_tampered_source_or_file_mode_or_links_block_before_writes(self):
+        path = self.target / 'scripts/backup-retention-protection.py'
+        for change in ('bytes', 'mode', 'symlink', 'hardlink'):
+            with self.subTest(change=change):
+                if path.is_symlink() or path.exists(): path.unlink()
+                linked = self.target / 'source-link'
+                if linked.exists(): linked.unlink()
+                path.write_bytes(self.new_helper); path.chmod(0o644)
+                if change == 'bytes': path.write_bytes(b'other')
+                if change == 'mode': path.chmod(0o666)
+                if change == 'symlink':
+                    linked.write_bytes(self.new_helper); path.unlink(); path.symlink_to(linked)
+                if change == 'hardlink': os.link(path, linked)
+                with self.assertRaises(RuntimeError): self.upgrade()
+                self.assert_unchanged(); self.assertFalse(self.namespace.exists())
+
+    def test_old_helper_tamper_and_dropin_mode_cannot_be_overwritten(self):
+        old_helper = self.old_entry.with_name('backup-retention-protection.py')
+        old_helper.write_bytes(b'other')
+        with self.assertRaisesRegex(RuntimeError, 'BACKUP_OLD_SOURCE_CHANGED'): self.upgrade()
+        old_helper.write_bytes(self.old_helper)
+        self.dropin.chmod(0o644)
+        with self.assertRaisesRegex(RuntimeError, 'BACKUP_FILE_INVALID'): self.upgrade()
+        self.assert_unchanged()
+
+    def test_directory_link_and_writable_namespace_are_rejected(self):
+        self.namespace.symlink_to(self.old_entry.parent, target_is_directory=True)
+        with self.assertRaisesRegex(RuntimeError, 'BACKUP_AUTHORITY_INVALID'): self.upgrade()
+        self.namespace.unlink(); self.namespace.mkdir(mode=0o777); self.namespace.chmod(0o777)
+        with self.assertRaisesRegex(RuntimeError, 'BACKUP_AUTHORITY_INVALID'): self.upgrade()
+        self.assert_unchanged()
+
+    def test_dropin_race_after_plan_is_detected_and_unknown_bytes_preserved(self):
+        def race(arguments):
+            if arguments[0] == '/usr/bin/python3': self.dropin.write_bytes(b'unknown raced entry\n')
+        self.native_hook = race
+        with self.assertRaisesRegex(RuntimeError, 'BACKUP_FILE_CHANGED'): self.upgrade()
+        self.assertEqual(self.dropin.read_bytes(), b'unknown raced entry\n')
+        self.assertFalse(self.namespace.exists())
+
+    def test_dropin_identity_race_at_final_CAS_is_detected(self):
+        count = 0
+        def race(arguments):
+            nonlocal count
+            if '--property=ExecStart' in arguments:
+                count += 1
+                if count == 2:
+                    replacement = self.dropin.with_name('concurrent-replacement.conf')
+                    replacement.write_bytes(self.original_configuration); replacement.chmod(0o600)
+                    os.replace(replacement, self.dropin)
+        self.native_hook = race
+        with self.assertRaisesRegex(RuntimeError, 'BACKUP_FILE_CHANGED'): self.upgrade()
+        self.assert_unchanged()
+
+    def test_current_pointer_race_after_plan_is_rejected(self):
+        def race(arguments):
+            if arguments[0] == '/usr/bin/python3':
+                pointer = self.root / 'current'; pointer.unlink(); pointer.symlink_to(self.target)
+        self.native_hook = race
+        with self.assertRaisesRegex(RuntimeError, 'BACKUP_CURRENT_CHANGED'): self.upgrade()
+        self.assert_unchanged(); self.assertFalse(self.namespace.exists())
+
+    def test_current_or_services_race_after_plan_stops_before_mutation(self):
+        def race(arguments):
+            if arguments[0] == '/usr/bin/python3': self.states['api']['container'] = 'different'
+        self.native_hook = race
+        with self.assertRaisesRegex(RuntimeError, 'BACKUP_SERVICES_CHANGED'): self.upgrade()
+        self.assert_unchanged(); self.assertFalse(self.namespace.exists())
+
+    def test_timer_change_after_plan_keeps_entry_unchanged(self):
+        def race(arguments):
+            if arguments[0] == '/usr/bin/python3': self.timer = 'inactive'
+        self.native_hook = race
+        with self.assertRaisesRegex(RuntimeError, 'BACKUP_TIMER_CHANGED'): self.upgrade()
+        self.assert_unchanged(); self.assertFalse(self.namespace.exists())
+
+    def test_daemon_reload_failure_and_wrong_entry_do_not_return_success(self):
+        self.reload_fail = True
+        with self.assertRaisesRegex(RuntimeError, 'BACKUP_NATIVE_FAILED'): self.upgrade()
+        self.assertEqual(self.dropin.read_bytes(), self.new_configuration)
+        # Failed reload is deliberately not accepted as an idempotent installation.
+        with self.assertRaisesRegex(RuntimeError, 'BACKUP_ENTRY_CHANGED'): self.upgrade()
+
+    def test_reload_success_with_wrong_loaded_entry_is_rejected(self):
+        self.reload_wrong = True
+        with self.assertRaisesRegex(RuntimeError, 'BACKUP_ENTRY_CHANGED'): self.upgrade()
+
+
 class PipelineTests(unittest.TestCase):
     setUp = SuccessorTests.setUp
     tearDown = SuccessorTests.tearDown
@@ -549,6 +804,8 @@ class PipelineTests(unittest.TestCase):
         args = SimpleNamespace(api_fault_restore_approved=True, commit=N, source_tree=T, run_id='12', run_attempt='1',
                                expected_current=D, ci_run_id='44', repository=REPOSITORY)
         context = {'modules': patch.object(a, 'modules', return_value=(d, admin, scope, projection)),
+            'backup_maintenance': patch.object(a, 'upgrade_backup_maintenance', side_effect=lambda *args:
+                (calls.append(('backup-maintenance', 'verified')) or {'status': 'UPGRADED', 'businessActions': 0})),
             'source': patch.object(a, 'source', return_value=(files, files, record, 'd' * 64, 'd' * 64)),
             'baseline': patch.object(a, 'baseline', return_value=(previous, old, evidence)),
             'instance': patch.object(a, 'instance_id', return_value=INSTANCE),
@@ -645,6 +902,29 @@ class PipelineTests(unittest.TestCase):
         calls = fixture[5]
         self.assertLess(calls.index(('migration', 'verified')), calls.index(('gate', 'stop_previous')))
         self.assertEqual(sum(call == ('migration', 'verified') for call in calls), 1)
+
+    def test_backup_maintenance_failure_blocks_fresh_backup_migration_and_services(self):
+        fixture = self.fixture()
+        fixture[0].fresh_backup = Mock(side_effect=AssertionError('No backup start after maintenance refusal'))
+        fixture[4]['backup_maintenance'] = patch.object(a, 'upgrade_backup_maintenance',
+            side_effect=RuntimeError('UNPUBLISHED_COMPONENT_BACKUP_ENTRY_CHANGED'))
+        with self.assertRaisesRegex(a.ComponentFailure, 'BACKUP_ENTRY_CHANGED') as error:
+            self.exercise(fixture)
+        fixture[0].fresh_backup.assert_not_called()
+        self.assertEqual(error.exception.receipt['phase'], 'backup')
+        self.assertEqual(error.exception.receipt['servicesAttempted'], [])
+        self.assertFalse(any(call == ('migration', 'verified') or call == ('gate', 'stop_previous')
+                             or call[:2] == ('compose', 'up') for call in fixture[5]))
+
+    def test_maintenance_is_verified_after_audit_and_before_fresh_backup(self):
+        fixture = self.fixture()
+        original = fixture[0].fresh_backup
+        fixture[0].fresh_backup = lambda previous: (fixture[5].append(('fresh-backup', 'verified')) or original(previous))
+        self.exercise(fixture)
+        self.assertLess(fixture[5].index(('backup-maintenance', 'verified')),
+                        fixture[5].index(('fresh-backup', 'verified')))
+        self.assertLess(fixture[5].index(('fresh-backup', 'verified')),
+                        fixture[5].index(('migration', 'verified')))
 
     def test_missing_verified_s3_backup_blocks_migration_and_stop(self):
         fixture = self.fixture()

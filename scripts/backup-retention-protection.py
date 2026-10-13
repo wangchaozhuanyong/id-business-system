@@ -27,6 +27,17 @@ HISTORY = (
      'f04e9356221bc10a33c774ce9e692b40db6afa23fd2a3bde23caf096a4f07485',
      'ONLINE_RECHARGE_FAILED_RESTORED', 'audit-after'),
 )
+# This ended API hotfix retained D's receipt while its immutable manifest
+# references the separate H backup. Both original records remain unchanged.
+INHERITED_H_BACKUP = {
+    'release': '20261012T182211Z-60e164b75d1e',
+    'manifestSha256': '7b081bbde167ebed1a9b94312036540471f16bb682d1f1e7ba9ff96822e4153c',
+    'backupRecordSha256': 'a3781243ccdb6741007cf9b8e87520127ee2b8337fe37c59c686f6e97dca0d54',
+    'manifestBackup': 'id-business-v2-20261012T181052Z.sql.gz',
+    'inheritedBackup': 'id-business-v2-20261012T162827Z.sql.gz',
+    'previousRelease': '20261012T162822Z-60e164b75d1e',
+    'previousManifestSha256': '5263307389da5be14cb13a0c2a26b6d2ca5a8268bc9bcfce4313cf07809f0c6c',
+}
 BACKUP_NAME = re.compile(r'id-business-v2-[0-9]{8}T[0-9]{6}Z\.sql\.gz\Z')
 RELEASE_NAME = re.compile(r'([0-9]{8}T[0-9]{6}Z)-[a-f0-9]{12}\Z')
 HEX = re.compile(r'[a-f0-9]{64}\Z')
@@ -159,11 +170,11 @@ class Authority:
         except FileNotFoundError:
             return None
 
-    def read(self, parent, name, optional=False):
+    def read(self, parent, name, optional=False, *, with_digest=False):
         visible = self.optional_stat(parent, name)
         if visible is None and optional:
             self.absent.append((parent, name))
-            return None
+            return (None, None) if with_digest else None
         need(visible is not None)
         trusted_file(visible)
         need(0 < visible.st_size <= JSON_LIMIT)
@@ -182,7 +193,8 @@ class Authority:
         need(len(raw) == before.st_size and identity(before) == identity(os.fstat(fd))
              == identity(os.stat(name, dir_fd=parent, follow_symlinks=False)), 'AUTHORITY_CHANGED')
         self.files.append((parent, name, fd, identity(before)))
-        return closed(raw)
+        value = closed(raw)
+        return (value, hashlib.sha256(raw).hexdigest()) if with_digest else value
 
     def check(self):
         for parent, name, fd, expected in self.directories:
@@ -223,17 +235,39 @@ class Authority:
             return False
         return True
 
+    def inherited_hotfix_backup(self, parent, directory, manifest, manifest_sha, backup, backup_sha):
+        binding = INHERITED_H_BACKUP
+        if not (directory == binding['release'] and manifest_sha == binding['manifestSha256']
+                and backup_sha == binding['backupRecordSha256']
+                and manifest['backupBeforeRelease'] == binding['manifestBackup']
+                and backup['name'] == binding['inheritedBackup']
+                and manifest.get('previousRelease') == str(BASE / 'releases' / binding['previousRelease'])
+                and manifest.get('previousManifestSha256') == binding['previousManifestSha256']):
+            return False
+        previous = self.child(self.releases, binding['previousRelease'])
+        previous_manifest, previous_sha = self.read(previous, 'release-manifest.json', with_digest=True)
+        previous_backup, previous_backup_sha = self.read(previous, 'backup-verification.json', with_digest=True)
+        need(previous_sha == binding['previousManifestSha256']
+             and previous_backup_sha == binding['backupRecordSha256'] and previous_backup == backup
+             and receipt(previous_backup) == previous_manifest.get('backupBeforeRelease') == binding['inheritedBackup'])
+        # The narrow historical exception uses the original private records.
+        # All four reads and their held descriptors remain in check()'s race set.
+        need(all(stat.S_IMODE(os.stat(name, dir_fd=fd, follow_symlinks=False).st_mode) == 0o600
+                 for fd in (parent, previous) for name in ('release-manifest.json', 'backup-verification.json')))
+        return True
+
     def referenced(self, directory, *, manifest_required=False):
         fd = self.child(self.releases, directory)
-        manifest = self.read(fd, 'release-manifest.json', optional=not manifest_required)
-        backup = self.read(fd, 'backup-verification.json', optional=True)
+        manifest, manifest_sha = self.read(fd, 'release-manifest.json', optional=not manifest_required, with_digest=True)
+        backup, backup_sha = self.read(fd, 'backup-verification.json', optional=True, with_digest=True)
         names = set()
         if backup is not None:
             names.add(receipt(backup))
         if manifest is not None and 'backupBeforeRelease' in manifest:
             name = manifest['backupBeforeRelease']
             need(type(name) is str and BACKUP_NAME.fullmatch(name))
-            need(backup is None or name == backup['name'])
+            need(backup is None or name == backup['name']
+                 or self.inherited_hotfix_backup(fd, directory, manifest, manifest_sha, backup, backup_sha))
             names.add(name)
         return names, manifest
 

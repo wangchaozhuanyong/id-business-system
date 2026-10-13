@@ -23,7 +23,34 @@ const gates = [
   'check:v2-concurrency-standard'
 ];
 
-function recordGuardCommands(mode, paths, part = 'guards') {
+test('Admin successor diagnostics always retain their offline controls', () => {
+  for (const part of ['guards', 'release-controls']) {
+    for (const changed of [
+      'scripts/production-release/admin-successor-diagnostic.py',
+      'scripts/production-release/admin-successor-diagnostic.test.py',
+      'scripts/production-release/admin-pending-online-release.py',
+      '.github/workflows/production-release.yml'
+    ]) {
+      const calls = recordGuardCommands('ci-only', [changed], part);
+      assert.equal(
+        calls.filter(
+          (call) =>
+            call.join(' ') ===
+            'python3 -B scripts/production-release/admin-successor-diagnostic.test.py'
+        ).length,
+        1,
+        `${part}: ${changed}`
+      );
+      assert.ok(
+        calls.every(
+          (call) => !call.includes('scripts/production-release/admin-successor-diagnostic.py')
+        )
+      );
+    }
+  }
+});
+
+function recordGuardCommands(mode, paths, part = 'guards', { cloud = false } = {}) {
   // Run the real dispatcher with process execution replaced before its named import resolves.
   // No Git command, nested test, database command or business operation is executed.
   const script = `
@@ -48,12 +75,33 @@ function recordGuardCommands(mode, paths, part = 'guards') {
       env: {
         ...process.env,
         CHECK_MODE: mode,
+        GITHUB_ACTIONS: cloud ? 'true' : '',
         GUARD_TEST_PART: part,
         GUARD_TEST_PATHS: JSON.stringify(paths)
       }
     })
   );
 }
+
+test('combined component migration runs only in cloud and retains the owned database entry', () => {
+  const paths = [
+    'scripts/production-release/unpublished-component-successor.py',
+    'scripts/acceptance-v2-workspace-dock.mjs',
+    'scripts/acceptance-v2-recharge-employee-concurrency.mjs'
+  ];
+  assert.throws(() => recordGuardCommands('admin', paths, 'migration'), /组合发布数据库验收/);
+  const calls = recordGuardCommands('admin', paths, 'migration', { cloud: true });
+  assert.deepEqual(calls.at(-1), [
+    'node',
+    'scripts/acceptance-v2-recharge-employee-concurrency.mjs',
+    '--runtime=docker',
+    '--combined-release'
+  ]);
+  assert.equal(calls.filter((call) => call.includes('--combined-release')).length, 1);
+  assert.ok(
+    !calls.some((call) => call.includes('scripts/acceptance-v2-registration-mirror-mysql.mjs'))
+  );
+});
 
 function recordBankSecurityCommands(drift = '') {
   // Source-byte/hash enforcement is tested with actual sealed bytes in scope

@@ -1737,11 +1737,11 @@ class FixedBootstrapCacheTests(unittest.TestCase):
         original=(self.project/cache.CACHE_PINS[1]).read_text()
         for name in ('current','collect_dependencies','fixed_dependencies','make_plan','verify_remote','cache_execute'):
             self.assertEqual(original_ast(original,name),original_ast(frame['program'],name))
-        for name in ('historical_online_cold_dependencies','failed_online_recovery_dependencies','generic_cache_closed'):
+        for name in ('historical_online_cold_dependencies','failed_online_recovery_dependencies','observed_h_recovery_dependencies','generic_cache_closed'):
             self.assertEqual(original_ast(original,name),original_ast(frame['program'],name))
-        for name in ('HISTORICAL_ONLINE_COLD_DEPENDENCIES','HISTORICAL_ONLINE_COLD_POLICY_SHA256','FAILED_ONLINE_RECOVERY_DEPENDENCY'):
-            self.assertEqual(cache.literal_dependency(ast.parse(original),name) if name!='HISTORICAL_ONLINE_COLD_POLICY_SHA256'
-                else cache.HISTORICAL_ONLINE_COLD_POLICY_SHA256,
+        for name in ('HISTORICAL_ONLINE_COLD_DEPENDENCIES','HISTORICAL_ONLINE_COLD_POLICY_SHA256','FAILED_ONLINE_RECOVERY_DEPENDENCY',
+                'H_RECOVERY_DEPENDENCIES','H_RECOVERY_DEPENDENCIES_SHA256'):
+            self.assertEqual(getattr(cache,name),
                 next(ast.literal_eval(n.value) for n in ast.parse(frame['program']).body if isinstance(n,ast.Assign)
                     and any(isinstance(t,ast.Name) and t.id==name for t in n.targets)))
         snapshot=(self.project/cache.CACHE_PINS[3]).read_text()
@@ -1903,6 +1903,12 @@ class FixedBootstrapCacheTests(unittest.TestCase):
         addition=ast.parse('images |= historical_online_cold_dependencies(directory, observed, evidence)').body[0]
         matches=[n for n in collector.body if ast.dump(n,include_attributes=False)==ast.dump(addition,include_attributes=False)]
         self.assertEqual(len(matches),1);collector.body.remove(matches[0])
+        addition=ast.parse('images |= observed_h_recovery_dependencies(prior_directory, previous, evidence)').body[0]
+        matches=[n for n in collector.body if ast.dump(n,include_attributes=False)==ast.dump(addition,include_attributes=False)]
+        self.assertEqual(len(matches),1);collector.body.remove(matches[0])
+        addition=ast.parse('images |= observed_h_recovery_dependencies(directory, observed, evidence)').body[0]
+        matches=[n for n in collector.body if ast.dump(n,include_attributes=False)==ast.dump(addition,include_attributes=False)]
+        self.assertEqual(len(matches),1);collector.body.remove(matches[0])
         constructor=next(n for n in tree.body if isinstance(n,ast.FunctionDef) and n.name=='parameters')
         projected=set()
         for node in constructor.body:
@@ -1912,8 +1918,9 @@ class FixedBootstrapCacheTests(unittest.TestCase):
                 self.assertEqual(node.value.value,'import ast,base64,fcntl,hashlib,json,os,re,shutil,stat,subprocess,time,types\nfrom pathlib import Path\n')
                 node.value.value=node.value.value.replace('ast,base64,','ast,');projected.add(name)
             elif name in ('constants','old_names'):
-                added=('FAILED_ONLINE_RECOVERY_DEPENDENCY','HISTORICAL_ONLINE_COLD_DEPENDENCIES','HISTORICAL_ONLINE_COLD_POLICY_SHA256') \
-                    if name=='constants' else ('historical_online_cold_dependencies','failed_online_recovery_dependencies','generic_cache_closed')
+                added=('FAILED_ONLINE_RECOVERY_DEPENDENCY','HISTORICAL_ONLINE_COLD_DEPENDENCIES','HISTORICAL_ONLINE_COLD_POLICY_SHA256',
+                    'H_RECOVERY_DEPENDENCIES','H_RECOVERY_DEPENDENCIES_SHA256') \
+                    if name=='constants' else ('historical_online_cold_dependencies','failed_online_recovery_dependencies','observed_h_recovery_dependencies','generic_cache_closed')
                 self.assertEqual([value.value for value in node.value.elts if value.value in added],list(added))
                 node.value.elts=[value for value in node.value.elts if value.value not in added];projected.add(name)
         self.assertEqual(projected,{'header','constants','old_names'})
@@ -2454,6 +2461,153 @@ class HistoricalOnlineColdDependencyTests(unittest.TestCase):
                 self.assertEqual(self.commands,[])
         mapping=copy.deepcopy(self.images);row=mapping.pop(next(iter(mapping)));mapping['f'*40+'-1-1-admin']=row
         with patch.object(cache,'HISTORICAL_ONLINE_COLD_DEPENDENCIES',mapping),self.assertRaises(RuntimeError):self.collect()
+
+
+class ObservedHRecoveryDependencyTests(unittest.TestCase):
+    def setUp(self):
+        import copy, hashlib
+        runtime=DIRECTORY.parents[1]/'.runtime/cache-retention-tests';runtime.mkdir(parents=True,exist_ok=True)
+        temporary=tempfile.TemporaryDirectory(dir=runtime);self.addCleanup(temporary.cleanup)
+        self.base=Path(temporary.name).resolve()
+        patcher=patch.object(cache,'BASE',self.base);patcher.start();self.addCleanup(patcher.stop)
+        self.original_policy=copy.deepcopy(cache.H_RECOVERY_DEPENDENCIES)
+        self.policy=copy.deepcopy(self.original_policy)
+        self.images=self.policy['images']
+        self.directory=self.base/self.policy['currentDirectory'];self.directory.mkdir(parents=True)
+        self.previous_directory=self.base/'releases/20261011T000000Z-111111111111';self.previous_directory.mkdir()
+        self.previous={'commit':'1'*40,'images':{'api':{'digest':'sha256:'+'2'*64}}}
+        self.manifest={'commit':self.policy['currentCommit'],'previousCommit':self.previous['commit'],
+            'previousRelease':str(self.previous_directory),'images':{'api':{'digest':'sha256:'+'3'*64}}}
+        self.manifest_path=self.directory/'release-manifest.json'
+        self.manifest_path.write_text(json.dumps(self.manifest))
+        (self.previous_directory/'release-manifest.json').write_text(json.dumps(self.previous))
+        (self.base/'current').symlink_to(self.directory)
+        # The manifest is synthetic and explicitly unqualified. Only its file
+        # SHA pin changes; all eight observed tag/ID identities stay immutable.
+        self.policy['currentManifestSha256']=hashlib.sha256(self.manifest_path.read_bytes()).hexdigest()
+        self.policy_sha=cache.plan_digest(self.policy)
+        for name,value in (('H_RECOVERY_DEPENDENCIES',self.policy),('H_RECOVERY_DEPENDENCIES_SHA256',self.policy_sha)):
+            patcher=patch.object(cache,name,value);patcher.start();self.addCleanup(patcher.stop)
+        failed=patch.object(cache,'failed_online_recovery_dependencies',side_effect=AssertionError('B-only origin'))
+        self.failed=failed.start();self.addCleanup(failed.stop)
+        self.commands=[]
+
+    def command(self,*args):
+        self.commands.append(args)
+        self.assertEqual(args[:5],('docker','image','inspect','--format','{{.Id}}'))
+        reference=args[-1]
+        return self.images[reference[len(cache.REPOSITORY)+1:]] if reference.startswith(cache.REPOSITORY+':') else reference
+
+    def collect(self,command=None):
+        with patch.object(cache,'read',side_effect=command or self.command):
+            return cache.collect_dependencies(self.manifest,self.previous)
+
+    def test_exact_h_keeps_all_eight_plus_existing_rollback_with_source_and_tag_evidence(self):
+        import hashlib
+        result=self.collect()
+        self.assertEqual(set(result['imageIds']),set(self.images.values())|{'sha256:'+'2'*64})
+        self.assertEqual(result['evidenceSha256']['literal/H_RECOVERY_DEPENDENCIES'],self.policy_sha)
+        self.assertEqual(result['evidenceSha256'][str(self.manifest_path.relative_to(self.base))],self.policy['currentManifestSha256'])
+        for tag,image in self.images.items():
+            self.assertEqual(result['evidenceSha256']['docker-image-inspect/'+tag],hashlib.sha256(image.encode()).hexdigest())
+        self.assertEqual(len([command for command in self.commands if command[-1].startswith(cache.REPOSITORY+':')]),8)
+        self.failed.assert_not_called()
+        protected=cache.protected_images(self.manifest,self.previous,{'sha256:'+'4'*64},result)
+        self.assertTrue(set(self.images.values())|{'sha256:'+'2'*64,'sha256:'+'3'*64,'sha256:'+'4'*64}<=protected)
+        inventory=[{'id':image,'repoTags':[cache.REPOSITORY+':'+tag]} for tag,image in self.images.items()]
+        eligible='f'*40+'-999-1-api'
+        inventory.append({'id':'sha256:'+'5'*64,'repoTags':[cache.REPOSITORY+':'+eligible]})
+        plan=cache.make_plan(self.manifest['commit'],self.previous,protected,inventory,result)
+        self.assertEqual(plan['items'],[{'tag':eligible,'imageId':'sha256:'+'5'*64}])
+        self.assertEqual(plan['policy'],cache.POLICY)
+
+    def test_each_missing_or_mismatched_exact_tag_rejects_without_pull_or_delete(self):
+        for tag in self.images:
+            for absent in (False,True):
+                with self.subTest(tag=tag,absent=absent):
+                    self.commands.clear()
+                    def unavailable(*args):
+                        value=self.command(*args)
+                        if args[-1]==cache.REPOSITORY+':'+tag:
+                            if absent:raise RuntimeError('Cache command failed; raw output suppressed')
+                            return 'sha256:'+'f'*64
+                        return value
+                    with self.assertRaises(RuntimeError):self.collect(unavailable)
+                    self.assertTrue(self.commands)
+                    self.assertTrue(all(command[:3]==('docker','image','inspect') for command in self.commands))
+                    self.failed.assert_not_called()
+
+    def test_same_h_path_changed_manifest_or_commit_rejects_before_docker(self):
+        raw=self.manifest_path.read_bytes()
+        self.manifest_path.write_bytes(raw+b'\n')
+        with self.assertRaisesRegex(RuntimeError,'Observed H recovery baseline changed'):self.collect()
+        self.assertEqual(self.commands,[])
+        self.manifest['commit']='6'*40;self.manifest_path.write_text(json.dumps(self.manifest))
+        with self.assertRaises(RuntimeError):self.collect()
+        self.assertEqual(self.commands,[])
+
+    def test_missing_manifest_and_symlinked_manifest_reject_before_docker(self):
+        self.manifest_path.unlink()
+        with self.assertRaises(FileNotFoundError):self.collect()
+        alternate=self.directory/'synthetic-other.json';alternate.write_text(json.dumps(self.manifest))
+        self.manifest_path.symlink_to(alternate)
+        with self.assertRaisesRegex(RuntimeError,'Dependency evidence path is not a regular project file'):self.collect()
+        self.assertEqual(self.commands,[])
+
+    def test_unknown_missing_changed_reference_or_digest_rejects_source_pin_before_docker(self):
+        import copy
+        for kind in ('extra','missing','tag','id','current','qualification'):
+            changed=copy.deepcopy(self.policy);tag=next(iter(changed['images']))
+            if kind=='extra':changed['images']['f'*40+'-1-1-api']='sha256:'+'f'*64
+            elif kind=='missing':changed['images'].pop(tag)
+            elif kind=='tag':changed['images']['f'*40+'-1-1-api']=changed['images'].pop(tag)
+            elif kind=='id':changed['images'][tag]='sha256:'+'f'*64
+            elif kind=='current':changed['currentManifestSha256']='f'*64
+            else:changed['publicationQualified']=True
+            with self.subTest(kind=kind),patch.object(cache,'H_RECOVERY_DEPENDENCIES',changed):
+                with self.assertRaisesRegex(RuntimeError,'Observed H recovery dependency policy changed'):self.collect()
+                self.assertEqual(self.commands,[])
+
+    def test_other_release_directory_even_same_commit_preserves_generic_behavior(self):
+        other=self.base/'releases/20261012T182212Z-60e164b75d1e';self.directory.rename(other)
+        (self.base/'current').unlink();(self.base/'current').symlink_to(other)
+        with patch.object(cache,'H_RECOVERY_DEPENDENCIES',None):result=self.collect()
+        self.assertEqual(result['imageIds'],['sha256:'+'2'*64])
+        self.assertNotIn('literal/H_RECOVERY_DEPENDENCIES',result['evidenceSha256'])
+        self.assertFalse(any(command[-1].startswith(cache.REPOSITORY+':') for command in self.commands))
+        self.failed.assert_not_called()
+
+    def test_successor_c_with_exact_h_previous_keeps_all_eight_cold_dependencies(self):
+        directory=self.base/'releases/20261013T000000Z-777777777777';directory.mkdir()
+        successor={'commit':'7'*40,'previousCommit':self.manifest['commit'],
+            'previousRelease':str(self.directory),'images':{'api':{'digest':'sha256:'+'8'*64}}}
+        (directory/'release-manifest.json').write_text(json.dumps(successor))
+        (self.base/'current').unlink();(self.base/'current').symlink_to(directory)
+        with patch.object(cache,'read',side_effect=self.command):result=cache.collect_dependencies(successor,self.manifest)
+        self.assertEqual(set(result['imageIds']),set(self.images.values())|{'sha256:'+'3'*64})
+        self.assertEqual(result['serviceRollback']['api'],{'status':'RETAINED','commit':self.manifest['commit'],'imageId':'sha256:'+'3'*64})
+        self.assertEqual(len([command for command in self.commands if command[-1].startswith(cache.REPOSITORY+':')]),8)
+        self.assertIn('literal/H_RECOVERY_DEPENDENCIES',result['evidenceSha256'])
+        self.failed.assert_not_called()
+
+    def test_original_literal_is_only_observed_retention_with_exact_immutable_source_identity(self):
+        self.assertEqual(cache.plan_digest(self.original_policy),'084306aa18f7cb49933f075164cd888b89384b678714ea60389ddff5a90989ef')
+        self.assertEqual(self.original_policy['kind'],'OBSERVED_H_RECOVERY_IMAGE_PROTECTIONS_V1')
+        self.assertEqual(self.original_policy['basis'],'READONLY_CACHE_INVENTORY')
+        self.assertIs(self.original_policy['publicationQualified'],False)
+        self.assertEqual(len(self.original_policy['images']),8)
+        self.assertTrue(all(cache.TAG.fullmatch(tag) and cache.IMAGE_ID.fullmatch(image) for tag,image in self.original_policy['images'].items()))
+
+    def test_old_plan_with_missing_h_protections_rejects_before_any_removal(self):
+        result=self.collect();old={**result,'imageIds':[],'evidenceSha256':{}}
+        image=next(iter(self.images.values()));tag=next(iter(self.images))
+        plan=cache.make_plan(self.manifest['commit'],self.previous,set(),[{'id':image,'repoTags':[cache.REPOSITORY+':'+tag]}],old)
+        self.commands.clear()
+        with patch.object(cache,'current',return_value=(self.manifest,self.previous)), \
+                patch.object(cache,'read',side_effect=self.command),patch.object(cache,'verify_remote'), \
+                patch.object(cache,'active_images',return_value=set()):
+            with self.assertRaisesRegex(RuntimeError,'Reviewed image dependencies changed'):cache.apply_plan(plan)
+        self.assertFalse(any(command[:3]==('docker','image','rm') for command in self.commands))
 
 
 class GenericWorkflowResultTests(unittest.TestCase):
