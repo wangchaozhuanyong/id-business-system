@@ -8,6 +8,7 @@ import lzma
 import os
 from pathlib import Path
 import shlex
+import shutil
 import tempfile
 from types import SimpleNamespace
 import unittest
@@ -212,6 +213,110 @@ class StageFilesystemTests(unittest.TestCase):
             with self.subTest(path=path), self.assertRaises(transport.Rejected): self.stage(path, 'invalid')
         self.value['operation'] = 'verify_cleanup'
         with self.assertRaises(transport.Rejected): self.stage()
+
+
+class ContainerSnapshotTests(unittest.TestCase):
+    def setUp(self):
+        self.temporary=ProjectTemporaryDirectory();self.addCleanup(self.temporary.cleanup)
+        self.base=Path(self.temporary.name);self.owner=os.geteuid()
+        self.release=self.base/'releases'/('20261014T000000Z-'+CURRENT[:12])
+        self.release.mkdir(parents=True)
+        manifest=self.release/'release-manifest.json'
+        manifest.write_bytes(transport.canonical({'commit':CURRENT}));manifest.chmod(0o600)
+        (self.base/'current').symlink_to(self.release)
+        self.identifier='f'*64
+        self.row={'id':self.identifier,'image':'sha256:'+'e'*64,'reference':'fixture:reviewed',
+                  'running':False,'status':'exited','started':'2026-10-14T00:00:00Z',
+                  'restartCount':0,'health':None}
+
+    def capture_template(self):
+        def read(arguments,**kwargs):
+            if arguments[1]=='ps':return (self.identifier+'\n').encode()
+            self.template=arguments[3]
+            return transport.canonical(self.row)+b'\n'
+        with patch.object(transport,'command',side_effect=read):
+            return transport.snapshot(CURRENT,self.base,self.owner)
+
+    def test_real_go_missingkey_old_template_fails_and_new_projection_is_safe(self):
+        self.capture_template()
+        old=self.template.replace('{{with index .State "Health"}}{{json .Status}}',
+                                  '{{if .State.Health}}{{json .State.Health.Status}}')
+        raw={'Id':self.identifier,'Image':self.row['image'],'RestartCount':0,
+             'Config':{'Image':self.row['reference'],'Env':['FICTITIOUS_PRIVATE_ENV_MARKER']},
+             'State':{'Running':False,'Status':'exited','StartedAt':self.row['started']}}
+        healthy=copy.deepcopy(raw);healthy['State']['Health']={'Status':'healthy','Log':['FICTITIOUS_PRIVATE_HEALTH_MARKER']}
+        null=copy.deepcopy(raw);null['State']['Health']=None
+        cases=[{'template':old,'value':raw},{'template':self.template,'value':raw},
+               {'template':self.template,'value':null},{'template':self.template,'value':healthy}]
+        # Docker CLI's raw-inspect fallback uses missingkey=error and this JSON function.
+        # https://github.com/docker/cli/blob/v25.0.5/cli/command/inspect/inspector.go
+        program=r'''package main
+import ("bytes"; "encoding/json"; "os"; "strings"; "text/template")
+type Case struct { Template string `json:"template"`; Value any `json:"value"` }
+func jsonValue(value any) string {
+    var output bytes.Buffer
+    encoder := json.NewEncoder(&output); encoder.SetEscapeHTML(false)
+    if err := encoder.Encode(value); err != nil { panic(err) }
+    return strings.TrimSpace(output.String())
+}
+func main() {
+    var cases []Case
+    decoder := json.NewDecoder(os.Stdin); decoder.UseNumber()
+    if err := decoder.Decode(&cases); err != nil { panic(err) }
+    rows := []map[string]any{}
+    for _, item := range cases {
+        formatter, err := template.New("").Funcs(template.FuncMap{"json":jsonValue}).Option("missingkey=error").Parse(item.Template)
+        if err != nil { panic(err) }
+        var output bytes.Buffer
+        err = formatter.Execute(&output, item.Value)
+        safe := ""; if err == nil { safe = output.String() }
+        rows = append(rows, map[string]any{"ok":err == nil, "output":safe,
+            "missingHealth":err != nil && strings.Contains(err.Error(), `map has no entry for key "Health"`)})
+    }
+    if err := json.NewEncoder(os.Stdout).Encode(rows); err != nil { panic(err) }
+}
+'''
+        source=self.base/'inspect-template.go';source.write_text(program)
+        cache=self.base/'go-cache';cache.mkdir(mode=0o700)
+        temporary=self.base/'go-tmp';temporary.mkdir(mode=0o700)
+        environment={**os.environ,'GOTOOLCHAIN':'local','GOPROXY':'off','GOWORK':'off','GO111MODULE':'off',
+                     'GOCACHE':str(cache),'TMPDIR':str(temporary)}
+        go=shutil.which('go') or str(Path.home()/'.local/bin/go')
+        self.assertTrue(Path(go).is_file(),'Existing Go runtime required for actual template regression')
+        process=transport.subprocess.run([go,'run',str(source)],input=transport.canonical(cases),
+            stdout=transport.subprocess.PIPE,stderr=transport.subprocess.PIPE,env=environment,timeout=90)
+        self.assertEqual(process.returncode,0,'Actual std text/template regression failed')
+        rows=json.loads(process.stdout)
+        self.assertFalse(rows[0]['ok']);self.assertTrue(rows[0]['missingHealth'])
+        for row,health in zip(rows[1:],(None,None,'healthy')):
+            self.assertTrue(row['ok']);self.assertFalse(row['missingHealth'])
+            self.assertEqual(json.loads(row['output']),{**self.row,'health':health})
+            self.assertNotIn('FICTITIOUS_PRIVATE',row['output'])
+            self.assertNotIn('Env',row['output']);self.assertNotIn('Log',row['output'])
+
+    def test_snapshot_equality_keeps_all_projected_container_fields(self):
+        first=self.capture_template();second=self.capture_template()
+        self.assertEqual(first,second)
+        self.assertEqual(first['containers'],[self.row])
+        self.row={**self.row,'health':'healthy'}
+        self.assertNotEqual(first,self.capture_template())
+
+    def test_ps_inspect_failures_identify_before_stage_and_create_no_source(self):
+        (self.base/'.staging').mkdir(mode=0o700)
+        lock=self.base/'.deploy.lock';lock.write_bytes(b'lock');lock.chmod(0o600)
+        value=binding();path=transport.RUNNER_PATHS[0]
+        payload=base64.b64encode(lzma.compress(path.encode())).decode()
+        for failed in ('ps','inspect'):
+            def run(arguments,**kwargs):
+                if arguments[1]==failed:
+                    return SimpleNamespace(returncode=1,stdout=b'',stderr=b'FICTITIOUS_PRIVATE_STDERR_MARKER')
+                return SimpleNamespace(returncode=0,stdout=(self.identifier+'\n').encode(),stderr=b'')
+            expected='MAINTENANCE_STAGE_BEFORE_SNAPSHOT_'+failed.upper()+'_FAILED'
+            with self.subTest(failed=failed),patch.object(transport.subprocess,'run',side_effect=run),\
+                 self.assertRaises(transport.Rejected) as error:
+                transport.stage_file(value,path,payload,base=self.base,owner=self.owner)
+            self.assertEqual(str(error.exception),expected)
+            self.assertEqual(list((self.base/'.staging').iterdir()),[])
 
 
 class RemoteWireTests(unittest.TestCase):
