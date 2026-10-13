@@ -243,7 +243,8 @@ class BaselineTests(unittest.TestCase):
             labels = {'org.opencontainers.image.revision': b if name == 'api' else D, 'id-business-v2.source-tree': T,
                       'id-business-v2.admin-pending-projection-sha256': projection['projectionSha256']}
             config = {'Hostname': identifier[:12], 'Image': reference, 'Labels': labels, 'Env': ['OFFLINE_ENV=fixture']}
-            row = {'Id': identifier, 'Image': image, 'Config': config, 'HostConfig': {'NetworkMode': 'offline-network'},
+            row = {'Id': identifier, 'Image': image, 'Config': config,
+                   'HostConfig': {'NetworkMode': 'offline-network', 'Dns': None, 'DnsOptions': None, 'DnsSearch': None},
                    'Mounts': [{'Destination': '/offline-data', 'Source': '/offline-data', 'RW': True}]}
             metadata[identifier] = row
             states[name] = {'containerId': identifier, 'image': image, 'reference': reference, 'status': 'running',
@@ -271,6 +272,7 @@ class BaselineTests(unittest.TestCase):
         authenticated = {'apiImage': images['api'], 'apiSourceCommit': b, 'apiSourceTree': T,
             'hotfixPublicationSha256': a.fingerprint(hotfix), 'hotfixReadbackCommandId': COMMAND,
             'hotfixReadbackInvocationBytesSha256': 'a' * 64, 'services': copy.deepcopy(states), 'restorationBinding': None,
+            'nativeRestartBinding': None,
             'historicalB': {'release': str(releases['B']), 'manifestSha256': a.digest(b_raw), 'recordSha256': a.digest(b_record),
                 'proofSha256': a.digest(b_proof), 'nativeReadbackCommandId': COMMAND, 'nativeInvocationSha256': 'b' * 64, 'authenticated': True}}
         def docker(*args, **kwargs):
@@ -291,7 +293,10 @@ class BaselineTests(unittest.TestCase):
         admin = SimpleNamespace(BASELINE=b, BASELINE_MANIFEST_SHA256=a.digest(b_raw), ORIGIN_MARKERS=tuple(origin),
             source_projection=lambda *_: ({}, {}, projection, runtime, None), readback=Mock(side_effect=AssertionError('cold Admin reader must not assert hotfix live API')))
         helper = SimpleNamespace(authenticate_hotfix=lambda *_: copy.deepcopy(authenticated))
-        contract = {'adminPredecessorRelease': str(releases['D']), 'adminPredecessorManifestSha256': a.digest(d_raw)}
+        contract = {'adminPredecessorRelease': str(releases['D']), 'adminPredecessorManifestSha256': a.digest(d_raw),
+                    'services': copy.deepcopy(states)}
+        self.fixture_states, self.fixture_metadata, self.fixture_authenticated = states, metadata, authenticated
+        self.fixture_contract = contract
         controls = [patch.object(a, 'load', return_value=helper), patch.object(a, 'BASELINE_CONTRACT', contract),
                     patch.object(a, 'migration_database_state', return_value=migration_state('PENDING')),
                     patch.object(a, 'grant_state', return_value={'newTablePrivileges': [], 'schemaGrantsSha256': 'c' * 64, 'preservedGrantsSha256': 'd' * 64})]
@@ -315,6 +320,46 @@ class BaselineTests(unittest.TestCase):
         with ExitStack() as stack:
             for control in controls: stack.enter_context(control)
             with self.assertRaisesRegex(RuntimeError, 'ADMIN_ANCESTOR_CHANGED'): a.baseline(d, admin, scope, D)
+
+    def restart_fixture(self):
+        result = self.fixture()
+        for state in self.fixture_states.values():
+            row = self.fixture_metadata[state['containerId']]
+            for name in ('Dns', 'DnsOptions', 'DnsSearch'):
+                row['HostConfig'][name] = []
+            state['configurationSha256'] = a.fingerprint({n: row[n] for n in ('Config', 'HostConfig', 'Mounts')})
+            state['startedAtSha256'] = '5' * 64
+        self.fixture_authenticated['services'] = copy.deepcopy(self.fixture_states)
+        self.fixture_authenticated['nativeRestartBinding'] = {'authenticated': True,
+            'scope': 'UNPUBLISHED_COMPONENT_SAME_CONTAINER_RESTART',
+            'servicesSha256': a.fingerprint(self.fixture_states), 'migrationState': migration_state('PENDING')}
+        return result
+
+    def test_native_restart_uses_authenticated_current_states_and_retains_cold_ledger(self):
+        d, admin, scope, controls, _releases, _current = self.restart_fixture()
+        with ExitStack() as stack:
+            for control in controls: stack.enter_context(control)
+            _directory, _manifest, evidence = a.baseline(d, admin, scope, D)
+        self.assertEqual(evidence['services'], self.fixture_states)
+        self.assertIsNone(evidence['restorationBinding'])
+        self.assertEqual(evidence['migrationState']['status'], 'PENDING')
+        self.assertNotEqual(evidence['services'], self.fixture_contract['services'])
+
+    def test_restart_binding_cannot_mix_restoration_or_apply_migration(self):
+        for variant in ('restoration', 'state', 'applied'):
+            d, admin, scope, controls, _releases, _current = self.restart_fixture()
+            if variant == 'restoration':
+                self.fixture_authenticated['restorationBinding'] = {'authenticated': True}
+            elif variant == 'state':
+                self.fixture_authenticated['nativeRestartBinding']['servicesSha256'] = '0' * 64
+            with self.subTest(variant=variant), ExitStack() as stack:
+                for control in controls: stack.enter_context(control)
+                if variant == 'applied':
+                    stack.enter_context(patch.object(a, 'migration_database_state', return_value=migration_state('APPLIED')))
+                with self.assertRaisesRegex(RuntimeError, 'RESTART_AUTHENTICATION_INVALID|RESTART_MIGRATION_STATE_CHANGED'):
+                    a.baseline(d, admin, scope, D)
+            # Each variant requires independent immutable ancestry fixtures.
+            self.tmp.cleanup(); self.setUp()
 
 
 class PreservationTests(unittest.TestCase):
@@ -821,6 +866,57 @@ class FiniteMigrationTests(unittest.TestCase):
         explicit = model('a' * 64, hostname='fixed-compose-host')
         self.assertFalse(explicit['automaticHostname'])
         self.assertEqual(explicit, model('b' * 64, hostname='fixed-compose-host'))
+
+
+class RestartConfigurationTests(unittest.TestCase):
+    def body(self):
+        return {'Config': {'Hostname': 'a' * 12, 'Env': ['A=one', 'B=two'], 'OnBuild': None},
+            'HostConfig': {'Dns': None, 'DnsOptions': None, 'DnsSearch': None,
+                           'Privileged': False, 'UnknownFutureField': []},
+            'Mounts': [{'Destination': '/data', 'Source': '/volume', 'RW': True}]}
+
+    def test_only_existing_empty_dns_slices_are_canonical_and_input_is_immutable(self):
+        body = self.body(); before = copy.deepcopy(body)
+        empty = copy.deepcopy(body)
+        for key in ('Dns', 'DnsOptions', 'DnsSearch'): empty['HostConfig'][key] = []
+        self.assertEqual(a.canonical_dns_configuration(body), a.canonical_dns_configuration(empty))
+        self.assertEqual(body, before)
+        missing = self.body(); del missing['HostConfig']['Dns']
+        self.assertNotIn('Dns', a.canonical_dns_configuration(missing)['HostConfig'])
+        for key in ('Dns', 'DnsOptions', 'DnsSearch'):
+            nonempty = self.body(); nonempty['HostConfig'][key] = ['192.0.2.1']
+            self.assertEqual(a.canonical_dns_configuration(nonempty)['HostConfig'][key], ['192.0.2.1'])
+            self.assertNotEqual(a.fingerprint(a.canonical_dns_configuration(nonempty)), a.fingerprint(body))
+
+    def test_environment_mounts_permissions_and_unknown_fields_never_normalize(self):
+        original = self.body()
+        variants = []
+        for section, field, value in (('Config', 'Env', ['B=two', 'A=one']),
+                ('Config', 'OnBuild', []), ('HostConfig', 'Privileged', True),
+                ('HostConfig', 'UnknownFutureField', None)):
+            body = self.body(); body[section][field] = value; variants.append(body)
+        mount = self.body(); mount['Mounts'][0]['RW'] = False; variants.append(mount)
+        for body in variants:
+            self.assertNotEqual(a.fingerprint(a.canonical_dns_configuration(body)), a.fingerprint(original))
+        for value in (False, {}, [None], '[]'):
+            body = self.body(); body['HostConfig']['Dns'] = value
+            with self.assertRaisesRegex(RuntimeError, 'DNS_CONFIGURATION_INVALID'):
+                a.canonical_dns_configuration(body)
+
+    def test_raw_configuration_digest_identity_and_only_automatic_hostname_remain_required(self):
+        body = self.body()
+        for key in ('Dns', 'DnsOptions', 'DnsSearch'): body['HostConfig'][key] = []
+        metadata = {'Id': 'a' * 64, 'Image': 'sha256:' + 'b' * 64, **body}
+        d = SimpleNamespace(run=lambda *_: json.dumps([metadata]))
+        state = {'containerId': metadata['Id'], 'image': metadata['Image'], 'configurationSha256': a.fingerprint(body)}
+        model = a.configuration_model(d, state)
+        self.assertTrue(model['automaticHostname'])
+        for key, value in (('configurationSha256', '0' * 64), ('containerId', 'c' * 64), ('image', 'sha256:' + 'c' * 64)):
+            with self.subTest(key=key), self.assertRaises(RuntimeError):
+                a.configuration_model(d, {**state, key: value})
+        metadata['Config']['Hostname'] = 'fixed-host'
+        state['configurationSha256'] = a.fingerprint({n: metadata[n] for n in ('Config', 'HostConfig', 'Mounts')})
+        self.assertFalse(a.configuration_model(d, state)['automaticHostname'])
 
 
 if __name__ == '__main__':
