@@ -1,5 +1,6 @@
 """Offline finite-source regression; no production reader or business action."""
 import copy
+import ast
 import importlib.util
 from pathlib import Path
 import subprocess
@@ -88,9 +89,16 @@ class FiniteProjectionTests(unittest.TestCase):
 
     def test_original_source_and_history_seals_remain_separate(self):
         original = load('unpublished-component-successor.py')
-        self.assertEqual(original.APPLICATION_SOURCE, 'a019e794fd6b3313fa312ad5a08fa4559f876d18')
-        self.assertEqual(original.APPROVED_APPLICATION_INPUT_SHA256,
+        historical = ast.parse(subprocess.check_output(['git', 'show',
+            'dbec7e0b08c989b9b4e7ba02ef5eae2bfc728746:scripts/production-release/unpublished-component-successor.py'], cwd=ROOT))
+        def frozen(name):
+            return next(ast.literal_eval(node.value) for node in historical.body
+                if isinstance(node, ast.Assign) and any(isinstance(target, ast.Name)
+                    and target.id == name for target in node.targets))
+        self.assertEqual(frozen('APPLICATION_SOURCE'), 'a019e794fd6b3313fa312ad5a08fa4559f876d18')
+        self.assertEqual(frozen('APPROVED_APPLICATION_INPUT_SHA256'),
                          '4b255d3214fed5825fe98e8fb337feba51c7247f63e38a573003d28c3e84b126')
+        self.assertNotEqual(original.APPLICATION_SOURCE, frozen('APPLICATION_SOURCE'))
         self.assertNotEqual(original.SCOPE, self.core.SCOPE)
         self.assertEqual(original.BASELINE_CONTRACT, self.core.BASELINE_CONTRACT)
         self.assertEqual(original.MIGRATION_IDENTITY, self.core.MIGRATION_IDENTITY)

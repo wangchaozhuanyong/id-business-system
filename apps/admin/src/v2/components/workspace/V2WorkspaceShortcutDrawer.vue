@@ -88,7 +88,7 @@
         loading-title="正在读取快捷网址"
         refreshing-title="正在更新快捷网址"
         empty-title="还没有快捷网址"
-        empty-message="添加后可从左下角工作区快速打开。"
+        empty-message="添加后可从右侧个人工具快速打开。"
         error-title="快捷网址加载失败"
         @retry="refresh"
       >

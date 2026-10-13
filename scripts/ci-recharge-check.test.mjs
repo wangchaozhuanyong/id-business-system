@@ -23,14 +23,58 @@ const gates = [
   'check:v2-concurrency-standard'
 ];
 
-function recordGuardCommands(mode, paths, part = 'guards') {
+test('Admin successor diagnostics always retain their offline controls', () => {
+  for (const part of ['guards', 'release-controls']) {
+    for (const changed of [
+      'scripts/production-release/admin-successor-diagnostic.py',
+      'scripts/production-release/admin-successor-diagnostic.test.py',
+      'scripts/production-release/admin-pending-online-release.py',
+      '.github/workflows/production-release.yml'
+    ]) {
+      const calls = recordGuardCommands('ci-only', [changed], part);
+      assert.equal(
+        calls.filter(
+          (call) =>
+            call.join(' ') ===
+            'python3 -B scripts/production-release/admin-successor-diagnostic.test.py'
+        ).length,
+        1,
+        `${part}: ${changed}`
+      );
+      assert.ok(
+        calls.every(
+          (call) => !call.includes('scripts/production-release/admin-successor-diagnostic.py')
+        )
+      );
+    }
+  }
+});
+
+function recordGuardCommands(
+  mode,
+  paths,
+  part = 'guards',
+  { cloud = false, resume = false, repository = '', event = '' } = {}
+) {
   // Run the real dispatcher with process execution replaced before its named import resolves.
   // No Git command, nested test, database command or business operation is executed.
   const script = `
     import childProcess from 'node:child_process';
-    import { syncBuiltinESMExports } from 'node:module';
+    import { registerHooks, syncBuiltinESMExports } from 'node:module';
     const paths = JSON.parse(process.env.GUARD_TEST_PATHS);
     const calls = [];
+    globalThis.guardTestCalls = calls;
+    const scopeUrl = new URL('./scripts/ci-recharge-scope.mjs', import.meta.url).href;
+    registerHooks({resolve(specifier, context, nextResolve) {
+      if (specifier === './ci-recharge-scope.mjs' && context.parentURL?.endsWith('/scripts/ci-recharge-check.mjs')) {
+        const source = 'export * from ' + JSON.stringify(scopeUrl) + ';' +
+          'export function canResumeCombinedGuard(base) {' +
+          'globalThis.guardTestCalls.push(["resume-helper", base]);' +
+          'return process.env.GUARD_TEST_RESUME === "true"; }';
+        return {url: 'data:text/javascript,' + encodeURIComponent(source), shortCircuit: true};
+      }
+      return nextResolve(specifier, context);
+    }});
     childProcess.execFileSync = (file, args) => {
       if (file === 'git') return paths.join('\\n');
       calls.push([file, ...args]);
@@ -48,12 +92,116 @@ function recordGuardCommands(mode, paths, part = 'guards') {
       env: {
         ...process.env,
         CHECK_MODE: mode,
+        GITHUB_ACTIONS: cloud ? 'true' : '',
+        GITHUB_REPOSITORY: repository,
+        GITHUB_EVENT_NAME: event,
+        GUARD_TEST_RESUME: resume ? 'true' : '',
         GUARD_TEST_PART: part,
         GUARD_TEST_PATHS: JSON.stringify(paths)
       }
     })
   );
 }
+
+test('verified combined guard continuation skips only its passed prefix and retains all actual later commands', () => {
+  const paths = [
+    'apps/admin/src/v2/components/workspace/V2WorkspaceDock.vue',
+    'scripts/production-release/unpublished-component-successor.py',
+    'scripts/acceptance-v2-workspace-dock.mjs',
+    'scripts/acceptance-v2-recharge-employee-concurrency.mjs',
+    'scripts/production-release/recharge-flow-entry.test.mjs',
+    'scripts/production-release/maintain-image-cache.py',
+    'scripts/backup-retention-protection.py',
+    'scripts/doctor.mjs',
+    '.github/workflows/production-release.yml'
+  ];
+  const ordinary = recordGuardCommands('admin', paths);
+  const resumed = recordGuardCommands('admin', paths, 'guards', {
+    cloud: true,
+    resume: true,
+    repository: 'wangchaozhuanyong/id-business-system',
+    event: 'pull_request'
+  });
+  assert.deepEqual(resumed[0], ['resume-helper', 'a'.repeat(40)]);
+  const pureNodeList = ordinary.find((call) =>
+    call.includes('scripts/ci-recharge-precision.test.mjs')
+  );
+  assert.ok(pureNodeList);
+  assert.ok(resumed.some((call) => JSON.stringify(call) === JSON.stringify(pureNodeList)));
+  const suffixStart = (calls) =>
+    calls.findIndex((call) =>
+      call.includes('scripts/production-release/recharge-flow-successor.test.py')
+    );
+  assert.ok(suffixStart(ordinary) > 0);
+  assert.ok(suffixStart(resumed) > 0);
+  assert.deepEqual(resumed.slice(suffixStart(resumed)), ordinary.slice(suffixStart(ordinary)));
+  for (const oldPrefix of [
+    'test:native-runtime',
+    'scripts/production-release/api-admin-scope.test.py',
+    'scripts/production-release/online-recharge-scope.test.py',
+    'scripts/production-release/admin-pending-online-release.test.py',
+    'scripts/production-release/unpublished-component-successor.test.py'
+  ]) {
+    assert.ok(
+      ordinary.some((call) => call.includes(oldPrefix)),
+      oldPrefix
+    );
+    assert.ok(!resumed.some((call) => call.includes(oldPrefix)), oldPrefix);
+  }
+  for (const later of [
+    'scripts/acceptance-v2-recharge-employee-concurrency.test.mjs',
+    'scripts/production-release/maintain-image-cache.test.py',
+    'scripts/backup-retention-protection.test.py',
+    'check:admin-ui',
+    'check:v2-loading-standard',
+    'check:v2-module-architecture'
+  ])
+    assert.ok(
+      resumed.some((call) => call.includes(later)),
+      later
+    );
+  for (const context of [
+    { resume: true },
+    { cloud: true, resume: true, repository: 'foreign/repository', event: 'pull_request' },
+    { cloud: true, resume: true, repository: 'wangchaozhuanyong/id-business-system', event: 'push' }
+  ])
+    assert.deepEqual(recordGuardCommands('admin', paths, 'guards', context), ordinary);
+  const rejectedProof = recordGuardCommands('admin', paths, 'guards', {
+    cloud: true,
+    repository: 'wangchaozhuanyong/id-business-system',
+    event: 'pull_request'
+  });
+  assert.deepEqual(rejectedProof.slice(1), ordinary);
+});
+
+test('combined component migration runs only in cloud and retains the owned database entry', () => {
+  const paths = [
+    'scripts/production-release/unpublished-component-successor.py',
+    'scripts/acceptance-v2-workspace-dock.mjs',
+    'scripts/acceptance-v2-recharge-employee-concurrency.mjs'
+  ];
+  assert.throws(() => recordGuardCommands('admin', paths, 'migration'), /组合发布数据库验收/);
+  const calls = recordGuardCommands('admin', paths, 'migration', { cloud: true });
+  assert.deepEqual(calls.at(-1), [
+    'node',
+    'scripts/acceptance-v2-recharge-employee-concurrency.mjs',
+    '--runtime=docker',
+    '--combined-release'
+  ]);
+  assert.equal(calls.filter((call) => call.includes('--combined-release')).length, 1);
+  assert.ok(
+    !calls.some((call) => call.includes('scripts/acceptance-v2-registration-mirror-mysql.mjs'))
+  );
+  const guardCalls = recordGuardCommands('admin', paths, 'guards');
+  assert.equal(
+    guardCalls.filter(
+      (call) =>
+        call.join(' ') ===
+        'node --test scripts/acceptance-v2-recharge-employee-concurrency.test.mjs'
+    ).length,
+    1
+  );
+});
 
 function recordBankSecurityCommands(drift = '') {
   // Source-byte/hash enforcement is tested with actual sealed bytes in scope
@@ -195,7 +343,12 @@ test('unpublished successor controls execute narrow suites once in either dispat
       'scripts/production-release/unpublished-component-successor-readonly.test.py'
     ],
     ['node', '--test', 'scripts/production-release/unpublished-component-entry.test.mjs'],
-    ['python3', '-B', 'scripts/production-release/unpublished-component-runtime-diagnostic.test.py']
+    [
+      'python3',
+      '-B',
+      'scripts/production-release/unpublished-component-runtime-diagnostic.test.py'
+    ],
+    ['python3', '-B', 'scripts/production-release/unified-component-source.test.py']
   ];
   for (const part of ['guards', 'release-controls']) {
     for (const paths of [

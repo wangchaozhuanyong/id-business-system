@@ -1500,7 +1500,7 @@ function assertLayoutStable(samples, label) {
       for (const [columnIndex, columnWidth] of table.headerWidths.entries()) {
         assert.ok(
           Math.abs(columnWidth - expected.headerWidths[columnIndex]) <= 1,
-          `${label} ${checkpoint} ${table.identity} 第 ${columnIndex + 1} 列宽漂移超过 1px`
+          `${label} ${checkpoint} ${table.identity} 第 ${columnIndex + 1} 列宽漂移超过 1px：${columnWidth} → ${expected.headerWidths[columnIndex]}`
         );
       }
     }
@@ -1635,6 +1635,13 @@ async function installApiMocks(page, user, unexpectedRequests, tablePreferences)
       url.pathname.endsWith('/api/id-business-v2/table-preferences')
     ) {
       await fulfillSuccess(route, { items: [...tablePreferences.values()] });
+      return;
+    }
+    if (
+      request.method() === 'GET' &&
+      url.pathname.endsWith('/api/id-business-v2/workspace-shortcuts')
+    ) {
+      await fulfillSuccess(route, { items: [] });
       return;
     }
     const tablePreferenceMatch = url.pathname.match(

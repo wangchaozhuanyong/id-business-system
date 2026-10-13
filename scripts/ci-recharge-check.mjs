@@ -15,11 +15,13 @@ import {
   hasAppleMailboxScope,
   hasRegistrationMirrorScope,
   hasRechargeConnectionMigrationScope,
+  hasCombinedComponentScope,
   onlineRechargeRecoveryPolicy,
   productionDatabaseAccessHelper,
   productionDatabaseAccessTest,
   productionDatabaseAccessAcceptance,
   hasBankCardDeletePolicyProof,
+  canResumeCombinedGuard,
   readProductionDatabaseAccessSnapshot
 } from './ci-recharge-scope.mjs';
 
@@ -31,6 +33,12 @@ const changed = execFileSync('git', ['diff', '--name-only', base, 'HEAD'], { enc
   .trim()
   .split('\n')
   .filter(Boolean);
+const resumeCombinedGuardPrefix =
+  part === 'guards' &&
+  process.env.GITHUB_ACTIONS === 'true' &&
+  process.env.GITHUB_REPOSITORY === 'wangchaozhuanyong/id-business-system' &&
+  process.env.GITHUB_EVENT_NAME === 'pull_request' &&
+  canResumeCombinedGuard(base);
 const shared = () => npm('run', 'build', '--workspace', '@apple-business/shared');
 const onlineEngine = () => {
   const directory = 'apps/api/src/id-business-v2/online-recharge/engine/upstream';
@@ -91,6 +99,7 @@ const unpublishedComponentSuccessorControls = () => {
       '-B',
       'scripts/production-release/unpublished-component-runtime-diagnostic.test.py'
     ]);
+    run('python3', ['-B', 'scripts/production-release/unified-component-source.test.py']);
   }
 };
 const ownedMysqlTestControls = () => {
@@ -100,6 +109,11 @@ const ownedMysqlTestControls = () => {
     hasRegistrationMirrorScope(changed)
   )
     run('node', ['--test', 'scripts/lib/owned-mysql-test-instance.test.mjs']);
+  if (
+    changed.includes('scripts/acceptance-v2-recharge-employee-concurrency.test.mjs') ||
+    hasCombinedComponentScope(changed)
+  )
+    run('node', ['--test', 'scripts/acceptance-v2-recharge-employee-concurrency.test.mjs']);
 };
 const rechargeFlowSuccessorControls = () => {
   if (
@@ -295,8 +309,19 @@ const adminPendingReleaseControls = () => {
         'scripts/ci-recharge-check.mjs'
       ].includes(path)
     )
-  )
+  ) {
     run('python3', ['-B', 'scripts/production-release/admin-pending-online-release.test.py']);
+    run('python3', ['-B', 'scripts/production-release/admin-successor-diagnostic.test.py']);
+  } else if (
+    changed.some((path) =>
+      [
+        'scripts/production-release/admin-successor-diagnostic.py',
+        'scripts/production-release/admin-successor-diagnostic.test.py'
+      ].includes(path)
+    )
+  ) {
+    run('python3', ['-B', 'scripts/production-release/admin-successor-diagnostic.test.py']);
+  }
 };
 
 if (part === 'guards') {
@@ -318,6 +343,8 @@ if (part === 'guards') {
     'scripts/ci-recharge-release.test.mjs',
     'scripts/admin-layout-rules.test.mjs'
   ]);
+}
+if (part === 'guards' && !resumeCombinedGuardPrefix) {
   if (
     changed.some(
       (path) =>
@@ -395,6 +422,8 @@ if (part === 'guards') {
   }
   adminPendingReleaseControls();
   unpublishedComponentSuccessorControls();
+}
+if (part === 'guards') {
   rechargeFlowSuccessorControls();
   ownedMysqlTestControls();
   releaseMaintenanceControls();
@@ -619,6 +648,9 @@ if (part === 'guards') {
   if (changed.some((p) => p.startsWith('apps/api/src/id-business-v2/online-recharge/')))
     onlineEngine();
 } else if (part === 'migration') {
+  const combined = hasCombinedComponentScope(changed);
+  if (combined && process.env.GITHUB_ACTIONS !== 'true')
+    throw new Error('组合发布数据库验收只能在 GitHub Actions 隔离环境执行');
   const connections = hasRechargeConnectionMigrationScope(changed);
   const mirror = hasRegistrationMirrorScope(changed);
   if (connections || mirror) {
@@ -627,7 +659,11 @@ if (part === 'guards') {
     shared();
     npm('run', 'build', '--workspace', '@apple-business/api');
     if (connections)
-      run('node', ['scripts/acceptance-v2-recharge-employee-concurrency.mjs', '--runtime=docker']);
+      run('node', [
+        'scripts/acceptance-v2-recharge-employee-concurrency.mjs',
+        '--runtime=docker',
+        ...(combined ? ['--combined-release'] : [])
+      ]);
     if (mirror) {
       npm('run', 'auto-registration:setup');
       run('node', [

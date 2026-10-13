@@ -302,15 +302,18 @@ test('read-only recharge operation never builds, pushes or deploys and evidence 
 });
 
 test('recharge extension preserves all previous workflow inputs, environments and routes', () => {
-  const baseline = loadYaml(
-    execFileSync('git', ['show', `42e8eab5ef696159c7cd6f91204213011c0cb3be:${workflowPath}`], {
-      cwd: root,
-      encoding: 'utf8'
-    })
-  );
-  const current = workflow();
-  current.on.workflow_dispatch.inputs.operation.options =
-    current.on.workflow_dispatch.inputs.operation.options.filter(
+  const frozenWorkflow = (commit) =>
+    loadYaml(
+      execFileSync('git', ['show', `${commit}:${workflowPath}`], {
+        cwd: root,
+        encoding: 'utf8'
+      })
+    );
+  const baseline = frozenWorkflow('42e8eab5ef696159c7cd6f91204213011c0cb3be');
+  const reviewedRecharge = frozenWorkflow('957afa4e7d9c776b0109bf7f217150fd3c545e04');
+  const rechargeOnly = structuredClone(reviewedRecharge);
+  rechargeOnly.on.workflow_dispatch.inputs.operation.options =
+    rechargeOnly.on.workflow_dispatch.inputs.operation.options.filter(
       (operation) => !['verify_recharge_flow', 'release_recharge_flow'].includes(operation)
     );
   const added = new Set([
@@ -318,9 +321,62 @@ test('recharge extension preserves all previous workflow inputs, environments an
     'Independently read back recharge flow images and preserved services',
     'Save recharge flow build and independent runtime evidence'
   ]);
-  current.jobs.release.steps = current.jobs.release.steps.filter((step) => !added.has(step.name));
-  for (const step of current.jobs.release.steps)
+  rechargeOnly.jobs.release.steps = rechargeOnly.jobs.release.steps.filter(
+    (step) => !added.has(step.name)
+  );
+  for (const step of rechargeOnly.jobs.release.steps)
     if (typeof step.if === 'string')
       step.if = step.if.replace("inputs.operation == 'release_recharge_flow' || ", '');
-  assert.deepEqual(current, baseline);
+  assert.deepEqual(rechargeOnly, baseline);
+
+  // Bind later Admin repairs to their exact delta; every other field and step stays frozen.
+  const expected = structuredClone(reviewedRecharge);
+  const steps = expected.jobs.release.steps;
+  const diagnosticIndex = steps.findIndex(
+    (step) => step.name === 'Read production release diagnostics'
+  );
+  assert.ok(diagnosticIndex >= 0);
+  const adminBaseline = '60e164b75d1eedaab440c17139bf9ba55de08c61';
+  assert.equal(steps[diagnosticIndex].if, "inputs.operation == 'verify_access'");
+  steps[diagnosticIndex].if += ` && inputs.expected_current != '${adminBaseline}'`;
+  steps.splice(
+    diagnosticIndex,
+    0,
+    {
+      name: 'Read finite Admin successor baseline facts',
+      if: `inputs.operation == 'verify_access' && inputs.expected_current == '${adminBaseline}'`,
+      run: 'python3 -B scripts/production-release/admin-successor-diagnostic.py'
+    },
+    {
+      name: 'Save finite Admin successor read-only evidence',
+      if: `always() && inputs.operation == 'verify_access' && inputs.expected_current == '${adminBaseline}'`,
+      uses: 'actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02',
+      with: {
+        name: 'admin-successor-diagnostic-${{ github.run_id }}-${{ github.run_attempt }}',
+        path: '.deploy/production-release/admin-successor-diagnostic-*.json',
+        'if-no-files-found': 'warn',
+        'include-hidden-files': true,
+        'retention-days': 14
+      }
+    }
+  );
+  const readback = steps.find(
+    (step) => step.name === 'Independently read back Admin publication and preserved services'
+  );
+  assert.ok(readback);
+  const apiOriginSelection = [
+    "    expected_api_origin = proof['projection'].get('apiComponentBaseline')",
+    "    if expected_api_origin is None and os.environ['EXPECTED_CURRENT'] == '31d2c6885a45817cd40d23fce8d6145bc9f18af2':",
+    "        expected_api_origin = '31d2c6885a45817cd40d23fce8d6145bc9f18af2'",
+    "    if expected_api_origin != '31d2c6885a45817cd40d23fce8d6145bc9f18af2':",
+    "        raise RuntimeError('Admin readback API origin unavailable')",
+    ''
+  ].join('\n');
+  const oldApiOrigin = "receipt['apiComponentBaseline'] != os.environ['EXPECTED_CURRENT']";
+  assert.equal(readback.run.split('    staged = ').length, 2);
+  assert.equal(readback.run.split(oldApiOrigin).length, 2);
+  readback.run = readback.run
+    .replace('    staged = ', apiOriginSelection + '    staged = ')
+    .replace(oldApiOrigin, "receipt['apiComponentBaseline'] != expected_api_origin");
+  assert.deepEqual(workflow(), expected);
 });

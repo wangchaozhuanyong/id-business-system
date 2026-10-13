@@ -2,6 +2,7 @@ import '@/v2/styles/base.css';
 import '@/v2/styles/v2.css';
 import { createApp } from 'vue';
 import { createPinia } from 'pinia';
+import { createMemoryHistory, createRouter } from 'vue-router';
 import { V2_GOOGLE_SHEETS_REPORT_NAMES } from '@apple-business/shared';
 import { sessionCoordinator, transitionSessionState } from '@/auth/sessionCoordinator';
 import { v2TableColumnVisibility } from '@/v2/directives/tableColumnVisibility';
@@ -9,16 +10,36 @@ import { idBusinessV2WorkspaceApi } from '@/v2/api/workspace';
 import { applyV2Theme, type V2Theme } from '@/v2/theme';
 import V2WorkspaceDesignFixture from './V2WorkspaceDesignFixture.vue';
 
-const requestedTheme = new URLSearchParams(window.location.search).get('theme');
+const fixtureParams = new URLSearchParams(window.location.search);
+const requestedTheme = fixtureParams.get('theme');
 const theme: V2Theme = requestedTheme === 'dark' ? 'dark' : 'light';
 
 applyV2Theme(theme);
-idBusinessV2WorkspaceApi.list = async () => ({ items: [] });
+const fixtureTime = '2026-10-13T08:00:00.000Z';
+idBusinessV2WorkspaceApi.list = async () => ({
+  items:
+    fixtureParams.get('shortcuts') === 'empty'
+      ? []
+      : ['IP 查询', '常用服务后台', '虚拟卡资料', '代充信息网', '装修网站后台', '购物网站后台'].map(
+          (name, index) => ({
+            id: `workspace-shortcut-fixture-${index + 1}`,
+            name,
+            url: `https://example.com/workspace-fixture/${index + 1}`,
+            sortOrder: index,
+            createdAt: fixtureTime,
+            updatedAt: fixtureTime
+          })
+        )
+});
 const quickActionsFixture = new URLSearchParams(window.location.search).get('quick-actions');
+const requestedQuickActionCount = Number(fixtureParams.get('count') || 13);
+const quickActionCount = Number.isInteger(requestedQuickActionCount)
+  ? Math.min(100, Math.max(1, requestedQuickActionCount))
+  : 13;
 let quickActions =
   quickActionsFixture === 'empty'
     ? []
-    : Array.from({ length: 13 }, (_, index) => ({
+    : Array.from({ length: quickActionCount }, (_, index) => ({
         id: `quick-action-fixture-${index + 1}`,
         title:
           quickActionsFixture === 'long' && index === 12
@@ -54,10 +75,25 @@ let quickActions =
         updatedAt: new Date(Date.UTC(2026, 8, 30, 10, index)).toISOString()
       }));
 let hasCustomQuickActionOrder = false;
-idBusinessV2WorkspaceApi.listQuickActions = async () => ({
-  items: [...quickActions],
-  hasCustomOrder: hasCustomQuickActionOrder
-});
+let quickActionReads = 0;
+let quickActionSaveAttempts = 0;
+const fixtureDelay = () =>
+  new Promise<void>((resolve) =>
+    window.setTimeout(resolve, fixtureParams.get('save') === 'slow' ? 600 : 0)
+  );
+const beforeQuickActionSave = async () => {
+  await fixtureDelay();
+  if (fixtureParams.get('save') === 'fail-once' && quickActionSaveAttempts++ === 0)
+    throw new Error('验收模拟保存失败，请重试');
+};
+idBusinessV2WorkspaceApi.listQuickActions = async () => {
+  quickActionReads += 1;
+  if (fixtureParams.get('read') === 'fail-once' && quickActionReads === 1)
+    throw new Error('验收模拟读取失败，请重试');
+  if (fixtureParams.get('read') === 'refresh-error' && quickActionReads === 2)
+    throw new Error('验收模拟刷新失败，请重试');
+  return { items: [...quickActions], hasCustomOrder: hasCustomQuickActionOrder };
+};
 idBusinessV2WorkspaceApi.reorderQuickActions = async (input) => {
   if (!(input.initializeOnly && hasCustomQuickActionOrder)) {
     if (quickActions.some((item, index) => item.id !== input.expectedQuickActionIds[index]))
@@ -72,6 +108,7 @@ idBusinessV2WorkspaceApi.reorderQuickActions = async (input) => {
   return { items: [...quickActions], hasCustomOrder: hasCustomQuickActionOrder };
 };
 idBusinessV2WorkspaceApi.createQuickAction = async (input) => {
+  await beforeQuickActionSave();
   const item = {
     id: `quick-action-fixture-${quickActions.length + 1}`,
     ...input,
@@ -82,6 +119,7 @@ idBusinessV2WorkspaceApi.createQuickAction = async (input) => {
   return item;
 };
 idBusinessV2WorkspaceApi.updateQuickAction = async (id, input) => {
+  await beforeQuickActionSave();
   const old = quickActions.find((item) => item.id === id);
   if (!old) throw new Error('记录不存在');
   const item = { ...old, ...input, updatedAt: new Date().toISOString() };
@@ -212,5 +250,15 @@ transitionSessionState({
 });
 const app = createApp(V2WorkspaceDesignFixture);
 app.use(createPinia());
+const router = createRouter({
+  history: createMemoryHistory(),
+  routes: [
+    { path: '/orders', component: { render: () => null } },
+    { path: '/accounts', component: { render: () => null } }
+  ]
+});
+app.use(router);
 app.directive('v2-column-visibility', v2TableColumnVisibility);
+await router.push('/orders');
+await router.isReady();
 app.mount('#app');

@@ -2208,10 +2208,12 @@ test('actual full-mode release controls select each missing suite once without r
     'python3 -B scripts/production-release/formal-runtime-package.test.py',
     ...onlineReleaseRegressionCommands,
     'python3 -B scripts/production-release/admin-pending-online-release.test.py',
+    'python3 -B scripts/production-release/admin-successor-diagnostic.test.py',
     'python3 -B scripts/production-release/unpublished-component-successor.test.py',
     'python3 -B scripts/production-release/unpublished-component-successor-readonly.test.py',
     'node --test scripts/production-release/unpublished-component-entry.test.mjs',
     'python3 -B scripts/production-release/unpublished-component-runtime-diagnostic.test.py',
+    'python3 -B scripts/production-release/unified-component-source.test.py',
     'python3 -B scripts/production-release/recharge-flow-successor.test.py',
     'python3 -B scripts/production-release/recharge-flow-successor-projection.test.py',
     'python3 -B scripts/production-release/recharge-flow-successor-readonly.test.py',
@@ -2282,7 +2284,10 @@ test('actual full-mode release controls preserve exact maintenance selection and
           ]),
       ...(path === 'scripts/ci-recharge-check.mjs' ? onlineReleaseRegressionCommands : []),
       ...(path === 'scripts/ci-recharge-check.mjs'
-        ? ['python3 -B scripts/production-release/admin-pending-online-release.test.py']
+        ? [
+            'python3 -B scripts/production-release/admin-pending-online-release.test.py',
+            'python3 -B scripts/production-release/admin-successor-diagnostic.test.py'
+          ]
         : []),
       'node --test scripts/v2-order-archive-release-policy.test.mjs',
       ...(path === 'scripts/ci-recharge-check.mjs'

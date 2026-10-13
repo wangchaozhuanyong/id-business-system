@@ -108,7 +108,9 @@ export function useV2TableContentWidths(
     const root = shell();
     if (!root) return;
     resizeObserver = new ResizeObserver(() => {
-      if (root.clientWidth !== containerWidth) schedule();
+      // ResizeObserver runs before paint. Update the allocation in this delivery
+      // so the new shell width and column widths appear in the same frame.
+      if (root.clientWidth !== containerWidth) measure();
     });
     resizeObserver.observe(root);
     contentObserver = new MutationObserver((records) => {

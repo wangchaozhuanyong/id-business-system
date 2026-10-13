@@ -284,6 +284,7 @@ jobs:
           CHECK_PART: ${{ matrix.part }}
           CHECK_BASE: ${{ needs.change-scope.outputs.base }}
           CHECK_MODE: ${{ needs.change-scope.outputs.mode }}
+          GH_TOKEN: ${{ matrix.part == 'guards' && github.token || '' }}
         run: node scripts/ci-recharge-check.mjs "$CHECK_PART" "$CHECK_BASE"
 
   quality:

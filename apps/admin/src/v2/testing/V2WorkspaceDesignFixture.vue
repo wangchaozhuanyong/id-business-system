@@ -15,14 +15,14 @@
             <span class="v2-navigation__parent-label">工作台</span>
           </button>
           <div class="v2-navigation__children">
-            <a class="v2-navigation__item router-link-active" href="#workspace">
+            <RouterLink class="v2-navigation__item" to="/orders">
               <span class="v2-navigation__item-dot" aria-hidden="true" />
               <span class="v2-navigation__item-label">订单录入</span>
-            </a>
-            <a class="v2-navigation__item" href="#accounts">
+            </RouterLink>
+            <RouterLink class="v2-navigation__item" to="/accounts">
               <span class="v2-navigation__item-dot" aria-hidden="true" />
               <span class="v2-navigation__item-label">ID 管理</span>
-            </a>
+            </RouterLink>
           </div>
         </section>
         <section class="v2-navigation__section">
@@ -32,19 +32,20 @@
           </button>
         </section>
       </nav>
-      <V2WorkspaceLauncher :sidebar-collapsed="false" />
     </aside>
 
     <div class="v2-workspace">
       <header class="v2-topbar">
-        <div class="v2-topbar__identity"><h1>订单录入</h1></div>
+        <div class="v2-topbar__identity">
+          <h1>{{ pageTitle }}</h1>
+        </div>
       </header>
       <main class="v2-content">
         <div class="v2-content__inner">
           <section class="v2-workspace-fixture__overview">
             <span>当前业务</span>
-            <h2>订单录入工作台</h2>
-            <p>个人工作区固定在侧栏左下角，不挤压主业务内容。</p>
+            <h2>{{ pageTitle }}工作台</h2>
+            <p>右侧工作区独立固定，切换业务页面时保留当前工具与输入。</p>
           </section>
           <section class="v2-workspace-fixture__content">
             <div>
@@ -59,14 +60,18 @@
         </div>
       </main>
     </div>
-    <V2QuickActions />
+    <V2WorkspaceDock />
   </div>
 </template>
 
 <script setup lang="ts">
 import { DataAnalysis, Monitor } from '@element-plus/icons-vue';
-import V2WorkspaceLauncher from '@/v2/components/workspace/V2WorkspaceLauncher.vue';
-import V2QuickActions from '@/v2/components/workspace/V2QuickActions.vue';
+import { computed } from 'vue';
+import { useRoute } from 'vue-router';
+import V2WorkspaceDock from '@/v2/components/workspace/V2WorkspaceDock.vue';
+
+const route = useRoute();
+const pageTitle = computed(() => (route.path === '/accounts' ? 'ID 管理' : '订单录入'));
 </script>
 
 <style scoped>
