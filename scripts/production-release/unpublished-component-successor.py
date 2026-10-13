@@ -27,10 +27,10 @@ CONTEXT = '.deploy/production-release/' + PREFIX + '-build-context'
 PROJECTION = '.deploy/production-release/' + PREFIX + '-build-projection.json'
 PROOF = '.deploy/production-release/' + PREFIX + '-build-proof.json'
 PREFLIGHT = '.deploy/production-release/' + PREFIX + '-preflight.json'
-APPLICATION_SOURCE = 'a019e794fd6b3313fa312ad5a08fa4559f876d18'
-APPLICATION_TREE = 'a0a23337d76e793347c1bd86d2679bc187cb043f'
-APPROVED_APPLICATION_INPUT_SHA256 = '4b255d3214fed5825fe98e8fb337feba51c7247f63e38a573003d28c3e84b126'
-APPLICATION_INPUT_COUNT = 2164
+APPLICATION_SOURCE = 'b1a775d1dc0bc460fb59eebcec089342b6134788'
+APPLICATION_TREE = 'c45fa8f14a97e215d47ec9dc2a325f5fe611a921'
+APPROVED_APPLICATION_INPUT_SHA256 = '2e9549278a2e883a6a7eba4a90a565146919e3ce631f4c5cfe8e5771b2dfd647'
+APPLICATION_INPUT_COUNT = 2191
 BASELINE_CONTRACT = {'adminPredecessorManifestSha256': '5263307389da5be14cb13a0c2a26b6d2ca5a8268bc9bcfce4313cf07809f0c6c',
  'adminPredecessorRelease': '/opt/id-business-v2/releases/20261012T162822Z-60e164b75d1e',
  'adminPublicationSha256': '75ab43cc2e0bdb6b2c3da66b5a411df7cc9aea2a313dc7dc1963624fa4fd564f',

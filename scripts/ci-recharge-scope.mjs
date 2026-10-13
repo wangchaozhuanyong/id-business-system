@@ -18,7 +18,8 @@ export const unpublishedComponentSuccessorControlPaths = Object.freeze([
   'scripts/production-release/unpublished-component-successor-readonly.test.py',
   'scripts/production-release/unpublished-component-runtime-diagnostic.py',
   'scripts/production-release/unpublished-component-runtime-diagnostic.test.py',
-  'scripts/production-release/unpublished-component-entry.test.mjs'
+  'scripts/production-release/unpublished-component-entry.test.mjs',
+  'scripts/production-release/unified-component-source.test.py'
 ]);
 export const ownedMysqlTestControlPaths = Object.freeze([
   'scripts/lib/owned-mysql-test-instance.mjs',

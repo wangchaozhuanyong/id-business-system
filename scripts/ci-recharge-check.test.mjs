@@ -101,6 +101,15 @@ test('combined component migration runs only in cloud and retains the owned data
   assert.ok(
     !calls.some((call) => call.includes('scripts/acceptance-v2-registration-mirror-mysql.mjs'))
   );
+  const guardCalls = recordGuardCommands('admin', paths, 'guards');
+  assert.equal(
+    guardCalls.filter(
+      (call) =>
+        call.join(' ') ===
+        'node --test scripts/acceptance-v2-recharge-employee-concurrency.test.mjs'
+    ).length,
+    1
+  );
 });
 
 function recordBankSecurityCommands(drift = '') {
@@ -243,7 +252,12 @@ test('unpublished successor controls execute narrow suites once in either dispat
       'scripts/production-release/unpublished-component-successor-readonly.test.py'
     ],
     ['node', '--test', 'scripts/production-release/unpublished-component-entry.test.mjs'],
-    ['python3', '-B', 'scripts/production-release/unpublished-component-runtime-diagnostic.test.py']
+    [
+      'python3',
+      '-B',
+      'scripts/production-release/unpublished-component-runtime-diagnostic.test.py'
+    ],
+    ['python3', '-B', 'scripts/production-release/unified-component-source.test.py']
   ];
   for (const part of ['guards', 'release-controls']) {
     for (const paths of [

@@ -92,6 +92,7 @@ const unpublishedComponentSuccessorControls = () => {
       '-B',
       'scripts/production-release/unpublished-component-runtime-diagnostic.test.py'
     ]);
+    run('python3', ['-B', 'scripts/production-release/unified-component-source.test.py']);
   }
 };
 const ownedMysqlTestControls = () => {
@@ -101,6 +102,11 @@ const ownedMysqlTestControls = () => {
     hasRegistrationMirrorScope(changed)
   )
     run('node', ['--test', 'scripts/lib/owned-mysql-test-instance.test.mjs']);
+  if (
+    changed.includes('scripts/acceptance-v2-recharge-employee-concurrency.test.mjs') ||
+    hasCombinedComponentScope(changed)
+  )
+    run('node', ['--test', 'scripts/acceptance-v2-recharge-employee-concurrency.test.mjs']);
 };
 const rechargeFlowSuccessorControls = () => {
   if (
