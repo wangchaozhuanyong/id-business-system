@@ -9,6 +9,7 @@ function read(relativePath: string) {
 describe('personal workspace UI contract', () => {
   const layout = read('../../layouts/V2AdminLayout.vue');
   const launcher = read('./V2WorkspaceLauncher.vue');
+  const dock = read('./V2WorkspaceDock.vue');
   const shortcutDrawer = read('./V2WorkspaceShortcutDrawer.vue');
   const totpDrawer = read('./V2TotpToolDrawer.vue');
   const savedTotpAccounts = read('./V2SavedTotpAccounts.vue');
@@ -34,13 +35,16 @@ describe('personal workspace UI contract', () => {
   const workspaceApi = read('../../api/workspace.ts');
   const baseCss = read('../../styles/base.css');
 
-  it('mounts one fixed workspace launcher outside the scrollable navigation', () => {
-    const navigationEnd = layout.indexOf('</nav>');
-    const launcherIndex = layout.indexOf('<V2WorkspaceLauncher');
-    const asideEnd = layout.indexOf('</aside>');
-    expect(navigationEnd).toBeGreaterThan(0);
-    expect(launcherIndex).toBeGreaterThan(navigationEnd);
-    expect(launcherIndex).toBeLessThan(asideEnd);
+  it('keeps one global dock outside navigation and the route outlet', () => {
+    const outletEnd = layout.indexOf('</RouterView>');
+    const dockIndex = layout.indexOf('<V2WorkspaceDock');
+    expect(outletEnd).toBeGreaterThan(0);
+    expect(dockIndex).toBeGreaterThan(outletEnd);
+    expect(layout.match(/<V2WorkspaceDock/g)).toHaveLength(1);
+    expect(layout).not.toContain('<V2WorkspaceLauncher');
+    expect(layout).not.toContain('<V2QuickActions');
+    expect(dock).toContain('useV2SessionDraft');
+    expect(dock).not.toMatch(/localStorage|sessionStorage|KeepAlive/);
   });
 
   it('opens external shortcuts without routing through the application', () => {
@@ -93,9 +97,12 @@ describe('personal workspace UI contract', () => {
     expect(mediaResolverDrawer).not.toContain('sessionStorage');
   });
 
-  it('shows a tall two-column shortcut grid without redundant headings', () => {
-    expect(launcher).toContain('height: min(720px, calc(100dvh - 92px))');
-    expect(launcher).toContain('grid-template-columns: repeat(2, minmax(0, 1fr))');
+  it('uses one navigation row and title-only tool entries', () => {
+    expect(dock).toContain('role="tablist"');
+    expect(dock).toContain("label: '个人工具'");
+    expect(dock).toContain("label: '在线工具'");
+    expect(dock).toContain("label: '话术文案'");
+    expect(launcher).not.toContain('<small>');
     expect(launcher).not.toContain('常用入口与在线工具');
     expect(launcher).not.toContain('<span>快捷网址</span>');
     expect(shortcutDrawer).toContain('.v2-workspace-shortcut-drawer__toolbar > div > span');

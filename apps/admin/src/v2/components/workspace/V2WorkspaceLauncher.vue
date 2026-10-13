@@ -1,57 +1,18 @@
 <template>
-  <div
-    ref="launcherRoot"
-    class="v2-workspace-launcher"
-    :class="{ 'is-collapsed': sidebarCollapsed }"
-  >
-    <button
-      ref="triggerButton"
-      class="v2-workspace-launcher__trigger"
-      type="button"
-      :aria-expanded="panelOpen"
-      aria-controls="v2-personal-workspace-panel"
-      :title="sidebarCollapsed ? '个人工作区' : undefined"
-      @click="togglePanel"
-    >
-      <el-icon><Briefcase /></el-icon>
-      <span>个人工作区</span>
-      <small>{{ shortcuts.length }}</small>
-    </button>
-
-    <section
-      v-if="panelOpen"
-      id="v2-personal-workspace-panel"
-      class="v2-workspace-panel"
-      role="dialog"
-      aria-label="个人工作区"
-    >
-      <header class="v2-workspace-panel__header">
-        <div>
-          <strong>个人工作区</strong>
-        </div>
-        <AppButton
-          variant="ghost"
-          icon-only
-          size="small"
-          title="管理快捷网址"
-          @click="openSettings"
-        >
-          <el-icon><Setting /></el-icon>
-        </AppButton>
-      </header>
-
-      <div class="v2-workspace-panel__section v2-workspace-panel__section--shortcuts">
+  <div class="v2-workspace-tools">
+    <div v-show="view === 'personal'" class="v2-workspace-personal">
+      <div class="v2-workspace-personal__scroll">
         <V2AsyncRegion
           :phase="shortcutsQuery.phase.value"
           :empty="shortcuts.length === 0"
           :error="shortcutError"
           variant="section"
           skeleton="inline"
-          loading-title="正在读取快捷网址"
-          refreshing-title="正在更新快捷网址"
-          empty-title="还没有快捷网址"
-          empty-message="可在设置中添加。"
-          error-title="快捷网址加载失败"
+          loading-title="正在读取个人工具"
+          refreshing-title="正在更新个人工具"
+          empty-title="还没有个人工具"
+          empty-message="可在管理工具中添加网址。"
+          error-title="个人工具加载失败"
           @retry="shortcutsQuery.refresh"
         >
           <ul class="v2-workspace-panel__links">
@@ -65,89 +26,84 @@
           </ul>
         </V2AsyncRegion>
       </div>
-
-      <div class="v2-workspace-panel__section">
-        <div class="v2-workspace-panel__section-title"><span>在线工具</span></div>
-        <div class="v2-workspace-panel__tools">
-          <button class="v2-workspace-panel__tool" type="button" @click="openTotpTool">
-            <el-icon><Key /></el-icon>
-            <span>
-              <strong>计算 2FA 验证码</strong>
-              <small>临时查询或管理已保存账号</small>
-            </span>
-            <el-icon><ArrowRight /></el-icon>
-          </button>
-          <button
-            class="v2-workspace-panel__tool is-website-monitor"
-            type="button"
-            title="网站监控"
-            @click="openWebsiteMonitor"
-          >
-            <el-icon><Monitor /></el-icon>
-            <span>
-              <strong>网站监控</strong>
-              <small>查看访问统计、网站状态和证书</small>
-            </span>
-            <el-icon><ArrowRight /></el-icon>
-          </button>
-          <button
-            class="v2-workspace-panel__tool is-media-resolver"
-            type="button"
-            title="抖音解析"
-            @click="openMediaResolver"
-          >
-            <el-icon><VideoPlay /></el-icon>
-            <span>
-              <strong>抖音解析</strong>
-              <small>支持国内抖音及多个主流平台</small>
-            </span>
-            <el-icon><ArrowRight /></el-icon>
-          </button>
-          <button
-            class="v2-workspace-panel__tool is-mail-viewer"
-            type="button"
-            title="邮箱查询与邮箱池"
-            @click="openMailViewerTool"
-          >
-            <el-icon><Message /></el-icon>
-            <span>
-              <strong>邮箱查询与邮箱池</strong>
-              <small>用于查询邮件和维护邮箱池</small>
-            </span>
-            <el-icon><ArrowRight /></el-icon>
-          </button>
-          <button
-            v-if="isAdmin"
-            class="v2-workspace-panel__tool is-google-sheets-sync"
-            type="button"
-            title="Google 表格同步"
-            @click="openGoogleSheetsSync"
-          >
-            <el-icon><DataAnalysis /></el-icon>
-            <span>
-              <strong>Google 表格同步</strong>
-              <small>业务保存后自动同步报表</small>
-            </span>
-            <el-icon><ArrowRight /></el-icon>
-          </button>
-          <button
-            v-if="isAdmin"
-            class="v2-workspace-panel__tool is-relay-script"
-            type="button"
-            title="中转脚本"
-            @click="openRelayScript"
-          >
-            <el-icon><Connection /></el-icon>
-            <span>
-              <strong>中转脚本</strong>
-              <small>在线部署 Google Cloud Vertex 账号</small>
-            </span>
-            <el-icon><ArrowRight /></el-icon>
-          </button>
-        </div>
-      </div>
-    </section>
-
+      <footer class="v2-workspace-personal__footer">
+        <AppButton variant="ghost" @click="openSettings">
+          <el-icon><Setting /></el-icon>
+          管理工具
+        </AppButton>
+      </footer>
+    </div>
+    <div v-show="view === 'tools'" class="v2-workspace-panel__tools">
+      <button class="v2-workspace-panel__tool" type="button" @click="openTotpTool">
+        <el-icon><Key /></el-icon>
+        <span>
+          <strong>计算 2FA 验证码</strong>
+        </span>
+        <el-icon><ArrowRight /></el-icon>
+      </button>
+      <button
+        class="v2-workspace-panel__tool is-website-monitor"
+        type="button"
+        title="网站监控"
+        @click="openWebsiteMonitor"
+      >
+        <el-icon><Monitor /></el-icon>
+        <span>
+          <strong>网站监控</strong>
+        </span>
+        <el-icon><ArrowRight /></el-icon>
+      </button>
+      <button
+        class="v2-workspace-panel__tool is-media-resolver"
+        type="button"
+        title="抖音解析"
+        @click="openMediaResolver"
+      >
+        <el-icon><VideoPlay /></el-icon>
+        <span>
+          <strong>抖音解析</strong>
+        </span>
+        <el-icon><ArrowRight /></el-icon>
+      </button>
+      <button
+        class="v2-workspace-panel__tool is-mail-viewer"
+        type="button"
+        title="邮箱查询与邮箱池"
+        @click="openMailViewerTool"
+      >
+        <el-icon><Message /></el-icon>
+        <span>
+          <strong>邮箱查询与邮箱池</strong>
+        </span>
+        <el-icon><ArrowRight /></el-icon>
+      </button>
+      <button
+        v-if="isAdmin"
+        class="v2-workspace-panel__tool is-google-sheets-sync"
+        type="button"
+        title="Google 表格同步"
+        @click="openGoogleSheetsSync"
+      >
+        <el-icon><DataAnalysis /></el-icon>
+        <span>
+          <strong>Google 表格同步</strong>
+        </span>
+        <el-icon><ArrowRight /></el-icon>
+      </button>
+      <button
+        v-if="isAdmin"
+        class="v2-workspace-panel__tool is-relay-script"
+        type="button"
+        title="中转脚本"
+        @click="openRelayScript"
+      >
+        <el-icon><Connection /></el-icon>
+        <span>
+          <strong>中转脚本</strong>
+        </span>
+        <el-icon><ArrowRight /></el-icon>
+      </button>
+    </div>
     <V2WorkspaceShortcutDrawer
       v-model="settingsOpen"
       :items="shortcuts"
@@ -166,11 +122,10 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
+import { computed, ref } from 'vue';
 import type { V2WorkspaceShortcut, V2WorkspaceShortcutList } from '@apple-business/shared';
 import {
   ArrowRight,
-  Briefcase,
   Connection,
   DataAnalysis,
   Key,
@@ -195,14 +150,9 @@ import V2TotpToolDrawer from './V2TotpToolDrawer.vue';
 import V2WebsiteMonitorDrawer from './V2WebsiteMonitorDrawer.vue';
 import V2WorkspaceShortcutDrawer from './V2WorkspaceShortcutDrawer.vue';
 
-defineProps<{ sidebarCollapsed: boolean }>();
-const emit = defineEmits<{ requestCloseNavigation: [] }>();
+const props = defineProps<{ active: boolean; view: 'personal' | 'tools' }>();
 
 const authStore = useAuthStore();
-const launcherRoot = ref<HTMLElement>();
-const triggerButton = ref<HTMLButtonElement>();
-const panelOpen = ref(false);
-const workspaceActivated = ref(false);
 const settingsOpen = ref(false);
 const totpToolOpen = ref(false);
 const mailViewerDrawerOpen = ref(false);
@@ -211,7 +161,6 @@ const relayScriptDrawerOpen = ref(false);
 const googleSheetsSyncDrawerOpen = ref(false);
 const websiteMonitorOpen = ref(false);
 useV2DrawerNavigation(() => {
-  panelOpen.value = false;
   settingsOpen.value = false;
   totpToolOpen.value = false;
   mailViewerDrawerOpen.value = false;
@@ -225,7 +174,7 @@ const shortcutsQuery = useV2ModuleQuery<V2WorkspaceShortcutList>({
   moduleKey: 'profile',
   scope: 'workspace',
   key: 'current-user',
-  enabled: () => workspaceActivated.value,
+  enabled: () => props.active && props.view === 'personal',
   trackRouteData: false,
   query: ({ signal }) => idBusinessV2WorkspaceApi.list({ signal })
 });
@@ -234,371 +183,36 @@ const shortcutError = computed(() =>
   shortcutsQuery.error.value ? getApiErrorMessage(shortcutsQuery.error.value) : ''
 );
 
-onMounted(() => {
-  document.addEventListener('pointerdown', handleDocumentPointerDown);
-  document.addEventListener('keydown', handleDocumentKeydown);
-});
-onBeforeUnmount(() => {
-  document.removeEventListener('pointerdown', handleDocumentPointerDown);
-  document.removeEventListener('keydown', handleDocumentKeydown);
-});
-
-function togglePanel() {
-  workspaceActivated.value = true;
-  panelOpen.value = !panelOpen.value;
-}
-
 function openSettings() {
-  panelOpen.value = false;
   settingsOpen.value = true;
-  emit('requestCloseNavigation');
 }
 
 function openTotpTool() {
-  panelOpen.value = false;
   totpToolOpen.value = true;
-  emit('requestCloseNavigation');
 }
 
 function openMailViewerTool() {
-  panelOpen.value = false;
   mailViewerDrawerOpen.value = true;
-  emit('requestCloseNavigation');
 }
 
 function openWebsiteMonitor() {
-  panelOpen.value = false;
   websiteMonitorOpen.value = true;
-  emit('requestCloseNavigation');
 }
 
 function openMediaResolver() {
-  panelOpen.value = false;
   mediaResolverDrawerOpen.value = true;
-  emit('requestCloseNavigation');
 }
 
 function openRelayScript() {
-  panelOpen.value = false;
   relayScriptDrawerOpen.value = true;
-  emit('requestCloseNavigation');
 }
 
 function openGoogleSheetsSync() {
-  panelOpen.value = false;
   googleSheetsSyncDrawerOpen.value = true;
-  emit('requestCloseNavigation');
 }
 
 function openShortcut(item: V2WorkspaceShortcut) {
-  panelOpen.value = false;
-  emit('requestCloseNavigation');
   const opened = window.open(item.url, '_blank', 'noopener,noreferrer');
   if (opened) opened.opener = null;
 }
-
-function handleDocumentPointerDown(event: PointerEvent) {
-  if (!panelOpen.value || launcherRoot.value?.contains(event.target as Node)) return;
-  panelOpen.value = false;
-}
-
-function handleDocumentKeydown(event: KeyboardEvent) {
-  if (event.key !== 'Escape' || !panelOpen.value) return;
-  panelOpen.value = false;
-  triggerButton.value?.focus();
-}
 </script>
-
-<style scoped>
-.v2-workspace-launcher {
-  position: relative;
-  min-width: 0;
-  padding: 10px 8px;
-  border-top: 1px solid var(--v2-sidebar-border);
-}
-
-.v2-workspace-launcher__trigger {
-  display: grid;
-  width: 100%;
-  min-height: 42px;
-  grid-template-columns: 22px minmax(0, 1fr) auto;
-  align-items: center;
-  gap: 10px;
-  padding: 8px 12px;
-  border: 0;
-  border-radius: 7px;
-  background: var(--v2-sidebar-surface);
-  color: var(--v2-sidebar-text);
-  cursor: pointer;
-  font: inherit;
-  text-align: left;
-}
-
-.v2-workspace-launcher__trigger:hover {
-  background: color-mix(in srgb, var(--v3-sidebar-text-strong) 10%, transparent);
-  color: var(--v3-sidebar-text-strong);
-}
-
-.v2-workspace-launcher__trigger:focus-visible {
-  outline: none;
-  box-shadow: inset var(--v2-focus);
-}
-
-.v2-workspace-launcher__trigger > span {
-  overflow: hidden;
-  font-size: 13px;
-  font-weight: var(--v3-font-weight-semibold);
-  line-height: 20px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.v2-workspace-launcher__trigger > small {
-  min-width: 20px;
-  color: var(--v2-sidebar-muted);
-  font-size: 11px;
-  text-align: right;
-}
-
-.v2-workspace-launcher.is-collapsed .v2-workspace-launcher__trigger {
-  grid-template-columns: 22px;
-  justify-content: center;
-  padding: 8px;
-}
-
-.v2-workspace-launcher.is-collapsed .v2-workspace-launcher__trigger > span,
-.v2-workspace-launcher.is-collapsed .v2-workspace-launcher__trigger > small {
-  display: none;
-}
-
-.v2-workspace-panel {
-  position: absolute;
-  z-index: 34;
-  bottom: calc(100% + 8px);
-  left: 8px;
-  display: flex;
-  flex-direction: column;
-  width: min(420px, calc(100vw - 24px));
-  height: min(720px, calc(100dvh - 92px));
-  overflow: hidden;
-  border: 1px solid var(--v2-border);
-  border-radius: 8px;
-  background: var(--v2-surface);
-  box-shadow: var(--v2-overview-shadow);
-  color: var(--v2-text);
-}
-
-.v2-workspace-panel__header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  padding: 14px 14px 12px;
-  border-bottom: 1px solid var(--v2-border-soft);
-}
-
-.v2-workspace-panel__header > div {
-  display: grid;
-  min-width: 0;
-}
-
-.v2-workspace-panel__header strong {
-  font-size: 15px;
-  line-height: 22px;
-}
-
-.v2-workspace-panel__section {
-  display: grid;
-  min-width: 0;
-  gap: 8px;
-  padding: 12px 14px;
-  border-bottom: 1px solid var(--v2-border-soft);
-}
-
-.v2-workspace-panel__section--shortcuts {
-  min-height: 0;
-  flex: 1;
-  grid-template-rows: minmax(0, 1fr);
-}
-
-.v2-workspace-panel__section--shortcuts > .v2-async-region {
-  display: grid;
-  min-height: 0;
-}
-
-.v2-workspace-panel__section--shortcuts :deep(.v2-async-region__content) {
-  min-height: 0;
-  height: 100%;
-}
-
-.v2-workspace-panel__section:last-child {
-  border-bottom: 0;
-}
-
-.v2-workspace-panel__section-title {
-  display: flex;
-  min-height: 28px;
-  align-items: center;
-  justify-content: space-between;
-  color: var(--v2-text-soft);
-  font-size: 11px;
-  font-weight: var(--v3-font-weight-semibold);
-}
-
-.v2-workspace-panel__links {
-  display: grid;
-  height: 100%;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  align-content: start;
-  gap: 8px;
-  margin: 0;
-  padding: 1px;
-  overflow-y: auto;
-  list-style: none;
-}
-
-.v2-workspace-panel__links > li {
-  min-width: 0;
-}
-
-.v2-workspace-panel__tools {
-  display: grid;
-  gap: 3px;
-}
-
-.v2-workspace-panel__links button,
-.v2-workspace-panel__tool {
-  display: grid;
-  width: 100%;
-  min-width: 0;
-  min-height: 42px;
-  grid-template-columns: 30px minmax(0, 1fr) 18px;
-  align-items: center;
-  gap: 9px;
-  padding: 6px 8px;
-  border: 0;
-  border-radius: 6px;
-  background: transparent;
-  color: var(--v2-text);
-  cursor: pointer;
-  font: inherit;
-  text-align: left;
-}
-
-.v2-workspace-panel__links button {
-  min-height: 46px;
-  grid-template-columns: 28px minmax(0, 1fr) 16px;
-  gap: 7px;
-  border: 1px solid var(--v2-border);
-  background: var(--v2-surface-muted);
-}
-
-.v2-workspace-panel__links button:hover,
-.v2-workspace-panel__tool:hover {
-  background: var(--v2-surface-hover);
-}
-
-.v2-workspace-panel__links button:active {
-  transform: translateY(1px);
-}
-
-.v2-workspace-panel__tool:disabled {
-  cursor: not-allowed;
-}
-
-.v2-workspace-panel__tool:disabled:hover {
-  background: transparent;
-}
-
-.v2-workspace-panel__links button:focus-visible,
-.v2-workspace-panel__tool:focus-visible {
-  outline: none;
-  box-shadow: var(--v2-focus);
-}
-
-.v2-workspace-panel__links button > span {
-  display: grid;
-  width: 28px;
-  height: 28px;
-  place-items: center;
-  border-radius: 5px;
-  background: var(--v2-accent-soft);
-  color: var(--v2-accent);
-  font-size: 12px;
-  font-weight: var(--v3-font-weight-bold);
-}
-
-.v2-workspace-panel__links button > strong {
-  overflow: hidden;
-  font-size: 13px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.v2-workspace-panel__links button > .el-icon,
-.v2-workspace-panel__tool > .el-icon:last-child {
-  color: var(--v2-text-soft);
-}
-
-.v2-workspace-panel__tool > .el-icon:first-child {
-  width: 30px;
-  height: 30px;
-  border-radius: 5px;
-  background: var(--v3-success-soft);
-  color: var(--v2-success);
-}
-
-.v2-workspace-panel__tool.is-media-resolver > .el-icon:first-child {
-  background: var(--v2-accent-soft);
-  color: var(--v2-accent);
-}
-
-.v2-workspace-panel__tool.is-mail-viewer > .el-icon:first-child {
-  background: var(--v3-info-soft);
-  color: var(--v3-info);
-}
-
-.v2-workspace-panel__tool.is-website-monitor > .el-icon:first-child {
-  background: var(--v3-success-soft);
-  color: var(--v3-success);
-}
-
-.v2-workspace-panel__tool.is-mail-viewer > .el-icon:last-child {
-  color: var(--v2-text-soft);
-}
-
-.v2-workspace-panel__tool > span {
-  display: grid;
-  min-width: 0;
-  gap: 1px;
-}
-
-.v2-workspace-panel__tool strong,
-.v2-workspace-panel__tool small {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.v2-workspace-panel__tool strong {
-  font-size: 13px;
-}
-
-.v2-workspace-panel__tool small {
-  color: var(--v2-text-soft);
-  font-size: 11px;
-}
-
-@media (max-width: 720px) {
-  .v2-workspace-launcher.is-collapsed .v2-workspace-launcher__trigger {
-    grid-template-columns: 22px minmax(0, 1fr) auto;
-    justify-content: initial;
-    padding: 8px 12px;
-  }
-
-  .v2-workspace-launcher.is-collapsed .v2-workspace-launcher__trigger > span,
-  .v2-workspace-launcher.is-collapsed .v2-workspace-launcher__trigger > small {
-    display: initial;
-  }
-}
-</style>

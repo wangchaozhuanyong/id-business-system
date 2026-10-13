@@ -16,6 +16,32 @@
   grid-template-columns: 68px minmax(0, 1fr);
 }
 
+.v2-shell:has(> .v2-workspace-dock) {
+  grid-template-columns: 200px minmax(0, 1fr) 368px;
+}
+
+.v2-shell.is-sidebar-collapsed:has(> .v2-workspace-dock) {
+  grid-template-columns: 68px minmax(0, 1fr) 368px;
+}
+
+.v2-shell:has(> .v2-workspace-dock.is-collapsed) {
+  grid-template-columns: 200px minmax(0, 1fr) 60px;
+}
+
+.v2-shell.is-sidebar-collapsed:has(> .v2-workspace-dock.is-collapsed) {
+  grid-template-columns: 68px minmax(0, 1fr) 60px;
+}
+
+.v2-shell:has(> .v2-workspace-dock) > .v2-workspace {
+  container-type: inline-size;
+  container-name: v2-main-workspace;
+}
+
+.v2-shell:has(> .v2-workspace-dock) .v2-content {
+  padding-block-end: max(20px, env(safe-area-inset-bottom));
+  scroll-padding-block-end: 20px;
+}
+
 .v2-skip-link {
   position: fixed;
   z-index: 40;
@@ -1393,6 +1419,13 @@ html[data-v2-theme] .v2-unified-table .el-scrollbar__wrap {
     grid-template-columns: 1fr;
   }
 
+  .v2-shell:has(> .v2-workspace-dock),
+  .v2-shell.is-sidebar-collapsed:has(> .v2-workspace-dock),
+  .v2-shell:has(> .v2-workspace-dock.is-collapsed),
+  .v2-shell.is-sidebar-collapsed:has(> .v2-workspace-dock.is-collapsed) {
+    grid-template-columns: minmax(0, 1fr) 60px;
+  }
+
   .v2-sidebar {
     position: fixed;
     top: 0;
@@ -1570,6 +1603,25 @@ html[data-v2-theme] .v2-unified-table .el-scrollbar__wrap {
 
   .v2-order-form__wide {
     grid-column: auto;
+  }
+}
+
+@container v2-main-workspace (max-width: 850px) {
+  .v2-global-search,
+  .v2-query-activity,
+  .v2-topbar__account-copy,
+  .v2-topbar__account-chevron,
+  .v2-theme-switcher button span {
+    display: none;
+  }
+
+  .v2-theme-switcher button {
+    padding-inline: 8px;
+  }
+
+  .v2-topbar {
+    gap: 10px;
+    padding-inline: 12px;
   }
 }
 
