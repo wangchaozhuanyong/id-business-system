@@ -120,7 +120,11 @@ const rechargeFlowSuccessorControls = () => {
     changed.some(
       (path) =>
         rechargeFlowSuccessorControlPaths.includes(path) ||
-        unpublishedComponentSuccessorEntryPaths.includes(path)
+        unpublishedComponentSuccessorEntryPaths.includes(path) ||
+        [
+          'scripts/production-release/unpublished-component-successor.py',
+          'scripts/production-release/unpublished-component-successor-readonly.py'
+        ].includes(path)
     )
   ) {
     run('python3', ['-B', 'scripts/production-release/recharge-flow-successor.test.py']);

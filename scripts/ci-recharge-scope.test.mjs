@@ -188,14 +188,22 @@ test('the completed Admin job is reusable only with native success and control-o
   assert.equal(validate(run, jobs, [], { ...checkout, tree: { sha: 'a'.repeat(40) } }), false);
 });
 
-test('guard continuation preserves every original dispatcher command byte', () => {
+test('changed guard controls require new evidence while frozen continuation remains exact', () => {
   const before = execFileSync(
     'git',
     ['show', combinedMigrationBinding.head + ':scripts/ci-recharge-check.mjs'],
     { encoding: 'utf8' }
   );
-  const after = readFileSync('scripts/ci-recharge-check.mjs', 'utf8');
+  const after = execFileSync(
+    'git',
+    ['show', 'f193f34ea09a2c37485c1582a81b33ee3acec865:scripts/ci-recharge-check.mjs'],
+    { encoding: 'utf8' }
+  );
   assert.equal(combinedDispatcherBytesUnchanged(before, after), true);
+  assert.equal(
+    combinedDispatcherBytesUnchanged(before, readFileSync('scripts/ci-recharge-check.mjs', 'utf8')),
+    false
+  );
   for (const name of [
     'shared',
     'onlineEngine',
