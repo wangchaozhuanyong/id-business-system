@@ -1174,6 +1174,7 @@ export const combinedMigrationBinding = Object.freeze({
   tree: '7f4cab0ac137726c71a955cbfa8903585d11ebb4'
 });
 const combinedMigrationRepairPaths = new Set([
+  '.github/workflows/quality.yml',
   'scripts/acceptance-v2-workspace-dock.mjs',
   'scripts/ci-recharge-release.test.mjs',
   'scripts/ci-recharge-scope.mjs',
@@ -1189,7 +1190,8 @@ export function validateCombinedMigrationNative({
   checkout,
   log,
   changed,
-  dispatcherUnchanged
+  dispatcherUnchanged,
+  qualityWorkflowUnchanged
 }) {
   const b = combinedMigrationBinding;
   if (
@@ -1202,7 +1204,8 @@ export function validateCombinedMigrationNative({
     JSON.stringify(checkout.parents?.map((parent) => parent.sha)) !==
       JSON.stringify([b.base, b.head]) ||
     !changed.every((path) => combinedMigrationRepairPaths.has(path)) ||
-    (changed.includes('scripts/ci-recharge-check.mjs') && dispatcherUnchanged !== true)
+    (changed.includes('scripts/ci-recharge-check.mjs') && dispatcherUnchanged !== true) ||
+    (changed.includes('.github/workflows/quality.yml') && qualityWorkflowUnchanged !== true)
   )
     return undefined;
   const job = jobs.find((row) => row.id === b.jobId);
@@ -1329,7 +1332,34 @@ export function combinedDispatcherBytesUnchanged(before, after) {
   );
 }
 
-export function canReuseCombinedAdminSource(run, jobs, changed, checkout, log = '') {
+export function combinedQualityWorkflowBytesUnchanged(before, after) {
+  const anchor = [
+    '      - name: Check affected recharge part',
+    '        if: ${{ !contains(fromJSON(needs.change-scope.outputs.reused_parts), matrix.part) }}',
+    '        env:',
+    '          CHECK_PART: ${{ matrix.part }}',
+    '          CHECK_BASE: ${{ needs.change-scope.outputs.base }}',
+    '          CHECK_MODE: ${{ needs.change-scope.outputs.mode }}',
+    ''
+  ].join('\n');
+  const token = "          GH_TOKEN: ${{ matrix.part == 'guards' && github.token || '' }}\n";
+  return (
+    typeof before === 'string' &&
+    typeof after === 'string' &&
+    before.split(anchor).length === 2 &&
+    !before.includes(token) &&
+    after === before.replace(anchor, anchor + token)
+  );
+}
+
+export function canReuseCombinedAdminSource(
+  run,
+  jobs,
+  changed,
+  checkout,
+  log = '',
+  qualityWorkflowUnchanged = false
+) {
   const plain = log
     .replace(/\^\[\[[0-9;]*m/g, '')
     .split(String.fromCharCode(27))
@@ -1348,6 +1378,7 @@ export function canReuseCombinedAdminSource(run, jobs, changed, checkout, log = 
         combinedMigrationRepairPaths.has(path) &&
         path !== 'scripts/acceptance-v2-workspace-dock.mjs'
     ) &&
+    (!changed.includes('.github/workflows/quality.yml') || qualityWorkflowUnchanged === true) &&
     checkout?.sha === 'd7a17bbd2626a9adc77ba732ed934d302f78a0d2' &&
     checkout.tree.sha === '3594058955012e7ad7087cbb340a0f30420c92f2' &&
     JSON.stringify(checkout.parents.map((row) => row.sha)) ===
@@ -1387,7 +1418,11 @@ function reuseCombinedAdmin(repo, currentTree) {
     ['run', 'view', String(run.id), '--repo', repo, '--job', '115355004562', '--log'],
     { encoding: 'utf8', maxBuffer: 4 * 1024 * 1024 }
   );
-  if (!canReuseCombinedAdminSource(run, jobs, changed, checkout, log))
+  const qualityWorkflowUnchanged = combinedQualityWorkflowBytesUnchanged(
+    git('show', `${run.head_sha}:.github/workflows/quality.yml`),
+    git('show', `${currentTree}:.github/workflows/quality.yml`)
+  );
+  if (!canReuseCombinedAdminSource(run, jobs, changed, checkout, log, qualityWorkflowUnchanged))
     throw new Error('Original Admin evidence changed');
   return {
     part: 'admin',
@@ -1412,6 +1447,10 @@ function validateCombinedCommands(currentTree) {
     !combinedDispatcherBytesUnchanged(
       git('show', `${before}:scripts/ci-recharge-check.mjs`),
       git('show', `${currentTree}:scripts/ci-recharge-check.mjs`)
+    ) ||
+    !combinedQualityWorkflowBytesUnchanged(
+      git('show', `${before}:.github/workflows/quality.yml`),
+      git('show', `${currentTree}:.github/workflows/quality.yml`)
     )
   )
     throw new Error('Original check commands changed');
@@ -1485,7 +1524,8 @@ function reuseCombinedMigration(repo, event, mode, paths, currentTree) {
     checkout,
     log,
     changed,
-    dispatcherUnchanged: true
+    dispatcherUnchanged: true,
+    qualityWorkflowUnchanged: true
   });
   if (!evidence)
     throw new Error('Original migration evidence or unchanged input proof is unavailable');

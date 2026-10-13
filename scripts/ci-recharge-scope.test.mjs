@@ -56,7 +56,8 @@ import {
   validateCombinedMigrationNative,
   combinedMigrationScopeBytesUnchanged,
   canReuseCombinedAdminSource,
-  combinedDispatcherBytesUnchanged
+  combinedDispatcherBytesUnchanged,
+  combinedQualityWorkflowBytesUnchanged
 } from './ci-recharge-scope.mjs';
 import { matchesSourceEvidence } from './ci-recharge-evidence.mjs';
 
@@ -82,6 +83,35 @@ test('finite migration reuse preserves every original scope and command byte', (
       combinedMigrationScopeBytesUnchanged(before, after.replace(name, name + 'Changed')),
       false
     );
+});
+
+test('combined Quality workflow permits only the guards token insertion against both frozen jobs', () => {
+  const current = readFileSync('.github/workflows/quality.yml', 'utf8');
+  for (const commit of [
+    combinedMigrationBinding.head,
+    '5930f71e00d178a867526766e16e9aee14077244'
+  ]) {
+    const before = execFileSync('git', ['show', commit + ':.github/workflows/quality.yml'], {
+      encoding: 'utf8'
+    });
+    assert.equal(combinedQualityWorkflowBytesUnchanged(before, current), true);
+    for (const changed of [
+      before,
+      current.replace("matrix.part == 'guards' && github.token || ''", 'github.token'),
+      current.replace("matrix.part == 'guards'", "matrix.part == 'admin'"),
+      current.replace('  contents: read', '  contents: write'),
+      current.replace('  actions: read', '  actions: write'),
+      current.replace('          CHECK_PART:', '          OTHER_ENV:'),
+      current.replace(
+        '        run: node scripts/ci-recharge-check.mjs',
+        '        run: node arbitrary.mjs'
+      ),
+      current.replace('          GH_TOKEN:', '          UNRELATED: true\n          GH_TOKEN:'),
+      current + '\n',
+      current.replace('          GH_TOKEN:', '          GH_TOKEN: fixture\n          GH_TOKEN:')
+    ])
+      assert.equal(combinedQualityWorkflowBytesUnchanged(before, changed), false);
+  }
 });
 
 test('the completed Admin job is reusable only with native success and control-only changes', () => {
@@ -117,8 +147,8 @@ test('the completed Admin job is reusable only with native success and control-o
   const log =
     checkout.sha +
     '\nTest Files 159 passed (159)\nTests 1235 passed (1235)\n工作区浏览器验收通过：86 项';
-  const validate = (r = run, j = jobs, c = [], x = checkout, l = log) =>
-    canReuseCombinedAdminSource(r, j, c, x, l);
+  const validate = (r = run, j = jobs, c = [], x = checkout, l = log, workflowProof = false) =>
+    canReuseCombinedAdminSource(r, j, c, x, l, workflowProof);
   assert.equal(validate(run, jobs, ['scripts/ci-recharge-scope.mjs']), true);
   for (const path of [
     'apps/admin/src/v2/styles/base.css',
@@ -127,6 +157,12 @@ test('the completed Admin job is reusable only with native success and control-o
     '.github/workflows/quality.yml'
   ])
     assert.equal(validate(run, jobs, [path]), false);
+  assert.equal(validate(run, jobs, ['.github/workflows/quality.yml'], checkout, log, true), true);
+  assert.equal(
+    validate(run, jobs, ['.github/workflows/quality.yml'], checkout, log, 'true'),
+    false
+  );
+  assert.equal(validate(run, jobs, ['.github/workflows/other.yml'], checkout, log, true), false);
   assert.equal(validate({ ...run, status: 'in_progress' }), false);
   assert.equal(validate({ ...run, run_attempt: 2 }), false);
   assert.equal(validate({ ...run, head_sha: 'a'.repeat(40) }), false);
@@ -228,6 +264,13 @@ test('finite combined migration reuse requires native source and all 25 actual a
     changed: ['scripts/acceptance-v2-workspace-dock.mjs', 'scripts/ci-recharge-release.test.mjs']
   });
   assert.equal(validateCombinedMigrationNative(fixture()).testsPassed, 25);
+  const tokenRepair = fixture();
+  tokenRepair.changed.push('.github/workflows/quality.yml');
+  assert.equal(validateCombinedMigrationNative(tokenRepair), undefined);
+  tokenRepair.qualityWorkflowUnchanged = 'true';
+  assert.equal(validateCombinedMigrationNative(tokenRepair), undefined);
+  tokenRepair.qualityWorkflowUnchanged = true;
+  assert.equal(validateCombinedMigrationNative(tokenRepair).testsPassed, 25);
   for (const path of [
     'apps/api/src/id-business-v2/auto-recharge/recharge.service.ts',
     'apps/api/prisma-mysql/schema.prisma',
