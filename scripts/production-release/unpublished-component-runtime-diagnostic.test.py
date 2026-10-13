@@ -481,7 +481,8 @@ const fs = require('node:fs');
 const cp = require('node:child_process');
 const yaml = require('js-yaml');
 const current = yaml.load(fs.readFileSync('.github/workflows/production-release.yml', 'utf8'));
-const old = yaml.load(cp.execFileSync('git', ['show', 'HEAD:.github/workflows/production-release.yml'], {encoding: 'utf8'}));
+// The reviewed predecessor is immutable; HEAD already includes this addition in PR and main CI.
+const old = yaml.load(cp.execFileSync('git', ['show', 'e90f02a65cdf63b656e82eed6e25fd8a68a21b7b:.github/workflows/production-release.yml'], {encoding: 'utf8'}));
 const operation = 'diagnose_unpublished_component_runtime';
 const inputs = new Proxy({operation, historical_exception: 'none', reuse_image_run: ''}, {get: (v, k) => v[k] ?? ''});
 const always = () => true;
