@@ -11,6 +11,7 @@ on:
         options:
           - verify_access
           - verify_unpublished_components
+          - diagnose_unpublished_component_runtime
           - release_unpublished_components
           - verify_online_recharge
           - release_online_recharge
@@ -518,7 +519,7 @@ jobs:
           aws ecr describe-repositories --repository-names id-business-v2-release --query 'repositories[0].repositoryUri' --output text | grep -Fx "$RELEASE_REPOSITORY"
 
       - name: Verify read-only SSM command access
-        if: inputs.operation != 'prepare_post_cleanup_release' && inputs.operation != 'prepare_order_archive_release'
+        if: inputs.operation != 'prepare_post_cleanup_release' && inputs.operation != 'prepare_order_archive_release' && inputs.operation != 'diagnose_unpublished_component_runtime'
         run: |
           set -Eeuo pipefail
           command_id="$(aws ssm send-command --instance-ids "$PRODUCTION_INSTANCE_ID" \
@@ -528,6 +529,11 @@ jobs:
           aws ssm wait command-executed --command-id "$command_id" --instance-id "$PRODUCTION_INSTANCE_ID"
           test "$(aws ssm get-command-invocation --command-id "$command_id" \
             --instance-id "$PRODUCTION_INSTANCE_ID" --query StandardOutputContent --output text)" = release_access_ok
+
+      - name: Diagnose the fixed unpublished component runtime without publication
+        if: inputs.operation == 'diagnose_unpublished_component_runtime'
+        timeout-minutes: 18
+        run: python3 -B scripts/production-release/unpublished-component-runtime-diagnostic.py diagnose
 
       - name: Explicitly repair the single baseline Compose source permission
         if: inputs.operation == 'repair_online_source_permissions'
@@ -2568,6 +2574,24 @@ jobs:
         with:
           name: unpublished-component-evidence-${{ github.run_id }}-${{ github.run_attempt }}
           path: .deploy/production-release/unpublished-component-successor-*.json
+          if-no-files-found: warn
+          include-hidden-files: true
+          retention-days: 14
+
+      - name: Save only credential-free unpublished component diagnostic evidence
+        if: always() && inputs.operation == 'diagnose_unpublished_component_runtime'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: unpublished-component-runtime-diagnostic-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            .deploy/production-release/unpublished-component-runtime-diagnostic-parameters.json
+            .deploy/production-release/unpublished-component-runtime-diagnostic-source-program.py
+            .deploy/production-release/unpublished-component-runtime-diagnostic-send-intent.json
+            .deploy/production-release/unpublished-component-runtime-diagnostic-invocation-metadata.json
+            .deploy/production-release/unpublished-component-runtime-diagnostic-original-parameters.json
+            .deploy/production-release/unpublished-component-runtime-diagnostic-native.json
+            .deploy/production-release/unpublished-component-runtime-diagnostic-result.json
+            .deploy/production-release/unpublished-component-runtime-diagnostic-failure.json
           if-no-files-found: warn
           include-hidden-files: true
           retention-days: 14

@@ -450,13 +450,8 @@ def image_content(d, scope, directory, service, expected):
     return metadata
 
 
-def configuration_model(d, state):
-    """Seal every Docker configuration field, normalising only automatic hostname.
-
-    Docker generates this value from the new container ID during recreation.
-    Explicit/custom hostnames remain literal. Environment values stay in memory
-    and only their existing opaque hashes are returned or persisted.
-    """
+def configuration_body(d, state):
+    """Read every configuration field and require the exact current raw digest."""
     rows = json.loads(d.run('docker', 'inspect', state['containerId']))
     need(type(rows) is list and len(rows) == 1 and rows[0].get('Id') == state['containerId']
          and rows[0].get('Image') == state['image'], 'CONFIGURATION_CONTAINER_CHANGED')
@@ -467,6 +462,33 @@ def configuration_model(d, state):
     body = {n: copy.deepcopy(metadata[n]) for n in ('Config', 'HostConfig')}
     body['Mounts'] = sorted(metadata['Mounts'], key=lambda n: n['Destination'])
     need(fingerprint(body) == state['configurationSha256'], 'CONFIGURATION_MODEL_CHANGED')
+    return body
+
+
+def canonical_dns_configuration(body):
+    """Only the three Docker-25 restored empty DNS slices share null shape.
+
+    Retain every other field and all nonempty DNS values. This pure operation
+    supplies no restart or production authority; native authentication is separate.
+    """
+    need(type(body) is dict and set(body) == {'Config', 'HostConfig', 'Mounts'}
+         and type(body['Config']) is dict and type(body['HostConfig']) is dict
+         and type(body['Mounts']) is list, 'DNS_CONFIGURATION_INVALID')
+    result = copy.deepcopy(body)
+    for name in ('Dns', 'DnsOptions', 'DnsSearch'):
+        if name not in result['HostConfig']:
+            continue
+        value = result['HostConfig'][name]
+        need(value is None or type(value) is list and all(type(n) is str for n in value),
+             'DNS_CONFIGURATION_INVALID')
+        if value is None or value == []:
+            result['HostConfig'][name] = None
+    return result
+
+
+def configuration_model(d, state):
+    """Seal DNS shape and only automatic hostname after full raw validation."""
+    body = canonical_dns_configuration(configuration_body(d, state))
     automatic = body['Config'].get('Hostname') == state['containerId'][:12]
     if automatic:
         body['Config']['Hostname'] = '<DOCKER_AUTOMATIC_CONTAINER_HOSTNAME>'
@@ -770,7 +792,8 @@ def baseline(d, admin, scope, expected):
     authenticated = readonly.authenticate_hotfix(d, current, manifest, BASELINE_CONTRACT)
     need(type(authenticated) is dict and set(authenticated) == {
         'apiImage', 'apiSourceCommit', 'apiSourceTree', 'hotfixPublicationSha256',
-        'hotfixReadbackCommandId', 'hotfixReadbackInvocationBytesSha256', 'services', 'restorationBinding', 'historicalB'},
+        'hotfixReadbackCommandId', 'hotfixReadbackInvocationBytesSha256', 'services', 'restorationBinding',
+        'nativeRestartBinding', 'historicalB'},
         'HOTFIX_AUTHENTICATION_INVALID')
     historical = authenticated['historicalB']
     need(type(historical) is dict and set(historical) == {'release', 'manifestSha256', 'recordSha256', 'proofSha256',
@@ -808,6 +831,11 @@ def baseline(d, admin, scope, expected):
     states = scope.snapshot(d, current)
     need(set(states) == set(SERVICES), 'SERVICE_SET_CHANGED')
     need(states == authenticated['services'], 'HOTFIX_SERVICES_CHANGED')
+    restart = authenticated['nativeRestartBinding']
+    need(restart is None or type(restart) is dict and restart.get('authenticated') is True
+         and restart.get('scope') == 'UNPUBLISHED_COMPONENT_SAME_CONTAINER_RESTART'
+         and restart.get('servicesSha256') == fingerprint(states)
+         and authenticated['restorationBinding'] is None, 'RESTART_AUTHENTICATION_INVALID')
     api = image_content(d, scope, current, 'api', authenticated['apiImage'])
     labels = api.get('Config', {}).get('Labels', {})
     need(labels.get('org.opencontainers.image.revision') == authenticated['apiSourceCommit']
@@ -815,8 +843,9 @@ def baseline(d, admin, scope, expected):
     for n in SERVICES:
         if n not in UPDATED:
             preserved_snapshot = ledger['preservedServices'][n]['after']
+            comparison = BASELINE_CONTRACT['services'][n] if restart is not None else states[n]
             need(ledger['preservedServices'][n]['before'] == preserved_snapshot
-                 and all(preserved_snapshot[k] == states[n][k] for k in preserved_snapshot),
+                 and all(preserved_snapshot[k] == comparison[k] for k in preserved_snapshot),
                  'PRESERVED_SERVICE_CHANGED')
     admin_proof_raw = private_bytes(admin_dir / 'admin-build-proof.json')
     admin_proof = closed_json(admin_proof_raw)
@@ -865,10 +894,13 @@ def baseline(d, admin, scope, expected):
         'hotfixReadbackCommandId': authenticated['hotfixReadbackCommandId'],
         'hotfixReadbackInvocationBytesSha256': authenticated['hotfixReadbackInvocationBytesSha256'],
         'restorationBinding': authenticated['restorationBinding'],
+        'nativeRestartBinding': restart,
         'componentCurrentImages': current_images,
         'configurationModels': {n: configuration_model(d, states[n]) for n in UPDATED},
         'migrationState': migration_database_state(d, scope, current)}
     evidence['databaseGrants'] = grant_state(d, current, applied=evidence['migrationState']['status'] == 'APPLIED')
+    need(restart is None or evidence['migrationState'] == restart['migrationState']
+         and evidence['migrationState']['status'] == 'PENDING', 'RESTART_MIGRATION_STATE_CHANGED')
     return current, manifest, evidence
 
 
