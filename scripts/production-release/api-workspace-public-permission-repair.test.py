@@ -53,7 +53,7 @@ def facts(targets):
     return value
 
 
-def workflow_condition(expression, inputs, failed):
+def workflow_condition(expression, inputs, failed, installed='false'):
     """Evaluate the repository's finite explicit workflow predicates, including negative gates."""
     if expression is None:
         return True
@@ -67,6 +67,8 @@ def workflow_condition(expression, inputs, failed):
                 return inputs[name.split('.')[1]]
             if name == 'steps.api_admin_preflight.outcome':
                 return 'failure' if failed else 'success'
+            if name == 'steps.disk_owner.outputs.installed':
+                return installed
         if isinstance(node, ast.BoolOp) and type(node.op) in (ast.And, ast.Or):
             values = [evaluate(value) for value in node.values]
             return all(values) if isinstance(node.op, ast.And) else any(values)
@@ -554,13 +556,14 @@ class TransportTests(unittest.TestCase):
             'Verify exact source and passing Quality Gate','Validate release policy and reviewed seal selection',
             *sequence[1:]]
         for failed in (False, True):
-            steps = [step for step in content['steps'] if workflow_condition(step.get('if'),inputs,failed)]
-            self.assertEqual([step['name'] for step in steps], expected)
-            uploads = [step for step in steps if step.get('uses','').startswith('actions/upload-artifact@')]
-            self.assertEqual(len(uploads),1)
-            self.assertEqual(uploads[0]['with']['path'],transport.ARTIFACT)
-            self.assertEqual(uploads[0]['with']['name'], 'api-workspace-public-permission-repair-${{ github.run_id }}-${{ github.run_attempt }}')
-            self.assertEqual(uploads[0]['if'], "always() && inputs.operation == 'repair_api_workspace_public_permissions'")
+            for installed in ('false', 'true'):
+                steps = [step for step in content['steps'] if workflow_condition(step.get('if'),inputs,failed,installed)]
+                self.assertEqual([step['name'] for step in steps], expected)
+                uploads = [step for step in steps if step.get('uses','').startswith('actions/upload-artifact@')]
+                self.assertEqual(len(uploads),1)
+                self.assertEqual(uploads[0]['with']['path'],transport.ARTIFACT)
+                self.assertEqual(uploads[0]['with']['name'], 'api-workspace-public-permission-repair-${{ github.run_id }}-${{ github.run_attempt }}')
+                self.assertEqual(uploads[0]['if'], "always() && inputs.operation == 'repair_api_workspace_public_permissions'")
 
 
 
