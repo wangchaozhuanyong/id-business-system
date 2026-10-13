@@ -1330,7 +1330,11 @@ export function combinedDispatcherBytesUnchanged(before, after) {
 }
 
 export function canReuseCombinedAdminSource(run, jobs, changed, checkout, log = '') {
-  const plain = log.replace(/\u001b\[[0-9;]*m/g, '');
+  const plain = log
+    .replace(/\^\[\[[0-9;]*m/g, '')
+    .split(String.fromCharCode(27))
+    .map((part, index) => (index ? part.replace(/^\[[0-9;]*m/, '') : part))
+    .join('');
   return (
     run.id === 38414414141 &&
     run.run_attempt === 1 &&

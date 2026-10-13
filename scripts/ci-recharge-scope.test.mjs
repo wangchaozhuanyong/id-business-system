@@ -132,6 +132,23 @@ test('the completed Admin job is reusable only with native success and control-o
   assert.equal(validate({ ...run, head_sha: 'a'.repeat(40) }), false);
   assert.equal(validate(run, []), false);
   assert.equal(validate(run, jobs, [], checkout, log.replace('1235 passed', '1234 passed')), false);
+  assert.equal(
+    validate(run, jobs, [], checkout, log.replace('Test Files', '^[[2mTest Files^[[22m')),
+    true
+  );
+  assert.equal(
+    validate(
+      run,
+      jobs,
+      [],
+      checkout,
+      log.replace(
+        'Test Files',
+        String.fromCharCode(27) + '[2mTest Files' + String.fromCharCode(27) + '[22m'
+      )
+    ),
+    true
+  );
   assert.equal(validate(run, jobs, [], { ...checkout, tree: { sha: 'a'.repeat(40) } }), false);
 });
 
