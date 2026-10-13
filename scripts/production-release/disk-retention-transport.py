@@ -112,16 +112,19 @@ def regular(path, limit=MAX_BODY, *, owner=0, mode=None):
         return raw, before
 
 
-def command(arguments, *, limit=MAX_BODY, timeout=90):
+def command(arguments, *, limit=MAX_BODY, timeout=90, failure_code='MAINTENANCE_COMMAND_FAILED'):
     child_environment = {**os.environ, 'LC_ALL': 'C', 'TZ': 'UTC'}
     process = subprocess.run(arguments, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                              timeout=timeout, env=child_environment)
-    need(process.returncode == 0 and len(process.stdout) <= limit, 'MAINTENANCE_COMMAND_FAILED')
+    need(process.returncode == 0 and len(process.stdout) <= limit, failure_code)
     return process.stdout
 
 
-def snapshot(expected, base=BASE, owner=0):
+def snapshot(expected, base=BASE, owner=0, *, context='OBSERVE'):
     need(matches(HEX40, expected), 'MAINTENANCE_CURRENT_INVALID')
+    need(context in ('OBSERVE', 'STAGE_BEFORE', 'STAGE_AFTER', 'OPERATION_BEFORE',
+                     'OPERATION_PREAPPLY', 'OPERATION_AFTER'), 'MAINTENANCE_SNAPSHOT_CONTEXT_INVALID')
+    failure_prefix = 'MAINTENANCE_' + context + '_SNAPSHOT_'
     link = base / 'current'
     first = link.lstat()
     need(stat.S_ISLNK(first.st_mode) and first.st_uid == owner, 'MAINTENANCE_CURRENT_INVALID')
@@ -130,16 +133,18 @@ def snapshot(expected, base=BASE, owner=0):
         r'[0-9]{8}T[0-9]{6}Z-' + expected[:12], release.name), 'MAINTENANCE_CURRENT_INVALID')
     manifest, unused = regular(release / 'release-manifest.json', 128 * 1024, owner=owner)
     need(closed(manifest)['commit'] == expected, 'MAINTENANCE_CURRENT_CHANGED')
-    identifiers = command(['docker', 'ps', '-a', '--no-trunc', '--quiet'], limit=65536).decode().splitlines()
+    identifiers = command(['docker', 'ps', '-a', '--no-trunc', '--quiet'], limit=65536,
+                          failure_code=failure_prefix + 'PS_FAILED').decode().splitlines()
     need(len(identifiers) <= 500 and len(set(identifiers)) == len(identifiers)
          and all(matches(HEX64, item) for item in identifiers), 'MAINTENANCE_CONTAINER_INVALID')
     states = []
     format_string = ('{"id":{{json .Id}},"image":{{json .Image}},"reference":{{json .Config.Image}},'
                      '"running":{{json .State.Running}},"status":{{json .State.Status}},'
                      '"started":{{json .State.StartedAt}},"restartCount":{{json .RestartCount}},'
-                     '"health":{{if .State.Health}}{{json .State.Health.Status}}{{else}}null{{end}}}')
+                     '"health":{{with index .State "Health"}}{{json .Status}}{{else}}null{{end}}}')
     if identifiers:
-        raw = command(['docker', 'inspect', '--format', format_string, *sorted(identifiers)], limit=512 * 1024)
+        raw = command(['docker', 'inspect', '--format', format_string, *sorted(identifiers)], limit=512 * 1024,
+                      failure_code=failure_prefix + 'INSPECT_FAILED')
         for line in raw.decode().splitlines():
             row = closed(line)
             need(type(row) is dict and set(row) == {'id', 'image', 'reference', 'running', 'status', 'started', 'restartCount', 'health'}
@@ -194,7 +199,7 @@ def stage_file(binding, path, payload, *, base=BASE, owner=0):
              and not stat.S_IMODE(before_lock.st_mode) & 0o022
              and identity(before_lock) == identity(lock_path.lstat()), 'MAINTENANCE_DEPLOY_LOCK_INVALID')
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        before = snapshot(binding['expectedCurrent'], base, owner)
+        before = snapshot(binding['expectedCurrent'], base, owner, context='STAGE_BEFORE')
         if path in CURRENT_PATHS:
             need(payload is None, 'MAINTENANCE_CURRENT_SOURCE_REQUIRED')
             raw, unused = regular(Path(before['currentRelease']) / path, owner=owner)
@@ -231,7 +236,7 @@ def stage_file(binding, path, payload, *, base=BASE, owner=0):
             finally:
                 os.close(directory_fd)
         actual, unused = regular(target, owner=owner, mode=0o600)
-        need(actual == raw and snapshot(binding['expectedCurrent'], base, owner) == before
+        need(actual == raw and snapshot(binding['expectedCurrent'], base, owner, context='STAGE_AFTER') == before
              and identity(os.fstat(lock.fileno())) == identity(lock_path.lstat()) == identity(before_lock),
              'MAINTENANCE_STAGE_STATE_CHANGED')
         return {'kind': 'ID_DISK_MAINTENANCE_STAGE_ACK_V1', 'status': 'STAGED',
@@ -428,7 +433,7 @@ def execute_native(binding):
     validate_binding(binding)
     need(os.geteuid() == 0, 'MAINTENANCE_ROOT_REQUIRED')
     operation = binding['operation']
-    before = snapshot(binding['expectedCurrent'])
+    before = snapshot(binding['expectedCurrent'], context='OPERATION_BEFORE')
     if operation in ('verify_install', 'install'):
         root = BASE / '.staging' / ('disk-retention-' + binding['producer']['commit'])
         for path, pin in binding['sourcePins'].items():
@@ -471,10 +476,10 @@ def execute_native(binding):
                  'MAINTENANCE_INSTALL_PLAN_CHANGED')
         if applying and not mutate:
             apply_receipt_budget(binding, result, before, policy)
-            need(snapshot(binding['expectedCurrent']) == before, 'MAINTENANCE_PRODUCTION_CHANGED')
+            need(snapshot(binding['expectedCurrent'], context='OPERATION_PREAPPLY') == before, 'MAINTENANCE_PRODUCTION_CHANGED')
     if operation in ('install', 'verify_cleanup', 'cleanup'):
         result['installationReadback'] = installation_readback(binding, policy)
-    need(snapshot(binding['expectedCurrent']) == before, 'MAINTENANCE_PRODUCTION_CHANGED')
+    need(snapshot(binding['expectedCurrent'], context='OPERATION_AFTER') == before, 'MAINTENANCE_PRODUCTION_CHANGED')
     result.update(currentUnchanged=True, containersUnchanged=True,
                   baselineSha256=digest(before), sourceProbe=before, websiteServicesChanged=False)
     return result
