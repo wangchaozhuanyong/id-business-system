@@ -226,6 +226,8 @@ export const historicalReleaseControlPaths = Object.freeze([
   'scripts/production-release/build-images.sh',
   'scripts/production-release/admin-pending-online-release.py',
   'scripts/production-release/admin-pending-online-release.test.py',
+  'scripts/production-release/admin-successor-diagnostic.py',
+  'scripts/production-release/admin-successor-diagnostic.test.py',
   'scripts/production-release/build-image-cache.test.py',
   'scripts/production-release/browser-cache-input.py',
   'scripts/production-release/browser-cache-input.test.py',

@@ -276,8 +276,19 @@ const adminPendingReleaseControls = () => {
         'scripts/ci-recharge-check.mjs'
       ].includes(path)
     )
-  )
+  ) {
     run('python3', ['-B', 'scripts/production-release/admin-pending-online-release.test.py']);
+    run('python3', ['-B', 'scripts/production-release/admin-successor-diagnostic.test.py']);
+  } else if (
+    changed.some((path) =>
+      [
+        'scripts/production-release/admin-successor-diagnostic.py',
+        'scripts/production-release/admin-successor-diagnostic.test.py'
+      ].includes(path)
+    )
+  ) {
+    run('python3', ['-B', 'scripts/production-release/admin-successor-diagnostic.test.py']);
+  }
 };
 
 if (part === 'guards') {

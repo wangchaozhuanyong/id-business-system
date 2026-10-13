@@ -22,6 +22,33 @@ const gates = [
   'check:v2-concurrency-standard'
 ];
 
+test('Admin successor diagnostics always retain their offline controls', () => {
+  for (const part of ['guards', 'release-controls']) {
+    for (const changed of [
+      'scripts/production-release/admin-successor-diagnostic.py',
+      'scripts/production-release/admin-successor-diagnostic.test.py',
+      'scripts/production-release/admin-pending-online-release.py',
+      '.github/workflows/production-release.yml'
+    ]) {
+      const calls = recordGuardCommands('ci-only', [changed], part);
+      assert.equal(
+        calls.filter(
+          (call) =>
+            call.join(' ') ===
+            'python3 -B scripts/production-release/admin-successor-diagnostic.test.py'
+        ).length,
+        1,
+        `${part}: ${changed}`
+      );
+      assert.ok(
+        calls.every(
+          (call) => !call.includes('scripts/production-release/admin-successor-diagnostic.py')
+        )
+      );
+    }
+  }
+});
+
 function recordGuardCommands(mode, paths, part = 'guards') {
   // Run the real dispatcher with process execution replaced before its named import resolves.
   // No Git command, nested test, database command or business operation is executed.

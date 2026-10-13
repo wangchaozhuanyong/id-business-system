@@ -3,6 +3,25 @@ import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import test from 'node:test';
+
+test('Admin successor diagnostics have a finite control scope', () => {
+  const paths = [
+    'scripts/production-release/admin-successor-diagnostic.py',
+    'scripts/production-release/admin-successor-diagnostic.test.py'
+  ];
+  assert.equal(isCiOnly(paths), true);
+  assert.equal(checkMode(paths, '', ''), 'ci-only');
+  assert.equal(
+    checkMode([...paths, 'apps/admin/src/v2/components/workspace/V2WorkspaceDock.vue'], '', ''),
+    'admin'
+  );
+  for (const other of [
+    'scripts/production-release/admin-successor-diagnostic.py.backup',
+    'scripts/production-release/admin-successor-diagnostic-write.py',
+    'apps/api/src/auth/unknown.ts'
+  ])
+    assert.equal(checkMode([...paths, other], '', ''), 'full');
+});
 import { fileURLToPath } from 'node:url';
 import {
   affectsPart,

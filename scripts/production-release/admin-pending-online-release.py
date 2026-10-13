@@ -34,6 +34,35 @@ APPROVED_ADMIN_INPUT_SHA256 = '013dff883299fd84c31919e2294ec725a2de8331a3a8f8892
 ADMIN_DIRECTORY = 'apps/admin/src/v2/features/online-recharge/'
 ORIGIN_MARKERS = ('apiWorkspacePublication', 'pendingOnlineMigration', 'preservedMigrationOrigin')
 REPOSITORY = '079740175286.dkr.ecr.ap-northeast-1.amazonaws.com/id-business-v2-release'
+WORKSPACE_BASELINE = '60e164b75d1eedaab440c17139bf9ba55de08c61'
+WORKSPACE_REVIEW_BASE = 'e90f02a65cdf63b656e82eed6e25fd8a68a21b7b'
+WORKSPACE_PROFILE = 'ADMIN_WORKSPACE_DOCK_20261013'
+WORKSPACE_FILES = (
+    'apps/admin/src/v2/components/workspace/V2QuickActions.vue',
+    'apps/admin/src/v2/components/workspace/V2QuickActionsDrawer.vue',
+    'apps/admin/src/v2/components/workspace/V2WorkspaceDock.vue',
+    'apps/admin/src/v2/components/workspace/V2WorkspaceLauncher.vue',
+    'apps/admin/src/v2/components/workspace/V2WorkspaceShortcutDrawer.vue',
+    'apps/admin/src/v2/components/workspace/workspace-ui.contract.spec.ts',
+    'apps/admin/src/v2/features/tableSchemas.ts',
+    'apps/admin/src/v2/layouts/V2AdminLayout.vue',
+    'apps/admin/src/v2/styles/base.css', 'apps/admin/src/v2/styles/layout.css',
+    'apps/admin/src/v2/styles/records.css', 'apps/admin/src/v2/styles/v2.css',
+    'apps/admin/src/v2/testing/V2WorkspaceDesignFixture.vue',
+    'apps/admin/src/v2/testing/workspace-design-fixture.ts')
+WORKSPACE_INPUT_SHA256 = 'ec30c89a1640f0ddf30c6c6e0956d085a02f375ae0a7ae6e741d3f1a7512c682'
+WORKSPACE_OVERLAY_SHA256 = '3a113bd09acf5dcd0a3365a0969839b40115c834d87500cd3c4922ee572d48aa'
+WORKSPACE_OLD_PROJECTION_SHA256 = '11b4e7a542023eca4a7ccf7887e7ab45cef4ab7293e581a901399cc421f9f4db'
+WORKSPACE_BASELINE_CONTRACT = {
+    'manifestSha256': '7b081bbde167ebed1a9b94312036540471f16bb682d1f1e7ba9ff96822e4153c',
+    'adminRelease': '/opt/id-business-v2/releases/20261012T162822Z-60e164b75d1e',
+    'adminManifestSha256': '5263307389da5be14cb13a0c2a26b6d2ca5a8268bc9bcfce4313cf07809f0c6c',
+    'adminProofSha256': 'b21763f665517d6bcaed4e737cb625c306e63090d818cdc47fdef61081f70b27',
+    'adminPublicationSha256': '75ab43cc2e0bdb6b2c3da66b5a411df7cc9aea2a313dc7dc1963624fa4fd564f',
+    'originMarkersSha256': 'c938dd21ab57e432327de61a622b9fdbad817afb57f2184385ec3f8d6e84e590',
+    'hotfixPublicationSha256': '3466112e7ee25fa5c1783391995b02809cd9071de25d3a229b90a8a1251c1599',
+    'apiImageId': 'sha256:5c06cae77f95c7a040a9fb22afcddefa45ca28b4e47589aa38eeae5eb5b6384b',
+    'adminImageId': 'sha256:c473c719184e2d5e1d5aa367bb933336866ec5814069360746fa3ca07627a394'}
 
 
 def need(condition, code):
@@ -141,13 +170,65 @@ def project_admin(candidate, baseline, online, commit, tree):
     return output, record, {name: full[name] for name in projection.RUNTIME_FILES}
 
 
+def project_workspace(candidate, predecessor, review_base, baseline, online, commit, tree):
+    """Only the sealed UI delta is placed on the published 60 source, before inversion."""
+    p = projection_module()
+    need(p.source_tree(candidate) == tree, 'CANDIDATE_TREE_CHANGED')
+    inputs = {name: row for name, row in p.inventory(candidate).items()
+        if name.startswith(('apps/admin/', 'packages/shared/')) or name in (
+            'package.json', 'package-lock.json', 'apps/api/package.json', '.dockerignore',
+            'deploy/nginx/admin.conf', 'tsconfig.base.json')}
+    need(fingerprint(inputs) == WORKSPACE_INPUT_SHA256, 'UNREVIEWED_WORKSPACE_SOURCE')
+    need(all(predecessor.get(n) == review_base.get(n) for n in WORKSPACE_FILES),
+         'WORKSPACE_BEFORE_CHANGED')
+    overlay = {n: candidate[n] for n in WORKSPACE_FILES if n in candidate}
+    need(set(overlay) == set(WORKSPACE_FILES)
+         and fingerprint(p.inventory(overlay)) == WORKSPACE_OVERLAY_SHA256, 'WORKSPACE_OVERLAY_CHANGED')
+    old_output, old_record, old_runtime = project_admin(predecessor, baseline, online,
+        WORKSPACE_BASELINE, p.source_tree(predecessor))
+    need(old_record['projectionSha256'] == WORKSPACE_OLD_PROJECTION_SHA256,
+         'WORKSPACE_PREDECESSOR_CHANGED')
+    composite = {**predecessor, **overlay}
+    full, sealed = p.project_files(composite, baseline, online, commit, p.source_tree(composite))
+    # Do not overlay raw layout/table bytes after inversion: that would restore ONLINE.
+    output = dict(composite)
+    for name in ADMIN_FILES:
+        output[name] = full[name]
+    removed = {n: r for n, r in sealed['removedFiles'].items() if n.startswith(ADMIN_DIRECTORY)}
+    for name in removed:
+        del output[name]
+    runtime = {n: full[n] for n in p.RUNTIME_FILES}
+    need(runtime == old_runtime and all(output[n] == row for n, row in old_output.items()
+         if n not in WORKSPACE_FILES) and set(output) - set(old_output) <= set(WORKSPACE_FILES),
+         'UNRELATED_WORKSPACE_SOURCE_CHANGED')
+    need(not any(n.startswith(ADMIN_DIRECTORY) for n in output)
+         and all(b'online-recharge' not in output[n][0] for n in (
+             'apps/admin/src/v2-router.ts', 'apps/admin/src/v2/features/registry.ts',
+             'apps/admin/src/v2/layouts/V2AdminLayout.vue')), 'ONLINE_ENTRY_RESTORED')
+    rows = p.inventory(output)
+    record = {'version': 1, 'scope': 'ADMIN_PENDING_ONLINE_BUILD_PROJECTION',
+        'profile': WORKSPACE_PROFILE, 'candidateCommit': commit, 'candidateTree': tree,
+        'sourceBasisCommit': WORKSPACE_BASELINE, 'sourceBasisTree': p.source_tree(predecessor),
+        'reviewBaseCommit': WORKSPACE_REVIEW_BASE, 'apiComponentBaseline': BASELINE,
+        'approvedAdminInputSha256': WORKSPACE_INPUT_SHA256, 'overlayFiles': p.inventory(overlay),
+        'overlaySha256': WORKSPACE_OVERLAY_SHA256, 'originalAdminProjectionSha256': old_record['projectionSha256'],
+        'compositeSourceTree': p.source_tree(composite), 'sourceProjectionSha256': sealed['projectionSha256'],
+        'contextPath': CONTEXT, 'outputTree': p.source_tree(output), 'outputFilesSha256': fingerprint(rows),
+        'deploymentSourceTree': p.source_tree({**output, **runtime}),
+        'generatedFiles': {n: sealed['generatedFiles'][n] for n in ADMIN_FILES}, 'removedFiles': removed,
+        'unchangedFilesSha256': fingerprint({n: r for n, r in rows.items() if n not in WORKSPACE_FILES}),
+        'runtimeFiles': {n: {'mode': v[1], 'sha256': digest(v[0])} for n, v in runtime.items()}}
+    record['projectionSha256'] = fingerprint(record)
+    return composite, output, record, runtime
+
+
 def git_files(d, commit):
     raw = subprocess.check_output(['git', 'archive', '--format=tar',
         '--prefix=id-business-system-' + commit + '/', commit])
     return d.registration_archive(raw, commit)
 
 
-def source_projection(d, commit, tree, *, local=False):
+def source_projection(d, commit, tree, *, local=False, expected_current=BASELINE):
     archives = {}
     def read(sha):
         if local:
@@ -157,20 +238,26 @@ def source_projection(d, commit, tree, *, local=False):
         return d.registration_archive(raw, sha)
     projection = projection_module()
     candidate = read(commit)
-    output, record, runtime = project_admin(candidate, read(projection.BASELINE_COMMIT),
-                                           read(projection.ONLINE_COMMIT), commit, tree)
+    baseline, online = read(projection.BASELINE_COMMIT), read(projection.ONLINE_COMMIT)
+    if expected_current == WORKSPACE_BASELINE:
+        candidate, output, record, runtime = project_workspace(candidate, read(WORKSPACE_BASELINE),
+            read(WORKSPACE_REVIEW_BASE), baseline, online, commit, tree)
+    else:
+        need(expected_current == BASELINE, 'BUILD_SELECTION_CHANGED')
+        output, record, runtime = project_admin(candidate, baseline, online, commit, tree)
     return candidate, output, record, runtime, (None if local else digest(archives[commit]))
 
 
 def prepare_build(d):
     commit, tree = os.environ.get('RELEASE_COMMIT'), os.environ.get('SOURCE_TREE')
     need(os.environ.get('RELEASE_OPERATION') == 'release_admin'
-         and os.environ.get('EXPECTED_CURRENT') == BASELINE
+         and os.environ.get('EXPECTED_CURRENT') in (BASELINE, WORKSPACE_BASELINE)
          and re.fullmatch(r'[a-f0-9]{40}', commit or '')
          and re.fullmatch(r'[a-f0-9]{40}', tree or '')
          and d.run('git', 'rev-parse', 'HEAD') == commit
          and d.run('git', 'rev-parse', 'HEAD^{tree}') == tree, 'BUILD_SELECTION_CHANGED')
-    _, output, record, _, _ = source_projection(d, commit, tree, local=True)
+    _, output, record, _, _ = source_projection(d, commit, tree, local=True,
+        expected_current=os.environ['EXPECTED_CURRENT'])
     root = Path.cwd().resolve()
     context, target = root / CONTEXT, root / RECORD
     need(not context.exists() and not context.is_symlink() and not target.exists()
@@ -185,8 +272,9 @@ def image_proof(d):
     record = read_json(RECORD)
     commit, tree = os.environ.get('RELEASE_COMMIT'), os.environ.get('SOURCE_TREE')
     need(os.environ.get('RELEASE_OPERATION') == 'release_admin'
-         and os.environ.get('EXPECTED_CURRENT') == BASELINE, 'BUILD_SELECTION_CHANGED')
-    _, output, expected, _, _ = source_projection(d, commit, tree, local=True)
+         and os.environ.get('EXPECTED_CURRENT') in (BASELINE, WORKSPACE_BASELINE), 'BUILD_SELECTION_CHANGED')
+    _, output, expected, _, _ = source_projection(d, commit, tree, local=True,
+        expected_current=os.environ['EXPECTED_CURRENT'])
     need(record == expected, 'BUILD_RECORD_CHANGED')
     context = Path(CONTEXT).resolve()
     actual = {}
@@ -217,12 +305,28 @@ def image_proof(d):
     return value
 
 
-def snapshot(d, directory):
+def snapshot(d, directory, *, configuration=False):
     need(set(d.production_services(directory)) == set(d.ALL_SERVICES), 'SERVICE_SET_CHANGED')
     result = {name: d.service_state(directory, name, include_container_id=True,
               include_environment_hash=True) for name in d.ALL_SERVICES}
     need(all(row['status'] == 'running' and (name == 'caddy' or row['health'] == 'healthy')
              for name, row in result.items()), 'SERVICE_NOT_HEALTHY')
+    if configuration:
+        for state in result.values():
+            inspected = json.loads(d.run('docker', 'inspect', state['containerId']))
+            need(isinstance(inspected, list) and len(inspected) == 1
+                 and inspected[0].get('Id') == state['containerId']
+                 and isinstance(inspected[0].get('Config'), dict)
+                 and isinstance(inspected[0].get('HostConfig'), dict)
+                 and isinstance(inspected[0].get('Mounts'), list), 'SERVICE_CONFIGURATION_UNAVAILABLE')
+            mounts = inspected[0]['Mounts']
+            need(all(isinstance(m, dict) and isinstance(m.get('Destination'), str)
+                     and m['Destination'].startswith('/') for m in mounts)
+                 and len({m['Destination'] for m in mounts}) == len(mounts),
+                 'SERVICE_CONFIGURATION_UNAVAILABLE')
+            state['configurationSha256'] = fingerprint({
+                'Config': inspected[0]['Config'], 'HostConfig': inspected[0]['HostConfig'],
+                'Mounts': sorted(mounts, key=lambda m: m['Destination'])})
     return result
 
 
@@ -280,7 +384,7 @@ def preserve(d, previous, target, manifest, manifest_sha, before, environment, r
              'RUNTIME_CONFIGURATION_CHANGED')
     need((previous / 'deploy/caddy/Caddyfile.aws').read_bytes()
          == (target / 'deploy/caddy/Caddyfile.aws').read_bytes(), 'EDGE_CONFIGURATION_CHANGED')
-    after = snapshot(d, target)
+    after = snapshot(d, target, configuration=manifest['commit'] == WORKSPACE_BASELINE)
     need(all(after[name] == before[name] for name in before if name != 'admin'), 'PRESERVED_SERVICE_CHANGED')
     need(volume_state(d, target, manifest) == volume, 'VOLUME_CHANGED')
     return after
@@ -298,12 +402,48 @@ def validate_proof(proof, args, expected):
          and re.fullmatch(r'sha256:[a-f0-9]{64}', proof['image']['imageId'] or ''), 'BUILD_PROOF_CHANGED')
 
 
+def baseline_manifest(d, previous, raw, manifest, expected_current):
+    """Authenticate inherited bytes; this grants no authority to restart or restore API."""
+    expected_sha = (WORKSPACE_BASELINE_CONTRACT['manifestSha256']
+                    if expected_current == WORKSPACE_BASELINE else BASELINE_MANIFEST_SHA256)
+    need(expected_current in (BASELINE, WORKSPACE_BASELINE)
+         and digest(raw) == expected_sha and manifest['commit'] == expected_current
+         and all(name in manifest for name in ORIGIN_MARKERS)
+         and manifest['apiWorkspacePublication']['version'] == 4
+         and manifest['apiWorkspacePublication']['onlinePublished'] is False
+         and manifest['apiWorkspacePublication']['migrationPerformed'] is False, 'BASELINE_CHANGED')
+    if expected_current == BASELINE:
+        return
+    contract = WORKSPACE_BASELINE_CONTRACT
+    admin_dir = Path(contract['adminRelease'])
+    need(admin_dir.parent == d.BASE / 'releases' and admin_dir.resolve() == admin_dir
+         and manifest['previousRelease'] == str(admin_dir), 'WORKSPACE_ADMIN_ANCESTOR_CHANGED')
+    admin_raw = private_bytes(admin_dir / 'release-manifest.json')
+    admin = json.loads(admin_raw)
+    proof_raw = private_bytes(admin_dir / 'admin-build-proof.json')
+    proof = json.loads(proof_raw)
+    need(digest(admin_raw) == contract['adminManifestSha256'] == manifest['previousManifestSha256']
+         and digest(proof_raw) == contract['adminProofSha256']
+         and fingerprint(manifest['adminPublication']) == contract['adminPublicationSha256']
+         and admin['adminPublication'] == manifest['adminPublication']
+         and proof['projection'] == manifest['adminPublication']['projection']
+         and proof['projection']['projectionSha256'] == WORKSPACE_OLD_PROJECTION_SHA256
+         and manifest['adminPublication']['componentBaselines'] == {'api': BASELINE}
+         and fingerprint({n: manifest[n] for n in ORIGIN_MARKERS}) == contract['originMarkersSha256']
+         and fingerprint(manifest['apiHotfixPublication']) == contract['hotfixPublicationSha256']
+         and all(admin[n] == manifest[n] for n in ORIGIN_MARKERS)
+         and manifest['images']['api']['digest'] == contract['apiImageId']
+         and manifest['images']['admin']['digest'] == contract['adminImageId'] == proof['image']['imageId'],
+         'WORKSPACE_INHERITED_ORIGIN_CHANGED')
+
+
 def publish(d, args, proof):
-    need(args.expected_current == BASELINE and args.repository == REPOSITORY
+    need(args.expected_current in (BASELINE, WORKSPACE_BASELINE) and args.repository == REPOSITORY
          and all(re.fullmatch(r'[a-f0-9]{40}', n or '') for n in (args.commit, args.source_tree))
          and all(re.fullmatch(r'[1-9][0-9]*', n or '') for n in (
              args.run_id, args.run_attempt, args.ci_run_id)), 'RELEASE_SELECTION_CHANGED')
-    candidate, _output, expected, runtime, archive_sha = source_projection(d, args.commit, args.source_tree)
+    candidate, _output, expected, runtime, archive_sha = source_projection(d, args.commit, args.source_tree,
+        expected_current=args.expected_current)
     validate_proof(proof, args, expected)
     os.umask(0o077)
     with (d.BASE / '.deploy.lock').open('a') as lock:
@@ -312,13 +452,9 @@ def publish(d, args, proof):
         need(previous.parent == d.BASE / 'releases', 'BASELINE_PATH_CHANGED')
         manifest_raw = private_bytes(previous / 'release-manifest.json')
         manifest = json.loads(manifest_raw)
-        need(digest(manifest_raw) == BASELINE_MANIFEST_SHA256 and manifest['commit'] == BASELINE
-             and all(name in manifest for name in ORIGIN_MARKERS)
-             and manifest['apiWorkspacePublication']['version'] == 4
-             and manifest['apiWorkspacePublication']['onlinePublished'] is False
-             and manifest['apiWorkspacePublication']['migrationPerformed'] is False, 'BASELINE_CHANGED')
+        baseline_manifest(d, previous, manifest_raw, manifest, args.expected_current)
         environment = private_bytes(previous / '.env.aws.production')
-        before = snapshot(d, previous)
+        before = snapshot(d, previous, configuration=args.expected_current == WORKSPACE_BASELINE)
         bind_baseline_images(d, previous, manifest, before)
         volume = volume_state(d, previous, manifest)
         need(set(runtime) == set(projection_module().RUNTIME_FILES), 'ORIGINAL_RUNTIME_SOURCE_SET_CHANGED')
@@ -334,7 +470,7 @@ def publish(d, args, proof):
         changed = False
         phase = 'source'
         try:
-            d.write_registration_files(target, candidate)
+            d.write_registration_files(target, _output if args.expected_current == WORKSPACE_BASELINE else candidate)
             original = target / '.deploy/production-release/pending-original-source'
             for name, (raw, mode) in runtime.items():
                 saved = original / name
@@ -397,16 +533,20 @@ def publish(d, args, proof):
             phase = 'manifest'
             ledger = {'version': 1, 'scope': 'ADMIN_ONLY_PENDING_ONLINE_SUCCESSOR',
                 'commit': args.commit, 'sourceTree': args.source_tree, 'projection': expected,
-                'buildProofSha256': fingerprint(proof), 'inheritedOriginCommit': BASELINE,
+                'buildProofSha256': fingerprint(proof), 'inheritedOriginCommit': args.expected_current,
                 'inheritedManifestSha256': digest(manifest_raw),
                 'componentBaselines': {'api': BASELINE}, 'onlinePublished': False,
                 'migrationPerformed': False, 'databaseGrantsChanged': False,
                 'environmentSha256': digest(environment), 'volumeIdentitySha256': volume,
                 'preservedServices': {name: {'before': before[name], 'after': after[name]}
                                       for name in before if name != 'admin'}}
+            if args.expected_current == WORKSPACE_BASELINE:
+                ledger.update(profile=WORKSPACE_PROFILE,
+                    inheritedAdminPublicationSha256=fingerprint(manifest['adminPublication']),
+                    inheritedApiHotfixPublicationSha256=fingerprint(manifest['apiHotfixPublication']))
             result = copy.deepcopy(manifest)
             result.update(commit=args.commit, sourceTree=args.source_tree, sourceBranch='main',
-                previousCommit=BASELINE, previousRelease=str(previous), previousManifestSha256=digest(manifest_raw),
+                previousCommit=args.expected_current, previousRelease=str(previous), previousManifestSha256=digest(manifest_raw),
                 releaseTag='v2-production-' + stamp, deployedAt=time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()),
                 ciWorkflow='Quality Gate', ciWorkflowRunId=int(args.ci_run_id),
                 deploymentRun=f'github-actions-{args.run_id}-{args.run_attempt}',
@@ -419,6 +559,8 @@ def publish(d, args, proof):
             result['rollback'] = {'release': str(previous), 'images': {'admin': before['admin']['image']},
                                   'servicesAdded': [], 'scope': 'ADMIN_ONLY'}
             need(all(result[name] == manifest[name] for name in ORIGIN_MARKERS), 'ORIGIN_MARKER_CHANGED')
+            if args.expected_current == WORKSPACE_BASELINE:
+                need(result['apiHotfixPublication'] == manifest['apiHotfixPublication'], 'ORIGIN_MARKER_CHANGED')
             write_json(target / 'release-manifest.json', result)
             d.point_current(target, args.run_id)
             return {'status': 'ADMIN_ONLY_PUBLISHED', 'commit': args.commit,
@@ -441,7 +583,7 @@ def publish(d, args, proof):
             try:
                 current = (d.BASE / 'current').resolve()
                 observed['currentCommit'] = read_json(current / 'release-manifest.json')['commit']
-                state = snapshot(d, current)
+                state = snapshot(d, current, configuration=args.expected_current == WORKSPACE_BASELINE)
                 observed['adminImage'] = state['admin']['image']
                 observed['preservedServicesUnchanged'] = all(
                     state[name] == before[name] for name in before if name != 'admin')
@@ -473,9 +615,11 @@ def readback(d, commit):
     previous = Path(manifest['previousRelease'])
     old_raw = private_bytes(previous / 'release-manifest.json')
     old = json.loads(old_raw)
-    need(previous.parent == d.BASE / 'releases' and old['commit'] == BASELINE
-         and digest(old_raw) == BASELINE_MANIFEST_SHA256 == ledger['inheritedManifestSha256']
+    inherited = ledger.get('inheritedOriginCommit')
+    need(inherited in (BASELINE, WORKSPACE_BASELINE) and previous.parent == d.BASE / 'releases'
+         and old['commit'] == inherited and digest(old_raw) == ledger['inheritedManifestSha256']
          and all(manifest[name] == old[name] for name in ORIGIN_MARKERS), 'ORIGIN_MARKER_CHANGED')
+    baseline_manifest(d, previous, old_raw, old, inherited)
     proof = read_json(current / 'admin-build-proof.json')
     projection = ledger['projection']
     need(fingerprint(proof) == ledger['buildProofSha256'] and proof['commit'] == commit
@@ -485,6 +629,23 @@ def readback(d, commit):
          and projection.get('projectionSha256') == fingerprint({k:v for k,v in projection.items() if k != 'projectionSha256'})
          and set(projection.get('runtimeFiles', {})) == set(projection_module().RUNTIME_FILES)
          and proof['projection'] == projection, 'BUILD_PROOF_CHANGED')
+    if inherited == WORKSPACE_BASELINE:
+        need(ledger.get('profile') == projection.get('profile') == WORKSPACE_PROFILE
+             and projection.get('apiComponentBaseline') == BASELINE
+             and projection.get('sourceBasisCommit') == WORKSPACE_BASELINE
+             and projection.get('overlaySha256') == WORKSPACE_OVERLAY_SHA256
+             and projection.get('approvedAdminInputSha256') == WORKSPACE_INPUT_SHA256
+             and projection.get('originalAdminProjectionSha256') == WORKSPACE_OLD_PROJECTION_SHA256
+             and manifest['apiHotfixPublication'] == old['apiHotfixPublication']
+             and fingerprint(old['adminPublication']) == ledger['inheritedAdminPublicationSha256']
+             and fingerprint(old['apiHotfixPublication']) == ledger['inheritedApiHotfixPublicationSha256'],
+             'WORKSPACE_INHERITED_ORIGIN_CHANGED')
+        # Rebuild the finite projection independently, rather than trusting a self-hashed receipt.
+        _, _, expected, _, _ = source_projection(d, commit, manifest['sourceTree'],
+            expected_current=WORKSPACE_BASELINE)
+        need(expected == projection, 'BUILD_PROOF_CHANGED')
+    else:
+        need('profile' not in projection, 'BUILD_PROOF_CHANGED')
     image = json.loads(d.run('docker', 'image', 'inspect', proof['image']['reference']))[0]
     labels = image['Config']['Labels']
     need(image.get('Id') == proof['image']['imageId'] and image.get('Architecture') == 'amd64'
@@ -492,7 +653,7 @@ def readback(d, commit):
          and labels.get('id-business-v2.source-tree') == manifest['sourceTree']
          and labels.get('id-business-v2.admin-pending-projection-sha256') == projection['projectionSha256'],
          'IMAGE_PROVENANCE_CHANGED')
-    states = snapshot(d, current)
+    states = snapshot(d, current, configuration=inherited == WORKSPACE_BASELINE)
     for name, preserved in ledger['preservedServices'].items():
         need(name != 'admin' and preserved['before'] == preserved['after'] == states[name],
              'PRESERVED_SERVICE_CHANGED')
@@ -521,10 +682,19 @@ def readback(d, commit):
 def cli(d=None):
     d = controller_module() if d is None else d
     parser = argparse.ArgumentParser()
-    parser.add_argument('operation', choices=('prepare', 'proof', 'release', 'readback'))
+    parser.add_argument('operation', choices=('selection', 'prepare', 'proof', 'release', 'readback'))
     for name in ('commit', 'source-tree', 'repository', 'expected-current', 'run-id', 'run-attempt', 'ci-run-id', 'build-proof'):
         parser.add_argument('--' + name)
     args = parser.parse_args()
+    if args.operation == 'selection':
+        need(all(value is None for key, value in vars(args).items() if key != 'operation')
+             and os.environ.get('RELEASE_OPERATION') == 'release_admin'
+             and os.environ.get('EXPECTED_CURRENT') == WORKSPACE_BASELINE,
+             'BUILD_SELECTION_CHANGED')
+        source_projection(d, os.environ.get('RELEASE_COMMIT'), os.environ.get('SOURCE_TREE'),
+            local=True, expected_current=WORKSPACE_BASELINE)
+        print(json.dumps({'status': 'ADMIN_WORKSPACE_SOURCE_VERIFIED', 'profile': WORKSPACE_PROFILE}))
+        return 0
     if args.operation == 'readback':
         need(args.commit is not None and all(value is None for key, value in vars(args).items()
             if key not in ('operation', 'commit')), 'SCOPE_CONFLICT')

@@ -319,4 +319,221 @@ class PublicationTests(unittest.TestCase):
                 self.assertFalse(any(row[0]=='compose'and row[1][:2]==('up','-d')for row in f.actions))
 
 
+class WorkspaceProjectionTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.commit = 'a2819b3ef7ecbba44678e060ef0ef1ef620e09c0'
+        cls.p = a.projection_module()
+        cls.files = git_files(cls.commit)
+        cls.predecessor, cls.review = git_files(a.WORKSPACE_BASELINE), git_files(a.WORKSPACE_REVIEW_BASE)
+        cls.baseline, cls.online = git_files(cls.p.BASELINE_COMMIT), git_files(cls.p.ONLINE_COMMIT)
+        cls.tree = cls.p.source_tree(cls.files)
+
+    def project(self, files=None, predecessor=None, review=None):
+        files = self.files if files is None else files
+        return a.project_workspace(files, self.predecessor if predecessor is None else predecessor,
+            self.review if review is None else review, self.baseline, self.online,
+            self.commit, self.p.source_tree(files))
+
+    def test_exact_fourteen_file_projection_excludes_pending_admin_backend_and_migrations(self):
+        source, output, record, runtime = self.project()
+        self.assertEqual(record['candidateTree'], self.tree)
+        self.assertEqual(record['apiComponentBaseline'], a.BASELINE)
+        self.assertEqual(record['outputTree'], '059f7fbfb292ae94de8d327ea59c797646dd11cb')
+        self.assertEqual(record['compositeSourceTree'], '8c4d958f6d406b07aa2d33ed6ed4d0c9a0ae26e0')
+        self.assertEqual(record['deploymentSourceTree'], self.p.source_tree({**output, **runtime}))
+        self.assertEqual(set(record['overlayFiles']), set(a.WORKSPACE_FILES))
+        for name, row in self.predecessor.items():
+            if name not in a.WORKSPACE_FILES:
+                self.assertEqual(source[name], row, name)
+        pending_admin = [n for n in self.files if n.startswith('apps/admin/')
+                         and n not in a.WORKSPACE_FILES and self.files[n] != self.predecessor.get(n)]
+        self.assertTrue(pending_admin)
+        for name in pending_admin:
+            self.assertEqual(output.get(name), self.predecessor.get(name), name)
+        allocator = 'apps/admin/src/v2/composables/useV2TableContentWidths.ts'
+        self.assertIn(allocator, self.files)
+        self.assertNotIn(allocator, self.predecessor)
+        self.assertNotIn(allocator, source)
+        self.assertNotIn(allocator, output)
+        self.assertNotIn('apps/api/prisma-mysql/migrations/20261012143000_recharge_connection_profiles/migration.sql', output)
+        self.assertNotIn(b'IdBusinessV2RechargeConnectionProfile', runtime['apps/api/prisma-mysql/schema.prisma'][0])
+        self.assertFalse(any(n.startswith(a.ADMIN_DIRECTORY) for n in output))
+        for name in ('apps/admin/src/v2-router.ts', 'apps/admin/src/v2/features/registry.ts',
+                     'apps/admin/src/v2/features/tableSchemas.ts', 'apps/admin/src/v2/layouts/V2AdminLayout.vue'):
+            self.assertNotIn(b'online-recharge', output[name][0], name)
+            self.assertNotIn(b'onlineRecharge', output[name][0], name)
+        self.assertIn(b'V2WorkspaceDock', output['apps/admin/src/v2/layouts/V2AdminLayout.vue'][0])
+        self.assertLess(len(json.dumps(record).encode()) + 2048, 32768)
+
+    def test_unknown_admin_input_overlay_modes_and_changed_before_bytes_are_rejected(self):
+        for name in (a.WORKSPACE_FILES[0], 'apps/admin/src/v2/components/unreviewed.vue', 'package-lock.json'):
+            files = dict(self.files)
+            raw, mode = files.get(name, (b'', '100644'))
+            files[name] = (raw + b'\n', mode)
+            with self.subTest(name=name), self.assertRaisesRegex(RuntimeError, 'UNREVIEWED_WORKSPACE_SOURCE'):
+                self.project(files=files)
+        files = dict(self.files); name = a.WORKSPACE_FILES[0]
+        files[name] = (files[name][0], '100755')
+        with self.assertRaises(RuntimeError): self.project(files=files)
+        before = dict(self.review); before[name] = (b'changed before', '100644')
+        with self.assertRaisesRegex(RuntimeError, 'WORKSPACE_BEFORE_CHANGED'): self.project(review=before)
+        predecessor = dict(self.predecessor); predecessor['docs/unreviewed.md'] = (b'changed', '100644')
+        with self.assertRaisesRegex(RuntimeError, 'WORKSPACE_PREDECESSOR_CHANGED'): self.project(predecessor=predecessor)
+
+    def test_transport_only_backend_and_control_changes_cannot_enter_output(self):
+        files = dict(self.files)
+        for name in ('apps/api/src/id-business-v2/unreviewed.ts', 'scripts/production-release/unreviewed.py'):
+            files[name] = (b'not published\n', '100644')
+        source, output, record, _ = self.project(files=files)
+        for name in ('apps/api/src/id-business-v2/unreviewed.ts', 'scripts/production-release/unreviewed.py'):
+            self.assertNotIn(name, source); self.assertNotIn(name, output)
+        self.assertEqual(record['outputTree'], '059f7fbfb292ae94de8d327ea59c797646dd11cb')
+        with self.assertRaisesRegex(RuntimeError, 'CANDIDATE_TREE_CHANGED'):
+            a.project_workspace(files, self.predecessor, self.review, self.baseline, self.online,
+                                self.commit, self.tree)
+
+    def test_selection_allows_only_sealed_sixty_profile_and_preserves_old_schema_guard(self):
+        selection = ROOT / 'scripts/production-release/validate-release-selection.sh'
+        env = {**os.environ, 'RELEASE_OPERATION': 'release_admin', 'RELEASE_ADMIN_ONLY': 'true',
+            'EXPECTED_CURRENT': a.WORKSPACE_BASELINE, 'RELEASE_COMMIT': self.commit,
+            'SOURCE_TREE': self.tree, 'GITHUB_REF': 'refs/heads/main', 'HISTORICAL_EXCEPTION': 'none'}
+        command = ['bash', '-c', 'source "$1"; validate_release_selection', '--', str(selection)]
+        result = subprocess.run(command, cwd=ROOT, env=env, capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
+        self.assertIn('ADMIN_WORKSPACE_SOURCE_VERIFIED', result.stdout)
+        for values in ({'EXPECTED_CURRENT': a.BASELINE}, {'SOURCE_TREE': 'f' * 40},
+                       {'RELEASE_COMMIT': a.WORKSPACE_REVIEW_BASE}, {'EXPECTED_CURRENT': 'd' * 40}):
+            with self.subTest(values=values):
+                result = subprocess.run(command, cwd=ROOT, env={**env, **values}, capture_output=True, text=True)
+                self.assertNotEqual(result.returncode, 0)
+
+
+class WorkspacePublicationTests(unittest.TestCase):
+    def fixture(self, root):
+        f = PublicationTests.fixture(self, root)
+        f.args.expected_current = a.WORKSPACE_BASELINE
+        f.configurations = {n: {'Config': {'fixture': n}, 'HostConfig': {'Memory': 0}, 'Mounts': []}
+                            for n in f.states}
+        f.configurations['api']['Mounts'] = [{'Type': 'volume', 'Name': 'fixture_sqlite',
+            'Destination': '/app/.runtime/auto-registration', 'Source': '/fixture-volume', 'RW': True}]
+        run = f.controller.run
+        def inspect(*parts, **kw):
+            if parts[:2] == ('docker', 'inspect'):
+                name = next(n for n, state in f.states.items() if state['containerId'] == parts[2])
+                return json.dumps([{'Id': parts[2], **f.configurations[name]}])
+            return run(*parts, **kw)
+        f.controller.run = inspect
+        ancestor = f.base / 'releases' / 'admin-sixty'; ancestor.mkdir()
+        old_projection = {'projectionSha256': a.WORKSPACE_OLD_PROJECTION_SHA256}
+        old_proof = {'projection': old_projection, 'image': {'imageId': f.original['admin']['image']}}
+        old_ledger = {'projection': old_projection, 'componentBaselines': {'api': a.BASELINE}}
+        old = {**copy.deepcopy(f.manifest), 'commit': a.WORKSPACE_BASELINE, 'adminPublication': old_ledger}
+        a.write_json(ancestor / 'release-manifest.json', old)
+        a.write_json(ancestor / 'admin-build-proof.json', old_proof)
+        ancestor_sha = a.digest((ancestor / 'release-manifest.json').read_bytes())
+        f.manifest.update(commit=a.WORKSPACE_BASELINE, adminPublication=old_ledger,
+            previousRelease=str(ancestor), previousManifestSha256=ancestor_sha,
+            apiHotfixPublication={'fixture': 'immutable existing hotfix; no new restore authority'})
+        (f.previous / 'release-manifest.json').write_text(json.dumps(f.manifest))
+        f.contract = {**a.WORKSPACE_BASELINE_CONTRACT,
+            'manifestSha256': a.digest((f.previous / 'release-manifest.json').read_bytes()),
+            'adminRelease': str(ancestor), 'adminManifestSha256': ancestor_sha,
+            'adminProofSha256': a.digest((ancestor / 'admin-build-proof.json').read_bytes()),
+            'adminPublicationSha256': a.fingerprint(old_ledger),
+            'originMarkersSha256': a.fingerprint({n: f.manifest[n] for n in a.ORIGIN_MARKERS}),
+            'hotfixPublicationSha256': a.fingerprint(f.manifest['apiHotfixPublication']),
+            'apiImageId': f.original['api']['image'], 'adminImageId': f.original['admin']['image']}
+        f.expected.update(profile=a.WORKSPACE_PROFILE, apiComponentBaseline=a.BASELINE,
+            sourceBasisCommit=a.WORKSPACE_BASELINE, overlaySha256=a.WORKSPACE_OVERLAY_SHA256,
+            approvedAdminInputSha256=a.WORKSPACE_INPUT_SHA256,
+            originalAdminProjectionSha256=a.WORKSPACE_OLD_PROJECTION_SHA256)
+        f.expected['projectionSha256'] = a.fingerprint({k:v for k,v in f.expected.items() if k != 'projectionSha256'})
+        return f
+
+    def execute(self, f):
+        with patch.object(a, 'WORKSPACE_BASELINE_CONTRACT', f.contract), \
+             patch.object(a, 'source_projection', return_value=(f.candidate,f.candidate,f.expected,f.runtime,'9'*64)):
+            result = a.publish(f.controller, f.args, f.proof)
+            readback = a.readback(f.controller, f.args.commit)
+            self.assertEqual(readback['apiComponentBaseline'], a.BASELINE)
+            return result
+
+    def test_sixty_successor_only_replaces_admin_and_inherits_api31_and_hotfix(self):
+        with tempfile.TemporaryDirectory(dir=RUNTIME) as root:
+            f = self.fixture(root); self.assertEqual(self.execute(f)['status'], 'ADMIN_ONLY_PUBLISHED')
+            manifest = a.read_json((f.base / 'current').resolve() / 'release-manifest.json')
+            self.assertEqual(manifest['previousCommit'], a.WORKSPACE_BASELINE)
+            self.assertEqual(manifest['adminPublication']['componentBaselines'], {'api': a.BASELINE})
+            self.assertEqual(manifest['apiHotfixPublication'], f.manifest['apiHotfixPublication'])
+            self.assertEqual(manifest['images']['api'], f.manifest['images']['api'])
+            self.assertEqual(f.states['api'], f.original['api'])
+            self.assertEqual([r for r in f.actions if r[0] == 'compose' and r[1][:2] == ('up','-d')],
+                [('compose', ('up','-d','--no-deps','--no-build','--pull','never','--force-recreate','admin'))])
+            self.assertEqual(f.rollback, [])
+
+    def test_inherited_proof_marker_and_current_image_drift_stop_before_switch(self):
+        for fault in ('proof', 'hotfix', 'origin', 'api', 'admin'):
+            with self.subTest(fault=fault), tempfile.TemporaryDirectory(dir=RUNTIME) as root:
+                f = self.fixture(root)
+                if fault == 'proof':
+                    (Path(f.contract['adminRelease']) / 'admin-build-proof.json').write_bytes(b'{}')
+                elif fault in ('hotfix', 'origin'):
+                    key = 'apiHotfixPublication' if fault == 'hotfix' else 'pendingOnlineMigration'
+                    f.manifest[key] = {'changed': True}
+                    (f.previous / 'release-manifest.json').write_text(json.dumps(f.manifest))
+                else:
+                    f.states[fault]['image'] = 'sha256:' + 'd' * 64
+                with self.assertRaises(RuntimeError): self.execute(f)
+                self.assertFalse(any(r[0] == 'compose' and r[1][:2] == ('up','-d') for r in f.actions))
+                self.assertEqual(f.rollback, [])
+
+    def test_readback_cannot_relabel_api_origin_to_current_admin(self):
+        with tempfile.TemporaryDirectory(dir=RUNTIME) as root:
+            f = self.fixture(root); self.execute(f)
+            current = (f.base / 'current').resolve()
+            manifest = a.read_json(current / 'release-manifest.json')
+            manifest['adminPublication']['componentBaselines']['api'] = a.WORKSPACE_BASELINE
+            (current / 'release-manifest.json').write_text(json.dumps(manifest))
+            with patch.object(a, 'WORKSPACE_BASELINE_CONTRACT', f.contract), self.assertRaisesRegex(RuntimeError, 'READBACK_CHANGED'):
+                a.readback(f.controller, f.args.commit)
+
+    def test_in_place_host_configuration_drift_is_preserved_failure_without_api_restart(self):
+        with tempfile.TemporaryDirectory(dir=RUNTIME) as root:
+            f = self.fixture(root)
+            compose = f.controller.compose
+            def drift(directory, *parts, **kw):
+                result = compose(directory, *parts, **kw)
+                if parts[:2] == ('up', '-d'):
+                    f.configurations['api']['HostConfig']['Memory'] = 1024
+                return result
+            f.controller.compose = drift
+            with self.assertRaisesRegex(RuntimeError, 'PRESERVED_SERVICE_CHANGED'): self.execute(f)
+            self.assertEqual(f.rollback, ['admin'])
+            self.assertEqual(f.states['api'], f.original['api'])
+            receipt = next(p for p in (f.base / 'releases').glob('*/admin-release-failure.json'))
+            self.assertFalse(a.read_json(receipt)['observed']['preservedServicesUnchanged'])
+
+    def test_readback_rejects_in_place_mount_drift(self):
+        with tempfile.TemporaryDirectory(dir=RUNTIME) as root:
+            f = self.fixture(root); self.execute(f)
+            f.configurations['mysql']['Mounts'].append({'Destination': '/fixture', 'Source': '/changed'})
+            with patch.object(a, 'WORKSPACE_BASELINE_CONTRACT', f.contract), \
+                 patch.object(a, 'source_projection', return_value=(f.candidate,f.candidate,f.expected,f.runtime,'9'*64)), \
+                 self.assertRaisesRegex(RuntimeError, 'PRESERVED_SERVICE_CHANGED'):
+                a.readback(f.controller, f.args.commit)
+
+    def test_mount_order_is_stable_and_duplicate_destinations_are_rejected(self):
+        with tempfile.TemporaryDirectory(dir=RUNTIME) as root:
+            f = self.fixture(root)
+            mounts = [{'Destination': '/one', 'Source': '/first'}, {'Destination': '/two', 'Source': '/second'}]
+            f.configurations['mysql']['Mounts'] = mounts
+            before = a.snapshot(f.controller, f.previous, configuration=True)
+            f.configurations['mysql']['Mounts'] = list(reversed(mounts))
+            self.assertEqual(before, a.snapshot(f.controller, f.previous, configuration=True))
+            f.configurations['mysql']['Mounts'].append(mounts[0])
+            with self.assertRaisesRegex(RuntimeError, 'SERVICE_CONFIGURATION_UNAVAILABLE'):
+                a.snapshot(f.controller, f.previous, configuration=True)
+
+
 if __name__=='__main__':unittest.main()

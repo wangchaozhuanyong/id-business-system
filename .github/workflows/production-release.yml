@@ -1116,8 +1116,22 @@ jobs:
             --command-id "$DIAGNOSTIC_COMMAND_ID" --instance-id "$PRODUCTION_INSTANCE_ID" --output json \
             | python3 scripts/production-release/remote-deploy.py --summarize-command-result
 
+      - name: Read finite Admin successor baseline facts
+        if: inputs.operation == 'verify_access' && inputs.expected_current == '60e164b75d1eedaab440c17139bf9ba55de08c61'
+        run: python3 -B scripts/production-release/admin-successor-diagnostic.py
+
+      - name: Save finite Admin successor read-only evidence
+        if: always() && inputs.operation == 'verify_access' && inputs.expected_current == '60e164b75d1eedaab440c17139bf9ba55de08c61'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: admin-successor-diagnostic-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .deploy/production-release/admin-successor-diagnostic-*.json
+          if-no-files-found: warn
+          include-hidden-files: true
+          retention-days: 14
+
       - name: Read production release diagnostics
-        if: inputs.operation == 'verify_access'
+        if: inputs.operation == 'verify_access' && inputs.expected_current != '60e164b75d1eedaab440c17139bf9ba55de08c61'
         run: |
           set -Eeuo pipefail
           mkdir -p .deploy/production-release
@@ -2443,6 +2457,11 @@ jobs:
               expected_projection = proof['projection']['projectionSha256']
               if not isinstance(expected_projection, str) or not re.fullmatch(r'[a-f0-9]{64}', expected_projection):
                   raise RuntimeError('Admin readback build projection unavailable')
+              expected_api_origin = proof['projection'].get('apiComponentBaseline')
+              if expected_api_origin is None and os.environ['EXPECTED_CURRENT'] == '31d2c6885a45817cd40d23fce8d6145bc9f18af2':
+                  expected_api_origin = '31d2c6885a45817cd40d23fce8d6145bc9f18af2'
+              if expected_api_origin != '31d2c6885a45817cd40d23fce8d6145bc9f18af2':
+                  raise RuntimeError('Admin readback API origin unavailable')
               staged = '/opt/id-business-v2/.staging/oidc-' + commit
               names = ('remote-deploy.py', 'api-admin-pending-projection.py', 'admin-pending-online-release.py')
               seals = {}
@@ -2528,7 +2547,7 @@ jobs:
                         'preservedServiceCount', 'onlinePublished', 'projectionSha256'}
               if (not isinstance(receipt, dict) or set(receipt) != fields
                       or receipt['status'] != 'ADMIN_ONLY_READBACK_VERIFIED' or receipt['commit'] != commit
-                      or receipt['apiComponentBaseline'] != os.environ['EXPECTED_CURRENT']
+                      or receipt['apiComponentBaseline'] != expected_api_origin
                       or receipt['servicesUpdated'] != ['admin'] or receipt['onlinePublished'] is not False
                       or type(receipt['preservedServiceCount']) is not int or receipt['preservedServiceCount'] != 6
                       or receipt['projectionSha256'] != expected_projection):
