@@ -187,7 +187,7 @@ describe('网页直连登录任务生命周期', () => {
     mock.callback.mockRejectedValueOnce(new Error('fixture-callback-unavailable'));
     await expect(
       controller.start(launch(), { sessionJson: 'fixture-json' }, '窗口')
-    ).rejects.toThrow('fixture-callback-unavailable');
+    ).rejects.toThrow('保存分组核验状态失败');
     expect(mock.run).not.toHaveBeenCalled();
     expect(controller.owns('job-fixture')).toBe(false);
     scope.stop();
@@ -284,6 +284,253 @@ describe('仅登录窗口控制器收尾', () => {
     scope.stop();
   });
 
+  it('创建窗口拒绝且终态保存409后成功收尾仍保留首失败和固定诊断，调用顺序不变', async () => {
+    const requestId = '11111111-1111-4111-8111-111111111111';
+    mock.callback.mockResolvedValueOnce({ ok: true }).mockRejectedValue(
+      new ApiError('fixture-private-body', {
+        kind: 'conflict',
+        code: 'CONFLICT',
+        status: 409,
+        requestId,
+        retryable: false,
+        cause: { url: 'https://example.invalid/?fixture-private-key' }
+      })
+    );
+    mock.run.mockRejectedValue(
+      new DirectBrowserError('bitbrowser_direct_rejected', {
+        operation: 'browser_update',
+        httpStatus: 200
+      })
+    );
+    const scope = effectScope(),
+      error = vi.fn(),
+      refresh = vi.fn().mockResolvedValue(undefined);
+    const flow = scope.run(() => useBitBrowserDirectOpen(refresh, error))!;
+    const current = launch(),
+      credential = { sessionJson: 'fixture-private-json' };
+    await flow.start(current, credential, '合成窗口');
+    await vi.waitFor(() => expect(flow.running.value).toBe(false));
+    expect(error.mock.calls.at(-1)?.[0]).toContain('创建或更新窗口资料失败');
+    expect(error.mock.calls.at(-1)?.[0]).toContain('HTTP 200');
+    expect(error.mock.calls.at(-1)?.[0]).toContain('保存执行结果失败');
+    expect(error.mock.calls.at(-1)?.[0]).toContain('HTTP 409');
+    expect(error.mock.calls.at(-1)?.[0]).toContain('执行记录冲突');
+    expect(error.mock.calls.at(-1)?.[0]).toContain(requestId);
+    expect(error.mock.calls.at(-1)?.[0]).toContain('原登录任务已停止');
+    expect(error.mock.calls.at(-1)?.[0]).not.toMatch(/fixture-private|https:|browser\/update/);
+    expect(mock.callback.mock.calls.map(([, , input]) => input.type)).toEqual([
+      'progress',
+      'finished'
+    ]);
+    expect(mock.cancel).toHaveBeenCalledExactlyOnceWith(current.id, {
+      signal: expect.any(AbortSignal)
+    });
+    expect(refresh).toHaveBeenCalledTimes(2);
+    expect(mock.run).toHaveBeenCalledOnce();
+    expect(credential.sessionJson).toBe('');
+    expect(current.agentToken).toBe('');
+    expect(current.bitBrowser.localApiToken).toBe('');
+    scope.stop();
+  });
+
+  it.each([
+    ['owned_profile_check', '保存原窗口核验状态失败'],
+    ['bitbrowser_profile_missing_confirmed', '保存原窗口缺失核验状态失败'],
+    ['bitbrowser_profile_created', '保存新窗口回执失败'],
+    ['bitbrowser_profile_opened', '保存窗口打开回执失败'],
+    ['bitbrowser_group', '保存分组核验状态失败'],
+    ['fixture-private-stage', '保存执行状态失败']
+  ])('执行回执失败保留受控当前步骤，成功收尾不覆盖首失败：%s', async (stage, label) => {
+    const profileId = 'b'.repeat(32);
+    mock.callback.mockResolvedValueOnce({ ok: true }).mockRejectedValue(
+      new ApiError('fixture-private-body', {
+        kind: 'conflict',
+        code: 'CONFLICT',
+        status: 409,
+        retryable: false
+      })
+    );
+    mock.run.mockImplementation(async (_settings, _credential, _name, _signal, hooks) => {
+      await hooks.progress(stage, { browser_profile_id: profileId });
+      return { status: 'session_ready', account_matched: true };
+    });
+    const scope = effectScope(),
+      error = vi.fn();
+    const flow = scope.run(() => useBitBrowserDirectOpen(vi.fn(), error))!;
+    await flow.start(launch(), { sessionJson: 'fixture-private-json' }, '合成窗口');
+    await vi.waitFor(() => expect(flow.running.value).toBe(false));
+    expect(error.mock.calls.at(-1)?.[0]).toContain(label);
+    expect(error.mock.calls.at(-1)?.[0]).toContain('保存执行结果失败');
+    expect(error.mock.calls.at(-1)?.[0]).toContain('HTTP 409');
+    expect(error.mock.calls.at(-1)?.[0]).toContain('执行记录冲突');
+    expect(error.mock.calls.at(-1)?.[0]).not.toMatch(/创建或更新窗口资料失败|fixture-private/);
+    expect(error.mock.calls.at(-1)?.[0]).not.toContain(profileId);
+    expect(mock.callback.mock.calls.map(([, , input]) => input.type)).toEqual([
+      'progress',
+      'progress',
+      'finished'
+    ]);
+    expect(mock.callback.mock.calls[1]?.[2]).toMatchObject({
+      type: 'progress',
+      result: { stage, browser_profile_id: profileId }
+    });
+    expect(mock.cancel).toHaveBeenCalledOnce();
+    scope.stop();
+  });
+
+  it('打开窗口失败且保存与收尾均失败时仍分别显示首失败和两次记录错误', async () => {
+    mock.callback.mockResolvedValueOnce({ ok: true }).mockRejectedValue(
+      new ApiError('fixture-private-record', {
+        kind: 'conflict',
+        code: 'CONFLICT',
+        status: 409,
+        retryable: false
+      })
+    );
+    mock.cancel.mockRejectedValue(
+      new ApiError('fixture-private-cancel', {
+        kind: 'forbidden',
+        code: 'AUTH_PERMISSION_DENIED',
+        status: 403,
+        requestId: 'fixture-private-invalid-uuid',
+        retryable: false
+      })
+    );
+    mock.run.mockRejectedValue(
+      new DirectBrowserError('bitbrowser_direct_rejected', {
+        operation: 'browser_open',
+        httpStatus: 503
+      })
+    );
+    const scope = effectScope(),
+      error = vi.fn();
+    const flow = scope.run(() => useBitBrowserDirectOpen(vi.fn(), error))!;
+    await flow.start(launch(), { sessionJson: 'fixture-private-json' }, '合成窗口');
+    await vi.waitFor(() => expect(flow.running.value).toBe(false));
+    expect(error.mock.calls.at(-1)?.[0]).toContain('打开比特窗口失败');
+    expect(error.mock.calls.at(-1)?.[0]).toContain('保存执行结果失败');
+    expect(error.mock.calls.at(-1)?.[0]).toContain('停止原任务失败');
+    expect(error.mock.calls.at(-1)?.[0]).toContain('执行记录权限未确认');
+    expect(error.mock.calls.at(-1)?.[0]).not.toMatch(/fixture-private|请求编号/);
+    expect(mock.callback.mock.calls.map(([, , input]) => input.type)).toEqual([
+      'progress',
+      'finished'
+    ]);
+    expect(mock.cancel).toHaveBeenCalledOnce();
+    scope.stop();
+  });
+
+  it('原执行成功但终态回传失败时定位记录保存，不伪造窗口控制或登录失败', async () => {
+    mock.run.mockResolvedValue({ status: 'session_ready', account_matched: true });
+    mock.callback.mockResolvedValueOnce({ ok: true }).mockRejectedValue(
+      new ApiError('fixture-private-response', {
+        kind: 'conflict',
+        code: 'CONFLICT',
+        status: 409,
+        retryable: false
+      })
+    );
+    const scope = effectScope(),
+      error = vi.fn();
+    const flow = scope.run(() => useBitBrowserDirectOpen(vi.fn(), error))!;
+    await flow.start(launch(), { sessionJson: 'fixture-private-json' }, '合成窗口');
+    await vi.waitFor(() => expect(flow.running.value).toBe(false));
+    expect(error.mock.calls.at(-1)?.[0]).toContain('保存执行结果失败');
+    expect(error.mock.calls.at(-1)?.[0]).toContain('执行记录冲突');
+    expect(error.mock.calls.at(-1)?.[0]).not.toMatch(
+      /窗口控制失败|未能确认官网账号登录成功|fixture-private/
+    );
+    expect(mock.callback.mock.calls.map(([, , input]) => input.type)).toEqual([
+      'progress',
+      'finished',
+      'finished'
+    ]);
+    expect(mock.callback.mock.calls[1]?.[2]).toMatchObject({
+      type: 'finished',
+      result: { status: 'session_ready', account_matched: true }
+    });
+    expect(mock.cancel).toHaveBeenCalledOnce();
+    scope.stop();
+  });
+
+  it('读取归属记录失败显示受控步骤，原账户绑定与十五秒信号保持', async () => {
+    const accountKey = 'c'.repeat(64);
+    mock.callback.mockImplementation(async (_id, _token, input) => {
+      if (input.type === 'restore')
+        throw new ApiError('fixture-private-restore-body', {
+          kind: 'conflict',
+          code: 'CONFLICT',
+          status: 409,
+          retryable: false
+        });
+      return { ok: true };
+    });
+    mock.run.mockImplementation(async (_settings, _credential, _name, _signal, hooks) => {
+      await hooks.restore(accountKey);
+    });
+    const scope = effectScope();
+    const report = vi.fn();
+    const flow = scope.run(() => useBitBrowserDirectOpen(vi.fn(), report))!;
+    await flow.start(launch(), { sessionJson: 'fixture-private-session' }, '合成窗口');
+    await vi.waitFor(() => expect(flow.running.value).toBe(false));
+    expect(report.mock.lastCall?.[0]).toContain('读取账户执行记录失败');
+    expect(report.mock.lastCall?.[0]).toContain('执行记录冲突');
+    expect(report.mock.lastCall?.[0]).not.toMatch(/fixture-private|账户标识|窗口控制失败/);
+    expect(mock.callback.mock.calls.map(([, , input]) => input.type)).toEqual([
+      'progress',
+      'restore',
+      'finished'
+    ]);
+    expect(mock.callback.mock.calls[1]?.slice(2)).toEqual([
+      { type: 'restore', accountKey },
+      { signal: expect.any(AbortSignal) }
+    ]);
+    expect(mock.cancel).not.toHaveBeenCalled();
+    scope.stop();
+  });
+  it('开始回执十五秒未返回则安全收尾，迟到响应不能启动浏览器', async () => {
+    vi.useFakeTimers();
+    const scope = effectScope();
+    try {
+      let initialSignal!: AbortSignal;
+      let release!: (value: object) => void;
+      mock.callback.mockImplementationOnce((_id, _token, _input, options) => {
+        initialSignal = options.signal;
+        return new Promise((resolve) => (release = resolve));
+      });
+      const report = vi.fn();
+      const flow = scope.run(() => useBitBrowserDirectOpen(vi.fn(), report))!;
+      const input = launch();
+      const credential = { sessionJson: 'fixture-private-session' };
+      const failure = expect(flow.start(input, credential, '合成窗口')).rejects.toThrow(
+        '保存分组核验状态失败：加载恢复已达到时间上限'
+      );
+      await vi.advanceTimersByTimeAsync(14_999);
+      expect(flow.running.value).toBe(true);
+      expect(initialSignal.aborted).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+      await failure;
+      expect(flow.running.value).toBe(false);
+      expect(initialSignal.aborted).toBe(true);
+      expect(mock.run).not.toHaveBeenCalled();
+      expect(mock.callback.mock.calls.map(([, , body]) => body.type)).toEqual([
+        'progress',
+        'finished'
+      ]);
+      expect(mock.callback.mock.calls.at(-1)?.[3].signal.aborted).toBe(false);
+      expect(report.mock.lastCall?.[0]).toContain('保存分组核验状态失败');
+      expect(report.mock.lastCall?.[0]).not.toContain('fixture-private');
+      expect(credential.sessionJson).toBe('');
+      expect(input.agentToken).toBe('');
+      release({ ok: true });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(mock.run).not.toHaveBeenCalled();
+      expect(mock.callback).toHaveBeenCalledTimes(2);
+    } finally {
+      scope.stop();
+      vi.useRealTimers();
+    }
+  });
   it('另一页面已结束任务时中止本地执行，不再用旧凭据回传或报失败', async () => {
     mock.callback.mockResolvedValue({ ok: true });
     mock.cancel.mockResolvedValue({ id: 'job-fixture', cancellationConfirmed: true });
@@ -336,9 +583,9 @@ describe('仅登录窗口控制器收尾', () => {
   });
   it('原始409及请求编号不会被终态保存失败、取消结果或迟到页面读取错误覆盖', async () => {
     const primary = new ApiError('原单付款状态未安全核实，不能更换比特窗口', {
-      code: 'RECHARGE_PROFILE_CONFLICT',
+      code: 'CONFLICT',
       kind: 'conflict',
-      requestId: 'fixture-original-request-id',
+      requestId: '11111111-1111-4111-8111-111111111111',
       status: 409,
       retryable: false
     });
@@ -355,7 +602,9 @@ describe('仅登录窗口控制器收尾', () => {
     await vi.waitFor(() => expect(flow.running.value).toBe(false));
     expect(mock.cancel).toHaveBeenCalledOnce();
     expect(report.mock.lastCall?.[0]).toContain(primary.message);
-    expect(report.mock.lastCall?.[0]).toContain(primary.code);
+    expect(report.mock.lastCall?.[0]).toContain('执行记录冲突');
+    expect(report.mock.lastCall?.[0]).toContain('保存原窗口核验状态失败');
+    expect(report.mock.lastCall?.[0]).not.toContain(primary.code);
     expect(report.mock.lastCall?.[0]).toContain(primary.requestId);
     expect(report.mock.lastCall?.[0]).toContain('资料已解锁');
     const reports = report.mock.calls.length;

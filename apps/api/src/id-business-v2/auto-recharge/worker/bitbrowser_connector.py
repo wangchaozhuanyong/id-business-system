@@ -20,7 +20,7 @@ import stat
 import tempfile
 import threading
 from urllib.parse import urlsplit
-from urllib.error import HTTPError
+from urllib.error import HTTPError, URLError
 from urllib.request import Request, build_opener, HTTPRedirectHandler, ProxyHandler
 
 import bitbrowser_catalog
@@ -34,7 +34,7 @@ import payment_network
 import payment_recovery
 import payment_state
 from callback_observation import (CALLBACK_METADATA_KEYS, operation_metadata, read_callback_bytes,
-    http_failure_metadata, enrich_http_failure, parse_http_failure)
+    http_failure_metadata, enrich_http_failure, parse_http_failure, safe_identifier, secret_values)
 import subscription_upgrade
 from checkout_core import Stop, parse_browser_credential, unique_object, write_json
 from payment_form import PaymentDetails, validate_details
@@ -141,6 +141,52 @@ class CallbackClient:
     def __init__(self, url, token, job_id):
         self.url = callback_url(url, job_id)
         self.token = token
+        self.job_id = job_id
+
+    def _diagnostic(self, body, error, failure, metadata=None, parsed=None):
+        types = (HTTPError, URLError, TimeoutError, json.JSONDecodeError, ValueError, OSError)
+        kind = next((item.__name__ for item in types if isinstance(error, item)), 'Exception')
+        operation = body.get('type') if isinstance(body, dict) else None
+        private_values = secret_values(body, self.token)
+        diagnostic = {'event': 'recharge_record_callback_failed',
+            'operation': operation if isinstance(operation, str) and operation in {
+                'restore', 'ledger', 'progress', 'result', 'finished', 'resolve_unknown_payment',
+                'stale_profile_cleanup', 'prepare_next_subscription_cycle'} else 'unknown',
+            'errorType': kind, 'failure': failure,
+            'observedAt': datetime.now(timezone.utc).isoformat()}
+        if safe_identifier(self.job_id, JOB_ID_TEXT, private_values):
+            diagnostic['jobId'] = self.job_id
+        metadata = metadata or {}
+        if metadata.get('callback_phase') in {'inspect', 'status', 'commit'}:
+            diagnostic['phase'] = metadata['callback_phase']
+        if isinstance(error, HTTPError) and type(error.code) is int and 100 <= error.code <= 599:
+            diagnostic['httpStatus'] = error.code
+        tracking = metadata.get('callback_request_id')
+        if safe_identifier(tracking, JOB_ID_TEXT, private_values):
+            diagnostic['requestId'] = tracking
+        if isinstance(parsed, dict):
+            code = parsed.get('errorCode')
+            if isinstance(code, str) and code in {'BAD_REQUEST', 'UNAUTHORIZED', 'FORBIDDEN',
+                    'AUTH_INVALID', 'AUTH_PERMISSION_DENIED', 'NOT_FOUND', 'CONFLICT',
+                    'REQUEST_TIMEOUT', 'RATE_LIMITED', 'TOO_MANY_REQUESTS',
+                    'INTERNAL_SERVER_ERROR', 'SERVICE_UNAVAILABLE'} and not any(
+                        private in code for private in private_values):
+                diagnostic['errorCode'] = code
+            tracking = parsed.get('requestId')
+            if safe_identifier(tracking, JOB_ID_TEXT, private_values):
+                diagnostic.setdefault('requestId', tracking)
+            message = parsed.get('message')
+            cause = {
+                '本机连接凭据无效': 'callback_credentials_rejected',
+                '执行窗口已结束，请重新核验原订单': 'job_expired',
+                '账户标识不一致': 'account_mismatch',
+                '该账户属于另一操作人的原任务': 'account_owner_mismatch',
+                '本次任务已绑定另一比特窗口，不能覆盖原窗口': 'profile_conflict',
+                '原订单编号不一致': 'checkout_conflict',
+            }.get(message) if isinstance(message, str) else None
+            if cause:
+                diagnostic['rejectionCause'] = cause
+        return diagnostic
 
     def send(self, body, *, deadline=None):
         request = Request(
@@ -150,16 +196,22 @@ class CallbackClient:
             method="POST",
         )
         completed, expired = threading.Event(), threading.Event()
-        results, failures = [], []
+        results, failures, diagnostics = [], [], []
         deadline = min(time.monotonic() + self.SEND_SECONDS, deadline) if deadline is not None else time.monotonic() + self.SEND_SECONDS
 
         def transfer():
+            failure = 'transport'
             try:
                 remaining_open = deadline - time.monotonic()
                 if remaining_open <= 0:
                     raise TimeoutError()
                 with build_opener(NoRedirect).open(request, timeout=remaining_open) as response:
-                    raw = read_callback_bytes(response, deadline, expired, MAX_BODY)
+                    failure = 'response'
+                    try:
+                        raw = read_callback_bytes(response, deadline, expired, MAX_BODY)
+                    except ValueError:
+                        failure = 'response_too_large'
+                        raise
                     result = json.loads(raw, object_pairs_hook=unique_object)
                 if (not isinstance(result, dict) or result.get('success') is not True
                         or not isinstance(result.get('data'), dict)):
@@ -170,11 +222,13 @@ class CallbackClient:
                 metadata = http_failure_metadata(error, body, self.token)
                 if not expired.is_set() and time.monotonic() < deadline:
                     failures.append(metadata)
+                    diagnostics.append(self._diagnostic(body, error, 'http_rejected', metadata))
                     try:
                         raw = read_callback_bytes(error, deadline, expired, 16 * 1024)
                         parsed = parse_http_failure(raw)
                         if not expired.is_set() and time.monotonic() < deadline:
                             enrich_http_failure(metadata, parsed, body, self.token)
+                            diagnostics[0].update(self._diagnostic(body, error, 'http_rejected', metadata, parsed))
                     except Exception:
                         pass
                 try:
@@ -186,6 +240,7 @@ class CallbackClient:
                     kind = ('timeout' if isinstance(error, TimeoutError) else
                             'invalid_response' if isinstance(error, (ValueError, TypeError, Stop)) else 'transport')
                     failures.append({**operation_metadata(body), 'callback_failure_kind': kind})
+                    diagnostics.append(self._diagnostic(body, error, failure, failures[-1]))
             finally:
                 completed.set()
 
@@ -197,6 +252,13 @@ class CallbackClient:
         if results:
             return results[0]
         details = failures[0] if failures else {**operation_metadata(body), 'callback_failure_kind': 'timeout'}
+        # The caller emits one bounded snapshot; a late transport thread never logs.
+        diagnostic = dict(diagnostics[0]) if diagnostics else self._diagnostic(
+            body, TimeoutError(), 'transport', details)
+        try:
+            print(json.dumps(diagnostic, sort_keys=True), flush=True)
+        except Exception:
+            pass
         raise Stop('durable_state_unavailable', **details) from None
 
 
