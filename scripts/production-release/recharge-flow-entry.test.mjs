@@ -329,7 +329,7 @@ test('recharge extension preserves all previous workflow inputs, environments an
       step.if = step.if.replace("inputs.operation == 'release_recharge_flow' || ", '');
   assert.deepEqual(rechargeOnly, baseline);
 
-  // Bind later Admin repairs to their exact delta; every other field and step stays frozen.
+  // Bind reviewed Admin and disk changes to their exact delta; every other field and step stays frozen.
   const expected = structuredClone(reviewedRecharge);
   const steps = expected.jobs.release.steps;
   const diagnosticIndex = steps.findIndex(
@@ -378,5 +378,83 @@ test('recharge extension preserves all previous workflow inputs, environments an
   readback.run = readback.run
     .replace('    staged = ', apiOriginSelection + '    staged = ')
     .replace(oldApiOrigin, "receipt['apiComponentBaseline'] != expected_api_origin");
+
+  const insertAfter = (name, ...addedSteps) => {
+    const index = steps.findIndex((step) => step.name === name);
+    assert.ok(index >= 0, name);
+    steps.splice(index + 1, 0, ...addedSteps);
+  };
+  const diskGate =
+    "inputs.historical_exception == 'none' && inputs.reuse_image_run == '' && (inputs.operation == 'release' || inputs.operation == 'release_admin' || inputs.operation == 'release_online_recharge' || inputs.operation == 'release_api_workspace' || inputs.operation == 'release_api_admin' || inputs.operation == 'release_api_admin_migration' || inputs.operation == 'release_unpublished_components' || inputs.operation == 'release_recharge_flow')";
+  insertAfter(
+    'Obtain short-lived AWS credentials through OIDC',
+    {
+      name: 'Read stable disk maintenance ownership before legacy image operations',
+      id: 'disk_owner',
+      if: "inputs.operation == 'release' || inputs.operation == 'cleanup_cache' || inputs.operation == 'cleanup_unused_cache' || inputs.operation == 'cleanup_unused_legacy_cache' || inputs.operation == 'cleanup_unused_builder_cache' || inputs.operation == 'cleanup_legacy_cache'",
+      run: String.raw`set -Eeuo pipefail
+command_id="$(aws ssm send-command --instance-ids "$PRODUCTION_INSTANCE_ID" \
+  --document-name AWS-RunShellScript \
+  --parameters '{"commands":["if test -e /opt/id-business-v2/maintenance/disk-retention/config.json; then printf true; else printf false; fi"]}' \
+  --query 'Command.CommandId' --output text)"
+aws ssm wait command-executed --command-id "$command_id" --instance-id "$PRODUCTION_INSTANCE_ID"
+installed="$(aws ssm get-command-invocation --command-id "$command_id" \
+  --instance-id "$PRODUCTION_INSTANCE_ID" --query StandardOutputContent --output text)"
+case "$installed" in true|false) ;; *) exit 1 ;; esac
+printf 'installed=%s\n' "$installed" >> "$GITHUB_OUTPUT"
+`
+    },
+    {
+      name: 'Reject legacy image cleanup after stable disk policy installation',
+      if: "steps.disk_owner.outputs.installed == 'true' && (inputs.operation == 'cleanup_cache' || inputs.operation == 'cleanup_unused_cache' || inputs.operation == 'cleanup_unused_legacy_cache' || inputs.operation == 'cleanup_unused_builder_cache' || inputs.operation == 'cleanup_legacy_cache')",
+      run: "echo 'The installed disk policy owns image cleanup; legacy cleanup cannot bypass its candidate protections.' >&2\nexit 1\n"
+    },
+    {
+      name: 'Recover reviewed disk headroom before release preflight',
+      if: diskGate,
+      run: 'python3 -B scripts/production-release/release-storage.py before-build'
+    }
+  );
+  insertAfter('Push immutable images', {
+    name: 'Register complete release candidate and reserve pull headroom',
+    if: diskGate,
+    run: 'python3 -B scripts/production-release/release-storage.py before-pull'
+  });
+  insertAfter(
+    'Independently read back online recharge runtime and preserved services',
+    {
+      name: 'Confirm published candidate and reclaim superseded local images',
+      if: diskGate,
+      run: 'python3 -B scripts/production-release/release-storage.py after-publish'
+    },
+    {
+      name: 'Save disk lifecycle safe evidence',
+      if: 'always() && ' + diskGate,
+      uses: 'actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02',
+      with: {
+        name: 'disk-lifecycle-evidence-${{ github.run_id }}-${{ github.run_attempt }}',
+        path: '.deploy/production-release/storage/**/*.json',
+        'if-no-files-found': 'warn',
+        'include-hidden-files': true,
+        'retention-days': 14
+      }
+    }
+  );
+  for (const name of [
+    'Verify or maintain recoverable unused project image cache',
+    'Maintain service rollback image cache independently after fixed release'
+  ]) {
+    const step = steps.find((candidate) => candidate.name === name);
+    assert.ok(step, name);
+    if (name === 'Verify or maintain recoverable unused project image cache') {
+      const releaseClause = "(inputs.operation == 'release' && ";
+      assert.equal(step.if.split(releaseClause).length, 2);
+      step.if = step.if.replace(
+        releaseClause,
+        releaseClause + "inputs.historical_exception != 'none' && "
+      );
+    }
+    step.if = "steps.disk_owner.outputs.installed != 'true' && (" + step.if + ')';
+  }
   assert.deepEqual(workflow(), expected);
 });

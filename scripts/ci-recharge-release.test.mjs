@@ -101,16 +101,19 @@ function assertRegistrationReleaseRetired(profile) {
   });
 }
 
-const workflowPredicate = (expression) => (inputs) =>
-  new Function('inputs', 'startsWith', 'always', 'failure', `return (${expression});`)(
-    inputs,
-    (value, prefix) =>
-      String(value ?? '')
-        .toLowerCase()
-        .startsWith(String(prefix).toLowerCase()),
-    () => true,
-    () => false
-  );
+const workflowPredicate =
+  (expression) =>
+  (inputs, steps = { disk_owner: { outputs: { installed: 'false' } } }) =>
+    new Function('inputs', 'steps', 'startsWith', 'always', 'failure', `return (${expression});`)(
+      inputs,
+      steps,
+      (value, prefix) =>
+        String(value ?? '')
+          .toLowerCase()
+          .startsWith(String(prefix).toLowerCase()),
+      () => true,
+      () => false
+    );
 
 test('declaration inventory requires its actual failed workspace preflight and grants no release', () => {
   const workflow = loadYaml(readFileSync('.github/workflows/production-release.yml', 'utf8'));
@@ -1974,6 +1977,7 @@ test('workflow skips legacy automatic cache mutation for the new release policy'
   );
   const selected = (operation, historical_exception) =>
     workflowPredicate(step.if)({ operation, historical_exception });
+  assert.equal(selected('release', 'none'), false);
   assert.equal(selected('release', postCleanupPolicy), false);
   assert.equal(selected('release', 'historical-finance-20261005-order-archive'), false);
   assert.equal(selected('release', 'recharge-pro-menu-b8-20261005'), false);
@@ -2001,6 +2005,7 @@ test('workflow skips legacy automatic cache mutation for the new release policy'
   for (const policy of workflowInputs.historical_exception.options.filter(
     (value) =>
       ![
+        'none',
         postCleanupPolicy,
         'historical-finance-20261005-order-archive',
         'recharge-pro-menu-b8-20261005',
@@ -2039,6 +2044,61 @@ test('workflow skips legacy automatic cache mutation for the new release policy'
   ])
     assert.equal(selected(operation, 'none'), true);
   assert.equal(selected('verify_access', 'none'), false);
+});
+
+test('installed disk ownership blocks legacy cleanup without weakening historical release conditions', () => {
+  const generic = workflowSteps.find(
+    (step) => step.name === 'Verify or maintain recoverable unused project image cache'
+  );
+  const service = workflowSteps.find(
+    (step) =>
+      step.name === 'Maintain service rollback image cache independently after fixed release'
+  );
+  const reject = workflowSteps.find(
+    (step) => step.name === 'Reject legacy image cleanup after stable disk policy installation'
+  );
+  assert.ok(generic && service && reject);
+  const state = (installed) => ({ disk_owner: { outputs: { installed } } });
+  for (const [step, historical_exception] of [
+    [generic, 'historical-finance-20261005'],
+    [service, 'recharge-pro-2f-20261007']
+  ]) {
+    const inputs = { operation: 'release', historical_exception, expected_current: 'a'.repeat(40) };
+    assert.equal(workflowPredicate(step.if)(inputs), true);
+    assert.equal(workflowPredicate(step.if)(inputs, state('false')), true);
+    assert.equal(workflowPredicate(step.if)(inputs, state('true')), false);
+    for (const installed of ['false', 'true'])
+      assert.equal(
+        workflowPredicate(step.if)({ ...inputs, historical_exception: 'none' }, state(installed)),
+        false
+      );
+  }
+  for (const historical_exception of [
+    'recharge-pro-4c-20261008',
+    'recharge-pro-6f5-20261008',
+    'recharge-pro-pricing-045-20261008',
+    'registration-worker-96-20261008'
+  ])
+    for (const installed of ['false', 'true'])
+      assert.equal(
+        workflowPredicate(service.if)(
+          { operation: 'release', historical_exception },
+          state(installed)
+        ),
+        false
+      );
+  for (const operation of [
+    'cleanup_cache',
+    'cleanup_unused_cache',
+    'cleanup_unused_legacy_cache',
+    'cleanup_unused_builder_cache',
+    'cleanup_legacy_cache'
+  ]) {
+    assert.equal(workflowPredicate(reject.if)({ operation }, state('true')), true);
+    assert.equal(workflowPredicate(reject.if)({ operation }, state('false')), false);
+  }
+  for (const operation of ['verify_cache', 'verify_unused_cache', 'cleanup_backups', 'release'])
+    assert.equal(workflowPredicate(reject.if)({ operation }, state('true')), false);
 });
 
 test('preparation permits only build push and evidence and cannot reach dispatch SSM or maintenance', () => {
@@ -2224,6 +2284,12 @@ test('actual full-mode release controls select each missing suite once without r
     'python3 -B scripts/production-release/browser-cache-input.test.py',
     'python3 -B scripts/production-release/service-image-retention.test.py',
     'python3 -B scripts/production-release/maintain-image-cache.test.py',
+    'python3 -B scripts/production-release/disk-retention.test.py',
+    'python3 -B scripts/production-release/disk-retention-install.test.py',
+    'python3 -B scripts/production-release/disk-retention-transport.test.py',
+    'python3 -B scripts/production-release/candidate-retention.test.py',
+    'python3 -B scripts/production-release/disk-lifecycle.test.py',
+    'python3 -B scripts/production-release/release-storage.test.py',
     'node --test scripts/v2-order-archive-release-policy.test.mjs',
     'python3 -B scripts/production-release/online-recharge-source-permission-repair.test.py',
     'python3 -B scripts/production-release/online-recharge-source-permission-repair-transport.test.py',
@@ -3564,7 +3630,7 @@ test('fixed b8 workflow checks approval before builds and credentials, then skip
     );
   assert.ok(
     workflow.includes(
-      "inputs.operation == 'release' && inputs.historical_exception != 'recharge-pro-menu-b8-20261005' && inputs.historical_exception != 'recharge-pro-menu-7f-20261005'"
+      "inputs.operation == 'release' && inputs.historical_exception != 'none' && inputs.historical_exception != 'recharge-pro-menu-b8-20261005' && inputs.historical_exception != 'recharge-pro-menu-7f-20261005'"
     )
   );
   assert.ok(workflow.includes('RECHARGE_ONLY_CACHE_SKIPPED'));
