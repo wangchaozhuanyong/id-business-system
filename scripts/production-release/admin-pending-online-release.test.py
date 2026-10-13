@@ -1,5 +1,6 @@
 """Exact source projection and offline Admin publication; no production traffic."""
 import copy
+from contextlib import redirect_stdout
 import hashlib
 import importlib.util
 import io
@@ -16,7 +17,8 @@ ROOT = Path(__file__).resolve().parents[2]
 spec = importlib.util.spec_from_file_location('admin_adapter', Path(__file__).with_name('admin-pending-online-release.py'))
 a = importlib.util.module_from_spec(spec); spec.loader.exec_module(a)
 d = a.controller_module()
-RUNTIME = ROOT / '.runtime/admin-independent-release-tests'; RUNTIME.mkdir(parents=True, exist_ok=True)
+RUNTIME = ROOT / '.runtime/bitbrowser-confirm-expiry-20261014/release/admin-tests'
+RUNTIME.mkdir(parents=True, exist_ok=True)
 
 
 def git_files(commit):
@@ -534,6 +536,407 @@ class WorkspacePublicationTests(unittest.TestCase):
             f.configurations['mysql']['Mounts'].append(mounts[0])
             with self.assertRaisesRegex(RuntimeError, 'SERVICE_CONFIGURATION_UNAVAILABLE'):
                 a.snapshot(f.controller, f.previous, configuration=True)
+
+
+class ConfirmProjectionTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.predecessor = git_files(a.CONFIRM_BASELINE)
+        cls.control_source = git_files(a.CONFIRM_CONTROL_SOURCE)
+        p = a.projection_module(); cls.p = p
+        cls.baseline, cls.online = git_files(p.BASELINE_COMMIT), git_files(p.ONLINE_COMMIT)
+        cls.candidate = dict(cls.control_source)
+        for name in (*a.CONFIRM_FILES, *a.CONFIRM_CONTROLS, *a.CONFIRM_DOCS):
+            cls.candidate[name] = ((ROOT / name).read_bytes(), '100644')
+
+    def project(self, candidate=None, predecessor=None, control_source=None):
+        files = self.candidate if candidate is None else candidate
+        return a.project_confirm(files, self.predecessor if predecessor is None else predecessor,
+            self.baseline, self.online, 'a' * 40, self.p.source_tree(files),
+            self.control_source if control_source is None else control_source)
+
+    def test_only_frozen_two_file_overlay_enters_published_projection_and_online_stays_absent(self):
+        output, record, runtime = self.project()
+        self.assertEqual(record['profile'], a.CONFIRM_PROFILE)
+        self.assertEqual(record['apiComponentBaseline'], a.CONFIRM_BASELINE)
+        self.assertEqual(record['controlSourceCommit'], a.CONFIRM_CONTROL_SOURCE)
+        self.assertEqual(record['controlSourceTree'], a.CONFIRM_CONTROL_TREE)
+        self.assertEqual(record['inheritedControlFiles'], {})
+        self.assertEqual(self.control_source, self.predecessor)
+        for name in (
+            'apps/admin/src/v2/features/auto-recharge/bitbrowser-direct-api.ts',
+            'apps/admin/src/v2/features/auto-recharge/bitbrowser-direct.spec.ts',
+            'apps/admin/src/v2/features/auto-recharge/useBitBrowserDirectOpen.spec.ts',
+            'apps/admin/src/v2/features/auto-recharge/useBitBrowserDirectOpen.ts',
+            'apps/api/src/id-business-v2/auto-recharge/recharge-owned-profile.spec.ts',
+            'apps/api/src/id-business-v2/auto-recharge/worker/bitbrowser_connector.py',
+            'apps/api/src/id-business-v2/auto-recharge/worker/test_bitbrowser_connector.py'):
+            self.assertEqual(output[name], self.control_source[name], name)
+        self.assertEqual(record['overlaySha256'], a.CONFIRM_OVERLAY_SHA256)
+        self.assertEqual(set(record['overlayFiles']), set(a.CONFIRM_FILES))
+        self.assertFalse(any('/online-recharge/' in name for name in output))
+        self.assertEqual(runtime['apps/api/prisma-mysql/schema.prisma'][1], '100644')
+        self.assertEqual(a.digest(runtime['apps/api/prisma-mysql/schema.prisma'][0]),
+            '2d63ec64a4d9aa40cbacfc127857124b296919142ea96318ab196aa2e4ee07f2')
+        for name in a.CONFIRM_FILES:
+            self.assertEqual(output[name], self.candidate[name])
+        self.assertEqual(record['projectionSha256'], a.fingerprint({k: v for k, v in record.items()
+            if k != 'projectionSha256'}))
+
+    def test_other_ui_api_auth_online_migration_dependency_and_unknown_control_changes_rejected(self):
+        paths = ('apps/admin/src/v2/features/registry.ts',
+            'apps/api/src/id-business-v2/auto-recharge/recharge.service.ts',
+            'apps/api/src/auth/auth.service.ts',
+            'apps/admin/src/v2/features/online-recharge/fixture.vue',
+            'apps/api/prisma-mysql/schema.prisma',
+            'apps/api/prisma-mysql/migrations/unreviewed/migration.sql', 'package-lock.json',
+            'scripts/production-release/extra.py', '.github/workflows/quality.yml',
+            'docs/another-release.md', 'scripts/production-release/disk-retention.py',
+            'deploy/aws/disk-retention-policy-20261014.json', '.github/workflows/disk-retention-maintenance.yml',
+            'apps/admin/src/v2/features/auto-recharge/bitbrowser-direct-api.ts',
+            'apps/admin/src/v2/features/auto-recharge/useBitBrowserDirectOpen.ts',
+            'apps/api/src/id-business-v2/auto-recharge/worker/bitbrowser_connector.py')
+        for name in paths:
+            files = dict(self.candidate); raw, mode = files.get(name, (b'', '100644'))
+            files[name] = (raw + b'\n# changed\n', mode)
+            with self.subTest(name=name), self.assertRaisesRegex(RuntimeError, 'CONFIRM_SOURCE_SCOPE_CHANGED'):
+                self.project(files)
+
+    def test_wrong_baseline_overlay_mode_and_deleted_controls_rejected(self):
+        old = dict(self.predecessor); name = a.CONFIRM_FILES[0]; raw, mode = old[name]
+        old[name] = (raw + b'\n', mode)
+        with self.assertRaisesRegex(RuntimeError, 'CONFIRM_SOURCE_TREE_CHANGED'):
+            self.project(predecessor=old)
+        with self.assertRaisesRegex(RuntimeError, 'CONFIRM_SOURCE_TREE_CHANGED'):
+            self.project(predecessor=git_files('f193f34ea09a2c37485c1582a81b33ee3acec865'))
+        for fault in ('bytes', 'mode', 'delete'):
+            files = dict(self.candidate)
+            if fault == 'bytes':
+                raw, mode = files[name]; files[name] = (raw + b'\n', mode)
+            elif fault == 'mode':
+                raw, _ = files[name]; files[name] = (raw, '100755')
+            else:
+                del files['scripts/production-release/dispatch.sh']
+            with self.subTest(fault=fault), self.assertRaises(RuntimeError):
+                self.project(files)
+
+    def test_native_predecessor_projection_cannot_be_resealed_from_mutable_input(self):
+        with patch.object(a, 'CONFIRM_CONTRACT', {**a.CONFIRM_CONTRACT, 'projectionSha256': '0' * 64}), \
+             self.assertRaisesRegex(RuntimeError, 'CONFIRM_PREDECESSOR_CHANGED'):
+            self.project()
+
+    def test_control_basis_cannot_drift_or_introduce_unapproved_runtime_even_when_tree_is_resealed(self):
+        source = dict(self.control_source)
+        name = 'scripts/production-release/disk-retention.py'
+        raw, mode = source[name]; source[name] = (raw + b'\n# drift\n', mode)
+        with self.assertRaisesRegex(RuntimeError, 'CONFIRM_CONTROL_SOURCE_CHANGED'):
+            self.project(control_source=source)
+        for name in ('apps/api/src/auth/auth.service.ts',
+                     'apps/admin/src/v2/features/auto-recharge/useRechargeLocalConfirmation.ts',
+                     'package-lock.json', 'apps/api/prisma-mysql/schema.prisma'):
+            source = dict(self.control_source); raw, mode = source[name]
+            source[name] = (raw + b'\n# runtime change\n', mode)
+            with self.subTest(name=name), patch.object(a, 'CONFIRM_CONTROL_TREE', self.p.source_tree(source)), \
+                 self.assertRaisesRegex(RuntimeError, 'CONFIRM_CONTROL_SCOPE_CHANGED'):
+                self.project(control_source=source)
+
+    def test_inherited_storage_registration_accepts_only_this_complete_admin_role(self):
+        storage = a.load_module('confirm_inherited_storage', 'release-storage.py')
+        producer = {'commit': 'a' * 40, 'sourceTree': 'b' * 40,
+            'workflowRunId': '123', 'workflowRunAttempt': '1'}
+        selected = {'operation': 'release_admin', 'producer': producer,
+            'qualityRunId': '111', 'batch': producer['commit'] + '-123-1'}
+        proof = {'version': 1, 'scope': 'ADMIN_PENDING_ONLINE_BUILD',
+            'commit': producer['commit'], 'sourceTree': producer['sourceTree'],
+            'runId': '123', 'runAttempt': '1', 'qualityRunId': '111',
+            'image': {'reference': a.REPOSITORY + ':' + selected['batch'] + '-admin',
+                'imageId': 'sha256:' + 'c' * 64, 'fileCount': 225, 'sha256': 'd' * 64}}
+        module, images = storage.proof_images(selected, proof)
+        self.assertEqual(module, 'admin')
+        self.assertEqual(set(images), {'admin'})
+        for fault in ('role', 'run', 'scope'):
+            changed = copy.deepcopy(proof)
+            if fault == 'role': changed['image']['reference'] = changed['image']['reference'].replace('-admin', '-api')
+            elif fault == 'run': changed['runId'] = '124'
+            else: changed['scope'] = 'UNPUBLISHED_COMPONENT_BUILD'
+            with self.subTest(fault=fault), self.assertRaises(storage.StorageRejected):
+                storage.proof_images(selected, changed)
+
+
+class ConfirmPublicationTests(unittest.TestCase):
+    def fixture(self, root):
+        f = WorkspacePublicationTests.fixture(self, root)
+        f.args.expected_current = a.CONFIRM_BASELINE
+        f.manifest.update(commit=a.CONFIRM_BASELINE, sourceTree=a.CONFIRM_BASELINE_TREE)
+        original_projection = {'outputTree': a.CONFIRM_CONTRACT['outputTree']}
+        f.rows = {name: {'reference': f.original[name]['reference'], 'imageId': f.original[name]['image'],
+            'fileCount': 2, 'sha256': a.digest((name + ':content').encode())} for name in ('api', 'admin')}
+        original_proof = {'scope': 'UNPUBLISHED_COMPONENT_BUILD', 'commit': a.CONFIRM_BASELINE,
+            'sourceTree': a.CONFIRM_BASELINE_TREE, 'runId': a.CONFIRM_CONTRACT['runId'],
+            'runAttempt': a.CONFIRM_CONTRACT['runAttempt'], 'qualityRunId': a.CONFIRM_CONTRACT['qualityRunId'],
+            'projection': original_projection, 'images': f.rows}
+        state = {'after': a.snapshot(f.controller, f.previous, configuration=True),
+            'proofSha256': a.fingerprint(original_proof), 'projectionSha256': a.fingerprint(original_projection),
+            'onlinePublished': False, 'businessActions': 0}
+        a.write_json(f.previous / 'unpublished-component-successor-build-proof.json', original_proof)
+        a.write_json(f.previous / 'unpublished-component-successor-preservation.json', state)
+        f.contract = {**a.CONFIRM_CONTRACT,
+            'buildProofSha256': a.digest((f.previous / 'unpublished-component-successor-build-proof.json').read_bytes()),
+            'preservationSha256': a.digest((f.previous / 'unpublished-component-successor-preservation.json').read_bytes()),
+            'projectionSha256': a.fingerprint(original_projection)}
+        ledger = {'componentAfter': {'api': a.CONFIRM_BASELINE, 'admin': a.CONFIRM_BASELINE},
+            'onlinePublished': False, 'businessActions': 0, 'buildProofBytesSha256': f.contract['buildProofSha256'],
+            'preservationRecordBytesSha256': f.contract['preservationSha256'],
+            'projectionSha256': f.contract['projectionSha256']}
+        f.manifest['apiComponentPublication'] = ledger
+        (f.previous / 'release-manifest.json').write_text(json.dumps(f.manifest))
+        f.contract.update(manifestSha256=a.digest((f.previous / 'release-manifest.json').read_bytes()),
+            publicationSha256=a.fingerprint(ledger))
+        f.expected = {'version': 1, 'scope': 'ADMIN_PENDING_ONLINE_BUILD_PROJECTION',
+            'profile': a.CONFIRM_PROFILE, 'apiComponentBaseline': a.CONFIRM_BASELINE,
+            'candidateCommit': f.args.commit, 'candidateTree': f.args.source_tree,
+            'sourceBasisCommit': a.CONFIRM_BASELINE, 'sourceBasisTree': a.CONFIRM_BASELINE_TREE,
+            'overlaySha256': a.CONFIRM_OVERLAY_SHA256,
+            'inheritedProjectionSha256': f.contract['projectionSha256'],
+            'runtimeFiles': {n: {'sha256': a.digest(row[0]), 'mode': row[1]} for n, row in f.runtime.items()}}
+        f.expected['projectionSha256'] = a.fingerprint(f.expected)
+        f.proof['projection'] = f.expected
+        f.proof['image'].update(fileCount=2, sha256=a.digest(b'admin:new-content'))
+        scope = SimpleNamespace(content_command=lambda n: 'synthetic-content:' + n,
+            content_summary=lambda controller, n, output: json.loads(output))
+        f.controller.api_admin_scope = lambda name: (scope, f.controller)
+        run, compose = f.controller.run, f.controller.compose
+        def inspect(*parts, **kw):
+            if parts[:3] == ('docker', 'image', 'inspect') and parts[3] in (
+                    f.rows['api']['reference'], f.rows['admin']['reference'], f.proof['image']['reference']):
+                name = 'api' if parts[3] == f.rows['api']['reference'] else 'admin'
+                new = parts[3] == f.proof['image']['reference']
+                row = f.proof['image'] if new else f.rows[name]
+                return json.dumps([{'Id': row['imageId'], 'Architecture': 'amd64', 'Config': {'Labels': {
+                    'org.opencontainers.image.revision': f.args.commit if new else a.CONFIRM_BASELINE,
+                    'id-business-v2.source-tree': f.args.source_tree if new else a.CONFIRM_BASELINE_TREE,
+                    ('id-business-v2.admin-pending-projection-sha256' if new else
+                     'id-business-v2.unpublished-component-successor-projection-sha256'):
+                    f.expected['projectionSha256'] if new else f.contract['projectionSha256']}}}])
+            return run(*parts, **kw)
+        def content(directory, *parts, **kw):
+            if parts[:2] == ('exec', '-T') and parts[2] in ('api', 'admin'):
+                name = parts[2]
+                row = f.proof['image'] if name == 'admin' and f.states['admin']['image'] == f.proof['image']['imageId'] else f.rows[name]
+                return json.dumps({k: row[k] for k in ('fileCount', 'sha256')})
+            return compose(directory, *parts, **kw)
+        f.controller.run, f.controller.compose = inspect, content
+        return f
+
+    def execute(self, f, *, readback=True):
+        with patch.object(a, 'CONFIRM_CONTRACT', f.contract), \
+             patch.object(a, 'source_projection', return_value=(f.candidate, f.candidate, f.expected, f.runtime, '9' * 64)):
+            result = a.publish(f.controller, f.args, f.proof)
+            if readback:
+                self.assertEqual(a.readback(f.controller, f.args.commit)['apiComponentBaseline'], a.CONFIRM_BASELINE)
+            return result
+
+    def test_native_proof_over_64k_has_its_own_bound_and_still_requires_exact_provenance(self):
+        with tempfile.TemporaryDirectory(dir=RUNTIME) as root:
+            f = self.fixture(root)
+            proof_path = f.previous / 'unpublished-component-successor-build-proof.json'
+            state_path = f.previous / 'unpublished-component-successor-preservation.json'
+            proof = a.read_json(proof_path); proof['safeNativeFixture'] = 'x' * 66000
+            encoded = lambda row: (json.dumps(row, sort_keys=True, separators=(',', ':')) + '\n').encode()
+            proof_path.write_bytes(encoded(proof))
+            self.assertGreater(proof_path.stat().st_size, 65536)
+            self.assertLess(proof_path.stat().st_size, a.CONFIRM_BASELINE_PROOF_LIMIT)
+            with self.assertRaisesRegex(RuntimeError, 'PRIVATE_FILE_CHANGED'):
+                a.read_json(proof_path)
+            state = a.read_json(state_path); state['proofSha256'] = a.fingerprint(proof)
+            state_path.write_bytes(encoded(state))
+            ledger = f.manifest['apiComponentPublication']
+            ledger['buildProofBytesSha256'] = a.digest(proof_path.read_bytes())
+            ledger['preservationRecordBytesSha256'] = a.digest(state_path.read_bytes())
+            manifest_raw = encoded(f.manifest)
+            f.contract.update(manifestSha256=a.digest(manifest_raw), publicationSha256=a.fingerprint(ledger),
+                buildProofSha256=ledger['buildProofBytesSha256'], preservationSha256=ledger['preservationRecordBytesSha256'])
+            with patch.object(a, 'CONFIRM_CONTRACT', f.contract):
+                self.assertEqual(a.confirm_baseline_records(f.previous, manifest_raw, f.manifest)[0], proof)
+                proof['safeNativeFixture'] += 'tamper'; proof_path.write_bytes(encoded(proof))
+                with self.assertRaisesRegex(RuntimeError, 'INHERITED_PROOF_CHANGED'):
+                    a.confirm_baseline_records(f.previous, manifest_raw, f.manifest)
+                proof_path.write_bytes(b'x' * (a.CONFIRM_BASELINE_PROOF_LIMIT + 1))
+                with self.assertRaisesRegex(RuntimeError, 'PRIVATE_FILE_CHANGED'):
+                    a.confirm_baseline_records(f.previous, manifest_raw, f.manifest)
+
+    def test_success_updates_only_admin_preserves_native_api_proof_and_six_services(self):
+        with tempfile.TemporaryDirectory(dir=RUNTIME) as root:
+            f = self.fixture(root); result = self.execute(f)
+            self.assertEqual(result['status'], 'ADMIN_ONLY_PUBLISHED')
+            manifest = a.read_json((f.base / 'current').resolve() / 'release-manifest.json')
+            self.assertEqual(manifest['servicesUpdated'], ['admin'])
+            self.assertFalse(manifest['migrationPerformed'])
+            self.assertEqual(manifest['newMigrations'], [])
+            for n in a.CONFIRM_ORIGIN_MARKERS:
+                self.assertEqual(manifest[n], f.manifest[n])
+            for n in f.states:
+                if n != 'admin': self.assertEqual(f.states[n], f.original[n])
+            self.assertEqual([r for r in f.actions if r[0] == 'compose' and r[1][:2] == ('up', '-d')],
+                [('compose', ('up','-d','--no-deps','--no-build','--pull','never','--force-recreate','admin'))])
+            self.assertFalse(any('migrate' in str(row) or 'GRANT' in str(row) for row in f.actions))
+
+    def test_wrong_base_manifest_proof_preservation_and_native_container_drift_stop_before_switch(self):
+        for fault in ('base', 'manifest', 'proof', 'preservation', 'container'):
+            with self.subTest(fault=fault), tempfile.TemporaryDirectory(dir=RUNTIME) as root:
+                f = self.fixture(root)
+                if fault == 'base': f.args.expected_current = 'd' * 40
+                elif fault == 'manifest': (f.previous / 'release-manifest.json').write_bytes(b'{}')
+                elif fault in ('proof', 'preservation'):
+                    suffix = 'build-proof' if fault == 'proof' else 'preservation'
+                    (f.previous / ('unpublished-component-successor-' + suffix + '.json')).write_bytes(b'{}')
+                else: f.configurations['api']['HostConfig']['Memory'] = 1024
+                with self.assertRaises((RuntimeError, KeyError)): self.execute(f)
+                self.assertFalse(any(r[0] == 'compose' and r[1][:2] == ('up', '-d') for r in f.actions))
+
+    def test_prior_build_run_and_missing_content_proof_cannot_be_reused(self):
+        for field, value in (('runId', a.CONFIRM_CONTRACT['runId']), ('sourceTree', a.CONFIRM_BASELINE_TREE),
+                            ('qualityRunId', a.CONFIRM_CONTRACT['qualityRunId'])):
+            with self.subTest(field=field), tempfile.TemporaryDirectory(dir=RUNTIME) as root:
+                f = self.fixture(root); f.proof[field] = value
+                with self.assertRaisesRegex(RuntimeError, 'BUILD_PROOF_CHANGED'): self.execute(f)
+        with tempfile.TemporaryDirectory(dir=RUNTIME) as root:
+            f = self.fixture(root); del f.proof['image']['sha256']
+            with self.assertRaisesRegex(RuntimeError, 'BUILD_PROOF_CHANGED'): self.execute(f)
+
+    def test_after_switch_configuration_drift_records_failure_and_never_restarts_api(self):
+        with tempfile.TemporaryDirectory(dir=RUNTIME) as root:
+            f = self.fixture(root); compose = f.controller.compose
+            def drift(directory, *parts, **kw):
+                result = compose(directory, *parts, **kw)
+                if parts[:2] == ('up', '-d'): f.configurations['api']['HostConfig']['Memory'] = 1024
+                return result
+            f.controller.compose = drift
+            with self.assertRaisesRegex(RuntimeError, 'PRESERVED_SERVICE_CHANGED'): self.execute(f)
+            self.assertEqual(f.rollback, ['admin'])
+            self.assertEqual(f.states['api'], f.original['api'])
+
+    def test_independent_readback_rejects_source_origin_content_and_preserved_config_drift(self):
+        for fault in ('source', 'origin', 'content', 'configuration'):
+            with self.subTest(fault=fault), tempfile.TemporaryDirectory(dir=RUNTIME) as root:
+                f = self.fixture(root); self.execute(f, readback=False)
+                current = (f.base / 'current').resolve()
+                if fault == 'source': (current / 'deploy/caddy/Caddyfile.aws').write_bytes(b'changed')
+                elif fault == 'origin':
+                    manifest = a.read_json(current / 'release-manifest.json')
+                    manifest['apiComponentPublication'] = {'unreviewed': True}
+                    (current / 'release-manifest.json').write_text(json.dumps(manifest))
+                elif fault == 'content': f.proof['image']['sha256'] = '0' * 64
+                else: f.configurations['mysql']['Mounts'].append({'Destination': '/changed', 'Source': '/changed'})
+                with patch.object(a, 'CONFIRM_CONTRACT', f.contract), \
+                     patch.object(a, 'source_projection', return_value=(f.candidate, f.candidate, f.expected, f.runtime, '9' * 64)), \
+                     self.assertRaises(RuntimeError): a.readback(f.controller, f.args.commit)
+
+
+class ConfirmPreflightTests(unittest.TestCase):
+    def test_readonly_preflight_binds_native_proofs_runtime_content_capacity_and_original_services(self):
+        with tempfile.TemporaryDirectory(dir=RUNTIME) as root:
+            f = ConfirmPublicationTests.fixture(self, root)
+            lock = f.base / '.deploy.lock'; lock.write_bytes(b'')
+            before = {p: p.read_bytes() for p in f.previous.rglob('*') if p.is_file()}
+            with patch.object(a, 'CONFIRM_CONTRACT', f.contract), \
+                 patch.object(a, 'source_projection', return_value=(f.candidate, f.candidate, f.expected, f.runtime, '9' * 64)):
+                receipt = a.confirm_preflight(f.controller, f.args.commit, f.args.source_tree, a.CONFIRM_BASELINE)
+            self.assertEqual(receipt['status'], 'ADMIN_CONFIRM_BASELINE_VERIFIED')
+            self.assertEqual(receipt['currentCommit'], a.CONFIRM_BASELINE)
+            self.assertEqual(receipt['projectionSha256'], f.expected['projectionSha256'])
+            self.assertEqual(receipt['servicesVerified'], 7)
+            self.assertEqual(receipt['businessActions'], 0)
+            self.assertFalse(receipt['migrationPerformed'])
+            self.assertEqual(before, {p: p.read_bytes() for p in f.previous.rglob('*') if p.is_file()})
+            self.assertEqual(f.states, f.original)
+            self.assertFalse(any(r[0] == 'compose' and r[1][:2] == ('up', '-d') for r in f.actions))
+            self.assertFalse(any('systemctl' in str(r) or 'migrate' in str(r) for r in f.actions))
+
+    def test_preflight_wrong_base_low_disk_runtime_and_service_drift_are_rejected_without_changes(self):
+        for fault in ('base', 'disk', 'runtime', 'service'):
+            with self.subTest(fault=fault), tempfile.TemporaryDirectory(dir=RUNTIME) as root:
+                f = ConfirmPublicationTests.fixture(self, root); (f.base / '.deploy.lock').write_bytes(b'')
+                base = a.CONFIRM_BASELINE
+                if fault == 'base': base = 'd' * 40
+                elif fault == 'disk': f.controller.shutil.disk_usage = lambda path: SimpleNamespace(free=6 * 1024**3)
+                elif fault == 'runtime': (f.previous / next(iter(f.runtime))).write_bytes(b'changed-runtime')
+                else: f.configurations['api']['HostConfig']['Memory'] = 512
+                with patch.object(a, 'CONFIRM_CONTRACT', f.contract), \
+                     patch.object(a, 'source_projection', return_value=(f.candidate, f.candidate, f.expected, f.runtime, '9' * 64)), \
+                     self.assertRaises(RuntimeError):
+                    a.confirm_preflight(f.controller, f.args.commit, f.args.source_tree, base)
+                self.assertFalse(any(r[0] == 'compose' and r[1][:2] == ('up', '-d') for r in f.actions))
+
+
+class ConfirmAccessTransportTests(unittest.TestCase):
+    def execute(self, root, fault=None):
+        candidate, tree, command = 'a' * 40, 'b' * 40, '12345678-1234-1234-1234-123456789abc'
+        receipt = {'status': 'ADMIN_CONFIRM_BASELINE_VERIFIED', 'scope': a.CONFIRM_PROFILE,
+            'candidateCommit': candidate, 'candidateTree': tree, 'currentCommit': a.CONFIRM_BASELINE,
+            'manifestSha256': a.CONFIRM_CONTRACT['manifestSha256'], 'projectionSha256': 'c' * 64,
+            'servicesVerified': 7, 'preservedServiceCount': 6, 'freeBytes': 8 * 1024**3,
+            'onlinePublished': False, 'migrationPerformed': False, 'businessActions': 0}
+        if fault == 'origin': receipt['currentCommit'] = 'd' * 40
+        elif fault == 'projection': receipt['projectionSha256'] = 'd' * 64
+        elif fault == 'extra': receipt['secret'] = 'SYNTHETIC_SECRET_NEVER_EMITTED'
+        elif fault == 'count': receipt['servicesVerified'] = True
+        for name in a.CONFIRM_HELPERS:
+            p = Path(root) / 'scripts/production-release' / name
+            p.parent.mkdir(parents=True, exist_ok=True); p.write_bytes(b'# fixture helper\n')
+        calls, parameters = [], []
+        def aws(args, **kwargs):
+            self.assertEqual(args[0], 'aws'); calls.append(args[1:3])
+            if args[1:3] == ['ssm', 'send-command']:
+                parameters.append(json.loads(args[args.index('--parameters') + 1]))
+                output = {'Command': {'CommandId': command}}
+            else:
+                output = {'CommandId': command, 'InstanceId': 'i-05836da38606e633c', 'Status': 'Success',
+                    'ResponseCode': 0, 'StandardErrorContent': '', 'StandardOutputContent': json.dumps(receipt)}
+                if fault == 'invocation': output['CommandId'] = 'f' * 36
+                if fault == 'duplicate': output['StandardOutputContent'] = '{"status":"wrong",' + json.dumps(receipt)[1:]
+                if fault == 'failure':
+                    output.update(Status='Failed', ResponseCode=1, StandardOutputContent=json.dumps({
+                        'status': 'ADMIN_ONLY_RELEASE_FAILED', 'code': 'ADMIN_PENDING_DISK_CAPACITY_INSUFFICIENT'}))
+            return SimpleNamespace(returncode=0, stdout=json.dumps(output), stderr='')
+        env = {'RELEASE_OPERATION': 'verify_access', 'EXPECTED_CURRENT': a.CONFIRM_BASELINE,
+            'RELEASE_COMMIT': candidate, 'SOURCE_TREE': tree,
+            'PRODUCTION_INSTANCE_ID': 'i-05836da38606e633c', 'AWS_REGION': 'ap-northeast-1'}
+        old = Path.cwd(); captured = io.StringIO()
+        try:
+            os.chdir(root)
+            with patch.dict(os.environ, env), patch.object(a.subprocess, 'run', side_effect=aws), \
+                 patch.object(a, 'source_projection', return_value=({}, {}, {'projectionSha256': 'c' * 64}, {}, None)), \
+                 redirect_stdout(captured):
+                if fault:
+                    with self.assertRaisesRegex(RuntimeError, 'CONFIRM_ACCESS_PREFLIGHT_FAILED'):
+                        a.confirm_access_transport()
+                else:
+                    self.assertEqual(a.confirm_access_transport(), receipt)
+        finally:
+            os.chdir(old)
+        self.assertNotIn('SYNTHETIC_SECRET', captured.getvalue())
+        return calls, parameters, a.read_json(Path(root) / '.deploy/production-release/admin-confirm-preflight-invocation.json')
+
+    def test_exact_invocation_receipt_and_five_helper_seals_are_saved_as_safe_evidence(self):
+        with tempfile.TemporaryDirectory(dir=RUNTIME) as root:
+            calls, parameters, metadata = self.execute(root)
+            self.assertEqual(calls, [['ssm', 'send-command'], ['ssm', 'get-command-invocation']])
+            self.assertTrue(metadata['preflightVerified'])
+            commands = parameters[0]['commands']
+            self.assertTrue(commands[-1].endswith(' --expected-current ' + a.CONFIRM_BASELINE))
+            self.assertIn(' preflight --commit ', commands[-1])
+            for name in a.CONFIRM_HELPERS: self.assertIn(name, commands[-2])
+            self.assertFalse(any(' release ' in row or 'docker restart' in row or 'systemctl' in row for row in commands))
+            self.assertEqual(parameters[0]['executionTimeout'], ['600'])
+
+    def test_wrong_origin_projection_invocation_duplicate_extra_fields_boolean_and_failed_command_rejected(self):
+        for fault in ('origin', 'projection', 'invocation', 'duplicate', 'extra', 'count', 'failure'):
+            with self.subTest(fault=fault), tempfile.TemporaryDirectory(dir=RUNTIME) as root:
+                _, _, metadata = self.execute(root, fault)
+                self.assertFalse(metadata['preflightVerified'])
+                self.assertFalse((Path(root) / '.deploy/production-release/admin-confirm-preflight-result.json').exists())
+                if fault == 'failure': self.assertEqual(metadata['serverCode'], 'ADMIN_PENDING_DISK_CAPACITY_INSUFFICIENT')
 
 
 if __name__=='__main__':unittest.main()

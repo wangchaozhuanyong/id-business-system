@@ -24,7 +24,10 @@ import {
   formalRuntimePackageControlPaths
 } from './ci-recharge-scope.mjs';
 
-function fixture(run, outputDirectory = '.deploy') {
+function fixture(
+  run,
+  outputDirectory = '.runtime/bitbrowser-confirm-expiry-20261014/release/control-tests'
+) {
   mkdirSync(outputDirectory, { recursive: true });
   const root = mkdtempSync(join(process.cwd(), outputDirectory, 'release-scope-test-'));
   const bin = join(root, 'bin');
@@ -604,7 +607,7 @@ test('independent Admin readback runs after successful deployment and saves only
 
 function adminReadbackFixture(run, options = {}) {
   fixture(({ root, env, log }) => {
-    const selected = independentAdminEnv(env);
+    const selected = independentAdminEnv(env, options.env ?? {});
     adminProjectionFixture(root, selected, log);
     const python = execFileSync('python3', ['-c', 'import sys;print(sys.executable)'], {
       encoding: 'utf8'
@@ -776,6 +779,13 @@ function adminProjectionFixture(root, env, log) {
   const directory = join(root, '.deploy/production-release');
   mkdirSync(directory, { recursive: true });
   const projection = { projectionSha256: 'e'.repeat(64) };
+  const confirm = env.EXPECTED_CURRENT === '43c31870c9497d900491cdb19c5f61c766f3b344';
+  if (confirm)
+    Object.assign(projection, {
+      profile: 'ADMIN_CONFIRM_EXPIRY_20261014',
+      apiComponentBaseline: env.EXPECTED_CURRENT,
+      sourceBasisCommit: env.EXPECTED_CURRENT
+    });
   writeFileSync(
     join(directory, 'admin-pending-online-build-projection.json'),
     JSON.stringify(projection)
@@ -792,11 +802,13 @@ function adminProjectionFixture(root, env, log) {
       projection
     })
   );
-  for (const name of [
+  const helpers = [
     'remote-deploy.py',
     'api-admin-pending-projection.py',
     'admin-pending-online-release.py'
-  ]) {
+  ];
+  if (confirm) helpers.push('unpublished-component-successor.py', 'api-admin-scope.py');
+  for (const name of helpers) {
     mkdirSync(join(root, 'scripts/production-release'), { recursive: true });
     writeFileSync(
       join(root, 'scripts/production-release', name),
@@ -825,6 +837,187 @@ function independentAdminEnv(env, overrides = {}) {
     ...overrides
   };
 }
+
+const confirmAdminBaseline = '43c31870c9497d900491cdb19c5f61c766f3b344';
+
+test('43c31870 verify access selects only the sealed read-only preflight and always saves safe evidence', () => {
+  const step = workflowSteps.find(
+    (row) =>
+      row.name === 'Read sealed 43c31870 Admin confirmation baseline without production changes'
+  );
+  const generic = workflowSteps.find((row) => row.name === 'Read production release diagnostics');
+  const old = workflowSteps.find(
+    (row) => row.name === 'Read finite Admin successor baseline facts'
+  );
+  const selected = { operation: 'verify_access', expected_current: confirmAdminBaseline };
+  assert.equal(workflowPredicate(step.if)(selected), true);
+  assert.equal(workflowPredicate(generic.if)(selected), false);
+  assert.equal(workflowPredicate(old.if)(selected), false);
+  assert.equal(
+    step.run,
+    'python3 -B scripts/production-release/admin-pending-online-release.py access-preflight'
+  );
+  assert.equal(step['continue-on-error'], undefined);
+  for (const operation of ['release', 'release_admin', 'release_unpublished_components'])
+    assert.equal(workflowPredicate(step.if)({ ...selected, operation }), false);
+  const save = workflowSteps.find(
+    (row) => row.name === 'Save sealed 43c31870 Admin confirmation preflight safe evidence'
+  );
+  const enabled = new Function('inputs', 'always', `return (${save.if});`);
+  assert.equal(
+    enabled(selected, () => true),
+    true
+  );
+  assert.equal(save.with.path, '.deploy/production-release/admin-confirm-preflight-*.json');
+  assert.equal(save.with['include-hidden-files'], true);
+  const build = workflowSteps.find(
+    (row) => row.name === 'Save only sealed 43c31870 Admin build source evidence'
+  );
+  const exportBuild = new Function('inputs', 'always', `return (${build.if});`);
+  assert.equal(
+    exportBuild({ operation: 'release_admin', expected_current: confirmAdminBaseline }, () => true),
+    true
+  );
+  for (const expected_current of [
+    '',
+    '60e164b75d1eedaab440c17139bf9ba55de08c61',
+    '31d2c6885a45817cd40d23fce8d6145bc9f18af2'
+  ])
+    assert.equal(
+      exportBuild({ operation: 'release_admin', expected_current }, () => true),
+      false
+    );
+  for (const operation of [
+    'verify_access',
+    'diagnose_unpublished_component_runtime',
+    'release_unpublished_components'
+  ])
+    assert.equal(
+      exportBuild({ operation, expected_current: confirmAdminBaseline }, () => true),
+      false
+    );
+  assert.deepEqual(build.with.path.trim().split('\n'), [
+    '.deploy/production-release/admin-pending-online-build-proof.json',
+    '.deploy/production-release/admin-pending-online-build-projection.json'
+  ]);
+});
+
+test('43c31870 confirmation profile builds and pushes only Admin and rejects mixed authorization inputs', () => {
+  fixture(({ root, env, log }) => {
+    const selected = independentAdminEnv(env, { EXPECTED_CURRENT: confirmAdminBaseline });
+    adminProjectionFixture(root, selected, log);
+    writeFileSync(
+      join(root, 'bin/docker'),
+      '#!/bin/sh\nprintf "%s\\n" "$*" >> "$TASK_DOCKER_LOG"\nif [ "$1" = login ]; then cat >/dev/null; fi\nif [ "$1" = image ]; then case "$*" in *admin-pending-projection-sha256*) printf "%s\\n" "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee" ;; *source-tree*) printf "%s\\n" "$SOURCE_TREE" ;; *) printf "%s\\n" "$RELEASE_COMMIT" ;; esac; fi\n',
+      { mode: 0o755 }
+    );
+    for (const name of ['build-images.sh', 'push-images.sh'])
+      execFileSync('bash', [join(process.cwd(), 'scripts/production-release', name)], {
+        env: selected,
+        cwd: root,
+        stdio: 'pipe'
+      });
+    const lines = readFileSync(log, 'utf8').trim().split('\n');
+    assert.equal(lines.filter((row) => row.startsWith('build ')).length, 1);
+    assert.deepEqual(
+      lines.filter((row) => row.startsWith('push ')),
+      ['push ' + selected.RELEASE_REPOSITORY + ':' + selected.RELEASE_COMMIT + '-999999-1-admin']
+    );
+    assert.equal(
+      lines.some((row) => /(?:-api|-migrate|-auto-recharge|-online-recharge)(?: |$)/.test(row)),
+      false
+    );
+    assert.ok(lines.includes('projection selection'));
+    for (const override of [
+      { EXPECTED_CURRENT: 'd'.repeat(40) },
+      { API_FAULT_RESTORE_APPROVED: 'true' },
+      { REUSE_IMAGE_RUN: '38429088560' },
+      { HISTORICAL_EXCEPTION: 'historical-finance-20261005' },
+      { CACHE_PLAN_SHA256: 'a'.repeat(64) }
+    ])
+      assert.throws(() =>
+        execFileSync(
+          'bash',
+          [join(process.cwd(), 'scripts/production-release/validate-release-selection.sh')],
+          {
+            env: { ...selected, ...override },
+            cwd: root,
+            stdio: 'pipe'
+          }
+        )
+      );
+  });
+});
+
+test('43c31870 Admin dispatch pins all pure projection helpers without entering an API release controller', () => {
+  dispatchFixture(
+    'none',
+    confirmAdminBaseline,
+    ({ execute, parametersFile, awsLog }) => {
+      execute();
+      const parameters = JSON.parse(readFileSync(parametersFile, 'utf8'));
+      for (const name of ['unpublished-component-successor.py', 'api-admin-scope.py']) {
+        const staged = '/opt/id-business-v2/.staging/oidc-' + 'b'.repeat(40) + '/' + name;
+        assert.ok(
+          parameters.commands.some(
+            (line) => line.startsWith('curl ') && line.endsWith(' -o ' + staged)
+          )
+        );
+        assert.ok(
+          parameters.commands.some(
+            (line) => line.includes(staged) && line.endsWith(' | sha256sum -c - >/dev/null')
+          )
+        );
+      }
+      const execution = parameters.commands.filter((line) => line.startsWith('python3 '));
+      assert.equal(execution.length, 1);
+      assert.ok(execution[0].includes('/admin-pending-online-release.py release --commit '));
+      assert.ok(execution[0].includes('--expected-current ' + confirmAdminBaseline));
+      assert.equal(execution[0].includes('api-fault-restore'), false);
+      assert.equal(
+        readFileSync(awsLog, 'utf8')
+          .split('\n')
+          .filter((line) => line.startsWith('ssm send-command ')).length,
+        1
+      );
+    },
+    independentAdminEnv({}, { EXPECTED_CURRENT: confirmAdminBaseline })
+  );
+});
+
+test('43c31870 independent Admin readback requires its own profile and unchanged API origin', () => {
+  adminReadbackFixture(
+    ({ execute, selected, root, result, parametersFile }) => {
+      execute();
+      assert.equal(
+        JSON.parse(readFileSync(result, 'utf8')).apiComponentBaseline,
+        confirmAdminBaseline
+      );
+      const parameters = JSON.parse(readFileSync(parametersFile, 'utf8'));
+      for (const name of ['unpublished-component-successor.py', 'api-admin-scope.py'])
+        assert.ok(parameters.commands[1].includes(name));
+      const proofPath = join(
+        root,
+        '.deploy/production-release/admin-pending-online-build-proof.json'
+      );
+      const proof = JSON.parse(readFileSync(proofPath, 'utf8'));
+      proof.projection.apiComponentBaseline = selected.RELEASE_COMMIT;
+      writeFileSync(proofPath, JSON.stringify(proof));
+      assert.throws(execute);
+    },
+    { env: { EXPECTED_CURRENT: confirmAdminBaseline } }
+  );
+  for (const receipt of [
+    { apiComponentBaseline: '31d2c6885a45817cd40d23fce8d6145bc9f18af2' },
+    { projectionSha256: '0'.repeat(64) },
+    { preservedServiceCount: 5 },
+    { servicesUpdated: ['api', 'admin'] }
+  ])
+    adminReadbackFixture(({ execute }) => assert.throws(execute), {
+      env: { EXPECTED_CURRENT: confirmAdminBaseline },
+      receipt
+    });
+});
 
 test('independent Admin builds and verifies only a fresh exact-source image despite carried backend changes', () => {
   fixture(({ root, env, log }) => {
