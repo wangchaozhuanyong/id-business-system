@@ -522,11 +522,11 @@ const apiOriginSelection = [
 ].join('\n');
 const expectedReadback = oldReadback.run.replace('    staged = ', apiOriginSelection + '    staged = ')
  .replace("receipt['apiComponentBaseline'] != os.environ['EXPECTED_CURRENT']", "receipt['apiComponentBaseline'] != expected_api_origin");
-// The separately authorised f193 profile must reconstruct the ORIGINAL B/60
+// The separately authorised 43c31870 profile must reconstruct the ORIGINAL B/60
 // program byte for byte. No other body, guard, helper or existing step may drift.
-const confirmBaseline = 'f193f34ea09a2c37485c1582a81b33ee3acec865';
+const confirmBaseline = '43c31870c9497d900491cdb19c5f61c766f3b344';
 const confirmOrigin = [
- "    confirm_baseline = 'f193f34ea09a2c37485c1582a81b33ee3acec865'",
+ "    confirm_baseline = '43c31870c9497d900491cdb19c5f61c766f3b344'",
  "    confirm_profile = os.environ['EXPECTED_CURRENT'] == confirm_baseline",
  "    if confirm_profile:",
  "        if (proof['projection'].get('profile') != 'ADMIN_CONFIRM_EXPIRY_20261014'",
@@ -543,7 +543,7 @@ const originalOrigin = [
 const confirmHelpers = ["    if confirm_profile:",
  "        names += ('unpublished-component-successor.py', 'api-admin-scope.py')", ''].join('\n');
 const replaceOnce = (source, fragment, replacement) => {
- if (source.split(fragment).length !== 2) throw Error('Finite f193 fragment missing duplicated or changed');
+ if (source.split(fragment).length !== 2) throw Error('Finite 43c31870 fragment missing duplicated or changed');
  return source.replace(fragment, replacement);
 };
 const originalReadback = source => replaceOnce(replaceOnce(source, confirmOrigin, originalOrigin), confirmHelpers, '');
@@ -561,8 +561,8 @@ const confirmTamperRejections = [
 ].map(source => !validatesReadback(source));
 const confirmAccess = "inputs.operation == 'verify_access' && inputs.expected_current == '" + confirmBaseline + "'";
 const confirmRelease = "inputs.operation == 'release_admin' && inputs.expected_current == '" + confirmBaseline + "'";
-const confirmNames = ['Read sealed f193 Admin confirmation baseline without production changes',
- 'Save sealed f193 Admin confirmation preflight safe evidence', 'Save only sealed f193 Admin build source evidence'];
+const confirmNames = ['Read sealed 43c31870 Admin confirmation baseline without production changes',
+ 'Save sealed 43c31870 Admin confirmation preflight safe evidence', 'Save only sealed 43c31870 Admin build source evidence'];
 const confirmExpected = [
  {name: confirmNames[0], if: confirmAccess,
   run: 'python3 -B scripts/production-release/admin-pending-online-release.py access-preflight'},

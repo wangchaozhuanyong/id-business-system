@@ -516,7 +516,7 @@ def remote_program(binding, *, path=None, payload=None):
     header += '\nbinding=' + repr(binding) + '\ntry:\n'
     expression = 'execute_native(binding)' if path is None else 'stage_file(binding,' + repr(path) + ',' + repr(payload) + ')'
     header += ' result=' + expression + '\n print(json.dumps(wire(binding,result),sort_keys=True))\n'
-    header += ('except Exception as error:\n code=str(error) if type(error)is Rejected and re.fullmatch(' 
+    header += ('except Exception as error:\n code=str(error) if type(error)is Rejected and re.fullmatch('
                "'MAINTENANCE_[A-Z_]+',str(error))else'MAINTENANCE_REMOTE_FAILED_CLOSED'\n"
                " print(json.dumps({'kind':'ID_DISK_MAINTENANCE_FAILURE_V1','bindingSha256':digest(binding),"
                "'operation':binding['operation'],'producer':binding['producer'],'status':'FAILED_CLOSED','code':code}))\n"

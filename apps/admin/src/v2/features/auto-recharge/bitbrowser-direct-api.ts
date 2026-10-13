@@ -1,4 +1,5 @@
 import { normalizeV2RechargeBrowserOptions } from '@apple-business/shared';
+import { isApiError } from '@/api/apiError';
 import type { V2RechargeBitBrowserOpenLaunch, V2RechargeBrowserCatalog } from './contracts';
 
 export type DirectBrowserSettings = V2RechargeBitBrowserOpenLaunch['bitBrowser'];
@@ -34,11 +35,153 @@ const messages = {
   invalid_session_json: '授权 JSON 缺少有效的会话、用户或账号资料，请重新授权。'
 } as const;
 export type DirectBrowserFailure = keyof typeof messages;
+const operationMessages = {
+  local_api: '请求比特接口',
+  browser_health: '检测比特接口',
+  browser_groups: '读取比特分组',
+  browser_tags: '读取比特标签',
+  browser_list: '核验原窗口资料',
+  browser_update: '创建或更新窗口资料',
+  browser_tag_relation: '关联窗口标签',
+  browser_detail: '读取窗口资料',
+  browser_open: '打开比特窗口',
+  browser_close: '关闭比特窗口',
+  browser_processes: '核验窗口关闭状态',
+  record_progress: '保存执行状态',
+  record_profile_check: '保存原窗口核验状态',
+  record_profile_missing: '保存原窗口缺失核验状态',
+  record_profile_created: '保存新窗口回执',
+  record_profile_opened: '保存窗口打开回执',
+  record_group: '保存分组核验状态',
+  record_restore: '读取账户执行记录',
+  record_finished: '保存执行结果',
+  record_stop: '停止原任务'
+} as const;
+export type DirectBrowserOperation = keyof typeof operationMessages;
+const apiCodeMessages = {
+  BAD_REQUEST: '记录接口参数未通过核验',
+  CONFLICT: '执行记录冲突',
+  AUTH_INVALID: '执行记录身份未确认',
+  AUTH_PERMISSION_DENIED: '执行记录权限未确认',
+  NOT_FOUND: '执行记录不存在',
+  RATE_LIMITED: '记录接口请求过于频繁',
+  SERVICE_UNAVAILABLE: '记录接口暂不可用',
+  INTERNAL_SERVER_ERROR: '记录接口内部错误',
+  NETWORK_UNAVAILABLE: '记录接口连接未确认',
+  REQUEST_FAILED: '记录接口请求失败'
+} as const;
+type DirectBrowserApiCode = keyof typeof apiCodeMessages;
+const apiReasonMessages = {
+  callback_credentials_rejected: '本机连接凭据无效',
+  job_expired: '执行窗口已结束，请重新核验原订单',
+  account_mismatch: '账户标识不一致',
+  account_owner_mismatch: '该账户属于另一操作人的原任务',
+  profile_conflict: '本次任务已绑定另一比特窗口，不能覆盖原窗口',
+  original_payment_profile_unverified: '原单付款状态未安全核实，不能更换比特窗口',
+  checkout_conflict: '原订单编号不一致'
+} as const;
+type DirectBrowserApiReason = keyof typeof apiReasonMessages;
+const apiRejections: ReadonlyArray<readonly [number, DirectBrowserApiReason]> = [
+  [401, 'callback_credentials_rejected'],
+  [409, 'job_expired'],
+  [400, 'account_mismatch'],
+  [403, 'account_owner_mismatch'],
+  [409, 'profile_conflict'],
+  [409, 'original_payment_profile_unverified'],
+  [409, 'checkout_conflict']
+];
+export interface DirectBrowserFailureMetadata {
+  operation?: DirectBrowserOperation;
+  httpStatus?: number;
+  apiCode?: string;
+  apiReason?: string;
+  requestId?: string;
+}
+function safeFailureMetadata(value: DirectBrowserFailureMetadata) {
+  return {
+    ...(typeof value.operation === 'string' && Object.hasOwn(operationMessages, value.operation)
+      ? { operation: value.operation }
+      : {}),
+    ...(typeof value.httpStatus === 'number' &&
+    Number.isInteger(value.httpStatus) &&
+    value.httpStatus >= 100 &&
+    value.httpStatus <= 599
+      ? { httpStatus: value.httpStatus }
+      : {}),
+    ...(typeof value.apiCode === 'string' && Object.hasOwn(apiCodeMessages, value.apiCode)
+      ? { apiCode: value.apiCode as DirectBrowserApiCode }
+      : {}),
+    ...(typeof value.apiReason === 'string' && Object.hasOwn(apiReasonMessages, value.apiReason)
+      ? { apiReason: value.apiReason as DirectBrowserApiReason }
+      : {}),
+    ...(typeof value.requestId === 'string' &&
+    value.requestId.length === 36 &&
+    /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i.test(value.requestId)
+      ? { requestId: value.requestId }
+      : {})
+  };
+}
 export class DirectBrowserError extends Error {
-  constructor(readonly reason: DirectBrowserFailure) {
-    super(messages[reason]);
+  readonly metadata: Readonly<ReturnType<typeof safeFailureMetadata>>;
+  constructor(
+    readonly reason: DirectBrowserFailure,
+    metadata: DirectBrowserFailureMetadata = {}
+  ) {
+    const safe = safeFailureMetadata(metadata);
+    const operation = safe.operation ? operationMessages[safe.operation] : undefined;
+    const description = operation
+      ? safe.operation?.startsWith('record_')
+        ? `${operation}失败${
+            reason === 'bitbrowser_direct_cancelled' || reason === 'bitbrowser_recovery_timeout'
+              ? `：${messages[reason]}`
+              : ''
+          }`
+        : `${operation}失败：${messages[reason]}`
+      : messages[reason];
+    const details = [
+      ...(safe.httpStatus ? [`HTTP ${safe.httpStatus}`] : []),
+      ...(safe.apiCode ? [apiCodeMessages[safe.apiCode]] : []),
+      ...(safe.apiReason ? [apiReasonMessages[safe.apiReason]] : []),
+      ...(safe.requestId ? [`请求编号：${safe.requestId}`] : [])
+    ];
+    super(details.length ? `${description}（${details.join('；')}）。` : description);
+    this.metadata = Object.freeze(safe);
   }
 }
+export function directBrowserFailure(error: unknown, operation?: DirectBrowserOperation) {
+  if (error instanceof DirectBrowserError) {
+    return new DirectBrowserError(
+      Object.hasOwn(messages, error.reason) ? error.reason : 'bitbrowser_direct_command_failed',
+      { ...error.metadata, ...(operation ? { operation } : {}) }
+    );
+  }
+  return new DirectBrowserError('bitbrowser_direct_command_failed', {
+    ...(operation ? { operation } : {}),
+    ...(isApiError(error)
+      ? {
+          httpStatus: error.status ?? undefined,
+          apiCode: error.code,
+          apiReason: apiRejections.find(
+            ([status, reason]) =>
+              status === error.status && apiReasonMessages[reason] === error.message
+          )?.[1],
+          requestId: error.requestId
+        }
+      : {})
+  });
+}
+const requestOperations: Record<string, DirectBrowserOperation> = {
+  '/health': 'browser_health',
+  '/group/list': 'browser_groups',
+  '/browserTag/list': 'browser_tags',
+  '/browser/list': 'browser_list',
+  '/browser/update': 'browser_update',
+  '/browserTag/updateRelation': 'browser_tag_relation',
+  '/browser/detail': 'browser_detail',
+  '/browser/open': 'browser_open',
+  '/browser/close': 'browser_close',
+  '/browser/pids/alive': 'browser_processes'
+};
 export function localBrowserUrl(value: string, websocket = false) {
   let url: URL;
   try {
@@ -67,8 +210,9 @@ export function directBrowserApi(url: string, token: string, signal: AbortSignal
     body: object = {},
     timeoutMs = 30_000
   ): Promise<Record<string, unknown>> {
+    const operation = requestOperations[path] ?? 'local_api';
     if (!token || /[\r\n]/.test(token))
-      throw new DirectBrowserError('bitbrowser_direct_token_invalid');
+      throw new DirectBrowserError('bitbrowser_direct_token_invalid', { operation });
     let response: Response;
     try {
       response = await fetch(origin + path, {
@@ -86,19 +230,29 @@ export function directBrowserApi(url: string, token: string, signal: AbortSignal
       });
     } catch {
       throw new DirectBrowserError(
-        signal.aborted ? 'bitbrowser_direct_cancelled' : 'bitbrowser_direct_unreachable'
+        signal.aborted ? 'bitbrowser_direct_cancelled' : 'bitbrowser_direct_unreachable',
+        { operation }
       );
     }
     if ([401, 403].includes(response.status))
-      throw new DirectBrowserError('bitbrowser_direct_token_invalid');
+      throw new DirectBrowserError('bitbrowser_direct_token_invalid', {
+        operation,
+        httpStatus: response.status
+      });
     let value: Record<string, unknown>;
     try {
       value = await response.json();
     } catch {
-      throw new DirectBrowserError('bitbrowser_direct_protocol');
+      throw new DirectBrowserError('bitbrowser_direct_protocol', {
+        operation,
+        httpStatus: response.status
+      });
     }
     if (!value || !response.ok || value.success !== true)
-      throw new DirectBrowserError('bitbrowser_direct_rejected');
+      throw new DirectBrowserError('bitbrowser_direct_rejected', {
+        operation,
+        httpStatus: response.status
+      });
     return value;
   }
   return { post };

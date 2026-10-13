@@ -561,9 +561,16 @@ class ConfirmProjectionTests(unittest.TestCase):
         self.assertEqual(record['apiComponentBaseline'], a.CONFIRM_BASELINE)
         self.assertEqual(record['controlSourceCommit'], a.CONFIRM_CONTROL_SOURCE)
         self.assertEqual(record['controlSourceTree'], a.CONFIRM_CONTROL_TREE)
-        self.assertEqual(set(record['inheritedControlFiles']), a.CONFIRM_UPSTREAM_CONTROLS | a.CONFIRM_DOCS)
-        self.assertEqual(len(a.CONFIRM_UPSTREAM_CONTROLS), 25)
-        for name in a.CONFIRM_UPSTREAM_CONTROLS - a.CONFIRM_CONTROLS - a.CONFIRM_DOCS:
+        self.assertEqual(record['inheritedControlFiles'], {})
+        self.assertEqual(self.control_source, self.predecessor)
+        for name in (
+            'apps/admin/src/v2/features/auto-recharge/bitbrowser-direct-api.ts',
+            'apps/admin/src/v2/features/auto-recharge/bitbrowser-direct.spec.ts',
+            'apps/admin/src/v2/features/auto-recharge/useBitBrowserDirectOpen.spec.ts',
+            'apps/admin/src/v2/features/auto-recharge/useBitBrowserDirectOpen.ts',
+            'apps/api/src/id-business-v2/auto-recharge/recharge-owned-profile.spec.ts',
+            'apps/api/src/id-business-v2/auto-recharge/worker/bitbrowser_connector.py',
+            'apps/api/src/id-business-v2/auto-recharge/worker/test_bitbrowser_connector.py'):
             self.assertEqual(output[name], self.control_source[name], name)
         self.assertEqual(record['overlaySha256'], a.CONFIRM_OVERLAY_SHA256)
         self.assertEqual(set(record['overlayFiles']), set(a.CONFIRM_FILES))
@@ -585,7 +592,10 @@ class ConfirmProjectionTests(unittest.TestCase):
             'apps/api/prisma-mysql/migrations/unreviewed/migration.sql', 'package-lock.json',
             'scripts/production-release/extra.py', '.github/workflows/quality.yml',
             'docs/another-release.md', 'scripts/production-release/disk-retention.py',
-            'deploy/aws/disk-retention-policy-20261014.json', '.github/workflows/disk-retention-maintenance.yml')
+            'deploy/aws/disk-retention-policy-20261014.json', '.github/workflows/disk-retention-maintenance.yml',
+            'apps/admin/src/v2/features/auto-recharge/bitbrowser-direct-api.ts',
+            'apps/admin/src/v2/features/auto-recharge/useBitBrowserDirectOpen.ts',
+            'apps/api/src/id-business-v2/auto-recharge/worker/bitbrowser_connector.py')
         for name in paths:
             files = dict(self.candidate); raw, mode = files.get(name, (b'', '100644'))
             files[name] = (raw + b'\n# changed\n', mode)
@@ -597,6 +607,8 @@ class ConfirmProjectionTests(unittest.TestCase):
         old[name] = (raw + b'\n', mode)
         with self.assertRaisesRegex(RuntimeError, 'CONFIRM_SOURCE_TREE_CHANGED'):
             self.project(predecessor=old)
+        with self.assertRaisesRegex(RuntimeError, 'CONFIRM_SOURCE_TREE_CHANGED'):
+            self.project(predecessor=git_files('f193f34ea09a2c37485c1582a81b33ee3acec865'))
         for fault in ('bytes', 'mode', 'delete'):
             files = dict(self.candidate)
             if fault == 'bytes':
@@ -723,6 +735,35 @@ class ConfirmPublicationTests(unittest.TestCase):
             if readback:
                 self.assertEqual(a.readback(f.controller, f.args.commit)['apiComponentBaseline'], a.CONFIRM_BASELINE)
             return result
+
+    def test_native_proof_over_64k_has_its_own_bound_and_still_requires_exact_provenance(self):
+        with tempfile.TemporaryDirectory(dir=RUNTIME) as root:
+            f = self.fixture(root)
+            proof_path = f.previous / 'unpublished-component-successor-build-proof.json'
+            state_path = f.previous / 'unpublished-component-successor-preservation.json'
+            proof = a.read_json(proof_path); proof['safeNativeFixture'] = 'x' * 66000
+            encoded = lambda row: (json.dumps(row, sort_keys=True, separators=(',', ':')) + '\n').encode()
+            proof_path.write_bytes(encoded(proof))
+            self.assertGreater(proof_path.stat().st_size, 65536)
+            self.assertLess(proof_path.stat().st_size, a.CONFIRM_BASELINE_PROOF_LIMIT)
+            with self.assertRaisesRegex(RuntimeError, 'PRIVATE_FILE_CHANGED'):
+                a.read_json(proof_path)
+            state = a.read_json(state_path); state['proofSha256'] = a.fingerprint(proof)
+            state_path.write_bytes(encoded(state))
+            ledger = f.manifest['apiComponentPublication']
+            ledger['buildProofBytesSha256'] = a.digest(proof_path.read_bytes())
+            ledger['preservationRecordBytesSha256'] = a.digest(state_path.read_bytes())
+            manifest_raw = encoded(f.manifest)
+            f.contract.update(manifestSha256=a.digest(manifest_raw), publicationSha256=a.fingerprint(ledger),
+                buildProofSha256=ledger['buildProofBytesSha256'], preservationSha256=ledger['preservationRecordBytesSha256'])
+            with patch.object(a, 'CONFIRM_CONTRACT', f.contract):
+                self.assertEqual(a.confirm_baseline_records(f.previous, manifest_raw, f.manifest)[0], proof)
+                proof['safeNativeFixture'] += 'tamper'; proof_path.write_bytes(encoded(proof))
+                with self.assertRaisesRegex(RuntimeError, 'INHERITED_PROOF_CHANGED'):
+                    a.confirm_baseline_records(f.previous, manifest_raw, f.manifest)
+                proof_path.write_bytes(b'x' * (a.CONFIRM_BASELINE_PROOF_LIMIT + 1))
+                with self.assertRaisesRegex(RuntimeError, 'PRIVATE_FILE_CHANGED'):
+                    a.confirm_baseline_records(f.previous, manifest_raw, f.manifest)
 
     def test_success_updates_only_admin_preserves_native_api_proof_and_six_services(self):
         with tempfile.TemporaryDirectory(dir=RUNTIME) as root:

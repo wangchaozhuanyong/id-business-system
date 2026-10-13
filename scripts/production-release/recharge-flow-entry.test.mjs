@@ -456,9 +456,9 @@ printf 'installed=%s\n' "$installed" >> "$GITHUB_OUTPUT"
     }
     step.if = "steps.disk_owner.outputs.installed != 'true' && (" + step.if + ')';
   }
-  // Extend the FULL reviewed 60/disk workflow with only these fixed f193
+  // Extend the FULL reviewed 60/disk workflow with only these fixed 43c31870
   // fields. The final equality retains every previous byte, route and gate.
-  const confirmBaseline = 'f193f34ea09a2c37485c1582a81b33ee3acec865';
+  const confirmBaseline = '43c31870c9497d900491cdb19c5f61c766f3b344';
   const confirmAccess = `inputs.operation == 'verify_access' && inputs.expected_current == '${confirmBaseline}'`;
   const confirmRelease = `inputs.operation == 'release_admin' && inputs.expected_current == '${confirmBaseline}'`;
   const legacyDiagnostic = steps.find(
@@ -469,12 +469,12 @@ printf 'installed=%s\n' "$installed" >> "$GITHUB_OUTPUT"
     steps.indexOf(legacyDiagnostic),
     0,
     {
-      name: 'Read sealed f193 Admin confirmation baseline without production changes',
+      name: 'Read sealed 43c31870 Admin confirmation baseline without production changes',
       if: confirmAccess,
       run: 'python3 -B scripts/production-release/admin-pending-online-release.py access-preflight'
     },
     {
-      name: 'Save sealed f193 Admin confirmation preflight safe evidence',
+      name: 'Save sealed 43c31870 Admin confirmation preflight safe evidence',
       if: 'always() && ' + confirmAccess,
       uses: 'actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02',
       with: {
@@ -487,7 +487,7 @@ printf 'installed=%s\n' "$installed" >> "$GITHUB_OUTPUT"
     }
   );
   insertAfter('Save only independent Admin readback safe evidence', {
-    name: 'Save only sealed f193 Admin build source evidence',
+    name: 'Save only sealed 43c31870 Admin build source evidence',
     if: 'always() && ' + confirmRelease,
     uses: 'actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02',
     with: {
@@ -499,7 +499,11 @@ printf 'installed=%s\n' "$installed" >> "$GITHUB_OUTPUT"
     }
   });
   const replaceOnce = (source, fragment, replacement) => {
-    assert.equal(source.split(fragment).length, 2, 'fixed f193 fragment must occur exactly once');
+    assert.equal(
+      source.split(fragment).length,
+      2,
+      'fixed 43c31870 fragment must occur exactly once'
+    );
     return source.replace(fragment, replacement);
   };
   const originalOrigin = [
@@ -508,7 +512,7 @@ printf 'installed=%s\n' "$installed" >> "$GITHUB_OUTPUT"
     ''
   ].join('\n');
   const confirmOrigin = [
-    "    confirm_baseline = 'f193f34ea09a2c37485c1582a81b33ee3acec865'",
+    "    confirm_baseline = '43c31870c9497d900491cdb19c5f61c766f3b344'",
     "    confirm_profile = os.environ['EXPECTED_CURRENT'] == confirm_baseline",
     '    if confirm_profile:',
     "        if (proof['projection'].get('profile') != 'ADMIN_CONFIRM_EXPIRY_20261014'",
@@ -550,11 +554,13 @@ printf 'installed=%s\n' "$installed" >> "$GITHUB_OUTPUT"
     const candidate = structuredClone(actual);
     const candidateSteps = candidate.jobs.release.steps;
     const named = (name) => candidateSteps.find((step) => step.name === name);
-    const preflightName = 'Read sealed f193 Admin confirmation baseline without production changes';
+    const preflightName =
+      'Read sealed 43c31870 Admin confirmation baseline without production changes';
     if (fault === 'preflight-gate') named(preflightName).if = "inputs.operation == 'verify_access'";
     else if (fault === 'ignored-error') named(preflightName)['continue-on-error'] = true;
     else if (fault === 'proof-export')
-      named('Save only sealed f193 Admin build source evidence').with.path = '.env.aws.production';
+      named('Save only sealed 43c31870 Admin build source evidence').with.path =
+        '.env.aws.production';
     else if (fault === 'legacy-gate')
       named('Read production release diagnostics').if = "inputs.operation == 'verify_access'";
     else if (fault === 'origin-seal')

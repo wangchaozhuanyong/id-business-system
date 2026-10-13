@@ -1,8 +1,11 @@
 import { V2_RECHARGE_BROWSER_DEFAULTS } from '@apple-business/shared';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { ApiError } from '@/api/apiError';
 import {
+  DirectBrowserError,
   directBrowserApi,
   directBrowserCatalog,
+  directBrowserFailure,
   directBrowserProfileExists,
   directProfileOptions,
   localBrowserUrl
@@ -454,6 +457,145 @@ describe('网页直连比特浏览器的输入和读取边界', () => {
     await expect(
       directBrowserApi('http://localhost:54345', 'fixture-only-api-key', signal()).post('/health')
     ).rejects.toThrow('无法访问比特浏览器');
+  });
+  it.each([
+    ['/browser/update', 'browser_update', '创建或更新窗口资料', 500],
+    ['/browser/update', 'browser_update', '创建或更新窗口资料', 200],
+    ['/browser/open', 'browser_open', '打开比特窗口', 503],
+    ['/browser/open', 'browser_open', '打开比特窗口', 200]
+  ] as const)(
+    '窗口接口拒绝保留受控步骤与HTTP状态：%s %s %s %i',
+    async (path, operation, label, status) => {
+      const fetch = vi.fn().mockResolvedValue(
+        new Response(
+          JSON.stringify({
+            success: false,
+            msg: 'fixture-private-response',
+            code: 'fixture-private-code',
+            data: { id: 'fixture-private-profile' }
+          }),
+          { status }
+        )
+      );
+      vi.stubGlobal('fetch', fetch);
+      const error = await directBrowserApi(
+        'http://localhost:54345',
+        'fixture-private-key',
+        signal()
+      )
+        .post(path, { name: 'fixture-private-window', id: 'fixture-private-profile' })
+        .catch((failure: unknown) => failure);
+      expect(error).toBeInstanceOf(DirectBrowserError);
+      expect(error).toMatchObject({
+        reason: 'bitbrowser_direct_rejected',
+        metadata: { operation, httpStatus: status }
+      });
+      expect((error as Error).message).toContain(label);
+      expect((error as Error).message).toContain(`HTTP ${status}`);
+      expect((error as Error).message).not.toMatch(/fixture-private|localhost|\/browser/);
+      expect(fetch).toHaveBeenCalledOnce();
+    }
+  );
+  it('成功窗口接口原样返回，保留原请求体、鉴权和请求数量', async () => {
+    const value = { success: true, data: { id: 'a'.repeat(32) } };
+    const body = { name: '合成窗口', groupId: 'fixture-group' };
+    const fetch = vi.fn().mockResolvedValue(new Response(JSON.stringify(value), { status: 200 }));
+    vi.stubGlobal('fetch', fetch);
+    expect(
+      await directBrowserApi('http://localhost:54345', 'fixture-only-key', signal()).post(
+        '/browser/update',
+        body
+      )
+    ).toEqual(value);
+    expect(fetch).toHaveBeenCalledOnce();
+    expect(fetch).toHaveBeenCalledWith(
+      'http://localhost:54345/browser/update',
+      expect.objectContaining({
+        method: 'POST',
+        credentials: 'omit',
+        redirect: 'error',
+        cache: 'no-store',
+        headers: { 'Content-Type': 'application/json', 'x-api-key': 'fixture-only-key' },
+        body: JSON.stringify(body)
+      })
+    );
+  });
+  it('记录失败只显示标准错误码、HTTP与UUID，不复制消息、cause或未知字段', () => {
+    const requestId = '11111111-1111-4111-8111-111111111111';
+    const error = directBrowserFailure(
+      new ApiError('fixture-private-message', {
+        kind: 'conflict',
+        code: 'CONFLICT',
+        status: 409,
+        requestId,
+        retryable: false,
+        cause: {
+          url: 'https://example.invalid/?fixture-private-key',
+          body: 'fixture-private-json',
+          profileId: 'fixture-private-profile'
+        }
+      }),
+      'record_finished'
+    );
+    expect(error.metadata).toEqual({
+      operation: 'record_finished',
+      httpStatus: 409,
+      apiCode: 'CONFLICT',
+      requestId
+    });
+    expect(error.message).toContain('保存执行结果失败');
+    expect(error.message).toContain('执行记录冲突');
+    expect(error.message).not.toContain('CONFLICT');
+    expect(error.message).toContain('HTTP 409');
+    expect(error.message).toContain(requestId);
+    expect(error.message).not.toMatch(/fixture-private|https:|profileId|body|cause/);
+    const invalid = directBrowserFailure(
+      new ApiError('fixture-private-message', {
+        kind: 'server',
+        code: 'fixture-private-code',
+        status: 600,
+        requestId: 'https://example.invalid/?fixture-private',
+        retryable: false
+      }),
+      'record_restore'
+    );
+    expect(invalid.metadata).toEqual({ operation: 'record_restore' });
+    expect(invalid.message).toBe('读取账户执行记录失败');
+  });
+  it('未知步骤、超长或带换行的请求号和非白名单原因均不进入诊断', () => {
+    const unsafe = new DirectBrowserError('bitbrowser_direct_command_failed', {
+      operation: '__proto__' as never,
+      httpStatus: Number.NaN,
+      apiCode: 'constructor',
+      apiReason: 'fixture-private-reason',
+      requestId: '11111111-1111-4111-8111-111111111111\n'
+    });
+    expect(unsafe.metadata).toEqual({});
+    expect(Object.isFrozen(unsafe.metadata)).toBe(true);
+    expect(unsafe.message).not.toMatch(/fixture-private|请求编号|__proto__|NaN/);
+    const valid = directBrowserFailure(
+      new ApiError('原单付款状态未安全核实，不能更换比特窗口', {
+        code: 'CONFLICT',
+        kind: 'conflict',
+        status: 409,
+        requestId: 'a'.repeat(4096),
+        retryable: false
+      }),
+      'record_profile_check'
+    );
+    expect(valid.metadata.apiReason).toBe('original_payment_profile_unverified');
+    expect(valid.metadata.requestId).toBeUndefined();
+    expect(valid.message).toContain('原单付款状态未安全核实，不能更换比特窗口');
+    const wrongStatus = directBrowserFailure(
+      new ApiError('原单付款状态未安全核实，不能更换比特窗口', {
+        code: 'CONFLICT',
+        kind: 'conflict',
+        status: 400,
+        retryable: false
+      })
+    );
+    expect(wrongStatus.metadata.apiReason).toBeUndefined();
+    expect(wrongStatus.message).not.toContain('原单付款状态');
   });
   it('创建窗口始终关闭登录态同步，保留已有代理和指纹设置', () => {
     const result = directProfileOptions({

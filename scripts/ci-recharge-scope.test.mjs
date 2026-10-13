@@ -194,7 +194,7 @@ test('the completed Admin job is reusable only with native success and control-o
   assert.equal(validate(run, jobs, [], { ...checkout, tree: { sha: 'a'.repeat(40) } }), false);
 });
 
-test('disk retention commands require new guard evidence and preserve the original byte gate', () => {
+test('changed guard controls require new evidence while frozen continuation remains exact', () => {
   const before = execFileSync(
     'git',
     ['show', combinedMigrationBinding.head + ':scripts/ci-recharge-check.mjs'],

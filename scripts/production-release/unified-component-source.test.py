@@ -20,6 +20,7 @@ APP_FILES = ('package.json', 'package-lock.json', '.dockerignore',
 # Independent literals retain the original application seal and admit exactly
 # the reviewed successor. Caller-supplied or recomputed hashes grant no scope.
 APPLICATION_SEAL = '2e9549278a2e883a6a7eba4a90a565146919e3ce631f4c5cfe8e5771b2dfd647'
+PUBLISHED_APPLICATION_SEAL = 'c4f1c8d57580412999493e0895faf5c912611dcc8973abffeb11d5f2aae0064b'
 CONFIRM_INPUTS = {
     'apps/admin/src/v2/features/auto-recharge/useRechargeLocalConfirmation.ts': {
         'mode': '100644', 'sha256': 'e68503d21fba26c5303d58eae0e35d2f076e167fb1a16aeb592084dcc199c352'},
@@ -33,19 +34,32 @@ def verify_application_worktree(sealed, current, projection):
     fingerprint = lambda value: hashlib.sha256(json.dumps(value, sort_keys=True,
         separators=(',', ':')).encode()).hexdigest()
     before = projection.inventory(sealed)
-    if len(before) != 2191 or fingerprint(before) != APPLICATION_SEAL:
+    seal = fingerprint(before)
+    if len(before) != 2191 or seal not in (APPLICATION_SEAL, PUBLISHED_APPLICATION_SEAL):
         raise RuntimeError('JOINT_ORIGINAL_APPLICATION_SEAL_CHANGED')
     if set(current) != set(sealed):
         raise RuntimeError('JOINT_APPLICATION_PATHS_CHANGED')
     changed = {name for name in sealed if current[name] != sealed[name]}
     if not changed:
-        return 'ORIGINAL_APPLICATION'
+        return 'ORIGINAL_APPLICATION' if seal == APPLICATION_SEAL else 'PUBLISHED_APPLICATION'
+    if seal != PUBLISHED_APPLICATION_SEAL:
+        raise RuntimeError('JOINT_CONFIRM_PUBLISHED_BASELINE_REQUIRED')
     if changed != set(CONFIRM_INPUTS):
         raise RuntimeError('JOINT_UNREVIEWED_APPLICATION_CHANGE')
     overlay = projection.inventory({name: current[name] for name in changed})
     if overlay != CONFIRM_INPUTS or fingerprint(overlay) != CONFIRM_OVERLAY:
         raise RuntimeError('JOINT_CONFIRM_OVERLAY_CHANGED')
     return 'ADMIN_CONFIRM_EXPIRY_20261014'
+REMAINING_REVIEWED_SOURCE = '28132dc776ccb94c44e243a81731f27c91ae4ed3'
+REMAINING_REVIEWED_PATHS = frozenset((
+    'apps/admin/src/v2/features/auto-recharge/bitbrowser-direct-api.ts',
+    'apps/admin/src/v2/features/auto-recharge/bitbrowser-direct.spec.ts',
+    'apps/admin/src/v2/features/auto-recharge/useBitBrowserDirectOpen.spec.ts',
+    'apps/admin/src/v2/features/auto-recharge/useBitBrowserDirectOpen.ts',
+    'apps/api/src/id-business-v2/auto-recharge/recharge-owned-profile.spec.ts',
+    'apps/api/src/id-business-v2/auto-recharge/worker/bitbrowser_connector.py',
+    'apps/api/src/id-business-v2/auto-recharge/worker/test_bitbrowser_connector.py',
+))
 
 
 def load(filename):
@@ -83,6 +97,9 @@ class JointSourceTests(unittest.TestCase):
         cls.reviewed458 = archived_files('a019e794fd6b3313fa312ad5a08fa4559f876d18')
         cls.old_api = archived_files('31d2c6885a45817cd40d23fce8d6145bc9f18af2')
         cls.old_admin = archived_files('60e164b75d1eedaab440c17139bf9ba55de08c61')
+        cls.original_application_source = archived_files('b1a775d1dc0bc460fb59eebcec089342b6134788')
+        cls.published = archived_files('f193f34ea09a2c37485c1582a81b33ee3acec865')
+        cls.reviewed_remaining = archived_files(REMAINING_REVIEWED_SOURCE)
         cls.output, cls.record = cls.projection.project_files(cls.candidate, cls.base, cls.online,
             cls.core.APPLICATION_SOURCE, cls.core.APPLICATION_TREE)
         cls.application = {name: row for name, row in cls.projection.inventory(cls.candidate).items()
@@ -104,17 +121,17 @@ class JointSourceTests(unittest.TestCase):
                 current[name] = (path.read_bytes(), '100755' if path.stat().st_mode & 0o111 else '100644')
         sealed = {name: self.candidate[name] for name in present}
         profile = verify_application_worktree(sealed, current, self.projection)
-        for name in sorted(present - (set(CONFIRM_INPUTS) if profile != 'ORIGINAL_APPLICATION' else set())):
+        for name in sorted(present - (set(CONFIRM_INPUTS) if profile == 'ADMIN_CONFIRM_EXPIRY_20261014' else set())):
             with self.subTest(path=name):
                 self.assertEqual(current[name], self.candidate[name])
-        if profile != 'ORIGINAL_APPLICATION':
+        if profile == 'ADMIN_CONFIRM_EXPIRY_20261014':
             # Prove these independent literals agree with the real production
             # projection and its fixed predecessor/control archives, in memory.
             adapter = load('admin-pending-online-release.py')
             self.assertEqual(set(adapter.CONFIRM_FILES), set(CONFIRM_INPUTS))
             self.assertEqual(adapter.CONFIRM_OVERLAY_SHA256, CONFIRM_OVERLAY)
-            self.assertEqual(adapter.CONFIRM_BASELINE, 'f193f34ea09a2c37485c1582a81b33ee3acec865')
-            self.assertEqual(adapter.CONFIRM_CONTROL_SOURCE, '7a6e0ea8f1504ca6c87510e9132e7018cc07b731')
+            self.assertEqual(adapter.CONFIRM_BASELINE, '43c31870c9497d900491cdb19c5f61c766f3b344')
+            self.assertEqual(adapter.CONFIRM_CONTROL_SOURCE, '43c31870c9497d900491cdb19c5f61c766f3b344')
             tracked = subprocess.check_output(['git', 'ls-files', '--cached', '--others', '--exclude-standard'],
                 cwd=ROOT).decode().splitlines()
             full = {}
@@ -131,18 +148,26 @@ class JointSourceTests(unittest.TestCase):
             self.assertEqual(record['overlayFiles'], CONFIRM_INPUTS)
             self.assertEqual(record['overlaySha256'], CONFIRM_OVERLAY)
             self.assertEqual(record['sourceBasisCommit'], adapter.CONFIRM_BASELINE)
-            self.assertEqual(record['controlSourceTree'], '1e15f88ff2ed92071d8f4ec55ff0a0f7619f6e54')
+            self.assertEqual(record['controlSourceTree'], 'ede35ed238c2b0c00f536dbca25014d748637749')
             self.assertFalse(any('/online-recharge/' in name for name in output))
             for name, row in runtime.items():
                 self.assertEqual(output[name], row)
 
     def test_original_application_branch_still_requires_the_entire_original_seal(self):
-        sealed = {name: self.candidate[name] for name in self.application}
+        sealed = {name: self.original_application_source[name] for name in self.application}
+        self.assertEqual(self.projection.source_tree(self.original_application_source),
+                         'c45fa8f14a97e215d47ec9dc2a325f5fe611a921')
         self.assertEqual(verify_application_worktree(sealed, dict(sealed), self.projection),
                          'ORIGINAL_APPLICATION')
+        published = {name: self.candidate[name] for name in self.application}
+        self.assertEqual(verify_application_worktree(published, dict(published), self.projection),
+                         'PUBLISHED_APPLICATION')
+        old_with_overlay = {**sealed, **{name: ((ROOT / name).read_bytes(), '100644') for name in CONFIRM_INPUTS}}
+        with self.assertRaisesRegex(RuntimeError, 'CONFIRM_PUBLISHED_BASELINE_REQUIRED'):
+            verify_application_worktree(sealed, old_with_overlay, self.projection)
         substituted = dict(sealed)
         name = next(iter(CONFIRM_INPUTS))
-        substituted[name] = ((ROOT / name).read_bytes(), '100644')
+        substituted[name] = (sealed[name][0] + b'\n// substituted seal\n', '100644')
         with self.assertRaisesRegex(RuntimeError, 'ORIGINAL_APPLICATION_SEAL_CHANGED'):
             verify_application_worktree(substituted, substituted, self.projection)
 
@@ -165,7 +190,7 @@ class JointSourceTests(unittest.TestCase):
                 verify_application_worktree(sealed, current, self.projection)
         for name in ('apps/api/src/main.ts', 'apps/api/src/auth/auth.service.ts',
                      'apps/admin/src/v2/styles/base.css', 'packages/shared/src/v2/auto-recharge.ts',
-                     'apps/api/prisma-mysql/schema.prisma', 'package-lock.json'):
+                     'apps/api/prisma-mysql/schema.prisma', 'package-lock.json', *REMAINING_REVIEWED_PATHS):
             current = dict(approved); raw, mode = current[name]
             current[name] = (raw + b'\n// unreviewed\n', mode)
             with self.subTest(path=name), self.assertRaisesRegex(RuntimeError, 'UNREVIEWED_APPLICATION_CHANGE'):
@@ -197,10 +222,28 @@ class JointSourceTests(unittest.TestCase):
         for name, digest in spec['businessFiles'].items():
             if name.startswith(APP_PREFIXES):
                 with self.subTest(path=name):
-                    self.assertEqual(hashlib.sha256(self.output[name][0]).hexdigest(), digest)
+                    if name in REMAINING_REVIEWED_PATHS:
+                        self.assertEqual(hashlib.sha256(self.published[name][0]).hexdigest(), digest)
+                        self.assertEqual(self.output[name], self.reviewed_remaining[name])
+                    else:
+                        self.assertEqual(hashlib.sha256(self.output[name][0]).hexdigest(), digest)
+                        self.assertEqual(self.output[name][1], self.published[name][1])
         shared = self.output['packages/shared/src/v2/auto-recharge.ts'][0]
         self.assertIn(b'V2_RECHARGE_SUBSCRIPTION_CYCLE_PROTOCOL', shared)
         self.assertIn(b'next-subscription-cycle-v1', shared)
+
+    def test_only_the_exact_reviewed_seven_file_remaining_delta_is_admitted(self):
+        paths = {n for n in set(self.published) | set(self.reviewed_remaining) | set(self.candidate)
+                 if n.startswith(APP_PREFIXES) or n in APP_FILES}
+        changed = {n for n in paths if self.published.get(n) != self.reviewed_remaining.get(n)}
+        self.assertEqual(changed, REMAINING_REVIEWED_PATHS)
+        candidate_changed = {n for n in paths if self.published.get(n) != self.candidate.get(n)}
+        self.assertEqual(candidate_changed, REMAINING_REVIEWED_PATHS)
+        for name in REMAINING_REVIEWED_PATHS:
+            with self.subTest(path=name):
+                self.assertEqual(self.output[name], self.reviewed_remaining[name])
+                self.assertEqual(self.output[name], self.candidate[name])
+                self.assertNotEqual(self.output[name], self.published[name])
 
     def test_workspace_dock_and_latest_table_width_fix_survive_without_old_admin(self):
         for name in (

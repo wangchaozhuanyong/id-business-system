@@ -65,10 +65,10 @@ WORKSPACE_BASELINE_CONTRACT = {
     'apiImageId': 'sha256:5c06cae77f95c7a040a9fb22afcddefa45ca28b4e47589aa38eeae5eb5b6384b',
     'adminImageId': 'sha256:c473c719184e2d5e1d5aa367bb933336866ec5814069360746fa3ca07627a394'}
 
-# A separate finite successor of the completed f193 component publication.
+# A separate finite successor of the completed 43 component publication.
 # The B/60 policies and their source seals retain their original meaning.
-CONFIRM_BASELINE = 'f193f34ea09a2c37485c1582a81b33ee3acec865'
-CONFIRM_BASELINE_TREE = '9aa97ecaa69bee7fdf5d390e1547dfe941050ed1'
+CONFIRM_BASELINE = '43c31870c9497d900491cdb19c5f61c766f3b344'
+CONFIRM_BASELINE_TREE = 'ede35ed238c2b0c00f536dbca25014d748637749'
 CONFIRM_PROFILE = 'ADMIN_CONFIRM_EXPIRY_20261014'
 CONFIRM_FILES = (
     'apps/admin/src/v2/features/auto-recharge/useRechargeLocalConfirmation.ts',
@@ -84,36 +84,23 @@ CONFIRM_CONTROLS = frozenset((
     'scripts/production-release/unified-component-source.test.py',
     'scripts/production-release/recharge-flow-entry.test.mjs'))
 CONFIRM_DOCS = frozenset(('docs/V2_TASKS.md', 'docs/CENTRAL_RELEASE_20261002.md',
-    'docs/UNIFIED_SITE_RELEASE_20261013.md'))
-CONFIRM_CONTROL_SOURCE = '7a6e0ea8f1504ca6c87510e9132e7018cc07b731'
-CONFIRM_CONTROL_TREE = '1e15f88ff2ed92071d8f4ec55ff0a0f7619f6e54'
-# Already-merged, independently authorised maintenance source. These bytes are
-# inherited from this ONE Git tree; they are not arbitrary candidate exceptions.
-CONFIRM_UPSTREAM_CONTROLS = frozenset((
-    '.github/workflows/disk-retention-maintenance.yml', '.github/workflows/production-release.yml',
-    'deploy/aws/disk-retention-policy-20261014.json', 'docs/DISK_STORAGE_POLICY.md', 'docs/V2_TASKS.md',
-    'scripts/ci-recharge-check.mjs', 'scripts/ci-recharge-check.test.mjs',
-    'scripts/ci-recharge-release.test.mjs', 'scripts/ci-recharge-scope.mjs', 'scripts/ci-recharge-scope.test.mjs',
-    'scripts/production-release/api-workspace-public-permission-repair.test.py',
-    'scripts/production-release/candidate-retention.py', 'scripts/production-release/candidate-retention.test.py',
-    'scripts/production-release/disk-lifecycle.test.py',
-    'scripts/production-release/disk-retention-install.py', 'scripts/production-release/disk-retention-install.test.py',
-    'scripts/production-release/disk-retention-transport.py', 'scripts/production-release/disk-retention-transport.test.py',
-    'scripts/production-release/disk-retention.py', 'scripts/production-release/disk-retention.test.py',
-    'scripts/production-release/online-recharge-source-permission-repair-transport.test.py',
-    'scripts/production-release/recharge-flow-entry.test.mjs',
-    'scripts/production-release/release-storage.py', 'scripts/production-release/release-storage.test.py',
-    'scripts/production-release/unpublished-component-runtime-diagnostic.test.py'))
+    'docs/UNIFIED_SITE_RELEASE_20261013.md', 'docs/WORKSPACE_RELEASE_CLEANUP_20261014.md'))
+CONFIRM_CONTROL_SOURCE = '43c31870c9497d900491cdb19c5f61c766f3b344'
+CONFIRM_CONTROL_TREE = 'ede35ed238c2b0c00f536dbca25014d748637749'
+CONFIRM_BASELINE_PROOF_LIMIT = 128 * 1024
 CONFIRM_HELPERS = ('remote-deploy.py', 'api-admin-pending-projection.py',
     'admin-pending-online-release.py', 'unpublished-component-successor.py', 'api-admin-scope.py')
 CONFIRM_CONTRACT = {
-    'manifestSha256': '11293b08b57f328e7e38ba8a81acad2778a8a1bb83eda6b3de6d6c9309612b16',
-    'publicationSha256': '067a01e76ea58170c937ac23f9b2d9dab5286c8ba247ce4c4119f40f10fdbfdc',
-    'buildProofSha256': 'eb475c519c1df183bcf02016a32ffe77303c7dc327d976aa5c76fefbcc98de04',
-    'preservationSha256': 'e16b890a2635bccb488ce7ef120ddadfeaef623fb3f2198ce345a7a09a732a3f',
-    'projectionSha256': '6fbc3fcd4b22b452e70371be0c45cd9724366578dce359f3e49120b73f4df41b',
-    'outputTree': '51a75f8dec296d42ac87700fd445c01838256ea3',
-    'runId': '38429088560', 'runAttempt': '1', 'qualityRunId': '38427315799'}
+    'manifestSha256': '204182bc2dee9acbd9b0f8594471fcefca69564f2b82893b5fe90d8025852f14',
+    'publicationSha256': '376f3fcd9102ea5974ef74e6ab2ef2bfa245c58680ce028df5e514ed54cf76a3',
+    'buildProofSha256': '88049211315f89ad01fc7442b934c8845995e2f1fc99f68f4bc9ae81d3ede4e0',
+    'preservationSha256': 'b7536f91fcea303bed7e210b79437ab1cd413d88fdfec9609f991bec7f84b982',
+    'projectionSha256': '973305a109c0044194e86413a8cebfbd1dac8a7ddb741d9ffca6cfee9052e1c8',
+    'outputTree': 'd106de236dfa914833c8fe84067f9ecfd26e3579',
+    'runId': '38476335896',
+    'runAttempt': '1',
+    'qualityRunId': '38475332468',
+}
 CONFIRM_ORIGIN_MARKERS = ORIGIN_MARKERS + ('apiHotfixPublication', 'apiComponentPublication')
 
 
@@ -162,7 +149,7 @@ def private_bytes(path, cap=65536):
     return raw
 
 
-def read_json(path):
+def read_json(path, *, cap=65536):
     def unique(rows):
         result = {}
         for key, value in rows:
@@ -172,7 +159,7 @@ def read_json(path):
     path = Path(path)
     if not path.is_absolute():
         path = Path.cwd().resolve() / path
-    return json.loads(private_bytes(path), object_pairs_hook=unique)
+    return json.loads(private_bytes(path, cap=cap), object_pairs_hook=unique)
 
 
 def write_json(path, value):
@@ -286,15 +273,10 @@ def project_confirm(candidate, predecessor, baseline, online, commit, tree, cont
     need(p.source_tree(candidate) == tree and p.source_tree(predecessor) == CONFIRM_BASELINE_TREE,
          'CONFIRM_SOURCE_TREE_CHANGED')
     need(p.source_tree(control_source) == CONFIRM_CONTROL_TREE, 'CONFIRM_CONTROL_SOURCE_CHANGED')
-    inherited = {n for n in set(control_source) | set(predecessor)
-                 if control_source.get(n) != predecessor.get(n)}
-    need(inherited == CONFIRM_UPSTREAM_CONTROLS | CONFIRM_DOCS
-         and all(n in control_source and control_source[n][1] == '100644' for n in inherited),
-         'CONFIRM_CONTROL_SCOPE_CHANGED')
-    # The control basis must have exactly the same complete application inputs,
-    # schema, migrations, Compose, auth and dependencies as the published source.
-    need(all(control_source.get(n) == row for n, row in predecessor.items()
-             if n not in inherited), 'CONFIRM_CONTROL_APPLICATION_CHANGED')
+    # The sole control basis is the genuine complete published predecessor.
+    # No separate control tree may introduce application or runtime differences.
+    need(control_source == predecessor, 'CONFIRM_CONTROL_SCOPE_CHANGED')
+    inherited = set()
     changed = {n for n in set(candidate) | set(control_source) if candidate.get(n) != control_source.get(n)}
     need(set(CONFIRM_FILES) <= changed <= set(CONFIRM_FILES) | CONFIRM_CONTROLS | CONFIRM_DOCS
          and all(n in candidate and candidate[n][1] == '100644' for n in changed),
@@ -322,7 +304,7 @@ def project_confirm(candidate, predecessor, baseline, online, commit, tree, cont
         'profile': CONFIRM_PROFILE, 'candidateCommit': commit, 'candidateTree': tree,
         'sourceBasisCommit': CONFIRM_BASELINE, 'sourceBasisTree': CONFIRM_BASELINE_TREE,
         'controlSourceCommit': CONFIRM_CONTROL_SOURCE, 'controlSourceTree': CONFIRM_CONTROL_TREE,
-        'inheritedControlFiles': p.inventory({n: control_source[n] for n in inherited}),
+        'inheritedControlFiles': {},
         'apiComponentBaseline': CONFIRM_BASELINE, 'overlayFiles': p.inventory(overlay),
         'overlaySha256': CONFIRM_OVERLAY_SHA256,
         'inheritedProjectionSha256': CONFIRM_CONTRACT['projectionSha256'],
@@ -533,9 +515,11 @@ def confirm_baseline_records(previous, raw, manifest):
     need(digest(raw) == c['manifestSha256'] and manifest['commit'] == CONFIRM_BASELINE
          and manifest['sourceTree'] == CONFIRM_BASELINE_TREE
          and all(n in manifest for n in CONFIRM_ORIGIN_MARKERS), 'CONFIRM_BASELINE_CHANGED')
-    proof_raw = private_bytes(previous / 'unpublished-component-successor-build-proof.json')
+    proof_raw = private_bytes(previous / 'unpublished-component-successor-build-proof.json',
+                              cap=CONFIRM_BASELINE_PROOF_LIMIT)
     state_raw = private_bytes(previous / 'unpublished-component-successor-preservation.json')
-    proof = read_json(previous / 'unpublished-component-successor-build-proof.json')
+    proof = read_json(previous / 'unpublished-component-successor-build-proof.json',
+                      cap=CONFIRM_BASELINE_PROOF_LIMIT)
     state = read_json(previous / 'unpublished-component-successor-preservation.json')
     ledger = manifest['apiComponentPublication']
     need(digest(proof_raw) == c['buildProofSha256'] and digest(state_raw) == c['preservationSha256']

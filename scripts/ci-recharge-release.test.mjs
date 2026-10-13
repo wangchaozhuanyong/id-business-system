@@ -779,7 +779,7 @@ function adminProjectionFixture(root, env, log) {
   const directory = join(root, '.deploy/production-release');
   mkdirSync(directory, { recursive: true });
   const projection = { projectionSha256: 'e'.repeat(64) };
-  const confirm = env.EXPECTED_CURRENT === 'f193f34ea09a2c37485c1582a81b33ee3acec865';
+  const confirm = env.EXPECTED_CURRENT === '43c31870c9497d900491cdb19c5f61c766f3b344';
   if (confirm)
     Object.assign(projection, {
       profile: 'ADMIN_CONFIRM_EXPIRY_20261014',
@@ -838,11 +838,12 @@ function independentAdminEnv(env, overrides = {}) {
   };
 }
 
-const confirmAdminBaseline = 'f193f34ea09a2c37485c1582a81b33ee3acec865';
+const confirmAdminBaseline = '43c31870c9497d900491cdb19c5f61c766f3b344';
 
-test('f193 verify access selects only the sealed read-only preflight and always saves safe evidence', () => {
+test('43c31870 verify access selects only the sealed read-only preflight and always saves safe evidence', () => {
   const step = workflowSteps.find(
-    (row) => row.name === 'Read sealed f193 Admin confirmation baseline without production changes'
+    (row) =>
+      row.name === 'Read sealed 43c31870 Admin confirmation baseline without production changes'
   );
   const generic = workflowSteps.find((row) => row.name === 'Read production release diagnostics');
   const old = workflowSteps.find(
@@ -860,7 +861,7 @@ test('f193 verify access selects only the sealed read-only preflight and always 
   for (const operation of ['release', 'release_admin', 'release_unpublished_components'])
     assert.equal(workflowPredicate(step.if)({ ...selected, operation }), false);
   const save = workflowSteps.find(
-    (row) => row.name === 'Save sealed f193 Admin confirmation preflight safe evidence'
+    (row) => row.name === 'Save sealed 43c31870 Admin confirmation preflight safe evidence'
   );
   const enabled = new Function('inputs', 'always', `return (${save.if});`);
   assert.equal(
@@ -870,7 +871,7 @@ test('f193 verify access selects only the sealed read-only preflight and always 
   assert.equal(save.with.path, '.deploy/production-release/admin-confirm-preflight-*.json');
   assert.equal(save.with['include-hidden-files'], true);
   const build = workflowSteps.find(
-    (row) => row.name === 'Save only sealed f193 Admin build source evidence'
+    (row) => row.name === 'Save only sealed 43c31870 Admin build source evidence'
   );
   const exportBuild = new Function('inputs', 'always', `return (${build.if});`);
   assert.equal(
@@ -901,7 +902,7 @@ test('f193 verify access selects only the sealed read-only preflight and always 
   ]);
 });
 
-test('f193 confirmation profile builds and pushes only Admin and rejects mixed authorization inputs', () => {
+test('43c31870 confirmation profile builds and pushes only Admin and rejects mixed authorization inputs', () => {
   fixture(({ root, env, log }) => {
     const selected = independentAdminEnv(env, { EXPECTED_CURRENT: confirmAdminBaseline });
     adminProjectionFixture(root, selected, log);
@@ -948,7 +949,7 @@ test('f193 confirmation profile builds and pushes only Admin and rejects mixed a
   });
 });
 
-test('f193 Admin dispatch pins all pure projection helpers without entering an API release controller', () => {
+test('43c31870 Admin dispatch pins all pure projection helpers without entering an API release controller', () => {
   dispatchFixture(
     'none',
     confirmAdminBaseline,
@@ -984,7 +985,7 @@ test('f193 Admin dispatch pins all pure projection helpers without entering an A
   );
 });
 
-test('f193 independent Admin readback requires its own profile and unchanged API origin', () => {
+test('43c31870 independent Admin readback requires its own profile and unchanged API origin', () => {
   adminReadbackFixture(
     ({ execute, selected, root, result, parametersFile }) => {
       execute();
