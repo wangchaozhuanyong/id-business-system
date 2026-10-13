@@ -53,12 +53,107 @@ import {
   ownedMysqlTestControlPaths,
   hasCombinedComponentScope,
   combinedMigrationBinding,
-  validateCombinedMigrationNative
+  validateCombinedMigrationNative,
+  combinedMigrationScopeBytesUnchanged,
+  canReuseCombinedAdminSource,
+  combinedDispatcherBytesUnchanged
 } from './ci-recharge-scope.mjs';
 import { matchesSourceEvidence } from './ci-recharge-evidence.mjs';
 
 const schema =
   'model Other { id String }\nmodel IdBusinessV2RechargeBrowserSetting { ownerId String }\n';
+
+test('finite migration reuse preserves every original scope and command byte', () => {
+  const before = execFileSync(
+    'git',
+    ['show', combinedMigrationBinding.head + ':scripts/ci-recharge-scope.mjs'],
+    { encoding: 'utf8' }
+  );
+  const after = readFileSync('scripts/ci-recharge-scope.mjs', 'utf8');
+  assert.equal(combinedMigrationScopeBytesUnchanged(before, after), true);
+  for (const name of [
+    'hasCombinedComponentScope',
+    'hasRechargeConnectionMigrationScope',
+    'hasRegistrationMirrorScope',
+    'adminCheckCommands',
+    'affectsPart'
+  ])
+    assert.equal(
+      combinedMigrationScopeBytesUnchanged(before, after.replace(name, name + 'Changed')),
+      false
+    );
+});
+
+test('the completed Admin job is reusable only with native success and control-only changes', () => {
+  const run = {
+    id: 38414414141,
+    run_attempt: 1,
+    conclusion: 'failure',
+    event: 'pull_request',
+    path: '.github/workflows/quality.yml',
+    status: 'completed',
+    head_sha: '5930f71e00d178a867526766e16e9aee14077244',
+    pull_requests: [{ number: 463, base: { sha: combinedMigrationBinding.base } }]
+  };
+  const jobs = [
+    {
+      id: 115355004562,
+      run_id: run.id,
+      name: 'recharge (admin)',
+      status: 'completed',
+      conclusion: 'success',
+      steps: ['Checkout', 'Check affected recharge part'].map((name) => ({
+        name,
+        status: 'completed',
+        conclusion: 'success'
+      }))
+    }
+  ];
+  const checkout = {
+    sha: 'd7a17bbd2626a9adc77ba732ed934d302f78a0d2',
+    tree: { sha: '3594058955012e7ad7087cbb340a0f30420c92f2' },
+    parents: [combinedMigrationBinding.base, run.head_sha].map((sha) => ({ sha }))
+  };
+  const log =
+    checkout.sha +
+    '\nTest Files 159 passed (159)\nTests 1235 passed (1235)\n工作区浏览器验收通过：86 项';
+  const validate = (r = run, j = jobs, c = [], x = checkout, l = log) =>
+    canReuseCombinedAdminSource(r, j, c, x, l);
+  assert.equal(validate(run, jobs, ['scripts/ci-recharge-scope.mjs']), true);
+  for (const path of [
+    'apps/admin/src/v2/styles/base.css',
+    'scripts/acceptance-v2-workspace-dock.mjs',
+    'package-lock.json',
+    '.github/workflows/quality.yml'
+  ])
+    assert.equal(validate(run, jobs, [path]), false);
+  assert.equal(validate({ ...run, status: 'in_progress' }), false);
+  assert.equal(validate({ ...run, run_attempt: 2 }), false);
+  assert.equal(validate({ ...run, head_sha: 'a'.repeat(40) }), false);
+  assert.equal(validate(run, []), false);
+  assert.equal(validate(run, jobs, [], checkout, log.replace('1235 passed', '1234 passed')), false);
+  assert.equal(validate(run, jobs, [], { ...checkout, tree: { sha: 'a'.repeat(40) } }), false);
+});
+
+test('guard continuation preserves every original dispatcher command byte', () => {
+  const before = execFileSync(
+    'git',
+    ['show', combinedMigrationBinding.head + ':scripts/ci-recharge-check.mjs'],
+    { encoding: 'utf8' }
+  );
+  const after = readFileSync('scripts/ci-recharge-check.mjs', 'utf8');
+  assert.equal(combinedDispatcherBytesUnchanged(before, after), true);
+  for (const name of [
+    'shared',
+    'onlineEngine',
+    'unpublishedComponentSuccessorControls',
+    'hasCombinedComponentScope'
+  ])
+    assert.equal(
+      combinedDispatcherBytesUnchanged(before, after.replace(name, name + 'Changed')),
+      false
+    );
+});
 
 test('finite combined migration reuse requires native source and all 25 actual assertions', () => {
   const b = combinedMigrationBinding;

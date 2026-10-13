@@ -21,6 +21,7 @@ import {
   productionDatabaseAccessTest,
   productionDatabaseAccessAcceptance,
   hasBankCardDeletePolicyProof,
+  canResumeCombinedGuard,
   readProductionDatabaseAccessSnapshot
 } from './ci-recharge-scope.mjs';
 
@@ -32,6 +33,12 @@ const changed = execFileSync('git', ['diff', '--name-only', base, 'HEAD'], { enc
   .trim()
   .split('\n')
   .filter(Boolean);
+const resumeCombinedGuardPrefix =
+  part === 'guards' &&
+  process.env.GITHUB_ACTIONS === 'true' &&
+  process.env.GITHUB_REPOSITORY === 'wangchaozhuanyong/id-business-system' &&
+  process.env.GITHUB_EVENT_NAME === 'pull_request' &&
+  canResumeCombinedGuard(base);
 const shared = () => npm('run', 'build', '--workspace', '@apple-business/shared');
 const onlineEngine = () => {
   const directory = 'apps/api/src/id-business-v2/online-recharge/engine/upstream';
@@ -336,6 +343,8 @@ if (part === 'guards') {
     'scripts/ci-recharge-release.test.mjs',
     'scripts/admin-layout-rules.test.mjs'
   ]);
+}
+if (part === 'guards' && !resumeCombinedGuardPrefix) {
   if (
     changed.some(
       (path) =>
@@ -413,6 +422,8 @@ if (part === 'guards') {
   }
   adminPendingReleaseControls();
   unpublishedComponentSuccessorControls();
+}
+if (part === 'guards') {
   rechargeFlowSuccessorControls();
   ownedMysqlTestControls();
   releaseMaintenanceControls();

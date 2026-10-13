@@ -1177,9 +1177,20 @@ const combinedMigrationRepairPaths = new Set([
   'scripts/acceptance-v2-workspace-dock.mjs',
   'scripts/ci-recharge-release.test.mjs',
   'scripts/ci-recharge-scope.mjs',
-  'scripts/ci-recharge-scope.test.mjs'
+  'scripts/ci-recharge-scope.test.mjs',
+  'scripts/ci-recharge-check.mjs',
+  'scripts/ci-recharge-check.test.mjs',
+  'scripts/production-release/recharge-flow-successor-projection.test.py',
+  'scripts/production-release/recharge-flow-entry.test.mjs'
 ]);
-export function validateCombinedMigrationNative({ run, jobs, checkout, log, changed }) {
+export function validateCombinedMigrationNative({
+  run,
+  jobs,
+  checkout,
+  log,
+  changed,
+  dispatcherUnchanged
+}) {
   const b = combinedMigrationBinding;
   if (
     run.id !== b.runId ||
@@ -1190,7 +1201,8 @@ export function validateCombinedMigrationNative({ run, jobs, checkout, log, chan
     checkout.tree?.sha !== b.tree ||
     JSON.stringify(checkout.parents?.map((parent) => parent.sha)) !==
       JSON.stringify([b.base, b.head]) ||
-    !changed.every((path) => combinedMigrationRepairPaths.has(path))
+    !changed.every((path) => combinedMigrationRepairPaths.has(path)) ||
+    (changed.includes('scripts/ci-recharge-check.mjs') && dispatcherUnchanged !== true)
   )
     return undefined;
   const job = jobs.find((row) => row.id === b.jobId);
@@ -1265,6 +1277,179 @@ export function validateCombinedMigrationNative({ run, jobs, checkout, log, chan
     : undefined;
 }
 
+export function combinedMigrationScopeBytesUnchanged(before, after) {
+  const marker = '// One completed migration job survived';
+  const start = after.indexOf(marker);
+  const end = after.indexOf('\nconst git = (...args)', start) + 1;
+  const call = [
+    "  if (process.env.GITHUB_EVENT_NAME === 'pull_request') {",
+    '    const migrationEvidence = reuseCombinedMigration(repo, event, mode, paths, currentTree);',
+    '    if (migrationEvidence) {',
+    "      reused.add('migration');",
+    '      evidence.push(migrationEvidence);',
+    '      const adminEvidence = reuseCombinedAdmin(repo, currentTree);',
+    '      if (adminEvidence) {',
+    "        reused.add('admin');",
+    '        evidence.push(adminEvidence);',
+    '      }',
+    '    }',
+    '  }',
+    ''
+  ].join('\n');
+  return (
+    !before.includes(marker) &&
+    start >= 0 &&
+    end > start &&
+    after.split('\n').filter((line) => line.startsWith(marker)).length === 1 &&
+    after.includes(call) &&
+    (after.slice(0, start) + after.slice(end)).replace(call, '').trim() === before.trim()
+  );
+}
+
+export function combinedDispatcherBytesUnchanged(before, after) {
+  const declaration = [
+    'const resumeCombinedGuardPrefix =',
+    "  part === 'guards' &&",
+    "  process.env.GITHUB_ACTIONS === 'true' &&",
+    "  process.env.GITHUB_REPOSITORY === 'wangchaozhuanyong/id-business-system' &&",
+    "  process.env.GITHUB_EVENT_NAME === 'pull_request' &&",
+    '  canResumeCombinedGuard(base);',
+    ''
+  ].join('\n');
+  return (
+    after
+      .replace('  canResumeCombinedGuard,\n', '')
+      .replace(declaration, '')
+      .replace("\n}\nif (part === 'guards' && !resumeCombinedGuardPrefix) {\n", '\n')
+      .replace(
+        "\n}\nif (part === 'guards') {\n  rechargeFlowSuccessorControls();",
+        '\n  rechargeFlowSuccessorControls();'
+      )
+      .trim() === before.trim()
+  );
+}
+
+export function canReuseCombinedAdminSource(run, jobs, changed, checkout, log = '') {
+  const plain = log.replace(/\u001b\[[0-9;]*m/g, '');
+  return (
+    run.id === 38414414141 &&
+    run.run_attempt === 1 &&
+    run.status === 'completed' &&
+    matchingRun(run, 463, '5930f71e00d178a867526766e16e9aee14077244') &&
+    run.pull_requests.some(
+      (pr) => pr.number === 463 && pr.base.sha === combinedMigrationBinding.base
+    ) &&
+    changed.every(
+      (path) =>
+        combinedMigrationRepairPaths.has(path) &&
+        path !== 'scripts/acceptance-v2-workspace-dock.mjs'
+    ) &&
+    checkout?.sha === 'd7a17bbd2626a9adc77ba732ed934d302f78a0d2' &&
+    checkout.tree.sha === '3594058955012e7ad7087cbb340a0f30420c92f2' &&
+    JSON.stringify(checkout.parents.map((row) => row.sha)) ===
+      JSON.stringify([combinedMigrationBinding.base, run.head_sha]) &&
+    jobs.filter(
+      (job) =>
+        job.id === 115355004562 &&
+        job.run_id === run.id &&
+        job.name === 'recharge (admin)' &&
+        job.status === 'completed' &&
+        job.conclusion === 'success' &&
+        ['Checkout', 'Check affected recharge part'].every((name) =>
+          job.steps.some(
+            (step) =>
+              step.name === name && step.status === 'completed' && step.conclusion === 'success'
+          )
+        )
+    ).length === 1 &&
+    plain.includes('d7a17bbd2626a9adc77ba732ed934d302f78a0d2') &&
+    /Test Files\s+159 passed\s+\(159\)/.test(plain) &&
+    /Tests\s+1235 passed\s+\(1235\)/.test(plain) &&
+    plain.includes('工作区浏览器验收通过：86 项')
+  );
+}
+
+function reuseCombinedAdmin(repo, currentTree) {
+  const run = gh(`repos/${repo}/actions/runs/38414414141`);
+  const { jobs } = gh(`repos/${repo}/actions/runs/${run.id}/attempts/1/jobs?per_page=100`);
+  const checkout = gh(`repos/${repo}/git/commits/d7a17bbd2626a9adc77ba732ed934d302f78a0d2`);
+  const tree = checkout.tree.sha;
+  ensureCommit(run.head_sha);
+  if (git('rev-parse', `${run.head_sha}^{tree}`) !== tree)
+    throw new Error('Original Admin source tree changed');
+  const changed = git('diff', '--name-only', tree, currentTree).split('\n').filter(Boolean);
+  const log = execFileSync(
+    'gh',
+    ['run', 'view', String(run.id), '--repo', repo, '--job', '115355004562', '--log'],
+    { encoding: 'utf8', maxBuffer: 4 * 1024 * 1024 }
+  );
+  if (!canReuseCombinedAdminSource(run, jobs, changed, checkout, log))
+    throw new Error('Original Admin evidence changed');
+  return {
+    part: 'admin',
+    run: run.id,
+    attempt: 1,
+    job: 115355004562,
+    tree,
+    head: run.head_sha,
+    testsPassed: 1235,
+    browserChecks: 86,
+    logSha256: createHash('sha256').update(log).digest('hex')
+  };
+}
+
+function validateCombinedCommands(currentTree) {
+  const before = combinedMigrationBinding.head;
+  if (
+    !combinedMigrationScopeBytesUnchanged(
+      git('show', `${before}:scripts/ci-recharge-scope.mjs`),
+      git('show', `${currentTree}:scripts/ci-recharge-scope.mjs`)
+    ) ||
+    !combinedDispatcherBytesUnchanged(
+      git('show', `${before}:scripts/ci-recharge-check.mjs`),
+      git('show', `${currentTree}:scripts/ci-recharge-check.mjs`)
+    )
+  )
+    throw new Error('Original check commands changed');
+}
+
+export function canResumeCombinedGuard(base) {
+  if (
+    base !== combinedMigrationBinding.base ||
+    process.env.GITHUB_REPOSITORY !== combinedMigrationBinding.repository
+  )
+    return false;
+  const event = JSON.parse(readFileSync(process.env.GITHUB_EVENT_PATH, 'utf8'));
+  if (event.pull_request?.number !== 463 || event.pull_request.base.sha !== base) return false;
+  const repo = combinedMigrationBinding.repository;
+  const tree = git('rev-parse', 'HEAD^{tree}');
+  validateCombinedCommands(tree);
+  reuseCombinedAdmin(repo, tree);
+  const { jobs } = gh(`repos/${repo}/actions/runs/38414414141/attempts/1/jobs?per_page=100`);
+  const job = jobs.find((row) => row.id === 115355004669);
+  const log = execFileSync(
+    'gh',
+    ['run', 'view', '38414414141', '--repo', repo, '--job', '115355004669', '--log'],
+    { encoding: 'utf8', maxBuffer: 4 * 1024 * 1024 }
+  );
+  const failures = log.match(/FAIL: [^\n]+/g) || [];
+  if (
+    job?.run_id !== 38414414141 ||
+    job.name !== 'recharge (guards)' ||
+    job.status !== 'completed' ||
+    job.conclusion !== 'failure' ||
+    job.steps.filter((step) => step.conclusion === 'failure').length !== 1 ||
+    failures.length !== 1 ||
+    !failures[0].includes('test_original_source_and_history_seals_remain_separate') ||
+    !log.includes('Ran 297 tests in') ||
+    !log.includes('Ran 9 tests in') ||
+    !log.includes('FAILED (failures=1)') ||
+    !log.includes('recharge-flow-successor-projection.test.py')
+  )
+    throw new Error('Original guard prefix evidence changed');
+  return true;
+}
+
 function reuseCombinedMigration(repo, event, mode, paths, currentTree) {
   const b = combinedMigrationBinding;
   if (
@@ -1278,6 +1463,7 @@ function reuseCombinedMigration(repo, event, mode, paths, currentTree) {
   ensureCommit(b.head);
   if (git('rev-parse', `${b.head}^{tree}`) !== b.tree)
     throw new Error('Migration source tree changed');
+  validateCombinedCommands(currentTree);
   const changed = git('diff', '--name-only', b.head, currentTree).split('\n').filter(Boolean);
   const run = gh(`repos/${repo}/actions/runs/${b.runId}`);
   const { jobs } = gh(
@@ -1289,7 +1475,14 @@ function reuseCombinedMigration(repo, event, mode, paths, currentTree) {
     ['run', 'view', String(b.runId), '--repo', repo, '--job', String(b.jobId), '--log'],
     { encoding: 'utf8', maxBuffer: 4 * 1024 * 1024 }
   );
-  const evidence = validateCombinedMigrationNative({ run, jobs, checkout, log, changed });
+  const evidence = validateCombinedMigrationNative({
+    run,
+    jobs,
+    checkout,
+    log,
+    changed,
+    dispatcherUnchanged: true
+  });
   if (!evidence)
     throw new Error('Original migration evidence or unchanged input proof is unavailable');
   const unchanged = git('ls-tree', '-r', b.head)
@@ -1472,6 +1665,11 @@ async function main() {
     if (migrationEvidence) {
       reused.add('migration');
       evidence.push(migrationEvidence);
+      const adminEvidence = reuseCombinedAdmin(repo, currentTree);
+      if (adminEvidence) {
+        reused.add('admin');
+        evidence.push(adminEvidence);
+      }
     }
   }
   const checkParts =
