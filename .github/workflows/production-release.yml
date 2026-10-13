@@ -144,6 +144,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 90
     env:
+      # Match the original AWS CLI receipt bytes without changing production timezones.
+      TZ: Asia/Kuala_Lumpur
       AWS_REGION: ap-northeast-1
       RELEASE_ROLE_ARN: arn:aws:iam::079740175286:role/id-business-v2-github-release
       RELEASE_REPOSITORY: 079740175286.dkr.ecr.ap-northeast-1.amazonaws.com/id-business-v2-release

@@ -516,6 +516,7 @@ const runtimeByBaseline = ['', '60e164b75d1eedaab440c17139bf9ba55de08c61', '31d2
 });
 console.log(JSON.stringify({concurrency: current.concurrency, oldConcurrency: old.concurrency,
  jobIf: current.jobs.release.if, permissions: current.permissions, oldPermissions: old.permissions,
+ jobEnv: current.jobs.release.env, oldJobEnv: old.jobs.release.env,
  options: current.on.workflow_dispatch.inputs.operation.options,
  oldOptions: old.on.workflow_dispatch.inputs.operation.options,
  oldStepsRetained: old.jobs.release.steps.every(o => steps.some(s => s.name === o.name)), changed,
@@ -531,6 +532,8 @@ console.log(JSON.stringify({concurrency: current.concurrency, oldConcurrency: ol
         self.assertEqual(value['concurrency'], {'group': 'id-business-v2-production-release', 'cancel-in-progress': False})
         self.assertEqual(value['permissions'], value['oldPermissions'])
         self.assertEqual(value['jobIf'], "github.ref == 'refs/heads/main'")
+        self.assertEqual(value['jobEnv'].pop('TZ'), 'Asia/Kuala_Lumpur')
+        self.assertEqual(value['jobEnv'], value['oldJobEnv'])
         self.assertEqual(value['options'], value['oldOptions'][:2] + [m.OPERATION] + value['oldOptions'][2:])
         self.assertTrue(value['oldStepsRetained'])
         self.assertEqual(value['changed'], ['Verify read-only SSM command access',
