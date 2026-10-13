@@ -1819,6 +1819,8 @@ test('workflow wires a separate empty-by-default seal and rejects all non-releas
         (error) =>
           error.status === 1 &&
           ([
+            'verify_recharge_flow',
+            'release_recharge_flow',
             'verify_online_recharge',
             'release_online_recharge',
             'verify_api_workspace',
@@ -2210,6 +2212,10 @@ test('actual full-mode release controls select each missing suite once without r
     'python3 -B scripts/production-release/unpublished-component-successor-readonly.test.py',
     'node --test scripts/production-release/unpublished-component-entry.test.mjs',
     'python3 -B scripts/production-release/unpublished-component-runtime-diagnostic.test.py',
+    'python3 -B scripts/production-release/recharge-flow-successor.test.py',
+    'python3 -B scripts/production-release/recharge-flow-successor-projection.test.py',
+    'python3 -B scripts/production-release/recharge-flow-successor-readonly.test.py',
+    'node --test scripts/production-release/recharge-flow-entry.test.mjs',
     'python3 -B scripts/production-release/retire-orphan-retention.test.py',
     'python3 -B scripts/production-release/prepared-images.test.py',
     'python3 -B scripts/production-release/build-image-cache.test.py',
@@ -2231,7 +2237,11 @@ test('actual full-mode release controls select each missing suite once without r
   for (const command of [
     'node --test scripts/v2-registration-finance-audit.test.mjs',
     'python3 -B scripts/production-release/retire-orphan-retention.test.py',
-    'python3 -B scripts/production-release/prepared-images.test.py'
+    'python3 -B scripts/production-release/prepared-images.test.py',
+    'python3 -B scripts/production-release/recharge-flow-successor.test.py',
+    'python3 -B scripts/production-release/recharge-flow-successor-projection.test.py',
+    'python3 -B scripts/production-release/recharge-flow-successor-readonly.test.py',
+    'node --test scripts/production-release/recharge-flow-entry.test.mjs'
   ])
     assert.equal(recharge.filter((actual) => actual === command).length, 1);
 });
@@ -2767,11 +2777,19 @@ test('worker CI runs card setup and full recharge regression modules without reg
       'test_payment_handoff',
       'test_recharge_email_code',
       'test_subscribe',
-      'test_payment.StateTests',
+      'test_payment',
+      'test_callback_observation',
+      'test_response_settlement',
+      'test_subscription_cycle',
       'test_go.GoStateTests'
     ]) {
       assert.equal(args.filter((arg) => arg === name).length, 1, name);
     }
+    assert.equal(args.includes('test_payment.StateTests'), false);
+    assert.equal(
+      args.some((arg) => /registration/.test(arg)),
+      false
+    );
   });
 });
 
