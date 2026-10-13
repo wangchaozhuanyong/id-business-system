@@ -10,6 +10,8 @@ on:
         type: choice
         options:
           - verify_access
+          - verify_recharge_flow
+          - release_recharge_flow
           - verify_unpublished_components
           - diagnose_unpublished_component_runtime
           - release_unpublished_components
@@ -449,6 +451,10 @@ jobs:
         if: inputs.operation == 'verify_unpublished_components' || inputs.operation == 'release_unpublished_components'
         run: python3 -B scripts/production-release/unpublished-component-successor-readonly.py preflight
 
+      - name: Verify recharge flow predecessor and idle workers before building
+        if: inputs.operation == 'verify_recharge_flow' || inputs.operation == 'release_recharge_flow'
+        run: python3 -B scripts/production-release/recharge-flow-successor-readonly.py preflight
+
       - name: Diagnose an online recharge predecessor failure without writes
         if: failure() && (inputs.operation == 'verify_online_recharge' || inputs.operation == 'release_online_recharge')
         run: python3 -B scripts/production-release/online-recharge-readonly.py diagnostic
@@ -503,7 +509,7 @@ jobs:
           aws ecr get-login-password --region "$AWS_REGION" | docker login --username AWS --password-stdin "$registry" >/dev/null
 
       - name: Build images on the GitHub runner
-        if: inputs.operation == 'release_unpublished_components' || inputs.operation == 'release_admin' || inputs.operation == 'release_online_recharge' || inputs.operation == 'release_api_workspace' || inputs.operation == 'release_api_admin' || inputs.operation == 'release_api_admin_migration' || inputs.operation == 'release_api_registration' || (inputs.operation == 'release' && inputs.reuse_image_run == '') || inputs.operation == 'prepare_post_cleanup_release' || inputs.operation == 'prepare_order_archive_release'
+        if: inputs.operation == 'release_recharge_flow' || inputs.operation == 'release_unpublished_components' || inputs.operation == 'release_admin' || inputs.operation == 'release_online_recharge' || inputs.operation == 'release_api_workspace' || inputs.operation == 'release_api_admin' || inputs.operation == 'release_api_admin_migration' || inputs.operation == 'release_api_registration' || (inputs.operation == 'release' && inputs.reuse_image_run == '') || inputs.operation == 'prepare_post_cleanup_release' || inputs.operation == 'prepare_order_archive_release'
         run: bash scripts/production-release/build-images.sh
 
       - name: Verify reusable build and unchanged application source
@@ -573,7 +579,7 @@ jobs:
           aws ecr describe-repositories --repository-names id-business-v2-release --query 'repositories[0].repositoryUri' --output text | grep -Fx "$RELEASE_REPOSITORY"
 
       - name: Push immutable images
-        if: inputs.operation == 'release_unpublished_components' || inputs.operation == 'release_admin' || inputs.operation == 'release_online_recharge' || inputs.operation == 'release_api_workspace' || inputs.operation == 'release_api_admin' || inputs.operation == 'release_api_admin_migration' || inputs.operation == 'release_api_registration' || (inputs.operation == 'release' && inputs.reuse_image_run == '') || inputs.operation == 'prepare_post_cleanup_release' || inputs.operation == 'prepare_order_archive_release'
+        if: inputs.operation == 'release_recharge_flow' || inputs.operation == 'release_unpublished_components' || inputs.operation == 'release_admin' || inputs.operation == 'release_online_recharge' || inputs.operation == 'release_api_workspace' || inputs.operation == 'release_api_admin' || inputs.operation == 'release_api_admin_migration' || inputs.operation == 'release_api_registration' || (inputs.operation == 'release' && inputs.reuse_image_run == '') || inputs.operation == 'prepare_post_cleanup_release' || inputs.operation == 'prepare_order_archive_release'
         run: bash scripts/production-release/push-images.sh
 
       - name: Save fixed registration Worker build projection
@@ -2404,7 +2410,7 @@ jobs:
           PY
 
       - name: Deploy through the production instance
-        if: inputs.operation == 'release_unpublished_components' || inputs.operation == 'release_admin' || inputs.operation == 'release_online_recharge' || inputs.operation == 'release_api_workspace' || inputs.operation == 'release' || inputs.operation == 'release_api_admin' || inputs.operation == 'release_api_admin_migration' || inputs.operation == 'release_api_registration'
+        if: inputs.operation == 'release_recharge_flow' || inputs.operation == 'release_unpublished_components' || inputs.operation == 'release_admin' || inputs.operation == 'release_online_recharge' || inputs.operation == 'release_api_workspace' || inputs.operation == 'release' || inputs.operation == 'release_api_admin' || inputs.operation == 'release_api_admin_migration' || inputs.operation == 'release_api_registration'
         run: bash scripts/production-release/dispatch.sh
 
       - name: Independently read back Admin publication and preserved services
@@ -2565,6 +2571,20 @@ jobs:
       - name: Independently read back API Admin running images and preserved services
         if: inputs.operation == 'release_api_workspace' || inputs.operation == 'release_api_admin' || inputs.operation == 'release_api_admin_migration' || inputs.operation == 'release_api_registration'
         run: python3 -B scripts/production-release/api-admin-readonly.py readback
+
+      - name: Independently read back recharge flow images and preserved services
+        if: inputs.operation == 'release_recharge_flow'
+        run: python3 -B scripts/production-release/recharge-flow-successor-readonly.py readback
+
+      - name: Save recharge flow build and independent runtime evidence
+        if: always() && (inputs.operation == 'verify_recharge_flow' || inputs.operation == 'release_recharge_flow')
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: recharge-flow-evidence-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .deploy/production-release/recharge-flow-successor-*.json
+          if-no-files-found: warn
+          include-hidden-files: true
+          retention-days: 14
 
       - name: Independently read back unpublished component images and preserved services
         if: inputs.operation == 'release_unpublished_components'

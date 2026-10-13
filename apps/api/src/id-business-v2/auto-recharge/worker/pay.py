@@ -226,6 +226,7 @@ async def payment_handler(page, guard, identity, ledger, target, *, pay, details
         if guard.confirmation_reserved:
             raise Stop("duplicate_payment_blocked")
         guard.confirmation_reserved = True
+        guard.observation_deadline = time.monotonic() + (300 if server_handoff else wait_seconds)
         await button.click()
         progress("payment_submitted_or_pending", repeated_payment="blocked")
         deadline = time.monotonic() + (300 if server_handoff else wait_seconds)
@@ -254,7 +255,10 @@ async def payment_handler(page, guard, identity, ledger, target, *, pay, details
             if guard.payment_error and guard.payment_state != "requires_action":
                 break
             await asyncio.sleep(.5)
-        guard.finish_three_ds()
+        if getattr(guard, 'response_observers', None) is not None:
+            await guard.response_observers.finish()
+        else:
+            guard.finish_three_ds()
         latest_plan = identity["current_plan"]
         latest_tier = None
         for i in range(poll_count if guard.payment_state == "paid" else 1):
@@ -300,7 +304,7 @@ async def run_payment(target, ledger, *, pay=False, details_reader=read_details,
 async def run_flow(target, state_dir, target_plan, *, details_reader, confirmer,
                    wait_seconds=120, poll_count=6, poll_interval=20, browser=None,
                    browser_context=None, session_budget=None, allow_checkout_replacement=True,
-                   expected_country=None):
+                   expected_country=None, subscription_check_only=False, next_cycle_grant=None):
     from subscription_upgrade import run_upgrade_in_context
     from plans import subscription_transition
     if session_budget:
@@ -318,6 +322,19 @@ async def run_flow(target, state_dir, target_plan, *, details_reader, confirmer,
                     "target_plan": target_plan, "payment_attempted": False,
                     "payment_requests_sent": 0, **identity}
         operation = subscription_transition(identity["current_plan"], target_plan)
+        cycle_grant = next_cycle_grant
+        if subscription_check_only:
+            if identity.get('has_active_subscription') is None:
+                raise Stop('subscription_state_unverified', user_action_required=True)
+            if operation == 'new_subscription':
+                if identity.get('has_active_subscription') is not False:
+                    raise Stop('existing_subscription_conflict', user_action_required=True)
+                controller = getattr(confirmer, '__self__', None)
+                if not callable(getattr(controller, 'prepare_next_subscription_cycle', None)):
+                    raise Stop('next_subscription_cycle_unavailable')
+                cycle_grant = await controller.prepare_next_subscription_cycle(page, verified_target)
+            elif identity.get('has_active_subscription') is not True:
+                raise Stop('subscription_state_unverified', user_action_required=True)
         # 选择实际订阅路径后，移除仅供前置只读核验的拦截器。
         pass  # Browser traffic is observed, never intercepted.
         if operation == "subscription_upgrade":
@@ -331,7 +348,8 @@ async def run_flow(target, state_dir, target_plan, *, details_reader, confirmer,
             confirmer=confirmer, wait_seconds=wait_seconds, poll_count=poll_count,
             poll_interval=poll_interval, browser_context=page.context,
             session_budget=session_budget.restart(phase="checkout_check") if session_budget else None,
-            allow_checkout_replacement=allow_checkout_replacement, expected_country=expected_country)
+            allow_checkout_replacement=allow_checkout_replacement, expected_country=expected_country,
+            next_cycle_grant=cycle_grant)
 
     return await run_browser(target, target_plan=target_plan, state_dir=state_dir,
                              browser=browser, browser_context=browser_context,
@@ -342,7 +360,7 @@ async def run_flow(target, state_dir, target_plan, *, details_reader, confirmer,
 async def run_checkout_flow(target, state_dir, target_plan, *, details_reader, confirmer,
                    wait_seconds=120, poll_count=6, poll_interval=20, browser=None,
                    browser_context=None, session_budget=None, allow_checkout_replacement=True,
-                   expected_country=None, expected_checkout_identifier=None):
+                   expected_country=None, expected_checkout_identifier=None, next_cycle_grant=None):
     ledger_holder = {}
 
     async def handler(page, guard, identity, original_quote):
@@ -350,7 +368,7 @@ async def run_checkout_flow(target, state_dir, target_plan, *, details_reader, c
         # 新建结算时复用建单锁；读取现有结算时则正常申请账户锁。
         # 两条路径都在当前浏览器会话内等待账单资料和确认。
         with PaymentLedger(state_dir, target.account_id, target_plan=target_plan,
-                           held_lock_fd=checkout_lock) as ledger:
+                           held_lock_fd=checkout_lock, next_cycle_grant=next_cycle_grant) as ledger:
             ledger.assert_unattempted()
             guard.attach_payment_ledger(ledger)
             ledger_holder["ledger"] = ledger
@@ -373,6 +391,7 @@ async def run_checkout_flow(target, state_dir, target_plan, *, details_reader, c
         "browser_context": browser_context,
         "session_budget": session_budget,
         "wait_seconds": wait_seconds,
+        **({'next_cycle_grant': next_cycle_grant} if next_cycle_grant is not None else {}),
     }
     record_path = checkout_record_path(state_dir, target.account_id, target_plan)
     if expected_checkout_identifier and not record_path.exists():
@@ -380,6 +399,9 @@ async def run_checkout_flow(target, state_dir, target_plan, *, details_reader, c
                 "stage": "quote_read", "checkout_identifier": expected_checkout_identifier,
                 "payment_attempted": False, "payment_requests_sent": 0,
                 "confirmation_requests_sent": 0}
+    if next_cycle_grant is not None and next_cycle_grant.get('status') == 'granted':
+        result = await run_browser(target, create=True, **browser_args)
+        return include_payment_record(result, ledger_holder.get('ledger'))
     if record_path.exists():
         # 任务停止不等于官网订单取消；原窗口恢复只能重新读取同一原单。
         record = read_checkout_record(state_dir, target.account_id, target_plan)
@@ -479,7 +501,7 @@ def main(argv=None):
         with args.json_file.open("rb") as f:
             target = parse_browser_credential(f.read(MAX_BYTES + 1))
         selected_plan = choose_plan() if args.choose_plan else args.plan
-        with PaymentLedger(ROOT / ".state", target.account_id, target_plan=selected_plan) as ledger:
+        with PaymentLedger(ROOT / ".state", target.account_id, target_plan=selected_plan, read_only=args.recheck) as ledger:
             if args.recheck:
                 from payment_recovery import recheck_payment
                 result = asyncio.run(recheck_payment(target, ledger))

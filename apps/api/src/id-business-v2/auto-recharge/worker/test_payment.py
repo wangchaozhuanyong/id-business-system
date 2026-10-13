@@ -1093,6 +1093,8 @@ class PaymentBrowserTests(unittest.IsolatedAsyncioTestCase):
     async def delayed_paid_flow(self, *, fail_subscription_read=False):
         released = asyncio.Event()
         original_response = PaymentGuard.response
+        from upgrade_authentication import UpgradeResponseObservers
+        original_finish = UpgradeResponseObservers.finish
         from pay import payment_handler, verify_identity_again
         observed = []
         identity_reads = 0
@@ -1108,6 +1110,12 @@ class PaymentBrowserTests(unittest.IsolatedAsyncioTestCase):
             released.set()
             return result
 
+        async def finish_observers(observers):
+            # Deliver the captured original response during bounded settlement,
+            # rather than requiring an unbounded post-return observer.
+            released.set()
+            await original_finish(observers)
+
         async def read_identity(*args, **kwargs):
             nonlocal identity_reads
             identity_reads += 1
@@ -1116,10 +1124,11 @@ class PaymentBrowserTests(unittest.IsolatedAsyncioTestCase):
             return await verify_identity_again(*args, **kwargs)
 
         with (patch.object(PaymentGuard, "response", delayed_response),
+              patch.object(UpgradeResponseObservers, 'finish', finish_observers),
               patch("pay.payment_handler", side_effect=finish_handler),
               patch("pay.verify_identity_again", side_effect=read_identity)):
             result = await self.flow()
-        self.assertEqual(observed, ["payment_result_unknown"])
+        self.assertEqual(observed, ["paid_pending_activation" if fail_subscription_read else "subscription_activated"])
         self.assertEqual(self.confirmations, 1)
         self.assertEqual(result["payment_status"], "paid")
         self.assertIsNotNone(result["payment_evidence"])
@@ -1138,6 +1147,30 @@ class PaymentBrowserTests(unittest.IsolatedAsyncioTestCase):
         result = await self.delayed_paid_flow(fail_subscription_read=True)
         self.assertEqual(result["status"], "paid_pending_activation")
         self.assertEqual(result["payment_outcome"], "paid_pending_activation")
+
+    async def test_final_ledger_api_failure_preserves_paid_finished_facts(self):
+        from attempt_ledger import atomic_json
+        from bitbrowser_connector import public_result
+        final_writes = []
+        original_flush = PaymentGuard.flush_observation
+        def fail_final(path, data):
+            if data.get('payment_status') == 'paid':
+                final_writes.append(data)
+                raise Stop('durable_state_unavailable')
+            return atomic_json(path, data)
+        def fail_flush(guard):
+            with patch('payment_state.atomic_json', side_effect=fail_final):
+                return original_flush(guard)
+        # This is the real browser workflow and its final serializer, with all
+        # website requests still intercepted by this local synthetic fixture.
+        with patch.object(PaymentGuard, 'flush_observation', fail_flush):
+            result = await self.flow()
+        receipt = public_result(result)
+        self.assertEqual(receipt['payment_status'], 'paid')
+        self.assertIsNotNone(receipt['payment_evidence'])
+        self.assertTrue(receipt['payment_record_write_failed'])
+        self.assertEqual(self.confirmations, 1)
+        self.assertEqual(len(final_writes), 1)
 
     async def test_invalid_renewal_terms_stop_the_server_payment_path_before_card_requests(self):
         import server

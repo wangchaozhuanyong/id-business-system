@@ -1,28 +1,67 @@
-import { computed, onScopeDispose, shallowRef } from 'vue';
+import { computed, onScopeDispose, shallowRef, watch } from 'vue';
+import { sessionCoordinator } from '@/auth/sessionCoordinator';
 import type { V2RechargeBitBrowserOpenLaunch } from './contracts';
 import { rechargeApi } from './api';
 import { DirectBrowserError } from './bitbrowser-direct-api';
 import type { DirectLoginCredential } from './bitbrowser-direct-credential';
 import type { DirectLoginCode } from './bitbrowser-direct-login';
+import { directOperationDeadline, rechargeExecutionFailure } from './recharge-direct-lifecycle';
 
 export function useBitBrowserDirectOpen(
   refresh: () => Promise<unknown>,
-  reportError: (message: string) => void
+  reportError: (message: string) => void,
+  refreshAlreadyCoalesced = false
 ) {
   const activeTask = shallowRef<{
     id: string;
     controller: AbortController;
-    done?: Promise<void>;
+    done: Promise<void>;
     endedRemotely: boolean;
+    primaryFailure: string;
+    clearCode?: () => void;
   }>();
   let codeRequest: { id: string; resolve: (code: DirectLoginCode) => void } | undefined;
   let disposed = false;
+  let refreshing = false;
+  let refreshQueued = false;
+  let displayFailure = '';
+  let handledId = '';
   const owns = (id: string) => activeTask.value?.id === id;
+  const handles = (id: string) => handledId === id;
   const running = computed(() => Boolean(activeTask.value));
+  function requestRefresh() {
+    if (disposed) return;
+    if (refreshAlreadyCoalesced) {
+      void refresh().catch(() => {
+        if (!disposed && !displayFailure)
+          reportError('执行状态已保存，但页面刷新失败，请刷新原任务核对。');
+      });
+      return;
+    }
+    if (refreshing) {
+      refreshQueued = true;
+      return;
+    }
+    refreshing = true;
+    void (async () => {
+      do {
+        refreshQueued = false;
+        try {
+          await refresh();
+        } catch {
+          if (!disposed && !displayFailure)
+            reportError('执行状态已保存，但页面刷新失败，请刷新原任务核对。');
+        }
+      } while (refreshQueued && !disposed);
+    })().finally(() => {
+      refreshing = false;
+    });
+  }
   async function start(
     launch: V2RechargeBitBrowserOpenLaunch,
     credential: DirectLoginCredential,
-    windowName: string
+    windowName: string,
+    expectedIdentityEpoch = sessionCoordinator.identityEpoch.value
   ) {
     const clearCredentials = () => {
       if (credential.login) credential.login.password = '';
@@ -33,53 +72,71 @@ export function useBitBrowserDirectOpen(
       if (launch.bitBrowser.staticProxyCredentials)
         launch.bitBrowser.staticProxyCredentials.password = '';
     };
-    if (disposed) {
+    if (activeTask.value) {
+      throw new Error('当前网页已有登录任务，请先处理原任务');
+    }
+    if (disposed || expectedIdentityEpoch !== sessionCoordinator.identityEpoch.value) {
       clearCredentials();
       throw new DirectBrowserError('bitbrowser_direct_cancelled');
     }
-    if (activeTask.value) throw new Error('当前网页已有登录任务，请先处理原任务');
     const task = {
       id: launch.id,
       controller: new AbortController(),
-      done: undefined as Promise<void> | undefined,
-      endedRemotely: false
+      done: Promise.resolve(),
+      endedRemotely: false,
+      primaryFailure: '',
+      clearCode: undefined as (() => void) | undefined
     };
     activeTask.value = task;
+    handledId = task.id;
+    const identityEpoch = sessionCoordinator.identityEpoch.value;
+    displayFailure = '';
     let profileId: unknown;
+    let initialSaved = false;
+    let acceptStart!: () => void;
+    let rejectStart!: (cause: unknown) => void;
+    const started = new Promise<void>((resolve, reject) => {
+      acceptStart = resolve;
+      rejectStart = reject;
+    });
     const callback = async (type: 'progress' | 'finished', result: Record<string, unknown>) => {
       if (task.endedRemotely) return;
-      await rechargeApi.directBrowserCallback(launch.id, launch.agentToken, {
-        type,
-        result: {
-          ...result,
-          payment_attempted: false,
-          payment_requests_sent: 0,
-          ...(profileId ? { browser_profile_id: profileId } : {})
-        }
-      });
-      if (!disposed) {
-        try {
-          await refresh();
-        } catch {
-          if (!disposed && !task.endedRemotely)
-            reportError('执行状态已保存，但页面刷新失败，请刷新原任务核对。');
-        }
-      }
+      await directOperationDeadline(
+        (signal) =>
+          rechargeApi.directBrowserCallback(
+            launch.id,
+            launch.agentToken,
+            {
+              type,
+              result: {
+                ...result,
+                payment_attempted: false,
+                payment_requests_sent: 0,
+                ...(profileId ? { browser_profile_id: profileId } : {})
+              }
+            },
+            { signal }
+          ),
+        15_000,
+        type === 'progress' ? task.controller.signal : undefined
+      );
+      if (type === 'finished') task.endedRemotely = true;
+      if (identityEpoch === sessionCoordinator.identityEpoch.value) requestRefresh();
     };
-    try {
-      await callback('progress', {
-        status: 'running',
-        stage: 'bitbrowser_group',
-        transport: 'web_direct'
-      });
-    } catch (error) {
-      activeTask.value = undefined;
-      clearCredentials();
-      throw error;
-    }
     task.done = (async () => {
       try {
-        const { runDirectLogin } = await import('./bitbrowser-direct-login');
+        await callback('progress', {
+          status: 'running',
+          stage: 'bitbrowser_group',
+          transport: 'web_direct'
+        });
+        initialSaved = true;
+        acceptStart();
+        const { runDirectLogin } = await directOperationDeadline(
+          () => import('./bitbrowser-direct-login'),
+          30_000,
+          task.controller.signal
+        );
         if (task.controller.signal.aborted)
           throw new DirectBrowserError('bitbrowser_direct_cancelled');
         const result = await runDirectLogin(
@@ -95,30 +152,38 @@ export function useBitBrowserDirectOpen(
               await callback('progress', { status: 'running', stage, ...extra });
             },
             restore: async (accountKey) => {
-              if (task.controller.signal.aborted || task.endedRemotely)
-                throw new DirectBrowserError('bitbrowser_direct_cancelled');
-              const result = await rechargeApi.directBrowserCallback(launch.id, launch.agentToken, {
-                type: 'restore',
-                accountKey
-              });
-              if (task.controller.signal.aborted || task.endedRemotely)
-                throw new DirectBrowserError('bitbrowser_direct_cancelled');
-              return result;
+              if (task.endedRemotely) throw new DirectBrowserError('bitbrowser_direct_cancelled');
+              return directOperationDeadline(
+                (signal) =>
+                  rechargeApi.directBrowserCallback(
+                    launch.id,
+                    launch.agentToken,
+                    { type: 'restore', accountKey },
+                    { signal }
+                  ),
+                15_000,
+                task.controller.signal
+              );
             },
             code: () =>
               new Promise<DirectLoginCode>((resolve, reject) => {
                 if (task.controller.signal.aborted)
                   return reject(new DirectBrowserError('bitbrowser_direct_cancelled'));
-                const abort = () => {
+                const clear = () => {
+                  task.controller.signal.removeEventListener('abort', abort);
+                  task.clearCode = undefined;
                   codeRequest = undefined;
+                };
+                const abort = () => {
+                  clear();
                   reject(new DirectBrowserError('bitbrowser_direct_cancelled'));
                 };
+                task.clearCode = abort;
                 task.controller.signal.addEventListener('abort', abort, { once: true });
                 codeRequest = {
                   id: launch.id,
                   resolve: (code) => {
-                    task.controller.signal.removeEventListener('abort', abort);
-                    codeRequest = undefined;
+                    clear();
                     resolve(code);
                   }
                 };
@@ -126,15 +191,22 @@ export function useBitBrowserDirectOpen(
           }
         );
         await callback('finished', result);
-      } catch (error) {
+      } catch (cause) {
+        if (!initialSaved) rejectStart(cause);
         if (task.endedRemotely) return;
         const cancelled = task.controller.signal.aborted;
         const reason = cancelled
           ? 'bitbrowser_direct_cancelled'
-          : error instanceof DirectBrowserError
-            ? error.reason
+          : cause instanceof DirectBrowserError
+            ? cause.reason
             : 'bitbrowser_direct_command_failed';
-        if (!disposed) reportError(new DirectBrowserError(reason).message);
+        task.primaryFailure = rechargeExecutionFailure(cause, cancelled);
+        displayFailure = task.primaryFailure;
+        const report = (supplement = '') => {
+          if (!disposed && identityEpoch === sessionCoordinator.identityEpoch.value)
+            reportError(task.primaryFailure + supplement);
+        };
+        report();
         try {
           await callback('finished', {
             status: cancelled ? 'cancelled' : 'blocked',
@@ -147,25 +219,24 @@ export function useBitBrowserDirectOpen(
           });
         } catch {
           try {
-            await rechargeApi.cancelBitBrowser(launch.id);
+            await directOperationDeadline(
+              (signal) => rechargeApi.cancelBitBrowser(launch.id, { signal }),
+              15_000
+            );
             task.endedRemotely = true;
-            if (!disposed) {
-              await refresh();
-              reportError(
-                '本次登录未完成，原登录任务已停止，资料已解锁；请核对比特连接和窗口状态。'
-              );
-            }
+            if (identityEpoch === sessionCoordinator.identityEpoch.value) requestRefresh();
+            report(' 原登录任务已停止，资料已解锁；请核对比特连接和窗口状态。');
           } catch {
-            if (!disposed && !task.endedRemotely)
-              reportError('网页登录已停止，原任务结束结果待核对；请停止原任务后重试。');
+            report(' 原任务结束结果待核对，请刷新原任务后处理；本次不会自动重试。');
           }
         }
       } finally {
         clearCredentials();
-        codeRequest = undefined;
+        task.clearCode?.();
         if (activeTask.value === task) activeTask.value = undefined;
       }
     })();
+    return started;
   }
   function submitCode(id: string, code: string, expiresAt?: string) {
     if (!codeRequest || codeRequest.id !== id || !owns(id) || !/^[0-9]{6,8}$/.test(code))
@@ -179,9 +250,17 @@ export function useBitBrowserDirectOpen(
     task.controller.abort();
     await task.done;
   }
+  watch(
+    sessionCoordinator.identityEpoch,
+    () => {
+      activeTask.value?.controller.abort();
+    },
+    { flush: 'sync' }
+  );
   onScopeDispose(() => {
     disposed = true;
+    refreshQueued = false;
     activeTask.value?.controller.abort();
   });
-  return { start, owns, running, submitCode, cancel };
+  return { start, owns, handles, running, submitCode, cancel };
 }

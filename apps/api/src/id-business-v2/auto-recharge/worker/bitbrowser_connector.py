@@ -33,6 +33,8 @@ import pay
 import payment_network
 import payment_recovery
 import payment_state
+from callback_observation import (CALLBACK_METADATA_KEYS, operation_metadata, read_callback_bytes,
+    http_failure_metadata, enrich_http_failure, parse_http_failure)
 import subscription_upgrade
 from checkout_core import Stop, parse_browser_credential, unique_object, write_json
 from payment_form import PaymentDetails, validate_details
@@ -76,6 +78,9 @@ SAFE_PUBLIC_KEYS = set(
 SAFE_PUBLIC_KEYS.update("quote_digest confirmation_expires_at manual_confirmation_accepted "
                         "operation current_plan_before upgrade_identifier upgrade_invoice_identifier "
                         "upgrade_payment_intent_identifier subscription_period three_ds_status".split())
+SAFE_PUBLIC_KEYS.update({'cycle_review', 'subscription_inspection', 'has_active_subscription'})
+SAFE_PUBLIC_KEYS.update(CALLBACK_METADATA_KEYS)
+TERMINAL_RESULT_KEYS.update(CALLBACK_METADATA_KEYS)
 
 
 class NoRedirect(HTTPRedirectHandler):
@@ -131,25 +136,68 @@ def public_result(value):
 
 
 class CallbackClient:
+    SEND_SECONDS = 10
+
     def __init__(self, url, token, job_id):
         self.url = callback_url(url, job_id)
         self.token = token
 
-    def send(self, body):
+    def send(self, body, *, deadline=None):
         request = Request(
             self.url,
             data=json.dumps(body, separators=(",", ":")).encode(),
             headers={"Content-Type": "application/json", "X-Recharge-Local": self.token},
             method="POST",
         )
-        try:
-            with build_opener(NoRedirect).open(request, timeout=10) as response:
-                result = json.loads(response.read(MAX_BODY), object_pairs_hook=unique_object)
-            if result.get("success") is not True or not isinstance(result.get("data"), dict):
-                raise ValueError()
-            return result["data"]
-        except Exception:
-            raise Stop("durable_state_unavailable") from None
+        completed, expired = threading.Event(), threading.Event()
+        results, failures = [], []
+        deadline = min(time.monotonic() + self.SEND_SECONDS, deadline) if deadline is not None else time.monotonic() + self.SEND_SECONDS
+
+        def transfer():
+            try:
+                remaining_open = deadline - time.monotonic()
+                if remaining_open <= 0:
+                    raise TimeoutError()
+                with build_opener(NoRedirect).open(request, timeout=remaining_open) as response:
+                    raw = read_callback_bytes(response, deadline, expired, MAX_BODY)
+                    result = json.loads(raw, object_pairs_hook=unique_object)
+                if (not isinstance(result, dict) or result.get('success') is not True
+                        or not isinstance(result.get('data'), dict)):
+                    raise ValueError()
+                if not expired.is_set() and time.monotonic() < deadline:
+                    results.append(result['data'])
+            except HTTPError as error:
+                metadata = http_failure_metadata(error, body, self.token)
+                if not expired.is_set() and time.monotonic() < deadline:
+                    failures.append(metadata)
+                    try:
+                        raw = read_callback_bytes(error, deadline, expired, 16 * 1024)
+                        parsed = parse_http_failure(raw)
+                        if not expired.is_set() and time.monotonic() < deadline:
+                            enrich_http_failure(metadata, parsed, body, self.token)
+                    except Exception:
+                        pass
+                try:
+                    error.close()
+                except Exception:
+                    pass
+            except Exception as error:
+                if not expired.is_set() and time.monotonic() < deadline:
+                    kind = ('timeout' if isinstance(error, TimeoutError) else
+                            'invalid_response' if isinstance(error, (ValueError, TypeError, Stop)) else 'transport')
+                    failures.append({**operation_metadata(body), 'callback_failure_kind': kind})
+            finally:
+                completed.set()
+
+        # One POST only. Even DNS resolution or a slow body cannot extend the
+        # caller's budget; an accepted request is never automatically replayed.
+        threading.Thread(target=transfer, daemon=True, name='recharge-callback').start()
+        completed.wait(max(0, deadline - time.monotonic()))
+        expired.set()
+        if results:
+            return results[0]
+        details = failures[0] if failures else {**operation_metadata(body), 'callback_failure_kind': 'timeout'}
+        raise Stop('durable_state_unavailable', **details) from None
 
 
 class BitBrowserClient:
@@ -337,6 +385,10 @@ def validate_payload(value):
                 or not re.fullmatch(r"[a-f0-9]{64}", value["accountKey"])
                 or "ownedProfile" in value and value["ownedProfile"]["accountKey"] != value["accountKey"]):
             raise Stop("invalid_owned_recharge_profile")
+    if 'subscriptionCycleProtocol' in value:
+        allowed.add('subscriptionCycleProtocol')
+        if mode != 'payment' or type(value['subscriptionCycleProtocol']) is not int or value['subscriptionCycleProtocol'] != 1:
+            raise Stop('invalid_connector_payload')
     if set(value) != allowed:
         raise Stop("invalid_connector_payload")
     job_id = value.get("id")
@@ -466,6 +518,9 @@ class LocalJob:
         self.stale_profiles_cleaned = 0
         self.checkout_replacement_performed = False
         self.original_checkout_identifier = None
+        self.next_cycle_context = None
+        self.next_cycle_grant = None
+        self.subscription_check_only = False
         self.confirmation_lock = threading.Lock()
         self.confirmation_event = threading.Event()
         self.pending_confirmation = None
@@ -592,11 +647,16 @@ class LocalJob:
         name = str(path.relative_to(self.root))
         if not re.fullmatch(r"(?:payments/)?[a-f0-9]{64}(?:-(?:go|pro-(?:5x|20x|500)))?\.json", name):
             raise Stop("unsupported_state_record")
+        outgoing = {key: value for key, value in document.items() if key not in {'cycle_resolution', 'cycle_origin'}}
         result = self.callback.send({
             "type": "ledger", "accountKey": self.account_key, "fileKey": name,
-            "revision": self.revisions.get(name, 0), "document": document,
+            "revision": self.revisions.get(name, 0), "document": outgoing,
         })
         self.revisions[name] = result["revision"]
+        if outgoing.get('next_cycle_grant') is not None and self.next_cycle_grant is not None:
+            self.next_cycle_grant['status'] = 'consumed'
+            if result.get('replayed') is True:
+                raise Stop('checkout_result_unknown', checkout_attempted=True, stage='checkout_create')
 
     def details(self, _initial_quote):
         data = self.payload.get("details", {})
@@ -742,7 +802,8 @@ class LocalJob:
         account_key = hashlib.sha256(target.account_id.encode()).hexdigest()
         if self.expected_account_key is not None and account_key != self.expected_account_key:
             raise Stop("official_account_mismatch", account_matched=False)
-        initial = self.callback.send({"type": "restore", "accountKey": account_key})
+        initial = self.callback.send({"type": "restore", "accountKey": account_key,
+            **({'subscriptionCycleProtocol': 1} if self.payload.get('subscriptionCycleProtocol') == 1 else {})})
         self.account_key = account_key
         records = initial.get("records")
         stale_profiles = initial.get("staleProfiles", [])
@@ -776,13 +837,111 @@ class LocalJob:
                     or owned_profile["profileId"] in seen_profiles):
                 raise Stop("durable_state_unavailable")
             self.owned_profile = dict(owned_profile)
-        for record in records:
-            path = self.root / record["fileKey"]
-            path.parent.mkdir(parents=True, exist_ok=True)
-            write_json(path, record["document"], exclusive=True)
-            self.revisions[record["fileKey"]] = record["revision"]
+        self.reconcile_cycle_records(records, initial=True)
+        if self.payload.get('subscriptionCycleProtocol') == 1 and initial.get('subscriptionCycleProtocol') == 1:
+            self.accept_cycle_context(initial.get('nextCycleContext'))
         if original_checkout is not None:
             self.original_checkout_identifier = original_checkout
+
+    def accept_cycle_context(self, context):
+        from subscription_cycle import grant_valid
+        if context is None:
+            self.next_cycle_context = None
+            return
+        if (not isinstance(context, dict) or type(context.get('protocol')) is not int or context['protocol'] != 1
+                or context.get('jobId') != self.id or context.get('accountKey') != self.account_key
+                or context.get('targetPlan') != self.payload['plan'] or not isinstance(context.get('sources'), list)):
+            raise Stop('invalid_subscription_cycle_state')
+        grant = context.get('grant')
+        if grant is not None and not grant_valid(grant, self.account_key, self.payload['plan'], job_id=self.id, consumed=True, allow_expired=True):
+            raise Stop('invalid_subscription_cycle_state')
+        self.next_cycle_context = context
+        self.next_cycle_grant = grant
+
+    def reconcile_cycle_records(self, records, *, initial=False):
+        from subscription_cycle import RECORD_KEY
+        if not isinstance(records, list) or len(records) > 1000:
+            raise Stop('durable_state_unavailable')
+        seen = set()
+        for record in records:
+            if (not isinstance(record, dict) or not isinstance(record.get('fileKey'), str)
+                    or not RECORD_KEY.fullmatch(record['fileKey']) or record['fileKey'] in seen
+                    or type(record.get('revision')) is not int or record['revision'] < 1
+                    or not isinstance(record.get('document'), dict)
+                    or len(json.dumps(record['document']).encode()) > 65536):
+                raise Stop('durable_state_unavailable')
+            seen.add(record['fileKey'])
+            path = self.root / record['fileKey']
+            path.parent.mkdir(parents=True, exist_ok=True)
+            if self.root.is_symlink() or path.parent.is_symlink() or path.is_symlink():
+                raise Stop('unsafe_state_file')
+            if not initial and record['revision'] < self.revisions.get(record['fileKey'], 0):
+                raise Stop('durable_state_unavailable')
+            if initial:
+                write_json(path, record['document'], exclusive=True)
+            else:
+                temporary = path.with_name('.' + path.name + '.' + secrets.token_hex(16))
+                try:
+                    write_json(temporary, record['document'], exclusive=True)
+                    os.replace(temporary, path)
+                finally:
+                    temporary.unlink(missing_ok=True)
+            self.revisions[record['fileKey']] = record['revision']
+
+    async def prepare_next_subscription_cycle(self, page, target):
+        from subscription_cycle import read_inspection, timestamp, grant_valid, assert_inspection_eligible
+        if self.next_cycle_context is None:
+            raise Stop('next_subscription_cycle_unavailable')
+        async def send(phase, *, remaining=None, **values):
+            self.check_cancelled()
+            body = {
+                'type': 'prepare_next_subscription_cycle', 'subscriptionCycleProtocol': 1,
+                'accountKey': self.account_key, 'phase': phase, **values}
+            options = {'deadline': time.monotonic() + remaining} if remaining is not None else {}
+            result = await asyncio.to_thread(self.callback.send, body, **options)
+            review = result.get('cycleReview')
+            if (not isinstance(review, dict) or type(review.get('protocol')) is not int or review['protocol'] != 1
+                    or review.get('status') not in {'awaiting_previous_cycle_confirmation', 'ready', 'consumed', 'revoked'}
+                    or not isinstance(review.get('reviewDigest'), str) or not re.fullmatch(r'[a-f0-9]{64}', review['reviewDigest'])):
+                raise Stop('invalid_subscription_cycle_state')
+            timestamp(review.get('expiresAt'))
+            if result.get('nextCycleContext') is not None:
+                self.accept_cycle_context(result['nextCycleContext'])
+            if result.get('records') is not None:
+                self.reconcile_cycle_records(result['records'])
+            return review
+        inspection = await read_inspection(page, target, self.next_cycle_context)
+        assert_inspection_eligible(inspection, self.next_cycle_context)
+        review = await send('inspect', subscription_inspection=inspection)
+        deadline = min(time.time() + 300, timestamp(review['expiresAt']))
+        self.waiting_for_user = review['status'] == 'awaiting_previous_cycle_confirmation'
+        try:
+            self.progress('next_subscription_cycle_review', cycle_review=review,
+                subscription_inspection=inspection, user_action_required=self.waiting_for_user,
+                payment_attempted=False, payment_requests_sent=0, checkout_requests_sent=0)
+            while review['status'] == 'awaiting_previous_cycle_confirmation':
+                self.check_cancelled()
+                remaining = deadline - time.time()
+                if remaining <= 0:
+                    raise Stop('subscription_cycle_review_expired', user_action_required=True)
+                await asyncio.sleep(min(1, remaining))
+                review = await send('status', remaining=max(0, deadline - time.time()), reviewDigest=review['reviewDigest'])
+            if review['status'] != 'ready':
+                raise Stop('subscription_cycle_review_revoked', user_action_required=True)
+            self.waiting_for_user = False
+            if time.time() >= deadline:
+                raise Stop('subscription_cycle_review_expired', user_action_required=True)
+            self.check_cancelled()
+            fresh = await read_inspection(page, target, self.next_cycle_context)
+            assert_inspection_eligible(fresh, self.next_cycle_context)
+            review = await send('commit', reviewDigest=review['reviewDigest'], subscription_inspection=fresh)
+            if review['status'] != 'ready' or not grant_valid(self.next_cycle_grant, self.account_key, self.payload['plan'], job_id=self.id):
+                raise Stop('next_subscription_cycle_unavailable')
+            self.original_checkout_identifier = None
+            self.subscription_check_only = False
+            return self.next_cycle_grant
+        finally:
+            self.waiting_for_user = False
 
     async def execute(self):
         if self.payload["mode"] == "resolve_unknown_payment":
@@ -929,6 +1088,9 @@ class LocalJob:
         self.owned_profile = None
         self.replaced_owned_profile = None
         self.expected_account_key = None
+        self.next_cycle_context = None
+        self.next_cycle_grant = None
+        self.subscription_check_only = False
         self.profile_id = None
         self.original_checkout_identifier = None
         self.login_code = None
@@ -1114,6 +1276,7 @@ class Handler(BaseHTTPRequestHandler):
             capabilities += ["manual-payment-confirmation", "recharge-process-isolation",
                              "payment-unknown-resolution", "prepayment-page-recovery",
                              "stale-owned-profile-cleanup", "same-profile-proxy-recovery", "json-page-ready"]
+            capabilities.append('next-subscription-cycle-v1')
             return self.reply(200, {"ok": True, "version": 4,
                                     "service": "id-business-v2-auto-recharge-connector",
                                     "role": REGISTRY.role, "capabilities": capabilities,

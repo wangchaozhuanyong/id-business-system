@@ -3,12 +3,14 @@ from __future__ import annotations
 
 import asyncio
 import os
+import time
 
 from browser_checkout import ORIGIN, check_session, progress
 from checkout_core import ROOT, Stop, session_cookies
 from payment_network import PaymentGuard
 from payment_state import outcome, quote_digest
 from plans import subscription_match
+from upgrade_authentication import UpgradeResponseObservers
 
 
 async def recheck_in_context(context, target, ledger, *, timeout=25, poll_count=6, poll_interval=20):
@@ -21,12 +23,7 @@ async def recheck_in_context(context, target, ledger, *, timeout=25, poll_count=
     guard.quote = ledger.record["quote"]
     guard.payment_state = ledger.record["payment_status"]
     guard.evidence = ledger.record.get("payment_evidence")
-    tasks = set()
-    def observe(response):
-        task = asyncio.create_task(guard.response(response))
-        tasks.add(task)
-        task.add_done_callback(tasks.discard)
-    context.on("response", observe)
+    observers = UpgradeResponseObservers(context, guard)
     identity = {"session_status": "not_verified", "account_matched": False, "current_plan": None}
     failure = {}
     try:
@@ -39,6 +36,7 @@ async def recheck_in_context(context, target, ledger, *, timeout=25, poll_count=
         guard.approved = True  # 只启用原单证据解析，read_only 禁止自动付款。
         if not guard.evidence:
             progress("rechecking_original_payment", new_payments="blocked")
+            guard.observation_deadline = time.monotonic() + timeout
             await page.goto(ORIGIN + "/checkout/" + ledger.checkout["processor_entity"] + "/" + ledger.checkout_id,
                             wait_until="domcontentloaded", timeout=45000)
             try:
@@ -70,10 +68,9 @@ async def recheck_in_context(context, target, ledger, *, timeout=25, poll_count=
         failure = {"reason": "original_payment_recheck_failed", "error_type": type(exc).__name__}
         identity = {"session_status": "not_verified", "account_matched": False, "current_plan": None}
     finally:
-        if tasks:
-            await asyncio.gather(*list(tasks), return_exceptions=True)
-        context.remove_listener("response", observe)
+        await observers.finish()
     guard.persist_observation(current_plan=identity["current_plan"], current_tier=identity.get("current_tier"))
+    await asyncio.to_thread(guard.flush_observation)
     matched = subscription_match(ledger.target_plan, identity["current_plan"], identity.get("current_tier"))
     return {"status": outcome(guard.payment_state, identity["current_plan"], guard.evidence,
                                target_plan=ledger.target_plan, current_tier=identity.get("current_tier")),

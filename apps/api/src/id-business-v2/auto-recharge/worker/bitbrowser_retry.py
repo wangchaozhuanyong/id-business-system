@@ -118,6 +118,9 @@ def terminal_cleanup_allowed(job, result):
 async def cancellable_flow(job, target, **kwargs):
     kwargs.setdefault("allow_checkout_replacement", False)
     expected_checkout = kwargs.pop("expected_checkout_identifier", None)
+    if getattr(job, 'subscription_check_only', False):
+        expected_checkout = None
+        kwargs['subscription_check_only'] = True
     flow = pay.run_checkout_flow if expected_checkout else pay.run_flow
     if expected_checkout:
         kwargs["expected_checkout_identifier"] = expected_checkout
@@ -426,7 +429,11 @@ async def _execute_profiles(job, client, target, playwright, owned):
             if job.payload["mode"] == "payment" and target is not None:
                 # Recheck durable evidence before every reopen as well: a marker
                 # can reach disk before an interrupted payment callback does.
-                assert_no_other_payment(Path(job.root), target.account_id)
+                from subscription_cycle import inspection_only_allowed
+                job.subscription_check_only = inspection_only_allowed(job, target)
+                if not job.subscription_check_only:
+                    assert_no_other_payment(Path(job.root), target.account_id,
+                        next_cycle_grant=getattr(job, 'next_cycle_grant', None))
             if attempt > 1:
                 job.progress("proxy_retrying", last_reason=previous.get("reason"))
                 await preparation.run(lambda: close_profile_id(job, client, job.profile_id), "profile_close")
@@ -493,7 +500,7 @@ async def _execute_profiles(job, client, target, playwright, owned):
             result["checkout_requests_sent"] = 1
         checkout_id = result.get("checkout_identifier")
         if checkout_id:
-            if original_checkout is not None and checkout_id != original_checkout:
+            if original_checkout is not None and checkout_id != original_checkout and not getattr(job, 'next_cycle_grant', None):
                 return {**result, "status": "blocked", "reason": "checkout_identifier_changed"}
             original_checkout = checkout_id
         if not proxy_reopen_allowed(job, target, result, options, owned):
@@ -548,7 +555,7 @@ async def _execute_profile_flow(job, target, budget, original_checkout=None):
             return target, await subscription_upgrade.recheck_upgrade_in_context(
                 job.context, target, job.root, job.payload["plan"], job.payload["upgradeIdentifier"])
         with payment_state.PaymentLedger(job.root, target.account_id,
-                                         target_plan=job.payload["plan"]) as ledger:
+                                         target_plan=job.payload["plan"], read_only=True) as ledger:
             result = await payment_recovery.recheck_in_context(
                 job.context, target, ledger, timeout=25, poll_count=6, poll_interval=20)
             return target, pay.include_payment_record(result, ledger)
@@ -577,6 +584,8 @@ async def _execute_profile_flow(job, target, budget, original_checkout=None):
                         "payment_attempted": False, "payment_requests_sent": 0,
                         "checkout_requests_sent": 0, **identity}
     restored_checkout = job.original_checkout_identifier
+    from subscription_cycle import inspection_only_allowed
+    job.subscription_check_only = inspection_only_allowed(job, target)
     if original_checkout and restored_checkout and original_checkout != restored_checkout:
         raise Stop("checkout_identifier_changed")
     original_checkout = original_checkout or restored_checkout
@@ -586,5 +595,7 @@ async def _execute_profile_flow(job, target, budget, original_checkout=None):
         browser_context=job.context, session_budget=budget,
         expected_country=job.payload["bitBrowser"].get("expectedCountryCode"),
         allow_checkout_replacement=False,
+        **({'next_cycle_grant': job.next_cycle_grant} if getattr(job, 'next_cycle_grant', None) is not None
+           and not job.subscription_check_only else {}),
         **({"expected_checkout_identifier": original_checkout} if original_checkout else {}))
     return target, result

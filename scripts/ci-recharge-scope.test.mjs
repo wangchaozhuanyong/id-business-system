@@ -2,6 +2,7 @@ import { imageInputsChanged } from './ci-recharge-python-image.mjs';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
+import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 import {
@@ -28,6 +29,8 @@ import {
   hasBankCardDeletePolicyProof,
   rechargeConnectionProfileMigration,
   unpublishedComponentSuccessorControlPaths,
+  rechargeFlowSuccessorControlPaths,
+  hasRechargeFlowBusinessReuseProof,
   ownedMysqlTestControlPaths
 } from './ci-recharge-scope.mjs';
 import { matchesSourceEvidence } from './ci-recharge-evidence.mjs';
@@ -119,7 +122,7 @@ const bankProof = {
 };
 const bankPolicyPaths = [productionDatabaseAccessHelper, productionDatabaseAccessAcceptance];
 
-function recordScopeClassification(paths, snapshot, eventName = 'pull_request') {
+function recordScopeClassification(paths, snapshot, eventName = 'pull_request', options = {}) {
   // Exercise the real CLI with synthetic Git snapshots and successful same-tree PR evidence.
   // No remote API, artifact download, file write or business command is executed.
   const script = `
@@ -128,7 +131,9 @@ function recordScopeClassification(paths, snapshot, eventName = 'pull_request') 
     import { syncBuiltinESMExports } from 'node:module';
     const paths = JSON.parse(process.env.SCOPE_TEST_PATHS);
     const snapshot = JSON.parse(process.env.SCOPE_TEST_SNAPSHOT);
+    const options = JSON.parse(process.env.SCOPE_TEST_OPTIONS);
     const gitCalls = [];
+    const apiCalls = [];
     const writes = [];
     const tree = 'd'.repeat(40);
     const pr = { number: 372, merged_at: '2026-10-09T00:00:00Z',
@@ -136,16 +141,20 @@ function recordScopeClassification(paths, snapshot, eventName = 'pull_request') 
       head: { sha: 'b'.repeat(40), repo: { full_name: process.env.GITHUB_REPOSITORY } } };
     const run = { id: 123, run_attempt: 1, event: 'pull_request',
       path: '.github/workflows/quality.yml', status: 'completed',
-      head_sha: pr.head.sha, conclusion: 'success' };
+      head_sha: options.historical ? 'a'.repeat(40) : pr.head.sha, conclusion: 'success',
+      pull_requests: [{ number: pr.number, head: pr.head, base: { sha: 'e'.repeat(40) } }] };
     const proof = { repository: process.env.GITHUB_REPOSITORY,
       runId: run.id, runAttempt: run.run_attempt, pullRequest: pr.number,
-      headSha: pr.head.sha, baseSha: process.env.BASE_SHA, testedTree: tree };
+      headSha: run.head_sha, baseSha: options.historical ? 'f'.repeat(40) : process.env.BASE_SHA,
+      testedTree: options.historical ? 'e'.repeat(40) : tree };
     childProcess.execFileSync = (file, args) => {
       if (file === 'git') {
         gitCalls.push(args);
         if (args[0] === 'cat-file') return '';
-        if (args[0] === 'diff') return paths.join('\\n') + '\\n';
+        if (args[0] === 'diff') return (options.historical && args[2] === proof.testedTree
+          ? options.changed : paths).join('\\n') + '\\n';
         if (args[0] === 'rev-parse') return tree + '\\n';
+        if (args[0] === 'merge-tree') return proof.testedTree + '\\n';
         if (args[0] === 'show' && args[1].endsWith(':' + process.env.SCOPE_TEST_HELPER)) {
           const source = args[1].startsWith('HEAD:') ? snapshot?.after : snapshot?.before;
           if (typeof source !== 'string') throw new Error('synthetic missing Git blob');
@@ -167,13 +176,16 @@ function recordScopeClassification(paths, snapshot, eventName = 'pull_request') 
       }
       if (file === 'gh' && args[0] === 'run') return '';
       if (file === 'gh' && args[0] === 'api') {
+        apiCalls.push(args[1]);
         if (args[1].endsWith('/pulls')) return JSON.stringify([pr]);
         if (args[1].includes('/workflows/quality.yml/runs?'))
           return JSON.stringify({ workflow_runs: [run] });
         if (args[1].endsWith('/artifacts?per_page=100'))
           return JSON.stringify({ artifacts: [{ name: 'quality-source-evidence-1', expired: false }] });
         if (args[1].endsWith('/jobs?per_page=100'))
-          return JSON.stringify({ jobs: [{ name: 'quality', conclusion: 'success' }] });
+          return JSON.stringify({ jobs: options.historical
+            ? ['guards', 'admin', 'api', 'connector'].map(part => ({ name: 'recharge (' + part + ')', conclusion: 'success' }))
+            : [{ name: 'quality', conclusion: 'success' }] });
       }
       throw new Error('Unexpected process: ' + file);
     };
@@ -189,7 +201,7 @@ function recordScopeClassification(paths, snapshot, eventName = 'pull_request') 
     console.log = (value) => { result = JSON.parse(value); };
     process.argv = ['node', 'scripts/ci-recharge-scope.mjs'];
     await import('./scripts/ci-recharge-scope.mjs');
-    process.stdout.write(JSON.stringify({ result, gitCalls, writes }));
+    process.stdout.write(JSON.stringify({ result, gitCalls, apiCalls, writes }));
   `;
   return JSON.parse(
     execFileSync(process.execPath, ['--input-type=module', '-e', script], {
@@ -206,6 +218,7 @@ function recordScopeClassification(paths, snapshot, eventName = 'pull_request') 
         BASE_SHA: 'a'.repeat(40),
         SCOPE_TEST_PATHS: JSON.stringify(paths),
         SCOPE_TEST_SNAPSHOT: JSON.stringify(snapshot),
+        SCOPE_TEST_OPTIONS: JSON.stringify(options),
         SCOPE_TEST_HELPER: productionDatabaseAccessHelper,
         SCOPE_TEST_ACCEPTANCE: productionDatabaseAccessAcceptance,
         SCOPE_TEST_SCHEMA: schema
@@ -1260,6 +1273,175 @@ test('evidence is bound to the same PR, source SHA and workflow', () => {
   assert.equal(matchingRun({ ...run, event: 'push' }, 191, 'abc'), false);
   assert.equal(matchingRun({ ...run, path: 'other.yml' }, 191, 'abc'), false);
   assert.equal(matchingRun({ ...run, status: 'in_progress' }, 191, 'abc'), false);
+  assert.equal(
+    matchingRun(
+      { ...run, pull_requests: [{ number: 191, head: { sha: 'later-head' } }] },
+      191,
+      'abc'
+    ),
+    true
+  );
+});
+
+function recordImmutableTestedTree(run, proof, options = {}) {
+  const script = `
+    import childProcess from 'node:child_process';
+    import fs from 'node:fs';
+    import { syncBuiltinESMExports } from 'node:module';
+    const data = JSON.parse(process.env.IMMUTABLE_TREE_FIXTURE);
+    const calls = [];
+    const originalRead = fs.readFileSync;
+    fs.readFileSync = (path, ...args) => String(path).endsWith('/evidence.json')
+      ? (data.options.badJson ? '{' : JSON.stringify(data.proof)) : originalRead(path, ...args);
+    childProcess.execFileSync = (file, args) => {
+      calls.push({ file, args });
+      if (file === 'gh' && args[0] === 'api') return JSON.stringify({ artifacts:
+        data.options.missingArtifact ? [] : [{ name: 'quality-source-evidence-1', expired: !!data.options.expired }] });
+      if (file === 'gh' && args[0] === 'run') {
+        if (data.options.downloadFailure) throw new Error('Synthetic missing artifact bytes');
+        return '';
+      }
+      if (file === 'git' && args[0] === 'cat-file') return '';
+      if (file === 'git' && args[0] === 'merge-tree') return data.options.actualTree || data.proof.testedTree;
+      throw new Error('Unexpected process');
+    };
+    syncBuiltinESMExports();
+    const { testedTree } = await import('./scripts/ci-recharge-scope.mjs');
+    const tree = testedTree(data.run, 460, 'owner/repo');
+    process.stdout.write(JSON.stringify({ tree: tree ?? null, calls }));
+  `;
+  return JSON.parse(
+    execFileSync(process.execPath, ['--input-type=module', '-e', script], {
+      cwd: root,
+      encoding: 'utf8',
+      env: { ...process.env, IMMUTABLE_TREE_FIXTURE: JSON.stringify({ run, proof, options }) }
+    })
+  );
+}
+
+const immutableRun = {
+  id: 123,
+  run_attempt: 1,
+  event: 'pull_request',
+  path: '.github/workflows/quality.yml',
+  status: 'completed',
+  head_sha: 'a'.repeat(40),
+  pull_requests: [{ number: 460, head: { sha: 'd'.repeat(40) }, base: { sha: 'e'.repeat(40) } }]
+};
+const immutableProof = {
+  repository: 'owner/repo',
+  runId: 123,
+  runAttempt: 1,
+  pullRequest: 460,
+  headSha: immutableRun.head_sha,
+  baseSha: 'b'.repeat(40),
+  testedTree: 'c'.repeat(40)
+};
+
+test('PR reuse reconstructs the exact immutable artifact tree after provider head and base updates', () => {
+  const result = recordImmutableTestedTree(immutableRun, immutableProof);
+  assert.equal(result.tree, immutableProof.testedTree);
+  assert.deepEqual(
+    result.calls.filter(({ file }) => file === 'git').map(({ args }) => args),
+    [
+      ['cat-file', '-e', immutableProof.baseSha],
+      ['cat-file', '-e', immutableRun.head_sha],
+      ['merge-tree', '--write-tree', immutableProof.baseSha, immutableRun.head_sha]
+    ]
+  );
+  assert.deepEqual(result.calls.find(({ file, args }) => file === 'gh' && args[0] === 'run').args, [
+    'run',
+    'download',
+    '123',
+    '--repo',
+    'owner/repo',
+    '--name',
+    'quality-source-evidence-1',
+    '--dir',
+    '.deploy/ci-source-evidence/123-1'
+  ]);
+});
+
+test('PR reuse rejects wrong immutable repository run attempt PR head base and tree evidence', () => {
+  for (const change of [
+    { repository: 'other/repo' },
+    { runId: 124 },
+    { runAttempt: 2 },
+    { pullRequest: 461 },
+    { headSha: 'd'.repeat(40) },
+    { baseSha: 'unknown' },
+    { testedTree: 'unknown' }
+  ]) {
+    const result = recordImmutableTestedTree(immutableRun, { ...immutableProof, ...change });
+    assert.equal(result.tree, null, JSON.stringify(change));
+    assert.equal(
+      result.calls.some(({ file }) => file === 'git'),
+      false
+    );
+  }
+  const wrongTree = recordImmutableTestedTree(immutableRun, immutableProof, {
+    actualTree: 'f'.repeat(40)
+  });
+  assert.equal(wrongTree.tree, null);
+});
+
+test('PR reuse rejects missing expired malformed or unavailable artifacts without mutable fallback', () => {
+  for (const options of [
+    { missingArtifact: true },
+    { expired: true },
+    { badJson: true },
+    { downloadFailure: true }
+  ]) {
+    const result = recordImmutableTestedTree(immutableRun, immutableProof, options);
+    assert.equal(result.tree, null, JSON.stringify(options));
+    assert.equal(
+      result.calls.some(({ file }) => file === 'git'),
+      false
+    );
+  }
+  for (const change of [
+    { id: '../other' },
+    { run_attempt: 2 },
+    { head_sha: 'invalid' },
+    { pull_requests: [] },
+    { pull_requests: [{ number: 461 }] }
+  ])
+    assert.equal(
+      recordImmutableTestedTree({ ...immutableRun, ...change }, immutableProof).tree,
+      null
+    );
+});
+
+test('PR reuse CLI pins the job attempt and reruns only changed business source inputs', () => {
+  const paths = [
+    'apps/admin/src/v2/features/auto-recharge/useAutoRecharge.ts',
+    'apps/api/src/id-business-v2/auto-recharge/recharge.service.ts',
+    'apps/api/src/id-business-v2/auto-recharge/worker/pay.py'
+  ];
+  for (const [extra, expected] of [
+    [[], ['admin', 'api', 'connector']],
+    [['apps/admin/src/v2/features/auto-recharge/useAutoRecharge.ts'], ['api', 'connector']],
+    [['apps/api/src/id-business-v2/auto-recharge/recharge.service.ts'], ['admin', 'connector']],
+    [['apps/api/src/id-business-v2/auto-recharge/worker/pay.py'], ['admin', 'api']],
+    [['packages/shared/src/v2/auto-recharge.ts'], ['connector']]
+  ]) {
+    const result = recordScopeClassification(paths, {}, 'pull_request', {
+      historical: true,
+      changed: ['scripts/ci-recharge-scope.mjs', ...extra]
+    });
+    assert.equal(result.result.mode, 'recharge');
+    assert.deepEqual(result.result.checkParts, ['guards', 'admin', 'api', 'connector']);
+    assert.deepEqual(result.result.reusedParts, expected);
+    assert.deepEqual(
+      result.apiCalls.filter((endpoint) => endpoint.endsWith('/jobs?per_page=100')),
+      ['repos/fixture/id-business/actions/runs/123/attempts/1/jobs?per_page=100']
+    );
+    assert.ok(
+      result.gitCalls.some(
+        (args) => args.join(' ') === `merge-tree --write-tree ${'f'.repeat(40)} ${'a'.repeat(40)}`
+      )
+    );
+  }
 });
 
 test('combined security and retry release selects affected modules without a migration run', () => {
@@ -1481,6 +1663,82 @@ test('finite unpublished successor controls do not admit adjacent scripts or bus
       checkMode([...unpublishedComponentSuccessorControlPaths, unknown], schema, schema),
       'full'
     );
+});
+
+test('recharge flow release controls remain finite and do not expand to adjacent controls or business', () => {
+  for (const path of rechargeFlowSuccessorControlPaths) {
+    assert.equal(isCiOnly([path]), true);
+    assert.equal(checkMode([path], schema, schema), 'ci-only');
+  }
+  for (const path of [
+    'scripts/production-release/recharge-flow-successor.py.backup',
+    'scripts/production-release/recharge-flow-successor-other.py',
+    'scripts/production-release/recharge-flow-successor-contract-other.json',
+    'apps/api/src/id-business-v2/auto-registration/unknown.service.ts'
+  ])
+    assert.equal(checkMode([...rechargeFlowSuccessorControlPaths, path], schema, schema), 'full');
+});
+
+test('reviewed dispatcher bytes reuse only unchanged Admin/API business evidence, never connector checks', () => {
+  const path = 'scripts/ci-recharge-check.mjs';
+  const snapshot = {
+    before: execFileSync('git', ['show', `bcd67c4dfe3944aa6c0498699a619395f04ed296:${path}`], {
+      cwd: root,
+      encoding: 'utf8'
+    }),
+    after: readFileSync(new URL('./ci-recharge-check.mjs', import.meta.url), 'utf8'),
+    beforeMode: '100644',
+    afterMode: '100644'
+  };
+  const changed = [path, ...rechargeFlowSuccessorControlPaths];
+  for (const part of ['admin', 'api']) {
+    assert.equal(hasRechargeFlowBusinessReuseProof(part, changed, snapshot), true);
+    for (const patch of [
+      { before: snapshot.before + 'drift' },
+      { after: snapshot.after + 'drift' },
+      { beforeMode: '100755' },
+      { afterMode: '100755' }
+    ])
+      assert.equal(
+        hasRechargeFlowBusinessReuseProof(part, changed, { ...snapshot, ...patch }),
+        false
+      );
+    assert.equal(hasRechargeFlowBusinessReuseProof(part, changed, undefined), false);
+    assert.equal(
+      hasRechargeFlowBusinessReuseProof(
+        part,
+        [...changed, '.github/workflows/quality.yml'],
+        snapshot
+      ),
+      false
+    );
+    assert.equal(
+      hasRechargeFlowBusinessReuseProof(
+        part,
+        [...changed, 'packages/shared/src/v2/auto-recharge.ts'],
+        snapshot
+      ),
+      false
+    );
+  }
+  for (const part of ['guards', 'connector', 'migration', 'security'])
+    assert.equal(hasRechargeFlowBusinessReuseProof(part, changed, snapshot), false);
+  assert.equal(
+    hasRechargeFlowBusinessReuseProof(
+      'admin',
+      [...changed, 'apps/admin/src/v2/features/auto-recharge/api.ts'],
+      snapshot
+    ),
+    false
+  );
+  assert.equal(
+    hasRechargeFlowBusinessReuseProof(
+      'api',
+      [...changed, 'apps/api/src/id-business-v2/auto-recharge/recharge.service.ts'],
+      snapshot
+    ),
+    false
+  );
 });
 
 test('mirror and employee MySQL acceptance inputs select migration without a schema edit', () => {

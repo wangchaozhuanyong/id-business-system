@@ -1,9 +1,18 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/validate-release-selection.sh"
-[[ "${RELEASE_OPERATION:-release}" != verify_unpublished_components && "${RELEASE_OPERATION:-release}" != verify_api_admin_migration && "${RELEASE_OPERATION:-release}" != verify_online_recharge && "${RELEASE_OPERATION:-release}" != verify_api_workspace ]] || exit 1
+[[ "${RELEASE_OPERATION:-release}" != verify_recharge_flow && "${RELEASE_OPERATION:-release}" != verify_unpublished_components && "${RELEASE_OPERATION:-release}" != verify_api_admin_migration && "${RELEASE_OPERATION:-release}" != verify_online_recharge && "${RELEASE_OPERATION:-release}" != verify_api_workspace ]] || exit 1
 
-if [[ "${RELEASE_OPERATION:-release}" == release_unpublished_components ]]; then
+if [[ "${RELEASE_OPERATION:-release}" == release_recharge_flow ]]; then
+  services=(api admin migrate)
+  recharge_flow_projection="$(read_recharge_flow_projection)"
+  for recharge_flow_service in "${services[@]}"; do
+    recharge_flow_reference="${RELEASE_REPOSITORY}:${RELEASE_COMMIT}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${recharge_flow_service}"
+    test "$(docker image inspect "$recharge_flow_reference" --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}')" = "$RELEASE_COMMIT"
+    test "$(docker image inspect "$recharge_flow_reference" --format '{{ index .Config.Labels "id-business-v2.source-tree" }}')" = "$SOURCE_TREE"
+    test "$(docker image inspect "$recharge_flow_reference" --format '{{ index .Config.Labels "id-business-v2.recharge-flow-successor-projection-sha256" }}')" = "$recharge_flow_projection"
+  done
+elif [[ "${RELEASE_OPERATION:-release}" == release_unpublished_components ]]; then
   services=(api admin migrate)
   unpublished_component_projection="$(read_unpublished_component_projection)"
 elif [[ "${RELEASE_OPERATION:-release}" == release_admin ]]; then

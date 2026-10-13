@@ -70,7 +70,10 @@ describe('比特浏览器真实分组和标签选择', () => {
       observed = { ...access };
       return catalog;
     });
-    expect(await readBrowserCatalog(form(), signal)).toEqual(catalog);
+    expect(await readBrowserCatalog(form(), signal)).toEqual({
+      ...catalog,
+      connectorCapabilities: []
+    });
     expect(mocks.health).toHaveBeenCalledWith('http://127.0.0.1:55322', signal);
     expect(observed).toMatchObject({
       localApiToken: 'b'.repeat(32),
@@ -79,6 +82,12 @@ describe('比特浏览器真实分组和标签选择', () => {
     });
     expect(mocks.catalog.mock.calls[0][0].localApiToken).toBe('');
     expect(mocks.catalog.mock.calls[0][0].connectorToken).toBe('');
+  });
+  it('复用同一次健康读取的能力协商结果，不增加启动前读取', async () => {
+    mocks.health.mockResolvedValueOnce({ capabilities: ['next-subscription-cycle-v1', 2] });
+    const result = await readBrowserCatalog(form(), new AbortController().signal);
+    expect(result.connectorCapabilities).toEqual(['next-subscription-cycle-v1']);
+    expect(mocks.health).toHaveBeenCalledOnce();
   });
   it('首次设置可直接用新填写密钥读取，不依赖保存分组', async () => {
     await readBrowserCatalog(

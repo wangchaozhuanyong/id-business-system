@@ -8,11 +8,13 @@ export function useRechargeNameMatch(
   details: Ref<V2RechargeDetails>,
   selectedCardId: Ref<string>,
   locked: Ref<boolean>,
-  onAddress: (value: string | null) => void
+  onAddress: (value: string | null, expectedManualRevision?: number) => void,
+  readManualAddressRevision?: () => number
 ) {
   const loading = ref(false);
   const error = ref('');
   const confirmed = ref(false);
+  const applying = ref(false);
   let generation = 0;
   let disposed = false;
   let matchingNumber = '';
@@ -35,19 +37,25 @@ export function useRechargeNameMatch(
     const revision = ++generation;
     matchingNumber = number;
     const originalName = details.value.name;
+    const manualAddressRevision = readManualAddressRevision?.();
     loading.value = true;
     error.value = '';
     const work = (async () => {
       try {
         const result = await bankRechargeApi.matchCardName(number);
         if (disposed || revision !== generation || canonical() !== number) return;
-        lastMatchedNumber = number;
-        confirmed.value = result.confirmed;
-        selectedCardId.value = result.cardId ?? '';
-        onAddress(result.billingAddressId);
-        if (result.confirmed || details.value.name === originalName || !details.value.name) {
-          details.value.name = result.name;
-          matchedName = result.name;
+        applying.value = true;
+        try {
+          lastMatchedNumber = number;
+          confirmed.value = result.confirmed;
+          selectedCardId.value = result.cardId ?? '';
+          onAddress(result.billingAddressId, manualAddressRevision);
+          if (result.confirmed || details.value.name === originalName || !details.value.name) {
+            details.value.name = result.name;
+            matchedName = result.name;
+          }
+        } finally {
+          applying.value = false;
         }
       } catch (cause) {
         if (!disposed && revision === generation) error.value = getApiErrorMessage(cause);
@@ -87,6 +95,7 @@ export function useRechargeNameMatch(
     loading,
     error,
     confirmed,
+    applying,
     retry: match,
     async ensureReady() {
       await match();

@@ -5,7 +5,7 @@ import {
   Injectable
 } from '@nestjs/common';
 import { Optional } from '@nestjs/common';
-import { randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
+import { randomBytes, randomUUID } from 'node:crypto';
 import { normalizeV2RechargeConnectorUrl } from '@apple-business/shared';
 import type { AuthenticatedUser } from '../../auth/auth.types';
 import {
@@ -21,6 +21,8 @@ import {
   readRechargeConnectionAccess
 } from './recharge-connection-access';
 import { startRechargeOpenProfile } from './recharge-profile-recovery';
+import { confirmNextSubscriptionCycle } from './recharge-subscription-cycle';
+import { revokeUnusedCycleGrant } from './recharge-cycle-state';
 import { localBitBrowserLaunchOptions } from './recharge-browser-options';
 import { RechargeSettingsService } from './recharge-settings.service';
 import { RechargeProxyService } from './recharge-proxy.service';
@@ -147,6 +149,7 @@ export class RechargeLocalService {
           leaseUntil: new Date(Date.now() + 45 * 60000),
           result: toV2JsonDocument({
             ...runtime.connectionMetadata,
+            ...(input.subscriptionCycleProtocol === 1 ? { client_cycle_protocol: 1 } : {}),
             status: 'waiting_local_connector',
             stage: 'connector_dispatch',
             addressId: address.id,
@@ -186,6 +189,7 @@ export class RechargeLocalService {
     );
 
     return {
+      ...(input.subscriptionCycleProtocol === 1 ? { subscriptionCycleProtocol: 1 as const } : {}),
       id: result.job.id,
       mode: 'payment' as const,
       ...(result.ownedProfile ? { ownedProfile: result.ownedProfile } : {}),
@@ -481,20 +485,17 @@ export class RechargeLocalService {
     };
   }
 
+  confirmNextCycle(id: string, value: unknown, operator: AuthenticatedUser) {
+    return confirmNextSubscriptionCycle(id, value, operator, {
+      repository: this.repository,
+      transactions: this.transactions,
+      audit: this.audit
+    });
+  }
+
   async callback(id: string, token: unknown, value: unknown) {
     if (!uuidPattern.test(id)) throw new BadRequestException('任务编号无效');
-    const job = await this.repository.byId(id);
-    if (job.action !== 'bitbrowser' || !job.nonceHash || typeof token !== 'string') {
-      throw new ForbiddenException('本机连接凭据无效');
-    }
-    const actual = hash(token);
-    if (
-      actual.length !== job.nonceHash.length ||
-      !timingSafeEqual(Buffer.from(actual), Buffer.from(job.nonceHash))
-    ) {
-      throw new ForbiddenException('本机连接凭据无效');
-    }
-    return this.recharge.callback(id, value);
+    return this.recharge.callback(id, value, { localToken: token });
   }
 
   async access(id: string, operator: AuthenticatedUser) {
@@ -560,6 +561,8 @@ export class RechargeLocalService {
         const current = object(job.result);
         if (job.state === 'finished' && current.cancellation_confirmed === true) return { id };
         if (job.state === 'finished') throw new ConflictException('本次任务已经结束');
+        // The first cancellation fixes the deadline; subsequent requests cannot extend it.
+        if (current.status === 'cancelling') return { id };
         if (current.payment_attempted === true || Number(current.payment_requests_sent) > 0) {
           throw new ConflictException('官网付款请求已发出，只能查看原单结果');
         }
@@ -571,7 +574,7 @@ export class RechargeLocalService {
           ...(directLogin ? { state: 'finished', nonceHash: null } : {}),
           leaseUntil: new Date(Date.now() + (directLogin ? 0 : 5 * 60000)),
           result: toV2JsonDocument({
-            ...current,
+            ...revokeUnusedCycleGrant(current),
             status: directLogin ? 'cancelled' : 'cancelling',
             reason: directLogin ? 'bitbrowser_direct_cancelled' : 'operation_cancel_requested',
             ...(directLogin ? { cancellation_confirmed: true, payment_attempted: false } : {}),

@@ -31,6 +31,16 @@ export const unpublishedComponentSuccessorEntryPaths = Object.freeze([
   'scripts/production-release/push-images.sh',
   'scripts/production-release/dispatch.sh'
 ]);
+export const rechargeFlowSuccessorControlPaths = Object.freeze([
+  'scripts/production-release/recharge-flow-successor.py',
+  'scripts/production-release/recharge-flow-successor.test.py',
+  'scripts/production-release/recharge-flow-successor-readonly.py',
+  'scripts/production-release/recharge-flow-successor-readonly.test.py',
+  'scripts/production-release/recharge-flow-successor-projection.py',
+  'scripts/production-release/recharge-flow-successor-projection.test.py',
+  'scripts/production-release/recharge-flow-successor-contract.json',
+  'scripts/production-release/recharge-flow-entry.test.mjs'
+]);
 export const formalRuntimePackageControlPaths = Object.freeze([
   'scripts/production-release/formal-runtime-package.test.py',
   'scripts/production-release/formal-runtime-package/driver.py',
@@ -532,6 +542,7 @@ export function isCiOnly(paths) {
       (p) =>
         historicalReleaseControlPaths.includes(p) ||
         unpublishedComponentSuccessorControlPaths.includes(p) ||
+        rechargeFlowSuccessorControlPaths.includes(p) ||
         ownedMysqlTestControlPaths.includes(p) ||
         onlineRecoveryControls.has(p) ||
         /^(?:\.github\/workflows\/(?:quality|production-release)\.yml|scripts\/ci-(?:recharge|change)-[\w.-]+|scripts\/check-v2-(?:module-architecture|prisma-runtime-boundary|concurrency-standard)(?:\.test)?\.mjs|scripts\/production-release\/online-recharge-entry\.test\.mjs|scripts\/production-release\/mailbox-diagnostic(?:\.test)?\.(?:mjs|py)|scripts\/production-release\/(?:cleanup-reviewed-cache|cleanup-verified-backups|maintain-image-cache|remote-deploy|reuse-images|storage-maintenance|api-admin-scope|api-admin-readonly|online-recharge-scope|online-recharge-readonly)(?:\.test)?\.py|scripts\/production-release\/audit-retention-mysql\.test\.py|scripts\/production-release\/(?:build-images|push-images|dispatch|check-source)\.sh|deploy\/aws\/cache-cleanup-(?:legacy-20261002|unused-legacy-20261003|storage-20261002|bitbrowser-direct-20261003|20261001|fx-subscription-20261002|unified(?:-recovery)?-20261002|recharge-(?:names|execution)-20261002)\.json|docs\/.*\.md|(?:README|AGENTS)\.md)$/.test(
@@ -910,6 +921,7 @@ export function isRechargeOnly(paths, oldSchema, newSchema) {
         allowed.test(p) ||
         historicalReleaseControlPaths.includes(p) ||
         unpublishedComponentSuccessorControlPaths.includes(p) ||
+        rechargeFlowSuccessorControlPaths.includes(p) ||
         ownedMysqlTestControlPaths.includes(p) ||
         sharedTableSourcePaths.has(p) ||
         rechargeConnectionAcceptancePaths.has(p) ||
@@ -1054,13 +1066,61 @@ export function affectsPart(part, paths) {
   return paths.some((p) => common.test(p) || inputs[part].test(p));
 }
 
+// This reviewed dispatcher extension adds release controls and connector cases;
+// the Admin and API business commands retain their exact previous bytes.
+const rechargeFlowDispatcherSource = Object.freeze({
+  before: 'a6534555a1ad068aee46fed9808b3220fc8ae32ea45f18945eebc64022115116',
+  after: '2954ccc78e01ad42c71a29815e6f7d5997a13cd9009a0ec56519ee529968181e'
+});
+export function hasRechargeFlowBusinessReuseProof(part, paths, snapshot) {
+  if (
+    !['admin', 'api'].includes(part) ||
+    !paths.includes('scripts/ci-recharge-check.mjs') ||
+    affectsPart(
+      part,
+      paths.filter((path) => path !== 'scripts/ci-recharge-check.mjs')
+    ) ||
+    snapshot?.beforeMode !== '100644' ||
+    snapshot?.afterMode !== '100644' ||
+    typeof snapshot.before !== 'string' ||
+    typeof snapshot.after !== 'string'
+  )
+    return false;
+  const digest = (source) => createHash('sha256').update(source).digest('hex');
+  return (
+    digest(snapshot.before) === rechargeFlowDispatcherSource.before &&
+    digest(snapshot.after) === rechargeFlowDispatcherSource.after
+  );
+}
+
+export function readRechargeFlowDispatcherSnapshot(before, after) {
+  if (![before, after].every((revision) => /^[a-f0-9]{40}$/.test(revision))) return undefined;
+  const path = 'scripts/ci-recharge-check.mjs';
+  const source = (revision) =>
+    execFileSync('git', ['show', `${revision}:${path}`], { encoding: 'utf8' });
+  const mode = (revision) =>
+    execFileSync('git', ['ls-tree', revision, '--', path], { encoding: 'utf8' })
+      .trim()
+      .split(/\s+/)[0];
+  try {
+    return {
+      before: source(before),
+      after: source(after),
+      beforeMode: mode(before),
+      afterMode: mode(after)
+    };
+  } catch {
+    return undefined;
+  }
+}
+
 export function matchingRun(run, number, headSha) {
   return (
     run.event === 'pull_request' &&
     run.path === '.github/workflows/quality.yml' &&
     run.status === 'completed' &&
     run.head_sha === headSha &&
-    run.pull_requests?.some((pr) => pr.number === number && pr.head.sha === headSha)
+    run.pull_requests?.some((pr) => pr.number === number)
   );
 }
 
@@ -1081,11 +1141,59 @@ function ensureCommit(sha) {
     git('fetch', '--no-tags', 'origin', sha);
   }
 }
-function testedTree(run, number) {
-  const pr = run.pull_requests.find((item) => item.number === number);
-  ensureCommit(pr.base.sha);
-  ensureCommit(pr.head.sha);
-  return git('merge-tree', '--write-tree', pr.base.sha, pr.head.sha).split('\n')[0];
+export function testedTree(run, number, repo) {
+  try {
+    if (
+      !matchingRun(run, number, run.head_sha) ||
+      !Number.isSafeInteger(run.id) ||
+      run.id <= 0 ||
+      !Number.isSafeInteger(run.run_attempt) ||
+      run.run_attempt <= 0 ||
+      !/^[a-f0-9]{40}$/.test(run.head_sha)
+    )
+      return undefined;
+    const { artifacts } = gh(`repos/${repo}/actions/runs/${run.id}/artifacts?per_page=100`);
+    const artifact = artifacts.find(
+      (item) => item.name === `quality-source-evidence-${run.run_attempt}` && !item.expired
+    );
+    if (!artifact) return undefined;
+    const directory = `.deploy/ci-source-evidence/${run.id}-${run.run_attempt}`;
+    execFileSync(
+      'gh',
+      [
+        'run',
+        'download',
+        String(run.id),
+        '--repo',
+        repo,
+        '--name',
+        artifact.name,
+        '--dir',
+        directory
+      ],
+      { stdio: 'pipe' }
+    );
+    const proof = JSON.parse(readFileSync(`${directory}/evidence.json`, 'utf8'));
+    if (
+      !/^[a-f0-9]{40}$/.test(proof.testedTree) ||
+      !matchesSourceEvidence(proof, {
+        repo,
+        run,
+        pr: { number, head: { sha: run.head_sha } },
+        tree: proof.testedTree
+      })
+    )
+      return undefined;
+    ensureCommit(proof.baseSha);
+    ensureCommit(run.head_sha);
+    const reconstructed = git('merge-tree', '--write-tree', proof.baseSha, run.head_sha).split(
+      '\n'
+    )[0];
+    return reconstructed === proof.testedTree ? reconstructed : undefined;
+  } catch {
+    // Missing or invalid immutable evidence cannot authorize reuse.
+    return undefined;
+  }
 }
 
 async function main() {
@@ -1167,11 +1275,22 @@ async function main() {
     );
     for (const run of runs) {
       if (!matchingRun(run, pr.number, run.head_sha)) continue;
-      const tree = testedTree(run, pr.number);
+      const tree = testedTree(run, pr.number, repo);
+      if (!tree) continue;
       const changed = git('diff', '--name-only', tree, currentTree).split('\n').filter(Boolean);
-      const { jobs } = gh(`repos/${repo}/actions/runs/${run.id}/jobs?per_page=100`);
+      const dispatcherSnapshot = changed.includes('scripts/ci-recharge-check.mjs')
+        ? readRechargeFlowDispatcherSnapshot(tree, currentTree)
+        : undefined;
+      const { jobs } = gh(
+        `repos/${repo}/actions/runs/${run.id}/attempts/${run.run_attempt}/jobs?per_page=100`
+      );
       for (const part of parts) {
-        if (reused.has(part) || affectsPart(part, changed)) continue;
+        if (
+          reused.has(part) ||
+          (affectsPart(part, changed) &&
+            !hasRechargeFlowBusinessReuseProof(part, changed, dispatcherSnapshot))
+        )
+          continue;
         if (jobs.some((job) => job.name === `recharge (${part})` && job.conclusion === 'success')) {
           reused.add(part);
           evidence.push({ part, run: run.id, tree });

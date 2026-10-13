@@ -57,6 +57,7 @@ beforeEach(async () => {
 });
 
 afterEach(() => {
+  vi.useRealTimers();
   scope.stop();
   vi.doUnmock('./bitbrowser-direct-login');
   vi.resetModules();
@@ -85,6 +86,43 @@ function expectCleared(input: V2RechargeBitBrowserOpenLaunch, credential: Direct
 }
 
 describe('登录执行模块按需加载', () => {
+  it('模块一直未返回也可以先取消并释放资料，迟到模块不得执行', async () => {
+    const credential = { sessionJson: 'fixture-session' };
+    const input = await startLoading(credential);
+    await flow.cancel(input.id);
+    expectCleared(input, credential);
+    expect(mock.run).not.toHaveBeenCalled();
+    loading.resolve({ runDirectLogin: mock.run });
+    await Promise.resolve();
+    expect(mock.run).not.toHaveBeenCalled();
+  });
+  it('下载三十秒仍未返回则有界结束，迟到下载不能执行', async () => {
+    vi.useFakeTimers();
+    const credential = { sessionJson: 'fixture-session' };
+    const input = await startLoading(credential);
+    await vi.advanceTimersByTimeAsync(30_000);
+    expectCleared(input, credential);
+    expect(reportError.mock.lastCall?.[0]).toContain('时间上限');
+    expect(mock.callback.mock.calls.at(-1)?.[2]).toMatchObject({
+      type: 'finished',
+      result: { status: 'blocked', reason: 'bitbrowser_recovery_timeout' }
+    });
+    loading.resolve({ runDirectLogin: mock.run });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(mock.run).not.toHaveBeenCalled();
+  });
+  it('下载中身份变化时清理旧任务但不向新身份展示原任务错误', async () => {
+    const credential = { sessionJson: 'fixture-session' };
+    const input = await startLoading(credential);
+    const { sessionCoordinator } = await import('@/auth/sessionCoordinator');
+    sessionCoordinator.clearLocalSession({ reason: 'identity-switched', broadcast: false });
+    await vi.waitFor(() => expect(flow.running.value).toBe(false));
+    expectCleared(input, credential);
+    expect(reportError).not.toHaveBeenCalled();
+    loading.resolve({ runDirectLogin: mock.run });
+    await Promise.resolve();
+    expect(mock.run).not.toHaveBeenCalled();
+  });
   it('记录开始事件并锁定任务后才加载，加载中重复点击不启动第二次执行', async () => {
     const credential = { login: { email: 'fixture@example.com', password: 'fixture-password' } };
     const input = await startLoading(credential);

@@ -8,6 +8,7 @@ import {
   validateRechargeNoBankRequest
 } from './recharge-local-validation';
 import { RechargeLocalService } from './recharge-local.service';
+import { RechargeService } from './recharge.service';
 import { validateRechargeBitBrowserSettings } from './recharge-settings-validation';
 
 const id = '11111111-1111-4111-8111-111111111111';
@@ -295,25 +296,37 @@ describe('本机任务持久化边界', () => {
   });
 
   it('回调密钥错误时不处理执行结果', async () => {
-    const callback = vi.fn();
+    const repository = {
+      lock: vi.fn(),
+      findJob: vi.fn().mockResolvedValue({
+        id,
+        action: 'bitbrowser',
+        nonceHash: hash('a'.repeat(64)),
+        result: {}
+      }),
+      updateJob: vi.fn()
+    };
+    const transactions = { execute: vi.fn(async (work) => work({})) };
+    const recharge = new RechargeService(
+      repository as never,
+      {} as never,
+      transactions as never,
+      {} as never
+    );
     const service = new RechargeLocalService(
-      {
-        byId: vi.fn().mockResolvedValue({
-          action: 'bitbrowser',
-          nonceHash: hash('a'.repeat(64))
-        })
-      } as never,
+      repository as never,
       {} as never,
       {} as never,
-      { callback } as never,
-      {} as never,
+      recharge,
+      transactions as never,
       {} as never
     );
 
     await expect(service.callback(id, 'wrong', { type: 'progress', result: {} })).rejects.toThrow(
       '连接凭据无效'
     );
-    expect(callback).not.toHaveBeenCalled();
+    expect(repository.lock).toHaveBeenCalledBefore(repository.findJob);
+    expect(repository.updateJob).not.toHaveBeenCalled();
   });
 
   it('只有未被本机接收的初始任务才能原子结束', async () => {

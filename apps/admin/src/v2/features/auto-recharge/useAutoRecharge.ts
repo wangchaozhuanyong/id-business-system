@@ -4,7 +4,6 @@ import { ElMessageBox } from 'element-plus/es/components/message-box/index.mjs';
 import type {
   V2RechargeAddress,
   V2RechargeAddressList,
-  V2RechargeBitBrowserLaunch,
   V2RechargeBitBrowserOpenLaunch,
   V2RechargeBitBrowserRecheckLaunch,
   V2RechargeBitBrowserResolutionLaunch,
@@ -31,8 +30,12 @@ import { canSelectRechargeAccount } from './recharge-account-options';
 import { currencyOptions } from './recharge-presentation';
 import { rechargeProxyApi, type RechargeProxyItem } from './recharge-proxy-api';
 import { useBitBrowserDirectOpen } from './useBitBrowserDirectOpen';
-import { parseDirectCredential } from './bitbrowser-direct-credential';
+import { parseDirectCredential, type DirectLoginCredential } from './bitbrowser-direct-credential';
 import { isV2TotpCodeCurrent } from '@/v2/components/workspace/totp';
+import { isApiError } from '@/api/apiError';
+import { directOperationDeadline, rechargeExecutionFailure } from './recharge-direct-lifecycle';
+import { sessionCoordinator } from '@/auth/sessionCoordinator';
+import { useRechargePaymentStart } from './useRechargePaymentStart';
 
 const activeStates = new Set([
   'running',
@@ -205,7 +208,11 @@ export function useAutoRecharge(options: { clearPaymentValidation?: () => void }
   let importGeneration = 0;
   let paymentCardGeneration = 0;
 
-  const query = useV2ModuleQuery<{ items: V2RechargeJob[]; configured: boolean }>({
+  const query = useV2ModuleQuery<{
+    items: V2RechargeJob[];
+    configured: boolean;
+    subscriptionCycleProtocol?: 1;
+  }>({
     moduleKey: 'auto-recharge',
     scope: 'auto-recharge',
     key: () => 'auto-recharge-bitbrowser-jobs',
@@ -279,9 +286,32 @@ export function useAutoRecharge(options: { clearPaymentValidation?: () => void }
     ref(false),
     computed(() => operationMode.value === 'open_browser')
   );
-  const directOpen = useBitBrowserDirectOpen(refresh, (message) => {
-    error.value = message;
-  });
+  const directTaskDisplay = ref<V2RechargeJob>();
+  let directCancelling = false;
+  let openStartGeneration = 0;
+  let openStartPending = false;
+  let clearPendingOpenCredential: (() => void) | undefined;
+  const directOpen = useBitBrowserDirectOpen(
+    refresh,
+    (message) => {
+      error.value = message;
+    },
+    true
+  );
+  watch(
+    sessionCoordinator.identityEpoch,
+    () => {
+      directTaskDisplay.value = undefined;
+      openStartGeneration++;
+      clearPendingOpenCredential?.();
+      clearPendingOpenCredential = undefined;
+      if (openStartPending) {
+        openStartPending = false;
+        busy.value = false;
+      }
+    },
+    { flush: 'sync' }
+  );
   const { settingsQuery } = browserSettings;
   function openProxySettings() {
     browserSettings.setSettingsOpen(true);
@@ -414,7 +444,10 @@ export function useAutoRecharge(options: { clearPaymentValidation?: () => void }
   );
   const selected = computed(() =>
     currentId.value
-      ? jobs.value.find((job) => job.id === currentId.value)
+      ? (jobs.value.find((job) => job.id === currentId.value) ??
+        (directOpen.owns(currentId.value) && directTaskDisplay.value?.id === currentId.value
+          ? directTaskDisplay.value
+          : undefined))
       : (jobs.value.find((job) => activeStates.has(job.state)) ??
         jobs.value.find((job) => job.state === 'unknown' && job.result.payment_attempted === true))
   );
@@ -462,9 +495,52 @@ export function useAutoRecharge(options: { clearPaymentValidation?: () => void }
     details,
     selectedPaymentCardId,
     formLocked,
-    (addressId) => {
+    (addressId, expectedManualRevision) => {
       selectedCardBillingAddressId.value = addressId ?? '';
-    }
+      if (
+        addressId &&
+        expectedManualRevision === manualAddressSelectionRevision.value &&
+        availableAddresses.value.some((address) => address.id === addressId)
+      ) {
+        addressSource.value = 'library';
+        selectedAddressId.value = addressId;
+      }
+    },
+    () => manualAddressSelectionRevision.value
+  );
+  let paymentEditVersion = 0;
+  watch(
+    [
+      operationMode,
+      loginMethod,
+      selectedBankAccountId,
+      selectedPaymentCardId,
+      selectedAddressId,
+      addressSource,
+      manualAddressSelectionRevision,
+      plan,
+      windowName,
+      lockedCurrency,
+      selectedProxyCountryCode,
+      selectedProxyId,
+      authorizeSinglePayment,
+      sessionJson,
+      () => details.value.number,
+      () => details.value.expiry,
+      () => details.value.cvc,
+      () => details.value.name,
+      () => details.value.email,
+      () => details.value.country,
+      () => details.value.line1,
+      () => details.value.line2,
+      () => details.value.city,
+      () => details.value.state,
+      () => details.value.postal_code
+    ],
+    () => {
+      if (!nameMatch.applying.value) paymentEditVersion++;
+    },
+    { flush: 'sync' }
   );
   const canStart = computed(
     () =>
@@ -586,6 +662,8 @@ export function useAutoRecharge(options: { clearPaymentValidation?: () => void }
     () =>
       selected.value?.action === 'bitbrowser' &&
       selected.value.state === 'awaiting_human_verification' &&
+      selected.value.result.stage !== 'next_subscription_cycle_review' &&
+      selected.value.result.cycle_review?.status !== 'awaiting_previous_cycle_confirmation' &&
       !needsCode.value &&
       (selected.value.result.transport !== 'web_direct' || directOpen.owns(selected.value.id))
   );
@@ -645,6 +723,10 @@ export function useAutoRecharge(options: { clearPaymentValidation?: () => void }
       return '官网报价已取得，等待本人核对金额并确认本次单次付款。';
     if (job?.action === 'server' && job.state === 'awaiting_human_verification')
       return '官网要求本人验证，请打开原付款验证窗口完成验证后核对原单。';
+    if (job?.result.stage === 'next_subscription_cycle_review')
+      return job.result.cycle_review?.status === 'awaiting_previous_cycle_confirmation'
+        ? '当前只读核实旧订阅周期，请在下方核实旧周期已经结束；后续付款仍须单独确认官网报价。'
+        : '正在只读核实旧订阅周期与当前订阅，请查看下方核实状态；本次尚未授权付款。';
     if (job?.state === 'awaiting_human_verification')
       return '比特浏览器正在等待人工验证；完成官网或银行验证后点击继续。';
     if (job?.state === 'running' && job.result.transport === 'web_direct')
@@ -934,130 +1016,142 @@ export function useAutoRecharge(options: { clearPaymentValidation?: () => void }
     }
   }
 
-  async function refresh() {
-    try {
-      await query.refresh();
-    } catch {
-      /* 读取失败由异步区域展示。 */
+  let refreshing: Promise<void> | undefined;
+  let refreshQueued = false;
+  function refresh(): Promise<void> {
+    if (disposed) return Promise.resolve();
+    if (refreshing) {
+      refreshQueued = true;
+      return refreshing;
     }
+    refreshing = (async () => {
+      do {
+        refreshQueued = false;
+        try {
+          await query.refresh();
+        } catch {
+          /* 读取失败由异步区域展示，不取消执行或覆盖业务错误。 */
+        }
+      } while (refreshQueued && !disposed);
+    })().finally(() => {
+      refreshing = undefined;
+    });
+    return refreshing;
   }
 
-  async function start() {
-    if (!canStart.value) return;
-    if (!selectedAddress.value) return;
-    busy.value = true;
-    error.value = '';
-    const id = crypto.randomUUID();
-    const rememberPaymentSave = beginPaymentSave(id);
-    let launch: V2RechargeBitBrowserLaunch | null = null;
-    try {
-      await nameMatch.ensureReady();
-      await bankRechargeApi.checkCardAvailability(details.value.number);
-      await browserSettings.checkSavedConnection();
-      if (disposed) return;
-      const paymentCard = await bankRechargeApi.preparePaymentCard({
-        number: details.value.number,
-        expiry: details.value.expiry,
-        name: details.value.name,
-        currencyCode: lockedCurrency.value
-      });
-      if (disposed) return;
-      launch = await rechargeApi.startBitBrowser({
-        id,
-        connectionProfileId: settingsQuery.data.value?.connectionProfileId ?? null,
-        plan: plan.value,
-        addressId: selectedAddress.value.id,
-        windowName: windowName.value.trim(),
-        lockedCurrency: lockedCurrency.value,
-        ...(selectedProxyId.value
-          ? { proxyId: selectedProxyId.value, proxyCountryCode: selectedProxyCountryCode.value }
-          : {}),
-        cardId: paymentCard.cardId,
-        billingName: details.value.name,
-        expectedEmail: details.value.email,
-        ...(loginMethod.value === 'password'
-          ? {
-              chatgptAccountId: selectedBankAccountId.value,
-              useSavedCredentials: true
-            }
-          : {}),
-        authorizeSinglePayment: true,
-        manualPaymentConfirmation: true
-      });
-      currentId.value = id;
-      rememberPaymentSave();
-      localAccess.value = {
-        connectorUrl: launch.connectorUrl,
-        connectorToken: launch.connectorToken
-      };
-      const payment = {
-        number: details.value.number,
-        expiry: details.value.expiry,
-        cvc: details.value.cvc,
-        name: details.value.name,
-        email: details.value.email
-      };
-      await rechargeConnectorApi.start(launch.connectorUrl, launch.connectorToken, {
-        id,
-        mode: launch.mode,
-        plan: plan.value,
-        windowName: windowName.value.trim(),
-        ...(await localCredential(launch.savedLogin)),
-        details: payment,
-        address: launch.address,
-        bitBrowser: launch.bitBrowser,
-        safety: {
-          lockedCurrency: launch.safety.lockedCurrency,
-          authorizeSinglePayment: launch.safety.authorizeSinglePayment,
-          manualPaymentConfirmation: launch.safety.manualPaymentConfirmation
-        },
-        ...(launch.ownedProfile ? { ownedProfile: launch.ownedProfile } : {}),
-        callbackUrl: rechargeCallbackUrl(id),
-        agentToken: launch.agentToken,
-        authorizeSinglePayment: true
-      });
-      connectorStatus.value = 'online';
-      connectorMessage.value = '本机连接器已接收任务';
-    } catch (cause) {
-      if (launch) {
-        try {
-          await rechargeConnectorApi.status(launch.connectorUrl, launch.connectorToken, id);
-          connectorStatus.value = 'online';
-          connectorMessage.value = '本机连接器已接收，本次不会重发';
-          error.value = '';
-        } catch {
-          try {
-            await rechargeApi.abandonUnreceivedBitBrowser(id);
-            connectorStatus.value = 'offline';
-            connectorMessage.value = '本机连接器未接收';
-            error.value = '本机连接器未接收任务，本次已安全结束；卡资料已保留。';
-          } catch {
-            connectorStatus.value = 'offline';
-            connectorMessage.value = '本机连接器接收结果待核验';
-            error.value = '本机连接器接收结果不明确，本次不会自动重发。请刷新原任务。';
+  const connectionVersion = () => JSON.stringify(settingsQuery.data.value ?? null);
+  const { start } = useRechargePaymentStart({
+    canStart,
+    busy,
+    error,
+    currentId,
+    connectorStatus,
+    connectorMessage,
+    localAccess,
+    apiProtocol: () => query.data.value?.subscriptionCycleProtocol,
+    connectionVersion,
+    editVersion: () => paymentEditVersion,
+    verifiedDetails: () =>
+      selectedAddress.value
+        ? {
+            name: details.value.name,
+            addressId: selectedAddress.value.id,
+            cardId: selectedPaymentCardId.value
           }
-        }
-      } else {
-        error.value = getApiErrorMessage(cause);
-      }
-    } finally {
-      await refresh();
-      busy.value = false;
+        : undefined,
+    ensureNameReady: () => nameMatch.ensureReady(),
+    checkSavedConnection: (current) => browserSettings.checkSavedConnection(current),
+    beginPaymentSave,
+    refresh,
+    snapshot: () => {
+      if (!selectedAddress.value) return undefined;
+      return {
+        connectionVersion: connectionVersion(),
+        input: {
+          connectionProfileId: settingsQuery.data.value?.connectionProfileId ?? null,
+          plan: plan.value,
+          addressId: selectedAddress.value.id,
+          windowName: windowName.value.trim(),
+          lockedCurrency: lockedCurrency.value,
+          ...(selectedProxyId.value
+            ? { proxyId: selectedProxyId.value, proxyCountryCode: selectedProxyCountryCode.value }
+            : {}),
+          billingName: details.value.name,
+          expectedEmail: details.value.email,
+          ...(loginMethod.value === 'password'
+            ? { chatgptAccountId: selectedBankAccountId.value, useSavedCredentials: true }
+            : {}),
+          authorizeSinglePayment: true,
+          manualPaymentConfirmation: true
+        },
+        payment: {
+          number: details.value.number,
+          expiry: details.value.expiry,
+          cvc: details.value.cvc,
+          name: details.value.name,
+          email: details.value.email
+        },
+        credential:
+          loginMethod.value === 'password'
+            ? { login: { email: details.value.email, password: '' } }
+            : { sessionJson: sessionJson.value }
+      };
     }
-  }
+  });
 
   async function startOpen() {
     if (!canStartOpen.value) return;
     busy.value = true;
     error.value = '';
     const id = crypto.randomUUID();
+    const identityEpoch = sessionCoordinator.identityEpoch.value;
+    const generation = ++openStartGeneration;
+    openStartPending = true;
+    const identityCurrent = () => identityEpoch === sessionCoordinator.identityEpoch.value;
+    const current = () => !disposed && identityCurrent() && generation === openStartGeneration;
     let launch: V2RechargeBitBrowserOpenLaunch | null = null;
+    let credential: DirectLoginCredential | undefined;
+    const clearCredential = () => {
+      if (credential?.login) credential.login.password = '';
+      if (credential && 'sessionJson' in credential) credential.sessionJson = '';
+    };
+    const releaseUnreceived = async (unreceived: V2RechargeBitBrowserOpenLaunch) => {
+      try {
+        if (identityCurrent()) await rechargeApi.abandonUnreceivedBitBrowser(id);
+        else
+          await directOperationDeadline(
+            (signal) =>
+              rechargeApi.directBrowserCallback(
+                id,
+                unreceived.agentToken,
+                {
+                  type: 'finished',
+                  result: {
+                    status: 'cancelled',
+                    stage: 'connector_dispatch',
+                    reason: 'bitbrowser_direct_cancelled',
+                    cancellation_confirmed: true,
+                    payment_attempted: false,
+                    payment_requests_sent: 0
+                  }
+                },
+                { signal }
+              ),
+            15_000
+          );
+        return true;
+      } catch {
+        return false;
+      }
+    };
     try {
-      await browserSettings.checkSavedConnection();
-      if (disposed) return;
-      const credential = await localCredential();
+      await browserSettings.checkSavedConnection(current);
+      if (!current()) return;
+      credential = await localCredential();
+      if (!current()) return;
+      clearPendingOpenCredential = clearCredential;
       parseDirectCredential(credential);
-      if (disposed) return;
+      if (!current()) return;
       launch = await rechargeApi.startBitBrowserOpen({
         id,
         connectionProfileId: settingsQuery.data.value?.connectionProfileId ?? null,
@@ -1067,22 +1161,68 @@ export function useAutoRecharge(options: { clearPaymentValidation?: () => void }
           ? { chatgptAccountId: selectedBankAccountId.value }
           : {})
       });
+      if (!current()) {
+        clearCredential();
+        await releaseUnreceived(launch);
+        return;
+      }
       currentId.value = id;
-      await directOpen.start(launch, credential, windowName.value.trim());
+      if (current()) {
+        const now = new Date().toISOString();
+        // 只展示当前网页已接管的登录任务，不覆盖服务端读取结果或保留敏感资料。
+        directTaskDisplay.value = {
+          id,
+          action: 'bitbrowser',
+          state: 'running',
+          plan: plan.value,
+          result: {
+            mode: 'open_browser',
+            transport: 'web_direct',
+            status: 'running',
+            stage: 'bitbrowser_group',
+            payment_attempted: false,
+            payment_requests_sent: 0
+          },
+          createdAt: now,
+          updatedAt: now
+        };
+      }
+      const starting = directOpen.start(launch, credential, windowName.value.trim(), identityEpoch);
+      if (clearPendingOpenCredential === clearCredential) clearPendingOpenCredential = undefined;
+      if (directOpen.owns(id)) busy.value = false;
+      await starting;
+      if (!current()) return;
       connectorStatus.value = 'online';
       connectorMessage.value = '网页已直连比特浏览器，登录进度见执行状态';
     } catch (cause) {
-      error.value = getApiErrorMessage(cause);
-      if (launch && !directOpen.owns(id)) {
-        try {
-          await rechargeApi.abandonUnreceivedBitBrowser(id);
-        } catch {
-          error.value = '网页登录任务接收结果待核验，请刷新原任务；本次不会自动重发。';
+      if (current() && !error.value)
+        error.value = isApiError(cause)
+          ? rechargeExecutionFailure(cause)
+          : getApiErrorMessage(cause);
+      if (launch && !directOpen.handles?.(id)) {
+        const released = await releaseUnreceived(launch);
+        if (!released && current()) {
+          error.value += ' 登录任务结束结果待核验，请刷新原任务；本次不会自动重发。';
         }
       }
     } finally {
-      await refresh();
-      busy.value = false;
+      if (!directOpen.handles?.(id)) {
+        clearCredential();
+        if (launch) {
+          launch.agentToken = '';
+          launch.connectorToken = '';
+          launch.bitBrowser.localApiToken = '';
+          launch.bitBrowser.dynamicProxyUrl = '';
+          if (launch.bitBrowser.staticProxyCredentials)
+            launch.bitBrowser.staticProxyCredentials.password = '';
+        }
+      }
+      if (clearPendingOpenCredential === clearCredential) clearPendingOpenCredential = undefined;
+      if (current()) {
+        openStartPending = false;
+        if (!directCancelling) busy.value = false;
+        void refresh();
+      }
     }
   }
 
@@ -1435,14 +1575,17 @@ export function useAutoRecharge(options: { clearPaymentValidation?: () => void }
     busy.value = true;
     error.value = '';
     const id = selected.value.id;
+    directCancelling = directOpen.owns(id);
     try {
       if (
         selected.value.result.mode === 'open_browser' &&
         selected.value.result.transport === 'web_direct'
       ) {
-        if (directOpen.owns(id)) await directOpen.cancel(id);
-        if (jobs.value.find((job) => job.id === id)?.state !== 'finished')
-          await rechargeApi.cancelBitBrowser(id);
+        if (directOpen.owns(id)) {
+          await directOpen.cancel(id);
+          return;
+        }
+        await rechargeApi.cancelBitBrowser(id);
         return;
       }
       if (selected.value.action === 'server') {
@@ -1463,8 +1606,9 @@ export function useAutoRecharge(options: { clearPaymentValidation?: () => void }
     } catch (cause) {
       error.value = getApiErrorMessage(cause);
     } finally {
-      await refresh();
+      directCancelling = false;
       busy.value = false;
+      void refresh();
     }
   }
 
@@ -1503,6 +1647,11 @@ export function useAutoRecharge(options: { clearPaymentValidation?: () => void }
     authorizeSinglePayment.value = false;
     details.value.cvc = '';
     localAccess.value = null;
+    directTaskDisplay.value = undefined;
+    openStartGeneration++;
+    openStartPending = false;
+    clearPendingOpenCredential?.();
+    clearPendingOpenCredential = undefined;
   });
 
   return {

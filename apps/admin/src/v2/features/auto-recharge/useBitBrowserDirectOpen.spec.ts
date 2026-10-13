@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { useBitBrowserDirectOpen } from './useBitBrowserDirectOpen';
 import { DirectBrowserError } from './bitbrowser-direct-api';
 import type { V2RechargeBitBrowserOpenLaunch } from './contracts';
+import { ApiError } from '@/api/apiError';
 const mock = vi.hoisted(() => ({ run: vi.fn(), callback: vi.fn(), cancel: vi.fn() }));
 vi.mock('./bitbrowser-direct-login', () => ({ runDirectLogin: mock.run }));
 vi.mock('./api', () => ({
@@ -116,7 +117,8 @@ describe('网页直连登录任务生命周期', () => {
     expect(mock.callback.mock.calls.find(([, , input]) => input.type === 'restore')).toEqual([
       'job-fixture',
       'fixture-only-agent',
-      { type: 'restore', accountKey: ownedProfile.accountKey }
+      { type: 'restore', accountKey: ownedProfile.accountKey },
+      { signal: expect.any(AbortSignal) }
     ]);
     expect(mock.callback.mock.calls.at(-1)?.[2]).toMatchObject({
       type: 'finished',
@@ -306,6 +308,88 @@ describe('仅登录窗口控制器收尾', () => {
     expect(flow.running.value).toBe(false);
     expect(mock.callback).toHaveBeenCalledOnce();
     expect(error).not.toHaveBeenCalled();
+    scope.stop();
+  });
+  it('页面读取挂起时进度继续保存、登录正常结束，只合并一次补读', async () => {
+    let release!: () => void;
+    const reading = new Promise<void>((resolve) => (release = resolve));
+    const refresh = vi.fn().mockReturnValueOnce(reading).mockResolvedValue(undefined);
+    mock.run.mockImplementation(async (_settings, _credential, _name, _signal, hooks) => {
+      await hooks.progress('owned_profile_check', { browser_profile_id: 'a'.repeat(32) });
+      await hooks.progress('session_restore', {});
+      return { status: 'session_ready', account_matched: true };
+    });
+    const scope = effectScope();
+    const flow = scope.run(() => useBitBrowserDirectOpen(refresh, vi.fn()))!;
+    await flow.start(launch(), { sessionJson: 'fixture-json' }, '测试窗口');
+    await vi.waitFor(() => expect(flow.running.value).toBe(false));
+    expect(refresh).toHaveBeenCalledOnce();
+    expect(mock.callback.mock.calls.map(([, , input]) => input.type)).toEqual([
+      'progress',
+      'progress',
+      'progress',
+      'finished'
+    ]);
+    release();
+    await vi.waitFor(() => expect(refresh).toHaveBeenCalledTimes(2));
+    scope.stop();
+  });
+  it('原始409及请求编号不会被终态保存失败、取消结果或迟到页面读取错误覆盖', async () => {
+    const primary = new ApiError('原单付款状态未安全核实，不能更换比特窗口', {
+      code: 'RECHARGE_PROFILE_CONFLICT',
+      kind: 'conflict',
+      requestId: 'fixture-original-request-id',
+      status: 409,
+      retryable: false
+    });
+    let failRead!: (reason: unknown) => void;
+    const refresh = vi.fn(() => new Promise<void>((_resolve, reject) => (failRead = reject)));
+    mock.callback.mockResolvedValueOnce({ ok: true }).mockRejectedValue(primary);
+    mock.run.mockImplementation(async (_settings, _credential, _name, _signal, hooks) => {
+      await hooks.progress('owned_profile_check', {});
+    });
+    const report = vi.fn();
+    const scope = effectScope();
+    const flow = scope.run(() => useBitBrowserDirectOpen(refresh, report))!;
+    await flow.start(launch(), { sessionJson: 'fixture-json' }, '测试窗口');
+    await vi.waitFor(() => expect(flow.running.value).toBe(false));
+    expect(mock.cancel).toHaveBeenCalledOnce();
+    expect(report.mock.lastCall?.[0]).toContain(primary.message);
+    expect(report.mock.lastCall?.[0]).toContain(primary.code);
+    expect(report.mock.lastCall?.[0]).toContain(primary.requestId);
+    expect(report.mock.lastCall?.[0]).toContain('资料已解锁');
+    const reports = report.mock.calls.length;
+    failRead(new Error('fixture-delayed-read-failure'));
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(report).toHaveBeenCalledTimes(reports);
+    scope.stop();
+  });
+  it('首进度请求挂起时也可以立即停止，收尾使用独立信号并清理资料', async () => {
+    let initialSignal!: AbortSignal;
+    mock.callback.mockImplementationOnce((_id, _token, _input, options) => {
+      initialSignal = options.signal;
+      return new Promise(() => {});
+    });
+    const scope = effectScope();
+    const flow = scope.run(() => useBitBrowserDirectOpen(vi.fn(), vi.fn()))!;
+    const input = launch();
+    const credential = { sessionJson: 'fixture-json' };
+    const started = flow.start(input, credential, '测试窗口');
+    const failed = expect(started).rejects.toThrow('已停止');
+    expect(flow.running.value).toBe(true);
+    await flow.cancel(input.id);
+    await failed;
+    expect(flow.running.value).toBe(false);
+    expect(initialSignal.aborted).toBe(true);
+    expect(mock.run).not.toHaveBeenCalled();
+    expect(mock.callback.mock.calls.at(-1)?.[2]).toMatchObject({
+      type: 'finished',
+      result: { status: 'cancelled', cancellation_confirmed: true }
+    });
+    expect(mock.callback.mock.calls.at(-1)?.[3].signal.aborted).toBe(false);
+    expect(input.agentToken).toBe('');
+    expect(credential.sessionJson).toBe('');
     scope.stop();
   });
 });

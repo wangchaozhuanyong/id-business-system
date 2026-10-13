@@ -6,6 +6,11 @@ import type { Prisma } from '@prisma/client';
 import { assertEmployeeBusinessWriter } from '../../../v2-auth/system-super-admin';
 import { hash } from '../recharge-validation';
 import { isRechargeUpgrade } from '../recharge-upgrade-protocol';
+import { rechargeDocumentDigest } from '../recharge-callback-receipts';
+import { isClosedCycleDocument } from '../recharge-cycle-state';
+import { preserveRechargeResolutionMetadata } from '../recharge-ledger-metadata';
+import { assertUnpaidCheckoutRecoverySources } from '../recharge-checkout-recovery';
+import { createCycleArchive, closeCycleRecord, closeCycleJobs } from './recharge-cycle.repository';
 import {
   findOriginalRechargeCheckout,
   findRetainedRechargeBrowserProfile,
@@ -113,7 +118,8 @@ export class RechargeRepository {
     ownerId: string,
     accountKey: string,
     plan: string,
-    excludeId: string
+    excludeId: string,
+    unpaidRecoveryIdentifier?: string
   ) {
     let cursor: string | undefined;
     for (let page = 0; page < 30; page += 1) {
@@ -123,16 +129,25 @@ export class RechargeRepository {
           accountKey,
           plan,
           action: 'bitbrowser',
-          state: 'finished',
+          ...(!unpaidRecoveryIdentifier ? { state: 'finished' as const } : {}),
           id: { not: excludeId }
         },
         orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
         take: 30,
         ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {})
       });
-      const identifier = findOriginalRechargeCheckout(jobs, ownerId, accountKey, plan);
-      if (identifier) return identifier;
-      if (jobs.length < 30) return undefined;
+      if (unpaidRecoveryIdentifier) {
+        assertUnpaidCheckoutRecoverySources(jobs, ownerId, accountKey, plan);
+      } else {
+        const identifier = findOriginalRechargeCheckout(
+          jobs.filter((job) => !isClosedCycleDocument(job.result, accountKey)),
+          ownerId,
+          accountKey,
+          plan
+        );
+        if (identifier) return identifier;
+      }
+      if (jobs.length < 30) return unpaidRecoveryIdentifier;
       cursor = jobs.at(-1)!.id;
     }
     throw new ConflictException('原订单历史尚未完整核验，禁止自动创建新订单');
@@ -145,9 +160,13 @@ export class RechargeRepository {
     expected: (string | undefined)[]
   ) {
     const fileKey = `${accountKey}${plan === 'plus' ? '' : `-${plan}`}.json`;
-    const record = records.find((item) => item.fileKey === fileKey);
+    const current = records.filter(
+      (item) =>
+        !item.fileKey.startsWith('history/') && !isClosedCycleDocument(item.document, accountKey)
+    );
+    const record = current.find((item) => item.fileKey === fileKey);
     const identifiers = expected.filter((value): value is string => value !== undefined);
-    for (const item of records.filter((value) => value.fileKey.startsWith('payments/'))) {
+    for (const item of current.filter((value) => value.fileKey.startsWith('payments/'))) {
       if (!item.document || typeof item.document !== 'object' || Array.isArray(item.document))
         throw new ConflictException('原付款记录未核实，禁止创建新订单');
       const payment = item.document as Record<string, unknown>;
@@ -194,9 +213,14 @@ export class RechargeRepository {
   async updateJob(
     tx: V2CommandTransaction,
     id: string,
-    data: Prisma.IdBusinessV2RechargeJobUncheckedUpdateInput
+    data: Prisma.IdBusinessV2RechargeJobUncheckedUpdateInput,
+    options?: { factsOnly: true }
   ) {
-    if (data.state !== 'finished' && (typeof data.accountKey === 'string' || data.result)) {
+    if (
+      !options?.factsOnly &&
+      data.state !== 'finished' &&
+      (typeof data.accountKey === 'string' || data.result)
+    ) {
       const current = await this.findJob(tx, id);
       if (current && current.action === 'bitbrowser') {
         await this.assertExecutionResources(tx, id, {
@@ -403,21 +427,49 @@ export class RechargeRepository {
       document: object;
       ownerId: string;
       allowCheckoutReplacement?: boolean;
+      allowCycleReplacement?: boolean;
+      cycleOrigin?: object;
     }
   ) {
     const key = { accountKey: input.accountKey, fileKey: input.fileKey };
     const previous = await tx.idBusinessV2RechargeRecord.findUnique({
       where: { accountKey_fileKey: key }
     });
+    const before = previous?.document as Record<string, unknown> | undefined;
+    const replacingCycle =
+      input.allowCycleReplacement === true &&
+      !input.fileKey.startsWith('payments/') &&
+      (!previous || isClosedCycleDocument(before, input.accountKey));
+    const next: Record<string, unknown> = {
+      ...(input.document as Record<string, unknown>),
+      ...preserveRechargeResolutionMetadata(
+        before,
+        input.document as Record<string, unknown>,
+        replacingCycle
+      ),
+      ...(!replacingCycle && before?.cycle_resolution
+        ? { cycle_resolution: before.cycle_resolution }
+        : {}),
+      ...(!replacingCycle && before?.cycle_origin ? { cycle_origin: before.cycle_origin } : {}),
+      ...(input.cycleOrigin ? { cycle_origin: input.cycleOrigin } : {})
+    };
+    if (
+      previous &&
+      previous.ownerId === input.ownerId &&
+      previous.revision === input.revision + 1 &&
+      previous.document &&
+      rechargeDocumentDigest(previous.document) === rechargeDocumentDigest(next)
+    )
+      return { revision: previous.revision, replayed: true as const };
     if (
       (previous?.revision ?? 0) !== input.revision ||
       (previous && previous.ownerId !== input.ownerId)
     ) {
       throw new ConflictException('原订单版本冲突，禁止重复提交');
     }
-    const document = toV2JsonDocument(input.document);
-    const next = input.document as Record<string, unknown>;
-    const before = previous?.document as Record<string, unknown> | undefined;
+    if (before && isClosedCycleDocument(before, input.accountKey) && !replacingCycle)
+      throw new ConflictException('旧付款周期已归档，不能改写原结算');
+    const document = toV2JsonDocument(next);
     if (next.operation === 'subscription_upgrade') {
       if (
         !isRechargeUpgrade(next) ||
@@ -441,7 +493,7 @@ export class RechargeRepository {
         JSON.stringify(before.payment_evidence) !== JSON.stringify(next.payment_evidence)
       )
         throw new ConflictException('已核实的升级付款证据不可更换');
-    } else if (before?.operation === 'subscription_upgrade')
+    } else if (before?.operation === 'subscription_upgrade' && !replacingCycle)
       throw new ConflictException('升级原单类型不可更换');
     const replacingUnpaidCheckout =
       input.allowCheckoutReplacement === true &&
@@ -459,7 +511,8 @@ export class RechargeRepository {
     if (
       before?.checkout_identifier &&
       before.checkout_identifier !== next.checkout_identifier &&
-      !replacingUnpaidCheckout
+      !replacingUnpaidCheckout &&
+      !replacingCycle
     ) {
       throw new ConflictException('原订单编号不可更换');
     }
@@ -467,15 +520,22 @@ export class RechargeRepository {
       if (
         next.account_key !== input.accountKey ||
         next.payment_attempted !== true ||
-        ![0, 1].includes(Number(next.confirmation_requests_sent))
+        ![0, 1].includes(next.confirmation_requests_sent as number) ||
+        (next.payment_requests_sent !== undefined &&
+          ![0, 1].includes(next.payment_requests_sent as number))
       ) {
         throw new ConflictException('付款标记无效');
       }
       if (
         before &&
         (before.quote_digest !== next.quote_digest ||
+          rechargeDocumentDigest(before.quote) !== rechargeDocumentDigest(next.quote) ||
           Number(before.confirmation_requests_sent) > Number(next.confirmation_requests_sent) ||
-          (before.payment_status === 'paid' && next.payment_status !== 'paid'))
+          (before.payment_requests_sent === 1 && next.payment_requests_sent === 0) ||
+          (before.payment_status === 'paid' && next.payment_status !== 'paid') ||
+          (before.payment_evidence &&
+            rechargeDocumentDigest(before.payment_evidence) !==
+              rechargeDocumentDigest(next.payment_evidence)))
       ) {
         throw new ConflictException('原付款标记不能回退或变更报价');
       }
@@ -487,5 +547,15 @@ export class RechargeRepository {
       update: { document, revision }
     });
     return { revision };
+  }
+
+  createCycleArchive(...args: Parameters<typeof createCycleArchive>) {
+    return createCycleArchive(...args);
+  }
+  closeCycleRecord(...args: Parameters<typeof closeCycleRecord>) {
+    return closeCycleRecord(...args);
+  }
+  closeCycleJobs(...args: Parameters<typeof closeCycleJobs>) {
+    return closeCycleJobs(...args);
   }
 }

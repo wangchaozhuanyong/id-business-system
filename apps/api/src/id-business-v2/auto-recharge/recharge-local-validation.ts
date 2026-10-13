@@ -34,6 +34,7 @@ export function validateRechargeBitBrowserStart(value: unknown) {
   delete input.maxAmount;
   const allowedKeys = new Set([
     'id',
+    'subscriptionCycleProtocol',
     'connectionProfileId',
     'plan',
     'addressId',
@@ -51,6 +52,7 @@ export function validateRechargeBitBrowserStart(value: unknown) {
   ]);
   if (
     Object.keys(input).some((key) => !allowedKeys.has(key)) ||
+    (input.subscriptionCycleProtocol !== undefined && input.subscriptionCycleProtocol !== 1) ||
     typeof input.id !== 'string' ||
     !uuidPattern.test(input.id) ||
     !V2_RECHARGE_PLANS.includes(input.plan as never) ||
@@ -111,6 +113,7 @@ export function validateRechargeBitBrowserStart(value: unknown) {
     throw new BadRequestException('请选择有效的代理国家和代理 IP');
   }
   return {
+    ...(input.subscriptionCycleProtocol === 1 ? { subscriptionCycleProtocol: 1 as const } : {}),
     ...connectionSelection(input),
     cardId: input.cardId as string | undefined,
     billingName: input.billingName as string | undefined,

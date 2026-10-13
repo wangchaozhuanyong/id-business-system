@@ -103,7 +103,10 @@ def official_subscription(data, account_id):
         plan = account_plan(normalized, account_id)
     else:
         plan = account_plan(data, account_id)
+    entitlement = node.get('entitlement') if isinstance(node, dict) else None
+    active = entitlement.get('has_active_subscription') if isinstance(entitlement, dict) else None
     return {"current_plan": plan,
+            "has_active_subscription": active if type(active) is bool else None,
             "current_tier": 5 if raw_plan == "prolite" else 20 if raw_plan == "pro" else None}
 
 

@@ -33,7 +33,7 @@ export async function listRechargeJobs(
           : object(job.result);
       const publicResult = { ...storedResult };
       for (const key of Object.keys(publicResult))
-        if (key.startsWith('connection_')) delete publicResult[key];
+        if (key.startsWith('connection_') || key.startsWith('_')) delete publicResult[key];
       const result = resultWithConfirmation({ ...job, result: publicResult }, workerToken);
       return {
         ...job,
@@ -46,6 +46,7 @@ export async function listRechargeJobs(
         result: withResolutionVerification(result, job, items)
       };
     }),
-    configured: isRechargeWorkerConfigured()
+    configured: isRechargeWorkerConfigured(),
+    subscriptionCycleProtocol: 1 as const
   };
 }

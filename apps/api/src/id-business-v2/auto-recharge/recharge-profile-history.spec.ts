@@ -190,4 +190,68 @@ describe('原窗口归属历史查询', () => {
       expect.objectContaining({ cursor: { id: first.at(-1)!.id }, skip: 1 })
     );
   });
+
+  it('安全取消原单恢复必须核完下一页，较老未知付款仍阻止恢复', async () => {
+    const first = Array.from({ length: 30 }, (_, index) => ({
+      ...source(index),
+      result: {
+        checkout_identifier: `cs_unpaid_${index}`,
+        status: 'blocked',
+        stage: 'quote_read',
+        payment_attempted: false,
+        payment_requests_sent: 0,
+        payment_status: 'not_attempted'
+      }
+    }));
+    const unsafe = {
+      ...source(30),
+      result: {
+        checkout_identifier: 'cs_unknown',
+        payment_attempted: true,
+        payment_status: 'unknown'
+      }
+    };
+    const jobs = {
+      findMany: vi.fn().mockResolvedValueOnce(first).mockResolvedValueOnce([unsafe])
+    };
+    const repository = new RechargeRepository({} as never);
+    await expect(
+      repository.originalCheckoutForAccount(
+        { idBusinessV2RechargeJob: jobs } as never,
+        ownerId,
+        accountKey,
+        'plus',
+        currentId,
+        'cs_current_unpaid'
+      )
+    ).rejects.toThrow('历史付款状态未核实');
+    expect(jobs.findMany).toHaveBeenCalledTimes(2);
+  });
+
+  it('安全恢复仍保留历史查询上限，不把未查完的旧状态当成无付款', async () => {
+    const first = Array.from({ length: 30 }, (_, index) => ({
+      ...source(index),
+      result: {
+        checkout_identifier: `cs_unpaid_${index}`,
+        status: 'blocked',
+        stage: 'quote_read',
+        payment_attempted: false,
+        payment_requests_sent: 0,
+        payment_status: 'not_attempted'
+      }
+    }));
+    const jobs = { findMany: vi.fn().mockResolvedValue(first) };
+    const repository = new RechargeRepository({} as never);
+    await expect(
+      repository.originalCheckoutForAccount(
+        { idBusinessV2RechargeJob: jobs } as never,
+        ownerId,
+        accountKey,
+        'plus',
+        currentId,
+        'cs_current_unpaid'
+      )
+    ).rejects.toThrow('原订单历史尚未完整核验');
+    expect(jobs.findMany).toHaveBeenCalledTimes(30);
+  });
 });

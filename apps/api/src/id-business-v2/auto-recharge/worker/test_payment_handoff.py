@@ -617,20 +617,20 @@ class FlowIntegrationTests(unittest.IsolatedAsyncioTestCase):
         from subscription_upgrade import run_upgrade_in_context, UPGRADE_PATH
         from test_subscription_upgrade import preview, minor_money, details, action_intent
         target = parse_browser_credential(fixture())
-        context = SimpleNamespace(unroute=AsyncMock(), on=MagicMock(), remove_listener=MagicMock())
+        context = SimpleNamespace(remove_listener=MagicMock())
         frame = Frame('https://chatgpt.com/')
         page = SimpleNamespace(main_frame=frame, context=context)
-        def attach(_pattern, route):
-            context.guard = route.__self__
-        context.route = AsyncMock(side_effect=attach)
+        def attach(event, callback):
+            if event == 'request':
+                context.guard = callback.__self__
+                context.request_observer = callback
+        context.on = MagicMock(side_effect=attach)
         async def submit():
             request = Request('https://chatgpt.com' + UPGRADE_PATH, data=json.dumps({
                 'account_id': target.account_id, 'updated_plan': 'chatgptpro',
                 'payment_method_id': 'pm_Synthetic'}), frame=frame,
                 headers={'authorization': 'Bearer ' + target.old_token})
-            route = Route(request)
-            await context.guard.route(route)
-            self.assertTrue(route.passed)
+            context.request_observer(request)
         button = SimpleNamespace(click=AsyncMock(side_effect=submit))
         choice = SimpleNamespace(click=AsyncMock())
         job = server.Job(str(uuid4()), {'action': 'server', 'plan': 'pro-20x', 'safety': {

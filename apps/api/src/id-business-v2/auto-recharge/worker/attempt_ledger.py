@@ -36,7 +36,7 @@ def checkout_record_path(state_dir, account_id, target_plan="plus"):
     return state_dir / (key + ("" if target_plan == "plus" else "-" + target_plan) + ".json")
 
 
-def assert_no_other_payment(state_dir, account_id, checkout_id=None):
+def assert_no_other_payment(state_dir, account_id, checkout_id=None, *, next_cycle_grant=None, read_only=False):
     """同一账户已有付款尝试时只能复查原单，切换套餐不能绕过禁重付。"""
     key = hashlib.sha256(account_id.encode()).hexdigest()
     folder = state_dir / "payments"
@@ -49,6 +49,9 @@ def assert_no_other_payment(state_dir, account_id, checkout_id=None):
         if not isinstance(data, dict):
             raise Stop("invalid_payment_record")
         if data.get("account_key") == key and data.get("payment_attempted"):
+            from subscription_cycle import closed_payment_allowed, closed_payment_for_observation
+            if closed_payment_allowed(data, next_cycle_grant) or read_only and closed_payment_for_observation(data):
+                continue
             if data.get("operation") == "subscription_upgrade":
                 from subscription_upgrade import validate_upgrade_record
                 validate_upgrade_record(data, key, data.get("target_plan"))
@@ -163,7 +166,7 @@ def atomic_json(path: Path, data: dict):
 
 class AttemptLedger:
     def __init__(self, state_dir: Path, account_id: str, *, retry_rejected=False,
-                 replace_unpaid_checkout=False, target_plan="plus"):
+                 replace_unpaid_checkout=False, target_plan="plus", next_cycle_grant=None):
         self.root = state_dir
         self.account_id = account_id
         self.target_plan = target_plan
@@ -175,6 +178,7 @@ class AttemptLedger:
         self.previous = None
         self.previous_bytes = None
         self.record = None
+        self.next_cycle_grant = next_cycle_grant
 
     def __enter__(self):
         if self.root.is_symlink():
@@ -188,7 +192,12 @@ class AttemptLedger:
             self.fd = None
             raise Stop("account_operation_in_progress") from None
         try:
-            assert_no_other_payment(self.root, self.account_id)
+            assert_no_other_payment(self.root, self.account_id, next_cycle_grant=self.next_cycle_grant)
+            if self.next_cycle_grant is not None:
+                from subscription_cycle import grant_valid
+                if (not grant_valid(self.next_cycle_grant, self.key, self.target_plan)
+                        or self.next_cycle_grant['checkoutFileKey'] != self.path.name):
+                    raise Stop('invalid_subscription_cycle_state')
             if self.path.is_symlink():
                 raise Stop("unsafe_state_file")
             if self.path.exists():
@@ -204,7 +213,10 @@ class AttemptLedger:
                 allowed_retry = self.retry_rejected and rejected_retry_allowed(self.previous)
                 allowed_replacement = (self.replace_unpaid_checkout
                                        and unpaid_checkout_replacement_allowed(self.previous))
-                if not (allowed_retry or allowed_replacement):
+                from subscription_cycle import cycle_resolution_matches
+                allowed_cycle = (self.next_cycle_grant is not None
+                                 and cycle_resolution_matches(self.previous, self.next_cycle_grant))
+                if not (allowed_retry or allowed_replacement or allowed_cycle):
                     raise Stop("previous_checkout_attempt_exists", retry_eligible=rejected_retry_allowed(self.previous))
             elif self.retry_rejected:
                 raise Stop("retry_requires_rejected_record")
@@ -217,7 +229,7 @@ class AttemptLedger:
         if self.record is not None or self.fd is None:
             raise Stop("duplicate_checkout_blocked")
         retry_of = None
-        if self.previous_bytes is not None:
+        if self.previous_bytes is not None and self.next_cycle_grant is None:
             digest = hashlib.sha256(self.previous_bytes).hexdigest()
             history = self.root / "history"
             if history.is_symlink():
@@ -240,12 +252,21 @@ class AttemptLedger:
                   "target_plan": self.target_plan,
                   "account_matched": True, "current_plan_before": "free", "retry_of": retry_of,
                   "checkout_outcome": "unknown", "payment_status": "not_attempted", "transport": "official_browser"}
+        if self.next_cycle_grant is not None:
+            from subscription_cycle import grant_valid
+            if not grant_valid(self.next_cycle_grant, self.key, self.target_plan):
+                raise Stop('invalid_subscription_cycle_state')
+            record['next_cycle_grant'] = {key: self.next_cycle_grant[key]
+                for key in ('protocol', 'jobId', 'accountKey', 'targetPlan', 'reviewDigest')}
         atomic_json(self.path, record)
+        if self.next_cycle_grant is not None:
+            self.next_cycle_grant['status'] = 'consumed'
         self.record = record
 
     def finish(self, result: dict):
         if self.record is not None:
             self.record = {**self.record, **result}
+            self.record.pop('next_cycle_grant', None)
             atomic_json(self.path, self.record)
 
     def __exit__(self, *args):

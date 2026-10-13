@@ -31,12 +31,7 @@ import {
   assertFinalQuote
 } from './recharge-validation';
 import { completeUnknownPaymentResolution } from './recharge-resolution';
-import {
-  canRecreateRechargeBrowserProfile,
-  isBrowserProfileId,
-  rechargeCheckoutIdentifier,
-  staleProfile
-} from './recharge-job-helpers';
+import { isBrowserProfileId, staleProfile } from './recharge-job-helpers';
 import { sendRechargeWorkerRequest } from './recharge-worker-client';
 import { BankRechargeAccountService } from './bank-recharge-account.service';
 import { BankRechargeCardService } from './bank-recharge-card.service';
@@ -56,6 +51,18 @@ import { startRechargeJob } from './recharge-start';
 import { startServerRecheck } from './recharge-server-recheck';
 import { listRechargeJobs } from './recharge-job-list';
 import { completeRechargeLedgerCallback } from './recharge-ledger-callback';
+import {
+  assertNoPrivateRechargeCallback,
+  authorizeLocalRechargeCallback,
+  isRetiredRechargeCallback,
+  replayRechargeReceipt,
+  withRechargeReceipt
+} from './recharge-callback-receipts';
+import { completeRetiredRechargeCallback } from './recharge-retired-callback';
+import { restoreRechargeAccount } from './recharge-account-restore';
+import { prepareNextSubscriptionCycle } from './recharge-subscription-cycle';
+import { assertNoClientCycleFields } from './recharge-cycle-state';
+import { isNextCycleCheckoutMarker } from './recharge-cycle-ledger';
 import { IdBusinessV2TotpAccountService } from '../workspace/public-api';
 import {
   readRechargeHandoff,
@@ -199,14 +206,46 @@ export class RechargeService {
     )
       throw new ForbiddenException('执行器身份无效');
   }
-  async callback(id: string, value: unknown) {
+  async callback(id: string, value: unknown, context?: { localToken: unknown }) {
     if (!uuidPattern.test(id)) throw new BadRequestException('任务编号无效');
     const input = object(value);
+    assertNoPrivateRechargeCallback(input);
+    assertNoClientCycleFields(input);
     return this.transactions.execute(
       async (tx) => {
         await this.repository.lock(tx);
-        const job = await this.repository.active(tx, id);
+        const job = context
+          ? authorizeLocalRechargeCallback(
+              await this.repository.findJob(tx, id),
+              context.localToken
+            )
+          : await this.repository.active(tx, id);
+        if (context) {
+          const replay = replayRechargeReceipt(job, input);
+          if (replay !== undefined) return replay;
+          if (isRetiredRechargeCallback(job))
+            return completeRetiredRechargeCallback({
+              tx,
+              job,
+              callback: input,
+              repository: this.repository,
+              addressRepository: this.addressRepository,
+              audit: this.audit,
+              orders: this.bankOrders,
+              cards: this.bankCards,
+              names: this.names
+            });
+        }
         const accountKey = input.accountKey;
+        if (input.type === 'prepare_next_subscription_cycle') {
+          return prepareNextSubscriptionCycle({
+            tx,
+            job,
+            callback: input,
+            repository: this.repository,
+            audit: this.audit
+          });
+        }
         if (input.type === 'resolve_unknown_payment') {
           return completeUnknownPaymentResolution({
             tx,
@@ -217,90 +256,13 @@ export class RechargeService {
           });
         }
         if (input.type === 'restore') {
-          if (
-            typeof accountKey !== 'string' ||
-            !/^[a-f0-9]{64}$/.test(accountKey) ||
-            (job.accountKey && job.accountKey !== accountKey)
-          )
-            throw new BadRequestException('账户标识不一致');
-          const records = await this.repository.records(tx, accountKey);
-          if (records.some((record) => record.ownerId !== job.ownerId))
-            throw new ForbiddenException('该账户属于另一操作人的原任务');
-          if (job.chatgptAccountId && this.bankAccounts) {
-            await this.bankAccounts.assertOfficialAccount(tx, job.chatgptAccountId, accountKey);
-          }
-          const currentResult = object(job.result);
-          let ownedProfile =
-            job.action === 'bitbrowser'
-              ? await this.repository.retainedProfileForAccount(
-                  tx,
-                  job.ownerId,
-                  accountKey,
-                  job.id,
-                  canRecreateRechargeBrowserProfile(currentResult),
-                  currentResult.connection_api_key as string | undefined,
-                  currentResult.connection_profile_id as string | null | undefined
-                )
-              : undefined;
-          const finished =
-            job.action === 'bitbrowser'
-              ? []
-              : await this.repository.finishedJobsForAccount(tx, job.ownerId, accountKey, job.id);
-          const originalCheckoutIdentifier =
-            job.action === 'bitbrowser' &&
-            currentResult.mode !== 'open_browser' &&
-            currentResult.recheck_only !== true
-              ? this.repository.restoreCheckoutIdentifier(records, accountKey, job.plan, [
-                  rechargeCheckoutIdentifier(currentResult),
-                  await this.repository.originalCheckoutForAccount(
-                    tx,
-                    job.ownerId,
-                    accountKey,
-                    job.plan,
-                    job.id
-                  )
-                ])
-              : undefined;
-          if (
-            ownedProfile &&
-            isBrowserProfileId(currentResult.browser_profile_id) &&
-            currentResult.browser_profile_id !== ownedProfile.profileId
-          ) {
-            if (
-              currentResult.browser_profile_missing_confirmed !== true ||
-              currentResult.replaced_browser_profile_id !== ownedProfile.profileId
-            )
-              throw new ConflictException('本次任务已绑定另一比特窗口，不能覆盖原窗口');
-            ownedProfile = { ...ownedProfile, profileId: currentResult.browser_profile_id };
-          }
-          const staleProfiles =
-            job.action === 'bitbrowser'
-              ? []
-              : finished
-                  .map((item) => staleProfile(item))
-                  .filter((item): item is { sourceJobId: string; profileId: string } =>
-                    Boolean(item)
-                  );
-          await this.repository.updateJob(tx, id, {
-            accountKey,
-            ...(ownedProfile || originalCheckoutIdentifier
-              ? {
-                  result: toV2JsonDocument({
-                    ...currentResult,
-                    ...(ownedProfile ? { browser_profile_id: ownedProfile.profileId } : {}),
-                    ...(originalCheckoutIdentifier
-                      ? { checkout_identifier: originalCheckoutIdentifier }
-                      : {})
-                  })
-                }
-              : {})
+          return restoreRechargeAccount({
+            tx,
+            job,
+            callback: input,
+            repository: this.repository,
+            accounts: this.bankAccounts
           });
-          return {
-            records,
-            staleProfiles,
-            ...(ownedProfile ? { ownedProfile } : {}),
-            ...(originalCheckoutIdentifier ? { originalCheckoutIdentifier } : {})
-          };
         }
         if (input.type === 'stale_profile_cleanup') {
           if (
@@ -369,7 +331,7 @@ export class RechargeService {
           return { ok: true, updated };
         }
         if (input.type === 'ledger') {
-          return completeRechargeLedgerCallback({
+          const response = await completeRechargeLedgerCallback({
             tx,
             job,
             callback: input,
@@ -377,6 +339,12 @@ export class RechargeService {
             addressRepository: this.addressRepository,
             audit: this.audit
           });
+          return {
+            revision: response.revision,
+            ...(response.replayed && isNextCycleCheckoutMarker(job, input)
+              ? { replayed: true }
+              : {})
+          };
         }
         if (
           !['progress', 'details_required', 'confirmation', 'finished'].includes(String(input.type))
@@ -524,12 +492,23 @@ export class RechargeService {
         await this.repository.updateJob(tx, id, {
           state,
           nonceHash,
-          ...(job.action === 'bitbrowser' && input.type === 'progress'
+          ...(job.action === 'bitbrowser' &&
+          input.type === 'progress' &&
+          report.stage !== 'next_subscription_cycle_review'
             ? { leaseUntil: new Date(Date.now() + 45 * 60000) }
             : serverBusinessHandoff
               ? { leaseUntil: new Date(Date.now() + 16 * 60000) }
               : {}),
-          result: mergeRechargeCallbackResult(job, report, verifiedAt)
+          result: toV2JsonDocument(
+            input.type === 'finished'
+              ? withRechargeReceipt(
+                  job,
+                  object(mergeRechargeCallbackResult(job, report, verifiedAt)),
+                  input,
+                  { ok: true }
+                )
+              : mergeRechargeCallbackResult(job, report, verifiedAt)
+          )
         });
         return { ok: true };
       },

@@ -104,6 +104,8 @@ const quoted = (plan) => ({
   renewal_interval: 'monthly'
 });
 const connectionAcceptance = process.argv.includes('--connections');
+const cycleAcceptance = process.argv.includes('--cycles');
+const startupDiagnosticsAcceptance = process.argv.includes('--startup-diagnostics');
 const report = {
   scope: 'OFFLINE_SYNTHETIC_ONLY',
   builtPreview: process.argv.includes('--built'),
@@ -175,7 +177,11 @@ try {
             refreshSeen = true;
             await new Promise((done) => setTimeout(done, 700));
           }
-          return success(route, { items: jobs, configured: true });
+          return success(route, {
+            items: jobs,
+            configured: true,
+            ...(cycleAcceptance ? { subscriptionCycleProtocol: 1 } : {})
+          });
         }
         if (/\/auto-recharge\/jobs\/[^/]+$/.test(path) && request.method() === 'GET')
           return success(
@@ -282,6 +288,25 @@ try {
             connectorUrl: connector,
             connectorToken: 'c'.repeat(64)
           });
+        if (path.endsWith('/next-cycle-confirm') && request.method() === 'POST') {
+          const entry = local.get(path.split('/').at(-2));
+          assert.ok(entry?.cycle);
+          assert.deepEqual(request.postDataJSON(), {
+            reviewDigest: 'f'.repeat(64),
+            confirmedPreviousCycleEnded: true
+          });
+          assert.equal(entry.cycleConfirmed, false, '旧周期核实只受理一次');
+          assert.equal(confirmations, 2, '核实旧周期不会授权或提交新付款');
+          entry.cycleConfirmed = true;
+          const cycleReview = {
+            ...entry.job.result.cycle_review,
+            status: 'ready',
+            manualPreviousCycleEnded: true
+          };
+          entry.job.state = 'awaiting_confirmation';
+          entry.job.result = { ...entry.quoteResult, cycle_review: cycleReview };
+          return success(route, { cycleReview });
+        }
         if (path.endsWith('/auto-recharge/jobs/bitbrowser') && request.method() === 'POST') {
           const input = request.postDataJSON();
           assert.equal(JSON.stringify(input).includes('5555555555554444'), false);
@@ -289,7 +314,10 @@ try {
           assert.equal(input.authorizeSinglePayment, true);
           assert.equal(Object.hasOwn(input, 'maxAmount'), false);
           assert.equal(input.addressId, id.address);
-          const upgrading = ++apiStarts > 1;
+          const ordinal = ++apiStarts;
+          const upgrading = ordinal === 2;
+          const cycle = cycleAcceptance && ordinal === 3;
+          assert.equal(input.subscriptionCycleProtocol, cycleAcceptance ? 1 : undefined);
           const job = {
             id: input.id,
             chatgptAccountId: id.account,
@@ -309,11 +337,14 @@ try {
             nonce: 'n'.repeat(64),
             digest: 'd'.repeat(64),
             used: false,
-            upgrading
+            upgrading,
+            cycle,
+            cycleConfirmed: false
           });
           return success(route, {
             id: input.id,
             mode: 'payment',
+            ...(cycleAcceptance ? { subscriptionCycleProtocol: 1 } : {}),
             connectorUrl: connector,
             connectorToken: 'c'.repeat(64),
             agentToken: 'a'.repeat(64),
@@ -374,7 +405,8 @@ try {
             version,
             role: 'recharge',
             originAllowed: true,
-            busy: false,
+            busy:
+              cycleAcceptance && [...local.values()].some((entry) => entry.cycle && !entry.used),
             capabilities: [
               'browser-catalog',
               'browser-options',
@@ -389,7 +421,8 @@ try {
               'password-login',
               'login-code',
               'manual-payment-confirmation',
-              'recharge-process-isolation'
+              'recharge-process-isolation',
+              ...(cycleAcceptance ? ['next-subscription-cycle-v1'] : [])
             ]
           });
         if (path === '/browser/catalog')
@@ -407,8 +440,8 @@ try {
           assert.equal(Object.hasOwn(input.safety, 'maxAmount'), false);
           assert.equal(Object.hasOwn(input.safety, 'maxAmountMinor'), false);
           starts++;
-          entry.job.state = 'awaiting_confirmation';
-          entry.job.result = {
+          assert.equal(input.subscriptionCycleProtocol, cycleAcceptance ? 1 : undefined);
+          entry.quoteResult = {
             status: 'awaiting_confirmation',
             stage: 'payment_confirmation',
             account_matched: true,
@@ -433,6 +466,26 @@ try {
             locked_currency: 'PHP',
             window_name: input.windowName
           };
+          entry.job.state = entry.cycle ? 'awaiting_human_verification' : 'awaiting_confirmation';
+          entry.job.result = entry.cycle
+            ? {
+                status: 'awaiting_previous_cycle_confirmation',
+                stage: 'next_subscription_cycle_review',
+                account_matched: true,
+                current_plan: 'free',
+                payment_attempted: false,
+                payment_requests_sent: 0,
+                user_action_required: true,
+                window_name: input.windowName,
+                cycle_review: {
+                  protocol: 1,
+                  status: 'awaiting_previous_cycle_confirmation',
+                  reviewDigest: 'f'.repeat(64),
+                  expiresAt: new Date(Date.now() + 300000).toISOString(),
+                  reason: 'previous_period_unavailable'
+                }
+              }
+            : entry.quoteResult;
           return reply({ id: input.id, accepted: true }, 202);
         }
         const match = path.match(/^\/jobs\/([^/]+)(?:\/(confirm))?$/);
@@ -443,11 +496,12 @@ try {
             return reply({
               done: entry.used,
               waitingForUser: false,
-              status: entry.used ? 'finished' : 'awaiting_confirmation',
-              waitingForConfirmation: !entry.used,
+              status: entry.used ? 'finished' : entry.job.result.status,
+              waitingForConfirmation: !entry.used && (!entry.cycle || entry.cycleConfirmed),
               result: {
                 ...entry.job.result,
-                nonce: entry.used ? undefined : entry.nonce
+                nonce:
+                  entry.used || (entry.cycle && !entry.cycleConfirmed) ? undefined : entry.nonce
               }
             });
           const input = request.postDataJSON();
@@ -623,6 +677,56 @@ try {
     assert.equal(jobs.length, 2);
     assert.notEqual(jobs[0].id, jobs[1].id);
     assert.ok(jobs.every((job) => job.chatgptAccountId === id.account));
+    if (cycleAcceptance) {
+      await page.getByRole('button', { name: /继续.*账号.*升级/ }).click();
+      await loadJson();
+      await choosePlan('ChatGPT Plus');
+      await fillPayment();
+      await start.click();
+      const review = page.getByRole('button', { name: '核实旧周期已结束', exact: true });
+      await review.waitFor();
+      assert.equal(confirmations, 2, '只读周期核实没有发送付款');
+      assert.equal(await confirm.count(), 0, '旧周期核实阶段不显示付款确认');
+      assert.equal(await page.getByRole('button', { name: '继续原任务', exact: true }).count(), 0);
+      for (const theme of ['light', 'dark']) {
+        if (width < 900) await page.setViewportSize({ width: 1440, height: 1100 });
+        await page.getByTitle(theme === 'dark' ? '切换为深色主题' : '切换为浅色主题').click();
+        if (width < 900) await page.setViewportSize({ width, height: 1100 });
+        if (width < 900) {
+          await page.keyboard.press('Escape');
+          await page.waitForFunction(
+            () => document.querySelector('.v2-sidebar').getBoundingClientRect().right <= 0
+          );
+        }
+        await review.click();
+        const dialog = page.getByRole('dialog', { name: '核实旧订阅周期', exact: true });
+        await dialog.waitFor();
+        assert.equal((await dialog.getByText(/不授权扣款/).count()) > 0, true);
+        assert.equal(
+          await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth + 1),
+          false,
+          '核实弹窗在窄屏不能产生横向溢出'
+        );
+        await page.screenshot({
+          path: resolve(evidence, `cycle-review-${theme}-${width}.png`),
+          fullPage: true,
+          animations: 'disabled'
+        });
+        await dialog.getByRole('button', { name: '取消', exact: true }).click();
+        await dialog.waitFor({ state: 'hidden' });
+      }
+      await review.click();
+      const dialog = page.getByRole('dialog', { name: '核实旧订阅周期', exact: true });
+      await dialog.getByRole('button', { name: '确认旧周期已结束', exact: true }).click();
+      await confirm.waitFor();
+      assert.equal(confirmations, 2, '人工核实旧周期也没有授权付款');
+      await confirm.click();
+      await page.locator('.recharge-status').filter({ hasText: '开通成功' }).waitFor();
+      assert.equal(confirmations, 3, '新周期仍需独立一次官网报价确认');
+      assert.equal(local.get(jobs[0].id).cycleConfirmed, true);
+      assert.equal(jobs.length, 3);
+      assert.equal(new Set(jobs.map((job) => job.id)).size, 3, '三个任务保持不同原操作');
+    }
     slowRefresh = true;
     await page.getByRole('button', { name: '刷新原任务状态', exact: true }).click();
     await waitFor(() => refreshSeen);
@@ -793,6 +897,65 @@ try {
     assert.equal(await form.getByRole('combobox', { name: /ChatGPT 账号/ }).inputValue(), '');
     assert.match(await form.locator('.el-select').first().innerText(), /fixture@example.test/);
     assert.ok(await form.getByText(address.line1, { exact: true }).count());
+    if (startupDiagnosticsAcceptance) {
+      const requestsBeforeDiagnostics = confirmations;
+      const requestId = 'synthetic-' + 'a'.repeat(118);
+      jobs[0].state = 'finished';
+      jobs[0].result = {
+        status: 'blocked',
+        reason: 'durable_state_unavailable',
+        stage: 'connector_dispatch',
+        payment_attempted: false,
+        payment_requests_sent: 0,
+        callback_operation: 'restore',
+        callback_http_status: 409,
+        callback_failure_kind: 'http',
+        callback_error_code: 'CONFLICT',
+        callback_business_reason: 'callback_original_checkout_mismatch',
+        callback_request_id: requestId,
+        callback_raw_body: 'DIAGNOSTIC_SECRET_MUST_NOT_DISPLAY'
+      };
+      await page.getByRole('button', { name: '刷新原任务状态', exact: true }).click();
+      // The draft test clears the selected task. Select the synthetic record
+      // through the normal history drawer before checking its diagnosis.
+      await page.getByRole('button', { name: '最近执行记录', exact: true }).click();
+      const history = page.getByRole('dialog', { name: '最近执行记录', exact: true });
+      await history.locator('.recharge-history button').first().click();
+      await history.locator('.el-drawer__close-btn').click();
+      await history.waitFor({ state: 'hidden' });
+      const panel = page.locator('.recharge-status-panel');
+      await panel
+        .getByText(/原结算绑定不一致/)
+        .first()
+        .waitFor();
+      await panel.locator('.recharge-diagnostics > summary').click();
+      await panel.getByText(requestId, { exact: true }).waitFor();
+      assert.equal((await panel.innerText()).includes('DIAGNOSTIC_SECRET_MUST_NOT_DISPLAY'), false);
+      assert.equal((await panel.innerText()).includes('再处理历史付款锁'), false);
+      assert.equal(confirmations, requestsBeforeDiagnostics, '诊断展示不触发付款');
+      for (const theme of ['light', 'dark']) {
+        if (width < 900) await page.setViewportSize({ width: 1440, height: 1100 });
+        await page.getByTitle(theme === 'dark' ? '切换为深色主题' : '切换为浅色主题').click();
+        if (width < 900) {
+          await page.setViewportSize({ width, height: 1100 });
+          await page.keyboard.press('Escape');
+          await page.waitForFunction(
+            () => document.querySelector('.v2-sidebar').getBoundingClientRect().right <= 0
+          );
+        }
+        await panel.scrollIntoViewIfNeeded();
+        assert.equal(
+          await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth + 1),
+          false,
+          '长请求编号在窄屏不能产生横向溢出'
+        );
+        await page.screenshot({
+          path: resolve(evidence, `startup-diagnostics-${theme}-${width}.png`),
+          fullPage: true,
+          animations: 'disabled'
+        });
+      }
+    }
     assert.deepEqual(errors, []);
     assert.deepEqual(forbidden, []);
     report.cases.push({
@@ -809,6 +972,7 @@ try {
       sensitiveInputMaskAndReveal: 'PASS',
       countrySelectionReadonly: 'PASS',
       connectionProfileDraftIsolation: connectionAcceptance ? 'PASS' : 'NOT_RUN',
+      startupCallbackDiagnostics: startupDiagnosticsAcceptance ? 'PASS' : 'NOT_RUN',
       result: 'PASS'
     });
     await context.close();

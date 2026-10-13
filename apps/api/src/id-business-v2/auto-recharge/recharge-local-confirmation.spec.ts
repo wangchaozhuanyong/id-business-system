@@ -45,6 +45,7 @@ function harness() {
   const repository = {
     lock: vi.fn(),
     active: vi.fn(async () => job),
+    findJob: vi.fn(async () => job),
     byId: vi.fn(async () => job),
     updateJob: vi.fn(async (_tx, _id, data) => Object.assign(job, data))
   };

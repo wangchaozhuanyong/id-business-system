@@ -17,6 +17,8 @@ export function useRechargeLocalConfirmation(
   const uncertain = ref(false);
   let generation = 0;
   let disposed = false;
+  const sentJobs = new Set<string>();
+  let identityEpoch = sessionCoordinator.identityEpoch.value;
   const eligible = computed(
     () => job.value?.action === 'bitbrowser' && job.value.state === 'awaiting_confirmation'
   );
@@ -35,7 +37,8 @@ export function useRechargeLocalConfirmation(
       digest.value === job.value?.result.quote_digest &&
       !loading.value &&
       !busy.value &&
-      !uncertain.value
+      !uncertain.value &&
+      !sentJobs.has(job.value?.id ?? '')
   );
 
   function reset() {
@@ -45,12 +48,23 @@ export function useRechargeLocalConfirmation(
     expiresAt.value = '';
     loading.value = false;
     busy.value = false;
-    uncertain.value = false;
-    message.value = '';
+    uncertain.value = sentJobs.has(job.value?.id ?? '');
+    message.value = uncertain.value
+      ? '本次确认已发送，结果待核验。系统不会重复发送付款确认，请刷新原任务。'
+      : '';
   }
 
   async function readConfirmation() {
-    if (!eligible.value || !job.value || loading.value || busy.value || uncertain.value) return;
+    if (
+      disposed ||
+      !eligible.value ||
+      !job.value ||
+      loading.value ||
+      busy.value ||
+      uncertain.value ||
+      sentJobs.has(job.value.id)
+    )
+      return;
     const id = job.value.id;
     const expectedDigest = job.value.result.quote_digest;
     const revision = generation;
@@ -58,12 +72,27 @@ export function useRechargeLocalConfirmation(
     message.value = '';
     try {
       const access = await rechargeApi.bitBrowserAccess(id);
+      if (
+        disposed ||
+        revision !== generation ||
+        job.value?.id !== id ||
+        !eligible.value ||
+        job.value.result.quote_digest !== expectedDigest
+      )
+        return;
       const local = await rechargeConnectorApi.status(
         access.connectorUrl,
         access.connectorToken,
         id
       );
-      if (disposed || revision !== generation || job.value?.id !== id || !eligible.value) return;
+      if (
+        disposed ||
+        revision !== generation ||
+        job.value?.id !== id ||
+        !eligible.value ||
+        job.value.result.quote_digest !== expectedDigest
+      )
+        return;
       const result = local.result as Record<string, unknown> | undefined;
       if (
         local.status !== 'awaiting_confirmation' ||
@@ -101,8 +130,7 @@ export function useRechargeLocalConfirmation(
     const quoteDigest = digest.value;
     const revision = generation;
     busy.value = true;
-    uncertain.value = true;
-    nonce.value = '';
+    let invoked = false;
     try {
       const access = await rechargeApi.bitBrowserAccess(id);
       if (
@@ -110,9 +138,30 @@ export function useRechargeLocalConfirmation(
         revision !== generation ||
         job.value?.id !== id ||
         !eligible.value ||
-        job.value.result.quote_digest !== quoteDigest
+        job.value.result.quote_digest !== quoteDigest ||
+        nonce.value !== singleNonce ||
+        job.value.result.account_matched !== true ||
+        !['official_checkout_response', 'official_upgrade_preview'].includes(
+          job.value.result.quote_authority ?? ''
+        ) ||
+        job.value.result.quote?.plan !== job.value.plan ||
+        !job.value.result.quote?.today ||
+        job.value.result.payment_attempted === true ||
+        Number(job.value.result.payment_requests_sent ?? 0) !== 0 ||
+        Number(job.value.result.confirmation_requests_sent ?? 0) !== 0 ||
+        sentJobs.has(id)
       )
         return;
+      if (!(Date.parse(expiresAt.value) > Date.now())) {
+        nonce.value = '';
+        message.value = '本次报价确认已过期，请刷新原任务；尚未发送付款确认。';
+        return;
+      }
+      // 只有真正调用本机确认接口才消费凭据；发送标记不随状态或报价回跳清除。
+      sentJobs.add(id);
+      invoked = true;
+      uncertain.value = true;
+      nonce.value = '';
       await rechargeConnectorApi.confirm(
         access.connectorUrl,
         access.connectorToken,
@@ -125,7 +174,9 @@ export function useRechargeLocalConfirmation(
       refresh();
     } catch {
       if (revision !== generation || disposed) return;
-      message.value = '本次确认结果待核验，请刷新原任务。系统不会重复发送付款确认。';
+      message.value = invoked
+        ? '本次确认结果待核验，请刷新原任务。系统不会重复发送付款确认。'
+        : '无法读取原任务连接信息，尚未发送付款确认。请刷新确认状态后重试。';
     } finally {
       if (revision === generation) busy.value = false;
     }
@@ -139,6 +190,10 @@ export function useRechargeLocalConfirmation(
       sessionCoordinator.identityEpoch
     ],
     () => {
+      if (identityEpoch !== sessionCoordinator.identityEpoch.value) {
+        identityEpoch = sessionCoordinator.identityEpoch.value;
+        sentJobs.clear();
+      }
       reset();
       void readConfirmation();
     },
@@ -146,6 +201,7 @@ export function useRechargeLocalConfirmation(
   );
   onScopeDispose(() => {
     disposed = true;
+    sentJobs.clear();
     reset();
   });
   return {

@@ -481,8 +481,9 @@ const fs = require('node:fs');
 const cp = require('node:child_process');
 const yaml = require('js-yaml');
 const current = yaml.load(fs.readFileSync('.github/workflows/production-release.yml', 'utf8'));
-// The reviewed predecessor is immutable; HEAD already includes this addition in PR and main CI.
-const old = yaml.load(cp.execFileSync('git', ['show', 'e90f02a65cdf63b656e82eed6e25fd8a68a21b7b:.github/workflows/production-release.yml'], {encoding: 'utf8'}));
+// The reviewed diagnostic entry is immutable. HEAD may already contain it,
+// and unrelated successor entries must not change this read-only path.
+const old = yaml.load(cp.execFileSync('git', ['show', '302b65945d39ef8b1e08c2e35a64c5a89a41e455:.github/workflows/production-release.yml'], {encoding: 'utf8'}));
 const operation = 'diagnose_unpublished_component_runtime';
 const inputs = new Proxy({operation, historical_exception: 'none', reuse_image_run: ''}, {get: (v, k) => v[k] ?? ''});
 const always = () => true;
@@ -490,14 +491,15 @@ const startsWith = (v, p) => v.startsWith(p);
 const steps = current.jobs.release.steps;
 const stepContext = new Proxy({}, {get: () => ({outcome: 'failure'})});
 const enabled = steps.filter(s => !s.if || Function('inputs', 'always', 'startsWith', 'failure', 'steps', 'return (' + s.if + ')')(inputs, always, startsWith, () => true, stepContext));
+const oldEnabled = old.jobs.release.steps.filter(s => !s.if || Function('inputs', 'always', 'startsWith', 'failure', 'steps', 'return (' + s.if + ')')(inputs, always, startsWith, () => true, stepContext));
 const changed = steps.filter(s => old.jobs.release.steps.some(o => o.name === s.name && JSON.stringify(o) !== JSON.stringify(s))).map(s => s.name);
 console.log(JSON.stringify({concurrency: current.concurrency, oldConcurrency: old.concurrency,
  jobIf: current.jobs.release.if, permissions: current.permissions, oldPermissions: old.permissions,
  jobEnv: current.jobs.release.env, oldJobEnv: old.jobs.release.env,
- options: current.on.workflow_dispatch.inputs.operation.options,
+ options: current.on.workflow_dispatch.inputs.operation.options.filter(o => !['verify_recharge_flow', 'release_recharge_flow'].includes(o)),
  oldOptions: old.on.workflow_dispatch.inputs.operation.options,
  oldStepsRetained: old.jobs.release.steps.every(o => steps.some(s => s.name === o.name)), changed,
- added: steps.filter(s => !old.jobs.release.steps.some(o => o.name === s.name)), enabled}));
+ added: steps.filter(s => !old.jobs.release.steps.some(o => o.name === s.name)), enabled, oldEnabled}));
 """
         result = subprocess.run(['node', '-e', script], cwd=ROOT, capture_output=True, text=True, timeout=30)
         self.assertEqual(result.returncode, 0, result.stderr)
@@ -508,10 +510,10 @@ console.log(JSON.stringify({concurrency: current.concurrency, oldConcurrency: ol
         self.assertEqual(value['jobIf'], "github.ref == 'refs/heads/main'")
         self.assertEqual(value['jobEnv'].pop('TZ'), 'Asia/Kuala_Lumpur')
         self.assertEqual(value['jobEnv'], value['oldJobEnv'])
-        self.assertEqual(value['options'], value['oldOptions'][:2] + [m.OPERATION] + value['oldOptions'][2:])
+        self.assertEqual(value['options'], value['oldOptions'])
+        self.assertIn(m.OPERATION, value['options'])
         self.assertTrue(value['oldStepsRetained'])
-        self.assertEqual(value['changed'], ['Verify read-only SSM command access'])
-        self.assertEqual(len(value['added']), 2)
+        self.assertEqual(value['enabled'], value['oldEnabled'])
         names = [step['name'] for step in value['enabled']]
         self.assertIn('Verify exact source and passing Quality Gate', names)
         self.assertIn('Validate release policy and reviewed seal selection', names)
@@ -519,10 +521,11 @@ console.log(JSON.stringify({concurrency: current.concurrency, oldConcurrency: ol
         self.assertIn('Check AWS identity and production target', names)
         self.assertNotIn('Verify read-only SSM command access', names)
         self.assertEqual(len(value['enabled']), 8, names)
-        diagnostic = next(step for step in value['added'] if 'run' in step)
+        diagnostic = next(step for step in value['enabled'] if step.get('run') ==
+                          'python3 -B scripts/production-release/' + m.NAME + ' diagnose')
         self.assertEqual(diagnostic['run'], 'python3 -B scripts/production-release/' + m.NAME + ' diagnose')
         self.assertEqual(diagnostic['timeout-minutes'], 18)
-        artifact = next(step for step in value['added'] if 'uses' in step)
+        artifact = next(step for step in value['enabled'] if step.get('uses', '').startswith('actions/upload-artifact@'))
         self.assertEqual(artifact['uses'], 'actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02')
         self.assertEqual(len(artifact['with']['path'].splitlines()), 8)
         self.assertTrue(all(line.startswith('.deploy/production-release/' + m.PREFIX + '-')

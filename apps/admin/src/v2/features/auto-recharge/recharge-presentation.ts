@@ -1,5 +1,10 @@
 import type { V2RechargeJob } from './contracts';
 import type { BankRechargeOrderStatus } from './bank-recharge-api';
+import {
+  rechargeCallbackDiagnostics,
+  rechargeCallbackFailureSummary
+} from './recharge-callback-diagnostics';
+export { rechargeCallbackDiagnostics } from './recharge-callback-diagnostics';
 
 export const planLabels = {
   go: 'ChatGPT Go',
@@ -73,6 +78,8 @@ const labels: Record<string, string> = {
   open_browser: '仅登录窗口',
   session_ready: '账号已登录，窗口已就绪',
   session_restore: '正在加载官网并核对账号',
+  next_subscription_cycle_review: '正在只读核实旧订阅周期',
+  awaiting_previous_cycle_confirmation: '等待本人核实旧周期已结束',
   proxy_resolving: '正在提取本次代理 IP',
   proxy_verifying: '正在核实代理出口 IP 和国家',
   proxy_retrying: '已关闭失败浏览器，正在更换代理 IP',
@@ -605,6 +612,8 @@ function issueAction(job: V2RechargeJob, reason?: string, paymentFailure?: strin
   }
   if (reason === 'bitbrowser_cleanup_unverified')
     return '请先在比特浏览器确认本任务的失败窗口已关闭，再重新开始。';
+  if (reason === 'durable_state_unavailable')
+    return '请先使用“只读复查原订单”；确认账号仍为免费版且银行卡没有收到请求后，再处理历史付款锁。';
   if (
     ['verification_required', 'bank_verification_required'].includes(String(reason)) ||
     job.result.user_action_required === true
@@ -653,6 +662,8 @@ export function rechargeIssueFeedback(job: V2RechargeJob): RechargeIssueFeedback
     };
   }
   const reason = typeof job.result.reason === 'string' ? job.result.reason : undefined;
+  const callbackDiagnostic = rechargeCallbackDiagnostics(job);
+  const callbackSummary = rechargeCallbackFailureSummary(job);
   if (reason) {
     if (
       reason === 'durable_state_unavailable' &&
@@ -674,7 +685,13 @@ export function rechargeIssueFeedback(job: V2RechargeJob): RechargeIssueFeedback
     ) {
       return {
         title: '执行记录未确认',
-        message: '本机助手与服务器的执行记录尚未确认，已暂停本次操作。',
+        message: [
+          callbackDiagnostic.businessReason,
+          '本机助手与服务器的执行记录尚未确认，已暂停本次操作。',
+          callbackSummary
+        ]
+          .filter(Boolean)
+          .join(' '),
         action:
           '请先检查本机助手与服务器的记录接口，并保留本次执行记录供排查。历史订单的付款情况仍需单独核实。'
       };
@@ -687,13 +704,16 @@ export function rechargeIssueFeedback(job: V2RechargeJob): RechargeIssueFeedback
     };
     return {
       title: job.result.user_action_required === true ? '需要你处理' : '本次未完成原因',
-      message:
-        typeof job.result.page_state === 'string' && pageMessages[job.result.page_state]
-          ? pageMessages[job.result.page_state]!
-          : ['session_network_error', 'browser_operation_failed'].includes(reason) &&
-              job.result.browser_error_code
-            ? browserFailureLabel(job.result.error_type, job.result.browser_error_code)
-            : failureReasonLabel(reason),
+      message: callbackDiagnostic.businessReason
+        ? `${callbackDiagnostic.businessReason}。${callbackSummary}`
+        : callbackSummary
+          ? `${failureReasonLabel(reason)}。${callbackSummary}`
+          : typeof job.result.page_state === 'string' && pageMessages[job.result.page_state]
+            ? pageMessages[job.result.page_state]!
+            : ['session_network_error', 'browser_operation_failed'].includes(reason) &&
+                job.result.browser_error_code
+              ? browserFailureLabel(job.result.error_type, job.result.browser_error_code)
+              : failureReasonLabel(reason),
       action: issueAction(job, reason)
     };
   }

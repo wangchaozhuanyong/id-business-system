@@ -106,7 +106,7 @@ def outcome(payment_status, current_plan, evidence=None, *, target_plan="plus", 
 
 
 class PaymentLedger:
-    def __init__(self, root: Path, account_id: str, *, target_plan="plus", held_lock_fd=None):
+    def __init__(self, root: Path, account_id: str, *, target_plan="plus", held_lock_fd=None, next_cycle_grant=None, read_only=False):
         self.root, self.account_id = root, account_id
         plan_spec(target_plan)
         self.target_plan = target_plan
@@ -115,6 +115,8 @@ class PaymentLedger:
         self.held_lock_fd = held_lock_fd
         self.owns_lock = False
         self.record = None
+        self.next_cycle_grant = next_cycle_grant
+        self.read_only = read_only
 
     def __enter__(self):
         if self.root.is_symlink():
@@ -132,7 +134,8 @@ class PaymentLedger:
                 fcntl.flock(self.fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
             self.checkout = existing_checkout(self.root, self.account_id, self.target_plan)
             self.checkout_id = self.checkout["checkout_identifier"]
-            assert_no_other_payment(self.root, self.account_id, self.checkout_id)
+            assert_no_other_payment(self.root, self.account_id, self.checkout_id,
+                next_cycle_grant=self.next_cycle_grant, read_only=self.read_only)
             folder = self.root / "payments"
             if folder.is_symlink():
                 raise Stop("unsafe_state_directory")
@@ -179,8 +182,8 @@ class PaymentLedger:
             raise
 
     def assert_unattempted(self):
-        if self.record is not None:
-            raise Stop("previous_payment_attempt_exists", payment_status=self.record.get("payment_status", "unknown"),
+        if self.read_only or self.record is not None:
+            raise Stop("previous_payment_attempt_exists", payment_status=(self.record or {}).get("payment_status", "unknown"),
                        action="recheck_original_order_only", recheck_plan=self.target_plan,
                        checkout_identifier=self.checkout_id)
 
@@ -204,7 +207,7 @@ class PaymentLedger:
         self.record = record
 
     def mark_confirmation_sent(self):
-        if not self.record or self.record.get("confirmation_requests_sent"):
+        if self.read_only or not self.record or self.record.get("confirmation_requests_sent"):
             raise Stop("duplicate_payment_blocked")
         updated = {**self.record, "confirmation_requests_sent": 1, "stage": "payment_request_sending"}
         atomic_json(self.path, updated)

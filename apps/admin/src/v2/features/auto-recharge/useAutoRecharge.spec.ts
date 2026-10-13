@@ -12,6 +12,8 @@ import type { BankChatgptAccount } from './bank-recharge-api';
 import { RechargeConnectorError } from './connector-transport';
 import { useAutoRecharge } from './useAutoRecharge';
 import { clearV2SessionDrafts, useV2FormDraft } from '@/v2/composables/useV2SessionDraft';
+import { DirectBrowserError } from './bitbrowser-direct-api';
+import { sessionCoordinator } from '@/auth/sessionCoordinator';
 
 const mock = vi.hoisted(() => ({
   jobsQuery: {} as Record<string, unknown>,
@@ -44,6 +46,7 @@ const mock = vi.hoisted(() => ({
   recheckServer: vi.fn(),
   cancelServer: vi.fn(),
   startBitBrowserOpen: vi.fn(),
+  directBrowserCallback: vi.fn(),
   recheckBitBrowser: vi.fn(),
   resolveNoBankRequest: vi.fn(),
   cancelBitBrowser: vi.fn(),
@@ -63,6 +66,7 @@ const mock = vi.hoisted(() => ({
   directStart: vi.fn(),
   directRunning: undefined as Ref<boolean> | undefined,
   directOwns: vi.fn(),
+  directHandles: vi.fn(),
   directSubmitCode: vi.fn(),
   directCancel: vi.fn(),
   callbackUrl: vi.fn((id: string) => `https://admin.example/api/local/${id}`),
@@ -77,6 +81,7 @@ vi.mock('./useBitBrowserDirectOpen', () => ({
   useBitBrowserDirectOpen: () => ({
     start: mock.directStart,
     owns: mock.directOwns,
+    handles: mock.directHandles,
     running: mock.directRunning ?? ref(false),
     submitCode: mock.directSubmitCode,
     cancel: mock.directCancel
@@ -124,6 +129,7 @@ vi.mock('./api', () => ({
     recheckServer: mock.recheckServer,
     cancelServer: mock.cancelServer,
     startBitBrowserOpen: mock.startBitBrowserOpen,
+    directBrowserCallback: mock.directBrowserCallback,
     recheckBitBrowser: mock.recheckBitBrowser,
     resolveNoBankRequest: mock.resolveNoBankRequest,
     cancelBitBrowser: mock.cancelBitBrowser,
@@ -232,7 +238,10 @@ const resolutionLaunch: V2RechargeBitBrowserResolutionLaunch = {
   verificationJobId: '77777777-7777-4777-8777-777777777777'
 };
 
-const jobs = ref<{ configured: boolean; items: V2RechargeJob[] }>({ configured: true, items: [] });
+const jobs = ref<{ configured: boolean; items: V2RechargeJob[]; subscriptionCycleProtocol?: 1 }>({
+  configured: true,
+  items: []
+});
 const addresses = ref({
   items: [address],
   total: 1,
@@ -409,9 +418,13 @@ beforeEach(() => {
     groups: [{ id: 'group-direct', name: settings.groupName }],
     tags: [{ id: 'tag-direct', name: settings.tagName }]
   });
-  mock.directStart.mockResolvedValue(undefined);
+  mock.directStart.mockImplementation(async () => {
+    mock.directHandles.mockReturnValue(true);
+  });
   mock.directRunning = ref(false);
   mock.directOwns.mockReturnValue(false);
+  mock.directHandles.mockReturnValue(false);
+  mock.directBrowserCallback.mockResolvedValue({ ok: true });
   mock.directCancel.mockReset().mockResolvedValue(undefined);
 
   mock.cancelBitBrowser.mockResolvedValue({ id: launch.id });
@@ -735,6 +748,238 @@ describe('比特浏览器充值入口', () => {
       manualPaymentConfirmation: true
     });
   });
+  it.each([
+    [false, false],
+    [false, true],
+    [true, false],
+    [true, true]
+  ])(
+    '周期协议只在API=%s与原助手=%s同时支持并得到launch回传时启用，原最终付款确认保持',
+    async (apiReady, helperReady) => {
+      fillForm();
+      if (apiReady) jobs.value.subscriptionCycleProtocol = 1;
+      mock.connectorCatalog.mockResolvedValueOnce({
+        groups: [{ id: 'g', name: settings.groupName }],
+        tags: [{ id: 't', name: settings.tagName }],
+        connectorCapabilities: helperReady ? ['next-subscription-cycle-v1'] : []
+      });
+      mock.startBitBrowser.mockImplementationOnce(async (input) => ({
+        ...structuredClone(launch),
+        id: input.id,
+        ...(input.subscriptionCycleProtocol === 1 ? { subscriptionCycleProtocol: 1 } : {})
+      }));
+      await flow.start();
+      const apiInput = mock.startBitBrowser.mock.calls[0]?.[0];
+      const helperInput = mock.connectorStart.mock.calls[0]?.[2];
+      expect(apiInput?.subscriptionCycleProtocol).toBe(apiReady && helperReady ? 1 : undefined);
+      expect(helperInput?.subscriptionCycleProtocol).toBe(apiReady && helperReady ? 1 : undefined);
+      expect(apiInput).toMatchObject({
+        manualPaymentConfirmation: true,
+        authorizeSinglePayment: true
+      });
+      expect(helperInput?.safety).toMatchObject({
+        manualPaymentConfirmation: true,
+        authorizeSinglePayment: true
+      });
+    }
+  );
+  it('启动API未回传周期协议时不向助手冒充三方协议已匹配', async () => {
+    fillForm();
+    jobs.value.subscriptionCycleProtocol = 1;
+    mock.connectorCatalog.mockResolvedValueOnce({
+      groups: [{ id: 'g', name: settings.groupName }],
+      tags: [{ id: 't', name: settings.tagName }],
+      connectorCapabilities: ['next-subscription-cycle-v1']
+    });
+    await flow.start();
+    expect(mock.startBitBrowser.mock.calls[0]?.[0].subscriptionCycleProtocol).toBe(1);
+    expect(mock.connectorStart.mock.calls[0]?.[2].subscriptionCycleProtocol).toBeUndefined();
+  });
+  it('待返回姓名核实完成后，卡准备、任务账单姓名和本机详情均使用已验证姓名', async () => {
+    let release!: (value: unknown) => void;
+    mock.matchCardName.mockImplementationOnce(() => new Promise((resolve) => (release = resolve)));
+    fillForm();
+    const starting = flow.start();
+    await vi.waitFor(() => expect(mock.matchCardName).toHaveBeenCalledOnce());
+    expect(mock.preparePaymentCard).not.toHaveBeenCalled();
+    release({
+      name: 'Verified Synthetic Owner',
+      confirmed: true,
+      cardId: '55555555-5555-4555-8555-555555555555',
+      billingAddressId: null
+    });
+    await starting;
+    expect(flow.details.value.name).toBe('Verified Synthetic Owner');
+    expect(mock.preparePaymentCard.mock.calls[0]?.[0].name).toBe('Verified Synthetic Owner');
+    expect(mock.startBitBrowser.mock.calls[0]?.[0].billingName).toBe('Verified Synthetic Owner');
+    expect(mock.connectorStart.mock.calls[0]?.[2].details.name).toBe('Verified Synthetic Owner');
+  });
+  it('姓名匹配自动回填原卡账单地址后，最终任务引用与页面地址一致且不改变账号、方案和币种', async () => {
+    const linked = {
+      ...address,
+      id: '88888888-8888-4888-8888-888888888888',
+      line1: 'Verified Billing Avenue'
+    };
+    addresses.value.items = [address, linked];
+    let release!: (value: unknown) => void;
+    mock.matchCardName.mockImplementationOnce(() => new Promise((resolve) => (release = resolve)));
+    mock.startBitBrowser.mockImplementationOnce(async (input) => ({
+      ...structuredClone(launch),
+      id: input.id,
+      address: { ...launch.address, id: linked.id, line1: linked.line1 }
+    }));
+    fillForm();
+    const originalPlan = flow.plan.value;
+    const originalCurrency = flow.lockedCurrency.value;
+    const originalEmail = flow.details.value.email;
+    const starting = flow.start();
+    await vi.waitFor(() => expect(mock.matchCardName).toHaveBeenCalledOnce());
+    release({
+      name: 'Verified Synthetic Owner',
+      confirmed: true,
+      cardId: '55555555-5555-4555-8555-555555555555',
+      billingAddressId: linked.id
+    });
+    await starting;
+    expect(flow.selectedAddressId.value).toBe(linked.id);
+    expect(flow.details.value.line1).toBe(linked.line1);
+    expect(mock.startBitBrowser.mock.calls[0]?.[0]).toMatchObject({
+      addressId: linked.id,
+      billingName: 'Verified Synthetic Owner',
+      plan: originalPlan,
+      lockedCurrency: originalCurrency,
+      expectedEmail: originalEmail
+    });
+    expect(mock.connectorStart.mock.calls[0]?.[2].address).toMatchObject({
+      id: linked.id,
+      line1: linked.line1
+    });
+    expect(mock.startBitBrowser).toHaveBeenCalledOnce();
+  });
+  it.each(['name', 'card', 'card_reference', 'plan', 'currency', 'account'] as const)(
+    '姓名核实等待中明确修改%s时停止旧点击，不混用旧绑定和新输入',
+    async (change) => {
+      let release!: (value: unknown) => void;
+      mock.matchCardName.mockImplementationOnce(
+        () => new Promise((resolve) => (release = resolve))
+      );
+      fillForm();
+      const starting = flow.start();
+      await vi.waitFor(() => expect(mock.matchCardName).toHaveBeenCalledOnce());
+      if (change === 'name') flow.details.value.name = 'Manually Changed Owner';
+      else if (change === 'card') flow.details.value.number = '4111111111111111';
+      else if (change === 'card_reference')
+        flow.selectedPaymentCardId.value = 'operator-selected-card';
+      else if (change === 'plan') flow.plan.value = 'pro-20x';
+      else if (change === 'currency')
+        flow.lockedCurrency.value = flow.lockedCurrency.value === 'PHP' ? 'USD' : 'PHP';
+      else flow.loginMethod.value = 'password';
+      release({
+        name: 'Verified Synthetic Owner',
+        confirmed: true,
+        cardId: '55555555-5555-4555-8555-555555555555',
+        billingAddressId: null
+      });
+      await starting;
+      expect(mock.preparePaymentCard).not.toHaveBeenCalled();
+      expect(mock.startBitBrowser).not.toHaveBeenCalled();
+      expect(mock.connectorStart).not.toHaveBeenCalled();
+      expect(flow.busy.value).toBe(false);
+      expect(flow.error.value).toContain('核实期间已变化');
+    }
+  );
+  it('姓名匹配待返回时人工重选账单地址，不被旧自动回填覆盖且旧执行停留可重试', async () => {
+    const manual = {
+      ...address,
+      id: '88888888-8888-4888-8888-888888888888',
+      line1: 'Manual Billing Avenue'
+    };
+    addresses.value.items = [address, manual];
+    let release!: (value: unknown) => void;
+    mock.matchCardName.mockImplementationOnce(() => new Promise((resolve) => (release = resolve)));
+    fillForm();
+    const starting = flow.start();
+    await vi.waitFor(() => expect(mock.matchCardName).toHaveBeenCalledOnce());
+    flow.markAddressSelectionManual();
+    flow.selectedAddressId.value = manual.id;
+    release({
+      name: 'Verified Synthetic Owner',
+      confirmed: true,
+      cardId: '55555555-5555-4555-8555-555555555555',
+      billingAddressId: address.id
+    });
+    await starting;
+    expect(flow.selectedAddressId.value).toBe(manual.id);
+    expect(flow.details.value.line1).toBe(manual.line1);
+    expect(mock.preparePaymentCard).not.toHaveBeenCalled();
+    expect(mock.startBitBrowser).not.toHaveBeenCalled();
+    expect(flow.error.value).toContain('核实期间已变化');
+    expect(flow.busy.value).toBe(false);
+  });
+  it('充值预检等待读取时身份切换，旧点击不继续创建任务且旧finally不释放新操作busy', async () => {
+    fillForm();
+    let release!: () => void;
+    mock.checkCardAvailability.mockImplementationOnce(
+      () => new Promise<void>((resolve) => (release = resolve))
+    );
+    const starting = flow.start();
+    await vi.waitFor(() => expect(mock.checkCardAvailability).toHaveBeenCalledOnce());
+    sessionCoordinator.clearLocalSession({ reason: 'identity-switched', broadcast: false });
+    flow.error.value = '新身份充值提示';
+    flow.busy.value = true;
+    const refresh = mock.jobsQuery.refresh as ReturnType<typeof vi.fn>;
+    const reads = refresh.mock.calls.length;
+    release();
+    await starting;
+    expect(mock.preparePaymentCard).not.toHaveBeenCalled();
+    expect(mock.startBitBrowser).not.toHaveBeenCalled();
+    expect(mock.connectorStart).not.toHaveBeenCalled();
+    expect(flow.error.value).toBe('新身份充值提示');
+    expect(flow.busy.value).toBe(true);
+    expect(refresh).toHaveBeenCalledTimes(reads);
+  });
+  it('连接配置在预检途中变化时不混用旧连接和新任务，并保留用户表单', async () => {
+    fillForm();
+    let release!: () => void;
+    mock.checkCardAvailability.mockImplementationOnce(
+      () => new Promise<void>((resolve) => (release = resolve))
+    );
+    const starting = flow.start();
+    await vi.waitFor(() => expect(mock.checkCardAvailability).toHaveBeenCalledOnce());
+    const previous = storedSettings.value;
+    storedSettings.value = {
+      ...settings,
+      connectionProfileId: '11111111-1111-4111-8111-111111111111',
+      connectorUrl: 'http://127.0.0.1:55444'
+    };
+    release();
+    await starting;
+    expect(mock.startBitBrowser).not.toHaveBeenCalled();
+    expect(mock.connectorStart).not.toHaveBeenCalled();
+    expect(flow.busy.value).toBe(false);
+    expect(flow.error.value).toContain('连接配置已变化');
+    expect(flow.details.value.cvc).toBe('123');
+    storedSettings.value = previous;
+  });
+  it('旧周期人工核实阶段不沿用普通人工验证继续入口', async () => {
+    jobs.value.items = [
+      job('awaiting_human_verification', {
+        stage: 'next_subscription_cycle_review',
+        user_action_required: true,
+        cycle_review: {
+          protocol: 1,
+          status: 'awaiting_previous_cycle_confirmation',
+          reviewDigest: 'a'.repeat(64),
+          expiresAt: new Date(Date.now() + 300_000).toISOString()
+        }
+      })
+    ];
+    expect(flow.needsHuman.value).toBe(false);
+    expect(flow.workflowMessage.value).toContain('只读核实旧订阅周期');
+    expect(flow.workflowMessage.value).not.toContain('银行验证');
+    await flow.resume();
+    expect(mock.connectorResume).not.toHaveBeenCalled();
+  });
   it('账号密码只选择资料库账号，并使用受控 savedLogin，保留同账号 2FA', async () => {
     fillForm();
     await choosePasswordAccount(true, true);
@@ -974,6 +1219,193 @@ describe('比特浏览器充值入口', () => {
     expect(mock.startBitBrowser).not.toHaveBeenCalled();
     expect(mock.connectorStart).not.toHaveBeenCalled();
   });
+  it('登录启动完成后页面读取一直挂起也释放按钮，重复刷新合并一次补读', async () => {
+    flow.operationMode.value = 'open_browser';
+    flow.updateJsonInput(directSessionJson());
+    let release!: () => void;
+    const read = new Promise<void>((resolve) => (release = resolve));
+    const refresh = mock.jobsQuery.refresh as ReturnType<typeof vi.fn>;
+    refresh.mockReturnValueOnce(read).mockResolvedValue(undefined);
+    await flow.startOpen();
+    expect(flow.busy.value).toBe(false);
+    expect(mock.directStart).toHaveBeenCalledOnce();
+    const first = flow.refresh();
+    const second = flow.refresh();
+    expect(refresh).toHaveBeenCalledOnce();
+    release();
+    await Promise.all([first, second]);
+    expect(refresh).toHaveBeenCalledTimes(2);
+  });
+  it('网页拥有的任务取消由同一生命周期收尾，不能因旧列表未刷新再取消一次', async () => {
+    flow.operationMode.value = 'open_browser';
+    jobs.value.items = [job('running', { mode: 'open_browser', transport: 'web_direct' })];
+    flow.selectJob('job-fixture');
+    mock.directOwns.mockReturnValue(true);
+    expect(flow.canCancel.value).toBe(true);
+    await flow.cancel();
+    expect(mock.directCancel).toHaveBeenCalledExactlyOnceWith('job-fixture');
+    expect(mock.cancelBitBrowser).not.toHaveBeenCalled();
+    expect(flow.busy.value).toBe(false);
+  });
+  it('原任务已接管而首次进度及页面读取仍挂起时停止按钮可用，取消只收尾一次', async () => {
+    flow.operationMode.value = 'open_browser';
+    flow.updateJsonInput(directSessionJson());
+    let rejectStarted!: (cause: unknown) => void;
+    const started = new Promise<void>((_resolve, reject) => (rejectStarted = reject));
+    mock.directStart.mockImplementationOnce(() => {
+      mock.directRunning!.value = true;
+      mock.directOwns.mockReturnValue(true);
+      mock.directHandles.mockReturnValue(true);
+      return started;
+    });
+    const starting = flow.startOpen();
+    await vi.waitFor(() => expect(mock.directStart).toHaveBeenCalledOnce());
+    const id = mock.startBitBrowserOpen.mock.calls[0]?.[0].id;
+    expect(jobs.value.items).toEqual([]);
+    expect(flow.selected.value?.id).toBe(id);
+    expect(flow.selected.value?.result).toMatchObject({
+      mode: 'open_browser',
+      transport: 'web_direct',
+      payment_attempted: false
+    });
+    expect(flow.canCancel.value).toBe(true);
+    expect(flow.busy.value).toBe(false);
+    mock.directCancel.mockImplementationOnce(async () => {
+      rejectStarted(new DirectBrowserError('bitbrowser_direct_cancelled'));
+      await Promise.resolve();
+      // 启动的 finally 不能在取消收尾期间提前开放按钮。
+      expect(flow.busy.value).toBe(true);
+      mock.directOwns.mockReturnValue(false);
+      mock.directRunning!.value = false;
+    });
+    await flow.cancel();
+    await starting;
+    expect(mock.directCancel).toHaveBeenCalledExactlyOnceWith(id);
+    expect(mock.cancelBitBrowser).not.toHaveBeenCalled();
+    expect(mock.abandonUnreceivedBitBrowser).not.toHaveBeenCalled();
+    expect(flow.busy.value).toBe(false);
+  });
+  it('页面销毁后迟到的启动响应未被接管时仍释放原任务', async () => {
+    flow.operationMode.value = 'open_browser';
+    flow.updateJsonInput(directSessionJson());
+    let resolveLaunch!: (value: typeof launch) => void;
+    mock.startBitBrowserOpen.mockImplementationOnce(
+      () => new Promise((resolve) => (resolveLaunch = resolve))
+    );
+    const starting = flow.startOpen();
+    await vi.waitFor(() => expect(mock.startBitBrowserOpen).toHaveBeenCalledOnce());
+    scope.stop();
+    mock.directStart.mockRejectedValueOnce(new DirectBrowserError('bitbrowser_direct_cancelled'));
+    resolveLaunch(structuredClone(launch));
+    await starting;
+    expect(mock.abandonUnreceivedBitBrowser).toHaveBeenCalledOnce();
+    expect(flow.selected.value).toBeUndefined();
+    expect(mock.cancelBitBrowser).not.toHaveBeenCalled();
+  });
+  it('预检期间切换员工身份后旧点击不能创建任务、覆盖连接状态或释放新操作忙状态', async () => {
+    flow.operationMode.value = 'open_browser';
+    flow.updateJsonInput(directSessionJson());
+    let release!: (value: unknown) => void;
+    mock.directCatalog.mockImplementationOnce(() => new Promise((resolve) => (release = resolve)));
+    const starting = flow.startOpen();
+    await vi.waitFor(() => expect(mock.directCatalog).toHaveBeenCalledOnce());
+    sessionCoordinator.clearLocalSession({ reason: 'identity-switched', broadcast: false });
+    flow.error.value = '新身份的操作提示';
+    flow.connectorStatus.value = 'offline';
+    flow.connectorMessage.value = '新身份的连接提示';
+    flow.busy.value = true;
+    const refresh = mock.jobsQuery.refresh as ReturnType<typeof vi.fn>;
+    const reads = refresh.mock.calls.length;
+    release({
+      groups: [{ id: 'group-direct', name: settings.groupName }],
+      tags: [{ id: 'tag-direct', name: settings.tagName }]
+    });
+    await starting;
+    expect(mock.startBitBrowserOpen).not.toHaveBeenCalled();
+    expect(mock.loginCredential).not.toHaveBeenCalled();
+    expect(mock.directStart).not.toHaveBeenCalled();
+    expect(flow.error.value).toBe('新身份的操作提示');
+    expect(flow.connectorStatus.value).toBe('offline');
+    expect(flow.connectorMessage.value).toBe('新身份的连接提示');
+    expect(flow.busy.value).toBe(true);
+    expect(refresh).toHaveBeenCalledTimes(reads);
+  });
+  it('读取密码期间切换员工身份后不得创建任务或接管旧凭据', async () => {
+    await choosePasswordAccount(true, false);
+    flow.operationMode.value = 'open_browser';
+    let release!: (value: { email: string; password: string }) => void;
+    mock.loginCredential.mockImplementationOnce(
+      () => new Promise((resolve) => (release = resolve))
+    );
+    const starting = flow.startOpen();
+    await vi.waitFor(() => expect(mock.loginCredential).toHaveBeenCalledOnce());
+    sessionCoordinator.clearLocalSession({ reason: 'identity-switched', broadcast: false });
+    flow.error.value = '新身份提示';
+    flow.busy.value = true;
+    const refresh = mock.jobsQuery.refresh as ReturnType<typeof vi.fn>;
+    const reads = refresh.mock.calls.length;
+    release({ email: 'fixture@example.com', password: 'fixture-only-password' });
+    await starting;
+    expect(mock.startBitBrowserOpen).not.toHaveBeenCalled();
+    expect(mock.directStart).not.toHaveBeenCalled();
+    expect(flow.error.value).toBe('新身份提示');
+    expect(flow.busy.value).toBe(true);
+    expect(refresh).toHaveBeenCalledTimes(reads);
+  });
+  it.each([false, true])(
+    '启动API已接受后切身份，旧回执清理失败=%s也不能覆盖新身份的选中任务、错误或忙状态',
+    async (cleanupFails) => {
+      flow.operationMode.value = 'open_browser';
+      flow.updateJsonInput(directSessionJson());
+      let release!: (value: unknown) => void;
+      mock.startBitBrowserOpen.mockImplementationOnce(
+        () => new Promise((resolve) => (release = resolve))
+      );
+      const starting = flow.startOpen();
+      await vi.waitFor(() => expect(mock.startBitBrowserOpen).toHaveBeenCalledOnce());
+      const oldId = mock.startBitBrowserOpen.mock.calls[0]?.[0].id;
+      const original = structuredClone({ ...launch, id: oldId, mode: 'open_browser' });
+      const originalToken = original.agentToken;
+      sessionCoordinator.clearLocalSession({ reason: 'identity-switched', broadcast: false });
+      jobs.value.items = [{ ...job('finished'), id: 'new-user-job' }];
+      flow.selectJob('new-user-job');
+      flow.error.value = '新身份提示';
+      flow.connectorStatus.value = 'offline';
+      flow.connectorMessage.value = '新身份连接';
+      flow.busy.value = true;
+      const refresh = mock.jobsQuery.refresh as ReturnType<typeof vi.fn>;
+      const reads = refresh.mock.calls.length;
+      if (cleanupFails) mock.directBrowserCallback.mockRejectedValueOnce(new Error('已结束'));
+      release(original);
+      await starting;
+      expect(mock.directStart).not.toHaveBeenCalled();
+      expect(mock.abandonUnreceivedBitBrowser).not.toHaveBeenCalled();
+      expect(mock.directBrowserCallback).toHaveBeenCalledExactlyOnceWith(
+        oldId,
+        originalToken,
+        {
+          type: 'finished',
+          result: {
+            status: 'cancelled',
+            stage: 'connector_dispatch',
+            reason: 'bitbrowser_direct_cancelled',
+            cancellation_confirmed: true,
+            payment_attempted: false,
+            payment_requests_sent: 0
+          }
+        },
+        { signal: expect.any(AbortSignal) }
+      );
+      expect(original.agentToken).toBe('');
+      expect(original.bitBrowser.localApiToken).toBe('');
+      expect(flow.selected.value?.id).toBe('new-user-job');
+      expect(flow.error.value).toBe('新身份提示');
+      expect(flow.connectorStatus.value).toBe('offline');
+      expect(flow.connectorMessage.value).toBe('新身份连接');
+      expect(flow.busy.value).toBe(true);
+      expect(refresh).toHaveBeenCalledTimes(reads);
+    }
+  );
   it('账号密码辅助登录传已选账号引用以恢复所属窗口，不向启动接口传密码', async () => {
     await choosePasswordAccount(true, false);
     flow.operationMode.value = 'open_browser';

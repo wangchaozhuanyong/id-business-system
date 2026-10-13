@@ -95,6 +95,17 @@ describe('本机连接错误识别', () => {
       requireConnectorHealth({ ...health, capabilities: ['browser-catalog', 'browser-options'] })
     ).toThrow('版本过旧');
   });
+  it('原任务只读能力核对可观察正在等待人工的助手，不放宽新任务启动占用限制', () => {
+    const busy = { ...health, busy: true };
+    expect(requireConnectorHealth(busy, { allowBusy: true })).toBe(busy);
+    expect(() => requireConnectorHealth(busy)).toThrow('任务未结束');
+    expect(() =>
+      requireConnectorHealth({ ...busy, originAllowed: false }, { allowBusy: true })
+    ).toThrow('网站来源');
+    expect(() =>
+      requireConnectorHealth({ ...busy, capabilities: [] }, { allowBusy: true })
+    ).toThrow('版本过旧');
+  });
   it.each(['same-profile-proxy-recovery', 'json-page-ready'])(
     '缺少%s能力时拒绝旧助手，不能回退到删除窗口逻辑',
     (capability) => {
