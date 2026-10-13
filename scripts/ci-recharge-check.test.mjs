@@ -23,6 +23,43 @@ const gates = [
   'check:v2-concurrency-standard'
 ];
 
+test('disk retention controls run lifecycle suites without database acceptance', () => {
+  for (const part of ['guards', 'release-controls']) {
+    for (const changed of [
+      'scripts/production-release/disk-retention.py',
+      'scripts/production-release/disk-retention-install.py',
+      'scripts/production-release/disk-retention-transport.py',
+      '.github/workflows/disk-retention-maintenance.yml',
+      'scripts/production-release/candidate-retention.py',
+      'scripts/production-release/disk-lifecycle.test.py',
+      'scripts/production-release/release-storage.py',
+      'deploy/aws/disk-retention-policy-20261014.json'
+    ]) {
+      const calls = recordGuardCommands('ci-only', [changed], part);
+      for (const suite of [
+        'disk-retention.test.py',
+        'disk-retention-install.test.py',
+        'disk-retention-transport.test.py',
+        'candidate-retention.test.py',
+        'disk-lifecycle.test.py',
+        'release-storage.test.py'
+      ]) {
+        assert.equal(
+          calls.filter(
+            (call) => call.join(' ') === `python3 -B scripts/production-release/${suite}`
+          ).length,
+          1
+        );
+      }
+      assert.ok(
+        calls.every(
+          (call) => !call.includes('docker') && !call.some((arg) => arg.includes('mysql'))
+        )
+      );
+    }
+  }
+});
+
 test('Admin successor diagnostics always retain their offline controls', () => {
   for (const part of ['guards', 'release-controls']) {
     for (const changed of [
