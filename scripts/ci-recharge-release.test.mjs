@@ -586,9 +586,7 @@ test('independent Admin readback runs after successful deployment and saves only
   );
   assert.deepEqual(evidence.with.path.trim().split('\n'), [
     '.deploy/production-release/admin-independent-readback-invocation.json',
-    '.deploy/production-release/admin-independent-readback-result.json',
-    '.deploy/production-release/admin-pending-online-build-proof.json',
-    '.deploy/production-release/admin-pending-online-build-projection.json'
+    '.deploy/production-release/admin-independent-readback-result.json'
   ]);
   const enabled = new Function('inputs', 'always', 'steps', `return (${evidence.if});`);
   for (const outcome of ['success', 'failure', 'cancelled', 'skipped'])
@@ -868,6 +866,36 @@ test('f193 verify access selects only the sealed read-only preflight and always 
   );
   assert.equal(save.with.path, '.deploy/production-release/admin-confirm-preflight-*.json');
   assert.equal(save.with['include-hidden-files'], true);
+  const build = workflowSteps.find(
+    (row) => row.name === 'Save only sealed f193 Admin build source evidence'
+  );
+  const exportBuild = new Function('inputs', 'always', `return (${build.if});`);
+  assert.equal(
+    exportBuild({ operation: 'release_admin', expected_current: confirmAdminBaseline }, () => true),
+    true
+  );
+  for (const expected_current of [
+    '',
+    '60e164b75d1eedaab440c17139bf9ba55de08c61',
+    '31d2c6885a45817cd40d23fce8d6145bc9f18af2'
+  ])
+    assert.equal(
+      exportBuild({ operation: 'release_admin', expected_current }, () => true),
+      false
+    );
+  for (const operation of [
+    'verify_access',
+    'diagnose_unpublished_component_runtime',
+    'release_unpublished_components'
+  ])
+    assert.equal(
+      exportBuild({ operation, expected_current: confirmAdminBaseline }, () => true),
+      false
+    );
+  assert.deepEqual(build.with.path.trim().split('\n'), [
+    '.deploy/production-release/admin-pending-online-build-proof.json',
+    '.deploy/production-release/admin-pending-online-build-projection.json'
+  ]);
 });
 
 test('f193 confirmation profile builds and pushes only Admin and rejects mixed authorization inputs', () => {

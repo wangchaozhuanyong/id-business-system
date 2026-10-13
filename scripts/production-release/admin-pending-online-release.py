@@ -79,7 +79,8 @@ CONFIRM_CONTROLS = frozenset((
     'scripts/production-release/admin-pending-online-release.test.py',
     'scripts/production-release/validate-release-selection.sh',
     'scripts/production-release/dispatch.sh', '.github/workflows/production-release.yml',
-    'scripts/ci-recharge-release.test.mjs'))
+    'scripts/ci-recharge-release.test.mjs',
+    'scripts/production-release/unpublished-component-runtime-diagnostic.test.py'))
 CONFIRM_DOCS = frozenset(('docs/V2_TASKS.md', 'docs/CENTRAL_RELEASE_20261002.md',
     'docs/UNIFIED_SITE_RELEASE_20261013.md'))
 CONFIRM_HELPERS = ('remote-deploy.py', 'api-admin-pending-projection.py',

@@ -2606,6 +2606,16 @@ jobs:
           path: |
             .deploy/production-release/admin-independent-readback-invocation.json
             .deploy/production-release/admin-independent-readback-result.json
+          if-no-files-found: warn
+          include-hidden-files: true
+          retention-days: 14
+
+      - name: Save only sealed f193 Admin build source evidence
+        if: always() && inputs.operation == 'release_admin' && inputs.expected_current == 'f193f34ea09a2c37485c1582a81b33ee3acec865'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: admin-confirm-build-source-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
             .deploy/production-release/admin-pending-online-build-proof.json
             .deploy/production-release/admin-pending-online-build-projection.json
           if-no-files-found: warn

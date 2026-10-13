@@ -511,6 +511,96 @@ const apiOriginSelection = [
 ].join('\n');
 const expectedReadback = oldReadback.run.replace('    staged = ', apiOriginSelection + '    staged = ')
  .replace("receipt['apiComponentBaseline'] != os.environ['EXPECTED_CURRENT']", "receipt['apiComponentBaseline'] != expected_api_origin");
+// The separately authorised f193 profile must reconstruct the ORIGINAL B/60
+// program byte for byte. No other body, guard, helper or existing step may drift.
+const confirmBaseline = 'f193f34ea09a2c37485c1582a81b33ee3acec865';
+const confirmOrigin = [
+ "    confirm_baseline = 'f193f34ea09a2c37485c1582a81b33ee3acec865'",
+ "    confirm_profile = os.environ['EXPECTED_CURRENT'] == confirm_baseline",
+ "    if confirm_profile:",
+ "        if (proof['projection'].get('profile') != 'ADMIN_CONFIRM_EXPIRY_20261014'",
+ "                or proof['projection'].get('sourceBasisCommit') != confirm_baseline",
+ "                or expected_api_origin != confirm_baseline):",
+ "            raise RuntimeError('Admin confirmation readback origin unavailable')",
+ "    elif expected_api_origin != '31d2c6885a45817cd40d23fce8d6145bc9f18af2':",
+ "        raise RuntimeError('Admin readback API origin unavailable')", ''
+].join('\n');
+const originalOrigin = [
+ "    if expected_api_origin != '31d2c6885a45817cd40d23fce8d6145bc9f18af2':",
+ "        raise RuntimeError('Admin readback API origin unavailable')", ''
+].join('\n');
+const confirmHelpers = ["    if confirm_profile:",
+ "        names += ('unpublished-component-successor.py', 'api-admin-scope.py')", ''].join('\n');
+const replaceOnce = (source, fragment, replacement) => {
+ if (source.split(fragment).length !== 2) throw Error('Finite f193 fragment missing duplicated or changed');
+ return source.replace(fragment, replacement);
+};
+const originalReadback = source => replaceOnce(replaceOnce(source, confirmOrigin, originalOrigin), confirmHelpers, '');
+const validatesReadback = source => {
+ try { return originalReadback(source) === expectedReadback; } catch { return false; }
+};
+const confirmTamperRejections = [
+ readback.run.replace("confirm_profile = os.environ['EXPECTED_CURRENT'] == confirm_baseline", 'confirm_profile = True'),
+ readback.run.replace("get('profile') != 'ADMIN_CONFIRM_EXPIRY_20261014'", "get('profile') == 'ADMIN_CONFIRM_EXPIRY_20261014'"),
+ readback.run.replace("get('sourceBasisCommit') != confirm_baseline", "get('sourceBasisCommit') == confirm_baseline"),
+ readback.run.replace('or expected_api_origin != confirm_baseline', 'or False'),
+ readback.run.replace("names += ('unpublished-component-successor.py', 'api-admin-scope.py')", "names += ('remote-deploy.py',)"),
+ readback.run.replace(confirmHelpers, confirmHelpers + confirmHelpers),
+ readback.run.replace('    staged = ', '    raise RuntimeError("unreviewed body")\n    staged = ')
+].map(source => !validatesReadback(source));
+const confirmAccess = "inputs.operation == 'verify_access' && inputs.expected_current == '" + confirmBaseline + "'";
+const confirmRelease = "inputs.operation == 'release_admin' && inputs.expected_current == '" + confirmBaseline + "'";
+const confirmNames = ['Read sealed f193 Admin confirmation baseline without production changes',
+ 'Save sealed f193 Admin confirmation preflight safe evidence', 'Save only sealed f193 Admin build source evidence'];
+const confirmExpected = [
+ {name: confirmNames[0], if: confirmAccess,
+  run: 'python3 -B scripts/production-release/admin-pending-online-release.py access-preflight'},
+ {name: confirmNames[1], if: 'always() && ' + confirmAccess,
+  uses: 'actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02',
+  with: {name: 'admin-confirm-preflight-${{ github.run_id }}-${{ github.run_attempt }}',
+   path: '.deploy/production-release/admin-confirm-preflight-*.json',
+   'if-no-files-found': 'warn', 'include-hidden-files': true, 'retention-days': 14}},
+ {name: confirmNames[2], if: 'always() && ' + confirmRelease,
+  uses: 'actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02',
+  with: {name: 'admin-confirm-build-source-${{ github.run_id }}-${{ github.run_attempt }}',
+   path: '.deploy/production-release/admin-pending-online-build-proof.json\n.deploy/production-release/admin-pending-online-build-projection.json\n',
+   'if-no-files-found': 'warn', 'include-hidden-files': true, 'retention-days': 14}}
+];
+const deepCanonical = value => JSON.stringify(value, function(key, row) {
+ if (row && typeof row === 'object' && !Array.isArray(row))
+  return Object.fromEntries(Object.entries(row).sort(([a], [b]) => a.localeCompare(b)));
+ return row;
+});
+const confirmSteps = confirmNames.map(name => byName(steps, name));
+const validatesConfirmSteps = values => deepCanonical(values) === deepCanonical(confirmExpected);
+const tamperSteps = (index, field, value) => {
+ const copy = JSON.parse(JSON.stringify(confirmSteps));
+ if (field.startsWith('with.')) copy[index].with[field.slice(5)] = value;
+ else copy[index][field] = value;
+ return !validatesConfirmSteps(copy);
+};
+const confirmStepTamperRejections = [
+ tamperSteps(0, 'if', "inputs.operation == 'verify_access'"),
+ tamperSteps(0, 'run', 'python3 scripts/production-release/remote-deploy.py'),
+ tamperSteps(0, 'continue-on-error', true),
+ tamperSteps(1, 'with.path', '.deploy/production-release/*.json'),
+ tamperSteps(2, 'with.path', '.env.aws.production'),
+ tamperSteps(2, 'if', "always() && inputs.operation == 'release_admin'")
+];
+const confirmEnabled = (operation, expected_current) => {
+ const values = new Proxy({operation, expected_current}, {get: (row, key) => row[key] ?? ''});
+ return enabledFor(values).filter(s => confirmNames.includes(s.name)).map(s => s.name);
+};
+const confirmInactiveForOld = ['', confirmBaseline, '60e164b75d1eedaab440c17139bf9ba55de08c61',
+ '31d2c6885a45817cd40d23fce8d6145bc9f18af2'].every(base => !confirmEnabled(operation, base).length)
+ && ['60e164b75d1eedaab440c17139bf9ba55de08c61', '31d2c6885a45817cd40d23fce8d6145bc9f18af2'].every(base =>
+ ['verify_access', 'release_admin'].every(op => !confirmEnabled(op, base).length));
+const confirmActiveOnlyForFiniteInputs = current.on.workflow_dispatch.inputs.operation.options.every(op => {
+ const expected = op === 'verify_access' ? confirmNames.slice(0, 2) : op === 'release_admin' ? confirmNames.slice(2) : [];
+ return deepCanonical(confirmEnabled(op, confirmBaseline)) === deepCanonical(expected);
+});
+const legacyGateSuffix = " && inputs.expected_current != '" + confirmBaseline + "'";
+const oldLegacyGate = replaceOnce(byName(steps, legacyName).if, legacyGateSuffix, '');
 const adminNames = ['Read finite Admin successor baseline facts', 'Save finite Admin successor read-only evidence', legacyName, readbackName];
 const runtimeByBaseline = ['', '60e164b75d1eedaab440c17139bf9ba55de08c61', '31d2c6885a45817cd40d23fce8d6145bc9f18af2'].map(expected_current => {
  const selected = new Proxy({...inputs, expected_current}, {get: (v, k) => v[k] ?? ''});
@@ -523,12 +613,14 @@ console.log(JSON.stringify({concurrency: current.concurrency, oldConcurrency: ol
  oldOptions: old.on.workflow_dispatch.inputs.operation.options,
  oldStepsRetained: old.jobs.release.steps.every(o => steps.some(s => s.name === o.name)), changed,
  legacyOnlyGateChanged: JSON.stringify(without(byName(steps, legacyName), 'if')) === JSON.stringify(without(byName(old.jobs.release.steps, legacyName), 'if')),
- readbackOnlyApiOriginChanged: JSON.stringify(without(readback, 'run')) === JSON.stringify(without(oldReadback, 'run')) && readback.run === expectedReadback,
+ readbackOnlyApiOriginChanged: JSON.stringify(without(readback, 'run')) === JSON.stringify(without(oldReadback, 'run')) && validatesReadback(readback.run),
  rechargeOnlyGateChanged: ['Build images on the GitHub runner', 'Push immutable images', 'Deploy through the production instance'].every(name => JSON.stringify(without(byName(steps, name), 'if')) === JSON.stringify(without(byName(old.jobs.release.steps, name), 'if'))),
  diagnostic: byName(steps, 'Diagnose the fixed unpublished component runtime without publication'),
  diagnosticArtifact: byName(steps, 'Save only credential-free unpublished component diagnostic evidence'),
- adminGates: Object.fromEntries(adminNames.map(name => [name, byName(steps, name).if])), runtimeByBaseline,
- added: steps.filter(s => !old.jobs.release.steps.some(o => o.name === s.name)), enabled, oldEnabled}));
+ adminGates: Object.fromEntries(adminNames.map(name => [name, name === legacyName ? oldLegacyGate : byName(steps, name).if])), runtimeByBaseline,
+ confirmReadbackValidated: validatesReadback(readback.run), confirmTamperRejections, confirmStepTamperRejections,
+ confirmStepsValidated: validatesConfirmSteps(confirmSteps), confirmInactiveForOld, confirmActiveOnlyForFiniteInputs,
+ added: steps.filter(s => !old.jobs.release.steps.some(o => o.name === s.name) && !confirmNames.includes(s.name)), enabled, oldEnabled}));
 """
         result = subprocess.run(['node', '-e', script], cwd=ROOT, capture_output=True, text=True, timeout=30)
         self.assertEqual(result.returncode, 0, result.stderr)
@@ -549,6 +641,12 @@ console.log(JSON.stringify({concurrency: current.concurrency, oldConcurrency: ol
         self.assertTrue(value['rechargeOnlyGateChanged'])
         self.assertTrue(value['legacyOnlyGateChanged'])
         self.assertTrue(value['readbackOnlyApiOriginChanged'])
+        self.assertTrue(value['confirmReadbackValidated'])
+        self.assertEqual(value['confirmTamperRejections'], [True] * 7)
+        self.assertEqual(value['confirmStepTamperRejections'], [True] * 6)
+        self.assertTrue(value['confirmStepsValidated'])
+        self.assertTrue(value['confirmInactiveForOld'])
+        self.assertTrue(value['confirmActiveOnlyForFiniteInputs'])
         admin_current = '60e164b75d1eedaab440c17139bf9ba55de08c61'
         self.assertEqual(value['adminGates'], {
             'Read finite Admin successor baseline facts': "inputs.operation == 'verify_access' && inputs.expected_current == '" + admin_current + "'",
