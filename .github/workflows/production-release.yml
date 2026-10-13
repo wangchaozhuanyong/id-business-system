@@ -1173,8 +1173,22 @@ jobs:
           include-hidden-files: true
           retention-days: 14
 
+      - name: Read sealed 43c31870 Admin confirmation baseline without production changes
+        if: inputs.operation == 'verify_access' && inputs.expected_current == '43c31870c9497d900491cdb19c5f61c766f3b344'
+        run: python3 -B scripts/production-release/admin-pending-online-release.py access-preflight
+
+      - name: Save sealed 43c31870 Admin confirmation preflight safe evidence
+        if: always() && inputs.operation == 'verify_access' && inputs.expected_current == '43c31870c9497d900491cdb19c5f61c766f3b344'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: admin-confirm-preflight-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .deploy/production-release/admin-confirm-preflight-*.json
+          if-no-files-found: warn
+          include-hidden-files: true
+          retention-days: 14
+
       - name: Read production release diagnostics
-        if: inputs.operation == 'verify_access' && inputs.expected_current != '60e164b75d1eedaab440c17139bf9ba55de08c61'
+        if: inputs.operation == 'verify_access' && inputs.expected_current != '60e164b75d1eedaab440c17139bf9ba55de08c61' && inputs.expected_current != '43c31870c9497d900491cdb19c5f61c766f3b344'
         run: |
           set -Eeuo pipefail
           mkdir -p .deploy/production-release
@@ -2503,10 +2517,19 @@ jobs:
               expected_api_origin = proof['projection'].get('apiComponentBaseline')
               if expected_api_origin is None and os.environ['EXPECTED_CURRENT'] == '31d2c6885a45817cd40d23fce8d6145bc9f18af2':
                   expected_api_origin = '31d2c6885a45817cd40d23fce8d6145bc9f18af2'
-              if expected_api_origin != '31d2c6885a45817cd40d23fce8d6145bc9f18af2':
+              confirm_baseline = '43c31870c9497d900491cdb19c5f61c766f3b344'
+              confirm_profile = os.environ['EXPECTED_CURRENT'] == confirm_baseline
+              if confirm_profile:
+                  if (proof['projection'].get('profile') != 'ADMIN_CONFIRM_EXPIRY_20261014'
+                          or proof['projection'].get('sourceBasisCommit') != confirm_baseline
+                          or expected_api_origin != confirm_baseline):
+                      raise RuntimeError('Admin confirmation readback origin unavailable')
+              elif expected_api_origin != '31d2c6885a45817cd40d23fce8d6145bc9f18af2':
                   raise RuntimeError('Admin readback API origin unavailable')
               staged = '/opt/id-business-v2/.staging/oidc-' + commit
               names = ('remote-deploy.py', 'api-admin-pending-projection.py', 'admin-pending-online-release.py')
+              if confirm_profile:
+                  names += ('unpublished-component-successor.py', 'api-admin-scope.py')
               seals = {}
               for name in names:
                   raw = Path('scripts/production-release', name).read_bytes()
@@ -2612,6 +2635,18 @@ jobs:
           path: |
             .deploy/production-release/admin-independent-readback-invocation.json
             .deploy/production-release/admin-independent-readback-result.json
+          if-no-files-found: warn
+          include-hidden-files: true
+          retention-days: 14
+
+      - name: Save only sealed 43c31870 Admin build source evidence
+        if: always() && inputs.operation == 'release_admin' && inputs.expected_current == '43c31870c9497d900491cdb19c5f61c766f3b344'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: admin-confirm-build-source-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            .deploy/production-release/admin-pending-online-build-proof.json
+            .deploy/production-release/admin-pending-online-build-projection.json
           if-no-files-found: warn
           include-hidden-files: true
           retention-days: 14

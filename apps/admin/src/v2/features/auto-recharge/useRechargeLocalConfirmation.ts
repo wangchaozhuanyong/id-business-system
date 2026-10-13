@@ -17,6 +17,8 @@ export function useRechargeLocalConfirmation(
   const uncertain = ref(false);
   let generation = 0;
   let disposed = false;
+  let expiryTimer: ReturnType<typeof setTimeout> | undefined;
+  let expiryTimerVersion = 0;
   const sentJobs = new Set<string>();
   let identityEpoch = sessionCoordinator.identityEpoch.value;
   const eligible = computed(
@@ -41,8 +43,58 @@ export function useRechargeLocalConfirmation(
       !sentJobs.has(job.value?.id ?? '')
   );
 
+  function clearExpiryTimer() {
+    expiryTimerVersion++;
+    if (expiryTimer !== undefined) clearTimeout(expiryTimer);
+    expiryTimer = undefined;
+  }
+
+  function expireConfirmation(text: string) {
+    clearExpiryTimer();
+    nonce.value = '';
+    digest.value = '';
+    message.value = text;
+  }
+
+  function syncExpiry() {
+    clearExpiryTimer();
+    if (disposed || !eligible.value || !nonce.value || !digest.value || uncertain.value) return;
+    const remaining = Date.parse(expiresAt.value) - Date.now();
+    if (!(remaining > 0)) {
+      expireConfirmation('本次报价确认已过期，请刷新原任务；尚未发送付款确认。');
+      return;
+    }
+    const revision = generation;
+    const timerVersion = expiryTimerVersion;
+    const id = job.value?.id;
+    const expectedNonce = nonce.value;
+    const expectedDigest = digest.value;
+    const expectedExpiry = expiresAt.value;
+    expiryTimer = setTimeout(
+      () => {
+        if (
+          disposed ||
+          revision !== generation ||
+          timerVersion !== expiryTimerVersion ||
+          job.value?.id !== id ||
+          nonce.value !== expectedNonce ||
+          digest.value !== expectedDigest ||
+          expiresAt.value !== expectedExpiry
+        )
+          return;
+        syncExpiry();
+      },
+      Math.min(remaining, 2_147_483_647)
+    );
+  }
+
+  function handleVisibilityChange() {
+    if (document.visibilityState === 'visible') syncExpiry();
+  }
+
   function reset() {
     generation++;
+    clearExpiryTimer();
     nonce.value = '';
     digest.value = '';
     expiresAt.value = '';
@@ -109,6 +161,7 @@ export function useRechargeLocalConfirmation(
       nonce.value = result.nonce;
       digest.value = result.quote_digest;
       expiresAt.value = result.confirmation_expires_at;
+      syncExpiry();
     } catch (cause) {
       if (revision === generation && !disposed)
         message.value =
@@ -121,8 +174,7 @@ export function useRechargeLocalConfirmation(
   async function confirm() {
     if (!confirmationEnabled.value || !job.value) return;
     if (!(Date.parse(expiresAt.value) > Date.now())) {
-      nonce.value = '';
-      message.value = '本次报价确认已过期，请刷新原任务；本次未重新授权付款。';
+      expireConfirmation('本次报价确认已过期，请刷新原任务；本次未重新授权付款。');
       return;
     }
     const id = job.value.id;
@@ -153,14 +205,14 @@ export function useRechargeLocalConfirmation(
       )
         return;
       if (!(Date.parse(expiresAt.value) > Date.now())) {
-        nonce.value = '';
-        message.value = '本次报价确认已过期，请刷新原任务；尚未发送付款确认。';
+        expireConfirmation('本次报价确认已过期，请刷新原任务；尚未发送付款确认。');
         return;
       }
       // 只有真正调用本机确认接口才消费凭据；发送标记不随状态或报价回跳清除。
       sentJobs.add(id);
       invoked = true;
       uncertain.value = true;
+      clearExpiryTimer();
       nonce.value = '';
       await rechargeConnectorApi.confirm(
         access.connectorUrl,
@@ -199,8 +251,12 @@ export function useRechargeLocalConfirmation(
     },
     { immediate: true, flush: 'sync' }
   );
+  if (typeof document !== 'undefined')
+    document.addEventListener('visibilitychange', handleVisibilityChange);
   onScopeDispose(() => {
     disposed = true;
+    if (typeof document !== 'undefined')
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
     sentJobs.clear();
     reset();
   });
