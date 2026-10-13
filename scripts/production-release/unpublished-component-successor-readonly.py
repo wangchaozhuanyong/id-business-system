@@ -554,6 +554,18 @@ def restart_origin_bytes(c):
     return raw_get, raw_list
 
 
+def component_predecessor_bytes(c):
+    # Only the exact already published component may use this new origin.
+    # The instance has no GetCommandInvocation permission; the trusted runner
+    # carries the original ended bytes through the existing private writer.
+    if os.environ.get('EXPECTED_CURRENT') != c.COMPONENT_PREDECESSOR['producer']['commit']:
+        return None
+    raw = command_raw('aws', '--region', REGION, 'ssm', 'get-command-invocation',
+        '--command-id', c.COMPONENT_PREDECESSOR['commandId'], '--instance-id', INSTANCE, '--output', 'json')
+    c.validate_component_predecessor_native(raw)
+    return raw
+
+
 def parameters(mode, environment=None, *, input_artifacts=None):
     c, p = selected(mode)
     directory = '/opt/id-business-v2/.staging/oidc-' + p['commit']
@@ -596,6 +608,11 @@ def parameters(mode, environment=None, *, input_artifacts=None):
     validate_hotfix_native(raw_origin, c.BASELINE_CONTRACT)
     origin_path = ('/opt/id-business-v2/.staging/component-hotfix-origin-'
                    + c.BASELINE_CONTRACT['hotfixReadbackInvocationBytesSha256'] + '/invocation.json')
+    component_program = ''
+    component_raw = component_predecessor_bytes(c)
+    if component_raw is not None:
+        component_path = '/opt/id-business-v2/.staging/component-published-origin-' + c.COMPONENT_PREDECESSOR['invocationBytesSha256'] + '/invocation.json'
+        component_program = '\nwrite_workspace_private_bytes(' + repr(component_path) + ',' + repr(component_raw) + ')\n'
     restart_program = ''
     restart_raw = restart_origin_bytes(c)
     if restart_raw is not None:
@@ -609,6 +626,7 @@ def parameters(mode, environment=None, *, input_artifacts=None):
         + 'import os,stat,base64\nfrom pathlib import Path\n'
         + inspect.getsource(original.write_workspace_private_bytes)
         + '\nwrite_workspace_private_bytes(' + repr(origin_path) + ',' + repr(raw_origin) + ')\n'
+        + component_program
         + restart_program
         + input_program
         + 'import sys,runpy\nsys.argv=[' + repr(directory + '/unpublished-component-successor.py') + ']+ '

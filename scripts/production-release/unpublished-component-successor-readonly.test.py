@@ -832,5 +832,57 @@ class NativeRestartTests(unittest.TestCase):
         for raw in actual_restart_bytes(): self.assertIn(repr(raw), program)
 
 
+class PublishedComponentTransportTests(unittest.TestCase):
+    def test_component_and_legacy_origins_fit_existing_carrier_without_send(self):
+        boundaries = Boundaries(); boundaries.setUp()
+        component_raw = b'original-native-component-fixture'
+        environment = {**boundaries.environment, 'EXPECTED_CURRENT': c.COMPONENT_PREDECESSOR['producer']['commit']}
+        original_load = r.load
+        with patch.dict(os.environ, environment, clear=True), patch.object(c, 'BASELINE_CONTRACT', boundaries.contract), \
+             patch.dict(c.COMPONENT_PREDECESSOR, {'invocationBytesSha256': c.digest(component_raw)}), \
+             patch.object(c, 'validate_component_predecessor_native') as validate, \
+             patch.object(r, 'load', side_effect=lambda name: c if name == 'unpublished-component-successor.py' else original_load(name)), \
+             patch.object(r, 'command_raw', side_effect=[boundaries.raw, component_raw, *actual_restart_bytes()]) as query:
+            parameters = r.parameters('preflight')
+        self.assertLess(len(json.dumps(parameters).encode()), 20 * 1024)
+        self.assertEqual(query.call_count, 4)
+        self.assertFalse(any('send-command' in call.args for call in query.call_args_list))
+        validate.assert_called_once_with(component_raw)
+        carrier = shlex.split(parameters['commands'][0])[-1]
+        import ast
+        packed = next(node.args[0].value for node in ast.walk(ast.parse(carrier)) if isinstance(node, ast.Call)
+                      and ast.unparse(node.func) == 'base64.b64decode')
+        program = gzip.decompress(base64.b64decode(packed, validate=True)).decode()
+        self.assertIn('component-published-origin-' + c.digest(component_raw), program)
+        self.assertIn(repr(component_raw), program)
+        for raw in actual_restart_bytes(): self.assertIn(repr(raw), program)
+
+    def test_only_exact_published_predecessor_fetches_original_native_bytes(self):
+        core = r.load('unpublished-component-successor.py')
+        raw = b'offline-original-native-bytes'
+        expected = core.COMPONENT_PREDECESSOR['producer']['commit']
+        with patch.dict(os.environ, {'EXPECTED_CURRENT': expected}), patch.object(r, 'command_raw', return_value=raw) as query, \
+             patch.object(core, 'validate_component_predecessor_native') as validate:
+            self.assertEqual(r.component_predecessor_bytes(core), raw)
+            validate.assert_called_once_with(raw)
+            query.assert_called_once_with('aws', '--region', r.REGION, 'ssm', 'get-command-invocation',
+                '--command-id', core.COMPONENT_PREDECESSOR['commandId'], '--instance-id', r.INSTANCE, '--output', 'json')
+
+    def test_legacy_and_unknown_producer_do_not_receive_component_origin(self):
+        core = r.load('unpublished-component-successor.py')
+        for expected in ('60e164b75d1eedaab440c17139bf9ba55de08c61', 'a' * 40):
+            with patch.dict(os.environ, {'EXPECTED_CURRENT': expected}), patch.object(r, 'command_raw') as query:
+                self.assertIsNone(r.component_predecessor_bytes(core))
+                query.assert_not_called()
+
+    def test_bad_native_bytes_stop_before_they_can_be_installed(self):
+        core = r.load('unpublished-component-successor.py')
+        with patch.dict(os.environ, {'EXPECTED_CURRENT': core.COMPONENT_PREDECESSOR['producer']['commit']}), \
+             patch.object(r, 'command_raw', return_value=b'changed original'), \
+             patch.object(core, 'validate_component_predecessor_native', side_effect=RuntimeError('UNPUBLISHED_COMPONENT_PREDECESSOR_NATIVE_CHANGED')):
+            with self.assertRaisesRegex(RuntimeError, 'PREDECESSOR_NATIVE_CHANGED'):
+                r.component_predecessor_bytes(core)
+
+
 if __name__ == '__main__':
     unittest.main()

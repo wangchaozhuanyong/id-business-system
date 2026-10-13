@@ -76,6 +76,198 @@ def migration_state(status):
     return {'name': a.MIGRATION_NAME, 'sha256': a.MIGRATION_IDENTITY['sha256'], 'status': status, 'schemaVerified': True, 'appliedMigrationsSha256': 'f' * 64}
 
 
+class PublishedPredecessorTests(unittest.TestCase):
+    def setUp(self):
+        folder = ROOT / '.runtime/remaining-release-20261014/component-control-tests'
+        folder.mkdir(parents=True, exist_ok=True)
+        self.tmp = tempfile.TemporaryDirectory(dir=folder)
+        self.root = Path(self.tmp.name)
+        self.authority = copy.deepcopy(a.COMPONENT_PREDECESSOR)
+        self.grants = {'preservedGrantsSha256': 'd' * 64, 'schemaGrantsSha256': 'e' * 64,
+            'newTablePrivileges': [{'grantee': "'id_business_app'@'%'", 'table': a.MIGRATION_TABLE,
+                'privilege': n, 'grantable': 'NO'} for n in ('INSERT', 'SELECT', 'UPDATE')]}
+        self.migration = migration_state('APPLIED')
+        self.receipt = {'version': 1, 'scope': a.SCOPE, 'status': 'UNPUBLISHED_COMPONENT_VERIFIED',
+            'commit': self.authority['producer']['commit'], 'sourceTree': self.authority['producer']['sourceTree'],
+            'servicesUpdated': list(a.UPDATED), 'preservedServiceCount': len(a.PRESERVED),
+            'runningImagesAndContentMatched': True, 'databaseOldGrantsPreserved': True,
+            'volumeDeletionPerformed': False, 'onlinePublished': False, 'businessActions': 0,
+            'migration': self.migration}
+        value = json.loads(native(self.receipt))
+        value.update(CommandId=self.authority['commandId'], InstanceId=self.authority['instanceId'])
+        self.raw = json.dumps(value).encode()
+        self.authority.update(invocationBytesSha256=a.digest(self.raw), receiptSha256=a.fingerprint(self.receipt))
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def origin(self):
+        origin = {n: copy.deepcopy(self.authority[n]) for n in ('producer', 'commandId', 'invocationBytesSha256',
+            'manifestBytesSha256', 'publicationSha256', 'buildProofBytesSha256', 'preservationRecordBytesSha256', 'projectionSha256')}
+        origin.update(version=1, scope=a.COMPONENT_PREDECESSOR_SCOPE, authenticated=True,
+            migration=copy.deepcopy(self.migration), databaseGrants=copy.deepcopy(self.grants))
+        return origin
+
+    def test_original_native_only_and_receipt_or_command_substitution_rejected(self):
+        with patch.dict(a.COMPONENT_PREDECESSOR, self.authority, clear=True):
+            self.assertEqual(a.validate_component_predecessor_native(self.raw), self.receipt)
+            with self.assertRaisesRegex(RuntimeError, 'NATIVE_CHANGED'):
+                a.validate_component_predecessor_native(self.raw + b' ')
+            for key, value in (('CommandId', COMMAND), ('InstanceId', INSTANCE), ('ResponseCode', True),
+                               ('StandardErrorContent', 'offline error'), ('Status', 'Failed')):
+                altered = json.loads(self.raw); altered[key] = value
+                changed = json.dumps(altered).encode()
+                with patch.dict(a.COMPONENT_PREDECESSOR, {'invocationBytesSha256': a.digest(changed)}):
+                    with self.assertRaises(RuntimeError): a.validate_component_predecessor_native(changed)
+            altered = json.loads(self.raw)
+            body = copy.deepcopy(self.receipt); body['onlinePublished'] = True
+            altered['StandardOutputContent'] = json.dumps(body)
+            changed = json.dumps(altered).encode()
+            with patch.dict(a.COMPONENT_PREDECESSOR, {'invocationBytesSha256': a.digest(changed)}):
+                with self.assertRaisesRegex(RuntimeError, 'RECEIPT_CHANGED'):
+                    a.validate_component_predecessor_native(changed)
+
+    def test_finite_origin_rejects_other_producer_native_seal_and_migration(self):
+        with patch.dict(a.COMPONENT_PREDECESSOR, self.authority, clear=True):
+            self.assertEqual(a.component_successor_origin({'componentSuccessorOrigin': self.origin()}), self.origin())
+            for modify in (lambda v: v['producer'].update(commit=N), lambda v: v['producer'].update(workflowRunId='99'),
+                           lambda v: v.update(authenticated=False), lambda v: v.update(invocationBytesSha256='a' * 64),
+                           lambda v: v['migration'].update(status='PENDING'),
+                           lambda v: v['migration'].update(name='unreviewed'), lambda v: v.update(extra=True)):
+                value = self.origin(); modify(value)
+                with self.assertRaises(RuntimeError): a.component_successor_origin({'componentSuccessorOrigin': value})
+
+    def test_applied_successor_is_readonly_and_unknown_migration_or_grants_fail(self):
+        d = SimpleNamespace(migration_plan=Mock(return_value=[]), compose=Mock(), sync_new_table_grants=Mock())
+        with patch.dict(a.COMPONENT_PREDECESSOR, self.authority, clear=True), patch.object(a, 'migration_source_check') as source, \
+             patch.object(a, 'migration_database_state', return_value=self.migration), patch.object(a, 'grant_state', return_value=self.grants):
+            result = a.apply_migration(d, None, self.root, self.root, retained=self.origin())
+            self.assertFalse(result['performed'])
+            self.assertEqual(result['grants'], {'status': 'EXISTING_GRANTS_READONLY_VERIFIED', 'mutationPerformed': False})
+            self.assertEqual(source.call_args_list[0].kwargs, {'candidate': True})
+            self.assertEqual(source.call_args_list[1].kwargs, {'candidate': True})
+            for change in ([a.MIGRATION_FILE], ['unexpected/migration.sql']):
+                d.migration_plan.return_value = change
+                with self.assertRaisesRegex(RuntimeError, 'MIGRATION_SCOPE_CHANGED'):
+                    a.apply_migration(d, None, self.root, self.root, retained=self.origin())
+            d.migration_plan.return_value = []
+            for altered in ({**self.migration, 'status': 'PENDING'}, {**self.migration, 'appliedMigrationsSha256': '1' * 64}):
+                with patch.object(a, 'migration_database_state', return_value=altered):
+                    with self.assertRaisesRegex(RuntimeError, 'MIGRATION_RETAINED_BINDING_CHANGED'):
+                        a.apply_migration(d, None, self.root, self.root, retained=self.origin())
+            with patch.object(a, 'grant_state', return_value={**self.grants, 'schemaGrantsSha256': '1' * 64}):
+                with self.assertRaisesRegex(RuntimeError, 'MIGRATION_RETAINED_BINDING_CHANGED'):
+                    a.apply_migration(d, None, self.root, self.root, retained=self.origin())
+        d.compose.assert_not_called(); d.sync_new_table_grants.assert_not_called()
+
+    def test_original_f193_source_is_loaded_without_using_the_new_application_seal(self):
+        commit = self.authority['producer']['commit']
+        files = archive(commit)
+        for name in a.HELPERS:
+            path = self.root / 'scripts/production-release' / name
+            row = files['scripts/production-release/' + name]
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(row[0]); path.chmod(0o755 if row[1] == '100755' else 0o644)
+        d = SimpleNamespace(registration_download=Mock(return_value=b'offline archive'), registration_archive=Mock(return_value=files))
+        with patch.object(a, 'APPLICATION_SOURCE', N), patch.object(a, 'APPROVED_APPLICATION_INPUT_SHA256', '1' * 64):
+            historical = a.component_predecessor_code(d, self.root)
+            self.assertEqual(historical.APPLICATION_SOURCE, 'b1a775d1dc0bc460fb59eebcec089342b6134788')
+            self.assertEqual(historical.APPROVED_APPLICATION_INPUT_SHA256,
+                             '2e9549278a2e883a6a7eba4a90a565146919e3ce631f4c5cfe8e5771b2dfd647')
+        for name in ('unpublished-component-successor.py', 'api-admin-scope.py'):
+            path = self.root / 'scripts/production-release' / name
+            original = path.read_bytes(); path.write_bytes(original + b'\n# unknown source\n')
+            with self.assertRaisesRegex(RuntimeError, 'PREDECESSOR_SOURCE_CHANGED'):
+                a.component_predecessor_code(d, self.root)
+            path.write_bytes(original)
+        bad = dict(files); bad['unrelated'] = (b'changed', '100644')
+        d.registration_archive.return_value = bad
+        with self.assertRaisesRegex(RuntimeError, 'PREDECESSOR_SOURCE_CHANGED'):
+            a.component_predecessor_code(d, self.root)
+
+    def test_preserve_accepts_only_unchanged_applied_schema_and_five_service_fingerprints(self):
+        fixture = PreservationTests(); fixture.root = self.root
+        d, scope, previous, target, evidence, images, states = fixture.fixture()
+        d.migration_plan = Mock(return_value=[])
+        evidence['componentSuccessorOrigin'] = self.origin()
+        schema = previous / a.MIGRATION_SCHEMA
+        with patch.dict(a.COMPONENT_PREDECESSOR, self.authority, clear=True), \
+             patch.dict(a.MIGRATION_IDENTITY, {'schemaAfterSha256': a.digest(schema.read_bytes())}), \
+             patch.object(a, 'migration_source_check') as source:
+            self.assertEqual(a.preserve(d, scope, previous, target, evidence, pointer=previous, images=images), states)
+            self.assertEqual(source.call_args_list[0].kwargs, {'candidate': True})
+            self.assertEqual(source.call_args_list[1].kwargs, {'candidate': True})
+            d.migration_plan.return_value = ['unreviewed/migration.sql']
+            with self.assertRaisesRegex(RuntimeError, 'MIGRATION_SCOPE_CHANGED'):
+                a.preserve(d, scope, previous, target, evidence, pointer=previous, images=images)
+            d.migration_plan.return_value = []
+            original = (target / a.MIGRATION_SCHEMA).read_bytes()
+            (target / a.MIGRATION_SCHEMA).write_bytes(b'unknown schema')
+            with self.assertRaisesRegex(RuntimeError, 'MIGRATION_SCHEMA_CHANGED'):
+                a.preserve(d, scope, previous, target, evidence, pointer=previous, images=images)
+            (target / a.MIGRATION_SCHEMA).write_bytes(original)
+            for name in a.PRESERVED:
+                changed = copy.deepcopy(states); changed[name]['configurationSha256'] = '0' * 64
+                scope.snapshot = Mock(return_value=changed)
+                with self.assertRaisesRegex(RuntimeError, 'PRESERVED_SERVICE_CHANGED'):
+                    a.preserve(d, scope, previous, target, evidence, pointer=previous, images=images)
+
+    def baseline_fixture(self):
+        current = self.root / 'releases/current'; current.mkdir(parents=True, mode=0o700)
+        (self.root / 'current').symlink_to(current)
+        states = {n: {'containerId': '1' * 64, 'image': 'sha256:' + '2' * 64, 'reference': 'offline-' + n,
+            'status': 'running', 'health': 'healthy', 'startedAtSha256': '3' * 64,
+            'environmentSha256': '4' * 64, 'configurationSha256': '5' * 64} for n in a.SERVICES}
+        volume = {'name': 'offline_volume'}
+        (current / 'runtime').write_bytes(b'fixed')
+        (current / '.env.aws.production').write_bytes(b'offline-placeholder'); (current / '.env.aws.production').chmod(0o600)
+        markers = {'historical': {'immutable': True}}
+        baseline = {'configurationFilesSha256': {'runtime': a.digest(b'fixed')}, 'originMarkersSha256': a.fingerprint(markers)}
+        ledger = {'producer': self.authority['producer'], 'baseline': baseline}
+        manifest = {'commit': self.authority['producer']['commit'], 'sourceTree': self.authority['producer']['sourceTree'],
+                    'apiComponentPublication': ledger, **markers}
+        raw = a.write_private(current / 'release-manifest.json', manifest)
+        proof = {'images': {n: {'imageId': states[n]['image'], 'reference': states[n]['reference']} for n in a.UPDATED},
+                 'projection': {'finite': True}}
+        proof_raw = a.write_private(current / (a.PREFIX + '-build-proof.json'), proof)
+        state = {'before': copy.deepcopy(states), 'after': copy.deepcopy(states), 'workspaceVolumeAfter': volume,
+                 'migration': {'grantProtection': self.grants}}
+        state_raw = a.write_private(current / (a.PREFIX + '-preservation.json'), state)
+        self.authority.update(manifestBytesSha256=a.digest(raw), buildProofBytesSha256=a.digest(proof_raw),
+            preservationRecordBytesSha256=a.digest(state_raw), publicationSha256=a.fingerprint(ledger), projectionSha256=a.fingerprint(proof['projection']))
+        d = SimpleNamespace(BASE=self.root)
+        scope = SimpleNamespace(snapshot=Mock(return_value=states), workspace_volume=Mock(return_value=volume),
+            jobs_idle=Mock(return_value={'registrationBusy': False}), workspace_idle=Mock(),
+            workspace_audit_protection=Mock(), workspace_private_inspect=Mock())
+        admin = SimpleNamespace(ORIGIN_MARKERS=('historical',))
+        historical = SimpleNamespace(readback=Mock(return_value=self.receipt))
+        return d, admin, scope, current, raw, manifest, historical
+
+    def test_successor_baseline_requires_full_historical_readback_and_five_services(self):
+        fixture = self.baseline_fixture()
+        d, admin, scope, current, raw, manifest, historical = fixture
+        with patch.dict(a.COMPONENT_PREDECESSOR, self.authority, clear=True), \
+             patch.object(a, 'validate_component_predecessor_native', return_value=self.receipt), \
+             patch.object(a, 'private_bytes', side_effect=lambda path, **kwargs: b'offline native' if path.name == 'invocation.json' else path.read_bytes()), \
+             patch.object(a, 'component_predecessor_code', return_value=historical), \
+             patch.object(a, 'migration_database_state', return_value=self.migration), \
+             patch.object(a, 'grant_state', return_value=self.grants), patch.object(a, 'configuration_model', return_value={'fixed': True}):
+            result = a.baseline(d, admin, scope, self.authority['producer']['commit'])
+            evidence = result[2]
+            self.assertEqual(evidence['apiCurrentSourceCommit'], self.authority['producer']['commit'])
+            self.assertEqual(evidence['componentSuccessorOrigin'], self.origin())
+            self.assertIsNone(evidence['restorationBinding'])
+            historical.readback.assert_called_once_with(None, self.authority['producer']['commit'])
+            historical.readback.return_value = {**self.receipt, 'onlinePublished': True}
+            with self.assertRaisesRegex(RuntimeError, 'PREDECESSOR_READBACK_CHANGED'):
+                a.baseline(d, admin, scope, self.authority['producer']['commit'])
+            historical.readback.return_value = self.receipt
+            altered = copy.deepcopy(scope.snapshot.return_value); altered['mysql']['containerId'] = '9' * 64
+            scope.snapshot.return_value = altered
+            with self.assertRaisesRegex(RuntimeError, 'PREDECESSOR_SERVICES_CHANGED'):
+                a.baseline(d, admin, scope, self.authority['producer']['commit'])
+
+
 class SuccessorTests(unittest.TestCase):
     def setUp(self):
         folder = ROOT / '.runtime/unpublished-release-20261013/successor-tests'
@@ -554,6 +746,21 @@ class BackupMaintenanceTests(unittest.TestCase):
         self.assertNotIn('UNRELATED_SECRET', json.dumps(value)); self.assertNotIn('synthetic-never-print', json.dumps(saved))
         for name, (raw, _mode) in self.files.items():
             self.assertEqual((self.namespace / Path(name).name).read_bytes(), raw)
+
+    def test_published_component_only_verifies_already_installed_backup_entry(self):
+        self.upgrade()
+        self.evidence['currentRelease'] = str(self.previous)
+        with patch.object(a, 'component_successor_origin', return_value={'authenticated': True}), \
+             patch.dict(a.COMPONENT_PREDECESSOR, {'manifestBytesSha256': a.digest(self.manifest)}):
+            before = self.dropin.read_bytes()
+            result = self.upgrade()
+            self.assertEqual(result['status'], 'ALREADY_VERIFIED')
+            self.assertEqual(self.dropin.read_bytes(), before)
+            self.dropin.write_bytes(self.original_configuration); self.dropin.chmod(0o600)
+            self.running_entry = self.old_entry
+            with self.assertRaisesRegex(RuntimeError, 'BACKUP_COMPONENT_ENTRY_CHANGED'):
+                self.upgrade()
+            self.assertEqual(self.dropin.read_bytes(), self.original_configuration)
 
     def test_existing_exact_entry_is_readonly_and_does_not_reload_or_add_records(self):
         self.upgrade()
