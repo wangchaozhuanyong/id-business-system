@@ -523,8 +523,14 @@ if os.environ.get('RELEASE_OPERATION') == 'release_admin':
     assert proof['commit'] == sha and proof['sourceTree'] == tree
     assert proof['runId'] == run_id and proof['runAttempt'] == attempt and proof['qualityRunId'] == quality_run
     assert proof['scope'] == 'ADMIN_PENDING_ONLINE_BUILD'
+    names = ('remote-deploy.py', 'api-admin-pending-projection.py', 'admin-pending-online-release.py')
+    if previous == 'f193f34ea09a2c37485c1582a81b33ee3acec865':
+        assert proof['projection'].get('profile') == 'ADMIN_CONFIRM_EXPIRY_20261014'
+        assert proof['projection'].get('apiComponentBaseline') == previous
+        assert proof['projection'].get('sourceBasisCommit') == previous
+        names += ('unpublished-component-successor.py', 'api-admin-scope.py')
     carrier = []
-    for name in ('remote-deploy.py', 'api-admin-pending-projection.py', 'admin-pending-online-release.py'):
+    for name in names:
         local = Path('scripts/production-release', name)
         target = f'/opt/id-business-v2/.staging/oidc-{sha}/{name}'
         digest = hashlib.sha256(local.read_bytes()).hexdigest()
