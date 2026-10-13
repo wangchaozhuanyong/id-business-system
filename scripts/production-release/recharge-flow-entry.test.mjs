@@ -303,7 +303,7 @@ test('read-only recharge operation never builds, pushes or deploys and evidence 
 
 test('recharge extension preserves all previous workflow inputs, environments and routes', () => {
   const baseline = loadYaml(
-    execFileSync('git', ['show', `4f19709a135bfb71fae574affb110051bc7d85ee:${workflowPath}`], {
+    execFileSync('git', ['show', `42e8eab5ef696159c7cd6f91204213011c0cb3be:${workflowPath}`], {
       cwd: root,
       encoding: 'utf8'
     })
