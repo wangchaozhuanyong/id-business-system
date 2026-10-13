@@ -259,6 +259,72 @@ def installed_targets(binding, policy):
     return targets
 
 
+def service_arguments(binding):
+    return ['/usr/bin/python3', '-B', str(INSTALL / 'disk-retention.py'), '--scheduled', '--config',
+            str(INSTALL / 'config.json'), '--expected-source-sha256',
+            binding['sourcePins'][RUNNER_PATHS[0]]['sha256']]
+
+
+def service_readback(binding):
+    properties = ('Id', 'Names', 'LoadState', 'FragmentPath', 'DropInPaths', 'Type', 'User', 'Group',
+                  'ExecStart', 'Result', 'ActiveState', 'SubState', 'MainPID', 'ControlPID',
+                  'ExecMainCode', 'ExecMainStatus', 'ExecMainStartTimestamp', 'ExecMainExitTimestamp')
+    raw = command(['env', 'TZ=UTC', 'systemctl', 'show', SERVICE, '--no-pager',
+                   '--property=' + ','.join(properties)], limit=16384)
+    values = {}
+    for line in raw.decode().splitlines():
+        key, separator, value = line.partition('=')
+        need(separator and key in properties and key not in values, 'MAINTENANCE_SERVICE_INVALID')
+        values[key] = value
+    need(set(values) == set(properties) and values['Id'] == values['Names'] == SERVICE
+         and values['LoadState'] == 'loaded' and values['FragmentPath'] == '/etc/systemd/system/' + SERVICE
+         and values['DropInPaths'] == '' and values['Type'] == 'oneshot'
+         and values['User'] == values['Group'] == 'root'
+         and (values['ActiveState'], values['SubState']) in (('inactive', 'dead'), ('failed', 'failed'))
+         and values['MainPID'] == values['ControlPID'] == '0', 'MAINTENANCE_SERVICE_INVALID')
+    expected = service_arguments(binding)
+    serialized = values.pop('ExecStart')
+    need(serialized.startswith('{ ') and serialized.endswith(' }'), 'MAINTENANCE_SERVICE_EXECSTART_CHANGED')
+    execution = {}
+    for field in serialized[2:-2].split(' ; '):
+        key, separator, value = field.partition('=')
+        need(separator and key not in execution, 'MAINTENANCE_SERVICE_EXECSTART_CHANGED')
+        execution[key] = value
+    need(set(execution) == {'path', 'argv[]', 'ignore_errors', 'start_time', 'stop_time', 'pid', 'code', 'status'}
+         and execution['path'] == expected[0] and execution['argv[]'] == ' '.join(expected)
+         and execution['ignore_errors'] == 'no'
+         and all(re.fullmatch(r'\[[^\[\]{}\r\n]{0,64}\]', execution[key]) for key in ('start_time', 'stop_time'))
+         and re.fullmatch(r'[0-9]{1,10}', execution['pid'])
+         and execution['code'] in ('(null)', 'exited', 'killed', 'dumped', 'trapped', 'stopped', 'continued')
+         and re.fullmatch(r'[0-9]{1,3}(?:/[A-Z0-9+-]{1,32})?', execution['status']),
+         'MAINTENANCE_SERVICE_EXECSTART_CHANGED')
+    need(values['Result'] in ('success', 'resources', 'protocol', 'timeout', 'exit-code', 'signal', 'core-dump',
+                             'watchdog', 'start-limit-hit', 'exec-condition', 'oom-kill')
+         and all(re.fullmatch(r'[0-9]{1,3}', values[key]) for key in ('ExecMainCode', 'ExecMainStatus')),
+         'MAINTENANCE_SERVICE_RESULT_INVALID')
+    timestamps = []
+    for key in ('ExecMainStartTimestamp', 'ExecMainExitTimestamp'):
+        stamp = values[key]
+        measured = None
+        if stamp not in ('', 'n/a'):
+            for pattern in ('%a %Y-%m-%d %H:%M:%S UTC', '%a %Y-%m-%d %H:%M:%S.%f UTC'):
+                try:
+                    measured = datetime.strptime(stamp, pattern).replace(tzinfo=timezone.utc); break
+                except ValueError:
+                    pass
+            need(measured is not None, 'MAINTENANCE_SERVICE_RESULT_INVALID')
+        timestamps.append(measured)
+    need((timestamps[0] is None) == (timestamps[1] is None)
+         and (timestamps[0] is None or timestamps[0] <= timestamps[1] <= datetime.now(timezone.utc)),
+         'MAINTENANCE_SERVICE_RESULT_INVALID')
+    observed = timestamps[0] is not None
+    values.update(execStartMatched=True, execStartExpectedSha256=digest({'path': expected[0], 'argv': expected}),
+                  executionObserved=observed, executionSucceeded=observed and values['Result'] == 'success'
+                  and values['ExecMainCode'] == '1' and values['ExecMainStatus'] == '0'
+                  and values['ActiveState'] == 'inactive')
+    return values
+
+
 def installation_readback(binding, policy):
     files = []
     for path, (expected_sha, mode) in installed_targets(binding, policy).items():
@@ -289,6 +355,7 @@ def installation_readback(binding, policy):
             pass
     need(next_trigger is not None and next_trigger > datetime.now(timezone.utc), 'MAINTENANCE_TIMER_NEXT_UNMEASURED')
     return {'status': 'INSTALLATION_READBACK_VERIFIED', 'targets': files, 'timer': values,
+            'service': service_readback(binding),
             'nextTriggerUtc': next_trigger.isoformat(), 'sourceSha256': binding['sourcePins'][RUNNER_PATHS[0]]['sha256']}
 
 
@@ -308,7 +375,7 @@ def cleanup_plan(result, binding):
     return plan
 
 
-def apply_receipt_budget(binding, planned, probe):
+def apply_receipt_budget(binding, planned, probe, policy):
     plan = planned['plan']
     model = {**planned, 'status': 'INSTALLED' if binding['operation'] == 'install' else 'APPLIED',
              'sourceProbe': probe, 'baselineSha256': digest(probe), 'currentUnchanged': True,
@@ -325,6 +392,9 @@ def apply_receipt_budget(binding, planned, probe):
     targets = plan.get('targets', {})
     need(type(targets) is dict, 'MAINTENANCE_BUDGET_PLAN_INVALID')
     need(binding['operation'] != 'install' or len(targets) == 6, 'MAINTENANCE_BUDGET_PLAN_INVALID')
+    if not targets:
+        targets = {str(path): {'sha256': expected_sha, 'mode': mode, 'bytes': MAX_BODY}
+                   for path, (expected_sha, mode) in installed_targets(binding, policy).items()}
     if targets:
         model['filesCreated'] = list(targets)
         measured = []
@@ -334,13 +404,23 @@ def apply_receipt_budget(binding, planned, probe):
                  and type(target.get('mode')) is int, 'MAINTENANCE_BUDGET_PLAN_INVALID')
             measured.append({'path': path, 'sha256': target['sha256'], 'bytes': target['bytes'],
                              'mode': target['mode'], 'uid': 0, 'gid': 0})
-        model['installationReadback'] = {'status': 'INSTALLATION_READBACK_VERIFIED', 'targets': measured,
-            'sourceSha256': binding['sourcePins'][RUNNER_PATHS[0]]['sha256'],
-            'nextTriggerUtc': '2099-12-31T23:59:59.999999+00:00',
-            'timer': {'Id': TIMER, 'LoadState': 'loaded', 'FragmentPath': '/etc/systemd/system/' + TIMER,
-                      'DropInPaths': '', 'ActiveState': 'active', 'SubState': 'waiting',
-                      'UnitFileState': 'enabled', 'Triggers': SERVICE,
-                      'NextElapseUSecRealtime': 'Thu 2099-12-31 23:59:59.999999 UTC'}}
+    expected = service_arguments(binding)
+    model['installationReadback'] = {'status': 'INSTALLATION_READBACK_VERIFIED', 'targets': measured if targets else [],
+        'sourceSha256': binding['sourcePins'][RUNNER_PATHS[0]]['sha256'],
+        'nextTriggerUtc': '2099-12-31T23:59:59.999999+00:00',
+        'timer': {'Id': TIMER, 'LoadState': 'loaded', 'FragmentPath': '/etc/systemd/system/' + TIMER,
+                  'DropInPaths': '', 'ActiveState': 'active', 'SubState': 'waiting',
+                  'UnitFileState': 'enabled', 'Triggers': SERVICE,
+                  'NextElapseUSecRealtime': 'Thu 2099-12-31 23:59:59.999999 UTC'},
+        'service': {'Id': SERVICE, 'Names': SERVICE, 'LoadState': 'loaded',
+                    'FragmentPath': '/etc/systemd/system/' + SERVICE, 'DropInPaths': '',
+                    'Type': 'oneshot', 'User': 'root', 'Group': 'root', 'Result': 'start-limit-hit',
+                    'ActiveState': 'inactive', 'SubState': 'dead', 'MainPID': '0', 'ControlPID': '0',
+                    'ExecMainCode': '255', 'ExecMainStatus': '255',
+                    'ExecMainStartTimestamp': 'Thu 2099-12-31 23:59:59.999999 UTC',
+                    'ExecMainExitTimestamp': 'Thu 2099-12-31 23:59:59.999999 UTC',
+                    'execStartMatched': True, 'execStartExpectedSha256': digest({'path': expected[0], 'argv': expected}),
+                    'executionObserved': False, 'executionSucceeded': False}}
     need(len(canonical(wire(binding, model))) <= 20000, 'MAINTENANCE_APPLY_RECEIPT_BUDGET')
 
 
@@ -390,9 +470,9 @@ def execute_native(binding):
             need(type(result.get('plan')) is dict and digest(result['plan']) == result['planSha256'],
                  'MAINTENANCE_INSTALL_PLAN_CHANGED')
         if applying and not mutate:
-            apply_receipt_budget(binding, result, before)
+            apply_receipt_budget(binding, result, before, policy)
             need(snapshot(binding['expectedCurrent']) == before, 'MAINTENANCE_PRODUCTION_CHANGED')
-    if operation == 'install':
+    if operation in ('install', 'verify_cleanup', 'cleanup'):
         result['installationReadback'] = installation_readback(binding, policy)
     need(snapshot(binding['expectedCurrent']) == before, 'MAINTENANCE_PRODUCTION_CHANGED')
     result.update(currentUnchanged=True, containersUnchanged=True,
@@ -417,7 +497,8 @@ def remote_program(binding, *, path=None, payload=None):
     functions = (need, matches, canonical, sha, digest, closed, identity, regular, command, snapshot,
                  validate_binding, wire)
     functions += ((stage_file,) if path is not None else
-                  (installed_targets, installation_readback, cleanup_plan, apply_receipt_budget, execute_native))
+                  (installed_targets, service_arguments, service_readback, installation_readback,
+                   cleanup_plan, apply_receipt_budget, execute_native))
     header = ('import base64,fcntl,gzip,hashlib,json,lzma,os,re,stat,subprocess,time,zlib\n'
               'from pathlib import Path\nfrom datetime import datetime,timezone\nclass Rejected(RuntimeError):pass\n')
     for name in ('BASE', 'INSTALL', 'INSTANCE', 'SERVICE', 'TIMER', 'POLICY_PATH', 'RUNNER_PATHS',
@@ -644,12 +725,21 @@ def validate_result(result, binding):
          'MAINTENANCE_RESULT_INVALID')
     if binding['operation'] in ('install', 'cleanup'):
         need(result['planSha256'] == binding['planSha256'], 'MAINTENANCE_APPROVED_PLAN_CHANGED')
-    if binding['operation'] == 'install':
+    if binding['operation'] in ('install', 'verify_cleanup', 'cleanup'):
         measured = result.get('installationReadback', {})
         need(measured.get('status') == 'INSTALLATION_READBACK_VERIFIED'
              and type(measured.get('targets')) is list and len(measured['targets']) == 6
              and measured.get('sourceSha256') == binding['sourcePins'][RUNNER_PATHS[0]]['sha256']
              and type(measured.get('nextTriggerUtc')) is str, 'MAINTENANCE_INSTALLATION_UNVERIFIED')
+        service = measured.get('service', {})
+        expected = service_arguments(binding)
+        need(service.get('Id') == SERVICE and service.get('Type') == 'oneshot'
+             and service.get('User') == service.get('Group') == 'root'
+             and service.get('FragmentPath') == '/etc/systemd/system/' + SERVICE and service.get('DropInPaths') == ''
+             and service.get('execStartMatched') is True and 'ExecStart' not in service
+             and service.get('execStartExpectedSha256') == digest({'path': expected[0], 'argv': expected})
+             and type(service.get('executionObserved')) is bool and type(service.get('executionSucceeded')) is bool
+             and type(service.get('Result')) is str, 'MAINTENANCE_SERVICE_UNVERIFIED')
     return result
 
 

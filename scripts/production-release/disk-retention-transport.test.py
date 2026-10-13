@@ -62,10 +62,15 @@ def result(value):
     status = {'verify_install': 'PLAN_ONLY', 'install': 'INSTALLED', 'verify_cleanup': 'PLAN_ONLY', 'cleanup': 'APPLIED'}
     output = {'status': status[value['operation']], 'plan': plan, 'planSha256': transport.digest(plan),
               'currentUnchanged': True, 'containersUnchanged': True, 'websiteServicesChanged': False}
-    if value['operation'] == 'install':
+    if value['operation'] in ('install', 'verify_cleanup', 'cleanup'):
+        arguments = transport.service_arguments(value)
         output['installationReadback'] = {'status': 'INSTALLATION_READBACK_VERIFIED', 'targets': [{}]*6,
             'sourceSha256': value['sourcePins'][transport.RUNNER_PATHS[0]]['sha256'],
-            'nextTriggerUtc': '2030-01-01T03:15:00+00:00'}
+            'nextTriggerUtc': '2030-01-01T03:15:00+00:00',
+            'service': {'Id':transport.SERVICE,'Type':'oneshot','User':'root','Group':'root',
+                'FragmentPath':'/etc/systemd/system/'+transport.SERVICE,'DropInPaths':'','Result':'success',
+                'execStartMatched':True,'execStartExpectedSha256':transport.digest({'path':arguments[0],'argv':arguments}),
+                'executionObserved':False,'executionSucceeded':False}}
     return output
 
 
@@ -379,6 +384,71 @@ class SsmTests(unittest.TestCase):
 
 
 class NativeOperationTests(unittest.TestCase):
+    def service_values(self, value):
+        arguments=transport.service_arguments(value)
+        return {'Id':transport.SERVICE,'Names':transport.SERVICE,'LoadState':'loaded',
+            'FragmentPath':'/etc/systemd/system/'+transport.SERVICE,'DropInPaths':'','Type':'oneshot',
+            'User':'root','Group':'root','Result':'success','ActiveState':'inactive','SubState':'dead',
+            'MainPID':'0','ControlPID':'0','ExecMainCode':'0','ExecMainStatus':'0',
+            'ExecMainStartTimestamp':'','ExecMainExitTimestamp':'',
+            'ExecStart':'{ path='+arguments[0]+' ; argv[]='+' '.join(arguments)+
+                ' ; ignore_errors=no ; start_time=[n/a] ; stop_time=[n/a] ; pid=0 ; code=(null) ; status=0/0 }'}
+
+    def read_service(self, value, properties):
+        with patch.object(transport,'command',return_value='\n'.join(key+'='+item for key,item in properties.items()).encode()) as call:
+            result=transport.service_readback(value)
+        arguments=call.call_args.args[0]
+        self.assertEqual(arguments[:6],['env','TZ=UTC','systemctl','show',transport.SERVICE,'--no-pager'])
+        self.assertNotIn('Environment',arguments[-1])
+        return result
+
+    def test_effective_service_configuration_does_not_claim_unobserved_execution(self):
+        value=binding('install');properties=self.service_values(value)
+        measured=self.read_service(value,properties)
+        self.assertEqual(measured['Result'],'success')
+        self.assertTrue(measured['execStartMatched'])
+        self.assertFalse(measured['executionObserved']);self.assertFalse(measured['executionSucceeded'])
+        self.assertNotIn('ExecStart',measured)
+        arguments=transport.service_arguments(value)
+        self.assertEqual(measured['execStartExpectedSha256'],transport.digest({'path':arguments[0],'argv':arguments}))
+
+    def test_effective_service_actual_completed_success_and_failure_are_distinct(self):
+        value=binding('cleanup');properties=self.service_values(value)
+        properties.update(ExecMainCode='1',ExecMainStartTimestamp='Wed 2026-01-14 03:15:00 UTC',
+                          ExecMainExitTimestamp='Wed 2026-01-14 03:15:01 UTC')
+        properties['ExecStart']=properties['ExecStart'].replace('code=(null) ; status=0/0','code=exited ; status=0')
+        measured=self.read_service(value,properties)
+        self.assertTrue(measured['executionObserved']);self.assertTrue(measured['executionSucceeded'])
+        properties.update(Result='exit-code',ActiveState='failed',SubState='failed',ExecMainStatus='1')
+        measured=self.read_service(value,properties)
+        self.assertTrue(measured['executionObserved']);self.assertFalse(measured['executionSucceeded'])
+        self.assertEqual(measured['Result'],'exit-code')
+
+    def test_foreign_effective_service_command_fields_and_result_fail_closed(self):
+        value=binding('install');properties=self.service_values(value)
+        changes=(('Type','simple'),('User','ubuntu'),('Group','ubuntu'),('Names',transport.SERVICE+' other.service'),
+            ('DropInPaths','/etc/systemd/system/override.conf'),('MainPID','10'),
+            ('ExecStart',properties['ExecStart'].replace('argv[]=/usr/bin/python3','argv[]=/bin/sh')),
+            ('ExecStart',properties['ExecStart'].replace(' ; ignore_errors=no',' --unknown ; ignore_errors=no')),
+            ('ExecStart',properties['ExecStart']+' '+properties['ExecStart']),
+            ('ExecStart',properties['ExecStart'].replace(' ; pid=0',' ; other=x ; pid=0')),
+            ('Result','unknown'),('ExecMainStartTimestamp','secret raw text'))
+        for key,altered in changes:
+            with self.subTest(key=key,altered=altered),self.assertRaises(transport.Rejected):
+                self.read_service(value,{**properties,key:altered})
+
+    def test_cleanup_results_require_full_service_readback(self):
+        for operation in ('install','verify_cleanup','cleanup'):
+            value=binding(operation);output=result(value)
+            if operation in ('install','cleanup'):value['planSha256']=output['planSha256']
+            transport.validate_result(output,value)
+            for altered in ({}, {**output['installationReadback'],'targets':[]},
+                            {**output['installationReadback'],'service':{}},
+                            {**output['installationReadback'],'service':{**output['installationReadback']['service'],
+                                'execStartExpectedSha256':'0'*64}}):
+                with self.subTest(operation=operation),self.assertRaises(transport.Rejected):
+                    transport.validate_result({**output,'installationReadback':altered},value)
+
     def make_binding(self, operation):
         value=binding(operation)
         raws={path:path.encode() for path in transport.PATHS}
@@ -411,13 +481,15 @@ class NativeOperationTests(unittest.TestCase):
                  patch.object(transport,'regular',side_effect=read),patch.object(transport,'snapshot',return_value=probe),\
                  patch.object(transport.subprocess,'run',side_effect=child) as runner,\
                  patch.object(transport,'cleanup_plan',return_value=plan),\
-                 patch.object(transport,'installation_readback',return_value={'status':'INSTALLATION_READBACK_VERIFIED'}):
+                 patch.object(transport,'installation_readback',return_value={'status':'INSTALLATION_READBACK_VERIFIED'}) as readback:
                 returned=transport.execute_native(value)
                 arguments=runner.call_args.args[0]
                 self.assertEqual(runner.call_count,2 if operation in ('install','cleanup') else 1)
                 self.assertNotIn('--scheduled',arguments);self.assertNotIn('--phase',arguments)
                 self.assertEqual('--apply' in arguments,operation in ('install','cleanup'))
                 self.assertEqual(returned['sourceProbe'],probe)
+                self.assertEqual(readback.call_count,0 if operation=='verify_install' else 1)
+                self.assertEqual('installationReadback' in returned,operation!='verify_install')
                 if operation in ('verify_install','install'):
                     self.assertIn('--policy-json',arguments)
                     self.assertTrue(arguments[2].endswith('/scripts/production-release/disk-retention-install.py'))
@@ -461,7 +533,7 @@ class NativeOperationTests(unittest.TestCase):
         plan={'corePlan':{'items':[{'tag':tag,'imageId':'sha256:'+image} for tag,image in rows]}}
         planned={'status':'PLAN_ONLY','plan':plan,'planSha256':transport.digest(plan)}
         transport.apply_receipt_budget(value,planned,{'currentRelease':'/opt/id-business-v2/releases/20261014T002401Z-f193f34ea09a',
-            'currentManifestSha256':'f'*64,'containers':[]})
+            'currentManifestSha256':'f'*64,'containers':[]}, {'approved':True})
 
     def test_installed_readback_requires_exact_six_sources_and_real_future_timer(self):
         value,raws,policy=self.make_binding('install')
@@ -475,10 +547,13 @@ class NativeOperationTests(unittest.TestCase):
         hashes={str(path):sha for path,(sha,mode) in expected.items()}
         with patch.object(transport,'installed_targets',return_value=expected),\
              patch.object(transport,'regular',side_effect=read),patch.object(transport,'sha',side_effect=lambda raw:hashes[raw.decode()]),\
-             patch.object(transport,'command',return_value='\n'.join(key+'='+item for key,item in values.items()).encode()):
+             patch.object(transport,'command',return_value='\n'.join(key+'='+item for key,item in values.items()).encode()),\
+             patch.object(transport,'service_readback',return_value={'execStartMatched':True}) as service:
             measured=transport.installation_readback(value,policy)
             self.assertEqual(len(measured['targets']),6)
             self.assertEqual(measured['timer']['UnitFileState'],'enabled')
+            service.assert_called_once_with(value)
+            self.assertTrue(measured['service']['execStartMatched'])
         for key,altered in (('SubState','dead'),('UnitFileState','disabled'),('NextElapseUSecRealtime','n/a')):
             changed={**values,key:altered}
             with self.subTest(key=key),patch.object(transport,'installed_targets',return_value=expected),\
