@@ -1,0 +1,24 @@
+{
+  "kind": "ID_DISK_RETENTION_POLICY_V1",
+  "version": 1,
+  "approved": false,
+  "sourceSha256": "30f3ed367b58847a980e1608b78987172b1476cddbd3d3134780e5b7b68d3bd1",
+  "maintainerSha256": "4ecd23b5688db65447fe8418aa29f061a5d2667312b68ecb56d9b1272e95562b",
+  "protectedCandidateBatches": ["08419dcbe85212a203906c86c98e5c3ae0695d72-38160127343-1"],
+  "supersededOnlineBatches": [
+    "28a3ba4ffd17d36001b1104c97394f5ae871d73d-37933246605-1",
+    "296c096af7c4c79a8ffc2f57d9a15ea75684f431-37944613453-1",
+    "a6f923205d6d9c9b2d7aee7b94a125369147c4db-38137369470-1",
+    "34a2ad26def934dcaed6bdd1e3188ca977fcdc30-38149250659-1",
+    "34a2ad26def934dcaed6bdd1e3188ca977fcdc30-38152058777-1"
+  ],
+  "budgets": {
+    "targetFreeBytes": 12884901888,
+    "cleanupThresholdBytes": 10737418240,
+    "criticalFreeBytes": 6442450944,
+    "projectArtifactsBytes": 4294967296,
+    "localBackupsBytes": 1073741824,
+    "systemLogsBytes": 1073741824
+  },
+  "candidateRegistrySha256": "998a8092ab5aa67496b674f374b992bedc003c7d54b9316e0476ed6fbfb2441a"
+}

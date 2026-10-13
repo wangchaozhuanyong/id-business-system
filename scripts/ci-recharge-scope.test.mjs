@@ -64,14 +64,20 @@ import { matchesSourceEvidence } from './ci-recharge-evidence.mjs';
 const schema =
   'model Other { id String }\nmodel IdBusinessV2RechargeBrowserSetting { ownerId String }\n';
 
-test('finite migration reuse preserves every original scope and command byte', () => {
+test('disk retention scope changes invalidate frozen migration reuse without weakening its original gate', () => {
   const before = execFileSync(
     'git',
     ['show', combinedMigrationBinding.head + ':scripts/ci-recharge-scope.mjs'],
     { encoding: 'utf8' }
   );
   const after = readFileSync('scripts/ci-recharge-scope.mjs', 'utf8');
-  assert.equal(combinedMigrationScopeBytesUnchanged(before, after), true);
+  const prior = execFileSync(
+    'git',
+    ['show', 'f193f34ea09a2c37485c1582a81b33ee3acec865:scripts/ci-recharge-scope.mjs'],
+    { encoding: 'utf8' }
+  );
+  assert.equal(combinedMigrationScopeBytesUnchanged(before, prior), true);
+  assert.equal(combinedMigrationScopeBytesUnchanged(before, after), false);
   for (const name of [
     'hasCombinedComponentScope',
     'hasRechargeConnectionMigrationScope',
@@ -80,7 +86,7 @@ test('finite migration reuse preserves every original scope and command byte', (
     'affectsPart'
   ])
     assert.equal(
-      combinedMigrationScopeBytesUnchanged(before, after.replace(name, name + 'Changed')),
+      combinedMigrationScopeBytesUnchanged(before, prior.replace(name, name + 'Changed')),
       false
     );
 });
@@ -188,14 +194,20 @@ test('the completed Admin job is reusable only with native success and control-o
   assert.equal(validate(run, jobs, [], { ...checkout, tree: { sha: 'a'.repeat(40) } }), false);
 });
 
-test('guard continuation preserves every original dispatcher command byte', () => {
+test('disk retention commands require new guard evidence and preserve the original byte gate', () => {
   const before = execFileSync(
     'git',
     ['show', combinedMigrationBinding.head + ':scripts/ci-recharge-check.mjs'],
     { encoding: 'utf8' }
   );
   const after = readFileSync('scripts/ci-recharge-check.mjs', 'utf8');
-  assert.equal(combinedDispatcherBytesUnchanged(before, after), true);
+  const prior = execFileSync(
+    'git',
+    ['show', 'f193f34ea09a2c37485c1582a81b33ee3acec865:scripts/ci-recharge-check.mjs'],
+    { encoding: 'utf8' }
+  );
+  assert.equal(combinedDispatcherBytesUnchanged(before, prior), true);
+  assert.equal(combinedDispatcherBytesUnchanged(before, after), false);
   for (const name of [
     'shared',
     'onlineEngine',
@@ -203,7 +215,7 @@ test('guard continuation preserves every original dispatcher command byte', () =
     'hasCombinedComponentScope'
   ])
     assert.equal(
-      combinedDispatcherBytesUnchanged(before, after.replace(name, name + 'Changed')),
+      combinedDispatcherBytesUnchanged(before, prior.replace(name, name + 'Changed')),
       false
     );
 });
@@ -1215,6 +1227,26 @@ test('approved audit trigger migration runs isolated MySQL guards without hiding
     'full'
   );
 });
+test('disk retention scripts and reviewed policy use release control checks', () => {
+  const paths = [
+    'scripts/production-release/disk-retention.py',
+    'scripts/production-release/disk-retention.test.py',
+    'scripts/production-release/disk-retention-install.py',
+    'scripts/production-release/disk-retention-install.test.py',
+    'scripts/production-release/disk-retention-transport.py',
+    'scripts/production-release/disk-retention-transport.test.py',
+    '.github/workflows/disk-retention-maintenance.yml',
+    'scripts/production-release/candidate-retention.py',
+    'scripts/production-release/candidate-retention.test.py',
+    'scripts/production-release/disk-lifecycle.test.py',
+    'scripts/production-release/release-storage.py',
+    'scripts/production-release/release-storage.test.py',
+    'deploy/aws/disk-retention-policy-20261014.json'
+  ];
+  for (const path of paths) assert.equal(checkMode([path], schema, schema), 'ci-only');
+  assert.equal(checkMode(paths, schema, schema), 'ci-only');
+});
+
 test('ordinary admin modules use frontend checks instead of backend and financial suites', () => {
   const paths = ['apps/admin/src/v2/features/orders/Orders.vue', 'docs/V2_TASKS.md'];
   assert.equal(checkMode(paths, schema, schema), 'admin');

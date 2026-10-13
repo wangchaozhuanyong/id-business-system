@@ -489,13 +489,24 @@ const inputs = new Proxy({operation, historical_exception: 'none', reuse_image_r
 const always = () => true;
 const startsWith = (v, p) => v.startsWith(p);
 const steps = current.jobs.release.steps;
-const stepContext = new Proxy({}, {get: () => ({outcome: 'failure'})});
-const enabledFor = values => steps.filter(s => !s.if || Function('inputs', 'always', 'startsWith', 'failure', 'steps', 'return (' + s.if + ')')(values, always, startsWith, () => true, stepContext));
+const stepContext = installed => new Proxy({}, {get: (value, name) => name === 'disk_owner' ? {outputs: {installed}} : {outcome: 'failure'}});
+const enabledFor = (values, installed = 'false') => steps.filter(s => !s.if || Function('inputs', 'always', 'startsWith', 'failure', 'steps', 'return (' + s.if + ')')(values, always, startsWith, () => true, stepContext(installed)));
 const enabled = enabledFor(inputs);
-const oldEnabled = old.jobs.release.steps.filter(s => !s.if || Function('inputs', 'always', 'startsWith', 'failure', 'steps', 'return (' + s.if + ')')(inputs, always, startsWith, () => true, stepContext));
+const oldEnabled = old.jobs.release.steps.filter(s => !s.if || Function('inputs', 'always', 'startsWith', 'failure', 'steps', 'return (' + s.if + ')')(inputs, always, startsWith, () => true, stepContext('false')));
 const changed = steps.filter(s => old.jobs.release.steps.some(o => o.name === s.name && JSON.stringify(o) !== JSON.stringify(s))).map(s => s.name);
 const byName = (list, name) => list.find(s => s.name === name);
 const without = (step, key) => Object.fromEntries(Object.entries(step).filter(([name]) => name !== key));
+const diskPrefix = "steps.disk_owner.outputs.installed != 'true' && (";
+const genericCacheName = 'Verify or maintain recoverable unused project image cache';
+const serviceCacheName = 'Maintain service rollback image cache independently after fixed release';
+const diskGateOnlyChanged = [genericCacheName, serviceCacheName].every(name => {
+ const before = byName(old.jobs.release.steps, name), after = byName(steps, name);
+ const releasePrefix = "inputs.operation == 'release' && ";
+ const expected = name === genericCacheName
+   ? before.if.replace(releasePrefix, releasePrefix + "inputs.historical_exception != 'none' && ") : before.if;
+ return JSON.stringify(without(after, 'if')) === JSON.stringify(without(before, 'if'))
+   && after.if === diskPrefix + expected + ')';
+});
 const legacyName = 'Read production release diagnostics';
 const readbackName = 'Independently read back Admin publication and preserved services';
 const oldReadback = byName(old.jobs.release.steps, readbackName);
@@ -614,6 +625,7 @@ console.log(JSON.stringify({concurrency: current.concurrency, oldConcurrency: ol
  oldStepsRetained: old.jobs.release.steps.every(o => steps.some(s => s.name === o.name)), changed,
  legacyOnlyGateChanged: JSON.stringify(without(byName(steps, legacyName), 'if')) === JSON.stringify(without(byName(old.jobs.release.steps, legacyName), 'if')),
  readbackOnlyApiOriginChanged: JSON.stringify(without(readback, 'run')) === JSON.stringify(without(oldReadback, 'run')) && validatesReadback(readback.run),
+ diskGateOnlyChanged, enabledByInstalled: ['false', 'true'].map(installed => enabledFor(inputs, installed)),
  rechargeOnlyGateChanged: ['Build images on the GitHub runner', 'Push immutable images', 'Deploy through the production instance'].every(name => JSON.stringify(without(byName(steps, name), 'if')) === JSON.stringify(without(byName(old.jobs.release.steps, name), 'if'))),
  diagnostic: byName(steps, 'Diagnose the fixed unpublished component runtime without publication'),
  diagnosticArtifact: byName(steps, 'Save only credential-free unpublished component diagnostic evidence'),
@@ -635,9 +647,13 @@ console.log(JSON.stringify({concurrency: current.concurrency, oldConcurrency: ol
         self.assertIn(m.OPERATION, value['options'])
         self.assertTrue(value['oldStepsRetained'])
         self.assertEqual(value['enabled'], value['oldEnabled'])
+        for selected in value['enabledByInstalled']:
+            self.assertEqual(selected, value['oldEnabled'])
         self.assertEqual(value['changed'], ['Build images on the GitHub runner', 'Push immutable images',
             'Read production release diagnostics', 'Deploy through the production instance',
-            'Independently read back Admin publication and preserved services'])
+            'Independently read back Admin publication and preserved services',
+            'Verify or maintain recoverable unused project image cache',
+            'Maintain service rollback image cache independently after fixed release'])
         self.assertTrue(value['rechargeOnlyGateChanged'])
         self.assertTrue(value['legacyOnlyGateChanged'])
         self.assertTrue(value['readbackOnlyApiOriginChanged'])
@@ -647,6 +663,7 @@ console.log(JSON.stringify({concurrency: current.concurrency, oldConcurrency: ol
         self.assertTrue(value['confirmStepsValidated'])
         self.assertTrue(value['confirmInactiveForOld'])
         self.assertTrue(value['confirmActiveOnlyForFiniteInputs'])
+        self.assertTrue(value['diskGateOnlyChanged'])
         admin_current = '60e164b75d1eedaab440c17139bf9ba55de08c61'
         self.assertEqual(value['adminGates'], {
             'Read finite Admin successor baseline facts': "inputs.operation == 'verify_access' && inputs.expected_current == '" + admin_current + "'",
@@ -657,7 +674,52 @@ console.log(JSON.stringify({concurrency: current.concurrency, oldConcurrency: ol
         self.assertEqual(set(added), {'Verify recharge flow predecessor and idle workers before building',
             'Independently read back recharge flow images and preserved services',
             'Save recharge flow build and independent runtime evidence',
-            'Read finite Admin successor baseline facts', 'Save finite Admin successor read-only evidence'})
+            'Read finite Admin successor baseline facts', 'Save finite Admin successor read-only evidence',
+            'Read stable disk maintenance ownership before legacy image operations',
+            'Reject legacy image cleanup after stable disk policy installation',
+            'Recover reviewed disk headroom before release preflight',
+            'Register complete release candidate and reserve pull headroom',
+            'Confirm published candidate and reclaim superseded local images',
+            'Save disk lifecycle safe evidence'})
+        modern_operations = ('release', 'release_admin', 'release_online_recharge', 'release_api_workspace',
+            'release_api_admin', 'release_api_admin_migration', 'release_unpublished_components', 'release_recharge_flow')
+        disk_condition = "inputs.historical_exception == 'none' && inputs.reuse_image_run == '' && (" + ' || '.join(
+            "inputs.operation == '" + operation + "'" for operation in modern_operations) + ')'
+        for title, phase in (('Recover reviewed disk headroom before release preflight', 'before-build'),
+                            ('Register complete release candidate and reserve pull headroom', 'before-pull'),
+                            ('Confirm published candidate and reclaim superseded local images', 'after-publish')):
+            self.assertEqual(added[title], {'name': title, 'if': disk_condition,
+                'run': 'python3 -B scripts/production-release/release-storage.py ' + phase})
+        artifact_title = 'Save disk lifecycle safe evidence'
+        self.assertEqual(added[artifact_title], {'name': artifact_title, 'if': 'always() && ' + disk_condition,
+            'uses': 'actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02',
+            'with': {'name': 'disk-lifecycle-evidence-${{ github.run_id }}-${{ github.run_attempt }}',
+                'path': '.deploy/production-release/storage/**/*.json', 'if-no-files-found': 'warn',
+                'include-hidden-files': True, 'retention-days': 14}})
+        cleanup_operations = ('cleanup_cache', 'cleanup_unused_cache', 'cleanup_unused_legacy_cache',
+            'cleanup_unused_builder_cache', 'cleanup_legacy_cache')
+        cleanup_condition = ' || '.join("inputs.operation == '" + operation + "'" for operation in cleanup_operations)
+        owner_title = 'Read stable disk maintenance ownership before legacy image operations'
+        owner = added[owner_title]
+        self.assertEqual(set(owner), {'name', 'id', 'if', 'run'})
+        self.assertEqual(owner['id'], 'disk_owner')
+        self.assertEqual(owner['if'], "inputs.operation == 'release' || " + cleanup_condition)
+        owner_run = """set -Eeuo pipefail
+command_id="$(aws ssm send-command --instance-ids "$PRODUCTION_INSTANCE_ID" \\
+  --document-name AWS-RunShellScript \\
+  --parameters '{"commands":["if test -e /opt/id-business-v2/maintenance/disk-retention/config.json; then printf true; else printf false; fi"]}' \\
+  --query 'Command.CommandId' --output text)"
+aws ssm wait command-executed --command-id "$command_id" --instance-id "$PRODUCTION_INSTANCE_ID"
+installed="$(aws ssm get-command-invocation --command-id "$command_id" \\
+  --instance-id "$PRODUCTION_INSTANCE_ID" --query StandardOutputContent --output text)"
+case "$installed" in true|false) ;; *) exit 1 ;; esac
+printf 'installed=%s\\n' "$installed" >> "$GITHUB_OUTPUT"
+"""
+        self.assertEqual(owner['run'], owner_run)
+        reject_title = 'Reject legacy image cleanup after stable disk policy installation'
+        self.assertEqual(added[reject_title], {'name': reject_title,
+            'if': "steps.disk_owner.outputs.installed == 'true' && (" + cleanup_condition + ')',
+            'run': "echo 'The installed disk policy owns image cleanup; legacy cleanup cannot bypass its candidate protections.' >&2\nexit 1\n"})
         self.assertEqual(added['Read finite Admin successor baseline facts']['run'],
                          'python3 -B scripts/production-release/admin-successor-diagnostic.py')
         admin_artifact = added['Save finite Admin successor read-only evidence']

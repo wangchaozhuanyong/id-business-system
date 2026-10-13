@@ -542,21 +542,29 @@ class ConfirmProjectionTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.predecessor = git_files(a.CONFIRM_BASELINE)
+        cls.control_source = git_files(a.CONFIRM_CONTROL_SOURCE)
         p = a.projection_module(); cls.p = p
         cls.baseline, cls.online = git_files(p.BASELINE_COMMIT), git_files(p.ONLINE_COMMIT)
-        cls.candidate = dict(cls.predecessor)
+        cls.candidate = dict(cls.control_source)
         for name in (*a.CONFIRM_FILES, *a.CONFIRM_CONTROLS, *a.CONFIRM_DOCS):
             cls.candidate[name] = ((ROOT / name).read_bytes(), '100644')
 
-    def project(self, candidate=None, predecessor=None):
+    def project(self, candidate=None, predecessor=None, control_source=None):
         files = self.candidate if candidate is None else candidate
         return a.project_confirm(files, self.predecessor if predecessor is None else predecessor,
-            self.baseline, self.online, 'a' * 40, self.p.source_tree(files))
+            self.baseline, self.online, 'a' * 40, self.p.source_tree(files),
+            self.control_source if control_source is None else control_source)
 
     def test_only_frozen_two_file_overlay_enters_published_projection_and_online_stays_absent(self):
         output, record, runtime = self.project()
         self.assertEqual(record['profile'], a.CONFIRM_PROFILE)
         self.assertEqual(record['apiComponentBaseline'], a.CONFIRM_BASELINE)
+        self.assertEqual(record['controlSourceCommit'], a.CONFIRM_CONTROL_SOURCE)
+        self.assertEqual(record['controlSourceTree'], a.CONFIRM_CONTROL_TREE)
+        self.assertEqual(set(record['inheritedControlFiles']), a.CONFIRM_UPSTREAM_CONTROLS | a.CONFIRM_DOCS)
+        self.assertEqual(len(a.CONFIRM_UPSTREAM_CONTROLS), 25)
+        for name in a.CONFIRM_UPSTREAM_CONTROLS - a.CONFIRM_CONTROLS - a.CONFIRM_DOCS:
+            self.assertEqual(output[name], self.control_source[name], name)
         self.assertEqual(record['overlaySha256'], a.CONFIRM_OVERLAY_SHA256)
         self.assertEqual(set(record['overlayFiles']), set(a.CONFIRM_FILES))
         self.assertFalse(any('/online-recharge/' in name for name in output))
@@ -576,7 +584,8 @@ class ConfirmProjectionTests(unittest.TestCase):
             'apps/api/prisma-mysql/schema.prisma',
             'apps/api/prisma-mysql/migrations/unreviewed/migration.sql', 'package-lock.json',
             'scripts/production-release/extra.py', '.github/workflows/quality.yml',
-            'docs/another-release.md')
+            'docs/another-release.md', 'scripts/production-release/disk-retention.py',
+            'deploy/aws/disk-retention-policy-20261014.json', '.github/workflows/disk-retention-maintenance.yml')
         for name in paths:
             files = dict(self.candidate); raw, mode = files.get(name, (b'', '100644'))
             files[name] = (raw + b'\n# changed\n', mode)
@@ -603,6 +612,43 @@ class ConfirmProjectionTests(unittest.TestCase):
         with patch.object(a, 'CONFIRM_CONTRACT', {**a.CONFIRM_CONTRACT, 'projectionSha256': '0' * 64}), \
              self.assertRaisesRegex(RuntimeError, 'CONFIRM_PREDECESSOR_CHANGED'):
             self.project()
+
+    def test_control_basis_cannot_drift_or_introduce_unapproved_runtime_even_when_tree_is_resealed(self):
+        source = dict(self.control_source)
+        name = 'scripts/production-release/disk-retention.py'
+        raw, mode = source[name]; source[name] = (raw + b'\n# drift\n', mode)
+        with self.assertRaisesRegex(RuntimeError, 'CONFIRM_CONTROL_SOURCE_CHANGED'):
+            self.project(control_source=source)
+        for name in ('apps/api/src/auth/auth.service.ts',
+                     'apps/admin/src/v2/features/auto-recharge/useRechargeLocalConfirmation.ts',
+                     'package-lock.json', 'apps/api/prisma-mysql/schema.prisma'):
+            source = dict(self.control_source); raw, mode = source[name]
+            source[name] = (raw + b'\n# runtime change\n', mode)
+            with self.subTest(name=name), patch.object(a, 'CONFIRM_CONTROL_TREE', self.p.source_tree(source)), \
+                 self.assertRaisesRegex(RuntimeError, 'CONFIRM_CONTROL_SCOPE_CHANGED'):
+                self.project(control_source=source)
+
+    def test_inherited_storage_registration_accepts_only_this_complete_admin_role(self):
+        storage = a.load_module('confirm_inherited_storage', 'release-storage.py')
+        producer = {'commit': 'a' * 40, 'sourceTree': 'b' * 40,
+            'workflowRunId': '123', 'workflowRunAttempt': '1'}
+        selected = {'operation': 'release_admin', 'producer': producer,
+            'qualityRunId': '111', 'batch': producer['commit'] + '-123-1'}
+        proof = {'version': 1, 'scope': 'ADMIN_PENDING_ONLINE_BUILD',
+            'commit': producer['commit'], 'sourceTree': producer['sourceTree'],
+            'runId': '123', 'runAttempt': '1', 'qualityRunId': '111',
+            'image': {'reference': a.REPOSITORY + ':' + selected['batch'] + '-admin',
+                'imageId': 'sha256:' + 'c' * 64, 'fileCount': 225, 'sha256': 'd' * 64}}
+        module, images = storage.proof_images(selected, proof)
+        self.assertEqual(module, 'admin')
+        self.assertEqual(set(images), {'admin'})
+        for fault in ('role', 'run', 'scope'):
+            changed = copy.deepcopy(proof)
+            if fault == 'role': changed['image']['reference'] = changed['image']['reference'].replace('-admin', '-api')
+            elif fault == 'run': changed['runId'] = '124'
+            else: changed['scope'] = 'UNPUBLISHED_COMPONENT_BUILD'
+            with self.subTest(fault=fault), self.assertRaises(storage.StorageRejected):
+                storage.proof_images(selected, changed)
 
 
 class ConfirmPublicationTests(unittest.TestCase):

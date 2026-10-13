@@ -443,6 +443,31 @@ jobs:
           aws-region: ${{ env.AWS_REGION }}
           role-duration-seconds: 3600
 
+      - name: Read stable disk maintenance ownership before legacy image operations
+        id: disk_owner
+        if: inputs.operation == 'release' || inputs.operation == 'cleanup_cache' || inputs.operation == 'cleanup_unused_cache' || inputs.operation == 'cleanup_unused_legacy_cache' || inputs.operation == 'cleanup_unused_builder_cache' || inputs.operation == 'cleanup_legacy_cache'
+        run: |
+          set -Eeuo pipefail
+          command_id="$(aws ssm send-command --instance-ids "$PRODUCTION_INSTANCE_ID" \
+            --document-name AWS-RunShellScript \
+            --parameters '{"commands":["if test -e /opt/id-business-v2/maintenance/disk-retention/config.json; then printf true; else printf false; fi"]}' \
+            --query 'Command.CommandId' --output text)"
+          aws ssm wait command-executed --command-id "$command_id" --instance-id "$PRODUCTION_INSTANCE_ID"
+          installed="$(aws ssm get-command-invocation --command-id "$command_id" \
+            --instance-id "$PRODUCTION_INSTANCE_ID" --query StandardOutputContent --output text)"
+          case "$installed" in true|false) ;; *) exit 1 ;; esac
+          printf 'installed=%s\n' "$installed" >> "$GITHUB_OUTPUT"
+
+      - name: Reject legacy image cleanup after stable disk policy installation
+        if: steps.disk_owner.outputs.installed == 'true' && (inputs.operation == 'cleanup_cache' || inputs.operation == 'cleanup_unused_cache' || inputs.operation == 'cleanup_unused_legacy_cache' || inputs.operation == 'cleanup_unused_builder_cache' || inputs.operation == 'cleanup_legacy_cache')
+        run: |
+          echo 'The installed disk policy owns image cleanup; legacy cleanup cannot bypass its candidate protections.' >&2
+          exit 1
+
+      - name: Recover reviewed disk headroom before release preflight
+        if: inputs.historical_exception == 'none' && inputs.reuse_image_run == '' && (inputs.operation == 'release' || inputs.operation == 'release_admin' || inputs.operation == 'release_online_recharge' || inputs.operation == 'release_api_workspace' || inputs.operation == 'release_api_admin' || inputs.operation == 'release_api_admin_migration' || inputs.operation == 'release_unpublished_components' || inputs.operation == 'release_recharge_flow')
+        run: python3 -B scripts/production-release/release-storage.py before-build
+
       - name: Verify online recharge predecessor and idle workers before building
         if: inputs.operation == 'verify_online_recharge' || inputs.operation == 'release_online_recharge'
         run: python3 -B scripts/production-release/online-recharge-readonly.py preflight
@@ -581,6 +606,10 @@ jobs:
       - name: Push immutable images
         if: inputs.operation == 'release_recharge_flow' || inputs.operation == 'release_unpublished_components' || inputs.operation == 'release_admin' || inputs.operation == 'release_online_recharge' || inputs.operation == 'release_api_workspace' || inputs.operation == 'release_api_admin' || inputs.operation == 'release_api_admin_migration' || inputs.operation == 'release_api_registration' || (inputs.operation == 'release' && inputs.reuse_image_run == '') || inputs.operation == 'prepare_post_cleanup_release' || inputs.operation == 'prepare_order_archive_release'
         run: bash scripts/production-release/push-images.sh
+
+      - name: Register complete release candidate and reserve pull headroom
+        if: inputs.historical_exception == 'none' && inputs.reuse_image_run == '' && (inputs.operation == 'release' || inputs.operation == 'release_admin' || inputs.operation == 'release_online_recharge' || inputs.operation == 'release_api_workspace' || inputs.operation == 'release_api_admin' || inputs.operation == 'release_api_admin_migration' || inputs.operation == 'release_unpublished_components' || inputs.operation == 'release_recharge_flow')
+        run: python3 -B scripts/production-release/release-storage.py before-pull
 
       - name: Save fixed registration Worker build projection
         if: inputs.operation == 'release' && inputs.historical_exception == 'registration-worker-b8-80-20261006'
@@ -2676,6 +2705,20 @@ jobs:
         if: inputs.operation == 'release_online_recharge'
         run: python3 -B scripts/production-release/online-recharge-readonly.py readback
 
+      - name: Confirm published candidate and reclaim superseded local images
+        if: inputs.historical_exception == 'none' && inputs.reuse_image_run == '' && (inputs.operation == 'release' || inputs.operation == 'release_admin' || inputs.operation == 'release_online_recharge' || inputs.operation == 'release_api_workspace' || inputs.operation == 'release_api_admin' || inputs.operation == 'release_api_admin_migration' || inputs.operation == 'release_unpublished_components' || inputs.operation == 'release_recharge_flow')
+        run: python3 -B scripts/production-release/release-storage.py after-publish
+
+      - name: Save disk lifecycle safe evidence
+        if: always() && inputs.historical_exception == 'none' && inputs.reuse_image_run == '' && (inputs.operation == 'release' || inputs.operation == 'release_admin' || inputs.operation == 'release_online_recharge' || inputs.operation == 'release_api_workspace' || inputs.operation == 'release_api_admin' || inputs.operation == 'release_api_admin_migration' || inputs.operation == 'release_unpublished_components' || inputs.operation == 'release_recharge_flow')
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: disk-lifecycle-evidence-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .deploy/production-release/storage/**/*.json
+          if-no-files-found: warn
+          include-hidden-files: true
+          retention-days: 14
+
       - name: Save online recharge build and independent runtime evidence
         if: always() && (inputs.operation == 'verify_online_recharge' || inputs.operation == 'release_online_recharge')
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
@@ -2905,7 +2948,7 @@ jobs:
           retention-days: 14
 
       - name: Verify or maintain recoverable unused project image cache
-        if: (inputs.operation == 'verify_unused_cache' || inputs.operation == 'cleanup_unused_cache' || inputs.operation == 'verify_unused_legacy_cache' || inputs.operation == 'cleanup_unused_legacy_cache' || inputs.operation == 'verify_unused_builder_cache' || inputs.operation == 'cleanup_unused_builder_cache' || (inputs.operation == 'release' && inputs.historical_exception != 'recharge-pro-menu-b8-20261005' && inputs.historical_exception != 'recharge-pro-menu-7f-20261005' && inputs.historical_exception != 'recharge-pro-main80-20261006' && inputs.historical_exception != 'recharge-pro-974-20261007' && inputs.historical_exception != 'recharge-pro-2f-20261007' && inputs.historical_exception != 'recharge-pro-4c-20261008' && inputs.historical_exception != 'recharge-pro-6f5-20261008' && inputs.historical_exception != 'recharge-pro-pricing-045-20261008' && inputs.historical_exception != 'registration-worker-b8-80-20261006' && inputs.historical_exception != 'registration-worker-956-20261006' && inputs.historical_exception != 'registration-worker-85-20261006' && inputs.historical_exception != 'registration-worker-86-20261006' && inputs.historical_exception != 'registration-worker-87-20261006' && inputs.historical_exception != 'registration-worker-88-20261006' && inputs.historical_exception != 'registration-worker-89-20261006' && inputs.historical_exception != 'registration-worker-90-20261007' && inputs.historical_exception != 'registration-worker-91-20261007' && inputs.historical_exception != 'registration-worker-92-20261007' && inputs.historical_exception != 'registration-worker-93-20261007' && inputs.historical_exception != 'registration-worker-94-20261007' && inputs.historical_exception != 'registration-worker-95-20261008' && inputs.historical_exception != 'registration-worker-96-20261008' && inputs.historical_exception != 'historical-finance-20261005-mailbox-batch' && inputs.historical_exception != 'historical-finance-20261005-post-cleanup' && inputs.historical_exception != 'historical-finance-20261005-order-archive')) && ((inputs.operation != 'verify_unused_cache' && inputs.operation != 'cleanup_unused_cache') || inputs.expected_current != '0a03fa28e6b844a18833d5c63f1de700f091fc64')
+        if: steps.disk_owner.outputs.installed != 'true' && ((inputs.operation == 'verify_unused_cache' || inputs.operation == 'cleanup_unused_cache' || inputs.operation == 'verify_unused_legacy_cache' || inputs.operation == 'cleanup_unused_legacy_cache' || inputs.operation == 'verify_unused_builder_cache' || inputs.operation == 'cleanup_unused_builder_cache' || (inputs.operation == 'release' && inputs.historical_exception != 'none' && inputs.historical_exception != 'recharge-pro-menu-b8-20261005' && inputs.historical_exception != 'recharge-pro-menu-7f-20261005' && inputs.historical_exception != 'recharge-pro-main80-20261006' && inputs.historical_exception != 'recharge-pro-974-20261007' && inputs.historical_exception != 'recharge-pro-2f-20261007' && inputs.historical_exception != 'recharge-pro-4c-20261008' && inputs.historical_exception != 'recharge-pro-6f5-20261008' && inputs.historical_exception != 'recharge-pro-pricing-045-20261008' && inputs.historical_exception != 'registration-worker-b8-80-20261006' && inputs.historical_exception != 'registration-worker-956-20261006' && inputs.historical_exception != 'registration-worker-85-20261006' && inputs.historical_exception != 'registration-worker-86-20261006' && inputs.historical_exception != 'registration-worker-87-20261006' && inputs.historical_exception != 'registration-worker-88-20261006' && inputs.historical_exception != 'registration-worker-89-20261006' && inputs.historical_exception != 'registration-worker-90-20261007' && inputs.historical_exception != 'registration-worker-91-20261007' && inputs.historical_exception != 'registration-worker-92-20261007' && inputs.historical_exception != 'registration-worker-93-20261007' && inputs.historical_exception != 'registration-worker-94-20261007' && inputs.historical_exception != 'registration-worker-95-20261008' && inputs.historical_exception != 'registration-worker-96-20261008' && inputs.historical_exception != 'historical-finance-20261005-mailbox-batch' && inputs.historical_exception != 'historical-finance-20261005-post-cleanup' && inputs.historical_exception != 'historical-finance-20261005-order-archive')) && ((inputs.operation != 'verify_unused_cache' && inputs.operation != 'cleanup_unused_cache') || inputs.expected_current != '0a03fa28e6b844a18833d5c63f1de700f091fc64'))
         env:
           CACHE_OPERATION: ${{ inputs.operation }}
           CACHE_PLAN_SHA256: ${{ inputs.cache_plan_sha256 }}
@@ -4539,7 +4582,7 @@ jobs:
         run: printf '%s\n' REGISTRATION_ONLY_CACHE_SKIPPED
 
       - name: Maintain service rollback image cache independently after fixed release
-        if: inputs.operation == 'release' && inputs.historical_exception != 'recharge-pro-4c-20261008' && inputs.historical_exception != 'recharge-pro-6f5-20261008' && inputs.historical_exception != 'recharge-pro-pricing-045-20261008' && inputs.historical_exception != 'registration-worker-96-20261008' && (startsWith(inputs.historical_exception, 'registration-worker-') || startsWith(inputs.historical_exception, 'recharge-pro-'))
+        if: steps.disk_owner.outputs.installed != 'true' && (inputs.operation == 'release' && inputs.historical_exception != 'recharge-pro-4c-20261008' && inputs.historical_exception != 'recharge-pro-6f5-20261008' && inputs.historical_exception != 'recharge-pro-pricing-045-20261008' && inputs.historical_exception != 'registration-worker-96-20261008' && (startsWith(inputs.historical_exception, 'registration-worker-') || startsWith(inputs.historical_exception, 'recharge-pro-')))
         env:
           RELEASE_OPERATION: ${{ inputs.operation }}
         run: python3 -B scripts/production-release/service-image-retention.py

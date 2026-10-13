@@ -57,7 +57,7 @@ def invocation(value):
             'StandardOutputContent': t.PREFIX + json.dumps(value)}
 
 
-def workflow_condition(expression, inputs, failed):
+def workflow_condition(expression, inputs, failed, installed='false'):
     """Evaluate the repository's finite explicit workflow predicates, including negative gates."""
     if expression is None:
         return True
@@ -71,6 +71,8 @@ def workflow_condition(expression, inputs, failed):
                 return inputs[name.split('.')[1]]
             if name == 'steps.api_admin_preflight.outcome':
                 return 'failure' if failed else 'success'
+            if name == 'steps.disk_owner.outputs.installed':
+                return installed
         if isinstance(node, ast.BoolOp) and type(node.op) in (ast.And, ast.Or):
             values = [evaluate(value) for value in node.values]
             return all(values) if isinstance(node.op, ast.And) else any(values)
@@ -611,12 +613,13 @@ class TransportTests(unittest.TestCase):
                     'Explicitly repair the single baseline Compose source permission',
                     'Save only the explicit source permission repair safe receipt']
         for failed in (False, True):
-            selected = [step for step in content['steps'] if workflow_condition(step.get('if'), inputs, failed)]
-            self.assertEqual([step['name'] for step in selected], expected)
-            artifacts = [step for step in selected if step.get('uses', '').startswith('actions/upload-artifact@')]
-            self.assertEqual(len(artifacts), 1)
-            self.assertEqual(artifacts[0]['with']['path'], str(t.ARTIFACT))
-            self.assertNotIn('*', artifacts[0]['with']['path'])
+            for installed in ('false', 'true'):
+                selected = [step for step in content['steps'] if workflow_condition(step.get('if'), inputs, failed, installed)]
+                self.assertEqual([step['name'] for step in selected], expected)
+                artifacts = [step for step in selected if step.get('uses', '').startswith('actions/upload-artifact@')]
+                self.assertEqual(len(artifacts), 1)
+                self.assertEqual(artifacts[0]['with']['path'], str(t.ARTIFACT))
+                self.assertNotIn('*', artifacts[0]['with']['path'])
 
 
 if __name__ == '__main__':

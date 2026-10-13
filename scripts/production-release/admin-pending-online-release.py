@@ -83,6 +83,25 @@ CONFIRM_CONTROLS = frozenset((
     'scripts/production-release/unpublished-component-runtime-diagnostic.test.py'))
 CONFIRM_DOCS = frozenset(('docs/V2_TASKS.md', 'docs/CENTRAL_RELEASE_20261002.md',
     'docs/UNIFIED_SITE_RELEASE_20261013.md'))
+CONFIRM_CONTROL_SOURCE = '7a6e0ea8f1504ca6c87510e9132e7018cc07b731'
+CONFIRM_CONTROL_TREE = '1e15f88ff2ed92071d8f4ec55ff0a0f7619f6e54'
+# Already-merged, independently authorised maintenance source. These bytes are
+# inherited from this ONE Git tree; they are not arbitrary candidate exceptions.
+CONFIRM_UPSTREAM_CONTROLS = frozenset((
+    '.github/workflows/disk-retention-maintenance.yml', '.github/workflows/production-release.yml',
+    'deploy/aws/disk-retention-policy-20261014.json', 'docs/DISK_STORAGE_POLICY.md', 'docs/V2_TASKS.md',
+    'scripts/ci-recharge-check.mjs', 'scripts/ci-recharge-check.test.mjs',
+    'scripts/ci-recharge-release.test.mjs', 'scripts/ci-recharge-scope.mjs', 'scripts/ci-recharge-scope.test.mjs',
+    'scripts/production-release/api-workspace-public-permission-repair.test.py',
+    'scripts/production-release/candidate-retention.py', 'scripts/production-release/candidate-retention.test.py',
+    'scripts/production-release/disk-lifecycle.test.py',
+    'scripts/production-release/disk-retention-install.py', 'scripts/production-release/disk-retention-install.test.py',
+    'scripts/production-release/disk-retention-transport.py', 'scripts/production-release/disk-retention-transport.test.py',
+    'scripts/production-release/disk-retention.py', 'scripts/production-release/disk-retention.test.py',
+    'scripts/production-release/online-recharge-source-permission-repair-transport.test.py',
+    'scripts/production-release/recharge-flow-entry.test.mjs',
+    'scripts/production-release/release-storage.py', 'scripts/production-release/release-storage.test.py',
+    'scripts/production-release/unpublished-component-runtime-diagnostic.test.py'))
 CONFIRM_HELPERS = ('remote-deploy.py', 'api-admin-pending-projection.py',
     'admin-pending-online-release.py', 'unpublished-component-successor.py', 'api-admin-scope.py')
 CONFIRM_CONTRACT = {
@@ -259,12 +278,22 @@ def git_files(d, commit):
     return d.registration_archive(raw, commit)
 
 
-def project_confirm(candidate, predecessor, baseline, online, commit, tree):
+def project_confirm(candidate, predecessor, baseline, online, commit, tree, control_source):
     """Overlay precisely two reviewed files on the genuine published projection."""
     p = projection_module()
     need(p.source_tree(candidate) == tree and p.source_tree(predecessor) == CONFIRM_BASELINE_TREE,
          'CONFIRM_SOURCE_TREE_CHANGED')
-    changed = {n for n in set(candidate) | set(predecessor) if candidate.get(n) != predecessor.get(n)}
+    need(p.source_tree(control_source) == CONFIRM_CONTROL_TREE, 'CONFIRM_CONTROL_SOURCE_CHANGED')
+    inherited = {n for n in set(control_source) | set(predecessor)
+                 if control_source.get(n) != predecessor.get(n)}
+    need(inherited == CONFIRM_UPSTREAM_CONTROLS | CONFIRM_DOCS
+         and all(n in control_source and control_source[n][1] == '100644' for n in inherited),
+         'CONFIRM_CONTROL_SCOPE_CHANGED')
+    # The control basis must have exactly the same complete application inputs,
+    # schema, migrations, Compose, auth and dependencies as the published source.
+    need(all(control_source.get(n) == row for n, row in predecessor.items()
+             if n not in inherited), 'CONFIRM_CONTROL_APPLICATION_CHANGED')
+    changed = {n for n in set(candidate) | set(control_source) if candidate.get(n) != control_source.get(n)}
     need(set(CONFIRM_FILES) <= changed <= set(CONFIRM_FILES) | CONFIRM_CONTROLS | CONFIRM_DOCS
          and all(n in candidate and candidate[n][1] == '100644' for n in changed),
          'CONFIRM_SOURCE_SCOPE_CHANGED')
@@ -280,20 +309,24 @@ def project_confirm(candidate, predecessor, baseline, online, commit, tree):
     # Carry only the explicitly named controls/documents from the candidate. Every
     # build and runtime input outside the two UI files remains the published byte.
     output = dict(published)
+    for name in inherited:
+        output[name] = control_source[name]
     for name in changed:
         output[name] = candidate[name]
-    need(all(output[n] == published[n] for n in published if n not in changed)
+    need(all(output[n] == published[n] for n in published if n not in changed | inherited)
          and not any('/online-recharge/' in n for n in output), 'CONFIRM_UNRELATED_SOURCE_CHANGED')
     runtime = {n: published[n] for n in p.RUNTIME_FILES}
     record = {'version': 1, 'scope': 'ADMIN_PENDING_ONLINE_BUILD_PROJECTION',
         'profile': CONFIRM_PROFILE, 'candidateCommit': commit, 'candidateTree': tree,
         'sourceBasisCommit': CONFIRM_BASELINE, 'sourceBasisTree': CONFIRM_BASELINE_TREE,
+        'controlSourceCommit': CONFIRM_CONTROL_SOURCE, 'controlSourceTree': CONFIRM_CONTROL_TREE,
+        'inheritedControlFiles': p.inventory({n: control_source[n] for n in inherited}),
         'apiComponentBaseline': CONFIRM_BASELINE, 'overlayFiles': p.inventory(overlay),
         'overlaySha256': CONFIRM_OVERLAY_SHA256,
         'inheritedProjectionSha256': CONFIRM_CONTRACT['projectionSha256'],
         'contextPath': CONTEXT, 'outputTree': p.source_tree(output),
         'outputFilesSha256': fingerprint(p.inventory(output)),
-        'unchangedFilesSha256': fingerprint({n: r for n, r in p.inventory(published).items() if n not in changed}),
+        'unchangedFilesSha256': fingerprint({n: r for n, r in p.inventory(published).items() if n not in changed | inherited}),
         'changedFiles': p.inventory({n: candidate[n] for n in changed}),
         'runtimeFiles': {n: {'mode': row[1], 'sha256': digest(row[0])} for n, row in runtime.items()}}
     record['projectionSha256'] = fingerprint(record)
@@ -312,7 +345,8 @@ def source_projection(d, commit, tree, *, local=False, expected_current=BASELINE
     candidate = read(commit)
     baseline, online = read(projection.BASELINE_COMMIT), read(projection.ONLINE_COMMIT)
     if expected_current == CONFIRM_BASELINE:
-        output, record, runtime = project_confirm(candidate, read(CONFIRM_BASELINE), baseline, online, commit, tree)
+        output, record, runtime = project_confirm(candidate, read(CONFIRM_BASELINE), baseline, online,
+            commit, tree, read(CONFIRM_CONTROL_SOURCE))
     elif expected_current == WORKSPACE_BASELINE:
         candidate, output, record, runtime = project_workspace(candidate, read(WORKSPACE_BASELINE),
             read(WORKSPACE_REVIEW_BASE), baseline, online, commit, tree)

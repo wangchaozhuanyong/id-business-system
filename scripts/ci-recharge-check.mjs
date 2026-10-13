@@ -193,6 +193,26 @@ const releaseMaintenanceControls = () => {
     )
   )
     run('python3', ['-B', 'scripts/production-release/maintain-image-cache.test.py']);
+  if (
+    changed.some(
+      (path) =>
+        path.startsWith('scripts/production-release/disk-retention') ||
+        path.startsWith('scripts/production-release/candidate-retention') ||
+        path.startsWith('scripts/production-release/disk-lifecycle') ||
+        path.startsWith('scripts/production-release/release-storage') ||
+        path === '.github/workflows/production-release.yml' ||
+        path === '.github/workflows/disk-retention-maintenance.yml' ||
+        path.startsWith('scripts/production-release/maintain-image-cache') ||
+        path === 'deploy/aws/disk-retention-policy-20261014.json'
+    )
+  ) {
+    run('python3', ['-B', 'scripts/production-release/disk-retention.test.py']);
+    run('python3', ['-B', 'scripts/production-release/disk-retention-install.test.py']);
+    run('python3', ['-B', 'scripts/production-release/disk-retention-transport.test.py']);
+    run('python3', ['-B', 'scripts/production-release/candidate-retention.test.py']);
+    run('python3', ['-B', 'scripts/production-release/disk-lifecycle.test.py']);
+    run('python3', ['-B', 'scripts/production-release/release-storage.test.py']);
+  }
 };
 const archiveReleaseControls = () => {
   run('node', ['--test', 'scripts/v2-order-archive-release-policy.test.mjs']);
