@@ -1120,7 +1120,7 @@ export function matchingRun(run, number, headSha) {
     run.path === '.github/workflows/quality.yml' &&
     run.status === 'completed' &&
     run.head_sha === headSha &&
-    run.pull_requests?.some((pr) => pr.number === number && pr.head.sha === headSha)
+    run.pull_requests?.some((pr) => pr.number === number)
   );
 }
 
@@ -1141,11 +1141,59 @@ function ensureCommit(sha) {
     git('fetch', '--no-tags', 'origin', sha);
   }
 }
-function testedTree(run, number) {
-  const pr = run.pull_requests.find((item) => item.number === number);
-  ensureCommit(pr.base.sha);
-  ensureCommit(pr.head.sha);
-  return git('merge-tree', '--write-tree', pr.base.sha, pr.head.sha).split('\n')[0];
+export function testedTree(run, number, repo) {
+  try {
+    if (
+      !matchingRun(run, number, run.head_sha) ||
+      !Number.isSafeInteger(run.id) ||
+      run.id <= 0 ||
+      !Number.isSafeInteger(run.run_attempt) ||
+      run.run_attempt <= 0 ||
+      !/^[a-f0-9]{40}$/.test(run.head_sha)
+    )
+      return undefined;
+    const { artifacts } = gh(`repos/${repo}/actions/runs/${run.id}/artifacts?per_page=100`);
+    const artifact = artifacts.find(
+      (item) => item.name === `quality-source-evidence-${run.run_attempt}` && !item.expired
+    );
+    if (!artifact) return undefined;
+    const directory = `.deploy/ci-source-evidence/${run.id}-${run.run_attempt}`;
+    execFileSync(
+      'gh',
+      [
+        'run',
+        'download',
+        String(run.id),
+        '--repo',
+        repo,
+        '--name',
+        artifact.name,
+        '--dir',
+        directory
+      ],
+      { stdio: 'pipe' }
+    );
+    const proof = JSON.parse(readFileSync(`${directory}/evidence.json`, 'utf8'));
+    if (
+      !/^[a-f0-9]{40}$/.test(proof.testedTree) ||
+      !matchesSourceEvidence(proof, {
+        repo,
+        run,
+        pr: { number, head: { sha: run.head_sha } },
+        tree: proof.testedTree
+      })
+    )
+      return undefined;
+    ensureCommit(proof.baseSha);
+    ensureCommit(run.head_sha);
+    const reconstructed = git('merge-tree', '--write-tree', proof.baseSha, run.head_sha).split(
+      '\n'
+    )[0];
+    return reconstructed === proof.testedTree ? reconstructed : undefined;
+  } catch {
+    // Missing or invalid immutable evidence cannot authorize reuse.
+    return undefined;
+  }
 }
 
 async function main() {
@@ -1227,12 +1275,15 @@ async function main() {
     );
     for (const run of runs) {
       if (!matchingRun(run, pr.number, run.head_sha)) continue;
-      const tree = testedTree(run, pr.number);
+      const tree = testedTree(run, pr.number, repo);
+      if (!tree) continue;
       const changed = git('diff', '--name-only', tree, currentTree).split('\n').filter(Boolean);
       const dispatcherSnapshot = changed.includes('scripts/ci-recharge-check.mjs')
         ? readRechargeFlowDispatcherSnapshot(tree, currentTree)
         : undefined;
-      const { jobs } = gh(`repos/${repo}/actions/runs/${run.id}/jobs?per_page=100`);
+      const { jobs } = gh(
+        `repos/${repo}/actions/runs/${run.id}/attempts/${run.run_attempt}/jobs?per_page=100`
+      );
       for (const part of parts) {
         if (
           reused.has(part) ||
