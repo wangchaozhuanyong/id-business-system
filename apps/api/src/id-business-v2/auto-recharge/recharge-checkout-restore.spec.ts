@@ -82,6 +82,37 @@ function fixture(history = [source()], records = [originalRecord()]) {
   return { service, job, table, ledger, records };
 }
 
+function unpaidReplacementFixture() {
+  const historical = source();
+  historical.result = {
+    browser_profile_id: profileId,
+    checkout_identifier: 'cs_original',
+    status: 'blocked',
+    reason: 'browser_operation_failed',
+    stage: 'session_restore',
+    account_matched: false,
+    checkout_requests_sent: 0,
+    payment_attempted: false,
+    payment_requests_sent: 0,
+    payment_status: 'not_attempted'
+  };
+  const record = originalRecord();
+  record.document = {
+    ...record.document,
+    status: 'cancelled',
+    checkout_identifier: 'cs_current_unpaid',
+    checkout_outcome: 'cancelled',
+    cancelled_before_confirmation: true,
+    payment_requests_sent: 0,
+    checkout_requests_sent: 1,
+    three_ds_status: 'not_required',
+    // 客户端提供的旧字节hash不是历史资格证明。
+    retry_of: 'd'.repeat(64)
+  };
+  const history = [historical];
+  return { ...fixture(history, [record]), history, historical, record };
+}
+
 describe('手动重试的原结算恢复合同', () => {
   it('较新的仅登录绑定保留原窗口，同套餐可信源与原账本共同返回原结算编号', async () => {
     const f = fixture();
@@ -203,5 +234,189 @@ describe('手动重试的原结算恢复合同', () => {
       })
     ).rejects.toThrow('原订单编号不可更换');
     expect(f.ledger.upsert).not.toHaveBeenCalled();
+  });
+
+  it('旧登录恢复失败引用在当前安全取消原单之后恢复现编号，重放不回退或改写历史', async () => {
+    const f = unpaidReplacementFixture();
+    const before = structuredClone({ history: f.history, records: f.records });
+    expect(await f.service.callback(id, { type: 'restore', accountKey })).toMatchObject({
+      originalCheckoutIdentifier: 'cs_current_unpaid'
+    });
+    expect(f.job.result.checkout_identifier).toBe('cs_current_unpaid');
+    expect(await f.service.callback(id, { type: 'restore', accountKey })).toMatchObject({
+      originalCheckoutIdentifier: 'cs_current_unpaid'
+    });
+    expect({ history: f.history, records: f.records }).toEqual(before);
+    expect(f.ledger.update).not.toHaveBeenCalled();
+    expect(f.ledger.upsert).not.toHaveBeenCalled();
+  });
+
+  it('真实首次start没有mode字段，旧助手首restore仍能恢复当前安全取消原单', async () => {
+    const f = unpaidReplacementFixture();
+    f.job.result = {
+      status: 'waiting_local_connector',
+      stage: 'connector_dispatch',
+      window_name: 'synthetic-window',
+      locked_currency: 'USD',
+      manual_payment_confirmation: true,
+      payment_requests_sent: 0
+    };
+    await expect(f.service.callback(id, { type: 'restore', accountKey })).resolves.toMatchObject({
+      originalCheckoutIdentifier: 'cs_current_unpaid'
+    });
+    expect(f.job.result).not.toHaveProperty('mode');
+    expect(f.ledger.upsert).not.toHaveBeenCalled();
+  });
+
+  it('旧报价读取失败可兼容缺省确认计数，但不同更老原单仍逐一核实', async () => {
+    const f = unpaidReplacementFixture();
+    const older = source();
+    older.id = '44444444-4444-4444-8444-444444444444';
+    older.result = {
+      ...f.historical.result,
+      checkout_identifier: 'cs_older',
+      checkout_requests_sent: 1,
+      stage: 'quote_read',
+      reason: 'actual_quote_unknown',
+      account_matched: true,
+      quote: { plan: 'plus' }
+    };
+    f.history.push(older);
+    await expect(f.service.callback(id, { type: 'restore', accountKey })).resolves.toMatchObject({
+      originalCheckoutIdentifier: 'cs_current_unpaid'
+    });
+  });
+
+  it.each([
+    { cancelled_before_confirmation: undefined },
+    { confirmation_requests_sent: undefined },
+    { confirmation_requests_sent: 1 },
+    { payment_requests_sent: 1 },
+    { payment_attempted: true },
+    { payment_status: 'unknown' },
+    { checkout_outcome: 'unknown' },
+    { manual_confirmation_accepted: true },
+    { payment_evidence: { kind: 'payment_intent', identifier: 'pi_unknown' } },
+    { three_ds_status: 'requires_action' }
+  ])('当前根存在风险或缺少严格取消证明时不能只凭retry_of忽略旧引用：%j', async (patch) => {
+    const f = unpaidReplacementFixture();
+    Object.assign(f.record.document, patch);
+    await expect(f.service.callback(id, { type: 'restore', accountKey })).rejects.toThrow(
+      '原订单编号不一致'
+    );
+    expect(f.table.update).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { stage: 'payment_preparation' },
+    { stage: 'unknown' },
+    { confirmation_requests_sent: null },
+    { confirmation_requests_sent: 1 },
+    { payment_requests_sent: undefined },
+    { payment_requests_sent: 1 },
+    { payment_attempted: true },
+    { payment_status: 'unknown' },
+    { manual_confirmation_accepted: true },
+    { request_attempt_key: 'ambiguous' },
+    { checkout_requests_sent: 'unknown' },
+    { target_plan: 'pro-20x' },
+    { payment_evidence: { kind: 'payment_intent', identifier: 'pi_unknown' } },
+    { account_matched: true },
+    { quote: { plan: 'plus' } }
+  ])('旧来源缺省确认只有明确未进入付款的协议形状可以恢复：%j', async (patch) => {
+    const f = unpaidReplacementFixture();
+    Object.assign(f.historical.result, patch);
+    await expect(f.service.callback(id, { type: 'restore', accountKey })).rejects.toThrow(
+      '原订单编号不一致'
+    );
+    expect(f.table.update).not.toHaveBeenCalled();
+  });
+
+  it('当前任务已经绑定不同编号仍拒绝，不能以安全历史替换当前绑定', async () => {
+    const f = unpaidReplacementFixture();
+    f.job.result.checkout_identifier = 'cs_bound_to_this_job';
+    await expect(f.service.callback(id, { type: 'restore', accountKey })).rejects.toThrow(
+      '原订单编号不一致'
+    );
+    expect(f.table.findMany).toHaveBeenCalledTimes(1);
+    expect(f.table.findMany.mock.calls[0]![0].where).not.toHaveProperty('plan');
+    expect(f.table.update).not.toHaveBeenCalled();
+  });
+
+  it.each([{ checkout_requests_sent: '0' }, { confirmation_requests_sent: null }])(
+    '当前任务未知类型请求计数不能取得旧引用恢复资格：%j',
+    async (patch) => {
+      const f = unpaidReplacementFixture();
+      Object.assign(f.job.result, patch);
+      await expect(f.service.callback(id, { type: 'restore', accountKey })).rejects.toThrow(
+        '原订单编号不一致'
+      );
+      expect(f.table.update).not.toHaveBeenCalled();
+    }
+  );
+
+  it('同套餐付款marker存在时，即使count0也不获得历史替换恢复资格', async () => {
+    const f = unpaidReplacementFixture();
+    f.records.push({
+      ...f.record,
+      fileKey: `payments/${'e'.repeat(64)}.json`,
+      document: {
+        checkout_identifier: 'cs_current_unpaid',
+        target_plan: 'plus',
+        payment_status: 'cancelled',
+        payment_attempted: true,
+        confirmation_requests_sent: 0
+      }
+    });
+    await expect(f.service.callback(id, { type: 'restore', accountKey })).rejects.toThrow(
+      '原订单编号不一致'
+    );
+  });
+
+  it('更老来源的确认风险仍阻止恢复，不能只跳过最新安全来源', async () => {
+    const f = unpaidReplacementFixture();
+    f.history.push({
+      ...source(),
+      id: '44444444-4444-4444-8444-444444444444',
+      result: {
+        ...f.historical.result,
+        checkout_identifier: 'cs_older_unknown',
+        confirmation_requests_sent: 1,
+        payment_status: 'unknown'
+      }
+    });
+    await expect(f.service.callback(id, { type: 'restore', accountKey })).rejects.toThrow(
+      '历史付款状态未核实'
+    );
+    expect(f.table.update).not.toHaveBeenCalled();
+  });
+
+  it('更早有原编号而任务尚未结束时，不能假定过期任务是安全旧引用', async () => {
+    const f = unpaidReplacementFixture();
+    f.history.push({
+      ...source(),
+      id: '44444444-4444-4444-8444-444444444444',
+      state: 'awaiting_confirmation',
+      result: {
+        ...f.historical.result,
+        checkout_identifier: 'cs_unfinished',
+        confirmation_requests_sent: 0
+      }
+    });
+    await expect(f.service.callback(id, { type: 'restore', accountKey })).rejects.toThrow(
+      '历史付款状态未核实'
+    );
+    expect(f.table.findMany.mock.calls.at(-1)![0].where).not.toHaveProperty('state');
+    expect(f.table.update).not.toHaveBeenCalled();
+  });
+
+  it('替换后的未知建单没有可核实编号时继续拒绝，不会从旧job拼回编号', async () => {
+    const f = unpaidReplacementFixture();
+    delete f.record.document.checkout_identifier;
+    f.record.document.checkout_outcome = 'unknown';
+    await expect(f.service.callback(id, { type: 'restore', accountKey })).rejects.toThrow(
+      '原订单编号未核实'
+    );
+    expect(f.table.update).not.toHaveBeenCalled();
   });
 });

@@ -25,5 +25,8 @@ export type {
   V2RechargeBitBrowserRecheckStart,
   V2RechargeBitBrowserRecheckLaunch,
   V2RechargeResolveNoBankRequest,
-  V2RechargeBitBrowserResolutionLaunch
+  V2RechargeBitBrowserResolutionLaunch,
+  V2RechargeCycleReview,
+  V2RechargeNextCycleConfirmation,
+  V2RechargeNextCyclePreparationResult
 } from '@apple-business/shared';

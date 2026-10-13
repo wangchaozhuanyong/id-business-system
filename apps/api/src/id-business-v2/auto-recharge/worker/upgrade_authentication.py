@@ -1,10 +1,105 @@
 """原升级唯一 update 后的临时认证权限；不构造认证或付款请求。"""
 import asyncio
 import os
+import re
 import time
 from urllib.parse import urlsplit
 
 from payment_3ds import AUTH_PATHS, ThreeDSAuthentication, checkout_resource_url
+from checkout_core import MAX_BYTES
+
+
+def consume_task(task):
+    if not task.cancelled():
+        task.exception()
+
+
+async def response_body(response, guard):
+    """正文等待有绝对截止，取消不依赖正文协程立即响应。"""
+    remaining = min(30, max(0, getattr(guard, 'observation_deadline', float('inf')) - time.monotonic()))
+    task = asyncio.create_task(response.body())
+    try:
+        done, _ = await asyncio.wait({task}, timeout=remaining)
+        if not done or getattr(guard, 'observations_closed', False):
+            raise asyncio.TimeoutError()
+        return task.result()
+    finally:
+        if not task.done():
+            task.cancel()
+            task.add_done_callback(consume_task)
+
+
+def authentication_facts(data):
+    """只在内存保存关联和结果字段，不保留原响应或支付秘密。"""
+    if not isinstance(data, dict):
+        return None
+    scalar = {'object', 'id', 'status', 'state', 'session_id', 'payment_status',
+              'amount', 'amount_received', 'currency', 'confirmation_method'}
+    result = {key: value for key, value in data.items()
+              if key in scalar and type(value) in (str, int, bool)}
+    for key in ('source', 'payment_intent', 'setup_intent'):
+        value = data.get(key)
+        if isinstance(value, str):
+            result[key] = value
+        elif isinstance(value, dict):
+            result[key] = authentication_facts(value)
+    ares = data.get('ares')
+    if isinstance(ares, dict):
+        result['ares'] = {key: value for key, value in ares.items()
+                          if key in {'acsURL', 'threeDSServerTransID', 'acsTransID'}
+                          and isinstance(value, str)}
+    error = data.get('error')
+    if (isinstance(error, dict) and isinstance(error.get('code'), str)
+            and re.fullmatch(r'[a-z0-9_]{1,80}', error['code'])):
+        result['error'] = {'code': error['code']}
+    return result
+
+
+class AuthenticationReceipts:
+    """原确认之后先到的认证回包，绑定原 intent 后才允许作为事实。"""
+    def __init__(self, origin_frame=None):
+        self.binding = ThreeDSAuthentication(origin_frame)
+        self.pending = []
+        self.bytes = 0
+
+    def capture(self, request, status, data, raw_size):
+        parsed = urlsplit(request.url)
+        if (parsed.scheme != 'https' or parsed.hostname != 'api.stripe.com'
+                or parsed.path not in AUTH_PATHS or request.method != 'POST'
+                or raw_size > MAX_BYTES or len(self.pending) >= 8
+                or self.bytes + raw_size > MAX_BYTES
+                or any(item[0] is request for item in self.pending)):
+            return False
+        facts = authentication_facts(data)
+        if facts is None:
+            return False
+        self.pending.append((request, status, facts, raw_size))
+        self.bytes += raw_size
+        return True
+
+    def bind(self, intent, expected_id):
+        return self.binding.bind(intent, expected_id)
+
+    async def verified(self, request, target, checkout_id):
+        if request in self.binding.requests:
+            return True
+        # This separate authority validates receipts only. It never routes a
+        # request, starts a challenge or reopens the action gate after cancel.
+        verified = await self.binding._decision(request, target, checkout_id) is True
+        if not verified:
+            self.binding.requests.pop(request, None)
+        return verified
+
+    def take(self):
+        pending, self.pending, self.bytes = self.pending, [], 0
+        return pending
+
+    def clear(self):
+        self.pending.clear()
+        self.bytes = 0
+        self.binding.close()
+        self.binding.requests.clear()
+        self.binding.client_secret = None
 
 
 class UpgradeAuthentication(ThreeDSAuthentication):
@@ -85,15 +180,23 @@ async def wait_upgrade_authentication(guard, wait_seconds, cancelled, progress, 
         await asyncio.sleep(.05)
 
 
-async def drain_upgrade_responses(tasks):
-    deadline = time.monotonic() + 5
+async def drain_upgrade_responses(tasks, *, seconds=5):
+    deadline = time.monotonic() + seconds
     while tasks:
         observed = set(tasks)
         _, pending = await asyncio.wait(observed, timeout=max(0, deadline - time.monotonic()))
         for task in pending:
             task.cancel()
-        await asyncio.gather(*observed, return_exceptions=True)
+            task.add_done_callback(consume_task)
+        for task in observed - pending:
+            consume_task(task)
         tasks.difference_update(observed)
+        if time.monotonic() >= deadline:
+            for task in list(tasks):
+                task.cancel()
+                task.add_done_callback(consume_task)
+            tasks.clear()
+            break
 
 
 class UpgradeResponseObservers:
@@ -106,13 +209,27 @@ class UpgradeResponseObservers:
         context.on('response', self.observe)
 
     def observe(self, response):
+        if not self.attached:
+            return
         task = asyncio.create_task(self.guard.response(response))
         self.tasks.add(task)
         task.add_done_callback(self.tasks.discard)
+        task.add_done_callback(consume_task)
 
     async def finish(self):
+        if not self.attached:
+            return
+        self.guard.armed = False
         self.guard.approved = False
-        self.guard.three_ds.finish()
+        self.guard.read_only = True
+        self.guard.settling = True
+        self.guard.observation_deadline = time.monotonic() + 5
+        if callable(getattr(self.guard, 'begin_settling', None)):
+            self.guard.begin_settling()
+        if callable(getattr(self.guard, 'finish_three_ds', None)):
+            self.guard.finish_three_ds()
+        elif getattr(self.guard, 'three_ds', None) is not None:
+            self.guard.three_ds.finish()
         if getattr(self.guard, 'card_change', None) is not None:
             self.guard.card_change.close()
         if self.attached:
@@ -120,6 +237,9 @@ class UpgradeResponseObservers:
             self.context.remove_listener('response', self.observe)
             self.attached = False
         await drain_upgrade_responses(self.tasks)
+        self.guard.observations_closed = True
+        if getattr(self.guard, 'authentication_receipts', None) is not None:
+            self.guard.authentication_receipts.clear()
 
 
 async def route_upgrade_card_change(guard, route):

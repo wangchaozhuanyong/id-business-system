@@ -10,6 +10,8 @@ from browser_checkout import NetworkGuard, progress
 from checkout_core import MAX_BYTES, Stop, safe_text
 from payment_state import payment_evidence
 from payment_3ds import ThreeDSAuthentication, AUTH_PATHS, checkout_resource_url
+from upgrade_authentication import AuthenticationReceipts, response_body
+from types import SimpleNamespace
 
 
 class PaymentGuard(NetworkGuard):
@@ -42,6 +44,10 @@ class PaymentGuard(NetworkGuard):
         self.observed_requests = set()
         self.quote_requests = {}
         self.quote_request_version = 0
+        self.authentication_receipts = AuthenticationReceipts()
+        self.settling = False
+        self.observations_closed = False
+        self.deferred_observation = {}
 
     def finish_three_ds(self):
         self.three_ds_closed = True
@@ -54,14 +60,27 @@ class PaymentGuard(NetworkGuard):
 
     def persist_observation(self, **updates):
         """磁盘故障不能抹掉刚收到的付款凭据，也不能重新开放付款。"""
+        if self.settling:
+            self.deferred_observation.update(updates)
+            return
         try:
             if self.payment_ledger is None:
                 raise Stop("payment_record_required")
             self.payment_ledger.update(payment_status=self.payment_state, evidence=self.evidence,
                                        reason=self.payment_error, **updates)
-        except OSError:
+        except (OSError, Stop):
             self.persistence_error = True
             progress("payment_record_write_failed", repeated_payment="blocked")
+
+    def flush_observation(self):
+        if self.payment_ledger is None or not self.payment_ledger.record:
+            return
+        try:
+            self.payment_ledger.update(payment_status=self.payment_state, evidence=self.evidence,
+                reason=self.payment_error, **self.deferred_observation)
+        except (OSError, Stop):
+            self.persistence_error = True
+        self.deferred_observation.clear()
 
     def approve(self, quote):
         if (self.payment_ledger is None or not self.account_verified
@@ -131,11 +150,18 @@ class PaymentGuard(NetworkGuard):
         await route.fallback()
 
     async def response(self, response):
+        if self.observations_closed:
+            return
         self.observe_request(response.request)
-        await self.observe_authentication_request(response.request)
-        await super().response(response)
-        await self.three_ds.observe_redirect(response)
         p = urlsplit(response.url)
+        authentication_candidate = (self.confirmation_sent == 1 and p.scheme == 'https'
+            and p.hostname == 'api.stripe.com' and p.path in AUTH_PATHS
+            and response.request.method == 'POST')
+        if not authentication_candidate:
+            await super().response(response)
+        await self.three_ds.observe_redirect(response)
+        if self.observations_closed:
+            return
         if p.scheme != "https" or p.hostname != "api.stripe.com" or not self.checkout_id:
             return
         initialization = response.request in self.quote_requests and self.account_verified
@@ -143,10 +169,10 @@ class PaymentGuard(NetworkGuard):
         authentication = self.three_ds.requests.get(response.request) in AUTH_PATHS
         linked_read = (self.linked_intent and response.request.method == "GET"
                        and p.path == f"/v1/payment_intents/{self.linked_intent}")
-        if not (initialization or confirmation or linked_read or authentication or response.request is self.token_request):
+        if not (initialization or confirmation or linked_read or authentication_candidate or authentication or response.request is self.token_request):
             return
         try:
-            raw = await response.body()
+            raw = await response_body(response, self)
             if len(raw) > MAX_BYTES:
                 if authentication:
                     self.three_ds.reject()
@@ -160,13 +186,49 @@ class PaymentGuard(NetworkGuard):
                     self.payment_error = 'payment_response_not_verified'
                     self.payment_done.set()
                 return
+            if authentication_candidate:
+                if not self.authentication_receipts.binding.intent_id:
+                    self.authentication_receipts.capture(response.request, response.status, data, len(raw))
+                    return
+                if not await self.authentication_receipts.verified(response.request, self.target, self.checkout_id):
+                    return
+                if self.observations_closed:
+                    return
+                authentication = True
+                self.three_ds.requests.setdefault(response.request, p.path)
+            await self.consume_response(response, data, initialization, confirmation, authentication, linked_read)
+        except Exception:
+            # 不输出 Stripe 响应正文、卡号、client_secret 或完整 traceback。
+            if self.payment_state != 'paid' and (confirmation or authentication or response.request is self.token_request):
+                self.payment_error = 'payment_response_not_verified'
+                if authentication:
+                    self.three_ds.close('failed')
+                self.payment_done.set()
+        finally:
+            if confirmation or authentication:
+                self.three_ds_ready.set()
+            if confirmation and self.authentication_receipts.binding.intent_id:
+                for request, status, facts, _size in self.authentication_receipts.take():
+                    if (await self.authentication_receipts.verified(request, self.target, self.checkout_id)
+                            and not self.observations_closed):
+                        self.three_ds.requests.setdefault(request, urlsplit(request.url).path)
+                        receipt = SimpleNamespace(request=request, status=status, url=request.url)
+                        await self.consume_response(receipt, facts, False, False, True, False)
+
+    async def consume_response(self, response, data, initialization, confirmation, authentication, linked_read):
+        try:
             if authentication:
                 if response.status >= 400:
                     self.three_ds.close('failed')
-                elif not self.three_ds.observe_authentication(response.request, data):
+                elif not self.authentication_receipts.binding.observe_authentication(response.request, data, allow_challenge=False):
                     self.payment_error = 'three_ds_binding_unverified'
+                    self.three_ds.close('failed')
                     self.payment_done.set()
                     return
+                elif not self.three_ds.closed:
+                    self.three_ds.observe_authentication(response.request, data)
+                    if self.three_ds.needs_user:
+                        self.authentication_receipts.binding.status = 'awaiting_user'
             if (initialization or confirmation or authentication) and "session_id" in data and data["session_id"] != self.checkout_id:
                 if self.approved:
                     self.payment_error = "payment_order_binding_changed"
@@ -195,6 +257,11 @@ class PaymentGuard(NetworkGuard):
                         self.payment_done.set()
                     return
                 self.linked_intent = intent_id
+            if (confirmation and isinstance(intent, dict) and intent.get('status') == 'requires_action'
+                    and self.quote and type(intent.get('amount')) is int
+                    and intent['amount'] == self.quote['today']['amount_minor']
+                    and str(intent.get('currency', '')).upper() == self.quote['today']['currency']):
+                self.authentication_receipts.bind(intent, self.linked_intent)
             # Ending automation must not discard an in-flight original payment
             # receipt. It grants observation only; confirmation stays reserved.
             original_in_flight = (self.read_only and self.confirmation_sent == 1
@@ -205,7 +272,7 @@ class PaymentGuard(NetworkGuard):
             evidence = payment_evidence(data, self.checkout_id, self.quote, linked_intent=self.linked_intent) if (
                 200 <= response.status < 300 and (initialization or confirmation or linked_read or authentication)) else None
             if evidence:
-                self.evidence = evidence
+                self.evidence = self.evidence or evidence
                 self.payment_state = "paid"
                 self.three_ds.close('completed')
                 self.payment_error = None
@@ -256,9 +323,6 @@ class PaymentGuard(NetworkGuard):
                 if authentication:
                     self.three_ds.close('failed')
                 self.payment_done.set()
-        finally:
-            if confirmation or authentication:
-                self.three_ds_ready.set()
 
     def summary(self):
         return {**super().summary(), "payment_requests_sent": self.confirmation_sent,

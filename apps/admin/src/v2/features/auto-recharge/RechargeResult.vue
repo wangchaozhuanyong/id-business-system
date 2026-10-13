@@ -168,6 +168,30 @@
             <dt>最后失败原因</dt>
             <dd>{{ failureReasonLabel(job.result.last_reason) }}</dd>
           </template>
+          <template v-if="callbackDiagnostic.operation">
+            <dt>失败回传操作</dt>
+            <dd>{{ callbackDiagnostic.operation }}</dd>
+          </template>
+          <template v-if="callbackDiagnostic.phase">
+            <dt>回传阶段</dt>
+            <dd>{{ callbackDiagnostic.phase }}</dd>
+          </template>
+          <template v-if="callbackDiagnostic.failureKind">
+            <dt>回传结果</dt>
+            <dd>{{ callbackDiagnostic.failureKind }}</dd>
+          </template>
+          <template v-if="callbackDiagnostic.httpStatus">
+            <dt>回传状态码</dt>
+            <dd>{{ callbackDiagnostic.httpStatus }}</dd>
+          </template>
+          <template v-if="callbackDiagnostic.businessReason || callbackDiagnostic.errorCode">
+            <dt>回传未完成原因</dt>
+            <dd>{{ callbackDiagnostic.businessReason || callbackDiagnostic.errorCode }}</dd>
+          </template>
+          <template v-if="callbackDiagnostic.requestId">
+            <dt>回传请求编号</dt>
+            <dd>{{ callbackDiagnostic.requestId }}</dd>
+          </template>
           <template v-if="job.result.page_state">
             <dt>报价页状态</dt>
             <dd>{{ statusLabel(job.result.page_state) }}</dd>
@@ -215,6 +239,7 @@ import {
   paymentFailureLabel,
   paymentStatusLabel,
   rechargeIssueFeedback,
+  rechargeCallbackDiagnostics,
   statusLabel,
   proxyAttemptLabel,
   quotePlaceholder,
@@ -233,6 +258,9 @@ function operationLabel(job: V2RechargeJob) {
   return job.result.account_matched ? '开通（以官网核实为准）' : '等待官网核实';
 }
 const issue = computed(() => (props.job ? rechargeIssueFeedback(props.job) : null));
+const callbackDiagnostic = computed<Partial<ReturnType<typeof rechargeCallbackDiagnostics>>>(() =>
+  props.job ? rechargeCallbackDiagnostics(props.job) : {}
+);
 const proxyProgress = computed(() => (props.job ? proxyAttemptLabel(props.job) : ''));
 function price(value: { currency: string; amount: string } | null | undefined, fallback = '未知') {
   return value ? `${value.currency} ${value.amount}` : fallback;

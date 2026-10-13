@@ -102,6 +102,15 @@ export class RechargeController {
   ) {
     return this.local.resolveNoBankRequest(id, input, operator);
   }
+  @Post('jobs/:id/next-cycle-confirm')
+  @Header('Cache-Control', 'no-store')
+  confirmNextCycle(
+    @Param('id') id: string,
+    @Body() input: unknown,
+    @CurrentUser() operator: AuthenticatedUser
+  ) {
+    return this.local.confirmNextCycle(id, input, operator);
+  }
   @Post('jobs/:id/bitbrowser-cancel')
   cancelBitBrowser(@Param('id') id: string, @CurrentUser() operator: AuthenticatedUser) {
     return this.local.cancel(id, operator);

@@ -10,7 +10,7 @@ export async function readBrowserCatalog(
   form: BitBrowserSettingsForm,
   signal: AbortSignal,
   directMode = false
-) {
+): Promise<V2RechargeBrowserCatalog & { connectorCapabilities?: string[] }> {
   if (form.newConnectionProfile && (!form.localApiToken || (!directMode && !form.connectorToken)))
     throw new Error('请填写新连接配置的接口密钥和本机连接密钥');
   if (directMode) {
@@ -27,7 +27,7 @@ export async function readBrowserCatalog(
     }
   }
   const rechargeUrl = normalizeV2RechargeConnectorUrl(form.connectorUrl);
-  await rechargeConnectorApi.health(rechargeUrl, signal);
+  const health = await rechargeConnectorApi.health(rechargeUrl, signal);
   const access =
     form.connectorToken && form.localApiToken
       ? {
@@ -49,7 +49,14 @@ export async function readBrowserCatalog(
     access.localApiUrl = form.localApiUrl;
     access.connectorToken = form.connectorToken || access.connectorToken;
     access.localApiToken = form.localApiToken || access.localApiToken;
-    return await rechargeConnectorApi.browserCatalog(access, signal);
+    return {
+      ...(await rechargeConnectorApi.browserCatalog(access, signal)),
+      connectorCapabilities: Array.isArray(health.capabilities)
+        ? health.capabilities.filter(
+            (capability): capability is string => typeof capability === 'string'
+          )
+        : []
+    };
   } finally {
     access.connectorToken = '';
     access.localApiToken = '';

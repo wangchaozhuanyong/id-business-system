@@ -20,7 +20,9 @@ from checkout_core import MAX_BYTES, Stop, parse_credential, unique_object
 from payment_3ds import AUTH_PATHS
 from payment_handoff import controller_cancelled
 from upgrade_authentication import (UpgradeAuthentication, UpgradeResponseObservers,
-                                    wait_upgrade_authentication, upgrade_authentication_summary, route_upgrade_card_change)
+                                    wait_upgrade_authentication, upgrade_authentication_summary, route_upgrade_card_change,
+                                    AuthenticationReceipts, response_body)
+from types import SimpleNamespace
 from upgrade_card_network import UpgradeCardChange
 from upgrade_card_selection import prepare_upgrade_card, verify_selected_upgrade_card
 from payment_state import quote_digest, validate_evidence, outcome
@@ -153,7 +155,7 @@ def validate_upgrade_record(record, account_key, target_plan, upgrade_id=None):
 
 
 class UpgradeLedger:
-    def __init__(self, root, account_id, target_plan, upgrade_id=None):
+    def __init__(self, root, account_id, target_plan, upgrade_id=None, *, cycle_context=None):
         self.root, self.account_id, self.target_plan = Path(root), account_id, target_plan
         subscription_transition('go' if target_plan == 'plus' else 'plus', target_plan)
         if upgrade_id is not None and not UPGRADE_ID.fullmatch(upgrade_id):
@@ -161,6 +163,7 @@ class UpgradeLedger:
         self.account_key = hashlib.sha256(account_id.encode()).hexdigest()
         self.upgrade_id, self.record, self.fd = upgrade_id, None, None
         self.path = None
+        self.cycle_context = cycle_context
 
     def __enter__(self):
         if self.root.is_symlink():
@@ -180,6 +183,15 @@ class UpgradeLedger:
                 if not isinstance(data, dict):
                     raise Stop('invalid_payment_record')
                 if data.get('account_key') != self.account_key:
+                    continue
+                from subscription_cycle import attested_closed_payment, resolved_without_bank_request, closed_payment_for_observation
+                if self.cycle_context is not None and resolved_without_bank_request(data):
+                    continue
+                if (self.upgrade_id and data.get('upgrade_identifier') != self.upgrade_id
+                        and closed_payment_for_observation(data)):
+                    continue
+                if (self.cycle_context is not None and self.cycle_context.get('targetPlan') == self.target_plan
+                        and attested_closed_payment(data, self.cycle_context, str(path.relative_to(self.root)))):
                     continue
                 if data.get('operation') == 'subscription_upgrade':
                     validate_upgrade_record(data, self.account_key, data.get('target_plan'))
@@ -213,7 +225,7 @@ class UpgradeLedger:
             raise
 
     def begin(self, quote, last4):
-        if self.record is not None or self.fd is None:
+        if self.upgrade_id is not None or self.record is not None or self.fd is None:
             raise Stop('previous_upgrade_attempt_exists', action='recheck_original_order_only')
         self.upgrade_id = quote.get('upgrade_identifier') or 'upg_' + uuid.uuid4().hex
         if not UPGRADE_ID.fullmatch(self.upgrade_id):
@@ -235,10 +247,20 @@ class UpgradeLedger:
         self.record = record
 
     def update(self, **details):
+        if self.record.get('payment_status') == 'paid':
+            details['payment_status'] = 'paid'
         updated = {**self.record, **details, 'updated_at': int(time.time())}
         validate_upgrade_record(updated, self.account_key, self.target_plan, self.upgrade_id)
-        atomic_json(self.path, updated)
+        if not getattr(self, 'defer_writes', False):
+            atomic_json(self.path, updated)
+        else:
+            self.deferred_write = True
         self.record = updated
+
+    def flush(self):
+        if getattr(self, 'deferred_write', False):
+            atomic_json(self.path, self.record)
+            self.deferred_write = False
 
     def __exit__(self, *args):
         if self.fd is not None:
@@ -271,6 +293,11 @@ class UpgradeGuard(NetworkGuard):
         self.read_only = ledger.record is not None
         self.three_ds = UpgradeAuthentication(origin_frame)
         self.card_change = UpgradeCardChange(target, origin_frame, read_only=self.read_only)
+        self.authentication_receipts = AuthenticationReceipts(origin_frame)
+        self.observations_closed = False
+
+    def begin_settling(self):
+        self.upgrade_ledger.defer_writes = True
 
     def observe_request(self, request):
         p = urlsplit(request.url)
@@ -310,22 +337,62 @@ class UpgradeGuard(NetworkGuard):
         await route.fallback()
 
     async def response(self, response):
+        if self.observations_closed:
+            return
         self.observe_request(response.request)
         await self.card_change.response(response)
-        if response.request not in self.three_ds.requests:
-            verified = await self.three_ds.original_request_decision(response.request, self.target, sent=self.sent,
-                read_only=self.read_only, payment_status=lambda: (self.upgrade_ledger.record or {}).get("payment_status"))
-            if verified is False:
-                self.three_ds.requests.pop(response.request, None)
         await self.three_ds.observe_redirect(response)
+        if self.observations_closed:
+            return
         p = urlsplit(response.url)
         update = response.request is self.update_request
         authentication = self.three_ds.requests.get(response.request) in AUTH_PATHS
+        authentication_candidate = (self.sent == 1 and p.scheme == 'https'
+            and p.hostname == 'api.stripe.com' and p.path in AUTH_PATHS
+            and response.request.method == 'POST')
         record = self.upgrade_ledger.record or {}
         linked_read = (response.request.method == 'GET' and p.scheme == 'https' and p.hostname == 'api.stripe.com'
                        and p.path == '/v1/payment_intents/' + str(record.get('upgrade_payment_intent_identifier')))
-        if not (update or authentication or linked_read):
+        if not (update or authentication_candidate or authentication or linked_read):
             return
+        try:
+            raw = await response_body(response, self)
+            if len(raw) > MAX_BYTES:
+                raise Stop('upgrade_result_unknown')
+            data = json.loads(raw)
+            if not isinstance(data, dict):
+                raise Stop('upgrade_result_unknown')
+            if authentication_candidate:
+                if not self.authentication_receipts.binding.intent_id:
+                    self.authentication_receipts.capture(response.request, response.status, data, len(raw))
+                    return
+                if not await self.authentication_receipts.verified(response.request, self.target, None):
+                    return
+                if self.observations_closed:
+                    return
+                authentication = True
+                self.three_ds.requests.setdefault(response.request, p.path)
+            await self.consume_response(response, data, update, authentication)
+        except Stop as exc:
+            self.error = exc
+        except Exception:
+            if (self.upgrade_ledger.record or {}).get('payment_status') != 'paid':
+                self.error = Stop('upgrade_result_unknown')
+        finally:
+            if update or authentication:
+                self.three_ds.ready.set()
+            if update or authentication or linked_read:
+                self.done.set()
+            if update and self.authentication_receipts.binding.intent_id:
+                for request, status, facts, _size in self.authentication_receipts.take():
+                    if (await self.authentication_receipts.verified(request, self.target, None)
+                            and not self.observations_closed):
+                        self.three_ds.requests.setdefault(request, urlsplit(request.url).path)
+                        receipt = SimpleNamespace(request=request, status=status, url=request.url)
+                        await self.consume_response(receipt, facts, False, True)
+
+    async def consume_response(self, response, data, update, authentication):
+        record = self.upgrade_ledger.record or {}
         try:
             if not 200 <= response.status < 300:
                 if record.get('payment_status') != 'paid':
@@ -333,15 +400,13 @@ class UpgradeGuard(NetworkGuard):
                 if authentication:
                     self.three_ds.close('failed')
                 raise Stop('upgrade_request_failed', http_status=response.status)
-            raw = await response.body()
-            if len(raw) > MAX_BYTES:
-                raise Stop('upgrade_result_unknown')
-            data = json.loads(raw)
-            if not isinstance(data, dict):
-                raise Stop('upgrade_result_unknown')
-            if authentication and not self.three_ds.observe_authentication(
-                    response.request, data, allow_challenge=not self.three_ds.closed):
-                raise Stop('three_ds_binding_unverified')
+            if authentication:
+                if not self.authentication_receipts.binding.observe_authentication(response.request, data, allow_challenge=False):
+                    raise Stop('three_ds_binding_unverified')
+                if not self.three_ds.closed:
+                    self.three_ds.observe_authentication(response.request, data)
+                    if self.three_ds.needs_user:
+                        self.authentication_receipts.binding.status = 'awaiting_user'
             if authentication:
                 self.upgrade_ledger.update(three_ds_status=self.three_ds.status)
             updates = {}
@@ -357,6 +422,11 @@ class UpgradeGuard(NetworkGuard):
                         updates[key] = identifier
             if updates:
                 self.upgrade_ledger.update(**updates)
+            if (update and isinstance(intent, dict) and intent.get('status') == 'requires_action'
+                    and type(intent.get('amount')) is int
+                    and intent['amount'] == record['quote']['today']['amount_minor']
+                    and str(intent.get('currency', '')).upper() == record['quote']['today']['currency']):
+                self.authentication_receipts.bind(intent, self.upgrade_ledger.record.get('upgrade_payment_intent_identifier'))
             self.observe(intent)
             record = self.upgrade_ledger.record
             if record.get('payment_status') == 'paid':
@@ -383,8 +453,6 @@ class UpgradeGuard(NetworkGuard):
             if authentication:
                 self.three_ds.close('failed')
         finally:
-            if update or authentication:
-                self.three_ds.ready.set()
             self.done.set()
 
     def observe(self, data):
@@ -399,6 +467,7 @@ class UpgradeGuard(NetworkGuard):
                 raise Stop('upgrade_payment_evidence_conflict')
         evidence = paid_evidence(data, self.upgrade_ledger.record)
         if evidence:
+            self.error = None
             updates = {'payment_status': 'paid'}
             if self.three_ds.intent_id:
                 self.three_ds.close('completed')
@@ -503,9 +572,10 @@ async def verify_preview_dom(page, quote, *, check_button=True):
 async def run_upgrade_in_context(page, target, state_dir, target_plan, *, details_reader=None,
                                  confirmer=None, wait_seconds=120, poll_count=6, poll_interval=20,
                                  session_budget=None, expected_country=None, upgrade_id=None):
-    with UpgradeLedger(state_dir, target.account_id, target_plan, upgrade_id) as ledger:
+    controller = getattr(confirmer, '__self__', None)
+    with UpgradeLedger(state_dir, target.account_id, target_plan, upgrade_id,
+                       cycle_context=getattr(controller, 'next_cycle_context', None)) as ledger:
         guard = UpgradeGuard(target, ledger, origin_frame=page.main_frame)
-        controller = getattr(confirmer, '__self__', None)
         handoff = getattr(controller, 'await_handoff', None)
         server_handoff = callable(handoff) and getattr(controller, 'payload', {}).get('action') == 'server'
         guard.hcaptcha_enabled = server_handoff
@@ -513,13 +583,15 @@ async def run_upgrade_in_context(page, target, state_dir, target_plan, *, detail
         context = page.context
         observers = UpgradeResponseObservers(context, guard)
         details = None
+        result = None
         def cancelled():
             if guard.operation_cancelled() or session_budget and session_budget.cancelled():
                 raise Stop('operation_cancelled')
         try:
             if ledger.record:
                 await observers.finish()
-                return await inspect_upgrade(page, target, ledger, guard, poll_count=poll_count, poll_interval=poll_interval)
+                result = await inspect_upgrade(page, target, ledger, guard, poll_count=poll_count, poll_interval=poll_interval)
+                return result
             refreshed, identity, subscription = await read_subscription(page, target)
             subscription_transition(identity['current_plan'], target_plan)
             source_plan = identity['current_plan']
@@ -557,7 +629,8 @@ async def run_upgrade_in_context(page, target, state_dir, target_plan, *, detail
                 raise Stop('proxy_country_mismatch')
             cancelled()
             if not await asyncio.to_thread(confirmer, quote, details.last4):
-                return {'status': 'payment_cancelled', 'stage': 'confirmation_cancelled', 'operation': 'subscription_upgrade'}
+                result = {'status': 'payment_cancelled', 'stage': 'confirmation_cancelled', 'operation': 'subscription_upgrade'}
+                return result
             cancelled()
             async def preflight(*, network_request=False):
                 cancelled()
@@ -578,6 +651,7 @@ async def run_upgrade_in_context(page, target, state_dir, target_plan, *, detail
             ledger.begin(quote, details.last4)
             guard.method_id, guard.approved = method_id, True
             cancelled()
+            guard.observation_deadline = time.monotonic() + (300 if server_handoff else wait_seconds)
             await button.click()
             if server_handoff:
                 await wait_upgrade_authentication(guard, wait_seconds, cancelled, progress,
@@ -604,9 +678,15 @@ async def run_upgrade_in_context(page, target, state_dir, target_plan, *, detail
                                      target_plan=target_plan, current_tier=ledger.record.get('current_tier'))
                     result.update(status=status, payment_outcome=status,
                                   **upgrade_authentication_summary(guard, ledger.record))
+                    result.pop('reason', None)
             return result
         finally:
             await observers.finish()
+            try:
+                await asyncio.to_thread(ledger.flush)
+            except (OSError, Stop):
+                if result is not None:
+                    result['payment_record_write_failed'] = True
             if details is not None:
                 details.clear()
 

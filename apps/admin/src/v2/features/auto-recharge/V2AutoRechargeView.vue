@@ -223,6 +223,13 @@
           <p v-if="error" class="recharge-error" role="alert">{{ error }}</p>
           <RechargeResult :job="selected" :mode="operationMode" @refresh="refresh" />
           <div class="recharge-actions">
+            <RechargeNextCycleControl
+              :job="selected"
+              :api-supports-cycle="
+                query.phase.value === 'ready' && query.data.value?.subscriptionCycleProtocol === 1
+              "
+              @refresh="refresh"
+            />
             <AppButton v-if="canContinueSameAccount" variant="primary" @click="continueSameAccount"
               >继续为此账号升级</AppButton
             >
@@ -320,6 +327,9 @@ const RechargeResult = defineAsyncComponent(() => import('./RechargeResult.vue')
 const RechargeBrowserSettings = defineAsyncComponent(() => import('./RechargeBrowserSettings.vue'));
 const RechargeLocalPaymentControl = defineAsyncComponent(
   () => import('./RechargeLocalPaymentControl.vue')
+);
+const RechargeNextCycleControl = defineAsyncComponent(
+  () => import('./RechargeNextCycleControl.vue')
 );
 const RechargeHistoryDrawer = defineAsyncComponent(() => import('./RechargeHistoryDrawer.vue'));
 const historyOpen = ref(false);

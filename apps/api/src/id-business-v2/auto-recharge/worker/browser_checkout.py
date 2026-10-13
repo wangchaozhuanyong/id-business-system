@@ -512,10 +512,15 @@ class NetworkGuard:
         await route.fallback()
 
     async def response(self, response):
+        from upgrade_authentication import response_body
+        if getattr(self, 'observations_closed', False):
+            return
         parts = urlsplit(response.url)
         if parts.hostname == "chatgpt.com" and parts.path == "/api/auth/session":
             # 只报告会话请求是否携带 Cookie 和响应状态，不输出 Cookie 值/响应全文。
             headers = await response.request.all_headers()
+            if getattr(self, 'observations_closed', False):
+                return
             cookie_header = headers.get("cookie", "")
             cookie_format = ("single" if "__Secure-next-auth.session-token=" in cookie_header else
                              "chunked" if "__Secure-next-auth.session-token." in cookie_header else "absent")
@@ -524,10 +529,13 @@ class NetworkGuard:
         if response.request is not self.request_object:
             return
         try:
-            raw = await response.body()
+            raw = await response_body(response, self)
             if len(raw) > MAX_BYTES:
                 raise Stop("response_too_large")
-            data = response_json(response.status, await response.all_headers(), raw, self.target.old_token)
+            headers = await response.all_headers()
+            if getattr(self, 'observations_closed', False):
+                return
+            data = response_json(response.status, headers, raw, self.target.old_token)
             result, url = checkout_result(data)
             self.result, self.private_url = result, url
             self.checkout_id = result["checkout_identifier"]
@@ -853,13 +861,9 @@ async def workflow(context, target, *, ledger=None, existing=None, wait_seconds=
             "returned_currency": existing.get("returned_currency"),
             "processor_entity": existing.get("processor_entity"),
         }
-    tasks = set()
-    def response_callback(response):
-        task = asyncio.create_task(guard.response(response))
-        tasks.add(task)
-        task.add_done_callback(tasks.discard)
-    context.on("request", guard.observe_request)
-    context.on("response", response_callback)
+    from upgrade_authentication import UpgradeResponseObservers
+    observers = UpgradeResponseObservers(context, guard)
+    guard.response_observers = observers
     # 本机比特已打开首页；复用并在注入 Cookie 后加载，避免留下游客标签页。
     page = next((p for p in context.pages if p.url == "about:blank" or
                  (urlsplit(p.url).hostname == "chatgpt.com"
@@ -1008,17 +1012,19 @@ async def workflow(context, target, *, ledger=None, existing=None, wait_seconds=
             ledger.finish(result)
         return result
     finally:
-        guard.armed = False
-        context.remove_listener("request", guard.observe_request)
-        context.remove_listener("response", response_callback)
-        if tasks:
-            if asyncio.current_task().cancelling():
-                for task in tasks:
-                    task.cancel()
-            await asyncio.gather(*list(tasks), return_exceptions=True)
+        await observers.finish()
+        if callable(getattr(guard, 'flush_observation', None)):
+            await asyncio.to_thread(guard.flush_observation)
         if result is not None and quote_handler:
             # 迟到的官方付款回包在清理阶段仍可能确认成功；返回快照必须包含这些证据。
             result.update(guard.summary())
+            if getattr(guard, 'payment_state', None) == 'paid' and guard.evidence:
+                from payment_state import outcome
+                result['status'] = outcome('paid', result.get('current_plan'), guard.evidence,
+                    target_plan=guard.target_plan, current_tier=result.get('current_tier'))
+                result['payment_outcome'] = result['status']
+                result['stage'] = 'payment_result'
+                result.pop('reason', None)
         # 同一窗口更换失效旧结算时，不能叠加上一轮的建单/付款拦截器。
         # Observation ends; the original browser window remains unrestricted.
 
@@ -1026,7 +1032,7 @@ async def workflow(context, target, *, ledger=None, existing=None, wait_seconds=
 async def run_browser(target, *, create=False, inspect_existing=False, retry_rejected=False,
                       replace_unpaid_checkout=False, state_dir=ROOT / ".state", wait_seconds=0, review_seconds=0,
                       quote_handler=None, guard_factory=NetworkGuard, target_plan="plus", browser=None,
-                      browser_context=None, session_budget=None, session_handler=None):
+                      browser_context=None, session_budget=None, session_handler=None, next_cycle_grant=None):
     # 固定项目自己的浏览器，不依赖开源参考目录或全局浏览器缓存。
     os.environ.setdefault("PLAYWRIGHT_BROWSERS_PATH", str(ROOT / ".browsers"))
     # 不允许环境变量意外启动协议调试日志，避免凭据进入终端/文件。
@@ -1039,7 +1045,7 @@ async def run_browser(target, *, create=False, inspect_existing=False, retry_rej
     existing = existing_checkout(state_dir, target.account_id, target_plan) if inspect_existing else None
     manager = AttemptLedger(state_dir, target.account_id, retry_rejected=retry_rejected,
                             replace_unpaid_checkout=replace_unpaid_checkout,
-                            target_plan=target_plan) if create else nullcontext()
+                            target_plan=target_plan, next_cycle_grant=next_cycle_grant) if create else nullcontext()
 
     async def execute(active_browser=None, active_context=None):
         context = active_context or await active_browser.new_context(

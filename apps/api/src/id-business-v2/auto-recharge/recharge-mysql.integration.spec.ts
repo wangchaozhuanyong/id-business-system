@@ -130,7 +130,7 @@ suite('recharge real MySQL restart and concurrency', () => {
         revision: 0,
         document
       })
-    ).rejects.toThrow();
+    ).resolves.toEqual({ revision: 1 });
     await local.callback(id, launch.agentToken, {
       type: 'finished',
       result: { status: 'checkout_quote_verified' }

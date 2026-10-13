@@ -163,7 +163,8 @@ export function useRechargeBrowserSettings(
     settingsOpen.value = open;
   }
 
-  async function checkConnection(form: BitBrowserSettingsForm) {
+  async function checkConnection(form: BitBrowserSettingsForm, current = () => true) {
+    if (!current()) throw new Error('本次连接检测已取消。');
     connectionCheck?.abort();
     const check = new AbortController();
     connectionCheck = check;
@@ -174,7 +175,7 @@ export function useRechargeBrowserSettings(
       : '正在检测连接器、比特接口和窗口分组／标签';
     try {
       const catalog = await readBrowserCatalog(form, check.signal, direct);
-      if (check.signal.aborted) throw new Error('本次连接检测已取消。');
+      if (check.signal.aborted || !current()) throw new Error('本次连接检测已取消。');
       if (catalog.groups.filter((item) => item.name === form.groupName).length !== 1)
         throw new Error('比特接口已连通，但所选窗口分组不存在或重名，请重新选择。');
       if (catalog.tags.filter((item) => item.name === form.tagName).length !== 1)
@@ -183,8 +184,9 @@ export function useRechargeBrowserSettings(
       connectorMessage.value = direct
         ? '比特浏览器直连、分组／标签检测通过'
         : '连接器、比特接口和分组／标签检测通过';
+      return catalog.connectorCapabilities ?? [];
     } catch (cause) {
-      if (connectionCheck === check) {
+      if (connectionCheck === check && current()) {
         connectorStatus.value = 'offline';
         connectorMessage.value = getApiErrorMessage(cause);
       }
@@ -222,7 +224,7 @@ export function useRechargeBrowserSettings(
     }
   }
 
-  async function checkSavedConnection() {
+  async function checkSavedConnection(current = () => true) {
     const settings = settingsQuery.data.value;
     if (!settings) throw new Error('请先读取并保存比特浏览器设置。');
     if (
@@ -231,7 +233,7 @@ export function useRechargeBrowserSettings(
         selectedProfile.value !== (settings.connectionProfileId ?? null))
     )
       throw new Error('连接配置正在读取，请稍后再开始任务。');
-    await checkConnection(formFromSettings(settings));
+    return checkConnection(formFromSettings(settings), current);
   }
 
   async function saveSettings(serverMode = false) {

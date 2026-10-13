@@ -10,6 +10,7 @@ import {
   paymentFailureLabel,
   quotePlaceholder,
   rechargeIssueFeedback,
+  rechargeCallbackDiagnostics,
   statusLabel,
   subscriptionLabel,
   paymentStatusLabel,
@@ -510,5 +511,157 @@ describe('recharge stage presentation', () => {
       message: '官网或本机连接器没有返回可确认的最终结果'
     });
     expect(rechargeIssueFeedback(pending)?.action).toContain('只读复查原订单');
+  });
+  it('原资料恢复409显示受控业务原因、操作、回传状态与请求编号，不把本次零请求指向清锁', () => {
+    const failure = job({
+      action: 'bitbrowser',
+      result: {
+        status: 'blocked',
+        reason: 'durable_state_unavailable',
+        payment_attempted: false,
+        payment_requests_sent: 0,
+        confirmation_requests_sent: 0,
+        callback_operation: 'restore',
+        callback_http_status: 409,
+        callback_error_code: 'CONFLICT',
+        callback_request_id: '9ffbffea-07d8-4745-8463-8e8126f9f8e1',
+        callback_failure_kind: 'http',
+        callback_business_reason: 'callback_original_checkout_missing'
+      }
+    });
+    expect(rechargeCallbackDiagnostics(failure)).toMatchObject({
+      operation: '恢复原账号与结算资料',
+      httpStatus: 409,
+      errorCode: '任务或原记录状态冲突',
+      requestId: '9ffbffea-07d8-4745-8463-8e8126f9f8e1',
+      failureKind: '服务器未受理回传',
+      businessReason: '原结算记录缺失'
+    });
+    const feedback = rechargeIssueFeedback(failure)!;
+    expect(feedback.message).toMatch(/^原结算记录缺失/);
+    expect(feedback.message).toContain('恢复原账号与结算资料');
+    expect(feedback.message).toContain('409');
+    expect(feedback.message).toContain('9ffbffea-07d8-4745-8463-8e8126f9f8e1');
+    expect(feedback.action).toContain('记录接口');
+    expect(feedback.action).not.toContain('历史付款锁');
+    expect(JSON.stringify(feedback)).not.toContain('尚未扣款');
+  });
+  it('同一回传失败已有未知付款时仍只读原单，不被迟到真人验证标记转向普通继续', () => {
+    const failure = job({
+      action: 'bitbrowser',
+      state: 'unknown',
+      result: {
+        reason: 'durable_state_unavailable',
+        payment_attempted: true,
+        payment_requests_sent: 1,
+        payment_status: 'unknown',
+        user_action_required: true,
+        callback_operation: 'ledger',
+        callback_http_status: 503,
+        callback_failure_kind: 'http',
+        callback_business_reason: 'callback_original_payment_unverified'
+      }
+    });
+    const feedback = rechargeIssueFeedback(failure)!;
+    expect(feedback.message).toContain('原单付款状态尚未核实');
+    expect(feedback.action).toContain('只读复查原订单');
+    expect(feedback.action).not.toContain('真人验证');
+  });
+  it.each([
+    'callback_original_checkout_missing',
+    'callback_original_checkout_unverified',
+    'callback_original_checkout_mismatch',
+    'callback_original_payment_unverified',
+    'callback_account_owned_by_another_operator',
+    'callback_profile_binding_conflict',
+    'callback_original_payment_profile_unverified',
+    'callback_profile_replacement_conflict'
+  ] as const)('业务诊断%s只映射中文，原始枚举不直接显示', (reason) => {
+    const diagnostic = rechargeCallbackDiagnostics(
+      job({ result: { callback_business_reason: reason } })
+    );
+    expect(diagnostic.businessReason).toMatch(/[\u4e00-\u9fff]/);
+    expect(diagnostic.businessReason).not.toContain('callback_');
+  });
+  it.each([
+    'restore',
+    'progress',
+    'ledger',
+    'finished',
+    'prepare_next_subscription_cycle',
+    'resolve_unknown_payment',
+    'stale_profile_cleanup'
+  ] as const)('回传操作%s映射中文，不输出协议枚举', (operation) => {
+    const diagnostic = rechargeCallbackDiagnostics(
+      job({ result: { callback_operation: operation } })
+    );
+    expect(diagnostic.operation).toMatch(/[\u4e00-\u9fff]/);
+    expect(diagnostic.operation).not.toContain(operation);
+  });
+  it('未使用的旧候选回传操作不冒充当前协议能力', () => {
+    const value = {
+      callback_operation: 'replace_browser_profile'
+    } as unknown as V2RechargeJob['result'];
+    expect(rechargeCallbackDiagnostics(job({ result: value })).operation).toBeUndefined();
+  });
+  it.each([
+    ['AUTH_INVALID', '任务访问凭据未确认'],
+    ['AUTH_PERMISSION_DENIED', '任务操作权限未确认'],
+    ['RATE_LIMITED', '回传请求暂时过于频繁']
+  ])('当前接口错误码%s映射中文而不输出内部代码', (code, label) => {
+    const diagnostic = rechargeCallbackDiagnostics(job({ result: { callback_error_code: code } }));
+    expect(diagnostic.errorCode).toBe(label);
+    expect(diagnostic.errorCode).not.toContain(code);
+  });
+  it('未知、格式非法或敏感字段不进入只读诊断与反馈，旧助手仍保持原有指引', () => {
+    const malicious = job({
+      action: 'bitbrowser',
+      result: {
+        reason: 'durable_state_unavailable',
+        status: 'blocked',
+        callback_http_status: '409',
+        callback_operation: 'Bearer private-secret',
+        callback_phase: 'unknown_phase',
+        callback_request_id: 'private\r\nAuthorization: fixture-secret',
+        callback_error_code: 'TOKEN_PRIVATE_SECRET',
+        callback_failure_kind: 'raw_body',
+        callback_business_reason: 'raw_message_secret',
+        callback_message: 'fixture-raw-message-secret',
+        callback_headers: { Authorization: 'fixture-secret' },
+        callback_body: 'fixture-full-body-secret'
+      } as unknown as V2RechargeJob['result']
+    });
+    expect(
+      Object.values(rechargeCallbackDiagnostics(malicious)).every((value) => value === undefined)
+    ).toBe(true);
+    expect(rechargeIssueFeedback(malicious)?.title).toBe('执行记录未确认');
+    expect(JSON.stringify(rechargeIssueFeedback(malicious))).not.toMatch(
+      /fixture|private|raw_body|409/
+    );
+  });
+  it.each([399, 600, 409.5, Number.NaN, Number.POSITIVE_INFINITY, true])(
+    '非法回传状态%s不显示',
+    (status) => {
+      expect(
+        rechargeCallbackDiagnostics(
+          job({ result: { callback_http_status: status } as unknown as V2RechargeJob['result'] })
+        ).httpStatus
+      ).toBeUndefined();
+    }
+  );
+  it('周期回传阶段与超时使用中文，只提供读取诊断不暗示已保存或已付款', () => {
+    const failure = job({
+      result: {
+        callback_operation: 'prepare_next_subscription_cycle',
+        callback_phase: 'inspect',
+        callback_failure_kind: 'timeout'
+      }
+    });
+    expect(rechargeCallbackDiagnostics(failure)).toMatchObject({
+      operation: '核实旧订阅周期',
+      phase: '只读核实',
+      failureKind: '回传等待超时'
+    });
+    expect(rechargeIssueFeedback(failure)).toBeNull();
   });
 });

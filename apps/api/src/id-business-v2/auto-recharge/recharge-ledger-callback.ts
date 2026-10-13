@@ -11,6 +11,7 @@ import { consumeRechargeAddress } from './recharge-address-consumption';
 import { canReplaceCheckout } from './recharge-cancellation';
 import { projectRechargePaymentRecord } from './recharge-payment-facts';
 import { safeDocument } from './recharge-validation';
+import { consumeNextCycleMarker } from './recharge-cycle-ledger';
 
 export async function completeRechargeLedgerCallback(input: {
   tx: V2CommandTransaction;
@@ -19,6 +20,7 @@ export async function completeRechargeLedgerCallback(input: {
   repository: RechargeRepository;
   addressRepository: RechargeAddressRepository;
   audit: V2TransactionalAuditService;
+  factsOnly?: boolean;
 }) {
   const { tx, job, callback, repository, addressRepository, audit } = input;
   if (
@@ -31,7 +33,19 @@ export async function completeRechargeLedgerCallback(input: {
   )
     throw new BadRequestException('原订单记录无效');
   const document = safeDocument(callback.document);
+  if (!input.factsOnly) {
+    const consumed = await consumeNextCycleMarker({
+      tx,
+      job,
+      callback,
+      document,
+      repository,
+      audit
+    });
+    if (consumed) return consumed;
+  }
   if (
+    !input.factsOnly &&
     callback.fileKey.startsWith('payments/') &&
     !(
       (['prepare', 'flow', 'server'].includes(job.action) && job.state === 'confirming') ||
@@ -49,11 +63,17 @@ export async function completeRechargeLedgerCallback(input: {
     document,
     allowCheckoutReplacement: canReplaceCheckout(job)
   });
+  if (saved.replayed) return saved;
   const paymentResult = callback.fileKey.startsWith('payments/')
     ? projectRechargePaymentRecord(job, callback.fileKey, document)
     : null;
-  if (paymentResult) {
-    await repository.updateJob(tx, job.id, { result: toV2JsonDocument(paymentResult) });
+  if (paymentResult && !input.factsOnly) {
+    await repository.updateJob(
+      tx,
+      job.id,
+      { result: toV2JsonDocument(paymentResult) },
+      input.factsOnly ? { factsOnly: true } : undefined
+    );
   }
   await consumeRechargeAddress({
     tx,

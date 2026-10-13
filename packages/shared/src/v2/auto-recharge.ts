@@ -50,12 +50,131 @@ export interface V2RechargeQuote {
   renewal: V2RechargeMoney | null;
   renewal_interval: string | null;
 }
+
+export const V2_RECHARGE_SUBSCRIPTION_CYCLE_PROTOCOL = 1 as const;
+export const V2_RECHARGE_SUBSCRIPTION_CYCLE_CAPABILITY = 'next-subscription-cycle-v1';
+
+export interface V2RechargeSubscriptionPeriod {
+  source: 'official_subscription_response';
+  start: string;
+  end: string;
+  account_key: string;
+  target_plan: V2RechargePlan;
+}
+
+/** 未返回有效订阅字段时保留未知，不能据此授予新建单资格。 */
+export interface V2RechargeSubscriptionInspection {
+  source: 'official_account_response';
+  account_key: string;
+  account_matched: boolean;
+  current_plan: string;
+  has_active_subscription: boolean | null;
+  checked_at: string;
+  previous_period?: V2RechargeSubscriptionPeriod;
+}
+
+/** 只公开核实状态；付款授权仍通过原有报价确认流程取得。 */
+export interface V2RechargeCycleReview {
+  protocol: 1;
+  status: 'awaiting_previous_cycle_confirmation' | 'ready' | 'consumed' | 'revoked';
+  reviewDigest: string;
+  expiresAt: string;
+  previousPeriodEnd?: string;
+  manualPreviousCycleEnded?: true;
+  reason?:
+    | 'previous_period_unavailable'
+    | 'previous_period_ended'
+    | 'subscription_state_changed'
+    | 'review_expired'
+    | 'new_checkout_pending';
+}
+
+export interface V2RechargeNextCycleSource {
+  fileKey: string;
+  revision: number;
+  operationIdentifier: string;
+  documentDigest: string;
+  targetPlan: V2RechargePlan;
+  subscriptionPeriod?: V2RechargeSubscriptionPeriod;
+}
+
+export interface V2RechargeNextCycleGrant {
+  protocol: 1;
+  jobId: string;
+  accountKey: string;
+  targetPlan: V2RechargePlan;
+  reviewDigest: string;
+  expiresAt: string;
+  status: 'granted' | 'consumed';
+  checkoutFileKey: string;
+  checkoutRevision: number;
+  previousDocumentDigest?: string;
+}
+
+/** 服务端生成的原单范围，助手不能扩展为其他账号或第二笔操作。 */
+export interface V2RechargeNextCycleContext {
+  protocol: 1;
+  jobId: string;
+  accountKey: string;
+  targetPlan: V2RechargePlan;
+  sources: V2RechargeNextCycleSource[];
+  review?: V2RechargeCycleReview;
+  grant?: V2RechargeNextCycleGrant;
+}
+
+export interface V2RechargeNextCycleConfirmation {
+  reviewDigest: string;
+  confirmedPreviousCycleEnded: true;
+}
+
+export type V2RechargeNextCyclePreparation = {
+  type: 'prepare_next_subscription_cycle';
+  subscriptionCycleProtocol: 1;
+  accountKey: string;
+} & (
+  | { phase: 'inspect'; subscription_inspection: V2RechargeSubscriptionInspection }
+  | { phase: 'status'; reviewDigest: string }
+  | {
+      phase: 'commit';
+      reviewDigest: string;
+      subscription_inspection: V2RechargeSubscriptionInspection;
+    }
+);
+
+export interface V2RechargeNextCyclePreparationResult {
+  cycleReview: V2RechargeCycleReview;
+  nextCycleContext?: V2RechargeNextCycleContext;
+  records?: { fileKey: string; revision: number; document: unknown }[];
+}
 export interface V2RechargeResult {
   status?: string;
   reason?: string;
   stage?: string;
   error_type?: string;
   browser_error_code?: string;
+  /** 回调失败只保留受控诊断，不携带原响应、请求正文或凭据。 */
+  callback_http_status?: number;
+  callback_operation?:
+    | 'restore'
+    | 'progress'
+    | 'ledger'
+    | 'finished'
+    | 'prepare_next_subscription_cycle'
+    | 'resolve_unknown_payment'
+    | 'stale_profile_cleanup';
+  callback_phase?: 'inspect' | 'status' | 'commit';
+  callback_error_code?: string;
+  callback_request_id?: string;
+  callback_failure_kind?: 'http' | 'timeout' | 'transport' | 'invalid_response';
+  callback_business_reason?:
+    | 'callback_original_checkout_missing'
+    | 'callback_original_checkout_unverified'
+    | 'callback_original_checkout_mismatch'
+    | 'callback_original_payment_unverified'
+    | 'callback_account_owned_by_another_operator'
+    | 'callback_profile_binding_conflict'
+    | 'callback_original_payment_profile_unverified'
+    | 'callback_profile_replacement_conflict';
   payment_failure_reason?: string;
   last_reason?: string;
   proxy_attempt?: number;
@@ -120,13 +239,9 @@ export interface V2RechargeResult {
   upgrade_identifier?: string;
   upgrade_invoice_identifier?: string;
   upgrade_payment_intent_identifier?: string;
-  subscription_period?: {
-    source: 'official_subscription_response';
-    start: string;
-    end: string;
-    account_key: string;
-    target_plan: V2RechargePlan;
-  };
+  subscription_period?: V2RechargeSubscriptionPeriod;
+  subscription_inspection?: V2RechargeSubscriptionInspection;
+  cycle_review?: V2RechargeCycleReview;
   three_ds_status?:
     | 'not_required'
     | 'authenticating'
@@ -406,6 +521,7 @@ export interface UpdateV2RechargeBitBrowserSettingsInput {
 }
 
 export interface V2RechargeBitBrowserStart {
+  subscriptionCycleProtocol?: 1;
   connectionProfileId?: string | null;
   cardId?: string;
   billingName?: string;
@@ -439,6 +555,8 @@ export interface V2RechargeOwnedBrowserProfile {
 }
 
 export interface V2RechargeBrowserRestore {
+  subscriptionCycleProtocol?: 1;
+  nextCycleContext?: V2RechargeNextCycleContext;
   records: unknown[];
   staleProfiles: { sourceJobId: string; profileId: string }[];
   ownedProfile?: V2RechargeOwnedBrowserProfile;
@@ -447,6 +565,7 @@ export interface V2RechargeBrowserRestore {
 }
 
 export interface V2RechargeBitBrowserLaunch {
+  subscriptionCycleProtocol?: 1;
   id: string;
   mode: 'payment';
   ownedProfile?: V2RechargeOwnedBrowserProfile;

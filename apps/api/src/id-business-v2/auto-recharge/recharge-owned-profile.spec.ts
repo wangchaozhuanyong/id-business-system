@@ -63,6 +63,7 @@ function restoreFixture(history = [retained()]) {
     state: 'running',
     plan: 'plus',
     nonceHash: hash(agentToken),
+    leaseUntil: new Date(Date.now() + 45 * 60000),
     result: { mode: 'open_browser', transport: 'web_direct', payment_requests_sent: 0 } as Record<
       string,
       unknown
@@ -71,6 +72,7 @@ function restoreFixture(history = [retained()]) {
   const repository = {
     lock: vi.fn(),
     active: vi.fn().mockResolvedValue(job),
+    findJob: vi.fn().mockResolvedValue(job),
     byId: vi.fn().mockResolvedValue(job),
     records: vi.fn().mockResolvedValue([]),
     finishedJobsForAccount: vi.fn().mockResolvedValue(history),
@@ -285,6 +287,7 @@ describe('同账号原比特窗口保留', () => {
       result: { mode: 'payment', payment_requests_sent: 0 }
     };
     f.repository.active.mockResolvedValue(next);
+    f.repository.findJob.mockResolvedValue(next);
     f.repository.byId.mockResolvedValue(next);
     f.repository.finishedJobsForAccount.mockResolvedValue([f.job] as never);
     f.repository.retainedProfileForAccount.mockResolvedValue({

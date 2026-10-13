@@ -105,7 +105,10 @@ export async function connectorRequest(
   return result;
 }
 
-export function requireConnectorHealth(result: Record<string, unknown>) {
+export function requireConnectorHealth(
+  result: Record<string, unknown>,
+  options: { allowBusy?: boolean } = {}
+) {
   if (result.service !== 'id-business-v2-auto-recharge-connector' || result.version !== 4) {
     throw new RechargeConnectorError(
       typeof result.version === 'number' && result.version < 4 ? 'version' : 'protocol'
@@ -113,7 +116,8 @@ export function requireConnectorHealth(result: Record<string, unknown>) {
   }
   if (result.role !== 'recharge') throw new RechargeConnectorError('version');
   if (result.originAllowed !== true) throw new RechargeConnectorError('origin');
-  if (result.busy !== false) throw new RechargeConnectorError('busy');
+  if (result.busy !== false && !(options.allowBusy === true && result.busy === true))
+    throw new RechargeConnectorError('busy');
   if (
     !Array.isArray(result.capabilities) ||
     ![

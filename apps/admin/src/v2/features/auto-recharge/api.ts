@@ -20,7 +20,9 @@ import type {
   V2RechargeBitBrowserRecheckStart,
   V2RechargeBitBrowserRecheckLaunch,
   V2RechargeResolveNoBankRequest,
-  V2RechargeBitBrowserResolutionLaunch
+  V2RechargeBitBrowserResolutionLaunch,
+  V2RechargeNextCycleConfirmation,
+  V2RechargeNextCyclePreparationResult
 } from './contracts';
 const base = '/id-business-v2/auto-recharge/jobs';
 export const rechargeApi = {
@@ -28,7 +30,7 @@ export const rechargeApi = {
     return request<{ id: string }>(http.post(`${base}/${id}/cancel`, {}));
   },
   list(options: ApiRequestOptions = {}) {
-    return request<{ items: V2RechargeJob[]; configured: boolean }>(
+    return request<{ items: V2RechargeJob[]; configured: boolean; subscriptionCycleProtocol?: 1 }>(
       http.get(base, { signal: options.signal })
     );
   },
@@ -73,10 +75,16 @@ export const rechargeApi = {
   startBitBrowserOpen(input: V2RechargeBitBrowserOpenStart) {
     return request<V2RechargeBitBrowserOpenLaunch>(http.post(`${base}/bitbrowser-open`, input));
   },
-  directBrowserCallback(id: string, agentToken: string, input: object) {
+  directBrowserCallback(
+    id: string,
+    agentToken: string,
+    input: object,
+    options: ApiRequestOptions = {}
+  ) {
     return request<Partial<V2RechargeBrowserRestore> & { ok?: true }>(
       http.post(`/id-business-v2/auto-recharge/local/${id}`, input, {
-        headers: { 'X-Recharge-Local': agentToken }
+        headers: { 'X-Recharge-Local': agentToken },
+        signal: options.signal
       })
     );
   },
@@ -90,15 +98,26 @@ export const rechargeApi = {
       http.post(`${base}/${id}/resolve-no-bank-request`, input)
     );
   },
-  cancelBitBrowser(id: string) {
-    return request<{ id: string }>(http.post(`${base}/${id}/bitbrowser-cancel`, {}));
+  cancelBitBrowser(id: string, options: ApiRequestOptions = {}) {
+    return request<{ id: string }>(
+      http.post(`${base}/${id}/bitbrowser-cancel`, {}, { signal: options.signal })
+    );
   },
   abandonUnreceivedBitBrowser(id: string) {
     return request<{ id: string }>(http.post(`${base}/${id}/bitbrowser-unreceived`, {}));
   },
-  bitBrowserAccess(id: string) {
+  confirmNextCycle(
+    id: string,
+    input: V2RechargeNextCycleConfirmation,
+    options: ApiRequestOptions = {}
+  ) {
+    return request<V2RechargeNextCyclePreparationResult>(
+      http.post(`${base}/${id}/next-cycle-confirm`, input, { signal: options.signal })
+    );
+  },
+  bitBrowserAccess(id: string, options: ApiRequestOptions = {}) {
     return request<{ connectorUrl: string; connectorToken: string }>(
-      http.post(`${base}/${id}/bitbrowser-access`, {})
+      http.post(`${base}/${id}/bitbrowser-access`, {}, { signal: options.signal })
     );
   },
   listAddresses(query: V2RechargeAddressListQuery, options: ApiRequestOptions = {}) {
@@ -155,8 +174,10 @@ export const rechargeConnectorApi = {
       throw new Error('分组与标签列表格式无效，请刷新重试');
     return { groups: result.groups, tags: result.tags };
   },
-  async health(connectorUrl: string, signal?: AbortSignal) {
-    return requireConnectorHealth(await connectorRequest(connectorUrl, '/health', { signal }));
+  async health(connectorUrl: string, signal?: AbortSignal, allowBusy = false) {
+    return requireConnectorHealth(await connectorRequest(connectorUrl, '/health', { signal }), {
+      allowBusy
+    });
   },
   start(connectorUrl: string, connectorToken: string, body: object) {
     return connectorRequest(connectorUrl, '/jobs', { token: connectorToken, body });
