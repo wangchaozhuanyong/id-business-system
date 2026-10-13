@@ -1,0 +1,93 @@
+name: Disk Retention Maintenance
+
+on:
+  workflow_dispatch:
+    inputs:
+      operation:
+        description: Inspect or apply the exact reviewed disk maintenance plan
+        required: true
+        default: verify_install
+        type: choice
+        options:
+          - verify_install
+          - install
+          - verify_cleanup
+          - cleanup
+      commit:
+        description: Exact current main source commit (40 lowercase hex characters)
+        required: true
+        type: string
+      expected_current:
+        description: Exact application commit currently running in production
+        required: true
+        type: string
+      plan_sha256:
+        description: Exact plan digest from the preceding verified maintenance run (apply only)
+        required: false
+        default: ''
+        type: string
+
+permissions:
+  actions: read
+  contents: read
+  id-token: write
+
+concurrency:
+  group: id-business-v2-production-release
+  cancel-in-progress: false
+
+jobs:
+  maintenance:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      TZ: Asia/Kuala_Lumpur
+      AWS_REGION: ap-northeast-1
+      RELEASE_ROLE_ARN: arn:aws:iam::079740175286:role/id-business-v2-github-release
+      RELEASE_REPOSITORY: 079740175286.dkr.ecr.ap-northeast-1.amazonaws.com/id-business-v2-release
+      PRODUCTION_INSTANCE_ID: i-05836da38606e633c
+      RELEASE_COMMIT: ${{ inputs.commit }}
+      EXPECTED_CURRENT: ${{ inputs.expected_current }}
+      DISK_MAINTENANCE_OPERATION: ${{ inputs.operation }}
+      DISK_MAINTENANCE_PLAN_SHA256: ${{ inputs.plan_sha256 }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Check out the exact maintenance source
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          ref: ${{ inputs.commit }}
+          fetch-depth: 0
+
+      - name: Verify current main and successful Quality Gate
+        run: bash scripts/production-release/check-source.sh
+
+      - name: Validate maintenance operation and exact plan selection
+        run: python3 -B scripts/production-release/disk-retention-transport.py --validate-only
+
+      - name: Obtain short-lived maintenance credentials
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          role-to-assume: ${{ env.RELEASE_ROLE_ARN }}
+          role-session-name: id-business-v2-${{ github.run_id }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-duration-seconds: 3600
+
+      - name: Verify dedicated production maintenance target
+        run: |
+          set -Eeuo pipefail
+          test "$(aws sts get-caller-identity --query Arn --output text | cut -d/ -f2)" = id-business-v2-github-release
+          test "$(aws ecr describe-repositories --repository-names id-business-v2-release --query 'repositories[0].repositoryUri' --output text)" = "$RELEASE_REPOSITORY"
+
+      - name: Execute one reviewed maintenance operation
+        run: python3 -B scripts/production-release/disk-retention-transport.py
+
+      - name: Preserve private source bindings and complete maintenance receipts
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: disk-retention-maintenance-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .deploy/production-release/disk-retention-maintenance/**/*.json
+          include-hidden-files: true
+          if-no-files-found: warn
+          retention-days: 30
