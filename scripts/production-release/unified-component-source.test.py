@@ -16,6 +16,16 @@ HERE = Path(__file__).resolve().parent
 APP_PREFIXES = ('apps/api/', 'apps/admin/', 'packages/shared/')
 APP_FILES = ('package.json', 'package-lock.json', '.dockerignore',
              'tsconfig.base.json', 'deploy/nginx/admin.conf')
+REMAINING_REVIEWED_SOURCE = '28132dc776ccb94c44e243a81731f27c91ae4ed3'
+REMAINING_REVIEWED_PATHS = frozenset((
+    'apps/admin/src/v2/features/auto-recharge/bitbrowser-direct-api.ts',
+    'apps/admin/src/v2/features/auto-recharge/bitbrowser-direct.spec.ts',
+    'apps/admin/src/v2/features/auto-recharge/useBitBrowserDirectOpen.spec.ts',
+    'apps/admin/src/v2/features/auto-recharge/useBitBrowserDirectOpen.ts',
+    'apps/api/src/id-business-v2/auto-recharge/recharge-owned-profile.spec.ts',
+    'apps/api/src/id-business-v2/auto-recharge/worker/bitbrowser_connector.py',
+    'apps/api/src/id-business-v2/auto-recharge/worker/test_bitbrowser_connector.py',
+))
 
 
 def load(filename):
@@ -53,6 +63,8 @@ class JointSourceTests(unittest.TestCase):
         cls.reviewed458 = archived_files('a019e794fd6b3313fa312ad5a08fa4559f876d18')
         cls.old_api = archived_files('31d2c6885a45817cd40d23fce8d6145bc9f18af2')
         cls.old_admin = archived_files('60e164b75d1eedaab440c17139bf9ba55de08c61')
+        cls.published = archived_files('f193f34ea09a2c37485c1582a81b33ee3acec865')
+        cls.reviewed_remaining = archived_files(REMAINING_REVIEWED_SOURCE)
         cls.output, cls.record = cls.projection.project_files(cls.candidate, cls.base, cls.online,
             cls.core.APPLICATION_SOURCE, cls.core.APPLICATION_TREE)
         cls.application = {name: row for name, row in cls.projection.inventory(cls.candidate).items()
@@ -99,10 +111,28 @@ class JointSourceTests(unittest.TestCase):
         for name, digest in spec['businessFiles'].items():
             if name.startswith(APP_PREFIXES):
                 with self.subTest(path=name):
-                    self.assertEqual(hashlib.sha256(self.output[name][0]).hexdigest(), digest)
+                    if name in REMAINING_REVIEWED_PATHS:
+                        self.assertEqual(hashlib.sha256(self.published[name][0]).hexdigest(), digest)
+                        self.assertEqual(self.output[name], self.reviewed_remaining[name])
+                    else:
+                        self.assertEqual(hashlib.sha256(self.output[name][0]).hexdigest(), digest)
+                        self.assertEqual(self.output[name][1], self.published[name][1])
         shared = self.output['packages/shared/src/v2/auto-recharge.ts'][0]
         self.assertIn(b'V2_RECHARGE_SUBSCRIPTION_CYCLE_PROTOCOL', shared)
         self.assertIn(b'next-subscription-cycle-v1', shared)
+
+    def test_only_the_exact_reviewed_seven_file_remaining_delta_is_admitted(self):
+        paths = {n for n in set(self.published) | set(self.reviewed_remaining) | set(self.candidate)
+                 if n.startswith(APP_PREFIXES) or n in APP_FILES}
+        changed = {n for n in paths if self.published.get(n) != self.reviewed_remaining.get(n)}
+        self.assertEqual(changed, REMAINING_REVIEWED_PATHS)
+        candidate_changed = {n for n in paths if self.published.get(n) != self.candidate.get(n)}
+        self.assertEqual(candidate_changed, REMAINING_REVIEWED_PATHS)
+        for name in REMAINING_REVIEWED_PATHS:
+            with self.subTest(path=name):
+                self.assertEqual(self.output[name], self.reviewed_remaining[name])
+                self.assertEqual(self.output[name], self.candidate[name])
+                self.assertNotEqual(self.output[name], self.published[name])
 
     def test_workspace_dock_and_latest_table_width_fix_survive_without_old_admin(self):
         for name in (

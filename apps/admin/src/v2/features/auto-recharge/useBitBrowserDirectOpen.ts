@@ -2,10 +2,22 @@ import { computed, onScopeDispose, shallowRef, watch } from 'vue';
 import { sessionCoordinator } from '@/auth/sessionCoordinator';
 import type { V2RechargeBitBrowserOpenLaunch } from './contracts';
 import { rechargeApi } from './api';
-import { DirectBrowserError } from './bitbrowser-direct-api';
+import {
+  DirectBrowserError,
+  directBrowserFailure,
+  type DirectBrowserOperation
+} from './bitbrowser-direct-api';
 import type { DirectLoginCredential } from './bitbrowser-direct-credential';
 import type { DirectLoginCode } from './bitbrowser-direct-login';
-import { directOperationDeadline, rechargeExecutionFailure } from './recharge-direct-lifecycle';
+import { directOperationDeadline } from './recharge-direct-lifecycle';
+
+const progressOperations: Readonly<Record<string, DirectBrowserOperation>> = {
+  owned_profile_check: 'record_profile_check',
+  bitbrowser_profile_missing_confirmed: 'record_profile_missing',
+  bitbrowser_profile_created: 'record_profile_created',
+  bitbrowser_profile_opened: 'record_profile_opened',
+  bitbrowser_group: 'record_group'
+};
 
 export function useBitBrowserDirectOpen(
   refresh: () => Promise<unknown>,
@@ -101,25 +113,36 @@ export function useBitBrowserDirectOpen(
     });
     const callback = async (type: 'progress' | 'finished', result: Record<string, unknown>) => {
       if (task.endedRemotely) return;
-      await directOperationDeadline(
-        (signal) =>
-          rechargeApi.directBrowserCallback(
-            launch.id,
-            launch.agentToken,
-            {
-              type,
-              result: {
-                ...result,
-                payment_attempted: false,
-                payment_requests_sent: 0,
-                ...(profileId ? { browser_profile_id: profileId } : {})
-              }
-            },
-            { signal }
-          ),
-        15_000,
-        type === 'progress' ? task.controller.signal : undefined
-      );
+      try {
+        await directOperationDeadline(
+          (signal) =>
+            rechargeApi.directBrowserCallback(
+              launch.id,
+              launch.agentToken,
+              {
+                type,
+                result: {
+                  ...result,
+                  payment_attempted: false,
+                  payment_requests_sent: 0,
+                  ...(profileId ? { browser_profile_id: profileId } : {})
+                }
+              },
+              { signal }
+            ),
+          15_000,
+          type === 'progress' ? task.controller.signal : undefined
+        );
+      } catch (cause) {
+        throw directBrowserFailure(
+          cause,
+          type === 'finished'
+            ? 'record_finished'
+            : typeof result.stage === 'string' && Object.hasOwn(progressOperations, result.stage)
+              ? progressOperations[result.stage]
+              : 'record_progress'
+        );
+      }
       if (type === 'finished') task.endedRemotely = true;
       if (identityEpoch === sessionCoordinator.identityEpoch.value) requestRefresh();
     };
@@ -153,17 +176,21 @@ export function useBitBrowserDirectOpen(
             },
             restore: async (accountKey) => {
               if (task.endedRemotely) throw new DirectBrowserError('bitbrowser_direct_cancelled');
-              return directOperationDeadline(
-                (signal) =>
-                  rechargeApi.directBrowserCallback(
-                    launch.id,
-                    launch.agentToken,
-                    { type: 'restore', accountKey },
-                    { signal }
-                  ),
-                15_000,
-                task.controller.signal
-              );
+              try {
+                return await directOperationDeadline(
+                  (signal) =>
+                    rechargeApi.directBrowserCallback(
+                      launch.id,
+                      launch.agentToken,
+                      { type: 'restore', accountKey },
+                      { signal }
+                    ),
+                  15_000,
+                  task.controller.signal
+                );
+              } catch (cause) {
+                throw directBrowserFailure(cause, 'record_restore');
+              }
             },
             code: () =>
               new Promise<DirectLoginCode>((resolve, reject) => {
@@ -200,7 +227,9 @@ export function useBitBrowserDirectOpen(
           : cause instanceof DirectBrowserError
             ? cause.reason
             : 'bitbrowser_direct_command_failed';
-        task.primaryFailure = rechargeExecutionFailure(cause, cancelled);
+        task.primaryFailure = cancelled
+          ? new DirectBrowserError('bitbrowser_direct_cancelled').message
+          : directBrowserFailure(cause).message;
         displayFailure = task.primaryFailure;
         const report = (supplement = '') => {
           if (!disposed && identityEpoch === sessionCoordinator.identityEpoch.value)
@@ -217,7 +246,8 @@ export function useBitBrowserDirectOpen(
               reason === 'official_login_page_not_ready' ? 'restored' : 'not_verified',
             ...(cancelled ? { cancellation_confirmed: true } : {})
           });
-        } catch {
+        } catch (saveError) {
+          const saveFailure = directBrowserFailure(saveError, 'record_finished');
           try {
             await directOperationDeadline(
               (signal) => rechargeApi.cancelBitBrowser(launch.id, { signal }),
@@ -225,9 +255,13 @@ export function useBitBrowserDirectOpen(
             );
             task.endedRemotely = true;
             if (identityEpoch === sessionCoordinator.identityEpoch.value) requestRefresh();
-            report(' 原登录任务已停止，资料已解锁；请核对比特连接和窗口状态。');
-          } catch {
-            report(' 原任务结束结果待核对，请刷新原任务后处理；本次不会自动重试。');
+            report(
+              ` ${saveFailure.message} 原登录任务已停止，资料已解锁；请核对比特连接和窗口状态。`
+            );
+          } catch (closeError) {
+            report(
+              ` ${saveFailure.message} ${directBrowserFailure(closeError, 'record_stop').message} 原任务结束结果待核对，请刷新原任务后处理；本次不会自动重试。`
+            );
           }
         }
       } finally {

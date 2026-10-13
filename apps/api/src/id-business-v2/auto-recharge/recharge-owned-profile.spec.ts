@@ -427,6 +427,35 @@ const replacement = () => ({
 });
 
 describe('确认原窗口不存在后的重建绑定', () => {
+  it('历史另一套餐付款待核对时，仅登录重建保留原付款记录', async () => {
+    const f = restoreFixture();
+    await f.service.callback(currentId, { type: 'restore', accountKey });
+    const original = {
+      ownerId,
+      fileKey: 'payments/fixture-other-plan.json',
+      revision: 1,
+      document: {
+        target_plan: 'pro20x',
+        payment_attempted: true,
+        payment_status: 'unknown',
+        payment_requests_sent: 1,
+        confirmation_requests_sent: 1
+      }
+    };
+    const snapshot = structuredClone(original);
+    f.repository.records.mockResolvedValue([original]);
+    await f.local.callback(currentId, f.agentToken, {
+      type: 'progress',
+      result: replacement()
+    });
+    expect(f.job.result).toMatchObject({
+      mode: 'open_browser',
+      browser_profile_id: replacementId,
+      payment_requests_sent: 0
+    });
+    expect(original).toEqual(snapshot);
+  });
+
   it('仅登录任务重建不受历史付款待核对记录影响，也不改写原单', async () => {
     const f = restoreFixture();
     await f.service.callback(currentId, { type: 'restore', accountKey });

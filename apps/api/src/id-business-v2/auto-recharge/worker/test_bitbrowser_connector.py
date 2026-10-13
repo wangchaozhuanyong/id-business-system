@@ -11,7 +11,7 @@ import weakref
 from pathlib import Path
 import unittest
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from urllib.error import HTTPError
+from urllib.error import HTTPError, URLError
 from urllib.request import Request, build_opener
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -92,6 +92,216 @@ def resolution_payload():
         "callbackUrl": "https://admin.example/api/id-business-v2/auto-recharge/local/" + JOB_ID,
         "agentToken": "a" * 64,
     }
+
+
+class CallbackDiagnosticTests(unittest.TestCase):
+    class Response(io.BytesIO):
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            self.close()
+
+    def client(self, token='private-fixture-token'):
+        return connector.CallbackClient(payload()['callbackUrl'], token, JOB_ID)
+
+    def failure(self, error, body=None, *, token='private-fixture-token'):
+        with patch.object(connector, 'build_opener') as opener:
+            opener.return_value.open.side_effect = error
+            output = io.StringIO()
+            with contextlib.redirect_stdout(output), self.assertRaises(Stop) as stopped:
+                self.client(token).send(body or {'type': 'restore', 'accountKey': 'c' * 64})
+            self.assertEqual(opener.return_value.open.call_count, 1)
+        self.assertEqual(stopped.exception.report['reason'], 'durable_state_unavailable')
+        diagnostic = json.loads(output.getvalue())
+        self.assertEqual(diagnostic['event'], 'recharge_record_callback_failed')
+        self.assertEqual(diagnostic['jobId'], JOB_ID)
+        self.assertLess(len(output.getvalue()), 1024)
+        self.assertLessEqual(set(diagnostic), {'event', 'jobId', 'operation', 'phase', 'errorType',
+            'failure', 'observedAt', 'httpStatus', 'errorCode', 'requestId', 'rejectionCause'})
+        self.assertEqual(connector.datetime.fromisoformat(diagnostic['observedAt']).utcoffset(),
+                         connector.datetime.now(connector.timezone.utc).utcoffset())
+        for private in ('private-fixture', 'admin.example', 'c' * 64):
+            self.assertNotIn(private, output.getvalue())
+        return stopped.exception.report, diagnostic
+
+    def test_http_rejection_keeps_original_stop_and_safe_tracking_metadata(self):
+        tracking = '22222222-2222-4222-8222-222222222222'
+        for status in (400, 401, 403, 409, 429, 500, 503):
+            with self.subTest(status=status):
+                raw = json.dumps({'success': False, 'errorCode': 'FORBIDDEN',
+                    'requestId': tracking, 'message': 'private-fixture-response'}).encode()
+                report, diagnostic = self.failure(HTTPError(payload()['callbackUrl'], status,
+                    'private-fixture-http-message', {}, io.BytesIO(raw)))
+                self.assertEqual(report['callback_http_status'], status)
+                self.assertEqual(report['callback_error_code'], 'FORBIDDEN')
+                self.assertEqual(report['callback_request_id'], tracking)
+                self.assertEqual(report['callback_failure_kind'], 'http')
+                self.assertNotIn('error_type', report)
+                self.assertEqual(diagnostic['httpStatus'], status)
+                self.assertEqual(diagnostic['errorType'], 'HTTPError')
+                self.assertEqual(diagnostic['requestId'], tracking)
+                self.assertEqual(diagnostic['errorCode'], 'FORBIDDEN')
+                self.assertEqual(diagnostic['failure'], 'http_rejected')
+
+    def test_current_auth_codes_are_logged_without_copying_error_body(self):
+        for status, code in ((401, 'AUTH_INVALID'), (403, 'AUTH_PERMISSION_DENIED')):
+            with self.subTest(code=code):
+                raw = json.dumps({'errorCode': code, 'message': 'private-fixture-response'}).encode()
+                report, diagnostic = self.failure(HTTPError(payload()['callbackUrl'], status,
+                    'private-fixture', {}, io.BytesIO(raw)))
+                self.assertEqual(report['callback_http_status'], status)
+                self.assertEqual(diagnostic['errorCode'], code)
+
+    def test_transport_errors_have_controlled_categories_without_exception_text(self):
+        for error, name, failure_kind in (
+                (TimeoutError('private-fixture-timeout'), 'TimeoutError', 'timeout'),
+                (URLError('private-fixture-network'), 'URLError', 'transport'),
+                (OSError('private-fixture-network'), 'OSError', 'transport'),
+                (RuntimeError('private-fixture-network'), 'Exception', 'transport')):
+            with self.subTest(name=name):
+                report, diagnostic = self.failure(error, {'type': 'ledger',
+                    'document': {'secret': 'private-fixture'}})
+                self.assertEqual(report['callback_failure_kind'], failure_kind)
+                self.assertEqual(diagnostic['errorType'], name)
+                self.assertNotIn('httpStatus', diagnostic)
+                self.assertNotIn('http_status', report)
+
+    def test_invalid_success_response_and_size_limit_stop_without_retry(self):
+        for raw, failure in ((b'not-json-private-fixture', 'response'),
+                (b'{"success":true,"data":{},"data":{}}', 'response'),
+                (b'{"success":false,"data":{}}', 'response'),
+                (b'{"success":true,"data":[]}', 'response'),
+                (b' ' * (connector.MAX_BODY + 1), 'response_too_large')):
+            with self.subTest(size=len(raw)), patch.object(connector, 'build_opener') as opener:
+                opener.return_value.open.return_value = self.Response(raw)
+                output = io.StringIO()
+                with contextlib.redirect_stdout(output), self.assertRaises(Stop) as stopped:
+                    self.client().send({'type': 'restore'})
+                self.assertEqual(stopped.exception.report['callback_failure_kind'], 'invalid_response')
+                self.assertEqual(json.loads(output.getvalue())['failure'], failure)
+                self.assertNotIn('private-fixture', output.getvalue())
+                self.assertEqual(opener.return_value.open.call_count, 1)
+
+    def test_valid_response_boundary_keeps_return_protocol_and_ten_second_budget(self):
+        raw = b'{"success":true,"data":{"records":[]}}'
+        for size in (len(raw), connector.MAX_BODY):
+            with self.subTest(size=size), patch.object(connector, 'build_opener') as opener:
+                opener.return_value.open.return_value = self.Response(raw + b' ' * (size - len(raw)))
+                output = io.StringIO()
+                with contextlib.redirect_stdout(output):
+                    self.assertEqual(self.client().send({'type': 'restore'}), {'records': []})
+                self.assertEqual(output.getvalue(), '')
+                self.assertGreater(opener.return_value.open.call_args.kwargs['timeout'], 9)
+                self.assertLessEqual(opener.return_value.open.call_args.kwargs['timeout'], 10)
+                self.assertEqual(opener.return_value.open.call_count, 1)
+
+    def test_untrusted_codes_identifiers_and_operation_are_not_logged(self):
+        for code, request_id, message, operation in (
+                ('PRIVATE_FIXTURE_CODE', 'private-fixture-request', 'private-fixture-body', 'private-fixture-operation'),
+                (['FORBIDDEN'], ['private-fixture'], {'private-fixture': 'body'}, []),
+                ('X' * 10000, 'x' * 10000, '该账户属于另一操作人的原任务 private-fixture', {})):
+            with self.subTest(code_type=type(code).__name__):
+                raw = json.dumps({'errorCode': code, 'requestId': request_id, 'message': message}).encode()
+                _, diagnostic = self.failure(HTTPError(payload()['callbackUrl'], 403,
+                    'private-fixture', {}, io.BytesIO(raw)), {'type': operation})
+                self.assertNotIn('requestId', diagnostic)
+                self.assertNotIn('errorCode', diagnostic)
+                self.assertNotIn('rejectionCause', diagnostic)
+                self.assertEqual(diagnostic['operation'], 'unknown')
+
+    def test_uuid_shaped_secret_and_standard_code_shaped_password_are_not_logged(self):
+        tracking = '22222222-2222-4222-8222-222222222222'
+        raw = json.dumps({'errorCode': 'FORBIDDEN', 'requestId': tracking}).encode()
+        _, diagnostic = self.failure(HTTPError(payload()['callbackUrl'], 403,
+            'private-fixture', {'X-Request-Id': tracking}, io.BytesIO(raw)),
+            {'type': 'restore', 'password': 'FORBIDDEN'}, token=tracking)
+        self.assertNotIn('requestId', diagnostic)
+        self.assertNotIn('errorCode', diagnostic)
+
+    def test_job_id_colliding_with_sensitive_input_is_omitted_without_changing_failure(self):
+        for body, token in (({'type': 'finished', 'password': JOB_ID}, 'private-fixture-token'),
+                ({'type': 'finished'}, JOB_ID)):
+            with self.subTest(password_collision='password' in body), patch.object(connector, 'build_opener') as opener:
+                raw = json.dumps({'errorCode': 'CONFLICT', 'requestId': JOB_ID}).encode()
+                opener.return_value.open.side_effect = HTTPError(payload()['callbackUrl'], 409,
+                    'private-fixture', {}, io.BytesIO(raw))
+                output = io.StringIO()
+                with contextlib.redirect_stdout(output), self.assertRaises(Stop) as stopped:
+                    self.client(token).send(body)
+                diagnostic = json.loads(output.getvalue())
+                self.assertNotIn('jobId', diagnostic)
+                self.assertNotIn('requestId', diagnostic)
+                self.assertNotIn(JOB_ID, output.getvalue())
+                self.assertEqual(diagnostic['event'], 'recharge_record_callback_failed')
+                self.assertEqual(diagnostic['operation'], 'finished')
+                self.assertEqual(diagnostic['httpStatus'], 409)
+                self.assertEqual(stopped.exception.report['reason'], 'durable_state_unavailable')
+                self.assertEqual(stopped.exception.report['callback_http_status'], 409)
+                self.assertEqual(opener.return_value.open.call_count, 1)
+
+    def test_log_sink_failure_preserves_original_stop(self):
+        for sink in (RuntimeError('private-fixture-sink'), BrokenPipeError(), ValueError()):
+            with self.subTest(sink=type(sink).__name__), patch.object(connector, 'build_opener') as opener:
+                opener.return_value.open.side_effect = HTTPError(payload()['callbackUrl'], 403,
+                    'private-fixture', {}, io.BytesIO(b'{}'))
+                with patch('builtins.print', side_effect=sink), self.assertRaises(Stop) as stopped:
+                    self.client().send({'type': 'restore'})
+                self.assertEqual(stopped.exception.report['reason'], 'durable_state_unavailable')
+                self.assertEqual(stopped.exception.report['callback_http_status'], 403)
+                self.assertEqual(opener.return_value.open.call_count, 1)
+
+    def test_fixed_guard_messages_map_only_to_safe_labels(self):
+        for message, cause in (
+                ('本机连接凭据无效', 'callback_credentials_rejected'),
+                ('执行窗口已结束，请重新核验原订单', 'job_expired'),
+                ('账户标识不一致', 'account_mismatch'),
+                ('该账户属于另一操作人的原任务', 'account_owner_mismatch'),
+                ('本次任务已绑定另一比特窗口，不能覆盖原窗口', 'profile_conflict'),
+                ('原订单编号不一致', 'checkout_conflict')):
+            with self.subTest(cause=cause):
+                raw = json.dumps({'message': message}).encode()
+                _, diagnostic = self.failure(HTTPError(payload()['callbackUrl'], 403,
+                    'private-fixture', {}, io.BytesIO(raw)), {'type': 'finished',
+                    'result': {'secret': 'private-fixture'}})
+                self.assertEqual(diagnostic['operation'], 'finished')
+                self.assertEqual(diagnostic['rejectionCause'], cause)
+
+    def test_caller_deadline_returns_once_and_late_transport_never_logs_again(self):
+        for late_error in (False, True):
+            with self.subTest(late_error=late_error):
+                release, returned = threading.Event(), threading.Event()
+                def slow_open(*_args, **_kwargs):
+                    release.wait(1)
+                    try:
+                        if late_error:
+                            raise HTTPError(payload()['callbackUrl'], 409, 'private-fixture', {},
+                                io.BytesIO(b'{"errorCode":"CONFLICT"}'))
+                        return self.Response(b'{"success":true,"data":{"secret":"private-fixture"}}')
+                    finally:
+                        returned.set()
+                output = io.StringIO()
+                try:
+                    with patch.object(connector, 'build_opener') as opener, contextlib.redirect_stdout(output):
+                        opener.return_value.open.side_effect = slow_open
+                        before = time.monotonic()
+                        with self.assertRaises(Stop) as stopped:
+                            self.client().send({'type': 'prepare_next_subscription_cycle', 'phase': 'status'},
+                                deadline=before + .03)
+                        self.assertLess(time.monotonic() - before, .25)
+                        self.assertEqual(stopped.exception.report['callback_failure_kind'], 'timeout')
+                        diagnostic = json.loads(output.getvalue())
+                        self.assertEqual(diagnostic['phase'], 'status')
+                        self.assertEqual(diagnostic['errorType'], 'TimeoutError')
+                        first_output = output.getvalue()
+                        release.set()
+                        self.assertTrue(returned.wait(.5))
+                        time.sleep(.01)
+                        self.assertEqual(output.getvalue(), first_output)
+                        self.assertEqual(opener.return_value.open.call_count, 1)
+                        self.assertLessEqual(opener.return_value.open.call_args.kwargs['timeout'], .03)
+                finally:
+                    release.set()
 
 
 class BitBrowserConnectorTests(unittest.TestCase):

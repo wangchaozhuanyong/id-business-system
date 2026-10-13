@@ -419,6 +419,10 @@ test('unpublished successor controls execute narrow suites once in either dispat
 });
 
 test('recharge flow controls execute their four suites once without business/database checks', () => {
+  const reusedPublisherInputs = [
+    'scripts/production-release/unpublished-component-successor.py',
+    'scripts/production-release/unpublished-component-successor-readonly.py'
+  ];
   const commands = [
     ['python3', '-B', 'scripts/production-release/recharge-flow-successor.test.py'],
     ['python3', '-B', 'scripts/production-release/recharge-flow-successor-projection.test.py'],
@@ -426,8 +430,11 @@ test('recharge flow controls execute their four suites once without business/dat
     ['node', '--test', 'scripts/production-release/recharge-flow-entry.test.mjs']
   ];
   for (const part of ['guards', 'release-controls']) {
-    for (const path of rechargeFlowSuccessorControlPaths) {
-      const calls = recordGuardCommands('ci-only', [path], part);
+    for (const paths of [
+      ...[...rechargeFlowSuccessorControlPaths, ...reusedPublisherInputs].map((path) => [path]),
+      reusedPublisherInputs
+    ]) {
+      const calls = recordGuardCommands('ci-only', paths, part);
       for (const command of commands)
         assert.equal(
           calls.filter((call) => JSON.stringify(call) === JSON.stringify(command)).length,
@@ -439,16 +446,19 @@ test('recharge flow controls execute their four suites once without business/dat
         )
       );
     }
-    const calls = recordGuardCommands(
-      'ci-only',
-      ['scripts/production-release/recharge-flow-successor-other.py'],
-      part
-    );
-    assert.ok(
-      calls.every(
-        (call) => !commands.some((command) => JSON.stringify(call) === JSON.stringify(command))
-      )
-    );
+    for (const path of [
+      'scripts/production-release/recharge-flow-successor-other.py',
+      'scripts/production-release/unpublished-component-successor.py.backup',
+      'scripts/production-release/unpublished-component-successor-other.py',
+      'scripts/production-release/unpublished-component-successor-readonly.test.py'
+    ]) {
+      const calls = recordGuardCommands('ci-only', [path], part);
+      assert.ok(
+        calls.every(
+          (call) => !commands.some((command) => JSON.stringify(call) === JSON.stringify(command))
+        )
+      );
+    }
   }
 });
 

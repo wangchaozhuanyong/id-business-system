@@ -27,10 +27,28 @@ CONTEXT = '.deploy/production-release/' + PREFIX + '-build-context'
 PROJECTION = '.deploy/production-release/' + PREFIX + '-build-projection.json'
 PROOF = '.deploy/production-release/' + PREFIX + '-build-proof.json'
 PREFLIGHT = '.deploy/production-release/' + PREFIX + '-preflight.json'
-APPLICATION_SOURCE = 'b1a775d1dc0bc460fb59eebcec089342b6134788'
-APPLICATION_TREE = 'c45fa8f14a97e215d47ec9dc2a325f5fe611a921'
-APPROVED_APPLICATION_INPUT_SHA256 = '2e9549278a2e883a6a7eba4a90a565146919e3ce631f4c5cfe8e5771b2dfd647'
+APPLICATION_SOURCE = '28132dc776ccb94c44e243a81731f27c91ae4ed3'
+APPLICATION_TREE = 'a9b0a4ea92ca6448316cd9e5ee9252950f1bacb6'
+APPROVED_APPLICATION_INPUT_SHA256 = 'c4f1c8d57580412999493e0895faf5c912611dcc8973abffeb11d5f2aae0064b'
 APPLICATION_INPUT_COUNT = 2191
+# One genuine publication, authenticated by its original ended native readback.
+# This is separate from the immutable legacy B/Admin contract below.
+COMPONENT_PREDECESSOR = {
+    'producer': {'commit': 'f193f34ea09a2c37485c1582a81b33ee3acec865',
+        'sourceTree': '9aa97ecaa69bee7fdf5d390e1547dfe941050ed1',
+        'workflowRunId': '38429088560', 'workflowRunAttempt': '1'},
+    'commandId': '6958d157-6893-4b42-8015-b88d86b05787',
+    'instanceId': 'i-05836da38606e633c',
+    'invocationBytesSha256': 'eea94cac0229873c3a0122441699d80e9be813c3c9544f5c2e6f5ca9ee0e1684',
+    'receiptSha256': 'fb745427ff38fd1a63f1e92e86156ddf3b6c5df970365eef2b76764da099ef9f',
+    'manifestBytesSha256': '11293b08b57f328e7e38ba8a81acad2778a8a1bb83eda6b3de6d6c9309612b16',
+    'publicationSha256': '067a01e76ea58170c937ac23f9b2d9dab5286c8ba247ce4c4119f40f10fdbfdc',
+    'buildProofBytesSha256': 'eb475c519c1df183bcf02016a32ffe77303c7dc327d976aa5c76fefbcc98de04',
+    'preservationRecordBytesSha256': 'e16b890a2635bccb488ce7ef120ddadfeaef623fb3f2198ce345a7a09a732a3f',
+    'projectionSha256': '6fbc3fcd4b22b452e70371be0c45cd9724366578dce359f3e49120b73f4df41b',
+    'coreSha256': '1237eb3e5c3089f822663bcb01963b73cf263837326c6cf4bb392813dd3ee74d',
+}
+COMPONENT_PREDECESSOR_SCOPE = 'UNPUBLISHED_COMPONENT_EXACT_PUBLISHED_PREDECESSOR'
 BASELINE_CONTRACT = {'adminPredecessorManifestSha256': '5263307389da5be14cb13a0c2a26b6d2ca5a8268bc9bcfce4313cf07809f0c6c',
  'adminPredecessorRelease': '/opt/id-business-v2/releases/20261012T162822Z-60e164b75d1e',
  'adminPublicationSha256': '75ab43cc2e0bdb6b2c3da66b5a411df7cc9aea2a313dc7dc1963624fa4fd564f',
@@ -598,10 +616,20 @@ def migration_database_state(d, scope, directory, database_identity=None):
 
 
 def apply_migration(d, scope, previous, target, retained=None):
-    migration_source_check(d, scope, previous, candidate=False)
+    successor = component_successor_origin({'componentSuccessorOrigin': retained}) if type(retained) is dict and retained.get('scope') == COMPONENT_PREDECESSOR_SCOPE else None
+    migration_source_check(d, scope, previous, candidate=successor is not None)
     migration_source_check(d, scope, target, candidate=True)
-    need(d.migration_plan(previous, target) == [MIGRATION_FILE], 'MIGRATION_SCOPE_CHANGED')
+    need(d.migration_plan(previous, target) == ([] if successor else [MIGRATION_FILE]), 'MIGRATION_SCOPE_CHANGED')
     before = migration_database_state(d, scope, previous)
+    if successor:
+        need(before == successor['migration'] and before['status'] == 'APPLIED', 'MIGRATION_RETAINED_BINDING_CHANGED')
+        after = migration_database_state(d, scope, target)
+        grants = grant_state(d, target, applied=True)
+        need(after == before and grants == successor['databaseGrants'], 'MIGRATION_RETAINED_BINDING_CHANGED')
+        # Already published schema and grants are read-only. No migrate or GRANT.
+        return {**after, 'performed': False, 'before': before,
+            'grants': {'status': 'EXISTING_GRANTS_READONLY_VERIFIED', 'mutationPerformed': False},
+            'grantProtection': grants}
     performed = before['status'] == 'PENDING'
     if performed:
         need(retained is None, 'MIGRATION_RETAINED_BINDING_CHANGED')
@@ -787,11 +815,138 @@ def authenticate_restoration(d, p, *, binding_sha256, command_id, invocation_sha
         'restorationLedgerBytesSha256': receipt['restorationLedgerBytesSha256'], 'migration': receipt['migration']}
 
 
+def component_predecessor_path(d):
+    return d.BASE / '.staging' / ('component-published-origin-' + COMPONENT_PREDECESSOR['invocationBytesSha256']) / 'invocation.json'
+
+
+def validate_component_predecessor_native(raw):
+    authority = COMPONENT_PREDECESSOR
+    need(digest(raw) == authority['invocationBytesSha256'], 'COMPONENT_PREDECESSOR_NATIVE_CHANGED')
+    _native, receipt = validate_invocation(raw, authority['commandId'], authority['instanceId'])
+    need(fingerprint(receipt) == authority['receiptSha256']
+         and receipt['scope'] == SCOPE and receipt['status'] == 'UNPUBLISHED_COMPONENT_VERIFIED'
+         and receipt['commit'] == authority['producer']['commit'] and receipt['sourceTree'] == authority['producer']['sourceTree']
+         and receipt['servicesUpdated'] == list(UPDATED) and type(receipt['preservedServiceCount']) is int
+         and receipt['preservedServiceCount'] == len(PRESERVED)
+         and receipt['onlinePublished'] is False and type(receipt['businessActions']) is int and receipt['businessActions'] == 0
+         and receipt['runningImagesAndContentMatched'] is True and receipt['databaseOldGrantsPreserved'] is True
+         and receipt['volumeDeletionPerformed'] is False, 'COMPONENT_PREDECESSOR_RECEIPT_CHANGED')
+    return receipt
+
+
+def component_predecessor_code(d, current):
+    """Execute only f193's archived helpers, never the new application seal."""
+    from types import ModuleType
+    authority = COMPONENT_PREDECESSOR
+    p = authority['producer']
+    files = d.registration_archive(d.registration_download(p['commit']), p['commit'])
+    need(projection_module().source_tree(files) == p['sourceTree'], 'COMPONENT_PREDECESSOR_SOURCE_CHANGED')
+    for name in HELPERS:
+        relative = 'scripts/production-release/' + name
+        path = current / relative
+        need(path.parent.resolve() == path.parent and path.is_file() and not path.is_symlink()
+             and relative in files and path.read_bytes() == files[relative][0]
+             and ('100755' if path.stat().st_mode & 0o111 else '100644') == files[relative][1],
+             'COMPONENT_PREDECESSOR_SOURCE_CHANGED')
+    path = current / 'scripts/production-release/unpublished-component-successor.py'
+    raw = path.read_bytes()
+    need(digest(raw) == authority['coreSha256'], 'COMPONENT_PREDECESSOR_SOURCE_CHANGED')
+    module = ModuleType('original_published_component_predecessor')
+    module.__file__ = str(path)
+    exec(compile(raw, str(path), 'exec', dont_inherit=True), module.__dict__)
+    need(tuple(module.HELPERS) == HELPERS and module.SCOPE == SCOPE
+         and module.MIGRATION_IDENTITY == MIGRATION_IDENTITY and module.PRESERVED == PRESERVED,
+         'COMPONENT_PREDECESSOR_SOURCE_CHANGED')
+    return module
+
+
+def component_successor_origin(evidence):
+    value = evidence.get('componentSuccessorOrigin')
+    if value is None:
+        return None
+    authority = COMPONENT_PREDECESSOR
+    fields = {'version', 'scope', 'authenticated', 'producer', 'commandId', 'invocationBytesSha256',
+        'manifestBytesSha256', 'publicationSha256', 'buildProofBytesSha256', 'preservationRecordBytesSha256',
+        'projectionSha256', 'migration', 'databaseGrants'}
+    need(type(value) is dict and set(value) == fields and type(value['version']) is int and value['version'] == 1
+         and value['scope'] == COMPONENT_PREDECESSOR_SCOPE and value['authenticated'] is True
+         and all(value[n] == authority[n] for n in fields - {'version', 'scope', 'authenticated', 'migration', 'databaseGrants'}),
+         'COMPONENT_PREDECESSOR_ORIGIN_CHANGED')
+    need(all(evidence[n] == authority['producer']['commit'] for n in ('currentCommit', 'apiCurrentSourceCommit') if n in evidence),
+         'COMPONENT_PREDECESSOR_ORIGIN_CHANGED')
+    migration = value['migration']
+    need(type(migration) is dict and set(migration) == {'name', 'sha256', 'status', 'schemaVerified', 'appliedMigrationsSha256'}
+         and migration['name'] == MIGRATION_NAME and migration['sha256'] == MIGRATION_IDENTITY['sha256']
+         and migration['status'] == 'APPLIED' and migration['schemaVerified'] is True
+         and re.fullmatch('[a-f0-9]{64}', migration['appliedMigrationsSha256'])
+         and type(value['databaseGrants']) is dict and set(value['databaseGrants']) == {
+             'preservedGrantsSha256', 'schemaGrantsSha256', 'newTablePrivileges'}, 'COMPONENT_PREDECESSOR_MIGRATION_CHANGED')
+    grants = value['databaseGrants']
+    expected = [{'grantee': "'id_business_app'@'%'", 'table': MIGRATION_TABLE, 'privilege': n, 'grantable': 'NO'}
+                for n in ('INSERT', 'SELECT', 'UPDATE')]
+    need(all(type(grants[n]) is str and re.fullmatch('[a-f0-9]{64}', grants[n])
+             for n in ('preservedGrantsSha256', 'schemaGrantsSha256'))
+         and grants['newTablePrivileges'] == expected, 'COMPONENT_PREDECESSOR_GRANTS_CHANGED')
+    return value
+
+
+def component_successor_baseline(d, admin, scope, current, raw, manifest):
+    authority = COMPONENT_PREDECESSOR
+    p = authority['producer']
+    receipt = validate_component_predecessor_native(private_bytes(component_predecessor_path(d), cap=128 * 1024))
+    need(digest(raw) == authority['manifestBytesSha256'] and manifest['commit'] == p['commit']
+         and manifest['sourceTree'] == p['sourceTree']
+         and manifest['apiComponentPublication']['producer'] == p, 'COMPONENT_PREDECESSOR_MANIFEST_CHANGED')
+    historical = component_predecessor_code(d, current)
+    # Loading the historical controller through its own modules preserves all
+    # original source, migration, native preflight, backup and runtime checks.
+    need(historical.readback(None, p['commit']) == receipt, 'COMPONENT_PREDECESSOR_READBACK_CHANGED')
+    proof_raw = private_bytes(current / (PREFIX + '-build-proof.json'))
+    state_raw = private_bytes(current / (PREFIX + '-preservation.json'))
+    proof, state = closed_json(proof_raw), closed_json(state_raw)
+    ledger = manifest['apiComponentPublication']
+    need(digest(proof_raw) == authority['buildProofBytesSha256']
+         and digest(state_raw) == authority['preservationRecordBytesSha256']
+         and fingerprint(ledger) == authority['publicationSha256']
+         and fingerprint(proof['projection']) == authority['projectionSha256'], 'COMPONENT_PREDECESSOR_RECORD_CHANGED')
+    states = scope.snapshot(d, current)
+    need(set(states) == set(SERVICES) and states == state['after']
+         and all(states[n] == state['before'][n] for n in PRESERVED), 'COMPONENT_PREDECESSOR_SERVICES_CHANGED')
+    origin = {n: copy.deepcopy(authority[n]) for n in ('producer', 'commandId', 'invocationBytesSha256',
+        'manifestBytesSha256', 'publicationSha256', 'buildProofBytesSha256', 'preservationRecordBytesSha256', 'projectionSha256')}
+    origin.update(version=1, scope=COMPONENT_PREDECESSOR_SCOPE, authenticated=True,
+        migration=copy.deepcopy(receipt['migration']), databaseGrants=copy.deepcopy(state['migration']['grantProtection']))
+    component_successor_origin({'componentSuccessorOrigin': origin})
+    evidence = copy.deepcopy(ledger['baseline'])
+    evidence.update(currentRelease=str(current), currentCommit=p['commit'], currentManifestBytesSha256=digest(raw),
+        apiCurrentSourceCommit=p['commit'], apiCurrentSourceTree=p['sourceTree'], services=states,
+        componentCurrentImages={n: proof['images'][n] for n in UPDATED},
+        configurationModels={n: configuration_model(d, states[n]) for n in UPDATED},
+        configurationFilesSha256={n: digest((current / n).read_bytes()) for n in evidence['configurationFilesSha256']},
+        environmentFileSha256=digest(private_bytes(current / '.env.aws.production')),
+        workspaceVolume=scope.workspace_volume(d, current, attached=True),
+        guards=scope.jobs_idle(d, current), migrationState=migration_database_state(d, scope, current),
+        databaseGrants=grant_state(d, current, applied=True), restorationBinding=None, nativeRestartBinding=None,
+        componentSuccessorOrigin=origin)
+    need(evidence['migrationState'] == origin['migration'] and evidence['databaseGrants'] == origin['databaseGrants']
+         and evidence['workspaceVolume'] == state['workspaceVolumeAfter']
+         and evidence['originMarkersSha256'] == fingerprint({n: manifest[n] for n in admin.ORIGIN_MARKERS}),
+         'COMPONENT_PREDECESSOR_STATE_CHANGED')
+    scope.workspace_idle(d, current, legacy=False)
+    scope.workspace_audit_protection(d, current)
+    scope.workspace_private_inspect(d, current, states['api']['reference'], evidence['workspaceVolume']['name'])
+    need((d.BASE / 'current').resolve() == current and private_bytes(current / 'release-manifest.json') == raw
+         and scope.snapshot(d, current) == states, 'BASELINE_MOVED')
+    return current, manifest, evidence
+
+
 def baseline(d, admin, scope, expected):
     current = (d.BASE / 'current').resolve()
     need(current.parent == d.BASE / 'releases' and not current.is_symlink(), 'CURRENT_PATH_INVALID')
     raw = private_bytes(current / 'release-manifest.json')
     manifest = closed_json(raw)
+    if expected == COMPONENT_PREDECESSOR['producer']['commit']:
+        return component_successor_baseline(d, admin, scope, current, raw, manifest)
     need(manifest.get('commit') == expected and manifest.get('adminPublication', {}).get('commit') == expected,
          'CURRENT_ADMIN_CHANGED')
     need(type(BASELINE_CONTRACT) is dict, 'BASELINE_CONTRACT_NOT_SEALED')
@@ -915,7 +1070,9 @@ def preflight(d, p, expected):
     d, admin, scope, _projection = modules(d)
     _files, _output, record, application_sha, _archive_sha = source(d, p)
     previous, _manifest, evidence = baseline(d, admin, scope, expected)
+    successor = component_successor_origin(evidence)
     need(evidence['migrationState']['status'] == 'PENDING'
+         or successor is not None
          or type(evidence['restorationBinding']) is dict and evidence['restorationBinding'].get('authenticated') is True
             and evidence['restorationBinding'].get('migration') == evidence['migrationState'],
          'MIGRATION_ALREADY_APPLIED_WITHOUT_RECEIPT')
@@ -1087,6 +1244,7 @@ def validate_build(value, p, record, transport, quality, repository):
 
 
 def preserve(d, scope, previous, target, evidence, *, pointer, images, all_services=False):
+    successor = component_successor_origin(evidence)
     need((d.BASE / 'current').resolve() == pointer
          and digest(private_bytes(previous / 'release-manifest.json')) == evidence['currentManifestBytesSha256'],
          'BASELINE_MOVED')
@@ -1096,13 +1254,13 @@ def preserve(d, scope, previous, target, evidence, *, pointer, images, all_servi
         if name == 'compose.release.json':
             continue
         if name == MIGRATION_SCHEMA:
-            need(digest((previous / name).read_bytes()) == MIGRATION_IDENTITY['schemaBeforeSha256']
+            need(digest((previous / name).read_bytes()) == MIGRATION_IDENTITY['schemaAfterSha256' if successor else 'schemaBeforeSha256']
                  and digest((target / name).read_bytes()) == MIGRATION_IDENTITY['schemaAfterSha256'], 'MIGRATION_SCHEMA_CHANGED')
             continue
         need((previous / name).read_bytes() == (target / name).read_bytes()
              and digest((target / name).read_bytes()) == sha, 'RUNTIME_CONFIGURATION_CHANGED')
-    need(d.migration_plan(previous, target) == [MIGRATION_FILE], 'MIGRATION_SCOPE_CHANGED')
-    migration_source_check(d, scope, previous, candidate=False)
+    need(d.migration_plan(previous, target) == ([] if successor else [MIGRATION_FILE]), 'MIGRATION_SCOPE_CHANGED')
+    migration_source_check(d, scope, previous, candidate=successor is not None)
     migration_source_check(d, scope, target, candidate=True)
     scope.workspace_configuration(d, previous, target)
     override = closed_json(private_bytes(previous / 'compose.release.json'))
@@ -1278,9 +1436,15 @@ def upgrade_backup_maintenance(d, scope, previous, target, evidence, files):
              and control('show', BACKUP_SERVICE, '--property=DropInPaths', '--value') == str(BACKUP_DROPIN),
              'BACKUP_ENTRY_CHANGED')
     try:
-        need(previous == d.BASE / 'releases' / Path(BASELINE_CONTRACT['currentRelease']).name
-             and evidence['currentManifestBytesSha256'] == BASELINE_CONTRACT['manifestSha256'],
-             'BACKUP_BASELINE_CHANGED')
+        successor = component_successor_origin(evidence)
+        if successor:
+            need(previous == Path(evidence['currentRelease']) and previous.parent == d.BASE / 'releases'
+                 and evidence['currentManifestBytesSha256'] == COMPONENT_PREDECESSOR['manifestBytesSha256'],
+                 'BACKUP_BASELINE_CHANGED')
+        else:
+            need(previous == d.BASE / 'releases' / Path(BASELINE_CONTRACT['currentRelease']).name
+                 and evidence['currentManifestBytesSha256'] == BASELINE_CONTRACT['manifestSha256'],
+                 'BACKUP_BASELINE_CHANGED')
         base_fd = authority.directory(d.BASE)
         pointer = os.stat('current', dir_fd=base_fd, follow_symlinks=False)
         need(stat.S_ISLNK(pointer.st_mode) and pointer.st_uid == 0 and pointer.st_nlink == 1,
@@ -1308,6 +1472,7 @@ def upgrade_backup_maintenance(d, scope, previous, target, evidence, files):
              'BACKUP_OLD_SOURCE_CHANGED')
         dropin, dropin_fd = authority.read(BACKUP_DROPIN, mode=0o600)
         already_installed = dropin == configuration
+        need(successor is None or already_installed, 'BACKUP_COMPONENT_ENTRY_CHANGED')
         need(already_installed or (dropin == old_configuration and digest(dropin) == BACKUP_DROPIN_SHA256),
              'BACKUP_DROPIN_CHANGED')
         unit_matches(entry if already_installed else old_entry)
@@ -1516,7 +1681,8 @@ def release(d, args, proof, transport):
             scope.jobs_idle(d, previous)
             gate.check_locked()
             phase = 'migration'
-            migration_result = apply_migration(d, scope, previous, target, evidence['restorationBinding'])
+            successor = component_successor_origin(evidence)
+            migration_result = apply_migration(d, scope, previous, target, successor or evidence['restorationBinding'])
             migration_result['grantProtection'] = require_grants_preserved(d, target, evidence, applied=True)
             migration_raw = write_private(target / (PREFIX + '-migration.json'), migration_result)
             scope.jobs_idle(d, previous)
@@ -1557,7 +1723,7 @@ def release(d, args, proof, transport):
                 'applicationSourceCommit': APPLICATION_SOURCE, 'applicationInputSha256': APPROVED_APPLICATION_INPUT_SHA256,
                 'sourceArchiveSha256': archive_sha, 'sourceFilesSha256': fingerprint(projection.inventory(files)),
                 'projectionSha256': fingerprint(record), 'servicesUpdated': list(UPDATED),
-                'onlinePublished': False, 'migrationPerformed': migration_result['performed'], 'databaseGrantsChanged': True,
+                'onlinePublished': False, 'migrationPerformed': migration_result['performed'], 'databaseGrantsChanged': successor is None,
                 'migration': migration_result, 'businessActions': 0}
             manifest = copy.deepcopy(old)
             manifest.update(commit=args.commit, sourceTree=args.source_tree, sourceBranch='main',
@@ -1566,9 +1732,9 @@ def release(d, args, proof, transport):
                 ciWorkflowRunId=int(args.ci_run_id), deploymentRun=f'github-actions-{args.run_id}-{args.run_attempt}',
                 imageBuildRun=f'github-actions-{args.run_id}-{args.run_attempt}', servicesUpdated=list(UPDATED),
                 sourceArchiveSha256=archive_sha,
-                backupBeforeRelease=backup['name'], migrationApplied=True, migrationPerformed=migration_result['performed'], newMigrations=[MIGRATION_FILE],
+                backupBeforeRelease=backup['name'], migrationApplied=True, migrationPerformed=migration_result['performed'], newMigrations=[] if successor else [MIGRATION_FILE],
                 dataAuditBefore=first, dataAuditAfter=second, apiComponentPublication=ledger,
-                databaseGrants={'status': 'VERIFIED', 'newTables': [MIGRATION_TABLE], 'report': migration_result['grants']},
+                databaseGrants={'status': 'VERIFIED', 'newTables': [] if successor else [MIGRATION_TABLE], 'report': migration_result['grants']},
                 rollback={'release': str(previous), 'scope': 'API_ADMIN_COMPONENT_STARTUP_FAULT_RESTORE',
                           'images': {n: evidence['services'][n]['image'] for n in UPDATED}, 'servicesAdded': []})
             # The Admin origin remains historical too; its original ledger is unchanged.
@@ -1669,11 +1835,11 @@ def readback(d, commit):
     ledger = manifest.get('apiComponentPublication', {})
     need(manifest.get('commit') == commit == ledger.get('producer', {}).get('commit')
          and ledger.get('scope') == SCOPE and manifest.get('servicesUpdated') == list(UPDATED)
-         and manifest.get('migrationApplied') is True and manifest.get('newMigrations') == [MIGRATION_FILE]
+         and manifest.get('migrationApplied') is True
          and ledger.get('componentAfter') == {'api': commit, 'admin': commit}
          and ledger.get('onlinePublished') is False and type(ledger.get('migrationPerformed')) is bool
          and ledger.get('migrationPerformed') is manifest.get('migrationPerformed')
-         and ledger.get('databaseGrantsChanged') is True and ledger.get('businessActions') == 0,
+         and type(ledger.get('databaseGrantsChanged')) is bool and ledger.get('businessActions') == 0,
          'READBACK_CHANGED')
     p = ledger['producer']
     need(p == producer(p['commit'], p['sourceTree'], p['workflowRunId'], p['workflowRunAttempt'])
@@ -1683,6 +1849,12 @@ def readback(d, commit):
     proof, state = closed_json(proof_raw), closed_json(state_raw)
     transport = closed_json(private_bytes(current / (PREFIX + '-preflight.json')))
     evidence = validate_preflight(d, transport, p, manifest['previousCommit'])['baseline']
+    successor = component_successor_origin(evidence)
+    need(manifest.get('newMigrations') == ([] if successor else [MIGRATION_FILE])
+         and ledger['databaseGrantsChanged'] is (successor is None)
+         and (successor is None or ledger['migrationPerformed'] is False
+              and ledger['migration']['grants'] == {'status': 'EXISTING_GRANTS_READONLY_VERIFIED', 'mutationPerformed': False}),
+         'MIGRATION_SCOPE_CHANGED')
     _files, _output, record, _sha, _archive_sha = source(d, p)
     repository = proof['images']['api']['reference'].rsplit(':', 1)[0]
     validate_build(proof, p, record, transport, str(manifest['ciWorkflowRunId']), repository)
