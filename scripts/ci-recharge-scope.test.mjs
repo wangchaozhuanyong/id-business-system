@@ -2,6 +2,7 @@ import { imageInputsChanged } from './ci-recharge-python-image.mjs';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
+import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 import {
@@ -28,6 +29,8 @@ import {
   hasBankCardDeletePolicyProof,
   rechargeConnectionProfileMigration,
   unpublishedComponentSuccessorControlPaths,
+  rechargeFlowSuccessorControlPaths,
+  hasRechargeFlowBusinessReuseProof,
   ownedMysqlTestControlPaths
 } from './ci-recharge-scope.mjs';
 import { matchesSourceEvidence } from './ci-recharge-evidence.mjs';
@@ -1471,6 +1474,8 @@ test('finite unpublished successor controls do not admit adjacent scripts or bus
     'scripts/production-release/unpublished-component-successor.py.backup',
     'scripts/production-release/unpublished-component-successor-other.py',
     'scripts/production-release/unpublished-component-successor-readonly-other.py',
+    'scripts/production-release/unpublished-component-runtime-diagnostic.py.backup',
+    'scripts/production-release/unpublished-component-runtime-diagnostic-other.py',
     'scripts/lib/owned-mysql-test-instance.mjs.backup',
     'scripts/lib/owned-mysql-test-instance-other.mjs',
     'apps/api/src/id-business-v2/auto-registration/unknown.service.ts'
@@ -1479,6 +1484,82 @@ test('finite unpublished successor controls do not admit adjacent scripts or bus
       checkMode([...unpublishedComponentSuccessorControlPaths, unknown], schema, schema),
       'full'
     );
+});
+
+test('recharge flow release controls remain finite and do not expand to adjacent controls or business', () => {
+  for (const path of rechargeFlowSuccessorControlPaths) {
+    assert.equal(isCiOnly([path]), true);
+    assert.equal(checkMode([path], schema, schema), 'ci-only');
+  }
+  for (const path of [
+    'scripts/production-release/recharge-flow-successor.py.backup',
+    'scripts/production-release/recharge-flow-successor-other.py',
+    'scripts/production-release/recharge-flow-successor-contract-other.json',
+    'apps/api/src/id-business-v2/auto-registration/unknown.service.ts'
+  ])
+    assert.equal(checkMode([...rechargeFlowSuccessorControlPaths, path], schema, schema), 'full');
+});
+
+test('reviewed dispatcher bytes reuse only unchanged Admin/API business evidence, never connector checks', () => {
+  const path = 'scripts/ci-recharge-check.mjs';
+  const snapshot = {
+    before: execFileSync('git', ['show', `bcd67c4dfe3944aa6c0498699a619395f04ed296:${path}`], {
+      cwd: root,
+      encoding: 'utf8'
+    }),
+    after: readFileSync(new URL('./ci-recharge-check.mjs', import.meta.url), 'utf8'),
+    beforeMode: '100644',
+    afterMode: '100644'
+  };
+  const changed = [path, ...rechargeFlowSuccessorControlPaths];
+  for (const part of ['admin', 'api']) {
+    assert.equal(hasRechargeFlowBusinessReuseProof(part, changed, snapshot), true);
+    for (const patch of [
+      { before: snapshot.before + 'drift' },
+      { after: snapshot.after + 'drift' },
+      { beforeMode: '100755' },
+      { afterMode: '100755' }
+    ])
+      assert.equal(
+        hasRechargeFlowBusinessReuseProof(part, changed, { ...snapshot, ...patch }),
+        false
+      );
+    assert.equal(hasRechargeFlowBusinessReuseProof(part, changed, undefined), false);
+    assert.equal(
+      hasRechargeFlowBusinessReuseProof(
+        part,
+        [...changed, '.github/workflows/quality.yml'],
+        snapshot
+      ),
+      false
+    );
+    assert.equal(
+      hasRechargeFlowBusinessReuseProof(
+        part,
+        [...changed, 'packages/shared/src/v2/auto-recharge.ts'],
+        snapshot
+      ),
+      false
+    );
+  }
+  for (const part of ['guards', 'connector', 'migration', 'security'])
+    assert.equal(hasRechargeFlowBusinessReuseProof(part, changed, snapshot), false);
+  assert.equal(
+    hasRechargeFlowBusinessReuseProof(
+      'admin',
+      [...changed, 'apps/admin/src/v2/features/auto-recharge/api.ts'],
+      snapshot
+    ),
+    false
+  );
+  assert.equal(
+    hasRechargeFlowBusinessReuseProof(
+      'api',
+      [...changed, 'apps/api/src/id-business-v2/auto-recharge/recharge.service.ts'],
+      snapshot
+    ),
+    false
+  );
 });
 
 test('mirror and employee MySQL acceptance inputs select migration without a schema edit', () => {

@@ -9,6 +9,7 @@ import {
   historicalReleaseControlPaths,
   unpublishedComponentSuccessorControlPaths,
   unpublishedComponentSuccessorEntryPaths,
+  rechargeFlowSuccessorControlPaths,
   ownedMysqlTestControlPaths,
   hasRegistrationOnboardingScope,
   hasAppleMailboxScope,
@@ -86,6 +87,10 @@ const unpublishedComponentSuccessorControls = () => {
       'scripts/production-release/unpublished-component-successor-readonly.test.py'
     ]);
     run('node', ['--test', 'scripts/production-release/unpublished-component-entry.test.mjs']);
+    run('python3', [
+      '-B',
+      'scripts/production-release/unpublished-component-runtime-diagnostic.test.py'
+    ]);
   }
 };
 const ownedMysqlTestControls = () => {
@@ -95,6 +100,20 @@ const ownedMysqlTestControls = () => {
     hasRegistrationMirrorScope(changed)
   )
     run('node', ['--test', 'scripts/lib/owned-mysql-test-instance.test.mjs']);
+};
+const rechargeFlowSuccessorControls = () => {
+  if (
+    changed.some(
+      (path) =>
+        rechargeFlowSuccessorControlPaths.includes(path) ||
+        unpublishedComponentSuccessorEntryPaths.includes(path)
+    )
+  ) {
+    run('python3', ['-B', 'scripts/production-release/recharge-flow-successor.test.py']);
+    run('python3', ['-B', 'scripts/production-release/recharge-flow-successor-projection.test.py']);
+    run('python3', ['-B', 'scripts/production-release/recharge-flow-successor-readonly.test.py']);
+    run('node', ['--test', 'scripts/production-release/recharge-flow-entry.test.mjs']);
+  }
 };
 const registrationControlPaths = [
   'deploy/aws/registration-worker-96-20261008.json',
@@ -376,6 +395,7 @@ if (part === 'guards') {
   }
   adminPendingReleaseControls();
   unpublishedComponentSuccessorControls();
+  rechargeFlowSuccessorControls();
   ownedMysqlTestControls();
   releaseMaintenanceControls();
   archiveReleaseControls();
@@ -527,6 +547,7 @@ if (part === 'guards') {
   }
   adminPendingReleaseControls();
   unpublishedComponentSuccessorControls();
+  rechargeFlowSuccessorControls();
   ownedMysqlTestControls();
   releaseMaintenanceControls();
   archiveReleaseControls();
@@ -621,6 +642,26 @@ if (part === 'guards') {
   const fullPro = changed.some((path) =>
     [`${workerDirectory}/plan_selection.py`, `${workerDirectory}/test_pro.py`].includes(path)
   );
+  const rechargeFlowRegression = changed.some((path) =>
+    [
+      'attempt_ledger.py',
+      'bitbrowser_connector.py',
+      'bitbrowser_retry.py',
+      'browser_checkout.py',
+      'callback_observation.py',
+      'pay.py',
+      'payment_network.py',
+      'payment_recovery.py',
+      'payment_state.py',
+      'subscription_cycle.py',
+      'subscription_upgrade.py',
+      'upgrade_authentication.py',
+      'test_callback_observation.py',
+      'test_response_settlement.py',
+      'test_subscription_cycle.py',
+      'test_payment.py'
+    ].some((name) => path === `${workerDirectory}/${name}`)
+  );
   const workerOptions = {
     cwd: workerDirectory,
     stdio: 'inherit',
@@ -651,7 +692,10 @@ if (part === 'guards') {
       'test_fingerprint_runtime',
       'test_password_login',
       'test_subscribe',
-      'test_payment.StateTests',
+      rechargeFlowRegression ? 'test_payment' : 'test_payment.StateTests',
+      ...(rechargeFlowRegression
+        ? ['test_callback_observation', 'test_response_settlement', 'test_subscription_cycle']
+        : []),
       'test_recharge_email_code',
       'test_payment_3ds',
       'test_payment_handoff',

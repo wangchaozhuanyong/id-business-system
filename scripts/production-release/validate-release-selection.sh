@@ -276,7 +276,38 @@ print(module.fingerprint(record))
 PY_UNPUBLISHED_COMPONENT_PROJECTION
 }
 
+read_recharge_flow_projection() {
+  python3 -B - <<'PY_RECHARGE_FLOW'
+import importlib.util, os
+from pathlib import Path
+path = Path('scripts/production-release/recharge-flow-successor.py')
+spec = importlib.util.spec_from_file_location('recharge_flow_label_source', path)
+core = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(core)
+record = core.closed_json(core.private_bytes(Path(core.PROJECTION).absolute(), cap=128 * 1024))
+core.projection.validate_record(record)
+core.need(record['candidateCommit'] == os.environ['RELEASE_COMMIT']
+          and record['candidateTree'] == os.environ['SOURCE_TREE'], 'BUILD_SELECTION_CHANGED')
+print(core.fingerprint(record))
+PY_RECHARGE_FLOW
+}
+
 validate_release_selection() {
+  if [[ "${RELEASE_OPERATION:-release}" == *_recharge_flow* ]]; then
+    [[ "$RELEASE_OPERATION" == verify_recharge_flow || "$RELEASE_OPERATION" == release_recharge_flow ]] || return 1
+    [[ "${HISTORICAL_EXCEPTION:-none}" == none && "${RELEASE_ADMIN_ONLY:-false}" == false ]] || return 1
+    [[ "${RELEASE_COMMIT:-}" =~ ^[a-f0-9]{40}$ && "${EXPECTED_CURRENT:-}" == 60e164b75d1eedaab440c17139bf9ba55de08c61
+      && "${SOURCE_TREE:-}" =~ ^[a-f0-9]{40}$ && "${GITHUB_REF:-}" == refs/heads/main ]] || return 1
+    [[ "${API_FAULT_RESTORE_APPROVED:-false}" == false || "${API_FAULT_RESTORE_APPROVED:-false}" == true ]] || return 1
+    if [[ "$RELEASE_OPERATION" == release_recharge_flow ]]; then
+      [[ "${API_FAULT_RESTORE_APPROVED:-false}" == true ]] || {
+        echo 'Recharge publication requires separately approved API fault restoration protection' >&2
+        return 1
+      }
+    fi
+    [[ -z "${REUSE_IMAGE_RUN:-}${REUSE_IMAGE_COMMIT:-}${REUSE_IMAGE_RUN_ID:-}${REUSE_IMAGE_RUN_ATTEMPT:-}${POST_CLEANUP_SEAL_SHA256:-}${ORDER_ARCHIVE_SEAL_SHA256:-}${ORDER_ARCHIVE_PREPARED_IMAGES_SHA256:-}${RELEASE_BROWSER_CACHE_IMAGE:-}${RELEASE_BROWSER_CACHE_IMAGE_ID:-}${CACHE_PLAN_SHA256:-}${DIAGNOSTIC_COMMAND_ID:-}" ]] || return 1
+    return 0
+  fi
   if [[ "${RELEASE_OPERATION:-release}" == *_unpublished_components* && "${RELEASE_OPERATION:-release}" != verify_unpublished_components && "${RELEASE_OPERATION:-release}" != release_unpublished_components ]]; then
     return 1
   fi

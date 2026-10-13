@@ -1,0 +1,136 @@
+{
+  "applicationInputSha256": "79a593767df021df5c2ddb247d931962faf9bd4dae8c16eb5e53306f51677388",
+  "approvedTestChanges": {
+    "apps/api/src/id-business-v2/auto-recharge/worker/test_connector_health.py": {
+      "after": {
+        "mode": "100644",
+        "sha256": "480ca6563f684a13db258c3f24296e07e6682a2e3c23089a891e0c51161982d2"
+      },
+      "before": {
+        "mode": "100644",
+        "sha256": "0d5303f3051471d310d77130e9ed14402125e753ac1c17e068c6ce308a951a4b"
+      }
+    }
+  },
+  "baseline": {
+    "admin": {
+      "commit": "60e164b75d1eedaab440c17139bf9ba55de08c61",
+      "projectionSha256": "11b4e7a542023eca4a7ccf7887e7ab45cef4ab7293e581a901399cc421f9f4db",
+      "sourceTree": "4922bfdfa14186e12532c3fa9e0d3aa3fd697b98"
+    },
+    "api": {
+      "commit": "31d2c6885a45817cd40d23fce8d6145bc9f18af2",
+      "projectionSha256": "f1e50c46b25aadc1843f4dafa797c432b3dd48535f47c11a73e11d62d1d258b1",
+      "sourceTree": "8cd7679461682d9c103e3130852431508c5e812c"
+    }
+  },
+  "builtImages": ["api", "admin", "migrate"],
+  "businessCommit": "bcd67c4dfe3944aa6c0498699a619395f04ed296",
+  "businessFiles": {
+    "apps/admin/src/v2/features/auto-recharge/RechargeNextCycleControl.vue": "dc2a0c16d81d8d04317c68acc0b9fb7009bc1a50d6f6928fdbde14f7b57ed3d6",
+    "apps/admin/src/v2/features/auto-recharge/RechargeResult.vue": "a4e417a74c6e51d6e076f38139401e5694536eac088e1c9c24d693c2b2a4acab",
+    "apps/admin/src/v2/features/auto-recharge/V2AutoRechargeView.vue": "9246b3f64cfa45d6b21ddb4b01f78a81ef5c627add48677a6164654332e34048",
+    "apps/admin/src/v2/features/auto-recharge/api.ts": "f04c284e66a13c1e11e04b8abd4bb472632c6550bb06a2b0cc2969b04d94ae6e",
+    "apps/admin/src/v2/features/auto-recharge/connector-transport.spec.ts": "1f34989045d64a85a586b798d60116e7cfb8c88c17e6b17d5f212f8d5d99ed03",
+    "apps/admin/src/v2/features/auto-recharge/connector-transport.ts": "6ca4f36edc5521da5d78d615312728a95c9fecc1fdfb68f6895ffcd4e6ea8218",
+    "apps/admin/src/v2/features/auto-recharge/contracts.ts": "59a58934497163da0844b60a57e87efcf1dfed268193abcdc28f9e1c03bfd36c",
+    "apps/admin/src/v2/features/auto-recharge/recharge-callback-diagnostics.ts": "1f8ff6baa01c4530818b81317f056d5fc6798f7c2780a4e10de1522b9eb1c7cc",
+    "apps/admin/src/v2/features/auto-recharge/recharge-direct-lifecycle.ts": "1dbff4ed6588cd6d5dc948506655a3d5e24f261689757bb483ebfd70a130705e",
+    "apps/admin/src/v2/features/auto-recharge/recharge-presentation.spec.ts": "75b50dd211640fee9cbfc71b98955c531b36f9df41c5929ec78c0d338344b74c",
+    "apps/admin/src/v2/features/auto-recharge/recharge-presentation.ts": "c5531e2419fc2c2190d649fcb4818c0579671a6d2f08f1cdca0f984f5a0681ef",
+    "apps/admin/src/v2/features/auto-recharge/useAutoRecharge.spec.ts": "f65a564695422e4f1b6977d157e7e851568c838f15ae1257cca79d787db5071f",
+    "apps/admin/src/v2/features/auto-recharge/useAutoRecharge.ts": "beacfbc4ca4c70c19e3cb4fe9c23b665707ac79f7a75e71dbe4a942418202bf4",
+    "apps/admin/src/v2/features/auto-recharge/useBitBrowserDirectOpen.loading.spec.ts": "403c819470d55b42263a1fdbb874a9cfd894e2a7c350c213621e9506eddf55be",
+    "apps/admin/src/v2/features/auto-recharge/useBitBrowserDirectOpen.spec.ts": "8236a52d96a61cacfb194431663bbf99c4c7ec17a44bab5991ecf920a94fad06",
+    "apps/admin/src/v2/features/auto-recharge/useBitBrowserDirectOpen.ts": "fed1b461a8afc151d99ad7c09a89354b7a003fec9d011cff25b67faa9ce8c706",
+    "apps/admin/src/v2/features/auto-recharge/useRechargeBrowserCatalog.spec.ts": "286a51431e0f847213d0dc84c857c6beed28a3c9275a5631eab495261119d2e9",
+    "apps/admin/src/v2/features/auto-recharge/useRechargeBrowserCatalog.ts": "7d83d56a8900d76799f43eda73b90c3a90ebc48e5f57761858c359f627142381",
+    "apps/admin/src/v2/features/auto-recharge/useRechargeBrowserSettings.ts": "f479e6ee955314ec3c792f6dcefcd11ef7e143e0f2a73e0c345dbdc40473aa4d",
+    "apps/admin/src/v2/features/auto-recharge/useRechargeLocalConfirmation.spec.ts": "f59d8c9b632ee65126b5472ef1b70ade5e1d692e98c8c7f29ae00b75d0176876",
+    "apps/admin/src/v2/features/auto-recharge/useRechargeLocalConfirmation.ts": "e3656772cf697b7ecb94a7d5aed05edadd557c112c8016fb688047370e7d09f4",
+    "apps/admin/src/v2/features/auto-recharge/useRechargeNameMatch.ts": "e9b48bfdcd4eaf576596b59faae2245fe05e0c33372c29cf59235d4af6f7b86a",
+    "apps/admin/src/v2/features/auto-recharge/useRechargeNextCycle.spec.ts": "cc5324a9eec7eb9110b22c2e1b5edde92dbc94fd57c5001bba81c17cd5ddc2f9",
+    "apps/admin/src/v2/features/auto-recharge/useRechargeNextCycle.ts": "2df712d05b0144baf0166f1fe14202c8e2d00b4909fe3468b4d4773828ed28e7",
+    "apps/admin/src/v2/features/auto-recharge/useRechargePaymentStart.ts": "b2e8786b8065c6c3b0da6bb08c5a2c4af932bc88d0fd692f016dbb6a02768a28",
+    "apps/api/src/id-business-v2/auto-recharge/persistence/recharge-cycle.repository.ts": "88116e37e5f096ff33ee583b9901f981b118069107d047ac74118e9871da9c5c",
+    "apps/api/src/id-business-v2/auto-recharge/persistence/recharge.repository.ts": "6428ec5c4eccb7cbcf2c8b3adaa8431f398aa8b54c674fa0838b96762276e0db",
+    "apps/api/src/id-business-v2/auto-recharge/recharge-account-restore.ts": "aeacd52e777983b2458d7fcaae686c15bea9845d0e56f017b166f1f6bbd0f173",
+    "apps/api/src/id-business-v2/auto-recharge/recharge-bitbrowser.spec.ts": "589981391916e9c9a22cc38cf0cd35d1cd1e959a204601b09d3a687dced00c82",
+    "apps/api/src/id-business-v2/auto-recharge/recharge-callback-receipts.mysql.integration.spec.ts": "f64cee990e2605b519a551ee450cd32145db75027ff70997565b40b7fcc48e82",
+    "apps/api/src/id-business-v2/auto-recharge/recharge-callback-receipts.spec.ts": "2fc47d6d51f8038fd6c20ec9165f0a93c9df0d799957c5ae71c149a14db611aa",
+    "apps/api/src/id-business-v2/auto-recharge/recharge-callback-receipts.ts": "6408972f6caa25b1d0405664787d1eb8d09a3e33813ecfc267880beadded74d8",
+    "apps/api/src/id-business-v2/auto-recharge/recharge-checkout-recovery.ts": "1b3bf341c7d29d2c5ef8304ee5e186e0e6636f602957f05e85e59b0d255bf447",
+    "apps/api/src/id-business-v2/auto-recharge/recharge-checkout-restore.spec.ts": "fe608d7947155453223d9c174b8c789012263f3f604e7f37c87c754aa0227ddd",
+    "apps/api/src/id-business-v2/auto-recharge/recharge-cycle-ledger.ts": "646f3c41830f20ed418b58054ae7e1f83326c2201ba580a92a27459bd7ea1cea",
+    "apps/api/src/id-business-v2/auto-recharge/recharge-cycle-state.ts": "054bd075ce9926dd70ae319b9f59e074ac639a055f9c398d4a4446bfed0dbcaf",
+    "apps/api/src/id-business-v2/auto-recharge/recharge-cycle-test-fixture.ts": "a3b68ca7b4e2ec74bc964c10a15ebfa1e504c3db4205ced36c2a6ea9c884af27",
+    "apps/api/src/id-business-v2/auto-recharge/recharge-cycle-worker-contract.spec.ts": "420010d8f6b6dbdbaf9ea3947adf9b07d4cf24549e6124452e93ebf49c81ca2f",
+    "apps/api/src/id-business-v2/auto-recharge/recharge-job-list.ts": "90736f52a7c1da31f99adf33f50020733445c66622258667e75da1fe235f68d5",
+    "apps/api/src/id-business-v2/auto-recharge/recharge-ledger-callback.ts": "e16a5ec4d12dca451734451cf1d522fe3c97c48cb31251b2ca4403cae440a62a",
+    "apps/api/src/id-business-v2/auto-recharge/recharge-ledger-metadata.ts": "812813e8a2fd943bf34e821f244aeba606c94547c5451e5cb8b7b1c879db4882",
+    "apps/api/src/id-business-v2/auto-recharge/recharge-local-confirmation.spec.ts": "13ffc7a514c18ba56b05ace862e228c79521350fe3571b2444cb9f6052b43b2d",
+    "apps/api/src/id-business-v2/auto-recharge/recharge-local-validation.ts": "f1e234306ea3800e0182b629304bfa060150da0b00ba82095e0ddd08517b9222",
+    "apps/api/src/id-business-v2/auto-recharge/recharge-local.service.ts": "c663d6c5cbba5e7be0d16affa5859109a07cb6578c2eaa9d5e4df4323f16ffdf",
+    "apps/api/src/id-business-v2/auto-recharge/recharge-mysql.integration.spec.ts": "16620556e1bf703fa314d728cae147a105f302164ba01a84ee51eec93e4de009",
+    "apps/api/src/id-business-v2/auto-recharge/recharge-owned-profile.spec.ts": "eea5c1872cb6237bd7fba701415fd527265935590728a7a27dbad7dfbe4e0389",
+    "apps/api/src/id-business-v2/auto-recharge/recharge-profile-history.spec.ts": "59f93effaf32feaeeffb02d68275052efa93e81dfe2dc6a28e88dbbc1ef5e1df",
+    "apps/api/src/id-business-v2/auto-recharge/recharge-retired-callback.ts": "8c3d70d2f35b9fd81d2796af7ff1b97288c65bcf7c0bf2591e970050e00a7469",
+    "apps/api/src/id-business-v2/auto-recharge/recharge-subscription-cycle.mysql.integration.spec.ts": "cb342b69ea13fd05000e7baa6c42f1ef6ee779adc586adb1d1baf0a12cf4be29",
+    "apps/api/src/id-business-v2/auto-recharge/recharge-subscription-cycle.spec.ts": "21d7955651e00b98ac473b91f12c3f78a7e703a7370bb5d3760373c897ba73c9",
+    "apps/api/src/id-business-v2/auto-recharge/recharge-subscription-cycle.ts": "a2ee8e1788bfe932ae6d962efc20933362e5f129ccb48b6058141cdd4aa08bd8",
+    "apps/api/src/id-business-v2/auto-recharge/recharge.controller.ts": "918d20fc9426411588b041e590e075041f90c7509739ee98265502ba1f9cc9a2",
+    "apps/api/src/id-business-v2/auto-recharge/recharge.service.ts": "4a5ce5a4c96d750db04aee54da60aed377aa98ad8dc12e15673bd8c9f63c448c",
+    "apps/api/src/id-business-v2/auto-recharge/worker/attempt_ledger.py": "9932870f8d5c6261107ebe52b0490997406164ba4f7a1a06a13f5e7298785d9e",
+    "apps/api/src/id-business-v2/auto-recharge/worker/bitbrowser_connector.py": "424c2e4fb3f598768706d8c4a042e455f81716971de702017d59237899481050",
+    "apps/api/src/id-business-v2/auto-recharge/worker/bitbrowser_retry.py": "7c7f2880f61aede1cf6a5ad2ad95a285b1b19ed453301dd2eb23d02c13f6f1f5",
+    "apps/api/src/id-business-v2/auto-recharge/worker/browser_checkout.py": "49c8783837b8cae331cb64c0d26fef9d5bf96d366110492077e34f0fd48ea765",
+    "apps/api/src/id-business-v2/auto-recharge/worker/callback_observation.py": "0151e857383368f22c13fc4aa7f9e391b9faaa7e8c719d8ef3c757cd14c04529",
+    "apps/api/src/id-business-v2/auto-recharge/worker/pay.py": "3a468c726bf1d1f2957d35038f2a625f61c20a4dfda9d18586941ff386e6f5bd",
+    "apps/api/src/id-business-v2/auto-recharge/worker/payment_network.py": "f2333c6b1fdca53caf2f164b518f1bb6d9a78ce30eed1bb58ea358e5538b55f8",
+    "apps/api/src/id-business-v2/auto-recharge/worker/payment_recovery.py": "9818c6281b0177d0771920119e52b6dbf11bcfa0ee804205d9168cc27ab43331",
+    "apps/api/src/id-business-v2/auto-recharge/worker/payment_state.py": "e9ee609aa25de827d61bdc14644cc41cb08d59e8c16cd12699c3a81def7a03bf",
+    "apps/api/src/id-business-v2/auto-recharge/worker/plans.py": "30e7fe723ca587de3098d92021a96b4866035445f998fbd8e4f0d48ecf9f4af0",
+    "apps/api/src/id-business-v2/auto-recharge/worker/subscription_cycle.py": "6a22e7698bd328402a96703d0cf44af369b17444a5ebde88c81be0bd9d23248f",
+    "apps/api/src/id-business-v2/auto-recharge/worker/subscription_upgrade.py": "7c76a9abee17bbc8fd9ad786f9f039688fd7c7a86a377d41f34105559bf47529",
+    "apps/api/src/id-business-v2/auto-recharge/worker/test_callback_observation.py": "83df41e1200bbc80b5c2d96ba7ba2384d6ab1063db9ee15d249bb2b75edb82b4",
+    "apps/api/src/id-business-v2/auto-recharge/worker/test_payment.py": "cce3bf0205b7c4d4063a8a45d26d57d18890dca2eeed3fd607fa90403fb138de",
+    "apps/api/src/id-business-v2/auto-recharge/worker/test_payment_handoff.py": "56d62a2e1312a3e22ddd1abdffd4eeaddfa00e0624b928e61268fe1cc1a2f223",
+    "apps/api/src/id-business-v2/auto-recharge/worker/test_response_settlement.py": "15d90e30fdf44159089b5a359bb495d07f3a7e30f78e712a514d48c054fc5ccf",
+    "apps/api/src/id-business-v2/auto-recharge/worker/test_subscription_cycle.py": "9cc7fa2d64086b801429967033954bc82bf81c6c6f98bf83cac32a11091bf6a7",
+    "apps/api/src/id-business-v2/auto-recharge/worker/upgrade_authentication.py": "48aac8a92dcca1f4c10289a17996f775632a4b4221e958dd1cf6381fe63b7198",
+    "docs/AUTO_RECHARGE.md": "cd7c6a2b51848de0c03035e22af0b7141af2399743b1a37e409f8b1dc3b0d2c1",
+    "docs/AUTO_RECHARGE_FLOW_FIXES_20261013.md": "f154f1d95c65a63195f6683ae8230bf20e110ed5bbc0ab9f7fae5557fd174e42",
+    "docs/AUTO_RECHARGE_STARTUP_INCIDENT_20261013.md": "d41f9d01034034709b32fef1574306f17bf791aa6b7f275020c89db8531b0bda",
+    "packages/shared/src/v2/auto-recharge.ts": "8309da7bba07637bcbf59274763e1c97bacb2f3082cf82f591a61394e90f8078",
+    "scripts/acceptance-v2-auto-recharge.mjs": "3425d41f3a13fa17630f4995cfe947f165080f8c9f794f948cd48465781fec40"
+  },
+  "businessTree": "5a101316bc2fbe34bc8d399fcd65b8d574262f1b",
+  "contractSha256": "2d1643d7f4ae50bdc5ab141af61bb2a0d0bb71df15649e37f9d3227e4169b9fe",
+  "deployedApiPatch": {
+    "after": "  if (\n    previous.mode !== 'open_browser' &&\n    rechargeProfileRecordsHavePaymentRisk(records, job.ownerId, job.accountKey, job.plan, previous)",
+    "afterSha256": "fd353cac75fa48aa138b7b1f1149d76971ba0230bb760612c7ba85945d8141e0",
+    "before": "  if (\n    rechargeProfileRecordsHavePaymentRisk(records, job.ownerId, job.accountKey, job.plan, previous)",
+    "beforeSha256": "6f60ca8d4e7f56aeec9400183ec2efc842ea06874164a205f3c3a05a07ff854a",
+    "path": "apps/api/src/id-business-v2/auto-recharge/recharge-profile-recovery.ts"
+  },
+  "migrationNew": false,
+  "prerequisites": {
+    "admin": {
+      "apps/admin/src/v2/features/auto-recharge/BitBrowserConnectionHelp.vue": "d9b8ad8ac7e486ca8641c541208b3a6dbbfb3307df033c0933e8c21d45e98157",
+      "apps/admin/src/v2/features/auto-recharge/RechargeBrowserSettings.vue": "eaf04ea5d27610e1b09afd242e4fdeb7ddee37d5eb0dec7972ee176ae9c6aafd",
+      "apps/admin/src/v2/features/auto-recharge/RechargeBrowserSettingsHelp.vue": "05e53fb3b273f961a20ee79588b1604b5300fefaa794538bb631f96ccc1be60f"
+    },
+    "api": {
+      "apps/api/src/id-business-v2/auto-recharge/persistence/recharge-settings.repository.ts": "90bfbb716745b68433e11ee22896c488a15dd07e491becf8bc35a34bd535e82e",
+      "apps/api/src/id-business-v2/auto-recharge/recharge-browser-options.ts": "511898d7a34adcda590cdab5c7538ac4028610beb8ff1197600f48cb20851f0f",
+      "apps/api/src/id-business-v2/auto-recharge/recharge-connection-access.ts": "d3dc335a5ac063b668c9bad2c3684ccf198d669d57a30c7712aabae0e1369657",
+      "apps/api/src/id-business-v2/auto-recharge/recharge-profile-recovery.ts": "c93d0cb80e871f6c1ce4f7ec83c2cb3bc259f40bd26ea949dd6d3640ca794985",
+      "apps/api/src/id-business-v2/auto-recharge/recharge-settings-validation.ts": "27c8a7e62de56b15fd50d4db30651dc53086e5e5a1739db4e42ae8a077c42c17",
+      "apps/api/src/id-business-v2/auto-recharge/recharge-settings.service.ts": "0f992a58951858c55fca6363ded2f70bab96e740a41d1adfd71f2f6611318138"
+    }
+  },
+  "requiredExistingMigration": "20261012143000_recharge_connection_profiles",
+  "scope": "RECHARGE_FLOW_FINITE_SOURCE_CONTRACT",
+  "updatedServices": ["api", "admin"],
+  "version": 1
+}

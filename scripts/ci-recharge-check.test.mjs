@@ -11,6 +11,7 @@ import {
   productionDatabaseAccessAcceptance,
   unpublishedComponentSuccessorControlPaths,
   unpublishedComponentSuccessorEntryPaths,
+  rechargeFlowSuccessorControlPaths,
   ownedMysqlTestControlPaths,
   rechargeConnectionProfileMigration
 } from './ci-recharge-scope.mjs';
@@ -193,7 +194,8 @@ test('unpublished successor controls execute narrow suites once in either dispat
       '-B',
       'scripts/production-release/unpublished-component-successor-readonly.test.py'
     ],
-    ['node', '--test', 'scripts/production-release/unpublished-component-entry.test.mjs']
+    ['node', '--test', 'scripts/production-release/unpublished-component-entry.test.mjs'],
+    ['python3', '-B', 'scripts/production-release/unpublished-component-runtime-diagnostic.test.py']
   ];
   for (const part of ['guards', 'release-controls']) {
     for (const paths of [
@@ -224,6 +226,70 @@ test('unpublished successor controls execute narrow suites once in either dispat
       );
     }
   }
+});
+
+test('recharge flow controls execute their four suites once without business/database checks', () => {
+  const commands = [
+    ['python3', '-B', 'scripts/production-release/recharge-flow-successor.test.py'],
+    ['python3', '-B', 'scripts/production-release/recharge-flow-successor-projection.test.py'],
+    ['python3', '-B', 'scripts/production-release/recharge-flow-successor-readonly.test.py'],
+    ['node', '--test', 'scripts/production-release/recharge-flow-entry.test.mjs']
+  ];
+  for (const part of ['guards', 'release-controls']) {
+    for (const path of rechargeFlowSuccessorControlPaths) {
+      const calls = recordGuardCommands('ci-only', [path], part);
+      for (const command of commands)
+        assert.equal(
+          calls.filter((call) => JSON.stringify(call) === JSON.stringify(command)).length,
+          1
+        );
+      assert.ok(
+        calls.every(
+          (call) => !call.some((arg) => /(?:prisma:|acceptance:|financial-integrity)/.test(arg))
+        )
+      );
+    }
+    const calls = recordGuardCommands(
+      'ci-only',
+      ['scripts/production-release/recharge-flow-successor-other.py'],
+      part
+    );
+    assert.ok(
+      calls.every(
+        (call) => !commands.some((command) => JSON.stringify(call) === JSON.stringify(command))
+      )
+    );
+  }
+});
+
+test('affected recharge flow connector inputs run complete payment and new observer/cycle regressions', () => {
+  const directory = 'apps/api/src/id-business-v2/auto-recharge/worker';
+  for (const path of [
+    'pay.py',
+    'payment_network.py',
+    'test_payment.py',
+    'test_subscription_cycle.py'
+  ]) {
+    const calls = recordGuardCommands('recharge', [`${directory}/${path}`], 'connector');
+    const tests = calls.find((call) => call[0] === 'python3' && call.includes('unittest'));
+    for (const name of [
+      'test_payment',
+      'test_callback_observation',
+      'test_response_settlement',
+      'test_subscription_cycle'
+    ])
+      assert.ok(tests.includes(name), path + ': ' + name);
+    assert.ok(!tests.includes('test_payment.StateTests'));
+  }
+  const calls = recordGuardCommands('recharge', [`${directory}/test_go.py`], 'connector');
+  const tests = calls.find((call) => call[0] === 'python3' && call.includes('unittest'));
+  assert.ok(tests.includes('test_payment.StateTests'));
+  for (const name of [
+    'test_callback_observation',
+    'test_response_settlement',
+    'test_subscription_cycle'
+  ])
+    assert.ok(!tests.includes(name));
 });
 
 test('owned MySQL helper edits run boundary tests without starting any database', () => {
