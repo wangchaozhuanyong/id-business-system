@@ -1591,6 +1591,8 @@ test('finite unpublished successor controls do not admit adjacent scripts or bus
     'scripts/production-release/unpublished-component-successor.py.backup',
     'scripts/production-release/unpublished-component-successor-other.py',
     'scripts/production-release/unpublished-component-successor-readonly-other.py',
+    'scripts/production-release/unpublished-component-runtime-diagnostic.py.backup',
+    'scripts/production-release/unpublished-component-runtime-diagnostic-other.py',
     'scripts/lib/owned-mysql-test-instance.mjs.backup',
     'scripts/lib/owned-mysql-test-instance-other.mjs',
     'apps/api/src/id-business-v2/auto-registration/unknown.service.ts'

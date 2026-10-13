@@ -86,6 +86,10 @@ const unpublishedComponentSuccessorControls = () => {
       'scripts/production-release/unpublished-component-successor-readonly.test.py'
     ]);
     run('node', ['--test', 'scripts/production-release/unpublished-component-entry.test.mjs']);
+    run('python3', [
+      '-B',
+      'scripts/production-release/unpublished-component-runtime-diagnostic.test.py'
+    ]);
   }
 };
 const ownedMysqlTestControls = () => {

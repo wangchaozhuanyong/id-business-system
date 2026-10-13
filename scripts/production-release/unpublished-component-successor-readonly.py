@@ -4,6 +4,7 @@ The already published hotfix is a cold predecessor, never a publication target.
 Historical B is authenticated from immutable files and its genuine ended Q;
 its old live database assumptions are not reused for a later migration.
 """
+import ast
 import base64
 import gzip
 import hashlib
@@ -13,6 +14,7 @@ import os
 from pathlib import Path
 import re
 import shlex
+import stat
 import subprocess
 import sys
 import time
@@ -29,6 +31,41 @@ HOTFIX_FIELDS = frozenset(('adminImageId', 'apiImageId', 'baselineApiCommit', 'b
     'current', 'migrationPerformed', 'patchSourceCommit', 'preservedServices', 'publicReady', 'scope', 'status'))
 INPUT_SCOPE = 'UNPUBLISHED_COMPONENT_INPUT_BUNDLE'
 INPUT_CHUNK_BYTES = 8192
+# Independent genuine restart Q; historical H/B/Q and BASELINE_CONTRACT stay sealed.
+NATIVE_RESTART_AUTHORITY = {'commandId': '4b8d9c99-03da-449e-9d64-731208fe3bc8',
+ 'commandListBytesSha256': '06b4a003aeefa24fbabde99848cbf18e946831b22e4bbfcd6e85eda5de8fed2c',
+ 'configurationModelsSha256': 'c73c4fe017bce40a54f7031ce10c5d02178463fc81a8c3fd68d1138a604a5aa3',
+ 'invocationBytesSha256': '9f1ea98fd2d592b5a97454eebd0ee1992410a05ba100a7113c9bed62cbdff39f',
+ 'parametersSha256': 'a741521da8fd3552dd1d7d24c79d84e61b975d751fa64a7be168d12a5652013f',
+ 'programSha256': '169850e7723c6018d2a3bab8ef607bd1cd3921276127385ee432cd3ef8f70a69',
+ 'receiptKeyset': ['businessActions',
+                   'configurationModels',
+                   'currentCommit',
+                   'currentRelease',
+                   'dnsFields',
+                   'docker',
+                   'hostBootIdSha256',
+                   'instanceId',
+                   'legacyConfigurationSha256',
+                   'manifestSha256',
+                   'migrationPerformed',
+                   'migrationState',
+                   'onlinePublished',
+                   'publicAdminBuildId',
+                   'publicReady',
+                   'scope',
+                   'services',
+                   'sourceCommit',
+                   'sourcePinsSha256',
+                   'sourceTree',
+                   'status',
+                   'version'],
+ 'receiptSha256': 'e70a5954e154ea7eb05b838e58156b3fd6e2f6065ef1a1ea75055801592b2b03',
+ 'servicesSha256': 'b6f4173005681c7e7ab6baba6fbd4b8f2bee972a3f38c8ce2a02b680dd40ef83',
+ 'sourceCommit': 'e90f02a65cdf63b656e82eed6e25fd8a68a21b7b',
+ 'sourcePinsSha256': '51501bce8c0ad3a82670f548cb9d9e601d85822e9a07f5a02df205158e916b9d',
+ 'sourceTree': 'd05f53c00552b444dd557fd56457668e60410017',
+ 'stdoutSha256': '09707dfecc6d10a9ab416e9551f5877cebcfe96d565294b75bee9cfe34b4d169'}
 
 
 def need(value, code):
@@ -140,6 +177,159 @@ def historical_b(d, contract):
         'nativeReadbackCommandId', 'nativeInvocationSha256')} | {'authenticated': True}
 
 
+def restart_origin_paths(d, authority):
+    folder = d.BASE / '.staging' / ('component-same-container-restart-origin-'
+                                   + authority['invocationBytesSha256'])
+    return folder / 'invocation.json', folder / 'command-list.json'
+
+
+def validate_restart_material(c, invocation_raw, command_list_raw):
+    """Authenticate both original AWS reads and the exact executed source."""
+    authority = NATIVE_RESTART_AUTHORITY
+    fields = {'commandId', 'invocationBytesSha256', 'commandListBytesSha256', 'parametersSha256',
+        'programSha256', 'stdoutSha256', 'sourcePinsSha256', 'servicesSha256',
+        'configurationModelsSha256', 'receiptSha256', 'receiptKeyset', 'sourceCommit', 'sourceTree'}
+    need(type(authority) is dict and set(authority) == fields, 'RESTART_NATIVE_NOT_SEALED')
+    need(all(type(authority[k]) is str and re.fullmatch('[a-f0-9]{64}', authority[k])
+         for k in fields if k.endswith('Sha256'))
+         and all(type(authority[k]) is str and re.fullmatch('[a-f0-9]{40}', authority[k])
+                 for k in ('sourceCommit', 'sourceTree')), 'RESTART_NATIVE_NOT_SEALED')
+    need(digest(invocation_raw) == authority['invocationBytesSha256']
+         and digest(command_list_raw) == authority['commandListBytesSha256'], 'RESTART_NATIVE_BYTES_CHANGED')
+    native, receipt = c.validate_invocation(invocation_raw, authority['commandId'], INSTANCE)
+    commands = c.closed_json(command_list_raw, 128 * 1024)
+    need(set(commands) == {'Commands'} and type(commands['Commands']) is list
+         and len(commands['Commands']) == 1, 'RESTART_COMMAND_LIST_CHANGED')
+    command = commands['Commands'][0]
+    need(type(command) is dict and command.get('CommandId') == authority['commandId']
+         and command.get('DocumentName') == 'AWS-RunShellScript'
+         and command.get('Status') == command.get('StatusDetails') == 'Success'
+         and command.get('InstanceIds') == [INSTANCE] and command.get('Targets') == []
+         and all(type(command.get(k)) is int and command[k] == expected for k, expected in
+                 (('TargetCount', 1), ('CompletedCount', 1), ('ErrorCount', 0), ('DeliveryTimedOutCount', 0))),
+         'RESTART_COMMAND_LIST_CHANGED')
+    parameters = command.get('Parameters')
+    need(type(parameters) is dict and set(parameters) == {'commands', 'executionTimeout'}
+         and c.fingerprint(parameters) == authority['parametersSha256']
+         and type(parameters['commands']) is list and len(parameters['commands']) == 1
+         and type(parameters['commands'][0]) is str, 'RESTART_PARAMETERS_CHANGED')
+    argv = shlex.split(parameters['commands'][0])
+    need(len(argv) == 4 and argv[:3] == ['python3', '-B', '-c'], 'RESTART_PROGRAM_CHANGED')
+    carrier = ast.parse(argv[3])
+    encoded = [node for node in ast.walk(carrier) if isinstance(node, ast.Call)
+               and ast.unparse(node.func) == 'base64.b64decode']
+    need(len(encoded) == 1 and len(encoded[0].args) == 1
+         and isinstance(encoded[0].args[0], ast.Constant) and type(encoded[0].args[0].value) is str,
+         'RESTART_PROGRAM_CHANGED')
+    packed = base64.b64decode(encoded[0].args[0].value, validate=True)
+    need(0 < len(packed) <= 24 * 1024, 'RESTART_PROGRAM_CHANGED')
+    decoder = zlib.decompressobj(31)
+    program = decoder.decompress(packed, 128 * 1024)
+    need(decoder.eof and not decoder.unused_data and not decoder.unconsumed_tail
+         and 0 < len(program) < 128 * 1024 and digest(program) == authority['programSha256'],
+         'RESTART_PROGRAM_CHANGED')
+    assignments = [node for node in ast.walk(ast.parse(program)) if isinstance(node, ast.Assign)
+                   and any(isinstance(target, ast.Name) and target.id == 'pins' for target in node.targets)]
+    need(len(assignments) == 1, 'RESTART_SOURCE_PINS_CHANGED')
+    pins = ast.literal_eval(assignments[0].value)
+    need(type(pins) is dict and set(pins) == set(c.HELPERS)
+         and all(type(v) is str and re.fullmatch('[a-f0-9]{64}', v) for v in pins.values())
+         and c.fingerprint(pins) == authority['sourcePinsSha256'], 'RESTART_SOURCE_PINS_CHANGED')
+    need(sorted(receipt) == authority['receiptKeyset'] and len(receipt) == 22
+         and type(receipt['version']) is int and receipt['version'] == 1
+         and receipt['scope'] == 'UNPUBLISHED_COMPONENT_SAME_CONTAINER_RESTART'
+         and receipt['status'] == 'SAME_CONTAINER_RESTART_VERIFIED'
+         and receipt['instanceId'] == INSTANCE and receipt['sourceCommit'] == authority['sourceCommit']
+         and receipt['sourceTree'] == authority['sourceTree']
+         and receipt['sourcePinsSha256'] == authority['sourcePinsSha256']
+         and c.fingerprint(receipt) == authority['receiptSha256']
+         and digest(native['StandardOutputContent'].encode()) == authority['stdoutSha256']
+         and c.fingerprint(receipt['services']) == authority['servicesSha256']
+         and c.fingerprint(receipt['configurationModels']) == authority['configurationModelsSha256']
+         and receipt['dnsFields'] == ['Dns', 'DnsOptions', 'DnsSearch']
+         and receipt['docker'] == {'version': '25.0.16', 'apiVersion': '1.44', 'minApiVersion': '1.24'}
+         and type(receipt['hostBootIdSha256']) is str
+         and re.fullmatch('[a-f0-9]{64}', receipt['hostBootIdSha256'])
+         and receipt['publicReady'] is True and type(receipt['businessActions']) is int
+         and receipt['businessActions'] == 0
+         and receipt['migrationPerformed'] is False and receipt['onlinePublished'] is False
+         and type(receipt['migrationState']) is dict and receipt['migrationState'].get('status') == 'PENDING',
+         'RESTART_RECEIPT_CHANGED')
+    return receipt, pins
+
+
+def restart_host_facts(d):
+    version = json.loads(d.run('docker', 'version', '--format', '{{json .Server}}'))
+    return {'version': version['Version'], 'apiVersion': version['ApiVersion'],
+            'minApiVersion': version['MinAPIVersion']}, digest(Path('/proc/sys/kernel/random/boot_id').read_bytes())
+
+
+def verify_restart_source_pins(d, pins, commit):
+    for name, expected in pins.items():
+        path = d.BASE / '.staging' / ('oidc-' + commit) / name
+        need(path.resolve() == path and not path.is_symlink(), 'RESTART_SOURCE_PINS_CHANGED')
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+        try:
+            before = os.fstat(fd)
+            need(stat.S_ISREG(before.st_mode) and before.st_nlink == 1
+                 and before.st_uid in (0, os.geteuid()) and before.st_mode & 0o022 == 0
+                 and 0 < before.st_size < 2 * 1024**2, 'RESTART_SOURCE_PINS_CHANGED')
+            raw = b''
+            while len(raw) <= before.st_size:
+                part = os.read(fd, min(65536, before.st_size - len(raw) + 1))
+                if not part:
+                    break
+                raw += part
+            after = os.fstat(fd)
+            visible = path.lstat()
+            identity = lambda row: (row.st_dev, row.st_ino, row.st_mode, row.st_uid, row.st_nlink,
+                                    row.st_size, row.st_mtime_ns, row.st_ctime_ns)
+            need(identity(before) == identity(after) == identity(visible)
+                 and len(raw) == before.st_size and digest(raw) == expected, 'RESTART_SOURCE_PINS_CHANGED')
+        finally:
+            os.close(fd)
+
+
+def authenticate_restart_native(c, d, current, manifest, contract, states):
+    need('restorationNative' not in contract, 'RESTART_RESTORATION_AUTHORITY_MIXED')
+    need(type(NATIVE_RESTART_AUTHORITY) is dict, 'RESTART_NATIVE_NOT_SEALED')
+    paths = restart_origin_paths(d, NATIVE_RESTART_AUTHORITY)
+    receipt, pins = validate_restart_material(c, *(c.private_bytes(path, cap=128 * 1024) for path in paths))
+    need(receipt['currentRelease'] == str(current) == contract['currentRelease']
+         and receipt['currentCommit'] == manifest['commit']
+         and receipt['manifestSha256'] == contract['manifestSha256']
+         and receipt['publicAdminBuildId'] == 'v2-' + manifest['commit'], 'RESTART_MANIFEST_CHANGED')
+    need(set(states) == set(receipt['services']) == set(contract['services']) == set(c.SERVICES)
+         and states == receipt['services'] and set(receipt['configurationModels']) == set(c.SERVICES)
+         and set(receipt['legacyConfigurationSha256']) == set(c.SERVICES), 'RESTART_CURRENT_STATE_CHANGED')
+    verify_restart_source_pins(d, pins, receipt['sourceCommit'])
+    docker, boot = restart_host_facts(d)
+    need(docker == receipt['docker'] and boot == receipt['hostBootIdSha256'], 'RESTART_HOST_CHANGED')
+    for name in c.SERVICES:
+        old, state = contract['services'][name], states[name]
+        need(type(state) is dict and set(state) == set(old)
+             and all(state[k] == old[k] for k in old if k not in ('startedAtSha256', 'configurationSha256'))
+             and type(state['startedAtSha256']) is str and re.fullmatch('[a-f0-9]{64}', state['startedAtSha256'])
+             and state['startedAtSha256'] != old['startedAtSha256'], 'RESTART_IDENTITY_CHANGED')
+        body = c.configuration_body(d, state)
+        need(all(k in body['HostConfig'] and type(body['HostConfig'][k]) is list
+                 and body['HostConfig'][k] == [] for k in receipt['dnsFields']), 'RESTART_DNS_NOT_EMPTY')
+        need(c.fingerprint(c.canonical_dns_configuration(body)) == old['configurationSha256']
+             == receipt['legacyConfigurationSha256'][name]
+             and c.configuration_model(d, state) == receipt['configurationModels'][name],
+             'RESTART_CONFIGURATION_CHANGED')
+    return {'scope': receipt['scope'], 'authenticated': True,
+        'commandId': NATIVE_RESTART_AUTHORITY['commandId'],
+        'invocationBytesSha256': NATIVE_RESTART_AUTHORITY['invocationBytesSha256'],
+        'commandListBytesSha256': NATIVE_RESTART_AUTHORITY['commandListBytesSha256'],
+        'parametersSha256': NATIVE_RESTART_AUTHORITY['parametersSha256'],
+        'programSha256': NATIVE_RESTART_AUTHORITY['programSha256'],
+        'sourceCommit': receipt['sourceCommit'], 'sourceTree': receipt['sourceTree'],
+        'sourcePinsSha256': receipt['sourcePinsSha256'], 'servicesSha256': c.fingerprint(states),
+        'configurationModelsSha256': c.fingerprint(receipt['configurationModels']),
+        'migrationState': receipt['migrationState']}
+
+
 def authenticate_hotfix(d, current, manifest, contract):
     c = load('unpublished-component-successor.py')
     need(type(contract) is dict and set(contract) in (CONTRACT_FIELDS,
@@ -184,9 +374,17 @@ def authenticate_hotfix(d, current, manifest, contract):
     historical = historical_b(d, contract)
     _, _, scope, _ = c.modules(d)
     states = scope.snapshot(d, current)
-    binding = None
-    binding = restoration_binding(c, d, contract, states)
-    if binding is None:
+    restart = None
+    if 'restorationNative' in contract or states == contract['services']:
+        binding = restoration_binding(c, d, contract, states)
+    elif NATIVE_RESTART_AUTHORITY is not None:
+        restart = authenticate_restart_native(c, d, current, manifest, contract, states)
+        binding = None
+        need(all(all(ledger['after'][n][k] == contract['services'][n][k] for k in ledger['after'][n])
+                 for n in c.SERVICES), 'HOTFIX_SERVICES_CHANGED')
+    else:
+        binding = restoration_binding(c, d, contract, states)
+    if binding is None and restart is None:
         for n in c.SERVICES:
             need(all(states[n][k] == ledger['after'][n][k] for k in ledger['after'][n]), 'HOTFIX_SERVICES_CHANGED')
     need(c.private_bytes(current / 'release-manifest.json', cap=128 * 1024) == raw, 'HOTFIX_BASELINE_CHANGED')
@@ -194,7 +392,7 @@ def authenticate_hotfix(d, current, manifest, contract):
         'apiSourceTree': contract['apiSourceTree'], 'hotfixPublicationSha256': contract['hotfixPublicationSha256'],
         'hotfixReadbackCommandId': contract['hotfixReadbackCommandId'],
         'hotfixReadbackInvocationBytesSha256': contract['hotfixReadbackInvocationBytesSha256'],
-        'services': states, 'restorationBinding': binding, 'historicalB': historical}
+        'services': states, 'restorationBinding': binding, 'nativeRestartBinding': restart, 'historicalB': historical}
 
 
 def restoration_binding(c, d, contract, states):
@@ -344,6 +542,18 @@ def read_input_bundle(plan, base=None):
     return proof, transport
 
 
+def restart_origin_bytes(c):
+    if NATIVE_RESTART_AUTHORITY is None:
+        return None
+    command_id = NATIVE_RESTART_AUTHORITY['commandId']
+    raw_get = command_raw('aws', '--region', REGION, 'ssm', 'get-command-invocation',
+        '--command-id', command_id, '--instance-id', INSTANCE, '--output', 'json')
+    raw_list = command_raw('aws', '--region', REGION, 'ssm', 'list-commands',
+        '--command-id', command_id, '--output', 'json')
+    validate_restart_material(c, raw_get, raw_list)
+    return raw_get, raw_list
+
+
 def parameters(mode, environment=None, *, input_artifacts=None):
     c, p = selected(mode)
     directory = '/opt/id-business-v2/.staging/oidc-' + p['commit']
@@ -386,11 +596,20 @@ def parameters(mode, environment=None, *, input_artifacts=None):
     validate_hotfix_native(raw_origin, c.BASELINE_CONTRACT)
     origin_path = ('/opt/id-business-v2/.staging/component-hotfix-origin-'
                    + c.BASELINE_CONTRACT['hotfixReadbackInvocationBytesSha256'] + '/invocation.json')
+    restart_program = ''
+    restart_raw = restart_origin_bytes(c)
+    if restart_raw is not None:
+        base = '/opt/id-business-v2/.staging/component-same-container-restart-origin-'
+        folder = base + NATIVE_RESTART_AUTHORITY['invocationBytesSha256']
+        restart_program = ('\nwrite_workspace_private_bytes(' + repr(folder + '/invocation.json')
+            + ',' + repr(restart_raw[0]) + ')\nwrite_workspace_private_bytes('
+            + repr(folder + '/command-list.json') + ',' + repr(restart_raw[1]) + ')\n')
     program = (inspect.getsource(original._store_files) + '\n_store_files(' + repr(directory) + ', '
         + repr(p['commit']) + ', ' + repr(pins) + ', False)\n'
         + 'import os,stat,base64\nfrom pathlib import Path\n'
         + inspect.getsource(original.write_workspace_private_bytes)
         + '\nwrite_workspace_private_bytes(' + repr(origin_path) + ',' + repr(raw_origin) + ')\n'
+        + restart_program
         + input_program
         + 'import sys,runpy\nsys.argv=[' + repr(directory + '/unpublished-component-successor.py') + ']+ '
         + repr(args) + payload_args + '\nrunpy.run_path(sys.argv[0],run_name="__main__")\n')

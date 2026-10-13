@@ -220,7 +220,8 @@ test('unpublished successor controls execute narrow suites once in either dispat
       '-B',
       'scripts/production-release/unpublished-component-successor-readonly.test.py'
     ],
-    ['node', '--test', 'scripts/production-release/unpublished-component-entry.test.mjs']
+    ['node', '--test', 'scripts/production-release/unpublished-component-entry.test.mjs'],
+    ['python3', '-B', 'scripts/production-release/unpublished-component-runtime-diagnostic.test.py']
   ];
   for (const part of ['guards', 'release-controls']) {
     for (const paths of [
