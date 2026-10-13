@@ -456,5 +456,121 @@ printf 'installed=%s\n' "$installed" >> "$GITHUB_OUTPUT"
     }
     step.if = "steps.disk_owner.outputs.installed != 'true' && (" + step.if + ')';
   }
-  assert.deepEqual(workflow(), expected);
+  // Extend the FULL reviewed 60/disk workflow with only these fixed f193
+  // fields. The final equality retains every previous byte, route and gate.
+  const confirmBaseline = 'f193f34ea09a2c37485c1582a81b33ee3acec865';
+  const confirmAccess = `inputs.operation == 'verify_access' && inputs.expected_current == '${confirmBaseline}'`;
+  const confirmRelease = `inputs.operation == 'release_admin' && inputs.expected_current == '${confirmBaseline}'`;
+  const legacyDiagnostic = steps.find(
+    (step) => step.name === 'Read production release diagnostics'
+  );
+  legacyDiagnostic.if += ` && inputs.expected_current != '${confirmBaseline}'`;
+  steps.splice(
+    steps.indexOf(legacyDiagnostic),
+    0,
+    {
+      name: 'Read sealed f193 Admin confirmation baseline without production changes',
+      if: confirmAccess,
+      run: 'python3 -B scripts/production-release/admin-pending-online-release.py access-preflight'
+    },
+    {
+      name: 'Save sealed f193 Admin confirmation preflight safe evidence',
+      if: 'always() && ' + confirmAccess,
+      uses: 'actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02',
+      with: {
+        name: 'admin-confirm-preflight-${{ github.run_id }}-${{ github.run_attempt }}',
+        path: '.deploy/production-release/admin-confirm-preflight-*.json',
+        'if-no-files-found': 'warn',
+        'include-hidden-files': true,
+        'retention-days': 14
+      }
+    }
+  );
+  insertAfter('Save only independent Admin readback safe evidence', {
+    name: 'Save only sealed f193 Admin build source evidence',
+    if: 'always() && ' + confirmRelease,
+    uses: 'actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02',
+    with: {
+      name: 'admin-confirm-build-source-${{ github.run_id }}-${{ github.run_attempt }}',
+      path: '.deploy/production-release/admin-pending-online-build-proof.json\n.deploy/production-release/admin-pending-online-build-projection.json\n',
+      'if-no-files-found': 'warn',
+      'include-hidden-files': true,
+      'retention-days': 14
+    }
+  });
+  const replaceOnce = (source, fragment, replacement) => {
+    assert.equal(source.split(fragment).length, 2, 'fixed f193 fragment must occur exactly once');
+    return source.replace(fragment, replacement);
+  };
+  const originalOrigin = [
+    "    if expected_api_origin != '31d2c6885a45817cd40d23fce8d6145bc9f18af2':",
+    "        raise RuntimeError('Admin readback API origin unavailable')",
+    ''
+  ].join('\n');
+  const confirmOrigin = [
+    "    confirm_baseline = 'f193f34ea09a2c37485c1582a81b33ee3acec865'",
+    "    confirm_profile = os.environ['EXPECTED_CURRENT'] == confirm_baseline",
+    '    if confirm_profile:',
+    "        if (proof['projection'].get('profile') != 'ADMIN_CONFIRM_EXPIRY_20261014'",
+    "                or proof['projection'].get('sourceBasisCommit') != confirm_baseline",
+    '                or expected_api_origin != confirm_baseline):',
+    "            raise RuntimeError('Admin confirmation readback origin unavailable')",
+    "    elif expected_api_origin != '31d2c6885a45817cd40d23fce8d6145bc9f18af2':",
+    "        raise RuntimeError('Admin readback API origin unavailable')",
+    ''
+  ].join('\n');
+  const originalHelpers =
+    "    names = ('remote-deploy.py', 'api-admin-pending-projection.py', 'admin-pending-online-release.py')\n";
+  const confirmHelpers =
+    originalHelpers +
+    [
+      '    if confirm_profile:',
+      "        names += ('unpublished-component-successor.py', 'api-admin-scope.py')",
+      ''
+    ].join('\n');
+  readback.run = replaceOnce(
+    replaceOnce(readback.run, originalOrigin, confirmOrigin),
+    originalHelpers,
+    confirmHelpers
+  );
+  const actual = workflow();
+  const validate = (candidate) => assert.deepEqual(candidate, expected);
+  validate(actual);
+  for (const fault of [
+    'preflight-gate',
+    'ignored-error',
+    'proof-export',
+    'legacy-gate',
+    'origin-seal',
+    'helpers',
+    'duplicate-step',
+    'disk-gate',
+    'quality-gate'
+  ]) {
+    const candidate = structuredClone(actual);
+    const candidateSteps = candidate.jobs.release.steps;
+    const named = (name) => candidateSteps.find((step) => step.name === name);
+    const preflightName = 'Read sealed f193 Admin confirmation baseline without production changes';
+    if (fault === 'preflight-gate') named(preflightName).if = "inputs.operation == 'verify_access'";
+    else if (fault === 'ignored-error') named(preflightName)['continue-on-error'] = true;
+    else if (fault === 'proof-export')
+      named('Save only sealed f193 Admin build source evidence').with.path = '.env.aws.production';
+    else if (fault === 'legacy-gate')
+      named('Read production release diagnostics').if = "inputs.operation == 'verify_access'";
+    else if (fault === 'origin-seal')
+      named(readback.name).run = readback.run.replace(
+        "get('sourceBasisCommit') != confirm_baseline",
+        'get("sourceBasisCommit") == confirm_baseline'
+      );
+    else if (fault === 'helpers')
+      named(readback.name).run = readback.run.replace(
+        "names += ('unpublished-component-successor.py', 'api-admin-scope.py')",
+        "names += ('remote-deploy.py',)"
+      );
+    else if (fault === 'duplicate-step') candidateSteps.push(structuredClone(named(preflightName)));
+    else if (fault === 'disk-gate')
+      named('Recover reviewed disk headroom before release preflight').if = 'false';
+    else named('Verify exact source and passing Quality Gate')['continue-on-error'] = true;
+    assert.throws(() => validate(candidate), undefined, fault);
+  }
 });

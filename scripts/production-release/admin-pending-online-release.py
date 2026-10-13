@@ -80,7 +80,9 @@ CONFIRM_CONTROLS = frozenset((
     'scripts/production-release/validate-release-selection.sh',
     'scripts/production-release/dispatch.sh', '.github/workflows/production-release.yml',
     'scripts/ci-recharge-release.test.mjs',
-    'scripts/production-release/unpublished-component-runtime-diagnostic.test.py'))
+    'scripts/production-release/unpublished-component-runtime-diagnostic.test.py',
+    'scripts/production-release/unified-component-source.test.py',
+    'scripts/production-release/recharge-flow-entry.test.mjs'))
 CONFIRM_DOCS = frozenset(('docs/V2_TASKS.md', 'docs/CENTRAL_RELEASE_20261002.md',
     'docs/UNIFIED_SITE_RELEASE_20261013.md'))
 CONFIRM_CONTROL_SOURCE = '7a6e0ea8f1504ca6c87510e9132e7018cc07b731'

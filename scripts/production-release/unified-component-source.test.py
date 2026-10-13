@@ -4,6 +4,7 @@ import ast
 import hashlib
 import importlib.util
 import io
+import json
 from pathlib import Path
 import subprocess
 import tarfile
@@ -16,6 +17,35 @@ HERE = Path(__file__).resolve().parent
 APP_PREFIXES = ('apps/api/', 'apps/admin/', 'packages/shared/')
 APP_FILES = ('package.json', 'package-lock.json', '.dockerignore',
              'tsconfig.base.json', 'deploy/nginx/admin.conf')
+# Independent literals retain the original application seal and admit exactly
+# the reviewed successor. Caller-supplied or recomputed hashes grant no scope.
+APPLICATION_SEAL = '2e9549278a2e883a6a7eba4a90a565146919e3ce631f4c5cfe8e5771b2dfd647'
+CONFIRM_INPUTS = {
+    'apps/admin/src/v2/features/auto-recharge/useRechargeLocalConfirmation.ts': {
+        'mode': '100644', 'sha256': 'e68503d21fba26c5303d58eae0e35d2f076e167fb1a16aeb592084dcc199c352'},
+    'apps/admin/src/v2/features/auto-recharge/useRechargeLocalConfirmation.spec.ts': {
+        'mode': '100644', 'sha256': '39597b5f8e5a6db3d5aaff309ab013156c59d7b50279a7d91e8e47a215a991af'},
+}
+CONFIRM_OVERLAY = 'a3ea38d3f31dce7f438d067e6bfbafe4108636ed50c75621beb44a8948b2b8b7'
+
+
+def verify_application_worktree(sealed, current, projection):
+    fingerprint = lambda value: hashlib.sha256(json.dumps(value, sort_keys=True,
+        separators=(',', ':')).encode()).hexdigest()
+    before = projection.inventory(sealed)
+    if len(before) != 2191 or fingerprint(before) != APPLICATION_SEAL:
+        raise RuntimeError('JOINT_ORIGINAL_APPLICATION_SEAL_CHANGED')
+    if set(current) != set(sealed):
+        raise RuntimeError('JOINT_APPLICATION_PATHS_CHANGED')
+    changed = {name for name in sealed if current[name] != sealed[name]}
+    if not changed:
+        return 'ORIGINAL_APPLICATION'
+    if changed != set(CONFIRM_INPUTS):
+        raise RuntimeError('JOINT_UNREVIEWED_APPLICATION_CHANGE')
+    overlay = projection.inventory({name: current[name] for name in changed})
+    if overlay != CONFIRM_INPUTS or fingerprint(overlay) != CONFIRM_OVERLAY:
+        raise RuntimeError('JOINT_CONFIRM_OVERLAY_CHANGED')
+    return 'ADMIN_CONFIRM_EXPIRY_20261014'
 
 
 def load(filename):
@@ -66,12 +96,80 @@ class JointSourceTests(unittest.TestCase):
             '--', 'apps/api', 'apps/admin', 'packages/shared', *APP_FILES], cwd=ROOT).decode().splitlines()
         present = {name for name in paths if (ROOT / name).is_file()}
         self.assertEqual(present, set(self.application))
+        current = {}
         for name in sorted(present):
             with self.subTest(path=name):
                 path = ROOT / name
                 self.assertFalse(path.is_symlink())
-                self.assertEqual(path.read_bytes(), self.candidate[name][0])
-                self.assertEqual('100755' if path.stat().st_mode & 0o111 else '100644', self.candidate[name][1])
+                current[name] = (path.read_bytes(), '100755' if path.stat().st_mode & 0o111 else '100644')
+        sealed = {name: self.candidate[name] for name in present}
+        profile = verify_application_worktree(sealed, current, self.projection)
+        for name in sorted(present - (set(CONFIRM_INPUTS) if profile != 'ORIGINAL_APPLICATION' else set())):
+            with self.subTest(path=name):
+                self.assertEqual(current[name], self.candidate[name])
+        if profile != 'ORIGINAL_APPLICATION':
+            # Prove these independent literals agree with the real production
+            # projection and its fixed predecessor/control archives, in memory.
+            adapter = load('admin-pending-online-release.py')
+            self.assertEqual(set(adapter.CONFIRM_FILES), set(CONFIRM_INPUTS))
+            self.assertEqual(adapter.CONFIRM_OVERLAY_SHA256, CONFIRM_OVERLAY)
+            self.assertEqual(adapter.CONFIRM_BASELINE, 'f193f34ea09a2c37485c1582a81b33ee3acec865')
+            self.assertEqual(adapter.CONFIRM_CONTROL_SOURCE, '7a6e0ea8f1504ca6c87510e9132e7018cc07b731')
+            tracked = subprocess.check_output(['git', 'ls-files', '--cached', '--others', '--exclude-standard'],
+                cwd=ROOT).decode().splitlines()
+            full = {}
+            for name in tracked:
+                path = ROOT / name
+                self.assertFalse(path.is_symlink(), name)
+                if path.is_file():
+                    full[name] = (path.read_bytes(), '100755' if path.stat().st_mode & 0o111 else '100644')
+            self.assertEqual({name: full[name] for name in current}, current)
+            output, record, runtime = adapter.project_confirm(full,
+                archived_files(adapter.CONFIRM_BASELINE), self.base, self.online,
+                'a' * 40, self.projection.source_tree(full), archived_files(adapter.CONFIRM_CONTROL_SOURCE))
+            self.assertEqual(record['profile'], profile)
+            self.assertEqual(record['overlayFiles'], CONFIRM_INPUTS)
+            self.assertEqual(record['overlaySha256'], CONFIRM_OVERLAY)
+            self.assertEqual(record['sourceBasisCommit'], adapter.CONFIRM_BASELINE)
+            self.assertEqual(record['controlSourceTree'], '1e15f88ff2ed92071d8f4ec55ff0a0f7619f6e54')
+            self.assertFalse(any('/online-recharge/' in name for name in output))
+            for name, row in runtime.items():
+                self.assertEqual(output[name], row)
+
+    def test_original_application_branch_still_requires_the_entire_original_seal(self):
+        sealed = {name: self.candidate[name] for name in self.application}
+        self.assertEqual(verify_application_worktree(sealed, dict(sealed), self.projection),
+                         'ORIGINAL_APPLICATION')
+        substituted = dict(sealed)
+        name = next(iter(CONFIRM_INPUTS))
+        substituted[name] = ((ROOT / name).read_bytes(), '100644')
+        with self.assertRaisesRegex(RuntimeError, 'ORIGINAL_APPLICATION_SEAL_CHANGED'):
+            verify_application_worktree(substituted, substituted, self.projection)
+
+    def test_reviewed_successor_rejects_mutated_single_deleted_added_and_mode_changed_inputs(self):
+        sealed = {name: self.candidate[name] for name in self.application}
+        approved = {**sealed, **{name: ((ROOT / name).read_bytes(), '100644') for name in CONFIRM_INPUTS}}
+        self.assertEqual(verify_application_worktree(sealed, approved, self.projection),
+                         'ADMIN_CONFIRM_EXPIRY_20261014')
+        first, second = CONFIRM_INPUTS
+        for fault in ('bytes', 'single', 'delete', 'add', 'overlay-mode', 'other-mode'):
+            current = dict(approved)
+            if fault == 'bytes': current[first] = (current[first][0] + b'\n// tampered\n', '100644')
+            elif fault == 'single': current[second] = sealed[second]
+            elif fault == 'delete': del current[first]
+            elif fault == 'add': current['apps/admin/src/v2/features/unknown.ts'] = (b'export {}', '100644')
+            elif fault == 'overlay-mode': current[first] = (current[first][0], '100755')
+            else:
+                name = 'package-lock.json'; current[name] = (current[name][0], '100755')
+            with self.subTest(fault=fault), self.assertRaises(RuntimeError):
+                verify_application_worktree(sealed, current, self.projection)
+        for name in ('apps/api/src/main.ts', 'apps/api/src/auth/auth.service.ts',
+                     'apps/admin/src/v2/styles/base.css', 'packages/shared/src/v2/auto-recharge.ts',
+                     'apps/api/prisma-mysql/schema.prisma', 'package-lock.json'):
+            current = dict(approved); raw, mode = current[name]
+            current[name] = (raw + b'\n// unreviewed\n', mode)
+            with self.subTest(path=name), self.assertRaisesRegex(RuntimeError, 'UNREVIEWED_APPLICATION_CHANGE'):
+                verify_application_worktree(sealed, current, self.projection)
 
     def test_projection_retains_every_source_outside_the_exact_online_delta(self):
         generated, removed = set(self.record['generatedFiles']), set(self.record['removedFiles'])
