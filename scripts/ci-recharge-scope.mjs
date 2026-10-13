@@ -84,6 +84,12 @@ export const formalRuntimePackageControlPaths = Object.freeze([
 const onlineRecoveryControls = new Set([
   onlineRechargeRecoveryPolicy,
   productionDatabaseAccessTest,
+  'scripts/production-release/online-recharge-component-consumer.py',
+  'scripts/production-release/online-recharge-component-consumer.test.py',
+  'scripts/production-release/online-recharge-component-runtime.py',
+  'scripts/production-release/online-recharge-component-runtime.test.py',
+  'scripts/production-release/online-recharge-component-readonly.py',
+  'scripts/production-release/online-recharge-component-readonly.test.py',
   'deploy/aws/bitbrowser-reviewed-release-20261012.json'
 ]);
 

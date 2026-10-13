@@ -3310,9 +3310,11 @@ def _online_after_bit_mysql_check(d, directory, expected, deadline):
         and time.monotonic() < deadline, code)
 
 
-def _online_after_bit_audit_transport(d, directory, bridge, reader, identity, plan, basis, *, history_record=None, first_api_check=None):
+def _online_after_bit_audit_transport(d, directory, bridge, reader, identity, plan, basis, *, history_record=None, first_api_check=None, receipt_kind='ONLINE_RECHARGE_AFTER_BIT_AUDIT_PROTECTION'):
     """Private verified B publication or sealed historical-prefix readback fence."""
     code = 'ONLINE_RECHARGE_AFTER_BIT_AUDIT_GUARD_LOST'
+    d.require(receipt_kind in ('ONLINE_RECHARGE_AFTER_BIT_AUDIT_PROTECTION',
+        'ONLINE_RECHARGE_ORDINARY_COMPONENT_AUDIT_PROTECTION'), code)
     class Barrier(reader.WorkspaceUnusedAuditBarrier):
         def __init__(self):
             super().__init__(d, directory, online=True)
@@ -3389,7 +3391,7 @@ def _online_after_bit_audit_transport(d, directory, bridge, reader, identity, pl
             # Seal one final unchanged frame after the actual old PID reached zero.
             self.check()
             d.require(self.pipe.process.poll() is None and time.monotonic() < self.pipe.deadline, code)
-            self.receipt = {'version': 1, 'kind': 'ONLINE_RECHARGE_AFTER_BIT_AUDIT_PROTECTION', 'basis': basis,
+            self.receipt = {'version': 1, 'kind': receipt_kind, 'basis': basis,
                 'sourceApiIdentity': identity, 'mysqlIdentitySha256': fingerprint(bridge['services']['mysql']),
                 'initialQuerySha256': hashlib.sha256(self.initial_query.encode()).hexdigest(),
                 'querySha256': hashlib.sha256(self.query.encode()).hexdigest(),
@@ -4305,8 +4307,20 @@ def _pending_workspace_reader(d):
     return reader
 
 
+def _online_component_consumer():
+    import runpy
+    return SimpleNamespace(**runpy.run_path(str(Path(__file__).with_name('online-recharge-component-consumer.py'))))
+
+
 def _workspace_baseline_kind(d, reader, directory):
     """Select from actual private A/B state, never from an F/P claim or fallback."""
+    # Component provenance cannot be relabelled as an old workspace publication.
+    manifest_path = directory / 'release-manifest.json'
+    if manifest_path.is_file():
+        manifest = closed_recovery_json(d, _declaration_source_bytes(manifest_path))
+        if 'apiComponentPublication' in manifest:
+            _online_component_consumer().require_runtime_adapter()
+            d.require(False, 'ONLINE_RECHARGE_COMPONENT_SEPARATE_ENTRY_REQUIRED')
     raw = _declaration_source_bytes(directory / reader.STATE_FILE)
     record = closed_recovery_json(d, raw)
     context = reader.validate_pending_online_origin(record.get('pendingOnlineMigrationOrigin'))
@@ -4764,6 +4778,9 @@ def validate_arguments(d, args):
 
 
 def validate_proof(d, value, commit, tree, repository=None, run_id=None, attempt=None):
+    if type(value) is dict and value.get('kind') == 'ONLINE_RECHARGE_ORDINARY_COMPONENT_BUILD_PROOF':
+        _online_component_consumer().require_runtime_adapter()
+        d.require(False, 'ONLINE_RECHARGE_COMPONENT_SEPARATE_ENTRY_REQUIRED')
     if type(value) is not dict or 'kind' not in value:
         return _PENDING_WORKSPACE_FIRST['validate_proof'](d,value,commit,tree,repository,run_id,attempt)
     bridge,producer=_pending_workspace_session(d)
@@ -4902,6 +4919,9 @@ def readback(d,expected):
 
 
 def validate_receipt(d,value,mode,commit,expected):
+    if type(value) is dict and value.get('kind') == 'ONLINE_RECHARGE_ORDINARY_COMPONENT':
+        _online_component_consumer().require_runtime_adapter()
+        d.require(False, 'ONLINE_RECHARGE_COMPONENT_SEPARATE_ENTRY_REQUIRED')
     if type(value) is not dict or not any(n in value for n, unused in _WORKSPACE_ORIGIN_TYPES.values()):
         return _PENDING_WORKSPACE_FIRST['validate_receipt'](d,value,mode,commit,expected)
     bridge=_workspace_evidence_origin(d,value)

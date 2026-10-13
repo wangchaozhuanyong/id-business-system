@@ -19,7 +19,9 @@ elif [[ "${RELEASE_OPERATION:-release}" == release_admin ]]; then
   [[ "${RELEASE_ADMIN_ONLY:-}" == true ]] || exit 1
   services=(admin)
 elif [[ "${RELEASE_OPERATION:-release}" == release_online_recharge ]]; then
-  if [[ "${EXPECTED_CURRENT:-}" != 0a03fa28e6b844a18833d5c63f1de700f091fc64 ]]; then
+  if online_component_selected; then
+    python3 -B scripts/production-release/online-recharge-component-readonly.py build-proof
+  elif [[ "${EXPECTED_CURRENT:-}" != 0a03fa28e6b844a18833d5c63f1de700f091fc64 ]]; then
     python3 -B scripts/production-release/online-recharge-readonly.py after-bit-build-proof
   fi
   services=(api admin migrate online-recharge)

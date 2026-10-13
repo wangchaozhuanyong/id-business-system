@@ -23,6 +23,37 @@ const gates = [
   'check:v2-concurrency-standard'
 ];
 
+test('ordinary ONLINE component pure tests run once in either control dispatcher', () => {
+  for (const part of ['guards', 'release-controls']) {
+    for (const changed of [
+      'scripts/production-release/online-recharge-component-consumer.py',
+      'scripts/production-release/online-recharge-component-consumer.test.py',
+      'scripts/production-release/online-recharge-component-runtime.py',
+      'scripts/production-release/online-recharge-component-runtime.test.py',
+      'scripts/production-release/online-recharge-component-readonly.py',
+      'scripts/production-release/online-recharge-component-readonly.test.py'
+    ]) {
+      const calls = recordGuardCommands('ci-only', [changed], part);
+      for (const helper of ['consumer', 'runtime', 'readonly'])
+        assert.equal(
+          calls.filter(
+            (call) =>
+              call.join(' ') ===
+              `python3 -B scripts/production-release/online-recharge-component-${helper}.test.py`
+          ).length,
+          1
+        );
+      assert.ok(
+        calls.every(
+          (call) =>
+            !call.includes('docker') &&
+            !call.some((arg) => arg.includes('acceptance-v2') || arg.startsWith('--workspace'))
+        )
+      );
+    }
+  }
+});
+
 test('disk retention controls run lifecycle suites without database acceptance', () => {
   for (const part of ['guards', 'release-controls']) {
     for (const changed of [

@@ -292,7 +292,20 @@ print(core.fingerprint(record))
 PY_RECHARGE_FLOW
 }
 
+online_component_selected() {
+  [[ "${RELEASE_OPERATION:-release}" == verify_online_recharge || "${RELEASE_OPERATION:-release}" == release_online_recharge ]] &&
+    [[ "${EXPECTED_CURRENT:-}" != 0a03fa28e6b844a18833d5c63f1de700f091fc64 && "${EXPECTED_CURRENT:-}" != 31d2c6885a45817cd40d23fce8d6145bc9f18af2 ]]
+}
+
+read_online_component_projection() {
+  python3 -B scripts/production-release/online-recharge-component-readonly.py label
+}
+
 validate_release_selection() {
+  if online_component_selected; then
+    python3 -B scripts/production-release/online-recharge-component-readonly.py selection || return 1
+    return 0
+  fi
   if [[ "${RELEASE_OPERATION:-release}" == *_recharge_flow* ]]; then
     [[ "$RELEASE_OPERATION" == verify_recharge_flow || "$RELEASE_OPERATION" == release_recharge_flow ]] || return 1
     [[ "${HISTORICAL_EXCEPTION:-none}" == none && "${RELEASE_ADMIN_ONLY:-false}" == false ]] || return 1

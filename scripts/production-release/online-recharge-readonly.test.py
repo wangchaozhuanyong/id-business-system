@@ -550,7 +550,7 @@ class AfterBitFormalTransportTests(unittest.TestCase):
             path=output/name;path.write_bytes(data);path.chmod(0o600)
         return receipt,raw,json.dumps(invocation).encode(),output,namespace
 
-    def test_actual_b_client_and_existing_cli_alias_select_strict_f_type(self):
+    def test_actual_b_client_binds_strict_f_type(self):
         module=self.fixture_module
         for initial in (False,True):
             with self.subTest(initial=initial),module.AfterBitFormalTests().fixture() as f:
@@ -564,13 +564,32 @@ class AfterBitFormalTransportTests(unittest.TestCase):
                             patch.object(module.scope,'verify_image_content') as image:
                         summary=transport.pending_workspace_client_binding(receipt,'preflight',f.producer,output)
                         self.assertIn('onlinePendingWorkspaceOrigin' if initial else 'onlineAfterBitOrigin',summary)
-                        for name in ('after-bit-build-input','after-bit-build-proof'):
-                            with patch.object(transport.sys,'argv',['readonly.py',name]),redirect_stdout(io.StringIO()) as stream:
-                                self.assertEqual(transport.main(),0)
+                        # This uses a synthetic source to test the full old F
+                        # contract. Real legacy CLI routing is tested separately;
+                        # synthetic unknown sources cannot authorize that route.
+                        for name in ('pending-workspace-build-input','pending-workspace-build-proof'):
+                            with redirect_stdout(io.StringIO()) as stream:
+                                self.assertEqual(transport.pending_workspace_main(name,output),0)
                             result=json.loads(stream.getvalue());self.assertEqual(result['status'],namespace+'_BUILD_INPUT_VERIFIED')
                         self.assertEqual(image.call_count,4)
                         f.d.compose.assert_not_called();f.d.sync_new_table_grants.assert_not_called();f.d.point_current.assert_not_called()
                 finally:os.chdir(old)
+
+    def test_legacy_cli_aliases_select_only_the_original_reader(self):
+        for predecessor in ('0a03fa28e6b844a18833d5c63f1de700f091fc64',
+                            '31d2c6885a45817cd40d23fce8d6145bc9f18af2'):
+            for alias,mode in (('after-bit-build-input','pending-workspace-build-input'),
+                               ('after-bit-build-proof','pending-workspace-build-proof')):
+                environment={**PendingWorkspaceTransportTests().env(),'EXPECTED_CURRENT':predecessor}
+                with self.subTest(predecessor=predecessor,alias=alias),patch.dict(os.environ,environment,clear=True), \
+                        patch.object(transport.sys,'argv',['readonly.py',alias]), \
+                        patch.object(transport.Path,'mkdir'), \
+                        patch.object(transport,'_pending_workspace_selected',return_value=True), \
+                        patch.object(transport,'pending_workspace_main',return_value=0) as existing, \
+                        patch.object(transport.runpy,'run_path') as component:
+                    self.assertEqual(transport.main(),0)
+                    existing.assert_called_once_with(mode,Path('.deploy/production-release'))
+                    component.assert_not_called()
 
     def test_b_installer_and_typed_client_refuse_a_relabel_or_missing_actual_f(self):
         module=self.fixture_module

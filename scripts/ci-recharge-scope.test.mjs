@@ -5,6 +5,27 @@ import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import test from 'node:test';
 
+test('ordinary ONLINE component controls remain finite and do not select a database part', () => {
+  const paths = [
+    'scripts/production-release/online-recharge-component-consumer.py',
+    'scripts/production-release/online-recharge-component-consumer.test.py',
+    'scripts/production-release/online-recharge-component-runtime.py',
+    'scripts/production-release/online-recharge-component-runtime.test.py',
+    'scripts/production-release/online-recharge-component-readonly.py',
+    'scripts/production-release/online-recharge-component-readonly.test.py'
+  ];
+  assert.equal(checkMode(paths, '', ''), 'ci-only');
+  assert.deepEqual(selectedParts(paths), ['guards']);
+  for (const extra of [
+    'scripts/production-release/online-recharge-component-consumer-write.py',
+    'scripts/production-release/online-recharge-component-consumer.py.backup',
+    'scripts/production-release/online-recharge-component-runtime-write.py',
+    'scripts/production-release/online-recharge-component-readonly.py.backup',
+    'apps/api/src/auth/unknown.ts'
+  ])
+    assert.equal(checkMode([...paths, extra], '', ''), 'full');
+});
+
 test('Admin successor diagnostics have a finite control scope', () => {
   const paths = [
     'scripts/production-release/admin-successor-diagnostic.py',

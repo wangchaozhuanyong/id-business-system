@@ -9,6 +9,11 @@ source "$(dirname "${BASH_SOURCE[0]}")/validate-release-selection.sh"
 [[ "$QUALITY_RUN_ID" =~ ^[1-9][0-9]*$ ]] || exit 1
 [[ "$RELEASE_REPOSITORY" =~ ^[0-9]{12}\.dkr\.ecr\.ap-northeast-1\.amazonaws\.com/id-business-v2-release$ ]] || exit 1
 
+if [[ "${RELEASE_OPERATION:-release}" == release_online_recharge ]] && online_component_selected; then
+  python3 -B scripts/production-release/online-recharge-component-readonly.py release
+  exit $?
+fi
+
 if [[ "${RELEASE_OPERATION:-release}" == release_recharge_flow ]]; then
   [[ "$(git ls-remote origin refs/heads/main | cut -f1)" == "$RELEASE_COMMIT" ]] || exit 1
   python3 -B scripts/production-release/recharge-flow-successor-readonly.py release

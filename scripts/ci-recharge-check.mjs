@@ -440,6 +440,9 @@ if (part === 'guards' && !resumeCombinedGuardPrefix) {
     changed.some((path) => path.includes('online-recharge') || onlineReleaseControlPaths.has(path))
   ) {
     onlineRecoveryGrantControls();
+    run('python3', ['-B', 'scripts/production-release/online-recharge-component-consumer.test.py']);
+    run('python3', ['-B', 'scripts/production-release/online-recharge-component-runtime.test.py']);
+    run('python3', ['-B', 'scripts/production-release/online-recharge-component-readonly.test.py']);
     run('python3', ['-B', 'scripts/production-release/online-recharge-scope.test.py']);
     run('python3', ['-B', 'scripts/production-release/online-recharge-readonly.test.py']);
     run('node', ['--test', 'scripts/production-release/online-recharge-entry.test.mjs']);
@@ -594,6 +597,9 @@ if (part === 'guards') {
     changed.some((path) => path.includes('online-recharge') || onlineReleaseControlPaths.has(path))
   ) {
     onlineRecoveryGrantControls();
+    run('python3', ['-B', 'scripts/production-release/online-recharge-component-consumer.test.py']);
+    run('python3', ['-B', 'scripts/production-release/online-recharge-component-runtime.test.py']);
+    run('python3', ['-B', 'scripts/production-release/online-recharge-component-readonly.test.py']);
     run('python3', ['-B', 'scripts/production-release/online-recharge-scope.test.py']);
     run('python3', ['-B', 'scripts/production-release/online-recharge-readonly.test.py']);
     run('node', ['--test', 'scripts/production-release/online-recharge-entry.test.mjs']);
