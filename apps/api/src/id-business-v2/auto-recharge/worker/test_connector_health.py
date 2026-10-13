@@ -31,6 +31,7 @@ class ConnectorHealthTests(unittest.TestCase):
                     'payment-unknown-resolution',
                     'prepayment-page-recovery', 'stale-owned-profile-cleanup',
                     'same-profile-proxy-recovery', 'json-page-ready',
+                    'next-subscription-cycle-v1',
                 ], 'originAllowed': True, 'busy': False
             })
             start.assert_not_called()
