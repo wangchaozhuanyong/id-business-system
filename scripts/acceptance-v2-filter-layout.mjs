@@ -1,11 +1,18 @@
 #!/usr/bin/env node
 /* global document, getComputedStyle, NodeFilter, window */
 import assert from 'node:assert/strict';
-import { spawn } from 'node:child_process';
-import { mkdirSync, writeFileSync } from 'node:fs';
+import {
+  appendFileSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  writeFileSync
+} from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { chromium } from 'playwright';
+import { createLogger, createServer } from 'vite';
 
 const root = fileURLToPath(new URL('..', import.meta.url));
 const baseUrl = new URL(process.env.V2_FILTER_LAYOUT_ADMIN_URL || 'http://127.0.0.1:5386');
@@ -76,34 +83,76 @@ const customer = (index) => ({
 let server;
 let browser;
 let page;
+let optimizationBefore;
 try {
   if (!process.env.V2_FILTER_LAYOUT_ADMIN_URL) {
-    server = spawn(
-      process.execPath,
-      [
-        path.join(root, 'node_modules/vite/bin/vite.js'),
-        '--host',
-        baseUrl.hostname,
-        '--port',
-        baseUrl.port,
-        '--strictPort'
-      ],
-      {
-        cwd: path.join(root, 'apps/admin'),
-        env: {
-          ...process.env,
-          VITE_API_BASE_URL: '/api',
-          VITE_V2_REALTIME_CHANGES_ENABLED: 'false'
-        },
-        stdio: 'ignore'
-      }
-    );
-    for (let attempt = 0; attempt < 100; attempt += 1) {
-      assert.equal(server.exitCode, null, '验收服务器提前退出');
-      const response = await fetch(new URL('/login', baseUrl)).catch(() => null);
-      if (response?.ok) break;
-      await new Promise((resolve) => setTimeout(resolve, 100));
+    Object.assign(process.env, {
+      VITE_API_BASE_URL: '/api',
+      VITE_V2_REALTIME_CHANGES_ENABLED: 'false'
+    });
+    const logger = createLogger('silent');
+    const viteLog = path.join(outputDir, 'vite.log');
+    writeFileSync(viteLog, '');
+    for (const level of ['info', 'warn', 'warnOnce', 'error']) {
+      const original = logger[level].bind(logger);
+      logger[level] = (message, options) => {
+        appendFileSync(viteLog, `[${level}] ${message}\n`);
+        if (level === 'error') errors.push(`vite:${message}`);
+        original(message, options);
+      };
     }
+    // ElementPlusResolver injects these style imports after Vite's HTML scan.
+    // Derive them from the installed package so newly used components do not
+    // invalidate optimized URLs while an earlier fixture is loading.
+    const elementPlusComponents = path.join(
+      path.dirname(fileURLToPath(import.meta.resolve('element-plus/package.json'))),
+      'es/components'
+    );
+    const resolverStyleImports = readdirSync(elementPlusComponents)
+      .filter((name) => existsSync(path.join(elementPlusComponents, name, 'style/css.mjs')))
+      .map((name) => `element-plus/es/components/${name}/style/css`);
+    server = await createServer({
+      root: path.join(root, 'apps/admin'),
+      configFile: path.join(root, 'apps/admin/vite.config.ts'),
+      // Each acceptance process owns its cache. Other fixture runners must not
+      // replace the browser hashes used by this still-running server.
+      cacheDir: mkdtempSync(path.join(outputDir, 'vite-cache-')),
+      customLogger: logger,
+      optimizeDeps: {
+        // The production build has only index.html as its entry. This suite also
+        // visits fixture HTML, so scan them before any browser imports are sent.
+        entries: ['*.html'],
+        include: ['element-plus/es', ...resolverStyleImports],
+        holdUntilCrawlEnd: false
+      },
+      server: { host: baseUrl.hostname, port: Number(baseUrl.port), strictPort: true }
+    });
+    await server.listen();
+    // Await this server's single optimizer; do not start optimizeDeps() beside it.
+    const optimizer = server.environments.client.depsOptimizer;
+    assert.ok(optimizer, '验收服务器必须启用依赖预优化');
+    await optimizer.scanProcessing;
+    await Promise.all(Object.values(optimizer.metadata.discovered).map((dep) => dep.processing));
+    assert.ok(
+      Object.keys(optimizer.metadata.optimized).length > 0,
+      '浏览器启动前必须完成依赖预优化'
+    );
+    assert.ok(
+      resolverStyleImports.every((id) => optimizer.metadata.optimized[id]),
+      '浏览器启动前必须完成按需组件样式预优化'
+    );
+    assert.deepEqual(errors, [], '验收服务器启动异常');
+    optimizationBefore = {
+      cacheDir: server.config.cacheDir,
+      entries: server.config.optimizeDeps.entries,
+      include: server.config.optimizeDeps.include,
+      browserHash: optimizer.metadata.browserHash,
+      dependencies: Object.keys(optimizer.metadata.optimized).sort()
+    };
+    writeFileSync(
+      path.join(outputDir, 'vite-optimization.json'),
+      JSON.stringify({ before: optimizationBefore }, null, 2)
+    );
   }
   browser = await chromium.launch({ headless: true });
   page = await browser.newPage({ viewport: { width: 1920, height: 1000 } });
@@ -115,7 +164,7 @@ try {
       customerReadBehavior === 'error' &&
       /\/api\/id-business-v2\/customers(\/bootstrap)?$/.test(pathname) &&
       message.text().includes('503 (Service Unavailable)');
-    if (!expectedReadFailure) errors.push(`console:${message.text()}`);
+    if (!expectedReadFailure) errors.push(`console:${message.text()} (${pathname})`);
   });
   await page.addInitScript((fixtureUser) => {
     // Seed only this isolated local test tab using the current credential contract.
@@ -755,6 +804,19 @@ try {
     }
   }
   assert.deepEqual(errors, [], '页面运行时异常');
+  if (server) {
+    const optimizer = server.environments.client.depsOptimizer;
+    assert.equal(
+      optimizer.metadata.browserHash,
+      optimizationBefore.browserHash,
+      '验收期间依赖版本发生变化，必须在浏览器启动前完成预优化'
+    );
+    assert.deepEqual(
+      Object.keys(optimizer.metadata.optimized).sort(),
+      optimizationBefore.dependencies,
+      '验收期间发现未预优化的依赖'
+    );
+  }
   writeFileSync(path.join(outputDir, 'geometry.json'), JSON.stringify(checks, null, 2));
   if (afterToolbar || realToolbarOnly || lifecycleOnly)
     writeFileSync(
@@ -804,7 +866,24 @@ try {
   throw error;
 } finally {
   await browser?.close();
-  server?.kill('SIGTERM');
+  if (server) {
+    const optimizer = server.environments.client.depsOptimizer;
+    writeFileSync(
+      path.join(outputDir, 'vite-optimization.json'),
+      JSON.stringify(
+        {
+          before: optimizationBefore,
+          after: {
+            browserHash: optimizer?.metadata.browserHash,
+            dependencies: Object.keys(optimizer?.metadata.optimized ?? {}).sort()
+          }
+        },
+        null,
+        2
+      )
+    );
+    await server.close();
+  }
 }
 
 async function settle(page) {
