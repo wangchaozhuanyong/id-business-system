@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 import tarfile
 import tempfile
+import subprocess
 import unittest
 from unittest.mock import patch
 
@@ -18,6 +19,10 @@ class RepairPublicationTests(unittest.TestCase):
     def test_actual_contract_preserves_latest_online_and_form_baseline(self):
         value = json.loads((HERE / 'recharge-record-contract.json').read_bytes())
         self.assertEqual(value['sourceBaseline'], 'f8a1612d9b465dc5cfb1534c9cc3c5640583cc80')
+        actual_tree = subprocess.check_output(['git', 'rev-parse', value['sourceBaseline'] + '^{tree}'],
+                                              cwd=HERE.parents[1], text=True).strip()
+        self.assertEqual(value['sourceBaselineTree'], actual_tree)
+        self.assertEqual(value['declaredBaselineTree'], '2c634fd53a6bb393bb37e4459579c266a93e4f4f')
         self.assertEqual(set(value['services']), set(release.SERVICES))
         self.assertEqual(len(value['changedSources']), 12)
         self.assertFalse(any('online-recharge/' in name or 'schema.prisma' in name

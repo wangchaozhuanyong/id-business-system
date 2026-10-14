@@ -22,6 +22,7 @@
     "docker-compose.aws-mysql.yml": "953c6264f157b00218f2a019d5e2c0b6bc4a34f687f2ec42ad782e0009e7672c"
   },
   "current": "/opt/id-business-v2/releases/20261014T184651Z-f8a1612d9b46-direct-online",
+  "declaredBaselineTree": "2c634fd53a6bb393bb37e4459579c266a93e4f4f",
   "mainBase": "f91e7d85c83cd23fe7ff7d98f751c4a890024f31",
   "manifestSha256": "f9de776dd5434af6da87bd272626b7781054be39fa555474504a012cca24a86f",
   "publicFiles": {
@@ -361,7 +362,7 @@
     }
   },
   "sourceBaseline": "f8a1612d9b465dc5cfb1534c9cc3c5640583cc80",
-  "sourceBaselineTree": "2c634fd53a6bb393bb37e4459579c266a93e4f4f",
+  "sourceBaselineTree": "da105ec06425921a64dd80bb034e1e202e448bd6",
   "validationOnlySources": {
     "apps/api/src/id-business-v2/auto-recharge/worker/test_payment.py": "5fb536776161b7cc03900622c27403e80c8a1c13e6a886a173e8656fe3e11784"
   }
