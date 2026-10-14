@@ -38,6 +38,7 @@ class PaymentGuard(NetworkGuard):
         self.payment_http_status = None
         self.official_quote_binding = None
         self.official_binding_version = 0
+        self.official_quote_binding_request_version = 0
         self.three_ds = ThreeDSAuthentication()
         self.three_ds_ready = asyncio.Event()
         self.three_ds_closed = False
@@ -247,6 +248,7 @@ class PaymentGuard(NetworkGuard):
                     if isinstance(details, dict) and type(details.get("amount_tax")) is int and details["amount_tax"] >= 0:
                         self.official_quote_binding["tax_minor"] = details["amount_tax"]
                     self.official_binding_version += 1
+                    self.official_quote_binding_request_version = self.quote_requests[response.request]
             # 同一结算响应中确实返回的 PaymentIntent 才能作为证据关联。
             intent = data if data.get('object') == 'payment_intent' else data.get("payment_intent")
             intent_id = intent.get("id") if isinstance(intent, dict) else intent

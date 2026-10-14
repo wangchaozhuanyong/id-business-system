@@ -21,6 +21,7 @@ export function useRechargeNameMatch(
   let pending: Promise<void> | null = null;
   let matchedName = '';
   let lastMatchedNumber = '';
+  let preserveRestoredName = Boolean(details.value.name);
   const canonical = () => details.value.number.replace(/[ -]/g, '');
 
   async function match() {
@@ -50,10 +51,15 @@ export function useRechargeNameMatch(
           confirmed.value = result.confirmed;
           selectedCardId.value = result.cardId ?? '';
           onAddress(result.billingAddressId, manualAddressRevision);
-          if (result.confirmed || details.value.name === originalName || !details.value.name) {
+          if (
+            result.confirmed ||
+            (!preserveRestoredName && details.value.name === originalName) ||
+            !details.value.name
+          ) {
             details.value.name = result.name;
             matchedName = result.name;
           }
+          preserveRestoredName = false;
         } finally {
           applying.value = false;
         }
@@ -72,6 +78,7 @@ export function useRechargeNameMatch(
   watch(
     canonical,
     (number, previous) => {
+      if (previous !== undefined && number !== previous) preserveRestoredName = false;
       generation++;
       lastMatchedNumber = '';
       pending = null;

@@ -16,8 +16,8 @@ PLANS = {
 
 # 官网公开定价组件将 Pro 100/200/500 分别映射为 prolite/pro/promax；不推算使用倍数。
 PRO_PRICE_PLANS = {100: "pro-5x", 200: "pro-20x", 500: "pro-500"}
-PRO_GROUP = re.compile(r"^\s*(?:Choose Pro plan tier|选择\s*Pro\s*套餐档位|(?:ChatGPT\s*)?Pro(?:\s*plan|\s*套餐)?)\s*$", re.I)
-PRO_USAGE_LABELS = {"pro-5x": r"Standard|标准", "pro-20x": r"More usage|更多使用额度",
+PRO_GROUP = re.compile(r"^\s*(?:Choose Pro plan tier|选择\s*Pro\s*套餐档位|Pro\s*订阅套餐|(?:ChatGPT\s*)?Pro(?:\s*plan|\s*套餐)?)\s*$", re.I)
+PRO_USAGE_LABELS = {"pro-5x": r"Standard|标准", "pro-20x": r"More usage|更多使用额度|更高使用额度",
                     "pro-500": r"Max usage|最高使用额度"}
 
 
@@ -65,10 +65,10 @@ def text_tiers(text):
 def checkout_option_plan(label):
     """仅在已确认的 Pro 档位组内识别官网 Standard/More usage/Max usage 文案。"""
     patterns = {"pro-5x": r"(?:Standard|标准)",
-                "pro-20x": r"(?:More usage|更多使用额度)",
+                "pro-20x": r"(?:More usage|更多使用额度|更高使用额度)",
                 "pro-500": r"(?:Max usage|最高使用额度)"}
     matches = [plan for plan, title in patterns.items()
-               if re.search(rf"(?:^|\n)\s*{title}\s*$", label, re.I)]
+               if re.search(rf"(?:^|\s){title}\s*$", label, re.I | re.M)]
     tiers = text_tiers(label)
     if len(tiers) > 1:
         return None
@@ -76,6 +76,23 @@ def checkout_option_plan(label):
     prices = re.findall(r'^\s*(?:ChatGPT\s+)?Pro\s+(100|200|500)\s*$', label, re.I | re.M)
     matches.extend(PRO_PRICE_PLANS[int(price)] for price in prices)
     return matches[0] if len(set(matches)) == 1 else None
+
+
+def pro_radio_plan(rows):
+    """仅按唯一已选 radio 的使用额度文字识别；原生与 ARIA 状态冲突时不猜。"""
+    selected = []
+    for row in rows:
+        aria, native = row.get('checked'), row.get('native_checked')
+        if aria not in (None, 'true', 'false') or native is not None and type(native) is not bool:
+            return None
+        if native is not None and aria is not None and native != (aria == 'true'):
+            return None
+        checked = native if native is not None else aria == 'true' if aria is not None else None
+        if checked is None or row.get('state') not in (None, 'checked' if checked else 'unchecked'):
+            return None
+        if checked:
+            selected.append(checkout_option_plan(row.get('label', '')))
+    return selected[0] if len(selected) == 1 else None
 
 
 def subscription_transition(current_plan, target_plan):

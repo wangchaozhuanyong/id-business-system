@@ -16,6 +16,7 @@ from unittest.mock import Mock, patch
 
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parents[1]
+RUNTIME = ROOT / '.runtime/first-recharge-release-20261014/historical-consumer'
 
 
 def load(filename):
@@ -162,7 +163,7 @@ class ClosedEntryTests(unittest.TestCase):
                     call()
 
     def test_actual_component_manifest_never_uses_old_workspace_state(self):
-        folder = ROOT / '.runtime/online-component-continuation-20261014/pure-tests'
+        folder = RUNTIME
         folder.mkdir(parents=True, exist_ok=True)
         with tempfile.TemporaryDirectory(dir=folder) as name:
             previous = Path(name)
@@ -173,7 +174,7 @@ class ClosedEntryTests(unittest.TestCase):
                 online._workspace_baseline_kind(SimpleNamespace(require=require), SimpleNamespace(STATE_FILE='absent'), previous)
 
     def test_original_a_and_b_selector_is_unchanged_without_component_publication(self):
-        folder = ROOT / '.runtime/online-component-continuation-20261014/pure-tests'
+        folder = RUNTIME
         folder.mkdir(parents=True, exist_ok=True)
         with tempfile.TemporaryDirectory(dir=folder) as name:
             previous = Path(name)
@@ -263,14 +264,17 @@ class NativeRecordTests(unittest.TestCase):
 class SourceAndDatabasePreparationTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.candidate = archive('HEAD')
+        # This suite verifies the finite historical ONLINE application seal.
+        cls.candidate = archive(c.APPLICATION_SOURCE)
         cls.ordinary = archive(c.AUTHENTICATED_PREDECESSOR['producer']['commit'])
         cls.base = archive('0a03fa28e6b844a18833d5c63f1de700f091fc64')
         cls.fixed = archive(c.ONLINE_SOURCE)
         cls.core = c.load_core()
         cls.projection = cls.core.projection_module()
-        cls.commit = subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=ROOT, text=True).strip()
+        cls.commit = c.APPLICATION_SOURCE
         cls.tree = cls.projection.source_tree(cls.candidate)
+        if cls.tree != c.APPLICATION_TREE:
+            raise AssertionError('historical application tree changed')
 
     def prepare(self, candidate=None, ordinary=None):
         candidate = self.candidate if candidate is None else candidate
@@ -299,7 +303,7 @@ class SourceAndDatabasePreparationTests(unittest.TestCase):
     def test_preparation_matches_original_producer_archive_core_source_output_and_record(self):
         # Run the genuine archived helper against its genuine archived controls.
         # Only the workflow tuple is a synthetic fixture; no network/runtime call.
-        folder = ROOT / '.runtime/online-component-continuation-20261014/pure-tests'
+        folder = RUNTIME
         folder.mkdir(parents=True, exist_ok=True)
         with tempfile.TemporaryDirectory(dir=folder) as name:
             archived_here = Path(name) / 'scripts/production-release'
@@ -351,7 +355,7 @@ class SourceAndDatabasePreparationTests(unittest.TestCase):
         return files, schema, {'rows': rows, **copy.deepcopy(schema)}
 
     def source_directory(self):
-        folder = ROOT / '.runtime/online-component-continuation-20261014/pure-tests'
+        folder = RUNTIME
         folder.mkdir(parents=True, exist_ok=True)
         temporary = tempfile.TemporaryDirectory(dir=folder)
         self.addCleanup(temporary.cleanup)

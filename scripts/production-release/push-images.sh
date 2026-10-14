@@ -1,9 +1,18 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/validate-release-selection.sh"
-[[ "${RELEASE_OPERATION:-release}" != verify_recharge_flow && "${RELEASE_OPERATION:-release}" != verify_unpublished_components && "${RELEASE_OPERATION:-release}" != verify_api_admin_migration && "${RELEASE_OPERATION:-release}" != verify_online_recharge && "${RELEASE_OPERATION:-release}" != verify_api_workspace ]] || exit 1
+[[ "${RELEASE_OPERATION:-release}" != verify_first_recharge && "${RELEASE_OPERATION:-release}" != verify_recharge_flow && "${RELEASE_OPERATION:-release}" != verify_unpublished_components && "${RELEASE_OPERATION:-release}" != verify_api_admin_migration && "${RELEASE_OPERATION:-release}" != verify_online_recharge && "${RELEASE_OPERATION:-release}" != verify_api_workspace ]] || exit 1
 
-if [[ "${RELEASE_OPERATION:-release}" == release_recharge_flow ]]; then
+if [[ "${RELEASE_OPERATION:-release}" == release_first_recharge ]]; then
+  services=(api admin migrate)
+  first_recharge_projection="$(read_first_recharge_projection)"
+  for first_recharge_service in "${services[@]}"; do
+    first_recharge_reference="${RELEASE_REPOSITORY}:${RELEASE_COMMIT}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${first_recharge_service}"
+    test "$(docker image inspect "$first_recharge_reference" --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}')" = "$RELEASE_COMMIT"
+    test "$(docker image inspect "$first_recharge_reference" --format '{{ index .Config.Labels "id-business-v2.source-tree" }}')" = "$SOURCE_TREE"
+    test "$(docker image inspect "$first_recharge_reference" --format '{{ index .Config.Labels "id-business-v2.first-recharge-successor-projection-sha256" }}')" = "$first_recharge_projection"
+  done
+elif [[ "${RELEASE_OPERATION:-release}" == release_recharge_flow ]]; then
   services=(api admin migrate)
   recharge_flow_projection="$(read_recharge_flow_projection)"
   for recharge_flow_service in "${services[@]}"; do

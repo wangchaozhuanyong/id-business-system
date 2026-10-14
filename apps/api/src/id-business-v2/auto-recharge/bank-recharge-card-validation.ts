@@ -65,7 +65,7 @@ export function parseManagedCard(value: unknown, currency?: string): ManagedCard
     throw new BadRequestException('不能把安全码填入备注；安全码仅在单笔充值时临时输入');
   }
   return {
-    billingName: bankRechargeText(input.billingName, '持卡人姓名', 120, false),
+    billingName: bankRechargeText(input.billingName, '账单姓名', 120, false),
     number,
     last4: number.slice(-4),
     expiry: cardExpiry(input.expiry),

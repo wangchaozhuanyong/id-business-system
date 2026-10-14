@@ -58,7 +58,7 @@ def proof(operation='release_online_recharge'):
     images = {role: {'reference': storage.REPOSITORY + ':' + value['batch'] + '-' + role,
                      'imageId': 'sha256:' + f'{number:064x}', 'fileCount': 1, 'sha256': 'f' * 64}
               for number, role in enumerate(sorted(roles), 1)}
-    if operation in ('release_admin', 'release_unpublished_components', 'release_recharge_flow'):
+    if operation in ('release_admin', 'release_unpublished_components', 'release_recharge_flow', 'release_first_recharge'):
         result.update(runId='900', runAttempt='2', qualityRunId='800')
     if operation == 'release_admin':
         row = images['admin']

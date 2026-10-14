@@ -17,6 +17,9 @@ import {
   onlinePrepareFixGuardCommands,
   onlinePrepareFixGuardBinding,
   onlinePrepareFixGuardPaths,
+  firstRechargeReleaseControlPaths,
+  firstRechargeBillingNamePaths,
+  readFirstRechargeBillingNameSnapshot,
   onlinePreflightReceiptFixGuardCommands,
   onlinePreflightReceiptFixGuardBinding,
   onlinePreflightReceiptFixGuardPaths
@@ -223,16 +226,28 @@ function recordGuardCommands(
     receiptResume = false,
     repository = '',
     event = '',
-    base = 'a'.repeat(40)
+    base = 'a'.repeat(40),
+    firstRechargeSnapshot,
+    transportProbe = false,
+    captureError = false,
+    failCommand = ''
   } = {}
 ) {
   // Run the real dispatcher with process execution replaced before its named import resolves.
   // No Git command, nested test, database command or business operation is executed.
   const script = `
     import childProcess from 'node:child_process';
+    import fs from 'node:fs';
     import { registerHooks, syncBuiltinESMExports } from 'node:module';
     const paths = JSON.parse(process.env.GUARD_TEST_PATHS);
+    const input = fs.readFileSync(0, 'utf8');
+    globalThis.guardTestFirstRechargeSnapshot = JSON.parse(input);
     const calls = [];
+    if (process.env.GUARD_TEST_TRANSPORT_PROBE === 'true') {
+      calls.push(['snapshot-transport', Buffer.byteLength(input),
+        Object.hasOwn(process.env, 'GUARD_TEST_FIRST_RECHARGE_SNAPSHOT'),
+        process.argv.some(arg => input.length > 0 && arg.includes(input))]);
+    }
     globalThis.guardTestCalls = calls;
     const scopeUrl = new URL('./scripts/ci-recharge-scope.mjs', import.meta.url).href;
     registerHooks({resolve(specifier, context, nextResolve) {
@@ -247,6 +262,8 @@ function recordGuardCommands(
           'export function canResumeOnlinePrepareFixGuard(base) {' +
           'globalThis.guardTestCalls.push(["prepare-resume-helper", base]);' +
           'return process.env.GUARD_TEST_PREPARE_RESUME === "true"; }' +
+          'export function readFirstRechargeBillingNameSnapshot() {' +
+          'return globalThis.guardTestFirstRechargeSnapshot; }' +
           'export function canResumeOnlinePreflightReceiptFixGuard(base) {' +
           'globalThis.guardTestCalls.push(["receipt-resume-helper", base]);' +
           'return process.env.GUARD_TEST_RECEIPT_RESUME === "true"; }';
@@ -257,6 +274,9 @@ function recordGuardCommands(
     childProcess.execFileSync = (file, args) => {
       if (file === 'git') return paths.join('\\n');
       calls.push([file, ...args]);
+      if ([file, ...args].join(' ') === process.env.GUARD_TEST_FAIL_COMMAND) {
+        throw new Error('SYNTHETIC_COMMAND_FAILED');
+      }
       return '';
     };
     syncBuiltinESMExports();
@@ -267,18 +287,23 @@ function recordGuardCommands(
     };
     try { await import('./scripts/ci-recharge-check.mjs'); }
     catch (error) {
-      if (error.message !== 'SYNTHETIC_PREPARE_EXIT' ||
+      if (process.env.GUARD_TEST_CAPTURE_ERROR === 'true') {
+        calls.push(['caught-error', error.message]);
+      } else if (error.message !== 'SYNTHETIC_PREPARE_EXIT' ||
           (process.env.GUARD_TEST_PREPARE_RESUME !== 'true' && process.env.GUARD_TEST_RECEIPT_RESUME !== 'true') ||
           calls.at(-1)?.[1] !== 0) throw error;
     }
     process.stdout.write(JSON.stringify(calls));
   `;
+  const environment = { ...process.env };
+  delete environment.GUARD_TEST_FIRST_RECHARGE_SNAPSHOT;
   return JSON.parse(
     execFileSync(process.execPath, ['--input-type=module', '-e', script], {
       cwd: root,
       encoding: 'utf8',
+      input: JSON.stringify(firstRechargeSnapshot ?? null),
       env: {
-        ...process.env,
+        ...environment,
         CHECK_MODE: mode,
         GITHUB_ACTIONS: cloud ? 'true' : '',
         GITHUB_REPOSITORY: repository,
@@ -289,11 +314,194 @@ function recordGuardCommands(
         GUARD_TEST_RECEIPT_RESUME: receiptResume ? 'true' : '',
         GUARD_TEST_BASE: base,
         GUARD_TEST_PART: part,
-        GUARD_TEST_PATHS: JSON.stringify(paths)
+        GUARD_TEST_PATHS: JSON.stringify(paths),
+        GUARD_TEST_TRANSPORT_PROBE: String(transportProbe),
+        GUARD_TEST_CAPTURE_ERROR: String(captureError),
+        GUARD_TEST_FAIL_COMMAND: failCommand
       }
     })
   );
 }
+
+test('real first-subscription snapshot exceeds Linux argument limit and travels only through stdin', () => {
+  const base = 'b9f2e2b75a753b86a5057dd798d651c57496554e';
+  const paths = [
+    ...firstRechargeBillingNamePaths,
+    'apps/api/src/id-business-v2/auto-recharge/worker/pay.py'
+  ];
+  const firstRechargeSnapshot = readFirstRechargeBillingNameSnapshot(base, paths);
+  const bytes = Buffer.byteLength(JSON.stringify(firstRechargeSnapshot));
+  assert.ok(bytes > 128 * 1024, 'Use the real large source snapshot, not padding or a tiny mock');
+  const calls = recordGuardCommands('recharge', paths, 'connector', {
+    base,
+    firstRechargeSnapshot,
+    transportProbe: true
+  });
+  assert.deepEqual(calls[0], ['snapshot-transport', bytes, false, false]);
+  assert.equal(
+    calls.filter((call) => call.join(' ') === 'npm run build --workspace @apple-business/shared')
+      .length,
+    1
+  );
+  assert.equal(
+    calls.filter((call) => call[0] === 'python3' && call.includes('test_native_pro_checkout'))
+      .length,
+    1
+  );
+});
+
+test('native checkout connector builds real shared exports before browser installation and Python contracts', () => {
+  const worker = 'apps/api/src/id-business-v2/auto-recharge/worker';
+  for (const file of ['pay.py', 'test_native_pro_checkout.py']) {
+    const calls = recordGuardCommands('recharge', [`${worker}/${file}`], 'connector');
+    const builds = calls
+      .map((call, index) => ({ call, index }))
+      .filter(({ call }) => call.join(' ') === 'npm run build --workspace @apple-business/shared');
+    assert.equal(builds.length, 1);
+    const browser = calls.findIndex(
+      (call) => call.join(' ') === 'python3 -m playwright install chromium'
+    );
+    const contracts = calls.findIndex((call) => call[0] === 'python3' && call.includes('unittest'));
+    assert.ok(builds[0].index < browser && browser < contracts);
+    assert.ok(calls[contracts].includes('test_native_pro_checkout'));
+  }
+  const original = recordGuardCommands('recharge', [`${worker}/server.py`], 'connector');
+  assert.ok(
+    original.every((call) => call.join(' ') !== 'npm run build --workspace @apple-business/shared')
+  );
+  assert.ok(original.every((call) => !call.includes('test_native_pro_checkout')));
+});
+
+test('failed shared preparation stops connector before any browser install or Python contract', () => {
+  const calls = recordGuardCommands(
+    'recharge',
+    ['apps/api/src/id-business-v2/auto-recharge/worker/test_native_pro_checkout.py'],
+    'connector',
+    { captureError: true, failCommand: 'npm run build --workspace @apple-business/shared' }
+  );
+  assert.deepEqual(calls, [
+    ['npm', 'run', 'build', '--workspace', '@apple-business/shared'],
+    ['caught-error', 'SYNTHETIC_COMMAND_FAILED']
+  ]);
+});
+
+test('connector matrix installs locked Node dependencies before invoking its actual check', () => {
+  const workflow = readFileSync(
+    new URL('../.github/workflows/quality.yml', import.meta.url),
+    'utf8'
+  );
+  const step = workflow.match(
+    /- name: Install package dependencies\n\s+if: ([^\n]+)\n\s+run: ([^\n]+)/
+  );
+  assert.ok(step);
+  assert.equal(
+    step[1],
+    '${{ !contains(fromJSON(needs.change-scope.outputs.reused_parts), matrix.part) && contains(fromJSON(\'["guards","admin","api","migration","connector"]\'), matrix.part) }}'
+  );
+  assert.equal(step[2], 'npm ci --no-audit');
+  const parts = JSON.parse(step[1].match(/contains\(fromJSON\('(\[[^']+\])'\), matrix.part\)/)[1]);
+  for (const part of ['guards', 'admin', 'api', 'migration', 'connector'])
+    assert.ok(parts.includes(part));
+  assert.ok(!parts.includes('security'));
+  assert.ok(
+    workflow.indexOf(step[0]) < workflow.indexOf('- name: Install existing connector dependencies')
+  );
+  assert.ok(workflow.indexOf(step[0]) < workflow.indexOf('- name: Check affected recharge part'));
+});
+
+test('first-subscription producer tests dispatch once and only from the exact finite controls', () => {
+  for (const part of ['guards', 'release-controls']) {
+    for (const changed of firstRechargeReleaseControlPaths) {
+      const calls = recordGuardCommands('ci-only', [changed], part);
+      for (const name of ['successor', 'successor-projection', 'successor-readonly'])
+        assert.equal(
+          calls.filter(
+            (call) =>
+              call.join(' ') ===
+              `python3 -B scripts/production-release/first-recharge-${name}.test.py`
+          ).length,
+          1
+        );
+      assert.equal(
+        calls.filter(
+          (call) =>
+            call.join(' ') ===
+            'node --test scripts/production-release/first-recharge-entry.test.mjs'
+        ).length,
+        1
+      );
+      assert.ok(
+        calls.every(
+          (call) =>
+            !call.includes('docker') &&
+            !call.some((arg) => arg.includes('acceptance-v2') || arg.startsWith('--workspace'))
+        )
+      );
+    }
+    const unknown = recordGuardCommands(
+      'ci-only',
+      ['scripts/production-release/first-recharge-unknown.py'],
+      part
+    );
+    assert.ok(unknown.every((call) => !call.some((arg) => arg.includes('first-recharge-'))));
+  }
+});
+
+test('an invalid base stops first-subscription controls before any nested command', () => {
+  for (const part of ['guards', 'release-controls']) {
+    const calls = recordGuardCommands('ci-only', [firstRechargeReleaseControlPaths[0]], part, {
+      base: 'bad-base',
+      captureError: true
+    });
+    assert.deepEqual(calls, [['caught-error', 'Missing diff base']]);
+  }
+});
+
+test('first-subscription exact label proof gates execution and preserves the API, native checkout and UI checks', () => {
+  const paths = [
+    ...firstRechargeBillingNamePaths,
+    'apps/admin/src/v2/features/auto-recharge/V2RechargeBillingAddressFields.vue',
+    'apps/api/src/id-business-v2/auto-recharge/recharge-local-validation.ts',
+    'apps/api/src/id-business-v2/auto-recharge/worker/pay.py'
+  ];
+  const base = 'b9f2e2b75a753b86a5057dd798d651c57496554e';
+  const firstRechargeSnapshot = readFirstRechargeBillingNameSnapshot(base, paths);
+  const options = { base, firstRechargeSnapshot };
+  const guards = recordGuardCommands('recharge', paths, 'guards', options);
+  for (const gate of [
+    'check:admin-ui',
+    'check:v2-ui-language',
+    'check:v2-color-contrast',
+    'check:v2-table-standard',
+    'check:v2-loading-standard',
+    'check:v2-module-architecture',
+    'check:v2-isolation',
+    'check:v2-decimal-standard',
+    ...gates
+  ])
+    assert.equal(guards.filter((call) => call.join(' ') === `npm run ${gate}`).length, 1);
+  const api = recordGuardCommands('recharge', paths, 'api', options);
+  assert.ok(api.some((call) => call.includes('src/id-business-v2/auto-recharge')));
+  assert.ok(api.some((call) => call.join(' ') === 'npm run build --workspace @apple-business/api'));
+  assert.ok(
+    api.every(
+      (call) =>
+        !call.includes('docker') &&
+        !call.some((arg) => arg.includes('acceptance-v2') || arg.includes('migrate'))
+    )
+  );
+  const connector = recordGuardCommands('recharge', paths, 'connector', options);
+  const suites = connector.find((call) => call[0] === 'python3' && call.includes('unittest'));
+  assert.equal(suites.filter((arg) => arg === 'test_native_pro_checkout').length, 1);
+  assert.ok(suites.includes('test_payment'));
+  assert.ok(suites.includes('test_subscription_cycle'));
+  const invalid = structuredClone(firstRechargeSnapshot);
+  invalid[firstRechargeBillingNamePaths[0]].after += '\n';
+  assert.throws(
+    () => recordGuardCommands('recharge', paths, 'api', { base, firstRechargeSnapshot: invalid }),
+    /Missing exact first-recharge billing-name source proof/
+  );
+});
 
 test('finite prepare-fix guard keeps the first Node controls and runs every fresh dependency exactly once without business or database parts', () => {
   assert.deepEqual(
@@ -853,7 +1061,9 @@ test('connection migration and registration mirror use only their disposable Doc
     'utf8'
   );
   assert.ok(
-    workflow.includes(`contains(fromJSON('["guards","admin","api","migration"]'), matrix.part)`)
+    workflow.includes(
+      `contains(fromJSON('["guards","admin","api","migration","connector"]'), matrix.part)`
+    )
   );
 });
 

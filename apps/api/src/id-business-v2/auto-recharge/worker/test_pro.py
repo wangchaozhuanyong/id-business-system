@@ -330,6 +330,11 @@ class ProBrowserTests(unittest.IsolatedAsyncioTestCase):
         self.target = parse_browser_credential(fixture())
         self.plan = "pro-5x"
         self.creates, self.payments = [], 0
+        self.create_observed = asyncio.Event()
+        self.create_clicks = 0
+        def create_clicked():
+            self.create_clicks += 1
+        await self.context.expose_function('recordCreateClick', create_clicked)
         self.wrong_request = False
         self.generic_quote = False
         self.omit_plus = False
@@ -365,6 +370,7 @@ class ProBrowserTests(unittest.IsolatedAsyncioTestCase):
             await route.fulfill(body=f'ip={ip}\nloc=US\n')
         elif path == CHECKOUT_PATH:
             self.creates.append(request.post_data_json)
+            self.create_observed.set()
             self.assertTrue(list(self.root.glob("*.json")))
             await route.fulfill(json={"checkout_session_id": "cs_pro_synthetic", "processor_entity": "openai_ie", "billing_details": {"currency": "MYR"}})
         elif path == "/v1/payment_methods":
@@ -383,8 +389,9 @@ class ProBrowserTests(unittest.IsolatedAsyncioTestCase):
         elif path.startswith("/checkout/"):
             title = "Pro 套餐"
             radios = "" if self.generic_quote else (
+                '<div role="radiogroup" aria-label="Pro 套餐">'
                 '<button role="radio" aria-label="相比 Plus 多 5 倍使用额度" aria-checked="' + str(self.plan == "pro-5x").lower() + '">5 倍</button>'
-                '<button role="radio" aria-label="相比 Plus 多 20 倍使用额度" aria-checked="' + str(self.plan == "pro-20x").lower() + '">20 倍</button>')
+                '<button role="radio" aria-label="相比 Plus 多 20 倍使用额度" aria-checked="' + str(self.plan == "pro-20x").lower() + '">20 倍</button></div>')
             if self.plan == "pro-500" and not self.generic_quote:
                 labels = (("pro-5x", "标准"), ("pro-20x", "更多使用额度"), ("pro-500", "最高使用额度"))
                 radios = '<div role="radiogroup" aria-label="Pro 套餐">' + ''.join(
@@ -415,7 +422,7 @@ class ProBrowserTests(unittest.IsolatedAsyncioTestCase):
                 <p id="usage">5x Plus</p><button onclick="create()">升级至 Pro</button></section>
                 <script>let tier=5;function choose(n){tier=n;document.querySelector('#five').setAttribute('aria-checked',n===5);
                     document.querySelector('#twenty').setAttribute('aria-checked',n===20);document.querySelector('#usage').innerText=n+'x Plus';}
-                async function create(){const r=await fetch('CHECKOUT',{method:'POST',headers:HEADERS,
+                async function create(){await recordCreateClick();const r=await fetch('CHECKOUT',{method:'POST',headers:HEADERS,
                     body:JSON.stringify({plan_name:WRONG?'chatgptpro':tier===500?'chatgptpromax':tier===5?'chatgptprolite':'chatgptpro',billing_details:{country:'MY',currency:'MYR'}})});
                     if(r.ok)location.href='/checkout/openai_ie/'+(await r.json()).checkout_session_id;}
                 </script></body></html>'''.replace("CHECKOUT", CHECKOUT_PATH).replace("HEADERS", headers).replace("WRONG", str(self.wrong_request).lower())
@@ -456,6 +463,11 @@ class ProBrowserTests(unittest.IsolatedAsyncioTestCase):
                     '<div id="pro-details" data-testid="pro-pricing-modal-column-top-half"><h3>Pro</h3><div role="radiogroup" aria-label="Pro 用量">')
                 html = html.replace('<button onclick="create()">升级至 Pro</button></section>',
                     '<button onclick="create()">升级订阅</button></div></section>')
+            if not self.numeric_controls and not self.usage_controls:
+                # 首次订阅控件所属的 Pro 组必须明确；旧价格/倍数文案仍保持原样。
+                html = html.replace('<button id="five"',
+                    '<div role="radiogroup" aria-label="选择 Pro 套餐档位"><button id="five"')
+                html = html.replace('<p id="usage">', '</div><p id="usage">')
             await route.fulfill(content_type="text/html; charset=utf-8", body=html)
         else:
             await route.abort()
@@ -463,6 +475,31 @@ class ProBrowserTests(unittest.IsolatedAsyncioTestCase):
     async def create(self):
         with AttemptLedger(self.root, self.target.account_id, target_plan=self.plan) as ledger, contextlib.redirect_stderr(io.StringIO()):
             return await workflow(self.context, self.target, ledger=ledger, target_plan=self.plan, quote_timeout=1)
+
+    async def assert_wrong_plan_observation_stops_once(self, result):
+        self.assertEqual(result['reason'], 'checkout_plan_mismatch', result)
+        self.assertEqual(result['checkout_requests_sent'], 1)
+        self.assertEqual(self.create_clicks, 1)
+        await asyncio.wait_for(self.create_observed.wait(), timeout=1)
+        self.assertEqual(len(self.creates), 1)
+        self.assertEqual(self.creates[0]['plan_name'], 'chatgptpro')
+        self.assertEqual(self.payments, 0)
+        self.assertNotIn('checkout_identifier', result)
+        self.assertNotEqual(result.get('checkout_plan'), self.plan)
+        self.assertNotIn('checkout_replacement_performed', result)
+        marker = next(self.root.glob('*.json'))
+        before = marker.read_bytes()
+        record = json.loads(before)
+        self.assertEqual(record['plan'], plan_spec(self.plan)['official_name'])
+        self.assertEqual(record['reason'], 'checkout_plan_mismatch')
+        self.assertFalse(record.get('checkout_identifier'))
+        with self.assertRaises(Stop) as blocked:
+            with AttemptLedger(self.root, self.target.account_id, target_plan=self.plan):
+                pass
+        self.assertEqual(blocked.exception.report['reason'], 'previous_checkout_attempt_exists')
+        self.assertEqual(marker.read_bytes(), before)
+        self.assertFalse((self.root / 'history').exists())
+        self.assertEqual(list((self.root / 'payments').glob('*.json')), [])
 
     async def test_pro5_official_selection_request_and_quote(self):
         result = await self.create()
@@ -654,20 +691,16 @@ class ProBrowserTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.creates[0]['plan_name'], 'chatgptpromax')
         self.assertEqual(self.payments, 0)
 
-    async def test_current_pro_card_wrong_request_is_blocked_before_sending(self):
+    async def test_current_pro_card_wrong_request_is_observed_once_then_stops(self):
         self.plan = 'pro-500'
         self.price_controls = self.numeric_controls = self.current_pro_card = self.wrong_request = True
         result = await self.create()
-        self.assertEqual(result['reason'], 'checkout_plan_mismatch', result)
-        self.assertEqual(self.creates, [])
-        self.assertEqual(self.payments, 0)
+        await self.assert_wrong_plan_observation_stops_once(result)
 
-    async def test_pro500_wrong_request_is_blocked_before_sending(self):
+    async def test_pro500_wrong_request_is_observed_once_then_stops(self):
         self.plan, self.price_controls, self.wrong_request = "pro-500", True, True
         result = await self.create()
-        self.assertEqual(result["reason"], "checkout_plan_mismatch", result)
-        self.assertFalse(self.creates)
-        self.assertEqual(self.payments, 0)
+        await self.assert_wrong_plan_observation_stops_once(result)
 
     async def test_pro500_payment_and_recheck_never_charge_twice(self):
         self.plan, self.price_controls, self.numeric_controls = "pro-500", True, True
@@ -759,18 +792,24 @@ class ProBrowserTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(self.creates)
         self.assertEqual(self.payments, 0)
 
-    async def test_wrong_tier_request_never_leaves_browser(self):
+    async def test_wrong_tier_request_is_observed_once_without_payment_or_retry(self):
         self.wrong_request = True
         result = await self.create()
-        self.assertEqual(result["reason"], "checkout_plan_mismatch", result)
-        self.assertEqual(self.creates, [])
+        await self.assert_wrong_plan_observation_stops_once(result)
 
-    async def test_quote_without_multiplier_is_not_accepted_for_payment(self):
+    async def test_checkout_without_scoped_tier_cannot_prepare_payment(self):
+        from browser_session import SessionBudget
         self.generic_quote = True
-        result = await self.create()
-        self.assertEqual(result["reason"], "checkout_tier_not_verified", result)
+        with patch('browser_checkout.SessionBudget', side_effect=lambda seconds=90, **options:
+                   SessionBudget(min(seconds, 1), **options)):
+            result = await self.create()
+        self.assertEqual(result['reason'], 'session_load_timeout', result)
+        self.assertEqual(result['stage'], 'plan_selection')
+        self.assertFalse(result['checkout_tier_verified'])
         self.assertEqual(len(self.creates), 1)
+        self.assertEqual(self.create_clicks, 1)
         self.assertEqual(self.payments, 0)
+        self.assertEqual(list((self.root / 'payments').glob('*.json')), [])
 
     async def pay_original(self):
         await self.create()
@@ -1060,6 +1099,131 @@ class ProSemanticParentMockTests(unittest.IsolatedAsyncioTestCase):
 
 
 
+class FirstSubscriptionMenuTests(unittest.IsolatedAsyncioTestCase):
+    """独立可访问控件夹具；打开菜单与个人切换不等于点击付款。"""
+    def setUp(self):
+        self.state = 'home'
+        self.entry_labels = ('升级订阅', '升级订阅')
+        self.final_labels = ('升级至 Go', '升级至 Plus', '升级至 Pro')
+        self.tier_count = 1
+        self.selected_tier = None
+        self.entry_clicks = 0
+        self.personal_clicks = 0
+        self.final_clicks = 0
+        self.page = MagicMock(url='https://chatgpt.com/')
+        self.scope = self.collection(1)
+        self.page.title = AsyncMock(return_value='ChatGPT')
+        self.page.get_by_role.side_effect = lambda _role, **_kwargs: self.collection(0)
+        async def goto(*_args, **_kwargs):
+            self.state = 'business'
+            return MagicMock(status=200)
+        self.page.goto = AsyncMock(side_effect=goto)
+        self.enterContext(patch('plan_selection.plan_scope', AsyncMock(return_value=self.scope)))
+        self.enterContext(patch('plan_selection.pro_cards', side_effect=lambda _scope: self.collection(0)))
+        self.enterContext(patch('plan_selection.personal_control', side_effect=self.personal))
+        self.enterContext(patch('plan_selection.buttons', side_effect=self.buttons))
+        self.enterContext(patch('plan_selection.pro_control', side_effect=self.tier))
+        self.enterContext(patch('plan_selection.expect', side_effect=self.expect))
+        self.selection = Selection(self.page, MagicMock())
+        self.enterContext(patch.object(self.selection, 'timeout', return_value=20))
+
+    def collection(self, count, action=None):
+        locator = ProSemanticParentMockTests.collection(count)
+        locator.fixture_count = count
+        locator.or_.side_effect = lambda other: self.collection(count + other.fixture_count)
+        if action:
+            locator.click.side_effect = action
+        if count > 1:
+            locator.first = self.collection(1, action)
+        return locator
+
+    def buttons(self, _scope, pattern):
+        labels = self.entry_labels if self.state == 'home' else self.final_labels if self.state == 'personal' else ()
+        matches = [label for label in labels if pattern.search(label)]
+        async def click(**_kwargs):
+            if self.state == 'home':
+                self.entry_clicks += 1
+                self.state = 'business'
+            else:
+                self.final_clicks += 1
+        return self.collection(len(matches), click)
+
+    def personal(self, _scope):
+        async def click(**_kwargs):
+            self.personal_clicks += 1
+            self.state = 'personal'
+        locator = self.collection(0 if self.state == 'home' else 1, click)
+        locator.get_attribute.side_effect = lambda name: ('radio' if name == 'role' else
+            ('true' if self.state == 'personal' else 'false') if name == 'aria-checked' else None)
+        return locator
+
+    def tier(self, _scope, target_plan):
+        async def click(**_kwargs):
+            self.selected_tier = target_plan
+        locator = self.collection(self.tier_count if self.state == 'personal' else 0, click)
+        locator.get_attribute.side_effect = lambda name: (
+            'true' if self.selected_tier == target_plan else 'false') if name == 'aria-checked' else None
+        return locator
+
+    @staticmethod
+    def expect(locator):
+        assertion = ProSemanticParentMockTests.expect(locator)
+        async def attribute(name, value, **_kwargs):
+            if await locator.get_attribute(name) != value:
+                raise AssertionError('synthetic selection mismatch')
+        assertion.to_have_attribute = attribute
+        return assertion
+
+    async def test_two_exact_subscription_entries_open_personal_pro_then_select_exact_tier(self):
+        button = await self.selection.run('pro-500')
+        self.assertEqual(await button.count(), 1)
+        self.assertEqual(self.entry_clicks, 1)
+        self.assertEqual(self.personal_clicks, 1)
+        self.assertEqual(self.selected_tier, 'pro-500')
+        self.assertEqual(self.final_clicks, 0)
+        self.page.goto.assert_not_awaited()
+
+    async def test_first_pricing_fallback_switches_business_before_waiting_for_pro(self):
+        self.selection.first_subscription = True
+        scope = await self.selection.open_pricing_card('pro-500')
+        self.assertIs(scope, self.scope)
+        self.assertEqual(self.personal_clicks, 1)
+        self.assertEqual(self.final_clicks, 0)
+        self.page.goto.assert_awaited_once()
+
+    async def test_unknown_similar_entry_is_not_clicked(self):
+        self.entry_labels = ('立即升级订阅', '确认升级订阅并付款')
+        button = await self.selection.run('pro-500')
+        self.assertEqual(await button.count(), 1)
+        self.assertEqual(self.entry_clicks, 0)
+        self.page.goto.assert_awaited_once()
+        self.assertEqual(self.final_clicks, 0)
+
+    async def test_duplicate_final_pro_actions_are_blocked_after_safe_menu_open(self):
+        self.final_labels = ('升级至 Go', '升级至 Plus', '升级至 Pro', '升级至 Pro')
+        with self.assertRaises(Stop) as stopped:
+            await self.selection.run('pro-500')
+        self.assertEqual(stopped.exception.report['reason'], 'official_plan_option_ambiguous')
+        self.assertEqual(self.entry_clicks, 1)
+        self.assertEqual(self.final_clicks, 0)
+
+    async def test_missing_exact_pro_tier_is_blocked_without_final_action(self):
+        self.tier_count = 0
+        with self.assertRaises(Stop) as stopped:
+            await self.selection.run('pro-500')
+        self.assertEqual(stopped.exception.report['reason'], 'official_plan_tier_not_found')
+        self.assertIsNone(self.selected_tier)
+        self.assertEqual(self.final_clicks, 0)
+
+    async def test_existing_upgrade_keeps_original_entry_matching(self):
+        with self.assertRaises(Stop) as stopped:
+            await self.selection.run('pro-500', require_upgrade=True)
+        self.assertEqual(stopped.exception.report['reason'], 'official_pricing_plan_entry_not_found')
+        self.assertEqual(self.entry_clicks, 0)
+        self.assertEqual(self.personal_clicks, 0)
+        self.assertEqual(self.final_clicks, 0)
+
+
 class ProCurrentMenuTests(unittest.IsolatedAsyncioTestCase):
     """当前卡片/用量控件夹具；全部网络请求终止于本机。"""
     async def asyncSetUp(self):
@@ -1284,11 +1448,11 @@ class ProCurrentMenuTests(unittest.IsolatedAsyncioTestCase):
             navigation.onclick=()=>{window.navigationClicks=(window.navigationClicks||0)+1;
               document.querySelector('#pro-details').hidden=false;navigation.remove();
               if(options.revealGroup){setTimeout(()=>document.querySelector('#usage-group').hidden=false,120);}
-              if(options.secondDialog){setTimeout(()=>{
+              if(options.secondDialog){
                 const other=document.createElement('section');other.setAttribute('role','dialog');
                 other.setAttribute('aria-label','Synthetic other task');
                 const action=document.createElement('button');action.textContent='Synthetic action';
-                other.append(action);document.body.append(other);},40);}
+                other.append(action);document.body.append(other);}
             };
             document.querySelector('section').append(navigation);
         }''', {'revealGroup': reveal_group, 'secondDialog': second_dialog})
@@ -1635,13 +1799,14 @@ class ProCurrentMenuTests(unittest.IsolatedAsyncioTestCase):
             release.set()
             await self.page.wait_for_load_state('domcontentloaded',timeout=3000)
 
-    async def test_pricing_pending_defer_without_pro_controls_stops_without_any_cta(self):
+    async def test_personal_pricing_pending_defer_without_pro_controls_stops_without_any_cta(self):
         paths,release,requested=await self.pricing_document_fixture(controls=False,pending_script=True)
         try:
             with patch('plan_selection.STEP_SECONDS',.3),patch('plan_selection.SELECTION_SECONDS',2),self.assertRaises(Stop) as stopped:
                 await select_plan(self.page,'pro-500',lambda *_args,**_kwargs:None)
-            self.assertEqual(stopped.exception.report['reason'],'official_pricing_plan_entry_not_found')
-            self.assertEqual(stopped.exception.report['diagnostics']['step'],'pricing_page')
+            self.assertEqual(stopped.exception.report['reason'],'official_plan_selection_timeout')
+            self.assertEqual(stopped.exception.report['diagnostics']['step'],'personal_plans')
+            self.assertEqual(await self.page.get_by_role('radio',name='个人',exact=True).get_attribute('aria-checked'),'true')
             self.assertTrue(requested.is_set())
             self.assertEqual(paths,['/pricing','nonessential-pricing.js'])
             self.assertFalse(await self.page.evaluate('window.domContentLoadedObserved'))

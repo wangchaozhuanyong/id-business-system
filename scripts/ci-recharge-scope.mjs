@@ -5,6 +5,88 @@ import { pathToFileURL } from 'node:url';
 import { matchesSourceEvidence } from './ci-recharge-evidence.mjs';
 
 export const parts = ['guards', 'admin', 'api', 'connector', 'migration', 'security'];
+export const firstRechargeReleaseControlPaths = Object.freeze([
+  'scripts/production-release/first-recharge-successor.py',
+  'scripts/production-release/first-recharge-successor.test.py',
+  'scripts/production-release/first-recharge-successor-projection.py',
+  'scripts/production-release/first-recharge-successor-projection.test.py',
+  'scripts/production-release/first-recharge-successor-readonly.py',
+  'scripts/production-release/first-recharge-successor-readonly.test.py',
+  'scripts/production-release/first-recharge-successor-contract.json',
+  'scripts/production-release/first-recharge-entry.test.mjs'
+]);
+export const firstRechargeBillingNamePaths = Object.freeze([
+  'apps/admin/src/v2/features/tableSchemas.ts',
+  'scripts/acceptance-v2-recharge-names-ui.mjs'
+]);
+const firstRechargeBillingNameHashes = [
+  [
+    '2ff5741def9d44a3de1ce4cd4cac2f4c15a5b1f7a6db0b6207fea6009540c694',
+    'f877039c789d1e7e31d5f30c973257338568915ee7bc2e47811f397364d41cc2'
+  ],
+  [
+    '126054e19f4e94e747789b2a7251b3a6b9227602ba3b79cb875ec75e505e307f',
+    'f1d6c7603a57323271e07343f95301c926c3067bda7a7687d83c7dd42e0a1d74'
+  ]
+];
+
+export function hasFirstRechargeBillingNameProof(paths, snapshot) {
+  const digest = (source) => createHash('sha256').update(source).digest('hex');
+  const changed = firstRechargeBillingNamePaths.filter((path) => paths.includes(path));
+  return (
+    changed.length > 0 &&
+    changed.every((path) => {
+      const source = snapshot?.[path];
+      const index = firstRechargeBillingNamePaths.indexOf(path);
+      if (
+        typeof source?.before !== 'string' ||
+        typeof source?.after !== 'string' ||
+        source.beforeMode !== '100644' ||
+        source.afterMode !== '100644' ||
+        digest(source.before) !== firstRechargeBillingNameHashes[index][0] ||
+        digest(source.after) !== firstRechargeBillingNameHashes[index][1]
+      )
+        return false;
+      const old =
+        index === 0
+          ? "{ key: 'billingName', label: '持卡人姓名', kind: 'text', widthPreset: 'wide' }"
+          : "getByLabel('持卡人姓名', { exact: true })";
+      return (
+        source.before.split(old).length === (index === 0 ? 2 : 3) &&
+        source.after === source.before.replaceAll(old, old.replace('持卡人姓名', '账单姓名'))
+      );
+    })
+  );
+}
+
+export function readFirstRechargeBillingNameSnapshot(base, paths) {
+  if (!/^[a-f0-9]{40}$/.test(base)) return undefined;
+  const changed = firstRechargeBillingNamePaths.filter((path) => paths.includes(path));
+  if (!changed.length) return undefined;
+  try {
+    return Object.fromEntries(
+      changed.map((path) => {
+        const read = (revision) =>
+          execFileSync('git', ['show', `${revision}:${path}`], { encoding: 'utf8' });
+        const mode = (revision) =>
+          execFileSync('git', ['ls-tree', revision, '--', path], { encoding: 'utf8' })
+            .trim()
+            .split(/\s+/)[0];
+        return [
+          path,
+          {
+            before: read(base),
+            after: read('HEAD'),
+            beforeMode: mode(base),
+            afterMode: mode('HEAD')
+          }
+        ];
+      })
+    );
+  } catch {
+    return undefined;
+  }
+}
 export const onlineRechargeRecoveryPolicy =
   'scripts/production-release/online-recharge-recovery.json';
 export const onlineCiBuildControlPaths = Object.freeze([
@@ -636,6 +718,7 @@ export function isCiOnly(paths) {
     paths.every(
       (p) =>
         releaseArtifactRetentionControls.includes(p) ||
+        firstRechargeReleaseControlPaths.includes(p) ||
         historicalReleaseControlPaths.includes(p) ||
         unpublishedComponentSuccessorControlPaths.includes(p) ||
         rechargeFlowSuccessorControlPaths.includes(p) ||
@@ -727,7 +810,7 @@ export function isMailboxOnly(paths) {
   );
 }
 
-export function checkMode(paths, oldSchema, newSchema, grantHelperSnapshot) {
+export function checkMode(paths, oldSchema, newSchema, grantHelperSnapshot, firstRechargeSnapshot) {
   if (paths.includes(rechargePricingProfile)) {
     if (!isRechargePricingOnly(paths)) return 'full';
     return paths.some((path) => rechargePricingSources.has(path)) ? 'recharge' : 'ci-only';
@@ -777,7 +860,7 @@ export function checkMode(paths, oldSchema, newSchema, grantHelperSnapshot) {
       : 'full';
   if (isCiOnly(paths)) return 'ci-only';
   if (isMailboxOnly(paths)) return 'mailbox';
-  if (isTargetedOnly(paths, oldSchema, newSchema)) return 'recharge';
+  if (isTargetedOnly(paths, oldSchema, newSchema, firstRechargeSnapshot)) return 'recharge';
   if (isAdminOnly(paths)) return 'admin';
   return 'full';
 }
@@ -898,6 +981,8 @@ export function adminCheckCommands(mode, paths) {
     paths.some((p) => p.startsWith('apps/admin/src/v2/features/auto-recharge/'))
   )
     commands.push(['run', 'acceptance:v2-auto-recharge']);
+  if (paths.includes(firstRechargeBillingNamePaths[1]))
+    commands.push(['exec', '--', 'node', firstRechargeBillingNamePaths[1]]);
   if (
     paths.some((p) =>
       /(?:layout\.css|V2(?:PageOverview|OverviewMetric|ListToolbar|PageContext)\.vue|admin-layout-rules|acceptance-v2-(?:filter|page)-layout)/.test(
@@ -998,7 +1083,7 @@ const bitOrdersAcceptancePaths = new Set([
 ]);
 export const hasAppleMailboxScope = (paths) => paths.some((path) => appleMailboxApiPaths.has(path));
 
-export function isRechargeOnly(paths, oldSchema, newSchema) {
+export function isRechargeOnly(paths, oldSchema, newSchema, firstRechargeSnapshot) {
   if (paths.includes(rechargePricingProfile))
     return isRechargePricingOnly(paths) && paths.some((path) => rechargePricingSources.has(path));
   if (hasRegistrationOnboardingScope(paths))
@@ -1045,6 +1130,9 @@ export function isRechargeOnly(paths, oldSchema, newSchema) {
         unpublishedComponentSuccessorControlPaths.includes(p) ||
         rechargeFlowSuccessorControlPaths.includes(p) ||
         ownedMysqlTestControlPaths.includes(p) ||
+        firstRechargeReleaseControlPaths.includes(p) ||
+        (firstRechargeBillingNamePaths.includes(p) &&
+          hasFirstRechargeBillingNameProof(paths, firstRechargeSnapshot)) ||
         sharedTableSourcePaths.has(p) ||
         rechargeConnectionAcceptancePaths.has(p) ||
         p === rechargeConnectionProfileMigration ||
@@ -1069,7 +1157,7 @@ export function isRechargeOnly(paths, oldSchema, newSchema) {
 // These security modules have explicit targeted checks below; other code remains full scope.
 const securityPaths =
   /^(?:apps\/api\/src\/auth\/(?:auth\.service|password-hasher)(?:\.spec)?\.ts$|apps\/admin\/src\/v2\/features\/audit-logs\/audit-log-presentation(?:\.spec)?\.ts$|apps\/api\/src\/id-business-v2\/workspace\/media-resolver\/|scripts\/(?:audit-python-dependencies(?:\.test)?\.py|container-hardening\.test\.mjs|start-auto-recharge-connector\.sh)$|\.github\/workflows\/python-dependency-audit\.yml$)/;
-export function isTargetedOnly(paths, oldSchema, newSchema) {
+export function isTargetedOnly(paths, oldSchema, newSchema, firstRechargeSnapshot) {
   if (paths.includes(rechargePricingProfile)) return isRechargeOnly(paths, oldSchema, newSchema);
   if (hasRegistrationOnboardingScope(paths)) return isRechargeOnly(paths, oldSchema, newSchema);
   if (paths.includes(registrationInterstitialProfile))
@@ -1099,7 +1187,7 @@ export function isTargetedOnly(paths, oldSchema, newSchema) {
     );
   return (
     isRegistrationHydrationOnly(paths) ||
-    isRechargeOnly(paths, oldSchema, newSchema) ||
+    isRechargeOnly(paths, oldSchema, newSchema, firstRechargeSnapshot) ||
     (paths.some((p) => securityPaths.test(p)) &&
       paths.every(
         (p) => allowed.test(p) || historicalReleaseControlPaths.includes(p) || securityPaths.test(p)
@@ -3133,6 +3221,1108 @@ export function testedTree(run, number, repo) {
   }
 }
 
+// BEGIN finite first-recharge PR477 business continuation
+export const firstRechargeBusinessBinding = Object.freeze({
+  repository: 'wangchaozhuanyong/id-business-system',
+  pullRequest: 477,
+  branch: 'codex/first-recharge-release-20261014',
+  run: 38522983057,
+  attempt: 1,
+  head: '01409a947192fb4152d5dcfad7923642ea6cbe46',
+  base: 'b9f2e2b75a753b86a5057dd798d651c57496554e',
+  currentBase: '619b04c240eed836b1db76a9fe330634de1fecbf',
+  checkout: '48965a6b2e5e1ecba6b7a5da4e4beefc99cb6168',
+  tree: '419277c1848340aabdbe07ddfc1433b9089d2db0',
+  admin: Object.freeze({
+    job: 115716788889,
+    logSha256: 'cdde7a4676b2c47257372e584f61acef019f6b7d9ba4dfc16a7f6bd57fc8030c',
+    testsPassed: 525,
+    testsSkipped: 0
+  }),
+  api: Object.freeze({
+    job: 115716788747,
+    logSha256: '116f22993bb6f38bbe6389d0bad59b245b4c6a61dde94699e1c4bc6a85731c9c',
+    testsPassed: 817,
+    testsSkipped: 36
+  })
+});
+const firstRechargeBusinessRepairPaths = new Set([
+  '.github/workflows/quality.yml',
+  'docs/CENTRAL_RELEASE_20261002.md',
+  'docs/WORKSPACE_RELEASE_CLEANUP_20261014.md',
+  'scripts/ci-recharge-check.mjs',
+  'scripts/ci-recharge-check.test.mjs',
+  'scripts/ci-recharge-release.test.mjs',
+  'scripts/ci-recharge-scope.mjs',
+  'scripts/ci-recharge-scope.test.mjs',
+  'scripts/production-release/online-recharge-component-runtime.py',
+  'scripts/production-release/online-recharge-component-runtime.test.py'
+]);
+const firstRechargeBusinessCall = [
+  '    for (const row of reuseFirstRechargeBusiness(repo, event, mode, currentTree) || []) {',
+  '      reused.add(row.part);',
+  '      evidence.push(row);',
+  '    }',
+  ''
+].join('\n');
+
+export function firstRechargeBusinessQualityBytesUnchanged(before, after) {
+  const old = 'fromJSON(\'["guards","admin","api","migration"]\')';
+  const added = 'fromJSON(\'["guards","admin","api","migration","connector"]\')';
+  return (
+    typeof before === 'string' &&
+    typeof after === 'string' &&
+    createHash('sha256').update(before).digest('hex') ===
+      '095df32d42b2385073b0183a08aae4c0fe4370b3422b090dbfacb0d92d28d9f5' &&
+    before.split(old).length === 2 &&
+    after === before.replace(old, added)
+  );
+}
+
+export function firstRechargeBusinessSourceUnchanged(snapshot) {
+  const digest = (source) => createHash('sha256').update(source).digest('hex');
+  for (const path of [
+    '.github/workflows/quality.yml',
+    'scripts/ci-recharge-check.mjs',
+    'scripts/ci-recharge-scope.mjs'
+  ]) {
+    const row = snapshot?.[path];
+    if (
+      typeof row?.before !== 'string' ||
+      typeof row.after !== 'string' ||
+      row.beforeMode !== '100644' ||
+      row.afterMode !== '100644'
+    )
+      return false;
+  }
+  const quality = snapshot['.github/workflows/quality.yml'];
+  const dispatcher = snapshot['scripts/ci-recharge-check.mjs'];
+  const scope = snapshot['scripts/ci-recharge-scope.mjs'];
+  const start = '// BEGIN finite first-recharge PR477 business continuation\n';
+  const end = '// END finite first-recharge PR477 business continuation\n\n';
+  if (
+    scope.before.includes(start) ||
+    scope.after.split(start).length !== 2 ||
+    scope.after.split(end).length !== 2 ||
+    scope.after.split(firstRechargeBusinessCall).length !== 2
+  )
+    return false;
+  const left = scope.after.indexOf(start),
+    right = scope.after.indexOf(end);
+  if (right <= left) return false;
+  const without = (scope.after.slice(0, left) + scope.after.slice(right + end.length)).replace(
+    firstRechargeBusinessCall,
+    ''
+  );
+  // The reviewed merge adds only the separate ONLINE guard lane. Pin all other
+  // scope and dispatcher bytes, including the Admin/API commands and predicates.
+  return (
+    firstRechargeBusinessQualityBytesUnchanged(quality.before, quality.after) &&
+    digest(dispatcher.before) ===
+      '041967db736756e0195272f69c7cccad0101a5f7be24006d4aadc5447536e2d1' &&
+    digest(dispatcher.after) ===
+      '441d56dd9c739c4c0b01a5cbfb81af6eb107732299f68f9b538dcdc7ccd76249' &&
+    onlinePreflightReceiptFixDispatcherBytesUnchanged(
+      dispatcher.before,
+      dispatcher.after.replace('  if (firstRechargeCheckoutRegression) shared();\n', '')
+    ) &&
+    digest(scope.before) === '740f230b42c56549e2d80eea37825094b2df62157e13ff33c69d33970f2bdbfb' &&
+    digest(without) === '5ed70a8a54e614ce0e1319b40350cf04eb296cbc47217c5f29a88daaeb48678b' &&
+    onlinePreflightReceiptFixScopeBytesUnchanged(scope.before, without)
+  );
+}
+
+export function firstRechargeBusinessRawLogFacts(log, part) {
+  if (typeof log !== 'string' || !['admin', 'api'].includes(part)) return undefined;
+  const b = firstRechargeBusinessBinding;
+  const lines = log
+    .split(String.fromCharCode(27))
+    .map((row, index) => (index ? row.replace(/^\[[0-?]*[ -/]*[@-~]/, '') : row))
+    .join('')
+    .split('\n')
+    .map((line) => line.replace(/^\d{4}-\d{2}-\d{2}T\S+Z /, ''));
+  const markers = lines.flatMap((line, index) =>
+    line === '[command]/usr/bin/git log -1 --format=%H' ? [index] : []
+  );
+  return {
+    sha256: createHash('sha256').update(log).digest('hex'),
+    checkout: markers.length === 1 ? lines[markers[0] + 1] : undefined,
+    scope:
+      lines.includes('  CHECK_PART: ' + part) &&
+      lines.includes('  CHECK_BASE: ' + b.base) &&
+      lines.includes('  CHECK_MODE: recharge') &&
+      lines.includes('##[group]Run node scripts/ci-recharge-check.mjs "$CHECK_PART" "$CHECK_BASE"'),
+    environment: [
+      '  NODE_ENV: test',
+      'Image: ubuntu-24.04',
+      'Version: 20261004.327.1',
+      'node: v24.21.0',
+      'npm: 11.19.0',
+      '##[group]Run npm ci --no-audit'
+    ].every((line) => lines.includes(line)),
+    checks:
+      part === 'admin'
+        ? /Test Files\s+28 passed\s+\(28\)/.test(lines.join('\n')) &&
+          /Tests\s+525 passed\s+\(525\)/.test(lines.join('\n')) &&
+          lines.some((line) => line.startsWith('{"scope":"OFFLINE_SYNTHETIC_ONLY"')) &&
+          lines.includes('{"ok":true,"layoutScenarios":36,"interactions":10,"runtimeErrors":0}')
+        : /Test Files\s+57 passed \| 8 skipped\s+\(65\)/.test(lines.join('\n')) &&
+          /Tests\s+817 passed \| 36 skipped\s+\(853\)/.test(lines.join('\n')) &&
+          lines.includes('> nest build')
+  };
+}
+
+export function validateFirstRechargeBusinessNative({
+  run,
+  jobs,
+  checkout,
+  facts,
+  changed,
+  modesUnchanged,
+  sourceUnchanged,
+  reconstructedTree,
+  currentEnvironment
+} = {}) {
+  const b = firstRechargeBusinessBinding;
+  if (
+    run?.id !== b.run ||
+    run.run_attempt !== b.attempt ||
+    run.conclusion !== 'failure' ||
+    run.repository?.full_name !== b.repository ||
+    !matchingRun(run, b.pullRequest, b.head) ||
+    run.head_branch !== b.branch ||
+    !Array.isArray(run.pull_requests) ||
+    run.pull_requests.filter((pr) => pr.number === b.pullRequest).length !== 1 ||
+    checkout?.sha !== b.checkout ||
+    checkout.tree?.sha !== b.tree ||
+    reconstructedTree !== b.tree ||
+    JSON.stringify(checkout.parents?.map((row) => row.sha)) !== JSON.stringify([b.base, b.head]) ||
+    !Array.isArray(changed) ||
+    !changed.length ||
+    !changed.every((path) => firstRechargeBusinessRepairPaths.has(path)) ||
+    modesUnchanged !== true ||
+    sourceUnchanged !== true ||
+    currentEnvironment?.node !== 'v24.21.0' ||
+    currentEnvironment.npm !== '11.19.0' ||
+    currentEnvironment.imageOS !== 'ubuntu24' ||
+    currentEnvironment.imageVersion !== '20261004.327.1' ||
+    currentEnvironment.platform !== 'linux' ||
+    !Array.isArray(jobs)
+  )
+    return undefined;
+  const evidence = [];
+  for (const part of ['admin', 'api']) {
+    const rows = jobs.filter((job) => job.id === b[part].job);
+    const job = rows[0];
+    const required = [
+      'Checkout',
+      'Setup Node.js',
+      'Install package dependencies',
+      'Check affected recharge part',
+      ...(part === 'admin' ? ['Install browser for recharge acceptance'] : [])
+    ];
+    if (
+      rows.length !== 1 ||
+      job.run_id !== b.run ||
+      job.run_attempt !== b.attempt ||
+      job.name !== `recharge (${part})` ||
+      job.status !== 'completed' ||
+      job.conclusion !== 'success' ||
+      !Array.isArray(job.steps) ||
+      job.steps.some((step) => !['success', 'skipped'].includes(step.conclusion)) ||
+      !required.every(
+        (name) =>
+          job.steps.filter(
+            (step) =>
+              step.name === name && step.status === 'completed' && step.conclusion === 'success'
+          ).length === 1
+      ) ||
+      facts?.[part]?.sha256 !== b[part].logSha256 ||
+      facts[part].checkout !== b.checkout ||
+      facts[part].scope !== true ||
+      facts[part].environment !== true ||
+      facts[part].checks !== true
+    )
+      return undefined;
+    evidence.push({
+      part,
+      run: b.run,
+      attempt: b.attempt,
+      job: b[part].job,
+      checkout: b.checkout,
+      tree: b.tree,
+      logSha256: b[part].logSha256,
+      testsPassed: b[part].testsPassed,
+      testsSkipped: b[part].testsSkipped,
+      kind: 'native-first-recharge-business'
+    });
+  }
+  return evidence;
+}
+
+export function readFirstRechargeBusinessRawLog(part) {
+  if (!['admin', 'api'].includes(part)) throw new Error('Unknown first-recharge business part');
+  const b = firstRechargeBusinessBinding;
+  return execFileSync(
+    'gh',
+    ['api', '--allow-escape-sequences', `repos/${b.repository}/actions/jobs/${b[part].job}/logs`],
+    { encoding: 'utf8', maxBuffer: 4 * 1024 * 1024 }
+  );
+}
+
+export const firstRechargeConnectorBinding = Object.freeze({
+  run: 38528040830,
+  attempt: 1,
+  head: '7651c4135e7b39f781ef74c8015b155d3d858f3c',
+  base: '619b04c240eed836b1db76a9fe330634de1fecbf',
+  checkout: 'b5993ad3735753997a4f42104d14c54770c0808f',
+  tree: '58488a3b4c195a6ee9df4aa1f221b4b370338b9f',
+  job: 115733043801,
+  logSha256: 'e5b2134cd5fc478313fffe001192c001d46bdd17d8f4055eda5cec9476d5fd49',
+  testsRun: 839,
+  testsPassed: 797,
+  testsSkipped: 42
+});
+const firstRechargeConnectorRepairPaths = new Set([
+  'scripts/ci-recharge-check.test.mjs',
+  'scripts/ci-recharge-scope.mjs',
+  'scripts/ci-recharge-scope.test.mjs'
+]);
+
+export function firstRechargeConnectorSourceUnchanged(snapshot) {
+  const digest = (value) => createHash('sha256').update(value).digest('hex');
+  const quality = snapshot?.['.github/workflows/quality.yml'];
+  const dispatcher = snapshot?.['scripts/ci-recharge-check.mjs'];
+  const scope = snapshot?.['scripts/ci-recharge-scope.mjs'];
+  if (
+    ![quality, dispatcher, scope].every(
+      (row) =>
+        typeof row?.before === 'string' &&
+        typeof row.after === 'string' &&
+        row.beforeMode === '100644' &&
+        row.afterMode === '100644'
+    )
+  )
+    return false;
+  const start = '// BEGIN finite first-recharge PR477 business continuation\n';
+  const end = '// END finite first-recharge PR477 business continuation\n\n';
+  const stripped = (source) => {
+    if (
+      source.split(start).length !== 2 ||
+      source.split(end).length !== 2 ||
+      source.split(firstRechargeBusinessCall).length !== 2
+    )
+      return undefined;
+    const left = source.indexOf(start),
+      right = source.indexOf(end);
+    return right > left
+      ? (source.slice(0, left) + source.slice(right + end.length)).replace(
+          firstRechargeBusinessCall,
+          ''
+        )
+      : undefined;
+  };
+  const before = stripped(scope.before),
+    after = stripped(scope.after);
+  return (
+    quality.before === quality.after &&
+    digest(quality.before) === '6f80ed300e474f33abee456911500c3c069f9bcacef17bb9618df0a92728b8f9' &&
+    dispatcher.before === dispatcher.after &&
+    digest(dispatcher.before) ===
+      '441d56dd9c739c4c0b01a5cbfb81af6eb107732299f68f9b538dcdc7ccd76249' &&
+    digest(scope.before) === 'da2d17e9301f1c28ca1671a231724e4b6f2cf896ae9c84db8da0ae962f0ccddb' &&
+    typeof before === 'string' &&
+    before === after &&
+    digest(before) === '5ed70a8a54e614ce0e1319b40350cf04eb296cbc47217c5f29a88daaeb48678b'
+  );
+}
+
+export function firstRechargeConnectorRawLogFacts(log) {
+  if (typeof log !== 'string') return undefined;
+  const b = firstRechargeConnectorBinding;
+  const lines = log
+    .split(String.fromCharCode(27))
+    .map((row, index) => (index ? row.replace(/^\[[0-?]*[ -/]*[@-~]/, '') : row))
+    .join('')
+    .split('\n')
+    .map((line) => line.replace(/^\d{4}-\d{2}-\d{2}T\S+Z /, ''));
+  const markers = lines.flatMap((line, index) =>
+    line === '[command]/usr/bin/git log -1 --format=%H' ? [index] : []
+  );
+  return {
+    sha256: createHash('sha256').update(log).digest('hex'),
+    checkout: markers.length === 1 ? lines[markers[0] + 1] : undefined,
+    scope: [
+      '  CHECK_PART: connector',
+      '  CHECK_BASE: ' + b.base,
+      '  CHECK_MODE: recharge',
+      '##[group]Run node scripts/ci-recharge-check.mjs "$CHECK_PART" "$CHECK_BASE"'
+    ].every((line) => lines.includes(line)),
+    environment: [
+      '  NODE_ENV: test',
+      'Image: ubuntu-24.04',
+      'Version: 20261004.327.1',
+      'node: v24.21.0',
+      'npm: 11.19.0',
+      '##[group]Run npm ci --no-audit',
+      '##[group]Run python3 -m pip install --disable-pip-version-check -r apps/api/src/id-business-v2/auto-recharge/worker/requirements.lock.txt'
+    ].every((line) => lines.includes(line)),
+    checks:
+      lines.includes('> @apple-business/shared@0.1.0 build') &&
+      lines.includes('> tsc -p tsconfig.json') &&
+      lines.filter((line) => /^Ran \d+ tests in [0-9.]+s$/.test(line)).length === 1 &&
+      lines.some((line) => /^Ran 839 tests in [0-9.]+s$/.test(line)) &&
+      lines.filter((line) => line === 'OK (skipped=42)').length === 1 &&
+      !lines.some((line) => /^FAILED \(|^(?:ERROR|FAIL): |^Error: Command failed:/.test(line))
+  };
+}
+
+export function validateFirstRechargeConnectorNative({
+  run,
+  jobs,
+  checkout,
+  facts,
+  changed,
+  modesUnchanged,
+  sourceUnchanged,
+  reconstructedTree,
+  currentEnvironment
+} = {}) {
+  const b = firstRechargeConnectorBinding,
+    p = firstRechargeBusinessBinding;
+  if (
+    run?.id !== b.run ||
+    run.run_attempt !== b.attempt ||
+    run.conclusion !== 'failure' ||
+    run.repository?.full_name !== p.repository ||
+    !matchingRun(run, p.pullRequest, b.head) ||
+    run.head_branch !== p.branch ||
+    !Array.isArray(run.pull_requests) ||
+    run.pull_requests.filter((pr) => pr.number === p.pullRequest).length !== 1 ||
+    checkout?.sha !== b.checkout ||
+    checkout.tree?.sha !== b.tree ||
+    reconstructedTree !== b.tree ||
+    JSON.stringify(checkout.parents?.map((row) => row.sha)) !== JSON.stringify([b.base, b.head]) ||
+    !Array.isArray(changed) ||
+    !changed.length ||
+    !changed.every((path) => firstRechargeConnectorRepairPaths.has(path)) ||
+    modesUnchanged !== true ||
+    sourceUnchanged !== true ||
+    currentEnvironment?.node !== 'v24.21.0' ||
+    currentEnvironment.npm !== '11.19.0' ||
+    currentEnvironment.imageOS !== 'ubuntu24' ||
+    currentEnvironment.imageVersion !== '20261004.327.1' ||
+    currentEnvironment.platform !== 'linux' ||
+    !Array.isArray(jobs)
+  )
+    return undefined;
+  const rows = jobs.filter((job) => job.id === b.job),
+    job = rows[0];
+  const required = [
+    'Checkout',
+    'Setup Node.js',
+    'Install package dependencies',
+    'Install existing connector dependencies',
+    'Check affected recharge part'
+  ];
+  if (
+    rows.length !== 1 ||
+    job.run_id !== b.run ||
+    job.run_attempt !== b.attempt ||
+    job.name !== 'recharge (connector)' ||
+    job.status !== 'completed' ||
+    job.conclusion !== 'success' ||
+    !Array.isArray(job.steps) ||
+    job.steps.some((step) => !['success', 'skipped'].includes(step.conclusion)) ||
+    !required.every(
+      (name) =>
+        job.steps.filter(
+          (step) =>
+            step.name === name && step.status === 'completed' && step.conclusion === 'success'
+        ).length === 1
+    ) ||
+    facts?.sha256 !== b.logSha256 ||
+    facts.checkout !== b.checkout ||
+    facts.scope !== true ||
+    facts.environment !== true ||
+    facts.checks !== true
+  )
+    return undefined;
+  return {
+    part: 'connector',
+    run: b.run,
+    attempt: b.attempt,
+    job: b.job,
+    checkout: b.checkout,
+    tree: b.tree,
+    logSha256: b.logSha256,
+    testsRun: b.testsRun,
+    testsPassed: b.testsPassed,
+    testsSkipped: b.testsSkipped,
+    kind: 'native-first-recharge-connector'
+  };
+}
+
+export function readFirstRechargeConnectorRawLog() {
+  return execFileSync(
+    'gh',
+    [
+      'api',
+      '--allow-escape-sequences',
+      `repos/${firstRechargeBusinessBinding.repository}/actions/jobs/${firstRechargeConnectorBinding.job}/logs`
+    ],
+    { encoding: 'utf8', maxBuffer: 4 * 1024 * 1024 }
+  );
+}
+
+export function reuseFirstRechargeConnector(repo, event, mode, currentTree) {
+  const b = firstRechargeConnectorBinding,
+    p = firstRechargeBusinessBinding,
+    pr = event?.pull_request;
+  if (
+    process.env.GITHUB_EVENT_NAME !== 'pull_request' ||
+    repo !== p.repository ||
+    mode !== 'recharge' ||
+    pr?.number !== p.pullRequest ||
+    pr.head?.ref !== p.branch ||
+    pr.base?.sha !== b.base ||
+    pr.head.repo?.full_name !== p.repository ||
+    !/^[a-f0-9]{40}$/.test(currentTree || '')
+  )
+    return undefined;
+  ensureCommit(b.checkout);
+  const changed = git('diff', '--name-only', b.tree, currentTree).split('\n').filter(Boolean);
+  if (!changed.length || !changed.every((path) => firstRechargeConnectorRepairPaths.has(path)))
+    return undefined;
+  const read = (revision, path) =>
+    execFileSync('git', ['show', `${revision}:${path}`], { encoding: 'utf8' });
+  const modeOf = (revision, path) => git('ls-tree', revision, '--', path).split(/\s+/)[0];
+  const snapshot = Object.fromEntries(
+    [
+      '.github/workflows/quality.yml',
+      'scripts/ci-recharge-check.mjs',
+      'scripts/ci-recharge-scope.mjs'
+    ].map((path) => [
+      path,
+      {
+        before: read(b.tree, path),
+        after: read(currentTree, path),
+        beforeMode: modeOf(b.tree, path),
+        afterMode: modeOf(currentTree, path)
+      }
+    ])
+  );
+  const run = gh(`repos/${repo}/actions/runs/${b.run}`);
+  const { jobs } = gh(
+    `repos/${repo}/actions/runs/${b.run}/attempts/${b.attempt}/jobs?per_page=100`
+  );
+  const checkout = gh(`repos/${repo}/git/commits/${b.checkout}`);
+  const evidence = validateFirstRechargeConnectorNative({
+    run,
+    jobs,
+    checkout,
+    facts: firstRechargeConnectorRawLogFacts(readFirstRechargeConnectorRawLog()),
+    changed,
+    sourceUnchanged: firstRechargeConnectorSourceUnchanged(snapshot),
+    modesUnchanged: changed.every(
+      (path) => modeOf(b.tree, path) === '100644' && modeOf(currentTree, path) === '100644'
+    ),
+    reconstructedTree:
+      git('rev-parse', `${b.checkout}^{tree}`) === b.tree &&
+      git('show', '-s', '--format=%P', b.checkout) === [b.base, b.head].join(' ')
+        ? git('merge-tree', '--write-tree', b.base, b.head).split('\n')[0]
+        : undefined,
+    currentEnvironment: onlineComponentGuardCurrentEnvironment()
+  });
+  if (!evidence)
+    throw new Error(
+      'Original first-recharge connector native proof or exact unchanged input is unavailable'
+    );
+  const input = git('ls-tree', '-r', b.tree)
+    .split('\n')
+    .filter((line) => !firstRechargeConnectorRepairPaths.has(line.split('\t')[1]))
+    .join('\n');
+  return { ...evidence, inputSha256: createHash('sha256').update(input).digest('hex') };
+}
+
+export function reuseFirstRechargeBusiness(repo, event, mode, currentTree) {
+  const b = firstRechargeBusinessBinding,
+    pr = event?.pull_request;
+  if (
+    process.env.GITHUB_EVENT_NAME !== 'pull_request' ||
+    repo !== b.repository ||
+    mode !== 'recharge' ||
+    pr?.number !== b.pullRequest ||
+    pr.head?.ref !== b.branch ||
+    pr.base?.sha !== b.currentBase ||
+    pr.head.repo?.full_name !== b.repository ||
+    !/^[a-f0-9]{40}$/.test(currentTree || '')
+  )
+    return undefined;
+  ensureCommit(b.checkout);
+  const changed = git('diff', '--name-only', b.tree, currentTree).split('\n').filter(Boolean);
+  // A later business edit must get fresh affected checks; this one-time proof
+  // authorizes only the reviewed dependency/control repair, never new app bytes.
+  if (!changed.length || !changed.every((path) => firstRechargeBusinessRepairPaths.has(path)))
+    return undefined;
+  const read = (revision, path) =>
+    execFileSync('git', ['show', `${revision}:${path}`], { encoding: 'utf8' });
+  const modeOf = (revision, path) => git('ls-tree', revision, '--', path).split(/\s+/)[0];
+  const snapshot = Object.fromEntries(
+    [
+      '.github/workflows/quality.yml',
+      'scripts/ci-recharge-check.mjs',
+      'scripts/ci-recharge-scope.mjs'
+    ].map((path) => [
+      path,
+      {
+        before: read(b.tree, path),
+        after: read(currentTree, path),
+        beforeMode: modeOf(b.tree, path),
+        afterMode: modeOf(currentTree, path)
+      }
+    ])
+  );
+  const run = gh(`repos/${repo}/actions/runs/${b.run}`);
+  const { jobs } = gh(
+    `repos/${repo}/actions/runs/${b.run}/attempts/${b.attempt}/jobs?per_page=100`
+  );
+  const checkout = gh(`repos/${repo}/git/commits/${b.checkout}`);
+  const facts = Object.fromEntries(
+    ['admin', 'api'].map((part) => [
+      part,
+      firstRechargeBusinessRawLogFacts(readFirstRechargeBusinessRawLog(part), part)
+    ])
+  );
+  const evidence = validateFirstRechargeBusinessNative({
+    run,
+    jobs,
+    checkout,
+    facts,
+    changed,
+    sourceUnchanged: firstRechargeBusinessSourceUnchanged(snapshot),
+    modesUnchanged: changed.every(
+      (path) =>
+        ['100644', '100755'].includes(modeOf(currentTree, path)) &&
+        modeOf(b.tree, path) === modeOf(currentTree, path)
+    ),
+    reconstructedTree:
+      git('rev-parse', `${b.checkout}^{tree}`) === b.tree &&
+      git('show', '-s', '--format=%P', b.checkout) === [b.base, b.head].join(' ')
+        ? git('merge-tree', '--write-tree', b.base, b.head).split('\n')[0]
+        : undefined,
+    currentEnvironment: onlineComponentGuardCurrentEnvironment()
+  });
+  if (!evidence)
+    throw new Error(
+      'Original first-recharge Admin/API evidence or exact unchanged input proof is unavailable'
+    );
+  const input = git('ls-tree', '-r', b.tree)
+    .split('\n')
+    .filter((line) => !firstRechargeBusinessRepairPaths.has(line.split('\t')[1]))
+    .join('\n');
+  const business = evidence.map((row) => ({
+    ...row,
+    inputSha256: createHash('sha256').update(input).digest('hex')
+  }));
+  const connector = reuseFirstRechargeConnector(repo, event, mode, currentTree);
+  return connector ? [...business, connector] : business;
+}
+// END finite first-recharge PR477 business continuation
+
+// BEGIN finite first-recharge PR477 fff continuation
+export const firstRechargeNewBaseBinding = Object.freeze({
+  template: '96f209cde0a8e387ea13522d00851c0dbcca5b6b',
+  templateTree: '45dcb899f00e2390f273dcb39df75b23e3447d39',
+  templateManifestSha256: 'b875920ec1c9098634bc5123e42603292ce7f02d14f638f966063bdf1124272b',
+  base: '5f458e7ac7cd0dfab0f99d2a6d07c20baa8b6e53',
+  historical: '02a744709c21e2eafbc4ec19e713e4eaad6384d5',
+  historicalTree: 'f3220953bc91d3ae5c8314d9a9fe7fc84da9a1b5',
+  historicalManifestSha256: '11c7b39e10e1c53992d04ee7c91af0ddd9ce7b6414de990ec2470455a513b04a',
+  source: '301f9e751dde020031a240920454060ce00a1000',
+  sourceTree: '2d15c4c07ea086064c5928f2336340d3f524e3a5',
+  contractSha256: 'e3a9800b7f75078063540414b0e536c625756a562e92e8ae938611d81c2c822d',
+  contractRawSha256: '32c14f77dd0142ad7010f500c8efc01fb4e66f743bb016524c4812a5b62ed3f6',
+  applicationCount: 2192,
+  applicationInputSha256: 'bef121cc439f545aeeb40ca770827f7faa4fb24e1344171f988079d0a25b7db2',
+  currentDiffCount: 65,
+  currentDiffSha256: 'fee1fc4780bc5be4832e16bff7d65cfe6f99378bdb1c9850041591ae1fabe68d',
+  scopeSha256: 'f7bd777690711ba11f139c5f0a6934ed8450e6905357d62f0eef5097db5592b3',
+  scopeBlockSha256: '63d4ab31eef516fe0a7a267e87e469369b4c7547729b9f3dab82757ad2486dbc',
+  scopeTestSha256: '5ba27fa554c3f4a103df8b2210c1ec12d30770ea383e6ac5a80ad2a73d66281d',
+  fixtureHashes: Object.freeze({
+    'scripts/production-release/online-recharge-ci-build.test.py':
+      'e2a8cda35b269e0582f9e59249f6c0d8b1b074c8948b09812bc569d9baf9e273',
+    'scripts/production-release/online-recharge-component-consumer.test.py':
+      '568d96fcea0b30b8da224cd06b228af1dcda1c0d9453884169fc61d8d306e9ac',
+    'scripts/production-release/online-recharge-component-lifecycle.test.py':
+      '9f702d2d1c6a40e03db228bade291088a5c39f0762576d305eb3e135c04cad48'
+  })
+});
+const firstRechargeNewBaseInversePaths = new Set([
+  '.github/workflows/online-recharge-diagnostic.yml',
+  '.github/workflows/quality.yml',
+  'docs/ONLINE_RECHARGE_RELEASE_HARDENING_20261014.md',
+  'docs/V2_TASKS.md',
+  'scripts/ci-recharge-check.mjs',
+  'scripts/ci-recharge-check.test.mjs',
+  'scripts/ci-recharge-release.test.mjs',
+  'scripts/ci-recharge-scope.mjs',
+  'scripts/ci-recharge-scope.test.mjs',
+  'scripts/production-release/first-recharge-successor-contract.json',
+  'scripts/production-release/first-recharge-successor-projection.py',
+  'scripts/production-release/first-recharge-successor-projection.test.py',
+  'scripts/production-release/online-recharge-ci-build.py',
+  'scripts/production-release/online-recharge-ci-build.test.py',
+  'scripts/production-release/online-recharge-component-consumer.test.py',
+  'scripts/production-release/online-recharge-component-diagnostic-entry.test.mjs',
+  'scripts/production-release/online-recharge-component-diagnostic.py',
+  'scripts/production-release/online-recharge-component-diagnostic.test.py',
+  'scripts/production-release/online-recharge-component-lifecycle.test.py',
+  'scripts/production-release/online-recharge-component-readonly.py',
+  'scripts/production-release/online-recharge-component-readonly.test.py',
+  'scripts/production-release/online-recharge-component-runtime.py',
+  'scripts/production-release/online-recharge-component-runtime.test.py',
+  'scripts/production-release/unified-component-source.test.py',
+  'scripts/production-release/release-storage.py',
+  'scripts/production-release/release-storage.test.py',
+  'scripts/production-release/unpublished-component-runtime-diagnostic.test.py'
+]);
+const firstRechargeNewBaseScope = 'scripts/ci-recharge-scope.mjs';
+const firstRechargeNewBaseTest = 'scripts/ci-recharge-scope.test.mjs';
+const firstRechargeNewBaseContract =
+  'scripts/production-release/first-recharge-successor-contract.json';
+const firstRechargeNewBaseOldCall =
+  '    for (const row of reuseFirstRechargeBusiness(repo, event, mode, currentTree) || []) {';
+const firstRechargeNewBaseCall =
+  '    for (const row of reuseFirstRechargeCurrent(repo, event, mode, currentTree) || []) {';
+const firstRechargeNewBaseOldGate = '  const onlineCiBuild = needsOnlineRechargeCiBuild(paths);';
+const firstRechargeNewBaseGate =
+  '  const onlineCiBuild = firstRechargeOnlineBuildRequired(repo, event, mode, paths, currentTree);';
+const firstRechargeNewBaseModeHook =
+  '  mode = selectFirstRechargeCurrentMode(repo, event, mode, paths, currentTree);\n';
+const firstRechargeNewBaseDigest = (bytes) => createHash('sha256').update(bytes).digest('hex');
+
+function firstRechargeNewBaseManifest(raw) {
+  if (typeof raw !== 'string' || !raw.endsWith('\0')) return undefined;
+  const rows = new Map();
+  for (const row of raw.slice(0, -1).split('\0')) {
+    const match = /^(100644|100755) blob ([a-f0-9]{40})\t([^\r\n\0\t]+)$/.exec(row);
+    if (
+      !match ||
+      rows.has(match[3]) ||
+      match[3].split('/').some((v) => !v || ['.', '..', '.git'].includes(v))
+    )
+      return undefined;
+    rows.set(match[3], { mode: match[1], blob: match[2], row });
+  }
+  return rows;
+}
+export function firstRechargeNewBaseScopeBytesUnchanged(after) {
+  if (typeof after !== 'string') return false;
+  const start = '// BEGIN finite first-recharge PR477 fff continuation\n';
+  const end = '// END finite first-recharge PR477 fff continuation\n\n';
+  if (after.split(start).length !== 2 || after.split(end).length !== 2) return false;
+  const left = after.indexOf(start),
+    right = after.indexOf(end);
+  if (right <= left) return false;
+  let block = after.slice(left, right + end.length);
+  for (const key of ['scopeBlockSha256']) {
+    const field = new RegExp('  ' + key + ": '[a-f0-9]{64}',\\n", 'g');
+    if ([...block.matchAll(field)].length !== 1) return false;
+    block = block.replace(field, '  ' + key + ": '" + '0'.repeat(64) + "',\n");
+  }
+  if (firstRechargeNewBaseDigest(block) !== firstRechargeNewBaseBinding.scopeBlockSha256)
+    return false;
+  let without = after.slice(0, left) + after.slice(right + end.length);
+  if (
+    without.split(firstRechargeNewBaseCall).length !== 2 ||
+    without.split(firstRechargeNewBaseGate).length !== 2
+  )
+    return false;
+  const declaration = '  let mode = checkMode(\n';
+  const position =
+    "  const currentTree = git('rev-parse', 'HEAD^{tree}');\n" + firstRechargeNewBaseModeHook;
+  if (
+    without.split(declaration).length !== 2 ||
+    without.split(firstRechargeNewBaseModeHook).length !== 2 ||
+    without.split(position).length !== 2
+  )
+    return false;
+  without = without
+    .replace(declaration, '  const mode = checkMode(\n')
+    .replace(firstRechargeNewBaseModeHook, '');
+  return (
+    firstRechargeNewBaseDigest(
+      without
+        .replace(firstRechargeNewBaseCall, firstRechargeNewBaseOldCall)
+        .replace(firstRechargeNewBaseGate, firstRechargeNewBaseOldGate)
+    ) === firstRechargeNewBaseBinding.scopeSha256
+  );
+}
+export function hasFirstRechargeNewBaseSourceProof(snapshot) {
+  const b = firstRechargeNewBaseBinding;
+  if (
+    snapshot?.templateTree !== b.templateTree ||
+    snapshot.sourceTree !== b.sourceTree ||
+    snapshot.historicalTree !== b.historicalTree ||
+    firstRechargeNewBaseDigest(snapshot.templateManifest || '') !== b.templateManifestSha256 ||
+    firstRechargeNewBaseDigest(snapshot.historicalManifest || '') !== b.historicalManifestSha256 ||
+    snapshot.applicationCount !== b.applicationCount ||
+    snapshot.applicationInputSha256 !== b.applicationInputSha256 ||
+    snapshot.currentApplicationManifest !== snapshot.sourceApplicationManifest ||
+    snapshot.currentApplicationManifest !== snapshot.historicalApplicationManifest ||
+    firstRechargeNewBaseDigest(snapshot.contract || '') !== b.contractRawSha256 ||
+    !firstRechargeNewBaseScopeBytesUnchanged(snapshot.files?.[firstRechargeNewBaseScope])
+  )
+    return false;
+  let contract;
+  try {
+    contract = JSON.parse(snapshot.contract);
+  } catch {
+    return false;
+  }
+  if (
+    contract.businessCommit !== b.source ||
+    contract.businessTree !== b.sourceTree ||
+    contract.contractSha256 !== b.contractSha256 ||
+    contract.applicationInputCount !== b.applicationCount ||
+    contract.applicationInputSha256 !== b.applicationInputSha256 ||
+    Object.keys(contract.businessFiles || {}).length !== 37 ||
+    Object.keys(contract.coldHelpers || {}).length !== 11
+  )
+    return false;
+  const template = firstRechargeNewBaseManifest(snapshot.templateManifest);
+  const current = firstRechargeNewBaseManifest(snapshot.currentManifest);
+  const historical = firstRechargeNewBaseManifest(snapshot.historicalManifest);
+  if (
+    !template ||
+    !current ||
+    !historical ||
+    template.size !== 2684 ||
+    current.size !== template.size
+  )
+    return false;
+  const allowed = new Map([
+    [firstRechargeNewBaseTest, b.scopeTestSha256],
+    ...Object.entries(b.fixtureHashes)
+  ]);
+  for (const [path, expected] of template) {
+    const actual = current.get(path);
+    if (!actual || actual.mode !== expected.mode) return false;
+    if (path === firstRechargeNewBaseScope || allowed.has(path)) {
+      const bytes = snapshot.files?.[path];
+      if (
+        typeof bytes !== 'string' ||
+        actual.blob !==
+          createHash('sha1')
+            .update('blob ' + Buffer.byteLength(bytes) + '\0')
+            .update(bytes)
+            .digest('hex')
+      )
+        return false;
+      if (allowed.has(path) && firstRechargeNewBaseDigest(bytes) !== allowed.get(path))
+        return false;
+    } else if (actual.blob !== expected.blob) return false;
+  }
+  // Undo only the fixed upstream ONLINE controls and the four source bindings.
+  // This recovers the actual third-run tree; no failed run is an overall success.
+  const names = new Set([...template.keys(), ...historical.keys()]);
+  const changed = [...names].filter(
+    (path) => template.get(path)?.row !== historical.get(path)?.row
+  );
+  if (
+    changed.length !== firstRechargeNewBaseInversePaths.size ||
+    !changed.every((path) => firstRechargeNewBaseInversePaths.has(path))
+  )
+    return false;
+  const inverse = [...template.entries()]
+    .filter(([path]) => !firstRechargeNewBaseInversePaths.has(path))
+    .concat(
+      [...historical.entries()].filter(([path]) => firstRechargeNewBaseInversePaths.has(path))
+    )
+    .sort(([a], [c]) => Buffer.compare(Buffer.from(a), Buffer.from(c)))
+    .map(([, row]) => row.row + '\0')
+    .join('');
+  return firstRechargeNewBaseDigest(inverse) === b.historicalManifestSha256;
+}
+
+export function readFirstRechargeNewBaseSourceSnapshot(currentTree) {
+  const b = firstRechargeNewBaseBinding;
+  if (!/^[a-f0-9]{40}$/.test(currentTree || '')) return undefined;
+  for (const commit of [b.template, b.source, b.historical]) ensureCommit(commit);
+  const manifest = (revision) =>
+    execFileSync('git', ['ls-tree', '-rz', '--full-tree', revision], {
+      encoding: 'utf8',
+      maxBuffer: 8 * 1024 * 1024
+    });
+  const read = (revision, path) =>
+    execFileSync('git', ['show', `${revision}:${path}`], {
+      encoding: 'utf8',
+      maxBuffer: 8 * 1024 * 1024
+    });
+  const raw = manifest(currentTree),
+    rows = firstRechargeNewBaseManifest(raw);
+  if (!rows) return undefined;
+  const appFiles = new Set([
+    'package.json',
+    'package-lock.json',
+    '.dockerignore',
+    'tsconfig.base.json',
+    'deploy/nginx/admin.conf'
+  ]);
+  const app = (value) =>
+    value
+      .split('\0')
+      .filter((row) => {
+        const path = row.split('\t')[1];
+        return (
+          path &&
+          (appFiles.has(path) ||
+            ['apps/api/', 'apps/admin/', 'packages/shared/'].some((prefix) =>
+              path.startsWith(prefix)
+            ))
+        );
+      })
+      .join('\0') + '\0';
+  const appRows = [...rows.entries()]
+    .filter(
+      ([path]) =>
+        appFiles.has(path) ||
+        ['apps/api/', 'apps/admin/', 'packages/shared/'].some((prefix) => path.startsWith(prefix))
+    )
+    .sort(([a], [c]) => (a < c ? -1 : a > c ? 1 : 0));
+  const blobs = execFileSync('git', ['cat-file', '--batch'], {
+    input: appRows.map(([, row]) => row.blob + '\n').join(''),
+    maxBuffer: 128 * 1024 * 1024
+  });
+  let offset = 0;
+  const inventory = {};
+  for (const [path, row] of appRows) {
+    const end = blobs.indexOf(10, offset),
+      header = blobs.subarray(offset, end).toString('ascii');
+    const match = /^([a-f0-9]{40}) blob (\d+)$/.exec(header);
+    if (!match || match[1] !== row.blob)
+      throw new Error('First recharge application blob is unavailable');
+    const size = Number(match[2]),
+      begin = end + 1;
+    if (
+      !Number.isSafeInteger(size) ||
+      size < 0 ||
+      size > 8 * 1024 * 1024 ||
+      blobs[begin + size] !== 10
+    )
+      throw new Error('First recharge application blob is invalid');
+    inventory[path] = {
+      mode: row.mode,
+      sha256: firstRechargeNewBaseDigest(blobs.subarray(begin, begin + size))
+    };
+    offset = begin + size + 1;
+  }
+  if (offset !== blobs.length) throw new Error('Unexpected first recharge application blob output');
+  const historicalManifest = manifest(b.historical),
+    sourceManifest = manifest(b.source);
+  return {
+    templateTree: git('rev-parse', `${b.template}^{tree}`),
+    sourceTree: git('rev-parse', `${b.source}^{tree}`),
+    historicalTree: git('rev-parse', `${b.historical}^{tree}`),
+    templateManifest: manifest(b.template),
+    currentManifest: raw,
+    historicalManifest,
+    applicationCount: appRows.length,
+    applicationInputSha256: firstRechargeNewBaseDigest(JSON.stringify(inventory)),
+    currentApplicationManifest: app(raw),
+    sourceApplicationManifest: app(sourceManifest),
+    historicalApplicationManifest: app(historicalManifest),
+    contract: read(currentTree, firstRechargeNewBaseContract),
+    files: Object.fromEntries(
+      [firstRechargeNewBaseScope, firstRechargeNewBaseTest, ...Object.keys(b.fixtureHashes)].map(
+        (path) => [path, read(currentTree, path)]
+      )
+    )
+  };
+}
+
+export function firstRechargeNewBaseContextMatches(repo, event, mode, eventName) {
+  const p = firstRechargeBusinessBinding,
+    b = firstRechargeNewBaseBinding,
+    pr = event?.pull_request;
+  return (
+    eventName === 'pull_request' &&
+    repo === p.repository &&
+    mode === 'recharge' &&
+    pr?.number === p.pullRequest &&
+    pr.head?.ref === p.branch &&
+    pr.head.repo?.full_name === p.repository &&
+    pr.base?.sha === b.base &&
+    pr.base.ref === 'main' &&
+    /^[a-f0-9]{40}$/.test(pr.head.sha || '')
+  );
+}
+export function firstRechargeNewBasePathsMatch(paths) {
+  const b = firstRechargeNewBaseBinding;
+  return (
+    Array.isArray(paths) &&
+    paths.length === b.currentDiffCount &&
+    paths.every((p) => typeof p === 'string' && !p.includes('\n')) &&
+    firstRechargeNewBaseDigest(paths.join('\n') + '\n') === b.currentDiffSha256
+  );
+}
+function firstRechargeNewBaseQualification(repo, event, mode, paths, currentTree) {
+  if (
+    !firstRechargeNewBaseContextMatches(repo, event, mode, process.env.GITHUB_EVENT_NAME) ||
+    !firstRechargeNewBasePathsMatch(paths)
+  )
+    return undefined;
+  const b = firstRechargeNewBaseBinding,
+    pr = event.pull_request;
+  if (
+    currentTree !== git('rev-parse', 'HEAD^{tree}') ||
+    process.env.GITHUB_SHA !== git('rev-parse', 'HEAD') ||
+    git('show', '-s', '--format=%P', 'HEAD') !== [b.base, pr.head.sha].join(' ') ||
+    git('merge-tree', '--write-tree', b.base, pr.head.sha).split('\n')[0] !== currentTree
+  )
+    return undefined;
+  const snapshot = readFirstRechargeNewBaseSourceSnapshot(currentTree);
+  return hasFirstRechargeNewBaseSourceProof(snapshot) ? snapshot : undefined;
+}
+export function selectFirstRechargeCurrentMode(repo, event, mode, paths, currentTree) {
+  if (
+    mode !== 'full' ||
+    !firstRechargeNewBaseQualification(repo, event, 'recharge', paths, currentTree)
+  )
+    return mode;
+  // Native evidence is available only in the original independently checked
+  // runtime. A changed runner retains the ordinary classifier and gets checks.
+  let environment;
+  try {
+    environment = onlineComponentGuardCurrentEnvironment();
+  } catch {
+    return mode;
+  }
+  return environment.node === 'v24.21.0' &&
+    environment.npm === '11.19.0' &&
+    environment.imageOS === 'ubuntu24' &&
+    environment.imageVersion === '20261004.327.1' &&
+    environment.platform === 'linux'
+    ? 'recharge'
+    : mode;
+}
+export function isFirstRechargeNewBaseOnlineBuildInapplicable(
+  repo,
+  event,
+  mode,
+  paths,
+  currentTree
+) {
+  return Boolean(firstRechargeNewBaseQualification(repo, event, mode, paths, currentTree));
+}
+export function firstRechargeOnlineBuildRequired(repo, event, mode, paths, currentTree) {
+  return (
+    needsOnlineRechargeCiBuild(paths) &&
+    !isFirstRechargeNewBaseOnlineBuildInapplicable(repo, event, mode, paths, currentTree)
+  );
+}
+export function reuseFirstRechargeCurrent(repo, event, mode, currentTree) {
+  return (
+    reuseFirstRechargeNewBaseNative(repo, event, mode, currentTree) ||
+    reuseFirstRechargeBusiness(repo, event, mode, currentTree)
+  );
+}
+export function validateFirstRechargeNewBaseNative({ sourceUnchanged, business, connector } = {}) {
+  if (sourceUnchanged !== true) return undefined;
+  const adminApi = validateFirstRechargeBusinessNative(business),
+    worker = validateFirstRechargeConnectorNative(connector);
+  return adminApi && worker ? [...adminApi, worker] : undefined;
+}
+export function reuseFirstRechargeNewBaseNative(repo, event, mode, currentTree) {
+  if (!firstRechargeNewBaseContextMatches(repo, event, mode, process.env.GITHUB_EVENT_NAME))
+    return undefined;
+  const b = firstRechargeNewBaseBinding,
+    p = firstRechargeBusinessBinding,
+    c = firstRechargeConnectorBinding;
+  const paths = git('diff', '--name-only', b.base, currentTree).split('\n').filter(Boolean);
+  const qualification = firstRechargeNewBaseQualification(repo, event, mode, paths, currentTree);
+  if (!qualification) return undefined;
+  const read = (revision, path) =>
+    execFileSync('git', ['show', `${revision}:${path}`], { encoding: 'utf8' });
+  const modeOf = (revision, path) => git('ls-tree', revision, '--', path).split(/\s+/)[0];
+  const historicalProof = (tree) =>
+    Object.fromEntries(
+      [
+        '.github/workflows/quality.yml',
+        'scripts/ci-recharge-check.mjs',
+        firstRechargeNewBaseScope
+      ].map((path) => [
+        path,
+        {
+          before: read(tree, path),
+          after: read(b.historicalTree, path),
+          beforeMode: modeOf(tree, path),
+          afterMode: modeOf(b.historicalTree, path)
+        }
+      ])
+    );
+  const input = (binding, sourceUnchanged, readFacts) => {
+    ensureCommit(binding.checkout);
+    const changed = git('diff', '--name-only', binding.tree, b.historicalTree)
+      .split('\n')
+      .filter(Boolean);
+    return {
+      run: gh(`repos/${repo}/actions/runs/${binding.run}`),
+      jobs: gh(
+        `repos/${repo}/actions/runs/${binding.run}/attempts/${binding.attempt}/jobs?per_page=100`
+      ).jobs,
+      checkout: gh(`repos/${repo}/git/commits/${binding.checkout}`),
+      facts: readFacts(),
+      changed,
+      sourceUnchanged,
+      modesUnchanged: changed.every(
+        (path) =>
+          ['100644', '100755'].includes(modeOf(binding.tree, path)) &&
+          modeOf(binding.tree, path) === modeOf(b.historicalTree, path)
+      ),
+      reconstructedTree:
+        git('rev-parse', `${binding.checkout}^{tree}`) === binding.tree &&
+        git('show', '-s', '--format=%P', binding.checkout) ===
+          [binding.base, binding.head].join(' ')
+          ? git('merge-tree', '--write-tree', binding.base, binding.head).split('\n')[0]
+          : undefined,
+      currentEnvironment: onlineComponentGuardCurrentEnvironment()
+    };
+  };
+  ensureCommit(p.checkout);
+  ensureCommit(c.checkout);
+  const business = input(p, firstRechargeBusinessSourceUnchanged(historicalProof(p.tree)), () =>
+    Object.fromEntries(
+      ['admin', 'api'].map((part) => [
+        part,
+        firstRechargeBusinessRawLogFacts(readFirstRechargeBusinessRawLog(part), part)
+      ])
+    )
+  );
+  const connector = input(c, firstRechargeConnectorSourceUnchanged(historicalProof(c.tree)), () =>
+    firstRechargeConnectorRawLogFacts(readFirstRechargeConnectorRawLog())
+  );
+  const evidence = validateFirstRechargeNewBaseNative({
+    sourceUnchanged: true,
+    business,
+    connector
+  });
+  if (!evidence)
+    throw new Error(
+      'Original first recharge native evidence or finite new-base input proof is unavailable'
+    );
+  return evidence.map((row) => ({
+    ...row,
+    inputSha256: b.applicationInputSha256,
+    source: b.source,
+    sourceTree: b.sourceTree,
+    qualification: 'finite-first-recharge-5f-native'
+  }));
+}
+// END finite first-recharge PR477 fff continuation
+
 async function main() {
   const repo = process.env.GITHUB_REPOSITORY;
   const event = JSON.parse(readFileSync(process.env.GITHUB_EVENT_PATH, 'utf8'));
@@ -3140,13 +4330,16 @@ async function main() {
   ensureCommit(base);
   const paths = git('diff', '--name-only', base, 'HEAD').split('\n').filter(Boolean);
   const grantHelperSnapshot = readProductionDatabaseAccessSnapshot(base, paths);
-  const mode = checkMode(
+  const firstRechargeSnapshot = readFirstRechargeBillingNameSnapshot(base, paths);
+  let mode = checkMode(
     paths,
     git('show', `${base}:${schema}`),
     git('show', `HEAD:${schema}`),
-    grantHelperSnapshot
+    grantHelperSnapshot,
+    firstRechargeSnapshot
   );
   const currentTree = git('rev-parse', 'HEAD^{tree}');
+  mode = selectFirstRechargeCurrentMode(repo, event, mode, paths, currentTree);
   let reuseMain = false;
   const reused = new Set();
   const evidence = [];
@@ -3206,6 +4399,10 @@ async function main() {
         'No successful PR evidence matches the merged source tree; stop instead of repeating checks'
       );
   } else if (process.env.GITHUB_EVENT_NAME === 'pull_request' && mode === 'recharge') {
+    for (const row of reuseFirstRechargeCurrent(repo, event, mode, currentTree) || []) {
+      reused.add(row.part);
+      evidence.push(row);
+    }
     const pr = event.pull_request;
     const { workflow_runs: runs } = gh(
       `repos/${repo}/actions/workflows/quality.yml/runs?event=pull_request&branch=${encodeURIComponent(pr.head.ref)}&status=completed&per_page=10`
@@ -3258,7 +4455,7 @@ async function main() {
           : mode === 'mailbox'
             ? ['guards', 'admin', 'api']
             : selectedParts(paths);
-  const onlineCiBuild = needsOnlineRechargeCiBuild(paths);
+  const onlineCiBuild = firstRechargeOnlineBuildRequired(repo, event, mode, paths, currentTree);
   const result = {
     mode,
     reuseMain,

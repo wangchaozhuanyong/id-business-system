@@ -14,7 +14,7 @@ import sys
 import time
 from urllib.parse import urlsplit
 
-from attempt_ledger import AttemptLedger, existing_checkout
+from attempt_ledger import AttemptLedger, assert_no_other_payment, existing_checkout
 from browser_session import (NETWORK_CODE_PATTERN, SessionBudget,
                              retryable_page_load_error, session_failure)
 from checkout_core import (ACCOUNT_PATH, CHECKOUT_PATH, MAX_BYTES, ROOT, BrowserCredential,
@@ -286,7 +286,7 @@ def money(text: str, currency_hint=None):
 def quote_from_text(text: str, currency_hint=None):
     lines = [x.strip() for x in text.splitlines() if x.strip()]
     labels = {"today": r"^(?:Total due today|Due today|Total today|Amount due today|今日应付(?:金额)?|今日應付(?:金額)?|今天应付|今日總計|今日总计|今天支付|今天應付)(?:\s|$|:|：)",
-              "tax": r"^(?:Tax|Taxes|Estimated tax|预估税费|預估稅費|税费|税金|稅金)(?:\s|$|:|：)",
+              "tax": r"^(?:Tax|Taxes|Estimated tax|预估税费|預估稅費|税费|税金|稅金|增值税(?:\s*\(VAT\))?|VAT)(?:\s*\(\s*\d+(?:\.\d+)?%\s*\))?(?:\s|$|:|：)",
               "renewal": r"^(?:Then|Renews|Renewal|续费|續費)(?:\s|$|:|：)"}
     fields, renewal_intervals = {}, []
     monthly = r"/\s*(?:month|月)(?!\w)|per\s+month\b|\bmonthly\b|每月|每个月|每個月|按月|月付"
@@ -301,12 +301,17 @@ def quote_from_text(text: str, currency_hint=None):
         return next(iter(periods)) if len(periods) == 1 else None
     for kind, pattern in labels.items():
         matches = []
+        label_count = 0
         # 同一报价字段存在多种值时拒绝自动判定。
         for i, line in enumerate(lines):
-            if re.search(pattern, line, re.I):
-                found = money(line, currency_hint)
+            label = re.search(pattern, line, re.I)
+            if label:
+                label_count += 1
+                amount_text = line[label.end():].strip() if kind == 'tax' else line
+                found = (money(amount_text, currency_hint)
+                         if kind != 'tax' or VISIBLE_MONEY_LINE.fullmatch(amount_text) else None)
                 amount_line, clause = i, line
-                if found is None and i + 1 < len(lines):
+                if found is None and i + 1 < len(lines) and (kind != 'tax' or not amount_text):
                     # 不跨越“未知/小计/税费”等下一字段，把别的金额误作今日应付。
                     value_line = lines[i + 1]
                     amount_text = (re.sub(rf"(?:{monthly}|{yearly})", "", value_line,
@@ -339,7 +344,8 @@ def quote_from_text(text: str, currency_hint=None):
                     renewal_intervals.append(interval(
                         text[start:end], "monthly" if matched[2] == "月" else "yearly"))
         unique = {json.dumps(item, sort_keys=True) for item in matches}
-        fields[kind] = json.loads(unique.pop()) if len(unique) == 1 else None
+        fields[kind] = (json.loads(unique.pop()) if len(unique) == 1
+                        and (kind != 'tax' or label_count == 1) else None)
     fields["plan"] = checkout_text_plan(text)
     fields["renewal_interval"] = ("monthly" if renewal_intervals
                                   and set(renewal_intervals) == {"monthly"} else None)
@@ -360,6 +366,11 @@ async def quote_from_page(page, currency_hint=None):
             quote['plan'] = 'pro'
             return quote
         scope = groups if count == 1 else page
+        if count == 1:
+            from plan_selection import checkout_radio_plan
+            quote['plan'] = await checkout_radio_plan(groups) or 'pro'
+            quote['plan_source'] = 'official_checkout_selected_radio'
+            return quote
         radios = await scope.locator('[role="radio"]').filter(visible=True).evaluate_all("""nodes => nodes.map(n => ({
             label:n.getAttribute('aria-label') || n.innerText || '',
             checked:n.getAttribute('aria-checked'), state:n.getAttribute('data-state')}))""")
@@ -413,6 +424,27 @@ class NetworkGuard:
         self.blocked_payment_paths = {}
         self.account_verified = False
         self.checkout_initializations_allowed = 0
+        self.first_pro_checkout = False
+        self.checkout_tier_pending = False
+        self.checkout_tier_verified = False
+        self.checkout_plan = None
+        self.checkout_tier_binding_minimum = 0
+        self.checkout_tier_request_minimum = 0
+
+    def prepare_first_pro_checkout(self, *, tier_pending, current_plan):
+        if (self.target_plan not in {"pro-5x", "pro-20x", "pro-500"}
+                or current_plan != 'free' or type(tier_pending) is not bool
+                or not self.account_verified or self.ledger is None
+                or self.ledger.target_plan != self.target_plan or self.armed or self.sent or self.checkout_id):
+            raise Stop("checkout_unarmed")
+        self.first_pro_checkout = True
+        self.checkout_tier_pending = tier_pending is True
+
+    def pro_checkout_summary(self):
+        return ({"first_pro_checkout": True, "checkout_plan": self.checkout_plan,
+                 "checkout_tier_pending": self.checkout_tier_pending,
+                 "checkout_tier_verified": self.checkout_tier_verified}
+                if self.first_pro_checkout else {})
 
     def classify(self, method, url, data=None, headers=None):
         p = urlsplit(url)
@@ -439,7 +471,12 @@ class NetworkGuard:
             # 某些页面用同一端点加载既有结算；仅接受本次已观察到的编号。
             if set(data) == {"checkout_session_id"} and self.checkout_id and data["checkout_session_id"] == self.checkout_id:
                 return "read"
-            if data.get("plan_name") != plan_spec(self.target_plan)["official_name"]:
+            allowed_plans = {plan_spec(self.target_plan)["official_name"]}
+            if (self.first_pro_checkout and self.checkout_tier_pending and self.account_verified
+                    and self.ledger is not None and self.ledger.target_plan == self.target_plan
+                    and self.target_plan in {"pro-5x", "pro-20x", "pro-500"}):
+                allowed_plans.add("chatgptprolite")
+            if data.get("plan_name") not in allowed_plans:
                 return "plan_mismatch" if data.get("plan_name") in {p["official_name"] for p in PLANS.values()} else "unknown_write"
             if self.sent:
                 return "duplicate"
@@ -487,7 +524,7 @@ class NetworkGuard:
             return
         self.observed_requests.add(request)
         parts = urlsplit(request.url)
-        if (not self.armed or request.method != "POST" or parts.scheme != "https"
+        if (request.method != "POST" or parts.scheme != "https"
                 or parts.hostname != "chatgpt.com" or parts.path != CHECKOUT_PATH):
             return
         try:
@@ -497,6 +534,12 @@ class NetworkGuard:
         decision = self.classify(request.method, request.url, data, request.headers)
         if decision == "read":
             return
+        if not self.armed:
+            if self.first_pro_checkout and self.checkout_id:
+                self.sent += 1
+                self.error = Stop("checkout_result_unknown", stage="checkout_create", checkout_attempted=True)
+                self.response_done.set()
+            return
         self.sent += 1
         if decision != "create":
             self.error = Stop("checkout_result_unknown" if self.sent > 1 else "checkout_" + decision,
@@ -504,6 +547,8 @@ class NetworkGuard:
             self.response_done.set()
             return
         self.request_object = request
+        self.checkout_plan = next(plan for plan, spec in PLANS.items()
+                                  if spec["official_name"] == data["plan_name"])
         progress("checkout_request_sending", attempt=self.sent)
 
     async def route(self, route):
@@ -539,7 +584,7 @@ class NetworkGuard:
             result, url = checkout_result(data)
             self.result, self.private_url = result, url
             self.checkout_id = result["checkout_identifier"]
-            self.ledger.finish({**result, "checkout_outcome": "created"})
+            self.ledger.finish({**result, "checkout_outcome": "created", **self.pro_checkout_summary()})
         except Stop as exc:
             exc.report.update(stage="checkout_create", checkout_attempted=True)
             self.error = exc
@@ -554,7 +599,7 @@ class NetworkGuard:
         return {"target_plan": self.target_plan, "checkout_requests_sent": self.sent, "duplicate_requests_blocked": self.blocked_duplicates,
                 "payment_requests_sent": 0, "payment_requests_blocked": self.blocked_payment_requests,
                 "other_writes_blocked": self.blocked_unknown_writes, "payment_status": "not_attempted",
-                "auth_session_writes_blocked": self.auth_session_writes_blocked,
+                "auth_session_writes_blocked": self.auth_session_writes_blocked, **self.pro_checkout_summary(),
                 "blocked_official_write_paths": dict(self.blocked_official_paths),
                 "blocked_payment_related_paths": dict(self.blocked_payment_paths),
                 "checkout_initializations_allowed": self.checkout_initializations_allowed,
@@ -828,25 +873,106 @@ async def synchronize_login_page(page, target, identity, *, budget):
             await budget.run(lambda: asyncio.sleep(0.5), "page_ui_sync")
         except Stop as exc:
             if (exc.report.get("reason") == "session_load_timeout"
-                    and (budget.step == "page_ui_sync" or budget.elapsed >= budget.seconds)):
+                    and budget.step == "page_ui_sync" and budget.elapsed >= budget.seconds):
                 raise Stop("official_login_page_not_ready", account_matched=True,
                            **budget.snapshot()) from None
             raise
 
 
-async def select_plan(page, target_plan):
+async def select_plan(page, target_plan, *, allow_checkout_tier=False):
     from plan_selection import select_plan as select_official_plan
-    return await select_official_plan(page, target_plan, progress)
+    return await select_official_plan(page, target_plan, progress, allow_checkout_tier=True) if allow_checkout_tier else await select_official_plan(page, target_plan, progress)
 
 
-async def verify_selected_plan(page, target_plan):
+async def verify_selected_plan(page, target_plan, *, checkout_tier_pending=False):
     from plan_selection import verify_selected_plan as verify_official_plan
-    return await verify_official_plan(page, target_plan)
+    return await verify_official_plan(page, target_plan, checkout_tier_pending=True) if checkout_tier_pending else await verify_official_plan(page, target_plan)
+
+
+def verify_first_pro_checkout_binding(page, guard):
+    if (not guard.first_pro_checkout or not guard.account_verified or not guard.checkout_id
+            or not checkout_page_matches(page.url, guard.checkout_id)):
+        raise Stop("checkout_page_identifier_unverified")
+    if guard.error:
+        raise guard.error
+    if guard.sent not in (0, 1):
+        raise Stop("checkout_result_unknown", checkout_attempted=True)
+
+
+async def verify_first_pro_checkout_tier(page, guard):
+    from plan_selection import checkout_radio_plan, pro_groups
+    verify_first_pro_checkout_binding(page, guard)
+    if (not guard.checkout_tier_verified or guard.checkout_tier_pending
+            or guard.target_plan not in {"pro-5x", "pro-20x", "pro-500"}):
+        raise Stop("checkout_tier_not_verified")
+    groups = pro_groups(page)
+    if await groups.count() != 1 or await checkout_radio_plan(groups) != guard.target_plan:
+        raise Stop("selected_plan_changed", stage="plan_selection")
+
+
+async def select_checkout_tier(page, guard, target_plan, *, session_budget=None, allow_change=False):
+    from plan_selection import Selection, checkout_radio_plan, pro_control, pro_groups
+    budget = session_budget.restart() if session_budget else SessionBudget(90)
+    expected_checkout = guard.checkout_id
+    while not checkout_page_matches(page.url, expected_checkout):
+        location = urlsplit(page.url)
+        if location.hostname != "chatgpt.com" or location.path.startswith("/checkout/"):
+            raise Stop("checkout_page_identifier_unverified")
+        if guard.error:
+            raise guard.error
+        await budget.run(lambda: asyncio.sleep(.2), "page_ui_sync")
+    verify_first_pro_checkout_binding(page, guard)
+    groups = pro_groups(page)
+    await budget.run(lambda: groups.first.wait_for(state='visible', timeout=0), "page_ui_sync")
+    if await groups.count() != 1:
+        raise Stop("official_plan_region_ambiguous")
+    choice = await pro_control(page.locator('body'), target_plan)
+    await Selection(page, progress).ready(choice, 'official_plan_tier_not_found')
+    verify_first_pro_checkout_binding(page, guard)
+    before = getattr(guard, 'official_binding_version', 0)
+    before_request = getattr(guard, 'quote_request_version', 0)
+    changed = await checkout_radio_plan(groups, strict=True) != target_plan
+    if changed:
+        if (not allow_change or getattr(guard, 'read_only', False)
+                or getattr(getattr(guard, 'payment_ledger', None), 'record', None)):
+            raise Stop('checkout_tier_not_verified')
+        await choice.click()
+    while await checkout_radio_plan(groups, strict=True) != target_plan:
+        verify_first_pro_checkout_binding(page, guard)
+        await budget.run(lambda: asyncio.sleep(.2), "page_ui_sync")
+    verify_first_pro_checkout_binding(page, guard)
+    guard.checkout_tier_verified = True
+    guard.checkout_tier_pending = False
+    guard.checkout_tier_binding_minimum = before + int(changed)
+    guard.checkout_tier_request_minimum = before_request + int(changed)
+    if guard.ledger:
+        guard.ledger.finish(guard.pro_checkout_summary())
+
+
+def can_restore_first_pro_checkout(record, target_plan):
+    """恢复服务端已规范的首次未付款原单，不依赖会被清洗掉的执行器标签。"""
+    if (target_plan not in {'pro-5x', 'pro-20x', 'pro-500'} or not isinstance(record, dict)
+            or record.get('target_plan') != target_plan
+            or record.get('plan') != plan_spec(target_plan)['official_name']
+            or record.get('account_matched') is not True
+            or record.get('current_plan_before') != 'free'
+            or record.get('transport') != 'official_browser'
+            or record.get('checkout_outcome') != 'created'
+            or record.get('payment_status') != 'not_attempted'
+            or record.get('operation') is not None
+            or record.get('payment_attempted') is not None and record.get('payment_attempted') is not False):
+        return False
+    if any(record.get(key) is not None for key in (
+            'payment_evidence', 'upgrade_identifier', 'upgrade_invoice_identifier',
+            'upgrade_payment_intent_identifier')):
+        return False
+    return all(record.get(key) is None or type(record.get(key)) is int and record[key] == 0
+               for key in ('payment_requests_sent', 'confirmation_requests_sent', 'card_tokenization_requests_sent'))
 
 
 async def workflow(context, target, *, ledger=None, existing=None, wait_seconds=0, review_seconds=0, quote_timeout=25,
                    quote_handler=None, guard_factory=NetworkGuard, target_plan="plus", session_budget=None,
-                   session_handler=None):
+                   session_handler=None, allow_checkout_tier_change=False):
     """同一临时 BrowserContext 贯穿校验、选套餐和报价。便于本地路由夹具验收。"""
     guard = guard_factory(target, ledger)
     spec = plan_spec(target_plan)
@@ -857,6 +983,10 @@ async def workflow(context, target, *, ledger=None, existing=None, wait_seconds=
         raise Stop("checkout_record_plan_mismatch")
     if existing:
         guard.checkout_id = existing["checkout_identifier"]
+        if can_restore_first_pro_checkout(existing, target_plan):
+            guard.first_pro_checkout = True
+            guard.checkout_plan = existing.get("checkout_plan") if existing.get("checkout_plan") in PLANS else None
+            guard.checkout_tier_pending = True
         guard.result = {
             "returned_currency": existing.get("returned_currency"),
             "processor_entity": existing.get("processor_entity"),
@@ -898,10 +1028,17 @@ async def workflow(context, target, *, ledger=None, existing=None, wait_seconds=
             return {"status": "session_verified", **identity, "checkout_status": "not_attempted", **guard.summary()}
         if identity["current_plan"] != "free":
             raise Stop("incompatible_existing_subscription", current_plan=identity["current_plan"])
+        if (existing is not None and target_plan in {'pro-5x', 'pro-20x', 'pro-500'}
+                and quote_handler is not None and not can_restore_first_pro_checkout(existing, target_plan)):
+            raise Stop('checkout_tier_not_verified')
         if existing is None:
             stage = "plan_selection"
             progress(stage)
-            button = await select_plan(page, target_plan)
+            if target_plan in {"pro-5x", "pro-20x", "pro-500"}:
+                button, tier_pending = await select_plan(page, target_plan, allow_checkout_tier=True)
+                guard.prepare_first_pro_checkout(tier_pending=tier_pending, current_plan=identity['current_plan'])
+            else:
+                button = await select_plan(page, target_plan)
             # 验证完成后/点击 Plus 前再次核对官网身份，防止切换账号。
             previous_network = identity.get("network")
             recheck_budget = session_budget.restart() if session_budget else None
@@ -913,7 +1050,7 @@ async def workflow(context, target, *, ledger=None, existing=None, wait_seconds=
                 if (not previous_network or any(identity["network"][key] != previous_network[key]
                                                 for key in ("ip", "country"))):
                     raise Stop("proxy_ip_changed_during_login")
-            await verify_selected_plan(page, target_plan)
+            await verify_selected_plan(page, target_plan, checkout_tier_pending=True) if guard.checkout_tier_pending else await verify_selected_plan(page, target_plan)
             stage = "checkout_create"
             progress(stage)
             guard.begin_checkout()
@@ -930,6 +1067,14 @@ async def workflow(context, target, *, ledger=None, existing=None, wait_seconds=
         else:
             stage = "existing_checkout_read"
             progress("existing_checkout_read", new_checkout_allowed=False)
+        if guard.first_pro_checkout:
+            stage = "plan_selection"
+            if existing and not checkout_page_matches(page.url, guard.checkout_id):
+                expected_url = ORIGIN + '/checkout/' + guard.result['processor_entity'] + '/' + guard.checkout_id
+                operation = lambda: page.goto(expected_url, wait_until='commit', timeout=0)
+                await session_budget.run(operation, 'page_load') if session_budget else await asyncio.wait_for(operation(), 90)
+            await select_checkout_tier(page, guard, target_plan, session_budget=session_budget,
+                allow_change=allow_checkout_tier_change and quote_handler is not None)
         stage = "quote_read"
         progress(stage)
         quote, quote_text, quote_meta = await quote_with_page_recovery(
@@ -985,7 +1130,7 @@ async def workflow(context, target, *, ledger=None, existing=None, wait_seconds=
                   "checkout_status": guard.checkout_status()}
         if stage == "session_restore" and session_budget:
             result.update(session_budget.snapshot())
-        if quote is not None:
+        if quote is not None and 'quote' not in exc.report:
             result["quote"] = quote
             lines = [line.strip() for line in quote_text.splitlines() if line.strip()]
             result["visible_quote_lines"] = [safe_text(" / ".join(lines[i:i + 2])) for i, line in enumerate(lines)
@@ -1032,7 +1177,8 @@ async def workflow(context, target, *, ledger=None, existing=None, wait_seconds=
 async def run_browser(target, *, create=False, inspect_existing=False, retry_rejected=False,
                       replace_unpaid_checkout=False, state_dir=ROOT / ".state", wait_seconds=0, review_seconds=0,
                       quote_handler=None, guard_factory=NetworkGuard, target_plan="plus", browser=None,
-                      browser_context=None, session_budget=None, session_handler=None, next_cycle_grant=None):
+                      browser_context=None, session_budget=None, session_handler=None, next_cycle_grant=None,
+                      allow_checkout_tier_change=False):
     # 固定项目自己的浏览器，不依赖开源参考目录或全局浏览器缓存。
     os.environ.setdefault("PLAYWRIGHT_BROWSERS_PATH", str(ROOT / ".browsers"))
     # 不允许环境变量意外启动协议调试日志，避免凭据进入终端/文件。
@@ -1043,6 +1189,46 @@ async def run_browser(target, *, create=False, inspect_existing=False, retry_rej
         raise Stop("invalid_operation_combination")
     plan_spec(target_plan)
     existing = existing_checkout(state_dir, target.account_id, target_plan) if inspect_existing else None
+    recovery_diagnostic = {
+        'canonical_proof_valid': can_restore_first_pro_checkout(existing, target_plan),
+        'missing_proof_fields': [key for key in (
+            'target_plan', 'plan', 'account_matched', 'current_plan_before',
+            'transport', 'checkout_outcome', 'payment_status')
+            if existing is not None and existing.get(key) is None],
+        'tier_change_requested': bool(allow_checkout_tier_change),
+        'payment_record_checked': False,
+        'current_checkout_payment_record': False,
+        'write_eligibility_checked': False,
+    }
+
+    def report_recovery_eligibility(reason):
+        if existing is not None and target_plan in {'pro-5x', 'pro-20x', 'pro-500'}:
+            progress('first_pro_recovery_diagnostic', **recovery_diagnostic,
+                     tier_change_allowed=bool(allow_checkout_tier_change and quote_handler is not None),
+                     eligibility_reason=reason)
+
+    eligibility_reason = 'not_requested'
+    if existing and allow_checkout_tier_change and quote_handler is not None:
+        from payment_state import PaymentLedger
+        try:
+            with PaymentLedger(state_dir, target.account_id, target_plan=target_plan,
+                               next_cycle_grant=next_cycle_grant, read_only=True) as payment:
+                recovery_diagnostic['payment_record_checked'] = True
+                recovery_diagnostic['current_checkout_payment_record'] = payment.record is not None
+                if payment.record is not None:
+                    allow_checkout_tier_change = False
+                    eligibility_reason = 'current_checkout_payment_record'
+                else:
+                    # 只读能观察已关闭周期，不等于允许写操作；沿用原账户付款资格核验。
+                    recovery_diagnostic['write_eligibility_checked'] = True
+                    assert_no_other_payment(state_dir, target.account_id, payment.checkout_id,
+                                            next_cycle_grant=next_cycle_grant, read_only=False)
+                    eligibility_reason = 'qualified'
+        except Stop:
+            allow_checkout_tier_change = False
+            report_recovery_eligibility('original_payment_eligibility_rejected')
+            raise
+    report_recovery_eligibility(eligibility_reason)
     manager = AttemptLedger(state_dir, target.account_id, retry_rejected=retry_rejected,
                             replace_unpaid_checkout=replace_unpaid_checkout,
                             target_plan=target_plan, next_cycle_grant=next_cycle_grant) if create else nullcontext()
@@ -1054,7 +1240,8 @@ async def run_browser(target, *, create=False, inspect_existing=False, retry_rej
             return await workflow(context, target, ledger=ledger, existing=existing,
                                   wait_seconds=wait_seconds, review_seconds=review_seconds,
                                   quote_handler=quote_handler, guard_factory=guard_factory, target_plan=target_plan,
-                                  session_budget=session_budget, session_handler=session_handler)
+                                  session_budget=session_budget, session_handler=session_handler,
+                                  allow_checkout_tier_change=allow_checkout_tier_change)
         finally:
             # 服务器 Worker 关闭隔离 Context；本机比特浏览器保留原窗口与登录状态。
             if active_context is None:

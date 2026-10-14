@@ -148,7 +148,7 @@ export class BankRechargeCardService {
   }
 
   encryptBillingName(value: string) {
-    return this.encryption.encrypt(bankRechargeText(value, '持卡人姓名', 120));
+    return this.encryption.encrypt(bankRechargeText(value, '账单姓名', 120));
   }
 
   async assertRechargeCard(
@@ -173,7 +173,7 @@ export class BankRechargeCardService {
       card.billingNameEncrypted &&
       this.encryption.decrypt(card.billingNameEncrypted) !== billingName
     ) {
-      throw new ConflictException('持卡人姓名与该卡已核实的账单资料不一致');
+      throw new ConflictException('账单姓名与该卡已核实的账单资料不一致');
     }
     if (card.billingAddressId && card.billingAddressId !== addressId) {
       throw new ConflictException('账单地址与该卡已核实的地址不一致');
@@ -360,7 +360,7 @@ export class BankRechargeCardService {
         const billingName =
           input.billingName === undefined || input.billingName === ''
             ? undefined
-            : bankRechargeText(input.billingName, '持卡人姓名', 120);
+            : bankRechargeText(input.billingName, '账单姓名', 120);
         if (
           billingName &&
           previous.billingNameEncrypted &&

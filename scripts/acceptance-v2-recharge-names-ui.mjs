@@ -375,7 +375,7 @@ try {
   await page.goto(`${url}/v2/auto-recharge/bank-cards`);
   await page.getByRole('button', { name: '新增银行卡', exact: true }).click();
   const cardDrawer = page.getByRole('dialog', { name: '新增银行卡' });
-  await cardDrawer.getByLabel('持卡人姓名', { exact: true }).fill('Saved Card Person');
+  await cardDrawer.getByLabel('账单姓名', { exact: true }).fill('Saved Card Person');
   await cardDrawer.getByLabel('银行卡卡号', { exact: true }).fill('4242424242424242');
   await cardDrawer.getByLabel('有效期', { exact: true }).fill('12/39');
   await cardDrawer.getByRole('button', { name: '保存', exact: true }).click();
@@ -383,7 +383,7 @@ try {
   await page.getByText('Saved Card Person', { exact: true }).waitFor();
   await page.goto(`${url}/v2/auto-recharge`);
   const cardNumber = page.getByLabel('银行卡号', { exact: true });
-  const holder = page.getByLabel('持卡人姓名', { exact: true });
+  const holder = page.getByLabel('账单姓名', { exact: true });
   await cardNumber.fill('4111111111111111');
   await page.waitForFunction(
     (input) => input.value === 'Old Bound Person',

@@ -232,7 +232,7 @@ export class RechargeNameService {
       binding?.confirmed ? binding.nameEncrypted : null
     ]) {
       if (fixed && this.encryption.decrypt(fixed) !== this.name(name))
-        throw new ConflictException('持卡人姓名与银行卡历史绑定不一致');
+        throw new ConflictException('账单姓名与银行卡历史绑定不一致');
     }
     return card;
   }
@@ -253,7 +253,7 @@ export class RechargeNameService {
       binding?.confirmed ? binding.nameEncrypted : null
     ]) {
       if (fixedName && this.encryption.decrypt(fixedName) !== this.name(value.name))
-        throw new ConflictException('持卡人姓名与银行卡历史绑定不一致');
+        throw new ConflictException('账单姓名与银行卡历史绑定不一致');
     }
     if (card) return card;
     const created = await this.repository.createCard(tx, {

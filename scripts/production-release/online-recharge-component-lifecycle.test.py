@@ -94,11 +94,11 @@ class ContinuousLifecycleTests(unittest.TestCase):
         cls.core = r.c.load_core()
         cls.projection = cls.core.projection_module()
         cls.references = {}
-        for ref in ('HEAD', r.c.AUTHENTICATED_PREDECESSOR['producer']['commit'],
+        for ref in (r.c.APPLICATION_SOURCE, r.c.AUTHENTICATED_PREDECESSOR['producer']['commit'],
                     '0a03fa28e6b844a18833d5c63f1de700f091fc64', r.c.ONLINE_SOURCE):
             commit, raw, files = archive(ref)
             cls.references[ref] = (commit, raw, files)
-        cls.candidate = dict(cls.references['HEAD'][2])
+        cls.candidate = dict(cls.references[r.c.APPLICATION_SOURCE][2])
         # Bind current control edits, but preserve every frozen business byte.
         for name in {*cls.core.HELPERS, *r.HELPERS}:
             path = HERE / name
@@ -115,8 +115,8 @@ class ContinuousLifecycleTests(unittest.TestCase):
         cls.ordinary_output_sha = r.c.fingerprint(cls.projection.inventory(_output))
 
     def setUp(self):
-        runtime = ROOT / '.runtime'
-        runtime.mkdir(exist_ok=True)
+        runtime = ROOT / '.runtime/first-recharge-release-20261014/historical-lifecycle'
+        runtime.mkdir(parents=True, exist_ok=True)
         self.temporary = tempfile.TemporaryDirectory(prefix='online-lifecycle-', dir=runtime)
         self.addCleanup(self.temporary.cleanup)
         self.directory = Path(self.temporary.name).resolve()

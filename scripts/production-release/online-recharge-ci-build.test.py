@@ -15,12 +15,23 @@ HERE = Path(__file__).resolve().parent
 spec = importlib.util.spec_from_file_location('online_ci_test', HERE / 'online-recharge-ci-build.py')
 ci = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(ci)
+HISTORICAL_SOURCE = 'fff7b257fa402e14da5d9aa43aa4ea22095695c5'
+FIRST_RECHARGE_SOURCE = '02a744709c21e2eafbc4ec19e713e4eaad6384d5'
 
 
 class SourceTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.files, cls.record = ci.source_projection()
+        original_git = ci.git
+        def historical_git(*arguments):
+            # Only the fixture's HEAD binding changes; archives and all validators remain real.
+            if arguments == ('rev-parse', 'HEAD'):
+                return original_git('rev-parse', HISTORICAL_SOURCE)
+            if arguments == ('rev-parse', 'HEAD^{tree}'):
+                return original_git('rev-parse', HISTORICAL_SOURCE + '^{tree}')
+            return original_git(*arguments)
+        with patch.object(ci, 'git', side_effect=historical_git):
+            cls.files, cls.record = ci.source_projection()
 
     def test_real_four_git_objects_match_frozen_application_online_and_admin(self):
         self.assertFalse(self.record['releaseAuthority'])
@@ -28,7 +39,7 @@ class SourceTests(unittest.TestCase):
         self.assertEqual(self.record['onlineInputSha256'], ci.c.ONLINE_SHA256)
         self.assertEqual(self.record['ordinaryProducer'], ci.c.sealed_authority()['producer'])
         for name in ci.c.ADMIN_OVERLAY_FILES:
-            self.assertEqual(self.files[name][0], ci.git('show', 'HEAD:' + name))
+            self.assertEqual(self.files[name][0], ci.git('show', self.record['candidateCommit'] + ':' + name))
 
     def test_dirty_working_files_are_not_source_inputs(self):
         with patch.object(Path, 'read_bytes', side_effect=AssertionError('working file read')):
@@ -49,6 +60,14 @@ class SourceTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, 'APPLICATION_SOURCE_CHANGED'):
             ci.c.validate_source_files(changed)
 
+    def test_first_recharge_source_remains_outside_historical_online_seal(self):
+        files = ci.git_files(FIRST_RECHARGE_SOURCE)
+        application = {name: value for name, value in files.items()
+            if name.startswith(ci.c.APP_PREFIXES) or name in ci.c.APP_FILES}
+        self.assertEqual(len(application), 2192)
+        with self.assertRaisesRegex(RuntimeError, 'APPLICATION_SOURCE_CHANGED'):
+            ci.c.validate_source_files(files)
+
     def test_ci_record_is_rejected_by_formal_build_validator(self):
         runtime = ci.load('online-recharge-component-runtime.py')
         value = {'version': 1, 'kind': ci.KIND, 'scope': 'CI_ONLY', 'releaseAuthority': False,
@@ -60,8 +79,8 @@ class SourceTests(unittest.TestCase):
 
 class ContextTests(unittest.TestCase):
     def test_exact_bytes_and_modes_survive_and_repeat_or_tamper_is_rejected(self):
-        runtime = ci.ROOT / '.runtime'
-        runtime.mkdir(exist_ok=True)
+        runtime = ci.ROOT / '.runtime/first-recharge-release-20261014/historical-ci-build'
+        runtime.mkdir(parents=True, exist_ok=True)
         with tempfile.TemporaryDirectory(prefix='online-ci-test-', dir=runtime) as directory:
             target = Path(directory) / 'context'
             files = {'a/file.bin': (b'\0\xff\n', '100644'), 'script': (b'#!/bin/sh\n', '100755')}
@@ -74,8 +93,8 @@ class ContextTests(unittest.TestCase):
                 ci.verify_context(target, files)
 
     def test_symlink_context_is_rejected(self):
-        runtime = ci.ROOT / '.runtime'
-        runtime.mkdir(exist_ok=True)
+        runtime = ci.ROOT / '.runtime/first-recharge-release-20261014/historical-ci-build'
+        runtime.mkdir(parents=True, exist_ok=True)
         with tempfile.TemporaryDirectory(prefix='online-ci-link-', dir=runtime) as directory:
             target = Path(directory) / 'context'
             target.symlink_to(runtime, target_is_directory=True)
