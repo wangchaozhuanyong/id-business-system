@@ -89,6 +89,53 @@ export function readFirstRechargeBillingNameSnapshot(base, paths) {
 }
 export const onlineRechargeRecoveryPolicy =
   'scripts/production-release/online-recharge-recovery.json';
+export const onlineCiBuildControlPaths = Object.freeze([
+  'scripts/production-release/online-recharge-ci-build.py',
+  'scripts/production-release/online-recharge-ci-build.test.py',
+  'scripts/production-release/online-recharge-component-diagnostic.py',
+  'scripts/production-release/online-recharge-component-diagnostic.test.py',
+  'scripts/production-release/online-recharge-component-lifecycle.test.py',
+  'scripts/production-release/online-recharge-component-diagnostic-entry.test.mjs',
+  '.github/workflows/online-recharge-diagnostic.yml'
+]);
+const onlineCiBuildInputs = new Set([
+  'scripts/production-release/online-recharge-ci-build.py',
+  'scripts/production-release/online-recharge-ci-build.test.py',
+  'scripts/production-release/online-recharge-component-lifecycle.test.py',
+  '.github/workflows/quality.yml',
+  '.github/workflows/production-release.yml',
+  'scripts/ci-recharge-scope.mjs',
+  'scripts/ci-recharge-check.mjs',
+  'scripts/production-release/build-images.sh',
+  'scripts/production-release/online-recharge-component-consumer.py',
+  'scripts/production-release/online-recharge-component-runtime.py',
+  'scripts/production-release/online-recharge-component-readonly.py',
+  'scripts/production-release/online-recharge-scope.py',
+  'scripts/production-release/api-admin-pending-projection.py',
+  'scripts/production-release/unpublished-component-successor.py',
+  'apps/api/Dockerfile.mysql',
+  'apps/admin/Dockerfile',
+  'apps/api/package.json',
+  'apps/admin/package.json',
+  'packages/shared/package.json',
+  'scripts/audit-python-dependencies.py',
+  'package.json',
+  'package-lock.json',
+  '.dockerignore',
+  'tsconfig.base.json',
+  'deploy/nginx/admin.conf'
+]);
+export function needsOnlineRechargeCiBuild(paths) {
+  return (
+    !isReleaseArtifactRetentionOnly(paths) &&
+    paths.some(
+      (path) =>
+        onlineCiBuildInputs.has(path) ||
+        path.startsWith('apps/api/src/id-business-v2/online-recharge/') ||
+        path.startsWith('apps/admin/src/v2/features/online-recharge/')
+    )
+  );
+}
 export const productionDatabaseAccessHelper = 'scripts/lib/v2-production-database-access.mjs';
 export const productionDatabaseAccessTest = 'scripts/production-database-access.test.mjs';
 export const productionDatabaseAccessAcceptance =
@@ -166,6 +213,7 @@ export const formalRuntimePackageControlPaths = Object.freeze([
 const onlineRecoveryControls = new Set([
   onlineRechargeRecoveryPolicy,
   productionDatabaseAccessTest,
+  ...onlineCiBuildControlPaths,
   'scripts/production-release/online-recharge-component-consumer.py',
   'scripts/production-release/online-recharge-component-consumer.test.py',
   'scripts/production-release/online-recharge-component-runtime.py',
@@ -3913,7 +3961,16 @@ async function main() {
           : mode === 'mailbox'
             ? ['guards', 'admin', 'api']
             : selectedParts(paths);
-  const result = { mode, reuseMain, reusedParts: [...reused], checkParts, base, evidence };
+  const onlineCiBuild = needsOnlineRechargeCiBuild(paths);
+  const result = {
+    mode,
+    reuseMain,
+    reusedParts: [...reused],
+    checkParts,
+    base,
+    evidence,
+    onlineCiBuild
+  };
   const adminAcceptance =
     checkParts.includes('admin') &&
     adminCheckCommands(mode, paths).some((args) =>
@@ -3926,7 +3983,7 @@ async function main() {
     );
   appendFileSync(
     process.env.GITHUB_OUTPUT,
-    `mode=${mode}\nreuse_main=${reuseMain}\nreused_parts=${JSON.stringify([...reused])}\ncheck_parts=${JSON.stringify(checkParts)}\nbase=${base}\nadmin_acceptance=${adminAcceptance}\n`
+    `mode=${mode}\nreuse_main=${reuseMain}\nreused_parts=${JSON.stringify([...reused])}\ncheck_parts=${JSON.stringify(checkParts)}\nbase=${base}\nadmin_acceptance=${adminAcceptance}\nonline_ci_build=${onlineCiBuild}\n`
   );
   appendFileSync(
     process.env.GITHUB_STEP_SUMMARY,

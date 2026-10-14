@@ -35,6 +35,66 @@ FORBIDDEN = ('REUSE_IMAGE_RUN', 'REUSE_IMAGE_COMMIT', 'REUSE_IMAGE_RUN_ID', 'REU
              'RELEASE_BROWSER_CACHE_IMAGE', 'RELEASE_BROWSER_CACHE_IMAGE_ID', 'CACHE_PLAN_SHA256',
              'DIAGNOSTIC_COMMAND_ID')
 MODES = ('selection', 'label', 'preflight', 'prepare', 'build-proof', 'release', 'readback', 'diagnostic')
+CONTROLLED_CODE = re.compile(r'(?:ONLINE_RECHARGE_COMPONENT|ONLINE_RECHARGE|API_ADMIN|UNPUBLISHED_COMPONENT)_[A-Z0-9_]{1,96}')
+NATIVE_STATES = ('Pending', 'InProgress', 'Delayed', 'Success', 'Failed', 'Cancelled', 'TimedOut', 'Cancelling')
+DIAGNOSTIC_PHASES = ('selection', 'output', 'diagnostic', 'read-preflight', 'read-projection',
+    'load-controller', 'prepare', 'build-proof', 'verify-main', 'verify-quality', 'prepare-parameters',
+    'submit', 'poll', 'authenticate-native', 'save-result')
+
+
+def exception_details(error):
+    # Never include arbitrary exception text, filenames, commands or stderr.
+    classes = (FileExistsError, FileNotFoundError, PermissionError, TimeoutError,
+        subprocess.TimeoutExpired, UnicodeError, ValueError, KeyError, TypeError, OSError, RuntimeError)
+    name = next((kind.__name__ for kind in classes if isinstance(error, kind)), 'UnexpectedError')
+    number = getattr(error, 'errno', None)
+    return {'exceptionClass': name, 'errno': number if type(number) is int and 0 <= number <= 4095 else None}
+
+
+def native_details(raw):
+    result = {'nativeBytesSha256': r.c.digest(raw)}
+    try:
+        value = json.loads(raw)
+        result['nativeStatus'] = value.get('Status') if value.get('Status') in NATIVE_STATES else 'UNKNOWN'
+        for field, name in (('StandardOutputContent', 'stdoutSha256'), ('StandardErrorContent', 'stderrSha256')):
+            if type(value.get(field)) is str:
+                result[name] = r.c.digest(value[field].encode())
+        code = value.get('ResponseCode')
+        if type(code) is int and -1 <= code <= 255:
+            result['responseCode'] = code
+    except (ValueError, TypeError, AttributeError):
+        result['nativeStatus'] = 'UNKNOWN'
+    return result
+
+
+def stage(trace, phase, **values):
+    if trace is not None:
+        r.need(phase in DIAGNOSTIC_PHASES, 'DIAGNOSTIC_PHASE_INVALID')
+        trace.update(phase=phase, **values)
+
+
+def diagnostic_failure(error, mode, p=None, trace=None):
+    trace = trace or {}
+    phase = trace.get('phase', 'selection')
+    outcome = ('AUTHENTICATION_REJECTED' if phase == 'authenticate-native' else
+               'RESULT_UNKNOWN' if trace.get('accepted') is True or phase == 'submit' else 'LOCAL_FAILED')
+    if isinstance(error, NativeFailure):
+        # A validated server rejection is a known failed command, not a local
+        # refusal to authenticate its native evidence.
+        outcome = 'COMMAND_FAILED'
+    result = {'version': 1, 'kind': r.KIND + '_DIAGNOSTIC', 'mode': mode if mode in MODES else 'selection',
+        'phase': phase if phase in DIAGNOSTIC_PHASES else 'selection', 'outcome': outcome,
+        **safe_failure(error), **exception_details(error), 'automaticRetryAllowed': False,
+        'nativeAuthenticated': isinstance(error, NativeFailure),
+        'serverRejected': isinstance(error, NativeFailure) and error.result['receipt'].get('status')
+            == 'ONLINE_RECHARGE_COMPONENT_REJECTED'}
+    if p is not None:
+        result['producer'] = p
+    for name in ('commandId', 'instanceId', 'nativeStatus', 'nativeBytesSha256', 'stdoutSha256',
+                 'stderrSha256', 'responseCode'):
+        if name in trace:
+            result[name] = trace[name]
+    return result
 
 
 class NativeFailure(RuntimeError):
@@ -316,7 +376,7 @@ def parameters(mode, core, p, *, input_artifacts=None, origin_raw=None, current_
 
 def safe_failure(error):
     code = str(error)
-    if not re.fullmatch(r'ONLINE_RECHARGE_COMPONENT_[A-Z0-9_]{1,96}', code):
+    if CONTROLLED_CODE.fullmatch(code) is None:
         code = 'ONLINE_RECHARGE_COMPONENT_REMOTE_EVIDENCE_UNAVAILABLE'
     return {'status': 'ONLINE_RECHARGE_COMPONENT_FAILED', 'code': code}
 
@@ -376,14 +436,17 @@ def diagnostic(core, p, output):
     return value
 
 
-def transport(mode, core, p, output):
+def transport(mode, core, p, output, trace=None):
+    stage(trace, 'verify-main')
     verify_main_head(p)
     inputs = None
     if mode == 'release':
+        stage(trace, 'verify-quality')
         verify_quality(p)
         proof = core.private_bytes(Path(r.PROOF).absolute(), cap=256 * 1024)
         preflight = core.private_bytes(Path(r.PREFLIGHT).absolute(), cap=256 * 1024)
         inputs = (proof, preflight)
+    stage(trace, 'prepare-parameters')
     params = parameters(mode, core, p, input_artifacts=inputs)
     path = output / (r.PREFIX + '-' + mode + '-parameters.json')
     write_once(core, path, params)
@@ -392,11 +455,13 @@ def transport(mode, core, p, output):
     core.write_private(intent, {'producer': p, 'mode': mode, 'expectedCurrent': os.environ['EXPECTED_CURRENT'],
         'parametersSha256': r.c.fingerprint(params), 'status': 'SUBMITTING_ONCE'})
     region, instance = os.environ['AWS_REGION'], os.environ['PRODUCTION_INSTANCE_ID']
+    stage(trace, 'submit')
     sent = command_raw('aws', '--region', region, 'ssm', 'send-command', '--instance-ids', instance,
         '--document-name', 'AWS-RunShellScript', '--parameters', 'file://' + str(path),
         '--timeout-seconds', params['executionTimeout'][0], '--comment', 'Online component ' + mode,
         '--query', 'Command.CommandId', '--output', 'text').decode('ascii').strip()
     r.need(re.fullmatch('[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}', sent) is not None, 'COMMAND_ID_INVALID')
+    stage(trace, 'poll', accepted=True, commandId=sent, instanceId=instance)
     write_once(core, output / (r.PREFIX + '-' + mode + '-invocation-metadata.json'),
         {'producer': p, 'mode': mode, 'commandId': sent, 'instanceId': instance, 'status': 'ACCEPTED'})
     deadline = time.monotonic() + (1845 if mode == 'release' else 645)
@@ -406,16 +471,21 @@ def transport(mode, core, p, output):
         if raw is None:
             time.sleep(5)
             continue
+        if trace is not None:
+            trace.update(native_details(raw))
         native = core.closed_json(raw, 128 * 1024)
         if native.get('Status') in ('Pending', 'InProgress', 'Delayed'):
             time.sleep(5)
             continue
         if native.get('Status') == 'Failed':
+            stage(trace, 'authenticate-native')
             failure = validate_failure_native(core, raw, p, sent, instance)
             write_once(core, output / (r.PREFIX + '-' + mode + '-failure.json'), failure)
             raise NativeFailure(failure)
         r.need(native.get('Status') == 'Success', 'REMOTE_OPERATION_FAILED')
+        stage(trace, 'authenticate-native')
         result = validate_native(core, raw, mode, p, sent, instance)
+        stage(trace, 'save-result')
         destination = Path(r.PREFLIGHT).absolute() if mode == 'preflight' else output / (r.PREFIX + '-' + mode + '.json')
         write_once(core, destination, result)
         return result
@@ -424,39 +494,52 @@ def transport(mode, core, p, output):
 
 def main(mode=None):
     mode = sys.argv[1] if mode is None and len(sys.argv) == 2 else mode
-    core, p = selected(mode)
-    if mode == 'selection':
-        return 0
-    output = output_directory()
-    if mode == 'diagnostic':
-        print(json.dumps(diagnostic(core, p, output), sort_keys=True))
-        return 1
-    if mode in ('prepare', 'build-proof', 'label'):
-        preflight = read_preflight(core, p)
-        if mode == 'label':
-            record = core.closed_json(core.private_bytes(Path(r.PROJECTION).absolute(), cap=128 * 1024))
-            r.need(record.get('candidateProducer') == p and record.get('contextPath') == r.CONTEXT,
-                   'BUILD_SELECTION_CHANGED')
-            print(r.c.fingerprint(record))
-            return 0
-        d = r.modules(None)[0]
-        value = r.prepare(d, p, preflight) if mode == 'prepare' else r.build_proof(
-            d, p, preflight, os.environ['QUALITY_RUN_ID'], os.environ['RELEASE_REPOSITORY'])
-        print(json.dumps({'kind': r.KIND, 'mode': mode, 'producer': p}, sort_keys=True))
-        return 0
+    core = p = output = None
+    trace = {'phase': 'selection'}
     try:
-        value = transport(mode, core, p, output)
+        core, p = selected(mode)
+        if mode == 'selection':
+            return 0
+        stage(trace, 'output')
+        output = output_directory()
+        if mode == 'diagnostic':
+            stage(trace, 'diagnostic')
+            print(json.dumps(diagnostic(core, p, output), sort_keys=True))
+            return 1
+        if mode in ('prepare', 'build-proof', 'label'):
+            stage(trace, 'read-preflight')
+            preflight = read_preflight(core, p)
+            if mode == 'label':
+                stage(trace, 'read-projection')
+                record = core.closed_json(core.private_bytes(Path(r.PROJECTION).absolute(), cap=128 * 1024))
+                r.need(record.get('candidateProducer') == p and record.get('contextPath') == r.CONTEXT,
+                       'BUILD_SELECTION_CHANGED')
+                print(r.c.fingerprint(record))
+                return 0
+            stage(trace, 'load-controller')
+            d = r.modules(None)[0]
+            stage(trace, mode)
+            value = r.prepare(d, p, preflight) if mode == 'prepare' else r.build_proof(
+                d, p, preflight, os.environ['QUALITY_RUN_ID'], os.environ['RELEASE_REPOSITORY'])
+            print(json.dumps({'kind': r.KIND, 'mode': mode, 'producer': p}, sort_keys=True))
+            return 0
+        value = transport(mode, core, p, output, trace)
         receipt = value['serverReceipt'] if mode == 'preflight' else value['receipt']
         print(json.dumps({name: receipt[name] for name in ('version', 'scope', 'kind', 'status', 'producer',
             'onlinePublished', 'migrationPerformed', 'businessActions')}, sort_keys=True))
         return 0
     except Exception as error:
-        if isinstance(error, NativeFailure):
-            print(json.dumps(failure_summary(error.result['receipt']), sort_keys=True))
-            return 1
         failure = safe_failure(error)
-        write_once(core, output / (r.PREFIX + '-failure.json'), failure)
-        print(json.dumps(failure, sort_keys=True))
+        details = diagnostic_failure(error, mode, p, trace)
+        if core is not None and output is not None:
+            try:
+                write_once(core, output / (r.PREFIX + '-' + details['mode'] + '-diagnostic.json'), details)
+                if not isinstance(error, NativeFailure):
+                    write_once(core, output / (r.PREFIX + '-failure.json'), failure)
+            except Exception as artifact_error:
+                details['diagnosticWriteCode'] = safe_failure(artifact_error)['code']
+        print(json.dumps(failure_summary(error.result['receipt']) if isinstance(error, NativeFailure) else details,
+                         sort_keys=True))
         return 1
 
 

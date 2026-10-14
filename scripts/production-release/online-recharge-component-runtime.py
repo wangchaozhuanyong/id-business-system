@@ -381,12 +381,12 @@ def validate_preflight(core, transport, p, expected):
 def preflight(d, p, expected):
     authority()
     d, core, _admin, workspace, online = modules(d)
-    previous, _manifest, evidence = baseline(d, expected)
-    _files, _output, record = source(d, p, evidence)
+    previous, _manifest, evidence = protected_stage('BASELINE', baseline, d, expected)
+    _files, _output, record = protected_stage('SOURCE', source, d, p, evidence)
     # The ordinary source directory retains both SQL files even though its
     # migration image excludes ONLINE; no file increment authorizes execution.
-    c.validate_source_files(_files)
-    need(d.shutil.disk_usage(d.BASE).free > 6 * 1024**3, 'DISK_LOW_BEFORE_PULL')
+    protected_stage('SOURCE', c.validate_source_files, _files)
+    need(protected_stage('DISK', d.shutil.disk_usage, d.BASE).free > 6 * 1024**3, 'DISK_LOW_BEFORE_PULL')
     return {'version': 1, 'scope': SCOPE, 'kind': KIND, 'status': 'ONLINE_RECHARGE_BASELINE_VERIFIED',
         'producer': p, 'baseline': evidence, 'sourceProjectionSha256': c.fingerprint(record),
         'applicationInputSha256': c.APPLICATION_SHA256, 'onlineInputSha256': c.ONLINE_SHA256,
@@ -486,9 +486,25 @@ def build_proof(d, p, transport, quality_run, repository):
     d, core, _admin, _workspace, online = modules(d)
     receipt = validate_preflight(core, transport, p, transport['expectedCurrent'])
     _files, output, record = source(d, p, receipt['baseline'])
-    need(core.closed_json(core.private_bytes(Path(PROJECTION).resolve())) == record,
+    projection_path = Path(PROJECTION).absolute()
+    projection_raw = core.private_bytes(projection_path)
+    need(core.closed_json(projection_raw) == record
+         and projection_raw == (json.dumps(record, sort_keys=True, separators=(',', ':'), allow_nan=False) + '\n').encode(),
          'BUILD_CONTEXT_CHANGED')
     verify_context(core, output, record)
+    # Build and push both measure the same run's images. The original proof is
+    # immutable: authenticate and remeasure it, never recreate or replace it.
+    proof_path = Path(PROOF).absolute()
+    def proof_identity():
+        row = proof_path.lstat()
+        return tuple(getattr(row, name) for name in (
+            'st_dev', 'st_ino', 'st_mode', 'st_nlink', 'st_uid', 'st_gid', 'st_size', 'st_mtime_ns', 'st_ctime_ns'))
+    saved_proof = saved_identity = None
+    if proof_path.exists() or proof_path.is_symlink():
+        saved_identity = proof_identity()
+        saved_proof = core.private_bytes(proof_path, cap=256 * 1024)
+        need(proof_identity() == saved_identity, 'BUILD_PROOF_CHANGED')
+        validate_build(core.closed_json(saved_proof, 256 * 1024), p, record, transport, quality_run, repository)
     result = {'version': 1, 'scope': SCOPE, 'kind': KIND + '_BUILD_PROOF', 'producer': p,
         'qualityRunId': quality_run, 'sourceProjection': record, 'preflightSha256': c.fingerprint(transport),
         'migrations': dict(c.MIGRATIONS), 'images': {}}
@@ -504,8 +520,15 @@ def build_proof(d, p, transport, quality_run, repository):
         result['images'][name] = {'reference': ref, 'imageId': metadata['Id'], **content}
     validate_build(result, p, record, transport, quality_run, repository)
     for name in IMAGES:
-        verify_image(d, online, Path(CONTEXT).resolve(), output, p, result, name)
-    core.write_private(Path(PROOF).resolve(), result)
+        verify_image(d, online, Path(CONTEXT).absolute(), output, p, result, name)
+    need(core.private_bytes(projection_path) == projection_raw, 'BUILD_CONTEXT_CHANGED')
+    verify_context(core, output, record)
+    if saved_proof is None:
+        core.write_private(proof_path, result)
+    else:
+        canonical = (json.dumps(result, sort_keys=True, separators=(',', ':'), allow_nan=False) + '\n').encode()
+        need(saved_proof == canonical and core.private_bytes(proof_path, cap=256 * 1024) == saved_proof
+             and proof_identity() == saved_identity, 'BUILD_PROOF_CHANGED')
     return result
 
 
@@ -1580,20 +1603,8 @@ def wire(value):
 
 def validate_component_invocation(core, raw, command_id, instance_id, status='Success'):
     authority()
-    original = None
-    validation_raw = raw
-    if status == 'Failed':
-        original = core.closed_json(raw, 128 * 1024)
-        if original.get('StandardErrorContent') == 'failed to run commands: exit status 1':
-            core.need(original.get('Status') == 'Failed' and type(original.get('ResponseCode')) is int
-                      and original['ResponseCode'] == 1, 'INVOCATION_INVALID')
-            # AWS adds this exact annotation to an exit-1 result. Validate only a
-            # copy through the frozen empty-stderr gate; retain the actual native.
-            validation = dict(original)
-            validation['StandardErrorContent'] = ''
-            validation_raw = json.dumps(validation, sort_keys=True, separators=(',', ':'),
-                                        ensure_ascii=False, allow_nan=False).encode()
-    invocation, envelope = core.validate_invocation(validation_raw, command_id, instance_id, status=status)
+    invocation, envelope = (failed_component_invocation(core, raw, command_id, instance_id)
+                            if status == 'Failed' else core.validate_invocation(raw, command_id, instance_id, status=status))
     need(set(envelope) == {'version', 'kind', 'encoding', 'decodedLength', 'payloadSha256', 'payload'}
          and type(envelope['version']) is int and envelope['version'] == 1
          and envelope['kind'] == KIND + '_WIRE' and envelope['encoding'] == 'gzip-base64'
@@ -1604,7 +1615,7 @@ def validate_component_invocation(core, raw, command_id, instance_id, status='Su
     need(len(decoded) == envelope['decodedLength'] and c.digest(decoded) == envelope['payloadSha256'], 'WIRE_CHANGED')
     receipt = core.closed_json(decoded)
     need(receipt.get('kind') == KIND and receipt.get('scope') == SCOPE, 'WIRE_RECEIPT_CHANGED')
-    return original if original is not None else invocation, receipt
+    return invocation, receipt
 
 
 def rejection_code(error):
@@ -1638,6 +1649,63 @@ def rejection_code(error):
         if error_type is exception_type:
             return 'ONLINE_RECHARGE_COMPONENT_' + code
     return 'ONLINE_RECHARGE_COMPONENT_PROTECTED_OPERATION_FAILED'
+
+
+def failed_component_invocation(core, raw, command_id, instance_id):
+    """Accept the agent's exact failure trailer, without changing native bytes.
+
+    The sealed ordinary validator and every Success path remain unchanged.
+    Only Failed/1 may carry the fixed AWS agent trailer observed in the original
+    invocation. Any other stderr still rejects the original evidence.
+    """
+    value = core.closed_json(raw, 128 * 1024)
+    need(type(value) is dict and value.get('CommandId') == command_id
+         and re.fullmatch('[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}', command_id or '')
+         and value.get('InstanceId') == instance_id and value.get('DocumentName') == 'AWS-RunShellScript'
+         and value.get('PluginName') == 'aws:runShellScript' and value.get('Status') == 'Failed'
+         and type(value.get('ResponseCode')) is int and value['ResponseCode'] == 1
+         and value.get('StandardErrorContent') in ('', 'failed to run commands: exit status 1')
+         and type(value.get('StandardOutputContent')) is str
+         and value.get('StandardOutputUrl') in (None, '') and value.get('StandardErrorUrl') in (None, '')
+         and 0 < len(value['StandardOutputContent']) < 24000
+         and all(type(value.get(n)) is str and re.fullmatch('[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:.]+(?:Z|\\+00:00)', value[n])
+                 for n in ('ExecutionStartDateTime', 'ExecutionEndDateTime')), 'INVOCATION_INVALID')
+    from datetime import datetime, timezone, timedelta
+    started, ended = (datetime.fromisoformat(value[n].replace('Z', '+00:00'))
+                      for n in ('ExecutionStartDateTime', 'ExecutionEndDateTime'))
+    need(started <= ended <= datetime.now(timezone.utc) + timedelta(minutes=5), 'INVOCATION_INVALID')
+    return value, core.closed_json(value['StandardOutputContent'].encode(), 24000)
+
+
+def safe_error_code(error, phase=None):
+    # Retain main's closed handling. Unknown subclasses must never expose
+    # __str__, args, errno or other user-controlled properties to diagnostics.
+    error_type = type(error)
+    if error_type is RuntimeError:
+        return rejection_code(error)
+    classes = (urllib.error.HTTPError, urllib.error.URLError, subprocess.TimeoutExpired,
+               FileExistsError, FileNotFoundError, PermissionError, TimeoutError, json.JSONDecodeError,
+               AttributeError, NameError, ImportError, UnicodeError, ValueError, KeyError, TypeError, OSError)
+    exception_type = next((cls for cls in classes if error_type is cls), None)
+    if exception_type is None:
+        return rejection_code(error)
+    kind = exception_type.__name__.upper()
+    if error_type is urllib.error.HTTPError:
+        http_code = error.code
+        kind += '_' + (str(http_code) if type(http_code) is int
+                      and http_code in (403, 404, 429, 500, 502, 503, 504) else 'UNKNOWN')
+    number = error.errno if any(error_type is cls for cls in
+        (FileExistsError, FileNotFoundError, PermissionError, TimeoutError, OSError)) else None
+    suffix = '_ERRNO_' + str(number) if type(number) is int and 0 <= number <= 4095 else ''
+    marker = phase + '_' if type(phase) is str and phase in ('BASELINE', 'SOURCE', 'DISK') else ''
+    return 'ONLINE_RECHARGE_COMPONENT_PROTECTED_' + marker + kind + suffix
+
+
+def protected_stage(phase, function, *args):
+    try:
+        return function(*args)
+    except Exception as error:
+        raise RuntimeError(safe_error_code(error, phase)) from None
 
 
 def cli(d=None):

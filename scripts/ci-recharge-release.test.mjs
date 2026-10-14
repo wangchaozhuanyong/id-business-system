@@ -14,6 +14,42 @@ import { join } from 'node:path';
 import test from 'node:test';
 import { gzipSync } from 'node:zlib';
 import { load as loadYaml } from 'js-yaml';
+
+test('Quality guards and full checks include scoped four-image build-only verification', () => {
+  const workflow = loadYaml(readFileSync('.github/workflows/quality.yml', 'utf8'));
+  assert.equal(workflow.permissions['id-token'], undefined);
+  assert.equal(
+    workflow.jobs['change-scope'].outputs.online_ci_build,
+    '${{ steps.recharge.outputs.online_ci_build }}'
+  );
+  for (const job of ['full-quality', 'recharge']) {
+    const steps = workflow.jobs[job].steps;
+    const builds = steps.filter(
+      (step) => step.name === 'Build and verify sealed ONLINE images without production access'
+    );
+    assert.equal(builds.length, 1);
+    assert.equal(
+      builds[0].run,
+      'python3 -B scripts/production-release/online-recharge-ci-build.py'
+    );
+    assert.match(builds[0].if, /online_ci_build == 'true'/);
+    assert.equal(builds[0].env, undefined);
+    if (job === 'recharge') {
+      assert.match(builds[0].if, /matrix\.part == 'guards'/);
+      assert.match(
+        builds[0].if,
+        /!contains\(fromJSON\(needs\.change-scope\.outputs\.reused_parts\)/
+      );
+    }
+    const saved = steps.find((step) => step.name === 'Preserve CI-only ONLINE image verification');
+    assert.equal(saved.with.path, '.deploy/ci-online-recharge/*/ci-build-only.json');
+    assert.equal(saved.if, builds[0].if);
+    assert.ok(steps.indexOf(saved) > steps.indexOf(builds[0]));
+  }
+  assert.ok(workflow.jobs.quality.needs.includes('full-quality'));
+  assert.ok(workflow.jobs.quality.needs.includes('recharge'));
+  assert.ok(!JSON.stringify(workflow).includes('configure-aws-credentials'));
+});
 import {
   adminCheckCommands,
   adminUiGuardChecks,
