@@ -64,3 +64,15 @@
 PR Quality `38475080972` 对 `58f52c573ddf4134fb08e01b4f70150db61f2110`、tree `1f452fb57c973feb2e075e761b3862c6d6d93f18` 全部成功。合并前另一个已批准批次 #466 正式发布 `43c31870c9497d900491cdb19c5f61c766f3b344`，tree `ede35ed238c2b0c00f536dbca25014d748637749`；其 Quality `38475332468` 与生产 `38476335896` 均成功。本轮因此把尚未上线的唯一确认 profile 精确重绑最新 43 前驱及同一完整控制来源，直接保留已上线的七项诊断文件，只叠加原两项冻结 UI；不再沿用旧 7a 控制来源或 f193 当前状态。原 b1 的 `2e9549…` 完整应用封印、最新已发布 `c4f1c8…` 完整封印、七项已审核路径断言均保留；旧 b1 加新 overlay、任意额外业务改动均拒绝。精确允许台账仅原三项及 `WORKSPACE_RELEASE_CLEANUP_20261014.md`，不扩大文档范围。
 
 新前驱常量来自原生 `unpublished-component-evidence-38476335896-1`，ZIP 45,824 bytes、SHA256 `17680747b772b2612b504ba568c36ee0c2c1f02db7fad54bc7e7588aa9223283`。独立 31 项核验复算固定 Git 投影、三个输入 chunk 参数和 preflight 原 getter；真实 build-proof 为 68,134 bytes，本轮仅对此固定前驱证明读取使用 128KiB 上限，仍强制原始字节 SHA，其他读取维持原上限。证据包没有 manifest/preservation 原文件及 release/readback 原 getter 字节，未将回执 hash 冒充原件；正式准入前必须由新 43 只读 preflight 核对服务器真实 manifest/proof/preservation、源码、镜像内容与七服务状态。此次只更换 Admin，保护 API 和另外五服务，无迁移、权限变更、API 故障恢复、付款或额外助手 WIP；本段不表示本轮已经上线。
+
+### 正式发布与独立回读结果
+
+PR #467 已合入 `568e9390a304a36edba86823d5d5b31e5506763b`，tree `6961e61290108e7301b9629f2d62685c88c9cec6`。PR Quality `38481370922` 全部成功，Admin 519 项通过；main Quality `38485011155` 精确复用相同源码树并成功。合并前最终 39、12、31、7、5、115、179 项受影响控制检查和独立增量审查通过，两份业务补丁指纹保持不变。
+
+实机只读预检 `38485146815` 成功，读取并核对真实 43 manifest、68,134-byte proof、preservation、镜像内容、配置与七个运行服务。manifest SHA256 为 `204182bc2dee9acbd9b0f8594471fcefca69564f2b82893b5fe90d8025852f14`，可用空间 `28946591744` bytes，六服务保留，无迁移或业务动作。前述原 artifact 缺失服务器原件的准入限制，已由本次实机强字节核验解决。
+
+正式 Admin 发布 `38485433818` 成功，独立回读命令 `735a823b-3431-4ef4-bbef-ac38ce0191be` 确认运行来源与构建证明一致。Admin 镜像 ID `sha256:bd4a789eb6295a976066e16c0ee4e467c5a7622056ce23d8db7233048ccdc9a4`、226 文件内容 SHA256 `ca955e57f53bf104427e6e3842ffec597016e4268db9df422c7018449bc2065a`；API 保持 `43c31870c9497d900491cdb19c5f61c766f3b344`，另外五服务完整保留。实际投影 SHA256 为 `5765c1932777da4b36b157523551b4c7fd551c23a4709d086a71487ccba34bd0`。三个原生 artifact／14 个 JSON 的原 ZIP digest、run/commit、闭合字段及本地实际源码投影全部复核通过；磁盘 before-build、before-pull、after-publish 三阶段回执均为 `APPLIED`，容量与发布核验成功，没有另行触发独立清理。
+
+公开 HTML 为 `v2-568e9390a304a36edba86823d5d5b31e5506763b`，入口资源和 API ready 正常。独立新标签页只读验收 `/v2/auto-recharge`：124 个捕获响应全部 200/304，充值 JS/CSS 实际加载成功，最终忙碌区域 0、可见报错 0、网络失败 0、运行异常 0；16 次 API 读取，未创建订单或执行付款。标题出现耗时 600ms，仅为标题时序，不冒充全部数据完成耗时。本轮不重复真实付款或订阅，原官网两次 400 的精确原因仍未确定，真实付款成功及 3DS 未验收。本机助手额外四份 WIP 未纳入，助手未被重启或覆盖。
+
+主目录采用冻结的新 43＋确认两文件＋22 项原真实 WIP 组合，Admin/API 类型、162 项前端、39 项 API mock、七项 UI 规则与 pay.py AST 均通过。原 56 文件备份完整；只按最终 main 重算 22 项补丁并保留 14 份历史设计，不回放旧整份 stash。实际同步结果以 `backups/bitbrowser-confirm-expiry-20261014/main-before-sync/recovery-execution.json` 的 `MAIN_UPDATED_TRUE_WIP_RESTORED` 及本轮 runtime 完结报告为准，保护方案验证不代替实际执行。完整原生证据归本轮工作树 `.runtime/bitbrowser-confirm-expiry-20261014/release/`；本次台账追加不再次部署应用。
