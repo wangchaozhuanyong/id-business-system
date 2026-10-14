@@ -225,7 +225,8 @@ def original_evidence(run_id, attempt):
          and intent['expectedCurrent'] == client.r.current_predecessor()
          and intent['status'] == 'SUBMITTING_ONCE'
          and intent['parametersSha256'] == authenticate_parameters(params, p, instance, mode, saved), 'INTENT_CHANGED')
-    return {'producer': p, 'mode': mode, 'commandId': metadata['commandId'], 'instanceId': instance,
+    return {'producer': p, 'mode': mode, 'expectedCurrent': intent['expectedCurrent'],
+            'commandId': metadata['commandId'], 'instanceId': instance,
             'evidenceJobId': str(job['id']), 'artifactId': str(artifact['id']),
             'artifactBytesSha256': client.r.c.digest(raw)}
 
@@ -252,7 +253,17 @@ def observe(binding):
         if native.get('Status') != 'Success':
             client.stage(trace, 'poll')
             raise RuntimeError('ONLINE_RECHARGE_COMPONENT_RESULT_NOT_AUTHENTICATED')
-        client.validate_native(core, raw, binding['mode'], binding['producer'], binding['commandId'], binding['instanceId'])
+        if binding['mode'] == 'preflight':
+            # The standalone diagnostic has no release environment. Bind the
+            # already authenticated original intent through the explicit F
+            # descriptor and retain every native/predecessor receipt check.
+            descriptor = {'version': 1, 'kind': client.r.KIND + '_PREFLIGHT_TRANSPORT',
+                'producer': binding['producer'], 'expectedCurrent': binding['expectedCurrent'],
+                'commandId': binding['commandId'], 'instanceId': binding['instanceId'],
+                'invocationBytesSha256': client.r.c.digest(raw)}
+            client.preflight_from_native(core, client.r, descriptor, raw)
+        else:
+            client.validate_native(core, raw, binding['mode'], binding['producer'], binding['commandId'], binding['instanceId'])
         return {**client.diagnostic_failure(RuntimeError('ONLINE_RECHARGE_COMPONENT_NATIVE_VERIFIED'),
             binding['mode'], binding['producer'], trace), **binding, 'outcome': 'VERIFIED_SUCCESS',
             'nativeAuthenticated': True, 'status': 'ONLINE_RECHARGE_COMPONENT_DIAGNOSTIC_VERIFIED'}
