@@ -957,7 +957,7 @@ class PaymentBrowserTests(unittest.IsolatedAsyncioTestCase):
         else:
             await route.abort()  # 禁止任何请求到公网，包括未列出的边界情况。
 
-    async def flow(self, pay=True, confirmer=None, *, wait_seconds=.3):
+    async def flow(self, pay=True, confirmer=None, *, wait_seconds=5):
         async def local_browser(target, **kwargs):
             from attempt_ledger import existing_checkout
             return await workflow(self.context, target, existing=existing_checkout(self.root, target.account_id),

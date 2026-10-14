@@ -79,14 +79,29 @@ def prepare():
     verify_scope(contract)
     need(not OUTPUT.exists(), 'BUILD_OUTPUT_EXISTS')
     OUTPUT.mkdir(parents=True, mode=0o700)
+    # Rolldown orders module identifiers by resolved path. Keep dependency realpaths
+    # before both source trees, as in the published build, without changing versions.
+    dependencies = OUTPUT / '00-dependencies'
+    source = subprocess.check_output(['git', 'archive', contract['sourceBaseline']], cwd=ROOT)
+    extract_source(source, dependencies)
+    run('npm', 'ci', '--no-audit', cwd=dependencies)
     baseline = OUTPUT / 'baseline'
-    extract_source(subprocess.check_output(['git', 'archive', contract['sourceBaseline']], cwd=ROOT), baseline)
+    extract_source(source, baseline)
     candidate = OUTPUT / 'candidate'
-    extract_source(subprocess.check_output(['git', 'archive', contract['sourceBaseline']], cwd=ROOT), candidate)
+    extract_source(source, candidate)
     for name in {**contract['changedSources'], **contract.get('validationOnlySources', {})}:
         (candidate / name).write_bytes((ROOT / name).read_bytes())
     for context in (baseline, candidate):
-        run('npm', 'ci', '--no-audit', cwd=context)
+        modules = context / 'node_modules'
+        modules.mkdir()
+        for package in (dependencies / 'node_modules').iterdir():
+            if package.name != '@apple-business':
+                (modules / package.name).symlink_to(package, target_is_directory=True)
+        workspaces = modules / '@apple-business'
+        workspaces.mkdir()
+        for package in (dependencies / 'node_modules/@apple-business').iterdir():
+            relative = package.resolve().relative_to(dependencies)
+            (workspaces / package.name).symlink_to(context / relative, target_is_directory=True)
         run('npm', 'run', 'prisma:mysql:generate', '--workspace', 'apps/api', cwd=context)
         run('npm', 'run', 'build', '--workspace', 'packages/shared', cwd=context)
 
@@ -96,7 +111,8 @@ def build():
     verify_scope(contract)
     baseline, candidate = OUTPUT / 'baseline', OUTPUT / 'candidate'
     run('npm', 'run', 'build', '--workspace', 'apps/api', cwd=baseline)
-    baseline_env = {**os.environ, 'VITE_BUILD_ID': 'v2-' + contract['sourceBaseline']}
+    baseline_env = {**os.environ, 'NODE_ENV': 'production',
+                    'V2_BUILD_ID': 'v2-' + contract['sourceBaseline']}
     run('npm', 'run', 'build', '--workspace', 'apps/admin', cwd=baseline, env=baseline_env)
     need(digest((baseline / MODULE).read_bytes()) == contract['apiValidationSha256'],
          'BASELINE_API_NOT_REPRODUCED')
@@ -106,7 +122,7 @@ def build():
     run('npm', 'run', 'build', '--workspace', 'apps/api', cwd=candidate)
     commit, tree = git('rev-parse', 'HEAD'), git('rev-parse', 'HEAD^{tree}')
     run('npm', 'run', 'build', '--workspace', 'apps/admin',
-        cwd=candidate, env={**os.environ, 'VITE_BUILD_ID': 'v2-' + commit})
+        cwd=candidate, env={**os.environ, 'NODE_ENV': 'production', 'V2_BUILD_ID': 'v2-' + commit})
     payload = OUTPUT / 'payload'
     (payload / 'api').mkdir(parents=True)
     shutil.copyfile(candidate / MODULE, payload / 'api/recharge-validation.js')
