@@ -82,10 +82,59 @@ def synthetic_records():
     return authority, (raw, m, b, s)
 
 
+def synthetic_admin_records():
+    """Synthetic two-publication chain; no production receipt is manufactured."""
+    old_authority, originals = synthetic_records()
+    native, old, old_proof, state = (json.loads(raw) for raw in originals)
+    old.update(adminPublication={'syntheticAdmin': True}, apiWorkspacePublication={'syntheticWorkspace': True},
+        pendingOnlineMigration={'syntheticPending': True}, preservedMigrationOrigin={'syntheticMigration': True},
+        apiHotfixPublication={'syntheticHotfix': True})
+    old_raw = encoded(old); old_authority['manifestBytesSha256'] = c.digest(old_raw)
+    old_receipt = json.loads(native['StandardOutputContent']); old_receipt['manifestBytesSha256'] = c.digest(old_raw)
+    native['StandardOutputContent'] = encoded(old_receipt).decode() + '\n'
+    old_authority.update(receiptSha256=c.fingerprint(old_receipt), invocationBytesSha256=c.digest(encoded(native)))
+    originals = (encoded(native), old_raw, encoded(old_proof), encoded(state))
+    authority = copy.deepcopy(c.AUTHENTICATED_ADMIN_SUCCESSOR)
+    authority['instanceId'] = old_authority['instanceId']; p = authority['producer']
+    projection = {'profile': c.ADMIN_PROFILE, 'sourceBasisCommit': old['commit'],
+        'apiComponentBaseline': old['commit'], 'sourceBasisTree': old['sourceTree'],
+        'overlaySha256': c.ADMIN_OVERLAY_SHA256, 'inheritedProjectionSha256': old_authority['projectionSha256']}
+    projection['projectionSha256'] = c.fingerprint(projection)
+    proof = {'commit': p['commit'], 'sourceTree': p['sourceTree'], 'runId': p['workflowRunId'],
+        'runAttempt': p['workflowRunAttempt'], 'qualityRunId': c.ADMIN_QUALITY_RUN,
+        'scope': 'ADMIN_PENDING_ONLINE_BUILD', 'projection': projection}
+    ledger = {'commit': p['commit'], 'sourceTree': p['sourceTree'], 'scope': 'ADMIN_ONLY_PENDING_ONLINE_SUCCESSOR',
+        'profile': c.ADMIN_PROFILE, 'buildProofSha256': c.fingerprint(proof), 'projection': projection,
+        'inheritedOriginCommit': old['commit'], 'inheritedManifestSha256': c.digest(old_raw),
+        'inheritedApiComponentPublicationSha256': c.fingerprint(old['apiComponentPublication']),
+        'inheritedAdminPublicationSha256': c.fingerprint(old['adminPublication']),
+        'componentBaselines': {'api': old['commit']}, 'onlinePublished': False, 'migrationPerformed': False,
+        'databaseGrantsChanged': False, 'businessActions': 0, 'preservedServices': {
+            n: {'before': state['after'][n], 'after': copy.deepcopy(state['after'][n])} for n in c.SERVICES if n != 'admin'}}
+    manifest = {**old, 'commit': p['commit'], 'sourceTree': p['sourceTree'], 'adminPublication': ledger,
+        'deploymentRun': 'github-actions-' + p['workflowRunId'] + '-' + p['workflowRunAttempt'],
+        'imageBuildRun': 'github-actions-' + p['workflowRunId'] + '-' + p['workflowRunAttempt'],
+        'ciWorkflowRunId': int(c.ADMIN_QUALITY_RUN), 'previousCommit': old['commit'],
+        'previousManifestSha256': c.digest(old_raw), 'servicesUpdated': ['admin'],
+        'migrationApplied': False, 'migrationPerformed': False, 'newMigrations': []}
+    receipt = {'status': 'ADMIN_ONLY_READBACK_VERIFIED', 'commit': p['commit'], 'apiComponentBaseline': old['commit'],
+        'servicesUpdated': ['admin'], 'preservedServiceCount': 6, 'onlinePublished': False,
+        'projectionSha256': projection['projectionSha256']}
+    native.update(CommandId=authority['commandId'], InstanceId=authority['instanceId'],
+        StandardOutputContent=encoded(receipt).decode() + '\n')
+    records = tuple(encoded(value) for value in (native, manifest, proof))
+    authority.update(invocationBytesSha256=c.digest(records[0]), receiptSha256=c.fingerprint(receipt),
+        manifestBytesSha256=c.digest(records[1]), buildProofBytesSha256=c.digest(records[2]),
+        projectionSha256=projection['projectionSha256'], publicationSha256=c.fingerprint(ledger))
+    return old_authority, authority, originals, records
+
+
 class ClosedEntryTests(unittest.TestCase):
     def setUp(self):
         closed = patch.object(c, 'SEALED_ORDINARY_COMPONENT', None)
         closed.start(); self.addCleanup(closed.stop)
+        admin_closed = patch.object(c, 'ADMIN_SUCCESSOR', None)
+        admin_closed.start(); self.addCleanup(admin_closed.stop)
         selector = patch.object(online, '_online_component_consumer', return_value=c)
         selector.start(); self.addCleanup(selector.stop)
 
@@ -140,6 +189,41 @@ class ClosedEntryTests(unittest.TestCase):
 
 
 class NativeRecordTests(unittest.TestCase):
+    def test_admin_successor_keeps_independent_ordinary_authority_and_all_six_services(self):
+        old, admin, originals, records = synthetic_admin_records()
+        with patch.object(c, 'SEALED_ORDINARY_COMPONENT', old), patch.object(c, 'ADMIN_SUCCESSOR', admin):
+            value = c.authenticate_admin_records(*records, originals)
+            self.assertFalse(value['releaseAuthority'])
+            self.assertEqual(value['ordinary']['manifest']['commit'], old['producer']['commit'])
+            self.assertEqual(value['manifest']['commit'], c.APPLICATION_SOURCE)
+            for index in range(3):
+                altered = list(records); altered[index] += b' '
+                with self.subTest(record=index), self.assertRaises(RuntimeError):
+                    c.authenticate_admin_records(*altered, originals)
+            bad = copy.deepcopy(admin); bad['producer']['commit'] = old['producer']['commit']
+            with patch.object(c, 'ADMIN_SUCCESSOR', bad), self.assertRaisesRegex(RuntimeError, 'ADMIN_SUCCESSOR_SEAL_CHANGED'):
+                c.authenticate_admin_records(*records, originals)
+
+    def test_admin_aggregate_hash_does_not_hide_changed_api_or_resident_service(self):
+        old, admin, originals, records = synthetic_admin_records()
+        manifest = json.loads(records[1]); manifest['adminPublication']['preservedServices']['api']['after']['containerId'] = 'e' * 64
+        altered = list(records); altered[1] = encoded(manifest)
+        admin['manifestBytesSha256'] = c.digest(altered[1]); admin['publicationSha256'] = c.fingerprint(manifest['adminPublication'])
+        with patch.object(c, 'SEALED_ORDINARY_COMPONENT', old), patch.object(c, 'ADMIN_SUCCESSOR', admin), \
+             self.assertRaisesRegex(RuntimeError, 'ADMIN_PRESERVED_SERVICES_CHANGED'):
+            c.authenticate_admin_records(*altered, originals)
+
+    def test_runtime_module_receives_both_seals_and_missing_admin_refuses(self):
+        old, admin, _, _ = synthetic_admin_records()
+        runtime = c.load_runtime(); runtime.RUNTIME_ADAPTER_READY = True
+        with patch.object(c, 'SEALED_ORDINARY_COMPONENT', old), patch.object(c, 'ADMIN_SUCCESSOR', admin), \
+             patch.object(c, 'load_runtime', return_value=runtime):
+            self.assertIs(c.require_runtime_adapter(), runtime)
+            self.assertEqual(runtime.c.SEALED_ORDINARY_COMPONENT, old)
+            self.assertEqual(runtime.c.ADMIN_SUCCESSOR, admin)
+            with patch.object(c, 'ADMIN_SUCCESSOR', None), self.assertRaisesRegex(RuntimeError, 'ADMIN_SUCCESSOR_NOT_SEALED'):
+                c.require_runtime_adapter()
+
     def test_changed_original_helper_refuses_before_compiling_any_code(self):
         with patch('builtins.compile', side_effect=AssertionError('no unsealed helper code')):
             for expected in (None, '0' * 64):
@@ -180,6 +264,7 @@ class SourceAndDatabasePreparationTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.candidate = archive('HEAD')
+        cls.ordinary = archive(c.AUTHENTICATED_PREDECESSOR['producer']['commit'])
         cls.base = archive('0a03fa28e6b844a18833d5c63f1de700f091fc64')
         cls.fixed = archive(c.ONLINE_SOURCE)
         cls.core = c.load_core()
@@ -189,16 +274,20 @@ class SourceAndDatabasePreparationTests(unittest.TestCase):
 
     def prepare(self, candidate=None, ordinary=None):
         candidate = self.candidate if candidate is None else candidate
-        ordinary = self.candidate if ordinary is None else ordinary
+        ordinary = self.ordinary if ordinary is None else ordinary
         return c.prepare_source_projection(candidate, ordinary, self.base, self.fixed, commit=self.commit,
-            tree=self.projection.source_tree(candidate), ordinary_producer={'commit': self.commit,
-                'sourceTree': self.projection.source_tree(ordinary), 'workflowRunId': '123', 'workflowRunAttempt': '1'})
+            tree=self.projection.source_tree(candidate), ordinary_producer={**c.AUTHENTICATED_PREDECESSOR['producer'],
+                'sourceTree': self.projection.source_tree(ordinary)})
 
     def test_real_git_2191_and_150_sources_survive_online_activation_projection(self):
         output, record = self.prepare()
         self.assertEqual(output, self.candidate)
         self.assertEqual(record['applicationFileCount'], 2191)
         self.assertEqual(record['onlineFileCount'], 150)
+        self.assertEqual(record['applicationInputSha256'], c.APPLICATION_SHA256)
+        for name in c.ADMIN_OVERLAY_FILES:
+            self.assertEqual(output[name], self.candidate[name])
+            self.assertNotEqual(output[name], self.ordinary[name])
         self.assertFalse(record['releaseAuthority'])
         for name in ('apps/admin/src/v2/features/auto-recharge/bitbrowser-direct-api.ts',
             'apps/api/src/id-business-v2/auto-recharge/worker/bitbrowser_connector.py',
@@ -217,24 +306,26 @@ class SourceAndDatabasePreparationTests(unittest.TestCase):
             archived_here.mkdir(parents=True)
             for helper in self.core.HELPERS:
                 relative = 'scripts/production-release/' + helper
-                (archived_here / helper).write_bytes(self.candidate[relative][0])
+                (archived_here / helper).write_bytes(self.ordinary[relative][0])
             core_path = archived_here / 'unpublished-component-successor.py'
             spec = importlib.util.spec_from_file_location('archived_ordinary_core_source_fixture', core_path)
             original_core = importlib.util.module_from_spec(spec)
             spec.loader.exec_module(original_core)
-            references = (self.commit, '0a03fa28e6b844a18833d5c63f1de700f091fc64', c.ONLINE_SOURCE)
+            ordinary_p = c.AUTHENTICATED_PREDECESSOR['producer']
+            references = (ordinary_p['commit'], '0a03fa28e6b844a18833d5c63f1de700f091fc64', c.ONLINE_SOURCE)
             raw_archives = {ref: subprocess.check_output(['git', 'archive', '--format=tar', ref], cwd=ROOT)
                             for ref in references}
-            files = dict(zip(references, (self.candidate, self.base, self.fixed)))
+            files = dict(zip(references, (self.ordinary, self.base, self.fixed)))
             d = SimpleNamespace(registration_download=lambda ref: raw_archives[ref],
                 registration_archive=lambda raw, ref: files[ref], require=require)
-            p = original_core.producer(self.commit, self.tree, '123', '1')
+            p = original_core.producer(ordinary_p['commit'], ordinary_p['sourceTree'], ordinary_p['workflowRunId'], ordinary_p['workflowRunAttempt'])
             actual_files, actual_output, actual_record, actual_app_sha, actual_archive_sha = original_core.source(d, p)
             output, preparation = self.prepare()
-            self.assertEqual(actual_files, self.candidate)
-            self.assertEqual(actual_app_sha, c.APPLICATION_SHA256)
-            self.assertEqual(actual_archive_sha, c.digest(raw_archives[self.commit]))
+            self.assertEqual(actual_files, self.ordinary)
+            self.assertEqual(actual_app_sha, c.ORDINARY_APPLICATION_SHA256)
+            self.assertEqual(actual_archive_sha, c.digest(raw_archives[ordinary_p['commit']]))
             self.assertEqual(preparation['ordinaryProjectionSha256'], c.fingerprint(actual_record))
+            self.assertEqual(preparation['ordinaryProjectionSha256'], c.AUTHENTICATED_PREDECESSOR['projectionSha256'])
             self.assertEqual(preparation['ordinaryOutputFilesSha256'], c.fingerprint(self.projection.inventory(actual_output)))
             self.assertEqual(output, self.candidate)
             self.assertFalse(preparation['releaseAuthority'])

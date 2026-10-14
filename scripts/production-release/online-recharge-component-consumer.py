@@ -15,13 +15,26 @@ from types import FunctionType
 
 
 AUTHENTICATED_PREDECESSOR = {'buildProofBytesSha256': '88049211315f89ad01fc7442b934c8845995e2f1fc99f68f4bc9ae81d3ede4e0', 'commandId': '3da05719-0aa6-4258-99b1-a4aa94099377', 'coreSha256': '930c552ee5599ea0b7014426749019e257421878c9bf49fbffdf82a07627b771', 'instanceId': 'i-05836da38606e633c', 'invocationBytesSha256': 'bd6b2a4329452eb928f277efc4afefdd1987640f71a2723b66114c55123ac903', 'manifestBytesSha256': '204182bc2dee9acbd9b0f8594471fcefca69564f2b82893b5fe90d8025852f14', 'preservationRecordBytesSha256': 'b7536f91fcea303bed7e210b79437ab1cd413d88fdfec9609f991bec7f84b982', 'producer': {'commit': '43c31870c9497d900491cdb19c5f61c766f3b344', 'sourceTree': 'ede35ed238c2b0c00f536dbca25014d748637749', 'workflowRunAttempt': '1', 'workflowRunId': '38476335896'}, 'projectionSha256': '973305a109c0044194e86413a8cebfbd1dac8a7ddb741d9ffca6cfee9052e1c8', 'publicationSha256': '376f3fcd9102ea5974ef74e6ab2ef2bfa245c58680ce028df5e514ed54cf76a3', 'receiptSha256': '9bb0f721d87a41b05819fb9510c16ae6dcb786d3d956db7d92b9b722bebf456a'}
-# Activation stays closed until the runtime and independent review are complete.
-SEALED_ORDINARY_COMPONENT = None
+# The finite original and successor receipts have completed independent review.
+SEALED_ORDINARY_COMPONENT = copy.deepcopy(AUTHENTICATED_PREDECESSOR)
 KIND = 'ONLINE_RECHARGE_ORDINARY_COMPONENT'
-APPLICATION_SOURCE = '28132dc776ccb94c44e243a81731f27c91ae4ed3'
-APPLICATION_TREE = 'a9b0a4ea92ca6448316cd9e5ee9252950f1bacb6'
+APPLICATION_SOURCE = '568e9390a304a36edba86823d5d5b31e5506763b'
+APPLICATION_TREE = '6961e61290108e7301b9629f2d62685c88c9cec6'
 APPLICATION_COUNT = 2191
-APPLICATION_SHA256 = 'c4f1c8d57580412999493e0895faf5c912611dcc8973abffeb11d5f2aae0064b'
+APPLICATION_SHA256 = '799d0472828889dd8d1aad4eaa69314df74e7fde92bbc2a4599a27b20c30de0c'
+ORDINARY_APPLICATION_SHA256 = 'c4f1c8d57580412999493e0895faf5c912611dcc8973abffeb11d5f2aae0064b'
+ADMIN_SUCCESSOR_PRODUCER = {'commit': APPLICATION_SOURCE, 'sourceTree': APPLICATION_TREE,
+    'workflowRunId': '38485433818', 'workflowRunAttempt': '1'}
+AUTHENTICATED_ADMIN_SUCCESSOR = {'producer': {'commit': '568e9390a304a36edba86823d5d5b31e5506763b', 'sourceTree': '6961e61290108e7301b9629f2d62685c88c9cec6', 'workflowRunAttempt': '1', 'workflowRunId': '38485433818'}, 'projectionSha256': '5765c1932777da4b36b157523551b4c7fd551c23a4709d086a71487ccba34bd0', 'invocationBytesSha256': 'c63c1df7e2c5900ee3f4336be1f6ebcdf7beb43a7b117bf2a6bf776d9a49cb68', 'receiptSha256': '71d9197c062057b0a4cde2a6bd3eb3bd741322ee072a148928d9e7f82ab8deef', 'commandId': '735a823b-3431-4ef4-bbef-ac38ce0191be', 'buildProofBytesSha256': '33d6c792f71dcb917b132943775b6cc413be2f42ba5a1504cda00bb8578f64dd', 'publicationSha256': 'fdaf13fac39449cc36057c299155fc7ccd76a0942dbefba6b4645a386d9908b3', 'manifestBytesSha256': 'd14d2c5570544a5ce6f44d5a5e9a1c93ecd16d2d86d8b7f44bd469ba2d8fe117', 'instanceId': 'i-05836da38606e633c', 'controllerSha256': '2386ff683baac968a006034b2768659223d15e06e1b54a5af2afde75d9740109'}
+ADMIN_SUCCESSOR = copy.deepcopy(AUTHENTICATED_ADMIN_SUCCESSOR)
+ADMIN_PROFILE = 'ADMIN_CONFIRM_EXPIRY_20261014'
+ADMIN_OVERLAY_FILES = ('apps/admin/src/v2/features/auto-recharge/useRechargeLocalConfirmation.ts',
+    'apps/admin/src/v2/features/auto-recharge/useRechargeLocalConfirmation.spec.ts')
+ADMIN_OVERLAY_SHA256 = 'a3ea38d3f31dce7f438d067e6bfbafe4108636ed50c75621beb44a8948b2b8b7'
+ADMIN_QUALITY_RUN = '38485011155'
+ADMIN_SEAL_FIELDS = frozenset(('producer', 'commandId', 'instanceId', 'invocationBytesSha256',
+    'receiptSha256', 'manifestBytesSha256', 'buildProofBytesSha256', 'publicationSha256',
+    'projectionSha256', 'controllerSha256'))
 ONLINE_SOURCE = '28a3ba4ffd17d36001b1104c97394f5ae871d73d'
 ONLINE_TREE = '014959a59519da585928adaa7f76f7236e1786d1'
 ONLINE_COUNT = 150
@@ -101,19 +114,21 @@ def require_runtime_adapter():
     authority = sealed_authority()
     module = load_runtime()
     module.c.SEALED_ORDINARY_COMPONENT = authority
+    module.c.ADMIN_SUCCESSOR = copy.deepcopy(ADMIN_SUCCESSOR)
     # A reviewed runtime also has an explicit closed activation gate. This does
     # not return the old workspace publisher or its GRANT synchronization path.
     module.authority()
     return module
 
 
-def validate_source_files(files):
+def validate_source_files(files, *, ordinary=False):
     core = load_core()
     inventory = core.projection_module().inventory(files)
     app = {n: row for n, row in inventory.items() if n.startswith(APP_PREFIXES) or n in APP_FILES}
     online = {n: row for n, row in inventory.items() if n.startswith(ONLINE_PREFIXES)
               or n == MIGRATION_ROOT + '/' + ONLINE_MIGRATION + '/migration.sql'}
-    need(len(app) == APPLICATION_COUNT and fingerprint(app) == APPLICATION_SHA256, 'APPLICATION_SOURCE_CHANGED')
+    need(type(ordinary) is bool and len(app) == APPLICATION_COUNT
+         and fingerprint(app) == (ORDINARY_APPLICATION_SHA256 if ordinary else APPLICATION_SHA256), 'APPLICATION_SOURCE_CHANGED')
     need(len(online) == ONLINE_COUNT and fingerprint(online) == ONLINE_SHA256, 'ONLINE_SOURCE_CHANGED')
     return {'applicationFileCount': len(app), 'applicationInputSha256': fingerprint(app),
             'onlineFileCount': len(online), 'onlineInputSha256': fingerprint(online)}
@@ -123,14 +138,14 @@ def prepare_source_projection(candidate, ordinary, base, online, *, commit, tree
     """Build the exact full application; invert only the original ONLINE exclusion.
 
     This is an in-memory source comparison, not an executable release authority.
-    Candidate and ordinary may have different control files; their complete
-    approved application inventories must be identical. No old application is
-    copied over the candidate, including the connection profile model/migration.
+    Preserve the authenticated Admin successor's two approved UI changes while
+    comparing every other application byte against the original producer. No
+    old application is copied over the candidate.
     """
     core = load_core()
     projection = core.projection_module()
     source = validate_source_files(candidate)
-    validate_source_files(ordinary)
+    validate_source_files(ordinary, ordinary=True)
     need(projection.source_tree(candidate) == tree, 'CANDIDATE_TREE_CHANGED')
     p = core.producer(ordinary_producer['commit'], ordinary_producer['sourceTree'],
                       ordinary_producer['workflowRunId'], ordinary_producer['workflowRunAttempt'])
@@ -140,9 +155,11 @@ def prepare_source_projection(candidate, ordinary, base, online, *, commit, tree
     ordinary_inventory = projection.inventory(ordinary)
     app_names = {n for n in set(before) | set(after) if n.startswith(APP_PREFIXES) or n in APP_FILES}
     changed = {n for n in app_names if before.get(n) != after.get(n)}
-    allowed = set(inverse['generatedFiles']) | set(inverse['removedFiles'])
+    overlay = {n: candidate[n] for n in ADMIN_OVERLAY_FILES}
+    need(fingerprint(projection.inventory(overlay)) == ADMIN_OVERLAY_SHA256, 'ADMIN_OVERLAY_CHANGED')
+    allowed = set(inverse['generatedFiles']) | set(inverse['removedFiles']) | set(ADMIN_OVERLAY_FILES)
     need(changed == allowed & app_names
-         and all(after.get(n) == ordinary_inventory.get(n) for n in app_names),
+         and all(after.get(n) == ordinary_inventory.get(n) for n in app_names - set(ADMIN_OVERLAY_FILES)),
          'APPLICATION_PROJECTION_CHANGED')
     need(digest(candidate[SCHEMA][0]) == FULL_SCHEMA_SHA256
          and digest(ordinary_output[SCHEMA][0]) == CORE_SCHEMA_SHA256
@@ -155,6 +172,72 @@ def prepare_source_projection(candidate, ordinary, base, online, *, commit, tree
         'ordinaryOutputFilesSha256': fingerprint(before),
         'changedApplicationFiles': sorted(changed), 'outputFilesSha256': fingerprint(after),
         'releaseAuthority': False}
+
+
+def admin_successor_authority():
+    ordinary = sealed_authority()
+    value = ADMIN_SUCCESSOR
+    need(type(value) is dict and set(value) == ADMIN_SEAL_FIELDS, 'ADMIN_SUCCESSOR_NOT_SEALED')
+    need(value['producer'] == ADMIN_SUCCESSOR_PRODUCER and value['instanceId'] == ordinary['instanceId']
+         and type(value['commandId']) is str and re.fullmatch('[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}', value['commandId'])
+         and all(type(value[n]) is str and re.fullmatch('[a-f0-9]{64}', value[n])
+             for n in ADMIN_SEAL_FIELDS - {'producer', 'commandId', 'instanceId'}), 'ADMIN_SUCCESSOR_SEAL_CHANGED')
+    return copy.deepcopy(value)
+
+
+def authenticate_admin_records(native_raw, manifest_raw, proof_raw, ordinary_records):
+    a = admin_successor_authority(); ordinary = authenticate_component_records(*ordinary_records)
+    core = load_core()
+    need(digest(native_raw) == a['invocationBytesSha256'], 'ADMIN_NATIVE_CHANGED')
+    _invocation, receipt = core.validate_invocation(native_raw, a['commandId'], a['instanceId'])
+    need(fingerprint(receipt) == a['receiptSha256']
+         and set(receipt) == {'status', 'commit', 'apiComponentBaseline', 'servicesUpdated',
+             'preservedServiceCount', 'onlinePublished', 'projectionSha256'}
+         and receipt['status'] == 'ADMIN_ONLY_READBACK_VERIFIED' and receipt['commit'] == APPLICATION_SOURCE
+         and receipt['apiComponentBaseline'] == sealed_authority()['producer']['commit']
+         and receipt['servicesUpdated'] == ['admin'] and type(receipt['preservedServiceCount']) is int
+         and receipt['preservedServiceCount'] == 6 and receipt['onlinePublished'] is False
+         and receipt['projectionSha256'] == a['projectionSha256'], 'ADMIN_NATIVE_RECEIPT_CHANGED')
+    need(digest(manifest_raw) == a['manifestBytesSha256'] and digest(proof_raw) == a['buildProofBytesSha256'],
+         'ADMIN_RECORD_BYTES_CHANGED')
+    manifest, proof = core.closed_json(manifest_raw), core.closed_json(proof_raw)
+    ledger = manifest.get('adminPublication', {}); projection = proof.get('projection', {})
+    p = a['producer']; old = ordinary['manifest']; old_state = ordinary['preservation']
+    need(manifest.get('commit') == ledger.get('commit') == proof.get('commit') == p['commit']
+         and manifest.get('sourceTree') == ledger.get('sourceTree') == proof.get('sourceTree') == p['sourceTree']
+         and manifest.get('deploymentRun') == manifest.get('imageBuildRun')
+             == 'github-actions-' + p['workflowRunId'] + '-' + p['workflowRunAttempt']
+         and proof.get('runId') == p['workflowRunId'] and proof.get('runAttempt') == p['workflowRunAttempt']
+         and proof.get('qualityRunId') == str(manifest.get('ciWorkflowRunId')) == ADMIN_QUALITY_RUN
+         and proof.get('scope') == 'ADMIN_PENDING_ONLINE_BUILD'
+         and ledger.get('scope') == 'ADMIN_ONLY_PENDING_ONLINE_SUCCESSOR'
+         and ledger.get('profile') == projection.get('profile') == ADMIN_PROFILE
+         and fingerprint(ledger) == a['publicationSha256']
+         and ledger.get('buildProofSha256') == fingerprint(proof) and ledger.get('projection') == projection
+         and projection.get('projectionSha256') == a['projectionSha256']
+             == fingerprint({k: v for k, v in projection.items() if k != 'projectionSha256'})
+         and projection.get('sourceBasisCommit') == projection.get('apiComponentBaseline') == old['commit']
+         and projection.get('sourceBasisTree') == old['sourceTree']
+         and projection.get('overlaySha256') == ADMIN_OVERLAY_SHA256
+         and projection.get('inheritedProjectionSha256') == sealed_authority()['projectionSha256']
+         and ledger.get('inheritedOriginCommit') == manifest.get('previousCommit') == old['commit']
+         and ledger.get('inheritedManifestSha256') == manifest.get('previousManifestSha256') == digest(ordinary_records[1])
+         and ledger.get('inheritedApiComponentPublicationSha256') == fingerprint(old['apiComponentPublication'])
+         and ledger.get('inheritedAdminPublicationSha256') == fingerprint(old['adminPublication'])
+         and ledger.get('componentBaselines') == {'api': old['commit']}
+         and manifest.get('servicesUpdated') == ['admin'] and manifest.get('newMigrations') == []
+         and manifest.get('migrationApplied') is False and manifest.get('migrationPerformed') is False
+         and ledger.get('onlinePublished') is False and ledger.get('migrationPerformed') is False
+         and ledger.get('databaseGrantsChanged') is False and type(ledger.get('businessActions')) is int
+         and ledger['businessActions'] == 0, 'ADMIN_PUBLICATION_CHANGED')
+    preserved = ledger.get('preservedServices', {})
+    need(set(preserved) == set(SERVICES) - {'admin'}
+         and all(type(row) is dict and set(row) == {'before', 'after'}
+             and row['before'] == row['after'] == old_state['after'][n] for n, row in preserved.items())
+         and all(manifest[n] == old[n] for n in ('apiWorkspacePublication', 'pendingOnlineMigration',
+             'preservedMigrationOrigin', 'apiHotfixPublication', 'apiComponentPublication')),
+         'ADMIN_PRESERVED_SERVICES_CHANGED')
+    return {'receipt': receipt, 'manifest': manifest, 'proof': proof, 'ordinary': ordinary, 'releaseAuthority': False}
 
 
 def authenticate_component_records(native_raw, manifest_raw, proof_raw, preservation_raw):

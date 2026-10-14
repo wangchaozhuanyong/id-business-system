@@ -11,9 +11,11 @@ import os
 from pathlib import Path
 import re
 import shlex
+import stat
 import subprocess
 import sys
 import time
+from types import SimpleNamespace
 
 
 def load(filename):
@@ -49,13 +51,14 @@ def component_selected(environment=None):
 
 def selected(mode):
     a = r.authority()
+    current = r.current_authority()
     r.need(mode in MODES and component_selected(), 'SELECTION_INVALID')
-    r.need(os.environ.get('EXPECTED_CURRENT') == a['producer']['commit']
+    r.need(os.environ.get('EXPECTED_CURRENT') == r.current_predecessor()
            and os.environ.get('GITHUB_REF') == 'refs/heads/main'
            and os.environ.get('HISTORICAL_EXCEPTION', 'none') == 'none'
            and os.environ.get('RELEASE_ADMIN_ONLY', 'false') == 'false'
            and os.environ.get('AWS_REGION') == 'ap-northeast-1'
-           and os.environ.get('PRODUCTION_INSTANCE_ID') == a['instanceId']
+           and os.environ.get('PRODUCTION_INSTANCE_ID') == a['instanceId'] == current['instanceId']
            and not any(os.environ.get(name) for name in FORBIDDEN), 'SELECTION_INVALID')
     flag = os.environ.get('API_FAULT_RESTORE_APPROVED', 'false')
     r.need(flag in ('false', 'true'), 'SELECTION_INVALID')
@@ -122,14 +125,26 @@ def verify_quality(p):
            and commit.get('commit', {}).get('tree', {}).get('sha') == p['sourceTree'], 'QUALITY_SOURCE_TREE_CHANGED')
 
 
-def predecessor_native(core):
-    a = r.authority()
-    raw = command_raw('aws', '--region', os.environ['AWS_REGION'], 'ssm', 'get-command-invocation',
-        '--command-id', a['commandId'], '--instance-id', a['instanceId'], '--output', 'json')
+def validate_sealed_native(core, a, raw):
+    r.need(type(raw) is bytes and 0 < len(raw) < 128 * 1024, 'PREDECESSOR_NATIVE_CHANGED')
     r.need(r.c.digest(raw) == a['invocationBytesSha256'], 'PREDECESSOR_NATIVE_CHANGED')
     _invocation, receipt = core.validate_invocation(raw, a['commandId'], a['instanceId'])
     r.need(r.c.fingerprint(receipt) == a['receiptSha256'], 'PREDECESSOR_NATIVE_CHANGED')
     return raw
+
+
+def sealed_native(core, a):
+    raw = command_raw('aws', '--region', os.environ['AWS_REGION'], 'ssm', 'get-command-invocation',
+        '--command-id', a['commandId'], '--instance-id', a['instanceId'], '--output', 'json')
+    return validate_sealed_native(core, a, raw)
+
+
+def predecessor_native(core):
+    return sealed_native(core, r.authority())
+
+
+def current_native(core):
+    return sealed_native(core, r.current_authority())
 
 
 def preflight_from_native(core, runtime, descriptor, raw):
@@ -144,16 +159,111 @@ def preflight_from_native(core, runtime, descriptor, raw):
     return value
 
 
-def parameters(mode, core, p, *, input_artifacts=None, origin_raw=None):
+def helper_snapshot(helpers):
+    result = {}
+    for name in helpers:
+        path = Path(__file__).with_name(name)
+        r.need(path.parent.resolve() == path.parent, 'HELPER_SOURCE_CHANGED')
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC)
+        try:
+            before = os.fstat(fd)
+            r.need(stat.S_ISREG(before.st_mode) and before.st_nlink == 1
+                   and 0 < before.st_size <= 2 * 1024 * 1024, 'HELPER_SOURCE_CHANGED')
+            with os.fdopen(fd, 'rb', closefd=False) as stream:
+                raw = stream.read(2 * 1024 * 1024 + 1)
+            after = os.fstat(fd)
+            identity = lambda row: (row.st_dev, row.st_ino, row.st_mode, row.st_uid, row.st_gid,
+                row.st_nlink, row.st_size, row.st_mtime_ns, row.st_ctime_ns)
+            r.need(len(raw) == before.st_size and identity(before) == identity(after)
+                   == identity(path.lstat()), 'HELPER_SOURCE_CHANGED')
+            result[name] = (raw, '100755' if before.st_mode & 0o111 else '100644', identity(before))
+        finally:
+            os.close(fd)
+    return result
+
+
+def helper_pins(core, p, helpers):
+    before = helper_snapshot(helpers)
+    d = r.modules(None)[0]
+    archive = d.registration_archive(d.registration_download(p['commit']), p['commit'])
+    r.need(core.projection_module().source_tree(archive) == p['sourceTree'], 'HELPER_SOURCE_TREE_CHANGED')
+    for name, (raw, mode, _identity) in before.items():
+        relative = 'scripts/production-release/' + name
+        r.need(archive.get(relative) == (raw, mode), 'HELPER_ARCHIVE_CHANGED')
+        # Bind the same archive member to the checked-out Git object and mode.
+        header = command_raw('git', 'ls-tree', p['commit'], '--', relative).decode('utf8').rstrip('\n')
+        blob = __import__('hashlib').sha1(b'blob ' + str(len(raw)).encode() + b'\0' + raw).hexdigest()
+        r.need(header == mode + ' blob ' + blob + '\t' + relative, 'HELPER_GIT_SOURCE_CHANGED')
+    r.need(helper_snapshot(helpers) == before, 'HELPER_SOURCE_CHANGED')
+    return {name: r.c.digest(row[0]) for name, row in before.items()}
+
+
+def load_staged_client(path, expected):
+    import hashlib
+    import os
+    import stat
+    from pathlib import Path
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC)
+    try:
+        before = os.fstat(fd)
+        identity = lambda row: (row.st_dev, row.st_ino, row.st_mode, row.st_uid, row.st_gid,
+            row.st_nlink, row.st_size, row.st_mtime_ns, row.st_ctime_ns)
+        if not (stat.S_ISREG(before.st_mode) and before.st_uid == os.geteuid() and before.st_nlink == 1
+                and stat.S_IMODE(before.st_mode) in (0o600, 0o644) and 0 < before.st_size <= 2 * 1024 * 1024):
+            raise RuntimeError('ONLINE_RECHARGE_COMPONENT_HELPER_SOURCE_CHANGED')
+        with os.fdopen(fd, 'rb', closefd=False) as stream:
+            raw = stream.read(2 * 1024 * 1024 + 1)
+        if not (identity(before) == identity(os.fstat(fd)) == identity(Path(path).lstat())
+                and len(raw) == before.st_size and hashlib.sha256(raw).hexdigest() == expected):
+            raise RuntimeError('ONLINE_RECHARGE_COMPONENT_HELPER_SOURCE_CHANGED')
+    finally:
+        os.close(fd)
+    namespace = {'__file__': path, '__name__': 'online_component_source_pinned_client'}
+    exec(compile(raw, path, 'exec', dont_inherit=True), namespace)
+    return namespace
+
+
+def server_arguments(args, origin_packed, current_packed, descriptor=None, f_packed=None, proof_arg=None):
+    a, current = r.authority(), r.current_authority()
+    r.need(type(args) is list and args and args[0] in ('preflight', 'release', 'readback'), 'SELECTION_INVALID')
+    r.need(all(type(value) is str and value for value in (origin_packed, current_packed)), 'PREDECESSOR_NATIVE_CHANGED')
+    publishing = args[0] == 'release'
+    r.need((descriptor is not None) is publishing and (f_packed is not None) is publishing
+           and (proof_arg is not None) is publishing, 'BUILD_INPUT_CHANGED')
+    core = r.c.load_core(a['coreSha256'])
+    decode = lambda packed: r.bounded_gzip(base64.b64decode(packed, validate=True), 128 * 1024)
+    origin = validate_sealed_native(core, a, decode(origin_packed))
+    successor = validate_sealed_native(core, current, decode(current_packed))
+    server = SimpleNamespace(BASE=Path('/opt/id-business-v2'))
+    paths = (str(r.native_path(server)), str(r.current_native_path(server)))
+    r.need(paths[0] != paths[1], 'PREDECESSOR_PATH_CHANGED')
+    result = list(args)
+    if publishing:
+        r.need(type(proof_arg) is str and proof_arg.startswith('gzip-base64:')
+               and type(f_packed) is str and f_packed, 'BUILD_INPUT_CHANGED')
+        value = preflight_from_native(core, r, descriptor, decode(f_packed))
+        transport = (json.dumps(value, sort_keys=True, separators=(',', ':'), allow_nan=False) + '\n').encode()
+        result += ['--build-proof', proof_arg, '--preflight', 'gzip-base64:'
+                   + base64.b64encode(gzip.compress(transport, mtime=0)).decode()]
+    ordinary = load('api-admin-readonly.py')
+    ordinary.write_workspace_private_bytes(paths[0], origin)
+    ordinary.write_workspace_private_bytes(paths[1], successor)
+    return result
+
+
+def parameters(mode, core, p, *, input_artifacts=None, origin_raw=None, current_raw=None):
     a = r.authority()
+    current = r.current_authority()
     r.need(mode in ('preflight', 'release', 'readback'), 'SELECTION_INVALID')
+    r.need(os.environ['EXPECTED_CURRENT'] == r.current_predecessor()
+           and current['instanceId'] == a['instanceId'], 'SELECTION_INVALID')
     # Descriptor-safe source and raw-byte writers are reused without changing
     # their ordinary publication seals or borrowing an old ONLINE receipt.
-    ordinary = load('api-admin-readonly.py')
     helpers = (*core.HELPERS, 'online-recharge-component-consumer.py',
                'online-recharge-component-runtime.py', 'online-recharge-component-readonly.py')
     r.need(len(set(helpers)) == len(helpers), 'HELPER_SET_CHANGED')
-    pins = {name: r.c.digest(Path(__file__).with_name(name).read_bytes()) for name in helpers}
+    pins = helper_pins(core, p, helpers)
+    ordinary = load('api-admin-readonly.py')
     directory = '/opt/id-business-v2/.staging/online-component-' + '-'.join(
         p[name] for name in ('commit', 'workflowRunId', 'workflowRunAttempt'))
     args = [mode, '--commit', p['commit'], '--source-tree', p['sourceTree'], '--run-id', p['workflowRunId'],
@@ -161,12 +271,14 @@ def parameters(mode, core, p, *, input_artifacts=None, origin_raw=None):
     if mode != 'readback':
         args += ['--expected-current', os.environ['EXPECTED_CURRENT']]
     native = predecessor_native(core) if origin_raw is None else origin_raw
-    r.need(r.c.digest(native) == a['invocationBytesSha256'], 'PREDECESSOR_NATIVE_CHANGED')
-    _value, receipt = core.validate_invocation(native, a['commandId'], a['instanceId'])
-    r.need(r.c.fingerprint(receipt) == a['receiptSha256'], 'PREDECESSOR_NATIVE_CHANGED')
-    native_path = '/opt/id-business-v2/.staging/online-component-origin-' + a['invocationBytesSha256'] + '/invocation.json'
-    payload = ''
-    preparation = ''
+    validate_sealed_native(core, a, native)
+    successor = current_native(core) if current_raw is None else current_raw
+    validate_sealed_native(core, current, successor)
+    server = SimpleNamespace(BASE=Path('/opt/id-business-v2'))
+    native_path = str(r.native_path(server))
+    successor_path = str(r.current_native_path(server))
+    r.need(native_path != successor_path, 'PREDECESSOR_PATH_CHANGED')
+    descriptor = packed_f = proof_arg = None
     if mode == 'release':
         r.need(type(input_artifacts) is tuple and len(input_artifacts) == 2, 'BUILD_INPUT_CHANGED')
         proof_raw, transport_raw = input_artifacts
@@ -182,25 +294,17 @@ def parameters(mode, core, p, *, input_artifacts=None, origin_raw=None):
         f_raw = base64.b64decode(transport['invocationRawBase64'], validate=True)
         packed_f = base64.b64encode(gzip.compress(f_raw, mtime=0)).decode()
         packed_proof = base64.b64encode(gzip.compress(proof_raw, mtime=0)).decode()
-        # Carry the exact authenticated native bytes once. The remote bounded
-        # adapter derives the complete F from those bytes and revalidates it;
-        # no serverReceipt is substituted or silently truncated.
-        preparation = (inspect.getsource(preflight_from_native)
-            + '\nimport json\nfrom types import SimpleNamespace\n'
-            + 'runtime=SimpleNamespace(**runpy.run_path(' + repr(directory + '/online-recharge-component-runtime.py') + '))\n'
-            + 'runtime.authority()\ncore=runtime.c.load_core(runtime.authority()["coreSha256"])\n'
-            + 'native=runtime.bounded_gzip(base64.b64decode(' + repr(packed_f) + ',validate=True),128*1024)\n'
-            + 'transport=preflight_from_native(core,runtime,' + repr(descriptor) + ',native)\n'
-            + 'preflight_arg="gzip-base64:"+base64.b64encode(gzip.compress('
-                '(json.dumps(transport,sort_keys=True,separators=(",",":"),allow_nan=False)+"\\n").encode(),mtime=0)).decode()\n')
-        payload = ' + ["--build-proof",' + repr('gzip-base64:' + packed_proof) + ',"--preflight",preflight_arg]'
+        proof_arg = 'gzip-base64:' + packed_proof
+    origin_packed = base64.b64encode(gzip.compress(native, mtime=0)).decode()
+    current_packed = base64.b64encode(gzip.compress(successor, mtime=0)).decode()
     program = (inspect.getsource(ordinary._store_files) + '\n_store_files(' + repr(directory) + ','
         + repr(p['commit']) + ',' + repr(pins) + ',False)\n'
-        + 'import os,stat,base64,gzip\nfrom pathlib import Path\n'
-        + inspect.getsource(ordinary.write_workspace_private_bytes)
-        + '\nwrite_workspace_private_bytes(' + repr(native_path) + ',' + repr(native) + ')\n'
-        + 'import sys,runpy\n' + preparation + 'sys.argv=[' + repr(directory + '/online-recharge-component-runtime.py') + ']+ '
-        + repr(args) + payload + '\nrunpy.run_path(sys.argv[0],run_name="__main__")\n')
+        + inspect.getsource(load_staged_client)
+        + '\nimport sys,runpy\nclient=load_staged_client(' + repr(directory + '/online-recharge-component-readonly.py')
+        + ',' + repr(pins['online-recharge-component-readonly.py']) + ')\n'
+        + 'sys.argv=[' + repr(directory + '/online-recharge-component-runtime.py') + ']+client["server_arguments"]('
+        + ','.join(repr(value) for value in (args, origin_packed, current_packed, descriptor, packed_f, proof_arg))
+        + ')\nrunpy.run_path(sys.argv[0],run_name="__main__")\n')
     packed = base64.b64encode(gzip.compress(program.encode(), mtime=0)).decode()
     carrier = ('import base64,gzip;exec(compile(gzip.decompress(base64.b64decode('
                + repr(packed) + ',validate=True)),"<online-component-transport>","exec"))')

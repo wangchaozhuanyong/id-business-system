@@ -33,7 +33,7 @@ def load(filename):
 
 c = load('online-recharge-component-consumer.py')
 # A real predecessor seal alone is insufficient while lifecycle review is open.
-RUNTIME_ADAPTER_READY = False
+RUNTIME_ADAPTER_READY = True
 SCOPE = 'ONLINE_RECHARGE'
 KIND = c.KIND
 PREFIX = 'online-recharge-component'
@@ -46,6 +46,7 @@ UPDATED = ('api', 'admin', 'online-recharge')
 IMAGES = (*UPDATED, 'migrate')
 SERVICES = (*c.SERVICES, 'online-recharge')
 PRESERVED = c.PRESERVED
+RESTORE_BUDGET_SECONDS = 65
 HELPERS = ('online-recharge-component-consumer.py', 'online-recharge-component-runtime.py',
            'online-recharge-component-readonly.py', 'online-recharge-scope.py')
 
@@ -57,7 +58,22 @@ def need(value, code):
 def authority():
     result = c.sealed_authority()
     need(RUNTIME_ADAPTER_READY is True, 'RUNTIME_ADAPTER_NOT_READY')
+    c.admin_successor_authority()
     return result
+
+
+def current_authority():
+    authority()
+    return c.admin_successor_authority()
+
+
+def current_predecessor():
+    return current_authority()['producer']['commit']
+
+
+def current_native_path(d):
+    value = current_authority()
+    return d.BASE / '.staging' / ('online-admin-successor-' + value['invocationBytesSha256']) / 'invocation.json'
 
 
 def modules(d=None):
@@ -80,11 +96,47 @@ def native_path(d):
 
 def predecessor_records(d, core, directory):
     authority()
+    directory = ordinary_directory(d, core, directory)
     old_prefix = core.PREFIX
     return (core.private_bytes(native_path(d), cap=128 * 1024),
         core.private_bytes(directory / 'release-manifest.json'),
         core.private_bytes(directory / (old_prefix + '-build-proof.json')),
         core.private_bytes(directory / (old_prefix + '-preservation.json')))
+
+
+def ordinary_directory(d, core, directory):
+    """The historical 43 records are never invented in the current 568 directory."""
+    raw = core.private_bytes(directory / 'release-manifest.json'); value = core.closed_json(raw)
+    if value.get('commit') == authority()['producer']['commit']:
+        need(c.digest(raw) == authority()['manifestBytesSha256'], 'ORDINARY_MANIFEST_CHANGED')
+        return directory
+    active = current_authority()
+    need(value.get('commit') == active['producer']['commit'] and c.digest(raw) == active['manifestBytesSha256'],
+         'ADMIN_CURRENT_MANIFEST_CHANGED')
+    original = Path(value['previousRelease'])
+    need(original.parent == d.BASE / 'releases' and original.resolve() == original
+         and original != directory and value['previousCommit'] == authority()['producer']['commit']
+         and c.digest(core.private_bytes(original / 'release-manifest.json')) == authority()['manifestBytesSha256'],
+         'ORDINARY_DIRECTORY_CHANGED')
+    return original
+
+
+def admin_controller(d, core, directory):
+    active = current_authority(); p = active['producer']
+    raw = d.registration_download(p['commit']); files = d.registration_archive(raw, p['commit'])
+    need(core.projection_module().source_tree(files) == p['sourceTree'], 'ADMIN_SOURCE_TREE_CHANGED')
+    names = ('remote-deploy.py', 'api-admin-pending-projection.py', 'admin-pending-online-release.py',
+             'unpublished-component-successor.py', 'api-admin-scope.py')
+    for name in names:
+        relative = 'scripts/production-release/' + name; path = directory / relative
+        need(path.is_file() and not path.is_symlink() and path.resolve() == path
+             and files[relative] == (path.read_bytes(), '100755' if path.stat().st_mode & 0o111 else '100644'),
+             'ADMIN_SOURCE_HELPER_CHANGED')
+    name = 'scripts/production-release/admin-pending-online-release.py'
+    need(c.digest(files[name][0]) == active['controllerSha256'], 'ADMIN_CONTROLLER_CHANGED')
+    module = ModuleType('authenticated_admin_successor_controller'); module.__file__ = str(directory / name)
+    exec(compile(files[name][0], module.__file__, 'exec', dont_inherit=True), module.__dict__)
+    return module, files, c.digest(raw)
 
 
 def original_controller(d, core, directory):
@@ -110,22 +162,31 @@ def original_controller(d, core, directory):
 
 def baseline(d, expected):
     a = authority()
-    need(expected == a['producer']['commit'], 'PREDECESSOR_CHANGED')
+    active = current_authority()
+    need(expected == active['producer']['commit'], 'PREDECESSOR_CHANGED')
     d, core, admin, workspace, online = modules(d)
     previous = (d.BASE / 'current').resolve()
     need(previous.parent == d.BASE / 'releases', 'CURRENT_PATH_CHANGED')
     records = predecessor_records(d, core, previous)
     authenticated = c.authenticate_component_records(*records)
-    original, files, archive_sha = original_controller(d, core, previous)
-    need(original.readback(None, expected) == authenticated['receipt'], 'ORDINARY_LIVE_READBACK_CHANGED')
-    manifest, proof, state = (authenticated[n] for n in ('manifest', 'proof', 'preservation'))
-    ledger = manifest['apiComponentPublication']
+    historical = ordinary_directory(d, core, previous)
+    _original, files, archive_sha = original_controller(d, core, historical)
+    admin_records = (core.private_bytes(current_native_path(d), cap=128 * 1024),
+        core.private_bytes(previous / 'release-manifest.json'), core.private_bytes(previous / 'admin-build-proof.json'))
+    successor = c.authenticate_admin_records(*admin_records, records)
+    current_reader, _current_files, current_archive_sha = admin_controller(d, core, previous)
+    need(current_reader.readback(d, expected) == successor['receipt'], 'ADMIN_LIVE_READBACK_CHANGED')
+    need(successor['manifest']['sourceArchiveSha256'] == current_archive_sha, 'ADMIN_ARCHIVE_CHANGED')
+    manifest = successor['manifest']; proof, state = (authenticated[n] for n in ('proof', 'preservation'))
+    ledger = authenticated['manifest']['apiComponentPublication']
     need(ledger['sourceArchiveSha256'] == archive_sha
          and ledger['sourceFilesSha256'] == c.fingerprint(core.projection_module().inventory(files)),
          'ORDINARY_ARCHIVE_CHANGED')
     states = workspace.snapshot(d, previous)
-    need(set(states) == set(c.SERVICES) and states == state['after']
-         and all(state['before'][n] == states[n] for n in PRESERVED), 'ORDINARY_SERVICES_CHANGED')
+    need(set(states) == set(c.SERVICES)
+         and all(states[n] == state['after'][n] for n in c.SERVICES if n != 'admin')
+         and states['admin']['image'] == successor['proof']['image']['imageId']
+         and states['admin']['reference'] == successor['proof']['image']['reference'], 'ADMIN_SERVICES_CHANGED')
     need(not d.compose(previous, 'ps', '-q', '--all', 'online-recharge'), 'ENGINE_ALREADY_PRESENT')
     volume = workspace.workspace_volume(d, previous, attached=True)
     need(volume == state['workspaceVolumeAfter'], 'WORKSPACE_VOLUME_CHANGED')
@@ -140,11 +201,14 @@ def baseline(d, expected):
     verify_online_grants(d, online, previous)
     backup = backup_cas(d, core, workspace, previous, manifest, states, files)
     need((d.BASE / 'current').resolve() == previous
-         and core.private_bytes(previous / 'release-manifest.json') == records[1]
+         and core.private_bytes(previous / 'release-manifest.json') == admin_records[1]
          and workspace.snapshot(d, previous) == states, 'BASELINE_MOVED')
     return previous, manifest, {'version': 1, 'kind': KIND + '_BASELINE',
         'ordinaryProducer': copy.deepcopy(a['producer']), 'ordinaryAuthoritySha256': c.fingerprint(a),
-        'currentRelease': str(previous), 'manifestBytesSha256': c.digest(records[1]),
+        'actualPredecessor': copy.deepcopy(active['producer']), 'adminAuthoritySha256': c.fingerprint(active),
+        'adminProjectionSha256': active['projectionSha256'], 'adminProof': successor['proof'],
+        'ordinaryRelease': str(historical), 'currentRelease': str(previous), 'manifestBytesSha256': c.digest(admin_records[1]),
+        'currentArchiveSha256': current_archive_sha,
         'ordinaryArchiveSha256': archive_sha, 'ordinarySourceFilesSha256': ledger['sourceFilesSha256'],
         'ordinaryProjectionSha256': c.fingerprint(proof['projection']),
         'ordinaryOutputFilesSha256': proof['projection']['outputFilesSha256'],
@@ -200,7 +264,7 @@ def backup_cas(d, core, workspace, previous, manifest, states, ordinary_files, *
         need(pointer_target.parent == d.BASE / 'releases'
              and text in (str(pointer_target), 'releases/' + pointer_target.name), 'BACKUP_CURRENT_CHANGED')
         raw, _ = held.read(previous / 'release-manifest.json', mode=0o600)
-        need(c.digest(raw) == a['manifestBytesSha256'], 'BACKUP_MANIFEST_CHANGED')
+        need(c.digest(raw) == current_authority()['manifestBytesSha256'], 'BACKUP_MANIFEST_CHANGED')
         env, _ = held.read(previous / '.env.aws.production', mode=0o600)
         limits = core.backup_limits(env)
         actual_dropin, _ = held.read(core.BACKUP_DROPIN, mode=0o600)
@@ -256,7 +320,9 @@ def backup_cas(d, core, workspace, previous, manifest, states, ordinary_files, *
 def source(d, p, evidence):
     a = authority()
     need(evidence['ordinaryProducer'] == a['producer']
-         and evidence['ordinaryAuthoritySha256'] == c.fingerprint(a), 'SOURCE_ORIGIN_CHANGED')
+         and evidence['ordinaryAuthoritySha256'] == c.fingerprint(a)
+         and evidence['actualPredecessor'] == current_authority()['producer']
+         and evidence['adminAuthoritySha256'] == c.fingerprint(current_authority()), 'SOURCE_ORIGIN_CHANGED')
     core = c.load_core(a['coreSha256']); projection = core.projection_module()
     candidate_raw = d.registration_download(p['commit'])
     candidate = d.registration_archive(candidate_raw, p['commit'])
@@ -280,6 +346,8 @@ def source(d, p, evidence):
          'ORDINARY_BUILD_OUTPUT_CHANGED')
     record = {**preparation, 'kind': KIND + '_SOURCE', 'contextPath': CONTEXT,
         'candidateProducer': copy.deepcopy(p), 'ordinaryAuthoritySha256': c.fingerprint(a),
+        'actualPredecessor': current_authority()['producer'],
+        'adminAuthoritySha256': c.fingerprint(current_authority()),
         'candidateArchiveSha256': c.digest(candidate_raw), 'releaseAuthority': False}
     return candidate, output, record
 
@@ -290,7 +358,7 @@ def validate_preflight(core, transport, p, expected):
         'commandId', 'instanceId', 'invocationBytesSha256', 'invocationRawBase64', 'serverReceipt'}
         and type(transport['version']) is int and transport['version'] == 1
         and transport['kind'] == KIND + '_PREFLIGHT_TRANSPORT'
-        and transport['producer'] == p and transport['expectedCurrent'] == expected == a['producer']['commit'],
+        and transport['producer'] == p and transport['expectedCurrent'] == expected == current_predecessor(),
         'PREFLIGHT_TRANSPORT_CHANGED')
     raw = base64.b64decode(transport['invocationRawBase64'], validate=True)
     need(c.digest(raw) == transport['invocationBytesSha256'], 'PREFLIGHT_NATIVE_CHANGED')
@@ -302,7 +370,9 @@ def validate_preflight(core, transport, p, expected):
          and receipt.get('migrationPerformed') is False and receipt.get('databaseGrantsChanged') is False
          and receipt.get('executionMigrationPlan') == [] and receipt.get('onlinePublished') is False
          and type(receipt.get('businessActions')) is int and receipt['businessActions'] == 0
-         and receipt['baseline']['ordinaryAuthoritySha256'] == c.fingerprint(a), 'PREFLIGHT_RECEIPT_CHANGED')
+         and receipt['baseline']['ordinaryAuthoritySha256'] == c.fingerprint(a)
+         and receipt['baseline']['actualPredecessor'] == current_authority()['producer']
+         and receipt['baseline']['adminAuthoritySha256'] == c.fingerprint(current_authority()), 'PREFLIGHT_RECEIPT_CHANGED')
     return receipt
 
 
@@ -491,13 +561,15 @@ def wait_healthy(d, directory, name, deadline):
 
 
 class DeadlineController:
-    """Bound every subprocess/readiness call inside the existing 210s fence."""
-    def __init__(self, original, deadline):
-        self.original, self.deadline = original, deadline
+    """Bound calls by both actual fences, retaining idle fault-restore time."""
+    def __init__(self, original, deadline, *, reserve=0):
+        need(type(deadline) in (int, float) and type(reserve) in (int, float)
+             and 0 <= reserve <= RESTORE_BUDGET_SECONDS, 'FENCE_DEADLINE_CHANGED')
+        self.original, self.deadline, self.reserve = original, deadline, reserve
         self.subprocess = SimpleNamespace(run=self.subprocess_run)
         self.urllib = SimpleNamespace(request=SimpleNamespace(urlopen=self.urlopen))
         self.bound_helpers = {}
-        names = ('current_job_database', 'assert_no_active_recharge', 'registration_runtime_state', 'rollback_service')
+        names = ('current_job_database', 'assert_no_active_recharge', 'registration_runtime_state', 'rollback_service', 'audit')
         functions = {name: getattr(original, name) for name in names}
         genuine = {name: fn for name, fn in functions.items() if type(fn) is FunctionType}
         if genuine:
@@ -505,9 +577,10 @@ class DeadlineController:
             need(all(fn.__globals__ is first.__globals__ for fn in genuine.values()), 'FENCED_HELPER_CHANGED')
             namespace = {**first.__globals__, 'run': self.run, 'compose': self.compose,
                 'service_state': self.service_state,
-                'wait_healthy': lambda directory, service: wait_healthy(self, directory, service, self.deadline)}
+                'wait_healthy': lambda directory, service: wait_healthy(self, directory, service, self.operation_deadline())}
             for name, fn in genuine.items():
                 self.bound_helpers[name] = FunctionType(fn.__code__, namespace, fn.__name__, fn.__defaults__, fn.__closure__)
+                self.bound_helpers[name].__kwdefaults__ = copy.copy(fn.__kwdefaults__)
             namespace.update(self.bound_helpers)
 
     def __getattr__(self, name):
@@ -518,9 +591,12 @@ class DeadlineController:
         return getattr(self.original, name)
 
     def timeout(self, requested):
-        remaining = self.deadline - time.monotonic() - 3
+        remaining = self.operation_deadline() - time.monotonic() - 3
         need(remaining > 0 and type(requested) in (int, float) and requested > 0, 'FENCE_TIMEOUT')
         return min(requested, remaining)
+
+    def operation_deadline(self):
+        return self.deadline - self.reserve
 
     def run(self, *command, **kwargs):
         kwargs['timeout'] = self.timeout(kwargs.get('timeout', 30))
@@ -578,10 +654,16 @@ def switch(d, core, workspace, online, previous, target, evidence, proof, args, 
             {'workspaceVolume': evidence['workspaceVolume']}, legacy=False)
         gate_holder['gate'] = gate
         need(gate is not None and gate.record is not None, 'SQLITE_PROTECTION_REQUIRED')
+        # SQLite already holds its original 150s lease while READ acquisition
+        # starts. Even an acquisition failure retains that earlier deadline.
+        d = DeadlineController(d, gate.deadline, reserve=RESTORE_BUDGET_SECONDS)
+        gate_holder['controller'] = d
+        gate.d = d
         audit.__enter__()
         gate_holder['audit'] = audit
-        d = DeadlineController(d, audit.pipe.deadline)
+        d = DeadlineController(d.original, min(gate.deadline, audit.pipe.deadline), reserve=RESTORE_BUDGET_SECONDS)
         gate_holder['controller'] = d
+        gate.d = d
         gate.check_locked(); audit.before_stop()
         class StopController:
             def __getattr__(self, name):
@@ -598,9 +680,15 @@ def switch(d, core, workspace, online, previous, target, evidence, proof, args, 
             gate.stop_previous()
         finally:
             gate.d = d
+        need(gate.connection is None, 'SQLITE_FENCE_NOT_RELEASED')
+        gate_holder['sqliteReleasedAfterStop'] = True
+        # Successful stop_previous proves the old API stopped and closes the
+        # 150s SQLite transaction. Its maintenance marker remains; from here
+        # the live same-connection READ fence supplies the original 210s limit.
+        d.deadline = audit.pipe.deadline
         audit.confirm_stopped(gate)
         d.compose(target, 'up', '-d', '--no-deps', '--no-build', '--pull', 'never', '--force-recreate', 'api', timeout=60)
-        wait_healthy(d, target, 'api', audit.pipe.deadline)
+        wait_healthy(d, target, 'api', d.operation_deadline())
         gate.check_marker(); audit.check()
         preserve(d, core, workspace, online, previous, target, evidence, proof, pointer=previous)
         # Keep the same READ fence through executor startup: no accepted queued,
@@ -608,15 +696,54 @@ def switch(d, core, workspace, online, previous, target, evidence, proof, args, 
         online.require_fresh_resources(d, target)
         changed.append('online-recharge')
         d.compose(target, 'up', '-d', '--no-deps', '--no-build', '--pull', 'never', '--force-recreate', 'online-recharge', timeout=60)
-        state = wait_healthy(d, target, 'online-recharge', audit.pipe.deadline)
+        state = wait_healthy(d, target, 'online-recharge', d.operation_deadline())
         workspace.online_engine_idle(d, {'Id': state['containerId']})
         online.require_fresh_resources(d, target); audit.check()
         preserve(d, core, workspace, online, previous, target, evidence, proof, pointer=previous, engine=True)
         return gate, audit.receipt
     except Exception as error:
         if gate is None:
-            gate_holder['gate'] = getattr(error, 'sqlite_gate', None)
+            capture_prepare_failure(d, workspace, previous, target, evidence, proof, args,
+                changed, gate_holder, getattr(error, 'sqlite_gate', None))
         raise
+
+
+def capture_prepare_failure(d, workspace, previous, target, evidence, proof, args, changed, holder, gate):
+    """Bind only the original helper's failed, already closed preparation gate."""
+    if gate is None:
+        holder['gate'] = None
+        return
+    need(changed == ['admin'] and holder.get('audit') is None
+         and holder.get('controller') is None, 'PREPARE_FAILURE_PHASE_CHANGED')
+    bound = (isinstance(gate, workspace.WorkspaceSqliteProtection)
+        and gate.previous == previous and gate.target == target and gate.proof is proof and gate.args is args
+        and gate.d is d and gate.legacy is False and gate.connection is None
+        and gate.volume == evidence['workspaceVolume']
+        and all(gate.api_identity.get(n) == evidence['services']['api'].get(n)
+            for n in ('containerId', 'image', 'startedAtSha256')))
+    holder['prepareFailure'] = {'boundGate': bound, 'ownedMarker': False,
+        'backupRestoreProofCompleted': False}
+    holder['gate'] = gate if bound else None
+    if not bound:
+        return  # No method, close or abort on an unowned exception object.
+    deadline = vars(gate).get('deadline')
+    if type(deadline) in (int, float) and 0 < deadline <= time.monotonic() + 150:
+        holder['controller'] = DeadlineController(d, deadline, reserve=0)
+        gate.d = holder['controller']
+    if type(gate.marker_bytes) is bytes and type(gate.summary) is dict:
+        try:
+            marker = json.loads(gate.marker_bytes)
+            need(type(marker) is dict and set(marker) == {'version', 'runId', 'runAttempt', 'candidateCommit', 'nonce'}
+                 and type(marker['version']) is int and marker['version'] == 1
+                 and marker['runId'] == args.run_id and marker['runAttempt'] == args.run_attempt
+                 and marker['candidateCommit'] == args.commit and type(marker['nonce']) is str
+                 and re.fullmatch('[a-f0-9]{64}', marker['nonce']), 'PREPARE_FAILURE_MARKER_CHANGED')
+            gate.check_marker()
+            holder['prepareFailure']['ownedMarker'] = True
+        except Exception:
+            # Incomplete creation or a replaced marker supplies no authority
+            # to clear it. The Admin-only recovery leaves it intact.
+            pass
 
 
 def remove_added_engine(d, workspace, online, target, proof, evidence, *, held_audit=None):
@@ -646,8 +773,8 @@ def remove_added_engine(d, workspace, online, target, proof, evidence, *, held_a
     with fence:
         if held_audit is not None:
             held_audit.check()
-            need(isinstance(d, DeadlineController) and d.deadline == held_audit.pipe.deadline
-                 and time.monotonic() + 65 < d.deadline, 'ENGINE_STOP_FENCE_TIMEOUT')
+            need(isinstance(d, DeadlineController) and d.deadline <= held_audit.pipe.deadline
+                 and time.monotonic() + RESTORE_BUDGET_SECONDS < d.deadline, 'ENGINE_STOP_FENCE_TIMEOUT')
         workspace.online_engine_idle(d, metadata)
         online.require_fresh_resources(d, target)
         # Container-only removal; no volume flag, prune or other service action.
@@ -738,6 +865,23 @@ def verify_live_sqlite(d, core, workspace, record_directory, current_directory, 
     return {'liveSchemaAndLogicalDataVerified': True, 'sqliteProtectionSha256': digest}
 
 
+def verify_fresh_audits(core, workspace, d, directory, manifest, ledger, state):
+    authority()
+    before, after = [], []
+    for suffix, into in (('Before', before), ('After', after)):
+        filename = 'before-audit.json' if suffix == 'Before' else 'after-audit.json'
+        raw = core.private_bytes(directory / filename)
+        actual = workspace.audit_receipt(d, directory / filename)
+        core.audit_guard(actual)
+        need(c.digest(raw) == ledger['dataAudit' + suffix + 'BytesSha256']
+             == state['dataAudit' + suffix + 'BytesSha256']
+             and actual == ledger['dataAudit' + suffix] == state['dataAudit' + suffix] == manifest['dataAudit' + suffix],
+             'FRESH_AUDIT_RECEIPT_CHANGED')
+        into.append(actual)
+    need(before[0]['checksSha256'] == after[0]['checksSha256'], 'AUDIT_RULES_CHANGED')
+    return {'freshStrictZero49Verified': True, 'checksSha256': before[0]['checksSha256']}
+
+
 def audit_readback(d, workspace, online, directory, evidence, value, sqlite_sha):
     authority()
     fields = {'version', 'kind', 'basis', 'sourceApiIdentity', 'mysqlIdentitySha256',
@@ -783,6 +927,9 @@ def restore(d, core, workspace, online, previous, target, evidence, proof, args,
     authority()
     need(args.api_fault_restore_approved is True, 'API_FAULT_RESTORE_APPROVAL_REQUIRED')
     gate = holder.get('gate')
+    preparation = holder.get('prepareFailure')
+    need(preparation is None or (changed == ['admin'] and holder.get('audit') is None),
+         'PREPARE_FAILURE_PHASE_CHANGED')
     workspace.jobs_idle(d, target)
     online.require_fresh_resources(d, target)
     if 'api' in changed:
@@ -810,13 +957,15 @@ def restore(d, core, workspace, online, previous, target, evidence, proof, args,
              for n in ('api', 'admin'))
          and workspace.workspace_volume(d, previous, attached=True) == evidence['workspaceVolume']
          and not d.compose(target, 'ps', '-q', '--all', 'online-recharge'), 'FAULT_RESTORE_NOT_PROVEN')
+    if preparation is not None:
+        need(states['api'] == evidence['services']['api'], 'PREPARE_FAILURE_API_CHANGED')
     records = predecessor_records(d, core, previous)
     db = c.verify_applied_database(d, online, workspace, previous, predecessor_records=records,
         migration_plan=[], source_candidate=False)
     verify_online_grants(d, online, previous)
     need(c.digest(core.private_bytes(previous / '.env.aws.production')) == evidence['environmentFileSha256'],
          'FAULT_RESTORE_ENVIRONMENT_CHANGED')
-    if gate is not None:
+    if gate is not None and (preparation is None or preparation['ownedMarker'] is True):
         gate.d = d
         gate.abort()
     if (d.BASE / 'current').resolve() == target:
@@ -828,11 +977,15 @@ def restore(d, core, workspace, online, previous, target, evidence, proof, args,
         'status': 'RESTORED_INDEPENDENT_READBACK_REQUIRED', 'producer': proof['producer'],
         'baseline': evidence, 'servicesAttempted': list(changed), 'servicesAfter': states,
         'engineAddedRemoved': 'online-recharge' in changed, 'workspaceVolume': evidence['workspaceVolume'],
-        'sqliteProtectionSha256': c.fingerprint(gate.record) if gate is not None else None,
+        'sqliteProtectionSha256': c.fingerprint(gate.record) if preparation is None and gate is not None and gate.record is not None else None,
+        'sqlitePreparation': None if preparation is None else {
+            **preparation, 'originalApiNeverStopped': True,
+            'markerClearedByThisRelease': preparation['ownedMarker'] is True},
         'buildProofBytesSha256': c.digest(restore_proof_raw), 'preflightBytesSha256': c.digest(restore_pref_raw),
         'appliedDatabase': db, 'onlineGrants': verify_online_grants(d, online, previous),
         'migrationPerformed': False, 'databaseGrantsChanged': False, 'executionMigrationPlan': [],
         'volumeDeletionPerformed': False, 'businessActions': 0}
+    validate_preparation_restore(value, evidence)
     raw = core.write_private(target / (PREFIX + '-fault-restore.json'), value)
     return {'status': value['status'], 'independentReadbackRequired': True,
             'recordSha256': c.fingerprint(value), 'recordBytesSha256': c.digest(raw), 'failedRelease': str(target)}
@@ -847,11 +1000,24 @@ class ComponentFailure(RuntimeError):
 def fault_restore_controller(original, holder):
     authority()
     audit = holder.get('audit')
-    if audit is None: return original
+    gate = holder.get('gate')
+    if audit is None and gate is None: return original
     bounded = holder.get('controller')
-    need(isinstance(bounded, DeadlineController) and bounded.deadline == audit.pipe.deadline,
+    # lock() can fail before establishing a deadline or creating our marker.
+    # Only Admin may be restored, using the existing pre-fence lifecycle; no
+    # guessed SQLite lease and no API stop/restore are authorised here.
+    if audit is None and holder.get('prepareFailure') is not None and bounded is None:
+        need(holder['prepareFailure']['ownedMarker'] is False, 'PREPARE_FAILURE_MARKER_CHANGED')
+        return original
+    sqlite_released = holder.get('sqliteReleasedAfterStop') is True
+    need(not sqlite_released or (gate is not None and gate.connection is None and audit is not None),
          'RESTORE_FENCE_CONTROLLER_REQUIRED')
-    audit.check()
+    deadlines = ([audit.pipe.deadline] if audit is not None else []) + ([gate.deadline] if gate is not None and not sqlite_released else [])
+    need(isinstance(bounded, DeadlineController) and bounded.deadline == min(deadlines),
+         'RESTORE_FENCE_CONTROLLER_REQUIRED')
+    if audit is not None: audit.check()
+    need(time.monotonic() < bounded.deadline - 3, 'FENCE_TIMEOUT')
+    bounded.reserve = 0
     bounded.timeout(1)
     return bounded
 
@@ -898,6 +1064,10 @@ def release(d, args, proof, transport):
             finally:
                 d.subprocess.run(['docker', 'logout', registry], capture_output=True, text=True)
             need(d.shutil.disk_usage(d.BASE).free > 2 * 1024**3, 'DISK_LOW')
+            phase = 'audit-before'
+            first = workspace.strict_audit(d, target, target / 'before-audit.json')
+            core.audit_guard(first)
+            first_raw = core.private_bytes(target / 'before-audit.json')
             phase = 'backup'
             ordinary_raw = d.registration_download(authority()['producer']['commit'])
             ordinary_files = d.registration_archive(ordinary_raw, authority()['producer']['commit'])
@@ -918,6 +1088,11 @@ def release(d, args, proof, transport):
             gate, audit = switch(d, core, workspace, online, previous, target, evidence, proof, args,
                 changed, gate_holder=holder)
             d = holder['controller']
+            phase = 'audit-after'
+            second = workspace.strict_audit(d, target, target / 'after-audit.json')
+            core.audit_guard(second)
+            need(first['checksSha256'] == second['checksSha256'], 'AUDIT_RULES_CHANGED')
+            second_raw = core.private_bytes(target / 'after-audit.json')
             audit_raw = core.write_private(target / (PREFIX + '-audit-protection.json'), audit)
             phase = 'protected-readback'
             states = preserve(d, core, workspace, online, previous, target, evidence, proof, pointer=previous, engine=True)
@@ -933,6 +1108,8 @@ def release(d, args, proof, transport):
                 'workspaceVolumeAfter': workspace.workspace_volume(d, target, attached=True),
                 'sqliteProtectionSha256': c.fingerprint(gate.record), 'auditProtectionSha256': c.fingerprint(audit),
                 'migration': migration, 'backupInstallation': installed, 'freshBackup': backup, 'onlinePublished': True,
+                'dataAuditBefore': first, 'dataAuditAfter': second,
+                'dataAuditBeforeBytesSha256': c.digest(first_raw), 'dataAuditAfterBytesSha256': c.digest(second_raw),
                 'migrationPerformed': False, 'databaseGrantsChanged': False, 'businessActions': 0}
             state_raw = core.write_private(target / (PREFIX + '-preservation.json'), state)
             proof_raw = core.write_private(target / (PREFIX + '-build-proof.json'), proof)
@@ -947,7 +1124,10 @@ def release(d, args, proof, transport):
                 'auditRecordBytesSha256': c.digest(audit_raw), 'migrationRecordBytesSha256': c.digest(migration_raw),
                 'backupInstallationSha256': c.fingerprint(installed), 'originMarkersSha256': evidence['originMarkersSha256'],
                 'backupReceiptBytesSha256': c.digest(backup_raw), 'backupReceiptSha256': c.fingerprint(backup),
+                'dataAuditBefore': first, 'dataAuditAfter': second,
+                'dataAuditBeforeBytesSha256': c.digest(first_raw), 'dataAuditAfterBytesSha256': c.digest(second_raw),
                 'servicesUpdated': list(UPDATED), 'ordinaryPublishedProducer': evidence['ordinaryProducer'],
+                'actualPredecessor': evidence['actualPredecessor'], 'adminAuthoritySha256': evidence['adminAuthoritySha256'],
                 'onlinePublished': True, 'migrationPerformed': False, 'databaseGrantsChanged': False,
                 'executionMigrationPlan': [], 'businessActions': 0}
             manifest = copy.deepcopy(old)
@@ -960,6 +1140,7 @@ def release(d, args, proof, transport):
                 sourceArchiveSha256=record['candidateArchiveSha256'], backupBeforeRelease=backup['name'],
                 migrationApplied=True, migrationPerformed=False, newMigrations=[], onlineComponentPublication=ledger,
                 databaseGrants={'status': 'EXISTING_GRANTS_READONLY_VERIFIED', 'newTables': [], 'mutationPerformed': False},
+                dataAuditBefore=first, dataAuditAfter=second,
                 rollback={'release': str(previous), 'scope': KIND + '_IDLE_STARTUP_FAULT_RESTORE',
                     'images': {n: evidence['services'][n]['image'] for n in ('api', 'admin')},
                     'servicesAdded': ['online-recharge']})
@@ -980,7 +1161,7 @@ def release(d, args, proof, transport):
             holder['audit'].__exit__(None, None, None); holder['audit'] = None
             return result
         except Exception as error:
-            gate = holder.get('gate') or getattr(error, 'sqlite_gate', None)
+            gate = holder.get('gate') if 'prepareFailure' in holder else (holder.get('gate') or getattr(error, 'sqlite_gate', None))
             if gate is not None:
                 gate.close()
             recovery = {'status': 'NOT_REQUIRED' if not changed else 'UNKNOWN'}
@@ -998,7 +1179,7 @@ def release(d, args, proof, transport):
             publication = {'attempted': phase == 'publication', 'currentRole': 'UNAVAILABLE', 'onlinePublished': None}
             try:
                 actual_pointer = (d.BASE / 'current').resolve()
-                if actual_pointer == previous and core.private_bytes(previous / 'release-manifest.json') == predecessor_records(d, core, previous)[1]:
+                if actual_pointer == previous and c.digest(core.private_bytes(previous / 'release-manifest.json')) == evidence['manifestBytesSha256'] == current_authority()['manifestBytesSha256']:
                     publication.update(currentRole='PREDECESSOR', onlinePublished=False)
                 elif actual_pointer == target:
                     actual_manifest = core.closed_json(core.private_bytes(target / 'release-manifest.json'))
@@ -1043,7 +1224,7 @@ def validate_failure_receipt(value, p):
     need(type(value) is dict and set(value) == fields and type(value['version']) is int and value['version'] == 1
          and value['scope'] == SCOPE and value['kind'] == KIND and value['producer'] == p
          and value['status'] == 'ONLINE_RECHARGE_COMPONENT_FAILED'
-         and value['phase'] in ('source', 'images', 'backup', 'service-switch', 'protected-readback', 'publication')
+         and value['phase'] in ('source', 'images', 'audit-before', 'backup', 'service-switch', 'audit-after', 'protected-readback', 'publication')
          and type(value['code']) is str and re.fullmatch('(?:ONLINE_RECHARGE_COMPONENT|ONLINE_RECHARGE|API_ADMIN|UNPUBLISHED_COMPONENT)_[A-Z0-9_]+', value['code'])
          and type(value['servicesAttempted']) is list
          and value['servicesAttempted'] in ([], ['admin'], ['admin', 'api'], ['admin', 'api', 'online-recharge'])
@@ -1124,12 +1305,14 @@ def readback(d, commit, *, held_audit=None, prepared_source=None, prepared_ordin
     state_raw = core.private_bytes(current / (PREFIX + '-preservation.json'))
     proof, state = core.closed_json(proof_raw), core.closed_json(state_raw)
     transport = core.closed_json(core.private_bytes(current / (PREFIX + '-preflight.json')))
-    evidence = validate_preflight(core, transport, p, a['producer']['commit'])['baseline']
+    evidence = validate_preflight(core, transport, p, current_predecessor())['baseline']
     previous = Path(evidence['currentRelease'])
     need(previous.parent == d.BASE / 'releases' and previous != current
-         and manifest.get('previousRelease') == str(previous) and manifest.get('previousCommit') == a['producer']['commit']
+         and manifest.get('previousRelease') == str(previous) and manifest.get('previousCommit') == current_predecessor()
          and manifest.get('previousManifestSha256') == evidence['manifestBytesSha256'], 'PREVIOUS_RELEASE_CHANGED')
-    predecessor = c.authenticate_component_records(*predecessor_records(d, core, previous))
+    ordinary_records = predecessor_records(d, core, previous)
+    predecessor = c.authenticate_admin_records(core.private_bytes(current_native_path(d), cap=128 * 1024),
+        core.private_bytes(previous / 'release-manifest.json'), core.private_bytes(previous / 'admin-build-proof.json'), ordinary_records)
     old = predecessor['manifest']
     need(all(manifest[n] == old[n] for n in (*admin.ORIGIN_MARKERS, 'apiComponentPublication',
          'adminPublication', 'apiHotfixPublication'))
@@ -1153,7 +1336,9 @@ def readback(d, commit, *, held_audit=None, prepared_source=None, prepared_ordin
          and ledger['sourceFilesSha256'] == c.fingerprint(core.projection_module().inventory(files))
          and ledger['sourceArchiveSha256'] == manifest['sourceArchiveSha256'] == record['candidateArchiveSha256']
          and ledger['preflightSha256'] == c.fingerprint(transport)
-         and ledger['ordinaryPublishedProducer'] == a['producer'], 'RECORD_BINDING_CHANGED')
+         and ledger['ordinaryPublishedProducer'] == a['producer']
+         and ledger['actualPredecessor'] == current_authority()['producer']
+         and ledger['adminAuthoritySha256'] == c.fingerprint(current_authority()), 'RECORD_BINDING_CHANGED')
     for name, (raw, mode) in output.items():
         path = current / name
         need(path.is_file() and not path.is_symlink() and path.read_bytes() == raw
@@ -1180,6 +1365,7 @@ def readback(d, commit, *, held_audit=None, prepared_source=None, prepared_ordin
          and core.closed_json(migration_raw) == actual == state['migration'] == evidence['appliedDatabase'],
          'MIGRATION_READBACK_CHANGED')
     grants = verify_online_grants(d, online, current)
+    verify_fresh_audits(core, workspace, d, current, manifest, ledger, state)
     sqlite = workspace.workspace_sqlite_receipt(d, current, proof, state,
         {'apiWorkspacePublication': {'sqliteProtectionSha256': ledger['sqliteProtectionSha256']}})
     need(sqlite is not None and state['sqliteProtectionSha256'] == ledger['sqliteProtectionSha256'], 'SQLITE_RECEIPT_CHANGED')
@@ -1253,18 +1439,27 @@ def restore_readback(d, p, failed_release):
     need(c.digest(proof_raw) == value['buildProofBytesSha256']
          and c.digest(pref_raw) == value['preflightBytesSha256'], 'RESTORE_RECORD_CHANGED')
     proof, transport = core.closed_json(proof_raw), core.closed_json(pref_raw)
-    evidence = validate_preflight(core, transport, p, a['producer']['commit'])['baseline']
+    evidence = validate_preflight(core, transport, p, current_predecessor())['baseline']
     need(value['baseline'] == evidence, 'RESTORE_BASELINE_CHANGED')
+    validate_preparation_restore(value, evidence)
     previous = Path(evidence['currentRelease'])
     need(previous.parent == d.BASE / 'releases' and (d.BASE / 'current').resolve() == previous, 'RESTORE_POINTER_CHANGED')
     records = predecessor_records(d, core, previous)
     original = c.authenticate_component_records(*records)
+    successor = c.authenticate_admin_records(core.private_bytes(current_native_path(d), cap=128 * 1024),
+        core.private_bytes(previous / 'release-manifest.json'), core.private_bytes(previous / 'admin-build-proof.json'), records)
     # Restore creates new API/Admin IDs. Authenticate the old interpreter and
     # all ten archived helper bytes without pretending its old live receipt is
     # valid for those new processes.
-    _historical_controller, _historical_files, historical_archive_sha = original_controller(d, core, previous)
+    _historical_controller, _historical_files, historical_archive_sha = original_controller(d, core,
+        ordinary_directory(d, core, previous))
+    # Authenticate both archived interpreters statically; new restore IDs must
+    # never be made eligible by either old live-readback snapshot.
+    _admin_controller, _admin_files, admin_archive_sha = admin_controller(d, core, previous)
+    need(admin_archive_sha == evidence['currentArchiveSha256'], 'RESTORE_ADMIN_ARCHIVE_CHANGED')
     need(historical_archive_sha == evidence['ordinaryArchiveSha256'], 'RESTORE_ARCHIVE_CHANGED')
-    need(c.digest(records[1]) == evidence['manifestBytesSha256'], 'RESTORE_MANIFEST_CHANGED')
+    need(c.digest(core.private_bytes(previous / 'release-manifest.json')) == evidence['manifestBytesSha256'],
+         'RESTORE_MANIFEST_CHANGED')
     files, output, projection = source(d, p, evidence)
     validate_build(proof, p, projection, transport, proof['qualityRunId'],
         proof['images']['api']['reference'].rsplit(':', 1)[0])
@@ -1292,8 +1487,13 @@ def restore_readback(d, p, failed_release):
     grants = verify_online_grants(d, online, previous)
     need(grants == value['onlineGrants'], 'RESTORE_GRANTS_CHANGED')
     for name in ('api', 'admin'):
-        row = original['proof']['images'][name]
-        online.inspect_image(d, row, a['producer']['commit'], a['producer']['sourceTree'])
+        row = original['proof']['images']['api'] if name == 'api' else successor['proof']['image']
+        identity = a['producer'] if name == 'api' else current_authority()['producer']
+        online.inspect_image(d, row, identity['commit'], identity['sourceTree'])
+        metadata = json.loads(d.run('docker', 'image', 'inspect', row['reference']))[0]
+        key = 'id-business-v2.unpublished-component-successor-projection-sha256' if name == 'api' else 'id-business-v2.admin-pending-projection-sha256'
+        expected_projection = a['projectionSha256'] if name == 'api' else current_authority()['projectionSha256']
+        need(metadata.get('Config', {}).get('Labels', {}).get(key) == expected_projection, 'RESTORE_PROJECTION_CHANGED')
         actual = online.content_summary(d, name, d.compose(previous, 'exec', '-T', name,
             '/bin/sh', '-c', online.content_command(name), timeout=30))
         need(actual == {key: row[key] for key in ('fileCount', 'sha256')}, 'RESTORE_CONTENT_CHANGED')
@@ -1307,25 +1507,41 @@ def restore_readback(d, p, failed_release):
     ordinary_raw = d.registration_download(a['producer']['commit'])
     need(c.digest(ordinary_raw) == evidence['ordinaryArchiveSha256'], 'RESTORE_ARCHIVE_CHANGED')
     ordinary_files = d.registration_archive(ordinary_raw, a['producer']['commit'])
-    installed = backup_cas(d, core, workspace, previous, original['manifest'], states, ordinary_files)
+    installed = backup_cas(d, core, workspace, previous, successor['manifest'], states, ordinary_files)
     need({k: installed[k] for k in installed if k != 'servicesSha256'}
          == {k: evidence['backupInstallation'][k] for k in evidence['backupInstallation'] if k != 'servicesSha256'},
          'RESTORE_BACKUP_CHANGED')
     public = d.environment_values(previous / '.env.aws.production')['APP_PUBLIC_URL'].rstrip('/')
     with d.urllib.request.urlopen(public + '/', timeout=20) as response:
-        need(response.status == 200 and ('v2-' + a['producer']['commit']).encode()
+        need(response.status == 200 and ('v2-' + current_predecessor()).encode()
              in response.read(4 * 1024 * 1024), 'RESTORE_PUBLIC_VERSION_CHANGED')
     need((d.BASE / 'current').resolve() == previous and workspace.snapshot(d, previous) == states
          and core.private_bytes(target / (PREFIX + '-fault-restore.json')) == raw
-         and core.private_bytes(previous / 'release-manifest.json') == records[1], 'RESTORE_READBACK_MOVED')
+         and c.digest(core.private_bytes(previous / 'release-manifest.json')) == evidence['manifestBytesSha256'], 'RESTORE_READBACK_MOVED')
     return {'version': 1, 'scope': SCOPE, 'kind': KIND, 'status': 'ONLINE_RECHARGE_COMPONENT_FAULT_RESTORED',
         'producer': p, 'ordinaryProducer': a['producer'], 'restoreRecordBytesSha256': c.digest(raw),
-        'manifestBytesSha256': c.digest(records[1]), 'ordinaryAuthoritySha256': c.fingerprint(a),
+        'actualPredecessor': current_authority()['producer'], 'manifestBytesSha256': evidence['manifestBytesSha256'],
+        'ordinaryAuthoritySha256': c.fingerprint(a), 'adminAuthoritySha256': c.fingerprint(current_authority()),
         'servicesAfter': states, 'engineAddedRemoved': value['engineAddedRemoved'], 'executorAbsent': True,
         'preservedServiceCount': len(PRESERVED), 'migrationPerformed': False, 'databaseGrantsChanged': False,
         'executionMigrationPlan': [], 'onlinePublished': False, 'volumeDeletionPerformed': False,
         'businessActions': 0, 'databaseOldGrantsPreserved': True, 'sqliteProtectionSha256': sqlite_sha,
         'appliedDatabase': applied, 'onlineGrants': grants, 'backupInstallationVerified': True}
+
+
+def validate_preparation_restore(value, evidence):
+    preparation = value.get('sqlitePreparation')
+    if preparation is None:
+        return
+    fields = {'boundGate', 'ownedMarker', 'backupRestoreProofCompleted',
+        'originalApiNeverStopped', 'markerClearedByThisRelease'}
+    need(type(preparation) is dict and set(preparation) == fields
+         and all(type(preparation[n]) is bool for n in fields)
+         and preparation['backupRestoreProofCompleted'] is False and preparation['originalApiNeverStopped'] is True
+         and preparation['markerClearedByThisRelease'] is preparation['ownedMarker']
+         and (not preparation['ownedMarker'] or preparation['boundGate'])
+         and value['servicesAttempted'] == ['admin'] and value['sqliteProtectionSha256'] is None
+         and value['servicesAfter']['api'] == evidence['services']['api'], 'PREPARE_FAILURE_RESTORE_CHANGED')
 
 
 def decode_json(core, text, cap=256 * 1024):

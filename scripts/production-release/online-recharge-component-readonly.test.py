@@ -5,11 +5,14 @@ from contextlib import contextmanager
 import copy
 import gzip
 import importlib.util
+import io
 import json
 import os
 import runpy
 from pathlib import Path
 import shlex
+import tarfile
+import tempfile
 from types import SimpleNamespace
 import unittest
 from unittest.mock import MagicMock, Mock, patch
@@ -20,14 +23,23 @@ client = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(client)
 P = {'commit': 'a' * 40, 'sourceTree': 'b' * 40, 'workflowRunId': '123', 'workflowRunAttempt': '1'}
 OLD = 'c' * 40
+CURRENT = 'f' * 40
+CURRENT_COMMAND = '22222222-2222-4222-8222-222222222222'
 COMMAND = '11111111-1111-4111-8111-111111111111'
 INSTANCE = 'i-0123456789abcdef0'
 ORIGIN_RECEIPT = {'scope': 'UNPUBLISHED_API_ADMIN_COMPONENT_SUCCESSOR', 'status': 'UNPUBLISHED_COMPONENT_VERIFIED'}
 ORIGIN = json.dumps({'synthetic': 'ended native fixture'}).encode()
+CURRENT_RECEIPT = {'status': 'ADMIN_ONLY_READBACK_VERIFIED', 'commit': CURRENT,
+                   'apiComponentBaseline': OLD, 'preservedServiceCount': 6, 'onlinePublished': False}
+CURRENT_RAW = json.dumps({'synthetic': 'ended Admin successor native fixture'}).encode()
 AUTHORITY = {'producer': {'commit': OLD}, 'instanceId': INSTANCE, 'commandId': COMMAND,
              'invocationBytesSha256': client.r.c.digest(ORIGIN),
              'receiptSha256': client.r.c.fingerprint(ORIGIN_RECEIPT), 'coreSha256': 'd' * 64}
-ENV = {'RELEASE_OPERATION': 'release_online_recharge', 'EXPECTED_CURRENT': OLD,
+CURRENT_AUTHORITY = {'producer': dict(P, commit=CURRENT), 'commandId': CURRENT_COMMAND, 'instanceId': INSTANCE,
+    'invocationBytesSha256': client.r.c.digest(CURRENT_RAW), 'receiptSha256': client.r.c.fingerprint(CURRENT_RECEIPT),
+    'manifestBytesSha256': '1' * 64, 'buildProofBytesSha256': '2' * 64, 'publicationSha256': '3' * 64,
+    'projectionSha256': '4' * 64, 'controllerSha256': '5' * 64}
+ENV = {'RELEASE_OPERATION': 'release_online_recharge', 'EXPECTED_CURRENT': CURRENT,
        'RELEASE_COMMIT': P['commit'], 'SOURCE_TREE': P['sourceTree'], 'GITHUB_RUN_ID': '123',
        'GITHUB_RUN_ATTEMPT': '1', 'GITHUB_REF': 'refs/heads/main', 'GITHUB_ACTIONS': 'true',
        'AWS_REGION': 'ap-northeast-1', 'PRODUCTION_INSTANCE_ID': INSTANCE,
@@ -94,15 +106,103 @@ REAL43_PUBLIC_SIZING_FRAME = (
     'XsrA9Vnz1ZuI/wbaawSgoCYAAA=='
 )
 
+# Public 43+735 authenticated source records, complete new F sizing shape.
+# Missing future runtime measurements are explicit sentinels, never authority.
+PUBLIC568_SIZING_FRAME = (
+    'H4sIAAAAAAAC/+2bW2/bx5nG7/djCFjkJpLmfPBVFVtpvXVswXayuy0WwhxlNhSpkpRTNch3729IiZJsyZKbehdYxIATi4eZ+c88'
+    '73OYGf28U84XizZbHdTTyexlWk3et28uVm355l1S1u082SlOF1m7b6rYKERruhutXW6yu5YL7+SWjU4+S+lzV8nl7r2rMZlYsgs7'
+    'X+/MF3UyS4uLu5rP1WWVjFbRWNVyVKEr71svJvXWa5UxeGdE9zIpr3R2TkpTrJVKpxKFpvlFK21ytvp2vngz+ftkdvJqNr3YefLz'
+    'Tjo7m04Kfc5nz2dn56ttnz7GKoxXQYUQYq2hypSqaSm5qKXhkUzzvbaoci4MzsZI51mJokVtotBnTss2nczaup+yOk/To0WrDGS5'
+    'nC/Gi2V+ejpZ0Zl1oUUdRdLCJO1azSm4oHS11WYtm7XCeaczjS7n54vS3i4aze646GRzUkUhRWheC5mjU7Gr6pQLtoRQYmnF8b2f'
+    '5osf+3T+0+vz2cFq1U7PRr/y9hvPK6/pYIJl9YIMO798vZPGmh+cr97NF5PVxXZ6ohVZsiTMv9RSyNZqyCHbkLTOrTtfElOvVOMd'
+    'ZqzrFoLIQXujWhC671y2fLSY/6WVMf3bpq13tsioWWJfk8ngSFpvlWZBsylMOv8oLK3xgjUKLnlpgi8lJ21yFTeanvd/dponp+lk'
+    'vXB9Mm1P5+czvq+Uu3xjPVHL9YCf5GqSD7FlJt6m6J1wrklXqALTDBNhk3dKCetKo6tQMxBlAKGUWiiANTh7o77KWFLhozdC8rzB'
+    '7dUfF3utLPbS2e5svli9a2m52pV76TT9fT5LPy33eLT9Sd3N50twtlzuvle7izblY+3JYx9298aC78rd9dQNnG1rO0Vrm/Xd6tyl'
+    'MEb55hpfUr03yt0L6ZoBbjXH2o1ShVeCMZGyEM6mAaKz7Spvam7ydH56Np9BKd9sa2TH6KJl8KJEE32FRkyUpWYZi+1OFu9c11mb'
+    'MWElzeqkphUr8/lLu/3y5xdReZdmJ61+CyaW40n2Tiard+d5/6qGlvs8aT1fP+nVQuxdnE7HZ0/ndfQmhXDrZ9hOsG6ljg6jY6zW'
+    'mSZ4SBAVtFGV4mLaXYxKwkJawaRFVFuiM1I4Zb2s6yo9O1vur5duf7ko++/Vfm9pdb5ovHq+mjMWhr44afvny/b68t8v5iVNn85n'
+    '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'
+    'reurg41/+weGbSsafzoAAA=='
+)
+
 
 @contextmanager
 def selected_fixture(env=None):
     core = SimpleNamespace(HELPERS=client.r.c.load_core().HELPERS,
         closed_json=lambda raw, *unused: json.loads(raw),
-        validate_invocation=Mock(return_value=({}, copy.deepcopy(ORIGIN_RECEIPT))))
+        validate_invocation=Mock(side_effect=lambda raw, *unused, **kw: ({}, copy.deepcopy(
+            CURRENT_RECEIPT if raw == CURRENT_RAW else ORIGIN_RECEIPT))))
     with patch.dict(os.environ, ENV if env is None else env, clear=True), \
             patch.object(client.r, 'authority', return_value=copy.deepcopy(AUTHORITY)), \
+            patch.object(client.r, 'current_authority', return_value=copy.deepcopy(CURRENT_AUTHORITY)), \
+            patch.object(client.r, 'current_predecessor', return_value=CURRENT), \
             patch.object(client.r, 'producer', return_value=copy.deepcopy(P)), \
+            patch.object(client, 'helper_pins', side_effect=lambda core, p, helpers: {
+                name: client.r.c.digest(PATH.with_name(name).read_bytes()) for name in helpers}), \
             patch.object(client.r.c, 'load_core', return_value=core):
         yield core
 
@@ -119,6 +219,23 @@ class ComponentClientTests(unittest.TestCase):
             command.assert_not_called()
             output.assert_not_called()
             modules.assert_not_called()
+
+    def test_missing_admin_successor_seal_or_unknown_current_stops_before_transport(self):
+        with patch.object(client.r, 'authority', return_value=AUTHORITY), \
+                patch.object(client.r.c, 'SEALED_ORDINARY_COMPONENT', client.r.c.AUTHENTICATED_PREDECESSOR), \
+                patch.object(client.r.c, 'ADMIN_SUCCESSOR', None), \
+                patch.object(client, 'command_raw') as command, patch.object(client, 'output_directory') as output:
+            for mode in client.MODES:
+                with self.subTest(mode=mode), self.assertRaisesRegex(RuntimeError, 'ADMIN_SUCCESSOR_NOT_SEALED'):
+                    client.main(mode)
+            command.assert_not_called()
+            output.assert_not_called()
+        with selected_fixture(dict(ENV, EXPECTED_CURRENT='unknown')), \
+                patch.object(client, 'command_raw') as command, patch.object(client, 'output_directory') as output:
+            with self.assertRaisesRegex(RuntimeError, 'SELECTION_INVALID'):
+                client.main('preflight')
+            command.assert_not_called()
+            output.assert_not_called()
 
     def test_historical_readers_and_unknown_operations_do_not_select_component(self):
         for expected in client.LEGACY_PREDECESSORS:
@@ -152,6 +269,17 @@ class ComponentClientTests(unittest.TestCase):
                 with self.subTest(mode=mode), self.assertRaises(RuntimeError):
                     client.selected(mode)
 
+    def test_expected_current_uses_sealed_admin_successor_without_relabeling_ordinary_origin(self):
+        with selected_fixture() as core:
+            self.assertEqual(client.selected('selection'), (core, P))
+            self.assertEqual(client.r.authority()['producer']['commit'], OLD)
+            self.assertEqual(client.r.current_predecessor(), CURRENT)
+        with selected_fixture(dict(ENV, EXPECTED_CURRENT=OLD)), self.assertRaisesRegex(RuntimeError, 'SELECTION_INVALID'):
+            client.selected('selection')
+        with selected_fixture(), patch.object(client.r, 'current_authority', return_value=dict(
+                CURRENT_AUTHORITY, instanceId='i-00000000000000000')), self.assertRaisesRegex(RuntimeError, 'SELECTION_INVALID'):
+            client.selected('selection')
+
     def test_transport_is_45_second_bounded_and_masks_command_errors(self):
         with patch.object(client.subprocess, 'run', return_value=SimpleNamespace(
                 returncode=1, stdout=b'', stderr=b'private fixture')) as run:
@@ -171,9 +299,22 @@ class ComponentClientTests(unittest.TestCase):
                 client.predecessor_native(core)
             core.validate_invocation.assert_not_called()
 
+    def test_ordinary_and_admin_successor_use_two_independent_original_native_bytes(self):
+        with selected_fixture() as core, patch.object(client, 'command_raw', side_effect=[ORIGIN, CURRENT_RAW]) as command:
+            self.assertEqual(client.predecessor_native(core), ORIGIN)
+            self.assertEqual(client.current_native(core), CURRENT_RAW)
+            self.assertEqual(command.call_args_list[0].args[6], COMMAND)
+            self.assertEqual(command.call_args_list[1].args[6], CURRENT_COMMAND)
+            self.assertEqual(core.validate_invocation.call_args_list[0].args, (ORIGIN, COMMAND, INSTANCE))
+            self.assertEqual(core.validate_invocation.call_args_list[1].args, (CURRENT_RAW, CURRENT_COMMAND, INSTANCE))
+        with selected_fixture() as core, patch.object(client, 'command_raw', return_value=ORIGIN):
+            with self.assertRaisesRegex(RuntimeError, 'PREDECESSOR_NATIVE_CHANGED'):
+                client.current_native(core)
+            core.validate_invocation.assert_not_called()
+
     def test_parameters_pin_full_helpers_and_install_original_raw_without_old_cli(self):
         with selected_fixture() as core:
-            result = client.parameters('preflight', core, P, origin_raw=ORIGIN)
+            result = client.parameters('preflight', core, P, origin_raw=ORIGIN, current_raw=CURRENT_RAW)
             carrier = shlex.split(result['commands'][0])[-1]
             argument = carrier.split('base64.b64decode(', 1)[1].split(',validate=True)', 1)[0]
             packed = __import__('ast').literal_eval(argument)
@@ -181,12 +322,21 @@ class ComponentClientTests(unittest.TestCase):
             for name in (*core.HELPERS, 'online-recharge-component-consumer.py',
                          'online-recharge-component-runtime.py', 'online-recharge-component-readonly.py'):
                 self.assertIn(repr(name), program)
-            self.assertIn('online-component-origin-' + AUTHORITY['invocationBytesSha256'], program)
-            self.assertIn(repr(ORIGIN), program)
+            call = next(node for node in ast.walk(ast.parse(program)) if isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Subscript) and isinstance(node.func.value, ast.Name)
+                and node.func.value.id == 'client')
+            packet = [ast.literal_eval(value) for value in call.args]
+            self.assertEqual(gzip.decompress(base64.b64decode(packet[1])), ORIGIN)
+            self.assertEqual(gzip.decompress(base64.b64decode(packet[2])), CURRENT_RAW)
+            self.assertLess(program.index('_store_files('), program.index('client=load_staged_client('))
             self.assertIn('online-recharge-component-runtime.py', program)
             self.assertNotIn('--online-recharge-only', program)
             self.assertNotIn('after-bit-build-input', program)
             self.assertLess(len(json.dumps(result).encode()), 20 * 1024)
+        with selected_fixture() as core, patch.object(client.r, 'current_native_path', return_value=Path(
+                '/opt/id-business-v2/.staging/online-component-origin-' + AUTHORITY['invocationBytesSha256'] + '/invocation.json')):
+            with self.assertRaisesRegex(RuntimeError, 'PREDECESSOR_PATH_CHANGED'):
+                client.parameters('preflight', core, P, origin_raw=ORIGIN, current_raw=CURRENT_RAW)
 
     def test_preflight_wraps_actual_native_then_uses_one_runtime_validator(self):
         receipt = {'kind': client.r.KIND, 'scope': 'ONLINE_RECHARGE',
@@ -201,7 +351,7 @@ class ComponentClientTests(unittest.TestCase):
             self.assertEqual(base64.b64decode(result['invocationRawBase64']), raw)
             self.assertEqual(result['serverReceipt'], receipt)
             decode.assert_called_once_with(core, raw, COMMAND, INSTANCE)
-            validate.assert_called_once_with(core, result, P, OLD)
+            validate.assert_called_once_with(core, result, P, CURRENT)
 
     def test_release_and_readback_require_new_typed_return_without_old_decoder(self):
         receipt = {'kind': client.r.KIND, 'producer': P}
@@ -217,50 +367,55 @@ class ComponentClientTests(unittest.TestCase):
     def test_release_stages_explicit_compressed_f_and_proof_with_existing_approval(self):
         proof = {'sourceProjection': {'candidateProducer': P}}
         transport = {'version': 1, 'kind': client.r.KIND + '_PREFLIGHT_TRANSPORT', 'producer': P,
-            'expectedCurrent': OLD, 'commandId': COMMAND, 'instanceId': INSTANCE,
+            'expectedCurrent': CURRENT, 'commandId': COMMAND, 'instanceId': INSTANCE,
             'invocationBytesSha256': client.r.c.digest(b'synthetic preflight native'),
             'invocationRawBase64': base64.b64encode(b'synthetic preflight native').decode(),
             'serverReceipt': {'producer': P}}
         with selected_fixture() as core, patch.object(client.r, 'validate_preflight'), \
                 patch.object(client.r, 'validate_build'):
             result = client.parameters('release', core, P, input_artifacts=(json.dumps(proof).encode(),
-                                       json.dumps(transport).encode()), origin_raw=ORIGIN)
+                                       json.dumps(transport).encode()), origin_raw=ORIGIN, current_raw=CURRENT_RAW)
             carrier = shlex.split(result['commands'][0])[-1]
             packed = __import__('ast').literal_eval(carrier.split('base64.b64decode(', 1)[1].split(',validate=True)', 1)[0])
             program = gzip.decompress(base64.b64decode(packed)).decode()
             self.assertIn('gzip-base64:', program)
             self.assertIn('--api-fault-restore-approved', program)
-            self.assertIn('--preflight', program)
-            self.assertIn('--build-proof', program)
-            self.assertIn('preflight_from_native(core,runtime,', program)
+            self.assertIn('client["server_arguments"](', program)
             self.assertNotIn(repr(json.dumps(transport).encode()), program)
             tree = ast.parse(program)
-            # Execute the actual carrier after replacing only its two mutating
-            # installers. Runtime/native validators are isolated pure mocks.
+            # Execute the actual carrier with only its source installer and the
+            # staged byte writer mocked. Native/F validators stay pure mocks.
             tree.body = [node for node in tree.body if not isinstance(node, ast.FunctionDef)
-                         or node.name not in ('_store_files', 'write_workspace_private_bytes')]
+                         or node.name not in ('_store_files', 'load_staged_client')]
             calls = []
             def runner(path, **kwargs):
                 if kwargs.get('run_name') == '__main__':
                     calls.append(list(client.sys.argv))
                     return {}
-                return vars(client.r)
+                self.assertTrue(path.endswith('/online-recharge-component-readonly.py'))
+                return vars(client)
+            writer = Mock()
             with patch.object(runpy, 'run_path', side_effect=runner), \
+                    patch.object(client, 'load', return_value=SimpleNamespace(write_workspace_private_bytes=writer)), \
                     patch.object(client.sys, 'argv', ['isolated carrier']), \
                     patch.object(client.r, 'validate_component_invocation', return_value=(
                         {'StandardOutputContent': 'bounded wire'}, transport['serverReceipt'])):
                 exec(compile(tree, '<pure-carrier-fixture>', 'exec'), {
-                    '_store_files': Mock(), 'write_workspace_private_bytes': Mock()})
+                    '_store_files': Mock(), 'load_staged_client': Mock(return_value=vars(client))})
             self.assertEqual(len(calls), 1)
             args = calls[0]
             decode_arg = lambda value: json.loads(gzip.decompress(base64.b64decode(value.removeprefix('gzip-base64:'))))
             self.assertEqual(decode_arg(args[args.index('--build-proof') + 1]), proof)
             self.assertEqual(decode_arg(args[args.index('--preflight') + 1]), transport)
+            self.assertEqual(writer.call_args_list[0].args, (
+                '/opt/id-business-v2/.staging/online-component-origin-' + AUTHORITY['invocationBytesSha256'] + '/invocation.json', ORIGIN))
+            self.assertEqual(writer.call_args_list[1].args, (
+                '/opt/id-business-v2/.staging/online-admin-successor-' + CURRENT_AUTHORITY['invocationBytesSha256'] + '/invocation.json', CURRENT_RAW))
 
     def test_remote_f_reconstruction_keeps_exact_authenticated_native_and_full_receipt(self):
         raw = b'synthetic exact native bytes'
         descriptor = {'version': 1, 'kind': client.r.KIND + '_PREFLIGHT_TRANSPORT', 'producer': P,
-            'expectedCurrent': OLD, 'commandId': COMMAND, 'instanceId': INSTANCE,
+            'expectedCurrent': CURRENT, 'commandId': COMMAND, 'instanceId': INSTANCE,
             'invocationBytesSha256': client.r.c.digest(raw)}
         receipt = {'producer': P, 'baseline': {'publicFixture': True}}
         with selected_fixture() as core, patch.object(client.r, 'validate_component_invocation',
@@ -271,16 +426,96 @@ class ComponentClientTests(unittest.TestCase):
             self.assertEqual(value['serverReceipt'], receipt)
             self.assertEqual(client.r.c.fingerprint(value), client.r.c.fingerprint(
                 dict(descriptor, invocationRawBase64=base64.b64encode(raw).decode(), serverReceipt=receipt)))
-            validate.assert_called_once_with(core, value, P, OLD)
+            validate.assert_called_once_with(core, value, P, CURRENT)
             decode.assert_called_once_with(core, raw, COMMAND, INSTANCE)
         with selected_fixture() as core, patch.object(client.r, 'validate_component_invocation') as decode:
             with self.assertRaisesRegex(RuntimeError, 'PREFLIGHT_NATIVE_CHANGED'):
                 client.preflight_from_native(core, client.r, descriptor, raw + b'changed')
             decode.assert_not_called()
 
+    def test_candidate_archive_git_mode_and_local_cas_are_checked_before_helper_execution(self):
+        core = client.r.c.load_core()
+        decoder = client.load('remote-deploy.py')
+        name = 'online-recharge-component-readonly.py'
+        relative = 'scripts/production-release/' + name
+        raw = b'# public source fixture\n'
+        files = {relative: (raw, '100644')}
+        p = dict(P, sourceTree=core.projection_module().source_tree(files))
+        stream = io.BytesIO()
+        with tarfile.open(fileobj=stream, mode='w') as archive:
+            row = tarfile.TarInfo('id-business-system-' + p['commit'] + '/' + relative)
+            row.mode, row.size = 0o644, len(raw)
+            archive.addfile(row, io.BytesIO(raw))
+        archive_raw = stream.getvalue()
+        header = '100644 blob ' + __import__('hashlib').sha1(
+            b'blob ' + str(len(raw)).encode() + b'\0' + raw).hexdigest() + '\t' + relative + '\n'
+        snapshot = {name: (raw, '100644', (1, 2, 3, 4))}
+        d = SimpleNamespace(registration_download=Mock(return_value=archive_raw),
+            registration_archive=Mock(wraps=decoder.registration_archive))
+        with patch.object(client, 'helper_snapshot', return_value=snapshot), \
+                patch.object(client.r, 'modules', return_value=(d,)), \
+                patch.object(client, 'command_raw', return_value=header.encode()):
+            self.assertEqual(client.helper_pins(core, p, (name,)), {name: client.r.c.digest(raw)})
+            d.registration_download.assert_called_once_with(p['commit'])
+            d.registration_archive.assert_called_once_with(archive_raw, p['commit'])
+        for changed in (b'# changed helper fixture\n', raw):
+            bad = {relative: (changed, '100755' if changed == raw else '100644')}
+            d.registration_archive = Mock(return_value=bad)
+            with self.subTest(modeOrBytes=changed), patch.object(client, 'helper_snapshot', return_value=snapshot), \
+                    patch.object(client.r, 'modules', return_value=(d,)), \
+                    patch.object(client, 'command_raw') as git:
+                with self.assertRaises(RuntimeError):
+                    client.helper_pins(core, p, (name,))
+                git.assert_not_called()
+        d.registration_archive = Mock(wraps=decoder.registration_archive)
+        with patch.object(client, 'helper_snapshot', return_value=snapshot), \
+                patch.object(client.r, 'modules', return_value=(d,)), \
+                patch.object(client, 'command_raw', return_value=header.replace('100644', '100755').encode()), \
+                self.assertRaisesRegex(RuntimeError, 'HELPER_GIT_SOURCE_CHANGED'):
+            client.helper_pins(core, p, (name,))
+        with patch.object(client, 'helper_snapshot', side_effect=[snapshot, {name: (raw, '100644', (1, 2, 3, 5))}]), \
+                patch.object(client.r, 'modules', return_value=(d,)), \
+                patch.object(client, 'command_raw', return_value=header.encode()), \
+                self.assertRaisesRegex(RuntimeError, 'HELPER_SOURCE_CHANGED'):
+            client.helper_pins(core, p, (name,))
+
+    def test_staged_server_refuses_missing_raw_or_writer_failure_before_dispatch(self):
+        pack = lambda value: base64.b64encode(gzip.compress(value, mtime=0)).decode()
+        writer = Mock()
+        with selected_fixture(), patch.object(client, 'load', return_value=SimpleNamespace(
+                write_workspace_private_bytes=writer)), patch.object(runpy, 'run_path') as dispatch:
+            for raw in ('', pack(b'changed successor native')):
+                with self.subTest(raw=raw), self.assertRaises(RuntimeError):
+                    client.server_arguments(['readback'], pack(ORIGIN), raw)
+            writer.assert_not_called()
+            dispatch.assert_not_called()
+            writer.side_effect = RuntimeError('API_ADMIN_PENDING_ONLINE_RECEIPT_CHANGED')
+            with self.assertRaisesRegex(RuntimeError, 'API_ADMIN_PENDING_ONLINE_RECEIPT_CHANGED'):
+                client.server_arguments(['readback'], pack(ORIGIN), pack(CURRENT_RAW))
+            self.assertEqual(writer.call_count, 1)
+            dispatch.assert_not_called()
+
+    def test_staged_client_hash_mode_and_cas_are_validated_before_execution(self):
+        runtime = PATH.parents[2] / '.runtime/online-recharge/component-source-pin-tests'
+        runtime.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=runtime) as directory:
+            path = Path(directory) / 'pinned-client.py'
+            raw = b'value = 42\n'
+            path.write_bytes(raw)
+            path.chmod(0o600)
+            expected = client.r.c.digest(raw)
+            self.assertEqual(client.load_staged_client(str(path), expected)['value'], 42)
+            path.write_bytes(b'raise AssertionError("must never execute")\n')
+            with self.assertRaisesRegex(RuntimeError, 'HELPER_SOURCE_CHANGED'):
+                client.load_staged_client(str(path), expected)
+            path.write_bytes(raw)
+            path.chmod(0o666)
+            with self.assertRaisesRegex(RuntimeError, 'HELPER_SOURCE_CHANGED'):
+                client.load_staged_client(str(path), expected)
+
     def test_readback_cli_does_not_carry_predecessor_or_publish_inputs(self):
         with selected_fixture() as core:
-            result = client.parameters('readback', core, P, origin_raw=ORIGIN)
+            result = client.parameters('readback', core, P, origin_raw=ORIGIN, current_raw=CURRENT_RAW)
             carrier = shlex.split(result['commands'][0])[-1]
             packed = __import__('ast').literal_eval(carrier.split('base64.b64decode(', 1)[1].split(',validate=True)', 1)[0])
             program = gzip.decompress(base64.b64decode(packed)).decode()
@@ -371,7 +606,7 @@ class ComponentClientTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, 'FAILURE_EVIDENCE_CHANGED'):
                 client.diagnostic(core, P, output)
 
-    def test_complete_real43_public_f_shape_fits_actual_native_stdout_boundary(self):
+    def test_historical_real43_public_f_shape_fits_actual_native_stdout_boundary(self):
         fixture = json.loads(gzip.decompress(base64.b64decode(REAL43_PUBLIC_SIZING_FRAME, validate=True)))
         self.assertIs(fixture['releaseAuthority'], False)
         receipt = fixture['receiptForSizingOnly']
@@ -405,6 +640,35 @@ class ComponentClientTests(unittest.TestCase):
         with patch.object(client.r, 'authority', return_value=AUTHORITY):
             _native, decoded = client.r.validate_component_invocation(core, json.dumps(native).encode(), COMMAND, INSTANCE)
         self.assertEqual(decoded, receipt)
+
+    def test_complete_568_f_keeps_full_admin_proof_and_fits_original_native_limit(self):
+        fixture = json.loads(gzip.decompress(base64.b64decode(PUBLIC568_SIZING_FRAME, validate=True)))
+        self.assertIs(fixture['releaseAuthority'], False)
+        receipt = fixture['receiptForSizingOnly']
+        baseline = receipt['baseline']
+        self.assertEqual(baseline['ordinaryProducer']['commit'], '43c31870c9497d900491cdb19c5f61c766f3b344')
+        self.assertEqual(baseline['actualPredecessor']['commit'], '568e9390a304a36edba86823d5d5b31e5506763b')
+        self.assertEqual(fixture['currentAdminNativeBytesSha256'],
+                         'c63c1df7e2c5900ee3f4336be1f6ebcdf7beb43a7b117bf2a6bf776d9a49cb68')
+        self.assertEqual(set(baseline), {'version', 'kind', 'ordinaryProducer', 'ordinaryAuthoritySha256',
+            'actualPredecessor', 'adminAuthoritySha256', 'adminProjectionSha256', 'adminProof', 'ordinaryRelease',
+            'currentArchiveSha256', 'currentRelease', 'manifestBytesSha256', 'ordinaryArchiveSha256',
+            'ordinarySourceFilesSha256', 'ordinaryProjectionSha256', 'ordinaryOutputFilesSha256',
+            'environmentFileSha256', 'services', 'workspaceVolume', 'guards', 'configurationModels',
+            'databaseGrants', 'migrationState', 'appliedDatabase', 'backupInstallation', 'originMarkersSha256'})
+        self.assertEqual(client.r.c.fingerprint(baseline['adminProof']),
+                         '61762ca2d160e8cb6715c56deb86dc821b9abea3a29a9aa728f77e362bf24bfa')
+        self.assertEqual(baseline['adminProof']['projection']['profile'], 'ADMIN_CONFIRM_EXPIRY_20261014')
+        self.assertEqual(len(baseline['adminProof']['projection']['overlayFiles']), 2)
+        self.assertEqual(receipt['applicationInputSha256'],
+                         '799d0472828889dd8d1aad4eaa69314df74e7fde92bbc2a4599a27b20c30de0c')
+        wire = client.r.wire(receipt)
+        stdout = json.dumps(wire, sort_keys=True, separators=(',', ':')) + '\n'
+        self.assertLess(len(stdout.encode()), 9000)
+        self.assertLess(len(stdout.encode()), 23000)
+        raw = gzip.decompress(base64.b64decode(wire['payload'], validate=True))
+        self.assertEqual(json.loads(raw), receipt)
+        self.assertEqual(client.r.c.digest(raw), wire['payloadSha256'])
 
     def test_failures_keep_only_a_controlled_code(self):
         value = client.safe_failure(ValueError('private account fixture'))
