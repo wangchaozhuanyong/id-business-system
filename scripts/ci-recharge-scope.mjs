@@ -3848,8 +3848,8 @@ export const firstRechargeNewBaseBinding = Object.freeze({
   currentDiffCount: 64,
   currentDiffSha256: 'c8cf0535ec42f398d27fe70e8b98ea43422f121f4f20608c2325013dab24eb53',
   scopeSha256: 'f7bd777690711ba11f139c5f0a6934ed8450e6905357d62f0eef5097db5592b3',
-  scopeBlockSha256: '23f6fc40d5425be1f7816f9c983616b0089fb84b67d79be0b45c01c3f1aec27f',
-  scopeTestSha256: 'd4a4849b15fe68555f96d95c7e5b092866b2eb047ed07e7fc9ce1695b2f0a26d',
+  scopeBlockSha256: 'ad1ad6a912d12e4bb58ec61762071a2e188050121903689713ed6302f98a2844',
+  scopeTestSha256: 'dfdecc47ffe62b8c7b95ddcecb5cad7d7670f2e43a48289fdc11885351b2c52f',
   fixtureHashes: Object.freeze({
     'scripts/production-release/online-recharge-ci-build.test.py':
       'e2a8cda35b269e0582f9e59249f6c0d8b1b074c8948b09812bc569d9baf9e273',
@@ -3896,6 +3896,8 @@ const firstRechargeNewBaseCall =
 const firstRechargeNewBaseOldGate = '  const onlineCiBuild = needsOnlineRechargeCiBuild(paths);';
 const firstRechargeNewBaseGate =
   '  const onlineCiBuild = firstRechargeOnlineBuildRequired(repo, event, mode, paths, currentTree);';
+const firstRechargeNewBaseModeHook =
+  '  mode = selectFirstRechargeCurrentMode(repo, event, mode, paths, currentTree);\n';
 const firstRechargeNewBaseDigest = (bytes) => createHash('sha256').update(bytes).digest('hex');
 
 function firstRechargeNewBaseManifest(raw) {
@@ -3929,12 +3931,24 @@ export function firstRechargeNewBaseScopeBytesUnchanged(after) {
   }
   if (firstRechargeNewBaseDigest(block) !== firstRechargeNewBaseBinding.scopeBlockSha256)
     return false;
-  const without = after.slice(0, left) + after.slice(right + end.length);
+  let without = after.slice(0, left) + after.slice(right + end.length);
   if (
     without.split(firstRechargeNewBaseCall).length !== 2 ||
     without.split(firstRechargeNewBaseGate).length !== 2
   )
     return false;
+  const declaration = '  let mode = checkMode(\n';
+  const position =
+    "  const currentTree = git('rev-parse', 'HEAD^{tree}');\n" + firstRechargeNewBaseModeHook;
+  if (
+    without.split(declaration).length !== 2 ||
+    without.split(firstRechargeNewBaseModeHook).length !== 2 ||
+    without.split(position).length !== 2
+  )
+    return false;
+  without = without
+    .replace(declaration, '  const mode = checkMode(\n')
+    .replace(firstRechargeNewBaseModeHook, '');
   return (
     firstRechargeNewBaseDigest(
       without
@@ -4169,6 +4183,28 @@ function firstRechargeNewBaseQualification(repo, event, mode, paths, currentTree
   const snapshot = readFirstRechargeNewBaseSourceSnapshot(currentTree);
   return hasFirstRechargeNewBaseSourceProof(snapshot) ? snapshot : undefined;
 }
+export function selectFirstRechargeCurrentMode(repo, event, mode, paths, currentTree) {
+  if (
+    mode !== 'full' ||
+    !firstRechargeNewBaseQualification(repo, event, 'recharge', paths, currentTree)
+  )
+    return mode;
+  // Native evidence is available only in the original independently checked
+  // runtime. A changed runner retains the ordinary classifier and gets checks.
+  let environment;
+  try {
+    environment = onlineComponentGuardCurrentEnvironment();
+  } catch {
+    return mode;
+  }
+  return environment.node === 'v24.21.0' &&
+    environment.npm === '11.19.0' &&
+    environment.imageOS === 'ubuntu24' &&
+    environment.imageVersion === '20261004.327.1' &&
+    environment.platform === 'linux'
+    ? 'recharge'
+    : mode;
+}
 export function isFirstRechargeNewBaseOnlineBuildInapplicable(
   repo,
   event,
@@ -4292,7 +4328,7 @@ async function main() {
   const paths = git('diff', '--name-only', base, 'HEAD').split('\n').filter(Boolean);
   const grantHelperSnapshot = readProductionDatabaseAccessSnapshot(base, paths);
   const firstRechargeSnapshot = readFirstRechargeBillingNameSnapshot(base, paths);
-  const mode = checkMode(
+  let mode = checkMode(
     paths,
     git('show', `${base}:${schema}`),
     git('show', `HEAD:${schema}`),
@@ -4300,6 +4336,7 @@ async function main() {
     firstRechargeSnapshot
   );
   const currentTree = git('rev-parse', 'HEAD^{tree}');
+  mode = selectFirstRechargeCurrentMode(repo, event, mode, paths, currentTree);
   let reuseMain = false;
   const reused = new Set();
   const evidence = [];

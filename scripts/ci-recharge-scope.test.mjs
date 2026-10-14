@@ -170,6 +170,7 @@ import {
   firstRechargeNewBasePathsMatch,
   validateFirstRechargeNewBaseNative,
   firstRechargeOnlineBuildRequired,
+  selectFirstRechargeCurrentMode,
   reuseFirstRechargeNewBaseNative,
   firstRechargeBusinessBinding,
   firstRechargeBusinessQualityBytesUnchanged,
@@ -5584,5 +5585,182 @@ test('current-base operational reader uses stdin source snapshots and stops at u
       (row) => row.file === 'aws' || row.file === 'docker' || row.args.includes('download')
     ),
     false
+  );
+});
+
+function recordFirstRechargeBoundedMain(options = {}) {
+  // Test-only native markers and their fixed hashes are mocked explicitly.
+  // All app blobs, schema, billing names, source manifests and scope code use
+  // genuine Git bytes. No remote evidence or success artifact is created.
+  const payload = {
+    snapshot: firstRechargeNewBaseWorkingSnapshot(),
+    paths: firstRechargeNewBasePaths(),
+    event: firstRechargeNewBaseEvent(),
+    options,
+    business: syntheticFirstRechargeBusinessNative(),
+    connector: syntheticFirstRechargeConnectorNative()
+  };
+  payload.event.pull_request.head.sha = 'e'.repeat(40);
+  const script = `
+    import childProcess from 'node:child_process';
+    import fs from 'node:fs';
+    import crypto from 'node:crypto';
+    import {syncBuiltinESMExports} from 'node:module';
+    const data=JSON.parse(fs.readFileSync(0,'utf8')),original=childProcess.execFileSync,readFile=fs.readFileSync;
+    const calls=[],writes=[],tree='f'.repeat(40),commit='d'.repeat(40),head='e'.repeat(40);
+    const b=data.business,c=data.connector,base=data.event.pull_request.base.sha;
+    if(data.options.repo) data.event.pull_request.head.repo.full_name=data.options.repo;
+    if(data.options.path) data.paths.push(data.options.path);
+    if(data.options.control) data.snapshot.currentManifest=data.snapshot.currentManifest.split('\\0').map(row=>row.endsWith('\\t'+data.options.control)?row.replace(/[a-f0-9]{40}/,'0'.repeat(40)):row).join('\\0');
+    if(data.options.scopeBody) {
+      const path='scripts/ci-recharge-scope.mjs',bytes=data.snapshot.files[path]+'\\n';
+      data.snapshot.files[path]=bytes;
+      const blob=crypto.createHash('sha1').update('blob '+Buffer.byteLength(bytes)+'\\0').update(bytes).digest('hex');
+      data.snapshot.currentManifest=data.snapshot.currentManifest.split('\\0').map(row=>row.endsWith('\\t'+path)?'100644 blob '+blob+'\\t'+path:row).join('\\0');
+    }
+    const shared=['  NODE_ENV: test','Image: ubuntu-24.04','Version: 20261004.327.1','node: v24.21.0','npm: 11.19.0','##[group]Run npm ci --no-audit'];
+    const logs=Object.fromEntries(['admin','api','connector'].map(part=>{
+      const input=part==='connector'?c:b;
+      const roleLines=part==='admin'?['Test Files 28 passed (28)','Tests 525 passed (525)',
+        '{"scope":"OFFLINE_SYNTHETIC_ONLY"}','{"ok":true,"layoutScenarios":36,"interactions":10,"runtimeErrors":0}']:
+        part==='api'?['Test Files 57 passed | 8 skipped (65)','Tests 817 passed | 36 skipped (853)','> nest build']:
+        ['##[group]Run python3 -m pip install --disable-pip-version-check -r apps/api/src/id-business-v2/auto-recharge/worker/requirements.lock.txt',
+         '> @apple-business/shared@0.1.0 build','> tsc -p tsconfig.json','Ran 839 tests in 1.0s','OK (skipped=42)'];
+      return [part,['SYNTHETIC_NATIVE_MAIN_'+part,'[command]/usr/bin/git log -1 --format=%H',input.checkout.sha,
+        '  CHECK_PART: '+part,'  CHECK_BASE: '+input.checkout.parents[0].sha,'  CHECK_MODE: recharge',
+        '##[group]Run node scripts/ci-recharge-check.mjs "$CHECK_PART" "$CHECK_BASE"',...shared,...roleLines].join('\\n')+'\\n'];
+    }));
+    const hashes=Object.fromEntries(['admin','api','connector'].map(part=>[logs[part],part==='connector'?c.facts.sha256:b.facts[part].sha256]));
+    const hash=crypto.createHash;
+    crypto.createHash=(algorithm,...args)=>{
+      const value=hash(algorithm,...args),update=value.update.bind(value),digest=value.digest.bind(value);let native;
+      value.update=(bytes,...rest)=>{if(algorithm==='sha256' && typeof bytes==='string' && Object.hasOwn(hashes,bytes)) native=hashes[bytes];update(bytes,...rest);return value;};
+      value.digest=(encoding)=>native && encoding==='hex'?native:digest(encoding);return value;
+    };
+    Object.defineProperty(process,'version',{value:data.options.node || 'v24.21.0'});
+    Object.defineProperty(process,'platform',{value:data.options.platform || 'linux'});
+    process.env.ImageOS=data.options.imageOS || 'ubuntu24';process.env.ImageVersion=data.options.imageVersion || '20261004.327.1';
+    childProcess.execFileSync=(file,args,opts)=>{
+      calls.push({file,args});
+      if(file==='npm' && args[0]==='--version') return data.options.npm || '11.19.0';
+      if(file==='git') {
+        if(args[0]==='cat-file' && args[1]==='-e' && [b.checkout.sha,c.checkout.sha].includes(args[2])) return '';
+        if(args[0]==='fetch') throw new Error('No network in whole-main fixture');
+        if(args[0]==='rev-parse' && args[1]==='HEAD^{tree}') return tree;
+        if(args[0]==='rev-parse' && args[1]==='HEAD') return commit;
+        if(args[0]==='rev-parse' && args[1]===b.checkout.sha+'^{tree}') return b.checkout.tree.sha;
+        if(args[0]==='rev-parse' && args[1]===c.checkout.sha+'^{tree}') return c.checkout.tree.sha;
+        if(args[0]==='show' && args[1]==='-s' && args.at(-1)==='HEAD') return base+' '+head;
+        if(args[0]==='show' && args[1]==='-s' && args.at(-1)===b.checkout.sha) return b.checkout.parents.map(row=>row.sha).join(' ');
+        if(args[0]==='show' && args[1]==='-s' && args.at(-1)===c.checkout.sha) return c.checkout.parents.map(row=>row.sha).join(' ');
+        if(args[0]==='merge-tree' && args[2]===base && args[3]===head) return tree+'\\n';
+        if(args[0]==='diff' && (args.at(-1)===tree || (args[2]===base && args.at(-1)==='HEAD'))) return data.paths.join('\\n')+'\\n';
+        if(args[0]==='ls-tree' && args.includes('-rz') && args.at(-1)===tree) return data.snapshot.currentManifest;
+        if(args[0]==='show' && args[1].startsWith(tree+':')) {
+          const path=args[1].slice(41);return path==='scripts/production-release/first-recharge-successor-contract.json'?data.snapshot.contract:data.snapshot.files[path];
+        }
+        return original(file,args,opts);
+      }
+      if(file==='gh' && args[0]==='api') {
+        const endpoint=args.at(-1);
+        if(endpoint.includes('/workflows/quality.yml/runs?')) return JSON.stringify({workflow_runs:[]});
+        for(const input of [b,c]) {
+          const run=input.run,checkout=input.checkout;
+          if(endpoint.endsWith('/actions/runs/'+run.id)) return JSON.stringify(run);
+          if(endpoint.endsWith('/actions/runs/'+run.id+'/attempts/1/jobs?per_page=100')) return JSON.stringify({jobs:input.jobs});
+          if(endpoint.endsWith('/git/commits/'+checkout.sha)) return JSON.stringify(checkout);
+          for(const job of input.jobs) if(endpoint.endsWith('/actions/jobs/'+job.id+'/logs')) return logs[job.name.slice(10,-1)];
+        }
+      }
+      throw new Error('Unexpected process in main fixture: '+file+' '+args.join(' '));
+    };
+    fs.readFileSync=(path,...args)=>path===process.env.GITHUB_EVENT_PATH?JSON.stringify({pull_request:data.event.pull_request}):readFile(path,...args);
+    fs.appendFileSync=(path,contents)=>writes.push({path,contents});
+    syncBuiltinESMExports();
+    process.env.GITHUB_SHA=commit;process.env.GITHUB_EVENT_NAME='pull_request';
+    process.env.GITHUB_REPOSITORY='wangchaozhuanyong/id-business-system';process.env.BASE_SHA=base;
+    process.env.GITHUB_EVENT_PATH='synthetic-first-recharge-main-event';process.env.GITHUB_OUTPUT='synthetic-first-recharge-output';process.env.GITHUB_STEP_SUMMARY='synthetic-first-recharge-summary';
+    let result;console.log=value=>{result=JSON.parse(value);};
+    process.argv=['node','scripts/ci-recharge-scope.mjs'];
+    await import('./scripts/ci-recharge-scope.mjs');
+    process.stdout.write(JSON.stringify({result,calls,writes}));`;
+  return JSON.parse(
+    execFileSync(process.execPath, ['--input-type=module', '-e', script], {
+      cwd: root,
+      encoding: 'utf8',
+      input: JSON.stringify(payload),
+      maxBuffer: 4 * 1024 * 1024
+    })
+  );
+}
+
+test('current-base real main transitions genuine64 paths from full to recharge and emits the bounded matrix', () => {
+  const paths = firstRechargeNewBasePaths(),
+    base = firstRechargeNewBaseBinding.base;
+  const before = execFileSync('git', ['show', base + ':apps/api/prisma-mysql/schema.prisma'], {
+    encoding: 'utf8'
+  });
+  const after = execFileSync('git', ['show', 'HEAD:apps/api/prisma-mysql/schema.prisma'], {
+    encoding: 'utf8'
+  });
+  const names = readFirstRechargeBillingNameSnapshot(base, paths);
+  assert.equal(hasFirstRechargeBillingNameProof(paths, names), true);
+  assert.equal(checkMode(paths, before, after, undefined, names), 'full');
+  const actual = recordFirstRechargeBoundedMain();
+  assert.equal(actual.result.mode, 'recharge');
+  assert.deepEqual(actual.result.checkParts, ['guards', 'admin', 'api', 'connector']);
+  assert.deepEqual(actual.result.reusedParts, ['admin', 'api', 'connector']);
+  assert.equal(actual.result.onlineCiBuild, false);
+  assert.equal(actual.result.reuseMain, false);
+  assert.equal(actual.result.evidence.length, 3);
+  const output = actual.writes.find(
+    (row) => row.path === 'synthetic-first-recharge-output'
+  ).contents;
+  assert.match(output, /mode=recharge\n/);
+  assert.match(output, /reused_parts=\["admin","api","connector"\]\n/);
+  assert.match(output, /online_ci_build=false\n/);
+  assert.equal(
+    actual.calls.some(
+      (row) =>
+        row.file === 'aws' ||
+        row.file === 'docker' ||
+        row.args.includes('download') ||
+        row.args[0] === 'fetch'
+    ),
+    false
+  );
+});
+
+test('current-base real main retains full and ONLINE gate for unknown source runtime or paths', () => {
+  for (const options of [
+    { control: '.github/workflows/quality.yml' },
+    { scopeBody: true },
+    { path: 'scripts/unreviewed-control.py' },
+    { repo: 'fork/repository' },
+    { node: 'v24.22.0' },
+    { npm: '12.0.0' },
+    { imageOS: 'ubuntu22' },
+    { imageVersion: '20261011.1' },
+    { platform: 'darwin' }
+  ]) {
+    const actual = recordFirstRechargeBoundedMain(options);
+    assert.equal(actual.result.mode, 'full', JSON.stringify(options));
+    assert.deepEqual(actual.result.reusedParts, [], JSON.stringify(options));
+    assert.equal(actual.result.onlineCiBuild, true, JSON.stringify(options));
+    assert.equal(
+      actual.calls.some((row) => row.file === 'gh' && row.args.at(-1).endsWith('/logs')),
+      false,
+      JSON.stringify(options)
+    );
+  }
+  assert.equal(
+    selectFirstRechargeCurrentMode(
+      'other/repository',
+      undefined,
+      'admin',
+      [],
+      firstRechargeNewBaseBinding.templateTree
+    ),
+    'admin'
   );
 });
