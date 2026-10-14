@@ -485,6 +485,18 @@ const current = yaml.load(fs.readFileSync('.github/workflows/production-release.
 // and unrelated successor entries must not change this read-only path.
 const old = yaml.load(cp.execFileSync('git', ['show', '302b65945d39ef8b1e08c2e35a64c5a89a41e455:.github/workflows/production-release.yml'], {encoding: 'utf8'}));
 const operation = 'diagnose_unpublished_component_runtime';
+const firstOperations = ['verify_first_recharge', 'release_first_recharge'];
+const currentOptions = current.on.workflow_dispatch.inputs.operation.options.filter(o => !['verify_recharge_flow', 'release_recharge_flow'].includes(o));
+const oldOptions = old.on.workflow_dispatch.inputs.operation.options;
+const expectedFirstOptions = [oldOptions[0], ...firstOperations, ...oldOptions.slice(1)];
+const validatesFirstOptions = values => JSON.stringify(values) === JSON.stringify(expectedFirstOptions);
+const firstOptionTamperRejections = [
+ currentOptions.filter(o => o !== firstOperations[0]),
+ currentOptions.filter(o => o !== firstOperations[1]),
+ [...currentOptions, 'release_first_recharge_unreviewed'],
+ [...currentOptions, firstOperations[0]],
+ [currentOptions[1], currentOptions[0], ...currentOptions.slice(2)]
+].map(values => !validatesFirstOptions(values));
 const inputs = new Proxy({operation, historical_exception: 'none', reuse_image_run: ''}, {get: (v, k) => v[k] ?? ''});
 const always = () => true;
 const startsWith = (v, p) => v.startsWith(p);
@@ -620,8 +632,8 @@ const runtimeByBaseline = ['', '60e164b75d1eedaab440c17139bf9ba55de08c61', '31d2
 console.log(JSON.stringify({concurrency: current.concurrency, oldConcurrency: old.concurrency,
  jobIf: current.jobs.release.if, permissions: current.permissions, oldPermissions: old.permissions,
  jobEnv: current.jobs.release.env, oldJobEnv: old.jobs.release.env,
- options: current.on.workflow_dispatch.inputs.operation.options.filter(o => !['verify_recharge_flow', 'release_recharge_flow'].includes(o)),
- oldOptions: old.on.workflow_dispatch.inputs.operation.options,
+ options: currentOptions, oldOptions, expectedFirstOptions,
+ firstOptionsValidated: validatesFirstOptions(currentOptions), firstOptionTamperRejections,
  oldStepsRetained: old.jobs.release.steps.every(o => steps.some(s => s.name === o.name)), changed,
  legacyOnlyGateChanged: JSON.stringify(without(byName(steps, legacyName), 'if')) === JSON.stringify(without(byName(old.jobs.release.steps, legacyName), 'if')),
  readbackOnlyApiOriginChanged: JSON.stringify(without(readback, 'run')) === JSON.stringify(without(oldReadback, 'run')) && validatesReadback(readback.run),
@@ -643,7 +655,10 @@ console.log(JSON.stringify({concurrency: current.concurrency, oldConcurrency: ol
         self.assertEqual(value['jobIf'], "github.ref == 'refs/heads/main'")
         self.assertEqual(value['jobEnv'].pop('TZ'), 'Asia/Kuala_Lumpur')
         self.assertEqual(value['jobEnv'], value['oldJobEnv'])
-        self.assertEqual(value['options'], value['oldOptions'])
+        self.assertEqual(value['oldOptions'][0], 'verify_access')
+        self.assertEqual(value['options'], value['expectedFirstOptions'])
+        self.assertTrue(value['firstOptionsValidated'])
+        self.assertEqual(value['firstOptionTamperRejections'], [True] * 5)
         self.assertIn(m.OPERATION, value['options'])
         self.assertTrue(value['oldStepsRetained'])
         self.assertEqual(value['enabled'], value['oldEnabled'])
@@ -680,9 +695,28 @@ console.log(JSON.stringify({concurrency: current.concurrency, oldConcurrency: ol
             'Recover reviewed disk headroom before release preflight',
             'Register complete release candidate and reserve pull headroom',
             'Confirm published candidate and reclaim superseded local images',
-            'Save disk lifecycle safe evidence'})
+            'Save disk lifecycle safe evidence',
+            'Verify first recharge predecessor and idle workers before building',
+            'Independently read back first recharge images and preserved services',
+            'Save first recharge build and independent runtime evidence'})
+        self.assertEqual(added['Verify first recharge predecessor and idle workers before building'], {
+            'name': 'Verify first recharge predecessor and idle workers before building',
+            'if': "inputs.operation == 'verify_first_recharge' || inputs.operation == 'release_first_recharge'",
+            'run': 'python3 -B scripts/production-release/first-recharge-successor-readonly.py preflight'})
+        self.assertEqual(added['Independently read back first recharge images and preserved services'], {
+            'name': 'Independently read back first recharge images and preserved services',
+            'if': "inputs.operation == 'release_first_recharge'",
+            'run': 'python3 -B scripts/production-release/first-recharge-successor-readonly.py readback'})
+        self.assertEqual(added['Save first recharge build and independent runtime evidence'], {
+            'name': 'Save first recharge build and independent runtime evidence',
+            'if': "always() && (inputs.operation == 'verify_first_recharge' || inputs.operation == 'release_first_recharge')",
+            'uses': 'actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02',
+            'with': {'name': 'first-recharge-evidence-${{ github.run_id }}-${{ github.run_attempt }}',
+                     'path': '.deploy/production-release/first-recharge-successor-*.json',
+                     'if-no-files-found': 'warn', 'include-hidden-files': True, 'retention-days': 14}})
         modern_operations = ('release', 'release_admin', 'release_online_recharge', 'release_api_workspace',
-            'release_api_admin', 'release_api_admin_migration', 'release_unpublished_components', 'release_recharge_flow')
+            'release_api_admin', 'release_api_admin_migration', 'release_unpublished_components', 'release_recharge_flow',
+            'release_first_recharge')
         disk_condition = "inputs.historical_exception == 'none' && inputs.reuse_image_run == '' && (" + ' || '.join(
             "inputs.operation == '" + operation + "'" for operation in modern_operations) + ')'
         for title, phase in (('Recover reviewed disk headroom before release preflight', 'before-build'),
