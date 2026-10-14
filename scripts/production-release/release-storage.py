@@ -106,6 +106,14 @@ def candidate_module():
     return module
 
 
+def online_component_module():
+    spec = importlib.util.spec_from_file_location('release_storage_online_component',
+                                                 HERE / 'online-recharge-component-readonly.py')
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
 def selection(environment):
     operation = environment.get('RELEASE_OPERATION')
     need(operation in OPERATIONS, 'STORAGE_CLOSED_BUILD_PROOF_REQUIRED')
@@ -126,8 +134,19 @@ def selection(environment):
          and environment.get('PRODUCTION_INSTANCE_ID') == INSTANCE
          and environment.get('AWS_REGION') == REGION
          and environment.get('GITHUB_REF') == 'refs/heads/main', 'STORAGE_TARGET_INVALID')
+    component = False
+    if operation == 'release_online_recharge':
+        online = online_component_module()
+        component = online.component_selected(environment)
+        if component:
+            need(environment['EXPECTED_CURRENT'] == online.r.current_predecessor()
+                 and environment.get('RELEASE_ADMIN_ONLY', 'false') == 'false'
+                 and environment.get('API_FAULT_RESTORE_APPROVED', 'false') == 'true'
+                 and not any(environment.get(key) for key in online.FORBIDDEN),
+                 'STORAGE_ONLINE_COMPONENT_SELECTION_INVALID')
     return {'operation': operation, 'producer': producer, 'qualityRunId': environment['QUALITY_RUN_ID'],
             'expectedCurrent': environment['EXPECTED_CURRENT'],
+            'onlineComponent': component,
             'adminOnly': environment.get('RELEASE_ADMIN_ONLY'),
             'batch': '-'.join(producer[key] for key in ('commit', 'workflowRunId', 'workflowRunAttempt'))}
 
@@ -248,6 +267,22 @@ def policy_binding():
 
 
 def proof_images(selected, proof):
+    if selected.get('onlineComponent') is True:
+        online = online_component_module()
+        need(type(proof) is dict and set(proof) == {'version', 'scope', 'kind', 'producer', 'qualityRunId',
+             'sourceProjection', 'preflightSha256', 'migrations', 'images'}
+             and type(proof['version']) is int and proof['version'] == 1 and proof['scope'] == online.r.SCOPE
+             and proof['kind'] == online.r.KIND + '_BUILD_PROOF' and proof['producer'] == selected['producer']
+             and proof['qualityRunId'] == selected['qualityRunId'], 'STORAGE_BUILD_PRODUCER_DRIFT')
+        # Full source/native/context/content authentication is owned by
+        # component_build below; this only maps its closed four-image record.
+        images = proof.get('images')
+        module, roles = candidate_module().OPERATION_SCOPES[selected['operation']]
+        need(type(images) is dict and set(images) == roles, 'STORAGE_BUILD_BATCH_INCOMPLETE')
+        for role, row in images.items():
+            need(type(row) is dict and row.get('reference') == REPOSITORY + ':' + selected['batch'] + '-' + role
+                 and matches(IMAGE_ID, row.get('imageId')), 'STORAGE_BUILD_IMAGE_DRIFT')
+        return module, images
     versions = (1, 2, 3) if selected['operation'] == 'release_online_recharge' else (1,)
     need(type(proof) is dict and type(proof.get('version')) is int and proof['version'] in versions
          and proof.get('commit') == selected['producer']['commit']
@@ -269,6 +304,51 @@ def proof_images(selected, proof):
         need(type(row) is dict and row.get('reference') == REPOSITORY + ':' + selected['batch'] + '-' + role
              and matches(IMAGE_ID, row.get('imageId')), 'STORAGE_BUILD_IMAGE_DRIFT')
     return module, images
+
+
+def private_snapshot(paths):
+    result = {}
+    for path in paths:
+        path = Path(path)
+        try:
+            before = path.lstat()
+            identity = lambda row: tuple(getattr(row, key) for key in (
+                'st_dev', 'st_ino', 'st_mode', 'st_nlink', 'st_uid', 'st_gid', 'st_size', 'st_mtime_ns', 'st_ctime_ns'))
+            raw = read_file(path, 256 * 1024, private=True)
+            need(identity(before) == identity(path.lstat()), 'STORAGE_COMPONENT_INPUT_CHANGED')
+            result[path] = (raw, identity(before))
+        except StorageRejected:
+            raise
+        except Exception:
+            raise StorageRejected('STORAGE_COMPONENT_INPUT_UNAVAILABLE') from None
+    return result
+
+
+def component_build(selected):
+    """Authenticate the actual immutable component proof, never make a copy."""
+    online = online_component_module()
+    try:
+        core, producer = online.selected('build-proof')
+        need(producer == selected['producer'] and os.environ.get('QUALITY_RUN_ID') == selected['qualityRunId']
+             and os.environ.get('RELEASE_REPOSITORY') == REPOSITORY,
+             'STORAGE_COMPONENT_PRODUCER_DRIFT')
+        paths = [PROJECT / name for name in (online.r.PROOF, online.r.PROJECTION, online.r.PREFLIGHT)]
+        snapshot = private_snapshot(paths)
+        proof = core.closed_json(snapshot[paths[0]][0], 256 * 1024)
+        preflight = core.closed_json(snapshot[paths[2]][0], 256 * 1024)
+        projection = core.closed_json(snapshot[paths[1]][0], 256 * 1024)
+        online.r.validate_preflight(core, preflight, producer, selected['expectedCurrent'])
+        online.r.validate_build(proof, producer, projection, preflight, selected['qualityRunId'], REPOSITORY)
+        # This existing publisher path verifies the frozen archives, projection,
+        # context and all four image contents. An existing proof is read-only;
+        # its O_EXCL writer is reached only when no proof exists.
+        measured = online.r.build_proof(None, producer, preflight, selected['qualityRunId'], REPOSITORY)
+        need(measured == proof and private_snapshot(paths) == snapshot, 'STORAGE_COMPONENT_INPUT_CHANGED')
+        return online, core, proof, snapshot
+    except StorageRejected:
+        raise
+    except Exception:
+        raise StorageRejected('STORAGE_COMPONENT_BUILD_AUTHENTICATION_FAILED') from None
 
 
 def image_measurement(reference, expected_id, selected, commands):
@@ -350,11 +430,18 @@ def build_record(selected, commands, proof=None):
         need(proof is None, 'STORAGE_NORMAL_BUILD_PROOF_UNEXPECTED')
         module, measured, proof = normal_release_record(selected, commands)
     else:
-        proof_name, _ = PROOFS[selected['operation']]
-        proof = closed(read_file(PROJECT / '.deploy/production-release' / proof_name)) if proof is None else proof
+        snapshot = None
+        if selected.get('onlineComponent') is True:
+            need(proof is None, 'STORAGE_COMPONENT_BUILD_PROOF_UNEXPECTED')
+            _online, _core, proof, snapshot = component_build(selected)
+        else:
+            proof_name, _ = PROOFS[selected['operation']]
+            proof = closed(read_file(PROJECT / '.deploy/production-release' / proof_name)) if proof is None else proof
         module, images = proof_images(selected, proof)
         measured = {role: image_measurement(row['reference'], row['imageId'], selected, commands)
                     for role, row in sorted(images.items())}
+        if snapshot is not None:
+            need(private_snapshot(snapshot) == snapshot, 'STORAGE_COMPONENT_INPUT_CHANGED')
     record = {'kind': 'DISK_CANDIDATE_RECORD_V1', 'version': 1, 'batch': selected['batch'], 'module': module,
               'operation': selected['operation'], 'producer': selected['producer'],
               'qualityRunId': selected['qualityRunId'], 'proofSha256': digest(proof), 'images': measured}
@@ -507,7 +594,63 @@ class LifecycleClient:
         raise StorageRejected('STORAGE_ACCEPTED_RESULT_PENDING')
 
 
-def validate_readback(selected, record):
+def component_readback(selected, record, commands, authenticated=None):
+    online, core, proof, build_snapshot = authenticated or component_build(selected)
+    directory = PROJECT / '.deploy/production-release'
+    names = ('readback.json', 'readback-invocation-metadata.json', 'readback-send-intent.json',
+             'readback-parameters.json')
+    paths = [directory / (online.r.PREFIX + '-' + name) for name in names]
+    snapshot = private_snapshot(paths)
+    try:
+        producer = selected['producer']
+        saved, metadata, intent, parameters = (core.closed_json(snapshot[path][0], 256 * 1024) for path in paths)
+        need(type(metadata) is dict and set(metadata) == {'producer', 'mode', 'commandId', 'instanceId', 'status'}
+             and metadata['producer'] == producer and metadata['mode'] == 'readback'
+             and metadata['status'] == 'ACCEPTED' and metadata['instanceId'] == INSTANCE
+             and matches(UUID, metadata['commandId']), 'STORAGE_COMPONENT_READBACK_COMMAND_DRIFT')
+        need(type(intent) is dict and set(intent) == {'producer', 'mode', 'expectedCurrent', 'parametersSha256', 'status'}
+             and intent['producer'] == producer and intent['mode'] == 'readback'
+             and intent['expectedCurrent'] == selected['expectedCurrent'] and intent['status'] == 'SUBMITTING_ONCE'
+             and intent['parametersSha256'] == online.r.c.fingerprint(parameters),
+             'STORAGE_COMPONENT_READBACK_INTENT_DRIFT')
+        # Regenerate the same source-pinned GET-only readback carrier. This
+        # authenticates the producer, helper/source pins and predecessor bytes;
+        # it does not send or rerun any server command.
+        need(parameters == online.parameters('readback', core, producer),
+             'STORAGE_COMPONENT_READBACK_PARAMETERS_DRIFT')
+        need(type(saved) is dict and set(saved) == {'commandId', 'instanceId', 'status',
+             'invocationBytesSha256', 'receipt'} and matches(HEX64, saved['invocationBytesSha256']),
+             'STORAGE_COMPONENT_READBACK_NATIVE_DRIFT')
+        # The success protocol retains its original shape. Reconcile only the
+        # already accepted UUID and exact raw JSON hash, never SendCommand.
+        _, raw = commands.run(['aws', '--region', REGION, 'ssm', 'get-command-invocation',
+            '--command-id', metadata['commandId'], '--instance-id', INSTANCE, '--output', 'json'],
+            limit=128 * 1024)
+        need(hashlib.sha256(raw).hexdigest() == saved['invocationBytesSha256'],
+             'STORAGE_COMPONENT_READBACK_NATIVE_DRIFT')
+        verified = online.validate_native(core, raw, 'readback', producer, metadata['commandId'], INSTANCE)
+        need(saved == verified, 'STORAGE_COMPONENT_READBACK_NATIVE_DRIFT')
+        receipt = verified['receipt']
+        proof_raw = build_snapshot[PROJECT / online.r.PROOF][0]
+        need(digest(proof) == record['proofSha256']
+             and receipt['buildProofBytesSha256'] == hashlib.sha256(proof_raw).hexdigest()
+             and receipt['sourceProjectionSha256'] == online.r.c.fingerprint(proof['sourceProjection']),
+             'STORAGE_COMPONENT_READBACK_PROOF_DRIFT')
+        _module, images = proof_images(selected, proof)
+        need(all(images[role]['imageId'] == row['imageId'] and images[role]['reference'] == row['reference']
+                 for role, row in record['images'].items()), 'STORAGE_READBACK_IMAGE_DRIFT')
+        need(private_snapshot(paths) == snapshot and private_snapshot(build_snapshot) == build_snapshot,
+             'STORAGE_COMPONENT_INPUT_CHANGED')
+        return hashlib.sha256(snapshot[paths[0]][0]).hexdigest()
+    except StorageRejected:
+        raise
+    except Exception:
+        raise StorageRejected('STORAGE_COMPONENT_READBACK_AUTHENTICATION_FAILED') from None
+
+
+def validate_readback(selected, record, commands=None, authenticated=None):
+    if selected.get('onlineComponent') is True:
+        return component_readback(selected, record, commands or Commands(), authenticated)
     directory = PROJECT / '.deploy/production-release'
     raw = read_file(directory / READBACKS[selected['operation']])
     receipt = closed(raw)
@@ -591,10 +734,15 @@ def lifecycle(phase, environment=None, commands=None, client=None):
         need(record['producer'] == selected['producer'] and record['operation'] == selected['operation']
              and record['qualityRunId'] == selected['qualityRunId'], 'STORAGE_LOCAL_RECORD_DRIFT')
         if selected['operation'] != 'release':
-            proof_name, _ = PROOFS[selected['operation']]
-            need(digest(closed(read_file(PROJECT / '.deploy/production-release' / proof_name))) == record['proofSha256'],
-                 'STORAGE_LOCAL_BUILD_PROOF_DRIFT')
-            validate_readback(selected, record)
+            if selected.get('onlineComponent') is True:
+                authenticated = component_build(selected)
+                need(digest(authenticated[2]) == record['proofSha256'], 'STORAGE_LOCAL_BUILD_PROOF_DRIFT')
+                validate_readback(selected, record, commands, authenticated)
+            else:
+                proof_name, _ = PROOFS[selected['operation']]
+                need(digest(closed(read_file(PROJECT / '.deploy/production-release' / proof_name))) == record['proofSha256'],
+                     'STORAGE_LOCAL_BUILD_PROOF_DRIFT')
+                validate_readback(selected, record)
         event = {'record': record}
         expected = selected['producer']['commit']
     else:
