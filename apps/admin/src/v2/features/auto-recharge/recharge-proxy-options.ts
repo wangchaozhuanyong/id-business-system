@@ -72,9 +72,57 @@ export const proxyCountries = [
   ['GR', '希腊']
 ] as const;
 
+const proxyRegionNames = new Intl.DisplayNames(['zh-Hans'], { type: 'region', fallback: 'none' });
+
 export function proxyCountryLabel(code: string) {
-  return proxyCountries.find(([value]) => value === code)?.[1] ?? code;
+  if (!/^[A-Z]{2}$/.test(code)) return '未知国家';
+  return (
+    proxyCountries.find(([value]) => value === code)?.[1] ?? proxyRegionNames.of(code) ?? '未知国家'
+  );
 }
+
+export const proxyCountryCurrencies: Readonly<Record<string, string>> = {
+  PH: 'PHP',
+  US: 'USD',
+  ID: 'IDR',
+  CL: 'CLP',
+  MY: 'MYR',
+  GB: 'GBP',
+  AU: 'AUD',
+  CA: 'CAD',
+  JP: 'JPY',
+  KR: 'KRW',
+  SG: 'SGD',
+  IN: 'INR',
+  TH: 'THB',
+  VN: 'VND',
+  TW: 'TWD',
+  HK: 'HKD',
+  BR: 'BRL',
+  MX: 'MXN',
+  AE: 'AED',
+  SA: 'SAR',
+  ZA: 'ZAR',
+  NZ: 'NZD',
+  CH: 'CHF',
+  SE: 'SEK',
+  NO: 'NOK',
+  DK: 'DKK',
+  PL: 'PLN',
+  TR: 'TRY',
+  CN: 'CNY',
+  DE: 'EUR',
+  FR: 'EUR',
+  IT: 'EUR',
+  ES: 'EUR',
+  NL: 'EUR',
+  BE: 'EUR',
+  AT: 'EUR',
+  IE: 'EUR',
+  PT: 'EUR',
+  FI: 'EUR',
+  GR: 'EUR'
+};
 
 export function parseProxyCountry(value: string) {
   const input = value.trim();

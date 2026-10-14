@@ -590,7 +590,9 @@ try {
     await page.getByRole('option', { name: /离线验收/ }).click();
     const fillPayment = async () => {
       await form.getByLabel('银行卡号', { exact: true }).fill('5555555555554444');
-      await form.getByLabel('持卡人姓名', { exact: true }).fill('Fixture Person');
+      const billingName = form.getByLabel('账单姓名', { exact: true });
+      await waitFor(async () => (await billingName.inputValue()) === 'Fixture Person');
+      assert.equal(await billingName.getAttribute('readonly'), '');
       await form.getByLabel('有效期', { exact: true }).fill('1230');
       await form.getByLabel('安全码', { exact: true }).fill('123');
       const authorization = form.getByRole('checkbox', { name: /我已核对银行卡/ });
@@ -895,7 +897,13 @@ try {
     assert.equal(await form.getByLabel('安全码', { exact: true }).inputValue(), '');
     assert.equal(await form.getByRole('checkbox', { name: /我已核对银行卡/ }).isChecked(), false);
     assert.equal(await form.getByRole('combobox', { name: /ChatGPT 账号/ }).inputValue(), '');
-    assert.match(await form.locator('.el-select').first().innerText(), /fixture@example.test/);
+    assert.match(
+      await form
+        .getByRole('combobox', { name: /ChatGPT 账号/ })
+        .locator('xpath=ancestor::div[contains(@class,"el-select__wrapper")][1]')
+        .innerText(),
+      /fixture@example.test/
+    );
     assert.ok(await form.getByText(address.line1, { exact: true }).count());
     if (startupDiagnosticsAcceptance) {
       const requestsBeforeDiagnostics = confirmations;

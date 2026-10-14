@@ -1,7 +1,7 @@
 <template>
   <div v-if="operationMode !== 'open_browser'" class="recharge-authorization">
     <el-checkbox v-model="authorizeSinglePayment">
-      我已核对银行卡真实姓名与账单地址，授权本任务核实官网币种和金额后，经我人工确认最多提交一次官网付款
+      我已核对银行卡资料、账单姓名与账单地址，授权本任务核实官网币种和金额后，经我人工确认最多提交一次官网付款
     </el-checkbox>
     <p class="recharge-note">
       官网币种不一致，或税费、今日应付、续费金额不明确时立即停止；付款前需人工确认，不会换币种或重复付款。

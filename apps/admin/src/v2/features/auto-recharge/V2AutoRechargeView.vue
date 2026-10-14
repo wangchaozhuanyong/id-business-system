@@ -17,10 +17,6 @@
     >
       <div class="recharge-grid">
         <section class="recharge-panel recharge-entry-panel" aria-labelledby="recharge-form-title">
-          <div class="recharge-section-heading">
-            <h2 id="recharge-form-title">比特浏览器充值</h2>
-            <span>{{ operationModeLabels[operationMode] }}</span>
-          </div>
           <el-form
             ref="paymentFormRef"
             name="recharge-entry-data"
@@ -33,6 +29,33 @@
             :disabled="formLocked"
             @submit.prevent
           >
+            <div class="recharge-section-heading">
+              <h2 id="recharge-form-title">比特浏览器充值</h2>
+              <div class="recharge-entry-heading-actions">
+                <span>{{ operationModeLabels[operationMode] }}</span>
+                <el-form-item
+                  v-if="operationMode === 'payment'"
+                  class="recharge-default-country"
+                  label="默认国家"
+                  label-width="76px"
+                >
+                  <el-select
+                    v-model="defaultCountryCode"
+                    aria-label="选择默认代理国家"
+                    name="recharge-default-country"
+                    :disabled="proxyRegionLocked"
+                    filterable
+                  >
+                    <el-option
+                      v-for="code in defaultCountryOptions"
+                      :key="code"
+                      :value="code"
+                      :label="proxyCountryLabel(code)"
+                    />
+                  </el-select>
+                </el-form-item>
+              </div>
+            </div>
             <div class="recharge-mode-fields">
               <el-form-item label="操作模式" required>
                 <el-radio-group v-model="operationMode">
@@ -124,25 +147,27 @@
                 @retry="bankCurrenciesQuery.refresh"
               />
               <V2RechargeProxySelect
-                v-if="availableProxyCountries.length || proxyCountriesQuery.error.value"
                 v-model:country-code="selectedProxyCountryCode"
                 v-model:proxy-id="selectedProxyId"
                 :countries="availableProxyCountries"
                 :login-country-restriction="loginCountryRestriction"
                 :proxies="availableProxies"
-                :loading="proxiesQuery.phase.value === 'initial-loading'"
+                :loading="
+                  proxiesQuery.phase.value === 'initial-loading' ||
+                  proxiesQuery.isParameterTransition.value
+                "
+                :selection-note="proxySelectionNote"
                 :error="
                   proxyCountriesQuery.error.value || proxiesQuery.error.value
                     ? getApiErrorMessage(
                         proxyCountriesQuery.error.value || proxiesQuery.error.value
                       )
-                    : ''
+                    : proxyRegionError
                 "
                 @retry="
                   proxyCountriesQuery.refresh();
                   proxiesQuery.refresh();
                 "
-                @update:country-code="markProxySelectionManual"
                 @update:proxy-id="markProxySelectionManual"
               />
             </div>
@@ -178,13 +203,14 @@
                 />
                 <V2RechargePaymentFields
                   v-model="details"
-                  :name-match="nameMatch"
                   :validate-event="!resettingPaymentFields"
                 />
                 <V2RechargeBillingAddressFields
                   v-model="details"
                   v-model:source="addressSource"
                   v-model:address-id="selectedAddressId"
+                  :name-match="nameMatch"
+                  :validate-event="!resettingPaymentFields"
                   :operation-mode="operationMode"
                   :addresses="availableAddresses"
                   :selected-address="selectedAddress"
@@ -323,6 +349,7 @@ import V2RechargePaymentFields from './V2RechargePaymentFields.vue';
 import V2RechargeProxySelect from './V2RechargeProxySelect.vue';
 import V2RechargePlanCurrencyFields from './V2RechargePlanCurrencyFields.vue';
 import V2RechargeBillingAddressFields from './V2RechargeBillingAddressFields.vue';
+import { proxyCountryLabel } from './recharge-proxy-options';
 const RechargeResult = defineAsyncComponent(() => import('./RechargeResult.vue'));
 const RechargeBrowserSettings = defineAsyncComponent(() => import('./RechargeBrowserSettings.vue'));
 const RechargeLocalPaymentControl = defineAsyncComponent(
@@ -368,6 +395,11 @@ const {
   plan,
   windowName,
   lockedCurrency,
+  defaultCountryCode,
+  defaultCountryOptions,
+  proxyRegionLocked,
+  proxyRegionError,
+  proxySelectionNote,
   selectedProxyCountryCode,
   selectedProxyId,
   availableProxyCountries,

@@ -87,6 +87,14 @@ export function useRechargeNameMatch(
     },
     { immediate: true, flush: 'sync' }
   );
+  watch(
+    locked,
+    (value) => {
+      // 已保存银行卡加载时卡号先写入，解锁后再补齐暂停的姓名匹配。
+      if (!value && !error.value) void match();
+    },
+    { flush: 'sync' }
+  );
   onScopeDispose(() => {
     disposed = true;
     generation++;

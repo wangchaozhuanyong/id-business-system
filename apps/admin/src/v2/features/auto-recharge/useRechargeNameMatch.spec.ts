@@ -4,7 +4,7 @@ import { useRechargeNameMatch } from './useRechargeNameMatch';
 import type { V2RechargeDetails } from './contracts';
 const mock = vi.hoisted(() => ({ match: vi.fn() }));
 vi.mock('./bank-recharge-api', () => ({ bankRechargeApi: { matchCardName: mock.match } }));
-function setup() {
+function setup(initial: Partial<V2RechargeDetails> = {}, locked = ref(false)) {
   const scope = effectScope();
   const details = ref<V2RechargeDetails>({
     number: '',
@@ -17,14 +17,94 @@ function setup() {
     line2: '',
     city: '',
     state: '',
-    postal_code: ''
+    postal_code: '',
+    ...initial
   });
   const selected = ref(''),
     onAddress = vi.fn();
-  const matcher = scope.run(() => useRechargeNameMatch(details, selected, ref(false), onAddress))!;
+  const matcher = scope.run(() => useRechargeNameMatch(details, selected, locked, onAddress))!;
   return { scope, details, selected, matcher };
 }
 describe('输入银行卡自动匹配姓名', () => {
+  it('银行卡加载期间暂停匹配，解锁后自动回填，重复解锁不再次分配', async () => {
+    mock.match.mockReset().mockResolvedValue({
+      name: 'Pool Person',
+      confirmed: false,
+      cardId: 'card-id',
+      billingAddressId: null
+    });
+    const locked = ref(true);
+    const { scope, details, selected } = setup({}, locked);
+    details.value.number = '5555555555554444';
+    await nextTick();
+    expect(mock.match).not.toHaveBeenCalled();
+    locked.value = false;
+    await nextTick();
+    expect(details.value.name).toBe('Pool Person');
+    expect(selected.value).toBe('card-id');
+    locked.value = true;
+    locked.value = false;
+    await nextTick();
+    expect(mock.match).toHaveBeenCalledOnce();
+    scope.stop();
+  });
+  it('自动匹配失败后保留错误，普通解锁不重试，用户可明确重试', async () => {
+    mock.match.mockReset().mockRejectedValueOnce(new Error('姓名库暂无启用姓名'));
+    const locked = ref(true);
+    const { scope, details, matcher } = setup({ number: '5555555555554444' }, locked);
+    locked.value = false;
+    await nextTick();
+    expect(matcher.error.value).toBe('姓名库暂无启用姓名');
+    locked.value = true;
+    locked.value = false;
+    await nextTick();
+    expect(mock.match).toHaveBeenCalledOnce();
+    mock.match.mockResolvedValueOnce({
+      name: 'Pool Person',
+      confirmed: false,
+      cardId: null,
+      billingAddressId: null
+    });
+    await matcher.retry();
+    expect(details.value.name).toBe('Pool Person');
+    expect(matcher.error.value).toBe('');
+    scope.stop();
+  });
+  it('切页恢复时自动回填同一卡在姓名库中的分配，不沿用旧手填姓名', async () => {
+    mock.match.mockReset().mockResolvedValue({
+      name: 'Pool Person',
+      confirmed: false,
+      cardId: null,
+      billingAddressId: null
+    });
+    const { scope, details, matcher } = setup({
+      number: '5555555555554444',
+      name: 'Restored Billing Person'
+    });
+    await matcher.ensureReady();
+    expect(details.value.name).toBe('Pool Person');
+    expect(matcher.confirmed.value).toBe(false);
+    details.value.number = '4111111111111111';
+    await matcher.ensureReady();
+    expect(details.value.name).toBe('Pool Person');
+    scope.stop();
+  });
+  it('切页恢复时已确认的历史绑定仍回填并锁定姓名', async () => {
+    mock.match.mockReset().mockResolvedValue({
+      name: 'Historic Person',
+      confirmed: true,
+      cardId: 'card-id',
+      billingAddressId: null
+    });
+    const { scope, details, matcher } = setup({
+      number: '5555555555554444',
+      name: 'Restored Billing Person'
+    });
+    await matcher.ensureReady();
+    expect(details.value.name).toBe('Historic Person');
+    expect(matcher.confirmed.value).toBe(true);
+    scope.stop();
+  });
   it('填写完整卡号后回填历史姓名，不完整或非法卡号不查询', async () => {
     mock.match.mockReset().mockResolvedValue({
       name: 'Existing Person',
