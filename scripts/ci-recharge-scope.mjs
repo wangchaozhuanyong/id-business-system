@@ -1773,6 +1773,10 @@ export const onlinePrepareFixGuardBinding = Object.freeze({
   proofSha256: 'c54ee5b50db235b9e41bdc117359ac6ea768e056df9b33d4f093e12aecff62ea',
   logSha256: 'e7151e901b9bdbb473f735ea808cbebcf39f91ba65e05314e54906b615169c9c',
   qualityLogSha256: '8437e426a8deb05fb482d0074e51d3aa4ebb6283f9c8125b116284464a35f4f5',
+  // Retain the original CLI presentation hashes above as historical evidence.
+  // This reader authenticates only the platform's raw job-log bytes.
+  rawLogSha256: '914d13bef30182deaaf574104f26cb51b17cd29c67dacc5e0529cfa98628e6db',
+  rawQualityLogSha256: '760539f4479f0a9d4f32cd86da2bab6c5a273cbdfe315cde2cd98b04fb41e028',
   runtimeSha256: '5dbf1b59d532e9f818919c0210602bb74a2153bbeecc20b1d823c238d6d2d41f',
   runtimeTestSha256: 'e2a6efb50b82c8e6b81b3bf25aa08c0770c6dfa1e2dc467f264782b55399c493'
 });
@@ -1870,6 +1874,34 @@ export function onlinePrepareFixRuntimeBytesUnchanged(before, after) {
     before.slice(0, left.index) + before.slice(left.index + left[0].length) ===
       after.slice(0, right.index) + after.slice(right.index + right[0].length)
   );
+}
+
+export function onlinePrepareFixGuardRawLogFacts(raw) {
+  if (!Buffer.isBuffer(raw) || !raw.length) return undefined;
+  const text = raw.toString('utf8');
+  if (!Buffer.from(text, 'utf8').equals(raw)) return undefined;
+  const utc = /^\uFEFF?\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z /;
+  const rows = text.split('\n');
+  if (rows.some((line) => line && !utc.test(line))) return undefined;
+  const lines = rows.map((line) => line.replace(utc, ''));
+  const checkout = lines.findIndex((line) => line === '[command]/usr/bin/git log -1 --format=%H');
+  return {
+    sha256: createHash('sha256').update(raw).digest('hex'),
+    checkout: checkout < 0 ? undefined : lines[checkout + 1],
+    scope:
+      lines.includes('  CHECK_BASE: ' + onlinePrepareFixGuardBinding.originalBase) &&
+      lines.includes('  CHECK_MODE: ci-only') &&
+      lines.includes('  CHECK_PART: guards') &&
+      lines.includes('##[group]Run node scripts/ci-recharge-check.mjs "$CHECK_PART" "$CHECK_BASE"'),
+    environment:
+      lines.includes('  NODE_ENV: test') &&
+      lines.includes('Image: ubuntu-24.04') &&
+      lines.includes('Version: 20261004.327.1') &&
+      lines.includes('node: v24.21.0') &&
+      lines.includes('npm: 11.19.0'),
+    errors: lines.filter((line) => /^(?:ERROR|FAIL): /.test(line)),
+    failedCommands: lines.filter((line) => /^Error: Command failed: /.test(line))
+  };
 }
 
 export function validateOnlinePrepareFixGuardNative({
@@ -1976,7 +2008,7 @@ export function validateOnlinePrepareFixGuardNative({
       tree: b.tree
     }) &&
     proof.baseSha === b.originalBase &&
-    facts?.sha256 === b.logSha256 &&
+    facts?.sha256 === b.rawLogSha256 &&
     facts.checkout === b.checkout &&
     facts.scope === true &&
     facts.environment === true &&
@@ -1984,7 +2016,7 @@ export function validateOnlinePrepareFixGuardNative({
     facts.errors.length === 0 &&
     Array.isArray(facts.failedCommands) &&
     facts.failedCommands.length === 0 &&
-    qualityLog?.sha256 === b.qualityLogSha256 &&
+    qualityLog?.sha256 === b.rawQualityLogSha256 &&
     qualityLog.checkout === b.checkout &&
     baselineTree === b.tree &&
     currentHeadTree === currentTree &&
@@ -2119,7 +2151,7 @@ export function onlinePrepareFixGuardFailureCodes(input = {}) {
       }) &&
       proof.baseSha === b.originalBase
   );
-  check('GUARD_LOG_BYTES', () => facts?.sha256 === b.logSha256);
+  check('GUARD_LOG_BYTES', () => facts?.sha256 === b.rawLogSha256);
   check('GUARD_LOG_CHECKOUT', () => facts?.checkout === b.checkout);
   check('GUARD_LOG_SCOPE', () => facts?.scope === true);
   check('GUARD_LOG_ENVIRONMENT', () => facts?.environment === true);
@@ -2131,7 +2163,7 @@ export function onlinePrepareFixGuardFailureCodes(input = {}) {
       Array.isArray(facts.failedCommands) &&
       facts.failedCommands.length === 0
   );
-  check('QUALITY_LOG_BYTES', () => qualityLog?.sha256 === b.qualityLogSha256);
+  check('QUALITY_LOG_BYTES', () => qualityLog?.sha256 === b.rawQualityLogSha256);
   check('QUALITY_LOG_CHECKOUT', () => qualityLog?.checkout === b.checkout);
   check('BASELINE_TREE', () => input.baselineTree === b.tree);
   check(
@@ -2229,11 +2261,9 @@ export function canResumeOnlinePrepareFixGuard(base) {
     { input: zipped, maxBuffer: 8192 }
   );
   const log = (job) =>
-    execFileSync(
-      'gh',
-      ['run', 'view', String(b.run), '--repo', b.repository, '--job', String(job), '--log'],
-      { encoding: 'utf8', maxBuffer: 4 * 1024 * 1024 }
-    );
+    execFileSync('gh', ['api', 'repos/' + b.repository + '/actions/jobs/' + job + '/logs'], {
+      maxBuffer: 4 * 1024 * 1024
+    });
   const modesUnchanged = changed.every((path) => {
     const before = git('ls-tree', b.base, '--', path),
       after = git('ls-tree', tree, '--', path);
@@ -2249,8 +2279,8 @@ export function canResumeOnlinePrepareFixGuard(base) {
     proofSha256: digest(proofRaw),
     originalPr: gh('repos/' + b.repository + '/pulls/470'),
     mainRun: gh('repos/' + b.repository + '/actions/runs/' + b.mainRun),
-    facts: onlineComponentGuardLogFacts(log(b.job)),
-    qualityLog: onlineComponentGuardLogFacts(log(b.qualityJob)),
+    facts: onlinePrepareFixGuardRawLogFacts(log(b.job)),
+    qualityLog: onlinePrepareFixGuardRawLogFacts(log(b.qualityJob)),
     changed,
     currentEnvironment: onlineComponentGuardCurrentEnvironment(),
     currentHeadTree,

@@ -75,3 +75,7 @@ PR #470 已合入 `2edb7ef92a9619e5b0e5855220c97bac29d22f60`，完整树 `36209f
 为只补受影响检查，增加仅适用于 `codex/online-component-prepare-fix-20261014`、基线 `2edb7ef9`、8 个指定路径及原环境的有限 CI 续办。完整复核真实成功运行 `38498139445`、guard job `115638566002`、quality job `115640756195`、原源码 artifact、已关闭合并的 PR #470 及 main 质量 `38499088168`，不使用关闭后变为空的 run.pull_requests，也不伪造不可取回的临时合并 Git 对象。scope、dispatcher 去除本次隔离续办后与原完整字节相同，runtime 在 prepare 之外逐字节相同；原 #470 控制块不变。
 
 首组 9 文件 Node 控制、格式和 lint 保留；15 套完整受影响检查重新执行，包括真实候选 HEAD、当前 CI 和变化台账的读取者。只有已认证且来源、命令、依赖、环境均未改变的检查复用；证据或匹配范围漂移拒绝本通道，其他模式仍走原选择器。未修改 workflow、整体 reused_parts、应用源码、依赖、迁移或权限规则。4 个 CI 文件定向 5 项、格式、lint、差异和三项归一化检查通过；本地冻结回执为 `.runtime/online-component-prepare-fix-20261014/ci-continuation-freeze-receipt.json`，SHA256 `d954386f50bc9b953326eb4378161dd2e68bd72b51ab75ac7dc9bb0383516d9d`。该回执不代表远端新候选或生产发布已完成。
+
+PR #471 首次质量运行 `38505404432` 在原件核验阶段拒绝；增加仅输出固定谓词名的诊断后，`38506997743` 确认仅 `GUARD_LOG_BYTES`、`QUALITY_LOG_BYTES` 不匹配，其他来源、环境和身份条件均通过。根因是 `gh run view --log` 的呈现字节随客户端环境变化。现取得两个原平台 job logs：guard 172389 字节、SHA256 `914d13bef30182deaaf574104f26cb51b17cd29c67dacc5e0529cfa98628e6db`；quality 14843 字节、SHA256 `760539f4479f0a9d4f32cd86da2bab6c5a273cbdfe315cde2cd98b04fb41e028`。去除呈现前缀和对应 ANSI 表示后，两份与历史日志逐行内容完全一致，原件及对应证明保存在项目内。
+
+本次仅将新有限通道改为读取 GitHub 原始日志，使用单一精确哈希和严格平台 UTC 行解析；保留原身份、环境、内容及其他门闸，旧 #470 通道不变。原失败输入不重跑；修复后由新候选获取实际质量结果，成功后再唯一正式发布。

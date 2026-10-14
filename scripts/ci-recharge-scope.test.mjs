@@ -91,6 +91,7 @@ import {
   onlinePrepareFixScopeBytesUnchanged,
   onlinePrepareFixDispatcherBytesUnchanged,
   onlinePrepareFixRuntimeBytesUnchanged,
+  onlinePrepareFixGuardRawLogFacts,
   validateOnlinePrepareFixGuardNative,
   onlinePrepareFixGuardFailureCodes,
   requireOnlinePrepareFixGuardNative,
@@ -535,14 +536,14 @@ function syntheticPrepareFixNative() {
     },
     proofSha256: b.proofSha256,
     facts: {
-      sha256: b.logSha256,
+      sha256: b.rawLogSha256,
       checkout: b.checkout,
       scope: true,
       environment: true,
       errors: [],
       failedCommands: []
     },
-    qualityLog: { sha256: b.qualityLogSha256, checkout: b.checkout },
+    qualityLog: { sha256: b.rawQualityLogSha256, checkout: b.checkout },
     currentEnvironment: {
       node: 'v24.21.0',
       npm: '11.19.0',
@@ -891,7 +892,7 @@ test('finite prepare-fix diagnostics distinguish native logs source and environm
   }
 });
 
-test('finite prepare-fix diagnostics never print secrets unknown fields or raw records and leave the validator bytes unchanged', () => {
+test('finite prepare-fix diagnostics never print secrets unknown fields or raw records and retain every non-log predicate byte', () => {
   const value = syntheticPrepareFixNative();
   for (const object of [value, value.run, value.jobs[0], value.artifact, value.currentEnvironment])
     object.syntheticUnknownSecret = 'synthetic-secret-do-not-print';
@@ -926,12 +927,106 @@ test('finite prepare-fix diagnostics never print secrets unknown fields or raw r
       source.indexOf('export function validateOnlinePrepareFixGuardNative('),
       source.indexOf('function typeOfProof(')
     );
+  const current = validator(
+    readFileSync(fileURLToPath(new URL('./ci-recharge-scope.mjs', import.meta.url)), 'utf8')
+  );
+  assert.equal(current.split('b.rawLogSha256').length, 2);
+  assert.equal(current.split('b.rawQualityLogSha256').length, 2);
   assert.equal(
-    validator(
-      readFileSync(fileURLToPath(new URL('./ci-recharge-scope.mjs', import.meta.url)), 'utf8')
-    ),
+    current
+      .replace('b.rawLogSha256', 'b.logSha256')
+      .replace('b.rawQualityLogSha256', 'b.qualityLogSha256'),
     validator(prior)
   );
+});
+
+test('finite prepare-fix raw log parsing uses exact platform bytes and rejects invalid UTF8 and CLI decorations', () => {
+  const b = onlinePrepareFixGuardBinding;
+  const text =
+    [
+      '[command]/usr/bin/git log -1 --format=%H',
+      b.checkout,
+      '  CHECK_BASE: ' + b.originalBase,
+      '  CHECK_MODE: ci-only',
+      '  CHECK_PART: guards',
+      '##[group]Run node scripts/ci-recharge-check.mjs "$CHECK_PART" "$CHECK_BASE"',
+      '  NODE_ENV: test',
+      'Image: ubuntu-24.04',
+      'Version: 20261004.327.1',
+      'node: v24.21.0',
+      'npm: 11.19.0',
+      '\x1b[36;1msynthetic command\x1b[0m'
+    ]
+      .map((line, i) => (i === 0 ? '\uFEFF' : '') + '2026-10-14T00:00:00.1234567Z ' + line)
+      .join('\n') + '\n';
+  const raw = Buffer.from(text, 'utf8');
+  const parsed = onlinePrepareFixGuardRawLogFacts(raw);
+  assert.equal(parsed.sha256, createHash('sha256').update(raw).digest('hex'));
+  assert.equal(parsed.checkout, b.checkout);
+  assert.equal(parsed.scope, true);
+  assert.equal(parsed.environment, true);
+  assert.deepEqual(parsed.errors, []);
+  assert.deepEqual(parsed.failedCommands, []);
+  const rendered = Buffer.from(text.replaceAll(String.fromCharCode(27), '^['), 'utf8');
+  assert.notEqual(onlinePrepareFixGuardRawLogFacts(rendered).sha256, parsed.sha256);
+  assert.equal(
+    validateOnlinePrepareFixGuardNative({ ...syntheticPrepareFixNative(), facts: parsed }),
+    false
+  );
+  for (const invalid of [
+    undefined,
+    '',
+    Buffer.alloc(0),
+    Buffer.from([0xff]),
+    Buffer.from('job\tstep\t' + text),
+    Buffer.from(text + 'unframed-tail'),
+    Buffer.from(text.replace('2026-10-14T00:00:00.1234567Z ', '2026-10-14T00:00:00+08:00 '))
+  ])
+    assert.equal(onlinePrepareFixGuardRawLogFacts(invalid), undefined);
+});
+
+test('finite prepare-fix authenticates one raw hash per job and never accepts historical CLI hashes', () => {
+  const b = onlinePrepareFixGuardBinding;
+  assert.equal(b.rawLogSha256, '914d13bef30182deaaf574104f26cb51b17cd29c67dacc5e0529cfa98628e6db');
+  assert.equal(
+    b.rawQualityLogSha256,
+    '760539f4479f0a9d4f32cd86da2bab6c5a273cbdfe315cde2cd98b04fb41e028'
+  );
+  assert.equal(b.logSha256, 'e7151e901b9bdbb473f735ea808cbebcf39f91ba65e05314e54906b615169c9c');
+  assert.equal(
+    b.qualityLogSha256,
+    '8437e426a8deb05fb482d0074e51d3aa4ebb6283f9c8125b116284464a35f4f5'
+  );
+  const value = syntheticPrepareFixNative();
+  assert.equal(requireOnlinePrepareFixGuardNative(value), true);
+  value.facts.sha256 = b.logSha256;
+  value.qualityLog.sha256 = b.qualityLogSha256;
+  assert.equal(validateOnlinePrepareFixGuardNative(value), false);
+  assert.deepEqual(onlinePrepareFixGuardFailureCodes(value), [
+    'GUARD_LOG_BYTES',
+    'QUALITY_LOG_BYTES'
+  ]);
+  assert.throws(
+    () => requireOnlinePrepareFixGuardNative(value),
+    /predicates=GUARD_LOG_BYTES,QUALITY_LOG_BYTES$/
+  );
+  const source = readFileSync(
+    fileURLToPath(new URL('./ci-recharge-scope.mjs', import.meta.url)),
+    'utf8'
+  );
+  const start = source.indexOf('export function canResumeOnlinePrepareFixGuard(');
+  const reader = source.slice(
+    start,
+    source.indexOf('// END finite ONLINE prepare-fix guard continuation', start)
+  );
+  assert.ok(
+    reader
+      .replace(/\s/g, '')
+      .includes(
+        "['api', 'repos/' + b.repository + '/actions/jobs/' + job + '/logs']".replace(/\s/g, '')
+      )
+  );
+  assert.equal(reader.includes("['run', 'view'"), false);
 });
 
 test('finite prepare-fix guard restores the entire prior dispatcher scope and runtime outside prepare byte-for-byte', () => {
