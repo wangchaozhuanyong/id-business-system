@@ -3173,6 +3173,338 @@ export function testedTree(run, number, repo) {
   }
 }
 
+// BEGIN finite first-recharge PR477 business continuation
+export const firstRechargeBusinessBinding = Object.freeze({
+  repository: 'wangchaozhuanyong/id-business-system',
+  pullRequest: 477,
+  branch: 'codex/first-recharge-release-20261014',
+  run: 38522983057,
+  attempt: 1,
+  head: '01409a947192fb4152d5dcfad7923642ea6cbe46',
+  base: 'b9f2e2b75a753b86a5057dd798d651c57496554e',
+  currentBase: '619b04c240eed836b1db76a9fe330634de1fecbf',
+  checkout: '48965a6b2e5e1ecba6b7a5da4e4beefc99cb6168',
+  tree: '419277c1848340aabdbe07ddfc1433b9089d2db0',
+  admin: Object.freeze({
+    job: 115716788889,
+    logSha256: 'cdde7a4676b2c47257372e584f61acef019f6b7d9ba4dfc16a7f6bd57fc8030c',
+    testsPassed: 525,
+    testsSkipped: 0
+  }),
+  api: Object.freeze({
+    job: 115716788747,
+    logSha256: '116f22993bb6f38bbe6389d0bad59b245b4c6a61dde94699e1c4bc6a85731c9c',
+    testsPassed: 817,
+    testsSkipped: 36
+  })
+});
+const firstRechargeBusinessRepairPaths = new Set([
+  '.github/workflows/quality.yml',
+  'docs/CENTRAL_RELEASE_20261002.md',
+  'docs/WORKSPACE_RELEASE_CLEANUP_20261014.md',
+  'scripts/ci-recharge-check.mjs',
+  'scripts/ci-recharge-check.test.mjs',
+  'scripts/ci-recharge-release.test.mjs',
+  'scripts/ci-recharge-scope.mjs',
+  'scripts/ci-recharge-scope.test.mjs',
+  'scripts/production-release/online-recharge-component-runtime.py',
+  'scripts/production-release/online-recharge-component-runtime.test.py'
+]);
+const firstRechargeBusinessCall = [
+  '    for (const row of reuseFirstRechargeBusiness(repo, event, mode, currentTree) || []) {',
+  '      reused.add(row.part);',
+  '      evidence.push(row);',
+  '    }',
+  ''
+].join('\n');
+
+export function firstRechargeBusinessQualityBytesUnchanged(before, after) {
+  const old = 'fromJSON(\'["guards","admin","api","migration"]\')';
+  const added = 'fromJSON(\'["guards","admin","api","migration","connector"]\')';
+  return (
+    typeof before === 'string' &&
+    typeof after === 'string' &&
+    createHash('sha256').update(before).digest('hex') ===
+      '095df32d42b2385073b0183a08aae4c0fe4370b3422b090dbfacb0d92d28d9f5' &&
+    before.split(old).length === 2 &&
+    after === before.replace(old, added)
+  );
+}
+
+export function firstRechargeBusinessSourceUnchanged(snapshot) {
+  const digest = (source) => createHash('sha256').update(source).digest('hex');
+  for (const path of [
+    '.github/workflows/quality.yml',
+    'scripts/ci-recharge-check.mjs',
+    'scripts/ci-recharge-scope.mjs'
+  ]) {
+    const row = snapshot?.[path];
+    if (
+      typeof row?.before !== 'string' ||
+      typeof row.after !== 'string' ||
+      row.beforeMode !== '100644' ||
+      row.afterMode !== '100644'
+    )
+      return false;
+  }
+  const quality = snapshot['.github/workflows/quality.yml'];
+  const dispatcher = snapshot['scripts/ci-recharge-check.mjs'];
+  const scope = snapshot['scripts/ci-recharge-scope.mjs'];
+  const start = '// BEGIN finite first-recharge PR477 business continuation\n';
+  const end = '// END finite first-recharge PR477 business continuation\n\n';
+  if (
+    scope.before.includes(start) ||
+    scope.after.split(start).length !== 2 ||
+    scope.after.split(end).length !== 2 ||
+    scope.after.split(firstRechargeBusinessCall).length !== 2
+  )
+    return false;
+  const left = scope.after.indexOf(start),
+    right = scope.after.indexOf(end);
+  if (right <= left) return false;
+  const without = (scope.after.slice(0, left) + scope.after.slice(right + end.length)).replace(
+    firstRechargeBusinessCall,
+    ''
+  );
+  // The reviewed merge adds only the separate ONLINE guard lane. Pin all other
+  // scope and dispatcher bytes, including the Admin/API commands and predicates.
+  return (
+    firstRechargeBusinessQualityBytesUnchanged(quality.before, quality.after) &&
+    digest(dispatcher.before) ===
+      '041967db736756e0195272f69c7cccad0101a5f7be24006d4aadc5447536e2d1' &&
+    digest(dispatcher.after) ===
+      '441d56dd9c739c4c0b01a5cbfb81af6eb107732299f68f9b538dcdc7ccd76249' &&
+    onlinePreflightReceiptFixDispatcherBytesUnchanged(
+      dispatcher.before,
+      dispatcher.after.replace('  if (firstRechargeCheckoutRegression) shared();\n', '')
+    ) &&
+    digest(scope.before) === '740f230b42c56549e2d80eea37825094b2df62157e13ff33c69d33970f2bdbfb' &&
+    digest(without) === '5ed70a8a54e614ce0e1319b40350cf04eb296cbc47217c5f29a88daaeb48678b' &&
+    onlinePreflightReceiptFixScopeBytesUnchanged(scope.before, without)
+  );
+}
+
+export function firstRechargeBusinessRawLogFacts(log, part) {
+  if (typeof log !== 'string' || !['admin', 'api'].includes(part)) return undefined;
+  const b = firstRechargeBusinessBinding;
+  const lines = log
+    .split(String.fromCharCode(27))
+    .map((row, index) => (index ? row.replace(/^\[[0-?]*[ -/]*[@-~]/, '') : row))
+    .join('')
+    .split('\n')
+    .map((line) => line.replace(/^\d{4}-\d{2}-\d{2}T\S+Z /, ''));
+  const markers = lines.flatMap((line, index) =>
+    line === '[command]/usr/bin/git log -1 --format=%H' ? [index] : []
+  );
+  return {
+    sha256: createHash('sha256').update(log).digest('hex'),
+    checkout: markers.length === 1 ? lines[markers[0] + 1] : undefined,
+    scope:
+      lines.includes('  CHECK_PART: ' + part) &&
+      lines.includes('  CHECK_BASE: ' + b.base) &&
+      lines.includes('  CHECK_MODE: recharge') &&
+      lines.includes('##[group]Run node scripts/ci-recharge-check.mjs "$CHECK_PART" "$CHECK_BASE"'),
+    environment: [
+      '  NODE_ENV: test',
+      'Image: ubuntu-24.04',
+      'Version: 20261004.327.1',
+      'node: v24.21.0',
+      'npm: 11.19.0',
+      '##[group]Run npm ci --no-audit'
+    ].every((line) => lines.includes(line)),
+    checks:
+      part === 'admin'
+        ? /Test Files\s+28 passed\s+\(28\)/.test(lines.join('\n')) &&
+          /Tests\s+525 passed\s+\(525\)/.test(lines.join('\n')) &&
+          lines.some((line) => line.startsWith('{"scope":"OFFLINE_SYNTHETIC_ONLY"')) &&
+          lines.includes('{"ok":true,"layoutScenarios":36,"interactions":10,"runtimeErrors":0}')
+        : /Test Files\s+57 passed \| 8 skipped\s+\(65\)/.test(lines.join('\n')) &&
+          /Tests\s+817 passed \| 36 skipped\s+\(853\)/.test(lines.join('\n')) &&
+          lines.includes('> nest build')
+  };
+}
+
+export function validateFirstRechargeBusinessNative({
+  run,
+  jobs,
+  checkout,
+  facts,
+  changed,
+  modesUnchanged,
+  sourceUnchanged,
+  reconstructedTree,
+  currentEnvironment
+} = {}) {
+  const b = firstRechargeBusinessBinding;
+  if (
+    run?.id !== b.run ||
+    run.run_attempt !== b.attempt ||
+    run.conclusion !== 'failure' ||
+    run.repository?.full_name !== b.repository ||
+    !matchingRun(run, b.pullRequest, b.head) ||
+    run.head_branch !== b.branch ||
+    !Array.isArray(run.pull_requests) ||
+    run.pull_requests.filter((pr) => pr.number === b.pullRequest).length !== 1 ||
+    checkout?.sha !== b.checkout ||
+    checkout.tree?.sha !== b.tree ||
+    reconstructedTree !== b.tree ||
+    JSON.stringify(checkout.parents?.map((row) => row.sha)) !== JSON.stringify([b.base, b.head]) ||
+    !Array.isArray(changed) ||
+    !changed.length ||
+    !changed.every((path) => firstRechargeBusinessRepairPaths.has(path)) ||
+    modesUnchanged !== true ||
+    sourceUnchanged !== true ||
+    currentEnvironment?.node !== 'v24.21.0' ||
+    currentEnvironment.npm !== '11.19.0' ||
+    currentEnvironment.imageOS !== 'ubuntu24' ||
+    currentEnvironment.imageVersion !== '20261004.327.1' ||
+    currentEnvironment.platform !== 'linux' ||
+    !Array.isArray(jobs)
+  )
+    return undefined;
+  const evidence = [];
+  for (const part of ['admin', 'api']) {
+    const rows = jobs.filter((job) => job.id === b[part].job);
+    const job = rows[0];
+    const required = [
+      'Checkout',
+      'Setup Node.js',
+      'Install package dependencies',
+      'Check affected recharge part',
+      ...(part === 'admin' ? ['Install browser for recharge acceptance'] : [])
+    ];
+    if (
+      rows.length !== 1 ||
+      job.run_id !== b.run ||
+      job.run_attempt !== b.attempt ||
+      job.name !== `recharge (${part})` ||
+      job.status !== 'completed' ||
+      job.conclusion !== 'success' ||
+      !Array.isArray(job.steps) ||
+      job.steps.some((step) => !['success', 'skipped'].includes(step.conclusion)) ||
+      !required.every(
+        (name) =>
+          job.steps.filter(
+            (step) =>
+              step.name === name && step.status === 'completed' && step.conclusion === 'success'
+          ).length === 1
+      ) ||
+      facts?.[part]?.sha256 !== b[part].logSha256 ||
+      facts[part].checkout !== b.checkout ||
+      facts[part].scope !== true ||
+      facts[part].environment !== true ||
+      facts[part].checks !== true
+    )
+      return undefined;
+    evidence.push({
+      part,
+      run: b.run,
+      attempt: b.attempt,
+      job: b[part].job,
+      checkout: b.checkout,
+      tree: b.tree,
+      logSha256: b[part].logSha256,
+      testsPassed: b[part].testsPassed,
+      testsSkipped: b[part].testsSkipped,
+      kind: 'native-first-recharge-business'
+    });
+  }
+  return evidence;
+}
+
+export function readFirstRechargeBusinessRawLog(part) {
+  if (!['admin', 'api'].includes(part)) throw new Error('Unknown first-recharge business part');
+  const b = firstRechargeBusinessBinding;
+  return execFileSync(
+    'gh',
+    ['api', '--allow-escape-sequences', `repos/${b.repository}/actions/jobs/${b[part].job}/logs`],
+    { encoding: 'utf8', maxBuffer: 4 * 1024 * 1024 }
+  );
+}
+
+export function reuseFirstRechargeBusiness(repo, event, mode, currentTree) {
+  const b = firstRechargeBusinessBinding,
+    pr = event?.pull_request;
+  if (
+    process.env.GITHUB_EVENT_NAME !== 'pull_request' ||
+    repo !== b.repository ||
+    mode !== 'recharge' ||
+    pr?.number !== b.pullRequest ||
+    pr.head?.ref !== b.branch ||
+    pr.base?.sha !== b.currentBase ||
+    pr.head.repo?.full_name !== b.repository ||
+    !/^[a-f0-9]{40}$/.test(currentTree || '')
+  )
+    return undefined;
+  ensureCommit(b.checkout);
+  const changed = git('diff', '--name-only', b.tree, currentTree).split('\n').filter(Boolean);
+  // A later business edit must get fresh affected checks; this one-time proof
+  // authorizes only the reviewed dependency/control repair, never new app bytes.
+  if (!changed.length || !changed.every((path) => firstRechargeBusinessRepairPaths.has(path)))
+    return undefined;
+  const read = (revision, path) =>
+    execFileSync('git', ['show', `${revision}:${path}`], { encoding: 'utf8' });
+  const modeOf = (revision, path) => git('ls-tree', revision, '--', path).split(/\s+/)[0];
+  const snapshot = Object.fromEntries(
+    [
+      '.github/workflows/quality.yml',
+      'scripts/ci-recharge-check.mjs',
+      'scripts/ci-recharge-scope.mjs'
+    ].map((path) => [
+      path,
+      {
+        before: read(b.tree, path),
+        after: read(currentTree, path),
+        beforeMode: modeOf(b.tree, path),
+        afterMode: modeOf(currentTree, path)
+      }
+    ])
+  );
+  const run = gh(`repos/${repo}/actions/runs/${b.run}`);
+  const { jobs } = gh(
+    `repos/${repo}/actions/runs/${b.run}/attempts/${b.attempt}/jobs?per_page=100`
+  );
+  const checkout = gh(`repos/${repo}/git/commits/${b.checkout}`);
+  const facts = Object.fromEntries(
+    ['admin', 'api'].map((part) => [
+      part,
+      firstRechargeBusinessRawLogFacts(readFirstRechargeBusinessRawLog(part), part)
+    ])
+  );
+  const evidence = validateFirstRechargeBusinessNative({
+    run,
+    jobs,
+    checkout,
+    facts,
+    changed,
+    sourceUnchanged: firstRechargeBusinessSourceUnchanged(snapshot),
+    modesUnchanged: changed.every(
+      (path) =>
+        ['100644', '100755'].includes(modeOf(currentTree, path)) &&
+        modeOf(b.tree, path) === modeOf(currentTree, path)
+    ),
+    reconstructedTree:
+      git('rev-parse', `${b.checkout}^{tree}`) === b.tree &&
+      git('show', '-s', '--format=%P', b.checkout) === [b.base, b.head].join(' ')
+        ? git('merge-tree', '--write-tree', b.base, b.head).split('\n')[0]
+        : undefined,
+    currentEnvironment: onlineComponentGuardCurrentEnvironment()
+  });
+  if (!evidence)
+    throw new Error(
+      'Original first-recharge Admin/API evidence or exact unchanged input proof is unavailable'
+    );
+  const input = git('ls-tree', '-r', b.tree)
+    .split('\n')
+    .filter((line) => !firstRechargeBusinessRepairPaths.has(line.split('\t')[1]))
+    .join('\n');
+  return evidence.map((row) => ({
+    ...row,
+    inputSha256: createHash('sha256').update(input).digest('hex')
+  }));
+}
+// END finite first-recharge PR477 business continuation
+
 async function main() {
   const repo = process.env.GITHUB_REPOSITORY;
   const event = JSON.parse(readFileSync(process.env.GITHUB_EVENT_PATH, 'utf8'));
@@ -3248,6 +3580,10 @@ async function main() {
         'No successful PR evidence matches the merged source tree; stop instead of repeating checks'
       );
   } else if (process.env.GITHUB_EVENT_NAME === 'pull_request' && mode === 'recharge') {
+    for (const row of reuseFirstRechargeBusiness(repo, event, mode, currentTree) || []) {
+      reused.add(row.part);
+      evidence.push(row);
+    }
     const pr = event.pull_request;
     const { workflow_runs: runs } = gh(
       `repos/${repo}/actions/workflows/quality.yml/runs?event=pull_request&branch=${encodeURIComponent(pr.head.ref)}&status=completed&per_page=10`
