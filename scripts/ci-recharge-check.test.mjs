@@ -19,6 +19,7 @@ import {
   onlinePrepareFixGuardPaths,
   onlinePreflightReceiptFixGuardCommands,
   onlinePreflightReceiptFixGuardBinding,
+  onlineBuildProofReuseCommands,
   onlinePreflightReceiptFixGuardPaths
 } from './ci-recharge-scope.mjs';
 
@@ -134,6 +135,8 @@ function recordGuardCommands(
     onlineResume = false,
     prepareResume = false,
     receiptResume = false,
+    buildResume = false,
+    failCommand = '',
     repository = '',
     event = '',
     base = 'a'.repeat(40)
@@ -162,14 +165,22 @@ function recordGuardCommands(
           'return process.env.GUARD_TEST_PREPARE_RESUME === "true"; }' +
           'export function canResumeOnlinePreflightReceiptFixGuard(base) {' +
           'globalThis.guardTestCalls.push(["receipt-resume-helper", base]);' +
-          'return process.env.GUARD_TEST_RECEIPT_RESUME === "true"; }';
+          'return process.env.GUARD_TEST_RECEIPT_RESUME === "true"; }' +
+          'export function canResumeOnlineBuildProofReuseGuard(base) {' +
+          'globalThis.guardTestCalls.push(["build-resume-helper", base]);' +
+          'return process.env.GUARD_TEST_BUILD_RESUME === "true"; }';
         return {url: 'data:text/javascript,' + encodeURIComponent(source), shortCircuit: true};
       }
       return nextResolve(specifier, context);
     }});
     childProcess.execFileSync = (file, args) => {
-      if (file === 'git') return paths.join('\\n');
+      if (file === 'git') {
+        if (args.join(' ') === 'rev-parse HEAD^{tree}') return 'a'.repeat(40) + '\\n';
+        return paths.join('\\n');
+      }
       calls.push([file, ...args]);
+      if ([file, ...args].join(' ') === process.env.GUARD_TEST_FAIL_COMMAND)
+        throw new Error('SYNTHETIC_COMMAND_FAILURE');
       return '';
     };
     syncBuiltinESMExports();
@@ -181,7 +192,7 @@ function recordGuardCommands(
     try { await import('./scripts/ci-recharge-check.mjs'); }
     catch (error) {
       if (error.message !== 'SYNTHETIC_PREPARE_EXIT' ||
-          (process.env.GUARD_TEST_PREPARE_RESUME !== 'true' && process.env.GUARD_TEST_RECEIPT_RESUME !== 'true') ||
+          (process.env.GUARD_TEST_PREPARE_RESUME !== 'true' && process.env.GUARD_TEST_RECEIPT_RESUME !== 'true' && process.env.GUARD_TEST_BUILD_RESUME !== 'true') ||
           calls.at(-1)?.[1] !== 0) throw error;
     }
     process.stdout.write(JSON.stringify(calls));
@@ -200,6 +211,8 @@ function recordGuardCommands(
         GUARD_TEST_ONLINE_RESUME: onlineResume ? 'true' : '',
         GUARD_TEST_PREPARE_RESUME: prepareResume ? 'true' : '',
         GUARD_TEST_RECEIPT_RESUME: receiptResume ? 'true' : '',
+        GUARD_TEST_BUILD_RESUME: buildResume ? 'true' : '',
+        GUARD_TEST_FAIL_COMMAND: failCommand,
         GUARD_TEST_BASE: base,
         GUARD_TEST_PART: part,
         GUARD_TEST_PATHS: JSON.stringify(paths)
@@ -1465,6 +1478,96 @@ test('finite failure-receipt integration keeps Node controls then fifteen source
     recordGuardCommands('ci-only', paths, 'release-controls', context),
     recordGuardCommands('ci-only', paths, 'release-controls')
   );
+});
+
+test('finite build-proof reuse keeps Node controls then helper tests, real CI build and all nineteen controls once', () => {
+  assert.equal(onlineBuildProofReuseCommands.length, 19);
+  assert.deepEqual(onlineBuildProofReuseCommands, onlinePreflightReceiptFixGuardCommands);
+  const paths = [
+    'scripts/ci-recharge-check.mjs',
+    'scripts/production-release/online-recharge-ci-build.py',
+    'scripts/production-release/online-recharge-ci-build.test.py'
+  ];
+  const context = {
+    cloud: true,
+    buildResume: true,
+    repository: 'wangchaozhuanyong/id-business-system',
+    event: 'pull_request',
+    base: '619b04c240eed836b1db76a9fe330634de1fecbf'
+  };
+  const commands = (calls) => calls.filter((call) => !call[0].endsWith('resume-helper'));
+  const original = recordGuardCommands('ci-only', paths);
+  const index = original.findIndex(
+    (call) =>
+      call[0] === 'node' &&
+      call[1] === '--test' &&
+      call.includes('scripts/ci-recharge-scope.test.mjs')
+  );
+  assert.ok(index >= 0);
+  const helperTest = [
+    'python3',
+    '-B',
+    'scripts/production-release/online-recharge-ci-build.test.py'
+  ];
+  const realBuild = [
+    'python3',
+    '-B',
+    'scripts/production-release/online-recharge-ci-build.py',
+    '--ci-real-build-not-for-release',
+    '--admitted-source-tree',
+    'a'.repeat(40)
+  ];
+  const resumed = commands(recordGuardCommands('ci-only', paths, 'guards', context));
+  assert.deepEqual(resumed, [
+    ...original.slice(0, index + 1),
+    helperTest,
+    realBuild,
+    ...onlineBuildProofReuseCommands,
+    ['process-exit', 0]
+  ]);
+  for (const command of [helperTest, realBuild, ...onlineBuildProofReuseCommands])
+    assert.equal(
+      resumed.filter((row) => JSON.stringify(row) === JSON.stringify(command)).length,
+      1
+    );
+  assert.ok(resumed.some((row) => row.includes('prettier')));
+  assert.ok(resumed.some((row) => row.includes('eslint')));
+  assert.ok(resumed.some((row) => row.includes('scripts/ci-recharge-release.test.mjs')));
+  assert.ok(
+    !resumed.some((row) =>
+      row.some(
+        (arg) =>
+          typeof arg === 'string' &&
+          (arg === 'docker' || arg.includes('acceptance-v2') || arg === '--workspace')
+      )
+    )
+  );
+  for (const reject of [
+    { ...context, buildResume: false },
+    { ...context, cloud: false },
+    { ...context, repository: 'foreign/project' },
+    { ...context, event: 'push' },
+    { ...context, base: '0'.repeat(40) }
+  ])
+    assert.deepEqual(commands(recordGuardCommands('ci-only', paths, 'guards', reject)), original);
+  for (const mode of ['admin', 'recharge'])
+    assert.deepEqual(
+      commands(recordGuardCommands(mode, paths, 'guards', context)),
+      recordGuardCommands(mode, paths)
+    );
+  assert.deepEqual(
+    recordGuardCommands('ci-only', paths, 'release-controls', context),
+    recordGuardCommands('ci-only', paths, 'release-controls')
+  );
+  for (const command of [original[index], helperTest, realBuild, ...onlineBuildProofReuseCommands])
+    assert.throws(
+      () =>
+        recordGuardCommands('ci-only', paths, 'guards', {
+          ...context,
+          failCommand: command.join(' ')
+        }),
+      /SYNTHETIC_COMMAND_FAILURE/
+    );
 });
 
 test('artifact-only controls keep the shared prefix and verify actual dependencies without unchanged website controllers', () => {

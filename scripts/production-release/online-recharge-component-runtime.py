@@ -484,9 +484,24 @@ def build_proof(d, p, transport, quality_run, repository):
     authority()
     need(os.environ.get('GITHUB_ACTIONS') == 'true', 'BUILD_RUNNER_REQUIRED')
     d, core, _admin, _workspace, online = modules(d)
+    proof_path = Path.cwd().resolve() / PROOF
+    identity = lambda row: (row.st_dev, row.st_ino, row.st_mode, row.st_nlink,
+        row.st_uid, row.st_gid, row.st_size, row.st_mtime_ns, row.st_ctime_ns)
+    try:
+        initial = proof_path.lstat()
+    except FileNotFoundError:
+        initial = None
+    saved = None
+    if initial is not None:
+        saved = core.private_bytes(proof_path)
+        need(identity(proof_path.lstat()) == identity(initial), 'BUILD_PROOF_CHANGED')
+    projection_path = Path.cwd().resolve() / PROJECTION
+    projection_initial = projection_path.lstat()
+    projection_raw = core.private_bytes(projection_path)
+    need(identity(projection_path.lstat()) == identity(projection_initial), 'BUILD_CONTEXT_CHANGED')
     receipt = validate_preflight(core, transport, p, transport['expectedCurrent'])
     _files, output, record = source(d, p, receipt['baseline'])
-    need(core.closed_json(core.private_bytes(Path(PROJECTION).resolve())) == record,
+    need(projection_raw == (json.dumps(record, sort_keys=True, separators=(',', ':'), allow_nan=False) + '\n').encode(),
          'BUILD_CONTEXT_CHANGED')
     verify_context(core, output, record)
     result = {'version': 1, 'scope': SCOPE, 'kind': KIND + '_BUILD_PROOF', 'producer': p,
@@ -505,7 +520,15 @@ def build_proof(d, p, transport, quality_run, repository):
     validate_build(result, p, record, transport, quality_run, repository)
     for name in IMAGES:
         verify_image(d, online, Path(CONTEXT).resolve(), output, p, result, name)
-    core.write_private(Path(PROOF).resolve(), result)
+    verify_context(core, output, record)
+    need(core.private_bytes(projection_path) == projection_raw
+         and identity(projection_path.lstat()) == identity(projection_initial), 'BUILD_CONTEXT_CHANGED')
+    if saved is not None:
+        canonical = (json.dumps(result, sort_keys=True, separators=(',', ':'), allow_nan=False) + '\n').encode()
+        need(saved == canonical and core.private_bytes(proof_path) == saved
+             and identity(proof_path.lstat()) == identity(initial), 'BUILD_PROOF_CHANGED')
+    else:
+        core.write_private(proof_path, result)
     return result
 
 

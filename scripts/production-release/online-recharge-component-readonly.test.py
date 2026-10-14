@@ -673,8 +673,44 @@ class ComponentClientTests(unittest.TestCase):
     def test_failures_keep_only_a_controlled_code(self):
         value = client.safe_failure(ValueError('private account fixture'))
         self.assertEqual(value, {'status': 'ONLINE_RECHARGE_COMPONENT_FAILED',
-                                'code': 'ONLINE_RECHARGE_COMPONENT_REMOTE_EVIDENCE_UNAVAILABLE'})
+                                'code': 'ONLINE_RECHARGE_COMPONENT_VALUE_ERROR'})
         self.assertNotIn('private', json.dumps(value))
+
+    def test_safe_failure_keeps_old_controlled_cap_and_unknown_contract_without_formatting(self):
+        unknown = 'ONLINE_RECHARGE_COMPONENT_REMOTE_EVIDENCE_UNAVAILABLE'
+        for error in (None, Exception('private secret'), RuntimeError('private secret'),
+            RuntimeError('API_ADMIN_PRIVATE'), RuntimeError('ONLINE_RECHARGE_COMPONENT_' + 'A' * 97),
+            RuntimeError('ONLINE_RECHARGE_COMPONENT_OK', 'private secret')):
+            self.assertEqual(client.safe_failure(error), {'status': 'ONLINE_RECHARGE_COMPONENT_FAILED', 'code': unknown})
+        for code in ('ONLINE_RECHARGE_COMPONENT_OK', 'ONLINE_RECHARGE_COMPONENT_' + 'A' * 96,
+                     'ONLINE_RECHARGE_COMPONENT_PROTECTED_OPERATION_FAILED'):
+            self.assertEqual(client.safe_failure(RuntimeError(code))['code'], code)
+        class Dangerous(RuntimeError):
+            def __str__(self): raise AssertionError('custom formatting forbidden')
+            def __getattribute__(self, name):
+                if name == 'args': raise AssertionError('custom args forbidden')
+                return super().__getattribute__(name)
+        class DangerousArgument:
+            def __str__(self): raise AssertionError('argument formatting forbidden')
+            def __eq__(self, other): raise AssertionError('argument comparison forbidden')
+        for error in (Dangerous('ONLINE_RECHARGE_COMPONENT_PRIVATE'), RuntimeError(DangerousArgument())):
+            self.assertEqual(client.safe_failure(error)['code'], unknown)
+
+    def test_safe_failure_classifies_builtin_errors_without_private_details(self):
+        secret = 'synthetic-password-token-cookie-command-url'
+        cases = ((FileExistsError(secret), 'FILE_EXISTS'), (PermissionError(secret), 'PERMISSION_DENIED'), (TypeError(secret), 'TYPE_ERROR'),
+            (KeyError(secret), 'KEY_ERROR'), (TimeoutError(secret), 'TIMEOUT'),
+            (json.JSONDecodeError(secret, secret, 0), 'JSON_INVALID'),
+            (client.r.urllib.error.HTTPError(secret, 403, secret, {}, None), 'HTTP_ERROR'),
+            (client.r.urllib.error.URLError(secret), 'URL_ERROR'),
+            (client.r.subprocess.TimeoutExpired([secret], 1, output=secret, stderr=secret), 'COMMAND_TIMEOUT'),
+            (client.r.subprocess.CalledProcessError(1, [secret], output=secret, stderr=secret), 'COMMAND_FAILED'))
+        for error, category in cases:
+            with self.subTest(category=category):
+                value = client.safe_failure(error)
+                self.assertEqual(value, {'status': 'ONLINE_RECHARGE_COMPONENT_FAILED',
+                    'code': 'ONLINE_RECHARGE_COMPONENT_' + category})
+                self.assertNotIn(secret, json.dumps(value))
 
 
 if __name__ == '__main__':

@@ -315,7 +315,13 @@ def parameters(mode, core, p, *, input_artifacts=None, origin_raw=None, current_
 
 
 def safe_failure(error):
-    code = str(error)
+    code = r.rejection_code(error)
+    if code == 'ONLINE_RECHARGE_COMPONENT_PROTECTED_OPERATION_FAILED':
+        # Only an exact built-in RuntimeError may carry this explicit code.
+        # Unknown exception properties and formatting remain inaccessible.
+        arguments = error.args if type(error) is RuntimeError else ()
+        if not (len(arguments) == 1 and type(arguments[0]) is str and arguments[0] == code):
+            code = 'ONLINE_RECHARGE_COMPONENT_REMOTE_EVIDENCE_UNAVAILABLE'
     if not re.fullmatch(r'ONLINE_RECHARGE_COMPONENT_[A-Z0-9_]{1,96}', code):
         code = 'ONLINE_RECHARGE_COMPONENT_REMOTE_EVIDENCE_UNAVAILABLE'
     return {'status': 'ONLINE_RECHARGE_COMPONENT_FAILED', 'code': code}
