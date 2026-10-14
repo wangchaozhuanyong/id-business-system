@@ -5430,6 +5430,7 @@ test('current-base qualification accepts only PR477 exact repository branch main
     (v) => (v.pull_request.head.repo.full_name = 'fork/repo'),
     (v) => (v.pull_request.base.sha = firstRechargeBusinessBinding.currentBase),
     (v) => (v.pull_request.base.sha = 'fff7b257fa402e14da5d9aa43aa4ea22095695c5'),
+    (v) => (v.pull_request.base.sha = 'c7a800b931311cd5c6da4c4b2320743b7a3015a1'),
     (v) => (v.pull_request.base.ref = 'release')
   ]) {
     const value = structuredClone(event);
@@ -5694,7 +5695,7 @@ function recordFirstRechargeBoundedMain(options = {}) {
   );
 }
 
-test('current-base real main transitions genuine64 paths from full to recharge and emits the bounded matrix', () => {
+test('current-base real main transitions genuine65 paths from full to recharge and emits the bounded matrix', () => {
   const paths = firstRechargeNewBasePaths(),
     base = firstRechargeNewBaseBinding.base;
   const before = execFileSync('git', ['show', base + ':apps/api/prisma-mysql/schema.prisma'], {
@@ -5762,5 +5763,42 @@ test('current-base real main retains full and ONLINE gate for unknown source run
       firstRechargeNewBaseBinding.templateTree
     ),
     'admin'
+  );
+});
+
+test('current-base refreshed template retains SOURCE and adds only the six reviewed control paths', () => {
+  const b = firstRechargeNewBaseBinding;
+  const paths = execFileSync(
+    'git',
+    ['diff', '--name-only', '265474135321fa33858402dd32b1c204ba432a3e', b.template],
+    { encoding: 'utf8' }
+  )
+    .trim()
+    .split('\n');
+  assert.deepEqual(paths, [
+    'docs/ONLINE_RECHARGE_RELEASE_HARDENING_20261014.md',
+    'scripts/ci-recharge-scope.mjs',
+    'scripts/ci-recharge-scope.test.mjs',
+    'scripts/production-release/release-storage.py',
+    'scripts/production-release/release-storage.test.py',
+    'scripts/production-release/unpublished-component-runtime-diagnostic.test.py'
+  ]);
+  for (const path of [
+    '.github/workflows/quality.yml',
+    'scripts/ci-recharge-check.mjs',
+    'scripts/production-release/first-recharge-successor-contract.json',
+    'docs/V2_TASKS.md'
+  ]) {
+    const old = execFileSync('git', ['show', '265474135321fa33858402dd32b1c204ba432a3e:' + path]);
+    const current = execFileSync('git', ['show', b.template + ':' + path]);
+    assert.equal(old.equals(current), true, path);
+  }
+  const snapshot = firstRechargeNewBaseWorkingSnapshot();
+  assert.equal(hasFirstRechargeNewBaseSourceProof(snapshot), true);
+  assert.equal(snapshot.sourceTree, '2d15c4c07ea086064c5928f2336340d3f524e3a5');
+  assert.equal(snapshot.applicationCount, 2192);
+  assert.equal(
+    snapshot.applicationInputSha256,
+    'bef121cc439f545aeeb40ca770827f7faa4fb24e1344171f988079d0a25b7db2'
   );
 });

@@ -3832,10 +3832,10 @@ export function reuseFirstRechargeBusiness(repo, event, mode, currentTree) {
 
 // BEGIN finite first-recharge PR477 fff continuation
 export const firstRechargeNewBaseBinding = Object.freeze({
-  template: '265474135321fa33858402dd32b1c204ba432a3e',
-  templateTree: 'e5e43cdd2d9cf1992752268289f0e7c225ee8f7f',
-  templateManifestSha256: '8f76369e9024ae40cbe8e6cf9e4ceb52317fca25265d3cf9d75a40fefe47a9f6',
-  base: 'c7a800b931311cd5c6da4c4b2320743b7a3015a1',
+  template: '96f209cde0a8e387ea13522d00851c0dbcca5b6b',
+  templateTree: '45dcb899f00e2390f273dcb39df75b23e3447d39',
+  templateManifestSha256: 'b875920ec1c9098634bc5123e42603292ce7f02d14f638f966063bdf1124272b',
+  base: '5f458e7ac7cd0dfab0f99d2a6d07c20baa8b6e53',
   historical: '02a744709c21e2eafbc4ec19e713e4eaad6384d5',
   historicalTree: 'f3220953bc91d3ae5c8314d9a9fe7fc84da9a1b5',
   historicalManifestSha256: '11c7b39e10e1c53992d04ee7c91af0ddd9ce7b6414de990ec2470455a513b04a',
@@ -3845,11 +3845,11 @@ export const firstRechargeNewBaseBinding = Object.freeze({
   contractRawSha256: '32c14f77dd0142ad7010f500c8efc01fb4e66f743bb016524c4812a5b62ed3f6',
   applicationCount: 2192,
   applicationInputSha256: 'bef121cc439f545aeeb40ca770827f7faa4fb24e1344171f988079d0a25b7db2',
-  currentDiffCount: 64,
-  currentDiffSha256: 'c8cf0535ec42f398d27fe70e8b98ea43422f121f4f20608c2325013dab24eb53',
+  currentDiffCount: 65,
+  currentDiffSha256: 'fee1fc4780bc5be4832e16bff7d65cfe6f99378bdb1c9850041591ae1fabe68d',
   scopeSha256: 'f7bd777690711ba11f139c5f0a6934ed8450e6905357d62f0eef5097db5592b3',
-  scopeBlockSha256: 'ad1ad6a912d12e4bb58ec61762071a2e188050121903689713ed6302f98a2844',
-  scopeTestSha256: 'dfdecc47ffe62b8c7b95ddcecb5cad7d7670f2e43a48289fdc11885351b2c52f',
+  scopeBlockSha256: '63d4ab31eef516fe0a7a267e87e469369b4c7547729b9f3dab82757ad2486dbc',
+  scopeTestSha256: '5ba27fa554c3f4a103df8b2210c1ec12d30770ea383e6ac5a80ad2a73d66281d',
   fixtureHashes: Object.freeze({
     'scripts/production-release/online-recharge-ci-build.test.py':
       'e2a8cda35b269e0582f9e59249f6c0d8b1b074c8948b09812bc569d9baf9e273',
@@ -3883,7 +3883,10 @@ const firstRechargeNewBaseInversePaths = new Set([
   'scripts/production-release/online-recharge-component-readonly.test.py',
   'scripts/production-release/online-recharge-component-runtime.py',
   'scripts/production-release/online-recharge-component-runtime.test.py',
-  'scripts/production-release/unified-component-source.test.py'
+  'scripts/production-release/unified-component-source.test.py',
+  'scripts/production-release/release-storage.py',
+  'scripts/production-release/release-storage.test.py',
+  'scripts/production-release/unpublished-component-runtime-diagnostic.test.py'
 ]);
 const firstRechargeNewBaseScope = 'scripts/ci-recharge-scope.mjs';
 const firstRechargeNewBaseTest = 'scripts/ci-recharge-scope.test.mjs';
@@ -4315,7 +4318,7 @@ export function reuseFirstRechargeNewBaseNative(repo, event, mode, currentTree) 
     inputSha256: b.applicationInputSha256,
     source: b.source,
     sourceTree: b.sourceTree,
-    qualification: 'finite-first-recharge-c7a-native'
+    qualification: 'finite-first-recharge-5f-native'
   }));
 }
 // END finite first-recharge PR477 fff continuation
