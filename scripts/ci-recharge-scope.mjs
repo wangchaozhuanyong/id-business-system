@@ -539,6 +539,31 @@ function isRegistrationRecoveryOnly(paths) {
     )
   );
 }
+export const releaseArtifactRetentionControls = Object.freeze([
+  'scripts/production-release/release-artifact-retention.py',
+  'scripts/production-release/release-artifact-retention.test.py',
+  'scripts/production-release/release-artifact-retention-transport.py',
+  'scripts/production-release/release-artifact-retention-transport.test.py',
+  '.github/workflows/release-artifact-retention.yml',
+  'deploy/aws/release-artifact-storage-proof-20261014.json'
+]);
+const releaseArtifactRetentionSupport = new Set([
+  ...releaseArtifactRetentionControls,
+  'scripts/ci-recharge-scope.mjs',
+  'scripts/ci-recharge-scope.test.mjs',
+  'scripts/ci-recharge-check.mjs',
+  'scripts/ci-recharge-check.test.mjs',
+  'docs/DISK_STORAGE_POLICY.md',
+  'docs/V2_TASKS.md'
+]);
+export function isReleaseArtifactRetentionOnly(paths) {
+  return (
+    paths.length > 0 &&
+    paths.some((path) => releaseArtifactRetentionControls.includes(path)) &&
+    paths.every((path) => releaseArtifactRetentionSupport.has(path))
+  );
+}
+
 export function isCiOnly(paths) {
   if (paths.includes(rechargePricingProfile))
     return paths.every((path) => rechargePricingControls.has(path));
@@ -562,6 +587,7 @@ export function isCiOnly(paths) {
     paths.length > 0 &&
     paths.every(
       (p) =>
+        releaseArtifactRetentionControls.includes(p) ||
         historicalReleaseControlPaths.includes(p) ||
         unpublishedComponentSuccessorControlPaths.includes(p) ||
         rechargeFlowSuccessorControlPaths.includes(p) ||
@@ -1033,6 +1059,7 @@ export function isTargetedOnly(paths, oldSchema, newSchema) {
   );
 }
 export function selectedParts(paths, grantHelperSnapshot) {
+  if (isReleaseArtifactRetentionOnly(paths)) return ['guards'];
   if (hasBankCardDeletePolicyProof(paths, grantHelperSnapshot)) return ['guards', 'security'];
   if (isRechargePricingOnly(paths))
     return paths.some((path) => rechargePricingSources.has(path))
@@ -2317,8 +2344,11 @@ export function canResumeOnlinePrepareFixGuard(base) {
 // BEGIN finite ONLINE failure-receipt guard continuation
 export const onlinePreflightReceiptFixGuardBinding = Object.freeze({
   repository: 'wangchaozhuanyong/id-business-system',
-  branch: 'codex/online-preflight-receipt-fix-20261014',
-  base: 'a9829b443fe5c0cf6f4803366d06c5f8e3357318',
+  branch: 'codex/online-receipt-storage-integration-20261014',
+  originalMergedMain: 'a9829b443fe5c0cf6f4803366d06c5f8e3357318',
+  integrationBase: '8ae90fb12e05abb61ea6ea9fde2bcd9a6b9c4c4f',
+  integrationTree: 'f2f8e38637bb5614b1230875ea1100004e6683f6',
+  integrationMainRun: 38515633798,
   originalHead: '4a1a76536fda6513cbc8e252bde813e471c15b6f',
   originalBase: '2edb7ef92a9619e5b0e5855220c97bac29d22f60',
   tree: 'a473264b8821ebe72471979614ba7983c531e309',
@@ -2367,7 +2397,11 @@ export const onlinePreflightReceiptFixGuardCommands = Object.freeze(
     ['node', '--test', 'scripts/production-release/online-recharge-entry.test.mjs'],
     ['python3', '-B', 'scripts/production-release/unified-component-source.test.py'],
     ['node', '--test', 'scripts/v2-order-archive-release-policy.test.mjs'],
-    ['python3', '-B', 'scripts/production-release/registration-onboarding-96.test.py']
+    ['python3', '-B', 'scripts/production-release/registration-onboarding-96.test.py'],
+    ['python3', '-B', 'scripts/production-release/release-artifact-retention.test.py'],
+    ['python3', '-B', 'scripts/production-release/release-artifact-retention-transport.test.py'],
+    ['python3', '-B', 'scripts/production-release/disk-retention-transport.test.py'],
+    ['python3', '-B', 'scripts/production-release/release-storage.test.py']
   ].map(Object.freeze)
 );
 
@@ -2395,7 +2429,7 @@ export function onlinePreflightReceiptFixDispatcherBytesUnchanged(before, after)
     "  process.env.GITHUB_ACTIONS === 'true' &&",
     "  process.env.GITHUB_REPOSITORY === 'wangchaozhuanyong/id-business-system' &&",
     "  process.env.GITHUB_EVENT_NAME === 'pull_request' &&",
-    "  base === 'a9829b443fe5c0cf6f4803366d06c5f8e3357318' &&",
+    "  base === '8ae90fb12e05abb61ea6ea9fde2bcd9a6b9c4c4f' &&",
     '  canResumeOnlinePreflightReceiptFixGuard(base);',
     ''
   ].join('\n');
@@ -2489,6 +2523,7 @@ export function validateOnlinePreflightReceiptFixGuardNative({
   proofSha256,
   originalPr,
   mainRun,
+  integrationMainRun,
   changed,
   currentEnvironment,
   currentHeadTree,
@@ -2526,15 +2561,26 @@ export function validateOnlinePreflightReceiptFixGuardNative({
     originalPr.merged === true &&
     originalPr.head?.sha === b.originalHead &&
     originalPr.base?.sha === b.originalBase &&
-    originalPr.merge_commit_sha === b.base &&
+    originalPr.merge_commit_sha === b.originalMergedMain &&
     mainRun?.id === b.mainRun &&
     mainRun.run_attempt === 1 &&
     mainRun.event === 'push' &&
     mainRun.path === '.github/workflows/quality.yml' &&
     mainRun.status === 'completed' &&
     mainRun.conclusion === 'success' &&
-    mainRun.head_sha === b.base &&
+    mainRun.head_sha === b.originalMergedMain &&
     mainRun.repository?.full_name === b.repository &&
+    integrationMainRun?.id === b.integrationMainRun &&
+    integrationMainRun.run_attempt === 1 &&
+    integrationMainRun.event === 'push' &&
+    integrationMainRun.path === '.github/workflows/quality.yml' &&
+    integrationMainRun.status === 'completed' &&
+    integrationMainRun.conclusion === 'success' &&
+    integrationMainRun.head_sha === b.integrationBase &&
+    integrationMainRun.head_branch === 'main' &&
+    integrationMainRun.head_commit?.id === b.integrationBase &&
+    integrationMainRun.head_commit?.tree_id === b.integrationTree &&
+    integrationMainRun.repository?.full_name === b.repository &&
     job.length === 1 &&
     validJob(job[0], 'recharge (guards)') &&
     quality.length === 1 &&
@@ -2593,7 +2639,7 @@ export function validateOnlinePreflightReceiptFixGuardNative({
     facts.failedCommands.length === 0 &&
     qualityLog?.sha256 === b.rawQualityLogSha256 &&
     qualityLog.checkout === b.checkout &&
-    baselineTree === b.tree &&
+    baselineTree === b.integrationTree &&
     currentHeadTree === currentTree &&
     /^[a-f0-9]{40}$/.test(currentTree || '') &&
     Array.isArray(changed) &&
@@ -2625,7 +2671,8 @@ export function onlinePreflightReceiptFixGuardFailureCodes(input = {}) {
       codes.push(code);
     }
   };
-  const { run, originalPr, mainRun, artifact, proof, facts, qualityLog } = input;
+  const { run, originalPr, mainRun, integrationMainRun, artifact, proof, facts, qualityLog } =
+    input;
   const jobs = Array.isArray(input.jobs) ? input.jobs : [];
   const guard = jobs.filter((row) => row?.id === b.job);
   const quality = jobs.filter((row) => row?.id === b.qualityJob);
@@ -2667,9 +2714,17 @@ export function onlinePreflightReceiptFixGuardFailureCodes(input = {}) {
       originalPr.merged === true &&
       originalPr.head?.sha === b.originalHead &&
       originalPr.base?.sha === b.originalBase &&
-      originalPr.merge_commit_sha === b.base
+      originalPr.merge_commit_sha === b.originalMergedMain
   );
-  check('MAIN_QUALITY', () => runOK(mainRun, b.mainRun, 'push', b.base));
+  check('MAIN_QUALITY', () => runOK(mainRun, b.mainRun, 'push', b.originalMergedMain));
+  check(
+    'INTEGRATION_MAIN_QUALITY',
+    () =>
+      runOK(integrationMainRun, b.integrationMainRun, 'push', b.integrationBase) &&
+      integrationMainRun.head_branch === 'main' &&
+      integrationMainRun.head_commit?.id === b.integrationBase &&
+      integrationMainRun.head_commit?.tree_id === b.integrationTree
+  );
   check('GUARD_JOB', () => jobOK(guard, 'recharge (guards)'));
   check('GUARD_STEPS', () =>
     stepsOK(guard, [
@@ -2732,7 +2787,7 @@ export function onlinePreflightReceiptFixGuardFailureCodes(input = {}) {
   );
   check('QUALITY_LOG_BYTES', () => qualityLog?.sha256 === b.rawQualityLogSha256);
   check('QUALITY_LOG_CHECKOUT', () => qualityLog?.checkout === b.checkout);
-  check('BASELINE_TREE', () => input.baselineTree === b.tree);
+  check('BASELINE_TREE', () => input.baselineTree === b.integrationTree);
   check(
     'CURRENT_TREE',
     () =>
@@ -2780,17 +2835,20 @@ export function requireOnlinePreflightReceiptFixGuardNative(input) {
 export function canResumeOnlinePreflightReceiptFixGuard(base) {
   const b = onlinePreflightReceiptFixGuardBinding;
   if (
-    base !== b.base ||
+    base !== b.integrationBase ||
     process.env.GITHUB_ACTIONS !== 'true' ||
     process.env.GITHUB_REPOSITORY !== b.repository ||
     process.env.GITHUB_EVENT_NAME !== 'pull_request'
   )
     return false;
   const event = JSON.parse(readFileSync(process.env.GITHUB_EVENT_PATH, 'utf8'));
-  if (event.pull_request?.head?.ref !== b.branch || event.pull_request.base?.sha !== b.base)
+  if (
+    event.pull_request?.head?.ref !== b.branch ||
+    event.pull_request.base?.sha !== b.integrationBase
+  )
     return false;
   if (
-    event.pull_request.base?.sha !== b.base ||
+    event.pull_request.base?.sha !== b.integrationBase ||
     event.pull_request.head.repo?.full_name !== b.repository ||
     event.pull_request.base.repo?.full_name !== b.repository ||
     process.env.CHECK_MODE !== 'ci-only' ||
@@ -2799,7 +2857,7 @@ export function canResumeOnlinePreflightReceiptFixGuard(base) {
     throw new Error('Failure-receipt continuation scope changed');
   const tree = git('rev-parse', 'HEAD^{tree}');
   const currentHeadTree = git('rev-parse', event.pull_request.head.sha + '^{tree}');
-  const changed = git('diff', '--name-only', b.base, tree).split('\n').filter(Boolean);
+  const changed = git('diff', '--name-only', b.integrationBase, tree).split('\n').filter(Boolean);
   const bytes = (commit, path) =>
     execFileSync('git', ['show', commit + ':' + path], { encoding: 'utf8' });
   const digest = (raw) => createHash('sha256').update(raw).digest('hex');
@@ -2840,7 +2898,7 @@ export function canResumeOnlinePreflightReceiptFixGuard(base) {
       }
     );
   const modesUnchanged = changed.every((path) => {
-    const before = git('ls-tree', b.base, '--', path),
+    const before = git('ls-tree', b.integrationBase, '--', path),
       after = git('ls-tree', tree, '--', path);
     return (
       /^[0-9]+ blob [a-f0-9]{40}\t/.test(after) && before.split(' ')[0] === after.split(' ')[0]
@@ -2854,26 +2912,27 @@ export function canResumeOnlinePreflightReceiptFixGuard(base) {
     proofSha256: digest(proofRaw),
     originalPr: gh('repos/' + b.repository + '/pulls/471'),
     mainRun: gh('repos/' + b.repository + '/actions/runs/' + b.mainRun),
+    integrationMainRun: gh('repos/' + b.repository + '/actions/runs/' + b.integrationMainRun),
     facts: onlinePreflightReceiptFixGuardRawLogFacts(log(b.job)),
     qualityLog: onlinePreflightReceiptFixGuardRawLogFacts(log(b.qualityJob)),
     changed,
     currentEnvironment: onlineComponentGuardCurrentEnvironment(),
     currentHeadTree,
     currentTree: tree,
-    baselineTree: git('rev-parse', b.base + '^{tree}'),
+    baselineTree: git('rev-parse', b.integrationBase + '^{tree}'),
     modesUnchanged,
     runtimeSha256: digest(bytes(tree, onlinePreflightReceiptFixGuardPaths[0])),
     runtimeTestSha256: digest(bytes(tree, onlinePreflightReceiptFixGuardPaths[1])),
     runtimeUnchanged: onlinePreflightReceiptFixRuntimeBytesUnchanged(
-      bytes(b.base, onlinePreflightReceiptFixGuardPaths[0]),
+      bytes(b.integrationBase, onlinePreflightReceiptFixGuardPaths[0]),
       bytes(tree, onlinePreflightReceiptFixGuardPaths[0])
     ),
     scopeUnchanged: onlinePreflightReceiptFixScopeBytesUnchanged(
-      bytes(b.base, 'scripts/ci-recharge-scope.mjs'),
+      bytes(b.integrationBase, 'scripts/ci-recharge-scope.mjs'),
       bytes(tree, 'scripts/ci-recharge-scope.mjs')
     ),
     dispatcherUnchanged: onlinePreflightReceiptFixDispatcherBytesUnchanged(
-      bytes(b.base, 'scripts/ci-recharge-check.mjs'),
+      bytes(b.integrationBase, 'scripts/ci-recharge-check.mjs'),
       bytes(tree, 'scripts/ci-recharge-check.mjs')
     )
   });

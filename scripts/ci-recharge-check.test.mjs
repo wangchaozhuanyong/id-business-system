@@ -1390,7 +1390,7 @@ test('removed registration transport paths select retirement checks without exec
   }
 });
 
-test('finite failure-receipt guard keeps the first Node controls and runs every fresh dependency exactly once without business or database parts', () => {
+test('finite failure-receipt integration keeps Node controls then fifteen source suites and four storage suites once without business or database parts', () => {
   assert.deepEqual(
     onlinePreflightReceiptFixGuardCommands.map((command) => command.at(-1)),
     [
@@ -1408,7 +1408,11 @@ test('finite failure-receipt guard keeps the first Node controls and runs every 
       'scripts/production-release/online-recharge-entry.test.mjs',
       'scripts/production-release/unified-component-source.test.py',
       'scripts/v2-order-archive-release-policy.test.mjs',
-      'scripts/production-release/registration-onboarding-96.test.py'
+      'scripts/production-release/registration-onboarding-96.test.py',
+      'scripts/production-release/release-artifact-retention.test.py',
+      'scripts/production-release/release-artifact-retention-transport.test.py',
+      'scripts/production-release/disk-retention-transport.test.py',
+      'scripts/production-release/release-storage.test.py'
     ]
   );
   const paths = [...onlinePreflightReceiptFixGuardPaths];
@@ -1417,7 +1421,7 @@ test('finite failure-receipt guard keeps the first Node controls and runs every 
     receiptResume: true,
     repository: onlinePreflightReceiptFixGuardBinding.repository,
     event: 'pull_request',
-    base: onlinePreflightReceiptFixGuardBinding.base
+    base: onlinePreflightReceiptFixGuardBinding.integrationBase
   };
   const commands = (calls) => calls.filter((call) => !call[0].endsWith('resume-helper'));
   const original = recordGuardCommands('ci-only', paths);
@@ -1461,4 +1465,63 @@ test('finite failure-receipt guard keeps the first Node controls and runs every 
     recordGuardCommands('ci-only', paths, 'release-controls', context),
     recordGuardCommands('ci-only', paths, 'release-controls')
   );
+});
+
+test('artifact-only controls keep the shared prefix and verify actual dependencies without unchanged website controllers', () => {
+  for (const part of ['guards', 'release-controls']) {
+    const paths = [
+      'scripts/production-release/release-artifact-retention.py',
+      'scripts/production-release/release-artifact-retention-transport.py',
+      '.github/workflows/release-artifact-retention.yml'
+    ];
+    const calls = recordGuardCommands('ci-only', paths, part);
+    for (const file of [
+      'release-artifact-retention',
+      'release-artifact-retention-transport',
+      'disk-retention-transport',
+      'release-storage'
+    ])
+      assert.equal(
+        calls.filter(
+          (call) => call.join(' ') === `python3 -B scripts/production-release/${file}.test.py`
+        ).length,
+        1
+      );
+    assert.equal(
+      calls.filter((call) => call.includes('scripts/ci-recharge-release.test.mjs')).length,
+      1
+    );
+    assert.ok(
+      !calls.some(
+        (call) =>
+          call.includes('scripts/production-release/remote-deploy.test.py') ||
+          call.includes('scripts/production-release/api-admin-scope.test.py')
+      )
+    );
+    assert.ok(
+      !calls.some(
+        (call) =>
+          call.includes('docker') ||
+          call.some((arg) => arg.startsWith('--workspace') || arg.includes('acceptance-v2'))
+      )
+    );
+    const mixed = recordGuardCommands(
+      'ci-only',
+      [...paths, 'scripts/production-release/remote-deploy.py'],
+      part
+    );
+    assert.equal(
+      mixed.filter((call) =>
+        call.includes('scripts/production-release/release-artifact-retention.test.py')
+      ).length,
+      1
+    );
+    assert.ok(
+      mixed.some((call) => call.includes('scripts/production-release/api-admin-scope.test.py'))
+    );
+    if (part === 'guards')
+      assert.ok(
+        mixed.some((call) => call.includes('scripts/production-release/remote-deploy.test.py'))
+      );
+  }
 });

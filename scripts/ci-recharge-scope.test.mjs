@@ -47,6 +47,8 @@ test('Admin successor diagnostics have a finite control scope', () => {
 import { fileURLToPath } from 'node:url';
 import {
   affectsPart,
+  releaseArtifactRetentionControls,
+  isReleaseArtifactRetentionOnly,
   isRechargeOnly,
   matchingRun,
   canReuseMain,
@@ -1053,12 +1055,15 @@ test('finite prepare-fix guard restores the entire prior dispatcher scope and ru
     ]
   ]) {
     const before = execFileSync('git', ['show', b.base + ':' + path], { encoding: 'utf8' });
+    // Validate the frozen preparation fix, not a later dispatcher revision.
     const after = execFileSync(
       'git',
       ['show', 'a9829b443fe5c0cf6f4803366d06c5f8e3357318:' + path],
       { encoding: 'utf8' }
     );
     assert.equal(verify(before, after), true, path);
+    const current = readFileSync(path, 'utf8');
+    if (current !== after) assert.equal(verify(before, current), false, path);
     for (const altered of [
       ' ' + after,
       after + '\n',
@@ -3910,9 +3915,17 @@ function syntheticPreflightReceiptFixNative() {
       merged: true,
       head: { sha: b.originalHead },
       base: { sha: b.originalBase },
-      merge_commit_sha: b.base
+      merge_commit_sha: b.originalMergedMain
     },
-    mainRun: { ...run, id: b.mainRun, event: 'push', head_sha: b.base },
+    mainRun: { ...run, id: b.mainRun, event: 'push', head_sha: b.originalMergedMain },
+    integrationMainRun: {
+      ...run,
+      id: b.integrationMainRun,
+      event: 'push',
+      head_sha: b.integrationBase,
+      head_branch: 'main',
+      head_commit: { id: b.integrationBase, tree_id: b.integrationTree }
+    },
     artifact: {
       id: b.artifact,
       name: 'quality-source-evidence-1',
@@ -3947,7 +3960,7 @@ function syntheticPreflightReceiptFixNative() {
       imageVersion: '20261004.327.1',
       platform: 'linux'
     },
-    baselineTree: b.tree,
+    baselineTree: b.integrationTree,
     currentHeadTree: 'a'.repeat(40),
     currentTree: 'a'.repeat(40),
     changed: [...onlinePreflightReceiptFixGuardPaths],
@@ -3993,6 +4006,46 @@ test('finite failure-receipt guard binds authentic closed-PR source artifact log
     },
     (v) => {
       v.mainRun.conclusion = 'failure';
+    },
+    (v) => {
+      v.mainRun.head_sha = onlinePreflightReceiptFixGuardBinding.integrationBase;
+    },
+    (v) => {
+      delete v.integrationMainRun;
+    },
+    (v) => {
+      v.integrationMainRun.id++;
+    },
+    (v) => {
+      v.integrationMainRun.run_attempt = 2;
+    },
+    (v) => {
+      v.integrationMainRun.event = 'pull_request';
+    },
+    (v) => {
+      v.integrationMainRun.head_sha = onlinePreflightReceiptFixGuardBinding.originalMergedMain;
+    },
+    (v) => {
+      v.integrationMainRun.head_branch = 'other';
+    },
+    (v) => {
+      delete v.integrationMainRun.head_commit;
+    },
+    (v) => {
+      v.integrationMainRun.head_commit.id =
+        onlinePreflightReceiptFixGuardBinding.originalMergedMain;
+    },
+    (v) => {
+      v.integrationMainRun.head_commit.tree_id = onlinePreflightReceiptFixGuardBinding.tree;
+    },
+    (v) => {
+      v.integrationMainRun.conclusion = 'failure';
+    },
+    (v) => {
+      v.integrationMainRun.path = '.github/workflows/production-release.yml';
+    },
+    (v) => {
+      v.integrationMainRun.repository.full_name = 'foreign/project';
     },
     (v) => {
       v.jobs[0].conclusion = 'failure';
@@ -4126,7 +4179,9 @@ test('finite failure-receipt source normalization preserves both prior lanes and
       onlinePreflightReceiptFixRuntimeBytesUnchanged
     ]
   ]) {
-    const before = execFileSync('git', ['show', b.base + ':' + path], { encoding: 'utf8' });
+    const before = execFileSync('git', ['show', b.integrationBase + ':' + path], {
+      encoding: 'utf8'
+    });
     const after = readFileSync(path, 'utf8');
     assert.equal(verify(before, after), true, path);
     for (const altered of [
@@ -4136,7 +4191,9 @@ test('finite failure-receipt source normalization preserves both prior lanes and
       after.replace('def authority(', 'def modified_authority('),
       after.replace('def prepare(', 'def modified_prepare('),
       after.replace('resumeOnlinePrepareFixGuard', 'resumeOldGuardChanged'),
-      after.replace('rawLogSha256:', 'changedRawLogSha256:')
+      after.replace('rawLogSha256:', 'changedRawLogSha256:'),
+      after.replace('releaseArtifactRetentionControls', 'changedStorageControls'),
+      after.replace('releaseArtifactOnly', 'changedStorageOnly')
     ])
       if (altered !== after) assert.equal(verify(before, altered), false, path);
     assert.equal(verify(before, before), false);
@@ -4147,7 +4204,10 @@ test('finite failure-receipt source normalization preserves both prior lanes and
   );
   const before = execFileSync(
     'git',
-    ['show', b.base + ':scripts/production-release/online-recharge-component-runtime.py'],
+    [
+      'show',
+      b.integrationBase + ':scripts/production-release/online-recharge-component-runtime.py'
+    ],
     { encoding: 'utf8' }
   );
   for (const altered of [
@@ -4163,6 +4223,12 @@ test('finite failure-receipt source normalization preserves both prior lanes and
 test('finite failure-receipt raw transport pins exactly the passed PR471 platform artifacts', () => {
   const b = onlinePreflightReceiptFixGuardBinding;
   assert.equal(b.run, 38508638260);
+  assert.equal(b.originalMergedMain, 'a9829b443fe5c0cf6f4803366d06c5f8e3357318');
+  assert.equal(b.integrationBase, '8ae90fb12e05abb61ea6ea9fde2bcd9a6b9c4c4f');
+  assert.equal(b.integrationTree, 'f2f8e38637bb5614b1230875ea1100004e6683f6');
+  assert.equal(b.integrationMainRun, 38515633798);
+  assert.equal(b.mainRun, 38511580891);
+  assert.equal(b.tree, 'a473264b8821ebe72471979614ba7983c531e309');
   assert.equal(b.job, 115671848013);
   assert.equal(b.qualityJob, 115680672303);
   assert.equal(b.artifact, 11869619286);
@@ -4229,4 +4295,30 @@ test('finite failure-receipt raw transport pins exactly the passed PR471 platfor
     }),
     false
   );
+});
+
+test('artifact retention is a finite operational scope with mixed changes retaining all guards', () => {
+  const paths = [
+    ...releaseArtifactRetentionControls,
+    'docs/DISK_STORAGE_POLICY.md',
+    'scripts/ci-recharge-check.mjs'
+  ];
+  assert.equal(isReleaseArtifactRetentionOnly(paths), true);
+  assert.equal(checkMode(paths, '', ''), 'ci-only');
+  assert.deepEqual(selectedParts(paths), ['guards']);
+  assert.equal(isReleaseArtifactRetentionOnly(['docs/DISK_STORAGE_POLICY.md']), false);
+  assert.equal(isReleaseArtifactRetentionOnly(['scripts/ci-recharge-check.mjs']), false);
+  for (const extra of [
+    'scripts/production-release/remote-deploy.py',
+    '.github/workflows/production-release.yml',
+    'apps/api/src/auth/auth.service.ts',
+    'scripts/production-release/release-artifact-retention.py.backup',
+    'scripts/production-release/release-artifact-retention-anything.py'
+  ])
+    assert.equal(isReleaseArtifactRetentionOnly([...paths, extra]), false);
+  for (const unknown of [
+    'scripts/production-release/release-artifact-retention.py.backup',
+    'scripts/production-release/release-artifact-retention-anything.py'
+  ])
+    assert.equal(checkMode([unknown], '', ''), 'full');
 });

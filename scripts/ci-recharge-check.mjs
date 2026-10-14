@@ -3,6 +3,8 @@ import { existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 import {
   adminCheckCommands,
+  releaseArtifactRetentionControls,
+  isReleaseArtifactRetentionOnly,
   adminUiGuardChecks,
   backendArchitectureGuardChecks,
   auditRetentionMigration,
@@ -38,6 +40,7 @@ const changed = execFileSync('git', ['diff', '--name-only', base, 'HEAD'], { enc
   .trim()
   .split('\n')
   .filter(Boolean);
+const releaseArtifactOnly = mode === 'ci-only' && isReleaseArtifactRetentionOnly(changed);
 const resumeCombinedGuardPrefix =
   part === 'guards' &&
   process.env.GITHUB_ACTIONS === 'true' &&
@@ -65,7 +68,7 @@ const resumeOnlinePreflightReceiptFixGuard =
   process.env.GITHUB_ACTIONS === 'true' &&
   process.env.GITHUB_REPOSITORY === 'wangchaozhuanyong/id-business-system' &&
   process.env.GITHUB_EVENT_NAME === 'pull_request' &&
-  base === 'a9829b443fe5c0cf6f4803366d06c5f8e3357318' &&
+  base === '8ae90fb12e05abb61ea6ea9fde2bcd9a6b9c4c4f' &&
   canResumeOnlinePreflightReceiptFixGuard(base);
 const shared = () => npm('run', 'build', '--workspace', '@apple-business/shared');
 const onlineEngine = () => {
@@ -404,7 +407,12 @@ if (resumeOnlinePreflightReceiptFixGuard) {
   for (const [file, ...args] of onlinePreflightReceiptFixGuardCommands) run(file, args);
   process.exit(0);
 }
-if (part === 'guards' && !resumeCombinedGuardPrefix && !resumeOnlineComponentGuardPrefix) {
+if (
+  part === 'guards' &&
+  !releaseArtifactOnly &&
+  !resumeCombinedGuardPrefix &&
+  !resumeOnlineComponentGuardPrefix
+) {
   if (
     changed.some(
       (path) =>
@@ -488,10 +496,28 @@ if (part === 'guards' && !resumeCombinedGuardPrefix && !resumeOnlineComponentGua
 }
 if (resumeOnlineComponentGuardPrefix)
   run('python3', ['-B', 'scripts/production-release/unified-component-source.test.py']);
-if (part === 'guards') {
+const releaseArtifactRetentionChecks = () => {
+  if (changed.some((path) => releaseArtifactRetentionControls.includes(path))) {
+    run('python3', ['-B', 'scripts/production-release/release-artifact-retention.test.py']);
+    run('python3', [
+      '-B',
+      'scripts/production-release/release-artifact-retention-transport.test.py'
+    ]);
+    run('python3', ['-B', 'scripts/production-release/disk-retention-transport.test.py']);
+    run('python3', ['-B', 'scripts/production-release/release-storage.test.py']);
+  }
+};
+// An archive-only change leaves the existing website controllers unchanged.
+// Keep the common Node/format/lint prefix and verify its actual transport dependencies.
+if (releaseArtifactOnly && ['guards', 'release-controls'].includes(part)) {
+  if (!/^[a-f0-9]{40}$/.test(base)) throw new Error('Missing diff base');
+  if (part === 'release-controls') run('node', ['--test', 'scripts/ci-recharge-release.test.mjs']);
+  releaseArtifactRetentionChecks();
+} else if (part === 'guards') {
   rechargeFlowSuccessorControls();
   ownedMysqlTestControls();
   releaseMaintenanceControls();
+  releaseArtifactRetentionChecks();
   archiveReleaseControls();
   onlineSourcePermissionRepairControls();
   workspacePublicPermissionRepairControls();
@@ -647,6 +673,7 @@ if (part === 'guards') {
   rechargeFlowSuccessorControls();
   ownedMysqlTestControls();
   releaseMaintenanceControls();
+  releaseArtifactRetentionChecks();
   archiveReleaseControls();
   onlineSourcePermissionRepairControls();
   workspacePublicPermissionRepairControls();
