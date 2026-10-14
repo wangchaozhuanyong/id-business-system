@@ -484,26 +484,29 @@ def build_proof(d, p, transport, quality_run, repository):
     authority()
     need(os.environ.get('GITHUB_ACTIONS') == 'true', 'BUILD_RUNNER_REQUIRED')
     d, core, _admin, _workspace, online = modules(d)
+    projection_path = Path(PROJECTION).absolute()
+    proof_path = Path(PROOF).absolute()
+    def file_identity(path):
+        row = path.lstat()
+        return tuple(getattr(row, name) for name in (
+            'st_dev', 'st_ino', 'st_mode', 'st_nlink', 'st_uid', 'st_gid', 'st_size', 'st_mtime_ns', 'st_ctime_ns'))
+    saved_proof = saved_identity = None
+    if proof_path.exists() or proof_path.is_symlink():
+        saved_identity = file_identity(proof_path)
+        saved_proof = core.private_bytes(proof_path, cap=256 * 1024)
+        need(file_identity(proof_path) == saved_identity, 'BUILD_PROOF_CHANGED')
+    projection_identity = file_identity(projection_path)
+    projection_raw = core.private_bytes(projection_path)
+    need(file_identity(projection_path) == projection_identity, 'BUILD_CONTEXT_CHANGED')
     receipt = validate_preflight(core, transport, p, transport['expectedCurrent'])
     _files, output, record = source(d, p, receipt['baseline'])
-    projection_path = Path(PROJECTION).absolute()
-    projection_raw = core.private_bytes(projection_path)
     need(core.closed_json(projection_raw) == record
          and projection_raw == (json.dumps(record, sort_keys=True, separators=(',', ':'), allow_nan=False) + '\n').encode(),
          'BUILD_CONTEXT_CHANGED')
     verify_context(core, output, record)
     # Build and push both measure the same run's images. The original proof is
     # immutable: authenticate and remeasure it, never recreate or replace it.
-    proof_path = Path(PROOF).absolute()
-    def proof_identity():
-        row = proof_path.lstat()
-        return tuple(getattr(row, name) for name in (
-            'st_dev', 'st_ino', 'st_mode', 'st_nlink', 'st_uid', 'st_gid', 'st_size', 'st_mtime_ns', 'st_ctime_ns'))
-    saved_proof = saved_identity = None
-    if proof_path.exists() or proof_path.is_symlink():
-        saved_identity = proof_identity()
-        saved_proof = core.private_bytes(proof_path, cap=256 * 1024)
-        need(proof_identity() == saved_identity, 'BUILD_PROOF_CHANGED')
+    if saved_proof is not None:
         validate_build(core.closed_json(saved_proof, 256 * 1024), p, record, transport, quality_run, repository)
     result = {'version': 1, 'scope': SCOPE, 'kind': KIND + '_BUILD_PROOF', 'producer': p,
         'qualityRunId': quality_run, 'sourceProjection': record, 'preflightSha256': c.fingerprint(transport),
@@ -521,14 +524,15 @@ def build_proof(d, p, transport, quality_run, repository):
     validate_build(result, p, record, transport, quality_run, repository)
     for name in IMAGES:
         verify_image(d, online, Path(CONTEXT).absolute(), output, p, result, name)
-    need(core.private_bytes(projection_path) == projection_raw, 'BUILD_CONTEXT_CHANGED')
     verify_context(core, output, record)
+    need(core.private_bytes(projection_path) == projection_raw
+         and file_identity(projection_path) == projection_identity, 'BUILD_CONTEXT_CHANGED')
     if saved_proof is None:
         core.write_private(proof_path, result)
     else:
         canonical = (json.dumps(result, sort_keys=True, separators=(',', ':'), allow_nan=False) + '\n').encode()
         need(saved_proof == canonical and core.private_bytes(proof_path, cap=256 * 1024) == saved_proof
-             and proof_identity() == saved_identity, 'BUILD_PROOF_CHANGED')
+             and file_identity(proof_path) == saved_identity, 'BUILD_PROOF_CHANGED')
     return result
 
 
