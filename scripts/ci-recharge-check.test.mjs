@@ -137,7 +137,8 @@ function recordGuardCommands(
     event = '',
     base = 'a'.repeat(40),
     firstRechargeSnapshot,
-    captureError = false
+    captureError = false,
+    failCommand = ''
   } = {}
 ) {
   // Run the real dispatcher with process execution replaced before its named import resolves.
@@ -170,6 +171,9 @@ function recordGuardCommands(
     childProcess.execFileSync = (file, args) => {
       if (file === 'git') return paths.join('\\n');
       calls.push([file, ...args]);
+      if ([file, ...args].join(' ') === process.env.GUARD_TEST_FAIL_COMMAND) {
+        throw new Error('SYNTHETIC_COMMAND_FAILED');
+      }
       return '';
     };
     syncBuiltinESMExports();
@@ -205,11 +209,71 @@ function recordGuardCommands(
         GUARD_TEST_PART: part,
         GUARD_TEST_PATHS: JSON.stringify(paths),
         GUARD_TEST_FIRST_RECHARGE_SNAPSHOT: JSON.stringify(firstRechargeSnapshot),
-        GUARD_TEST_CAPTURE_ERROR: String(captureError)
+        GUARD_TEST_CAPTURE_ERROR: String(captureError),
+        GUARD_TEST_FAIL_COMMAND: failCommand
       }
     })
   );
 }
+
+test('native checkout connector builds real shared exports before browser installation and Python contracts', () => {
+  const worker = 'apps/api/src/id-business-v2/auto-recharge/worker';
+  for (const file of ['pay.py', 'test_native_pro_checkout.py']) {
+    const calls = recordGuardCommands('recharge', [`${worker}/${file}`], 'connector');
+    const builds = calls
+      .map((call, index) => ({ call, index }))
+      .filter(({ call }) => call.join(' ') === 'npm run build --workspace @apple-business/shared');
+    assert.equal(builds.length, 1);
+    const browser = calls.findIndex(
+      (call) => call.join(' ') === 'python3 -m playwright install chromium'
+    );
+    const contracts = calls.findIndex((call) => call[0] === 'python3' && call.includes('unittest'));
+    assert.ok(builds[0].index < browser && browser < contracts);
+    assert.ok(calls[contracts].includes('test_native_pro_checkout'));
+  }
+  const original = recordGuardCommands('recharge', [`${worker}/server.py`], 'connector');
+  assert.ok(
+    original.every((call) => call.join(' ') !== 'npm run build --workspace @apple-business/shared')
+  );
+  assert.ok(original.every((call) => !call.includes('test_native_pro_checkout')));
+});
+
+test('failed shared preparation stops connector before any browser install or Python contract', () => {
+  const calls = recordGuardCommands(
+    'recharge',
+    ['apps/api/src/id-business-v2/auto-recharge/worker/test_native_pro_checkout.py'],
+    'connector',
+    { captureError: true, failCommand: 'npm run build --workspace @apple-business/shared' }
+  );
+  assert.deepEqual(calls, [
+    ['npm', 'run', 'build', '--workspace', '@apple-business/shared'],
+    ['caught-error', 'SYNTHETIC_COMMAND_FAILED']
+  ]);
+});
+
+test('connector matrix installs locked Node dependencies before invoking its actual check', () => {
+  const workflow = readFileSync(
+    new URL('../.github/workflows/quality.yml', import.meta.url),
+    'utf8'
+  );
+  const step = workflow.match(
+    /- name: Install package dependencies\n\s+if: ([^\n]+)\n\s+run: ([^\n]+)/
+  );
+  assert.ok(step);
+  assert.equal(
+    step[1],
+    '${{ !contains(fromJSON(needs.change-scope.outputs.reused_parts), matrix.part) && contains(fromJSON(\'["guards","admin","api","migration","connector"]\'), matrix.part) }}'
+  );
+  assert.equal(step[2], 'npm ci --no-audit');
+  const parts = JSON.parse(step[1].match(/contains\(fromJSON\('(\[[^']+\])'\), matrix.part\)/)[1]);
+  for (const part of ['guards', 'admin', 'api', 'migration', 'connector'])
+    assert.ok(parts.includes(part));
+  assert.ok(!parts.includes('security'));
+  assert.ok(
+    workflow.indexOf(step[0]) < workflow.indexOf('- name: Install existing connector dependencies')
+  );
+  assert.ok(workflow.indexOf(step[0]) < workflow.indexOf('- name: Check affected recharge part'));
+});
 
 test('first-subscription producer tests dispatch once and only from the exact finite controls', () => {
   for (const part of ['guards', 'release-controls']) {
@@ -863,7 +927,9 @@ test('connection migration and registration mirror use only their disposable Doc
     'utf8'
   );
   assert.ok(
-    workflow.includes(`contains(fromJSON('["guards","admin","api","migration"]'), matrix.part)`)
+    workflow.includes(
+      `contains(fromJSON('["guards","admin","api","migration","connector"]'), matrix.part)`
+    )
   );
 });
 

@@ -2020,6 +2020,8 @@ test('workflow wires a separate empty-by-default seal and rejects all non-releas
           ([
             'verify_recharge_flow',
             'release_recharge_flow',
+            'verify_first_recharge',
+            'release_first_recharge',
             'verify_online_recharge',
             'release_online_recharge',
             'verify_api_workspace',

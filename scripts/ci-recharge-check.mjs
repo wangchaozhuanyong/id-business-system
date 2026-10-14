@@ -810,6 +810,7 @@ if (releaseArtifactOnly && ['guards', 'release-controls'].includes(part)) {
       'test_native_pro_checkout.py'
     ].some((name) => path === `${workerDirectory}/${name}`)
   );
+  if (firstRechargeCheckoutRegression) shared();
   const workerOptions = {
     cwd: workerDirectory,
     stdio: 'inherit',
