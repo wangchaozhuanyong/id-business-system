@@ -2988,6 +2988,545 @@ export function canResumeOnlinePreflightReceiptFixGuard(base) {
 }
 // END finite ONLINE failure-receipt guard continuation
 
+// BEGIN finite ONLINE build-proof reuse guard continuation
+export const onlineBuildProofReuseGuardBinding = Object.freeze({
+  repository: 'wangchaozhuanyong/id-business-system',
+  branch: 'codex/online-storage-proof-integration-20261014',
+  base: '5f458e7ac7cd0dfab0f99d2a6d07c20baa8b6e53',
+  tree: 'bcc614bd53dbf4ddf8e3d7d6ba85d5a4ed1f1a3a',
+  originalMergedMain: 'fff7b257fa402e14da5d9aa43aa4ea22095695c5',
+  originalMergedTree: '04637480488076dc891c822e79864f8ff96bbf06',
+  originalPr: 475,
+  originalHead: '52f25bad6fb42721faceb3d7ce5cd9d052e8e71a',
+  originalBase: '619b04c240eed836b1db76a9fe330634de1fecbf',
+  run: 38526906459,
+  attempt: 1,
+  originalMainRun: 38530643303,
+  integrationMainRun: 38544086836,
+  job: 115729349592,
+  qualityJob: 115740147064,
+  checkout: '52fe5d339984bc8c89f27175e96786015469a25a',
+  artifact: 11877289090,
+  artifactBytes: 356,
+  artifactSha256: '0bc50667d3c61761e6340a80100eaf0bfc6b8a7a47feaa264754c56a285d867d',
+  proofSha256: '9a211fe11776350e0a2760a7ab5e3fbc44c8b254689dbd7efc0435ddf725ca1d',
+  rawLogSha256: '6a87290af1201dcc0c603fccf3a40669b2c41c121abf5084e503b4257f858b3b',
+  rawQualityLogSha256: '7fa909ea5f2feb39e56ab1f80cd510fee5460bc175b2559056d0c101c453edef',
+  runtimeSha256: 'f751166a3caec0dcf0d1657d9604f2aacff3aa7b1615112275c81d116dabfb79',
+  runtimeTestSha256: '4a2dbf2111592d2711cf175b2d9b3bdd0fc619b6f940bc5d604cfb2378eb74d7',
+  readonlySha256: 'c65a7fd1a92c133cfda4e2a94d9326c4b1eae5f63c149b163f31aa59ef34fe8a',
+  readonlyTestSha256: 'e43cf0ead1fdd0c3a46186c3b24a1527c1d6d48085912a9fcf2eae3b7907cb26',
+  helperSha256: '81373a391b1116e81d914acbeed574ef272daac37a88e9e2539c4d7351372434',
+  helperTestSha256: '47f20b34d353214c52527ec1dac492be7c2e5ec5cf986dc8d8b86ca374e55357',
+  dispatcherTestSha256: '08a891b2d2acb151445332dda7d0fdc442908b44f9112430f653e9e1d929d5cf'
+});
+export const onlineBuildProofReuseGuardPaths = Object.freeze([
+  'scripts/production-release/online-recharge-component-runtime.py',
+  'scripts/production-release/online-recharge-component-runtime.test.py',
+  'scripts/production-release/online-recharge-component-readonly.py',
+  'scripts/production-release/online-recharge-component-readonly.test.py',
+  'scripts/ci-recharge-scope.mjs',
+  'scripts/ci-recharge-scope.test.mjs',
+  'scripts/ci-recharge-check.mjs',
+  'scripts/ci-recharge-check.test.mjs',
+  'scripts/production-release/online-recharge-ci-build.py',
+  'scripts/production-release/online-recharge-ci-build.test.py',
+  'docs/CENTRAL_RELEASE_20261002.md',
+  'docs/WORKSPACE_RELEASE_CLEANUP_20261014.md'
+]);
+export const onlineBuildProofReuseCommands = Object.freeze([
+  ...onlinePreflightReceiptFixGuardCommands,
+  Object.freeze([
+    'python3',
+    '-B',
+    'scripts/production-release/online-recharge-component-diagnostic.test.py'
+  ]),
+  Object.freeze([
+    'python3',
+    '-B',
+    'scripts/production-release/online-recharge-component-lifecycle.test.py'
+  ]),
+  Object.freeze([
+    'node',
+    '--test',
+    'scripts/production-release/online-recharge-component-diagnostic-entry.test.mjs'
+  ])
+]);
+
+export function onlineBuildProofReuseScopeBytesUnchanged(before, after) {
+  if (typeof before !== 'string' || typeof after !== 'string') return false;
+  for (const [name, indent] of [
+    ['guard continuation', ''],
+    ['classifier admission', '  ']
+  ]) {
+    const start = indent + '// BEGIN finite ONLINE build-proof reuse ' + name + '\n';
+    const end = indent + '// END finite ONLINE build-proof reuse ' + name + '\n\n';
+    if (before.includes(start) || after.split(start).length !== 2 || after.split(end).length !== 2)
+      return false;
+    const left = after.indexOf(start),
+      right = after.indexOf(end);
+    if (right <= left) return false;
+    after = after.slice(0, left) + after.slice(right + end.length);
+  }
+  return after === before;
+}
+export function onlineBuildProofReuseScopeTestBytesUnchanged(before, after) {
+  if (typeof before !== 'string' || typeof after !== 'string') return false;
+  const start = '// BEGIN finite ONLINE build-proof reuse guard tests\n';
+  const end = '// END finite ONLINE build-proof reuse guard tests\n';
+  if (before.includes(start) || after.split(start).length !== 2 || after.split(end).length !== 2)
+    return false;
+  const left = after.indexOf(start),
+    right = after.indexOf(end);
+  return right > left && after.slice(0, left) + after.slice(right + end.length) === before;
+}
+export function onlineBuildProofReuseDispatcherBytesUnchanged(before, after) {
+  if (typeof before !== 'string' || typeof after !== 'string') return false;
+  const declaration = [
+    'const resumeOnlineBuildProofReuseGuard =',
+    "  part === 'guards' &&",
+    "  mode === 'ci-only' &&",
+    "  process.env.GITHUB_ACTIONS === 'true' &&",
+    "  process.env.GITHUB_REPOSITORY === 'wangchaozhuanyong/id-business-system' &&",
+    "  process.env.GITHUB_EVENT_NAME === 'pull_request' &&",
+    "  base === '5f458e7ac7cd0dfab0f99d2a6d07c20baa8b6e53' &&",
+    '  canResumeOnlineBuildProofReuseGuard(base);',
+    ''
+  ].join('\n');
+  const extension = [
+    'if (resumeOnlineBuildProofReuseGuard) {',
+    "  run('python3', ['-B', 'scripts/production-release/online-recharge-ci-build.test.py']);",
+    "  run('python3', [",
+    "    '-B',",
+    "    'scripts/production-release/online-recharge-ci-build.py',",
+    "    '--ci-real-build-not-for-release',",
+    "    '--admitted-source-tree',",
+    "    execFileSync('git', ['rev-parse', 'HEAD^{tree}'], { encoding: 'utf8' }).trim()",
+    '  ]);',
+    '  for (const [file, ...args] of onlineBuildProofReuseCommands) run(file, args);',
+    '  process.exit(0);',
+    '}',
+    ''
+  ].join('\n');
+  for (const addition of [
+    '  canResumeOnlineBuildProofReuseGuard,\n',
+    '  onlineBuildProofReuseCommands,\n',
+    declaration,
+    extension
+  ]) {
+    if (after.split(addition).length !== 2) return false;
+    after = after.replace(addition, '');
+  }
+  return after === before;
+}
+
+export function onlineBuildProofReusePythonBytesUnchanged(before, after, name) {
+  if (
+    typeof before !== 'string' ||
+    typeof after !== 'string' ||
+    !['build_proof', 'safe_failure'].includes(name)
+  )
+    return false;
+  try {
+    return (
+      execFileSync(
+        'python3',
+        [
+          '-B',
+          '-c',
+          [
+            'import ast,json,sys',
+            'v=json.load(sys.stdin)',
+            'def normalized(source):',
+            ' tree=ast.parse(source)',
+            ' names=["build_proof"] if v["name"]=="build_proof" else ["safe_failure","exception_details"]',
+            ' for name in names:',
+            '  hits=[n for n in tree.body if isinstance(n,(ast.FunctionDef,ast.AsyncFunctionDef)) and n.name==name]',
+            '  assert len(hits)==1',
+            '  tree.body.remove(hits[0])',
+            ' return ast.dump(tree,include_attributes=False)',
+            'print("same" if normalized(v["before"])==normalized(v["after"]) else "different")'
+          ].join('\n')
+        ],
+        {
+          input: JSON.stringify({ before, after, name }),
+          encoding: 'utf8',
+          stdio: 'pipe',
+          maxBuffer: 1024 * 1024
+        }
+      ).trim() === 'same'
+    );
+  } catch {
+    return false;
+  }
+}
+
+export function onlineBuildProofReuseGuardRawLogFacts(raw) {
+  if (!Buffer.isBuffer(raw) || !raw.length) return undefined;
+  const source = raw.toString('utf8');
+  if (!Buffer.from(source, 'utf8').equals(raw)) return undefined;
+  const utc = /^\uFEFF?\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z /;
+  const rows = source.split('\n');
+  if (rows.some((line) => line && !utc.test(line))) return undefined;
+  const lines = rows.map((line) => line.replace(utc, ''));
+  const positions = lines.flatMap((line, index) =>
+    line === '[command]/usr/bin/git log -1 --format=%H' ? [index] : []
+  );
+  return {
+    sha256: createHash('sha256').update(raw).digest('hex'),
+    checkout: positions.length === 1 ? lines[positions[0] + 1] : undefined,
+    scope:
+      lines.includes('  CHECK_BASE: ' + onlineBuildProofReuseGuardBinding.originalBase) &&
+      lines.includes('  CHECK_MODE: ci-only') &&
+      lines.includes('  CHECK_PART: guards') &&
+      lines.includes('##[group]Run node scripts/ci-recharge-check.mjs "$CHECK_PART" "$CHECK_BASE"'),
+    environment:
+      lines.includes('  NODE_ENV: test') &&
+      lines.includes('Image: ubuntu-24.04') &&
+      lines.includes('Version: 20261004.327.1') &&
+      lines.includes('node: v24.21.0') &&
+      lines.includes('npm: 11.19.0'),
+    errors: lines.filter((line) => /^(?:ERROR|FAIL): /.test(line)),
+    failedCommands: lines.filter((line) => /^Error: Command failed: /.test(line))
+  };
+}
+
+export function onlineBuildProofReuseGuardFailureCodes(input = {}) {
+  const b = onlineBuildProofReuseGuardBinding,
+    codes = [];
+  const check = (code, predicate) => {
+    try {
+      if (!predicate()) codes.push(code);
+    } catch {
+      codes.push(code);
+    }
+  };
+  const { run, originalPr, mainRun, integrationMainRun, artifact, proof, facts, qualityLog } =
+    input;
+  const jobs = Array.isArray(input.jobs) ? input.jobs : [];
+  const guard = jobs.filter((row) => row?.id === b.job),
+    quality = jobs.filter((row) => row?.id === b.qualityJob);
+  const runOK = (row, id, event, head) =>
+    row?.id === id &&
+    row.run_attempt === b.attempt &&
+    row.event === event &&
+    row.path === '.github/workflows/quality.yml' &&
+    row.status === 'completed' &&
+    row.conclusion === 'success' &&
+    row.head_sha === head &&
+    row.repository?.full_name === b.repository;
+  const jobOK = (rows, name) =>
+    rows.length === 1 &&
+    rows[0].run_id === b.run &&
+    rows[0].run_attempt === b.attempt &&
+    rows[0].name === name &&
+    rows[0].head_sha === b.originalHead &&
+    rows[0].status === 'completed' &&
+    rows[0].conclusion === 'success';
+  const stepsOK = (rows, names, skipped = false) =>
+    rows.length === 1 &&
+    Array.isArray(rows[0].steps) &&
+    names.every(
+      (name) =>
+        rows[0].steps.filter(
+          (step) =>
+            step?.name === name &&
+            step.status === 'completed' &&
+            step.conclusion === (skipped ? 'skipped' : 'success')
+        ).length === 1
+    );
+  check('ORIGINAL_RUN', () => runOK(run, b.run, 'pull_request', b.originalHead));
+  check(
+    'CLOSED_PR_SOURCE',
+    () =>
+      originalPr?.number === b.originalPr &&
+      originalPr.state === 'closed' &&
+      originalPr.merged === true &&
+      originalPr.head?.sha === b.originalHead &&
+      originalPr.base?.sha === b.originalBase &&
+      originalPr.merge_commit_sha === b.originalMergedMain
+  );
+  check(
+    'MAIN_QUALITY',
+    () =>
+      runOK(mainRun, b.originalMainRun, 'push', b.originalMergedMain) &&
+      mainRun.head_branch === 'main' &&
+      mainRun.head_commit?.id === b.originalMergedMain &&
+      mainRun.head_commit?.tree_id === b.originalMergedTree
+  );
+  check(
+    'INTEGRATION_MAIN_QUALITY',
+    () =>
+      runOK(integrationMainRun, b.integrationMainRun, 'push', b.base) &&
+      integrationMainRun.head_branch === 'main' &&
+      integrationMainRun.head_commit?.id === b.base &&
+      integrationMainRun.head_commit?.tree_id === b.tree
+  );
+  check('GUARD_JOB', () => jobOK(guard, 'recharge (guards)'));
+  check('GUARD_STEPS', () =>
+    stepsOK(guard, [
+      'Checkout',
+      'Setup Node.js',
+      'Install package dependencies',
+      'Check affected recharge part',
+      'Build and verify sealed ONLINE images without production access',
+      'Preserve CI-only ONLINE image verification'
+    ])
+  );
+  check('GUARD_SKIPPED_DEPENDENCIES', () =>
+    stepsOK(
+      guard,
+      ['Install browser for recharge acceptance', 'Install existing connector dependencies'],
+      true
+    )
+  );
+  check('QUALITY_JOB', () => jobOK(quality, 'quality'));
+  check('QUALITY_STEPS', () =>
+    stepsOK(quality, [
+      'Checkout the tested source tree for its evidence',
+      'Record successful PR source evidence',
+      'Preserve successful source evidence'
+    ])
+  );
+  check(
+    'SOURCE_ARTIFACT',
+    () =>
+      artifact?.id === b.artifact &&
+      artifact.name === 'quality-source-evidence-1' &&
+      artifact.expired === false &&
+      artifact.size_in_bytes === b.artifactBytes &&
+      artifact.digest === 'sha256:' + b.artifactSha256 &&
+      artifact.workflow_run?.id === b.run &&
+      artifact.workflow_run.head_sha === b.originalHead
+  );
+  check('PROOF_BYTES', () => input.proofSha256 === b.proofSha256);
+  check(
+    'PROOF_SOURCE',
+    () =>
+      typeOfProof(proof) &&
+      matchesSourceEvidence(proof, {
+        repo: b.repository,
+        run,
+        pr: { number: b.originalPr, head: { sha: b.originalHead } },
+        tree: b.originalMergedTree
+      }) &&
+      proof.baseSha === b.originalBase
+  );
+  check('GUARD_LOG_BYTES', () => facts?.sha256 === b.rawLogSha256);
+  check('GUARD_LOG_CHECKOUT', () => facts?.checkout === b.checkout);
+  check('GUARD_LOG_SCOPE', () => facts?.scope === true);
+  check('GUARD_LOG_ENVIRONMENT', () => facts?.environment === true);
+  check(
+    'GUARD_LOG_ERRORS',
+    () =>
+      Array.isArray(facts?.errors) &&
+      facts.errors.length === 0 &&
+      Array.isArray(facts.failedCommands) &&
+      facts.failedCommands.length === 0
+  );
+  check('QUALITY_LOG_BYTES', () => qualityLog?.sha256 === b.rawQualityLogSha256);
+  check('QUALITY_LOG_CHECKOUT', () => qualityLog?.checkout === b.checkout);
+  check('BASELINE_TREE', () => input.baselineTree === b.tree);
+  check(
+    'CURRENT_TREE',
+    () =>
+      input.currentHeadTree === input.currentTree &&
+      /^[a-f0-9]{40}$/.test(input.currentTree || '') &&
+      input.currentTree !== b.tree
+  );
+  check(
+    'CHANGED_PATHS',
+    () =>
+      Array.isArray(input.changed) &&
+      input.changed.length === onlineBuildProofReuseGuardPaths.length &&
+      new Set(input.changed).size === input.changed.length &&
+      input.changed.every((path) => onlineBuildProofReuseGuardPaths.includes(path))
+  );
+  for (const [key, expected, code] of [
+    ['node', 'v24.21.0', 'ENV_NODE'],
+    ['npm', '11.19.0', 'ENV_NPM'],
+    ['imageOS', 'ubuntu24', 'ENV_IMAGE_OS'],
+    ['imageVersion', '20261004.327.1', 'ENV_IMAGE_VERSION'],
+    ['platform', 'linux', 'ENV_PLATFORM']
+  ])
+    check(code, () => input.currentEnvironment?.[key] === expected);
+  for (const [key, code] of [
+    ['runtimeSha256', 'RUNTIME_SOURCE'],
+    ['runtimeTestSha256', 'RUNTIME_TEST_SOURCE'],
+    ['readonlySha256', 'READONLY_SOURCE'],
+    ['readonlyTestSha256', 'READONLY_TEST_SOURCE'],
+    ['helperSha256', 'HELPER_SOURCE'],
+    ['helperTestSha256', 'HELPER_TEST_SOURCE'],
+    ['dispatcherTestSha256', 'DISPATCHER_TEST_SOURCE']
+  ])
+    check(code, () => input[key] === b[key] && /^[a-f0-9]{64}$/.test(b[key]));
+  for (const [key, code] of [
+    ['scopeUnchanged', 'SCOPE_NORMALIZATION'],
+    ['scopeTestUnchanged', 'SCOPE_TEST_NORMALIZATION'],
+    ['dispatcherUnchanged', 'DISPATCHER_NORMALIZATION'],
+    ['runtimeUnchanged', 'RUNTIME_NORMALIZATION'],
+    ['readonlyUnchanged', 'READONLY_NORMALIZATION'],
+    ['modesUnchanged', 'FILE_MODES']
+  ])
+    check(code, () => input[key] === true);
+  return codes;
+}
+export function validateOnlineBuildProofReuseGuardNative(input) {
+  return onlineBuildProofReuseGuardFailureCodes(input).length === 0;
+}
+export function requireOnlineBuildProofReuseGuardNative(input) {
+  const codes = onlineBuildProofReuseGuardFailureCodes(input);
+  if (codes.length)
+    throw new Error(
+      'Original build-proof source or guard evidence changed; predicates=' + codes.join(',')
+    );
+  return true;
+}
+
+export function canResumeOnlineBuildProofReuseGuard(base, phase = 'guards') {
+  const b = onlineBuildProofReuseGuardBinding;
+  if (process.env.GITHUB_ACTIONS !== 'true' || process.env.GITHUB_EVENT_NAME !== 'pull_request')
+    return false;
+  let event;
+  try {
+    event = JSON.parse(readFileSync(process.env.GITHUB_EVENT_PATH, 'utf8'));
+  } catch {
+    throw new Error('Build-proof continuation event unavailable');
+  }
+  if (event.pull_request?.head?.ref !== b.branch) return false;
+  if (
+    process.env.GITHUB_REPOSITORY !== b.repository ||
+    base !== b.base ||
+    event.pull_request.base?.sha !== b.base ||
+    event.pull_request.head.repo?.full_name !== b.repository ||
+    event.pull_request.base.repo?.full_name !== b.repository ||
+    !['scope', 'guards'].includes(phase) ||
+    (phase === 'guards' &&
+      (process.env.CHECK_MODE !== 'ci-only' || process.env.NODE_ENV !== 'test')) ||
+    (phase === 'scope' &&
+      ((process.env.CHECK_MODE && process.env.CHECK_MODE !== 'ci-only') ||
+        (process.env.NODE_ENV && process.env.NODE_ENV !== 'test')))
+  )
+    throw new Error('Build-proof continuation scope changed');
+  try {
+    const tree = git('rev-parse', 'HEAD^{tree}');
+    const currentHeadTree = git('rev-parse', event.pull_request.head.sha + '^{tree}');
+    const changed = git('diff', '--name-only', b.base, tree).split('\n').filter(Boolean);
+    if (
+      currentHeadTree !== tree ||
+      tree === b.tree ||
+      git('rev-parse', b.base + '^{tree}') !== b.tree ||
+      changed.length !== onlineBuildProofReuseGuardPaths.length ||
+      new Set(changed).size !== changed.length ||
+      changed.some((path) => !onlineBuildProofReuseGuardPaths.includes(path))
+    )
+      throw new Error('Build-proof continuation candidate source changed');
+    const bytes = (revision, path) =>
+      execFileSync('git', ['show', revision + ':' + path], { encoding: 'utf8' });
+    const digest = (raw) => createHash('sha256').update(raw).digest('hex');
+    const run = gh('repos/' + b.repository + '/actions/runs/' + b.run);
+    const { jobs } = gh(
+      'repos/' + b.repository + '/actions/runs/' + b.run + '/attempts/1/jobs?per_page=100'
+    );
+    const { artifacts } = gh(
+      'repos/' + b.repository + '/actions/runs/' + b.run + '/artifacts?per_page=100'
+    );
+    const artifactsForSource = artifacts.filter((row) => row.id === b.artifact);
+    if (artifactsForSource.length !== 1)
+      throw new Error('Build-proof source artifact selection changed');
+    const zipped = execFileSync(
+      'gh',
+      ['api', 'repos/' + b.repository + '/actions/artifacts/' + b.artifact + '/zip'],
+      { maxBuffer: 8192 }
+    );
+    if (zipped.length !== b.artifactBytes || digest(zipped) !== b.artifactSha256)
+      throw new Error('Build-proof source artifact bytes changed');
+    const proofRaw = execFileSync(
+      'python3',
+      [
+        '-B',
+        '-c',
+        'import sys,zipfile,io;z=zipfile.ZipFile(io.BytesIO(sys.stdin.buffer.read()));assert z.namelist()==["evidence.json"];sys.stdout.buffer.write(z.read("evidence.json"))'
+      ],
+      { input: zipped, maxBuffer: 8192 }
+    );
+    const log = (job) =>
+      execFileSync(
+        'gh',
+        [
+          'api',
+          '--allow-escape-sequences',
+          'repos/' + b.repository + '/actions/jobs/' + job + '/logs'
+        ],
+        { maxBuffer: 4 * 1024 * 1024 }
+      );
+    const modesUnchanged = changed.every((path) => {
+      const before = git('ls-tree', b.base, '--', path),
+        after = git('ls-tree', tree, '--', path);
+      return (
+        /^100644 blob [a-f0-9]{40}\t/.test(before) && /^100644 blob [a-f0-9]{40}\t/.test(after)
+      );
+    });
+    const sourcePins = Object.fromEntries(
+      [
+        ['runtimeSha256', 0],
+        ['runtimeTestSha256', 1],
+        ['readonlySha256', 2],
+        ['readonlyTestSha256', 3],
+        ['helperSha256', 8],
+        ['helperTestSha256', 9],
+        ['dispatcherTestSha256', 7]
+      ].map(([key, index]) => [key, digest(bytes(tree, onlineBuildProofReuseGuardPaths[index]))])
+    );
+    requireOnlineBuildProofReuseGuardNative({
+      run,
+      jobs,
+      artifact: artifactsForSource[0],
+      proof: JSON.parse(proofRaw),
+      proofSha256: digest(proofRaw),
+      originalPr: gh('repos/' + b.repository + '/pulls/' + b.originalPr),
+      mainRun: gh('repos/' + b.repository + '/actions/runs/' + b.originalMainRun),
+      integrationMainRun: gh('repos/' + b.repository + '/actions/runs/' + b.integrationMainRun),
+      facts: onlineBuildProofReuseGuardRawLogFacts(log(b.job)),
+      qualityLog: onlineBuildProofReuseGuardRawLogFacts(log(b.qualityJob)),
+      changed,
+      currentEnvironment: onlineComponentGuardCurrentEnvironment(),
+      currentHeadTree,
+      currentTree: tree,
+      baselineTree: git('rev-parse', b.base + '^{tree}'),
+      modesUnchanged,
+      ...sourcePins,
+      runtimeUnchanged: onlineBuildProofReusePythonBytesUnchanged(
+        bytes(b.base, onlineBuildProofReuseGuardPaths[0]),
+        bytes(tree, onlineBuildProofReuseGuardPaths[0]),
+        'build_proof'
+      ),
+      readonlyUnchanged: onlineBuildProofReusePythonBytesUnchanged(
+        bytes(b.base, onlineBuildProofReuseGuardPaths[2]),
+        bytes(tree, onlineBuildProofReuseGuardPaths[2]),
+        'safe_failure'
+      ),
+      scopeUnchanged: onlineBuildProofReuseScopeBytesUnchanged(
+        bytes(b.base, 'scripts/ci-recharge-scope.mjs'),
+        bytes(tree, 'scripts/ci-recharge-scope.mjs')
+      ),
+      scopeTestUnchanged: onlineBuildProofReuseScopeTestBytesUnchanged(
+        bytes(b.base, 'scripts/ci-recharge-scope.test.mjs'),
+        bytes(tree, 'scripts/ci-recharge-scope.test.mjs')
+      ),
+      dispatcherUnchanged: onlineBuildProofReuseDispatcherBytesUnchanged(
+        bytes(b.base, 'scripts/ci-recharge-check.mjs'),
+        bytes(tree, 'scripts/ci-recharge-check.mjs')
+      )
+    });
+    return true;
+  } catch {
+    throw new Error('Build-proof continuation evidence unavailable');
+  }
+}
+const onlineBuildProofReusePriorNeedsCiBuild = needsOnlineRechargeCiBuild;
+// END finite ONLINE build-proof reuse guard continuation
+
 export function canResumeCombinedGuard(base) {
   if (
     base !== combinedMigrationBinding.base ||
@@ -3258,6 +3797,13 @@ async function main() {
           : mode === 'mailbox'
             ? ['guards', 'admin', 'api']
             : selectedParts(paths);
+  // BEGIN finite ONLINE build-proof reuse classifier admission
+  const needsOnlineRechargeCiBuild = (paths) =>
+    canResumeOnlineBuildProofReuseGuard(base, 'scope')
+      ? false
+      : onlineBuildProofReusePriorNeedsCiBuild(paths);
+  // END finite ONLINE build-proof reuse classifier admission
+
   const onlineCiBuild = needsOnlineRechargeCiBuild(paths);
   const result = {
     mode,

@@ -3,7 +3,7 @@
 import base64
 import ast
 import copy
-from contextlib import redirect_stdout
+from contextlib import ExitStack, redirect_stdout
 from datetime import datetime, timezone
 import gzip
 import importlib.util
@@ -100,6 +100,132 @@ class RuntimeTests(unittest.TestCase):
              patch.object(r, 'source', return_value=({}, fixture['output'], fixture['record'])), \
              patch.object(r.Path, 'cwd', return_value=directory):
             return r.prepare(fixture['d'], self.p, fixture['transport'])
+
+    def sealed_private_build_fixture(self, directory):
+        # Real frozen private I/O and context inventory; source, preflight and
+        # Docker responses are public synthetic fixtures, never live operations.
+        core = r.c.load_core(self.auth['coreSha256'])
+        output = {'synthetic-public-source.txt': (b'public fixture\n', '100644')}
+        record = {'syntheticProjection': True,
+            'outputFilesSha256': r.c.fingerprint(core.projection_module().inventory(output))}
+        transport = {'expectedCurrent': self.admin_auth['producer']['commit'], 'syntheticPreflight': True}
+        context = directory / r.CONTEXT; context.mkdir(parents=True)
+        context.parent.chmod(0o700)
+        for name, (raw, _mode) in output.items(): (context / name).write_bytes(raw)
+        core.write_private(directory / r.PROJECTION, record)
+        content = {'fileCount': 1, 'sha256': 'd' * 64}
+        online = SimpleNamespace(content_command=Mock(return_value='synthetic content command'),
+            content_summary=Mock(return_value=content), inspect_image=Mock(), engine_content=Mock(return_value=content),
+            SEED_FILE=r.load('online-recharge-scope.py').SEED_FILE)
+        fixture = {'core': core, 'output': output, 'record': record, 'transport': transport,
+            'online': online, 'imageId': 'sha256:' + 'c' * 64, 'content': content}
+        def run(*args, **unused):
+            if args[:3] == ('docker', 'image', 'inspect'):
+                return json.dumps([{'Id': fixture['imageId'], 'Architecture': 'amd64', 'Config': {'Labels': {
+                    'org.opencontainers.image.revision': self.p['commit'], 'id-business-v2.source-tree': self.p['sourceTree'],
+                    r.LABEL: r.c.fingerprint(fixture['record'])}}}])
+            return 'synthetic public image contents'
+        fixture['d'] = SimpleNamespace(run=Mock(side_effect=run))
+        return fixture
+
+    def call_sealed_private_build(self, directory, fixture, during_context=None):
+        context_calls = []
+        original_context = r.verify_context
+        def context(core, output, record):
+            original_context(core, output, record)
+            context_calls.append(True)
+            if during_context: during_context(len(context_calls))
+        previous = Path.cwd(); r.os.chdir(directory)
+        try:
+            with ExitStack() as stack:
+                stack.enter_context(self.seal()); stack.enter_context(self.enabled())
+                stack.enter_context(patch.dict(r.os.environ, GITHUB_ACTIONS='true'))
+                stack.enter_context(patch.object(r, 'modules', return_value=(fixture['d'], fixture['core'], None, None, fixture['online'])))
+                stack.enter_context(patch.object(r, 'validate_preflight', return_value={'baseline': {}}))
+                stack.enter_context(patch.object(r, 'source', return_value=({}, fixture['output'], fixture['record'])))
+                stack.enter_context(patch.object(r, 'verify_context', side_effect=context))
+                value = r.build_proof(fixture['d'], self.p, fixture['transport'], '456', self.repo)
+            return value, len(context_calls)
+        finally:
+            r.os.chdir(previous)
+
+    def file_identity(self, path):
+        row = path.lstat()
+        return (row.st_dev, row.st_ino, row.st_mode, row.st_nlink, row.st_uid,
+            row.st_gid, row.st_size, row.st_mtime_ns, row.st_ctime_ns)
+
+    def test_build_proof_real_private_io_first_create_and_repeat_preserves_original(self):
+        with tempfile.TemporaryDirectory(prefix='online-proof-repeat-', dir=HERE.parents[1] / '.runtime' / 'online-component-continuation-20261014') as td:
+            directory = Path(td); f = self.sealed_private_build_fixture(directory); path = directory / r.PROOF
+            with patch.object(f['core'], 'write_private', wraps=f['core'].write_private) as write:
+                first, contexts = self.call_sealed_private_build(directory, f)
+                raw = path.read_bytes(); identity = self.file_identity(path)
+                self.assertEqual(raw, encoded(first) + b'\n'); self.assertEqual(contexts, 2)
+                second, contexts = self.call_sealed_private_build(directory, f)
+                self.assertEqual(second, first); self.assertEqual(contexts, 2)
+                write.assert_called_once_with(path, first)
+                self.assertEqual(path.read_bytes(), raw); self.assertEqual(self.file_identity(path), identity)
+                self.assertEqual(f['online'].inspect_image.call_count, 8)
+                self.assertEqual(f['d'].run.call_count, 32)
+
+    def test_build_proof_real_private_io_rejects_canonical_bytes_or_current_inputs_changed(self):
+        for changed in ('raw', 'producer', 'quality', 'image_id', 'image_content', 'projection'):
+            with self.subTest(changed=changed), tempfile.TemporaryDirectory(prefix='online-proof-changed-', dir=HERE.parents[1] / '.runtime' / 'online-component-continuation-20261014') as td:
+                directory = Path(td); f = self.sealed_private_build_fixture(directory); path = directory / r.PROOF
+                self.call_sealed_private_build(directory, f)
+                if changed == 'raw': path.write_bytes(path.read_bytes() + b' ')
+                elif changed in ('producer', 'quality'):
+                    value = json.loads(path.read_bytes())
+                    if changed == 'producer': value['producer']['workflowRunId'] = '999'
+                    else: value['qualityRunId'] = '999'
+                    path.write_bytes(encoded(value) + b'\n')
+                elif changed == 'image_id': f['imageId'] = 'sha256:' + 'e' * 64
+                elif changed == 'image_content':
+                    f['content'].update(sha256='e' * 64)
+                else:
+                    f['record']['syntheticProjection'] = 'changed'
+                    (directory / r.PROJECTION).write_bytes(encoded(f['record']) + b'\n')
+                raw = path.read_bytes(); identity = self.file_identity(path)
+                with patch.object(f['core'], 'write_private', wraps=f['core'].write_private) as write, \
+                     self.assertRaises(RuntimeError): self.call_sealed_private_build(directory, f)
+                write.assert_not_called(); self.assertEqual(path.read_bytes(), raw)
+                self.assertEqual(self.file_identity(path), identity)
+
+    def test_build_proof_and_projection_real_private_io_reject_links_and_permissions_before_images(self):
+        for target in (r.PROOF, r.PROJECTION):
+            for changed in ('symlink', 'hardlink', 'permission'):
+                with self.subTest(target=target, changed=changed), tempfile.TemporaryDirectory(prefix='online-proof-private-', dir=HERE.parents[1] / '.runtime' / 'online-component-continuation-20261014') as td:
+                    directory = Path(td); f = self.sealed_private_build_fixture(directory)
+                    self.call_sealed_private_build(directory, f); f['d'].run.reset_mock()
+                    path = directory / target; raw = path.read_bytes()
+                    if changed == 'symlink':
+                        other = path.with_name('synthetic-original.json'); path.rename(other); path.symlink_to(other)
+                    elif changed == 'hardlink': r.os.link(path, path.with_name('synthetic-hardlink.json'))
+                    else: path.chmod(0o644)
+                    with patch.object(f['core'], 'write_private', wraps=f['core'].write_private) as write, \
+                         self.assertRaises(RuntimeError): self.call_sealed_private_build(directory, f)
+                    write.assert_not_called(); f['d'].run.assert_not_called(); self.assertEqual(path.read_bytes(), raw)
+
+    def test_build_proof_real_private_io_refuses_identity_bytes_or_context_drift_during_verification(self):
+        for target, changed in ((r.PROOF, 'replace'), (r.PROOF, 'same_bytes_write'),
+            (r.PROOF, 'bytes'), (r.PROJECTION, 'replace'), (r.PROJECTION, 'same_bytes_write'),
+            (r.PROJECTION, 'bytes'), (r.CONTEXT, 'bytes')):
+            with self.subTest(target=target, changed=changed), tempfile.TemporaryDirectory(prefix='online-proof-drift-', dir=HERE.parents[1] / '.runtime' / 'online-component-continuation-20261014') as td:
+                directory = Path(td); f = self.sealed_private_build_fixture(directory)
+                self.call_sealed_private_build(directory, f)
+                path = directory / target
+                if target == r.CONTEXT: path = path / 'synthetic-public-source.txt'
+                original = path.read_bytes()
+                def mutate(count):
+                    if count != 1: return
+                    if changed == 'replace':
+                        replacement = path.with_name('synthetic-replacement.json')
+                        replacement.write_bytes(original); replacement.chmod(0o600); r.os.replace(replacement, path)
+                    elif changed == 'same_bytes_write': path.write_bytes(original)
+                    else: path.write_bytes(original + b' ')
+                with patch.object(f['core'], 'write_private', wraps=f['core'].write_private) as write, \
+                     self.assertRaises(RuntimeError): self.call_sealed_private_build(directory, f, mutate)
+                write.assert_not_called()
 
     def test_prepare_existing_preflight_private_io_preserves_original_and_refuses_replay(self):
         with tempfile.TemporaryDirectory(prefix='online-prepare-private-', dir=HERE.parents[1] / '.runtime') as td:
@@ -1087,6 +1213,44 @@ def verify_failed_native_original(filename):
         'automaticRetryAllowed': verified['automaticRetryAllowed'], 'runtimeAuthorityGranted': False}))
 
 
+def verify_build_proof_original(directory):
+    """Read-only audit of actual 385245 build inputs; no release acceptance."""
+    directory = Path(directory).resolve()
+    if not directory.is_relative_to(HERE.parents[1].parent.parent):
+        raise RuntimeError('public fixture must stay inside this project')
+    pins = {'preflight': '338d557be74debc56f3614e129fb5d9bd45c011ea9d56e19e0f3101e6a0e428c',
+        'build-projection': 'c7ec356e12bad40160650d3701b8563dbb985dd879df5be958f2202f359bb648',
+        'build-proof': '619c9746d834a2ee2f1f65fb02e3f19eda98e788fb2aa6f0682f27eea6c2d5d9'}
+    core = r.c.load_core(); raw, values, identities = {}, {}, {}
+    identity = RuntimeTests().file_identity
+    for name, expected in pins.items():
+        path = directory / (r.PREFIX + '-' + name + '.json')
+        identities[name] = identity(path); raw[name] = core.private_bytes(path)
+        if r.c.digest(raw[name]) != expected: raise AssertionError('actual build original changed')
+        values[name] = core.closed_json(raw[name])
+    proof, projection, transport = (values[name] for name in ('build-proof', 'build-projection', 'preflight'))
+    p = {'commit': '619b04c240eed836b1db76a9fe330634de1fecbf',
+        'sourceTree': '19ee8ec7ddaaa0e555e5e9f7548cfb6721afe0a0',
+        'workflowRunId': '38524528837', 'workflowRunAttempt': '1'}
+    with patch.object(r.c, 'SEALED_ORDINARY_COMPONENT', r.c.AUTHENTICATED_PREDECESSOR), \
+         patch.object(r.c, 'ADMIN_SUCCESSOR', r.c.AUTHENTICATED_ADMIN_SUCCESSOR), patch.object(r, 'RUNTIME_ADAPTER_READY', True):
+        receipt = r.validate_preflight(core, transport, p, r.current_predecessor())
+        if receipt['sourceProjectionSha256'] != r.c.fingerprint(projection): raise AssertionError('actual source projection changed')
+        for _ in range(2):
+            r.validate_build(proof, p, projection, transport, '38523835751',
+                '079740175286.dkr.ecr.ap-northeast-1.amazonaws.com/id-business-v2-release')
+        if raw['build-proof'] != encoded(proof) + b'\n': raise AssertionError('actual proof canonical bytes changed')
+    for name in pins:
+        path = directory / (r.PREFIX + '-' + name + '.json')
+        if core.private_bytes(path) != raw[name] or identity(path) != identities[name]:
+            raise AssertionError('actual original bytes or identity changed')
+    print(json.dumps({'actualBuildInputs': 'PASS', 'producer': p, 'originalHashes': pins,
+        'proofValidationPasses': 2, 'actualSourceProjectionAndFourImageIdentitiesBound': True,
+        'nativePreflightBound': True, 'originalBytesAndIdentityUnchanged': True,
+        'liveDockerOrSourceTransportCalled': False, 'formalReleaseVerified': False,
+        'actualPushExceptionTypeDirectlyObserved': False, 'runtimeAuthorityGranted': False}))
+
+
 if __name__ == '__main__':
     (HERE.parents[1] / '.runtime').mkdir(exist_ok=True)
     if len(sys.argv) == 3 and sys.argv[1] == '--authenticated-original-dir':
@@ -1095,5 +1259,7 @@ if __name__ == '__main__':
         verify_authenticated_admin(sys.argv[2], sys.argv[3])
     elif len(sys.argv) == 3 and sys.argv[1] == '--failed-native-original':
         verify_failed_native_original(sys.argv[2])
+    elif len(sys.argv) == 3 and sys.argv[1] == '--build-proof-original':
+        verify_build_proof_original(sys.argv[2])
     else:
         unittest.main()

@@ -28,6 +28,8 @@ import {
   canResumeOnlinePrepareFixGuard,
   canResumeOnlinePreflightReceiptFixGuard,
   onlinePreflightReceiptFixGuardCommands,
+  canResumeOnlineBuildProofReuseGuard,
+  onlineBuildProofReuseCommands,
   onlinePrepareFixGuardCommands,
   needsOnlineRechargeCiBuild,
   onlineCiBuildControlPaths,
@@ -64,6 +66,14 @@ const resumeOnlinePrepareFixGuard =
   process.env.GITHUB_EVENT_NAME === 'pull_request' &&
   base === '2edb7ef92a9619e5b0e5855220c97bac29d22f60' &&
   canResumeOnlinePrepareFixGuard(base);
+const resumeOnlineBuildProofReuseGuard =
+  part === 'guards' &&
+  mode === 'ci-only' &&
+  process.env.GITHUB_ACTIONS === 'true' &&
+  process.env.GITHUB_REPOSITORY === 'wangchaozhuanyong/id-business-system' &&
+  process.env.GITHUB_EVENT_NAME === 'pull_request' &&
+  base === '5f458e7ac7cd0dfab0f99d2a6d07c20baa8b6e53' &&
+  canResumeOnlineBuildProofReuseGuard(base);
 const resumeOnlinePreflightReceiptFixGuard =
   part === 'guards' &&
   mode === 'ci-only' &&
@@ -400,6 +410,18 @@ if (part === 'guards') {
     'scripts/ci-recharge-release.test.mjs',
     'scripts/admin-layout-rules.test.mjs'
   ]);
+}
+if (resumeOnlineBuildProofReuseGuard) {
+  run('python3', ['-B', 'scripts/production-release/online-recharge-ci-build.test.py']);
+  run('python3', [
+    '-B',
+    'scripts/production-release/online-recharge-ci-build.py',
+    '--ci-real-build-not-for-release',
+    '--admitted-source-tree',
+    execFileSync('git', ['rev-parse', 'HEAD^{tree}'], { encoding: 'utf8' }).trim()
+  ]);
+  for (const [file, ...args] of onlineBuildProofReuseCommands) run(file, args);
+  process.exit(0);
 }
 if (resumeOnlinePrepareFixGuard) {
   for (const [file, ...args] of onlinePrepareFixGuardCommands) run(file, args);

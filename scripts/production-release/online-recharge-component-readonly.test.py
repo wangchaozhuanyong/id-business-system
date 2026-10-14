@@ -676,8 +676,64 @@ class ComponentClientTests(unittest.TestCase):
     def test_failures_keep_only_a_controlled_code(self):
         value = client.safe_failure(ValueError('private account fixture'))
         self.assertEqual(value, {'status': 'ONLINE_RECHARGE_COMPONENT_FAILED',
-                                'code': 'ONLINE_RECHARGE_COMPONENT_REMOTE_EVIDENCE_UNAVAILABLE'})
+                                'code': 'ONLINE_RECHARGE_COMPONENT_VALUE_ERROR'})
         self.assertNotIn('private', json.dumps(value))
+
+    def test_safe_failure_keeps_old_controlled_cap_and_unknown_contract_without_formatting(self):
+        unknown = 'ONLINE_RECHARGE_COMPONENT_REMOTE_EVIDENCE_UNAVAILABLE'
+        for error in (None, Exception('private secret'), RuntimeError('private secret'),
+            RuntimeError('OTHER_PRIVATE'), RuntimeError('ONLINE_RECHARGE_COMPONENT_' + 'A' * 97),
+            RuntimeError('ONLINE_RECHARGE_COMPONENT_OK', 'private secret')):
+            self.assertEqual(client.safe_failure(error), {'status': 'ONLINE_RECHARGE_COMPONENT_FAILED', 'code': unknown})
+        for prefix in ('ONLINE_RECHARGE_COMPONENT', 'ONLINE_RECHARGE', 'API_ADMIN', 'UNPUBLISHED_COMPONENT'):
+            for code in (prefix + '_OK', prefix + '_' + 'A' * 96):
+                self.assertEqual(client.safe_failure(RuntimeError(code))['code'], code)
+                native = client.NativeFailure({'receipt': {'code': code}})
+                self.assertEqual(client.safe_failure(native)['code'], code)
+            self.assertEqual(client.safe_failure(RuntimeError(prefix + '_' + 'A' * 97))['code'], unknown)
+        self.assertEqual(client.safe_failure(RuntimeError('ONLINE_RECHARGE_COMPONENT_PROTECTED_OPERATION_FAILED'))['code'],
+                         'ONLINE_RECHARGE_COMPONENT_PROTECTED_OPERATION_FAILED')
+        class Dangerous(RuntimeError):
+            def __str__(self): raise AssertionError('custom formatting forbidden')
+            def __getattribute__(self, name):
+                if name in ('args', 'errno', '__class__'): raise AssertionError('custom properties forbidden')
+                return super().__getattribute__(name)
+        class DangerousPermission(PermissionError):
+            def __str__(self): raise AssertionError('custom formatting forbidden')
+            def __getattribute__(self, name):
+                if name in ('args', 'errno', '__class__'): raise AssertionError('custom properties forbidden')
+                return super().__getattribute__(name)
+        class DangerousArgument:
+            def __str__(self): raise AssertionError('argument formatting forbidden')
+            def __eq__(self, other): raise AssertionError('argument comparison forbidden')
+        for error in (Dangerous('ONLINE_RECHARGE_COMPONENT_PRIVATE'), DangerousPermission(13, 'private secret'),
+                      RuntimeError(DangerousArgument())):
+            self.assertEqual(client.safe_failure(error)['code'], unknown)
+            self.assertEqual(client.exception_details(error)['errno'], None)
+        for error in (Dangerous('private secret'), DangerousPermission(13, 'private secret')):
+            self.assertEqual(client.exception_details(error), {'exceptionClass': 'UnexpectedError', 'errno': None})
+
+    def test_safe_failure_classifies_builtin_errors_without_private_details(self):
+        secret = 'synthetic-password-token-cookie-command-url'
+        cases = ((FileExistsError(secret), 'FILE_EXISTS'), (PermissionError(secret), 'PERMISSION_DENIED'), (TypeError(secret), 'TYPE_ERROR'),
+            (KeyError(secret), 'KEY_ERROR'), (TimeoutError(secret), 'TIMEOUT'),
+            (json.JSONDecodeError(secret, secret, 0), 'JSON_INVALID'),
+            (client.r.urllib.error.HTTPError(secret, 403, secret, {}, None), 'HTTP_ERROR'),
+            (client.r.urllib.error.URLError(secret), 'URL_ERROR'),
+            (client.r.subprocess.TimeoutExpired([secret], 1, output=secret, stderr=secret), 'COMMAND_TIMEOUT'),
+            (client.r.subprocess.CalledProcessError(1, [secret], output=secret, stderr=secret), 'COMMAND_FAILED'))
+        for error, category in cases:
+            with self.subTest(category=category):
+                value = client.safe_failure(error)
+                self.assertEqual(value, {'status': 'ONLINE_RECHARGE_COMPONENT_FAILED',
+                    'code': 'ONLINE_RECHARGE_COMPONENT_' + category})
+                self.assertNotIn(secret, json.dumps(value))
+        self.assertEqual(client.exception_details(json.JSONDecodeError(secret, secret, 0)),
+                         {'exceptionClass': 'ValueError', 'errno': None})
+        self.assertEqual(client.exception_details(FileExistsError(17, secret)),
+                         {'exceptionClass': 'FileExistsError', 'errno': 17})
+        self.assertEqual(client.exception_details(OSError(13, secret)),
+                         {'exceptionClass': 'PermissionError', 'errno': 13})
 
     def test_cross_module_controlled_errors_retain_original_code(self):
         for prefix in ('ONLINE_RECHARGE_COMPONENT', 'ONLINE_RECHARGE', 'API_ADMIN', 'UNPUBLISHED_COMPONENT'):

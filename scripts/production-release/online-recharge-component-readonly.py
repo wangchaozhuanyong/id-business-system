@@ -44,10 +44,23 @@ DIAGNOSTIC_PHASES = ('selection', 'output', 'diagnostic', 'read-preflight', 'rea
 
 def exception_details(error):
     # Never include arbitrary exception text, filenames, commands or stderr.
+    error_type = type(error)
     classes = (FileExistsError, FileNotFoundError, PermissionError, TimeoutError,
         subprocess.TimeoutExpired, UnicodeError, ValueError, KeyError, TypeError, OSError, RuntimeError)
-    name = next((kind.__name__ for kind in classes if isinstance(error, kind)), 'UnexpectedError')
-    number = getattr(error, 'errno', None)
+    name = next((kind.__name__ for kind in classes if error_type is kind), 'UnexpectedError')
+    os_classes = (OSError, BlockingIOError, ChildProcessError, ConnectionError, BrokenPipeError,
+        ConnectionAbortedError, ConnectionRefusedError, ConnectionResetError, FileExistsError,
+        FileNotFoundError, InterruptedError, IsADirectoryError, NotADirectoryError, PermissionError,
+        ProcessLookupError, TimeoutError)
+    if error_type is json.JSONDecodeError:
+        name = 'ValueError'
+    elif any(error_type is kind for kind in (UnicodeDecodeError, UnicodeEncodeError, UnicodeTranslateError)):
+        name = 'UnicodeError'
+    elif error_type is NativeFailure:
+        name = 'RuntimeError'
+    elif name == 'UnexpectedError' and any(error_type is kind for kind in os_classes):
+        name = 'OSError'
+    number = error.errno if any(error_type is kind for kind in os_classes) else None
     return {'exceptionClass': name, 'errno': number if type(number) is int and 0 <= number <= 4095 else None}
 
 
@@ -375,7 +388,16 @@ def parameters(mode, core, p, *, input_artifacts=None, origin_raw=None, current_
 
 
 def safe_failure(error):
-    code = str(error)
+    error_type = type(error)
+    code = 'ONLINE_RECHARGE_COMPONENT_REMOTE_EVIDENCE_UNAVAILABLE'
+    if error_type is RuntimeError or error_type is NativeFailure:
+        arguments = error.args
+        if len(arguments) == 1 and type(arguments[0]) is str:
+            code = arguments[0]
+    else:
+        category = r.rejection_code(error)
+        if category != 'ONLINE_RECHARGE_COMPONENT_PROTECTED_OPERATION_FAILED':
+            code = category
     if CONTROLLED_CODE.fullmatch(code) is None:
         code = 'ONLINE_RECHARGE_COMPONENT_REMOTE_EVIDENCE_UNAVAILABLE'
     return {'status': 'ONLINE_RECHARGE_COMPONENT_FAILED', 'code': code}
