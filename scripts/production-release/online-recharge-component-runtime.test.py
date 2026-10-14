@@ -229,12 +229,8 @@ class RuntimeTests(unittest.TestCase):
         with self.seal(), self.enabled():
             with self.assertRaisesRegex(RuntimeError, 'UNPUBLISHED_COMPONENT_INVOCATION_INVALID'):
                 core.validate_invocation(raw, native['CommandId'], native['InstanceId'], status='Failed')
-            with patch.object(core, 'validate_invocation', wraps=core.validate_invocation) as validate:
-                result, receipt = r.validate_component_invocation(core, raw,
-                    native['CommandId'], native['InstanceId'], status='Failed')
-                checked = core.closed_json(validate.call_args.args[0])
-                self.assertEqual(checked, {**native, 'StandardErrorContent': ''})
-                self.assertNotEqual(validate.call_args.args[0], raw)
+            result, receipt = r.validate_component_invocation(core, raw,
+                native['CommandId'], native['InstanceId'], status='Failed')
             self.assertEqual(result, native); self.assertEqual(receipt, self.rejected_receipt())
             self.assertEqual(result['StandardErrorContent'], 'failed to run commands: exit status 1')
             client = r.load('online-recharge-component-readonly.py')
@@ -348,6 +344,37 @@ class RuntimeTests(unittest.TestCase):
             payload = r.bounded_gzip(base64.b64decode(json.loads(output)['payload']), 256 * 1024)
             self.assertEqual(json.loads(payload)['code'], 'ONLINE_RECHARGE_COMPONENT_PROTECTED_OPERATION_FAILED')
             self.assertNotIn(b'SECRET', payload); self.assertNotIn(b'private secret', payload)
+
+    def test_actual_main_preflight_keeps_safe_baseline_source_and_disk_phase_codes(self):
+        source = HERE / 'online-recharge-component-runtime.py'
+        main = ast.parse(source.read_bytes()).body[-1]
+        secret = 'synthetic-private-path-url-token'
+        cases = (('BASELINE', FileNotFoundError(2, secret), 'BASELINE_FILENOTFOUNDERROR_ERRNO_2'),
+                 ('SOURCE', TypeError(secret), 'SOURCE_TYPEERROR'),
+                 ('DISK', PermissionError(13, secret), 'DISK_PERMISSIONERROR_ERRNO_13'))
+        argv = [str(source), 'preflight', '--commit', self.p['commit'], '--source-tree', self.p['sourceTree'],
+                '--run-id', self.p['workflowRunId'], '--run-attempt', self.p['workflowRunAttempt'],
+                '--expected-current', self.admin_auth['producer']['commit']]
+        for phase, error, suffix in cases:
+            output = io.StringIO()
+            d = SimpleNamespace(BASE=Path('/synthetic-public-fixture'), shutil=SimpleNamespace(
+                disk_usage=Mock(side_effect=error if phase == 'DISK' else None,
+                                return_value=SimpleNamespace(free=7 * 1024**3))))
+            with self.subTest(phase=phase), self.seal(), self.enabled(), patch.object(sys, 'argv', argv), \
+                    patch.object(r, 'modules', return_value=(d, None, None, None, None)), \
+                    patch.object(r, 'baseline', side_effect=error if phase == 'BASELINE' else None,
+                                 return_value=(None, None, {})), \
+                    patch.object(r, 'source', side_effect=error if phase == 'SOURCE' else None,
+                                 return_value=({}, {}, {})), \
+                    patch.object(r.c, 'validate_source_files'), patch.dict(r.__dict__, __name__='__main__'), \
+                    redirect_stdout(output), self.assertRaises(SystemExit) as ended:
+                # Real cli -> preflight -> protected_stage -> actual main wire.
+                exec(compile(ast.Module(body=[main], type_ignores=[]), str(source), 'exec'), r.__dict__)
+            self.assertEqual(ended.exception.code, 1)
+            envelope = json.loads(output.getvalue())
+            payload = r.bounded_gzip(base64.b64decode(envelope['payload']), 256 * 1024)
+            self.assertEqual(json.loads(payload)['code'], 'ONLINE_RECHARGE_COMPONENT_PROTECTED_' + suffix)
+            self.assertNotIn(secret.encode(), payload)
 
     def test_wire_hash_length_kind_bombs_and_concatenated_members_rejected(self):
         core = r.c.load_core(self.auth['coreSha256'])

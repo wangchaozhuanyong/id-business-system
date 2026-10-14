@@ -5,6 +5,85 @@ import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import test from 'node:test';
 
+test('ONLINE CI build has finite inputs and read-only diagnostics remain control-only', () => {
+  for (const path of onlineCiBuildControlPaths) {
+    assert.equal(isCiOnly([path]), true, path);
+    assert.deepEqual(selectedParts([path]), ['guards']);
+  }
+  for (const path of [
+    'scripts/production-release/online-recharge-ci-build.py',
+    'scripts/production-release/online-recharge-component-runtime.py',
+    'scripts/production-release/online-recharge-component-readonly.py',
+    'scripts/production-release/build-images.sh',
+    '.github/workflows/quality.yml',
+    'apps/api/Dockerfile.mysql',
+    'apps/admin/Dockerfile',
+    'apps/api/package.json',
+    'apps/admin/package.json',
+    'packages/shared/package.json',
+    'scripts/audit-python-dependencies.py',
+    'apps/api/src/id-business-v2/online-recharge/engine/.dockerignore',
+    'apps/api/src/id-business-v2/online-recharge/engine/requirements-hcaptcha.lock.txt',
+    'apps/api/src/id-business-v2/online-recharge/engine/upstream/package-lock.json',
+    'apps/api/src/id-business-v2/online-recharge/engine/upstream/payment.js',
+    'apps/api/src/id-business-v2/online-recharge/engine/Dockerfile',
+    'apps/admin/src/v2/features/online-recharge/OnlineRechargePage.vue'
+  ])
+    assert.equal(needsOnlineRechargeCiBuild([path]), true, path);
+  for (const path of [
+    '.github/workflows/online-recharge-diagnostic.yml',
+    'scripts/production-release/online-recharge-component-diagnostic.py',
+    'docs/ONLINE_RECHARGE.md',
+    'apps/admin/src/v2/features/customers/CustomerPage.vue'
+  ])
+    assert.equal(needsOnlineRechargeCiBuild([path]), false, path);
+  assert.equal(needsOnlineRechargeCiBuild([]), false);
+  for (const path of [
+    'scripts/production-release/online-recharge-ci-build-write.py',
+    'scripts/production-release/online-recharge-ci-build.py.backup',
+    '.github/workflows/online-recharge-diagnostic-write.yml'
+  ])
+    assert.equal(isCiOnly([path]), false, path);
+});
+
+test('archive-only controls never select ONLINE images while mixed ONLINE changes retain the build gate', () => {
+  const archive = [
+    ...releaseArtifactRetentionControls,
+    'scripts/ci-recharge-scope.mjs',
+    'scripts/ci-recharge-check.mjs',
+    'docs/DISK_STORAGE_POLICY.md'
+  ];
+  assert.equal(isReleaseArtifactRetentionOnly(archive), true);
+  assert.equal(needsOnlineRechargeCiBuild(archive), false);
+  for (const online of [
+    'scripts/production-release/online-recharge-component-runtime.py',
+    'scripts/production-release/online-recharge-ci-build.py',
+    'apps/api/src/id-business-v2/online-recharge/engine/worker.cjs'
+  ]) {
+    assert.equal(isReleaseArtifactRetentionOnly([...archive, online]), false);
+    assert.equal(needsOnlineRechargeCiBuild([...archive, online]), true);
+  }
+});
+
+test('typed receipt repair mixed with ONLINE and archive controls retains every affected guard and image check', () => {
+  const paths = [
+    ...onlinePreflightReceiptFixGuardPaths,
+    ...onlineCiBuildControlPaths,
+    ...releaseArtifactRetentionControls
+  ];
+  assert.equal(checkMode(paths, '', ''), 'ci-only');
+  // The main classifier uses only guards for ci-only; the raw dependency
+  // selector also includes consumers of a changed dispatcher.
+  assert.ok(selectedParts(paths).includes('guards'));
+  assert.equal(isReleaseArtifactRetentionOnly(paths), false);
+  assert.equal(needsOnlineRechargeCiBuild(paths), true);
+  for (const path of [
+    'scripts/production-release/online-recharge-component-runtime.py',
+    'scripts/production-release/online-recharge-component-runtime.test.py'
+  ])
+    assert.ok(paths.includes(path));
+});
+
 test('ordinary ONLINE component controls remain finite and do not select a database part', () => {
   const paths = [
     'scripts/production-release/online-recharge-component-consumer.py',
@@ -57,6 +136,8 @@ import {
   isMailboxOnly,
   isTargetedOnly,
   selectedParts,
+  onlineCiBuildControlPaths,
+  needsOnlineRechargeCiBuild,
   checkMode,
   adminCheckCommands,
   adminUiGuardChecks,
@@ -1044,7 +1125,7 @@ test('finite prepare-fix authenticates one raw hash per job and never accepts hi
   assert.equal(reader.includes("['run', 'view'"), false);
 });
 
-test('finite prepare-fix guard restores the entire prior dispatcher scope and runtime outside prepare byte-for-byte', () => {
+test('historical finite prepare-fix guard restores its frozen source bytes and rejects subsequent hardening', () => {
   const b = onlinePrepareFixGuardBinding;
   for (const [path, verify] of [
     ['scripts/ci-recharge-scope.mjs', onlinePrepareFixScopeBytesUnchanged],
@@ -1077,8 +1158,12 @@ test('finite prepare-fix guard restores the entire prior dispatcher scope and ru
   assert.equal(canResumeOnlinePrepareFixGuard('0'.repeat(40)), false);
 });
 
-test('combined Quality workflow permits only the guards token insertion against both frozen jobs', () => {
-  const current = readFileSync('.github/workflows/quality.yml', 'utf8');
+test('historical combined Quality workflow permits only its frozen guards token insertion and rejects new build steps', () => {
+  const current = execFileSync(
+    'git',
+    ['show', 'a9829b443fe5c0cf6f4803366d06c5f8e3357318:.github/workflows/quality.yml'],
+    { encoding: 'utf8' }
+  );
   for (const commit of [
     combinedMigrationBinding.head,
     '5930f71e00d178a867526766e16e9aee14077244'
@@ -1087,6 +1172,13 @@ test('combined Quality workflow permits only the guards token insertion against 
       encoding: 'utf8'
     });
     assert.equal(combinedQualityWorkflowBytesUnchanged(before, current), true);
+    assert.equal(
+      combinedQualityWorkflowBytesUnchanged(
+        before,
+        readFileSync('.github/workflows/quality.yml', 'utf8')
+      ),
+      false
+    );
     for (const changed of [
       before,
       current.replace("matrix.part == 'guards' && github.token || ''", 'github.token'),
@@ -4169,7 +4261,7 @@ test('finite failure-receipt diagnostics retain native privacy and fail closed o
   assert.equal(canResumeOnlinePreflightReceiptFixGuard('0'.repeat(40)), false);
 });
 
-test('finite failure-receipt source normalization preserves both prior lanes and every other runtime byte', () => {
+test('historical failure-receipt normalization authenticates frozen typed repair and rejects subsequent hardening', () => {
   const b = onlinePreflightReceiptFixGuardBinding;
   for (const [path, verify] of [
     ['scripts/ci-recharge-scope.mjs', onlinePreflightReceiptFixScopeBytesUnchanged],
@@ -4182,8 +4274,14 @@ test('finite failure-receipt source normalization preserves both prior lanes and
     const before = execFileSync('git', ['show', b.integrationBase + ':' + path], {
       encoding: 'utf8'
     });
-    const after = readFileSync(path, 'utf8');
+    const after = execFileSync(
+      'git',
+      ['show', '619b04c240eed836b1db76a9fe330634de1fecbf:' + path],
+      { encoding: 'utf8' }
+    );
     assert.equal(verify(before, after), true, path);
+    const current = readFileSync(path, 'utf8');
+    if (current !== after) assert.equal(verify(before, current), false, path);
     for (const altered of [
       ' ' + after,
       after + '\n',
@@ -4198,9 +4296,13 @@ test('finite failure-receipt source normalization preserves both prior lanes and
       if (altered !== after) assert.equal(verify(before, altered), false, path);
     assert.equal(verify(before, before), false);
   }
-  const runtime = readFileSync(
-    'scripts/production-release/online-recharge-component-runtime.py',
-    'utf8'
+  const runtime = execFileSync(
+    'git',
+    [
+      'show',
+      '619b04c240eed836b1db76a9fe330634de1fecbf:scripts/production-release/online-recharge-component-runtime.py'
+    ],
+    { encoding: 'utf8' }
   );
   const before = execFileSync(
     'git',

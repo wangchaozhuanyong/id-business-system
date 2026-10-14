@@ -1,0 +1,65 @@
+name: Online Recharge Failure Diagnostic
+
+on:
+  workflow_dispatch:
+    inputs:
+      evidence_run_id:
+        description: Completed Production Release run containing the accepted command
+        required: true
+        type: string
+      evidence_run_attempt:
+        description: Original run attempt to inspect
+        required: true
+        default: '1'
+        type: string
+
+permissions:
+  actions: read
+  contents: read
+  id-token: write
+
+concurrency:
+  group: id-business-v2-production-release
+  cancel-in-progress: false
+
+jobs:
+  diagnostic:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      AWS_REGION: ap-northeast-1
+      PRODUCTION_INSTANCE_ID: i-05836da38606e633c
+      GH_TOKEN: ${{ github.token }}
+      EVIDENCE_RUN_ID: ${{ inputs.evidence_run_id }}
+      EVIDENCE_RUN_ATTEMPT: ${{ inputs.evidence_run_attempt }}
+    steps:
+      - name: Checkout diagnostic source
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          fetch-depth: 0
+
+      - name: Assume existing release role for original result lookup
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          role-to-assume: arn:aws:iam::079740175286:role/id-business-v2-github-release
+          role-session-name: id-business-v2-diagnostic-${{ github.run_id }}
+          aws-region: ap-northeast-1
+
+      - name: Authenticate the original run and inspect its accepted command
+        run: |
+          set -Eeuo pipefail
+          [[ "$EVIDENCE_RUN_ID" =~ ^[1-9][0-9]*$ ]]
+          [[ "$EVIDENCE_RUN_ATTEMPT" =~ ^[1-9][0-9]*$ ]]
+          python3 -B scripts/production-release/online-recharge-component-diagnostic.py \
+            --evidence-run-id "$EVIDENCE_RUN_ID" --evidence-run-attempt "$EVIDENCE_RUN_ATTEMPT"
+
+      - name: Preserve only the safe diagnostic summary
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: online-recharge-failure-diagnostic-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .deploy/production-release/online-recharge-component-evidence-diagnostic.json
+          include-hidden-files: true
+          if-no-files-found: warn
+          retention-days: 14

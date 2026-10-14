@@ -23,6 +23,93 @@ import {
 } from './ci-recharge-scope.mjs';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
+
+test('new ONLINE controls retain pure diagnostics lifecycle and CI build tests without invoking Docker', () => {
+  for (const part of ['guards', 'release-controls']) {
+    for (const path of [
+      'scripts/production-release/online-recharge-ci-build.py',
+      'scripts/production-release/online-recharge-component-runtime.py',
+      '.github/workflows/online-recharge-diagnostic.yml'
+    ]) {
+      const calls = recordGuardCommands('ci-only', [path], part);
+      for (const suite of [
+        'online-recharge-ci-build.test.py',
+        'online-recharge-component-diagnostic.test.py',
+        'online-recharge-component-lifecycle.test.py'
+      ])
+        assert.equal(
+          calls.filter((row) => row.join(' ') === `python3 -B scripts/production-release/${suite}`)
+            .length,
+          1,
+          `${part}: ${path}: ${suite}`
+        );
+      assert.equal(
+        calls.filter(
+          (row) =>
+            row.join(' ') ===
+            'node --test scripts/production-release/online-recharge-component-diagnostic-entry.test.mjs'
+        ).length,
+        1
+      );
+      assert.ok(
+        calls.every(
+          (row) =>
+            !row.includes('docker') &&
+            !row.includes('scripts/production-release/online-recharge-ci-build.py')
+        )
+      );
+    }
+  }
+});
+
+test('full Quality runs new ONLINE pure suites in its later guards without duplicating its release-controls prefix', () => {
+  const paths = ['scripts/ci-recharge-check.mjs'];
+  const prefix = recordGuardCommands('full', paths, 'release-controls');
+  const guards = recordGuardCommands('ci-only', paths, 'guards');
+  for (const suite of [
+    'online-recharge-ci-build.test.py',
+    'online-recharge-component-diagnostic.test.py',
+    'online-recharge-component-lifecycle.test.py'
+  ]) {
+    assert.equal(
+      prefix.filter((row) => row.includes('scripts/production-release/' + suite)).length,
+      0
+    );
+    assert.equal(
+      guards.filter((row) => row.includes('scripts/production-release/' + suite)).length,
+      1
+    );
+  }
+});
+
+test('mixed typed receipt ONLINE and archive changes execute each controller and fresh control suite once', () => {
+  const paths = [
+    ...onlinePreflightReceiptFixGuardPaths,
+    'scripts/production-release/online-recharge-ci-build.py',
+    'scripts/production-release/online-recharge-component-diagnostic.py',
+    'scripts/production-release/online-recharge-component-lifecycle.test.py',
+    'scripts/production-release/release-artifact-retention.py',
+    'scripts/production-release/release-artifact-retention-transport.py'
+  ];
+  for (const part of ['guards', 'release-controls']) {
+    const calls = recordGuardCommands('ci-only', paths, part);
+    for (const suite of [
+      'online-recharge-component-runtime.test.py',
+      'online-recharge-component-readonly.test.py',
+      'online-recharge-ci-build.test.py',
+      'online-recharge-component-diagnostic.test.py',
+      'online-recharge-component-lifecycle.test.py',
+      'release-artifact-retention.test.py',
+      'release-artifact-retention-transport.test.py'
+    ])
+      assert.equal(
+        calls.filter((call) => call.includes('scripts/production-release/' + suite)).length,
+        1,
+        `${part}: ${suite}`
+      );
+    assert.ok(calls.every((call) => !call.includes('docker') && !call.includes('process-exit')));
+  }
+});
 const gates = [
   'check:v2-module-architecture',
   'check:v2-prisma-runtime-boundary',
@@ -1472,7 +1559,9 @@ test('artifact-only controls keep the shared prefix and verify actual dependenci
     const paths = [
       'scripts/production-release/release-artifact-retention.py',
       'scripts/production-release/release-artifact-retention-transport.py',
-      '.github/workflows/release-artifact-retention.yml'
+      '.github/workflows/release-artifact-retention.yml',
+      'scripts/ci-recharge-check.mjs',
+      'scripts/ci-recharge-scope.mjs'
     ];
     const calls = recordGuardCommands('ci-only', paths, part);
     for (const file of [
@@ -1495,7 +1584,12 @@ test('artifact-only controls keep the shared prefix and verify actual dependenci
       !calls.some(
         (call) =>
           call.includes('scripts/production-release/remote-deploy.test.py') ||
-          call.includes('scripts/production-release/api-admin-scope.test.py')
+          call.includes('scripts/production-release/api-admin-scope.test.py') ||
+          call.includes('scripts/production-release/online-recharge-ci-build.test.py') ||
+          call.includes(
+            'scripts/production-release/online-recharge-component-diagnostic.test.py'
+          ) ||
+          call.includes('scripts/production-release/online-recharge-component-lifecycle.test.py')
       )
     );
     assert.ok(
@@ -1523,5 +1617,21 @@ test('artifact-only controls keep the shared prefix and verify actual dependenci
       assert.ok(
         mixed.some((call) => call.includes('scripts/production-release/remote-deploy.test.py'))
       );
+    const onlineMixed = recordGuardCommands(
+      'ci-only',
+      [...paths, 'scripts/production-release/online-recharge-component-runtime.py'],
+      part
+    );
+    for (const suite of [
+      'release-artifact-retention.test.py',
+      'online-recharge-ci-build.test.py',
+      'online-recharge-component-diagnostic.test.py',
+      'online-recharge-component-lifecycle.test.py'
+    ])
+      assert.equal(
+        onlineMixed.filter((call) => call.includes('scripts/production-release/' + suite)).length,
+        1
+      );
+    assert.ok(onlineMixed.every((call) => !call.includes('docker')));
   }
 });
