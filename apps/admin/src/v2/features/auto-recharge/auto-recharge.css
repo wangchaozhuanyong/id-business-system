@@ -80,6 +80,7 @@
   grid-column: auto;
 }
 .recharge-billing-grid :deep(.recharge-card-number),
+.recharge-billing-grid :deep(.recharge-card-expiry),
 .recharge-billing-grid :deep(.recharge-address-country),
 .recharge-billing-grid :deep(.recharge-street-address),
 .recharge-billing-grid :deep(.recharge-address-select) {

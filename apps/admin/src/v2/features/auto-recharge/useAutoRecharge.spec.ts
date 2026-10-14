@@ -532,7 +532,7 @@ describe('比特浏览器充值入口', () => {
     flow.details.value.name = '';
     expect(flow.canStart.value).toBe(false);
     expect(flow.workflowMessage.value).toContain('银行卡号校验未通过');
-    expect(flow.workflowMessage.value).toContain('请填写持卡人姓名');
+    expect(flow.workflowMessage.value).toContain('请填写账单姓名');
     expect(flow.workflowMessage.value).not.toContain('账单地址');
     expect(flow.workflowMessage.value).not.toContain(flow.details.value.number);
     expect(flow.workflowMessage.value).not.toContain(flow.details.value.cvc);

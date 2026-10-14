@@ -759,14 +759,14 @@ export function useAutoRecharge(options: { clearPaymentValidation?: () => void }
       return '核对窗口名称后，点击即可打开比特浏览器并自动登录。';
     const fieldErrors = rechargeFields.flatMap((field) => {
       const cardField = rechargePaymentFields.includes(field);
-      const addressField = !cardField && field.key !== 'email';
+      const addressField = !cardField && field.key !== 'name' && field.key !== 'email';
       if (addressField && !selectedAddress.value) return [];
       const message = rechargeFieldError(field.key, details.value[field.key]);
       return message ? [addressField ? `账单地址：${message}` : message] : [];
     });
     if (!selectedAddress.value) fieldErrors.push('请选择可用的账单地址');
     if (fieldErrors.length) return `请修正以下资料：${fieldErrors.join('；')}。`;
-    if (nameMatch.error.value) return '银行卡姓名匹配失败，请在持卡人姓名处重试。';
+    if (nameMatch.error.value) return '账单姓名匹配失败，请在账单姓名处重试。';
     if (!authorizeSinglePayment.value)
       return '银行卡与账单地址已通过校验，请勾选本次单次付款授权。';
     if (!windowName.value.trim()) return '银行卡与账单地址已通过校验，请填写窗口名称。';

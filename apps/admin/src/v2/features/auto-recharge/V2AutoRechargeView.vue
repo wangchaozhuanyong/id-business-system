@@ -178,13 +178,14 @@
                 />
                 <V2RechargePaymentFields
                   v-model="details"
-                  :name-match="nameMatch"
                   :validate-event="!resettingPaymentFields"
                 />
                 <V2RechargeBillingAddressFields
                   v-model="details"
                   v-model:source="addressSource"
                   v-model:address-id="selectedAddressId"
+                  :name-match="nameMatch"
+                  :validate-event="!resettingPaymentFields"
                   :operation-mode="operationMode"
                   :addresses="availableAddresses"
                   :selected-address="selectedAddress"

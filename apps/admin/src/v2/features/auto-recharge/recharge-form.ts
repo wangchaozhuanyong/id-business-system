@@ -10,7 +10,7 @@ export const rechargeFields: {
   placeholder?: string;
 }[] = [
   { key: 'number', label: '银行卡号', required: true, secret: true, max: 23 },
-  { key: 'name', label: '持卡人姓名', required: true, max: 120 },
+  { key: 'name', label: '账单姓名', required: true, max: 120 },
   { key: 'expiry', label: '有效期', required: true, max: 5, placeholder: 'MM/YY' },
   { key: 'cvc', label: '安全码', required: true, secret: true, max: 4 },
   { key: 'email', label: '账单邮箱', required: true, max: 250 },
@@ -23,7 +23,7 @@ export const rechargeFields: {
 ];
 
 export const rechargePaymentFields = rechargeFields.filter((field) =>
-  ['number', 'name', 'expiry', 'cvc'].includes(field.key)
+  ['number', 'expiry', 'cvc'].includes(field.key)
 );
 
 export function formatRechargeExpiry(value: string): string {

@@ -29,6 +29,112 @@ const job = (overrides: Partial<V2RechargeJob> = {}): V2RechargeJob => ({
   ...overrides
 });
 describe('recharge stage presentation', () => {
+  it('付款确认及原单真人验证阶段显示明确中文', () => {
+    expect(executionStageLabel(job({ result: { stage: 'payment_confirmation' } }))).toBe(
+      '等待确认本次报价并付款'
+    );
+    expect(executionStageLabel(job({ result: { stage: 'payment_human_verification' } }))).toBe(
+      '等待完成官网真人验证'
+    );
+    expect(failureReasonLabel('checkout_tier_not_verified')).toBe('官网结算的 Pro 档位无法确认');
+    expect(
+      executionStageLabel(
+        job({ result: { stage: 'payment_confirmation', reason: 'payment_confirmation_expired' } })
+      )
+    ).toBe('付款确认已过期');
+  });
+  it('本机已提交原单的真人验证只引导验证和只读复查', () => {
+    const feedback = rechargeIssueFeedback(
+      job({
+        action: 'bitbrowser',
+        result: {
+          status: 'verification_required',
+          reason: 'payment_hcaptcha_required',
+          payment_status: 'unknown',
+          three_ds_status: 'not_required',
+          user_action_required: true,
+          payment_attempted: true,
+          payment_requests_sent: 1
+        }
+      })
+    )!;
+    expect(feedback.title).toBe('需要你处理');
+    expect(feedback.action).toContain('原官网窗口完成真人验证');
+    expect(feedback.action).toContain('只读复查原订单');
+    expect(feedback.action).not.toContain('返回网站继续');
+    expect(feedback.action).not.toContain('处理历史付款锁');
+    const running = rechargeIssueFeedback(
+      job({
+        state: 'running',
+        action: 'bitbrowser',
+        result: {
+          status: 'verification_required',
+          reason: 'payment_hcaptcha_required',
+          payment_status: 'unknown',
+          three_ds_status: 'not_required',
+          payment_attempted: true,
+          user_action_required: true
+        }
+      })
+    )!;
+    expect(running.action).toContain('系统将继续核验原订单');
+    expect(running.action).not.toContain('只读复查');
+  });
+  it('没有验证类型诊断的原单使用官网或银行提示', () => {
+    const feedback = rechargeIssueFeedback(
+      job({
+        action: 'bitbrowser',
+        result: {
+          status: 'verification_required',
+          payment_status: 'requires_action',
+          three_ds_status: 'not_required',
+          payment_attempted: true
+        }
+      })
+    )!;
+    expect(feedback.message).toBe('官网或银行验证尚未完成');
+    expect(feedback.action).toContain('官网或银行验证');
+    expect(feedback.action).toContain('只读复查原订单');
+  });
+  it('官网支付方式验证失败显示页面事实且保留原单核验', () => {
+    const failure = job({
+      action: 'bitbrowser',
+      result: {
+        status: 'payment_result_unknown',
+        reason: 'official_payment_method_verification_failed',
+        payment_status: 'unknown',
+        payment_attempted: true,
+        payment_requests_sent: 1
+      }
+    });
+    const before = structuredClone(failure.result);
+    const feedback = rechargeIssueFeedback(failure)!;
+    expect(feedback.message).toContain('官网未能验证本次支付方式');
+    expect(feedback.message).toContain('付款结果仍待核验');
+    expect(feedback.action).toContain('只读复查原订单');
+    expect(JSON.stringify(feedback)).not.toMatch(/银行拒付|尚未扣款|银行卡没有收到请求/);
+    expect(failure.result).toEqual(before);
+    expect(
+      rechargeIssueFeedback(
+        job({
+          ...failure,
+          result: { ...failure.result, payment_failure_reason: 'payment_response_not_verified' }
+        })
+      )?.message
+    ).toContain('官网未能验证本次支付方式');
+    expect(
+      rechargeIssueFeedback(
+        job({
+          ...failure,
+          result: {
+            ...failure.result,
+            payment_status: 'declined',
+            payment_failure_reason: 'card_declined'
+          }
+        })
+      )?.message
+    ).toBe('发卡行拒绝了这笔付款');
+  });
   it('重建与读取失败分别显示中文说明，不再把已删除窗口一律提示不能新建', () => {
     expect(statusLabel('bitbrowser_profile_missing_confirmed')).toContain('重建窗口');
     expect(failureReasonLabel('bitbrowser_owned_profile_missing')).toContain('无法确认');

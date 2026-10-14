@@ -4,7 +4,7 @@ import { useRechargeNameMatch } from './useRechargeNameMatch';
 import type { V2RechargeDetails } from './contracts';
 const mock = vi.hoisted(() => ({ match: vi.fn() }));
 vi.mock('./bank-recharge-api', () => ({ bankRechargeApi: { matchCardName: mock.match } }));
-function setup() {
+function setup(initial: Partial<V2RechargeDetails> = {}) {
   const scope = effectScope();
   const details = ref<V2RechargeDetails>({
     number: '',
@@ -17,7 +17,8 @@ function setup() {
     line2: '',
     city: '',
     state: '',
-    postal_code: ''
+    postal_code: '',
+    ...initial
   });
   const selected = ref(''),
     onAddress = vi.fn();
@@ -25,6 +26,41 @@ function setup() {
   return { scope, details, selected, matcher };
 }
 describe('输入银行卡自动匹配姓名', () => {
+  it('切页恢复时保留手动账单姓名，换卡后仍自动匹配新姓名', async () => {
+    mock.match.mockReset().mockResolvedValue({
+      name: 'Pool Person',
+      confirmed: false,
+      cardId: null,
+      billingAddressId: null
+    });
+    const { scope, details, matcher } = setup({
+      number: '5555555555554444',
+      name: 'Restored Billing Person'
+    });
+    await matcher.ensureReady();
+    expect(details.value.name).toBe('Restored Billing Person');
+    expect(matcher.confirmed.value).toBe(false);
+    details.value.number = '4111111111111111';
+    await matcher.ensureReady();
+    expect(details.value.name).toBe('Pool Person');
+    scope.stop();
+  });
+  it('切页恢复时已确认的历史绑定仍回填并锁定姓名', async () => {
+    mock.match.mockReset().mockResolvedValue({
+      name: 'Historic Person',
+      confirmed: true,
+      cardId: 'card-id',
+      billingAddressId: null
+    });
+    const { scope, details, matcher } = setup({
+      number: '5555555555554444',
+      name: 'Restored Billing Person'
+    });
+    await matcher.ensureReady();
+    expect(details.value.name).toBe('Historic Person');
+    expect(matcher.confirmed.value).toBe(true);
+    scope.stop();
+  });
   it('填写完整卡号后回填历史姓名，不完整或非法卡号不查询', async () => {
     mock.match.mockReset().mockResolvedValue({
       name: 'Existing Person',

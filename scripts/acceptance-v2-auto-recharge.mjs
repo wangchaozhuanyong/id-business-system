@@ -590,7 +590,7 @@ try {
     await page.getByRole('option', { name: /离线验收/ }).click();
     const fillPayment = async () => {
       await form.getByLabel('银行卡号', { exact: true }).fill('5555555555554444');
-      await form.getByLabel('持卡人姓名', { exact: true }).fill('Fixture Person');
+      await form.getByLabel('账单姓名', { exact: true }).fill('Fixture Person');
       await form.getByLabel('有效期', { exact: true }).fill('1230');
       await form.getByLabel('安全码', { exact: true }).fill('123');
       const authorization = form.getByRole('checkbox', { name: /我已核对银行卡/ });

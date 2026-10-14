@@ -20,7 +20,7 @@
             >当前未显示 <AppButton size="small" @click="loadDetail">重新查看</AppButton></span
           >
         </el-descriptions-item>
-        <el-descriptions-item label="持卡人姓名">{{
+        <el-descriptions-item label="账单姓名">{{
           detail.billingName || '未设定'
         }}</el-descriptions-item>
         <el-descriptions-item label="有效期">{{ detail.expiry ?? '未录入' }}</el-descriptions-item>
