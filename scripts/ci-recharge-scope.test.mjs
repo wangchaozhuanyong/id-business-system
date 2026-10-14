@@ -92,6 +92,8 @@ import {
   onlinePrepareFixDispatcherBytesUnchanged,
   onlinePrepareFixRuntimeBytesUnchanged,
   validateOnlinePrepareFixGuardNative,
+  onlinePrepareFixGuardFailureCodes,
+  requireOnlinePrepareFixGuardNative,
   canResumeOnlinePrepareFixGuard
 } from './ci-recharge-scope.mjs';
 import { matchesSourceEvidence } from './ci-recharge-evidence.mjs';
@@ -687,6 +689,249 @@ test('finite prepare-fix guard binds authentic closed-PR source artifact logs jo
     mutate(changed);
     assert.equal(validateOnlinePrepareFixGuardNative(changed), false, mutate.toString());
   }
+});
+
+test('finite prepare-fix diagnostics distinguish native logs source and environment while the same gate still rejects', () => {
+  const original = syntheticPrepareFixNative();
+  assert.deepEqual(onlinePrepareFixGuardFailureCodes(original), []);
+  assert.equal(requireOnlinePrepareFixGuardNative(original), true);
+  const cases = [
+    [
+      'ORIGINAL_RUN',
+      (v) => {
+        v.run.conclusion = 'failure';
+      }
+    ],
+    [
+      'CLOSED_PR_SOURCE',
+      (v) => {
+        v.originalPr.merged = false;
+      }
+    ],
+    [
+      'MAIN_QUALITY',
+      (v) => {
+        v.mainRun.conclusion = 'failure';
+      }
+    ],
+    [
+      'GUARD_JOB',
+      (v) => {
+        v.jobs[0].head_sha = 'b'.repeat(40);
+      }
+    ],
+    [
+      'GUARD_STEPS',
+      (v) => {
+        v.jobs[0].steps[0].conclusion = 'failure';
+      }
+    ],
+    [
+      'GUARD_SKIPPED_DEPENDENCIES',
+      (v) => {
+        v.jobs[0].steps.pop();
+      }
+    ],
+    [
+      'QUALITY_JOB',
+      (v) => {
+        v.jobs[1].conclusion = 'failure';
+      }
+    ],
+    [
+      'QUALITY_STEPS',
+      (v) => {
+        v.jobs[1].steps.pop();
+      }
+    ],
+    [
+      'SOURCE_ARTIFACT',
+      (v) => {
+        v.artifact.expired = true;
+      }
+    ],
+    [
+      'PROOF_BYTES',
+      (v) => {
+        v.proofSha256 = '0'.repeat(64);
+      }
+    ],
+    [
+      'PROOF_SOURCE',
+      (v) => {
+        v.proof.extra = 'synthetic-private';
+      }
+    ],
+    [
+      'GUARD_LOG_BYTES',
+      (v) => {
+        v.facts.sha256 = '0'.repeat(64);
+      }
+    ],
+    [
+      'GUARD_LOG_CHECKOUT',
+      (v) => {
+        v.facts.checkout = '0'.repeat(40);
+      }
+    ],
+    [
+      'GUARD_LOG_SCOPE',
+      (v) => {
+        v.facts.scope = false;
+      }
+    ],
+    [
+      'GUARD_LOG_ENVIRONMENT',
+      (v) => {
+        v.facts.environment = false;
+      }
+    ],
+    [
+      'GUARD_LOG_ERRORS',
+      (v) => {
+        v.facts.errors.push('synthetic-private');
+      }
+    ],
+    [
+      'QUALITY_LOG_BYTES',
+      (v) => {
+        v.qualityLog.sha256 = '0'.repeat(64);
+      }
+    ],
+    [
+      'QUALITY_LOG_CHECKOUT',
+      (v) => {
+        v.qualityLog.checkout = '0'.repeat(40);
+      }
+    ],
+    [
+      'BASELINE_TREE',
+      (v) => {
+        v.baselineTree = '0'.repeat(40);
+      }
+    ],
+    [
+      'CURRENT_TREE',
+      (v) => {
+        v.currentHeadTree = '0'.repeat(40);
+      }
+    ],
+    [
+      'CHANGED_PATHS',
+      (v) => {
+        v.changed.push('synthetic-private');
+      }
+    ],
+    ...[
+      ['node', 'ENV_NODE'],
+      ['npm', 'ENV_NPM'],
+      ['imageOS', 'ENV_IMAGE_OS'],
+      ['imageVersion', 'ENV_IMAGE_VERSION'],
+      ['platform', 'ENV_PLATFORM']
+    ].map(([key, code]) => [
+      code,
+      (v) => {
+        v.currentEnvironment[key] = 'synthetic-private';
+      }
+    ]),
+    [
+      'RUNTIME_SOURCE',
+      (v) => {
+        v.runtimeSha256 = '0'.repeat(64);
+      }
+    ],
+    [
+      'RUNTIME_TEST_SOURCE',
+      (v) => {
+        v.runtimeTestSha256 = '0'.repeat(64);
+      }
+    ],
+    [
+      'SCOPE_NORMALIZATION',
+      (v) => {
+        v.scopeUnchanged = false;
+      }
+    ],
+    [
+      'DISPATCHER_NORMALIZATION',
+      (v) => {
+        v.dispatcherUnchanged = false;
+      }
+    ],
+    [
+      'RUNTIME_NORMALIZATION',
+      (v) => {
+        v.runtimeUnchanged = false;
+      }
+    ],
+    [
+      'FILE_MODES',
+      (v) => {
+        v.modesUnchanged = false;
+      }
+    ]
+  ];
+  for (const [code, mutate] of cases) {
+    const value = structuredClone(original);
+    mutate(value);
+    assert.equal(validateOnlinePrepareFixGuardNative(value), false, code);
+    assert.ok(onlinePrepareFixGuardFailureCodes(value).includes(code), code);
+    assert.throws(
+      () => requireOnlinePrepareFixGuardNative(value),
+      (error) => {
+        assert.match(
+          error.message,
+          /^Original prepare-fix source or guard evidence changed; predicates=[A-Z_,]+$/
+        );
+        assert.ok(error.message.includes(code), code);
+        assert.equal(error.message.includes('synthetic-private'), false);
+        return true;
+      }
+    );
+  }
+});
+
+test('finite prepare-fix diagnostics never print secrets unknown fields or raw records and leave the validator bytes unchanged', () => {
+  const value = syntheticPrepareFixNative();
+  for (const object of [value, value.run, value.jobs[0], value.artifact, value.currentEnvironment])
+    object.syntheticUnknownSecret = 'synthetic-secret-do-not-print';
+  assert.deepEqual(onlinePrepareFixGuardFailureCodes(value), []);
+  assert.equal(requireOnlinePrepareFixGuardNative(value), true);
+  value.facts.failedCommands.push('synthetic-secret-do-not-print');
+  value.currentEnvironment.imageOS = 'synthetic-secret-do-not-print';
+  assert.throws(
+    () => requireOnlinePrepareFixGuardNative(value),
+    (error) => {
+      assert.equal(
+        error.message,
+        'Original prepare-fix source or guard evidence changed; predicates=GUARD_LOG_ERRORS,ENV_IMAGE_OS'
+      );
+      for (const excluded of [
+        'syntheticUnknownSecret',
+        'synthetic-secret-do-not-print',
+        'failedCommands',
+        'currentEnvironment'
+      ])
+        assert.equal(error.message.includes(excluded), false);
+      return true;
+    }
+  );
+  const path = 'scripts/ci-recharge-scope.mjs';
+  const prior = execFileSync('git', ['show', '327bfbc03bd414ae8328f7f2a875bcc4dcd8998d:' + path], {
+    cwd: root,
+    encoding: 'utf8'
+  });
+  const validator = (source) =>
+    source.slice(
+      source.indexOf('export function validateOnlinePrepareFixGuardNative('),
+      source.indexOf('function typeOfProof(')
+    );
+  assert.equal(
+    validator(
+      readFileSync(fileURLToPath(new URL('./ci-recharge-scope.mjs', import.meta.url)), 'utf8')
+    ),
+    validator(prior)
+  );
 });
 
 test('finite prepare-fix guard restores the entire prior dispatcher scope and runtime outside prepare byte-for-byte', () => {

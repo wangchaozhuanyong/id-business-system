@@ -2014,6 +2014,170 @@ function typeOfProof(proof) {
   );
 }
 
+export function onlinePrepareFixGuardFailureCodes(input = {}) {
+  // Diagnostics never serialize native records, caller fields or environment
+  // values. The original validator remains the sole admission decision.
+  const b = onlinePrepareFixGuardBinding;
+  const codes = [];
+  const check = (code, predicate) => {
+    try {
+      if (!predicate()) codes.push(code);
+    } catch {
+      codes.push(code);
+    }
+  };
+  const { run, originalPr, mainRun, artifact, proof, facts, qualityLog } = input;
+  const jobs = Array.isArray(input.jobs) ? input.jobs : [];
+  const guard = jobs.filter((row) => row?.id === b.job);
+  const quality = jobs.filter((row) => row?.id === b.qualityJob);
+  const runOK = (row, id, event, head) =>
+    row?.id === id &&
+    row.run_attempt === 1 &&
+    row.event === event &&
+    row.path === '.github/workflows/quality.yml' &&
+    row.status === 'completed' &&
+    row.conclusion === 'success' &&
+    row.head_sha === head &&
+    row.repository?.full_name === b.repository;
+  const jobOK = (rows, name) =>
+    rows.length === 1 &&
+    rows[0].run_id === b.run &&
+    rows[0].run_attempt === 1 &&
+    rows[0].name === name &&
+    rows[0].head_sha === b.originalHead &&
+    rows[0].status === 'completed' &&
+    rows[0].conclusion === 'success';
+  const stepsOK = (rows, names, skipped = false) =>
+    rows.length === 1 &&
+    Array.isArray(rows[0].steps) &&
+    names.every(
+      (name) =>
+        rows[0].steps.filter(
+          (step) =>
+            step?.name === name &&
+            step.conclusion === (skipped ? 'skipped' : 'success') &&
+            (skipped || step.status === 'completed')
+        ).length === 1
+    );
+  check('ORIGINAL_RUN', () => runOK(run, b.run, 'pull_request', b.originalHead));
+  check(
+    'CLOSED_PR_SOURCE',
+    () =>
+      originalPr?.number === 470 &&
+      originalPr.state === 'closed' &&
+      originalPr.merged === true &&
+      originalPr.head?.sha === b.originalHead &&
+      originalPr.base?.sha === b.originalBase &&
+      originalPr.merge_commit_sha === b.base
+  );
+  check('MAIN_QUALITY', () => runOK(mainRun, b.mainRun, 'push', b.base));
+  check('GUARD_JOB', () => jobOK(guard, 'recharge (guards)'));
+  check('GUARD_STEPS', () =>
+    stepsOK(guard, [
+      'Checkout',
+      'Setup Node.js',
+      'Install package dependencies',
+      'Check affected recharge part'
+    ])
+  );
+  check('GUARD_SKIPPED_DEPENDENCIES', () =>
+    stepsOK(
+      guard,
+      ['Install browser for recharge acceptance', 'Install existing connector dependencies'],
+      true
+    )
+  );
+  check('QUALITY_JOB', () => jobOK(quality, 'quality'));
+  check('QUALITY_STEPS', () =>
+    stepsOK(quality, [
+      'Checkout the tested source tree for its evidence',
+      'Record successful PR source evidence',
+      'Preserve successful source evidence'
+    ])
+  );
+  check(
+    'SOURCE_ARTIFACT',
+    () =>
+      artifact?.id === b.artifact &&
+      artifact.name === 'quality-source-evidence-1' &&
+      artifact.expired === false &&
+      artifact.size_in_bytes === 357 &&
+      artifact.digest === 'sha256:' + b.artifactSha256 &&
+      artifact.workflow_run?.id === b.run &&
+      artifact.workflow_run.head_sha === b.originalHead
+  );
+  check('PROOF_BYTES', () => input.proofSha256 === b.proofSha256);
+  check(
+    'PROOF_SOURCE',
+    () =>
+      typeOfProof(proof) &&
+      matchesSourceEvidence(proof, {
+        repo: b.repository,
+        run,
+        pr: { number: 470, head: { sha: b.originalHead } },
+        tree: b.tree
+      }) &&
+      proof.baseSha === b.originalBase
+  );
+  check('GUARD_LOG_BYTES', () => facts?.sha256 === b.logSha256);
+  check('GUARD_LOG_CHECKOUT', () => facts?.checkout === b.checkout);
+  check('GUARD_LOG_SCOPE', () => facts?.scope === true);
+  check('GUARD_LOG_ENVIRONMENT', () => facts?.environment === true);
+  check(
+    'GUARD_LOG_ERRORS',
+    () =>
+      Array.isArray(facts?.errors) &&
+      facts.errors.length === 0 &&
+      Array.isArray(facts.failedCommands) &&
+      facts.failedCommands.length === 0
+  );
+  check('QUALITY_LOG_BYTES', () => qualityLog?.sha256 === b.qualityLogSha256);
+  check('QUALITY_LOG_CHECKOUT', () => qualityLog?.checkout === b.checkout);
+  check('BASELINE_TREE', () => input.baselineTree === b.tree);
+  check(
+    'CURRENT_TREE',
+    () =>
+      input.currentHeadTree === input.currentTree && /^[a-f0-9]{40}$/.test(input.currentTree || '')
+  );
+  check(
+    'CHANGED_PATHS',
+    () =>
+      Array.isArray(input.changed) &&
+      input.changed.includes(onlinePrepareFixGuardPaths[0]) &&
+      input.changed.includes(onlinePrepareFixGuardPaths[1]) &&
+      input.changed.every((path) => onlinePrepareFixGuardPaths.includes(path))
+  );
+  for (const [key, expected, code] of [
+    ['node', 'v24.21.0', 'ENV_NODE'],
+    ['npm', '11.19.0', 'ENV_NPM'],
+    ['imageOS', 'ubuntu24', 'ENV_IMAGE_OS'],
+    ['imageVersion', '20261004.327.1', 'ENV_IMAGE_VERSION'],
+    ['platform', 'linux', 'ENV_PLATFORM']
+  ])
+    check(code, () => input.currentEnvironment?.[key] === expected);
+  check('RUNTIME_SOURCE', () => input.runtimeSha256 === b.runtimeSha256);
+  check('RUNTIME_TEST_SOURCE', () => input.runtimeTestSha256 === b.runtimeTestSha256);
+  for (const [key, code] of [
+    ['scopeUnchanged', 'SCOPE_NORMALIZATION'],
+    ['dispatcherUnchanged', 'DISPATCHER_NORMALIZATION'],
+    ['runtimeUnchanged', 'RUNTIME_NORMALIZATION'],
+    ['modesUnchanged', 'FILE_MODES']
+  ])
+    check(code, () => input[key] === true);
+  return codes;
+}
+
+export function requireOnlinePrepareFixGuardNative(input) {
+  if (!validateOnlinePrepareFixGuardNative(input)) {
+    const codes = onlinePrepareFixGuardFailureCodes(input);
+    throw new Error(
+      'Original prepare-fix source or guard evidence changed; predicates=' +
+        (codes.length ? codes.join(',') : 'UNCLASSIFIED_PREDICATE')
+    );
+  }
+  return true;
+}
+
 export function canResumeOnlinePrepareFixGuard(base) {
   const b = onlinePrepareFixGuardBinding;
   if (
@@ -2077,40 +2241,37 @@ export function canResumeOnlinePrepareFixGuard(base) {
       /^[0-9]+ blob [a-f0-9]{40}\t/.test(after) && before.split(' ')[0] === after.split(' ')[0]
     );
   });
-  if (
-    !validateOnlinePrepareFixGuardNative({
-      run,
-      jobs,
-      artifact,
-      proof: JSON.parse(proofRaw),
-      proofSha256: digest(proofRaw),
-      originalPr: gh('repos/' + b.repository + '/pulls/470'),
-      mainRun: gh('repos/' + b.repository + '/actions/runs/' + b.mainRun),
-      facts: onlineComponentGuardLogFacts(log(b.job)),
-      qualityLog: onlineComponentGuardLogFacts(log(b.qualityJob)),
-      changed,
-      currentEnvironment: onlineComponentGuardCurrentEnvironment(),
-      currentHeadTree,
-      currentTree: tree,
-      baselineTree: git('rev-parse', b.base + '^{tree}'),
-      modesUnchanged,
-      runtimeSha256: digest(bytes(tree, onlinePrepareFixGuardPaths[0])),
-      runtimeTestSha256: digest(bytes(tree, onlinePrepareFixGuardPaths[1])),
-      runtimeUnchanged: onlinePrepareFixRuntimeBytesUnchanged(
-        bytes(b.base, onlinePrepareFixGuardPaths[0]),
-        bytes(tree, onlinePrepareFixGuardPaths[0])
-      ),
-      scopeUnchanged: onlinePrepareFixScopeBytesUnchanged(
-        bytes(b.base, 'scripts/ci-recharge-scope.mjs'),
-        bytes(tree, 'scripts/ci-recharge-scope.mjs')
-      ),
-      dispatcherUnchanged: onlinePrepareFixDispatcherBytesUnchanged(
-        bytes(b.base, 'scripts/ci-recharge-check.mjs'),
-        bytes(tree, 'scripts/ci-recharge-check.mjs')
-      )
-    })
-  )
-    throw new Error('Original prepare-fix source or guard evidence changed');
+  requireOnlinePrepareFixGuardNative({
+    run,
+    jobs,
+    artifact,
+    proof: JSON.parse(proofRaw),
+    proofSha256: digest(proofRaw),
+    originalPr: gh('repos/' + b.repository + '/pulls/470'),
+    mainRun: gh('repos/' + b.repository + '/actions/runs/' + b.mainRun),
+    facts: onlineComponentGuardLogFacts(log(b.job)),
+    qualityLog: onlineComponentGuardLogFacts(log(b.qualityJob)),
+    changed,
+    currentEnvironment: onlineComponentGuardCurrentEnvironment(),
+    currentHeadTree,
+    currentTree: tree,
+    baselineTree: git('rev-parse', b.base + '^{tree}'),
+    modesUnchanged,
+    runtimeSha256: digest(bytes(tree, onlinePrepareFixGuardPaths[0])),
+    runtimeTestSha256: digest(bytes(tree, onlinePrepareFixGuardPaths[1])),
+    runtimeUnchanged: onlinePrepareFixRuntimeBytesUnchanged(
+      bytes(b.base, onlinePrepareFixGuardPaths[0]),
+      bytes(tree, onlinePrepareFixGuardPaths[0])
+    ),
+    scopeUnchanged: onlinePrepareFixScopeBytesUnchanged(
+      bytes(b.base, 'scripts/ci-recharge-scope.mjs'),
+      bytes(tree, 'scripts/ci-recharge-scope.mjs')
+    ),
+    dispatcherUnchanged: onlinePrepareFixDispatcherBytesUnchanged(
+      bytes(b.base, 'scripts/ci-recharge-check.mjs'),
+      bytes(tree, 'scripts/ci-recharge-check.mjs')
+    )
+  });
   return true;
 }
 // END finite ONLINE prepare-fix guard continuation
