@@ -29,7 +29,7 @@ def load_client():
 
 client = load_client()
 REPOSITORY = 'wangchaozhuanyong/id-business-system'
-RESULT = 'online-recharge-component-evidence-diagnostic.json'
+RESULT_PREFIX = 'online-recharge-component-evidence-diagnostic'
 CAP = 4 * 1024 * 1024
 
 
@@ -270,7 +270,10 @@ def main(argv=None):
     except Exception as error:
         result = client.diagnostic_failure(error, 'diagnostic', trace={'phase': 'diagnostic'})
     output = client.output_directory()
-    client.write_once(client.r.c.load_core(), output / RESULT, result)
+    identity = [value if re.fullmatch('[1-9][0-9]*', value or '') else 'unbound'
+                for value in (args.evidence_run_id, args.evidence_run_attempt)]
+    name = RESULT_PREFIX + '-' + '-'.join(identity) + '-' + client.r.c.fingerprint(result) + '.json'
+    client.write_once(client.r.c.load_core(), output / name, result)
     print(json.dumps(result, sort_keys=True))
     # A diagnosed Failed invocation is a successful read-only observation.
     return 0 if result.get('nativeAuthenticated') is True and 'commandId' in result else 1

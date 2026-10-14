@@ -43,7 +43,7 @@ test('the workflow only queries an original run and uploads the safe typed summa
   assert.equal(upload.if, 'always()');
   assert.equal(
     upload.with.path,
-    '.deploy/production-release/online-recharge-component-evidence-diagnostic.json'
+    '.deploy/production-release/online-recharge-component-evidence-diagnostic-*.json'
   );
   assert.equal(upload.with['include-hidden-files'], true);
 });

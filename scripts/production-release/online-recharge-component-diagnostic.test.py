@@ -6,7 +6,10 @@ from datetime import datetime, timezone
 import importlib.util
 import io
 import json
+import os
 from pathlib import Path
+import subprocess
+import tempfile
 from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
@@ -116,8 +119,9 @@ class DiagnosticTests(unittest.TestCase):
                 'artifactId': '654', 'artifactBytesSha256': 'f' * 64}
 
     @contextmanager
-    def finite_parameters(self, mode):
+    def finite_parameters(self, mode, producer=None):
         client = diag.client; r = client.r; core = r.c.load_core()
+        producer = P if producer is None else producer
         a = copy.deepcopy(r.c.AUTHENTICATED_PREDECESSOR)
         current = copy.deepcopy(r.c.AUTHENTICATED_ADMIN_SUCCESSOR)
         now = datetime.now(timezone.utc).isoformat()
@@ -132,33 +136,37 @@ class DiagnosticTests(unittest.TestCase):
         for authority, raw in ((a, origin), (current, successor)):
             authority['invocationBytesSha256'] = r.c.digest(raw)
             authority['receiptSha256'] = r.c.fingerprint(json.loads(json.loads(raw)['StandardOutputContent']))
-        projection = {'candidateProducer': P, 'syntheticPublicProjection': True}
-        receipt = {'version': 1, 'kind': r.KIND, 'scope': r.SCOPE, 'producer': P,
+        projection = {'candidateProducer': producer, 'syntheticPublicProjection': True}
+        receipt = {'version': 1, 'kind': r.KIND, 'scope': r.SCOPE, 'producer': producer,
             'status': 'ONLINE_RECHARGE_BASELINE_VERIFIED', 'migrationPerformed': False,
             'databaseGrantsChanged': False, 'executionMigrationPlan': [], 'onlinePublished': False,
             'businessActions': 0, 'sourceProjectionSha256': r.c.fingerprint(projection),
             'baseline': {'ordinaryAuthoritySha256': r.c.fingerprint(a),
                 'actualPredecessor': current['producer'], 'adminAuthoritySha256': r.c.fingerprint(current)}}
         raw = native(receipt, fixtures.COMMAND)
-        transport = {'version': 1, 'kind': r.KIND + '_PREFLIGHT_TRANSPORT', 'producer': P,
+        transport = {'version': 1, 'kind': r.KIND + '_PREFLIGHT_TRANSPORT', 'producer': producer,
             'expectedCurrent': current['producer']['commit'], 'commandId': fixtures.COMMAND,
             'instanceId': a['instanceId'], 'invocationBytesSha256': r.c.digest(raw),
             'invocationRawBase64': base64.b64encode(raw).decode(), 'serverReceipt': receipt}
         repository = '123456789012.dkr.ecr.ap-northeast-1.amazonaws.com/id-business-v2-release'
-        proof = {'version': 1, 'scope': r.SCOPE, 'kind': r.KIND + '_BUILD_PROOF', 'producer': P,
+        proof = {'version': 1, 'scope': r.SCOPE, 'kind': r.KIND + '_BUILD_PROOF', 'producer': producer,
             'qualityRunId': '456', 'sourceProjection': projection, 'preflightSha256': r.c.fingerprint(transport),
             'migrations': dict(r.c.MIGRATIONS), 'images': {name: {
-                'reference': repository + ':' + P['commit'] + '-123-1-' + name,
+                'reference': repository + ':' + producer['commit'] + '-123-1-' + name,
                 'imageId': 'sha256:' + r.c.digest(name.encode()), 'fileCount': 1, 'sha256': 'e' * 64}
                 for name in r.IMAGES}}
         encoded = lambda value: (json.dumps(value, sort_keys=True, separators=(',', ':')) + '\n').encode()
         saved = {'proof': encoded(proof), 'preflight': encoded(transport)}
         env = dict(fixtures.ENV, EXPECTED_CURRENT=current['producer']['commit'],
             PRODUCTION_INSTANCE_ID=a['instanceId'])
+        def pins(core, p, helpers):
+            return {name: r.c.digest(subprocess.check_output(['git', 'show', p['commit']
+                + ':scripts/production-release/' + name], cwd=HERE.parents[1])) if producer is not P
+                else r.c.digest((HERE / name).read_bytes()) for name in helpers}
         with patch.object(r.c, 'SEALED_ORDINARY_COMPONENT', a), patch.object(r.c, 'ADMIN_SUCCESSOR', current), \
                 patch.dict(client.os.environ, env, clear=True), patch.object(client, 'helper_pins',
-                    side_effect=lambda core, p, helpers: {name: r.c.digest((HERE / name).read_bytes()) for name in helpers}):
-            params = client.parameters(mode, core, P, input_artifacts=(saved['proof'], saved['preflight'])
+                    side_effect=pins):
+            params = client.parameters(mode, core, producer, input_artifacts=(saved['proof'], saved['preflight'])
                 if mode == 'release' else None, origin_raw=origin, current_raw=successor)
             yield params, saved, a['instanceId'], current['producer']['commit']
 
@@ -292,11 +300,90 @@ class DiagnosticTests(unittest.TestCase):
                 patch.object(diag.client, 'output_directory', return_value=Path('/public-fixture')), \
                 patch.object(diag.client, 'write_once') as write, redirect_stdout(io.StringIO()) as printed:
             self.assertEqual(diag.main(['--evidence-run-id', '123', '--evidence-run-attempt', '1']), 0)
-        self.assertEqual(write.call_args.args[1].name, diag.RESULT)
+        self.assertTrue(write.call_args.args[1].name.startswith(diag.RESULT_PREFIX + '-123-1-'))
         result = write.call_args.args[2]
         self.assertEqual(result, json.loads(printed.getvalue()))
         for forbidden in ('invocationRawBase64', 'commands', 'parameters', 'serverReceipt', 'StandardOutputContent'):
             self.assertNotIn(forbidden, result)
+
+    @contextmanager
+    def main_private_io(self):
+        root = HERE.parents[1]
+        runtime = root / '.runtime'; runtime.mkdir(exist_ok=True)
+        producer = dict(P, commit=subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=root).decode().strip(),
+            sourceTree=subprocess.check_output(['git', 'rev-parse', 'HEAD^{tree}'], cwd=root).decode().strip())
+        # Only fixture-generation seals are substituted. main's real artifact,
+        # parameter, Git-object, native and private-file validators all execute.
+        with self.finite_parameters('preflight', producer) as (params, saved, instance, current), \
+                tempfile.TemporaryDirectory(prefix='online-diagnostic-observation-', dir=runtime) as temporary:
+            binding = dict(self.binding(), producer=producer)
+            f = {'params': params,
+                'metadata': {'producer': producer, 'mode': 'preflight', 'commandId': binding['commandId'],
+                    'instanceId': instance, 'status': 'ACCEPTED'},
+                'intent': {'producer': producer, 'mode': 'preflight', 'expectedCurrent': current,
+                    'parametersSha256': diag.client.r.c.fingerprint(params), 'status': 'SUBMITTING_ONCE'},
+                'run': {'id': 123, 'run_attempt': 1, 'repository': {'full_name': diag.REPOSITORY},
+                    'path': '.github/workflows/production-release.yml', 'event': 'workflow_dispatch',
+                    'head_branch': 'main', 'status': 'completed', 'conclusion': 'failure', 'head_sha': producer['commit']},
+                'job': {'id': 987, 'name': 'release', 'status': 'completed', 'conclusion': 'failure',
+                    'head_sha': producer['commit'], 'steps': [{'name': 'Verify online recharge predecessor and idle workers before building',
+                        'conclusion': 'failure'}]},
+                'artifact': {'id': 654, 'expired': False, 'size_in_bytes': 100,
+                    'name': 'online-recharge-evidence-123-1'}, 'additional': {}}
+            def api_reply(endpoint):
+                if '/commits/' in endpoint:
+                    return {'sha': producer['commit'], 'commit': {'tree': {'sha': producer['sourceTree']}}}
+                return self.api(f, endpoint)
+            actual_read = diag.read_command
+            responses = [self.native(binding, 'InProgress')]
+            aws = []
+            def external_read(arguments, cap=128 * 1024):
+                if arguments[0] == 'aws':
+                    aws.append(arguments)
+                    return responses[0]
+                return actual_read(arguments, cap)  # Real bounded Git reads.
+            previous = Path.cwd()
+            os.chdir(temporary)
+            try:
+                with patch.object(diag, 'api', side_effect=api_reply), \
+                        patch.object(diag, 'artifact_bytes', return_value=self.archive(f)), \
+                        patch.object(diag, 'read_command', side_effect=external_read):
+                    yield binding, Path(temporary) / '.deploy/production-release', responses, aws
+            finally:
+                os.chdir(previous)
+
+    def test_main_real_private_io_retains_unknown_and_late_failed_observations(self):
+        with self.main_private_io() as (binding, output, responses, aws), redirect_stdout(io.StringIO()):
+            argv = ['--evidence-run-id', '123', '--evidence-run-attempt', '1']
+            self.assertEqual(diag.main(argv), 1)
+            first = next(output.glob(diag.RESULT_PREFIX + '-123-1-*.json'))
+            raw = first.read_bytes(); identity = (first.stat().st_ino, first.stat().st_mtime_ns)
+            self.assertEqual(json.loads(raw)['outcome'], 'RESULT_UNKNOWN')
+            responses[0] = self.native(binding)
+            self.assertEqual(diag.main(argv), 0)
+            files = list(output.glob(diag.RESULT_PREFIX + '-123-1-*.json'))
+            self.assertEqual(len(files), 2)
+            self.assertEqual(first.read_bytes(), raw)
+            self.assertEqual((first.stat().st_ino, first.stat().st_mtime_ns), identity)
+            terminal = next(path for path in files if path != first)
+            self.assertEqual(json.loads(terminal.read_bytes())['outcome'], 'COMMAND_FAILED')
+            self.assertEqual(terminal.stat().st_mode & 0o777, 0o600)
+            self.assertEqual(len(aws), 2)
+            self.assertTrue(all(row[4] == 'get-command-invocation' and row[6] == binding['commandId'] for row in aws))
+
+    def test_main_real_private_io_identical_observation_reuses_original_inode(self):
+        with self.main_private_io() as (binding, output, responses, aws), redirect_stdout(io.StringIO()):
+            responses[0] = self.native(binding)
+            argv = ['--evidence-run-id', '123', '--evidence-run-attempt', '1']
+            self.assertEqual(diag.main(argv), 0)
+            first = next(output.glob(diag.RESULT_PREFIX + '-123-1-*.json'))
+            raw = first.read_bytes(); identity = (first.stat().st_ino, first.stat().st_mtime_ns)
+            self.assertEqual(diag.main(argv), 0)
+            self.assertEqual(list(output.glob(diag.RESULT_PREFIX + '-123-1-*.json')), [first])
+            self.assertEqual(first.read_bytes(), raw)
+            self.assertEqual((first.stat().st_ino, first.stat().st_mtime_ns), identity)
+            self.assertEqual(len(aws), 2)
+            self.assertIs(json.loads(raw)['automaticRetryAllowed'], False)
 
 
 if __name__ == '__main__':
