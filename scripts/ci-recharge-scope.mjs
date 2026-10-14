@@ -2341,6 +2341,605 @@ export function canResumeOnlinePrepareFixGuard(base) {
 }
 // END finite ONLINE prepare-fix guard continuation
 
+// BEGIN finite ONLINE failure-receipt guard continuation
+export const onlinePreflightReceiptFixGuardBinding = Object.freeze({
+  repository: 'wangchaozhuanyong/id-business-system',
+  branch: 'codex/online-receipt-storage-integration-20261014',
+  originalMergedMain: 'a9829b443fe5c0cf6f4803366d06c5f8e3357318',
+  integrationBase: 'b9f2e2b75a753b86a5057dd798d651c57496554e',
+  integrationTree: 'd7a012ba01d59d37ccf79141bc9055332c3978fc',
+  integrationMainRun: 38518628653,
+  originalHead: '4a1a76536fda6513cbc8e252bde813e471c15b6f',
+  originalBase: '2edb7ef92a9619e5b0e5855220c97bac29d22f60',
+  tree: 'a473264b8821ebe72471979614ba7983c531e309',
+  checkout: 'bb4ffb35b1772a1df28caf8f5c68dfbbb02f9632',
+  run: 38508638260,
+  attempt: 1,
+  job: 115671848013,
+  qualityJob: 115680672303,
+  mainRun: 38511580891,
+  artifact: 11869619286,
+  artifactSha256: 'a9647d0f5c21777325da19670cf9ff825252f88b8784169a56cf8caa6dcc2031',
+  proofSha256: 'c901e3b542522976e6896c24b951af22d5abaf5fe59d98a706bc2292c7bc4521',
+  // Authenticate only original platform log bytes, never CLI presentation.
+  rawLogSha256: '33b7dd17b66f825aea10dc6b6f1dcda61baf053d39ae71c370986baf10a84318',
+  rawQualityLogSha256: '2f46b3bf0ad7a1ab19c42c1dd9751283c8927611bb90a75ab8470d8fe85d36aa',
+  runtimeSha256: 'd9c190070799937c548c5188e44d3a63c1c129ede2d9565637e3ae95b18c1641',
+  runtimeTestSha256: 'b7e0ff38b8cd7246fb63c2b8510233bf257f822a04b559a56f8094616e8bbc77'
+});
+export const onlinePreflightReceiptFixGuardPaths = Object.freeze([
+  'scripts/production-release/online-recharge-component-runtime.py',
+  'scripts/production-release/online-recharge-component-runtime.test.py',
+  'scripts/ci-recharge-scope.mjs',
+  'scripts/ci-recharge-scope.test.mjs',
+  'scripts/ci-recharge-check.mjs',
+  'scripts/ci-recharge-check.test.mjs',
+  'docs/CENTRAL_RELEASE_20261002.md',
+  'docs/WORKSPACE_RELEASE_CLEANUP_20261014.md'
+]);
+export const onlinePreflightReceiptFixGuardCommands = Object.freeze(
+  [
+    ['python3', '-B', 'scripts/production-release/online-recharge-component-consumer.test.py'],
+    ['python3', '-B', 'scripts/production-release/online-recharge-component-runtime.test.py'],
+    ['python3', '-B', 'scripts/production-release/online-recharge-component-readonly.test.py'],
+    ['python3', '-B', 'scripts/production-release/api-admin-scope.test.py'],
+    ['python3', '-B', 'scripts/production-release/api-admin-pending-online.test.py'],
+    ['python3', '-B', 'scripts/production-release/admin-pending-online-release.test.py'],
+    ['python3', '-B', 'scripts/production-release/online-recharge-scope.test.py'],
+    ['python3', '-B', 'scripts/production-release/unpublished-component-successor.test.py'],
+    [
+      'python3',
+      '-B',
+      'scripts/production-release/unpublished-component-successor-readonly.test.py'
+    ],
+    ['python3', '-B', 'scripts/production-release/prepared-images.test.py'],
+    ['node', '--test', 'scripts/production-release/recharge-flow-entry.test.mjs'],
+    ['node', '--test', 'scripts/production-release/online-recharge-entry.test.mjs'],
+    ['python3', '-B', 'scripts/production-release/unified-component-source.test.py'],
+    ['node', '--test', 'scripts/v2-order-archive-release-policy.test.mjs'],
+    ['python3', '-B', 'scripts/production-release/registration-onboarding-96.test.py'],
+    ['python3', '-B', 'scripts/production-release/release-artifact-retention.test.py'],
+    ['python3', '-B', 'scripts/production-release/release-artifact-retention-transport.test.py'],
+    ['python3', '-B', 'scripts/production-release/disk-retention-transport.test.py'],
+    ['python3', '-B', 'scripts/production-release/release-storage.test.py']
+  ].map(Object.freeze)
+);
+
+export function onlinePreflightReceiptFixScopeBytesUnchanged(before, after) {
+  const start = '// BEGIN finite ONLINE failure-receipt guard continuation\n';
+  const end = '// END finite ONLINE failure-receipt guard continuation\n\n';
+  if (
+    typeof before !== 'string' ||
+    typeof after !== 'string' ||
+    before.includes(start) ||
+    after.split(start).length !== 2 ||
+    after.split(end).length !== 2
+  )
+    return false;
+  const left = after.indexOf(start),
+    right = after.indexOf(end);
+  return right > left && after.slice(0, left) + after.slice(right + end.length) === before;
+}
+
+export function onlinePreflightReceiptFixDispatcherBytesUnchanged(before, after) {
+  const declaration = [
+    'const resumeOnlinePreflightReceiptFixGuard =',
+    "  part === 'guards' &&",
+    "  mode === 'ci-only' &&",
+    "  process.env.GITHUB_ACTIONS === 'true' &&",
+    "  process.env.GITHUB_REPOSITORY === 'wangchaozhuanyong/id-business-system' &&",
+    "  process.env.GITHUB_EVENT_NAME === 'pull_request' &&",
+    "  base === 'b9f2e2b75a753b86a5057dd798d651c57496554e' &&",
+    '  canResumeOnlinePreflightReceiptFixGuard(base);',
+    ''
+  ].join('\n');
+  const extension = [
+    'if (resumeOnlinePreflightReceiptFixGuard) {',
+    '  for (const [file, ...args] of onlinePreflightReceiptFixGuardCommands) run(file, args);',
+    '  process.exit(0);',
+    '}',
+    ''
+  ].join('\n');
+  if (typeof before !== 'string' || typeof after !== 'string') return false;
+  for (const addition of [
+    '  canResumeOnlinePreflightReceiptFixGuard,\n',
+    '  onlinePreflightReceiptFixGuardCommands,\n',
+    declaration,
+    extension
+  ]) {
+    if (after.split(addition).length !== 2) return false;
+    after = after.replace(addition, '');
+  }
+  return after === before;
+}
+
+export function onlinePreflightReceiptFixRuntimeBytesUnchanged(before, after) {
+  if (typeof before !== 'string' || typeof after !== 'string') return false;
+  const body = /^def validate_component_invocation\(.*?(?=^def [A-Za-z_])/ms;
+  const helper = /^def rejection_code\(.*?(?=^def [A-Za-z_])/ms;
+  const left = body.exec(before),
+    right = body.exec(after),
+    added = helper.exec(after);
+  if (
+    !left ||
+    !right ||
+    left[0] === right[0] ||
+    helper.test(before) ||
+    !added ||
+    after.match(/^def rejection_code\(/gm)?.length !== 1
+  )
+    return false;
+  for (const declaration of ['import subprocess\n', 'import urllib.error\n']) {
+    if (before.includes(declaration) || after.split(declaration).length !== 2) return false;
+    after = after.replace(declaration, '');
+  }
+  const prior = [
+    '        code = str(error)',
+    "        if not re.fullmatch('(?:ONLINE_RECHARGE_COMPONENT|ONLINE_RECHARGE|API_ADMIN|UNPUBLISHED_COMPONENT)_[A-Z0-9_]+', code):",
+    "            code = 'ONLINE_RECHARGE_COMPONENT_PROTECTED_OPERATION_FAILED'",
+    ''
+  ].join('\n');
+  const current = '        code = rejection_code(error)\n';
+  if (before.split(prior).length !== 2 || after.split(current).length !== 2) return false;
+  after = after.replace(current, prior).replace(right[0], left[0]).replace(added[0], '');
+  return after === before;
+}
+
+export function onlinePreflightReceiptFixGuardRawLogFacts(raw) {
+  if (!Buffer.isBuffer(raw) || !raw.length) return undefined;
+  const text = raw.toString('utf8');
+  if (!Buffer.from(text, 'utf8').equals(raw)) return undefined;
+  const utc = /^\uFEFF?\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z /;
+  const rows = text.split('\n');
+  if (rows.some((line) => line && !utc.test(line))) return undefined;
+  const lines = rows.map((line) => line.replace(utc, ''));
+  const checkout = lines.findIndex((line) => line === '[command]/usr/bin/git log -1 --format=%H');
+  return {
+    sha256: createHash('sha256').update(raw).digest('hex'),
+    checkout: checkout < 0 ? undefined : lines[checkout + 1],
+    scope:
+      lines.includes('  CHECK_BASE: ' + onlinePreflightReceiptFixGuardBinding.originalBase) &&
+      lines.includes('  CHECK_MODE: ci-only') &&
+      lines.includes('  CHECK_PART: guards') &&
+      lines.includes('##[group]Run node scripts/ci-recharge-check.mjs "$CHECK_PART" "$CHECK_BASE"'),
+    environment:
+      lines.includes('  NODE_ENV: test') &&
+      lines.includes('Image: ubuntu-24.04') &&
+      lines.includes('Version: 20261004.327.1') &&
+      lines.includes('node: v24.21.0') &&
+      lines.includes('npm: 11.19.0'),
+    errors: lines.filter((line) => /^(?:ERROR|FAIL): /.test(line)),
+    failedCommands: lines.filter((line) => /^Error: Command failed: /.test(line))
+  };
+}
+
+export function validateOnlinePreflightReceiptFixGuardNative({
+  run,
+  jobs,
+  qualityLog,
+  facts,
+  artifact,
+  proof,
+  proofSha256,
+  originalPr,
+  mainRun,
+  integrationMainRun,
+  changed,
+  currentEnvironment,
+  currentHeadTree,
+  currentTree,
+  runtimeSha256,
+  runtimeTestSha256,
+  scopeUnchanged,
+  dispatcherUnchanged,
+  runtimeUnchanged,
+  modesUnchanged,
+  baselineTree
+} = {}) {
+  const b = onlinePreflightReceiptFixGuardBinding;
+  const rows = Array.isArray(jobs) ? jobs : [];
+  const job = rows.filter((row) => row.id === b.job);
+  const quality = rows.filter((row) => row.id === b.qualityJob);
+  const validJob = (row, name) =>
+    row?.run_id === b.run &&
+    row.run_attempt === 1 &&
+    row.name === name &&
+    row.head_sha === b.originalHead &&
+    row.status === 'completed' &&
+    row.conclusion === 'success';
+  return !!(
+    run?.id === b.run &&
+    run.run_attempt === 1 &&
+    run.event === 'pull_request' &&
+    run.path === '.github/workflows/quality.yml' &&
+    run.status === 'completed' &&
+    run.conclusion === 'success' &&
+    run.head_sha === b.originalHead &&
+    run.repository?.full_name === b.repository &&
+    originalPr?.number === 471 &&
+    originalPr.state === 'closed' &&
+    originalPr.merged === true &&
+    originalPr.head?.sha === b.originalHead &&
+    originalPr.base?.sha === b.originalBase &&
+    originalPr.merge_commit_sha === b.originalMergedMain &&
+    mainRun?.id === b.mainRun &&
+    mainRun.run_attempt === 1 &&
+    mainRun.event === 'push' &&
+    mainRun.path === '.github/workflows/quality.yml' &&
+    mainRun.status === 'completed' &&
+    mainRun.conclusion === 'success' &&
+    mainRun.head_sha === b.originalMergedMain &&
+    mainRun.repository?.full_name === b.repository &&
+    integrationMainRun?.id === b.integrationMainRun &&
+    integrationMainRun.run_attempt === 1 &&
+    integrationMainRun.event === 'push' &&
+    integrationMainRun.path === '.github/workflows/quality.yml' &&
+    integrationMainRun.status === 'completed' &&
+    integrationMainRun.conclusion === 'success' &&
+    integrationMainRun.head_sha === b.integrationBase &&
+    integrationMainRun.head_branch === 'main' &&
+    integrationMainRun.head_commit?.id === b.integrationBase &&
+    integrationMainRun.head_commit?.tree_id === b.integrationTree &&
+    integrationMainRun.repository?.full_name === b.repository &&
+    job.length === 1 &&
+    validJob(job[0], 'recharge (guards)') &&
+    quality.length === 1 &&
+    validJob(quality[0], 'quality') &&
+    [
+      'Checkout',
+      'Setup Node.js',
+      'Install package dependencies',
+      'Check affected recharge part'
+    ].every(
+      (name) =>
+        job[0].steps?.filter(
+          (step) =>
+            step.name === name && step.status === 'completed' && step.conclusion === 'success'
+        ).length === 1
+    ) &&
+    ['Install browser for recharge acceptance', 'Install existing connector dependencies'].every(
+      (name) =>
+        job[0].steps?.filter((step) => step.name === name && step.conclusion === 'skipped')
+          .length === 1
+    ) &&
+    [
+      'Checkout the tested source tree for its evidence',
+      'Record successful PR source evidence',
+      'Preserve successful source evidence'
+    ].every(
+      (name) =>
+        quality[0].steps?.filter(
+          (step) =>
+            step.name === name && step.status === 'completed' && step.conclusion === 'success'
+        ).length === 1
+    ) &&
+    artifact?.id === b.artifact &&
+    artifact.name === 'quality-source-evidence-1' &&
+    artifact.expired === false &&
+    artifact.size_in_bytes === 355 &&
+    artifact.digest === 'sha256:' + b.artifactSha256 &&
+    artifact.workflow_run?.id === b.run &&
+    artifact.workflow_run.head_sha === b.originalHead &&
+    typeOfProof(proof) &&
+    proofSha256 === b.proofSha256 &&
+    matchesSourceEvidence(proof, {
+      repo: b.repository,
+      run,
+      pr: { number: 471, head: { sha: b.originalHead } },
+      tree: b.tree
+    }) &&
+    proof.baseSha === b.originalBase &&
+    facts?.sha256 === b.rawLogSha256 &&
+    facts.checkout === b.checkout &&
+    facts.scope === true &&
+    facts.environment === true &&
+    Array.isArray(facts.errors) &&
+    facts.errors.length === 0 &&
+    Array.isArray(facts.failedCommands) &&
+    facts.failedCommands.length === 0 &&
+    qualityLog?.sha256 === b.rawQualityLogSha256 &&
+    qualityLog.checkout === b.checkout &&
+    baselineTree === b.integrationTree &&
+    currentHeadTree === currentTree &&
+    /^[a-f0-9]{40}$/.test(currentTree || '') &&
+    Array.isArray(changed) &&
+    changed.includes(onlinePreflightReceiptFixGuardPaths[0]) &&
+    changed.includes(onlinePreflightReceiptFixGuardPaths[1]) &&
+    changed.every((path) => onlinePreflightReceiptFixGuardPaths.includes(path)) &&
+    currentEnvironment?.node === 'v24.21.0' &&
+    currentEnvironment.npm === '11.19.0' &&
+    currentEnvironment.imageOS === 'ubuntu24' &&
+    currentEnvironment.imageVersion === '20261004.327.1' &&
+    currentEnvironment.platform === 'linux' &&
+    runtimeSha256 === b.runtimeSha256 &&
+    runtimeTestSha256 === b.runtimeTestSha256 &&
+    scopeUnchanged === true &&
+    dispatcherUnchanged === true &&
+    runtimeUnchanged === true &&
+    modesUnchanged === true
+  );
+}
+export function onlinePreflightReceiptFixGuardFailureCodes(input = {}) {
+  // Diagnostics never serialize native records, caller fields or environment
+  // values. The original validator remains the sole admission decision.
+  const b = onlinePreflightReceiptFixGuardBinding;
+  const codes = [];
+  const check = (code, predicate) => {
+    try {
+      if (!predicate()) codes.push(code);
+    } catch {
+      codes.push(code);
+    }
+  };
+  const { run, originalPr, mainRun, integrationMainRun, artifact, proof, facts, qualityLog } =
+    input;
+  const jobs = Array.isArray(input.jobs) ? input.jobs : [];
+  const guard = jobs.filter((row) => row?.id === b.job);
+  const quality = jobs.filter((row) => row?.id === b.qualityJob);
+  const runOK = (row, id, event, head) =>
+    row?.id === id &&
+    row.run_attempt === 1 &&
+    row.event === event &&
+    row.path === '.github/workflows/quality.yml' &&
+    row.status === 'completed' &&
+    row.conclusion === 'success' &&
+    row.head_sha === head &&
+    row.repository?.full_name === b.repository;
+  const jobOK = (rows, name) =>
+    rows.length === 1 &&
+    rows[0].run_id === b.run &&
+    rows[0].run_attempt === 1 &&
+    rows[0].name === name &&
+    rows[0].head_sha === b.originalHead &&
+    rows[0].status === 'completed' &&
+    rows[0].conclusion === 'success';
+  const stepsOK = (rows, names, skipped = false) =>
+    rows.length === 1 &&
+    Array.isArray(rows[0].steps) &&
+    names.every(
+      (name) =>
+        rows[0].steps.filter(
+          (step) =>
+            step?.name === name &&
+            step.conclusion === (skipped ? 'skipped' : 'success') &&
+            (skipped || step.status === 'completed')
+        ).length === 1
+    );
+  check('ORIGINAL_RUN', () => runOK(run, b.run, 'pull_request', b.originalHead));
+  check(
+    'CLOSED_PR_SOURCE',
+    () =>
+      originalPr?.number === 471 &&
+      originalPr.state === 'closed' &&
+      originalPr.merged === true &&
+      originalPr.head?.sha === b.originalHead &&
+      originalPr.base?.sha === b.originalBase &&
+      originalPr.merge_commit_sha === b.originalMergedMain
+  );
+  check('MAIN_QUALITY', () => runOK(mainRun, b.mainRun, 'push', b.originalMergedMain));
+  check(
+    'INTEGRATION_MAIN_QUALITY',
+    () =>
+      runOK(integrationMainRun, b.integrationMainRun, 'push', b.integrationBase) &&
+      integrationMainRun.head_branch === 'main' &&
+      integrationMainRun.head_commit?.id === b.integrationBase &&
+      integrationMainRun.head_commit?.tree_id === b.integrationTree
+  );
+  check('GUARD_JOB', () => jobOK(guard, 'recharge (guards)'));
+  check('GUARD_STEPS', () =>
+    stepsOK(guard, [
+      'Checkout',
+      'Setup Node.js',
+      'Install package dependencies',
+      'Check affected recharge part'
+    ])
+  );
+  check('GUARD_SKIPPED_DEPENDENCIES', () =>
+    stepsOK(
+      guard,
+      ['Install browser for recharge acceptance', 'Install existing connector dependencies'],
+      true
+    )
+  );
+  check('QUALITY_JOB', () => jobOK(quality, 'quality'));
+  check('QUALITY_STEPS', () =>
+    stepsOK(quality, [
+      'Checkout the tested source tree for its evidence',
+      'Record successful PR source evidence',
+      'Preserve successful source evidence'
+    ])
+  );
+  check(
+    'SOURCE_ARTIFACT',
+    () =>
+      artifact?.id === b.artifact &&
+      artifact.name === 'quality-source-evidence-1' &&
+      artifact.expired === false &&
+      artifact.size_in_bytes === 355 &&
+      artifact.digest === 'sha256:' + b.artifactSha256 &&
+      artifact.workflow_run?.id === b.run &&
+      artifact.workflow_run.head_sha === b.originalHead
+  );
+  check('PROOF_BYTES', () => input.proofSha256 === b.proofSha256);
+  check(
+    'PROOF_SOURCE',
+    () =>
+      typeOfProof(proof) &&
+      matchesSourceEvidence(proof, {
+        repo: b.repository,
+        run,
+        pr: { number: 471, head: { sha: b.originalHead } },
+        tree: b.tree
+      }) &&
+      proof.baseSha === b.originalBase
+  );
+  check('GUARD_LOG_BYTES', () => facts?.sha256 === b.rawLogSha256);
+  check('GUARD_LOG_CHECKOUT', () => facts?.checkout === b.checkout);
+  check('GUARD_LOG_SCOPE', () => facts?.scope === true);
+  check('GUARD_LOG_ENVIRONMENT', () => facts?.environment === true);
+  check(
+    'GUARD_LOG_ERRORS',
+    () =>
+      Array.isArray(facts?.errors) &&
+      facts.errors.length === 0 &&
+      Array.isArray(facts.failedCommands) &&
+      facts.failedCommands.length === 0
+  );
+  check('QUALITY_LOG_BYTES', () => qualityLog?.sha256 === b.rawQualityLogSha256);
+  check('QUALITY_LOG_CHECKOUT', () => qualityLog?.checkout === b.checkout);
+  check('BASELINE_TREE', () => input.baselineTree === b.integrationTree);
+  check(
+    'CURRENT_TREE',
+    () =>
+      input.currentHeadTree === input.currentTree && /^[a-f0-9]{40}$/.test(input.currentTree || '')
+  );
+  check(
+    'CHANGED_PATHS',
+    () =>
+      Array.isArray(input.changed) &&
+      input.changed.includes(onlinePreflightReceiptFixGuardPaths[0]) &&
+      input.changed.includes(onlinePreflightReceiptFixGuardPaths[1]) &&
+      input.changed.every((path) => onlinePreflightReceiptFixGuardPaths.includes(path))
+  );
+  for (const [key, expected, code] of [
+    ['node', 'v24.21.0', 'ENV_NODE'],
+    ['npm', '11.19.0', 'ENV_NPM'],
+    ['imageOS', 'ubuntu24', 'ENV_IMAGE_OS'],
+    ['imageVersion', '20261004.327.1', 'ENV_IMAGE_VERSION'],
+    ['platform', 'linux', 'ENV_PLATFORM']
+  ])
+    check(code, () => input.currentEnvironment?.[key] === expected);
+  check('RUNTIME_SOURCE', () => input.runtimeSha256 === b.runtimeSha256);
+  check('RUNTIME_TEST_SOURCE', () => input.runtimeTestSha256 === b.runtimeTestSha256);
+  for (const [key, code] of [
+    ['scopeUnchanged', 'SCOPE_NORMALIZATION'],
+    ['dispatcherUnchanged', 'DISPATCHER_NORMALIZATION'],
+    ['runtimeUnchanged', 'RUNTIME_NORMALIZATION'],
+    ['modesUnchanged', 'FILE_MODES']
+  ])
+    check(code, () => input[key] === true);
+  return codes;
+}
+
+export function requireOnlinePreflightReceiptFixGuardNative(input) {
+  if (!validateOnlinePreflightReceiptFixGuardNative(input)) {
+    const codes = onlinePreflightReceiptFixGuardFailureCodes(input);
+    throw new Error(
+      'Original failure-receipt source or guard evidence changed; predicates=' +
+        (codes.length ? codes.join(',') : 'UNCLASSIFIED_PREDICATE')
+    );
+  }
+  return true;
+}
+
+export function canResumeOnlinePreflightReceiptFixGuard(base) {
+  const b = onlinePreflightReceiptFixGuardBinding;
+  if (
+    base !== b.integrationBase ||
+    process.env.GITHUB_ACTIONS !== 'true' ||
+    process.env.GITHUB_REPOSITORY !== b.repository ||
+    process.env.GITHUB_EVENT_NAME !== 'pull_request'
+  )
+    return false;
+  const event = JSON.parse(readFileSync(process.env.GITHUB_EVENT_PATH, 'utf8'));
+  if (
+    event.pull_request?.head?.ref !== b.branch ||
+    event.pull_request.base?.sha !== b.integrationBase
+  )
+    return false;
+  if (
+    event.pull_request.base?.sha !== b.integrationBase ||
+    event.pull_request.head.repo?.full_name !== b.repository ||
+    event.pull_request.base.repo?.full_name !== b.repository ||
+    process.env.CHECK_MODE !== 'ci-only' ||
+    process.env.NODE_ENV !== 'test'
+  )
+    throw new Error('Failure-receipt continuation scope changed');
+  const tree = git('rev-parse', 'HEAD^{tree}');
+  const currentHeadTree = git('rev-parse', event.pull_request.head.sha + '^{tree}');
+  const changed = git('diff', '--name-only', b.integrationBase, tree).split('\n').filter(Boolean);
+  const bytes = (commit, path) =>
+    execFileSync('git', ['show', commit + ':' + path], { encoding: 'utf8' });
+  const digest = (raw) => createHash('sha256').update(raw).digest('hex');
+  const run = gh('repos/' + b.repository + '/actions/runs/' + b.run);
+  const { jobs } = gh(
+    'repos/' + b.repository + '/actions/runs/' + b.run + '/attempts/1/jobs?per_page=100'
+  );
+  const { artifacts } = gh(
+    'repos/' + b.repository + '/actions/runs/' + b.run + '/artifacts?per_page=100'
+  );
+  const artifact = artifacts.find((row) => row.id === b.artifact);
+  const zipped = execFileSync(
+    'gh',
+    ['api', 'repos/' + b.repository + '/actions/artifacts/' + b.artifact + '/zip'],
+    { maxBuffer: 8192 }
+  );
+  if (zipped.length !== 355 || digest(zipped) !== b.artifactSha256)
+    throw new Error('Failure-receipt source artifact bytes changed');
+  const proofRaw = execFileSync(
+    'python3',
+    [
+      '-B',
+      '-c',
+      'import sys,zipfile,io;z=zipfile.ZipFile(io.BytesIO(sys.stdin.buffer.read()));assert z.namelist()==["evidence.json"];sys.stdout.buffer.write(z.read("evidence.json"))'
+    ],
+    { input: zipped, maxBuffer: 8192 }
+  );
+  const log = (job) =>
+    execFileSync(
+      'gh',
+      [
+        'api',
+        '--allow-escape-sequences',
+        'repos/' + b.repository + '/actions/jobs/' + job + '/logs'
+      ],
+      {
+        maxBuffer: 4 * 1024 * 1024
+      }
+    );
+  const modesUnchanged = changed.every((path) => {
+    const before = git('ls-tree', b.integrationBase, '--', path),
+      after = git('ls-tree', tree, '--', path);
+    return (
+      /^[0-9]+ blob [a-f0-9]{40}\t/.test(after) && before.split(' ')[0] === after.split(' ')[0]
+    );
+  });
+  requireOnlinePreflightReceiptFixGuardNative({
+    run,
+    jobs,
+    artifact,
+    proof: JSON.parse(proofRaw),
+    proofSha256: digest(proofRaw),
+    originalPr: gh('repos/' + b.repository + '/pulls/471'),
+    mainRun: gh('repos/' + b.repository + '/actions/runs/' + b.mainRun),
+    integrationMainRun: gh('repos/' + b.repository + '/actions/runs/' + b.integrationMainRun),
+    facts: onlinePreflightReceiptFixGuardRawLogFacts(log(b.job)),
+    qualityLog: onlinePreflightReceiptFixGuardRawLogFacts(log(b.qualityJob)),
+    changed,
+    currentEnvironment: onlineComponentGuardCurrentEnvironment(),
+    currentHeadTree,
+    currentTree: tree,
+    baselineTree: git('rev-parse', b.integrationBase + '^{tree}'),
+    modesUnchanged,
+    runtimeSha256: digest(bytes(tree, onlinePreflightReceiptFixGuardPaths[0])),
+    runtimeTestSha256: digest(bytes(tree, onlinePreflightReceiptFixGuardPaths[1])),
+    runtimeUnchanged: onlinePreflightReceiptFixRuntimeBytesUnchanged(
+      bytes(b.integrationBase, onlinePreflightReceiptFixGuardPaths[0]),
+      bytes(tree, onlinePreflightReceiptFixGuardPaths[0])
+    ),
+    scopeUnchanged: onlinePreflightReceiptFixScopeBytesUnchanged(
+      bytes(b.integrationBase, 'scripts/ci-recharge-scope.mjs'),
+      bytes(tree, 'scripts/ci-recharge-scope.mjs')
+    ),
+    dispatcherUnchanged: onlinePreflightReceiptFixDispatcherBytesUnchanged(
+      bytes(b.integrationBase, 'scripts/ci-recharge-check.mjs'),
+      bytes(tree, 'scripts/ci-recharge-check.mjs')
+    )
+  });
+  return true;
+}
+// END finite ONLINE failure-receipt guard continuation
+
 export function canResumeCombinedGuard(base) {
   if (
     base !== combinedMigrationBinding.base ||
