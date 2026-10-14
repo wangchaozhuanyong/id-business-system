@@ -46,6 +46,19 @@ class RuntimeTests(unittest.TestCase):
     def seal(self):
         return patch.multiple(r.c, SEALED_ORDINARY_COMPONENT=self.auth, ADMIN_SUCCESSOR=self.admin_auth)
 
+    def test_central_restored_baseline_defaults_closed_and_returns_standard_tuple_only_after_seal(self):
+        expected = self.admin_auth['producer']['commit']
+        with self.enabled(), self.seal(), patch.object(r, 'RECOVERY_AUTHORITY', None), \
+                patch.object(r, 'baseline') as baseline:
+            with self.assertRaisesRegex(RuntimeError, 'RECOVERY_NOT_SEALED'):
+                r.restored_baseline(None, expected)
+            baseline.assert_not_called()
+        result = (Path('/synthetic/previous'), {'commit': expected}, {'recoveryAdmission': {'sealed': True}})
+        with self.enabled(), self.seal(), patch.object(r, 'RECOVERY_AUTHORITY', {'syntheticSourceSeal': True}), \
+                patch.object(r, 'baseline', return_value=result) as baseline:
+            self.assertEqual(r.restored_baseline(None, expected), result)
+            baseline.assert_called_once_with(None, expected)
+
     def native(self, receipt, *, response=0, status='Success'):
         now = datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
         return encoded({'CommandId': '11111111-2222-3333-4444-555555555555',

@@ -1,13 +1,17 @@
 """Real byte/record lifecycle; Docker, AWS, SQL and service transports are mocked."""
 
 import base64
+import ast
 import copy
 from contextlib import ExitStack
 from datetime import datetime, timezone
 import importlib.util
+import gzip
 import json
 import os
 from pathlib import Path
+import subprocess
+import shlex
 import tempfile
 import time
 from types import SimpleNamespace
@@ -20,6 +24,7 @@ spec = importlib.util.spec_from_file_location('online_protected_recovery_tests',
     HERE / 'online-recharge-component-recovery.py')
 m = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(m)
+REAL_PROCESS_RUN = subprocess.run
 
 
 def raw(value):
@@ -436,10 +441,28 @@ class RecoveryTests(unittest.TestCase):
         admin_native, admin_manifest, admin_proof = (json.loads(v) for v in admin_records)
         old_state['before'] = copy.deepcopy(self.baseline['services'])
         old_state['after'] = copy.deepcopy(self.baseline['services'])
+        old_state['workspaceVolumeAfter'] = self.baseline['workspaceVolume']
         images = {n: {'reference': self.baseline['services'][n]['reference'],
             'imageId': self.baseline['services'][n]['image'], 'fileCount': 3, 'sha256': 'a' * 64}
             for n in ('api', 'admin')}
         old_proof['images'], admin_proof['image'] = images, images['admin']
+        old_proof['projection']['outputFilesSha256'] = 'f' * 64
+        ordinary_files = {'scripts/synthetic-readonly-fixture.py': (b'# synthetic source fixture\n', '100644')}
+        old_manifest['apiComponentPublication'].update(sourceArchiveSha256=m.r.c.digest(b'ordinary archive'),
+            sourceFilesSha256=m.r.c.fingerprint(self.core.projection_module().inventory(ordinary_files)))
+        old_auth.update(projectionSha256=m.r.c.fingerprint(old_proof['projection']),
+            publicationSha256=m.r.c.fingerprint(old_manifest['apiComponentPublication']))
+        admin_proof['projection']['inheritedProjectionSha256'] = old_auth['projectionSha256']
+        admin_proof['projection']['projectionSha256'] = m.r.c.fingerprint({k: v
+            for k, v in admin_proof['projection'].items() if k != 'projectionSha256'})
+        admin_manifest['adminPublication']['inheritedApiComponentPublicationSha256'] = m.r.c.fingerprint(old_manifest['apiComponentPublication'])
+        admin_manifest['apiComponentPublication'] = copy.deepcopy(old_manifest['apiComponentPublication'])
+        admin_manifest['adminPublication']['projection'] = admin_proof['projection']
+        admin_manifest['sourceArchiveSha256'] = m.r.c.digest(b'admin archive')
+        admin_receipt = json.loads(admin_native['StandardOutputContent'])
+        admin_receipt['projectionSha256'] = admin_proof['projection']['projectionSha256']
+        admin_native['StandardOutputContent'] = raw(admin_receipt).decode()
+        admin_auth['projectionSha256'] = admin_proof['projection']['projectionSha256']
         admin_manifest['adminPublication']['preservedServices'] = {
             n: {'before': copy.deepcopy(old_state['after'][n]), 'after': copy.deepcopy(old_state['after'][n])}
             for n in m.r.c.SERVICES if n != 'admin'}
@@ -448,7 +471,9 @@ class RecoveryTests(unittest.TestCase):
         old_auth.update(manifestBytesSha256=m.r.c.digest(old_encoded[0]),
             buildProofBytesSha256=m.r.c.digest(old_encoded[1]), preservationRecordBytesSha256=m.r.c.digest(old_encoded[2]))
         old_receipt = json.loads(old_native['StandardOutputContent'])
-        old_receipt.update({n: old_auth[n] for n in ('manifestBytesSha256', 'buildProofBytesSha256', 'preservationRecordBytesSha256')})
+        old_receipt.update({n: old_auth[n] for n in ('manifestBytesSha256', 'buildProofBytesSha256',
+            'preservationRecordBytesSha256', 'projectionSha256', 'publicationSha256')})
+        old_receipt['migration'] = copy.deepcopy(old_state['migration'])
         old_native['StandardOutputContent'] = raw(old_receipt).decode()
         old_auth.update(invocationBytesSha256=m.r.c.digest(raw(old_native)), receiptSha256=m.r.c.fingerprint(old_receipt))
         old_records = (raw(old_native), *old_encoded)
@@ -487,7 +512,7 @@ class RecoveryTests(unittest.TestCase):
         controller = SimpleNamespace(BASE=base, require=self.core.need)
         for path, data in ((m.r.native_path(controller), old_records[0]), (m.r.current_native_path(controller), admin_records[0])):
             path.parent.mkdir(parents=True, mode=0o700); path.write_bytes(data); path.chmod(0o600)
-        _d, _core, _admin, actual_workspace, actual_online = m.r.modules()
+        _d, _core, actual_admin, actual_workspace, actual_online = m.r.modules()
         workspace = SimpleNamespace(WORKSPACE_SAFETY=actual_workspace.WORKSPACE_SAFETY,
             WORKSPACE_SQLITE_RECEIPT=actual_workspace.WORKSPACE_SQLITE_RECEIPT,
             WorkspaceSqliteProtection=actual_workspace.WorkspaceSqliteProtection,
@@ -561,11 +586,14 @@ class RecoveryTests(unittest.TestCase):
         controller.registration_download = Mock(return_value=b'ordinary archive')
         controller.registration_archive = Mock(return_value={})
         online = SimpleNamespace(inspect_image=Mock(), content_command=lambda _name: 'fixed readonly content',
-            content_summary=Mock(return_value={'fileCount': 3, 'sha256': 'a' * 64}), require_fresh_resources=Mock())
-        self.stack.enter_context(patch.object(m.r, 'modules', return_value=(controller, self.core, None, workspace, online)))
-        self.stack.enter_context(patch.object(m.r, 'original_controller', return_value=(None, {}, self.baseline['ordinaryArchiveSha256'])))
+            content_summary=Mock(return_value={'fileCount': 3, 'sha256': 'a' * 64}), require_fresh_resources=Mock(),
+            verify_permission_seed=Mock())
+        controller.shutil = SimpleNamespace(disk_usage=Mock(return_value=SimpleNamespace(free=10 * 1024**3)))
+        self.stack.enter_context(patch.object(m.r, 'modules', return_value=(controller, self.core, actual_admin, workspace, online)))
+        self.stack.enter_context(patch.object(m.r, 'original_controller', return_value=(None, ordinary_files, self.baseline['ordinaryArchiveSha256'])))
         self.stack.enter_context(patch.object(m.r, 'admin_controller', return_value=(None, {}, self.baseline['currentArchiveSha256'])))
         self.stack.enter_context(patch.object(m.r, 'source', return_value=({}, source_output, self.proof['sourceProjection'])))
+        self.stack.enter_context(patch.object(m, 'failed_source', return_value=({}, source_output, self.proof['sourceProjection'])))
         self.stack.enter_context(patch.object(self.core, 'configuration_model',
             side_effect=lambda _d, state: {'profile': 'api' if state['reference'] == 'old-api' else 'admin'}))
         self.stack.enter_context(patch.object(m.r.c, 'verify_applied_database', return_value=self.baseline['appliedDatabase']))
@@ -647,6 +675,280 @@ class RecoveryTests(unittest.TestCase):
         d.rollback_service.assert_not_called()
         self.assertTrue(all('up' not in call.args and 'stop' not in call.args and 'rm' not in call.args
             for call in d.compose.call_args_list))
+
+    def witness_fixture(self):
+        d, workspace, target, marker, _sqlite, _safety = self.full_verifier_fixture()
+        names = (*self.core.HELPERS, 'online-recharge-component-consumer.py',
+            'online-recharge-component-runtime.py', 'online-recharge-component-readonly.py',
+            'online-recharge-component-recovery.py', 'online-recharge-component-recovery-readonly.py')
+        archive_files = {'scripts/production-release/' + name: ((HERE / name).read_bytes(),
+            '100755' if (HERE / name).stat().st_mode & 0o111 else '100644') for name in names}
+        executor = {**self.executor(), 'commit': 'e' * 40,
+            'sourceTree': self.core.projection_module().source_tree(archive_files)}
+        archive_raw = b'synthetic authenticated executor archive transport'
+        directory = d.BASE / '.staging' / ('online-protected-recovery-' + '-'.join(
+            executor[n] for n in ('commit', 'workflowRunId', 'workflowRunAttempt')))
+        directory.mkdir(parents=True, mode=0o700)
+        for name in names:
+            data, mode = archive_files['scripts/production-release/' + name]
+            path = directory / name; path.write_bytes(data); path.chmod(0o755 if mode == '100755' else 0o600)
+        d.registration_download = lambda commit: archive_raw if commit == executor['commit'] else b'ordinary archive'
+        d.registration_archive = lambda data, commit: archive_files if data == archive_raw else {}
+        helper_sha = m.r.c.digest(Path(m.__file__).read_bytes())
+        class Fence:
+            def __init__(self): self.pipe = SimpleNamespace(deadline=time.monotonic() + 210)
+            def __enter__(self): return self
+            def __exit__(self, *args): pass
+            def check(self):
+                if time.monotonic() >= self.pipe.deadline: raise RuntimeError('expired fixture fence')
+        self.stack.enter_context(patch('sqlite3.connect', side_effect=lambda *args, **kwargs: SqliteTransport()))
+        self.stack.enter_context(patch.object(m, 'require_root'))
+        self.stack.enter_context(patch.dict(os.environ, API_FAULT_RESTORE_APPROVED='true'))
+        self.stack.enter_context(patch.object(m, 'fresh_audit_fence', side_effect=lambda *args: Fence()))
+        recovered = m.recover(d, self.context, approved=True, executor=executor)
+        independent = m.readback(d, self.context)
+        self.assertEqual(recovered, independent); self.assertFalse(marker.exists())
+        witness = {'version': 1, 'kind': m.WITNESS_KIND, 'origin': copy.deepcopy(self.origin),
+            'originalProducer': self.producer, 'executorProducer': executor,
+            'executorRun': {'runId': executor['workflowRunId'], 'runAttempt': executor['workflowRunAttempt'],
+                'headBranch': 'main', 'headCommit': executor['commit'], 'sourceTree': executor['sourceTree'],
+                'workflowPath': '.github/workflows/online-recharge-recovery.yml', 'event': 'workflow_dispatch',
+                'status': 'completed', 'conclusion': 'success', 'runResponseBytesSha256': 'a' * 64,
+                'treeResponseBytesSha256': 'b' * 64},
+            'executorArchiveBytesSha256': m.r.c.digest(archive_raw), 'executorHelperSha256': helper_sha,
+            'contextRawBase64': {k: base64.b64encode(v).decode() for k, v in self.context.items()},
+            'commands': {}, 'recoveryRecordBytesSha256': recovered['recoveryRecordBytesSha256'],
+            'servicesSha256': m.r.c.fingerprint(recovered['state']['servicesAfter'])}
+        actual_generator = m.archived_parameter_generator
+        def fixture_generator(controller, core, authority):
+            generator, saved = actual_generator(controller, core, authority)
+            # Synthetic seals are confined to this fixture. The archived control
+            # implementation and every archived source/parameter byte remain real.
+            archived_runtime = generator.__globals__['r']
+            archived_runtime.c.SEALED_ORDINARY_COMPONENT = copy.deepcopy(m.r.c.SEALED_ORDINARY_COMPONENT)
+            archived_runtime.c.ADMIN_SUCCESSOR = copy.deepcopy(m.r.c.ADMIN_SUCCESSOR)
+            generator.__globals__['recovery'] = m
+            return generator, saved
+        self.stack.enter_context(patch.object(m, 'archived_parameter_generator', side_effect=fixture_generator))
+        generator, _saved = fixture_generator(d, self.core, witness)
+        for mode, command_id in (('recover', '22222222-2222-3333-4444-555555555555'),
+                                 ('readback', '33333333-2222-3333-4444-555555555555')):
+            params = generator(mode, self.core, executor, self.context)
+            native = self.native(recovered, command=command_id)
+            witness['commands'][mode] = {'commandId': command_id, 'instanceId': self.origin['instanceId'],
+                'parameters': params, 'parametersSha256': m.r.c.fingerprint(params),
+                'nativeRawBase64': base64.b64encode(native).decode(), 'nativeBytesSha256': m.r.c.digest(native),
+                'receiptSha256': m.r.c.fingerprint(recovered)}
+        source_directory = d.BASE / 'admission-source'; source_directory.mkdir(mode=0o700)
+        for name in (*names, 'online-recharge-scope.py'):
+            path = source_directory / name
+            if not path.exists(): path.write_bytes((HERE / name).read_bytes()); path.chmod(0o600)
+        profile = source_directory / 'online-recharge-component-runtime.py'
+        profile.write_text(profile.read_text().replace('RECOVERY_AUTHORITY = None', 'RECOVERY_AUTHORITY = ' + repr(witness)))
+        self.stack.enter_context(patch.object(m.r, '__file__', str(profile)))
+        self.stack.enter_context(patch.object(m.r, 'RECOVERY_AUTHORITY', witness))
+        original_load = m.r.load
+        self.stack.enter_context(patch.object(m.r, 'load', side_effect=lambda name:
+            m if name == 'online-recharge-component-recovery.py' else original_load(name)))
+        return d, workspace, target, profile, witness, recovered
+
+    def test_full_actual_recovery_native_witness_consumed_by_next_real_baseline_and_preflight(self):
+        d, workspace, target, _profile, witness, recovered = self.witness_fixture()
+        manifest_before = (Path(self.baseline['currentRelease']) / 'release-manifest.json').read_bytes()
+        admission = m.admit_baseline(d, witness)
+        self.assertEqual(admission['state'], recovered['state'])
+        previous, _manifest, evidence = m.r.restored_baseline(d, m.r.current_predecessor())
+        self.assertEqual(evidence['services'], recovered['state']['servicesAfter'])
+        self.assertEqual(evidence['recoveryAdmission']['readbackCommandId'], witness['commands']['readback']['commandId'])
+        with patch.object(m.r.c, 'validate_source_files', return_value={}):
+            next_f = m.r.preflight(d, self.executor(), m.r.current_predecessor())
+        self.assertEqual(next_f['baseline'], evidence)
+        self.assertEqual(previous, Path(self.baseline['currentRelease']))
+        self.assertEqual((previous / 'release-manifest.json').read_bytes(), manifest_before)
+        self.assertTrue((target / m.RECORD).is_file())
+
+    def test_source_none_self_declared_witness_or_same_command_never_admits(self):
+        d, _workspace, _target, profile, witness, _receipt = self.witness_fixture()
+        raw_profile = profile.read_bytes()
+        profile.write_text('RECOVERY_AUTHORITY = None\n')
+        with self.assertRaisesRegex(RuntimeError, 'AUTHORITY_NOT_SEALED'): m.admit_baseline(d, witness)
+        profile.write_bytes(raw_profile)
+        forged = copy.deepcopy(witness); forged['commands']['readback']['commandId'] = forged['commands']['recover']['commandId']
+        with self.assertRaisesRegex(RuntimeError, 'AUTHORITY_NOT_SEALED'): m.admit_baseline(d, forged)
+        with self.assertRaisesRegex(RuntimeError, 'INDEPENDENT_COMMAND_REQUIRED'): m.validate_witness_shape(forged)
+        with patch.object(m.r, 'RECOVERY_AUTHORITY', None):
+            with self.assertRaisesRegex(RuntimeError, 'RECOVERY_NOT_SEALED'):
+                m.r.restored_baseline(d, m.r.current_predecessor())
+
+    def test_source_seal_symlink_or_hardlink_rejected(self):
+        d, _workspace, _target, profile, witness, _receipt = self.witness_fixture()
+        link = profile.with_name('linked-runtime.py'); link.symlink_to(profile)
+        with patch.object(m.r, '__file__', str(link)):
+            with self.assertRaisesRegex(RuntimeError, 'AUTHORITY_SOURCE_CHANGED'): m.admit_baseline(d, witness)
+        link.unlink()
+        os.link(profile, link)
+        with self.assertRaisesRegex(RuntimeError, 'AUTHORITY_SOURCE_CHANGED'): m.admit_baseline(d, witness)
+        link.unlink()
+
+    def rewritten_carrier(self, parameters, os_byte, *, append_program=b''):
+        program = m.sender_program(parameters)
+        tree = ast.parse(program)
+        call = next(node for node in ast.walk(tree) if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Subscript) and isinstance(node.func.value, ast.Name)
+            and node.func.value.id == 'client' and isinstance(node.func.slice, ast.Constant)
+            and node.func.slice.value == 'server_arguments')
+        for index in (2, 4, 5):
+            text = ast.literal_eval(call.args[index])
+            packed = bytearray(gzip.compress(gzip.decompress(base64.b64decode(text[len('gzip-base64:'):], validate=True)), mtime=0))
+            packed[9] = os_byte
+            replacement = 'gzip-base64:' + base64.b64encode(packed).decode()
+            program = program.replace(repr(text).encode(), repr(replacement).encode())
+        packed = bytearray(gzip.compress(program + append_program, mtime=0)); packed[9] = os_byte
+        carrier = ('import base64,gzip;exec(compile(gzip.decompress(base64.b64decode('
+            + repr(base64.b64encode(packed).decode()) + ',validate=True)),"<online-protected-recovery-transport>","exec"))')
+        return {'commands': ['python3 -B -c ' + shlex.quote(carrier)], 'executionTimeout': ['600']}
+
+    def test_os_three_255_parameter_equivalence_retains_actual_hash_and_full_program_guard(self):
+        d, _workspace, _target, _profile, witness, _receipt = self.witness_fixture()
+        generator, _saved = m.archived_parameter_generator(d, self.core, witness)
+        executor = m.r.producer(*[witness['executorProducer'][n] for n in
+            ('commit', 'sourceTree', 'workflowRunId', 'workflowRunAttempt')])
+        for os_byte in (3, 255):
+            parameters = self.rewritten_carrier(witness['commands']['recover']['parameters'], os_byte)
+            original_hash = m.r.c.fingerprint(parameters)
+            self.assertEqual(m.authenticate_sender_parameters(generator, 'recover', self.core,
+                executor, self.context, parameters), parameters)
+            self.assertEqual(m.r.c.fingerprint(parameters), original_hash)
+        changed = self.rewritten_carrier(witness['commands']['recover']['parameters'], 255,
+            append_program=b'\nraise RuntimeError("unexpected extra program")\n')
+        with self.assertRaisesRegex(RuntimeError, 'WITNESS_PARAMETERS_CHANGED'):
+            m.authenticate_sender_parameters(generator, 'recover', self.core, executor, self.context, changed)
+        with self.assertRaisesRegex(RuntimeError, 'WITNESS_ARGUMENTS_CHANGED'):
+            m.authenticate_sender_parameters(generator, 'readback', self.core, executor, self.context,
+                witness['commands']['recover']['parameters'])
+        noncanonical = copy.deepcopy(witness['commands']['recover']['parameters'])
+        noncanonical['commands'][0] = ' ' + noncanonical['commands'][0]
+        with self.assertRaisesRegex(RuntimeError, 'WITNESS_CARRIER_CHANGED'): m.sender_program(noncanonical)
+
+    def test_json_sorted_source_executor_data_keeps_original_constructor_program(self):
+        d, _workspace, _target, profile, witness, _receipt = self.witness_fixture()
+        witness['executorProducer'] = json.loads(json.dumps(witness['executorProducer'], sort_keys=True))
+        source = profile.read_text(); tree = ast.parse(source)
+        declaration = next(node for node in tree.body if isinstance(node, ast.Assign)
+            and any(isinstance(t, ast.Name) and t.id == 'RECOVERY_AUTHORITY' for t in node.targets))
+        lines = source.splitlines(keepends=True)
+        lines[declaration.lineno - 1:declaration.end_lineno] = ['RECOVERY_AUTHORITY = ' + repr(witness) + '\n']
+        profile.write_text(''.join(lines))
+        self.assertEqual(m.admit_baseline(d, witness)['servicesSha256'], witness['servicesSha256'])
+
+    def test_sealed_native_parameters_or_live_service_drift_is_rejected(self):
+        d, workspace, _target, _profile, witness, _receipt = self.witness_fixture()
+        original_authority = copy.deepcopy(witness)
+        # Even a re-sealed modified parameter declaration cannot bypass the
+        # actual archived source generator, unlike a self-consistent file hash.
+        original_source_authority = m.source_authority
+        with patch.object(m, 'source_authority', side_effect=lambda v: copy.deepcopy(v)):
+            changed = copy.deepcopy(witness)
+            changed['commands']['recover']['parameters']['executionTimeout'] = ['601']
+            changed['commands']['recover']['parametersSha256'] = m.r.c.fingerprint(changed['commands']['recover']['parameters'])
+            with self.assertRaisesRegex(RuntimeError, 'WITNESS_PARAMETERS_CHANGED'): m.admit_baseline(d, changed)
+            changed = copy.deepcopy(witness)
+            changed['commands']['readback']['nativeRawBase64'] = changed['commands']['recover']['nativeRawBase64']
+            with self.assertRaises(RuntimeError): m.admit_baseline(d, changed)
+        workspace.snapshot.return_value['mysql']['containerId'] = 'f' * 64
+        with self.assertRaisesRegex(RuntimeError, 'SERVICES_CHANGED'): m.admit_baseline(d, original_authority)
+
+
+class FailedSourceTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.core = m.r.c.load_core(m.r.authority()['coreSha256'])
+        cls.projection = cls.core.projection_module()
+        cls.root = HERE.parents[1]
+        commits = (m.FAILED_PRODUCER['commit'], m.r.authority()['producer']['commit'],
+            '0a03fa28e6b844a18833d5c63f1de700f091fc64', m.r.c.ONLINE_SOURCE)
+        cls.archives, cls.files = {}, {}
+        for commit in commits:
+            process = REAL_PROCESS_RUN(['git', 'archive', '--format=tar', '--prefix=id-business-system-' + commit + '/', commit],
+                cwd=cls.root, capture_output=True, timeout=30, check=True)
+            cls.archives[commit] = process.stdout
+            cls.files[commit] = m.r.modules()[0].registration_archive(process.stdout, commit)
+
+    def fixture(self):
+        output = self.root / '.runtime' / 'online-release-hardening-20261014' / 'unit-recovery'
+        output.mkdir(parents=True, exist_ok=True)
+        directory = tempfile.TemporaryDirectory(dir=output); self.addCleanup(directory.cleanup)
+        base = Path(directory.name).resolve(); target = base / 'releases' / m.TARGET_NAME
+        helper_directory = target / 'scripts/production-release'; helper_directory.mkdir(parents=True, mode=0o700)
+        candidate = self.files[m.FAILED_PRODUCER['commit']]
+        for name in (*self.core.HELPERS, *m.r.HELPERS):
+            data, mode = candidate['scripts/production-release/' + name]
+            path = helper_directory / name; path.write_bytes(data); path.chmod(0o755 if mode == '100755' else 0o644)
+        a = m.r.authority(); ordinary = self.files[a['producer']['commit']]
+        base_files = self.files['0a03fa28e6b844a18833d5c63f1de700f091fc64']
+        fixed = self.files[m.r.c.ONLINE_SOURCE]
+        original_output, original_projection = self.projection.project_files(ordinary, base_files, fixed,
+            a['producer']['commit'], a['producer']['sourceTree'])
+        evidence = {'ordinaryProducer': a['producer'], 'ordinaryAuthoritySha256': m.r.c.fingerprint(a),
+            'actualPredecessor': m.r.current_authority()['producer'],
+            'adminAuthoritySha256': m.r.c.fingerprint(m.r.current_authority()),
+            'ordinaryArchiveSha256': m.r.c.digest(self.archives[a['producer']['commit']]),
+            'ordinarySourceFilesSha256': m.r.c.fingerprint(self.projection.inventory(ordinary)),
+            'ordinaryProjectionSha256': m.r.c.fingerprint(original_projection),
+            'ordinaryOutputFilesSha256': m.r.c.fingerprint(self.projection.inventory(original_output))}
+        d = SimpleNamespace(BASE=base, registration_download=lambda commit: self.archives[commit],
+            registration_archive=lambda data, commit: self.files[commit],
+            _apiAdminPendingProjectionReferences=(base_files, fixed))
+        proof = {'sourceProjection': {'candidateArchiveSha256': m.r.c.digest(self.archives[m.FAILED_PRODUCER['commit']])}}
+        return d, target, evidence, proof
+
+    def test_old_new_helper_call_fails_real_archived_pure_source_succeeds(self):
+        d, _target, evidence, proof = self.fixture()
+        with patch.object(m, 'BASE', d.BASE), \
+                patch('subprocess.run', side_effect=AssertionError('external transport forbidden')):
+            with self.assertRaisesRegex(RuntimeError, 'EXECUTOR_SOURCE_CHANGED'):
+                m.r.source(d, m.FAILED_PRODUCER, evidence)
+            candidate, output, record = m.failed_source(d, self.core, evidence, proof)
+        self.assertEqual(candidate, self.files[m.FAILED_PRODUCER['commit']])
+        self.assertEqual(output, candidate)
+        self.assertEqual(record['candidateProducer'], m.FAILED_PRODUCER)
+        self.assertEqual(record['applicationInputSha256'], m.r.c.APPLICATION_SHA256)
+        self.assertEqual(record['onlineInputSha256'], m.r.c.ONLINE_SHA256)
+
+    def test_original_helper_or_archive_bytes_drift_rejected_before_execution(self):
+        d, target, evidence, proof = self.fixture()
+        helper = target / 'scripts/production-release/online-recharge-component-runtime.py'
+        with patch.object(m, 'BASE', d.BASE):
+            helper.write_bytes(helper.read_bytes() + b'\n# changed\n')
+            with self.assertRaisesRegex(RuntimeError, 'FAILED_HELPER_CHANGED'):
+                m.failed_source(d, self.core, evidence, proof)
+            changed = copy.deepcopy(proof); changed['sourceProjection']['candidateArchiveSha256'] = 'f' * 64
+            with self.assertRaisesRegex(RuntimeError, 'FAILED_ARCHIVE_CHANGED'):
+                m.failed_source(d, self.core, evidence, changed)
+
+    def test_new_candidate_source_authenticates_recovery_dependency_with_real_frozen_projection(self):
+        d, _target, evidence, _proof = self.fixture()
+        candidate = copy.deepcopy(self.files[m.FAILED_PRODUCER['commit']])
+        for name in (*self.core.HELPERS, *m.r.HELPERS, 'online-recharge-component-recovery.py'):
+            path = HERE / name
+            candidate['scripts/production-release/' + name] = (path.read_bytes(),
+                '100755' if path.stat().st_mode & 0o111 else '100644')
+        producer = {'commit': 'e' * 40, 'sourceTree': self.projection.source_tree(candidate),
+            'workflowRunId': '54321', 'workflowRunAttempt': '1'}
+        candidate_raw = b'synthetic current candidate archive transport'
+        d.registration_download = lambda commit: candidate_raw if commit == producer['commit'] else self.archives[commit]
+        d.registration_archive = lambda data, commit: candidate if data == candidate_raw else self.files[commit]
+        with patch.object(m.r, 'RECOVERY_AUTHORITY', {'syntheticSourceSeal': True}), \
+                patch('subprocess.run', side_effect=AssertionError('external transport forbidden')):
+            files, output, record = m.r.source(d, producer, evidence)
+            self.assertEqual(files, candidate); self.assertEqual(output, candidate)
+            self.assertEqual(record['applicationInputSha256'], m.r.c.APPLICATION_SHA256)
+            self.assertEqual(m.r.c.validate_source_files(files)['onlineInputSha256'], m.r.c.ONLINE_SHA256)
+            helper = 'scripts/production-release/online-recharge-component-recovery.py'
+            candidate[helper] = (candidate[helper][0] + b'\n# mutated\n', candidate[helper][1])
+            producer['sourceTree'] = self.projection.source_tree(candidate)
+            with self.assertRaisesRegex(RuntimeError, 'EXECUTOR_SOURCE_CHANGED'):
+                m.r.source(d, producer, evidence)
 
 
 if __name__ == '__main__':

@@ -51,6 +51,10 @@ PRESERVED = c.PRESERVED
 RESTORE_BUDGET_SECONDS = 65
 HELPERS = ('online-recharge-component-consumer.py', 'online-recharge-component-runtime.py',
            'online-recharge-component-readonly.py', 'online-recharge-scope.py')
+# Filled only with separately obtained actual recover/readback native bytes by
+# the central release owner. Environment/CLI/caller JSON cannot supply this seal.
+# None keeps the original historical live-identity admission fail-closed.
+RECOVERY_AUTHORITY = None
 
 
 def need(value, code):
@@ -177,7 +181,17 @@ def baseline(d, expected):
         core.private_bytes(previous / 'release-manifest.json'), core.private_bytes(previous / 'admin-build-proof.json'))
     successor = c.authenticate_admin_records(*admin_records, records)
     current_reader, _current_files, current_archive_sha = admin_controller(d, core, previous)
-    need(current_reader.readback(d, expected) == successor['receipt'], 'ADMIN_LIVE_READBACK_CHANGED')
+    admission = None
+    if RECOVERY_AUTHORITY is not None:
+        recovery = load('online-recharge-component-recovery.py')
+        # The only authority enters from this source-pinned module constant.
+        # In particular, a recovery record by itself is never a live seal.
+        admission = recovery.admit_baseline(d, copy.deepcopy(RECOVERY_AUTHORITY))
+        need(admission['state']['currentRelease'] == str(previous)
+             and admission['state']['manifestBytesSha256'] == c.digest(admin_records[1]),
+             'RECOVERY_CURRENT_CHANGED')
+    else:
+        need(current_reader.readback(d, expected) == successor['receipt'], 'ADMIN_LIVE_READBACK_CHANGED')
     need(successor['manifest']['sourceArchiveSha256'] == current_archive_sha, 'ADMIN_ARCHIVE_CHANGED')
     manifest = successor['manifest']; proof, state = (authenticated[n] for n in ('proof', 'preservation'))
     ledger = authenticated['manifest']['apiComponentPublication']
@@ -186,7 +200,11 @@ def baseline(d, expected):
          'ORDINARY_ARCHIVE_CHANGED')
     states = workspace.snapshot(d, previous)
     need(set(states) == set(c.SERVICES)
-         and all(states[n] == state['after'][n] for n in c.SERVICES if n != 'admin')
+         and all(states[n] == state['after'][n] for n in (PRESERVED if admission is not None else
+             tuple(n for n in c.SERVICES if n != 'admin')))
+         and (admission is None or states == admission['state']['servicesAfter'])
+         and (admission is None or states['api']['image'] == proof['images']['api']['imageId']
+             and states['api']['reference'] == proof['images']['api']['reference'])
          and states['admin']['image'] == successor['proof']['image']['imageId']
          and states['admin']['reference'] == successor['proof']['image']['reference'], 'ADMIN_SERVICES_CHANGED')
     need(not d.compose(previous, 'ps', '-q', '--all', 'online-recharge'), 'ENGINE_ALREADY_PRESENT')
@@ -205,7 +223,7 @@ def baseline(d, expected):
     need((d.BASE / 'current').resolve() == previous
          and core.private_bytes(previous / 'release-manifest.json') == admin_records[1]
          and workspace.snapshot(d, previous) == states, 'BASELINE_MOVED')
-    return previous, manifest, {'version': 1, 'kind': KIND + '_BASELINE',
+    evidence = {'version': 1, 'kind': KIND + '_BASELINE',
         'ordinaryProducer': copy.deepcopy(a['producer']), 'ordinaryAuthoritySha256': c.fingerprint(a),
         'actualPredecessor': copy.deepcopy(active['producer']), 'adminAuthoritySha256': c.fingerprint(active),
         'adminProjectionSha256': active['projectionSha256'], 'adminProof': successor['proof'],
@@ -221,6 +239,21 @@ def baseline(d, expected):
         'migrationState': copy.deepcopy(authenticated['receipt']['migration']),
         'appliedDatabase': database, 'backupInstallation': backup,
         'originMarkersSha256': c.fingerprint({n: manifest[n] for n in admin.ORIGIN_MARKERS})}
+    if admission is not None:
+        evidence['recoveryAdmission'] = {name: admission[name] for name in admission if name != 'state'}
+        need(admission['state']['appliedDatabase'] == database
+             and admission['state']['workspaceVolume'] == volume
+             and admission['state']['environmentFileSha256'] == evidence['environmentFileSha256']
+             and admission['state']['backupInstallationSha256'] == c.fingerprint(backup),
+             'RECOVERY_BASELINE_CHANGED')
+    return previous, manifest, evidence
+
+
+def restored_baseline(d, expected):
+    """Central first-recharge entry; never invokes a stale frozen live readback."""
+    authority()
+    need(RECOVERY_AUTHORITY is not None, 'RECOVERY_NOT_SEALED')
+    return baseline(d, expected)
 
 
 def verify_online_grants(d, online, directory):
@@ -329,7 +362,8 @@ def source(d, p, evidence):
     candidate_raw = d.registration_download(p['commit'])
     candidate = d.registration_archive(candidate_raw, p['commit'])
     need(projection.source_tree(candidate) == p['sourceTree'], 'SOURCE_TREE_CHANGED')
-    for name in (*core.HELPERS, *HELPERS):
+    for name in (*core.HELPERS, *HELPERS,
+                 *(('online-recharge-component-recovery.py',) if RECOVERY_AUTHORITY is not None else ())):
         relative = 'scripts/production-release/' + name
         path = Path(__file__).with_name(name)
         need(relative in candidate and path.is_file() and not path.is_symlink()

@@ -6,6 +6,7 @@ restored API/Admin under fresh guards; it never switches or removes a service.
 """
 
 import argparse
+import ast
 import base64
 import copy
 import fcntl
@@ -13,6 +14,7 @@ import json
 import os
 from pathlib import Path
 import re
+import shlex
 import stat
 from types import SimpleNamespace
 
@@ -59,6 +61,14 @@ RETURN_FIELDS = frozenset(('version', 'scope', 'kind', 'status', 'producer', 'or
     'state', 'originalMarkerCleared', 'onlinePublished', 'migrationPerformed',
     'databaseGrantsChanged', 'executionMigrationPlan', 'volumeDeletionPerformed',
     'businessActions', 'failedOperationBusinessActions'))
+WITNESS_FIELDS = frozenset(('version', 'kind', 'origin', 'originalProducer', 'executorProducer',
+    'executorRun', 'executorArchiveBytesSha256', 'executorHelperSha256', 'contextRawBase64',
+    'commands', 'recoveryRecordBytesSha256', 'servicesSha256'))
+COMMAND_WITNESS_FIELDS = frozenset(('commandId', 'instanceId', 'parameters', 'parametersSha256',
+    'nativeRawBase64', 'nativeBytesSha256', 'receiptSha256'))
+EXECUTOR_RUN_FIELDS = frozenset(('runId', 'runAttempt', 'headBranch', 'headCommit', 'sourceTree',
+    'workflowPath', 'event', 'status', 'conclusion', 'runResponseBytesSha256', 'treeResponseBytesSha256'))
+WITNESS_KIND = r.KIND + '_PROTECTED_RECOVERY_AUTHORITY'
 
 
 def need(value, code):
@@ -192,6 +202,47 @@ def unchanged(saved):
         need(file_identity(path) == identity and path.read_bytes() == raw, 'RECORD_MOVED')
 
 
+def failed_source(d, core, evidence, proof):
+    """Recompute the old candidate using only its authenticated pure interpreter.
+
+    A changed recovery helper cannot impersonate the failed producer's source.
+    This loader never calls that interpreter's baseline, release or old fences.
+    """
+    from types import ModuleType
+    target = target_path(d)
+    archive_raw = d.registration_download(FAILED_PRODUCER['commit'])
+    need(r.c.digest(archive_raw) == proof['sourceProjection']['candidateArchiveSha256'],
+         'FAILED_ARCHIVE_CHANGED')
+    files = d.registration_archive(archive_raw, FAILED_PRODUCER['commit'])
+    need(core.projection_module().source_tree(files) == FAILED_PRODUCER['sourceTree'], 'FAILED_TREE_CHANGED')
+    path = target / 'scripts/production-release/online-recharge-component-runtime.py'
+    relative = path.relative_to(target).as_posix()
+    need(relative in files, 'FAILED_HELPER_MISSING')
+    # Authenticate the complete known helper set before any archived Python is
+    # evaluated. Each additional target source byte is checked by _verify.
+    names = (*core.HELPERS, 'online-recharge-component-consumer.py', 'online-recharge-component-runtime.py',
+        'online-recharge-component-readonly.py', 'online-recharge-scope.py')
+    saved = {}
+    for name in names:
+        helper = path.with_name(name); expected = files.get('scripts/production-release/' + name)
+        need(helper.is_file() and not helper.is_symlink() and helper.resolve() == helper
+             and expected is not None, 'FAILED_HELPER_CHANGED')
+        identity = file_identity(helper); source = helper.read_bytes()
+        mode = '100755' if helper.stat().st_mode & 0o111 else '100644'
+        need(expected == (source, mode) and identity == file_identity(helper), 'FAILED_HELPER_CHANGED')
+        saved[helper] = (source, identity)
+    module = ModuleType('authenticated_failed_online_source'); module.__file__ = str(path)
+    exec(compile(saved[path][0], str(path), 'exec', dont_inherit=True), module.__dict__)
+    need(tuple(module.HELPERS) == names[len(core.HELPERS):]
+         and module.authority() == r.authority() and module.current_authority() == r.current_authority(),
+         'FAILED_INTERPRETER_CHANGED')
+    result = module.source(d, FAILED_PRODUCER, evidence)
+    need(result[0] == files and result[2]['candidateArchiveSha256'] == r.c.digest(archive_raw),
+         'FAILED_SOURCE_CHANGED')
+    unchanged(saved)
+    return result
+
+
 def _verify(d, context, *, marker_required):
     core, transport, evidence, proof = inputs(context)
     d, core, _admin, workspace, online = r.modules(d)
@@ -209,7 +260,7 @@ def _verify(d, context, *, marker_required):
     _admin_reader, _admin_files, admin_archive_sha = r.admin_controller(d, core, previous)
     need(old_archive_sha == evidence['ordinaryArchiveSha256']
          and admin_archive_sha == evidence['currentArchiveSha256'], 'ARCHIVE_CHANGED')
-    files, output, projection = r.source(d, FAILED_PRODUCER, evidence)
+    files, output, projection = failed_source(d, core, evidence, proof)
     r.validate_build(proof, FAILED_PRODUCER, projection, transport, proof['qualityRunId'],
         proof['images']['api']['reference'].rsplit(':', 1)[0])
     for name, (raw, mode) in output.items():
@@ -509,6 +560,246 @@ def validate_receipt(receipt, context, operation):
                  receipt['recoveryExecutor'].get('sourceTree'), receipt['recoveryExecutor'].get('workflowRunId'),
                  receipt['recoveryExecutor'].get('workflowRunAttempt')), 'RETURN_CHANGED')
     return receipt
+
+
+def source_authority(value):
+    """Only the literal committed runtime seal is eligible, never caller JSON."""
+    path = Path(r.__file__)
+    need(path.is_absolute() and path.resolve() == path and not path.is_symlink(), 'AUTHORITY_SOURCE_CHANGED')
+    metadata = path.lstat()
+    need(stat.S_ISREG(metadata.st_mode) and metadata.st_nlink == 1 and metadata.st_uid == os.geteuid()
+         and stat.S_IMODE(metadata.st_mode) in (0o600, 0o644, 0o755)
+         and 0 < metadata.st_size < 2 * 1024 * 1024, 'AUTHORITY_SOURCE_CHANGED')
+    before = file_identity(path)
+    descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC)
+    with os.fdopen(descriptor, 'rb') as stream:
+        opened = os.fstat(stream.fileno())
+        identity = lambda row: tuple(getattr(row, name) for name in ('st_dev', 'st_ino', 'st_mode', 'st_nlink',
+            'st_uid', 'st_gid', 'st_size', 'st_mtime_ns', 'st_ctime_ns'))
+        need(identity(opened) == before, 'AUTHORITY_SOURCE_CHANGED')
+        raw = stream.read(2 * 1024 * 1024 + 1)
+        need(identity(os.fstat(stream.fileno())) == before, 'AUTHORITY_SOURCE_CHANGED')
+    need(before == file_identity(path) and len(raw) == metadata.st_size,
+         'AUTHORITY_SOURCE_CHANGED')
+    declarations = [node for node in ast.parse(raw).body if isinstance(node, ast.Assign)
+        and any(isinstance(target, ast.Name) and target.id == 'RECOVERY_AUTHORITY' for target in node.targets)]
+    need(len(declarations) == 1, 'AUTHORITY_SOURCE_CHANGED')
+    declared = ast.literal_eval(declarations[0].value)
+    need(declared is not None and type(declared) is dict and value == declared, 'AUTHORITY_NOT_SEALED')
+    return copy.deepcopy(declared)
+
+
+def validate_witness_shape(value):
+    """Validate source-bound data; this function alone grants no admission."""
+    need(type(value) is dict and set(value) == WITNESS_FIELDS and type(value['version']) is int
+         and value['version'] == 1 and value['kind'] == WITNESS_KIND
+         and value['origin'] == ORIGIN and value['originalProducer'] == FAILED_PRODUCER,
+         'WITNESS_CHANGED')
+    executor = value['executorProducer']
+    need(type(executor) is dict and executor == r.producer(executor.get('commit'), executor.get('sourceTree'),
+        executor.get('workflowRunId'), executor.get('workflowRunAttempt')) and executor != FAILED_PRODUCER,
+        'WITNESS_EXECUTOR_CHANGED')
+    run = value['executorRun']
+    need(type(run) is dict and set(run) == EXECUTOR_RUN_FIELDS
+         and run['runId'] == executor['workflowRunId'] and run['runAttempt'] == executor['workflowRunAttempt']
+         and run['headCommit'] == executor['commit'] and run['sourceTree'] == executor['sourceTree']
+         and run['headBranch'] == 'main' and run['workflowPath'] == '.github/workflows/online-recharge-recovery.yml'
+         and run['event'] == 'workflow_dispatch' and run['status'] == 'completed' and run['conclusion'] == 'success'
+         and all(type(run[n]) is str and re.fullmatch('[a-f0-9]{64}', run[n])
+             for n in ('runResponseBytesSha256', 'treeResponseBytesSha256')), 'WITNESS_RUN_CHANGED')
+    need(all(type(value[n]) is str and re.fullmatch('[a-f0-9]{64}', value[n]) for n in
+        ('executorArchiveBytesSha256', 'executorHelperSha256', 'recoveryRecordBytesSha256', 'servicesSha256')),
+        'WITNESS_HASH_CHANGED')
+    raw_context = value['contextRawBase64']
+    need(type(raw_context) is dict and set(raw_context) == {'failureRaw', 'preflightRaw', 'proofRaw'},
+         'WITNESS_INPUTS_CHANGED')
+    for text in raw_context.values():
+        need(type(text) is str and 0 < len(text) < 360 * 1024, 'WITNESS_INPUTS_CHANGED')
+    decoded = {name: base64.b64decode(text, validate=True) for name, text in raw_context.items()}
+    context = validate_inputs(decoded['failureRaw'], decoded['preflightRaw'], decoded['proofRaw'])
+    commands = value['commands']
+    need(type(commands) is dict and set(commands) == {'recover', 'readback'}, 'WITNESS_COMMANDS_CHANGED')
+    ids = [ORIGIN['failureCommandId']]
+    for command in commands.values():
+        need(type(command) is dict and set(command) == COMMAND_WITNESS_FIELDS
+             and type(command['commandId']) is str and re.fullmatch('[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}', command['commandId'])
+             and command['instanceId'] == ORIGIN['instanceId']
+             and type(command['nativeRawBase64']) is str and 0 < len(command['nativeRawBase64']) < 180 * 1024
+             and all(type(command[n]) is str and re.fullmatch('[a-f0-9]{64}', command[n])
+                 for n in ('parametersSha256', 'nativeBytesSha256', 'receiptSha256')),
+             'WITNESS_COMMANDS_CHANGED')
+        ids.append(command['commandId'])
+    need(len(set(ids)) == 3, 'WITNESS_INDEPENDENT_COMMAND_REQUIRED')
+    return context
+
+
+def archived_parameter_generator(d, core, value):
+    """Use actual archived sender source, never a later helper's parameter format.
+
+    All fixed source/helper validation precedes execution. Only the already
+    authenticated archive transport replaces the original Git read; no network,
+    Git executable, IAM or sender operation is added to the parameter generator.
+    """
+    import importlib.util
+    from types import FunctionType, ModuleType
+    executor = value['executorProducer']
+    archive_raw = d.registration_download(executor['commit'])
+    need(r.c.digest(archive_raw) == value['executorArchiveBytesSha256'], 'WITNESS_ARCHIVE_CHANGED')
+    files = d.registration_archive(archive_raw, executor['commit'])
+    need(core.projection_module().source_tree(files) == executor['sourceTree'], 'WITNESS_TREE_CHANGED')
+    directory = d.BASE / '.staging' / ('online-protected-recovery-' + '-'.join(
+        executor[name] for name in ('commit', 'workflowRunId', 'workflowRunAttempt')))
+    need(directory.resolve() == directory and directory.is_dir() and not directory.is_symlink(), 'WITNESS_SOURCE_MISSING')
+    names = (*core.HELPERS, 'online-recharge-component-consumer.py', 'online-recharge-component-runtime.py',
+        'online-recharge-component-readonly.py', 'online-recharge-component-recovery.py',
+        'online-recharge-component-recovery-readonly.py')
+    saved, pins = {}, {}
+    for name in names:
+        path = directory / name
+        need(path.is_file() and not path.is_symlink() and path.resolve() == path
+             and path.stat().st_nlink == 1 and path.stat().st_uid == os.geteuid()
+             and stat.S_IMODE(path.stat().st_mode) in (0o600, 0o644, 0o755), 'WITNESS_HELPER_CHANGED')
+        identity = file_identity(path)
+        source = path.read_bytes()
+        mode = '100755' if path.stat().st_mode & 0o111 else '100644'
+        need(0 < len(source) < 2 * 1024 * 1024 and files.get('scripts/production-release/' + name) == (source, mode)
+             and file_identity(path) == identity, 'WITNESS_HELPER_CHANGED')
+        saved[path] = (source, identity); pins[name] = r.c.digest(source)
+    need(pins['online-recharge-component-recovery.py'] == value['executorHelperSha256']
+         == r.c.digest(Path(__file__).read_bytes()), 'WITNESS_RECOVERY_HELPER_CHANGED')
+    filename = 'online-recharge-component-recovery-readonly.py'
+    path = directory / filename
+    # Match the existing importlib/ModuleType loader and execute exactly the
+    # bytes just authenticated against the archived Git tree.
+    spec = importlib.util.spec_from_file_location('sealed_online_recovery_sender', path)
+    archived = importlib.util.module_from_spec(spec)
+    exec(compile(saved[path][0], str(path), 'exec', dont_inherit=True), archived.__dict__)
+    need(tuple(archived.helpers(core)) == names, 'WITNESS_HELPER_SET_CHANGED')
+    def authenticated_pins(requested_core, requested_executor, requested_names):
+        need(requested_executor == executor and tuple(requested_names) == names
+             and requested_core.__file__ == core.__file__, 'WITNESS_PIN_REQUEST_CHANGED')
+        unchanged(saved)
+        return copy.deepcopy(pins)
+    # Keep the original source-pinned parameter implementation. Replacing this
+    # archive lookup with its already authenticated result avoids both a second
+    # source transfer and a Git CLI dependency on the production instance.
+    original_client = archived.client
+    client_view = SimpleNamespace(**original_client.__dict__)
+    client_view.helper_pins = authenticated_pins
+    original = archived.parameter_spec
+    generator = FunctionType(original.__code__, {**original.__globals__, 'client': client_view},
+        original.__name__, original.__defaults__, original.__closure__)
+    generator.__kwdefaults__ = copy.copy(original.__kwdefaults__)
+    unchanged(saved)
+    return generator, saved
+
+
+def sender_program(parameters):
+    """Decode only the fixed carrier; arbitrary submitted Python never executes."""
+    need(type(parameters) is dict and set(parameters) == {'commands', 'executionTimeout'}
+         and parameters['executionTimeout'] == ['600'] and type(parameters['commands']) is list
+         and len(parameters['commands']) == 1 and type(parameters['commands'][0]) is str
+         and len(json.dumps(parameters).encode()) < 20 * 1024, 'WITNESS_PARAMETERS_CHANGED')
+    command = shlex.split(parameters['commands'][0])
+    need(len(command) == 4 and command[:3] == ['python3', '-B', '-c']
+         and parameters['commands'][0] == 'python3 -B -c ' + shlex.quote(command[3]), 'WITNESS_CARRIER_CHANGED')
+    match = re.fullmatch(r'import base64,gzip;exec\(compile\(gzip\.decompress\(base64\.b64decode\((.+),validate=True\)\),'
+        r'"<online-protected-recovery-transport>","exec"\)\)', command[3])
+    need(match is not None, 'WITNESS_CARRIER_CHANGED')
+    packed = ast.literal_eval(match[1])
+    need(type(packed) is str and 0 < len(packed) < 64 * 1024, 'WITNESS_CARRIER_CHANGED')
+    need(command[3] == 'import base64,gzip;exec(compile(gzip.decompress(base64.b64decode('
+         + repr(packed) + ',validate=True)),"<online-protected-recovery-transport>","exec"))',
+         'WITNESS_CARRIER_CHANGED')
+    return r.bounded_gzip(base64.b64decode(packed, validate=True), 256 * 1024)
+
+
+def authenticate_sender_parameters(generator, mode, core, executor, context, parameters):
+    """Compare the entire program, allowing only gzip representation differences.
+
+    Python/zlib versions differ in gzip OS headers and compressed blocks. The
+    actual parameter hash remains sealed. Each inner archive must decode to the
+    exact original bytes before it can be reused by the original source generator.
+    """
+    from types import FunctionType
+    program = sender_program(parameters)
+    calls = [node for node in ast.walk(ast.parse(program)) if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Subscript) and isinstance(node.func.value, ast.Name)
+        and node.func.value.id == 'client' and isinstance(node.func.slice, ast.Constant)
+        and node.func.slice.value == 'server_arguments']
+    need(len(calls) == 1 and len(calls[0].args) == 6 and not calls[0].keywords, 'WITNESS_ARGUMENTS_CHANGED')
+    args = [ast.literal_eval(node) for node in calls[0].args]
+    transport = core.closed_json(context['preflightRaw'])
+    descriptor = {name: value for name, value in transport.items()
+        if name not in ('invocationRawBase64', 'serverReceipt')}
+    need(args[0] == mode and args[1] == executor and args[3] == descriptor, 'WITNESS_ARGUMENTS_CHANGED')
+    original_raws = (context['failureRaw'], base64.b64decode(transport['invocationRawBase64'], validate=True), context['proofRaw'])
+    representations = {}
+    for text, original in zip((args[2], args[4], args[5]), original_raws):
+        need(type(text) is str and text.startswith('gzip-base64:'), 'WITNESS_INPUT_ENCODING_CHANGED')
+        decoded = r.bounded_gzip(base64.b64decode(text[len('gzip-base64:'):], validate=True), 256 * 1024)
+        need(decoded == original and (original not in representations or representations[original] == text),
+             'WITNESS_INPUT_BYTES_CHANGED')
+        representations[original] = text
+    def bound_pack(original):
+        need(type(original) is bytes and original in representations, 'WITNESS_PACK_REQUEST_CHANGED')
+        return representations[original]
+    # The three immutable original inputs are the only variable gzip literals.
+    # Source/helper pins, mode, approval, arguments and every other program byte
+    # are still generated by the authenticated archived implementation.
+    bounded_generator = FunctionType(generator.__code__, {**generator.__globals__, 'pack': bound_pack},
+        generator.__name__, generator.__defaults__, generator.__closure__)
+    bounded_generator.__kwdefaults__ = copy.copy(generator.__kwdefaults__)
+    expected = bounded_generator(mode, core, executor, context)
+    need(sender_program(expected) == program and expected['executionTimeout'] == parameters['executionTimeout'],
+         'WITNESS_PARAMETERS_CHANGED')
+    return parameters
+
+
+def admit_baseline(d, witness):
+    """Authenticate sealed actual GET bytes, then independently remeasure state.
+
+    The central GHA role retrieves the actual sender and independent readback
+    once and commits the finite witness. EC2 never issues another GET/send and
+    never needs Actions or SSM read permissions for this admission.
+    """
+    value = source_authority(witness)
+    context = validate_witness_shape(value)
+    core, _transport, _evidence, _proof = inputs(context)
+    generator, saved = archived_parameter_generator(d, core, value)
+    executor, receipts = r.producer(value['executorProducer']['commit'], value['executorProducer']['sourceTree'],
+        value['executorProducer']['workflowRunId'], value['executorProducer']['workflowRunAttempt']), {}
+    for mode in ('recover', 'readback'):
+        command = value['commands'][mode]
+        need(command['parametersSha256'] == r.c.fingerprint(command['parameters']), 'WITNESS_PARAMETERS_CHANGED')
+        authenticate_sender_parameters(generator, mode, core, executor, context, command['parameters'])
+        native_raw = base64.b64decode(command['nativeRawBase64'], validate=True)
+        need(r.c.digest(native_raw) == command['nativeBytesSha256'], 'WITNESS_NATIVE_CHANGED')
+        _native, receipt = r.validate_component_invocation(core, native_raw, command['commandId'], command['instanceId'])
+        validate_receipt(receipt, context, mode)
+        need(r.c.fingerprint(receipt) == command['receiptSha256'] and receipt['recoveryExecutor'] == executor
+             and receipt['recoveryHelperSha256'] == value['executorHelperSha256']
+             and receipt['recoveryRecordBytesSha256'] == value['recoveryRecordBytesSha256']
+             and r.c.fingerprint(receipt['state']['servicesAfter']) == value['servicesSha256'], 'WITNESS_RECEIPT_CHANGED')
+        receipts[mode] = receipt
+    need(receipts['recover'] == receipts['readback'], 'WITNESS_READBACK_CHANGED')
+    # This preserves every image/content/configuration/database/audit/SQLite/
+    # backup/idle guard and authenticates the newly created restoration record.
+    actual = readback(d, context)
+    validate_receipt(actual, context, 'readback')
+    need(actual == receipts['readback'], 'WITNESS_LIVE_READBACK_CHANGED')
+    unchanged(saved)
+    return {'version': 1, 'kind': r.KIND + '_PROTECTED_RECOVERY_ADMISSION',
+        'sourceAuthoritySha256': r.c.fingerprint(value), 'originSha256': r.c.fingerprint(ORIGIN),
+        'executorProducer': copy.deepcopy(executor), 'executorHelperSha256': value['executorHelperSha256'],
+        'recoverCommandId': value['commands']['recover']['commandId'],
+        'readbackCommandId': value['commands']['readback']['commandId'], 'instanceId': ORIGIN['instanceId'],
+        'recoverNativeBytesSha256': value['commands']['recover']['nativeBytesSha256'],
+        'readbackNativeBytesSha256': value['commands']['readback']['nativeBytesSha256'],
+        'recoverParametersSha256': value['commands']['recover']['parametersSha256'],
+        'readbackParametersSha256': value['commands']['readback']['parametersSha256'],
+        'recoveryRecordBytesSha256': value['recoveryRecordBytesSha256'], 'servicesSha256': value['servicesSha256'],
+        'state': actual['state']}
 
 
 def cli(d=None):

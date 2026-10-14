@@ -341,6 +341,23 @@ class ComponentClientTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, 'PREDECESSOR_PATH_CHANGED'):
                 client.parameters('preflight', core, P, origin_raw=ORIGIN, current_raw=CURRENT_RAW)
 
+    def test_sealed_recovery_preflight_pins_and_stages_required_helper(self):
+        with selected_fixture() as core, patch.object(client.r, 'RECOVERY_AUTHORITY', {'syntheticSourceSeal': True}), \
+                patch.object(client, 'helper_pins', side_effect=lambda _core, _p, names: {
+                    name: client.r.c.digest(Path(client.__file__).with_name(name).read_bytes()) for name in names}) as pins:
+            result = client.parameters('preflight', core, P, origin_raw=ORIGIN, current_raw=CURRENT_RAW)
+            carrier = shlex.split(result['commands'][0])[-1]
+            packed = ast.literal_eval(carrier.split('base64.b64decode(', 1)[1].split(',validate=True)', 1)[0])
+            program = gzip.decompress(base64.b64decode(packed)).decode()
+            store = next(node for node in ast.walk(ast.parse(program)) if isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Name) and node.func.id == '_store_files')
+            stored_pins = ast.literal_eval(store.args[2])
+            helper = 'online-recharge-component-recovery.py'
+            self.assertIn(helper, pins.call_args.args[2])
+            self.assertEqual(stored_pins[helper], client.r.c.digest(Path(client.__file__).with_name(helper).read_bytes()))
+            self.assertLess(program.index('_store_files('), program.index('client=load_staged_client('))
+            self.assertLess(len(json.dumps(result).encode()), 20 * 1024)
+
     def test_preflight_wraps_actual_native_then_uses_one_runtime_validator(self):
         receipt = {'kind': client.r.KIND, 'scope': 'ONLINE_RECHARGE',
                    'status': 'ONLINE_RECHARGE_BASELINE_VERIFIED', 'producer': P}
