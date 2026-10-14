@@ -73,6 +73,23 @@ def extract_source(raw, target):
                 path.chmod(0o755 if item.mode & 0o111 else 0o644)
 
 
+def admin_dependencies(context):
+    # Preserve the API's normal dependency layout for declaration generation.
+    # Only the subsequent frontend bundle uses the published realpath order.
+    modules = context / 'node_modules'
+    modules.rename(context / 'node_modules-api')
+    modules.mkdir()
+    dependencies = OUTPUT / '00-dependencies'
+    for package in (dependencies / 'node_modules').iterdir():
+        if package.name != '@apple-business':
+            (modules / package.name).symlink_to(package, target_is_directory=True)
+    workspaces = modules / '@apple-business'
+    workspaces.mkdir()
+    for package in (dependencies / 'node_modules/@apple-business').iterdir():
+        relative = package.resolve().relative_to(dependencies)
+        (workspaces / package.name).symlink_to(context / relative, target_is_directory=True)
+
+
 def prepare():
     os.umask(0o077)
     contract = json.loads(CONTRACT.read_bytes())
@@ -92,16 +109,7 @@ def prepare():
     for name in {**contract['changedSources'], **contract.get('validationOnlySources', {})}:
         (candidate / name).write_bytes((ROOT / name).read_bytes())
     for context in (baseline, candidate):
-        modules = context / 'node_modules'
-        modules.mkdir()
-        for package in (dependencies / 'node_modules').iterdir():
-            if package.name != '@apple-business':
-                (modules / package.name).symlink_to(package, target_is_directory=True)
-        workspaces = modules / '@apple-business'
-        workspaces.mkdir()
-        for package in (dependencies / 'node_modules/@apple-business').iterdir():
-            relative = package.resolve().relative_to(dependencies)
-            (workspaces / package.name).symlink_to(context / relative, target_is_directory=True)
+        run('npm', 'ci', '--no-audit', cwd=context)
         run('npm', 'run', 'prisma:mysql:generate', '--workspace', 'apps/api', cwd=context)
         run('npm', 'run', 'build', '--workspace', 'packages/shared', cwd=context)
 
@@ -111,6 +119,7 @@ def build():
     verify_scope(contract)
     baseline, candidate = OUTPUT / 'baseline', OUTPUT / 'candidate'
     run('npm', 'run', 'build', '--workspace', 'apps/api', cwd=baseline)
+    admin_dependencies(baseline)
     baseline_env = {**os.environ, 'NODE_ENV': 'production',
                     'V2_BUILD_ID': 'v2-' + contract['sourceBaseline']}
     run('npm', 'run', 'build', '--workspace', 'apps/admin', cwd=baseline, env=baseline_env)
@@ -120,6 +129,7 @@ def build():
          'BASELINE_ADMIN_NOT_REPRODUCED')
     run('npm', 'run', 'typecheck', '--workspace', 'apps/api', cwd=candidate)
     run('npm', 'run', 'build', '--workspace', 'apps/api', cwd=candidate)
+    admin_dependencies(candidate)
     commit, tree = git('rev-parse', 'HEAD'), git('rev-parse', 'HEAD^{tree}')
     run('npm', 'run', 'build', '--workspace', 'apps/admin',
         cwd=candidate, env={**os.environ, 'NODE_ENV': 'production', 'V2_BUILD_ID': 'v2-' + commit})
