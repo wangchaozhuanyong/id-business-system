@@ -3422,6 +3422,281 @@ export function readFirstRechargeBusinessRawLog(part) {
   );
 }
 
+export const firstRechargeConnectorBinding = Object.freeze({
+  run: 38528040830,
+  attempt: 1,
+  head: '7651c4135e7b39f781ef74c8015b155d3d858f3c',
+  base: '619b04c240eed836b1db76a9fe330634de1fecbf',
+  checkout: 'b5993ad3735753997a4f42104d14c54770c0808f',
+  tree: '58488a3b4c195a6ee9df4aa1f221b4b370338b9f',
+  job: 115733043801,
+  logSha256: 'e5b2134cd5fc478313fffe001192c001d46bdd17d8f4055eda5cec9476d5fd49',
+  testsRun: 839,
+  testsPassed: 797,
+  testsSkipped: 42
+});
+const firstRechargeConnectorRepairPaths = new Set([
+  'scripts/ci-recharge-check.test.mjs',
+  'scripts/ci-recharge-scope.mjs',
+  'scripts/ci-recharge-scope.test.mjs'
+]);
+
+export function firstRechargeConnectorSourceUnchanged(snapshot) {
+  const digest = (value) => createHash('sha256').update(value).digest('hex');
+  const quality = snapshot?.['.github/workflows/quality.yml'];
+  const dispatcher = snapshot?.['scripts/ci-recharge-check.mjs'];
+  const scope = snapshot?.['scripts/ci-recharge-scope.mjs'];
+  if (
+    ![quality, dispatcher, scope].every(
+      (row) =>
+        typeof row?.before === 'string' &&
+        typeof row.after === 'string' &&
+        row.beforeMode === '100644' &&
+        row.afterMode === '100644'
+    )
+  )
+    return false;
+  const start = '// BEGIN finite first-recharge PR477 business continuation\n';
+  const end = '// END finite first-recharge PR477 business continuation\n\n';
+  const stripped = (source) => {
+    if (
+      source.split(start).length !== 2 ||
+      source.split(end).length !== 2 ||
+      source.split(firstRechargeBusinessCall).length !== 2
+    )
+      return undefined;
+    const left = source.indexOf(start),
+      right = source.indexOf(end);
+    return right > left
+      ? (source.slice(0, left) + source.slice(right + end.length)).replace(
+          firstRechargeBusinessCall,
+          ''
+        )
+      : undefined;
+  };
+  const before = stripped(scope.before),
+    after = stripped(scope.after);
+  return (
+    quality.before === quality.after &&
+    digest(quality.before) === '6f80ed300e474f33abee456911500c3c069f9bcacef17bb9618df0a92728b8f9' &&
+    dispatcher.before === dispatcher.after &&
+    digest(dispatcher.before) ===
+      '441d56dd9c739c4c0b01a5cbfb81af6eb107732299f68f9b538dcdc7ccd76249' &&
+    digest(scope.before) === 'da2d17e9301f1c28ca1671a231724e4b6f2cf896ae9c84db8da0ae962f0ccddb' &&
+    typeof before === 'string' &&
+    before === after &&
+    digest(before) === '5ed70a8a54e614ce0e1319b40350cf04eb296cbc47217c5f29a88daaeb48678b'
+  );
+}
+
+export function firstRechargeConnectorRawLogFacts(log) {
+  if (typeof log !== 'string') return undefined;
+  const b = firstRechargeConnectorBinding;
+  const lines = log
+    .split(String.fromCharCode(27))
+    .map((row, index) => (index ? row.replace(/^\[[0-?]*[ -/]*[@-~]/, '') : row))
+    .join('')
+    .split('\n')
+    .map((line) => line.replace(/^\d{4}-\d{2}-\d{2}T\S+Z /, ''));
+  const markers = lines.flatMap((line, index) =>
+    line === '[command]/usr/bin/git log -1 --format=%H' ? [index] : []
+  );
+  return {
+    sha256: createHash('sha256').update(log).digest('hex'),
+    checkout: markers.length === 1 ? lines[markers[0] + 1] : undefined,
+    scope: [
+      '  CHECK_PART: connector',
+      '  CHECK_BASE: ' + b.base,
+      '  CHECK_MODE: recharge',
+      '##[group]Run node scripts/ci-recharge-check.mjs "$CHECK_PART" "$CHECK_BASE"'
+    ].every((line) => lines.includes(line)),
+    environment: [
+      '  NODE_ENV: test',
+      'Image: ubuntu-24.04',
+      'Version: 20261004.327.1',
+      'node: v24.21.0',
+      'npm: 11.19.0',
+      '##[group]Run npm ci --no-audit',
+      '##[group]Run python3 -m pip install --disable-pip-version-check -r apps/api/src/id-business-v2/auto-recharge/worker/requirements.lock.txt'
+    ].every((line) => lines.includes(line)),
+    checks:
+      lines.includes('> @apple-business/shared@0.1.0 build') &&
+      lines.includes('> tsc -p tsconfig.json') &&
+      lines.filter((line) => /^Ran \d+ tests in [0-9.]+s$/.test(line)).length === 1 &&
+      lines.some((line) => /^Ran 839 tests in [0-9.]+s$/.test(line)) &&
+      lines.filter((line) => line === 'OK (skipped=42)').length === 1 &&
+      !lines.some((line) => /^FAILED \(|^(?:ERROR|FAIL): |^Error: Command failed:/.test(line))
+  };
+}
+
+export function validateFirstRechargeConnectorNative({
+  run,
+  jobs,
+  checkout,
+  facts,
+  changed,
+  modesUnchanged,
+  sourceUnchanged,
+  reconstructedTree,
+  currentEnvironment
+} = {}) {
+  const b = firstRechargeConnectorBinding,
+    p = firstRechargeBusinessBinding;
+  if (
+    run?.id !== b.run ||
+    run.run_attempt !== b.attempt ||
+    run.conclusion !== 'failure' ||
+    run.repository?.full_name !== p.repository ||
+    !matchingRun(run, p.pullRequest, b.head) ||
+    run.head_branch !== p.branch ||
+    !Array.isArray(run.pull_requests) ||
+    run.pull_requests.filter((pr) => pr.number === p.pullRequest).length !== 1 ||
+    checkout?.sha !== b.checkout ||
+    checkout.tree?.sha !== b.tree ||
+    reconstructedTree !== b.tree ||
+    JSON.stringify(checkout.parents?.map((row) => row.sha)) !== JSON.stringify([b.base, b.head]) ||
+    !Array.isArray(changed) ||
+    !changed.length ||
+    !changed.every((path) => firstRechargeConnectorRepairPaths.has(path)) ||
+    modesUnchanged !== true ||
+    sourceUnchanged !== true ||
+    currentEnvironment?.node !== 'v24.21.0' ||
+    currentEnvironment.npm !== '11.19.0' ||
+    currentEnvironment.imageOS !== 'ubuntu24' ||
+    currentEnvironment.imageVersion !== '20261004.327.1' ||
+    currentEnvironment.platform !== 'linux' ||
+    !Array.isArray(jobs)
+  )
+    return undefined;
+  const rows = jobs.filter((job) => job.id === b.job),
+    job = rows[0];
+  const required = [
+    'Checkout',
+    'Setup Node.js',
+    'Install package dependencies',
+    'Install existing connector dependencies',
+    'Check affected recharge part'
+  ];
+  if (
+    rows.length !== 1 ||
+    job.run_id !== b.run ||
+    job.run_attempt !== b.attempt ||
+    job.name !== 'recharge (connector)' ||
+    job.status !== 'completed' ||
+    job.conclusion !== 'success' ||
+    !Array.isArray(job.steps) ||
+    job.steps.some((step) => !['success', 'skipped'].includes(step.conclusion)) ||
+    !required.every(
+      (name) =>
+        job.steps.filter(
+          (step) =>
+            step.name === name && step.status === 'completed' && step.conclusion === 'success'
+        ).length === 1
+    ) ||
+    facts?.sha256 !== b.logSha256 ||
+    facts.checkout !== b.checkout ||
+    facts.scope !== true ||
+    facts.environment !== true ||
+    facts.checks !== true
+  )
+    return undefined;
+  return {
+    part: 'connector',
+    run: b.run,
+    attempt: b.attempt,
+    job: b.job,
+    checkout: b.checkout,
+    tree: b.tree,
+    logSha256: b.logSha256,
+    testsRun: b.testsRun,
+    testsPassed: b.testsPassed,
+    testsSkipped: b.testsSkipped,
+    kind: 'native-first-recharge-connector'
+  };
+}
+
+export function readFirstRechargeConnectorRawLog() {
+  return execFileSync(
+    'gh',
+    [
+      'api',
+      '--allow-escape-sequences',
+      `repos/${firstRechargeBusinessBinding.repository}/actions/jobs/${firstRechargeConnectorBinding.job}/logs`
+    ],
+    { encoding: 'utf8', maxBuffer: 4 * 1024 * 1024 }
+  );
+}
+
+export function reuseFirstRechargeConnector(repo, event, mode, currentTree) {
+  const b = firstRechargeConnectorBinding,
+    p = firstRechargeBusinessBinding,
+    pr = event?.pull_request;
+  if (
+    process.env.GITHUB_EVENT_NAME !== 'pull_request' ||
+    repo !== p.repository ||
+    mode !== 'recharge' ||
+    pr?.number !== p.pullRequest ||
+    pr.head?.ref !== p.branch ||
+    pr.base?.sha !== b.base ||
+    pr.head.repo?.full_name !== p.repository ||
+    !/^[a-f0-9]{40}$/.test(currentTree || '')
+  )
+    return undefined;
+  ensureCommit(b.checkout);
+  const changed = git('diff', '--name-only', b.tree, currentTree).split('\n').filter(Boolean);
+  if (!changed.length || !changed.every((path) => firstRechargeConnectorRepairPaths.has(path)))
+    return undefined;
+  const read = (revision, path) =>
+    execFileSync('git', ['show', `${revision}:${path}`], { encoding: 'utf8' });
+  const modeOf = (revision, path) => git('ls-tree', revision, '--', path).split(/\s+/)[0];
+  const snapshot = Object.fromEntries(
+    [
+      '.github/workflows/quality.yml',
+      'scripts/ci-recharge-check.mjs',
+      'scripts/ci-recharge-scope.mjs'
+    ].map((path) => [
+      path,
+      {
+        before: read(b.tree, path),
+        after: read(currentTree, path),
+        beforeMode: modeOf(b.tree, path),
+        afterMode: modeOf(currentTree, path)
+      }
+    ])
+  );
+  const run = gh(`repos/${repo}/actions/runs/${b.run}`);
+  const { jobs } = gh(
+    `repos/${repo}/actions/runs/${b.run}/attempts/${b.attempt}/jobs?per_page=100`
+  );
+  const checkout = gh(`repos/${repo}/git/commits/${b.checkout}`);
+  const evidence = validateFirstRechargeConnectorNative({
+    run,
+    jobs,
+    checkout,
+    facts: firstRechargeConnectorRawLogFacts(readFirstRechargeConnectorRawLog()),
+    changed,
+    sourceUnchanged: firstRechargeConnectorSourceUnchanged(snapshot),
+    modesUnchanged: changed.every(
+      (path) => modeOf(b.tree, path) === '100644' && modeOf(currentTree, path) === '100644'
+    ),
+    reconstructedTree:
+      git('rev-parse', `${b.checkout}^{tree}`) === b.tree &&
+      git('show', '-s', '--format=%P', b.checkout) === [b.base, b.head].join(' ')
+        ? git('merge-tree', '--write-tree', b.base, b.head).split('\n')[0]
+        : undefined,
+    currentEnvironment: onlineComponentGuardCurrentEnvironment()
+  });
+  if (!evidence)
+    throw new Error(
+      'Original first-recharge connector native proof or exact unchanged input is unavailable'
+    );
+  const input = git('ls-tree', '-r', b.tree)
+    .split('\n')
+    .filter((line) => !firstRechargeConnectorRepairPaths.has(line.split('\t')[1]))
+    .join('\n');
+  return { ...evidence, inputSha256: createHash('sha256').update(input).digest('hex') };
+}
+
 export function reuseFirstRechargeBusiness(repo, event, mode, currentTree) {
   const b = firstRechargeBusinessBinding,
     pr = event?.pull_request;
@@ -3498,10 +3773,12 @@ export function reuseFirstRechargeBusiness(repo, event, mode, currentTree) {
     .split('\n')
     .filter((line) => !firstRechargeBusinessRepairPaths.has(line.split('\t')[1]))
     .join('\n');
-  return evidence.map((row) => ({
+  const business = evidence.map((row) => ({
     ...row,
     inputSha256: createHash('sha256').update(input).digest('hex')
   }));
+  const connector = reuseFirstRechargeConnector(repo, event, mode, currentTree);
+  return connector ? [...business, connector] : business;
 }
 // END finite first-recharge PR477 business continuation
 
