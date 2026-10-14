@@ -350,9 +350,61 @@ for (const key of [
 ]) {
   scalarKeys.add(key);
 }
+const callbackEnums: Record<string, readonly string[]> = {
+  callback_operation: [
+    'progress',
+    'restore',
+    'ledger',
+    'finished',
+    'prepare_next_subscription_cycle',
+    'resolve_unknown_payment',
+    'stale_profile_cleanup'
+  ],
+  callback_phase: ['inspect', 'status', 'commit'],
+  callback_failure_kind: ['http', 'timeout', 'transport', 'invalid_response'],
+  callback_error_code: [
+    'BAD_REQUEST',
+    'VALIDATION_ERROR',
+    'AUTH_INVALID',
+    'AUTH_PERMISSION_DENIED',
+    'RATE_LIMITED',
+    'UNAUTHORIZED',
+    'FORBIDDEN',
+    'NOT_FOUND',
+    'CONFLICT',
+    'INTERNAL_SERVER_ERROR',
+    'SERVICE_UNAVAILABLE',
+    'REQUEST_TIMEOUT'
+  ],
+  callback_business_reason: [
+    'callback_original_checkout_missing',
+    'callback_original_checkout_unverified',
+    'callback_original_checkout_mismatch',
+    'callback_original_payment_unverified',
+    'callback_account_owned_by_another_operator',
+    'callback_profile_binding_conflict',
+    'callback_original_payment_profile_unverified',
+    'callback_profile_replacement_conflict',
+    'callback_previous_payment_unverified',
+    'callback_previous_checkout_unfinished'
+  ]
+};
 export function safeDocument(value: unknown): Record<string, unknown> {
   const input = object(value);
   const result: Record<string, unknown> = {};
+  // 诊断只保存协议枚举和受限请求编号，不把错误正文或任意字段放入记录。
+  for (const [key, values] of Object.entries(callbackEnums)) {
+    if (typeof input[key] === 'string' && values.includes(input[key])) result[key] = input[key];
+  }
+  if (result.callback_operation !== 'prepare_next_subscription_cycle') delete result.callback_phase;
+  if (
+    Number.isInteger(input.callback_http_status) &&
+    Number(input.callback_http_status) >= 400 &&
+    Number(input.callback_http_status) <= 599
+  )
+    result.callback_http_status = input.callback_http_status;
+  if (typeof input.callback_request_id === 'string' && uuidPattern.test(input.callback_request_id))
+    result.callback_request_id = input.callback_request_id;
   for (const [key, item] of Object.entries(input)) {
     if (
       scalarKeys.has(key) &&

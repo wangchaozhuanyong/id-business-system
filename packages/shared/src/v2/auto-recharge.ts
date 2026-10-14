@@ -167,6 +167,8 @@ export interface V2RechargeResult {
   callback_request_id?: string;
   callback_failure_kind?: 'http' | 'timeout' | 'transport' | 'invalid_response';
   callback_business_reason?:
+    | 'callback_previous_payment_unverified'
+    | 'callback_previous_checkout_unfinished'
     | 'callback_original_checkout_missing'
     | 'callback_original_checkout_unverified'
     | 'callback_original_checkout_mismatch'

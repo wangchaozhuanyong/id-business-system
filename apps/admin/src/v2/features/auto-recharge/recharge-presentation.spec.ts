@@ -29,6 +29,24 @@ const job = (overrides: Partial<V2RechargeJob> = {}): V2RechargeJob => ({
   ...overrides
 });
 describe('recharge stage presentation', () => {
+  it('原单窗口无法核实时引导核对连接及原窗口，不误导完成真人验证或重试付款', () => {
+    const feedback = rechargeIssueFeedback(
+      job({
+        action: 'bitbrowser',
+        result: {
+          reason: 'owned_recharge_window_unavailable',
+          status: 'blocked',
+          user_action_required: true,
+          recheck_only: true,
+          payment_attempted: true,
+          payment_status: 'requires_action'
+        }
+      })
+    );
+    expect(feedback?.action).toContain('原任务绑定的窗口');
+    expect(feedback?.action).toContain('保留原单和付款保护');
+    expect(feedback?.action).not.toContain('完成真人验证');
+  });
   it('付款确认及原单真人验证阶段显示明确中文', () => {
     expect(executionStageLabel(job({ result: { stage: 'payment_confirmation' } }))).toBe(
       '等待确认本次报价并付款'
@@ -561,9 +579,9 @@ describe('recharge stage presentation', () => {
         result: { status: 'blocked', reason: 'durable_state_unavailable', ...result }
       })
     );
-    expect(feedback?.title).toBe('执行记录未确认');
-    expect(feedback?.message).toContain('本机助手与服务器的执行记录尚未确认');
-    expect(feedback?.action).toContain('检查本机助手与服务器的记录接口');
+    expect(feedback?.title).toBe('执行记录缺少诊断信息');
+    expect(feedback?.message).toContain('未保存接口失败详情');
+    expect(feedback?.action).toContain('检查比特浏览器连接器与服务器的记录接口');
     expect(feedback?.action).toContain('历史订单的付款情况仍需单独核实');
     expect(JSON.stringify(feedback)).not.toMatch(
       /只读复查|历史付款锁|未提交付款|未扣款|HTTPError|409/
@@ -617,6 +635,69 @@ describe('recharge stage presentation', () => {
       message: '官网或本机连接器没有返回可确认的最终结果'
     });
     expect(rechargeIssueFeedback(pending)?.action).toContain('只读复查原订单');
+  });
+  it.each([
+    'callback_previous_payment_unverified',
+    'callback_previous_checkout_unfinished'
+  ] as const)('历史冲突显示原单复查而不是连接排错或重试付款：%s', (businessReason) => {
+    const failure = job({
+      action: 'bitbrowser',
+      result: {
+        status: 'blocked',
+        reason: 'durable_state_unavailable',
+        stage: 'connector_dispatch',
+        payment_attempted: false,
+        payment_requests_sent: 0,
+        callback_operation: 'restore',
+        callback_http_status: 409,
+        callback_error_code: 'CONFLICT',
+        callback_failure_kind: 'http',
+        callback_request_id: '9ffbffea-07d8-4745-8463-8e8126f9f8e1',
+        callback_business_reason: businessReason
+      }
+    });
+    const feedback = rechargeIssueFeedback(failure)!;
+    expect(feedback.title).toBe('历史付款待核实，已暂停本次充值');
+    expect(feedback.message).toContain('409');
+    expect(feedback.action).toContain('最近执行记录');
+    expect(feedback.action).toContain('只读复查原订单');
+    expect(feedback.action).not.toContain('历史付款锁');
+    expect(executionStageLabel(failure)).toBe('恢复原账号与结算资料未完成');
+    expect(
+      rechargeIssueFeedback({
+        ...failure,
+        result: {
+          ...failure.result,
+          payment_attempted: true,
+          payment_status: 'unknown',
+          payment_requests_sent: 1
+        }
+      })?.title
+    ).not.toBe(feedback.title);
+    expect(
+      rechargeIssueFeedback({
+        ...failure,
+        result: { ...failure.result, callback_business_reason: 'private' as never }
+      })?.title
+    ).toBe('执行记录状态冲突');
+  });
+  it.each([
+    [{ callback_failure_kind: 'timeout' }, '执行记录回传超时'],
+    [{ callback_failure_kind: 'transport' }, '执行记录连接失败'],
+    [{ callback_failure_kind: 'http', callback_http_status: 403 }, '执行记录访问被拒绝'],
+    [{ callback_failure_kind: 'http', callback_http_status: 409 }, '执行记录状态冲突']
+  ] as const)('诊断明确分流连接及访问失败：%s', (diagnostic, title) => {
+    expect(
+      rechargeIssueFeedback(job({ result: { reason: 'durable_state_unavailable', ...diagnostic } }))
+        ?.title
+    ).toBe(title);
+  });
+  it('旧失败记录缺少诊断时只显示记录未完成，不猜测历史扣款或真实失败操作', () => {
+    const old = job({
+      result: { reason: 'durable_state_unavailable', stage: 'connector_dispatch' }
+    });
+    expect(executionStageLabel(old)).toBe('恢复或保存执行记录未完成');
+    expect(rechargeIssueFeedback(old)?.title).toBe('执行记录缺少诊断信息');
   });
   it('原资料恢复409显示受控业务原因、操作、回传状态与请求编号，不把本次零请求指向清锁', () => {
     const failure = job({
@@ -740,7 +821,7 @@ describe('recharge stage presentation', () => {
     expect(
       Object.values(rechargeCallbackDiagnostics(malicious)).every((value) => value === undefined)
     ).toBe(true);
-    expect(rechargeIssueFeedback(malicious)?.title).toBe('执行记录未确认');
+    expect(rechargeIssueFeedback(malicious)?.title).toBe('执行记录缺少诊断信息');
     expect(JSON.stringify(rechargeIssueFeedback(malicious))).not.toMatch(
       /fixture|private|raw_body|409/
     );

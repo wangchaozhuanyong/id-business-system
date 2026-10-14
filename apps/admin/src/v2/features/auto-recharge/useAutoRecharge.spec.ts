@@ -488,6 +488,31 @@ const job = (
   updatedAt: ''
 });
 
+it('历史付款恢复冲突不引导普通重试，保留资料并指向原单只读核实', async () => {
+  jobs.value = {
+    configured: true,
+    items: [
+      job('finished', {
+        status: 'blocked',
+        reason: 'durable_state_unavailable',
+        payment_attempted: false,
+        payment_requests_sent: 0,
+        callback_operation: 'restore',
+        callback_failure_kind: 'http',
+        callback_http_status: 409,
+        callback_business_reason: 'callback_previous_payment_unverified'
+      })
+    ]
+  };
+  flow.selectJob('job-fixture');
+  await nextTick();
+  expect(flow.workflowMessage.value).toContain('历史付款或订阅结果待核实');
+  expect(flow.workflowMessage.value).toContain('只读复查原订单');
+  expect(flow.workflowMessage.value).not.toContain('可再次执行');
+  expect(mock.startBitBrowser).not.toHaveBeenCalled();
+  expect(mock.resolveNoBankRequest).not.toHaveBeenCalled();
+});
+
 async function choosePasswordAccount(hasPassword = true, hasTotp = false) {
   bankAccounts.value.items = [account(hasPassword, hasTotp)];
   flow.loginMethod.value = 'password';
