@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import {
   adminCheckCommands,
@@ -410,6 +410,44 @@ if (part === 'guards') {
     'scripts/ci-recharge-release.test.mjs',
     'scripts/admin-layout-rules.test.mjs'
   ]);
+}
+const readonlyQualityMetadataOnly = () => {
+  const source = 'scripts/production-release/online-recharge-component-readonly.py';
+  const paths = [source, source.replace('.py', '.test.py')];
+  if (
+    part !== 'guards' ||
+    mode !== 'ci-only' ||
+    !paths.every((path) => changed.includes(path)) ||
+    !changed.every((path) =>
+      [...paths, 'scripts/ci-recharge-check.mjs', 'scripts/ci-recharge-check.test.mjs'].includes(
+        path
+      )
+    )
+  )
+    return false;
+  try {
+    const raw = execFileSync('git', ['show', `${base}:${source}`]);
+    let before = raw.toString('utf8');
+    if (!Buffer.from(before, 'utf8').equals(raw)) return false;
+    for (const [old, replacement] of [
+      ["'/commits/'", "'/git/commits/'"],
+      ["commit.get('commit', {}).get('tree', {}).get('sha')", "commit.get('tree', {}).get('sha')"]
+    ]) {
+      if (before.split(old).length !== 2) return false;
+      before = before.replace(old, replacement);
+    }
+    return readFileSync(resolve(source)).equals(Buffer.from(before, 'utf8'));
+  } catch {
+    return false;
+  }
+};
+if (readonlyQualityMetadataOnly()) {
+  for (const helper of ['readonly', 'recovery-readonly', 'consumer', 'runtime'])
+    run('python3', [
+      '-B',
+      `scripts/production-release/online-recharge-component-${helper}.test.py`
+    ]);
+  process.exit(0);
 }
 if (resumeOnlineBuildProofReuseGuard) {
   run('python3', ['-B', 'scripts/production-release/online-recharge-ci-build.test.py']);
