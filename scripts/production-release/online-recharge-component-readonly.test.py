@@ -553,10 +553,12 @@ class ComponentClientTests(unittest.TestCase):
         run = {'id': 456, 'path': '.github/workflows/quality.yml', 'event': 'push',
                'status': 'completed', 'conclusion': 'success', 'head_sha': P['commit'],
                'repository': {'full_name': 'wangchaozhuanyong/id-business-system'}}
-        commit = {'sha': P['commit'], 'commit': {'tree': {'sha': P['sourceTree']}}}
+        commit = {'sha': P['commit'], 'tree': {'sha': P['sourceTree']}}
         with selected_fixture(), patch.object(client, 'command_raw', side_effect=[
-                json.dumps(run).encode(), json.dumps(commit).encode()]):
+                json.dumps(run).encode(), json.dumps(commit).encode()]) as command:
             client.verify_quality(P)
+            self.assertEqual(command.call_args_list[1].args,
+                ('gh', 'api', 'repos/wangchaozhuanyong/id-business-system/git/commits/' + P['commit']))
         for field, value in [('id', 123), ('path', '.github/workflows/other.yml'),
                              ('event', 'pull_request'), ('status', 'in_progress'),
                              ('conclusion', 'failure'), ('head_sha', OLD)]:
@@ -565,7 +567,7 @@ class ComponentClientTests(unittest.TestCase):
                     self.assertRaisesRegex(RuntimeError, 'QUALITY_RUN_CHANGED'):
                 client.verify_quality(P)
         with selected_fixture(), patch.object(client, 'command_raw', side_effect=[json.dumps(run).encode(),
-                json.dumps({'sha': P['commit'], 'commit': {'tree': {'sha': 'e' * 40}}}).encode()]), \
+                json.dumps({'sha': P['commit'], 'tree': {'sha': 'e' * 40}}).encode()]), \
                 self.assertRaisesRegex(RuntimeError, 'QUALITY_SOURCE_TREE_CHANGED'):
             client.verify_quality(P)
 
