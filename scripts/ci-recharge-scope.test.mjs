@@ -85,7 +85,17 @@ import {
   onlineComponentGuardScopeBytesUnchanged,
   onlineComponentGuardDispatcherBytesUnchanged,
   validateOnlineComponentGuardNative,
-  canResumeOnlineComponentGuard
+  canResumeOnlineComponentGuard,
+  onlinePrepareFixGuardBinding,
+  onlinePrepareFixGuardPaths,
+  onlinePrepareFixScopeBytesUnchanged,
+  onlinePrepareFixDispatcherBytesUnchanged,
+  onlinePrepareFixRuntimeBytesUnchanged,
+  onlinePrepareFixGuardRawLogFacts,
+  validateOnlinePrepareFixGuardNative,
+  onlinePrepareFixGuardFailureCodes,
+  requireOnlinePrepareFixGuardNative,
+  canResumeOnlinePrepareFixGuard
 } from './ci-recharge-scope.mjs';
 import { matchesSourceEvidence } from './ci-recharge-evidence.mjs';
 
@@ -395,8 +405,11 @@ test('finite ONLINE guard wiring restores every original command byte and keeps 
     ['scripts/ci-recharge-check.mjs', onlineComponentGuardDispatcherBytesUnchanged]
   ]) {
     const before = execFileSync('git', ['show', b.head + ':' + path], { encoding: 'utf8' });
-    const after = readFileSync(path, 'utf8');
+    const after = execFileSync('git', ['show', onlinePrepareFixGuardBinding.base + ':' + path], {
+      encoding: 'utf8'
+    });
     assert.equal(validate(before, after), true, path);
+    assert.equal(validate(before, readFileSync(path, 'utf8')), false, path);
     const dispatcher = path === 'scripts/ci-recharge-check.mjs';
     for (const changed of [
       ' ' + after,
@@ -438,6 +451,611 @@ test('disk retention scope changes invalidate frozen migration reuse without wea
       combinedMigrationScopeBytesUnchanged(before, prior.replace(name, name + 'Changed')),
       false
     );
+});
+
+function syntheticPrepareFixNative() {
+  // Synthetic validator metadata only; it cannot grant operational authority.
+  // The real reader hashes the original complete artifact/log bytes itself.
+  const b = onlinePrepareFixGuardBinding;
+  const passed = (name) => ({ name, status: 'completed', conclusion: 'success' });
+  const run = {
+    id: b.run,
+    run_attempt: 1,
+    event: 'pull_request',
+    path: '.github/workflows/quality.yml',
+    status: 'completed',
+    conclusion: 'success',
+    head_sha: b.originalHead,
+    repository: { full_name: b.repository },
+    pull_requests: []
+  };
+  return {
+    run,
+    jobs: [
+      {
+        id: b.job,
+        run_id: b.run,
+        run_attempt: 1,
+        name: 'recharge (guards)',
+        head_sha: b.originalHead,
+        status: 'completed',
+        conclusion: 'success',
+        steps: [
+          ...[
+            'Checkout',
+            'Setup Node.js',
+            'Install package dependencies',
+            'Check affected recharge part'
+          ].map(passed),
+          ...[
+            'Install browser for recharge acceptance',
+            'Install existing connector dependencies'
+          ].map((name) => ({ name, status: 'completed', conclusion: 'skipped' }))
+        ]
+      },
+      {
+        id: b.qualityJob,
+        run_id: b.run,
+        run_attempt: 1,
+        name: 'quality',
+        head_sha: b.originalHead,
+        status: 'completed',
+        conclusion: 'success',
+        steps: [
+          'Checkout the tested source tree for its evidence',
+          'Record successful PR source evidence',
+          'Preserve successful source evidence'
+        ].map(passed)
+      }
+    ],
+    originalPr: {
+      number: 470,
+      state: 'closed',
+      merged: true,
+      head: { sha: b.originalHead },
+      base: { sha: b.originalBase },
+      merge_commit_sha: b.base
+    },
+    mainRun: { ...run, id: b.mainRun, event: 'push', head_sha: b.base },
+    artifact: {
+      id: b.artifact,
+      name: 'quality-source-evidence-1',
+      expired: false,
+      size_in_bytes: 357,
+      digest: 'sha256:' + b.artifactSha256,
+      workflow_run: { id: b.run, head_sha: b.originalHead }
+    },
+    proof: {
+      repository: b.repository,
+      runId: b.run,
+      runAttempt: 1,
+      pullRequest: 470,
+      headSha: b.originalHead,
+      baseSha: b.originalBase,
+      testedTree: b.tree
+    },
+    proofSha256: b.proofSha256,
+    facts: {
+      sha256: b.rawLogSha256,
+      checkout: b.checkout,
+      scope: true,
+      environment: true,
+      errors: [],
+      failedCommands: []
+    },
+    qualityLog: { sha256: b.rawQualityLogSha256, checkout: b.checkout },
+    currentEnvironment: {
+      node: 'v24.21.0',
+      npm: '11.19.0',
+      imageOS: 'ubuntu24',
+      imageVersion: '20261004.327.1',
+      platform: 'linux'
+    },
+    baselineTree: b.tree,
+    currentHeadTree: 'a'.repeat(40),
+    currentTree: 'a'.repeat(40),
+    changed: [...onlinePrepareFixGuardPaths],
+    runtimeSha256: b.runtimeSha256,
+    runtimeTestSha256: b.runtimeTestSha256,
+    scopeUnchanged: true,
+    dispatcherUnchanged: true,
+    runtimeUnchanged: true,
+    modesUnchanged: true
+  };
+}
+
+test('finite prepare-fix guard binds authentic closed-PR source artifact logs jobs and exact repairs without mutable PR aliases', () => {
+  const original = syntheticPrepareFixNative();
+  assert.equal(validateOnlinePrepareFixGuardNative(original), true);
+  for (const mutate of [
+    (v) => {
+      v.run.id++;
+    },
+    (v) => {
+      v.run.run_attempt = 2;
+    },
+    (v) => {
+      v.run.head_sha = v.currentHeadTree;
+    },
+    (v) => {
+      v.run.conclusion = 'failure';
+    },
+    (v) => {
+      v.run.event = 'push';
+    },
+    (v) => {
+      v.run.path = '.github/workflows/production-release.yml';
+    },
+    (v) => {
+      v.originalPr.merged = false;
+    },
+    (v) => {
+      v.originalPr.head.sha = v.currentHeadTree;
+    },
+    (v) => {
+      v.originalPr.merge_commit_sha = v.currentHeadTree;
+    },
+    (v) => {
+      v.mainRun.conclusion = 'failure';
+    },
+    (v) => {
+      v.jobs[0].conclusion = 'failure';
+    },
+    (v) => {
+      v.jobs[0].steps[0].conclusion = 'skipped';
+    },
+    (v) => {
+      v.jobs.push({ ...v.jobs[0] });
+    },
+    (v) => {
+      v.jobs[1].steps.pop();
+    },
+    (v) => {
+      v.artifact.expired = true;
+    },
+    (v) => {
+      v.artifact.id++;
+    },
+    (v) => {
+      v.artifact.digest = 'sha256:' + '0'.repeat(64);
+    },
+    (v) => {
+      v.proof.baseSha = v.currentHeadTree;
+    },
+    (v) => {
+      v.proof.testedTree = v.currentHeadTree;
+    },
+    (v) => {
+      v.proof.extra = true;
+    },
+    (v) => {
+      v.proofSha256 = '0'.repeat(64);
+    },
+    (v) => {
+      v.facts.sha256 = '0'.repeat(64);
+    },
+    (v) => {
+      v.facts.errors.push('ERROR: unknown');
+    },
+    (v) => {
+      v.facts.environment = false;
+    },
+    (v) => {
+      v.qualityLog.checkout = v.currentHeadTree;
+    },
+    (v) => {
+      v.qualityLog.sha256 = '0'.repeat(64);
+    },
+    (v) => {
+      v.currentHeadTree = 'b'.repeat(40);
+    },
+    (v) => {
+      v.baselineTree = v.currentTree;
+    },
+    (v) => {
+      v.changed.push('apps/api/src/main.ts');
+    },
+    (v) => {
+      v.changed.shift();
+    },
+    (v) => {
+      v.currentEnvironment.imageVersion = 'changed';
+    },
+    (v) => {
+      v.currentEnvironment.platform = 'darwin';
+    },
+    (v) => {
+      v.currentEnvironment.node = 'v24.19.0';
+    },
+    (v) => {
+      v.runtimeSha256 = '0'.repeat(64);
+    },
+    (v) => {
+      v.runtimeTestSha256 = '0'.repeat(64);
+    },
+    (v) => {
+      v.scopeUnchanged = false;
+    },
+    (v) => {
+      v.dispatcherUnchanged = false;
+    },
+    (v) => {
+      v.runtimeUnchanged = false;
+    },
+    (v) => {
+      v.modesUnchanged = false;
+    }
+  ]) {
+    const changed = structuredClone(original);
+    mutate(changed);
+    assert.equal(validateOnlinePrepareFixGuardNative(changed), false, mutate.toString());
+  }
+});
+
+test('finite prepare-fix diagnostics distinguish native logs source and environment while the same gate still rejects', () => {
+  const original = syntheticPrepareFixNative();
+  assert.deepEqual(onlinePrepareFixGuardFailureCodes(original), []);
+  assert.equal(requireOnlinePrepareFixGuardNative(original), true);
+  const cases = [
+    [
+      'ORIGINAL_RUN',
+      (v) => {
+        v.run.conclusion = 'failure';
+      }
+    ],
+    [
+      'CLOSED_PR_SOURCE',
+      (v) => {
+        v.originalPr.merged = false;
+      }
+    ],
+    [
+      'MAIN_QUALITY',
+      (v) => {
+        v.mainRun.conclusion = 'failure';
+      }
+    ],
+    [
+      'GUARD_JOB',
+      (v) => {
+        v.jobs[0].head_sha = 'b'.repeat(40);
+      }
+    ],
+    [
+      'GUARD_STEPS',
+      (v) => {
+        v.jobs[0].steps[0].conclusion = 'failure';
+      }
+    ],
+    [
+      'GUARD_SKIPPED_DEPENDENCIES',
+      (v) => {
+        v.jobs[0].steps.pop();
+      }
+    ],
+    [
+      'QUALITY_JOB',
+      (v) => {
+        v.jobs[1].conclusion = 'failure';
+      }
+    ],
+    [
+      'QUALITY_STEPS',
+      (v) => {
+        v.jobs[1].steps.pop();
+      }
+    ],
+    [
+      'SOURCE_ARTIFACT',
+      (v) => {
+        v.artifact.expired = true;
+      }
+    ],
+    [
+      'PROOF_BYTES',
+      (v) => {
+        v.proofSha256 = '0'.repeat(64);
+      }
+    ],
+    [
+      'PROOF_SOURCE',
+      (v) => {
+        v.proof.extra = 'synthetic-private';
+      }
+    ],
+    [
+      'GUARD_LOG_BYTES',
+      (v) => {
+        v.facts.sha256 = '0'.repeat(64);
+      }
+    ],
+    [
+      'GUARD_LOG_CHECKOUT',
+      (v) => {
+        v.facts.checkout = '0'.repeat(40);
+      }
+    ],
+    [
+      'GUARD_LOG_SCOPE',
+      (v) => {
+        v.facts.scope = false;
+      }
+    ],
+    [
+      'GUARD_LOG_ENVIRONMENT',
+      (v) => {
+        v.facts.environment = false;
+      }
+    ],
+    [
+      'GUARD_LOG_ERRORS',
+      (v) => {
+        v.facts.errors.push('synthetic-private');
+      }
+    ],
+    [
+      'QUALITY_LOG_BYTES',
+      (v) => {
+        v.qualityLog.sha256 = '0'.repeat(64);
+      }
+    ],
+    [
+      'QUALITY_LOG_CHECKOUT',
+      (v) => {
+        v.qualityLog.checkout = '0'.repeat(40);
+      }
+    ],
+    [
+      'BASELINE_TREE',
+      (v) => {
+        v.baselineTree = '0'.repeat(40);
+      }
+    ],
+    [
+      'CURRENT_TREE',
+      (v) => {
+        v.currentHeadTree = '0'.repeat(40);
+      }
+    ],
+    [
+      'CHANGED_PATHS',
+      (v) => {
+        v.changed.push('synthetic-private');
+      }
+    ],
+    ...[
+      ['node', 'ENV_NODE'],
+      ['npm', 'ENV_NPM'],
+      ['imageOS', 'ENV_IMAGE_OS'],
+      ['imageVersion', 'ENV_IMAGE_VERSION'],
+      ['platform', 'ENV_PLATFORM']
+    ].map(([key, code]) => [
+      code,
+      (v) => {
+        v.currentEnvironment[key] = 'synthetic-private';
+      }
+    ]),
+    [
+      'RUNTIME_SOURCE',
+      (v) => {
+        v.runtimeSha256 = '0'.repeat(64);
+      }
+    ],
+    [
+      'RUNTIME_TEST_SOURCE',
+      (v) => {
+        v.runtimeTestSha256 = '0'.repeat(64);
+      }
+    ],
+    [
+      'SCOPE_NORMALIZATION',
+      (v) => {
+        v.scopeUnchanged = false;
+      }
+    ],
+    [
+      'DISPATCHER_NORMALIZATION',
+      (v) => {
+        v.dispatcherUnchanged = false;
+      }
+    ],
+    [
+      'RUNTIME_NORMALIZATION',
+      (v) => {
+        v.runtimeUnchanged = false;
+      }
+    ],
+    [
+      'FILE_MODES',
+      (v) => {
+        v.modesUnchanged = false;
+      }
+    ]
+  ];
+  for (const [code, mutate] of cases) {
+    const value = structuredClone(original);
+    mutate(value);
+    assert.equal(validateOnlinePrepareFixGuardNative(value), false, code);
+    assert.ok(onlinePrepareFixGuardFailureCodes(value).includes(code), code);
+    assert.throws(
+      () => requireOnlinePrepareFixGuardNative(value),
+      (error) => {
+        assert.match(
+          error.message,
+          /^Original prepare-fix source or guard evidence changed; predicates=[A-Z_,]+$/
+        );
+        assert.ok(error.message.includes(code), code);
+        assert.equal(error.message.includes('synthetic-private'), false);
+        return true;
+      }
+    );
+  }
+});
+
+test('finite prepare-fix diagnostics never print secrets unknown fields or raw records and retain every non-log predicate byte', () => {
+  const value = syntheticPrepareFixNative();
+  for (const object of [value, value.run, value.jobs[0], value.artifact, value.currentEnvironment])
+    object.syntheticUnknownSecret = 'synthetic-secret-do-not-print';
+  assert.deepEqual(onlinePrepareFixGuardFailureCodes(value), []);
+  assert.equal(requireOnlinePrepareFixGuardNative(value), true);
+  value.facts.failedCommands.push('synthetic-secret-do-not-print');
+  value.currentEnvironment.imageOS = 'synthetic-secret-do-not-print';
+  assert.throws(
+    () => requireOnlinePrepareFixGuardNative(value),
+    (error) => {
+      assert.equal(
+        error.message,
+        'Original prepare-fix source or guard evidence changed; predicates=GUARD_LOG_ERRORS,ENV_IMAGE_OS'
+      );
+      for (const excluded of [
+        'syntheticUnknownSecret',
+        'synthetic-secret-do-not-print',
+        'failedCommands',
+        'currentEnvironment'
+      ])
+        assert.equal(error.message.includes(excluded), false);
+      return true;
+    }
+  );
+  const path = 'scripts/ci-recharge-scope.mjs';
+  const prior = execFileSync('git', ['show', '327bfbc03bd414ae8328f7f2a875bcc4dcd8998d:' + path], {
+    cwd: root,
+    encoding: 'utf8'
+  });
+  const validator = (source) =>
+    source.slice(
+      source.indexOf('export function validateOnlinePrepareFixGuardNative('),
+      source.indexOf('function typeOfProof(')
+    );
+  const current = validator(
+    readFileSync(fileURLToPath(new URL('./ci-recharge-scope.mjs', import.meta.url)), 'utf8')
+  );
+  assert.equal(current.split('b.rawLogSha256').length, 2);
+  assert.equal(current.split('b.rawQualityLogSha256').length, 2);
+  assert.equal(
+    current
+      .replace('b.rawLogSha256', 'b.logSha256')
+      .replace('b.rawQualityLogSha256', 'b.qualityLogSha256'),
+    validator(prior)
+  );
+});
+
+test('finite prepare-fix raw log parsing uses exact platform bytes and rejects invalid UTF8 and CLI decorations', () => {
+  const b = onlinePrepareFixGuardBinding;
+  const text =
+    [
+      '[command]/usr/bin/git log -1 --format=%H',
+      b.checkout,
+      '  CHECK_BASE: ' + b.originalBase,
+      '  CHECK_MODE: ci-only',
+      '  CHECK_PART: guards',
+      '##[group]Run node scripts/ci-recharge-check.mjs "$CHECK_PART" "$CHECK_BASE"',
+      '  NODE_ENV: test',
+      'Image: ubuntu-24.04',
+      'Version: 20261004.327.1',
+      'node: v24.21.0',
+      'npm: 11.19.0',
+      '\x1b[36;1msynthetic command\x1b[0m'
+    ]
+      .map((line, i) => (i === 0 ? '\uFEFF' : '') + '2026-10-14T00:00:00.1234567Z ' + line)
+      .join('\n') + '\n';
+  const raw = Buffer.from(text, 'utf8');
+  const parsed = onlinePrepareFixGuardRawLogFacts(raw);
+  assert.equal(parsed.sha256, createHash('sha256').update(raw).digest('hex'));
+  assert.equal(parsed.checkout, b.checkout);
+  assert.equal(parsed.scope, true);
+  assert.equal(parsed.environment, true);
+  assert.deepEqual(parsed.errors, []);
+  assert.deepEqual(parsed.failedCommands, []);
+  const rendered = Buffer.from(text.replaceAll(String.fromCharCode(27), '^['), 'utf8');
+  assert.notEqual(onlinePrepareFixGuardRawLogFacts(rendered).sha256, parsed.sha256);
+  assert.equal(
+    validateOnlinePrepareFixGuardNative({ ...syntheticPrepareFixNative(), facts: parsed }),
+    false
+  );
+  for (const invalid of [
+    undefined,
+    '',
+    Buffer.alloc(0),
+    Buffer.from([0xff]),
+    Buffer.from('job\tstep\t' + text),
+    Buffer.from(text + 'unframed-tail'),
+    Buffer.from(text.replace('2026-10-14T00:00:00.1234567Z ', '2026-10-14T00:00:00+08:00 '))
+  ])
+    assert.equal(onlinePrepareFixGuardRawLogFacts(invalid), undefined);
+});
+
+test('finite prepare-fix authenticates one raw hash per job and never accepts historical CLI hashes', () => {
+  const b = onlinePrepareFixGuardBinding;
+  assert.equal(b.rawLogSha256, '914d13bef30182deaaf574104f26cb51b17cd29c67dacc5e0529cfa98628e6db');
+  assert.equal(
+    b.rawQualityLogSha256,
+    '760539f4479f0a9d4f32cd86da2bab6c5a273cbdfe315cde2cd98b04fb41e028'
+  );
+  assert.equal(b.logSha256, 'e7151e901b9bdbb473f735ea808cbebcf39f91ba65e05314e54906b615169c9c');
+  assert.equal(
+    b.qualityLogSha256,
+    '8437e426a8deb05fb482d0074e51d3aa4ebb6283f9c8125b116284464a35f4f5'
+  );
+  const value = syntheticPrepareFixNative();
+  assert.equal(requireOnlinePrepareFixGuardNative(value), true);
+  value.facts.sha256 = b.logSha256;
+  value.qualityLog.sha256 = b.qualityLogSha256;
+  assert.equal(validateOnlinePrepareFixGuardNative(value), false);
+  assert.deepEqual(onlinePrepareFixGuardFailureCodes(value), [
+    'GUARD_LOG_BYTES',
+    'QUALITY_LOG_BYTES'
+  ]);
+  assert.throws(
+    () => requireOnlinePrepareFixGuardNative(value),
+    /predicates=GUARD_LOG_BYTES,QUALITY_LOG_BYTES$/
+  );
+  const source = readFileSync(
+    fileURLToPath(new URL('./ci-recharge-scope.mjs', import.meta.url)),
+    'utf8'
+  );
+  const start = source.indexOf('export function canResumeOnlinePrepareFixGuard(');
+  const reader = source.slice(
+    start,
+    source.indexOf('// END finite ONLINE prepare-fix guard continuation', start)
+  );
+  assert.ok(
+    reader
+      .replace(/\s/g, '')
+      .includes(
+        "['api', '--allow-escape-sequences', 'repos/' + b.repository + '/actions/jobs/' + job + '/logs']".replace(
+          /\s/g,
+          ''
+        )
+      )
+  );
+  assert.equal(reader.includes("['run', 'view'"), false);
+});
+
+test('finite prepare-fix guard restores the entire prior dispatcher scope and runtime outside prepare byte-for-byte', () => {
+  const b = onlinePrepareFixGuardBinding;
+  for (const [path, verify] of [
+    ['scripts/ci-recharge-scope.mjs', onlinePrepareFixScopeBytesUnchanged],
+    ['scripts/ci-recharge-check.mjs', onlinePrepareFixDispatcherBytesUnchanged],
+    [
+      'scripts/production-release/online-recharge-component-runtime.py',
+      onlinePrepareFixRuntimeBytesUnchanged
+    ]
+  ]) {
+    const before = execFileSync('git', ['show', b.base + ':' + path], { encoding: 'utf8' });
+    const after = readFileSync(path, 'utf8');
+    assert.equal(verify(before, after), true, path);
+    for (const altered of [
+      ' ' + after,
+      after + '\n',
+      after.replace('const git =', 'const modifiedGit ='),
+      after.replace('def authority(', 'def modified_authority(')
+    ]) {
+      if (altered !== after) assert.equal(verify(before, altered), false, path);
+    }
+    assert.equal(verify(before, before), false);
+  }
+  assert.equal(canResumeOnlinePrepareFixGuard('0'.repeat(40)), false);
 });
 
 test('combined Quality workflow permits only the guards token insertion against both frozen jobs', () => {

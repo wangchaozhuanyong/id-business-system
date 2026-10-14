@@ -49,6 +49,108 @@ class RuntimeTests(unittest.TestCase):
             'StandardErrorContent': '', 'StandardOutputContent': encoded(r.wire(receipt)).decode(),
             'ExecutionStartDateTime': now, 'ExecutionEndDateTime': now})
 
+    def private_prepare_fixture(self, directory):
+        # Original frozen private I/O is real. Source transport, acceptance,
+        # containers, SQL and service operations remain mocked.
+        core = r.c.load_core(self.auth['coreSha256'])
+        transport = {'version': 1, 'expectedCurrent': self.admin_auth['producer']['commit'],
+            'syntheticPublicTransport': True}
+        output = {'synthetic-public-source.txt': (b'public fixture\n', '100644')}
+        record = {'kind': r.KIND + '_SOURCE', 'syntheticProjection': True}
+        def store(context, files):
+            context.mkdir(parents=True, mode=0o700)
+            for name, (raw, _mode) in files.items(): (context / name).write_bytes(raw)
+        return {'core': core, 'transport': transport, 'record': record, 'output': output,
+            'd': SimpleNamespace(write_registration_files=Mock(side_effect=store))}
+
+    def call_private_prepare(self, directory, fixture):
+        with self.seal(), self.enabled(), patch.dict(r.os.environ, GITHUB_ACTIONS='true'), \
+             patch.object(r.c, 'load_core', return_value=fixture['core']), \
+             patch.object(r, 'validate_preflight', return_value={'baseline': {},
+                 'sourceProjectionSha256': r.c.fingerprint(fixture['record'])}), \
+             patch.object(r, 'source', return_value=({}, fixture['output'], fixture['record'])), \
+             patch.object(r.Path, 'cwd', return_value=directory):
+            return r.prepare(fixture['d'], self.p, fixture['transport'])
+
+    def test_prepare_existing_preflight_private_io_preserves_original_and_refuses_replay(self):
+        with tempfile.TemporaryDirectory(prefix='online-prepare-private-', dir=HERE.parents[1] / '.runtime') as td:
+            directory = Path(td); f = self.private_prepare_fixture(directory)
+            preflight = directory / r.PREFLIGHT
+            original = f['core'].write_private(preflight, f['transport'])
+            identity = lambda p: (p.stat().st_dev, p.stat().st_ino, p.stat().st_mode,
+                p.stat().st_uid, p.stat().st_gid, p.stat().st_size, p.stat().st_mtime_ns, p.stat().st_ctime_ns)
+            before = identity(preflight)
+            with patch.object(f['core'], 'write_private', wraps=f['core'].write_private) as write:
+                self.assertEqual(self.call_private_prepare(directory, f), f['record'])
+                write.assert_called_once_with(directory / r.PROJECTION, f['record'])
+                self.assertEqual(preflight.read_bytes(), original)
+                self.assertEqual(identity(preflight), before)
+                self.assertEqual(f['core'].closed_json(f['core'].private_bytes(directory / r.PROJECTION)), f['record'])
+                projection_before = (directory / r.PROJECTION).read_bytes()
+                with self.assertRaisesRegex(RuntimeError, 'BUILD_CONTEXT_EXISTS'):
+                    self.call_private_prepare(directory, f)
+                self.assertEqual(write.call_count, 1)
+                self.assertEqual(f['d'].write_registration_files.call_count, 1)
+                self.assertEqual((directory / r.PROJECTION).read_bytes(), projection_before)
+                self.assertEqual(preflight.read_bytes(), original)
+                self.assertEqual(identity(preflight), before)
+
+    def test_prepare_missing_preflight_private_io_refuses_before_context_or_projection_write(self):
+        with tempfile.TemporaryDirectory(prefix='online-prepare-missing-', dir=HERE.parents[1] / '.runtime') as td:
+            directory = Path(td); f = self.private_prepare_fixture(directory)
+            with patch.object(f['core'], 'write_private', wraps=f['core'].write_private) as write:
+                with self.assertRaises(FileNotFoundError): self.call_private_prepare(directory, f)
+                write.assert_not_called(); f['d'].write_registration_files.assert_not_called()
+            self.assertFalse((directory / r.CONTEXT).exists())
+            self.assertFalse((directory / r.PROJECTION).exists())
+
+    def test_prepare_symlink_preflight_private_io_refuses_before_context_or_projection_write(self):
+        with tempfile.TemporaryDirectory(prefix='online-prepare-symlink-', dir=HERE.parents[1] / '.runtime') as td:
+            directory = Path(td); f = self.private_prepare_fixture(directory)
+            target = directory / 'synthetic-public-original.json'
+            original = f['core'].write_private(target, f['transport'])
+            preflight = directory / r.PREFLIGHT; preflight.parent.mkdir(parents=True, mode=0o700)
+            preflight.symlink_to(target)
+            with patch.object(f['core'], 'write_private', wraps=f['core'].write_private) as write:
+                with self.assertRaisesRegex(RuntimeError, 'PRIVATE_ARTIFACT_INVALID'):
+                    self.call_private_prepare(directory, f)
+                write.assert_not_called(); f['d'].write_registration_files.assert_not_called()
+            self.assertTrue(preflight.is_symlink()); self.assertEqual(target.read_bytes(), original)
+            self.assertFalse((directory / r.CONTEXT).exists())
+            self.assertFalse((directory / r.PROJECTION).exists())
+
+    def test_prepare_different_preflight_private_io_refuses_before_context_or_projection_write(self):
+        with tempfile.TemporaryDirectory(prefix='online-prepare-different-', dir=HERE.parents[1] / '.runtime') as td:
+            directory = Path(td); f = self.private_prepare_fixture(directory)
+            preflight = directory / r.PREFLIGHT
+            original = f['core'].write_private(preflight, {**f['transport'], 'unreviewed': True})
+            with patch.object(f['core'], 'write_private', wraps=f['core'].write_private) as write:
+                with self.assertRaisesRegex(RuntimeError, 'PREFLIGHT_RECEIPT_CHANGED'):
+                    self.call_private_prepare(directory, f)
+                write.assert_not_called(); f['d'].write_registration_files.assert_not_called()
+            self.assertEqual(preflight.read_bytes(), original)
+            self.assertFalse((directory / r.CONTEXT).exists())
+            self.assertFalse((directory / r.PROJECTION).exists())
+
+    def test_prepare_preflight_bytes_drift_after_projection_private_io_refuses(self):
+        with tempfile.TemporaryDirectory(prefix='online-prepare-drift-', dir=HERE.parents[1] / '.runtime') as td:
+            directory = Path(td); f = self.private_prepare_fixture(directory)
+            preflight = directory / r.PREFLIGHT; original = f['core'].write_private(preflight, f['transport'])
+            write_private = f['core'].write_private
+            def write_projection(path, value):
+                self.assertEqual(path, directory / r.PROJECTION)
+                raw = write_private(path, value)
+                preflight.write_bytes(original + b' ')  # JSON is equal; original raw bytes are not.
+                return raw
+            with patch.object(f['core'], 'write_private', side_effect=write_projection) as write:
+                with self.assertRaisesRegex(RuntimeError, 'PREFLIGHT_RECEIPT_CHANGED'):
+                    self.call_private_prepare(directory, f)
+                write.assert_called_once_with(directory / r.PROJECTION, f['record'])
+                f['d'].write_registration_files.assert_called_once()
+            self.assertTrue((directory / r.CONTEXT).is_dir())
+            self.assertEqual(f['core'].closed_json(f['core'].private_bytes(directory / r.PROJECTION)), f['record'])
+            self.assertEqual(preflight.read_bytes(), original + b' ')
+
     def test_none_and_unreviewed_adapter_refuse_before_controller_or_io(self):
         calls = (lambda: r.modules(), lambda: r.baseline(None, ''), lambda: r.preflight(None, {}, ''),
             lambda: r.prepare(None, {}, {}), lambda: r.build_proof(None, {}, {}, '', ''),

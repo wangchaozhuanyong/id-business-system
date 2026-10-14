@@ -399,10 +399,13 @@ def prepare(d, p, transport):
     _files, output, record = source(d, p, receipt['baseline'])
     need(c.fingerprint(record) == receipt['sourceProjectionSha256'], 'BUILD_SOURCE_CHANGED')
     root = Path.cwd().resolve(); context = root / CONTEXT
+    saved_preflight = core.private_bytes(root / PREFLIGHT, cap=256 * 1024)
+    need(core.closed_json(saved_preflight) == transport, 'PREFLIGHT_RECEIPT_CHANGED')
     need(not context.exists(), 'BUILD_CONTEXT_EXISTS')
     d.write_registration_files(context, output)
     core.write_private(root / PROJECTION, record)
-    core.write_private(root / PREFLIGHT, transport)
+    need(core.private_bytes(root / PREFLIGHT, cap=256 * 1024) == saved_preflight,
+         'PREFLIGHT_RECEIPT_CHANGED')
     return record
 
 
