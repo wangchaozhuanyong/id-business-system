@@ -193,9 +193,9 @@ def verify_quality(p):
            and value.get('event') == 'push' and value.get('status') == 'completed'
            and value.get('conclusion') == 'success' and value.get('head_sha') == p['commit']
            and value.get('repository', {}).get('full_name') == repository, 'QUALITY_RUN_CHANGED')
-    commit = json.loads(command_raw('gh', 'api', 'repos/' + repository + '/commits/' + p['commit']))
+    commit = json.loads(command_raw('gh', 'api', 'repos/' + repository + '/git/commits/' + p['commit']))
     r.need(commit.get('sha') == p['commit']
-           and commit.get('commit', {}).get('tree', {}).get('sha') == p['sourceTree'], 'QUALITY_SOURCE_TREE_CHANGED')
+           and commit.get('tree', {}).get('sha') == p['sourceTree'], 'QUALITY_SOURCE_TREE_CHANGED')
 
 
 def validate_sealed_native(core, a, raw):

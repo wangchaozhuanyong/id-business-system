@@ -24,6 +24,18 @@ import {
 } from './ci-recharge-scope.mjs';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
+const readonlyMetadataPaths = [
+  'scripts/production-release/online-recharge-component-readonly.py',
+  'scripts/production-release/online-recharge-component-readonly.test.py'
+];
+const readonlyMetadataCurrent = readFileSync(resolve(root, readonlyMetadataPaths[0]), 'utf8');
+const readonlyMetadataPrevious = readonlyMetadataCurrent
+  .replace("'/git/commits/'", "'/commits/'")
+  .replace(
+    "commit.get('tree', {}).get('sha')",
+    "commit.get('commit', {}).get('tree', {}).get('sha')"
+  );
+const readonlyMetadataFixture = { readonlyBaseSource: readonlyMetadataPrevious };
 
 test('new ONLINE controls retain pure diagnostics lifecycle and CI build tests without invoking Docker', () => {
   for (const part of ['guards', 'release-controls']) {
@@ -134,7 +146,13 @@ test('ordinary ONLINE component pure tests run once in either control dispatcher
       'scripts/production-release/online-recharge-component-readonly.py',
       'scripts/production-release/online-recharge-component-readonly.test.py'
     ]) {
-      const calls = recordGuardCommands('ci-only', [changed], part);
+      const metadataGuard = part === 'guards' && readonlyMetadataPaths.includes(changed);
+      const calls = recordGuardCommands(
+        'ci-only',
+        metadataGuard ? readonlyMetadataPaths : [changed],
+        part,
+        metadataGuard ? readonlyMetadataFixture : {}
+      );
       for (const helper of ['consumer', 'runtime', 'readonly'])
         assert.equal(
           calls.filter(
@@ -148,11 +166,133 @@ test('ordinary ONLINE component pure tests run once in either control dispatcher
         calls.every(
           (call) =>
             !call.includes('docker') &&
-            !call.some((arg) => arg.includes('acceptance-v2') || arg.startsWith('--workspace'))
+            !call.some(
+              (arg) =>
+                typeof arg === 'string' &&
+                (arg.includes('acceptance-v2') || arg.startsWith('--workspace'))
+            )
         )
       );
     }
   }
+});
+
+test('exact readonly Quality metadata repair keeps the common prefix and only four transport suites', () => {
+  const tail = [
+    ...['readonly', 'recovery-readonly', 'consumer', 'runtime'].map((name) => [
+      'python3',
+      '-B',
+      `scripts/production-release/online-recharge-component-${name}.test.py`
+    ]),
+    ['process-exit', 0]
+  ];
+  for (const selectors of [
+    [],
+    ['scripts/ci-recharge-check.mjs'],
+    ['scripts/ci-recharge-check.test.mjs'],
+    ['scripts/ci-recharge-check.mjs', 'scripts/ci-recharge-check.test.mjs']
+  ]) {
+    const calls = recordGuardCommands(
+      'ci-only',
+      [...readonlyMetadataPaths, ...selectors],
+      'guards',
+      readonlyMetadataFixture
+    );
+    const prefix = calls.findIndex((call) => call.includes('scripts/ci-recharge-scope.test.mjs'));
+    assert.ok(prefix >= 0);
+    assert.ok(calls[prefix].includes('scripts/ci-recharge-check.test.mjs'));
+    assert.deepEqual(calls.slice(prefix + 1), tail);
+    assert.equal(
+      calls.filter((call) => call.includes('prettier')).length,
+      selectors.length ? 1 : 0
+    );
+    assert.equal(calls.filter((call) => call.includes('eslint')).length, selectors.length ? 1 : 0);
+    assert.ok(calls.slice(0, prefix).every((call) => call[0] === 'npm'));
+  }
+});
+
+test('metadata shortcut rejects incomplete paths extra paths modes and any other readonly bytes', () => {
+  const cases = [
+    { paths: [readonlyMetadataPaths[0]] },
+    { paths: [readonlyMetadataPaths[1]] },
+    { paths: ['scripts/ci-recharge-check.mjs', 'scripts/ci-recharge-check.test.mjs'] },
+    {
+      paths: [
+        ...readonlyMetadataPaths,
+        'scripts/production-release/online-recharge-component-runtime.py'
+      ]
+    },
+    { paths: [...readonlyMetadataPaths, 'docs/V2_TASKS.md'] },
+    { mode: 'full' },
+    { mode: 'recharge' },
+    { part: 'release-controls' },
+    { fixture: { readonlyBaseSource: readonlyMetadataCurrent } },
+    { fixture: { readonlyBaseSource: '' } },
+    {
+      fixture: { ...readonlyMetadataFixture, readonlyCurrentSource: readonlyMetadataCurrent + '\n' }
+    },
+    { fixture: { readonlyBaseSource: readonlyMetadataPrevious + "\n# '/commits/'\n" } },
+    {
+      fixture: { readonlyBaseSource: readonlyMetadataPrevious.replace("'/commits/'", "'/other/'") }
+    }
+  ];
+  for (const {
+    paths = readonlyMetadataPaths,
+    mode = 'ci-only',
+    part = 'guards',
+    fixture = readonlyMetadataFixture
+  } of cases) {
+    const calls = recordGuardCommands(mode, paths, part, fixture);
+    assert.ok(calls.every((call) => call[0] !== 'process-exit'));
+    if (paths.some((path) => path.startsWith('scripts/production-release/'))) {
+      assert.ok(
+        calls.some((call) =>
+          call.includes('scripts/production-release/online-recharge-scope.test.py')
+        )
+      );
+      assert.ok(
+        calls.some((call) =>
+          call.includes('scripts/production-release/api-admin-pending-online.test.py')
+        )
+      );
+      if (part === 'guards')
+        assert.ok(
+          calls.some((call) => call.includes('scripts/production-release/remote-deploy.test.py'))
+        );
+    }
+  }
+  assert.throws(
+    () =>
+      recordGuardCommands('ci-only', readonlyMetadataPaths, 'guards', {
+        ...readonlyMetadataFixture,
+        failCommand:
+          'python3 -B scripts/production-release/online-recharge-component-readonly.test.py'
+      }),
+    /SYNTHETIC_COMMAND_FAILURE/
+  );
+});
+
+test('readonly metadata shortcut leaves the separate four-image Quality step and artifact intact', () => {
+  const workflow = readFileSync(resolve(root, '.github/workflows/quality.yml'), 'utf8');
+  const build = readFileSync(
+    resolve(root, 'scripts/production-release/online-recharge-ci-build.py'),
+    'utf8'
+  );
+  assert.ok(
+    workflow.includes(
+      "matrix.part == 'guards' && needs.change-scope.outputs.online_ci_build == 'true'"
+    )
+  );
+  const check = workflow.indexOf(
+    'run: node scripts/ci-recharge-check.mjs "$CHECK_PART" "$CHECK_BASE"'
+  );
+  const images = workflow.indexOf(
+    'run: python3 -B scripts/production-release/online-recharge-ci-build.py',
+    check
+  );
+  assert.ok(check > 0 && images > check);
+  assert.ok(workflow.indexOf('name: Preserve CI-only ONLINE image verification', images) > images);
+  assert.ok(build.includes("IMAGES = ('api', 'admin', 'migrate', 'online-recharge')"));
 });
 
 test('disk retention controls run lifecycle suites without database acceptance', () => {
@@ -233,17 +373,28 @@ function recordGuardCommands(
     failCommand = '',
     repository = '',
     event = '',
-    base = 'a'.repeat(40)
+    base = 'a'.repeat(40),
+    readonlyBaseSource = '',
+    readonlyCurrentSource = null
   } = {}
 ) {
   // Run the real dispatcher with process execution replaced before its named import resolves.
   // No Git command, nested test, database command or business operation is executed.
   const script = `
     import childProcess from 'node:child_process';
+    import fs from 'node:fs';
     import { registerHooks, syncBuiltinESMExports } from 'node:module';
     const paths = JSON.parse(process.env.GUARD_TEST_PATHS);
     const calls = [];
     globalThis.guardTestCalls = calls;
+    const readonlyPath = ${JSON.stringify(resolve(root, readonlyMetadataPaths[0]))};
+    const readonlySource = ${JSON.stringify(readonlyCurrentSource)};
+    const originalReadFileSync = fs.readFileSync;
+    fs.readFileSync = (path, options) => {
+      if (String(path) === readonlyPath && typeof readonlySource === 'string')
+        return typeof options === 'string' ? readonlySource : Buffer.from(readonlySource);
+      return originalReadFileSync(path, options);
+    };
     const scopeUrl = new URL('./scripts/ci-recharge-scope.mjs', import.meta.url).href;
     registerHooks({resolve(specifier, context, nextResolve) {
       if (specifier === './ci-recharge-scope.mjs' && context.parentURL?.endsWith('/scripts/ci-recharge-check.mjs')) {
@@ -270,6 +421,8 @@ function recordGuardCommands(
     childProcess.execFileSync = (file, args) => {
       if (file === 'git') {
         if (args.join(' ') === 'rev-parse HEAD^{tree}') return 'a'.repeat(40) + '\\n';
+        if (args[0] === 'show' && args[1] === process.env.GUARD_TEST_BASE + ':${readonlyMetadataPaths[0]}')
+          return Buffer.from(${JSON.stringify(readonlyBaseSource)});
         return paths.join('\\n');
       }
       calls.push([file, ...args]);
@@ -286,8 +439,7 @@ function recordGuardCommands(
     try { await import('./scripts/ci-recharge-check.mjs'); }
     catch (error) {
       if (error.message !== 'SYNTHETIC_PREPARE_EXIT' ||
-          (process.env.GUARD_TEST_PREPARE_RESUME !== 'true' && process.env.GUARD_TEST_RECEIPT_RESUME !== 'true' && process.env.GUARD_TEST_BUILD_RESUME !== 'true') ||
-          calls.at(-1)?.[1] !== 0) throw error;
+          calls.at(-1)?.[0] !== 'process-exit' || calls.at(-1)?.[1] !== 0) throw error;
     }
     process.stdout.write(JSON.stringify(calls));
   `;
