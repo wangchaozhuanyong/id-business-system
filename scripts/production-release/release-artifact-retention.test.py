@@ -107,7 +107,10 @@ class FakeCloud(native.Cloud):
                 **self.changes}
         if operation == 'get-object-tagging': return {'TagSet': []}
         assert operation == 'get-object'
-        assert arg('--version-id') == row['versionId']
+        if '--version-id' in arguments:
+            raise native.Rejected('ARTIFACT_CLOUD_GET_OBJECT_FAILED')
+        if arg('--if-match') != row['etag']:
+            raise native.Rejected('ARTIFACT_CLOUD_GET_OBJECT_FAILED')
         target = Path(arguments[-1]); data = row['raw']
         if self.corrupt_middle and key.endswith(native.PACKAGE):
             middle = len(data) // 2; data = data[:middle] + b'X' + data[middle+1:]
@@ -266,6 +269,30 @@ class ArchiveTests(Fixture):
         with self.assertRaisesRegex(native.Rejected, 'CLOUD_OBJECT_CHANGED'): self.apply()
         self.assertTrue(self.package.exists())
 
+    def test_same_etag_same_bytes_new_version_during_get_retains_original(self):
+        original_bytes = self.payload
+        def changed(key):
+            if key.endswith(native.PACKAGE):
+                self.cloud.objects[key]['versionId'] = 'different-version-same-content'
+        self.cloud.on_download = changed
+        with self.assertRaisesRegex(native.Rejected, 'CLOUD_DOWNLOAD_CHANGED'): self.apply()
+        self.assertEqual(self.package.read_bytes(), original_bytes)
+        row = next(record for key, record in self.cloud.objects.items() if key.endswith(native.PACKAGE))
+        self.assertEqual(row['raw'], original_bytes); self.assertEqual(row['etag'], '"' + 'a'*32 + '"')
+
+    def test_if_match_precondition_failure_preserves_package_without_release(self):
+        original = self.cloud.call
+        def conditional_failure(operation, *arguments, **kwargs):
+            if operation == 'get-object':
+                key = arguments[arguments.index('--key') + 1]
+                self.cloud.objects[key]['etag'] = '"' + 'b'*32 + '"'
+            return original(operation, *arguments, **kwargs)
+        self.cloud.call = conditional_failure
+        with self.assertRaisesRegex(native.Rejected, 'CLOUD_GET_OBJECT_FAILED'): self.apply()
+        self.assertEqual(self.package.read_bytes(), self.payload)
+        failed = json.loads(next(self.files.receipts.glob('*.result.json')).read_bytes())
+        self.assertEqual(failed['status'], 'FAILED_CLOSED')
+
     def test_failed_native_attempt_has_safe_private_receipt_pointer(self):
         self.cloud.corrupt_middle = True
         with self.assertRaises(native.Rejected) as error: self.apply()
@@ -344,6 +371,29 @@ class ArchiveTests(Fixture):
 
 
 class SafeFailureTests(unittest.TestCase):
+    def test_actual_get_cli_uses_existing_getobject_permission_and_checks_response_version(self):
+        record = {'key': 'fixture/package.tar.gz', 'etag': '"' + 'a'*32 + '"',
+                  'versionId': 'confirmed-version', 'bytes': 1234}
+        cloud = native.Cloud({'bucket': 'fixture-private-bucket', 'region': 'ap-northeast-1'})
+        requests = []
+        def permission(arguments, **kwargs):
+            requests.append(arguments)
+            if '--version-id' in arguments:
+                return SimpleNamespace(returncode=1, stdout=b'',
+                    stderr=b'AccessDenied: s3:GetObjectVersion FICTITIOUS_PRIVATE_VALUE')
+            self.assertIn('--if-match', arguments)
+            self.assertEqual(arguments[arguments.index('--if-match') + 1], record['etag'])
+            return SimpleNamespace(returncode=0, stderr=b'', stdout=native.canonical(
+                {'VersionId': record['versionId'], 'ETag': record['etag'], 'ContentLength': record['bytes']}))
+        with patch.object(native.subprocess, 'run', side_effect=permission):
+            with self.assertRaisesRegex(native.Rejected, 'CLOUD_GET_OBJECT_FAILED'):
+                cloud.call('get-object', '--key', record['key'], '--version-id', record['versionId'],
+                           '/fixture/output', timeout=600)
+            cloud.download(record, Path('/fixture/output'))
+        self.assertEqual(len(requests), 2)
+        self.assertIn('--version-id', requests[0]); self.assertNotIn('--version-id', requests[1])
+        self.assertEqual(requests[1][:4], ['aws', 's3api', '--region', 'ap-northeast-1'])
+
     def test_raw_cloud_error_is_never_emitted(self):
         with patch.object(native.subprocess, 'run', return_value=SimpleNamespace(returncode=1,
              stdout=b'SECRET_SQL_FIXTURE', stderr=b'SECRET_TOKEN_FIXTURE')),\

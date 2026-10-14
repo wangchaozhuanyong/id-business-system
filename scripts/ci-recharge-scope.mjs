@@ -2346,9 +2346,9 @@ export const onlinePreflightReceiptFixGuardBinding = Object.freeze({
   repository: 'wangchaozhuanyong/id-business-system',
   branch: 'codex/online-receipt-storage-integration-20261014',
   originalMergedMain: 'a9829b443fe5c0cf6f4803366d06c5f8e3357318',
-  integrationBase: '8ae90fb12e05abb61ea6ea9fde2bcd9a6b9c4c4f',
-  integrationTree: 'f2f8e38637bb5614b1230875ea1100004e6683f6',
-  integrationMainRun: 38515633798,
+  integrationBase: 'b9f2e2b75a753b86a5057dd798d651c57496554e',
+  integrationTree: 'd7a012ba01d59d37ccf79141bc9055332c3978fc',
+  integrationMainRun: 38518628653,
   originalHead: '4a1a76536fda6513cbc8e252bde813e471c15b6f',
   originalBase: '2edb7ef92a9619e5b0e5855220c97bac29d22f60',
   tree: 'a473264b8821ebe72471979614ba7983c531e309',
@@ -2429,7 +2429,7 @@ export function onlinePreflightReceiptFixDispatcherBytesUnchanged(before, after)
     "  process.env.GITHUB_ACTIONS === 'true' &&",
     "  process.env.GITHUB_REPOSITORY === 'wangchaozhuanyong/id-business-system' &&",
     "  process.env.GITHUB_EVENT_NAME === 'pull_request' &&",
-    "  base === '8ae90fb12e05abb61ea6ea9fde2bcd9a6b9c4c4f' &&",
+    "  base === 'b9f2e2b75a753b86a5057dd798d651c57496554e' &&",
     '  canResumeOnlinePreflightReceiptFixGuard(base);',
     ''
   ].join('\n');

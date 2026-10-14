@@ -68,7 +68,7 @@ const resumeOnlinePreflightReceiptFixGuard =
   process.env.GITHUB_ACTIONS === 'true' &&
   process.env.GITHUB_REPOSITORY === 'wangchaozhuanyong/id-business-system' &&
   process.env.GITHUB_EVENT_NAME === 'pull_request' &&
-  base === '8ae90fb12e05abb61ea6ea9fde2bcd9a6b9c4c4f' &&
+  base === 'b9f2e2b75a753b86a5057dd798d651c57496554e' &&
   canResumeOnlinePreflightReceiptFixGuard(base);
 const shared = () => npm('run', 'build', '--workspace', '@apple-business/shared');
 const onlineEngine = () => {

@@ -4224,9 +4224,9 @@ test('finite failure-receipt raw transport pins exactly the passed PR471 platfor
   const b = onlinePreflightReceiptFixGuardBinding;
   assert.equal(b.run, 38508638260);
   assert.equal(b.originalMergedMain, 'a9829b443fe5c0cf6f4803366d06c5f8e3357318');
-  assert.equal(b.integrationBase, '8ae90fb12e05abb61ea6ea9fde2bcd9a6b9c4c4f');
-  assert.equal(b.integrationTree, 'f2f8e38637bb5614b1230875ea1100004e6683f6');
-  assert.equal(b.integrationMainRun, 38515633798);
+  assert.equal(b.integrationBase, 'b9f2e2b75a753b86a5057dd798d651c57496554e');
+  assert.equal(b.integrationTree, 'd7a012ba01d59d37ccf79141bc9055332c3978fc');
+  assert.equal(b.integrationMainRun, 38518628653);
   assert.equal(b.mainRun, 38511580891);
   assert.equal(b.tree, 'a473264b8821ebe72471979614ba7983c531e309');
   assert.equal(b.job, 115671848013);
