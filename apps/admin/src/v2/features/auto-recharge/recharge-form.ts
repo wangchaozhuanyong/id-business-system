@@ -33,7 +33,10 @@ export function formatRechargeExpiry(value: string): string {
 
 export function rechargeFieldError(key: keyof V2RechargeDetails, value: string): string {
   const field = rechargeFields.find((item) => item.key === key)!;
-  if (!value.trim()) return field.required ? `请填写${field.label}` : '';
+  if (!value.trim()) {
+    if (key === 'name') return '请先输入或选择银行卡，账单姓名将自动填入';
+    return field.required ? `请填写${field.label}` : '';
+  }
   if (
     value.length > field.max ||
     Array.from(value).some(

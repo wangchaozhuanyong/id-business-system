@@ -53,9 +53,23 @@
   font-size: 12px;
   line-height: 24px;
 }
+.recharge-entry-heading-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+  min-width: 0;
+  max-width: 100%;
+  margin-left: auto;
+}
+.recharge-default-country {
+  width: 260px;
+  max-width: 100%;
+}
 .recharge-fields {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 8px 16px;
 }
 .recharge-entry-panel {
@@ -84,9 +98,6 @@
 .recharge-billing-grid :deep(.recharge-address-country),
 .recharge-billing-grid :deep(.recharge-street-address),
 .recharge-billing-grid :deep(.recharge-address-select) {
-  grid-column: span 2;
-}
-.recharge-options-grid :deep(.recharge-proxy-field) {
   grid-column: span 2;
 }
 .recharge-entry-panel :deep(.recharge-full-row),
@@ -363,9 +374,6 @@
 @container recharge-entry (max-width: 860px) {
   .recharge-fields {
     grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-  .recharge-options-grid :deep(.recharge-proxy-field) {
-    grid-column: 1 / -1;
   }
   .recharge-billing-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));

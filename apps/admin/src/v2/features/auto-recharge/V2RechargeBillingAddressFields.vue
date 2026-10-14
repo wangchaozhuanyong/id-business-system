@@ -3,10 +3,10 @@
     <el-input
       v-model="details.name"
       :validate-event="validateEvent !== false"
-      :readonly="nameConfirmed"
+      readonly
       maxlength="120"
       name="recharge-entry-name"
-      placeholder="填写官网账单地址中的全名"
+      placeholder="输入或选择银行卡后，自动从姓名库填入"
       autocomplete="off"
     />
     <p v-if="nameLoading" role="status">正在匹配账单姓名…</p>
@@ -14,6 +14,7 @@
       {{ nameError }} <AppButton size="small" @click="nameMatch?.retry()">重试</AppButton>
     </p>
     <p v-else-if="nameConfirmed" class="recharge-note">已回填这张银行卡的绑定账单姓名</p>
+    <p v-else class="recharge-note">新卡按姓名库录入顺序自动填入，用完后从第一个循环。</p>
   </el-form-item>
   <el-form-item class="recharge-address-select recharge-full-row" label="地址库" required>
     <el-select

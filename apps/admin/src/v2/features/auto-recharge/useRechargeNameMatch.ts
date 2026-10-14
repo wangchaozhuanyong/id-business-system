@@ -21,7 +21,6 @@ export function useRechargeNameMatch(
   let pending: Promise<void> | null = null;
   let matchedName = '';
   let lastMatchedNumber = '';
-  let preserveRestoredName = Boolean(details.value.name);
   const canonical = () => details.value.number.replace(/[ -]/g, '');
 
   async function match() {
@@ -51,15 +50,10 @@ export function useRechargeNameMatch(
           confirmed.value = result.confirmed;
           selectedCardId.value = result.cardId ?? '';
           onAddress(result.billingAddressId, manualAddressRevision);
-          if (
-            result.confirmed ||
-            (!preserveRestoredName && details.value.name === originalName) ||
-            !details.value.name
-          ) {
+          if (result.confirmed || details.value.name === originalName || !details.value.name) {
             details.value.name = result.name;
             matchedName = result.name;
           }
-          preserveRestoredName = false;
         } finally {
           applying.value = false;
         }
@@ -78,7 +72,6 @@ export function useRechargeNameMatch(
   watch(
     canonical,
     (number, previous) => {
-      if (previous !== undefined && number !== previous) preserveRestoredName = false;
       generation++;
       lastMatchedNumber = '';
       pending = null;
@@ -93,6 +86,14 @@ export function useRechargeNameMatch(
       if (!locked.value) void match();
     },
     { immediate: true, flush: 'sync' }
+  );
+  watch(
+    locked,
+    (value) => {
+      // 已保存银行卡加载时卡号先写入，解锁后再补齐暂停的姓名匹配。
+      if (!value && !error.value) void match();
+    },
+    { flush: 'sync' }
   );
   onScopeDispose(() => {
     disposed = true;

@@ -28,6 +28,8 @@ import { useRechargeNameMatch } from './useRechargeNameMatch';
 import { bankRechargeApi } from './bank-recharge-api';
 import { canSelectRechargeAccount } from './recharge-account-options';
 import { currencyOptions } from './recharge-presentation';
+import { proxyCountryCurrencies } from './recharge-proxy-options';
+import { useRechargeProxyRegion } from './useRechargeProxyRegion';
 import { rechargeProxyApi, type RechargeProxyItem } from './recharge-proxy-api';
 import { useBitBrowserDirectOpen } from './useBitBrowserDirectOpen';
 import { parseDirectCredential, type DirectLoginCredential } from './bitbrowser-direct-credential';
@@ -133,6 +135,10 @@ async function loadCountryProxies(countryCode: string, signal?: AbortSignal) {
 }
 
 export function useAutoRecharge(options: { clearPaymentValidation?: () => void } = {}) {
+  const regionPreferences = useV2SessionDraft('auto-recharge-region-preference', () => ({
+    defaultCountryCode: ref('PH')
+  }));
+  const { defaultCountryCode } = regionPreferences;
   const execution = useV2SessionDraft('auto-recharge-execution', () => ({
     currentId: ref(''),
     paymentJobId: ref(''),
@@ -156,14 +162,17 @@ export function useAutoRecharge(options: { clearPaymentValidation?: () => void }
     selectedAddressId: '',
     addressSource: 'library' as 'library' | 'manual',
     windowName: '',
-    lockedCurrency: 'PHP',
-    selectedProxyCountryCode: '',
+    lockedCurrency: proxyCountryCurrencies[defaultCountryCode.value] ?? 'PHP',
+    selectedProxyCountryCode: defaultCountryCode.value,
     selectedProxyId: '',
+    proxySelectionManual: false,
     details: emptyDetails()
   }));
   formDraft.open('new');
   // 同一标签页仍持有旧表单草稿时，只迁移入口与账号来源，不沿用旧的手填密码。
   const restored = formDraft.form as unknown as Record<string, unknown>;
+  if (restored.proxySelectionManual === undefined)
+    formDraft.form.proxySelectionManual = Boolean(restored.selectedProxyId);
   if (restored.operationMode === 'server_payment') formDraft.form.operationMode = 'payment';
   if (restored.loginMethod === 'saved') formDraft.form.loginMethod = 'password';
   formDraft.form.addressSource = 'library';
@@ -187,7 +196,8 @@ export function useAutoRecharge(options: { clearPaymentValidation?: () => void }
     windowName,
     lockedCurrency,
     selectedProxyCountryCode,
-    selectedProxyId
+    selectedProxyId,
+    proxySelectionManual
   } = toRefs(formDraft.form);
   const paymentDetails = reactive({ ...toRefs(formDraft.form.details), cvc: ref('') });
   const details = computed<V2RechargeDetails>({
@@ -268,18 +278,6 @@ export function useAutoRecharge(options: { clearPaymentValidation?: () => void }
     keepPreviousData: true,
     query: ({ signal }) => loadCountryProxies(selectedProxyCountryCode.value, signal)
   });
-  watch(
-    selectedProxyCountryCode,
-    () => {
-      selectedProxyId.value = '';
-      void proxiesQuery.ensureFresh();
-    },
-    { flush: 'sync' }
-  );
-  watch(lockedCurrency, () => {
-    selectedProxyCountryCode.value = '';
-    selectedProxyId.value = '';
-  });
   const browserSettings = useRechargeBrowserSettings(
     connectorStatus,
     connectorMessage,
@@ -341,27 +339,19 @@ export function useAutoRecharge(options: { clearPaymentValidation?: () => void }
       (item) => item.active && item.hasNumber && item.currencyCode === lockedCurrency.value
     )
   );
-  const availableProxyCountries = computed(() => proxyCountriesQuery.data.value?.items ?? []);
-  function markProxySelectionManual() {}
-  const availableProxies = computed(() =>
-    selectedProxyCountryCode.value
-      ? (proxiesQuery.data.value?.items ?? []).filter(
-          (item) => item.countryCode === selectedProxyCountryCode.value && item.status === 'active'
-        )
-      : []
-  );
   const proxySelectionReady = computed(
     () =>
       proxyCountriesQuery.phase.value === 'ready' &&
       !proxyCountriesQuery.error.value &&
-      (availableProxyCountries.value.length === 0 ||
-        Boolean(
-          selectedProxyCountryCode.value &&
-          selectedProxyId.value &&
-          proxiesQuery.phase.value === 'ready' &&
-          !proxiesQuery.error.value &&
-          availableProxies.value.some((item) => item.id === selectedProxyId.value)
-        ))
+      !proxyRegionError.value &&
+      Boolean(
+        selectedProxyCountryCode.value &&
+        selectedProxyId.value &&
+        proxiesQuery.phase.value === 'ready' &&
+        !proxiesQuery.error.value &&
+        !proxiesQuery.isParameterTransition.value &&
+        availableProxies.value.some((item) => item.id === selectedProxyId.value)
+      )
   );
 
   async function selectSavedCard(id: string) {
@@ -466,6 +456,26 @@ export function useAutoRecharge(options: { clearPaymentValidation?: () => void }
       paymentCardLoading.value ||
       Boolean(paymentJobId.value && !jobs.value.some((job) => job.id === paymentJobId.value))
   );
+  const proxyRegionLocked = computed(() => formLocked.value || active.value);
+  const proxyRegion = useRechargeProxyRegion({
+    currency: lockedCurrency,
+    country: selectedProxyCountryCode,
+    proxyId: selectedProxyId,
+    defaultCountry: defaultCountryCode,
+    manualSelection: proxySelectionManual,
+    currencies: availableCurrencyOptions,
+    countries: computed(() => proxyCountriesQuery.data.value?.items ?? []),
+    locked: proxyRegionLocked,
+    query: proxiesQuery
+  });
+  const {
+    countries: availableProxyCountries,
+    defaultCountries: defaultCountryOptions,
+    proxies: availableProxies,
+    countryCurrencyError: proxyRegionError,
+    note: proxySelectionNote,
+    markManual: markProxySelectionManual
+  } = proxyRegion;
   const paymentRetryBlocked = computed(() => {
     const job = selected.value;
     return Boolean(
@@ -778,6 +788,8 @@ export function useAutoRecharge(options: { clearPaymentValidation?: () => void }
         : '请从 ChatGPT 账号资料中选择已保存登录密码的账号。';
     if (operationMode.value === 'open_browser')
       return '核对窗口名称后，点击即可打开比特浏览器并自动登录。';
+    if (nameMatch.loading.value) return '正在从姓名库匹配账单姓名，请稍候。';
+    if (nameMatch.error.value) return '账单姓名匹配失败，请在账单姓名处重试。';
     const fieldErrors = rechargeFields.flatMap((field) => {
       const cardField = rechargePaymentFields.includes(field);
       const addressField = !cardField && field.key !== 'name' && field.key !== 'email';
@@ -787,7 +799,6 @@ export function useAutoRecharge(options: { clearPaymentValidation?: () => void }
     });
     if (!selectedAddress.value) fieldErrors.push('请选择可用的账单地址');
     if (fieldErrors.length) return `请修正以下资料：${fieldErrors.join('；')}。`;
-    if (nameMatch.error.value) return '账单姓名匹配失败，请在账单姓名处重试。';
     if (!authorizeSinglePayment.value)
       return '银行卡与账单地址已通过校验，请勾选本次单次付款授权。';
     if (!windowName.value.trim()) return '银行卡与账单地址已通过校验，请填写窗口名称。';
@@ -797,7 +808,11 @@ export function useAutoRecharge(options: { clearPaymentValidation?: () => void }
     )
       return '银行卡与账单地址已通过校验，请选择可用的锁定币种。';
     if (!proxySelectionReady.value || loginCountryRestriction.value)
-      return '银行卡与账单地址已通过校验，请核对代理国家与可用的代理 IP。';
+      return (
+        proxyRegionError.value ||
+        proxySelectionNote.value ||
+        '银行卡与账单地址已通过校验，请核对代理国家与可用的代理 IP。'
+      );
     return canStart.value
       ? '资料已就绪，点击“在比特浏览器执行”核实官网币种和金额后，等待你确认本次付款。'
       : '银行卡与账单地址已通过校验，正在确认任务状态，请稍候。';
@@ -1708,6 +1723,11 @@ export function useAutoRecharge(options: { clearPaymentValidation?: () => void }
     plan,
     windowName,
     lockedCurrency,
+    defaultCountryCode,
+    defaultCountryOptions,
+    proxyRegionLocked,
+    proxyRegionError,
+    proxySelectionNote,
     selectedProxyCountryCode,
     selectedProxyId,
     availableProxyCountries,

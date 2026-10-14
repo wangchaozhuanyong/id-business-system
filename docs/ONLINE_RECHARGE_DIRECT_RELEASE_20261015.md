@@ -19,3 +19,9 @@ Compose 的 `ONLINE_RECHARGE_ENGINE_ENABLED` 缺省从 1 改为 0，部署同时
 管理端完成七项规则、类型/构建/lint、138 项针对性测试；API 完成 Prisma 校验及隔离 Linux 客户端生成、类型/构建/lint、37 项针对性测试。新增客户端匹配 ONLINE 九模型，不复用 CORE 客户端或重放迁移。只在真实输入变化时补受影响验证。
 
 最终源码、依赖、编译产物、备份、切换与用户指定 Chrome 页面验收回执统一保存于本工作树 `.runtime/online-direct-release-20261015/`。最终发布结论以实际切换和线上验收记录为准；本文件初版记录的是候选准备。
+
+## 并发发布后的基线刷新
+
+准备期间另一项已获用户独立授权的 Admin 发布 `f91e7d85c83c` 完成，实际运行镜像为 `sha256:4698b702fefdbcdc5cae9fcff95760f91c6589bb4dcf2b6f15c0e3430e9579ab`。本轮在切换前检测到变更并停止，没有覆盖该版本。随后从其实际 published-admin-context 精确保留已发布的 12 个表单文件，包括保持 Pro 修复的两份三方合并文件；不能用 Git 原树替代实际发布来源。
+
+新线上基线为 `/opt/id-business-v2/releases/20261014T181446Z-f91e7d85c83c-recharge-ui`。API 及执行器输入未变，复用已经通过的 API、Linux client、生产依赖和离线浏览器结果，只补受影响的 Admin 组合检查。运行挂载按同一内容排序后计算摘要，避免 Docker 检查返回顺序变化被误判为配置改变；全部挂载字段仍完整核对。

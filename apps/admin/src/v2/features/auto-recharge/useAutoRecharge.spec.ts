@@ -9,6 +9,7 @@ import type {
   V2RechargeJob
 } from './contracts';
 import type { BankChatgptAccount } from './bank-recharge-api';
+import type { RechargeProxyItem } from './recharge-proxy-api';
 import { RechargeConnectorError } from './connector-transport';
 import { useAutoRecharge } from './useAutoRecharge';
 import { clearV2SessionDrafts, useV2FormDraft } from '@/v2/composables/useV2SessionDraft';
@@ -342,9 +343,28 @@ beforeEach(() => {
   mock.bankAccountsQuery = queryResult(bankAccounts);
   mock.bankCurrenciesQuery = queryResult(bankCurrencies);
   mock.paymentCardsQuery = queryResult(ref({ items: [] }));
-  mock.proxyCountriesQuery = queryResult(ref({ items: [] }));
+  mock.proxyCountriesQuery = queryResult(ref({ items: ['PH'] }));
   mock.proxiesQuery = {
-    ...queryResult(ref({ items: [], total: 0 })),
+    ...queryResult(
+      ref({
+        items: [
+          {
+            id: 'proxy-ph',
+            countryCode: 'PH',
+            kind: 'mobile',
+            status: 'active',
+            connectionMode: 'extraction',
+            protocol: 'http',
+            linkMask: '合成代理',
+            remark1: null,
+            remark2: null,
+            createdAt: '',
+            updatedAt: ''
+          } satisfies RechargeProxyItem
+        ],
+        total: 1
+      })
+    ),
     ensureFresh: vi.fn().mockResolvedValue(undefined)
   };
   mock.preparePaymentCard.mockResolvedValue({ cardId: '55555555-5555-4555-8555-555555555555' });
@@ -477,6 +497,32 @@ async function choosePasswordAccount(hasPassword = true, hasTotp = false) {
 }
 
 describe('比特浏览器充值入口', () => {
+  it('默认菲律宾移动代理自动进入最终任务，缺少同国代理时不能启动', async () => {
+    fillForm();
+    await nextTick();
+    expect(flow.defaultCountryCode.value).toBe('PH');
+    expect(flow.selectedProxyCountryCode.value).toBe('PH');
+    expect(flow.selectedProxyId.value).toBe('proxy-ph');
+    await flow.start();
+    expect(mock.startBitBrowser.mock.calls[0]?.[0]).toMatchObject({
+      proxyCountryCode: 'PH',
+      proxyId: 'proxy-ph',
+      lockedCurrency: 'PHP'
+    });
+  });
+  it('所选国家的代理库为空时阻止执行，不沿用设置中的其他代理', async () => {
+    fillForm();
+    (mock.proxiesQuery.data as Ref<{ items: RechargeProxyItem[]; total: number }>).value = {
+      items: [],
+      total: 0
+    };
+    await nextTick();
+    expect(flow.selectedProxyId.value).toBe('');
+    expect(flow.canStart.value).toBe(false);
+    expect(flow.workflowMessage.value).toContain('所选国家暂无启用代理');
+    await flow.start();
+    expect(mock.startBitBrowser).not.toHaveBeenCalled();
+  });
   it('切换模式清除另一种连接结果，迟到检测不能覆盖新模式状态', async () => {
     flow.operationMode.value = 'open_browser';
     await flow.testConnector();
@@ -517,6 +563,47 @@ describe('比特浏览器充值入口', () => {
     flow.updateJsonInput('not-json');
     expect(flow.sessionJson.value).toBe('');
   });
+  it('选择未绑定姓名的已保存银行卡后自动从姓名库回填，无需手填或点击执行', async () => {
+    mock.managedCardDetail.mockResolvedValueOnce({
+      id: 'card-a',
+      status: 'active',
+      currencyCode: 'PHP',
+      number: '5555555555554444',
+      expiry: '12/30',
+      billingName: null,
+      billingAddressId: address.id
+    });
+    mock.matchCardName.mockResolvedValueOnce({
+      name: 'Library Person',
+      confirmed: false,
+      cardId: 'card-a',
+      billingAddressId: address.id
+    });
+    await flow.selectSavedCard('card-a');
+    await nextTick();
+    expect(mock.matchCardName).toHaveBeenCalledExactlyOnceWith('5555555555554444');
+    expect(flow.details.value.name).toBe('Library Person');
+    expect(flow.selectedPaymentCardId.value).toBe('card-a');
+    expect(mock.preparePaymentCard).not.toHaveBeenCalled();
+    expect(mock.startBitBrowser).not.toHaveBeenCalled();
+    expect(mock.connectorStart).not.toHaveBeenCalled();
+  });
+  it('姓名匹配等待和失败时显示自动填写状态，不要求手填姓名', async () => {
+    let reject!: (cause: Error) => void;
+    mock.matchCardName.mockImplementationOnce(
+      () => new Promise((_resolve, fail) => (reject = fail))
+    );
+    fillForm();
+    flow.details.value.name = '';
+    expect(flow.workflowMessage.value).toBe('正在从姓名库匹配账单姓名，请稍候。');
+    expect(flow.canStart.value).toBe(false);
+    const ready = flow.nameMatch.ensureReady();
+    reject(new Error('姓名库暂无启用姓名，请先录入姓名'));
+    await expect(ready).rejects.toThrow('姓名库暂无启用姓名');
+    expect(flow.workflowMessage.value).toBe('账单姓名匹配失败，请在账单姓名处重试。');
+    expect(flow.canStart.value).toBe(false);
+    expect(mock.startBitBrowser).not.toHaveBeenCalled();
+  });
   it('银行卡和地址通过校验后显示就绪，不再要求重复补齐', async () => {
     fillForm();
     await nextTick();
@@ -532,7 +619,7 @@ describe('比特浏览器充值入口', () => {
     flow.details.value.name = '';
     expect(flow.canStart.value).toBe(false);
     expect(flow.workflowMessage.value).toContain('银行卡号校验未通过');
-    expect(flow.workflowMessage.value).toContain('请填写账单姓名');
+    expect(flow.workflowMessage.value).toContain('账单姓名将自动填入');
     expect(flow.workflowMessage.value).not.toContain('账单地址');
     expect(flow.workflowMessage.value).not.toContain(flow.details.value.number);
     expect(flow.workflowMessage.value).not.toContain(flow.details.value.cvc);
