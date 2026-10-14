@@ -1,4 +1,21 @@
 <template>
+  <el-form-item class="recharge-full-row" label="账单姓名" prop="name" required>
+    <el-input
+      v-model="details.name"
+      :validate-event="validateEvent !== false"
+      readonly
+      maxlength="120"
+      name="recharge-entry-name"
+      placeholder="输入或选择银行卡后，自动从姓名库填入"
+      autocomplete="off"
+    />
+    <p v-if="nameLoading" role="status">正在匹配账单姓名…</p>
+    <p v-else-if="nameError" class="recharge-error" role="alert">
+      {{ nameError }} <AppButton size="small" @click="nameMatch?.retry()">重试</AppButton>
+    </p>
+    <p v-else-if="nameConfirmed" class="recharge-note">已回填这张银行卡的绑定账单姓名</p>
+    <p v-else class="recharge-note">新卡按姓名库录入顺序自动填入，用完后从第一个循环。</p>
+  </el-form-item>
   <el-form-item class="recharge-address-select recharge-full-row" label="地址库" required>
     <el-select
       v-model="addressId"
@@ -46,19 +63,30 @@
 </template>
 
 <script setup lang="ts">
+import { computed, type Ref } from 'vue';
 import AppButton from '@/components/ui/AppButton.vue';
 import type { V2RechargeAddress, V2RechargeDetails } from './contracts';
 
-defineModel<V2RechargeDetails>({ required: true });
+const details = defineModel<V2RechargeDetails>({ required: true });
 const source = defineModel<'library' | 'manual'>('source', { required: true });
 const addressId = defineModel<string>('addressId', { required: true });
-defineProps<{
+const props = defineProps<{
+  validateEvent?: boolean;
+  nameMatch?: {
+    loading: Ref<boolean>;
+    error: Ref<string>;
+    confirmed: Ref<boolean>;
+    retry: () => Promise<void>;
+  };
   operationMode: 'payment' | 'open_browser';
   addresses: V2RechargeAddress[];
   selectedAddress?: V2RechargeAddress;
   loading: boolean;
   error: string;
 }>();
+const nameLoading = computed(() => props.nameMatch?.loading.value ?? false);
+const nameError = computed(() => props.nameMatch?.error.value ?? '');
+const nameConfirmed = computed(() => props.nameMatch?.confirmed.value ?? false);
 defineEmits<{ retry: []; select: [] }>();
 </script>
 

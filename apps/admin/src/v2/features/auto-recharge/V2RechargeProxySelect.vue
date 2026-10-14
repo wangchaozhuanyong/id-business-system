@@ -23,9 +23,10 @@
       name="recharge-proxy-entry"
       autocomplete="off"
       filterable
-      :disabled="!countryCode"
+      :disabled="!countryCode || loading"
       :loading="loading"
-      placeholder="仅显示所选国家的启用代理"
+      placeholder="自动匹配对应国家，优先使用移动代理"
+      no-data-text="所选国家暂无启用代理"
       @update:model-value="$emit('update:proxyId', $event)"
     >
       <el-option
@@ -37,7 +38,7 @@
     </el-select>
   </el-form-item>
   <p v-if="countries.length" class="recharge-note">
-    代理资料来自代理 IP 管理，本次任务使用这里选中的条目。
+    自动匹配所选国家的启用代理，优先使用移动代理；也可手动改选同国代理。
     <AppButton v-if="defaultProxyId" link variant="primary" @click="$emit('useDefault')"
       >使用默认代理</AppButton
     >
@@ -46,7 +47,8 @@
     >
     <router-link to="/v2/auto-recharge/proxies">管理代理</router-link>
   </p>
-  <p v-else-if="!loading && !error" class="recharge-note">
+  <p v-if="selectionNote" class="recharge-note" role="status">{{ selectionNote }}</p>
+  <p v-if="!countries.length && !loading && !error" class="recharge-note">
     暂无启用代理，请先在<router-link to="/v2/auto-recharge/proxies">代理 IP 管理</router-link>新增。
   </p>
   <p v-if="error" class="recharge-error" role="alert">
@@ -75,6 +77,7 @@ defineProps<{
   proxies: RechargeProxyItem[];
   loading: boolean;
   error: string;
+  selectionNote?: string;
 }>();
 defineEmits<{
   'update:countryCode': [value: string];

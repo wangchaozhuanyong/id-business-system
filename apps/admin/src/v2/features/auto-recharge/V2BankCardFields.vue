@@ -11,7 +11,7 @@
     <el-form-item label="银行卡名称" prop="label"
       ><el-input v-model="form.label" maxlength="80" placeholder="选填，默认使用卡尾号"
     /></el-form-item>
-    <el-form-item label="持卡人姓名" prop="billingName">
+    <el-form-item label="账单姓名" prop="billingName">
       <el-input
         v-model="form.billingName"
         maxlength="120"

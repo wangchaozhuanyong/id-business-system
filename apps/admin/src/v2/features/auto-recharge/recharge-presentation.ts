@@ -162,6 +162,8 @@ const labels: Record<string, string> = {
   payment_request_sending: '已发出本次唯一付款请求',
   details_required: '等待填写官网资料',
   payment_ready: '已核价，等待确认',
+  payment_confirmation: '等待确认本次报价并付款',
+  payment_human_verification: '等待完成官网真人验证',
   checkout_quote_verified: '官方报价已核对',
   checkout_ready_for_billing: '等待账单地址确定总额',
   blocked: '当前步骤未完成',
@@ -173,6 +175,8 @@ const labels: Record<string, string> = {
   payment_unknown_resolved: '历史付款锁已处理',
   payment_unknown_resolution: '正在处理历史付款记录',
   verification_required: '官网或银行验证尚未完成',
+  payment_hcaptcha_required: '官网要求完成本次付款的真人验证',
+  official_payment_method_verification_failed: '官网未能验证本次支付方式，付款结果仍待核验',
   payment_cancelled: '已取消本次确认',
   payment_submitted_or_pending: '等待原单付款结果',
   rechecking_original_payment: '正在只读复查原订单',
@@ -514,6 +518,7 @@ export function accountVerificationLabel(job: V2RechargeJob): string {
 }
 
 export function executionStageLabel(job: V2RechargeJob): string {
+  if (job.result.reason === 'payment_confirmation_expired') return '付款确认已过期';
   if (job.state === 'finished' && job.result.stage === 'session_restore' && job.result.reason)
     return '官网会话恢复未完成';
   return statusLabel(job.result.stage);
@@ -587,6 +592,18 @@ export function paymentFailureLabel(value: unknown): string {
 }
 
 function issueAction(job: V2RechargeJob, reason?: string, paymentFailure?: string): string {
+  if (reason === 'official_payment_method_verification_failed')
+    return '请只读复查原订单并核对支付资料；系统不会自动重复付款。';
+  if (paymentFailure && paymentUnknownReasons.has(paymentFailure))
+    return '请只读复查原订单；系统不会自动重复付款。';
+  if (
+    job.action === 'bitbrowser' &&
+    reason === 'payment_hcaptcha_required' &&
+    (job.result.payment_attempted === true || Number(job.result.payment_requests_sent ?? 0) > 0)
+  )
+    return ['finished', 'unknown'].includes(job.state)
+      ? '请在原官网窗口完成真人验证，然后只读复查原订单；不要重新发起付款。'
+      : '请在原官网窗口完成真人验证，系统将继续核验原订单；不要重新发起付款。';
   if (reason === 'upgrade_card_bank_verification_required')
     return job.action === 'server'
       ? '新卡需要本人银行验证，服务器没有可操作的挑战窗口。尚未提交升级付款，请核对官网银行卡设置结果。'
@@ -599,7 +616,11 @@ function issueAction(job: V2RechargeJob, reason?: string, paymentFailure?: strin
       ? job.result.three_ds_status && job.result.three_ds_status !== 'awaiting_user'
         ? '银行认证结果尚未确认，请保留原单并只读复查。服务器没有可操作的验证窗口，不要重新发起付款。'
         : '银行要求本人验证，服务器模式无法操作挑战页。请核对银行验证通知并只读复查原订单，不要重新发起付款。'
-      : '请在当前官网窗口完成银行验证，然后只读复查原订单。';
+      : paymentFailure === 'authentication_required' ||
+          reason === 'bank_verification_required' ||
+          job.result.three_ds_status === 'awaiting_user'
+        ? '请在当前官网窗口完成银行验证，然后只读复查原订单。'
+        : '请在原官网窗口完成官网或银行验证，然后只读复查原订单；不要重新发起付款。';
   if (paymentFailure || job.result.payment_status === 'declined')
     return '请核对银行卡状态、余额、限额和银行限制；系统不会自动重复付款。';
   if (reason && credentialReasons.has(reason)) return '请重新导出并载入当前账号的授权 JSON。';
@@ -650,8 +671,17 @@ export function rechargeIssueFeedback(job: V2RechargeJob): RechargeIssueFeedback
     typeof job.result.payment_failure_reason === 'string'
       ? job.result.payment_failure_reason
       : undefined;
+  const reason = typeof job.result.reason === 'string' ? job.result.reason : undefined;
+  const explicitPageDiagnostic =
+    ['payment_hcaptcha_required', 'official_payment_method_verification_failed'].includes(
+      String(reason)
+    ) &&
+    (!paymentFailure ||
+      ['official_payment_evidence_not_observed', 'payment_response_not_verified'].includes(
+        paymentFailure
+      ));
   if (
-    paymentFailure ||
+    (paymentFailure && !explicitPageDiagnostic) ||
     job.result.payment_status === 'declined' ||
     job.result.status === 'payment_failed'
   ) {
@@ -661,7 +691,6 @@ export function rechargeIssueFeedback(job: V2RechargeJob): RechargeIssueFeedback
       action: issueAction(job, undefined, paymentFailure)
     };
   }
-  const reason = typeof job.result.reason === 'string' ? job.result.reason : undefined;
   const callbackDiagnostic = rechargeCallbackDiagnostics(job);
   const callbackSummary = rechargeCallbackFailureSummary(job);
   if (reason) {
@@ -715,6 +744,13 @@ export function rechargeIssueFeedback(job: V2RechargeJob): RechargeIssueFeedback
               ? browserFailureLabel(job.result.error_type, job.result.browser_error_code)
               : failureReasonLabel(reason),
       action: issueAction(job, reason)
+    };
+  }
+  if (job.result.status === 'verification_required') {
+    return {
+      title: '需要你处理',
+      message: '官网或银行验证尚未完成',
+      action: issueAction(job)
     };
   }
   if (job.state === 'unknown' || job.result.status === 'payment_result_unknown') {
