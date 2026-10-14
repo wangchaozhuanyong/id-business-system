@@ -31,6 +31,8 @@ import {
   canResumeOnlineBuildProofReuseGuard,
   onlineBuildProofReuseCommands,
   onlinePrepareFixGuardCommands,
+  needsOnlineRechargeCiBuild,
+  onlineCiBuildControlPaths,
   readProductionDatabaseAccessSnapshot
 } from './ci-recharge-scope.mjs';
 
@@ -70,7 +72,7 @@ const resumeOnlineBuildProofReuseGuard =
   process.env.GITHUB_ACTIONS === 'true' &&
   process.env.GITHUB_REPOSITORY === 'wangchaozhuanyong/id-business-system' &&
   process.env.GITHUB_EVENT_NAME === 'pull_request' &&
-  base === '619b04c240eed836b1db76a9fe330634de1fecbf' &&
+  base === 'fff7b257fa402e14da5d9aa43aa4ea22095695c5' &&
   canResumeOnlineBuildProofReuseGuard(base);
 const resumeOnlinePreflightReceiptFixGuard =
   part === 'guards' &&
@@ -428,6 +430,20 @@ if (resumeOnlinePrepareFixGuard) {
 if (resumeOnlinePreflightReceiptFixGuard) {
   for (const [file, ...args] of onlinePreflightReceiptFixGuardCommands) run(file, args);
   process.exit(0);
+}
+if (
+  !releaseArtifactOnly &&
+  (part === 'guards' || (part === 'release-controls' && mode !== 'full')) &&
+  (needsOnlineRechargeCiBuild(changed) ||
+    changed.some((path) => onlineCiBuildControlPaths.includes(path)))
+) {
+  run('python3', ['-B', 'scripts/production-release/online-recharge-ci-build.test.py']);
+  run('python3', ['-B', 'scripts/production-release/online-recharge-component-diagnostic.test.py']);
+  run('python3', ['-B', 'scripts/production-release/online-recharge-component-lifecycle.test.py']);
+  run('node', [
+    '--test',
+    'scripts/production-release/online-recharge-component-diagnostic-entry.test.mjs'
+  ]);
 }
 if (
   part === 'guards' &&

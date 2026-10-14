@@ -1,7 +1,7 @@
 """Pure closed-scope tests: no AWS, Docker, services, browser or database."""
 import base64
 import ast
-from contextlib import contextmanager
+from contextlib import contextmanager, redirect_stdout
 import copy
 import gzip
 import importlib.util
@@ -214,8 +214,9 @@ class ComponentClientTests(unittest.TestCase):
                 patch.object(client, 'output_directory') as output, \
                 patch.object(client.r, 'modules') as modules:
             for mode in client.MODES:
-                with self.subTest(mode=mode), self.assertRaisesRegex(RuntimeError, 'PREDECESSOR_NOT_SEALED'):
-                    client.main(mode)
+                with self.subTest(mode=mode), redirect_stdout(io.StringIO()) as printed:
+                    self.assertEqual(client.main(mode), 1)
+                    self.assertEqual(json.loads(printed.getvalue())['code'], 'ONLINE_RECHARGE_COMPONENT_PREDECESSOR_NOT_SEALED')
             command.assert_not_called()
             output.assert_not_called()
             modules.assert_not_called()
@@ -226,14 +227,16 @@ class ComponentClientTests(unittest.TestCase):
                 patch.object(client.r.c, 'ADMIN_SUCCESSOR', None), \
                 patch.object(client, 'command_raw') as command, patch.object(client, 'output_directory') as output:
             for mode in client.MODES:
-                with self.subTest(mode=mode), self.assertRaisesRegex(RuntimeError, 'ADMIN_SUCCESSOR_NOT_SEALED'):
-                    client.main(mode)
+                with self.subTest(mode=mode), redirect_stdout(io.StringIO()) as printed:
+                    self.assertEqual(client.main(mode), 1)
+                    self.assertEqual(json.loads(printed.getvalue())['code'], 'ONLINE_RECHARGE_COMPONENT_ADMIN_SUCCESSOR_NOT_SEALED')
             command.assert_not_called()
             output.assert_not_called()
         with selected_fixture(dict(ENV, EXPECTED_CURRENT='unknown')), \
                 patch.object(client, 'command_raw') as command, patch.object(client, 'output_directory') as output:
-            with self.assertRaisesRegex(RuntimeError, 'SELECTION_INVALID'):
-                client.main('preflight')
+            with redirect_stdout(io.StringIO()) as printed:
+                self.assertEqual(client.main('preflight'), 1)
+                self.assertEqual(json.loads(printed.getvalue())['code'], 'ONLINE_RECHARGE_COMPONENT_SELECTION_INVALID')
             command.assert_not_called()
             output.assert_not_called()
 
@@ -679,22 +682,36 @@ class ComponentClientTests(unittest.TestCase):
     def test_safe_failure_keeps_old_controlled_cap_and_unknown_contract_without_formatting(self):
         unknown = 'ONLINE_RECHARGE_COMPONENT_REMOTE_EVIDENCE_UNAVAILABLE'
         for error in (None, Exception('private secret'), RuntimeError('private secret'),
-            RuntimeError('API_ADMIN_PRIVATE'), RuntimeError('ONLINE_RECHARGE_COMPONENT_' + 'A' * 97),
+            RuntimeError('OTHER_PRIVATE'), RuntimeError('ONLINE_RECHARGE_COMPONENT_' + 'A' * 97),
             RuntimeError('ONLINE_RECHARGE_COMPONENT_OK', 'private secret')):
             self.assertEqual(client.safe_failure(error), {'status': 'ONLINE_RECHARGE_COMPONENT_FAILED', 'code': unknown})
-        for code in ('ONLINE_RECHARGE_COMPONENT_OK', 'ONLINE_RECHARGE_COMPONENT_' + 'A' * 96,
-                     'ONLINE_RECHARGE_COMPONENT_PROTECTED_OPERATION_FAILED'):
-            self.assertEqual(client.safe_failure(RuntimeError(code))['code'], code)
+        for prefix in ('ONLINE_RECHARGE_COMPONENT', 'ONLINE_RECHARGE', 'API_ADMIN', 'UNPUBLISHED_COMPONENT'):
+            for code in (prefix + '_OK', prefix + '_' + 'A' * 96):
+                self.assertEqual(client.safe_failure(RuntimeError(code))['code'], code)
+                native = client.NativeFailure({'receipt': {'code': code}})
+                self.assertEqual(client.safe_failure(native)['code'], code)
+            self.assertEqual(client.safe_failure(RuntimeError(prefix + '_' + 'A' * 97))['code'], unknown)
+        self.assertEqual(client.safe_failure(RuntimeError('ONLINE_RECHARGE_COMPONENT_PROTECTED_OPERATION_FAILED'))['code'],
+                         'ONLINE_RECHARGE_COMPONENT_PROTECTED_OPERATION_FAILED')
         class Dangerous(RuntimeError):
             def __str__(self): raise AssertionError('custom formatting forbidden')
             def __getattribute__(self, name):
-                if name == 'args': raise AssertionError('custom args forbidden')
+                if name in ('args', 'errno', '__class__'): raise AssertionError('custom properties forbidden')
+                return super().__getattribute__(name)
+        class DangerousPermission(PermissionError):
+            def __str__(self): raise AssertionError('custom formatting forbidden')
+            def __getattribute__(self, name):
+                if name in ('args', 'errno', '__class__'): raise AssertionError('custom properties forbidden')
                 return super().__getattribute__(name)
         class DangerousArgument:
             def __str__(self): raise AssertionError('argument formatting forbidden')
             def __eq__(self, other): raise AssertionError('argument comparison forbidden')
-        for error in (Dangerous('ONLINE_RECHARGE_COMPONENT_PRIVATE'), RuntimeError(DangerousArgument())):
+        for error in (Dangerous('ONLINE_RECHARGE_COMPONENT_PRIVATE'), DangerousPermission(13, 'private secret'),
+                      RuntimeError(DangerousArgument())):
             self.assertEqual(client.safe_failure(error)['code'], unknown)
+            self.assertEqual(client.exception_details(error)['errno'], None)
+        for error in (Dangerous('private secret'), DangerousPermission(13, 'private secret')):
+            self.assertEqual(client.exception_details(error), {'exceptionClass': 'UnexpectedError', 'errno': None})
 
     def test_safe_failure_classifies_builtin_errors_without_private_details(self):
         secret = 'synthetic-password-token-cookie-command-url'
@@ -711,6 +728,88 @@ class ComponentClientTests(unittest.TestCase):
                 self.assertEqual(value, {'status': 'ONLINE_RECHARGE_COMPONENT_FAILED',
                     'code': 'ONLINE_RECHARGE_COMPONENT_' + category})
                 self.assertNotIn(secret, json.dumps(value))
+        self.assertEqual(client.exception_details(json.JSONDecodeError(secret, secret, 0)),
+                         {'exceptionClass': 'ValueError', 'errno': None})
+        self.assertEqual(client.exception_details(FileExistsError(17, secret)),
+                         {'exceptionClass': 'FileExistsError', 'errno': 17})
+        self.assertEqual(client.exception_details(OSError(13, secret)),
+                         {'exceptionClass': 'PermissionError', 'errno': 13})
+
+    def test_cross_module_controlled_errors_retain_original_code(self):
+        for prefix in ('ONLINE_RECHARGE_COMPONENT', 'ONLINE_RECHARGE', 'API_ADMIN', 'UNPUBLISHED_COMPONENT'):
+            code = prefix + '_SOURCE_CHANGED'
+            self.assertEqual(client.safe_failure(RuntimeError(code))['code'], code)
+        for private in ('API_ADMIN_SOURCE_CHANGED\nprivate', 'private', 'OTHER_PRIVATE'):
+            self.assertEqual(client.safe_failure(RuntimeError(private))['code'],
+                             'ONLINE_RECHARGE_COMPONENT_REMOTE_EVIDENCE_UNAVAILABLE')
+
+    def test_prepare_and_proof_errors_save_safe_stage_without_private_message(self):
+        for mode in ('prepare', 'build-proof', 'label'):
+            with self.subTest(mode=mode), selected_fixture() as core, \
+                    patch.object(client, 'output_directory', return_value=Path('/public-fixture')), \
+                    patch.object(client, 'write_once') as write, \
+                    patch.object(client, 'read_preflight', side_effect=FileExistsError(17, 'private-card-fixture')), \
+                    redirect_stdout(io.StringIO()) as printed:
+                self.assertEqual(client.main(mode), 1)
+                result = json.loads(printed.getvalue())
+                self.assertEqual(result['phase'], 'read-preflight')
+                self.assertEqual(result['exceptionClass'], 'FileExistsError')
+                self.assertEqual(result['errno'], 17)
+                self.assertEqual(result['outcome'], 'LOCAL_FAILED')
+                self.assertEqual(write.call_count, 2)
+                self.assertNotIn('private-card', printed.getvalue())
+
+    def test_unknown_accepted_outcome_and_authentication_rejection_are_distinct(self):
+        trace = {'phase': 'poll', 'accepted': True, 'commandId': COMMAND, 'instanceId': INSTANCE}
+        unknown = client.diagnostic_failure(TimeoutError('private transport'), 'preflight', P, trace)
+        self.assertEqual(unknown['outcome'], 'RESULT_UNKNOWN')
+        self.assertIs(unknown['automaticRetryAllowed'], False)
+        trace['phase'] = 'authenticate-native'
+        rejected = client.diagnostic_failure(RuntimeError('API_ADMIN_INVOCATION_INVALID'), 'preflight', P, trace)
+        self.assertEqual(rejected['outcome'], 'AUTHENTICATION_REJECTED')
+        self.assertEqual(rejected['code'], 'API_ADMIN_INVOCATION_INVALID')
+        self.assertNotIn('private', json.dumps(unknown))
+
+    def test_real_failed_agent_trailer_keeps_original_raw_and_strict_success(self):
+        from datetime import datetime, timezone
+        core = client.r.c.load_core()
+        now = datetime.now(timezone.utc).isoformat()
+        receipt = {'version': 1, 'kind': client.r.KIND, 'scope': client.r.SCOPE,
+            'status': 'ONLINE_RECHARGE_COMPONENT_REJECTED',
+            'code': 'ONLINE_RECHARGE_COMPONENT_PROTECTED_OPERATION_FAILED'}
+        value = {'CommandId': COMMAND, 'InstanceId': INSTANCE, 'DocumentName': 'AWS-RunShellScript',
+            'PluginName': 'aws:runShellScript', 'Status': 'Failed', 'ResponseCode': 1,
+            'StandardErrorContent': 'failed to run commands: exit status 1',
+            'StandardOutputContent': json.dumps(client.r.wire(receipt)),
+            'ExecutionStartDateTime': now, 'ExecutionEndDateTime': now}
+        raw = json.dumps(value).encode()
+        with self.assertRaisesRegex(RuntimeError, 'INVOCATION_INVALID'):
+            core.validate_invocation(raw, COMMAND, INSTANCE, status='Failed')
+        result = client.validate_failure_native(core, raw, P, COMMAND, INSTANCE)
+        self.assertEqual(base64.b64decode(result['invocationRawBase64']), raw)
+        self.assertEqual(result['invocationBytesSha256'], client.r.c.digest(raw))
+        self.assertEqual(result['receipt'], receipt)
+        self.assertEqual(result['status'], 'Failed')
+        for patch_value in ({'StandardErrorContent': 'private arbitrary stderr'},
+                            {'ResponseCode': 2}, {'Status': 'Success', 'ResponseCode': 0},
+                            {'CommandId': CURRENT_COMMAND}, {'StandardOutputUrl': 'https://fixture.invalid/log'}):
+            with self.subTest(patch_value=patch_value), self.assertRaises(RuntimeError):
+                client.validate_failure_native(core, json.dumps(dict(value, **patch_value)).encode(), P, COMMAND, INSTANCE)
+        success = dict(value, Status='Success', ResponseCode=0)
+        with self.assertRaisesRegex(RuntimeError, 'INVOCATION_INVALID'):
+            client.r.validate_component_invocation(core, json.dumps(success).encode(), COMMAND, INSTANCE)
+
+    def test_runtime_unknown_exception_class_errno_and_phase_are_public_only(self):
+        import urllib.error
+        cases = ((FileExistsError(17, 'private card'), 'SOURCE', 'SOURCE_FILEEXISTSERROR_ERRNO_17'),
+            (urllib.error.HTTPError('https://private.invalid', 403, 'private token', {}, None), 'BASELINE', 'BASELINE_HTTPERROR_403'),
+            (PermissionError(13, 'private token'), 'DISK', 'DISK_PERMISSIONERROR_ERRNO_13'))
+        for error, phase, suffix in cases:
+            code = client.r.safe_error_code(error, phase)
+            self.assertEqual(code, 'ONLINE_RECHARGE_COMPONENT_PROTECTED_' + suffix)
+            self.assertNotIn('private', code)
+        self.assertEqual(client.r.safe_error_code(RuntimeError('API_ADMIN_SOURCE_CHANGED'), 'BASELINE'),
+                         'API_ADMIN_SOURCE_CHANGED')
 
 
 if __name__ == '__main__':

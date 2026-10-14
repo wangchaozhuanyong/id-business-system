@@ -28,8 +28,8 @@ ENGINE = 'apps/api/src/id-business-v2/online-recharge/engine'
 BUILD_TARGETS = (*IMAGES, 'api-build', 'admin-build', 'registration-dependencies')
 STATE = {'stage': 'SOURCE_PROJECTION', 'image': None}
 RUNTIME_LABEL = 'id-business-v2.online-component-source-sha256'
-BRANCH = 'codex/online-build-proof-reuse-20261014'
-CI_BASE = '619b04c240eed836b1db76a9fe330634de1fecbf'
+BRANCH = 'codex/online-proof-reuse-integration-20261014'
+CI_BASE = 'fff7b257fa402e14da5d9aa43aa4ea22095695c5'
 SYNTHETIC_REPOSITORY = '000000000000.dkr.ecr.ap-northeast-1.amazonaws.com/id-business-v2-release'
 ACTIVE_ENV = None
 ACTIVE_REFERENCES = frozenset()
@@ -167,8 +167,8 @@ def build_arguments(name, dockerfile, target, context, record):
 
 
 def build(name, dockerfile, target, context, record):
-    STATE.update(stage='IMAGE_BUILD', image=name)
     args = build_arguments(name, dockerfile, target, context, record)
+    STATE.update(stage='IMAGE_BUILD', image=name)
     approved_docker(*args)
     reference = 'id-online-ci:' + record['candidateTree'] + '-' + name
     return reference
@@ -311,7 +311,8 @@ def public_environment():
 
 def require_docker_command(args):
     # Authorization is fixed before execution; callers cannot enroll new tuples.
-    need(ACTIVE_ENV is not None and tuple(args) in ACTIVE_COMMANDS, 'DOCKER_COMMAND_FORBIDDEN')
+    need(ACTIVE_ENV is not None and args and all(type(arg) is str for arg in args)
+         and tuple(args) in ACTIVE_COMMANDS, 'DOCKER_COMMAND_FORBIDDEN')
     references = ((args[args.index('-t') + 1],) if args[0] == 'build' else
         args[1:] if args[0] == 'tag' else (args[-3],) if args[0] == 'run' else (args[-1],))
     need(all(reference in ACTIVE_REFERENCES for reference in references), 'DOCKER_COMMAND_FORBIDDEN')
@@ -322,11 +323,12 @@ def approved_docker(*args):
     return docker(*args)
 
 
-def execution_allowlist(context, record, producer):
+def execution_allowlist(context, record, producer=None):
     need(type(record) is dict and record.get('releaseAuthority') is False
-         and re.fullmatch('[a-f0-9]{40}', record.get('candidateCommit', ''))
-         and re.fullmatch('[a-f0-9]{40}', record.get('candidateTree', ''))
-         and type(producer) is dict and set(producer) == {
+         and all(type(record.get(key)) is str and re.fullmatch('[a-f0-9]{40}', record[key])
+             for key in ('candidateCommit', 'candidateTree')), 'CI_PRODUCER_CHANGED')
+    if producer is not None:
+        need(type(producer) is dict and set(producer) == {
              'commit', 'sourceTree', 'workflowRunId', 'workflowRunAttempt'}
          and producer['commit'] == record['candidateCommit']
          and producer['sourceTree'] == record['candidateTree']
@@ -350,23 +352,32 @@ def execution_allowlist(context, record, producer):
     commands.update((('pull', '--platform', 'linux/amd64', ADMIN_RUNTIME_BASE),
         ('image', 'inspect', ADMIN_RUNTIME_BASE),
         content_arguments(ADMIN_RUNTIME_BASE, content_command(CONTENT_ROOTS['admin']))))
-    online = load('online-recharge-scope.py')
-    for name in IMAGES:
-        alias = SYNTHETIC_REPOSITORY + ':' + producer['commit'] + '-' + producer['workflowRunId'] + '-' + producer['workflowRunAttempt'] + '-' + name
-        references.add(alias)
-        commands.update((('tag', 'id-online-ci:' + record['candidateTree'] + '-' + name, alias),
-            ('image', 'inspect', alias), content_arguments(alias, online.content_command(name))))
+    if producer is not None:
+        online = load('online-recharge-scope.py')
+        for name in IMAGES:
+            alias = SYNTHETIC_REPOSITORY + ':' + producer['commit'] + '-' + producer['workflowRunId'] + '-' + producer['workflowRunAttempt'] + '-' + name
+            references.add(alias)
+            commands.update((('tag', 'id-online-ci:' + record['candidateTree'] + '-' + name, alias),
+                ('image', 'inspect', alias), content_arguments(alias, online.content_command(name))))
     return frozenset(commands), frozenset(references)
 
 
-def configure_execution(directory, record):
+def configure_execution(directory, record, *, strict=False):
     global ACTIVE_ENV, ACTIVE_COMMANDS, ACTIVE_REFERENCES
-    need(ADMITTED_TREE == record['candidateTree'] and record.get('ciOnly') is True
-         and record.get('notForRelease') is True and directory ==
-         ROOT / '.deploy/ci-online-recharge' / ADMITTED_TREE, 'CI_ADMISSION_CHANGED')
-    runtime = load('online-recharge-component-runtime.py')
-    commands, references = execution_allowlist(directory / runtime.CONTEXT,
-        record, record['candidateProducer'])
+    ACTIVE_ENV, ACTIVE_COMMANDS, ACTIVE_REFERENCES = None, frozenset(), frozenset()
+    need(os.environ.get('GITHUB_ACTIONS') == 'true' and sys.platform == 'linux', 'LINUX_CI_RUNNER_REQUIRED')
+    need(type(record.get('candidateTree')) is str and re.fullmatch('[a-f0-9]{40}', record['candidateTree'])
+         and directory == ROOT / '.deploy/ci-online-recharge' / record['candidateTree'], 'CI_ADMISSION_CHANGED')
+    producer = None
+    context = directory / 'context'
+    if strict:
+        need(ADMITTED_TREE == record['candidateTree'] and record.get('ciOnly') is True
+             and record.get('notForRelease') is True, 'CI_ADMISSION_CHANGED')
+        producer = record['candidateProducer']
+        need(producer.get('workflowRunId') == os.environ.get('GITHUB_RUN_ID') and
+             producer.get('workflowRunAttempt') == os.environ.get('GITHUB_RUN_ATTEMPT'), 'CI_PRODUCER_CHANGED')
+        context = directory / load('online-recharge-component-runtime.py').CONTEXT
+    commands, references = execution_allowlist(context, record, producer)
     temporary = directory / 'private-tmp'; config = directory / 'docker-config'
     for path in (ROOT / '.deploy', ROOT / '.deploy/ci-online-recharge', directory,
                  directory / '.deploy', directory / '.deploy/production-release', temporary, config):
@@ -377,10 +388,12 @@ def configure_execution(directory, record):
     ACTIVE_ENV = {**public_environment(), 'DOCKER_CONFIG': str(config),
         'TMPDIR': str(temporary), 'DOCKER_BUILDKIT': '1'}
     ACTIVE_COMMANDS, ACTIVE_REFERENCES = commands, references
+    return context
 
 
 def ci_entry_guard(admitted_tree):
     global ADMITTED_TREE
+    ADMITTED_TREE = None
     need(os.environ.get('GITHUB_ACTIONS') == 'true' and sys.platform == 'linux', 'LINUX_CI_RUNNER_REQUIRED')
     need(os.environ.get('GITHUB_REPOSITORY') == 'wangchaozhuanyong/id-business-system'
          and os.environ.get('GITHUB_EVENT_NAME') == 'pull_request'
@@ -388,6 +401,8 @@ def ci_entry_guard(admitted_tree):
     event = json.loads(Path(os.environ['GITHUB_EVENT_PATH']).read_bytes())
     pr = event.get('pull_request', {})
     need(pr.get('head', {}).get('ref') == BRANCH and pr.get('base', {}).get('sha') == CI_BASE
+         and type(pr.get('head', {}).get('sha')) is str
+         and re.fullmatch('[a-f0-9]{40}', pr['head']['sha'])
          and pr.get('head', {}).get('repo', {}).get('full_name') == 'wangchaozhuanyong/id-business-system'
          and pr.get('base', {}).get('repo', {}).get('full_name') == 'wangchaozhuanyong/id-business-system', 'CI_ADMISSION_CHANGED')
     tree = git('rev-parse', 'HEAD^{tree}').decode().strip()
@@ -521,34 +536,44 @@ def double_build_proof(directory, files, record, producer, runtime, build_result
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--source-only', action='store_true')
+    parser.add_argument('--source-only', action='store_true', help='Validate Git objects without writing or Docker')
     parser.add_argument('--ci-real-build-not-for-release', action='store_true')
     parser.add_argument('--admitted-source-tree')
     args = parser.parse_args()
+    need(args.admitted_source_tree is None or args.ci_real_build_not_for_release, 'CI_ADMISSION_REQUIRED')
     if not args.source_only:
         need(os.environ.get('GITHUB_ACTIONS') == 'true' and sys.platform == 'linux', 'LINUX_CI_RUNNER_REQUIRED')
-        need(args.ci_real_build_not_for_release is True, 'CI_ADMISSION_REQUIRED')
-        ci_entry_guard(args.admitted_source_tree)
+        if args.ci_real_build_not_for_release:
+            ci_entry_guard(args.admitted_source_tree)
     files, source = source_projection()
     if args.source_only:
-        print(json.dumps({'kind': KIND, 'scope': 'CI_ONLY', 'notForRelease': True,
-            'candidateCommit': source['candidateCommit'], 'candidateTree': source['candidateTree'],
+        print(json.dumps({'kind': KIND, 'candidateCommit': source['candidateCommit'],
+            'candidateTree': source['candidateTree'], 'fileCount': len(files),
+            'applicationInputSha256': source['applicationInputSha256'],
+            'onlineInputSha256': source['onlineInputSha256'],
             'releaseAuthority': False, 'status': 'CI_SOURCE_ONLY_VERIFIED'}))
         return
-    runtime = load('online-recharge-component-runtime.py')
-    core = c.load_core(c.sealed_authority()['coreSha256'])
-    producer = core.producer(source['candidateCommit'], source['candidateTree'],
-        os.environ['GITHUB_RUN_ID'], os.environ['GITHUB_RUN_ATTEMPT'])
-    record = runtime_source_record(files, source, producer, runtime)
+    record = source
+    if args.ci_real_build_not_for_release:
+        runtime = load('online-recharge-component-runtime.py')
+        core = c.load_core(c.sealed_authority()['coreSha256'])
+        producer = core.producer(source['candidateCommit'], source['candidateTree'],
+            os.environ['GITHUB_RUN_ID'], os.environ['GITHUB_RUN_ATTEMPT'])
+        record = runtime_source_record(files, source, producer, runtime)
     directory = ROOT / '.deploy/ci-online-recharge' / record['candidateTree']
-    configure_execution(directory, record)
-    context = directory / runtime.CONTEXT
+    context = configure_execution(directory, record, strict=args.ci_real_build_not_for_release)
     write_context(context, files)
     result = build_and_verify(context, files, record)
-    result['doubleProof'] = double_build_proof(directory, files, record, producer, runtime, result)
+    if args.ci_real_build_not_for_release:
+        result['doubleProof'] = double_build_proof(directory, files, record, producer, runtime, result)
     STATE.update(stage='RECORD_PERSISTENCE', image=None)
-    with (directory / 'ci-build-only-NOT_FOR_RELEASE.json').open('x') as handle:
+    with (directory / 'ci-build-only.json').open('x') as handle:
         json.dump(result, handle, sort_keys=True, indent=2); handle.write('\n')
+    if not args.ci_real_build_not_for_release:
+        print(json.dumps({'kind': KIND, 'candidateCommit': record['candidateCommit'],
+            'candidateTree': record['candidateTree'], 'imageCount': len(result['images']),
+            'releaseAuthority': False, 'status': 'CI_BUILD_ONLY_VERIFIED'}))
+        return
     print(json.dumps({'kind': KIND, 'scope': 'CI_ONLY', 'notForRelease': True,
         'candidateCommit': record['candidateCommit'], 'candidateTree': record['candidateTree'],
         'images': result['images'], 'doubleProof': result['doubleProof'],
