@@ -27,7 +27,11 @@ import {
   canResumeOnlineComponentGuard,
   canResumeOnlinePrepareFixGuard,
   onlinePrepareFixGuardCommands,
-  readProductionDatabaseAccessSnapshot
+  readProductionDatabaseAccessSnapshot,
+  firstRechargeReleaseControlPaths,
+  firstRechargeBillingNamePaths,
+  hasFirstRechargeBillingNameProof,
+  readFirstRechargeBillingNameSnapshot
 } from './ci-recharge-scope.mjs';
 
 const [part, base] = process.argv.slice(2);
@@ -38,6 +42,12 @@ const changed = execFileSync('git', ['diff', '--name-only', base, 'HEAD'], { enc
   .trim()
   .split('\n')
   .filter(Boolean);
+if (
+  mode === 'recharge' &&
+  changed.some((path) => firstRechargeBillingNamePaths.includes(path)) &&
+  !hasFirstRechargeBillingNameProof(changed, readFirstRechargeBillingNameSnapshot(base, changed))
+)
+  throw new Error('Missing exact first-recharge billing-name source proof');
 const releaseArtifactOnly = mode === 'ci-only' && isReleaseArtifactRetentionOnly(changed);
 const resumeCombinedGuardPrefix =
   part === 'guards' &&
@@ -61,6 +71,13 @@ const resumeOnlinePrepareFixGuard =
   base === '2edb7ef92a9619e5b0e5855220c97bac29d22f60' &&
   canResumeOnlinePrepareFixGuard(base);
 const shared = () => npm('run', 'build', '--workspace', '@apple-business/shared');
+const firstRechargeReleaseControls = () => {
+  if (changed.some((path) => firstRechargeReleaseControlPaths.includes(path))) {
+    for (const name of ['successor', 'successor-projection', 'successor-readonly'])
+      run('python3', ['-B', `scripts/production-release/first-recharge-${name}.test.py`]);
+    run('node', ['--test', 'scripts/production-release/first-recharge-entry.test.mjs']);
+  }
+};
 const onlineEngine = () => {
   const directory = 'apps/api/src/id-business-v2/online-recharge/engine/upstream';
   npm('ci', '--prefix', directory, '--ignore-scripts', '--no-audit', '--no-fund');
@@ -500,6 +517,7 @@ if (releaseArtifactOnly && ['guards', 'release-controls'].includes(part)) {
   if (part === 'release-controls') run('node', ['--test', 'scripts/ci-recharge-release.test.mjs']);
   releaseArtifactRetentionChecks();
 } else if (part === 'guards') {
+  firstRechargeReleaseControls();
   rechargeFlowSuccessorControls();
   ownedMysqlTestControls();
   releaseMaintenanceControls();
@@ -590,6 +608,7 @@ if (releaseArtifactOnly && ['guards', 'release-controls'].includes(part)) {
   }
 } else if (part === 'release-controls') {
   if (!/^[a-f0-9]{40}$/.test(base)) throw new Error('Missing diff base');
+  firstRechargeReleaseControls();
   if (
     changed.some(
       (path) =>
@@ -779,6 +798,18 @@ if (releaseArtifactOnly && ['guards', 'release-controls'].includes(part)) {
       'test_payment.py'
     ].some((name) => path === `${workerDirectory}/${name}`)
   );
+  const firstRechargeCheckoutRegression = changed.some((path) =>
+    [
+      'browser_checkout.py',
+      'pay.py',
+      'payment_form.py',
+      'payment_network.py',
+      'payment_recovery.py',
+      'plan_selection.py',
+      'plans.py',
+      'test_native_pro_checkout.py'
+    ].some((name) => path === `${workerDirectory}/${name}`)
+  );
   const workerOptions = {
     cwd: workerDirectory,
     stdio: 'inherit',
@@ -809,6 +840,7 @@ if (releaseArtifactOnly && ['guards', 'release-controls'].includes(part)) {
       'test_fingerprint_runtime',
       'test_password_login',
       'test_subscribe',
+      ...(firstRechargeCheckoutRegression ? ['test_native_pro_checkout'] : []),
       rechargeFlowRegression ? 'test_payment' : 'test_payment.StateTests',
       ...(rechargeFlowRegression
         ? ['test_callback_observation', 'test_response_settlement', 'test_subscription_cycle']

@@ -97,12 +97,123 @@ import {
   validateOnlinePrepareFixGuardNative,
   onlinePrepareFixGuardFailureCodes,
   requireOnlinePrepareFixGuardNative,
-  canResumeOnlinePrepareFixGuard
+  canResumeOnlinePrepareFixGuard,
+  firstRechargeReleaseControlPaths,
+  firstRechargeBillingNamePaths,
+  hasFirstRechargeBillingNameProof,
+  readFirstRechargeBillingNameSnapshot
 } from './ci-recharge-scope.mjs';
 import { matchesSourceEvidence } from './ci-recharge-evidence.mjs';
 
 const schema =
   'model Other { id String }\nmodel IdBusinessV2RechargeBrowserSetting { ownerId String }\n';
+
+const firstRechargeBase = 'b9f2e2b75a753b86a5057dd798d651c57496554e';
+function firstRechargeBusinessPaths() {
+  return execFileSync(
+    'git',
+    ['diff', '--name-only', firstRechargeBase, '9b5365d1cd738afbffcd72ad3663755e20a30595'],
+    {
+      encoding: 'utf8'
+    }
+  )
+    .trim()
+    .split('\n');
+}
+
+test('the exact first-subscription batch keeps all business parts and UI guards without migration or security', () => {
+  const paths = [
+    ...firstRechargeBusinessPaths(),
+    ...firstRechargeReleaseControlPaths,
+    '.github/workflows/production-release.yml',
+    'scripts/production-release/build-images.sh',
+    'scripts/production-release/push-images.sh',
+    'scripts/production-release/dispatch.sh',
+    'scripts/production-release/validate-release-selection.sh',
+    'scripts/production-release/release-storage.py',
+    'scripts/production-release/release-storage.test.py',
+    'scripts/production-release/candidate-retention.py',
+    'scripts/ci-recharge-scope.mjs',
+    'scripts/ci-recharge-scope.test.mjs',
+    'scripts/ci-recharge-check.mjs',
+    'scripts/ci-recharge-check.test.mjs'
+  ];
+  const snapshot = readFirstRechargeBillingNameSnapshot(firstRechargeBase, paths);
+  assert.equal(firstRechargeBusinessPaths().length, 37);
+  assert.equal(hasFirstRechargeBillingNameProof(paths, snapshot), true);
+  assert.equal(checkMode(paths, '', '', undefined, snapshot), 'recharge');
+  assert.equal(isTargetedOnly(paths, '', '', snapshot), true);
+  assert.deepEqual(selectedParts(paths), ['guards', 'admin', 'api', 'connector']);
+  const guards = adminUiGuardChecks('recharge', paths);
+  assert.deepEqual(guards, [
+    'check:admin-ui',
+    'check:v2-ui-language',
+    'check:v2-color-contrast',
+    'check:v2-table-standard',
+    'check:v2-loading-standard',
+    'check:v2-module-architecture',
+    'check:v2-isolation',
+    'check:v2-decimal-standard'
+  ]);
+  assert.deepEqual(backendArchitectureGuardChecks('recharge', paths), [
+    'check:v2-module-architecture',
+    'check:v2-prisma-runtime-boundary',
+    'check:v2-concurrency-standard'
+  ]);
+  assert.ok(
+    adminCheckCommands('recharge', paths).some((args) =>
+      args.includes(firstRechargeBillingNamePaths[1])
+    )
+  );
+});
+
+test('billing-name exceptions reject missing bytes, extra table or acceptance edits and executable modes', () => {
+  const paths = firstRechargeBusinessPaths();
+  const snapshot = readFirstRechargeBillingNameSnapshot(firstRechargeBase, paths);
+  assert.equal(checkMode(paths, '', ''), 'full');
+  for (const path of firstRechargeBillingNamePaths) {
+    for (const mutate of [
+      (source) => {
+        source.after += '\n';
+      },
+      (source) => {
+        source.after = source.after.replace('账单姓名', '其他姓名');
+      },
+      (source) => {
+        source.beforeMode = '100755';
+      },
+      (source) => {
+        source.afterMode = '100755';
+      },
+      (source) => {
+        delete source.before;
+      }
+    ]) {
+      const altered = structuredClone(snapshot);
+      mutate(altered[path]);
+      assert.equal(hasFirstRechargeBillingNameProof(paths, altered), false);
+      assert.equal(checkMode(paths, '', '', undefined, altered), 'full');
+    }
+  }
+  assert.equal(readFirstRechargeBillingNameSnapshot('bad-base', paths), undefined);
+  assert.equal(hasFirstRechargeBillingNameProof([], snapshot), false);
+});
+
+test('first-subscription producer controls have finite paths and retain full checks for unrelated edits', () => {
+  assert.equal(checkMode(firstRechargeReleaseControlPaths, '', ''), 'ci-only');
+  assert.deepEqual(selectedParts(firstRechargeReleaseControlPaths), ['guards']);
+  const paths = firstRechargeBusinessPaths();
+  const snapshot = readFirstRechargeBillingNameSnapshot(firstRechargeBase, paths);
+  for (const extra of [
+    'scripts/production-release/first-recharge-successor.py.backup',
+    'scripts/production-release/first-recharge-unknown.py',
+    'apps/api/src/auth/unknown.ts',
+    'apps/api/prisma-mysql/schema.prisma'
+  ]) {
+    assert.equal(checkMode([...firstRechargeReleaseControlPaths, extra], '', ''), 'full');
+    assert.equal(checkMode([...paths, extra], '', '', undefined, snapshot), 'full');
+  }
+});
 
 function syntheticOnlineGuardNative() {
   const b = onlineComponentGuardBinding;

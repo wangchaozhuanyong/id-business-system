@@ -292,6 +292,22 @@ print(core.fingerprint(record))
 PY_RECHARGE_FLOW
 }
 
+read_first_recharge_projection() {
+  python3 -B - <<'PY_FIRST_RECHARGE'
+import importlib.util, os
+from pathlib import Path
+path = Path('scripts/production-release/first-recharge-successor.py')
+spec = importlib.util.spec_from_file_location('first_recharge_label_source', path)
+core = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(core)
+record = core.closed_json(core.private_bytes(Path(core.PROJECTION).absolute(), cap=128 * 1024))
+core.projection.validate_record(record)
+core.need(record['candidateCommit'] == os.environ['RELEASE_COMMIT']
+          and record['candidateTree'] == os.environ['SOURCE_TREE'], 'BUILD_SELECTION_CHANGED')
+print(core.fingerprint(record))
+PY_FIRST_RECHARGE
+}
+
 online_component_selected() {
   [[ "${RELEASE_OPERATION:-release}" == verify_online_recharge || "${RELEASE_OPERATION:-release}" == release_online_recharge ]] &&
     [[ "${EXPECTED_CURRENT:-}" != 0a03fa28e6b844a18833d5c63f1de700f091fc64 && "${EXPECTED_CURRENT:-}" != 31d2c6885a45817cd40d23fce8d6145bc9f18af2 ]]
@@ -304,6 +320,21 @@ read_online_component_projection() {
 validate_release_selection() {
   if online_component_selected; then
     python3 -B scripts/production-release/online-recharge-component-readonly.py selection || return 1
+    return 0
+  fi
+  if [[ "${RELEASE_OPERATION:-release}" == *_first_recharge* ]]; then
+    [[ "$RELEASE_OPERATION" == verify_first_recharge || "$RELEASE_OPERATION" == release_first_recharge ]] || return 1
+    [[ "${HISTORICAL_EXCEPTION:-none}" == none && "${RELEASE_ADMIN_ONLY:-false}" == false ]] || return 1
+    [[ "${RELEASE_COMMIT:-}" =~ ^[a-f0-9]{40}$ && "${EXPECTED_CURRENT:-}" == 568e9390a304a36edba86823d5d5b31e5506763b
+      && "${SOURCE_TREE:-}" =~ ^[a-f0-9]{40}$ && "${GITHUB_REF:-}" == refs/heads/main ]] || return 1
+    [[ "${API_FAULT_RESTORE_APPROVED:-false}" == false || "${API_FAULT_RESTORE_APPROVED:-false}" == true ]] || return 1
+    if [[ "$RELEASE_OPERATION" == release_first_recharge ]]; then
+      [[ "${API_FAULT_RESTORE_APPROVED:-false}" == true ]] || {
+        echo 'First recharge publication requires separately approved API fault restoration protection' >&2
+        return 1
+      }
+    fi
+    [[ -z "${REUSE_IMAGE_RUN:-}${REUSE_IMAGE_COMMIT:-}${REUSE_IMAGE_RUN_ID:-}${REUSE_IMAGE_RUN_ATTEMPT:-}${POST_CLEANUP_SEAL_SHA256:-}${ORDER_ARCHIVE_SEAL_SHA256:-}${ORDER_ARCHIVE_PREPARED_IMAGES_SHA256:-}${RELEASE_BROWSER_CACHE_IMAGE:-}${RELEASE_BROWSER_CACHE_IMAGE_ID:-}${CACHE_PLAN_SHA256:-}${DIAGNOSTIC_COMMAND_ID:-}" ]] || return 1
     return 0
   fi
   if [[ "${RELEASE_OPERATION:-release}" == *_recharge_flow* ]]; then

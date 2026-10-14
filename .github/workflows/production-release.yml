@@ -12,6 +12,8 @@ on:
           - verify_access
           - verify_recharge_flow
           - release_recharge_flow
+          - verify_first_recharge
+          - release_first_recharge
           - verify_unpublished_components
           - diagnose_unpublished_component_runtime
           - release_unpublished_components
@@ -465,7 +467,7 @@ jobs:
           exit 1
 
       - name: Recover reviewed disk headroom before release preflight
-        if: inputs.historical_exception == 'none' && inputs.reuse_image_run == '' && (inputs.operation == 'release' || inputs.operation == 'release_admin' || inputs.operation == 'release_online_recharge' || inputs.operation == 'release_api_workspace' || inputs.operation == 'release_api_admin' || inputs.operation == 'release_api_admin_migration' || inputs.operation == 'release_unpublished_components' || inputs.operation == 'release_recharge_flow')
+        if: inputs.historical_exception == 'none' && inputs.reuse_image_run == '' && (inputs.operation == 'release' || inputs.operation == 'release_admin' || inputs.operation == 'release_online_recharge' || inputs.operation == 'release_api_workspace' || inputs.operation == 'release_api_admin' || inputs.operation == 'release_api_admin_migration' || inputs.operation == 'release_unpublished_components' || inputs.operation == 'release_recharge_flow' || inputs.operation == 'release_first_recharge')
         run: python3 -B scripts/production-release/release-storage.py before-build
 
       - name: Verify online recharge predecessor and idle workers before building
@@ -479,6 +481,10 @@ jobs:
       - name: Verify recharge flow predecessor and idle workers before building
         if: inputs.operation == 'verify_recharge_flow' || inputs.operation == 'release_recharge_flow'
         run: python3 -B scripts/production-release/recharge-flow-successor-readonly.py preflight
+
+      - name: Verify first recharge predecessor and idle workers before building
+        if: inputs.operation == 'verify_first_recharge' || inputs.operation == 'release_first_recharge'
+        run: python3 -B scripts/production-release/first-recharge-successor-readonly.py preflight
 
       - name: Diagnose an online recharge predecessor failure without writes
         if: failure() && (inputs.operation == 'verify_online_recharge' || inputs.operation == 'release_online_recharge')
@@ -534,7 +540,7 @@ jobs:
           aws ecr get-login-password --region "$AWS_REGION" | docker login --username AWS --password-stdin "$registry" >/dev/null
 
       - name: Build images on the GitHub runner
-        if: inputs.operation == 'release_recharge_flow' || inputs.operation == 'release_unpublished_components' || inputs.operation == 'release_admin' || inputs.operation == 'release_online_recharge' || inputs.operation == 'release_api_workspace' || inputs.operation == 'release_api_admin' || inputs.operation == 'release_api_admin_migration' || inputs.operation == 'release_api_registration' || (inputs.operation == 'release' && inputs.reuse_image_run == '') || inputs.operation == 'prepare_post_cleanup_release' || inputs.operation == 'prepare_order_archive_release'
+        if: inputs.operation == 'release_recharge_flow' || inputs.operation == 'release_first_recharge' || inputs.operation == 'release_unpublished_components' || inputs.operation == 'release_admin' || inputs.operation == 'release_online_recharge' || inputs.operation == 'release_api_workspace' || inputs.operation == 'release_api_admin' || inputs.operation == 'release_api_admin_migration' || inputs.operation == 'release_api_registration' || (inputs.operation == 'release' && inputs.reuse_image_run == '') || inputs.operation == 'prepare_post_cleanup_release' || inputs.operation == 'prepare_order_archive_release'
         run: bash scripts/production-release/build-images.sh
 
       - name: Verify reusable build and unchanged application source
@@ -604,11 +610,11 @@ jobs:
           aws ecr describe-repositories --repository-names id-business-v2-release --query 'repositories[0].repositoryUri' --output text | grep -Fx "$RELEASE_REPOSITORY"
 
       - name: Push immutable images
-        if: inputs.operation == 'release_recharge_flow' || inputs.operation == 'release_unpublished_components' || inputs.operation == 'release_admin' || inputs.operation == 'release_online_recharge' || inputs.operation == 'release_api_workspace' || inputs.operation == 'release_api_admin' || inputs.operation == 'release_api_admin_migration' || inputs.operation == 'release_api_registration' || (inputs.operation == 'release' && inputs.reuse_image_run == '') || inputs.operation == 'prepare_post_cleanup_release' || inputs.operation == 'prepare_order_archive_release'
+        if: inputs.operation == 'release_recharge_flow' || inputs.operation == 'release_first_recharge' || inputs.operation == 'release_unpublished_components' || inputs.operation == 'release_admin' || inputs.operation == 'release_online_recharge' || inputs.operation == 'release_api_workspace' || inputs.operation == 'release_api_admin' || inputs.operation == 'release_api_admin_migration' || inputs.operation == 'release_api_registration' || (inputs.operation == 'release' && inputs.reuse_image_run == '') || inputs.operation == 'prepare_post_cleanup_release' || inputs.operation == 'prepare_order_archive_release'
         run: bash scripts/production-release/push-images.sh
 
       - name: Register complete release candidate and reserve pull headroom
-        if: inputs.historical_exception == 'none' && inputs.reuse_image_run == '' && (inputs.operation == 'release' || inputs.operation == 'release_admin' || inputs.operation == 'release_online_recharge' || inputs.operation == 'release_api_workspace' || inputs.operation == 'release_api_admin' || inputs.operation == 'release_api_admin_migration' || inputs.operation == 'release_unpublished_components' || inputs.operation == 'release_recharge_flow')
+        if: inputs.historical_exception == 'none' && inputs.reuse_image_run == '' && (inputs.operation == 'release' || inputs.operation == 'release_admin' || inputs.operation == 'release_online_recharge' || inputs.operation == 'release_api_workspace' || inputs.operation == 'release_api_admin' || inputs.operation == 'release_api_admin_migration' || inputs.operation == 'release_unpublished_components' || inputs.operation == 'release_recharge_flow' || inputs.operation == 'release_first_recharge')
         run: python3 -B scripts/production-release/release-storage.py before-pull
 
       - name: Save fixed registration Worker build projection
@@ -2467,7 +2473,7 @@ jobs:
           PY
 
       - name: Deploy through the production instance
-        if: inputs.operation == 'release_recharge_flow' || inputs.operation == 'release_unpublished_components' || inputs.operation == 'release_admin' || inputs.operation == 'release_online_recharge' || inputs.operation == 'release_api_workspace' || inputs.operation == 'release' || inputs.operation == 'release_api_admin' || inputs.operation == 'release_api_admin_migration' || inputs.operation == 'release_api_registration'
+        if: inputs.operation == 'release_recharge_flow' || inputs.operation == 'release_first_recharge' || inputs.operation == 'release_unpublished_components' || inputs.operation == 'release_admin' || inputs.operation == 'release_online_recharge' || inputs.operation == 'release_api_workspace' || inputs.operation == 'release' || inputs.operation == 'release_api_admin' || inputs.operation == 'release_api_admin_migration' || inputs.operation == 'release_api_registration'
         run: bash scripts/production-release/dispatch.sh
 
       - name: Independently read back Admin publication and preserved services
@@ -2669,6 +2675,20 @@ jobs:
           include-hidden-files: true
           retention-days: 14
 
+      - name: Independently read back first recharge images and preserved services
+        if: inputs.operation == 'release_first_recharge'
+        run: python3 -B scripts/production-release/first-recharge-successor-readonly.py readback
+
+      - name: Save first recharge build and independent runtime evidence
+        if: always() && (inputs.operation == 'verify_first_recharge' || inputs.operation == 'release_first_recharge')
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: first-recharge-evidence-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .deploy/production-release/first-recharge-successor-*.json
+          if-no-files-found: warn
+          include-hidden-files: true
+          retention-days: 14
+
       - name: Independently read back unpublished component images and preserved services
         if: inputs.operation == 'release_unpublished_components'
         run: python3 -B scripts/production-release/unpublished-component-successor-readonly.py readback
@@ -2706,11 +2726,11 @@ jobs:
         run: python3 -B scripts/production-release/online-recharge-readonly.py readback
 
       - name: Confirm published candidate and reclaim superseded local images
-        if: inputs.historical_exception == 'none' && inputs.reuse_image_run == '' && (inputs.operation == 'release' || inputs.operation == 'release_admin' || inputs.operation == 'release_online_recharge' || inputs.operation == 'release_api_workspace' || inputs.operation == 'release_api_admin' || inputs.operation == 'release_api_admin_migration' || inputs.operation == 'release_unpublished_components' || inputs.operation == 'release_recharge_flow')
+        if: inputs.historical_exception == 'none' && inputs.reuse_image_run == '' && (inputs.operation == 'release' || inputs.operation == 'release_admin' || inputs.operation == 'release_online_recharge' || inputs.operation == 'release_api_workspace' || inputs.operation == 'release_api_admin' || inputs.operation == 'release_api_admin_migration' || inputs.operation == 'release_unpublished_components' || inputs.operation == 'release_recharge_flow' || inputs.operation == 'release_first_recharge')
         run: python3 -B scripts/production-release/release-storage.py after-publish
 
       - name: Save disk lifecycle safe evidence
-        if: always() && inputs.historical_exception == 'none' && inputs.reuse_image_run == '' && (inputs.operation == 'release' || inputs.operation == 'release_admin' || inputs.operation == 'release_online_recharge' || inputs.operation == 'release_api_workspace' || inputs.operation == 'release_api_admin' || inputs.operation == 'release_api_admin_migration' || inputs.operation == 'release_unpublished_components' || inputs.operation == 'release_recharge_flow')
+        if: always() && inputs.historical_exception == 'none' && inputs.reuse_image_run == '' && (inputs.operation == 'release' || inputs.operation == 'release_admin' || inputs.operation == 'release_online_recharge' || inputs.operation == 'release_api_workspace' || inputs.operation == 'release_api_admin' || inputs.operation == 'release_api_admin_migration' || inputs.operation == 'release_unpublished_components' || inputs.operation == 'release_recharge_flow' || inputs.operation == 'release_first_recharge')
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: disk-lifecycle-evidence-${{ github.run_id }}-${{ github.run_attempt }}

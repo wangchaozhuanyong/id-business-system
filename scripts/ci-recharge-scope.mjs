@@ -5,6 +5,88 @@ import { pathToFileURL } from 'node:url';
 import { matchesSourceEvidence } from './ci-recharge-evidence.mjs';
 
 export const parts = ['guards', 'admin', 'api', 'connector', 'migration', 'security'];
+export const firstRechargeReleaseControlPaths = Object.freeze([
+  'scripts/production-release/first-recharge-successor.py',
+  'scripts/production-release/first-recharge-successor.test.py',
+  'scripts/production-release/first-recharge-successor-projection.py',
+  'scripts/production-release/first-recharge-successor-projection.test.py',
+  'scripts/production-release/first-recharge-successor-readonly.py',
+  'scripts/production-release/first-recharge-successor-readonly.test.py',
+  'scripts/production-release/first-recharge-successor-contract.json',
+  'scripts/production-release/first-recharge-entry.test.mjs'
+]);
+export const firstRechargeBillingNamePaths = Object.freeze([
+  'apps/admin/src/v2/features/tableSchemas.ts',
+  'scripts/acceptance-v2-recharge-names-ui.mjs'
+]);
+const firstRechargeBillingNameHashes = [
+  [
+    '2ff5741def9d44a3de1ce4cd4cac2f4c15a5b1f7a6db0b6207fea6009540c694',
+    'f877039c789d1e7e31d5f30c973257338568915ee7bc2e47811f397364d41cc2'
+  ],
+  [
+    '126054e19f4e94e747789b2a7251b3a6b9227602ba3b79cb875ec75e505e307f',
+    'f1d6c7603a57323271e07343f95301c926c3067bda7a7687d83c7dd42e0a1d74'
+  ]
+];
+
+export function hasFirstRechargeBillingNameProof(paths, snapshot) {
+  const digest = (source) => createHash('sha256').update(source).digest('hex');
+  const changed = firstRechargeBillingNamePaths.filter((path) => paths.includes(path));
+  return (
+    changed.length > 0 &&
+    changed.every((path) => {
+      const source = snapshot?.[path];
+      const index = firstRechargeBillingNamePaths.indexOf(path);
+      if (
+        typeof source?.before !== 'string' ||
+        typeof source?.after !== 'string' ||
+        source.beforeMode !== '100644' ||
+        source.afterMode !== '100644' ||
+        digest(source.before) !== firstRechargeBillingNameHashes[index][0] ||
+        digest(source.after) !== firstRechargeBillingNameHashes[index][1]
+      )
+        return false;
+      const old =
+        index === 0
+          ? "{ key: 'billingName', label: '持卡人姓名', kind: 'text', widthPreset: 'wide' }"
+          : "getByLabel('持卡人姓名', { exact: true })";
+      return (
+        source.before.split(old).length === (index === 0 ? 2 : 3) &&
+        source.after === source.before.replaceAll(old, old.replace('持卡人姓名', '账单姓名'))
+      );
+    })
+  );
+}
+
+export function readFirstRechargeBillingNameSnapshot(base, paths) {
+  if (!/^[a-f0-9]{40}$/.test(base)) return undefined;
+  const changed = firstRechargeBillingNamePaths.filter((path) => paths.includes(path));
+  if (!changed.length) return undefined;
+  try {
+    return Object.fromEntries(
+      changed.map((path) => {
+        const read = (revision) =>
+          execFileSync('git', ['show', `${revision}:${path}`], { encoding: 'utf8' });
+        const mode = (revision) =>
+          execFileSync('git', ['ls-tree', revision, '--', path], { encoding: 'utf8' })
+            .trim()
+            .split(/\s+/)[0];
+        return [
+          path,
+          {
+            before: read(base),
+            after: read('HEAD'),
+            beforeMode: mode(base),
+            afterMode: mode('HEAD')
+          }
+        ];
+      })
+    );
+  } catch {
+    return undefined;
+  }
+}
 export const onlineRechargeRecoveryPolicy =
   'scripts/production-release/online-recharge-recovery.json';
 export const productionDatabaseAccessHelper = 'scripts/lib/v2-production-database-access.mjs';
@@ -588,6 +670,7 @@ export function isCiOnly(paths) {
     paths.every(
       (p) =>
         releaseArtifactRetentionControls.includes(p) ||
+        firstRechargeReleaseControlPaths.includes(p) ||
         historicalReleaseControlPaths.includes(p) ||
         unpublishedComponentSuccessorControlPaths.includes(p) ||
         rechargeFlowSuccessorControlPaths.includes(p) ||
@@ -679,7 +762,7 @@ export function isMailboxOnly(paths) {
   );
 }
 
-export function checkMode(paths, oldSchema, newSchema, grantHelperSnapshot) {
+export function checkMode(paths, oldSchema, newSchema, grantHelperSnapshot, firstRechargeSnapshot) {
   if (paths.includes(rechargePricingProfile)) {
     if (!isRechargePricingOnly(paths)) return 'full';
     return paths.some((path) => rechargePricingSources.has(path)) ? 'recharge' : 'ci-only';
@@ -729,7 +812,7 @@ export function checkMode(paths, oldSchema, newSchema, grantHelperSnapshot) {
       : 'full';
   if (isCiOnly(paths)) return 'ci-only';
   if (isMailboxOnly(paths)) return 'mailbox';
-  if (isTargetedOnly(paths, oldSchema, newSchema)) return 'recharge';
+  if (isTargetedOnly(paths, oldSchema, newSchema, firstRechargeSnapshot)) return 'recharge';
   if (isAdminOnly(paths)) return 'admin';
   return 'full';
 }
@@ -850,6 +933,8 @@ export function adminCheckCommands(mode, paths) {
     paths.some((p) => p.startsWith('apps/admin/src/v2/features/auto-recharge/'))
   )
     commands.push(['run', 'acceptance:v2-auto-recharge']);
+  if (paths.includes(firstRechargeBillingNamePaths[1]))
+    commands.push(['exec', '--', 'node', firstRechargeBillingNamePaths[1]]);
   if (
     paths.some((p) =>
       /(?:layout\.css|V2(?:PageOverview|OverviewMetric|ListToolbar|PageContext)\.vue|admin-layout-rules|acceptance-v2-(?:filter|page)-layout)/.test(
@@ -950,7 +1035,7 @@ const bitOrdersAcceptancePaths = new Set([
 ]);
 export const hasAppleMailboxScope = (paths) => paths.some((path) => appleMailboxApiPaths.has(path));
 
-export function isRechargeOnly(paths, oldSchema, newSchema) {
+export function isRechargeOnly(paths, oldSchema, newSchema, firstRechargeSnapshot) {
   if (paths.includes(rechargePricingProfile))
     return isRechargePricingOnly(paths) && paths.some((path) => rechargePricingSources.has(path));
   if (hasRegistrationOnboardingScope(paths))
@@ -997,6 +1082,9 @@ export function isRechargeOnly(paths, oldSchema, newSchema) {
         unpublishedComponentSuccessorControlPaths.includes(p) ||
         rechargeFlowSuccessorControlPaths.includes(p) ||
         ownedMysqlTestControlPaths.includes(p) ||
+        firstRechargeReleaseControlPaths.includes(p) ||
+        (firstRechargeBillingNamePaths.includes(p) &&
+          hasFirstRechargeBillingNameProof(paths, firstRechargeSnapshot)) ||
         sharedTableSourcePaths.has(p) ||
         rechargeConnectionAcceptancePaths.has(p) ||
         p === rechargeConnectionProfileMigration ||
@@ -1021,7 +1109,7 @@ export function isRechargeOnly(paths, oldSchema, newSchema) {
 // These security modules have explicit targeted checks below; other code remains full scope.
 const securityPaths =
   /^(?:apps\/api\/src\/auth\/(?:auth\.service|password-hasher)(?:\.spec)?\.ts$|apps\/admin\/src\/v2\/features\/audit-logs\/audit-log-presentation(?:\.spec)?\.ts$|apps\/api\/src\/id-business-v2\/workspace\/media-resolver\/|scripts\/(?:audit-python-dependencies(?:\.test)?\.py|container-hardening\.test\.mjs|start-auto-recharge-connector\.sh)$|\.github\/workflows\/python-dependency-audit\.yml$)/;
-export function isTargetedOnly(paths, oldSchema, newSchema) {
+export function isTargetedOnly(paths, oldSchema, newSchema, firstRechargeSnapshot) {
   if (paths.includes(rechargePricingProfile)) return isRechargeOnly(paths, oldSchema, newSchema);
   if (hasRegistrationOnboardingScope(paths)) return isRechargeOnly(paths, oldSchema, newSchema);
   if (paths.includes(registrationInterstitialProfile))
@@ -1051,7 +1139,7 @@ export function isTargetedOnly(paths, oldSchema, newSchema) {
     );
   return (
     isRegistrationHydrationOnly(paths) ||
-    isRechargeOnly(paths, oldSchema, newSchema) ||
+    isRechargeOnly(paths, oldSchema, newSchema, firstRechargeSnapshot) ||
     (paths.some((p) => securityPaths.test(p)) &&
       paths.every(
         (p) => allowed.test(p) || historicalReleaseControlPaths.includes(p) || securityPaths.test(p)
@@ -2493,11 +2581,13 @@ async function main() {
   ensureCommit(base);
   const paths = git('diff', '--name-only', base, 'HEAD').split('\n').filter(Boolean);
   const grantHelperSnapshot = readProductionDatabaseAccessSnapshot(base, paths);
+  const firstRechargeSnapshot = readFirstRechargeBillingNameSnapshot(base, paths);
   const mode = checkMode(
     paths,
     git('show', `${base}:${schema}`),
     git('show', `HEAD:${schema}`),
-    grantHelperSnapshot
+    grantHelperSnapshot,
+    firstRechargeSnapshot
   );
   const currentTree = git('rev-parse', 'HEAD^{tree}');
   let reuseMain = false;

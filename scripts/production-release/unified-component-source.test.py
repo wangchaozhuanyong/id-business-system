@@ -30,6 +30,17 @@ CONFIRM_INPUTS = {
 CONFIRM_OVERLAY = 'a3ea38d3f31dce7f438d067e6bfbafe4108636ed50c75621beb44a8948b2b8b7'
 CONFIRM_PUBLISHED_SOURCE = '568e9390a304a36edba86823d5d5b31e5506763b'
 CONFIRM_PUBLISHED_TREE = '6961e61290108e7301b9629f2d62685c88c9cec6'
+FIRST_RECHARGE_SOURCE = '3b7fea251508f7ffb32cc98553bdc56790cb6e1b'
+FIRST_RECHARGE_TREE = '1da5cd9e60311a45698493bf131927019d9851e8'
+FIRST_RECHARGE_APPLICATION_SEAL = 'bef121cc439f545aeeb40ca770827f7faa4fb24e1344171f988079d0a25b7db2'
+
+
+def verify_first_recharge_worktree(current, projection):
+    rows = projection.inventory(current)
+    fingerprint = hashlib.sha256(json.dumps(rows, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
+    if len(rows) != 2192 or fingerprint != FIRST_RECHARGE_APPLICATION_SEAL:
+        raise RuntimeError('JOINT_FIRST_RECHARGE_SOURCE_CHANGED')
+    return 'FIRST_RECHARGE_FINITE_PROJECTION'
 
 
 def verify_application_worktree(sealed, current, projection):
@@ -115,13 +126,38 @@ class JointSourceTests(unittest.TestCase):
         paths = subprocess.check_output(['git', 'ls-files', '--cached', '--others', '--exclude-standard',
             '--', 'apps/api', 'apps/admin', 'packages/shared', *APP_FILES], cwd=ROOT).decode().splitlines()
         present = {name for name in paths if (ROOT / name).is_file()}
-        self.assertEqual(present, set(self.application))
         current = {}
         for name in sorted(present):
             with self.subTest(path=name):
                 path = ROOT / name
                 self.assertFalse(path.is_symlink())
                 current[name] = (path.read_bytes(), '100755' if path.stat().st_mode & 0o111 else '100644')
+        if len(present) == 2192:
+            self.assertEqual(verify_first_recharge_worktree(current, self.projection),
+                             'FIRST_RECHARGE_FINITE_PROJECTION')
+            business = archived_files(FIRST_RECHARGE_SOURCE)
+            self.assertEqual(self.projection.source_tree(business), FIRST_RECHARGE_TREE)
+            full_application = {name: row for name, row in business.items()
+                                if name.startswith(APP_PREFIXES) or name in APP_FILES}
+            self.assertEqual(current, full_application)
+            future = load('first-recharge-successor-projection.py')
+            self.assertEqual(future.BUSINESS_COMMIT, FIRST_RECHARGE_SOURCE)
+            self.assertEqual(future.BUSINESS_TREE, FIRST_RECHARGE_TREE)
+            self.assertEqual(future.contract()['applicationInputSha256'], FIRST_RECHARGE_APPLICATION_SEAL)
+            d = SimpleNamespace(registration_download=lambda commit: subprocess.check_output([
+                'git', 'archive', '--format=tar', '--prefix=id-business-system-' + commit + '/', commit], cwd=ROOT),
+                registration_archive=self.core.modules()[0].registration_archive)
+            output, record = future.project_sources(d, business, FIRST_RECHARGE_SOURCE, FIRST_RECHARGE_TREE)
+            self.assertEqual(record['scope'], 'FIRST_RECHARGE_FINITE_PROJECTION')
+            self.assertEqual(len(record['contexts']['api']['changedFiles']), 16)
+            self.assertEqual(len(record['contexts']['admin']['changedFiles']), 15)
+            self.assertEqual(record['contexts']['api']['baseCommit'], '43c31870c9497d900491cdb19c5f61c766f3b344')
+            self.assertEqual(record['contexts']['admin']['baseCommit'], CONFIRM_PUBLISHED_SOURCE)
+            self.assertFalse(any('/online-recharge/' in name for name in output))
+            self.assertFalse(any('/schema.prisma' in name or '/migrations/' in name
+                                 for role in record['contexts'].values() for name in role['changedFiles']))
+            return
+        self.assertEqual(present, set(self.application))
         sealed = {name: self.candidate[name] for name in present}
         profile = verify_application_worktree(sealed, current, self.projection)
         for name in sorted(present - (set(CONFIRM_INPUTS) if profile == 'ADMIN_CONFIRM_EXPIRY_20261014' else set())):
@@ -156,6 +192,28 @@ class JointSourceTests(unittest.TestCase):
             self.assertFalse(any('/online-recharge/' in name for name in output))
             for name, row in runtime.items():
                 self.assertEqual(output[name], row)
+
+    def test_first_recharge_finite_application_rejects_added_deleted_mode_and_unrelated_bytes(self):
+        business = archived_files(FIRST_RECHARGE_SOURCE)
+        approved = {name: row for name, row in business.items()
+                    if name.startswith(APP_PREFIXES) or name in APP_FILES}
+        self.assertEqual(verify_first_recharge_worktree(approved, self.projection),
+                         'FIRST_RECHARGE_FINITE_PROJECTION')
+        native = 'apps/api/src/id-business-v2/auto-recharge/worker/test_native_pro_checkout.py'
+        for fault in ('native-byte', 'native-mode', 'native-delete', 'foreign-add', 'schema', 'auth', 'lockfile'):
+            changed = dict(approved)
+            if fault == 'native-delete':
+                del changed[native]
+            elif fault == 'foreign-add':
+                changed['apps/admin/src/v2/features/unknown.ts'] = (b'export {};', '100644')
+            else:
+                path = {'schema': 'apps/api/prisma-mysql/schema.prisma',
+                        'auth': 'apps/api/src/auth/auth.service.ts',
+                        'lockfile': 'package-lock.json'}.get(fault, native)
+                raw, mode = changed[path]
+                changed[path] = (raw, '100755') if fault == 'native-mode' else (raw + b'\n// unapproved\n', mode)
+            with self.subTest(fault=fault), self.assertRaisesRegex(RuntimeError, 'JOINT_FIRST_RECHARGE_SOURCE_CHANGED'):
+                verify_first_recharge_worktree(changed, self.projection)
 
     def test_published_confirmation_fixture_rejects_wrong_tree_ui_and_additional_application_or_online_controls(self):
         adapter = load('admin-pending-online-release.py')

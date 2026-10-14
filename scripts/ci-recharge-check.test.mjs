@@ -16,7 +16,10 @@ import {
   rechargeConnectionProfileMigration,
   onlinePrepareFixGuardCommands,
   onlinePrepareFixGuardBinding,
-  onlinePrepareFixGuardPaths
+  onlinePrepareFixGuardPaths,
+  firstRechargeReleaseControlPaths,
+  firstRechargeBillingNamePaths,
+  readFirstRechargeBillingNameSnapshot
 } from './ci-recharge-scope.mjs';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
@@ -132,7 +135,9 @@ function recordGuardCommands(
     prepareResume = false,
     repository = '',
     event = '',
-    base = 'a'.repeat(40)
+    base = 'a'.repeat(40),
+    firstRechargeSnapshot,
+    captureError = false
   } = {}
 ) {
   // Run the real dispatcher with process execution replaced before its named import resolves.
@@ -155,7 +160,9 @@ function recordGuardCommands(
           'return process.env.GUARD_TEST_ONLINE_RESUME === "true"; }' +
           'export function canResumeOnlinePrepareFixGuard(base) {' +
           'globalThis.guardTestCalls.push(["prepare-resume-helper", base]);' +
-          'return process.env.GUARD_TEST_PREPARE_RESUME === "true"; }';
+          'return process.env.GUARD_TEST_PREPARE_RESUME === "true"; }' +
+          'export function readFirstRechargeBillingNameSnapshot() {' +
+          'return JSON.parse(process.env.GUARD_TEST_FIRST_RECHARGE_SNAPSHOT || "null"); }';
         return {url: 'data:text/javascript,' + encodeURIComponent(source), shortCircuit: true};
       }
       return nextResolve(specifier, context);
@@ -173,7 +180,9 @@ function recordGuardCommands(
     };
     try { await import('./scripts/ci-recharge-check.mjs'); }
     catch (error) {
-      if (error.message !== 'SYNTHETIC_PREPARE_EXIT' ||
+      if (process.env.GUARD_TEST_CAPTURE_ERROR === 'true') {
+        calls.push(['caught-error', error.message]);
+      } else if (error.message !== 'SYNTHETIC_PREPARE_EXIT' ||
           process.env.GUARD_TEST_PREPARE_RESUME !== 'true' ||
           calls.at(-1)?.[1] !== 0) throw error;
     }
@@ -194,11 +203,107 @@ function recordGuardCommands(
         GUARD_TEST_PREPARE_RESUME: prepareResume ? 'true' : '',
         GUARD_TEST_BASE: base,
         GUARD_TEST_PART: part,
-        GUARD_TEST_PATHS: JSON.stringify(paths)
+        GUARD_TEST_PATHS: JSON.stringify(paths),
+        GUARD_TEST_FIRST_RECHARGE_SNAPSHOT: JSON.stringify(firstRechargeSnapshot),
+        GUARD_TEST_CAPTURE_ERROR: String(captureError)
       }
     })
   );
 }
+
+test('first-subscription producer tests dispatch once and only from the exact finite controls', () => {
+  for (const part of ['guards', 'release-controls']) {
+    for (const changed of firstRechargeReleaseControlPaths) {
+      const calls = recordGuardCommands('ci-only', [changed], part);
+      for (const name of ['successor', 'successor-projection', 'successor-readonly'])
+        assert.equal(
+          calls.filter(
+            (call) =>
+              call.join(' ') ===
+              `python3 -B scripts/production-release/first-recharge-${name}.test.py`
+          ).length,
+          1
+        );
+      assert.equal(
+        calls.filter(
+          (call) =>
+            call.join(' ') ===
+            'node --test scripts/production-release/first-recharge-entry.test.mjs'
+        ).length,
+        1
+      );
+      assert.ok(
+        calls.every(
+          (call) =>
+            !call.includes('docker') &&
+            !call.some((arg) => arg.includes('acceptance-v2') || arg.startsWith('--workspace'))
+        )
+      );
+    }
+    const unknown = recordGuardCommands(
+      'ci-only',
+      ['scripts/production-release/first-recharge-unknown.py'],
+      part
+    );
+    assert.ok(unknown.every((call) => !call.some((arg) => arg.includes('first-recharge-'))));
+  }
+});
+
+test('an invalid base stops first-subscription controls before any nested command', () => {
+  for (const part of ['guards', 'release-controls']) {
+    const calls = recordGuardCommands('ci-only', [firstRechargeReleaseControlPaths[0]], part, {
+      base: 'bad-base',
+      captureError: true
+    });
+    assert.deepEqual(calls, [['caught-error', 'Missing diff base']]);
+  }
+});
+
+test('first-subscription exact label proof gates execution and preserves the API, native checkout and UI checks', () => {
+  const paths = [
+    ...firstRechargeBillingNamePaths,
+    'apps/admin/src/v2/features/auto-recharge/V2RechargeBillingAddressFields.vue',
+    'apps/api/src/id-business-v2/auto-recharge/recharge-local-validation.ts',
+    'apps/api/src/id-business-v2/auto-recharge/worker/pay.py'
+  ];
+  const base = 'b9f2e2b75a753b86a5057dd798d651c57496554e';
+  const firstRechargeSnapshot = readFirstRechargeBillingNameSnapshot(base, paths);
+  const options = { base, firstRechargeSnapshot };
+  const guards = recordGuardCommands('recharge', paths, 'guards', options);
+  for (const gate of [
+    'check:admin-ui',
+    'check:v2-ui-language',
+    'check:v2-color-contrast',
+    'check:v2-table-standard',
+    'check:v2-loading-standard',
+    'check:v2-module-architecture',
+    'check:v2-isolation',
+    'check:v2-decimal-standard',
+    ...gates
+  ])
+    assert.equal(guards.filter((call) => call.join(' ') === `npm run ${gate}`).length, 1);
+  const api = recordGuardCommands('recharge', paths, 'api', options);
+  assert.ok(api.some((call) => call.includes('src/id-business-v2/auto-recharge')));
+  assert.ok(api.some((call) => call.join(' ') === 'npm run build --workspace @apple-business/api'));
+  assert.ok(
+    api.every(
+      (call) =>
+        !call.includes('docker') &&
+        !call.some((arg) => arg.includes('acceptance-v2') || arg.includes('migrate'))
+    )
+  );
+  const connector = recordGuardCommands('recharge', paths, 'connector', options);
+  const suites = connector.find((call) => call[0] === 'python3' && call.includes('unittest'));
+  assert.equal(suites.filter((arg) => arg === 'test_native_pro_checkout').length, 1);
+  assert.ok(suites.includes('test_payment'));
+  assert.ok(suites.includes('test_subscription_cycle'));
+  const invalid = structuredClone(firstRechargeSnapshot);
+  invalid[firstRechargeBillingNamePaths[0]].after += '\n';
+  assert.throws(
+    () => recordGuardCommands('recharge', paths, 'api', { base, firstRechargeSnapshot: invalid }),
+    /Missing exact first-recharge billing-name source proof/
+  );
+});
 
 test('finite prepare-fix guard keeps the first Node controls and runs every fresh dependency exactly once without business or database parts', () => {
   assert.deepEqual(

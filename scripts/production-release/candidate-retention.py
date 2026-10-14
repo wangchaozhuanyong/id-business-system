@@ -40,6 +40,7 @@ OPERATION_SCOPES = {
     'release_api_admin_migration': ('api-admin-migration', frozenset(('api', 'admin', 'migrate'))),
     'release_unpublished_components': ('unpublished-components', frozenset(('api', 'admin', 'migrate'))),
     'release_recharge_flow': ('recharge-flow', frozenset(('api', 'admin', 'migrate'))),
+    'release_first_recharge': ('first-recharge', frozenset(('api', 'admin', 'migrate'))),
 }
 MODULES = frozenset(scope[0] for scope in OPERATION_SCOPES.values()) | {'full-release'}
 RECORD_FIELDS = frozenset(('kind', 'version', 'batch', 'module', 'operation', 'producer',

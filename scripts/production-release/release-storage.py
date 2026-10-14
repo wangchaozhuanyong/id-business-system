@@ -45,6 +45,7 @@ PROOFS = {
     'release_api_admin_migration': ('api-admin-migration-build-proof.json', 'API_ADMIN_MIGRATION'),
     'release_unpublished_components': ('unpublished-component-successor-build-proof.json', 'UNPUBLISHED_COMPONENT_BUILD'),
     'release_recharge_flow': ('recharge-flow-successor-build-proof.json', 'RECHARGE_FLOW_BUILD'),
+    'release_first_recharge': ('first-recharge-successor-build-proof.json', 'FIRST_RECHARGE_BUILD'),
 }
 READBACKS = {
     'release_admin': 'admin-independent-readback-result.json',
@@ -54,6 +55,7 @@ READBACKS = {
     'release_api_admin_migration': 'api-admin-migration-readback-result.json',
     'release_unpublished_components': 'unpublished-component-successor-readback.json',
     'release_recharge_flow': 'recharge-flow-successor-readback.json',
+    'release_first_recharge': 'first-recharge-successor-readback.json',
 }
 OPERATIONS = frozenset(PROOFS) | {'release'}
 
@@ -256,7 +258,7 @@ def proof_images(selected, proof):
         need('scope' not in proof, 'STORAGE_BUILD_SCOPE_DRIFT')
     else:
         need(proof.get('scope') == wanted_scope, 'STORAGE_BUILD_SCOPE_DRIFT')
-    if operation in ('release_admin', 'release_unpublished_components', 'release_recharge_flow'):
+    if operation in ('release_admin', 'release_unpublished_components', 'release_recharge_flow', 'release_first_recharge'):
         need(proof.get('runId') == selected['producer']['workflowRunId']
              and proof.get('runAttempt') == selected['producer']['workflowRunAttempt']
              and proof.get('qualityRunId') == selected['qualityRunId'], 'STORAGE_BUILD_PRODUCER_DRIFT')
@@ -518,7 +520,7 @@ def validate_readback(selected, record):
              and metadata.get('commit') == producer['commit'] and metadata.get('sourceTree') == producer['sourceTree']
              and metadata.get('readbackVerified') is True and matches(UUID, metadata.get('commandId')),
              'STORAGE_INDEPENDENT_READBACK_INVALID')
-    elif operation in ('release_unpublished_components', 'release_recharge_flow'):
+    elif operation in ('release_unpublished_components', 'release_recharge_flow', 'release_first_recharge'):
         need(receipt.get('instanceId') == INSTANCE and receipt.get('status') == 'Success'
              and matches(UUID, receipt.get('commandId')) and matches(HEX64, receipt.get('invocationBytesSha256'))
              and type(receipt.get('receipt')) is dict, 'STORAGE_INDEPENDENT_READBACK_INVALID')

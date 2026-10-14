@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/validate-release-selection.sh"
-[[ "${RELEASE_OPERATION:-release}" != verify_recharge_flow && "${RELEASE_OPERATION:-release}" != verify_unpublished_components && "${RELEASE_OPERATION:-release}" != verify_api_admin_migration && "${RELEASE_OPERATION:-release}" != verify_online_recharge && "${RELEASE_OPERATION:-release}" != verify_api_workspace ]] || exit 1
+[[ "${RELEASE_OPERATION:-release}" != verify_first_recharge && "${RELEASE_OPERATION:-release}" != verify_recharge_flow && "${RELEASE_OPERATION:-release}" != verify_unpublished_components && "${RELEASE_OPERATION:-release}" != verify_api_admin_migration && "${RELEASE_OPERATION:-release}" != verify_online_recharge && "${RELEASE_OPERATION:-release}" != verify_api_workspace ]] || exit 1
 
 validate_browser_cache_reference() {
   local reference="${RELEASE_BROWSER_CACHE_IMAGE:-}" image_id="${RELEASE_BROWSER_CACHE_IMAGE_ID:-}" tag
@@ -68,6 +68,15 @@ build_image() {
     [[ "${unpublished_component_projection:-}" =~ ^[a-f0-9]{64}$ ]] || exit 1
     options+=(--label "id-business-v2.source-tree=$SOURCE_TREE"
       --label "id-business-v2.unpublished-component-successor-projection-sha256=$unpublished_component_projection")
+  fi
+  if [[ "${RELEASE_OPERATION:-release}" == release_first_recharge ]]; then
+    [[ "$service" == api || "$service" == admin || "$service" == migrate ]] || exit 1
+    [[ "${first_recharge_projection:-}" =~ ^[a-f0-9]{64}$ ]] || exit 1
+    options+=(--label "id-business-v2.source-tree=$SOURCE_TREE"
+      --label "id-business-v2.first-recharge-successor-projection-sha256=$first_recharge_projection")
+    if [[ "$service" == admin ]]; then
+      options+=(--build-arg "V2_BUILD_ID=v2-$RELEASE_COMMIT")
+    fi
   fi
   if [[ "${RELEASE_OPERATION:-release}" == release_recharge_flow ]]; then
     [[ "${recharge_flow_projection:-}" =~ ^[a-f0-9]{64}$ ]] || exit 1
@@ -167,6 +176,18 @@ build_image() {
   fi
   echo "Built image: $service"
 }
+
+if [[ "${RELEASE_OPERATION:-release}" == release_first_recharge ]]; then
+  python3 -B scripts/production-release/first-recharge-successor.py prepare
+  first_recharge_context=.deploy/production-release/first-recharge-successor-build-context
+  first_recharge_projection="$(read_first_recharge_projection)"
+  echo 'RELEASE_ADMIN_ONLY=false' >> "$GITHUB_ENV"
+  build_image api "$first_recharge_context/api/apps/api/Dockerfile.mysql" runtime "$first_recharge_context/api"
+  build_image admin "$first_recharge_context/admin/apps/admin/Dockerfile" runtime "$first_recharge_context/admin"
+  build_image migrate "$first_recharge_context/api/apps/api/Dockerfile.mysql" migration "$first_recharge_context/api"
+  python3 -B scripts/production-release/first-recharge-successor.py proof
+  exit 0
+fi
 
 if [[ "${RELEASE_OPERATION:-release}" == release_recharge_flow ]]; then
   python3 -B scripts/production-release/recharge-flow-successor.py prepare

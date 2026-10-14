@@ -1,3 +1,59 @@
+function withFirstRechargeWorkflow(value) {
+  const result = structuredClone(value);
+  const options = result.on.workflow_dispatch.inputs.operation.options;
+  const index = options.indexOf('release_recharge_flow');
+  assert.ok(index >= 0 && !options.includes('release_first_recharge'));
+  options.splice(index + 1, 0, 'verify_first_recharge', 'release_first_recharge');
+  const steps = result.jobs.release.steps;
+  const find = (name) => {
+    const matches = steps.filter((step) => step.name === name);
+    assert.equal(matches.length, 1, name);
+    return matches[0];
+  };
+  for (const name of [
+    'Recover reviewed disk headroom before release preflight',
+    'Build images on the GitHub runner',
+    'Push immutable images',
+    'Register complete release candidate and reserve pull headroom',
+    'Deploy through the production instance',
+    'Confirm published candidate and reclaim superseded local images',
+    'Save disk lifecycle safe evidence'
+  ]) {
+    const step = find(name);
+    const clause = "inputs.operation == 'release_recharge_flow'";
+    assert.equal(step.if.split(clause).length, 2, name);
+    step.if = step.if.replace(clause, clause + " || inputs.operation == 'release_first_recharge'");
+  }
+  const anchor = find('Verify recharge flow predecessor and idle workers before building');
+  steps.splice(steps.indexOf(anchor) + 1, 0, {
+    name: 'Verify first recharge predecessor and idle workers before building',
+    if: "inputs.operation == 'verify_first_recharge' || inputs.operation == 'release_first_recharge'",
+    run: 'python3 -B scripts/production-release/first-recharge-successor-readonly.py preflight'
+  });
+  const save = find('Save recharge flow build and independent runtime evidence');
+  steps.splice(
+    steps.indexOf(save) + 1,
+    0,
+    {
+      name: 'Independently read back first recharge images and preserved services',
+      if: "inputs.operation == 'release_first_recharge'",
+      run: 'python3 -B scripts/production-release/first-recharge-successor-readonly.py readback'
+    },
+    {
+      name: 'Save first recharge build and independent runtime evidence',
+      if: "always() && (inputs.operation == 'verify_first_recharge' || inputs.operation == 'release_first_recharge')",
+      uses: 'actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02',
+      with: {
+        name: 'first-recharge-evidence-${{ github.run_id }}-${{ github.run_attempt }}',
+        path: '.deploy/production-release/first-recharge-successor-*.json',
+        'if-no-files-found': 'warn',
+        'include-hidden-files': true,
+        'retention-days': 14
+      }
+    }
+  );
+  return result;
+}
 import assert from 'node:assert/strict';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
@@ -538,7 +594,8 @@ printf 'installed=%s\n' "$installed" >> "$GITHUB_OUTPUT"
     confirmHelpers
   );
   const actual = workflow();
-  const validate = (candidate) => assert.deepEqual(candidate, expected);
+  const futureExpected = withFirstRechargeWorkflow(expected);
+  const validate = (candidate) => assert.deepEqual(candidate, futureExpected);
   validate(actual);
   for (const fault of [
     'preflight-gate',
