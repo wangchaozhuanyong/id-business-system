@@ -1023,7 +1023,10 @@ test('finite prepare-fix authenticates one raw hash per job and never accepts hi
     reader
       .replace(/\s/g, '')
       .includes(
-        "['api', 'repos/' + b.repository + '/actions/jobs/' + job + '/logs']".replace(/\s/g, '')
+        "['api', '--allow-escape-sequences', 'repos/' + b.repository + '/actions/jobs/' + job + '/logs']".replace(
+          /\s/g,
+          ''
+        )
       )
   );
   assert.equal(reader.includes("['run', 'view'"), false);

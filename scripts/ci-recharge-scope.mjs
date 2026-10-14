@@ -2261,9 +2261,17 @@ export function canResumeOnlinePrepareFixGuard(base) {
     { input: zipped, maxBuffer: 8192 }
   );
   const log = (job) =>
-    execFileSync('gh', ['api', 'repos/' + b.repository + '/actions/jobs/' + job + '/logs'], {
-      maxBuffer: 4 * 1024 * 1024
-    });
+    execFileSync(
+      'gh',
+      [
+        'api',
+        '--allow-escape-sequences',
+        'repos/' + b.repository + '/actions/jobs/' + job + '/logs'
+      ],
+      {
+        maxBuffer: 4 * 1024 * 1024
+      }
+    );
   const modesUnchanged = changed.every((path) => {
     const before = git('ls-tree', b.base, '--', path),
       after = git('ls-tree', tree, '--', path);
