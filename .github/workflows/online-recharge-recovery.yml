@@ -1,0 +1,86 @@
+name: Online Recharge Protected Recovery
+
+on:
+  workflow_dispatch:
+    inputs:
+      commit:
+        description: Exact current main source used by this finite recovery executor
+        required: true
+        type: string
+      api_fault_restore_approved:
+        description: Approve completing the original protected recovery after read-only verification
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  actions: read
+  contents: read
+  id-token: write
+
+concurrency:
+  group: id-business-v2-production-release
+  cancel-in-progress: false
+
+jobs:
+  recovery:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    env:
+      TZ: Asia/Kuala_Lumpur
+      AWS_REGION: ap-northeast-1
+      PRODUCTION_INSTANCE_ID: i-05836da38606e633c
+      RELEASE_COMMIT: ${{ inputs.commit }}
+      API_FAULT_RESTORE_APPROVED: ${{ inputs.api_fault_restore_approved }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Checkout recovery source
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          fetch-depth: 0
+
+      - name: Bind the sealed predecessor and successful main Quality Gate
+        run: |
+          set -Eeuo pipefail
+          predecessor="$(python3 -B - <<'PY'
+          import importlib.util
+          from pathlib import Path
+          path = Path('scripts/production-release/online-recharge-component-runtime.py')
+          spec = importlib.util.spec_from_file_location('online_recovery_source', path)
+          module = importlib.util.module_from_spec(spec)
+          spec.loader.exec_module(module)
+          print(module.current_predecessor())
+          PY
+          )"
+          export EXPECTED_CURRENT="$predecessor"
+          printf 'EXPECTED_CURRENT=%s\n' "$predecessor" >> "$GITHUB_ENV"
+          bash scripts/production-release/check-source.sh
+
+      - name: Assume existing release role for the finite protected recovery
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          role-to-assume: arn:aws:iam::079740175286:role/id-business-v2-github-release
+          role-session-name: id-business-v2-recovery-${{ github.run_id }}
+          aws-region: ap-northeast-1
+
+      - name: Authenticate original evidence and verify the protected state without mutation
+        run: python3 -B scripts/production-release/online-recharge-component-recovery-readonly.py verify
+
+      - name: Complete only the approved original protected recovery
+        if: inputs.api_fault_restore_approved == true
+        run: python3 -B scripts/production-release/online-recharge-component-recovery-readonly.py recover
+
+      - name: Independently read back the recovery through a new native command
+        if: inputs.api_fault_restore_approved == true
+        run: python3 -B scripts/production-release/online-recharge-component-recovery-readonly.py readback
+
+      - name: Preserve source binding and actual recovery command evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: online-recharge-protected-recovery-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .deploy/production-release/online-recharge-component-protected-recovery-transport-*.json
+          include-hidden-files: true
+          if-no-files-found: warn
+          retention-days: 14

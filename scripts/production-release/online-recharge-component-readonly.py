@@ -333,7 +333,8 @@ def parameters(mode, core, p, *, input_artifacts=None, origin_raw=None, current_
     # Descriptor-safe source and raw-byte writers are reused without changing
     # their ordinary publication seals or borrowing an old ONLINE receipt.
     helpers = (*core.HELPERS, 'online-recharge-component-consumer.py',
-               'online-recharge-component-runtime.py', 'online-recharge-component-readonly.py')
+               'online-recharge-component-runtime.py', 'online-recharge-component-readonly.py',
+               *(('online-recharge-component-recovery.py',) if r.RECOVERY_AUTHORITY is not None else ()))
     r.need(len(set(helpers)) == len(helpers), 'HELPER_SET_CHANGED')
     pins = helper_pins(core, p, helpers)
     ordinary = load('api-admin-readonly.py')

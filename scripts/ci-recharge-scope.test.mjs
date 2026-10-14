@@ -33,6 +33,10 @@ test('ONLINE CI build has finite inputs and read-only diagnostics remain control
   for (const path of [
     '.github/workflows/online-recharge-diagnostic.yml',
     'scripts/production-release/online-recharge-component-diagnostic.py',
+    'scripts/production-release/online-recharge-component-recovery.py',
+    'scripts/production-release/online-recharge-component-recovery.test.py',
+    'scripts/production-release/online-recharge-component-recovery-readonly.py',
+    '.github/workflows/online-recharge-recovery.yml',
     'docs/ONLINE_RECHARGE.md',
     'apps/admin/src/v2/features/customers/CustomerPage.vue'
   ])
@@ -41,7 +45,10 @@ test('ONLINE CI build has finite inputs and read-only diagnostics remain control
   for (const path of [
     'scripts/production-release/online-recharge-ci-build-write.py',
     'scripts/production-release/online-recharge-ci-build.py.backup',
-    '.github/workflows/online-recharge-diagnostic-write.yml'
+    '.github/workflows/online-recharge-diagnostic-write.yml',
+    'scripts/production-release/online-recharge-component-recovery-write.py',
+    'scripts/production-release/online-recharge-component-recovery.py.backup',
+    '.github/workflows/online-recharge-recovery-write.yml'
   ])
     assert.equal(isCiOnly([path]), false, path);
 });
@@ -4784,13 +4791,19 @@ test('finite build-proof diagnostics expose only closed predicate codes and cann
 test('finite build-proof source normalization preserves every published selector byte and excludes only repaired Python function boundaries', () => {
   const b = onlineBuildProofReuseGuardBinding;
   const source = (path) => execFileSync('git', ['show', b.base + ':' + path], { encoding: 'utf8' });
+  // The admitted upstream repair remains an immutable positive fixture. Later
+  // recovery controls must require their own guards, rather than broaden it.
+  const admitted = (path) =>
+    execFileSync('git', ['show', 'adb541c9c70757464a0f7fc31dce91f93f6d36d6:' + path], {
+      encoding: 'utf8'
+    });
   for (const [path, verify] of [
     ['scripts/ci-recharge-scope.mjs', onlineBuildProofReuseScopeBytesUnchanged],
     ['scripts/ci-recharge-scope.test.mjs', onlineBuildProofReuseScopeTestBytesUnchanged],
     ['scripts/ci-recharge-check.mjs', onlineBuildProofReuseDispatcherBytesUnchanged]
   ]) {
     const before = source(path),
-      after = readFileSync(path, 'utf8');
+      after = admitted(path);
     assert.equal(verify(before, after), true, path);
     const mutations = [' ' + after, after + '\n'];
     for (const [from, to] of [
@@ -4808,7 +4821,7 @@ test('finite build-proof source normalization preserves every published selector
     ['scripts/production-release/online-recharge-component-readonly.py', 'safe_failure']
   ]) {
     const before = source(path),
-      after = readFileSync(path, 'utf8');
+      after = admitted(path);
     assert.equal(onlineBuildProofReusePythonBytesUnchanged(before, after, name), true);
     assert.equal(
       onlineBuildProofReusePythonBytesUnchanged(before, after + '\nINJECTED = 1\n', name),
@@ -4824,6 +4837,28 @@ test('finite build-proof source normalization preserves every published selector
     );
     assert.equal(onlineBuildProofReusePythonBytesUnchanged(before, after, 'cli'), false);
   }
+});
+
+test('protected recovery changes cannot borrow the earlier finite proof-reuse guard admission', () => {
+  const source = (path) =>
+    execFileSync('git', ['show', onlineBuildProofReuseGuardBinding.base + ':' + path], {
+      encoding: 'utf8'
+    });
+  for (const [path, verify] of [
+    ['scripts/ci-recharge-scope.mjs', onlineBuildProofReuseScopeBytesUnchanged],
+    ['scripts/ci-recharge-scope.test.mjs', onlineBuildProofReuseScopeTestBytesUnchanged],
+    ['scripts/ci-recharge-check.mjs', onlineBuildProofReuseDispatcherBytesUnchanged]
+  ])
+    assert.equal(verify(source(path), readFileSync(path, 'utf8')), false, path);
+  const runtime = 'scripts/production-release/online-recharge-component-runtime.py';
+  assert.equal(
+    onlineBuildProofReusePythonBytesUnchanged(
+      source(runtime),
+      readFileSync(runtime, 'utf8'),
+      'build_proof'
+    ),
+    false
+  );
 });
 
 test('finite build-proof raw logs require original UTC bytes and the authenticated actual PR475 checkout', () => {
