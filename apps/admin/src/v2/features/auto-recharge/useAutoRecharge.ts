@@ -30,6 +30,7 @@ import { canSelectRechargeAccount } from './recharge-account-options';
 import { currencyOptions } from './recharge-presentation';
 import { proxyCountryCurrencies } from './recharge-proxy-options';
 import { useRechargeProxyRegion } from './useRechargeProxyRegion';
+import { rechargeHistoryPaymentBlocked } from './recharge-callback-diagnostics';
 import { rechargeProxyApi, type RechargeProxyItem } from './recharge-proxy-api';
 import { useBitBrowserDirectOpen } from './useBitBrowserDirectOpen';
 import { parseDirectCredential, type DirectLoginCredential } from './bitbrowser-direct-credential';
@@ -768,6 +769,8 @@ export function useAutoRecharge(options: { clearPaymentValidation?: () => void }
       return '套餐已核实生效，付款凭据待核验；请只读复查原订单，禁止重新付款。';
     if (job?.state === 'unknown') return '原单结果待核验，禁止重新付款。';
     if (job?.state === 'finished') {
+      if (rechargeHistoryPaymentBlocked(job))
+        return '历史付款或订阅结果待核实，本次充值已暂停；请查看最近执行记录并只读复查原订单，填写资料已保留。';
       if (job.result.mode === 'open_browser') {
         return job.result.status === 'session_ready' && job.result.account_matched
           ? '账号登录成功，比特浏览器窗口已打开，可进行手动操作。'

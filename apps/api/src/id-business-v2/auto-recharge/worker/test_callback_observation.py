@@ -62,6 +62,18 @@ class CallbackObservationTests(unittest.TestCase):
                 altered = self.failure_report(rejection(status, {'message': message + ' secret-suffix'}))
                 self.assertNotIn('callback_business_reason', altered)
 
+    def test_cycle_protection_maps_without_changing_payment_authority(self):
+        for message, reason in [
+            ('该账户仍有未核实付款或订阅待生效，只能复查原订单', 'callback_previous_payment_unverified'),
+            ('该账户仍有未完成的原结算，不能创建新周期订单', 'callback_previous_checkout_unfinished'),
+        ]:
+            report = self.failure_report(rejection(409, {'message': message, 'errorCode': 'CONFLICT', 'requestId': REQUEST_ID}))
+            self.assertEqual(report['callback_business_reason'], reason)
+            self.assertEqual(report['reason'], 'durable_state_unavailable')
+            self.assertNotIn('operator_resolution', report)
+            self.assertNotIn('payment_status', report)
+            self.assertNotIn('message', report)
+
     def test_unverified_historical_payment_message_maps_to_existing_payment_reason(self):
         report = self.failure_report(rejection(409, {'message': '原订单编号不一致，历史付款状态未核实',
                                                     'requestId': REQUEST_ID}))

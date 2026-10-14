@@ -35,6 +35,8 @@ const errorLabels: Record<string, string> = {
   REQUEST_TIMEOUT: '记录服务处理超时'
 };
 const businessLabels: Record<string, string> = {
+  callback_previous_payment_unverified: '该账号历史付款或订阅结果尚未核实',
+  callback_previous_checkout_unfinished: '该账号历史原订单尚未完成核实',
   callback_original_checkout_missing: '原结算记录缺失',
   callback_original_checkout_unverified: '原结算编号尚未核实',
   callback_original_checkout_mismatch: '原结算绑定不一致',
@@ -47,6 +49,19 @@ const businessLabels: Record<string, string> = {
 
 function mapped(labels: Record<string, string>, value: unknown) {
   return typeof value === 'string' && Object.hasOwn(labels, value) ? labels[value] : undefined;
+}
+
+export function rechargeHistoryPaymentBlocked(job: V2RechargeJob) {
+  const result = job.result;
+  return (
+    result.reason === 'durable_state_unavailable' &&
+    result.callback_http_status === 409 &&
+    result.callback_failure_kind === 'http' &&
+    ['restore', 'prepare_next_subscription_cycle'].includes(String(result.callback_operation)) &&
+    ['callback_previous_payment_unverified', 'callback_previous_checkout_unfinished'].includes(
+      String(result.callback_business_reason)
+    )
+  );
 }
 
 export function rechargeCallbackDiagnostics(job: V2RechargeJob) {

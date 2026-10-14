@@ -3,6 +3,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import {
   adminCheckCommands,
+  rechargeRecordControlPaths,
   releaseArtifactRetentionControls,
   isReleaseArtifactRetentionOnly,
   adminUiGuardChecks,
@@ -45,6 +46,13 @@ const changed = execFileSync('git', ['diff', '--name-only', base, 'HEAD'], { enc
   .split('\n')
   .filter(Boolean);
 const releaseArtifactOnly = mode === 'ci-only' && isReleaseArtifactRetentionOnly(changed);
+if (
+  ['guards', 'release-controls'].includes(part) &&
+  changed.some((path) => rechargeRecordControlPaths.includes(path))
+) {
+  run('python3', ['-B', 'scripts/production-release/recharge-record-release.test.py']);
+  run('node', ['--test', 'scripts/ci-recharge-record.test.mjs']);
+}
 const resumeCombinedGuardPrefix =
   part === 'guards' &&
   process.env.GITHUB_ACTIONS === 'true' &&

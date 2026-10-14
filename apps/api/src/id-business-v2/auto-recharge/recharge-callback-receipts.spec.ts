@@ -146,6 +146,40 @@ afterEach(() => {
 });
 
 describe('本机回执恢复、单调取消和精确账本重放', () => {
+  it('启动恢复被拒后的结束回执保存诊断，列表读取和精确重放均保留且不写付款账本', async () => {
+    const f = fixture();
+    f.job.accountKey = null as never;
+    f.job.result = {
+      status: 'waiting_local_connector',
+      stage: 'connector_dispatch',
+      payment_attempted: false,
+      payment_requests_sent: 0
+    };
+    const result = {
+      status: 'blocked',
+      reason: 'durable_state_unavailable',
+      payment_attempted: false,
+      payment_requests_sent: 0,
+      callback_operation: 'restore',
+      callback_failure_kind: 'http',
+      callback_http_status: 409,
+      callback_error_code: 'CONFLICT',
+      callback_request_id: id,
+      callback_business_reason: 'callback_previous_payment_unverified'
+    };
+    const terminal = { type: 'finished', result };
+    await expect(f.callback(terminal)).resolves.toEqual({ ok: true });
+    expect(f.job.state).toBe('finished');
+    expect(f.job.result).toMatchObject(result);
+    const list = await f.service.list(operator);
+    expect(list.items[0].result).toMatchObject(result);
+    const writes = f.tx.idBusinessV2RechargeJob.update.mock.calls.length;
+    await expect(f.callback(terminal)).resolves.toEqual({ ok: true });
+    expect(f.tx.idBusinessV2RechargeJob.update).toHaveBeenCalledTimes(writes);
+    expect(f.records.size).toBe(0);
+    expect(f.tx.idBusinessV2RechargeRecord.upsert).not.toHaveBeenCalled();
+    expect(f.addresses.markUsed).not.toHaveBeenCalled();
+  });
   it('认证在事务锁内读取最新nonce，旧凭据无权写入任何结果', async () => {
     const f = fixture();
     vi.mocked(f.repository.lock).mockImplementation(async () => {

@@ -172,6 +172,47 @@ describe('recharge input and durable evidence', () => {
     ).resolves.toBe(false);
     expect(records.update).not.toHaveBeenCalled();
   });
+  it('记录恢复失败诊断通过服务端过滤后仍完整保留，过滤重复执行不丢字段', () => {
+    const diagnostic = {
+      callback_operation: 'restore',
+      callback_failure_kind: 'http',
+      callback_http_status: 409,
+      callback_error_code: 'CONFLICT',
+      callback_request_id: id,
+      callback_business_reason: 'callback_previous_payment_unverified'
+    };
+    expect(
+      safeDocument({
+        ...diagnostic,
+        rawResponse: 'private',
+        token: 'private',
+        callback_phase: 'commit'
+      })
+    ).toEqual(diagnostic);
+    expect(safeDocument(safeDocument(diagnostic))).toEqual(diagnostic);
+    expect(
+      safeDocument({
+        callback_operation: 'prepare_next_subscription_cycle',
+        callback_phase: 'inspect'
+      })
+    ).toEqual({ callback_operation: 'prepare_next_subscription_cycle', callback_phase: 'inspect' });
+  });
+  it('回传诊断拒绝任意正文、错误枚举、超范围状态和非系统请求编号', () => {
+    expect(
+      safeDocument({
+        callback_operation: 'private',
+        callback_phase: 'private',
+        callback_failure_kind: 'private',
+        callback_http_status: '409',
+        callback_error_code: 'TOKEN_SECRET',
+        callback_business_reason: 'private',
+        callback_request_id: '5555555555554444'
+      })
+    ).toEqual({});
+    for (const status of [399, 600, 409.5, true, null])
+      expect(safeDocument({ callback_http_status: status })).toEqual({});
+    expect(safeDocument({ callback_request_id: 'a'.repeat(64) })).toEqual({});
+  });
   it('只保留范围内的会话进度与脱敏错误', () => {
     const progress = {
       session_attempt: 2,
