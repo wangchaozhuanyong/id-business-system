@@ -47,6 +47,8 @@ test('Admin successor diagnostics have a finite control scope', () => {
 import { fileURLToPath } from 'node:url';
 import {
   affectsPart,
+  releaseArtifactRetentionControls,
+  isReleaseArtifactRetentionOnly,
   isRechargeOnly,
   matchingRun,
   canReuseMain,
@@ -1043,8 +1045,15 @@ test('finite prepare-fix guard restores the entire prior dispatcher scope and ru
     ]
   ]) {
     const before = execFileSync('git', ['show', b.base + ':' + path], { encoding: 'utf8' });
-    const after = readFileSync(path, 'utf8');
+    // Validate the frozen preparation fix, not a later dispatcher revision.
+    const after = execFileSync(
+      'git',
+      ['show', 'a9829b443fe5c0cf6f4803366d06c5f8e3357318:' + path],
+      { encoding: 'utf8' }
+    );
     assert.equal(verify(before, after), true, path);
+    const current = readFileSync(path, 'utf8');
+    if (current !== after) assert.equal(verify(before, current), false, path);
     for (const altered of [
       ' ' + after,
       after + '\n',
@@ -3833,4 +3842,30 @@ test('reviewed backup retention leaf paths are control-only without widening nei
     'scripts/production-release/backup-retention-install.py.backup'
   ])
     assert.equal(checkMode([path], '', ''), 'full');
+});
+
+test('artifact retention is a finite operational scope with mixed changes retaining all guards', () => {
+  const paths = [
+    ...releaseArtifactRetentionControls,
+    'docs/DISK_STORAGE_POLICY.md',
+    'scripts/ci-recharge-check.mjs'
+  ];
+  assert.equal(isReleaseArtifactRetentionOnly(paths), true);
+  assert.equal(checkMode(paths, '', ''), 'ci-only');
+  assert.deepEqual(selectedParts(paths), ['guards']);
+  assert.equal(isReleaseArtifactRetentionOnly(['docs/DISK_STORAGE_POLICY.md']), false);
+  assert.equal(isReleaseArtifactRetentionOnly(['scripts/ci-recharge-check.mjs']), false);
+  for (const extra of [
+    'scripts/production-release/remote-deploy.py',
+    '.github/workflows/production-release.yml',
+    'apps/api/src/auth/auth.service.ts',
+    'scripts/production-release/release-artifact-retention.py.backup',
+    'scripts/production-release/release-artifact-retention-anything.py'
+  ])
+    assert.equal(isReleaseArtifactRetentionOnly([...paths, extra]), false);
+  for (const unknown of [
+    'scripts/production-release/release-artifact-retention.py.backup',
+    'scripts/production-release/release-artifact-retention-anything.py'
+  ])
+    assert.equal(checkMode([unknown], '', ''), 'full');
 });

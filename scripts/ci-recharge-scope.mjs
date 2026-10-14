@@ -539,6 +539,31 @@ function isRegistrationRecoveryOnly(paths) {
     )
   );
 }
+export const releaseArtifactRetentionControls = Object.freeze([
+  'scripts/production-release/release-artifact-retention.py',
+  'scripts/production-release/release-artifact-retention.test.py',
+  'scripts/production-release/release-artifact-retention-transport.py',
+  'scripts/production-release/release-artifact-retention-transport.test.py',
+  '.github/workflows/release-artifact-retention.yml',
+  'deploy/aws/release-artifact-storage-proof-20261014.json'
+]);
+const releaseArtifactRetentionSupport = new Set([
+  ...releaseArtifactRetentionControls,
+  'scripts/ci-recharge-scope.mjs',
+  'scripts/ci-recharge-scope.test.mjs',
+  'scripts/ci-recharge-check.mjs',
+  'scripts/ci-recharge-check.test.mjs',
+  'docs/DISK_STORAGE_POLICY.md',
+  'docs/V2_TASKS.md'
+]);
+export function isReleaseArtifactRetentionOnly(paths) {
+  return (
+    paths.length > 0 &&
+    paths.some((path) => releaseArtifactRetentionControls.includes(path)) &&
+    paths.every((path) => releaseArtifactRetentionSupport.has(path))
+  );
+}
+
 export function isCiOnly(paths) {
   if (paths.includes(rechargePricingProfile))
     return paths.every((path) => rechargePricingControls.has(path));
@@ -562,6 +587,7 @@ export function isCiOnly(paths) {
     paths.length > 0 &&
     paths.every(
       (p) =>
+        releaseArtifactRetentionControls.includes(p) ||
         historicalReleaseControlPaths.includes(p) ||
         unpublishedComponentSuccessorControlPaths.includes(p) ||
         rechargeFlowSuccessorControlPaths.includes(p) ||
@@ -1033,6 +1059,7 @@ export function isTargetedOnly(paths, oldSchema, newSchema) {
   );
 }
 export function selectedParts(paths, grantHelperSnapshot) {
+  if (isReleaseArtifactRetentionOnly(paths)) return ['guards'];
   if (hasBankCardDeletePolicyProof(paths, grantHelperSnapshot)) return ['guards', 'security'];
   if (isRechargePricingOnly(paths))
     return paths.some((path) => rechargePricingSources.has(path))
