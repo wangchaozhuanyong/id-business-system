@@ -78,12 +78,340 @@ import {
   combinedMigrationScopeBytesUnchanged,
   canReuseCombinedAdminSource,
   combinedDispatcherBytesUnchanged,
-  combinedQualityWorkflowBytesUnchanged
+  combinedQualityWorkflowBytesUnchanged,
+  onlineComponentGuardBinding,
+  onlineComponentGuardLogFacts,
+  onlineComponentGuardCurrentEnvironment,
+  onlineComponentGuardScopeBytesUnchanged,
+  onlineComponentGuardDispatcherBytesUnchanged,
+  validateOnlineComponentGuardNative,
+  canResumeOnlineComponentGuard
 } from './ci-recharge-scope.mjs';
 import { matchesSourceEvidence } from './ci-recharge-evidence.mjs';
 
 const schema =
   'model Other { id String }\nmodel IdBusinessV2RechargeBrowserSetting { ownerId String }\n';
+
+function syntheticOnlineGuardNative() {
+  const b = onlineComponentGuardBinding;
+  const counts = [
+    257, 40, 27, 91, 30, 16, 40, 63, 40, 35, 8, 25, 24, 109, 24, 86, 90, 23, 20, 25, 27, 297, 34,
+    39, 15, 66, 32, 31
+  ];
+  // Synthetic metadata tests validate the finite contract. Only the runtime
+  // GH reader can derive the frozen digest from the actual complete raw log.
+  return {
+    run: {
+      id: b.run,
+      run_attempt: b.attempt,
+      conclusion: 'failure',
+      event: 'pull_request',
+      path: '.github/workflows/quality.yml',
+      status: 'completed',
+      head_sha: b.head,
+      repository: { full_name: b.repository },
+      pull_requests: [{ number: b.pullRequest, base: { sha: b.base }, head: { sha: b.head } }]
+    },
+    jobs: [
+      {
+        id: b.job,
+        run_id: b.run,
+        run_attempt: b.attempt,
+        name: 'recharge (guards)',
+        status: 'completed',
+        conclusion: 'failure',
+        steps: [
+          ...['Checkout', 'Setup Node.js', 'Install package dependencies'].map((name) => ({
+            name,
+            status: 'completed',
+            conclusion: 'success'
+          })),
+          ...[
+            'Install browser for recharge acceptance',
+            'Install existing connector dependencies'
+          ].map((name) => ({ name, status: 'completed', conclusion: 'skipped' })),
+          { name: 'Check affected recharge part', status: 'completed', conclusion: 'failure' }
+        ]
+      }
+    ],
+    checkout: {
+      sha: b.checkout,
+      tree: { sha: b.tree },
+      parents: [{ sha: b.base }, { sha: b.head }]
+    },
+    headTree: b.tree,
+    currentHead: b.head,
+    changed: ['scripts/production-release/unified-component-source.test.py'],
+    fixtureSha256: b.fixtureSha256,
+    scopeUnchanged: true,
+    dispatcherUnchanged: true,
+    modesUnchanged: true,
+    currentEnvironment: {
+      node: 'v24.21.0',
+      npm: '11.19.0',
+      imageOS: 'ubuntu24',
+      imageVersion: '20261004.327.1',
+      platform: 'linux'
+    },
+    facts: {
+      sha256: b.logSha256,
+      checkout: b.checkout,
+      scope: true,
+      environment: true,
+      failureCode: 1,
+      python: [...counts.map((count) => [count, 'OK']), [12, 'FAILED (errors=1)']],
+      node: [320, 202, 13, 5, 12, 5].flatMap((count) => [
+        'ℹ tests ' + count,
+        'ℹ fail 0',
+        'ℹ cancelled 0',
+        'ℹ skipped 0'
+      ]),
+      errors: [
+        'ERROR: test_business_archive_tree_and_all_application_bytes_match_the_worktree_seal (__main__.JointSourceTests.test_business_archive_tree_and_all_application_bytes_match_the_worktree_seal)'
+      ],
+      failedCommands: [
+        'Error: Command failed: python3 -B scripts/production-release/unified-component-source.test.py'
+      ]
+    }
+  };
+}
+
+test('finite ONLINE guard continuation binds the original native failed job and rejects unknown evidence or inputs', () => {
+  assert.equal(validateOnlineComponentGuardNative(syntheticOnlineGuardNative()), true);
+  for (const mutate of [
+    (v) => {
+      delete v.run;
+    },
+    (v) => {
+      delete v.jobs;
+    },
+    (v) => {
+      delete v.checkout;
+    },
+    (v) => {
+      delete v.facts;
+    },
+    (v) => {
+      delete v.currentEnvironment;
+    },
+    (v) => {
+      delete v.currentHead;
+    },
+    (v) => {
+      v.currentHead = 'not-a-source-commit';
+    },
+    (v) => {
+      v.currentHead = 'a'.repeat(40);
+    },
+    ...['node', 'npm', 'imageOS', 'imageVersion', 'platform'].flatMap((field) => [
+      (v) => {
+        v.currentEnvironment[field] += '-changed';
+      },
+      (v) => {
+        delete v.currentEnvironment[field];
+      }
+    ]),
+    (v) => {
+      v.run.id++;
+    },
+    (v) => {
+      v.run.run_attempt++;
+    },
+    (v) => {
+      v.run.repository.full_name = 'foreign/repo';
+    },
+    (v) => {
+      v.run.head_sha = 'a'.repeat(40);
+    },
+    (v) => {
+      v.run.path = '.github/workflows/other.yml';
+    },
+    (v) => {
+      v.run.pull_requests[0].number++;
+    },
+    (v) => {
+      v.run.pull_requests[0].base.sha = 'a'.repeat(40);
+    },
+    (v) => {
+      v.run.pull_requests[0].head.sha = 'a'.repeat(40);
+    },
+    (v) => {
+      v.headTree = 'a'.repeat(40);
+    },
+    (v) => {
+      v.checkout.sha = 'a'.repeat(40);
+    },
+    (v) => {
+      v.checkout.tree.sha = 'a'.repeat(40);
+    },
+    (v) => {
+      v.checkout.parents.reverse();
+    },
+    (v) => {
+      v.jobs[0].id++;
+    },
+    (v) => {
+      v.jobs[0].run_id++;
+    },
+    (v) => {
+      v.jobs[0].run_attempt++;
+    },
+    (v) => {
+      v.jobs[0].conclusion = 'success';
+    },
+    (v) => {
+      v.jobs[0].steps[0].conclusion = 'failure';
+    },
+    (v) => {
+      v.jobs.push(v.jobs[0]);
+    },
+    (v) => {
+      v.changed.push('apps/api/src/main.ts');
+    },
+    (v) => {
+      v.changed.push('package-lock.json');
+    },
+    (v) => {
+      v.changed.push('.github/workflows/quality.yml');
+    },
+    (v) => {
+      v.changed.push('scripts/production-release/online-recharge-component-runtime.py');
+    },
+    (v) => {
+      v.fixtureSha256 = '0'.repeat(64);
+    },
+    (v) => {
+      v.scopeUnchanged = false;
+    },
+    (v) => {
+      v.dispatcherUnchanged = false;
+    },
+    (v) => {
+      v.modesUnchanged = false;
+    },
+    (v) => {
+      v.facts.sha256 = '0'.repeat(64);
+    },
+    (v) => {
+      v.facts.checkout = 'a'.repeat(40);
+    },
+    (v) => {
+      v.facts.errors[0] = 'ERROR: another failing suite';
+    },
+    (v) => {
+      v.facts.failureCode++;
+    },
+    (v) => {
+      v.facts.python[0][1] = 'OK (skipped=1)';
+    },
+    (v) => {
+      v.facts.python.pop();
+    },
+    (v) => {
+      v.facts.node[1] = 'ℹ fail 1';
+    },
+    (v) => {
+      v.facts.scope = false;
+    },
+    (v) => {
+      v.facts.environment = false;
+    },
+    (v) => {
+      v.facts.failedCommands[0] += ' --different';
+    }
+  ]) {
+    const input = syntheticOnlineGuardNative();
+    mutate(input);
+    assert.equal(validateOnlineComponentGuardNative(input), false, mutate.toString());
+  }
+  assert.equal(canResumeOnlineComponentGuard('a'.repeat(40)), false);
+});
+
+test('finite ONLINE guard continuation binds the dynamic PR head while retaining immutable original run checkout tree and log', () => {
+  const input = syntheticOnlineGuardNative();
+  input.currentHead = 'f'.repeat(40);
+  input.run.pull_requests[0].head.sha = input.currentHead;
+  assert.equal(input.run.head_sha, onlineComponentGuardBinding.head);
+  assert.equal(validateOnlineComponentGuardNative(input), true);
+  for (const mutate of [
+    (v) => {
+      v.run.pull_requests[0].head.sha = onlineComponentGuardBinding.head;
+    },
+    (v) => {
+      v.currentHead = onlineComponentGuardBinding.head;
+    },
+    (v) => {
+      v.run.head_sha = v.currentHead;
+    },
+    (v) => {
+      v.checkout.parents[1].sha = v.currentHead;
+    },
+    (v) => {
+      v.headTree = 'f'.repeat(40);
+    },
+    (v) => {
+      delete v.currentHead;
+    }
+  ]) {
+    const changed = structuredClone(input);
+    mutate(changed);
+    assert.equal(validateOnlineComponentGuardNative(changed), false, mutate.toString());
+  }
+});
+
+test('finite ONLINE guard environment collector reads current runtime without claiming local Ubuntu identity', () => {
+  const current = onlineComponentGuardCurrentEnvironment();
+  assert.deepEqual(current, {
+    node: process.version,
+    npm: execFileSync('npm', ['--version'], { encoding: 'utf8' }).trim(),
+    imageOS: process.env.ImageOS,
+    imageVersion: process.env.ImageVersion,
+    platform: process.platform
+  });
+});
+
+test('finite ONLINE guard log facts hash the complete original bytes and keep each failure identity', () => {
+  const raw =
+    'job\tstep\t2026-10-14T01:00:00Z [command]/usr/bin/git log -1 --format=%H\n' +
+    'job\tstep\t2026-10-14T01:00:00Z ' +
+    onlineComponentGuardBinding.checkout +
+    '\n' +
+    'job\tstep\t2026-10-14T01:00:00Z Ran 12 tests in 1.0s\n\nFAILED (errors=1)\n' +
+    'ERROR: synthetic failing test\nError: Command failed: python3 -B synthetic.py\n';
+  const facts = onlineComponentGuardLogFacts(raw);
+  assert.equal(facts.sha256, createHash('sha256').update(raw).digest('hex'));
+  assert.equal(facts.checkout, onlineComponentGuardBinding.checkout);
+  assert.deepEqual(facts.python, [[12, 'FAILED (errors=1)']]);
+  assert.deepEqual(facts.errors, ['ERROR: synthetic failing test']);
+  assert.notEqual(onlineComponentGuardLogFacts(raw + '\n').sha256, facts.sha256);
+  assert.equal(onlineComponentGuardLogFacts(''), undefined);
+  assert.equal(onlineComponentGuardLogFacts(undefined), undefined);
+});
+
+test('finite ONLINE guard wiring restores every original command byte and keeps the old combined contract unchanged', () => {
+  const b = onlineComponentGuardBinding;
+  for (const [path, validate] of [
+    ['scripts/ci-recharge-scope.mjs', onlineComponentGuardScopeBytesUnchanged],
+    ['scripts/ci-recharge-check.mjs', onlineComponentGuardDispatcherBytesUnchanged]
+  ]) {
+    const before = execFileSync('git', ['show', b.head + ':' + path], { encoding: 'utf8' });
+    const after = readFileSync(path, 'utf8');
+    assert.equal(validate(before, after), true, path);
+    const dispatcher = path === 'scripts/ci-recharge-check.mjs';
+    for (const changed of [
+      ' ' + after,
+      after + '\n',
+      dispatcher
+        ? after.replace('const npm =', 'const changedNpm =')
+        : after.replace('const git =', 'const changedGit ='),
+      dispatcher
+        ? after.replace("run('python3',", "run('modified-python3',")
+        : after.replace('export function matchingRun(', 'export function modifiedMatchingRun(')
+    ])
+      assert.equal(validate(before, changed), false, path);
+    assert.equal(validate(before, before), false);
+  }
+});
 
 test('disk retention scope changes invalidate frozen migration reuse without weakening its original gate', () => {
   const before = execFileSync(

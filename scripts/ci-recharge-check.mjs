@@ -22,6 +22,7 @@ import {
   productionDatabaseAccessAcceptance,
   hasBankCardDeletePolicyProof,
   canResumeCombinedGuard,
+  canResumeOnlineComponentGuard,
   readProductionDatabaseAccessSnapshot
 } from './ci-recharge-scope.mjs';
 
@@ -39,6 +40,13 @@ const resumeCombinedGuardPrefix =
   process.env.GITHUB_REPOSITORY === 'wangchaozhuanyong/id-business-system' &&
   process.env.GITHUB_EVENT_NAME === 'pull_request' &&
   canResumeCombinedGuard(base);
+const resumeOnlineComponentGuardPrefix =
+  part === 'guards' &&
+  process.env.GITHUB_ACTIONS === 'true' &&
+  process.env.GITHUB_REPOSITORY === 'wangchaozhuanyong/id-business-system' &&
+  process.env.GITHUB_EVENT_NAME === 'pull_request' &&
+  base === 'b922b2d900e683f565ff3c5f95576ebc5f07803f' &&
+  canResumeOnlineComponentGuard(base);
 const shared = () => npm('run', 'build', '--workspace', '@apple-business/shared');
 const onlineEngine = () => {
   const directory = 'apps/api/src/id-business-v2/online-recharge/engine/upstream';
@@ -368,7 +376,7 @@ if (part === 'guards') {
     'scripts/admin-layout-rules.test.mjs'
   ]);
 }
-if (part === 'guards' && !resumeCombinedGuardPrefix) {
+if (part === 'guards' && !resumeCombinedGuardPrefix && !resumeOnlineComponentGuardPrefix) {
   if (
     changed.some(
       (path) =>
@@ -450,6 +458,8 @@ if (part === 'guards' && !resumeCombinedGuardPrefix) {
   adminPendingReleaseControls();
   unpublishedComponentSuccessorControls();
 }
+if (resumeOnlineComponentGuardPrefix)
+  run('python3', ['-B', 'scripts/production-release/unified-component-source.test.py']);
 if (part === 'guards') {
   rechargeFlowSuccessorControls();
   ownedMysqlTestControls();

@@ -1475,6 +1475,285 @@ function validateCombinedCommands(currentTree) {
     throw new Error('Original check commands changed');
 }
 
+// BEGIN finite ONLINE PR470 guard continuation
+export const onlineComponentGuardBinding = Object.freeze({
+  repository: 'wangchaozhuanyong/id-business-system',
+  pullRequest: 470,
+  base: 'b922b2d900e683f565ff3c5f95576ebc5f07803f',
+  head: 'd08eefd5aa5c718918953ed60b9e34a67e12f327',
+  tree: '3cd57b0372c82737741f3cd854c7fc1de00240d3',
+  checkout: 'cdbc7636ad80aebebf3486d8099c16faf49ad547',
+  run: 38492172446,
+  attempt: 1,
+  job: 115619776622,
+  logSha256: '2efb7584708ba8522cd289b5db766edc4aa1e0139466dc31f67b2339b7eb5935',
+  fixtureSha256: '5fcdd988ece780fd0bda6cc0e27a5e31ec43212a9a985cc99a89425e6953a307'
+});
+const onlineGuardAllowedRepairs = new Set([
+  'scripts/ci-recharge-scope.mjs',
+  'scripts/ci-recharge-scope.test.mjs',
+  'scripts/ci-recharge-check.mjs',
+  'scripts/ci-recharge-check.test.mjs',
+  'scripts/production-release/unified-component-source.test.py',
+  'docs/CENTRAL_RELEASE_20261002.md',
+  'docs/WORKSPACE_RELEASE_CLEANUP_20261014.md'
+]);
+
+export function onlineComponentGuardLogFacts(log) {
+  if (typeof log !== 'string' || !log) return undefined;
+  const lines = log.split('\n').map((line) => line.replace(/^.*?\t.*?\t\uFEFF?[^ ]+Z /, ''));
+  const python = [];
+  for (let i = 0; i < lines.length; i++) {
+    const result = /^Ran (\d+) tests in [0-9.]+s$/.exec(lines[i]);
+    if (result) python.push([Number(result[1]), lines[i + 2]]);
+  }
+  const checkout = lines.findIndex((line) => line === '[command]/usr/bin/git log -1 --format=%H');
+  return {
+    sha256: createHash('sha256').update(log).digest('hex'),
+    checkout: checkout < 0 ? undefined : lines[checkout + 1],
+    python,
+    node: lines.filter((line) => /^ℹ (?:tests|fail|cancelled|skipped) \d+$/.test(line)),
+    errors: lines.filter((line) => /^(?:ERROR|FAIL): /.test(line)),
+    failedCommands: lines.filter((line) => /^Error: Command failed: /.test(line)),
+    scope:
+      lines.includes('  CHECK_BASE: ' + onlineComponentGuardBinding.base) &&
+      lines.includes('  CHECK_MODE: ci-only') &&
+      lines.includes('  CHECK_PART: guards') &&
+      lines.includes('##[group]Run node scripts/ci-recharge-check.mjs "$CHECK_PART" "$CHECK_BASE"'),
+    environment:
+      lines.includes('  NODE_ENV: test') &&
+      lines.includes('Image: ubuntu-24.04') &&
+      lines.includes('Version: 20261004.327.1') &&
+      lines.includes('node: v24.21.0') &&
+      lines.includes('npm: 11.19.0'),
+    failureCode: lines.filter(
+      (line) => line === 'RuntimeError: ADMIN_PENDING_CONFIRM_SOURCE_SCOPE_CHANGED'
+    ).length
+  };
+}
+
+export function onlineComponentGuardScopeBytesUnchanged(before, after) {
+  const startMarker = '// BEGIN finite ONLINE PR470 guard continuation\n';
+  const endMarker = '// END finite ONLINE PR470 guard continuation\n\n';
+  if (
+    typeof before !== 'string' ||
+    typeof after !== 'string' ||
+    before.includes(startMarker) ||
+    after.split(startMarker).length !== 2 ||
+    after.split(endMarker).length !== 2
+  )
+    return false;
+  const start = after.indexOf(startMarker),
+    end = after.indexOf(endMarker);
+  return end > start && after.slice(0, start) + after.slice(end + endMarker.length) === before;
+}
+
+export function onlineComponentGuardDispatcherBytesUnchanged(before, after) {
+  const declaration = [
+    'const resumeOnlineComponentGuardPrefix =',
+    "  part === 'guards' &&",
+    "  process.env.GITHUB_ACTIONS === 'true' &&",
+    "  process.env.GITHUB_REPOSITORY === 'wangchaozhuanyong/id-business-system' &&",
+    "  process.env.GITHUB_EVENT_NAME === 'pull_request' &&",
+    "  base === 'b922b2d900e683f565ff3c5f95576ebc5f07803f' &&",
+    '  canResumeOnlineComponentGuard(base);',
+    ''
+  ].join('\n');
+  const changes = [
+    ['  canResumeOnlineComponentGuard,\n', ''],
+    [declaration, ''],
+    [
+      "if (part === 'guards' && !resumeCombinedGuardPrefix && !resumeOnlineComponentGuardPrefix) {",
+      "if (part === 'guards' && !resumeCombinedGuardPrefix) {"
+    ],
+    [
+      "if (resumeOnlineComponentGuardPrefix)\n  run('python3', ['-B', 'scripts/production-release/unified-component-source.test.py']);\n",
+      ''
+    ]
+  ];
+  if (typeof before !== 'string' || typeof after !== 'string') return false;
+  for (const [added, original] of changes) {
+    if (after.split(added).length !== 2) return false;
+    after = after.replace(added, original);
+  }
+  return after === before;
+}
+
+export function validateOnlineComponentGuardNative({
+  run,
+  jobs,
+  checkout,
+  facts,
+  changed,
+  fixtureSha256,
+  scopeUnchanged,
+  dispatcherUnchanged,
+  headTree,
+  modesUnchanged,
+  currentEnvironment,
+  currentHead
+} = {}) {
+  const b = onlineComponentGuardBinding;
+  const job = Array.isArray(jobs) ? jobs.filter((row) => row.id === b.job) : undefined;
+  const counts = [
+    257, 40, 27, 91, 30, 16, 40, 63, 40, 35, 8, 25, 24, 109, 24, 86, 90, 23, 20, 25, 27, 297, 34,
+    39, 15, 66, 32, 31
+  ];
+  return !!(
+    run?.id === b.run &&
+    run.run_attempt === b.attempt &&
+    run.conclusion === 'failure' &&
+    run.repository?.full_name === b.repository &&
+    matchingRun(run, b.pullRequest, b.head) &&
+    Array.isArray(run.pull_requests) &&
+    run.pull_requests.length === 1 &&
+    run.pull_requests[0].base?.sha === b.base &&
+    typeof currentHead === 'string' &&
+    /^[a-f0-9]{40}$/.test(currentHead) &&
+    run.pull_requests[0].head?.sha === currentHead &&
+    checkout?.sha === b.checkout &&
+    checkout.tree?.sha === b.tree &&
+    headTree === b.tree &&
+    Array.isArray(checkout.parents) &&
+    JSON.stringify(checkout.parents.map((row) => row.sha)) === JSON.stringify([b.base, b.head]) &&
+    job?.length === 1 &&
+    job[0].run_id === b.run &&
+    job[0].run_attempt === b.attempt &&
+    job[0].name === 'recharge (guards)' &&
+    job[0].status === 'completed' &&
+    job[0].conclusion === 'failure' &&
+    Array.isArray(job[0].steps) &&
+    ['Checkout', 'Setup Node.js', 'Install package dependencies'].every(
+      (name) =>
+        job[0].steps?.filter(
+          (step) =>
+            step.name === name && step.status === 'completed' && step.conclusion === 'success'
+        ).length === 1
+    ) &&
+    job[0].steps?.filter((step) => step.conclusion === 'failure').length === 1 &&
+    job[0].steps.find((step) => step.conclusion === 'failure').name ===
+      'Check affected recharge part' &&
+    ['Install browser for recharge acceptance', 'Install existing connector dependencies'].every(
+      (name) =>
+        job[0].steps.filter((step) => step.name === name && step.conclusion === 'skipped')
+          .length === 1
+    ) &&
+    facts?.sha256 === b.logSha256 &&
+    facts.checkout === b.checkout &&
+    facts.scope === true &&
+    facts.environment === true &&
+    facts.failureCode === 1 &&
+    currentEnvironment?.node === 'v24.21.0' &&
+    currentEnvironment.npm === '11.19.0' &&
+    currentEnvironment.imageOS === 'ubuntu24' &&
+    currentEnvironment.imageVersion === '20261004.327.1' &&
+    currentEnvironment.platform === 'linux' &&
+    JSON.stringify(facts.python) ===
+      JSON.stringify([...counts.map((count) => [count, 'OK']), [12, 'FAILED (errors=1)']]) &&
+    JSON.stringify(facts.node) ===
+      JSON.stringify(
+        [320, 202, 13, 5, 12, 5].flatMap((count) => [
+          'ℹ tests ' + count,
+          'ℹ fail 0',
+          'ℹ cancelled 0',
+          'ℹ skipped 0'
+        ])
+      ) &&
+    JSON.stringify(facts.errors) ===
+      JSON.stringify([
+        'ERROR: test_business_archive_tree_and_all_application_bytes_match_the_worktree_seal (__main__.JointSourceTests.test_business_archive_tree_and_all_application_bytes_match_the_worktree_seal)'
+      ]) &&
+    JSON.stringify(facts.failedCommands) ===
+      JSON.stringify([
+        'Error: Command failed: python3 -B scripts/production-release/unified-component-source.test.py'
+      ]) &&
+    Array.isArray(changed) &&
+    changed.includes('scripts/production-release/unified-component-source.test.py') &&
+    changed.every((path) => onlineGuardAllowedRepairs.has(path)) &&
+    fixtureSha256 === b.fixtureSha256 &&
+    scopeUnchanged === true &&
+    dispatcherUnchanged === true &&
+    modesUnchanged === true
+  );
+}
+
+export function onlineComponentGuardCurrentEnvironment() {
+  return {
+    node: process.version,
+    npm: execFileSync('npm', ['--version'], { encoding: 'utf8' }).trim(),
+    imageOS: process.env.ImageOS,
+    imageVersion: process.env.ImageVersion,
+    platform: process.platform
+  };
+}
+
+export function canResumeOnlineComponentGuard(base) {
+  const b = onlineComponentGuardBinding;
+  if (
+    base !== b.base ||
+    process.env.GITHUB_ACTIONS !== 'true' ||
+    process.env.GITHUB_REPOSITORY !== b.repository ||
+    process.env.GITHUB_EVENT_NAME !== 'pull_request'
+  )
+    return false;
+  const event = JSON.parse(readFileSync(process.env.GITHUB_EVENT_PATH, 'utf8'));
+  if (event.pull_request?.number !== b.pullRequest || event.pull_request.base.sha !== b.base)
+    return false;
+  if (process.env.CHECK_MODE !== 'ci-only' || process.env.NODE_ENV !== 'test')
+    throw new Error('ONLINE continuation check environment changed');
+  const tree = git('rev-parse', 'HEAD^{tree}');
+  ensureCommit(b.head);
+  ensureCommit(event.pull_request.head.sha);
+  if (git('rev-parse', `${event.pull_request.head.sha}^{tree}`) !== tree)
+    throw new Error('ONLINE continuation current source changed');
+  const changed = git('diff', '--name-only', b.head, tree).split('\n').filter(Boolean);
+  const fixture = 'scripts/production-release/unified-component-source.test.py';
+  const bytes = (commit, path) =>
+    execFileSync('git', ['show', `${commit}:${path}`], { encoding: 'utf8' });
+  const run = gh(`repos/${b.repository}/actions/runs/${b.run}`);
+  const { jobs } = gh(
+    `repos/${b.repository}/actions/runs/${b.run}/attempts/${b.attempt}/jobs?per_page=100`
+  );
+  const checkout = gh(`repos/${b.repository}/git/commits/${b.checkout}`);
+  const log = execFileSync(
+    'gh',
+    ['run', 'view', String(b.run), '--repo', b.repository, '--job', String(b.job), '--log'],
+    { encoding: 'utf8', maxBuffer: 4 * 1024 * 1024 }
+  );
+  const fixtureBytes = execFileSync('git', ['show', `${tree}:${fixture}`]);
+  const modesUnchanged = changed.every(
+    (path) =>
+      /^[0-9]+ blob [a-f0-9]{40}\t/.test(git('ls-tree', tree, '--', path)) &&
+      git('ls-tree', tree, '--', path).split(' ')[0] ===
+        git('ls-tree', b.head, '--', path).split(' ')[0]
+  );
+  if (
+    !validateOnlineComponentGuardNative({
+      run,
+      jobs,
+      checkout,
+      changed,
+      facts: onlineComponentGuardLogFacts(log),
+      currentEnvironment: onlineComponentGuardCurrentEnvironment(),
+      currentHead: event.pull_request.head.sha,
+      headTree: git('rev-parse', `${b.head}^{tree}`),
+      modesUnchanged,
+      fixtureSha256: createHash('sha256').update(fixtureBytes).digest('hex'),
+      scopeUnchanged: onlineComponentGuardScopeBytesUnchanged(
+        bytes(b.head, 'scripts/ci-recharge-scope.mjs'),
+        bytes(tree, 'scripts/ci-recharge-scope.mjs')
+      ),
+      dispatcherUnchanged: onlineComponentGuardDispatcherBytesUnchanged(
+        bytes(b.head, 'scripts/ci-recharge-check.mjs'),
+        bytes(tree, 'scripts/ci-recharge-check.mjs')
+      )
+    })
+  )
+    throw new Error('Original ONLINE guard prefix evidence changed');
+  return true;
+}
+// END finite ONLINE PR470 guard continuation
+
 export function canResumeCombinedGuard(base) {
   if (
     base !== combinedMigrationBinding.base ||

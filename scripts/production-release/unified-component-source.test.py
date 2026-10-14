@@ -28,6 +28,8 @@ CONFIRM_INPUTS = {
         'mode': '100644', 'sha256': '39597b5f8e5a6db3d5aaff309ab013156c59d7b50279a7d91e8e47a215a991af'},
 }
 CONFIRM_OVERLAY = 'a3ea38d3f31dce7f438d067e6bfbafe4108636ed50c75621beb44a8948b2b8b7'
+CONFIRM_PUBLISHED_SOURCE = '568e9390a304a36edba86823d5d5b31e5506763b'
+CONFIRM_PUBLISHED_TREE = '6961e61290108e7301b9629f2d62685c88c9cec6'
 
 
 def verify_application_worktree(sealed, current, projection):
@@ -100,6 +102,7 @@ class JointSourceTests(unittest.TestCase):
         cls.original_application_source = archived_files('b1a775d1dc0bc460fb59eebcec089342b6134788')
         cls.published = archived_files('f193f34ea09a2c37485c1582a81b33ee3acec865')
         cls.reviewed_remaining = archived_files(REMAINING_REVIEWED_SOURCE)
+        cls.confirmation = archived_files(CONFIRM_PUBLISHED_SOURCE)
         cls.output, cls.record = cls.projection.project_files(cls.candidate, cls.base, cls.online,
             cls.core.APPLICATION_SOURCE, cls.core.APPLICATION_TREE)
         cls.application = {name: row for name, row in cls.projection.inventory(cls.candidate).items()
@@ -132,18 +135,19 @@ class JointSourceTests(unittest.TestCase):
             self.assertEqual(adapter.CONFIRM_OVERLAY_SHA256, CONFIRM_OVERLAY)
             self.assertEqual(adapter.CONFIRM_BASELINE, '43c31870c9497d900491cdb19c5f61c766f3b344')
             self.assertEqual(adapter.CONFIRM_CONTROL_SOURCE, '43c31870c9497d900491cdb19c5f61c766f3b344')
-            tracked = subprocess.check_output(['git', 'ls-files', '--cached', '--others', '--exclude-standard'],
-                cwd=ROOT).decode().splitlines()
-            full = {}
-            for name in tracked:
-                path = ROOT / name
-                self.assertFalse(path.is_symlink(), name)
-                if path.is_file():
-                    full[name] = (path.read_bytes(), '100755' if path.stat().st_mode & 0o111 else '100644')
+            # Current ONLINE controls belong to their separate publisher. The
+            # historical confirmation projection uses its actually published
+            # complete input, while every current application byte is checked.
+            full = self.confirmation
+            self.assertEqual(self.projection.source_tree(full), CONFIRM_PUBLISHED_TREE)
+            self.assertEqual({name for name in full if name.startswith(APP_PREFIXES) or name in APP_FILES},
+                             set(current))
             self.assertEqual({name: full[name] for name in current}, current)
             output, record, runtime = adapter.project_confirm(full,
                 archived_files(adapter.CONFIRM_BASELINE), self.base, self.online,
-                'a' * 40, self.projection.source_tree(full), archived_files(adapter.CONFIRM_CONTROL_SOURCE))
+                CONFIRM_PUBLISHED_SOURCE, CONFIRM_PUBLISHED_TREE, archived_files(adapter.CONFIRM_CONTROL_SOURCE))
+            self.assertEqual(record['candidateCommit'], CONFIRM_PUBLISHED_SOURCE)
+            self.assertEqual(record['candidateTree'], CONFIRM_PUBLISHED_TREE)
             self.assertEqual(record['profile'], profile)
             self.assertEqual(record['overlayFiles'], CONFIRM_INPUTS)
             self.assertEqual(record['overlaySha256'], CONFIRM_OVERLAY)
@@ -152,6 +156,33 @@ class JointSourceTests(unittest.TestCase):
             self.assertFalse(any('/online-recharge/' in name for name in output))
             for name, row in runtime.items():
                 self.assertEqual(output[name], row)
+
+    def test_published_confirmation_fixture_rejects_wrong_tree_ui_and_additional_application_or_online_controls(self):
+        adapter = load('admin-pending-online-release.py')
+        predecessor = archived_files(adapter.CONFIRM_BASELINE)
+        control = archived_files(adapter.CONFIRM_CONTROL_SOURCE)
+        def project(files, *, tree=None):
+            return adapter.project_confirm(files, predecessor, self.base, self.online,
+                CONFIRM_PUBLISHED_SOURCE, self.projection.source_tree(files) if tree is None else tree, control)
+        with self.assertRaisesRegex(RuntimeError, 'CONFIRM_SOURCE_TREE_CHANGED'):
+            project(self.confirmation, tree='0' * 40)
+        first = next(iter(CONFIRM_INPUTS))
+        for fault in ('ui-bytes', 'ui-mode', 'extra-app', 'online-control', 'source-app'):
+            files = dict(self.confirmation)
+            expected = 'CONFIRM_SOURCE_SCOPE_CHANGED'
+            if fault == 'ui-bytes':
+                raw, mode = files[first]; files[first] = (raw + b'\n// tampered UI\n', mode)
+                expected = 'CONFIRM_OVERLAY_CHANGED'
+            elif fault == 'ui-mode': files[first] = (files[first][0], '100755')
+            elif fault == 'extra-app': files['apps/admin/src/v2/features/unreviewed.ts'] = (b'export {}', '100644')
+            elif fault == 'online-control':
+                files['scripts/production-release/online-recharge-component-runtime.py'] = (
+                    (HERE / 'online-recharge-component-runtime.py').read_bytes(), '100644')
+            else:
+                name = 'apps/api/src/main.ts'; raw, mode = files[name]
+                files[name] = (raw + b'\n// unrelated source\n', mode)
+            with self.subTest(fault=fault), self.assertRaisesRegex(RuntimeError, expected):
+                project(files)
 
     def test_original_application_branch_still_requires_the_entire_original_seal(self):
         sealed = {name: self.original_application_source[name] for name in self.application}
