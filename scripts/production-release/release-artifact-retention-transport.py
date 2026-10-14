@@ -401,7 +401,9 @@ def validate_plan(plan, binding, expected_sha):
          'files', 'targetSha256', 'cloudProofSha256', 'minimumRecoveryDays', 'requiredFreeBytes'}
          and plan['kind'] == 'ID_RELEASE_ARTIFACT_PLAN_V1' and type(plan['version']) is int
          and plan['version'] == 1 and plan['relativePath'] == RELATIVE
-         and plan['currentCommit'] == binding['expectedCurrent'] and digest(plan) == expected_sha
+         and matches(HEX40, plan['currentCommit'])
+         and (binding['operation'] == 'restore' or plan['currentCommit'] == binding['expectedCurrent'])
+         and digest(plan) == expected_sha
          and matches(HEX64, plan['targetSha256'])
          and plan['cloudProofSha256'] == binding['sourcePins'][PROOF_PATH]['sha256']
          and type(plan['minimumRecoveryDays']) is int and plan['minimumRecoveryDays'] == 14
@@ -410,9 +412,9 @@ def validate_plan(plan, binding, expected_sha):
          'ARTIFACT_PLAN_BINDING_CHANGED')
     probe = plan['sourceProbe']
     need(type(probe) is dict and set(probe) == {'currentCommit', 'currentRelease', 'currentManifestSha256',
-         'currentPointerIdentity', 'containers'} and probe['currentCommit'] == binding['expectedCurrent']
+         'currentPointerIdentity', 'containers'} and probe['currentCommit'] == plan['currentCommit']
          and probe['currentRelease'] == str(BASE / 'releases' / Path(probe['currentRelease']).name)
-         and re.fullmatch(r'[0-9]{8}T[0-9]{6}Z-' + binding['expectedCurrent'][:12], Path(probe['currentRelease']).name)
+         and re.fullmatch(r'[0-9]{8}T[0-9]{6}Z-' + plan['currentCommit'][:12], Path(probe['currentRelease']).name)
          and matches(HEX64, probe['currentManifestSha256']) and type(probe['containers']) is list
          and len(probe['containers']) <= 128, 'ARTIFACT_PLAN_PROTECTION_INVALID')
     fields = {'device', 'inode', 'mode', 'uid', 'gid', 'links', 'bytes', 'mtimeNs', 'ctimeNs'}

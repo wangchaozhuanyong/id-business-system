@@ -378,8 +378,7 @@ class Cloud:
         return self.head(key, pin, proof)
 
     def download(self, record, path):
-        selectors = ['--version-id', record['versionId']] if record['versionId'] else ['--if-match', record['etag']]
-        value = self.call('get-object', '--key', record['key'], *selectors, str(path), timeout=600)
+        value = self.call('get-object', '--key', record['key'], '--if-match', record['etag'], str(path), timeout=600)
         need(type(value) is dict and value.get('ETag') == record['etag']
              and value.get('VersionId') == record['versionId']
              and value.get('ContentLength') == record['bytes'], 'CLOUD_DOWNLOAD_CHANGED')

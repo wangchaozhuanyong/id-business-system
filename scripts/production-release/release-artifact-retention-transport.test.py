@@ -280,6 +280,35 @@ class PlanWireTests(unittest.TestCase):
         value = binding('archive'); output = result(value); value['planSha256'] = '0' * 64
         with self.assertRaisesRegex(transport.Rejected, 'APPROVED_PLAN_CHANGED'): transport.validate_result(output, value)
 
+    def test_only_restore_accepts_unchanged_historical_archive_plan_after_live_release_changes(self):
+        value = binding('restore'); archived = plan(value); archived_bytes = transport.canonical(archived)
+        approved = transport.digest(archived); value['planSha256'] = approved; value['expectedCurrent'] = '9' * 40
+        live = probe(); live['currentCommit'] = value['expectedCurrent']
+        live['currentRelease'] = str(transport.BASE / 'releases' / ('20261015T000000Z-' + value['expectedCurrent'][:12]))
+        output = transport.complete_result(value, native(value, archived, 'restore'), archived, live)
+        self.assertIs(transport.validate_result(output, value), output)
+        self.assertEqual(output['planSha256'], approved)
+        self.assertEqual(transport.canonical(archived), archived_bytes)
+        self.assertEqual(output['plan']['currentCommit'], CURRENT)
+        self.assertEqual(output['sourceProbe']['currentCommit'], value['expectedCurrent'])
+        for operation in ('verify', 'archive'):
+            current_binding = binding(operation); current_binding['expectedCurrent'] = value['expectedCurrent']
+            with self.subTest(operation=operation), self.assertRaisesRegex(transport.Rejected, 'PLAN_BINDING_CHANGED'):
+                transport.validate_plan(archived, current_binding, approved)
+
+    def test_restore_rejects_malformed_or_inconsistent_history_and_original_plan_digest_drift(self):
+        value = binding('restore'); value['expectedCurrent'] = '9' * 40
+        mutations = (lambda p: p.update(currentCommit='invalid'), lambda p: p.update(currentCommit=123),
+                     lambda p: p['sourceProbe'].update(currentCommit='8' * 40),
+                     lambda p: p['sourceProbe'].update(currentRelease=str(transport.BASE / 'releases' / ('20261014T000000Z-' + '8' * 12))))
+        for mutate in mutations:
+            archived = plan(value); mutate(archived)
+            with self.subTest(mutate=mutate), self.assertRaises(transport.Rejected):
+                transport.validate_plan(archived, value, transport.digest(archived))
+        archived = plan(value); approved = transport.digest(archived); archived['targetSha256'] = '0' * 64
+        with self.assertRaisesRegex(transport.Rejected, 'PLAN_BINDING_CHANGED'):
+            transport.validate_plan(archived, value, approved)
+
     def test_actual_sources_and_all_operations_fit_the_real_ssm_payload_budget(self):
         for operation in transport.OPERATIONS:
             value = binding(operation, actual=True)
@@ -406,16 +435,18 @@ class NativeOperationTests(unittest.TestCase):
             path = Path(path)
             for source in transport.PATHS:
                 if path == transport.stage_root(self.value) / source: return source.encode(), None
+            if path == transport.RECEIPTS / (transport.digest(self.planned) + '.plan.json'):
+                return transport.canonical(self.planned), None
             if path == transport.RECEIPTS / (transport.digest(self.planned) + '.recovery.json'): return recovery_raw, None
             return transport.canonical({key: value for key, value in final.items() if key != 'receiptFile'}), None
         with patch.object(transport.os, 'geteuid', return_value=0), \
              patch.object(Path, 'lstat', return_value=self.directory_info), patch.object(transport, 'regular', side_effect=regular), \
-             patch.object(transport, 'snapshot', side_effect=snapshots or [self.before] * (3 if operation != 'verify' else 2)), \
-             patch.object(transport, 'read_plan', return_value=self.planned), \
+             patch.object(transport, 'snapshot', side_effect=snapshots or [self.before] * (3 if operation != 'verify' else 2)) as observing, \
              patch.object(transport, 'receipt_path', side_effect=lambda path, *args: Path(path)), \
              patch.object(transport.subprocess, 'run', side_effect=processes) as running, \
              patch.object(transport, 'apply_receipt_budget', side_effect=budget, wraps=transport.apply_receipt_budget) as checking:
             self.running = running
+            self.observing = observing
             output = transport.execute_native(self.value)
         return output, running, checking
 
@@ -438,6 +469,39 @@ class NativeOperationTests(unittest.TestCase):
         transport.validate_result(output, self.value); self.assertEqual(running.call_count, 1); checking.assert_called_once()
         self.assertEqual(running.call_args.args[0][3], 'restore'); self.assertNotIn('target', output)
 
+    def test_restore_preserves_archive_a_approval_while_cli_and_all_snapshots_protect_live_b(self):
+        archived_bytes = transport.canonical(self.planned); approved = transport.digest(self.planned)
+        self.value['expectedCurrent'] = '9' * 40
+        self.before['currentCommit'] = self.value['expectedCurrent']
+        self.before['currentRelease'] = str(transport.BASE / 'releases' / ('20261015T000000Z-' + self.value['expectedCurrent'][:12]))
+        self.before['containers'] = [{'id': '7' * 64, 'imageId': 'sha256:' + '8' * 64,
+            'reference': 'public/live-b:immutable', 'running': False, 'state': 'exited',
+            'startedAt': '2026-10-15T00:00:00Z', 'restartCount': 0, 'health': None, 'mounts': []}]
+        output, running, checking = self.native_run('restore')
+        transport.validate_result(output, self.value)
+        self.assertEqual(transport.canonical(self.planned), archived_bytes)
+        self.assertEqual(output['planSha256'], approved); self.assertEqual(output['plan']['currentCommit'], CURRENT)
+        self.assertEqual(output['sourceProbe'], self.before); self.assertEqual(running.call_count, 1)
+        arguments = running.call_args.args[0]
+        self.assertEqual(arguments[arguments.index('--expected-current') + 1], '9' * 40)
+        self.assertEqual(arguments[-2:], ['--approved-plan-sha256', approved])
+        self.assertEqual([call.args[0] for call in self.observing.call_args_list], ['9' * 40] * 3)
+        self.assertEqual([call.kwargs['context'] for call in self.observing.call_args_list],
+                         ['OPERATION_BEFORE', 'OPERATION_PREAPPLY', 'OPERATION_AFTER'])
+        self.assertEqual(checking.call_args.args[3], self.before)
+
+    def test_restore_stops_if_live_b_current_or_containers_change_before_or_after_native_restore(self):
+        self.value['expectedCurrent'] = '9' * 40
+        self.before['currentCommit'] = self.value['expectedCurrent']
+        self.before['currentRelease'] = str(transport.BASE / 'releases' / ('20261015T000000Z-' + self.value['expectedCurrent'][:12]))
+        for field in ('currentManifestSha256', 'containers'):
+            changed = copy.deepcopy(self.before)
+            changed[field] = '0' * 64 if field == 'currentManifestSha256' else [{'newStoppedContainer': True}]
+            for phase, snapshots in (('before', [self.before, changed]), ('after', [self.before, self.before, changed])):
+                with self.subTest(field=field, phase=phase), self.assertRaisesRegex(transport.Rejected, 'PRODUCTION_CHANGED'):
+                    self.native_run('restore', snapshots=snapshots)
+                self.assertEqual(self.running.call_count, 0 if phase == 'before' else 1)
+
     def test_failed_budget_or_changed_preapply_state_never_invokes_apply(self):
         with self.assertRaisesRegex(transport.Rejected, 'BUDGET'):
             self.native_run('archive', budget=transport.Rejected('ARTIFACT_APPLY_RECEIPT_BUDGET'))
@@ -450,7 +514,7 @@ class NativeOperationTests(unittest.TestCase):
     def test_claimed_native_mutation_and_incorrect_plan_digest_fail_before_apply(self):
         with self.assertRaisesRegex(transport.Rejected, 'NATIVE_RESULT_INVALID'):
             self.native_run('archive', mutate=lambda planned, final: planned.update(containersUnchanged=False))
-        with self.assertRaisesRegex(transport.Rejected, 'NATIVE_RESULT_INVALID'):
+        with self.assertRaisesRegex(transport.Rejected, 'PLAN_BINDING_CHANGED'):
             self.native_run('archive', mutate=lambda planned, final: planned.update(planSha256='0' * 64))
 
     def test_actual_receipt_budget_has_reserved_headroom(self):
