@@ -486,9 +486,25 @@ def build_proof(d, p, transport, quality_run, repository):
     d, core, _admin, _workspace, online = modules(d)
     receipt = validate_preflight(core, transport, p, transport['expectedCurrent'])
     _files, output, record = source(d, p, receipt['baseline'])
-    need(core.closed_json(core.private_bytes(Path(PROJECTION).resolve())) == record,
+    projection_path = Path(PROJECTION).absolute()
+    projection_raw = core.private_bytes(projection_path)
+    need(core.closed_json(projection_raw) == record
+         and projection_raw == (json.dumps(record, sort_keys=True, separators=(',', ':'), allow_nan=False) + '\n').encode(),
          'BUILD_CONTEXT_CHANGED')
     verify_context(core, output, record)
+    # Build and push both measure the same run's images. The original proof is
+    # immutable: authenticate and remeasure it, never recreate or replace it.
+    proof_path = Path(PROOF).absolute()
+    def proof_identity():
+        row = proof_path.lstat()
+        return tuple(getattr(row, name) for name in (
+            'st_dev', 'st_ino', 'st_mode', 'st_nlink', 'st_uid', 'st_gid', 'st_size', 'st_mtime_ns', 'st_ctime_ns'))
+    saved_proof = saved_identity = None
+    if proof_path.exists() or proof_path.is_symlink():
+        saved_identity = proof_identity()
+        saved_proof = core.private_bytes(proof_path, cap=256 * 1024)
+        need(proof_identity() == saved_identity, 'BUILD_PROOF_CHANGED')
+        validate_build(core.closed_json(saved_proof, 256 * 1024), p, record, transport, quality_run, repository)
     result = {'version': 1, 'scope': SCOPE, 'kind': KIND + '_BUILD_PROOF', 'producer': p,
         'qualityRunId': quality_run, 'sourceProjection': record, 'preflightSha256': c.fingerprint(transport),
         'migrations': dict(c.MIGRATIONS), 'images': {}}
@@ -504,8 +520,15 @@ def build_proof(d, p, transport, quality_run, repository):
         result['images'][name] = {'reference': ref, 'imageId': metadata['Id'], **content}
     validate_build(result, p, record, transport, quality_run, repository)
     for name in IMAGES:
-        verify_image(d, online, Path(CONTEXT).resolve(), output, p, result, name)
-    core.write_private(Path(PROOF).resolve(), result)
+        verify_image(d, online, Path(CONTEXT).absolute(), output, p, result, name)
+    need(core.private_bytes(projection_path) == projection_raw, 'BUILD_CONTEXT_CHANGED')
+    verify_context(core, output, record)
+    if saved_proof is None:
+        core.write_private(proof_path, result)
+    else:
+        canonical = (json.dumps(result, sort_keys=True, separators=(',', ':'), allow_nan=False) + '\n').encode()
+        need(saved_proof == canonical and core.private_bytes(proof_path, cap=256 * 1024) == saved_proof
+             and proof_identity() == saved_identity, 'BUILD_PROOF_CHANGED')
     return result
 
 

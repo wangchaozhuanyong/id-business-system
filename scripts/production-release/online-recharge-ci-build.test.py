@@ -128,6 +128,41 @@ class ImageTests(unittest.TestCase):
                 with self.assertRaisesRegex(RuntimeError, 'IMAGE_IDENTITY_CHANGED'):
                     ci.inspect('id-online-ci:test', self.record)
 
+    def test_inherited_admin_content_requires_exact_pinned_base_and_all_original_files(self):
+        files = {'apps/admin/Dockerfile': (('FROM ' + ci.ADMIN_RUNTIME_BASE + ' AS runtime\n').encode(), '100644')}
+        metadata = {'Architecture': 'amd64', 'Os': 'linux', 'Id': ci.ADMIN_BASE_IMAGE_ID,
+                    'RepoDigests': ['nginx@' + ci.ADMIN_RUNTIME_BASE.split('@')[1]]}
+        calls = []
+        with patch.object(ci, 'docker', side_effect=lambda *args: calls.append(args) or
+            (json.dumps([metadata]) if args[:2] == ('image', 'inspect') else '')), \
+             patch.object(ci, 'content', return_value=dict(ci.ADMIN_BASE_HTML)):
+            rows, proof = ci.admin_base_content(files)
+        self.assertEqual(rows, ci.ADMIN_BASE_HTML)
+        self.assertEqual(proof['imageId'], ci.ADMIN_BASE_IMAGE_ID)
+        self.assertEqual(proof['fileCount'], 2)
+        self.assertEqual(calls[0], ('pull', '--platform', 'linux/amd64', ci.ADMIN_RUNTIME_BASE))
+        self.assertTrue(all('push' not in call and 'login' not in call for call in calls))
+        for key, changed in (('Architecture', 'arm64'), ('Os', 'other'), ('Id', 'sha256:' + '1' * 64),
+                             ('RepoDigests', ['nginx@sha256:' + '2' * 64])):
+            bad = {**metadata, key: changed}
+            with self.subTest(key=key), patch.object(ci, 'docker', side_effect=lambda *args:
+                json.dumps([bad]) if args[:2] == ('image', 'inspect') else ''), \
+                 patch.object(ci, 'content', side_effect=AssertionError('invalid base read')):
+                with self.assertRaisesRegex(RuntimeError, 'ADMIN_BASE_IDENTITY_CHANGED'):
+                    ci.admin_base_content(files)
+        for changed in ({**ci.ADMIN_BASE_HTML, '/usr/share/nginx/html/unknown.html': '3' * 64},
+                        {**ci.ADMIN_BASE_HTML, '/usr/share/nginx/html/50x.html': '4' * 64},
+                        {'/usr/share/nginx/html/index.html': ci.ADMIN_BASE_HTML['/usr/share/nginx/html/index.html']}):
+            with self.subTest(changed=changed), patch.object(ci, 'docker', side_effect=lambda *args:
+                json.dumps([metadata]) if args[:2] == ('image', 'inspect') else ''), \
+                 patch.object(ci, 'content', return_value=changed):
+                with self.assertRaisesRegex(RuntimeError, 'ADMIN_BASE_CONTENT_CHANGED'):
+                    ci.admin_base_content(files)
+        with patch.object(ci, 'docker') as operation:
+            with self.assertRaisesRegex(RuntimeError, 'ADMIN_BASE_SOURCE_CHANGED'):
+                ci.admin_base_content({'apps/admin/Dockerfile': (b'FROM nginx:latest AS runtime\n', '100644')})
+            operation.assert_not_called()
+
     def test_docker_is_refused_outside_linux_github_runner(self):
         with patch.dict(os.environ, {'GITHUB_ACTIONS': 'false'}), patch('sys.argv', ['ci-build']):
             with patch.object(ci, 'docker', side_effect=AssertionError('Docker invoked')):
@@ -153,6 +188,7 @@ class ImageTests(unittest.TestCase):
 
     def test_four_packaged_images_match_compilation_and_frozen_source(self):
         files = {
+            'apps/admin/Dockerfile': (('FROM ' + ci.ADMIN_RUNTIME_BASE + ' AS runtime\n').encode(), '100644'),
             'apps/api/src/id-business-v2/auto-registration/worker/tool.py': (b'worker', '100644'),
             'apps/admin/src/v2/styles/base.css': (b'css', '100644'),
             ci.c.SCHEMA: (b'schema', '100644'),
@@ -167,7 +203,8 @@ class ImageTests(unittest.TestCase):
             'admin-build': compiled_admin,
             'api': {**compiled, **dependencies, **{'/app/' + name: ci.c.digest(raw)
                 for name, (raw, _mode) in files.items() if name.endswith(('tool.py', 'base.css'))}},
-            'admin': {'/usr/share/nginx/html/index.html': '5' * 64},
+            'admin': {**ci.ADMIN_BASE_HTML, '/usr/share/nginx/html/index.html': '5' * 64},
+            ci.ADMIN_RUNTIME_BASE: dict(ci.ADMIN_BASE_HTML),
             'migrate': {'/app/' + name: ci.c.digest(raw) for name, (raw, _mode) in files.items()
                         if name.startswith('apps/api/prisma-mysql/')},
             'online-recharge': {'./worker.cjs': ci.c.digest(b'engine')}}
@@ -179,15 +216,31 @@ class ImageTests(unittest.TestCase):
 
         with patch.object(ci, 'verify_context'), patch.object(ci, 'build', side_effect=fake_build), \
              patch.object(ci, 'inspect', return_value='sha256:' + '6' * 64), \
+             patch.object(ci, 'docker', side_effect=lambda *args: json.dumps([{
+                'Architecture': 'amd64', 'Os': 'linux', 'Id': ci.ADMIN_BASE_IMAGE_ID,
+                'RepoDigests': ['nginx@' + ci.ADMIN_BASE_PLATFORM_MANIFEST]}])
+                if args[:2] == ('image', 'inspect') else ''), \
              patch.object(ci, 'content', side_effect=lambda reference, *_args, **_kwargs: snapshots[reference]):
+            # Reproduce the old false rejection: compiled dist has no 50x.html,
+            # while the immutable nginx base contributes that exact original.
+            self.assertNotEqual(snapshots['admin'], {'/usr/share/nginx/html/index.html': '5' * 64})
             result = ci.build_and_verify(Path('/project/context'), files, self.record)
             self.assertEqual(set(result['images']), set(ci.IMAGES))
             self.assertFalse(result['releaseAuthority'])
             self.assertFalse(result['productionAccess'])
             self.assertFalse(result['registryPushPerformed'])
             self.assertEqual(result['businessActions'], 0)
-            snapshots['admin']['/usr/share/nginx/html/index.html'] = '7' * 64
-            with self.assertRaisesRegex(RuntimeError, 'IMAGE_SOURCE_CHANGED'):
+            self.assertEqual(result['adminRuntimeBase']['imageId'], ci.ADMIN_BASE_IMAGE_ID)
+            for mutation in ({'/usr/share/nginx/html/index.html': '7' * 64},
+                             {'/usr/share/nginx/html/50x.html': '7' * 64},
+                             {'/usr/share/nginx/html/unknown.html': '7' * 64}):
+                original = snapshots['admin']
+                snapshots['admin'] = {**original, **mutation}
+                with self.assertRaisesRegex(RuntimeError, 'IMAGE_SOURCE_CHANGED'):
+                    ci.build_and_verify(Path('/project/context'), files, self.record)
+                snapshots['admin'] = original
+            snapshots['admin-build'] = {'/app/apps/admin/dist/assets/app.js': '8' * 64}
+            with self.assertRaisesRegex(RuntimeError, 'ADMIN_COMPILED_INDEX_MISSING'):
                 ci.build_and_verify(Path('/project/context'), files, self.record)
         selected = {name: (dockerfile.name, target, str(context)) for name, dockerfile, target, context in calls}
         self.assertEqual(selected['api'][:2], ('Dockerfile.mysql', 'runtime'))

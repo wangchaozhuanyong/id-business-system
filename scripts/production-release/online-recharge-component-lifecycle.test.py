@@ -376,6 +376,23 @@ class ContinuousLifecycleTests(unittest.TestCase):
         self.assertTrue(context_file.is_symlink())
         self.assertEqual(self.docker, [])
 
+    def test_projection_evidence_symlink_refuses_without_changing_preflight_or_context(self):
+        self.prepare()
+        path = self.directory / r.PROJECTION
+        target = path.with_name('synthetic-original-projection.json')
+        original = self.core.private_bytes(path)
+        preflight = self.core.private_bytes(self.directory / r.PREFLIGHT)
+        path.rename(target); path.symlink_to(target)
+        with self.assertRaisesRegex(RuntimeError, 'PRIVATE_ARTIFACT_INVALID'):
+            self.build()
+        self.assertTrue(path.is_symlink())
+        self.assertEqual(self.core.private_bytes(target), original)
+        self.assertEqual(self.core.private_bytes(self.directory / r.PREFLIGHT), preflight)
+        with working_directory(self.directory):
+            r.verify_context(self.core, self.output, self.record)
+        self.assertFalse((self.directory / r.PROOF).exists())
+        self.assertEqual(self.docker, [])
+
     def test_stale_source_and_cross_module_content_errors_are_real(self):
         changed = {**self.p, 'sourceTree': 'f' * 40}
         with self.assertRaisesRegex(RuntimeError, 'SOURCE_TREE_CHANGED'):
@@ -405,6 +422,78 @@ class ContinuousLifecycleTests(unittest.TestCase):
         changed = copy.deepcopy(proof); changed['images']['api']['sha256'] = '0' * 64
         with self.assertRaisesRegex(RuntimeError, 'IMAGE_CONTENT_CHANGED'):
             r.verify_image(self.d, online, self.directory / r.CONTEXT, self.output, self.p, changed, 'api')
+        self.assertEqual(self.aws, [])
+
+    def test_build_and_push_consumers_revalidate_same_four_image_proof_without_rewrite(self):
+        self.prepare()
+        # These are the genuine two shell consumers in one formal run. Invoke
+        # their actual CLI dispatcher with its full producer/F/quality/repo
+        # environment; only Docker transport remains the existing fixture.
+        command = 'python3 -B scripts/production-release/online-recharge-component-readonly.py build-proof'
+        for name in ('build-images.sh', 'push-images.sh'):
+            self.assertIn(command, (HERE / name).read_text())
+        with working_directory(self.directory), patch.object(r, 'build_proof', wraps=r.build_proof) as proof_call:
+            with redirect_stdout(io.StringIO()): self.assertEqual(client.main('build-proof'), 0)
+            path = self.directory / r.PROOF
+            before, metadata = self.core.private_bytes(path), path.stat()
+            image_checks = len(self.docker)
+            with redirect_stdout(io.StringIO()): self.assertEqual(client.main('build-proof'), 0)
+            self.assertEqual(proof_call.call_count, 2)
+            for call in proof_call.call_args_list:
+                self.assertEqual(call.args, (self.d, self.p, self.transport, '456', REPOSITORY))
+        after = path.stat()
+        self.assertEqual(self.core.private_bytes(path), before)
+        self.assertEqual((after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns, after.st_ctime_ns),
+                         (metadata.st_dev, metadata.st_ino, metadata.st_size,
+                          metadata.st_mtime_ns, metadata.st_ctime_ns))
+        self.assertGreater(len(self.docker), image_checks)  # Push guard rereads all image identities/content.
+        saved = self.core.closed_json(before)
+        self.assertEqual(set(saved['images']), set(r.IMAGES))
+        self.assertEqual(saved['producer'], self.p)
+        self.assertEqual(saved['qualityRunId'], '456')
+        self.assertEqual(saved['preflightSha256'], r.c.fingerprint(self.transport))
+        self.assertEqual(self.aws, [])
+
+    def test_archived_build_proof_second_call_reproduces_errno17_then_current_call_reuses(self):
+        self.prepare()
+        raw = subprocess.check_output(['git', 'show',
+            'a9829b443fe5c0cf6f4803366d06c5f8e3357318:scripts/production-release/online-recharge-component-runtime.py'],
+            cwd=ROOT)
+        function = next(node for node in ast.parse(raw).body
+                        if isinstance(node, ast.FunctionDef) and node.name == 'build_proof')
+        # Run the exact archived function, using current genuine validators and
+        # private writer. This is the old production bug, not a writer mock.
+        namespace = dict(vars(r))
+        exec(compile(ast.Module(body=[function], type_ignores=[]), '<archived-build-proof>', 'exec'), namespace)
+        old_build = namespace['build_proof']
+        with working_directory(self.directory):
+            expected = old_build(self.d, self.p, self.transport, '456', REPOSITORY)
+            path = self.directory / r.PROOF
+            before, metadata = self.core.private_bytes(path), path.stat()
+            with self.assertRaises(FileExistsError) as caught:
+                old_build(self.d, self.p, self.transport, '456', REPOSITORY)
+            self.assertEqual(caught.exception.errno, errno.EEXIST)
+            self.assertEqual(r.build_proof(self.d, self.p, self.transport, '456', REPOSITORY), expected)
+        self.assertEqual(self.core.private_bytes(path), before)
+        self.assertEqual(path.stat().st_ino, metadata.st_ino)
+        self.assertEqual(path.stat().st_mtime_ns, metadata.st_mtime_ns)
+
+    def test_existing_build_proof_tampering_or_symlink_refuses_without_overwrite(self):
+        self.prepare(); self.build()
+        path = self.directory / r.PROOF
+        original = self.core.private_bytes(path)
+        changed = self.core.closed_json(original); changed['qualityRunId'] = '999'
+        path.write_bytes(encoded(changed))
+        tampered = path.read_bytes()
+        with self.assertRaises(RuntimeError): self.build()
+        self.assertEqual(path.read_bytes(), tampered)
+        path.write_bytes(original)
+        target = path.with_name('synthetic-original-build-proof.json')
+        path.rename(target); path.symlink_to(target)
+        with self.assertRaisesRegex(RuntimeError, 'PRIVATE_ARTIFACT_INVALID'):
+            self.build()
+        self.assertTrue(path.is_symlink())
+        self.assertEqual(self.core.private_bytes(target), original)
         self.assertEqual(self.aws, [])
 
     def test_accepted_read_timeout_then_late_result_never_resends(self):

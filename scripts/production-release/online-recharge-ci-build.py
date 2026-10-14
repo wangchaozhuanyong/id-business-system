@@ -25,6 +25,15 @@ IMAGES = ('api', 'admin', 'migrate', 'online-recharge')
 ENGINE = 'apps/api/src/id-business-v2/online-recharge/engine'
 BUILD_TARGETS = (*IMAGES, 'api-build', 'admin-build', 'registration-dependencies')
 STATE = {'stage': 'SOURCE_PROJECTION', 'image': None}
+# Read-only OCI verification of this exact index and amd64 manifest proves the
+# base's two HTML files originate in layer 61ca4f733c802afd9e05a32f0de0361b6d713b8b53292dc15fb093229f648674.
+# COPY of the compiled directory replaces index.html and retains 50x.html.
+ADMIN_RUNTIME_BASE = 'nginx:1.27-alpine@sha256:65645c7bb6a0661892a8b03b89d0743208a18dd2f3f17a54ef4b76fb8e2f2a10'
+ADMIN_BASE_PLATFORM_MANIFEST = 'sha256:62223d644fa234c3a1cc785ee14242ec47a77364226f1c811d2f669f96dc2ac8'
+ADMIN_BASE_IMAGE_ID = 'sha256:6769dc3a703c719c1d2756bda113659be28ae16cf0da58dd5fd823d6b9a050ea'
+ADMIN_BASE_HTML = {
+    '/usr/share/nginx/html/50x.html': '876766b4e80133fd490603e073d3567425b88794828a9292104244c9e40875ed',
+    '/usr/share/nginx/html/index.html': 'fb47468a2cd3953c7131431991afcc6a2703f14640520102eea0a685a7e8d6de'}
 
 
 def need(value, code):
@@ -137,7 +146,7 @@ def build(name, dockerfile, target, context, record):
 
 def content(reference, roots, *, relative=False):
     STATE.update(stage='IMAGE_CONTENT', image=next((name for name in BUILD_TARGETS
-        if reference.endswith('-' + name)), None))
+        if reference.endswith('-' + name)), 'admin' if reference == ADMIN_RUNTIME_BASE else None))
     # Explicit entrypoint never runs the API, engine, migration or web server.
     command = 'set -eu; export LC_ALL=C; '
     if relative:
@@ -181,6 +190,36 @@ def inspect(reference, record):
     return value['Id']
 
 
+def admin_base_content(files):
+    """Authenticate inherited HTML, rather than exempting arbitrary extra files."""
+    STATE.update(stage='ADMIN_BASE_VERIFICATION', image='admin')
+    raw, mode = files.get('apps/admin/Dockerfile', (b'', ''))
+    need(type(raw) is bytes and mode == '100644' and re.findall(
+        rb'^FROM (\S+) AS runtime$', raw, flags=re.MULTILINE) == [ADMIN_RUNTIME_BASE.encode()],
+        'ADMIN_BASE_SOURCE_CHANGED')
+    # BuildKit's cache does not guarantee the base is in Docker's image store.
+    # Pull only its immutable public digest; never authenticate or upload.
+    docker('pull', '--platform', 'linux/amd64', ADMIN_RUNTIME_BASE)
+    metadata = json.loads(docker('image', 'inspect', ADMIN_RUNTIME_BASE))
+    need(type(metadata) is list and len(metadata) == 1 and type(metadata[0]) is dict,
+         'ADMIN_BASE_IDENTITY_CHANGED')
+    value = metadata[0]
+    digests = value.get('RepoDigests')
+    need(value.get('Architecture') == 'amd64' and value.get('Os') == 'linux'
+         and value.get('Id') == ADMIN_BASE_IMAGE_ID and type(digests) is list
+         and any(type(digest) is str and digest in (
+             'nginx@' + ADMIN_RUNTIME_BASE.split('@')[1],
+             'nginx@' + ADMIN_BASE_PLATFORM_MANIFEST,
+             'docker.io/library/nginx@' + ADMIN_RUNTIME_BASE.split('@')[1],
+             'docker.io/library/nginx@' + ADMIN_BASE_PLATFORM_MANIFEST) for digest in digests),
+         'ADMIN_BASE_IDENTITY_CHANGED')
+    measured = content(ADMIN_RUNTIME_BASE, ('/usr/share/nginx/html',))
+    STATE.update(stage='ADMIN_BASE_VERIFICATION', image='admin')
+    need(measured == ADMIN_BASE_HTML, 'ADMIN_BASE_CONTENT_CHANGED')
+    return measured, {'reference': ADMIN_RUNTIME_BASE, 'imageId': value['Id'],
+        'platformManifestDigest': ADMIN_BASE_PLATFORM_MANIFEST, **summary(measured)}
+
+
 def build_and_verify(context, files, record):
     verify_context(context, files)
     api_file, admin_file = context / 'apps/api/Dockerfile.mysql', context / 'apps/admin/Dockerfile'
@@ -192,6 +231,7 @@ def build_and_verify(context, files, record):
     api_deps = content(registration, ('/opt/id-registration/venv', '/opt/id-registration/dependency-audit.json'))
     admin_compiled = {name.replace('/app/apps/admin/dist/', '/usr/share/nginx/html/', 1): sha
         for name, sha in content(admin_build, ('/app/apps/admin/dist',)).items()}
+    need('/usr/share/nginx/html/index.html' in admin_compiled, 'ADMIN_COMPILED_INDEX_MISSING')
     api_sources = {'/app/' + name: c.digest(raw) for name, (raw, _mode) in files.items()
         if name.startswith('apps/api/src/id-business-v2/auto-registration/') or
         name == 'apps/admin/src/v2/styles/base.css'}
@@ -207,12 +247,16 @@ def build_and_verify(context, files, record):
         'admin': ('/usr/share/nginx/html',), 'migrate': ('/app/apps/api/prisma-mysql',),
         'online-recharge': ()}
     images = {}
+    base_record = None
     for name in IMAGES:
         dockerfile, target, build_context = (admin_file, 'runtime', context) if name == 'admin' else (
             context / ENGINE / 'Dockerfile', '', context / ENGINE) if name == 'online-recharge' else (
             api_file, 'migration' if name == 'migrate' else 'runtime', context)
         reference = build(name, dockerfile, target, build_context, record)
         image_id = inspect(reference, record)
+        if name == 'admin':
+            inherited, base_record = admin_base_content(files)
+            expected[name] = {**inherited, **admin_compiled}
         measured = content(reference, roots[name], relative=name == 'online-recharge')
         STATE.update(stage='IMAGE_SOURCE_VERIFICATION', image=name)
         need(measured == expected[name], 'IMAGE_SOURCE_CHANGED')
@@ -220,6 +264,7 @@ def build_and_verify(context, files, record):
     verify_context(context, files)
     return {'version': 1, 'kind': KIND, 'scope': 'CI_ONLY', 'releaseAuthority': False,
         'sourceProjection': record, 'images': images, 'productionAccess': False,
+        'adminRuntimeBase': base_record,
         'registryPushPerformed': False, 'databaseAccessPerformed': False, 'businessActions': 0}
 
 
