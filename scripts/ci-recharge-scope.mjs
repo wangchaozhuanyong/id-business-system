@@ -3830,6 +3830,460 @@ export function reuseFirstRechargeBusiness(repo, event, mode, currentTree) {
 }
 // END finite first-recharge PR477 business continuation
 
+// BEGIN finite first-recharge PR477 fff continuation
+export const firstRechargeNewBaseBinding = Object.freeze({
+  template: '265474135321fa33858402dd32b1c204ba432a3e',
+  templateTree: 'e5e43cdd2d9cf1992752268289f0e7c225ee8f7f',
+  templateManifestSha256: '8f76369e9024ae40cbe8e6cf9e4ceb52317fca25265d3cf9d75a40fefe47a9f6',
+  base: 'c7a800b931311cd5c6da4c4b2320743b7a3015a1',
+  historical: '02a744709c21e2eafbc4ec19e713e4eaad6384d5',
+  historicalTree: 'f3220953bc91d3ae5c8314d9a9fe7fc84da9a1b5',
+  historicalManifestSha256: '11c7b39e10e1c53992d04ee7c91af0ddd9ce7b6414de990ec2470455a513b04a',
+  source: '301f9e751dde020031a240920454060ce00a1000',
+  sourceTree: '2d15c4c07ea086064c5928f2336340d3f524e3a5',
+  contractSha256: 'e3a9800b7f75078063540414b0e536c625756a562e92e8ae938611d81c2c822d',
+  contractRawSha256: '32c14f77dd0142ad7010f500c8efc01fb4e66f743bb016524c4812a5b62ed3f6',
+  applicationCount: 2192,
+  applicationInputSha256: 'bef121cc439f545aeeb40ca770827f7faa4fb24e1344171f988079d0a25b7db2',
+  currentDiffCount: 64,
+  currentDiffSha256: 'c8cf0535ec42f398d27fe70e8b98ea43422f121f4f20608c2325013dab24eb53',
+  scopeSha256: 'f7bd777690711ba11f139c5f0a6934ed8450e6905357d62f0eef5097db5592b3',
+  scopeBlockSha256: '23f6fc40d5425be1f7816f9c983616b0089fb84b67d79be0b45c01c3f1aec27f',
+  scopeTestSha256: 'd4a4849b15fe68555f96d95c7e5b092866b2eb047ed07e7fc9ce1695b2f0a26d',
+  fixtureHashes: Object.freeze({
+    'scripts/production-release/online-recharge-ci-build.test.py':
+      'e2a8cda35b269e0582f9e59249f6c0d8b1b074c8948b09812bc569d9baf9e273',
+    'scripts/production-release/online-recharge-component-consumer.test.py':
+      '568d96fcea0b30b8da224cd06b228af1dcda1c0d9453884169fc61d8d306e9ac',
+    'scripts/production-release/online-recharge-component-lifecycle.test.py':
+      '9f702d2d1c6a40e03db228bade291088a5c39f0762576d305eb3e135c04cad48'
+  })
+});
+const firstRechargeNewBaseInversePaths = new Set([
+  '.github/workflows/online-recharge-diagnostic.yml',
+  '.github/workflows/quality.yml',
+  'docs/ONLINE_RECHARGE_RELEASE_HARDENING_20261014.md',
+  'docs/V2_TASKS.md',
+  'scripts/ci-recharge-check.mjs',
+  'scripts/ci-recharge-check.test.mjs',
+  'scripts/ci-recharge-release.test.mjs',
+  'scripts/ci-recharge-scope.mjs',
+  'scripts/ci-recharge-scope.test.mjs',
+  'scripts/production-release/first-recharge-successor-contract.json',
+  'scripts/production-release/first-recharge-successor-projection.py',
+  'scripts/production-release/first-recharge-successor-projection.test.py',
+  'scripts/production-release/online-recharge-ci-build.py',
+  'scripts/production-release/online-recharge-ci-build.test.py',
+  'scripts/production-release/online-recharge-component-consumer.test.py',
+  'scripts/production-release/online-recharge-component-diagnostic-entry.test.mjs',
+  'scripts/production-release/online-recharge-component-diagnostic.py',
+  'scripts/production-release/online-recharge-component-diagnostic.test.py',
+  'scripts/production-release/online-recharge-component-lifecycle.test.py',
+  'scripts/production-release/online-recharge-component-readonly.py',
+  'scripts/production-release/online-recharge-component-readonly.test.py',
+  'scripts/production-release/online-recharge-component-runtime.py',
+  'scripts/production-release/online-recharge-component-runtime.test.py',
+  'scripts/production-release/unified-component-source.test.py'
+]);
+const firstRechargeNewBaseScope = 'scripts/ci-recharge-scope.mjs';
+const firstRechargeNewBaseTest = 'scripts/ci-recharge-scope.test.mjs';
+const firstRechargeNewBaseContract =
+  'scripts/production-release/first-recharge-successor-contract.json';
+const firstRechargeNewBaseOldCall =
+  '    for (const row of reuseFirstRechargeBusiness(repo, event, mode, currentTree) || []) {';
+const firstRechargeNewBaseCall =
+  '    for (const row of reuseFirstRechargeCurrent(repo, event, mode, currentTree) || []) {';
+const firstRechargeNewBaseOldGate = '  const onlineCiBuild = needsOnlineRechargeCiBuild(paths);';
+const firstRechargeNewBaseGate =
+  '  const onlineCiBuild = firstRechargeOnlineBuildRequired(repo, event, mode, paths, currentTree);';
+const firstRechargeNewBaseDigest = (bytes) => createHash('sha256').update(bytes).digest('hex');
+
+function firstRechargeNewBaseManifest(raw) {
+  if (typeof raw !== 'string' || !raw.endsWith('\0')) return undefined;
+  const rows = new Map();
+  for (const row of raw.slice(0, -1).split('\0')) {
+    const match = /^(100644|100755) blob ([a-f0-9]{40})\t([^\r\n\0\t]+)$/.exec(row);
+    if (
+      !match ||
+      rows.has(match[3]) ||
+      match[3].split('/').some((v) => !v || ['.', '..', '.git'].includes(v))
+    )
+      return undefined;
+    rows.set(match[3], { mode: match[1], blob: match[2], row });
+  }
+  return rows;
+}
+export function firstRechargeNewBaseScopeBytesUnchanged(after) {
+  if (typeof after !== 'string') return false;
+  const start = '// BEGIN finite first-recharge PR477 fff continuation\n';
+  const end = '// END finite first-recharge PR477 fff continuation\n\n';
+  if (after.split(start).length !== 2 || after.split(end).length !== 2) return false;
+  const left = after.indexOf(start),
+    right = after.indexOf(end);
+  if (right <= left) return false;
+  let block = after.slice(left, right + end.length);
+  for (const key of ['scopeBlockSha256']) {
+    const field = new RegExp('  ' + key + ": '[a-f0-9]{64}',\\n", 'g');
+    if ([...block.matchAll(field)].length !== 1) return false;
+    block = block.replace(field, '  ' + key + ": '" + '0'.repeat(64) + "',\n");
+  }
+  if (firstRechargeNewBaseDigest(block) !== firstRechargeNewBaseBinding.scopeBlockSha256)
+    return false;
+  const without = after.slice(0, left) + after.slice(right + end.length);
+  if (
+    without.split(firstRechargeNewBaseCall).length !== 2 ||
+    without.split(firstRechargeNewBaseGate).length !== 2
+  )
+    return false;
+  return (
+    firstRechargeNewBaseDigest(
+      without
+        .replace(firstRechargeNewBaseCall, firstRechargeNewBaseOldCall)
+        .replace(firstRechargeNewBaseGate, firstRechargeNewBaseOldGate)
+    ) === firstRechargeNewBaseBinding.scopeSha256
+  );
+}
+export function hasFirstRechargeNewBaseSourceProof(snapshot) {
+  const b = firstRechargeNewBaseBinding;
+  if (
+    snapshot?.templateTree !== b.templateTree ||
+    snapshot.sourceTree !== b.sourceTree ||
+    snapshot.historicalTree !== b.historicalTree ||
+    firstRechargeNewBaseDigest(snapshot.templateManifest || '') !== b.templateManifestSha256 ||
+    firstRechargeNewBaseDigest(snapshot.historicalManifest || '') !== b.historicalManifestSha256 ||
+    snapshot.applicationCount !== b.applicationCount ||
+    snapshot.applicationInputSha256 !== b.applicationInputSha256 ||
+    snapshot.currentApplicationManifest !== snapshot.sourceApplicationManifest ||
+    snapshot.currentApplicationManifest !== snapshot.historicalApplicationManifest ||
+    firstRechargeNewBaseDigest(snapshot.contract || '') !== b.contractRawSha256 ||
+    !firstRechargeNewBaseScopeBytesUnchanged(snapshot.files?.[firstRechargeNewBaseScope])
+  )
+    return false;
+  let contract;
+  try {
+    contract = JSON.parse(snapshot.contract);
+  } catch {
+    return false;
+  }
+  if (
+    contract.businessCommit !== b.source ||
+    contract.businessTree !== b.sourceTree ||
+    contract.contractSha256 !== b.contractSha256 ||
+    contract.applicationInputCount !== b.applicationCount ||
+    contract.applicationInputSha256 !== b.applicationInputSha256 ||
+    Object.keys(contract.businessFiles || {}).length !== 37 ||
+    Object.keys(contract.coldHelpers || {}).length !== 11
+  )
+    return false;
+  const template = firstRechargeNewBaseManifest(snapshot.templateManifest);
+  const current = firstRechargeNewBaseManifest(snapshot.currentManifest);
+  const historical = firstRechargeNewBaseManifest(snapshot.historicalManifest);
+  if (
+    !template ||
+    !current ||
+    !historical ||
+    template.size !== 2684 ||
+    current.size !== template.size
+  )
+    return false;
+  const allowed = new Map([
+    [firstRechargeNewBaseTest, b.scopeTestSha256],
+    ...Object.entries(b.fixtureHashes)
+  ]);
+  for (const [path, expected] of template) {
+    const actual = current.get(path);
+    if (!actual || actual.mode !== expected.mode) return false;
+    if (path === firstRechargeNewBaseScope || allowed.has(path)) {
+      const bytes = snapshot.files?.[path];
+      if (
+        typeof bytes !== 'string' ||
+        actual.blob !==
+          createHash('sha1')
+            .update('blob ' + Buffer.byteLength(bytes) + '\0')
+            .update(bytes)
+            .digest('hex')
+      )
+        return false;
+      if (allowed.has(path) && firstRechargeNewBaseDigest(bytes) !== allowed.get(path))
+        return false;
+    } else if (actual.blob !== expected.blob) return false;
+  }
+  // Undo only the fixed upstream ONLINE controls and the four source bindings.
+  // This recovers the actual third-run tree; no failed run is an overall success.
+  const names = new Set([...template.keys(), ...historical.keys()]);
+  const changed = [...names].filter(
+    (path) => template.get(path)?.row !== historical.get(path)?.row
+  );
+  if (
+    changed.length !== firstRechargeNewBaseInversePaths.size ||
+    !changed.every((path) => firstRechargeNewBaseInversePaths.has(path))
+  )
+    return false;
+  const inverse = [...template.entries()]
+    .filter(([path]) => !firstRechargeNewBaseInversePaths.has(path))
+    .concat(
+      [...historical.entries()].filter(([path]) => firstRechargeNewBaseInversePaths.has(path))
+    )
+    .sort(([a], [c]) => Buffer.compare(Buffer.from(a), Buffer.from(c)))
+    .map(([, row]) => row.row + '\0')
+    .join('');
+  return firstRechargeNewBaseDigest(inverse) === b.historicalManifestSha256;
+}
+
+export function readFirstRechargeNewBaseSourceSnapshot(currentTree) {
+  const b = firstRechargeNewBaseBinding;
+  if (!/^[a-f0-9]{40}$/.test(currentTree || '')) return undefined;
+  for (const commit of [b.template, b.source, b.historical]) ensureCommit(commit);
+  const manifest = (revision) =>
+    execFileSync('git', ['ls-tree', '-rz', '--full-tree', revision], {
+      encoding: 'utf8',
+      maxBuffer: 8 * 1024 * 1024
+    });
+  const read = (revision, path) =>
+    execFileSync('git', ['show', `${revision}:${path}`], {
+      encoding: 'utf8',
+      maxBuffer: 8 * 1024 * 1024
+    });
+  const raw = manifest(currentTree),
+    rows = firstRechargeNewBaseManifest(raw);
+  if (!rows) return undefined;
+  const appFiles = new Set([
+    'package.json',
+    'package-lock.json',
+    '.dockerignore',
+    'tsconfig.base.json',
+    'deploy/nginx/admin.conf'
+  ]);
+  const app = (value) =>
+    value
+      .split('\0')
+      .filter((row) => {
+        const path = row.split('\t')[1];
+        return (
+          path &&
+          (appFiles.has(path) ||
+            ['apps/api/', 'apps/admin/', 'packages/shared/'].some((prefix) =>
+              path.startsWith(prefix)
+            ))
+        );
+      })
+      .join('\0') + '\0';
+  const appRows = [...rows.entries()]
+    .filter(
+      ([path]) =>
+        appFiles.has(path) ||
+        ['apps/api/', 'apps/admin/', 'packages/shared/'].some((prefix) => path.startsWith(prefix))
+    )
+    .sort(([a], [c]) => (a < c ? -1 : a > c ? 1 : 0));
+  const blobs = execFileSync('git', ['cat-file', '--batch'], {
+    input: appRows.map(([, row]) => row.blob + '\n').join(''),
+    maxBuffer: 128 * 1024 * 1024
+  });
+  let offset = 0;
+  const inventory = {};
+  for (const [path, row] of appRows) {
+    const end = blobs.indexOf(10, offset),
+      header = blobs.subarray(offset, end).toString('ascii');
+    const match = /^([a-f0-9]{40}) blob (\d+)$/.exec(header);
+    if (!match || match[1] !== row.blob)
+      throw new Error('First recharge application blob is unavailable');
+    const size = Number(match[2]),
+      begin = end + 1;
+    if (
+      !Number.isSafeInteger(size) ||
+      size < 0 ||
+      size > 8 * 1024 * 1024 ||
+      blobs[begin + size] !== 10
+    )
+      throw new Error('First recharge application blob is invalid');
+    inventory[path] = {
+      mode: row.mode,
+      sha256: firstRechargeNewBaseDigest(blobs.subarray(begin, begin + size))
+    };
+    offset = begin + size + 1;
+  }
+  if (offset !== blobs.length) throw new Error('Unexpected first recharge application blob output');
+  const historicalManifest = manifest(b.historical),
+    sourceManifest = manifest(b.source);
+  return {
+    templateTree: git('rev-parse', `${b.template}^{tree}`),
+    sourceTree: git('rev-parse', `${b.source}^{tree}`),
+    historicalTree: git('rev-parse', `${b.historical}^{tree}`),
+    templateManifest: manifest(b.template),
+    currentManifest: raw,
+    historicalManifest,
+    applicationCount: appRows.length,
+    applicationInputSha256: firstRechargeNewBaseDigest(JSON.stringify(inventory)),
+    currentApplicationManifest: app(raw),
+    sourceApplicationManifest: app(sourceManifest),
+    historicalApplicationManifest: app(historicalManifest),
+    contract: read(currentTree, firstRechargeNewBaseContract),
+    files: Object.fromEntries(
+      [firstRechargeNewBaseScope, firstRechargeNewBaseTest, ...Object.keys(b.fixtureHashes)].map(
+        (path) => [path, read(currentTree, path)]
+      )
+    )
+  };
+}
+
+export function firstRechargeNewBaseContextMatches(repo, event, mode, eventName) {
+  const p = firstRechargeBusinessBinding,
+    b = firstRechargeNewBaseBinding,
+    pr = event?.pull_request;
+  return (
+    eventName === 'pull_request' &&
+    repo === p.repository &&
+    mode === 'recharge' &&
+    pr?.number === p.pullRequest &&
+    pr.head?.ref === p.branch &&
+    pr.head.repo?.full_name === p.repository &&
+    pr.base?.sha === b.base &&
+    pr.base.ref === 'main' &&
+    /^[a-f0-9]{40}$/.test(pr.head.sha || '')
+  );
+}
+export function firstRechargeNewBasePathsMatch(paths) {
+  const b = firstRechargeNewBaseBinding;
+  return (
+    Array.isArray(paths) &&
+    paths.length === b.currentDiffCount &&
+    paths.every((p) => typeof p === 'string' && !p.includes('\n')) &&
+    firstRechargeNewBaseDigest(paths.join('\n') + '\n') === b.currentDiffSha256
+  );
+}
+function firstRechargeNewBaseQualification(repo, event, mode, paths, currentTree) {
+  if (
+    !firstRechargeNewBaseContextMatches(repo, event, mode, process.env.GITHUB_EVENT_NAME) ||
+    !firstRechargeNewBasePathsMatch(paths)
+  )
+    return undefined;
+  const b = firstRechargeNewBaseBinding,
+    pr = event.pull_request;
+  if (
+    currentTree !== git('rev-parse', 'HEAD^{tree}') ||
+    process.env.GITHUB_SHA !== git('rev-parse', 'HEAD') ||
+    git('show', '-s', '--format=%P', 'HEAD') !== [b.base, pr.head.sha].join(' ') ||
+    git('merge-tree', '--write-tree', b.base, pr.head.sha).split('\n')[0] !== currentTree
+  )
+    return undefined;
+  const snapshot = readFirstRechargeNewBaseSourceSnapshot(currentTree);
+  return hasFirstRechargeNewBaseSourceProof(snapshot) ? snapshot : undefined;
+}
+export function isFirstRechargeNewBaseOnlineBuildInapplicable(
+  repo,
+  event,
+  mode,
+  paths,
+  currentTree
+) {
+  return Boolean(firstRechargeNewBaseQualification(repo, event, mode, paths, currentTree));
+}
+export function firstRechargeOnlineBuildRequired(repo, event, mode, paths, currentTree) {
+  return (
+    needsOnlineRechargeCiBuild(paths) &&
+    !isFirstRechargeNewBaseOnlineBuildInapplicable(repo, event, mode, paths, currentTree)
+  );
+}
+export function reuseFirstRechargeCurrent(repo, event, mode, currentTree) {
+  return (
+    reuseFirstRechargeNewBaseNative(repo, event, mode, currentTree) ||
+    reuseFirstRechargeBusiness(repo, event, mode, currentTree)
+  );
+}
+export function validateFirstRechargeNewBaseNative({ sourceUnchanged, business, connector } = {}) {
+  if (sourceUnchanged !== true) return undefined;
+  const adminApi = validateFirstRechargeBusinessNative(business),
+    worker = validateFirstRechargeConnectorNative(connector);
+  return adminApi && worker ? [...adminApi, worker] : undefined;
+}
+export function reuseFirstRechargeNewBaseNative(repo, event, mode, currentTree) {
+  if (!firstRechargeNewBaseContextMatches(repo, event, mode, process.env.GITHUB_EVENT_NAME))
+    return undefined;
+  const b = firstRechargeNewBaseBinding,
+    p = firstRechargeBusinessBinding,
+    c = firstRechargeConnectorBinding;
+  const paths = git('diff', '--name-only', b.base, currentTree).split('\n').filter(Boolean);
+  const qualification = firstRechargeNewBaseQualification(repo, event, mode, paths, currentTree);
+  if (!qualification) return undefined;
+  const read = (revision, path) =>
+    execFileSync('git', ['show', `${revision}:${path}`], { encoding: 'utf8' });
+  const modeOf = (revision, path) => git('ls-tree', revision, '--', path).split(/\s+/)[0];
+  const historicalProof = (tree) =>
+    Object.fromEntries(
+      [
+        '.github/workflows/quality.yml',
+        'scripts/ci-recharge-check.mjs',
+        firstRechargeNewBaseScope
+      ].map((path) => [
+        path,
+        {
+          before: read(tree, path),
+          after: read(b.historicalTree, path),
+          beforeMode: modeOf(tree, path),
+          afterMode: modeOf(b.historicalTree, path)
+        }
+      ])
+    );
+  const input = (binding, sourceUnchanged, readFacts) => {
+    ensureCommit(binding.checkout);
+    const changed = git('diff', '--name-only', binding.tree, b.historicalTree)
+      .split('\n')
+      .filter(Boolean);
+    return {
+      run: gh(`repos/${repo}/actions/runs/${binding.run}`),
+      jobs: gh(
+        `repos/${repo}/actions/runs/${binding.run}/attempts/${binding.attempt}/jobs?per_page=100`
+      ).jobs,
+      checkout: gh(`repos/${repo}/git/commits/${binding.checkout}`),
+      facts: readFacts(),
+      changed,
+      sourceUnchanged,
+      modesUnchanged: changed.every(
+        (path) =>
+          ['100644', '100755'].includes(modeOf(binding.tree, path)) &&
+          modeOf(binding.tree, path) === modeOf(b.historicalTree, path)
+      ),
+      reconstructedTree:
+        git('rev-parse', `${binding.checkout}^{tree}`) === binding.tree &&
+        git('show', '-s', '--format=%P', binding.checkout) ===
+          [binding.base, binding.head].join(' ')
+          ? git('merge-tree', '--write-tree', binding.base, binding.head).split('\n')[0]
+          : undefined,
+      currentEnvironment: onlineComponentGuardCurrentEnvironment()
+    };
+  };
+  ensureCommit(p.checkout);
+  ensureCommit(c.checkout);
+  const business = input(p, firstRechargeBusinessSourceUnchanged(historicalProof(p.tree)), () =>
+    Object.fromEntries(
+      ['admin', 'api'].map((part) => [
+        part,
+        firstRechargeBusinessRawLogFacts(readFirstRechargeBusinessRawLog(part), part)
+      ])
+    )
+  );
+  const connector = input(c, firstRechargeConnectorSourceUnchanged(historicalProof(c.tree)), () =>
+    firstRechargeConnectorRawLogFacts(readFirstRechargeConnectorRawLog())
+  );
+  const evidence = validateFirstRechargeNewBaseNative({
+    sourceUnchanged: true,
+    business,
+    connector
+  });
+  if (!evidence)
+    throw new Error(
+      'Original first recharge native evidence or finite new-base input proof is unavailable'
+    );
+  return evidence.map((row) => ({
+    ...row,
+    inputSha256: b.applicationInputSha256,
+    source: b.source,
+    sourceTree: b.sourceTree,
+    qualification: 'finite-first-recharge-c7a-native'
+  }));
+}
+// END finite first-recharge PR477 fff continuation
+
 async function main() {
   const repo = process.env.GITHUB_REPOSITORY;
   const event = JSON.parse(readFileSync(process.env.GITHUB_EVENT_PATH, 'utf8'));
@@ -3905,7 +4359,7 @@ async function main() {
         'No successful PR evidence matches the merged source tree; stop instead of repeating checks'
       );
   } else if (process.env.GITHUB_EVENT_NAME === 'pull_request' && mode === 'recharge') {
-    for (const row of reuseFirstRechargeBusiness(repo, event, mode, currentTree) || []) {
+    for (const row of reuseFirstRechargeCurrent(repo, event, mode, currentTree) || []) {
       reused.add(row.part);
       evidence.push(row);
     }
@@ -3961,7 +4415,7 @@ async function main() {
           : mode === 'mailbox'
             ? ['guards', 'admin', 'api']
             : selectedParts(paths);
-  const onlineCiBuild = needsOnlineRechargeCiBuild(paths);
+  const onlineCiBuild = firstRechargeOnlineBuildRequired(repo, event, mode, paths, currentTree);
   const result = {
     mode,
     reuseMain,

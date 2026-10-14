@@ -162,6 +162,15 @@ import {
   canReuseCombinedAdminSource,
   combinedDispatcherBytesUnchanged,
   combinedQualityWorkflowBytesUnchanged,
+  firstRechargeNewBaseBinding,
+  firstRechargeNewBaseScopeBytesUnchanged,
+  readFirstRechargeNewBaseSourceSnapshot,
+  hasFirstRechargeNewBaseSourceProof,
+  firstRechargeNewBaseContextMatches,
+  firstRechargeNewBasePathsMatch,
+  validateFirstRechargeNewBaseNative,
+  firstRechargeOnlineBuildRequired,
+  reuseFirstRechargeNewBaseNative,
   firstRechargeBusinessBinding,
   firstRechargeBusinessQualityBytesUnchanged,
   firstRechargeBusinessSourceUnchanged,
@@ -1957,7 +1966,7 @@ test('the fixed recovery policy and grant test are bounded controls and never au
     );
   }
   for (const path of [
-    'apps/api/src/id-business-v2/online-recharge/online-recharge.service.ts',
+    'apps/api/src/id-business-v2/online-recharge/worker.service.ts',
     'apps/admin/src/v2/features/online-recharge/OnlineResourceView.vue',
     'apps/api/src/auth/auth.service.ts',
     'apps/api/prisma-mysql/schema.prisma'
@@ -4726,7 +4735,11 @@ function firstRechargeBusinessSnapshot() {
         before: execFileSync('git', ['show', firstRechargeBusinessBinding.tree + ':' + path], {
           encoding: 'utf8'
         }),
-        after: readFileSync(path, 'utf8'),
+        after: execFileSync(
+          'git',
+          ['show', firstRechargeNewBaseBinding.historicalTree + ':' + path],
+          { encoding: 'utf8' }
+        ),
         beforeMode: '100644',
         afterMode: '100644'
       }
@@ -5085,7 +5098,11 @@ test('first-recharge connector keeps dispatcher quality and all outside-block sc
         before: execFileSync('git', ['show', firstRechargeConnectorBinding.tree + ':' + path], {
           encoding: 'utf8'
         }),
-        after: readFileSync(path, 'utf8'),
+        after: execFileSync(
+          'git',
+          ['show', firstRechargeNewBaseBinding.historicalTree + ':' + path],
+          { encoding: 'utf8' }
+        ),
         beforeMode: '100644',
         afterMode: '100644'
       }
@@ -5241,4 +5258,331 @@ test('first-recharge connector operational reuse stops at unavailable original r
     false
   );
   assert.equal(reuseFirstRechargeConnector('other/repo', undefined, 'recharge', b.tree), undefined);
+});
+
+// This candidate contains only the reviewed current-base control repair. Full
+// source bytes travel as JS values or stdin; never a large argv or env entry.
+let firstRechargeNewBaseWorking;
+function firstRechargeNewBaseWorkingSnapshot() {
+  if (!firstRechargeNewBaseWorking) {
+    const b = firstRechargeNewBaseBinding;
+    const value = readFirstRechargeNewBaseSourceSnapshot(b.templateTree);
+    for (const path of ['scripts/ci-recharge-scope.mjs', 'scripts/ci-recharge-scope.test.mjs']) {
+      const bytes = readFileSync(path, 'utf8');
+      value.files[path] = bytes;
+      const blob = createHash('sha1')
+        .update('blob ' + Buffer.byteLength(bytes) + '\0')
+        .update(bytes)
+        .digest('hex');
+      value.currentManifest = value.currentManifest
+        .split('\0')
+        .map((row) => (row.endsWith('\t' + path) ? '100644 blob ' + blob + '\t' + path : row))
+        .join('\0');
+    }
+    firstRechargeNewBaseWorking = value;
+  }
+  return structuredClone(firstRechargeNewBaseWorking);
+}
+function firstRechargeNewBaseEvent() {
+  const b = firstRechargeBusinessBinding,
+    n = firstRechargeNewBaseBinding;
+  return {
+    pull_request: {
+      number: b.pullRequest,
+      head: { ref: b.branch, sha: 'a'.repeat(40), repo: { full_name: b.repository } },
+      base: { sha: n.base, ref: 'main' }
+    }
+  };
+}
+function firstRechargeNewBasePaths() {
+  const b = firstRechargeNewBaseBinding;
+  return execFileSync('git', ['diff', '--name-only', b.base, b.template], { encoding: 'utf8' })
+    .trim()
+    .split('\n');
+}
+
+test('current-base first recharge proof certifies the complete 2192-file source and exact inverse tree', () => {
+  const b = firstRechargeNewBaseBinding,
+    snapshot = firstRechargeNewBaseWorkingSnapshot();
+  assert.equal(hasFirstRechargeNewBaseSourceProof(snapshot), true);
+  assert.equal(snapshot.applicationCount, 2192);
+  assert.equal(snapshot.applicationInputSha256, b.applicationInputSha256);
+  assert.equal(snapshot.currentApplicationManifest, snapshot.sourceApplicationManifest);
+  assert.equal(snapshot.currentApplicationManifest, snapshot.historicalApplicationManifest);
+  assert.equal(firstRechargeNewBasePathsMatch(firstRechargeNewBasePaths()), true);
+  assert.equal(
+    firstRechargeNewBaseScopeBytesUnchanged(snapshot.files['scripts/ci-recharge-scope.mjs']),
+    true
+  );
+  for (const [path, pin] of Object.entries(b.fixtureHashes))
+    assert.equal(createHash('sha256').update(snapshot.files[path]).digest('hex'), pin);
+  assert.equal(hasFirstRechargeNewBaseSourceProof(), false);
+});
+
+test('current-base first recharge proof rejects any altered path blob mode source or contract', () => {
+  const original = firstRechargeNewBaseWorkingSnapshot();
+  for (const change of [
+    (v) => (v.templateTree = '0'.repeat(40)),
+    (v) => (v.sourceTree = '0'.repeat(40)),
+    (v) => (v.historicalTree = '0'.repeat(40)),
+    (v) => (v.templateManifest += '100644 blob ' + 'a'.repeat(40) + '\tunexpected\0'),
+    (v) => (v.historicalManifest = v.historicalManifest.replace('100644', '100755')),
+    (v) => (v.currentManifest += '100644 blob ' + 'a'.repeat(40) + '\tunknown-control.py\0'),
+    (v) => (v.currentManifest = v.currentManifest.replace('100644', '100755')),
+    (v) => (v.currentManifest = v.currentManifest.replace(/[a-f0-9]{40}/, '0'.repeat(40))),
+    (v) => (v.currentManifest = v.currentManifest.split('\0').slice(1).join('\0')),
+    (v) => (v.currentManifest += v.currentManifest.split('\0')[0] + '\0'),
+    (v) => (v.applicationCount = 2191),
+    (v) => (v.applicationInputSha256 = '0'.repeat(64)),
+    (v) => (v.currentApplicationManifest += 'unknown\0'),
+    (v) => (v.sourceApplicationManifest += 'unknown\0'),
+    (v) => (v.historicalApplicationManifest += 'unknown\0'),
+    (v) => (v.contract += '\n'),
+    (v) => (v.contract = v.contract.replace('301f9e75', '00000000')),
+    (v) => (v.files['scripts/ci-recharge-scope.test.mjs'] += '\n'),
+    ...Object.keys(firstRechargeNewBaseBinding.fixtureHashes).map(
+      (path) => (v) => (v.files[path] += '\n')
+    )
+  ]) {
+    const value = structuredClone(original);
+    change(value);
+    assert.equal(hasFirstRechargeNewBaseSourceProof(value), false, change.toString());
+  }
+  for (const path of [
+    'apps/api/package.json',
+    'apps/admin/Dockerfile',
+    'package-lock.json',
+    'apps/api/prisma-mysql/schema.prisma',
+    'apps/api/src/id-business-v2/online-recharge/worker.service.ts',
+    'scripts/production-release/online-recharge-component-consumer.py',
+    'scripts/production-release/online-recharge-component-diagnostic.py',
+    '.github/workflows/quality.yml',
+    'scripts/ci-recharge-check.mjs'
+  ]) {
+    const row = original.currentManifest.split('\0').find((row) => row.endsWith('\t' + path));
+    assert.ok(row, path);
+    const value = structuredClone(original);
+    value.currentManifest = value.currentManifest.replace(
+      row,
+      row.replace(/[a-f0-9]{40}/, '0'.repeat(40))
+    );
+    assert.equal(hasFirstRechargeNewBaseSourceProof(value), false, path);
+  }
+});
+
+test('current-base finite scope has exactly one native hook and retains every old dispatch byte', () => {
+  const source = firstRechargeNewBaseWorkingSnapshot().files['scripts/ci-recharge-scope.mjs'];
+  for (const after of [
+    source + '\n',
+    source.replace(
+      'export function adminCheckCommands',
+      'export function changedAdminCheckCommands'
+    ),
+    source.replace(
+      '\n    for (const row of reuseFirstRechargeCurrent',
+      '\n    for (const row of reuseFirstRechargeBusiness'
+    ),
+    source.replace(
+      '\n  const onlineCiBuild = firstRechargeOnlineBuildRequired',
+      '\n  const onlineCiBuild = needsOnlineRechargeCiBuild'
+    ),
+    source.replaceAll('reused.add(row.part);', 'reused.add("guards");'),
+    source.replace(
+      'export function reuseFirstRechargeNewBaseNative',
+      'export function maliciousReplacement'
+    ),
+    source.replace(/scopeTestSha256: '[a-f0-9]{64}'/, "scopeTestSha256: '" + '0'.repeat(64) + "'"),
+    source + source
+  ])
+    assert.equal(firstRechargeNewBaseScopeBytesUnchanged(after), false);
+  const start = '// BEGIN finite first-recharge PR477 business continuation\n',
+    end = '// END finite first-recharge PR477 business continuation\n';
+  const old = execFileSync(
+    'git',
+    ['show', firstRechargeNewBaseBinding.template + ':scripts/ci-recharge-scope.mjs'],
+    { encoding: 'utf8' }
+  );
+  const extract = (s) => s.slice(s.indexOf(start), s.indexOf(end) + end.length);
+  assert.equal(extract(source), extract(old));
+});
+
+test('current-base qualification accepts only PR477 exact repository branch main base and fixed path set', () => {
+  const b = firstRechargeBusinessBinding,
+    event = firstRechargeNewBaseEvent(),
+    paths = firstRechargeNewBasePaths();
+  assert.equal(
+    firstRechargeNewBaseContextMatches(b.repository, event, 'recharge', 'pull_request'),
+    true
+  );
+  for (const [repo, value, mode, name] of [
+    [b.repository, event, 'recharge', 'push'],
+    ['fork/repo', event, 'recharge', 'pull_request'],
+    [b.repository, event, 'full', 'pull_request'],
+    [b.repository, event, 'ci-only', 'pull_request'],
+    [b.repository, undefined, 'recharge', 'pull_request']
+  ])
+    assert.equal(firstRechargeNewBaseContextMatches(repo, value, mode, name), false);
+  for (const mutate of [
+    (v) => v.pull_request.number++,
+    (v) => (v.pull_request.head.ref = 'other'),
+    (v) => (v.pull_request.head.sha = 'bad'),
+    (v) => (v.pull_request.head.repo.full_name = 'fork/repo'),
+    (v) => (v.pull_request.base.sha = firstRechargeBusinessBinding.currentBase),
+    (v) => (v.pull_request.base.sha = 'fff7b257fa402e14da5d9aa43aa4ea22095695c5'),
+    (v) => (v.pull_request.base.ref = 'release')
+  ]) {
+    const value = structuredClone(event);
+    mutate(value);
+    assert.equal(
+      firstRechargeNewBaseContextMatches(b.repository, value, 'recharge', 'pull_request'),
+      false
+    );
+  }
+  for (const value of [
+    [],
+    [...paths, 'package-lock.json'],
+    paths.slice(1),
+    [...paths].reverse(),
+    [...paths.slice(1), paths[0]],
+    paths.map((p, i) => (i === 0 ? p + '\n' : p))
+  ])
+    assert.equal(firstRechargeNewBasePathsMatch(value), false);
+  // An unmatched request keeps the existing sealed ONLINE build gate enabled.
+  assert.equal(
+    firstRechargeOnlineBuildRequired(
+      'other/repo',
+      event,
+      'recharge',
+      paths,
+      firstRechargeNewBaseBinding.templateTree
+    ),
+    true
+  );
+  assert.equal(
+    reuseFirstRechargeNewBaseNative(
+      'other/repo',
+      event,
+      'recharge',
+      firstRechargeNewBaseBinding.templateTree
+    ),
+    undefined
+  );
+});
+
+test('current-base reuse keeps three fixed successful jobs separate from failed overall runs', () => {
+  const value = {
+    sourceUnchanged: true,
+    business: syntheticFirstRechargeBusinessNative(),
+    connector: syntheticFirstRechargeConnectorNative()
+  };
+  const proof = validateFirstRechargeNewBaseNative(value);
+  assert.deepEqual(
+    proof.map((row) => row.part),
+    ['admin', 'api', 'connector']
+  );
+  assert.deepEqual(
+    proof.map((row) => row.testsPassed),
+    [525, 817, 797]
+  );
+  assert.equal(
+    proof.some((row) => ['guards', 'security', 'quality', 'migration'].includes(row.part)),
+    false
+  );
+  for (const mutate of [
+    (v) => (v.sourceUnchanged = false),
+    (v) => (v.sourceUnchanged = 'true'),
+    (v) => (v.business.run.conclusion = 'success'),
+    (v) => (v.connector.run.conclusion = 'success'),
+    (v) => (v.business.facts.api.sha256 = '0'.repeat(64)),
+    (v) => (v.connector.facts.sha256 = '0'.repeat(64)),
+    (v) => (v.connector.jobs[0].steps[0].conclusion = 'skipped'),
+    (v) => (v.business.currentEnvironment.platform = 'darwin')
+  ]) {
+    const changed = structuredClone(value);
+    mutate(changed);
+    assert.equal(validateFirstRechargeNewBaseNative(changed), undefined, mutate.toString());
+  }
+  assert.equal(validateFirstRechargeNewBaseNative(), undefined);
+});
+
+test('current-base operational reader uses stdin source snapshots and stops at unavailable native raw bytes', () => {
+  const b = firstRechargeNewBaseBinding,
+    p = firstRechargeBusinessBinding;
+  const payload = {
+    snapshot: firstRechargeNewBaseWorkingSnapshot(),
+    paths: firstRechargeNewBasePaths(),
+    event: firstRechargeNewBaseEvent()
+  };
+  payload.event.pull_request.head.sha = 'e'.repeat(40);
+  const script = `
+    import childProcess from 'node:child_process';
+    import fs from 'node:fs';
+    import {syncBuiltinESMExports} from 'node:module';
+    const payload=JSON.parse(fs.readFileSync(0,'utf8')),original=childProcess.execFileSync,calls=[];
+    const tree='f'.repeat(40),commit='d'.repeat(40),head='e'.repeat(40);
+    childProcess.execFileSync=(file,args,options)=>{
+      calls.push({file,args});
+      if(file==='git') {
+        if(args[0]==='cat-file' && args[1]==='-e' && ['${p.checkout}','${firstRechargeConnectorBinding.checkout}'].includes(args[2])) return '';
+        if(args[0]==='fetch') throw new Error('Unexpected network fetch in reader fixture');
+        if(args[0]==='rev-parse' && args[1]==='HEAD^{tree}') return tree;
+        if(args[0]==='rev-parse' && args[1]==='HEAD') return commit;
+        if(args[0]==='show' && args[1]==='-s' && args.at(-1)==='HEAD') return '${b.base} '+head;
+        if(args[0]==='merge-tree' && args[2]==='${b.base}' && args[3]===head) return tree+'\\n';
+        if(args[0]==='diff' && args.at(-1)===tree) return payload.paths.join('\\n')+'\\n';
+        if(args[0]==='ls-tree' && args.includes('-rz') && args.at(-1)===tree) return payload.snapshot.currentManifest;
+        if(args[0]==='show' && args[1].startsWith(tree+':')) {
+          const path=args[1].slice(41);
+          return path==='scripts/production-release/first-recharge-successor-contract.json'?payload.snapshot.contract:payload.snapshot.files[path];
+        }
+        return original(file,args,options);
+      }
+      if(file==='gh' && args[0]==='api') {
+        if(args.at(-1).endsWith('/logs')) throw new Error('SYNTHETIC_CURRENT_BASE_NATIVE_LOG_UNAVAILABLE');
+        return JSON.stringify(args.at(-1).includes('/jobs?')?{jobs:[]}:{});
+      }
+      throw new Error('Unexpected command in bounded reader');
+    };
+    syncBuiltinESMExports();
+    process.env.GITHUB_SHA=commit;process.env.GITHUB_EVENT_NAME='pull_request';
+    const {reuseFirstRechargeNewBaseNative,firstRechargeBusinessBinding:p}=await import('./scripts/ci-recharge-scope.mjs');
+    let error;try {reuseFirstRechargeNewBaseNative(p.repository,payload.event,'recharge',tree);} catch(e) {error=e.message;}
+    process.stdout.write(JSON.stringify({calls,error}));`;
+  const result = JSON.parse(
+    execFileSync(process.execPath, ['--input-type=module', '-e', script], {
+      cwd: root,
+      encoding: 'utf8',
+      input: JSON.stringify(payload),
+      maxBuffer: 4 * 1024 * 1024
+    })
+  );
+  assert.equal(result.error, 'SYNTHETIC_CURRENT_BASE_NATIVE_LOG_UNAVAILABLE');
+  const nativeCalls = result.calls.filter((row) => row.file === 'gh');
+  assert.deepEqual(
+    nativeCalls.map((row) => row.args),
+    [
+      ['api', `repos/${p.repository}/actions/runs/${p.run}`],
+      [
+        'api',
+        `repos/${p.repository}/actions/runs/${p.run}/attempts/${p.attempt}/jobs?per_page=100`
+      ],
+      ['api', `repos/${p.repository}/git/commits/${p.checkout}`],
+      ['api', '--allow-escape-sequences', `repos/${p.repository}/actions/jobs/${p.admin.job}/logs`]
+    ]
+  );
+  for (const checkout of [p.checkout, firstRechargeConnectorBinding.checkout]) {
+    const available = result.calls.findIndex(
+      (row) => row.file === 'git' && row.args.join(' ') === 'cat-file -e ' + checkout
+    );
+    const historicalRead = result.calls.findIndex(
+      (row) => row.file === 'git' && row.args[0] === 'show' && row.args[1].startsWith(p.tree + ':')
+    );
+    assert.ok(available >= 0 && historicalRead > available, checkout);
+  }
+  assert.equal(
+    result.calls.some(
+      (row) => row.file === 'aws' || row.file === 'docker' || row.args.includes('download')
+    ),
+    false
+  );
 });
