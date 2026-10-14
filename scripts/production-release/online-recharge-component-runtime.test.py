@@ -1,10 +1,13 @@
 """Pure lifecycle tests. All controllers, containers, SQL and service calls are mocks."""
 
 import base64
+import ast
 import copy
+from contextlib import redirect_stdout
 from datetime import datetime, timezone
 import gzip
 import importlib.util
+import io
 import json
 import hashlib
 from pathlib import Path
@@ -48,6 +51,32 @@ class RuntimeTests(unittest.TestCase):
             'PluginName': 'aws:runShellScript', 'Status': status, 'ResponseCode': response,
             'StandardErrorContent': '', 'StandardOutputContent': encoded(r.wire(receipt)).decode(),
             'ExecutionStartDateTime': now, 'ExecutionEndDateTime': now})
+
+    def failed_native(self, receipt, stderr='failed to run commands: exit status 1'):
+        native = json.loads(self.native(receipt, response=1, status='Failed'))
+        native.update(StandardErrorContent=stderr, StandardErrorUrl='', StandardOutputUrl='',
+            DocumentVersion='$DEFAULT', Comment='synthetic public failed fixture',
+            StatusDetails='Failed', ExecutionElapsedTime='PT0.100S',
+            CloudWatchOutputConfig={'CloudWatchOutputEnabled': False, 'CloudWatchLogGroupName': ''})
+        return encoded(native)
+
+    def rejected_receipt(self):
+        return {'version': 1, 'scope': r.SCOPE, 'kind': r.KIND,
+            'status': 'ONLINE_RECHARGE_COMPONENT_REJECTED', 'code': 'ONLINE_RECHARGE_COMPONENT_TYPE_ERROR'}
+
+    def call_rejected_main(self, error):
+        # Execute the real main handler with only cli replaced; no controller,
+        # network, database or filesystem operation belongs to this fixture.
+        source = HERE / 'online-recharge-component-runtime.py'
+        main = ast.parse(source.read_bytes()).body[-1]
+        self.assertIsInstance(main, ast.If)
+        output = io.StringIO()
+        with patch.dict(r.__dict__, __name__='__main__'), \
+             patch.object(r, 'cli', side_effect=error), redirect_stdout(output), \
+             self.assertRaises(SystemExit) as ended:
+            exec(compile(ast.Module(body=[main], type_ignores=[]), str(source), 'exec'), r.__dict__)
+        self.assertEqual(ended.exception.code, 1)
+        return output.getvalue()
 
     def private_prepare_fixture(self, directory):
         # Original frozen private I/O is real. Source transport, acceptance,
@@ -192,6 +221,133 @@ class RuntimeTests(unittest.TestCase):
                 bad = json.loads(raw); bad[field] = value
                 with self.assertRaises(RuntimeError):
                     r.validate_component_invocation(core, encoded(bad), native['CommandId'], self.auth['instanceId'])
+
+    def test_failed_ssm_annotation_keeps_complete_actual_native_and_raw_hash(self):
+        core = r.c.load_core(self.auth['coreSha256'])
+        raw = self.failed_native(self.rejected_receipt()); original = bytes(raw)
+        before_sha = r.c.digest(raw); native = core.closed_json(raw)
+        with self.seal(), self.enabled():
+            with self.assertRaisesRegex(RuntimeError, 'UNPUBLISHED_COMPONENT_INVOCATION_INVALID'):
+                core.validate_invocation(raw, native['CommandId'], native['InstanceId'], status='Failed')
+            with patch.object(core, 'validate_invocation', wraps=core.validate_invocation) as validate:
+                result, receipt = r.validate_component_invocation(core, raw,
+                    native['CommandId'], native['InstanceId'], status='Failed')
+                checked = core.closed_json(validate.call_args.args[0])
+                self.assertEqual(checked, {**native, 'StandardErrorContent': ''})
+                self.assertNotEqual(validate.call_args.args[0], raw)
+            self.assertEqual(result, native); self.assertEqual(receipt, self.rejected_receipt())
+            self.assertEqual(result['StandardErrorContent'], 'failed to run commands: exit status 1')
+            client = r.load('online-recharge-component-readonly.py')
+            with patch.object(client, 'r', r):
+                failure = client.validate_failure_native(core, raw, self.p, native['CommandId'], native['InstanceId'])
+            self.assertEqual(failure['receipt'], receipt)
+            self.assertEqual(failure['invocationBytesSha256'], before_sha)
+            self.assertEqual(base64.b64decode(failure['invocationRawBase64'], validate=True), original)
+            self.assertIs(failure['automaticRetryAllowed'], False)
+        self.assertEqual(raw, original); self.assertEqual(r.c.digest(raw), before_sha)
+
+    def test_failed_annotation_does_not_relax_frozen_identity_status_urls_time_or_wire(self):
+        core = r.c.load_core(self.auth['coreSha256'])
+        raw = self.failed_native(self.rejected_receipt()); native = core.closed_json(raw)
+        fields = (('CommandId', '00000000-2222-3333-4444-555555555555'),
+            ('InstanceId', 'i-00000000000000000'), ('DocumentName', 'other'), ('PluginName', 'other'),
+            ('Status', 'Success'), ('Status', 'InProgress'), ('ResponseCode', 0), ('ResponseCode', 2),
+            ('ResponseCode', True), ('StandardOutputUrl', 'https://synthetic.invalid/output'),
+            ('StandardErrorUrl', 'https://synthetic.invalid/error'), ('ExecutionStartDateTime', None),
+            ('ExecutionStartDateTime', '9999-12-31T00:00:00Z'),
+            ('ExecutionEndDateTime', '9999-12-31T00:00:00Z'),
+            ('ExecutionEndDateTime', '2000-01-01T00:00:00Z'),
+            ('StandardOutputContent', None), ('StandardOutputContent', ''),
+            ('StandardOutputContent', 'x' * 24000))
+        with self.seal(), self.enabled():
+            for field, value in fields:
+                bad = {**native, field: value}
+                with self.subTest(field=field, value=value if type(value) is not str else value[:40]), \
+                     self.assertRaises(RuntimeError):
+                    r.validate_component_invocation(core, encoded(bad), native['CommandId'], native['InstanceId'], status='Failed')
+            for field, value in (('payloadSha256', '0' * 64), ('decodedLength', True),
+                                ('decodedLength', 1), ('kind', 'OLD_B'), ('extra', 'x')):
+                bad = copy.deepcopy(native); envelope = json.loads(bad['StandardOutputContent'])
+                envelope[field] = value; bad['StandardOutputContent'] = encoded(envelope).decode()
+                with self.subTest(wire=field), self.assertRaises(RuntimeError):
+                    r.validate_component_invocation(core, encoded(bad), native['CommandId'], native['InstanceId'], status='Failed')
+            bad = copy.deepcopy(native)
+            bad['StandardOutputContent'] = encoded(r.wire({**self.rejected_receipt(), 'scope': 'other'})).decode()
+            with self.assertRaisesRegex(RuntimeError, 'WIRE_RECEIPT_CHANGED'):
+                r.validate_component_invocation(core, encoded(bad), native['CommandId'], native['InstanceId'], status='Failed')
+            for malformed in (b'{"CommandId":"first",' + raw[1:], b'[]', b'{', raw + b' ' * (128 * 1024)):
+                with self.subTest(malformed=len(malformed)), self.assertRaises((RuntimeError, ValueError)):
+                    r.validate_component_invocation(core, malformed, native['CommandId'], native['InstanceId'], status='Failed')
+
+    def test_only_exact_failed_annotation_is_accepted_and_success_stays_empty_stderr(self):
+        core = r.c.load_core(self.auth['coreSha256']); receipt = self.rejected_receipt()
+        with self.seal(), self.enabled():
+            for stderr in ('failed to run commands: exit status 1\n', 'failed to run commands: exit status 1\r\n',
+                ' failed to run commands: exit status 1', 'failed to run commands: exit status 2',
+                'failed to run commands: exit status 1 secret', 'private secret', None, True):
+                raw = self.failed_native(receipt, stderr); native = core.closed_json(raw)
+                with self.subTest(stderr=stderr), self.assertRaises(RuntimeError):
+                    r.validate_component_invocation(core, raw, native['CommandId'], native['InstanceId'], status='Failed')
+            raw = self.failed_native(receipt, ''); native = core.closed_json(raw)
+            result, actual = r.validate_component_invocation(core, raw,
+                native['CommandId'], native['InstanceId'], status='Failed')
+            self.assertEqual((result, actual), (native, receipt))
+            success = core.closed_json(self.native(receipt))
+            success['StandardErrorContent'] = 'failed to run commands: exit status 1'
+            with self.assertRaisesRegex(RuntimeError, 'INVOCATION_INVALID'):
+                r.validate_component_invocation(core, encoded(success), success['CommandId'], success['InstanceId'])
+
+    def test_rejection_code_preserves_only_plain_single_allowed_runtime_code(self):
+        for code in ('ONLINE_RECHARGE_COMPONENT_WIRE_INVALID', 'ONLINE_RECHARGE_AUDIT_REJECTED',
+                     'API_ADMIN_CONTENT_INVALID', 'UNPUBLISHED_COMPONENT_INVOCATION_INVALID'):
+            self.assertEqual(r.rejection_code(RuntimeError(code)), code)
+        for error in (RuntimeError('private secret'), RuntimeError(), RuntimeError('API_ADMIN_OK', 'private secret'),
+                      RuntimeError('API_ADMIN_OK\nprivate secret'), RuntimeError(['API_ADMIN_OK'])):
+            self.assertEqual(r.rejection_code(error), 'ONLINE_RECHARGE_COMPONENT_PROTECTED_OPERATION_FAILED')
+
+    def test_rejection_categories_and_actual_main_emit_only_closed_codes_without_private_values(self):
+        secret = 'synthetic-private-password-token-cookie-command-url'
+        cases = (
+            (TimeoutError(secret), 'TIMEOUT'), (r.urllib.error.HTTPError(secret, 401, secret, {}, None), 'HTTP_ERROR'),
+            (r.urllib.error.URLError(secret), 'URL_ERROR'), (TypeError(secret), 'TYPE_ERROR'),
+            (KeyError(secret), 'KEY_ERROR'), (json.JSONDecodeError(secret, secret, 0), 'JSON_INVALID'),
+            (r.subprocess.TimeoutExpired([secret], 1, output=secret, stderr=secret), 'COMMAND_TIMEOUT'),
+            (r.subprocess.CalledProcessError(1, [secret], output=secret, stderr=secret), 'COMMAND_FAILED'),
+            (ValueError(secret), 'VALUE_ERROR'), (FileNotFoundError(secret), 'FILE_NOT_FOUND'),
+            (PermissionError(secret), 'PERMISSION_DENIED'), (FileExistsError(secret), 'FILE_EXISTS'),
+            (OSError(secret), 'OS_ERROR'), (ImportError(secret), 'IMPORT_ERROR'),
+            (UnicodeDecodeError('ascii', secret.encode(), 0, 1, secret), 'DECODE_ERROR'),
+            (gzip.BadGzipFile(secret), 'GZIP_INVALID'), (r.zlib.error(secret), 'ZLIB_ERROR'),
+            (Exception(secret), 'PROTECTED_OPERATION_FAILED'))
+        for error, category in cases:
+            code = 'ONLINE_RECHARGE_COMPONENT_' + category
+            with self.subTest(category=category):
+                self.assertEqual(r.rejection_code(error), code)
+                output = self.call_rejected_main(error)
+                self.assertNotIn(secret, output)
+                envelope = json.loads(output)
+                payload = r.bounded_gzip(base64.b64decode(envelope['payload'], validate=True), 256 * 1024)
+                self.assertNotIn(secret.encode(), payload)
+                self.assertEqual(json.loads(payload), {**self.rejected_receipt(), 'code': code})
+                self.assertEqual(r.c.digest(payload), envelope['payloadSha256'])
+                self.assertEqual(len(payload), envelope['decodedLength'])
+
+    def test_rejection_code_never_formats_or_reads_unknown_exception_properties(self):
+        class DangerousMeta(type):
+            def __hash__(cls): raise AssertionError('unknown exception type hashing forbidden')
+        class DangerousRuntime(RuntimeError, metaclass=DangerousMeta):
+            def __str__(self): raise AssertionError('custom exception formatting forbidden')
+            def __getattribute__(self, name):
+                if name == 'args': raise AssertionError('unknown exception args forbidden')
+                return super().__getattribute__(name)
+        class DangerousType(TypeError):
+            def __str__(self): raise AssertionError('custom exception formatting forbidden')
+        for error in (DangerousRuntime('API_ADMIN_SECRET'), DangerousType('private secret')):
+            self.assertEqual(r.rejection_code(error), 'ONLINE_RECHARGE_COMPONENT_PROTECTED_OPERATION_FAILED')
+            output = self.call_rejected_main(error)
+            payload = r.bounded_gzip(base64.b64decode(json.loads(output)['payload']), 256 * 1024)
+            self.assertEqual(json.loads(payload)['code'], 'ONLINE_RECHARGE_COMPONENT_PROTECTED_OPERATION_FAILED')
+            self.assertNotIn(b'SECRET', payload); self.assertNotIn(b'private secret', payload)
 
     def test_wire_hash_length_kind_bombs_and_concatenated_members_rejected(self):
         core = r.c.load_core(self.auth['coreSha256'])
@@ -740,11 +896,50 @@ def verify_authenticated_admin(original_directory, admin_directory):
         'actualPredecessor': authenticated['receipt']['commit'], 'runtimeAuthorityGranted': False}))
 
 
+def verify_failed_native_original(filename):
+    """Explicit read-only regression against the supplied 38511656661 original."""
+    path = Path(filename).resolve(); project = HERE.parents[1].parent.parent
+    if not path.is_relative_to(project):
+        raise RuntimeError('public fixture must stay inside this project')
+    identity = lambda p: (p.stat().st_dev, p.stat().st_ino, p.stat().st_mode,
+        p.stat().st_uid, p.stat().st_gid, p.stat().st_size, p.stat().st_mtime_ns, p.stat().st_ctime_ns)
+    before = identity(path); raw = path.read_bytes()
+    expected_sha = 'fbab049b3ee46cd48134b8e48e6d9b3055d0aea0f8eada679ef13fb49389da0c'
+    if len(raw) != 1182 or r.c.digest(raw) != expected_sha:
+        raise AssertionError('actual failed native original changed')
+    core = r.c.load_core(r.c.AUTHENTICATED_PREDECESSOR['coreSha256']); native = core.closed_json(raw)
+    if native['CommandId'] != '2768a77d-b433-4033-8576-50c82d96be77' or native['InstanceId'] != 'i-05836da38606e633c':
+        raise AssertionError('actual failed native identity changed')
+    try:
+        core.validate_invocation(raw, native['CommandId'], native['InstanceId'], status='Failed')
+    except RuntimeError as error:
+        if error.args != ('UNPUBLISHED_COMPONENT_INVOCATION_INVALID',): raise
+    else:
+        raise AssertionError('old parser unexpectedly accepted actual SSM annotation')
+    client = r.load('online-recharge-component-readonly.py')
+    with patch.object(r.c, 'SEALED_ORDINARY_COMPONENT', r.c.AUTHENTICATED_PREDECESSOR), \
+         patch.object(r.c, 'ADMIN_SUCCESSOR', r.c.AUTHENTICATED_ADMIN_SUCCESSOR), \
+         patch.object(r, 'RUNTIME_ADAPTER_READY', True), patch.object(client, 'r', r):
+        returned, receipt = r.validate_component_invocation(core, raw,
+            native['CommandId'], native['InstanceId'], status='Failed')
+        verified = client.validate_failure_native(core, raw, {}, native['CommandId'], native['InstanceId'])
+    if returned != native or verified['receipt'] != receipt or verified['invocationBytesSha256'] != expected_sha \
+            or base64.b64decode(verified['invocationRawBase64'], validate=True) != raw \
+            or path.read_bytes() != raw or identity(path) != before:
+        raise AssertionError('actual failed native original was not preserved')
+    print(json.dumps({'actualFailedNativeOriginal': 'PASS', 'oldParserRejectedExactSsmAnnotation': True,
+        'newParserAcceptedTypedRejectedWire': True, 'nativeBytesAndIdentityUnchanged': True,
+        'invocationBytesSha256': expected_sha, 'receiptStatus': receipt['status'], 'receiptCode': receipt['code'],
+        'automaticRetryAllowed': verified['automaticRetryAllowed'], 'runtimeAuthorityGranted': False}))
+
+
 if __name__ == '__main__':
     (HERE.parents[1] / '.runtime').mkdir(exist_ok=True)
     if len(sys.argv) == 3 and sys.argv[1] == '--authenticated-original-dir':
         verify_authenticated_original(sys.argv[2])
     elif len(sys.argv) == 4 and sys.argv[1] == '--authenticated-admin-dirs':
         verify_authenticated_admin(sys.argv[2], sys.argv[3])
+    elif len(sys.argv) == 3 and sys.argv[1] == '--failed-native-original':
+        verify_failed_native_original(sys.argv[2])
     else:
         unittest.main()

@@ -24,6 +24,8 @@ import {
   canResumeCombinedGuard,
   canResumeOnlineComponentGuard,
   canResumeOnlinePrepareFixGuard,
+  canResumeOnlinePreflightReceiptFixGuard,
+  onlinePreflightReceiptFixGuardCommands,
   onlinePrepareFixGuardCommands,
   readProductionDatabaseAccessSnapshot
 } from './ci-recharge-scope.mjs';
@@ -57,6 +59,14 @@ const resumeOnlinePrepareFixGuard =
   process.env.GITHUB_EVENT_NAME === 'pull_request' &&
   base === '2edb7ef92a9619e5b0e5855220c97bac29d22f60' &&
   canResumeOnlinePrepareFixGuard(base);
+const resumeOnlinePreflightReceiptFixGuard =
+  part === 'guards' &&
+  mode === 'ci-only' &&
+  process.env.GITHUB_ACTIONS === 'true' &&
+  process.env.GITHUB_REPOSITORY === 'wangchaozhuanyong/id-business-system' &&
+  process.env.GITHUB_EVENT_NAME === 'pull_request' &&
+  base === 'a9829b443fe5c0cf6f4803366d06c5f8e3357318' &&
+  canResumeOnlinePreflightReceiptFixGuard(base);
 const shared = () => npm('run', 'build', '--workspace', '@apple-business/shared');
 const onlineEngine = () => {
   const directory = 'apps/api/src/id-business-v2/online-recharge/engine/upstream';
@@ -388,6 +398,10 @@ if (part === 'guards') {
 }
 if (resumeOnlinePrepareFixGuard) {
   for (const [file, ...args] of onlinePrepareFixGuardCommands) run(file, args);
+  process.exit(0);
+}
+if (resumeOnlinePreflightReceiptFixGuard) {
+  for (const [file, ...args] of onlinePreflightReceiptFixGuardCommands) run(file, args);
   process.exit(0);
 }
 if (part === 'guards' && !resumeCombinedGuardPrefix && !resumeOnlineComponentGuardPrefix) {
