@@ -37,7 +37,7 @@
   "applicationInputCount": 2192,
   "applicationInputSha256": "bef121cc439f545aeeb40ca770827f7faa4fb24e1344171f988079d0a25b7db2",
   "businessActions": 0,
-  "businessCommit": "3b7fea251508f7ffb32cc98553bdc56790cb6e1b",
+  "businessCommit": "301f9e751dde020031a240920454060ce00a1000",
   "businessFiles": {
     "apps/admin/src/v2/features/auto-recharge/RechargeSubmission.vue": {
       "mode": "100644",
@@ -177,7 +177,7 @@
     },
     "docs/V2_TASKS.md": {
       "mode": "100644",
-      "sha256": "2c98ae9cc97a947093bca172cabb05eaa35273c74a6c4ef940547842bf5cbc59"
+      "sha256": "1eb5c44500b333ff4c63b99f3a637a12a66194e0462e3095fa86880f0325060a"
     },
     "scripts/acceptance-v2-auto-recharge.mjs": {
       "mode": "100644",
@@ -188,7 +188,7 @@
       "sha256": "f1d6c7603a57323271e07343f95301c926c3067bda7a7687d83c7dd42e0a1d74"
     }
   },
-  "businessTree": "1da5cd9e60311a45698493bf131927019d9851e8",
+  "businessTree": "2d15c4c07ea086064c5928f2336340d3f524e3a5",
   "coldHelpers": {
     "admin-pending-online-release.py": "2386ff683baac968a006034b2768659223d15e06e1b54a5af2afde75d9740109",
     "api-admin-pending-projection.py": "592aebbeb7c8605587924416b0632dc4533eacfb3305793b577db3827bbf8d78",
@@ -202,7 +202,7 @@
     "unpublished-component-successor-readonly.py": "310d6879d09a6032444c605568bd2909a3a0bf03a5e6e4ecfa79cc94bc8eeda5",
     "unpublished-component-successor.py": "930c552ee5599ea0b7014426749019e257421878c9bf49fbffdf82a07627b771"
   },
-  "contractSha256": "fbf1c5709ef9d4036f67bd2be97abdb121594bb1807d037ead0d28ce0a7faad5",
+  "contractSha256": "e3a9800b7f75078063540414b0e536c625756a562e92e8ae938611d81c2c822d",
   "migrationPerformed": false,
   "newMigrations": [],
   "onlinePublished": false,

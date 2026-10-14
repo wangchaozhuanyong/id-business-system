@@ -16,9 +16,17 @@ from unittest.mock import Mock, patch
 
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parent.parent
-BUSINESS_COMMIT = '3b7fea251508f7ffb32cc98553bdc56790cb6e1b'
-BUSINESS_TREE = '1da5cd9e60311a45698493bf131927019d9851e8'
-CONTRACT_SHA256 = 'fbf1c5709ef9d4036f67bd2be97abdb121594bb1807d037ead0d28ce0a7faad5'
+BUSINESS_COMMIT = '301f9e751dde020031a240920454060ce00a1000'
+BUSINESS_TREE = '2d15c4c07ea086064c5928f2336340d3f524e3a5'
+CONTRACT_SHA256 = 'e3a9800b7f75078063540414b0e536c625756a562e92e8ae938611d81c2c822d'
+ORIGINAL_BUSINESS_COMMIT = '3b7fea251508f7ffb32cc98553bdc56790cb6e1b'
+ORIGINAL_BUSINESS_TREE = '1da5cd9e60311a45698493bf131927019d9851e8'
+ORIGINAL_CONTRACT_SHA256 = 'fbf1c5709ef9d4036f67bd2be97abdb121594bb1807d037ead0d28ce0a7faad5'
+ORIGINAL_CONTRACT_BYTES_SHA256 = '7fef0a0bfb57a3631dda0d97108489e5f7248d4140826ac5a34871cccbb9b8fe'
+APPLICATION_SHA256 = 'bef121cc439f545aeeb40ca770827f7faa4fb24e1344171f988079d0a25b7db2'
+TASK_APPEND_BASE = '619b04c240eed836b1db76a9fe330634de1fecbf'
+TASK_APPEND_COMMIT = 'fff7b257fa402e14da5d9aa43aa4ea22095695c5'
+TASK_APPEND_SHA256 = 'c7119c9c711d4faef6d809730bf7af9123988adfd1457d2093825d4eacae30b9'
 API_COMMIT = '43c31870c9497d900491cdb19c5f61c766f3b344'
 ADMIN_COMMIT = '568e9390a304a36edba86823d5d5b31e5506763b'
 API_COLD_SEAL = '973305a109c0044194e86413a8cebfbd1dac8a7ddb741d9ffca6cfee9052e1c8'
@@ -124,6 +132,67 @@ class FirstRechargeProjectionTests(unittest.TestCase):
             self.assertEqual(self.record['contexts'][role]['baseCommit'], commit)
             self.assertEqual(self.record['contexts'][role]['baselineProjectionSha256'], seal)
 
+    def test_doc_only_refreeze_preserves_original_application_contract_and_role_outputs(self):
+        original = self.reader(self.git_archive(ORIGINAL_BUSINESS_COMMIT), ORIGINAL_BUSINESS_COMMIT)
+        self.assertEqual(self.p.source_tree(original), ORIGINAL_BUSINESS_TREE)
+        original_application = self.p.application_rows(original)
+        current_application = self.p.application_rows(self.candidate)
+        self.assertEqual(len(original_application), 2192)
+        self.assertEqual(self.p.fingerprint(original_application), APPLICATION_SHA256)
+        self.assertEqual(current_application, original_application)
+        self.assertEqual({n: self.candidate[n] for n in current_application},
+                         {n: original[n] for n in original_application})
+
+        # The frozen merge contains the actual previously approved contract;
+        # its independent raw and canonical seals retain the original scope.
+        contract_path = 'scripts/production-release/first-recharge-successor-contract.json'
+        prior_raw, prior_mode = self.candidate[contract_path]
+        self.assertEqual(prior_mode, '100644')
+        self.assertEqual(self.p.digest(prior_raw), ORIGINAL_CONTRACT_BYTES_SHA256)
+        prior = json.loads(prior_raw)
+        self.assertEqual(prior['contractSha256'], ORIGINAL_CONTRACT_SHA256)
+        self.assertEqual(self.p.fingerprint({k: v for k, v in prior.items() if k != 'contractSha256'}),
+                         ORIGINAL_CONTRACT_SHA256)
+        self.assertEqual(prior['businessCommit'], ORIGINAL_BUSINESS_COMMIT)
+        self.assertEqual(prior['businessTree'], ORIGINAL_BUSINESS_TREE)
+
+        task = 'docs/V2_TASKS.md'
+        earlier = self.reader(self.git_archive(TASK_APPEND_BASE), TASK_APPEND_BASE)[task]
+        upstream = self.reader(self.git_archive(TASK_APPEND_COMMIT), TASK_APPEND_COMMIT)[task]
+        self.assertEqual(earlier[1], '100644')
+        self.assertEqual(upstream[1], '100644')
+        self.assertTrue(upstream[0].startswith(earlier[0]))
+        suffix = upstream[0][len(earlier[0]):]
+        self.assertEqual(len(suffix), 659)
+        self.assertEqual(self.p.digest(suffix), TASK_APPEND_SHA256)
+        self.assertEqual(original[task][1], '100644')
+        self.assertEqual(self.candidate[task], (original[task][0] + suffix, '100644'))
+        self.assertEqual(set(self.spec['businessFiles']), set(prior['businessFiles']))
+        preserved = set(self.spec['businessFiles']) - {task}
+        self.assertEqual(len(preserved), 36)
+        for path in preserved:
+            with self.subTest(path=path):
+                self.assertEqual(self.candidate[path], original[path])
+                self.assertEqual(self.spec['businessFiles'][path], prior['businessFiles'][path])
+        restored = copy.deepcopy(self.spec)
+        restored['businessCommit'] = ORIGINAL_BUSINESS_COMMIT
+        restored['businessTree'] = ORIGINAL_BUSINESS_TREE
+        restored['businessFiles'][task] = prior['businessFiles'][task]
+        restored['contractSha256'] = ORIGINAL_CONTRACT_SHA256
+        self.assertEqual(restored, prior)
+        self.assertEqual(self.spec['coldHelpers'], prior['coldHelpers'])
+        self.assertEqual(self.spec['outputSeals'], prior['outputSeals'])
+        self.assertEqual(self.record['contexts'], prior['outputSeals']['contexts'])
+        self.assertEqual(self.record['outputTree'], prior['outputSeals']['outputTree'])
+        self.assertEqual(self.record['outputFilesSha256'], prior['outputSeals']['outputFilesSha256'])
+        changed_controls = {n for n in self.candidate if n.startswith(('scripts/', '.github/'))
+                            and self.candidate[n] != original.get(n)}
+        self.assertTrue(changed_controls)
+        for role in ('api', 'admin'):
+            context = {n[len(role) + 1:]: row for n, row in self.output.items() if n.startswith(role + '/')}
+            for path in changed_controls:
+                self.assertEqual(context.get(path), self.before[role].get(path), role + '/' + path)
+
     def test_only_31_role_owned_inputs_change_and_all_other_bytes_survive(self):
         self.p.verify_output(self.output, self.record)
         self.assertEqual(self.record['contexts'], self.spec['outputSeals']['contexts'])
@@ -189,7 +258,7 @@ class FirstRechargeProjectionTests(unittest.TestCase):
     def test_frozen_business_file_bytes_and_modes_are_not_wildcards(self):
         for path in ('apps/api/src/id-business-v2/auto-recharge/worker/pay.py',
                      'apps/admin/src/v2/features/auto-recharge/recharge-presentation.ts',
-                     'docs/AUTO_RECHARGE_FIRST_SUBSCRIPTION_FIXES_20261014.md'):
+                     'docs/AUTO_RECHARGE_FIRST_SUBSCRIPTION_FIXES_20261014.md', 'docs/V2_TASKS.md'):
             for files in (self.changed(path), self.changed(path, mode='100755'), self.changed(path, remove=True)):
                 with self.subTest(path=path), self.assertRaisesRegex(
                         RuntimeError, 'UNRELATED_APPLICATION_SOURCE_CHANGED|BUSINESS_SOURCE_CHANGED'):
