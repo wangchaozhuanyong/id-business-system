@@ -18,7 +18,9 @@ import os
 from pathlib import Path
 import re
 import stat
+import subprocess
 import time
+import urllib.error
 import zlib
 from types import FunctionType, ModuleType, SimpleNamespace
 
@@ -1578,7 +1580,20 @@ def wire(value):
 
 def validate_component_invocation(core, raw, command_id, instance_id, status='Success'):
     authority()
-    invocation, envelope = core.validate_invocation(raw, command_id, instance_id, status=status)
+    original = None
+    validation_raw = raw
+    if status == 'Failed':
+        original = core.closed_json(raw, 128 * 1024)
+        if original.get('StandardErrorContent') == 'failed to run commands: exit status 1':
+            core.need(original.get('Status') == 'Failed' and type(original.get('ResponseCode')) is int
+                      and original['ResponseCode'] == 1, 'INVOCATION_INVALID')
+            # AWS adds this exact annotation to an exit-1 result. Validate only a
+            # copy through the frozen empty-stderr gate; retain the actual native.
+            validation = dict(original)
+            validation['StandardErrorContent'] = ''
+            validation_raw = json.dumps(validation, sort_keys=True, separators=(',', ':'),
+                                        ensure_ascii=False, allow_nan=False).encode()
+    invocation, envelope = core.validate_invocation(validation_raw, command_id, instance_id, status=status)
     need(set(envelope) == {'version', 'kind', 'encoding', 'decodedLength', 'payloadSha256', 'payload'}
          and type(envelope['version']) is int and envelope['version'] == 1
          and envelope['kind'] == KIND + '_WIRE' and envelope['encoding'] == 'gzip-base64'
@@ -1589,7 +1604,40 @@ def validate_component_invocation(core, raw, command_id, instance_id, status='Su
     need(len(decoded) == envelope['decodedLength'] and c.digest(decoded) == envelope['payloadSha256'], 'WIRE_CHANGED')
     receipt = core.closed_json(decoded)
     need(receipt.get('kind') == KIND and receipt.get('scope') == SCOPE, 'WIRE_RECEIPT_CHANGED')
-    return invocation, receipt
+    return original if original is not None else invocation, receipt
+
+
+def rejection_code(error):
+    """Closed error categories without formatting an exception or its values."""
+    error_type = type(error)
+    if error_type is RuntimeError:
+        arguments = error.args
+        if len(arguments) == 1 and type(arguments[0]) is str and re.fullmatch(
+                '(?:ONLINE_RECHARGE_COMPONENT|ONLINE_RECHARGE|API_ADMIN|UNPUBLISHED_COMPONENT)_[A-Z0-9_]+', arguments[0]):
+            return arguments[0]
+    categories = (
+        (TimeoutError, 'TIMEOUT'),
+        (urllib.error.HTTPError, 'HTTP_ERROR'),
+        (urllib.error.URLError, 'URL_ERROR'),
+        (TypeError, 'TYPE_ERROR'),
+        (KeyError, 'KEY_ERROR'),
+        (json.JSONDecodeError, 'JSON_INVALID'),
+        (subprocess.TimeoutExpired, 'COMMAND_TIMEOUT'),
+        (subprocess.CalledProcessError, 'COMMAND_FAILED'),
+        (ValueError, 'VALUE_ERROR'),
+        (FileNotFoundError, 'FILE_NOT_FOUND'),
+        (PermissionError, 'PERMISSION_DENIED'),
+        (FileExistsError, 'FILE_EXISTS'),
+        (OSError, 'OS_ERROR'),
+        (ImportError, 'IMPORT_ERROR'),
+        (UnicodeDecodeError, 'DECODE_ERROR'),
+        (gzip.BadGzipFile, 'GZIP_INVALID'),
+        (zlib.error, 'ZLIB_ERROR'),
+    )
+    for exception_type, code in categories:
+        if error_type is exception_type:
+            return 'ONLINE_RECHARGE_COMPONENT_' + code
+    return 'ONLINE_RECHARGE_COMPONENT_PROTECTED_OPERATION_FAILED'
 
 
 def cli(d=None):
@@ -1634,9 +1682,7 @@ if __name__ == '__main__':
         print(json.dumps(wire(error.receipt), sort_keys=True, separators=(',', ':')))
         raise SystemExit(1) from None
     except Exception as error:
-        code = str(error)
-        if not re.fullmatch('(?:ONLINE_RECHARGE_COMPONENT|ONLINE_RECHARGE|API_ADMIN|UNPUBLISHED_COMPONENT)_[A-Z0-9_]+', code):
-            code = 'ONLINE_RECHARGE_COMPONENT_PROTECTED_OPERATION_FAILED'
+        code = rejection_code(error)
         print(json.dumps(wire({'version': 1, 'scope': SCOPE, 'kind': KIND, 'status': 'ONLINE_RECHARGE_COMPONENT_REJECTED', 'code': code}),
                          sort_keys=True, separators=(',', ':')))
         raise SystemExit(1) from None

@@ -19,7 +19,10 @@ import {
   onlinePrepareFixGuardPaths,
   firstRechargeReleaseControlPaths,
   firstRechargeBillingNamePaths,
-  readFirstRechargeBillingNameSnapshot
+  readFirstRechargeBillingNameSnapshot,
+  onlinePreflightReceiptFixGuardCommands,
+  onlinePreflightReceiptFixGuardBinding,
+  onlinePreflightReceiptFixGuardPaths
 } from './ci-recharge-scope.mjs';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
@@ -133,6 +136,7 @@ function recordGuardCommands(
     resume = false,
     onlineResume = false,
     prepareResume = false,
+    receiptResume = false,
     repository = '',
     event = '',
     base = 'a'.repeat(40),
@@ -163,7 +167,10 @@ function recordGuardCommands(
           'globalThis.guardTestCalls.push(["prepare-resume-helper", base]);' +
           'return process.env.GUARD_TEST_PREPARE_RESUME === "true"; }' +
           'export function readFirstRechargeBillingNameSnapshot() {' +
-          'return JSON.parse(process.env.GUARD_TEST_FIRST_RECHARGE_SNAPSHOT || "null"); }';
+          'return JSON.parse(process.env.GUARD_TEST_FIRST_RECHARGE_SNAPSHOT || "null"); }' +
+          'export function canResumeOnlinePreflightReceiptFixGuard(base) {' +
+          'globalThis.guardTestCalls.push(["receipt-resume-helper", base]);' +
+          'return process.env.GUARD_TEST_RECEIPT_RESUME === "true"; }';
         return {url: 'data:text/javascript,' + encodeURIComponent(source), shortCircuit: true};
       }
       return nextResolve(specifier, context);
@@ -187,7 +194,7 @@ function recordGuardCommands(
       if (process.env.GUARD_TEST_CAPTURE_ERROR === 'true') {
         calls.push(['caught-error', error.message]);
       } else if (error.message !== 'SYNTHETIC_PREPARE_EXIT' ||
-          process.env.GUARD_TEST_PREPARE_RESUME !== 'true' ||
+          (process.env.GUARD_TEST_PREPARE_RESUME !== 'true' && process.env.GUARD_TEST_RECEIPT_RESUME !== 'true') ||
           calls.at(-1)?.[1] !== 0) throw error;
     }
     process.stdout.write(JSON.stringify(calls));
@@ -205,6 +212,7 @@ function recordGuardCommands(
         GUARD_TEST_RESUME: resume ? 'true' : '',
         GUARD_TEST_ONLINE_RESUME: onlineResume ? 'true' : '',
         GUARD_TEST_PREPARE_RESUME: prepareResume ? 'true' : '',
+        GUARD_TEST_RECEIPT_RESUME: receiptResume ? 'true' : '',
         GUARD_TEST_BASE: base,
         GUARD_TEST_PART: part,
         GUARD_TEST_PATHS: JSON.stringify(paths),
@@ -1551,6 +1559,83 @@ test('removed registration transport paths select retirement checks without exec
       )
     );
   }
+});
+
+test('finite failure-receipt integration keeps Node controls then fifteen source suites and four storage suites once without business or database parts', () => {
+  assert.deepEqual(
+    onlinePreflightReceiptFixGuardCommands.map((command) => command.at(-1)),
+    [
+      'scripts/production-release/online-recharge-component-consumer.test.py',
+      'scripts/production-release/online-recharge-component-runtime.test.py',
+      'scripts/production-release/online-recharge-component-readonly.test.py',
+      'scripts/production-release/api-admin-scope.test.py',
+      'scripts/production-release/api-admin-pending-online.test.py',
+      'scripts/production-release/admin-pending-online-release.test.py',
+      'scripts/production-release/online-recharge-scope.test.py',
+      'scripts/production-release/unpublished-component-successor.test.py',
+      'scripts/production-release/unpublished-component-successor-readonly.test.py',
+      'scripts/production-release/prepared-images.test.py',
+      'scripts/production-release/recharge-flow-entry.test.mjs',
+      'scripts/production-release/online-recharge-entry.test.mjs',
+      'scripts/production-release/unified-component-source.test.py',
+      'scripts/v2-order-archive-release-policy.test.mjs',
+      'scripts/production-release/registration-onboarding-96.test.py',
+      'scripts/production-release/release-artifact-retention.test.py',
+      'scripts/production-release/release-artifact-retention-transport.test.py',
+      'scripts/production-release/disk-retention-transport.test.py',
+      'scripts/production-release/release-storage.test.py'
+    ]
+  );
+  const paths = [...onlinePreflightReceiptFixGuardPaths];
+  const context = {
+    cloud: true,
+    receiptResume: true,
+    repository: onlinePreflightReceiptFixGuardBinding.repository,
+    event: 'pull_request',
+    base: onlinePreflightReceiptFixGuardBinding.integrationBase
+  };
+  const commands = (calls) => calls.filter((call) => !call[0].endsWith('resume-helper'));
+  const original = recordGuardCommands('ci-only', paths);
+  const index = original.findIndex(
+    (call) =>
+      call[0] === 'node' &&
+      call[1] === '--test' &&
+      call.includes('scripts/ci-recharge-scope.test.mjs')
+  );
+  assert.ok(index >= 0);
+  const resumed = commands(recordGuardCommands('ci-only', paths, 'guards', context));
+  assert.deepEqual(resumed, [
+    ...original.slice(0, index + 1),
+    ...onlinePreflightReceiptFixGuardCommands,
+    ['process-exit', 0]
+  ]);
+  for (const command of onlinePreflightReceiptFixGuardCommands)
+    assert.equal(
+      resumed.filter((row) => JSON.stringify(row) === JSON.stringify(command)).length,
+      1
+    );
+  assert.ok(resumed.some((row) => row.includes('scripts/ci-recharge-release.test.mjs')));
+  assert.ok(
+    !resumed.some((row) =>
+      row.some(
+        (arg) =>
+          typeof arg === 'string' &&
+          (arg === 'docker' || arg.includes('acceptance-v2') || arg === '--workspace')
+      )
+    )
+  );
+  for (const reject of [
+    { ...context, receiptResume: false },
+    { ...context, cloud: false },
+    { ...context, repository: 'foreign/project' },
+    { ...context, event: 'push' },
+    { ...context, base: '0'.repeat(40) }
+  ])
+    assert.deepEqual(commands(recordGuardCommands('ci-only', paths, 'guards', reject)), original);
+  assert.deepEqual(
+    recordGuardCommands('ci-only', paths, 'release-controls', context),
+    recordGuardCommands('ci-only', paths, 'release-controls')
+  );
 });
 
 test('artifact-only controls keep the shared prefix and verify actual dependencies without unchanged website controllers', () => {

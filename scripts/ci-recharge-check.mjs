@@ -26,6 +26,8 @@ import {
   canResumeCombinedGuard,
   canResumeOnlineComponentGuard,
   canResumeOnlinePrepareFixGuard,
+  canResumeOnlinePreflightReceiptFixGuard,
+  onlinePreflightReceiptFixGuardCommands,
   onlinePrepareFixGuardCommands,
   readProductionDatabaseAccessSnapshot,
   firstRechargeReleaseControlPaths,
@@ -70,6 +72,14 @@ const resumeOnlinePrepareFixGuard =
   process.env.GITHUB_EVENT_NAME === 'pull_request' &&
   base === '2edb7ef92a9619e5b0e5855220c97bac29d22f60' &&
   canResumeOnlinePrepareFixGuard(base);
+const resumeOnlinePreflightReceiptFixGuard =
+  part === 'guards' &&
+  mode === 'ci-only' &&
+  process.env.GITHUB_ACTIONS === 'true' &&
+  process.env.GITHUB_REPOSITORY === 'wangchaozhuanyong/id-business-system' &&
+  process.env.GITHUB_EVENT_NAME === 'pull_request' &&
+  base === 'b9f2e2b75a753b86a5057dd798d651c57496554e' &&
+  canResumeOnlinePreflightReceiptFixGuard(base);
 const shared = () => npm('run', 'build', '--workspace', '@apple-business/shared');
 const firstRechargeReleaseControls = () => {
   if (changed.some((path) => firstRechargeReleaseControlPaths.includes(path))) {
@@ -408,6 +418,10 @@ if (part === 'guards') {
 }
 if (resumeOnlinePrepareFixGuard) {
   for (const [file, ...args] of onlinePrepareFixGuardCommands) run(file, args);
+  process.exit(0);
+}
+if (resumeOnlinePreflightReceiptFixGuard) {
+  for (const [file, ...args] of onlinePreflightReceiptFixGuardCommands) run(file, args);
   process.exit(0);
 }
 if (
