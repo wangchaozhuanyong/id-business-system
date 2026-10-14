@@ -2991,9 +2991,9 @@ export function canResumeOnlinePreflightReceiptFixGuard(base) {
 // BEGIN finite ONLINE build-proof reuse guard continuation
 export const onlineBuildProofReuseGuardBinding = Object.freeze({
   repository: 'wangchaozhuanyong/id-business-system',
-  branch: 'codex/online-proof-reuse-integration-20261014',
-  base: 'c7a800b931311cd5c6da4c4b2320743b7a3015a1',
-  tree: '620f5766fd5b664a79a79df2026708df08625642',
+  branch: 'codex/online-storage-proof-integration-20261014',
+  base: '5f458e7ac7cd0dfab0f99d2a6d07c20baa8b6e53',
+  tree: 'bcc614bd53dbf4ddf8e3d7d6ba85d5a4ed1f1a3a',
   originalMergedMain: 'fff7b257fa402e14da5d9aa43aa4ea22095695c5',
   originalMergedTree: '04637480488076dc891c822e79864f8ff96bbf06',
   originalPr: 475,
@@ -3002,7 +3002,7 @@ export const onlineBuildProofReuseGuardBinding = Object.freeze({
   run: 38526906459,
   attempt: 1,
   originalMainRun: 38530643303,
-  integrationMainRun: 38537007996,
+  integrationMainRun: 38544086836,
   job: 115729349592,
   qualityJob: 115740147064,
   checkout: '52fe5d339984bc8c89f27175e96786015469a25a',
@@ -3016,9 +3016,9 @@ export const onlineBuildProofReuseGuardBinding = Object.freeze({
   runtimeTestSha256: '4a2dbf2111592d2711cf175b2d9b3bdd0fc619b6f940bc5d604cfb2378eb74d7',
   readonlySha256: 'c65a7fd1a92c133cfda4e2a94d9326c4b1eae5f63c149b163f31aa59ef34fe8a',
   readonlyTestSha256: 'e43cf0ead1fdd0c3a46186c3b24a1527c1d6d48085912a9fcf2eae3b7907cb26',
-  helperSha256: '2702bad4f82a8212ba7dd1085e48bb75e162d98d0fcfa2c6998fe1dcd5dc4543',
+  helperSha256: '81373a391b1116e81d914acbeed574ef272daac37a88e9e2539c4d7351372434',
   helperTestSha256: '47f20b34d353214c52527ec1dac492be7c2e5ec5cf986dc8d8b86ca374e55357',
-  dispatcherTestSha256: '12fc17331e91d667400769c90d24c36aca5dd554b8540930cfa95682ee6d4bd4'
+  dispatcherTestSha256: '08a891b2d2acb151445332dda7d0fdc442908b44f9112430f653e9e1d929d5cf'
 });
 export const onlineBuildProofReuseGuardPaths = Object.freeze([
   'scripts/production-release/online-recharge-component-runtime.py',
@@ -3089,7 +3089,7 @@ export function onlineBuildProofReuseDispatcherBytesUnchanged(before, after) {
     "  process.env.GITHUB_ACTIONS === 'true' &&",
     "  process.env.GITHUB_REPOSITORY === 'wangchaozhuanyong/id-business-system' &&",
     "  process.env.GITHUB_EVENT_NAME === 'pull_request' &&",
-    "  base === 'c7a800b931311cd5c6da4c4b2320743b7a3015a1' &&",
+    "  base === '5f458e7ac7cd0dfab0f99d2a6d07c20baa8b6e53' &&",
     '  canResumeOnlineBuildProofReuseGuard(base);',
     ''
   ].join('\n');

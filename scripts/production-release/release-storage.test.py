@@ -1,10 +1,13 @@
 import base64
+import ast
 import copy
+import gzip
 import importlib.util
 import json
 import os
 from pathlib import Path
 import shlex
+import subprocess
 import tempfile
 import unittest
 from unittest.mock import Mock, patch
@@ -17,7 +20,9 @@ spec.loader.exec_module(storage)
 candidate = storage.candidate_module()
 COMMIT = 'a' * 40
 TREE = 'b' * 40
-BASELINE = 'c' * 40
+# These fixtures exercise the preserved historical ONLINE protocol. Current
+# ordinary-component coverage below uses the authenticated current predecessor.
+BASELINE = '0a03fa28e6b844a18833d5c63f1de700f091fc64'
 POLICY = 'd' * 64
 SOURCE = 'e' * 64
 COMMAND = '00000000-0000-0000-0000-000000000001'
@@ -565,6 +570,292 @@ class ExistingReadbackContractTests(unittest.TestCase):
         mapping = {'.deploy/production-release/api-workspace-readback-result.json': native}
         with patch.object(storage, 'read_file', side_effect=self.files(storage.PROJECT, mapping)):
             storage.validate_readback(selected('release_api_workspace'), value)
+
+
+class OrdinaryComponentStorageTests(unittest.TestCase):
+    """Real source/proof/storage files and validators; external systems are fixtures."""
+
+    @classmethod
+    def setUpClass(cls):
+        spec = importlib.util.spec_from_file_location('storage_component_lifecycle_fixture',
+            HERE / 'online-recharge-component-lifecycle.test.py')
+        cls.module = importlib.util.module_from_spec(spec); spec.loader.exec_module(cls.module)
+        cls.module.ContinuousLifecycleTests.setUpClass()
+
+    def setUp(self):
+        self.fixture = self.module.ContinuousLifecycleTests()
+        self.fixture.setUp(); self.addCleanup(self.fixture.doCleanups)
+        self.online = self.module.client
+        self.root = self.fixture.directory
+        self.source_sha256, self.policy_sha256 = storage.policy_binding()
+        for patcher in (
+            patch.object(storage, 'PROJECT', self.root),
+            patch.object(storage, 'OUTPUT', self.root / '.deploy/production-release/storage'),
+            patch.object(storage, 'online_component_module', return_value=self.online),
+            patch.dict(os.environ, {'GITHUB_REPOSITORY': storage.GITHUB_REPOSITORY,
+                                  'RELEASE_ADMIN_ONLY': 'false'}),
+            patch.object(self.online, 'command_raw', side_effect=self.fixture.command)):
+            patcher.start(); self.addCleanup(patcher.stop)
+        directory = self.module.working_directory(self.root)
+        directory.__enter__(); self.addCleanup(directory.__exit__, None, None, None)
+        self.calls = []
+        self.commands = self.external_commands()
+        self.lifecycle_client = storage.LifecycleClient(self.commands, sleep=lambda _: None)
+        self.selected = storage.selection(dict(os.environ))
+
+    def external_commands(self):
+        fixture, calls, policy = self.fixture, self.calls, self.policy_sha256
+        accepted = {}
+        class External:
+            def git(self, *arguments, **_kwargs):
+                calls.append(('git', *arguments))
+                if arguments == ('rev-parse', 'HEAD'): return 0, (fixture.p['commit'] + '\n').encode()
+                if arguments == ('rev-parse', 'HEAD^{tree}'): return 0, (fixture.p['sourceTree'] + '\n').encode()
+                if arguments == ('ls-remote', 'origin', 'refs/heads/main'):
+                    return 0, (fixture.p['commit'] + '\trefs/heads/main\n').encode()
+                raise AssertionError('unexpected source query')
+
+            def quality(self, run):
+                calls.append(('quality', run))
+                return {'id': int(run), 'head_sha': fixture.p['commit'], 'head_branch': 'main',
+                    'event': 'push', 'status': 'completed', 'conclusion': 'success',
+                    'path': '.github/workflows/quality.yml'}
+
+            def archive_size(self, revision):
+                if revision != fixture.p['commit']: raise AssertionError('source archive drift')
+                return len(fixture.candidate_raw)
+
+            def run(self, arguments, **_kwargs):
+                calls.append(tuple(arguments))
+                if arguments[:3] == ['docker', 'image', 'inspect']:
+                    reference = arguments[-1]
+                    name = reference.rsplit('-', 1)[-1]
+                    if name == 'recharge': name = 'online-recharge'
+                    return 0, storage.canonical({'Id': 'sha256:' + self_outer.online.r.c.digest(name.encode()),
+                        'Size': 4096, 'Architecture': 'amd64', 'Labels': {
+                            'org.opencontainers.image.revision': fixture.p['commit'],
+                            'id-business-v2.source-tree': fixture.p['sourceTree']}})
+                expected = ['aws', '--region', storage.REGION, 'ssm', 'get-command-invocation',
+                            '--command-id', self_outer.module.COMMAND, '--instance-id', storage.INSTANCE,
+                            '--output', 'json']
+                if arguments != expected: raise AssertionError('only the original readback GET is permitted')
+                return 0, fixture.return_native
+
+            def aws(self, *arguments, **_kwargs):
+                calls.append(('aws', *arguments))
+                if arguments[:2] == ('ecr', 'batch-get-image'):
+                    tag = arguments[arguments.index('--image-ids') + 1].removeprefix('imageTag=')
+                    role = tag.rsplit('-', 1)[-1]
+                    if role == 'recharge': role = 'online-recharge'
+                    identity = 'sha256:' + self_outer.online.r.c.digest(role.encode())
+                    manifest = storage.canonical({'schemaVersion': 2,
+                        'config': {'digest': identity, 'size': 10},
+                        'layers': [{'digest': 'sha256:' + '2' * 64, 'size': 20}]}).decode()
+                    return {'failures': [], 'images': [{'registryId': '079740175286',
+                        'repositoryName': 'id-business-v2-release', 'imageId': {'imageTag': tag,
+                        'imageDigest': 'sha256:' + storage.hashlib.sha256(manifest.encode()).hexdigest()},
+                        'imageManifest': manifest}]}
+                if arguments[:2] == ('ssm', 'send-command'):
+                    value = json.loads(arguments[arguments.index('--cli-input-json') + 1])
+                    phase = value['Comment'].removeprefix('ID disk lifecycle ')
+                    command = '00000000-0000-0000-0000-' + f'{len(accepted) + 1:012d}'
+                    accepted[command] = phase
+                    return {'Command': {'CommandId': command, 'InstanceIds': [storage.INSTANCE],
+                                        'DocumentName': 'AWS-RunShellScript'}}
+                if arguments[:2] != ('ssm', 'get-command-invocation'):
+                    raise AssertionError('unexpected external operation')
+                command = arguments[arguments.index('--command-id') + 1]
+                phase = accepted[command]
+                result = {**remote_result(phase), 'policySha256': policy}
+                return {**invocation(result), 'CommandId': command}
+        self_outer = self
+        return External()
+
+    def prepare_candidate(self):
+        storage.lifecycle('before-build', commands=self.commands, client=self.lifecycle_client)
+        self.fixture.prepare()
+        self.proof = self.fixture.build()
+        storage.lifecycle('before-pull', commands=self.commands, client=self.lifecycle_client)
+        self.storage_directory = storage.OUTPUT / self.selected['batch']
+        self.record = storage.closed(storage.read_file(self.storage_directory / 'candidate.json', private=True))
+
+    def save_readback(self):
+        core, producer = self.fixture.core, self.fixture.p
+        parameters = self.online.parameters('readback', core, producer)
+        prefix = self.root / '.deploy/production-release' / self.online.r.PREFIX
+        self.readback_paths = {
+            'parameters': Path(str(prefix) + '-readback-parameters.json'),
+            'intent': Path(str(prefix) + '-readback-send-intent.json'),
+            'metadata': Path(str(prefix) + '-readback-invocation-metadata.json'),
+            'result': Path(str(prefix) + '-readback.json')}
+        receipt = self.fixture.returned_receipt()
+        self.fixture.return_native = self.module.native(receipt, self.module.COMMAND, storage.INSTANCE)
+        values = {'parameters': parameters,
+            'intent': {'producer': producer, 'mode': 'readback',
+                'expectedCurrent': self.selected['expectedCurrent'],
+                'parametersSha256': self.online.r.c.fingerprint(parameters), 'status': 'SUBMITTING_ONCE'},
+            'metadata': {'producer': producer, 'mode': 'readback', 'commandId': self.module.COMMAND,
+                'instanceId': storage.INSTANCE, 'status': 'ACCEPTED'},
+            'result': self.online.validate_native(core, self.fixture.return_native, 'readback', producer,
+                                                  self.module.COMMAND, storage.INSTANCE)}
+        for name, path in self.readback_paths.items(): core.write_private(path, values[name])
+        return receipt
+
+    def test_real_continuous_component_storage_publisher_and_after_publish(self):
+        self.prepare_candidate()
+        self.assertTrue(self.selected['onlineComponent'])
+        self.assertEqual(set(self.record['images']), set(self.online.r.IMAGES))
+        self.assertEqual(self.record['producer'], self.fixture.p)
+        self.assertEqual(self.record['proofSha256'], storage.digest(self.proof))
+        build_path = self.root / self.online.r.PROOF
+        before = storage.private_snapshot([build_path])
+        parameters = self.online.parameters('release', self.fixture.core, self.fixture.p,
+            input_artifacts=(self.fixture.core.private_bytes(build_path),
+                self.fixture.core.private_bytes(self.root / self.online.r.PREFLIGHT)))
+        self.assertEqual(parameters['executionTimeout'], ['1800'])
+        self.assertIn('python3 -B -c', parameters['commands'][0])
+        carrier = shlex.split(parameters['commands'][0])[-1]
+        packed = ast.literal_eval(carrier.split('base64.b64decode(', 1)[1].split(',validate=True)', 1)[0])
+        program = ast.parse(gzip.decompress(base64.b64decode(packed)).decode())
+        argument_call = next(node.value.right for node in program.body if isinstance(node, ast.Assign)
+            and any(isinstance(target, ast.Attribute) and target.attr == 'argv' for target in node.targets))
+        arguments, _origin, _current, descriptor, packed_f, packed_proof = [ast.literal_eval(arg) for arg in argument_call.args]
+        self.assertEqual(arguments[0], 'release')
+        for argument, field in (('--commit', 'commit'), ('--source-tree', 'sourceTree'),
+                                ('--run-id', 'workflowRunId'), ('--run-attempt', 'workflowRunAttempt')):
+            self.assertEqual(arguments[arguments.index(argument) + 1], self.fixture.p[field])
+        self.assertEqual(json.loads(gzip.decompress(base64.b64decode(packed_proof.removeprefix('gzip-base64:')))), self.proof)
+        self.assertEqual(gzip.decompress(base64.b64decode(packed_f)), self.fixture.preflight_native)
+        self.assertEqual(descriptor['producer'], self.record['producer'])
+        receipt = self.save_readback()
+        self.assertNotEqual(receipt['buildProofBytesSha256'], self.record['proofSha256'])
+        result = storage.lifecycle('after-publish', commands=self.commands, client=self.lifecycle_client)
+        self.assertTrue(result['publicationVerified'])
+        after = storage.closed(storage.read_file(self.storage_directory / 'after-publish.intent.json', private=True))
+        expected_parameters = storage.remote_parameters('after-publish', self.fixture.p['commit'],
+            self.source_sha256, {'record': self.record})
+        self.assertEqual(after['binding']['parametersSha256'], storage.digest(expected_parameters))
+        native_intent = next(json.loads(call[call.index('--cli-input-json') + 1]) for call in reversed(self.calls)
+            if call[:3] == ('aws', 'ssm', 'send-command'))
+        args = shlex.split(native_intent['Parameters']['commands'][0])
+        self.assertEqual(args[args.index('--expected-current') + 1], self.fixture.p['commit'])
+        self.assertEqual(json.loads(base64.b64decode(args[-1])), {'record': self.record})
+        self.assertEqual(storage.private_snapshot([build_path]), before)
+        self.assertFalse((self.root / '.deploy/production-release/online-recharge-build-proof.json').exists())
+        self.assertFalse((self.root / '.deploy/production-release/online-recharge-readback-result.json').exists())
+        self.assertEqual(len([call for call in self.fixture.aws if 'send-command' in call]), 0)
+
+    def test_original_formal_source_reproduces_missing_legacy_file(self):
+        self.prepare_candidate(); self.save_readback()
+        original = subprocess.check_output(['git', 'show',
+            'c7a800b931311cd5c6da4c4b2320743b7a3015a1:scripts/production-release/release-storage.py'],
+            cwd=HERE.parents[1])
+        namespace = {'__file__': str(HERE / 'release-storage.py'), '__name__': 'storage_failed_formal_regression'}
+        exec(compile(original, str(HERE / 'release-storage.py'), 'exec'), namespace)
+        namespace['PROJECT'] = self.root
+        with self.assertRaisesRegex(namespace['StorageRejected'], 'STORAGE_FILE_UNAVAILABLE'):
+            namespace['build_record'](self.selected, self.commands)
+        with self.assertRaisesRegex(namespace['StorageRejected'], 'STORAGE_FILE_UNAVAILABLE'):
+            namespace['validate_readback'](self.selected, self.record)
+        storage.validate_readback(self.selected, self.record, self.commands)
+
+    def test_component_cannot_select_an_unknown_or_other_baseline(self):
+        for key, bad in (('EXPECTED_CURRENT', 'd' * 40), ('API_FAULT_RESTORE_APPROVED', 'false'),
+                         ('RELEASE_ADMIN_ONLY', 'true'), ('DIAGNOSTIC_COMMAND_ID', self.module.COMMAND)):
+            value = dict(os.environ); value[key] = bad
+            with self.subTest(key=key), self.assertRaises(storage.StorageRejected): storage.selection(value)
+
+    def test_build_proof_source_run_quality_images_and_symlinks_reject(self):
+        self.fixture.prepare(); self.proof = self.fixture.build()
+        path = self.root / self.online.r.PROOF
+        raw = path.read_bytes()
+        for key in ('producer', 'qualityRunId', 'sourceProjection', 'images', 'version'):
+            changed = copy.deepcopy(self.proof)
+            if key == 'producer': changed[key]['sourceTree'] = 'b' * 40
+            if key == 'qualityRunId': changed[key] = '999'
+            if key == 'sourceProjection': changed[key]['candidateArchiveSha256'] = 'd' * 64
+            if key == 'images': changed[key]['api']['imageId'] = 'sha256:' + 'd' * 64
+            if key == 'version': changed[key] = 2
+            path.write_bytes(storage.canonical(changed) + b'\n')
+            with self.subTest(key=key), self.assertRaises(storage.StorageRejected):
+                storage.build_record(self.selected, self.commands)
+            path.write_bytes(raw)
+        for name in (self.online.r.PROOF, self.online.r.PROJECTION, self.online.r.PREFLIGHT):
+            path = self.root / name; target = path.with_suffix('.original')
+            path.rename(target); path.symlink_to(target)
+            with self.subTest(name=name), self.assertRaises(storage.StorageRejected):
+                storage.build_record(self.selected, self.commands)
+            path.unlink(); target.rename(path)
+
+    def test_proof_file_identity_cannot_change_while_ecr_is_measured(self):
+        self.fixture.prepare(); self.proof = self.fixture.build()
+        original = self.commands.aws
+        path = self.root / self.online.r.PROOF
+        def replace(*arguments, **kwargs):
+            if arguments[:2] == ('ecr', 'batch-get-image'):
+                raw = path.read_bytes(); path.unlink(); self.fixture.core.write_private(path, json.loads(raw))
+            return original(*arguments, **kwargs)
+        self.commands.aws = replace
+        with self.assertRaisesRegex(storage.StorageRejected, 'COMPONENT_INPUT_CHANGED'):
+            storage.build_record(self.selected, self.commands)
+
+    def test_readback_native_hash_command_producer_and_proof_drift_never_acknowledge(self):
+        self.prepare_candidate(); self.save_readback()
+        authenticated = storage.component_build(self.selected)
+        original_native = self.fixture.return_native
+        original_files = {name: path.read_bytes() for name, path in self.readback_paths.items()}
+        for field in ('hash', 'command', 'producer', 'proof', 'projection', 'parameters', 'native'):
+            if field == 'native':
+                self.fixture.return_native = original_native + b'\n'
+            else:
+                name = 'metadata' if field == 'command' else 'parameters' if field == 'parameters' else 'result'
+                changed = json.loads(original_files[name])
+                if field == 'hash': changed['invocationBytesSha256'] = 'd' * 64
+                if field == 'command': changed['commandId'] = COMMAND
+                if field == 'producer': changed['receipt']['producer']['workflowRunId'] = '999'
+                if field == 'proof': changed['receipt']['buildProofBytesSha256'] = 'd' * 64
+                if field == 'projection': changed['receipt']['sourceProjectionSha256'] = 'd' * 64
+                if field == 'parameters': changed['executionTimeout'] = ['601']
+                if field in ('proof', 'projection'):
+                    # The complete native envelope and saved wrapper agree.
+                    # Only the independent exact proof/projection binding fails.
+                    self.fixture.return_native = self.module.native(changed['receipt'], self.module.COMMAND, storage.INSTANCE)
+                    changed = self.online.validate_native(self.fixture.core, self.fixture.return_native,
+                        'readback', self.fixture.p, self.module.COMMAND, storage.INSTANCE)
+                self.readback_paths[name].write_bytes(storage.canonical(changed) + b'\n')
+            with self.subTest(field=field), self.assertRaises(storage.StorageRejected):
+                storage.validate_readback(self.selected, self.record, self.commands, authenticated)
+            for name, path in self.readback_paths.items(): path.write_bytes(original_files[name])
+            self.fixture.return_native = original_native
+        self.assertFalse((self.storage_directory / 'after-publish.intent.json').exists())
+        self.assertEqual(len([call for call in self.fixture.aws if 'send-command' in call]), 0)
+
+    def test_unavailable_original_native_does_not_acknowledge_or_resend(self):
+        self.prepare_candidate(); self.save_readback()
+        authenticated = storage.component_build(self.selected)
+        before = len([call for call in self.calls if call[:3] == ('aws', 'ssm', 'send-command')])
+        original = self.commands.run
+        def unavailable(arguments, **keywords):
+            if arguments[:5] == ['aws', '--region', storage.REGION, 'ssm', 'get-command-invocation']:
+                raise storage.StorageRejected('STORAGE_PROCESS_FAILED')
+            return original(arguments, **keywords)
+        self.commands.run = unavailable
+        with self.assertRaisesRegex(storage.StorageRejected, 'STORAGE_PROCESS_FAILED'):
+            storage.validate_readback(self.selected, self.record, self.commands, authenticated)
+        self.assertFalse((self.storage_directory / 'after-publish.intent.json').exists())
+        self.assertEqual(len([call for call in self.calls if call[:3] == ('aws', 'ssm', 'send-command')]), before)
+
+    def test_after_publish_requires_complete_bound_readback_and_all_candidate_images(self):
+        self.prepare_candidate(); self.save_readback()
+        result_path = self.readback_paths['result']; target = result_path.with_suffix('.original')
+        result_path.rename(target); result_path.symlink_to(target)
+        with self.assertRaises(storage.StorageRejected):
+            storage.lifecycle('after-publish', commands=self.commands, client=self.lifecycle_client)
+        self.assertFalse((self.storage_directory / 'after-publish.intent.json').exists())
+        result_path.unlink(); target.rename(result_path)
+        altered = copy.deepcopy(self.record); altered['images']['online-recharge']['imageId'] = 'sha256:' + 'd' * 64
+        with self.assertRaisesRegex(storage.StorageRejected, 'READBACK_IMAGE_DRIFT'):
+            storage.validate_readback(self.selected, altered, self.commands)
 
 
 if __name__ == '__main__':

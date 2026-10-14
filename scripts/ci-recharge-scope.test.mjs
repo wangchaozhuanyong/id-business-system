@@ -4696,15 +4696,15 @@ test('finite build-proof reuse authenticates actual merged PR475, original raw q
   assert.equal(needsOnlineRechargeCiBuild(onlineBuildProofReuseGuardPaths), true);
 });
 
-test('finite build-proof integration authenticates latest C7 quality without relabeling original PR475 artifact tree', () => {
+test('finite build-proof integration authenticates latest 5f storage quality without relabeling original PR475 artifact tree', () => {
   const b = onlineBuildProofReuseGuardBinding;
   const original = syntheticBuildProofReuseNative();
-  assert.equal(b.base, 'c7a800b931311cd5c6da4c4b2320743b7a3015a1');
-  assert.equal(b.tree, '620f5766fd5b664a79a79df2026708df08625642');
+  assert.equal(b.base, '5f458e7ac7cd0dfab0f99d2a6d07c20baa8b6e53');
+  assert.equal(b.tree, 'bcc614bd53dbf4ddf8e3d7d6ba85d5a4ed1f1a3a');
   assert.equal(b.originalMergedMain, 'fff7b257fa402e14da5d9aa43aa4ea22095695c5');
   assert.equal(b.originalMergedTree, '04637480488076dc891c822e79864f8ff96bbf06');
   assert.equal(b.originalMainRun, 38530643303);
-  assert.equal(b.integrationMainRun, 38537007996);
+  assert.equal(b.integrationMainRun, 38544086836);
   assert.equal(original.proof.testedTree, b.originalMergedTree);
   assert.equal(original.baselineTree, b.tree);
   assert.notEqual(original.proof.testedTree, original.baselineTree);

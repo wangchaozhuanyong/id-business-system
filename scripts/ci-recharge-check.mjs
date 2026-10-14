@@ -72,7 +72,7 @@ const resumeOnlineBuildProofReuseGuard =
   process.env.GITHUB_ACTIONS === 'true' &&
   process.env.GITHUB_REPOSITORY === 'wangchaozhuanyong/id-business-system' &&
   process.env.GITHUB_EVENT_NAME === 'pull_request' &&
-  base === 'c7a800b931311cd5c6da4c4b2320743b7a3015a1' &&
+  base === '5f458e7ac7cd0dfab0f99d2a6d07c20baa8b6e53' &&
   canResumeOnlineBuildProofReuseGuard(base);
 const resumeOnlinePreflightReceiptFixGuard =
   part === 'guards' &&
