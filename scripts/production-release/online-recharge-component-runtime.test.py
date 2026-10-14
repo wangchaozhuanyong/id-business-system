@@ -3,16 +3,18 @@
 import base64
 import ast
 import copy
-from contextlib import redirect_stdout
+from contextlib import ExitStack, redirect_stdout
 from datetime import datetime, timezone
 import gzip
 import importlib.util
 import io
 import json
 import hashlib
+import os
 from pathlib import Path
 import tempfile
 import sys
+import subprocess
 from types import SimpleNamespace
 import unittest
 from unittest.mock import MagicMock, Mock, patch
@@ -776,6 +778,133 @@ class RuntimeTests(unittest.TestCase):
                     r.fault_restore_controller(original, {'audit': audit, 'controller': bounded})
         original.run.assert_not_called(); original.rollback_service.assert_not_called()
 
+    def test_actual_backup_native_uses_fixed_streams_and_keeps_process_deadline(self):
+        core = r.c.load_core(self.auth['coreSha256'])
+        original = Mock(); original.assert_no_active_recharge = Mock()
+        original.subprocess.run.return_value = SimpleNamespace(returncode=0, stdout=b'active\n')
+        with self.seal(), self.enabled(), patch.object(r.time, 'monotonic', return_value=100):
+            bounded = r.DeadlineController(original, 200, reserve=65)
+            self.assertEqual(core.backup_native(bounded, ['/usr/bin/systemctl', 'show', 'public-fixture']), 'active')
+            kwargs = original.subprocess.run.call_args.kwargs
+            self.assertEqual(kwargs['stdin'], subprocess.DEVNULL)
+            self.assertEqual(kwargs['stderr'], subprocess.DEVNULL)
+            self.assertEqual(kwargs['stdout'], subprocess.PIPE)
+            self.assertEqual(kwargs['timeout'], 30)
+            self.assertEqual(set(vars(bounded.subprocess)), {'run', 'DEVNULL', 'PIPE'})
+            with patch.object(r.time, 'monotonic', return_value=132):
+                calls = original.subprocess.run.call_count
+                with self.assertRaisesRegex(RuntimeError, 'FENCE_TIMEOUT'):
+                    core.backup_native(bounded, ['/usr/bin/systemctl', 'show', 'public-fixture'])
+                self.assertEqual(original.subprocess.run.call_count, calls)
+            holder = {'controller': bounded, 'audit': Mock(), 'gate': Mock(), 'sqliteReleasedAfterStop': True}
+            holder['audit'].pipe.deadline = 200; holder['gate'].connection = None
+            self.assertIs(r.fault_restore_controller(original, holder), bounded)
+            self.assertEqual(bounded.reserve, 0)
+            with patch.object(r.time, 'monotonic', return_value=190):
+                core.backup_native(bounded, ['/usr/bin/systemctl', 'show', 'public-fixture'])
+                self.assertEqual(original.subprocess.run.call_args.kwargs['timeout'], 7)
+            with patch.object(r.time, 'monotonic', return_value=197):
+                calls = original.subprocess.run.call_count
+                with self.assertRaisesRegex(RuntimeError, 'FENCE_TIMEOUT'):
+                    core.backup_native(bounded, ['/usr/bin/systemctl', 'show', 'public-fixture'])
+                self.assertEqual(original.subprocess.run.call_count, calls)
+
+    def test_backup_native_timeout_or_late_result_never_repeats_process(self):
+        core = r.c.load_core(self.auth['coreSha256'])
+        original = Mock(); original.assert_no_active_recharge = Mock()
+        secret = 'synthetic-private-backup-command'
+        with self.seal(), self.enabled(), patch.object(r.time, 'monotonic', return_value=100):
+            bounded = r.DeadlineController(original, 200)
+            original.subprocess.run.side_effect = subprocess.TimeoutExpired(secret, 30, output=secret, stderr=secret)
+            with self.assertRaises(subprocess.TimeoutExpired) as failed:
+                core.backup_native(bounded, ['/usr/bin/systemctl', 'show', 'public-fixture'])
+            self.assertEqual(r.safe_error_code(failed.exception, 'PROTECTED_READBACK'),
+                'ONLINE_RECHARGE_COMPONENT_PROTECTED_PROTECTED_READBACK_TIMEOUTEXPIRED')
+            self.assertEqual(original.subprocess.run.call_count, 1)
+            original.subprocess.run.side_effect = None
+            original.subprocess.run.return_value = SimpleNamespace(returncode=0, stdout=b'active\n')
+            with patch.object(r.time, 'monotonic', side_effect=(100, 198)):
+                with self.assertRaisesRegex(RuntimeError, 'FENCE_TIMEOUT'):
+                    core.backup_native(bounded, ['/usr/bin/systemctl', 'show', 'public-fixture'])
+            self.assertEqual(original.subprocess.run.call_count, 2)
+
+    def test_current_backup_cas_real_private_namespace_and_native_controller_before_and_after_publication(self):
+        core = r.c.load_core(self.auth['coreSha256'])
+        raw_manifest = b'{"publicFixture":true}\n'; raw_env = b'SYNTHETIC_PUBLIC=value\n'
+        script = (HERE.parents[1] / 'scripts/backup-aws-mysql.sh').read_bytes()
+        old_helper = b'# public old fixture\n'; helper = b'# public new fixture\n'
+        files = {'scripts/backup-aws-mysql.sh': (script, '100755'),
+                 'scripts/backup-retention-protection.py': (helper, '100644')}
+        states = {n: {'publicFixture': n} for n in r.c.SERVICES}
+        evidence = {'services': states}
+        original = Mock(); original.assert_no_active_recharge = Mock()
+        workspace = SimpleNamespace(snapshot=Mock(return_value=states))
+        real_stat, real_fstat, real_lstat = os.stat, os.fstat, os.lstat
+        real_path_stat, real_path_lstat = Path.stat, Path.lstat
+        class RootOwnedFixture:
+            def __init__(self, row): self.row = row; self.st_uid = 0
+            def __getattr__(self, key): return getattr(self.row, key)
+        with tempfile.TemporaryDirectory(prefix='online-backup-cas-private-', dir=HERE.parents[1] / '.runtime') as td:
+            base = Path(td); previous = base / 'releases/old'; target = base / 'releases/new'
+            previous.mkdir(parents=True, mode=0o700); target.mkdir(mode=0o700)
+            for name, raw in (('release-manifest.json', raw_manifest), ('.env.aws.production', raw_env)):
+                path = previous / name; path.write_bytes(raw); path.chmod(0o600)
+            old = base / 'maintenance' / core.BACKUP_OLD_NAMESPACE; old.mkdir(parents=True, mode=0o700)
+            namespace = r.c.fingerprint({'backup-aws-mysql.sh': r.c.digest(script),
+                'backup-retention-protection.py': r.c.digest(helper)})
+            installed = base / 'maintenance' / ('mysql-backup-' + namespace[:16]); installed.mkdir(mode=0o700)
+            for directory, current_helper in ((old, old_helper), (installed, helper)):
+                for name, raw in (('backup-aws-mysql.sh', script), ('backup-retention-protection.py', current_helper)):
+                    path = directory / name; path.write_bytes(raw); path.chmod(0o700 if name.endswith('.sh') else 0o600)
+            entry = installed / 'backup-aws-mysql.sh'
+            dropin = base / 'systemd/dropin.conf'; dropin.parent.mkdir(mode=0o700)
+            dropin.write_bytes(('[Service]\nExecStart=\nExecStart=' + str(entry) + '\n').encode()); dropin.chmod(0o600)
+            lock = base / 'backups/mysql/.backup.lock'; lock.parent.mkdir(parents=True, mode=0o700); lock.touch(mode=0o600)
+            pointer = base / 'current'; pointer.symlink_to(previous)
+            original.BASE = base
+            def native(arguments, **kwargs):
+                self.assertEqual(arguments[:1], ['/usr/bin/systemctl'])
+                prop = next(v for v in arguments if v.startswith('--property='))
+                value = ('active' if arguments[2] == core.BACKUP_TIMER else 'failed') if prop == '--property=ActiveState' \
+                    else str(dropin) if prop == '--property=DropInPaths' \
+                    else '{ path=' + str(entry) + ' ; argv[]=' + str(entry) + ' ; }'
+                return SimpleNamespace(returncode=0, stdout=(value + '\n').encode())
+            original.subprocess.run.side_effect = native
+            identities = {p: (p.read_bytes(), p.stat().st_ino, p.stat().st_mtime_ns) for p in
+                (previous / 'release-manifest.json', previous / '.env.aws.production', dropin,
+                 installed / 'backup-aws-mysql.sh', installed / 'backup-retention-protection.py')}
+            with ExitStack() as stack:
+                for patcher in (self.seal(), self.enabled(), patch.object(r.time, 'monotonic', return_value=100),
+                    patch.object(r, 'current_authority', return_value={'manifestBytesSha256': r.c.digest(raw_manifest)}),
+                    patch.object(core, 'BACKUP_DROPIN', dropin),
+                    patch.object(core, 'BACKUP_OLD_HELPER_SHA256', r.c.digest(old_helper)),
+                    patch.object(os, 'stat', side_effect=lambda *a, **kw: RootOwnedFixture(real_stat(*a, **kw))),
+                    patch.object(os, 'fstat', side_effect=lambda *a, **kw: RootOwnedFixture(real_fstat(*a, **kw))),
+                    patch.object(os, 'lstat', side_effect=lambda *a, **kw: RootOwnedFixture(real_lstat(*a, **kw))),
+                    patch.object(Path, 'stat', lambda path, *a, **kw: RootOwnedFixture(real_path_stat(path, *a, **kw))),
+                    patch.object(Path, 'lstat', lambda path, *a, **kw: RootOwnedFixture(real_path_lstat(path, *a, **kw))),
+                    patch.object(os, 'getuid', return_value=0), patch.object(os, 'geteuid', return_value=0)):
+                    stack.enter_context(patcher)
+                bounded = r.DeadlineController(original, 200, reserve=65)
+                first = r.current_backup_cas(bounded, core, workspace, previous, target, evidence, files, states)
+                self.assertFalse(first['installationModified']); self.assertFalse(first['backupDeletedByCas'])
+                self.assertEqual(first['servicesSha256'], r.c.fingerprint(states))
+                self.assertGreater(original.subprocess.run.call_count, 0)
+                self.assertTrue(all(call.kwargs['timeout'] == 30 for call in original.subprocess.run.call_args_list))
+                pointer.unlink(); pointer.symlink_to(target)
+                second = r.current_backup_cas(bounded, core, workspace, previous, target, evidence, files, states, pointer=target)
+                self.assertEqual(second, first)
+                changed = copy.deepcopy(states); changed['mysql'] = {'publicFixture': 'changed'}
+                with self.assertRaisesRegex(RuntimeError, 'BACKUP_SERVICES_CHANGED'):
+                    r.current_backup_cas(bounded, core, workspace, previous, target, evidence, files, changed, pointer=target)
+                with patch.object(r.time, 'monotonic', return_value=132):
+                    calls = original.subprocess.run.call_count
+                    with self.assertRaisesRegex(RuntimeError, 'FENCE_TIMEOUT'):
+                        r.current_backup_cas(bounded, core, workspace, previous, target, evidence, files, states, pointer=target)
+                    self.assertEqual(original.subprocess.run.call_count, calls)
+            for path, identity in identities.items():
+                self.assertEqual((path.read_bytes(), path.stat().st_ino, path.stat().st_mtime_ns), identity)
+
     def test_after_audit_uses_original_function_with_read_deadline_and_restore_reserve(self):
         original = Mock(); original.assert_no_active_recharge = Mock()
         controller = r.load('remote-deploy.py'); original.audit = controller.audit
@@ -832,6 +961,107 @@ class RuntimeTests(unittest.TestCase):
                 self.assertEqual(failure.exception.receipt['phase'], 'audit-before')
         workspace.workspace_prepare.assert_not_called(); switch.assert_not_called()
         d.fresh_backup.assert_not_called(); d.compose.assert_not_called()
+
+    def test_real_release_failure_handler_keeps_all_stage_categories_without_exception_values(self):
+        secret = 'synthetic-private-token-url-and-file'
+        class UntrustedFailure(RuntimeError):
+            def __str__(self): raise AssertionError('exception formatting is forbidden')
+            def __getattribute__(self, name):
+                if name in ('args', 'errno'): raise AssertionError('untrusted diagnostic properties are forbidden')
+                return super().__getattribute__(name)
+        errors = ((lambda: FileExistsError(17, secret), 'FILEEXISTSERROR_ERRNO_17'),
+                  (lambda: AttributeError(secret), 'ATTRIBUTEERROR'),
+                  (lambda: json.JSONDecodeError(secret, secret, 0), 'JSONDECODEERROR'),
+                  (lambda: subprocess.TimeoutExpired(secret, 30, output=secret), 'TIMEOUTEXPIRED'),
+                  (lambda: UntrustedFailure(secret), None),
+                  (lambda: RuntimeError('API_ADMIN_SYNTHETIC_CONTROLLED_FAILURE'), 'CONTROLLED'))
+        phases = ('source', 'images', 'audit-before', 'backup', 'service-switch',
+                  'audit-after', 'protected-readback', 'publication')
+        for phase in phases:
+            for make_error, category in errors:
+                with self.subTest(phase=phase, category=category), tempfile.TemporaryDirectory(
+                        prefix='online-release-stage-private-', dir=HERE.parents[1] / '.runtime') as td:
+                    d, workspace, online = Mock(), Mock(), Mock()
+                    d.assert_no_active_recharge = Mock()
+                    core = r.c.load_core(self.auth['coreSha256'])
+                    admin = SimpleNamespace(ORIGIN_MARKERS=('publicMarker',))
+                    d.BASE = Path(td); previous = d.BASE / 'releases/old'; previous.mkdir(parents=True, mode=0o700)
+                    pointer = d.BASE / 'current'; pointer.symlink_to(previous)
+                    old = {'images': {}, 'publicMarker': {}, 'apiComponentPublication': {},
+                           'adminPublication': {}, 'apiHotfixPublication': {}}
+                    old_raw = core.write_private(previous / 'release-manifest.json', old)
+                    core.write_private(previous / 'compose.release.json', {'services': {}})
+                    raw_env = b'SYNTHETIC_PUBLIC=value\n'; ordinary_raw = b'public ordinary archive fixture'
+                    states = {n: {'image': 'sha256:' + 'a' * 64, 'reference': 'public-' + n} for n in r.SERVICES}
+                    proof = {'images': {n: {'imageId': states[n]['image'] if n in states else 'sha256:' + 'a' * 64,
+                                           'reference': 'public-' + n} for n in r.IMAGES}}
+                    evidence = {'environmentFileSha256': r.c.digest(raw_env), 'manifestBytesSha256': r.c.digest(old_raw),
+                        'ordinaryArchiveSha256': r.c.digest(ordinary_raw), 'services': {n: states[n] for n in r.c.SERVICES},
+                        'workspaceVolume': {}, 'appliedDatabase': {}, 'originMarkersSha256': 'a' * 64,
+                        'ordinaryProducer': self.auth['producer'], 'actualPredecessor': self.admin_auth['producer'],
+                        'adminAuthoritySha256': r.c.fingerprint(self.admin_auth), 'backupInstallation': {}}
+                    record = {'candidateArchiveSha256': 'b' * 64}; first = {'checksSha256': 'c' * 64}
+                    pref = {'baseline': evidence, 'sourceProjectionSha256': r.c.fingerprint(record)}
+                    args = SimpleNamespace(api_fault_restore_approved=True, commit=self.p['commit'],
+                        source_tree=self.p['sourceTree'], run_id='123', run_attempt='1',
+                        expected_current=self.admin_auth['producer']['commit'], ci_run_id='456', repository=self.repo)
+                    d.write_registration_files.side_effect = lambda target, output: target.mkdir(mode=0o700)
+                    d.shutil.disk_usage.return_value = SimpleNamespace(free=10 * 1024**3)
+                    d.subprocess.run.return_value = SimpleNamespace(returncode=0)
+                    d.registration_download.return_value = ordinary_raw; d.registration_archive.return_value = {}
+                    d.fresh_backup.return_value = {'name': 'public-backup-fixture'}
+                    online.extend_environment.return_value = raw_env
+                    workspace.workspace_volume.return_value = {}
+                    gate = Mock(); gate.record = {'publicFixture': True}; gate.connection = None
+                    audit = MagicMock(); audit.pipe.deadline = 200
+                    def switched(*_args, **kwargs):
+                        _args[9].extend(('admin', 'api', 'online-recharge'))
+                        holder = kwargs['gate_holder']; holder.update(gate=gate, audit=audit,
+                            controller=r.DeadlineController(d, 200, reserve=65), sqliteReleasedAfterStop=True)
+                        return gate, {'publicFixture': True}
+                    failure = make_error()
+                    if phase == 'source': online.extend_environment.side_effect = failure
+                    elif phase == 'backup': d.fresh_backup.side_effect = failure
+                    def audited(_d, _target, path):
+                        if (phase == 'audit-before' and path.name == 'before-audit.json') \
+                                or (phase == 'audit-after' and path.name == 'after-audit.json'):
+                            raise failure
+                        core.write_private(path, first)
+                        return first
+                    workspace.strict_audit.side_effect = audited
+                    with ExitStack() as stack:
+                        for patcher in (self.seal(), self.enabled(), patch.object(r.os, 'umask'),
+                            patch.object(r.time, 'monotonic', return_value=100),
+                            patch.object(r, 'modules', return_value=(d, core, admin, workspace, online)),
+                            patch.object(r, 'producer', return_value=self.p), patch.object(r, 'validate_preflight', return_value=pref),
+                            patch.object(r, 'source', return_value=({}, {}, record)), patch.object(r, 'validate_build'),
+                            patch.object(r, 'baseline', return_value=(previous, old, evidence)),
+                            patch.object(r, 'current_authority', return_value={'manifestBytesSha256': r.c.digest(old_raw)}),
+                            patch.object(r, 'preserve', return_value=states),
+                            patch.object(r, 'verify_image', side_effect=failure if phase == 'images' else None),
+                            patch.object(core, 'audit_guard'), patch.object(core, 'backup_guard'),
+                            patch.object(core, 'projection_module', return_value=SimpleNamespace(inventory=lambda files: {})),
+                            patch.object(r, 'backup_cas', return_value={}), patch.object(r, 'predecessor_records', return_value=()),
+                            patch.object(r.c, 'verify_applied_database', return_value={}), patch.object(r, 'verify_online_grants'),
+                            patch.object(r, 'switch', side_effect=failure if phase == 'service-switch' else switched),
+                            patch.object(r, 'current_backup_cas', side_effect=failure if phase == 'protected-readback' else None),
+                            patch.object(r, 'readback', side_effect=failure if phase == 'publication' else None),
+                            patch.object(r, 'restore', side_effect=RuntimeError('ONLINE_RECHARGE_COMPONENT_SYNTHETIC_RECOVERY_BLOCKED'))):
+                            stack.enter_context(patcher)
+                        with self.assertRaises(r.ComponentFailure) as caught:
+                            r.release(d, args, proof, {})
+                    receipt = caught.exception.receipt
+                    marker = phase.upper().replace('-', '_')
+                    expected = 'API_ADMIN_SYNTHETIC_CONTROLLED_FAILURE' if category == 'CONTROLLED' \
+                        else 'ONLINE_RECHARGE_COMPONENT_PROTECTED_' + marker + '_' + category if category \
+                        else 'ONLINE_RECHARGE_COMPONENT_PROTECTED_OPERATION_FAILED'
+                    self.assertEqual(receipt['phase'], phase); self.assertEqual(receipt['code'], expected)
+                    self.assertNotIn(secret, json.dumps(receipt)); self.assertNotIn(secret, json.dumps(r.wire(receipt)))
+                    if phase in ('audit-after', 'protected-readback', 'publication'):
+                        self.assertIsNone(receipt['businessActions'])
+                        self.assertEqual(receipt['recovery']['status'], 'BLOCKED_OR_FAILED')
+                    else:
+                        self.assertEqual(receipt['recovery']['status'], 'NOT_REQUIRED')
 
     def test_before_confirmed_api_stop_sqlite_deadline_is_still_required(self):
         original = Mock(); original.assert_no_active_recharge = Mock(); audit = Mock(); audit.pipe.deadline = 310

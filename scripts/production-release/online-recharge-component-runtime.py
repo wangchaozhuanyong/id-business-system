@@ -594,7 +594,10 @@ class DeadlineController:
         need(type(deadline) in (int, float) and type(reserve) in (int, float)
              and 0 <= reserve <= RESTORE_BUDGET_SECONDS, 'FENCE_DEADLINE_CHANGED')
         self.original, self.deadline, self.reserve = original, deadline, reserve
-        self.subprocess = SimpleNamespace(run=self.subprocess_run)
+        # The frozen backup verifier uses these stream constants. Expose only
+        # the fixed module values; every process still uses the bounded runner.
+        self.subprocess = SimpleNamespace(run=self.subprocess_run,
+            DEVNULL=subprocess.DEVNULL, PIPE=subprocess.PIPE)
         self.urllib = SimpleNamespace(request=SimpleNamespace(urlopen=self.urlopen))
         self.bound_helpers = {}
         names = ('current_job_database', 'assert_no_active_recharge', 'registration_runtime_state', 'rollback_service', 'audit')
@@ -1201,9 +1204,7 @@ def release(d, args, proof, transport):
                         holder, transport=transport)
             except Exception:
                 recovery = {'status': 'BLOCKED_OR_FAILED', 'sqliteMaintenanceRetained': gate is not None}
-            code = str(error)
-            if not re.fullmatch('(?:ONLINE_RECHARGE_COMPONENT|ONLINE_RECHARGE|API_ADMIN|UNPUBLISHED_COMPONENT)_[A-Z0-9_]+', code):
-                code = 'ONLINE_RECHARGE_COMPONENT_PROTECTED_OPERATION_FAILED'
+            code = safe_error_code(error, phase.upper().replace('-', '_'))
             publication = {'attempted': phase == 'publication', 'currentRole': 'UNAVAILABLE', 'onlinePublished': None}
             try:
                 actual_pointer = (d.BASE / 'current').resolve()
@@ -1697,7 +1698,9 @@ def safe_error_code(error, phase=None):
     number = error.errno if any(error_type is cls for cls in
         (FileExistsError, FileNotFoundError, PermissionError, TimeoutError, OSError)) else None
     suffix = '_ERRNO_' + str(number) if type(number) is int and 0 <= number <= 4095 else ''
-    marker = phase + '_' if type(phase) is str and phase in ('BASELINE', 'SOURCE', 'DISK') else ''
+    marker = phase + '_' if type(phase) is str and phase in (
+        'BASELINE', 'SOURCE', 'DISK', 'IMAGES', 'AUDIT_BEFORE', 'BACKUP',
+        'SERVICE_SWITCH', 'AUDIT_AFTER', 'PROTECTED_READBACK', 'PUBLICATION') else ''
     return 'ONLINE_RECHARGE_COMPONENT_PROTECTED_' + marker + kind + suffix
 
 

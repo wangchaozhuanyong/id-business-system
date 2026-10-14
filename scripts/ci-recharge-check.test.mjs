@@ -29,13 +29,18 @@ test('new ONLINE controls retain pure diagnostics lifecycle and CI build tests w
     for (const path of [
       'scripts/production-release/online-recharge-ci-build.py',
       'scripts/production-release/online-recharge-component-runtime.py',
+      'scripts/production-release/online-recharge-component-recovery.py',
+      'scripts/production-release/online-recharge-component-recovery-readonly.py',
+      '.github/workflows/online-recharge-recovery.yml',
       '.github/workflows/online-recharge-diagnostic.yml'
     ]) {
       const calls = recordGuardCommands('ci-only', [path], part);
       for (const suite of [
         'online-recharge-ci-build.test.py',
         'online-recharge-component-diagnostic.test.py',
-        'online-recharge-component-lifecycle.test.py'
+        'online-recharge-component-lifecycle.test.py',
+        'online-recharge-component-recovery.test.py',
+        'online-recharge-component-recovery-readonly.test.py'
       ])
         assert.equal(
           calls.filter((row) => row.join(' ') === `python3 -B scripts/production-release/${suite}`)
@@ -69,7 +74,9 @@ test('full Quality runs new ONLINE pure suites in its later guards without dupli
   for (const suite of [
     'online-recharge-ci-build.test.py',
     'online-recharge-component-diagnostic.test.py',
-    'online-recharge-component-lifecycle.test.py'
+    'online-recharge-component-lifecycle.test.py',
+    'online-recharge-component-recovery.test.py',
+    'online-recharge-component-recovery-readonly.test.py'
   ]) {
     assert.equal(
       prefix.filter((row) => row.includes('scripts/production-release/' + suite)).length,

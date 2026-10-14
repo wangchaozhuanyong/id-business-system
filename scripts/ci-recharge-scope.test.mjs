@@ -33,6 +33,10 @@ test('ONLINE CI build has finite inputs and read-only diagnostics remain control
   for (const path of [
     '.github/workflows/online-recharge-diagnostic.yml',
     'scripts/production-release/online-recharge-component-diagnostic.py',
+    'scripts/production-release/online-recharge-component-recovery.py',
+    'scripts/production-release/online-recharge-component-recovery.test.py',
+    'scripts/production-release/online-recharge-component-recovery-readonly.py',
+    '.github/workflows/online-recharge-recovery.yml',
     'docs/ONLINE_RECHARGE.md',
     'apps/admin/src/v2/features/customers/CustomerPage.vue'
   ])
@@ -41,7 +45,10 @@ test('ONLINE CI build has finite inputs and read-only diagnostics remain control
   for (const path of [
     'scripts/production-release/online-recharge-ci-build-write.py',
     'scripts/production-release/online-recharge-ci-build.py.backup',
-    '.github/workflows/online-recharge-diagnostic-write.yml'
+    '.github/workflows/online-recharge-diagnostic-write.yml',
+    'scripts/production-release/online-recharge-component-recovery-write.py',
+    'scripts/production-release/online-recharge-component-recovery.py.backup',
+    '.github/workflows/online-recharge-recovery-write.yml'
   ])
     assert.equal(isCiOnly([path]), false, path);
 });

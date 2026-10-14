@@ -418,6 +418,11 @@ if (
   run('python3', ['-B', 'scripts/production-release/online-recharge-ci-build.test.py']);
   run('python3', ['-B', 'scripts/production-release/online-recharge-component-diagnostic.test.py']);
   run('python3', ['-B', 'scripts/production-release/online-recharge-component-lifecycle.test.py']);
+  run('python3', ['-B', 'scripts/production-release/online-recharge-component-recovery.test.py']);
+  run('python3', [
+    '-B',
+    'scripts/production-release/online-recharge-component-recovery-readonly.test.py'
+  ]);
   run('node', [
     '--test',
     'scripts/production-release/online-recharge-component-diagnostic-entry.test.mjs'

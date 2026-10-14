@@ -10,6 +10,11 @@ export const onlineRechargeRecoveryPolicy =
 export const onlineCiBuildControlPaths = Object.freeze([
   'scripts/production-release/online-recharge-ci-build.py',
   'scripts/production-release/online-recharge-ci-build.test.py',
+  'scripts/production-release/online-recharge-component-recovery.py',
+  'scripts/production-release/online-recharge-component-recovery.test.py',
+  'scripts/production-release/online-recharge-component-recovery-readonly.py',
+  'scripts/production-release/online-recharge-component-recovery-readonly.test.py',
+  '.github/workflows/online-recharge-recovery.yml',
   'scripts/production-release/online-recharge-component-diagnostic.py',
   'scripts/production-release/online-recharge-component-diagnostic.test.py',
   'scripts/production-release/online-recharge-component-lifecycle.test.py',
