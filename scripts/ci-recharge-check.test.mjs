@@ -1381,3 +1381,62 @@ test('removed registration transport paths select retirement checks without exec
     );
   }
 });
+
+test('artifact-only controls keep the shared prefix and verify actual dependencies without unchanged website controllers', () => {
+  for (const part of ['guards', 'release-controls']) {
+    const paths = [
+      'scripts/production-release/release-artifact-retention.py',
+      'scripts/production-release/release-artifact-retention-transport.py',
+      '.github/workflows/release-artifact-retention.yml'
+    ];
+    const calls = recordGuardCommands('ci-only', paths, part);
+    for (const file of [
+      'release-artifact-retention',
+      'release-artifact-retention-transport',
+      'disk-retention-transport',
+      'release-storage'
+    ])
+      assert.equal(
+        calls.filter(
+          (call) => call.join(' ') === `python3 -B scripts/production-release/${file}.test.py`
+        ).length,
+        1
+      );
+    assert.equal(
+      calls.filter((call) => call.includes('scripts/ci-recharge-release.test.mjs')).length,
+      1
+    );
+    assert.ok(
+      !calls.some(
+        (call) =>
+          call.includes('scripts/production-release/remote-deploy.test.py') ||
+          call.includes('scripts/production-release/api-admin-scope.test.py')
+      )
+    );
+    assert.ok(
+      !calls.some(
+        (call) =>
+          call.includes('docker') ||
+          call.some((arg) => arg.startsWith('--workspace') || arg.includes('acceptance-v2'))
+      )
+    );
+    const mixed = recordGuardCommands(
+      'ci-only',
+      [...paths, 'scripts/production-release/remote-deploy.py'],
+      part
+    );
+    assert.equal(
+      mixed.filter((call) =>
+        call.includes('scripts/production-release/release-artifact-retention.test.py')
+      ).length,
+      1
+    );
+    assert.ok(
+      mixed.some((call) => call.includes('scripts/production-release/api-admin-scope.test.py'))
+    );
+    if (part === 'guards')
+      assert.ok(
+        mixed.some((call) => call.includes('scripts/production-release/remote-deploy.test.py'))
+      );
+  }
+});

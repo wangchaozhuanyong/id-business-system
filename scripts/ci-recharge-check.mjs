@@ -3,6 +3,8 @@ import { existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 import {
   adminCheckCommands,
+  releaseArtifactRetentionControls,
+  isReleaseArtifactRetentionOnly,
   adminUiGuardChecks,
   backendArchitectureGuardChecks,
   auditRetentionMigration,
@@ -36,6 +38,7 @@ const changed = execFileSync('git', ['diff', '--name-only', base, 'HEAD'], { enc
   .trim()
   .split('\n')
   .filter(Boolean);
+const releaseArtifactOnly = mode === 'ci-only' && isReleaseArtifactRetentionOnly(changed);
 const resumeCombinedGuardPrefix =
   part === 'guards' &&
   process.env.GITHUB_ACTIONS === 'true' &&
@@ -390,7 +393,12 @@ if (resumeOnlinePrepareFixGuard) {
   for (const [file, ...args] of onlinePrepareFixGuardCommands) run(file, args);
   process.exit(0);
 }
-if (part === 'guards' && !resumeCombinedGuardPrefix && !resumeOnlineComponentGuardPrefix) {
+if (
+  part === 'guards' &&
+  !releaseArtifactOnly &&
+  !resumeCombinedGuardPrefix &&
+  !resumeOnlineComponentGuardPrefix
+) {
   if (
     changed.some(
       (path) =>
@@ -474,10 +482,28 @@ if (part === 'guards' && !resumeCombinedGuardPrefix && !resumeOnlineComponentGua
 }
 if (resumeOnlineComponentGuardPrefix)
   run('python3', ['-B', 'scripts/production-release/unified-component-source.test.py']);
-if (part === 'guards') {
+const releaseArtifactRetentionChecks = () => {
+  if (changed.some((path) => releaseArtifactRetentionControls.includes(path))) {
+    run('python3', ['-B', 'scripts/production-release/release-artifact-retention.test.py']);
+    run('python3', [
+      '-B',
+      'scripts/production-release/release-artifact-retention-transport.test.py'
+    ]);
+    run('python3', ['-B', 'scripts/production-release/disk-retention-transport.test.py']);
+    run('python3', ['-B', 'scripts/production-release/release-storage.test.py']);
+  }
+};
+// An archive-only change leaves the existing website controllers unchanged.
+// Keep the common Node/format/lint prefix and verify its actual transport dependencies.
+if (releaseArtifactOnly && ['guards', 'release-controls'].includes(part)) {
+  if (!/^[a-f0-9]{40}$/.test(base)) throw new Error('Missing diff base');
+  if (part === 'release-controls') run('node', ['--test', 'scripts/ci-recharge-release.test.mjs']);
+  releaseArtifactRetentionChecks();
+} else if (part === 'guards') {
   rechargeFlowSuccessorControls();
   ownedMysqlTestControls();
   releaseMaintenanceControls();
+  releaseArtifactRetentionChecks();
   archiveReleaseControls();
   onlineSourcePermissionRepairControls();
   workspacePublicPermissionRepairControls();
@@ -633,6 +659,7 @@ if (part === 'guards') {
   rechargeFlowSuccessorControls();
   ownedMysqlTestControls();
   releaseMaintenanceControls();
+  releaseArtifactRetentionChecks();
   archiveReleaseControls();
   onlineSourcePermissionRepairControls();
   workspacePublicPermissionRepairControls();

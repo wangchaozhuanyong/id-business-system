@@ -1,0 +1,96 @@
+name: Release Artifact Retention
+
+on:
+  workflow_dispatch:
+    inputs:
+      operation:
+        description: Inspect, archive, or restore the exact reviewed release package
+        required: true
+        default: verify
+        type: choice
+        options:
+          - verify
+          - archive
+          - restore
+      commit:
+        description: Exact current main source commit (40 lowercase hex characters)
+        required: true
+        type: string
+      expected_current:
+        description: Exact application commit currently running in production
+        required: true
+        type: string
+      plan_sha256:
+        description: Exact digest from the preceding verified plan (archive or restore only)
+        required: false
+        default: ''
+        type: string
+
+permissions:
+  actions: read
+  contents: read
+  id-token: write
+
+concurrency:
+  group: id-business-v2-production-release
+  cancel-in-progress: false
+
+jobs:
+  retention:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      TZ: Asia/Kuala_Lumpur
+      AWS_REGION: ap-northeast-1
+      RELEASE_ACCOUNT_ID: '079740175286'
+      RELEASE_ROLE_ARN: arn:aws:iam::079740175286:role/id-business-v2-github-release
+      RELEASE_REPOSITORY: 079740175286.dkr.ecr.ap-northeast-1.amazonaws.com/id-business-v2-release
+      PRODUCTION_INSTANCE_ID: i-05836da38606e633c
+      RELEASE_COMMIT: ${{ inputs.commit }}
+      EXPECTED_CURRENT: ${{ inputs.expected_current }}
+      RELEASE_ARTIFACT_RETENTION_OPERATION: ${{ inputs.operation }}
+      RELEASE_ARTIFACT_RETENTION_PLAN_SHA256: ${{ inputs.plan_sha256 }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Check out the exact retention source
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          ref: ${{ inputs.commit }}
+          fetch-depth: 0
+
+      - name: Verify current main and successful Quality Gate
+        run: bash scripts/production-release/check-source.sh
+
+      - name: Validate retention operation and exact plan selection
+        run: python3 -B scripts/production-release/release-artifact-retention-transport.py --validate-only
+
+      - name: Obtain short-lived retention credentials
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          role-to-assume: ${{ env.RELEASE_ROLE_ARN }}
+          role-session-name: id-business-v2-${{ github.run_id }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-duration-seconds: 3600
+
+      - name: Verify dedicated production retention target
+        run: |
+          set -Eeuo pipefail
+          test "$(aws sts get-caller-identity --query Account --output text)" = "$RELEASE_ACCOUNT_ID"
+          test "$(aws sts get-caller-identity --query Arn --output text | cut -d/ -f2)" = id-business-v2-github-release
+          test "$(aws ecr describe-repositories --repository-names id-business-v2-release --query 'repositories[0].repositoryUri' --output text)" = "$RELEASE_REPOSITORY"
+          test "$(aws ssm describe-instance-information --filters Key=InstanceIds,Values=$PRODUCTION_INSTANCE_ID --query 'InstanceInformationList[0].InstanceId' --output text)" = "$PRODUCTION_INSTANCE_ID"
+          test "$(aws ssm describe-instance-information --filters Key=InstanceIds,Values=$PRODUCTION_INSTANCE_ID --query 'InstanceInformationList[0].PingStatus' --output text)" = Online
+
+      - name: Execute one reviewed release package operation
+        run: python3 -B scripts/production-release/release-artifact-retention-transport.py
+
+      - name: Preserve private source bindings and complete operation receipts
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: release-artifact-retention-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .deploy/production-release/release-artifact-retention/**/*.json
+          include-hidden-files: true
+          if-no-files-found: warn
+          retention-days: 30
