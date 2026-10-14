@@ -51,3 +51,5 @@
 首次精确清理在 esbuild 硬链接的 ctime 比较处安全停止；原计划与失败日志保留。按实际剩余状态重验恢复材料并修正本程序删除硬链接引起的 metadata 变化后，唯一续办计划 `6e8dc34b3f66e12743e094bd6cb6797f4a8eed77fdc6fa464712c1a0f311d3e2` 执行成功；没有重放旧程序、重复恢复源码或使用 force/prune。终态回执为 `backups/workspace-finalize-20261014/diagnostics-three-cache-continuation-actions.json`。
 
 这一组操作开始前可用空间为 `19,923,378,176` 字节，完成后为 `20,639,416,320` 字节，观察增加约 683 MiB，包含同时运行系统的影响。缓存以外的构建资料、运行记录、当前助手、回退目录、其他窗口和其他项目继续保留。
+
+独立终态只读核验通过：32 个已退休工作区、50 项缓存均无残留；9 个新增恢复引用、恢复 bundle、26 份公开源码、4 份原始未跟踪文件及 13 项忽略资料完整。32 个存续工作区对已删路径的依赖引用和开放文件均为零；当前助手、回退目录及原始发布材料仍保留。最终报告为 `backups/workspace-finalize-20261014/final-recovery-readonly-report.json`，SHA256 `f6e1d07d2aacabd60e41053983ce420cff1678c6e5147e76f450ef0eafbeef02`；清理前保护集合只作为历史快照。
