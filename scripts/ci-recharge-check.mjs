@@ -23,6 +23,8 @@ import {
   hasBankCardDeletePolicyProof,
   canResumeCombinedGuard,
   canResumeOnlineComponentGuard,
+  canResumeOnlinePrepareFixGuard,
+  onlinePrepareFixGuardCommands,
   readProductionDatabaseAccessSnapshot
 } from './ci-recharge-scope.mjs';
 
@@ -47,6 +49,14 @@ const resumeOnlineComponentGuardPrefix =
   process.env.GITHUB_EVENT_NAME === 'pull_request' &&
   base === 'b922b2d900e683f565ff3c5f95576ebc5f07803f' &&
   canResumeOnlineComponentGuard(base);
+const resumeOnlinePrepareFixGuard =
+  part === 'guards' &&
+  mode === 'ci-only' &&
+  process.env.GITHUB_ACTIONS === 'true' &&
+  process.env.GITHUB_REPOSITORY === 'wangchaozhuanyong/id-business-system' &&
+  process.env.GITHUB_EVENT_NAME === 'pull_request' &&
+  base === '2edb7ef92a9619e5b0e5855220c97bac29d22f60' &&
+  canResumeOnlinePrepareFixGuard(base);
 const shared = () => npm('run', 'build', '--workspace', '@apple-business/shared');
 const onlineEngine = () => {
   const directory = 'apps/api/src/id-business-v2/online-recharge/engine/upstream';
@@ -375,6 +385,10 @@ if (part === 'guards') {
     'scripts/ci-recharge-release.test.mjs',
     'scripts/admin-layout-rules.test.mjs'
   ]);
+}
+if (resumeOnlinePrepareFixGuard) {
+  for (const [file, ...args] of onlinePrepareFixGuardCommands) run(file, args);
+  process.exit(0);
 }
 if (part === 'guards' && !resumeCombinedGuardPrefix && !resumeOnlineComponentGuardPrefix) {
   if (
