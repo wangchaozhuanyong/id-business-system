@@ -361,5 +361,8 @@
     }
   },
   "sourceBaseline": "f8a1612d9b465dc5cfb1534c9cc3c5640583cc80",
-  "sourceBaselineTree": "2c634fd53a6bb393bb37e4459579c266a93e4f4f"
+  "sourceBaselineTree": "2c634fd53a6bb393bb37e4459579c266a93e4f4f",
+  "validationOnlySources": {
+    "apps/api/src/id-business-v2/auto-recharge/worker/test_payment.py": "5fb536776161b7cc03900622c27403e80c8a1c13e6a886a173e8656fe3e11784"
+  }
 }

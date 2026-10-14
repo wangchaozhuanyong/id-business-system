@@ -47,9 +47,13 @@ def verify_scope(contract):
     changed = set(git('diff', '--name-only', contract['mainBase'], 'HEAD', '--',
                       'apps/', 'packages/', 'deploy/', 'package.json', 'package-lock.json',
                       'tsconfig.base.json', 'docker-compose.aws-mysql.yml').splitlines())
-    need(changed == set(contract['changedSources']), 'SOURCE_SCOPE_CHANGED')
+    validation_only = contract.get('validationOnlySources', {})
+    need(set(validation_only) <= {'apps/api/src/id-business-v2/auto-recharge/worker/test_payment.py'},
+         'VALIDATION_SCOPE_CHANGED')
+    sources = {**contract['changedSources'], **validation_only}
+    need(changed == set(sources), 'SOURCE_SCOPE_CHANGED')
     need(all(digest((ROOT / name).read_bytes()) == sha
-             for name, sha in contract['changedSources'].items()), 'REPAIR_SOURCE_CHANGED')
+             for name, sha in sources.items()), 'REPAIR_SOURCE_CHANGED')
     need(not git('status', '--porcelain', '--untracked-files=no'), 'SOURCE_DIRTY')
 
 
@@ -79,7 +83,7 @@ def prepare():
     extract_source(subprocess.check_output(['git', 'archive', contract['sourceBaseline']], cwd=ROOT), baseline)
     candidate = OUTPUT / 'candidate'
     extract_source(subprocess.check_output(['git', 'archive', contract['sourceBaseline']], cwd=ROOT), candidate)
-    for name in contract['changedSources']:
+    for name in {**contract['changedSources'], **contract.get('validationOnlySources', {})}:
         (candidate / name).write_bytes((ROOT / name).read_bytes())
     for context in (baseline, candidate):
         run('npm', 'ci', '--no-audit', cwd=context)

@@ -27,6 +27,7 @@ const rechargeRecordApplicationPaths = new Set([
   'apps/api/src/id-business-v2/auto-recharge/recharge.spec.ts',
   'apps/api/src/id-business-v2/auto-recharge/worker/callback_observation.py',
   'apps/api/src/id-business-v2/auto-recharge/worker/test_callback_observation.py',
+  'apps/api/src/id-business-v2/auto-recharge/worker/test_payment.py',
   'packages/shared/src/v2/auto-recharge.ts'
 ]);
 export function isRechargeRecordRepairOnly(paths) {

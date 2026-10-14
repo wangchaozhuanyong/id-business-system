@@ -842,6 +842,7 @@ class PaymentBrowserTests(unittest.IsolatedAsyncioTestCase):
         self.new_checkouts = 0
         self.result_mode = "paid"
         self.activation_delayed = False
+        self.confirm_response_delay = 0
         self.recovery_paid = False
         self.recovery_activated = False
         self.official_totals_shape = False
@@ -897,6 +898,8 @@ class PaymentBrowserTests(unittest.IsolatedAsyncioTestCase):
                     data["id"] = "page_synthetic"
                     data["session_id"] = "cs_synthetic"
                     data["total_summary"] = {"due": 9250, "total": 9250}
+            if self.confirm_response_delay:
+                await asyncio.sleep(self.confirm_response_delay)
             await route.fulfill(json=data, headers={"Access-Control-Allow-Origin": "*"})
         elif p.hostname == "js.stripe.com" and p.path == "/card-fixture":
             await route.fulfill(content_type="text/html; charset=utf-8", body='''<html><body>
@@ -954,7 +957,7 @@ class PaymentBrowserTests(unittest.IsolatedAsyncioTestCase):
         else:
             await route.abort()  # 禁止任何请求到公网，包括未列出的边界情况。
 
-    async def flow(self, pay=True, confirmer=None):
+    async def flow(self, pay=True, confirmer=None, *, wait_seconds=.3):
         async def local_browser(target, **kwargs):
             from attempt_ledger import existing_checkout
             return await workflow(self.context, target, existing=existing_checkout(self.root, target.account_id),
@@ -962,7 +965,7 @@ class PaymentBrowserTests(unittest.IsolatedAsyncioTestCase):
         with PaymentLedger(self.root, self.target.account_id) as ledger:
             with patch("pay.run_browser", side_effect=local_browser), contextlib.redirect_stderr(io.StringIO()):
                 return await run_payment(self.target, ledger, pay=pay, details_reader=details,
-                                         confirmer=confirmer or (lambda *_: True), wait_seconds=.3, poll_count=2, poll_interval=.01)
+                                         confirmer=confirmer or (lambda *_: True), wait_seconds=wait_seconds, poll_count=2, poll_interval=.01)
 
     async def test_prepare_fills_card_without_any_payment_or_new_order(self):
         result = await self.flow(False)
@@ -1026,9 +1029,15 @@ class PaymentBrowserTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_paid_but_not_active_is_pending(self):
         self.activation_delayed = True
-        result = await self.flow()
+        # This real browser case verifies the mocked paid receipt, not whether
+        # an overloaded CI runner schedules its response within 300 ms.
+        self.confirm_response_delay = .6
+        result = await self.flow(wait_seconds=5)
         self.assertEqual(result["status"], "paid_pending_activation", result)
         self.assertEqual(result["payment_status"], "paid")
+        self.assertIsNotNone(result["payment_evidence"])
+        self.assertEqual(self.confirmations, 1)
+        self.assertEqual(self.new_checkouts, 0)
 
     async def test_cancel_never_tokenizes_or_attempts_payment(self):
         result = await self.flow(confirmer=lambda *_: False)

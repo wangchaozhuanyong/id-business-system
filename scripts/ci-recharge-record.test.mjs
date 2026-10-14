@@ -13,6 +13,7 @@ const contract = JSON.parse(
 );
 const paths = [
   ...Object.keys(contract.changedSources),
+  ...Object.keys(contract.validationOnlySources || {}),
   'scripts/production-release/recharge-record-contract.json',
   'scripts/production-release/recharge-record-build.py',
   'scripts/production-release/recharge-record-release.py',
