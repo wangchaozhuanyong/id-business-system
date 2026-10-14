@@ -18,6 +18,7 @@ const paths = [
   'scripts/production-release/recharge-record-release.py',
   'scripts/production-release/recharge-record-release.test.py',
   'scripts/production-release/recharge-record-dispatch.py',
+  'scripts/production-release/online-recharge-component-consumer.test.py',
   '.github/workflows/recharge-record-validation.yml',
   'scripts/ci-recharge-scope.mjs',
   'scripts/ci-recharge-check.mjs',

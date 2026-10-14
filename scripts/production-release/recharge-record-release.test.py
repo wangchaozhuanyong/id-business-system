@@ -51,6 +51,10 @@ class RepairPublicationTests(unittest.TestCase):
             (payload / 'api/recharge-validation.js').write_text('export const safe = true;')
             (payload / 'admin/html').mkdir(parents=True)
             (payload / 'admin/html/index.html').write_text('<html></html>')
+            for name in contract['changedSources']:
+                path = payload / 'source' / name
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes((HERE.parents[1] / name).read_bytes())
             proof = {'version': 1, 'scope': release.SCOPE, **plan,
                      'sourceBaseline': contract['sourceBaseline'],
                      'liveManifestSha256': contract['manifestSha256'],
@@ -67,6 +71,13 @@ class RepairPublicationTests(unittest.TestCase):
                 with self.subTest(field=field), self.assertRaisesRegex(RuntimeError, 'BUILD_PROOF_INVALID'):
                     release.validate_proof({**proof, field: value}, plan, contract, payload)
             (payload / 'api/payment-executor.js').write_text('extra')
+            with self.assertRaisesRegex(RuntimeError, 'BUILD_CONTENT_CHANGED'):
+                release.validate_proof(proof, plan, contract, payload)
+            (payload / 'api/payment-executor.js').unlink()
+            name = next(iter(contract['changedSources']))
+            path = payload / 'source' / name
+            path.write_bytes(path.read_bytes() + b' ')
+            proof['files'] = release.file_inventory(payload)
             with self.assertRaisesRegex(RuntimeError, 'BUILD_CONTENT_CHANGED'):
                 release.validate_proof(proof, plan, contract, payload)
 

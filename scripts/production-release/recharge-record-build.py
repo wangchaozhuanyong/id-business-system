@@ -107,6 +107,10 @@ def build():
     (payload / 'api').mkdir(parents=True)
     shutil.copyfile(candidate / MODULE, payload / 'api/recharge-validation.js')
     shutil.copytree(candidate / 'apps/admin/dist', payload / 'admin/html')
+    for name in contract['changedSources']:
+        path = payload / 'source' / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes((candidate / name).read_bytes())
     proof = {'version': 1, 'scope': 'RECHARGE_RECORD_DIAGNOSTICS_ONLY',
              'commit': commit, 'tree': tree, 'contractSha256': digest(CONTRACT.read_bytes()),
              'workflowRunId': os.environ['GITHUB_RUN_ID'],

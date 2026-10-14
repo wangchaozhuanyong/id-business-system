@@ -97,7 +97,10 @@ def validate_proof(proof, plan, contract, payload):
     actual.pop('build-proof.json', None)
     need(actual == proof.get('files') and 'api/recharge-validation.js' in actual
          and 'admin/html/index.html' in actual
+         and {name.removeprefix('source/'): value for name, value in actual.items()
+              if name.startswith('source/')} == contract['changedSources']
          and all(name == 'api/recharge-validation.js' or name.startswith('admin/html/')
+                 or name.startswith('source/')
                  for name in actual), 'BUILD_CONTENT_CHANGED')
     return proof
 
@@ -205,6 +208,15 @@ def release(plan, contract, d):
             states = snapshot(d, target)
             need(states == receipt['after'] and all(states[n] == receipt['before'][n] for n in PRESERVED),
                  'READBACK_SERVICES_CHANGED')
+            for name, expected in contract['changedSources'].items():
+                path = target / name
+                need(path.resolve().is_relative_to(target) and not path.is_symlink()
+                     and digest(path.read_bytes()) == expected, 'READBACK_HOST_SOURCE_CHANGED')
+            for name, expected in (('recharge-record-release.py', plan['controllerSha256']),
+                                   ('remote-deploy.py', plan['releaseUtilitySha256']),
+                                   ('recharge-record-contract.json', plan['contractSha256'])):
+                need(digest((target / 'scripts/production-release' / name).read_bytes()) == expected,
+                     'READBACK_EXECUTOR_SOURCE_CHANGED')
             guards(d, target, states)
             code = "console.log(require('crypto').createHash('sha256').update(require('fs').readFileSync(" + json.dumps(MODULE) + ")).digest('hex'))"
             need(d.compose(target, 'exec', '-T', 'api', 'node', '-e', code) == receipt['apiValidationSha256'],
@@ -291,6 +303,22 @@ def release(plan, contract, d):
         target = BASE / 'releases' / (stamp + '-' + plan['commit'][:12] + '-recharge-record')
         need(not target.exists(), 'RELEASE_DIRECTORY_EXISTS')
         shutil.copytree(previous, target, symlinks=True)
+        for name, expected in contract['changedSources'].items():
+            path = target / name
+            source = payload / 'source' / name
+            need(path.resolve().is_relative_to(target) and not path.is_symlink()
+                 and digest(source.read_bytes()) == expected, 'HOST_SOURCE_PATH_CHANGED')
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(source.read_bytes())
+            path.chmod(0o644)
+        # Keep the exact executed controls alongside the native build proof.
+        for source, name, expected in (
+            (Path(__file__), 'recharge-record-release.py', plan['controllerSha256']),
+            (Path(d.__file__), 'remote-deploy.py', plan['releaseUtilitySha256']),
+            (Path(__file__).with_name('recharge-record-contract.json'), 'recharge-record-contract.json', plan['contractSha256'])
+        ):
+            need(source.is_file() and digest(source.read_bytes()) == expected, 'EXECUTED_CONTROL_CHANGED')
+            (target / 'scripts/production-release' / name).write_bytes(source.read_bytes())
         override = json.loads((target / 'compose.release.json').read_bytes())
         for role in ('api', 'admin'):
             override['services'][role]['image'] = images[role]['reference']
@@ -348,6 +376,7 @@ def release(plan, contract, d):
                         sourceProjection={'sourceBaseline': contract['sourceBaseline'],
                                           'changedSources': contract['changedSources'],
                                           'buildProofSha256': plan['buildProofSha256']},
+                        sourceLayout='FROZEN_PUBLISHED_SOURCE_WITH_EXACT_DIAGNOSTIC_OVERLAY',
                         servicesBefore=before, servicesAfter=after, actualDeployment=receipt,
                         rechargeRecordPublication={'artifactSha256': plan['artifactSha256'],
                                                    'buildProofSha256': plan['buildProofSha256'],

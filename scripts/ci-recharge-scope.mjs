@@ -12,6 +12,7 @@ export const rechargeRecordControlPaths = Object.freeze([
   'scripts/production-release/recharge-record-release.py',
   'scripts/production-release/recharge-record-release.test.py',
   'scripts/production-release/recharge-record-dispatch.py',
+  'scripts/production-release/online-recharge-component-consumer.test.py',
   'scripts/ci-recharge-record.test.mjs'
 ]);
 const rechargeRecordApplicationPaths = new Set([

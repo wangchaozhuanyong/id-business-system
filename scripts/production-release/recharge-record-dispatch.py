@@ -103,6 +103,10 @@ try:
  with urllib.request.urlopen(RAW_BASE+'recharge-record-contract.json',timeout=30) as response:contract_raw=response.read(256*1024+1)
  if len(contract_raw)>256*1024 or hashlib.sha256(contract_raw).hexdigest()!=plan['contractSha256']:raise RuntimeError('RECHARGE_RECORD_CONTRACT_CHANGED')
  contract=json.loads(contract_raw)
+ contract_path=directory/'recharge-record-contract.json'
+ if contract_path.exists():
+  if contract_path.is_symlink() or contract_path.read_bytes()!=contract_raw:raise RuntimeError('RECHARGE_RECORD_CONTRACT_CHANGED')
+ else:contract_path.write_bytes(contract_raw)
  for name,field in [('recharge-record-release.py','controllerSha256'),('remote-deploy.py','releaseUtilitySha256')]:
   with urllib.request.urlopen(RAW_BASE+name,timeout=30) as response:raw=response.read(8*1024**2+1)
   if len(raw)>8*1024**2 or hashlib.sha256(raw).hexdigest()!=plan[field]:raise RuntimeError('RECHARGE_RECORD_EXECUTOR_SOURCE_CHANGED')
