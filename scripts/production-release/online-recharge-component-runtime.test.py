@@ -180,6 +180,133 @@ class RuntimeTests(unittest.TestCase):
             self.assertEqual(f['core'].closed_json(f['core'].private_bytes(directory / r.PROJECTION)), f['record'])
             self.assertEqual(preflight.read_bytes(), original + b' ')
 
+    def private_build_fixture(self, directory):
+        f = self.private_prepare_fixture(directory)
+        f['record']['candidateProducer'] = self.p
+        f['record']['outputFilesSha256'] = r.c.fingerprint(f['core'].projection_module().inventory(f['output']))
+        f['core'].write_private(directory / r.PROJECTION, f['record'])
+        f['d'].write_registration_files(directory / r.CONTEXT, f['output'])
+        for path in (directory / r.CONTEXT).rglob('*'):
+            if path.is_file(): path.chmod(0o644)
+        def run(*args):
+            if args[1:3] == ('image', 'inspect'):
+                reference = args[3]
+                return json.dumps([{'Id': 'sha256:' + r.c.digest(reference.encode()), 'Architecture': 'amd64',
+                    'Config': {'Labels': {'org.opencontainers.image.revision': self.p['commit'],
+                        'id-business-v2.source-tree': self.p['sourceTree'], r.LABEL: r.c.fingerprint(f['record'])}}}])
+            return 'synthetic public image content'
+        f['d'].run = Mock(side_effect=run)
+        f['online'] = SimpleNamespace(content_command=lambda name: 'fixed fixture',
+            content_summary=lambda d, name, raw: {'fileCount': 1, 'sha256': r.c.digest(name.encode())})
+        return f
+
+    def call_private_build(self, directory, f):
+        previous = Path.cwd(); r.os.chdir(directory)
+        try:
+            with self.seal(), self.enabled(), patch.dict(r.os.environ, GITHUB_ACTIONS='true'), \
+                    patch.object(r, 'modules', return_value=(f['d'], f['core'], None, None, f['online'])), \
+                    patch.object(r, 'validate_preflight', return_value={'baseline': {}}), \
+                    patch.object(r, 'source', return_value=({}, f['output'], f['record'])), \
+                    patch.object(r, 'verify_image'):
+                return r.build_proof(f['d'], self.p, f['transport'], '456', self.repo)
+        finally:
+            r.os.chdir(previous)
+
+    def test_build_proof_existing_private_original_is_remeasured_without_recreation(self):
+        with tempfile.TemporaryDirectory(prefix='online-build-proof-private-', dir=HERE.parents[1] / '.runtime') as td:
+            directory = Path(td); f = self.private_build_fixture(directory)
+            path = directory / r.PROOF
+            with patch.object(f['core'], 'write_private', wraps=f['core'].write_private) as write:
+                first = self.call_private_build(directory, f)
+                raw = path.read_bytes()
+                identity = (path.stat().st_ino, path.stat().st_mode, path.stat().st_mtime_ns, path.stat().st_ctime_ns)
+                measured = f['d'].run.call_count
+                self.assertEqual(self.call_private_build(directory, f), first)
+                self.assertEqual(f['d'].run.call_count, measured * 2)
+                self.assertEqual(write.call_count, 1)
+                self.assertEqual(path.read_bytes(), raw)
+                self.assertEqual((path.stat().st_ino, path.stat().st_mode, path.stat().st_mtime_ns, path.stat().st_ctime_ns), identity)
+                self.assertEqual(path.stat().st_mode & 0o777, 0o600)
+
+    def test_build_proof_private_tampering_and_symbolic_path_never_overwrite_original(self):
+        for mutation in ('content', 'whitespace', 'symlink'):
+            with self.subTest(mutation=mutation), tempfile.TemporaryDirectory(
+                    prefix='online-build-proof-reject-', dir=HERE.parents[1] / '.runtime') as td:
+                directory = Path(td); f = self.private_build_fixture(directory)
+                self.call_private_build(directory, f)
+                path = directory / r.PROOF
+                original = path.read_bytes()
+                if mutation == 'content':
+                    changed = json.loads(original); changed['qualityRunId'] = '999'
+                    path.write_bytes(encoded(changed) + b'\n')
+                elif mutation == 'whitespace':
+                    path.write_bytes(original + b' ')
+                else:
+                    target = directory / 'synthetic-original-proof.json'; path.rename(target); path.symlink_to(target)
+                before = path.read_bytes()
+                with patch.object(f['core'], 'write_private', wraps=f['core'].write_private) as write:
+                    with self.assertRaisesRegex(RuntimeError, 'BUILD_PROOF_CHANGED|PRIVATE_ARTIFACT_INVALID'):
+                        self.call_private_build(directory, f)
+                    write.assert_not_called()
+                self.assertEqual(path.read_bytes(), before)
+                if mutation == 'symlink': self.assertTrue(path.is_symlink())
+
+    def test_build_proof_private_original_drift_during_image_checks_is_rejected(self):
+        with tempfile.TemporaryDirectory(prefix='online-build-proof-drift-', dir=HERE.parents[1] / '.runtime') as td:
+            directory = Path(td); f = self.private_build_fixture(directory)
+            self.call_private_build(directory, f)
+            path = directory / r.PROOF; original = path.read_bytes()
+            run = f['d'].run.side_effect
+            def drift(*args):
+                value = run(*args)
+                path.write_bytes(original + b' ')
+                return value
+            f['d'].run.side_effect = drift
+            with patch.object(f['core'], 'write_private', wraps=f['core'].write_private) as write:
+                with self.assertRaisesRegex(RuntimeError, 'BUILD_PROOF_CHANGED'):
+                    self.call_private_build(directory, f)
+                write.assert_not_called()
+            self.assertEqual(path.read_bytes(), original + b' ')
+
+    def test_build_proof_projection_or_context_symbolic_path_and_projection_byte_tampering_refuse(self):
+        for mutation in ('projection-symlink', 'context-symlink', 'projection-whitespace'):
+            with self.subTest(mutation=mutation), tempfile.TemporaryDirectory(
+                    prefix='online-build-projection-reject-', dir=HERE.parents[1] / '.runtime') as td:
+                directory = Path(td); f = self.private_build_fixture(directory)
+                projection = directory / r.PROJECTION
+                original = projection.read_bytes()
+                if mutation == 'projection-symlink':
+                    target = directory / 'synthetic-projection-original.json'
+                    projection.rename(target); projection.symlink_to(target)
+                elif mutation == 'context-symlink':
+                    context = directory / r.CONTEXT; target = directory / 'synthetic-context-original'
+                    context.rename(target); context.symlink_to(target, target_is_directory=True)
+                else:
+                    projection.write_bytes(original + b' ')
+                with patch.object(f['core'], 'write_private', wraps=f['core'].write_private) as write:
+                    with self.assertRaisesRegex(RuntimeError, 'PRIVATE_ARTIFACT_INVALID|BUILD_CONTEXT_CHANGED'):
+                        self.call_private_build(directory, f)
+                    write.assert_not_called()
+                f['d'].run.assert_not_called()
+                self.assertFalse((directory / r.PROOF).exists())
+                self.assertEqual(projection.read_bytes(), original + b' ' if mutation == 'projection-whitespace' else original)
+
+    def test_build_proof_projection_drift_after_image_measurement_refuses_first_proof_write(self):
+        with tempfile.TemporaryDirectory(prefix='online-build-projection-drift-', dir=HERE.parents[1] / '.runtime') as td:
+            directory = Path(td); f = self.private_build_fixture(directory)
+            path = directory / r.PROJECTION; original = path.read_bytes()
+            run = f['d'].run.side_effect
+            def drift(*args):
+                value = run(*args)
+                path.write_bytes(original + b' ')
+                return value
+            f['d'].run.side_effect = drift
+            with patch.object(f['core'], 'write_private', wraps=f['core'].write_private) as write:
+                with self.assertRaisesRegex(RuntimeError, 'BUILD_CONTEXT_CHANGED'):
+                    self.call_private_build(directory, f)
+                write.assert_not_called()
+            self.assertFalse((directory / r.PROOF).exists())
+
     def test_none_and_unreviewed_adapter_refuse_before_controller_or_io(self):
         calls = (lambda: r.modules(), lambda: r.baseline(None, ''), lambda: r.preflight(None, {}, ''),
             lambda: r.prepare(None, {}, {}), lambda: r.build_proof(None, {}, {}, '', ''),
@@ -229,12 +356,8 @@ class RuntimeTests(unittest.TestCase):
         with self.seal(), self.enabled():
             with self.assertRaisesRegex(RuntimeError, 'UNPUBLISHED_COMPONENT_INVOCATION_INVALID'):
                 core.validate_invocation(raw, native['CommandId'], native['InstanceId'], status='Failed')
-            with patch.object(core, 'validate_invocation', wraps=core.validate_invocation) as validate:
-                result, receipt = r.validate_component_invocation(core, raw,
-                    native['CommandId'], native['InstanceId'], status='Failed')
-                checked = core.closed_json(validate.call_args.args[0])
-                self.assertEqual(checked, {**native, 'StandardErrorContent': ''})
-                self.assertNotEqual(validate.call_args.args[0], raw)
+            result, receipt = r.validate_component_invocation(core, raw,
+                native['CommandId'], native['InstanceId'], status='Failed')
             self.assertEqual(result, native); self.assertEqual(receipt, self.rejected_receipt())
             self.assertEqual(result['StandardErrorContent'], 'failed to run commands: exit status 1')
             client = r.load('online-recharge-component-readonly.py')
@@ -348,6 +471,37 @@ class RuntimeTests(unittest.TestCase):
             payload = r.bounded_gzip(base64.b64decode(json.loads(output)['payload']), 256 * 1024)
             self.assertEqual(json.loads(payload)['code'], 'ONLINE_RECHARGE_COMPONENT_PROTECTED_OPERATION_FAILED')
             self.assertNotIn(b'SECRET', payload); self.assertNotIn(b'private secret', payload)
+
+    def test_actual_main_preflight_keeps_safe_baseline_source_and_disk_phase_codes(self):
+        source = HERE / 'online-recharge-component-runtime.py'
+        main = ast.parse(source.read_bytes()).body[-1]
+        secret = 'synthetic-private-path-url-token'
+        cases = (('BASELINE', FileNotFoundError(2, secret), 'BASELINE_FILENOTFOUNDERROR_ERRNO_2'),
+                 ('SOURCE', TypeError(secret), 'SOURCE_TYPEERROR'),
+                 ('DISK', PermissionError(13, secret), 'DISK_PERMISSIONERROR_ERRNO_13'))
+        argv = [str(source), 'preflight', '--commit', self.p['commit'], '--source-tree', self.p['sourceTree'],
+                '--run-id', self.p['workflowRunId'], '--run-attempt', self.p['workflowRunAttempt'],
+                '--expected-current', self.admin_auth['producer']['commit']]
+        for phase, error, suffix in cases:
+            output = io.StringIO()
+            d = SimpleNamespace(BASE=Path('/synthetic-public-fixture'), shutil=SimpleNamespace(
+                disk_usage=Mock(side_effect=error if phase == 'DISK' else None,
+                                return_value=SimpleNamespace(free=7 * 1024**3))))
+            with self.subTest(phase=phase), self.seal(), self.enabled(), patch.object(sys, 'argv', argv), \
+                    patch.object(r, 'modules', return_value=(d, None, None, None, None)), \
+                    patch.object(r, 'baseline', side_effect=error if phase == 'BASELINE' else None,
+                                 return_value=(None, None, {})), \
+                    patch.object(r, 'source', side_effect=error if phase == 'SOURCE' else None,
+                                 return_value=({}, {}, {})), \
+                    patch.object(r.c, 'validate_source_files'), patch.dict(r.__dict__, __name__='__main__'), \
+                    redirect_stdout(output), self.assertRaises(SystemExit) as ended:
+                # Real cli -> preflight -> protected_stage -> actual main wire.
+                exec(compile(ast.Module(body=[main], type_ignores=[]), str(source), 'exec'), r.__dict__)
+            self.assertEqual(ended.exception.code, 1)
+            envelope = json.loads(output.getvalue())
+            payload = r.bounded_gzip(base64.b64decode(envelope['payload']), 256 * 1024)
+            self.assertEqual(json.loads(payload)['code'], 'ONLINE_RECHARGE_COMPONENT_PROTECTED_' + suffix)
+            self.assertNotIn(secret.encode(), payload)
 
     def test_wire_hash_length_kind_bombs_and_concatenated_members_rejected(self):
         core = r.c.load_core(self.auth['coreSha256'])

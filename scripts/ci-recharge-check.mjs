@@ -29,6 +29,8 @@ import {
   canResumeOnlinePreflightReceiptFixGuard,
   onlinePreflightReceiptFixGuardCommands,
   onlinePrepareFixGuardCommands,
+  needsOnlineRechargeCiBuild,
+  onlineCiBuildControlPaths,
   readProductionDatabaseAccessSnapshot
 } from './ci-recharge-scope.mjs';
 
@@ -406,6 +408,20 @@ if (resumeOnlinePrepareFixGuard) {
 if (resumeOnlinePreflightReceiptFixGuard) {
   for (const [file, ...args] of onlinePreflightReceiptFixGuardCommands) run(file, args);
   process.exit(0);
+}
+if (
+  !releaseArtifactOnly &&
+  (part === 'guards' || (part === 'release-controls' && mode !== 'full')) &&
+  (needsOnlineRechargeCiBuild(changed) ||
+    changed.some((path) => onlineCiBuildControlPaths.includes(path)))
+) {
+  run('python3', ['-B', 'scripts/production-release/online-recharge-ci-build.test.py']);
+  run('python3', ['-B', 'scripts/production-release/online-recharge-component-diagnostic.test.py']);
+  run('python3', ['-B', 'scripts/production-release/online-recharge-component-lifecycle.test.py']);
+  run('node', [
+    '--test',
+    'scripts/production-release/online-recharge-component-diagnostic-entry.test.mjs'
+  ]);
 }
 if (
   part === 'guards' &&
