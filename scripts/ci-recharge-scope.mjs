@@ -2992,14 +2992,17 @@ export function canResumeOnlinePreflightReceiptFixGuard(base) {
 export const onlineBuildProofReuseGuardBinding = Object.freeze({
   repository: 'wangchaozhuanyong/id-business-system',
   branch: 'codex/online-proof-reuse-integration-20261014',
-  base: 'fff7b257fa402e14da5d9aa43aa4ea22095695c5',
-  tree: '04637480488076dc891c822e79864f8ff96bbf06',
+  base: 'c7a800b931311cd5c6da4c4b2320743b7a3015a1',
+  tree: '620f5766fd5b664a79a79df2026708df08625642',
+  originalMergedMain: 'fff7b257fa402e14da5d9aa43aa4ea22095695c5',
+  originalMergedTree: '04637480488076dc891c822e79864f8ff96bbf06',
   originalPr: 475,
   originalHead: '52f25bad6fb42721faceb3d7ce5cd9d052e8e71a',
   originalBase: '619b04c240eed836b1db76a9fe330634de1fecbf',
   run: 38526906459,
   attempt: 1,
-  mainRun: 38530643303,
+  originalMainRun: 38530643303,
+  integrationMainRun: 38537007996,
   job: 115729349592,
   qualityJob: 115740147064,
   checkout: '52fe5d339984bc8c89f27175e96786015469a25a',
@@ -3013,9 +3016,9 @@ export const onlineBuildProofReuseGuardBinding = Object.freeze({
   runtimeTestSha256: '4a2dbf2111592d2711cf175b2d9b3bdd0fc619b6f940bc5d604cfb2378eb74d7',
   readonlySha256: 'c65a7fd1a92c133cfda4e2a94d9326c4b1eae5f63c149b163f31aa59ef34fe8a',
   readonlyTestSha256: 'e43cf0ead1fdd0c3a46186c3b24a1527c1d6d48085912a9fcf2eae3b7907cb26',
-  helperSha256: 'd18de93dccc88f28177769d4ac6c78e984e9b0a63d62b586d590c5f6ea2ccf99',
+  helperSha256: '2702bad4f82a8212ba7dd1085e48bb75e162d98d0fcfa2c6998fe1dcd5dc4543',
   helperTestSha256: '47f20b34d353214c52527ec1dac492be7c2e5ec5cf986dc8d8b86ca374e55357',
-  dispatcherTestSha256: '02b615a069cd0357e023f8165e47585dfb0f74c69782590179b528728947c371'
+  dispatcherTestSha256: '12fc17331e91d667400769c90d24c36aca5dd554b8540930cfa95682ee6d4bd4'
 });
 export const onlineBuildProofReuseGuardPaths = Object.freeze([
   'scripts/production-release/online-recharge-component-runtime.py',
@@ -3086,7 +3089,7 @@ export function onlineBuildProofReuseDispatcherBytesUnchanged(before, after) {
     "  process.env.GITHUB_ACTIONS === 'true' &&",
     "  process.env.GITHUB_REPOSITORY === 'wangchaozhuanyong/id-business-system' &&",
     "  process.env.GITHUB_EVENT_NAME === 'pull_request' &&",
-    "  base === 'fff7b257fa402e14da5d9aa43aa4ea22095695c5' &&",
+    "  base === 'c7a800b931311cd5c6da4c4b2320743b7a3015a1' &&",
     '  canResumeOnlineBuildProofReuseGuard(base);',
     ''
   ].join('\n');
@@ -3198,7 +3201,8 @@ export function onlineBuildProofReuseGuardFailureCodes(input = {}) {
       codes.push(code);
     }
   };
-  const { run, originalPr, mainRun, artifact, proof, facts, qualityLog } = input;
+  const { run, originalPr, mainRun, integrationMainRun, artifact, proof, facts, qualityLog } =
+    input;
   const jobs = Array.isArray(input.jobs) ? input.jobs : [];
   const guard = jobs.filter((row) => row?.id === b.job),
     quality = jobs.filter((row) => row?.id === b.qualityJob);
@@ -3240,15 +3244,23 @@ export function onlineBuildProofReuseGuardFailureCodes(input = {}) {
       originalPr.merged === true &&
       originalPr.head?.sha === b.originalHead &&
       originalPr.base?.sha === b.originalBase &&
-      originalPr.merge_commit_sha === b.base
+      originalPr.merge_commit_sha === b.originalMergedMain
   );
   check(
     'MAIN_QUALITY',
     () =>
-      runOK(mainRun, b.mainRun, 'push', b.base) &&
+      runOK(mainRun, b.originalMainRun, 'push', b.originalMergedMain) &&
       mainRun.head_branch === 'main' &&
-      mainRun.head_commit?.id === b.base &&
-      mainRun.head_commit?.tree_id === b.tree
+      mainRun.head_commit?.id === b.originalMergedMain &&
+      mainRun.head_commit?.tree_id === b.originalMergedTree
+  );
+  check(
+    'INTEGRATION_MAIN_QUALITY',
+    () =>
+      runOK(integrationMainRun, b.integrationMainRun, 'push', b.base) &&
+      integrationMainRun.head_branch === 'main' &&
+      integrationMainRun.head_commit?.id === b.base &&
+      integrationMainRun.head_commit?.tree_id === b.tree
   );
   check('GUARD_JOB', () => jobOK(guard, 'recharge (guards)'));
   check('GUARD_STEPS', () =>
@@ -3296,7 +3308,7 @@ export function onlineBuildProofReuseGuardFailureCodes(input = {}) {
         repo: b.repository,
         run,
         pr: { number: b.originalPr, head: { sha: b.originalHead } },
-        tree: b.tree
+        tree: b.originalMergedTree
       }) &&
       proof.baseSha === b.originalBase
   );
@@ -3473,7 +3485,8 @@ export function canResumeOnlineBuildProofReuseGuard(base, phase = 'guards') {
       proof: JSON.parse(proofRaw),
       proofSha256: digest(proofRaw),
       originalPr: gh('repos/' + b.repository + '/pulls/' + b.originalPr),
-      mainRun: gh('repos/' + b.repository + '/actions/runs/' + b.mainRun),
+      mainRun: gh('repos/' + b.repository + '/actions/runs/' + b.originalMainRun),
+      integrationMainRun: gh('repos/' + b.repository + '/actions/runs/' + b.integrationMainRun),
       facts: onlineBuildProofReuseGuardRawLogFacts(log(b.job)),
       qualityLog: onlineBuildProofReuseGuardRawLogFacts(log(b.qualityJob)),
       changed,

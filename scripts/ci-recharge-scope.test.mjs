@@ -4504,11 +4504,19 @@ function syntheticBuildProofReuseNative() {
       merged: true,
       head: { sha: b.originalHead },
       base: { sha: b.originalBase },
-      merge_commit_sha: b.base
+      merge_commit_sha: b.originalMergedMain
     },
     mainRun: {
       ...run,
-      id: b.mainRun,
+      id: b.originalMainRun,
+      event: 'push',
+      head_sha: b.originalMergedMain,
+      head_branch: 'main',
+      head_commit: { id: b.originalMergedMain, tree_id: b.originalMergedTree }
+    },
+    integrationMainRun: {
+      ...run,
+      id: b.integrationMainRun,
       event: 'push',
       head_sha: b.base,
       head_branch: 'main',
@@ -4529,7 +4537,7 @@ function syntheticBuildProofReuseNative() {
       pullRequest: 475,
       headSha: b.originalHead,
       baseSha: b.originalBase,
-      testedTree: b.tree
+      testedTree: b.originalMergedTree
     },
     proofSha256: b.proofSha256,
     facts: {
@@ -4686,6 +4694,65 @@ test('finite build-proof reuse authenticates actual merged PR475, original raw q
   );
   assert.equal(checkMode(onlineBuildProofReuseGuardPaths, '', ''), 'ci-only');
   assert.equal(needsOnlineRechargeCiBuild(onlineBuildProofReuseGuardPaths), true);
+});
+
+test('finite build-proof integration authenticates latest C7 quality without relabeling original PR475 artifact tree', () => {
+  const b = onlineBuildProofReuseGuardBinding;
+  const original = syntheticBuildProofReuseNative();
+  assert.equal(b.base, 'c7a800b931311cd5c6da4c4b2320743b7a3015a1');
+  assert.equal(b.tree, '620f5766fd5b664a79a79df2026708df08625642');
+  assert.equal(b.originalMergedMain, 'fff7b257fa402e14da5d9aa43aa4ea22095695c5');
+  assert.equal(b.originalMergedTree, '04637480488076dc891c822e79864f8ff96bbf06');
+  assert.equal(b.originalMainRun, 38530643303);
+  assert.equal(b.integrationMainRun, 38537007996);
+  assert.equal(original.proof.testedTree, b.originalMergedTree);
+  assert.equal(original.baselineTree, b.tree);
+  assert.notEqual(original.proof.testedTree, original.baselineTree);
+  assert.deepEqual(onlineBuildProofReuseGuardFailureCodes(original), []);
+  for (const [keys, replacement, expected] of [
+    [['integrationMainRun'], undefined, 'INTEGRATION_MAIN_QUALITY'],
+    [['integrationMainRun', 'id'], b.originalMainRun, 'INTEGRATION_MAIN_QUALITY'],
+    [['integrationMainRun', 'run_attempt'], 2, 'INTEGRATION_MAIN_QUALITY'],
+    [['integrationMainRun', 'event'], 'pull_request', 'INTEGRATION_MAIN_QUALITY'],
+    [['integrationMainRun', 'status'], 'in_progress', 'INTEGRATION_MAIN_QUALITY'],
+    [['integrationMainRun', 'conclusion'], 'failure', 'INTEGRATION_MAIN_QUALITY'],
+    [
+      ['integrationMainRun', 'path'],
+      '.github/workflows/production-release.yml',
+      'INTEGRATION_MAIN_QUALITY'
+    ],
+    [['integrationMainRun', 'head_sha'], b.originalMergedMain, 'INTEGRATION_MAIN_QUALITY'],
+    [['integrationMainRun', 'head_branch'], 'foreign-branch', 'INTEGRATION_MAIN_QUALITY'],
+    [['integrationMainRun', 'head_commit'], undefined, 'INTEGRATION_MAIN_QUALITY'],
+    [['integrationMainRun', 'head_commit', 'id'], b.originalMergedMain, 'INTEGRATION_MAIN_QUALITY'],
+    [
+      ['integrationMainRun', 'head_commit', 'tree_id'],
+      b.originalMergedTree,
+      'INTEGRATION_MAIN_QUALITY'
+    ],
+    [
+      ['integrationMainRun', 'repository', 'full_name'],
+      'foreign/project',
+      'INTEGRATION_MAIN_QUALITY'
+    ],
+    [['mainRun'], original.integrationMainRun, 'MAIN_QUALITY'],
+    [['mainRun', 'head_commit', 'tree_id'], b.tree, 'MAIN_QUALITY'],
+    [['originalPr', 'merge_commit_sha'], b.base, 'CLOSED_PR_SOURCE'],
+    [['proof', 'testedTree'], b.tree, 'PROOF_SOURCE'],
+    [['proof', 'baseSha'], b.base, 'PROOF_SOURCE'],
+    [['artifact', 'workflow_run', 'id'], b.integrationMainRun, 'SOURCE_ARTIFACT'],
+    [['artifact', 'workflow_run', 'head_sha'], b.base, 'SOURCE_ARTIFACT'],
+    [['artifact', 'digest'], 'sha256:' + '0'.repeat(64), 'SOURCE_ARTIFACT'],
+    [['proofSha256'], '0'.repeat(64), 'PROOF_BYTES'],
+    [['baselineTree'], b.originalMergedTree, 'BASELINE_TREE']
+  ]) {
+    const value = structuredClone(original);
+    let parent = value;
+    for (const key of keys.slice(0, -1)) parent = parent[key];
+    parent[keys.at(-1)] = replacement;
+    assert.ok(onlineBuildProofReuseGuardFailureCodes(value).includes(expected), keys.join('.'));
+    assert.throws(() => requireOnlineBuildProofReuseGuardNative(value), /predicates=/);
+  }
 });
 
 test('finite build-proof diagnostics expose only closed predicate codes and cannot grant production authority', () => {

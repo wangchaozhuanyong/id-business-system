@@ -91,6 +91,7 @@ class DiagnosticTests(unittest.TestCase):
                 self.assertEqual(result['producer'], P)
                 self.assertEqual(result['commandId'], fixtures.COMMAND)
                 self.assertEqual(result['evidenceJobId'], '987')
+                self.assertEqual(result['expectedCurrent'], fixtures.CURRENT)
                 self.assertTrue(all(call.args[0][0] == 'git' for call in reads.call_args_list))
 
     def test_changed_run_attempt_job_instance_or_parameters_refuses_before_ssm(self):
@@ -101,6 +102,7 @@ class DiagnosticTests(unittest.TestCase):
             lambda f: f['job'].update(head_sha='0' * 40),
             lambda f: f['artifact'].update(expired=True),
             lambda f: f['metadata'].update(instanceId='i-00000000000000000'),
+            lambda f: f['intent'].update(expectedCurrent='0' * 40),
             lambda f: f['intent'].update(parametersSha256='0' * 64),
             lambda f: f['params'].update(commands=['python3 -c "private malicious fixture"']),
         )
@@ -114,7 +116,8 @@ class DiagnosticTests(unittest.TestCase):
                 self.assertTrue(all(call.args[0][0] == 'git' for call in reads.call_args_list))
 
     def binding(self):
-        return {'producer': P, 'mode': 'preflight', 'commandId': fixtures.COMMAND,
+        return {'producer': P, 'mode': 'preflight', 'expectedCurrent': diag.client.r.current_predecessor(),
+                'commandId': fixtures.COMMAND,
                 'instanceId': diag.client.r.authority()['instanceId'], 'evidenceJobId': '987',
                 'artifactId': '654', 'artifactBytesSha256': 'f' * 64}
 
@@ -293,6 +296,43 @@ class DiagnosticTests(unittest.TestCase):
         self.assertEqual(read.call_count, 1)
         self.assertEqual(result['nativeBytesSha256'], r.c.digest(raw))
 
+    def test_real_preflight_success_without_release_environment_uses_authenticated_intent(self):
+        with self.finite_parameters('preflight') as (_params, saved, instance, current):
+            binding = dict(self.binding(), instanceId=instance, expectedCurrent=current)
+            raw = base64.b64decode(json.loads(saved['preflight'])['invocationRawBase64'])
+            with patch.dict(os.environ, {}, clear=True), patch.object(diag, 'read_command', return_value=raw) as read:
+                self.assertNotIn('EXPECTED_CURRENT', os.environ)
+                result = diag.observe(binding)
+                self.assertNotIn('EXPECTED_CURRENT', os.environ)
+            self.assertEqual(result['outcome'], 'VERIFIED_SUCCESS')
+            self.assertTrue(result['nativeAuthenticated'])
+            self.assertEqual(result['expectedCurrent'], current)
+            self.assertEqual(result['nativeBytesSha256'], diag.client.r.c.digest(raw))
+            self.assertFalse(result['automaticRetryAllowed'])
+            read.assert_called_once_with(['aws', '--region', 'ap-northeast-1', 'ssm',
+                'get-command-invocation', '--command-id', binding['commandId'],
+                '--instance-id', instance, '--output', 'json'])
+
+    def test_real_preflight_wrong_intent_predecessor_or_receipt_is_rejected_without_resend(self):
+        with self.finite_parameters('preflight') as (_params, saved, instance, current):
+            binding = dict(self.binding(), instanceId=instance, expectedCurrent=current)
+            raw = base64.b64decode(json.loads(saved['preflight'])['invocationRawBase64'])
+            receipt = json.loads(saved['preflight'])['serverReceipt']
+            changed = copy.deepcopy(receipt)
+            changed['baseline']['actualPredecessor']['commit'] = '0' * 40
+            value = json.loads(raw)
+            value['StandardOutputContent'] = json.dumps(diag.client.r.wire(changed))
+            for selected, native in ((dict(binding, expectedCurrent='0' * 40), raw),
+                                     (binding, json.dumps(value).encode())):
+                with self.subTest(changed_intent=selected != binding), patch.dict(os.environ, {}, clear=True), \
+                        patch.object(diag, 'read_command', return_value=native) as read:
+                    result = diag.observe(selected)
+                self.assertEqual(result['outcome'], 'AUTHENTICATION_REJECTED')
+                self.assertFalse(result['nativeAuthenticated'])
+                self.assertFalse(result['automaticRetryAllowed'])
+                self.assertEqual(read.call_count, 1)
+                self.assertEqual(read.call_args.args[0][4], 'get-command-invocation')
+
     def test_main_persists_only_closed_summary_and_never_raw_archive(self):
         binding = self.binding()
         with patch.object(diag, 'original_evidence', return_value=binding), \
@@ -316,7 +356,7 @@ class DiagnosticTests(unittest.TestCase):
         # parameter, Git-object, native and private-file validators all execute.
         with self.finite_parameters('preflight', producer) as (params, saved, instance, current), \
                 tempfile.TemporaryDirectory(prefix='online-diagnostic-observation-', dir=runtime) as temporary:
-            binding = dict(self.binding(), producer=producer)
+            binding = dict(self.binding(), producer=producer, expectedCurrent=current)
             f = {'params': params,
                 'metadata': {'producer': producer, 'mode': 'preflight', 'commandId': binding['commandId'],
                     'instanceId': instance, 'status': 'ACCEPTED'},
@@ -335,7 +375,8 @@ class DiagnosticTests(unittest.TestCase):
                     return {'sha': producer['commit'], 'commit': {'tree': {'sha': producer['sourceTree']}}}
                 return self.api(f, endpoint)
             actual_read = diag.read_command
-            responses = [self.native(binding, 'InProgress')]
+            responses = [self.native(binding, 'InProgress'),
+                base64.b64decode(json.loads(saved['preflight'])['invocationRawBase64'])]
             aws = []
             def external_read(arguments, cap=128 * 1024):
                 if arguments[0] == 'aws':
@@ -370,6 +411,31 @@ class DiagnosticTests(unittest.TestCase):
             self.assertEqual(terminal.stat().st_mode & 0o777, 0o600)
             self.assertEqual(len(aws), 2)
             self.assertTrue(all(row[4] == 'get-command-invocation' and row[6] == binding['commandId'] for row in aws))
+
+    def test_main_real_private_io_retains_unknown_and_late_preflight_success_without_release_environment(self):
+        with self.main_private_io() as (binding, output, responses, aws), \
+                patch.dict(os.environ, {}, clear=True), redirect_stdout(io.StringIO()):
+            argv = ['--evidence-run-id', '123', '--evidence-run-attempt', '1']
+            self.assertNotIn('EXPECTED_CURRENT', os.environ)
+            self.assertEqual(diag.main(argv), 1)
+            first = next(output.glob(diag.RESULT_PREFIX + '-123-1-*.json'))
+            raw = first.read_bytes(); identity = (first.stat().st_ino, first.stat().st_mtime_ns)
+            self.assertEqual(json.loads(raw)['outcome'], 'RESULT_UNKNOWN')
+            responses[0] = responses[1]
+            self.assertEqual(diag.main(argv), 0)
+            files = list(output.glob(diag.RESULT_PREFIX + '-123-1-*.json'))
+            self.assertEqual(len(files), 2)
+            self.assertEqual(first.read_bytes(), raw)
+            self.assertEqual((first.stat().st_ino, first.stat().st_mtime_ns), identity)
+            terminal = next(path for path in files if path != first)
+            result = json.loads(terminal.read_bytes())
+            self.assertEqual(result['outcome'], 'VERIFIED_SUCCESS')
+            self.assertTrue(result['nativeAuthenticated'])
+            self.assertEqual(result['expectedCurrent'], binding['expectedCurrent'])
+            self.assertEqual(terminal.stat().st_mode & 0o777, 0o600)
+            self.assertEqual(len(aws), 2)
+            self.assertTrue(all(row[4] == 'get-command-invocation' and row[6] == binding['commandId'] for row in aws))
+            self.assertNotIn('EXPECTED_CURRENT', os.environ)
 
     def test_main_real_private_io_identical_observation_reuses_original_inode(self):
         with self.main_private_io() as (binding, output, responses, aws), redirect_stdout(io.StringIO()):
