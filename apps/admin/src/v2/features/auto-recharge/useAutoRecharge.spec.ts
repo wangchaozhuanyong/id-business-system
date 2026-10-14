@@ -1084,6 +1084,139 @@ describe('比特浏览器充值入口', () => {
     expect(flow.canRecheck.value).toBe(true);
     expect(flow.workflowMessage.value).toContain('禁止重新付款');
   });
+  it('目标升级已核实但付款未知时只提示只读复查，保留原付款锁', () => {
+    fillForm();
+    for (const state of ['unknown', 'finished'] as const) {
+      for (const [plan, current] of [
+        ['plus', 'plus'],
+        ['pro-5x', 'pro'],
+        ['pro-20x', 'pro'],
+        ['pro-500', 'promax']
+      ] as const) {
+        jobs.value.items = [
+          {
+            ...job(state, {
+              status: 'uncertain',
+              operation: 'subscription_upgrade',
+              account_matched: true,
+              payment_attempted: true,
+              payment_requests_sent: 1,
+              payment_status: 'unknown',
+              subscription_status: plan,
+              current_plan: current
+            }),
+            plan
+          }
+        ];
+        flow.selectJob('job-fixture');
+        expect(flow.workflowMessage.value).toBe(
+          '套餐已核实生效，付款凭据待核验；请只读复查原订单，禁止重新付款。'
+        );
+        expect(flow.canStart.value).toBe(false);
+        expect(flow.canRecheck.value).toBe(true);
+        expect(flow.canContinueSameAccount.value).toBe(false);
+      }
+    }
+  });
+  it('付款与精确目标套餐均核实的升级保留原成功提示', () => {
+    jobs.value.items = [
+      {
+        ...job('finished', {
+          status: 'subscription_activated',
+          operation: 'subscription_upgrade',
+          account_matched: true,
+          payment_attempted: true,
+          payment_requests_sent: 1,
+          payment_status: 'paid',
+          payment_outcome: 'subscription_activated',
+          subscription_status: 'pro-20x',
+          current_plan: 'pro'
+        }),
+        plan: 'pro-20x'
+      }
+    ];
+    flow.selectJob('job-fixture');
+    expect(flow.workflowMessage.value).toBe(
+      '付款与套餐生效均已核实；可继续为同一账号选择下一套餐。'
+    );
+  });
+  it('错误档位、账号不符或非升级原单不能展示套餐已核实提示', () => {
+    fillForm();
+    const cases: Array<{
+      plan?: V2RechargeJob['plan'];
+      result: Partial<V2RechargeJob['result']>;
+    }> = [
+      { result: { subscription_status: 'pro-5x' } },
+      { result: { subscription_status: 'pro' } },
+      { result: { subscription_status: undefined } },
+      { result: { current_plan: 'plus' } },
+      { result: { current_plan: 'promax' } },
+      { result: { account_matched: false } },
+      { result: { operation: undefined } },
+      { result: { payment_attempted: false } },
+      { plan: 'pro-500', result: { subscription_status: 'pro-500', current_plan: 'pro' } }
+    ];
+    for (const state of ['unknown', 'finished'] as const) {
+      for (const fixture of cases) {
+        jobs.value.items = [
+          {
+            ...job(state, {
+              status: 'uncertain',
+              operation: 'subscription_upgrade',
+              account_matched: true,
+              payment_attempted: true,
+              payment_requests_sent: 1,
+              payment_status: 'unknown',
+              subscription_status: 'pro-20x',
+              current_plan: 'pro',
+              ...fixture.result
+            }),
+            plan: fixture.plan ?? 'pro-20x'
+          }
+        ];
+        flow.selectJob('job-fixture');
+        expect(flow.workflowMessage.value).not.toContain('套餐已核实生效');
+        expect(flow.canStart.value).toBe(false);
+        expect(flow.canRecheck.value).toBe(true);
+        expect(flow.canContinueSameAccount.value).toBe(false);
+      }
+    }
+  });
+  it('明确银行结果或已有付款凭据时不展示付款未知的升级提示', () => {
+    fillForm();
+    const cases: Array<Partial<V2RechargeJob['result']>> = [
+      { payment_status: 'declined' },
+      { payment_status: 'requires_action' },
+      { payment_status: 'not_attempted' },
+      {
+        payment_status: 'unknown',
+        payment_evidence: { kind: 'invoice', identifier: 'synthetic-evidence' }
+      }
+    ];
+    for (const state of ['unknown', 'finished'] as const) {
+      for (const result of cases) {
+        jobs.value.items = [
+          {
+            ...job(state, {
+              status: 'uncertain',
+              operation: 'subscription_upgrade',
+              account_matched: true,
+              payment_attempted: true,
+              payment_requests_sent: 1,
+              subscription_status: 'pro-20x',
+              current_plan: 'pro',
+              ...result
+            }),
+            plan: 'pro-20x'
+          }
+        ];
+        flow.selectJob('job-fixture');
+        expect(flow.workflowMessage.value).not.toContain('套餐已核实生效');
+        expect(flow.canRecheck.value).toBe(result.payment_status !== 'declined');
+        expect(flow.canContinueSameAccount.value).toBe(false);
+      }
+    }
+  });
   it('确认暂停时允许编辑草稿，保留原任务确认并禁止重复启动', () => {
     jobs.value.items = [job('awaiting_confirmation', { quote_digest: 'fixture-digest' })];
     expect(flow.formLocked.value).toBe(false);

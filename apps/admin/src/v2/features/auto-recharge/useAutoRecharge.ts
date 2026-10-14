@@ -735,6 +735,27 @@ export function useAutoRecharge(options: { clearPaymentValidation?: () => void }
       return job.action === 'server'
         ? '服务器正在执行，本任务最多提交一次付款。'
         : '本机比特浏览器正在执行，系统不会重复提交付款。';
+    const targetFamily =
+      job?.plan === 'plus'
+        ? 'plus'
+        : job?.plan === 'pro-500'
+          ? 'promax'
+          : job && ['pro-5x', 'pro-20x'].includes(job.plan)
+            ? 'pro'
+            : undefined;
+    if (
+      job &&
+      ['unknown', 'finished'].includes(job.state) &&
+      job.result.operation === 'subscription_upgrade' &&
+      job.result.account_matched === true &&
+      job.result.payment_attempted === true &&
+      job.result.payment_status === 'unknown' &&
+      !job.result.payment_evidence &&
+      job.result.subscription_status === job.plan &&
+      targetFamily &&
+      job.result.current_plan === targetFamily
+    )
+      return '套餐已核实生效，付款凭据待核验；请只读复查原订单，禁止重新付款。';
     if (job?.state === 'unknown') return '原单结果待核验，禁止重新付款。';
     if (job?.state === 'finished') {
       if (job.result.mode === 'open_browser') {

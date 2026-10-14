@@ -541,6 +541,201 @@ class UpgradeThreeDSGuardTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.ledger.record['confirmation_requests_sent'], 0)
 
 
+class UpgradeResultReconcileTests(unittest.IsolatedAsyncioTestCase):
+    async def asyncSetUp(self):
+        OUTPUT.mkdir(parents=True, exist_ok=True)
+        self.temp = tempfile.TemporaryDirectory(dir=OUTPUT)
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name) / 'state'
+        self.target = parse_browser_credential(fixture())
+        self.frame = Frame('https://chatgpt.com/')
+        self.requests, self.final_reads, self.invoice_reads = 0, 0, 0
+        self.guard = None
+        self.invoice_override = None
+
+    async def flow(self, *, mode='paid', stop=None, invoice_error=False, final_plan='prolite',
+                   identity_error=False, upgrade_id=None, seed_old_identity=False, initial_conflict=False,
+                   poll_count=1):
+        import subscription_upgrade as upgrade
+        context = SimpleNamespace(on=lambda event, handler: setattr(self, 'guard', handler.__self__)
+                                  if event == 'request' else None, remove_listener=MagicMock())
+        page = SimpleNamespace(context=context, main_frame=self.frame)
+        async def read_subscription(*_args):
+            final = self.guard.sent or upgrade_id
+            if final:
+                self.final_reads += 1
+                if identity_error:
+                    raise Stop('official_account_mismatch')
+            raw_plan = final_plan if final else 'plus'
+            observed = official_subscription(account(raw_plan), self.target.account_id)
+            return self.target, {'account_matched': True, **observed}, {
+                'account_id': self.target.account_id, 'plan_type': raw_plan,
+                'is_processor_stripe': True, 'will_renew': True}
+        async def read(_page, path, _target):
+            if path.startswith(upgrade.PREVIEW_PATH):
+                return preview()
+            self.assertTrue(path.startswith(upgrade.INVOICES_PATH), path)
+            self.invoice_reads += 1
+            if invoice_error:
+                raise Stop('session_network_error')
+            return {'data': [self.invoice_override or {
+                'object': 'invoice', 'id': 'in_Synthetic', 'payment_intent': 'pi_Synthetic',
+                'status': 'paid' if mode == 'paid' else 'open', 'paid': mode == 'paid',
+                'amount_paid': 40000 if mode == 'paid' else 0, 'currency': 'myr'}]}
+        async def click():
+            if not self.guard.approved:
+                return
+            self.assertFalse(self.guard.read_only)
+            request = Request('https://chatgpt.com' + upgrade.UPGRADE_PATH,
+                data=json.dumps({'account_id': self.target.account_id, 'updated_plan': 'chatgptprolite',
+                                 'payment_method_id': 'pm_Synthetic'}), frame=self.frame,
+                headers={'authorization': 'Bearer ' + self.target.old_token,
+                         'chatgpt-account-id': self.target.account_id})
+            self.requests += 1
+            self.guard.observe_request(request)
+            data = {'pending_update_invoice_id': 'in_Synthetic', 'payment_intent': {
+                'object': 'payment_intent', 'id': 'pi_Synthetic',
+                'status': 'succeeded' if mode == 'paid' else 'processing',
+                'amount_received': 40000 if mode == 'paid' else 0, 'currency': 'myr'}}
+            await self.guard.response(Response(request, data, status=500 if mode == 'http_error' else 200))
+            if initial_conflict:
+                self.guard.error = Stop('upgrade_payment_evidence_conflict')
+            if seed_old_identity:
+                self.guard.upgrade_ledger.update(current_plan='pro', current_tier=5,
+                    subscription_status='pro-5x', status='subscription_activated')
+        async def wait(*_args, **_kwargs):
+            if stop:
+                raise Stop(stop)
+        button = SimpleNamespace(click=AsyncMock(side_effect=click))
+        with (patch.object(upgrade, 'read_subscription', side_effect=read_subscription),
+              patch.object(upgrade, 'browser_read', side_effect=read),
+              patch.object(upgrade, 'select_plan', AsyncMock(return_value=button)),
+              patch.object(upgrade, 'verify_selected_plan', AsyncMock()),
+              patch.object(upgrade, 'visible_renewal', AsyncMock(return_value=minor_money('MYR', 42000))),
+              patch.object(upgrade, 'verify_preview_dom', AsyncMock(return_value=button)),
+              patch.object(upgrade, 'prepare_upgrade_card', AsyncMock(return_value='pm_Synthetic')) as card,
+              patch.object(upgrade, 'verify_selected_upgrade_card', AsyncMock(return_value='pm_Synthetic')),
+              patch.object(upgrade, 'wait_upgrade_authentication', side_effect=wait),
+              patch.object(upgrade, 'progress')):
+            result = await run_upgrade_in_context(page, self.target, self.root, 'pro-5x',
+                details_reader=lambda _: details(), confirmer=lambda *_: True,
+                upgrade_id=upgrade_id, poll_count=poll_count, poll_interval=0)
+        self.assertTrue(self.guard.read_only)
+        self.assertEqual(context.remove_listener.call_count, 2)
+        if upgrade_id:
+            card.assert_not_awaited()
+        return result
+
+    async def test_paid_target_survives_invoice_failure_and_preserves_fresh_tier(self):
+        result = await self.flow(invoice_error=True)
+        self.assertEqual(result['status'], 'subscription_activated', result)
+        self.assertEqual(result['payment_status'], 'paid')
+        self.assertEqual(result['current_tier'], 5)
+        self.assertEqual(result['subscription_status'], 'pro-5x')
+        self.assertEqual(result['last_reason'], 'session_network_error')
+        self.assertNotIn('reason', result)
+        self.assertEqual((self.requests, self.final_reads, self.invoice_reads), (1, 1, 1))
+        record = json.loads(next((self.root / 'payments').glob('*.json')).read_text())
+        self.assertEqual(record['current_tier'], 5)
+        self.assertEqual(record['status'], 'subscription_activated')
+
+    async def test_post_request_stop_reconciles_paid_target_once_without_second_submit(self):
+        result = await self.flow(stop='upgrade_request_failed')
+        self.assertEqual(result['status'], 'subscription_activated', result)
+        self.assertEqual(result['last_reason'], 'upgrade_request_failed')
+        self.assertNotIn('reason', result)
+        self.assertEqual((self.requests, self.final_reads, self.invoice_reads), (1, 1, 1))
+
+    async def test_failed_update_with_active_target_stays_unknown_and_original_locked(self):
+        result = await self.flow(mode='http_error')
+        self.assertEqual(result['status'], 'payment_result_unknown', result)
+        self.assertEqual(result['payment_outcome'], 'payment_result_unknown')
+        self.assertEqual(result['payment_status'], 'unknown')
+        self.assertIsNone(result['payment_evidence'])
+        self.assertEqual(result['subscription_status'], 'pro-5x')
+        self.assertTrue(result['account_matched'])
+        self.assertEqual(result['last_reason'], 'upgrade_request_failed')
+        self.assertNotIn('reason', result)
+        self.assertEqual(result['repeated_payment'], 'blocked')
+        with self.assertRaisesRegex(Stop, 'previous_upgrade_attempt_exists'):
+            with UpgradeLedger(self.root, self.target.account_id, 'pro-5x'):
+                pass
+        self.assertEqual(self.requests, 1)
+
+    async def test_unknown_stop_and_invoice_failure_keep_target_and_zero_new_payment_on_recheck(self):
+        result = await self.flow(mode='unknown', stop='upgrade_request_failed', invoice_error=True)
+        self.assertEqual(result['status'], 'payment_result_unknown', result)
+        self.assertEqual(result['current_tier'], 5)
+        self.assertEqual(result['subscription_status'], 'pro-5x')
+        recheck = await self.flow(mode='unknown', invoice_error=True, upgrade_id=result['upgrade_identifier'])
+        self.assertEqual(recheck['payment_requests_sent'], 0)
+        self.assertTrue(recheck['recheck_only'])
+        self.assertEqual(self.requests, 1)
+
+    async def test_wrong_final_tier_is_not_activated_even_with_paid_evidence(self):
+        result = await self.flow(final_plan='pro', invoice_error=True)
+        self.assertEqual(result['status'], 'paid_pending_activation', result)
+        self.assertEqual(result['current_tier'], 20)
+        self.assertEqual(result['subscription_status'], 'target_not_verified')
+        self.assertEqual(self.requests, 1)
+
+    async def test_fresh_identity_failure_cannot_reuse_old_matched_paid_observation(self):
+        result = await self.flow(stop='upgrade_request_failed', identity_error=True, seed_old_identity=True)
+        self.assertEqual(result['status'], 'paid_pending_activation', result)
+        self.assertFalse(result['account_matched'])
+        self.assertIsNone(result['current_plan'])
+        self.assertEqual(result['subscription_status'], 'not_verified')
+        self.assertEqual(result['reason'], 'official_account_mismatch')
+        self.assertEqual((self.requests, self.final_reads, self.invoice_reads), (1, 1, 0))
+
+    async def test_foreign_paid_invoice_does_not_prove_the_original_unknown_payment(self):
+        self.invoice_override = {'object': 'invoice', 'id': 'in_Other', 'payment_intent': 'pi_Other',
+                                 'status': 'paid', 'paid': True, 'amount_paid': 40000, 'currency': 'myr'}
+        result = await self.flow(mode='unknown')
+        self.assertEqual(result['status'], 'payment_result_unknown', result)
+        self.assertIsNone(result['payment_evidence'])
+        self.assertEqual(result['subscription_status'], 'pro-5x')
+        self.assertEqual(self.requests, 1)
+
+    async def test_bound_invoice_money_conflict_blocks_even_after_paid_target_is_verified(self):
+        for changes in ({'amount_paid': 40001}, {'currency': 'usd'}):
+            with self.subTest(changes=changes):
+                self.root = Path(self.temp.name) / ('conflict-' + next(iter(changes)))
+                self.invoice_override = {'object': 'invoice', 'id': 'in_Synthetic',
+                    'payment_intent': 'pi_Synthetic', 'status': 'paid', 'paid': True,
+                    'amount_paid': 40000, 'currency': 'myr', **changes}
+                result = await self.flow()
+                self.assertEqual(result['status'], 'blocked', result)
+                self.assertEqual(result['reason'], 'upgrade_payment_evidence_conflict')
+                self.assertNotEqual(result['payment_outcome'], 'subscription_activated')
+                self.assertEqual(result['payment_status'], 'paid')
+                self.assertEqual(result['payment_evidence']['identifier'], 'pi_Synthetic')
+                self.assertEqual(result['current_tier'], 5)
+                self.assertEqual(result['subscription_status'], 'pro-5x')
+                with self.assertRaisesRegex(Stop, 'previous_upgrade_attempt_exists'):
+                    with UpgradeLedger(self.root, self.target.account_id, 'pro-5x'):
+                        pass
+        self.assertEqual(self.requests, 2)
+
+    async def test_observer_conflict_requires_fresh_original_evidence_to_clear(self):
+        for case in ('read-failed', 'foreign-invoice', 'original-paid'):
+            with self.subTest(case=case):
+                self.root = Path(self.temp.name) / case
+                self.invoice_override = ({'object': 'invoice', 'id': 'in_Other',
+                    'payment_intent': 'pi_Other', 'status': 'paid', 'paid': True,
+                    'amount_paid': 40000, 'currency': 'myr'} if case == 'foreign-invoice' else None)
+                result = await self.flow(initial_conflict=True, invoice_error=case == 'read-failed')
+                self.assertEqual(result['status'], 'subscription_activated' if case == 'original-paid' else 'blocked', result)
+                if case != 'original-paid':
+                    self.assertEqual(result['reason'], 'upgrade_payment_evidence_conflict')
+                    self.assertNotEqual(result['payment_outcome'], 'subscription_activated')
+                else:
+                    self.assertNotIn('reason', result)
+                self.assertEqual(result['payment_status'], 'paid')
+                self.assertEqual(result['current_tier'], 5)
+        self.assertEqual(self.requests, 3)
+
+
 class GoToPlusLocalContractTests(unittest.IsolatedAsyncioTestCase):
     async def test_verified_go_to_plus_uses_official_upgrade_without_new_checkout(self):
         import subscription_upgrade as upgrade
