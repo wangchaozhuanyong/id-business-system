@@ -84,6 +84,117 @@ function fixture(run) {
   }
 }
 
+test('ordinary component source builds and pushes exactly four projected immutable images', () => {
+  fixture(({ env, folder, log }) => {
+    env.EXPECTED_CURRENT = 'c'.repeat(40);
+    env.API_FAULT_RESTORE_APPROVED = 'true';
+    const label = 'd'.repeat(64);
+    writeFileSync(
+      join(folder, 'bin/python3'),
+      `#!/bin/sh\nprintf "python %s\\n" "$*" >> "$TEST_ENTRY_LOG"\ncase "$*" in *online-recharge-component-readonly.py\\ label) printf '%s\\n' '${label}' ;; esac\n`,
+      { mode: 0o755 }
+    );
+    execFileSync('bash', [join(scripts, 'build-images.sh')], { cwd: root, env, stdio: 'pipe' });
+    const calls = readFileSync(log, 'utf8').trim().split('\n');
+    const builds = calls.filter((line) => line.startsWith('docker build '));
+    assert.equal(builds.length, 4);
+    const context = '.deploy/production-release/online-recharge-component-build-context';
+    for (const [index, service] of ['api', 'admin', 'migrate', 'online-recharge'].entries()) {
+      assert.ok(builds[index].includes(`${commit}-123-1-${service}`));
+      assert.ok(builds[index].includes(`id-business-v2.source-tree=${tree}`));
+      assert.ok(builds[index].includes(context));
+      assert.ok(builds[index].includes(`id-business-v2.online-component-source-sha256=${label}`));
+    }
+    assert.ok(builds[1].includes(`V2_BUILD_ID=v2-${commit}`));
+    assert.ok(builds[3].endsWith(`${context}/apps/api/src/id-business-v2/online-recharge/engine`));
+    assert.ok(calls.some((line) => line.endsWith('online-recharge-component-readonly.py prepare')));
+    assert.ok(
+      calls.some((line) => line.endsWith('online-recharge-component-readonly.py build-proof'))
+    );
+    assert.equal(
+      calls.some((line) => /after-bit-build|write-online-recharge-build-proof/.test(line)),
+      false
+    );
+    writeFileSync(log, '');
+    execFileSync('bash', [join(scripts, 'push-images.sh')], { cwd: root, env, stdio: 'pipe' });
+    const pushes = readFileSync(log, 'utf8').trim().split('\n');
+    assert.equal(pushes.filter((line) => line.startsWith('docker push ')).length, 4);
+    assert.ok(
+      pushes.some((line) => line.endsWith('online-recharge-component-readonly.py build-proof'))
+    );
+    assert.equal(
+      pushes.some((line) =>
+        /after-bit-build|auto-registration|auto-recharge|media-resolver/.test(line)
+      ),
+      false
+    );
+  });
+});
+
+test('all four component build options reject a missing or invalid source label before Docker', () => {
+  const source = readFileSync(join(scripts, 'build-images.sh'), 'utf8');
+  const body = source.split('build_image() {\n')[1].split('\n}\n')[0];
+  const program = `set -Eeuo pipefail\nsource "$1"\nbuild_image() {\n${body}\n}\nonline_component_projection="$TEST_PROJECTION"\nbuild_image "$2" fixtures/Dockerfile runtime fixtures/component-context\n`;
+  fixture(({ env, log }) => {
+    env.EXPECTED_CURRENT = 'c'.repeat(40);
+    env.API_FAULT_RESTORE_APPROVED = 'true';
+    for (const service of ['api', 'admin', 'migrate', 'online-recharge']) {
+      for (const label of ['', 'd'.repeat(63), 'D'.repeat(64), 'z'.repeat(64)]) {
+        writeFileSync(log, '');
+        const result = spawnSync(
+          'bash',
+          [
+            '-c',
+            program,
+            'component-options-test',
+            join(scripts, 'validate-release-selection.sh'),
+            service
+          ],
+          { cwd: root, env: { ...env, TEST_PROJECTION: label }, encoding: 'utf8' }
+        );
+        assert.notEqual(result.status, 0, `${service}: ${label || 'missing'}`);
+        assert.equal(
+          readFileSync(log, 'utf8'),
+          'python -B scripts/production-release/online-recharge-component-readonly.py selection\n'
+        );
+      }
+    }
+  });
+});
+
+test('ordinary component publication dispatches only its typed transport', () => {
+  fixture(({ env, log }) => {
+    env.EXPECTED_CURRENT = 'c'.repeat(40);
+    env.API_FAULT_RESTORE_APPROVED = 'true';
+    execFileSync('bash', [join(scripts, 'dispatch.sh')], { cwd: root, env, stdio: 'pipe' });
+    const calls = readFileSync(log, 'utf8').trim().split('\n');
+    assert.deepEqual(calls, [
+      'python -B scripts/production-release/online-recharge-component-readonly.py selection',
+      'python -B scripts/production-release/online-recharge-component-readonly.py release'
+    ]);
+  });
+});
+
+test('an unsealed or unknown component predecessor rejects before Docker or AWS', () => {
+  fixture(({ env, folder, log }) => {
+    env.EXPECTED_CURRENT = 'c'.repeat(40);
+    env.API_FAULT_RESTORE_APPROVED = 'true';
+    writeFileSync(join(folder, 'bin/python3'), '#!/bin/sh\nexec /usr/bin/python3 "$@"\n', {
+      mode: 0o755
+    });
+    for (const script of ['build-images.sh', 'push-images.sh', 'dispatch.sh']) {
+      const result = spawnSync('bash', [join(scripts, script)], {
+        cwd: root,
+        env,
+        encoding: 'utf8'
+      });
+      assert.notEqual(result.status, 0);
+      assert.match(result.stdout + result.stderr, /ONLINE_RECHARGE_COMPONENT_/);
+      assert.equal(readFileSync(log, 'utf8'), '');
+    }
+  });
+});
+
 test('online scope keeps exact-source/Quality/OIDC checks and preflight before any build or deploy', () => {
   assert.equal(
     workflow.concurrency.cancel_in_progress ?? workflow.concurrency['cancel-in-progress'],

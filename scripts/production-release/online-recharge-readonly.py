@@ -117,6 +117,13 @@ def main():
     mode = sys.argv[1] if len(sys.argv) in (2,3) else ''
     mode = {'after-bit-build-input':'pending-workspace-build-input',
             'after-bit-build-proof':'pending-workspace-build-proof'}.get(mode,mode)
+    if (os.environ.get('RELEASE_OPERATION') in ('verify_online_recharge', 'release_online_recharge')
+            and os.environ.get('EXPECTED_CURRENT') not in (
+                '0a03fa28e6b844a18833d5c63f1de700f091fc64',
+                '31d2c6885a45817cd40d23fce8d6145bc9f18af2')):
+        client = runpy.run_path(str(Path(__file__).with_name('online-recharge-component-readonly.py')))
+        return client['main']({'pending-workspace-build-input': 'prepare',
+                               'pending-workspace-build-proof': 'build-proof'}.get(mode, mode))
     output = Path('.deploy/production-release')
     output.mkdir(parents=True, exist_ok=True)
     if _pending_workspace_selected():

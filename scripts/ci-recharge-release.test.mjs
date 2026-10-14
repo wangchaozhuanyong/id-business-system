@@ -253,6 +253,9 @@ function dispatchFixture(historyPolicy, current, run, extraEnv = {}) {
 }
 
 const onlineReleaseRegressionCommands = [
+  'python3 -B scripts/production-release/online-recharge-component-consumer.test.py',
+  'python3 -B scripts/production-release/online-recharge-component-runtime.test.py',
+  'python3 -B scripts/production-release/online-recharge-component-readonly.test.py',
   'python3 -B scripts/production-release/online-recharge-scope.test.py',
   'python3 -B scripts/production-release/online-recharge-readonly.test.py',
   'node --test scripts/production-release/online-recharge-entry.test.mjs'
@@ -1222,7 +1225,7 @@ test('independent Admin checks actual Git diffs and refuses each production conf
         readFileSync(
           join(process.cwd(), 'scripts/production-release/validate-release-selection.sh'),
           'utf8'
-        ).replace('31d2c6885a45817cd40d23fce8d6145bc9f18af2', baseline)
+        ).replaceAll('31d2c6885a45817cd40d23fce8d6145bc9f18af2', baseline)
       );
       const execute = () =>
         execFileSync('bash', [script], { cwd: source, env: selectedEnv, stdio: 'pipe' });

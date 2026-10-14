@@ -23,6 +23,37 @@ const gates = [
   'check:v2-concurrency-standard'
 ];
 
+test('ordinary ONLINE component pure tests run once in either control dispatcher', () => {
+  for (const part of ['guards', 'release-controls']) {
+    for (const changed of [
+      'scripts/production-release/online-recharge-component-consumer.py',
+      'scripts/production-release/online-recharge-component-consumer.test.py',
+      'scripts/production-release/online-recharge-component-runtime.py',
+      'scripts/production-release/online-recharge-component-runtime.test.py',
+      'scripts/production-release/online-recharge-component-readonly.py',
+      'scripts/production-release/online-recharge-component-readonly.test.py'
+    ]) {
+      const calls = recordGuardCommands('ci-only', [changed], part);
+      for (const helper of ['consumer', 'runtime', 'readonly'])
+        assert.equal(
+          calls.filter(
+            (call) =>
+              call.join(' ') ===
+              `python3 -B scripts/production-release/online-recharge-component-${helper}.test.py`
+          ).length,
+          1
+        );
+      assert.ok(
+        calls.every(
+          (call) =>
+            !call.includes('docker') &&
+            !call.some((arg) => arg.includes('acceptance-v2') || arg.startsWith('--workspace'))
+        )
+      );
+    }
+  }
+});
+
 test('disk retention controls run lifecycle suites without database acceptance', () => {
   for (const part of ['guards', 'release-controls']) {
     for (const changed of [
@@ -91,7 +122,14 @@ function recordGuardCommands(
   mode,
   paths,
   part = 'guards',
-  { cloud = false, resume = false, repository = '', event = '' } = {}
+  {
+    cloud = false,
+    resume = false,
+    onlineResume = false,
+    repository = '',
+    event = '',
+    base = 'a'.repeat(40)
+  } = {}
 ) {
   // Run the real dispatcher with process execution replaced before its named import resolves.
   // No Git command, nested test, database command or business operation is executed.
@@ -107,7 +145,10 @@ function recordGuardCommands(
         const source = 'export * from ' + JSON.stringify(scopeUrl) + ';' +
           'export function canResumeCombinedGuard(base) {' +
           'globalThis.guardTestCalls.push(["resume-helper", base]);' +
-          'return process.env.GUARD_TEST_RESUME === "true"; }';
+          'return process.env.GUARD_TEST_RESUME === "true"; }' +
+          'export function canResumeOnlineComponentGuard(base) {' +
+          'globalThis.guardTestCalls.push(["online-resume-helper", base]);' +
+          'return process.env.GUARD_TEST_ONLINE_RESUME === "true"; }';
         return {url: 'data:text/javascript,' + encodeURIComponent(source), shortCircuit: true};
       }
       return nextResolve(specifier, context);
@@ -118,7 +159,7 @@ function recordGuardCommands(
       return '';
     };
     syncBuiltinESMExports();
-    process.argv = ['node', 'scripts/ci-recharge-check.mjs', process.env.GUARD_TEST_PART, 'a'.repeat(40)];
+    process.argv = ['node', 'scripts/ci-recharge-check.mjs', process.env.GUARD_TEST_PART, process.env.GUARD_TEST_BASE];
     await import('./scripts/ci-recharge-check.mjs');
     process.stdout.write(JSON.stringify(calls));
   `;
@@ -133,12 +174,66 @@ function recordGuardCommands(
         GITHUB_REPOSITORY: repository,
         GITHUB_EVENT_NAME: event,
         GUARD_TEST_RESUME: resume ? 'true' : '',
+        GUARD_TEST_ONLINE_RESUME: onlineResume ? 'true' : '',
+        GUARD_TEST_BASE: base,
         GUARD_TEST_PART: part,
         GUARD_TEST_PATHS: JSON.stringify(paths)
       }
     })
   );
 }
+
+test('verified ONLINE guard continuation reruns first controls and unified source once and preserves the exact suffix', () => {
+  const paths = [
+    'scripts/doctor.mjs',
+    'scripts/ci-recharge-check.mjs',
+    '.github/workflows/production-release.yml',
+    'scripts/production-release/online-recharge-component-runtime.py',
+    'scripts/production-release/unified-component-source.test.py',
+    'scripts/production-release/recharge-flow-successor.py',
+    'scripts/production-release/remote-deploy.py',
+    'scripts/production-release/maintain-image-cache.py',
+    'scripts/backup-retention-protection.py'
+  ];
+  const context = {
+    cloud: true,
+    onlineResume: true,
+    repository: 'wangchaozhuanyong/id-business-system',
+    event: 'pull_request',
+    base: 'b922b2d900e683f565ff3c5f95576ebc5f07803f'
+  };
+  const commands = (calls) => calls.filter((call) => !call[0].endsWith('resume-helper'));
+  const ordinary = recordGuardCommands('ci-only', paths);
+  const resumed = commands(recordGuardCommands('ci-only', paths, 'guards', context));
+  const start = ordinary.findIndex((call) => call.includes('test:native-runtime'));
+  const end = ordinary.findIndex((call) =>
+    call.includes('scripts/production-release/recharge-flow-successor.test.py')
+  );
+  const unified = ['python3', '-B', 'scripts/production-release/unified-component-source.test.py'];
+  assert.ok(start > 0 && end > start);
+  assert.deepEqual(resumed, [...ordinary.slice(0, start), unified, ...ordinary.slice(end)]);
+  assert.equal(
+    resumed.filter((call) => JSON.stringify(call) === JSON.stringify(unified)).length,
+    1
+  );
+  assert.ok(resumed.some((call) => call.includes('scripts/ci-recharge-release.test.mjs')));
+  assert.ok(resumed.some((call) => call.includes('prettier')));
+  assert.ok(resumed.some((call) => call.includes('eslint')));
+  for (const call of ordinary.slice(start, end).filter((call) => !call.includes(unified[2])))
+    assert.ok(!resumed.some((row) => JSON.stringify(row) === JSON.stringify(call)), call.join(' '));
+  for (const rejected of [
+    { ...context, onlineResume: false },
+    { ...context, cloud: false },
+    { ...context, repository: 'foreign/repository' },
+    { ...context, event: 'push' },
+    { ...context, base: 'a'.repeat(40) }
+  ])
+    assert.deepEqual(commands(recordGuardCommands('ci-only', paths, 'guards', rejected)), ordinary);
+  assert.deepEqual(
+    recordGuardCommands('ci-only', paths, 'release-controls', context),
+    recordGuardCommands('ci-only', paths, 'release-controls')
+  );
+});
 
 test('verified combined guard continuation skips only its passed prefix and retains all actual later commands', () => {
   const paths = [

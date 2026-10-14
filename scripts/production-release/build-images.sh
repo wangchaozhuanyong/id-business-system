@@ -80,6 +80,15 @@ build_image() {
   if [[ "${RELEASE_OPERATION:-release}" == release_admin || "${RELEASE_OPERATION:-release}" == release_online_recharge || "${RELEASE_OPERATION:-release}" == release_api_workspace || "${RELEASE_OPERATION:-release}" == release_api_admin || "${RELEASE_OPERATION:-release}" == release_api_admin_migration || "${RELEASE_OPERATION:-release}" == release_api_registration ]]; then
     options+=(--label "id-business-v2.source-tree=$SOURCE_TREE")
   fi
+  if [[ "${RELEASE_OPERATION:-release}" == release_online_recharge ]] && online_component_selected; then
+    [[ "${online_component_projection:-}" =~ ^[a-f0-9]{64}$ ]] || exit 1
+    if [[ "$service" == api || "$service" == admin || "$service" == online-recharge || "$service" == migrate ]]; then
+      options+=(--label "id-business-v2.online-component-source-sha256=$online_component_projection")
+    fi
+    if [[ "$service" == admin ]]; then
+      options+=(--build-arg "V2_BUILD_ID=v2-$RELEASE_COMMIT")
+    fi
+  fi
   if [[ "${RELEASE_OPERATION:-release}" == release_api_workspace && -n "${pending_online_record_sha256:-}" ]]; then
     [[ "$service" == api || "$service" == admin ]] || exit 1
     [[ "$pending_online_record_sha256" =~ ^[a-f0-9]{64}$ ]] || exit 1
@@ -194,6 +203,19 @@ if [[ "${RELEASE_OPERATION:-release}" == release_admin ]]; then
 fi
 
 if [[ "${RELEASE_OPERATION:-release}" == release_online_recharge ]]; then
+  if online_component_selected; then
+    python3 -B scripts/production-release/online-recharge-component-readonly.py prepare
+    online_component_context=.deploy/production-release/online-recharge-component-build-context
+    online_component_projection="$(read_online_component_projection)"
+    echo 'RELEASE_ADMIN_ONLY=false' >> "$GITHUB_ENV"
+    build_image api "$online_component_context/apps/api/Dockerfile.mysql" runtime "$online_component_context"
+    build_image admin "$online_component_context/apps/admin/Dockerfile" runtime "$online_component_context"
+    build_image migrate "$online_component_context/apps/api/Dockerfile.mysql" migration "$online_component_context"
+    online_component_engine_context="$online_component_context/apps/api/src/id-business-v2/online-recharge/engine"
+    build_image online-recharge "$online_component_engine_context/Dockerfile" '' "$online_component_engine_context"
+    python3 -B scripts/production-release/online-recharge-component-readonly.py build-proof
+    exit 0
+  fi
   if [[ "${EXPECTED_CURRENT:-}" != 0a03fa28e6b844a18833d5c63f1de700f091fc64 ]]; then
     python3 -B scripts/production-release/online-recharge-readonly.py after-bit-build-input
   fi
