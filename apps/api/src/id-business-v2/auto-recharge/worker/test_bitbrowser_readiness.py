@@ -133,6 +133,32 @@ class LoginReadinessTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(error.exception.report['reason'], 'operation_cancelled')
         page.reload.assert_not_awaited()
 
+    async def test_identity_read_deadline_keeps_original_timeout_reason(self):
+        for step in ('session_read', 'account_read'):
+            page, target, _, identity, budget = self.make([True])
+            async def timed_out(*_args, **_kwargs):
+                budget.step = step
+                self.now = budget.seconds
+                raise Stop('session_load_timeout', error_type='TimeoutError')
+            with self.subTest(step=step):
+                with patch.object(browser_checkout, 'check_session', AsyncMock(side_effect=timed_out)), \
+                        self.assertRaises(Stop) as error:
+                    await browser_checkout.synchronize_login_page(page, target, identity, budget=budget)
+                self.assertEqual(error.exception.report['reason'], 'session_load_timeout')
+                self.assertEqual(error.exception.report['error_type'], 'TimeoutError')
+                page.evaluate.assert_not_awaited()
+                page.reload.assert_not_awaited()
+
+    async def test_ui_read_timeout_before_deadline_keeps_original_reason(self):
+        page, target, refreshed, identity, budget = self.make([False])
+        page.evaluate.side_effect = Stop('session_load_timeout', error_type='TimeoutError')
+        with patch.object(browser_checkout, 'check_session', AsyncMock(return_value=(refreshed, identity))), \
+                self.assertRaises(Stop) as error:
+            await browser_checkout.synchronize_login_page(page, target, identity, budget=budget)
+        self.assertEqual(error.exception.report['reason'], 'session_load_timeout')
+        self.assertLess(budget.elapsed, budget.seconds)
+        page.reload.assert_not_awaited()
+
 
 class LoginComposerDOMTests(unittest.TestCase):
     """Execute the real readiness expression in a local, fully stubbed browser."""

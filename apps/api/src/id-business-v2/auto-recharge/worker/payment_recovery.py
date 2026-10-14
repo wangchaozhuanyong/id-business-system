@@ -16,7 +16,7 @@ from upgrade_authentication import UpgradeResponseObservers
 async def recheck_in_context(context, target, ledger, *, timeout=25, poll_count=6, poll_interval=20):
     if not ledger.record:
         raise Stop("no_payment_attempt_to_recheck")
-    from pay import verified_quote_once, verify_identity_again
+    from pay import original_payment_feedback, verified_quote_once, verify_identity_again
     guard = PaymentGuard(target, ledger)
     guard.read_only = True
     guard.checkout_id = ledger.checkout_id
@@ -26,6 +26,8 @@ async def recheck_in_context(context, target, ledger, *, timeout=25, poll_count=
     observers = UpgradeResponseObservers(context, guard)
     identity = {"session_status": "not_verified", "account_matched": False, "current_plan": None}
     failure = {}
+    feedback = {'reason': None, 'user_action_required': False}
+    page = None
     try:
         if getattr(target, "session_token", None):
             await context.add_cookies(session_cookies(target))
@@ -69,12 +71,16 @@ async def recheck_in_context(context, target, ledger, *, timeout=25, poll_count=
         identity = {"session_status": "not_verified", "account_matched": False, "current_plan": None}
     finally:
         await observers.finish()
+    if page is not None and identity.get('account_matched') is True:
+        feedback.update(await original_payment_feedback(page, guard))
     guard.persist_observation(current_plan=identity["current_plan"], current_tier=identity.get("current_tier"))
     await asyncio.to_thread(guard.flush_observation)
+    if guard.evidence or guard.payment_state in {'paid', 'declined'}:
+        feedback = {'reason': None, 'user_action_required': False}
     matched = subscription_match(ledger.target_plan, identity["current_plan"], identity.get("current_tier"))
     return {"status": outcome(guard.payment_state, identity["current_plan"], guard.evidence,
                                target_plan=ledger.target_plan, current_tier=identity.get("current_tier")),
-            "stage": "original_payment_recheck", **identity, **guard.summary(), **failure,
+            "stage": "original_payment_recheck", **identity, **guard.summary(), **feedback, **failure,
             "subscription_status": ledger.target_plan if matched == "matched" else matched,
             "recheck_only": True}
 

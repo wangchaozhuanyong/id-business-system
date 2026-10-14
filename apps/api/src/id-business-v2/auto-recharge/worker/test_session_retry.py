@@ -1274,25 +1274,99 @@ class WindowRetryTests(unittest.IsolatedAsyncioTestCase):
 class SessionFailureReceiptTests(unittest.IsolatedAsyncioTestCase):
     async def test_pro_dispatch_preserves_context_and_distinguishes_recheck_budgets(self):
         import pay
+        from checkout_core import BrowserCredential, Credential
         context, page, guard = MagicMock(), MagicMock(), MagicMock(unroute=AsyncMock())
         page.context = context
         context.unroute = AsyncMock()
         budget = SessionBudget(60)
-        target = SimpleNamespace()
+        target = BrowserCredential('synthetic-session', 'synthetic-account', 'synthetic-user', 'old-access')
+        refreshed = Credential('new-access', target.account_id, 2000000000)
+        identity = {'current_plan': 'free', 'account_matched': True}
         async def browser(*args, **kwargs):
             self.assertEqual(kwargs['session_budget'].phase, 'subscription_check')
-            return await kwargs['session_handler'](page, guard, {'current_plan': 'free'})
+            return await kwargs['session_handler'](page, guard, identity)
         with patch.object(pay, 'run_browser', side_effect=browser), \
-                patch.object(pay, 'synchronize_login_page', new=AsyncMock(return_value=(
-                    target, {'current_plan': 'free'}))) as synchronize, \
+                patch.object(pay, 'check_session', new=AsyncMock(return_value=(refreshed, identity))) as check, \
+                patch.object(pay, 'synchronize_login_page', new=AsyncMock(return_value=(target, identity))) as synchronize, \
                 patch.object(pay, 'run_checkout_flow', new=AsyncMock(return_value={'status': 'fixture'})) as checkout:
             await pay.run_flow(target, None, 'pro-500', details_reader=None,
                                confirmer=None, browser_context=context, session_budget=budget)
-        synchronize.assert_awaited_once_with(page, target, {'current_plan': 'free'}, budget=budget)
+        synchronize.assert_not_awaited()
+        check.assert_awaited_once_with(page, target, budget=budget)
+        verified = checkout.call_args.args[0]
+        self.assertEqual(verified.account_id, target.account_id)
+        self.assertEqual(verified.user_id, target.user_id)
+        self.assertEqual(verified.session_token, '')
+        self.assertEqual(verified.old_token, refreshed.token)
         self.assertIs(checkout.call_args.kwargs['browser_context'], context)
         self.assertEqual(checkout.call_args.kwargs['session_budget'].phase, 'checkout_check')
         self.assertIsNot(checkout.call_args.kwargs['session_budget'], budget)
         self.assertEqual(checkout.call_args.kwargs['session_budget'].seconds, 60)
+        page.evaluate.assert_not_called()
+        page.reload.assert_not_called()
+
+    async def test_first_checkout_identity_failure_never_enters_checkout_or_upgrade(self):
+        import pay
+        from checkout_core import BrowserCredential
+        target = BrowserCredential('synthetic-session', 'synthetic-account', 'synthetic-user', 'old-access')
+        page = SimpleNamespace(context=object())
+        async def browser(*_args, **kwargs):
+            return await kwargs['session_handler'](page, object(), {'current_plan': 'free', 'account_matched': True})
+        for reason in ('official_account_mismatch', 'official_user_mismatch', 'access_token_expired',
+                       'verification_required', 'session_load_timeout', 'session_network_error'):
+            with self.subTest(reason=reason):
+                with patch.object(pay, 'run_browser', side_effect=browser), \
+                        patch.object(pay, 'check_session', AsyncMock(side_effect=Stop(reason))), \
+                        patch.object(pay, 'synchronize_login_page', AsyncMock(return_value=(
+                            target, {'current_plan': 'free', 'account_matched': True}))) as synchronize, \
+                        patch.object(pay, 'run_checkout_flow', AsyncMock()) as checkout, \
+                        patch('subscription_upgrade.run_upgrade_in_context', AsyncMock()) as upgrade, \
+                        self.assertRaises(Stop) as error:
+                    await pay.run_flow(target, None, 'pro-500', details_reader=None, confirmer=None,
+                        browser_context=page.context, session_budget=SessionBudget(60))
+                self.assertEqual(error.exception.report['reason'], reason)
+                synchronize.assert_not_awaited()
+                checkout.assert_not_awaited()
+                upgrade.assert_not_awaited()
+
+    async def test_subscription_changed_during_first_recheck_retains_existing_ui_sync(self):
+        import pay
+        from checkout_core import BrowserCredential, Credential
+        target = BrowserCredential('synthetic-session', 'synthetic-account', 'synthetic-user', 'old-access')
+        refreshed = Credential('new-access', target.account_id, 2000000000)
+        page = SimpleNamespace(context=object())
+        active = {'current_plan': 'plus', 'account_matched': True}
+        async def browser(*_args, **kwargs):
+            return await kwargs['session_handler'](page, object(), {'current_plan': 'free', 'account_matched': True})
+        with patch.object(pay, 'run_browser', side_effect=browser), \
+                patch.object(pay, 'check_session', AsyncMock(return_value=(refreshed, active))), \
+                patch.object(pay, 'synchronize_login_page', AsyncMock(return_value=(target, active))) as synchronize, \
+                patch.object(pay, 'run_checkout_flow', AsyncMock()) as checkout:
+            result = await pay.run_flow(target, None, 'plus', details_reader=None, confirmer=None,
+                browser_context=page.context, session_budget=SessionBudget(60))
+        self.assertEqual(result['status'], 'already_subscribed')
+        synchronize.assert_awaited_once()
+        checkout.assert_not_awaited()
+
+    async def test_subscription_check_only_retains_existing_ui_sync(self):
+        import pay
+        page = SimpleNamespace(context=object())
+        target = SimpleNamespace()
+        identity = {'current_plan': 'free', 'account_matched': True, 'has_active_subscription': None}
+        async def browser(*_args, **kwargs):
+            return await kwargs['session_handler'](page, object(), identity)
+        budget = SessionBudget(60)
+        with patch.object(pay, 'run_browser', side_effect=browser), \
+                patch.object(pay, 'check_session', AsyncMock()) as check, \
+                patch.object(pay, 'synchronize_login_page', AsyncMock(return_value=(target, identity))) as synchronize, \
+                patch.object(pay, 'run_checkout_flow', AsyncMock()) as checkout, \
+                self.assertRaises(Stop) as error:
+            await pay.run_flow(target, None, 'plus', details_reader=None, confirmer=None,
+                browser_context=page.context, session_budget=budget, subscription_check_only=True)
+        self.assertEqual(error.exception.report['reason'], 'subscription_state_unverified')
+        synchronize.assert_awaited_once_with(page, target, identity, budget=budget)
+        check.assert_not_awaited()
+        checkout.assert_not_awaited()
 
     async def execute_failure(self, error=None, *, repeat=False, status=200, seconds=7,
                               check_error=None, cancelled=False):

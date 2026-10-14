@@ -147,6 +147,7 @@ services:
       - ALL
     tmpfs:
       - /tmp:rw,nosuid,nodev,size=384m,mode=1777
+      - /home/node:rw,noexec,nosuid,nodev,size=64m,uid=1000,gid=1000,mode=0700
     shm_size: 256m
     stop_grace_period: 45s
     logging: *default-logging
@@ -155,7 +156,7 @@ services:
       - online_recharge_data:/workspace/engine/runtime
     environment:
       NODE_ENV: production
-      ONLINE_RECHARGE_ENGINE_ENABLED: ${ONLINE_RECHARGE_ENGINE_ENABLED:-1}
+      ONLINE_RECHARGE_ENGINE_ENABLED: ${ONLINE_RECHARGE_ENGINE_ENABLED:-0}
       ONLINE_RECHARGE_WORKER_KEY: ${ONLINE_RECHARGE_WORKER_KEY:?set ONLINE_RECHARGE_WORKER_KEY}
       ONLINE_RECHARGE_RPC_URL: http://127.0.0.1:3000/api/id-business-v2/online-recharge/worker/rpc
       ONLINE_RECHARGE_CREDENTIALS_URL: http://127.0.0.1:8053

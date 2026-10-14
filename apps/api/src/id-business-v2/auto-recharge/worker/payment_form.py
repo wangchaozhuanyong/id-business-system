@@ -315,9 +315,18 @@ async def verify_billing_fields(page, details, filled):
         raise Stop("payment_save_preference_changed")
 
 
-async def subscribe_button(page):
+async def subscribe_button(page, *, first_pro_context=None):
+    pattern = r"^\s*(?:订阅|訂閱|Subscribe)\s*$"
+    if first_pro_context is not None:
+        from browser_checkout import verify_first_pro_checkout_tier
+        await verify_first_pro_checkout_tier(page, first_pro_context)
+        if (not first_pro_context.official_quote_binding
+                or first_pro_context.official_binding_version < first_pro_context.checkout_tier_binding_minimum
+                or first_pro_context.official_quote_binding_request_version < first_pro_context.checkout_tier_request_minimum):
+            raise Stop("payment_quote_not_ready")
+        pattern = r"^\s*(?:订阅|訂閱|Subscribe|升级至\s*Pro)\s*$"
     button = page.locator("button[type='submit']").filter(
-        has_text=re.compile(r"^\s*(?:订阅|訂閱|Subscribe)\s*$", re.I), visible=True)
+        has_text=re.compile(pattern, re.I), visible=True)
     if await button.count() != 1 or not await button.is_enabled():
         raise Stop("official_subscribe_button_not_ready")
     return button
