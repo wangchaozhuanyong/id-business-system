@@ -141,6 +141,7 @@ function recordGuardCommands(
     event = '',
     base = 'a'.repeat(40),
     firstRechargeSnapshot,
+    transportProbe = false,
     captureError = false,
     failCommand = ''
   } = {}
@@ -149,9 +150,17 @@ function recordGuardCommands(
   // No Git command, nested test, database command or business operation is executed.
   const script = `
     import childProcess from 'node:child_process';
+    import fs from 'node:fs';
     import { registerHooks, syncBuiltinESMExports } from 'node:module';
     const paths = JSON.parse(process.env.GUARD_TEST_PATHS);
+    const input = fs.readFileSync(0, 'utf8');
+    globalThis.guardTestFirstRechargeSnapshot = JSON.parse(input);
     const calls = [];
+    if (process.env.GUARD_TEST_TRANSPORT_PROBE === 'true') {
+      calls.push(['snapshot-transport', Buffer.byteLength(input),
+        Object.hasOwn(process.env, 'GUARD_TEST_FIRST_RECHARGE_SNAPSHOT'),
+        process.argv.some(arg => input.length > 0 && arg.includes(input))]);
+    }
     globalThis.guardTestCalls = calls;
     const scopeUrl = new URL('./scripts/ci-recharge-scope.mjs', import.meta.url).href;
     registerHooks({resolve(specifier, context, nextResolve) {
@@ -167,7 +176,7 @@ function recordGuardCommands(
           'globalThis.guardTestCalls.push(["prepare-resume-helper", base]);' +
           'return process.env.GUARD_TEST_PREPARE_RESUME === "true"; }' +
           'export function readFirstRechargeBillingNameSnapshot() {' +
-          'return JSON.parse(process.env.GUARD_TEST_FIRST_RECHARGE_SNAPSHOT || "null"); }' +
+          'return globalThis.guardTestFirstRechargeSnapshot; }' +
           'export function canResumeOnlinePreflightReceiptFixGuard(base) {' +
           'globalThis.guardTestCalls.push(["receipt-resume-helper", base]);' +
           'return process.env.GUARD_TEST_RECEIPT_RESUME === "true"; }';
@@ -199,12 +208,15 @@ function recordGuardCommands(
     }
     process.stdout.write(JSON.stringify(calls));
   `;
+  const environment = { ...process.env };
+  delete environment.GUARD_TEST_FIRST_RECHARGE_SNAPSHOT;
   return JSON.parse(
     execFileSync(process.execPath, ['--input-type=module', '-e', script], {
       cwd: root,
       encoding: 'utf8',
+      input: JSON.stringify(firstRechargeSnapshot ?? null),
       env: {
-        ...process.env,
+        ...environment,
         CHECK_MODE: mode,
         GITHUB_ACTIONS: cloud ? 'true' : '',
         GITHUB_REPOSITORY: repository,
@@ -216,13 +228,40 @@ function recordGuardCommands(
         GUARD_TEST_BASE: base,
         GUARD_TEST_PART: part,
         GUARD_TEST_PATHS: JSON.stringify(paths),
-        GUARD_TEST_FIRST_RECHARGE_SNAPSHOT: JSON.stringify(firstRechargeSnapshot),
+        GUARD_TEST_TRANSPORT_PROBE: String(transportProbe),
         GUARD_TEST_CAPTURE_ERROR: String(captureError),
         GUARD_TEST_FAIL_COMMAND: failCommand
       }
     })
   );
 }
+
+test('real first-subscription snapshot exceeds Linux argument limit and travels only through stdin', () => {
+  const base = 'b9f2e2b75a753b86a5057dd798d651c57496554e';
+  const paths = [
+    ...firstRechargeBillingNamePaths,
+    'apps/api/src/id-business-v2/auto-recharge/worker/pay.py'
+  ];
+  const firstRechargeSnapshot = readFirstRechargeBillingNameSnapshot(base, paths);
+  const bytes = Buffer.byteLength(JSON.stringify(firstRechargeSnapshot));
+  assert.ok(bytes > 128 * 1024, 'Use the real large source snapshot, not padding or a tiny mock');
+  const calls = recordGuardCommands('recharge', paths, 'connector', {
+    base,
+    firstRechargeSnapshot,
+    transportProbe: true
+  });
+  assert.deepEqual(calls[0], ['snapshot-transport', bytes, false, false]);
+  assert.equal(
+    calls.filter((call) => call.join(' ') === 'npm run build --workspace @apple-business/shared')
+      .length,
+    1
+  );
+  assert.equal(
+    calls.filter((call) => call[0] === 'python3' && call.includes('test_native_pro_checkout'))
+      .length,
+    1
+  );
+});
 
 test('native checkout connector builds real shared exports before browser installation and Python contracts', () => {
   const worker = 'apps/api/src/id-business-v2/auto-recharge/worker';
