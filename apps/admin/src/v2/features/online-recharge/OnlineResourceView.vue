@@ -238,7 +238,8 @@ import {
   rowActions,
   sectionDescriptions,
   sectionTitles,
-  onlineActionAllowedForRow
+  onlineActionAllowedForRow,
+  onlineActionPayload
 } from './sections';
 import { onlineTableSchemas } from './tableSchemas';
 import type { OnlineAction, OnlineQuery, OnlineRow, OnlineSection } from './contracts';
@@ -439,8 +440,7 @@ async function runAction() {
           : selectedAction.value.key,
       selectedAction.value.key === 'recheck'
         ? { id: selectedRow.value?.id }
-        : {
-            ...filters.value,
+        : onlineActionPayload(filters.value, {
             id: selectedRow.value?.id,
             ids: selectedRow.value
               ? undefined
@@ -450,7 +450,7 @@ async function runAction() {
             cardLast4: selectedRow.value?.cardLast4,
             startDate: dateRange.value?.[0],
             endDate: dateRange.value?.[1]
-          }
+          })
     );
     confirmOpen.value = false;
     if (selectedAction.value.key === 'copy') {
