@@ -911,8 +911,8 @@ try {
   await page.getByPlaceholder('输入兑换码').fill('SYNTHETIC-CODE');
   await page.locator('textarea').fill(privateSession);
   await navigate(page, '/online-recharge/subscription');
-  assert.equal(await page.locator('textarea').inputValue(), '');
-  await page.locator('textarea').fill(privateSession);
+  assert.equal(new URL(page.url()).pathname, '/v2/online-recharge/renewal');
+  assert.equal(await page.locator('textarea').count(), 0, '续费管理不应恢复旧公开会话表单');
   await navigate(page, '/online-recharge');
   assert.equal(await page.locator('textarea').inputValue(), '');
   await page.getByRole('button', { name: '验证兑换码', exact: true }).click();
