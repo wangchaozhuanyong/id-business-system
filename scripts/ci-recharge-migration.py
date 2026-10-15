@@ -48,7 +48,7 @@ try:
     assert sql("SELECT JSON_UNQUOTE(JSON_EXTRACT(browser_options,'$.proxyMode')),static_proxy_credentials_encrypted FROM id_business_v2_recharge_browser_settings WHERE owner_id='fixture';") == 'static\tencrypted-fixture'
     # Exercise the actual shared-pool migration with duplicate content, old IDs and an
     # existing job foreign key. Only synthetic encrypted payloads enter this fixture.
-    sql("CREATE TABLE id_business_v2_recharge_jobs (id CHAR(36) PRIMARY KEY);")
+    sql("CREATE TABLE id_business_v2_recharge_jobs (id CHAR(36) PRIMARY KEY) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;")
     sql((migrations / '20260930210000_recharge_proxy_catalog/migration.sql').read_text())
     source = (migrations / '20261009093000_online_recharge/migration.sql').read_text()
     start = source.index('CREATE TABLE `online_recharge_proxies`')

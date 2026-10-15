@@ -337,7 +337,10 @@ try {
         ['代理连接方式', 'HTTPS 提取链接'],
         ['代理协议', 'HTTPS']
       ]) {
-        await importer.getByRole('combobox', { name, exact: true }).click();
+        await importer
+          .locator('.el-select')
+          .filter({ has: importer.getByRole('combobox', { name, exact: true }) })
+          .click();
         await page.getByRole('option', { name: label, exact: true }).click();
       }
       await importer
