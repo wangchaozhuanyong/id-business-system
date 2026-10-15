@@ -55,9 +55,14 @@ jobs:
           python3 -B scripts/ci-recharge-migration.py
           node scripts/acceptance-v2-shared-proxy-mysql.mjs
           npm run acceptance:v2-production-database-access
+      - name: Verify preserved production diagnostics with shared proxy execution
+        run: |
+          npm ci --prefix apps/api/src/id-business-v2/online-recharge/engine/upstream --ignore-scripts --no-audit --no-fund
+          cd apps/api/src/id-business-v2/online-recharge/engine
+          node --test test/proxy-pool.test.cjs test/proxy-resolver.test.cjs test/regressions.test.cjs test/runtime-main.test.cjs
       - name: Verify changed acceptance controls
         run: |
-          npx prettier --check scripts/acceptance-v2-online-recharge-ui.mjs scripts/shared-proxy-validation-reuse.mjs .github/workflows/shared-proxy-pool-validation.yml
+          npx prettier --check scripts/acceptance-v2-online-recharge-ui.mjs scripts/shared-proxy-validation-reuse.mjs .github/workflows/shared-proxy-pool-validation.yml apps/api/src/id-business-v2/online-recharge/engine/task-runner.cjs apps/api/src/id-business-v2/online-recharge/engine/SOURCE_MANIFEST.json
           npx eslint scripts/acceptance-v2-online-recharge-ui.mjs scripts/shared-proxy-validation-reuse.mjs
           node --check scripts/acceptance-v2-online-recharge-ui.mjs
       - name: Verify actual routes with synthetic data
@@ -77,6 +82,7 @@ jobs:
             .runtime/shared-proxy-release/
             .runtime/shared-proxy-mysql/result.json
             .runtime/shared-proxy-pool-ui/
+            .runtime/online-recharge/ui/
           include-hidden-files: true
           if-no-files-found: error
           retention-days: 30

@@ -145,9 +145,9 @@
     {
       "path": "task-runner.cjs",
       "originalSha256": null,
-      "adaptedSha256": "c81e954fdfd652a95524bd5a2bf9a24377585b4705a3e54816ab038379a81461",
+      "adaptedSha256": "aaf0e184bdb523ee63dcc4773805e39539977bc52fddd2493cc127c84b2a6af6",
       "changed": true,
-      "reason": "审计修复：续费未知结果明确保留待核对，禁止清除未知提交状态。 共用代理池适配：按任务/租约缓存解析，提取失败回写失败检测，保留已发布升级与原单行为。"
+      "reason": "审计修复：续费未知结果明确保留待核对，禁止清除未知提交状态。 共用代理池适配：按任务/租约缓存解析，提取失败回写失败检测，保留已发布升级与原单行为。 保留当前线上执行阶段诊断补丁，公共代理检测失败仍回写明确结果。"
     },
     {
       "path": "test/checkout-outcomes.test.cjs",

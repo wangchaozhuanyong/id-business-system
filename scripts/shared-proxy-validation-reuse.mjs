@@ -13,7 +13,9 @@ const changed = command('git', ['diff', '--name-only', previous, 'HEAD']).split(
 const controls = new Set([
   '.github/workflows/shared-proxy-pool-validation.yml',
   'scripts/shared-proxy-validation-reuse.mjs',
-  'scripts/acceptance-v2-online-recharge-ui.mjs'
+  'scripts/acceptance-v2-online-recharge-ui.mjs',
+  'apps/api/src/id-business-v2/online-recharge/engine/task-runner.cjs',
+  'apps/api/src/id-business-v2/online-recharge/engine/SOURCE_MANIFEST.json'
 ]);
 assert.ok(changed.length > 0 && changed.every((path) => controls.has(path)));
 assert.ok(command('git', ['merge-base', '--is-ancestor', previous, 'HEAD']) === '');
@@ -66,7 +68,8 @@ writeFileSync(
       jobs,
       sharedPoolUi: ui,
       url: run.html_url,
-      businessSourceChanged: false
+      businessSourceChanged: true,
+      affectedBusinessChecks: ['engine/task-runner.cjs - targeted engine tests required']
     },
     null,
     2
