@@ -47,9 +47,11 @@ def complete_payment(record):
 
 
 def resolved_without_bank_request(record):
-    from attempt_ledger import confirmed_no_bank_request
+    from attempt_ledger import confirmed_no_bank_request, declined_payment_resolved
     if not isinstance(record, dict) or record.get('payment_evidence'):
         return False
+    if declined_payment_resolved(record):
+        return True
     count = record.get('confirmation_requests_sent')
     return (record.get('cancelled_before_confirmation') is True
             and record.get('payment_status') == 'cancelled' and type(count) is int and count == 0

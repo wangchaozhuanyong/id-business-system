@@ -1,3 +1,4 @@
+import { resolvedDeclinedPayment, resolvedDeclinedCheckout } from '../recharge-noncharge-proof';
 import { ConflictException, Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../../../common/prisma/prisma.service';
 import { acquireMysqlTransactionLock } from '../../../common/prisma/mysql-transaction-lock';
@@ -27,6 +28,46 @@ export class RechargeRepository {
       orderBy: { createdAt: 'desc' },
       take: 30
     });
+  }
+
+  verificationCandidates(ownerId: string, accountKeys: string[]) {
+    return this.prisma.idBusinessV2RechargeJob.findMany({
+      where: {
+        ownerId,
+        accountKey: { in: accountKeys },
+        state: 'finished',
+        AND: [
+          { result: { path: '$.account_matched', equals: true } },
+          { result: { path: '$.current_plan', equals: 'free' } }
+        ]
+      },
+      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+      take: 200
+    });
+  }
+
+  async reviewPage(ownerId: string, options: { page: number; pageSize: number; search: string }) {
+    const where: Prisma.IdBusinessV2RechargeJobWhereInput = {
+      ownerId,
+      ...(options.search
+        ? {
+            OR: [
+              { id: { contains: options.search } },
+              { result: { path: '$.window_name', string_contains: options.search } }
+            ]
+          }
+        : {})
+    };
+    const [items, total] = await Promise.all([
+      this.prisma.idBusinessV2RechargeJob.findMany({
+        where,
+        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+        take: options.pageSize,
+        skip: (options.page - 1) * options.pageSize
+      }),
+      this.prisma.idBusinessV2RechargeJob.count({ where })
+    ]);
+    return { items, total };
   }
 
   async owned(id: string, ownerId: string) {
@@ -167,6 +208,7 @@ export class RechargeRepository {
     const record = current.find((item) => item.fileKey === fileKey);
     const identifiers = expected.filter((value): value is string => value !== undefined);
     for (const item of current.filter((value) => value.fileKey.startsWith('payments/'))) {
+      if (resolvedDeclinedPayment(item.document)) continue;
       if (!item.document || typeof item.document !== 'object' || Array.isArray(item.document))
         throw new ConflictException('原付款记录未核实，禁止创建新订单');
       const payment = item.document as Record<string, unknown>;
@@ -241,7 +283,7 @@ export class RechargeRepository {
     id: string,
     data: Prisma.IdBusinessV2RechargeJobUncheckedCreateInput
   ) {
-    if (data.action !== 'bitbrowser') return;
+    if (data.action !== 'bitbrowser' || data.state === 'finished') return;
     const result = data.result as Record<string, unknown> | undefined;
     const checks: Prisma.IdBusinessV2RechargeJobWhereInput[] = [{ ownerId: data.ownerId }];
     if (data.accountKey) checks.push({ accountKey: data.accountKey });
@@ -280,9 +322,15 @@ export class RechargeRepository {
     return tx.idBusinessV2RechargeRecord.findMany({ where: { accountKey } });
   }
 
-  paymentRecords(ownerId: string, accountKeys: string[]) {
+  paymentRecords(ownerId: string, accountKeys: string[], includeCheckouts = false) {
     return this.prisma.idBusinessV2RechargeRecord.findMany({
-      where: { ownerId, accountKey: { in: accountKeys }, fileKey: { startsWith: 'payments/' } }
+      where: {
+        ownerId,
+        accountKey: { in: accountKeys },
+        ...(includeCheckouts
+          ? { NOT: { fileKey: { startsWith: 'history/' } } }
+          : { fileKey: { startsWith: 'payments/' } })
+      }
     });
   }
 
@@ -345,6 +393,7 @@ export class RechargeRepository {
       sourceJobId: string;
       verificationJobId: string;
       resolvedAt: string;
+      kind?: 'confirmed_declined_no_charge';
     }
   ) {
     const records = await this.records(tx, input.accountKey);
@@ -372,14 +421,24 @@ export class RechargeRepository {
       String(paymentDocument.target_plan ?? 'plus') !== input.plan ||
       paymentDocument.payment_attempted !== true ||
       Number(paymentDocument.confirmation_requests_sent) !== 1 ||
-      paymentDocument.payment_status !== 'unknown' ||
+      paymentDocument.payment_status !== (input.kind ? 'declined' : 'unknown') ||
       paymentDocument.payment_evidence ||
       checkoutDocument.payment_evidence
     ) {
       throw new ConflictException('历史付款证据不符合处理条件');
     }
+    if (
+      input.kind &&
+      (checkoutDocument.payment_status !== 'not_attempted' ||
+        checkoutDocument.payment_attempted === true ||
+        Number(checkoutDocument.confirmation_requests_sent ?? 0) !== 0 ||
+        paymentDocument.operation === 'subscription_upgrade')
+    )
+      throw new ConflictException('原结算状态不支持安全结束，请保留原单继续核实');
+    if (input.kind && paymentDocument.confirmation_requests_sent !== 1)
+      throw new ConflictException('拒付原单的付款次数未核实');
     const resolution = {
-      operator_resolution: 'confirmed_no_bank_request',
+      operator_resolution: input.kind ?? 'confirmed_no_bank_request',
       resolved_at: input.resolvedAt,
       resolution_job_id: input.resolutionJobId,
       source_job_id: input.sourceJobId,
@@ -427,6 +486,7 @@ export class RechargeRepository {
       document: object;
       ownerId: string;
       allowCheckoutReplacement?: boolean;
+      allowResolvedDeclineReplacement?: boolean;
       allowCycleReplacement?: boolean;
       cycleOrigin?: object;
     }
@@ -440,12 +500,23 @@ export class RechargeRepository {
       input.allowCycleReplacement === true &&
       !input.fileKey.startsWith('payments/') &&
       (!previous || isClosedCycleDocument(before, input.accountKey));
+    const replacement = input.document as Record<string, unknown>;
+    const replacingResolvedDecline =
+      input.allowResolvedDeclineReplacement === true &&
+      resolvedDeclinedCheckout(before) &&
+      !input.fileKey.startsWith('payments/') &&
+      replacement.status === 'checkout_attempted' &&
+      replacement.stage === 'checkout_create' &&
+      replacement.checkout_outcome === 'unknown' &&
+      replacement.payment_status === 'not_attempted' &&
+      typeof replacement.retry_of === 'string' &&
+      /^[a-f0-9]{64}$/.test(replacement.retry_of);
     const next: Record<string, unknown> = {
       ...(input.document as Record<string, unknown>),
       ...preserveRechargeResolutionMetadata(
         before,
         input.document as Record<string, unknown>,
-        replacingCycle
+        replacingCycle || replacingResolvedDecline
       ),
       ...(!replacingCycle && before?.cycle_resolution
         ? { cycle_resolution: before.cycle_resolution }
@@ -496,18 +567,19 @@ export class RechargeRepository {
     } else if (before?.operation === 'subscription_upgrade' && !replacingCycle)
       throw new ConflictException('升级原单类型不可更换');
     const replacingUnpaidCheckout =
-      input.allowCheckoutReplacement === true &&
-      input.fileKey.endsWith('.json') &&
-      !input.fileKey.startsWith('payments/') &&
-      before?.payment_status === 'not_attempted' &&
-      before.payment_attempted !== true &&
-      !before.confirmation_requests_sent &&
-      next.status === 'checkout_attempted' &&
-      next.stage === 'checkout_create' &&
-      next.checkout_outcome === 'unknown' &&
-      next.payment_status === 'not_attempted' &&
-      typeof next.retry_of === 'string' &&
-      /^[a-f0-9]{64}$/.test(next.retry_of);
+      replacingResolvedDecline ||
+      (input.allowCheckoutReplacement === true &&
+        input.fileKey.endsWith('.json') &&
+        !input.fileKey.startsWith('payments/') &&
+        before?.payment_status === 'not_attempted' &&
+        before.payment_attempted !== true &&
+        !before.confirmation_requests_sent &&
+        next.status === 'checkout_attempted' &&
+        next.stage === 'checkout_create' &&
+        next.checkout_outcome === 'unknown' &&
+        next.payment_status === 'not_attempted' &&
+        typeof next.retry_of === 'string' &&
+        /^[a-f0-9]{64}$/.test(next.retry_of));
     if (
       before?.checkout_identifier &&
       before.checkout_identifier !== next.checkout_identifier &&

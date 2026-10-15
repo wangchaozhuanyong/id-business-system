@@ -1,0 +1,121 @@
+import copy
+import importlib.util
+import json
+from pathlib import Path
+import tempfile
+import unittest
+from unittest.mock import Mock
+
+HERE = Path(__file__).resolve().parent
+
+
+def load(name, file):
+    spec = importlib.util.spec_from_file_location(name, HERE / file)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+release = load('availability_test_release', 'recharge-availability-release.py')
+build = load('availability_test_build', 'recharge-availability-build.py')
+
+
+class AvailabilityPublicationTests(unittest.TestCase):
+    def test_build_excludes_incremental_cache_but_never_unrelated_executable_changes(self):
+        name = 'id-business-v2/auto-recharge/fixture'
+        modules = {name + '.js': None}
+        before = {'tsconfig.build.tsbuildinfo': 'old-cache', 'other.js': 'same', 'other.d.ts': 'old-type'}
+        after = {'tsconfig.build.tsbuildinfo': 'new-cache', 'other.js': 'same', 'other.d.ts': 'new-type',
+                 **{name + ext: 'new-module' for ext in ('.js', '.js.map', '.d.ts')}}
+        self.assertEqual(build.verify_api_outputs(before, after, modules), {name + ext for ext in ('.js', '.js.map', '.d.ts')})
+        with self.assertRaisesRegex(RuntimeError, 'API_OUTPUT_SCOPE_CHANGED'):
+            build.verify_api_outputs(before, {**after, 'other.js': 'changed'}, modules)
+        with self.assertRaisesRegex(RuntimeError, 'API_OUTPUT_MISSING'):
+            build.verify_api_outputs(before, {k:v for k,v in after.items() if k != name+'.d.ts'}, modules)
+
+    def test_contract_only_replaces_reviewed_recharge_modules_and_no_schema(self):
+        contract = json.loads((HERE / 'recharge-availability-contract.json').read_bytes())
+        self.assertEqual(contract['scope'], 'RECHARGE_PAYMENT_AVAILABILITY_ONLY')
+        self.assertEqual(contract['expectedCurrent'], '20a8a9afede46a1c8e1c6d0163e315e96c4d57c7')
+        for name in contract['sources']:
+            self.assertTrue(name.startswith(('apps/admin/src/v2/features/auto-recharge/',
+                'apps/api/src/id-business-v2/auto-recharge/', 'packages/shared/src/v2/auto-recharge.ts', 'docs/')))
+            self.assertEqual(build.digest((build.ROOT / name).read_bytes()), contract['sources'][name])
+        self.assertFalse(any('prisma' in name or name.endswith('package-lock.json') for name in contract['sources']))
+        self.assertTrue(all(name.startswith('id-business-v2/auto-recharge/') and name.endswith('.js') for name in contract['apiModules']))
+        self.assertEqual(set(release.PRESERVED), {'mysql', 'caddy', 'media-resolver', 'auto-recharge', 'auto-registration'})
+
+    def fixture(self, root):
+        api = 'id-business-v2/auto-recharge/fixture.js'
+        source = 'apps/api/src/id-business-v2/auto-recharge/fixture.ts'
+        paths = ['api/modules/' + api.removesuffix('.js') + ext for ext in ('.js', '.js.map', '.d.ts')]
+        paths += ['source/' + source, 'admin/html/index.html']
+        paths += ['admin/html/assets/fixture-' + str(i) + '.css' for i in range(250)]
+        for name in paths:
+            path = root / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(b'synthetic-content')
+        files = build.inventory(root)
+        contract = {'scope': 'RECHARGE_PAYMENT_AVAILABILITY_ONLY', 'apiModules': {api: None},
+                    'sources': {source: files['source/' + source]}}
+        plan = {'commit': 'a' * 40, 'tree': 'b' * 40, 'workflowRunId': '1', 'workflowRunAttempt': '1', 'contractSha256': 'c' * 64}
+        proof = {'version': 1, 'scope': contract['scope'], **plan, 'baselineApiReproduced': True,
+                 'baselineAdminReproduced': True, 'updatedServices': ['api', 'admin'], 'migrationPerformed': False,
+                 'businessActions': 0, 'files': files,
+                 'apiModules': {n.removeprefix('api/modules/'): v for n, v in files.items() if n.startswith('api/modules/')},
+                 'adminFiles': {n.removeprefix('admin/html/'): v for n, v in files.items() if n.startswith('admin/html/')}}
+        return contract, plan, proof
+
+    def test_proof_rejects_changed_identity_failed_reproduction_or_business_actions(self):
+        temporary = build.ROOT / '.runtime/recharge-payment-availability-20261015'
+        temporary.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=temporary) as directory:
+            root = Path(directory)
+            contract, plan, proof = self.fixture(root)
+            helper = Mock(file_inventory=build.inventory)
+            self.assertEqual(release.validate_proof(proof, plan, contract, root, helper), proof)
+            for field, value in [('commit', 'd' * 40), ('tree', 'e' * 40), ('workflowRunId', '2'),
+                                 ('baselineApiReproduced', False), ('baselineAdminReproduced', False),
+                                 ('businessActions', 1), ('migrationPerformed', True), ('updatedServices', ['api', 'online-recharge'])]:
+                with self.subTest(field=field):
+                    changed = {**proof, field: value}
+                    with self.assertRaisesRegex(RuntimeError, 'PROOF_INVALID'):
+                        release.validate_proof(changed, plan, contract, root, helper)
+
+    def test_payload_rejects_content_mutation_and_unsigned_extra_api_module(self):
+        temporary = build.ROOT / '.runtime/recharge-payment-availability-20261015'
+        temporary.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=temporary) as directory:
+            root = Path(directory)
+            contract, plan, proof = self.fixture(root)
+            helper = Mock(file_inventory=build.inventory)
+            path = root / 'api/modules/id-business-v2/auto-recharge/fixture.js'
+            path.write_bytes(b'changed-content')
+            with self.assertRaisesRegex(RuntimeError, 'PAYLOAD_CHANGED'):
+                release.validate_proof(proof, plan, contract, root, helper)
+            path.write_bytes(b'synthetic-content')
+            extra = root / 'api/modules/id-business-v2/unrelated.js'
+            extra.write_bytes(b'unsigned-content')
+            with self.assertRaisesRegex(RuntimeError, 'PAYLOAD_CHANGED'):
+                release.validate_proof(proof, plan, contract, root, helper)
+            changed = copy.deepcopy(proof)
+            changed['files'] = build.inventory(root)
+            changed['apiModules']['id-business-v2/unrelated.js'] = build.digest(extra.read_bytes())
+            with self.assertRaisesRegex(RuntimeError, 'PAYLOAD_SCOPE_INVALID'):
+                release.validate_proof(changed, plan, contract, root, helper)
+
+    def test_module_probe_rejects_any_predecessor_drift_with_read_only_command(self):
+        d = Mock()
+        modules = {'id-business-v2/auto-recharge/fixture.js': 'a' * 64}
+        d.compose.return_value = json.dumps(modules)
+        release.verify_modules(d, Path('/fixture'), modules)
+        d.compose.return_value = json.dumps({**modules, 'unexpected': 'b' * 64})
+        with self.assertRaisesRegex(RuntimeError, 'API_CONTENT_CHANGED'):
+            release.verify_modules(d, Path('/fixture'), modules)
+        self.assertEqual(d.compose.call_args.args[1:5], ('exec', '-T', 'api', 'node'))
+        self.assertIn('readFileSync', d.compose.call_args.args[-1])
+        self.assertNotIn('writeFile', d.compose.call_args.args[-1])
+
+
+if __name__ == '__main__':
+    unittest.main()

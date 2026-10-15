@@ -1,3 +1,4 @@
+import { resolvedDeclinedCheckout, resolvedDeclinedPayment } from './recharge-noncharge-proof';
 import { BadRequestException, ConflictException, ForbiddenException } from '@nestjs/common';
 import type { IdBusinessV2RechargeJob } from '@prisma/client';
 import {
@@ -61,6 +62,7 @@ function confirmedNoBankResolution(document: Record<string, unknown>) {
 }
 
 export function resolvedCyclePayment(value: unknown) {
+  if (resolvedDeclinedPayment(value)) return true;
   if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
   const document = object(value);
   if (document.payment_evidence) return false;
@@ -76,6 +78,7 @@ export function resolvedCyclePayment(value: unknown) {
 }
 
 export function safeUnpaidCycleCheckout(value: unknown) {
+  if (resolvedDeclinedCheckout(value)) return true;
   if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
   const document = object(value);
   // A consumed next-cycle marker can precede an uncertain external create.

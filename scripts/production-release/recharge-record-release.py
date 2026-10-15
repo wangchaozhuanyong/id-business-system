@@ -256,7 +256,7 @@ def download(url, cap):
     return raw
 
 
-def fresh_scoped_backup(d, previous, plan):
+def fresh_scoped_backup(d, previous, plan, *, normalizer_path=None):
     # This release needs a fresh backup, not a retention or deletion operation.
     need(re.fullmatch('[a-f0-9]{40}', plan['commit']) and re.fullmatch('[0-9]+', plan['workflowRunId']),
          'BACKUP_IDENTITY_INVALID')
@@ -274,7 +274,7 @@ def fresh_scoped_backup(d, previous, plan):
          and re.fullmatch(r'[a-z]{2}(?:-gov)?-[a-z]+-[0-9]', region)
          and re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9._/-]*', prefix)
          and '..' not in Path(prefix).parts, 'BACKUP_LOCATION_INVALID')
-    normalizer = previous / 'scripts/mysql-dump-restore-normalizer.sed'
+    normalizer = normalizer_path or previous / 'scripts/mysql-dump-restore-normalizer.sed'
     need(normalizer.is_file() and not normalizer.is_symlink()
          and digest(normalizer.read_bytes()) == 'ca9b05f832e9ed73bb36b7e76c083c99a40b13e067850166f8715bae469e5202',
          'BACKUP_NORMALIZER_CHANGED')

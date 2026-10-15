@@ -1183,8 +1183,13 @@ describe('比特浏览器充值入口', () => {
     expect(mock.abandonUnreceivedBitBrowser).not.toHaveBeenCalled();
     expect(flow.error.value).toBe('');
   });
-  it('未知付款只允许复查原单，不重新充值', () => {
+  it('未知付款只允许复查原单，不重新充值', async () => {
     fillForm();
+    bankAccounts.value.items = [account()];
+    flow.loginMethod.value = 'password';
+    flow.selectedBankAccountId.value = 'account-fixture';
+    await nextTick();
+    await nextTick();
     jobs.value.items = [
       job('unknown', {
         payment_attempted: true,
@@ -1196,8 +1201,43 @@ describe('比特浏览器充值入口', () => {
     expect(flow.canRecheck.value).toBe(true);
     expect(flow.workflowMessage.value).toContain('禁止重新付款');
   });
-  it('目标升级已核实但付款未知时只提示只读复查，保留原付款锁', () => {
+  it('查看旧失败单不限制其他账号，切回同账号才限制新付款，仍允许仅登录', async () => {
     fillForm();
+    await choosePasswordAccount();
+    expect(flow.canStart.value).toBe(true);
+    jobs.value.items = [
+      {
+        ...job('finished', {
+          payment_attempted: true,
+          payment_requests_sent: 1,
+          payment_status: 'unknown'
+        }),
+        chatgptAccountId: 'other-account',
+        availability: {
+          execution: 'released',
+          payment: 'unknown',
+          accountPaymentRestricted: true,
+          canInspect: true
+        }
+      }
+    ];
+    flow.selectJob('job-fixture');
+    expect(flow.selectedBankAccountId.value).toBe('account-fixture');
+    expect(flow.canStart.value).toBe(true);
+    expect(flow.canStartOpen.value).toBe(true);
+    jobs.value.items[0]!.chatgptAccountId = 'account-fixture';
+    expect(flow.canStart.value).toBe(false);
+    expect(flow.canStartOpen.value).toBe(true);
+    expect(flow.details.value.number).toBe('5555555555554444');
+    expect(flow.details.value.cvc).toBe('123');
+  });
+  it('目标升级已核实但付款未知时只提示只读复查，保留原付款锁', async () => {
+    fillForm();
+    bankAccounts.value.items = [account()];
+    flow.loginMethod.value = 'password';
+    flow.selectedBankAccountId.value = 'account-fixture';
+    await nextTick();
+    await nextTick();
     for (const state of ['unknown', 'finished'] as const) {
       for (const [plan, current] of [
         ['plus', 'plus'],
@@ -1252,8 +1292,13 @@ describe('比特浏览器充值入口', () => {
       '付款与套餐生效均已核实；可继续为同一账号选择下一套餐。'
     );
   });
-  it('错误档位、账号不符或非升级原单不能展示套餐已核实提示', () => {
+  it('错误档位、账号不符或非升级原单不能展示套餐已核实提示', async () => {
     fillForm();
+    bankAccounts.value.items = [account()];
+    flow.loginMethod.value = 'password';
+    flow.selectedBankAccountId.value = 'account-fixture';
+    await nextTick();
+    await nextTick();
     const cases: Array<{
       plan?: V2RechargeJob['plan'];
       result: Partial<V2RechargeJob['result']>;
@@ -1324,7 +1369,7 @@ describe('比特浏览器充值入口', () => {
         ];
         flow.selectJob('job-fixture');
         expect(flow.workflowMessage.value).not.toContain('套餐已核实生效');
-        expect(flow.canRecheck.value).toBe(result.payment_status !== 'declined');
+        expect(flow.canRecheck.value).toBe(true);
         expect(flow.canContinueSameAccount.value).toBe(false);
       }
     }

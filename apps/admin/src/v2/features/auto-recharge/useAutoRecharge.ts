@@ -39,6 +39,7 @@ import { isApiError } from '@/api/apiError';
 import { directOperationDeadline, rechargeExecutionFailure } from './recharge-direct-lifecycle';
 import { sessionCoordinator } from '@/auth/sessionCoordinator';
 import { useRechargePaymentStart } from './useRechargePaymentStart';
+import { accountReferenceFromJson, paymentBlockedForAccount } from './recharge-availability';
 
 const activeStates = new Set([
   'running',
@@ -477,20 +478,27 @@ export function useAutoRecharge(options: { clearPaymentValidation?: () => void }
     note: proxySelectionNote,
     markManual: markProxySelectionManual
   } = proxyRegion;
-  const paymentRetryBlocked = computed(() => {
-    const job = selected.value;
-    return Boolean(
-      job &&
-      job.result.mode !== 'open_browser' &&
-      (job.state === 'unknown' ||
-        ((job.result.payment_attempted === true ||
-          Number(job.result.payment_requests_sent ?? 0) > 0 ||
-          Number(job.result.confirmation_requests_sent ?? 0) > 0) &&
-          job.result.status !== 'subscription_activated' &&
-          job.result.payment_status !== 'declined' &&
-          job.result.operator_resolution !== 'confirmed_no_bank_request'))
-    );
-  });
+  const currentAccountReference = ref<string>();
+  let accountReferenceGeneration = 0;
+  watch(
+    sessionJson,
+    async (raw) => {
+      const generation = ++accountReferenceGeneration;
+      currentAccountReference.value = undefined;
+      const reference = await accountReferenceFromJson(raw);
+      if (!disposed && generation === accountReferenceGeneration)
+        currentAccountReference.value = reference;
+    },
+    { immediate: true }
+  );
+  const paymentRetryBlocked = computed(() =>
+    jobs.value.some((job) =>
+      paymentBlockedForAccount(job, {
+        reference: loginMethod.value === 'json' ? currentAccountReference.value : undefined,
+        savedId: loginMethod.value === 'password' ? selectedBankAccountId.value : undefined
+      })
+    )
+  );
   const credentialReady = computed(() =>
     loginMethod.value === 'json'
       ? Boolean(sessionJson.value && !importing.value && !jsonError.value)
@@ -601,8 +609,7 @@ export function useAutoRecharge(options: { clearPaymentValidation?: () => void }
       Number(job.result.payment_requests_sent ?? 0) === 0
     );
   });
-  const canRecheck = computed(() => {
-    const job = selected.value;
+  function recheckAllowed(job: V2RechargeJob | undefined) {
     if (!job) return false;
     return Boolean(
       job.action === 'bitbrowser' &&
@@ -610,8 +617,9 @@ export function useAutoRecharge(options: { clearPaymentValidation?: () => void }
       (job.result.payment_attempted === true ||
         Number(job.result.payment_requests_sent ?? 0) === 1) &&
       job.result.recheck_only !== true &&
-      job.result.payment_status !== 'declined' &&
-      job.result.operator_resolution !== 'confirmed_no_bank_request' &&
+      !['confirmed_no_bank_request', 'confirmed_declined_no_charge'].includes(
+        String(job.result.operator_resolution)
+      ) &&
       job.result.status !== 'subscription_activated' &&
       job.result.payment_outcome !== 'subscription_activated' &&
       credentialReady.value &&
@@ -621,7 +629,8 @@ export function useAutoRecharge(options: { clearPaymentValidation?: () => void }
       !active.value &&
       query.phase.value === 'ready'
     );
-  });
+  }
+  const canRecheck = computed(() => recheckAllowed(selected.value));
   const canResolveNoBankRequest = computed(() => {
     const job = selected.value;
     const hasSingleHistoricalRequest =
@@ -767,7 +776,10 @@ export function useAutoRecharge(options: { clearPaymentValidation?: () => void }
       job.result.current_plan === targetFamily
     )
       return '套餐已核实生效，付款凭据待核验；请只读复查原订单，禁止重新付款。';
-    if (job?.state === 'unknown') return '原单结果待核验，禁止重新付款。';
+    if (job?.state === 'unknown')
+      return paymentRetryBlocked.value
+        ? '本账号原单结果待核验，禁止重新付款；可仅登录、只读查单或处理其他账号。'
+        : '原任务执行租约已结束，不继续占执行名额；付款风险按当前账号单独核对。';
     if (job?.state === 'finished') {
       if (rechargeHistoryPaymentBlocked(job))
         return '历史付款或订阅结果待核实，本次充值已暂停；请查看最近执行记录并只读复查原订单，填写资料已保留。';
@@ -1273,14 +1285,10 @@ export function useAutoRecharge(options: { clearPaymentValidation?: () => void }
     }
     currentId.value = id;
     localAccess.value = null;
-    const job = jobs.value.find((item) => item.id === id);
-    if (job?.chatgptAccountId && loginMethod.value === 'password')
-      selectedBankAccountId.value = job.chatgptAccountId;
   }
 
-  async function recheck() {
-    const source = selected.value;
-    if (!canRecheck.value || !source) return;
+  async function recheck(source: V2RechargeJob | undefined = selected.value) {
+    if (!source || !recheckAllowed(source)) return;
     busy.value = true;
     error.value = '';
     const id = crypto.randomUUID();

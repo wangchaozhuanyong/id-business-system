@@ -1,3 +1,4 @@
+import { declinedResolutionEligible } from './recharge-noncharge-proof';
 import { BadRequestException, ConflictException } from '@nestjs/common';
 import {
   toV2JsonDocument,
@@ -15,6 +16,7 @@ export interface RechargeResolutionJob {
   state: string;
   accountKey: string | null;
   createdAt: Date;
+  updatedAt?: Date;
   result: unknown;
 }
 
@@ -77,8 +79,13 @@ export function withResolutionVerification<T extends Record<string, unknown>>(
   job: RechargeResolutionJob,
   jobs: RechargeResolutionJob[]
 ) {
-  if (!unknownPaymentCanBeResolved(job)) return result;
-  const verification = jobs.find((candidate) => isFreeAccountVerification(job, candidate));
+  if (!unknownPaymentCanBeResolved(job) && !declinedResolutionEligible(job)) return result;
+  const verification = jobs.find(
+    (candidate) =>
+      isFreeAccountVerification(job, candidate) &&
+      (!declinedResolutionEligible(job) ||
+        candidate.createdAt.getTime() > (job.updatedAt ?? job.createdAt).getTime())
+  );
   return verification ? { ...result, resolution_verification_job_id: verification.id } : result;
 }
 

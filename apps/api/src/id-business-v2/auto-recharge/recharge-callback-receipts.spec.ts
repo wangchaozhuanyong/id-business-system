@@ -76,7 +76,8 @@ function fixture() {
     }
   };
   const repository = new RechargeRepository({
-    idBusinessV2RechargeJob: { findMany: async () => [job] }
+    idBusinessV2RechargeJob: { findMany: async () => [job] },
+    idBusinessV2RechargeRecord: tx.idBusinessV2RechargeRecord
   } as never);
   const lock = vi.spyOn(repository, 'lock').mockResolvedValue(undefined);
   const used = new Set<string>();

@@ -1,3 +1,5 @@
+import { resolveDeclinedRecharge } from './recharge-declined-resolution';
+import { reviewRechargeJobs } from './recharge-review';
 import {
   BadRequestException,
   ConflictException,
@@ -145,6 +147,22 @@ export class RechargeService {
         operator,
         retryMode: 'none'
       }
+    );
+  }
+
+  async resolveDeclined(id: string, value: unknown, operator: AuthenticatedUser) {
+    return this.transactions.execute(
+      (tx) => resolveDeclinedRecharge(tx, this.repository, this.audit, id, value, operator),
+      { changedScopes: ['auto-recharge'], requestId: randomUUID(), operator, retryMode: 'none' }
+    );
+  }
+
+  async review(query: Record<string, unknown>, operator: AuthenticatedUser) {
+    return reviewRechargeJobs(
+      this.repository,
+      operator.id,
+      query,
+      process.env.AUTO_RECHARGE_WORKER_TOKEN ?? ''
     );
   }
 

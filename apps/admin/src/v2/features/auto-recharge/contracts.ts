@@ -1,4 +1,7 @@
 export type {
+  V2RechargeAvailability,
+  V2RechargeReviewQuery,
+  V2RechargeReviewPage,
   V2RechargeStart,
   V2RechargeHandoffFrame,
   V2RechargeHandoffCommand,

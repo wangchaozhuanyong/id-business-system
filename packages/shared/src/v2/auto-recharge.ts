@@ -281,7 +281,26 @@ export interface V2RechargeResult {
   handoff_generation?: number;
   [key: string]: unknown;
 }
+export interface V2RechargeAvailability {
+  execution: 'active' | 'released' | 'expired';
+  payment: 'no_request' | 'unknown' | 'declined' | 'paid_pending' | 'completed' | 'resolved';
+  accountPaymentRestricted: boolean;
+  accountReference?: string;
+  canInspect: boolean;
+}
+export interface V2RechargeReviewQuery {
+  page?: number;
+  pageSize?: number;
+  search?: string;
+}
+export interface V2RechargeReviewPage {
+  items: V2RechargeJob[];
+  total: number;
+  page: number;
+  pageSize: number;
+}
 export interface V2RechargeJob {
+  availability?: V2RechargeAvailability;
   id: string;
   chatgptAccountId?: string | null;
   plan: V2RechargePlan;
