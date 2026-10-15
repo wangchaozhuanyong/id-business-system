@@ -17,6 +17,7 @@
     @confirm="submit"
   >
     <V2AsyncRegion
+      v-if="open"
       skeleton="inline"
       :phase="query.phase.value"
       :error="query.error.value ? getApiErrorMessage(query.error.value) : ''"
