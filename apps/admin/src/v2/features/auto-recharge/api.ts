@@ -26,6 +26,19 @@ import type {
 } from './contracts';
 const base = '/id-business-v2/auto-recharge/jobs';
 export const rechargeApi = {
+  resolveDeclined(id: string, verificationJobId: string) {
+    return withV2QueryInvalidation(
+      request<{ id: string; alreadyResolved: boolean }>(
+        http.post(`${base}/${id}/resolve-declined`, { confirmNoDebit: true, verificationJobId })
+      ),
+      'auto-recharge'
+    );
+  },
+  review(query: import('./contracts').V2RechargeReviewQuery, options: ApiRequestOptions = {}) {
+    return request<import('./contracts').V2RechargeReviewPage>(
+      http.get(`${base}/review`, { params: query, signal: options.signal })
+    );
+  },
   cancelServer(id: string) {
     return request<{ id: string }>(http.post(`${base}/${id}/cancel`, {}));
   },
@@ -126,6 +139,11 @@ export const rechargeApi = {
         params: query,
         signal: options.signal
       })
+    );
+  },
+  generateAddresses(count = 10) {
+    return request<{ count: number; items: V2RechargeAddress[] }>(
+      http.post('/id-business-v2/auto-recharge/addresses/generate', { count })
     );
   },
   importAddresses(streets: string[]) {

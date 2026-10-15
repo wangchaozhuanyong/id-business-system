@@ -165,6 +165,16 @@ jobs:
           src/id-business-v2/online-recharge/order-sync.spec.ts
           src/id-business-v2/auto-recharge/bank-recharge-online-order.service.spec.ts
           src/id-business-v2/auto-recharge/bank-recharge-online-management.spec.ts
+          src/id-business-v2/proxy-pool/proxy-pool.spec.ts
+      - name: Verify order UI and preserved proxy contracts
+        run: >-
+          npm run test --workspace @apple-business/admin --
+          src/v2/features/auto-recharge/useBankRechargeOrdersPage.spec.ts
+          src/v2/features/auto-recharge/bit-order-pricing.spec.ts
+          src/v2/features/auto-recharge/useBitOrderPricing.spec.ts
+          src/v2/features/online-recharge/api.spec.ts
+          src/v2/features/online-recharge/permissions.spec.ts
+          src/v2/features/proxy-pool/api.spec.ts
       - name: Install unchanged engine Node dependencies
         run: npm ci --prefix apps/api/src/id-business-v2/online-recharge/engine/upstream --ignore-scripts --no-audit --no-fund
       - name: Verify affected engine behavior without browser or Python setup
@@ -177,6 +187,7 @@ jobs:
             test/debug-checkout.test.cjs \
             test/payment-core.test.cjs \
             test/proxy-resolver.test.cjs \
+            test/proxy-pool.test.cjs \
             test/regressions.test.cjs \
             test/order-sync-recheck.test.cjs \
             test/renewal-recheck.test.cjs \

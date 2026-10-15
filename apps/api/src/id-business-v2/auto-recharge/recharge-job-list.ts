@@ -4,6 +4,8 @@ import { resultWithConfirmation } from './recharge-validation';
 import { isRechargeWorkerConfigured } from './recharge-worker-client';
 import { recoverRechargePaymentResult } from './recharge-payment-facts';
 import { object } from './recharge-validation';
+import { rechargeAvailability } from './recharge-availability';
+import type { IdBusinessV2RechargeJob, IdBusinessV2RechargeRecord } from '@prisma/client';
 
 export async function listRechargeJobs(
   repository: RechargeRepository,
@@ -12,41 +14,43 @@ export async function listRechargeJobs(
 ) {
   const items = await repository.list(ownerId);
   const accountKeys = [
-    ...new Set(
-      items
-        .filter(
-          (job) =>
-            job.action === 'server' &&
-            job.accountKey &&
-            object(job.result).recheck_only !== true &&
-            object(job.result).quote_authority === 'official_checkout_response'
-        )
-        .map((job) => job.accountKey!)
-    )
+    ...new Set(items.map((job) => job.accountKey).filter((key): key is string => Boolean(key)))
   ];
-  const records = accountKeys.length ? await repository.paymentRecords(ownerId, accountKeys) : [];
+  const records = accountKeys.length
+    ? await repository.paymentRecords(ownerId, accountKeys, true)
+    : [];
   return {
-    items: items.map((job) => {
-      const storedResult =
-        job.action === 'server' && object(job.result).recheck_only !== true
-          ? recoverRechargePaymentResult(job, records)
-          : object(job.result);
-      const publicResult = { ...storedResult };
-      for (const key of Object.keys(publicResult))
-        if (key.startsWith('connection_') || key.startsWith('_')) delete publicResult[key];
-      const result = resultWithConfirmation({ ...job, result: publicResult }, workerToken);
-      return {
-        ...job,
-        nonceHash: undefined,
-        accountKey: undefined,
-        expectedEmailEncrypted: undefined,
-        billingNameEncrypted: undefined,
-        state:
-          job.state !== 'finished' && job.leaseUntil.getTime() < Date.now() ? 'unknown' : job.state,
-        result: withResolutionVerification(result, job, items)
-      };
-    }),
+    items: presentRechargeJobs(items, records, workerToken),
     configured: isRechargeWorkerConfigured(),
     subscriptionCycleProtocol: 1 as const
   };
+}
+
+export function presentRechargeJobs(
+  items: IdBusinessV2RechargeJob[],
+  records: IdBusinessV2RechargeRecord[],
+  workerToken: string,
+  verificationItems: IdBusinessV2RechargeJob[] = items
+) {
+  return items.map((job) => {
+    const storedResult =
+      object(job.result).recheck_only !== true
+        ? recoverRechargePaymentResult(job, records)
+        : object(job.result);
+    const publicResult = { ...storedResult };
+    for (const key of Object.keys(publicResult))
+      if (key.startsWith('connection_') || key.startsWith('_')) delete publicResult[key];
+    const result = resultWithConfirmation({ ...job, result: publicResult }, workerToken);
+    return {
+      ...job,
+      availability: rechargeAvailability({ ...job, result: storedResult as never }, records),
+      nonceHash: undefined,
+      accountKey: undefined,
+      expectedEmailEncrypted: undefined,
+      billingNameEncrypted: undefined,
+      state:
+        job.state !== 'finished' && job.leaseUntil.getTime() < Date.now() ? 'unknown' : job.state,
+      result: withResolutionVerification(result, job, verificationItems)
+    };
+  });
 }

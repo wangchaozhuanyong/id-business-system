@@ -32,11 +32,11 @@
 | ---------------------------------- | ------------------------------------------------------------------------------------------------------------------- |
 | `IdBusinessV2RechargeOrderChannel` | 新增 `bitbrowser`、`online` 受控渠道                                                                                |
 | `IdBusinessV2BankRechargeOrder`    | 新增 `channel`（默认比特）、唯一 `onlineRechargeTaskId`、`onlineRechargeCardId`、`onlineSourceSnapshot` 和索引      |
-| 订单实付金额／币种                 | 允许线上待补全订单为 null；数据库 CHECK 保持比特侧必填，并限制各渠道专属来源引用                                    |
+| 订单实付金额／币种                 | 允许线上待补全订单为 null；数据库 CHECK 保持比特侧必填，INSERT／UPDATE 触发器限制各渠道专属来源引用                 |
 | `OnlineRechargeOrderSync`          | 新增 `online_recharge_order_sync` 表：原任务主键、pending／synced／needs_review、尝试次数、下次执行时间和受控错误码 |
 | 原任务与线上卡                     | 增加订单反向关联；原任务删除 RESTRICT，卡删除 SET NULL，订单安全快照保留                                            |
 
-队列不保存登录资料或完整卡号。迁移已与 Prisma 离线生成 DDL 对照，schema 静态校验及 Client 生成通过，尚未对数据库应用。后续须在已有远端隔离 MySQL 验收环境执行全部向前迁移及新增六项结构／事务测试，通过后再安排获授权的生产步骤。
+队列不保存登录资料或完整卡号。迁移已与 Prisma 离线生成 DDL 对照，schema 静态校验及 Client 生成通过，尚未对生产数据库应用。发布准备中发现 MySQL 不允许 CHECK 引用带级联动作的外键列，已将渠道来源约束改为同语义的 BEFORE INSERT／UPDATE 触发器，保留金额 CHECK 和线上卡删除 SET NULL。七项结构／事务测试同时覆盖插入与更新拒绝混用来源、渠道切换原子失败及删除卡后保留快照；须经远端隔离 MySQL 实际验证后再安排生产步骤。
 
 ## 接口变化
 
@@ -75,7 +75,7 @@
 | 七项 UI 规则             | `check:admin-ui`、`check:v2-ui-language`、`check:v2-color-contrast`、`check:v2-table-standard`、`check:v2-loading-standard`、`check:v2-module-architecture`、`check:v2-isolation` 全部通过 |
 | 后端架构                 | Decimal、并发和 Prisma runtime 边界检查通过；业务层无直接 Prisma 模型、事务或 SQL 访问                                                                                                     |
 | 实际 Vue 页面离线验收    | 10 组通过；合成 API、无本机网站／数据库、无外部网络请求和页面异常                                                                                                                          |
-| 远端隔离 MySQL           | 新增六项结构／约束／并发／事务测试及原入口已接入，未执行；CI 配置仅准备，未派发                                                                                                            |
+| 远端隔离 MySQL           | 已接入七项结构／约束／并发／事务测试及原比特独立库回归；首轮确认渠道 CHECK 与外键级联不兼容（MySQL 3823），触发器修复等待远端复验                                                          |
 
 以上合计 328 项不同用例，不把修复后补跑的子集重复计数。首轮新增测试 fixture 缺少 decrypt stub、类型契约及 CommonJS fixture 兼容问题均已修复，保留原失败日志和受影响复验回执，不以旧失败日志冒充最终状态。
 

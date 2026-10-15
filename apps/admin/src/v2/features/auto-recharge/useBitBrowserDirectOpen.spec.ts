@@ -30,6 +30,31 @@ beforeEach(() => {
   mock.cancel.mockResolvedValue({ id: 'job-fixture', cancellationConfirmed: true });
 });
 describe('网页直连登录任务生命周期', () => {
+  it.each([
+    ['bitbrowser_existing_window_control_unavailable', 'browser_control_connect', false],
+    ['bitbrowser_direct_debug_unavailable', 'browser_control_connect', false],
+    ['official_login_page_not_ready', 'official_page_readiness', true]
+  ] as const)('结束回执保留真实失败步骤与已核实身份：%s', async (reason, stage, matched) => {
+    mock.run.mockRejectedValue(new DirectBrowserError(reason));
+    const scope = effectScope();
+    const flow = scope.run(() => useBitBrowserDirectOpen(vi.fn(), vi.fn()))!;
+    await flow.start(launch(), { sessionJson: 'fixture-json' }, '测试窗口');
+    await vi.waitFor(() => expect(flow.running.value).toBe(false));
+    expect(mock.callback.mock.calls.at(-1)?.[2]).toMatchObject({
+      type: 'finished',
+      result: {
+        status: 'blocked',
+        stage,
+        reason,
+        account_matched: matched,
+        payment_attempted: false,
+        payment_requests_sent: 0
+      }
+    });
+    expect(mock.run).toHaveBeenCalledOnce();
+    expect(mock.cancel).not.toHaveBeenCalled();
+    scope.stop();
+  });
   it('密码登录携带服务端账号绑定，重建回执及后续终态统一使用新ID', async () => {
     const current = launch();
     current.accountKey = 'c'.repeat(64);

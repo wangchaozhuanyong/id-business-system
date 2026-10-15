@@ -25,6 +25,7 @@ import {
 } from './recharge-form';
 import { useRechargeBrowserSettings, type ConnectorStatus } from './useRechargeBrowserSettings';
 import { useRechargeNameMatch } from './useRechargeNameMatch';
+import { useRechargeAddressGeneration } from './useRechargeAddressGeneration';
 import { bankRechargeApi } from './bank-recharge-api';
 import { canSelectRechargeAccount } from './recharge-account-options';
 import { currencyOptions } from './recharge-presentation';
@@ -39,6 +40,7 @@ import { isApiError } from '@/api/apiError';
 import { directOperationDeadline, rechargeExecutionFailure } from './recharge-direct-lifecycle';
 import { sessionCoordinator } from '@/auth/sessionCoordinator';
 import { useRechargePaymentStart } from './useRechargePaymentStart';
+import { accountReferenceFromJson, paymentBlockedForAccount } from './recharge-availability';
 
 const activeStates = new Set([
   'running',
@@ -477,20 +479,27 @@ export function useAutoRecharge(options: { clearPaymentValidation?: () => void }
     note: proxySelectionNote,
     markManual: markProxySelectionManual
   } = proxyRegion;
-  const paymentRetryBlocked = computed(() => {
-    const job = selected.value;
-    return Boolean(
-      job &&
-      job.result.mode !== 'open_browser' &&
-      (job.state === 'unknown' ||
-        ((job.result.payment_attempted === true ||
-          Number(job.result.payment_requests_sent ?? 0) > 0 ||
-          Number(job.result.confirmation_requests_sent ?? 0) > 0) &&
-          job.result.status !== 'subscription_activated' &&
-          job.result.payment_status !== 'declined' &&
-          job.result.operator_resolution !== 'confirmed_no_bank_request'))
-    );
-  });
+  const currentAccountReference = ref<string>();
+  let accountReferenceGeneration = 0;
+  watch(
+    sessionJson,
+    async (raw) => {
+      const generation = ++accountReferenceGeneration;
+      currentAccountReference.value = undefined;
+      const reference = await accountReferenceFromJson(raw);
+      if (!disposed && generation === accountReferenceGeneration)
+        currentAccountReference.value = reference;
+    },
+    { immediate: true }
+  );
+  const paymentRetryBlocked = computed(() =>
+    jobs.value.some((job) =>
+      paymentBlockedForAccount(job, {
+        reference: loginMethod.value === 'json' ? currentAccountReference.value : undefined,
+        savedId: loginMethod.value === 'password' ? selectedBankAccountId.value : undefined
+      })
+    )
+  );
   const credentialReady = computed(() =>
     loginMethod.value === 'json'
       ? Boolean(sessionJson.value && !importing.value && !jsonError.value)
@@ -505,20 +514,60 @@ export function useAutoRecharge(options: { clearPaymentValidation?: () => void }
   const nameMatch = useRechargeNameMatch(
     details,
     selectedPaymentCardId,
-    formLocked,
+    computed(() => formLocked.value || active.value || operationMode.value !== 'payment'),
     (addressId, expectedManualRevision) => {
       selectedCardBillingAddressId.value = addressId ?? '';
-      if (
-        addressId &&
-        expectedManualRevision === manualAddressSelectionRevision.value &&
-        availableAddresses.value.some((address) => address.id === addressId)
-      ) {
+      if (addressId && expectedManualRevision === manualAddressSelectionRevision.value) {
         addressSource.value = 'library';
-        selectedAddressId.value = addressId;
+        selectedAddressId.value = availableAddresses.value.some(
+          (address) => address.id === addressId
+        )
+          ? addressId
+          : '';
       }
     },
     () => manualAddressSelectionRevision.value
   );
+  const canGenerateAddress = computed(
+    () =>
+      operationMode.value === 'payment' &&
+      !formLocked.value &&
+      !active.value &&
+      !selectedCardBillingAddressId.value &&
+      !nameMatch.loading.value &&
+      !nameMatch.error.value
+  );
+  const addressGeneration = useRechargeAddressGeneration({
+    allowed: canGenerateAddress,
+    automatic: computed(
+      () =>
+        canGenerateAddress.value &&
+        addressQuery.phase.value === 'ready' &&
+        !addressQuery.error.value &&
+        Boolean(details.value.name) &&
+        !rechargeFieldError('number', details.value.number) &&
+        availableAddresses.value.length === 0
+    ),
+    context: () => [
+      details.value.number.replace(/[ -]/g, ''),
+      selectedPaymentCardId.value,
+      selectedCardBillingAddressId.value,
+      manualAddressSelectionRevision.value,
+      operationMode.value,
+      formLocked.value,
+      active.value,
+      sessionCoordinator.identityEpoch.value
+    ],
+    addresses: availableAddresses,
+    refresh: () => addressQuery.refresh(),
+    select: (id) => {
+      addressSource.value = 'library';
+      selectedAddressId.value = id;
+    }
+  });
+  function generateBillingAddress() {
+    return addressGeneration.generate();
+  }
   let paymentEditVersion = 0;
   watch(
     [
@@ -564,6 +613,7 @@ export function useAutoRecharge(options: { clearPaymentValidation?: () => void }
         proxySelectionReady.value &&
         !loginCountryRestriction.value &&
         !nameMatch.error.value &&
+        !addressGeneration.generating.value &&
         authorizeSinglePayment.value &&
         rechargeDetailsReady(details.value) &&
         currentSettingsReady.value
@@ -601,8 +651,7 @@ export function useAutoRecharge(options: { clearPaymentValidation?: () => void }
       Number(job.result.payment_requests_sent ?? 0) === 0
     );
   });
-  const canRecheck = computed(() => {
-    const job = selected.value;
+  function recheckAllowed(job: V2RechargeJob | undefined) {
     if (!job) return false;
     return Boolean(
       job.action === 'bitbrowser' &&
@@ -610,8 +659,9 @@ export function useAutoRecharge(options: { clearPaymentValidation?: () => void }
       (job.result.payment_attempted === true ||
         Number(job.result.payment_requests_sent ?? 0) === 1) &&
       job.result.recheck_only !== true &&
-      job.result.payment_status !== 'declined' &&
-      job.result.operator_resolution !== 'confirmed_no_bank_request' &&
+      !['confirmed_no_bank_request', 'confirmed_declined_no_charge'].includes(
+        String(job.result.operator_resolution)
+      ) &&
       job.result.status !== 'subscription_activated' &&
       job.result.payment_outcome !== 'subscription_activated' &&
       credentialReady.value &&
@@ -621,7 +671,8 @@ export function useAutoRecharge(options: { clearPaymentValidation?: () => void }
       !active.value &&
       query.phase.value === 'ready'
     );
-  });
+  }
+  const canRecheck = computed(() => recheckAllowed(selected.value));
   const canResolveNoBankRequest = computed(() => {
     const job = selected.value;
     const hasSingleHistoricalRequest =
@@ -767,7 +818,10 @@ export function useAutoRecharge(options: { clearPaymentValidation?: () => void }
       job.result.current_plan === targetFamily
     )
       return '套餐已核实生效，付款凭据待核验；请只读复查原订单，禁止重新付款。';
-    if (job?.state === 'unknown') return '原单结果待核验，禁止重新付款。';
+    if (job?.state === 'unknown')
+      return paymentRetryBlocked.value
+        ? '本账号原单结果待核验，禁止重新付款；可仅登录、只读查单或处理其他账号。'
+        : '原任务执行租约已结束，不继续占执行名额；付款风险按当前账号单独核对。';
     if (job?.state === 'finished') {
       if (rechargeHistoryPaymentBlocked(job))
         return '历史付款或订阅结果待核实，本次充值已暂停；请查看最近执行记录并只读复查原订单，填写资料已保留。';
@@ -791,8 +845,11 @@ export function useAutoRecharge(options: { clearPaymentValidation?: () => void }
         : '请从 ChatGPT 账号资料中选择已保存登录密码的账号。';
     if (operationMode.value === 'open_browser')
       return '核对窗口名称后，点击即可打开比特浏览器并自动登录。';
-    if (nameMatch.loading.value) return '正在从姓名库匹配账单姓名，请稍候。';
+    if (nameMatch.loading.value) return '正在填写银行卡账单姓名，请稍候。';
     if (nameMatch.error.value) return '账单姓名匹配失败，请在账单姓名处重试。';
+    if (addressGeneration.generating.value) return '正在生成并填写账单地址，请稍候。';
+    if (addressGeneration.error.value && !selectedAddress.value)
+      return addressGeneration.error.value;
     const fieldErrors = rechargeFields.flatMap((field) => {
       const cardField = rechargePaymentFields.includes(field);
       const addressField = !cardField && field.key !== 'name' && field.key !== 'email';
@@ -1273,14 +1330,10 @@ export function useAutoRecharge(options: { clearPaymentValidation?: () => void }
     }
     currentId.value = id;
     localAccess.value = null;
-    const job = jobs.value.find((item) => item.id === id);
-    if (job?.chatgptAccountId && loginMethod.value === 'password')
-      selectedBankAccountId.value = job.chatgptAccountId;
   }
 
-  async function recheck() {
-    const source = selected.value;
-    if (!canRecheck.value || !source) return;
+  async function recheck(source: V2RechargeJob | undefined = selected.value) {
+    if (!source || !recheckAllowed(source)) return;
     busy.value = true;
     error.value = '';
     const id = crypto.randomUUID();
@@ -1696,10 +1749,14 @@ export function useAutoRecharge(options: { clearPaymentValidation?: () => void }
   return {
     query,
     addressQuery,
+    addressGeneration,
+    canGenerateAddress,
+    generateBillingAddress,
     jobs,
     availableAddresses,
     selectedAddress,
     selectedAddressId,
+    selectedCardBillingAddressId,
     addressSource,
     markAddressSelectionManual,
     selected,

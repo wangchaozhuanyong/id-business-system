@@ -106,6 +106,24 @@ for (const { file, script } of sources) {
           );
         const onlineConfigSecrets =
           name === 'secrets' && file.endsWith('/online-recharge/V2OnlineConfigView.vue');
+        const proxyPoolSecret =
+          (name === 'url' && file.endsWith('/proxy-pool/ProxyPoolEditor.vue')) ||
+          (name === 'text' && file.endsWith('/proxy-pool/ProxyPoolImport.vue'));
+        if (proxyPoolSecret) {
+          if (
+            !new RegExp(
+              `function clearSensitiveInput\\(\\)\\s*\\{\\s*${name}\\.value = '';\\s*\\}`
+            ).test(script) ||
+            !script.includes('subscribeIdentityChange(clearSensitiveInput)') ||
+            !/onBeforeUnmount\(\(\) => \{\s*clearSensitiveInput\(\);\s*stop\(\);\s*\}\)/.test(
+              script
+            )
+          )
+            issues.push(`${file}: 代理敏感输入必须在离页与身份变化时清除`);
+          if (/localStorage|sessionStorage/.test(script))
+            issues.push(`${file}: 代理凭据不得进入浏览器存储`);
+          return;
+        }
         if (onlineTemporarySession || onlineConfigSecrets) {
           const cleared = onlineTemporarySession
             ? /onBeforeUnmount\(\(\) => \{[^{}]*\bsession\.value = '';/s.test(script)

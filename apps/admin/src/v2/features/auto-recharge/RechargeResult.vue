@@ -49,6 +49,20 @@
         </dl>
       </template>
       <dl class="recharge-summary">
+        <template v-if="job.availability">
+          <dt>执行占用</dt>
+          <dd>{{ executionAvailabilityLabels[job.availability.execution] }}</dd>
+          <dt>付款核对</dt>
+          <dd>{{ paymentAvailabilityLabels[job.availability.payment] }}</dd>
+          <dt>可用操作</dt>
+          <dd>
+            {{
+              job.availability.accountPaymentRestricted
+                ? '仅限制本账号新付款；可仅登录、只读核对原单或处理其他账号。'
+                : '历史记录不占执行名额；新付款仍需官网核价和人工确认。'
+            }}
+          </dd>
+        </template>
         <dt>执行模式</dt>
         <dd>
           {{
@@ -132,7 +146,7 @@
         >
       </p>
       <p v-if="job.result.session_refresh_count" class="recharge-note" role="status">
-        当前窗口加载失败后已自动刷新
+        当前窗口已自动刷新
         {{ job.result.session_refresh_count }} 次；{{
           job.action === 'server'
             ? '恢复期间沿用原窗口和代理，仍失败时停止本次任务。'
@@ -225,6 +239,7 @@
   </div>
 </template>
 <script setup lang="ts">
+import { executionAvailabilityLabels, paymentAvailabilityLabels } from './recharge-availability';
 import { computed } from 'vue';
 import type { V2RechargeJob } from './contracts';
 import { formatV2DateTime } from '@/v2/utils/dateTime';

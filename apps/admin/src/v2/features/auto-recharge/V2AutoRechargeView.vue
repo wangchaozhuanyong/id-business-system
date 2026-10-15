@@ -214,6 +214,10 @@
                   :operation-mode="operationMode"
                   :addresses="availableAddresses"
                   :selected-address="selectedAddress"
+                  :generating="addressGeneration.generating.value"
+                  :generation-error="addressGeneration.error.value"
+                  :can-generate="canGenerateAddress"
+                  :address-bound="Boolean(selectedCardBillingAddressId)"
                   :loading="
                     addressQuery.phase.value === 'initial-loading' ||
                     addressQuery.phase.value === 'refreshing'
@@ -223,6 +227,7 @@
                   "
                   @retry="addressQuery.refresh"
                   @select="markAddressSelectionManual"
+                  @generate="generateBillingAddress"
                 />
               </div>
             </section>
@@ -299,7 +304,7 @@
               {{ resumeActionLabel }}
             </AppButton>
             <AppButton v-if="canCancel" :disabled="busy" @click="cancel">停止本次任务</AppButton>
-            <AppButton v-if="canRecheck" variant="primary" :loading="busy" @click="recheck">
+            <AppButton v-if="canRecheck" variant="primary" :loading="busy" @click="recheck()">
               只读复查原订单
             </AppButton>
             <AppButton
@@ -322,11 +327,17 @@
       v-if="historyOpen"
       v-model="historyOpen"
       :jobs="jobs"
+      :inspection-ready="canStartOpen"
       :can-recheck="canRecheck"
       :can-resolve-no-bank-request="canResolveNoBankRequest"
       :busy="busy"
       @select="selectJob"
       @recheck="recheck"
+      @review-recheck="recheck"
+      @prepare-inspection="
+        operationMode = 'open_browser';
+        historyOpen = false;
+      "
       @resolve-no-bank-request="resolveNoBankRequest"
     />
   </section>
@@ -368,10 +379,14 @@ const operationModeLabels = {
 const {
   query,
   addressQuery,
+  addressGeneration,
+  canGenerateAddress,
+  generateBillingAddress,
   jobs,
   availableAddresses,
   selectedAddress,
   selectedAddressId,
+  selectedCardBillingAddressId,
   markAddressSelectionManual,
   addressSource,
   selected,

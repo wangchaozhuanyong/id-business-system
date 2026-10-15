@@ -55,6 +55,11 @@ export class RechargeController {
   list(@CurrentUser() operator: AuthenticatedUser) {
     return this.service.list(operator);
   }
+  @Get('jobs/review')
+  @Header('Cache-Control', 'no-store')
+  review(@Query() query: Record<string, unknown>, @CurrentUser() operator: AuthenticatedUser) {
+    return this.service.review(query, operator);
+  }
   @Get('addresses')
   @Header('Cache-Control', 'no-store')
   listAddresses(@Query() query: unknown, @CurrentUser() operator: AuthenticatedUser) {
@@ -63,6 +68,11 @@ export class RechargeController {
   @Post('addresses/import')
   importAddresses(@Body() input: unknown, @CurrentUser() operator: AuthenticatedUser) {
     return this.service.importAddresses(input, operator);
+  }
+  @Post('addresses/generate')
+  @Header('Cache-Control', 'no-store')
+  generateAddresses(@Body() input: unknown, @CurrentUser() operator: AuthenticatedUser) {
+    return this.service.generateAddresses(input, operator);
   }
   @Patch('addresses/:id/status')
   updateAddressStatus(
@@ -93,6 +103,14 @@ export class RechargeController {
   @Post('jobs/bitbrowser-recheck')
   recheckBitBrowser(@Body() input: unknown, @CurrentUser() operator: AuthenticatedUser) {
     return this.local.recheck(input, operator);
+  }
+  @Post('jobs/:id/resolve-declined')
+  resolveDeclined(
+    @Param('id') id: string,
+    @Body() input: unknown,
+    @CurrentUser() operator: AuthenticatedUser
+  ) {
+    return this.service.resolveDeclined(id, input, operator);
   }
   @Post('jobs/:id/resolve-no-bank-request')
   resolveNoBankRequest(

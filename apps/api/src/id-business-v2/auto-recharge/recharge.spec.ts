@@ -979,7 +979,7 @@ describe('single worker dispatch and confirmation', () => {
     });
     expect(response.items[0]?.accountKey).toBeUndefined();
     expect(response.items[0]?.nonceHash).toBeUndefined();
-    expect(paymentRecords).toHaveBeenCalledWith(operator.id, [accountKey]);
+    expect(paymentRecords).toHaveBeenCalledWith(operator.id, [accountKey], true);
     expect(tx.idBusinessV2RechargeJob.update).not.toHaveBeenCalled();
     expect(transaction.execute).not.toHaveBeenCalled();
     expect(job.state).toBe('confirming');

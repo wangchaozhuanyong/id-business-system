@@ -1,3 +1,4 @@
+import { ProxyPoolModule } from '../proxy-pool/public-api';
 import { BankRechargeOnlineOrderService } from './bank-recharge-online-order.service';
 import { BankRechargeOnlineOrderRepository } from './persistence/bank-recharge-online-order.repository';
 import { BankRechargeSubscriptionReviewService } from './bank-recharge-subscription-review.service';
@@ -20,8 +21,6 @@ import { RechargeLocalService } from './recharge-local.service';
 import { RechargeSettingsService } from './recharge-settings.service';
 import { RechargeSettingsRepository } from './persistence/recharge-settings.repository';
 import { RechargeProxyController } from './recharge-proxy.controller';
-import { RechargeProxyService } from './recharge-proxy.service';
-import { RechargeProxyRepository } from './persistence/recharge-proxy.repository';
 import { BankRechargeController } from './bank-recharge.controller';
 import { BankRechargeAccountDeliveryService } from './bank-recharge-account-delivery.service';
 import { IdBusinessV2WorkspaceModule } from '../workspace/public-api';
@@ -40,7 +39,12 @@ import { RechargeEmailCodeController } from './recharge-email-code.controller';
 import { RechargeEmailCodeService } from './recharge-email-code.service';
 import { BankRechargePricingService } from './bank-recharge-pricing.service';
 @Module({
-  imports: [IdBusinessV2RuntimeModule, IdBusinessV2FinanceModule, IdBusinessV2WorkspaceModule],
+  imports: [
+    ProxyPoolModule,
+    IdBusinessV2RuntimeModule,
+    IdBusinessV2FinanceModule,
+    IdBusinessV2WorkspaceModule
+  ],
   controllers: [
     RechargeEmailCodeController,
     RechargeController,
@@ -50,7 +54,7 @@ import { BankRechargePricingService } from './bank-recharge-pricing.service';
   ],
   exports: [
     RechargeSettingsService,
-    RechargeProxyService,
+    ProxyPoolModule,
     BankRechargeRegistrationMirrorService,
     BankRechargeOnlineOrderService
   ],
@@ -84,9 +88,7 @@ import { BankRechargePricingService } from './bank-recharge-pricing.service';
     RechargeSettingsService,
     RechargeRepository,
     RechargeAddressRepository,
-    RechargeSettingsRepository,
-    RechargeProxyService,
-    RechargeProxyRepository
+    RechargeSettingsRepository
   ]
 })
 export class RechargeModule {}

@@ -145,7 +145,7 @@
     {
       "path": "task-runner.cjs",
       "originalSha256": null,
-      "adaptedSha256": "9f8a805139f231c950c44d8068d2df763f30037a8d6988ad89299013f21a445a",
+      "adaptedSha256": "aaf0e184bdb523ee63dcc4773805e39539977bc52fddd2493cc127c84b2a6af6",
       "changed": true,
       "reason": "任务初始化区分配置、代理、环境和执行阶段；异常仅经现有安全控制台脱敏记录，不改变付款状态保护。"
     },
@@ -376,7 +376,7 @@
     {
       "path": "upstream/mysql-store.js",
       "originalSha256": "b8d120cdafac6884da0bf9ef2f062965f89b17efcb6f1978f3831a4d3c0267b9",
-      "adaptedSha256": "77c92fc674ed5fd09068d1f506094cfdacf351bb4800074dcb95b3a5ecef15dc",
+      "adaptedSha256": "c5a6c9764a2f4aa4fa977b918f2b032abcb8e0ab068ea29a717100a71a15d60a",
       "changed": true,
       "reason": "2026-10-15 Pro档位及升级适配：精确目标、官网报价、单次提交、实际付款方式与原单证据保护；不猜Pro500上游ID。保留既有必要适配。"
     },
@@ -540,6 +540,20 @@
       "adaptedSha256": "fdb27f06a0c8beb0277223409adf4f9eb0fa607b0b807e610f2b0d417a32c3a3",
       "changed": true,
       "reason": "Offline recheck receipt whitelist, exact amounts, wrong identity and privacy regressions; no payment requests."
+    },
+    {
+      "path": "proxy-connection.cjs",
+      "originalSha256": null,
+      "adaptedSha256": "f697a3e7964c7a8bc48fc70851cb7dfa268f05f42ec6f510b2bd9fe6346bb02a",
+      "changed": true,
+      "reason": "Shared proxy pool connection compatibility and isolated fixture regression tests."
+    },
+    {
+      "path": "test/proxy-pool.test.cjs",
+      "originalSha256": null,
+      "adaptedSha256": "c3bf54ef56dd51bd70766391c5a63da921c2c9ee0348f098979d82b90e8123f0",
+      "changed": true,
+      "reason": "Shared proxy pool connection compatibility and isolated fixture regression tests."
     }
   ],
   "dependencySecurityPatches": [

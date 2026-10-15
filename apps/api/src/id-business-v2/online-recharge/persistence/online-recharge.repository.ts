@@ -1,3 +1,4 @@
+import { OnlineProxyPoolRepository } from '../../proxy-pool/public-api';
 import { Injectable } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../../common/prisma/prisma.service';
@@ -16,6 +17,7 @@ import { integer, redact, sanitize } from '../validation';
 @Injectable()
 export class OnlineRechargeRepository {
   constructor(
+    private readonly proxies: OnlineProxyPoolRepository,
     private readonly prisma: PrismaService,
     private readonly audit: V2TransactionalAuditService,
     private readonly transactions: V2CommandTransactionManager
@@ -103,19 +105,8 @@ export class OnlineRechargeRepository {
           ]);
           break;
         }
-        case 'proxies': {
-          const where: Prisma.OnlineRechargeProxyWhereInput = {
-            ...(keyword ? { displayHost: { contains: keyword } } : {}),
-            ...(query.status
-              ? { status: String(query.status) as Prisma.EnumOnlineRechargeAssetStatusFilter }
-              : {})
-          };
-          [items, total] = await Promise.all([
-            db.onlineRechargeProxy.findMany({ where, ...options, orderBy: { createdAt: order } }),
-            db.onlineRechargeProxy.count({ where })
-          ]);
-          break;
-        }
+        case 'proxies':
+          return this.proxies.list(query);
         case 'addresses': {
           const where = {
             active: true,

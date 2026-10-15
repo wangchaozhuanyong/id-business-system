@@ -1,3 +1,5 @@
+import { resolveDeclinedRecharge } from './recharge-declined-resolution';
+import { reviewRechargeJobs } from './recharge-review';
 import {
   BadRequestException,
   ConflictException,
@@ -19,6 +21,7 @@ import { RechargeAddressRepository } from './persistence/recharge-address.reposi
 import { consumeRechargeAddress } from './recharge-address-consumption';
 import {
   RECHARGE_ADDRESS_LOCATION,
+  validateRechargeAddressGeneration,
   validateRechargeAddressImport,
   validateRechargeAddressListQuery,
   validateRechargeAddressStatus
@@ -91,6 +94,26 @@ export class RechargeService {
     return { ...result, page: query.page, pageSize: query.pageSize };
   }
 
+  async generateAddresses(value: unknown, operator: AuthenticatedUser) {
+    const { count } = validateRechargeAddressGeneration(value);
+    return this.transactions.execute(
+      async (tx) => {
+        const items = await this.addressRepository.generate(tx, operator.id, count);
+        await this.audit.append(tx, {
+          userId: operator.id,
+          module: 'id_business_v2',
+          action: 'id_business_v2.auto_recharge.addresses.generate',
+          objectType: 'recharge_address_batch',
+          objectId: randomUUID(),
+          afterData: { count: items.length, ids: items.map((item) => item.id) },
+          remark: '生成比特充值账单地址'
+        });
+        return { count: items.length, items };
+      },
+      { changedScopes: ['auto-recharge'], requestId: randomUUID(), operator, retryMode: 'none' }
+    );
+  }
+
   async importAddresses(value: unknown, operator: AuthenticatedUser) {
     const input = validateRechargeAddressImport(value);
     return this.transactions.execute(
@@ -145,6 +168,22 @@ export class RechargeService {
         operator,
         retryMode: 'none'
       }
+    );
+  }
+
+  async resolveDeclined(id: string, value: unknown, operator: AuthenticatedUser) {
+    return this.transactions.execute(
+      (tx) => resolveDeclinedRecharge(tx, this.repository, this.audit, id, value, operator),
+      { changedScopes: ['auto-recharge'], requestId: randomUUID(), operator, retryMode: 'none' }
+    );
+  }
+
+  async review(query: Record<string, unknown>, operator: AuthenticatedUser) {
+    return reviewRechargeJobs(
+      this.repository,
+      operator.id,
+      query,
+      process.env.AUTO_RECHARGE_WORKER_TOKEN ?? ''
     );
   }
 

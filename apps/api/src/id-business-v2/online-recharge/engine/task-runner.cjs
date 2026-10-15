@@ -47,12 +47,13 @@ async function execute(task, cfg) {
     case 'proxy_test': {
       const results = [];
       for (const proxyId of (payload.ids || [payload.proxyId]).filter(Boolean).slice(0, 50)) {
-        const proxy = await store.getActiveProxy(proxyId);
-        if (!proxy) {
-          results.push({ ok: false, proxyId });
-          continue;
+        let result;
+        try {
+          const proxy = await store.getActiveProxy(proxyId);
+          result = await require('./upstream/proxy-pool').testProxyUrl(proxy);
+        } catch {
+          result = { ok: false, error: '代理不可用或提取失败', latencyMs: null };
         }
-        const result = await require('./upstream/proxy-pool').testProxyUrl(proxy);
         await rpc('proxyTestResult', { proxyId, ...result });
         results.push({ ...result, proxyId });
       }

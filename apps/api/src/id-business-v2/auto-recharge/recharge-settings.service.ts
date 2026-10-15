@@ -87,17 +87,18 @@ export class RechargeSettingsService {
     const proxy = proxyId ? await this.proxies.find(proxyId) : null;
     return {
       proxyId,
-      proxy: proxy
-        ? {
-            id: proxy.id,
-            countryCode: proxy.countryCode,
-            kind: proxy.kind,
-            connectionMode: proxy.connectionMode,
-            protocol: proxy.protocol as 'http' | 'https' | 'socks5',
-            status: proxy.active ? 'active' : 'disabled',
-            remark1: proxy.remark1
-          }
-        : null,
+      proxy:
+        proxy && proxy.countryCode && proxy.kind
+          ? {
+              id: proxy.id,
+              countryCode: proxy.countryCode,
+              kind: proxy.kind,
+              connectionMode: proxy.connectionMode,
+              protocol: proxy.protocol as 'http' | 'https' | 'socks5',
+              status: proxy.active ? 'active' : 'disabled',
+              remark1: proxy.remark1
+            }
+          : null,
       legacyConfigured: Boolean(
         row?.dynamicProxyUrlEncrypted || row?.staticProxyCredentialsEncrypted
       )
@@ -114,7 +115,7 @@ export class RechargeSettingsService {
       async (tx) => {
         if (proxyId) {
           const proxy = await this.proxies.findInTransaction(tx, proxyId);
-          if (!proxy || !proxy.active)
+          if (!proxy || !proxy.active || !proxy.countryCode || !proxy.kind)
             throw new BadRequestException('请选择代理 IP 管理中的启用代理');
         }
         const before = await this.repository.findInTransaction(tx, operator.id);
@@ -261,7 +262,7 @@ export class RechargeSettingsService {
             : input.proxyId;
         if (input.proxyId) {
           const proxy = await this.proxies.findInTransaction(tx, input.proxyId);
-          if (!proxy || !proxy.active)
+          if (!proxy || !proxy.active || !proxy.countryCode || !proxy.kind)
             throw new BadRequestException('请选择代理 IP 管理中的启用代理');
           const connection = rechargeProxyConnection(
             this.encryption.decrypt(proxy.urlEncrypted)!,
@@ -435,7 +436,7 @@ export class RechargeSettingsService {
     let proxyType = row.proxyType;
     if (!selectedProxy && proxyId) {
       const proxy = await this.proxies.find(proxyId);
-      if (!proxy || !proxy.active)
+      if (!proxy || !proxy.active || !proxy.countryCode || !proxy.kind)
         throw new ServiceUnavailableException('默认代理 IP 已停用或不存在，请重新选择');
       const connection = rechargeProxyConnection(
         this.encryption.decrypt(proxy.urlEncrypted)!,

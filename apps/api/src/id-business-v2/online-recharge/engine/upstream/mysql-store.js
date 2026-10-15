@@ -10,7 +10,12 @@ async function getActiveProxy(proxyId) {
   const scope = require('../rpc.cjs').scope();
   const key = scope.taskId ? `${scope.taskId}:${scope.leaseVersion}:${proxyId || 'default'}` : null;
   if (key && proxies.has(key)) return proxies.get(key);
-  const resolved = (async () => require('../proxy-resolver.cjs').resolveProxy(await rpc('getActiveProxy', proxyId ? { proxyId } : {})))();
+  const resolved = (async () => {
+    const proxy = await rpc('getActiveProxy', proxyId ? { proxyId } : {});
+    const connection = await require(proxy?.connectionMode ? '../proxy-connection.cjs' : '../proxy-resolver.cjs').resolveProxy(proxy);
+    if (!connection) throw new Error('共用代理池没有可用代理');
+    return connection;
+  })();
   if (key) proxies.set(key, resolved);
   return resolved;
 }

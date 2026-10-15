@@ -10,7 +10,7 @@ import type { RechargeAddressRepository } from './persistence/recharge-address.r
 import { consumeRechargeAddress } from './recharge-address-consumption';
 import { canReplaceCheckout } from './recharge-cancellation';
 import { projectRechargePaymentRecord } from './recharge-payment-facts';
-import { safeDocument } from './recharge-validation';
+import { safeDocument, object } from './recharge-validation';
 import { consumeNextCycleMarker } from './recharge-cycle-ledger';
 
 export async function completeRechargeLedgerCallback(input: {
@@ -61,7 +61,18 @@ export async function completeRechargeLedgerCallback(input: {
     fileKey: callback.fileKey,
     revision: Number(callback.revision),
     document,
-    allowCheckoutReplacement: canReplaceCheckout(job)
+    allowCheckoutReplacement: canReplaceCheckout(job),
+    allowResolvedDeclineReplacement:
+      !input.factsOnly &&
+      job.action === 'bitbrowser' &&
+      job.state === 'running' &&
+      callback.fileKey === `${job.accountKey}${job.plan === 'plus' ? '' : `-${job.plan}`}.json` &&
+      object(job.result).mode !== 'open_browser' &&
+      object(job.result).recheck_only !== true &&
+      object(job.result).resolution_only !== true &&
+      object(job.result).payment_attempted !== true &&
+      Number(object(job.result).payment_requests_sent ?? 0) === 0 &&
+      Number(object(job.result).confirmation_requests_sent ?? 0) === 0
   });
   if (saved.replayed) return saved;
   const paymentResult = callback.fileKey.startsWith('payments/')

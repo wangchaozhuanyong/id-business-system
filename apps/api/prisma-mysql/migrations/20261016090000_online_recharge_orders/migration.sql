@@ -41,7 +41,30 @@ ALTER TABLE `id_business_v2_bank_recharge_orders` ADD CONSTRAINT `id_business_v2
 -- Nullable payment fields are reserved for online orders awaiting actual evidence.
 ALTER TABLE `id_business_v2_bank_recharge_orders`
   ADD CONSTRAINT `recharge_orders_bit_payment_required`
-  CHECK (`channel` = 'online' OR (`charge_amount` IS NOT NULL AND `charge_currency_code` IS NOT NULL)),
-  ADD CONSTRAINT `recharge_orders_channel_references`
-  CHECK ((`channel` = 'bitbrowser' AND `online_recharge_task_id` IS NULL AND `online_recharge_card_id` IS NULL)
-    OR (`channel` = 'online' AND `recharge_job_id` IS NULL AND `card_id` IS NULL));
+  CHECK (`channel` = 'online' OR (`charge_amount` IS NOT NULL AND `charge_currency_code` IS NOT NULL));
+
+-- MySQL CHECK constraints cannot reference columns with cascading foreign-key actions.
+-- Keep the same source-channel rule in write guards, preserving ON DELETE SET NULL.
+CREATE TRIGGER `idv2_recharge_orders_channel_insert`
+BEFORE INSERT ON `id_business_v2_bank_recharge_orders`
+FOR EACH ROW
+BEGIN
+  IF NOT (
+    (NEW.`channel` = 'bitbrowser' AND NEW.`online_recharge_task_id` IS NULL AND NEW.`online_recharge_card_id` IS NULL)
+    OR (NEW.`channel` = 'online' AND NEW.`recharge_job_id` IS NULL AND NEW.`card_id` IS NULL)
+  ) THEN
+    SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Recharge order source channel mismatch';
+  END IF;
+END;
+
+CREATE TRIGGER `idv2_recharge_orders_channel_update`
+BEFORE UPDATE ON `id_business_v2_bank_recharge_orders`
+FOR EACH ROW
+BEGIN
+  IF NOT (
+    (NEW.`channel` = 'bitbrowser' AND NEW.`online_recharge_task_id` IS NULL AND NEW.`online_recharge_card_id` IS NULL)
+    OR (NEW.`channel` = 'online' AND NEW.`recharge_job_id` IS NULL AND NEW.`card_id` IS NULL)
+  ) THEN
+    SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Recharge order source channel mismatch';
+  END IF;
+END;

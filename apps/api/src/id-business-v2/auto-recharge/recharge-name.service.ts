@@ -16,6 +16,7 @@ import {
   type V2CommandTransaction
 } from '../runtime/public-api';
 import { RechargeNameRepository } from './persistence/recharge-name.repository';
+import { generateRechargeBillingName } from './recharge-billing-generator';
 import { cardNumber, cardExpiry } from './bank-recharge-card-validation';
 import {
   bankRechargeCurrency,
@@ -165,19 +166,11 @@ export class RechargeNameService {
         let nameEncrypted = binding?.confirmed
           ? binding.nameEncrypted
           : card?.billingNameEncrypted || binding?.nameEncrypted;
-        let confirmed = Boolean(card?.billingNameEncrypted || binding?.confirmed);
-        let nameId = binding?.nameId ?? null;
+        const confirmed = Boolean(card?.billingNameEncrypted || binding?.confirmed);
+        const nameId = binding?.nameId ?? null;
         if (!nameEncrypted) {
-          const next = await this.repository.next(tx);
-          if (!next) throw new ConflictException('姓名库暂无启用姓名，请先录入姓名');
-          nameEncrypted = next.nameEncrypted;
-          nameId = next.id;
-          confirmed = false;
-          await this.repository.update(tx, next.id, {
-            matchCount: { increment: 1 },
-            lastMatchedAt: new Date()
-          });
-          await this.repository.bind(tx, numberHash, nameEncrypted, false, nameId);
+          nameEncrypted = this.encryption.encrypt(generateRechargeBillingName())!;
+          await this.repository.bind(tx, numberHash, nameEncrypted, false);
         }
         await this.audit.append(tx, {
           userId: operator.id,
@@ -186,7 +179,7 @@ export class RechargeNameService {
           objectType: 'bank_recharge_card',
           objectId: card?.id,
           afterData: { last4: number.slice(-4), nameId, confirmed },
-          remark: confirmed ? '读取银行卡历史绑定姓名' : '匹配姓名库资料'
+          remark: confirmed ? '读取银行卡历史绑定姓名' : '读取或生成银行卡账单姓名'
         });
         return {
           name: this.encryption.decrypt(nameEncrypted),

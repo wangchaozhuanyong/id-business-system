@@ -3212,8 +3212,8 @@ enum IdBusinessV2RechargeProxyConnectionMode {
 // 代理链接可能含提取令牌或代理凭据，仅加密保存；任务只记录所选代理 ID。
 model IdBusinessV2RechargeProxy {
   id              String                                  @id @default(uuid()) @db.Char(36)
-  countryCode     String                                  @map("country_code") @db.Char(2)
-  kind            IdBusinessV2RechargeProxyKind
+  countryCode     String?                                  @map("country_code") @db.Char(2)
+  kind            IdBusinessV2RechargeProxyKind?
   connectionMode  IdBusinessV2RechargeProxyConnectionMode @map("connection_mode")
   protocol        String                                  @db.VarChar(8)
   urlEncrypted    String                                  @map("url_encrypted") @db.Text
@@ -3221,6 +3221,12 @@ model IdBusinessV2RechargeProxy {
   active          Boolean                                 @default(true)
   remark1         String?                                 @db.VarChar(500)
   remark2         String?                                 @db.VarChar(500)
+  remark          String? @db.Text
+  displayHost     String? @map("display_host") @db.VarChar(255)
+  exitIp          String? @map("exit_ip") @db.VarChar(100)
+  latencyMs       Int? @map("latency_ms")
+  testMessage     String? @map("test_message") @db.Text
+  testedAt        DateTime? @map("tested_at") @db.DateTime(6)
   createdByUserId String?                                 @map("created_by_user_id") @db.Char(36)
   createdAt       DateTime                                @default(now()) @map("created_at") @db.DateTime(6)
   updatedAt       DateTime                                @updatedAt @map("updated_at") @db.DateTime(6)
@@ -3264,4 +3270,12 @@ model IdBusinessV2RechargeCardName {
 enum IdBusinessV2OfferSource {
   automatic
   manual
+}
+
+// Preserve online task references without rewriting historical JSON payloads.
+model IdBusinessV2ProxyAlias {
+  oldId String @id @map("old_id") @db.Char(36)
+  proxyId String @map("proxy_id") @db.Char(36)
+  @@index([proxyId])
+  @@map("id_business_v2_proxy_aliases")
 }

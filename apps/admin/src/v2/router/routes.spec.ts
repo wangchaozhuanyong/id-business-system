@@ -4,6 +4,7 @@ import { hasUserFeatureAccess } from '@/utils/permissions';
 import { v2ModuleDefinitions } from '@/v2/config/modules';
 import type { CurrentUser } from '@/types/system';
 import {
+  v2Routes,
   prefetchV2Route,
   resetV2RouteNavigationState,
   setV2RouteNavigationState,
@@ -31,6 +32,21 @@ describe('V2 route navigation state', () => {
       const feature = v2ModuleDefinitions.find((module) => module.key === key)!;
       expect(hasUserFeatureAccess(employee, feature)).toBe(false);
       expect(hasUserFeatureAccess(admin, feature)).toBe(true);
+    }
+  });
+  it('redirects legacy resource URLs and preserves query and hash', () => {
+    const children = v2Routes[0]!.children!;
+    for (const [old, target] of [
+      ['auto-recharge/proxies', 'proxies'],
+      ['online-recharge/proxies', 'proxies'],
+      ['auto-recharge/mailbox', 'mailbox'],
+      ['auto-recharge/chatgpt-accounts', 'chatgpt-accounts']
+    ]) {
+      const redirect = children.find((route) => route.path === old)?.redirect;
+      expect(typeof redirect).toBe('function');
+      expect(
+        (redirect as (to: unknown) => unknown)({ query: { page: '2' }, hash: '#detail' })
+      ).toEqual({ path: `/v2/account-settings/${target}`, query: { page: '2' }, hash: '#detail' });
     }
   });
   beforeEach(() => {

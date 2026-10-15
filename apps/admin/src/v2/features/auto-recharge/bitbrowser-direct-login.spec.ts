@@ -6,6 +6,7 @@ import { V2_RECHARGE_BROWSER_DEFAULTS } from '@apple-business/shared';
 
 const mock = vi.hoisted(() => ({
   post: vi.fn(),
+  connect: vi.fn(),
   evaluate: vi.fn(),
   command: vi.fn(),
   close: vi.fn(),
@@ -15,17 +16,20 @@ const mock = vi.hoisted(() => ({
 }));
 vi.mock('./bitbrowser-cdp', () => ({
   BrowserCdp: {
-    connect: async () => ({
-      command: mock.command,
-      evaluate: (_session: string, expression: string, ...args: unknown[]) =>
-        expression.includes('/cdn-cgi/trace')
-          ? mock.proxy(_session, expression, ...args)
-          : expression.includes('accounts-profile-button')
-            ? mock.ui(_session, expression, ...args)
-            : mock.evaluate(_session, expression, ...args),
-      close: mock.close,
-      onEvent: mock.onEvent
-    })
+    connect: async (...args: unknown[]) => {
+      await mock.connect(...args);
+      return {
+        command: mock.command,
+        evaluate: (_session: string, expression: string, ...args: unknown[]) =>
+          expression.includes('/cdn-cgi/trace')
+            ? mock.proxy(_session, expression, ...args)
+            : expression.includes('accounts-profile-button')
+              ? mock.ui(_session, expression, ...args)
+              : mock.evaluate(_session, expression, ...args),
+        close: mock.close,
+        onEvent: mock.onEvent
+      };
+    }
   }
 }));
 vi.mock('./bitbrowser-direct-api', async (original) => ({
@@ -37,6 +41,7 @@ vi.mock('./bitbrowser-direct-api', async (original) => ({
   })
 }));
 beforeEach(() => {
+  mock.connect.mockResolvedValue(undefined);
   mock.proxy.mockResolvedValue({ kind: 'proxy_ready' });
   mock.ui.mockResolvedValue({ kind: 'page_ready' });
   mock.onEvent.mockReturnValue(() => {});
@@ -455,6 +460,77 @@ describe('API原窗口归属与当前官网身份双核验', () => {
       ).join('')
     };
   }
+  it.each([
+    [123, 'bitbrowser_existing_window_control_unavailable'],
+    [0, 'bitbrowser_direct_debug_unavailable']
+  ])('窗口控制握手失败区分原进程状态，不关闭或重建窗口：%s', async (pid, reason) => {
+    const ownedProfile = await owned();
+    const post = mock.post.getMockImplementation()!;
+    mock.post.mockImplementation((path, ...args) =>
+      path === '/browser/pids/alive'
+        ? Promise.resolve({ data: { [ownedProfile.profileId]: pid } })
+        : post(path, ...args)
+    );
+    mock.connect.mockRejectedValue(new DirectBrowserError('bitbrowser_direct_debug_unavailable'));
+    const progress = vi.fn();
+    await expect(
+      runDirectLogin(settings, credential(), '测试窗口', new AbortController().signal, {
+        restore: async () => ({ ownedProfile }),
+        progress,
+        code: vi.fn()
+      })
+    ).rejects.toMatchObject({ reason, metadata: { operation: 'browser_control' } });
+    expect(mock.connect).toHaveBeenCalledOnce();
+    expect(progress).toHaveBeenCalledWith('browser_control_connect');
+    expect(mock.post.mock.calls.filter(([path]) => path === '/browser/open')).toHaveLength(1);
+    expect(
+      mock.post.mock.calls.some(([path]) =>
+        ['/browser/close', '/browser/delete', '/browser/update'].includes(path)
+      )
+    ).toBe(false);
+    expect(mock.command).not.toHaveBeenCalled();
+  });
+  it.each(['123', -1, 1.5])(
+    '原进程状态格式错误时停在进程核验，不猜测窗口已关闭：%s',
+    async (pid) => {
+      const ownedProfile = await owned();
+      const post = mock.post.getMockImplementation()!;
+      mock.post.mockImplementation((path, ...args) =>
+        path === '/browser/pids/alive'
+          ? Promise.resolve({ data: { [ownedProfile.profileId]: pid } })
+          : post(path, ...args)
+      );
+      await expect(
+        runDirectLogin(settings, credential(), '测试窗口', new AbortController().signal, {
+          restore: async () => ({ ownedProfile }),
+          progress: vi.fn(),
+          code: vi.fn()
+        })
+      ).rejects.toMatchObject({
+        reason: 'bitbrowser_direct_protocol',
+        metadata: { operation: 'browser_processes' }
+      });
+      expect(mock.post.mock.calls.some(([path]) => path === '/browser/open')).toBe(false);
+    }
+  );
+  it('原窗口控制连接被取消时保留取消结果，不误报启动参数问题', async () => {
+    const ownedProfile = await owned();
+    const post = mock.post.getMockImplementation()!;
+    mock.post.mockImplementation((path, ...args) =>
+      path === '/browser/pids/alive'
+        ? Promise.resolve({ data: { [ownedProfile.profileId]: 123 } })
+        : post(path, ...args)
+    );
+    mock.connect.mockRejectedValue(new DirectBrowserError('bitbrowser_direct_cancelled'));
+    await expect(
+      runDirectLogin(settings, credential(), '测试窗口', new AbortController().signal, {
+        restore: async () => ({ ownedProfile }),
+        progress: vi.fn(),
+        code: vi.fn()
+      })
+    ).rejects.toMatchObject({ reason: 'bitbrowser_direct_cancelled' });
+    expect(mock.post.mock.calls.some(([path]) => path === '/browser/close')).toBe(false);
+  });
   it('同账号原窗口使用相同授权时直接复用，不创建资料或重新注入JSON', async () => {
     mock.evaluate.mockResolvedValue(identity);
     const command = mock.command.getMockImplementation()!;

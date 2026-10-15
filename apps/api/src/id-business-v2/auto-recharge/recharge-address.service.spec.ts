@@ -20,6 +20,81 @@ function authorizationClient() {
 }
 
 describe('auto recharge address service', () => {
+  it('generates an owned batch with aggregate audit in the same transaction', async () => {
+    const tx = {};
+    const items = [{ id: 'new-address', status: 'unused', ownerId: operator.id }];
+    const repository = { generate: vi.fn().mockResolvedValue(items) };
+    const audit = { append: vi.fn() };
+    const transactions = { execute: vi.fn(async (work) => work(tx)) };
+    const service = new RechargeService(
+      {} as never,
+      repository as never,
+      transactions as never,
+      audit as never
+    );
+    expect(await service.generateAddresses({ count: 1 }, operator)).toEqual({ count: 1, items });
+    expect(repository.generate).toHaveBeenCalledWith(tx, operator.id, 1);
+    expect(audit.append).toHaveBeenCalledWith(
+      tx,
+      expect.objectContaining({
+        action: 'id_business_v2.auto_recharge.addresses.generate',
+        afterData: { count: 1, ids: ['new-address'] }
+      })
+    );
+    expect(transactions.execute).toHaveBeenCalledWith(
+      expect.any(Function),
+      expect.objectContaining({
+        operator,
+        changedScopes: ['auto-recharge'],
+        retryMode: 'none'
+      })
+    );
+    audit.append.mockRejectedValueOnce(new Error('audit unavailable'));
+    await expect(service.generateAddresses({ count: 1 }, operator)).rejects.toThrow(
+      'audit unavailable'
+    );
+    await expect(service.generateAddresses({ count: 101 }, operator)).rejects.toThrow();
+    expect(repository.generate).toHaveBeenCalledTimes(2);
+  });
+
+  it('only returns new owned rows and replaces unique street collisions without updating history', async () => {
+    const stored: { id: string; ownerId: string; line1: string; status: string }[] = [];
+    const model = {
+      createMany: vi.fn(async ({ data }) => {
+        // Simulate one collision with a pre-existing disabled street on the first batch.
+        stored.push(...(stored.length ? data : data.slice(1)));
+      }),
+      findMany: vi.fn(async ({ where }) =>
+        stored.filter((item) => item.ownerId === where.ownerId && where.id.in.includes(item.id))
+      )
+    };
+    const tx = { ...authorizationClient(), idBusinessV2RechargeAddress: model };
+    const repository = new RechargeAddressRepository({} as never);
+    const items = await repository.generate(tx as never, operator.id, 2);
+    expect(items).toHaveLength(2);
+    expect(items.every((item) => item.ownerId === operator.id && item.status === 'unused')).toBe(
+      true
+    );
+    expect(model.createMany).toHaveBeenCalledTimes(2);
+    expect(model.createMany.mock.calls[0][0].skipDuplicates).toBe(true);
+    expect(model.findMany.mock.calls[0][0].where).toEqual({
+      ownerId: operator.id,
+      id: { in: expect.any(Array) }
+    });
+  });
+
+  it('bounds collision retries and surfaces a transactional failure rather than a partial batch', async () => {
+    const tx = {
+      ...authorizationClient(),
+      idBusinessV2RechargeAddress: {
+        createMany: vi.fn(),
+        findMany: vi.fn().mockResolvedValue([])
+      }
+    };
+    const repository = new RechargeAddressRepository({} as never);
+    await expect(repository.generate(tx as never, operator.id, 10)).rejects.toThrow('街道重复');
+    expect(tx.idBusinessV2RechargeAddress.createMany).toHaveBeenCalledTimes(3);
+  });
   it('imports only normalized unique streets and audits aggregate counts', async () => {
     const addressRepository = {
       createMany: vi.fn().mockResolvedValue({ count: 1 })
