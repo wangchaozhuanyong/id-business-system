@@ -94,11 +94,12 @@ class ContinuousLifecycleTests(unittest.TestCase):
         cls.core = r.c.load_core()
         cls.projection = cls.core.projection_module()
         cls.references = {}
-        for ref in ('HEAD', r.c.AUTHENTICATED_PREDECESSOR['producer']['commit'],
+        for ref in (r.c.APPLICATION_SOURCE, r.c.AUTHENTICATED_PREDECESSOR['producer']['commit'],
                     '0a03fa28e6b844a18833d5c63f1de700f091fc64', r.c.ONLINE_SOURCE):
             commit, raw, files = archive(ref)
             cls.references[ref] = (commit, raw, files)
-        cls.candidate = dict(cls.references['HEAD'][2])
+        cls.candidate = dict(cls.references[r.c.APPLICATION_SOURCE][2])
+        r.c.validate_source_files(cls.candidate)
         # Bind current control edits, but preserve every frozen business byte.
         for name in {*cls.core.HELPERS, *r.HELPERS}:
             path = HERE / name
@@ -394,6 +395,12 @@ class ContinuousLifecycleTests(unittest.TestCase):
         self.assertEqual(self.docker, [])
 
     def test_stale_source_and_cross_module_content_errors_are_real(self):
+        mutated = dict(self.candidate)
+        path = 'apps/admin/src/v2/features/online-recharge/sections.ts'
+        raw, mode = mutated[path]
+        mutated[path] = (raw + b'\n', mode)
+        with self.assertRaisesRegex(RuntimeError, 'APPLICATION_SOURCE_CHANGED'):
+            r.c.validate_source_files(mutated)
         changed = {**self.p, 'sourceTree': 'f' * 40}
         with self.assertRaisesRegex(RuntimeError, 'SOURCE_TREE_CHANGED'):
             r.source(self.d, changed, self.evidence)
