@@ -136,8 +136,8 @@ def published_admin_inputs(commit):
     return files
 
 
-def successor_receipt(contract):
-    binding = contract['publishedAdminSuccessor']
+def successor_receipt(contract, field='publishedAdminSuccessor'):
+    binding = contract[field]
     return {key:binding[key] for key in ('sourceCommit','sourceTree','archiveSha256','publicInventorySha256')} | {
         'inputSha256':binding['roleProjection']['inputSha256'],'qualityRunId':binding['quality']['runId'],'verified':True}
 
@@ -159,21 +159,21 @@ def verify_successor_archive(raw, binding):
          == binding['publicInventorySha256'], 'SUCCESSOR_STATIC_CHANGED')
 
 
-def verify_published_admin_successor(contract):
-    binding = contract['publishedAdminSuccessor']
+def verify_published_admin_version(contract, binding, parent_commit):
     quality = binding['quality']
     projection = binding['roleProjection']
     canonical = lambda value: json.dumps(value,sort_keys=True,separators=(',',':')).encode()
     files = published_admin_inputs(binding['sourceCommit'])
     need(projection['commit'] == binding['sourceCommit'] and projection['sourceTree'] == binding['sourceTree']
          == git('rev-parse',binding['sourceCommit']+'^{tree}').decode().strip()
-         and projection['publishedBaseCommit'] == contract['sourceBaseline']
-         and projection['retainedPublishedAdminSource'] == contract['sourceBaseline']
+         and projection['publishedBaseCommit'] == parent_commit
          and len(files) == projection['inputFileCount'] and digest(canonical(files)) == projection['inputSha256']
          and {name:files[name] for name in binding['repairSources']} == binding['repairSources']
          and digest(canonical(binding['repairSources'])) == projection['repairInputsSha256'], 'SUCCESSOR_INPUTS_CHANGED')
-    changed = set(git('diff','--name-only',contract['sourceBaseline'],binding['sourceCommit'],'--',*files).decode().splitlines())
-    need(changed == set(binding['repairSources']) and len(changed) == 9, 'SUCCESSOR_SOURCE_SCOPE_CHANGED')
+    if parent_commit == contract['sourceBaseline']:
+        need(projection.get('retainedPublishedAdminSource') == contract['sourceBaseline'], 'SUCCESSOR_ROOT_CHANGED')
+    changed = set(git('diff','--name-only',parent_commit,binding['sourceCommit'],'--',*files).decode().splitlines())
+    need(changed == set(binding['repairSources']), 'SUCCESSOR_SOURCE_SCOPE_CHANGED')
     native = platform_json('actions/runs/'+str(quality['runId']))
     need(native['head_sha'] == binding['sourceCommit'] and native['head_branch'] == quality['headBranch']
          and native['event'] == 'pull_request' and native['path'] == '.github/workflows/quality.yml'
@@ -196,7 +196,7 @@ def verify_published_admin_successor(contract):
          and quality['evidence']['testedTree'] == binding['sourceTree']
          and quality['evidence']['repository'] == 'wangchaozhuanyong/id-business-system'
          and quality['evidence']['runId'] == quality['runId'] and quality['evidence']['runAttempt'] == 1
-         and quality['evidence']['pullRequest'] == 502, 'SUCCESSOR_QUALITY_IDENTITY_CHANGED')
+         and quality['evidence']['pullRequest'] == quality['pullRequest'], 'SUCCESSOR_QUALITY_IDENTITY_CHANGED')
     release = platform_json('releases/tags/'+binding['releaseTag'])
     assets = [a for a in release['assets'] if a['id'] == binding['assetId']]
     need(release['id'] == binding['releaseId'] and release['tag_name'] == binding['releaseTag']
@@ -207,7 +207,14 @@ def verify_published_admin_successor(contract):
     raw = subprocess.check_output(['gh','api','repos/wangchaozhuanyong/id-business-system/releases/assets/'+str(binding['assetId']),
                                   '-H','Accept: application/octet-stream'],cwd=ROOT)
     verify_successor_archive(raw,binding)
-    return raw, quality_zip, successor_receipt(contract)
+    return raw, quality_zip
+
+
+def verify_published_admin_successor(contract):
+    ancestor = contract['publishedAdminAncestor']
+    parent_raw, parent_quality = verify_published_admin_version(contract,ancestor,contract['sourceBaseline'])
+    raw, quality_zip = verify_published_admin_version(contract,contract['publishedAdminSuccessor'],ancestor['sourceCommit'])
+    return raw,quality_zip,successor_receipt(contract),parent_raw,parent_quality,successor_receipt(contract,'publishedAdminAncestor')
 
 
 def database_inputs(contract):
@@ -362,7 +369,7 @@ def build():
     permitted = verify_api_outputs(before, after, contract['apiModules'])
     # Reuse the exact original successful native Admin build; do not relabel a local rebuild.
     published_admin_zip, admin_verification = verify_published_admin(contract)
-    successor_raw, successor_quality_zip, successor_verification = verify_published_admin_successor(contract)
+    successor_raw, successor_quality_zip, successor_verification, ancestor_raw, ancestor_quality_zip, ancestor_verification = verify_published_admin_successor(contract)
     run('npm', 'run', 'build', '--workspace', 'apps/admin', cwd=candidate,
         env={**os.environ, 'NODE_ENV': contract['adminNodeEnv'], 'V2_BUILD_ID': 'v2-' + git('rev-parse', 'HEAD').decode().strip()})
     payload = OUTPUT / 'payload'
@@ -370,6 +377,8 @@ def build():
     (payload / 'baseline-admin-native.zip').write_bytes(published_admin_zip)
     (payload / 'baseline-admin-successor-native.tar.gz').write_bytes(successor_raw)
     (payload / 'baseline-admin-successor-quality-native.zip').write_bytes(successor_quality_zip)
+    (payload / 'baseline-admin-ancestor-native.tar.gz').write_bytes(ancestor_raw)
+    (payload / 'baseline-admin-ancestor-quality-native.zip').write_bytes(ancestor_quality_zip)
     for name in sorted(permitted):
         path = payload / 'api/modules' / name
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -388,6 +397,7 @@ def build():
              'baselineApiReproduced': True, 'baselineAdminArtifactVerified': True,
              'databaseVerification': json.loads((OUTPUT / 'database-evidence.json').read_bytes()),
              'baselineAdminVerification': admin_verification, 'baselineAdminSuccessorVerification': successor_verification,
+             'baselineAdminAncestorVerification': ancestor_verification,
              'files': inventory(payload),
              'apiModules': {name: after[name] for name in sorted(permitted)},
              'adminFiles': inventory(candidate / 'apps/admin/dist'), 'updatedServices': ['api', 'admin'],

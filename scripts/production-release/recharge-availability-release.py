@@ -37,11 +37,12 @@ def acquire_release_lock(lock):
 
 
 def published_admin_files(contract):
-    return {**contract['publicFiles'],**contract.get('publishedAdminSuccessor',{}).get('publicFiles',{})}
+    return {**contract['publicFiles'],**contract.get('publishedAdminAncestor',{}).get('publicFiles',{}),
+            **contract.get('publishedAdminSuccessor',{}).get('publicFiles',{})}
 
 
-def successor_receipt(contract):
-    binding = contract['publishedAdminSuccessor']
+def successor_receipt(contract, field='publishedAdminSuccessor'):
+    binding = contract[field]
     return {key:binding[key] for key in ('sourceCommit','sourceTree','archiveSha256','publicInventorySha256')} | {
         'inputSha256':binding['roleProjection']['inputSha256'],'qualityRunId':binding['quality']['runId'],'verified':True}
 
@@ -147,6 +148,8 @@ def validate_proof(proof, plan, contract, payload, h):
          and type(proof.get('businessActions')) is int and proof.get('businessActions') == 0, 'PROOF_INVALID')
     if contract.get('publishedAdminSuccessor'):
         need(proof.get('baselineAdminSuccessorVerification') == successor_receipt(contract), 'SUCCESSOR_PROOF_INVALID')
+    if contract.get('publishedAdminAncestor'):
+        need(proof.get('baselineAdminAncestorVerification') == successor_receipt(contract,'publishedAdminAncestor'), 'SUCCESSOR_PROOF_INVALID')
     actual = h.file_inventory(payload)
     actual.pop('build-proof.json', None)
     need(actual == proof.get('files'), 'PAYLOAD_CHANGED')
@@ -154,6 +157,8 @@ def validate_proof(proof, plan, contract, payload, h):
     native_files = {'baseline-admin-native.zip'}
     if contract.get('publishedAdminSuccessor'):
         native_files.update(('baseline-admin-successor-native.tar.gz','baseline-admin-successor-quality-native.zip'))
+    if contract.get('publishedAdminAncestor'):
+        native_files.update(('baseline-admin-ancestor-native.tar.gz','baseline-admin-ancestor-quality-native.zip'))
     need(set(proof['apiModules']) == expected_api and len(proof['adminFiles']) >= 250
          and {n.removeprefix('source/'): v for n, v in actual.items() if n.startswith('source/')} == contract['sources']
          and {n.removeprefix('api/modules/'): v for n, v in actual.items() if n.startswith('api/modules/')} == proof['apiModules']
@@ -165,6 +170,11 @@ def validate_proof(proof, plan, contract, payload, h):
         successor = contract['publishedAdminSuccessor']
         need(actual.get('baseline-admin-successor-native.tar.gz') == successor['archiveSha256']
              and actual.get('baseline-admin-successor-quality-native.zip') == successor['quality']['artifactDigest'].removeprefix('sha256:'),
+             'SUCCESSOR_PAYLOAD_CHANGED')
+    if contract.get('publishedAdminAncestor'):
+        ancestor = contract['publishedAdminAncestor']
+        need(actual.get('baseline-admin-ancestor-native.tar.gz') == ancestor['archiveSha256']
+             and actual.get('baseline-admin-ancestor-quality-native.zip') == ancestor['quality']['artifactDigest'].removeprefix('sha256:'),
              'SUCCESSOR_PAYLOAD_CHANGED')
     return proof
 
@@ -333,7 +343,8 @@ def release(plan, contract, d, h):
         (target / 'recharge-availability-preservation.json').write_text(json.dumps(receipt, sort_keys=True, indent=2) + '\n')
         (target / 'recharge-availability-build-proof.json').write_bytes(raw_proof)
         (target / 'recharge-availability-baseline-admin-native.zip').write_bytes((payload / 'baseline-admin-native.zip').read_bytes())
-        for name in ('baseline-admin-successor-native.tar.gz','baseline-admin-successor-quality-native.zip'):
+        for name in ('baseline-admin-successor-native.tar.gz','baseline-admin-successor-quality-native.zip',
+                     'baseline-admin-ancestor-native.tar.gz','baseline-admin-ancestor-quality-native.zip'):
             (target / ('recharge-availability-'+name)).write_bytes((payload / name).read_bytes())
         manifest = json.loads(raw_manifest)
         previous_admin_projection = manifest.get('adminSourceProjection')
