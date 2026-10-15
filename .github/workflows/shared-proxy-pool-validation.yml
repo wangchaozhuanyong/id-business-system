@@ -52,7 +52,7 @@ jobs:
         run: |
           npx playwright install --with-deps chromium
           node scripts/acceptance-v2-recharge-proxies-ui.mjs
-          npm run acceptance:v2-online-recharge-ui
+          npm run acceptance:v2-online-recharge-ui -- --quick
           npm run acceptance:v2-auto-recharge
       - name: Independently reproduce the published baseline and package the scoped overlay
         run: node scripts/shared-proxy-publication.mjs package

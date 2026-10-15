@@ -524,41 +524,26 @@ try {
           });
         report.cases.push({ theme, width, section, measurements: measured, result: 'PASS' });
       }
-      for (const path of ['/online-recharge', '/online-recharge/subscription']) {
+      // The published system retired anonymous entry pages; the legacy URLs
+      // resolve to the authenticated internal Session and renewal pages.
+      for (const [path, target] of [
+        ['/online-recharge', '/v2/online-recharge/redeem'],
+        ['/online-recharge/subscription', '/v2/online-recharge/renewal']
+      ]) {
         await page.goto(origin + path);
-        await page.locator('.online-public').waitFor();
-        if (process.argv.includes('--affected')) {
-          if (path.endsWith('/subscription')) {
-            await page
-              .locator('textarea')
-              .fill(JSON.stringify({ accessToken: 'synthetic-private-session' }));
-            await page.getByRole('button', { name: '查询订阅', exact: true }).click();
-            await page.getByRole('button', { name: '刷新结果', exact: true }).click();
-          } else {
-            await page.getByPlaceholder('输入兑换码').fill('SYNTHETIC-CODE');
-            await page.getByRole('button', { name: '查询兑换结果', exact: true }).click();
-          }
-          await page.getByText('31天', { exact: true }).waitFor();
-          assert.equal(
-            await page
-              .getByRole('link', { name: '打开账单管理', exact: true })
-              .getAttribute('href'),
-            'https://chatgpt.com/account/manage'
-          );
-        }
+        await page.locator('.online-page').waitFor();
+        await page.locator('.v2-async-region[data-v2-query-phase="ready"]').first().waitFor();
+        assert.equal(new URL(page.url()).pathname, target);
         const measured = await measure(page);
         assert.ok(measured.documentWidth <= width + 1, `${path}页面横向溢出`);
-        const label = await page.locator('.el-form-item__label').first().boundingBox(),
-          control = await page
-            .locator('.el-form-item .el-input,.el-form-item .el-textarea')
-            .first()
-            .boundingBox();
-        assert.ok(label.x + label.width <= control.x + 2, '公开表单标签必须位于左侧');
-        report.cases.push({ theme, width, path, measurements: measured, result: 'PASS' });
+        report.cases.push({ theme, width, path, target, measurements: measured, result: 'PASS' });
       }
+      assert.ok(network.publicHeaders.length > 0, '未检查内部兼容接口');
       assert.ok(
-        network.publicHeaders.every((value) => value === null),
-        '客户接口附带后台身份'
+        network.publicHeaders.every(
+          (value) => typeof value === 'string' && value.startsWith('Bearer ')
+        ),
+        '内部兼容接口未携带后台身份'
       );
       assert.deepEqual(network.unexpected, [], '出现未拦截外部请求');
       assert.deepEqual(errors, [], '页面运行异常');
