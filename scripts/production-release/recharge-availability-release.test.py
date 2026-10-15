@@ -21,9 +21,93 @@ def load(name, file):
 
 release = load('availability_test_release', 'recharge-availability-release.py')
 build = load('availability_test_build', 'recharge-availability-build.py')
+dispatch = load('availability_test_dispatch', 'recharge-availability-dispatch.py')
 
 
 class AvailabilityPublicationTests(unittest.TestCase):
+    def test_download_accepts_only_this_exact_compiled_asset_and_never_changes_the_legacy_helper(self):
+        commit='a'*40
+        url='https://github.com/wangchaozhuanyong/id-business-system/releases/download/recharge-availability-'+commit+'/recharge-availability-artifact.tar.gz'
+        response=Mock();response.__enter__=Mock(return_value=response);response.__exit__=Mock(return_value=False)
+        response.read.return_value=b'compiled-asset'
+        with patch.object(release.urllib.request,'urlopen',return_value=response) as request:
+            self.assertEqual(release.download_payload(url,commit),b'compiled-asset')
+            request.assert_called_once_with(url,timeout=60)
+        for changed in [url+'?other=1',url.replace('recharge-availability-','recharge-record-'),url.replace('id-business-system','another-repository')]:
+            with patch.object(release.urllib.request,'urlopen') as request:
+                with self.assertRaisesRegex(RuntimeError,'ARTIFACT_LOCATION_INVALID'):release.download_payload(changed,commit)
+                request.assert_not_called()
+        response.read.return_value=b''
+        with patch.object(release.urllib.request,'urlopen',return_value=response),self.assertRaisesRegex(RuntimeError,'ARTIFACT_TOO_LARGE'):
+            release.download_payload(url,commit)
+
+    def test_engine_successor_must_extend_the_original_image_without_runtime_changes(self):
+        original={'image':'old-image','environmentSha256':'same-env','status':'running','health':'healthy'}
+        current={**original,'image':'new-image'}
+        before={'RootFS':{'Layers':['reviewed-layer']},'Config':{'Cmd':['node'],'Env':['synthetic-env'],'Labels':{'revision':'old'}}}
+        after=copy.deepcopy(before);after['RootFS']['Layers'].append('engine-fix');after['Config']['Labels']['revision']='new'
+        d=Mock();d.run.side_effect=[json.dumps([before]),json.dumps([after])]
+        release.verify_engine_successor(d,original,current)
+        for changed in [dict(after,RootFS={'Layers':['unrelated-layer']}),dict(after,Config={'Cmd':['different-command']})]:
+            d.run.side_effect=[json.dumps([before]),json.dumps([changed])]
+            with self.assertRaisesRegex(RuntimeError,'ENGINE_BASE_CHANGED'):release.verify_engine_successor(d,original,current)
+        d.reset_mock()
+        with self.assertRaisesRegex(RuntimeError,'ENGINE_RUNTIME_CHANGED'):
+            release.verify_engine_successor(d,original,{**current,'environmentSha256':'changed'})
+        d.run.assert_not_called()
+
+    def test_api_admin_and_other_services_cannot_borrow_engine_successor_admission(self):
+        engine={'image':'engine','environmentSha256':'same-env','status':'running','health':'healthy'}
+        original={n:{'containerId':n} for n in ('api','admin',*release.PRESERVED)}
+        original['online-recharge']=engine
+        release.verify_service_successor(Mock(),original,copy.deepcopy(original))
+        for name in original:
+            if name=='online-recharge':continue
+            changed=copy.deepcopy(original);changed[name]['containerId']='different-container'
+            with self.assertRaisesRegex(RuntimeError,'SERVICES_CHANGED'):
+                release.verify_service_successor(Mock(),original,changed)
+
+    def test_override_allows_only_the_actual_engine_image_reference(self):
+        original={'services':{'api':{'image':'reviewed-api'},'admin':{'image':'reviewed-admin'},
+                             'online-recharge':{'image':'reviewed-engine','network_mode':'service:api'}}}
+        current=copy.deepcopy(original);current['services']['online-recharge']['image']='preserved-engine'
+        release.verify_override_successor(json.dumps(original),json.dumps(current),'preserved-engine')
+        for name,field,value in [('api','image','unreviewed-api'),('admin','ports',['8080:80']),('online-recharge','network_mode','host')]:
+            changed=copy.deepcopy(current);changed['services'][name][field]=value
+            with self.assertRaisesRegex(RuntimeError,'CONFIGURATION_CHANGED'):
+                release.verify_override_successor(json.dumps(original),json.dumps(changed),'preserved-engine')
+        with self.assertRaisesRegex(RuntimeError,'ENGINE_REFERENCE_CHANGED'):
+            release.verify_override_successor(json.dumps(original),json.dumps(current),'other-image')
+
+    def test_preflight_runtime_receipt_stops_every_later_identity_or_configuration_change(self):
+        actual={'current':'/release/current','manifestSha256':'manifest','services':{'online-recharge':{'containerId':'engine'}},'configurationSha256':{'compose.release.json':'config'}}
+        release.verify_runtime_receipt(actual,copy.deepcopy(actual))
+        for field in actual:
+            changed=copy.deepcopy(actual);changed[field]='changed'
+            with self.assertRaisesRegex(RuntimeError,'PREFLIGHT_RUNTIME_MOVED'):
+                release.verify_runtime_receipt(actual,changed)
+        with self.assertRaisesRegex(RuntimeError,'PREFLIGHT_RUNTIME_MOVED'):release.verify_runtime_receipt(actual,None)
+
+    def test_dispatch_freezes_the_original_native_preflight_before_any_switch(self):
+        temporary=build.ROOT/'.runtime/recharge-payment-availability-20261015';temporary.mkdir(parents=True,exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=temporary) as directory:
+            output=Path(directory);(output/'preflight-accepted-command.json').write_text(json.dumps({'CommandId':'native-preflight'}))
+            frozen={'current':'/release/current','manifestSha256':'reviewed','services':{}}
+            observed=[]
+            def transport(plan,contract,mode):
+                observed.append((copy.deepcopy(plan),mode))
+                return {'status':'RECHARGE_AVAILABILITY_PREFLIGHT_VERIFIED','runtimeBaseline':frozen}
+            with patch.object(dispatch,'OUTPUT',output),patch.object(dispatch,'prepare_plan',return_value=({'commit':'a'*40},{})),patch.object(dispatch,'transport',side_effect=transport):
+                dispatch.publish()
+            self.assertEqual([mode for _,mode in observed],['preflight','release','readback'])
+            self.assertNotIn('runtimeBaseline',observed[0][0])
+            self.assertEqual(observed[1][0]['runtimeBaseline'],frozen)
+            self.assertEqual(observed[1][0]['runtimeObservationCommandId'],'native-preflight')
+            self.assertEqual(json.loads((output/'publication-plan.json').read_bytes()),observed[1][0])
+            with patch.object(dispatch,'OUTPUT',output),patch.object(dispatch,'prepare_plan',return_value=({'commit':'a'*40},{})),patch.object(dispatch,'transport',return_value={'status':'failed'}) as request:
+                with self.assertRaisesRegex(RuntimeError,'PREFLIGHT_RECEIPT_INVALID'):dispatch.publish()
+                self.assertEqual(request.call_count,1)
+
     def test_native_logs_are_captured_without_echo_and_only_old_cli_flags_allow_fallback(self):
         raw=b'\x1b[32m7 passed\x1b[0m\n25 passed'
         success=Mock(returncode=0,stdout=raw,stderr=b'')

@@ -24,6 +24,51 @@ def digest(raw):
     return hashlib.sha256(raw).hexdigest()
 
 
+def download_payload(url, commit):
+    expected = ('https://github.com/wangchaozhuanyong/id-business-system/releases/download/'
+                'recharge-availability-' + commit + '/recharge-availability-artifact.tar.gz')
+    need(re.fullmatch('[a-f0-9]{40}', commit) and url == expected, 'ARTIFACT_LOCATION_INVALID')
+    with urllib.request.urlopen(url, timeout=60) as response:
+        raw = response.read(32 * 1024**2 + 1)
+    need(0 < len(raw) <= 32 * 1024**2, 'ARTIFACT_TOO_LARGE')
+    return raw
+
+
+def verify_engine_successor(d, original, current):
+    need(current['environmentSha256'] == original['environmentSha256']
+         and current['status'] == 'running' and current['health'] == 'healthy', 'ENGINE_RUNTIME_CHANGED')
+    if current['image'] != original['image']:
+        before = json.loads(d.run('docker', 'image', 'inspect', original['image']))[0]
+        after = json.loads(d.run('docker', 'image', 'inspect', current['image']))[0]
+        need(after['RootFS']['Layers'][:len(before['RootFS']['Layers'])] == before['RootFS']['Layers']
+             and {k:v for k,v in before['Config'].items() if k != 'Labels'}
+                 == {k:v for k,v in after['Config'].items() if k != 'Labels'}, 'ENGINE_BASE_CHANGED')
+
+
+def verify_service_successor(d, original, current):
+    need(set(current) == set(original)
+         and all(current[n] == original[n] for n in current if n != 'online-recharge'), 'SERVICES_CHANGED')
+    verify_engine_successor(d, original['online-recharge'], current['online-recharge'])
+
+
+def verify_override_successor(original, current, reference):
+    before, after = json.loads(original), json.loads(current)
+    need(after['services']['online-recharge']['image'] == reference, 'ENGINE_REFERENCE_CHANGED')
+    before['services']['online-recharge']['image'] = '${PRESERVED_ENGINE_IMAGE}'
+    after['services']['online-recharge']['image'] = '${PRESERVED_ENGINE_IMAGE}'
+    need(before == after, 'CONFIGURATION_CHANGED')
+
+
+def runtime_receipt(directory, raw, states):
+    return {'current': str(directory), 'manifestSha256': digest(raw), 'services': states,
+            'configurationSha256': {n: digest((directory / n).read_bytes())
+                for n in ('.env.aws.production', 'compose.release.json', 'docker-compose.aws-mysql.yml')}}
+
+
+def verify_runtime_receipt(actual, expected):
+    need(type(expected) is dict and actual == expected, 'PREFLIGHT_RUNTIME_MOVED')
+
+
 def write_release_override(path, value):
     # The predecessor may point at shared maintenance configuration.
     # Replace the new release's entry without writing through its symlink.
@@ -115,20 +160,29 @@ def smoke(d, target, proof, states, contract, h):
          == {'released': True, 'unknownProtected': True}, 'AVAILABILITY_SMOKE_FAILED')
 
 
-def baseline(d, contract, h):
+def baseline(d, contract, h, expected_runtime=None):
     previous=(BASE/'current').resolve()
-    need(previous==Path(contract['current']) and previous.parent==BASE/'releases','CURRENT_CHANGED')
+    need(previous.parent==BASE/'releases','CURRENT_CHANGED')
     raw=(previous/'release-manifest.json').read_bytes()
-    need(digest(raw)==contract['manifestSha256'],'MANIFEST_CHANGED')
+    frozen = Path(contract['current'])
+    need(frozen.parent == BASE/'releases'
+         and digest((frozen/'release-manifest.json').read_bytes()) == contract['manifestSha256'], 'FROZEN_MANIFEST_CHANGED')
+    need(json.loads(raw).get('commit') == contract['expectedCurrent'], 'CURRENT_CHANGED')
     states=h.snapshot(d,previous)
-    need(states==contract['services'],'SERVICES_CHANGED')
-    need(all(digest((previous/n).read_bytes())==v for n,v in contract['configurationSha256'].items()),'CONFIGURATION_CHANGED')
+    verify_service_successor(d, contract['services'], states)
+    need(all(digest((previous/n).read_bytes())==v for n,v in contract['configurationSha256'].items()
+             if n != 'compose.release.json'), 'CONFIGURATION_CHANGED')
+    original_override=(frozen/'compose.release.json').read_bytes()
+    need(digest(original_override)==contract['configurationSha256']['compose.release.json'], 'FROZEN_CONFIGURATION_CHANGED')
+    verify_override_successor(original_override, (previous/'compose.release.json').read_bytes(), states['online-recharge']['reference'])
     need(shutil.disk_usage(BASE).free>6*1024**3,'DISK_LOW')
     normalizer=Path(contract['backupNormalizerPath'])
     need(normalizer.is_relative_to(BASE/'releases') and normalizer.is_file() and not normalizer.is_symlink() and digest(normalizer.read_bytes())=='ca9b05f832e9ed73bb36b7e76c083c99a40b13e067850166f8715bae469e5202','BACKUP_NORMALIZER_CHANGED')
     verify_modules(d,previous,contract['apiModules'])
     verify_admin(d,states['admin'],contract['publicFiles'])
     h.guards(d,previous,states,contract)
+    if expected_runtime is not None:
+        verify_runtime_receipt(runtime_receipt(previous, raw, states), expected_runtime)
     return previous,raw,states
 
 
@@ -152,14 +206,17 @@ def release(plan, contract, d, h):
             smoke(d, target, json.loads(raw), states, contract, h)
             return {'status': 'RECHARGE_AVAILABILITY_INDEPENDENT_READBACK_VERIFIED', 'commit': plan['commit'],
                     'images': receipt['images'], 'preservedServices': list(PRESERVED), 'businessActions': 0, 'migrationPerformed': False}
-        previous, raw_manifest, before = baseline(d, contract, h)
+        if plan['mode'] == 'release':
+            need(type(plan.get('runtimeBaseline')) is dict, 'PREFLIGHT_RECEIPT_MISSING')
+        previous, raw_manifest, before = baseline(d, contract, h, plan.get('runtimeBaseline'))
         verify_modules(d, previous, contract['apiModules'])
         if plan['mode'] == 'preflight':
-            return {'status': 'RECHARGE_AVAILABILITY_PREFLIGHT_VERIFIED', 'commit': plan['commit'], 'businessActions': 0, 'migrationPerformed': False}
+            return {'status': 'RECHARGE_AVAILABILITY_PREFLIGHT_VERIFIED', 'commit': plan['commit'],
+                    'runtimeBaseline': runtime_receipt(previous, raw_manifest, before), 'businessActions': 0, 'migrationPerformed': False}
         stage = BASE / '.staging' / ('recharge-availability-' + plan['commit'] + '-' + plan['workflowRunId'])
         need(not stage.exists(), 'RELEASE_ALREADY_ACCEPTED')
         stage.mkdir(mode=0o700)
-        bundle = h.download(plan['artifactUrl'], 32 * 1024**2)
+        bundle = download_payload(plan['artifactUrl'], plan['commit'])
         need(digest(bundle) == plan['artifactSha256'], 'ARTIFACT_CHANGED')
         payload = h.safe_archive(bundle, stage / 'content')
         raw_proof = (payload / 'build-proof.json').read_bytes()
@@ -191,7 +248,7 @@ def release(plan, contract, d, h):
         d.run('docker', 'run', '--rm', '--network', 'none', '--read-only', '--user', '101:101',
               '--entrypoint', 'sh', images['admin']['reference'], '-c',
               'test -r /usr/share/nginx/html/index.html && test -x /usr/share/nginx/html/assets')
-        need(baseline(d, contract, h)[1:] == (raw_manifest, before), 'BASELINE_MOVED')
+        need(baseline(d, contract, h, plan['runtimeBaseline']) == (previous, raw_manifest, before), 'BASELINE_MOVED')
         backup = h.fresh_scoped_backup(d, previous, plan, normalizer_path=Path(contract['backupNormalizerPath']))
         need(backup.get('s3Verified') is True, 'BACKUP_UNVERIFIED')
         stamp = datetime.datetime.now(datetime.timezone.utc).strftime('%Y%m%dT%H%M%SZ')
@@ -214,7 +271,7 @@ def release(plan, contract, d, h):
         for role in images:
             override['services'][role]['image'] = images[role]['reference']
         write_release_override(target / 'compose.release.json', override)
-        need(baseline(d, contract, h)[1:] == (raw_manifest, before), 'BASELINE_MOVED')
+        need(baseline(d, contract, h, plan['runtimeBaseline']) == (previous, raw_manifest, before), 'BASELINE_MOVED')
         state_path = stage / 'switch-state.json'
         state_path.write_text(json.dumps({'status': 'SWITCH_STARTED', 'target': str(target), 'previous': str(previous)}) + '\n')
         d.compose(previous, 'stop', 'online-recharge', timeout=90)
@@ -251,7 +308,8 @@ def release(plan, contract, d, h):
                         sourceLayout='PUBLISHED_PREDECESSOR_WITH_APPROVED_AVAILABILITY_OVERLAY',
                         deploymentMethod='NATIVE_CI_APPROVED_SSM_FORWARD',
                         compiledArtifact={'url':plan['artifactUrl'],'sha256':plan['artifactSha256'],'validationRun':plan['workflowRunId']},
-                        rechargeAvailabilityPublication={'plan': plan, 'baselineManifestSha256': contract['manifestSha256'], 'backup': backup})
+                        rechargeAvailabilityPublication={'plan': plan, 'baselineManifestSha256': digest(raw_manifest),
+                            'reviewedBaselineManifestSha256': contract['manifestSha256'], 'backup': backup})
         for field in ('acceptedSwitchCommandId', 'publicationFinalization', 'deploymentRun'):
             manifest.pop(field, None)
         for role in images:
