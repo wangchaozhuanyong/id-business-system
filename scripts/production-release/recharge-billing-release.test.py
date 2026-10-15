@@ -91,7 +91,33 @@ class BillingReleaseTests(unittest.TestCase):
         source = (HERE / 'recharge-billing-release.py').read_text()
         self.assertNotIn("*command, 'migrate', 'deploy'", source)
         self.assertIn("*command, 'migrate', 'resolve', '--applied'", source)
-        self.assertIn("'--no-build', '--pull', 'never'", source)
+        self.assertIn("'--no-deps', '--pull', 'never'", source)
+
+    def test_migration_uses_supported_run_arguments_and_only_the_reviewed_sql(self):
+        c = json.loads(b.CONTRACT.read_bytes())
+        with tempfile.TemporaryDirectory(dir=ROOT / '.runtime/bit-recharge-billing-generation-20261016') as name:
+            root = Path(name)
+            target, stage = root / 'target', root / 'stage'
+            stage.mkdir()
+            sql = target / c['migration']['path']
+            sql.parent.mkdir(parents=True)
+            sql.write_bytes((ROOT / c['migration']['path']).read_bytes())
+            platform = Mock()
+            with patch.object(r, 'verify_migrate_image'), patch.object(r, 'migration_state', side_effect=[{'before': True}, {'after': True}]), patch.object(r, 'verify_migration_state'):
+                result = r.apply_migration(platform, target, c, stage)
+            calls = [call.args[1:] for call in platform.compose.call_args_list]
+            self.assertEqual(len(calls), 2)
+            for command in calls:
+                self.assertEqual(command[:8], ('run', '--rm', '-T', '--no-deps', '--pull', 'never', '--volume', str(sql.parent) + ':/app/' + str(Path(c['migration']['path']).parent) + ':ro'))
+                self.assertNotIn('--no-build', command)
+                self.assertNotIn('--build', command)
+                self.assertNotIn('deploy', command)
+            self.assertIn('execute', calls[0])
+            self.assertIn('/app/' + c['migration']['path'], calls[0])
+            self.assertIn('--applied', calls[1])
+            self.assertIn(c['migration']['name'], calls[1])
+            self.assertEqual(result['phase'], 'VERIFIED')
+            self.assertEqual(json.loads((stage / 'migration-operation.json').read_bytes())['phase'], 'VERIFIED')
 
     def test_baseline_refuses_changed_current_before_touching_services(self):
         with tempfile.TemporaryDirectory(dir=ROOT / '.runtime/bit-recharge-billing-generation-20261016') as directory:

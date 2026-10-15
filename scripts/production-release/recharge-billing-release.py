@@ -69,6 +69,8 @@ def verify_migration_state(state, contract, *, applied=False):
 
 
 def verify_migrate_image(d, directory, contract):
+    help_text = d.compose(directory, 'run', '--help')
+    need(all(option in help_text for option in ('--no-deps', '--pull', '--volume', '--entrypoint')), 'MIGRATE_COMPOSE_OPTIONS_UNSUPPORTED')
     config = json.loads(d.compose(directory, 'config', '--format', 'json'))
     migration = config['services']['migrate']
     need(migration.get('image') == contract['migrateImage']['reference'], 'MIGRATE_REFERENCE_CHANGED')
@@ -89,7 +91,9 @@ def apply_migration(d, target, contract, stage):
     verify_migration_state(migration_state(d, target, contract), contract)
     journal = stage / 'migration-operation.json'
     need(not journal.exists(), 'MIGRATION_ALREADY_ACCEPTED')
-    command = ['run', '--rm', '-T', '--no-deps', '--no-build', '--pull', 'never', '--volume',
+    # Compose run does not support up's --no-build option. The exact migration
+    # image is already present and verified; never request --build or a pull.
+    command = ['run', '--rm', '-T', '--no-deps', '--pull', 'never', '--volume',
                str(directory) + ':/app/apps/api/prisma-mysql/migrations/' + migration['name'] + ':ro',
                '--entrypoint', 'node', 'migrate', '/app/node_modules/prisma/build/index.js']
     schema = ['--schema', '/app/apps/api/prisma-mysql/schema.prisma']
