@@ -1,3 +1,4 @@
+import { resolvedDeclinedPayment } from './recharge-noncharge-proof';
 import type {
   V2RechargeDetails,
   V2RechargeStart,
@@ -93,6 +94,7 @@ export function rechargeProfileRecordsHavePaymentRisk(
     if (!record.document || typeof record.document !== 'object' || Array.isArray(record.document))
       return record.fileKey === checkoutFile || record.fileKey.startsWith('payments/');
     const document = record.document as Record<string, unknown>;
+    if (resolvedDeclinedPayment(document)) return false;
     const bound =
       typeof identifier === 'string' &&
       (document.checkout_identifier === identifier || document.upgrade_identifier === identifier);
@@ -256,6 +258,7 @@ export function findOriginalRechargeCheckout(
       Array.isArray(job.result)
     )
       continue;
+    if (resolvedDeclinedPayment(job.result)) continue;
     const identifier = rechargeCheckoutIdentifier(job.result as Record<string, unknown>);
     if (identifier) return identifier;
   }

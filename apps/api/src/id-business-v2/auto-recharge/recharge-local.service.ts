@@ -321,7 +321,7 @@ export class RechargeLocalService {
           !['prepare', 'flow', 'bitbrowser', 'server'].includes(source.action) ||
           !paymentAttempted ||
           sourceResult.recheck_only === true ||
-          sourceResult.payment_status === 'declined' ||
+          sourceResult.operator_resolution === 'confirmed_declined_no_charge' ||
           sourceResult.status === 'subscription_activated' ||
           sourceResult.payment_outcome === 'subscription_activated'
         ) {

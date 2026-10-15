@@ -536,7 +536,7 @@ async def run_checkout_flow(target, state_dir, target_plan, *, details_reader, c
                 return {"status": "blocked", "reason": "existing_checkout_unavailable",
                         "stage": "quote_read", "payment_attempted": False,
                         "payment_requests_sent": 0, "confirmation_requests_sent": 0}
-            progress("existing_checkout_rebuilding", reason="confirmed_no_bank_request")
+            progress("existing_checkout_rebuilding", reason=record.get("operator_resolution", "confirmed_no_bank_request"))
             result = await run_browser(target, create=True, replace_unpaid_checkout=True, **browser_args)
             result["checkout_replacement_performed"] = True
             return include_payment_record(result, ledger_holder.get("ledger"))
