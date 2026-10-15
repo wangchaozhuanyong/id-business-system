@@ -71,7 +71,17 @@ function sanitizeResult(value) {
     if (!original || typeof original !== 'object' || !sanitized || typeof sanitized !== 'object')
       return;
     for (const [key, child] of Object.entries(original)) {
+      // Preserve only strictly shaped, non-credential identifiers needed to bind
+      // payment evidence to its original task. Log redaction remains unchanged.
       if (
+        typeof child === 'string' &&
+        ((/^(?:accountId|expectedAccountId|cardId|recheckTaskId|recheckedByTaskId)$/.test(key) &&
+          /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(child)) ||
+          (key === 'quoteId' && /^quote:[0-9a-f]{32}$/.test(child)) ||
+          (key === 'amount' && /^\d{1,14}(?:\.\d{1,4})?$/.test(child)))
+      )
+        sanitized[key] = child;
+      else if (
         key === 'billingPageUrl' &&
         [
           'https://chatgpt.com/account/manage',

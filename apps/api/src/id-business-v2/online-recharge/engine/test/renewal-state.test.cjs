@@ -71,6 +71,7 @@ function fixture({ reads, postStatus = 200, postThrows = false, guardThrows = fa
       if (name === './playwright-proxy')
         return { preparePlaywrightProxy: async () => ({ cleanup: async () => {} }) };
       if (name === '../rpc.cjs') return rpc;
+      if (name === '../plans.cjs') return require('../plans.cjs');
       throw new Error(`Unexpected import: ${name}`);
     },
     process: { env: {} },

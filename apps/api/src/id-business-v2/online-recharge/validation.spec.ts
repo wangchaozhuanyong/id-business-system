@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto';
 import type { OnlineRechargeTask } from '@prisma/client';
 import { ONLINE_RECHARGE_DEFAULTS } from './contracts';
 import { confirmedSubscription, requireTaskLease } from './persistence/worker.repository';
-import { redact, sanitize, session, sessionAccountId } from './validation';
+import { plan, redact, sanitize, session, sessionAccountId } from './validation';
 import { secureEqual } from './worker.service';
 import { assertOnlineSensitive } from './assets.service';
 import { createOnlineRechargeCodes } from './cdk-generator';
@@ -103,6 +103,8 @@ describe('线上代充安全边界和原版默认行为', () => {
     for (const invalid of [
       { ...proof, accountId: 'other', expectedAccountId: 'other' },
       { ...proof, observedPlan: 'chatgptpro' },
+      { ...proof, tierVerified: false },
+      { ...proof, tierVerified: true, observedCanonicalPlan: 'pro_20x' },
       { ...proof, querySucceeded: false },
       { ...proof, hasActiveSubscription: false },
       { ...proof, observedPlan: 'pro' }
@@ -112,7 +114,7 @@ describe('线上代充安全边界和原版默认行为', () => {
     expect(confirmedSubscription({ confirmation: proof }, 'pro_5x', '')).toBe(false);
     expect(
       confirmedSubscription(
-        { confirmation: { ...proof, targetPlan: 'pro_20x', observedPlan: 'chatgptpro' } },
+        { confirmation: { ...proof, targetPlan: 'pro_20x', observedPlan: 'pro_20x' } },
         'pro_20x',
         expected
       )
@@ -124,6 +126,46 @@ describe('线上代充安全边界和原版默认行为', () => {
         expected
       )
     ).toBe(true);
+  });
+  it('新增 Pro 500 保留旧套餐值，拒绝未知值和只有通用 Pro 的成功凭据', () => {
+    for (const value of ['plus', 'pro_5x', 'pro_20x', 'pro_500']) expect(plan(value)).toBe(value);
+    expect(() => plan('pro')).toThrow('套餐无效');
+    expect(() => plan('pro_1000')).toThrow('套餐无效');
+    const proof = {
+      verified: true,
+      source: 'subscription',
+      querySucceeded: true,
+      hasActiveSubscription: true,
+      accountId: 'synthetic-account',
+      expectedAccountId: 'synthetic-account',
+      targetPlan: 'pro_500',
+      observedPlan: 'pro'
+    };
+    for (const invalid of [
+      proof,
+      { ...proof, observedPlan: 'chatgptpro' },
+      { ...proof, observedPlan: 'pro_500' },
+      { ...proof, observedCanonicalPlan: 'pro_500' },
+      { ...proof, tierVerified: true, observedCanonicalPlan: 'pro_20x' }
+    ])
+      expect(confirmedSubscription({ confirmation: invalid }, 'pro_500', 'synthetic-account')).toBe(
+        false
+      );
+    expect(
+      confirmedSubscription(
+        { confirmation: { ...proof, tierVerified: true, observedCanonicalPlan: 'pro_500' } },
+        'pro_500',
+        'synthetic-account'
+      )
+    ).toBe(true);
+    expect(
+      confirmedSubscription(
+        { confirmation: { ...proof, targetPlan: 'pro_20x', observedPlan: 'chatgptpro' } },
+        'pro_20x',
+        'synthetic-account'
+      )
+    ).toBe(false);
+    expect(ONLINE_RECHARGE_DEFAULTS.planNamePro500).toBe('');
   });
   it('日志和公开结果递归移除凭据、卡号和结账链接', () => {
     const value = sanitize({
@@ -141,6 +183,41 @@ describe('线上代充安全边界和原版默认行为', () => {
     expect(JSON.stringify(value)).not.toContain('cs_synthetic');
     expect(JSON.stringify(value)).toContain('f***@example.invalid');
     expect(redact('https://checkout.stripe.com/c/pay/cs_synthetic')).toBe('（支付链接已脱敏）');
+  });
+  it('付款证据的合法UUID和固定报价摘要原样保留，日志脱敏规则不变', () => {
+    const uuid = '12345678-1234-4567-8def-123456789012';
+    const evidence = {
+      accountId: uuid,
+      expectedAccountId: uuid,
+      cardId: uuid,
+      recheckTaskId: uuid,
+      recheckedByTaskId: uuid,
+      quoteId: 'quote:123456789012abcdefabcdefabcdefab'
+    };
+    expect(sanitize({ paymentEvidence: evidence })).toEqual({ paymentEvidence: evidence });
+    expect(redact(uuid)).not.toBe(uuid);
+  });
+  it('相同元数据字段中的银行卡号码或令牌仍脱敏，其他字段不能借UUID形状绕过', () => {
+    const pan = '4242424242424242';
+    const token = 'eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJzeW50aGV0aWMifQ.synthetic';
+    for (const value of [pan, token]) {
+      const safe = sanitize(
+        Object.fromEntries(
+          [
+            'accountId',
+            'expectedAccountId',
+            'cardId',
+            'recheckTaskId',
+            'recheckedByTaskId',
+            'quoteId'
+          ].map((key) => [key, value])
+        )
+      );
+      expect(JSON.stringify(safe)).not.toContain(value);
+    }
+    const uuid = '12345678-1234-4567-8def-123456789012';
+    expect(sanitize({ message: uuid })).not.toEqual({ message: uuid });
+    expect(sanitize({ accessToken: uuid, card_number: uuid })).toEqual({});
   });
   it('不允许旧版本、其他所有者、到期或待核对任务继续执行', () => {
     const leaseId = randomUUID(),

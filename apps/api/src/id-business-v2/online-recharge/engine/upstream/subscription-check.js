@@ -217,6 +217,7 @@ function parseAccountCheckResponse(data, profile = {}) {
     const hasActive = typeof entitlement.has_active_subscription === 'boolean'
         ? entitlement.has_active_subscription : null;
     const rawPlan = String(entitlement.subscription_plan || '');
+    const canonicalPlan = require('../plans.cjs').observedCanonicalPlan(rawPlan);
     const planKey = normalizeSubscriptionPlan(rawPlan, hasActive);
     const expiresAt = entitlement.expires_at || lastActive.expires_at || null;
     const remainingDays = computeRemainingDays(expiresAt);
@@ -226,9 +227,11 @@ function parseAccountCheckResponse(data, profile = {}) {
         email: profile.email || '',
         accountId: account.account_id || profile.accountId || '',
         upstreamAccountId: account.account_id || '',
-        plan: formatPlanLabel(planKey, rawPlan),
+        plan: canonicalPlan ? require('../plans.cjs').PLANS[canonicalPlan].label : formatPlanLabel(planKey, rawPlan),
         planKey,
         rawPlan,
+        canonicalPlan,
+        tierVerified: Boolean(canonicalPlan),
         hasActiveSubscription: hasActive,
         subscriptionChannel: formatPurchaseOrigin(lastActive.purchase_origin_platform),
         subscriptionChannelRaw: lastActive.purchase_origin_platform || '',

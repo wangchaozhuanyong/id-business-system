@@ -20,6 +20,12 @@ async function executeThirdParty(task, cfg, injected = {}) {
       ? await injected.preflight(task)
       : await require('./confirmation.cjs').preflightPayment(task.plan, token);
     if (!preflight.allowed) return { success: false, submitted: false, ...preflight };
+    if (task.plan === 'pro_500' || preflight.kind === 'upgrade')
+      return {
+        success: false,
+        submitted: false,
+        error: '第三方通道尚未核实支持该档位或已有订阅升级，请使用本地浏览器通道'
+      };
     const planKey = { pro_5x: 'pro5x', pro_20x: 'pro20x' }[task.plan] || task.plan;
     const inspect = await client.inspectPay(cfg.gptApi, { planKey, session });
     if (!inspect.success || inspect.data?.ok === false)

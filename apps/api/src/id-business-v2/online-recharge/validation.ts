@@ -109,6 +109,13 @@ export function sanitize(value: unknown, field = ''): unknown {
     return '（敏感号码已脱敏）';
   if (
     typeof value === 'string' &&
+    ((/^(?:accountId|expectedAccountId|cardId|recheckTaskId|recheckedByTaskId)$/.test(field) &&
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value)) ||
+      (field === 'quoteId' && /^quote:[0-9a-f]{32}$/.test(value)))
+  )
+    return value;
+  if (
+    typeof value === 'string' &&
     /^(?:amount|estimatedAmount|balance|totalAmount)$/i.test(field) &&
     /^-?\d+(\.\d{1,4})?$/.test(value)
   )

@@ -60,3 +60,41 @@ test('debug keeps its 60 second timeout when no supported final button is presen
   assert.equal(f.elapsed(), 60000);
   assert.deepEqual(f.effects, { click: 0, fill: 0 });
 });
+
+test('only checkout debug permits an unverified target through the actual index preflight call', async () => {
+  const preflightStart = source.indexOf(
+    "const preflight = await require('../confirmation.cjs').preflightPayment"
+  );
+  const preflightEnd = source.indexOf('\n        // --- Phase 2:', preflightStart);
+  assert.ok(preflightStart >= 0 && preflightEnd > preflightStart);
+  for (const debugOnly of [false, true]) {
+    const calls = [];
+    const check = runInNewContext(
+      '(async () => {' + source.slice(preflightStart, preflightEnd) + '\nreturn preflight; })',
+      {
+        planType: 'pro_500',
+        accessToken: 'synthetic-token',
+        debugOnly,
+        require: (moduleName) => {
+          assert.equal(moduleName, '../confirmation.cjs');
+          return {
+            preflightPayment: async (target, token, options) => {
+              calls.push({ target, token, allowUnverifiedTarget: options.allowUnverifiedTarget });
+              return {
+                allowed: debugOnly,
+                kind: 'upgrade',
+                error: debugOnly ? undefined : '未核实目标标识'
+              };
+            }
+          };
+        }
+      }
+    );
+    const result = await check();
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0].target, 'pro_500');
+    assert.equal(calls[0].allowUnverifiedTarget, debugOnly);
+    assert.equal(result.allowed, debugOnly);
+    if (!debugOnly) assert.equal(result.submitted, false);
+  }
+});

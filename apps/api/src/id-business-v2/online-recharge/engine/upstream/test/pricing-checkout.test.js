@@ -25,7 +25,7 @@ const createPricingReadinessPage = (visibleTestIds) => ({
     })
 });
 
-const createProPricingPage = () => {
+const createProPricingPage = ({ tier = '20x' } = {}) => {
     const radio = {
         selected: false,
         count: async () => 1,
@@ -35,7 +35,7 @@ const createProPricingPage = () => {
     };
     return {
         page: {
-            getByRole: () => radio,
+            getByRole: (role, options) => role === 'radiogroup' && /^\d+$/.test(tier) ? { count: async () => 1, getByRole: () => radio } : role === 'radio' && options.name === tier ? radio : { count: async () => 0 },
             waitForTimeout: async () => {}
         },
         radio
@@ -58,6 +58,7 @@ const createProCheckoutPage = ({ count = 1, visible = true } = {}) => {
     return {
         page: {
             locator: () => option,
+            getByRole: () => ({ count: async () => 0 }),
             waitForTimeout: async () => {}
         },
         option
@@ -69,14 +70,16 @@ describe('pricing checkout plan button', () => {
         expect(PLAN_UPGRADE_TEST_IDS).toEqual({
             plus: 'select-plan-button-plus-upgrade',
             pro_5x: 'select-plan-button-pro-upgrade',
-            pro_20x: 'select-plan-button-pro-upgrade'
+            pro_20x: 'select-plan-button-pro-upgrade',
+            pro_500: 'select-plan-button-pro-upgrade'
         });
     });
 
     it('maps each Pro CDK plan to its verified checkout option', () => {
         expect(PRO_VARIANTS).toEqual({
-            pro_5x: { checkoutValue: 'chatgptprolite', pricingRadioLabel: '5x' },
-            pro_20x: { checkoutValue: 'chatgptpro', pricingRadioLabel: '20x' }
+            pro_5x: { checkoutValue: 'chatgptprolite', pricingRadioLabel: '5x', pricingTierLabel: '100' },
+            pro_20x: { checkoutValue: 'chatgptpro', pricingRadioLabel: '20x', pricingTierLabel: '200' },
+            pro_500: { checkoutValue: null, pricingRadioLabel: null, pricingTierLabel: '500' }
         });
     });
 
@@ -124,4 +127,29 @@ describe('pricing checkout plan button', () => {
             .rejects
             .toThrow('Checkout Pro 档位按钮数量异常: pro_20x / chatgptpro / 0');
     });
+    it('selects Pro 500 only through its exact visible tier, without a guessed checkout ID', async () => {
+        const pricing = createProPricingPage({ tier: '500' });
+        await expect(selectProVariantOnPricingPage(pricing.page, 'pro_500')).resolves.toBe(true);
+        expect(pricing.radio.selected).toBe(true);
+        const checkout = createProCheckoutPage({ count: 0 });
+        await expect(selectProVariantOnCheckoutPage(checkout.page, 'pro_500')).rejects.toThrow('Checkout 未显示明确 Pro 500 选项');
+        expect(checkout.option.selected).toBe(false);
+    });
+
+    it('stops before clicking a generic Pro choice when the requested tier is unavailable', async () => {
+        const pricing = createProPricingPage({ tier: '20x' });
+        await expect(selectProVariantOnPricingPage(pricing.page, 'pro_500')).rejects.toThrow('Pro 档位按钮数量异常');
+        expect(pricing.radio.selected).toBe(false);
+    });
+
+    it('uses the verified Pro card boundary for the new pricing page without touching Plus', async () => {
+        const proButton = { count: async () => 1, isVisible: async () => true };
+        const proCard = { count: async () => 1, getByRole: (_, options) => {
+            expect(options.name.test('升级订阅')).toBe(true);
+            return proButton;
+        } };
+        const page = { getByTestId: (id) => id === 'pro-pricing-modal-column-top-half' ? proCard : { count: async () => 0 } };
+        expect((await getUniqueVisiblePlanButton(page, 'pro_500')).button).toBe(proButton);
+    });
+
 });

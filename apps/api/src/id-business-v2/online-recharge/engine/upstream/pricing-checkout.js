@@ -3,6 +3,7 @@
 const { getRegionConfig } = require('./region-config');
 const { assertChatGptLoggedIn } = require('./session-auth');
 const { clearHumanVerification } = require('./human-verification');
+const { findUpgradeDialog } = require('./upgrade-checkout');
 
 const PRICING_URL = 'https://chatgpt.com/#pricing';
 
@@ -46,15 +47,19 @@ const SKIP_REGION_BUTTON_TEXT = /^(Upgrade|Personal|Business|Free|Plus|Pro|Subsc
 const PLAN_UPGRADE_TEST_IDS = Object.freeze({
     plus: 'select-plan-button-plus-upgrade',
     pro_5x: 'select-plan-button-pro-upgrade',
-    pro_20x: 'select-plan-button-pro-upgrade'
+    pro_20x: 'select-plan-button-pro-upgrade',
+    pro_500: 'select-plan-button-pro-upgrade'
 });
 
 const PRICING_PAGE_INITIAL_WAIT_MS = 5000;
 const PRICING_PAGE_READY_TIMEOUT_MS = 10000;
 
 const PRO_VARIANTS = Object.freeze({
-    pro_5x: { checkoutValue: 'chatgptprolite', pricingRadioLabel: '5x' },
-    pro_20x: { checkoutValue: 'chatgptpro', pricingRadioLabel: '20x' }
+    pro_5x: { checkoutValue: 'chatgptprolite', pricingRadioLabel: '5x', pricingTierLabel: '100' },
+    pro_20x: { checkoutValue: 'chatgptpro', pricingRadioLabel: '20x', pricingTierLabel: '200' },
+    // 500 has no verified upstream identifier. Only explicit visible UI labels
+    // are accepted; never invent a checkout value or fall back to Pro 200.
+    pro_500: { checkoutValue: null, pricingRadioLabel: null, pricingTierLabel: '500' }
 });
 
 const resolvePlanUpgradeTestId = (planType) => {
@@ -69,8 +74,15 @@ const resolvePlanUpgradeTestId = (planType) => {
 const getUniqueVisiblePlanButton = async (page, planType) => {
     const plan = String(planType).trim().toLowerCase();
     const testId = resolvePlanUpgradeTestId(plan);
-    const button = page.getByTestId(testId);
-    const count = await button.count();
+    let button = page.getByTestId(testId);
+    let count = await button.count();
+    if (count === 0 && PRO_VARIANTS[plan]) {
+        const proCard = page.getByTestId('pro-pricing-modal-column-top-half');
+        if (await proCard.count() === 1) {
+            button = proCard.getByRole('button', { name: /^(?:升级订阅|Upgrade subscription|Upgrade to Pro)$/i });
+            count = await button.count();
+        }
+    }
     if (count !== 1) {
         throw new Error(`定价页套餐按钮数量异常: ${plan} / ${testId} / ${count}`);
     }
@@ -81,17 +93,9 @@ const getUniqueVisiblePlanButton = async (page, planType) => {
 };
 
 const isPricingPlanSelectorVisible = async (page, planType) => {
-    const testIds = typeof planType === 'string'
-        ? [resolvePlanUpgradeTestId(planType)]
-        : [...new Set(Object.values(PLAN_UPGRADE_TEST_IDS))];
-    for (const testId of testIds) {
-        const button = page.getByTestId(testId);
-        if ((await button.count()) !== 1) {
-            continue;
-        }
-        if (await button.isVisible({ timeout: 500 }).catch(() => false)) {
-            return true;
-        }
+    const plans = typeof planType === 'string' ? [planType] : Object.keys(PLAN_UPGRADE_TEST_IDS);
+    for (const plan of plans) {
+        if (await getUniqueVisiblePlanButton(page, plan).then(() => true).catch(() => false)) return true;
     }
     return false;
 };
@@ -117,24 +121,27 @@ const selectProVariantOnPricingPage = async (page, planType) => {
         return false;
     }
 
-    const radio = page.getByRole('radio', { name: variant.pricingRadioLabel, exact: true });
-    const count = await radio.count();
-    if (count === 0) {
-        return false;
+    const group = page.getByRole('radiogroup', { name: /^Pro (?:用量|usage)$/i });
+    const groupCount = await group.count();
+    if (groupCount > 1) throw new Error('定价页 Pro 用量分组不唯一');
+    const scope = groupCount === 1 ? group : page;
+    let radio = scope.getByRole('radio', { name: variant.pricingTierLabel, exact: true });
+    let count = groupCount === 1 ? await radio.count() : 0;
+    let label = variant.pricingTierLabel;
+    if (count === 0 && variant.pricingRadioLabel) {
+        label = variant.pricingRadioLabel;
+        radio = scope.getByRole('radio', { name: label, exact: true });
+        count = await radio.count();
     }
-    if (count !== 1) {
-        throw new Error(`定价页 Pro 档位按钮数量异常: ${plan} / ${variant.pricingRadioLabel} / ${count}`);
-    }
-    if (!(await radio.isVisible({ timeout: 4000 }))) {
-        throw new Error(`定价页 Pro 档位按钮不可见: ${plan} / ${variant.pricingRadioLabel}`);
-    }
+    if (count !== 1) throw new Error(`定价页 Pro 档位按钮数量异常: ${plan} / ${label} / ${count}`);
+    if (!(await radio.isVisible({ timeout: 4000 }))) throw new Error(`定价页 Pro 档位按钮不可见: ${plan} / ${label}`);
 
     await radio.click({ timeout: 10000 });
     await page.waitForTimeout(300);
     if (await radio.getAttribute('aria-checked') !== 'true') {
         throw new Error(`定价页 Pro 档位未选中: ${plan} / ${variant.pricingRadioLabel}`);
     }
-    console.log(`✅ [步骤] 定价页已选择 Pro 档位: ${plan} (${variant.pricingRadioLabel})`);
+    console.log(`✅ [步骤] 定价页已选择 Pro 档位: ${plan} (${label})`);
     return true;
 };
 
@@ -145,6 +152,22 @@ const selectProVariantOnCheckoutPage = async (page, planType) => {
         return;
     }
 
+    const proGroup = page.getByRole('radiogroup', { name: /^Pro (?:用量|usage)$/i });
+    const groupCount = await proGroup.count();
+    if (groupCount > 1) throw new Error('Checkout Pro 用量分组不唯一');
+    const numeric = groupCount === 1 ? proGroup.getByRole('radio', { name: variant.pricingTierLabel, exact: true }) : null;
+    const numericCount = numeric ? await numeric.count() : 0;
+    if (numericCount) {
+        if (numericCount !== 1 || !(await numeric.isVisible({ timeout: 4000 }))) throw new Error('Checkout Pro 数字档位不唯一或不可见');
+        await numeric.click({ timeout: 10000 });
+        if (await numeric.getAttribute('aria-checked') !== 'true') throw new Error('Checkout Pro 数字档位未确认选中');
+        return;
+    }
+    if (!variant.checkoutValue) {
+        const exactTitle = page.getByRole('heading', { name: /^(?:ChatGPT\s+)?Pro\s+500$/i });
+        if (await exactTitle.count() === 1 && await exactTitle.isVisible({ timeout: 1000 })) return;
+        throw new Error('Checkout 未显示明确 Pro 500 选项，禁止使用其他套餐');
+    }
     const option = page.locator(`#${variant.checkoutValue}`);
     const count = await option.count();
     if (count !== 1) {
@@ -197,6 +220,8 @@ async function isPersonalPlanView(page) {
     if (await isBusinessTabActive(page)) {
         return false;
     }
+    const proCard = page.getByTestId('pro-pricing-modal-column-top-half');
+    if (await proCard.count() === 1 && await proCard.isVisible({ timeout: 500 }).catch(() => false)) return true;
 
     const plusCard = await page.locator('[role="dialog"]').locator('div').filter({
         hasText: /ChatGPT Plus|^Plus$/
@@ -774,12 +799,13 @@ async function waitForCheckoutPage(page, timeout = 90000) {
 
     while (Date.now() < deadline) {
         const url = page.url();
+        if (await findUpgradeDialog(page)) return { kind: 'upgrade', checkoutUrl: url };
         if (url.includes('/checkout/') || url.includes('chatgpt.com/checkout')) {
             await page.waitForLoadState('domcontentloaded', { timeout: 15000 }).catch(() => {});
             await page.waitForTimeout(2000);
             await assertChatGptLoggedIn(page, 'Checkout');
             console.log(`✅ [步骤] Checkout 页面已打开: ${url.slice(0, 80)}...`);
-            return url;
+            return { kind: 'checkout', checkoutUrl: url };
         }
         if (url.includes('accounts.google.com')) {
             throw new Error('Session 未生效：升级后跳转到 Google 登录页');
@@ -797,9 +823,9 @@ async function openPricingCheckout(page, { region, planType }) {
     await selectPricingRegion(page, region);
     await selectProVariantOnPricingPage(page, planType);
     await clickPlanUpgrade(page, planType);
-    const checkoutUrl = await waitForCheckoutPage(page);
-    await selectProVariantOnCheckoutPage(page, planType);
-    return checkoutUrl;
+    const checkout = await waitForCheckoutPage(page);
+    if (checkout.kind === 'checkout') await selectProVariantOnCheckoutPage(page, planType);
+    return checkout;
 }
 
 module.exports = {

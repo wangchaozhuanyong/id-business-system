@@ -163,11 +163,17 @@ export const configGroups: {
   },
   {
     key: 'plans',
-    title: '原版套餐标识',
+    title: '官网套餐标识',
     fields: [
       { key: 'planNamePlus', label: 'Plus 套餐标识', initial: 'chatgptplusplan' },
-      { key: 'planNamePro5x', label: 'Pro 5 倍标识', initial: 'chatgptprolite' },
-      { key: 'planNamePro20x', label: 'Pro 20 倍标识', initial: 'chatgptpro' }
+      { key: 'planNamePro5x', label: 'Pro 100 标识', initial: 'chatgptprolite' },
+      { key: 'planNamePro20x', label: 'Pro 200 标识', initial: 'chatgptpro' },
+      {
+        key: 'planNamePro500',
+        label: 'Pro 500 标识',
+        initial: '',
+        help: '仅填写已核实的官网标识；留空可做 Pro 500 付款前调试，自动付款暂停，不改用其他档位。'
+      }
     ]
   }
 ];

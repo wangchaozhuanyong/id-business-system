@@ -162,6 +162,63 @@ suite('线上代充隔离MySQL事务验收', () => {
     expect(await db.onlineRechargeTask.count()).toBe(1);
     expect((await db.onlineRechargeCode.findFirst())?.status).toBe('reserved');
   });
+  it('扩展迁移保留旧套餐并贯通 Pro 500 兑换码、任务与账单列', async () => {
+    await settings.update({ maxConcurrent: 10 }, operator);
+    expect((await settings.runtime()).planNames).toMatchObject({ pro_500: '' });
+    for (const target of ['plus', 'pro_5x', 'pro_20x', 'pro_500'] as const) {
+      const codes = (await assets.action(
+        'cdks',
+        'generate',
+        { count: 1, plan: target },
+        operator
+      )) as { codes: string[] };
+      expect(await tasks.verify({ code: codes.codes[0] })).toMatchObject({
+        plan: target,
+        status: 'available'
+      });
+      const task = await tasks.start({ session: fullSession(), code: codes.codes[0] }, operator);
+      expect(task.plan).toBe(target);
+      await db.onlineRechargeBill.create({
+        data: {
+          taskId: task.id,
+          plan: target,
+          status: 'failed',
+          amount: null,
+          currency: 'USD',
+          idempotencyKey: `${task.id}:schema-fixture`,
+          message: '仅验证套餐枚举兼容'
+        }
+      });
+      expect(await db.onlineRechargeBill.findFirst({ where: { taskId: task.id } })).toMatchObject({
+        plan: target
+      });
+    }
+    expect(await db.onlineRechargeCode.count()).toBe(4);
+    expect(await db.onlineRechargeTask.count()).toBe(4);
+  });
+  it('500映射默认空，显式配置不得复用旧套餐；第三方未核实前不创建500任务', async () => {
+    for (const alias of ['pro', 'chatgptpro', 'chatgptprolite', 'chatgptplusplan', 'pro_20x'])
+      await expect(settings.update({ planNamePro500: alias }, operator)).rejects.toThrow(
+        '不能复用'
+      );
+    await settings.update({ planNamePro500: 'fixture-verified-tier-500' }, operator);
+    expect((await settings.runtime()).planNames.pro_500).toBe('fixture-verified-tier-500');
+    await settings.update({ gptApiEnabled: true }, operator);
+    const codes = (await assets.action(
+      'cdks',
+      'generate',
+      { count: 1, plan: 'pro_500' },
+      operator
+    )) as { codes: string[] };
+    await expect(
+      tasks.start({ session: fullSession(), code: codes.codes[0] }, operator)
+    ).rejects.toThrow('尚未核实支持 Pro 500');
+    expect(await db.onlineRechargeTask.count()).toBe(0);
+    expect(await db.onlineRechargeCode.findFirst()).toMatchObject({
+      status: 'available',
+      taskId: null
+    });
+  });
   it('地址保留独立支付地区与国家，清空按原地区且仅清未绑定', async () => {
     await assets.action(
       'addresses',
@@ -276,6 +333,96 @@ suite('线上代充隔离MySQL事务验收', () => {
       status: 'awaiting_credentials',
       paymentStarted: false
     });
+  });
+  it('保存卡升级可先无CVC预约，新卡路线仍保持缺码等待', async () => {
+    credentials.mockResolvedValue([]);
+    await assets.importCards(
+      [{ number: '4242424242424242', expiryMonth: 12, expiryYear: 2030 }],
+      operator
+    );
+    const task = await tasks.start({ session: fullSession(), plan: 'pro_500' }, operator);
+    const claim = (await workers.claim('fixture-saved-card'))!;
+    expect(await workers.reserveCard(lease(claim, { requireCvc: false }))).toMatchObject({
+      hasCvc: false
+    });
+    expect(await db.onlineRechargeTask.findUnique({ where: { id: task.id } })).toMatchObject({
+      status: 'running',
+      paymentStarted: false
+    });
+    expect(await workers.reserveCard(lease(claim))).toMatchObject({ pendingCredentials: true });
+    expect(await db.onlineRechargeTask.findUnique({ where: { id: task.id } })).toMatchObject({
+      status: 'awaiting_credentials',
+      paymentStarted: false
+    });
+  });
+  it('Pro 500零应付升级只消费兑换码和确认套餐变更，不计扣款或银行卡次数', async () => {
+    const codes = (await assets.action(
+      'cdks',
+      'generate',
+      { count: 1, plan: 'pro_500' },
+      operator
+    )) as { codes: string[] };
+    const identity = randomUUID();
+    const task = await tasks.start(
+      { session: fullSession(identity), code: codes.codes[0] },
+      operator
+    );
+    const claim = (await workers.claim('fixture-zero-upgrade'))!;
+    const card = await prepareCard(claim);
+    const context = {
+      kind: 'upgrade',
+      sourcePlan: 'plus',
+      targetPlan: 'pro_500',
+      accountId: identity,
+      cardId: card.id,
+      cardLast4: '4242',
+      amount: '0.0000',
+      currency: 'USD',
+      quoteId: 'synthetic-zero-quote'
+    };
+    await workers.beforeSubmit(lease(claim, { paymentContext: context }));
+    await expect(workers.beforeSubmit(lease(claim, { paymentContext: context }))).rejects.toThrow(
+      '重复提交'
+    );
+    const confirmation = {
+      source: 'subscription',
+      querySucceeded: true,
+      verified: true,
+      hasActiveSubscription: true,
+      accountId: identity,
+      expectedAccountId: identity,
+      targetPlan: 'pro_500',
+      observedPlan: 'pro',
+      observedCanonicalPlan: 'pro_500',
+      tierVerified: true
+    };
+    expect(
+      await workers.finish(
+        lease(claim, {
+          status: 'succeeded',
+          result: {
+            subscriptionChangedVerified: true,
+            confirmedPaid: false,
+            confirmation,
+            paymentEvidence: { ...context, source: 'subscription_change', verified: true }
+          }
+        }),
+        false
+      )
+    ).toMatchObject({ status: 'succeeded' });
+    expect(await db.onlineRechargeTask.findUnique({ where: { id: task.id } })).toMatchObject({
+      status: 'succeeded',
+      confirmedPaid: false
+    });
+    expect(await db.onlineRechargeCode.findFirst()).toMatchObject({
+      status: 'used',
+      taskId: task.id
+    });
+    expect(await db.onlineRechargeCard.findUnique({ where: { id: card.id } })).toMatchObject({
+      leaseOwner: null,
+      successCount: 0
+    });
+    expect(await db.onlineRechargeBill.count()).toBe(0);
   });
   it('安全码丢失后补充只恢复同任务、同兑换码和原选择卡，不创建新单', async () => {
     const codes = (await assets.action(
@@ -485,7 +632,7 @@ suite('线上代充隔离MySQL事务验收', () => {
       (await db.onlineRechargeTask.findUnique({ where: { id: claim.id } }))?.paymentStarted
     ).toBe(false);
   });
-  it('提交后未知结果和已确认付款均不能提前释放卡，明确拒付仍允许原任务换卡', async () => {
+  it('提交后不能重复付款或更换卡，明确拒付只结束原任务', async () => {
     await assets.importCards(
       [
         { number: '4242424242424242', expiryMonth: 12, expiryYear: 2030 },
@@ -502,21 +649,13 @@ suite('线上代充隔离MySQL事务验收', () => {
     ).rejects.toThrow('不能释放');
     await workers.cardAction(lease(claim, { cardId: first.id }), 'recordCardDecline');
     await workers.cardAction(lease(claim, { cardId: first.id }), 'releaseCard');
-    const next = (await workers.reserveCard(lease(claim, { excludedIds: [first.id] }))) as {
-      id: string;
-    };
-    expect(next.id).not.toBe(first.id);
-    await workers.beforeSubmit(lease(claim));
-    await expect(
-      workers.cardAction(lease(claim, { cardId: next.id }), 'releaseCard')
-    ).rejects.toThrow('不能释放');
-    await workers.cardAction(lease(claim, { cardId: next.id }), 'recordCardUsage');
-    await expect(
-      workers.cardAction(lease(claim, { cardId: next.id, confirmed: true }), 'releaseCard')
-    ).rejects.toThrow('不能释放');
-    await workers.finish(lease(claim, { status: 'awaiting_review', confirmedPaid: true }), true);
-    expect(await db.onlineRechargeCard.findUnique({ where: { id: next.id } })).toMatchObject({
-      leaseOwner: claim.id
+    await expect(workers.reserveCard(lease(claim, { excludedIds: [first.id] }))).rejects.toThrow(
+      '不能更换银行卡'
+    );
+    await expect(workers.beforeSubmit(lease(claim))).rejects.toThrow('重复提交');
+    await workers.finish(lease(claim, { status: 'failed', definitiveFailure: true }), true);
+    expect(await db.onlineRechargeCard.findUnique({ where: { id: first.id } })).toMatchObject({
+      leaseOwner: null
     });
   });
   for (const action of ['enable', 'disable'] as const) {

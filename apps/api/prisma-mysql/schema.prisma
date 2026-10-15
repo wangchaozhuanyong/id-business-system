@@ -11,6 +11,7 @@ enum OnlineRechargePlan {
   plus
   pro_5x
   pro_20x
+  pro_500
 }
 
 enum OnlineRechargeStatus {

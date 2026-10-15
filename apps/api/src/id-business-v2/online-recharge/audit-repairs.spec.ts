@@ -132,6 +132,36 @@ describe('线上代充审计修复的后台边界和返回契约', () => {
       })
     ).toMatchObject({ subscriptionStatus: null, autoRenew: null });
     expect(repo.map(row, true)).not.toHaveProperty('sessionMasked');
+    expect(
+      repo.map({ ...row, result: { subscriptionChange: { amount: '999', currency: 'USD' } } })
+        .subscriptionChange
+    ).toBeNull();
+    const withContext = {
+      ...row,
+      payload: {
+        paymentContext: {
+          kind: 'upgrade',
+          sourcePlan: 'plus',
+          targetPlan: 'pro_500',
+          amount: '500.1234',
+          currency: 'USD',
+          cardLast4: '4242',
+          cardId: 'synthetic-card-id',
+          accountId: 'synthetic-account-id'
+        }
+      }
+    };
+    expect(repo.map(withContext).subscriptionChange).toMatchObject({
+      kind: 'upgrade',
+      sourcePlan: 'plus',
+      targetPlan: 'pro_500',
+      amount: '500.1234',
+      currency: 'USD',
+      cardLast4: '4242'
+    });
+    expect(repo.map(withContext, true).subscriptionChange).not.toHaveProperty('cardLast4');
+    expect(repo.map(withContext).subscriptionChange).not.toHaveProperty('accountId');
+    expect(repo.map(withContext).subscriptionChange).not.toHaveProperty('cardId');
     expect(JSON.stringify(repo.map(row))).not.toContain('synthetic-encrypted');
     expect(
       repo.map({

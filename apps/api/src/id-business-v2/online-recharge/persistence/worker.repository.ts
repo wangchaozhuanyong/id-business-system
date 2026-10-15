@@ -14,6 +14,8 @@ import { OnlineRechargeSettingsService } from '../settings.service';
 import {
   ONLINE_RECHARGE_CONFIRMED_PLAN_NAMES,
   ONLINE_RECHARGE_DEFAULTS,
+  ONLINE_RECHARGE_PLANS,
+  type OnlineRechargePaymentContext,
   type OnlineRechargePlan,
   type OnlineRechargeWorkerRpc
 } from '../contracts';
@@ -63,10 +65,84 @@ export function confirmedSubscription(
     proof &&
     proof.verified === true &&
     proof.hasActiveSubscription === true &&
-    typeof proof.observedPlan === 'string' &&
-    ONLINE_RECHARGE_CONFIRMED_PLAN_NAMES[targetPlan].includes(
-      proof.observedPlan.trim().toLowerCase()
-    )
+    ((proof.tierVerified === true && proof.observedCanonicalPlan === targetPlan) ||
+      (proof.tierVerified === undefined &&
+        targetPlan !== 'pro_500' &&
+        typeof proof.observedPlan === 'string' &&
+        ONLINE_RECHARGE_CONFIRMED_PLAN_NAMES[targetPlan].includes(
+          proof.observedPlan.trim().toLowerCase()
+        )))
+  );
+}
+
+function paymentContext(row: OnlineRechargeTask): OnlineRechargePaymentContext | null {
+  const value = row.payload ? object(row.payload).paymentContext : null;
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? (value as unknown as OnlineRechargePaymentContext)
+    : null;
+}
+
+function validatedPaymentContext(
+  value: unknown,
+  row: OnlineRechargeTask,
+  accountId: string,
+  last4: string
+): OnlineRechargePaymentContext {
+  const context = object(value);
+  const ranks: Record<string, number> = { free: 0, plus: 1, pro_5x: 2, pro_20x: 3, pro_500: 4 };
+  const source = String(context.sourcePlan);
+  const validRoute =
+    (context.kind === 'initial' && source === 'free') ||
+    (context.kind === 'upgrade' &&
+      ['plus', 'pro_5x', 'pro_20x'].includes(source) &&
+      ranks[source]! < ranks[row.plan]!);
+  if (
+    !validRoute ||
+    !ONLINE_RECHARGE_PLANS.includes(context.targetPlan as OnlineRechargePlan) ||
+    context.targetPlan !== row.plan ||
+    !accountId ||
+    context.accountId !== accountId ||
+    context.cardId !== row.cardId ||
+    context.cardLast4 !== last4 ||
+    typeof context.amount !== 'string' ||
+    !/^\d{1,14}(\.\d{1,4})?$/.test(context.amount) ||
+    typeof context.currency !== 'string' ||
+    !/^[A-Z]{3}$/.test(context.currency) ||
+    (context.kind === 'initial' && new Prisma.Decimal(context.amount).isZero())
+  )
+    throw new ConflictException('付款账号、升级路线、实际卡或官网报价不明确，禁止提交');
+  return {
+    kind: context.kind as OnlineRechargePaymentContext['kind'],
+    sourcePlan: source as OnlineRechargePaymentContext['sourcePlan'],
+    targetPlan: row.plan,
+    accountId,
+    cardId: row.cardId!,
+    cardLast4: last4,
+    amount: context.amount,
+    currency: context.currency,
+    ...(context.quoteId ? { quoteId: text(context.quoteId, '报价编号', 255) } : {})
+  };
+}
+
+export function matchesPaymentEvidence(value: unknown, row: OnlineRechargeTask): boolean {
+  const context = paymentContext(row);
+  if (!context || !value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const evidence = value as Record<string, unknown>;
+  if (
+    evidence.verified !== true ||
+    !(context.kind === 'upgrade'
+      ? ['subscription_change', 'checkout'].includes(String(evidence.source))
+      : evidence.source === 'checkout') ||
+    typeof evidence.amount !== 'string' ||
+    !/^\d{1,14}(\.\d{1,4})?$/.test(evidence.amount)
+  )
+    return false;
+  return (
+    ['kind', 'sourcePlan', 'targetPlan', 'accountId', 'cardId', 'cardLast4', 'currency'].every(
+      (key) => evidence[key] === context[key as keyof OnlineRechargePaymentContext]
+    ) &&
+    (!context.quoteId || evidence.quoteId === context.quoteId) &&
+    new Prisma.Decimal(evidence.amount).equals(context.amount)
   );
 }
 
@@ -224,6 +300,7 @@ export class OnlineRechargeWorkerRepository {
         return this.beforeRenewalSubmit(tx, row, args);
       if (row.operation !== 'recharge' || !row.cardId)
         throw new ConflictException('付款前必须预约当前任务的银行卡');
+      if (row.paymentStarted) throw new ConflictException('付款已经提交，禁止再次建单或重复提交');
       const card = await this.requireCard(tx, row.id, row.cardId);
       if (
         !card.leaseExpiresAt ||
@@ -233,12 +310,23 @@ export class OnlineRechargeWorkerRepository {
         (args.cardLeaseVersion !== undefined && args.cardLeaseVersion !== card.leaseVersion)
       )
         throw new ConflictException('银行卡租约失效，禁止提交付款');
-      // 同一仍存活的本地任务允许明确拒付后换卡；绝不重新领取已提交任务。
-      if (row.provider === 'third_party' && row.paymentStarted)
-        throw new ConflictException('第三方订单已经提交，禁止再次建单');
+      const payload = row.payload ? object(row.payload) : {};
+      if (args.paymentContext !== undefined) {
+        payload.paymentContext = validatedPaymentContext(
+          args.paymentContext,
+          row,
+          sessionAccountId(this.encryption.decrypt(row.sessionEncrypted)),
+          card.last4
+        );
+      } else if (row.plan === 'pro_500')
+        throw new ConflictException('Pro 500 缺少可核实的付款报价与实际卡资料');
       await tx.onlineRechargeTask.update({
         where: { id: row.id },
-        data: { paymentStarted: true, stage: 'payment_submitted' }
+        data: {
+          paymentStarted: true,
+          stage: 'payment_submitted',
+          payload: payload as Prisma.InputJsonValue
+        }
       });
       await this.repository.log(tx, 'worker.payment_submitted', undefined, row.id, {
         leaseVersion: row.leaseVersion
@@ -256,6 +344,7 @@ export class OnlineRechargeWorkerRepository {
     const allowed =
       row.status === 'running' &&
       row.provider === 'local' &&
+      !(row.operation === 'recharge' && paymentContext(row)?.kind === 'upgrade') &&
       (row.operation === 'renewal' || (row.operation === 'recharge' && row.confirmedPaid)) &&
       ['enable', 'disable'].includes(String(action)) &&
       args.stage === 'renewal_update' &&
@@ -300,7 +389,21 @@ export class OnlineRechargeWorkerRepository {
       const renewalResult =
         row.operation === 'renewal' ||
         (row.operation === 'subscription' && payload.originalOperation === 'renewal');
-      const paid = !renewalResult && (result.confirmedPaid === true || args.confirmedPaid === true);
+      const context = paymentContext(row);
+      const evidenceVerified = context
+        ? matchesPaymentEvidence(result.paymentEvidence, row)
+        : row.plan !== 'pro_500';
+      const zeroChange =
+        context?.kind === 'upgrade' &&
+        new Prisma.Decimal(context.amount).isZero() &&
+        evidenceVerified &&
+        result.subscriptionChangedVerified === true;
+      const paid =
+        !renewalResult &&
+        !zeroChange &&
+        evidenceVerified &&
+        (!context || new Prisma.Decimal(context.amount).greaterThan(0)) &&
+        (result.confirmedPaid === true || args.confirmedPaid === true);
       const expectedAccountId = sessionAccountId(this.encryption.decrypt(row.sessionEncrypted));
       const verified = confirmedSubscription(result, row.plan, expectedAccountId);
       if (row.operation === 'renewal' && hasRenewalSubmission(row)) {
@@ -321,7 +424,11 @@ export class OnlineRechargeWorkerRepository {
         if ((status === 'failed' && !rejected) || (status === 'succeeded' && !renewalVerified))
           status = 'awaiting_review';
       }
-      if (row.operation === 'recharge' && status === 'succeeded' && (!paid || !verified))
+      if (
+        row.operation === 'recharge' &&
+        status === 'succeeded' &&
+        ((!paid && !zeroChange) || !verified)
+      )
         status = 'awaiting_review';
       if (
         status === 'failed' &&
@@ -456,7 +563,21 @@ export class OnlineRechargeWorkerRepository {
       return;
     }
     if (original.operation !== 'recharge') return;
-    const paid = verified && result.confirmedPaid === true;
+    const context = paymentContext(original);
+    const evidenceVerified = context
+      ? matchesPaymentEvidence(result.paymentEvidence, original)
+      : original.plan !== 'pro_500';
+    const zeroChange =
+      context?.kind === 'upgrade' &&
+      new Prisma.Decimal(context.amount).isZero() &&
+      evidenceVerified &&
+      verified &&
+      result.subscriptionChangedVerified === true;
+    const paid =
+      verified &&
+      evidenceVerified &&
+      (!context || new Prisma.Decimal(context.amount).greaterThan(0)) &&
+      result.confirmedPaid === true;
     const proof = subscriptionProof(
       result,
       original.plan,
@@ -474,8 +595,8 @@ export class OnlineRechargeWorkerRepository {
           Object.values(ONLINE_RECHARGE_CONFIRMED_PLAN_NAMES).some((names) =>
             names.includes(String(proof.observedPlan).trim().toLowerCase())
           )));
-    if (!paid && !conclusivelyFailed) return;
-    const status = paid ? 'succeeded' : 'failed';
+    if (!paid && !zeroChange && !conclusivelyFailed) return;
+    const status = paid || zeroChange ? 'succeeded' : 'failed';
     await tx.onlineRechargeTask.update({
       where: { id: original.id },
       data: {
@@ -487,14 +608,17 @@ export class OnlineRechargeWorkerRepository {
         leaseId: null,
         leaseExpiresAt: null,
         stage: 'rechecked',
-        message: paid ? '原任务经同账号订阅证据确认成功' : '原上游订单确认失败且账号未开通',
+        message:
+          paid || zeroChange
+            ? '原任务经同账号准确套餐和付款证据确认成功'
+            : '原上游订单确认失败且账号未开通',
         result: sanitize({ ...result, recheckedByTaskId: recheck.id }) as Prisma.InputJsonValue
       }
     });
     if (original.codeId)
       await tx.onlineRechargeCode.updateMany({
         where: { id: original.codeId, taskId: original.id, status: 'reserved' },
-        data: paid ? { status: 'used' } : { status: 'available', taskId: null }
+        data: paid || zeroChange ? { status: 'used' } : { status: 'available', taskId: null }
       });
     if (original.cardId && paid) {
       const dedupeKey = `${original.id}:${original.cardId}:recordCardUsage`;
@@ -533,10 +657,12 @@ export class OnlineRechargeWorkerRepository {
             cardLast4: original.cardLast4,
             plan: original.plan,
             status: 'success',
-            amount: null,
-            currency: typeof result.currency === 'string' ? result.currency.slice(0, 8) : 'USD',
+            amount: context ? new Prisma.Decimal(context.amount) : null,
+            currency:
+              context?.currency ??
+              (typeof result.currency === 'string' ? result.currency.slice(0, 8) : 'USD'),
             idempotencyKey: `${original.id}:recheck`,
-            message: '订阅已确认，实际扣款金额尚无证据'
+            message: context ? '原单实际付款卡和官网报价已核对' : '订阅已确认，实际扣款金额尚无证据'
           }
         });
     }
@@ -560,6 +686,7 @@ export class OnlineRechargeWorkerRepository {
         await tx.onlineRechargeTask.findUnique({ where: { id: id(rpc.taskId ?? args.ownerKey) } }),
         rpc
       );
+      if (row.paymentStarted) throw new ConflictException('付款已经提交，不能更换银行卡或重新提交');
       const prior = await tx.onlineRechargeCard.findFirst({ where: { leaseOwner: row.id } });
       const resumed =
         row.cardId && !row.paymentStarted && !excluded.includes(row.cardId)
@@ -586,7 +713,7 @@ export class OnlineRechargeWorkerRepository {
         }));
       if (!card) return null;
       const hasCvc = (await this.memory.available([card.id])).includes(card.id);
-      if (!hasCvc) {
+      if (!hasCvc && args.requireCvc !== false) {
         await tx.onlineRechargeTask.update({
           where: { id: row.id },
           data: {
@@ -673,6 +800,15 @@ export class OnlineRechargeWorkerRepository {
           declineCount: card.declineCount
         };
       if (action === 'recordCardUsage') {
+        const context = paymentContext(row);
+        if (
+          (row.plan === 'pro_500' && !context) ||
+          (context &&
+            (!row.paymentStarted ||
+              !new Prisma.Decimal(context.amount).greaterThan(0) ||
+              !matchesPaymentEvidence(args.paymentEvidence, row)))
+        )
+          throw new ConflictException('实际付款卡或金额未核实，不能记录扣款次数');
         const usageCount = card.successCount + 1,
           exhausted = usageCount >= policy.maxSubscriptionCount;
         await tx.onlineRechargeCard.update({
@@ -751,6 +887,19 @@ export class OnlineRechargeWorkerRepository {
         source.amountSource === 'checkout' && amountValue !== undefined && amountValue !== null
           ? new Prisma.Decimal(amountValue as string)
           : null;
+      const context = paymentContext(row);
+      if (row.plan === 'pro_500' && !context && status === 'success')
+        throw new ConflictException('Pro 500 缺少已提交的付款证据，不能生成成功账单');
+      if (
+        context &&
+        status === 'success' &&
+        (!row.paymentStarted ||
+          !actual?.greaterThan(0) ||
+          !actual.equals(context.amount) ||
+          source.currency !== context.currency ||
+          !matchesPaymentEvidence(source.paymentEvidence, row))
+      )
+        throw new ConflictException('实际付款卡或金额未核实，不能生成成功扣款账单');
       const checkoutId = source.checkoutId ?? source.stripe_session_id;
       const idempotencyKey = `${row.id}:${row.cardId ?? 'none'}:${checkoutId ?? status}`.slice(
         0,

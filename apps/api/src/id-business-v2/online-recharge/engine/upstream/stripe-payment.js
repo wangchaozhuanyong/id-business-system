@@ -11,6 +11,7 @@
  */
 
 const fs = require('fs');
+const { createHash } = require('node:crypto');
 const { beforeExternalSubmit, wasSubmitted, ResultUnknownError } = require('../rpc.cjs');
 const { isVerifiedPaymentRedirect } = require('../outcomes.cjs');
 const safeMedia = require('../safe-media.cjs');
@@ -108,6 +109,26 @@ function normalizeCardExpiry(expiry) {
         return `${raw.slice(0, 2)}/${raw.slice(2)}`;
     }
     return raw;
+}
+
+function isVerifiedCheckoutOutcome(originalUrl, resultUrl) {
+    if (!isVerifiedPaymentRedirect(resultUrl)) return false;
+    try {
+        const original = new URL(originalUrl);
+        const result = new URL(resultUrl);
+        const trusted = ['chatgpt.com', 'pay.openai.com', 'checkout.stripe.com'];
+        if (original.protocol !== 'https:' || !trusted.includes(original.hostname)) return false;
+        if (original.origin === result.origin) return true;
+        // A different origin is accepted only when the original checkout URL
+        // explicitly named that return destination. Do not guess provider flows.
+        for (const key of ['return_url', 'success_url']) {
+            const raw = original.searchParams.get(key);
+            if (!raw) continue;
+            const expected = new URL(raw);
+            if (expected.protocol === 'https:' && trusted.includes(expected.hostname) && result.origin === expected.origin && result.pathname === expected.pathname) return true;
+        }
+    } catch (_) { /* no reliable original checkout/return identity */ }
+    return false;
 }
 
 function normalizeCardNumber(number) {
@@ -285,7 +306,7 @@ function isOpenAiCustomCheckout(page) {
  * 从 Checkout 页面读取「今日应付」金额（随汇率浮动）
  * @returns {Promise<{ amount: string, currency: string }|null>}
  */
-function parseCheckoutDueAmount(bodyText) {
+function parseCheckoutDueAmount(bodyText, { allowZero = false } = {}) {
     // Only an explicitly labelled payable total is a billing fact. A monthly price,
     // subtotal or credit elsewhere on the page must never stand in for this total.
     const label = '(?:Due today|Total due(?: today)?|Pay today|Amount due|今日应付(?:总额|金额)?|今天应付(?:总额|金额)?|应付总额)';
@@ -303,7 +324,7 @@ function parseCheckoutDueAmount(bodyText) {
             const rawAmount = (index === 1 ? match[1] : match[2]).replace(/,/g, '');
             const rawCurrency = (index === 1 ? match[2] : match[1]).toUpperCase();
             const normalized = rawAmount.includes('.') ? rawAmount : `${rawAmount}.00`;
-            if (!/[1-9]/.test(normalized)) continue;
+            if (!allowZero && !/[1-9]/.test(normalized)) continue;
             candidates.push({ amount: normalized, currency: currencyMap[rawCurrency] || rawCurrency });
         }
         // Explicit payable labels take precedence over a standalone "Total".
@@ -463,6 +484,11 @@ async function completeStripeCardPayment(page, cardInfo, address, options = {}) 
     const isCardRetry = cardAttempt > 1;
     let holderName = String(options.holderName || '').trim();
     let checkoutDue = null;
+
+    if (options.operation === 'upgrade' && await require('./upgrade-checkout').findUpgradeDialog(page)) {
+        return require('./upgrade-checkout').completeUpgradePayment(page, cardInfo, options);
+    }
+    if (options.operation === 'upgrade' && options.checkoutKind !== 'checkout') return { success: false, submitted: false, canRetryCard: false, error: '未核实升级付款页面，未提交付款' };
 
     try {
         if (isCardRetry) {
@@ -647,12 +673,19 @@ async function completeStripeCardPayment(page, cardInfo, address, options = {}) 
             console.log(`[Stripe] 提交前确认应付: ${checkoutDue.currency || ''} ${checkoutDue.amount}`);
         }
 
-        const payResult = await finalizeCheckoutPayment(page, holderName);
-        if (checkoutDue?.amount) {
-            payResult.dueAmount = checkoutDue.amount;
-            payResult.dueCurrency = checkoutDue.currency;
+        // Only the final official payable total can authorize a submission.
+        // Re-read after billing/tax updates rather than trusting a stale estimate.
+        const finalDue = parseCheckoutDueAmount(await page.textContent('body'), { allowZero: options.operation === 'upgrade' });
+        if (!finalDue || !options.expectedCurrency || finalDue.currency !== options.expectedCurrency) {
+            return { success: false, error: '付款前官网应付金额或币种不明确，未提交付款', canRetryCard: false };
         }
-        return payResult;
+        const paymentContext = require('./upgrade-checkout').buildPaymentContext(options, cardInfo, finalDue);
+        const originalCheckoutUrl = page.url();
+        const originalCheckoutId = String(originalCheckoutUrl).match(/(?:oaics_[a-f0-9]+|cs_(?:live|test)_[A-Za-z0-9]+)/)?.[0];
+        if (originalCheckoutId) paymentContext.quoteId = 'quote:' + createHash('sha256').update(originalCheckoutId).digest('hex').slice(0, 32);
+        const payResult = await finalizeCheckoutPayment(page, holderName, { paymentContext });
+        const paymentEvidence = { ...paymentContext, source: 'checkout', quoteVerified: true, verified: payResult.success === true && isVerifiedCheckoutOutcome(originalCheckoutUrl, page.url()) };
+        return { ...payResult, dueAmount: finalDue.amount, dueCurrency: finalDue.currency, paymentEvidence };
 
     } catch (error) {
         if (['LEASE_LOST', 'RESULT_UNKNOWN'].includes(error.code) || wasSubmitted()) throw error.code === 'LEASE_LOST' ? error : new ResultUnknownError();
@@ -847,14 +880,14 @@ async function handlePostSubmitPhase(page) {
     return { action: 'continue', captcha: postCaptcha };
 }
 
-async function finalizeCheckoutPayment(page, holderName) {
+async function finalizeCheckoutPayment(page, holderName, options = {}) {
     // Do not treat an earlier card's lingering error as a fresh rejection of the
     // next card. If it cannot be cleared, stop before a further submission.
     if (await detectPaymentDeclineOnPage(page)) {
         return { success: false, error: '上一笔拒付提示尚未清除，请核对原单后继续', canRetryCard: false };
     }
     console.log('[Stripe] Step 9: 点击订阅/支付...');
-    const submitted = await clickCheckoutSubmitButton(page);
+    const submitted = await clickCheckoutSubmitButton(page, options);
     if (!submitted) {
         const screenshotPath = await saveDebugScreenshot(page, 'submit_not_found');
         return { success: false, error: '无法找到提交/支付按钮', screenshot: screenshotPath };
@@ -2473,7 +2506,9 @@ async function fillBillingLine1Strict(page, value) {
     return ok;
 }
 
-async function clickCheckoutSubmitButton(page) {
+async function clickCheckoutSubmitButton(page, options = {}) {
+    const currentUrl = new URL(page.url());
+    if (!((currentUrl.hostname === 'chatgpt.com' && currentUrl.pathname.startsWith('/checkout/')) || currentUrl.hostname === 'pay.openai.com' || currentUrl.hostname === 'checkout.stripe.com')) return false;
     await dismissAddressAutocomplete(page);
     await page.keyboard.press('Escape').catch(() => {});
     await page.evaluate(() => {
@@ -2483,7 +2518,8 @@ async function clickCheckoutSubmitButton(page) {
 
     const tryClick = async (locator, label) => {
         try {
-            const target = locator.first ? locator.first() : locator;
+            if (await locator.count() !== 1) return false;
+            const target = locator;
             if (!(await target.isVisible({ timeout: 2000 }).catch(() => false))) {
                 return false;
             }
@@ -2493,12 +2529,14 @@ async function clickCheckoutSubmitButton(page) {
             }
             await target.scrollIntoViewIfNeeded({ timeout: 3000 }).catch(() => {});
             await page.waitForTimeout(randomBetween(150, 350));
-            await beforeExternalSubmit({ provider: 'local', stage: 'payment_submit' });
+            if (!options.paymentContext || wasSubmitted()) throw new Error('付款提交资料缺失或已提交过，禁止重复付款');
+            await beforeExternalSubmit({ provider: 'local', stage: 'payment_submit', paymentContext: options.paymentContext });
             await target.click({ timeout: 8000, delay: randomBetween(40, 120) });
             console.log(`[Stripe] ✅ 已点击提交按钮 (${label})`);
             return true;
         } catch (error) {
-            if (error.code === 'LEASE_LOST' || wasSubmitted()) throw new ResultUnknownError();
+            if (error.code === 'LEASE_LOST') throw error;
+            if (wasSubmitted()) throw new ResultUnknownError();
             console.log(`[Stripe] 提交按钮点击失败 (${label}): ${error.message}`);
             return false;
         }
@@ -2507,7 +2545,7 @@ async function clickCheckoutSubmitButton(page) {
     const strategies = [
         () => tryClick(page.getByRole('button', { name: /^Subscribe$/i }), 'role=Subscribe'),
         () => tryClick(page.getByRole('button', { name: /^订阅$/ }), 'role=订阅'),
-        () => tryClick(page.getByRole('button', { name: /subscribe|订阅|pay/i }), 'role=subscribe'),
+        () => tryClick(page.getByRole('button', { name: /^(?:Pay|Pay now|立即支付|Subscribe and pay)$/i }), 'role=pay'),
         () => tryClick(page.locator('button').filter({ hasText: /^Subscribe$/i }), 'button Subscribe'),
         () => tryClick(page.locator('button').filter({ hasText: /^订阅$/ }), 'button 订阅'),
         () => tryClick(page.locator('[role="button"]').filter({ hasText: /^Subscribe$/i }), 'role=button Subscribe'),
@@ -2809,6 +2847,7 @@ module.exports = {
     getTypingDelay,
     normalizeCardExpiry,
     normalizeCardNumber,
+    isVerifiedCheckoutOutcome,
     // Internal helpers exported for testing
     humanTypeInFrame,
     saveDebugScreenshot,

@@ -14,15 +14,28 @@ async function getActiveProxy(proxyId) {
   if (key) proxies.set(key, resolved);
   return resolved;
 }
-const plans = { plus: 'chatgptplusplan', pro_5x: 'chatgptprolite', pro_20x: 'chatgptpro', pro5x: 'chatgptprolite', pro20x: 'chatgptpro' };
-async function reserveCard(ownerKey, excludedIds = []) {
-  const card = await rpc('reserveCard', { ownerKey, excludedIds });
+async function reserveCard(ownerKey, excludedIds = [], options = {}) {
+  const requireCvc = options.requireCvc !== false;
+  const card = await rpc('reserveCard', { ownerKey, excludedIds, ...(requireCvc ? {} : { requireCvc: false }) });
   if (!card) return null;
   if (card.pendingCredentials) { const error = new Error('等待补齐本次临时安全码'); error.code = 'PENDING_CREDENTIALS'; throw error; }
   const normalized = { ...card, card_expiry: card.card_expiry || `${String(card.exp_month).padStart(2, '0')}/${String(card.exp_year).slice(-2)}`,
-    card_cvc: await requestCredential(String(card.id)), card_holder: card.card_holder || card.name || '', usage_count: card.usage_count ?? card.bind_count ?? 0 };
-  if (!normalized.card_cvc) { clearSensitive(normalized); const error = new Error('等待补齐本次临时安全码'); error.code = 'PENDING_CREDENTIALS'; throw error; }
+    card_cvc: requireCvc ? await requestCredential(String(card.id)) : '', card_holder: card.card_holder || card.name || '', usage_count: card.usage_count ?? card.bind_count ?? 0 };
+  if (requireCvc && !normalized.card_cvc) { clearSensitive(normalized); const error = new Error('等待补齐本次临时安全码'); error.code = 'PENDING_CREDENTIALS'; throw error; }
   rememberSecrets(normalized); cards.set(String(card.id), normalized); return normalized;
+}
+async function requireCardCvc(id) {
+  const card = cards.get(String(id));
+  if (!card) throw new Error('当前任务未预约该银行卡');
+  if (!card.card_cvc) card.card_cvc = await requestCredential(String(id));
+  if (!card.card_cvc) {
+    await rpc('reserveCard', { ownerKey: require('../rpc.cjs').scope().taskId, excludedIds: [], requireCvc: true });
+    const error = new Error('官网要求安全码，请补充本次临时安全码');
+    error.code = 'PENDING_CREDENTIALS';
+    throw error;
+  }
+  rememberSecrets(card);
+  return card.card_cvc;
 }
 async function cardRpc(method, id, args = {}) {
   const card = cards.get(String(id));
@@ -43,7 +56,7 @@ async function createBillingRecord(data) {
 }
 module.exports = {
   currentCardLease: () => { const card = [...cards.values()].at(-1); return card ? { cardId: card.id, cardLeaseId: card.leaseId, cardLeaseVersion: card.leaseVersion } : {}; },
-  resolvePlanName: (p) => plans[p] || plans.plus,
+  resolvePlanName: (p) => require('../plans.cjs').resolveApiPlanName(p),
   getRuntimeConfig: () => rpc('getRuntimeConfig'),
   getPaymentRegion: () => rpc('getPaymentRegion'),
   getCardPolicy: () => rpc('getCardPolicy'),
@@ -51,8 +64,8 @@ module.exports = {
   getActiveProxy,
   getAppConfigValue: (key, fallback) => key === 'last_used_address_id' ? rpc('getAppConfigValue', { key, fallback }) : Promise.reject(new Error('不允许读取该配置')),
   setAppConfigValue: (key, value) => key === 'last_used_address_id' ? rpc('setAppConfigValue', { key, value }) : Promise.reject(new Error('不允许写入该配置')),
-  reserveCard, releaseCard, clearCredentials,
-  recordCardUsage: async (id) => { recordKnownOutcome('success'); const out = await cardRpc('recordCardUsage', id); return out; },
+  reserveCard, requireCardCvc, releaseCard, clearCredentials,
+  recordCardUsage: async (id, detail = {}) => { recordKnownOutcome('success'); const out = await cardRpc('recordCardUsage', id, detail.paymentEvidence ? { paymentEvidence: detail.paymentEvidence } : {}); return out; },
   recordCardDecline: async (id) => { const out = await cardRpc('recordCardDecline', id); recordKnownOutcome(); return out; },
   bindCardPaymentProfile: (id, profile) => cardRpc('bindCardPaymentProfile', id, { profile: { ...profile, addressId: profile.address?.id || null } }),
   createBillingRecord,

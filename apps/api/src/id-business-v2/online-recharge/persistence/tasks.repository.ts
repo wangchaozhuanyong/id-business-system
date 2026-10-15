@@ -9,7 +9,12 @@ import { Prisma, type OnlineRechargeTask } from '@prisma/client';
 import { randomBytes } from 'node:crypto';
 import type { AuthenticatedUser } from '../../../auth/auth.types';
 import { FieldEncryptionService } from '../../../common/crypto/field-encryption.service';
-import { ONLINE_RECHARGE_DEFAULTS, type OnlineRechargeOperation } from '../contracts';
+import {
+  ONLINE_RECHARGE_DEFAULTS,
+  ONLINE_RECHARGE_PLAN_LABELS,
+  ONLINE_RECHARGE_PLANS,
+  type OnlineRechargeOperation
+} from '../contracts';
 import { OnlineRechargeSettingsService } from '../settings.service';
 import { OnlineRechargeRepository } from './online-recharge.repository';
 import { OnlineRechargeEphemeralCredentials } from '../ephemeral-credentials.service';
@@ -50,6 +55,11 @@ export class OnlineRechargeTasksRepository {
     const subscriptionVerified =
       (resultObject.ok === true || resultObject.renewalVerified === true) &&
       typeof subscription.hasActiveSubscription === 'boolean';
+    const payment = row.payload ? object(row.payload).paymentContext : null;
+    const change =
+      payment && typeof payment === 'object' && !Array.isArray(payment)
+        ? (payment as Record<string, unknown>)
+        : null;
     const base = {
       id: row.id,
       jobKey: row.id,
@@ -62,6 +72,17 @@ export class OnlineRechargeTasksRepository {
       message: redact(row.message),
       cardLast4: row.cardLast4,
       email: maskEmail(this.encryption.decrypt(row.emailEncrypted)),
+      subscriptionChange: change
+        ? {
+            kind: change.kind,
+            sourcePlan: change.sourcePlan,
+            targetPlan: change.targetPlan,
+            amount: change.amount,
+            currency: change.currency,
+            ...(publicView ? {} : { cardLast4: change.cardLast4 }),
+            ...(change.quoteId ? { quoteId: change.quoteId } : {})
+          }
+        : null,
       result,
       createdAt: row.createdAt,
       updatedAt: row.updatedAt
@@ -116,11 +137,7 @@ export class OnlineRechargeTasksRepository {
       maxConcurrent: settings.maxConcurrent,
       active,
       paymentRegion: settings.paymentRegion,
-      plans: [
-        { key: 'plus', label: 'Plus' },
-        { key: 'pro_5x', label: 'Pro 5x' },
-        { key: 'pro_20x', label: 'Pro 20x' }
-      ]
+      plans: ONLINE_RECHARGE_PLANS.map((key) => ({ key, label: ONLINE_RECHARGE_PLAN_LABELS[key] }))
     };
   }
   async verify(input: unknown) {
@@ -228,6 +245,8 @@ export class OnlineRechargeTasksRepository {
       )
         throw new ConflictException('该账号已有充值或续费执行中或待核对任务，请先核对原任务');
       const selectedPlan = codeRow?.plan ?? plan(input.plan ?? 'plus');
+      if (operation === 'recharge' && settings.gptApiEnabled && selectedPlan === 'pro_500')
+        throw new BadRequestException('第三方通道尚未核实支持 Pro 500，请使用本地执行通道');
       const payload: Record<string, unknown> = {};
       for (const key of [
         'region',
@@ -251,13 +270,36 @@ export class OnlineRechargeTasksRepository {
         if (input[key] !== undefined) payload[key] = input[key];
       if (payload.region && !['US', 'PH', 'SG', 'MY'].includes(String(payload.region)))
         throw new BadRequestException('支付地区无效');
-      if (payload.planName) payload.planName = text(payload.planName, '套餐标识', 100);
+      if (payload.planName) {
+        if (operation !== 'debug')
+          throw new BadRequestException('自定义套餐标识仅允许用于付款前调试');
+        payload.planName = text(payload.planName, '套餐标识', 100);
+      }
       if (
         operation === 'renewal' &&
         !['cancel', 'disable', 'enable', 'check'].includes(String(payload.action))
       )
         throw new BadRequestException('续费操作无效');
       if (payload.action === 'cancel') payload.action = 'disable';
+      if (operation === 'subscription' && payload.recheckTaskId) {
+        const original = await tx.onlineRechargeTask.findUnique({
+          where: { id: id(payload.recheckTaskId) }
+        });
+        if (
+          !operator ||
+          !original ||
+          original.status !== 'awaiting_review' ||
+          original.leaseVersion !== payload.sourceVersion ||
+          original.plan !== selectedPlan ||
+          original.sessionIdentityHash !== this.encryption.hash(sessionData?.identity)
+        )
+          throw new ConflictException('原任务核对资料已变化，请重新打开原任务');
+        const originalPayload = original.payload ? object(original.payload) : {};
+        if (originalPayload.paymentContext) payload.paymentContext = originalPayload.paymentContext;
+        const originalResult = original.result ? object(original.result) : {};
+        if (originalResult.paymentEvidence)
+          payload.originalPaymentEvidence = originalResult.paymentEvidence;
+      }
       const row = await tx.onlineRechargeTask.create({
         data: {
           operation,

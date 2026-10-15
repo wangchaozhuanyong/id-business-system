@@ -12,6 +12,7 @@ import type { AuthenticatedUser } from '../../../auth/auth.types';
 import { maskLoginEventIp } from '../../../auth/login-events';
 import {
   ONLINE_RECHARGE_PERMISSION,
+  ONLINE_RECHARGE_PLAN_LABELS,
   ONLINE_RECHARGE_SECTIONS,
   type OnlineRechargeSection
 } from '../contracts';
@@ -342,9 +343,7 @@ export class OnlineRechargeAdminRepository {
             bill.cardLast4,
             bill.amount?.toString() ?? '',
             bill.currency,
-            ({ plus: 'Plus', pro_5x: 'Pro 5x', pro_20x: 'Pro 20x' } as Record<string, string>)[
-              bill.plan
-            ],
+            (ONLINE_RECHARGE_PLAN_LABELS as Record<string, string>)[bill.plan],
             (
               { success: '成功', failed: '失败', result_unknown: '待核对' } as Record<
                 string,

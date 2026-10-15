@@ -1,22 +1,18 @@
 'use strict';
-const PLAN_NAMES = {
-  plus: ['plus', 'chatgptplus', 'chatgptplusplan'],
-  pro_5x: ['pro_5x', 'pro5x', 'chatgptprolite'],
-  pro_20x: ['pro_20x', 'pro20x', 'chatgptpro']
-};
-function evaluateSubscription(targetPlan, expectedAccountId, result) {
+const { PLAN_NAMES, assertPlan, observedCanonicalPlan, classifyChange } = require('./plans.cjs');
+function evaluateSubscription(targetPlan, expectedAccountId, result, options = {}) {
   const data = result?.data || {};
   const observedPlan = String(data.rawPlan || '')
     .trim()
     .toLowerCase();
   const observedAccountId = String(data.upstreamAccountId || '');
-  const names = PLAN_NAMES[targetPlan] || [];
+  const canonicalPlan = observedCanonicalPlan(observedPlan, options);
   const verified =
     result?.ok === true &&
     data.hasActiveSubscription === true &&
     Boolean(expectedAccountId) &&
     observedAccountId === expectedAccountId &&
-    names.includes(observedPlan);
+    canonicalPlan === targetPlan;
   return {
     verified,
     querySucceeded: result?.ok === true,
@@ -26,6 +22,8 @@ function evaluateSubscription(targetPlan, expectedAccountId, result) {
     expectedAccountId,
     targetPlan,
     observedPlan,
+    observedCanonicalPlan: canonicalPlan,
+    tierVerified: Boolean(canonicalPlan),
     queriedAt: data.queriedAt || null
   };
 }
@@ -35,9 +33,28 @@ async function confirmSubscription(targetPlan, token, injected = {}) {
   const query =
     injected.query || require('./upstream/subscription-check').querySubscriptionBySession;
   const result = await query(token, { timezoneOffsetMin: 480 });
-  return evaluateSubscription(targetPlan, expectedAccountId, result);
+  return evaluateSubscription(targetPlan, expectedAccountId, result, {
+    pro500Name:
+      injected.pro500Name || (targetPlan === 'pro_500' ? process.env.PLAN_NAME_OVERRIDE : '')
+  });
 }
 async function preflightPayment(targetPlan, token, injected = {}) {
+  try {
+    assertPlan(targetPlan);
+  } catch (error) {
+    return { allowed: false, alreadyActive: false, error: error.message };
+  }
+  const pro500Name = String(injected.pro500Name || process.env.PLAN_NAME_OVERRIDE || '').trim();
+  if (
+    targetPlan === 'pro_500' &&
+    observedCanonicalPlan(pro500Name, { pro500Name }) !== 'pro_500' &&
+    injected.allowUnverifiedTarget !== true
+  )
+    return {
+      allowed: false,
+      alreadyActive: false,
+      error: 'Pro 500 的准确订阅标识尚未核实，请先完成付款前调试并核实配置；本次未提交付款'
+    };
   let confirmation;
   let activeSubscription;
   try {
@@ -81,7 +98,11 @@ async function preflightPayment(targetPlan, token, injected = {}) {
       error: '账号已是目标套餐，本次未提交付款，无需重复充值'
     };
   }
-  return { allowed: true, alreadyActive: false, confirmation };
+  return {
+    alreadyActive: false,
+    confirmation,
+    ...classifyChange(targetPlan, confirmation, activeSubscription)
+  };
 }
 
 async function recheck(task, cfg, injected = {}) {
@@ -169,10 +190,36 @@ async function recheck(task, cfg, injected = {}) {
       providerTaskId: payload.providerTaskId || null
     };
   }
+  const context = payload.paymentContext;
+  const evidence = payload.originalPaymentEvidence;
+  const decimal = (value) => {
+    const match = /^(\d+)(?:\.(\d{1,4}))?$/.exec(String(value ?? ''));
+    return match ? BigInt(match[1]) * 10000n + BigInt((match[2] || '').padEnd(4, '0')) : null;
+  };
+  const evidenceMatches =
+    context &&
+    evidence?.verified === true &&
+    ['checkout', 'subscription_change'].includes(evidence.source) &&
+    ['kind', 'sourcePlan', 'targetPlan', 'accountId', 'cardId', 'cardLast4', 'currency'].every(
+      (key) => evidence[key] === context[key]
+    ) &&
+    (!context.quoteId || context.quoteId === evidence.quoteId) &&
+    decimal(context.amount) !== null &&
+    decimal(context.amount) === decimal(evidence.amount);
+  const verified = confirmation.verified && (!context || evidenceMatches);
   return {
-    success: confirmation.verified,
-    confirmedPaid: confirmation.verified,
-    resultUnknown: !confirmation.verified,
+    success: Boolean(verified),
+    confirmedPaid: Boolean(verified && (!context || decimal(context.amount) > 0n)),
+    ...(context
+      ? {
+          subscriptionChangedVerified: confirmation.verified,
+          paymentEvidence: evidenceMatches ? evidence : undefined
+        }
+      : {}),
+    resultUnknown: !verified,
+    ...(context && !evidenceMatches
+      ? { error: '已核对订阅，但缺少对应原单的实际付款证据，请继续核对原单' }
+      : {}),
     confirmation,
     recheckTaskId: payload.recheckTaskId || null,
     providerOrderId: payload.providerOrderId || null,

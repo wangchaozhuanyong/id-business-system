@@ -54,9 +54,9 @@
     {
       "path": "confirmation.cjs",
       "originalSha256": null,
-      "adaptedSha256": "ff898cc1bba2250bebecabc0f60abf2493576f5806ddd9c8885c88cf25ff91c2",
+      "adaptedSha256": "36c1fcfcee1de89305c26ecdbf84c52744c91c4151e2c1aff1fdc80e8f9e53d3",
       "changed": true,
-      "reason": "审计修复：付款前同账号精确套餐检查，明确无订阅可缺套餐名；续费原单只读核对与付款证据隔离，第三方原单身份验证。"
+      "reason": "2026-10-15 Pro档位及升级适配：精确目标、官网报价、单次提交、实际付款方式与原单证据保护；不猜Pro500上游ID。保留既有必要适配。"
     },
     {
       "path": "credential-client.cjs",
@@ -101,6 +101,13 @@
       "reason": "Keep validated project-owned media paths and allocate owned 0700 platform temporary directories for profiles and solver task data; remove only directories created by this process."
     },
     {
+      "path": "plans.cjs",
+      "originalSha256": null,
+      "adaptedSha256": "6dbdaeb25db6f50db41c8324c9bdcea7f13cff354a741937c640a17cc41b000c",
+      "changed": true,
+      "reason": "本模块新增：明确档位与套餐升级兼容、保存卡及官网报价核验，缺少证据不付款或不报成功。"
+    },
+    {
       "path": "proxy-resolver.cjs",
       "originalSha256": null,
       "adaptedSha256": "28aff967368d96ce1f8615650bfe0c133ef1945acfde089d2628de547492588e",
@@ -131,9 +138,9 @@
     {
       "path": "security.cjs",
       "originalSha256": null,
-      "adaptedSha256": "af54cc6a612fb0db973c5ffc7599c2a186d680782a3678479a145b728abb55e1",
+      "adaptedSha256": "a80307ac306cc5e1186a153622e06881a998e4284e5bff7fbc224d88b6bb278b",
       "changed": true,
-      "reason": "Transient-secret redaction and cleanup; protected debug link transfer and fixed public billing-link allowlist."
+      "reason": "2026-10-15 Pro档位及升级适配：精确目标、官网报价、单次提交、实际付款方式与原单证据保护；不猜Pro500上游ID。保留既有必要适配。"
     },
     {
       "path": "task-runner.cjs",
@@ -159,7 +166,7 @@
     {
       "path": "test/debug-checkout.test.cjs",
       "originalSha256": null,
-      "adaptedSha256": "380ba83883fe9d2710f37cac576b4f687bcad86282dcb1e3dcbbd930eae173d9",
+      "adaptedSha256": "173b35fbc0177a0697dd621841780054a105afee69e2ab2e98b4defc9c0db4d0",
       "changed": true,
       "reason": "Offline VM tests of the actual readonly debug helper: original four labels, exact Upgrade to Pro, unchanged 60-second no-match timeout, and zero click/fill calls; no upstream executor import or network."
     },
@@ -180,9 +187,9 @@
     {
       "path": "test/payment-core.test.cjs",
       "originalSha256": null,
-      "adaptedSha256": "dc1aad311682cb949d57335156302d3757fd265713a1b57803081aeae2ec0dd3",
+      "adaptedSha256": "8ee1127f088f32e5321e48478b68e866d0a5edd697cd88a5c7d3717fb8ef470a",
       "changed": true,
-      "reason": "离线回归：泛化错误和不可信成功不换卡，认证确认后记账。"
+      "reason": "2026-10-15 Pro档位及升级适配：精确目标、官网报价、单次提交、实际付款方式与原单证据保护；不猜Pro500上游ID。保留既有必要适配。"
     },
     {
       "path": "test/proxy-resolver.test.cjs",
@@ -208,9 +215,9 @@
     {
       "path": "test/renewal-state.test.cjs",
       "originalSha256": null,
-      "adaptedSha256": "9b1120dc5d835e4b66923dd5955f75b956d9b4be770d1e63e6aa0318f18d7014",
+      "adaptedSha256": "fb5cb7185027ae1742adf77feacc5e9c4be53f01890f31a776b12db4ecf99efa",
       "changed": true,
-      "reason": "离线VM回归：续费动作仅一次POST、同账号状态回读、未知及401/403、只读GET。"
+      "reason": "2026-10-15 Pro档位及升级适配：精确目标、官网报价、单次提交、实际付款方式与原单证据保护；不猜Pro500上游ID。保留既有必要适配。"
     },
     {
       "path": "test/runtime-main.test.cjs",
@@ -220,11 +227,25 @@
       "reason": "Offline synthetic runtime tests for private health, 0700 transient paths, SIGINT/SIGTERM, late result/claim races and lease-based interrupted-task recovery."
     },
     {
+      "path": "test/upgrade-checkout.test.cjs",
+      "originalSha256": null,
+      "adaptedSha256": "fefa603e53e93ddc0f2257840f4c682a9f86c8386361eb1384ec852ccf8ad1af",
+      "changed": true,
+      "reason": "本模块新增：覆盖准确档位、单次提交、保存卡、报价、凭据完整性及未核实Pro500付款阻止。"
+    },
+    {
+      "path": "test/upgrade-plans.test.cjs",
+      "originalSha256": null,
+      "adaptedSha256": "78d2097887cbaac22e5aa4d2da3e4b9765402c56c645a6b335133bce12f6666a",
+      "changed": true,
+      "reason": "本模块新增：覆盖准确档位、单次提交、保存卡、报价、凭据完整性及未核实Pro500付款阻止。"
+    },
+    {
       "path": "third-party.cjs",
       "originalSha256": null,
-      "adaptedSha256": "5f1774b3e6a45c171423d5a48eb8dec92a43599647bba64855fe99d37ade2a4d",
+      "adaptedSha256": "27dae76a7f8b3da5f857522c9a8687d4997a16bf08d09f8e8aae6903a332b826",
       "changed": true,
-      "reason": "审计修复：所有供应商终态严格核对原单与任务身份；已是目标套餐或身份不明时付款前停止。"
+      "reason": "2026-10-15 Pro档位及升级适配：精确目标、官网报价、单次提交、实际付款方式与原单证据保护；不猜Pro500上游ID。保留既有必要适配。"
     },
     {
       "path": "upstream/LICENSE",
@@ -292,9 +313,9 @@
     {
       "path": "upstream/chatgpt.js",
       "originalSha256": "cc94972036ccc614fe02276328b2ac82090a3893219d6d351772f659de88d550",
-      "adaptedSha256": "cc94972036ccc614fe02276328b2ac82090a3893219d6d351772f659de88d550",
-      "changed": false,
-      "reason": "冻结原版保持不变。"
+      "adaptedSha256": "1a8b4a1c92f25cc285a53e1eb3dab7bad7a9f8fc0716a5936f17ca55e24e9cf6",
+      "changed": true,
+      "reason": "2026-10-15 Pro档位及升级适配：精确目标、官网报价、单次提交、实际付款方式与原单证据保护；不猜Pro500上游ID。保留既有必要适配。"
     },
     {
       "path": "upstream/gpt-api-client.js",
@@ -334,16 +355,16 @@
     {
       "path": "upstream/index.js",
       "originalSha256": "1694958e105ebe962494d3c88bbf2f0c6b22e49028e46cfc77801e2c9f814855",
-      "adaptedSha256": "70de3186985eb8100366983435f65d29d18210979e93ae0f4dcb7b465399c080",
+      "adaptedSha256": "eee9a418a0cb9e2e4d47141779d90cd168db2aa9ca2ff3d2d77924b4f2d27cc8",
       "changed": true,
-      "reason": "审计修复：首次付款前核验原账号状态，付款后严格认证确认，再进行成功处理；已确认付款不因取消续费失败改判。"
+      "reason": "2026-10-15 Pro档位及升级适配：精确目标、官网报价、单次提交、实际付款方式与原单证据保护；不猜Pro500上游ID。保留既有必要适配。"
     },
     {
       "path": "upstream/mysql-store.js",
       "originalSha256": "b8d120cdafac6884da0bf9ef2f062965f89b17efcb6f1978f3831a4d3c0267b9",
-      "adaptedSha256": "022df5df256806dfcfbc4d727a9c666f2a3c548eda06c0bc3c430625037fd9d4",
+      "adaptedSha256": "77c92fc674ed5fd09068d1f506094cfdacf351bb4800074dcb95b3a5ecef15dc",
       "changed": true,
-      "reason": "审计修复：每任务缓存代理及动态提取结果，在任务清理时释放；同任务不二次提取。"
+      "reason": "2026-10-15 Pro档位及升级适配：精确目标、官网报价、单次提交、实际付款方式与原单证据保护；不猜Pro500上游ID。保留既有必要适配。"
     },
     {
       "path": "upstream/package-lock.json",
@@ -362,9 +383,9 @@
     {
       "path": "upstream/payment-retry.js",
       "originalSha256": "41d4f3fad99d2f0b8036fa7da597bd251134361232fe96b4515a1d2b5bd80597",
-      "adaptedSha256": "31e1ee6e35b4c148d0aad34abcc1097ca42054affc55c71ab9aa5272399b0060",
+      "adaptedSha256": "682430ca8bdf534dabac7813d8190341b6fc73668ba66a96a84727dc2b3ff646",
       "changed": true,
-      "reason": "审计修复：记账与换卡前认证原账号套餐，结果不明保持原单；泛化报错不可触发拒付轮换。"
+      "reason": "2026-10-15 Pro档位及升级适配：精确目标、官网报价、单次提交、实际付款方式与原单证据保护；不猜Pro500上游ID。保留既有必要适配。"
     },
     {
       "path": "upstream/playwright-proxy.js",
@@ -376,9 +397,9 @@
     {
       "path": "upstream/pricing-checkout.js",
       "originalSha256": "b3f7914013cfbc7b17469396fc51b80f32acc99e940b810d48ba8cea4237f894",
-      "adaptedSha256": "b3f7914013cfbc7b17469396fc51b80f32acc99e940b810d48ba8cea4237f894",
-      "changed": false,
-      "reason": "冻结原版保持不变。"
+      "adaptedSha256": "4091fde11fa6db421f1c1ac4de4fa1ad82908bb2c618a7b135a342e6010be13b",
+      "changed": true,
+      "reason": "2026-10-15 Pro档位及升级适配：精确目标、官网报价、单次提交、实际付款方式与原单证据保护；不猜Pro500上游ID。保留既有必要适配。"
     },
     {
       "path": "upstream/proxy-pool.js",
@@ -390,9 +411,9 @@
     {
       "path": "upstream/region-config.js",
       "originalSha256": "057c54db616846692bb942f037f6be3860a644a8d03b269cc41a9328187e3fd5",
-      "adaptedSha256": "057c54db616846692bb942f037f6be3860a644a8d03b269cc41a9328187e3fd5",
-      "changed": false,
-      "reason": "冻结原版保持不变。"
+      "adaptedSha256": "538d4cbb9096e0483cd38f2f93a4b54dee323cad8a215a3ab9bad70ca8a3a40a",
+      "changed": true,
+      "reason": "2026-10-15 Pro档位及升级适配：精确目标、官网报价、单次提交、实际付款方式与原单证据保护；不猜Pro500上游ID。保留既有必要适配。"
     },
     {
       "path": "upstream/requirements-hcaptcha.txt",
@@ -411,16 +432,16 @@
     {
       "path": "upstream/stripe-payment.js",
       "originalSha256": "007a6ae1abb633fd283e48f4ceac02bf3d2e2fc30aaca87520565b34eb29743e",
-      "adaptedSha256": "c3fbf02c11ad20f147f74fb64ef3d3af3ea51f7947b6062f10f719902a223e52",
+      "adaptedSha256": "0b6c54931ca60e5c36f288ac7b5cea24681f7884e2733794b17aaf95a435517a",
       "changed": true,
-      "reason": "审计修复：一般错误不判明确拒付，陈旧拒付提示阻止再次提交；仅解析明确应付总额并保留十进制字符串。"
+      "reason": "2026-10-15 Pro档位及升级适配：精确目标、官网报价、单次提交、实际付款方式与原单证据保护；不猜Pro500上游ID。保留既有必要适配。"
     },
     {
       "path": "upstream/subscription-check.js",
       "originalSha256": "e1f8f285a318389c055c0438f1c143e01023bdc42c619c6ea9eb7abe7238a11e",
-      "adaptedSha256": "4b2d617f30460e4e4964f50f18ef42c9b81f856bc883902d48a8cf4ab232796d",
+      "adaptedSha256": "3b3c765bf171286fd639c016106e1b61b8f6fb12dbc6a732496d9e6c036e414b",
       "changed": true,
-      "reason": "审计修复：续费提交动作校验、一次POST后同账号续费状态回读；保留有效订阅三态，未知状态不可误作Free。"
+      "reason": "2026-10-15 Pro档位及升级适配：精确目标、官网报价、单次提交、实际付款方式与原单证据保护；不猜Pro500上游ID。保留既有必要适配。"
     },
     {
       "path": "upstream/tax-free-address.js",
@@ -453,9 +474,16 @@
     {
       "path": "upstream/test/pricing-checkout.test.js",
       "originalSha256": "d5354791a21258f84f523943d381f25d89d00bf85cb8cfe78ed1c73b9f85c619",
-      "adaptedSha256": "d5354791a21258f84f523943d381f25d89d00bf85cb8cfe78ed1c73b9f85c619",
-      "changed": false,
-      "reason": "冻结原版保持不变。"
+      "adaptedSha256": "a33922cf5bc21d46359f75d7274028914557cb8cf682fe53f3e9c594f10019f5",
+      "changed": true,
+      "reason": "2026-10-15 Pro档位及升级适配：精确目标、官网报价、单次提交、实际付款方式与原单证据保护；不猜Pro500上游ID。保留既有必要适配。"
+    },
+    {
+      "path": "upstream/upgrade-checkout.js",
+      "originalSha256": null,
+      "adaptedSha256": "02a79eeb491cad80ad247c54ee1cfd9d8183b24c291d257c978a29e8cef32ad1",
+      "changed": true,
+      "reason": "本模块新增：明确档位与套餐升级兼容、保存卡及官网报价核验，缺少证据不付款或不报成功。"
     },
     {
       "path": "upstream/vitest.config.js",

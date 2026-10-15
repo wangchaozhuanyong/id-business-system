@@ -2,7 +2,7 @@ name: Online Recharge Audit Validation
 
 on:
   push:
-    branches: [codex/online-audit-repairs-20261015]
+    branches: [codex/online-audit-repairs-20261015, codex/online-pro500-upgrade-20261015]
 
 permissions:
   contents: read
@@ -54,6 +54,59 @@ jobs:
           npm run check:v2-module-architecture
           npm run check:v2-isolation
       - run: npm run prisma:mysql:generate
+      - name: Prepare portable Prisma client metadata
+        id: prisma_metadata
+        run: |
+          node <<'NODE'
+          const assert = require('node:assert/strict');
+          const fs = require('node:fs');
+          const path = require('node:path');
+          const { createHash } = require('node:crypto');
+          const client = require('./node_modules/.prisma/client');
+          const version = '6.19.3';
+          assert.equal(require('prisma/package.json').version, version);
+          assert.equal(require('@prisma/client/package.json').version, version);
+          assert.equal(client.Prisma.prismaVersion.client, version);
+          assert.deepEqual(client.OnlineRechargePlan, {
+            plus: 'plus', pro_5x: 'pro_5x', pro_20x: 'pro_20x', pro_500: 'pro_500'
+          });
+          const directory = '.runtime/online-audit-validation';
+          const source = path.resolve('node_modules/.prisma/client');
+          const destination = path.resolve(directory, 'prisma-client-metadata');
+          const files = [];
+          const excluded = [];
+          function copyMetadata(relative = '') {
+            for (const entry of fs.readdirSync(path.join(source, relative), { withFileTypes: true })) {
+              const name = path.join(relative, entry.name);
+              assert.equal(entry.isSymbolicLink(), false, `Unexpected Prisma client symlink: ${name}`);
+              if (entry.isDirectory()) { copyMetadata(name); continue; }
+              if (!entry.isFile() || !/\.(?:[cm]?js|json|prisma|d\.ts)$/.test(name)) {
+                excluded.push(name);
+                continue;
+              }
+              const input = path.join(source, name);
+              const output = path.join(destination, name);
+              fs.mkdirSync(path.dirname(output), { recursive: true });
+              fs.copyFileSync(input, output);
+              files.push({ path: name, sha256: createHash('sha256').update(fs.readFileSync(input)).digest('hex') });
+            }
+          }
+          copyMetadata();
+          for (const name of ['index.js', 'index.d.ts', 'default.js', 'package.json', 'schema.prisma'])
+            assert.ok(files.some((file) => file.path === name), `Missing Prisma client metadata: ${name}`);
+          const result = {
+            commit: process.env.GITHUB_SHA,
+            clientVersion: version,
+            engineVersion: client.Prisma.prismaVersion.engine,
+            plans: Object.values(client.OnlineRechargePlan),
+            files,
+            excluded,
+            platformEngineIncluded: false,
+            preserveProductionPlatformEngine: 'debian-openssl-3.0.x'
+          };
+          fs.writeFileSync(path.join(directory, 'prisma-client-metadata.json'), JSON.stringify(result, null, 2) + '\n');
+          console.log(JSON.stringify({ clientVersion: version, plans: result.plans, metadataFiles: files.length, excluded }));
+          NODE
       - name: Migrate only the disposable CI database
         run: npx prisma migrate deploy --schema apps/api/prisma-mysql/schema.prisma
       - name: Build shared package
@@ -73,6 +126,12 @@ jobs:
           npm run test --workspace @apple-business/api -- \
             src/id-business-v2/online-recharge/mysql.integration.spec.ts \
             --reporter=json --outputFile="$GITHUB_WORKSPACE/.runtime/online-audit-validation/mysql-results.json"
+      - name: Verify affected API payment contracts
+        run: >-
+          npm run test --workspace @apple-business/api --
+          src/id-business-v2/online-recharge/validation.spec.ts
+          src/id-business-v2/online-recharge/audit-repairs.spec.ts
+          src/id-business-v2/online-recharge/persistence/worker.repository.spec.ts
       - name: Install unchanged engine Node dependencies
         run: npm ci --prefix apps/api/src/id-business-v2/online-recharge/engine/upstream --ignore-scripts --no-audit --no-fund
       - name: Verify affected engine behavior without browser or Python setup
@@ -89,7 +148,13 @@ jobs:
             test/renewal-recheck.test.cjs \
             test/renewal-state.test.cjs \
             test/runtime-main.test.cjs \
+            test/upgrade-plans.test.cjs \
+            test/upgrade-checkout.test.cjs \
             | tee "$GITHUB_WORKSPACE/.runtime/online-audit-validation/engine-results.tap"
+      - name: Verify exact pricing tier selection
+        run: >-
+          npm --prefix apps/api/src/id-business-v2/online-recharge/engine/upstream
+          test -- --run test/pricing-checkout.test.js
       - name: Record candidate validation result
         if: always()
         env:
@@ -97,6 +162,7 @@ jobs:
           ADMIN_RESULT: ${{ steps.admin.outcome }}
           MYSQL_RESULT: ${{ steps.mysql.outcome }}
           ENGINE_RESULT: ${{ steps.engine.outcome }}
+          PRISMA_METADATA_RESULT: ${{ steps.prisma_metadata.outcome }}
         run: |
           node --input-type=module <<'NODE'
           import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
@@ -110,6 +176,7 @@ jobs:
             run: process.env.GITHUB_RUN_ID,
             apiBuild: process.env.API_RESULT,
             adminBuild: process.env.ADMIN_RESULT,
+            prismaMetadata: process.env.PRISMA_METADATA_RESULT,
             mysql: { outcome: process.env.MYSQL_RESULT, passed: mysql.numPassedTests ?? null, failed: mysql.numFailedTests ?? null },
             engine: { outcome: process.env.ENGINE_RESULT, passed: Number(engine.match(/^# pass (\d+)$/m)?.[1] ?? NaN) || null },
             productionAccess: false,
@@ -126,6 +193,10 @@ jobs:
             apps/admin/dist/
             apps/api/dist/
             packages/shared/dist/
+            apps/api/prisma-mysql/schema.prisma
+            apps/api/prisma-mysql/migrations/20261015110000_online_recharge_pro_500/migration.sql
+            .runtime/online-audit-validation/prisma-client-metadata/
+            .runtime/online-audit-validation/prisma-client-metadata.json
             .runtime/online-audit-validation/result.json
           include-hidden-files: true
           if-no-files-found: error

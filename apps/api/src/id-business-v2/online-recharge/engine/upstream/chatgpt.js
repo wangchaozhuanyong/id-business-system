@@ -6,6 +6,7 @@ const { getRegionConfig } = require('./region-config');
 const { executePaymentWithRetry } = require('./payment-retry');
 
 function buildCheckoutPayload(planName, country, currency) {
+    if (!String(planName || '').trim()) throw new Error('缺少已核实的目标套餐标识，未创建付款页');
     const uiMode = String(process.env.CHECKOUT_UI_MODE || 'custom').trim() || 'custom';
     return {
         entry_point: 'all_plans_pricing_modal',
@@ -270,7 +271,8 @@ class ChatGPTService {
             pro_5x: 100.00,
             pro_20x: 200.00
         };
-        const amount = baseAmounts[planType] || baseAmounts.plus;
+        const amount = baseAmounts[planType];
+        if (amount == null) throw new Error('未核实该套餐金额，请以官网实际报价为准');
 
         // 非 USD 币种的简单转换（实际金额由 Stripe 返回，这里仅用于记录参考）
         if (currency === 'SGD') return Math.round(amount * 1.35 * 100) / 100;
