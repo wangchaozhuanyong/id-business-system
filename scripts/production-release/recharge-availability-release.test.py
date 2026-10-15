@@ -10,7 +10,7 @@ import unittest
 from unittest.mock import Mock, patch
 
 HERE = Path(__file__).resolve().parent
-REVIEWED_AVAILABILITY_COMMIT = '4c07cc42580216a5719e9abb2efa697b6da0b52b'
+REVIEWED_AVAILABILITY_COMMIT = 'c60be0441cc31b6cb4652f30ccbe4b849202b7d8'
 
 
 def load(name, file):
