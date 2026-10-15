@@ -16,6 +16,7 @@ import re
 import shutil
 import subprocess
 import tarfile
+import time
 import urllib.request
 
 BASE = Path('/opt/id-business-v2')
@@ -103,11 +104,12 @@ def file_inventory(root):
 def validate_proof(proof, plan, contract, payload):
     fields = {'version', 'scope', 'commit', 'tree', 'contractSha256', 'workflowRunId',
               'workflowRunAttempt', 'sourceBaseline', 'liveManifestSha256',
-              'baselineApiReproduced', 'baselineAdminReproduced', 'controllerSha256',
+              'baselineApiReproduced', 'baselineAdminReproduced', 'publishedAdminPatchCommit',
+              'publishedAdminSources', 'controllerSha256',
               'releaseUtilitySha256', 'files', 'updatedServices', 'dependentServiceRebound',
               'migrationPerformed', 'businessActions'}
     need(type(proof) is dict and set(proof) == fields and type(proof.get('version')) is int
-         and proof.get('version') == 1 and proof.get('scope') == SCOPE
+         and proof.get('version') == 3 and proof.get('scope') == SCOPE
          and proof.get('commit') == plan['commit'] and proof.get('tree') == plan['tree']
          and proof.get('workflowRunId') == plan['workflowRunId']
          and proof.get('workflowRunAttempt') == plan['workflowRunAttempt']
@@ -116,6 +118,8 @@ def validate_proof(proof, plan, contract, payload):
          and proof.get('contractSha256') == plan['contractSha256']
          and proof.get('baselineApiReproduced') is True
          and proof.get('baselineAdminReproduced') is True
+         and proof.get('publishedAdminPatchCommit') == contract['preservedAdminCommit']
+         and proof.get('publishedAdminSources') == contract['publishedAdminSources']
          and proof.get('updatedServices') == ['api', 'admin']
          and proof.get('dependentServiceRebound') == 'online-recharge'
          and proof.get('controllerSha256') == plan['controllerSha256']
@@ -128,9 +132,8 @@ def validate_proof(proof, plan, contract, payload):
     need(actual == proof.get('files') and 'api/recharge-validation.js' in actual
          and 'admin/html/index.html' in actual
          and {name.removeprefix('source/'): value for name, value in actual.items()
-              if name.startswith('source/')} == contract['changedSources']
-         and all(name == 'api/recharge-validation.js' or name.startswith('admin/html/')
-                 or name.startswith('source/')
+              if name.startswith('source/')} == {**contract['changedSources'], **contract['publishedAdminSources']}
+         and all(name == 'api/recharge-validation.js' or name.startswith('admin/html/') or name.startswith('source/')
                  for name in actual), 'BUILD_CONTENT_CHANGED')
     return proof
 
@@ -140,14 +143,41 @@ def snapshot(d, directory):
                                   include_environment_hash=True) for name in SERVICES}
 
 
-def engine_idle(d, state):
+def verify_admin_content(d, state, contract):
+    files = contract['publicFiles']
+    need(type(files) is dict and len(files) == 259
+         and fingerprint(files) == contract['preservedAdminFilesSha256'], 'ADMIN_INVENTORY_CHANGED')
+    need(all(re.fullmatch(r'[A-Za-z0-9_./-]+', name) and '..' not in Path(name).parts
+             and not name.startswith('/') for name in files), 'ADMIN_PATH_INVALID')
+    prefix = '/usr/share/nginx/html/'
+    output = d.run('docker', 'exec', state['containerId'], 'sha256sum',
+                   *(prefix + name for name in files), timeout=60)
+    actual = {}
+    for line in output.splitlines():
+        parts = line.split('  ', 1)
+        need(len(parts) == 2 and parts[1].startswith(prefix), 'ADMIN_CONTENT_INVALID')
+        name = parts[1].removeprefix(prefix)
+        need(name not in actual, 'ADMIN_CONTENT_INVALID')
+        actual[name] = parts[0]
+    need(actual == files, 'PRESERVED_ADMIN_CONTENT_CHANGED')
+
+
+def engine_idle(d, state, contract, *, wait_connected=False):
     code = ("require('/workspace/engine/healthcheck.cjs').check().then(v=>{"
             "console.log(JSON.stringify({ready:v.ready,mode:v.mode,activeTasks:v.activeTasks,"
             "stopping:v.stopping,rpcConnected:v.rpcConnected}))}).catch(()=>process.exit(1))")
-    result = json.loads(d.run('docker', 'exec', state['containerId'], 'node', '-e', code, timeout=15))
-    need(result == {'ready': True, 'mode': 'credentials-only', 'activeTasks': 0,
-                    'stopping': False, 'rpcConnected': False}
-         and type(result['activeTasks']) is int, 'ONLINE_NOT_IDLE')
+    expected = contract['engineHealth']
+    need(expected == {'ready': True, 'mode': 'enabled', 'activeTasks': 0,
+                      'stopping': False, 'rpcConnected': True}, 'ENGINE_CONTRACT_CHANGED')
+    deadline = time.monotonic() + 45
+    while True:
+        result = json.loads(d.run('docker', 'exec', state['containerId'], 'node', '-e', code, timeout=15))
+        need(type(result.get('activeTasks')) is int, 'ONLINE_NOT_IDLE')
+        if result == expected:
+            break
+        need(wait_connected and result == {**expected, 'rpcConnected': False}
+             and time.monotonic() < deadline, 'ONLINE_NOT_IDLE')
+        time.sleep(2)
     rpc = ("(async()=>{const value=await require('/workspace/engine/rpc.cjs').rpc('getRuntimeConfig',{});"
            "console.log(JSON.stringify({readOnlyRpcReady:!!value&&typeof value==='object'&&!Array.isArray(value)}))"
            "})().catch(()=>process.exit(1));")
@@ -156,14 +186,14 @@ def engine_idle(d, state):
     return result
 
 
-def guards(d, directory, states):
+def guards(d, directory, states, contract):
     d.assert_no_active_recharge(directory)
     d.assert_no_active_registration(directory)
     marker = BASE / 'maintenance.json'
     need(not marker.exists(), 'MAINTENANCE_PRESENT')
     need(not Path('/var/lib/docker/volumes/20260821t095106z_auto_registration_data/_data/.id-release-maintenance.json').exists(),
          'MAINTENANCE_PRESENT')
-    engine_idle(d, states['online-recharge'])
+    engine_idle(d, states['online-recharge'], contract)
     code = ("const{PrismaClient}=require('@prisma/client');const p=new PrismaClient({log:[]});"
             "(async()=>{const r=await p.$queryRawUnsafe(\"SELECT COUNT(*) AS n FROM online_recharge_tasks "
             "WHERE status IN ('queued','running') OR lease_expires_at>UTC_TIMESTAMP(6)\");"
@@ -187,7 +217,8 @@ def baseline(d, contract):
     need(d.compose(previous, 'exec', '-T', 'api', 'node', '-e', code) == contract['apiValidationSha256'],
          'API_CONTENT_CHANGED')
     need(shutil.disk_usage(BASE).free > 6 * 1024**3, 'DISK_LOW')
-    guards(d, previous, states)
+    verify_admin_content(d, states['admin'], contract)
+    guards(d, previous, states, contract)
     return previous, raw, states
 
 
@@ -238,7 +269,7 @@ def release(plan, contract, d):
             states = snapshot(d, target)
             need(states == receipt['after'] and all(states[n] == receipt['before'][n] for n in PRESERVED),
                  'READBACK_SERVICES_CHANGED')
-            for name, expected in contract['changedSources'].items():
+            for name, expected in {**contract['changedSources'], **contract['publishedAdminSources']}.items():
                 path = target / name
                 need(path.resolve().is_relative_to(target) and not path.is_symlink()
                      and digest(path.read_bytes()) == expected, 'READBACK_HOST_SOURCE_CHANGED')
@@ -247,21 +278,17 @@ def release(plan, contract, d):
                                    ('recharge-record-contract.json', plan['contractSha256'])):
                 need(digest((target / 'scripts/production-release' / name).read_bytes()) == expected,
                      'READBACK_EXECUTOR_SOURCE_CHANGED')
-            guards(d, target, states)
+            guards(d, target, states, contract)
             code = "console.log(require('crypto').createHash('sha256').update(require('fs').readFileSync(" + json.dumps(MODULE) + ")).digest('hex'))"
             need(d.compose(target, 'exec', '-T', 'api', 'node', '-e', code) == receipt['apiValidationSha256'],
                  'READBACK_CONTENT_CHANGED')
             proof_raw = (target / 'recharge-record-build-proof.json').read_bytes()
             need(digest(proof_raw) == receipt['buildProofSha256'], 'READBACK_PROOF_CHANGED')
             proof = json.loads(proof_raw)
-            for name, expected in proof['files'].items():
-                if name.startswith('admin/html/'):
-                    relative = name.removeprefix('admin/html/')
-                    need(re.fullmatch(r'[A-Za-z0-9_./-]+', relative) and '..' not in Path(relative).parts,
-                         'READBACK_PATH_INVALID')
-                    actual = d.run('docker', 'exec', states['admin']['containerId'], 'sha256sum',
-                                   '/usr/share/nginx/html/' + relative).split()[0]
-                    need(actual == expected, 'READBACK_ADMIN_CONTENT_CHANGED')
+            current_admin_files = {n.removeprefix('admin/html/'): sha for n, sha in proof['files'].items()
+                                   if n.startswith('admin/html/')}
+            verify_admin_content(d, states['admin'], {**contract, 'publicFiles': current_admin_files,
+                                                     'preservedAdminFilesSha256': fingerprint(current_admin_files)})
             fixture = {'callback_operation': 'restore', 'callback_http_status': 409,
                        'callback_error_code': 'CONFLICT', 'callback_failure_kind': 'http',
                        'callback_business_reason': 'callback_previous_payment_unverified',
@@ -273,7 +300,7 @@ def release(plan, contract, d):
                  == {'preserved': True, 'rawRejected': True}, 'READBACK_DIAGNOSTIC_CONTRACT_FAILED')
             return {'status': 'RECHARGE_RECORD_INDEPENDENT_READBACK_VERIFIED', 'commit': plan['commit'],
                     'images': receipt['images'], 'preservedServices': list(PRESERVED),
-                    'onlineMode': engine_idle(d, states['online-recharge'])['mode'],
+                    'onlineMode': engine_idle(d, states['online-recharge'], contract)['mode'],
                     'migrationPerformed': False, 'businessActions': 0}
         previous, raw_manifest, before = baseline(d, contract)
         models = {name: configuration(d, before[name]) for name in ('api', 'admin', 'online-recharge')}
@@ -335,7 +362,7 @@ def release(plan, contract, d):
         target = BASE / 'releases' / (stamp + '-' + plan['commit'][:12] + '-recharge-record')
         need(not target.exists(), 'RELEASE_DIRECTORY_EXISTS')
         shutil.copytree(previous, target, symlinks=True)
-        for name, expected in contract['changedSources'].items():
+        for name, expected in {**contract['changedSources'], **contract['publishedAdminSources']}.items():
             path = target / name
             source = payload / 'source' / name
             need(path.resolve().is_relative_to(target) and not path.is_symlink()
@@ -357,7 +384,7 @@ def release(plan, contract, d):
         (target / 'compose.release.json').write_text(json.dumps(override, sort_keys=True, indent=2) + '\n')
         (target / 'compose.release.json').chmod(0o600)
         need(baseline(d, contract)[1:] == (raw_manifest, before), 'BASELINE_MOVED')
-        # The credentials-only sidecar shares the API's network namespace.
+        # The existing enabled sidecar shares the API's network namespace.
         # Rebind it after replacing the API; its image, settings and volume stay.
         d.compose(previous, 'stop', 'online-recharge', timeout=90)
         failure_path = stage / 'switch-state.json'
@@ -376,11 +403,11 @@ def release(plan, contract, d):
         need(all(after[n]['image'] == images[n]['imageId'] for n in ('api', 'admin')),
              'IMAGE_MISMATCH')
         need(after['online-recharge']['image'] == before['online-recharge']['image'], 'ONLINE_IMAGE_CHANGED')
-        engine_idle(d, after['online-recharge'])
+        engine_idle(d, after['online-recharge'], contract, wait_connected=True)
         metadata = json.loads(d.run('docker', 'inspect', after['online-recharge']['containerId']))[0]
         need(metadata['HostConfig']['NetworkMode'] == 'container:' + after['api']['containerId'],
              'ONLINE_BINDING_INVALID')
-        guards(d, target, after)
+        guards(d, target, after, contract)
         request = urllib.request.Request('https://54-249-61-238.sslip.io/', headers={'Cache-Control': 'no-cache'})
         with urllib.request.urlopen(request, timeout=25) as response:
             public = response.read(2 * 1024**2)
@@ -391,7 +418,7 @@ def release(plan, contract, d):
                    'apiValidationSha256': proof['files']['api/recharge-validation.js'],
                    'workflowRunId': plan['workflowRunId'], 'artifactSha256': plan['artifactSha256'],
                    'buildProofSha256': plan['buildProofSha256'],
-                   'preservedServices': list(PRESERVED), 'onlineMode': 'credentials-only',
+                   'preservedServices': list(PRESERVED), 'onlineMode': contract['engineHealth']['mode'],
                    'migrationPerformed': False, 'businessActions': 0}
         (target / 'recharge-record-preservation.json').write_text(json.dumps(receipt, sort_keys=True, indent=2) + '\n')
         (target / 'recharge-record-build-proof.json').write_bytes((payload / 'build-proof.json').read_bytes())
@@ -407,8 +434,11 @@ def release(plan, contract, d):
                                           'validationRun': plan['workflowRunId']},
                         sourceProjection={'sourceBaseline': contract['sourceBaseline'],
                                           'changedSources': contract['changedSources'],
-                                          'buildProofSha256': plan['buildProofSha256']},
-                        sourceLayout='FROZEN_PUBLISHED_SOURCE_WITH_EXACT_DIAGNOSTIC_OVERLAY',
+                                          'buildProofSha256': plan['buildProofSha256'],
+                                          'publishedAdminBaseCommit': contract['preservedAdminCommit'],
+                                          'publishedAdminSources': contract['publishedAdminSources'],
+                                          'preservedEngineCommit': contract['preservedEngineCommit']},
+                        sourceLayout='PUBLISHED_API_AND_ADMIN_WITH_DIAGNOSTICS_AND_PUBLISHED_ONLINE_OVERLAY',
                         servicesBefore=before, servicesAfter=after, actualDeployment=receipt,
                         rechargeRecordPublication={'artifactSha256': plan['artifactSha256'],
                                                    'buildProofSha256': plan['buildProofSha256'],
@@ -419,6 +449,9 @@ def release(plan, contract, d):
         for role in ('api', 'admin'):
             manifest['images'][role] = {'reference': images[role]['reference'],
                                         'digest': images[role]['imageId'], 'sourceCommit': plan['commit']}
+        manifest['images']['online-recharge'] = {'reference': before['online-recharge']['reference'],
+                                                 'digest': before['online-recharge']['image'],
+                                                 'sourceCommit': contract['preservedEngineCommit']}
         (target / 'release-manifest.json').write_text(json.dumps(manifest, sort_keys=True, indent=2) + '\n')
         d.point_current(target, stamp + '-recharge-record')
         failure_path.write_text(json.dumps({'status': 'DEPLOYED', 'target': str(target), 'commit': plan['commit']}) + '\n')
