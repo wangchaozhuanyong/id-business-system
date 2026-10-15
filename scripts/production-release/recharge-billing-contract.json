@@ -1,4 +1,18 @@
 {
+  "addressChecksBefore": [
+    {
+      "CHECK_CLAUSE": "((`country` = _utf8mb4\\'US\\') and (`city` = _utf8mb4\\'Portland\\') and (`state` = _utf8mb4\\'OR\\') and (`postal_code` = _utf8mb4\\'97204\\'))",
+      "CONSTRAINT_NAME": "id_business_v2_recharge_addresses_fixed_location_chk"
+    },
+    {
+      "CHECK_CLAUSE": "(`status` in (_utf8mb4\\'unused\\',_utf8mb4\\'used\\',_utf8mb4\\'disabled\\'))",
+      "CONSTRAINT_NAME": "id_business_v2_recharge_addresses_status_chk"
+    },
+    {
+      "CHECK_CLAUSE": "(((`status` = _utf8mb4\\'used\\') and (`used_at` is not null)) or ((`status` <> _utf8mb4\\'used\\') and (`used_at` is null)))",
+      "CONSTRAINT_NAME": "id_business_v2_recharge_addresses_used_at_chk"
+    }
+  ],
   "apiModules": {
     "id-business-v2/auto-recharge/persistence/recharge-address.repository.js": "54739133e6336287d837833b0fb70267105ec9724e773a6d920f639958a7bded",
     "id-business-v2/auto-recharge/recharge-address-validation.js": "6fc73a124003ce44192a5ba33ba6acdc9d0b9539e47a98c8435c6b05337dca8b",
@@ -284,6 +298,17 @@
   },
   "expectedCurrent": "3f796a9f79a950caf2dce85d6ee687dc5d48e21b",
   "manifestSha256": "bbdba7b5b6f1ff15703185f76ec7098d23d01411178d9f183b662efd96bc5060",
+  "migrateImage": {
+    "imageId": "sha256:b76eba175d99be90017e2654dad6a6b1dea3a08baacdcc9a2743770f2fb80383",
+    "reference": "079740175286.dkr.ecr.ap-northeast-1.amazonaws.com/id-business-v2-release:43c31870c9497d900491cdb19c5f61c766f3b344-38476335896-1-migrate"
+  },
+  "migration": {
+    "name": "20261016020000_recharge_generated_address_locations",
+    "newCheck": "id_business_v2_recharge_addresses_us_location_chk",
+    "oldCheck": "id_business_v2_recharge_addresses_fixed_location_chk",
+    "path": "apps/api/prisma-mysql/migrations/20261016020000_recharge_generated_address_locations/migration.sql",
+    "sha256": "eb5ad7d01a4bacd754407be36015fe496ecd227f07997703a4502aceb304e5c9"
+  },
   "nginxSha256": "0b73aedbebdc12065d922b35bbf428e8959fe3a3ea9ef9fa5dc7af2f995baa99",
   "publicFiles": {
     "_headers": "d4c6717ea046cf5b22007827eb6e4cebf372f13fd07031594ea11174bb4a4a18",
@@ -1256,6 +1281,7 @@
     "apps/admin/src/v2/features/auto-recharge/useAutoRecharge.ts": "0568f83f0e4ce1c464e15dedace4dc31c8db78cbb35eaba172bf9c785195bfa4",
     "apps/admin/src/v2/features/auto-recharge/useRechargeAddressGeneration.spec.ts": "1078909cc68ece8b2e24fd9e1c6acb3444c9fbad7a279ba38e77338061f160fe",
     "apps/admin/src/v2/features/auto-recharge/useRechargeAddressGeneration.ts": "8b1ab7ab5e20c6b0d3e82f6865f20c0d4f69d1a25154fada62ac775f646614fe",
+    "apps/api/prisma-mysql/migrations/20261016020000_recharge_generated_address_locations/migration.sql": "eb5ad7d01a4bacd754407be36015fe496ecd227f07997703a4502aceb304e5c9",
     "apps/api/src/id-business-v2/auto-recharge/persistence/recharge-address.repository.ts": "9d519be5fd8fd2f6f24fa9be880da4d6e10810bba798994bee4dfa052b4c61f9",
     "apps/api/src/id-business-v2/auto-recharge/recharge-address-validation.spec.ts": "6e84bddeab30f2dde167b546b3219a4f5f3831f486ee5bbed797c9f9b94fdcea",
     "apps/api/src/id-business-v2/auto-recharge/recharge-address-validation.ts": "d07dd4960f32bf17db4cb27b9f0e6be354963ebbc4ef81abc6deb1cc71904e7a",

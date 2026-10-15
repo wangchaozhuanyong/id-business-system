@@ -52,8 +52,8 @@ def verify_sources(contract):
     changed = set(git('diff', '--name-only', contract['reviewBase'], 'HEAD', '--', 'apps/', 'packages/').decode().splitlines())
     need(changed == set(contract['sources']), 'SOURCE_SCOPE_CHANGED')
     for name, expected in contract['sources'].items():
-        need(name.startswith(('apps/admin/src/v2/features/auto-recharge/',
-                             'apps/api/src/id-business-v2/auto-recharge/'))
+        need((name.startswith(('apps/admin/src/v2/features/auto-recharge/',
+                             'apps/api/src/id-business-v2/auto-recharge/')) or name == contract['migration']['path'])
              and digest((ROOT / name).read_bytes()) == expected, 'SOURCE_CHANGED')
     # Preserve all ordinary frontend inputs, dependencies, Prisma and build commands.
     names = git('ls-tree', '-r', '--name-only', before).decode().splitlines()
@@ -142,7 +142,7 @@ def build():
              'baselineNativeVerified': native, 'databaseVerification': {'isolated': True, 'suite': 'recharge-billing.mysql.integration.spec.ts'},
              'files': inventory(payload), 'apiModules': {n: after[n] for n in sorted(allowed)},
              'adminFiles': inventory(candidate / 'apps/admin/dist'), 'updatedServices': ['api', 'admin'],
-             'migrationPerformed': False, 'businessActions': 0}
+             'migrationPerformed': False, 'plannedMigration': contract['migration'], 'businessActions': 0}
     for field, name in [('controllerSha256', 'recharge-billing-release.py'), ('releaseUtilitySha256', 'remote-deploy.py'), ('helperSha256', 'recharge-record-release.py')]:
         proof[field] = digest((HERE / name).read_bytes())
     (payload / 'build-proof.json').write_text(json.dumps(proof, sort_keys=True, indent=2) + '\n')
