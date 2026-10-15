@@ -1,3 +1,4 @@
+import { isRechargeBillingOnly } from './ci-recharge-billing-scope.mjs';
 import {
   isSharedProxyPoolPaths,
   isSharedProxyPoolOnly,
@@ -206,6 +207,7 @@ const onlineCiBuildTestInputs = new Set([
   'scripts/production-release/online-recharge-component-lifecycle.test.py'
 ]);
 export function needsOnlineRechargeCiBuild(paths) {
+  if (isRechargeBillingOnly(paths)) return false;
   if (isAdminHtmlCacheOnly(paths)) return false;
   // This shared feature uses the normal API/engine builds, not the historical sealed ONLINE projection.
   if (isSharedProxyPoolPaths(paths)) return false;
@@ -1271,6 +1273,7 @@ const bitOrdersAcceptancePaths = new Set([
 export const hasAppleMailboxScope = (paths) => paths.some((path) => appleMailboxApiPaths.has(path));
 
 export function isRechargeOnly(paths, oldSchema, newSchema) {
+  if (isRechargeBillingOnly(paths)) return true;
   if (paths.includes(rechargePricingProfile))
     return isRechargePricingOnly(paths) && paths.some((path) => rechargePricingSources.has(path));
   if (hasRegistrationOnboardingScope(paths))
@@ -1381,6 +1384,16 @@ export function isTargetedOnly(paths, oldSchema, newSchema) {
   );
 }
 export function selectedParts(paths, grantHelperSnapshot) {
+  if (isRechargeBillingOnly(paths))
+    return [
+      'guards',
+      ...(paths.some(
+        (p) => p.startsWith('apps/admin/') || p === 'scripts/acceptance-v2-recharge-billing.mjs'
+      )
+        ? ['admin']
+        : []),
+      ...(paths.some((p) => p.startsWith('apps/api/')) ? ['api'] : [])
+    ];
   if (isAdminHtmlCacheOnly(paths)) return ['guards', 'admin'];
   if (isSharedProxyPoolPaths(paths))
     return [

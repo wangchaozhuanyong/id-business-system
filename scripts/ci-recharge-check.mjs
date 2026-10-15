@@ -1,3 +1,4 @@
+import { isRechargeBillingOnly } from './ci-recharge-billing-scope.mjs';
 import { isSharedProxyPoolOnly, sharedProxyAdminCommand } from './ci-shared-proxy-scope.mjs';
 import { execFileSync } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
@@ -470,6 +471,17 @@ if (part === 'guards' && mode === 'admin' && isAdminHtmlCacheOnly(changed)) {
 // format, lint and CI-selector contracts have also run. Business source remains
 // subject to the formal workflow's immutable source and prior-validation proof.
 if (part === 'guards' && mode === 'recharge') {
+  if (isRechargeBillingOnly(changed)) {
+    run('node', ['--test', 'scripts/ci-recharge-billing-scope.test.mjs']);
+    run('python3', ['-B', 'scripts/production-release/recharge-billing-release.test.py']);
+    for (const name of new Set([
+      ...adminUiGuardChecks(mode, changed),
+      ...backendArchitectureGuardChecks(mode, changed)
+    ]))
+      npm('run', name);
+    console.log('Independent billing controls and all affected architecture/UI rules verified');
+    process.exit(0);
+  }
   const checks = rechargeAvailabilityGuardChecks(changed);
   if (checks) {
     for (const name of checks) npm('run', name);
