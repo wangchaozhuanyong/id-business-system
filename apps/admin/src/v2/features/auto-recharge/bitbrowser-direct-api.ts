@@ -12,6 +12,8 @@ const messages = {
   bitbrowser_direct_protocol: '比特接口返回的数据无法确认，请核对接口地址并更新比特浏览器。',
   bitbrowser_direct_debug_unavailable:
     '窗口已打开，但网页无法连接窗口控制接口。请检查网站本机网络权限，并更新比特浏览器后重试。',
+  bitbrowser_existing_window_control_unavailable:
+    '原窗口已在运行，但网页未能建立窗口控制连接。请关闭这个原窗口，再从本页重新打开；原窗口资料和执行记录已保留。',
   bitbrowser_direct_command_failed: '窗口控制失败，请检查原窗口；本次不会自动重建或重复登录。',
   bitbrowser_direct_cancelled: '本次网页直连操作已停止，已打开的窗口保留供手动检查。',
   bitbrowser_profile_sync_unverified: '无法确认窗口已关闭登录资料同步，本次已停止登录。',
@@ -47,6 +49,7 @@ const operationMessages = {
   browser_open: '打开比特窗口',
   browser_close: '关闭比特窗口',
   browser_processes: '核验窗口关闭状态',
+  browser_control: '连接窗口控制通道',
   record_progress: '保存执行状态',
   record_profile_check: '保存原窗口核验状态',
   record_profile_missing: '保存原窗口缺失核验状态',

@@ -6,6 +6,7 @@ import { resolve, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 const root = fileURLToPath(new URL('../', import.meta.url));
 const baseline = '04aa234505adccfe295776245b88fc56feac0588';
+const adminBaseline = '7f419903e9335c00524f5065f46920e8f24f2722';
 const output = resolve(root, '.runtime/shared-proxy-release');
 const run = (file, args, options = {}) =>
   execFileSync(file, args, { cwd: root, stdio: 'inherit', ...options });
@@ -49,11 +50,33 @@ if (process.argv[2] === 'controls') {
   const source = resolve(root, '.codex-worktrees/shared-proxy-release-baseline');
   assert.equal(existsSync(source), false);
   run('git', ['worktree', 'add', '--detach', source, baseline]);
+  const adminFiles = git([
+    'diff',
+    '--name-only',
+    baseline,
+    adminBaseline,
+    '--',
+    'apps/admin',
+    'packages/shared',
+    'package.json',
+    'package-lock.json'
+  ])
+    .split('\n')
+    .filter(Boolean);
+  assert.equal(adminFiles.length, 9);
+  assert.ok(
+    adminFiles.every((path) => path.startsWith('apps/admin/src/v2/features/auto-recharge/'))
+  );
+  for (const name of adminFiles)
+    writeFileSync(
+      resolve(source, name),
+      execFileSync('git', ['show', `${adminBaseline}:${name}`], { cwd: root })
+    );
   run('npm', ['ci', '--ignore-scripts', '--no-audit', '--no-fund'], { cwd: source });
   run('npm', ['run', 'prisma:mysql:generate'], { cwd: source });
   run('npm', ['run', 'build'], {
     cwd: source,
-    env: { ...process.env, V2_BUILD_ID: 'v2-' + baseline }
+    env: { ...process.env, V2_BUILD_ID: 'v2-' + adminBaseline }
   });
   const packageDir = resolve(output, 'content');
   mkdirSync(packageDir, { recursive: true });
@@ -133,6 +156,7 @@ if (process.argv[2] === 'controls') {
     commit,
     sourceTree: git(['rev-parse', 'HEAD^{tree}']),
     baseline,
+    adminBaseline,
     runId: process.env.GITHUB_RUN_ID,
     overlays,
     engineChanged: engineChanged.map((path) => path.slice(engineDir.length)),

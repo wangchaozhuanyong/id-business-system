@@ -35,10 +35,10 @@ jobs:
       - run: npm run prisma:mysql:generate && npm run prisma:mysql:validate
       - run: npm run typecheck && npm run build
       - name: Verify the seven V2 controls and affected source
-        if: steps.reuse.outputs.verified != 'true'
         run: |
           for check in check:admin-ui check:v2-ui-language check:v2-color-contrast check:v2-table-standard check:v2-loading-standard check:v2-module-architecture check:v2-isolation check:v2-prisma-runtime-boundary check:v2-concurrency-standard; do npm run "$check"; done
           node scripts/shared-proxy-publication.mjs controls
+          npm run test --workspace @apple-business/admin -- src/v2/features/auto-recharge src/v2/features/proxy-pool src/v2/features/online-recharge src/v2/features/registry.spec.ts src/v2/router/routes.spec.ts
       - name: Verify both recharge systems and the shared pool
         if: steps.reuse.outputs.verified != 'true'
         run: |
