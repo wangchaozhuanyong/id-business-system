@@ -84,6 +84,9 @@ for (const extra of [
 ]) {
   test(`control-only path excludes ${extra}`, () => {
     assert.equal(isRechargeRecordControlsOnly([...controlsOnly, extra]), false);
-    assert.equal(needsOnlineRechargeCiBuild([...controlsOnly, extra]), true);
+    assert.equal(
+      needsOnlineRechargeCiBuild([...controlsOnly, extra]),
+      !isRechargeRecordRepairOnly([...controlsOnly, extra])
+    );
   });
 }
