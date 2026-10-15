@@ -11,7 +11,9 @@ import {
   isRegistrationEnvironmentRepair,
   registrationEnvironmentRepairBase,
   isRegistrationDeclarationRepair,
-  registrationDeclarationRepairBase
+  registrationDeclarationRepairBase,
+  isRegistrationMigrationQueryRepair,
+  registrationMigrationQueryRepairBase
 } from './ci-registration-closure-scope.mjs';
 import { imageInputsChanged } from './ci-recharge-python-image.mjs';
 import { adminHtmlCachePaths, isAdminHtmlCacheOnly } from './ci-recharge-scope.mjs';
@@ -73,7 +75,9 @@ test('single proven Prisma declaration propagation has its own exact control-onl
   ];
   const options = {
     base: registrationDeclarationRepairBase,
-    baseTree: '874102957cbd6cc921e05e5bba252e63bd09fd85'
+    baseTree: '874102957cbd6cc921e05e5bba252e63bd09fd85',
+    readSource: (path) =>
+      execFileSync('git', ['show', 'd38c243b5727953aa96c0fa83e706fee253c9624:' + path])
   };
   assert.equal(isRegistrationDeclarationRepair(paths, options), true);
   assert.equal(checkMode(paths, schema, schema), 'ci-only');
@@ -104,6 +108,55 @@ test('single proven Prisma declaration propagation has its own exact control-onl
   for (const drift of paths)
     assert.equal(
       isRegistrationDeclarationRepair(paths, {
+        ...options,
+        readSource: (path) =>
+          path === drift ? Buffer.from('UNREVIEWED') : options.readSource(path)
+      }),
+      false,
+      drift
+    );
+});
+
+test('migration query marker repair stays on its exact controller and regression bytes', () => {
+  const paths = [
+    'scripts/production-release/registration-closure-release.py',
+    'scripts/production-release/registration-closure-release.test.py'
+  ];
+  const options = {
+    base: registrationMigrationQueryRepairBase,
+    baseTree: 'a331c3ab6b23c3331aa550b752d9d66860e62cdb'
+  };
+  assert.equal(isRegistrationMigrationQueryRepair(paths, options), true);
+  assert.equal(checkMode(paths, schema, schema), 'ci-only');
+  assert.deepEqual(selectedParts(paths), ['guards']);
+  for (const extra of [
+    'apps/api/src/id-business-v2/online-recharge/public.controller.ts',
+    'apps/admin/src/v2/features/auto-registration/api.ts',
+    'packages/shared/src/index.ts',
+    'apps/api/prisma-mysql/schema.prisma',
+    'package-lock.json',
+    '.github/workflows/quality.yml',
+    '.github/workflows/registration-closure-validation.yml',
+    'scripts/production-release/registration-closure-build.py',
+    'scripts/production-release/registration-closure-contract.json',
+    'scripts/ci-registration-closure-native-reuse.mjs'
+  ])
+    assert.equal(isRegistrationMigrationQueryRepair([...paths, extra], options), false, extra);
+  assert.equal(
+    isRegistrationMigrationQueryRepair(paths, {
+      ...options,
+      base: registrationDeclarationRepairBase
+    }),
+    false
+  );
+  assert.equal(
+    isRegistrationMigrationQueryRepair(paths, { ...options, baseTree: 'a'.repeat(40) }),
+    false
+  );
+  assert.equal(isRegistrationMigrationQueryRepair(paths.slice(1), options), false);
+  for (const drift of paths)
+    assert.equal(
+      isRegistrationMigrationQueryRepair(paths, {
         ...options,
         readSource: (path) => (path === drift ? Buffer.from('UNREVIEWED') : readFileSync(path))
       }),

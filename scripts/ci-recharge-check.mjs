@@ -3,7 +3,9 @@ import {
   isRegistrationEnvironmentRepair,
   registrationEnvironmentRepairBase,
   isRegistrationDeclarationRepair,
-  registrationDeclarationRepairBase
+  registrationDeclarationRepairBase,
+  isRegistrationMigrationQueryRepair,
+  registrationMigrationQueryRepairBase
 } from './ci-registration-closure-scope.mjs';
 import { isRechargeCheckoutOnly } from './ci-recharge-checkout-scope.mjs';
 import { isRechargeBillingOnly } from './ci-recharge-billing-scope.mjs';
@@ -78,7 +80,18 @@ const registrationDeclarationRepair =
     base,
     baseTree: execFileSync('git', ['rev-parse', base + '^{tree}'], { encoding: 'utf8' }).trim()
   });
-const registrationOwnControlRepair = registrationEnvironmentRepair || registrationDeclarationRepair;
+const registrationMigrationQueryRepair =
+  part === 'guards' &&
+  mode === 'ci-only' &&
+  base === registrationMigrationQueryRepairBase &&
+  isRegistrationMigrationQueryRepair(changed, {
+    base,
+    baseTree: execFileSync('git', ['rev-parse', base + '^{tree}'], { encoding: 'utf8' }).trim()
+  });
+const registrationOwnControlRepair =
+  registrationEnvironmentRepair ||
+  registrationDeclarationRepair ||
+  registrationMigrationQueryRepair;
 const sharedPoolOnly =
   mode === 'recharge' &&
   changed.some((path) => path.includes('/proxy-pool/')) &&
