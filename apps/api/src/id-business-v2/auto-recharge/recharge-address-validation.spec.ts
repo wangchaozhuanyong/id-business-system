@@ -1,12 +1,22 @@
 import { describe, expect, it } from 'vitest';
 import {
   RECHARGE_ADDRESS_LOCATION,
+  validateRechargeAddressGeneration,
   validateRechargeAddressImport,
   validateRechargeAddressListQuery,
   validateRechargeAddressStatus
 } from './recharge-address-validation';
 
 describe('auto recharge address validation', () => {
+  it('bounds generation and rejects overrides or coerced counts', () => {
+    expect(validateRechargeAddressGeneration({})).toEqual({ count: 10 });
+    for (const count of [1, 100])
+      expect(validateRechargeAddressGeneration({ count })).toEqual({ count });
+    for (const count of [0, 101, 1.5, '10', null, true, Number.NaN])
+      expect(() => validateRechargeAddressGeneration({ count })).toThrow();
+    for (const value of [null, [], { count: 1, ownerId: 'other' }, { city: 'elsewhere' }])
+      expect(() => validateRechargeAddressGeneration(value)).toThrow();
+  });
   it('keeps the requested location fixed and normalizes unique streets', () => {
     expect(RECHARGE_ADDRESS_LOCATION).toEqual({
       country: 'US',

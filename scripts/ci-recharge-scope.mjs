@@ -1,3 +1,4 @@
+import { isRechargeBillingOnly } from './ci-recharge-billing-scope.mjs';
 import {
   isSharedProxyPoolPaths,
   isSharedProxyPoolOnly,
@@ -206,6 +207,7 @@ const onlineCiBuildTestInputs = new Set([
   'scripts/production-release/online-recharge-component-lifecycle.test.py'
 ]);
 export function needsOnlineRechargeCiBuild(paths) {
+  if (isRechargeBillingOnly(paths)) return false;
   if (isAdminHtmlCacheOnly(paths)) return false;
   // This shared feature uses the normal API/engine builds, not the historical sealed ONLINE projection.
   if (isSharedProxyPoolPaths(paths)) return false;
@@ -1168,6 +1170,8 @@ export function adminCheckCommands(mode, paths) {
     paths.some((p) => p.startsWith('apps/admin/src/v2/features/auto-recharge/'))
   )
     commands.push(['run', 'acceptance:v2-auto-recharge']);
+  if (paths.includes('scripts/acceptance-v2-recharge-billing.mjs'))
+    commands.push(['exec', '--', 'node', 'scripts/acceptance-v2-recharge-billing.mjs']);
   if (
     paths.some((p) =>
       /(?:layout\.css|V2(?:PageOverview|OverviewMetric|ListToolbar|PageContext)\.vue|admin-layout-rules|acceptance-v2-(?:filter|page)-layout)/.test(
@@ -1236,7 +1240,7 @@ function hasRechargeConnectionSchemaProof(paths, before, after) {
   );
 }
 const allowed =
-  /^(?:apps\/admin\/src\/v2\/features\/auto-recharge\/|apps\/api\/src\/id-business-v2\/auto-recharge\/|packages\/shared\/src\/v2\/auto-recharge\.ts$|docs\/|scripts\/ci-recharge-[\w.-]+$|scripts\/check-v2-(?:decimal-standard|ui-language)\.mjs$|scripts\/acceptance-v2-auto-recharge\.mjs$|\.github\/workflows\/quality\.yml$)/;
+  /^(?:apps\/admin\/src\/v2\/features\/auto-recharge\/|apps\/api\/src\/id-business-v2\/auto-recharge\/|packages\/shared\/src\/v2\/auto-recharge\.ts$|docs\/|scripts\/ci-recharge-[\w.-]+$|scripts\/check-v2-(?:decimal-standard|ui-language)\.mjs$|scripts\/acceptance-v2-(?:auto-recharge|recharge-billing)\.mjs$|\.github\/workflows\/quality\.yml$)/;
 const appleMailboxApiPaths = new Set([
   'apps/api/src/id-business-v2/auto-registration/apple-mailbox-pool.ts',
   'apps/api/src/id-business-v2/auto-registration/apple-mailboxes-task-bridge.service.ts',
@@ -1269,6 +1273,7 @@ const bitOrdersAcceptancePaths = new Set([
 export const hasAppleMailboxScope = (paths) => paths.some((path) => appleMailboxApiPaths.has(path));
 
 export function isRechargeOnly(paths, oldSchema, newSchema) {
+  if (isRechargeBillingOnly(paths)) return true;
   if (paths.includes(rechargePricingProfile))
     return isRechargePricingOnly(paths) && paths.some((path) => rechargePricingSources.has(path));
   if (hasRegistrationOnboardingScope(paths))
@@ -1379,6 +1384,16 @@ export function isTargetedOnly(paths, oldSchema, newSchema) {
   );
 }
 export function selectedParts(paths, grantHelperSnapshot) {
+  if (isRechargeBillingOnly(paths))
+    return [
+      'guards',
+      ...(paths.some(
+        (p) => p.startsWith('apps/admin/') || p === 'scripts/acceptance-v2-recharge-billing.mjs'
+      )
+        ? ['admin']
+        : []),
+      ...(paths.some((p) => p.startsWith('apps/api/')) ? ['api'] : [])
+    ];
   if (isAdminHtmlCacheOnly(paths)) return ['guards', 'admin'];
   if (isSharedProxyPoolPaths(paths))
     return [

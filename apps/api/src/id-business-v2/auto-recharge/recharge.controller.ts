@@ -69,6 +69,11 @@ export class RechargeController {
   importAddresses(@Body() input: unknown, @CurrentUser() operator: AuthenticatedUser) {
     return this.service.importAddresses(input, operator);
   }
+  @Post('addresses/generate')
+  @Header('Cache-Control', 'no-store')
+  generateAddresses(@Body() input: unknown, @CurrentUser() operator: AuthenticatedUser) {
+    return this.service.generateAddresses(input, operator);
+  }
   @Patch('addresses/:id/status')
   updateAddressStatus(
     @Param('id') id: string,
