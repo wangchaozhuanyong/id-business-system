@@ -591,6 +591,12 @@ export function safeDocument(value: unknown): Record<string, unknown> {
     result.page_state = input.page_state;
   if (input.quote !== undefined) result.quote = cleanQuote(input.quote);
   if (input.initial_quote !== undefined) result.initial_quote = cleanQuote(input.initial_quote);
+  if (['object', 'unavailable'].includes(String(input.checkout_request_body_state)))
+    result.checkout_request_body_state = input.checkout_request_body_state;
+  if (['matched', 'missing', 'unsupported'].includes(String(input.checkout_request_plan_state)))
+    result.checkout_request_plan_state = input.checkout_request_plan_state;
+  if (input.checkout_recovered_from_original === true)
+    result.checkout_recovered_from_original = true;
   if (
     ['official_checkout_response', 'official_upgrade_preview'].includes(
       String(input.quote_authority)

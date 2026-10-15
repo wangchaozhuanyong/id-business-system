@@ -194,7 +194,8 @@ def atomic_json(path: Path, data: dict):
 
 class AttemptLedger:
     def __init__(self, state_dir: Path, account_id: str, *, retry_rejected=False,
-                 replace_unpaid_checkout=False, target_plan="plus", next_cycle_grant=None):
+                 replace_unpaid_checkout=False, target_plan="plus", next_cycle_grant=None,
+                 recover_unknown_checkout=False):
         self.root = state_dir
         self.account_id = account_id
         self.target_plan = target_plan
@@ -207,6 +208,7 @@ class AttemptLedger:
         self.previous_bytes = None
         self.record = None
         self.next_cycle_grant = next_cycle_grant
+        self.recover_unknown_checkout = recover_unknown_checkout
 
     def __enter__(self):
         if self.root.is_symlink():
@@ -244,8 +246,12 @@ class AttemptLedger:
                 from subscription_cycle import cycle_resolution_matches
                 allowed_cycle = (self.next_cycle_grant is not None
                                  and cycle_resolution_matches(self.previous, self.next_cycle_grant))
-                if not (allowed_retry or allowed_replacement or allowed_cycle):
+                from native_checkout import unknown_checkout_recoverable
+                allowed_recovery = self.recover_unknown_checkout and unknown_checkout_recoverable(self.previous)
+                if not (allowed_retry or allowed_replacement or allowed_cycle or allowed_recovery):
                     raise Stop("previous_checkout_attempt_exists", retry_eligible=rejected_retry_allowed(self.previous))
+                if allowed_recovery:
+                    self.record = dict(self.previous)
             elif self.retry_rejected:
                 raise Stop("retry_requires_rejected_record")
         except BaseException:
@@ -254,7 +260,7 @@ class AttemptLedger:
         return self
 
     def begin(self):
-        if self.record is not None or self.fd is None:
+        if self.recover_unknown_checkout or self.record is not None or self.fd is None:
             raise Stop("duplicate_checkout_blocked")
         retry_of = None
         if self.previous_bytes is not None and self.next_cycle_grant is None:

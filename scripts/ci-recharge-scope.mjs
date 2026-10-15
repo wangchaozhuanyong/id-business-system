@@ -1,3 +1,4 @@
+import { isRechargeCheckoutOnly } from './ci-recharge-checkout-scope.mjs';
 import { isRechargeBillingOnly } from './ci-recharge-billing-scope.mjs';
 import {
   isRegistrationClosureOnly,
@@ -229,6 +230,7 @@ export function needsOnlineRechargeCiBuild(paths) {
       ))
   )
     return false;
+  if (isRechargeCheckoutOnly(paths)) return false;
   if (isRechargeBillingOnly(paths)) return false;
   if (isAdminHtmlCacheOnly(paths)) return false;
   // This shared feature uses the normal API/engine builds, not the historical sealed ONLINE projection.
@@ -1148,6 +1150,15 @@ export function adminCheckCommands(mode, paths) {
         ])
   ]);
   commands.push(['run', 'build', '--workspace', '@apple-business/admin']);
+  if (isRechargeCheckoutOnly(paths))
+    commands.push([
+      'exec',
+      '--',
+      'node',
+      'scripts/acceptance-v2-auto-recharge.mjs',
+      '--built',
+      '--quote-stages'
+    ]);
   if (
     paths.some(
       (path) =>
@@ -1319,6 +1330,7 @@ const bitOrdersAcceptancePaths = new Set([
 export const hasAppleMailboxScope = (paths) => paths.some((path) => appleMailboxApiPaths.has(path));
 
 export function isRechargeOnly(paths, oldSchema, newSchema) {
+  if (isRechargeCheckoutOnly(paths)) return oldSchema === newSchema;
   if (isRechargeBillingOnly(paths)) return true;
   if (paths.includes(rechargePricingProfile))
     return isRechargePricingOnly(paths) && paths.some((path) => rechargePricingSources.has(path));
@@ -1449,6 +1461,25 @@ export function selectedParts(paths, grantHelperSnapshot) {
       paths.some((path) => path.includes('/proxy-pool/') && path.startsWith('apps/api/'))
         ? ['migration']
         : [])
+    ];
+  if (isRechargeCheckoutOnly(paths))
+    return [
+      'guards',
+      ...(paths.some(
+        (p) =>
+          p.startsWith('apps/admin/') ||
+          p.startsWith('packages/') ||
+          p === 'scripts/acceptance-v2-auto-recharge.mjs'
+      )
+        ? ['admin']
+        : []),
+      ...(paths.some(
+        (p) =>
+          (p.startsWith('apps/api/src/') && !p.includes('/worker/')) || p.startsWith('packages/')
+      )
+        ? ['api']
+        : []),
+      ...(paths.some((p) => p.includes('/auto-recharge/worker/')) ? ['connector'] : [])
     ];
   if (isRechargeBillingOnly(paths))
     return [

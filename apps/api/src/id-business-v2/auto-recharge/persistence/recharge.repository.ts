@@ -1,4 +1,5 @@
 import { resolvedDeclinedPayment, resolvedDeclinedCheckout } from '../recharge-noncharge-proof';
+import { isUnidentifiedUnpaidCheckout } from '../recharge-unidentified-checkout';
 import { ConflictException, Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../../../common/prisma/prisma.service';
 import { acquireMysqlTransactionLock } from '../../../common/prisma/mysql-transaction-lock';
@@ -160,7 +161,8 @@ export class RechargeRepository {
     accountKey: string,
     plan: string,
     excludeId: string,
-    unpaidRecoveryIdentifier?: string
+    unpaidRecoveryIdentifier?: string,
+    unidentifiedSourceJobId?: string
   ) {
     let cursor: string | undefined;
     for (let page = 0; page < 30; page += 1) {
@@ -184,7 +186,8 @@ export class RechargeRepository {
           jobs.filter((job) => !isClosedCycleDocument(job.result, accountKey)),
           ownerId,
           accountKey,
-          plan
+          plan,
+          unidentifiedSourceJobId
         );
         if (identifier) return identifier;
       }
@@ -198,7 +201,8 @@ export class RechargeRepository {
     records: { fileKey: string; revision: number; document: unknown }[],
     accountKey: string,
     plan: string,
-    expected: (string | undefined)[]
+    expected: (string | undefined)[],
+    allowUnidentified = false
   ) {
     const fileKey = `${accountKey}${plan === 'plus' ? '' : `-${plan}`}.json`;
     const current = records.filter(
@@ -229,6 +233,8 @@ export class RechargeRepository {
     )
       throw new ConflictException('原订单记录未核实，禁止创建新订单');
     const document = record.document as Record<string, unknown>;
+    if (allowUnidentified && identifiers.length === 0 && isUnidentifiedUnpaidCheckout(document))
+      return undefined;
     const identifier = rechargeCheckoutIdentifier(document);
     if (!identifier || (document.target_plan ?? 'plus') !== plan)
       throw new ConflictException('原订单记录未核实，禁止创建新订单');

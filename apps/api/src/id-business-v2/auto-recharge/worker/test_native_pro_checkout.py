@@ -585,10 +585,13 @@ class NativeProContractTests(unittest.IsolatedAsyncioTestCase):
                 return await payment_handler(active_page, guard, live_identity, payment, self.target,
                     pay=False, details_reader=details, confirmer=lambda *_args: False,
                     wait_seconds=0, poll_count=0, poll_interval=0, quote_wait_seconds=1.5)
+        async def filled_and_repriced(*_args):
+            await self.quote_binding(guards[0], 'update', amount=3249000, tax=348107)
+            return {'card_fields_filled': True, 'billing_fields_filled': ['country', 'name', 'line1']}
         with patch('browser_checkout.check_session', AsyncMock(return_value=(self.target, identity))) as session, \
-                patch('pay.fill_official_form', AsyncMock(return_value={
-                    'card_fields_filled': True, 'billing_fields_filled': ['country', 'name', 'line1']})) as fill, \
+                patch('pay.fill_official_form', AsyncMock(side_effect=filled_and_repriced)) as fill, \
                 patch('pay.verify_billing_fields', AsyncMock()) as verify, \
+                patch('pay.verify_card_fields', AsyncMock()), \
                 patch.dict('os.environ', {'AUTO_RECHARGE_CALLBACK_URL': ''}):
             result = await run_browser(self.target, inspect_existing=True, state_dir=self.state,
                 target_plan='pro-500', browser_context=context, guard_factory=factory,
