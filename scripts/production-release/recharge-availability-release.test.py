@@ -24,6 +24,25 @@ build = load('availability_test_build', 'recharge-availability-build.py')
 
 
 class AvailabilityPublicationTests(unittest.TestCase):
+    def test_native_logs_are_captured_without_echo_and_only_old_cli_flags_allow_fallback(self):
+        raw=b'\x1b[32m7 passed\x1b[0m\n25 passed'
+        success=Mock(returncode=0,stdout=raw,stderr=b'')
+        unsupported=Mock(returncode=1,stdout=b'',stderr=b'unknown flag: --allow-escape-sequences')
+        with patch.object(build.subprocess,'run',return_value=success) as request:
+            self.assertEqual(build.platform_log_bytes('actions/jobs/8/logs'),raw)
+            self.assertTrue(request.call_args.kwargs['capture_output'])
+            self.assertIn('--allow-escape-sequences',request.call_args.args[0])
+        with patch.object(build.subprocess,'run',side_effect=[unsupported,success]) as request:
+            self.assertEqual(build.platform_log_bytes('actions/jobs/8/logs'),raw)
+            self.assertEqual(request.call_count,2)
+            self.assertNotIn('--allow-escape-sequences',request.call_args.args[0])
+        with patch.object(build.subprocess,'run',return_value=Mock(returncode=1,stdout=b'',stderr=b'permission denied')) as request:
+            with self.assertRaisesRegex(RuntimeError,'DATABASE_LOG_REQUEST_FAILED'):build.platform_log_bytes('actions/jobs/8/logs')
+            self.assertEqual(request.call_count,1)
+        with patch.object(build.subprocess,'run') as request:
+            with self.assertRaisesRegex(RuntimeError,'DATABASE_LOG_PATH_INVALID'):build.platform_log_bytes('actions/artifacts/8/zip')
+            request.assert_not_called()
+
     def test_database_reuse_requires_native_success_and_identical_source_commands_environment_and_artifact(self):
         name='apps/api/src/id-business-v2/auto-recharge/recharge-availability.ts'
         content=(build.ROOT/name).read_bytes()
@@ -58,7 +77,7 @@ class AvailabilityPublicationTests(unittest.TestCase):
             if suffix==path:return workflow
             return (build.ROOT/suffix).read_bytes()
         def verify(c=contract,n=native,j=jobs,a=artifact,z=raw,log=b'7 passed\n25 passed',g=git):
-            with patch.object(build,'git',side_effect=g),patch.object(build,'platform_json',side_effect=[n,j,a]),patch.object(build,'platform_bytes',side_effect=[z,log]):
+            with patch.object(build,'git',side_effect=g),patch.object(build,'platform_json',side_effect=[n,j,a]),patch.object(build,'platform_bytes',return_value=z),patch.object(build,'platform_log_bytes',return_value=log):
                 return build.verify_database_evidence(c)
         self.assertEqual(verify()['testsPassed'],32)
         for changed in [{**contract,'sourceBaseline':'f'*40},{**contract,'sources':{name:'0'*64}}]:
