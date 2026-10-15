@@ -403,7 +403,8 @@ function recordGuardCommands(
     event = '',
     base = 'a'.repeat(40),
     readonlyBaseSource = '',
-    readonlyCurrentSource = null
+    readonlyCurrentSource = null,
+    cacheConfiguration = null
   } = {}
 ) {
   // Run the real dispatcher with process execution replaced before its named import resolves.
@@ -417,10 +418,14 @@ function recordGuardCommands(
     globalThis.guardTestCalls = calls;
     const readonlyPath = ${JSON.stringify(resolve(root, readonlyMetadataPaths[0]))};
     const readonlySource = ${JSON.stringify(readonlyCurrentSource)};
+    const cacheConfigurationUrl = new URL('./deploy/nginx/admin.conf', import.meta.url).href;
+    const cacheConfiguration = ${JSON.stringify(cacheConfiguration)};
     const originalReadFileSync = fs.readFileSync;
     fs.readFileSync = (path, options) => {
       if (String(path) === readonlyPath && typeof readonlySource === 'string')
         return typeof options === 'string' ? readonlySource : Buffer.from(readonlySource);
+      if (String(path) === cacheConfigurationUrl && typeof cacheConfiguration === 'string')
+        return typeof options === 'string' ? cacheConfiguration : Buffer.from(cacheConfiguration);
       return originalReadFileSync(path, options);
     };
     const scopeUrl = new URL('./scripts/ci-recharge-scope.mjs', import.meta.url).href;
@@ -1932,5 +1937,140 @@ test('artifact-only controls keep the shared prefix and verify actual dependenci
         1
       );
     assert.ok(onlineMixed.every((call) => !call.includes('docker')));
+  }
+});
+
+test('HTML cache repair runs the real disposable Nginx regression once in guards only', () => {
+  const command = ['python3', '-B', 'scripts/acceptance-nginx-admin-cache.py', '--docker'];
+  for (const path of ['deploy/nginx/admin.conf', 'scripts/acceptance-nginx-admin-cache.py']) {
+    const calls = recordGuardCommands('admin', [path]);
+    assert.equal(calls.filter((row) => row.join(' ') === command.join(' ')).length, 1, path);
+    assert.equal(
+      recordGuardCommands('admin', [path], 'release-controls').some(
+        (row) => row.join(' ') === command.join(' ')
+      ),
+      false,
+      path
+    );
+  }
+  assert.equal(
+    recordGuardCommands('ci-only', ['scripts/ci-recharge-scope.mjs']).some((row) =>
+      row.includes('scripts/acceptance-nginx-admin-cache.py')
+    ),
+    false
+  );
+});
+
+const finiteHtmlCachePaths = [
+  'deploy/nginx/admin.conf',
+  'scripts/acceptance-nginx-admin-cache.py',
+  'scripts/ci-recharge-scope.mjs',
+  'scripts/ci-recharge-scope.test.mjs',
+  'scripts/ci-recharge-check.mjs',
+  'scripts/ci-recharge-check.test.mjs'
+];
+const realNginxCommand = ['python3', '-B', 'scripts/acceptance-nginx-admin-cache.py', '--docker'];
+const finiteHtmlCacheUiChecks = [
+  'check:admin-ui',
+  'check:v2-ui-language',
+  'check:v2-color-contrast',
+  'check:v2-table-standard',
+  'check:v2-loading-standard',
+  'check:v2-module-architecture',
+  'check:v2-isolation',
+  'check:v2-decimal-standard'
+];
+
+test('finite HTML cache guards finish only after common controls real Nginx and all UI rules', () => {
+  const calls = recordGuardCommands('admin', finiteHtmlCachePaths);
+  const common = calls.findIndex(
+    (row) =>
+      row[0] === 'node' && row[1] === '--test' && row.includes('scripts/ci-recharge-scope.test.mjs')
+  );
+  const nginx = calls.findIndex((row) => row.join(' ') === realNginxCommand.join(' '));
+  assert.ok(calls.findIndex((row) => row.includes('prettier')) < common);
+  assert.ok(calls.findIndex((row) => row.includes('eslint')) < common);
+  assert.ok(common >= 0 && nginx > common);
+  for (const check of finiteHtmlCacheUiChecks) {
+    const positions = calls.flatMap((row, index) =>
+      row.join(' ') === 'npm run ' + check ? [index] : []
+    );
+    assert.equal(positions.length, 1, check);
+    assert.ok(positions[0] > nginx, check);
+  }
+  assert.deepEqual(calls.at(-1), ['process-exit', 0]);
+  assert.equal(
+    calls.some((row) =>
+      row.some((arg) => typeof arg === 'string' && arg.startsWith('scripts/production-release/'))
+    ),
+    false
+  );
+  const admin = recordGuardCommands('admin', finiteHtmlCachePaths, 'admin');
+  assert.equal(admin.filter((row) => row.includes('@apple-business/admin')).length, 2);
+  assert.equal(
+    admin.some((row) => row[0] === 'process-exit'),
+    false
+  );
+});
+
+test('finite HTML cache guards never turn a failed common Nginx or UI command into success', () => {
+  const calls = recordGuardCommands('admin', finiteHtmlCachePaths);
+  const common = calls.find(
+    (row) =>
+      row[0] === 'node' && row[1] === '--test' && row.includes('scripts/ci-recharge-scope.test.mjs')
+  );
+  for (const command of [common, realNginxCommand, ['npm', 'run', 'check:v2-loading-standard']])
+    assert.throws(
+      () =>
+        recordGuardCommands('admin', finiteHtmlCachePaths, 'guards', {
+          failCommand: command.join(' ')
+        }),
+      /SYNTHETIC_COMMAND_FAILURE/
+    );
+});
+
+test('mixed source Docker dependency arbitrary Nginx and other modes keep original publication controls', () => {
+  for (const extra of [
+    'apps/api/src/id-business-v2/online-recharge/online-recharge.service.ts',
+    'apps/admin/src/v2/features/customers/CustomerPage.vue',
+    'apps/api/Dockerfile.mysql',
+    'apps/admin/Dockerfile',
+    'package-lock.json',
+    'deploy/nginx/other.conf'
+  ]) {
+    const calls = recordGuardCommands('admin', [...finiteHtmlCachePaths, extra]);
+    assert.ok(
+      calls.some((row) =>
+        row.includes('scripts/production-release/api-admin-pending-online.test.py')
+      ),
+      extra
+    );
+    assert.equal(
+      calls.some((row) => row[0] === 'process-exit'),
+      false,
+      extra
+    );
+  }
+  const changedConfiguration = readFileSync(
+    resolve(root, 'deploy/nginx/admin.conf'),
+    'utf8'
+  ).replace('    etag off;', '    etag on;');
+  for (const calls of [
+    recordGuardCommands('admin', finiteHtmlCachePaths, 'guards', {
+      cacheConfiguration: changedConfiguration
+    }),
+    recordGuardCommands('full', finiteHtmlCachePaths),
+    recordGuardCommands('ci-only', finiteHtmlCachePaths),
+    recordGuardCommands('admin', finiteHtmlCachePaths, 'release-controls')
+  ]) {
+    assert.ok(
+      calls.some((row) =>
+        row.includes('scripts/production-release/api-admin-pending-online.test.py')
+      )
+    );
+    assert.equal(
+      calls.some((row) => row[0] === 'process-exit'),
+      false
+    );
   }
 });
