@@ -317,9 +317,8 @@ try {
           createdAt: new Date().toISOString(),
           updatedAt: new Date().toISOString()
         };
-        if (path.endsWith('/auto-recharge/proxies/countries'))
-          return success(route, { items: ['US'] });
-        if (path.endsWith('/auto-recharge/proxies'))
+        if (path.endsWith('/proxy-pool/countries')) return success(route, { items: ['US'] });
+        if (path.endsWith('/proxy-pool'))
           return success(route, { items: [proxy], total: 1, page: 1, pageSize: 100 });
         if (path.endsWith('/auto-recharge/server-proxy-settings'))
           return success(route, { proxyId, proxy, legacyConfigured: false });

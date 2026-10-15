@@ -1,3 +1,8 @@
+import {
+  RechargeProxyService,
+  RechargeProxyRepository,
+  OnlineProxyPoolRepository
+} from '../proxy-pool/public-api';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ConfigService } from '@nestjs/config';
 import { ConfigModule } from '@nestjs/config';
@@ -40,7 +45,16 @@ suite('线上代充隔离MySQL事务验收', () => {
     HASH_SECRET: 'synthetic-blind-index-fixture'
   });
   const encryption = new FieldEncryptionService(config);
+  const poolRepository = new RechargeProxyRepository(db);
+  const pool = new RechargeProxyService(
+    poolRepository,
+    new V2CommandTransactionManager(db),
+    new V2TransactionalAuditService(),
+    encryption
+  );
+  const proxiesPool = new OnlineProxyPoolRepository(pool, poolRepository, encryption);
   const repository = new OnlineRechargeRepository(
+    proxiesPool,
     db,
     new V2TransactionalAuditService(),
     new V2CommandTransactionManager(db)
@@ -50,7 +64,7 @@ suite('线上代充隔离MySQL事务验收', () => {
   );
   const memory = new OnlineRechargeEphemeralCredentials(config);
   const assets = new OnlineRechargeAssetsService(
-    new OnlineRechargeAssetsRepository(repository, encryption, memory)
+    new OnlineRechargeAssetsRepository(proxiesPool, repository, encryption, memory)
   );
   const tasks = new OnlineRechargeTasksService(
     new OnlineRechargeTasksRepository(repository, settings, encryption, memory)
@@ -133,6 +147,8 @@ suite('线上代充隔离MySQL事务验收', () => {
       db.onlineRechargeCode,
       db.onlineRechargeCard,
       db.onlineRechargeProxy,
+      db.idBusinessV2ProxyAlias,
+      db.idBusinessV2RechargeProxy,
       db.onlineRechargeAddress,
       db.onlineRechargeConfig
     ]) {
@@ -951,5 +967,63 @@ suite('线上代充隔离MySQL事务验收', () => {
         maskedIp: '127.0.0.1'
       })
     ).rejects.toThrow('脱敏');
+  });
+  it('uses one pool for legacy online imports, country completion and canonical detection', async () => {
+    const url = 'socks5://fixture:fixture@gateway.example.test:1080';
+    await proxiesPool.action('import', { proxies: [url] }, operator);
+    const result = await pool.list();
+    expect(result.total).toBe(1);
+    const proxy = result.items[0]!;
+    expect(proxy.countryCode).toBe('');
+    expect(proxy.kind).toBeNull();
+    expect((await pool.countries()).items).toEqual([]);
+    await pool.update(
+      proxy.id,
+      { countryCode: 'PH', kind: 'mobile', remark: '共用代理' },
+      operator
+    );
+    expect((await pool.countries()).items).toEqual(['PH']);
+    expect((await pool.forCharge(proxy.id, operator, 'PH')).mode).toBe('static');
+    const oldId = '55555555-5555-4555-8555-555555555555';
+    await db.idBusinessV2ProxyAlias.create({ data: { oldId, proxyId: proxy.id } });
+    await repository.transaction('shared-proxy-test', async (tx) => {
+      expect((await proxiesPool.active(tx, oldId)).id).toBe(proxy.id);
+      await proxiesPool.result(tx, oldId, { ip: '8.8.8.8', latencyMs: 25, ok: true });
+    });
+    expect((await pool.list()).items[0]).toMatchObject({ exitIp: '8.8.8.8', latencyMs: 25 });
+    await pool.update(proxy.id, { status: 'disabled' }, operator);
+    await repository.transaction('shared-proxy-disabled', async (tx) => {
+      await expect(proxiesPool.active(tx, oldId)).rejects.toThrow('已停用');
+    });
+  });
+  it('keeps extraction links through legacy import and protects pending batch proxy references', async () => {
+    await assets.action(
+      'proxies',
+      'import',
+      {
+        proxies: [
+          'https://api.ipdeep.com/api/Pro/DynamicIp/GetIpByGenerateLink?id=synthetic-shared-only'
+        ]
+      },
+      operator
+    );
+    const proxy = (await pool.list()).items[0]!;
+    expect(proxy).toMatchObject({ connectionMode: 'extraction', protocol: 'http' });
+    const oldId = randomUUID();
+    await db.idBusinessV2ProxyAlias.create({ data: { oldId, proxyId: proxy.id } });
+    const task = await db.onlineRechargeTask.create({
+      data: {
+        operation: 'proxy_test',
+        message: 'synthetic pending batch',
+        payload: { ids: [oldId] }
+      }
+    });
+    await expect(pool.delete(proxy.id, operator)).rejects.toThrow('已用于充值任务');
+    await expect(
+      pool.update(proxy.id, { url: 'https://provider.example.test/another' }, operator)
+    ).rejects.toThrow();
+    await db.onlineRechargeTask.delete({ where: { id: task.id } });
+    await pool.delete(proxy.id, operator);
+    expect((await pool.list()).total).toBe(0);
   });
 });

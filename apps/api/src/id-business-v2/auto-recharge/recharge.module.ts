@@ -1,3 +1,4 @@
+import { ProxyPoolModule } from '../proxy-pool/public-api';
 import { BankRechargeSubscriptionReviewService } from './bank-recharge-subscription-review.service';
 import { BankRechargeLifecycleService } from './bank-recharge-lifecycle.service';
 import { BankRechargeLifecycleRepository } from './persistence/bank-recharge-lifecycle.repository';
@@ -18,8 +19,6 @@ import { RechargeLocalService } from './recharge-local.service';
 import { RechargeSettingsService } from './recharge-settings.service';
 import { RechargeSettingsRepository } from './persistence/recharge-settings.repository';
 import { RechargeProxyController } from './recharge-proxy.controller';
-import { RechargeProxyService } from './recharge-proxy.service';
-import { RechargeProxyRepository } from './persistence/recharge-proxy.repository';
 import { BankRechargeController } from './bank-recharge.controller';
 import { BankRechargeAccountDeliveryService } from './bank-recharge-account-delivery.service';
 import { IdBusinessV2WorkspaceModule } from '../workspace/public-api';
@@ -38,7 +37,12 @@ import { RechargeEmailCodeController } from './recharge-email-code.controller';
 import { RechargeEmailCodeService } from './recharge-email-code.service';
 import { BankRechargePricingService } from './bank-recharge-pricing.service';
 @Module({
-  imports: [IdBusinessV2RuntimeModule, IdBusinessV2FinanceModule, IdBusinessV2WorkspaceModule],
+  imports: [
+    ProxyPoolModule,
+    IdBusinessV2RuntimeModule,
+    IdBusinessV2FinanceModule,
+    IdBusinessV2WorkspaceModule
+  ],
   controllers: [
     RechargeEmailCodeController,
     RechargeController,
@@ -46,7 +50,7 @@ import { BankRechargePricingService } from './bank-recharge-pricing.service';
     RechargeProxyController,
     RechargeNameController
   ],
-  exports: [RechargeSettingsService, RechargeProxyService, BankRechargeRegistrationMirrorService],
+  exports: [RechargeSettingsService, ProxyPoolModule, BankRechargeRegistrationMirrorService],
   providers: [
     BankRechargeSubscriptionReviewService,
     BankRechargeLifecycleService,
@@ -75,9 +79,7 @@ import { BankRechargePricingService } from './bank-recharge-pricing.service';
     RechargeSettingsService,
     RechargeRepository,
     RechargeAddressRepository,
-    RechargeSettingsRepository,
-    RechargeProxyService,
-    RechargeProxyRepository
+    RechargeSettingsRepository
   ]
 })
 export class RechargeModule {}

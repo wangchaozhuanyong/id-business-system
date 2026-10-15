@@ -1,3 +1,4 @@
+import { isSharedProxyPoolOnly, sharedProxyAdminCommand } from './ci-shared-proxy-scope.mjs';
 import { execFileSync } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
@@ -50,7 +51,18 @@ const changed = execFileSync('git', ['diff', '--name-only', base, 'HEAD'], { enc
   .trim()
   .split('\n')
   .filter(Boolean);
+const sharedPoolOnly =
+  mode === 'recharge' &&
+  changed.some((path) => path.includes('/proxy-pool/')) &&
+  isSharedProxyPoolOnly(
+    changed,
+    execFileSync('git', ['show', `${base}:apps/api/prisma-mysql/schema.prisma`], {
+      encoding: 'utf8'
+    }),
+    readFileSync('apps/api/prisma-mysql/schema.prisma', 'utf8')
+  );
 if (
+  !sharedPoolOnly &&
   ['guards', 'release-controls'].includes(part) &&
   changed.some((p) => rechargeAvailabilityControlPaths.includes(p))
 ) {
@@ -432,6 +444,15 @@ if (part === 'guards') {
   ];
   run('node', ['--test', ...commonControlTests]);
 }
+// The shared pool changes business source and an additive migration. Keep all
+// applicable checks; unrelated historical publishers are unchanged inputs.
+if (part === 'guards' && sharedPoolOnly) {
+  run('node', ['--test', 'scripts/ci-shared-proxy-scope.test.mjs', productionDatabaseAccessTest]);
+  npm('run', 'test:online-recharge:controls');
+  for (const check of backendArchitectureGuardChecks(mode, changed)) npm('run', check);
+  console.log('Shared pool controls verified; API, UI and disposable MySQL run in their own jobs.');
+  process.exit(0);
+}
 // The finite diagnostic controls have their own native tests above. The common
 // format, lint and CI-selector contracts have also run. Business source remains
 // subject to the formal workflow's immutable source and prior-validation proof.
@@ -799,7 +820,8 @@ if (releaseArtifactOnly && ['guards', 'release-controls'].includes(part)) {
   onlineBackupSourceRecoveryControls();
   backupRetentionProtectionControls();
 } else if (part === 'admin') {
-  for (const args of adminCheckCommands(mode, changed)) npm(...args);
+  for (const args of adminCheckCommands(mode, changed))
+    npm(...(sharedPoolOnly ? sharedProxyAdminCommand(args) : args));
 } else if (part === 'api') {
   npm('run', 'prisma:mysql:generate');
   npm('run', 'prisma:mysql:validate');
@@ -824,6 +846,7 @@ if (releaseArtifactOnly && ['guards', 'release-controls'].includes(part)) {
       '--',
       'src/id-business-v2/auto-recharge',
       ...(hasAppleMailboxScope(changed) ? ['src/id-business-v2/auto-registration'] : []),
+      ...(changed.some((p) => p.includes('/proxy-pool/')) ? ['src/id-business-v2/proxy-pool'] : []),
       ...(changed.some((p) => p.startsWith('apps/api/src/id-business-v2/online-recharge/'))
         ? ['src/id-business-v2/online-recharge']
         : []),
@@ -886,7 +909,14 @@ if (releaseArtifactOnly && ['guards', 'release-controls'].includes(part)) {
         '--python=' + resolve('.runtime/auto-registration/venv/bin/python')
       ]);
     }
-  } else run('python3', ['scripts/ci-recharge-migration.py']);
+  } else {
+    run('python3', ['scripts/ci-recharge-migration.py']);
+    if (changed.some((path) => path.includes('/proxy-pool/'))) {
+      npm('run', 'prisma:mysql:generate');
+      shared();
+      run('node', ['scripts/acceptance-v2-shared-proxy-mysql.mjs']);
+    }
+  }
 } else if (part === 'connector') {
   const workerDirectory = 'apps/api/src/id-business-v2/auto-recharge/worker';
   const fullPro = changed.some((path) =>
@@ -957,7 +987,11 @@ if (releaseArtifactOnly && ['guards', 'release-controls'].includes(part)) {
     workerOptions
   );
 } else if (part === 'security') {
-  if (
+  if (sharedPoolOnly) {
+    npm('ci', '--no-audit');
+    npm('run', 'prisma:mysql:generate');
+    npm('run', 'acceptance:v2-production-database-access');
+  } else if (
     mode === 'ci-only' &&
     changed.some((path) =>
       [productionDatabaseAccessHelper, productionDatabaseAccessAcceptance].includes(path)

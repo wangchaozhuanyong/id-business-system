@@ -363,7 +363,7 @@ try {
   failSave = false;
   await drawer.getByRole('button', { name: '保存', exact: true }).click();
   await drawer.waitFor({ state: 'hidden' });
-  await page.goto(`${url}/v2/auto-recharge/chatgpt-accounts`);
+  await page.goto(`${url}/v2/account-settings/chatgpt-accounts`);
   await page.getByText('银行卡信息', { exact: true }).waitFor();
   await page.getByRole('button', { name: '删除卡', exact: true }).click();
   const dialog = page.getByRole('dialog', { name: '删除开通银行卡' });

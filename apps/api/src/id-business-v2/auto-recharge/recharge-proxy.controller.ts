@@ -21,7 +21,7 @@ export class RechargeProxyController {
       status?: string;
     }
   ) {
-    return this.proxies.list(query);
+    return this.proxies.list({ ...query, completeOnly: 'true' });
   }
 
   @Get('countries')
