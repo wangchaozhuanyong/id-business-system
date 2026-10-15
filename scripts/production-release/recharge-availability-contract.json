@@ -72,8 +72,8 @@
     "apps/api/src/id-business-v2/proxy-pool/public-api.ts": "8eb0ae62117c4924279257775c5cef8acd31f9115ee621c1d3030c1addc8859a",
     "apps/api/src/id-business-v2/proxy-pool/validation.ts": "e7b0c12a932fe67651a7c0e04d04bb45d0c9346d3097d3ef56d1d82dc0378ca7"
   },
-  "manifestSha256": "97ebfbb2e18eb09c2ad5803084fc1da5c5a9154815dfca131f04d69879edfef4",
-  "observationCommandId": "fbe9558d-5c7c-40e3-8978-61370b9cb457",
+  "manifestSha256": "ed31248f333a46ab23fb8a87d9f2abb751905b3b5b49015c78dd9fd2c882a1f4",
+  "observationCommandId": "2e12c666-2ef7-4bac-b2c8-09c540d50329",
   "preservedAdminCommit": "4aa49436239ab57e9deb3b5890e645ceeef25149",
   "publicFiles": {
     "_headers": "d4c6717ea046cf5b22007827eb6e4cebf372f13fd07031594ea11174bb4a4a18",
@@ -1124,7 +1124,7 @@
     "apps/api/src/id-business-v2/auto-recharge/worker/pay.py": "dfd5d5cc51e055798ac89cb4683743cdc2d9227ceec08497c3239f70f72a2b32",
     "apps/api/src/id-business-v2/auto-recharge/worker/subscription_cycle.py": "7f6c5dd05db4d72922965f83c88e61ab4c0d4b781933ab2cdaf0064904997019",
     "apps/api/src/id-business-v2/auto-recharge/worker/test_declined_resolution.py": "971b0e2da304314c86e30ccc70bdef749d21646effa4f4548765ea37747f254b",
-    "docs/AUTO_RECHARGE_PAYMENT_AVAILABILITY_20261015.md": "270c68b71279e3696b48ffd41ab3fc4c4d1a4dc762cc40d029db01e7abd03a22",
+    "docs/AUTO_RECHARGE_PAYMENT_AVAILABILITY_20261015.md": "4cf491ba8139db7f5f66077b4f2f14ed6acedb626f679b7f628536fa6e68e925",
     "packages/shared/src/v2/auto-recharge.ts": "da6fbc0efb928d99848e3661043a3583af912692650a4264b7b8fe5a509397f6"
   },
   "version": 1,
