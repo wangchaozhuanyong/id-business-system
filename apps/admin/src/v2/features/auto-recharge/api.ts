@@ -141,6 +141,11 @@ export const rechargeApi = {
       })
     );
   },
+  generateAddresses(count = 10) {
+    return request<{ count: number; items: V2RechargeAddress[] }>(
+      http.post('/id-business-v2/auto-recharge/addresses/generate', { count })
+    );
+  },
   importAddresses(streets: string[]) {
     return request<ImportV2RechargeAddressesResult>(
       http.post('/id-business-v2/auto-recharge/addresses/import', { streets })

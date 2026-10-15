@@ -8,6 +8,8 @@ import { PrismaService } from '../../../common/prisma/prisma.service';
 import type { V2CommandTransaction } from '../../runtime/public-api';
 import type { V2RechargeAddressListQuery, V2RechargeAddressStatus } from '@apple-business/shared';
 import { RECHARGE_ADDRESS_LOCATION } from '../recharge-address-validation';
+import { randomUUID } from 'node:crypto';
+import { generateRechargeBillingAddress } from '../recharge-billing-generator';
 
 @Injectable()
 export class RechargeAddressRepository {
@@ -147,6 +149,28 @@ export class RechargeAddressRepository {
       })),
       skipDuplicates: true
     });
+  }
+
+  async generate(tx: V2CommandTransaction, ownerId: string, count: number) {
+    await assertEmployeeBusinessWriter(tx, ownerId);
+    const items: Awaited<ReturnType<typeof tx.idBusinessV2RechargeAddress.findMany>> = [];
+    // 唯一街道冲突只补缺额，不复用或启用旧记录；失败由外层事务整体撤销。
+    for (let attempt = 0; attempt < 3 && items.length < count; attempt++) {
+      const data = Array.from({ length: count - items.length }, () => ({
+        ...generateRechargeBillingAddress(),
+        id: randomUUID(),
+        ownerId,
+        status: 'unused'
+      }));
+      await tx.idBusinessV2RechargeAddress.createMany({ data, skipDuplicates: true });
+      items.push(
+        ...(await tx.idBusinessV2RechargeAddress.findMany({
+          where: { ownerId, id: { in: data.map((item) => item.id) } }
+        }))
+      );
+    }
+    if (items.length !== count) throw new ConflictException('本次生成的街道重复，请重新生成');
+    return items;
   }
 
   async updateStatus(

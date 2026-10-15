@@ -1,6 +1,6 @@
 <template>
   <section class="v2-page-layout v2-records-page recharge-address-page">
-    <V2PageContext description="导入和管理自动充值使用的街道地址。">
+    <V2PageContext description="生成、导入和管理比特充值独立使用的账单地址。">
       <template #meta
         ><span>自动充值</span><span aria-hidden="true">/</span><span>地址管理</span></template
       >
@@ -13,14 +13,41 @@
 
     <V2ListToolbar
       class="recharge-address-toolbar"
-      title="批量导入"
-      aria-label="地址导入与筛选"
+      title="生成与导入"
+      aria-label="地址生成、导入与筛选"
       :help="[
-        '地区固定为美国（官网选择 United States）：Portland、OR、97204。',
-        '仅支持 TXT 文件，每行填写一个街道地址，每次最多 2000 行。',
-        '充值页只提供未使用地址；开通成功后，系统自动标记为已使用。'
+        '可一键生成 1 至 100 条美国地址模板，城市、州与邮编配套填写；付款前请核对账单资料。',
+        'TXT 导入仍固定为 Portland、OR、97204，每行一个街道，每次最多 2000 行。',
+        '比特充值与线上代充各自管理资料，互不占用；已使用地址保留历史，停用地址不可选。'
       ]"
     >
+      <el-form
+        aria-label="生成账单地址"
+        label-position="left"
+        label-width="90px"
+        require-asterisk-position="right"
+        @submit.prevent="generateAddresses"
+      >
+        <el-form-item label="生成数量" required>
+          <div class="recharge-address-file-row">
+            <el-input-number
+              v-model="generationCount"
+              :min="1"
+              :max="100"
+              :precision="0"
+              :disabled="generating || importing"
+              aria-label="生成地址数量"
+            />
+            <AppButton
+              variant="primary"
+              :loading="generating"
+              :disabled="generating || importing"
+              @click="generateAddresses"
+              >一键生成地址</AppButton
+            >
+          </div>
+        </el-form-item>
+      </el-form>
       <el-form
         aria-label="地址文件导入"
         label-position="left"
@@ -32,14 +59,14 @@
           <div class="recharge-address-file-row">
             <label
               class="recharge-address-file-picker"
-              :class="{ 'is-disabled': importing }"
+              :class="{ 'is-disabled': importing || generating }"
               :title="fileName || '选择 TXT 文件'"
             >
               <span>{{ fileName || '选择 TXT 文件' }}</span>
               <input
                 type="file"
                 accept=".txt,text/plain"
-                :disabled="importing"
+                :disabled="importing || generating"
                 aria-label="选择街道地址文件"
                 @change="loadFile"
               />
@@ -48,7 +75,7 @@
             <AppButton
               variant="primary"
               :loading="importing"
-              :disabled="importing"
+              :disabled="importing || generating"
               @click="importAddresses"
               >导入地址</AppButton
             >
@@ -112,7 +139,9 @@
             <div class="v2-records-empty">
               <strong>暂无地址</strong>
               <span>{{
-                keyword || status !== 'all' ? '当前筛选条件下没有数据' : '请先导入 TXT 地址文件'
+                keyword || status !== 'all'
+                  ? '当前筛选条件下没有数据'
+                  : '可一键生成地址或导入 TXT 地址文件'
               }}</span>
             </div>
           </template>
@@ -246,6 +275,8 @@ const { pendingStreets, fileName } = useV2SessionDraft('recharge-address-import'
   fileName: ref('')
 }));
 const importing = ref(false);
+const generating = ref(false);
+const generationCount = useV2SessionDraft('auto-recharge-address-generation-count', () => ref(10));
 const updating = ref(false);
 const operationMessage = ref('');
 const operationError = ref('');
@@ -319,7 +350,7 @@ async function loadFile(event: Event) {
   pendingStreets.value = streets;
 }
 async function importAddresses() {
-  if (importing.value) return;
+  if (importing.value || generating.value) return;
   if (!pendingStreets.value.length) {
     operationError.value = '请先选择包含街道地址的 TXT 文件';
     return;
@@ -338,6 +369,30 @@ async function importAddresses() {
     operationError.value = getApiErrorMessage(cause);
   } finally {
     importing.value = false;
+  }
+}
+async function generateAddresses() {
+  if (generating.value || importing.value) return;
+  if (
+    !Number.isInteger(generationCount.value) ||
+    generationCount.value < 1 ||
+    generationCount.value > 100
+  ) {
+    operationError.value = '每次可生成 1 至 100 条地址';
+    return;
+  }
+  generating.value = true;
+  operationError.value = '';
+  operationMessage.value = '';
+  try {
+    const result = await rechargeApi.generateAddresses(generationCount.value);
+    operationMessage.value = `已生成 ${result.count} 条账单地址，付款前请核对资料。`;
+    page.value = 1;
+    await query.refresh();
+  } catch (cause) {
+    operationError.value = getApiErrorMessage(cause);
+  } finally {
+    generating.value = false;
   }
 }
 function openStatusDialog(address: V2RechargeAddress, nextStatus: V2RechargeAddressStatus) {

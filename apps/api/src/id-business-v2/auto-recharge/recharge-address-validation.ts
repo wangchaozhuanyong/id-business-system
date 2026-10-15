@@ -14,6 +14,22 @@ export const RECHARGE_ADDRESS_LOCATION = Object.freeze({
 
 const streetPattern = /^[A-Za-z0-9][A-Za-z0-9 .,'#/-]{1,179}$/;
 
+export function validateRechargeAddressGeneration(value: unknown) {
+  if (!value || typeof value !== 'object' || Array.isArray(value))
+    throw new BadRequestException('地址生成资料无效');
+  const input = value as Record<string, unknown>;
+  const count = input.count === undefined ? 10 : input.count;
+  if (
+    Object.keys(input).some((key) => key !== 'count') ||
+    typeof count !== 'number' ||
+    !Number.isInteger(count) ||
+    count < 1 ||
+    count > 100
+  )
+    throw new BadRequestException('每次可生成 1 至 100 条地址');
+  return { count };
+}
+
 function normalizeStreet(value: string) {
   return value.trim().replace(/\s+/g, ' ');
 }

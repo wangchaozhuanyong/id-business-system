@@ -25,6 +25,7 @@ import {
 } from './recharge-form';
 import { useRechargeBrowserSettings, type ConnectorStatus } from './useRechargeBrowserSettings';
 import { useRechargeNameMatch } from './useRechargeNameMatch';
+import { useRechargeAddressGeneration } from './useRechargeAddressGeneration';
 import { bankRechargeApi } from './bank-recharge-api';
 import { canSelectRechargeAccount } from './recharge-account-options';
 import { currencyOptions } from './recharge-presentation';
@@ -513,20 +514,60 @@ export function useAutoRecharge(options: { clearPaymentValidation?: () => void }
   const nameMatch = useRechargeNameMatch(
     details,
     selectedPaymentCardId,
-    formLocked,
+    computed(() => formLocked.value || active.value || operationMode.value !== 'payment'),
     (addressId, expectedManualRevision) => {
       selectedCardBillingAddressId.value = addressId ?? '';
-      if (
-        addressId &&
-        expectedManualRevision === manualAddressSelectionRevision.value &&
-        availableAddresses.value.some((address) => address.id === addressId)
-      ) {
+      if (addressId && expectedManualRevision === manualAddressSelectionRevision.value) {
         addressSource.value = 'library';
-        selectedAddressId.value = addressId;
+        selectedAddressId.value = availableAddresses.value.some(
+          (address) => address.id === addressId
+        )
+          ? addressId
+          : '';
       }
     },
     () => manualAddressSelectionRevision.value
   );
+  const canGenerateAddress = computed(
+    () =>
+      operationMode.value === 'payment' &&
+      !formLocked.value &&
+      !active.value &&
+      !selectedCardBillingAddressId.value &&
+      !nameMatch.loading.value &&
+      !nameMatch.error.value
+  );
+  const addressGeneration = useRechargeAddressGeneration({
+    allowed: canGenerateAddress,
+    automatic: computed(
+      () =>
+        canGenerateAddress.value &&
+        addressQuery.phase.value === 'ready' &&
+        !addressQuery.error.value &&
+        Boolean(details.value.name) &&
+        !rechargeFieldError('number', details.value.number) &&
+        availableAddresses.value.length === 0
+    ),
+    context: () => [
+      details.value.number.replace(/[ -]/g, ''),
+      selectedPaymentCardId.value,
+      selectedCardBillingAddressId.value,
+      manualAddressSelectionRevision.value,
+      operationMode.value,
+      formLocked.value,
+      active.value,
+      sessionCoordinator.identityEpoch.value
+    ],
+    addresses: availableAddresses,
+    refresh: () => addressQuery.refresh(),
+    select: (id) => {
+      addressSource.value = 'library';
+      selectedAddressId.value = id;
+    }
+  });
+  function generateBillingAddress() {
+    return addressGeneration.generate();
+  }
   let paymentEditVersion = 0;
   watch(
     [
@@ -572,6 +613,7 @@ export function useAutoRecharge(options: { clearPaymentValidation?: () => void }
         proxySelectionReady.value &&
         !loginCountryRestriction.value &&
         !nameMatch.error.value &&
+        !addressGeneration.generating.value &&
         authorizeSinglePayment.value &&
         rechargeDetailsReady(details.value) &&
         currentSettingsReady.value
@@ -803,8 +845,11 @@ export function useAutoRecharge(options: { clearPaymentValidation?: () => void }
         : '请从 ChatGPT 账号资料中选择已保存登录密码的账号。';
     if (operationMode.value === 'open_browser')
       return '核对窗口名称后，点击即可打开比特浏览器并自动登录。';
-    if (nameMatch.loading.value) return '正在从姓名库匹配账单姓名，请稍候。';
+    if (nameMatch.loading.value) return '正在填写银行卡账单姓名，请稍候。';
     if (nameMatch.error.value) return '账单姓名匹配失败，请在账单姓名处重试。';
+    if (addressGeneration.generating.value) return '正在生成并填写账单地址，请稍候。';
+    if (addressGeneration.error.value && !selectedAddress.value)
+      return addressGeneration.error.value;
     const fieldErrors = rechargeFields.flatMap((field) => {
       const cardField = rechargePaymentFields.includes(field);
       const addressField = !cardField && field.key !== 'name' && field.key !== 'email';
@@ -1704,10 +1749,14 @@ export function useAutoRecharge(options: { clearPaymentValidation?: () => void }
   return {
     query,
     addressQuery,
+    addressGeneration,
+    canGenerateAddress,
+    generateBillingAddress,
     jobs,
     availableAddresses,
     selectedAddress,
     selectedAddressId,
+    selectedCardBillingAddressId,
     addressSource,
     markAddressSelectionManual,
     selected,

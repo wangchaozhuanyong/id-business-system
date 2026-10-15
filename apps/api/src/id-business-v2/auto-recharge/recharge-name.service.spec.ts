@@ -1,5 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import { RechargeNameService } from './recharge-name.service';
+const { generateName } = vi.hoisted(() => ({ generateName: vi.fn() }));
+vi.mock('./recharge-billing-generator', () => ({ generateRechargeBillingName: generateName }));
 const operator = { id: 'operator' } as never;
 const encode = (value: string) => `encrypted:${value}`;
 function pan(seed: number) {
@@ -15,6 +17,7 @@ function pan(seed: number) {
   throw new Error('invalid fixture');
 }
 function setup() {
+  generateName.mockReset().mockReturnValue('James Smith');
   const names = ['Alice Example', 'Bob Example', 'Chen Example'].map((name, sequence) => ({
     id: `name-${sequence}`,
     sequence,
@@ -67,30 +70,44 @@ function setup() {
     )
   };
 }
-describe('姓名循环及银行卡稳定绑定', () => {
-  it('未使用优先，使用完后从头按顺序循环', async () => {
-    const { service, names } = setup();
-    const output = [];
-    for (let i = 1; i <= 7; i++)
-      output.push((await service.match({ number: pan(i) }, operator)).name);
-    expect(output).toEqual([
-      'Alice Example',
-      'Bob Example',
-      'Chen Example',
-      'Alice Example',
-      'Bob Example',
-      'Chen Example',
-      'Alice Example'
-    ]);
-    expect(names.map((name) => name.matchCount)).toEqual([3, 2, 2]);
+describe('自动生成姓名及银行卡稳定绑定', () => {
+  it('空姓名库也能生成新卡姓名，保存加密临时绑定，不消费原姓名库', async () => {
+    const { service, names, repository, bindings, audit } = setup();
+    names.forEach((name) => (name.active = false));
+    const number = pan(1);
+    expect(await service.match({ number }, operator)).toMatchObject({
+      name: 'James Smith',
+      confirmed: false
+    });
+    expect(bindings.get(`hash:${number}`)).toMatchObject({
+      nameEncrypted: encode('James Smith'),
+      confirmed: false
+    });
+    expect(repository.next).not.toHaveBeenCalled();
+    expect(repository.update).not.toHaveBeenCalled();
+    expect(JSON.stringify(audit.append.mock.calls)).not.toContain('James Smith');
   });
-  it('重复输入同一完整卡号不推进姓名顺序，空格格式不改变绑定', async () => {
-    const { service, repository } = setup();
+  it('重复输入同一完整卡号保留姓名，空格格式不改变绑定，不同卡号独立生成', async () => {
+    const { service } = setup();
+    generateName.mockReturnValueOnce('James Smith').mockReturnValueOnce('Mary Johnson');
     const first = await service.match({ number: pan(1) }, operator);
     const repeated = await service.match({ number: pan(1).replace(/(.{4})/g, '$1 ') }, operator);
     expect(repeated.name).toBe(first.name);
-    expect(repository.next).toHaveBeenCalledTimes(1);
-    expect((await service.match({ number: pan(2) }, operator)).name).toBe('Bob Example');
+    expect(generateName).toHaveBeenCalledOnce();
+    expect((await service.match({ number: pan(2) }, operator)).name).toBe('Mary Johnson');
+  });
+  it('保留未确认的原姓名库分配，不用生成值覆盖', async () => {
+    const { service, bindings } = setup();
+    bindings.set(`hash:${pan(1)}`, {
+      nameEncrypted: encode('Legacy Person'),
+      confirmed: false,
+      nameId: 'legacy'
+    });
+    expect(await service.match({ number: pan(1) }, operator)).toMatchObject({
+      name: 'Legacy Person',
+      confirmed: false
+    });
+    expect(generateName).not.toHaveBeenCalled();
   });
   it('优先使用旧银行卡姓名，姓名库即使没有可用姓名也不重新分配', async () => {
     const { service, repository, names } = setup();
@@ -108,14 +125,12 @@ describe('姓名循环及银行卡稳定绑定', () => {
     });
     expect(repository.next).not.toHaveBeenCalled();
   });
-  it('停用姓名跳过，空库和停用卡明确失败', async () => {
-    const { service, names, repository } = setup();
-    names[0].active = false;
-    expect((await service.match({ number: pan(1) }, operator)).name).toBe('Bob Example');
-    names.forEach((name) => (name.active = false));
-    await expect(service.match({ number: pan(2) }, operator)).rejects.toThrow('暂无启用姓名');
+  it('停用卡不能生成或覆盖姓名', async () => {
+    const { service, repository } = setup();
     repository.card.mockResolvedValue({ active: false });
     await expect(service.match({ number: pan(3) }, operator)).rejects.toThrow('已停用');
+    expect(generateName).not.toHaveBeenCalled();
+    expect(repository.bind).not.toHaveBeenCalled();
   });
   it('银行卡资料删除后通过盲索引仍能识别已确认姓名，审计不含完整卡号或姓名', async () => {
     const { service, audit } = setup();

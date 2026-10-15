@@ -6,7 +6,7 @@
       readonly
       maxlength="120"
       name="recharge-entry-name"
-      placeholder="输入或选择银行卡后，自动从姓名库填入"
+      placeholder="输入或选择银行卡后，自动填写账单姓名"
       autocomplete="off"
     />
     <p v-if="nameLoading" role="status">正在匹配账单姓名…</p>
@@ -14,34 +14,51 @@
       {{ nameError }} <AppButton size="small" @click="nameMatch?.retry()">重试</AppButton>
     </p>
     <p v-else-if="nameConfirmed" class="recharge-note">已回填这张银行卡的绑定账单姓名</p>
-    <p v-else class="recharge-note">新卡按姓名库录入顺序自动填入，用完后从第一个循环。</p>
+    <p v-else class="recharge-note">新卡自动生成英文账单姓名；再次使用同一张卡时保留原姓名。</p>
   </el-form-item>
   <el-form-item class="recharge-address-select recharge-full-row" label="地址库" required>
-    <el-select
-      v-model="addressId"
-      aria-label="选择真实账单地址"
-      name="recharge-billing-entry"
-      autocomplete="off"
-      filterable
-      :loading="loading"
-      placeholder="选择与银行卡相符的账单地址"
-      no-data-text="没有可用账单地址"
-      @change="$emit('select')"
-    >
-      <el-option
-        v-for="address in addresses"
-        :key="address.id"
-        :label="address.line1"
-        :value="address.id"
-      />
-    </el-select>
+    <div class="recharge-billing-address-row">
+      <el-select
+        v-model="addressId"
+        aria-label="选择真实账单地址"
+        name="recharge-billing-entry"
+        autocomplete="off"
+        filterable
+        :loading="loading"
+        placeholder="选择与银行卡相符的账单地址"
+        no-data-text="没有可用账单地址"
+        @change="$emit('select')"
+      >
+        <el-option
+          v-for="address in addresses"
+          :key="address.id"
+          :label="address.line1"
+          :value="address.id"
+        />
+      </el-select>
+      <AppButton
+        variant="soft"
+        :loading="generating"
+        :disabled="!canGenerate || generating"
+        @click="$emit('generate')"
+        >一键生成并使用</AppButton
+      >
+    </div>
   </el-form-item>
+  <p v-if="generationError" class="recharge-error" role="alert">{{ generationError }}</p>
   <p v-if="source === 'library' && error" class="recharge-error" role="alert">
     {{ error }} <AppButton link variant="primary" @click="$emit('retry')">重试</AppButton>
   </p>
-  <p v-else-if="source === 'library' && !addresses.length" class="recharge-note" role="status">
-    暂无可用地址，请先到“地址管理”核对或启用地址。
+  <p v-else-if="addressBound && !selectedAddress" class="recharge-error" role="alert">
+    这张卡的绑定地址不可用，请到地址管理核对原地址；系统不会自动替换。
   </p>
+  <p v-else-if="source === 'library' && !addresses.length" class="recharge-note" role="status">
+    暂无可用地址，输入银行卡后自动生成，也可点击“一键生成并使用”。
+  </p>
+  <p v-if="addressBound && selectedAddress" class="recharge-note">
+    这张卡已有绑定账单地址，系统沿用原资料。
+  </p>
+  <p class="recharge-note">生成地址为模板，请在付款前核对。地址不会改变代理国家或付款币种。</p>
   <dl v-if="selectedAddress" class="recharge-fixed-address">
     <div>
       <dt>国家</dt>
@@ -83,14 +100,33 @@ const props = defineProps<{
   selectedAddress?: V2RechargeAddress;
   loading: boolean;
   error: string;
+  generating?: boolean;
+  generationError?: string;
+  canGenerate?: boolean;
+  addressBound?: boolean;
 }>();
 const nameLoading = computed(() => props.nameMatch?.loading.value ?? false);
 const nameError = computed(() => props.nameMatch?.error.value ?? '');
 const nameConfirmed = computed(() => props.nameMatch?.confirmed.value ?? false);
-defineEmits<{ retry: []; select: [] }>();
+defineEmits<{ retry: []; select: []; generate: [] }>();
 </script>
 
 <style scoped>
+.recharge-billing-address-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--v2-layout-control-gap);
+  width: 100%;
+  min-width: 0;
+}
+.recharge-billing-address-row > .el-select {
+  flex: 1 1 220px;
+  min-width: 0;
+}
+.recharge-billing-address-row > .app-button {
+  flex-shrink: 0;
+}
 .recharge-fixed-address {
   grid-column: 1 / -1;
   min-width: 0;

@@ -1,7 +1,7 @@
 <template>
   <section class="v2-page-layout v2-records-page bank-recharge-page">
     <V2PageContext
-      description="新银行卡优先匹配未使用姓名，用完后按录入顺序循环。旧卡保持原绑定；停用姓名不参与新匹配。"
+      description="保留已录入姓名和历史绑定。比特充值新卡自动生成英文账单姓名，不再依赖姓名库；旧卡保持原姓名。"
     >
       <template #filters>
         <el-form

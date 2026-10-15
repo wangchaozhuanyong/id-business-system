@@ -214,6 +214,10 @@
                   :operation-mode="operationMode"
                   :addresses="availableAddresses"
                   :selected-address="selectedAddress"
+                  :generating="addressGeneration.generating.value"
+                  :generation-error="addressGeneration.error.value"
+                  :can-generate="canGenerateAddress"
+                  :address-bound="Boolean(selectedCardBillingAddressId)"
                   :loading="
                     addressQuery.phase.value === 'initial-loading' ||
                     addressQuery.phase.value === 'refreshing'
@@ -223,6 +227,7 @@
                   "
                   @retry="addressQuery.refresh"
                   @select="markAddressSelectionManual"
+                  @generate="generateBillingAddress"
                 />
               </div>
             </section>
@@ -374,10 +379,14 @@ const operationModeLabels = {
 const {
   query,
   addressQuery,
+  addressGeneration,
+  canGenerateAddress,
+  generateBillingAddress,
   jobs,
   availableAddresses,
   selectedAddress,
   selectedAddressId,
+  selectedCardBillingAddressId,
   markAddressSelectionManual,
   addressSource,
   selected,

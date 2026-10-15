@@ -21,6 +21,7 @@ import { RechargeAddressRepository } from './persistence/recharge-address.reposi
 import { consumeRechargeAddress } from './recharge-address-consumption';
 import {
   RECHARGE_ADDRESS_LOCATION,
+  validateRechargeAddressGeneration,
   validateRechargeAddressImport,
   validateRechargeAddressListQuery,
   validateRechargeAddressStatus
@@ -91,6 +92,26 @@ export class RechargeService {
     const query = validateRechargeAddressListQuery(value);
     const result = await this.addressRepository.list(operator.id, query);
     return { ...result, page: query.page, pageSize: query.pageSize };
+  }
+
+  async generateAddresses(value: unknown, operator: AuthenticatedUser) {
+    const { count } = validateRechargeAddressGeneration(value);
+    return this.transactions.execute(
+      async (tx) => {
+        const items = await this.addressRepository.generate(tx, operator.id, count);
+        await this.audit.append(tx, {
+          userId: operator.id,
+          module: 'id_business_v2',
+          action: 'id_business_v2.auto_recharge.addresses.generate',
+          objectType: 'recharge_address_batch',
+          objectId: randomUUID(),
+          afterData: { count: items.length, ids: items.map((item) => item.id) },
+          remark: '生成比特充值账单地址'
+        });
+        return { count: items.length, items };
+      },
+      { changedScopes: ['auto-recharge'], requestId: randomUUID(), operator, retryMode: 'none' }
+    );
   }
 
   async importAddresses(value: unknown, operator: AuthenticatedUser) {
