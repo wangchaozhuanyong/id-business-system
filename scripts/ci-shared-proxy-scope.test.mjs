@@ -1,6 +1,4 @@
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
-import { execFileSync } from 'node:child_process';
 import { test } from 'node:test';
 import {
   isSharedProxyPoolPaths,
@@ -9,12 +7,9 @@ import {
 } from './ci-shared-proxy-scope.mjs';
 import { checkMode, needsOnlineRechargeCiBuild, selectedParts } from './ci-recharge-scope.mjs';
 const schemaPath = 'apps/api/prisma-mysql/schema.prisma';
-const after = readFileSync(schemaPath, 'utf8');
-const before = execFileSync(
-  'git',
-  ['show', '5bf15a507d46ccfc76e2f7e737ea7ef38d0cc32e:' + schemaPath],
-  { encoding: 'utf8' }
-);
+const before = 'model User {\n  id String\n}\n\nmodel IdBusinessV2RechargeProxy {\n id String\n}\n';
+const after =
+  'model User {\n  id String\n}\n\nmodel IdBusinessV2RechargeProxy {\n id String\n remark String?\n}\n\nmodel IdBusinessV2ProxyAlias {\n oldId String\n}\n';
 const paths = [
   'apps/api/src/id-business-v2/proxy-pool/proxy-pool.module.ts',
   schemaPath,
