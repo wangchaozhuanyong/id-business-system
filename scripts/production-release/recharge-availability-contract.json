@@ -20,10 +20,10 @@
   "backupNormalizerPath": "/opt/id-business-v2/releases/20261015T091200Z-e197218c8b38-recharge-record/scripts/mysql-dump-restore-normalizer.sed",
   "configurationSha256": {
     ".env.aws.production": "fd3737df209c871945f76f51323064e69f1352e78c12041379f1ed085281aa54",
-    "compose.release.json": "26c0fc7ddd8da87943d01275cf226d421354e24a3ff277ad43200a40f60e4e0e",
+    "compose.release.json": "fc965d96d41a5c3effce575c0c74eef7c035640ee5beda46fd51de297f94b098",
     "docker-compose.aws-mysql.yml": "953c6264f157b00218f2a019d5e2c0b6bc4a34f687f2ec42ad782e0009e7672c"
   },
-  "current": "/opt/id-business-v2/releases/20261015T130203Z-upgrade-2a3efa50caec",
+  "current": "/opt/id-business-v2/releases/20261015T131558Z-manifest-b86fda4114f1",
   "databaseValidationNative": {
     "artifactDigest": "sha256:7053a0d8988da2bde1caae5d6c040bc29f7dbae9bf812e024a9a9b547f9f4300",
     "artifactId": 11974149986,
@@ -40,8 +40,8 @@
     "stopping": false
   },
   "expectedCurrent": "04aa234505adccfe295776245b88fc56feac0588",
-  "manifestSha256": "01fb35045cfdb32b8c63ee59691eb5ab299fc54ed75da32b53b0c2b365399c95",
-  "observationCommandId": "b615d922-ad76-40d8-84ee-8ce367ee60a4",
+  "manifestSha256": "543954a60e8ff53959d1f5cae902163cc769895fdfab379350731eb2e5fe6200",
+  "observationCommandId": "dae20be0-f477-4a7b-a19b-b3f91e555ebf",
   "preservedAdminCommit": "04aa234505adccfe295776245b88fc56feac0588",
   "publicFiles": {
     "_headers": "d4c6717ea046cf5b22007827eb6e4cebf372f13fd07031594ea11174bb4a4a18",
@@ -381,12 +381,12 @@
       "status": "running"
     },
     "online-recharge": {
-      "containerId": "62767f6fcad64256b41dc814d2b498a29fdee7516715feb537c771397479f59a",
+      "containerId": "51caa6c7fb1cf963a472f2a70bf5ca8f5822f0e8cbfb23b19ae76b57e9fa31fa",
       "environmentSha256": "60bb48bbd6e03a4ceebe245c8405f248d0c682a27287aabb17c1d3573e50ad37",
       "health": "healthy",
-      "image": "sha256:59d53b68d77b76ddb42fc938227d4e5b9591abb0f85b54c12ab0de58cd1550c9",
-      "reference": "id-business-v2-online-upgrade:2a3efa50caec",
-      "startedAtSha256": "7bbd1d84cc61201118f67703f8569b22c684c25602b7133258b7ac42a079ba60",
+      "image": "sha256:67297c19151ef6ab0a6a08fab6cf87578c0bc2146a04af90bdecfc35180a5543",
+      "reference": "id-business-v2-online-manifest:b86fda4114f1",
+      "startedAtSha256": "3f144b6955ca4aee524c0b494f1af950c57ca2fa0733c90f0dd380efb2cf7a8f",
       "status": "running"
     }
   },
@@ -428,7 +428,7 @@
     "apps/api/src/id-business-v2/auto-recharge/worker/pay.py": "dfd5d5cc51e055798ac89cb4683743cdc2d9227ceec08497c3239f70f72a2b32",
     "apps/api/src/id-business-v2/auto-recharge/worker/subscription_cycle.py": "7f6c5dd05db4d72922965f83c88e61ab4c0d4b781933ab2cdaf0064904997019",
     "apps/api/src/id-business-v2/auto-recharge/worker/test_declined_resolution.py": "971b0e2da304314c86e30ccc70bdef749d21646effa4f4548765ea37747f254b",
-    "docs/AUTO_RECHARGE_PAYMENT_AVAILABILITY_20261015.md": "6de7e74cbc84bb94c81cf5aaac01a5858a050e36bd24fded06598c877aab9753",
+    "docs/AUTO_RECHARGE_PAYMENT_AVAILABILITY_20261015.md": "a235804dd30f8d32ea28530a8860d97fb939aaea4d2119f64d469ca4ddde7d93",
     "docs/V2_TASKS.md": "d416038c26c28038c31c2a7a1f99294d05329d590fe7295352cfdf45a0e6c87e",
     "packages/shared/src/v2/auto-recharge.ts": "da6fbc0efb928d99848e3661043a3583af912692650a4264b7b8fe5a509397f6"
   },
