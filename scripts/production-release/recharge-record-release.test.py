@@ -188,9 +188,9 @@ class RepairPublicationTests(unittest.TestCase):
         self.assertEqual(len(value['changedSources']), 12)
         self.assertFalse(any('online-recharge/' in name or 'schema.prisma' in name
                              for name in value['changedSources']))
-        self.assertEqual(release.PRESERVED, ('mysql', 'caddy', 'media-resolver',
+        self.assertEqual(release.PRESERVED, ('admin', 'mysql', 'caddy', 'media-resolver',
                                             'auto-recharge', 'auto-registration'))
-        self.assertEqual(value['preservedAdminCommit'], '95d3e506d45522124598ec6af291eb22ff9f8f81')
+        self.assertEqual(value['preservedAdminCommit'], '6b4237006e8cc083d31f8ab146ee7186e13c6737')
         self.assertEqual(value['engineHealth'], {'ready': True, 'mode': 'enabled', 'activeTasks': 0,
                                                'stopping': False, 'rpcConnected': True})
 
@@ -256,25 +256,27 @@ class RepairPublicationTests(unittest.TestCase):
                 path.parent.mkdir(parents=True, exist_ok=True)
                 path.write_bytes(subprocess.check_output(['git', 'show', contract['preservedAdminCommit'] + ':' + name], cwd=HERE.parents[1])
                                  if name in contract['publishedAdminSources'] else (HERE.parents[1] / name).read_bytes())
-            proof = {'version': 3, 'scope': release.SCOPE, **plan,
+            proof = {'version': 4, 'scope': release.SCOPE, **plan,
                      'sourceBaseline': contract['sourceBaseline'],
                      'liveManifestSha256': contract['manifestSha256'],
                      'baselineApiReproduced': True, 'baselineAdminReproduced': True,
                      'publishedAdminPatchCommit': contract['preservedAdminCommit'],
                      'publishedAdminSources': contract['publishedAdminSources'],
-                     'updatedServices': ['api', 'admin'], 'dependentServiceRebound': 'online-recharge',
+                     'updatedServices': ['api'], 'dependentServiceRebound': 'online-recharge',
                      'migrationPerformed': False, 'businessActions': 0,
                      'files': release.file_inventory(payload)}
-            (payload / 'admin/html').mkdir(parents=True)
-            (payload / 'admin/html/index.html').write_text('<html></html>')
-            proof['files'] = release.file_inventory(payload)
             self.assertEqual(release.validate_proof(proof, plan, contract, payload), proof)
+            (payload / 'admin/html').mkdir(parents=True)
+            (payload / 'admin/html/index.html').write_text('<html>must not deploy</html>')
+            with self.assertRaisesRegex(RuntimeError, 'BUILD_CONTENT_CHANGED'):
+                release.validate_proof({**proof, 'files': release.file_inventory(payload)}, plan, contract, payload)
+            (payload / 'admin/html/index.html').unlink()
             for field, value in [('commit', 'd' * 40), ('tree', 'e' * 40), ('workflowRunId', '999'),
                                  ('workflowRunAttempt', '2'), ('baselineApiReproduced', False),
                                  ('baselineAdminReproduced', False), ('migrationPerformed', True),
                                  ('businessActions', 1), ('businessActions', False), ('version', True), ('version', 1),
-                                 ('publishedAdminPatchCommit', '0' * 40), ('publishedAdminSources', {}), ('version', 2),
-                                 ('updatedServices', ['api', 'admin', 'mysql'])]:
+                                 ('publishedAdminPatchCommit', '0' * 40), ('publishedAdminSources', {}), ('version', 2), ('version', 3),
+                                 ('updatedServices', ['api', 'admin'])]:
                 with self.subTest(field=field), self.assertRaisesRegex(RuntimeError, 'BUILD_PROOF_INVALID'):
                     release.validate_proof({**proof, field: value}, plan, contract, payload)
             (payload / 'api/payment-executor.js').write_text('extra')
