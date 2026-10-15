@@ -60,6 +60,18 @@ def platform_json(path):
     return json.loads(platform_bytes(path))
 
 
+def platform_log_bytes(path):
+    need(re.fullmatch(r'actions/jobs/[0-9]+/logs', path), 'DATABASE_LOG_PATH_INVALID')
+    # Capture original bytes for verification; never forward log control bytes
+    # to a terminal. New gh versions require an explicit flag for this stream.
+    command = ['gh', 'api', '--allow-escape-sequences', 'repos/wangchaozhuanyong/id-business-system/' + path]
+    result = subprocess.run(command, cwd=ROOT, capture_output=True)
+    if result.returncode and b'unknown flag: --allow-escape-sequences' in result.stderr:
+        result = subprocess.run([command[0], command[1], command[3]], cwd=ROOT, capture_output=True)
+    need(result.returncode == 0, 'DATABASE_LOG_REQUEST_FAILED')
+    return result.stdout
+
+
 def verify_published_admin(contract):
     binding = contract['publishedAdminNative']
     run_id = str(binding['runId'])
@@ -150,7 +162,7 @@ def verify_database_evidence(contract):
              and proof['contractSha256'] == digest(old_raw), 'DATABASE_BUILD_IDENTITY_CHANGED')
         for name, expected in old['sources'].items():
             need(digest(archive.extractfile('payload/source/' + name).read()) == expected, 'DATABASE_TESTED_SOURCE_CHANGED')
-    log = re.sub(rb'\x1b\[[0-9;]*m', b'', platform_bytes('actions/jobs/' + str(validators[0]['id']) + '/logs'))
+    log = re.sub(rb'\x1b\[[0-9;]*m', b'', platform_log_bytes('actions/jobs/' + str(validators[0]['id']) + '/logs'))
     need(b'7 passed' in log and b'25 passed' in log, 'DATABASE_TEST_COUNTS_CHANGED')
     return {**binding, 'verified': True, 'reused': True, 'testsPassed': 32}
 
