@@ -127,13 +127,13 @@ def extract_source(raw, target):
                 path.chmod(0o755 if item.mode & 0o111 else 0o644)
 
 
-def admin_dependencies(context):
+def admin_dependencies(context, *, after_source=False):
     # Preserve the API's normal dependency layout for declaration generation.
     # Only the subsequent frontend bundle uses the published realpath order.
     modules = context / 'node_modules'
     modules.rename(context / 'node_modules-api')
     modules.mkdir()
-    dependencies = OUTPUT / '00-dependencies'
+    dependencies = OUTPUT / ('zz-dependencies' if after_source else '00-dependencies')
     for package in (dependencies / 'node_modules').iterdir():
         if package.name != '@apple-business':
             (modules / package.name).symlink_to(package, target_is_directory=True)
@@ -150,8 +150,8 @@ def prepare():
     verify_scope(contract)
     need(not OUTPUT.exists(), 'BUILD_OUTPUT_EXISTS')
     OUTPUT.mkdir(parents=True, mode=0o700)
-    # Rolldown orders module identifiers by resolved path. Keep dependency realpaths
-    # before both source trees, as in the published build, without changing versions.
+    # Install the same locked dependency set; build selects the current role's
+    # resolved-path ordering without changing versions or application test inputs.
     dependencies = OUTPUT / '00-dependencies'
     source = subprocess.check_output(['git', 'archive', contract['sourceBaseline']], cwd=ROOT)
     extract_source(source, dependencies)
@@ -180,13 +180,17 @@ def build():
     verify_scope(contract)
     baseline, candidate = OUTPUT / 'baseline', OUTPUT / 'candidate'
     run('npm', 'run', 'build', '--workspace', 'apps/api', cwd=baseline)
-    overlay_published_admin(baseline, contract)
-    admin_dependencies(baseline)
-    baseline_env = {**os.environ, 'NODE_ENV': 'production',
-                    'V2_BUILD_ID': 'v2-' + contract['preservedAdminCommit']}
-    run('npm', 'run', 'build', '--workspace', 'apps/admin', cwd=baseline, env=baseline_env)
     need(digest((baseline / MODULE).read_bytes()) == contract['apiValidationSha256'],
          'BASELINE_API_NOT_REPRODUCED')
+    # The currently served Admin6b already includes the exact diagnostic overlay.
+    for name in contract['changedSources']:
+        (baseline / name).write_bytes((ROOT / name).read_bytes())
+    run('npm', 'run', 'build', '--workspace', 'packages/shared', cwd=baseline)
+    overlay_published_admin(baseline, contract)
+    (OUTPUT / '00-dependencies').rename(OUTPUT / 'zz-dependencies')
+    admin_dependencies(baseline, after_source=True)
+    run('npm', 'run', 'build', '--workspace', 'apps/admin', cwd=baseline,
+        env={**os.environ, 'NODE_ENV': 'production', 'V2_BUILD_ID': 'v2-' + contract['preservedAdminCommit']})
     need(inventory(baseline / 'apps/admin/dist') == contract['publicFiles'],
          'BASELINE_ADMIN_NOT_REPRODUCED')
     run('npm', 'run', 'typecheck', '--workspace', 'apps/api', cwd=candidate)
@@ -194,20 +198,17 @@ def build():
     overlay_published_admin(candidate, contract)
     run('npm', 'run', 'typecheck', '--workspace', 'apps/admin', cwd=candidate)
     run('npm', 'run', 'test', '--workspace', 'apps/admin', '--',
-        'src/v2/features/online-recharge/api.spec.ts', cwd=candidate)
-    admin_dependencies(candidate)
+        'src/v2/features/online-recharge/api.spec.ts',
+        'src/v2/features/online-recharge/OnlineActionDrawer.spec.ts', cwd=candidate)
     commit, tree = git('rev-parse', 'HEAD'), git('rev-parse', 'HEAD^{tree}')
-    run('npm', 'run', 'build', '--workspace', 'apps/admin',
-        cwd=candidate, env={**os.environ, 'NODE_ENV': 'production', 'V2_BUILD_ID': 'v2-' + commit})
     payload = OUTPUT / 'payload'
     (payload / 'api').mkdir(parents=True)
     shutil.copyfile(candidate / MODULE, payload / 'api/recharge-validation.js')
-    shutil.copytree(candidate / 'apps/admin/dist', payload / 'admin/html')
     for name in {**contract['changedSources'], **contract['publishedAdminSources']}:
         path = payload / 'source' / name
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes((candidate / name).read_bytes())
-    proof = {'version': 3, 'scope': 'RECHARGE_RECORD_DIAGNOSTICS_ONLY',
+    proof = {'version': 4, 'scope': 'RECHARGE_RECORD_DIAGNOSTICS_ONLY',
              'commit': commit, 'tree': tree, 'contractSha256': digest(CONTRACT.read_bytes()),
              'workflowRunId': os.environ['GITHUB_RUN_ID'],
              'workflowRunAttempt': os.environ['GITHUB_RUN_ATTEMPT'],
@@ -218,7 +219,7 @@ def build():
              'publishedAdminSources': contract['publishedAdminSources'],
              'controllerSha256': digest((ROOT / 'scripts/production-release/recharge-record-release.py').read_bytes()),
              'releaseUtilitySha256': digest((ROOT / 'scripts/production-release/remote-deploy.py').read_bytes()),
-             'files': inventory(payload), 'updatedServices': ['api', 'admin'],
+             'files': inventory(payload), 'updatedServices': ['api'],
              'dependentServiceRebound': 'online-recharge',
              'migrationPerformed': False, 'businessActions': 0}
     (payload / 'build-proof.json').write_text(json.dumps(proof, sort_keys=True, indent=2) + '\n')
