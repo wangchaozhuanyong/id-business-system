@@ -1635,6 +1635,7 @@ function recordScopeClassification(paths, snapshot, eventName = 'pull_request', 
       env: {
         ...process.env,
         GITHUB_EVENT_NAME: eventName,
+        GITHUB_REF: 'refs/heads/synthetic-scope-fixture',
         GITHUB_EVENT_PATH: root + '/.runtime/online-recharge-ci-synthetic-event.json',
         GITHUB_OUTPUT: root + '/.runtime/online-recharge-ci-synthetic-output',
         GITHUB_STEP_SUMMARY: root + '/.runtime/online-recharge-ci-synthetic-summary',
