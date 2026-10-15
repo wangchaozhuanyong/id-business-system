@@ -133,6 +133,8 @@ def release(plan, contract, d, h):
             need(states == receipt['after'] and all(states[n] == receipt['before'][n] for n in PRESERVED), 'READBACK_SERVICES_CHANGED')
             raw = (target / 'recharge-availability-build-proof.json').read_bytes()
             need(digest(raw) == plan['buildProofSha256'], 'READBACK_PROOF_CHANGED')
+            need(all(digest((target / 'scripts/production-release' / n).read_bytes()) == v
+                     for n, v in plan['controlSources'].items()), 'READBACK_EXECUTOR_CHANGED')
             smoke(d, target, json.loads(raw), states, contract, h)
             return {'status': 'RECHARGE_AVAILABILITY_INDEPENDENT_READBACK_VERIFIED', 'commit': plan['commit'],
                     'images': receipt['images'], 'preservedServices': list(PRESERVED), 'businessActions': 0, 'migrationPerformed': False}
@@ -229,6 +231,11 @@ def release(plan, contract, d, h):
                         previousCommit=contract['expectedCurrent'], previousRelease=str(previous), previousManifestSha256=digest(raw_manifest),
                         servicesUpdated=['api', 'admin'], dependentServiceRebound='online-recharge', newMigrations=[], migrationPerformed=False,
                         paymentActions=0, validationRun=plan['workflowRunId'], actualDeployment=receipt,
+                        previousSourceProjection=manifest.get('sourceProjection'),
+                        sourceProjection={'sourceBaseline':contract['sourceBaseline'],'changedSources':contract['sources'],
+                                          'apiModules':proof['apiModules'],'adminNativeOrigin':proof['baselineAdminVerification'],
+                                          'buildProofSha256':plan['buildProofSha256']},
+                        sourceLayout='PUBLISHED_PREDECESSOR_WITH_APPROVED_AVAILABILITY_OVERLAY',
                         rechargeAvailabilityPublication={'plan': plan, 'baselineManifestSha256': contract['manifestSha256'], 'backup': backup})
         for role in images:
             manifest['images'][role] = {'reference': images[role]['reference'], 'digest': images[role]['imageId'], 'sourceCommit': plan['commit']}
