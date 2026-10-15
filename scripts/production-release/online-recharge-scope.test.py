@@ -2,6 +2,7 @@ import base64
 import gzip
 import copy
 from contextlib import ExitStack, contextmanager, redirect_stdout
+import faulthandler
 import hashlib
 import importlib.util
 import io
@@ -7137,4 +7138,8 @@ class ReviewedApplicationMappingTests(unittest.TestCase):
 
 
 if __name__ == '__main__':
-    unittest.main()
+    faulthandler.dump_traceback_later(120, repeat=True)
+    try:
+        unittest.main(verbosity=2)
+    finally:
+        faulthandler.cancel_dump_traceback_later()
