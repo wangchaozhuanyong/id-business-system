@@ -9,6 +9,79 @@ const root = fileURLToPath(new URL('../', import.meta.url));
 const acceptanceSource = () =>
   readFileSync(new URL('./acceptance-v2-online-recharge-ui.mjs', import.meta.url), 'utf8');
 
+test('合成验收诊断能定位资源和运行时错误且不读取凭据', async () => {
+  const source = acceptanceSource();
+  const start = source.indexOf('const diagnostic = {');
+  const end = source.indexOf('const wait = async', start);
+  assert.ok(start >= 0 && end > start);
+  const helpers = runInNewContext(
+    source.slice(start, end) + '\n({ observePage, failureDiagnostic, safeDiagnosticPath });',
+    { URL, origin: 'http://127.0.0.1:5409' }
+  );
+  const listeners = {};
+  helpers.observePage({ on: (name, callback) => (listeners[name] = callback) });
+  listeners.pageerror(new ReferenceError('computed is not defined'));
+  listeners.console({ type: () => 'error', text: () => 'session="sensitive-input"' });
+  listeners.request({
+    method: () => 'GET',
+    url: () => 'http://127.0.0.1:5409/assets/chunk.js?token=sensitive-input',
+    resourceType: () => 'script',
+    headers: () => {
+      throw new Error('诊断不得读取请求头');
+    }
+  });
+  listeners.response({ url: () => 'http://127.0.0.1:5409/assets/chunk.js', status: () => 500 });
+  const result = await helpers.failureDiagnostic(
+    {
+      isClosed: () => false,
+      url: () => 'http://127.0.0.1:5409/v2/online-recharge/overview?token=sensitive-input',
+      evaluate: async () => ['正在安全打开页面', 'synthetic-private-session']
+    },
+    new Error('locator timeout')
+  );
+  assert.equal(result.path, '/v2/online-recharge/overview');
+  assert.equal(result.pageErrors[0].message, 'computed is not defined');
+  assert.equal(result.requests[0].path, '/assets/chunk.js');
+  assert.equal(result.responses[0].status, 500);
+  assert.ok(!JSON.stringify(result).includes('sensitive-input'));
+  assert.ok(!JSON.stringify(result).includes('synthetic-private-session'));
+  assert.ok(source.includes('ONLINE_UI_ACCEPTANCE_DIAGNOSTIC'));
+  assert.ok(source.includes('.v2-boot-gate__copy strong'));
+});
+
+test('正式产物验收不依赖开发源码且保留原身份动作', async () => {
+  const source = acceptanceSource();
+  assert.ok(source.includes("'apps/admin/dist/index.html'"));
+  assert.ok(source.includes("    'preview',"));
+  assert.ok(source.includes('builtPreview: true'));
+  assert.ok(!source.includes("import('/src/"));
+  const start = source.indexOf('async function switchFixtureIdentity(');
+  const end = source.indexOf('async function measure(', start);
+  assert.ok(start >= 0 && end > start);
+  const calls = [];
+  const auth = {
+    clearLocalSession: () => calls.push('clear'),
+    login: async () => calls.push('login')
+  };
+  const switchIdentity = runInNewContext(source.slice(start, end) + '\nswitchFixtureIdentity;', {
+    document: {
+      querySelector: () => ({
+        __vue_app__: {
+          config: {
+            globalProperties: {
+              $pinia: { _s: new Map([['auth', auth]]) }
+            }
+          }
+        }
+      })
+    }
+  });
+  const page = { evaluate: async (callback, clear) => callback(clear) };
+  await switchIdentity(page);
+  await switchIdentity(page, false);
+  assert.deepEqual(calls, ['clear', 'login', 'login']);
+});
+
 test('合成页面夹具按当前会话协议恢复账号并拦截全部外部连接', async () => {
   const source = acceptanceSource();
   const start = source.indexOf('async function fixture(context, state) {');
