@@ -20,11 +20,12 @@ from attempt_ledger import (checkout_record_path, read_checkout_record,
                             resolved_checkout_replacement_allowed)
 from checkout_core import BrowserCredential, MAX_BYTES, ROOT, Stop, parse_browser_credential, write_json
 from payment_form import (PaymentDetails, fill_official_form, subscribe_button, validate_details,
-                          verify_billing_fields, verify_card_fields)
+                          verify_billing_fields, verify_card_fields, billing_snapshot_fingerprint)
 from payment_network import PaymentGuard
 from payment_handoff import challenge_frames, controller_cancelled
 from payment_state import PaymentLedger, outcome, quote_digest, validate_evidence
 from plans import PLANS, plan_spec, subscription_match
+from native_checkout import unknown_checkout_recoverable, read_original_native_checkout
 
 
 def focus_input_terminal():
@@ -82,6 +83,9 @@ def confirm_quote(quote, last4):
 async def verified_quote_once(page, guard):
     binding = guard.official_quote_binding
     if not binding:
+        return None
+    expected = getattr(guard, 'expected_billing_fingerprint', None)
+    if binding.get('native') and expected and binding.get('billing_fingerprint') != expected:
         return None
     if (getattr(guard, 'first_pro_checkout', False)
             and (guard.official_binding_version < guard.checkout_tier_binding_minimum
@@ -219,10 +223,7 @@ async def payment_handler(page, guard, identity, ledger, target, *, pay, details
         raise Stop("proxy_country_mismatch")
     if first_pro:
         await verify_first_pro_checkout_tier(page, guard)
-        initial = await current_quote(page, guard, tier_binding_minimum,
-                                      wait_seconds=quote_wait_seconds)
-        if initial['plan'] != selected_plan:
-            raise Stop('payment_quote_plan_mismatch')
+        # 初始金额可能需要完整账单资料才出现；档位先核实，金额在填表后核实。
     details = await asyncio.to_thread(details_reader)
     try:
         binding_before = guard.official_binding_version
@@ -230,11 +231,29 @@ async def payment_handler(page, guard, identity, ledger, target, *, pay, details
 
         # A changed address must agree with the latest response for this checkout.
         # Reading and calculating tax must never refresh the form or reuse old totals.
-        quote = await current_quote(page, guard, max(1, binding_before, tier_binding_minimum),
+        native = str(getattr(guard, 'checkout_id', '')).startswith('oaics_')
+        if native:
+            guard.expected_billing_fingerprint = await billing_snapshot_fingerprint(
+                page, details, prepared['billing_fields_filled'])
+            if not guard.expected_billing_fingerprint:
+                raise Stop('billing_fields_incomplete')
+            await verify_card_fields(page, details)
+            previous_binding = guard.official_quote_binding
+            if (guard.official_binding_version == binding_before and previous_binding
+                    and previous_binding.get('billing_fingerprint') == guard.expected_billing_fingerprint):
+                # 官网已保存相同完整地址时可能不重新计税。重新 GET 原单核对同一地址，
+                # 不刷新表单，也不为凑新版号伪造税费或提交订阅。
+                credential, latest_identity = await check_session(page, target, 0)
+                if latest_identity['current_plan'] != 'free':
+                    raise Stop('incompatible_existing_subscription')
+                await read_original_native_checkout(page, credential, selected_plan)
+        quote = await current_quote(page, guard, max(1, binding_before + 1, tier_binding_minimum),
                                     wait_seconds=quote_wait_seconds)
         if quote["plan"] != selected_plan:
             raise Stop("payment_quote_plan_mismatch")
         await verify_billing_fields(page, details, prepared["billing_fields_filled"])
+        await verify_card_fields(page, details)
+        guard.final_quote_verified = True
         if not pay:
             progress("payment_prepared", quote=quote, payment="blocked")
             return {"status": "payment_prepared", "stage": "payment_ready", "quote": quote,
@@ -460,7 +479,8 @@ async def run_flow(target, state_dir, target_plan, *, details_reader, confirmer,
 async def run_checkout_flow(target, state_dir, target_plan, *, details_reader, confirmer,
                    wait_seconds=120, poll_count=6, poll_interval=20, browser=None,
                    browser_context=None, session_budget=None, allow_checkout_replacement=True,
-                   expected_country=None, expected_checkout_identifier=None, next_cycle_grant=None):
+                   expected_country=None, expected_checkout_identifier=None, next_cycle_grant=None,
+                   allow_unknown_checkout_recovery=False):
     ledger_holder = {}
 
     async def handler(page, guard, identity, original_quote):
@@ -506,6 +526,10 @@ async def run_checkout_flow(target, state_dir, target_plan, *, details_reader, c
     if record_path.exists():
         # 任务停止不等于官网订单取消；原窗口恢复只能重新读取同一原单。
         record = read_checkout_record(state_dir, target.account_id, target_plan)
+        if (allow_unknown_checkout_recovery and unknown_checkout_recoverable(record)
+                and browser_context is not None and not expected_checkout_identifier):
+            result = await run_browser(target, inspect_existing=True, recover_unknown_checkout=True, **browser_args)
+            return include_payment_record(result, ledger_holder.get('ledger'))
         if expected_checkout_identifier and record.get("checkout_identifier") != expected_checkout_identifier:
             return {"status": "blocked", "reason": "existing_checkout_mismatch",
                     "stage": "quote_read", "checkout_identifier": expected_checkout_identifier,

@@ -121,7 +121,10 @@ async def cancellable_flow(job, target, **kwargs):
     if getattr(job, 'subscription_check_only', False):
         expected_checkout = None
         kwargs['subscription_check_only'] = True
-    flow = pay.run_checkout_flow if expected_checkout else pay.run_flow
+    recovery = getattr(job, 'unidentified_checkout_recovery', False) is True
+    flow = pay.run_checkout_flow if expected_checkout or recovery else pay.run_flow
+    if recovery:
+        kwargs['allow_unknown_checkout_recovery'] = True
     if expected_checkout:
         kwargs["expected_checkout_identifier"] = expected_checkout
     task = asyncio.create_task(flow(target, job.root, job.payload["plan"], **kwargs))
@@ -503,6 +506,8 @@ async def _execute_profiles(job, client, target, playwright, owned):
             if original_checkout is not None and checkout_id != original_checkout and not getattr(job, 'next_cycle_grant', None):
                 return {**result, "status": "blocked", "reason": "checkout_identifier_changed"}
             original_checkout = checkout_id
+        if getattr(job, 'unidentified_checkout_recovery', False) is True:
+            return result
         if not proxy_reopen_allowed(job, target, result, options, owned):
             return result
         if attempt == attempts:

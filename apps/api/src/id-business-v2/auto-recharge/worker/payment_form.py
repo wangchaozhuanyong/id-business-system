@@ -263,6 +263,8 @@ async def fill_official_form(page, details):
         if node is None:
             continue  # 官网没有要求该字段时，不伪造网页请求添加字段。
         await fill_billing_node(node, value)
+        # 街道自动补全可能立即改写 autocomplete，不能用旧 selector 再定位 blur。
+        await page.keyboard.press('Tab')
         filled.append(field_name)
     # 已观察的自愿跨次保存选项保持不选；订阅自身续费条款在最终确认中单独展示。
     save = await one_field(page, "input[name='savePayment']", required=False)
@@ -313,6 +315,18 @@ async def verify_billing_fields(page, details, filled):
     save = await one_field(page, "input[name='savePayment']", required=False)
     if save and await save.is_checked():
         raise Stop("payment_save_preference_changed")
+
+
+async def billing_snapshot_fingerprint(page, details, filled):
+    """仅在内存绑定官网已核对的完整地址；州以下拉框实际值为准。"""
+    from native_checkout import billing_fingerprint
+    await verify_billing_fields(page, details, filled)
+    address = {key: getattr(details, key) for key in ('country', 'line1', 'line2', 'city', 'state', 'postal_code')}
+    scope = await billing_frame(page, details.country) if 'country' in filled else None
+    if 'state' in filled:
+        node = await one_billing_field(page, 'state', ADDRESS_FIELDS['state'], details.state, scope=scope)
+        address['state'] = await node.input_value()
+    return billing_fingerprint(address, details.name)
 
 
 async def subscribe_button(page, *, first_pro_context=None):

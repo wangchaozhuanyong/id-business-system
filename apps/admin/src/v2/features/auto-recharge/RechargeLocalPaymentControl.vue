@@ -4,7 +4,9 @@
     class="recharge-local-confirmation"
     aria-label="本次付款确认"
   >
-    <p>请核对当前账号、目标套餐和官网今日应付。确认仅用于当前报价；报价变化后本次确认失效。</p>
+    <p>
+      银行卡与完整账单资料填写后，请核对官网重新计税的最终应付及续费金额。资料或报价变化后，本次确认失效。
+    </p>
     <p v-if="confirmation.expiresAt.value">
       本次确认有效至 {{ formatV2DateTime(confirmation.expiresAt.value) }}
     </p>

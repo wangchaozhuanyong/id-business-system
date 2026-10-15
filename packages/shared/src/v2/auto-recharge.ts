@@ -211,6 +211,9 @@ export interface V2RechargeResult {
     | 'network_error';
   stale_profiles_cleaned?: number;
   checkout_replacement_performed?: boolean;
+  checkout_request_body_state?: 'object' | 'unavailable';
+  checkout_request_plan_state?: 'matched' | 'missing' | 'unsupported';
+  checkout_recovered_from_original?: boolean;
   diagnostics?: {
     step?:
       | 'open_menu'
