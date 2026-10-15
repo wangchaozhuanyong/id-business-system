@@ -96,10 +96,13 @@ def main() -> None:
             wait_ready(child)
             if request("/health", authenticated=False)[0] != 401:
                 raise RuntimeError("自动注册内部访问隔离失败")
-            for path in ("/", "/accounts", "/email-services", "/payment", "/settings", "/static/js/app.js", "/static/id-workspace.js", "/static/id-workspace.css", "/static/id-system-skin.css"):
+            for path in ("/", "/accounts", "/email-services", "/settings", "/static/js/app.js", "/static/id-workspace.js", "/static/id-workspace.css", "/static/id-system-skin.css"):
                 status, body = request(path)
                 if status != 200 or not body:
                     raise RuntimeError("自动注册镜像资源校验失败")
+            status, body = request("/payment")
+            if status != 410 or json.loads(body) != {"detail": "自动注册的订阅管理已移除，请使用现有充值业务"}:
+                raise RuntimeError("REGISTRATION_SUBSCRIPTION_RETIREMENT_CHECK_FAILED")
         finally:
             stop(child)
 
@@ -139,6 +142,9 @@ def main() -> None:
 if __name__ == "__main__":
     try:
         main()
-    except Exception:
-        print(json.dumps({"status": "FAIL", "message": "自动注册离线运行验收未通过"}), file=sys.stderr)
+    except Exception as error:
+        code = "REGISTRATION_SUBSCRIPTION_RETIREMENT_CHECK_FAILED" if (
+            type(error) is RuntimeError and str(error) == "REGISTRATION_SUBSCRIPTION_RETIREMENT_CHECK_FAILED"
+        ) else "OFFLINE_ACCEPTANCE_FAILED"
+        print(json.dumps({"status": "FAIL", "code": code, "message": "自动注册离线运行验收未通过"}), file=sys.stderr)
         raise SystemExit(1) from None

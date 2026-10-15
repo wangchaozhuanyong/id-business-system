@@ -1006,6 +1006,7 @@
     "worker.cjs": "010fc671c329c16ea37e435c13ca594b1f92a3b14184f9793dabbc24113299d9"
   },
   "baselineWorkerFiles": {
+    "acceptance_runtime.py": "bf5b5d2906e4104ff03fe20a19ef36ce7ea818e9b4c376cabca12de824c0f27c",
     "apple_closed_loop.py": "f7acc36a08d2d7a2f1994c77bc7dc5f8a8b69415beaaabbb4441f2369308acca",
     "apple_mailboxes.py": "5fe439977c66c13b027051bbb7652b96473fe9e2dad095a28ec757f49d9f12b5",
     "release_safety.py": "ed1dae3b3817fdecb6ad861cb8e2e7698da1567371f0dfabbc5c71b9b5014757",
@@ -1109,6 +1110,7 @@
     "apps/api/src/id-business-v2/auto-registration/apple-mailboxes.types.ts": "155d34550184cae378dcc13e3811fd30203f0b05346dbf1317f63b6edb821d43",
     "apps/api/src/id-business-v2/auto-registration/auto-registration.service.spec.ts": "3ff3c6e03514a10fc89a744b2417f080f610779f9e8f1373bb741ad0b0dc6778",
     "apps/api/src/id-business-v2/auto-registration/auto-registration.service.ts": "e92e23706fd3b82d1dac40c067d6b8ac111e70529a9b26e4691e891192771e46",
+    "apps/api/src/id-business-v2/auto-registration/worker/acceptance_runtime.py": "e5ec8bcc4932a3bfc7a14d6f8c8f01f952ca097699c987f0ba90202e9f831d1c",
     "apps/api/src/id-business-v2/auto-registration/worker/apple_closed_loop.py": "f71dc93773fdc9f636d07b051a9738263ef6219234b28dafe909ff253b647391",
     "apps/api/src/id-business-v2/auto-registration/worker/apple_mailboxes.py": "1c34ac02c4e532e42aaa954f92dd9567db8181bee0bc90103d4b22e916465759",
     "apps/api/src/id-business-v2/auto-registration/worker/release_safety.py": "6422bacc1808b02e083a202f6f55d68c7e8ae01fe8ec647d1256d2b6542df16f",

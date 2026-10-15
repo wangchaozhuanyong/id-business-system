@@ -132,6 +132,10 @@ class RegistrationClosureControls(unittest.TestCase):
         self.assertIn('acceptance-v2-shared-proxy-mysql.mjs', runner)
         self.assertIn('test_release_safety', workflow)
         self.assertIn('test_registration_closed_loop_unit', workflow)
+        prefix = '$GITHUB_WORKSPACE/.deploy/registration-closure-release/python/bin/python -B -m unittest '
+        self.assertEqual([line.strip() for line in workflow.splitlines() if line.strip().startswith(prefix)],
+                         [prefix + name for name in ('test_workspace', 'test_apple_mailboxes',
+                                                     'test_release_safety', 'test_registration_closed_loop_unit')])
         self.assertIn('test/proxy-test.test.cjs', workflow)
         self.assertLess(workflow.index('Compile API for isolated database acceptance'), workflow.index('Verify isolated registration MySQL SQLite'))
         for name in ('proxy-test.test.cjs', 'dispatch.test.cjs', 'proxy-worker.test.cjs', 'proxy-pool.test.cjs'):

@@ -57,7 +57,10 @@ jobs:
       - name: Verify encrypted SQLite persistence and old receipt compatibility
         working-directory: .deploy/registration-closure-release/candidate/apps/api/src/id-business-v2/auto-registration/worker
         run: |
-          $GITHUB_WORKSPACE/.deploy/registration-closure-release/python/bin/python -B -m unittest test_workspace test_apple_mailboxes test_release_safety test_registration_closed_loop_unit
+          $GITHUB_WORKSPACE/.deploy/registration-closure-release/python/bin/python -B -m unittest test_workspace
+          $GITHUB_WORKSPACE/.deploy/registration-closure-release/python/bin/python -B -m unittest test_apple_mailboxes
+          $GITHUB_WORKSPACE/.deploy/registration-closure-release/python/bin/python -B -m unittest test_release_safety
+          $GITHUB_WORKSPACE/.deploy/registration-closure-release/python/bin/python -B -m unittest test_registration_closed_loop_unit
       - name: Verify seven V2 controls and affected application boundaries
         working-directory: .deploy/registration-closure-release/candidate
         run: |

@@ -5289,6 +5289,24 @@ test('registration closure selects independent browser, API and both database re
   ]);
 });
 
+test('registration runtime acceptance selects the exact API fixture without admitting adjacent worker files', () => {
+  const fixture = 'apps/api/src/id-business-v2/auto-registration/worker/acceptance_runtime.py';
+  const paths = [registrationPublishedBindingPath, fixture];
+  assert.equal(isRegistrationClosureOnly(paths, schema, schema), true);
+  assert.equal(isRegistrationClosureControlsOnly(paths), false);
+  assert.equal(checkMode(paths, schema, schema), 'recharge');
+  assert.deepEqual(selectedParts(paths), ['guards', 'api']);
+  assert.equal(hasAppleMailboxScope([fixture]), true);
+  for (const unknown of [
+    'apps/api/src/id-business-v2/auto-registration/worker/acceptance_unreviewed.py',
+    'apps/api/src/id-business-v2/auto-registration/worker/upstream/acceptance_runtime.py'
+  ]) {
+    assert.equal(isRegistrationClosureOnly([...paths, unknown], schema, schema), false);
+    assert.equal(checkMode([...paths, unknown], schema, schema), 'full');
+    assert.equal(hasAppleMailboxScope([unknown]), false);
+  }
+});
+
 test('registration closure controls stay finite without moving unrelated source into control-only checks', () => {
   const paths = [
     '.github/workflows/registration-closure-validation.yml',

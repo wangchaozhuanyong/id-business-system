@@ -164,6 +164,7 @@ const taskPaths = new Set([
   'apps/api/src/id-business-v2/auto-registration/apple-mailboxes.types.ts',
   'apps/api/src/id-business-v2/auto-registration/auto-registration.service.spec.ts',
   'apps/api/src/id-business-v2/auto-registration/auto-registration.service.ts',
+  'apps/api/src/id-business-v2/auto-registration/worker/acceptance_runtime.py',
   'apps/api/src/id-business-v2/auto-registration/worker/apple_closed_loop.py',
   'apps/api/src/id-business-v2/auto-registration/worker/apple_mailboxes.py',
   'apps/api/src/id-business-v2/auto-registration/worker/release_safety.py',
