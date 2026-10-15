@@ -349,6 +349,39 @@ export function isRegistrationEnvironmentRepair(
     return false;
   }
 }
+export const registrationDeclarationRepairBase = 'cd7bba03bec1742328e0829c215823bda1fd3fae';
+const registrationDeclarationRepairPins = Object.freeze({
+  'scripts/production-release/registration-closure-contract.json':
+    '4136417acd11234ac42059f2551905e8c97838364cdc7dba7ea6998aabea6899',
+  'scripts/production-release/registration-closure-release.test.py':
+    '47b66b7c943a71f52e269d99cd55d9a0a60a1d06485869f6007f828c52fa851d'
+});
+export function isRegistrationDeclarationRepair(
+  paths,
+  { base, baseTree, readSource = readFileSync }
+) {
+  const allowed = new Set([
+    ...Object.keys(registrationDeclarationRepairPins),
+    'scripts/ci-registration-closure-scope.mjs',
+    'scripts/ci-recharge-check.mjs',
+    'scripts/ci-recharge-check.test.mjs',
+    'scripts/ci-recharge-scope.test.mjs'
+  ]);
+  if (
+    base !== registrationDeclarationRepairBase ||
+    baseTree !== '874102957cbd6cc921e05e5bba252e63bd09fd85' ||
+    !isRegistrationClosureControlsOnly(paths) ||
+    paths.some((path) => !allowed.has(path))
+  )
+    return false;
+  try {
+    return Object.entries(registrationDeclarationRepairPins).every(
+      ([path, digest]) => paths.includes(path) && sha256(readSource(path)) === digest
+    );
+  } catch {
+    return false;
+  }
+}
 export function hasRegistrationClosureApplication(paths) {
   return paths.some(
     (path) => path.startsWith('apps/') || path.startsWith('scripts/acceptance-v2-')

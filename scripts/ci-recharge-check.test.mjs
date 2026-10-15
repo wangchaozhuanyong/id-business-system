@@ -37,6 +37,48 @@ const readonlyMetadataPrevious = readonlyMetadataCurrent
   );
 const readonlyMetadataFixture = { readonlyBaseSource: readonlyMetadataPrevious };
 
+test('exact declaration proof repair runs its publisher tests and selectors without unrelated historical prefix', () => {
+  const paths = [
+    'scripts/production-release/registration-closure-contract.json',
+    'scripts/production-release/registration-closure-release.test.py',
+    'scripts/ci-registration-closure-scope.mjs',
+    'scripts/ci-recharge-check.mjs',
+    'scripts/ci-recharge-check.test.mjs',
+    'scripts/ci-recharge-scope.test.mjs'
+  ];
+  const options = { base: 'cd7bba03bec1742328e0829c215823bda1fd3fae' };
+  const calls = recordGuardCommands('ci-only', paths, 'guards', options);
+  assert.equal(
+    calls.filter(
+      (row) =>
+        row.join(' ') ===
+        'python3 -B scripts/production-release/registration-closure-release.test.py'
+    ).length,
+    1
+  );
+  for (const command of ['prettier', 'eslint'])
+    assert.ok(calls.some((row) => row.includes(command)));
+  const tests = calls.find((row) => row[0] === 'node' && row[1] === '--test');
+  assert.ok(tests.includes('scripts/ci-registration-closure-native-reuse.test.mjs'));
+  assert.equal(tests.length, 6);
+  assert.deepEqual(calls.at(-1), ['process-exit', 0]);
+  assert.equal(
+    calls.some((row) =>
+      row.includes('scripts/production-release/api-admin-pending-online.test.py')
+    ),
+    false
+  );
+  const wider = recordGuardCommands(
+    'ci-only',
+    [...paths, '.github/workflows/registration-closure-validation.yml'],
+    'guards',
+    options
+  );
+  assert.ok(
+    wider.some((row) => row.includes('scripts/production-release/api-admin-pending-online.test.py'))
+  );
+});
+
 test('exact registration dependency controls retain own tests and formatting before ending ahead of historical suites', () => {
   const paths = [
     '.github/workflows/registration-closure-validation.yml',
@@ -460,7 +502,19 @@ function recordGuardCommands(
   } = {}
 ) {
   // Run the real dispatcher with process execution replaced before its named import resolves.
-  // No Git command, nested test, database command or business operation is executed.
+  // Only the prior environment repair reads its immutable local Git fixture.
+  // No nested test, database command or business operation is executed.
+  const environmentTestSource =
+    base === '7d1c3822c8f8c8c6a970067580443a3b75e88bf0'
+      ? execFileSync(
+          'git',
+          [
+            'show',
+            'cd7bba03bec1742328e0829c215823bda1fd3fae:scripts/production-release/registration-closure-release.test.py'
+          ],
+          { encoding: 'utf8' }
+        )
+      : null;
   const script = `
     import childProcess from 'node:child_process';
     import fs from 'node:fs';
@@ -472,8 +526,11 @@ function recordGuardCommands(
     const readonlySource = ${JSON.stringify(readonlyCurrentSource)};
     const cacheConfigurationUrl = new URL('./deploy/nginx/admin.conf', import.meta.url).href;
     const cacheConfiguration = ${JSON.stringify(cacheConfiguration)};
+    const environmentTestSource = ${JSON.stringify(environmentTestSource)};
     const originalReadFileSync = fs.readFileSync;
     fs.readFileSync = (path, options) => {
+      if (String(path) === 'scripts/production-release/registration-closure-release.test.py' && typeof environmentTestSource === 'string')
+        return typeof options === 'string' ? environmentTestSource : Buffer.from(environmentTestSource);
       if (String(path) === readonlyPath && typeof readonlySource === 'string')
         return typeof options === 'string' ? readonlySource : Buffer.from(readonlySource);
       if (String(path) === cacheConfigurationUrl && typeof cacheConfiguration === 'string')
@@ -505,6 +562,7 @@ function recordGuardCommands(
     }});
     childProcess.execFileSync = (file, args) => {
       if (file === 'git') {
+        if (args.join(' ') === 'rev-parse cd7bba03bec1742328e0829c215823bda1fd3fae^{tree}') return '874102957cbd6cc921e05e5bba252e63bd09fd85\\n';
         if (args.join(' ') === 'rev-parse 7d1c3822c8f8c8c6a970067580443a3b75e88bf0^{tree}') return 'a1ffd620d2b79630b9c1e9db700d6af765f33a50\\n';
         if (args.join(' ') === 'rev-parse HEAD^{tree}') return 'a'.repeat(40) + '\\n';
         if (args[0] === 'show' && args[1] === process.env.GUARD_TEST_BASE + ':${readonlyMetadataPaths[0]}')

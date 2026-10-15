@@ -55,6 +55,24 @@ class RegistrationClosureControls(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, 'MIGRATION_BASELINE_CHANGED'):
             r.check_migration(after, contract)
 
+    def test_independent_prisma_facts_propagation_requires_the_exact_reviewed_module(self):
+        module = 'id-business-v2/auto-recharge/persistence/recharge-card-removal.repository.js'
+        declaration = module.removesuffix('.js') + '.d.ts'
+        original_js = 'fcdf44b78c845cf5fba4412a1d9692d75d2bf204b5aba484468a505df6c55219'
+        before = {module: original_js, declaration: '1c2c1a4b987b9327f5eadec85e2b0eb1d5c9dc186d8f5ebc3022fbbbab2a7093'}
+        after = {module: original_js, declaration: '57b2867244aae458074aaac3efdec98dbbe72f00054fe2160dcf763b4139d9b7'}
+        contract = json.loads((HERE / 'registration-closure-contract.json').read_bytes())
+        approved = {module: contract['apiModules'][module]}
+        self.assertEqual(approved, {module: original_js})
+        self.assertEqual(b.api_delta(before, after, approved), {declaration: after[declaration]})
+        with self.assertRaisesRegex(RuntimeError, 'API_OUTPUT_SCOPE_CHANGED'):
+            b.api_delta(before, after, {})
+        unknown = 'id-business-v2/auto-recharge/persistence/unreviewed.repository.d.ts'
+        with self.assertRaisesRegex(RuntimeError, 'API_OUTPUT_SCOPE_CHANGED'):
+            b.api_delta(before, {**after, unknown: 'unreviewed'}, approved)
+        with self.assertRaisesRegex(RuntimeError, 'BASE_API_NOT_REPRODUCED'):
+            b.api_delta({**before, module: 'another-baseline'}, after, approved)
+
     def test_safe_archive_rejects_links_traversal_duplicates_and_foreign_root(self):
         output = ROOT / '.runtime/auto-registration-review-20261016/release-control-tests'
         output.mkdir(parents=True, exist_ok=True)
