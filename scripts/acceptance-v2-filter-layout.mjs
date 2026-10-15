@@ -324,7 +324,8 @@ try {
                 protocol: 'http',
                 linkMask: 'https://example.invalid/…',
                 status: 'active',
-                remark1: number === 1 ? '布局验收' : '最后一页',
+                remark: number === 1 ? '布局验收' : '最后一页',
+                displayHost: 'proxy.example.invalid',
                 remark2: '',
                 createdAt: now,
                 updatedAt: now
@@ -412,18 +413,18 @@ try {
       await page.getByRole('main').getByText('布局验收', { exact: true }).waitFor();
       await page.locator('.el-pagination .btn-next').click();
       await page.getByText('最后一页', { exact: true }).waitFor();
-      await checkToolbar(page, '.recharge-proxy-filters', '代理-最后一页');
-      await page.getByPlaceholder('国家代码或备注').fill('empty');
-      await page.getByRole('button', { name: '搜索', exact: true }).click();
-      await page.getByText('暂无代理 IP', { exact: true }).waitFor();
-      await checkToolbar(page, '.recharge-proxy-filters', '代理-空状态');
+      await checkToolbar(page, '.v2-page-context__filters > .el-form--inline', '代理-最后一页');
+      await page.getByPlaceholder('代理地址、国家代码或备注').fill('empty');
+      await page.getByRole('button', { name: '查询', exact: true }).click();
+      await page.getByText('暂无代理', { exact: true }).waitFor();
+      await checkToolbar(page, '.v2-page-context__filters > .el-form--inline', '代理-空状态');
       for (const width of [1440, 390]) {
         await page.setViewportSize({ width, height: 1000 });
-        await page.getByRole('button', { name: '新增代理 IP', exact: true }).click();
-        await page.getByRole('heading', { name: '新增代理 IP', exact: true }).waitFor();
+        await page.getByRole('button', { name: '新增代理', exact: true }).click();
+        await page.getByRole('heading', { name: '新增代理', exact: true }).waitFor();
         await settle(page);
         await checkLabels(page, `代理-抽屉-${width}`);
-        const drawer = page.getByLabel('新增代理 IP', { exact: true });
+        const drawer = page.getByLabel('新增代理', { exact: true });
         await drawer.locator('.el-drawer__close-btn').click();
         await drawer.waitFor({ state: 'hidden' });
       }
