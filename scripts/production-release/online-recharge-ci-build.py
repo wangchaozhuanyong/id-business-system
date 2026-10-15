@@ -1,4 +1,4 @@
-"""Build the sealed ONLINE application on CI, without production authority.
+"""Build current Git ONLINE application on CI, without production authority.
 
 Only Git objects are source inputs. No AWS, registry upload, database, service
 startup, preflight or publication entry belongs to this program.
@@ -101,9 +101,33 @@ def git_files(commit):
     return result
 
 
-def source_projection():
+def source_projection(*, sealed=False):
     commit = git('rev-parse', 'HEAD').decode().strip()
-    tree = git('rev-parse', 'HEAD^{tree}').decode().strip()
+    tree = git('rev-parse', commit + '^{tree}').decode().strip()
+    if not sealed:
+        candidate = git_files(commit)
+        projection = c.load_core().projection_module()
+        need(projection.source_tree(candidate) == tree, 'CANDIDATE_TREE_CHANGED')
+        inventory = projection.inventory(candidate)
+        app = {name: row for name, row in inventory.items()
+               if name.startswith(c.APP_PREFIXES) or name in c.APP_FILES}
+        online = {name: row for name, row in inventory.items()
+                  if name.startswith(c.ONLINE_PREFIXES) or name ==
+                  c.MIGRATION_ROOT + '/' + c.ONLINE_MIGRATION + '/migration.sql'}
+        required = ('apps/api/Dockerfile.mysql', 'apps/admin/Dockerfile',
+            ENGINE + '/Dockerfile', c.SCHEMA, 'package-lock.json',
+            'apps/admin/src/v2/features/online-recharge/manifest.ts',
+            'apps/api/src/id-business-v2/online-recharge/online-recharge.module.ts')
+        need(app and online and all(name in candidate for name in required),
+             'CURRENT_SOURCE_INCOMPLETE')
+        return candidate, {'version': 1, 'kind': KIND + '_CURRENT_GIT_SOURCE',
+            'scope': 'CI_ONLY', 'notForRelease': True, 'releaseAuthority': False,
+            'candidateCommit': commit, 'candidateTree': tree,
+            'applicationFileCount': len(app), 'applicationInputSha256': c.fingerprint(app),
+            'onlineFileCount': len(online), 'onlineInputSha256': c.fingerprint(online),
+            'outputFilesSha256': c.fingerprint(inventory)}
+    # The historical explicitly admitted double-proof experiment retains its
+    # original sealed source and formal validators. Normal CI claims no seal.
     predecessor = c.sealed_authority()['producer']
     candidate, ordinary, base, online = (git_files(ref) for ref in
         (commit, predecessor['commit'], BASE, c.ONLINE_SOURCE))
@@ -545,7 +569,7 @@ def main():
         need(os.environ.get('GITHUB_ACTIONS') == 'true' and sys.platform == 'linux', 'LINUX_CI_RUNNER_REQUIRED')
         if args.ci_real_build_not_for_release:
             ci_entry_guard(args.admitted_source_tree)
-    files, source = source_projection()
+    files, source = source_projection(sealed=args.ci_real_build_not_for_release)
     if args.source_only:
         print(json.dumps({'kind': KIND, 'candidateCommit': source['candidateCommit'],
             'candidateTree': source['candidateTree'], 'fileCount': len(files),

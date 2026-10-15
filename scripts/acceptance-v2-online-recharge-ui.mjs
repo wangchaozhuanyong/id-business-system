@@ -298,7 +298,7 @@ async function fixture(context, state) {
       return route.abort();
     }
     if (path === '/api/auth/me') return ok(state.actor);
-    if (path === '/api/auth/login')
+    if (path === '/api/auth/login' || path === '/api/auth/session')
       return ok({ accessToken: 'synthetic-access', user: state.actor });
     if (path === '/api/auth/logout') return ok({});
     if (path.endsWith('/change-events')) return route.abort();
@@ -482,8 +482,17 @@ try {
       const context = await browser.newContext({ viewport: { width, height: 1100 } });
       await context.addInitScript(
         ({ theme, user }) => {
-          localStorage.setItem('apple_business_access_token', 'synthetic-access');
-          localStorage.setItem('apple_business_current_user', JSON.stringify(user));
+          sessionStorage.setItem(
+            'apple_business_auth_v2',
+            JSON.stringify({
+              schemaVersion: 2,
+              credentialId: 'online-fixture-' + user.id,
+              token: 'synthetic-access',
+              tokenRevision: 1,
+              updatedAt: Date.now(),
+              userCache: user
+            })
+          );
           localStorage.setItem('id-business-v2-theme', theme);
         },
         { theme, user: administrator }
@@ -569,8 +578,17 @@ try {
   // 生命周期采用同一个标签页内的真实路由切换，整页加载不代替草稿恢复验收。
   const context = await browser.newContext({ viewport: { width: 1440, height: 1100 } });
   await context.addInitScript((user) => {
-    localStorage.setItem('apple_business_access_token', 'synthetic-access');
-    localStorage.setItem('apple_business_current_user', JSON.stringify(user));
+    sessionStorage.setItem(
+      'apple_business_auth_v2',
+      JSON.stringify({
+        schemaVersion: 2,
+        credentialId: 'online-fixture-' + user.id,
+        token: 'synthetic-access',
+        tokenRevision: 1,
+        updatedAt: Date.now(),
+        userCache: user
+      })
+    );
   }, administrator);
   const page = await context.newPage();
   lastPage = page;
@@ -1025,7 +1043,12 @@ try {
   writeFileSync(
     resolve(evidence, 'failure.json'),
     JSON.stringify(
-      { message: error.message, cases: report.cases.length, lifecycle: report.lifecycle },
+      {
+        message: error.message,
+        url: lastPage && !lastPage.isClosed() ? lastPage.url() : null,
+        cases: report.cases.length,
+        lifecycle: report.lifecycle
+      },
       null,
       2
     )

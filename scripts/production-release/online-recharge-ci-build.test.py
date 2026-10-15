@@ -26,11 +26,14 @@ class SourceTests(unittest.TestCase):
     def setUpClass(cls):
         cls.files, cls.record = ci.source_projection()
 
-    def test_real_four_git_objects_match_frozen_application_online_and_admin(self):
+    def test_current_git_objects_are_bound_without_claiming_historical_release_authority(self):
         self.assertFalse(self.record['releaseAuthority'])
-        self.assertEqual(self.record['applicationInputSha256'], ci.c.APPLICATION_SHA256)
-        self.assertEqual(self.record['onlineInputSha256'], ci.c.ONLINE_SHA256)
-        self.assertEqual(self.record['ordinaryProducer'], ci.c.sealed_authority()['producer'])
+        self.assertEqual(self.record['scope'], 'CI_ONLY')
+        self.assertTrue(self.record['notForRelease'])
+        self.assertEqual(self.record['candidateCommit'], ci.git('rev-parse', 'HEAD').decode().strip())
+        self.assertNotIn('ordinaryProducer', self.record)
+        inventory = ci.c.load_core().projection_module().inventory(self.files)
+        self.assertEqual(self.record['outputFilesSha256'], ci.c.fingerprint(inventory))
         for name in ci.c.ADMIN_OVERLAY_FILES:
             self.assertEqual(self.files[name][0], ci.git('show', 'HEAD:' + name))
 
@@ -47,18 +50,28 @@ class SourceTests(unittest.TestCase):
                 ci.git_files('b' * 40)
 
     def test_application_drift_is_rejected_by_real_source_validator(self):
-        changed = dict(self.files)
+        frozen = ci.git_files(ci.c.APPLICATION_SOURCE)
+        ci.c.validate_source_files(frozen)
+        changed = dict(frozen)
         name = ci.c.ADMIN_OVERLAY_FILES[0]
         changed[name] = (changed[name][0] + b'\nchanged', changed[name][1])
         with self.assertRaisesRegex(RuntimeError, 'APPLICATION_SOURCE_CHANGED'):
             ci.c.validate_source_files(changed)
+
+    def test_current_git_projection_rejects_source_bytes_not_bound_to_its_tree(self):
+        changed = dict(self.files)
+        name = 'apps/admin/src/v2/features/online-recharge/sections.ts'
+        changed[name] = (changed[name][0] + b'\nchanged', changed[name][1])
+        with patch.object(ci, 'git_files', return_value=changed):
+            with self.assertRaisesRegex(RuntimeError, 'CANDIDATE_TREE_CHANGED'):
+                ci.source_projection()
 
     def test_ci_record_is_rejected_by_formal_build_validator(self):
         runtime = ci.load('online-recharge-component-runtime.py')
         value = {'version': 1, 'kind': ci.KIND, 'scope': 'CI_ONLY', 'releaseAuthority': False,
                  'sourceProjection': self.record, 'images': {}}
         with self.assertRaisesRegex(RuntimeError, 'BUILD_PROOF_CHANGED'):
-            runtime.validate_build(value, self.record['ordinaryProducer'], self.record, {}, '123',
+            runtime.validate_build(value, ci.c.sealed_authority()['producer'], self.record, {}, '123',
                 '012345678901.dkr.ecr.ap-northeast-1.amazonaws.com/id-business-v2-release')
 
 
