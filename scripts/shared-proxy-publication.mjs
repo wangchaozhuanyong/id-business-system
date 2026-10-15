@@ -118,7 +118,17 @@ if (process.argv[2] === 'controls') {
     resolve(root, 'scripts/lib/v2-production-database-access.mjs'),
     resolve(packageDir, 'production-database-access.mjs')
   );
+  cpSync(
+    resolve(root, 'scripts/mysql-dump-restore-normalizer.sed'),
+    resolve(packageDir, 'mysql-dump-restore-normalizer.sed')
+  );
+  const baseEngineFileHashes = Object.fromEntries(
+    engineChanged
+      .filter((path) => existsSync(resolve(source, path)))
+      .map((path) => [path.slice(engineDir.length), hash(readFileSync(resolve(source, path)))])
+  );
   const data = {
+    baseEngineFileHashes,
     status: 'VALIDATED_SCOPED_PUBLICATION_ARTIFACT',
     commit,
     sourceTree: git(['rev-parse', 'HEAD^{tree}']),

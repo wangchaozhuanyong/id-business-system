@@ -339,7 +339,7 @@ try {
       ]) {
         await importer
           .locator('.el-select')
-          .filter({ has: importer.getByRole('combobox', { name, exact: true }) })
+          .filter({ has: page.getByRole('combobox', { name, exact: true }) })
           .click();
         await page.getByRole('option', { name: label, exact: true }).click();
       }

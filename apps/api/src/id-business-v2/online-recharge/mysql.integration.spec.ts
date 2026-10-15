@@ -1307,4 +1307,34 @@ suite('线上代充隔离MySQL事务验收', () => {
       await expect(proxiesPool.active(tx, oldId)).rejects.toThrow('已停用');
     });
   });
+  it('keeps extraction links through legacy import and protects pending batch proxy references', async () => {
+    await assets.action(
+      'proxies',
+      'import',
+      {
+        proxies: [
+          'https://api.ipdeep.com/api/Pro/DynamicIp/GetIpByGenerateLink?id=synthetic-shared-only'
+        ]
+      },
+      operator
+    );
+    const proxy = (await pool.list()).items[0]!;
+    expect(proxy).toMatchObject({ connectionMode: 'extraction', protocol: 'http' });
+    const oldId = randomUUID();
+    await db.idBusinessV2ProxyAlias.create({ data: { oldId, proxyId: proxy.id } });
+    const task = await db.onlineRechargeTask.create({
+      data: {
+        operation: 'proxy_test',
+        message: 'synthetic pending batch',
+        payload: { ids: [oldId] }
+      }
+    });
+    await expect(pool.delete(proxy.id, operator)).rejects.toThrow('已用于充值任务');
+    await expect(
+      pool.update(proxy.id, { url: 'https://provider.example.test/another' }, operator)
+    ).rejects.toThrow();
+    await db.onlineRechargeTask.delete({ where: { id: task.id } });
+    await pool.delete(proxy.id, operator);
+    expect((await pool.list()).total).toBe(0);
+  });
 });

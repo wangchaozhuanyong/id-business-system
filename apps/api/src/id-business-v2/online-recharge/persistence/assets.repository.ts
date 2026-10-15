@@ -1,4 +1,3 @@
-import { parseOnlineRechargeProxy } from '../proxy-input';
 import { OnlineProxyPoolRepository } from '../../proxy-pool/public-api';
 import {
   BadRequestException,
@@ -218,23 +217,6 @@ export class OnlineRechargeAssetsRepository {
     input: Record<string, unknown>,
     operator: AuthenticatedUser
   ) {
-    if (action === 'import' && Array.isArray(input.proxies)) {
-      input = {
-        ...input,
-        proxies: input.proxies.map((value) => {
-          if (typeof value !== 'string') return value;
-          const proxy = parseOnlineRechargeProxy(value);
-          return {
-            url: proxy.raw,
-            connectionMode: proxy.protocol === 'extraction' ? 'extraction' : 'direct',
-            protocol: proxy.protocol === 'extraction' ? 'http' : proxy.protocol,
-            countryCode: input.countryCode,
-            kind: input.kind,
-            remark: input.remark
-          };
-        })
-      };
-    }
     return this.proxiesPool.action(action, input, operator);
   }
 

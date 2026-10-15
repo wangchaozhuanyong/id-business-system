@@ -7,6 +7,36 @@ import { RechargeProxyRepository } from './proxy-pool.repository';
 import { RechargeProxyService } from '../proxy-pool.service';
 import { bankRechargeObject, bankRechargeId } from '../validation';
 
+function legacyProxy(value: string) {
+  let url = value.trim();
+  if (!url.includes('://')) {
+    const match = /^([^:/\s]+):(\d{1,5}):([^:\r\n]+):([^\r\n]+)$/.exec(url);
+    if (!match) throw new BadRequestException('代理地址格式无效');
+    url = `http://${encodeURIComponent(match[3]!)}:${encodeURIComponent(match[4]!)}@${match[1]}:${match[2]}`;
+  }
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    throw new BadRequestException('代理地址格式无效');
+  }
+  const extraction =
+    parsed.protocol === 'https:' &&
+    parsed.hostname === 'api.ipdeep.com' &&
+    parsed.pathname === '/api/Pro/DynamicIp/GetIpByGenerateLink' &&
+    parsed.searchParams.has('id') &&
+    Boolean(parsed.searchParams.get('id')) &&
+    !parsed.port &&
+    !parsed.username &&
+    !parsed.password &&
+    !parsed.hash;
+  return {
+    url,
+    connectionMode: extraction ? 'extraction' : 'direct',
+    protocol: extraction ? 'http' : parsed.protocol.slice(0, -1)
+  };
+}
+
 @Injectable()
 export class OnlineProxyPoolRepository {
   constructor(
@@ -75,8 +105,7 @@ export class OnlineProxyPoolRepository {
           proxies: input.proxies.map((value) =>
             typeof value === 'string'
               ? {
-                  url: value,
-                  connectionMode: 'direct',
+                  ...legacyProxy(value),
                   countryCode: input.countryCode,
                   kind: input.kind,
                   remark: input.remark
