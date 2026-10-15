@@ -72,6 +72,8 @@ def validate_proof(proof, plan, contract, payload, h):
     need(proof.get('version') == 1 and proof.get('scope') == contract['scope']
          and all(proof.get(k) == plan[k] for k in ('commit', 'tree', 'workflowRunId', 'workflowRunAttempt', 'contractSha256'))
          and proof.get('baselineApiReproduced') is True and proof.get('baselineAdminArtifactVerified') is True
+         and proof.get('databaseVerification') == {**contract['databaseValidationNative'],
+             'verified': True, 'reused': True, 'testsPassed': 32}
          and proof.get('baselineAdminVerification') == {**contract['publishedAdminNative'], 'verified': True,
              'publicInventorySha256': digest(json.dumps(contract['publicFiles'], sort_keys=True, separators=(',', ':')).encode())}
          and proof.get('updatedServices') == ['api', 'admin'] and proof.get('migrationPerformed') is False
