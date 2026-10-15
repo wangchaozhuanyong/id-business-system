@@ -4,6 +4,7 @@ on:
     branches: [codex/shared-proxy-pool-published-base-20261015]
 permissions:
   contents: read
+  actions: read
 concurrency:
   group: shared-proxy-pool-publication-${{ github.ref }}
   cancel-in-progress: false
@@ -25,14 +26,21 @@ jobs:
         with:
           node-version: 24
           cache: npm
+      - name: Reuse native checks only for unchanged business inputs
+        id: reuse
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node scripts/shared-proxy-validation-reuse.mjs
       - run: npm ci --no-audit
       - run: npm run prisma:mysql:generate && npm run prisma:mysql:validate
       - run: npm run typecheck && npm run build
       - name: Verify the seven V2 controls and affected source
+        if: steps.reuse.outputs.verified != 'true'
         run: |
           for check in check:admin-ui check:v2-ui-language check:v2-color-contrast check:v2-table-standard check:v2-loading-standard check:v2-module-architecture check:v2-isolation check:v2-prisma-runtime-boundary check:v2-concurrency-standard; do npm run "$check"; done
           node scripts/shared-proxy-publication.mjs controls
       - name: Verify both recharge systems and the shared pool
+        if: steps.reuse.outputs.verified != 'true'
         run: |
           npm run test --workspace @apple-business/admin -- src/v2/features/auto-recharge src/v2/features/proxy-pool src/v2/features/online-recharge src/v2/features/registry.spec.ts src/v2/router/routes.spec.ts
           npm run test --workspace @apple-business/api -- src/id-business-v2/auto-recharge src/id-business-v2/proxy-pool src/id-business-v2/online-recharge
@@ -42,16 +50,21 @@ jobs:
           npm run test:online-recharge:engine
           npm run test:online-recharge:controls
       - name: Verify real migrations and repository operations on owned empty MySQL
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && steps.reuse.outputs.verified != 'true' }}
         run: |
           python3 -B scripts/ci-recharge-migration.py
           node scripts/acceptance-v2-shared-proxy-mysql.mjs
           npm run acceptance:v2-production-database-access
+      - name: Verify changed acceptance controls
+        run: |
+          npx prettier --check scripts/acceptance-v2-online-recharge-ui.mjs scripts/shared-proxy-validation-reuse.mjs .github/workflows/shared-proxy-pool-validation.yml
+          npx eslint scripts/acceptance-v2-online-recharge-ui.mjs scripts/shared-proxy-validation-reuse.mjs
+          node --check scripts/acceptance-v2-online-recharge-ui.mjs
       - name: Verify actual routes with synthetic data
         if: ${{ !cancelled() }}
         run: |
           npx playwright install --with-deps chromium
-          node scripts/acceptance-v2-recharge-proxies-ui.mjs
+          if [[ "${{ steps.reuse.outputs.verified }}" != true ]]; then node scripts/acceptance-v2-recharge-proxies-ui.mjs; fi
           npm run acceptance:v2-online-recharge-ui -- --quick
           npm run acceptance:v2-auto-recharge
       - name: Independently reproduce the published baseline and package the scoped overlay

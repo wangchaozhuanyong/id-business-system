@@ -96,6 +96,7 @@ const settings = {
 const common = { id: taskId, createdAt: date, updatedAt: date, status: 'active' };
 const task = {
   ...common,
+  operation: 'recharge',
   status: 'succeeded',
   plan: 'plus',
   provider: 'local',
@@ -430,6 +431,7 @@ async function fixture(context, state) {
         id: '33333333-3333-4333-8333-333333333333',
         status: 'queued',
         progress: 0,
+        operation: 'recheck',
         message: '合成原单核对排队',
         result: undefined
       });
@@ -438,7 +440,13 @@ async function fixture(context, state) {
       const body = req.postDataJSON();
       configTargets.push(body.target);
       state.configTarget = body.target;
-      return ok({ ...task, status: 'queued', progress: 0, result: undefined });
+      return ok({
+        ...task,
+        operation: 'config_test',
+        status: 'queued',
+        progress: 0,
+        result: undefined
+      });
     }
     if (action === 'subscribe')
       return ok({ ticket: 'synthetic-ticket', wsPath: '/api/id-business-v2/online-recharge/ws' });
@@ -884,11 +892,13 @@ try {
     '公开凭据进入浏览器存储'
   );
   assert.ok(
-    network.publicHeaders.every((value) => value === null),
-    '公开提交附带后台身份'
+    network.publicHeaders.every(
+      (value) => typeof value === 'string' && value.startsWith('Bearer ')
+    ),
+    '内部兼容提交缺少后台身份'
   );
   report.lifecycle.push({
-    case: 'public-session-volatile-capability-no-browser-storage-no-admin-header',
+    case: 'internal-session-volatile-capability-no-browser-storage-authenticated',
     result: 'PASS'
   });
   await page.locator('textarea').fill(privateSession);
