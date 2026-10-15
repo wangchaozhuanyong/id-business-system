@@ -52,6 +52,7 @@ if (
   changed.some((path) => rechargeRecordControlPaths.includes(path))
 ) {
   run('python3', ['-B', 'scripts/production-release/recharge-record-release.test.py']);
+  run('python3', ['-B', 'scripts/production-release/recharge-record-finalize.test.py']);
   run('node', ['--test', 'scripts/ci-recharge-record.test.mjs']);
 }
 const resumeCombinedGuardPrefix =
