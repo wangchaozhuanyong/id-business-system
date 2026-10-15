@@ -95,6 +95,14 @@ def runtime_receipt(directory, raw, states):
                 for n in ('.env.aws.production', 'compose.release.json', 'docker-compose.aws-mysql.yml')}}
 
 
+def verify_admin_origin(manifest, contract):
+    expected = contract.get('publishedSharedProxy', {}).get('runtimeProjection',
+                 contract['publishedAdminSuccessor']['roleProjection'])
+    need(manifest.get('adminSourceProjection') == expected
+         and manifest.get('compiledArtifact') == contract['publishedAdminSuccessor']['nativeOrigin'],
+         'ADMIN_ORIGIN_CHANGED')
+
+
 def verify_runtime_receipt(actual, expected):
     need(type(expected) is dict and actual == expected, 'PREFLIGHT_RUNTIME_MOVED')
 
@@ -238,9 +246,7 @@ def baseline(d, contract, h, expected_runtime=None):
     verify_modules(d,previous,contract['apiModules'])
     verify_admin(d,states['admin'],published_admin_files(contract))
     if contract.get('publishedAdminSuccessor'):
-        manifest = json.loads(raw)
-        need(manifest.get('adminSourceProjection') == contract['publishedAdminSuccessor']['roleProjection']
-             and manifest.get('compiledArtifact') == contract['publishedAdminSuccessor']['nativeOrigin'], 'ADMIN_ORIGIN_CHANGED')
+        verify_admin_origin(json.loads(raw), contract)
     h.guards(d,previous,states,contract)
     if expected_runtime is not None:
         verify_runtime_receipt(runtime_receipt(previous, raw, states), expected_runtime)

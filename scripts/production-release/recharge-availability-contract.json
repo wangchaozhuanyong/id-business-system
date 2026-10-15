@@ -1124,7 +1124,7 @@
     "apps/api/src/id-business-v2/auto-recharge/worker/pay.py": "dfd5d5cc51e055798ac89cb4683743cdc2d9227ceec08497c3239f70f72a2b32",
     "apps/api/src/id-business-v2/auto-recharge/worker/subscription_cycle.py": "7f6c5dd05db4d72922965f83c88e61ab4c0d4b781933ab2cdaf0064904997019",
     "apps/api/src/id-business-v2/auto-recharge/worker/test_declined_resolution.py": "971b0e2da304314c86e30ccc70bdef749d21646effa4f4548765ea37747f254b",
-    "docs/AUTO_RECHARGE_PAYMENT_AVAILABILITY_20261015.md": "4cf491ba8139db7f5f66077b4f2f14ed6acedb626f679b7f628536fa6e68e925",
+    "docs/AUTO_RECHARGE_PAYMENT_AVAILABILITY_20261015.md": "fbaf19d2f1fae8439d60f087072eb63a301c19b5516f7ecaed487a2c57a20753",
     "packages/shared/src/v2/auto-recharge.ts": "da6fbc0efb928d99848e3661043a3583af912692650a4264b7b8fe5a509397f6"
   },
   "version": 1,
@@ -1436,6 +1436,19 @@
       "Verify preserved production diagnostics with shared proxy execution",
       "Verify actual routes with synthetic data",
       "Independently reproduce the published baseline and package the scoped overlay"
-    ]
+    ],
+    "runtimeProjection": {
+      "ciRun": "38753953252",
+      "commit": "3cf2293bdc1fb62ea44196b8a8775d42b1cc5c9c",
+      "evidence": "shared-proxy-acceptance-receipt.json",
+      "kind": "SCOPED_PUBLISHED_ROLE_OVERLAY",
+      "preservedPublishedExecutorFiles": null,
+      "publicationArtifactSha256": "fca59fb3db8190cbb88b7369283798049dd08cca7ff8f806370cb165e146e6e8",
+      "publishedBaseImageId": "sha256:ae7d0f46e5dc15a6ba6ba63e20927f24dd87e730d04b6cbb071e429127e733ce",
+      "role": "admin",
+      "runtimeImageId": "sha256:92c81aee1a919885b1e2aa6fb6a8b73b2eb41aa49f9b60c010f0df1989e5231d",
+      "scope": "SHARED_PROXY_POOL_ACCOUNT_SETTINGS_ONLY",
+      "sourceTree": "81f2b3be7c06a0c13226ca16d0dc929252748b23"
+    }
   }
 }

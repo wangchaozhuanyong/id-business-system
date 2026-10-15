@@ -248,11 +248,16 @@ def verify_shared_proxy_sources(contract):
     changed = set(git('diff', '--name-only', contract['publishedAdminSuccessor']['sourceCommit'],
                       binding['sourceCommit'], '--', *sorted(set(files) | set(parent))).decode().splitlines())
     actual = {n: files[n]['sha256'] if n in files else None for n in changed}
+    projection = binding['runtimeProjection']
     need(all(n.startswith('apps/admin/src/v2/') for n in actual)
          and actual == contract['preservedAdminSources']
          and digest(canonical(actual)) == binding['sourceDeltaSha256']
          and len(files) == binding['inputFileCount'] and digest(canonical(files)) == binding['inputSha256']
-         and git('rev-parse', binding['sourceCommit']+'^{tree}').decode().strip() == binding['sourceTree'],
+         and git('rev-parse', binding['sourceCommit']+'^{tree}').decode().strip() == binding['sourceTree']
+         and projection['commit'] == binding['sourceCommit'] and projection['sourceTree'] == binding['sourceTree']
+         and projection['publicationArtifactSha256'] == binding['archiveSha256']
+         and projection['ciRun'] == str(binding['runId']) and projection['role'] == 'admin'
+         and projection['runtimeImageId'] == contract['services']['admin']['image'],
          'PRESERVED_ADMIN_SOURCE_CHANGED')
 
 

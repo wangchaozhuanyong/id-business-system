@@ -26,6 +26,18 @@ dispatch = load('availability_test_dispatch', 'recharge-availability-dispatch.py
 
 
 class AvailabilityPublicationTests(unittest.TestCase):
+    def test_admin_origin_uses_the_finalized_proxy_projection_and_rejects_older_or_changed_metadata(self):
+        contract={'publishedAdminSuccessor':{'roleProjection':{'commit':'old'},'nativeOrigin':{'sha256':'original'}},
+                  'publishedSharedProxy':{'runtimeProjection':{'commit':'published-proxy'}}}
+        manifest={'adminSourceProjection':{'commit':'published-proxy'},'compiledArtifact':{'sha256':'original'}}
+        release.verify_admin_origin(manifest,contract)
+        for changed in ({**manifest,'adminSourceProjection':{'commit':'old'}},
+                        {**manifest,'compiledArtifact':{'sha256':'unreviewed'}}):
+            with self.assertRaisesRegex(RuntimeError,'ADMIN_ORIGIN_CHANGED'):
+                release.verify_admin_origin(changed,contract)
+        release.verify_admin_origin({**manifest,'adminSourceProjection':{'commit':'old'}},
+                                    {'publishedAdminSuccessor':contract['publishedAdminSuccessor']})
+
     def test_frontend_preparation_normalization_cannot_hide_api_or_other_preparation_changes(self):
         old = "def prepare():\n    if name == 'candidate':\n        copy_sources(context, contract)\n"
         current = "def prepare():\n    if name == 'candidate':\n        apply_preserved_admin_sources(context, contract)\n        copy_sources(context, contract)\n"
