@@ -46,7 +46,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: python3 -B scripts/production-release/recharge-record-build.py verify-prior-validation
-      - name: Build API repair and independently reproduce live API baseline
+      - name: Build diagnostic repair and independently reproduce current API and Admin baselines
         run: python3 -B scripts/production-release/recharge-record-build.py build
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:

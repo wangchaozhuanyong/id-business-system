@@ -168,35 +168,57 @@ def prepare():
         run('npm', 'run', 'build', '--workspace', 'packages/shared', cwd=context)
 
 
+def overlay_published_admin(context, contract):
+    for name, expected in contract['publishedAdminSources'].items():
+        raw = subprocess.check_output(['git', 'show', contract['preservedAdminCommit'] + ':' + name], cwd=ROOT)
+        need(digest(raw) == expected, 'PUBLISHED_ADMIN_SOURCE_CHANGED')
+        (context / name).write_bytes(raw)
+
+
 def build():
     contract = json.loads(CONTRACT.read_bytes())
     verify_scope(contract)
     baseline, candidate = OUTPUT / 'baseline', OUTPUT / 'candidate'
     run('npm', 'run', 'build', '--workspace', 'apps/api', cwd=baseline)
+    overlay_published_admin(baseline, contract)
+    admin_dependencies(baseline)
+    baseline_env = {**os.environ, 'NODE_ENV': 'production',
+                    'V2_BUILD_ID': 'v2-' + contract['preservedAdminCommit']}
+    run('npm', 'run', 'build', '--workspace', 'apps/admin', cwd=baseline, env=baseline_env)
     need(digest((baseline / MODULE).read_bytes()) == contract['apiValidationSha256'],
          'BASELINE_API_NOT_REPRODUCED')
+    need(inventory(baseline / 'apps/admin/dist') == contract['publicFiles'],
+         'BASELINE_ADMIN_NOT_REPRODUCED')
     run('npm', 'run', 'typecheck', '--workspace', 'apps/api', cwd=candidate)
     run('npm', 'run', 'build', '--workspace', 'apps/api', cwd=candidate)
+    overlay_published_admin(candidate, contract)
+    run('npm', 'run', 'typecheck', '--workspace', 'apps/admin', cwd=candidate)
+    run('npm', 'run', 'test', '--workspace', 'apps/admin', '--',
+        'src/v2/features/online-recharge/api.spec.ts', cwd=candidate)
+    admin_dependencies(candidate)
     commit, tree = git('rev-parse', 'HEAD'), git('rev-parse', 'HEAD^{tree}')
+    run('npm', 'run', 'build', '--workspace', 'apps/admin',
+        cwd=candidate, env={**os.environ, 'NODE_ENV': 'production', 'V2_BUILD_ID': 'v2-' + commit})
     payload = OUTPUT / 'payload'
     (payload / 'api').mkdir(parents=True)
     shutil.copyfile(candidate / MODULE, payload / 'api/recharge-validation.js')
-    for name in contract['changedSources']:
+    shutil.copytree(candidate / 'apps/admin/dist', payload / 'admin/html')
+    for name in {**contract['changedSources'], **contract['publishedAdminSources']}:
         path = payload / 'source' / name
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes((candidate / name).read_bytes())
-    proof = {'version': 2, 'scope': 'RECHARGE_RECORD_DIAGNOSTICS_ONLY',
+    proof = {'version': 3, 'scope': 'RECHARGE_RECORD_DIAGNOSTICS_ONLY',
              'commit': commit, 'tree': tree, 'contractSha256': digest(CONTRACT.read_bytes()),
              'workflowRunId': os.environ['GITHUB_RUN_ID'],
              'workflowRunAttempt': os.environ['GITHUB_RUN_ATTEMPT'],
              'sourceBaseline': contract['sourceBaseline'],
              'liveManifestSha256': contract['manifestSha256'],
-             'baselineApiReproduced': True, 'baselineAdminPreserved': True,
-             'preservedAdminImageId': contract['services']['admin']['image'],
-             'preservedAdminFilesSha256': contract['preservedAdminFilesSha256'],
+             'baselineApiReproduced': True, 'baselineAdminReproduced': True,
+             'publishedAdminPatchCommit': contract['preservedAdminCommit'],
+             'publishedAdminSources': contract['publishedAdminSources'],
              'controllerSha256': digest((ROOT / 'scripts/production-release/recharge-record-release.py').read_bytes()),
              'releaseUtilitySha256': digest((ROOT / 'scripts/production-release/remote-deploy.py').read_bytes()),
-             'files': inventory(payload), 'updatedServices': ['api'],
+             'files': inventory(payload), 'updatedServices': ['api', 'admin'],
              'dependentServiceRebound': 'online-recharge',
              'migrationPerformed': False, 'businessActions': 0}
     (payload / 'build-proof.json').write_text(json.dumps(proof, sort_keys=True, indent=2) + '\n')
