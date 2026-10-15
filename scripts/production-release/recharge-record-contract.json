@@ -1,7 +1,7 @@
 {
   "apiValidationSha256": "f0cb57b4710b4574d4c47e1d3036959b7b9652de7d6fb0fc1ac31913b76fd812",
-  "baselineObservationCommandId": "214d8a6f-267a-47c8-b91e-1981324a320e",
-  "baselineObservationRawSha256": "fc8d6cd75ab6b085007d5bd6752f9df276005f8acf37726c128070fc96e4fb04",
+  "baselineObservationCommandId": "a83021eb-87f9-48f5-a5cc-295bac407ab2",
+  "baselineObservationRawSha256": "9b0dec6c9f4304d1470f4417c3e4148f47d4021f3aa1d7ae72ff03c07af76027",
   "changedSources": {
     "apps/admin/src/v2/features/auto-recharge/RechargePageContext.vue": "aec120b69e3f13e99ccbef4df2e3407d05a06054b40dee7bae3cf65fc3a422c1",
     "apps/admin/src/v2/features/auto-recharge/recharge-callback-diagnostics.ts": "8be881cab095df487ac09a2a0f88a504e086beefef3a94cb9b9e76a12f1fa3a8",
@@ -18,7 +18,7 @@
   },
   "configurationSha256": {
     ".env.aws.production": "730449a5ff3d3027c77ef9ed585b2768c44cf6e40f837a2ec609b86ae9bb81c3",
-    "compose.release.json": "245c02638f74a95cab6006dda529b6f4cc787c086ac1b0ff1faa2a5a5801e689",
+    "compose.release.json": "cec24fdcdb6eb92cdd3f110551eda791c88fb7d6a434f0f4b086d8be0a9247d8",
     "docker-compose.aws-mysql.yml": "953c6264f157b00218f2a019d5e2c0b6bc4a34f687f2ec42ad782e0009e7672c"
   },
   "current": "/opt/id-business-v2/releases/20261014T184651Z-f8a1612d9b46-direct-online",
@@ -31,10 +31,10 @@
     "stopping": false
   },
   "mainBase": "f91e7d85c83cd23fe7ff7d98f751c4a890024f31",
-  "manifestSha256": "54fd32cb1a0eca503e157efe0b371520e5477c27f85ee41287f27baa270ebbce",
+  "manifestSha256": "98c90bb7acccef72eded06e589a98711e9f042aa5a860d5b256cb4760287c73b",
   "preservedAdminCommit": "6b4237006e8cc083d31f8ab146ee7186e13c6737",
   "preservedAdminFilesSha256": "a27d73e26b06d83c875d84f557a3cae35b574baa91a7a92dd8fcd722e0be0a01",
-  "preservedEngineCommit": "8f93d4ab55164b1adb47347a039e96d09e4ad312",
+  "preservedEngineCommit": "adb3a3c7a63054520c284838189d85064e1c019a",
   "priorApplicationValidation": {
     "commit": "0843571b60f7e149fca350965590ebc06e57ffb1",
     "runId": "38674893292",
@@ -379,12 +379,12 @@
       "status": "running"
     },
     "online-recharge": {
-      "containerId": "9319a10dec278c12fb8588037c543f702b2610b911afbb1e6fc467a12a2074e8",
+      "containerId": "2105629100f7dbf62eda66aceff24dff49f43288339d814e8a887bf992d0e7f5",
       "environmentSha256": "60bb48bbd6e03a4ceebe245c8405f248d0c682a27287aabb17c1d3573e50ad37",
       "health": "healthy",
-      "image": "sha256:bc4620edf3bd195dcd679015678e89c1c0a399de9c54d6e9a663a8cca4691767",
-      "reference": "id-business-v2-direct:8f93d4ab-online-engine",
-      "startedAtSha256": "4d31b7d2eff80f61317e606a2f8181a2d336421f7e882bd0528c94e66bf4237b",
+      "image": "sha256:49f530475998ad007d675f6c73961f445fc5e989ce3bbfb9c9b3313939066137",
+      "reference": "id-business-v2-direct:adb3a3c7-online-engine",
+      "startedAtSha256": "94bca3ba65e06be2d81a705bd08abda4276ce7614ddc3c864fb35fb176f40212",
       "status": "running"
     }
   },
