@@ -502,6 +502,7 @@ async function run() {
         if (!preflight.allowed) return { success: false, submitted: false, ...preflight };
         const operation = preflight.kind;
         if (!['initial', 'upgrade'].includes(operation)) throw new Error('无法确定首次开通或升级操作');
+        const expectedCurrency = require('../confirmation.cjs').resolvePaymentCurrency(preflight, billingCurrency, { debugOnly });
 
         // --- Phase 2: API 创建 Checkout（注入账单地区），失败时回退 UI 定价页 ---
         const checkoutMode = String(process.env.CHECKOUT_MODE || 'api').toLowerCase();
@@ -534,17 +535,25 @@ async function run() {
             console.log('🧭 [步骤] 正在打开定价页并选择升级套餐...');
             checkoutResult = await openPricingCheckout(page, {
                 region: billingCountry,
-                planType
+                planType,
+                operation,
+                debugOnly
             });
         }
 
         if (debugOnly) {
             await waitForDebugPaymentStep(page);
+            const observedDue = await require('./stripe-payment').readCheckoutDueAmount(page);
+            const observedCurrency = observedDue?.currency || null;
+            const pricingRegionVerified = operation === 'initial' ? checkoutResult?.pricingRegionVerified ?? null : null;
+            if (pricingRegionVerified === false) {
+                console.warn(`[调试] 仅观察官网付款页：配置地区 ${billingCountry} 未核验，实际应付币种 ${observedCurrency || '未识别'}；不可作为正式付款验收`);
+            }
             const checkoutUrl = checkoutResult?.checkoutUrl || page.url();
             console.log(`🔗 [调试] 支付链接: ${checkoutUrl}`);
             console.log(`CHECKOUT_URL: ${checkoutUrl}`);
             console.log('CHECKOUT_DEBUG_SUCCESS');
-            return { success: true, debugOnly: true, checkoutUrl }; 
+            return { success: true, debugOnly: true, checkoutUrl, requestedRegion: operation === 'initial' ? billingCountry : null, observedCurrency, pricingRegionVerified };
         }
 
         console.log('✅ [步骤] Checkout 页面已打开，开始信用卡支付流程...');
@@ -559,7 +568,7 @@ async function run() {
             cdkCode,
             email,
             stripeSessionId,
-            operation, preflight, expectedCurrency: billingCurrency, checkoutKind: checkoutResult?.kind,
+            operation, preflight, expectedCurrency, checkoutKind: checkoutResult?.kind,
             confirmPayment: () => require('../confirmation.cjs').confirmSubscription(planType, accessToken)
         });
 

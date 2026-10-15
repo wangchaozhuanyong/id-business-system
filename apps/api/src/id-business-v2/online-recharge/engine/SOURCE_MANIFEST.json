@@ -54,9 +54,9 @@
     {
       "path": "confirmation.cjs",
       "originalSha256": null,
-      "adaptedSha256": "36c1fcfcee1de89305c26ecdbf84c52744c91c4151e2c1aff1fdc80e8f9e53d3",
+      "adaptedSha256": "9433429d6bb24a96aa65acebca28264e1acd97306359ff4ff070eaf507ec7dcf",
       "changed": true,
-      "reason": "2026-10-15 Pro档位及升级适配：精确目标、官网报价、单次提交、实际付款方式与原单证据保护；不猜Pro500上游ID。保留既有必要适配。"
+      "reason": "Whitelist bounded original-provider order facts after read-only recheck; preserve all payment guards, omit credentials and arbitrary supplier metadata."
     },
     {
       "path": "credential-client.cjs",
@@ -103,9 +103,9 @@
     {
       "path": "plans.cjs",
       "originalSha256": null,
-      "adaptedSha256": "6dbdaeb25db6f50db41c8324c9bdcea7f13cff354a741937c640a17cc41b000c",
+      "adaptedSha256": "08ca20d5ff83626a14f6abca6ab0645efd364d9d19b36c969289607daa0aeb0e",
       "changed": true,
-      "reason": "本模块新增：明确档位与套餐升级兼容、保存卡及官网报价核验，缺少证据不付款或不报成功。"
+      "reason": "Recognize the exact observed chatgptfreeplan alias only with verified inactive subscription and matching account; reserve free aliases from paid plan mapping."
     },
     {
       "path": "proxy-resolver.cjs",
@@ -124,16 +124,16 @@
     {
       "path": "rpc.cjs",
       "originalSha256": null,
-      "adaptedSha256": "7035512ff0cce47d90f01032e737f9feafed23d807ef93d0c20aefce385164b7",
+      "adaptedSha256": "2286dcf7e7f5844299877a9ca70d51edd5437dd3230f83ff6dface0982d1273b",
       "changed": true,
-      "reason": "Allowlisted internal HTTP RPC, task/card leases, pre-submit authorization and unknown/confirmed-payment states."
+      "reason": "兼容Nest成功空响应及文本标量；仅已核实的可空资源允许空正文，提交授权与其他接口仍严格拒绝空/无效响应。"
     },
     {
       "path": "safe-media.cjs",
       "originalSha256": null,
-      "adaptedSha256": "33db82b0f0ea60675e829f028a5e2e532d6b42a6fbdf9f6c9f23eeb32f9e187c",
+      "adaptedSha256": "3e72084292eb92de5016cad49fcc8239ed49f4ebd795032560d9f8f46bf24105",
       "changed": true,
-      "reason": "Actual-page mandatory masks, screenshot-sequence VP9 WebM; no raw recording or fallback capture."
+      "reason": "Bound masked media finalization to preserve finished evidence; recognize exact native Pro plan groups and report only redacted radio structure when exact tier remains unavailable."
     },
     {
       "path": "security.cjs",
@@ -145,9 +145,9 @@
     {
       "path": "task-runner.cjs",
       "originalSha256": null,
-      "adaptedSha256": "1dbcf546a488869e513a992109ad6c446acc204798f75b580b5cbd2ebfd17184",
+      "adaptedSha256": "9f8a805139f231c950c44d8068d2df763f30037a8d6988ad89299013f21a445a",
       "changed": true,
-      "reason": "审计修复：续费未知结果明确保留待核对，禁止清除未知提交状态。"
+      "reason": "任务初始化区分配置、代理、环境和执行阶段；异常仅经现有安全控制台脱敏记录，不改变付款状态保护。"
     },
     {
       "path": "test/checkout-outcomes.test.cjs",
@@ -166,9 +166,9 @@
     {
       "path": "test/debug-checkout.test.cjs",
       "originalSha256": null,
-      "adaptedSha256": "173b35fbc0177a0697dd621841780054a105afee69e2ab2e98b4defc9c0db4d0",
+      "adaptedSha256": "02278f50e7421ffeeb8c43fa29addd640952d755cd4c78bdc1397baa82c8db8c",
       "changed": true,
-      "reason": "Offline VM tests of the actual readonly debug helper: original four labels, exact Upgrade to Pro, unchanged 60-second no-match timeout, and zero click/fill calls; no upstream executor import or network."
+      "reason": "Allow controlled debug to observe current checkout region without authorizing payment; defer exact tier selection only for a unique empty Pro card, verify tier at checkout and retain all real payment gates."
     },
     {
       "path": "test/dispatch.test.cjs",
@@ -201,9 +201,9 @@
     {
       "path": "test/regressions.test.cjs",
       "originalSha256": null,
-      "adaptedSha256": "ca7d2b9a22b59aea849923396d040040f5304991a5dd07367f4ce593a5bb20a2",
+      "adaptedSha256": "fe7c984130b09cde6a548f8a4ae14f43e9530c88d9806ce120a205c6ab6f972f",
       "changed": true,
-      "reason": "离线回归：第三方终态及原单核对身份验证。"
+      "reason": "Keep transient heartbeat failures within the server-confirmed lease; stop expired ownership before execution or completion, with bounded child shutdown and secret-free diagnostics."
     },
     {
       "path": "test/renewal-recheck.test.cjs",
@@ -220,11 +220,18 @@
       "reason": "2026-10-15 Pro档位及升级适配：精确目标、官网报价、单次提交、实际付款方式与原单证据保护；不猜Pro500上游ID。保留既有必要适配。"
     },
     {
+      "path": "test/rpc-response.test.cjs",
+      "originalSha256": null,
+      "adaptedSha256": "78a6378432e5381ea782997666387982667f7be5c2b9013f571a60a8a961a5e3",
+      "changed": true,
+      "reason": "离线回归真实HTTP响应解析、空代理池初始化、付款授权拒绝空响应、错误阶段与凭据脱敏。"
+    },
+    {
       "path": "test/runtime-main.test.cjs",
       "originalSha256": null,
-      "adaptedSha256": "ba3ce562fe9997617619f629247e86cfc92d9a40cfb93d1a111e0d99191f8f9d",
+      "adaptedSha256": "23de99397726284aef901a1071859206a7c525c3ed64fac8853149cd8e828475",
       "changed": true,
-      "reason": "Offline synthetic runtime tests for private health, 0700 transient paths, SIGINT/SIGTERM, late result/claim races and lease-based interrupted-task recovery."
+      "reason": "Keep transient heartbeat failures within the server-confirmed lease; stop expired ownership before execution or completion, with bounded child shutdown and secret-free diagnostics."
     },
     {
       "path": "test/upgrade-checkout.test.cjs",
@@ -234,11 +241,18 @@
       "reason": "本模块新增：覆盖准确档位、单次提交、保存卡、报价、凭据完整性及未核实Pro500付款阻止。"
     },
     {
+      "path": "test/upgrade-currency.test.cjs",
+      "originalSha256": null,
+      "adaptedSha256": "6509176508fda35c5d504f20797676d69be412776338b64904955ba11073d3a1",
+      "changed": true,
+      "reason": "Offline currency inheritance, missing or foreign-account rejection, and final dialog currency mismatch checks."
+    },
+    {
       "path": "test/upgrade-plans.test.cjs",
       "originalSha256": null,
-      "adaptedSha256": "78d2097887cbaac22e5aa4d2da3e4b9765402c56c645a6b335133bce12f6666a",
+      "adaptedSha256": "2c88927059ed59f4aaf379c55acf5e0a38dc4cb3b7661f24c0362feec9300ee8",
       "changed": true,
-      "reason": "本模块新增：覆盖准确档位、单次提交、保存卡、报价、凭据完整性及未核实Pro500付款阻止。"
+      "reason": "Cover actual free plan parser output, identity and active-state rejection, and prevention of mapping free aliases to paid tiers."
     },
     {
       "path": "third-party.cjs",
@@ -355,9 +369,9 @@
     {
       "path": "upstream/index.js",
       "originalSha256": "1694958e105ebe962494d3c88bbf2f0c6b22e49028e46cfc77801e2c9f814855",
-      "adaptedSha256": "eee9a418a0cb9e2e4d47141779d90cd168db2aa9ca2ff3d2d77924b4f2d27cc8",
+      "adaptedSha256": "7649040b33dceb55a56659424b0128ab3dc57605219a31794a9fad2d837fd10e",
       "changed": true,
-      "reason": "2026-10-15 Pro档位及升级适配：精确目标、官网报价、单次提交、实际付款方式与原单证据保护；不猜Pro500上游ID。保留既有必要适配。"
+      "reason": "Verify the unique canonical Pro CTA independently of its top-half container; require a visible unique Pro card for deferred debug, exact checkout tier and all real payment guards. Keep debug-only region evidence explicit."
     },
     {
       "path": "upstream/mysql-store.js",
@@ -397,9 +411,9 @@
     {
       "path": "upstream/pricing-checkout.js",
       "originalSha256": "b3f7914013cfbc7b17469396fc51b80f32acc99e940b810d48ba8cea4237f894",
-      "adaptedSha256": "4091fde11fa6db421f1c1ac4de4fa1ad82908bb2c618a7b135a342e6010be13b",
+      "adaptedSha256": "e7c8f44b66f0c065ae3b9585a2809f62c238dbbf0054d038d5398f20d9d1bb8e",
       "changed": true,
-      "reason": "2026-10-15 Pro档位及升级适配：精确目标、官网报价、单次提交、实际付款方式与原单证据保护；不猜Pro500上游ID。保留既有必要适配。"
+      "reason": "Wait up to ten seconds for the exact official Pro Checkout tile to mount; reject ambiguous or wrong tiers and never infer an account/API plan_name."
     },
     {
       "path": "upstream/proxy-pool.js",
@@ -474,9 +488,9 @@
     {
       "path": "upstream/test/pricing-checkout.test.js",
       "originalSha256": "d5354791a21258f84f523943d381f25d89d00bf85cb8cfe78ed1c73b9f85c619",
-      "adaptedSha256": "a33922cf5bc21d46359f75d7274028914557cb8cf682fe53f3e9c594f10019f5",
+      "adaptedSha256": "026b23f7af812c30b3c5050a1fa818645732f26b27b5309919ad9840a778e64d",
       "changed": true,
-      "reason": "2026-10-15 Pro档位及升级适配：精确目标、官网报价、单次提交、实际付款方式与原单证据保护；不猜Pro500上游ID。保留既有必要适配。"
+      "reason": "Wait up to ten seconds for the exact official Pro Checkout tile to mount; reject ambiguous or wrong tiers and never infer an account/API plan_name."
     },
     {
       "path": "upstream/upgrade-checkout.js",
@@ -502,9 +516,30 @@
     {
       "path": "worker.cjs",
       "originalSha256": null,
-      "adaptedSha256": "464f1c1c0d41b00da1b3e08d376376dabe455d24c4f301ca6abf00792f1b93c6",
+      "adaptedSha256": "010fc671c329c16ea37e435c13ca594b1f92a3b14184f9793dabbc24113299d9",
       "changed": true,
-      "reason": "Native independent worker with private health, bounded signal shutdown, outcome transaction completion and lease-safe interrupted jobs; browser/solver transient data never enters persisted media/model volume."
+      "reason": "Keep transient heartbeat failures within the server-confirmed lease; stop expired ownership before execution or completion, with bounded child shutdown and secret-free diagnostics."
+    },
+    {
+      "path": "test/safe-media-finish.test.cjs",
+      "originalSha256": null,
+      "adaptedSha256": "9a1dc7840e268e5a72793ebc98a38e5f925fac0fc5441c14e2df6feb762f1945",
+      "changed": true,
+      "reason": "Synthetic bounded media finish regression tests; no browser, services or raw media."
+    },
+    {
+      "path": "test/worker-heartbeat.test.cjs",
+      "originalSha256": null,
+      "adaptedSha256": "8aa96a255496f10cb607ca3ef6537855c78465e6e117e4fb26bea1801d46aeed",
+      "changed": true,
+      "reason": "Keep transient heartbeat failures within the server-confirmed lease; stop expired ownership before execution or completion, with bounded child shutdown and secret-free diagnostics."
+    },
+    {
+      "path": "test/order-sync-recheck.test.cjs",
+      "originalSha256": null,
+      "adaptedSha256": "fdb27f06a0c8beb0277223409adf4f9eb0fa607b0b807e610f2b0d417a32c3a3",
+      "changed": true,
+      "reason": "Offline recheck receipt whitelist, exact amounts, wrong identity and privacy regressions; no payment requests."
     }
   ],
   "dependencySecurityPatches": [

@@ -102,6 +102,7 @@ describe('线上代充审计修复的后台边界和返回契约', () => {
       {} as never,
       {} as never,
       { decrypt: () => 'fixture@example.invalid' } as unknown as FieldEncryptionService,
+      {} as never,
       {} as never
     );
     const row = {
@@ -209,6 +210,7 @@ describe('线上代充审计修复的后台边界和返回契约', () => {
       repository as unknown as OnlineRechargeRepository,
       {} as never,
       { hash: () => 'synthetic-identity-hash' } as unknown as FieldEncryptionService,
+      {} as never,
       {} as never
     );
     const token = `fixture.${Buffer.from(JSON.stringify({ 'https://api.openai.com/auth': { chatgpt_account_id: 'synthetic-account' } })).toString('base64url')}.unused`;

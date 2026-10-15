@@ -2,7 +2,12 @@ name: Online Recharge Audit Validation
 
 on:
   push:
-    branches: [codex/online-audit-repairs-20261015, codex/online-pro500-upgrade-20261015]
+    branches:
+      [
+        codex/online-audit-repairs-20261015,
+        codex/online-pro500-upgrade-20261015,
+        codex/online-order-sync-20261016
+      ]
     paths-ignore:
       - '.github/workflows/online-recharge-audit-validation.yml'
       - '.github/workflows/online-recharge-pricing-validation.yml'
@@ -127,14 +132,39 @@ jobs:
         run: |
           mkdir -p .runtime/online-audit-validation
           npm run test --workspace @apple-business/api -- \
+            --no-file-parallelism \
             src/id-business-v2/online-recharge/mysql.integration.spec.ts \
+            src/id-business-v2/online-recharge/order-sync-schema.mysql.integration.spec.ts \
             --reporter=json --outputFile="$GITHUB_WORKSPACE/.runtime/online-audit-validation/mysql-results.json"
+      - name: Verify original BitBrowser order finance, lifecycle and recycle transactions
+        id: bank_mysql
+        env:
+          FIXTURE_DATABASE: id_business_v2_financial_integrity_${{ github.run_id }}
+          MYSQL_PWD: synthetic-online-audit-ci-only
+          DATABASE_URL: mysql://root:synthetic-online-audit-ci-only@127.0.0.1:3306/id_business_v2_financial_integrity_${{ github.run_id }}
+          V2_BANK_RECHARGE_TEST_DATABASE_URL: mysql://root:synthetic-online-audit-ci-only@127.0.0.1:3306/id_business_v2_financial_integrity_${{ github.run_id }}
+          V2_FINANCIAL_INTEGRITY_DATABASE_URL: mysql://root:synthetic-online-audit-ci-only@127.0.0.1:3306/id_business_v2_financial_integrity_${{ github.run_id }}
+          ONLINE_RECHARGE_MYSQL_TEST: '0'
+        run: |
+          [[ "$FIXTURE_DATABASE" =~ ^id_business_v2_financial_integrity_[0-9]+$ ]]
+          docker exec --env MYSQL_PWD "${{ job.services.mysql.id }}" \
+            mysql --user=root --execute="CREATE DATABASE \`$FIXTURE_DATABASE\` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;"
+          npx prisma migrate deploy --schema apps/api/prisma-mysql/schema.prisma
+          npm run test --workspace @apple-business/api -- \
+            --no-file-parallelism \
+            src/id-business-v2/auto-recharge/bank-recharge-mysql.integration.spec.ts \
+            src/id-business-v2/auto-recharge/bank-recharge-lifecycle-mysql.integration.spec.ts \
+            src/id-business-v2/data-governance/bank-recharge-governance-mysql.integration.spec.ts \
+            --reporter=json --outputFile="$GITHUB_WORKSPACE/.runtime/online-audit-validation/bank-mysql-results.json"
       - name: Verify affected API payment contracts
         run: >-
           npm run test --workspace @apple-business/api --
           src/id-business-v2/online-recharge/validation.spec.ts
           src/id-business-v2/online-recharge/audit-repairs.spec.ts
           src/id-business-v2/online-recharge/persistence/worker.repository.spec.ts
+          src/id-business-v2/online-recharge/order-sync.spec.ts
+          src/id-business-v2/auto-recharge/bank-recharge-online-order.service.spec.ts
+          src/id-business-v2/auto-recharge/bank-recharge-online-management.spec.ts
       - name: Install unchanged engine Node dependencies
         run: npm ci --prefix apps/api/src/id-business-v2/online-recharge/engine/upstream --ignore-scripts --no-audit --no-fund
       - name: Verify affected engine behavior without browser or Python setup
@@ -148,6 +178,7 @@ jobs:
             test/payment-core.test.cjs \
             test/proxy-resolver.test.cjs \
             test/regressions.test.cjs \
+            test/order-sync-recheck.test.cjs \
             test/renewal-recheck.test.cjs \
             test/renewal-state.test.cjs \
             test/runtime-main.test.cjs \
@@ -164,6 +195,7 @@ jobs:
           API_RESULT: ${{ steps.api.outcome }}
           ADMIN_RESULT: ${{ steps.admin.outcome }}
           MYSQL_RESULT: ${{ steps.mysql.outcome }}
+          BANK_MYSQL_RESULT: ${{ steps.bank_mysql.outcome }}
           ENGINE_RESULT: ${{ steps.engine.outcome }}
           PRISMA_METADATA_RESULT: ${{ steps.prisma_metadata.outcome }}
         run: |
@@ -173,6 +205,7 @@ jobs:
           mkdirSync(directory, { recursive: true });
           const read = (path) => { try { return readFileSync(path, 'utf8'); } catch { return ''; } };
           const mysql = JSON.parse(read(directory + '/mysql-results.json') || '{}');
+          const bankMysql = JSON.parse(read(directory + '/bank-mysql-results.json') || '{}');
           const engine = read(directory + '/engine-results.tap');
           const result = {
             commit: process.env.GITHUB_SHA,
@@ -181,6 +214,7 @@ jobs:
             adminBuild: process.env.ADMIN_RESULT,
             prismaMetadata: process.env.PRISMA_METADATA_RESULT,
             mysql: { outcome: process.env.MYSQL_RESULT, passed: mysql.numPassedTests ?? null, failed: mysql.numFailedTests ?? null },
+            bankMysql: { outcome: process.env.BANK_MYSQL_RESULT, passed: bankMysql.numPassedTests ?? null, failed: bankMysql.numFailedTests ?? null },
             engine: { outcome: process.env.ENGINE_RESULT, passed: Number(engine.match(/^# pass (\d+)$/m)?.[1] ?? NaN) || null },
             productionAccess: false,
             paymentSubmitted: false
@@ -198,6 +232,7 @@ jobs:
             packages/shared/dist/
             apps/api/prisma-mysql/schema.prisma
             apps/api/prisma-mysql/migrations/20261015110000_online_recharge_pro_500/migration.sql
+            apps/api/prisma-mysql/migrations/20261016090000_online_recharge_orders/migration.sql
             .runtime/online-audit-validation/prisma-client-metadata/
             .runtime/online-audit-validation/prisma-client-metadata.json
             .runtime/online-audit-validation/result.json

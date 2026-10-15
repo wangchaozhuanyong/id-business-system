@@ -87,7 +87,10 @@ export async function listChatgptAccounts(
         order.cardNumberSummaryEncrypted,
         order.card?.numberEncrypted
       ),
-      deleted: Boolean(order.cardDeletedAt) || (!order.card && Boolean(order.cardLabelSnapshot))
+      deleted:
+        order.channel === 'online'
+          ? !order.onlineRechargeCard
+          : Boolean(order.cardDeletedAt) || (!order.card && Boolean(order.cardLabelSnapshot))
     });
   }
   const total = pagination ? await repository.countAccounts(where) : items.length;

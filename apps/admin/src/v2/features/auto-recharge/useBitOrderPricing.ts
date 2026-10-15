@@ -8,6 +8,7 @@ import { ElMessage } from '@/v2/services/elementPlusMessage';
 import {
   bankRechargeApi,
   type BankRechargeOrder,
+  type RechargeOrderChannel,
   type BitOrderPricingSettings
 } from './bank-recharge-api';
 import { estimateBitOrder, bitOrderPricingFormDefaults } from './bit-order-pricing';
@@ -22,18 +23,21 @@ function emptySettings(): BitOrderPricingSettings {
     updatedAt: null
   };
 }
-export function useBitOrderPricing() {
+export function useBitOrderPricing(channel: RechargeOrderChannel = 'bitbrowser') {
+  const settingsKey =
+    channel === 'online' ? 'online-orders-pricing-settings' : 'bit-orders-pricing-settings';
+  const channelLabel = channel === 'online' ? '线上订单' : '比特订单';
   const open = ref(false),
     saving = ref(false),
     error = ref(''),
     initialized = ref(false);
-  const draft = useV2FormDraft('bit-orders-pricing-settings', emptySettings);
+  const draft = useV2FormDraft(settingsKey, emptySettings);
   const dirty = computed(() => JSON.stringify(draft.form) !== draft.original.value);
   const query = useV2ModuleQuery({
     moduleKey: 'bank-recharge-orders',
     scope: 'auto-recharge',
-    key: 'bit-orders-pricing-settings',
-    query: ({ signal }) => bankRechargeApi.orderPricingSettings({ signal })
+    key: settingsKey,
+    query: ({ signal }) => bankRechargeApi.orderPricingSettings({ signal }, channel)
   });
   const ratesQuery = useV2ModuleQuery<
     Awaited<ReturnType<typeof bankRechargeApi.orderPricingRates>>
@@ -74,12 +78,12 @@ export function useBitOrderPricing() {
     const finish = draft.beginSave();
     const identityEpoch = sessionCoordinator.identityEpoch.value;
     try {
-      const result = await bankRechargeApi.updateOrderPricingSettings(input);
+      const result = await bankRechargeApi.updateOrderPricingSettings(input, channel);
       if (identityEpoch !== sessionCoordinator.identityEpoch.value) return;
       primeV2Query({
         moduleKey: 'bank-recharge-orders',
         scope: 'auto-recharge',
-        key: 'bit-orders-pricing-settings',
+        key: settingsKey,
         data: result
       });
       if (finish()) {
@@ -104,12 +108,12 @@ export function useBitOrderPricing() {
     const finish = draft.beginSave();
     const identityEpoch = sessionCoordinator.identityEpoch.value;
     try {
-      const result = await bankRechargeApi.orderPricingSettings();
+      const result = await bankRechargeApi.orderPricingSettings({}, channel);
       if (identityEpoch !== sessionCoordinator.identityEpoch.value) return;
       primeV2Query({
         moduleKey: 'bank-recharge-orders',
         scope: 'auto-recharge',
-        key: 'bit-orders-pricing-settings',
+        key: settingsKey,
         data: result
       });
       if (finish()) draft.open('settings', result, result.updatedAt ?? undefined);
@@ -136,6 +140,7 @@ export function useBitOrderPricing() {
       : '已按当前金额计算，请核对实际收款及费用付款账户后保存';
   }
   return {
+    channelLabel,
     open,
     saving,
     error,

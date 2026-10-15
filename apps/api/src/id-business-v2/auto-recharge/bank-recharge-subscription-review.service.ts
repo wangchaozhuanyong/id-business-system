@@ -1,4 +1,8 @@
 import {
+  assertBankRechargeChannelAccess,
+  bankRechargePaymentAccountKey
+} from './bank-recharge-channel';
+import {
   BadRequestException,
   ConflictException,
   Injectable,
@@ -28,9 +32,15 @@ export class BankRechargeSubscriptionReviewService {
     private readonly transactions: V2CommandTransactionManager,
     private readonly audit: V2TransactionalAuditService
   ) {}
-  private async context(tx: V2CommandTransaction, id: string) {
+  private async context(
+    tx: V2CommandTransaction,
+    id: string,
+    operator?: AuthenticatedUser,
+    manage = false
+  ) {
     const order = await this.repository.order(tx, id);
     if (!order || order.deletedAt) throw new NotFoundException('银充订单不存在或已删除');
+    assertBankRechargeChannelAccess(order.channel, operator, manage);
     if (
       !order.accountId ||
       order.status === 'cancelled' ||
@@ -45,15 +55,17 @@ export class BankRechargeSubscriptionReviewService {
       const source = order.rechargeJobId
         ? await this.repository.originalPaymentAccountKey(tx, order.rechargeJobId)
         : null;
-      if (!account.officialAccountKey || source?.accountKey !== account.officialAccountKey)
+      const sourceKey =
+        order.channel === 'online' ? bankRechargePaymentAccountKey(order) : source?.accountKey;
+      if (!account.officialAccountKey || sourceKey !== account.officialAccountKey)
         throw new ConflictException('自动订单账号尚未核对原付款的官网身份');
     }
     return { order, subscription: await this.repository.subscription(tx, order.accountId) };
   }
-  async preview(id: string) {
+  async preview(id: string, operator?: AuthenticatedUser) {
     bankRechargeId(id, '银充订单');
     return this.repository.read(async (tx) => {
-      const { order, subscription } = await this.context(tx, id);
+      const { order, subscription } = await this.context(tx, id, operator);
       return {
         orderId: order.id,
         orderNo: order.orderNo,
@@ -134,7 +146,7 @@ export class BankRechargeSubscriptionReviewService {
             throw new ConflictException('操作编号已用于其他确认内容');
           return data.outcome;
         }
-        const { order, subscription } = await this.context(tx, id);
+        const { order, subscription } = await this.context(tx, id, operator, true);
         if (
           order.updatedAt.toISOString() !== version.toISOString() ||
           (subscription?.currentOrderId ?? null) !== pointer ||

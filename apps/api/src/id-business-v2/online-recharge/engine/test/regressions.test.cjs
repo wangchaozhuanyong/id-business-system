@@ -470,7 +470,12 @@ test('browser management validation failure does not become an unknown payment',
     return { ok: true };
   });
   await require('../worker.cjs').runJob(
-    { ...task(), operation: 'browser_manage', payload: { action: 'invalid' } },
+    {
+      ...task(),
+      operation: 'browser_manage',
+      payload: { action: 'invalid' },
+      leaseExpiresAt: new Date(Date.now() + 90000).toISOString()
+    },
     { browserPool: { enabled: false, size: 2 } }
   );
   assert.equal(finish.status, 'failed');

@@ -7,6 +7,7 @@ import { NodeTypes, parse as parseTemplate } from '@vue/compiler-dom';
 import ts from 'typescript';
 import postcss from 'postcss';
 import { loadV2TableSchemaRegistry } from './lib/v2-table-schema-registry.mjs';
+import { resolveRegisteredTableSchemaAlias } from './lib/v2-table-schema-alias.mjs';
 
 const rootDir = process.cwd();
 const featuresRoot = path.join(rootDir, 'apps/admin/src/v2/features');
@@ -324,11 +325,49 @@ function validateTableNode(tableNode, projectPath, consumedSchemas) {
   }
 
   if (!schema) {
+    const alternatives = resolveRegisteredTableSchemaAlias(
+      read(projectPath),
+      schemaExpression,
+      schemaByExpression
+    );
+    if (alternatives.length) {
+      for (const reference of alternatives) {
+        validateRegisteredTable(
+          tableNode,
+          columns,
+          projectPath,
+          consumedSchemas,
+          reference,
+          schemaExpression
+        );
+      }
+      return alternatives;
+    }
     if (projectPath !== layoutFixturePath && !schemaExpression.startsWith('fixtureSchemas.')) {
       issues.push(`${projectPath}: 未登记的 schema ${schemaExpression}`);
     }
     return schemaExpression;
   }
+  validateRegisteredTable(
+    tableNode,
+    columns,
+    projectPath,
+    consumedSchemas,
+    schemaExpression,
+    schemaExpression
+  );
+  return schemaExpression;
+}
+
+function validateRegisteredTable(
+  tableNode,
+  columns,
+  projectPath,
+  consumedSchemas,
+  schemaExpression,
+  bindingExpression
+) {
+  const schema = schemaByExpression.get(schemaExpression);
   const consumers = consumedSchemas.get(schemaExpression) ?? [];
   consumers.push(projectPath);
   consumedSchemas.set(schemaExpression, consumers);
@@ -339,7 +378,7 @@ function validateTableNode(tableNode, projectPath, consumedSchemas) {
     );
   }
   columns.forEach((columnNode, index) => {
-    const expectedDefinition = `${schemaExpression}.columns[${index}]`;
+    const expectedDefinition = `${bindingExpression}.columns[${index}]`;
     if (boundExpression(columnNode, 'definition') !== expectedDefinition) {
       issues.push(
         `${projectPath}: ${schemaExpression} 第 ${index + 1} 列必须引用 ${expectedDefinition}`

@@ -21,6 +21,7 @@ const onlineRetainedTables = [
   'online_recharge_codes',
   'online_recharge_config',
   'online_recharge_events',
+  'online_recharge_order_sync',
   'online_recharge_tasks',
   'online_recharge_webhook_receipts'
 ];

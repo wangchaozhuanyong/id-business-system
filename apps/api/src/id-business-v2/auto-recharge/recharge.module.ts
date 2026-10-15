@@ -1,3 +1,5 @@
+import { BankRechargeOnlineOrderService } from './bank-recharge-online-order.service';
+import { BankRechargeOnlineOrderRepository } from './persistence/bank-recharge-online-order.repository';
 import { BankRechargeSubscriptionReviewService } from './bank-recharge-subscription-review.service';
 import { BankRechargeLifecycleService } from './bank-recharge-lifecycle.service';
 import { BankRechargeLifecycleRepository } from './persistence/bank-recharge-lifecycle.repository';
@@ -46,8 +48,15 @@ import { BankRechargePricingService } from './bank-recharge-pricing.service';
     RechargeProxyController,
     RechargeNameController
   ],
-  exports: [RechargeSettingsService, RechargeProxyService, BankRechargeRegistrationMirrorService],
+  exports: [
+    RechargeSettingsService,
+    RechargeProxyService,
+    BankRechargeRegistrationMirrorService,
+    BankRechargeOnlineOrderService
+  ],
   providers: [
+    BankRechargeOnlineOrderService,
+    BankRechargeOnlineOrderRepository,
     BankRechargeSubscriptionReviewService,
     BankRechargeLifecycleService,
     BankRechargeLifecycleRepository,

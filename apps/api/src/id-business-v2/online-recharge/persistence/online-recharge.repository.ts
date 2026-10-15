@@ -23,14 +23,20 @@ export class OnlineRechargeRepository {
   read<T>(work: (db: PrismaService) => Promise<T>) {
     return work(this.prisma);
   }
-  transaction<T>(key: string, work: (tx: V2CommandTransaction) => Promise<T>) {
+  transaction<T>(
+    key: string,
+    work: (tx: V2CommandTransaction) => Promise<T>,
+    changedScopes: Parameters<V2CommandTransactionManager['execute']>[1]['changedScopes'] = [
+      'online-recharge'
+    ]
+  ) {
     return this.transactions.execute(
       async (tx) => {
         await acquireMysqlTransactionLock(tx, `online-recharge:${key}`);
         return work(tx);
       },
       {
-        changedScopes: ['online-recharge'],
+        changedScopes,
         requestId: randomUUID(),
         isolationLevel: 'Serializable',
         timeoutMs: 20000,

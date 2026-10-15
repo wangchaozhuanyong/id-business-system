@@ -9,6 +9,7 @@ import type { OnlineRechargeEphemeralCredentials } from '../ephemeral-credential
 import type { OnlineRechargeSettingsService } from '../settings.service';
 import type { OnlineRechargeRepository } from './online-recharge.repository';
 import { OnlineRechargeWorkerRepository } from './worker.repository';
+import type { OnlineRechargeOrderSyncService } from '../order-sync.service';
 
 const accountId = randomUUID();
 const syntheticSession = JSON.stringify({
@@ -93,13 +94,15 @@ function fixture(overrides: Partial<OnlineRechargeTask> = {}, original?: OnlineR
     log: vi.fn(async () => undefined)
   };
   const available = vi.fn(async (ids: string[]) => ids);
+  const orderSync = { enqueueInTransaction: vi.fn(async () => undefined) };
   const worker = new OnlineRechargeWorkerRepository(
     repository as unknown as OnlineRechargeRepository,
     {
       cardPolicy: async () => ({ maxSubscriptionCount: 2, maxDeclineCount: 3 })
     } as OnlineRechargeSettingsService,
     { decrypt: () => syntheticSession } as unknown as FieldEncryptionService,
-    { available } as unknown as OnlineRechargeEphemeralCredentials
+    { available } as unknown as OnlineRechargeEphemeralCredentials,
+    orderSync as unknown as OnlineRechargeOrderSyncService
   );
   const rpc = (args: Record<string, unknown> = {}): OnlineRechargeWorkerRpc => ({
     method: 'beforeExternalSubmit',
@@ -109,7 +112,7 @@ function fixture(overrides: Partial<OnlineRechargeTask> = {}, original?: OnlineR
     leaseVersion: row.leaseVersion,
     args: { stage: 'renewal_update', renewalAction: 'disable', ...args }
   });
-  return { row, tx, repository, worker, rpc, available };
+  return { row, tx, repository, worker, rpc, available, orderSync };
 }
 
 describe('续费提交与付款提交隔离', () => {
@@ -368,6 +371,8 @@ describe('续费原单核对与付款核对隔离', () => {
       false
     );
     expect(f.original).toMatchObject({ status: 'succeeded', confirmedPaid: true });
+    expect(f.orderSync.enqueueInTransaction).toHaveBeenCalledWith(f.tx, f.original.id);
+    expect(f.orderSync.enqueueInTransaction).not.toHaveBeenCalledWith(f.tx, f.row.id);
     expect(f.tx.onlineRechargeBill.create).toHaveBeenCalledTimes(1);
   });
 });
@@ -519,6 +524,7 @@ describe('准确升级与实际付款卡、报价的持久证据', () => {
     );
     // 超过四位小数的非规范金额不是可接受的付款证据。
     expect(response.status).toBe('awaiting_review');
+    expect(f.orderSync.enqueueInTransaction).not.toHaveBeenCalled();
     const valid = upgradeFixture();
     await valid.worker.beforeSubmit(valid.submit());
     expect(
@@ -534,6 +540,7 @@ describe('准确升级与实际付款卡、报价的持久证据', () => {
         false
       )
     ).toMatchObject({ status: 'succeeded' });
+    expect(valid.orderSync.enqueueInTransaction).toHaveBeenCalledWith(valid.tx, valid.row.id);
   });
 
   it('零应付升级只确认套餐变更，不计扣款、不造账单，并释放当前卡租约', async () => {
@@ -572,6 +579,7 @@ describe('准确升级与实际付款卡、报价的持久证据', () => {
     );
     expect(response.status).toBe('succeeded');
     expect(f.row.confirmedPaid).toBe(false);
+    expect(f.orderSync.enqueueInTransaction).toHaveBeenCalledWith(f.tx, f.row.id);
     expect(f.tx.onlineRechargeCard.updateMany).toHaveBeenCalledWith({
       where: { leaseOwner: f.row.id },
       data: { leaseOwner: null, leaseId: null, leaseExpiresAt: null }

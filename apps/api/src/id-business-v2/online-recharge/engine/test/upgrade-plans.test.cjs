@@ -43,6 +43,48 @@ test('free account can start Pro500 only with an explicit verified identity mapp
   assert.equal(result.allowed, true);
   assert.equal(result.kind, 'initial');
 });
+test('the observed official free-plan identifier allows an initial Pro500 preview after account checks', async () => {
+  const data = parseAccountCheckResponse({
+    accounts: {
+      default: {
+        account: { account_id: 'synthetic-account' },
+        entitlement: { subscription_plan: 'chatgptfreeplan', has_active_subscription: false }
+      }
+    }
+  });
+  const result = await preflightPayment('pro_500', token, {
+    allowUnverifiedTarget: true,
+    query: async () => ({ ok: true, data })
+  });
+  assert.equal(result.allowed, true);
+  assert.equal(result.kind, 'initial');
+  assert.equal(result.sourcePlan, 'free');
+  assert.equal(result.confirmation.observedPlan, 'chatgptfreeplan');
+});
+test('free-plan alias does not admit active, foreign-account or unknown free-like states', async () => {
+  for (const [raw, active, account] of [
+    ['chatgptfreeplan', true, 'synthetic-account'],
+    ['chatgptfreeplan', null, 'synthetic-account'],
+    ['free', true, 'synthetic-account'],
+    ['chatgptfreeplan', false, 'other-account'],
+    ['chatgptfreeplan_future', false, 'synthetic-account']
+  ]) {
+    const result = await preflightPayment('pro_500', token, {
+      allowUnverifiedTarget: true,
+      query: query(raw, active, account)
+    });
+    assert.equal(result.allowed, false);
+  }
+  assert.equal(
+    plans.observedCanonicalPlan('chatgptfreeplan', { pro500Name: 'chatgptfreeplan' }),
+    null
+  );
+  const invalidMapping = await preflightPayment('pro_500', token, {
+    pro500Name: 'chatgptfreeplan',
+    query: query('chatgptfreeplan', false)
+  });
+  assert.equal(invalidMapping.allowed, false);
+});
 test('same tier, downgrade, wrong account, vague Pro and inconsistent free state stop before payment', async () => {
   for (const [source, target, active, account] of [
     ['pro_500', 'pro_500', true],

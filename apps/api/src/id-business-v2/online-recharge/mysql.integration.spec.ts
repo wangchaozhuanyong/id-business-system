@@ -29,6 +29,8 @@ import { PrismaModule } from '../../common/prisma/prisma.module';
 import { OnlineRechargeSecurityNotificationService } from './security-notification.service';
 import { OnlineRechargeSecurityNotificationRepository } from './persistence/security-notification.repository';
 import { sessionAccountId } from './validation';
+import { OnlineRechargeOrderSyncService } from './order-sync.service';
+import { OnlineRechargeOrderSyncRepository } from './persistence/order-sync.repository';
 
 const enabled = process.env.ONLINE_RECHARGE_MYSQL_TEST === '1';
 const suite = enabled ? describe : describe.skip;
@@ -52,10 +54,19 @@ suite('线上代充隔离MySQL事务验收', () => {
   const assets = new OnlineRechargeAssetsService(
     new OnlineRechargeAssetsRepository(repository, encryption, memory)
   );
-  const tasks = new OnlineRechargeTasksService(
-    new OnlineRechargeTasksRepository(repository, settings, encryption, memory)
+  const orderSync = new OnlineRechargeOrderSyncService(
+    new OnlineRechargeOrderSyncRepository(repository, encryption, {} as never)
   );
-  const workers = new OnlineRechargeWorkerRepository(repository, settings, encryption, memory);
+  const tasks = new OnlineRechargeTasksService(
+    new OnlineRechargeTasksRepository(repository, settings, encryption, memory, orderSync)
+  );
+  const workers = new OnlineRechargeWorkerRepository(
+    repository,
+    settings,
+    encryption,
+    memory,
+    orderSync
+  );
   const webhooks = new OnlineRechargeWebhooksService(
     new OnlineRechargeWebhooksRepository(repository, settings, encryption, assets, memory)
   );
@@ -126,6 +137,7 @@ suite('线上代充隔离MySQL事务验收', () => {
   });
   beforeEach(async () => {
     for (const model of [
+      db.onlineRechargeOrderSync,
       db.onlineRechargeBill,
       db.onlineRechargeEvent,
       db.onlineRechargeWebhookReceipt,

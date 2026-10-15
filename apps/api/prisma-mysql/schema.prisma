@@ -85,6 +85,8 @@ model OnlineRechargeCard {
   @@index([status, successCount, lastUsedAt])
   @@index([leaseOwner])
   @@map("online_recharge_cards")
+
+  rechargeOrders IdBusinessV2BankRechargeOrder[]
 }
 
 model OnlineRechargeProxy {
@@ -174,6 +176,29 @@ model OnlineRechargeTask {
   @@index([codeId])
   @@index([sessionIdentityHash])
   @@map("online_recharge_tasks")
+
+  rechargeOrder IdBusinessV2BankRechargeOrder?
+  orderSync OnlineRechargeOrderSync?
+}
+
+enum OnlineRechargeOrderSyncStatus {
+  pending
+  synced
+  needs_review
+}
+
+model OnlineRechargeOrderSync {
+  taskId String @id @map("task_id") @db.Char(36)
+  status OnlineRechargeOrderSyncStatus @default(pending)
+  attempts Int @default(0)
+  nextAttemptAt DateTime @default(now()) @map("next_attempt_at") @db.DateTime(6)
+  lastErrorCode String? @map("last_error_code") @db.VarChar(80)
+  createdAt DateTime @default(now()) @map("created_at") @db.DateTime(6)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.DateTime(6)
+  task OnlineRechargeTask @relation(fields: [taskId], references: [id], onDelete: Restrict)
+
+  @@index([status, nextAttemptAt])
+  @@map("online_recharge_order_sync")
 }
 
 model OnlineRechargeEvent {
@@ -2761,6 +2786,11 @@ enum IdBusinessV2BankRechargeOrderSource {
   manual
 }
 
+enum IdBusinessV2RechargeOrderChannel {
+  bitbrowser
+  online
+}
+
 enum IdBusinessV2BankRechargeOrderStatus {
   pending_details
   pending_finance
@@ -2985,6 +3015,10 @@ model IdBusinessV2BankRechargeOrder {
   id                     String                             @id @default(uuid()) @db.Char(36)
   orderNo                String                             @unique @map("order_no") @db.VarChar(40)
   source                 IdBusinessV2BankRechargeOrderSource
+  channel                IdBusinessV2RechargeOrderChannel @default(bitbrowser)
+  onlineRechargeTaskId    String? @unique @map("online_recharge_task_id") @db.Char(36)
+  onlineRechargeCardId    String? @map("online_recharge_card_id") @db.Char(36)
+  onlineSourceSnapshot   Json? @map("online_source_snapshot")
   rechargeJobId          String?                            @unique @map("recharge_job_id") @db.VarChar(36)
   checkoutIdentifier     String?                            @unique @map("checkout_identifier") @db.VarChar(220)
   paymentEvidenceId      String?                            @unique @map("payment_evidence_id") @db.VarChar(220)
@@ -2997,8 +3031,8 @@ model IdBusinessV2BankRechargeOrder {
   cardDeletedAt          DateTime?                          @map("card_deleted_at") @db.DateTime(6)
   cardLast4              String?                            @map("card_last4") @db.Char(4)
   plan                   String                             @db.VarChar(16)
-  chargeAmount           Decimal                            @map("charge_amount") @db.Decimal(18, 4)
-  chargeCurrencyCode     String                             @map("charge_currency_code") @db.Char(3)
+  chargeAmount           Decimal?                           @map("charge_amount") @db.Decimal(18, 4)
+  chargeCurrencyCode     String?                            @map("charge_currency_code") @db.Char(3)
   accountingVersion IdBusinessV2BankRechargeAccountingVersion @default(legacy) @map("accounting_version")
   usdtFeeAmount Decimal? @map("usdt_fee_amount") @db.Decimal(18,4)
   usdtFeeCurrencyCode IdBusinessV2FinanceCurrency? @map("usdt_fee_currency_code")
@@ -3039,6 +3073,8 @@ model IdBusinessV2BankRechargeOrder {
   updatedAt              DateTime                           @updatedAt @map("updated_at") @db.DateTime(6)
 
   rechargeJob        IdBusinessV2RechargeJob? @relation(fields: [rechargeJobId], references: [id], onDelete: Restrict)
+  onlineRechargeTask OnlineRechargeTask? @relation(fields: [onlineRechargeTaskId], references: [id], onDelete: Restrict)
+  onlineRechargeCard OnlineRechargeCard? @relation(fields: [onlineRechargeCardId], references: [id], onDelete: SetNull)
   account            IdBusinessV2ChatgptAccount? @relation(fields: [accountId], references: [id], onDelete: Restrict)
   customer           IdBusinessV2Customer? @relation(fields: [customerId], references: [id], onDelete: Restrict)
   card               IdBusinessV2BankRechargeCard? @relation(fields: [cardId], references: [id], onDelete: SetNull)
@@ -3051,6 +3087,8 @@ model IdBusinessV2BankRechargeOrder {
   @@index([accountId, createdAt])
   @@index([status, dueAt])
   @@index([cardId, createdAt])
+  @@index([channel, deletedAt, createdAt], map: "recharge_orders_channel_deleted_created_idx")
+  @@index([onlineRechargeCardId, createdAt], map: "recharge_orders_online_card_created_idx")
   @@map("id_business_v2_bank_recharge_orders")
 }
 

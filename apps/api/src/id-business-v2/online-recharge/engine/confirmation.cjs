@@ -1,5 +1,28 @@
 'use strict';
 const { PLAN_NAMES, assertPlan, observedCanonicalPlan, classifyChange } = require('./plans.cjs');
+function providerOrderReceipt(provider) {
+  const data = provider.data || {};
+  const id = (value) => {
+    const text =
+      typeof value === 'string' ? value : Number.isSafeInteger(value) ? String(value) : '';
+    return /^[A-Za-z0-9:_-]{1,190}$/.test(text) ? text : null;
+  };
+  const amount =
+    data.payment?.actual_paid_amount ?? data.result?.actual_paid_amount ?? data.actual_paid_amount;
+  const currency = data.payment?.paid_currency ?? data.result?.paid_currency ?? data.paid_currency;
+  return {
+    order_id: id(data.order_id ?? data.order?.id),
+    task_id: id(data.task_id ?? data.task?.id),
+    status: provider.rawStatus,
+    result: { ok: data.result?.ok !== false },
+    ...(typeof amount === 'string' && /^\d{1,14}(\.\d{1,4})?$/.test(amount)
+      ? { actual_paid_amount: amount }
+      : {}),
+    ...(typeof currency === 'string' && /^[A-Z]{3}$/.test(currency)
+      ? { paid_currency: currency }
+      : {})
+  };
+}
 function evaluateSubscription(targetPlan, expectedAccountId, result, options = {}) {
   const data = result?.data || {};
   const observedPlan = String(data.rawPlan || '')
@@ -24,8 +47,35 @@ function evaluateSubscription(targetPlan, expectedAccountId, result, options = {
     observedPlan,
     observedCanonicalPlan: canonicalPlan,
     tierVerified: Boolean(canonicalPlan),
+    currency:
+      result?.ok === true &&
+      Boolean(expectedAccountId) &&
+      observedAccountId === expectedAccountId &&
+      /^[A-Z]{3}$/.test(
+        String(data.currency || '')
+          .trim()
+          .toUpperCase()
+      )
+        ? String(data.currency).trim().toUpperCase()
+        : null,
     queriedAt: data.queriedAt || null
   };
+}
+function resolvePaymentCurrency(preflight, configuredCurrency, { debugOnly = false } = {}) {
+  if (preflight?.allowed !== true || !['initial', 'upgrade'].includes(preflight.kind))
+    throw new Error('付款前账号或套餐核验未通过');
+  if (preflight.kind === 'initial') return configuredCurrency;
+  const confirmation = preflight.confirmation;
+  const currency = confirmation?.currency;
+  if (
+    confirmation?.querySucceeded === true &&
+    confirmation.expectedAccountId &&
+    confirmation.accountId === confirmation.expectedAccountId &&
+    /^[A-Z]{3}$/.test(String(currency || ''))
+  )
+    return currency;
+  if (debugOnly) return null;
+  throw new Error('无法核实原订阅币种，本次未提交付款');
 }
 async function confirmSubscription(targetPlan, token, injected = {}) {
   const expectedAccountId =
@@ -222,6 +272,9 @@ async function recheck(task, cfg, injected = {}) {
       : {}),
     confirmation,
     recheckTaskId: payload.recheckTaskId || null,
+    // Keep only bounded order facts from the read-only original provider receipt.
+    // Payment and subscription success conditions above remain authoritative.
+    ...(verified && provider ? { providerResult: providerOrderReceipt(provider) } : {}),
     providerOrderId: payload.providerOrderId || null,
     providerTaskId: payload.providerTaskId || null
   };
@@ -230,6 +283,7 @@ module.exports = {
   evaluateSubscription,
   confirmSubscription,
   preflightPayment,
+  resolvePaymentCurrency,
   recheck,
   PLAN_NAMES
 };

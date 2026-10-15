@@ -300,3 +300,49 @@ describe('比特订单共享收费设置', () => {
     expect(f.transactions.execute).not.toHaveBeenCalled();
   });
 });
+
+describe('线上订单收费渠道隔离', () => {
+  const onlineOperator = {
+    ...operator,
+    permissions: ['id_business_v2.online_recharge.read', 'id_business_v2.online_recharge.manage']
+  };
+  it('线上默认人民币与空套餐价/费率，不读取或复制比特收费', async () => {
+    const f = fixture();
+    await f.service.read(onlineOperator, 'online');
+    expect(f.settingsModel.findUnique).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { ownerId: '__online_order_pricing_settings__' } })
+    );
+    await expect(f.service.read(onlineOperator, 'online')).resolves.toMatchObject({
+      receivedCurrencyCode: 'CNY',
+      shoppingFeePercent: null,
+      usdtFeePercent: null,
+      planPrices
+    });
+    expect(f.settingsModel.createMany).not.toHaveBeenCalled();
+  });
+  it('线上写入独立设置行并审计，不改比特设置owner', async () => {
+    const f = fixture();
+    await f.service.update(draft, onlineOperator, 'online');
+    expect(f.settingsModel.createMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: [expect.objectContaining({ ownerId: '__online_order_pricing_settings__' })]
+      })
+    );
+    expect(f.audit.append).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ objectId: '__online_order_pricing_settings__' })
+    );
+  });
+  it('管理员读取和修改线上收费分别要求线上权限', async () => {
+    const f = fixture();
+    await expect(f.service.read(operator, 'online')).rejects.toThrow('线上订单读取');
+    await expect(
+      f.service.update(
+        draft,
+        { ...onlineOperator, permissions: ['id_business_v2.online_recharge.read'] },
+        'online'
+      )
+    ).rejects.toThrow('线上订单管理');
+    expect(f.settingsModel.findUnique).not.toHaveBeenCalled();
+  });
+});

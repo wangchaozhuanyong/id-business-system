@@ -43,13 +43,20 @@ export class BankRechargeController {
 
   @Get('order-pricing-settings')
   @Header('Cache-Control', 'no-store')
-  orderPricingSettings(@CurrentUser() operator: AuthenticatedUser) {
-    return this.pricing.read(operator);
+  orderPricingSettings(
+    @CurrentUser() operator: AuthenticatedUser,
+    @Query('channel') channel?: string
+  ) {
+    return this.pricing.read(operator, channel);
   }
 
   @Put('order-pricing-settings')
-  updateOrderPricingSettings(@Body() input: unknown, @CurrentUser() operator: AuthenticatedUser) {
-    return this.pricing.update(input, operator);
+  updateOrderPricingSettings(
+    @Body() input: unknown,
+    @CurrentUser() operator: AuthenticatedUser,
+    @Query('channel') channel?: string
+  ) {
+    return this.pricing.update(input, operator, channel);
   }
 
   @Get('order-pricing-rates')
@@ -145,16 +152,21 @@ export class BankRechargeController {
     return this.lifecycle.execute('account', id, 'restore', value, operator);
   }
   @Get('orders/:id/lifecycle-preview')
-  orderLifecyclePreview(@Param('id') id: string, @Query('action') action: string) {
+  orderLifecyclePreview(
+    @Param('id') id: string,
+    @Query('action') action: string,
+    @CurrentUser() operator: AuthenticatedUser
+  ) {
     return this.lifecycle.preview(
       'order',
       id,
-      action === 'restore' ? 'restore' : action === 'delete' ? 'delete' : 'cancel'
+      action === 'restore' ? 'restore' : action === 'delete' ? 'delete' : 'cancel',
+      operator
     );
   }
   @Get('orders/:id/subscription-review')
-  subscriptionReviewPreview(@Param('id') id: string) {
-    return this.subscriptionReview.preview(id);
+  subscriptionReviewPreview(@Param('id') id: string, @CurrentUser() operator: AuthenticatedUser) {
+    return this.subscriptionReview.preview(id, operator);
   }
   @Post('orders/:id/subscription-review')
   verifySubscription(
@@ -278,8 +290,11 @@ export class BankRechargeController {
   }
 
   @Get('orders/options')
-  orderOptions() {
-    return this.queries.options();
+  orderOptions(
+    @Query('channel') channel: string | undefined,
+    @CurrentUser() operator: AuthenticatedUser
+  ) {
+    return this.queries.options(channel, operator);
   }
 
   @Get('renewal-warnings')
@@ -289,8 +304,8 @@ export class BankRechargeController {
 
   @Get('orders')
   @Header('Cache-Control', 'no-store')
-  listOrders(@Query() query: unknown) {
-    return this.queries.list(query);
+  listOrders(@Query() query: unknown, @CurrentUser() operator: AuthenticatedUser) {
+    return this.queries.list(query, operator);
   }
 
   @Post('orders')

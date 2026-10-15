@@ -1,3 +1,4 @@
+import { acquireMysqlTransactionLock } from '../../../common/prisma/mysql-transaction-lock';
 import { Injectable } from '@nestjs/common';
 import type { Prisma } from '@prisma/client';
 import {
@@ -89,6 +90,9 @@ export class BankRechargeRepository {
       },
       select: {
         accountId: true,
+        channel: true,
+        onlineRechargeCardId: true,
+        onlineRechargeCard: { select: { id: true, last4: true, status: true } },
         cardId: true,
         cardLabelSnapshot: true,
         cardNumberSummaryEncrypted: true,
@@ -306,6 +310,12 @@ export class BankRechargeRepository {
   findCard(tx: V2CommandTransaction, id: string) {
     return tx.idBusinessV2BankRechargeCard.findUnique({ where: { id } });
   }
+  findOnlineCard(tx: V2CommandTransaction, id: string) {
+    return tx.onlineRechargeCard.findUnique({
+      where: { id },
+      select: { id: true, last4: true, status: true }
+    });
+  }
   findCardsByTail(tx: V2CommandTransaction, last4: string, currencyCode: string) {
     return tx.idBusinessV2BankRechargeCard.findMany({
       where: { last4, currencyCode, active: true },
@@ -326,17 +336,47 @@ export class BankRechargeRepository {
   findOrderForCompletion(tx: V2CommandTransaction, id: string) {
     return tx.idBusinessV2BankRechargeOrder.findFirst({
       where: { id, deletedAt: null },
-      include: { card: true, account: true, customer: true }
+      include: {
+        card: true,
+        onlineRechargeCard: { select: { id: true, last4: true, status: true } },
+        account: true,
+        customer: true
+      }
     });
   }
-  findOrderByPaymentEvidence(
+  async findOtherOrderByPaymentReference(
+    tx: V2CommandTransaction,
+    reference: string,
+    id: string | null = null
+  ) {
+    await acquireMysqlTransactionLock(tx, 'bank-recharge-order-evidence');
+    return tx.idBusinessV2BankRechargeOrder.findFirst({
+      where: {
+        ...(id ? { id: { not: id } } : {}),
+        OR: [
+          { paymentEvidenceId: reference },
+          { manualEvidenceRef: reference },
+          { checkoutIdentifier: reference }
+        ]
+      }
+    });
+  }
+  async findOrderByPaymentEvidence(
     tx: V2CommandTransaction,
     rechargeJobId: string,
     checkoutIdentifier: string,
     paymentEvidenceId: string
   ) {
+    await acquireMysqlTransactionLock(tx, 'bank-recharge-order-evidence');
     return tx.idBusinessV2BankRechargeOrder.findFirst({
-      where: { OR: [{ rechargeJobId }, { checkoutIdentifier }, { paymentEvidenceId }] }
+      where: {
+        OR: [
+          { rechargeJobId },
+          { checkoutIdentifier },
+          { paymentEvidenceId },
+          { manualEvidenceRef: paymentEvidenceId }
+        ]
+      }
     });
   }
   createOrder(tx: V2CommandTransaction, args: Prisma.IdBusinessV2BankRechargeOrderCreateArgs) {

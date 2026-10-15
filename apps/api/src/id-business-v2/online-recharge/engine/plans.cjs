@@ -39,7 +39,7 @@ function observedCanonicalPlan(raw, options = {}) {
     .toLowerCase();
   if (
     configured &&
-    !['pro', 'chatgptpro', 'free', 'unknown'].includes(configured) &&
+    !['pro', 'chatgptpro', 'free', 'chatgptfreeplan', 'unknown'].includes(configured) &&
     value === configured
   )
     return 'pro_500';
@@ -51,7 +51,7 @@ function classifyChange(targetPlan, confirmation, active) {
     .trim()
     .toLowerCase();
   const sourcePlan =
-    active === false && (!raw || raw === 'free')
+    active === false && (!raw || ['free', 'chatgptfreeplan'].includes(raw))
       ? 'free'
       : active === true && confirmation.tierVerified
         ? confirmation.observedCanonicalPlan

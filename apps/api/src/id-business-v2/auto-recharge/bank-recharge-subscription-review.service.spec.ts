@@ -54,6 +54,23 @@ function setup() {
   return { service, repository, audit, order, input, operator };
 }
 describe('订阅日期受控核对', () => {
+  it('线上订单通过来源快照核对账号，不依赖比特原任务', async () => {
+    const f = setup();
+    Object.assign(f.order, {
+      channel: 'online',
+      rechargeJobId: null,
+      onlineSourceSnapshot: { accountKey: 'verified' }
+    });
+    const onlineOperator = {
+      id,
+      roles: ['admin'],
+      permissions: ['id_business_v2.online_recharge.read', 'id_business_v2.online_recharge.manage']
+    } as never;
+    await f.service.preview(id, onlineOperator);
+    await f.service.verify(id, f.input, onlineOperator);
+    expect(f.repository.originalPaymentAccountKey).not.toHaveBeenCalled();
+    expect(f.repository.updateDates).toHaveBeenCalledOnce();
+  });
   it('无投影时通过明确官网日期及原版本核对建立订阅，不财务入账', async () => {
     const f = setup();
     await f.service.verify(id, f.input, f.operator);

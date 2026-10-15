@@ -77,7 +77,7 @@ try {
       instance.database
     )
   );
-  assert.equal(count, 9);
+  assert.equal(count, 10);
   assert.equal(
     Number(
       instance.query(
@@ -115,7 +115,7 @@ try {
     1
   );
   report.databaseChecks.push(
-    '专属九表',
+    '专属十表（含订单同步队列）',
     '没有安全码字段',
     '三项独立权限',
     '敏感权限登记',
@@ -156,6 +156,7 @@ try {
       resolve(root, 'node_modules/vitest/vitest.mjs'),
       'run',
       'src/id-business-v2/online-recharge/mysql.integration.spec.ts',
+      'src/id-business-v2/online-recharge/order-sync-schema.mysql.integration.spec.ts',
       '--reporter=json',
       '--silent'
     ],

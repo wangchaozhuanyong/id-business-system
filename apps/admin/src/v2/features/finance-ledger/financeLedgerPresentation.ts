@@ -102,7 +102,7 @@ export function journalReversalBlockReason(
 
 export function journalTypeLabel(value: V2FinanceJournalType) {
   const labels: Partial<Record<V2FinanceJournalType, string>> = {
-    bank_recharge_completed: '比特订单完成',
+    bank_recharge_completed: '充值订单完成',
     supplier_deposit: '供应商充值',
     supplier_refund: '供应商退款',
     supplier_adjustment: '供应商调整',
@@ -158,10 +158,10 @@ export function accountCodeLabel(value: V2FinanceAccountCode) {
     realized_fx_gain_loss: '已实现汇兑损益',
     opening_equity: '期初权益',
     manual_adjustment: '手工调整',
-    bank_recharge_revenue: '比特充值代充收入',
-    bank_recharge_service_fee: '比特充值客户手续费收入',
-    bank_recharge_cost: '比特充值代付成本',
-    bank_recharge_bank_fee: '比特充值银行手续费'
+    bank_recharge_revenue: '订阅充值代充收入',
+    bank_recharge_service_fee: '订阅充值客户手续费收入',
+    bank_recharge_cost: '订阅充值代付成本',
+    bank_recharge_bank_fee: '订阅充值银行手续费'
   };
   return labels[value];
 }

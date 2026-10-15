@@ -68,6 +68,8 @@ async function rpcServer(handle) {
     for await (const chunk of req) chunks.push(chunk);
     const body = JSON.parse(Buffer.concat(chunks).toString());
     await handle(body, (value) => {
+      if (body.method === 'heartbeat' && value?.ok === true)
+        value = { ...value, leaseExpiresAt: new Date(Date.now() + 90000).toISOString() };
       res.writeHead(200, { 'content-type': 'application/json' });
       res.end(JSON.stringify(value));
     });
@@ -97,7 +99,8 @@ const task = {
   payload: { proxyId: 'synthetic-proxy' },
   workerId: 'synthetic-runtime-worker',
   leaseId: 'synthetic-runtime-lease',
-  leaseVersion: 1
+  leaseVersion: 1,
+  leaseExpiresAt: new Date(Date.now() + 90000).toISOString()
 };
 
 test('health is authenticated, secret-free and reports readiness without exposing card data', async () => {

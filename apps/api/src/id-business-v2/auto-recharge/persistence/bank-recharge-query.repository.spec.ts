@@ -15,7 +15,7 @@ function subscription(dueAt: string) {
 }
 
 describe('BankRechargeQueryRepository renewal warnings', () => {
-  it('比特来源筛选保持列表和总数一致，缺省保留旧全来源查询', async () => {
+  it('比特来源筛选保持列表和总数一致，缺省只读比特渠道所有录入来源', async () => {
     const orders = {
       findMany: vi.fn().mockResolvedValue([]),
       count: vi.fn().mockResolvedValue(0)
@@ -26,6 +26,7 @@ describe('BankRechargeQueryRepository renewal warnings', () => {
     await repository.list({ executionSource: 'bitbrowser', page: 2, pageSize: 20 });
     const where = orders.findMany.mock.calls[0][0].where;
     expect(where).toEqual({
+      channel: 'bitbrowser',
       deletedAt: null,
       source: 'automatic',
       rechargeJob: { is: { action: 'bitbrowser' } }
@@ -34,8 +35,11 @@ describe('BankRechargeQueryRepository renewal warnings', () => {
     expect(orders.findMany).toHaveBeenCalledWith(expect.objectContaining({ skip: 20, take: 20 }));
 
     await repository.list({});
-    expect(orders.findMany.mock.calls[1][0].where).toEqual({ deletedAt: null });
-    expect(orders.count.mock.calls[1][0].where).toEqual({ deletedAt: null });
+    expect(orders.findMany.mock.calls[1][0].where).toEqual({
+      channel: 'bitbrowser',
+      deletedAt: null
+    });
+    expect(orders.count.mock.calls[1][0].where).toEqual({ channel: 'bitbrowser', deletedAt: null });
   });
 
   it.each(['server', 'manual', 'all', '', null, ['bitbrowser'], { action: 'bitbrowser' }])(

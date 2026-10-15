@@ -74,10 +74,12 @@ test('only checkout debug permits an unverified target through the actual index 
       {
         planType: 'pro_500',
         accessToken: 'synthetic-token',
+        billingCurrency: 'PHP',
         debugOnly,
         require: (moduleName) => {
           assert.equal(moduleName, '../confirmation.cjs');
           return {
+            resolvePaymentCurrency: require('../confirmation.cjs').resolvePaymentCurrency,
             preflightPayment: async (target, token, options) => {
               calls.push({ target, token, allowUnverifiedTarget: options.allowUnverifiedTarget });
               return {
@@ -98,3 +100,53 @@ test('only checkout debug permits an unverified target through the actual index 
     if (!debugOnly) assert.equal(result.submitted, false);
   }
 });
+
+for (const currency of ['JPY', null]) {
+  test(`debug preserves unverified PH and observed ${currency} before any card or payment execution`, async () => {
+    const branchStart = source.indexOf(
+      '        if (debugOnly) {\n            await waitForDebugPaymentStep(page);'
+    );
+    const branchEnd = source.indexOf(
+      "        console.log('✅ [步骤] Checkout 页面已打开，开始信用卡支付流程...');",
+      branchStart
+    );
+    assert.ok(branchStart >= 0 && branchEnd > branchStart);
+    let cardOrPaymentCalls = 0;
+    const forbidden = async () => {
+      cardOrPaymentCalls++;
+      throw new Error('Debug must stop before payment');
+    };
+    const run = runInNewContext(
+      '(async () => {' +
+        source.slice(branchStart, branchEnd) +
+        '\nawait executePaymentWithRetry(); })',
+      {
+        debugOnly: true,
+        operation: 'initial',
+        billingCountry: 'PH',
+        page: {},
+        checkoutResult: {
+          checkoutUrl: 'https://chatgpt.com/checkout/synthetic',
+          pricingRegionVerified: false
+        },
+        console: { log() {}, warn() {} },
+        waitForDebugPaymentStep: async () => {},
+        executePaymentWithRetry: forbidden,
+        require: (name) => {
+          assert.equal(name, './stripe-payment');
+          return {
+            readCheckoutDueAmount: async () => (currency ? { amount: '0', currency } : null),
+            reserveCard: forbidden,
+            beforeExternalSubmit: forbidden
+          };
+        }
+      }
+    );
+    const result = await run();
+    assert.equal(result.debugOnly, true);
+    assert.equal(result.requestedRegion, 'PH');
+    assert.equal(result.observedCurrency, currency);
+    assert.equal(result.pricingRegionVerified, false);
+    assert.equal(cardOrPaymentCalls, 0);
+  });
+}

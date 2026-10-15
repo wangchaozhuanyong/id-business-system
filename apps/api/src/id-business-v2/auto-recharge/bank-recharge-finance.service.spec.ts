@@ -58,6 +58,92 @@ function fixture() {
 }
 
 describe('银充预存资金卡入账', () => {
+  it('线上原卡因成功达到上限而 exhausted 时仍可完成原单财务，不能借同尾号替换卡', async () => {
+    const f = fixture();
+    const onlineOperator = {
+      ...operator,
+      roles: ['admin'],
+      permissions: ['id_business_v2.online_recharge.manage']
+    };
+    Object.assign(f.order, {
+      channel: 'online',
+      source: 'automatic',
+      accountingVersion: 'subscription_cost_v2',
+      account: { status: 'active', officialAccountKey: 'a'.repeat(64) },
+      card: null,
+      onlineRechargeCard: { id: 'original-card', last4: '1234', status: 'exhausted' },
+      onlineSourceSnapshot: { accountKey: 'a'.repeat(64), originalCardId: 'original-card' },
+      paymentEvidenceId: 'pi_fixture',
+      usdtFeeAmount: '0',
+      shoppingFeeAmount: '0',
+      customerFeeAmount: '0',
+      bankFeeAmount: '0'
+    });
+    await expect(
+      f.service.complete(
+        id,
+        { expectedUpdatedAt: updatedAt.toISOString() },
+        onlineOperator as never
+      )
+    ).resolves.toBeTruthy();
+    f.posting.post.mockClear();
+    Object.assign(f.order, {
+      onlineRechargeCard: { id: 'other-card', last4: '1234', status: 'active' }
+    });
+    await expect(
+      f.service.complete(
+        id,
+        { expectedUpdatedAt: updatedAt.toISOString() },
+        onlineOperator as never
+      )
+    ).rejects.toThrow('准确卡片身份');
+    expect(f.posting.post).not.toHaveBeenCalled();
+  });
+  it('线上缺金额/币种不能入账，零元升级不伪造银行卡扣款分录', async () => {
+    const f = fixture();
+    const onlineOperator = {
+      ...operator,
+      roles: ['admin'],
+      permissions: ['id_business_v2.online_recharge.manage']
+    };
+    Object.assign(f.order, {
+      channel: 'online',
+      source: 'automatic',
+      accountingVersion: 'subscription_cost_v2',
+      account: { status: 'active', officialAccountKey: 'a'.repeat(64) },
+      card: null,
+      onlineRechargeCard: null,
+      fundingFinanceAccountId: null,
+      onlineSourceSnapshot: { accountKey: 'a'.repeat(64), zeroAmountChange: true },
+      paymentEvidenceId: 'change_fixture',
+      usdtFeeAmount: '0',
+      shoppingFeeAmount: '0',
+      customerFeeAmount: '0',
+      bankFeeAmount: '0',
+      chargeAmount: null
+    });
+    await expect(
+      f.service.complete(
+        id,
+        { expectedUpdatedAt: updatedAt.toISOString() },
+        onlineOperator as never
+      )
+    ).rejects.toThrow('请先补齐');
+    Object.assign(f.order, { chargeAmount: '0' });
+    await f.service.complete(
+      id,
+      { expectedUpdatedAt: updatedAt.toISOString() },
+      onlineOperator as never
+    );
+    const lines = f.posting.post.mock.calls[0]![1].lines;
+    expect(
+      lines.some(
+        (line: { accountCode: string; direction: string }) =>
+          line.accountCode === 'bank_recharge_cost' ||
+          (line.accountCode === 'cash' && line.direction === 'credit')
+      )
+    ).toBe(false);
+  });
   it.each(V2_FINANCE_CURRENCIES)('客户实收 %s 沿用原币账户及汇率完成财务', async (currency) => {
     const { service, order, repository, posting } = fixture();
     Object.assign(order, { receivedCurrencyCode: currency, receivedFxRateToCny: '1' });

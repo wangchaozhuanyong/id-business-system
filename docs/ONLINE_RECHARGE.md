@@ -162,3 +162,10 @@
 `mysql-acceptance.json`、`source-verification.json`、`local-verification.json`，以及
 `ui/full-matrix.json`、`ui/affected-matrix.json`、`ui/result.json`、`ui/frontend-validation.json`。
 保留的是本地验证证据，不代表已部署或发生实际充值。
+
+## 2026-10-16 订单同步扩展（用户授权）
+
+线上正式充值的已核实成功事实可同步至现有充值订单主表，使用独立线上渠道、原任务唯一关联和线上卡引用；任务、账单、卡池与 Session 仍保持原归属，不复制银行卡或登录凭据。
+订单自动创建为待补全，不自动确认收款、完成财务或再次付款。比特与线上分别维护套餐参考价及两项手续费；共用现有 Decimal、汇率快照、收退款、更正和回收站规则。
+调试成功不等于充值成功；历史补录仅使用原持久化证据，不重跑充值。未知金额、币种、国家和日期不推算，零元套餐变更不标记扣款。
+具体约束、接口和检查见 `ONLINE_RECHARGE_ORDER_SYNC_20261016.md`。

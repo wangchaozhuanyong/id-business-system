@@ -30,7 +30,15 @@ export const onlineApi = {
     const result = request<Record<string, unknown>>(
       http.post(`${base}/admin/${section}/${action}`, body)
     );
-    return ['detail', 'reveal', 'summary', 'artifacts', 'subscribe', 'export'].includes(action)
+    return [
+      'detail',
+      'reveal',
+      'summary',
+      'artifacts',
+      'subscribe',
+      'export',
+      'order-backfill-preview'
+    ].includes(action)
       ? result
       : withV2QueryInvalidation(result, 'online-recharge');
   },

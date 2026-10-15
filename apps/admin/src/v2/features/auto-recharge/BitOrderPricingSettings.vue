@@ -3,8 +3,8 @@
   <V2FormDrawer
     v-model="open"
     retain-draft
-    title="比特订单收费设置"
-    description="所有管理员共用。保存后用于待补全订单的计算参考；客户实收需按实际收款核对，历史账务保持原金额。"
+    :title="`${channelLabel}收费设置`"
+    :description="`${channelLabel}独立设置，所有管理员共用。保存后用于待补全订单的计算参考；客户实收需按实际收款核对，历史账务保持原金额。`"
     :confirm-loading="saving"
     :confirm-disabled="query.phase.value !== 'ready'"
     :dirty="dirty"
@@ -89,5 +89,6 @@ import { getApiErrorMessage } from '@/api/client';
 import { bankRechargePlanOptions, bankRechargePlanLabel } from './recharge-plan-options';
 import type { useBitOrderPricing } from './useBitOrderPricing';
 const props = defineProps<{ state: ReturnType<typeof useBitOrderPricing> }>();
-const { open, saving, dirty, error, query, draft, openSettings, save, reloadSaved } = props.state;
+const { channelLabel, open, saving, dirty, error, query, draft, openSettings, save, reloadSaved } =
+  props.state;
 </script>

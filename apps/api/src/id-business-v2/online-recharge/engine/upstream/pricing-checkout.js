@@ -57,9 +57,9 @@ const PRICING_PAGE_READY_TIMEOUT_MS = 10000;
 const PRO_VARIANTS = Object.freeze({
     pro_5x: { checkoutValue: 'chatgptprolite', pricingRadioLabel: '5x', pricingTierLabel: '100' },
     pro_20x: { checkoutValue: 'chatgptpro', pricingRadioLabel: '20x', pricingTierLabel: '200' },
-    // 500 has no verified upstream identifier. Only explicit visible UI labels
-    // are accepted; never invent a checkout value or fall back to Pro 200.
-    pro_500: { checkoutValue: null, pricingRadioLabel: null, pricingTierLabel: '500' }
+    // Verified on the official Checkout on 2026-10-15 (Max usage).
+    // This UI option value does not establish the account/API plan_name contract.
+    pro_500: { checkoutValue: 'chatgptpromax', pricingRadioLabel: null, pricingTierLabel: '500' }
 });
 
 const resolvePlanUpgradeTestId = (planType) => {
@@ -71,13 +71,20 @@ const resolvePlanUpgradeTestId = (planType) => {
     return testId;
 };
 
-const getUniqueVisiblePlanButton = async (page, planType) => {
+const getUniqueVisiblePlanButton = async (page, planType, { requireProCard = false } = {}) => {
     const plan = String(planType).trim().toLowerCase();
     const testId = resolvePlanUpgradeTestId(plan);
+    const proCard = page.getByTestId('pro-pricing-modal-column-top-half');
+    if (requireProCard) {
+        if (!PRO_VARIANTS[plan] || await proCard.count() !== 1 || !(await proCard.isVisible({ timeout: 4000 }))) {
+            throw new Error('定价页 Pro 卡片不唯一或不可见，禁止打开档位选择');
+        }
+    }
+    // The verified plan-specific CTA may be a sibling of the card top-half.
+    // Its exact unique test ID is authoritative; text fallback stays inside Pro.
     let button = page.getByTestId(testId);
     let count = await button.count();
     if (count === 0 && PRO_VARIANTS[plan]) {
-        const proCard = page.getByTestId('pro-pricing-modal-column-top-half');
         if (await proCard.count() === 1) {
             button = proCard.getByRole('button', { name: /^(?:升级订阅|Upgrade subscription|Upgrade to Pro)$/i });
             count = await button.count();
@@ -114,35 +121,85 @@ const waitForPricingPlanSelector = async (page, planType) => {
 
 const getProVariant = (planType) => PRO_VARIANTS[String(planType).trim().toLowerCase()];
 
-const selectProVariantOnPricingPage = async (page, planType) => {
+async function logProPricingStructure(page) {
+    try {
+        const structure = await page.evaluate(() => {
+            const dialogs = [...document.querySelectorAll('[role="dialog"]')].filter((node) => node.getClientRects().length > 0);
+            const surface = dialogs.length === 1 ? dialogs[0] : document.querySelector('main');
+            if (!surface) return [];
+            let roots = [...surface.querySelectorAll('[data-testid="pro-pricing-modal-column-top-half"]')];
+            if (!roots.length) {
+                roots = [...surface.querySelectorAll('h1,h2,h3,h4,h5,h6,[role="heading"]')]
+                    .filter((node) => /^(?:ChatGPT\s+)?Pro$/i.test(String(node.textContent || '').trim()))
+                    .map((node) => node.parentElement || node);
+            }
+            return roots.slice(0, 3).map((root) =>
+                [root, ...root.querySelectorAll('[role],[data-testid],input[type="radio"]')]
+                    .slice(0, 24).map((node) => ({
+                        role: node.getAttribute('role') || (node.matches('input[type="radio"]') ? 'radio' : null),
+                        tag: node.tagName.toLowerCase(),
+                        testid: node.getAttribute('data-testid'),
+                        'aria-label': node.getAttribute('aria-label'),
+                        label: /^(?:100|200|500|5x|20x)$/i.test(String(node.getAttribute('aria-label') || node.textContent || '').trim())
+                            ? String(node.getAttribute('aria-label') || node.textContent).trim() : null,
+                        checked: node.getAttribute('aria-checked') ?? (node.matches('input[type="radio"]') ? node.checked : null)
+                    }))
+            );
+        });
+        console.warn('[定价页 Pro 结构]', JSON.stringify(require('../security.cjs').sanitize(structure)));
+    } catch (_) {
+        console.warn('[定价页 Pro 结构] 当前结构不可读取');
+    }
+}
+
+const selectProVariantOnPricingPage = async (page, planType, { debugOnly = false } = {}) => {
     const plan = String(planType).trim().toLowerCase();
     const variant = getProVariant(plan);
     if (!variant) {
         return false;
     }
 
-    const group = page.getByRole('radiogroup', { name: /^Pro (?:用量|usage)$/i });
-    const groupCount = await group.count();
-    if (groupCount > 1) throw new Error('定价页 Pro 用量分组不唯一');
-    const scope = groupCount === 1 ? group : page;
-    let radio = scope.getByRole('radio', { name: variant.pricingTierLabel, exact: true });
-    let count = groupCount === 1 ? await radio.count() : 0;
-    let label = variant.pricingTierLabel;
-    if (count === 0 && variant.pricingRadioLabel) {
-        label = variant.pricingRadioLabel;
-        radio = scope.getByRole('radio', { name: label, exact: true });
-        count = await radio.count();
-    }
-    if (count !== 1) throw new Error(`定价页 Pro 档位按钮数量异常: ${plan} / ${label} / ${count}`);
-    if (!(await radio.isVisible({ timeout: 4000 }))) throw new Error(`定价页 Pro 档位按钮不可见: ${plan} / ${label}`);
+    try {
+        const card = page.getByTestId('pro-pricing-modal-column-top-half');
+        if (await card.count() !== 1 || !(await card.isVisible({ timeout: 4000 }))) {
+            throw new Error('定价页 Pro 卡片不唯一或不可见，禁止选择档位');
+        }
+        const group = card.getByRole('radiogroup');
+        const groupCount = await group.count();
+        const allGroupCount = debugOnly === true
+            ? await card.getByRole('radiogroup', { includeHidden: true }).count() : groupCount;
+        if (groupCount > 1 || allGroupCount > 1) throw new Error('定价页 Pro 用量分组不唯一');
+        if (debugOnly === true && allGroupCount === 0 && await card.getByRole('radio', { includeHidden: true }).count() === 0) {
+            console.log('[调试] 当前 Pro 卡片未提供档位控件，打开后须在 Checkout 核实准确档位');
+            return { deferredToCheckout: true };
+        }
+        const scope = groupCount === 1 ? group : card;
+        let label = variant.pricingTierLabel;
+        let cardRadio = card.getByRole('radio', { name: label, exact: true });
+        let count = await cardRadio.count();
+        if (count === 0 && variant.pricingRadioLabel) {
+            label = variant.pricingRadioLabel;
+            cardRadio = card.getByRole('radio', { name: label, exact: true });
+            count = await cardRadio.count();
+        }
+        const radio = scope.getByRole('radio', { name: label, exact: true });
+        if (count !== 1 || await radio.count() !== 1) {
+            throw new Error(`定价页 Pro 档位按钮数量异常: ${plan} / ${label} / ${count}`);
+        }
+        if (!(await radio.isVisible({ timeout: 4000 }))) throw new Error(`定价页 Pro 档位按钮不可见: ${plan} / ${label}`);
 
-    await radio.click({ timeout: 10000 });
-    await page.waitForTimeout(300);
-    if (await radio.getAttribute('aria-checked') !== 'true') {
-        throw new Error(`定价页 Pro 档位未选中: ${plan} / ${variant.pricingRadioLabel}`);
+        await radio.click({ timeout: 10000 });
+        await page.waitForTimeout(300);
+        const checked = await radio.getAttribute('aria-checked');
+        if (checked !== 'true' && !(checked === null && await radio.isChecked().catch(() => false))) {
+            throw new Error(`定价页 Pro 档位未选中: ${plan} / ${label}`);
+        }
+        console.log(`✅ [步骤] 定价页已选择 Pro 档位: ${plan} (${label})`);
+        return true;
+    } catch (error) {
+        await logProPricingStructure(page);
+        throw error;
     }
-    console.log(`✅ [步骤] 定价页已选择 Pro 档位: ${plan} (${label})`);
-    return true;
 };
 
 const selectProVariantOnCheckoutPage = async (page, planType) => {
@@ -152,25 +209,45 @@ const selectProVariantOnCheckoutPage = async (page, planType) => {
         return;
     }
 
-    const proGroup = page.getByRole('radiogroup', { name: /^Pro (?:用量|usage)$/i });
-    const groupCount = await proGroup.count();
-    if (groupCount > 1) throw new Error('Checkout Pro 用量分组不唯一');
-    const numeric = groupCount === 1 ? proGroup.getByRole('radio', { name: variant.pricingTierLabel, exact: true }) : null;
-    const numericCount = numeric ? await numeric.count() : 0;
+    let numeric = null, numericCount = 0, option, count = 0, valueFallback = false;
+    const readyDeadline = Date.now() + 10000;
+    // Navigation can finish before React mounts the plan tiles. count() does
+    // not wait, so observe the exact target before deciding it is absent.
+    for (let attempt = 0; attempt < 50; attempt++) {
+        let proGroup = page.getByRole('radiogroup', { name: /^Pro (?:用量|usage|plan)$/i });
+        let groupCount = await proGroup.count();
+        if (groupCount === 0) {
+            proGroup = page.getByRole('group', { name: /^Pro plan$/i });
+            groupCount = await proGroup.count();
+        }
+        if (groupCount > 1) throw new Error('Checkout Pro 用量分组不唯一');
+        numeric = groupCount === 1 ? proGroup.getByRole('radio', { name: variant.pricingTierLabel, exact: true }) : null;
+        numericCount = numeric ? await numeric.count() : 0;
+        if (numericCount) break;
+        option = page.locator(`#${variant.checkoutValue}`);
+        count = await option.count();
+        valueFallback = count === 0;
+        if (valueFallback) {
+            option = page.locator(`[role="radio"][value="${variant.checkoutValue}"]`);
+            count = await option.count();
+        }
+        if (count || attempt === 49 || Date.now() >= readyDeadline) break;
+        await page.waitForTimeout(200);
+    }
     if (numericCount) {
         if (numericCount !== 1 || !(await numeric.isVisible({ timeout: 4000 }))) throw new Error('Checkout Pro 数字档位不唯一或不可见');
         await numeric.click({ timeout: 10000 });
-        if (await numeric.getAttribute('aria-checked') !== 'true') throw new Error('Checkout Pro 数字档位未确认选中');
+        const checked = await numeric.getAttribute('aria-checked');
+        if (checked !== 'true' && !(checked === null && await numeric.isChecked().catch(() => false))) throw new Error('Checkout Pro 数字档位未确认选中');
         return;
     }
-    if (!variant.checkoutValue) {
-        const exactTitle = page.getByRole('heading', { name: /^(?:ChatGPT\s+)?Pro\s+500$/i });
-        if (await exactTitle.count() === 1 && await exactTitle.isVisible({ timeout: 1000 })) return;
-        throw new Error('Checkout 未显示明确 Pro 500 选项，禁止使用其他套餐');
+    // ID-free tiles include a hidden native input per tile. Only the exact
+    // ARIA control within one plan group is accepted, never that hidden input.
+    if (valueFallback && count === 1 && await page.getByRole('radiogroup').filter({ has: option }).count() !== 1) {
+        throw new Error('Checkout Pro 档位不在唯一选项分组内');
     }
-    const option = page.locator(`#${variant.checkoutValue}`);
-    const count = await option.count();
     if (count !== 1) {
+        await logCheckoutProOptions(page);
         throw new Error(`Checkout Pro 档位按钮数量异常: ${plan} / ${variant.checkoutValue} / ${count}`);
     }
     if (!(await option.isVisible({ timeout: 4000 }))) {
@@ -186,11 +263,33 @@ const selectProVariantOnCheckoutPage = async (page, planType) => {
     await page.waitForTimeout(300);
     const ariaChecked = await option.getAttribute('aria-checked');
     const dataState = await option.getAttribute('data-state');
-    if (ariaChecked !== 'true' || dataState !== 'checked') {
+    if (ariaChecked !== 'true' || (dataState !== null && dataState !== 'checked')) {
         throw new Error(`Checkout Pro 档位未确认选中: ${plan} / ${variant.checkoutValue}`);
     }
     console.log(`✅ [步骤] Checkout 已确认 Pro 档位: ${plan} (${variant.checkoutValue})`);
 };
+
+async function logCheckoutProOptions(page) {
+    let deadline;
+    try {
+        const structure = await Promise.race([page.evaluate(() => [...document.querySelectorAll('[role="radiogroup"],fieldset')]
+            .filter((group) => group.getClientRects().length > 0).slice(0, 5).map((group) => ({
+                role: group.getAttribute('role') || 'fieldset',
+                name: String(group.getAttribute('aria-label') || group.querySelector('legend')?.textContent || '').trim().slice(0, 80),
+                choices: [...group.querySelectorAll('[role="radio"],input[type="radio"]')].slice(0, 8).map((node) => ({
+                    label: String(node.getAttribute('aria-label') || [...(node.labels || [])].map((label) => label.textContent).join(' ') || node.textContent || '').trim().slice(0, 100),
+                    planId: /^chatgpt[a-z0-9_-]{1,40}$/i.test(node.id) ? node.id : null,
+                    planValue: /^chatgpt[a-z0-9_-]{1,40}$/i.test(node.getAttribute('value') || '') ? node.getAttribute('value') : null,
+                    checked: node.getAttribute('aria-checked') ?? (node.matches('input[type="radio"]') ? node.checked : null)
+                }))
+            }))), new Promise((_, reject) => { deadline = setTimeout(() => reject(new Error('诊断读取超时')), 5000); })]);
+        console.warn('[Checkout Pro 选项结构]', JSON.stringify(require('../security.cjs').sanitize(structure)));
+    } catch (_) {
+        console.warn('[Checkout Pro 选项结构] 当前结构不可读取');
+    } finally {
+        clearTimeout(deadline);
+    }
+}
 
 function normalizeOptionText(text) {
     return String(text || '').replace(/\s+/g, ' ').trim();
@@ -712,6 +811,7 @@ async function waitForPricingPage(page, timeout = 60000) {
     if (!url.includes('chatgpt.com')) {
         throw new Error(`定价页打开失败，当前 URL: ${url}`);
     }
+    await switchToPersonalPlans(page);
     await waitForPricingPlanSelector(page);
     console.log('✅ [步骤] 已打开 ChatGPT 定价页 (#pricing)');
 }
@@ -778,7 +878,7 @@ async function selectPricingRegion(page, regionCode) {
 /**
  * 点击对应套餐的升级按钮
  */
-async function clickPlanUpgrade(page, planType) {
+async function clickPlanUpgrade(page, planType, { requireProCard = false } = {}) {
     const plan = String(planType).trim().toLowerCase();
     console.log(`📦 [步骤] 正在点击升级按钮 (套餐: ${plan})...`);
 
@@ -786,7 +886,7 @@ async function clickPlanUpgrade(page, planType) {
     await switchToPersonalPlans(page);
     await page.waitForTimeout(1000);
 
-    const target = await getUniqueVisiblePlanButton(page, plan);
+    const target = await getUniqueVisiblePlanButton(page, plan, { requireProCard });
     const button = target.button;
     await button.scrollIntoViewIfNeeded().catch(() => {});
     await button.click({ timeout: 10000 });
@@ -816,16 +916,23 @@ async function waitForCheckoutPage(page, timeout = 90000) {
     throw new Error(`等待 Checkout 页面超时，当前 URL: ${page.url()}`);
 }
 
-async function openPricingCheckout(page, { region, planType }) {
+async function openPricingCheckout(page, { region, planType, operation = 'initial', debugOnly = false }) {
+    if (!['initial', 'upgrade'].includes(operation)) throw new Error('未核实开通类型，禁止选择定价地区');
     await waitForPricingPage(page);
     await waitForPricingPlanSelector(page, planType);
-    await switchToPersonalPlans(page);
-    await selectPricingRegion(page, region);
-    await selectProVariantOnPricingPage(page, planType);
-    await clickPlanUpgrade(page, planType);
+    let pricingRegionVerified = false;
+    if (operation === 'initial' && debugOnly !== true) {
+        await selectPricingRegion(page, region);
+        pricingRegionVerified = true;
+    } else if (operation === 'initial') {
+        console.log('[调试] 仅观察官网当前地区报价，未核验配置账单地区');
+    }
+    const selected = await selectProVariantOnPricingPage(page, planType, { debugOnly });
+    const deferred = selected?.deferredToCheckout === true;
+    await clickPlanUpgrade(page, planType, { requireProCard: deferred });
     const checkout = await waitForCheckoutPage(page);
-    if (checkout.kind === 'checkout') await selectProVariantOnCheckoutPage(page, planType);
-    return checkout;
+    if (checkout.kind === 'checkout' || deferred) await selectProVariantOnCheckoutPage(page, planType);
+    return { ...checkout, pricingRegionVerified };
 }
 
 module.exports = {

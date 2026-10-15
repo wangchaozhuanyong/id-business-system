@@ -130,6 +130,7 @@ async function runTask(task) {
   rememberSecrets(process.env.ONLINE_RECHARGE_WORKER_KEY, 'secret');
   installSafeConsole((log) => send({ type: 'log', log }));
   let config;
+  let phase = 'runtime_config';
   try {
     config = await rpc('getRuntimeConfig');
     rememberSecrets(config);
@@ -142,6 +143,11 @@ async function runTask(task) {
       captcha_platform_api_url: config.hcaptcha?.platform_api_url,
       captcha_platform_timeout: config.hcaptcha?.platform_timeout
     };
+    phase = 'proxy';
+    const proxy = ['recharge', 'debug', 'subscription', 'renewal'].includes(task.operation)
+      ? (await require('./upstream/mysql-store').getActiveProxy()) || ''
+      : '';
+    phase = 'environment';
     Object.assign(
       process.env,
       require('./upstream/hcaptcha-runtime').buildHcaptchaEnvFromConfig(hcaptcha).env,
@@ -160,15 +166,14 @@ async function runTask(task) {
         CHECKOUT_DEBUG_ONLY: task.operation === 'debug' ? '1' : '0',
         HEADFUL: config.headful ? '1' : '0',
         RECORD_VIDEO: '0',
-        PROXY: ['recharge', 'debug', 'subscription', 'renewal'].includes(task.operation)
-          ? (await require('./upstream/mysql-store').getActiveProxy()) || ''
-          : '',
+        PROXY: proxy,
         HCAPTCHA_SOLVER_OUT_DIR: path.join(
           process.env.ONLINE_RECHARGE_RUNTIME_DIR || path.join(__dirname, 'runtime', task.id),
           'solver'
         )
       }
     );
+    phase = 'execution';
     const result = await execute(task, config);
     if (task.operation === 'recharge' && !result?.resultUnknown && !result?.pendingCredentials) {
       const event = result?.success
@@ -209,6 +214,15 @@ async function runTask(task) {
               : '执行未完成'
     });
   } catch (error) {
+    // installSafeConsole redacts registered credentials and sensitive text
+    // before sending this diagnostic to the parent or persisted task log.
+    console.error(
+      '[执行异常]',
+      phase,
+      error?.name || 'Error',
+      error?.code || '',
+      error?.message || '执行未完成'
+    );
     send({
       type: 'result',
       status:
@@ -219,7 +233,7 @@ async function runTask(task) {
               error.code === 'RESULT_UNKNOWN'
             ? 'awaiting_review'
             : 'failed',
-      result: { code: error.code || 'EXECUTION_FAILED' },
+      result: sanitizeResult({ code: error.code || 'EXECUTION_FAILED', phase }),
       message: '执行未完成，请查看受限诊断'
     });
   } finally {

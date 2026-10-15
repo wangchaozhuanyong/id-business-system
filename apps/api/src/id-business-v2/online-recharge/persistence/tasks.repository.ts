@@ -19,6 +19,7 @@ import { OnlineRechargeSettingsService } from '../settings.service';
 import { OnlineRechargeRepository } from './online-recharge.repository';
 import { OnlineRechargeEphemeralCredentials } from '../ephemeral-credentials.service';
 import { assertOnlineSensitive } from '../assets.service';
+import { OnlineRechargeOrderSyncService } from '../order-sync.service';
 import {
   id,
   ids,
@@ -38,7 +39,8 @@ export class OnlineRechargeTasksRepository {
     private readonly repository: OnlineRechargeRepository,
     private readonly settings: OnlineRechargeSettingsService,
     private readonly encryption: FieldEncryptionService,
-    private readonly memory: OnlineRechargeEphemeralCredentials
+    private readonly memory: OnlineRechargeEphemeralCredentials,
+    private readonly orderSync: OnlineRechargeOrderSyncService
   ) {}
   map(row: OnlineRechargeTask, publicView = false) {
     const result = sanitize(row.result);
@@ -119,7 +121,9 @@ export class OnlineRechargeTasksRepository {
       db.onlineRechargeTask.findUnique({ where: { id: taskId } })
     );
     if (!row) throw new NotFoundException('任务不存在');
-    return this.map(row, publicView);
+    return publicView
+      ? this.map(row, true)
+      : { ...this.map(row), orderSync: await this.orderSync.summary(taskId) };
   }
   async publicConfig() {
     const { settings } = await this.settings.internal();
@@ -332,6 +336,12 @@ export class OnlineRechargeTasksRepository {
   }
   async action(section: string, action: string, raw: unknown, operator: AuthenticatedUser) {
     const input = object(raw);
+    if (section === 'jobs' && action === 'sync-order')
+      return this.orderSync.enqueue(id(input.id), operator);
+    if (section === 'jobs' && action === 'order-backfill-preview')
+      return this.orderSync.preview(input, operator);
+    if (section === 'jobs' && action === 'order-backfill')
+      return this.orderSync.backfill(input, operator);
     if (action === 'start')
       return this.start(input, operator, section === 'checkout-debug' ? 'debug' : 'recharge');
     if (action === 'recheck') {
@@ -407,6 +417,7 @@ export class OnlineRechargeTasksRepository {
       if (action === 'detail')
         return {
           ...this.map(row),
+          orderSync: await this.orderSync.summary(taskId, tx),
           events: await tx.onlineRechargeEvent.findMany({
             where: { taskId },
             orderBy: { createdAt: 'asc' },

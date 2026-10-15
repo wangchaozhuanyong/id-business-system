@@ -20,6 +20,7 @@ import {
   type OnlineRechargeWorkerRpc
 } from '../contracts';
 import { id, integer, object, redact, sanitize, sessionAccountId, text } from '../validation';
+import { OnlineRechargeOrderSyncService } from '../order-sync.service';
 
 const LEASE_MS = 90000;
 function hasRenewalSubmission(row: OnlineRechargeTask) {
@@ -152,7 +153,8 @@ export class OnlineRechargeWorkerRepository {
     private readonly repository: OnlineRechargeRepository,
     private readonly settings: OnlineRechargeSettingsService,
     private readonly encryption: FieldEncryptionService,
-    private readonly memory: OnlineRechargeEphemeralCredentials
+    private readonly memory: OnlineRechargeEphemeralCredentials,
+    private readonly orderSync: OnlineRechargeOrderSyncService
   ) {}
   withLease<T>(
     rpc: OnlineRechargeWorkerRpc,
@@ -484,6 +486,8 @@ export class OnlineRechargeWorkerRepository {
           args.definitiveFailure === true
         );
       }
+      if (row.operation === 'recharge' && status === 'succeeded')
+        await this.orderSync.enqueueInTransaction(tx, row.id);
       if (terminal || status === 'awaiting_credentials')
         await tx.onlineRechargeCard.updateMany({
           where: { leaseOwner: row.id },
@@ -615,6 +619,7 @@ export class OnlineRechargeWorkerRepository {
         result: sanitize({ ...result, recheckedByTaskId: recheck.id }) as Prisma.InputJsonValue
       }
     });
+    if (status === 'succeeded') await this.orderSync.enqueueInTransaction(tx, original.id);
     if (original.codeId)
       await tx.onlineRechargeCode.updateMany({
         where: { id: original.codeId, taskId: original.id, status: 'reserved' },

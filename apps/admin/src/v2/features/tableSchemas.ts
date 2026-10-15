@@ -157,6 +157,42 @@ export const v2TableSchemas = {
         { key: 'status', label: '订单状态', kind: 'status', widthPreset: 'standard' },
         { key: 'actions', label: '操作', kind: 'actions', layout: 'triple', pin: 'end' }
       ]
+    }),
+    online: table({
+      id: 'bank-recharge-orders.online',
+      feature: 'bank-recharge-orders',
+      role: 'primary',
+      mobileMode: 'scroll',
+      rowKey: { kind: 'path', value: 'id' },
+      columns: [
+        {
+          key: 'orderNo',
+          label: '线上订单',
+          kind: 'identifier',
+          widthPreset: 'wide',
+          pin: 'start'
+        },
+        { key: 'customer', label: '客户', kind: 'text', widthPreset: 'standard' },
+        { key: 'account', label: 'ChatGPT 账号', kind: 'identifier', widthPreset: 'wide' },
+        { key: 'plan', label: '套餐', kind: 'text', widthPreset: 'standard' },
+        { key: 'card', label: '银行卡', kind: 'identifier', widthPreset: 'standard' },
+        { key: 'chargeAmount', label: '代付金额', kind: 'numeric', widthPreset: 'wide' },
+        { key: 'usdtFeeAmount', label: 'USDT 手续费', kind: 'numeric', widthPreset: 'standard' },
+        {
+          key: 'shoppingFeeAmount',
+          label: '购物网手续费',
+          kind: 'numeric',
+          widthPreset: 'standard'
+        },
+        { key: 'receivedAmount', label: '客户实收', kind: 'numeric', widthPreset: 'standard' },
+        { key: 'profitAmountCny', label: '利润(CNY)', kind: 'numeric', widthPreset: 'standard' },
+        { key: 'openedAt', label: '开通时间', kind: 'date', widthPreset: 'dateTime' },
+        { key: 'dueAt', label: '到期时间', kind: 'date', widthPreset: 'dateTime' },
+        { key: 'paymentResult', label: '充值结果', kind: 'status', widthPreset: 'standard' },
+        { key: 'usageStatus', label: '使用状态', kind: 'status', widthPreset: 'standard' },
+        { key: 'status', label: '订单状态', kind: 'status', widthPreset: 'standard' },
+        { key: 'actions', label: '操作', kind: 'actions', layout: 'triple', pin: 'end' }
+      ]
     })
   },
   vendureMailbox: {
@@ -1404,7 +1440,10 @@ export const v2TablesByFeature = {
   'chatgpt-accounts': [v2TableSchemas.chatgptAccounts.main],
   'bank-recharge-cards': [v2TableSchemas.bankRechargeCards.main],
   'recharge-proxies': [v2TableSchemas.rechargeProxies.main],
-  'bank-recharge-orders': [v2TableSchemas.bankRechargeOrders.main],
+  'bank-recharge-orders': [
+    v2TableSchemas.bankRechargeOrders.main,
+    v2TableSchemas.bankRechargeOrders.online
+  ],
   'vendure-mailbox': [
     v2TableSchemas.vendureMailbox.primary,
     v2TableSchemas.vendureMailbox.aliases,

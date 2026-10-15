@@ -2,6 +2,8 @@ import { http, request, type ApiRequestOptions } from '@/api/client';
 import type { V2AccountOffer } from '@apple-business/shared';
 import { withV2QueryInvalidation } from '@/v2/composables/useV2Query';
 
+export type RechargeOrderChannel = 'bitbrowser' | 'online';
+
 const base = '/id-business-v2/bank-recharge';
 
 export interface BitOrderPricingSettings {
@@ -95,6 +97,7 @@ export interface BankRechargeCard {
   last4: string;
   currencyCode: string;
   active: boolean;
+  status?: 'active' | 'exhausted' | 'disabled';
   hasNumber?: boolean;
   expiry?: string | null;
 }
@@ -150,6 +153,12 @@ export type BankRechargeOrderStatus =
   | 'cancelled';
 
 export interface BankRechargeOrder {
+  channel?: RechargeOrderChannel;
+  onlineRechargeTaskId?: string | null;
+  onlineRechargeCardId?: string | null;
+  paymentEvidenceId?: string | null;
+  checkoutIdentifier?: string | null;
+  onlineSourceSnapshot?: { zeroAmountChange?: boolean; [key: string]: unknown } | null;
   chargeCountryCode?: string | null;
   accountingVersion?: 'legacy' | 'subscription_cost_v2';
   usdtFeeAmount?: string | null;
@@ -179,8 +188,8 @@ export interface BankRechargeOrder {
   activeSubscription: { status: 'active' | 'expired' | 'cancelled' } | null;
   cardLast4: string | null;
   plan: string;
-  chargeAmount: string;
-  chargeCurrencyCode: string;
+  chargeAmount: string | null;
+  chargeCurrencyCode: string | null;
   customerFeeRate: string;
   customerFeeAmount: string;
   customerFeeOverridden: boolean;
@@ -206,6 +215,7 @@ export interface BankRechargeOrder {
 }
 
 export interface BankRechargeOrderOptions {
+  cards?: BankRechargeCard[];
   customers: Array<{ id: string; name: string }>;
   financeAccounts: Array<{ id: string; name: string; currency: string; accountType: string }>;
 }
@@ -470,6 +480,7 @@ export const bankRechargeApi = {
       expiry?: 'all' | 'expired';
       deleted?: 'active' | 'deleted';
       executionSource?: 'bitbrowser';
+      channel?: RechargeOrderChannel;
     },
     options: ApiRequestOptions = {}
   ) {
@@ -482,19 +493,27 @@ export const bankRechargeApi = {
       revalidateAt: string;
     }>(http.get(`${base}/orders`, { params: query, signal: options.signal }));
   },
-  orderOptions(options: ApiRequestOptions = {}) {
+  orderOptions(options: ApiRequestOptions = {}, channel: RechargeOrderChannel = 'bitbrowser') {
     return request<BankRechargeOrderOptions>(
-      http.get(`${base}/orders/options`, { signal: options.signal })
+      http.get(`${base}/orders/options`, { params: { channel }, signal: options.signal })
     );
   },
-  orderPricingSettings(options: ApiRequestOptions = {}) {
+  orderPricingSettings(
+    options: ApiRequestOptions = {},
+    channel: RechargeOrderChannel = 'bitbrowser'
+  ) {
     return request<BitOrderPricingSettings>(
-      http.get(`${base}/order-pricing-settings`, { signal: options.signal })
+      http.get(`${base}/order-pricing-settings`, { params: { channel }, signal: options.signal })
     );
   },
-  updateOrderPricingSettings(input: BitOrderPricingSettings) {
+  updateOrderPricingSettings(
+    input: BitOrderPricingSettings,
+    channel: RechargeOrderChannel = 'bitbrowser'
+  ) {
     return withV2QueryInvalidation(
-      request<BitOrderPricingSettings>(http.put(`${base}/order-pricing-settings`, input)),
+      request<BitOrderPricingSettings>(
+        http.put(`${base}/order-pricing-settings`, input, { params: { channel } })
+      ),
       ['auto-recharge']
     );
   },
