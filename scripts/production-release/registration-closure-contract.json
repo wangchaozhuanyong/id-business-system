@@ -1114,7 +1114,7 @@
     "apps/api/src/id-business-v2/auto-registration/worker/release_safety.py": "6422bacc1808b02e083a202f6f55d68c7e8ae01fe8ec647d1256d2b6542df16f",
     "apps/api/src/id-business-v2/auto-registration/worker/test_apple_mailboxes.py": "ccb4541b8317551e30e26c1917a4c51cb5926104546d53bd0d655640305028d7",
     "apps/api/src/id-business-v2/auto-registration/worker/test_registration_closed_loop_unit.py": "0ba9d921f01daef5cdf97ad38f1a27a1285d40e47de986d6c5a1238f936b3a38",
-    "apps/api/src/id-business-v2/auto-registration/worker/test_release_safety.py": "9789533d5d4e367167eedbd6c81826fa8fdd527afe9422f4a9845f58db6ebcb6",
+    "apps/api/src/id-business-v2/auto-registration/worker/test_release_safety.py": "f1702ad06b7e9fb6f123e8ae35b4ce2c368bd46f7ddddd20253496c7855ce24b",
     "apps/api/src/id-business-v2/auto-registration/worker/test_workspace.py": "b209874b0a8d7b640a3df1253356f206b2e98c7253eee43efe7a212c14f32154",
     "apps/api/src/id-business-v2/auto-registration/worker/workspace.py": "6bcb2050633db830068fd1a1b1a30d3dd75bf45f24aef3ab5b9c398d632e7237",
     "apps/api/src/id-business-v2/auto-registration/workspace-path.spec.ts": "354ed8afbd84a1c8d96824d8d3a3d63a70d4314b38ff91b18724235e0115d96d",

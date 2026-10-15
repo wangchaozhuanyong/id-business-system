@@ -5481,7 +5481,10 @@ test('published fixture recovery admits only its three exact existing test sourc
 });
 
 test('registration closure real CLI preserves schema blob bytes for exact published recovery', () => {
-  const base = '07e28beb3fbb1fc5c9dac8050e16b3f00e0b1083';
+  const { reviewBase: base } = JSON.parse(
+    readFileSync('scripts/production-release/registration-closure-contract.json', 'utf8')
+  );
+  assert.match(base, /^[a-f0-9]{40}$/);
   const before = execFileSync('git', ['show', base + ':apps/api/prisma-mysql/schema.prisma'], {
     encoding: 'utf8'
   });

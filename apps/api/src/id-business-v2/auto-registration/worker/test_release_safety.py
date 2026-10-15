@@ -2,6 +2,7 @@
 
 import asyncio
 import base64
+from contextvars import ContextVar
 import hashlib
 import importlib.util
 import json
@@ -541,6 +542,11 @@ summary=module.logical_summary(db); print(json.dumps({'sha':summary['logicalSha2
 
 class MaintenanceBoundaryTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
+        self.execution_actor = ContextVar("maintenance_test_actor", default=None)
+        self.execution_actor.set("outer-test-actor")
+        actor_module = patch.dict(sys.modules, {"apple_mailboxes": SimpleNamespace(execution_actor=self.execution_actor)})
+        actor_module.start()
+        self.addCleanup(actor_module.stop)
         output = workspace.PROJECT_ROOT / ".runtime/registration-closed-loop-20261011"
         output.mkdir(exist_ok=True, parents=True)
         self.directory = tempfile.TemporaryDirectory(prefix="maintenance-", dir=output)
@@ -555,6 +561,7 @@ class MaintenanceBoundaryTests(unittest.IsolatedAsyncioTestCase):
     async def request(self, method="POST", token=None):
         async def app(scope, receive, send):
             self.called += 1
+            self.assertEqual(self.execution_actor.get(), "offline-operator")
             await send({"type": "http.response.start", "status": 200, "headers": [(b"content-type", b"application/json")]})
             await send({"type": "http.response.body", "body": b'{"ready":true}'})
         messages = []
@@ -562,9 +569,29 @@ class MaintenanceBoundaryTests(unittest.IsolatedAsyncioTestCase):
             messages.append(message)
         async def receive():
             return {"type": "http.request", "body": b"", "more_body": False}
-        scope = {"type": "http", "method": method, "path": "/health", "headers": [(b"x-id-workspace-token", (self.token if token is None else token).encode())]}
+        scope = {"type": "http", "method": method, "path": "/health", "headers": [
+            (b"x-id-workspace-token", (self.token if token is None else token).encode()),
+            (b"x-id-workspace-operator-id", b"offline-operator"),
+        ]}
         await workspace.WorkspaceGatewayBoundary(app, self.token, self.root)(scope, receive, send)
+        self.assertEqual(self.execution_actor.get(), "outer-test-actor")
         return messages
+
+    async def test_request_failure_restores_operator_context(self):
+        async def app(scope, receive, send):
+            self.assertEqual(self.execution_actor.get(), "offline-operator")
+            raise RuntimeError("offline application failure")
+        async def receive():
+            return {"type": "http.request", "body": b"", "more_body": False}
+        async def send(message):
+            self.fail("failing application must not send a response")
+        scope = {"type": "http", "method": "POST", "path": "/health", "headers": [
+            (b"x-id-workspace-token", self.token.encode()),
+            (b"x-id-workspace-operator-id", b"offline-operator"),
+        ]}
+        with self.assertRaisesRegex(RuntimeError, "offline application failure"):
+            await workspace.WorkspaceGatewayBoundary(app, self.token, self.root)(scope, receive, send)
+        self.assertEqual(self.execution_actor.get(), "outer-test-actor")
 
     async def test_missing_marker_preserves_existing_behavior(self):
         messages = await self.request()
