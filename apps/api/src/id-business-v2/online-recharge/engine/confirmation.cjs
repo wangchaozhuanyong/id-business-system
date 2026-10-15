@@ -37,9 +37,91 @@ async function confirmSubscription(targetPlan, token, injected = {}) {
   const result = await query(token, { timezoneOffsetMin: 480 });
   return evaluateSubscription(targetPlan, expectedAccountId, result);
 }
+async function preflightPayment(targetPlan, token, injected = {}) {
+  let confirmation;
+  let activeSubscription;
+  try {
+    const query =
+      injected.query || require('./upstream/subscription-check').querySubscriptionBySession;
+    confirmation = await confirmSubscription(targetPlan, token, {
+      ...injected,
+      query: async (...args) => {
+        const result = await query(...args);
+        activeSubscription = result?.data?.hasActiveSubscription;
+        return result;
+      }
+    });
+  } catch (error) {
+    if (error.code === 'LEASE_LOST') throw error;
+    return {
+      allowed: false,
+      alreadyActive: false,
+      error: '付款前无法核实原账号套餐，本次未提交付款'
+    };
+  }
+  if (
+    !confirmation.querySucceeded ||
+    !confirmation.expectedAccountId ||
+    confirmation.accountId !== confirmation.expectedAccountId ||
+    typeof activeSubscription !== 'boolean' ||
+    (!confirmation.observedPlan && activeSubscription !== false)
+  ) {
+    return {
+      allowed: false,
+      alreadyActive: false,
+      confirmation,
+      error: '付款前账号或套餐核验未通过，本次未提交付款'
+    };
+  }
+  if (confirmation.verified) {
+    return {
+      allowed: false,
+      alreadyActive: true,
+      confirmation,
+      error: '账号已是目标套餐，本次未提交付款，无需重复充值'
+    };
+  }
+  return { allowed: true, alreadyActive: false, confirmation };
+}
+
 async function recheck(task, cfg, injected = {}) {
   const payload = task.payload || {};
   const token = require('./upstream/session-auth').extractAccessTokenFromRaw(task.session || '');
+  if (payload.originalOperation === 'renewal') {
+    const expectedAccountId =
+      require('./upstream/session-auth').extractProfileFromToken(token).accountId || '';
+    const action = payload.renewalAction;
+    const unknown = {
+      success: false,
+      renewalVerified: false,
+      confirmedPaid: false,
+      resultUnknown: true,
+      recheckTaskId: payload.recheckTaskId || null
+    };
+    if (!expectedAccountId || !['enable', 'disable'].includes(action))
+      return { ...unknown, error: '原续费变更资料不完整，禁止重新提交' };
+    const query =
+      injected.query || require('./upstream/subscription-check').querySubscriptionBySession;
+    let result;
+    try {
+      result = await query(token, { timezoneOffsetMin: payload.timezoneOffsetMin ?? 480 });
+    } catch (error) {
+      if (error.code === 'LEASE_LOST') throw error;
+      return { ...unknown, error: '原续费变更结果仍待核对' };
+    }
+    const verified =
+      result?.ok === true &&
+      result.data?.upstreamAccountId === expectedAccountId &&
+      result.data?.autoRenewRaw === (action === 'enable');
+    return {
+      ...unknown,
+      success: verified,
+      renewalVerified: verified,
+      resultUnknown: !verified,
+      data: result?.data || {},
+      ...(verified ? {} : { error: '原续费变更结果仍待核对' })
+    };
+  }
   const targetPlan = payload.targetPlan || task.plan;
   let provider = null;
   if ((payload.originalProvider || task.provider) === 'third_party') {
@@ -56,6 +138,7 @@ async function recheck(task, cfg, injected = {}) {
     const identity = provider.data?.order_id || provider.data?.order?.id;
     const taskIdentity = provider.data?.task_id || provider.data?.task?.id;
     if (
+      (!identity && !taskIdentity) ||
       (identity && String(identity) !== String(payload.providerOrderId)) ||
       (taskIdentity && String(taskIdentity) !== String(payload.providerTaskId))
     )
@@ -96,4 +179,10 @@ async function recheck(task, cfg, injected = {}) {
     providerTaskId: payload.providerTaskId || null
   };
 }
-module.exports = { evaluateSubscription, confirmSubscription, recheck, PLAN_NAMES };
+module.exports = {
+  evaluateSubscription,
+  confirmSubscription,
+  preflightPayment,
+  recheck,
+  PLAN_NAMES
+};

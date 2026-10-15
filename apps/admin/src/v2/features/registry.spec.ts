@@ -43,7 +43,7 @@ describe('V2 feature registry', () => {
     });
     try {
       const runtime = await import('./runtimeRegistry');
-      expect(runtime.v2RuntimeFeatureRegistry).toHaveLength(48);
+      expect(runtime.v2RuntimeFeatureRegistry).toHaveLength(49);
       expect(runtime.getV2RuntimeModuleDefinition('accounts')?.loadView).toBeTypeOf('function');
     } finally {
       vi.doUnmock('@/v2/features/tableSchemas');
@@ -58,7 +58,7 @@ describe('V2 feature registry', () => {
 
     expect(new Set(keys).size).toBe(keys.length);
     expect(new Set(routes).size).toBe(routes.length);
-    expect(v2FeatureRegistry).toHaveLength(48);
+    expect(v2FeatureRegistry).toHaveLength(49);
   });
 
   it('keeps the removed registration names module retired', () => {
@@ -91,9 +91,18 @@ describe('V2 feature registry', () => {
     );
     const online = v2NavigationSections[sectionIndex + 1];
     expect(online?.key).toBe('online-recharge');
+    expect(
+      v2FeatureRegistry.find((feature) => feature.key === 'online-recharge-redeem')
+    ).toMatchObject({
+      route: '/v2/online-recharge/redeem',
+      title: '兑换充值',
+      permission: 'id_business_v2.online_recharge.read',
+      kind: 'form'
+    });
     expect(online?.title).toBe('线上代充');
     expect(online?.items.map((item) => item.key)).toEqual([
       'online-recharge-overview',
+      'online-recharge-redeem',
       'online-recharge-jobs',
       'online-recharge-automation',
       'online-recharge-runtime-logs',

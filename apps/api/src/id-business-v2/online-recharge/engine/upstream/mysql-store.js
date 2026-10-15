@@ -5,6 +5,15 @@ const { rpc, wasSubmitted, wasPaymentConfirmed, recordKnownOutcome } = require('
 const { rememberSecrets, clearSensitive } = require('../security.cjs');
 const { requestCredential, forgetCredential } = require('../credential-client.cjs');
 const cards = new Map();
+const proxies = new Map();
+async function getActiveProxy(proxyId) {
+  const scope = require('../rpc.cjs').scope();
+  const key = scope.taskId ? `${scope.taskId}:${scope.leaseVersion}:${proxyId || 'default'}` : null;
+  if (key && proxies.has(key)) return proxies.get(key);
+  const resolved = (async () => require('../proxy-resolver.cjs').resolveProxy(await rpc('getActiveProxy', proxyId ? { proxyId } : {})))();
+  if (key) proxies.set(key, resolved);
+  return resolved;
+}
 const plans = { plus: 'chatgptplusplan', pro_5x: 'chatgptprolite', pro_20x: 'chatgptpro', pro5x: 'chatgptprolite', pro20x: 'chatgptpro' };
 async function reserveCard(ownerKey, excludedIds = []) {
   const card = await rpc('reserveCard', { ownerKey, excludedIds });
@@ -24,7 +33,7 @@ async function releaseCard(id) {
   try { if (!wasSubmitted() && !wasPaymentConfirmed()) await cardRpc('releaseCard', id); }
   finally { const card = cards.get(String(id)); clearSensitive(card); cards.delete(String(id)); forgetCredential(String(id)); }
 }
-function clearCredentials() { for (const [id, card] of cards) { clearSensitive(card); forgetCredential(id); } cards.clear(); }
+function clearCredentials() { for (const [id, card] of cards) { clearSensitive(card); forgetCredential(id); } cards.clear(); proxies.clear(); }
 async function createBillingRecord(data) {
   // Full PAN/CVC must never enter a billing record or an RPC error response.
   const { card_number: _pan, card_cvc: _cvc, cvc: _ignored, ...safe } = data;
@@ -39,7 +48,7 @@ module.exports = {
   getPaymentRegion: () => rpc('getPaymentRegion'),
   getCardPolicy: () => rpc('getCardPolicy'),
   verifyCdkDetails: (cdk) => rpc('verifyCdkDetails', { code: cdk }),
-  getActiveProxy: async (proxyId) => { const proxy = await rpc('getActiveProxy', proxyId ? { proxyId } : {}); return proxy?.proxy_url || (typeof proxy === 'string' ? proxy : null); },
+  getActiveProxy,
   getAppConfigValue: (key, fallback) => key === 'last_used_address_id' ? rpc('getAppConfigValue', { key, fallback }) : Promise.reject(new Error('不允许读取该配置')),
   setAppConfigValue: (key, value) => key === 'last_used_address_id' ? rpc('setAppConfigValue', { key, value }) : Promise.reject(new Error('不允许写入该配置')),
   reserveCard, releaseCard, clearCredentials,

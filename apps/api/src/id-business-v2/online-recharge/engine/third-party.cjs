@@ -13,6 +13,13 @@ async function executeThirdParty(task, cfg, injected = {}) {
   try {
     if (cfg.gptApi?.enabled === false) return { success: false, error: '第三方代充路径未启用' };
     await progress(10, 'session_check', '正在检查会话');
+    const token = require('./upstream/session-auth').extractAccessTokenFromRaw(
+      typeof task.session === 'string' ? task.session : JSON.stringify(task.session || {})
+    );
+    const preflight = injected.preflight
+      ? await injected.preflight(task)
+      : await require('./confirmation.cjs').preflightPayment(task.plan, token);
+    if (!preflight.allowed) return { success: false, submitted: false, ...preflight };
     const planKey = { pro_5x: 'pro5x', pro_20x: 'pro20x' }[task.plan] || task.plan;
     const inspect = await client.inspectPay(cfg.gptApi, { planKey, session });
     if (!inspect.success || inspect.data?.ok === false)
@@ -96,18 +103,18 @@ async function executeThirdParty(task, cfg, injected = {}) {
         await progress(Math.min(95, 40 + poll), 'provider_poll', '供应商仍在处理');
         continue;
       }
+      // Terminal failure is just as identity-sensitive as terminal success.
+      // A response for another order cannot release this order's resources.
+      const identity = out.data?.order_id || out.data?.order?.id;
+      const taskIdentity = out.data?.task_id || out.data?.task?.id;
+      if (
+        (!identity && !taskIdentity) ||
+        (identity && String(identity) !== String(orderId)) ||
+        (taskIdentity && String(taskIdentity) !== String(taskId))
+      )
+        throw new ResultUnknownError('供应商返回的原单身份不一致');
       const business = out.data?.result || {};
       if (isSuccessGptApiStatus(out.rawStatus) && business.ok !== false) {
-        const identity = out.data?.order_id || out.data?.order?.id;
-        const taskIdentity = out.data?.task_id || out.data?.task?.id;
-        if (
-          (identity && String(identity) !== String(orderId)) ||
-          (taskIdentity && String(taskIdentity) !== String(taskId))
-        )
-          throw new ResultUnknownError('供应商返回的原单身份不一致');
-        const token = require('./upstream/session-auth').extractAccessTokenFromRaw(
-          task.session || ''
-        );
         const confirmation = injected.confirm
           ? await injected.confirm(task, out)
           : await require('./confirmation.cjs').confirmSubscription(task.plan, token);

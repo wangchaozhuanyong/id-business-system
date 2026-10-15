@@ -35,20 +35,29 @@ export class OnlineRechargeAdminRepository {
   ) {}
   async overview() {
     const counts = await this.repository.read(async (db) => {
-      const [tasks, codes, cards, billing, active] = await Promise.all([
-        db.onlineRechargeTask.groupBy({ by: ['status'], _count: true }),
-        db.onlineRechargeCode.groupBy({ by: ['status'], _count: true }),
-        db.onlineRechargeCard.groupBy({ by: ['status'], _count: true }),
-        db.onlineRechargeBill.groupBy({
-          by: ['currency'],
-          where: { status: 'success' },
-          _sum: { amount: true },
-          _count: true
-        }),
-        db.onlineRechargeTask.count({ where: { status: 'running' } })
-      ]);
+      const [tasks, codes, cards, billing, active, rechargeTasks, confirmedRechargeCount] =
+        await Promise.all([
+          db.onlineRechargeTask.groupBy({ by: ['status'], _count: true }),
+          db.onlineRechargeCode.groupBy({ by: ['status'], _count: true }),
+          db.onlineRechargeCard.groupBy({ by: ['status'], _count: true }),
+          db.onlineRechargeBill.groupBy({
+            by: ['currency'],
+            where: { status: 'success' },
+            _sum: { amount: true },
+            _count: true
+          }),
+          db.onlineRechargeTask.count({ where: { status: 'running' } }),
+          db.onlineRechargeTask.groupBy({
+            by: ['status'],
+            where: { operation: 'recharge' },
+            _count: true
+          }),
+          db.onlineRechargeTask.count({ where: { operation: 'recharge', confirmedPaid: true } })
+        ]);
       return {
         tasks,
+        rechargeTasks,
+        confirmedRechargeCount,
         codes,
         cards,
         billing: billing.map((row) => ({
@@ -94,7 +103,10 @@ export class OnlineRechargeAdminRepository {
           id: String(slot.slotId ?? index + 1),
           status: slot.inUse === true ? 'busy' : 'idle',
           activeTaskId: slot.jobKey ?? null,
-          browserMode: stats?.mode ?? config.browserMode
+          browserMode: stats?.mode ?? config.browserMode,
+          taskId: slot.jobKey ?? null,
+          mode: stats?.mode ?? config.browserMode,
+          updatedAt: latest?.updatedAt ?? null
         };
       });
       return {

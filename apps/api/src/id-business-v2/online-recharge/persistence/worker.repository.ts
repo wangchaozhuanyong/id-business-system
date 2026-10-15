@@ -20,6 +20,9 @@ import {
 import { id, integer, object, redact, sanitize, sessionAccountId, text } from '../validation';
 
 const LEASE_MS = 90000;
+function hasRenewalSubmission(row: OnlineRechargeTask) {
+  return Boolean(row.payload && object(row.payload).renewalSubmission);
+}
 export function requireTaskLease(row: OnlineRechargeTask | null, rpc: OnlineRechargeWorkerRpc) {
   if (
     !row ||
@@ -97,7 +100,10 @@ export class OnlineRechargeWorkerRepository {
       });
       for (const task of expired) {
         const uncertain =
-          task.paymentStarted || task.confirmedPaid || Boolean(task.providerOrderId);
+          task.paymentStarted ||
+          task.confirmedPaid ||
+          Boolean(task.providerOrderId) ||
+          hasRenewalSubmission(task);
         await tx.onlineRechargeTask.update({
           where: { id: task.id },
           data: {
@@ -106,7 +112,7 @@ export class OnlineRechargeWorkerRepository {
             leaseId: null,
             leaseExpiresAt: null,
             message: uncertain
-              ? '执行器离线且存在付款提交，等待核对，禁止自动重放'
+              ? '执行器离线且存在外部提交，等待核对，禁止自动重放'
               : '执行器离线，尚未提交付款，等待重新领取'
           }
         });
@@ -213,10 +219,12 @@ export class OnlineRechargeWorkerRepository {
   async beforeSubmit(rpc: OnlineRechargeWorkerRpc) {
     return this.withLease(rpc, async (tx, row) => {
       if (row.operation === 'debug') throw new ConflictException('调试任务必须在付款前停止');
+      const args = rpc.args ?? {};
+      if (row.operation === 'renewal' || args.stage === 'renewal_update')
+        return this.beforeRenewalSubmit(tx, row, args);
       if (row.operation !== 'recharge' || !row.cardId)
         throw new ConflictException('付款前必须预约当前任务的银行卡');
       const card = await this.requireCard(tx, row.id, row.cardId);
-      const args = rpc.args ?? {};
       if (
         !card.leaseExpiresAt ||
         card.leaseExpiresAt.getTime() <= Date.now() ||
@@ -238,6 +246,45 @@ export class OnlineRechargeWorkerRepository {
       return { ok: true, idempotencyKey: row.codeId ?? row.id };
     });
   }
+  private async beforeRenewalSubmit(
+    tx: V2CommandTransaction,
+    row: OnlineRechargeTask,
+    args: Record<string, unknown>
+  ) {
+    const payload = row.payload ? object(row.payload) : {};
+    const action = row.operation === 'renewal' ? payload.action : 'disable';
+    const allowed =
+      row.status === 'running' &&
+      row.provider === 'local' &&
+      (row.operation === 'renewal' || (row.operation === 'recharge' && row.confirmedPaid)) &&
+      ['enable', 'disable'].includes(String(action)) &&
+      args.stage === 'renewal_update' &&
+      args.renewalAction === action;
+    if (!allowed) throw new ConflictException('当前任务不允许提交此续费变更');
+    if (hasRenewalSubmission(row))
+      throw new ConflictException('续费变更已经提交，等待核对，禁止重复提交');
+    if (!sessionAccountId(this.encryption.decrypt(row.sessionEncrypted)))
+      throw new ConflictException('续费变更缺少可核对的账号资料');
+    await tx.onlineRechargeTask.update({
+      where: { id: row.id },
+      data: {
+        payload: {
+          ...payload,
+          renewalSubmission: {
+            action,
+            leaseVersion: row.leaseVersion,
+            submittedAt: new Date().toISOString()
+          }
+        } as Prisma.InputJsonValue,
+        ...(row.operation === 'renewal' ? { stage: 'renewal_submitted' } : {})
+      }
+    });
+    await this.repository.log(tx, 'worker.renewal_submitted', undefined, row.id, {
+      action,
+      leaseVersion: row.leaseVersion
+    });
+    return { ok: true, idempotencyKey: `${row.id}:renewal:${action}` };
+  }
   async finish(rpc: OnlineRechargeWorkerRpc, failed: boolean) {
     const args = rpc.args ?? {};
     return this.withLease(rpc, async (tx, row) => {
@@ -250,9 +297,30 @@ export class OnlineRechargeWorkerRepository {
       const payload = row.payload ? object(row.payload) : {};
       if (row.operation === 'debug' && typeof result.checkoutUrl === 'string')
         payload.debugCheckoutEncrypted = this.encryption.encrypt(result.checkoutUrl);
-      const paid = result.confirmedPaid === true || args.confirmedPaid === true;
+      const renewalResult =
+        row.operation === 'renewal' ||
+        (row.operation === 'subscription' && payload.originalOperation === 'renewal');
+      const paid = !renewalResult && (result.confirmedPaid === true || args.confirmedPaid === true);
       const expectedAccountId = sessionAccountId(this.encryption.decrypt(row.sessionEncrypted));
       const verified = confirmedSubscription(result, row.plan, expectedAccountId);
+      if (row.operation === 'renewal' && hasRenewalSubmission(row)) {
+        const data =
+          result.data && typeof result.data === 'object' && !Array.isArray(result.data)
+            ? (result.data as Record<string, unknown>)
+            : {};
+        const renewalVerified =
+          result.ok === true &&
+          Boolean(expectedAccountId) &&
+          data.upstreamAccountId === expectedAccountId &&
+          ['enable', 'disable'].includes(String(payload.action)) &&
+          data.autoRenewRaw === (payload.action === 'enable');
+        const rejected =
+          args.definitiveFailure === true &&
+          result.renewalRejected === true &&
+          [401, 403].includes(Number(result.statusCode));
+        if ((status === 'failed' && !rejected) || (status === 'succeeded' && !renewalVerified))
+          status = 'awaiting_review';
+      }
       if (row.operation === 'recharge' && status === 'succeeded' && (!paid || !verified))
         status = 'awaiting_review';
       if (
@@ -275,7 +343,11 @@ export class OnlineRechargeWorkerRepository {
             String(
               args.message ??
                 result.message ??
-                (status === 'awaiting_review' ? '付款结果待核对，禁止自动重试' : '任务结束')
+                (status === 'awaiting_review'
+                  ? row.operation === 'renewal'
+                    ? '续费变更结果待核对，禁止自动重试'
+                    : '付款结果待核对，禁止自动重试'
+                  : '任务结束')
             )
           ).slice(0, 12000),
           leaseOwner: null,
@@ -336,6 +408,54 @@ export class OnlineRechargeWorkerRepository {
       original.plan !== recheck.plan
     )
       return;
+    if (original.operation === 'renewal') {
+      const originalPayload = original.payload ? object(original.payload) : {};
+      const data =
+        result.data && typeof result.data === 'object' && !Array.isArray(result.data)
+          ? (result.data as Record<string, unknown>)
+          : {};
+      const expectedAccountId = sessionAccountId(
+        this.encryption.decrypt(original.sessionEncrypted)
+      );
+      if (
+        payload.originalOperation !== 'renewal' ||
+        !hasRenewalSubmission(original) ||
+        !['enable', 'disable'].includes(String(originalPayload.action)) ||
+        payload.renewalAction !== originalPayload.action ||
+        result.success !== true ||
+        result.renewalVerified !== true ||
+        !expectedAccountId ||
+        data.upstreamAccountId !== expectedAccountId ||
+        data.autoRenewRaw !== (originalPayload.action === 'enable')
+      )
+        return;
+      await tx.onlineRechargeTask.update({
+        where: { id: original.id },
+        data: {
+          status: 'succeeded',
+          confirmedPaid: original.confirmedPaid,
+          progress: 100,
+          leaseVersion: { increment: 1 },
+          leaseOwner: null,
+          leaseId: null,
+          leaseExpiresAt: null,
+          stage: 'rechecked',
+          message: '原续费变更经同账号实际续费状态确认成功',
+          result: sanitize({
+            ...result,
+            confirmedPaid: false,
+            recheckedByTaskId: recheck.id
+          }) as Prisma.InputJsonValue
+        }
+      });
+      await this.repository.log(tx, 'tasks.recheck.resolve', undefined, original.id, {
+        recheckTaskId: recheck.id,
+        status: 'succeeded',
+        operation: 'renewal'
+      });
+      return;
+    }
+    if (original.operation !== 'recharge') return;
     const paid = verified && result.confirmedPaid === true;
     const proof = subscriptionProof(
       result,

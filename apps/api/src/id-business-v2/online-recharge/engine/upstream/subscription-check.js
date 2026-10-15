@@ -214,7 +214,8 @@ function parseAccountCheckResponse(data, profile = {}) {
     const entitlement = defaultAccount.entitlement || {};
     const lastActive = defaultAccount.last_active_subscription || {};
 
-    const hasActive = Boolean(entitlement.has_active_subscription);
+    const hasActive = typeof entitlement.has_active_subscription === 'boolean'
+        ? entitlement.has_active_subscription : null;
     const rawPlan = String(entitlement.subscription_plan || '');
     const planKey = normalizeSubscriptionPlan(rawPlan, hasActive);
     const expiresAt = entitlement.expires_at || lastActive.expires_at || null;
@@ -358,7 +359,11 @@ async function requestOpenAiJson(accessToken, { method = 'GET', url, body = null
             extraHTTPHeaders: headers
         });
         try {
-            if (method !== 'GET') await require('../rpc.cjs').beforeExternalSubmit({ provider: 'local', stage: 'renewal_update' });
+            if (method !== 'GET') await require('../rpc.cjs').beforeExternalSubmit({
+                provider: 'local',
+                stage: 'renewal_update',
+                renewalAction: url === RESUME_SUBSCRIPTION_URL ? 'enable' : 'disable'
+            });
             const response = await ctx.fetch(url, {
                 method,
                 timeout: 20000,
@@ -366,7 +371,9 @@ async function requestOpenAiJson(accessToken, { method = 'GET', url, body = null
                 data: body != null ? body : undefined
             });
             const status = response.status();
-            if (method !== 'GET' && status >= 200 && status < 500) require('../rpc.cjs').recordKnownOutcome();
+            // A successful POST response is not the final subscription state. Clear the
+            // in-flight marker only after a matching account readback, or an auth rejection.
+            if (method !== 'GET' && [401, 403].includes(status)) require('../rpc.cjs').recordKnownOutcome();
             let data;
             try {
                 data = await response.json();
@@ -419,6 +426,33 @@ function isAppStoreOrigin(channelRaw) {
         || raw.includes('android');
 }
 
+async function verifyRenewalUpdate(accessToken, options, subscription, accountId, enabled) {
+    const verify = await querySubscriptionBySession(accessToken, {
+        timezoneOffsetMin: options.timezoneOffsetMin,
+        email: options.email || subscription.email || ''
+    });
+    if (!verify.ok
+        || verify.data.accountId !== accountId
+        || verify.data.upstreamAccountId !== accountId
+        || verify.data.autoRenewRaw !== enabled) {
+        return {
+            ok: false,
+            resultUnknown: true,
+            statusCode: 502,
+            error: '续费变更已提交，但同一账号的目标状态尚未确认，请核对原任务，禁止重复提交'
+        };
+    }
+    require('../rpc.cjs').recordKnownOutcome();
+    return {
+        ok: true,
+        data: {
+            ...verify.data,
+            ...(enabled ? { alreadyEnabled: false, resumed: true } : { alreadyCancelled: false, cancelled: true }),
+            message: enabled ? '已成功开启自动续费' : '已成功关闭自动续费，当前周期仍可继续使用'
+        }
+    };
+}
+
 async function cancelAutoRenew(accessToken, options = {}) {
     const token = String(accessToken || '').trim();
     if (!token) {
@@ -440,6 +474,9 @@ async function cancelAutoRenew(accessToken, options = {}) {
     }
 
     const subscription = checkResult.data;
+    if (subscription.accountId !== accountId || subscription.upstreamAccountId !== accountId) {
+        return { ok: false, statusCode: 409, error: '订阅账号与当前会话不一致，未提交续费变更' };
+    }
     if (isAppStoreOrigin(subscription.subscriptionChannelRaw)) {
         return {
             ok: false,
@@ -480,11 +517,11 @@ async function cancelAutoRenew(accessToken, options = {}) {
 
     const body = normalizeResponseBody(response.data);
     if (response.status === 401) {
-        return { ok: false, statusCode: 401, error: 'Session 无效或已过期，请重新获取 Session' };
+        return { ok: false, statusCode: 401, definitiveFailure: true, renewalRejected: true, error: 'Session 无效或已过期，请重新获取 Session' };
     }
     if (response.status === 403) {
         const mapped = mapCheckError(403, body);
-        return { ok: false, ...mapped };
+        return { ok: false, ...mapped, definitiveFailure: true, renewalRejected: true };
     }
     if (response.status !== 200 && response.status !== 204) {
         const detail = typeof body === 'string'
@@ -492,27 +529,13 @@ async function cancelAutoRenew(accessToken, options = {}) {
             : JSON.stringify(body || {}).slice(0, 200);
         return {
             ok: false,
+            resultUnknown: require('../rpc.cjs').wasSubmitted(),
             statusCode: response.status || 502,
             error: `取消自动续费失败 (${response.status})${detail ? `：${detail}` : ''}`
         };
     }
 
-    const verify = await querySubscriptionBySession(token, {
-        timezoneOffsetMin: options.timezoneOffsetMin,
-        email: options.email || profile.email || ''
-    });
-
-    return {
-        ok: true,
-        data: {
-            ...(verify.ok ? verify.data : subscription),
-            alreadyCancelled: false,
-            cancelled: true,
-            message: verify.ok && verify.data.autoRenewRaw === false
-                ? '已成功关闭自动续费，当前周期仍可继续使用'
-                : '已提交取消自动续费请求，请稍后刷新确认状态'
-        }
-    };
+    return verifyRenewalUpdate(token, options, subscription, accountId, false);
 }
 
 async function resumeAutoRenew(accessToken, options = {}) {
@@ -536,6 +559,9 @@ async function resumeAutoRenew(accessToken, options = {}) {
     }
 
     const subscription = checkResult.data;
+    if (subscription.accountId !== accountId || subscription.upstreamAccountId !== accountId) {
+        return { ok: false, statusCode: 409, error: '订阅账号与当前会话不一致，未提交续费变更' };
+    }
     if (isAppStoreOrigin(subscription.subscriptionChannelRaw)) {
         return {
             ok: false,
@@ -576,11 +602,11 @@ async function resumeAutoRenew(accessToken, options = {}) {
 
     const body = normalizeResponseBody(response.data);
     if (response.status === 401) {
-        return { ok: false, statusCode: 401, error: 'Session 无效或已过期，请重新获取 Session' };
+        return { ok: false, statusCode: 401, definitiveFailure: true, renewalRejected: true, error: 'Session 无效或已过期，请重新获取 Session' };
     }
     if (response.status === 403) {
         const mapped = mapCheckError(403, body);
-        return { ok: false, ...mapped };
+        return { ok: false, ...mapped, definitiveFailure: true, renewalRejected: true };
     }
     if (response.status !== 200 && response.status !== 204) {
         const detail = typeof body === 'string'
@@ -588,27 +614,13 @@ async function resumeAutoRenew(accessToken, options = {}) {
             : JSON.stringify(body || {}).slice(0, 200);
         return {
             ok: false,
+            resultUnknown: require('../rpc.cjs').wasSubmitted(),
             statusCode: response.status || 502,
             error: `开启自动续费失败 (${response.status})${detail ? `：${detail}` : ''}`
         };
     }
 
-    const verify = await querySubscriptionBySession(token, {
-        timezoneOffsetMin: options.timezoneOffsetMin,
-        email: options.email || profile.email || ''
-    });
-
-    return {
-        ok: true,
-        data: {
-            ...(verify.ok ? verify.data : subscription),
-            alreadyEnabled: false,
-            resumed: true,
-            message: verify.ok && verify.data.autoRenewRaw === true
-                ? '已成功开启自动续费'
-                : '已提交开启自动续费请求，请稍后刷新确认状态'
-        }
-    };
+    return verifyRenewalUpdate(token, options, subscription, accountId, true);
 }
 
 function mapCheckError(status, data) {

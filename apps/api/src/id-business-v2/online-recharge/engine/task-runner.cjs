@@ -39,7 +39,8 @@ async function execute(task, cfg) {
       const result = await require('./upstream/subscription-check')[method](token, {
         timezoneOffsetMin: payload.timezoneOffsetMin ?? 480
       });
-      if (!result.ok && wasSubmitted()) throw new ResultUnknownError('续费变更结果未能确认');
+      if (result.resultUnknown || (!result.ok && wasSubmitted()))
+        throw new ResultUnknownError('续费变更结果未能确认');
       require('./rpc.cjs').recordKnownOutcome();
       return result;
     }

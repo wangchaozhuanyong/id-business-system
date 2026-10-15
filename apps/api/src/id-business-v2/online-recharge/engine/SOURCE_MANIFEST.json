@@ -31,11 +31,32 @@
       "reason": "Exclude only module dependencies/runtime/local secrets/Python caches."
     },
     {
+      "path": "Dockerfile",
+      "originalSha256": null,
+      "adaptedSha256": "35638ed559cad7698ae45706503bdb74d3353f65d871f9285be539addc8da569",
+      "changed": true,
+      "reason": "Pin Node image digest, original Chromium and Node lock except documented ws security patch, validated independent CPU-only Python lock; non-root, private health, signal forwarding and transient profiles."
+    },
+    {
+      "path": "README.md",
+      "originalSha256": null,
+      "adaptedSha256": "920e45b462d434319202f460fe8f0095ed68df476ebb0e748f0608eb68ae90ff",
+      "changed": true,
+      "reason": "Document targeted ws8.21.0 security exception, separate root/upstream audits and regression evidence, and require a new patched image proof; retain existing runtime guidance."
+    },
+    {
+      "path": "UPSTREAM.json",
+      "originalSha256": null,
+      "adaptedSha256": "2357ff0a121ce916de81aa7cf6303d58ac59666aa530f42083e528b6530f9623",
+      "changed": true,
+      "reason": "Frozen source repository/commit and original SHA256 for 34 upstream files."
+    },
+    {
       "path": "confirmation.cjs",
       "originalSha256": null,
-      "adaptedSha256": "b4b706e21c4fddf84564ac6a20c54b494a6e3a13f20ca80caacfef433092dcac",
+      "adaptedSha256": "ff898cc1bba2250bebecabc0f60abf2493576f5806ddd9c8885c88cf25ff91c2",
       "changed": true,
-      "reason": "Upstream account identity and fixed Plus/Pro-5x/Pro-20x evidence; original-order read-only recheck; generic Pro stays unknown."
+      "reason": "审计修复：付款前同账号精确套餐检查，明确无订阅可缺套餐名；续费原单只读核对与付款证据隔离，第三方原单身份验证。"
     },
     {
       "path": "credential-client.cjs",
@@ -50,13 +71,6 @@
       "adaptedSha256": "9aaa73b82db49bf04976691c176a5de9001995a1899b6cc6130b8aee9169d410",
       "changed": true,
       "reason": "Authenticated loopback CVC memory service with secret-free private health and task/TTL/exit cleanup; no API-side cache or persisted credentials."
-    },
-    {
-      "path": "Dockerfile",
-      "originalSha256": null,
-      "adaptedSha256": "35638ed559cad7698ae45706503bdb74d3353f65d871f9285be539addc8da569",
-      "changed": true,
-      "reason": "Pin Node image digest, original Chromium and Node lock except documented ws security patch, validated independent CPU-only Python lock; non-root, private health, signal forwarding and transient profiles."
     },
     {
       "path": "healthcheck.cjs",
@@ -82,16 +96,16 @@
     {
       "path": "paths.cjs",
       "originalSha256": null,
-      "adaptedSha256": "04408965422ae6cf175db9b68eb40f9fcb8fec9f5dcae45009ce4c0c12353e1a",
+      "adaptedSha256": "079470bd04141db382ec9dd4fdd930af7f0862225ffcb924fdee679d52021dea",
       "changed": true,
       "reason": "Keep validated project-owned media paths and allocate owned 0700 platform temporary directories for profiles and solver task data; remove only directories created by this process."
     },
     {
-      "path": "README.md",
+      "path": "proxy-resolver.cjs",
       "originalSha256": null,
-      "adaptedSha256": "920e45b462d434319202f460fe8f0095ed68df476ebb0e748f0608eb68ae90ff",
+      "adaptedSha256": "28aff967368d96ce1f8615650bfe0c133ef1945acfde089d2628de547492588e",
       "changed": true,
-      "reason": "Document targeted ws8.21.0 security exception, separate root/upstream audits and regression evidence, and require a new patched image proof; retain existing runtime guidance."
+      "reason": "审计修复：IPDEEP固定HTTPS生成链接每任务提取一次；限时限量、不跟重定向，支持四段网关与字面session占位符。"
     },
     {
       "path": "requirements-hcaptcha.lock.txt",
@@ -124,9 +138,16 @@
     {
       "path": "task-runner.cjs",
       "originalSha256": null,
-      "adaptedSha256": "a1fee4b58d8886146656df2181704d5c6d9c2a976dfc1bd05e399a1f75fa78ae",
+      "adaptedSha256": "1dbcf546a488869e513a992109ad6c446acc204798f75b580b5cbd2ebfd17184",
       "changed": true,
-      "reason": "Scoped runtime configuration, original-core operation dispatch and structured results; safe login/security notification events."
+      "reason": "审计修复：续费未知结果明确保留待核对，禁止清除未知提交状态。"
+    },
+    {
+      "path": "test/checkout-outcomes.test.cjs",
+      "originalSha256": null,
+      "adaptedSha256": "ce562c3ff76d615ef80fc175bec05ec3e87af9fb7d39ef35572a2a63a6c060b6",
+      "changed": true,
+      "reason": "离线回归：真实Checkout辅助函数、今日应付与一般错误、同账号Free首次开通预检，不使用真实资料。"
     },
     {
       "path": "test/credentials-main.test.cjs",
@@ -134,6 +155,13 @@
       "adaptedSha256": "a4abbc72402643943455b855b01010b26c6c9441569d82c957b616e4f018fb1c",
       "changed": true,
       "reason": "Credentials-only entrypoint boots/stops without RPC, browser or external execution."
+    },
+    {
+      "path": "test/debug-checkout.test.cjs",
+      "originalSha256": null,
+      "adaptedSha256": "380ba83883fe9d2710f37cac576b4f687bcad86282dcb1e3dcbbd930eae173d9",
+      "changed": true,
+      "reason": "Offline VM tests of the actual readonly debug helper: original four labels, exact Upgrade to Pro, unchanged 60-second no-match timeout, and zero click/fill calls; no upstream executor import or network."
     },
     {
       "path": "test/dispatch.test.cjs",
@@ -152,37 +180,58 @@
     {
       "path": "test/payment-core.test.cjs",
       "originalSha256": null,
-      "adaptedSha256": "7b0d21a209afc6d676ca8f057955d896085b73ef2dc6c164e949dc671b5e3772",
+      "adaptedSha256": "dc1aad311682cb949d57335156302d3757fd265713a1b57803081aeae2ec0dd3",
       "changed": true,
-      "reason": "Actual original local core: max-three decline rotation, no unknown retry, observed-only amounts and retained locks on post-payment write failures."
+      "reason": "离线回归：泛化错误和不可信成功不换卡，认证确认后记账。"
+    },
+    {
+      "path": "test/proxy-resolver.test.cjs",
+      "originalSha256": null,
+      "adaptedSha256": "66ecbd07c80688060d06536441c8e733de6194a64750ea2bec6fff4887304674",
+      "changed": true,
+      "reason": "离线回归：四段网关/响应解析、并发只提取一次、下个任务重新提取与提取失败不直连。"
     },
     {
       "path": "test/regressions.test.cjs",
       "originalSha256": null,
-      "adaptedSha256": "c9166d4b86d978d727f9bb02531675aa4aee41fd3dd7bbb327b6b9c56caca106",
+      "adaptedSha256": "ca7d2b9a22b59aea849923396d040040f5304991a5dd07367f4ce593a5bb20a2",
       "changed": true,
-      "reason": "False positives, dual leases, CVC lifecycle, provider unknown outcomes, same-account recheck and media/path regressions."
+      "reason": "离线回归：第三方终态及原单核对身份验证。"
+    },
+    {
+      "path": "test/renewal-recheck.test.cjs",
+      "originalSha256": null,
+      "adaptedSha256": "3930ae388b07243e63f2ed82ee835c1e3e24da420cc79edc18729ec2baa2d2a0",
+      "changed": true,
+      "reason": "离线回归：续费原单只读核对，原目标套餐不能被认作新付款。"
+    },
+    {
+      "path": "test/renewal-state.test.cjs",
+      "originalSha256": null,
+      "adaptedSha256": "9b1120dc5d835e4b66923dd5955f75b956d9b4be770d1e63e6aa0318f18d7014",
+      "changed": true,
+      "reason": "离线VM回归：续费动作仅一次POST、同账号状态回读、未知及401/403、只读GET。"
     },
     {
       "path": "test/runtime-main.test.cjs",
       "originalSha256": null,
-      "adaptedSha256": "99b22d50874cdd306e449e8452e0e618780ff696f3a137509a98807ebcce30a0",
+      "adaptedSha256": "ba3ce562fe9997617619f629247e86cfc92d9a40cfb93d1a111e0d99191f8f9d",
       "changed": true,
       "reason": "Offline synthetic runtime tests for private health, 0700 transient paths, SIGINT/SIGTERM, late result/claim races and lease-based interrupted-task recovery."
     },
     {
       "path": "third-party.cjs",
       "originalSha256": null,
-      "adaptedSha256": "a63f4a235507f93b932497f820deab43c4045c86c05a1d13e3578bad097991ad",
+      "adaptedSha256": "5f1774b3e6a45c171423d5a48eb8dec92a43599647bba64855fe99d37ade2a4d",
       "changed": true,
-      "reason": "Original API client with stable CDK/task idempotency, single submit/poll path and strict account/plan confirmation; no new cancellation or local bills."
+      "reason": "审计修复：所有供应商终态严格核对原单与任务身份；已是目标套餐或身份不明时付款前停止。"
     },
     {
-      "path": "UPSTREAM.json",
-      "originalSha256": null,
-      "adaptedSha256": "2357ff0a121ce916de81aa7cf6303d58ac59666aa530f42083e528b6530f9623",
-      "changed": true,
-      "reason": "Frozen source repository/commit and original SHA256 for 34 upstream files."
+      "path": "upstream/LICENSE",
+      "originalSha256": "5de9a1fe797832d01e42932e57d087b8a67280431bc4eebe90519e5c2a98806d",
+      "adaptedSha256": "5de9a1fe797832d01e42932e57d087b8a67280431bc4eebe90519e5c2a98806d",
+      "changed": false,
+      "reason": "冻结原版保持不变。"
     },
     {
       "path": "upstream/auth-page-detect.js",
@@ -285,23 +334,16 @@
     {
       "path": "upstream/index.js",
       "originalSha256": "1694958e105ebe962494d3c88bbf2f0c6b22e49028e46cfc77801e2c9f814855",
-      "adaptedSha256": "0880c71f1943ce98029c1deed51b94c591eda97176ec95d7172ea375f4530925",
+      "adaptedSha256": "70de3186985eb8100366983435f65d29d18210979e93ae0f4dcb7b465399c080",
       "changed": true,
-      "reason": "保留Session/API优先及UI回退；结构化结果、严格账户/目标套餐确认、本地成功取消续费、强制脱敏媒体及context清理。"
-    },
-    {
-      "path": "upstream/LICENSE",
-      "originalSha256": "5de9a1fe797832d01e42932e57d087b8a67280431bc4eebe90519e5c2a98806d",
-      "adaptedSha256": "5de9a1fe797832d01e42932e57d087b8a67280431bc4eebe90519e5c2a98806d",
-      "changed": false,
-      "reason": "冻结原版保持不变。"
+      "reason": "审计修复：首次付款前核验原账号状态，付款后严格认证确认，再进行成功处理；已确认付款不因取消续费失败改判。"
     },
     {
       "path": "upstream/mysql-store.js",
       "originalSha256": "b8d120cdafac6884da0bf9ef2f062965f89b17efcb6f1978f3831a4d3c0267b9",
-      "adaptedSha256": "fee06739c2dd245b04d631594c13035624b75cf9fbb45c58964f3851c94f8d41",
+      "adaptedSha256": "022df5df256806dfcfbc4d727a9c666f2a3c548eda06c0bc3c430625037fd9d4",
       "changed": true,
-      "reason": "替换MySQL实现为allowlist内部HTTP RPC；所有权/版本校验；CVC仅engine内存经IPC提供。"
+      "reason": "审计修复：每任务缓存代理及动态提取结果，在任务清理时释放；同任务不二次提取。"
     },
     {
       "path": "upstream/package-lock.json",
@@ -320,9 +362,9 @@
     {
       "path": "upstream/payment-retry.js",
       "originalSha256": "41d4f3fad99d2f0b8036fa7da597bd251134361232fe96b4515a1d2b5bd80597",
-      "adaptedSha256": "17e21123d7be24b230fd834c80b763c1a4209d240eeff7c541df223e20f37371",
+      "adaptedSha256": "31e1ee6e35b4c148d0aad34abcc1097ca42054affc55c71ab9aa5272399b0060",
       "changed": true,
-      "reason": "保留三卡拒付轮换；UUID/原子租约适配；未知或已付款后失败保持资产；账单仅记录实测金额。"
+      "reason": "审计修复：记账与换卡前认证原账号套餐，结果不明保持原单；泛化报错不可触发拒付轮换。"
     },
     {
       "path": "upstream/playwright-proxy.js",
@@ -369,16 +411,16 @@
     {
       "path": "upstream/stripe-payment.js",
       "originalSha256": "007a6ae1abb633fd283e48f4ceac02bf3d2e2fc30aaca87520565b34eb29743e",
-      "adaptedSha256": "79a8cbfe8824d074a7c4718ad0d9e9d0edbcf454c9c693f19a3c23218f201be9",
+      "adaptedSha256": "c3fbf02c11ad20f147f74fb64ef3d3af3ea51f7947b6062f10f719902a223e52",
       "changed": true,
-      "reason": "移除登录/离开checkout即成功误判；提交前租约校验、未知结果不可重复提交；强制脱敏截图。"
+      "reason": "审计修复：一般错误不判明确拒付，陈旧拒付提示阻止再次提交；仅解析明确应付总额并保留十进制字符串。"
     },
     {
       "path": "upstream/subscription-check.js",
       "originalSha256": "e1f8f285a318389c055c0438f1c143e01023bdc42c619c6ea9eb7abe7238a11e",
-      "adaptedSha256": "46ce23ad91d0ff548d216efd00ccfc3e30f5eaa99754b47f0c5849deaf6bab97",
+      "adaptedSha256": "4b2d617f30460e4e4964f50f18ef42c9b81f856bc883902d48a8cf4ab232796d",
       "changed": true,
-      "reason": "保留原订阅解析/续费操作；增加实际上游账户证据；变更前校验租约，POST失败不二次发送。"
+      "reason": "审计修复：续费提交动作校验、一次POST后同账号续费状态回读；保留有效订阅三态，未知状态不可误作Free。"
     },
     {
       "path": "upstream/tax-free-address.js",

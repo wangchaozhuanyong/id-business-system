@@ -10,7 +10,8 @@ import {
   Req
 } from '@nestjs/common';
 import { createHash } from 'node:crypto';
-import { Public } from '../../auth/auth.decorators';
+import { CurrentUser, RequirePermissions } from '../../auth/auth.decorators';
+import type { AuthenticatedUser } from '../../auth/auth.types';
 import { OnlineRechargeTasksService } from './tasks.service';
 
 @Injectable()
@@ -31,7 +32,7 @@ export class OnlineRechargePublicLimiter {
 }
 
 @Controller('id-business-v2/online-recharge/public')
-@Public()
+@RequirePermissions('id_business_v2.online_recharge.read')
 export class OnlineRechargePublicController {
   constructor(
     private readonly tasks: OnlineRechargeTasksService,
@@ -53,16 +54,26 @@ export class OnlineRechargePublicController {
     return this.tasks.query(input);
   }
   @Post('redeem')
+  @RequirePermissions('id_business_v2.online_recharge.manage')
   @Header('Cache-Control', 'no-store')
-  redeem(@Body() input: unknown, @Req() request: { ip?: string }) {
+  redeem(
+    @Body() input: unknown,
+    @Req() request: { ip?: string },
+    @CurrentUser() operator: AuthenticatedUser
+  ) {
     this.limits.check(request.ip);
-    return this.tasks.start(input, undefined, 'recharge', true);
+    return this.tasks.start(input, operator, 'recharge', true);
   }
   @Post('subscription')
+  @RequirePermissions('id_business_v2.online_recharge.manage')
   @Header('Cache-Control', 'no-store')
-  subscription(@Body() input: unknown, @Req() request: { ip?: string }) {
+  subscription(
+    @Body() input: unknown,
+    @Req() request: { ip?: string },
+    @CurrentUser() operator: AuthenticatedUser
+  ) {
     this.limits.check(request.ip);
-    return this.tasks.start(input, undefined, 'subscription', true);
+    return this.tasks.start(input, operator, 'subscription', true);
   }
   @Post('task')
   @Header('Cache-Control', 'no-store')

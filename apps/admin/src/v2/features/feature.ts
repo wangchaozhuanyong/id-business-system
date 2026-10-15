@@ -4,6 +4,7 @@ import type { V2TableSchema } from '@/v2/components/tableSystem';
 export type V2ModuleKey =
   | 'auto-registration'
   | 'online-recharge-overview'
+  | 'online-recharge-redeem'
   | 'online-recharge-config'
   | 'online-recharge-proxies'
   | 'online-recharge-browser-pool'

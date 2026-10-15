@@ -1,5 +1,5 @@
 <template>
-  <main class="online-public v2-page-layout">
+  <main v-if="canRead" class="online-public v2-page-layout">
     <header>
       <h1>订阅与账单查询</h1>
       <RouterLink to="/online-recharge">返回兑换入口</RouterLink>
@@ -14,6 +14,7 @@
           ><div class="online-field">
             <el-input
               v-model="session"
+              :disabled="!canManage"
               type="textarea"
               :rows="8"
               autocomplete="off"
@@ -21,7 +22,11 @@
             /><small>用于查询当前账户订阅状态、到期时间和续费状态；不提交支付。</small>
           </div></el-form-item
         ><el-form-item label="操作"
-          ><AppButton variant="primary" :loading="busy" :disabled="busy" @click="submit"
+          ><AppButton
+            variant="primary"
+            :loading="busy"
+            :disabled="busy || !canManage"
+            @click="submit"
             >查询订阅</AppButton
           ></el-form-item
         ></el-form
@@ -43,7 +48,9 @@
   </main>
 </template>
 <script setup lang="ts">
-import { onBeforeUnmount, ref } from 'vue';
+import { computed, onBeforeUnmount, ref } from 'vue';
+import { useAuthStore } from '@/stores/auth';
+import { canUseOnlineAction } from './permissions';
 import { sessionCoordinator } from '@/auth/sessionCoordinator';
 import AppButton from '@/components/ui/AppButton.vue';
 import V2SectionHeading from '@/v2/components/V2SectionHeading.vue';
@@ -57,6 +64,9 @@ import '@/v2/styles/base.css';
 import '@/v2/styles/layout.css';
 import './online-recharge.css';
 const session = ref('');
+const authStore = useAuthStore();
+const canRead = computed(() => canUseOnlineAction(authStore.user, 'renewal', 'detail'));
+const canManage = computed(() => canUseOnlineAction(authStore.user, 'renewal', 'subscription'));
 const busy = ref(false);
 const error = ref('');
 const task = useV2SessionDraft('online-recharge/public/subscription-task', () => ref<PublicTask>());
@@ -79,6 +89,10 @@ onBeforeUnmount(() => {
 });
 async function submit() {
   if (busy.value) return;
+  if (!canManage.value) {
+    error.value = '需要线上代充管理权限才能发起订阅查询';
+    return;
+  }
   busy.value = true;
   error.value = '';
   const revision = requestRevision;

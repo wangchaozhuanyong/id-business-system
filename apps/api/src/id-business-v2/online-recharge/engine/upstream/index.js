@@ -56,7 +56,7 @@ const CONFIG = {
 const RECORD_VIDEO = String(process.env.RECORD_VIDEO || '1') !== '0';
 const VIDEO_DIR = path.join(__dirname, 'debug_screenshots', 'videos');
 const VIDEO_TAG = (process.env.JOB_KEY || process.env.CDK_CODE || `${Date.now()}`).replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 32) || `${Date.now()}`;
-const DEBUG_PAYMENT_BUTTON_PATTERNS = [/^Subscribe$/i, /^订阅$/, /^立即支付$/, /^Pay now$/i];
+const DEBUG_PAYMENT_BUTTON_PATTERNS = [/^Subscribe$/i, /^订阅$/, /^立即支付$/, /^Pay now$/i, /^Upgrade to Pro$/i];
 
 const waitForDebugPaymentStep = async (page, timeout = 60000) => {
     const deadline = Date.now() + timeout;
@@ -548,18 +548,21 @@ async function run() {
 
         // --- Phase 4: Execute Payment with Card Pool Retry ---
         console.log("[步骤] 正在使用 Stripe 信用卡卡池支付流程（单次尝试）...");
+        const accessToken = String(loginInfo.session?.accessToken || CONFIG.chatgptToken).trim();
+        const preflight = await require('../confirmation.cjs').preflightPayment(planType, accessToken);
+        if (!preflight.allowed) return { success: false, submitted: false, ...preflight };
         const paymentResult = await executePaymentWithRetry(page, {
             planType,
             cdkCode,
             email,
-            stripeSessionId
+            stripeSessionId,
+            confirmPayment: () => require('../confirmation.cjs').confirmSubscription(planType, accessToken)
         });
 
         if (paymentResult.success) {
             paymentSucceeded = true;
             console.log(`    [+] 最终校验：支付成功! (stripe_card_payment)`);
-            const accessToken = String(loginInfo.session?.accessToken || CONFIG.chatgptToken).trim();
-            const confirmation = await require('../confirmation.cjs').confirmSubscription(planType, accessToken);
+            const confirmation = paymentResult.confirmation;
             if (!confirmation.verified) return { success: false, resultUnknown: true, confirmedPaid: false, confirmation, cardLast4: paymentResult.cardLast4 };
             const cancellationEmail = loginInfo.email ? loginInfo.email : email;
             const cancellationResult = await cancelAutoRenew(accessToken, { email: cancellationEmail });

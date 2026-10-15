@@ -120,3 +120,126 @@ for (const failure of ['recordCardUsage', 'createBillingRecord'])
       store[failure] = original;
     }
   });
+
+test('ambiguous page after charge is resolved from the original authenticated subscription once', async () => {
+  responses = [
+    {
+      success: false,
+      resultUnknown: true,
+      error: 'Your plan change could not be completed. Please try again.'
+    }
+  ];
+  let queries = 0;
+  const confirmation = {
+    verified: true,
+    expectedAccountId: 'synthetic-account',
+    accountId: 'synthetic-account',
+    targetPlan: 'plus'
+  };
+  const result = await executePaymentWithRetry(
+    {},
+    {
+      planType: 'plus',
+      confirmPayment: async () => {
+        queries++;
+        return confirmation;
+      }
+    }
+  );
+  assert.equal(result.confirmedPaid, true);
+  assert.equal(result.confirmation, confirmation);
+  assert.equal(queries, 1);
+  assert.equal(calls.reserve, 1);
+  assert.equal(calls.pay, 1);
+  assert.equal(calls.decline, 0);
+  assert.deepEqual(
+    calls.bills.map((bill) => bill.status),
+    ['success']
+  );
+});
+
+test('unconfirmed ambiguous original payment cannot release a card, write a failed bill or rotate', async () => {
+  rpc.setTransportForTest(async () => ({ ok: true }));
+  await rpc.beforeExternalSubmit({});
+  responses = [{ success: false, resultUnknown: true, error: 'payment failed' }];
+  try {
+    await assert.rejects(
+      () =>
+        executePaymentWithRetry(
+          {},
+          {
+            planType: 'plus',
+            confirmPayment: async () => ({ verified: false, querySucceeded: true })
+          }
+        ),
+      (error) => error.code === 'RESULT_UNKNOWN'
+    );
+    assert.equal(calls.reserve, 1);
+    assert.equal(calls.pay, 1);
+    assert.equal(calls.release, 0);
+    assert.equal(calls.decline, 0);
+    assert.equal(calls.bills.length, 0);
+    assert.equal(rpc.wasSubmitted(), true);
+  } finally {
+    rpc.setTransportForTest(null);
+  }
+});
+
+test('a page success without exact subscription confirmation never writes a successful bill', async () => {
+  responses = [{ success: true, dueAmount: '10.25', dueCurrency: 'PHP' }];
+  await assert.rejects(
+    () =>
+      executePaymentWithRetry(
+        {},
+        {
+          planType: 'plus',
+          confirmPayment: async () => ({ verified: false, querySucceeded: true })
+        }
+      ),
+    (error) => error.code === 'RESULT_UNKNOWN'
+  );
+  assert.equal(calls.usage, 0);
+  assert.equal(calls.bills.length, 0);
+  assert.equal(calls.reserve, 1);
+});
+
+test('an account mismatch after a rejection stops rather than submitting another card', async () => {
+  responses = [{ success: false, declined: true, error: 'card_declined' }];
+  await assert.rejects(
+    () =>
+      executePaymentWithRetry(
+        {},
+        {
+          planType: 'plus',
+          confirmPayment: async () => ({
+            verified: false,
+            querySucceeded: true,
+            accountId: 'other',
+            expectedAccountId: 'original'
+          })
+        }
+      ),
+    (error) => error.code === 'RESULT_UNKNOWN'
+  );
+  assert.equal(calls.reserve, 1);
+  assert.equal(calls.decline, 0);
+});
+
+test('authenticated subscription verification failure leaves an ambiguous payment pending', async () => {
+  responses = [{ success: false, resultUnknown: true }];
+  await assert.rejects(
+    () =>
+      executePaymentWithRetry(
+        {},
+        {
+          planType: 'plus',
+          confirmPayment: async () => {
+            throw new Error('synthetic read timeout');
+          }
+        }
+      ),
+    (error) => error.code === 'RESULT_UNKNOWN'
+  );
+  assert.equal(calls.pay, 1);
+  assert.equal(calls.bills.length, 0);
+});

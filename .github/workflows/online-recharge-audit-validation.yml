@@ -1,0 +1,132 @@
+name: Online Recharge Audit Validation
+
+on:
+  push:
+    branches: [codex/online-audit-repairs-20261015]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: online-recharge-audit-validation-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    services:
+      mysql:
+        image: mysql:8.4
+        env:
+          MYSQL_ROOT_PASSWORD: synthetic-online-audit-ci-only
+          MYSQL_ROOT_HOST: '%'
+          MYSQL_DATABASE: online_recharge_test_audit
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 --silent"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=30
+    env:
+      NODE_ENV: test
+      DATABASE_URL: mysql://root:synthetic-online-audit-ci-only@127.0.0.1:3306/online_recharge_test_audit
+      FIELD_ENCRYPTION_KEY: synthetic-online-audit-field-key
+      HASH_SECRET: synthetic-online-audit-hash-key
+      ONLINE_RECHARGE_WORKER_KEY: synthetic-online-audit-worker-key-long-enough
+      ONLINE_RECHARGE_MYSQL_TEST: '1'
+      V2_BUILD_ID: v2-${{ github.sha }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci --no-audit
+      - name: Verify required Admin UI rules
+        run: |
+          npm run check:admin-ui
+          npm run check:v2-ui-language
+          npm run check:v2-color-contrast
+          npm run check:v2-table-standard
+          npm run check:v2-loading-standard
+          npm run check:v2-module-architecture
+          npm run check:v2-isolation
+      - run: npm run prisma:mysql:generate
+      - name: Migrate only the disposable CI database
+        run: npx prisma migrate deploy --schema apps/api/prisma-mysql/schema.prisma
+      - name: Build shared package
+        run: npm run build --workspace @apple-business/shared
+      - name: Check API types including integration tests
+        run: npm run typecheck --workspace @apple-business/api
+      - name: Build API with TypeScript checking
+        id: api
+        run: npm run build --workspace @apple-business/api
+      - name: Build Admin with Vue TypeScript checking
+        id: admin
+        run: npm run build --workspace @apple-business/admin
+      - name: Verify online recharge MySQL transactions and HTTP permissions
+        id: mysql
+        run: |
+          mkdir -p .runtime/online-audit-validation
+          npm run test --workspace @apple-business/api -- \
+            src/id-business-v2/online-recharge/mysql.integration.spec.ts \
+            --reporter=json --outputFile="$GITHUB_WORKSPACE/.runtime/online-audit-validation/mysql-results.json"
+      - name: Install unchanged engine Node dependencies
+        run: npm ci --prefix apps/api/src/id-business-v2/online-recharge/engine/upstream --ignore-scripts --no-audit --no-fund
+      - name: Verify affected engine behavior without browser or Python setup
+        id: engine
+        run: |
+          set -o pipefail
+          cd apps/api/src/id-business-v2/online-recharge/engine
+          node --test --test-reporter=tap \
+            test/checkout-outcomes.test.cjs \
+            test/debug-checkout.test.cjs \
+            test/payment-core.test.cjs \
+            test/proxy-resolver.test.cjs \
+            test/regressions.test.cjs \
+            test/renewal-recheck.test.cjs \
+            test/renewal-state.test.cjs \
+            test/runtime-main.test.cjs \
+            | tee "$GITHUB_WORKSPACE/.runtime/online-audit-validation/engine-results.tap"
+      - name: Record candidate validation result
+        if: always()
+        env:
+          API_RESULT: ${{ steps.api.outcome }}
+          ADMIN_RESULT: ${{ steps.admin.outcome }}
+          MYSQL_RESULT: ${{ steps.mysql.outcome }}
+          ENGINE_RESULT: ${{ steps.engine.outcome }}
+        run: |
+          node --input-type=module <<'NODE'
+          import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+          const directory = '.runtime/online-audit-validation';
+          mkdirSync(directory, { recursive: true });
+          const read = (path) => { try { return readFileSync(path, 'utf8'); } catch { return ''; } };
+          const mysql = JSON.parse(read(directory + '/mysql-results.json') || '{}');
+          const engine = read(directory + '/engine-results.tap');
+          const result = {
+            commit: process.env.GITHUB_SHA,
+            run: process.env.GITHUB_RUN_ID,
+            apiBuild: process.env.API_RESULT,
+            adminBuild: process.env.ADMIN_RESULT,
+            mysql: { outcome: process.env.MYSQL_RESULT, passed: mysql.numPassedTests ?? null, failed: mysql.numFailedTests ?? null },
+            engine: { outcome: process.env.ENGINE_RESULT, passed: Number(engine.match(/^# pass (\d+)$/m)?.[1] ?? NaN) || null },
+            productionAccess: false,
+            paymentSubmitted: false
+          };
+          writeFileSync(directory + '/result.json', JSON.stringify(result, null, 2) + '\n');
+          console.log(JSON.stringify(result));
+          NODE
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: online-audit-candidate-${{ github.sha }}
+          path: |
+            apps/admin/dist/
+            apps/api/dist/
+            packages/shared/dist/
+            .runtime/online-audit-validation/result.json
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 14

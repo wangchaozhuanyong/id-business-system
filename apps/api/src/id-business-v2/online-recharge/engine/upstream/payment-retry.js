@@ -20,17 +20,15 @@ const MAX_CARD_ATTEMPTS = Number(process.env.PAYMENT_MAX_CARD_ATTEMPTS) || 3;
 const MAX_AUTOMATION_ATTEMPTS = MAX_CARD_ATTEMPTS;
 
 function isPaymentDeclined(errorMsg) {
-    if (!errorMsg) return false;
-    const declinedKeywords = [
-        'declined', 'card_declined', 'insufficient_funds',
-        'expired_card', 'incorrect_cvc', 'processing_error',
-        'lost_card', 'stolen_card', 'do_not_honor',
-        '拒绝', '被拒', 'your card was declined',
-        'payment was not successful', 'payment was not approved',
-        'not approved'
-    ];
-    const lower = errorMsg.toLowerCase();
-    return declinedKeywords.some((kw) => lower.includes(kw));
+    const text = String(errorMsg || '');
+    return [
+        /\b(?:card_declined|insufficient_funds|expired_card|incorrect_cvc|lost_card|stolen_card|do_not_honor)\b/i,
+        /(?:your )?card (?:was |has been |is )?declined/i,
+        /(?:payment|transaction) (?:was )?declined/i,
+        /^declined$/i,
+        /insufficient funds|do not hono[u]?r|expired card/i,
+        /银行卡(?:被拒绝|被拒|拒付)|余额不足/
+    ].some((pattern) => pattern.test(text));
 }
 
 /**
@@ -60,7 +58,7 @@ async function resolveBilledAmountForRecord(page, paymentResult, preTaxAmount, c
  * @returns {Promise<{ success: boolean, error?: string, cardLast4?: string, manualIntervention?: boolean, screenshots?: string[] }>}
  */
 async function executePaymentWithRetry(page, options) {
-    const { planType, cdkCode, email, onProgress, stripeSessionId } = options || {};
+    const { planType, cdkCode, email, onProgress, stripeSessionId, confirmPayment } = options || {};
 
     const progress = (msg) => {
         console.log(`[PaymentRetry] ${msg}`);
@@ -143,10 +141,38 @@ async function executePaymentWithRetry(page, options) {
         let cardHandled = false;
 
         try {
-            const paymentResult = await completeStripeCardPayment(page, cardInfo, address, {
-                cardAttempt,
-                holderName: billingHolderName
-            });
+            let paymentResult;
+            try {
+                paymentResult = await completeStripeCardPayment(page, cardInfo, address, {
+                    cardAttempt,
+                    holderName: billingHolderName
+                });
+            } catch (error) {
+                if (error.code !== 'RESULT_UNKNOWN') throw error;
+                paymentResult = { success: false, resultUnknown: true };
+            }
+            // Authenticate the original account before any success bookkeeping or
+            // handling an ambiguous post-submit page. Never submit a second payment
+            // just because the first page failed to refresh after charging.
+            let confirmation = null;
+            if (typeof confirmPayment === 'function' && (
+                paymentResult.success || paymentResult.resultUnknown || paymentResult.declined ||
+                require('../rpc.cjs').wasSubmitted()
+            )) {
+                try {
+                    confirmation = await confirmPayment();
+                } catch (error) {
+                    if (error.code === 'LEASE_LOST') throw error;
+                    confirmation = { verified: false, querySucceeded: false };
+                }
+                if (confirmation?.verified) {
+                    paymentResult = { ...paymentResult, success: true, resultUnknown: false, confirmation };
+                } else if (paymentResult.success || (confirmation?.querySucceeded &&
+                    confirmation.expectedAccountId && confirmation.accountId !== confirmation.expectedAccountId)) {
+                    paymentResult = { ...paymentResult, success: false, resultUnknown: true, confirmation };
+                }
+            }
+
 
             if (paymentResult.holderName) {
                 billingHolderName = paymentResult.holderName;
@@ -190,7 +216,7 @@ async function executePaymentWithRetry(page, options) {
                     screenshots.push(paymentResult.screenshot);
                     progress(`SUCCESS_SCREENSHOT: ${paymentResult.screenshot}`);
                 }
-                return { success: true, confirmedPaid: true, cardLast4, holderName, screenshots };
+                return { success: true, confirmedPaid: true, cardLast4, holderName, screenshots, confirmation };
             }
 
             if (paymentResult.resultUnknown) throw new ResultUnknownError();
@@ -200,7 +226,8 @@ async function executePaymentWithRetry(page, options) {
                 progress(`FAILURE_SCREENSHOT: ${paymentResult.screenshot}`);
             }
 
-            const declined = paymentResult.declined || isPaymentDeclined(lastError);
+            const declined = paymentResult.declined === true && isPaymentDeclined(lastError);
+            if (require('../rpc.cjs').wasSubmitted() && !declined) throw new ResultUnknownError();
             if (declined) {
                 await store.createBillingRecord({
                     card_number: card.card_number,

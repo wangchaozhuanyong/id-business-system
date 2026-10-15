@@ -37,6 +37,19 @@ export class OnlineRechargeTasksRepository {
   ) {}
   map(row: OnlineRechargeTask, publicView = false) {
     const result = sanitize(row.result);
+    const resultObject =
+      result && typeof result === 'object' && !Array.isArray(result)
+        ? (result as Record<string, unknown>)
+        : {};
+    const subscription =
+      resultObject.data &&
+      typeof resultObject.data === 'object' &&
+      !Array.isArray(resultObject.data)
+        ? (resultObject.data as Record<string, unknown>)
+        : resultObject;
+    const subscriptionVerified =
+      (resultObject.ok === true || resultObject.renewalVerified === true) &&
+      typeof subscription.hasActiveSubscription === 'boolean';
     const base = {
       id: row.id,
       jobKey: row.id,
@@ -61,7 +74,23 @@ export class OnlineRechargeTasksRepository {
           providerTaskId: row.providerTaskId,
           paymentStarted: row.paymentStarted,
           confirmedPaid: row.confirmedPaid,
-          hasSession: Boolean(row.sessionEncrypted)
+          hasSession: Boolean(row.sessionEncrypted),
+          sessionMasked: row.sessionEncrypted ? '已提供（加密保存）' : null,
+          subscriptionStatus: subscriptionVerified
+            ? subscription.hasActiveSubscription
+              ? 'active'
+              : 'inactive'
+            : null,
+          autoRenew:
+            subscriptionVerified && typeof subscription.autoRenewRaw === 'boolean'
+              ? subscription.autoRenewRaw
+              : null,
+          expiresAt:
+            subscriptionVerified &&
+            typeof subscription.expiresAt === 'string' &&
+            Number.isFinite(Date.parse(subscription.expiresAt))
+              ? subscription.expiresAt
+              : null
         };
   }
   async get(taskId: string, publicView = false) {
@@ -185,18 +214,19 @@ export class OnlineRechargeTasksRepository {
         });
         if (active >= Number(settings.maxConcurrent))
           throw new ConflictException('当前代充名额已满，请稍后再试');
-        if (
-          sessionData &&
-          (await tx.onlineRechargeTask.count({
-            where: {
-              sessionIdentityHash: this.encryption.hash(sessionData.identity),
-              operation: 'recharge',
-              status: { in: [...activeTaskStatuses] }
-            }
-          }))
-        )
-          throw new ConflictException('该账号已有执行中或待核对任务');
       }
+      if (
+        sessionData &&
+        (operation === 'recharge' || (operation === 'renewal' && input.action !== 'check')) &&
+        (await tx.onlineRechargeTask.count({
+          where: {
+            sessionIdentityHash: this.encryption.hash(sessionData.identity),
+            operation: { in: ['recharge', 'renewal'] },
+            status: { in: [...activeTaskStatuses] }
+          }
+        }))
+      )
+        throw new ConflictException('该账号已有充值或续费执行中或待核对任务，请先核对原任务');
       const selectedPlan = codeRow?.plan ?? plan(input.plan ?? 'plus');
       const payload: Record<string, unknown> = {};
       for (const key of [
@@ -211,6 +241,8 @@ export class OnlineRechargeTasksRepository {
         'reason',
         'recheckTaskId',
         'originalProvider',
+        'originalOperation',
+        'renewalAction',
         'providerOrderId',
         'providerTaskId',
         'targetPlan',
@@ -264,7 +296,12 @@ export class OnlineRechargeTasksRepository {
       const row = await this.repository.read((db) =>
         db.onlineRechargeTask.findUnique({ where: { id: id(input.id) } })
       );
-      if (!row || row.status !== 'awaiting_review' || !row.sessionEncrypted)
+      if (
+        !row ||
+        row.status !== 'awaiting_review' ||
+        !row.sessionEncrypted ||
+        !['recharge', 'renewal'].includes(row.operation)
+      )
         throw new ConflictException('仅允许复查具有会话资料的待核对任务');
       return this.start(
         {
@@ -273,6 +310,9 @@ export class OnlineRechargeTasksRepository {
           action: 'recheck',
           recheckTaskId: row.id,
           originalProvider: row.provider,
+          originalOperation: row.operation,
+          renewalAction:
+            row.operation === 'renewal' && row.payload ? object(row.payload).action : undefined,
           providerOrderId: row.providerOrderId,
           providerTaskId: row.providerTaskId,
           targetPlan: row.plan,

@@ -283,28 +283,40 @@ function isOpenAiCustomCheckout(page) {
 
 /**
  * 从 Checkout 页面读取「今日应付」金额（随汇率浮动）
- * @returns {Promise<{ amount: number, currency: string }|null>}
+ * @returns {Promise<{ amount: string, currency: string }|null>}
  */
+function parseCheckoutDueAmount(bodyText) {
+    // Only an explicitly labelled payable total is a billing fact. A monthly price,
+    // subtotal or credit elsewhere on the page must never stand in for this total.
+    const label = '(?:Due today|Total due(?: today)?|Pay today|Amount due|今日应付(?:总额|金额)?|今天应付(?:总额|金额)?|应付总额)';
+    const currency = '(USD|PHP|EUR|GBP|MYR|SGD|AUD|CAD|HKD|JPY|CNY|THB|IDR|US\\$|HK\\$|CA\\$|A\\$|S\\$|RM|₱|\\$|€|£)';
+    const amount = '((?:[0-9]{1,3}(?:,[0-9]{3})+|[0-9]+)(?:\\.[0-9]{2})?)(?![0-9.,])';
+    const patterns = [
+        new RegExp(label + '[\\s:：]*' + currency + '[\\s]*' + amount, 'gi'),
+        new RegExp(label + '[\\s:：]*' + amount + '[\\s]*' + currency + '(?![A-Z])', 'gi'),
+        new RegExp('(?:^|\\n)[\\t ]*(?:Total|总计|合计)[\\s:：]*' + currency + '[\\s]*' + amount, 'gi')
+    ];
+    const currencyMap = { '₱': 'PHP', '$': 'USD', 'US$': 'USD', '€': 'EUR', '£': 'GBP', RM: 'MYR', 'S$': 'SGD', 'A$': 'AUD', 'CA$': 'CAD', 'HK$': 'HKD' };
+    const candidates = [];
+    for (const [index, pattern] of patterns.entries()) {
+        for (const match of String(bodyText || '').matchAll(pattern)) {
+            const rawAmount = (index === 1 ? match[1] : match[2]).replace(/,/g, '');
+            const rawCurrency = (index === 1 ? match[2] : match[1]).toUpperCase();
+            const normalized = rawAmount.includes('.') ? rawAmount : `${rawAmount}.00`;
+            if (!/[1-9]/.test(normalized)) continue;
+            candidates.push({ amount: normalized, currency: currencyMap[rawCurrency] || rawCurrency });
+        }
+        // Explicit payable labels take precedence over a standalone "Total".
+        if (index === 1 && candidates.length) break;
+    }
+    const unique = new Map(candidates.map((due) => [`${due.currency}:${due.amount}`, due]));
+    return unique.size === 1 ? unique.values().next().value : null;
+}
+
 async function readCheckoutDueAmount(page) {
     try {
-        const bodyText = String(await page.textContent('body', { timeout: 8000 }).catch(() => '') || '');
-        const patterns = [
-            /Due today[^\n₱$€£]{0,48}?([₱$€£])\s*([\d,]+\.\d{2})/i,
-            /(?:Total due|Pay today|今日应付|应付)[^\n₱$€£]{0,48}?([₱$€£])\s*([\d,]+\.\d{2})/i,
-            /([₱$€£])\s*([\d,]+\.\d{2})\s*(?:\n|$)/,
-        ];
-        const currencyMap = { '₱': 'PHP', '$': 'USD', '€': 'EUR', '£': 'GBP' };
-        for (const re of patterns) {
-            const match = bodyText.match(re);
-            if (!match) continue;
-            const sym = match[1];
-            const amount = parseFloat(String(match[2] || '').replace(/,/g, ''));
-            if (Number.isFinite(amount) && amount > 0) {
-                return { amount, currency: currencyMap[sym] || null };
-            }
-        }
-    } catch (_) { /* ignore */ }
-    return null;
+        return parseCheckoutDueAmount(await page.textContent('body', { timeout: 8000 }));
+    } catch (_) { return null; }
 }
 
 /** 菲律宾 VAT 12%：1100 PHP 含税 → 约 982.14 PHP 免税 */
@@ -668,36 +680,32 @@ const PAYMENT_SUCCESS_PATTERNS = [
     /已成功订阅/i
 ];
 
+// Generic failures (including plan-change errors) cannot establish a card decline.
+// Only explicit card/issuer rejection permits another card submission.
 const PAYMENT_DECLINE_PATTERNS = [
-    /your card was declined/i,
-    /your card has been declined/i,
-    /card was declined/i,
-    /card has been declined/i,
-    /payment was not approved/i,
-    /payment was declined/i,
-    /payment could not be processed/i,
-    /payment method could not be verified/i,
-    /your bank may have declined/i,
-    /payment details may be incorrect/i,
-    /we are unable to authenticate your payment method/i,
-    /payment failed/i,
-    /payment was not successful/i,
-    /could not be completed/i,
-    /transaction (was )?(declined|failed)/i,
+    /(?:your )?card (?:was|has been|is) declined/i,
+    /\bcard_declined\b/i,
+    /(?:payment|transaction) (?:was )?declined/i,
     /insufficient funds/i,
-    /do not honor/i,
+    /do not hono[u]?r/i,
     /incorrect.*cvc/i,
     /expired card/i,
     /card number is (incorrect|invalid)/i,
-    /银行卡被拒绝/i,
-    /支付未(通过|成功|获批)/i,
-    /未获批准/i,
-    /拒付/i,
-    /被拒绝/i,
-    /try another (payment )?method/i,
-    /try a different (card|payment)/i,
-    /unable to authenticate/i
+    /银行卡(?:被拒绝|被拒|拒付)/i,
+    /余额不足/i
 ];
+const PAYMENT_UNCERTAIN_PATTERNS = [
+    /payment failed/i,
+    /payment was not successful/i,
+    /could not be completed/i,
+    /transaction (?:was )?failed/i,
+    /payment could not be processed/i,
+    /(?:未能|无法)完成(?:此次|本次)?套餐变更/,
+    /支付未成功/
+];
+function hasUncertainPaymentError(text) {
+    return PAYMENT_UNCERTAIN_PATTERNS.some((pattern) => pattern.test(String(text || '')));
+}
 
 function buildDeclinedPaymentResult(page, msg, screenshotPath) {
     return {
@@ -780,6 +788,8 @@ async function handlePostSubmitPhase(page) {
                 screenshot: screenshotPath
             };
         }
+        const bodyText = await page.textContent('body', { timeout: 3000 }).catch(() => '');
+        if (hasUncertainPaymentError(bodyText)) return { action: 'unknown' };
 
         if (await hasAnyCheckoutCaptchaSignal(page)) {
             captchaDetected = true;
@@ -838,6 +848,11 @@ async function handlePostSubmitPhase(page) {
 }
 
 async function finalizeCheckoutPayment(page, holderName) {
+    // Do not treat an earlier card's lingering error as a fresh rejection of the
+    // next card. If it cannot be cleared, stop before a further submission.
+    if (await detectPaymentDeclineOnPage(page)) {
+        return { success: false, error: '上一笔拒付提示尚未清除，请核对原单后继续', canRetryCard: false };
+    }
     console.log('[Stripe] Step 9: 点击订阅/支付...');
     const submitted = await clickCheckoutSubmitButton(page);
     if (!submitted) {
@@ -846,6 +861,9 @@ async function finalizeCheckoutPayment(page, holderName) {
     }
 
     const postResult = await handlePostSubmitPhase(page);
+    if (postResult.action === 'unknown') {
+        return { success: false, resultUnknown: true, error: '支付页面结果不明确，等待原单核对' };
+    }
     if (postResult.action === 'declined') {
         return buildDeclinedPaymentResult(page, postResult.declineMsg, postResult.screenshot);
     }
@@ -940,7 +958,6 @@ async function waitForPaymentResult(page, holderName) {
         // A login/error/home redirect leaves the outcome unresolved.
 
         const bodyText = String(await page.textContent('body', { timeout: 8000 }).catch(() => '') || '');
-
         for (const re of PAYMENT_DECLINE_PATTERNS) {
             if (re.test(bodyText)) {
                 const match = bodyText.match(re);
@@ -949,6 +966,10 @@ async function waitForPaymentResult(page, holderName) {
                 const screenshotPath = await saveDebugScreenshot(page, 'payment_declined');
                 return buildDeclinedPaymentResult(page, msg, screenshotPath);
             }
+        }
+
+        if (hasUncertainPaymentError(bodyText)) {
+            return { success: false, resultUnknown: true, error: '支付页面结果不明确，等待原单核对' };
         }
 
         for (const re of PAYMENT_SUCCESS_PATTERNS) {
@@ -2793,6 +2814,7 @@ module.exports = {
     saveDebugScreenshot,
     waitForPaymentResult,
     handlePostSubmitPhase,
+    finalizeCheckoutPayment,
     waitForStripeFrame,
     waitForBillingFields,
     fillBillingAddress,
@@ -2800,6 +2822,7 @@ module.exports = {
     discoverCardInputs,
     prepareCheckoutCardSection,
     readCheckoutDueAmount,
+    parseCheckoutDueAmount,
     estimateTaxFreeAmount,
     waitForCheckoutTaxRecalculation,
     ensureCheckoutTaxFreeAmount,

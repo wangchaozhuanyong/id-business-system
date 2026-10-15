@@ -65,7 +65,7 @@ suite('线上代充隔离MySQL事务验收', () => {
   let operator: AuthenticatedUser;
   const credentials = vi.spyOn(memory, 'available').mockImplementation(async (ids) => ids);
   vi.spyOn(memory, 'putCvc').mockResolvedValue(undefined);
-  vi.spyOn(memory, 'putCards').mockResolvedValue(undefined);
+  const putCards = vi.spyOn(memory, 'putCards').mockResolvedValue(undefined);
   vi.spyOn(memory, 'forgetCvc').mockResolvedValue(undefined);
   const fullSession = (identity = randomUUID()) =>
     JSON.stringify({
@@ -139,6 +139,7 @@ suite('线上代充隔离MySQL事务验收', () => {
       await (model.deleteMany as () => Promise<unknown>)();
     }
     credentials.mockImplementation(async (ids) => ids);
+    putCards.mockReset().mockResolvedValue(undefined);
   });
   afterAll(async () => {
     await db.$disconnect();
@@ -518,6 +519,74 @@ suite('线上代充隔离MySQL事务验收', () => {
       leaseOwner: claim.id
     });
   });
+  for (const action of ['enable', 'disable'] as const) {
+    it(`续费${action}持久记录一次意图，同账号状态确认不写付款账单`, async () => {
+      const original = await tasks.start(
+        { session: fullSession(), plan: 'plus', action },
+        operator,
+        'renewal'
+      );
+      const claim = (await workers.claim('fixture-renewal'))!;
+      expect(claim.id).toBe(original.id);
+      const submission = lease(claim, { stage: 'renewal_update', renewalAction: action });
+      await workers.beforeSubmit(submission);
+      await expect(workers.beforeSubmit(submission)).rejects.toThrow('禁止重复提交');
+      expect(await db.onlineRechargeTask.findUnique({ where: { id: original.id } })).toMatchObject({
+        stage: 'renewal_submitted',
+        paymentStarted: false,
+        confirmedPaid: false,
+        payload: { action, renewalSubmission: { action, leaseVersion: claim.leaseVersion } }
+      });
+      expect(await db.onlineRechargeCard.count()).toBe(0);
+      await expect(
+        workers.finish(
+          lease(claim, {
+            status: 'succeeded',
+            result: {
+              ok: true,
+              data: {
+                upstreamAccountId: sessionAccountId(claim.session),
+                autoRenewRaw: action === 'enable'
+              }
+            }
+          }),
+          false
+        )
+      ).resolves.toMatchObject({ status: 'succeeded' });
+      expect(await db.onlineRechargeTask.findUnique({ where: { id: original.id } })).toMatchObject({
+        status: 'succeeded',
+        paymentStarted: false,
+        confirmedPaid: false
+      });
+      expect(await db.onlineRechargeBill.count()).toBe(0);
+    });
+  }
+  it('续费意图提交后租约过期转待核对，不重领且阻止同账号新变更', async () => {
+    const session = fullSession();
+    const original = await tasks.start(
+      { session, plan: 'plus', action: 'disable' },
+      operator,
+      'renewal'
+    );
+    const claim = (await workers.claim('fixture-renewal'))!;
+    await workers.beforeSubmit(lease(claim, { stage: 'renewal_update', renewalAction: 'disable' }));
+    await db.onlineRechargeTask.update({
+      where: { id: original.id },
+      data: { leaseExpiresAt: new Date(0) }
+    });
+    expect(await workers.claim('fixture-replacement')).toBeNull();
+    expect(await db.onlineRechargeTask.findUnique({ where: { id: original.id } })).toMatchObject({
+      status: 'awaiting_review',
+      paymentStarted: false,
+      confirmedPaid: false,
+      payload: { renewalSubmission: { action: 'disable' } }
+    });
+    await expect(
+      tasks.start({ session, plan: 'plus', action: 'enable' }, operator, 'renewal')
+    ).rejects.toThrow('先核对原任务');
+    expect(await db.onlineRechargeTask.count()).toBe(1);
+    expect(await db.onlineRechargeBill.count()).toBe(0);
+  });
   it('账单实际金额Decimal，未知金额不落估算', async () => {
     await start();
     const claim = (await workers.claim('fixture-a'))!;
@@ -839,6 +908,80 @@ suite('线上代充隔离MySQL事务验收', () => {
       '4242424242424242'
     );
   });
+  it('补货首回安全码通道失败后同正文重交付，卡片回执仍各一条', async () => {
+    const secret = 'synthetic-webhook-redelivery-fixture-key';
+    await settings.update({ cardSupplierWebhookSecret: secret }, operator);
+    const auditCount = await db.auditLog.count({
+      where: { action: 'id_business_v2.online_recharge.webhook.receive' }
+    });
+    const encrypt = (value: string) => {
+      const iv = randomBytes(12);
+      const cipher = createCipheriv(
+        'aes-256-gcm',
+        createHmac('sha256', secret).update('vcc-webhook-sensitive-v1').digest(),
+        iv
+      );
+      return Buffer.concat([
+        iv,
+        cipher.update(value),
+        cipher.final(),
+        cipher.getAuthTag()
+      ]).toString('base64url');
+    };
+    const input = {
+      eventId: randomUUID(),
+      eventType: 'CARD_ISSUE.SUCCESS',
+      data: {
+        cards: [
+          {
+            cardNumberCiphertext: encrypt('4242424242424242'),
+            expiryDateCiphertext: encrypt('12/2030'),
+            cvvCiphertext: encrypt('123')
+          }
+        ]
+      }
+    };
+    const raw = Buffer.from(JSON.stringify(input));
+    const timestamp = String(Date.now());
+    const nonce = randomUUID();
+    const headers = {
+      'x-vcc-webhook-id': input.eventId,
+      'x-vcc-webhook-event': input.eventType,
+      'x-vcc-webhook-timestamp': timestamp,
+      'x-vcc-webhook-nonce': nonce,
+      'x-vcc-webhook-signature': `v1=${createHmac('sha256', secret)
+        .update(
+          [
+            input.eventId,
+            input.eventType,
+            timestamp,
+            nonce,
+            createHash('sha256').update(raw).digest('hex')
+          ].join('\n')
+        )
+        .digest('hex')}`
+    };
+    putCards.mockRejectedValueOnce(new Error('Synthetic credentials channel unavailable'));
+    await expect(webhooks.receive(headers, input, raw)).resolves.toMatchObject({
+      duplicate: false,
+      imported: 1,
+      credentialsAvailable: false
+    });
+    await expect(webhooks.receive(headers, input, raw)).resolves.toMatchObject({
+      duplicate: true,
+      imported: 1,
+      credentialsAvailable: true
+    });
+    expect(putCards).toHaveBeenCalledTimes(2);
+    expect(putCards.mock.calls[1]![0]).toEqual(putCards.mock.calls[0]![0]);
+    expect(await db.onlineRechargeCard.count()).toBe(1);
+    expect(await db.onlineRechargeWebhookReceipt.count()).toBe(1);
+    expect(
+      await db.auditLog.count({
+        where: { action: 'id_business_v2.online_recharge.webhook.receive' }
+      })
+    ).toBe(auditCount + 1);
+  });
   it('真实Nest模块能启动关闭，HTTP资源和WebSocket任务授权可达', async () => {
     const module = await Test.createTestingModule({
       imports: [
@@ -880,12 +1023,41 @@ suite('线上代充隔离MySQL事务验收', () => {
       const address = app.getHttpServer().address() as AddressInfo;
       const base = `http://127.0.0.1:${address.port}/api/id-business-v2/online-recharge`;
       const as = (role: string) => ({ 'x-synthetic-fixture-role': role });
-      for (const path of ['/admin/config', '/admin/overview', '/admin/cards']) {
+      for (const path of ['/admin/config', '/admin/overview', '/admin/cards', '/public/config']) {
         expect((await fetch(base + path)).status).toBe(403);
         expect((await fetch(base + path, { headers: as('employee') })).status).toBe(403);
         expect((await fetch(base + path, { headers: as('read') })).ok).toBe(true);
       }
-      expect((await fetch(base + '/public/config')).ok).toBe(true);
+      const generated = (await assets.action(
+        'cdks',
+        'generate',
+        { count: 1, plan: 'plus' },
+        operator
+      )) as { codes: string[] };
+      for (const operation of ['redeem', 'subscription']) {
+        const body = {
+          session: fullSession(),
+          plan: 'plus',
+          ...(operation === 'redeem' ? { code: generated.codes[0] } : {})
+        };
+        const submit = (role?: string) =>
+          fetch(base + '/public/' + operation, {
+            method: 'POST',
+            headers: { ...(role ? as(role) : {}), 'content-type': 'application/json' },
+            body: JSON.stringify(body)
+          });
+        for (const role of [undefined, 'employee', 'read']) {
+          expect((await submit(role)).status).toBe(403);
+          expect(await db.onlineRechargeTask.count()).toBe(operation === 'redeem' ? 0 : 1);
+        }
+        const response = await submit('manage');
+        expect(response.ok).toBe(true);
+        const result = (await response.json()) as { id: string };
+        expect(await db.onlineRechargeTask.findUnique({ where: { id: result.id } })).toMatchObject({
+          operatorId: operator.id,
+          operation: operation === 'redeem' ? 'recharge' : 'subscription'
+        });
+      }
       expect((await fetch(base + '/admin/login-logs', { headers: as('read') })).status).toBe(403);
       expect(
         (await fetch(base + `/admin/artifacts/${randomUUID()}`, { headers: as('read') })).status
