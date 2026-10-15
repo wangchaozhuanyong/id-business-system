@@ -4076,8 +4076,8 @@ async function main() {
   const grantHelperSnapshot = readProductionDatabaseAccessSnapshot(base, paths);
   const mode = checkMode(
     paths,
-    git('show', `${base}:${schema}`),
-    git('show', `HEAD:${schema}`),
+    execFileSync('git', ['show', `${base}:${schema}`], { encoding: 'utf8' }),
+    execFileSync('git', ['show', `HEAD:${schema}`], { encoding: 'utf8' }),
     grantHelperSnapshot
   );
   const currentTree = git('rev-parse', 'HEAD^{tree}');

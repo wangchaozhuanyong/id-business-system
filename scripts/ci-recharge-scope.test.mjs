@@ -1686,7 +1686,8 @@ function recordScopeClassification(paths, snapshot, eventName = 'pull_request', 
           return (mode ?? '100644') + ' blob ' + 'e'.repeat(40) + '\\t' + args[3] + '\\n';
         }
         if (args[0] === 'show' && args[1].endsWith(':apps/api/prisma-mysql/schema.prisma'))
-          return process.env.SCOPE_TEST_SCHEMA;
+          return (args[1].startsWith('HEAD:') ? options.schemaAfter : options.schemaBefore)
+            ?? process.env.SCOPE_TEST_SCHEMA;
         throw new Error('Unexpected Git command: ' + JSON.stringify(args));
       }
       if (file === 'gh' && args[0] === 'run') return '';
@@ -5474,4 +5475,28 @@ test('published fixture recovery admits only its three exact existing test sourc
   ]) {
     assert.equal(checkMode([...paths, extra], schema, schema), 'full', extra);
   }
+});
+
+test('registration closure real CLI preserves schema blob bytes for exact published recovery', () => {
+  const base = '07e28beb3fbb1fc5c9dac8050e16b3f00e0b1083';
+  const before = execFileSync('git', ['show', base + ':apps/api/prisma-mysql/schema.prisma'], {
+    encoding: 'utf8'
+  });
+  const after = readFileSync('apps/api/prisma-mysql/schema.prisma', 'utf8');
+  const paths = execFileSync('git', ['diff', '--name-only', base, 'HEAD'], { encoding: 'utf8' })
+    .trim()
+    .split('\n');
+  assert.ok(before.endsWith('\n') && after.endsWith('\n'));
+  assert.equal(checkMode(paths, before.trim(), after.trim()), 'full');
+  const classify = (changed, oldSource = before) =>
+    recordScopeClassification(changed, {}, 'pull_request', {
+      schemaBefore: oldSource,
+      schemaAfter: after
+    }).result;
+  const positive = classify(paths);
+  assert.equal(positive.mode, 'recharge');
+  assert.deepEqual(positive.checkParts, ['guards', 'admin', 'api', 'migration']);
+  assert.equal(positive.onlineCiBuild, false);
+  assert.equal(classify([...paths, 'apps/api/src/auth/auth.service.ts']).mode, 'full');
+  assert.equal(classify(paths, before + '\n').mode, 'full');
 });
