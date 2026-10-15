@@ -3,7 +3,6 @@ import { onlineRechargeAutomationFeature } from './automation-manifest';
 import { onlineRechargeRuntimeLogsFeature } from './runtime-logs-manifest';
 import { onlineRechargeBillingFeature } from './billing-manifest';
 import { onlineRechargeCardsFeature } from './cards-manifest';
-import { onlineRechargeProxiesFeature } from './proxies-manifest';
 import { onlineRechargeAddressesFeature } from './addresses-manifest';
 import { onlineRechargeBrowserPoolFeature } from './browser-pool-manifest';
 import { onlineRechargeCdksFeature } from './cdks-manifest';
@@ -36,7 +35,6 @@ export const onlineRechargeFeatures = [
   onlineRechargeRuntimeLogsFeature,
   onlineRechargeBillingFeature,
   onlineRechargeCardsFeature,
-  onlineRechargeProxiesFeature,
   onlineRechargeAddressesFeature,
   onlineRechargeBrowserPoolFeature,
   onlineRechargeCdksFeature,

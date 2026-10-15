@@ -33,7 +33,7 @@
         v-for="proxy in proxies"
         :key="proxy.id"
         :value="proxy.id"
-        :label="`${proxyProtocolLabel(proxy.protocol)} · ${proxyKindLabels[proxy.kind]} · ${proxy.remark1 ? `${proxy.remark1} · ` : ''}${proxy.linkMask}`"
+        :label="`${proxyProtocolLabel(proxy.protocol)} · ${proxyKindLabels[proxy.kind]} · ${proxy.remark || proxy.remark1 ? `${proxy.remark || proxy.remark1} · ` : ''}${proxy.linkMask}`"
       />
     </el-select>
   </el-form-item>
@@ -45,11 +45,12 @@
     <AppButton v-if="proxyId" link variant="primary" @click="detailId = proxyId"
       >查看完整链接</AppButton
     >
-    <router-link to="/v2/auto-recharge/proxies">管理代理</router-link>
+    <router-link to="/v2/account-settings/proxies">管理代理</router-link>
   </p>
   <p v-if="selectionNote" class="recharge-note" role="status">{{ selectionNote }}</p>
   <p v-if="!countries.length && !loading && !error" class="recharge-note">
-    暂无启用代理，请先在<router-link to="/v2/auto-recharge/proxies">代理 IP 管理</router-link>新增。
+    暂无启用代理，请先在<router-link to="/v2/account-settings/proxies">代理 IP 管理</router-link
+    >新增。
   </p>
   <p v-if="error" class="recharge-error" role="alert">
     {{ error }} <AppButton link variant="primary" @click="$emit('retry')">重试</AppButton>

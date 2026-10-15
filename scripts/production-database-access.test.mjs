@@ -386,3 +386,20 @@ test('integrity triggers remain owned by the dedicated migration identity', () =
   assert.match(migration, /CREATE TRIGGER `idv2_exchange_run_update_guard`/);
   assert.match(migration, /CREATE TRIGGER `idv2_order_snapshot_insert_capture`/);
 });
+
+test('shared proxy pool retains physical deletion only for its canonical proxy records', () => {
+  const grants = buildV2RuntimeTableGrantStatements(databaseName, [
+    'id_business_v2_recharge_proxies',
+    'id_business_v2_proxy_aliases'
+  ]);
+  assert.ok(
+    grants.includes(
+      "GRANT SELECT, INSERT, UPDATE, DELETE ON `id_business_v2`.`id_business_v2_recharge_proxies` TO 'id_business_app'@'%'"
+    )
+  );
+  assert.ok(
+    grants.includes(
+      "GRANT SELECT, INSERT, UPDATE ON `id_business_v2`.`id_business_v2_proxy_aliases` TO 'id_business_app'@'%'"
+    )
+  );
+});

@@ -1,3 +1,4 @@
+import { isSharedProxyPoolPaths, isSharedProxyPoolOnly } from './ci-shared-proxy-scope.mjs';
 import { appendFileSync, readFileSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
@@ -109,6 +110,8 @@ const onlineCiBuildInputs = new Set([
   'deploy/nginx/admin.conf'
 ]);
 export function needsOnlineRechargeCiBuild(paths) {
+  // This shared feature uses the normal API/engine builds, not the historical sealed ONLINE projection.
+  if (isSharedProxyPoolPaths(paths)) return false;
   if (isRechargeRecordRepairOnly(paths) || isRechargeRecordControlsOnly(paths)) return false;
   return (
     !isReleaseArtifactRetentionOnly(paths) &&
@@ -795,6 +798,7 @@ export function isMailboxOnly(paths) {
 }
 
 export function checkMode(paths, oldSchema, newSchema, grantHelperSnapshot) {
+  if (isSharedProxyPoolOnly(paths, oldSchema, newSchema)) return 'recharge';
   if (paths.includes(rechargePricingProfile)) {
     if (!isRechargePricingOnly(paths)) return 'full';
     return paths.some((path) => rechargePricingSources.has(path)) ? 'recharge' : 'ci-only';
@@ -916,6 +920,13 @@ export function adminCheckCommands(mode, paths) {
       : [
           '--',
           'src/v2/features/auto-recharge',
+          ...(paths.some((p) => p.includes('/proxy-pool/'))
+            ? [
+                'src/v2/features/proxy-pool',
+                'src/v2/features/registry.spec.ts',
+                'src/v2/router/routes.spec.ts'
+              ]
+            : []),
           ...(paths.some((p) => p.startsWith('apps/admin/src/v2/features/online-recharge/'))
             ? ['src/v2/features/online-recharge']
             : []),
@@ -936,6 +947,14 @@ export function adminCheckCommands(mode, paths) {
     )
   )
     commands.push(['exec', '--', 'node', workspaceDockAcceptance]);
+  if (
+    paths.some(
+      (path) =>
+        path.startsWith('apps/admin/src/v2/features/proxy-pool/') ||
+        path === 'scripts/acceptance-v2-recharge-proxies-ui.mjs'
+    )
+  )
+    commands.push(['exec', '--', 'node', 'scripts/acceptance-v2-recharge-proxies-ui.mjs']);
   if (
     paths.some(
       (path) =>
@@ -1175,6 +1194,14 @@ export function isTargetedOnly(paths, oldSchema, newSchema) {
   );
 }
 export function selectedParts(paths, grantHelperSnapshot) {
+  if (isSharedProxyPoolPaths(paths))
+    return [
+      'guards',
+      ...(paths.some((path) => path.startsWith('apps/admin/')) ? ['admin'] : []),
+      ...(paths.some((path) => path.startsWith('apps/api/')) ? ['api'] : []),
+      ...(paths.some((path) => path.startsWith('apps/api/prisma-mysql/')) ? ['migration'] : []),
+      ...(paths.includes(productionDatabaseAccessHelper) ? ['security'] : [])
+    ];
   if (isReleaseArtifactRetentionOnly(paths)) return ['guards'];
   if (hasBankCardDeletePolicyProof(paths, grantHelperSnapshot)) return ['guards', 'security'];
   if (isRechargePricingOnly(paths))

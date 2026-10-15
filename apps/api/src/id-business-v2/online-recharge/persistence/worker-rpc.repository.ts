@@ -1,3 +1,4 @@
+import { OnlineProxyPoolRepository } from '../../proxy-pool/public-api';
 import { BadRequestException, Injectable, UnauthorizedException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { timingSafeEqual } from 'node:crypto';
@@ -19,6 +20,7 @@ export function secureEqual(left: unknown, right: string | undefined) {
 @Injectable()
 export class OnlineRechargeWorkerRpcRepository {
   constructor(
+    private readonly proxies: OnlineProxyPoolRepository,
     private readonly config: ConfigService,
     private readonly repository: OnlineRechargeRepository,
     private readonly workers: OnlineRechargeWorkerRepository,
@@ -119,21 +121,24 @@ export class OnlineRechargeWorkerRpcRepository {
                   typeof row.payload.proxyId === 'string'
                 ? id(row.payload.proxyId)
                 : null;
-          const rows = await tx.onlineRechargeProxy.findMany({
-            where: { status: 'active', ...(proxyId ? { id: proxyId } : {}) },
-            take: 500
-          });
-          if (!rows.length) return null;
-          const proxy = rows[Math.floor(Math.random() * rows.length)];
+          const payload =
+            row.payload && typeof row.payload === 'object' && !Array.isArray(row.payload)
+              ? row.payload
+              : {};
+          const proxy = await this.proxies.active(
+            tx,
+            proxyId ?? undefined,
+            payload.proxyPoolReference === true
+          );
+          if (row.operation !== 'proxy_test')
+            await tx.onlineRechargeTask.update({
+              where: { id: row.id },
+              data: { payload: { ...payload, proxyId: proxy.id, proxyPoolReference: true } }
+            });
           await this.repository.log(tx, 'worker.proxy.credentials', undefined, row.id, {
             proxyId: proxy.id
           });
-          return {
-            id: proxy.id,
-            proxy_url: this.encryption.decrypt(proxy.connectionEncrypted),
-            protocol: proxy.protocol,
-            host: proxy.displayHost
-          };
+          return proxy;
         });
       case 'listAddresses':
         return this.workers.withLease(rpc, async (tx) =>
@@ -199,16 +204,19 @@ export class OnlineRechargeWorkerRpcRepository {
             !(Array.isArray(payload.ids) && payload.ids.includes(proxyId))
           )
             throw new BadRequestException('代理检测资料不属于当前任务');
-          await tx.onlineRechargeProxy.update({
-            where: { id: proxyId },
-            data: {
-              exitIp: args.ip ? text(args.ip, '出口地址', 100) : null,
+          await this.proxies.result(
+            tx,
+            proxyId,
+            {
+              ip: args.ip ? text(args.ip, '出口地址', 100) : null,
               latencyMs:
-                typeof args.latencyMs === 'number' ? Math.max(0, Math.round(args.latencyMs)) : null,
-              testMessage: args.ok ? '检测成功' : '检测失败',
-              testedAt: new Date()
-            }
-          });
+                typeof args.latencyMs === 'number' && Number.isFinite(args.latencyMs)
+                  ? Math.max(0, Math.round(args.latencyMs))
+                  : null,
+              ok: args.ok === true
+            },
+            payload.proxyPoolReference === true
+          );
           return { ok: true };
         });
       default:

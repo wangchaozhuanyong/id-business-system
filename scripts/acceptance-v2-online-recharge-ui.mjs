@@ -31,7 +31,6 @@ const sections = process.argv.includes('--affected')
       'runtime-logs',
       'billing',
       'cards',
-      'proxies',
       'addresses',
       'browser-pool',
       'cdks',

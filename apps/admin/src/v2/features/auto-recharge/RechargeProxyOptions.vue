@@ -37,7 +37,7 @@
             v-for="item in catalog.matchingItems.value"
             :key="item.id"
             :value="item.id"
-            :label="`${proxyCountryLabel(item.countryCode)} · ${proxyProtocolLabel(item.protocol)} · ${proxyKindLabels[item.kind]} · ${item.remark1 || item.linkMask}`"
+            :label="`${proxyCountryLabel(item.countryCode)} · ${proxyProtocolLabel(item.protocol)} · ${proxyKindLabels[item.kind]} · ${item.remark || item.remark1 || item.linkMask}`"
           />
         </el-select>
       </el-form-item>

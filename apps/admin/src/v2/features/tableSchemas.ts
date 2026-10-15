@@ -104,19 +104,23 @@ export const v2TableSchemas = {
       rowKey: { kind: 'path', value: 'id' },
       columns: [
         {
-          key: 'countryCode',
-          label: '国家',
+          key: 'displayHost',
+          label: '代理地址',
           kind: 'identifier',
-          widthPreset: 'standard',
+          widthPreset: 'wide',
           pin: 'start'
         },
-        { key: 'kind', label: 'IP 属性', kind: 'text', widthPreset: 'standard' },
-        { key: 'linkMask', label: '代理链接', kind: 'text', widthPreset: 'standard' },
-        { key: 'status', label: '状态', kind: 'status', widthPreset: 'compact' },
-        { key: 'remark1', label: '备注1', kind: 'text', widthPreset: 'longText' },
-        { key: 'remark2', label: '备注2', kind: 'text', widthPreset: 'longText' },
-        { key: 'updatedAt', label: '更新时间', kind: 'date', widthPreset: 'dateTime' },
         { key: 'protocol', label: '代理协议', kind: 'text', widthPreset: 'compact' },
+        { key: 'connectionMode', label: '连接方式', kind: 'text', widthPreset: 'standard' },
+        { key: 'kind', label: 'IP 属性', kind: 'text', widthPreset: 'standard' },
+        { key: 'countryCode', label: '国家', kind: 'text', widthPreset: 'standard' },
+        { key: 'remark', label: '备注', kind: 'text', widthPreset: 'longText' },
+        { key: 'status', label: '状态', kind: 'status', widthPreset: 'compact' },
+        { key: 'exitIp', label: '出口 IP', kind: 'identifier', widthPreset: 'wide' },
+        { key: 'latencyMs', label: '延迟（毫秒）', kind: 'numeric', widthPreset: 'standard' },
+        { key: 'testMessage', label: '检测结果', kind: 'text', widthPreset: 'standard' },
+        { key: 'testedAt', label: '检测时间', kind: 'date', widthPreset: 'dateTime' },
+        { key: 'updatedAt', label: '更新时间', kind: 'date', widthPreset: 'dateTime' },
         { key: 'actions', label: '操作', kind: 'actions', layout: 'double', pin: 'end' }
       ]
     })
