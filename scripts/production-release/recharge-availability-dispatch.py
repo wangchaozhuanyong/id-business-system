@@ -155,7 +155,18 @@ except Exception as error:
     raise RuntimeError('RECHARGE_AVAILABILITY_ACCEPTED_COMMAND_STILL_PENDING')
 
 
-if __name__ == '__main__':
+def publish():
     plan, contract = prepare_plan()
-    for mode in ('preflight', 'release', 'readback'):
+    preflight = transport(plan, contract, 'preflight')
+    need(preflight.get('status') == 'RECHARGE_AVAILABILITY_PREFLIGHT_VERIFIED'
+         and type(preflight.get('runtimeBaseline')) is dict, 'PREFLIGHT_RECEIPT_INVALID')
+    accepted = json.loads((OUTPUT / 'preflight-accepted-command.json').read_bytes())
+    plan = {**plan, 'runtimeBaseline': preflight['runtimeBaseline'],
+            'runtimeObservationCommandId': accepted['CommandId']}
+    (OUTPUT / 'publication-plan.json').write_text(json.dumps(plan, sort_keys=True, indent=2) + '\n')
+    for mode in ('release', 'readback'):
         transport(plan, contract, mode)
+
+
+if __name__ == '__main__':
+    publish()
