@@ -1118,21 +1118,33 @@ class AppleMailboxTests(unittest.TestCase):
             self.store.reserve(request, str(uuid.uuid4()))
         self.assertEqual(rejected.exception.status_code, 409)
 
+    def assert_pending_created_account(self, task):
+        with self.sessions.get_db() as db:
+            account = db.query(self.models.Account).filter_by(email=self.email).one()
+            _, data = self.store.task_data(db, task["taskUuid"])
+            self.assertTrue(data["creationConfirmed"])
+            self.assertTrue(account.password)
+            self.assertEqual(account.password, data["passwordCheckpoint"])
+            self.assertEqual(account.source, "register")
+            self.assertEqual(account.status, "expired")
+            self.assertEqual(account.extra_data["idSourceTaskUuid"], task["taskUuid"])
+            self.assertEqual(account.extra_data["idAuthorizationStatus"], "pending")
+            for field in ("access_token", "refresh_token", "id_token", "session_token", "account_id", "workspace_id"):
+                self.assertIsNone(getattr(account, field), field)
+
     def test_remote_creation_oauth_failure_task_fact_prevents_manual_unknown_and_new_registration(self):
         task = self.run_original_algorithm_offline(fail_after_created=True)
         self.assertEqual(task["record"]["source"], "automatic")
-        with self.sessions.get_db() as db:
-            self.assertIsNone(db.query(self.models.Account).filter_by(email=self.email).first())
-            _, data = self.store.task_data(db, task["taskUuid"])
-            self.assertTrue(data["creationConfirmed"])
+        self.assert_pending_created_account(task)
         self.assert_reliable_fact_cannot_reenter_pool()
+        self.assert_pending_created_account(task)
 
     def test_local_save_failure_task_fact_prevents_manual_unknown_and_new_registration(self):
         task = self.run_original_algorithm_offline(fail_save=True)
         self.assertEqual(task["record"]["localSaveStatus"], "failed")
-        with self.sessions.get_db() as db:
-            self.assertIsNone(db.query(self.models.Account).filter_by(email=self.email).first())
+        self.assert_pending_created_account(task)
         self.assert_reliable_fact_cannot_reenter_pool()
+        self.assert_pending_created_account(task)
 
     def test_deleted_local_account_retains_registration_fact_against_manual_unknown_and_reserve(self):
         context, _, _ = self.successful_saved_task()

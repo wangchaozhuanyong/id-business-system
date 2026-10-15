@@ -1099,7 +1099,7 @@
     "apps/api/src/id-business-v2/auto-registration/worker/apple_closed_loop.py": "f71dc93773fdc9f636d07b051a9738263ef6219234b28dafe909ff253b647391",
     "apps/api/src/id-business-v2/auto-registration/worker/apple_mailboxes.py": "1c34ac02c4e532e42aaa954f92dd9567db8181bee0bc90103d4b22e916465759",
     "apps/api/src/id-business-v2/auto-registration/worker/release_safety.py": "6422bacc1808b02e083a202f6f55d68c7e8ae01fe8ec647d1256d2b6542df16f",
-    "apps/api/src/id-business-v2/auto-registration/worker/test_apple_mailboxes.py": "53d3e786f197dfeca143e23295b8c29e300d1c6ba51002e10b56917d61678a7b",
+    "apps/api/src/id-business-v2/auto-registration/worker/test_apple_mailboxes.py": "ccb4541b8317551e30e26c1917a4c51cb5926104546d53bd0d655640305028d7",
     "apps/api/src/id-business-v2/auto-registration/worker/test_registration_closed_loop_unit.py": "0ba9d921f01daef5cdf97ad38f1a27a1285d40e47de986d6c5a1238f936b3a38",
     "apps/api/src/id-business-v2/auto-registration/worker/test_release_safety.py": "9789533d5d4e367167eedbd6c81826fa8fdd527afe9422f4a9845f58db6ebcb6",
     "apps/api/src/id-business-v2/auto-registration/worker/test_workspace.py": "b209874b0a8d7b640a3df1253356f206b2e98c7253eee43efe7a212c14f32154",

@@ -1643,10 +1643,9 @@ function recordScopeClassification(paths, snapshot, eventName = 'pull_request', 
   const script = `
     import childProcess from 'node:child_process';
     import fs from 'node:fs';
+    import { createHash } from 'node:crypto';
     import { syncBuiltinESMExports } from 'node:module';
-    const paths = JSON.parse(process.env.SCOPE_TEST_PATHS);
-    const snapshot = JSON.parse(process.env.SCOPE_TEST_SNAPSHOT);
-    const options = JSON.parse(process.env.SCOPE_TEST_OPTIONS);
+    const { paths, snapshot, options, schema: fixtureSchema } = JSON.parse(fs.readFileSync(0, 'utf8'));
     const gitCalls = [];
     const apiCalls = [];
     const writes = [];
@@ -1687,7 +1686,7 @@ function recordScopeClassification(paths, snapshot, eventName = 'pull_request', 
         }
         if (args[0] === 'show' && args[1].endsWith(':apps/api/prisma-mysql/schema.prisma'))
           return (args[1].startsWith('HEAD:') ? options.schemaAfter : options.schemaBefore)
-            ?? process.env.SCOPE_TEST_SCHEMA;
+            ?? fixtureSchema;
         throw new Error('Unexpected Git command: ' + JSON.stringify(args));
       }
       if (file === 'gh' && args[0] === 'run') return '';
@@ -1717,12 +1716,20 @@ function recordScopeClassification(paths, snapshot, eventName = 'pull_request', 
     console.log = (value) => { result = JSON.parse(value); };
     process.argv = ['node', 'scripts/ci-recharge-scope.mjs'];
     await import('./scripts/ci-recharge-scope.mjs');
-    process.stdout.write(JSON.stringify({ result, gitCalls, apiCalls, writes }));
+    process.stdout.write(JSON.stringify({ result, gitCalls, apiCalls, writes,
+      fixtureTransfer: options.fixtureTransferProbe ? {
+        beforeBytes: Buffer.byteLength(options.schemaBefore),
+        beforeSha256: createHash('sha256').update(options.schemaBefore).digest('hex'),
+        afterBytes: Buffer.byteLength(options.schemaAfter),
+        afterSha256: createHash('sha256').update(options.schemaAfter).digest('hex')
+      } : undefined
+    }));
   `;
   return JSON.parse(
     execFileSync(process.execPath, ['--input-type=module', '-e', script], {
       cwd: root,
       encoding: 'utf8',
+      input: JSON.stringify({ paths, snapshot, options, schema }),
       env: {
         ...process.env,
         GITHUB_EVENT_NAME: eventName,
@@ -1733,12 +1740,8 @@ function recordScopeClassification(paths, snapshot, eventName = 'pull_request', 
         GITHUB_REPOSITORY: 'fixture/id-business',
         GITHUB_SHA: 'c'.repeat(40),
         BASE_SHA: 'a'.repeat(40),
-        SCOPE_TEST_PATHS: JSON.stringify(paths),
-        SCOPE_TEST_SNAPSHOT: JSON.stringify(snapshot),
-        SCOPE_TEST_OPTIONS: JSON.stringify(options),
         SCOPE_TEST_HELPER: productionDatabaseAccessHelper,
-        SCOPE_TEST_ACCEPTANCE: productionDatabaseAccessAcceptance,
-        SCOPE_TEST_SCHEMA: schema
+        SCOPE_TEST_ACCEPTANCE: productionDatabaseAccessAcceptance
       }
     })
   );
@@ -5499,4 +5502,28 @@ test('registration closure real CLI preserves schema blob bytes for exact publis
   assert.equal(positive.onlineCiBuild, false);
   assert.equal(classify([...paths, 'apps/api/src/auth/auth.service.ts']).mode, 'full');
   assert.equal(classify(paths, before + '\n').mode, 'full');
+});
+
+test('scope CLI fixture transport preserves schema blobs larger than a Linux environment item', () => {
+  const before = schema + '\n// ' + '原始字节'.repeat(20_000) + '\n';
+  const after = before + '\n';
+  assert.ok(Buffer.byteLength(before) > 128 * 1024);
+  const value = recordScopeClassification(['scripts/ci-recharge-scope.mjs'], {}, 'pull_request', {
+    schemaBefore: before,
+    schemaAfter: after,
+    fixtureTransferProbe: true
+  });
+  assert.equal(value.result.mode, 'ci-only');
+  assert.deepEqual(value.fixtureTransfer, {
+    beforeBytes: Buffer.byteLength(before),
+    beforeSha256: createHash('sha256').update(before).digest('hex'),
+    afterBytes: Buffer.byteLength(after),
+    afterSha256: createHash('sha256').update(after).digest('hex')
+  });
+  const source = readFileSync('scripts/ci-recharge-scope.test.mjs', 'utf8');
+  const fixture = source.slice(
+    source.indexOf('function recordScopeClassification('),
+    source.indexOf("test('bank-card policy controls")
+  );
+  assert.equal(/process\.env\.SCOPE_TEST_(?:PATHS|SNAPSHOT|OPTIONS|SCHEMA)/.test(fixture), false);
 });
