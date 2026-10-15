@@ -4,6 +4,7 @@ export const sharedProxyMigration =
 const paths = new Set([
   '.github/workflows/shared-proxy-pool-validation.yml',
   'scripts/shared-proxy-publication.mjs',
+  'scripts/acceptance-v2-production-database-access.mjs',
   'apps/admin/src/v2/features/auto-recharge/RechargePasswordLoginFields.vue',
   'apps/admin/src/v2/features/auto-recharge/RechargeProxyOptions.vue',
   'apps/admin/src/v2/features/auto-recharge/V2RechargeProxiesView.vue',

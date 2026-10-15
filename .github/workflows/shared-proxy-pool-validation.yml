@@ -37,14 +37,18 @@ jobs:
           npm run test --workspace @apple-business/admin -- src/v2/features/auto-recharge src/v2/features/proxy-pool src/v2/features/online-recharge src/v2/features/registry.spec.ts src/v2/router/routes.spec.ts
           npm run test --workspace @apple-business/api -- src/id-business-v2/auto-recharge src/id-business-v2/proxy-pool src/id-business-v2/online-recharge
           npm ci --prefix apps/api/src/id-business-v2/online-recharge/engine/upstream --ignore-scripts --no-audit --no-fund
+          node apps/api/src/id-business-v2/online-recharge/engine/upstream/node_modules/playwright/cli.js install --with-deps chromium
+          sudo apt-get install -y --no-install-recommends ffmpeg
           npm run test:online-recharge:engine
           npm run test:online-recharge:controls
       - name: Verify real migrations and repository operations on owned empty MySQL
+        if: ${{ !cancelled() }}
         run: |
           python3 -B scripts/ci-recharge-migration.py
           node scripts/acceptance-v2-shared-proxy-mysql.mjs
           npm run acceptance:v2-production-database-access
       - name: Verify actual routes with synthetic data
+        if: ${{ !cancelled() }}
         run: |
           npx playwright install --with-deps chromium
           node scripts/acceptance-v2-recharge-proxies-ui.mjs

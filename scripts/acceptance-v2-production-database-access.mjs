@@ -91,6 +91,8 @@ function createAcceptanceSchema() {
     CREATE TABLE \`id_business_v2_bank_recharge_cards\` (id INT PRIMARY KEY);
     CREATE TABLE \`id_business_v2_bank_recharge_orders\` (id INT PRIMARY KEY);
     CREATE TABLE \`id_business_v2_recharge_jobs\` (id INT PRIMARY KEY);
+    CREATE TABLE \`id_business_v2_recharge_proxies\` (id INT PRIMARY KEY);
+    CREATE TABLE \`id_business_v2_proxy_aliases\` (id INT PRIMARY KEY);
   `;
   const result = spawnSync(
     'docker',
@@ -157,7 +159,18 @@ async function verifyRuntimeEnforcement(databaseUrl) {
       ),
       1
     );
-    for (const table of ['id_business_v2_bank_recharge_orders', 'id_business_v2_recharge_jobs']) {
+    await client.$executeRawUnsafe(
+      'INSERT INTO `id_business_v2_recharge_proxies` (`id`) VALUES (1)'
+    );
+    assert.equal(
+      await client.$executeRawUnsafe('DELETE FROM `id_business_v2_recharge_proxies` WHERE `id`=1'),
+      1
+    );
+    for (const table of [
+      'id_business_v2_bank_recharge_orders',
+      'id_business_v2_recharge_jobs',
+      'id_business_v2_proxy_aliases'
+    ]) {
       await client.$executeRawUnsafe(`INSERT INTO \`${table}\` (\`id\`) VALUES (1)`);
       await assert.rejects(
         client.$executeRawUnsafe(`DELETE FROM \`${table}\` WHERE \`id\` = 1`),
