@@ -3,6 +3,9 @@ name: Online Recharge Audit Validation
 on:
   push:
     branches: [codex/online-audit-repairs-20261015, codex/online-pro500-upgrade-20261015]
+    paths-ignore:
+      - '.github/workflows/online-recharge-audit-validation.yml'
+      - '.github/workflows/online-recharge-pricing-validation.yml'
 
 permissions:
   contents: read
@@ -154,7 +157,7 @@ jobs:
       - name: Verify exact pricing tier selection
         run: >-
           npm --prefix apps/api/src/id-business-v2/online-recharge/engine/upstream
-          test -- --run test/pricing-checkout.test.js
+          test -- test/pricing-checkout.test.js
       - name: Record candidate validation result
         if: always()
         env:

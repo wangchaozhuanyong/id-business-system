@@ -1,0 +1,100 @@
+name: Online Recharge Pricing Validation
+
+on:
+  push:
+    branches: [codex/online-pro500-upgrade-20261015]
+    paths:
+      - '.github/workflows/online-recharge-pricing-validation.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      RUNTIME_CANDIDATE: 04aa234505adccfe295776245b88fc56feac0588
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          fetch-depth: 2
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
+        with:
+          node-version: 24
+      - name: Bind supplemental check to the existing runtime candidate
+        run: |
+          node <<'NODE'
+          const assert = require('node:assert/strict');
+          const { execFileSync } = require('node:child_process');
+          const { createHash } = require('node:crypto');
+          const fs = require('node:fs');
+          const git = (...args) => execFileSync('git', args, { encoding: 'utf8' }).trim();
+          const candidate = process.env.RUNTIME_CANDIDATE;
+          const commit = process.env.GITHUB_SHA;
+          const allowed = new Set([
+            '.github/workflows/online-recharge-audit-validation.yml',
+            '.github/workflows/online-recharge-pricing-validation.yml'
+          ]);
+          const changed = git('diff', '--name-only', candidate, commit).split('\n').filter(Boolean);
+          assert.ok(changed.every((file) => allowed.has(file)), 'Business source differs from the validated runtime candidate');
+          const paths = [
+            'apps/api/src/id-business-v2/online-recharge/engine/plans.cjs',
+            'apps/api/src/id-business-v2/online-recharge/engine/upstream/pricing-checkout.js',
+            'apps/api/src/id-business-v2/online-recharge/engine/upstream/test/pricing-checkout.test.js',
+            'apps/api/src/id-business-v2/online-recharge/engine/upstream/package.json',
+            'apps/api/src/id-business-v2/online-recharge/engine/upstream/package-lock.json'
+          ];
+          const files = paths.map((path) => ({
+            path,
+            gitBlob: git('rev-parse', `${commit}:${path}`),
+            sha256: createHash('sha256').update(fs.readFileSync(path)).digest('hex')
+          }));
+          fs.mkdirSync('.runtime/online-pricing-validation', { recursive: true });
+          fs.writeFileSync('.runtime/online-pricing-validation/source.json', JSON.stringify({
+            commit, runtimeCandidate: candidate, reusedValidationRun: '38728508273', changed, files
+          }, null, 2) + '\n');
+          NODE
+      - name: Install only the unchanged upstream Node dependencies
+        run: npm ci --prefix apps/api/src/id-business-v2/online-recharge/engine/upstream --ignore-scripts --no-audit --no-fund
+      - name: Verify the 11 exact pricing tier cases
+        id: pricing
+        run: >-
+          npm --prefix apps/api/src/id-business-v2/online-recharge/engine/upstream
+          test -- test/pricing-checkout.test.js --reporter=json
+          --outputFile="$GITHUB_WORKSPACE/.runtime/online-pricing-validation/vitest-results.json"
+      - name: Record the supplemental result
+        if: always()
+        env:
+          PRICING_RESULT: ${{ steps.pricing.outcome }}
+        run: |
+          node <<'NODE'
+          const assert = require('node:assert/strict');
+          const fs = require('node:fs');
+          const directory = '.runtime/online-pricing-validation';
+          const read = (name) => { try { return JSON.parse(fs.readFileSync(`${directory}/${name}`, 'utf8')); } catch { return null; } };
+          const source = read('source.json');
+          const tests = read('vitest-results.json');
+          const result = {
+            commit: process.env.GITHUB_SHA, run: process.env.GITHUB_RUN_ID,
+            runtimeCandidate: process.env.RUNTIME_CANDIDATE, reusedValidationRun: '38728508273',
+            source, pricing: { outcome: process.env.PRICING_RESULT, passed: tests?.numPassedTests ?? null, failed: tests?.numFailedTests ?? null, total: tests?.numTotalTests ?? null },
+            productionAccess: false, paymentSubmitted: false
+          };
+          fs.mkdirSync(directory, { recursive: true });
+          fs.writeFileSync(`${directory}/result.json`, JSON.stringify(result, null, 2) + '\n');
+          console.log(JSON.stringify(result));
+          assert.ok(source && source.commit === process.env.GITHUB_SHA);
+          assert.equal(result.pricing.outcome, 'success');
+          assert.equal(result.pricing.passed, 11);
+          assert.equal(result.pricing.failed, 0);
+          assert.equal(result.pricing.total, 11);
+          NODE
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: online-pricing-validation-${{ github.sha }}
+          path: .runtime/online-pricing-validation/
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 14
