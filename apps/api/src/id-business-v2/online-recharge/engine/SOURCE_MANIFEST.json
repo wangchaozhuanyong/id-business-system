@@ -124,7 +124,7 @@
     {
       "path": "task-runner.cjs",
       "originalSha256": null,
-      "adaptedSha256": "a1fee4b58d8886146656df2181704d5c6d9c2a976dfc1bd05e399a1f75fa78ae",
+      "adaptedSha256": "5b971258c8f3067d0f00655d22712f48ee691f408d036ea683abf54354d45268",
       "changed": true,
       "reason": "Scoped runtime configuration, original-core operation dispatch and structured results; safe login/security notification events."
     },
@@ -299,9 +299,9 @@
     {
       "path": "upstream/mysql-store.js",
       "originalSha256": "b8d120cdafac6884da0bf9ef2f062965f89b17efcb6f1978f3831a4d3c0267b9",
-      "adaptedSha256": "fee06739c2dd245b04d631594c13035624b75cf9fbb45c58964f3851c94f8d41",
+      "adaptedSha256": "34ee639639d3b05a72e26efc2e9320f6ebfe63e64b9db7da90a870180fa51595",
       "changed": true,
-      "reason": "替换MySQL实现为allowlist内部HTTP RPC；所有权/版本校验；CVC仅engine内存经IPC提供。"
+      "reason": "Database-free RPC facade over the shared proxy pool; resolve extraction and session once per task and clear transient connections with credentials."
     },
     {
       "path": "upstream/package-lock.json",
@@ -435,6 +435,20 @@
       "adaptedSha256": "464f1c1c0d41b00da1b3e08d376376dabe455d24c4f301ca6abf00792f1b93c6",
       "changed": true,
       "reason": "Native independent worker with private health, bounded signal shutdown, outcome transaction completion and lease-safe interrupted jobs; browser/solver transient data never enters persisted media/model volume."
+    },
+    {
+      "path": "proxy-connection.cjs",
+      "originalSha256": null,
+      "adaptedSha256": "f697a3e7964c7a8bc48fc70851cb7dfa268f05f42ec6f510b2bd9fe6346bb02a",
+      "changed": true,
+      "reason": "Shared proxy pool connection compatibility and isolated fixture regression tests."
+    },
+    {
+      "path": "test/proxy-pool.test.cjs",
+      "originalSha256": null,
+      "adaptedSha256": "c3bf54ef56dd51bd70766391c5a63da921c2c9ee0348f098979d82b90e8123f0",
+      "changed": true,
+      "reason": "Shared proxy pool connection compatibility and isolated fixture regression tests."
     }
   ],
   "dependencySecurityPatches": [

@@ -1,3 +1,4 @@
+import { ProxyPoolModule } from '../proxy-pool/public-api';
 import { Module } from '@nestjs/common';
 import { IdBusinessV2RuntimeModule } from '../runtime/public-api';
 import { FieldEncryptionService } from '../../common/crypto/field-encryption.service';
@@ -28,7 +29,7 @@ import { AuthLoginEventsModule } from '../../auth/login-events';
 import { OnlineRechargeLoginNotificationBridge } from './login-notification-bridge.service';
 
 @Module({
-  imports: [IdBusinessV2RuntimeModule, AuthLoginEventsModule],
+  imports: [ProxyPoolModule, IdBusinessV2RuntimeModule, AuthLoginEventsModule],
   controllers: [
     OnlineRechargeAdminController,
     OnlineRechargePublicController,

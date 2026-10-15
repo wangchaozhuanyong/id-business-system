@@ -124,6 +124,17 @@ export const v2Routes: RouteRecordRaw[] = [
         path: '',
         redirect: '/v2/dashboard'
       },
+      ...Object.entries({
+        'auto-recharge/chatgpt-accounts': '/v2/account-settings/chatgpt-accounts',
+        'auto-recharge/mailbox': '/v2/account-settings/mailbox',
+        'auto-recharge/proxies': '/v2/account-settings/proxies',
+        'online-recharge/proxies': '/v2/account-settings/proxies'
+      }).map(
+        ([path, target]): RouteRecordRaw => ({
+          path,
+          redirect: (to) => ({ path: target, query: to.query, hash: to.hash })
+        })
+      ),
       ...v2ModuleDefinitions.map(
         (module): RouteRecordRaw => ({
           path: module.route.replace(/^\/v2\//, ''),

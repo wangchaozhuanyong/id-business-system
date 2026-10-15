@@ -4,7 +4,7 @@ import { autoRegistrationFeature } from '@/v2/features/auto-registration/manifes
 import { autoRechargeFeature } from '@/v2/features/auto-recharge/manifest';
 import { chatgptAccountsFeature } from '@/v2/features/auto-recharge/chatgpt-accounts-manifest';
 import { bankRechargeCardsFeature } from '@/v2/features/auto-recharge/bank-cards-manifest';
-import { rechargeProxiesFeature } from '@/v2/features/auto-recharge/recharge-proxies-manifest';
+import { rechargeProxiesFeature } from '@/v2/features/proxy-pool/manifest';
 import { bankRechargeOrdersFeature } from '@/v2/features/auto-recharge/bank-orders-manifest';
 import { autoRechargeAddressesFeature } from '@/v2/features/auto-recharge/address-manifest';
 import { vendureMailboxFeature } from '@/v2/features/auto-recharge/vendure-mailbox-manifest';
@@ -38,10 +38,10 @@ export const v2FeatureRegistry: readonly V2FeatureManifest[] = [
   autoRegistrationFeature,
   autoRechargeFeature,
   chatgptAccountsFeature,
+  vendureMailboxFeature,
   bankRechargeCardsFeature,
   rechargeProxiesFeature,
   bankRechargeOrdersFeature,
-  vendureMailboxFeature,
   autoRechargeAddressesFeature,
   autoRechargeNamesFeature,
   ...onlineRechargeFeatures,
@@ -94,6 +94,7 @@ export const v2NavigationSections: readonly V2NavigationSection[] = [
   },
   { key: 'workspace', title: '工作台', items: v2WorkbenchModules },
   { key: 'auto-registration', title: '自动注册', items: navigationItems('自动注册') },
+  { key: 'account-settings', title: '账号设置', items: navigationItems('账号设置') },
   { key: 'auto-recharge', title: '自动充值', items: navigationItems('自动充值') },
   { key: 'online-recharge', title: '线上代充', items: navigationItems('线上代充') },
   {

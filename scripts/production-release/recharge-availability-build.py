@@ -239,7 +239,10 @@ def verify_database_evidence(contract):
          and environment(workflow) == environment(current), 'DATABASE_COMMANDS_CHANGED')
     previous_build = ast.parse(git('show', commit + ':scripts/production-release/recharge-availability-build.py'))
     current_build = ast.parse(Path(__file__).read_bytes())
-    selected = {'prepare', 'verify_sources', 'helper', 'run', 'git'}
+    # Source admission is checked directly against the frozen forward-main
+    # boundary below; candidate materialization and all DB inputs stay exact.
+    verify_sources(contract)
+    selected = {'prepare', 'helper', 'run', 'git'}
     functions = lambda tree: {n.name: ast.dump(n) for n in tree.body if isinstance(n, ast.FunctionDef) and n.name in selected}
     need(functions(previous_build) == functions(current_build)
          and git('show', commit + ':scripts/production-release/recharge-record-build.py')
@@ -289,12 +292,27 @@ def verify_sources(contract):
     need(not git('status', '--porcelain', '--untracked-files=no').strip(), 'SOURCE_DIRTY')
     changed = set(git('diff', '--name-only', contract['reviewBase'], 'HEAD', '--', 'apps/', 'packages/').decode().splitlines())
     approved = {n for n in contract['sources'] if n.startswith(('apps/', 'packages/'))}
-    need(approved <= changed and all(
-        git('ls-tree', 'HEAD', '--', name) == git('ls-tree', contract['sourceBaseline'], '--', name)
-        for name in changed - approved), 'SOURCE_SCOPE_CHANGED')
+    verify_source_boundary(contract,changed,approved)
     for name, expected in contract['sources'].items():
         need(digest((ROOT / name).read_bytes()) == expected, 'SOURCE_CHANGED')
     need(git('show', contract['sourceBaseline'] + ':package-lock.json') == (ROOT / 'package-lock.json').read_bytes(), 'LOCKFILE_CHANGED')
+
+
+def verify_source_boundary(contract, changed, approved):
+    foreign = {name for name in changed-approved
+               if git('ls-tree','HEAD','--',name) != git('ls-tree',contract['sourceBaseline'],'--',name)}
+    retained = contract.get('mainOnlySources',{})
+    need(approved <= changed and foreign == set(retained), 'SOURCE_SCOPE_CHANGED')
+    if not retained:
+        return
+    commit = contract['mainOnlySourceBaseline']
+    need(re.fullmatch('[a-f0-9]{40}',commit) and subprocess.run(
+        ['git','merge-base','--is-ancestor',commit,'HEAD'],cwd=ROOT).returncode == 0, 'MAIN_ONLY_BASE_CHANGED')
+    for name,expected in retained.items():
+        old = git('ls-tree',commit,'--',name)
+        current = git('ls-tree','HEAD','--',name)
+        need(old == current and (digest(git('show',commit+':'+name)) if old else None) == expected,
+             'MAIN_ONLY_SOURCE_CHANGED')
 
 
 def verify_api_outputs(before, after, modules):

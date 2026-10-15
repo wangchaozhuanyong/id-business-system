@@ -1,0 +1,108 @@
+import assert from 'node:assert/strict';
+import { test } from 'node:test';
+import {
+  sharedProxyPullRequestBase,
+  sharedProxyAdminCommand,
+  isSharedProxyPoolPaths,
+  isSharedProxyPoolOnly,
+  sharedProxyMigration
+} from './ci-shared-proxy-scope.mjs';
+import { checkMode, needsOnlineRechargeCiBuild, selectedParts } from './ci-recharge-scope.mjs';
+const schemaPath = 'apps/api/prisma-mysql/schema.prisma';
+const before = 'model User {\n  id String\n}\n\nmodel IdBusinessV2RechargeProxy {\n id String\n}\n';
+const after =
+  'model User {\n  id String\n}\n\nmodel IdBusinessV2RechargeProxy {\n id String\n remark String?\n}\n\nmodel IdBusinessV2ProxyAlias {\n oldId String\n}\n';
+const paths = [
+  'apps/api/src/id-business-v2/proxy-pool/proxy-pool.module.ts',
+  schemaPath,
+  sharedProxyMigration,
+  'scripts/lib/v2-production-database-access.mjs'
+];
+test('shared pool selects real UI/API/migration/security checks without historical frozen image build', () => {
+  assert.equal(checkMode(paths, before, after), 'recharge');
+  assert.equal(needsOnlineRechargeCiBuild(paths), false);
+  assert.deepEqual(selectedParts(paths), ['guards', 'api', 'migration', 'security']);
+});
+test('unrelated schema changes and other migrations are not admitted', () => {
+  assert.equal(
+    isSharedProxyPoolOnly(
+      paths,
+      before,
+      after.replace('model User {', 'model User {\n  extra String?')
+    ),
+    false
+  );
+  assert.equal(
+    isSharedProxyPoolOnly(
+      [...paths, 'apps/api/prisma-mysql/migrations/unrelated/migration.sql'],
+      before,
+      after
+    ),
+    false
+  );
+  assert.equal(
+    isSharedProxyPoolOnly(
+      paths.filter((p) => p !== sharedProxyMigration),
+      before,
+      after
+    ),
+    false
+  );
+});
+test('unrelated business, deployment controls and dependency changes retain normal checks', () => {
+  for (const path of [
+    'apps/api/src/id-business-v2/finance/public-api.ts',
+    '.github/workflows/production-release.yml',
+    'package-lock.json'
+  ])
+    assert.equal(isSharedProxyPoolPaths([...paths, path]), false);
+  assert.equal(
+    needsOnlineRechargeCiBuild([
+      'apps/api/src/id-business-v2/online-recharge/engine/task-runner.cjs'
+    ]),
+    true
+  );
+});
+
+test('stale PR event base uses the verified actual merge parent only for the shared pool', () => {
+  const input = {
+    eventName: 'pull_request',
+    ref: 'refs/pull/500/merge',
+    prNumber: 500,
+    headSha: 'b'.repeat(40),
+    parents: ['a'.repeat(40), 'b'.repeat(40)],
+    requestedBase: 'c'.repeat(40),
+    requestedBaseIsAncestor: true,
+    paths,
+    before,
+    after
+  };
+  assert.equal(sharedProxyPullRequestBase(input), input.parents[0]);
+  for (const override of [
+    { ref: 'refs/heads/main' },
+    { headSha: 'd'.repeat(40) },
+    { requestedBaseIsAncestor: false },
+    { paths: [...paths, 'package-lock.json'] },
+    { after: after + '\nmodel Unrelated {}' }
+  ])
+    assert.equal(sharedProxyPullRequestBase({ ...input, ...override }), input.requestedBase);
+});
+
+test('shared-pool UI keeps responsive pool, guards and recharge checks while scoping unchanged pages', () => {
+  assert.deepEqual(sharedProxyAdminCommand(['run', 'acceptance:v2-online-recharge-ui']), [
+    'run',
+    'acceptance:v2-online-recharge-ui',
+    '--',
+    '--quick'
+  ]);
+  assert.deepEqual(
+    sharedProxyAdminCommand(['exec', '--', 'node', 'scripts/acceptance-v2-filter-layout.mjs']),
+    ['exec', '--', 'node', 'scripts/acceptance-v2-filter-layout.mjs', '--real-toolbar-only']
+  );
+  for (const args of [
+    ['run', 'check:v2-loading-standard'],
+    ['exec', '--', 'node', 'scripts/acceptance-v2-recharge-proxies-ui.mjs'],
+    ['run', 'acceptance:v2-auto-recharge']
+  ])
+    assert.deepEqual(sharedProxyAdminCommand(args), args);
+});

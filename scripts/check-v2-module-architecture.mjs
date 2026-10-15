@@ -9,6 +9,7 @@ const backendRoot = 'apps/api/src/id-business-v2';
 const issues = [];
 
 const expectedFeatures = [
+  'proxy-pool',
   'online-recharge',
   'auto-registration',
   'auto-recharge',
@@ -39,6 +40,7 @@ const expectedFeatures = [
 ];
 const plannedFeatures = new Set();
 const expectedBackendDomains = [
+  'proxy-pool',
   'online-recharge',
   'auto-registration',
   'auto-recharge',

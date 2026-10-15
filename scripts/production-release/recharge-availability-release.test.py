@@ -25,6 +25,27 @@ dispatch = load('availability_test_dispatch', 'recharge-availability-dispatch.py
 
 
 class AvailabilityPublicationTests(unittest.TestCase):
+    def test_forward_main_sources_are_fixed_to_their_exact_commit_and_never_join_the_payload(self):
+        approved={'apps/api/approved.ts'};foreign='apps/api/excluded.ts';commit='f'*40
+        contract={'sourceBaseline':'original','mainOnlySourceBaseline':commit,
+                  'mainOnlySources':{foreign:build.digest(b'main-only-source')}}
+        def git(*args):
+            if args[0]=='show':return b'main-only-source'
+            ref,name=args[1],args[-1]
+            return b'' if ref=='original' else b'tree-'+name.encode()
+        with patch.object(build,'git',side_effect=git),patch.object(build.subprocess,'run',return_value=Mock(returncode=0)):
+            build.verify_source_boundary(contract,approved|{foreign},approved)
+            with self.assertRaisesRegex(RuntimeError,'SOURCE_SCOPE_CHANGED'):
+                build.verify_source_boundary(contract,approved|{foreign,'apps/api/unreviewed.ts'},approved)
+            changed=copy.deepcopy(contract);changed['mainOnlySources'][foreign]='unverified'
+            with self.assertRaisesRegex(RuntimeError,'MAIN_ONLY_SOURCE_CHANGED'):
+                build.verify_source_boundary(changed,approved|{foreign},approved)
+            with self.assertRaisesRegex(RuntimeError,'SOURCE_SCOPE_CHANGED'):
+                build.verify_source_boundary(contract,{foreign},approved)
+        with patch.object(build,'git',side_effect=git),patch.object(build.subprocess,'run',return_value=Mock(returncode=1)):
+            with self.assertRaisesRegex(RuntimeError,'MAIN_ONLY_BASE_CHANGED'):
+                build.verify_source_boundary(contract,approved|{foreign},approved)
+
     def test_lock_waits_for_an_existing_publication_and_returns_a_closed_busy_code(self):
         lock=Mock()
         with patch.object(release.fcntl,'flock',side_effect=[BlockingIOError,None]) as flock, \
@@ -216,10 +237,14 @@ class AvailabilityPublicationTests(unittest.TestCase):
             if suffix.endswith('contract.json'):return old_raw
             if suffix==path:return workflow
             return (build.ROOT/suffix).read_bytes()
-        def verify(c=contract,n=native,j=jobs,a=artifact,z=raw,log=b'7 passed\n25 passed',g=git):
-            with patch.object(build,'git',side_effect=g),patch.object(build,'platform_json',side_effect=[n,j,a]),patch.object(build,'platform_bytes',return_value=z),patch.object(build,'platform_log_bytes',return_value=log):
-                return build.verify_database_evidence(c)
+        def verify(c=contract,n=native,j=jobs,a=artifact,z=raw,log=b'7 passed\n25 passed',g=git,source_error=None):
+            with patch.object(build,'git',side_effect=g),patch.object(build,'platform_json',side_effect=[n,j,a]),patch.object(build,'platform_bytes',return_value=z),patch.object(build,'platform_log_bytes',return_value=log),patch.object(build,'verify_sources',side_effect=source_error) as source_gate:
+                value=build.verify_database_evidence(c)
+                source_gate.assert_called_once_with(c)
+                return value
         self.assertEqual(verify()['testsPassed'],32)
+        with self.assertRaisesRegex(RuntimeError,'SOURCE_SCOPE_CHANGED'):
+            verify(source_error=RuntimeError('RECHARGE_AVAILABILITY_SOURCE_SCOPE_CHANGED'))
         for changed in [{**contract,'sourceBaseline':'f'*40},{**contract,'sources':{name:'0'*64}}]:
             with self.assertRaisesRegex(RuntimeError,'DATABASE_INPUTS_CHANGED'):verify(c=changed)
         with self.assertRaisesRegex(RuntimeError,'DATABASE_COMMANDS_CHANGED'):
@@ -360,6 +385,10 @@ class AvailabilityPublicationTests(unittest.TestCase):
         self.assertEqual(contract['sourceBaseline'], '04aa234505adccfe295776245b88fc56feac0588')
         self.assertEqual(contract['publishedAdminSuccessor']['sourceCommit'],contract['expectedCurrent'])
         self.assertEqual(len(contract['publishedAdminSuccessor']['repairSources']),9)
+        self.assertEqual(contract['mainOnlySourceBaseline'],'970e0a05f2ca340a3b62f7083f6866e3c0c0fcdf')
+        self.assertEqual(len(contract['mainOnlySources']),56)
+        self.assertFalse(set(contract['mainOnlySources']) & set(contract['sources']))
+        self.assertIn('apps/api/prisma-mysql/schema.prisma',contract['mainOnlySources'])
         for name in contract['sources']:
             self.assertTrue(name.startswith(('apps/admin/src/v2/features/auto-recharge/',
                 'apps/api/src/id-business-v2/auto-recharge/', 'packages/shared/src/v2/auto-recharge.ts', 'docs/')))

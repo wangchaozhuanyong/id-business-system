@@ -1,3 +1,4 @@
+import { OnlineProxyPoolRepository } from '../../proxy-pool/public-api';
 import {
   BadRequestException,
   ConflictException,
@@ -13,7 +14,6 @@ import { OnlineRechargeEphemeralCredentials } from '../ephemeral-credentials.ser
 import { OnlineRechargeRepository } from './online-recharge.repository';
 import { id, ids, integer, object, plan, text, activeTaskStatuses } from '../validation';
 import { createOnlineRechargeCodes } from '../cdk-generator';
-import { parseOnlineRechargeProxy } from '../proxy-input';
 
 const locations: [string, string, string[]][] = [
   ['Portland', 'Oregon', ['97201', '97205', '97209', '97214']],
@@ -57,6 +57,7 @@ export function assertOnlineSensitive(operator: AuthenticatedUser) {
 @Injectable()
 export class OnlineRechargeAssetsRepository {
   constructor(
+    private readonly proxiesPool: OnlineProxyPoolRepository,
     private readonly repository: OnlineRechargeRepository,
     private readonly encryption: FieldEncryptionService,
     private readonly memory: OnlineRechargeEphemeralCredentials
@@ -216,46 +217,9 @@ export class OnlineRechargeAssetsRepository {
     input: Record<string, unknown>,
     operator: AuthenticatedUser
   ) {
-    if (action === 'import') {
-      const values = input.proxies;
-      if (!Array.isArray(values) || !values.length || values.length > 500)
-        throw new BadRequestException('每次须导入1至500条代理');
-      const parsed = values.map((value) => {
-        const proxy = parseOnlineRechargeProxy(value);
-        return {
-          connectionEncrypted: this.encryption.encrypt(proxy.raw)!,
-          connectionHash: this.encryption.hash(proxy.raw)!,
-          displayHost: proxy.displayHost,
-          protocol: proxy.protocol
-        };
-      });
-      return this.repository.transaction('proxies-import', async (tx) => {
-        const result = await tx.onlineRechargeProxy.createMany({
-          data: parsed,
-          skipDuplicates: true
-        });
-        await this.repository.log(tx, 'proxies.import', operator, undefined, {
-          count: result.count
-        });
-        return { success: true, inserted: result.count, duplicates: values.length - result.count };
-      });
-    }
-    const selected = ids(input);
-    return this.repository.transaction('proxies-update', async (tx) => {
-      if (action === 'delete')
-        await tx.onlineRechargeProxy.deleteMany({ where: { id: { in: selected } } });
-      else if (action === 'update' || action === 'status') {
-        if (!['active', 'disabled'].includes(String(input.status)))
-          throw new BadRequestException('代理状态无效');
-        await tx.onlineRechargeProxy.updateMany({
-          where: { id: { in: selected } },
-          data: { status: input.status as 'active' | 'disabled' }
-        });
-      } else throw new BadRequestException('不支持该代理操作');
-      await this.repository.log(tx, `proxies.${action}`, operator, undefined, { ids: selected });
-      return { success: true };
-    });
+    return this.proxiesPool.action(action, input, operator);
   }
+
   private address(value: Record<string, unknown>) {
     const region = text(value.region ?? 'US', '支付地区', 2);
     if (!['US', 'PH', 'SG', 'MY'].includes(region)) throw new BadRequestException('支付地区无效');
