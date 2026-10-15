@@ -4,6 +4,7 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
+import { runInNewContext } from 'node:vm';
 import {
   onlineRechargeRecoveryPolicy,
   productionDatabaseAccessHelper,
@@ -36,6 +37,40 @@ const readonlyMetadataPrevious = readonlyMetadataCurrent
     "commit.get('commit', {}).get('tree', {}).get('sha')"
   );
 const readonlyMetadataFixture = { readonlyBaseSource: readonlyMetadataPrevious };
+
+test('ONLINE browser fixture restores the current session contract without starting a server', async () => {
+  const script = readFileSync(
+    resolve(root, 'scripts/acceptance-v2-online-recharge-ui.mjs'),
+    'utf8'
+  );
+  const start = script.indexOf('async function fixture(context, state) {');
+  const end = script.indexOf('\ntry {', start);
+  assert.ok(start >= 0 && end > start);
+  const origin = 'http://127.0.0.1:5409';
+  const install = runInNewContext('(' + script.slice(start, end).trim() + ')', { origin, URL });
+  const actor = { id: 'synthetic-user', roles: ['admin'], permissions: [] };
+  let handler;
+  await install(
+    {
+      routeWebSocket: async () => {},
+      route: async (_pattern, callback) => {
+        handler = callback;
+      }
+    },
+    { actor }
+  );
+  let response;
+  await handler({
+    request: () => ({ url: () => origin + '/api/auth/session' }),
+    fulfill: async (value) => {
+      response = value;
+    }
+  });
+  assert.deepEqual(JSON.parse(response.body), {
+    success: true,
+    data: { accessToken: 'synthetic-access', user: actor }
+  });
+});
 
 test('new ONLINE controls retain pure diagnostics lifecycle and CI build tests without invoking Docker', () => {
   for (const part of ['guards', 'release-controls']) {
