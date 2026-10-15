@@ -9,7 +9,10 @@ import {
   needsOnlineRechargeCiBuild,
   selectedParts
 } from './ci-recharge-scope.mjs';
-import { rechargeAvailabilityGuardChecks } from './ci-recharge-scope.mjs';
+import {
+  rechargeAvailabilityGuardChecks,
+  rechargeAvailabilityCommonControlTests
+} from './ci-recharge-scope.mjs';
 
 const contract = JSON.parse(
   readFileSync('scripts/production-release/recharge-availability-contract.json', 'utf8')
@@ -61,6 +64,23 @@ test('finite availability still runs every mandatory UI and backend architecture
     program.indexOf('const checks = rechargeAvailabilityGuardChecks(changed)') <
       program.indexOf('const readonlyQualityMetadataOnly')
   );
+});
+test('only the closed availability scope narrows unrelated historical selector suites', () => {
+  const wanted = [
+    'scripts/ci-recharge-scope.test.mjs',
+    'scripts/ci-recharge-check.test.mjs',
+    'scripts/ci-change-scope.test.mjs'
+  ];
+  assert.deepEqual(rechargeAvailabilityCommonControlTests(paths), wanted);
+  assert.deepEqual(rechargeAvailabilityCommonControlTests(controls), wanted);
+  assert.equal(
+    rechargeAvailabilityCommonControlTests([
+      ...paths,
+      'scripts/production-release/remote-deploy.py'
+    ]),
+    undefined
+  );
+  assert.equal(rechargeAvailabilityCommonControlTests([]), undefined);
 });
 for (const extra of [
   'apps/api/src/id-business-v2/online-recharge/worker.service.ts',
