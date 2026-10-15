@@ -22,6 +22,16 @@ def digest(raw):
     return hashlib.sha256(raw).hexdigest()
 
 
+def verify_image_configuration(original, built):
+    # Docker clears the deprecated parent-image build marker when inheriting an
+    # image. It is not the selected image ID or a container runtime setting.
+    for config in (original, built):
+        marker = config.get('Image')
+        need(marker in (None, '') or (isinstance(marker, str) and re.fullmatch('sha256:[a-f0-9]{64}', marker)), 'IMAGE_PARENT_MARKER_INVALID')
+    need({k: v for k, v in built.items() if k not in ('Labels', 'Image')} ==
+         {k: v for k, v in original.items() if k not in ('Labels', 'Image')}, 'IMAGE_CONFIGURATION_CHANGED')
+
+
 def load(path, name):
     spec = importlib.util.spec_from_file_location(name, path)
     module = importlib.util.module_from_spec(spec)
@@ -97,11 +107,16 @@ def apply_migration(d, target, contract, stage):
 
 
 def validate_proof(proof, plan, contract, payload, h):
+    reused = contract.get('priorValidationNative')
+    database = {'isolated': True, 'suite': 'recharge-billing.mysql.integration.spec.ts'}
+    if reused:
+        database['reusedFrom'] = reused
+        need(proof.get('apiCompilationReused') == {**reused, 'verified': True}, 'REUSED_PROOF_INVALID')
     need(proof.get('version') == 1 and proof.get('scope') == contract['scope']
          and all(proof.get(k) == plan[k] for k in ('commit', 'tree', 'workflowRunId', 'workflowRunAttempt', 'contractSha256', 'controllerSha256', 'releaseUtilitySha256', 'helperSha256'))
          and proof.get('baselineApiReproduced') is True
          and proof.get('baselineNativeVerified') == {**contract['baselineNative'], 'verified': True}
-         and proof.get('databaseVerification') == {'isolated': True, 'suite': 'recharge-billing.mysql.integration.spec.ts'}
+         and proof.get('databaseVerification') == database
          and proof.get('updatedServices') == ['api', 'admin'] and proof.get('migrationPerformed') is False
          and proof.get('plannedMigration') == contract['migration']
          and type(proof.get('businessActions')) is int and proof['businessActions'] == 0, 'PROOF_INVALID')
@@ -216,7 +231,7 @@ def release(plan, contract, d, h):
             h.build_image(d, payload / role, image, role, before[role], stage)
             built = json.loads(d.run('docker', 'image', 'inspect', image))[0]
             need(built['RootFS']['Layers'][:len(original['RootFS']['Layers'])] == original['RootFS']['Layers'], 'BASE_LAYERS_CHANGED')
-            need({k: v for k, v in built['Config'].items() if k != 'Labels'} == {k: v for k, v in original['Config'].items() if k != 'Labels'}, 'IMAGE_CONFIGURATION_CHANGED')
+            verify_image_configuration(original['Config'], built['Config'])
             need(built['Config']['Labels'] == {**(original['Config'].get('Labels') or {}), 'org.opencontainers.image.revision': plan['commit'], label: plan['buildProofSha256']}, 'IMAGE_LABELS_CHANGED')
             images[role] = {'reference': image, 'imageId': built['Id']}
         d.run('docker', 'run', '--rm', '--network', 'none', '--read-only', '--user', '101:101', '--entrypoint', 'sh', images['admin']['reference'], '-c', 'test -r /usr/share/nginx/html/index.html && test -x /usr/share/nginx/html/assets')
