@@ -39,6 +39,36 @@ def fingerprint(value):
     return digest(json.dumps(value, sort_keys=True, separators=(',', ':')).encode())
 
 
+def base_image_reference(d, state):
+    reference = state['reference']
+    need(isinstance(reference, str) and re.fullmatch(r'[a-z0-9][a-z0-9._:/@-]{1,255}', reference)
+         and not re.fullmatch(r'(?:sha256:)?[a-f0-9]{64}', reference),
+         'BASE_REFERENCE_INVALID')
+    image = json.loads(d.run('docker', 'image', 'inspect', reference))[0]
+    need(image['Id'] == state['image'], 'BASE_REFERENCE_CHANGED')
+    return reference
+
+
+def build_image(d, source, reference, role, state, stage):
+    receipt_path = stage / (role + '-image-build.json')
+    receipt = {'role': role, 'status': 'STARTED', 'baseImageId': state['image'],
+               'baseReference': state['reference'], 'reference': reference}
+    receipt_path.write_text(json.dumps(receipt, sort_keys=True) + '\n')
+    try:
+        d.run('docker', 'build', '--pull=false', '--network', 'none', '--tag',
+              reference, str(source), timeout=300)
+    except (RuntimeError, subprocess.TimeoutExpired) as error:
+        # Record only bounded classifications, never registry responses or credentials.
+        detail = str(error).lower()
+        code = 'SOURCE_UNAVAILABLE' if 'pull access denied' in detail or 'insufficient_scope' in detail else (
+            'TIMEOUT' if isinstance(error, subprocess.TimeoutExpired) else 'COMMAND_FAILED')
+        receipt.update(status='FAILED', failureKind=code, exceptionType=type(error).__name__)
+        receipt_path.write_text(json.dumps(receipt, sort_keys=True) + '\n')
+        raise RuntimeError('RECHARGE_RECORD_' + role.upper() + '_IMAGE_BUILD_' + code) from None
+    receipt['status'] = 'BUILT'
+    receipt_path.write_text(json.dumps(receipt, sort_keys=True) + '\n')
+
+
 def safe_archive(raw, directory):
     need(not directory.exists(), 'ARTIFACT_OUTPUT_EXISTS')
     directory.mkdir(mode=0o700)
@@ -265,13 +295,14 @@ def release(plan, contract, d):
             source = payload / role
             base_image = before[role]['image']
             original = json.loads(d.run('docker', 'image', 'inspect', base_image))[0]
+            base_reference = base_image_reference(d, before[role])
             copy_line = ('COPY recharge-validation.js ' + MODULE + '\n') if role == 'api' else (
                 'COPY html/ /usr/share/nginx/html/\n'
                 'RUN find /usr/share/nginx/html -type d -exec chmod 755 {} + && '
                 'find /usr/share/nginx/html -type f -exec chmod 644 {} +\n')
             original_user = original['Config'].get('User') or ''
             switch_user = role == 'admin' and original_user not in ('', 'root', '0')
-            dockerfile = 'FROM ' + base_image + '\n' + ('USER root\n' if switch_user else '') + copy_line
+            dockerfile = 'FROM ' + base_reference + '\n' + ('USER root\n' if switch_user else '') + copy_line
             dockerfile += 'LABEL org.opencontainers.image.revision="' + plan['commit'] + '" '
             dockerfile += 'id-business-v2.recharge-record-build-proof-sha256="' + plan['buildProofSha256'] + '"\n'
             need(re.fullmatch('[a-f0-9]{64}', plan['buildProofSha256']), 'PROOF_ID_INVALID')
@@ -279,7 +310,8 @@ def release(plan, contract, d):
                 dockerfile += 'USER ' + original_user + '\n'
             (source / 'Dockerfile').write_text(dockerfile)
             reference = 'id-business-v2-records:' + plan['commit'] + '-' + plan['workflowRunId'] + '-' + role
-            d.run('docker', 'build', '--network', 'none', '--tag', reference, str(source), timeout=300)
+            build_image(d, source, reference, role, before[role], stage)
+            need(base_image_reference(d, before[role]) == base_reference, 'BASE_REFERENCE_CHANGED')
             built = json.loads(d.run('docker', 'image', 'inspect', reference))[0]
             need(built['RootFS']['Layers'][:len(original['RootFS']['Layers'])] == original['RootFS']['Layers'],
                  'BASE_LAYERS_CHANGED')

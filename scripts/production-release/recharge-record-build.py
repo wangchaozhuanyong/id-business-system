@@ -41,6 +41,12 @@ def git(*args):
     return subprocess.check_output(['git', *args], cwd=ROOT).decode().strip()
 
 
+def matches_published_source(name, baseline):
+    current = git('ls-tree', 'HEAD', '--', name)
+    published = git('ls-tree', baseline, '--', name)
+    return current == published and (not current or current.split()[0] in ('100644', '100755'))
+
+
 def verify_scope(contract):
     need(git('rev-parse', contract['sourceBaseline'] + '^{tree}') == contract['sourceBaselineTree'],
          'PUBLISHED_SOURCE_TREE_CHANGED')
@@ -51,7 +57,10 @@ def verify_scope(contract):
     need(set(validation_only) <= {'apps/api/src/id-business-v2/auto-recharge/worker/test_payment.py'},
          'VALIDATION_SCOPE_CHANGED')
     sources = {**contract['changedSources'], **validation_only}
-    need(changed == set(sources), 'SOURCE_SCOPE_CHANGED')
+    # Main may synchronize source that was already in the frozen live image.
+    # Admit it only with the identical Git blob and mode, never other WIP.
+    need(set(sources) <= changed and all(matches_published_source(name, contract['sourceBaseline'])
+                                       for name in changed - set(sources)), 'SOURCE_SCOPE_CHANGED')
     need(all(digest((ROOT / name).read_bytes()) == sha
              for name, sha in sources.items()), 'REPAIR_SOURCE_CHANGED')
     need(not git('status', '--porcelain', '--untracked-files=no'), 'SOURCE_DIRTY')
