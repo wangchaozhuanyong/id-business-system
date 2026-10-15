@@ -65,7 +65,9 @@ jobs:
         run: |
           npm run test --workspace @apple-business/api -- src/id-business-v2/auto-recharge/recharge-availability.mysql.integration.spec.ts
           npm run test --workspace @apple-business/api -- src/id-business-v2/auto-recharge/recharge-callback-receipts.mysql.integration.spec.ts src/id-business-v2/auto-recharge/recharge-employee-concurrency.mysql.integration.spec.ts src/id-business-v2/auto-recharge/recharge-subscription-cycle.mysql.integration.spec.ts
-      - name: Reproduce live baselines and build finite API and Admin artifacts
+      - name: Verify published provenance and build finite API and Admin artifacts
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: python3 -B scripts/production-release/recharge-availability-build.py build
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:

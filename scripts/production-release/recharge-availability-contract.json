@@ -293,6 +293,15 @@
     "v2-boot.js": "c2fdaf3938e6ef8b58320965dba5a90edc564760f19d0b8d99248aefef4a2a52"
   },
   "publishedAdminArtifactSha256": "e755a93456a454db736a2bd0ee535ec9ce4633dfcb6c456bd7bbc8bafd9e735a",
+  "publishedAdminNative": {
+    "artifactDigest": "sha256:1a4ab3de6aea430a40b070b9397454e26e895eb0d5bcfbc897796843ffed8d41",
+    "artifactId": 11964700822,
+    "artifactName": "online-audit-candidate-20a8a9afede46a1c8e1c6d0163e315e96c4d57c7",
+    "runId": 38719784764,
+    "sourceCommit": "20a8a9afede46a1c8e1c6d0163e315e96c4d57c7",
+    "workflowPath": ".github/workflows/online-recharge-audit-validation.yml",
+    "workflowSha256": "aee3a6f60ad359e67c0d227646e8e2dc2624c59334ff39dc6081e6cf244bc2e9"
+  },
   "publishedAdminNativeCiRun": "38719784764",
   "reviewBase": "5bf15a507d46ccfc76e2f7e737ea7ef38d0cc32e",
   "scope": "RECHARGE_PAYMENT_AVAILABILITY_ONLY",
@@ -408,7 +417,7 @@
     "apps/api/src/id-business-v2/auto-recharge/worker/pay.py": "dfd5d5cc51e055798ac89cb4683743cdc2d9227ceec08497c3239f70f72a2b32",
     "apps/api/src/id-business-v2/auto-recharge/worker/subscription_cycle.py": "7f6c5dd05db4d72922965f83c88e61ab4c0d4b781933ab2cdaf0064904997019",
     "apps/api/src/id-business-v2/auto-recharge/worker/test_declined_resolution.py": "971b0e2da304314c86e30ccc70bdef749d21646effa4f4548765ea37747f254b",
-    "docs/AUTO_RECHARGE_PAYMENT_AVAILABILITY_20261015.md": "f70bca727f5f4356781673b365b2cc63a70a5451ab20d307c9b0ef419fbd87a4",
+    "docs/AUTO_RECHARGE_PAYMENT_AVAILABILITY_20261015.md": "0d80ea344635c9edc4c3a4f268b8f0d80fcf18f1b6376673639e760992a7b9e0",
     "docs/V2_TASKS.md": "d416038c26c28038c31c2a7a1f99294d05329d590fe7295352cfdf45a0e6c87e",
     "packages/shared/src/v2/auto-recharge.ts": "da6fbc0efb928d99848e3661043a3583af912692650a4264b7b8fe5a509397f6"
   },

@@ -22,6 +22,12 @@ def digest(raw):
     return hashlib.sha256(raw).hexdigest()
 
 
+def normalize_image_context(directory):
+    for path in (directory, *directory.rglob('*')):
+        need(not path.is_symlink() and (path.is_dir() or path.is_file()), 'IMAGE_CONTEXT_PATH_INVALID')
+        path.chmod(0o755 if path.is_dir() else 0o644)
+
+
 def load(path, name):
     spec = importlib.util.spec_from_file_location(name, path)
     module = importlib.util.module_from_spec(spec)
@@ -53,7 +59,9 @@ def verify_admin(d, state, files):
 def validate_proof(proof, plan, contract, payload, h):
     need(proof.get('version') == 1 and proof.get('scope') == contract['scope']
          and all(proof.get(k) == plan[k] for k in ('commit', 'tree', 'workflowRunId', 'workflowRunAttempt', 'contractSha256'))
-         and proof.get('baselineApiReproduced') is True and proof.get('baselineAdminReproduced') is True
+         and proof.get('baselineApiReproduced') is True and proof.get('baselineAdminArtifactVerified') is True
+         and proof.get('baselineAdminVerification') == {**contract['publishedAdminNative'], 'verified': True,
+             'publicInventorySha256': digest(json.dumps(contract['publicFiles'], sort_keys=True, separators=(',', ':')).encode())}
          and proof.get('updatedServices') == ['api', 'admin'] and proof.get('migrationPerformed') is False
          and type(proof.get('businessActions')) is int and proof.get('businessActions') == 0, 'PROOF_INVALID')
     actual = h.file_inventory(payload)
@@ -64,7 +72,8 @@ def validate_proof(proof, plan, contract, payload, h):
          and {n.removeprefix('source/'): v for n, v in actual.items() if n.startswith('source/')} == contract['sources']
          and {n.removeprefix('api/modules/'): v for n, v in actual.items() if n.startswith('api/modules/')} == proof['apiModules']
          and {n.removeprefix('admin/html/'): v for n, v in actual.items() if n.startswith('admin/html/')} == proof['adminFiles']
-         and all(n.startswith(('source/', 'api/modules/', 'admin/html/')) for n in actual), 'PAYLOAD_SCOPE_INVALID')
+         and actual.get('baseline-admin-native.zip') == contract['publishedAdminNative']['artifactDigest'].removeprefix('sha256:')
+         and all(n == 'baseline-admin-native.zip' or n.startswith(('source/', 'api/modules/', 'admin/html/')) for n in actual), 'PAYLOAD_SCOPE_INVALID')
     return proof
 
 
@@ -124,6 +133,8 @@ def release(plan, contract, d, h):
             need(states == receipt['after'] and all(states[n] == receipt['before'][n] for n in PRESERVED), 'READBACK_SERVICES_CHANGED')
             raw = (target / 'recharge-availability-build-proof.json').read_bytes()
             need(digest(raw) == plan['buildProofSha256'], 'READBACK_PROOF_CHANGED')
+            need(all(digest((target / 'scripts/production-release' / n).read_bytes()) == v
+                     for n, v in plan['controlSources'].items()), 'READBACK_EXECUTOR_CHANGED')
             smoke(d, target, json.loads(raw), states, contract, h)
             return {'status': 'RECHARGE_AVAILABILITY_INDEPENDENT_READBACK_VERIFIED', 'commit': plan['commit'],
                     'images': receipt['images'], 'preservedServices': list(PRESERVED), 'businessActions': 0, 'migrationPerformed': False}
@@ -145,15 +156,11 @@ def release(plan, contract, d, h):
         for role in ('api', 'admin'):
             original = json.loads(d.run('docker', 'image', 'inspect', before[role]['image']))[0]
             reference = h.base_image_reference(d, before[role])
-            user = original['Config'].get('User') or ''
+            normalize_image_context(payload / role)
             lines = 'FROM ' + reference + '\n'
-            if role == 'admin' and user not in ('', 'root', '0'):
-                lines += 'USER root\n'
             lines += 'COPY modules/ /app/apps/api/dist/\n' if role == 'api' else (
-                'COPY html/ /usr/share/nginx/html/\nRUN find /usr/share/nginx/html -type d -exec chmod 755 {} + && find /usr/share/nginx/html -type f -exec chmod 644 {} +\n')
+                'COPY html/ /usr/share/nginx/html/\n')
             lines += 'LABEL org.opencontainers.image.revision="' + plan['commit'] + '" id-business-v2.recharge-record-build-proof-sha256="' + plan['buildProofSha256'] + '"\n'
-            if role == 'admin' and user not in ('', 'root', '0'):
-                lines += 'USER ' + user + '\n'
             (payload / role / 'Dockerfile').write_text(lines)
             image = 'id-business-v2-availability:' + plan['commit'] + '-' + plan['workflowRunId'] + '-' + role
             h.build_image(d, payload / role, image, role, before[role], stage)
@@ -164,6 +171,12 @@ def release(plan, contract, d, h):
                       'id-business-v2.recharge-record-build-proof-sha256': plan['buildProofSha256']}
             need(built['Config']['Labels'] == labels, 'IMAGE_LABELS_CHANGED')
             images[role] = {'reference': image, 'imageId': built['Id']}
+        # Load only the pure availability classifier; no database, volumes or external network.
+        d.run('docker', 'run', '--rm', '--network', 'none', '--read-only', '--entrypoint', 'node',
+              images['api']['reference'], '-e', "const m=require('/app/apps/api/dist/id-business-v2/auto-recharge/recharge-availability.js');if(typeof m.rechargeAvailability!=='function')process.exit(2)")
+        d.run('docker', 'run', '--rm', '--network', 'none', '--read-only', '--user', '101:101',
+              '--entrypoint', 'sh', images['admin']['reference'], '-c',
+              'test -r /usr/share/nginx/html/index.html && test -x /usr/share/nginx/html/assets')
         need(baseline(d, contract, h)[1:] == (raw_manifest, before), 'BASELINE_MOVED')
         backup = h.fresh_scoped_backup(d, previous, plan, normalizer_path=Path(contract['backupNormalizerPath']))
         need(backup.get('s3Verified') is True, 'BACKUP_UNVERIFIED')
@@ -212,12 +225,22 @@ def release(plan, contract, d, h):
                    'buildProofSha256': plan['buildProofSha256'], 'businessActions': 0, 'migrationPerformed': False}
         (target / 'recharge-availability-preservation.json').write_text(json.dumps(receipt, sort_keys=True, indent=2) + '\n')
         (target / 'recharge-availability-build-proof.json').write_bytes(raw_proof)
+        (target / 'recharge-availability-baseline-admin-native.zip').write_bytes((payload / 'baseline-admin-native.zip').read_bytes())
         manifest = json.loads(raw_manifest)
         manifest.update(commit=plan['commit'], sourceTree=plan['tree'], sourceBranch='main', scope=contract['scope'], status='DEPLOYED',
                         previousCommit=contract['expectedCurrent'], previousRelease=str(previous), previousManifestSha256=digest(raw_manifest),
                         servicesUpdated=['api', 'admin'], dependentServiceRebound='online-recharge', newMigrations=[], migrationPerformed=False,
                         paymentActions=0, validationRun=plan['workflowRunId'], actualDeployment=receipt,
+                        previousSourceProjection=manifest.get('sourceProjection'),
+                        sourceProjection={'sourceBaseline':contract['sourceBaseline'],'changedSources':contract['sources'],
+                                          'apiModules':proof['apiModules'],'adminNativeOrigin':proof['baselineAdminVerification'],
+                                          'buildProofSha256':plan['buildProofSha256']},
+                        sourceLayout='PUBLISHED_PREDECESSOR_WITH_APPROVED_AVAILABILITY_OVERLAY',
+                        deploymentMethod='NATIVE_CI_APPROVED_SSM_FORWARD',
+                        compiledArtifact={'url':plan['artifactUrl'],'sha256':plan['artifactSha256'],'validationRun':plan['workflowRunId']},
                         rechargeAvailabilityPublication={'plan': plan, 'baselineManifestSha256': contract['manifestSha256'], 'backup': backup})
+        for field in ('acceptedSwitchCommandId', 'publicationFinalization', 'deploymentRun'):
+            manifest.pop(field, None)
         for role in images:
             manifest['images'][role] = {'reference': images[role]['reference'], 'digest': images[role]['imageId'], 'sourceCommit': plan['commit']}
         (target / 'release-manifest.json').write_text(json.dumps(manifest, sort_keys=True, indent=2) + '\n')
