@@ -1151,8 +1151,7 @@
     "apps/api/src/id-business-v2/auto-recharge/worker/pay.py": "dfd5d5cc51e055798ac89cb4683743cdc2d9227ceec08497c3239f70f72a2b32",
     "apps/api/src/id-business-v2/auto-recharge/worker/subscription_cycle.py": "7f6c5dd05db4d72922965f83c88e61ab4c0d4b781933ab2cdaf0064904997019",
     "apps/api/src/id-business-v2/auto-recharge/worker/test_declined_resolution.py": "971b0e2da304314c86e30ccc70bdef749d21646effa4f4548765ea37747f254b",
-    "docs/AUTO_RECHARGE_PAYMENT_AVAILABILITY_20261015.md": "64df1447b5c055b83dc4123c0ed7f35e887c52695f76a8ed3733903e54dfe284",
-    "docs/V2_TASKS.md": "565a221966a079ac4504ce1fd1c1b218014691347b00276191da93c83670985b",
+    "docs/AUTO_RECHARGE_PAYMENT_AVAILABILITY_20261015.md": "8130cf279c6623016413c40e8d4629b960f617913c9ba838b0af6d60a9bda068",
     "packages/shared/src/v2/auto-recharge.ts": "da6fbc0efb928d99848e3661043a3583af912692650a4264b7b8fe5a509397f6"
   },
   "version": 1
