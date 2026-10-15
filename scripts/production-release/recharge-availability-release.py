@@ -236,7 +236,11 @@ def release(plan, contract, d, h):
                                           'apiModules':proof['apiModules'],'adminNativeOrigin':proof['baselineAdminVerification'],
                                           'buildProofSha256':plan['buildProofSha256']},
                         sourceLayout='PUBLISHED_PREDECESSOR_WITH_APPROVED_AVAILABILITY_OVERLAY',
+                        deploymentMethod='NATIVE_CI_APPROVED_SSM_FORWARD',
+                        compiledArtifact={'url':plan['artifactUrl'],'sha256':plan['artifactSha256'],'validationRun':plan['workflowRunId']},
                         rechargeAvailabilityPublication={'plan': plan, 'baselineManifestSha256': contract['manifestSha256'], 'backup': backup})
+        for field in ('acceptedSwitchCommandId', 'publicationFinalization', 'deploymentRun'):
+            manifest.pop(field, None)
         for role in images:
             manifest['images'][role] = {'reference': images[role]['reference'], 'digest': images[role]['imageId'], 'sourceCommit': plan['commit']}
         (target / 'release-manifest.json').write_text(json.dumps(manifest, sort_keys=True, indent=2) + '\n')
