@@ -107,6 +107,7 @@ const settings = {
 const common = { id: taskId, createdAt: date, updatedAt: date, status: 'active' };
 const task = {
   ...common,
+  operation: 'recharge',
   status: 'succeeded',
   plan: 'plus',
   provider: 'local',
@@ -341,6 +342,21 @@ async function switchFixtureIdentity(page, clear = true) {
     await auth.login('fixture', 'synthetic');
   }, clear);
 }
+async function refreshResultDialog(page, dialog, taskId) {
+  const [response] = await Promise.all([
+    page.waitForResponse(
+      (response) =>
+        response.request().method() === 'POST' &&
+        new URL(response.url()).pathname.endsWith('/admin/jobs/detail') &&
+        response.request().postDataJSON()?.id === taskId
+    ),
+    dialog.getByRole('button', { name: '刷新结果', exact: true }).click()
+  ]);
+  assert.equal(response.status(), 200, '刷新原任务结果失败');
+  const result = (await response.json()).data;
+  assert.equal(result.id, taskId, '刷新返回了其他任务');
+  await dialog.getByText('成功', { exact: true }).first().waitFor();
+}
 async function measure(page) {
   return page.evaluate(() => {
     const rect = (element) => {
@@ -401,6 +417,27 @@ async function fixture(context, state) {
   const writes = [];
   const rechecks = [];
   const configTargets = [];
+  const queuedTasks = [];
+  const detailRequests = [];
+  const completedTasks = new Map([[task.id, task]]);
+  function queueTask(operation, result, extra = {}) {
+    const id =
+      operation === 'recheck'
+        ? '33333333-3333-4333-8333-333333333333'
+        : `44444444-4444-4444-8444-${String(queuedTasks.length + 1).padStart(12, '0')}`;
+    const queued = {
+      ...task,
+      ...extra,
+      id,
+      operation,
+      status: 'queued',
+      progress: 0,
+      result: undefined
+    };
+    completedTasks.set(id, { ...queued, status: 'succeeded', progress: 100, result });
+    queuedTasks.push({ id, operation });
+    return queued;
+  }
   await context.routeWebSocket('**/*', (ws) => ws.close());
   await context.route('**/*', async (route) => {
     const req = route.request(),
@@ -485,7 +522,13 @@ async function fixture(context, state) {
         return ok({ maintenance: false, maxConcurrent: 1, active: 0, paymentRegion: 'PH' });
       if (method === 'verify') return ok({ valid: true, plan: 'plus', status: 'available' });
       if (method === 'redeem' || method === 'subscription')
-        return ok({ ...task, status: 'queued', progress: 0, taskToken: 'synthetic-capability' });
+        return ok({
+          ...task,
+          operation: method === 'subscription' ? 'subscription' : 'recharge',
+          status: 'queued',
+          progress: 0,
+          taskToken: 'synthetic-capability'
+        });
       if (method === 'query') return ok({ task, taskToken: 'synthetic-capability' });
       if (method === 'task') return ok(task);
       if (method === 'subscribe')
@@ -553,38 +596,36 @@ async function fixture(context, state) {
     writes.push(`${section}/${action}`);
     if (section === 'jobs' && action === 'recheck') {
       rechecks.push(req.postDataJSON());
-      return ok({
-        ...task,
-        id: '33333333-3333-4333-8333-333333333333',
-        status: 'queued',
-        progress: 0,
-        message: '合成原单核对排队',
-        result: undefined
-      });
+      return ok(queueTask('recheck', task.result, { message: '合成原单核对排队' }));
     }
     if (section === 'config' && action === 'test') {
       const body = req.postDataJSON();
       configTargets.push(body.target);
-      state.configTarget = body.target;
-      return ok({ ...task, status: 'queued', progress: 0, result: undefined });
+      return ok(
+        queueTask('config_test', {
+          ok: true,
+          ready: true,
+          model: 'fixture-model',
+          latency_ms: 35,
+          http_status: 200,
+          message: '合成检测已完成'
+        })
+      );
     }
     if (action === 'subscribe')
       return ok({ ticket: 'synthetic-ticket', wsPath: '/api/id-business-v2/online-recharge/ws' });
-    if (action === 'detail')
-      return ok({
-        ...task,
-        result: state.configTarget
-          ? {
-              ok: true,
-              ready: true,
-              model: 'fixture-model',
-              latency_ms: 35,
-              http_status: 200,
-              message: '合成检测已完成'
-            }
-          : task.result,
-        events: [{ message: '合成事件' }]
-      });
+    if (action === 'detail') {
+      const id = req.postDataJSON()?.id;
+      const completed = completedTasks.get(id);
+      if (!completed)
+        return route.fulfill({
+          status: 404,
+          contentType: 'application/json',
+          body: JSON.stringify({ success: false, message: '合成原任务不存在' })
+        });
+      detailRequests.push({ id, operation: completed.operation });
+      return ok({ ...completed, events: [{ message: '合成事件' }] });
+    }
     if (action === 'start') return ok({ ...task, status: 'queued' });
     if (action === 'reveal') return ok({ number: '4111111111111111' });
     if (['import', 'update', 'create'].includes(action)) {
@@ -599,7 +640,15 @@ async function fixture(context, state) {
     }
     return ok({ success: true, message: '合成操作完成' });
   });
-  return { unexpected, credentialHeaders, writes, configTargets, rechecks };
+  return {
+    unexpected,
+    credentialHeaders,
+    writes,
+    configTargets,
+    rechecks,
+    queuedTasks,
+    detailRequests
+  };
 }
 try {
   await wait(async () => (await fetch(origin).catch(() => null))?.ok);
@@ -640,7 +689,9 @@ try {
         if (process.argv.includes('--affected') && section === 'config') {
           await page.getByRole('button', { name: '检测视觉模型', exact: true }).click();
           const dialog = page.getByRole('dialog', { name: '操作结果', exact: true });
-          await dialog.getByRole('button', { name: '刷新结果', exact: true }).click();
+          const queued = network.queuedTasks.at(-1);
+          assert.equal(queued.operation, 'config_test');
+          await refreshResultDialog(page, dialog, queued.id);
           await dialog.getByText('合成检测已完成', { exact: true }).first().waitFor();
           assert.ok(await dialog.getByText(/耗时（毫秒）：35/).count(), '原检测耗时未显示');
           await dialog.getByRole('button', { name: '关闭', exact: true }).click();
@@ -862,8 +913,9 @@ try {
     await page.getByRole('button', { name: label, exact: true }).click();
     const resultDialog = page.getByRole('dialog', { name: '操作结果', exact: true });
     await resultDialog.getByText('等待执行', { exact: true }).first().waitFor();
-    await resultDialog.getByRole('button', { name: '刷新结果', exact: true }).click();
-    await resultDialog.getByText('成功', { exact: true }).first().waitFor();
+    const queued = network.queuedTasks.at(-1);
+    assert.equal(queued.operation, 'config_test');
+    await refreshResultDialog(page, resultDialog, queued.id);
     await resultDialog.getByRole('button', { name: '关闭', exact: true }).click();
     await resultDialog.waitFor({ state: 'hidden' });
   }
@@ -926,7 +978,6 @@ try {
     result: 'PASS'
   });
   state.awaitingReview = true;
-  state.configTarget = undefined;
   await navigate(page, '/v2/online-recharge/jobs');
   await page.getByRole('button', { name: '刷新', exact: true }).click();
   await page.locator('.el-table').getByText('待核对', { exact: true }).first().waitFor();
@@ -954,8 +1005,7 @@ try {
     0,
     '原单核对重建了充值任务'
   );
-  await recheckResult.getByRole('button', { name: '刷新结果', exact: true }).click();
-  await recheckResult.getByText('成功', { exact: true }).first().waitFor();
+  await refreshResultDialog(page, recheckResult, '33333333-3333-4333-8333-333333333333');
   await recheckResult.getByRole('button', { name: '关闭', exact: true }).click();
   report.lifecycle.push({
     case: 'awaiting-review-recheck-original-task-without-payment',

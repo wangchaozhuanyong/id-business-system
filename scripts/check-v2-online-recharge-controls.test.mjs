@@ -4,10 +4,114 @@ import { readFileSync } from 'node:fs';
 import { runInNewContext } from 'node:vm';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
+import ts from 'typescript';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
 const acceptanceSource = () =>
   readFileSync(new URL('./acceptance-v2-online-recharge-ui.mjs', import.meta.url), 'utf8');
+
+test('结果弹窗识别真实任务协议并按原编号刷新每类合成任务', async () => {
+  const source = acceptanceSource();
+  const component = readFileSync(
+    new URL(
+      '../apps/admin/src/v2/features/online-recharge/OnlineResultDialog.vue',
+      import.meta.url
+    ),
+    'utf8'
+  );
+  const predicateSource =
+    component.slice(
+      component.indexOf('function record('),
+      component.indexOf('const resultRecord =')
+    ) +
+    component.slice(
+      component.indexOf('const taskOperations ='),
+      component.indexOf('const entries =')
+    );
+  const predicate = runInNewContext(
+    ts.transpileModule(predicateSource, { compilerOptions: { target: ts.ScriptTarget.ES2022 } })
+      .outputText + '\nresultTask;'
+  );
+  const values = runInNewContext(
+    source.slice(source.indexOf('const date ='), source.indexOf('const report =')) +
+      '\n({administrator, task, rows, settings, date});'
+  );
+  const start = source.indexOf('async function fixture(context, state) {');
+  const end = source.indexOf('\ntry {\n  await wait(', start);
+  const origin = 'http://127.0.0.1:5409';
+  const fixture = runInNewContext(source.slice(start, end) + '\nfixture;', {
+    ...values,
+    URL,
+    origin,
+    setTimeout
+  });
+  let handler;
+  const network = await fixture(
+    {
+      routeWebSocket: async () => {},
+      route: async (_pattern, callback) => (handler = callback)
+    },
+    { actor: values.administrator }
+  );
+  async function request(endpoint, body) {
+    let response;
+    await handler({
+      request: () => ({
+        url: () => origin + '/api/id-business-v2/online-recharge/' + endpoint,
+        method: () => 'POST',
+        headers: () => ({ authorization: 'Bearer synthetic-access' }),
+        postDataJSON: () => body
+      }),
+      fulfill: async (value) => (response = JSON.parse(value.body))
+    });
+    return response;
+  }
+  assert.equal(predicate(values.task)?.operation, 'recharge');
+  const ids = new Set();
+  for (const target of [
+    'solver',
+    'vlm',
+    'captcha_platform',
+    'gpt_api',
+    'gpt_status',
+    'telegram',
+    'solver_logs'
+  ]) {
+    const queued = (await request('admin/config/test', { target })).data;
+    assert.equal(predicate(queued)?.operation, 'config_test');
+    assert.equal(queued.status, 'queued');
+    assert.ok(!ids.has(queued.id), '不同检测复用了同一任务');
+    ids.add(queued.id);
+    const completed = (await request('admin/jobs/detail', { id: queued.id })).data;
+    assert.equal(predicate(completed)?.operation, 'config_test');
+    assert.equal(completed.id, queued.id);
+    assert.equal(completed.status, 'succeeded');
+    assert.equal(completed.result.latency_ms, 35);
+  }
+  const recheck = (await request('admin/jobs/recheck', { id: values.task.id })).data;
+  assert.equal(predicate(recheck)?.operation, 'recheck');
+  const refreshed = (await request('admin/jobs/detail', { id: recheck.id })).data;
+  assert.equal(refreshed.id, recheck.id);
+  assert.equal(refreshed.operation, 'recheck');
+  assert.equal(refreshed.status, 'succeeded');
+  assert.equal(
+    (await request('admin/jobs/detail', { id: values.task.id })).data.operation,
+    'recharge'
+  );
+  assert.equal((await request('admin/jobs/detail', { id: 'missing-original' })).success, false);
+  assert.deepEqual(JSON.parse(JSON.stringify(network.rechecks)), [{ id: values.task.id }]);
+  assert.equal(network.writes.filter((item) => item === 'jobs/start').length, 0);
+  assert.equal(
+    predicate({ id: values.task.id, operation: 'uncontrolled', status: 'queued' }),
+    undefined
+  );
+  assert.equal(
+    predicate({ id: values.task.id, operation: 'recharge', status: 'uncontrolled' }),
+    undefined
+  );
+  assert.equal((source.match(/dialog\.getByRole\('button', \{ name: '刷新结果'/g) ?? []).length, 1);
+  assert.equal((source.match(/await refreshResultDialog\(/g) ?? []).length, 3);
+});
 
 test('合成验收诊断能定位资源和运行时错误且不读取凭据', async () => {
   const source = acceptanceSource();
