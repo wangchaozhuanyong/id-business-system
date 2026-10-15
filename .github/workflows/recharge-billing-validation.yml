@@ -64,7 +64,7 @@ jobs:
           V2_RECHARGE_TEST_DATABASE_URL: ${{ env.DATABASE_URL }}
         run: |
           npm run test --workspace @apple-business/api -- src/id-business-v2/auto-recharge/recharge-billing.mysql.integration.spec.ts
-          npm run test --workspace @apple-business/api -- src/id-business-v2/auto-recharge/recharge-billing.mysql.integration.spec.ts
+          npm run test --workspace @apple-business/api -- src/id-business-v2/auto-recharge/recharge-availability.mysql.integration.spec.ts
           npm run test --workspace @apple-business/api -- src/id-business-v2/auto-recharge/recharge-callback-receipts.mysql.integration.spec.ts src/id-business-v2/auto-recharge/recharge-employee-concurrency.mysql.integration.spec.ts src/id-business-v2/auto-recharge/recharge-subscription-cycle.mysql.integration.spec.ts
       - name: Verify published provenance and build finite API and Admin artifacts
         env:

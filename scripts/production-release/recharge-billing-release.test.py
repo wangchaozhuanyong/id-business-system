@@ -93,6 +93,8 @@ class BillingReleaseTests(unittest.TestCase):
         self.assertIn('group: id-business-v2-production-release', workflow)
         self.assertIn('cancel-in-progress: false', workflow)
         self.assertIn('recharge-billing.mysql.integration.spec.ts', workflow)
+        self.assertEqual(workflow.count('recharge-billing.mysql.integration.spec.ts'), 1)
+        self.assertIn('recharge-availability.mysql.integration.spec.ts', workflow)
         self.assertIn('recharge-callback-receipts.mysql.integration.spec.ts', workflow)
         self.assertIn('working-directory: .deploy/recharge-billing-release/candidate', workflow)
         self.assertNotIn("database_evidence.outputs.reuse", workflow)
