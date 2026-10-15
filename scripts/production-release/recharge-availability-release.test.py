@@ -46,6 +46,39 @@ class AvailabilityPublicationTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError,'PUBLISHED_ADMIN_DIGEST_CHANGED'):verify(bytes_value=raw+b'changed')
         with self.assertRaisesRegex(RuntimeError,'PUBLISHED_ADMIN_CONTENT_CHANGED'):verify(contract_value={**contract,'publicFiles':{'index.html':'0'*64}})
 
+        # Preserve the exact already-published Admin artifact when its native
+        # run failed only a separately recorded pricing test after that build.
+        recorded = {**binding, 'runConclusion': 'failure', 'validationConclusion': 'failure',
+                    'failedValidationSteps': ['Verify exact pricing tier selection']}
+        published_run = {**run, 'conclusion': 'failure'}
+        published_jobs = copy.deepcopy(jobs)
+        published_jobs['jobs'][0]['conclusion'] = 'failure'
+        published_jobs['jobs'][0]['steps'].append({'name': 'Verify exact pricing tier selection', 'conclusion': 'failure'})
+        published_contract = {**contract, 'publishedAdminNative': recorded}
+        self.assertEqual(verify(published_run, published_jobs, contract_value=published_contract)[0], raw)
+        published_jobs['jobs'][0]['steps'][0]['conclusion'] = 'failure'
+        with self.assertRaisesRegex(RuntimeError, 'PUBLISHED_ADMIN_BUILD_NOT_SUCCESSFUL'):
+            verify(published_run, published_jobs, contract_value=published_contract)
+
+    def test_new_release_override_never_writes_through_shared_configuration_symlink(self):
+        temporary = build.ROOT / '.runtime/recharge-payment-availability-20261015'
+        temporary.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=temporary) as directory:
+            root = Path(directory)
+            shared = root / 'shared-compose.json'
+            original = b'{"services":{"api":{"image":"existing"}}}\n'
+            shared.write_bytes(original)
+            target = root / 'release'
+            target.mkdir()
+            link = target / 'compose.release.json'
+            link.symlink_to(shared)
+            value = {'services': {'api': {'image': 'approved-candidate'}}}
+            release.write_release_override(link, value)
+            self.assertFalse(link.is_symlink())
+            self.assertEqual(json.loads(link.read_bytes()), value)
+            self.assertEqual(shared.read_bytes(), original)
+            self.assertEqual(link.stat().st_mode & 0o777, 0o600)
+
     def test_published_baseline_bytes_can_be_merged_but_other_application_drift_cannot(self):
         name='apps/api/src/id-business-v2/auto-recharge/recharge-availability.ts'
         extra='apps/api/src/id-business-v2/online-recharge/already-published.ts'
@@ -97,7 +130,7 @@ class AvailabilityPublicationTests(unittest.TestCase):
     def test_contract_only_replaces_reviewed_recharge_modules_and_no_schema(self):
         contract = json.loads((HERE / 'recharge-availability-contract.json').read_bytes())
         self.assertEqual(contract['scope'], 'RECHARGE_PAYMENT_AVAILABILITY_ONLY')
-        self.assertEqual(contract['expectedCurrent'], '20a8a9afede46a1c8e1c6d0163e315e96c4d57c7')
+        self.assertEqual(contract['expectedCurrent'], '04aa234505adccfe295776245b88fc56feac0588')
         for name in contract['sources']:
             self.assertTrue(name.startswith(('apps/admin/src/v2/features/auto-recharge/',
                 'apps/api/src/id-business-v2/auto-recharge/', 'packages/shared/src/v2/auto-recharge.ts', 'docs/')))

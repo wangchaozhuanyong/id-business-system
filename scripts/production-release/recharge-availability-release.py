@@ -4,9 +4,11 @@ import fcntl
 import hashlib
 import importlib.util
 import json
+import os
 from pathlib import Path
 import re
 import shutil
+import tempfile
 import urllib.request
 
 BASE = Path('/opt/id-business-v2')
@@ -20,6 +22,16 @@ def need(value, code):
 
 def digest(raw):
     return hashlib.sha256(raw).hexdigest()
+
+
+def write_release_override(path, value):
+    # The predecessor may point at shared maintenance configuration.
+    # Replace the new release's entry without writing through its symlink.
+    with tempfile.NamedTemporaryFile(dir=path.parent, prefix='.availability-compose-', delete=False) as output:
+        temporary = Path(output.name)
+        output.write((json.dumps(value, sort_keys=True, indent=2) + '\n').encode())
+    temporary.chmod(0o600)
+    os.replace(temporary, path)
 
 
 def normalize_image_context(directory):
@@ -199,8 +211,7 @@ def release(plan, contract, d, h):
         override = json.loads((target / 'compose.release.json').read_bytes())
         for role in images:
             override['services'][role]['image'] = images[role]['reference']
-        (target / 'compose.release.json').write_text(json.dumps(override, sort_keys=True, indent=2) + '\n')
-        (target / 'compose.release.json').chmod(0o600)
+        write_release_override(target / 'compose.release.json', override)
         need(baseline(d, contract, h)[1:] == (raw_manifest, before), 'BASELINE_MOVED')
         state_path = stage / 'switch-state.json'
         state_path.write_text(json.dumps({'status': 'SWITCH_STARTED', 'target': str(target), 'previous': str(previous)}) + '\n')
