@@ -699,6 +699,20 @@ describe('recharge stage presentation', () => {
     expect(executionStageLabel(old)).toBe('恢复或保存执行记录未完成');
     expect(rechargeIssueFeedback(old)?.title).toBe('执行记录缺少诊断信息');
   });
+  it.each([
+    [
+      'browser_control_connect',
+      'bitbrowser_existing_window_control_unavailable',
+      '比特窗口控制连接未完成'
+    ],
+    [
+      'official_page_readiness',
+      'official_login_page_not_ready',
+      '官网账号已核实，页面就绪检查未完成'
+    ]
+  ])('窗口控制和页面识别失败显示不同步骤：%s', (stage, reason, label) => {
+    expect(executionStageLabel(job({ state: 'finished', result: { stage, reason } }))).toBe(label);
+  });
   it('原资料恢复409显示受控业务原因、操作、回传状态与请求编号，不把本次零请求指向清锁', () => {
     const failure = job({
       action: 'bitbrowser',

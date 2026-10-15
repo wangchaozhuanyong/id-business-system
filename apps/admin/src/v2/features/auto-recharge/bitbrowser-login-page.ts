@@ -271,7 +271,9 @@ export function inspectLoggedInPage() {
   };
   const controls = Array.from(
     document.querySelectorAll<HTMLElement>(
-      '[data-testid="accounts-profile-button"][aria-haspopup="menu"]'
+      '[data-testid="accounts-profile-button"][aria-haspopup="menu"], ' +
+        'button[aria-label="打开个人资料菜单"][aria-haspopup="menu"], ' +
+        'button[aria-label="Open profile menu"][aria-haspopup="menu"]'
     )
   ).filter(
     (node) =>
@@ -281,7 +283,9 @@ export function inspectLoggedInPage() {
   );
   const composers = Array.from(
     document.querySelectorAll<HTMLElement>(
-      '#prompt-textarea, textarea[data-testid="prompt-textarea"]'
+      '#prompt-textarea, textarea[data-testid="prompt-textarea"], ' +
+        'div[role="textbox"][contenteditable="true"][aria-label="询问 ChatGPT"], ' +
+        'div[role="textbox"][contenteditable="true"][aria-label="Ask ChatGPT"]'
     )
   );
   const ready =

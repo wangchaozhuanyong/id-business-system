@@ -24,15 +24,35 @@ spec.loader.exec_module(ci)
 class SourceTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.files, cls.record = ci.source_projection()
+        # This consumer admits one sealed historical application, not whichever
+        # application happens to be HEAD when its control tests run later.
+        cls.fixture_commit = ci.c.APPLICATION_SOURCE
+        cls.fixture_tree = ci.c.APPLICATION_TREE
+        cls.head_git = ci.git
+        with patch.object(ci, 'git', side_effect=cls.historical_git):
+            cls.files, cls.record = ci.source_projection()
+
+    @classmethod
+    def historical_git(cls, *args):
+        if args == ('rev-parse', 'HEAD'):
+            return (cls.fixture_commit + '\n').encode()
+        if args == ('rev-parse', 'HEAD^{tree}'):
+            return (cls.fixture_tree + '\n').encode()
+        # File bytes, modes, ordinary producer, base and ONLINE inputs still
+        # come from the real immutable Git objects and the real validators.
+        return cls.head_git(*args)
 
     def test_real_four_git_objects_match_frozen_application_online_and_admin(self):
         self.assertFalse(self.record['releaseAuthority'])
+        self.assertEqual(self.record['candidateCommit'], self.fixture_commit)
+        self.assertEqual(self.record['candidateTree'], self.fixture_tree)
+        self.assertEqual(ci.git('rev-parse', self.fixture_commit + '^{tree}').decode().strip(),
+                         self.fixture_tree)
         self.assertEqual(self.record['applicationInputSha256'], ci.c.APPLICATION_SHA256)
         self.assertEqual(self.record['onlineInputSha256'], ci.c.ONLINE_SHA256)
         self.assertEqual(self.record['ordinaryProducer'], ci.c.sealed_authority()['producer'])
         for name in ci.c.ADMIN_OVERLAY_FILES:
-            self.assertEqual(self.files[name][0], ci.git('show', 'HEAD:' + name))
+            self.assertEqual(self.files[name][0], ci.git('show', self.fixture_commit + ':' + name))
 
     def test_dirty_working_files_are_not_source_inputs(self):
         with patch.object(Path, 'read_bytes', side_effect=AssertionError('working file read')):
@@ -52,6 +72,15 @@ class SourceTests(unittest.TestCase):
         changed[name] = (changed[name][0] + b'\nchanged', changed[name][1])
         with self.assertRaisesRegex(RuntimeError, 'APPLICATION_SOURCE_CHANGED'):
             ci.c.validate_source_files(changed)
+
+    def test_later_admin_candidate_is_rejected_by_historical_consumer(self):
+        # This ancestor candidate reproduced the failure in run 38724007645.
+        # Pinning it also avoids depending on a removable side branch's object.
+        later_commit = 'f979c38c59c0f08d326b746ce14cba543f602b0c'
+        later = ci.git_files(later_commit)
+        self.assertNotEqual(later, self.files)
+        with self.assertRaisesRegex(RuntimeError, 'APPLICATION_SOURCE_CHANGED'):
+            ci.c.validate_source_files(later)
 
     def test_ci_record_is_rejected_by_formal_build_validator(self):
         runtime = ci.load('online-recharge-component-runtime.py')

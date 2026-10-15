@@ -1,9 +1,8 @@
 <template>
-  <main class="online-public v2-page-layout">
-    <header>
-      <h1>线上代充</h1>
-      <RouterLink to="/online-recharge/subscription">查询订阅与账单</RouterLink>
-    </header>
+  <section v-if="canRead" class="v2-page-layout online-page">
+    <V2PageContext
+      description="使用兑换码和账号会话资料提交内部充值任务，目标套餐由兑换码决定，自动核对首次开通或升级。"
+    />
     <V2AsyncRegion
       :phase="config.phase.value"
       :error="config.error.value ? onlineError(config.error.value) : ''"
@@ -11,11 +10,11 @@
       loading-title="正在读取兑换服务"
       @retry="config.refresh"
       ><section class="online-panel">
-        <V2SectionHeading title="兑换充值" />
+        <V2SectionHeading title="兑换资料" />
         <p v-if="config.data.value?.maintenanceMode || config.data.value?.available === false">
           当前暂停接收新任务，仍可查询已有兑换结果。
         </p>
-        <p v-else>先验证兑换码，再提交完整会话资料。兑换套餐由兑换码决定。</p>
+        <p v-else>先验证兑换码，再提交完整会话资料。同档、降档或当前套餐不明时停止执行。</p>
         <p>
           当前任务 {{ config.data.value?.activeJobs ?? 0 }}／{{
             config.data.value?.capacity ?? 0
@@ -29,6 +28,7 @@
           ><el-form-item label="兑换码" required
             ><el-input
               v-model="code"
+              :disabled="Boolean(busy)"
               autocomplete="off"
               placeholder="输入兑换码"
               @update:model-value="verified = undefined" /></el-form-item
@@ -36,6 +36,7 @@
             ><div class="online-field">
               <el-input
                 v-model="session"
+                :disabled="Boolean(busy)"
                 type="textarea"
                 :rows="8"
                 autocomplete="off"
@@ -44,7 +45,7 @@
                 >会话资料仅用于对应兑换任务；刷新页面后清除，请勿提交密码或银行卡信息。</small
               >
             </div></el-form-item
-          ><el-form-item label="充值套餐"
+          ><el-form-item label="目标套餐"
             ><span>{{
               verified ? onlineLabel(verified.plan) : '验证兑换码后显示'
             }}</span></el-form-item
@@ -60,6 +61,7 @@
                 variant="primary"
                 :loading="busy === 'redeem'"
                 :disabled="
+                  !canManage ||
                   Boolean(busy) ||
                   config.data.value?.maintenanceMode ||
                   config.data.value?.available === false
@@ -86,12 +88,14 @@
       :error="tracker.error.value"
       @refresh="tracker.refresh"
     />
-  </main>
+  </section>
 </template>
 <script setup lang="ts">
-import { onBeforeUnmount, ref } from 'vue';
+import { computed, onBeforeUnmount, ref } from 'vue';
 import { sessionCoordinator } from '@/auth/sessionCoordinator';
+import { useAuthStore } from '@/stores/auth';
 import AppButton from '@/components/ui/AppButton.vue';
+import V2PageContext from '@/v2/components/V2PageContext.vue';
 import V2AsyncRegion from '@/v2/components/V2AsyncRegion.vue';
 import V2SectionHeading from '@/v2/components/V2SectionHeading.vue';
 import { useV2SessionDraft } from '@/v2/composables/useV2SessionDraft';
@@ -101,17 +105,19 @@ import { onlineError, onlineLabel } from './labels';
 import type { PublicTask } from './contracts';
 import { useOnlineTask } from './useOnlineTask';
 import OnlineTaskProgress from './OnlineTaskProgress.vue';
-import '@/v2/styles/base.css';
-import '@/v2/styles/layout.css';
+import { canUseOnlineAction } from './permissions';
 import './online-recharge.css';
-const code = useV2SessionDraft('online-recharge/public/code', () => ref(''));
+const authStore = useAuthStore();
+const canRead = computed(() => canUseOnlineAction(authStore.user, 'jobs', 'detail'));
+const canManage = computed(() => canUseOnlineAction(authStore.user, 'jobs', 'start'));
+const code = useV2SessionDraft('online-recharge/redeem/code', () => ref(''));
 const session = ref('');
 const busy = ref('');
 const message = ref('');
 const failure = ref(false);
 const verified = ref<{ plan: string; status: string }>();
-const task = useV2SessionDraft('online-recharge/public/task', () => ref<PublicTask>());
-const token = useV2SessionDraft('online-recharge/public/task-token', () => ref(''));
+const task = useV2SessionDraft('online-recharge/redeem/task', () => ref<PublicTask>());
+const token = useV2SessionDraft('online-recharge/redeem/task-token', () => ref(''));
 const tracker = useOnlineTask(task, token);
 let active = true;
 let requestRevision = 0;
@@ -131,8 +137,9 @@ onBeforeUnmount(() => {
   stopIdentityWatch();
 });
 const config = useV2ModuleQuery({
-  moduleKey: 'online-recharge-overview',
+  moduleKey: 'online-recharge-redeem',
   scope: 'online-recharge',
+  enabled: () => canRead.value,
   key: 'public-config',
   query: ({ signal }) => onlineApi.publicConfig(signal),
   keepPreviousData: true
@@ -179,6 +186,7 @@ function recover() {
 function redeem() {
   return perform('redeem', async () => {
     const revision = requestRevision;
+    if (!canManage.value) throw new Error('没有提交充值的权限');
     if (!verified.value) throw new Error('请先验证兑换码');
     let parsed: Record<string, unknown>;
     try {

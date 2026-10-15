@@ -146,7 +146,7 @@
         >
       </p>
       <p v-if="job.result.session_refresh_count" class="recharge-note" role="status">
-        当前窗口加载失败后已自动刷新
+        当前窗口已自动刷新
         {{ job.result.session_refresh_count }} 次；{{
           job.action === 'server'
             ? '恢复期间沿用原窗口和代理，仍失败时停止本次任务。'

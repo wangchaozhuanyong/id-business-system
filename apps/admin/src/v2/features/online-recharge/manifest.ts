@@ -1,4 +1,5 @@
 import { onlineRechargeJobsFeature } from './jobs-manifest';
+import { onlineRechargeRedeemFeature } from './redeem-manifest';
 import { onlineRechargeAutomationFeature } from './automation-manifest';
 import { onlineRechargeRuntimeLogsFeature } from './runtime-logs-manifest';
 import { onlineRechargeBillingFeature } from './billing-manifest';
@@ -30,6 +31,7 @@ export const onlineRechargeOverviewFeature = defineV2Feature({
 });
 export const onlineRechargeFeatures = [
   onlineRechargeOverviewFeature,
+  onlineRechargeRedeemFeature,
   onlineRechargeJobsFeature,
   onlineRechargeAutomationFeature,
   onlineRechargeRuntimeLogsFeature,

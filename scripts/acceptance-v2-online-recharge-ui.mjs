@@ -1,62 +1,42 @@
 /* global document, window, getComputedStyle */
 // 完全合成夹具；禁止连接真实服务、账号、供应商或支付页面。
 import assert from 'node:assert/strict';
-import {
-  appendFileSync,
-  existsSync,
-  mkdirSync,
-  mkdtempSync,
-  readdirSync,
-  writeFileSync
-} from 'node:fs';
+import { spawn } from 'node:child_process';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { resolve } from 'node:path';
 import { chromium } from 'playwright';
-import { createLogger, createServer } from 'vite';
 const root = fileURLToPath(new URL('..', import.meta.url));
 const evidence = resolve(root, '.runtime/online-recharge/ui');
 mkdirSync(evidence, { recursive: true });
 const origin = 'http://127.0.0.1:5409';
-Object.assign(process.env, {
-  VITE_API_BASE_URL: '/api',
-  VITE_V2_REALTIME_CHANGES_ENABLED: 'false'
-});
-const logger = createLogger('silent');
-for (const level of ['info', 'warn', 'warnOnce', 'error']) {
-  logger[level] = (message) =>
-    appendFileSync(resolve(evidence, 'vite.log'), `[${level}] ${message}\n`);
-}
-const elementComponents = resolve(
-  fileURLToPath(new URL('.', import.meta.resolve('element-plus/package.json'))),
-  'es/components'
+const legacyRoutes = {
+  '/online-recharge': '/v2/online-recharge/redeem',
+  '/online-recharge/subscription': '/v2/online-recharge/renewal'
+};
+const builtIndex = resolve(root, 'apps/admin/dist/index.html');
+assert.ok(existsSync(builtIndex), '正式管理端产物不存在，请先完成 Admin 构建');
+const builtHtml = readFileSync(builtIndex, 'utf8');
+const buildId = /<meta name="v2-build-id" content="([\w.-]+)"/.exec(builtHtml)?.[1];
+assert.ok(buildId && builtHtml.includes('/assets/'), '正式管理端入口缺少版本或静态资源');
+const server = spawn(
+  process.execPath,
+  [
+    resolve(root, 'node_modules/vite/bin/vite.js'),
+    'preview',
+    '--host',
+    '127.0.0.1',
+    '--port',
+    '5409',
+    '--strictPort'
+  ],
+  { cwd: resolve(root, 'apps/admin'), stdio: 'ignore' }
 );
-const styles = readdirSync(elementComponents)
-  .filter((name) => existsSync(resolve(elementComponents, name, 'style/css.mjs')))
-  .map((name) => `element-plus/es/components/${name}/style/css`);
-const server = await createServer({
-  root: resolve(root, 'apps/admin'),
-  configFile: resolve(root, 'apps/admin/vite.config.ts'),
-  cacheDir: mkdtempSync(resolve(evidence, 'vite-cache-')),
-  customLogger: logger,
-  optimizeDeps: {
-    entries: ['*.html'],
-    include: ['element-plus/es', ...styles],
-    holdUntilCrawlEnd: false
-  },
-  server: { host: '127.0.0.1', port: 5409, strictPort: true }
-});
-await server.listen();
-const optimizer = server.environments.client.depsOptimizer;
-assert.ok(optimizer, '验收必须启用依赖预优化');
-await optimizer.scanProcessing;
-await Promise.all(
-  Object.values(optimizer.metadata.discovered).map((dependency) => dependency.processing)
-);
-assert.ok(Object.keys(optimizer.metadata.optimized).length > 0, '浏览器启动前完成依赖预优化');
 const sections = process.argv.includes('--affected')
   ? ['config', 'addresses', 'cdks']
   : [
       'overview',
+      'redeem',
       'jobs',
       'automation',
       'runtime-logs',
@@ -127,6 +107,7 @@ const settings = {
 const common = { id: taskId, createdAt: date, updatedAt: date, status: 'active' };
 const task = {
   ...common,
+  operation: 'recharge',
   status: 'succeeded',
   plan: 'plus',
   provider: 'local',
@@ -225,6 +206,8 @@ const rows = {
 };
 const report = {
   scope: 'OFFLINE_SYNTHETIC_ONLY',
+  builtPreview: true,
+  buildId,
   realPayment: 'NOT_MEASURED',
   realSession: 'NOT_USED',
   externalRequests: 'BLOCKED',
@@ -232,6 +215,101 @@ const report = {
   lifecycle: []
 };
 let browser, lastPage;
+const diagnostic = {
+  stage: 'startup',
+  pageErrors: [],
+  consoleErrors: [],
+  requests: [],
+  responses: [],
+  requestFailures: []
+};
+function safeDiagnosticText(value) {
+  const text = String(value ?? '');
+  if (
+    /synthetic-|Bearer\s|(?:token|session|password|cookie|authorization|secret|api[_-]?key)["']?\s*[:=]|eyJ[\w-]+\./i.test(
+      text
+    )
+  )
+    return '[敏感异常内容已过滤]';
+  return text.replace(/https?:\/\/[^\s)"']+/g, (url) => safeDiagnosticPath(url)).slice(0, 320);
+}
+function safeDiagnosticPath(value) {
+  try {
+    return new URL(value, origin).pathname
+      .replace(/synthetic-[\w.-]+/gi, '[合成输入已过滤]')
+      .replace(/[\w-]{32,}/g, '[标识已过滤]')
+      .slice(0, 180);
+  } catch {
+    return '[路径无法确认]';
+  }
+}
+function rememberDiagnostic(kind, value) {
+  diagnostic[kind].push(value);
+  if (diagnostic[kind].length > 60) diagnostic[kind].shift();
+}
+function observePage(page) {
+  page.on('pageerror', (error) =>
+    rememberDiagnostic('pageErrors', {
+      name: safeDiagnosticText(error.name),
+      message: safeDiagnosticText(error.message)
+    })
+  );
+  page.on('console', (message) => {
+    if (message.type() === 'error' || message.type() === 'warning')
+      rememberDiagnostic('consoleErrors', safeDiagnosticText(message.text()));
+  });
+  page.on('request', (request) =>
+    rememberDiagnostic('requests', {
+      method: request.method(),
+      path: safeDiagnosticPath(request.url()),
+      type: request.resourceType()
+    })
+  );
+  page.on('response', (response) =>
+    rememberDiagnostic('responses', {
+      path: safeDiagnosticPath(response.url()),
+      status: response.status()
+    })
+  );
+  page.on('requestfailed', (request) =>
+    rememberDiagnostic('requestFailures', {
+      path: safeDiagnosticPath(request.url()),
+      reason: safeDiagnosticText(request.failure()?.errorText)
+    })
+  );
+}
+async function failureDiagnostic(page, error) {
+  const screen =
+    page && !page.isClosed()
+      ? await page
+          .evaluate(() =>
+            Array.from(
+              document.querySelectorAll(
+                '.v2-boot__status,.v2-boot h1,.v2-boot-gate__copy strong,.v2-boot-gate__copy p,.v2-route-error h2,.v2-route-error p,.app-route-error strong,.app-route-error p'
+              )
+            )
+              .filter((node) => node.getClientRects().length)
+              .map((node) => node.textContent?.slice(0, 160) ?? '')
+              .slice(0, 8)
+          )
+          .catch(() => [])
+      : [];
+  return {
+    ...diagnostic,
+    path: page ? safeDiagnosticPath(page.url()) : '[尚未创建页面]',
+    message: safeDiagnosticText(error.message),
+    screen: screen.map(safeDiagnosticText),
+    frames: String(error.stack ?? '')
+      .split('\n')
+      .filter((line) => /^\s+at /.test(line))
+      .slice(0, 8)
+      .map(safeDiagnosticText)
+  };
+}
+function diagnosticException(failure) {
+  // Only sanitized diagnostics may cross the process boundary; do not attach raw causes.
+  return new Error(`合成验收失败（${failure.stage}）：${failure.message}`);
+}
 const wait = async (check) => {
   const until = Date.now() + 25000;
   while (Date.now() < until) {
@@ -241,10 +319,11 @@ const wait = async (check) => {
   throw new Error('本地预览未就绪');
 };
 const navigate = async (page, path) => {
+  diagnostic.stage = 'navigate:' + safeDiagnosticPath(path);
   await page.evaluate((target) => {
     void document.querySelector('#app').__vue_app__.config.globalProperties.$router.push(target);
   }, path);
-  await page.waitForURL(origin + path);
+  await page.waitForURL(origin + (legacyRoutes[path] ?? path));
   await page.locator('.online-page,.online-public').first().waitFor();
   await page
     .locator('.v2-async-region[data-v2-query-phase="ready"]')
@@ -252,6 +331,32 @@ const navigate = async (page, path) => {
     .waitFor({ timeout: 15000 })
     .catch(() => undefined);
 };
+async function switchFixtureIdentity(page, clear = true) {
+  await page.evaluate(async (clear) => {
+    const auth = document
+      .querySelector('#app')
+      .__vue_app__.config.globalProperties.$pinia._s.get('auth');
+    if (typeof auth?.clearLocalSession !== 'function' || typeof auth?.login !== 'function')
+      throw new Error('正式管理端认证动作未就绪');
+    if (clear) auth.clearLocalSession();
+    await auth.login('fixture', 'synthetic');
+  }, clear);
+}
+async function refreshResultDialog(page, dialog, taskId) {
+  const [response] = await Promise.all([
+    page.waitForResponse(
+      (response) =>
+        response.request().method() === 'POST' &&
+        new URL(response.url()).pathname.endsWith('/admin/jobs/detail') &&
+        response.request().postDataJSON()?.id === taskId
+    ),
+    dialog.getByRole('button', { name: '刷新结果', exact: true }).click()
+  ]);
+  assert.equal(response.status(), 200, '刷新原任务结果失败');
+  const result = (await response.json()).data;
+  assert.equal(result.id, taskId, '刷新返回了其他任务');
+  await dialog.getByText('成功', { exact: true }).first().waitFor();
+}
 async function measure(page) {
   return page.evaluate(() => {
     const rect = (element) => {
@@ -308,10 +413,31 @@ async function measure(page) {
 }
 async function fixture(context, state) {
   const unexpected = [];
-  const publicHeaders = [];
+  const credentialHeaders = [];
   const writes = [];
   const rechecks = [];
   const configTargets = [];
+  const queuedTasks = [];
+  const detailRequests = [];
+  const completedTasks = new Map([[task.id, task]]);
+  function queueTask(operation, result, extra = {}) {
+    const id =
+      operation === 'recheck'
+        ? '33333333-3333-4333-8333-333333333333'
+        : `44444444-4444-4444-8444-${String(queuedTasks.length + 1).padStart(12, '0')}`;
+    const queued = {
+      ...task,
+      ...extra,
+      id,
+      operation,
+      status: 'queued',
+      progress: 0,
+      result: undefined
+    };
+    completedTasks.set(id, { ...queued, status: 'succeeded', progress: 100, result });
+    queuedTasks.push({ id, operation });
+    return queued;
+  }
   await context.routeWebSocket('**/*', (ws) => ws.close());
   await context.route('**/*', async (route) => {
     const req = route.request(),
@@ -328,6 +454,8 @@ async function fixture(context, state) {
       return route.abort();
     }
     if (path === '/api/auth/me') return ok(state.actor);
+    if (path === '/api/auth/session')
+      return ok({ accessToken: 'synthetic-access', user: state.actor });
     if (path === '/api/auth/login')
       return ok({ accessToken: 'synthetic-access', user: state.actor });
     if (path === '/api/auth/logout') return ok({});
@@ -382,13 +510,25 @@ async function fixture(context, state) {
     const base = '/api/id-business-v2/online-recharge/';
     const endpoint = path.slice(base.length);
     if (endpoint.startsWith('public/')) {
-      publicHeaders.push(req.headers().authorization ?? null);
+      credentialHeaders.push(req.headers().authorization ?? null);
+      if (req.headers().authorization !== 'Bearer synthetic-access')
+        return route.fulfill({
+          status: 401,
+          contentType: 'application/json',
+          body: JSON.stringify({ success: false, message: '合成后台身份缺失' })
+        });
       const method = endpoint.split('/')[1];
       if (method === 'config')
         return ok({ maintenance: false, maxConcurrent: 1, active: 0, paymentRegion: 'PH' });
       if (method === 'verify') return ok({ valid: true, plan: 'plus', status: 'available' });
       if (method === 'redeem' || method === 'subscription')
-        return ok({ ...task, status: 'queued', progress: 0, taskToken: 'synthetic-capability' });
+        return ok({
+          ...task,
+          operation: method === 'subscription' ? 'subscription' : 'recharge',
+          status: 'queued',
+          progress: 0,
+          taskToken: 'synthetic-capability'
+        });
       if (method === 'query') return ok({ task, taskToken: 'synthetic-capability' });
       if (method === 'task') return ok(task);
       if (method === 'subscribe')
@@ -456,38 +596,36 @@ async function fixture(context, state) {
     writes.push(`${section}/${action}`);
     if (section === 'jobs' && action === 'recheck') {
       rechecks.push(req.postDataJSON());
-      return ok({
-        ...task,
-        id: '33333333-3333-4333-8333-333333333333',
-        status: 'queued',
-        progress: 0,
-        message: '合成原单核对排队',
-        result: undefined
-      });
+      return ok(queueTask('recheck', task.result, { message: '合成原单核对排队' }));
     }
     if (section === 'config' && action === 'test') {
       const body = req.postDataJSON();
       configTargets.push(body.target);
-      state.configTarget = body.target;
-      return ok({ ...task, status: 'queued', progress: 0, result: undefined });
+      return ok(
+        queueTask('config_test', {
+          ok: true,
+          ready: true,
+          model: 'fixture-model',
+          latency_ms: 35,
+          http_status: 200,
+          message: '合成检测已完成'
+        })
+      );
     }
     if (action === 'subscribe')
       return ok({ ticket: 'synthetic-ticket', wsPath: '/api/id-business-v2/online-recharge/ws' });
-    if (action === 'detail')
-      return ok({
-        ...task,
-        result: state.configTarget
-          ? {
-              ok: true,
-              ready: true,
-              model: 'fixture-model',
-              latency_ms: 35,
-              http_status: 200,
-              message: '合成检测已完成'
-            }
-          : task.result,
-        events: [{ message: '合成事件' }]
-      });
+    if (action === 'detail') {
+      const id = req.postDataJSON()?.id;
+      const completed = completedTasks.get(id);
+      if (!completed)
+        return route.fulfill({
+          status: 404,
+          contentType: 'application/json',
+          body: JSON.stringify({ success: false, message: '合成原任务不存在' })
+        });
+      detailRequests.push({ id, operation: completed.operation });
+      return ok({ ...completed, events: [{ message: '合成事件' }] });
+    }
     if (action === 'start') return ok({ ...task, status: 'queued' });
     if (action === 'reveal') return ok({ number: '4111111111111111' });
     if (['import', 'update', 'create'].includes(action)) {
@@ -502,7 +640,15 @@ async function fixture(context, state) {
     }
     return ok({ success: true, message: '合成操作完成' });
   });
-  return { unexpected, publicHeaders, writes, configTargets, rechecks };
+  return {
+    unexpected,
+    credentialHeaders,
+    writes,
+    configTargets,
+    rechecks,
+    queuedTasks,
+    detailRequests
+  };
 }
 try {
   await wait(async () => (await fetch(origin).catch(() => null))?.ok);
@@ -520,6 +666,7 @@ try {
       );
       const page = await context.newPage();
       lastPage = page;
+      observePage(page);
       const state = {
         actor: administrator,
         empty: false,
@@ -529,15 +676,22 @@ try {
       };
       const network = await fixture(context, state);
       const errors = [];
-      page.on('pageerror', (error) => errors.push(error.message));
+      page.on('pageerror', (error) => errors.push(safeDiagnosticText(error.message)));
       for (const section of sections) {
+        diagnostic.stage = `${theme}/${width}/${section}`;
         await page.goto(`${origin}/v2/online-recharge/${section}`);
-        await page.locator('.online-page').waitFor();
+        try {
+          await page.locator('.online-page').waitFor();
+        } catch {
+          throw new Error(`合成页面未显示：${section}；实际路由：${new URL(page.url()).pathname}`);
+        }
         await page.locator('.v2-async-region[data-v2-query-phase="ready"]').first().waitFor();
         if (process.argv.includes('--affected') && section === 'config') {
           await page.getByRole('button', { name: '检测视觉模型', exact: true }).click();
           const dialog = page.getByRole('dialog', { name: '操作结果', exact: true });
-          await dialog.getByRole('button', { name: '刷新结果', exact: true }).click();
+          const queued = network.queuedTasks.at(-1);
+          assert.equal(queued.operation, 'config_test');
+          await refreshResultDialog(page, dialog, queued.id);
           await dialog.getByText('合成检测已完成', { exact: true }).first().waitFor();
           assert.ok(await dialog.getByText(/耗时（毫秒）：35/).count(), '原检测耗时未显示');
           await dialog.getByRole('button', { name: '关闭', exact: true }).click();
@@ -556,19 +710,14 @@ try {
         report.cases.push({ theme, width, section, measurements: measured, result: 'PASS' });
       }
       for (const path of ['/online-recharge', '/online-recharge/subscription']) {
+        diagnostic.stage = `${theme}/${width}/legacy:${safeDiagnosticPath(path)}`;
         await page.goto(origin + path);
-        await page.locator('.online-public').waitFor();
-        if (process.argv.includes('--affected')) {
-          if (path.endsWith('/subscription')) {
-            await page
-              .locator('textarea')
-              .fill(JSON.stringify({ accessToken: 'synthetic-private-session' }));
-            await page.getByRole('button', { name: '查询订阅', exact: true }).click();
-            await page.getByRole('button', { name: '刷新结果', exact: true }).click();
-          } else {
-            await page.getByPlaceholder('输入兑换码').fill('SYNTHETIC-CODE');
-            await page.getByRole('button', { name: '查询兑换结果', exact: true }).click();
-          }
+        await page.waitForURL(origin + legacyRoutes[path]);
+        await page.locator('.online-page').waitFor();
+        await page.locator('.v2-async-region[data-v2-query-phase="ready"]').first().waitFor();
+        if (process.argv.includes('--affected') && path === '/online-recharge') {
+          await page.getByPlaceholder('输入兑换码').fill('SYNTHETIC-CODE');
+          await page.getByRole('button', { name: '查询兑换结果', exact: true }).click();
           await page.getByText('31天', { exact: true }).waitFor();
           assert.equal(
             await page
@@ -579,17 +728,19 @@ try {
         }
         const measured = await measure(page);
         assert.ok(measured.documentWidth <= width + 1, `${path}页面横向溢出`);
-        const label = await page.locator('.el-form-item__label').first().boundingBox(),
-          control = await page
-            .locator('.el-form-item .el-input,.el-form-item .el-textarea')
-            .first()
-            .boundingBox();
-        assert.ok(label.x + label.width <= control.x + 2, '公开表单标签必须位于左侧');
+        if (path === '/online-recharge') {
+          const label = await page.locator('.el-form-item__label').first().boundingBox(),
+            control = await page
+              .locator('.el-form-item .el-input,.el-form-item .el-textarea')
+              .first()
+              .boundingBox();
+          assert.ok(label.x + label.width <= control.x + 2, '后台兑换表单标签必须位于左侧');
+        }
         report.cases.push({ theme, width, path, measurements: measured, result: 'PASS' });
       }
       assert.ok(
-        network.publicHeaders.every((value) => value === null),
-        '客户接口附带后台身份'
+        network.credentialHeaders.every((value) => value === 'Bearer synthetic-access'),
+        '内部兑换接口未携带当前后台身份'
       );
       assert.deepEqual(network.unexpected, [], '出现未拦截外部请求');
       assert.deepEqual(errors, [], '页面运行异常');
@@ -604,6 +755,8 @@ try {
   }, administrator);
   const page = await context.newPage();
   lastPage = page;
+  observePage(page);
+  diagnostic.stage = 'lifecycle:addresses';
   const state = {
     actor: administrator,
     empty: false,
@@ -760,8 +913,9 @@ try {
     await page.getByRole('button', { name: label, exact: true }).click();
     const resultDialog = page.getByRole('dialog', { name: '操作结果', exact: true });
     await resultDialog.getByText('等待执行', { exact: true }).first().waitFor();
-    await resultDialog.getByRole('button', { name: '刷新结果', exact: true }).click();
-    await resultDialog.getByText('成功', { exact: true }).first().waitFor();
+    const queued = network.queuedTasks.at(-1);
+    assert.equal(queued.operation, 'config_test');
+    await refreshResultDialog(page, resultDialog, queued.id);
     await resultDialog.getByRole('button', { name: '关闭', exact: true }).click();
     await resultDialog.waitFor({ state: 'hidden' });
   }
@@ -824,7 +978,6 @@ try {
     result: 'PASS'
   });
   state.awaitingReview = true;
-  state.configTarget = undefined;
   await navigate(page, '/v2/online-recharge/jobs');
   await page.getByRole('button', { name: '刷新', exact: true }).click();
   await page.locator('.el-table').getByText('待核对', { exact: true }).first().waitFor();
@@ -852,8 +1005,7 @@ try {
     0,
     '原单核对重建了充值任务'
   );
-  await recheckResult.getByRole('button', { name: '刷新结果', exact: true }).click();
-  await recheckResult.getByText('成功', { exact: true }).first().waitFor();
+  await refreshResultDialog(page, recheckResult, '33333333-3333-4333-8333-333333333333');
   await recheckResult.getByRole('button', { name: '关闭', exact: true }).click();
   report.lifecycle.push({
     case: 'awaiting-review-recheck-original-task-without-payment',
@@ -876,11 +1028,7 @@ try {
     id: 'online-fixture-admin-second',
     username: 'fixture-admin-second'
   };
-  await page.evaluate(async () => {
-    const { sessionCoordinator } = await import('/src/auth/sessionCoordinator.ts');
-    sessionCoordinator.clearLocalSession();
-    await sessionCoordinator.login('fixture', 'synthetic');
-  });
+  await switchFixtureIdentity(page);
   await navigate(page, '/v2/online-recharge/config');
   assert.equal(await providerSecret.inputValue(), '', '身份变化未清空配置密钥');
   await providerSecret.fill('synthetic-config-new-identity');
@@ -902,18 +1050,12 @@ try {
   });
   state.saveDelay = false;
   state.actor = administrator;
-  await page.evaluate(async () => {
-    const { sessionCoordinator } = await import('/src/auth/sessionCoordinator.ts');
-    sessionCoordinator.clearLocalSession();
-    await sessionCoordinator.login('fixture', 'synthetic');
-  });
+  await switchFixtureIdentity(page);
   await navigate(page, '/online-recharge');
   const privateSession = JSON.stringify({ accessToken: 'synthetic-private-session' });
   await page.getByPlaceholder('输入兑换码').fill('SYNTHETIC-CODE');
   await page.locator('textarea').fill(privateSession);
-  await navigate(page, '/online-recharge/subscription');
-  assert.equal(await page.locator('textarea').inputValue(), '');
-  await page.locator('textarea').fill(privateSession);
+  await navigate(page, '/v2/online-recharge/addresses');
   await navigate(page, '/online-recharge');
   assert.equal(await page.locator('textarea').inputValue(), '');
   await page.getByRole('button', { name: '验证兑换码', exact: true }).click();
@@ -927,24 +1069,19 @@ try {
   );
   assert.ok(
     !stored.includes('synthetic-private-session') && !stored.includes('synthetic-capability'),
-    '公开凭据进入浏览器存储'
+    '兑换会话或任务凭据进入浏览器存储'
   );
   assert.ok(
-    network.publicHeaders.every((value) => value === null),
-    '公开提交附带后台身份'
+    network.credentialHeaders.every((value) => value === 'Bearer synthetic-access'),
+    '内部兑换提交未携带后台身份'
   );
   report.lifecycle.push({
-    case: 'public-session-volatile-capability-no-browser-storage-no-admin-header',
+    case: 'internal-session-volatile-capability-no-browser-storage-authenticated',
     result: 'PASS'
   });
   await page.locator('textarea').fill(privateSession);
   state.actor = reader;
-  await page.evaluate(async () => {
-    const { sessionCoordinator } = await import('/src/auth/sessionCoordinator.ts');
-    sessionCoordinator.clearLocalSession();
-    window.__onlineFixtureLogin = sessionCoordinator.login('fixture', 'synthetic');
-    await window.__onlineFixtureLogin;
-  });
+  await switchFixtureIdentity(page);
   assert.equal(await page.locator('textarea').inputValue(), '', '同页身份变化未清 Session');
   assert.equal(
     await page.getByPlaceholder('输入兑换码').inputValue(),
@@ -957,25 +1094,15 @@ try {
     '同页身份变化留下旧客户任务'
   );
   report.lifecycle.push({
-    case: 'public-same-page-identity-clears-session-task-capability',
+    case: 'internal-same-page-identity-clears-session-task-capability',
     result: 'PASS'
   });
   state.actor = administrator;
-  await page.evaluate(async () => {
-    const { sessionCoordinator } = await import('/src/auth/sessionCoordinator.ts');
-    sessionCoordinator.clearLocalSession();
-    window.__onlineFixtureLogin = sessionCoordinator.login('fixture', 'synthetic');
-    await window.__onlineFixtureLogin;
-  });
+  await switchFixtureIdentity(page);
   await navigate(page, '/v2/online-recharge/addresses');
   await page.getByPlaceholder('搜索当前清单').fill('身份草稿');
   state.actor = employee;
-  await page.evaluate(async () => {
-    const { sessionCoordinator } = await import('/src/auth/sessionCoordinator.ts');
-    sessionCoordinator.clearLocalSession();
-    window.__onlineFixtureLogin = sessionCoordinator.login('fixture', 'synthetic');
-    await window.__onlineFixtureLogin;
-  });
+  await switchFixtureIdentity(page);
   await page.evaluate(async () => {
     await document
       .querySelector('#app')
@@ -990,11 +1117,7 @@ try {
   });
   assert.ok(!page.url().includes('/v2/online-recharge/cards'), '导航权限守卫未拦截员工');
   state.actor = administrator;
-  await page.evaluate(async () => {
-    const { sessionCoordinator } = await import('/src/auth/sessionCoordinator.ts');
-    window.__onlineFixtureLogin = sessionCoordinator.login('fixture', 'synthetic');
-    await window.__onlineFixtureLogin;
-  });
+  await switchFixtureIdentity(page, false);
   await navigate(page, '/v2/online-recharge/addresses');
   assert.equal(await page.getByPlaceholder('搜索当前清单').inputValue(), '', '身份变更未清除草稿');
   report.lifecycle.push({
@@ -1002,12 +1125,7 @@ try {
     result: 'PASS'
   });
   state.actor = reader;
-  await page.evaluate(async () => {
-    const { sessionCoordinator } = await import('/src/auth/sessionCoordinator.ts');
-    sessionCoordinator.clearLocalSession();
-    window.__onlineFixtureLogin = sessionCoordinator.login('fixture', 'synthetic');
-    await window.__onlineFixtureLogin;
-  });
+  await switchFixtureIdentity(page);
   await navigate(page, '/v2/online-recharge/jobs');
   assert.equal(await page.getByRole('button', { name: '管理员代提交', exact: true }).count(), 0);
   assert.equal(await page.getByRole('menuitem', { name: '核对原单', exact: true }).count(), 0);
@@ -1047,6 +1165,8 @@ try {
     })
   );
 } catch (error) {
+  const failure = await failureDiagnostic(lastPage, error);
+  console.error('ONLINE_UI_ACCEPTANCE_DIAGNOSTIC ' + JSON.stringify(failure));
   if (lastPage && !lastPage.isClosed()) {
     await lastPage
       .screenshot({ path: resolve(evidence, 'failure.png'), fullPage: true })
@@ -1054,14 +1174,10 @@ try {
   }
   writeFileSync(
     resolve(evidence, 'failure.json'),
-    JSON.stringify(
-      { message: error.message, cases: report.cases.length, lifecycle: report.lifecycle },
-      null,
-      2
-    )
+    JSON.stringify({ ...failure, cases: report.cases.length, lifecycle: report.lifecycle }, null, 2)
   );
-  throw error;
+  throw diagnosticException(failure);
 } finally {
   await browser?.close();
-  await server.close();
+  server.kill('SIGTERM');
 }

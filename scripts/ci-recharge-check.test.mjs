@@ -40,6 +40,8 @@ const readonlyMetadataFixture = { readonlyBaseSource: readonlyMetadataPrevious }
 test('new ONLINE controls retain pure diagnostics lifecycle and CI build tests without invoking Docker', () => {
   for (const part of ['guards', 'release-controls']) {
     for (const path of [
+      'scripts/production-release/online-recharge-ci-build.test.py',
+      'scripts/production-release/online-recharge-component-lifecycle.test.py',
       'scripts/production-release/online-recharge-ci-build.py',
       'scripts/production-release/online-recharge-component-runtime.py',
       'scripts/production-release/online-recharge-component-recovery.py',
@@ -78,6 +80,32 @@ test('new ONLINE controls retain pure diagnostics lifecycle and CI build tests w
       );
     }
   }
+});
+
+test('Admin with exact historical fixture repairs retains both control suites without building images', () => {
+  const paths = [
+    'apps/admin/src/v2/features/online-recharge/V2OnlineRedeemView.vue',
+    'scripts/production-release/online-recharge-ci-build.test.py',
+    'scripts/production-release/online-recharge-component-lifecycle.test.py'
+  ];
+  const calls = recordGuardCommands('admin', paths, 'guards');
+  for (const suite of [
+    'online-recharge-ci-build.test.py',
+    'online-recharge-component-lifecycle.test.py'
+  ])
+    assert.equal(
+      calls.filter((row) => row.join(' ') === `python3 -B scripts/production-release/${suite}`)
+        .length,
+      1,
+      suite
+    );
+  assert.ok(
+    calls.every(
+      (row) =>
+        !row.includes('docker') &&
+        !row.includes('scripts/production-release/online-recharge-ci-build.py')
+    )
+  );
 });
 
 test('full Quality runs new ONLINE pure suites in its later guards without duplicating its release-controls prefix', () => {

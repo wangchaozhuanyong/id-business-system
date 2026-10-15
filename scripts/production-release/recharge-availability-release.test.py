@@ -10,6 +10,7 @@ import unittest
 from unittest.mock import Mock, patch
 
 HERE = Path(__file__).resolve().parent
+REVIEWED_AVAILABILITY_COMMIT = 'c60be0441cc31b6cb4652f30ccbe4b849202b7d8'
 
 
 def load(name, file):
@@ -304,10 +305,34 @@ class AvailabilityPublicationTests(unittest.TestCase):
         for name in contract['sources']:
             self.assertTrue(name.startswith(('apps/admin/src/v2/features/auto-recharge/',
                 'apps/api/src/id-business-v2/auto-recharge/', 'packages/shared/src/v2/auto-recharge.ts', 'docs/')))
-            self.assertEqual(build.digest((build.ROOT / name).read_bytes()), contract['sources'][name])
+            # The publication contract is a fixed historical candidate, while
+            # later independent repairs may legitimately change current HEAD.
+            self.assertEqual(build.digest(build.git('show', REVIEWED_AVAILABILITY_COMMIT + ':' + name)),
+                             contract['sources'][name])
         self.assertFalse(any('prisma' in name or name.endswith('package-lock.json') for name in contract['sources']))
         self.assertTrue(all(name.startswith('id-business-v2/auto-recharge/') and name.endswith('.js') for name in contract['apiModules']))
         self.assertEqual(set(release.PRESERVED), {'mysql', 'caddy', 'media-resolver', 'auto-recharge', 'auto-registration'})
+
+    def test_frozen_availability_contract_still_rejects_current_presentation_drift(self):
+        name = 'apps/admin/src/v2/features/auto-recharge/recharge-presentation.ts'
+        contract = json.loads((HERE / 'recharge-availability-contract.json').read_bytes())
+        current = (build.ROOT / name).read_bytes()
+        self.assertNotEqual(build.digest(current), contract['sources'][name])
+        temporary = build.ROOT / '.runtime/recharge-invocation-main-integration-20261015'
+        temporary.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=temporary) as directory:
+            root = Path(directory)
+            path = root / name
+            path.parent.mkdir(parents=True)
+            path.write_bytes(current)
+            original = {**contract, 'sources': {name: contract['sources'][name]}}
+            def fixture_git(*args):
+                if args[0] == 'status': return b''
+                if args[0] == 'diff': return (name + '\n').encode()
+                raise AssertionError('unexpected external operation')
+            with patch.object(build, 'ROOT', root), patch.object(build, 'git', side_effect=fixture_git), \
+                    self.assertRaisesRegex(RuntimeError, 'SOURCE_CHANGED'):
+                build.verify_sources(original)
 
     def fixture(self, root):
         api = 'id-business-v2/auto-recharge/fixture.js'

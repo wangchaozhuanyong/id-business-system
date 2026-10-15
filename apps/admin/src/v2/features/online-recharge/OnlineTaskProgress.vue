@@ -11,7 +11,7 @@
       <dd class="online-wrap">{{ task.id }}</dd>
       <dt>执行状态</dt>
       <dd>{{ onlineLabel(task.status) }}</dd>
-      <dt>充值套餐</dt>
+      <dt>目标套餐</dt>
       <dd>{{ onlineLabel(task.plan) }}</dd>
       <dt>完成进度</dt>
       <dd>{{ task.progress ?? 0 }}%</dd>
@@ -23,7 +23,15 @@
       :show-text="false"
     />
     <p v-if="error" role="alert" class="online-error">{{ error }}</p>
-    <p v-if="task.status === 'awaiting_review'">支付结果待核对，请保留兑换码，不要重新付款。</p>
+    <p v-if="task.status === 'awaiting_review'">
+      原单结果待核对，请保留当前任务和兑换码，使用原任务核对，不要重新付款。
+    </p>
+    <dl v-if="changeEntries.length" class="online-status-grid">
+      <template v-for="entry in changeEntries" :key="entry.label"
+        ><dt>{{ entry.label }}</dt>
+        <dd class="online-wrap">{{ entry.value }}</dd></template
+      >
+    </dl>
     <dl v-if="results.length" class="online-status-grid">
       <template v-for="entry in results" :key="entry.label"
         ><dt>{{ entry.label }}</dt>
@@ -40,7 +48,7 @@ import { computed } from 'vue';
 import AppButton from '@/components/ui/AppButton.vue';
 import V2SectionHeading from '@/v2/components/V2SectionHeading.vue';
 import type { PublicTask } from './contracts';
-import { onlineLabel, onlineSubscriptionDetails } from './labels';
+import { onlineChangeEntries, onlineLabel, onlineSubscriptionDetails } from './labels';
 const props = defineProps<{ task?: PublicTask; connected?: boolean; error?: string }>();
 defineEmits<{ refresh: [] }>();
 const labels: Record<string, string> = {
@@ -61,6 +69,11 @@ const labels: Record<string, string> = {
   error: '查询结果说明'
 };
 const details = computed(() => onlineSubscriptionDetails(props.task?.result));
+const changeEntries = computed(() =>
+  onlineChangeEntries({
+    subscriptionChange: props.task?.subscriptionChange
+  })
+);
 const results = computed(() =>
   Object.entries(details.value)
     .filter(([key]) => labels[key])

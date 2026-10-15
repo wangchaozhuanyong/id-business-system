@@ -94,12 +94,13 @@ class ContinuousLifecycleTests(unittest.TestCase):
         cls.core = r.c.load_core()
         cls.projection = cls.core.projection_module()
         cls.references = {}
-        for ref in ('HEAD', r.c.AUTHENTICATED_PREDECESSOR['producer']['commit'],
+        for ref in (r.c.APPLICATION_SOURCE, r.c.AUTHENTICATED_PREDECESSOR['producer']['commit'],
                     '0a03fa28e6b844a18833d5c63f1de700f091fc64', r.c.ONLINE_SOURCE):
             commit, raw, files = archive(ref)
             cls.references[ref] = (commit, raw, files)
-        cls.candidate = dict(cls.references['HEAD'][2])
-        # Bind current control edits, but preserve every frozen business byte.
+        cls.candidate = dict(cls.references[r.c.APPLICATION_SOURCE][2])
+        # Bind current control edits to the sealed historical application;
+        # later HEAD business changes must not become historical test inputs.
         for name in {*cls.core.HELPERS, *r.HELPERS}:
             path = HERE / name
             cls.candidate['scripts/production-release/' + name] = (
@@ -402,6 +403,22 @@ class ContinuousLifecycleTests(unittest.TestCase):
             online.content_summary(self.d, 'api', 'synthetic invalid content')
         self.assertEqual(client.safe_failure(caught.exception)['code'], 'API_ADMIN_CONTENT_INVALID')
         self.assertEqual(self.docker, [])
+
+    def test_later_admin_candidate_is_rejected_before_context_or_external_operations(self):
+        # Reproduce run 38724007645 with real ancestor application bytes while
+        # retaining today's helper checks, transport and source validator.
+        later = dict(archive('f979c38c59c0f08d326b746ce14cba543f602b0c')[2])
+        for name in {*self.core.HELPERS, *r.HELPERS}:
+            relative = 'scripts/production-release/' + name
+            later[relative] = self.candidate[relative]
+        self.assertNotEqual(later, self.candidate)
+        producer = {**self.p, 'sourceTree': self.projection.source_tree(later)}
+        with patch.object(self, 'candidate_raw', synthetic_archive(later, producer['commit'])), \
+                self.assertRaisesRegex(RuntimeError, 'APPLICATION_SOURCE_CHANGED'):
+            r.source(self.d, producer, self.evidence)
+        self.assertFalse((self.directory / r.CONTEXT).exists())
+        self.assertEqual(self.docker, [])
+        self.assertEqual(self.aws, [])
 
     def test_four_image_label_drift_is_refused_before_build_proof_is_saved(self):
         self.prepare()

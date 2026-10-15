@@ -184,6 +184,105 @@ describe('官网已登录页面与真实代理的独立证据', () => {
       parentElement: region
     };
   }
+  function currentOfficialPage(
+    options: {
+      profileLabel?: string;
+      composerLabel?: string;
+      editable?: boolean;
+      menu?: boolean;
+      profileVisible?: boolean;
+      profileDisabled?: boolean;
+      composerVisible?: boolean;
+      composerDisabled?: boolean;
+      busy?: boolean;
+      hidden?: boolean;
+      pointerEvents?: string;
+    } = {}
+  ) {
+    // Attribute snapshot of the current official DOM: neither element has a test id or id.
+    const snapshotNode = (tag: string, attributes: Record<string, string>, visible = true) => ({
+      ...control(visible),
+      matches: (selector: string): boolean =>
+        selector.split(',').some((entry) => {
+          const part = entry.trim();
+          if (part === ':disabled') return attributes.disabled !== undefined;
+          if (part.startsWith('#')) return attributes.id === part.slice(1);
+          const selectedTag = /^[a-z]+/i.exec(part)?.[0];
+          if (selectedTag && selectedTag.toLowerCase() !== tag) return false;
+          const selectedAttributes = [...part.matchAll(/\[([^=\]]+)(?:="([^"]*)")?\]/g)];
+          if (!selectedTag && selectedAttributes.length === 0) return false;
+          return selectedAttributes.every(
+            ([, name, value]) =>
+              attributes[name!] !== undefined &&
+              (value === undefined || attributes[name!] === value)
+          );
+        })
+    });
+    const profile = snapshotNode(
+      'button',
+      {
+        'aria-label': options.profileLabel ?? '打开个人资料菜单',
+        'aria-haspopup': options.menu === false ? 'dialog' : 'menu',
+        ...(options.profileDisabled ? { 'aria-disabled': 'true' } : {})
+      },
+      options.profileVisible !== false
+    );
+    const region = { querySelectorAll: () => (options.busy ? [control()] : []) };
+    const input = {
+      ...snapshotNode(
+        'div',
+        {
+          role: 'textbox',
+          contenteditable: options.editable === false ? 'false' : 'true',
+          'aria-label': options.composerLabel ?? '询问 ChatGPT',
+          ...(options.composerDisabled ? { 'aria-disabled': 'true' } : {})
+        },
+        options.composerVisible !== false
+      ),
+      isContentEditable: options.editable !== false,
+      closest: () => (options.hidden ? {} : null),
+      parentElement: region
+    };
+    const nodes = [profile, input];
+    vi.stubGlobal('location', { protocol: 'https:', hostname: 'chatgpt.com' });
+    vi.stubGlobal('document', {
+      title: 'ChatGPT',
+      querySelectorAll: (selector: string) => nodes.filter((node) => node.matches(selector))
+    });
+    vi.stubGlobal('getComputedStyle', () => ({
+      visibility: 'visible',
+      display: 'block',
+      pointerEvents: options.pointerEvents ?? 'auto'
+    }));
+  }
+  it.each([
+    ['打开个人资料菜单', '询问 ChatGPT'],
+    ['Open profile menu', 'Ask ChatGPT']
+  ])(
+    '当前官网没有旧测试属性时，明确的账号菜单和聊天输入仍可就绪：%s',
+    (profileLabel, composerLabel) => {
+      currentOfficialPage({ profileLabel, composerLabel });
+      expect(inspectLoggedInPage()).toEqual({ kind: 'page_ready' });
+    }
+  );
+  it.each([
+    { profileLabel: '升级套餐' },
+    { profileLabel: '打开菜单' },
+    { composerLabel: '搜索' },
+    { composerLabel: '留言' },
+    { editable: false },
+    { menu: false },
+    { profileVisible: false },
+    { profileDisabled: true },
+    { composerVisible: false },
+    { composerDisabled: true },
+    { busy: true },
+    { hidden: true },
+    { pointerEvents: 'none' }
+  ])('当前DOM的无关、不可用或被遮挡控件不能冒充可用聊天页：%j', (options) => {
+    currentOfficialPage(options);
+    expect(inspectLoggedInPage()).toEqual({ kind: 'page_loading' });
+  });
   it('账号和输入框均可用才交付，无关资源未完成不阻塞', () => {
     official([control(), control()]);
     expect(inspectLoggedInPage()).toEqual({ kind: 'page_ready' });

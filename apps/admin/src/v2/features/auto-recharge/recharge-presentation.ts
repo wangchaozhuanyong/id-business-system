@@ -79,6 +79,8 @@ const labels: Record<string, string> = {
   open_browser: '仅登录窗口',
   session_ready: '账号已登录，窗口已就绪',
   session_restore: '正在加载官网并核对账号',
+  browser_control_connect: '正在连接比特窗口控制通道',
+  official_page_readiness: '正在核验官网页面是否可用',
   next_subscription_cycle_review: '正在只读核实旧订阅周期',
   awaiting_previous_cycle_confirmation: '等待本人核实旧周期已结束',
   proxy_resolving: '正在提取本次代理 IP',
@@ -124,6 +126,8 @@ const labels: Record<string, string> = {
   bitbrowser_direct_rejected: '比特浏览器拒绝请求，请核对接口与窗口配置',
   bitbrowser_direct_protocol: '比特接口数据无法确认，请核对地址与版本',
   bitbrowser_direct_debug_unavailable: '网页无法连接窗口控制接口，请核对权限与比特版本',
+  bitbrowser_existing_window_control_unavailable:
+    '原窗口已在运行但网页无法接管，请关闭该原窗口后从本页重新打开',
   bitbrowser_direct_command_failed: '窗口控制失败，请检查原窗口后重试',
   bitbrowser_direct_cancelled: '网页直连操作已停止，窗口保留供手动处理',
   page_load: '加载官网页面',
@@ -521,6 +525,10 @@ export function accountVerificationLabel(job: V2RechargeJob): string {
 }
 
 export function executionStageLabel(job: V2RechargeJob): string {
+  if (job.state === 'finished' && job.result.reason) {
+    if (job.result.stage === 'browser_control_connect') return '比特窗口控制连接未完成';
+    if (job.result.stage === 'official_page_readiness') return '官网账号已核实，页面就绪检查未完成';
+  }
   if (job.result.reason === 'payment_confirmation_expired') return '付款确认已过期';
   if (job.result.reason === 'durable_state_unavailable' && job.state !== 'running') {
     const diagnostic = rechargeCallbackDiagnostics(job);

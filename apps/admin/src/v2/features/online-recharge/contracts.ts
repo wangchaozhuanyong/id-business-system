@@ -14,7 +14,15 @@ export type OnlineSection =
   | 'billing'
   | 'runtime-logs'
   | 'login-logs';
-export type OnlinePlan = 'plus' | 'pro_5x' | 'pro_20x';
+export type OnlinePlan = 'plus' | 'pro_5x' | 'pro_20x' | 'pro_500';
+export interface OnlineSubscriptionChange {
+  kind: 'initial' | 'upgrade';
+  sourcePlan: OnlinePlan | 'free' | 'unknown';
+  targetPlan: OnlinePlan;
+  amount: string | null;
+  currency: string | null;
+  cardLast4?: string | null;
+}
 export type OnlineRow = { id: string; updatedAt?: string; [key: string]: unknown };
 export interface OnlineList {
   items: OnlineRow[];
@@ -47,7 +55,8 @@ export interface PublicTask {
   stage?: string;
   message?: string;
   plan?: OnlinePlan;
-  result?: Record<string, unknown>;
+  subscriptionChange?: OnlineSubscriptionChange;
+  result?: Record<string, unknown> & { subscriptionChange?: OnlineSubscriptionChange };
   taskToken?: string;
 }
 export interface PublicConfig {
