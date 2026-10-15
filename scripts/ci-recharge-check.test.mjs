@@ -1060,7 +1060,9 @@ test('connection migration and registration mirror use only their disposable Doc
     'utf8'
   );
   assert.ok(
-    workflow.includes(`contains(fromJSON('["guards","admin","api","migration"]'), matrix.part)`)
+    workflow.includes(
+      `contains(fromJSON('["guards","admin","api","migration","online-engine"]'), matrix.part)`
+    )
   );
 });
 

@@ -202,6 +202,14 @@ const report = {
   lifecycle: []
 };
 let browser, lastPage;
+const pageErrors = [];
+const requestFailures = [];
+function observeFailureDiagnostics(page) {
+  page.on('pageerror', (error) => pageErrors.push(error.message));
+  page.on('requestfailed', (request) =>
+    requestFailures.push({ url: request.url(), error: request.failure()?.errorText ?? '' })
+  );
+}
 const wait = async (check) => {
   const until = Date.now() + 25000;
   while (Date.now() < until) {
@@ -499,6 +507,7 @@ try {
       );
       const page = await context.newPage();
       lastPage = page;
+      observeFailureDiagnostics(page);
       const state = {
         actor: administrator,
         empty: false,
@@ -592,6 +601,7 @@ try {
   }, administrator);
   const page = await context.newPage();
   lastPage = page;
+  observeFailureDiagnostics(page);
   const state = {
     actor: administrator,
     empty: false,
@@ -1035,24 +1045,30 @@ try {
     })
   );
 } catch (error) {
+  const diagnostic = {
+    message: error.message,
+    url: lastPage && !lastPage.isClosed() ? lastPage.url() : null,
+    pageerrors: pageErrors.slice(-20),
+    body:
+      lastPage && !lastPage.isClosed()
+        ? (
+            await lastPage
+              .locator('body')
+              .innerText({ timeout: 3000 })
+              .catch(() => '')
+          ).slice(0, 1500)
+        : '',
+    requestfailed: requestFailures.slice(-20),
+    cases: report.cases.length,
+    lifecycle: report.lifecycle
+  };
+  console.log('ONLINE_RECHARGE_UI_FAILURE ' + JSON.stringify(diagnostic));
   if (lastPage && !lastPage.isClosed()) {
     await lastPage
       .screenshot({ path: resolve(evidence, 'failure.png'), fullPage: true })
       .catch(() => {});
   }
-  writeFileSync(
-    resolve(evidence, 'failure.json'),
-    JSON.stringify(
-      {
-        message: error.message,
-        url: lastPage && !lastPage.isClosed() ? lastPage.url() : null,
-        cases: report.cases.length,
-        lifecycle: report.lifecycle
-      },
-      null,
-      2
-    )
-  );
+  writeFileSync(resolve(evidence, 'failure.json'), JSON.stringify(diagnostic, null, 2));
   throw error;
 } finally {
   await browser?.close();
