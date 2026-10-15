@@ -382,6 +382,39 @@ export function isRegistrationDeclarationRepair(
     return false;
   }
 }
+export const registrationMigrationQueryRepairBase = 'd38c243b5727953aa96c0fa83e706fee253c9624';
+const registrationMigrationQueryRepairPins = Object.freeze({
+  'scripts/production-release/registration-closure-release.py':
+    '0d2daaeff0a35e1e11666ace39560273fdc83ff9e5718cb244337c8b0f851274',
+  'scripts/production-release/registration-closure-release.test.py':
+    'f774685d72ba8e1caa730d48ee5234eb021c0e117d655202258a86575aac9a1a'
+});
+export function isRegistrationMigrationQueryRepair(
+  paths,
+  { base, baseTree, readSource = readFileSync }
+) {
+  const allowed = new Set([
+    ...Object.keys(registrationMigrationQueryRepairPins),
+    'scripts/ci-registration-closure-scope.mjs',
+    'scripts/ci-recharge-check.mjs',
+    'scripts/ci-recharge-check.test.mjs',
+    'scripts/ci-recharge-scope.test.mjs'
+  ]);
+  if (
+    base !== registrationMigrationQueryRepairBase ||
+    baseTree !== 'a331c3ab6b23c3331aa550b752d9d66860e62cdb' ||
+    !isRegistrationClosureControlsOnly(paths) ||
+    paths.some((path) => !allowed.has(path))
+  )
+    return false;
+  try {
+    return Object.entries(registrationMigrationQueryRepairPins).every(
+      ([path, digest]) => paths.includes(path) && sha256(readSource(path)) === digest
+    );
+  } catch {
+    return false;
+  }
+}
 export function hasRegistrationClosureApplication(paths) {
   return paths.some(
     (path) => path.startsWith('apps/') || path.startsWith('scripts/acceptance-v2-')

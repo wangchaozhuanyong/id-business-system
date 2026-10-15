@@ -37,6 +37,48 @@ const readonlyMetadataPrevious = readonlyMetadataCurrent
   );
 const readonlyMetadataFixture = { readonlyBaseSource: readonlyMetadataPrevious };
 
+test('exact migration query repair retains fresh release tests and selector gates without the historical prefix', () => {
+  const paths = [
+    'scripts/production-release/registration-closure-release.py',
+    'scripts/production-release/registration-closure-release.test.py',
+    'scripts/ci-registration-closure-scope.mjs',
+    'scripts/ci-recharge-check.mjs',
+    'scripts/ci-recharge-check.test.mjs',
+    'scripts/ci-recharge-scope.test.mjs'
+  ];
+  const options = { base: 'd38c243b5727953aa96c0fa83e706fee253c9624' };
+  const calls = recordGuardCommands('ci-only', paths, 'guards', options);
+  assert.equal(
+    calls.filter(
+      (row) =>
+        row.join(' ') ===
+        'python3 -B scripts/production-release/registration-closure-release.test.py'
+    ).length,
+    1
+  );
+  for (const command of ['prettier', 'eslint'])
+    assert.ok(calls.some((row) => row.includes(command)));
+  const tests = calls.find((row) => row[0] === 'node' && row[1] === '--test');
+  assert.ok(tests.includes('scripts/ci-registration-closure-native-reuse.test.mjs'));
+  assert.equal(tests.length, 6);
+  assert.deepEqual(calls.at(-1), ['process-exit', 0]);
+  assert.equal(
+    calls.some((row) =>
+      row.includes('scripts/production-release/api-admin-pending-online.test.py')
+    ),
+    false
+  );
+  const wider = recordGuardCommands(
+    'ci-only',
+    [...paths, 'scripts/production-release/registration-closure-contract.json'],
+    'guards',
+    options
+  );
+  assert.ok(
+    wider.some((row) => row.includes('scripts/production-release/api-admin-pending-online.test.py'))
+  );
+});
+
 test('exact declaration proof repair runs its publisher tests and selectors without unrelated historical prefix', () => {
   const paths = [
     'scripts/production-release/registration-closure-contract.json',
@@ -502,19 +544,22 @@ function recordGuardCommands(
   } = {}
 ) {
   // Run the real dispatcher with process execution replaced before its named import resolves.
-  // Only the prior environment repair reads its immutable local Git fixture.
+  // Prior repair cases read their immutable local Git fixtures.
   // No nested test, database command or business operation is executed.
-  const environmentTestSource =
-    base === '7d1c3822c8f8c8c6a970067580443a3b75e88bf0'
-      ? execFileSync(
-          'git',
-          [
-            'show',
-            'cd7bba03bec1742328e0829c215823bda1fd3fae:scripts/production-release/registration-closure-release.test.py'
-          ],
-          { encoding: 'utf8' }
-        )
-      : null;
+  const priorRepairCommit = {
+    '7d1c3822c8f8c8c6a970067580443a3b75e88bf0': 'cd7bba03bec1742328e0829c215823bda1fd3fae',
+    cd7bba03bec1742328e0829c215823bda1fd3fae: 'd38c243b5727953aa96c0fa83e706fee253c9624'
+  }[base];
+  const environmentTestSource = priorRepairCommit
+    ? execFileSync(
+        'git',
+        [
+          'show',
+          priorRepairCommit + ':scripts/production-release/registration-closure-release.test.py'
+        ],
+        { encoding: 'utf8' }
+      )
+    : null;
   const script = `
     import childProcess from 'node:child_process';
     import fs from 'node:fs';
@@ -562,6 +607,7 @@ function recordGuardCommands(
     }});
     childProcess.execFileSync = (file, args) => {
       if (file === 'git') {
+        if (args.join(' ') === 'rev-parse d38c243b5727953aa96c0fa83e706fee253c9624^{tree}') return 'a331c3ab6b23c3331aa550b752d9d66860e62cdb\\n';
         if (args.join(' ') === 'rev-parse cd7bba03bec1742328e0829c215823bda1fd3fae^{tree}') return '874102957cbd6cc921e05e5bba252e63bd09fd85\\n';
         if (args.join(' ') === 'rev-parse 7d1c3822c8f8c8c6a970067580443a3b75e88bf0^{tree}') return 'a1ffd620d2b79630b9c1e9db700d6af765f33a50\\n';
         if (args.join(' ') === 'rev-parse HEAD^{tree}') return 'a'.repeat(40) + '\\n';

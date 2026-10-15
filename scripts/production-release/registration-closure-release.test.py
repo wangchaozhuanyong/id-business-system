@@ -4,6 +4,7 @@ import importlib.util
 import io
 import json
 from pathlib import Path
+import subprocess
 import tarfile
 import tempfile
 import unittest
@@ -54,6 +55,111 @@ class RegistrationClosureControls(unittest.TestCase):
                 r.check_migration(invalid, contract, True)
         with self.assertRaisesRegex(RuntimeError, 'MIGRATION_BASELINE_CHANGED'):
             r.check_migration(after, contract)
+
+    def test_migration_query_preserves_column_names_and_exact_bound_parameters(self):
+        contract = json.loads((HERE / 'registration-closure-contract.json').read_bytes())
+        adapter = Mock()
+        adapter.compose.return_value = '{}'
+        directory = Path('/read-only-migration-query-fixture')
+        r.migration_state(adapter, directory, contract)
+        args = adapter.compose.call_args.args
+        self.assertEqual(args[:-1], (directory, 'exec', '-T', 'api', 'node', '-e'))
+        source = args[-1]
+        self.assertEqual(source.count('COLUMN_NAME'), 3)
+        self.assertNotIn('__REGISTRATION_MIGRATION_NAME_JSON__', source)
+        self.assertNotIn('__PROTECTED_MIGRATION_NAMES_JSON__', source)
+        syntax = subprocess.run(['node', '--check'], input=source, capture_output=True, text=True, check=False)
+        self.assertEqual(syntax.returncode, 0, syntax.stderr)
+        # The generated script runs only in a VM whose sole import is this in-memory Prisma stub.
+        harness = """const vm=require('vm'),fs=require('fs');const source=fs.readFileSync(0,'utf8');
+const calls=[],logs=[];let disconnects=0;const processStub={};let options;
+class PrismaClient{constructor(value){options=value}async $queryRawUnsafe(...args){calls.push(args);return args[0].includes('COUNT(*)')?[{n:0}]:[]}async $disconnect(){disconnects++}}
+vm.runInNewContext(source,{require(name){if(name!=='@prisma/client')throw Error('UNEXPECTED_IMPORT');return{PrismaClient}},console:{log(value){logs.push(JSON.parse(value))}},process:processStub});
+setImmediate(()=>console.log(JSON.stringify({calls,logs,disconnects,options,exitCode:processStub.exitCode??null})));"""
+        executed = subprocess.run(['node', '-e', harness], input=source, capture_output=True, text=True, check=False)
+        self.assertEqual(executed.returncode, 0, executed.stderr)
+        result = json.loads(executed.stdout)
+        names = sorted(Path(name).parent.name for name in contract['protectedPublishedRecovery']['migrations'])
+        self.assertEqual(result['calls'], [
+            ["SELECT COLUMN_NAME,IS_NULLABLE,DATA_TYPE FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='id_business_v2_chatgpt_accounts' AND COLUMN_NAME IN ('registration_ip_encrypted','registered_at') ORDER BY COLUMN_NAME"],
+            ['SELECT checksum,finished_at,rolled_back_at FROM _prisma_migrations WHERE migration_name=?', contract['migration']['name']],
+            ['SELECT COUNT(*) AS n FROM _prisma_migrations WHERE finished_at IS NULL AND rolled_back_at IS NULL'],
+            ['SELECT migration_name,checksum,finished_at,rolled_back_at FROM _prisma_migrations WHERE migration_name IN (' + ','.join('?' for _ in names) + ') ORDER BY migration_name', *names]])
+        self.assertEqual(result['logs'], [{'columns': [], 'rows': [], 'protectedRows': [], 'pending': 0}])
+        self.assertEqual((result['disconnects'], result['options'], result['exitCode']), (1, {'log': []}, None))
+
+    def test_all_controller_node_segments_are_captured_without_io_and_parse(self):
+        contract = json.loads((HERE / 'registration-closure-contract.json').read_bytes())
+        protected = sorted(({'name': Path(name).parent.name, 'checksum': checksum,
+                             'finished': True, 'rolledBack': False}
+                            for name, checksum in contract['protectedPublishedRecovery']['migrations'].items()),
+                           key=lambda row: row['name'])
+        before_migration = {'columns': [], 'rows': [], 'protectedRows': protected, 'pending': 0}
+        after_migration = {**before_migration, 'columns': [
+            {'COLUMN_NAME': 'registered_at', 'IS_NULLABLE': 'YES', 'DATA_TYPE': 'datetime'},
+            {'COLUMN_NAME': 'registration_ip_encrypted', 'IS_NULLABLE': 'YES', 'DATA_TYPE': 'text'}],
+            'rows': [{'checksum': contract['migration']['sha256'], 'finished': True, 'rolledBack': False}]}
+        sqlite = {'status': 'PASS', 'businessActions': 0, 'activeAppleLeaseCount': 0,
+                  'corruptEncryptedValueCount': 0, 'logicalSha256': 'fixture-logical-hash'}
+        worker_names = ('acceptance_runtime.py', 'apple_closed_loop.py', 'apple_mailboxes.py',
+                        'release_safety.py', 'workspace.py')
+        worker_files = {name: contract['changedSources'][
+            'apps/api/src/id-business-v2/auto-registration/worker/' + name] for name in worker_names}
+        public = ('v2-' + 'c' * 40).encode()
+        proof = {'commit': 'c' * 40, 'apiModules': {}, 'workerFiles': worker_files,
+                 'engineFiles': contract['engineFiles'], 'adminFiles': {'index.html': r.digest(public)}}
+        captured = []
+
+        def compose(*args, **kwargs):
+            self.assertEqual(args[1:-1], ('exec', '-T', 'api', 'node', '-e'))
+            captured.append(args[-1])
+            return compose_results.pop(0)
+
+        def run(*args, **kwargs):
+            self.assertEqual(args[:-1], ('docker', 'exec', contract['services']['online-recharge']['containerId'], 'node', '-e'))
+            captured.append(args[-1])
+            return json.dumps({**contract['baselineEngineInventory'], **contract['engineFiles']})
+
+        adapter = Mock(compose=compose, run=run)
+        helpers = Mock()
+        helpers.snapshot.return_value = contract['services']
+        availability = Mock()
+        output = ROOT / '.runtime/auto-registration-review-20261016/release-control-tests'
+        output.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=output) as name:
+            base = Path(name)
+            previous = base / 'releases' / 'published-fixture'
+            previous.mkdir(parents=True)
+            (base / 'current').symlink_to(previous)
+            manifest = json.dumps({'commit': contract['expectedCurrent']}).encode()
+            (previous / 'release-manifest.json').write_bytes(manifest)
+            fixture_contract = {**contract, 'current': str(previous), 'manifestSha256': r.digest(manifest),
+                                'configurationSha256': {}}
+            compose_results = [json.dumps(contract['baselineWorkerFiles']), json.dumps(sqlite), json.dumps(before_migration)]
+            with patch.object(r, 'BASE', base), patch.object(r, 'extra', return_value=availability), \
+                    patch.object(r.shutil, 'disk_usage', return_value=Mock(free=7 * 1024**3)):
+                r.baseline(adapter, fixture_contract, helpers)
+                self.assertEqual(compose_results, [])
+                compose_results = [json.dumps(sqlite), json.dumps(after_migration), *worker_files.values(),
+                                   json.dumps({'fields': ['registeredAt', 'registrationIpEncrypted']}),
+                                   contract['changedSources']['apps/api/prisma-mysql/schema.prisma']]
+                response = Mock()
+                response.__enter__ = Mock(return_value=response)
+                response.__exit__ = Mock(return_value=False)
+                response.read.return_value = public
+                with patch.object(r.urllib.request, 'urlopen', return_value=response):
+                    r.smoke(adapter, previous, proof, contract['services'], fixture_contract, helpers, {'logical': sqlite})
+                self.assertEqual(compose_results, [])
+        self.assertEqual(len(captured), 14)
+        for index, source in enumerate(captured):
+            with self.subTest(segment=index):
+                syntax = subprocess.run(['node', '--check'], input=source, capture_output=True, text=True, check=False)
+                self.assertEqual(syntax.returncode, 0, syntax.stderr)
+        self.assertEqual(sum('spawnSync' in source for source in captured), 2)
+        self.assertEqual(sum('SELECT COLUMN_NAME' in source for source in captured), 2)
+        self.assertEqual(sum('Prisma.dmmf' in source for source in captured), 1)
+        self.assertEqual(sum('/workspace/engine/' in source for source in captured), 2)
+        self.assertEqual(sum('/worker/' in source and 'spawnSync' not in source for source in captured), 6)
 
     def test_independent_prisma_facts_propagation_requires_the_exact_reviewed_module(self):
         module = 'id-business-v2/auto-recharge/persistence/recharge-card-removal.repository.js'
