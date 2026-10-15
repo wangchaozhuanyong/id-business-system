@@ -29,6 +29,21 @@ const job = (overrides: Partial<V2RechargeJob> = {}): V2RechargeJob => ({
   ...overrides
 });
 describe('recharge stage presentation', () => {
+  it('结算识别失败不会被误报为回传失败或银行卡拒付', () => {
+    const current = job({
+      action: 'bitbrowser',
+      result: {
+        reason: 'checkout_unknown_write',
+        stage: 'checkout_create',
+        payment_status: 'not_attempted',
+        payment_attempted: false,
+        payment_requests_sent: 0
+      }
+    });
+    expect(failureReasonLabel(current.result.reason)).toContain('结算可能已打开');
+    expect(rechargeIssueFeedback(current)?.action).toContain('接续原结算');
+    expect(rechargeIssueFeedback(current)?.action).not.toContain('银行卡状态');
+  });
   it('原单窗口无法核实时引导核对连接及原窗口，不误导完成真人验证或重试付款', () => {
     const feedback = rechargeIssueFeedback(
       job({

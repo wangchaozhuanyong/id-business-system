@@ -29,7 +29,13 @@ const server = spawn(
     String(port),
     '--strictPort'
   ],
-  { cwd: resolve('apps/admin'), stdio: 'ignore' }
+  {
+    cwd: resolve(
+      process.argv.find((arg) => arg.startsWith('--admin-dir='))?.slice('--admin-dir='.length) ??
+        'apps/admin'
+    ),
+    stdio: 'ignore'
+  }
 );
 const waitFor = async (check) => {
   const deadline = Date.now() + 20_000;
@@ -485,6 +491,20 @@ try {
                 }
               }
             : entry.quoteResult;
+          if (process.argv.includes('--quote-stages') && starts === 1) {
+            entry.quoteResult.initial_quote = {
+              ...quoted(input.plan),
+              today: { currency: 'PHP', amount: '9999.00', amount_minor: 999900 }
+            };
+            entry.job.state = 'running';
+            entry.job.result = {
+              status: 'running',
+              stage: 'payment_preparation',
+              payment_requests_sent: 0,
+              initial_quote: entry.quoteResult.initial_quote,
+              quote: entry.quoteResult.initial_quote
+            };
+          }
           return reply({ id: input.id, accepted: true }, 202);
         }
         const match = path.match(/^\/jobs\/([^/]+)(?:\/(confirm))?$/);
@@ -651,6 +671,43 @@ try {
     version = 4;
     await start.click();
     const confirm = page.getByRole('button', { name: /确认.*付款|确认.*扣款/ });
+    if (process.argv.includes('--quote-stages')) {
+      await page.getByText('初始参考报价（银行卡与完整账单资料填写前）', { exact: true }).waitFor();
+      assert.equal(await confirm.count(), 0, '填写资料和重新计税前不能确认付款');
+      const result = page.locator('.recharge-result');
+      const finalAmounts = result.locator('.recharge-quote').nth(1);
+      assert.match(await finalAmounts.innerText(), /待完整填写资料并重新计税/);
+      assert.equal(
+        (await finalAmounts.innerText()).includes('9999.00'),
+        false,
+        '初始价不能充当最终应付'
+      );
+      await page.screenshot({
+        path: resolve(evidence, `initial-reference-${width}.png`),
+        fullPage: true
+      });
+      const entry = local.get(jobs[0].id);
+      entry.job.state = 'awaiting_confirmation';
+      entry.job.result = entry.quoteResult;
+      await page.getByRole('button', { name: '刷新原任务状态', exact: true }).click();
+      await confirm.waitFor();
+      assert.ok((await finalAmounts.innerText()).includes(quoted(jobs[0].plan).today.amount));
+      assert.equal((await finalAmounts.innerText()).includes('9999.00'), false);
+      for (const theme of ['light', 'dark']) {
+        if (width < 900) await page.setViewportSize({ width: 1440, height: 1100 });
+        await page.getByTitle(theme === 'dark' ? '切换为深色主题' : '切换为浅色主题').click();
+        await page.setViewportSize({ width, height: 1100 });
+        await page.keyboard.press('Escape');
+        assert.equal(
+          await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth + 1),
+          false
+        );
+        await page.screenshot({
+          path: resolve(evidence, `final-quote-${theme}-${width}.png`),
+          fullPage: true
+        });
+      }
+    }
     await confirm.waitFor();
     assert.equal(confirmations, 0);
     assert.equal(jobs[0].result.nonce, undefined, '后端不得持久化付款授权');
@@ -978,6 +1035,7 @@ try {
       invalidJsonClearsOldSession: 'PASS',
       sensitiveInputMaskAndReveal: 'PASS',
       countrySelectionReadonly: 'PASS',
+      finalQuoteAfterBilling: process.argv.includes('--quote-stages') ? 'PASS' : 'NOT_RUN',
       connectionProfileDraftIsolation: connectionAcceptance ? 'PASS' : 'NOT_RUN',
       startupCallbackDiagnostics: startupDiagnosticsAcceptance ? 'PASS' : 'NOT_RUN',
       result: 'PASS'

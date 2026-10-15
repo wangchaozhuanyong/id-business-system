@@ -12,6 +12,7 @@ from payment_state import payment_evidence
 from payment_3ds import ThreeDSAuthentication, AUTH_PATHS, checkout_resource_url
 from upgrade_authentication import AuthenticationReceipts, response_body
 from types import SimpleNamespace
+from native_checkout import NativeQuoteObserver
 
 
 class PaymentGuard(NetworkGuard):
@@ -49,6 +50,13 @@ class PaymentGuard(NetworkGuard):
         self.settling = False
         self.observations_closed = False
         self.deferred_observation = {}
+        self.native_quotes = NativeQuoteObserver(self)
+        self.expected_billing_fingerprint = None
+        self.final_quote_verified = False
+
+    def accept_native_quote(self, data):
+        self.quote_request_version += 1
+        self.native_quotes.accept(data, self.quote_request_version)
 
     def finish_three_ds(self):
         self.three_ds_closed = True
@@ -99,6 +107,7 @@ class PaymentGuard(NetworkGuard):
         if request in self.observed_requests:
             return
         super().observe_request(request)
+        self.native_quotes.observe(request)
         p = urlsplit(request.url)
         if p.scheme != "https" or p.hostname != "api.stripe.com" or not self.checkout_id:
             return
@@ -107,6 +116,8 @@ class PaymentGuard(NetworkGuard):
             self.quote_request_version += 1
             self.quote_requests[request] = self.quote_request_version
             self.official_quote_binding = None
+            if not self.approved:
+                self.final_quote_verified = False
             self.checkout_initializations_allowed += int(p.path == base + "/init")
         if (self.read_only or self.operation_cancelled() or not self.payment_ledger
                 or not (self.payment_ledger.record or {}).get("payment_attempted")):
@@ -160,6 +171,15 @@ class PaymentGuard(NetworkGuard):
             and response.request.method == 'POST')
         if not authentication_candidate:
             await super().response(response)
+        if await self.native_quotes.response(response):
+            return
+        if (response.request is self.request_object and self.checkout_id and self.checkout_id.startswith('oaics_')
+                and self.quote_request_version == 0):
+            # 建单响应可能同时携带初始结算；这仍只是填写资料前的参考价。
+            try:
+                self.accept_native_quote(json.loads(await response_body(response, self)))
+            except (Stop, ValueError, TypeError):
+                pass
         await self.three_ds.observe_redirect(response)
         if self.observations_closed:
             return
@@ -168,8 +188,11 @@ class PaymentGuard(NetworkGuard):
         initialization = response.request in self.quote_requests and self.account_verified
         confirmation = response.request is self.confirm_request
         authentication = self.three_ds.requests.get(response.request) in AUTH_PATHS
-        linked_read = (self.linked_intent and response.request.method == "GET"
-                       and p.path == f"/v1/payment_intents/{self.linked_intent}")
+        linked_read = (self.linked_intent and (response.request.method == "GET"
+                       and p.path == f"/v1/payment_intents/{self.linked_intent}"
+                       or self.checkout_id.startswith('oaics_') and self.confirmation_sent == 1
+                       and response.request.method == 'POST'
+                       and p.path == f'/v1/payment_intents/{self.linked_intent}/confirm'))
         if not (initialization or confirmation or linked_read or authentication_candidate or authentication or response.request is self.token_request):
             return
         try:
@@ -335,4 +358,4 @@ class PaymentGuard(NetworkGuard):
                 "payment_http_status": self.payment_http_status,
                 "payment_failure_reason": safe_text(self.payment_error),
                 "three_ds_status": self.three_ds.status,
-                "quote_authority": "official_checkout_response" if self.official_quote_binding else None}
+                "quote_authority": "official_checkout_response" if self.final_quote_verified or self.approved else None}

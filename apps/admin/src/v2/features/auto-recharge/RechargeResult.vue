@@ -6,7 +6,7 @@
       </p>
       <template v-if="job.result.mode !== 'open_browser'">
         <p v-if="job.result.initial_quote" class="recharge-quote-title">
-          初始报价（填写账单地址前）
+          初始参考报价（银行卡与完整账单资料填写前）
         </p>
         <dl v-if="job.result.initial_quote" class="recharge-summary recharge-quote">
           <dt>初始应付</dt>
@@ -18,30 +18,33 @@
           <dt>初始续费</dt>
           <dd>{{ price(job.result.initial_quote.renewal, '需填写账单地址后确定') }}</dd>
         </dl>
-        <p class="recharge-quote-title">
-          {{ job.result.initial_quote ? '账单地址后最终金额' : '官方报价' }}
-        </p>
+        <p class="recharge-quote-title">资料填写后最终应付</p>
         <dl class="recharge-summary recharge-quote">
           <dt>今日应付</dt>
           <dd class="recharge-total">
-            {{ price(job.result.quote?.today, quotePlaceholder(job)) }}
+            {{
+              price(
+                finalQuote?.today,
+                finalQuote ? quotePlaceholder(job) : '待完整填写资料并重新计税'
+              )
+            }}
           </dd>
-          <template v-if="job.result.quote?.credit">
+          <template v-if="finalQuote?.credit">
             <dt>折抵金额</dt>
-            <dd>{{ price(job.result.quote.credit) }}</dd>
+            <dd>{{ price(finalQuote.credit) }}</dd>
           </template>
           <dt>税费</dt>
           <dd>
-            {{ price(job.result.quote?.tax, quotePlaceholder(job))
-            }}{{ job.result.quote?.tax_status === 'estimated' ? '（预估）' : '' }}
+            {{ price(finalQuote?.tax, '待官网重新计税')
+            }}{{ finalQuote?.tax_status === 'estimated' ? '（预估）' : '' }}
           </dd>
           <dt>续费</dt>
           <dd>
-            {{ price(job.result.quote?.renewal, quotePlaceholder(job))
+            {{ price(finalQuote?.renewal, '待官网确认续费金额')
             }}{{
-              job.result.quote?.renewal_interval === 'monthly'
+              finalQuote?.renewal_interval === 'monthly'
                 ? ' / 月，直至取消'
-                : job.result.quote
+                : finalQuote
                   ? '，周期未知'
                   : ''
             }}
@@ -277,6 +280,9 @@ const callbackDiagnostic = computed<Partial<ReturnType<typeof rechargeCallbackDi
   props.job ? rechargeCallbackDiagnostics(props.job) : {}
 );
 const proxyProgress = computed(() => (props.job ? proxyAttemptLabel(props.job) : ''));
+const finalQuote = computed(() =>
+  props.job?.result.quote_authority ? props.job.result.quote : undefined
+);
 function price(value: { currency: string; amount: string } | null | undefined, fallback = '未知') {
   return value ? `${value.currency} ${value.amount}` : fallback;
 }

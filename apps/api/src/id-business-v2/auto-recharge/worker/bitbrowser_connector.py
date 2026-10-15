@@ -79,6 +79,8 @@ SAFE_PUBLIC_KEYS.update("quote_digest confirmation_expires_at manual_confirmatio
                         "operation current_plan_before upgrade_identifier upgrade_invoice_identifier "
                         "upgrade_payment_intent_identifier subscription_period three_ds_status".split())
 SAFE_PUBLIC_KEYS.update({'cycle_review', 'subscription_inspection', 'has_active_subscription'})
+SAFE_PUBLIC_KEYS.update({'checkout_request_body_state', 'checkout_request_plan_state',
+                         'checkout_recovered_from_original'})
 SAFE_PUBLIC_KEYS.update(CALLBACK_METADATA_KEYS)
 TERMINAL_RESULT_KEYS.update(CALLBACK_METADATA_KEYS)
 
@@ -580,6 +582,7 @@ class LocalJob:
         self.stale_profiles_cleaned = 0
         self.checkout_replacement_performed = False
         self.original_checkout_identifier = None
+        self.unidentified_checkout_recovery = False
         self.next_cycle_context = None
         self.next_cycle_grant = None
         self.subscription_check_only = False
@@ -899,6 +902,10 @@ class LocalJob:
                     or owned_profile["profileId"] in seen_profiles):
                 raise Stop("durable_state_unavailable")
             self.owned_profile = dict(owned_profile)
+        unidentified = initial.get('unidentifiedCheckoutRecovery')
+        if unidentified is not None and (unidentified is not True or not self.owned_profile or original_checkout is not None):
+            raise Stop('durable_state_unavailable')
+        self.unidentified_checkout_recovery = unidentified is True
         self.reconcile_cycle_records(records, initial=True)
         if self.payload.get('subscriptionCycleProtocol') == 1 and initial.get('subscriptionCycleProtocol') == 1:
             self.accept_cycle_context(initial.get('nextCycleContext'))
@@ -1339,6 +1346,7 @@ class Handler(BaseHTTPRequestHandler):
                              "payment-unknown-resolution", "prepayment-page-recovery",
                              "stale-owned-profile-cleanup", "same-profile-proxy-recovery", "json-page-ready"]
             capabilities.append('next-subscription-cycle-v1')
+            capabilities.append('native-checkout-quote-v1')
             return self.reply(200, {"ok": True, "version": 4,
                                     "service": "id-business-v2-auto-recharge-connector",
                                     "role": REGISTRY.role, "capabilities": capabilities,

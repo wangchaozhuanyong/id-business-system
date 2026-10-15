@@ -21,6 +21,8 @@ from checkout_core import (ACCOUNT_PATH, CHECKOUT_PATH, MAX_BYTES, ROOT, Browser
                            Stop, account_plan, checkout_result, parse_credential, response_json,
                            safe_text, session_cookies, verify_official_session)
 from plans import PLANS, PRO_GROUP, checkout_option_plan, checkout_text_plan, plan_spec, text_tiers, official_subscription, subscription_transition
+from native_checkout import (account_request_matches, native_session, official_checkout_request,
+                             read_original_native_checkout, request_document, unknown_checkout_recoverable)
 
 ORIGIN = "https://chatgpt.com"
 
@@ -430,6 +432,10 @@ class NetworkGuard:
         self.checkout_plan = None
         self.checkout_tier_binding_minimum = 0
         self.checkout_tier_request_minimum = 0
+        self.checkout_request_body_state = None
+        self.checkout_request_plan_state = None
+        self.checkout_response_plan_required = False
+        self.checkout_recovered_from_original = False
 
     def prepare_first_pro_checkout(self, *, tier_pending, current_plan):
         if (self.target_plan not in {"pro-5x", "pro-20x", "pro-500"}
@@ -527,10 +533,7 @@ class NetworkGuard:
         if (request.method != "POST" or parts.scheme != "https"
                 or parts.hostname != "chatgpt.com" or parts.path != CHECKOUT_PATH):
             return
-        try:
-            data = request.post_data_json if request.post_data else None
-        except Exception:
-            data = None
+        data, body_state = request_document(request)
         decision = self.classify(request.method, request.url, data, request.headers)
         if decision == "read":
             return
@@ -540,7 +543,21 @@ class NetworkGuard:
                 self.error = Stop("checkout_result_unknown", stage="checkout_create", checkout_attempted=True)
                 self.response_done.set()
             return
+        self.checkout_request_body_state = body_state
+        self.checkout_request_plan_state = ('matched' if isinstance(data, dict)
+            and data.get('plan_name') == plan_spec(self.target_plan)['official_name'] else
+            'missing' if not isinstance(data, dict) or data.get('plan_name') is None else 'unsupported')
+        # CDP 有时不提供原始 POST 正文。继续接收原响应，只在完整官网响应证明
+        # 目标账号、套餐及原结算时接续；不把请求体缺失等同于官网建单失败。
+        response_candidate = (decision == 'unknown_write' and self.checkout_request_plan_state == 'missing'
+            and self.sent == 0 and self.ledger is not None and self.account_verified
+            and official_checkout_request(request.url))
         self.sent += 1
+        if response_candidate:
+            self.request_object = request
+            self.checkout_response_plan_required = True
+            progress('checkout_request_sending', attempt=self.sent)
+            return
         if decision != "create":
             self.error = Stop("checkout_result_unknown" if self.sent > 1 else "checkout_" + decision,
                               stage="checkout_create", checkout_attempted=True)
@@ -582,6 +599,13 @@ class NetworkGuard:
                 return
             data = response_json(response.status, headers, raw, self.target.old_token)
             result, url = checkout_result(data)
+            if self.checkout_response_plan_required:
+                request_headers = await response.request.all_headers()
+                if not account_request_matches(request_headers, self.target):
+                    raise Stop('checkout_account_mismatch')
+                if not native_session(data, result['checkout_identifier'], result['processor_entity'], self.target_plan):
+                    raise Stop('checkout_response_plan_unverified')
+                self.checkout_plan = self.target_plan
             self.result, self.private_url = result, url
             self.checkout_id = result["checkout_identifier"]
             self.ledger.finish({**result, "checkout_outcome": "created", **self.pro_checkout_summary()})
@@ -603,6 +627,10 @@ class NetworkGuard:
                 "blocked_official_write_paths": dict(self.blocked_official_paths),
                 "blocked_payment_related_paths": dict(self.blocked_payment_paths),
                 "checkout_initializations_allowed": self.checkout_initializations_allowed,
+                **({'checkout_recovered_from_original': True} if self.checkout_recovered_from_original else {}),
+                **({"checkout_request_body_state": self.checkout_request_body_state,
+                    "checkout_request_plan_state": self.checkout_request_plan_state}
+                   if self.checkout_request_body_state else {}),
                 **self.session_observation}
 
     def checkout_status(self):
@@ -817,7 +845,8 @@ async def prepare_proxy_in_context(context, expected_country=None, *, budget):
     pass  # Browser traffic is observed, never intercepted.
     try:
         page = next((item for item in context.pages if item.url == "about:blank"
-                     or urlsplit(item.url).hostname == "chatgpt.com"), None)
+                     or (urlsplit(item.url).hostname == "chatgpt.com"
+                         and not urlsplit(item.url).path.startswith('/checkout/'))), None)
         page = page or await probe.run(context.new_page, "proxy_probe")
         response = await probe.run(lambda: page.goto(
             ORIGIN + "/cdn-cgi/trace", wait_until="commit", timeout=0), "proxy_probe")
@@ -981,7 +1010,8 @@ async def workflow(context, target, *, ledger=None, existing=None, wait_seconds=
         raise Stop("checkout_ledger_plan_mismatch")
     if existing and existing.get("target_plan", "plus") != target_plan:
         raise Stop("checkout_record_plan_mismatch")
-    if existing:
+    recovering_unknown = unknown_checkout_recoverable(existing)
+    if existing and not recovering_unknown:
         guard.checkout_id = existing["checkout_identifier"]
         if can_restore_first_pro_checkout(existing, target_plan):
             guard.first_pro_checkout = True
@@ -991,15 +1021,21 @@ async def workflow(context, target, *, ledger=None, existing=None, wait_seconds=
             "returned_currency": existing.get("returned_currency"),
             "processor_entity": existing.get("processor_entity"),
         }
-    from upgrade_authentication import UpgradeResponseObservers
-    observers = UpgradeResponseObservers(context, guard)
-    guard.response_observers = observers
     # 本机比特已打开首页；复用并在注入 Cookie 后加载，避免留下游客标签页。
     page = next((p for p in context.pages if p.url == "about:blank" or
                  (urlsplit(p.url).hostname == "chatgpt.com"
                   and (urlsplit(p.url).path in ("", "/")
                        or urlsplit(p.url).path.startswith("/checkout/")))), None)
     page = page or await context.new_page()
+    if recovering_unknown:
+        candidates = [p for p in context.pages if urlsplit(p.url).hostname == 'chatgpt.com'
+                      and re.fullmatch(r'/checkout/[a-z][a-z0-9_]{0,40}/oaics_[A-Za-z0-9_]{1,200}/?', urlsplit(p.url).path)]
+        if len(candidates) != 1 or ledger is None or not ledger.recover_unknown_checkout:
+            raise Stop('existing_checkout_unknown')
+        page = candidates[0]
+    from upgrade_authentication import UpgradeResponseObservers
+    observers = UpgradeResponseObservers(context, guard)
+    guard.response_observers = observers
     page.set_default_timeout(20000)
     identity = {"session_status": "not_verified", "account_matched": False}
     stage = "session_restore"
@@ -1007,11 +1043,13 @@ async def workflow(context, target, *, ledger=None, existing=None, wait_seconds=
     quote_text = ""
     result = None
     try:
-        if getattr(target, "session_token", None):
+        if not recovering_unknown and getattr(target, "session_token", None):
             await install_session_cookies(context, target, budget=session_budget)
         progress(stage, account_matched=False, session_status="not_verified",
                  **(session_budget.snapshot() if session_budget else {}))
-        if session_budget:
+        if recovering_unknown:
+            refreshed, identity = await check_session(page, target, 0, session_budget)
+        elif session_budget:
             _, identity = await restore_session_with_refresh(
                 page, target, wait_seconds, session_budget
             )
@@ -1019,6 +1057,24 @@ async def workflow(context, target, *, ledger=None, existing=None, wait_seconds=
             await page.goto(ORIGIN + "/", wait_until="domcontentloaded", timeout=45000)
             _, identity = await check_session(page, target, wait_seconds, session_budget)
         guard.account_verified = True
+        if recovering_unknown:
+            if identity.get('current_plan') != 'free':
+                raise Stop('incompatible_existing_subscription')
+            stage = 'existing_checkout_read'
+            session = await read_original_native_checkout(page, refreshed, target_plan)
+            restored, guard.private_url = checkout_result(session)
+            guard.result, guard.checkout_id, guard.checkout_plan = restored, restored['checkout_identifier'], target_plan
+            ledger.finish({**restored, 'reason': None, 'checkout_outcome': 'created',
+                           'checkout_recovered_from_original': True,
+                           'account_matched': True, 'current_plan_before': 'free',
+                           'transport': 'official_browser'})
+            guard.checkout_recovered_from_original = True
+            existing = ledger.record
+            if target_plan in {'pro-5x', 'pro-20x', 'pro-500'}:
+                guard.first_pro_checkout = True
+                guard.checkout_tier_pending = True
+            if hasattr(guard, 'accept_native_quote'):
+                guard.accept_native_quote(session)
         if os.environ.get("AUTO_RECHARGE_CALLBACK_URL"):
             identity["network"] = await observe_page_network(page, session_budget)
         progress("session_verified", **identity)
@@ -1110,7 +1166,7 @@ async def workflow(context, target, *, ledger=None, existing=None, wait_seconds=
                   **quote_meta}
         if existing:
             result["inspection_only"] = True
-        if ledger:
+        if ledger and (not recovering_unknown or guard.checkout_recovered_from_original):
             ledger.finish(result)
         progress("quote_ready" if quote.get("today") else "details_required", initial_quote=quote)
         if quote_handler:
@@ -1139,7 +1195,7 @@ async def workflow(context, target, *, ledger=None, existing=None, wait_seconds=
             result["checkout_identifier"] = guard.checkout_id
         if existing:
             result["inspection_only"] = True
-        if ledger:
+        if ledger and (not recovering_unknown or guard.checkout_recovered_from_original):
             ledger.finish(result)
         return result
     except Exception as exc:
@@ -1153,7 +1209,7 @@ async def workflow(context, target, *, ledger=None, existing=None, wait_seconds=
             result.update(session_budget.snapshot())
         if guard.checkout_id:
             result["checkout_identifier"] = guard.checkout_id
-        if ledger:
+        if ledger and (not recovering_unknown or guard.checkout_recovered_from_original):
             ledger.finish(result)
         return result
     finally:
@@ -1178,7 +1234,7 @@ async def run_browser(target, *, create=False, inspect_existing=False, retry_rej
                       replace_unpaid_checkout=False, state_dir=ROOT / ".state", wait_seconds=0, review_seconds=0,
                       quote_handler=None, guard_factory=NetworkGuard, target_plan="plus", browser=None,
                       browser_context=None, session_budget=None, session_handler=None, next_cycle_grant=None,
-                      allow_checkout_tier_change=False):
+                      allow_checkout_tier_change=False, recover_unknown_checkout=False):
     # 固定项目自己的浏览器，不依赖开源参考目录或全局浏览器缓存。
     os.environ.setdefault("PLAYWRIGHT_BROWSERS_PATH", str(ROOT / ".browsers"))
     # 不允许环境变量意外启动协议调试日志，避免凭据进入终端/文件。
@@ -1188,7 +1244,14 @@ async def run_browser(target, *, create=False, inspect_existing=False, retry_rej
     if inspect_existing and (create or retry_rejected or replace_unpaid_checkout):
         raise Stop("invalid_operation_combination")
     plan_spec(target_plan)
-    existing = existing_checkout(state_dir, target.account_id, target_plan) if inspect_existing else None
+    if recover_unknown_checkout:
+        from attempt_ledger import read_checkout_record
+        existing = read_checkout_record(state_dir, target.account_id, target_plan)
+        if (create or not inspect_existing or browser_context is None or next_cycle_grant is not None
+                or not unknown_checkout_recoverable(existing)):
+            raise Stop('existing_checkout_unknown')
+    else:
+        existing = existing_checkout(state_dir, target.account_id, target_plan) if inspect_existing else None
     recovery_diagnostic = {
         'canonical_proof_valid': can_restore_first_pro_checkout(existing, target_plan),
         'missing_proof_fields': [key for key in (
@@ -1208,7 +1271,7 @@ async def run_browser(target, *, create=False, inspect_existing=False, retry_rej
                      eligibility_reason=reason)
 
     eligibility_reason = 'not_requested'
-    if existing and allow_checkout_tier_change and quote_handler is not None:
+    if existing and not recover_unknown_checkout and allow_checkout_tier_change and quote_handler is not None:
         from payment_state import PaymentLedger
         try:
             with PaymentLedger(state_dir, target.account_id, target_plan=target_plan,
@@ -1231,7 +1294,8 @@ async def run_browser(target, *, create=False, inspect_existing=False, retry_rej
     report_recovery_eligibility(eligibility_reason)
     manager = AttemptLedger(state_dir, target.account_id, retry_rejected=retry_rejected,
                             replace_unpaid_checkout=replace_unpaid_checkout,
-                            target_plan=target_plan, next_cycle_grant=next_cycle_grant) if create else nullcontext()
+                            target_plan=target_plan, next_cycle_grant=next_cycle_grant,
+                            recover_unknown_checkout=recover_unknown_checkout) if create or recover_unknown_checkout else nullcontext()
 
     async def execute(active_browser=None, active_context=None):
         context = active_context or await active_browser.new_context(

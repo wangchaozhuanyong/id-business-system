@@ -1,0 +1,39 @@
+import assert from 'node:assert/strict';
+import test from 'node:test';
+import { checkoutControlPaths, isRechargeCheckoutOnly } from './ci-recharge-checkout-scope.mjs';
+import {
+  adminCheckCommands,
+  isRechargeOnly,
+  needsOnlineRechargeCiBuild,
+  selectedParts
+} from './ci-recharge-scope.mjs';
+const paths = [
+  ...checkoutControlPaths,
+  'apps/admin/src/v2/features/auto-recharge/RechargeResult.vue',
+  'apps/api/src/id-business-v2/auto-recharge/worker/native_checkout.py',
+  'apps/api/src/id-business-v2/auto-recharge/persistence/recharge.repository.ts',
+  'packages/shared/src/v2/auto-recharge.ts',
+  'scripts/ci-recharge-check.mjs'
+];
+test('native checkout selects UI/API/connector and retains filled-details acceptance', () => {
+  assert.equal(isRechargeCheckoutOnly(paths), true);
+  assert.equal(isRechargeOnly(paths, 'same', 'same'), true);
+  assert.equal(isRechargeOnly(paths, 'before', 'after'), false);
+  assert.deepEqual(selectedParts(paths), ['guards', 'admin', 'api', 'connector']);
+  assert.equal(needsOnlineRechargeCiBuild(paths), false);
+  assert.ok(adminCheckCommands('recharge', paths).some((row) => row.includes('--quote-stages')));
+});
+test('scope rejects dependency, schema, ONLINE, auth and unrelated UI changes', () => {
+  for (const extra of [
+    'package-lock.json',
+    '.github/workflows/quality.yml',
+    'apps/api/prisma-mysql/schema.prisma',
+    'apps/api/prisma-mysql/migrations/new/migration.sql',
+    'apps/api/src/auth/auth.service.ts',
+    'apps/admin/src/v2/features/orders/OrdersView.vue',
+    'apps/api/src/id-business-v2/online-recharge/online.service.ts'
+  ]) {
+    assert.equal(isRechargeCheckoutOnly([...paths, extra]), false, extra);
+  }
+  assert.equal(isRechargeCheckoutOnly([]), false);
+});

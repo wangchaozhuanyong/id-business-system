@@ -1,4 +1,5 @@
 import { resolvedDeclinedPayment } from './recharge-noncharge-proof';
+import { isUnidentifiedUnpaidCheckout } from './recharge-unidentified-checkout';
 import type {
   V2RechargeDetails,
   V2RechargeStart,
@@ -243,7 +244,8 @@ export function findOriginalRechargeCheckout(
   jobs: OwnedRechargeJob[],
   ownerId: string,
   accountKey: string,
-  plan: string
+  plan: string,
+  unidentifiedSourceJobId?: string
 ) {
   for (const job of jobs) {
     if (
@@ -259,6 +261,7 @@ export function findOriginalRechargeCheckout(
     )
       continue;
     if (resolvedDeclinedPayment(job.result)) continue;
+    if (job.id === unidentifiedSourceJobId && isUnidentifiedUnpaidCheckout(job.result)) continue;
     const identifier = rechargeCheckoutIdentifier(job.result as Record<string, unknown>);
     if (identifier) return identifier;
   }

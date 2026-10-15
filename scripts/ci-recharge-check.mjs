@@ -1,3 +1,4 @@
+import { isRechargeCheckoutOnly } from './ci-recharge-checkout-scope.mjs';
 import { isRechargeBillingOnly } from './ci-recharge-billing-scope.mjs';
 import { isSharedProxyPoolOnly, sharedProxyAdminCommand } from './ci-shared-proxy-scope.mjs';
 import { execFileSync } from 'node:child_process';
@@ -434,17 +435,27 @@ if (part === 'guards') {
   const linted = existing.filter((p) => /\.(?:mjs|ts|vue)$/.test(p));
   if (formatted.length) npm('exec', '--', 'prettier', '--check', ...formatted);
   if (linted.length) npm('exec', '--', 'eslint', ...linted);
-  const commonControlTests = rechargeAvailabilityCommonControlTests(changed) ?? [
-    'scripts/ci-recharge-scope.test.mjs',
-    'scripts/ci-recharge-check.test.mjs',
-    'scripts/check-cloud-independence.test.mjs',
-    'scripts/check-v2-prisma-runtime-boundary.test.mjs',
-    'scripts/check-v2-module-architecture.test.mjs',
-    'scripts/ci-recharge-precision.test.mjs',
-    'scripts/ci-change-scope.test.mjs',
-    'scripts/ci-recharge-release.test.mjs',
-    'scripts/admin-layout-rules.test.mjs'
-  ];
+  const commonControlTests = isRechargeCheckoutOnly(changed)
+    ? [
+        'scripts/ci-recharge-checkout-scope.test.mjs',
+        'scripts/ci-recharge-scope.test.mjs',
+        'scripts/ci-recharge-check.test.mjs',
+        'scripts/check-cloud-independence.test.mjs',
+        'scripts/check-v2-prisma-runtime-boundary.test.mjs',
+        'scripts/check-v2-module-architecture.test.mjs',
+        'scripts/admin-layout-rules.test.mjs'
+      ]
+    : (rechargeAvailabilityCommonControlTests(changed) ?? [
+        'scripts/ci-recharge-scope.test.mjs',
+        'scripts/ci-recharge-check.test.mjs',
+        'scripts/check-cloud-independence.test.mjs',
+        'scripts/check-v2-prisma-runtime-boundary.test.mjs',
+        'scripts/check-v2-module-architecture.test.mjs',
+        'scripts/ci-recharge-precision.test.mjs',
+        'scripts/ci-change-scope.test.mjs',
+        'scripts/ci-recharge-release.test.mjs',
+        'scripts/admin-layout-rules.test.mjs'
+      ]);
   run('node', ['--test', ...commonControlTests]);
 }
 // The shared pool changes business source and an additive migration. Keep all
@@ -471,6 +482,16 @@ if (part === 'guards' && mode === 'admin' && isAdminHtmlCacheOnly(changed)) {
 // format, lint and CI-selector contracts have also run. Business source remains
 // subject to the formal workflow's immutable source and prior-validation proof.
 if (part === 'guards' && mode === 'recharge') {
+  if (isRechargeCheckoutOnly(changed)) {
+    run('python3', ['-B', 'scripts/production-release/recharge-checkout-release.test.py']);
+    for (const name of new Set([
+      ...adminUiGuardChecks(mode, changed),
+      ...backendArchitectureGuardChecks(mode, changed)
+    ]))
+      npm('run', name);
+    console.log('Native checkout controls and all affected architecture/UI rules verified');
+    process.exit(0);
+  }
   if (isRechargeBillingOnly(changed)) {
     run('node', ['--test', 'scripts/ci-recharge-billing-scope.test.mjs']);
     run('python3', ['-B', 'scripts/production-release/recharge-billing-release.test.py']);
@@ -953,6 +974,7 @@ if (releaseArtifactOnly && ['guards', 'release-controls'].includes(part)) {
       'bitbrowser_connector.py',
       'bitbrowser_retry.py',
       'browser_checkout.py',
+      'native_checkout.py',
       'callback_observation.py',
       'pay.py',
       'payment_network.py',
@@ -964,7 +986,8 @@ if (releaseArtifactOnly && ['guards', 'release-controls'].includes(part)) {
       'test_callback_observation.py',
       'test_response_settlement.py',
       'test_subscription_cycle.py',
-      'test_payment.py'
+      'test_payment.py',
+      'test_native_checkout.py'
     ].some((name) => path === `${workerDirectory}/${name}`)
   );
   const workerOptions = {
@@ -977,6 +1000,12 @@ if (releaseArtifactOnly && ['guards', 'release-controls'].includes(part)) {
     }
   };
   execFileSync('python3', ['-m', 'playwright', 'install', 'chromium'], workerOptions);
+  if (rechargeFlowRegression) {
+    // Native checkout contracts execute the real API sanitizer in Node.
+    if (!existsSync(resolve('node_modules/typescript/package.json'))) npm('ci', '--no-audit');
+    npm('run', 'prisma:mysql:generate', '--workspace', '@apple-business/api');
+    shared();
+  }
   execFileSync(
     'python3',
     [
@@ -997,6 +1026,7 @@ if (releaseArtifactOnly && ['guards', 'release-controls'].includes(part)) {
       'test_fingerprint_runtime',
       'test_password_login',
       'test_subscribe',
+      ...(rechargeFlowRegression ? ['test_native_checkout', 'test_native_pro_checkout'] : []),
       rechargeFlowRegression ? 'test_payment' : 'test_payment.StateTests',
       ...(rechargeFlowRegression
         ? ['test_callback_observation', 'test_response_settlement', 'test_subscription_cycle']

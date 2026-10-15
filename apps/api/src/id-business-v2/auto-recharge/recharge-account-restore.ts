@@ -13,6 +13,7 @@ import {
 } from './recharge-job-helpers';
 import { cycleContext, readCycleState } from './recharge-cycle-state';
 import { unpaidCheckoutRecoveryIdentifier } from './recharge-checkout-recovery';
+import { isUnidentifiedUnpaidCheckout } from './recharge-unidentified-checkout';
 
 export async function restoreRechargeAccount(input: {
   tx: V2CommandTransaction;
@@ -57,6 +58,37 @@ export async function restoreRechargeAccount(input: {
       ? []
       : await repository.finishedJobsForAccount(tx, job.ownerId, accountKey, job.id);
   let originalCheckoutIdentifier: string | undefined;
+  const unidentifiedRecord = records.find(
+    (r) =>
+      r.fileKey === `${accountKey}${job.plan === 'plus' ? '' : `-${job.plan}`}.json` &&
+      Number.isSafeInteger(r.revision) &&
+      r.revision >= 0 &&
+      isUnidentifiedUnpaidCheckout(r.document)
+  );
+  const unidentifiedSource =
+    unidentifiedRecord && ownedProfile
+      ? await repository.findJob(tx, ownedProfile.sourceJobId)
+      : null;
+  const unidentifiedRecovery = Boolean(
+    unidentifiedRecord &&
+    ownedProfile &&
+    unidentifiedSource &&
+    job.action === 'bitbrowser' &&
+    job.state === 'running' &&
+    currentResult.mode !== 'open_browser' &&
+    currentResult.recheck_only !== true &&
+    currentResult.resolution_only !== true &&
+    currentResult.payment_requests_sent === 0 &&
+    !currentResult.manual_confirmation_accepted &&
+    !records.some((r) => r.fileKey.startsWith('payments/')) &&
+    unidentifiedSource.ownerId === job.ownerId &&
+    unidentifiedSource.accountKey === accountKey &&
+    unidentifiedSource.plan === job.plan &&
+    unidentifiedSource.action === 'bitbrowser' &&
+    unidentifiedSource.state === 'finished' &&
+    isUnidentifiedUnpaidCheckout(unidentifiedSource.result) &&
+    object(unidentifiedSource.result).browser_profile_id === ownedProfile.profileId
+  );
   if (job.action === 'bitbrowser' && currentResult.recheck_only === true) {
     const source =
       typeof currentResult.source_job_id === 'string'
@@ -97,14 +129,17 @@ export async function restoreRechargeAccount(input: {
       records,
       accountKey,
       job.plan,
-      [boundIdentifier]
+      [boundIdentifier],
+      unidentifiedRecovery
     );
     let historicalIdentifier = await repository.originalCheckoutForAccount(
       tx,
       job.ownerId,
       accountKey,
       job.plan,
-      job.id
+      job.id,
+      undefined,
+      unidentifiedRecovery ? ownedProfile?.sourceJobId : undefined
     );
     if (
       persistedIdentifier &&
@@ -125,7 +160,8 @@ export async function restoreRechargeAccount(input: {
       records,
       accountKey,
       job.plan,
-      [boundIdentifier, historicalIdentifier]
+      [boundIdentifier, historicalIdentifier],
+      unidentifiedRecovery
     );
   }
   if (
@@ -168,6 +204,7 @@ export async function restoreRechargeAccount(input: {
     records,
     staleProfiles,
     ...(ownedProfile ? { ownedProfile } : {}),
+    ...(unidentifiedRecovery ? { unidentifiedCheckoutRecovery: true as const } : {}),
     ...(originalCheckoutIdentifier ? { originalCheckoutIdentifier } : {})
   };
 }

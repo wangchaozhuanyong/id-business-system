@@ -152,6 +152,7 @@ const labels: Record<string, string> = {
   checkout_create: '准备创建官方结算',
   checkout_request_sending: '正在请求官方结算',
   checkout_wait: '等待官方结算响应',
+  payment_preparation: '正在填写银行卡和账单资料',
   quote_read: '读取官方报价',
   quote_waiting: '报价页仍在加载',
   quote_page_refreshing: '正在刷新当前报价页',
@@ -276,6 +277,10 @@ const labels: Record<string, string> = {
   three_ds_authentication_failed: '本次银行验证未通过，请核对银行提示并只读复查',
   quote_needs_review_or_billing: '官网初始总额或预估税费未完整读取，本次未付款',
   actual_quote_unknown: '无法明确读取今日应付',
+  checkout_unknown_write: '官网结算请求未被识别，结算可能已打开，本次未提交付款',
+  checkout_response_plan_unverified: '官网已返回结算，但无法核实对应套餐，本次未提交付款',
+  existing_checkout_unverified: '原结算的账号、套餐或未付款状态未能核实',
+  billing_fields_incomplete: '官网完整账单资料尚未核实，本次未提交付款',
   checkout_page_load_timeout: '报价页等待满本轮时间后仍未加载',
   checkout_page_network_error: '当前报价页的代理或网络连接失败',
   checkout_page_incomplete: '报价页未返回完整内容',
@@ -607,6 +612,8 @@ export function paymentFailureLabel(value: unknown): string {
 }
 
 function issueAction(job: V2RechargeJob, reason?: string, paymentFailure?: string): string {
+  if (['checkout_unknown_write', 'checkout_response_plan_unverified'].includes(String(reason)))
+    return '请保留已打开的官网结算窗口和本次记录；修复连接器后核验并接续原结算，避免重复创建。本次未提交付款。';
   if (reason === 'owned_recharge_window_unavailable')
     return '请检查比特浏览器本地接口和原任务绑定的窗口；窗口无法确认时停止复查，保留原单和付款保护。不要新建替代订单或重新付款。';
   if (reason === 'official_payment_method_verification_failed')
