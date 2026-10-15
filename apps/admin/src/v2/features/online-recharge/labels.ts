@@ -82,6 +82,8 @@ const states: Record<string, string> = {
   pro_20x: 'Pro 20 倍',
   local: '本地浏览器',
   third_party: '第三方代充',
+  recharge: '充值',
+  recheck: '原单核对',
   subscription: '查询订阅',
   renewal: '处理续费',
   config_test: '配置连通性测试',
@@ -122,7 +124,8 @@ export function onlineCell(row: OnlineRow, key: string, kind = 'text') {
   if (kind === 'date') return formatV2DateTime(String(value));
   if (key === 'country' || key === 'region')
     return regionOptions.find((item) => item.value === value)?.label ?? String(value);
-  if (key === 'protocol') return String(value).toUpperCase();
+  if (key === 'protocol')
+    return value === 'extraction' ? '动态提取链接' : String(value).toUpperCase();
   if (kind === 'status' || ['plan', 'provider', 'mode', 'level', 'stage', 'event'].includes(key))
     return onlineLabel(value);
   if (typeof value === 'boolean') return value ? '是' : '否';

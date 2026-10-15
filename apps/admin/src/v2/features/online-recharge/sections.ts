@@ -1,4 +1,4 @@
-import type { OnlineAction, OnlineField, OnlineRow, OnlineSection } from './contracts';
+import type { OnlineAction, OnlineField, OnlineQuery, OnlineRow, OnlineSection } from './contracts';
 import { planOptions } from './labels';
 const plan: OnlineField = {
   key: 'plan',
@@ -71,10 +71,12 @@ export const sectionDescriptions: Record<OnlineSection, string> = {
   overview: '查看线上代充任务、独立资源和执行器运行状态。',
   config: '保存原软件的执行、地区、供应商、通知和验证码配置。',
   proxies: '管理线上代充独立代理池，检测连通性并调整可用状态。',
-  'browser-pool': '查看浏览器槽位、连接状态以及独立／池化运行模式。',
+  'browser-pool':
+    '查看最近一次检测的浏览器槽位快照、连接状态和独立／池化运行模式；需要时重新检测。',
   addresses: '管理银行卡关联的免税地址，生成美国地址并清理未绑定记录。',
   'checkout-debug': '使用原套餐和地区生成支付链接，执行在付款前停止。',
-  cards: '银行卡默认脱敏；安全码仅短暂交给执行器，刷新或重启后需要补充。',
+  cards:
+    '银行卡默认脱敏；安全码仅在执行器内存保留最多 30 分钟，任务结束、失去租约或执行器重启后清除，需要时重新补充。',
   cdks: '生成、导入、出库和查询兑换码；已被任务占用的兑换码受保护。',
   sessions: '查看任务会话资料和订阅情况，查看敏感资料需要填写原因并记录审计。',
   renewal: '查询订阅到期和续费状态，按原逻辑取消或恢复自动续费。',
@@ -126,7 +128,7 @@ export const topActions: Partial<Record<OnlineSection, readonly OnlineAction[]>>
           type: 'textarea',
           required: true,
           transient: true,
-          help: '每行一条代理地址，支持原有代理协议。'
+          help: '每行一条，支持 HTTP／SOCKS5 直连、主机:端口:用户名:密码四段网关或 IPDEEP 动态提取链接；提取链接每任务读取一次。'
         }
       ]
     }
@@ -306,4 +308,11 @@ export function initialFields(fields: readonly OnlineField[] = []) {
         field.initial ?? (field.type === 'switch' ? false : field.type === 'number' ? 1 : '')
       ])
   );
+}
+
+export function onlineActionPayload(filters: OnlineQuery, values: Record<string, unknown>) {
+  const selectedFilters = Object.fromEntries(
+    Object.entries(filters).filter(([, value]) => value !== '' && value != null)
+  );
+  return { ...selectedFilters, ...values };
 }

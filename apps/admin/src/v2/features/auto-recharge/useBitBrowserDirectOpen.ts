@@ -239,7 +239,14 @@ export function useBitBrowserDirectOpen(
         try {
           await callback('finished', {
             status: cancelled ? 'cancelled' : 'blocked',
-            stage: 'session_restore',
+            stage: [
+              'bitbrowser_existing_window_control_unavailable',
+              'bitbrowser_direct_debug_unavailable'
+            ].includes(reason)
+              ? 'browser_control_connect'
+              : reason === 'official_login_page_not_ready'
+                ? 'official_page_readiness'
+                : 'session_restore',
             reason,
             account_matched: reason === 'official_login_page_not_ready',
             session_status:

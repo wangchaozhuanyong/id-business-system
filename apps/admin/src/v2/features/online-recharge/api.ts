@@ -1,21 +1,14 @@
-import axios from 'axios';
 import { http, request } from '@/api/client';
 import { withV2QueryInvalidation } from '@/v2/composables/useV2Query';
 import type { OnlineList, OnlineQuery, OnlineSection, PublicConfig, PublicTask } from './contracts';
 const base = '/id-business-v2/online-recharge';
-const publicHttp = axios.create({
-  baseURL: import.meta.env.VITE_API_BASE_URL ?? '/api',
-  timeout: 20000
-});
-// 独立客户客户端，不附加后台登录凭据，也不触发后台会话失效处理。
-async function customerRequest<T>(path: string, body?: object, signal?: AbortSignal): Promise<T> {
-  const result =
+// 保留原接口路径；公司内部入口统一使用后台身份及会话失效处理。
+function internalRequest<T>(path: string, body?: object, signal?: AbortSignal): Promise<T> {
+  return request<T>(
     body === undefined
-      ? await publicHttp.get(`${base}/public/${path}`, { signal })
-      : await publicHttp.post(`${base}/public/${path}`, body, { signal });
-  const payload = result.data;
-  if (payload?.success === false) throw new Error(payload.message || '请求失败，请稍后重试');
-  return payload?.data ?? payload;
+      ? http.get(`${base}/public/${path}`, { signal })
+      : http.post(`${base}/public/${path}`, body, { signal })
+  );
 }
 export const onlineApi = {
   list(section: OnlineSection, params: OnlineQuery, signal?: AbortSignal) {
@@ -42,7 +35,7 @@ export const onlineApi = {
       : withV2QueryInvalidation(result, 'online-recharge');
   },
   async publicConfig(signal?: AbortSignal): Promise<PublicConfig> {
-    const result = await customerRequest<
+    const result = await internalRequest<
       PublicConfig & {
         maintenance?: boolean;
         maxConcurrent?: number;
@@ -59,22 +52,22 @@ export const onlineApi = {
     };
   },
   verify(code: string) {
-    return customerRequest<{ plan: string; status: string; taskId?: string }>('verify', { code });
+    return internalRequest<{ plan: string; status: string; taskId?: string }>('verify', { code });
   },
   redeem(code: string, session: string) {
-    return customerRequest<PublicTask>('redeem', { code, session });
+    return internalRequest<PublicTask>('redeem', { code, session });
   },
   task(id: string, taskToken: string, signal?: AbortSignal) {
-    return customerRequest<PublicTask>('task', { id, taskToken }, signal);
+    return internalRequest<PublicTask>('task', { id, taskToken }, signal);
   },
   query(code: string) {
-    return customerRequest<{ task?: PublicTask; taskToken?: string }>('query', { code });
+    return internalRequest<{ task?: PublicTask; taskToken?: string }>('query', { code });
   },
   publicSubscribe(id: string, taskToken: string) {
-    return customerRequest<{ ticket: string; wsPath: string }>('subscribe', { id, taskToken });
+    return internalRequest<{ ticket: string; wsPath: string }>('subscribe', { id, taskToken });
   },
   subscription(session: string) {
-    return customerRequest<PublicTask>('subscription', { session });
+    return internalRequest<PublicTask>('subscription', { session });
   }
 };
 export async function copyOnlineText(value: string) {
