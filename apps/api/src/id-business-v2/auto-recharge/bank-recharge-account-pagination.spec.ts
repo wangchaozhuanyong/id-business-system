@@ -17,6 +17,7 @@ describe('银充资料查询完整性', () => {
       ),
       countAccounts: vi.fn().mockResolvedValue(501),
       subscriptionsForAccounts: vi.fn().mockResolvedValue([]),
+      registrationSourceAudits: vi.fn().mockResolvedValue([]),
       openingCardsForAccounts: vi.fn().mockResolvedValue([]),
       loginNetworksByEmailHashes: vi.fn().mockResolvedValue([]),
       renewalWarningDays: vi.fn().mockResolvedValue(3)
@@ -25,7 +26,7 @@ describe('银充资料查询完整性', () => {
       repository as never,
       {} as never,
       {} as never,
-      {} as never
+      { decrypt: () => null } as never
     );
     expect((await service.listAccounts()).items).toHaveLength(501);
     const page = await service.listAccounts({ page: '26', pageSize: '20' });

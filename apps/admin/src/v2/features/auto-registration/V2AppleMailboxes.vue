@@ -55,6 +55,12 @@
           @click="page.openMark(page.selected)"
           >批量标记{{ page.selected.length ? `（${page.selected.length}）` : '' }}</AppButton
         >
+        <AppButton
+          variant="soft"
+          :disabled="!page.canWrite || !page.hasSelection || page.busy"
+          @click="page.openManualSync"
+          >同步历史标记</AppButton
+        >
         <AppButton variant="soft" :disabled="page.paginationBusy" @click="page.refreshMailboxes"
           >刷新</AppButton
         >
@@ -62,7 +68,10 @@
     </V2PageContext>
 
     <p v-if="page.feedback" role="status">{{ page.feedback }}</p>
-    <p v-if="page.actionError && !page.markOpen && !page.recoverOpen" role="alert">
+    <p
+      v-if="page.actionError && !page.markOpen && !page.recoverOpen && !page.manualSyncOpen"
+      role="alert"
+    >
       {{ page.actionError }}
     </p>
     <V2AsyncRegion
@@ -119,7 +128,7 @@
             prop="registrationIp"
             ><template #default="{ row }"
               ><div class="v2-apple-cell">
-                <span>{{ row.registrationIp || '未记录' }}</span
+                <span>{{ registrationNetworkLabel(row) }}</span
                 ><small v-if="row.registrationIp">{{
                   appleMailboxIpSourceLabel(row.registrationIpSource)
                 }}</small>
@@ -143,7 +152,9 @@
             prop="taskStatus"
             ><template #default="{ row }"
               >{{ appleMailboxTaskLabel(row.taskStatus)
-              }}<small v-if="row.syncStatus">
+              }}<small v-if="row.authorizationStatus">
+                · {{ appleMailboxAuthorizationLabel(row.authorizationStatus) }}</small
+              ><small v-if="row.syncStatus">
                 · {{ appleMailboxSyncLabel(row.syncStatus) }}</small
               ></template
             ></V2TableColumn
@@ -173,6 +184,12 @@
                   ><el-dropdown-menu
                     ><el-dropdown-item command="task" :disabled="!row.taskUuid"
                       >查看任务</el-dropdown-item
+                    ><el-dropdown-item
+                      command="authorization"
+                      :disabled="
+                        !page.canWrite || page.busy || !appleMailboxCanResumeAuthorization(row)
+                      "
+                      >继续授权</el-dropdown-item
                     ><el-dropdown-item
                       command="sync"
                       :disabled="
@@ -247,9 +264,9 @@
                   'registrationIp'
                 ]"
               >
-                <dt>注册 IP</dt>
+                <dt>注册 IP / 国家</dt>
                 <dd>
-                  {{ row.registrationIp || '未记录'
+                  {{ registrationNetworkLabel(row)
                   }}<small v-if="row.registrationIp">
                     · {{ appleMailboxIpSourceLabel(row.registrationIpSource) }}</small
                   >
@@ -282,7 +299,9 @@
                 <dt>任务状态</dt>
                 <dd>
                   {{ appleMailboxTaskLabel(row.taskStatus)
-                  }}<small v-if="row.syncStatus">
+                  }}<small v-if="row.authorizationStatus">
+                    · {{ appleMailboxAuthorizationLabel(row.authorizationStatus) }}</small
+                  ><small v-if="row.syncStatus">
                     · {{ appleMailboxSyncLabel(row.syncStatus) }}</small
                   >
                 </dd>
@@ -308,6 +327,12 @@
                   ><el-dropdown-menu
                     ><el-dropdown-item command="task" :disabled="!row.taskUuid"
                       >查看任务</el-dropdown-item
+                    ><el-dropdown-item
+                      command="authorization"
+                      :disabled="
+                        !page.canWrite || page.busy || !appleMailboxCanResumeAuthorization(row)
+                      "
+                      >继续授权</el-dropdown-item
                     ><el-dropdown-item
                       command="sync"
                       :disabled="
@@ -416,6 +441,16 @@
         <p v-else-if="page.taskQuery.data?.status === 'awaiting_review'">
           注册结果尚未确认。请先核对官网及已有账号记录，再从邮箱的“更多操作”选择“核对后解除占用”；结果仍不明时保留占用。
         </p>
+        <p v-if="page.taskQuery.data?.record.authorizationStatus">
+          {{ appleMailboxAuthorizationLabel(page.taskQuery.data.record.authorizationStatus) }}
+          <AppButton
+            v-if="appleMailboxCanResumeAuthorization(page.taskQuery.data.record)"
+            variant="soft"
+            :loading="page.busy"
+            @click="page.resumeAuthorization()"
+            >继续授权</AppButton
+          >
+        </p>
         <p v-if="page.taskQuery.data?.record.syncStatus">
           {{ appleMailboxSyncLabel(page.taskQuery.data.record.syncStatus) }}
         </p>
@@ -437,6 +472,46 @@
         }}</pre>
       </section>
     </V2AsyncRegion>
+
+    <V2ConfirmDialog
+      v-model="page.manualSyncOpen"
+      title="同步历史人工标记"
+      message=""
+      width="min(680px, 94vw)"
+      confirm-text="同步到 ChatGPT 账号"
+      :confirm-loading="page.busy"
+      :confirm-disabled-reason="page.manualSyncDisabledReason"
+      @confirm="page.syncManualMailboxes"
+    >
+      <p>人工标记为已注册的邮箱将建立待补资料记录，并保留人工来源；缺失资料留空。</p>
+      <V2AsyncRegion
+        skeleton="form"
+        :phase="page.manualSyncQuery.phase"
+        :error="page.manualSyncError"
+        loading-title="正在核对历史标记"
+        refreshing-title="正在更新同步预览"
+        error-title="同步预览失败"
+        @retry="page.manualSyncQuery.refresh"
+      >
+        <p>
+          已选择 {{ page.manualSyncQuery.data?.total ?? 0 }} 个邮箱，可新增
+          {{ page.manualSyncQuery.data?.creatable ?? 0 }} 个。
+        </p>
+        <ul>
+          <li
+            v-for="item in page.manualSyncQuery.data?.items ?? []"
+            :key="item.aliasId"
+            class="v2-apple-task-source"
+          >
+            {{ item.email }} · {{ appleMailboxManualSyncPreviewLabel(item.status) }}
+          </li>
+        </ul>
+      </V2AsyncRegion>
+      <AppButton variant="soft" :disabled="page.busy" @click="page.refreshManualSyncPreview"
+        >重新核对最新状态</AppButton
+      >
+      <p v-if="page.actionError" role="alert">{{ page.actionError }}</p>
+    </V2ConfirmDialog>
 
     <V2ConfirmDialog
       v-model="page.recoverOpen"
@@ -538,6 +613,7 @@ import V2TableControlColumn from '@/v2/components/V2TableControlColumn.vue';
 import { useV2StableListFrame } from '@/v2/composables/useV2StableListFrame';
 import { v2TableSchemas } from '@/v2/features/tableSchemas';
 import { formatV2DateTime } from '@/v2/utils/dateTime';
+import { proxyCountryLabel } from '@/v2/features/proxy-pool/public-api';
 import '@/v2/styles/records.css';
 import {
   appleMailboxStatusOptions,
@@ -555,7 +631,10 @@ import {
   appleMailboxLocalSaveLabel,
   appleMailboxIdentityLabel,
   appleMailboxDiagnostic,
-  appleMailboxSelectionLabel
+  appleMailboxSelectionLabel,
+  appleMailboxCanResumeAuthorization,
+  appleMailboxAuthorizationLabel,
+  appleMailboxManualSyncPreviewLabel
 } from './apple-mailbox-presentation';
 import type { AppleMailboxRow } from './contracts';
 import { useAppleMailboxes } from './useAppleMailboxes';
@@ -575,6 +654,9 @@ const { listRef, listFrameStyle } = useV2StableListFrame({
 function showDate(value: string | null) {
   return value ? formatV2DateTime(value) : '未记录';
 }
+function registrationNetworkLabel(row: AppleMailboxRow) {
+  return `${row.registrationIp || 'IP 未记录'} · ${row.registrationCountryCode ? proxyCountryLabel(row.registrationCountryCode) : '国家未记录'}`;
+}
 function mailboxBusy(row: AppleMailboxRow) {
   return appleMailboxBusy(row);
 }
@@ -583,6 +665,7 @@ function command(row: AppleMailboxRow, value: string) {
   if (value === 'recover') page.openRecovery(row);
   if (value === 'sync') void page.syncTask(row);
   if (value === 'local-save') void page.saveLocalAccount(row);
+  if (value === 'authorization') void page.resumeAuthorization(row);
 }
 </script>
 

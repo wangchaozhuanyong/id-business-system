@@ -341,7 +341,8 @@ class ReleaseSafetyTests(unittest.TestCase):
                     with sessions.get_db() as db:
                         _, task = store.task_data(db, task_uuid)
                         mirror_id = task["mirrorAccountId"]
-                    self.assertTrue(store.sync_ack(task_uuid, mirror_id, "saved")["accepted"])
+                    self.assertTrue(store.sync_ack(task_uuid, mirror_id, "saved",
+                        payload_fingerprint=task["syncPayload"]["fingerprint"])["accepted"])
                     batch_id = str(uuid.uuid4())
                     with sessions.get_db() as db:
                         binding, task = store.task_data(db, task_uuid)

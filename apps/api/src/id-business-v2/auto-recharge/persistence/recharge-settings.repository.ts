@@ -5,6 +5,7 @@ import type { V2CommandTransaction } from '../../runtime/public-api';
 import { acquireMysqlTransactionLock } from '../../../common/prisma/mysql-transaction-lock';
 import { ACCOUNT_COPY_SETTINGS_OWNER_ID, accountCopySuffix } from '../account-copy-settings';
 
+export const ONLINE_ORDER_PRICING_SETTINGS_OWNER_ID = '__online_order_pricing_settings__';
 export const BIT_ORDER_PRICING_SETTINGS_OWNER_ID = '__bit_order_pricing_settings__';
 
 @Injectable()
@@ -121,9 +122,14 @@ export class RechargeSettingsRepository {
     });
   }
 
-  findOrderPricing(tx?: V2CommandTransaction) {
+  findOrderPricing(tx?: V2CommandTransaction, channel: 'bitbrowser' | 'online' = 'bitbrowser') {
     return (tx ?? this.prisma).idBusinessV2RechargeBrowserSetting.findUnique({
-      where: { ownerId: BIT_ORDER_PRICING_SETTINGS_OWNER_ID },
+      where: {
+        ownerId:
+          channel === 'online'
+            ? ONLINE_ORDER_PRICING_SETTINGS_OWNER_ID
+            : BIT_ORDER_PRICING_SETTINGS_OWNER_ID
+      },
       select: { browserOptions: true, updatedAt: true }
     });
   }
@@ -131,9 +137,13 @@ export class RechargeSettingsRepository {
   async compareAndSetOrderPricing(
     tx: V2CommandTransaction,
     expectedUpdatedAt: Date | null,
-    browserOptions: Prisma.InputJsonValue
+    browserOptions: Prisma.InputJsonValue,
+    channel: 'bitbrowser' | 'online' = 'bitbrowser'
   ) {
-    const ownerId = BIT_ORDER_PRICING_SETTINGS_OWNER_ID;
+    const ownerId =
+      channel === 'online'
+        ? ONLINE_ORDER_PRICING_SETTINGS_OWNER_ID
+        : BIT_ORDER_PRICING_SETTINGS_OWNER_ID;
     const updatedAt = new Date(Math.max(Date.now(), (expectedUpdatedAt?.getTime() ?? 0) + 1));
     const result =
       expectedUpdatedAt === null
@@ -145,7 +155,7 @@ export class RechargeSettingsRepository {
             where: { ownerId, updatedAt: expectedUpdatedAt },
             data: { browserOptions, updatedAt }
           });
-    return result.count === 1 ? this.findOrderPricing(tx) : null;
+    return result.count === 1 ? this.findOrderPricing(tx, channel) : null;
   }
 
   async findAccountCopySuffix(tx?: V2CommandTransaction) {

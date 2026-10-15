@@ -5,7 +5,7 @@ allowlist. Neither recovery nor synchronization invokes registration or uploads.
 """
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import hashlib
 import json
 from pathlib import Path
@@ -33,6 +33,9 @@ def now():
 def fingerprint(payload):
     fields = {key: payload[key] for key in ("accountId", "sourceTaskUuid", "upstreamAccountId",
               "email", "registrationCountry", "source")}
+    if payload.get("schemaVersion") == 2:
+        fields.update({key: payload[key] for key in ("schemaVersion", "registrationIp", "registeredAt",
+                      "creationConfirmed", "provider", "identityStatus")})
     return hashlib.sha256(json.dumps(fields, sort_keys=True, separators=(",", ":"),
                                      ensure_ascii=False).encode("utf-8")).hexdigest()
 
@@ -174,6 +177,12 @@ class ClosedLoopFacts:
     def capture_result(self, task_uuid, result, identity):
         with self.sessions.get_db() as db:
             _, data = self.task_data(db, task_uuid)
+        if identity.get("identityStatus") == "mismatch":
+            # Do not replace the created account's checkpoint with credentials
+            # belonging to a different authenticated official account.
+            self.update_task(task_uuid, **{**identity, "syncStatus": "quarantined", "reason": "identity_mismatch",
+                             "syncErrorKind": "identity_mismatch"})
+            return False
         values = {key: getattr(result, key, None) for key in RESULT_FIELDS}
         values["metadata"] = {**(values.get("metadata") or {}), "idSourceTaskUuid": task_uuid}
         if (not isinstance(values["email"], str) or values["email"].strip().lower() != data["email"]
@@ -202,13 +211,27 @@ class ClosedLoopFacts:
                        "password": raw.get("password") or "", "registrationCountry": record.get("registrationCountry"),
                        "source": raw.get("source"), "identityStatus": identity.get("identityStatus"),
                        "identityEvidence": identity.get("identityEvidence")}
+            # Version 1 payloads are immutable replay receipts. Only new tasks
+            # opt in, so adding facts never changes an old task's fingerprint.
+            if data.get("schemaVersion") == 2:
+                payload.update(schemaVersion=2, provider=data.get("provider", "apple_hidden"),
+                               registrationIp=record.get("registrationIp") if data.get("creationConfirmed") else None,
+                               registeredAt=data.get("creationConfirmedAt"),
+                               creationConfirmed=bool(data.get("creationConfirmed")))
+                if payload["creationConfirmed"] and identity.get("identityStatus") != "verified":
+                    payload["identityStatus"] = "creation_confirmed"
             payload["fingerprint"] = fingerprint(payload)
-            status = "pending" if identity.get("identityStatus") == "verified" else "awaiting_identity"
+            eligible = identity.get("identityStatus") == "verified" or (payload.get("schemaVersion") == 2
+                       and payload.get("creationConfirmed") is True and payload.get("source") == "register"
+                       and bool(data.get("passwordCheckpoint")))
+            status = "pending" if eligible else "awaiting_identity"
             data.update(upstreamAccountId=str(account.id), syncPayload=payload, localSaveStatus="saved", syncStatus=status,
                         stage="sync", syncErrorKind=identity.get("reason"), **identity)
             row.value = json.dumps(data, ensure_ascii=False)
             record.update(localSaveStatus="saved", syncStatus=status, identityStatus=identity.get("identityStatus"),
                           stage="sync", syncErrorKind=identity.get("reason"), reason=identity.get("reason"))
+            if identity.get("identityStatus") == "verified":
+                record["authorizationStatus"] = "complete"
             self.write(db, record)
             return True
 
@@ -216,8 +239,13 @@ class ClosedLoopFacts:
         with self.sessions.get_db() as db:
             _, data = self.task_data(db, task_uuid)
             payload = data.get("syncPayload")
+            eligible = isinstance(payload, dict) and (payload.get("identityStatus") == "verified" or
+                       (payload.get("schemaVersion") == 2 and payload.get("creationConfirmed") is True
+                        and data.get("creationConfirmed") is True and payload.get("source") == "register"
+                        and payload.get("identityStatus") == "creation_confirmed"
+                        and payload.get("password") == data.get("passwordCheckpoint") and bool(payload.get("password"))))
             if (data.get("syncStatus") not in {"pending", "failed", "saved"} or data.get("localSaveStatus") != "saved"
-                    or not isinstance(payload, dict) or payload.get("identityStatus") != "verified"
+                    or not eligible
                     or self.current(db, task_uuid, data) is None):
                 raise HTTPException(409, "账号尚不满足同步条件，请先核对注册与身份")
             account = db.query(self.models.Account).filter_by(id=int(payload["upstreamAccountId"])).first()
@@ -231,21 +259,34 @@ class ClosedLoopFacts:
 
     def sync_pending(self):
         tasks = []
-        with self.sessions.get_db() as db:
+        with self.transaction() as db:
             for row in db.query(self.models.Setting).filter(self.models.Setting.key.startswith(TASK_PREFIX)).all():
                 data = json.loads(row.value)
                 task_uuid = row.key[len(TASK_PREFIX):]
+                retry_due = (data.get("syncStatus") == "failed" and data.get("syncErrorKind") in
+                             {"storage_unavailable", "sync_failed"} and data.get("syncRetryCount", 0) < 3
+                             and (data.get("syncNextRetryAt") is None or
+                                  (isinstance(data["syncNextRetryAt"], str) and data["syncNextRetryAt"] <= now())))
+                if retry_due and self.current(db, task_uuid, data) is not None:
+                    data.update(syncStatus="pending", syncErrorKind=None)
+                    row.value = json.dumps(data, ensure_ascii=False)
+                    record = self.current(db, task_uuid, data)
+                    record.update(syncStatus="pending", syncErrorKind=None)
+                    self.write(db, record)
                 if data.get("syncStatus") == "pending" and self.current(db, task_uuid, data) is not None:
                     tasks.append({"taskUuid": task_uuid, "operatorId": data["operatorId"], "syncStatus": "pending"})
         return {"tasks": tasks}
 
-    def sync_ack(self, task_uuid, account_id, status, error_kind=None):
+    def sync_ack(self, task_uuid, account_id, status, error_kind=None, payload_fingerprint=None):
         if status not in {"saved", "failed", "conflict"} or (error_kind is not None and error_kind not in SYNC_ERRORS):
             raise HTTPException(400, "账号同步回执无效")
         with self.transaction() as db:
             row, data = self.task_data(db, task_uuid)
             if account_id != data.get("mirrorAccountId") or not data.get("syncPayload"):
                 raise HTTPException(409, "账号同步回执与原任务不一致")
+            if (data["syncPayload"].get("schemaVersion") == 2 and
+                    payload_fingerprint != data["syncPayload"].get("fingerprint")):
+                raise HTTPException(409, "同步资料版本已变化，旧回执不能覆盖新资料")
             record = self.current(db, task_uuid, data)
             if record is None:
                 raise HTTPException(409, "迟到的同步回执需要核对")
@@ -255,6 +296,10 @@ class ClosedLoopFacts:
                 raise HTTPException(409, "当前任务不允许接收同步回执")
             data.update(syncStatus=status, syncErrorKind=error_kind,
                         systemAccountId=account_id if status == "saved" else None, syncedAt=now() if status == "saved" else None)
+            if status == "failed" and error_kind in {"storage_unavailable", "sync_failed"}:
+                retries = min(data.get("syncRetryCount", 0) + 1, 3)
+                data.update(syncRetryCount=retries, syncNextRetryAt=(datetime.now(timezone.utc) +
+                            timedelta(seconds=10 * (3 ** (retries - 1)))).isoformat().replace("+00:00", "Z"))
             row.value = json.dumps(data, ensure_ascii=False)
             record.update(syncStatus=status, syncErrorKind=error_kind, systemAccountId=data["systemAccountId"])
             self.write(db, record)
@@ -270,7 +315,7 @@ class ClosedLoopFacts:
                 return {"accepted": True, "syncStatus": "saved"}
             if data.get("syncStatus") not in {"failed", "pending"}:
                 raise HTTPException(409, "请先核对身份或账号冲突，不能直接重试")
-            data.update(syncStatus="pending", syncErrorKind=None)
+            data.update(syncStatus="pending", syncErrorKind=None, syncRetryCount=0, syncNextRetryAt=None)
             row.value = json.dumps(data, ensure_ascii=False)
             record.update(syncStatus="pending", syncErrorKind=None)
             self.write(db, record)
@@ -284,9 +329,13 @@ class ClosedLoopFacts:
                 raise HTTPException(409, "原任务状态已变化，请刷新后核对")
             status = "pending" if identity.get("identityStatus") == "verified" else "awaiting_identity"
             data["syncPayload"].update({key: identity.get(key) for key in ("identityStatus", "identityEvidence")})
+            if data["syncPayload"].get("schemaVersion") == 2:
+                data["syncPayload"]["fingerprint"] = fingerprint(data["syncPayload"])
             data.update(syncStatus=status, syncErrorKind=identity.get("reason"), **identity)
             row.value = json.dumps(data, ensure_ascii=False)
             record.update(syncStatus=status, syncErrorKind=identity.get("reason"),
                           identityStatus=identity.get("identityStatus"), reason=identity.get("reason"))
+            if identity.get("identityStatus") == "verified":
+                record["authorizationStatus"] = "complete"
             self.write(db, record)
         return {"accepted": True, "syncStatus": status}

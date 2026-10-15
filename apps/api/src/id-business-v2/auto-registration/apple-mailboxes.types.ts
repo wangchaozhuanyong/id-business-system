@@ -90,6 +90,10 @@ export interface AppleMailboxRecord {
   proxyId?: string | null;
   mailboxSelection?: 'specified' | 'automatic';
   firstFailure?: AppleMailboxFailure | null;
+  registeredAt?: string | null;
+  manualSyncId?: string | null;
+  creationConfirmed?: boolean;
+  authorizationStatus?: 'pending' | 'complete' | null;
 }
 
 export interface AppleMailboxTask {
@@ -120,6 +124,10 @@ export interface AppleMailboxRow {
   primaryAvailable: boolean;
   registrationStatus: AppleMailboxRegistrationStatus;
   registrationIp: string | null;
+  registrationCountryCode?: string | null;
+  registeredAt?: string | null;
+  creationConfirmed?: boolean;
+  authorizationStatus?: 'pending' | 'complete' | null;
   registrationIpSource: AppleMailboxRecord['registrationIpSource'];
   source: AppleMailboxRecord['source'];
   note: string | null;
@@ -159,6 +167,7 @@ export interface AppleMailboxBatch {
 
 /** Private worker response: never return credentials to the browser. */
 export interface AppleMailboxSyncPayload {
+  schemaVersion?: 2;
   accountId: string;
   sourceTaskUuid: string;
   upstreamAccountId: string | number;
@@ -167,6 +176,11 @@ export interface AppleMailboxSyncPayload {
   email: string;
   password?: string | null;
   registrationCountry: string | null;
+  registrationIp?: string | null;
+  registeredAt?: string | null;
+  creationConfirmed?: boolean;
+  provider?: string;
+  identityStatus?: 'creation_confirmed' | 'verified';
   source: 'register' | 'login';
   fingerprint: string;
 }

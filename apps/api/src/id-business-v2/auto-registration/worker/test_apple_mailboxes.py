@@ -73,6 +73,11 @@ class AppleMailboxTests(unittest.TestCase):
             self.integration.stopping = False
 
     def post(self, path, data):
+        if path.endswith("/sync-ack") and "fingerprint" not in data:
+            task_uuid = path.split("/")[1]
+            with self.sessions.get_db() as db:
+                _, binding = self.store.task_data(db, task_uuid)
+            data = {**data, "fingerprint": binding.get("syncPayload", {}).get("fingerprint")}
         return self.client.post("/internal/apple-mailboxes/" + path,
                                 json=data, headers=self.headers)
 
@@ -400,7 +405,10 @@ class AppleMailboxTests(unittest.TestCase):
         engine = SimpleNamespace(http_client=SimpleNamespace(get=get),
             _submit_signup_form=Mock(return_value=SimpleNamespace(is_existing_account=False)),
             _send_verification_code=Mock(return_value=True), _create_user_account=Mock(return_value=True),
-            _mark_email_as_registered=Mock(return_value=None))
+            _mark_email_as_registered=Mock(return_value=None), email_service=provider,
+            email_info={"email": self.email, "service_id": self.alias},
+            oauth_manager=SimpleNamespace(client_id="offline-client"), proxy_url=None)
+        self.store.password_checkpoint(context["taskUuid"], lambda: "offline-checkpoint-password")
         self.integration.observe_engine(engine, provider)
         actual = engine.http_client.get("https://cloudflare.com/cdn-cgi/trace", timeout=10)
         self.assertIs(actual, response)
@@ -551,7 +559,11 @@ class AppleMailboxTests(unittest.TestCase):
         }
         with ExitStack() as stack:
             if fail_save:
-                stack.enter_context(patch.object(engine_class, "save_to_database", return_value=False))
+                def unavailable(task_uuid, result, original_save, identity):
+                    self.store.update_task(task_uuid, localSaveStatus="failed", syncStatus="blocked",
+                                           syncErrorKind="local_save_failed", reason="local_save_failed")
+                    raise ValueError("离线凭据保存失败")
+                stack.enter_context(patch.object(self.integration, "persist_result", side_effect=unavailable))
             stack.enter_context(patch.object(engine_class, "_submit_signup_form", signup))
             def initialize_session(engine):
                 engine.session = self.official_session(malformed=not verified_identity)
@@ -614,6 +626,13 @@ class AppleMailboxTests(unittest.TestCase):
         self.assertEqual(task["status"], "failed")
         self.assertEqual(task["resultKind"], "new_registration")
         self.assertEqual(task["record"]["registrationStatus"], "registered")
+        self.assertEqual(task["localSaveStatus"], "saved")
+        self.assertEqual(task["record"]["authorizationStatus"], "pending")
+        with self.sessions.get_db() as db:
+            account = db.query(self.models.Account).filter_by(email=self.email).one()
+            self.assertTrue(account.password)
+            self.assertIsNone(account.access_token)
+            self.assertIsNone(account.account_id)
 
     def official_session(self, email=None, cookie=False, status=200, redirected=False, malformed=False):
         endpoint = "https://chatgpt.com/api/auth/session" if cookie else "https://chatgpt.com/backend-api/me"
@@ -624,17 +643,18 @@ class AppleMailboxTests(unittest.TestCase):
         return SimpleNamespace(cookies={"__Secure-next-auth.session-token": "offline-cookie"} if cookie else {},
                                get=Mock(return_value=response), post=Mock(), close=Mock())
 
-    def successful_saved_task(self, verified=True):
+    def successful_saved_task(self, verified=True, creation=True):
         context, provider, _ = self.reservation()
         registration = importlib.import_module("src.core.register")
         password = self.store.password_checkpoint(context["taskUuid"], lambda: "offline-checkpoint-password")
-        self.store.registered(self.email, context["taskUuid"], existing=False)
+        self.store.registered(self.email, context["taskUuid"], existing=not creation)
         identity = self.apple.verify_identity(self.official_session(), self.email, "offline-access") if verified else {
             "identityStatus": "awaiting_identity", "reason": "identity_missing"}
         engine = registration.RegistrationEngine(provider, task_uuid=context["taskUuid"])
         engine.email_info = {"email": self.email, "service_id": self.alias}
         engine._apple_identity = identity
-        result = registration.RegistrationResult(success=True, email=self.email, password=password,
+        result = registration.RegistrationResult(success=True, email=self.email, password=password if creation else "",
+                                                source="register" if creation else "login",
                                                 access_token="offline-access", refresh_token="offline-refresh")
         self.assertTrue(engine.save_to_database(result))
         return context, engine, result
@@ -775,7 +795,7 @@ class AppleMailboxTests(unittest.TestCase):
         self.assertEqual(self.post("tasks/" + task_uuid + "/sync-retry", {}).json()["syncStatus"], "saved")
 
     def test_awaiting_identity_can_only_resume_from_actual_readonly_response(self):
-        context, _, _ = self.successful_saved_task(verified=False)
+        context, _, _ = self.successful_saved_task(verified=False, creation=False)
         task_uuid = context["taskUuid"]
         self.assertEqual(self.read()["syncStatus"], "awaiting_identity")
         self.assertEqual(self.client.get("/internal/apple-mailboxes/tasks/" + task_uuid + "/sync-payload", headers=self.headers).status_code, 409)
@@ -1189,7 +1209,8 @@ class AppleMailboxTests(unittest.TestCase):
 
     def diagnostic_response(self, status=200, payload=None):
         return SimpleNamespace(status_code=status, json=Mock(return_value=payload or {}),
-                               text="offline-secret-response", headers={})
+                               text="offline-secret-response", headers={},
+                               url="https://auth.openai.com/api/accounts/create_account")
 
     def test_task_sources_are_safe_and_frozen_without_proxy_credentials(self):
         request = self.apple.StartInput(aliasId=self.alias, email=self.email, revision=0,
@@ -1427,6 +1448,7 @@ class AppleMailboxTests(unittest.TestCase):
 
     def test_created_fact_survives_exact_oauth_failure_and_cannot_reregister(self):
         context, engine, _ = self.diagnostic_engine(response=self.diagnostic_response(200))
+        self.store.password_checkpoint(context["taskUuid"], lambda: "offline-created-password")
         self.assertTrue(engine._create_user_account())
         self.assertIsNone(engine._handle_oauth_callback("https://example.invalid/callback"))
         self.store.finish(self.email, context["taskUuid"], False)

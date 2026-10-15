@@ -7,7 +7,7 @@ const hcaptcha = require('../upstream/hcaptcha-solver');
 const platform = require('../upstream/captcha-platform');
 const gpt = require('../upstream/gpt-api-client');
 const telegram = require('../upstream/telegram-notify');
-const proxies = require('../upstream/proxy-pool');
+const proxies = require('../proxy-test.cjs');
 const cfg = {
   hcaptcha: {
     platform_api_key: 'synthetic-platform-key',
@@ -62,7 +62,7 @@ test.before(() => {
   stub(proxies, 'testProxyUrl', async (url) => {
     assert.equal(url, 'http://synthetic.invalid:1234');
     calls.push('proxy-connectivity');
-    return { ok: true, ip: '192.0.2.10', latencyMs: 12 };
+    return { ok: true, ip: '8.8.8.8', latencyMs: 12 };
   });
 });
 test.after(() => {
@@ -112,7 +112,7 @@ test('proxy dispatch retrieves real connection transiently and reports tested re
       return { proxy_url: 'http://synthetic.invalid:1234' };
     }
     assert.equal(args.proxyId, 'synthetic-proxy');
-    assert.equal(args.ip, '192.0.2.10');
+    assert.equal(args.ip, '8.8.8.8');
     return { ok: true };
   });
   const result = await execute(

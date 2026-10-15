@@ -13,9 +13,8 @@ export interface AutoRegistrationWorkspaceSession {
 
 export const autoRegistrationPages = [
   { path: '/', title: '注册控制台' },
-  { path: '/accounts', title: '账号管理' },
+  { path: '/accounts', title: '注册结果与凭据' },
   { path: '/email-services', title: '邮箱服务' },
-  { path: '/payment', title: '订阅管理' },
   { path: '/settings', title: '系统设置' }
 ] as const;
 
@@ -76,6 +75,8 @@ export interface AppleMailboxRecord {
   revision: number;
   registrationStatus: AppleMailboxRegistrationStatus;
   registrationIp: string | null;
+  registrationCountryCode?: string | null;
+  registeredAt?: string | null;
   registrationIpSource: 'manual' | 'observed' | null;
   source: 'manual' | 'automatic' | 'account_history' | null;
   note: string | null;
@@ -85,6 +86,8 @@ export interface AppleMailboxRecord {
   lastTaskUuid: string | null;
   lastResultKind: AppleMailboxResultKind;
   taskStatus: AppleMailboxTaskStatus | null;
+  creationConfirmed?: boolean;
+  authorizationStatus?: 'pending' | 'complete' | null;
   syncStatus?: AppleMailboxSyncStatus;
   localSaveStatus?: 'not_ready' | 'not_started' | 'pending' | 'saved' | 'failed';
   identityStatus?: 'not_verified' | 'awaiting_identity' | 'verified' | 'mismatch';
@@ -118,6 +121,8 @@ export interface AppleMailboxRow {
   primaryAvailable: boolean;
   registrationStatus: AppleMailboxRegistrationStatus;
   registrationIp: string | null;
+  registrationCountryCode?: string | null;
+  registeredAt?: string | null;
   registrationIpSource: 'manual' | 'observed' | null;
   note: string | null;
   source: 'manual' | 'automatic' | 'account_history' | null;
@@ -126,6 +131,8 @@ export interface AppleMailboxRow {
   taskUuid: string | null;
   activeTaskUuid?: string | null;
   taskStatus: AppleMailboxTaskStatus | null;
+  creationConfirmed?: boolean;
+  authorizationStatus?: 'pending' | 'complete' | null;
   canRegister: boolean;
   blockedReason: string | null;
   syncStatus?: AppleMailboxSyncStatus;
@@ -203,6 +210,27 @@ export interface AppleMailboxMarkInput {
   registrationIp: string | null;
   note: string;
 }
+export interface AppleMailboxManualSyncPreview {
+  items: Array<{
+    aliasId: string;
+    email: string;
+    revision: number;
+    status: 'create' | 'exists' | 'conflict' | 'deleted' | 'busy' | 'stale' | 'ineligible';
+    accountId: string | null;
+  }>;
+  total: number;
+  creatable: number;
+}
+export interface AppleMailboxManualSyncResult {
+  items: Array<{
+    aliasId: string;
+    status: 'saved' | 'failed' | 'conflict' | 'skipped';
+    accountId: string | null;
+  }>;
+  synchronized: number;
+  failed: number;
+  skipped: number;
+}
 export interface AppleMailboxTask {
   taskUuid: string;
   status: AppleMailboxTaskStatus;
@@ -216,6 +244,7 @@ export type AutoRegistrationDraft = Record<string, string | boolean>;
 export type AutoRegistrationChildMessage =
   | { type: 'id-registration:ready'; page: AutoRegistrationPage }
   | { type: 'id-registration:draft'; page: AutoRegistrationPage; values: unknown }
+  | { type: 'id-registration:account-open'; page: '/accounts'; accountId: string }
   | {
       type: 'id-registration:apple-request';
       page: '/';

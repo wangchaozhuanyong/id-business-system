@@ -2074,3 +2074,94 @@ test('mixed source Docker dependency arbitrary Nginx and other modes keep origin
     );
   }
 });
+
+test('registration closure dispatches both owned database suites without running databases in these control tests', () => {
+  const paths = [
+    'apps/api/src/id-business-v2/auto-recharge/bank-recharge-registration-mirror.service.ts',
+    'apps/api/src/id-business-v2/proxy-pool/proxy-test.ts',
+    'scripts/acceptance-v2-registration-mirror-mysql.mjs',
+    'scripts/acceptance-v2-shared-proxy-mysql.mjs'
+  ];
+  const calls = recordGuardCommands('recharge', paths, 'migration', { cloud: true });
+  for (const suite of [
+    'scripts/acceptance-v2-registration-mirror-mysql.mjs',
+    'scripts/acceptance-v2-shared-proxy-mysql.mjs'
+  ])
+    assert.equal(calls.filter((call) => call.includes(suite)).length, 1, suite);
+  assert.ok(
+    calls.findIndex((call) => call.includes(paths[2])) <
+      calls.findIndex((call) => call.includes(paths[3]))
+  );
+  assert.equal(calls.filter((call) => call.includes('prisma:mysql:generate')).length, 1);
+});
+
+test('registration closure retains its pure worker regression in the API check', () => {
+  const paths = ['apps/api/src/id-business-v2/auto-registration/worker/apple_mailboxes.py'];
+  const calls = recordGuardCommands('recharge', paths, 'api');
+  assert.equal(
+    calls.filter((call) => call.includes('test_registration_closed_loop_unit.py')).length,
+    1
+  );
+  assert.ok(calls.some((call) => call.includes('test_release_safety.py')));
+  assert.ok(calls.some((call) => call.includes('test_workspace.py')));
+  assert.ok(
+    !calls.some((call) => call.includes('scripts/acceptance-v2-registration-native-ui.mjs'))
+  );
+});
+
+test('registration native browser runs with its Python setup in the browser-equipped Admin job', () => {
+  const paths = ['scripts/acceptance-v2-registration-native-ui.mjs'];
+  const calls = recordGuardCommands('recharge', paths, 'admin');
+  const setup = calls.findIndex((call) => call.includes('auto-registration:setup'));
+  const browser = calls.findIndex((call) => call.includes(paths[0]));
+  assert.ok(setup >= 0 && browser > setup);
+  assert.equal(calls.filter((call) => call.includes(paths[0])).length, 1);
+});
+
+test('registration publication controls run their own pure test once and keep every UI rule', () => {
+  const paths = [
+    'scripts/production-release/registration-closure-release.py',
+    'apps/admin/src/v2/features/auto-registration/V2AppleMailboxes.vue'
+  ];
+  for (const part of ['guards', 'release-controls']) {
+    const calls = recordGuardCommands('recharge', paths, part);
+    assert.equal(
+      calls.filter((call) =>
+        call.includes('scripts/production-release/registration-closure-release.test.py')
+      ).length,
+      1
+    );
+    if (part === 'guards')
+      for (const name of [
+        'check:admin-ui',
+        'check:v2-ui-language',
+        'check:v2-color-contrast',
+        'check:v2-table-standard',
+        'check:v2-loading-standard',
+        'check:v2-module-architecture',
+        'check:v2-isolation'
+      ])
+        assert.ok(
+          calls.some((call) => call.includes(name)),
+          name
+        );
+  }
+});
+
+test('exact published table alias controls run their pure positive and negative cases', () => {
+  for (const part of ['guards', 'release-controls']) {
+    for (const path of [
+      'scripts/check-v2-table-standard.mjs',
+      'scripts/lib/v2-table-schema-alias.mjs',
+      'scripts/v2-table-schema-alias.test.mjs'
+    ]) {
+      const calls = recordGuardCommands('ci-only', [path], part);
+      assert.equal(
+        calls.filter(
+          (call) => call.join(' ') === 'node --test scripts/v2-table-schema-alias.test.mjs'
+        ).length,
+        1
+      );
+    }
+  }
+});

@@ -1,3 +1,4 @@
+import { assertBankRechargeChannelAccess, bankRechargeOrderChannel } from './bank-recharge-channel';
 import { V2_BANK_RECHARGE_PLANS, V2_FINANCE_CURRENCIES } from '@apple-business/shared';
 import {
   BadRequestException,
@@ -16,6 +17,7 @@ import {
 } from '../runtime/public-api';
 import {
   BIT_ORDER_PRICING_SETTINGS_OWNER_ID,
+  ONLINE_ORDER_PRICING_SETTINGS_OWNER_ID,
   RechargeSettingsRepository
 } from './persistence/recharge-settings.repository';
 import {
@@ -105,9 +107,14 @@ export class BankRechargePricingService {
     }
   }
 
-  async read(operator: AuthenticatedUser): Promise<BankRechargePricingSettings> {
+  async read(
+    operator: AuthenticatedUser,
+    channelValue?: unknown
+  ): Promise<BankRechargePricingSettings> {
     this.requireAdmin(operator);
-    const row = await this.settings.findOrderPricing();
+    const channel = bankRechargeOrderChannel(channelValue);
+    assertBankRechargeChannelAccess(channel, operator);
+    const row = await this.settings.findOrderPricing(undefined, channel);
     return row
       ? { ...normalizeSettings(row.browserOptions), updatedAt: row.updatedAt.toISOString() }
       : {
@@ -119,14 +126,20 @@ export class BankRechargePricingService {
         };
   }
 
-  async update(value: unknown, operator: AuthenticatedUser): Promise<BankRechargePricingSettings> {
+  async update(
+    value: unknown,
+    operator: AuthenticatedUser,
+    channelValue?: unknown
+  ): Promise<BankRechargePricingSettings> {
     this.requireAdmin(operator);
+    const channel = bankRechargeOrderChannel(channelValue);
+    assertBankRechargeChannelAccess(channel, operator, true);
     const input = bankRechargeObject(value);
     const expectedUpdatedAt = normalizeOptionalV2ExpectedUpdatedAt(input.updatedAt, '收费设置');
     const next = normalizeSettings(input);
     return this.transactions.execute(
       async (tx) => {
-        const previous = await this.settings.findOrderPricing(tx);
+        const previous = await this.settings.findOrderPricing(tx, channel);
         if (
           (expectedUpdatedAt === null && previous) ||
           (expectedUpdatedAt !== null &&
@@ -137,7 +150,8 @@ export class BankRechargePricingService {
         const saved = await this.settings.compareAndSetOrderPricing(
           tx,
           expectedUpdatedAt,
-          toV2JsonDocument(next)
+          toV2JsonDocument(next),
+          channel
         );
         if (!saved) throw new ConflictException('收费设置已被其他管理员修改，请刷新后重试。');
         await this.audit.append(tx, {
@@ -145,12 +159,15 @@ export class BankRechargePricingService {
           module: 'id_business_v2',
           action: 'id_business_v2.auto_recharge.order_pricing.settings',
           objectType: 'recharge_browser_settings',
-          objectId: BIT_ORDER_PRICING_SETTINGS_OWNER_ID,
+          objectId:
+            channel === 'online'
+              ? ONLINE_ORDER_PRICING_SETTINGS_OWNER_ID
+              : BIT_ORDER_PRICING_SETTINGS_OWNER_ID,
           ...(previous
             ? { beforeData: toV2JsonDocument(normalizeSettings(previous.browserOptions)) }
             : {}),
           afterData: toV2JsonDocument(next),
-          remark: '设置比特订单套餐收费与手续费比例，历史订单保持原记录'
+          remark: `设置${channel === 'online' ? '线上' : '比特'}订单套餐收费与手续费比例，历史订单保持原记录`
         });
         return { ...next, updatedAt: saved.updatedAt.toISOString() };
       },

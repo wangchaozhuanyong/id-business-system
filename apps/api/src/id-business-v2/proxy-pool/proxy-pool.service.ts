@@ -286,6 +286,7 @@ export class RechargeProxyService {
     }
     return this.transactions.execute(
       async (tx) => {
+        await this.repository.lock(tx, id);
         const previous = await this.repository.findInTransaction(tx, id);
         if (!previous) throw new NotFoundException('代理 IP 不存在');
         if (
@@ -321,14 +322,17 @@ export class RechargeProxyService {
                   .filter(Boolean)
                   .join('\n')
               : undefined;
-        if (
-          (linkChanged ||
-            protocolChanged ||
-            (link && link.connectionMode !== previous.connectionMode) ||
-            (countryCode && previous.countryCode && countryCode !== previous.countryCode) ||
-            (kind && previous.kind && kind !== previous.kind)) &&
-          (await this.repository.hasJobs(tx, id))
-        ) {
+        const protectedFieldsChanged =
+          linkChanged ||
+          protocolChanged ||
+          (link && link.connectionMode !== previous.connectionMode) ||
+          (countryCode && previous.countryCode && countryCode !== previous.countryCode) ||
+          (kind && previous.kind && kind !== previous.kind);
+        if (protectedFieldsChanged && (await this.repository.hasActiveTest(tx, id)))
+          throw new ConflictException(
+            '代理正在检测，请等待检测结束或取消待执行检测后再修改连接资料'
+          );
+        if (protectedFieldsChanged && (await this.repository.hasJobs(tx, id))) {
           throw new ConflictException(
             '代理 IP 已用于充值任务，不能更换国家、属性、协议或链接；请新增代理'
           );
@@ -345,6 +349,9 @@ export class RechargeProxyService {
                 protocol: nextProtocol,
                 displayHost: new URL(link.url).host
               }
+            : {}),
+          ...(linkChanged || modeChanged || protocolChanged
+            ? { exitIp: null, latencyMs: null, testMessage: null, testedAt: null }
             : {}),
           ...(nextRemark !== undefined ? { remark: nextRemark || null } : {}),
           ...(remark1 !== undefined ? { remark1: remark1 || null } : {}),
@@ -388,8 +395,11 @@ export class RechargeProxyService {
     bankRechargeId(id, '代理编号');
     return this.transactions.execute(
       async (tx) => {
+        await this.repository.lock(tx, id);
         const item = await this.repository.findInTransaction(tx, id);
         if (!item) throw new NotFoundException('代理 IP 不存在');
+        if (await this.repository.hasActiveTest(tx, id))
+          throw new ConflictException('代理正在检测，请等待检测结束或取消待执行检测后再删除');
         if (await this.repository.hasJobs(tx, id)) {
           throw new ConflictException('代理 IP 已用于充值任务，请改为停用');
         }
@@ -428,9 +438,12 @@ export class RechargeProxyService {
       async (tx) => {
         for (const oldId of ids) {
           const id = (await this.repository.resolveOnlineId(tx, oldId))?.proxyId ?? oldId;
+          await this.repository.lock(tx, id);
           const row = await this.repository.findInTransaction(tx, id);
           if (!row) throw new NotFoundException('代理 IP 不存在');
           if (action === 'delete') {
+            if (await this.repository.hasActiveTest(tx, id))
+              throw new ConflictException('代理正在检测，请等待检测结束或取消待执行检测后再删除');
             if (await this.repository.hasJobs(tx, id))
               throw new ConflictException('代理 IP 已用于充值任务，请改为停用');
             await this.repository.delete(tx, id);

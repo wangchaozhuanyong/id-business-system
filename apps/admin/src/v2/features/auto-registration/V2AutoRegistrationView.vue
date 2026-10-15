@@ -1,6 +1,6 @@
 <template>
   <section class="v2-page-layout v2-auto-registration-page">
-    <V2PageContext description="管理注册任务、账号、苹果隐藏邮箱、邮箱服务、订阅与系统设置。">
+    <V2PageContext description="管理注册任务、注册结果与凭据、苹果隐藏邮箱、邮箱服务和系统设置。">
       <template #filters>
         <div class="v2-auto-registration-tabs" role="tablist" aria-label="自动注册功能">
           <AppButton
@@ -33,6 +33,7 @@
         </AppButton>
       </template>
     </V2PageContext>
+    <p v-if="navigationError" role="alert">{{ navigationError }}</p>
 
     <V2AppleMailboxes
       v-if="activePage === appleMailboxPage.path && canAccess"
@@ -50,7 +51,7 @@
       refreshing-title="正在更新自动注册连接"
       error-title="自动注册加载失败"
       empty-title="自动注册服务尚未启动"
-      empty-message="启动本地自动注册服务后，点击刷新重新连接。"
+      empty-message="自动注册执行服务当前不可用，请检查服务后刷新重新连接。"
       forbidden-message="请使用已登录的管理员账号访问自动注册。"
       @retry="workspaceQuery.refresh"
     >
@@ -69,6 +70,7 @@
 
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
+import { useRouter } from 'vue-router';
 import { getApiErrorMessage } from '@/api/client';
 import { sessionCoordinator } from '@/auth/sessionCoordinator';
 import AppButton from '@/components/ui/AppButton.vue';
@@ -91,6 +93,7 @@ import {
 } from './contracts';
 import {
   readRegistrationChildMessage,
+  isAutoRegistrationPage,
   registrationThemeState,
   registrationWorkspaceUrl,
   sanitizeRegistrationDraft
@@ -100,6 +103,8 @@ import V2AppleMailboxes from './V2AppleMailboxes.vue';
 const parentPages = [autoRegistrationPages[0], appleMailboxPage, ...autoRegistrationPages.slice(1)];
 
 const auth = useAuthStore();
+const router = useRouter();
+const navigationError = ref('');
 const identityChanged = ref(false);
 const canAccess = computed(
   () => !identityChanged.value && auth.writesAllowed && !!auth.user?.roles.includes('admin')
@@ -107,6 +112,10 @@ const canAccess = computed(
 const activePage = useV2SessionDraft('auto-registration:active-page', () =>
   ref<AutoRegistrationParentPage>('/')
 );
+// 兼容已移除订阅页的会话草稿，避免恢复到不可访问的工作区。
+if (activePage.value !== appleMailboxPage.path && !isAutoRegistrationPage(activePage.value)) {
+  activePage.value = '/';
+}
 // 只控制父页面发起的导航，子页面内部跳转不重设 iframe 地址。
 const frameEntryPage = ref<AutoRegistrationPage>(
   activePage.value === appleMailboxPage.path ? '/' : activePage.value
@@ -115,6 +124,9 @@ const pageDrafts = useV2SessionDraft(
   'auto-registration:page-drafts',
   () => new Map<AutoRegistrationPage, AutoRegistrationDraft>()
 );
+for (const page of pageDrafts.keys()) {
+  if (!isAutoRegistrationPage(page)) pageDrafts.delete(page);
+}
 const workspaceFrame = ref<HTMLIFrameElement>();
 const unsubscribeIdentity = sessionCoordinator.subscribeIdentityChange(() => {
   identityChanged.value = true;
@@ -198,6 +210,22 @@ function receiveWorkspaceMessage(event: MessageEvent) {
     pageDrafts.set(message.page, sanitizeRegistrationDraft(message.values));
   }
   if (message?.type === 'id-registration:apple-request') void handleAppleRequest(message);
+  if (message?.type === 'id-registration:account-open') {
+    void openMainInventory();
+  }
+}
+
+async function openMainInventory() {
+  navigationError.value = '';
+  try {
+    const failure = await router.push({
+      path: '/v2/account-settings/chatgpt-accounts',
+      query: { view: 'all' }
+    });
+    if (failure) navigationError.value = 'ChatGPT 账号台账未能打开，请重试';
+  } catch (error) {
+    navigationError.value = getApiErrorMessage(error);
+  }
 }
 
 async function handleAppleRequest(

@@ -44,21 +44,27 @@ async function execute(task, cfg) {
       return result;
     }
     case 'proxy_test': {
+      const probe = require('./proxy-test.cjs');
       const results = [];
-      for (const proxyId of (payload.ids || [payload.proxyId]).filter(Boolean).slice(0, 50)) {
+      for (const proxyId of probe.selectedIds(task)) {
         let result;
         try {
           const proxy = await store.getActiveProxy(proxyId);
-          result = await require('./upstream/proxy-pool').testProxyUrl(proxy);
-        } catch {
-          result = { ok: false, error: '代理不可用或提取失败', latencyMs: null };
+          result = await probe.testProxyUrl(proxy);
+        } catch (error) {
+          if (error.code === 'LEASE_LOST') throw error;
+          result = probe.failure(probe.errorCode(error));
         }
-        await rpc('proxyTestResult', { proxyId, ...result });
+        try {
+          await rpc('proxyTestResult', { proxyId, ...result });
+        } catch (error) {
+          if (error.code === 'LEASE_LOST') throw error;
+          throw Object.assign(new Error('检测结果回写未能确认'), {
+            code: 'result_write_failed',
+            proxyResults: [...results, { ...result, proxyId }]
+          });
+        }
         results.push({ ...result, proxyId });
-      }
-      if (!results.length) {
-        const proxy = await store.getActiveProxy();
-        if (proxy) results.push(await require('./upstream/proxy-pool').testProxyUrl(proxy));
       }
       return { success: results.length > 0 && results.every((r) => r.ok), results };
     }
@@ -130,6 +136,7 @@ async function runTask(task) {
   rememberSecrets(process.env.ONLINE_RECHARGE_WORKER_KEY, 'secret');
   installSafeConsole((log) => send({ type: 'log', log }));
   let config;
+  let executionStarted = false;
   try {
     config = await rpc('getRuntimeConfig');
     rememberSecrets(config);
@@ -169,6 +176,7 @@ async function runTask(task) {
         )
       }
     );
+    executionStarted = true;
     const result = await execute(task, config);
     if (task.operation === 'recharge' && !result?.resultUnknown && !result?.pendingCredentials) {
       const event = result?.success
@@ -209,6 +217,18 @@ async function runTask(task) {
               : '执行未完成'
     });
   } catch (error) {
+    const proxyFailure =
+      task.operation === 'proxy_test' ? require('./proxy-test.cjs').taskFailure(task, error) : null;
+    // Preparation failures must also reach the proxy row while this task still owns its lease.
+    // A failed result acknowledgement is not permission to overwrite the actual probe outcome.
+    if (proxyFailure && !executionStarted && error.code !== 'LEASE_LOST')
+      for (const result of proxyFailure.results) {
+        try {
+          await rpc('proxyTestResult', result);
+        } catch {
+          break;
+        }
+      }
     send({
       type: 'result',
       status:
@@ -219,8 +239,8 @@ async function runTask(task) {
               error.code === 'RESULT_UNKNOWN'
             ? 'awaiting_review'
             : 'failed',
-      result: { code: error.code || 'EXECUTION_FAILED' },
-      message: '执行未完成，请查看受限诊断'
+      result: proxyFailure || { code: error.code || 'EXECUTION_FAILED' },
+      message: proxyFailure ? proxyFailure.error : '执行未完成，请查看受限诊断'
     });
   } finally {
     require('./upstream/mysql-store').clearCredentials();

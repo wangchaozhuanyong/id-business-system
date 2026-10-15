@@ -16,6 +16,32 @@
         :error="tracker.error.value"
         @refresh="tracker.refresh"
       />
+      <section v-if="orderSync" aria-label="充值订单同步">
+        <h3>订单同步</h3>
+        <p>
+          {{ syncLabels[orderSync.status] ?? '待核对'
+          }}<span v-if="orderSync.orderNo"> · {{ orderSync.orderNo }}</span>
+        </p>
+        <RouterLink
+          v-if="orderSync.orderNo && canReadOrders"
+          :to="{
+            path: '/v2/auto-recharge/bank-orders',
+            query: { channel: 'online', orderNo: orderSync.orderNo }
+          }"
+          @click="$emit('update:modelValue', false)"
+          >查看线上订单</RouterLink
+        >
+        <AppButton
+          v-if="
+            canSyncOrder && orderSync.status !== 'synced' && orderSync.status !== 'not_applicable'
+          "
+          variant="soft"
+          :loading="syncBusy"
+          @click="syncOrder"
+          >补同步订单</AppButton
+        >
+        <p v-if="syncMessage" role="status">{{ syncMessage }}</p>
+      </section>
       <template v-for="entry in entries" :key="entry.label"
         ><h3>{{ entry.label }}</h3>
         <p>{{ entry.value }}</p></template
@@ -45,7 +71,9 @@ import { computed, onBeforeUnmount, ref, watch } from 'vue';
 import V2ConfirmDialog from '@/v2/components/V2ConfirmDialog.vue';
 import AppButton from '@/components/ui/AppButton.vue';
 import { http } from '@/api/client';
-import { copyOnlineText } from './api';
+import { copyOnlineText, onlineApi } from './api';
+import { useAuthStore } from '@/stores/auth';
+import { canReadOnlineOrders, canManageOnlineOrders } from './orderPermissions';
 import { onlineChangeEntries, onlineLabel } from './labels';
 import OnlineTaskProgress from './OnlineTaskProgress.vue';
 import { useOnlineTask } from './useOnlineTask';
@@ -183,6 +211,54 @@ function resultTask(value: unknown): PublicTask | undefined {
     taskStatuses.has(String(item.status))
     ? (item as unknown as PublicTask)
     : undefined;
+}
+interface OrderSync {
+  status: 'pending' | 'synced' | 'needs_review' | 'not_applicable';
+  orderId?: string;
+  orderNo?: string;
+  errorCode?: string;
+}
+const auth = useAuthStore();
+const synced = ref<OrderSync>();
+const syncBusy = ref(false),
+  syncMessage = ref('');
+const syncLabels: Record<OrderSync['status'], string> = {
+  pending: '等待同步',
+  synced: '已同步订单',
+  needs_review: '同步待人工核对',
+  not_applicable: '此任务不生成充值订单'
+};
+const orderSync = computed(
+  () =>
+    synced.value ??
+    ((record(resultRecord.value.orderSync).status
+      ? resultRecord.value.orderSync
+      : record(resultRecord.value.task).orderSync) as OrderSync | undefined)
+);
+const canReadOrders = computed(() => canReadOnlineOrders(auth.user));
+const canSyncOrder = computed(() => canManageOnlineOrders(auth.user));
+watch(
+  () => props.result,
+  () => {
+    synced.value = undefined;
+    syncMessage.value = '';
+  }
+);
+async function syncOrder() {
+  const id = String(resultRecord.value.id ?? record(resultRecord.value.task).id ?? '');
+  if (!id || syncBusy.value || !canSyncOrder.value) return;
+  syncBusy.value = true;
+  syncMessage.value = '';
+  try {
+    const value = await onlineApi.action('jobs', 'sync-order', { id });
+    if (String(resultRecord.value.id ?? record(resultRecord.value.task).id ?? '') !== id) return;
+    synced.value = value as unknown as OrderSync;
+    syncMessage.value = '已提交订单同步；不会重新充值或付款。';
+  } catch {
+    syncMessage.value = '订单同步失败，请稍后重试。';
+  } finally {
+    syncBusy.value = false;
+  }
 }
 const entries = computed(() => {
   if (Array.isArray(props.result))

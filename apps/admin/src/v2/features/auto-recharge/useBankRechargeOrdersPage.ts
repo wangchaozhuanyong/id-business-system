@@ -1,50 +1,79 @@
-import { computed, reactive, ref, watch } from 'vue';
+import { computed, onBeforeUnmount, reactive, ref, watch } from 'vue';
 import type { FormInstance, FormRules } from 'element-plus';
 import { useRoute, useRouter } from 'vue-router';
 import { V2_FINANCE_CURRENCIES } from '@apple-business/shared';
 import { getApiErrorMessage } from '@/api/client';
 import { createV2QueryKey, useV2ModuleQuery } from '@/v2/composables/useV2Query';
 import { ElMessage } from '@/v2/services/elementPlusMessage';
-import { toV2DateTimeInput, v2DateTimeInputToIso } from '@/v2/utils/dateTime';
+import { v2DateTimeInputToIso } from '@/v2/utils/dateTime';
 import { useBankRechargeOrderTiming } from './useBankRechargeOrderTiming';
 import { validateV2Form } from '@/v2/utils/formValidation';
 import { useV2FormDraft, useV2SessionDraft } from '@/v2/composables/useV2SessionDraft';
-import { bankRechargeApi, type BankRechargeOrder } from './bank-recharge-api';
-import { emptyForm, emptyRefundForm } from './bank-recharge-order-form';
+import {
+  bankRechargeApi,
+  type BankRechargeOrder,
+  type RechargeOrderChannel
+} from './bank-recharge-api';
+import { emptyForm, emptyRefundForm, orderFormInitial } from './bank-recharge-order-form';
 import { bankRechargePlanLabel as planLabel } from './recharge-plan-options';
 import { bankRechargeOrderStatusLabel as statusLabel } from './recharge-presentation';
+import { useBankRechargeOrderResources } from './useBankRechargeOrderResources';
+import { useAuthStore } from '@/stores/auth';
+import { canManageOnlineOrders } from '@/v2/features/online-recharge/public-api';
 import { useBitOrderPricing } from './useBitOrderPricing';
 
-export function useBankRechargeOrdersPage() {
+export function useBankRechargeOrdersPage(channel: RechargeOrderChannel = 'bitbrowser') {
+  const auth = useAuthStore();
+  const canManage = computed(() => channel !== 'online' || canManageOnlineOrders(auth.user));
+  const channelLabel = channel === 'online' ? '线上订单' : '比特订单';
+  const draftKey = (key: string) => `recharge-orders:${channel}:${key}`;
+  let active = true;
+  onBeforeUnmount(() => {
+    active = false;
+  });
   const route = useRoute();
   const router = useRouter();
   const accountIdFilter = computed(() =>
     typeof route.query.accountId === 'string' ? route.query.accountId : ''
   );
   const linkedOrderNo = computed(() =>
-    typeof route.query.orderNo === 'string' && accountIdFilter.value ? route.query.orderNo : ''
+    typeof route.query.orderNo === 'string' ? route.query.orderNo : ''
   );
   const financeCurrencies = V2_FINANCE_CURRENCIES;
-  const pricing = useBitOrderPricing();
-  const executionSource = useV2SessionDraft('bit-orders:execution-source', () =>
-    ref<'' | 'bitbrowser'>('bitbrowser')
+  const pricing = useBitOrderPricing(channel);
+  const executionSource = useV2SessionDraft(draftKey('bit-orders:execution-source'), () =>
+    ref<'' | 'bitbrowser'>(channel === 'online' ? '' : 'bitbrowser')
   );
-  const page = useV2SessionDraft('auto-recharge/useBankRechargeOrdersPage:page', () => ref(1));
-  const pageSize = useV2SessionDraft('auto-recharge/useBankRechargeOrdersPage:pageSize', () =>
-    ref(20)
+  const page = useV2SessionDraft(draftKey('auto-recharge/useBankRechargeOrdersPage:page'), () =>
+    ref(1)
+  );
+  const pageSize = useV2SessionDraft(
+    draftKey('auto-recharge/useBankRechargeOrdersPage:pageSize'),
+    () => ref(20)
   );
   const keywordInput = useV2SessionDraft(
-    'auto-recharge/useBankRechargeOrdersPage:keywordInput',
+    draftKey('auto-recharge/useBankRechargeOrdersPage:keywordInput'),
     () => ref(linkedOrderNo.value)
   );
-  const statusInput = useV2SessionDraft('auto-recharge/useBankRechargeOrdersPage:statusInput', () =>
+  const statusInput = useV2SessionDraft(
+    draftKey('auto-recharge/useBankRechargeOrdersPage:statusInput'),
+    () => ref('')
+  );
+  const keyword = useV2SessionDraft(
+    draftKey('auto-recharge/useBankRechargeOrdersPage:keyword'),
+    () => ref(linkedOrderNo.value)
+  );
+  const status = useV2SessionDraft(draftKey('auto-recharge/useBankRechargeOrdersPage:status'), () =>
     ref('')
   );
-  const keyword = useV2SessionDraft('auto-recharge/useBankRechargeOrdersPage:keyword', () =>
-    ref(linkedOrderNo.value)
+  if (linkedOrderNo.value) {
+    keywordInput.value = linkedOrderNo.value;
+    keyword.value = linkedOrderNo.value;
+    page.value = 1;
+  }
+  const expiry = useV2SessionDraft(draftKey('bank-orders:expiry'), () =>
+    ref<'all' | 'expired'>('all')
   );
-  const status = useV2SessionDraft('auto-recharge/useBankRechargeOrdersPage:status', () => ref(''));
-  const expiry = useV2SessionDraft('bank-orders:expiry', () => ref<'all' | 'expired'>('all'));
   watch(expiry, () => (page.value = 1));
   watch(executionSource, () => (page.value = 1));
   const drawerOpen = ref(false);
@@ -61,11 +90,14 @@ export function useBankRechargeOrdersPage() {
     version: refundVersion,
     open: openRefundDraft,
     beginSave: beginRefundSave
-  } = useV2FormDraft('bank-orders-refund', emptyRefundForm);
-  const { cardForm, currencyForm } = useV2SessionDraft('bank-order-related-create', () => ({
-    cardForm: reactive({ label: '', last4: '', currencyCode: 'PHP' }),
-    currencyForm: reactive({ code: '', name: '', minorUnits: 2 })
-  }));
+  } = useV2FormDraft(draftKey('bank-orders-refund'), emptyRefundForm);
+  const { cardForm, currencyForm } = useV2SessionDraft(
+    draftKey('bank-order-related-create'),
+    () => ({
+      cardForm: reactive({ label: '', last4: '', currencyCode: 'PHP' }),
+      currencyForm: reactive({ code: '', name: '', minorUnits: 2 })
+    })
+  );
   const saving = ref(false);
   const working = ref(false);
   const saveError = ref('');
@@ -76,13 +108,13 @@ export function useBankRechargeOrdersPage() {
     version: formVersion,
     open: openFormDraft,
     beginSave: beginFormSave
-  } = useV2FormDraft('bank-orders-editor', emptyForm);
+  } = useV2FormDraft(draftKey('bank-orders-editor'), emptyForm);
   const { usageLabel, usageTagType, initializeDates } = useBankRechargeOrderTiming(
     form,
     () => selected.value?.source === 'automatic'
   );
   const correctionReasons = useV2SessionDraft(
-    'bank-orders-correction-reasons',
+    draftKey('bank-orders-correction-reasons'),
     () => new Map<string, string>()
   );
   watch(correctionReason, (reason) => {
@@ -95,9 +127,10 @@ export function useBankRechargeOrdersPage() {
   );
   const readonly = computed(() =>
     Boolean(
-      !correcting.value &&
-      selected.value &&
-      ['completed', 'refunded', 'cancelled'].includes(selected.value.status)
+      !canManage.value ||
+      (!correcting.value &&
+        selected.value &&
+        ['completed', 'refunded', 'cancelled'].includes(selected.value.status))
     )
   );
   const rules: FormRules = {
@@ -105,10 +138,11 @@ export function useBankRechargeOrdersPage() {
     manualEvidenceRef: [{ required: true, message: '请填写付款凭据编号', trigger: 'blur' }]
   };
 
-  const deletedFilter = useV2SessionDraft('bank-recharge-orders:deleted', () =>
+  const deletedFilter = useV2SessionDraft(draftKey('bank-recharge-orders:deleted'), () =>
     ref<'active' | 'deleted'>('active')
   );
   const listQuery = () => ({
+    channel,
     page: page.value,
     pageSize: pageSize.value,
     keyword: keyword.value,
@@ -116,7 +150,7 @@ export function useBankRechargeOrdersPage() {
     expiry: expiry.value,
     deleted: deletedFilter.value,
     accountId: accountIdFilter.value,
-    executionSource: executionSource.value || undefined
+    executionSource: channel === 'bitbrowser' ? executionSource.value || undefined : undefined
   });
   const ordersQuery = useV2ModuleQuery<Awaited<ReturnType<typeof bankRechargeApi.listOrders>>>({
     moduleKey: 'bank-recharge-orders',
@@ -145,69 +179,28 @@ export function useBankRechargeOrdersPage() {
     (items) => {
       if (!linkedOrderNo.value || !items) return;
       const order = items.find(
-        (item) => item.orderNo === linkedOrderNo.value && item.accountId === accountIdFilter.value
+        (item) =>
+          item.orderNo === linkedOrderNo.value &&
+          (!accountIdFilter.value || item.accountId === accountIdFilter.value)
       );
       if (order && selected.value?.id !== order.id) openEdit(order);
     },
     { immediate: true }
   );
-  const optionsQuery = useV2ModuleQuery({
-    moduleKey: 'bank-recharge-orders',
-    scope: 'auto-recharge',
-    key: 'bank-recharge-order-options',
-    query: ({ signal }) => bankRechargeApi.orderOptions({ signal })
-  });
-  const accountsQuery = useV2ModuleQuery({
-    moduleKey: 'chatgpt-accounts',
-    scope: 'auto-recharge',
-    key: 'bank-recharge-account-options',
-    query: ({ signal }) => bankRechargeApi.listAccounts({ signal })
-  });
-  const cardsQuery = useV2ModuleQuery({
-    moduleKey: 'bank-recharge-orders',
-    scope: 'auto-recharge',
-    key: 'bank-recharge-card-options',
-    query: ({ signal }) => bankRechargeApi.listCards({ signal })
-  });
-  const currenciesQuery = useV2ModuleQuery({
-    moduleKey: 'bank-recharge-orders',
-    scope: 'auto-recharge',
-    key: 'bank-recharge-currency-options',
-    query: ({ signal }) => bankRechargeApi.listCurrencies({ signal })
-  });
   const data = computed(() => ordersQuery.data.value);
-  const customers = ref<Array<{ id: string; name: string }>>([]);
-  watch(
-    () => optionsQuery.data.value?.customers,
-    (items) => {
-      if (!items) return;
-      const selectedCustomer = customers.value.find((item) => item.id === form.customerId);
-      customers.value = [...items];
-      if (selectedCustomer && !items.some((item) => item.id === selectedCustomer.id)) {
-        customers.value.unshift(selectedCustomer);
-      }
-    }
-  );
-  const accounts = computed(() =>
-    (accountsQuery.data.value?.items ?? []).filter((item) => item.status === 'active')
-  );
-  const activeCurrencies = computed(() =>
-    (currenciesQuery.data.value?.items ?? []).filter((item) => item.active)
-  );
-  const availableCards = computed(() =>
-    (cardsQuery.data.value?.items ?? []).filter(
-      (item) => item.active && item.currencyCode === form.chargeCurrencyCode
-    )
-  );
-  const fundingAccounts = computed(() =>
-    (optionsQuery.data.value?.financeAccounts ?? []).filter((item) => item.currency === 'CNY')
-  );
-  const receivedAccounts = computed(() =>
-    (optionsQuery.data.value?.financeAccounts ?? []).filter(
-      (item) => item.currency === form.receivedCurrencyCode
-    )
-  );
-  const feeAccounts = computed(() => optionsQuery.data.value?.financeAccounts ?? []);
+  const {
+    optionsQuery,
+    accountsQuery,
+    cardsQuery,
+    currenciesQuery,
+    customers,
+    accounts,
+    activeCurrencies,
+    availableCards,
+    fundingAccounts,
+    receivedAccounts,
+    feeAccounts
+  } = useBankRechargeOrderResources(channel, form, () => selected.value?.onlineRechargeCardId);
   const newFeeMode = computed(
     () => selected.value?.accountingVersion === 'subscription_cost_v2' || form.confirmFeeConversion
   );
@@ -217,7 +210,10 @@ export function useBankRechargeOrdersPage() {
     page.value = 1;
   }
   function clearAccountFilter() {
-    void router.replace({ path: '/v2/auto-recharge/bank-orders' });
+    void router.replace({
+      path: '/v2/auto-recharge/bank-orders',
+      query: channel === 'online' ? { channel } : {}
+    });
   }
   function changePage(value: number) {
     page.value = value;
@@ -225,6 +221,10 @@ export function useBankRechargeOrdersPage() {
   function changePageSize(value: number) {
     pageSize.value = value;
     page.value = 1;
+  }
+  function changeChargeCurrency() {
+    form.chargeFxRateToCny = '';
+    if (channel === 'bitbrowser') form.cardId = '';
   }
   function openCreate() {
     correcting.value = false;
@@ -243,45 +243,7 @@ export function useBankRechargeOrdersPage() {
     creating.value = false;
     selected.value = row;
     saveError.value = '';
-    openFormDraft(
-      row.id,
-      {
-        plan: row.plan,
-        chargeCurrencyCode: row.chargeCurrencyCode,
-        chargeAmount: row.chargeAmount,
-        manualEvidenceRef: row.manualEvidenceRef ?? '',
-        accountId: row.accountId ?? '',
-        customerId: row.customerId ?? '',
-        cardId: row.cardId ?? '',
-        confirmFeeConversion: false,
-        usdtFeeAmount: row.usdtFeeAmount ?? '',
-        usdtFeeCurrencyCode: row.usdtFeeCurrencyCode ?? 'USDT',
-        usdtFeeFinanceAccountId: row.usdtFeeFinanceAccountId ?? '',
-        usdtFeeFxRateToCny: row.usdtFeeFxRateToCny ?? '',
-        usdtFeeManualRateReason: '',
-        shoppingFeeAmount: row.shoppingFeeAmount ?? '',
-        shoppingFeeCurrencyCode: row.shoppingFeeCurrencyCode ?? 'CNY',
-        shoppingFeeFinanceAccountId: row.shoppingFeeFinanceAccountId ?? '',
-        shoppingFeeFxRateToCny: row.shoppingFeeFxRateToCny ?? '',
-        shoppingFeeManualRateReason: '',
-        customerFeeRate: row.customerFeeRate,
-        feeOverride: row.customerFeeOverridden,
-        customerFeeAmount: row.customerFeeOverridden ? row.customerFeeAmount : '',
-        bankFeeAmount: row.bankFeeAmount ?? '0',
-        bankFeeCurrencyCode: row.bankFeeCurrencyCode ?? row.chargeCurrencyCode,
-        receivedAmount: row.receivedAmount ?? '',
-        receivedCurrencyCode: row.receivedCurrencyCode ?? 'CNY',
-        chargeFxRateToCny: row.chargeFxRateToCny ?? '',
-        bankFeeFxRateToCny: row.bankFeeFxRateToCny ?? '',
-        receivedFxRateToCny: row.receivedFxRateToCny ?? '',
-        fundingFinanceAccountId: row.fundingFinanceAccountId ?? '',
-        receivedFinanceAccountId: row.receivedFinanceAccountId ?? '',
-        openedAt: row.openedAt ? toV2DateTimeInput(row.openedAt) : '',
-        dueAt: row.dueAt ? toV2DateTimeInput(row.dueAt) : '',
-        remark: row.remark ?? ''
-      },
-      row.updatedAt
-    );
+    openFormDraft(row.id, orderFormInitial(row, channel), row.updatedAt);
     customers.value = [...(optionsQuery.data.value?.customers ?? [])];
     if (row.customer && !customers.value.some((item) => item.id === row.customer!.id))
       customers.value.unshift(row.customer);
@@ -305,6 +267,7 @@ export function useBankRechargeOrdersPage() {
     form.customerId = customer.id;
   }
   async function save() {
+    if (!canManage.value) return;
     if (correcting.value && !correctionReason.value.trim()) {
       saveError.value = '请填写更正原因';
       return;
@@ -317,6 +280,7 @@ export function useBankRechargeOrdersPage() {
     try {
       if (creating.value) {
         const created = await bankRechargeApi.createManualOrder({
+          channel,
           plan: form.plan,
           chargeCurrencyCode: form.chargeCurrencyCode,
           chargeAmount: form.chargeAmount,
@@ -327,12 +291,14 @@ export function useBankRechargeOrdersPage() {
           dueAt: form.dueAt ? v2DateTimeInputToIso(form.dueAt) : null
         });
         completeFormDraft();
+        if (!active) return;
         if (selected.value) correctionReasons.delete(selected.value.id);
         drawerOpen.value = false;
         await ordersQuery.refresh();
+        if (!active) return;
         openEdit(created);
         executionSource.value = '';
-        ElMessage.success('比特订单已建立，请继续补全手续费、收款和到期时间');
+        ElMessage.success(`${channelLabel}已建立，请继续补全手续费、收款和到期时间`);
       } else if (selected.value) {
         const payload = {
           ...(selected.value.source === 'manual'
@@ -342,10 +308,24 @@ export function useBankRechargeOrdersPage() {
                 plan: form.plan
               }
             : {}),
+          ...(channel === 'online' &&
+          (selected.value.chargeAmount == null || !selected.value.chargeCurrencyCode)
+            ? {
+                chargeAmount: form.chargeAmount || null,
+                chargeCurrencyCode: form.chargeCurrencyCode || null
+              }
+            : {}),
+          ...(channel === 'online' &&
+          selected.value.source === 'automatic' &&
+          form.paymentEvidenceRef.trim()
+            ? { paymentEvidenceRef: form.paymentEvidenceRef.trim() }
+            : {}),
           expectedUpdatedAt: formVersion.value ?? selected.value.updatedAt,
           accountId: form.accountId || null,
           customerId: form.customerId || null,
-          cardId: form.cardId || null,
+          ...(channel === 'online'
+            ? { onlineRechargeCardId: form.cardId || null }
+            : { cardId: form.cardId || null }),
           ...(newFeeMode.value
             ? {
                 confirmFeeConversion: form.confirmFeeConversion,
@@ -377,13 +357,13 @@ export function useBankRechargeOrdersPage() {
           fundingFinanceAccountId: form.fundingFinanceAccountId || null,
           receivedFinanceAccountId: form.receivedFinanceAccountId || null,
           openedAt:
-            selected.value.source === 'automatic'
+            selected.value.source === 'automatic' && channel === 'bitbrowser'
               ? selected.value.openedAt
               : form.openedAt
                 ? v2DateTimeInputToIso(form.openedAt)
                 : null,
           dueAt:
-            selected.value.source === 'automatic'
+            selected.value.source === 'automatic' && channel === 'bitbrowser'
               ? selected.value.dueAt
               : form.dueAt
                 ? v2DateTimeInputToIso(form.dueAt)
@@ -397,9 +377,10 @@ export function useBankRechargeOrdersPage() {
           });
         else await bankRechargeApi.updateOrder(selected.value.id, payload);
         completeFormDraft();
+        if (!active) return;
         if (selected.value) correctionReasons.delete(selected.value.id);
         drawerOpen.value = false;
-        ElMessage.success(correcting.value ? '比特订单已更正并重新入账' : '比特订单已保存');
+        ElMessage.success(`${channelLabel}${correcting.value ? '已更正并重新入账' : '已保存'}`);
         await ordersQuery.refresh();
       }
     } catch (error) {
@@ -409,10 +390,11 @@ export function useBankRechargeOrdersPage() {
     }
   }
   async function complete(row: BankRechargeOrder) {
+    if (!canManage.value) return;
     working.value = true;
     try {
       await bankRechargeApi.completeOrder(row.id, row.updatedAt);
-      ElMessage.success('比特订单已完成并入账');
+      ElMessage.success(`${channelLabel}已完成并入账`);
       await ordersQuery.refresh();
     } catch (error) {
       ElMessage.error(getApiErrorMessage(error));
@@ -440,6 +422,7 @@ export function useBankRechargeOrdersPage() {
     refundOpen.value = true;
   }
   async function confirmRefund() {
+    if (!canManage.value) return;
     if (!selected.value || !refund.reason.trim() || !refund.refundReference.trim()) {
       saveError.value = '请填写退款原因和真实退款凭据';
       return;
@@ -524,6 +507,9 @@ export function useBankRechargeOrdersPage() {
   }
 
   return {
+    canManage,
+    channel,
+    channelLabel,
     pricing,
     executionSource,
     applyPricingDefaults,
@@ -581,6 +567,7 @@ export function useBankRechargeOrdersPage() {
     applyFilters,
     changePage,
     changePageSize,
+    changeChargeCurrency,
     openCreate,
     openEdit,
     openCorrection,

@@ -470,6 +470,128 @@ describe('苹果隐藏邮箱：权限、登记与私有取码桥', () => {
     expect(JSON.stringify(audit.create.mock.calls)).not.toContain(alias.email);
   });
 
+  it('官网已创建任务只续接原授权并重建同邮箱取码桥，不再次启动注册', async () => {
+    records[0] = {
+      ...baseRecord(),
+      registrationStatus: 'registered',
+      creationConfirmed: true,
+      identityStatus: 'awaiting_identity'
+    };
+    worker.appleMailboxRequest.mockImplementation(async (path: string) => {
+      if (path.endsWith('/authorization-resume'))
+        return { taskUuid: taskId, record: { ...records[0], activeTaskUuid: taskId } };
+      if (path.endsWith(`/tasks/${taskId}`)) return { taskUuid: taskId, record: records[0] };
+      return { tasks: [] };
+    });
+    expect(await service.resumeAuthorization(taskId, actor, revalidate)).toMatchObject({
+      taskUuid: taskId
+    });
+    expect(worker.appleMailboxRequest).toHaveBeenCalledWith(
+      `/internal/apple-mailboxes/tasks/${taskId}/authorization-resume`,
+      'POST',
+      {}
+    );
+    expect(
+      worker.appleMailboxRequest.mock.calls.every((call) => !/\/(start|batch)$/.test(call[0]))
+    ).toBe(true);
+    expect(mailboxes.registrationCode).not.toHaveBeenCalled();
+  });
+
+  it('人工标记成功后同步传输失败，返回独立失败而不谎称标记未保存', async () => {
+    worker.appleMailboxRequest.mockImplementation(async (path: string) => {
+      if (path.endsWith('/mark')) return {};
+      throw new Error('transport failed after commit');
+    });
+    expect(
+      await service.mark(
+        { items: [{ aliasId: alias.id, revision: 1 }], registrationStatus: 'registered' },
+        actor
+      )
+    ).toMatchObject({ updated: 1, synchronization: { synchronized: 0, failed: 1 } });
+  });
+
+  it('新版同步完整透传原创建IP时间及授权状态，旧版不增加未观察事实', async () => {
+    const payload = {
+      accountId: requestId,
+      sourceTaskUuid: taskId,
+      upstreamAccountId: '7',
+      operatorId: actor.id,
+      aliasId: alias.id,
+      email: alias.email,
+      registrationCountry: 'PH',
+      source: 'register',
+      fingerprint: 'd'.repeat(64),
+      schemaVersion: 2,
+      registrationIp: '203.0.113.12',
+      registeredAt: '2026-10-09T01:00:00Z',
+      creationConfirmed: true,
+      provider: 'apple_hidden',
+      identityStatus: 'creation_confirmed'
+    };
+    worker.appleMailboxRequest.mockImplementation(async (path: string) =>
+      path.endsWith('/sync-payload') ? payload : {}
+    );
+    await service.sync(taskId, actor);
+    expect(accounts.mirrorRegistration).toHaveBeenCalledWith(
+      expect.objectContaining({
+        schemaVersion: 2,
+        registrationIp: payload.registrationIp,
+        registeredAt: payload.registeredAt,
+        identityStatus: 'creation_confirmed',
+        source: 'register'
+      }),
+      actor
+    );
+    expect(worker.appleMailboxRequest).toHaveBeenLastCalledWith(
+      `/internal/apple-mailboxes/tasks/${taskId}/sync-ack`,
+      'POST',
+      expect.objectContaining({ fingerprint: payload.fingerprint, status: 'saved' })
+    );
+  });
+
+  it('旧的待授权回执被拒绝后重新读取新版资料，授权完成不会被旧ACK吞掉', async () => {
+    const partial = {
+      accountId: requestId,
+      sourceTaskUuid: taskId,
+      upstreamAccountId: '7',
+      operatorId: actor.id,
+      aliasId: alias.id,
+      email: alias.email,
+      registrationCountry: 'PH',
+      source: 'register',
+      fingerprint: 'd'.repeat(64),
+      schemaVersion: 2,
+      creationConfirmed: true,
+      provider: 'apple_hidden',
+      identityStatus: 'creation_confirmed'
+    };
+    const completed = { ...partial, identityStatus: 'verified', fingerprint: 'e'.repeat(64) };
+    let current = partial;
+    worker.appleMailboxRequest.mockImplementation(
+      async (path: string, _method?: string, body?: unknown) => {
+        if (path.endsWith('/sync-payload')) return current;
+        if (path.endsWith('/sync-ack')) {
+          const acknowledgement = body as { fingerprint: string };
+          if (acknowledgement.fingerprint === partial.fingerprint) {
+            current = completed;
+            throw new ConflictException('旧回执版本已变化');
+          }
+          expect(acknowledgement.fingerprint).toBe(completed.fingerprint);
+        }
+        return {};
+      }
+    );
+    await expect(service.sync(taskId, actor)).rejects.toThrow('版本已变化');
+    expect(await service.sync(taskId, actor)).toMatchObject({ syncStatus: 'saved' });
+    expect(accounts.mirrorRegistration.mock.calls.map(([value]) => value.identityStatus)).toEqual([
+      'creation_confirmed',
+      'verified'
+    ]);
+    expect(
+      worker.appleMailboxRequest.mock.calls.every(([path]) => !/\/(start|batch)$/.test(path))
+    ).toBe(true);
+  });
+
   it.each([{ status: 'DISABLED' }, { authorizationValid: false }, { primaryAvailable: false }])(
     '停用或没有有效查询授权的邮箱禁止启动：%j',
     async (change) => {

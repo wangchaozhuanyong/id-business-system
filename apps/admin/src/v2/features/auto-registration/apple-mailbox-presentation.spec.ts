@@ -15,7 +15,10 @@ import {
   appleMailboxSelectionLabel,
   appleMailboxCanSaveLocal,
   appleMailboxBusy,
-  appleMailboxCanRecover
+  appleMailboxCanRecover,
+  appleMailboxCanResumeAuthorization,
+  appleMailboxAuthorizationLabel,
+  appleMailboxManualSyncPreviewLabel
 } from './apple-mailbox-presentation';
 
 const row: AppleMailboxRow = {
@@ -39,6 +42,27 @@ const row: AppleMailboxRow = {
 };
 
 describe('苹果隐藏邮箱注册边界与中文展示', () => {
+  it('官网创建和授权完成分别展示，人工注册标记不能冒充可恢复任务', () => {
+    const created = {
+      ...row,
+      taskUuid: 'task-1',
+      creationConfirmed: true,
+      authorizationStatus: 'pending' as const,
+      taskStatus: 'failed' as const
+    };
+    expect(appleMailboxCanResumeAuthorization(row)).toBe(false);
+    expect(appleMailboxCanResumeAuthorization(created)).toBe(true);
+    expect(appleMailboxCanResumeAuthorization({ ...created, activeTaskUuid: 'task-1' })).toBe(
+      false
+    );
+    expect(appleMailboxCanResumeAuthorization({ ...created, taskStatus: 'running' })).toBe(false);
+    expect(
+      appleMailboxCanResumeAuthorization({ ...created, authorizationStatus: 'complete' })
+    ).toBe(false);
+    expect(appleMailboxAuthorizationLabel('pending')).toBe('官网已创建·待授权');
+    expect(appleMailboxAuthorizationLabel('complete')).toBe('授权已完成');
+    expect(appleMailboxManualSyncPreviewLabel('exists')).toContain('保留现有资料');
+  });
   it('显示首次失败快照，不把前序成功或当前同步步骤当成失败位置', () => {
     const text = appleMailboxDiagnostic({
       stage: 'sync',

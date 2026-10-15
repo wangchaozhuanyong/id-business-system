@@ -43,6 +43,9 @@ export function registrationWorkspaceUrl(workspacePath: string, page: AutoRegist
   if (workspacePath !== AUTO_REGISTRATION_WORKSPACE_PATH) {
     throw new Error('自动注册工作区地址不正确，请重新加载。');
   }
+  if (!isAutoRegistrationPage(page)) {
+    throw new Error('该自动注册页面已停用，请返回注册控制台。');
+  }
   return `${workspacePath}${page === '/' ? '' : page.slice(1)}`;
 }
 
@@ -72,6 +75,17 @@ export function readRegistrationChildMessage(
   if (!value || typeof value !== 'object') return;
   const message = value as Partial<AutoRegistrationChildMessage>;
   if (!isAutoRegistrationPage(message.page)) return;
+  if (
+    message.type === 'id-registration:account-open' &&
+    message.page === '/accounts' &&
+    activePage === '/accounts' &&
+    typeof message.accountId === 'string' &&
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+      message.accountId
+    )
+  ) {
+    return { type: message.type, page: '/accounts', accountId: message.accountId };
+  }
   if (message.type === 'id-registration:ready') {
     return { type: message.type, page: message.page };
   }

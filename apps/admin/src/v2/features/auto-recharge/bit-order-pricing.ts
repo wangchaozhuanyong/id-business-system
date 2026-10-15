@@ -30,7 +30,8 @@ export function estimateBitOrder(
         : null) ?? 'CNY';
   const receipt =
     order.receivedAmount ?? (editable ? settings?.planPrices[order.plan] : null) ?? null;
-  function cachedRate(code: string, saved?: string | null) {
+  function cachedRate(code: string | null, saved?: string | null) {
+    if (!code) return null;
     if (code === 'CNY') return '1';
     if (saved) return saved;
     const found = rates.find((item) => item.currency === code);
@@ -38,8 +39,8 @@ export function estimateBitOrder(
       ? found.rateToCny
       : null;
   }
-  function cny(amount: string | null, code: string, saved?: string | null) {
-    if (amount === null) return null;
+  function cny(amount: string | null, code: string | null, saved?: string | null) {
+    if (amount === null || !code) return null;
     if (/^0(?:\.0+)?$/.test(amount)) return '0';
     const fx = cachedRate(code, saved);
     return fx ? multiplyDecimalStrings(amount, fx, 4) : null;
@@ -80,13 +81,16 @@ export function estimateBitOrder(
   const usdtCny = cny(usdtFee, usdtCurrency, order.usdtFeeFxRateToCny);
   const shoppingCny = cny(shoppingFee, shoppingCurrency, order.shoppingFeeFxRateToCny);
   const profit =
-    order.profitAmountCny ??
-    (editable && [receivedCny, principalCny, usdtCny, shoppingCny].every((value) => value !== null)
-      ? [principalCny!, usdtCny!, shoppingCny!].reduce(
-          (value, cost) => addDecimalStrings(value, `-${cost}`, 4),
-          receivedCny!
-        )
-      : null);
+    order.chargeAmount == null || !order.chargeCurrencyCode
+      ? null
+      : (order.profitAmountCny ??
+        (editable &&
+        [receivedCny, principalCny, usdtCny, shoppingCny].every((value) => value !== null)
+          ? [principalCny!, usdtCny!, shoppingCny!].reduce(
+              (value, cost) => addDecimalStrings(value, `-${cost}`, 4),
+              receivedCny!
+            )
+          : null));
   return {
     receipt,
     currency,
@@ -114,9 +118,10 @@ export function bitOrderPricingFormDefaults(
   now = Date.now()
 ) {
   const chargeAmount = order.source === 'automatic' ? order.chargeAmount : form.chargeAmount;
-  if (!chargeAmount) throw new Error('请先填写代付金额');
+  if (chargeAmount == null || chargeAmount === '') throw new Error('请先核对实际代付金额');
   const chargeCurrencyCode =
     order.source === 'automatic' ? order.chargeCurrencyCode : form.chargeCurrencyCode;
+  if (!chargeCurrencyCode) throw new Error('请先核对实际代付币种');
   const receiptCurrency = form.receivedAmount
     ? form.receivedCurrencyCode
     : (settings?.receivedCurrencyCode ?? 'CNY');

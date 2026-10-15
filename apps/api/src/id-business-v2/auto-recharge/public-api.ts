@@ -7,3 +7,8 @@ export {
   type RegistrationMirrorResult
 } from './bank-recharge-registration-mirror.service';
 export { bankRechargeCountryCode } from './bank-recharge-validation';
+
+export {
+  BankRechargeOnlineOrderService,
+  type VerifiedOnlineRechargeOrderFact
+} from './bank-recharge-online-order.service';

@@ -81,9 +81,20 @@ function makeInput(index, patch = {}) {
     sourceTaskUuid: value.sourceTaskUuid,
     upstreamAccountId: String(value.upstreamAccountId)
   };
+  if (value.schemaVersion === 2)
+    Object.assign(identity, {
+      schemaVersion: 2,
+      registrationIp: value.registrationIp ?? null,
+      registeredAt: value.registeredAt ?? null,
+      creationConfirmed: value.creationConfirmed,
+      provider: value.provider,
+      identityStatus: value.identityStatus
+    });
   return {
     ...value,
-    fingerprint: createHash('sha256').update(JSON.stringify(identity)).digest('hex')
+    fingerprint: createHash('sha256')
+      .update(JSON.stringify(identity, Object.keys(identity).sort()))
+      .digest('hex')
   };
 }
 
@@ -424,6 +435,68 @@ try {
   assert.equal((await receipts(login.accountId)).length, 1);
   report.passedChecks += 1;
 
+  stage = 'v2_registration_facts_and_authorization_resume';
+  const partial = makeInput(103, {
+    schemaVersion: 2,
+    creationConfirmed: true,
+    identityStatus: 'creation_confirmed',
+    registrationIp: '203.0.113.8',
+    registeredAt: '2026-01-01T01:02:03Z',
+    provider: 'apple_hidden'
+  });
+  await service.mirrorRegistration(partial, admins[0]);
+  const created = await getAccount(partial.accountId);
+  assert.equal(encryption.decrypt(created.registrationIpEncrypted), partial.registrationIp);
+  assert.equal(created.registeredAt.toISOString(), '2026-01-01T01:02:03.000Z');
+  assert.ok(created.registrationIpEncrypted.startsWith('v1:'));
+  let summary = (await manualAccounts.listAccounts()).items.find(
+    (item) => item.id === partial.accountId
+  );
+  assert.equal(summary.needsSupplement, true);
+  const completed = makeInput(103, { ...partial, identityStatus: 'verified' });
+  await service.mirrorRegistration(completed, admins[1]);
+  assert.deepEqual(await getAccount(partial.accountId), created);
+  assert.equal((await receipts(partial.accountId)).length, 2);
+  summary = (await manualAccounts.listAccounts()).items.find(
+    (item) => item.id === partial.accountId
+  );
+  assert.equal(summary.needsSupplement, false);
+  assert.equal(summary.registrationSource, 'automatic');
+  assert.equal(summary.registrationIp, partial.registrationIp);
+  await service.mirrorRegistration(completed, admins[1]);
+  assert.equal((await receipts(partial.accountId)).length, 2);
+  assert.ok(!JSON.stringify(await receipts(partial.accountId)).includes(partial.registrationIp));
+  report.passedChecks += 1;
+
+  stage = 'manual_registered_inventory_backfill';
+  const manualInput = {
+    email: 'manual-registered-fixture@example.test',
+    aliasId: 'fixture-alias',
+    revision: 3
+  };
+  assert.equal((await service.previewManualRegistered(manualInput, admins[0])).status, 'create');
+  const manualOutputs = await Promise.all(
+    Array.from({ length: 3 }, () => service.mirrorManualRegistered(manualInput, admins[0]))
+  );
+  assert.equal(manualOutputs.filter((item) => !item.replayed).length, 1);
+  assert.equal(new Set(manualOutputs.map((item) => item.accountId)).size, 1);
+  const manualId = manualOutputs[0].accountId;
+  const manualRow = await getAccount(manualId);
+  assert.equal(manualRow.registeredAt, null);
+  assert.equal(manualRow.passwordEncrypted, null);
+  assert.equal(manualRow.registrationIpEncrypted, null);
+  assert.equal((await service.previewManualRegistered(manualInput, admins[0])).status, 'exists');
+  summary = (await manualAccounts.listAccounts()).items.find((item) => item.id === manualId);
+  assert.equal(summary.needsSupplement, true);
+  assert.equal(summary.registrationSource, 'manual');
+  await prisma.idBusinessV2ChatgptAccount.update({
+    where: { id: manualId },
+    data: { deletedAt: new Date() }
+  });
+  assert.equal((await service.previewManualRegistered(manualInput, admins[0])).status, 'deleted');
+  await expectConflict(() => service.mirrorManualRegistered(manualInput, admins[0]));
+  report.passedChecks += 1;
+
   if (python) {
     stage = 'joint_sqlite_prepare';
     workerFixture = startWorkerFixture(python);
@@ -451,7 +524,17 @@ try {
         password: payload.password || undefined,
         registrationCountryCode: payload.registrationCountry,
         source: payload.source,
-        fingerprint: payload.fingerprint
+        fingerprint: payload.fingerprint,
+        ...(payload.schemaVersion === 2
+          ? {
+              schemaVersion: 2,
+              registrationIp: payload.registrationIp,
+              registeredAt: payload.registeredAt,
+              creationConfirmed: payload.creationConfirmed,
+              provider: payload.provider,
+              identityStatus: payload.identityStatus
+            }
+          : {})
       };
       assert.equal(makeInput(0, input).fingerprint, payload.fingerprint);
       assert.deepEqual(await service.mirrorRegistration(input, admins[0]), {
@@ -477,7 +560,8 @@ try {
       assert.equal((await receipts(payload.accountId)).length, 1);
       acknowledgements.push({
         accountId: payload.accountId,
-        sourceTaskUuid: payload.sourceTaskUuid
+        sourceTaskUuid: payload.sourceTaskUuid,
+        fingerprint: payload.fingerprint
       });
     }
     const listed = await manualAccounts.listAccounts({ page: '1', pageSize: '100' });
@@ -549,9 +633,9 @@ try {
   stage = 'final_counts';
   report.syntheticAccounts = await prisma.idBusinessV2ChatgptAccount.count();
   report.mirrorReceipts = await prisma.auditLog.count({ where: { action: mirrorAction } });
-  assert.equal(report.syntheticAccounts, python ? 38 : 35);
-  assert.equal(report.mirrorReceipts, python ? 37 : 34);
-  assert.equal(report.passedChecks, python ? 10 : 9);
+  assert.equal(report.syntheticAccounts, python ? 40 : 37);
+  assert.equal(report.mirrorReceipts, python ? 39 : 36);
+  assert.equal(report.passedChecks, python ? 12 : 11);
   report.status = 'PASS';
 } catch {
   report.status = 'FAIL';

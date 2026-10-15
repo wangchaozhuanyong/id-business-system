@@ -427,6 +427,28 @@ const adminPendingReleaseControls = () => {
   }
 };
 
+if (
+  ['guards', 'release-controls'].includes(part) &&
+  changed.some(
+    (path) =>
+      path.startsWith('scripts/production-release/registration-closure-') ||
+      path === '.github/workflows/registration-closure-validation.yml'
+  )
+)
+  run('python3', ['-B', 'scripts/production-release/registration-closure-release.test.py']);
+
+if (
+  ['guards', 'release-controls'].includes(part) &&
+  changed.some((path) =>
+    [
+      'scripts/check-v2-table-standard.mjs',
+      'scripts/lib/v2-table-schema-alias.mjs',
+      'scripts/v2-table-schema-alias.test.mjs'
+    ].includes(path)
+  )
+)
+  run('node', ['--test', 'scripts/v2-table-schema-alias.test.mjs']);
+
 if (part === 'guards') {
   if (!/^[a-f0-9]{40}$/.test(base)) throw new Error('Missing diff base');
   const existing = changed.filter((p) => existsSync(p));
@@ -898,6 +920,7 @@ if (releaseArtifactOnly && ['guards', 'release-controls'].includes(part)) {
       'test_workspace.py',
       'test_apple_mailboxes.py',
       'test_release_safety.py',
+      'test_registration_closed_loop_unit.py',
       'test_upload_compat.py'
     ])
       run(python, ['-B', '-m', 'unittest', 'discover', '-s', worker, '-p', name]);
@@ -936,11 +959,18 @@ if (releaseArtifactOnly && ['guards', 'release-controls'].includes(part)) {
     }
   } else {
     run('python3', ['scripts/ci-recharge-migration.py']);
-    if (changed.some((path) => path.includes('/proxy-pool/'))) {
+  }
+  // Shared-pool and registration changes can be in the same candidate. Keep
+  // both real database suites; the mirror branch must not hide proxy coverage.
+  if (
+    changed.some((path) => path.includes('/proxy-pool/')) ||
+    changed.includes('scripts/acceptance-v2-shared-proxy-mysql.mjs')
+  ) {
+    if (!connections && !mirror) {
       npm('run', 'prisma:mysql:generate');
       shared();
-      run('node', ['scripts/acceptance-v2-shared-proxy-mysql.mjs']);
     }
+    run('node', ['scripts/acceptance-v2-shared-proxy-mysql.mjs']);
   }
 } else if (part === 'connector') {
   const workerDirectory = 'apps/api/src/id-business-v2/auto-recharge/worker';

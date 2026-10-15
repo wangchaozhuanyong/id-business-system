@@ -220,7 +220,7 @@ mysql('银充治理恢复：真实隔离MySQL事务', () => {
       openedAt: null,
       dueAt: null
     });
-    expect(restoredOrder.chargeAmount.toString()).toBe('100');
+    expect(restoredOrder.chargeAmount?.toString()).toBe('100');
     expect(
       await prisma.idBusinessV2BankRechargeSubscription.findUniqueOrThrow({
         where: { id: subscription.id }

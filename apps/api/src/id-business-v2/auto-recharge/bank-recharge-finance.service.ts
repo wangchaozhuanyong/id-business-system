@@ -1,3 +1,8 @@
+import {
+  assertBankRechargeChannelAccess,
+  bankRechargePaymentAccountKey,
+  onlineOrderSnapshot
+} from './bank-recharge-channel';
 import { BankRechargeFeesService } from './bank-recharge-fees.service';
 import { V2_FINANCE_CURRENCIES } from '@apple-business/shared';
 import {
@@ -73,14 +78,24 @@ export class BankRechargeFinanceService {
 
     const order = await this.repository.findOrderForCompletion(tx, id);
     if (!order) throw new NotFoundException('银充订单不存在');
+    assertBankRechargeChannelAccess(order.channel, operator, true);
     if (order.status === 'completed') throw new ConflictException('银充订单已经完成');
     if (['refunded', 'cancelled'].includes(order.status))
       throw new ConflictException('银充订单已结束');
     assertV2ExpectedUpdatedAt(order.updatedAt, expectedUpdatedAt, '银充订单');
+    const online = order.channel === 'online';
+    const zeroAmountChange =
+      online &&
+      onlineOrderSnapshot(order.onlineSourceSnapshot).zeroAmountChange === true &&
+      order.chargeAmount !== null &&
+      Amount4.from(order.chargeAmount).isZero();
+    const selectedCard = online ? order.onlineRechargeCard : order.card;
     if (
+      order.chargeAmount === null ||
+      !order.chargeCurrencyCode ||
       !order.account ||
       !order.customer ||
-      !order.card ||
+      (!selectedCard && !zeroAmountChange) ||
       !order.openedAt ||
       !order.dueAt ||
       !order.receivedAmount ||
@@ -95,17 +110,46 @@ export class BankRechargeFinanceService {
       order.customer.recordStatus !== 'active' ||
       order.account.status !== 'active' ||
       order.account.deletedAt ||
-      !order.card.active
+      (online
+        ? Boolean(
+            selectedCard &&
+            'status' in selectedCard &&
+            !['active', 'exhausted'].includes(selectedCard.status)
+          )
+        : Boolean(selectedCard && 'active' in selectedCard && !selectedCard.active))
     ) {
       throw new ConflictException('账号、客户或银行卡已停用');
+    }
+    if (online && order.source === 'automatic') {
+      const snapshot = onlineOrderSnapshot(order.onlineSourceSnapshot);
+      const originalCardId =
+        typeof snapshot.originalCardId === 'string' ? snapshot.originalCardId : null;
+      const reviewedCardId =
+        typeof snapshot.manualVerifiedCardId === 'string' ? snapshot.manualVerifiedCardId : null;
+      if (
+        !zeroAmountChange &&
+        (!selectedCard ||
+          (originalCardId
+            ? selectedCard.id !== originalCardId
+            : selectedCard.id !== reviewedCardId || !snapshot.manualCardEvidenceRef))
+      )
+        throw new ConflictException('线上银行卡尚未核对原付款的准确卡片身份');
     }
     if (order.source === 'automatic') {
       const source = order.rechargeJobId
         ? await this.repository.findRechargeJob(tx, order.rechargeJobId)
         : null;
-      if (!source?.accountKey || order.account.officialAccountKey !== source.accountKey) {
+      const sourceKey = online ? bankRechargePaymentAccountKey(order) : source?.accountKey;
+      if (!sourceKey || order.account.officialAccountKey !== sourceKey) {
         throw new ConflictException('账号与原官网付款身份不一致，不能完成财务');
       }
+      if (
+        online &&
+        !order.paymentEvidenceId &&
+        !order.checkoutIdentifier &&
+        !order.manualEvidenceRef
+      )
+        throw new ConflictException('线上原单缺少付款凭据，请先补核实付凭据编号');
     }
     bankRechargeFxRate(undefined, order.chargeFxRateToCny, '代付汇率', order.chargeCurrencyCode);
     bankRechargeFxRate(
@@ -134,17 +178,15 @@ export class BankRechargeFinanceService {
     ) {
       throw new BadRequestException('客户收款账户不存在或币种不一致');
     }
-    if (!order.fundingFinanceAccountId) {
+    if (!zeroAmountChange && !order.fundingFinanceAccountId) {
       throw new BadRequestException('请为预存资金银行卡选择代付资金账户');
     }
-    const fundingAccount = await this.repository.findFinanceAccount(
-      tx,
-      order.fundingFinanceAccountId
-    );
+    const fundingAccount = order.fundingFinanceAccountId
+      ? await this.repository.findFinanceAccount(tx, order.fundingFinanceAccountId)
+      : null;
     if (
-      !fundingAccount ||
-      fundingAccount.status !== 'active' ||
-      fundingAccount.currency !== 'CNY'
+      !zeroAmountChange &&
+      (!fundingAccount || fundingAccount.status !== 'active' || fundingAccount.currency !== 'CNY')
     ) {
       throw new BadRequestException('代付资金账户必须是启用中的人民币账户');
     }
@@ -198,7 +240,9 @@ export class BankRechargeFinanceService {
         chargeCurrencyCode: order.chargeCurrencyCode,
         bankFeeAmount: bankFee.toString(),
         bankFeeCurrencyCode: order.bankFeeCurrencyCode,
-        cardId: order.card.id
+        channel: order.channel,
+        cardId: selectedCard?.id ?? null,
+        zeroAmountChange
       },
       lines: [
         {
@@ -233,25 +277,29 @@ export class BankRechargeFinanceService {
                 memo: '客户手续费收入'
               }
             ]),
-        {
-          accountCode: 'bank_recharge_cost',
-          direction: 'debit',
-          currency: 'CNY',
-          amountOriginal: chargeCny,
-          fxRateToCny: Rate8.one(),
-          amountCny: chargeCny,
-          memo: '官网代付成本'
-        },
-        {
-          accountCode: 'cash',
-          direction: 'credit',
-          currency: 'CNY',
-          amountOriginal: chargeCny,
-          fxRateToCny: Rate8.one(),
-          amountCny: chargeCny,
-          financeAccountId: fundingAccount.id,
-          memo: '银行卡代付'
-        },
+        ...(zeroAmountChange
+          ? []
+          : [
+              {
+                accountCode: 'bank_recharge_cost' as const,
+                direction: 'debit' as const,
+                currency: 'CNY' as const,
+                amountOriginal: chargeCny,
+                fxRateToCny: Rate8.one(),
+                amountCny: chargeCny,
+                memo: '官网代付成本'
+              },
+              {
+                accountCode: 'cash' as const,
+                direction: 'credit' as const,
+                currency: 'CNY' as const,
+                amountOriginal: chargeCny,
+                fxRateToCny: Rate8.one(),
+                amountCny: chargeCny,
+                financeAccountId: fundingAccount!.id,
+                memo: '银行卡代付'
+              }
+            ]),
         ...(bankFeeCny.isZero()
           ? []
           : [
@@ -271,7 +319,7 @@ export class BankRechargeFinanceService {
                 amountOriginal: bankFeeCny,
                 fxRateToCny: Rate8.one(),
                 amountCny: bankFeeCny,
-                financeAccountId: fundingAccount.id,
+                financeAccountId: fundingAccount!.id,
                 memo: '银行卡通道手续费支出'
               }
             ]),
@@ -321,6 +369,7 @@ export class BankRechargeFinanceService {
       async (tx) => {
         const order = await this.repository.findOrder(tx, id);
         if (!order) throw new NotFoundException('银充订单不存在');
+        assertBankRechargeChannelAccess(order.channel, operator, true);
         if (
           !['completed', 'refunded'].includes(order.status) ||
           !['posted', 'partial'].includes(order.financeStatus)

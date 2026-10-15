@@ -12,6 +12,7 @@ import type { AuthenticatedUser } from '../../../auth/auth.types';
 import { maskLoginEventIp } from '../../../auth/login-events';
 import {
   ONLINE_RECHARGE_PERMISSION,
+  ONLINE_RECHARGE_PLAN_LABELS,
   ONLINE_RECHARGE_SECTIONS,
   type OnlineRechargeSection
 } from '../contracts';
@@ -35,20 +36,29 @@ export class OnlineRechargeAdminRepository {
   ) {}
   async overview() {
     const counts = await this.repository.read(async (db) => {
-      const [tasks, codes, cards, billing, active] = await Promise.all([
-        db.onlineRechargeTask.groupBy({ by: ['status'], _count: true }),
-        db.onlineRechargeCode.groupBy({ by: ['status'], _count: true }),
-        db.onlineRechargeCard.groupBy({ by: ['status'], _count: true }),
-        db.onlineRechargeBill.groupBy({
-          by: ['currency'],
-          where: { status: 'success' },
-          _sum: { amount: true },
-          _count: true
-        }),
-        db.onlineRechargeTask.count({ where: { status: 'running' } })
-      ]);
+      const [tasks, codes, cards, billing, active, rechargeTasks, confirmedRechargeCount] =
+        await Promise.all([
+          db.onlineRechargeTask.groupBy({ by: ['status'], _count: true }),
+          db.onlineRechargeCode.groupBy({ by: ['status'], _count: true }),
+          db.onlineRechargeCard.groupBy({ by: ['status'], _count: true }),
+          db.onlineRechargeBill.groupBy({
+            by: ['currency'],
+            where: { status: 'success' },
+            _sum: { amount: true },
+            _count: true
+          }),
+          db.onlineRechargeTask.count({ where: { status: 'running' } }),
+          db.onlineRechargeTask.groupBy({
+            by: ['status'],
+            where: { operation: 'recharge' },
+            _count: true
+          }),
+          db.onlineRechargeTask.count({ where: { operation: 'recharge', confirmedPaid: true } })
+        ]);
       return {
         tasks,
+        rechargeTasks,
+        confirmedRechargeCount,
         codes,
         cards,
         billing: billing.map((row) => ({
@@ -94,7 +104,10 @@ export class OnlineRechargeAdminRepository {
           id: String(slot.slotId ?? index + 1),
           status: slot.inUse === true ? 'busy' : 'idle',
           activeTaskId: slot.jobKey ?? null,
-          browserMode: stats?.mode ?? config.browserMode
+          browserMode: stats?.mode ?? config.browserMode,
+          taskId: slot.jobKey ?? null,
+          mode: stats?.mode ?? config.browserMode,
+          updatedAt: latest?.updatedAt ?? null
         };
       });
       return {
@@ -113,6 +126,15 @@ export class OnlineRechargeAdminRepository {
     if (['jobs', 'automation', 'sessions', 'renewal'].includes(section))
       return {
         ...result,
+        ...(query.operation === 'proxy_test'
+          ? {
+              revalidateAt: result.items.some((row) =>
+                ['queued', 'running'].includes((row as { status: string }).status)
+              )
+                ? new Date(Date.now() + 3000).toISOString()
+                : null
+            }
+          : {}),
         items: result.items.map((row) =>
           this.tasks.map(row as Parameters<OnlineRechargeTasksService['map']>[0])
         )
@@ -233,7 +255,12 @@ export class OnlineRechargeAdminRepository {
             'proxy_test'
           )
         );
-      return { tasks };
+      return {
+        tasks,
+        reused: tasks.some((task) =>
+          Boolean(task && typeof task === 'object' && 'reused' in task && task.reused === true)
+        )
+      };
     }
     if (section === 'config' && action === 'test') {
       const aliases: Record<string, string> = {
@@ -341,9 +368,7 @@ export class OnlineRechargeAdminRepository {
             bill.cardLast4,
             bill.amount?.toString() ?? '',
             bill.currency,
-            ({ plus: 'Plus', pro_5x: 'Pro 5x', pro_20x: 'Pro 20x' } as Record<string, string>)[
-              bill.plan
-            ],
+            (ONLINE_RECHARGE_PLAN_LABELS as Record<string, string>)[bill.plan],
             (
               { success: '成功', failed: '失败', result_unknown: '待核对' } as Record<
                 string,

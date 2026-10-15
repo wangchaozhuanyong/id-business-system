@@ -14,14 +14,17 @@ import {
   appleMailboxRegisterReason,
   appleMailboxTaskActive,
   appleMailboxBusy,
-  appleMailboxCanRecover
+  appleMailboxCanRecover,
+  appleMailboxCanResumeAuthorization
 } from './apple-mailbox-presentation';
 import type {
   AppleMailboxListQuery,
   AppleMailboxMarkInput,
   AppleMailboxPageResult,
   AppleMailboxRow,
-  AppleMailboxTask
+  AppleMailboxTask,
+  AppleMailboxTarget,
+  AppleMailboxManualSyncPreview
 } from './contracts';
 
 type AppleMailboxRecoveryTarget = Pick<
@@ -116,6 +119,12 @@ export function useAppleMailboxes() {
   const feedback = ref('');
   const busy = ref(false);
   const markOpen = ref(false);
+  const manualSyncOpen = ref(false);
+  const manualSyncReadError = ref('');
+  const manualSyncDraft = useV2FormDraft<{ items: AppleMailboxTarget[] }>(
+    'auto-registration:apple:manual-sync',
+    () => ({ items: [] })
+  );
   const recoverOpen = ref(false);
   const recoverDraft = useV2FormDraft<{ target: AppleMailboxRecoveryTarget | null }>(
     'auto-registration:apple:recover',
@@ -214,7 +223,11 @@ export function useAppleMailboxes() {
       const result = await autoRegistrationApi.markAppleMailboxes(input);
       if (!canAccess.value) return;
       if (finishSave()) markOpen.value = false;
-      feedback.value = `已标记 ${result.updated} 个邮箱`;
+      const sync = result.synchronization;
+      feedback.value = sync
+        ? `已标记 ${result.updated} 个邮箱；已同步 ${sync.synchronized} 个，失败 ${sync.failed} 个，跳过 ${sync.skipped} 个。失败项可选择后仅同步历史标记。`
+        : `已标记 ${result.updated} 个邮箱`;
+      invalidateV2Queries('auto-recharge');
       await refreshMailboxes();
     } catch (error) {
       if (canAccess.value) actionError.value = getApiErrorMessage(error);
@@ -347,6 +360,7 @@ export function useAppleMailboxes() {
         result.syncStatus === 'saved'
           ? '已同步到 ChatGPT 账号列表'
           : '账号同步尚未完成，请查看任务记录';
+      invalidateV2Queries('auto-recharge');
       if (id === taskUuid.value) await taskQuery.refresh();
       await refreshMailboxes();
     } catch (error) {
@@ -368,6 +382,26 @@ export function useAppleMailboxes() {
           ? '已补存自动注册本地账号，可继续核对主账号同步'
           : '本地账号尚未保存，请查看任务记录';
       if (id === taskUuid.value) await taskQuery.refresh();
+      await refreshMailboxes();
+    } catch (error) {
+      if (canAccess.value) actionError.value = getApiErrorMessage(error);
+    } finally {
+      busy.value = false;
+    }
+  }
+  async function resumeAuthorization(row?: AppleMailboxRow) {
+    const record = row ?? taskQuery.data.value?.record;
+    const id = row?.taskUuid ?? taskUuid.value;
+    if (!canAccess.value || busy.value || !id || !appleMailboxCanResumeAuthorization(record))
+      return;
+    busy.value = true;
+    actionError.value = '';
+    try {
+      const result = await autoRegistrationApi.resumeAppleMailboxAuthorization(id);
+      if (!canAccess.value) return;
+      taskUuid.value = result.taskUuid;
+      feedback.value = '已继续原账号的登录与授权，请查看任务进度';
+      await taskQuery.refresh();
       await refreshMailboxes();
     } catch (error) {
       if (canAccess.value) actionError.value = getApiErrorMessage(error);
@@ -400,9 +434,118 @@ export function useAppleMailboxes() {
         taskTimer = setTimeout(() => {
           if (canAccess.value) void taskQuery.refresh();
         }, 2500);
-      else if (previous?.[0] && appleMailboxTaskActive(previous[0].status)) void refreshMailboxes();
+      else if (previous?.[0] && appleMailboxTaskActive(previous[0].status)) {
+        invalidateV2Queries('auto-recharge');
+        void refreshMailboxes();
+      }
     }
   );
+  const manualSyncQuery = useV2ModuleQuery<AppleMailboxManualSyncPreview>({
+    moduleKey: 'auto-registration',
+    scope: 'auto-registration',
+    key: () => createV2QueryKey({ manualSync: manualSyncDraft.form.items }),
+    enabled: () => canAccess.value && manualSyncOpen.value && manualSyncDraft.form.items.length > 0,
+    keepPreviousData: false,
+    query: ({ signal }) =>
+      autoRegistrationApi.previewManualMailboxSync(manualSyncDraft.form.items, { signal })
+  });
+  const manualSyncError = computed(() =>
+    manualSyncQuery.error.value ? getApiErrorMessage(manualSyncQuery.error.value) : ''
+  );
+  const manualSyncDisabledReason = computed(() => {
+    if (!canAccess.value) return '请先确认当前登录状态';
+    if (manualSyncReadError.value) return manualSyncReadError.value;
+    if (!manualSyncQuery.hasCurrentData.value || manualSyncQuery.isRefreshing.value)
+      return '请先完成同步预览';
+    if (manualSyncQuery.error.value) return '预览读取失败，请重试';
+    return manualSyncQuery.data.value?.creatable ? '' : '所选邮箱没有待新增的人工标记账号';
+  });
+  function openManualSync() {
+    if (!canWrite.value || busy.value || !selected.value.length) return;
+    const targets = selected.value.map(({ aliasId, revision }) => ({ aliasId, revision }));
+    const key = targets
+      .map(({ aliasId }) => aliasId)
+      .sort()
+      .join(':');
+    const restored = manualSyncDraft.open(key, { items: targets });
+    if (!restored) manualSyncDraft.form.items = targets.map((item) => ({ ...item }));
+    manualSyncOpen.value = true;
+    manualSyncReadError.value = '';
+    actionError.value = '';
+    void manualSyncQuery.refresh();
+  }
+  async function refreshManualSyncPreview() {
+    if (!canAccess.value || busy.value || !manualSyncOpen.value) return;
+    busy.value = true;
+    actionError.value = '';
+    try {
+      await refreshMailboxes();
+      if (!canAccess.value) return;
+      if (query.error.value || !query.hasCurrentData.value) {
+        manualSyncReadError.value = '邮箱最新状态读取失败，请重试核对';
+        return;
+      }
+      const targets = manualSyncDraft.form.items.map(({ aliasId }) =>
+        items.value.find((row) => row.aliasId === aliasId)
+      );
+      if (targets.some((row) => !row)) {
+        manualSyncReadError.value = '部分邮箱已不在当前结果中，请关闭并重新选择';
+        return;
+      }
+      manualSyncReadError.value = '';
+      manualSyncDraft.form.items = targets.map((row) => ({
+        aliasId: row!.aliasId,
+        revision: row!.revision
+      }));
+      await manualSyncQuery.refresh();
+    } catch (error) {
+      if (canAccess.value) manualSyncReadError.value = getApiErrorMessage(error);
+    } finally {
+      busy.value = false;
+    }
+  }
+  async function syncManualMailboxes() {
+    if (!manualSyncOpen.value || busy.value || manualSyncDisabledReason.value) return;
+    const finishSave = manualSyncDraft.beginSave();
+    const targets = manualSyncDraft.form.items.map((item) => ({ ...item }));
+    busy.value = true;
+    actionError.value = '';
+    try {
+      const result = await autoRegistrationApi.syncManualMailboxes(targets);
+      if (!canAccess.value) return;
+      feedback.value = `历史标记同步：已同步 ${result.synchronized} 个，失败 ${result.failed} 个，跳过 ${result.skipped} 个。缺失密码、注册 IP 和注册时间保留待补。`;
+      invalidateV2Queries('auto-recharge');
+      const completedSnapshot = finishSave();
+      if (result.failed === 0 && completedSnapshot) manualSyncOpen.value = false;
+      await refreshMailboxes();
+      if (result.failed > 0 && completedSnapshot && canAccess.value) {
+        const failedIds = new Set(
+          result.items.filter((item) => item.status === 'failed').map((item) => item.aliasId)
+        );
+        const remaining = targets
+          .filter((item) => failedIds.has(item.aliasId))
+          .map((item) => ({
+            ...item,
+            revision:
+              items.value.find((row) => row.aliasId === item.aliasId)?.revision ?? item.revision
+          }));
+        manualSyncDraft.open(
+          remaining
+            .map(({ aliasId }) => aliasId)
+            .sort()
+            .join(':'),
+          {
+            items: remaining
+          }
+        );
+        await manualSyncQuery.refresh();
+      }
+    } catch (error) {
+      if (canAccess.value) actionError.value = getApiErrorMessage(error);
+    } finally {
+      busy.value = false;
+    }
+  }
   async function cancelTask() {
     const id = taskUuid.value;
     if (
@@ -467,6 +610,10 @@ export function useAppleMailboxes() {
     actionError,
     feedback,
     markOpen,
+    manualSyncOpen,
+    manualSyncQuery,
+    manualSyncError,
+    manualSyncDisabledReason,
     recoverOpen,
     recoverDraft,
     recoverDisabledReason,
@@ -482,10 +629,14 @@ export function useAppleMailboxes() {
     openMark,
     resetMark,
     saveMark,
+    openManualSync,
+    refreshManualSyncPreview,
+    syncManualMailboxes,
     start,
     startBatch,
     syncTask,
     saveLocalAccount,
+    resumeAuthorization,
     recover,
     openRecovery,
     refreshRecovery,

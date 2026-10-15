@@ -23,7 +23,7 @@ export const v2TableSchemas = {
         { key: 'email', label: '隐藏邮箱', kind: 'identifier', widthPreset: 'wide', pin: 'start' },
         { key: 'primaryEmail', label: '主邮箱', kind: 'identifier', widthPreset: 'wide' },
         { key: 'registrationStatus', label: '注册状态', kind: 'status', widthPreset: 'standard' },
-        { key: 'registrationIp', label: '注册 IP', kind: 'identifier', widthPreset: 'wide' },
+        { key: 'registrationIp', label: '注册 IP / 国家', kind: 'identifier', widthPreset: 'wide' },
         { key: 'source', label: '标记来源', kind: 'text', widthPreset: 'standard' },
         { key: 'updatedAt', label: '更新时间', kind: 'date', widthPreset: 'dateTime' },
         { key: 'taskStatus', label: '任务状态', kind: 'status', widthPreset: 'standard' },
@@ -46,30 +46,24 @@ export const v2TableSchemas = {
           widthPreset: 'wide',
           pin: 'start'
         },
-        { key: 'registrationCountryCode', label: '国家', kind: 'text', widthPreset: 'standard' },
         { key: 'status', label: '状态', kind: 'status', widthPreset: 'compact' },
         { key: 'offerStatus', label: '优惠状况', kind: 'status', widthPreset: 'standard' },
         { key: 'hasPassword', label: '登录密码', kind: 'status', widthPreset: 'compact' },
         { key: 'hasTotp', label: '双重验证', kind: 'status', widthPreset: 'compact' },
         {
-          key: 'firstLoginNetwork',
-          label: '首次登录 IP / 国家',
+          key: 'registrationIp',
+          label: '注册 IP / 国家',
           kind: 'text',
           widthPreset: 'wide'
         },
-        { key: 'lastLoginNetwork', label: '最近登录 IP / 国家', kind: 'text', widthPreset: 'wide' },
+        { key: 'registrationSource', label: '资料来源', kind: 'status', widthPreset: 'standard' },
+        { key: 'needsSupplement', label: '资料状态', kind: 'status', widthPreset: 'wide' },
         { key: 'remark', label: '备注', kind: 'text', widthPreset: 'longText' },
-        { key: 'createdAt', label: '注册时间', kind: 'date', widthPreset: 'dateTime' },
+        { key: 'registeredAt', label: '注册时间', kind: 'date', widthPreset: 'dateTime' },
         { key: 'registeredDays', label: '已注册天数', kind: 'numeric', widthPreset: 'standard' },
         { key: 'updatedAt', label: '更新时间', kind: 'date', widthPreset: 'dateTime' },
         { key: 'openingCard', label: '银行卡信息', kind: 'identifier', widthPreset: 'wide' },
-        {
-          key: 'cardDeletionStatus',
-          label: '银行卡删除状态',
-          kind: 'status',
-          widthPreset: 'standard'
-        },
-        { key: 'actions', label: '操作', kind: 'actions', layout: 'quadruple', pin: 'end' }
+        { key: 'actions', label: '操作', kind: 'actions', layout: 'triple', pin: 'end' }
       ]
     })
   },
@@ -136,6 +130,42 @@ export const v2TableSchemas = {
         {
           key: 'orderNo',
           label: '比特订单',
+          kind: 'identifier',
+          widthPreset: 'wide',
+          pin: 'start'
+        },
+        { key: 'customer', label: '客户', kind: 'text', widthPreset: 'standard' },
+        { key: 'account', label: 'ChatGPT 账号', kind: 'identifier', widthPreset: 'wide' },
+        { key: 'plan', label: '套餐', kind: 'text', widthPreset: 'standard' },
+        { key: 'card', label: '银行卡', kind: 'identifier', widthPreset: 'standard' },
+        { key: 'chargeAmount', label: '代付金额', kind: 'numeric', widthPreset: 'wide' },
+        { key: 'usdtFeeAmount', label: 'USDT 手续费', kind: 'numeric', widthPreset: 'standard' },
+        {
+          key: 'shoppingFeeAmount',
+          label: '购物网手续费',
+          kind: 'numeric',
+          widthPreset: 'standard'
+        },
+        { key: 'receivedAmount', label: '客户实收', kind: 'numeric', widthPreset: 'standard' },
+        { key: 'profitAmountCny', label: '利润(CNY)', kind: 'numeric', widthPreset: 'standard' },
+        { key: 'openedAt', label: '开通时间', kind: 'date', widthPreset: 'dateTime' },
+        { key: 'dueAt', label: '到期时间', kind: 'date', widthPreset: 'dateTime' },
+        { key: 'paymentResult', label: '充值结果', kind: 'status', widthPreset: 'standard' },
+        { key: 'usageStatus', label: '使用状态', kind: 'status', widthPreset: 'standard' },
+        { key: 'status', label: '订单状态', kind: 'status', widthPreset: 'standard' },
+        { key: 'actions', label: '操作', kind: 'actions', layout: 'triple', pin: 'end' }
+      ]
+    }),
+    online: table({
+      id: 'bank-recharge-orders.online',
+      feature: 'bank-recharge-orders',
+      role: 'primary',
+      mobileMode: 'scroll',
+      rowKey: { kind: 'path', value: 'id' },
+      columns: [
+        {
+          key: 'orderNo',
+          label: '线上订单',
           kind: 'identifier',
           widthPreset: 'wide',
           pin: 'start'
@@ -1408,7 +1438,10 @@ export const v2TablesByFeature = {
   'chatgpt-accounts': [v2TableSchemas.chatgptAccounts.main],
   'bank-recharge-cards': [v2TableSchemas.bankRechargeCards.main],
   'recharge-proxies': [v2TableSchemas.rechargeProxies.main],
-  'bank-recharge-orders': [v2TableSchemas.bankRechargeOrders.main],
+  'bank-recharge-orders': [
+    v2TableSchemas.bankRechargeOrders.main,
+    v2TableSchemas.bankRechargeOrders.online
+  ],
   'vendure-mailbox': [
     v2TableSchemas.vendureMailbox.primary,
     v2TableSchemas.vendureMailbox.aliases,

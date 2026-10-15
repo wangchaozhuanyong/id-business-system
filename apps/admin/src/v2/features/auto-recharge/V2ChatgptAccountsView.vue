@@ -1,7 +1,7 @@
 <template>
   <section class="v2-page-layout v2-records-page bank-recharge-page">
     <V2PageContext
-      description="管理未开通或订阅已取消的待用账号及回收站；软删除保留资料，恢复后保持停用。密码与 2FA 加密存储。"
+      description="统一记录注册结果与账号资料。人工标记保留来源，缺失资料待补；注册 IP 和注册时间只展示已记录的事实。"
     >
       <template #actions>
         <ChatgptAccountCopySettings />
@@ -30,7 +30,8 @@
       </template>
     </V2PageContext>
 
-    <el-tabs v-model="deletedFilter" aria-label="账号清单分类">
+    <el-tabs v-model="accountView" aria-label="账号清单分类">
+      <el-tab-pane label="全部账号" name="all" />
       <el-tab-pane label="待用账号" name="active" />
       <el-tab-pane label="回收站" name="deleted" />
     </el-tabs>
@@ -57,7 +58,7 @@
         </header>
         <V2Table
           :schema="v2TableSchemas.chatgptAccounts.main"
-          :view-key="deletedFilter"
+          :view-key="accountView"
           :show-column-settings="false"
           :data="accounts"
           class="v2-records-table bank-recharge-nowrap"
@@ -73,61 +74,50 @@
             prop="emailMasked"
             show-overflow-tooltip
           />
-          <V2TableColumn
-            :definition="v2TableSchemas.chatgptAccounts.main.columns[1]"
-            show-overflow-tooltip
-          >
-            <template #default="{ row }">{{
-              chatgptCountryLabel(row.registrationCountryCode)
-            }}</template>
-          </V2TableColumn>
-          <V2TableColumn :definition="v2TableSchemas.chatgptAccounts.main.columns[2]">
+          <V2TableColumn :definition="v2TableSchemas.chatgptAccounts.main.columns[1]">
             <template #default="{ row }">
               <el-tag :type="row.status === 'active' ? 'success' : 'info'" effect="plain">{{
                 row.status === 'active' ? '启用' : '停用'
               }}</el-tag>
             </template>
           </V2TableColumn>
-          <V2TableColumn :definition="v2TableSchemas.chatgptAccounts.main.columns[3]">
+          <V2TableColumn :definition="v2TableSchemas.chatgptAccounts.main.columns[2]">
             <template #default="{ row }">{{
               V2_ACCOUNT_OFFER_LABELS[(row.offerStatus ?? 'unknown') as V2AccountOffer]
             }}</template>
           </V2TableColumn>
-          <V2TableColumn :definition="v2TableSchemas.chatgptAccounts.main.columns[4]">
+          <V2TableColumn :definition="v2TableSchemas.chatgptAccounts.main.columns[3]">
             <template #default="{ row }">{{ row.hasPassword ? '已保存' : '未保存' }}</template>
           </V2TableColumn>
-          <V2TableColumn :definition="v2TableSchemas.chatgptAccounts.main.columns[5]">
+          <V2TableColumn :definition="v2TableSchemas.chatgptAccounts.main.columns[4]">
             <template #default="{ row }">{{ row.hasTotp ? '已保存' : '未保存' }}</template>
           </V2TableColumn>
           <V2TableColumn
-            :definition="v2TableSchemas.chatgptAccounts.main.columns[6]"
+            :definition="v2TableSchemas.chatgptAccounts.main.columns[5]"
             show-overflow-tooltip
           >
             <template #default="{ row }">
-              <span
-                v-if="row.firstLoginNetwork"
-                :title="formatV2DateTime(row.firstLoginNetwork.observedAt)"
-              >
-                {{ row.firstLoginNetwork.ip }} ·
-                {{ proxyCountryLabel(row.firstLoginNetwork.countryCode) }}
-              </span>
-              <span v-else>未记录</span>
+              {{ row.registrationIp || 'IP 未记录' }} ·
+              {{
+                row.registrationCountryCode
+                  ? proxyCountryLabel(row.registrationCountryCode)
+                  : '国家未记录'
+              }}
             </template>
           </V2TableColumn>
-          <V2TableColumn
-            :definition="v2TableSchemas.chatgptAccounts.main.columns[7]"
-            show-overflow-tooltip
-          >
-            <template #default="{ row }">
-              <span
-                v-if="row.lastLoginNetwork"
-                :title="formatV2DateTime(row.lastLoginNetwork.observedAt)"
-              >
-                {{ row.lastLoginNetwork.ip }} ·
-                {{ proxyCountryLabel(row.lastLoginNetwork.countryCode) }}
-              </span>
-              <span v-else>未记录</span>
-            </template>
+          <V2TableColumn :definition="v2TableSchemas.chatgptAccounts.main.columns[6]">
+            <template #default="{ row }">{{
+              row.registrationSource === 'manual'
+                ? '人工标记'
+                : row.registrationSource === 'automatic'
+                  ? '自动注册'
+                  : '未记录'
+            }}</template>
+          </V2TableColumn>
+          <V2TableColumn :definition="v2TableSchemas.chatgptAccounts.main.columns[7]">
+            <template #default="{ row }">{{
+              row.needsSupplement !== false ? '已注册·待补资料' : '资料齐全'
+            }}</template>
           </V2TableColumn>
           <V2TableColumn
             :definition="v2TableSchemas.chatgptAccounts.main.columns[8]"
@@ -136,13 +126,15 @@
           />
           <V2TableColumn :definition="v2TableSchemas.chatgptAccounts.main.columns[9]">
             <template #default="{ row }">
-              <span title="首次录入系统的时间">{{ formatV2DateTime(row.createdAt) }}</span>
+              <span title="已核实的真实注册时间">{{
+                row.registeredAt ? formatV2DateTime(row.registeredAt) : '未记录'
+              }}</span>
             </template>
           </V2TableColumn>
           <V2TableColumn :definition="v2TableSchemas.chatgptAccounts.main.columns[10]">
             <template #default="{ row }">
-              <span title="从首次录入起，每满 24 小时增加 1 天；不足一天为 0 天">{{
-                registeredDaysLabel(row.createdAt)
+              <span title="从真实注册时刻起，每满 24 小时增加 1 天；注册时间缺失时不推算">{{
+                registeredDaysLabel(row.registeredAt)
               }}</span>
             </template>
           </V2TableColumn>
@@ -155,12 +147,7 @@
           >
             <template #default="{ row }">{{ row.openingCard?.numberSummary || '未记录' }}</template>
           </V2TableColumn>
-          <V2TableColumn :definition="v2TableSchemas.chatgptAccounts.main.columns[13]">
-            <template #default="{ row }">{{
-              row.openingCard?.deleted ? '已删除' : row.openingCard?.id ? '尚未删除' : '未记录'
-            }}</template>
-          </V2TableColumn>
-          <V2TableActionColumn :definition="v2TableSchemas.chatgptAccounts.main.columns[14]">
+          <V2TableActionColumn :definition="v2TableSchemas.chatgptAccounts.main.columns[13]">
             <template #default="{ row }">
               <AppButton
                 v-if="row.deletedAt"
@@ -176,11 +163,6 @@
                   @error="operationError = $event"
                 />
                 <AppButton size="small" variant="ghost" @click="openEdit(row)">编辑</AppButton>
-                <ChatgptOpeningCardDeleteButton
-                  :account="row"
-                  :disabled="working"
-                  @deleted="query.refresh"
-                />
                 <el-dropdown trigger="click">
                   <AppButton size="small" variant="ghost" :disabled="working">更多操作</AppButton>
                   <template #dropdown>
@@ -262,6 +244,7 @@ import type { BankLifecycleEntity, BankLifecycleAction } from './bank-recharge-a
 import ChatgptAccountOfferSelect from './ChatgptAccountOfferSelect.vue';
 import ChatgptAccountEditorFields from './ChatgptAccountEditorFields.vue';
 import { computed, ref, watch } from 'vue';
+import { useRoute } from 'vue-router';
 import type { FormInstance, FormRules } from 'element-plus';
 import AppButton from '@/components/ui/AppButton.vue';
 import { getApiErrorMessage } from '@/api/client';
@@ -283,11 +266,9 @@ import { validateV2Form } from '@/v2/utils/formValidation';
 import { useV2FormDraft, useV2SessionDraft } from '@/v2/composables/useV2SessionDraft';
 import { bankRechargeApi, type BankChatgptAccount } from './bank-recharge-api';
 import ChatgptAccountImportDrawer from './ChatgptAccountImportDrawer.vue';
-import ChatgptOpeningCardDeleteButton from './ChatgptOpeningCardDeleteButton.vue';
 import ChatgptAccountCopyButton from './ChatgptAccountCopyButton.vue';
 import ChatgptAccountCopySettings from './ChatgptAccountCopySettings.vue';
 import { proxyCountryLabel } from './recharge-proxy-options';
-import { chatgptCountryLabel } from './chatgpt-country';
 import { V2_ACCOUNT_OFFER_LABELS, type V2AccountOffer } from '@apple-business/shared';
 import '@/v2/styles/records.css';
 import './bank-recharge.css';
@@ -302,9 +283,10 @@ const keywordInput = useV2SessionDraft('auto-recharge/V2ChatgptAccountsView:keyw
 const offerStatus = useV2SessionDraft('chatgpt-accounts:offer-filter', () =>
   ref<V2AccountOffer | 'all'>('all')
 );
-const deletedFilter = useV2SessionDraft('chatgpt-accounts:deleted', () =>
-  ref<'active' | 'deleted'>('active')
+const accountView = useV2SessionDraft('chatgpt-accounts:inventory-view', () =>
+  ref<'all' | 'active' | 'deleted'>('all')
 );
+if (useRoute().query.view === 'all') accountView.value = 'all';
 const lifecycleTarget = ref<{
   entity: BankLifecycleEntity;
   id: string;
@@ -318,8 +300,8 @@ const query = useV2ModuleQuery({
       page: page.value,
       pageSize: pageSize.value,
       keyword: keyword.value,
-      subscriptionState: deletedFilter.value === 'deleted' ? 'all' : 'never_subscribed',
-      deleted: deletedFilter.value,
+      subscriptionState: accountView.value === 'active' ? 'never_subscribed' : 'all',
+      deleted: accountView.value === 'deleted' ? 'deleted' : 'active',
       offerStatus: offerStatus.value
     }),
   keepPreviousData: true,
@@ -330,16 +312,16 @@ const query = useV2ModuleQuery({
         page: page.value,
         pageSize: pageSize.value,
         keyword: keyword.value,
-        subscriptionState: deletedFilter.value === 'deleted' ? 'all' : 'never_subscribed',
-        deleted: deletedFilter.value,
+        subscriptionState: accountView.value === 'active' ? 'never_subscribed' : 'all',
+        deleted: accountView.value === 'deleted' ? 'deleted' : 'active',
         offerStatus: offerStatus.value
       }
     )
 });
-watch([page, pageSize, keyword, offerStatus, deletedFilter], () => {
+watch([page, pageSize, keyword, offerStatus, accountView], () => {
   void query.ensureFresh();
 });
-watch([offerStatus, deletedFilter], () => {
+watch([offerStatus, accountView], () => {
   page.value = 1;
 });
 function search() {

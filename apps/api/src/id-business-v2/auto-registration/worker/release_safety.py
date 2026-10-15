@@ -38,13 +38,16 @@ ENCRYPTED_COLUMNS = {
 JSON_COLUMNS = {("accounts", "extra_data"), ("email_services", "config"), ("registration_tasks", "result")}
 RECORD_FIELDS = {"email", "aliasId", "registrationStatus", "revision", "registrationIp", "registrationIpSource", "source", "markedAt", "operatorId", "note", "activeTaskUuid", "attemptIp", "attemptCountry", "registrationCountry", "lastTaskUuid", "lastResultKind", "taskStatus"}
 PUBLIC_FACT_FIELDS = {"localSaveStatus", "syncStatus", "systemAccountId", "syncErrorKind", "identityStatus", "passwordStatus", "stage", "reason", "lastHttpStatus", "proxySource", "proxyId", "mailboxSelection", "firstFailure"}
-OPTIONAL_RECORD_FIELDS = {"lastMailId", "consumedMailIds", "registrationEvidenceTaskUuid"} | PUBLIC_FACT_FIELDS
+OPTIONAL_RECORD_FIELDS = {"lastMailId", "consumedMailIds", "registrationEvidenceTaskUuid", "registeredAt",
+                          "manualSyncId", "creationConfirmed", "authorizationStatus"} | PUBLIC_FACT_FIELDS
 TASK_FIELDS = {"email", "aliasId", "resultKind"}
-OPTIONAL_TASK_FIELDS = {"operatorId", "mirrorAccountId", "attempt", "sideEffectPossible", "batchId", "startedAt", "configurationCheckpoint", "passwordCheckpoint", "passwordSavedAt", "creationConfirmed", "existingAccountIndication", "verifiedExistingAccount", "rawResult", "identityEvidence", "upstreamAccountId", "syncPayload", "syncedAt", "needsReview", "lateFacts"} | PUBLIC_FACT_FIELDS
+OPTIONAL_TASK_FIELDS = {"operatorId", "mirrorAccountId", "attempt", "sideEffectPossible", "batchId", "startedAt", "configurationCheckpoint", "passwordCheckpoint", "passwordSavedAt", "creationConfirmed", "existingAccountIndication", "verifiedExistingAccount", "rawResult", "identityEvidence", "upstreamAccountId", "syncPayload", "syncedAt", "needsReview", "lateFacts", "schemaVersion", "provider", "creationConfirmedAt", "syncRetryCount", "syncNextRetryAt", "providerCheckpoint"} | PUBLIC_FACT_FIELDS
 RESULT_FIELDS = {"success", "email", "password", "account_id", "workspace_id", "access_token", "refresh_token", "id_token", "session_token", "source", "metadata"}
-RESULT_METADATA_FIELDS = {"email_service", "proxy_used", "registered_at", "is_existing_account", "idSourceTaskUuid"}
+RESULT_METADATA_FIELDS = {"email_service", "proxy_used", "registered_at", "is_existing_account", "idSourceTaskUuid", "idAuthorizationStatus"}
 IDENTITY_FIELDS = {"source", "emailMatched", "officialUserIdHash", "observedAt"}
 SYNC_FIELDS = {"accountId", "sourceTaskUuid", "upstreamAccountId", "operatorId", "aliasId", "email", "password", "registrationCountry", "source", "identityStatus", "identityEvidence", "fingerprint"}
+SYNC_V2_FIELDS = {"schemaVersion", "provider", "registrationIp", "registeredAt", "creationConfirmed"}
+PROVIDERS = {"apple_hidden", "tempmail", "outlook", "custom_domain", "temp_mail"}
 BATCH_FIELDS = {"batchId", "operatorId", "taskUuids", "cancelled", "createdAt", "mode", "concurrency", "interval_min", "interval_max", "skipped"}
 SYNC_ERRORS = {"email_conflict", "deleted_account", "storage_unavailable", "sync_failed", "identity_missing", "identity_mismatch", "local_save_failed", "payload_invalid"}
 FACT_ENUMS = {
@@ -273,6 +276,7 @@ def validate_result(value: Any, task_uuid: str) -> None:
     if (not isinstance(metadata, dict) or set(metadata) - RESULT_METADATA_FIELDS
             or metadata.get("idSourceTaskUuid") != task_uuid
             or ("is_existing_account" in metadata and type(metadata["is_existing_account"]) is not bool)
+            or ("idAuthorizationStatus" in metadata and metadata["idAuthorizationStatus"] not in {"pending", "complete"})
             or any(field in metadata and not bounded_text(metadata[field], 16384, nullable=True)
                    for field in ("email_service", "proxy_used", "registered_at"))):
         raise SafetyError("APPLE_RECORD_INVALID")
@@ -285,7 +289,8 @@ def validate_result(value: Any, task_uuid: str) -> None:
 
 
 def validate_sync(value: Any, task_uuid: str, binding: dict[str, Any]) -> None:
-    if (not isinstance(value, dict) or set(value) != SYNC_FIELDS
+    version2 = isinstance(value, dict) and value.get("schemaVersion") == 2
+    if (not isinstance(value, dict) or set(value) != (SYNC_FIELDS | SYNC_V2_FIELDS if version2 else SYNC_FIELDS)
             or value.get("sourceTaskUuid") != task_uuid
             or any(value.get(field) != binding.get(field) for field in ("email", "aliasId", "operatorId", "upstreamAccountId"))
             or value.get("accountId") != binding.get("mirrorAccountId")
@@ -293,12 +298,22 @@ def validate_sync(value: Any, task_uuid: str, binding: dict[str, Any]) -> None:
             or value.get("upstreamAccountId") is None or not nullable_id(value["upstreamAccountId"])
             or not bounded_text(value.get("password"), 255)
             or not controlled(value.get("source"), {"register", "login"})
-            or not controlled(value.get("identityStatus"), FACT_ENUMS["identityStatus"])
+            or not controlled(value.get("identityStatus"), FACT_ENUMS["identityStatus"] | ({"creation_confirmed"} if version2 else set()))
             or (value.get("registrationCountry") is not None and (not isinstance(value["registrationCountry"], str)
                 or not re.fullmatch(r"[A-Z]{2}", value["registrationCountry"])))):
         raise SafetyError("APPLE_RECORD_INVALID")
     validate_identity(value["identityEvidence"])
     fields = {field: value[field] for field in ("accountId", "sourceTaskUuid", "upstreamAccountId", "email", "registrationCountry", "source")}
+    if version2:
+        if (not controlled(value.get("provider"), PROVIDERS) or not nullable_ip(value.get("registrationIp"))
+                or not nullable_date(value.get("registeredAt")) or type(value.get("creationConfirmed")) is not bool
+                or (value["creationConfirmed"] is True and (binding.get("creationConfirmed") is not True
+                    or value.get("source") != "register"))
+                or (value["identityStatus"] == "creation_confirmed" and (not value["creationConfirmed"]
+                    or not value.get("password") or value["password"] != binding.get("passwordCheckpoint")))):
+            raise SafetyError("APPLE_RECORD_INVALID")
+        fields.update({field: value[field] for field in ("schemaVersion", "provider", "registrationIp", "registeredAt",
+                       "creationConfirmed", "identityStatus")})
     expected = hashlib.sha256(json.dumps(fields, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()).hexdigest()
     if value.get("fingerprint") != expected:
         raise SafetyError("APPLE_RECORD_INVALID")
@@ -321,6 +336,19 @@ def validate_task(task_uuid: str, value: Any, *, late=False) -> None:
             or any(field in value and type(value[field]) is not bool for field in ("sideEffectPossible", "creationConfirmed", "existingAccountIndication", "verifiedExistingAccount", "needsReview"))
             or ("passwordCheckpoint" in value and not bounded_text(value["passwordCheckpoint"], 255, empty=False))):
         raise SafetyError("APPLE_RECORD_INVALID")
+    if (("schemaVersion" in value and value["schemaVersion"] != 2)
+            or ("provider" in value and not controlled(value["provider"], PROVIDERS))
+            or ("creationConfirmedAt" in value and not nullable_date(value["creationConfirmedAt"]))
+            or ("syncNextRetryAt" in value and not nullable_date(value["syncNextRetryAt"]))
+            or ("syncRetryCount" in value and (type(value["syncRetryCount"]) is not int or not 0 <= value["syncRetryCount"] <= 3))):
+        raise SafetyError("APPLE_RECORD_INVALID")
+    if "providerCheckpoint" in value:
+        snapshot = value["providerCheckpoint"]
+        if (not isinstance(snapshot, dict) or set(snapshot) != {"serviceType", "config", "emailInfo"}
+                or not controlled(snapshot.get("serviceType"), PROVIDERS - {"apple_hidden"})
+                or not isinstance(snapshot.get("config"), dict) or not isinstance(snapshot.get("emailInfo"), dict)
+                or len(canonical(snapshot)) > 1048576 or snapshot["emailInfo"].get("email", "").strip().lower() != value["email"]):
+            raise SafetyError("APPLE_RECORD_INVALID")
     if "configurationCheckpoint" in value:
         checkpoint = value["configurationCheckpoint"]
         if (not isinstance(checkpoint, dict) or set(checkpoint) != {"clientId", "proxyUsed"}
@@ -378,7 +406,10 @@ def validate_record(key: str, value: Any) -> None:
     if (any(not nullable_id(value.get(field)) for field in ("aliasId", "operatorId", "lastMailId"))
             or any(not nullable_uuid(value.get(field)) for field in ("activeTaskUuid", "lastTaskUuid", "registrationEvidenceTaskUuid"))
             or any(not nullable_ip(value.get(field)) for field in ("registrationIp", "attemptIp"))
-            or not nullable_date(value.get("markedAt"))
+            or not nullable_date(value.get("markedAt")) or not nullable_date(value.get("registeredAt"))
+            or not nullable_uuid(value.get("manualSyncId"))
+            or ("creationConfirmed" in value and type(value["creationConfirmed"]) is not bool)
+            or not controlled(value.get("authorizationStatus"), {None, "pending", "complete"})
             or any(item is not None and (not isinstance(item, str) or not re.fullmatch(r"[A-Z]{2}", item)) for item in (value.get("attemptCountry"), value.get("registrationCountry")))):
         raise SafetyError("APPLE_RECORD_INVALID")
     consumed = value.get("consumedMailIds", [])

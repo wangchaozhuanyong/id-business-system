@@ -1,5 +1,10 @@
 import { OnlineProxyPoolRepository } from '../../proxy-pool/public-api';
-import { BadRequestException, Injectable, UnauthorizedException } from '@nestjs/common';
+import {
+  BadRequestException,
+  ConflictException,
+  Injectable,
+  UnauthorizedException
+} from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { timingSafeEqual } from 'node:crypto';
 import type { OnlineRechargeWorkerRpc } from '../contracts';
@@ -125,16 +130,29 @@ export class OnlineRechargeWorkerRpcRepository {
             row.payload && typeof row.payload === 'object' && !Array.isArray(row.payload)
               ? row.payload
               : {};
+          if (row.operation === 'proxy_test' && typeof payload.proxyConnectionVersion !== 'string')
+            throw new ConflictException('旧检测缺少连接版本，请重新检测');
           const proxy = await this.proxies.active(
             tx,
             proxyId ?? undefined,
-            payload.proxyPoolReference === true
+            payload.proxyPoolReference === true,
+            row.operation === 'proxy_test' && typeof payload.proxyConnectionVersion === 'string'
+              ? payload.proxyConnectionVersion
+              : undefined
           );
-          if (row.operation !== 'proxy_test')
-            await tx.onlineRechargeTask.update({
-              where: { id: row.id },
-              data: { payload: { ...payload, proxyId: proxy.id, proxyPoolReference: true } }
-            });
+          await tx.onlineRechargeTask.update({
+            where: { id: row.id },
+            data: {
+              payload: {
+                ...payload,
+                proxyId: proxy.id,
+                proxyPoolReference: true,
+                ...(row.operation === 'proxy_test'
+                  ? { proxyConnectionVersion: proxy.connectionVersion }
+                  : {})
+              }
+            }
+          });
           await this.repository.log(tx, 'worker.proxy.credentials', undefined, row.id, {
             proxyId: proxy.id
           });
@@ -204,7 +222,7 @@ export class OnlineRechargeWorkerRpcRepository {
             !(Array.isArray(payload.ids) && payload.ids.includes(proxyId))
           )
             throw new BadRequestException('代理检测资料不属于当前任务');
-          await this.proxies.result(
+          const applied = await this.proxies.result(
             tx,
             proxyId,
             {
@@ -213,10 +231,16 @@ export class OnlineRechargeWorkerRpcRepository {
                 typeof args.latencyMs === 'number' && Number.isFinite(args.latencyMs)
                   ? Math.max(0, Math.round(args.latencyMs))
                   : null,
-              ok: args.ok === true
+              ok: args.ok === true,
+              errorCode: args.errorCode
             },
-            payload.proxyPoolReference === true
+            payload.proxyPoolReference === true,
+            typeof payload.proxyConnectionVersion === 'string'
+              ? payload.proxyConnectionVersion
+              : undefined
           );
+          if (!applied.applied)
+            throw new ConflictException('代理连接资料已修改，检测结果未写入，请重新检测');
           return { ok: true };
         });
       default:

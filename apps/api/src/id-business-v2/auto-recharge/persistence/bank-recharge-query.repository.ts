@@ -1,3 +1,9 @@
+import type { AuthenticatedUser } from '../../../auth/auth.types';
+import {
+  assertBankRechargeChannelAccess,
+  bankRechargeOrderChannel,
+  onlineOrderSnapshot
+} from '../bank-recharge-channel';
 import { BadRequestException, Injectable } from '@nestjs/common';
 import type { Prisma } from '@prisma/client';
 import { PrismaService } from '../../../common/prisma/prisma.service';
@@ -52,7 +58,7 @@ export class BankRechargeQueryRepository {
         include: {
           account: { select: { emailMasked: true } },
           customer: { select: { name: true } },
-          currentOrder: { select: { id: true, orderNo: true } }
+          currentOrder: { select: { id: true, orderNo: true, channel: true } }
         },
         orderBy: { dueAt: 'asc' },
         take: 100
@@ -84,6 +90,7 @@ export class BankRechargeQueryRepository {
         id: item.id,
         orderId: item.currentOrder.id,
         orderNo: item.currentOrder.orderNo,
+        channel: item.currentOrder.channel,
         customerName: item.customer?.name ?? '待关联客户',
         accountMasked: item.account.emailMasked,
         plan: item.plan,
@@ -95,18 +102,23 @@ export class BankRechargeQueryRepository {
     };
   }
 
-  async list(value: unknown) {
+  async list(value: unknown, operator?: AuthenticatedUser) {
     const query =
       value && typeof value === 'object' && !Array.isArray(value)
         ? (value as Record<string, unknown>)
         : {};
+    const channel = bankRechargeOrderChannel(query.channel);
+    assertBankRechargeChannelAccess(channel, operator);
     const page = this.pageNumber(query.page, 1, 100000);
     const pageSize = this.pageNumber(query.pageSize, 20, 100);
     const keyword = bankRechargeText(query.keyword, '搜索词', 160, false);
     const status = bankRechargeText(query.status, '订单状态', 40, false);
     const expiry = bankRechargeText(query.expiry, '到期筛选', 20, false) || 'all';
     if (!['all', 'expired'].includes(expiry)) throw new BadRequestException('到期筛选无效');
-    if (query.executionSource !== undefined && query.executionSource !== 'bitbrowser') {
+    if (
+      query.executionSource !== undefined &&
+      (channel === 'online' || query.executionSource !== 'bitbrowser')
+    ) {
       throw new BadRequestException('执行来源筛选无效');
     }
     const now = new Date();
@@ -127,6 +139,7 @@ export class BankRechargeQueryRepository {
     if (query.deleted && !['active', 'deleted'].includes(String(query.deleted)))
       throw new BadRequestException('删除状态筛选无效');
     const where: Prisma.IdBusinessV2BankRechargeOrderWhereInput = {
+      channel,
       deletedAt: query.deleted === 'deleted' ? { not: null } : null,
       ...(query.executionSource === 'bitbrowser'
         ? { source: 'automatic', rechargeJob: { is: { action: 'bitbrowser' } } }
@@ -154,6 +167,7 @@ export class BankRechargeQueryRepository {
           customer: { select: { id: true, name: true } },
           account: { select: { id: true, emailMasked: true } },
           card: { select: { id: true, label: true, last4: true } },
+          onlineRechargeCard: { select: { id: true, last4: true, status: true } },
           activeSubscription: { select: { status: true } },
           rechargeJob: { select: { result: true } }
         },
@@ -164,7 +178,7 @@ export class BankRechargeQueryRepository {
       this.prisma.idBusinessV2BankRechargeOrder.count({ where })
     ]);
     return {
-      items: items.map(({ rechargeJob, ...order }) => {
+      items: items.map(({ rechargeJob, onlineRechargeCard, ...order }) => {
         const result = rechargeJob?.result;
         const report =
           result && typeof result === 'object' && !Array.isArray(result) ? result : null;
@@ -173,8 +187,17 @@ export class BankRechargeQueryRepository {
           network && typeof network === 'object' && !Array.isArray(network)
             ? network.country
             : null;
+        const snapshot = onlineOrderSnapshot(order.onlineSourceSnapshot);
         let chargeCountryCode: string | null = null;
+        if (order.channel === 'online') {
+          try {
+            chargeCountryCode = bankRechargeCountryCode(snapshot.chargeCountryCode);
+          } catch {
+            /* 历史未知地区保留待核对。 */
+          }
+        }
         if (
+          order.channel !== 'online' &&
           order.source === 'automatic' &&
           report?.account_matched === true &&
           typeof country === 'string' &&
@@ -189,6 +212,19 @@ export class BankRechargeQueryRepository {
         }
         return {
           ...order,
+          card:
+            order.channel === 'online'
+              ? onlineRechargeCard
+                ? {
+                    id: onlineRechargeCard.id,
+                    last4: onlineRechargeCard.last4,
+                    label: order.cardLabelSnapshot || `线上银行卡 ····${onlineRechargeCard.last4}`,
+                    currencyCode: order.chargeCurrencyCode ?? '',
+                    active: ['active', 'exhausted'].includes(onlineRechargeCard.status),
+                    status: onlineRechargeCard.status
+                  }
+                : null
+              : order.card,
           // 国家只来自本次任务已核实账号的出口，不按币种或账单地址推算。
           chargeCountryCode
         };
@@ -201,7 +237,9 @@ export class BankRechargeQueryRepository {
     };
   }
 
-  async options() {
+  async options(channelValue?: unknown, operator?: AuthenticatedUser) {
+    const channel = bankRechargeOrderChannel(channelValue);
+    assertBankRechargeChannelAccess(channel, operator);
     const [customers, financeAccounts] = await Promise.all([
       this.prisma.idBusinessV2Customer.findMany({
         where: { deletedAt: null, recordStatus: 'active' },
@@ -214,7 +252,24 @@ export class BankRechargeQueryRepository {
         orderBy: { name: 'asc' }
       })
     ]);
-    return { customers, financeAccounts };
+    const cards =
+      channel === 'online'
+        ? (
+            await this.prisma.onlineRechargeCard.findMany({
+              where: { status: { in: ['active', 'exhausted'] } },
+              select: { id: true, last4: true, status: true },
+              orderBy: { createdAt: 'desc' }
+            })
+          ).map((card) => ({
+            id: card.id,
+            label: `线上银行卡 ····${card.last4}`,
+            last4: card.last4,
+            currencyCode: '',
+            active: ['active', 'exhausted'].includes(card.status),
+            status: card.status
+          }))
+        : undefined;
+    return { customers, financeAccounts, ...(cards ? { cards } : {}) };
   }
 
   private pageNumber(value: unknown, fallback: number, max: number) {

@@ -35,6 +35,7 @@ export class AutoRegistrationService implements OnModuleInit, OnModuleDestroy {
   private starting: Promise<void> | null = null;
   private readonly streams = new Set<WebSocket>();
   private readonly channels = new Map<string, { socket: WebSocket; path: string }>();
+  onWorkspaceOperator?: (operator: AuthenticatedUser, revalidate: () => Promise<boolean>) => void;
 
   constructor(
     private readonly config: ConfigService,
@@ -193,6 +194,7 @@ export class AutoRegistrationService implements OnModuleInit, OnModuleDestroy {
   ) {
     const path = workspaceUpstreamPath(request.originalUrl);
     const method = request.method ?? 'GET';
+    this.onWorkspaceOperator?.(operator, revalidate);
     await this.start();
     const sensitive = isWorkspaceSensitiveRead(method, path);
     const mutating = !['GET', 'HEAD', 'OPTIONS'].includes(method);
@@ -230,6 +232,8 @@ export class AutoRegistrationService implements OnModuleInit, OnModuleDestroy {
       return;
     }
     const headers: Record<string, string> = { 'X-ID-Workspace-Token': this.internalToken };
+    // Only the authenticated server actor is forwarded; browser-supplied values are ignored.
+    headers['X-ID-Workspace-Operator-Id'] = operator.id;
     if (sensitive) headers['X-ID-Workspace-Sensitive-Access'] = 'audited';
     const contentType = request.headers['content-type'];
     if (typeof contentType === 'string') headers['Content-Type'] = contentType;

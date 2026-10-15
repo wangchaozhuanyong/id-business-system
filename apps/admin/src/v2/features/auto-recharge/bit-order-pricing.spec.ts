@@ -35,6 +35,33 @@ const order = (value: Partial<BankRechargeOrder> = {}) =>
     ...value
   }) as BankRechargeOrder;
 describe('比特订单收费参考与人民币利润', () => {
+  it.each([
+    { chargeAmount: null, chargeCurrencyCode: 'PHP' },
+    { chargeAmount: '0', chargeCurrencyCode: null }
+  ])('线上待核对实付缺失时不生成利润或本金估算：%j', (missing) => {
+    const result = estimateBitOrder(
+      order({ channel: 'online', ...missing, profitAmountCny: '999' }),
+      settings,
+      rates,
+      now
+    );
+    expect(result.profit).toBeNull();
+    expect(result.usdtFee).toBeNull();
+  });
+  it('明确零元套餐变更保留0，仍按已配置费用计算，不误作未知金额', () => {
+    const result = estimateBitOrder(
+      order({
+        channel: 'online',
+        chargeAmount: '0',
+        onlineSourceSnapshot: { zeroAmountChange: true }
+      }),
+      { ...settings, shoppingFeePercent: '0', usdtFeePercent: '0' },
+      rates,
+      now
+    );
+    expect(result.usdtFee).toBe('0');
+    expect(result.profit).toBe('1000');
+  });
   it('空实收只有旧币种时，当前套餐参考价始终使用设置的币种', () => {
     const result = estimateBitOrder(
       order({ receivedAmount: null, receivedCurrencyCode: 'MYR', receivedFxRateToCny: '2' }),

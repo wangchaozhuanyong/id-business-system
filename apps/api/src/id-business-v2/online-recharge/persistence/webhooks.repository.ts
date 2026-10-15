@@ -46,10 +46,19 @@ export class OnlineRechargeWebhooksRepository {
       if (prior) {
         if (prior.eventId === verified.eventId && prior.payloadHash !== verified.payloadHash)
           throw new ConflictException('相同事件编号包含不同正文');
+        // 回执只用于卡片入库幂等；安全码不落库，已验签的相同正文重试仍须重新投递。
+        const existing: { id: string; cvc: string }[] = [];
+        for (const card of cards) {
+          const row = await tx.onlineRechargeCard.findUnique({
+            where: { numberHash: this.encryption.hash(card.number)! }
+          });
+          if (row && row.expiryMonth === card.expiryMonth && row.expiryYear === card.expiryYear)
+            existing.push({ id: row.id, cvc: card.cvc });
+        }
         return {
           duplicate: true,
           count: prior.cardCount,
-          cards: [] as { id: string; cvc: string }[]
+          cards: existing
         };
       }
       const imported: { id: string; cvc: string }[] = [];
@@ -80,7 +89,7 @@ export class OnlineRechargeWebhooksRepository {
       });
       return { duplicate: false, count, cards: imported };
     });
-    let credentialsAvailable = true;
+    let credentialsAvailable = result.cards.length === cards.length;
     try {
       await this.memory.putCards(result.cards);
     } catch {

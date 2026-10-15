@@ -24,7 +24,17 @@ export class AppleMailboxTaskBridgeService implements OnModuleDestroy {
   private timer: ReturnType<typeof setInterval> | undefined;
   private pumping = false;
   private destroyed = false;
+  private operatorContext?: {
+    operator: AuthenticatedUser;
+    revalidate: () => Promise<boolean>;
+    expiresAt: number;
+    checkedAt: number;
+  };
   onTerminal?: (id: string, result: AppleMailboxTask, context: TaskContext) => Promise<void>;
+  onReconcile?: (
+    operator: AuthenticatedUser,
+    revalidate: () => Promise<boolean>
+  ) => Promise<number>;
   constructor(
     private readonly worker: AutoRegistrationService,
     private readonly mailboxes: IdBusinessV2VendureMailboxService,
@@ -37,10 +47,21 @@ export class AppleMailboxTaskBridgeService implements OnModuleDestroy {
     this.tasks.set(this.uuid(id), context);
     this.ensurePump();
   }
+  rememberOperator(operator: AuthenticatedUser, revalidate: () => Promise<boolean>) {
+    this.operatorContext = {
+      operator,
+      revalidate,
+      expiresAt: Date.now() + 30 * 60_000,
+      checkedAt:
+        this.operatorContext?.operator.id === operator.id ? this.operatorContext.checkedAt : 0
+    };
+    this.ensurePump();
+  }
   onModuleDestroy() {
     this.destroyed = true;
     if (this.timer) clearInterval(this.timer);
     this.tasks.clear();
+    this.operatorContext = undefined;
   }
   private log(operator: AuthenticatedUser, action: string, remark?: string) {
     return this.audit.create({
@@ -64,12 +85,21 @@ export class AppleMailboxTaskBridgeService implements OnModuleDestroy {
 
   /** Private pull bridge: neither worker nor browser ever receives the system JWT/query code. */
   async pump() {
-    if (this.pumping || this.destroyed || !this.tasks.size) return;
+    if (this.pumping || this.destroyed || (!this.tasks.size && !this.operatorContext)) return;
     this.pumping = true;
     try {
-      const pending = await this.worker.appleMailboxRequest<{
-        requests: AppleMailboxCodeRequest[];
-      }>(`${privateBase}/requests`);
+      const context = this.operatorContext;
+      if (context && Date.now() - context.checkedAt >= 10_000) {
+        context.checkedAt = Date.now();
+        if (context.expiresAt <= Date.now() || !(await context.revalidate())) {
+          if (this.operatorContext === context) this.operatorContext = undefined;
+        } else await this.onReconcile?.(context.operator, context.revalidate);
+      }
+      const pending = this.tasks.size
+        ? await this.worker.appleMailboxRequest<{
+            requests: AppleMailboxCodeRequest[];
+          }>(`${privateBase}/requests`)
+        : { requests: [] };
       const requests = pending.requests.slice(0, 16);
       for (let offset = 0; offset < requests.length; offset += 4) {
         if (this.destroyed) break;
@@ -89,7 +119,7 @@ export class AppleMailboxTaskBridgeService implements OnModuleDestroy {
           this.tasks.delete(id);
         }
       }
-      if (!this.tasks.size && this.timer) {
+      if (!this.tasks.size && !this.operatorContext && this.timer) {
         clearInterval(this.timer);
         this.timer = undefined;
       }

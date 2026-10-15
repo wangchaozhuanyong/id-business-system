@@ -18,6 +18,7 @@ async function listing(openingCards: unknown[]) {
     ],
     subscriptionsForAccounts: async () => [],
     loginNetworksByEmailHashes: async () => [],
+    registrationSourceAudits: async () => [],
     openingCardsForAccounts: async () => openingCards
   };
   return (await listChatgptAccounts({}, repository as never, encryption)).items[0]!.openingCard;

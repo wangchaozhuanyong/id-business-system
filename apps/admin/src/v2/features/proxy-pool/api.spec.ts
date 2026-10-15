@@ -65,4 +65,38 @@ describe('shared proxy pool transport', () => {
       '协议'
     );
   });
+  it('reads only latest proxy detection tasks with cancellation and server deadlines', async () => {
+    const signal = new AbortController().signal;
+    fixtures.get
+      .mockResolvedValueOnce({
+        items: [{ id: 'one' }],
+        total: 2,
+        revalidateAt: '2026-10-15T00:00:03Z'
+      })
+      .mockResolvedValueOnce({ items: [{ id: 'two' }], total: 2, revalidateAt: null });
+    expect(await proxyPoolApi.testTasks(['proxy-one', 'proxy-two'], { signal })).toEqual({
+      items: [{ id: 'one' }, { id: 'two' }],
+      revalidateAt: '2026-10-15T00:00:03Z'
+    });
+    expect(fixtures.get).toHaveBeenLastCalledWith('/id-business-v2/online-recharge/admin/jobs', {
+      params: {
+        operation: 'proxy_test',
+        proxyIds: 'proxy-one,proxy-two',
+        latestPerProxy: 'true',
+        page: 2,
+        pageSize: 100
+      },
+      signal
+    });
+  });
+  it('keeps visible proxies alongside a full tracked batch without exceeding server ID limits', async () => {
+    fixtures.get.mockResolvedValue({ items: [], total: 0, revalidateAt: null });
+    const ids = Array.from({ length: 600 }, (_, index) => `proxy-${index}`);
+    await proxyPoolApi.testTasks(ids);
+    const calls = fixtures.get.mock.calls;
+    expect(calls).toHaveLength(2);
+    expect(calls[0][1].params.proxyIds.split(',')).toHaveLength(500);
+    expect(calls[1][1].params.proxyIds.split(',')).toHaveLength(100);
+    expect(calls[1][1].params.proxyIds).toContain('proxy-599');
+  });
 });

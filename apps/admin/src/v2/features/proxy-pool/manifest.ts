@@ -8,7 +8,7 @@ export const rechargeProxiesFeature = defineV2Feature({
   sourceSheet: '充值代理 IP',
   permission: 'id_business_v2.online_recharge.read',
   kind: 'list',
-  freshnessPolicy: 'event-driven',
+  freshnessPolicy: 'event-with-deadline',
   filters: [
     { key: 'keyword', label: '搜索', kind: 'search', placeholder: '国家或备注' },
     { key: 'status', label: '状态', kind: 'select', options: ['启用', '停用'] }

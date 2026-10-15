@@ -6,9 +6,39 @@ import {
   sanitizeRegistrationDraft,
   sanitizeAppleMailboxRequest
 } from './bridge';
-import { AUTO_REGISTRATION_WORKSPACE_PATH } from './contracts';
+import { AUTO_REGISTRATION_WORKSPACE_PATH, type AutoRegistrationPage } from './contracts';
 
 describe('automatic registration workspace bridge', () => {
+  it('台账跳转只接受当前凭据页同源frame的受控账号UUID', () => {
+    const frame = {} as Window;
+    const event = {
+      origin: 'https://fixture.invalid',
+      source: frame,
+      data: {
+        type: 'id-registration:account-open',
+        page: '/accounts',
+        accountId: '11111111-1111-4111-8111-111111111111'
+      }
+    };
+    expect(readRegistrationChildMessage(event, frame, event.origin, '/accounts')).toEqual(
+      event.data
+    );
+    expect(readRegistrationChildMessage(event, frame, event.origin, '/')).toBeUndefined();
+    expect(
+      readRegistrationChildMessage(event, {} as Window, event.origin, '/accounts')
+    ).toBeUndefined();
+    expect(
+      readRegistrationChildMessage(event, frame, 'https://another.invalid', '/accounts')
+    ).toBeUndefined();
+    expect(
+      readRegistrationChildMessage(
+        { ...event, data: { ...event.data, accountId: '../accounts' } },
+        frame,
+        event.origin,
+        '/accounts'
+      )
+    ).toBeUndefined();
+  });
   it('only opens the fixed same-origin workspace and known page paths', () => {
     expect(registrationWorkspaceUrl(AUTO_REGISTRATION_WORKSPACE_PATH, '/')).toBe(
       AUTO_REGISTRATION_WORKSPACE_PATH
@@ -18,6 +48,9 @@ describe('automatic registration workspace bridge', () => {
     );
     expect(() => registrationWorkspaceUrl('https://another.invalid/', '/')).toThrow();
     expect(() => registrationWorkspaceUrl('//another.invalid/', '/')).toThrow();
+    expect(() =>
+      registrationWorkspaceUrl(AUTO_REGISTRATION_WORKSPACE_PATH, '/payment' as AutoRegistrationPage)
+    ).toThrow('已停用');
   });
 
   it('rejects draft messages from another origin, another frame, or another page', () => {
@@ -51,6 +84,14 @@ describe('automatic registration workspace bridge', () => {
     };
     expect(readRegistrationChildMessage(event, frame, event.origin, '/')).toEqual(event.data);
     expect(readRegistrationChildMessage(event, {} as Window, event.origin, '/')).toBeUndefined();
+    expect(
+      readRegistrationChildMessage(
+        { ...event, data: { type: 'id-registration:ready', page: '/payment' } },
+        frame,
+        event.origin,
+        '/'
+      )
+    ).toBeUndefined();
     expect(
       readRegistrationChildMessage(event, frame, 'https://another.invalid', '/')
     ).toBeUndefined();

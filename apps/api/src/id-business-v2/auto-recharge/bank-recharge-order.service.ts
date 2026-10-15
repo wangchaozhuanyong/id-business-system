@@ -1,3 +1,10 @@
+import { createManualBankRechargeOrder } from './bank-recharge-manual-order';
+import { recordVerifiedBankRechargeOrder } from './bank-recharge-verified-order';
+import {
+  assertBankRechargeChannelAccess,
+  bankRechargePaymentAccountKey,
+  onlineOrderSnapshot
+} from './bank-recharge-channel';
 import { bankRechargeOrderAuditSnapshot } from './bank-recharge-order-audit';
 import { BankRechargeFeesService, BANK_RECHARGE_FEE_PREFIXES } from './bank-recharge-fees.service';
 import {
@@ -12,6 +19,7 @@ import { randomUUID } from 'node:crypto';
 import type { AuthenticatedUser } from '../../auth/auth.types';
 import {
   Amount4,
+  toV2JsonDocument,
   V2CommandTransactionManager,
   V2TransactionalAuditService,
   assertV2ExpectedUpdatedAt,
@@ -23,13 +31,7 @@ import { BankRechargeAccountService } from './bank-recharge-account.service';
 import { FieldEncryptionService } from '../../common/crypto/field-encryption.service';
 import { bankRechargeCardSnapshot } from './bank-recharge-card-summary';
 import { BankRechargeRepository } from './persistence/bank-recharge.repository';
-import { resolveBankRechargeSource } from './bank-recharge-recheck';
 import { activateBankRechargeSubscription } from './bank-recharge-subscription-projection';
-import {
-  hasVerifiedRechargePayment,
-  isRechargeUpgrade,
-  rechargeUpgradePaymentReference
-} from './recharge-upgrade-protocol';
 import {
   bankRechargeCurrency,
   bankRechargeDate,
@@ -55,6 +57,8 @@ const editable = new Set([
   'customerId',
   'accountId',
   'cardId',
+  'onlineRechargeCardId',
+  'paymentEvidenceRef',
   'customerFeeRate',
   'customerFeeAmount',
   'bankFeeAmount',
@@ -74,8 +78,6 @@ const editable = new Set([
   'plan'
 ]);
 
-type SuccessEvidence = { kind: string; identifier: string; amount_minor: number; currency: string };
-
 @Injectable()
 export class BankRechargeOrderService {
   constructor(
@@ -88,79 +90,19 @@ export class BankRechargeOrderService {
   ) {}
 
   async createManual(value: unknown, operator: AuthenticatedUser) {
-    const input = bankRechargeObject(value);
-    const accountId = bankRechargeOptionalId(input.accountId, 'ChatGPT 账号');
-    const customerId = bankRechargeOptionalId(input.customerId, '客户');
-    const cardId = bankRechargeOptionalId(input.cardId, '银行卡');
-    const plan = this.plan(input.plan);
-    const currencyCode = bankRechargeCurrency(input.chargeCurrencyCode);
-    const evidence = bankRechargeText(input.manualEvidenceRef, '手工付款凭据编号', 220);
-    const remark = bankRechargeText(input.remark, '备注', 2000, false);
-    return this.transactions.execute(
-      async (tx) => {
-        const currency = await this.accounts.requireCurrency(tx, currencyCode);
-        const charge = bankRechargeMoney(input.chargeAmount, '代付金额', currency.minorUnits, true);
-        if (accountId) await this.accounts.requireActive(tx, accountId);
-        if (customerId) await this.requireCustomer(tx, customerId);
-        const card = cardId ? await this.requireCard(tx, cardId, currencyCode) : null;
-        const openedAt = input.openedAt ? bankRechargeDate(input.openedAt, '开通时间') : new Date();
-        const dueAt = input.dueAt
-          ? bankRechargeDate(input.dueAt, '到期时间')
-          : bankRechargeDefaultDueAt(openedAt);
-        this.assertDates(openedAt, dueAt);
-        const item = await this.repository.createOrder(tx, {
-          data: {
-            orderNo: this.orderNo(),
-            source: 'manual',
-            manualEvidenceRef: evidence,
-            accountId,
-            customerId,
-            cardId,
-            cardLast4: card?.last4 ?? null,
-            ...bankRechargeCardSnapshot(this.encryption, card),
-            plan,
-            chargeAmount: charge.toString(),
-            chargeCurrencyCode: currencyCode,
-            accountingVersion: 'subscription_cost_v2',
-            customerFeeRate: '0',
-            customerFeeAmount: '0',
-            openedAt,
-            dueAt,
-            remark: remark || null,
-            createdByUserId: operator.id,
-            updatedByUserId: operator.id
-          }
-        });
-        if (accountId && openedAt)
-          await activateBankRechargeSubscription(tx, this.repository, item);
-        await this.audit.append(tx, {
-          userId: operator.id,
-          module: 'id_business_v2',
-          action: 'id_business_v2.bank_recharge.order.create_manual',
-          objectType: 'bank_recharge_order',
-          objectId: item.id,
-          afterData: {
-            orderNo: item.orderNo,
-            accountId,
-            customerId,
-            cardId,
-            plan,
-            chargeAmount: charge.toString(),
-            chargeCurrencyCode: currencyCode,
-            manualEvidenceRef: evidence
-          },
-          remark: '新建手工银充订单，待补齐资料和财务确认'
-        });
-        return item;
-      },
-      {
-        changedScopes: ['auto-recharge', 'renewals', 'renewal-warning-summary'],
-        requestId: randomUUID(),
-        operator,
-        retryMode: 'none',
-        uniqueConflictMessage: '该手工付款凭据已关联银充订单'
-      }
-    );
+    return createManualBankRechargeOrder(value, operator, {
+      transactions: this.transactions,
+      audit: this.audit,
+      accounts: this.accounts,
+      repository: this.repository,
+      encryption: this.encryption,
+      requireCustomer: (tx, id) => this.requireCustomer(tx, id),
+      requireCard: (tx, id, currency) => this.requireCard(tx, id, currency),
+      requireOnlineCard: (tx, id) => this.requireOnlineCard(tx, id),
+      plan: (plan) => this.plan(plan),
+      orderNo: () => this.orderNo(),
+      assertDates: (openedAt, dueAt) => this.assertDates(openedAt, dueAt)
+    });
   }
   async update(id: string, value: unknown, operator: AuthenticatedUser) {
     return this.transactions.execute(
@@ -189,17 +131,59 @@ export class BankRechargeOrderService {
 
     const previous = await this.repository.findOrder(tx, id);
     if (!previous) throw new NotFoundException('银充订单不存在');
+    assertBankRechargeChannelAccess(previous.channel, operator, true);
+    const online = previous.channel === 'online';
+    if (online ? Boolean(input.cardId) : Boolean(input.onlineRechargeCardId))
+      throw new BadRequestException('银行卡必须属于当前订单渠道');
     if (['completed', 'refunded', 'cancelled'].includes(previous.status)) {
       throw new ConflictException('已完成或已结束的银充订单不能直接改写，请走更正或退款流程');
     }
     assertV2ExpectedUpdatedAt(previous.updatedAt, expectedUpdatedAt, '银充订单');
     if (
       previous.source === 'automatic' &&
+      !online &&
       (input.chargeAmount !== undefined ||
         input.chargeCurrencyCode !== undefined ||
         input.plan !== undefined)
     ) {
       throw new ConflictException('官网代付事实不能修改');
+    }
+    if (input.paymentEvidenceRef !== undefined && typeof input.paymentEvidenceRef !== 'string')
+      throw new BadRequestException('实付凭据编号格式无效');
+    let onlineSnapshot = onlineOrderSnapshot(previous.onlineSourceSnapshot);
+    if (online && previous.source === 'automatic') {
+      if (input.plan !== undefined && input.plan !== previous.plan)
+        throw new ConflictException('官网套餐事实不能修改');
+      const changingAmount =
+        input.chargeAmount !== undefined &&
+        (previous.chargeAmount === null ||
+          !bankRechargeMoney(input.chargeAmount, '代付金额').equals(previous.chargeAmount));
+      const changingCurrency =
+        input.chargeCurrencyCode !== undefined &&
+        input.chargeCurrencyCode !== previous.chargeCurrencyCode;
+      if (
+        (changingAmount && previous.chargeAmount !== null) ||
+        (changingCurrency && previous.chargeCurrencyCode !== null)
+      )
+        throw new ConflictException('已核实的官网代付事实不能修改');
+      if (
+        changingAmount ||
+        changingCurrency ||
+        (typeof input.paymentEvidenceRef === 'string' && input.paymentEvidenceRef.trim())
+      ) {
+        const ref = bankRechargeText(input.paymentEvidenceRef, '实付金额人工核验凭据编号', 220);
+        if (/[:/]/.test(ref) || /(?:token|cookie|session|password)[= ]/i.test(ref))
+          throw new BadRequestException('请只填写付款凭据编号，不填写网址或登录资料');
+        if (previous.manualEvidenceRef && previous.manualEvidenceRef !== ref)
+          throw new ConflictException('已核实的人工付款凭据不能改写');
+        if (await this.repository.findOtherOrderByPaymentReference(tx, ref, previous.id))
+          throw new ConflictException('该付款凭据已关联其他充值订单');
+        onlineSnapshot = {
+          ...onlineSnapshot,
+          manualAmountEvidenceRef: ref,
+          manualAmountVerifiedBy: operator.id
+        };
+      }
     }
     if (
       previous.source === 'automatic' &&
@@ -219,14 +203,28 @@ export class BankRechargeOrderService {
       input.chargeCurrencyCode === undefined
         ? previous.chargeCurrencyCode
         : bankRechargeCurrency(input.chargeCurrencyCode);
-    const currency = await this.accounts.requireCurrency(tx, currencyCode);
+    const currency = currencyCode ? await this.accounts.requireCurrency(tx, currencyCode) : null;
     const charge =
       input.chargeAmount === undefined
-        ? Amount4.from(previous.chargeAmount)
-        : bankRechargeMoney(input.chargeAmount, '代付金额', currency.minorUnits, true);
-    if (input.chargeAmount === undefined) {
-      bankRechargeMoney(charge.toString(), '代付金额', currency.minorUnits, true);
-    }
+        ? previous.chargeAmount === null
+          ? null
+          : Amount4.from(previous.chargeAmount)
+        : bankRechargeMoney(
+            input.chargeAmount,
+            '代付金额',
+            currency?.minorUnits ?? 4,
+            !(online && onlineSnapshot.zeroAmountChange === true)
+          );
+    if (!online && (!currency || !charge)) throw new BadRequestException('请填写代付金额和币种');
+    if (charge && currency)
+      bankRechargeMoney(
+        charge.toString(),
+        '代付金额',
+        currency.minorUnits,
+        !(online && onlineSnapshot.zeroAmountChange === true)
+      );
+    if (input.chargeAmount !== undefined && !currency)
+      throw new BadRequestException('请先填写代付币种');
     const accountId =
       input.accountId === undefined
         ? previous.accountId
@@ -239,25 +237,64 @@ export class BankRechargeOrderService {
         ? previous.customerId
         : bankRechargeOptionalId(input.customerId, '客户');
     const cardId =
-      input.cardId === undefined ? previous.cardId : bankRechargeOptionalId(input.cardId, '银行卡');
+      (online ? input.onlineRechargeCardId : input.cardId) === undefined
+        ? online
+          ? previous.onlineRechargeCardId
+          : previous.cardId
+        : bankRechargeOptionalId(online ? input.onlineRechargeCardId : input.cardId, '银行卡');
     if (accountId) {
       const account = await this.accounts.requireActive(tx, accountId);
       if (previous.source === 'automatic') {
         const source = previous.rechargeJobId
           ? await this.repository.findRechargeJob(tx, previous.rechargeJobId)
           : null;
-        if (!source?.accountKey || account.officialAccountKey !== source.accountKey) {
+        const sourceKey = online ? bankRechargePaymentAccountKey(previous) : source?.accountKey;
+        if (!sourceKey || account.officialAccountKey !== sourceKey) {
           throw new ConflictException('所选账号与原官网付款身份不一致，请先核验账号归属');
         }
       }
     }
     if (customerId) await this.requireCustomer(tx, customerId);
-    const card = cardId ? await this.requireCard(tx, cardId, currencyCode) : null;
+    const card =
+      cardId && !online && currencyCode ? await this.requireCard(tx, cardId, currencyCode) : null;
+    const originalOnlineCardId =
+      typeof onlineSnapshot.originalCardId === 'string'
+        ? onlineSnapshot.originalCardId
+        : previous.onlineRechargeCardId;
+    if (online && previous.source === 'automatic') {
+      if (originalOnlineCardId && cardId !== originalOnlineCardId)
+        throw new ConflictException('线上原付款银行卡不能更换，即使尾号相同也不能替代');
+      if (!originalOnlineCardId && cardId && cardId !== previous.onlineRechargeCardId) {
+        const cardEvidence = bankRechargeText(
+          input.paymentEvidenceRef,
+          '原付款银行卡核验凭据编号',
+          220
+        );
+        if (/[:/]/.test(cardEvidence)) throw new BadRequestException('请只填写付款凭据编号');
+        onlineSnapshot = {
+          ...onlineSnapshot,
+          manualVerifiedCardId: cardId,
+          manualCardEvidenceRef: cardEvidence
+        };
+      }
+    }
+    const onlineCard =
+      cardId && online
+        ? await this.requireOnlineCard(
+            tx,
+            cardId,
+            previous.onlineRechargeCardId === cardId ||
+              (previous.source === 'automatic' &&
+                (originalOnlineCardId === cardId ||
+                  (onlineSnapshot.manualVerifiedCardId === cardId &&
+                    Boolean(onlineSnapshot.manualCardEvidenceRef))))
+          )
+        : null;
     if (
       previous.source === 'automatic' &&
       previous.cardLast4 &&
-      card &&
-      previous.cardLast4 !== card.last4
+      (card || onlineCard) &&
+      previous.cardLast4 !== (card?.last4 ?? onlineCard?.last4)
     ) {
       throw new ConflictException('所选银行卡尾号与官网付款凭据不一致');
     }
@@ -298,7 +335,7 @@ export class BankRechargeOrderService {
         : bankRechargeFeeRate(input.customerFeeRate);
     const manualFee =
       input.customerFeeAmount !== undefined && input.customerFeeAmount !== null
-        ? bankRechargeMoney(input.customerFeeAmount, '客户手续费', currency.minorUnits)
+        ? bankRechargeMoney(input.customerFeeAmount, '客户手续费', currency?.minorUnits ?? 4)
         : null;
     const feeOverridden =
       manualFee !== null
@@ -310,7 +347,9 @@ export class BankRechargeOrderService {
       manualFee ??
       (feeOverridden
         ? Amount4.from(previous.customerFeeAmount)
-        : bankRechargeFee(charge, rate, currency.minorUnits));
+        : charge
+          ? bankRechargeFee(charge, rate, currency?.minorUnits ?? 4)
+          : Amount4.zero());
     const openedAt =
       input.openedAt === undefined
         ? previous.openedAt
@@ -320,9 +359,11 @@ export class BankRechargeOrderService {
     const dueAt =
       input.dueAt === undefined
         ? (previous.dueAt ??
-          (previous.source === 'manual' && openedAt ? bankRechargeDefaultDueAt(openedAt) : null))
+          (previous.source === 'manual' && !online && openedAt
+            ? bankRechargeDefaultDueAt(openedAt)
+            : null))
         : input.dueAt === null
-          ? previous.source === 'manual' && openedAt
+          ? previous.source === 'manual' && !online && openedAt
             ? bankRechargeDefaultDueAt(openedAt)
             : null
           : bankRechargeDate(input.dueAt, '到期时间');
@@ -391,11 +432,25 @@ export class BankRechargeOrderService {
       data: {
         accountId,
         customerId,
-        cardId,
-        cardLast4: card?.last4 ?? previous.cardLast4,
-        ...(cardId !== previous.cardId ? bankRechargeCardSnapshot(this.encryption, card) : {}),
+        cardId: online ? null : cardId,
+        onlineRechargeCardId: online ? cardId : null,
+        ...(online
+          ? {
+              onlineSourceSnapshot: toV2JsonDocument(onlineSnapshot),
+              ...(typeof onlineSnapshot.manualAmountEvidenceRef === 'string'
+                ? { manualEvidenceRef: onlineSnapshot.manualAmountEvidenceRef }
+                : {})
+            }
+          : {}),
+        cardLast4: onlineCard?.last4 ?? card?.last4 ?? previous.cardLast4,
+        ...(!online && cardId !== previous.cardId
+          ? bankRechargeCardSnapshot(this.encryption, card)
+          : {}),
+        ...(onlineCard && cardId !== previous.onlineRechargeCardId
+          ? { cardLabelSnapshot: `线上银行卡 ····${onlineCard.last4}` }
+          : {}),
         plan: input.plan === undefined ? previous.plan : this.plan(input.plan),
-        chargeAmount: charge.toString(),
+        chargeAmount: charge?.toString() ?? null,
         chargeCurrencyCode: currencyCode,
         ...(newFees ? { accountingVersion: 'subscription_cost_v2' as const, ...feeData } : {}),
         customerFeeRate: rate.toString(),
@@ -442,122 +497,13 @@ export class BankRechargeOrderService {
     job: IdBusinessV2RechargeJob,
     result: Record<string, unknown>
   ) {
-    const verifiedSource = await resolveBankRechargeSource(tx, this.repository, job, result);
-    if (!verifiedSource) return null;
-    ({ job, result } = verifiedSource);
-    if (!hasVerifiedRechargePayment(result, job)) return null;
-    const evidence = result.payment_evidence as SuccessEvidence | undefined;
-    const quote = result.quote as
-      | { today?: { amount?: string; amount_minor?: number; currency?: string } }
-      | undefined;
-    const checkoutIdentifier = isRechargeUpgrade(result)
-      ? rechargeUpgradePaymentReference(result)
-      : result.checkout_identifier;
-    if (
-      !evidence ||
-      !quote?.today ||
-      typeof checkoutIdentifier !== 'string' ||
-      !checkoutIdentifier ||
-      typeof evidence.identifier !== 'string' ||
-      !evidence.identifier ||
-      !Number.isSafeInteger(evidence.amount_minor) ||
-      evidence.amount_minor !== quote.today.amount_minor ||
-      evidence.currency !== quote.today.currency ||
-      typeof quote.today.amount !== 'string'
-    )
-      return null;
-    if (job.chatgptAccountId) {
-      const account = await this.accounts.requireActive(tx, job.chatgptAccountId);
-      if (account.officialAccountKey !== job.accountKey) return null;
-    }
-    const prior = await this.repository.findOrderByPaymentEvidence(
-      tx,
-      job.id,
-      checkoutIdentifier,
-      evidence.identifier
-    );
-    if (prior) {
-      if (
-        prior.rechargeJobId !== job.id ||
-        prior.checkoutIdentifier !== checkoutIdentifier ||
-        prior.paymentEvidenceId !== evidence.identifier ||
-        prior.chargeCurrencyCode !== quote.today.currency ||
-        prior.chargeAmount.toString() !== Amount4.from(quote.today.amount).toString()
-      ) {
-        throw new ConflictException('官网付款证据已关联其他银充订单');
-      }
-      return prior;
-    }
-    const currencyCode = bankRechargeCurrency(quote.today.currency);
-    const currency = await this.accounts.ensureVerifiedCurrency(
-      tx,
-      currencyCode,
-      quote.today.amount.split('.')[1]?.length ?? 0
-    );
-    const charge = bankRechargeMoney(quote.today.amount, '官网代付金额', currency.minorUnits, true);
-    if (!charge.mul(`1${'0'.repeat(currency.minorUnits)}`).equals(String(evidence.amount_minor))) {
-      return null;
-    }
-    const cardLast4 =
-      typeof result.card_last4 === 'string' && /^\d{4}$/.test(result.card_last4)
-        ? result.card_last4
-        : null;
-    const matchingCards = cardLast4
-      ? await this.repository.findCardsByTail(tx, cardLast4, currencyCode)
-      : [];
-    const card = job.cardId
-      ? (matchingCards.find((candidate) => candidate.id === job.cardId) ?? null)
-      : matchingCards.length === 1
-        ? matchingCards[0]!
-        : null;
-    const verifiedAt = new Date();
-    const accountId = await this.accounts.ensureAccountForVerifiedPayment(tx, job);
-    // 核验时刻和官网旧账期均不代表本次实际付款时间，先保留待人工核对。
-    const item = await this.repository.createOrder(tx, {
-      data: {
-        orderNo: this.orderNo(),
-        source: 'automatic',
-        rechargeJobId: job.id,
-        checkoutIdentifier,
-        paymentEvidenceId: evidence.identifier,
-        accountId,
-        customerId: null,
-        cardId: card?.id ?? null,
-        ...bankRechargeCardSnapshot(this.encryption, card),
-        cardLast4,
-        plan: job.plan,
-        chargeAmount: charge.toString(),
-        chargeCurrencyCode: currencyCode,
-        accountingVersion: 'subscription_cost_v2',
-        customerFeeRate: '0',
-        customerFeeAmount: '0',
-        openedAt: null,
-        verifiedAt,
-        dueAt: null,
-        renewedFromOrderId: null,
-        createdByUserId: job.ownerId,
-        updatedByUserId: job.ownerId
-      }
+    return recordVerifiedBankRechargeOrder(tx, job, result, {
+      accounts: this.accounts,
+      repository: this.repository,
+      audit: this.audit,
+      encryption: this.encryption,
+      orderNo: () => this.orderNo()
     });
-    await this.audit.append(tx, {
-      userId: job.ownerId,
-      module: 'id_business_v2',
-      action: 'id_business_v2.bank_recharge.order.create_from_verified_payment',
-      objectType: 'bank_recharge_order',
-      objectId: item.id,
-      afterData: {
-        orderNo: item.orderNo,
-        rechargeJobId: job.id,
-        checkoutIdentifier,
-        paymentEvidenceId: evidence.identifier,
-        chargeAmount: charge.toString(),
-        chargeCurrencyCode: currencyCode,
-        accountId,
-        status: item.status
-      },
-      remark: '官网付款和订阅生效均核实，自动生成待补全银充订单'
-    });
-    return item;
   }
 
   private async requireCustomer(tx: V2CommandTransaction, id: string) {
@@ -566,6 +512,13 @@ export class BankRechargeOrderService {
       throw new BadRequestException('客户不存在或已停用');
     }
     return customer;
+  }
+
+  private async requireOnlineCard(tx: V2CommandTransaction, id: string, allowExhausted = false) {
+    const card = await this.repository.findOnlineCard(tx, id);
+    if (!card || (card.status !== 'active' && !(allowExhausted && card.status === 'exhausted')))
+      throw new BadRequestException('线上银行卡不存在、已停用或不能用于当前订单');
+    return card;
   }
 
   private async requireCard(tx: V2CommandTransaction, id: string, currencyCode: string) {

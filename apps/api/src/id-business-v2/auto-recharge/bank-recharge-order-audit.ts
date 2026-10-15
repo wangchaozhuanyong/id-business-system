@@ -2,8 +2,11 @@ export function bankRechargeOrderAuditSnapshot(order: {
   customerId: string | null;
   accountId: string | null;
   cardId: string | null;
-  chargeAmount: { toString(): string };
-  chargeCurrencyCode: string;
+  channel?: string;
+  onlineRechargeCardId?: string | null;
+  manualEvidenceRef?: string | null;
+  chargeAmount: { toString(): string } | null;
+  chargeCurrencyCode: string | null;
   accountingVersion?: string;
   usdtFeeAmount?: { toString(): string } | null;
   shoppingFeeAmount?: { toString(): string } | null;
@@ -32,7 +35,10 @@ export function bankRechargeOrderAuditSnapshot(order: {
     customerId: order.customerId,
     accountId: order.accountId,
     cardId: order.cardId,
-    chargeAmount: order.chargeAmount.toString(),
+    channel: order.channel ?? 'bitbrowser',
+    onlineRechargeCardId: order.onlineRechargeCardId ?? null,
+    manualEvidenceRef: order.manualEvidenceRef ?? null,
+    chargeAmount: order.chargeAmount?.toString() ?? null,
     chargeCurrencyCode: order.chargeCurrencyCode,
     accountingVersion: order.accountingVersion ?? 'legacy',
     usdtFeeAmount: order.usdtFeeAmount?.toString() ?? null,

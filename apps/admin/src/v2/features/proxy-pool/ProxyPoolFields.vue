@@ -1,5 +1,5 @@
 <template>
-  <el-form-item label="国家" required
+  <el-form-item label="国家" prop="countryCode" required
     ><el-select
       v-model="model.countryCode"
       filterable
@@ -13,7 +13,7 @@
         :label="label"
         :value="code" /></el-select
   ></el-form-item>
-  <el-form-item label="IP 属性" required
+  <el-form-item label="IP 属性" prop="kind" required
     ><el-select v-model="model.kind" aria-label="代理属性" placeholder="选择 IP 属性"
       ><el-option
         v-for="(label, key) in proxyKindLabels"
@@ -21,13 +21,13 @@
         :value="key"
         :label="label" /></el-select
   ></el-form-item>
-  <el-form-item label="连接方式" required
+  <el-form-item label="连接方式" prop="connectionMode" required
     ><el-select v-model="model.connectionMode" aria-label="代理连接方式"
       ><el-option label="代理地址（支持动态会话）" value="direct" /><el-option
         label="HTTPS 提取链接"
         value="extraction" /></el-select
   ></el-form-item>
-  <el-form-item label="代理协议" required
+  <el-form-item label="代理协议" prop="protocol" required
     ><el-select v-model="model.protocol" aria-label="代理协议"
       ><el-option
         v-for="(label, key) in proxyProtocolLabels"
@@ -35,8 +35,8 @@
         :value="key"
         :label="label" /></el-select
   ></el-form-item>
-  <p>代理地址按链接自身协议保存；提取链接使用所选协议。</p>
-  <el-form-item label="备注"
+  <p>标准代理链接保留自身协议；主机:端口:账号:密码与提取链接使用所选协议。</p>
+  <el-form-item label="备注" prop="remark"
     ><el-input v-model="model.remark" type="textarea" :maxlength="1200" :rows="3"
   /></el-form-item>
 </template>
