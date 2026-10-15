@@ -100,6 +100,15 @@ const onlineCiBuildInputs = new Set([
 ]);
 const onlineEngineWrapperPath =
   /^apps\/api\/src\/id-business-v2\/online-recharge\/engine\/(?:[^/]+\.cjs|test\/[^/]+\.test\.cjs)$/;
+const onlineEngineRuntimeSources = new Set([
+  'apps/api/src/id-business-v2/online-recharge/engine/SOURCE_MANIFEST.json',
+  'apps/api/src/id-business-v2/online-recharge/engine/upstream/index.js'
+]);
+const isOnlineRechargeAdminPath = (path) =>
+  path.startsWith('apps/admin/src/v2/features/online-recharge/') ||
+  path === 'scripts/acceptance-v2-online-recharge-ui.mjs';
+const isOnlineEngineRuntimePath = (path) =>
+  onlineEngineWrapperPath.test(path) || onlineEngineRuntimeSources.has(path);
 const onlineFocusedCiControls = new Set([
   'scripts/production-release/online-recharge-ci-build.py',
   'scripts/production-release/online-recharge-ci-build.test.py',
@@ -110,10 +119,13 @@ const onlineFocusedCiControls = new Set([
   'scripts/acceptance-v2-online-recharge-ui.mjs',
   '.github/workflows/quality.yml'
 ]);
-function isOnlineEngineWrapperOnly(paths) {
+function isOnlineRechargeRuntimeOnly(paths) {
   return (
-    paths.some((path) => onlineEngineWrapperPath.test(path)) &&
-    paths.every((path) => onlineEngineWrapperPath.test(path) || isCiOnly([path]))
+    paths.some(isOnlineEngineRuntimePath) &&
+    paths.every(
+      (path) =>
+        isOnlineEngineRuntimePath(path) || isOnlineRechargeAdminPath(path) || isCiOnly([path])
+    )
   );
 }
 export function needsOnlineRechargeCiBuild(paths) {
@@ -863,7 +875,7 @@ export function checkMode(paths, oldSchema, newSchema, grantHelperSnapshot) {
       ? 'ci-only'
       : 'full';
   if (isCiOnly(paths)) return 'ci-only';
-  if (isOnlineEngineWrapperOnly(paths)) return 'recharge';
+  if (isOnlineRechargeRuntimeOnly(paths)) return 'recharge';
   if (isMailboxOnly(paths)) return 'mailbox';
   if (isTargetedOnly(paths, oldSchema, newSchema)) return 'recharge';
   if (isAdminOnly(paths)) return 'admin';
@@ -1197,7 +1209,8 @@ export function isTargetedOnly(paths, oldSchema, newSchema) {
 }
 export function selectedParts(paths, grantHelperSnapshot) {
   if (isReleaseArtifactRetentionOnly(paths)) return ['guards'];
-  if (isOnlineEngineWrapperOnly(paths)) return ['guards', 'online-engine'];
+  if (isOnlineRechargeRuntimeOnly(paths))
+    return ['guards', ...(paths.some(isOnlineRechargeAdminPath) ? ['admin'] : []), 'online-engine'];
   if (
     isAdminOnly(paths) &&
     paths.some(

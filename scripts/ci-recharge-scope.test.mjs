@@ -2380,6 +2380,63 @@ test('ONLINE wrapper-only edits retain engine evidence and select its existing t
   assert.match(workflow, /\["guards","admin","api","migration","online-engine"\]/);
 });
 
+test('ONLINE exact runtime source inputs select only the existing engine runner', () => {
+  for (const path of [
+    'apps/api/src/id-business-v2/online-recharge/engine/SOURCE_MANIFEST.json',
+    'apps/api/src/id-business-v2/online-recharge/engine/upstream/index.js'
+  ]) {
+    assert.equal(checkMode([path], schema, schema), 'recharge', path);
+    assert.deepEqual(selectedParts([path]), ['guards', 'online-engine'], path);
+    assert.equal(needsOnlineRechargeCiBuild([path]), true, path);
+  }
+});
+
+test('ONLINE UI and reviewed runtime changes retain their combined affected checks', () => {
+  const paths = [
+    '.github/workflows/quality.yml',
+    'apps/admin/src/v2/features/online-recharge/OnlineActionDrawer.spec.ts',
+    'apps/admin/src/v2/features/online-recharge/OnlineActionDrawer.vue',
+    'apps/admin/src/v2/features/online-recharge/OnlineResourceView.vue',
+    'apps/admin/src/v2/features/online-recharge/api.spec.ts',
+    'apps/admin/src/v2/features/online-recharge/sections.ts',
+    'apps/api/src/id-business-v2/online-recharge/engine/SOURCE_MANIFEST.json',
+    'apps/api/src/id-business-v2/online-recharge/engine/paths.cjs',
+    'apps/api/src/id-business-v2/online-recharge/engine/test/debug-checkout.test.cjs',
+    'apps/api/src/id-business-v2/online-recharge/engine/test/runtime-main.test.cjs',
+    'apps/api/src/id-business-v2/online-recharge/engine/upstream/index.js',
+    'docs/ONLINE_RECHARGE.md',
+    'scripts/acceptance-v2-online-recharge-ui.mjs',
+    'scripts/ci-recharge-check.mjs',
+    'scripts/ci-recharge-check.test.mjs',
+    'scripts/ci-recharge-scope.mjs',
+    'scripts/ci-recharge-scope.test.mjs',
+    'scripts/production-release/online-recharge-ci-build.py',
+    'scripts/production-release/online-recharge-ci-build.test.py',
+    'scripts/production-release/online-recharge-component-lifecycle.test.py'
+  ];
+  assert.equal(checkMode(paths, schema, schema), 'recharge');
+  assert.deepEqual(selectedParts(paths), ['guards', 'admin', 'online-engine']);
+  assert.equal(needsOnlineRechargeCiBuild(paths), true);
+  const minimal = [
+    'apps/admin/src/v2/features/online-recharge/OnlineActionDrawer.vue',
+    'apps/api/src/id-business-v2/online-recharge/engine/paths.cjs'
+  ];
+  assert.equal(checkMode(minimal, schema, schema), 'recharge');
+  assert.deepEqual(selectedParts(minimal), ['guards', 'admin', 'online-engine']);
+  assert.equal(needsOnlineRechargeCiBuild(minimal), false);
+  for (const extra of [
+    'apps/api/src/id-business-v2/online-recharge/engine/upstream/payment.js',
+    'apps/api/src/id-business-v2/online-recharge/engine/upstream/index.js.backup',
+    'apps/api/src/id-business-v2/online-recharge/engine/SOURCE_MANIFEST.json.backup',
+    'apps/api/src/id-business-v2/orders/order.service.ts',
+    'apps/api/prisma-mysql/schema.prisma'
+  ]) {
+    assert.equal(checkMode([extra], schema, schema), 'full', extra);
+    for (const candidate of [paths, minimal])
+      assert.equal(checkMode([...candidate, extra], schema, schema), 'full', extra);
+  }
+});
+
 test('ONLINE Docker dependencies upstream migration and backend edits retain conservative checks and images', () => {
   const wrapper = 'apps/api/src/id-business-v2/online-recharge/engine/paths.cjs';
   for (const path of [
