@@ -2,7 +2,7 @@
 /* global document, window */
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
-import { mkdirSync } from 'node:fs';
+import { mkdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { chromium } from 'playwright';
 
@@ -117,6 +117,7 @@ try {
       page.setDefaultTimeout(10000);
       const errors = [];
       const unexpected = [];
+      let failListRequests = 0;
       page.on('pageerror', (error) => errors.push(error.message));
       await page.addInitScript((fixture) => {
         localStorage.setItem('apple_business_access_token', 'proxy-acceptance-token');
@@ -199,6 +200,15 @@ try {
           });
           data = { id: rows.at(-1).id };
         } else if (endpoint.endsWith('/proxy-pool') && method === 'GET') {
+          if (failListRequests > 0) {
+            failListRequests--;
+            await route.fulfill({
+              status: 422,
+              contentType: 'application/json',
+              body: JSON.stringify({ success: false, message: '模拟代理列表读取失败' })
+            });
+            return;
+          }
           const filtered = rows.filter(
             (item) =>
               (!url.searchParams.get('keyword') ||
@@ -277,6 +287,15 @@ try {
         root.style.colorScheme = value;
       }, theme);
       await assertListLayout(page, `${width}px 首页`);
+      if (theme === 'light' && width === 1440) {
+        failListRequests = 1;
+        await page.getByRole('button', { name: '刷新', exact: true }).click();
+        await page.getByRole('button', { name: '重试', exact: true }).waitFor();
+        assert.ok(await page.getByText('测试代理 1', { exact: true }).isVisible());
+        await page.getByRole('button', { name: '重试', exact: true }).click();
+        await page.getByRole('button', { name: '重试', exact: true }).waitFor({ state: 'hidden' });
+        assert.ok(await page.getByText('测试代理 1', { exact: true }).isVisible());
+      }
       await page.screenshot({
         path: path.join(outputDir, `${theme}-${width}-first.png`),
         fullPage: true
@@ -351,9 +370,32 @@ try {
       await importer
         .getByPlaceholder('每行一条代理地址或提取链接，最多 500 条')
         .fill('https://proxy.example.invalid/another');
+      if (theme === 'light' && width === 1440) {
+        await importer.getByRole('button', { name: '关闭', exact: true }).click();
+        await importer.waitFor({ state: 'hidden' });
+        await page.getByRole('button', { name: '批量导入', exact: true }).click();
+        await importer.waitFor();
+        assert.equal(
+          await importer.getByPlaceholder('每行一条代理地址或提取链接，最多 500 条').inputValue(),
+          ''
+        );
+        assert.equal(
+          await importer
+            .locator('.el-form-item')
+            .filter({ hasText: '备注' })
+            .getByRole('textbox')
+            .inputValue(),
+          '导入验收'
+        );
+        assert.match(await importer.innerText(), /菲律宾/);
+        assert.match(await importer.innerText(), /移动代理/);
+        await importer
+          .getByPlaceholder('每行一条代理地址或提取链接，最多 500 条')
+          .fill('https://proxy.example.invalid/another');
+      }
       await importer.getByRole('button', { name: '导入代理', exact: true }).click();
       await importer.getByText('已导入 1 条，跳过重复 0 条').waitFor();
-      await importer.getByRole('button', { name: '取消', exact: true }).click();
+      await importer.getByRole('button', { name: '关闭', exact: true }).click();
       await importer.waitFor({ state: 'hidden' });
       await page.getByText('导入验收').first().waitFor({ state: 'visible' });
       await page.getByPlaceholder('代理地址、国家代码或备注').fill('不存在');
@@ -390,24 +432,26 @@ try {
       (entry) => entry.endpoint.endsWith('/import') && entry.input.proxies[0].protocol === 'https'
     )
   );
-  console.log(
-    JSON.stringify({
-      ok: true,
-      widths: [1440, 1024, 901, 900, 768, 390],
-      themes: ['light', 'dark'],
-      states: [
-        'legacy-redirect',
-        'first',
-        'last',
-        'detail',
-        'protocol-edit',
-        'detection-queue',
-        'import-protocol',
-        'empty'
-      ],
-      outputDir
-    })
-  );
+  const result = {
+    ok: true,
+    widths: [1440, 1024, 901, 900, 768, 390],
+    themes: ['light', 'dark'],
+    states: [
+      'legacy-redirect',
+      'first',
+      'last',
+      'detail',
+      'protocol-edit',
+      'detection-queue',
+      'import-protocol',
+      'refresh-failure-retains-content-and-retry',
+      'metadata-draft-restored-sensitive-input-cleared',
+      'empty'
+    ],
+    outputDir
+  };
+  writeFileSync(path.join(outputDir, 'result.json'), JSON.stringify(result, null, 2) + '\n');
+  console.log(JSON.stringify(result));
 } finally {
   await browser?.close();
   server.kill('SIGTERM');
