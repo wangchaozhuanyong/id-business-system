@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import {
+  sharedProxyPullRequestBase,
   isSharedProxyPoolPaths,
   isSharedProxyPoolOnly,
   sharedProxyMigration
@@ -60,4 +61,28 @@ test('unrelated business, deployment controls and dependency changes retain norm
     ]),
     true
   );
+});
+
+test('stale PR event base uses the verified actual merge parent only for the shared pool', () => {
+  const input = {
+    eventName: 'pull_request',
+    ref: 'refs/pull/500/merge',
+    prNumber: 500,
+    headSha: 'b'.repeat(40),
+    parents: ['a'.repeat(40), 'b'.repeat(40)],
+    requestedBase: 'c'.repeat(40),
+    requestedBaseIsAncestor: true,
+    paths,
+    before,
+    after
+  };
+  assert.equal(sharedProxyPullRequestBase(input), input.parents[0]);
+  for (const override of [
+    { ref: 'refs/heads/main' },
+    { headSha: 'd'.repeat(40) },
+    { requestedBaseIsAncestor: false },
+    { paths: [...paths, 'package-lock.json'] },
+    { after: after + '\nmodel Unrelated {}' }
+  ])
+    assert.equal(sharedProxyPullRequestBase({ ...input, ...override }), input.requestedBase);
 });

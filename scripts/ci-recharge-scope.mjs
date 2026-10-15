@@ -1,4 +1,8 @@
-import { isSharedProxyPoolPaths, isSharedProxyPoolOnly } from './ci-shared-proxy-scope.mjs';
+import {
+  isSharedProxyPoolPaths,
+  isSharedProxyPoolOnly,
+  sharedProxyPullRequestBase
+} from './ci-shared-proxy-scope.mjs';
 import { appendFileSync, readFileSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
@@ -3875,8 +3879,35 @@ export function testedTree(run, number, repo) {
 async function main() {
   const repo = process.env.GITHUB_REPOSITORY;
   const event = JSON.parse(readFileSync(process.env.GITHUB_EVENT_PATH, 'utf8'));
-  const base = process.env.BASE_SHA;
+  let base = process.env.BASE_SHA;
   ensureCommit(base);
+  if (
+    process.env.GITHUB_EVENT_NAME === 'pull_request' &&
+    /^refs\/pull\/\d+\/merge$/.test(process.env.GITHUB_REF || '')
+  ) {
+    const parents = git('rev-list', '--parents', '-n', '1', 'HEAD').split(' ').slice(1);
+    if (process.env.GITHUB_EVENT_NAME === 'pull_request' && parents.length === 2) {
+      let requestedBaseIsAncestor = false;
+      try {
+        execFileSync('git', ['merge-base', '--is-ancestor', base, parents[0]], { stdio: 'pipe' });
+        requestedBaseIsAncestor = true;
+      } catch {
+        /* The original base retains all normal checks. */
+      }
+      base = sharedProxyPullRequestBase({
+        eventName: process.env.GITHUB_EVENT_NAME,
+        ref: process.env.GITHUB_REF,
+        prNumber: event.pull_request?.number,
+        headSha: event.pull_request?.head?.sha,
+        parents,
+        requestedBase: base,
+        requestedBaseIsAncestor,
+        paths: git('diff', '--name-only', parents[0], 'HEAD').split('\n').filter(Boolean),
+        before: git('show', `${parents[0]}:${schema}`),
+        after: git('show', `HEAD:${schema}`)
+      });
+    }
+  }
   const paths = git('diff', '--name-only', base, 'HEAD').split('\n').filter(Boolean);
   const grantHelperSnapshot = readProductionDatabaseAccessSnapshot(base, paths);
   const mode = checkMode(

@@ -107,3 +107,17 @@ export function isSharedProxyPoolOnly(changed, before, after) {
     /^model IdBusinessV2ProxyAlias /m.test(after)
   );
 }
+
+// GitHub may refresh refs/pull/.../merge after the event's base SHA was recorded.
+// Admit the actual first parent only for an authenticated merge shape and this finite scope.
+export function sharedProxyPullRequestBase(input) {
+  return input.eventName === 'pull_request' &&
+    input.ref === `refs/pull/${input.prNumber}/merge` &&
+    input.parents.length === 2 &&
+    input.parents[1] === input.headSha &&
+    /^[a-f0-9]{40}$/.test(input.parents[0]) &&
+    input.requestedBaseIsAncestor === true &&
+    isSharedProxyPoolOnly(input.paths, input.before, input.after)
+    ? input.parents[0]
+    : input.requestedBase;
+}

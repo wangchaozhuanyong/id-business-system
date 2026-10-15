@@ -51,7 +51,18 @@ const changed = execFileSync('git', ['diff', '--name-only', base, 'HEAD'], { enc
   .trim()
   .split('\n')
   .filter(Boolean);
+const sharedPoolOnly =
+  mode === 'recharge' &&
+  changed.some((path) => path.includes('/proxy-pool/')) &&
+  isSharedProxyPoolOnly(
+    changed,
+    execFileSync('git', ['show', `${base}:apps/api/prisma-mysql/schema.prisma`], {
+      encoding: 'utf8'
+    }),
+    readFileSync('apps/api/prisma-mysql/schema.prisma', 'utf8')
+  );
 if (
+  !sharedPoolOnly &&
   ['guards', 'release-controls'].includes(part) &&
   changed.some((p) => rechargeAvailabilityControlPaths.includes(p))
 ) {
@@ -435,17 +446,7 @@ if (part === 'guards') {
 }
 // The shared pool changes business source and an additive migration. Keep all
 // applicable checks; unrelated historical publishers are unchanged inputs.
-if (
-  part === 'guards' &&
-  mode === 'recharge' &&
-  isSharedProxyPoolOnly(
-    changed,
-    execFileSync('git', ['show', `${base}:apps/api/prisma-mysql/schema.prisma`], {
-      encoding: 'utf8'
-    }),
-    readFileSync('apps/api/prisma-mysql/schema.prisma', 'utf8')
-  )
-) {
+if (part === 'guards' && sharedPoolOnly) {
   run('node', ['--test', 'scripts/ci-shared-proxy-scope.test.mjs', productionDatabaseAccessTest]);
   npm('run', 'test:online-recharge:controls');
   for (const check of backendArchitectureGuardChecks(mode, changed)) npm('run', check);
@@ -985,16 +986,7 @@ if (releaseArtifactOnly && ['guards', 'release-controls'].includes(part)) {
     workerOptions
   );
 } else if (part === 'security') {
-  if (
-    mode === 'recharge' &&
-    isSharedProxyPoolOnly(
-      changed,
-      execFileSync('git', ['show', `${base}:apps/api/prisma-mysql/schema.prisma`], {
-        encoding: 'utf8'
-      }),
-      readFileSync('apps/api/prisma-mysql/schema.prisma', 'utf8')
-    )
-  ) {
+  if (sharedPoolOnly) {
     npm('ci', '--no-audit');
     npm('run', 'prisma:mysql:generate');
     npm('run', 'acceptance:v2-production-database-access');

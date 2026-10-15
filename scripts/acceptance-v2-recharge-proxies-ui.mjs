@@ -146,6 +146,7 @@ try {
           data = { now, timezone: 'Asia/Shanghai' };
         else if (endpoint.endsWith('/id-business-v2/change-versions'))
           data = { generatedAt: now, versions: {} };
+        else if (endpoint.endsWith('/id-business-v2/workspace-shortcuts')) data = { items: [] };
         else if (endpoint.endsWith('/id-business-v2/table-preferences')) data = { items: [] };
         else if (endpoint.endsWith('/id-business-v2/renewals/warning-summary'))
           data = {
@@ -371,7 +372,7 @@ try {
         .getByPlaceholder('每行一条代理地址或提取链接，最多 500 条')
         .fill('https://proxy.example.invalid/another');
       if (theme === 'light' && width === 1440) {
-        await importer.getByRole('button', { name: '取消', exact: true }).click();
+        await importer.getByRole('button', { name: '关闭', exact: true }).click();
         await importer.waitFor({ state: 'hidden' });
         await page.getByRole('button', { name: '批量导入', exact: true }).click();
         await importer.waitFor();
@@ -395,7 +396,7 @@ try {
       }
       await importer.getByRole('button', { name: '导入代理', exact: true }).click();
       await importer.getByText('已导入 1 条，跳过重复 0 条').waitFor();
-      await importer.getByRole('button', { name: '取消', exact: true }).click();
+      await importer.getByRole('button', { name: '关闭', exact: true }).click();
       await importer.waitFor({ state: 'hidden' });
       await page.getByText('导入验收').first().waitFor({ state: 'visible' });
       await page.getByPlaceholder('代理地址、国家代码或备注').fill('不存在');
