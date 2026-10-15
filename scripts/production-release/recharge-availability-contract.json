@@ -297,9 +297,7 @@
     "artifactDigest": "sha256:0e738b9a47c6cb81d9f7f1f9e23e5700f8a996c51ed00a7663c46d8f197a0946",
     "artifactId": 11969956369,
     "artifactName": "online-audit-candidate-04aa234505adccfe295776245b88fc56feac0588",
-    "failedValidationSteps": [
-      "Verify exact pricing tier selection"
-    ],
+    "failedValidationSteps": ["Verify exact pricing tier selection"],
     "runConclusion": "failure",
     "runId": 38728508273,
     "sourceCommit": "04aa234505adccfe295776245b88fc56feac0588",
