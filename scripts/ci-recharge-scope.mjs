@@ -1,3 +1,4 @@
+import { readRegistrationNativeReuse } from './ci-registration-closure-native-reuse.mjs';
 import { isRechargeCheckoutOnly } from './ci-recharge-checkout-scope.mjs';
 import { isRechargeBillingOnly } from './ci-recharge-billing-scope.mjs';
 import {
@@ -4201,6 +4202,17 @@ async function main() {
       }
       if (reused.size === parts.length) break;
     }
+  }
+  const registrationNativeEvidence = readRegistrationNativeReuse({
+    repo,
+    event,
+    base,
+    mode,
+    currentTree
+  });
+  if (registrationNativeEvidence) {
+    for (const part of ['admin', 'api', 'migration']) reused.add(part);
+    evidence.push(...registrationNativeEvidence.parts);
   }
   if (process.env.GITHUB_EVENT_NAME === 'pull_request') {
     const migrationEvidence = reuseCombinedMigration(repo, event, mode, paths, currentTree);

@@ -2130,6 +2130,8 @@
   "sourceBaseline": "369c57fcb56f950c61b5fe4164a6c6d1d8102e95",
   "sourceBaselineTree": "0a1c267bc5ce3bfc71d82fab33adc9865e07561c",
   "validationSources": {
+    "scripts/check-v2-decimal-standard.mjs": "02830830f190ca937e2f6ac36112f7389e4b3364a43cfd26439fe31a547f1c18",
+    "scripts/check-v2-decimal-standard.test.mjs": "b222b4581459324ded1b10f1d5c36d7ec0c040fc9127789130e21c8c1a92e9ec",
     "scripts/acceptance-v2-recharge-proxies-ui.mjs": "d6b32decc3a79de097aeaed1ea7ea5bc2ccfec54a62806b30347f14e9f963e8e",
     "scripts/acceptance-v2-registration-inventory-ui.mjs": "25f7928cf0df4147e8e00d7c99833f58373ffab62c443f45cad88f9d35915f2d",
     "scripts/acceptance-v2-registration-mirror-mysql.mjs": "496f85b23018a39e622b308657f0c5319de6a709b7ede32b2141a5c040dc2b60",

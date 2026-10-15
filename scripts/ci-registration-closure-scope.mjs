@@ -90,6 +90,10 @@ const registeredFacts = `  registrationIpEncrypted String?                      
   registeredAt        DateTime?                        @map("registered_at") @db.DateTime(6)
 `;
 export const registrationClosureControlPaths = Object.freeze([
+  'scripts/ci-registration-closure-native-reuse.mjs',
+  'scripts/ci-registration-closure-native-reuse.test.mjs',
+  'scripts/check-v2-decimal-standard.mjs',
+  'scripts/check-v2-decimal-standard.test.mjs',
   '.github/workflows/registration-closure-validation.yml',
   'scripts/production-release/registration-closure-build.py',
   'scripts/production-release/registration-closure-dispatch.py',
@@ -110,6 +114,11 @@ export const registrationClosureControlPaths = Object.freeze([
   'scripts/ci-recharge-check.test.mjs'
 ]);
 const taskPaths = new Set([
+  'scripts/ci-registration-closure-native-reuse.mjs',
+  'scripts/ci-registration-closure-native-reuse.test.mjs',
+  'scripts/check-v2-decimal-standard.mjs',
+  'scripts/check-v2-decimal-standard.test.mjs',
+  'scripts/check-v2-online-recharge-controls.test.mjs',
   '.github/workflows/registration-closure-validation.yml',
   'apps/admin/src/v2/features/auto-recharge/V2ChatgptAccountsView.vue',
   'apps/admin/src/v2/features/auto-recharge/bank-recharge-api.ts',

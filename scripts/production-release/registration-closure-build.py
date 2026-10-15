@@ -142,7 +142,8 @@ def verify_sources(contract):
         need(admitted_source(name, protection) and digest((ROOT / name).read_bytes()) == expected, 'SOURCE_CHANGED')
     for name, expected in contract.get('validationSources', {}).items():
         need((name.startswith(('scripts/acceptance-v2-', 'scripts/fixtures/'))
-              or name in ('scripts/check-v2-table-standard.mjs', 'scripts/lib/v2-table-schema-alias.mjs',
+              or name in ('scripts/check-v2-decimal-standard.mjs', 'scripts/check-v2-decimal-standard.test.mjs',
+                          'scripts/check-v2-table-standard.mjs', 'scripts/lib/v2-table-schema-alias.mjs',
                           'scripts/v2-table-schema-alias.test.mjs'))
              and digest((ROOT / name).read_bytes()) == expected, 'VALIDATION_SOURCE_CHANGED')
     for name, binding in contract['publishedSources'].items():
