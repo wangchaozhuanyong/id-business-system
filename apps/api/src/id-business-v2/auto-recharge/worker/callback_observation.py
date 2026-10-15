@@ -10,6 +10,8 @@ CALLBACK_METADATA_KEYS = {'callback_http_status', 'callback_operation', 'callbac
 CALLBACK_TYPES = {'progress', 'restore', 'ledger', 'finished', 'prepare_next_subscription_cycle',
     'resolve_unknown_payment', 'stale_profile_cleanup'}
 ERROR_REASONS = {
+    (409, '该账户仍有未核实付款或订阅待生效，只能复查原订单'): 'callback_previous_payment_unverified',
+    (409, '该账户仍有未完成的原结算，不能创建新周期订单'): 'callback_previous_checkout_unfinished',
     (409, '原订单持久化记录缺失，禁止创建新订单'): 'callback_original_checkout_missing',
     (409, '原订单记录未核实，禁止创建新订单'): 'callback_original_checkout_unverified',
     (409, '原订单编号未核实，禁止创建新订单'): 'callback_original_checkout_unverified',

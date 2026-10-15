@@ -263,14 +263,17 @@ class NativeRecordTests(unittest.TestCase):
 class SourceAndDatabasePreparationTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.candidate = archive('HEAD')
+        # This consumer authenticates the original fixed application, not a
+        # future checkout containing unrelated, already published repairs.
+        cls.candidate = archive(c.APPLICATION_SOURCE)
         cls.ordinary = archive(c.AUTHENTICATED_PREDECESSOR['producer']['commit'])
         cls.base = archive('0a03fa28e6b844a18833d5c63f1de700f091fc64')
         cls.fixed = archive(c.ONLINE_SOURCE)
         cls.core = c.load_core()
         cls.projection = cls.core.projection_module()
-        cls.commit = subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=ROOT, text=True).strip()
+        cls.commit = c.APPLICATION_SOURCE
         cls.tree = cls.projection.source_tree(cls.candidate)
+        assert cls.tree == c.APPLICATION_TREE
 
     def prepare(self, candidate=None, ordinary=None):
         candidate = self.candidate if candidate is None else candidate
@@ -295,6 +298,10 @@ class SourceAndDatabasePreparationTests(unittest.TestCase):
             'apps/admin/src/v2/components/workspace/V2WorkspaceDock.vue'):
             self.assertEqual(output[name], self.candidate[name])
         self.assertEqual(c.digest(output[c.SCHEMA][0]), c.FULL_SCHEMA_SHA256)
+
+    def test_future_checkout_cannot_borrow_original_application_authority(self):
+        with self.assertRaisesRegex(RuntimeError, 'APPLICATION_SOURCE_CHANGED'):
+            self.prepare(archive('HEAD'))
 
     def test_preparation_matches_original_producer_archive_core_source_output_and_record(self):
         # Run the genuine archived helper against its genuine archived controls.

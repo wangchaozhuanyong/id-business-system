@@ -5,6 +5,48 @@ import { pathToFileURL } from 'node:url';
 import { matchesSourceEvidence } from './ci-recharge-evidence.mjs';
 
 export const parts = ['guards', 'admin', 'api', 'connector', 'migration', 'security'];
+export const rechargeRecordControlPaths = Object.freeze([
+  '.github/workflows/recharge-record-validation.yml',
+  'scripts/production-release/recharge-record-build.py',
+  'scripts/production-release/recharge-record-contract.json',
+  'scripts/production-release/recharge-record-release.py',
+  'scripts/production-release/recharge-record-release.test.py',
+  'scripts/production-release/recharge-record-dispatch.py',
+  'scripts/production-release/online-recharge-component-consumer.test.py',
+  'scripts/ci-recharge-record.test.mjs'
+]);
+const rechargeRecordApplicationPaths = new Set([
+  'apps/admin/src/v2/features/auto-recharge/RechargePageContext.vue',
+  'apps/admin/src/v2/features/auto-recharge/recharge-callback-diagnostics.ts',
+  'apps/admin/src/v2/features/auto-recharge/recharge-presentation.spec.ts',
+  'apps/admin/src/v2/features/auto-recharge/recharge-presentation.ts',
+  'apps/admin/src/v2/features/auto-recharge/useAutoRecharge.spec.ts',
+  'apps/admin/src/v2/features/auto-recharge/useAutoRecharge.ts',
+  'apps/api/src/id-business-v2/auto-recharge/recharge-callback-receipts.spec.ts',
+  'apps/api/src/id-business-v2/auto-recharge/recharge-validation.ts',
+  'apps/api/src/id-business-v2/auto-recharge/recharge.spec.ts',
+  'apps/api/src/id-business-v2/auto-recharge/worker/callback_observation.py',
+  'apps/api/src/id-business-v2/auto-recharge/worker/test_callback_observation.py',
+  'apps/api/src/id-business-v2/auto-recharge/worker/test_payment.py',
+  'packages/shared/src/v2/auto-recharge.ts'
+]);
+export function isRechargeRecordRepairOnly(paths) {
+  return (
+    paths.includes('scripts/production-release/recharge-record-contract.json') &&
+    paths.some((path) => rechargeRecordApplicationPaths.has(path)) &&
+    paths.every(
+      (path) =>
+        rechargeRecordApplicationPaths.has(path) ||
+        rechargeRecordControlPaths.includes(path) ||
+        [
+          'scripts/ci-recharge-scope.mjs',
+          'scripts/ci-recharge-check.mjs',
+          'docs/AUTO_RECHARGE_RECORD_DIAGNOSTICS_20261015.md',
+          'docs/V2_TASKS.md'
+        ].includes(path)
+    )
+  );
+}
 export const onlineRechargeRecoveryPolicy =
   'scripts/production-release/online-recharge-recovery.json';
 export const onlineCiBuildControlPaths = Object.freeze([
@@ -49,6 +91,7 @@ const onlineCiBuildInputs = new Set([
   'deploy/nginx/admin.conf'
 ]);
 export function needsOnlineRechargeCiBuild(paths) {
+  if (isRechargeRecordRepairOnly(paths)) return false;
   return (
     !isReleaseArtifactRetentionOnly(paths) &&
     paths.some(
@@ -641,6 +684,7 @@ export function isCiOnly(paths) {
     paths.every(
       (p) =>
         releaseArtifactRetentionControls.includes(p) ||
+        rechargeRecordControlPaths.includes(p) ||
         historicalReleaseControlPaths.includes(p) ||
         unpublishedComponentSuccessorControlPaths.includes(p) ||
         rechargeFlowSuccessorControlPaths.includes(p) ||
@@ -1046,6 +1090,7 @@ export function isRechargeOnly(paths, oldSchema, newSchema) {
     !paths.every(
       (p) =>
         allowed.test(p) ||
+        rechargeRecordControlPaths.includes(p) ||
         historicalReleaseControlPaths.includes(p) ||
         unpublishedComponentSuccessorControlPaths.includes(p) ||
         rechargeFlowSuccessorControlPaths.includes(p) ||

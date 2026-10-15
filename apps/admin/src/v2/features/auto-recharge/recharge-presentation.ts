@@ -2,7 +2,8 @@ import type { V2RechargeJob } from './contracts';
 import type { BankRechargeOrderStatus } from './bank-recharge-api';
 import {
   rechargeCallbackDiagnostics,
-  rechargeCallbackFailureSummary
+  rechargeCallbackFailureSummary,
+  rechargeHistoryPaymentBlocked
 } from './recharge-callback-diagnostics';
 export { rechargeCallbackDiagnostics } from './recharge-callback-diagnostics';
 
@@ -519,6 +520,10 @@ export function accountVerificationLabel(job: V2RechargeJob): string {
 
 export function executionStageLabel(job: V2RechargeJob): string {
   if (job.result.reason === 'payment_confirmation_expired') return '付款确认已过期';
+  if (job.result.reason === 'durable_state_unavailable' && job.state !== 'running') {
+    const diagnostic = rechargeCallbackDiagnostics(job);
+    return diagnostic.operation ? `${diagnostic.operation}未完成` : '恢复或保存执行记录未完成';
+  }
   if (job.state === 'finished' && job.result.stage === 'session_restore' && job.result.reason)
     return '官网会话恢复未完成';
   return statusLabel(job.result.stage);
@@ -592,6 +597,8 @@ export function paymentFailureLabel(value: unknown): string {
 }
 
 function issueAction(job: V2RechargeJob, reason?: string, paymentFailure?: string): string {
+  if (reason === 'owned_recharge_window_unavailable')
+    return '请检查比特浏览器本地接口和原任务绑定的窗口；窗口无法确认时停止复查，保留原单和付款保护。不要新建替代订单或重新付款。';
   if (reason === 'official_payment_method_verification_failed')
     return '请只读复查原订单并核对支付资料；系统不会自动重复付款。';
   if (paymentFailure && paymentUnknownReasons.has(paymentFailure))
@@ -712,17 +719,44 @@ export function rechargeIssueFeedback(job: V2RechargeJob): RechargeIssueFeedback
       (!job.result.payment_status || job.result.payment_status === 'not_attempted') &&
       (!job.result.payment_outcome || job.result.payment_outcome === 'not_attempted')
     ) {
+      if (rechargeHistoryPaymentBlocked(job)) {
+        return {
+          title: '历史付款待核实，已暂停本次充值',
+          message: `${callbackDiagnostic.businessReason}。${callbackSummary}`,
+          action:
+            '请打开“最近执行记录”，选择历史原订单并使用“只读复查原订单”；完成官网或银行要求的验证，再核实付款及订阅结果。核实前不要重新发起充值，本次零付款记录不能证明历史订单未扣款。'
+        };
+      }
+      if (Object.values(callbackDiagnostic).every((value) => value === undefined)) {
+        return {
+          title: '执行记录缺少诊断信息',
+          message: '该任务未保存接口失败详情，当前无法确认具体原因。',
+          action:
+            '请保留原任务编号，并检查比特浏览器连接器与服务器的记录接口。历史订单的付款情况仍需单独核实；核实前不要重新发起充值。'
+        };
+      }
+      const failureKind = job.result.callback_failure_kind;
+      const title =
+        failureKind === 'timeout'
+          ? '执行记录回传超时'
+          : failureKind === 'transport'
+            ? '执行记录连接失败'
+            : [401, 403].includes(Number(callbackDiagnostic.httpStatus))
+              ? '执行记录访问被拒绝'
+              : callbackDiagnostic.httpStatus === 409
+                ? '执行记录状态冲突'
+                : '执行记录未确认';
       return {
-        title: '执行记录未确认',
+        title,
         message: [
           callbackDiagnostic.businessReason,
-          '本机助手与服务器的执行记录尚未确认，已暂停本次操作。',
+          '比特浏览器连接器与服务器的执行记录尚未确认，已暂停本次操作。',
           callbackSummary
         ]
           .filter(Boolean)
           .join(' '),
         action:
-          '请先检查本机助手与服务器的记录接口，并保留本次执行记录供排查。历史订单的付款情况仍需单独核实。'
+          '请先检查比特浏览器连接器与服务器的记录接口，并保留本次执行记录供排查。历史订单的付款情况仍需单独核实。'
       };
     }
     const pageMessages: Record<string, string> = {
