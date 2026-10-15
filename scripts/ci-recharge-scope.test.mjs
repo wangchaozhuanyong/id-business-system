@@ -1,4 +1,5 @@
 import { imageInputsChanged } from './ci-recharge-python-image.mjs';
+import { adminHtmlCachePaths, isAdminHtmlCacheOnly } from './ci-recharge-scope.mjs';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
@@ -5136,3 +5137,40 @@ test('finite build-proof rejects same-branch drift before external reads and nev
   assert.equal('accepted' in scope, false);
 });
 // END finite ONLINE build-proof reuse guard tests
+
+test('reviewed HTML cache directives keep Admin and real Nginx checks without admitting unrelated sealed images', () => {
+  const paths = [
+    ...adminHtmlCachePaths,
+    'scripts/ci-recharge-scope.mjs',
+    'scripts/ci-recharge-scope.test.mjs',
+    'scripts/ci-recharge-check.mjs',
+    'scripts/ci-recharge-check.test.mjs'
+  ];
+  assert.equal(isAdminHtmlCacheOnly(paths), true);
+  assert.equal(checkMode(paths, '', ''), 'admin');
+  assert.deepEqual(selectedParts(paths), ['guards', 'admin']);
+  assert.equal(needsOnlineRechargeCiBuild(paths), false);
+  assert.equal(isAdminHtmlCacheOnly([]), false);
+  assert.equal(isAdminHtmlCacheOnly(['scripts/ci-recharge-scope.mjs']), false);
+  const current = readFileSync(new URL('../deploy/nginx/admin.conf', import.meta.url));
+  for (const raw of [
+    current.toString().replace('    etag off;\n', ''),
+    current
+      .toString()
+      .replace('proxy_pass http://api:3000/api/;', 'proxy_pass http://other:3000/api/;'),
+    current.toString().replace('immutable', 'no-store')
+  ])
+    assert.equal(isAdminHtmlCacheOnly(paths, raw), false);
+  for (const extra of [
+    'apps/api/src/id-business-v2/online-recharge/online-recharge.service.ts',
+    'apps/admin/src/v2/features/customers/CustomerPage.vue',
+    'apps/api/Dockerfile.mysql',
+    'apps/admin/Dockerfile',
+    'package-lock.json',
+    'deploy/nginx/other.conf',
+    'scripts/acceptance-nginx-admin-cache.py.backup'
+  ]) {
+    assert.equal(isAdminHtmlCacheOnly([...paths, extra]), false, extra);
+    assert.equal(needsOnlineRechargeCiBuild([...paths, extra]), true, extra);
+  }
+});
