@@ -28,6 +28,8 @@ def declared_models(d, previous, target, before_reference, after_reference):
         if isinstance(value, list):
             return [original_paths(v) for v in value]
         if isinstance(value, str):
+            if value == str(target):
+                return str(previous)
             return value.replace(str(target) + '/', str(previous) + '/')
         return value
 

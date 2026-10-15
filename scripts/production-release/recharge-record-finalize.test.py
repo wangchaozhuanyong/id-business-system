@@ -24,11 +24,12 @@ release = load('release', 'recharge-record-release.py')
 class ExistingSwitchTests(unittest.TestCase):
     def test_only_image_and_release_paths_may_change_in_resolved_declarations(self):
         old = {'services': {'api': {'image': 'old:api', 'environment': {'fixture': 'same'},
-                                   'build': {'context': '/previous/context'}},
+                                   'build': {'context': '/previous', 'dockerfile': '/previous/context'}},
                             'admin': {'image': 'preserved:admin'}}}
         new = copy.deepcopy(old)
         new['services']['api']['image'] = 'new:api'
-        new['services']['api']['build']['context'] = '/target/context'
+        new['services']['api']['build']['context'] = '/target'
+        new['services']['api']['build']['dockerfile'] = '/target/context'
         d = Mock()
         d.compose.side_effect = [json.dumps(old), json.dumps(new)]
         self.assertEqual(finalize.declared_models(d, Path('/previous'), Path('/target'),
