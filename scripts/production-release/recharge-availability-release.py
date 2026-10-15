@@ -38,7 +38,24 @@ def acquire_release_lock(lock):
 
 def published_admin_files(contract):
     return {**contract['publicFiles'],**contract.get('publishedAdminAncestor',{}).get('publicFiles',{}),
-            **contract.get('publishedAdminSuccessor',{}).get('publicFiles',{})}
+            **contract.get('publishedAdminSuccessor',{}).get('publicFiles',{}),
+            **contract.get('publishedSharedProxy',{}).get('publicFiles',{})}
+
+
+def shared_proxy_receipt(contract):
+    binding = contract['publishedSharedProxy']
+    return {n: binding[n] for n in ('sourceCommit', 'sourceTree', 'archiveSha256', 'artifactDigest',
+            'publicInventorySha256', 'inputSha256', 'sourceDeltaSha256', 'runId')} | {'verified': True}
+
+
+def shared_proxy_native_payload(payload, binding):
+    first = (payload/'baseline-shared-proxy-native.zip.part00').read_bytes()
+    second = (payload/'baseline-shared-proxy-native.zip.part01').read_bytes()
+    raw = first+second
+    need(len(first) == 6*1024**2 and 0 < len(second) <= 6*1024**2
+         and len(raw) == binding['artifactBytes'] and 'sha256:'+digest(raw) == binding['artifactDigest'],
+         'SHARED_PROXY_PAYLOAD_CHANGED')
+    return raw
 
 
 def successor_receipt(contract, field='publishedAdminSuccessor'):
@@ -86,6 +103,14 @@ def runtime_receipt(directory, raw, states):
     return {'current': str(directory), 'manifestSha256': digest(raw), 'services': states,
             'configurationSha256': {n: digest((directory / n).read_bytes())
                 for n in ('.env.aws.production', 'compose.release.json', 'docker-compose.aws-mysql.yml')}}
+
+
+def verify_admin_origin(manifest, contract):
+    expected = contract.get('publishedSharedProxy', {}).get('runtimeProjection',
+                 contract['publishedAdminSuccessor']['roleProjection'])
+    need(manifest.get('adminSourceProjection') == expected
+         and manifest.get('compiledArtifact') == contract['publishedAdminSuccessor']['nativeOrigin'],
+         'ADMIN_ORIGIN_CHANGED')
 
 
 def verify_runtime_receipt(actual, expected):
@@ -150,6 +175,8 @@ def validate_proof(proof, plan, contract, payload, h):
         need(proof.get('baselineAdminSuccessorVerification') == successor_receipt(contract), 'SUCCESSOR_PROOF_INVALID')
     if contract.get('publishedAdminAncestor'):
         need(proof.get('baselineAdminAncestorVerification') == successor_receipt(contract,'publishedAdminAncestor'), 'SUCCESSOR_PROOF_INVALID')
+    if contract.get('publishedSharedProxy'):
+        need(proof.get('preservedSharedProxyVerification') == shared_proxy_receipt(contract), 'SHARED_PROXY_PROOF_INVALID')
     actual = h.file_inventory(payload)
     actual.pop('build-proof.json', None)
     need(actual == proof.get('files'), 'PAYLOAD_CHANGED')
@@ -159,6 +186,8 @@ def validate_proof(proof, plan, contract, payload, h):
         native_files.update(('baseline-admin-successor-native.tar.gz','baseline-admin-successor-quality-native.zip'))
     if contract.get('publishedAdminAncestor'):
         native_files.update(('baseline-admin-ancestor-native.tar.gz','baseline-admin-ancestor-quality-native.zip'))
+    if contract.get('publishedSharedProxy'):
+        native_files.update(('baseline-shared-proxy-native.zip.part00','baseline-shared-proxy-native.zip.part01'))
     need(set(proof['apiModules']) == expected_api and len(proof['adminFiles']) >= 250
          and {n.removeprefix('source/'): v for n, v in actual.items() if n.startswith('source/')} == contract['sources']
          and {n.removeprefix('api/modules/'): v for n, v in actual.items() if n.startswith('api/modules/')} == proof['apiModules']
@@ -176,6 +205,8 @@ def validate_proof(proof, plan, contract, payload, h):
         need(actual.get('baseline-admin-ancestor-native.tar.gz') == ancestor['archiveSha256']
              and actual.get('baseline-admin-ancestor-quality-native.zip') == ancestor['quality']['artifactDigest'].removeprefix('sha256:'),
              'SUCCESSOR_PAYLOAD_CHANGED')
+    if contract.get('publishedSharedProxy'):
+        shared_proxy_native_payload(payload, contract['publishedSharedProxy'])
     return proof
 
 
@@ -224,9 +255,7 @@ def baseline(d, contract, h, expected_runtime=None):
     verify_modules(d,previous,contract['apiModules'])
     verify_admin(d,states['admin'],published_admin_files(contract))
     if contract.get('publishedAdminSuccessor'):
-        manifest = json.loads(raw)
-        need(manifest.get('adminSourceProjection') == contract['publishedAdminSuccessor']['roleProjection']
-             and manifest.get('compiledArtifact') == contract['publishedAdminSuccessor']['nativeOrigin'], 'ADMIN_ORIGIN_CHANGED')
+        verify_admin_origin(json.loads(raw), contract)
     h.guards(d,previous,states,contract)
     if expected_runtime is not None:
         verify_runtime_receipt(runtime_receipt(previous, raw, states), expected_runtime)
@@ -346,11 +375,15 @@ def release(plan, contract, d, h):
         for name in ('baseline-admin-successor-native.tar.gz','baseline-admin-successor-quality-native.zip',
                      'baseline-admin-ancestor-native.tar.gz','baseline-admin-ancestor-quality-native.zip'):
             (target / ('recharge-availability-'+name)).write_bytes((payload / name).read_bytes())
+        (target/'recharge-availability-baseline-shared-proxy-native.zip').write_bytes(
+            shared_proxy_native_payload(payload, contract['publishedSharedProxy']))
         manifest = json.loads(raw_manifest)
         previous_admin_projection = manifest.get('adminSourceProjection')
         admin_projection = {'kind':'PUBLISHED_ADMIN_WITH_APPROVED_AVAILABILITY_OVERLAY','commit':plan['commit'],
                             'sourceTree':plan['tree'],'sourceBaseline':contract['sourceBaseline'],
                             'preservedPublishedAdminCommit':contract['publishedAdminSuccessor']['sourceCommit'],
+                            'preservedSharedProxy': shared_proxy_receipt(contract),
+                            'preservedAdminSources': contract['preservedAdminSources'],
                             'changedSources':{n:v for n,v in contract['sources'].items() if n.startswith('apps/admin/')},
                             'buildProofSha256':plan['buildProofSha256']}
         manifest['previousAdminSourceProjection'] = previous_admin_projection

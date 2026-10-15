@@ -225,6 +225,119 @@ def database_inputs(contract):
                         if n.startswith(('apps/api/', 'packages/'))}}
 
 
+def database_preparation_functions(tree):
+    # The only new preparation step copies the authenticated, frontend-only
+    # predecessor. API/shared/schema/lockfile materialization stays identical.
+    statement = ast.dump(ast.parse('apply_preserved_admin_sources(context, contract)').body[0])
+    class FrontendOverlay(ast.NodeTransformer):
+        def visit_Expr(self, node):
+            return None if ast.dump(node) == statement else self.generic_visit(node)
+    selected = {'prepare', 'helper', 'run', 'git'}
+    return {n.name: ast.dump(FrontendOverlay().visit(n)) for n in tree.body
+            if isinstance(n, ast.FunctionDef) and n.name in selected}
+
+
+def verify_shared_proxy_sources(contract):
+    binding = contract.get('publishedSharedProxy')
+    if not binding:
+        need(not contract.get('preservedAdminSources'), 'PRESERVED_ADMIN_ORIGIN_MISSING')
+        return
+    files = published_admin_inputs(binding['sourceCommit'])
+    parent = published_admin_inputs(contract['publishedAdminSuccessor']['sourceCommit'])
+    canonical = lambda value: json.dumps(value, sort_keys=True, separators=(',', ':')).encode()
+    changed = set(git('diff', '--name-only', contract['publishedAdminSuccessor']['sourceCommit'],
+                      binding['sourceCommit'], '--', *sorted(set(files) | set(parent))).decode().splitlines())
+    actual = {n: files[n]['sha256'] if n in files else None for n in changed}
+    projection = binding['runtimeProjection']
+    need(all(n.startswith('apps/admin/src/v2/') for n in actual)
+         and actual == contract['preservedAdminSources']
+         and digest(canonical(actual)) == binding['sourceDeltaSha256']
+         and len(files) == binding['inputFileCount'] and digest(canonical(files)) == binding['inputSha256']
+         and git('rev-parse', binding['sourceCommit']+'^{tree}').decode().strip() == binding['sourceTree']
+         and projection['commit'] == binding['sourceCommit'] and projection['sourceTree'] == binding['sourceTree']
+         and projection['publicationArtifactSha256'] == binding['archiveSha256']
+         and projection['ciRun'] == str(binding['runId']) and projection['role'] == 'admin'
+         and projection['runtimeImageId'] == contract['services']['admin']['image'],
+         'PRESERVED_ADMIN_SOURCE_CHANGED')
+
+
+def apply_preserved_admin_sources(context, contract):
+    for name, expected in contract.get('preservedAdminSources', {}).items():
+        need(name.startswith('apps/admin/src/v2/') and '..' not in Path(name).parts,
+             'PRESERVED_ADMIN_SCOPE_INVALID')
+        target = context / name
+        need(not target.is_symlink(), 'PRESERVED_ADMIN_SYMLINK')
+        if expected is None:
+            target.unlink(missing_ok=True)
+        else:
+            raw = git('show', contract['publishedSharedProxy']['sourceCommit']+':'+name)
+            need(digest(raw) == expected, 'PRESERVED_ADMIN_SOURCE_CHANGED')
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(raw)
+
+
+def shared_proxy_receipt(contract):
+    binding = contract['publishedSharedProxy']
+    return {n: binding[n] for n in ('sourceCommit', 'sourceTree', 'archiveSha256', 'artifactDigest',
+            'publicInventorySha256', 'inputSha256', 'sourceDeltaSha256', 'runId')} | {'verified': True}
+
+
+def verify_shared_proxy_archive(raw, binding):
+    need(len(raw) == binding['artifactBytes'] and len(raw) <= 16*1024**2
+         and 'sha256:'+digest(raw) == binding['artifactDigest'],
+         'SHARED_PROXY_ARTIFACT_CHANGED')
+    with zipfile.ZipFile(io.BytesIO(raw)) as archive:
+        names = archive.namelist()
+        need(len(names) == len(set(names)) and all(not Path(n).is_absolute() and '..' not in Path(n).parts
+             and info.file_size <= 32*1024**2 and (info.external_attr >> 16) & 0o170000 != 0o120000
+             for n, info in zip(names, archive.infolist())), 'SHARED_PROXY_ARCHIVE_UNSAFE')
+        bundle = archive.read('shared-proxy-release/publication.tar.gz')
+        need(len(bundle) == binding['archiveBytes'] and digest(bundle) == binding['archiveSha256']
+             == archive.read('shared-proxy-release/publication-sha256.txt').decode().strip(),
+             'SHARED_PROXY_BUNDLE_CHANGED')
+    with tarfile.open(fileobj=io.BytesIO(bundle)) as archive:
+        members = archive.getmembers()
+        need(all((m.isdir() or m.isfile()) and not Path(m.name).is_absolute() and '..' not in Path(m.name).parts
+                 and 0 <= m.size <= 32*1024**2 for m in members)
+             and sum(m.size for m in members) <= 64*1024**2, 'SHARED_PROXY_ARCHIVE_UNSAFE')
+        files = {m.name.removeprefix('./'): m for m in members if m.isfile()}
+        need(len(files) == sum(m.isfile() for m in members), 'SHARED_PROXY_ARCHIVE_UNSAFE')
+        metadata_raw = archive.extractfile(files['publication.json']).read()
+        metadata = json.loads(metadata_raw)
+        need(digest(metadata_raw) == binding['metadataSha256'] and metadata['commit'] == binding['sourceCommit']
+             and metadata['sourceTree'] == binding['sourceTree'] and metadata['runId'] == str(binding['runId'])
+             and metadata['baseline'] == '04aa234505adccfe295776245b88fc56feac0588'
+             and metadata['adminBaseline'] == '4aa49436239ab57e9deb3b5890e645ceeef25149'
+             and set(files) == set(metadata['files']) | {'publication.json'}, 'SHARED_PROXY_METADATA_CHANGED')
+        need(all(digest(archive.extractfile(files[n]).read()) == v for n, v in metadata['files'].items()),
+             'SHARED_PROXY_CONTENT_CHANGED')
+        public = {n.removeprefix('admin/dist/'): v for n, v in metadata['files'].items() if n.startswith('admin/dist/')}
+        need(public == binding['publicFiles'] and digest(json.dumps(public, sort_keys=True,
+             separators=(',', ':')).encode()) == binding['publicInventorySha256'], 'SHARED_PROXY_PUBLIC_CHANGED')
+
+
+def verify_published_shared_proxy(contract):
+    binding = contract['publishedSharedProxy']
+    verify_shared_proxy_sources(contract)
+    native = platform_json('actions/runs/'+str(binding['runId']))
+    need(native['head_sha'] == binding['sourceCommit'] and native['head_branch'] == binding['headBranch']
+         and native['event'] == 'push' and native['path'] == binding['workflowPath']
+         and native['status'] == 'completed' and native['conclusion'] == 'success' and native['run_attempt'] == 1
+         and digest(git('show', binding['sourceCommit']+':'+binding['workflowPath'])) == binding['workflowSha256'],
+         'SHARED_PROXY_RUN_CHANGED')
+    jobs = platform_json('actions/runs/'+str(binding['runId'])+'/attempts/1/jobs')['jobs']
+    need(len(jobs) == 1 and jobs[0]['name'] == 'validate' and jobs[0]['conclusion'] == 'success'
+         and set(binding['requiredSteps']) <= {s['name'] for s in jobs[0]['steps'] if s['conclusion'] == 'success'},
+         'SHARED_PROXY_VALIDATION_CHANGED')
+    artifacts = platform_json('actions/runs/'+str(binding['runId'])+'/artifacts')['artifacts']
+    matches = [a for a in artifacts if a['id'] == binding['artifactId']]
+    need(len(matches) == 1 and not matches[0]['expired'] and matches[0]['name'] == binding['artifactName']
+         and matches[0]['digest'] == binding['artifactDigest'], 'SHARED_PROXY_ARTIFACT_CHANGED')
+    raw = platform_bytes('actions/artifacts/'+str(binding['artifactId'])+'/zip')
+    verify_shared_proxy_archive(raw, binding)
+    return raw, shared_proxy_receipt(contract)
+
+
 def verify_database_evidence(contract):
     binding = contract['databaseValidationNative']
     commit, run_id = binding['sourceCommit'], str(binding['runId'])
@@ -249,9 +362,7 @@ def verify_database_evidence(contract):
     # Source admission is checked directly against the frozen forward-main
     # boundary below; candidate materialization and all DB inputs stay exact.
     verify_sources(contract)
-    selected = {'prepare', 'helper', 'run', 'git'}
-    functions = lambda tree: {n.name: ast.dump(n) for n in tree.body if isinstance(n, ast.FunctionDef) and n.name in selected}
-    need(functions(previous_build) == functions(current_build)
+    need(database_preparation_functions(previous_build) == database_preparation_functions(current_build)
          and git('show', commit + ':scripts/production-release/recharge-record-build.py')
              == Path(__file__).with_name('recharge-record-build.py').read_bytes(), 'DATABASE_PREPARATION_CHANGED')
     native = platform_json('actions/runs/' + run_id)
@@ -298,10 +409,15 @@ def database_evidence():
 def verify_sources(contract):
     need(not git('status', '--porcelain', '--untracked-files=no').strip(), 'SOURCE_DIRTY')
     changed = set(git('diff', '--name-only', contract['reviewBase'], 'HEAD', '--', 'apps/', 'packages/').decode().splitlines())
-    approved = {n for n in contract['sources'] if n.startswith(('apps/', 'packages/'))}
+    approved = {n for n in contract['sources'] if n.startswith(('apps/', 'packages/'))} | set(contract.get('preservedAdminSources', {}))
     verify_source_boundary(contract,changed,approved)
     for name, expected in contract['sources'].items():
         need(digest((ROOT / name).read_bytes()) == expected, 'SOURCE_CHANGED')
+    verify_shared_proxy_sources(contract)
+    for name, expected in contract.get('preservedAdminSources', {}).items():
+        path = ROOT / name
+        need((not path.exists()) if expected is None else path.is_file() and digest(path.read_bytes()) == expected,
+             'PRESERVED_ADMIN_SOURCE_CHANGED')
     need(git('show', contract['sourceBaseline'] + ':package-lock.json') == (ROOT / 'package-lock.json').read_bytes(), 'LOCKFILE_CHANGED')
 
 
@@ -346,6 +462,7 @@ def prepare():
         context = OUTPUT / name
         h.extract_source(source, context)
         if name == 'candidate':
+            apply_preserved_admin_sources(context, contract)
             for path in contract['sources']:
                 destination = context / path
                 destination.parent.mkdir(parents=True, exist_ok=True)
@@ -370,6 +487,7 @@ def build():
     # Reuse the exact original successful native Admin build; do not relabel a local rebuild.
     published_admin_zip, admin_verification = verify_published_admin(contract)
     successor_raw, successor_quality_zip, successor_verification, ancestor_raw, ancestor_quality_zip, ancestor_verification = verify_published_admin_successor(contract)
+    shared_proxy_raw, shared_proxy_verification = verify_published_shared_proxy(contract)
     run('npm', 'run', 'build', '--workspace', 'apps/admin', cwd=candidate,
         env={**os.environ, 'NODE_ENV': contract['adminNodeEnv'], 'V2_BUILD_ID': 'v2-' + git('rev-parse', 'HEAD').decode().strip()})
     payload = OUTPUT / 'payload'
@@ -379,6 +497,8 @@ def build():
     (payload / 'baseline-admin-successor-quality-native.zip').write_bytes(successor_quality_zip)
     (payload / 'baseline-admin-ancestor-native.tar.gz').write_bytes(ancestor_raw)
     (payload / 'baseline-admin-ancestor-quality-native.zip').write_bytes(ancestor_quality_zip)
+    for index, part in enumerate((shared_proxy_raw[:6*1024**2], shared_proxy_raw[6*1024**2:])):
+        (payload / ('baseline-shared-proxy-native.zip.part0'+str(index))).write_bytes(part)
     for name in sorted(permitted):
         path = payload / 'api/modules' / name
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -398,6 +518,7 @@ def build():
              'databaseVerification': json.loads((OUTPUT / 'database-evidence.json').read_bytes()),
              'baselineAdminVerification': admin_verification, 'baselineAdminSuccessorVerification': successor_verification,
              'baselineAdminAncestorVerification': ancestor_verification,
+             'preservedSharedProxyVerification': shared_proxy_verification,
              'files': inventory(payload),
              'apiModules': {name: after[name] for name in sorted(permitted)},
              'adminFiles': inventory(candidate / 'apps/admin/dist'), 'updatedServices': ['api', 'admin'],
