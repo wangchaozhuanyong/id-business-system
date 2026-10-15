@@ -3,6 +3,7 @@
 Requires independently reproduced predecessor content and native successful CI.
 It never invokes migration, payment, notifications, cleanup, or automatic rollback.
 """
+import base64
 import copy
 import datetime
 import fcntl
@@ -13,11 +14,13 @@ import json
 import os
 from pathlib import Path
 import re
+import shlex
 import shutil
 import subprocess
 import tarfile
 import time
 import urllib.request
+from urllib.parse import unquote, urlsplit
 
 BASE = Path('/opt/id-business-v2')
 SERVICES = ('api', 'admin', 'mysql', 'caddy', 'media-resolver', 'auto-recharge',
@@ -252,6 +255,87 @@ def download(url, cap):
     return raw
 
 
+def fresh_scoped_backup(d, previous, plan):
+    # This release needs a fresh backup, not a retention or deletion operation.
+    need(re.fullmatch('[a-f0-9]{40}', plan['commit']) and re.fullmatch('[0-9]+', plan['workflowRunId']),
+         'BACKUP_IDENTITY_INVALID')
+    values = d.environment_values(previous / '.env.aws.production')
+    database = values.get('MYSQL_DATABASE', '')
+    connection = urlsplit(values.get('DATABASE_URL', ''))
+    need(re.fullmatch(r'[A-Za-z0-9_]{1,64}', database)
+         and connection.scheme == 'mysql' and connection.hostname == 'mysql'
+         and connection.port in (None, 3306) and connection.username
+         and not connection.fragment and unquote(connection.path) == '/' + database,
+         'BACKUP_DATABASE_INVALID')
+    bucket, region = values.get('MYSQL_BACKUP_S3_BUCKET', ''), values.get('MYSQL_BACKUP_S3_REGION') or 'ap-northeast-1'
+    prefix = values.get('MYSQL_BACKUP_S3_PREFIX') or 'mysql/daily'
+    need(re.fullmatch(r'[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]', bucket)
+         and re.fullmatch(r'[a-z]{2}(?:-gov)?-[a-z]+-[0-9]', region)
+         and re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9._/-]*', prefix)
+         and '..' not in Path(prefix).parts, 'BACKUP_LOCATION_INVALID')
+    normalizer = previous / 'scripts/mysql-dump-restore-normalizer.sed'
+    need(normalizer.is_file() and not normalizer.is_symlink()
+         and digest(normalizer.read_bytes()) == 'ca9b05f832e9ed73bb36b7e76c083c99a40b13e067850166f8715bae469e5202',
+         'BACKUP_NORMALIZER_CHANGED')
+    directory = BASE / 'backups' / ('recharge-record-' + plan['commit'] + '-' + plan['workflowRunId'])
+    need(not directory.exists(), 'BACKUP_ALREADY_ACCEPTED')
+    directory.mkdir(mode=0o700)
+    stamp = datetime.datetime.now(datetime.timezone.utc).strftime('%Y%m%dT%H%M%SZ')
+    backup = directory / ('id-business-v2-' + stamp + '.sql.gz')
+    partial = directory / ('.' + backup.name + '.partial')
+    compose = ['docker', 'compose', '--env-file', str(previous / '.env.aws.production'),
+               '-f', str(previous / 'docker-compose.aws-mysql.yml'),
+               '-f', str(previous / 'compose.release.json'), 'exec', '-T', '-e',
+               'MYSQL_DATABASE=' + database, 'mysql', 'sh', '-c']
+    tables = ('set -eu; test "$MYSQL_BACKUP_USER" = id_business_backup || exit 1; '
+              'test -n "$MYSQL_BACKUP_PASSWORD" || exit 1; export MYSQL_PWD="$MYSQL_BACKUP_PASSWORD"; '
+              'exec mysqldump --host=127.0.0.1 --user="$MYSQL_BACKUP_USER" --single-transaction '
+              '--quick --hex-blob --no-tablespaces --triggers "$MYSQL_DATABASE"')
+    routines = ('set -eu; test -n "$MYSQL_ROOT_PASSWORD" || exit 1; export MYSQL_PWD="$MYSQL_ROOT_PASSWORD"; '
+                'exec mysqldump --host=127.0.0.1 --user=root --routines --no-data --no-create-info '
+                '--skip-triggers --no-tablespaces --skip-add-locks --skip-lock-tables '
+                '--set-gtid-purged=OFF "$MYSQL_DATABASE"')
+    pipeline = ('set -euo pipefail; umask 077; { ' + shlex.join(compose + [tables]) + '; '
+                + shlex.join(compose + [routines]) + '; } | sed -E -f ' + shlex.quote(str(normalizer))
+                + ' | gzip -9 > ' + shlex.quote(str(partial)))
+    phase = 'EXPORT'
+    operation = directory / 'backup-operation.json'
+    operation.write_text(json.dumps({'status': 'STARTED', 'phase': phase}) + '\n')
+    try:
+        d.run('bash', '-c', pipeline, timeout=600)
+        phase = 'INTEGRITY'
+        d.run('gzip', '-t', str(partial), timeout=60)
+        need(partial.is_file() and not partial.is_symlink() and partial.stat().st_size > 0,
+             'BACKUP_EMPTY')
+        partial.rename(backup)
+        backup.chmod(0o600)
+        raw = backup.read_bytes()
+        sha = hashlib.sha256(raw)
+        key = prefix.rstrip('/') + '/recharge-record/' + plan['commit'] + '-' + plan['workflowRunId'] + '/' + backup.name
+        phase = 'UPLOAD'
+        d.run('aws', 's3api', 'put-object', '--region', region, '--bucket', bucket, '--key', key,
+              '--body', str(backup), '--server-side-encryption', 'AES256', '--checksum-algorithm', 'SHA256', timeout=180)
+        phase = 'S3_VERIFICATION'
+        head = json.loads(d.run('aws', 's3api', 'head-object', '--region', region, '--bucket', bucket,
+                               '--key', key, '--checksum-mode', 'ENABLED', timeout=60))
+        need(head.get('ContentLength') == len(raw)
+             and head.get('ChecksumSHA256') == base64.b64encode(sha.digest()).decode()
+             and head.get('ServerSideEncryption') == 'AES256', 'BACKUP_S3_UNVERIFIED')
+        result = {'name': backup.name, 'path': str(backup), 'sha256': sha.hexdigest(), 'size': len(raw),
+                  's3Bucket': bucket, 's3Key': key, 's3Verified': True, 'retentionActions': 0}
+        (directory / 'backup-verification.json').write_text(json.dumps(result, sort_keys=True, indent=2) + '\n')
+        operation.write_text(json.dumps({'status': 'VERIFIED', 'phase': phase, 'retentionActions': 0}) + '\n')
+        return result
+    except Exception as error:
+        code = str(error)
+        controlled = code if re.fullmatch('RECHARGE_RECORD_[A-Z0-9_]+', code) else 'RECHARGE_RECORD_BACKUP_' + phase + '_FAILED'
+        operation.write_text(json.dumps({'status': 'FAILED', 'phase': phase, 'code': controlled,
+                                         'retentionActions': 0}) + '\n')
+        if re.fullmatch('RECHARGE_RECORD_[A-Z0-9_]+', code):
+            raise
+        raise RuntimeError(controlled) from None
+
+
 def release(plan, contract, d):
     need(plan['mode'] in ('preflight', 'release', 'readback'), 'MODE_INVALID')
     need(re.fullmatch('[a-f0-9]{40}', plan['commit']) and re.fullmatch('[a-f0-9]{40}', plan['tree'])
@@ -356,7 +440,7 @@ def release(plan, contract, d):
         # Candidate images are recoverable from the native CI artifact and the
         # protected predecessor. No historical proof is synthesized.
         need(baseline(d, contract)[1:] == (raw_manifest, before), 'BASELINE_MOVED')
-        backup = d.fresh_backup(previous)
+        backup = fresh_scoped_backup(d, previous, plan)
         need(backup.get('s3Verified') is True, 'BACKUP_UNVERIFIED')
         stamp = datetime.datetime.now(datetime.timezone.utc).strftime('%Y%m%dT%H%M%SZ')
         target = BASE / 'releases' / (stamp + '-' + plan['commit'][:12] + '-recharge-record')

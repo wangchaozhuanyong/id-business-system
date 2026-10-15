@@ -1,8 +1,11 @@
 import copy
+import base64
+import gzip
 import hashlib
 import importlib.util
 import io
 import json
+import os
 from pathlib import Path
 import tarfile
 import tempfile
@@ -20,6 +23,56 @@ build_spec.loader.exec_module(build)
 
 
 class RepairPublicationTests(unittest.TestCase):
+    def test_scoped_backup_streams_normalizes_and_verifies_without_retention_or_secret_arguments(self):
+        runtime = HERE.parents[1] / '.runtime'
+        runtime.mkdir(exist_ok=True)
+        with tempfile.TemporaryDirectory(prefix='record-backup-', dir=runtime) as temporary:
+            root = Path(temporary)
+            (root / 'backups').mkdir()
+            previous = root / "previous 'quoted' $literal"
+            (previous / 'scripts').mkdir(parents=True)
+            (previous / 'scripts/mysql-dump-restore-normalizer.sed').write_bytes(
+                (HERE.parents[1] / 'scripts/mysql-dump-restore-normalizer.sed').read_bytes())
+            binary = root / 'bin'
+            binary.mkdir()
+            docker = binary / 'docker'
+            docker.write_text("#!/usr/bin/env python3\nimport sys\nprint('ROUTINES-DATA' if '--routines' in sys.argv[-1] else 'TABLES-DATA')\n")
+            docker.chmod(0o755)
+            d = Mock()
+            d.environment_values.return_value = {'MYSQL_DATABASE': 'fixture_database',
+                'DATABASE_URL': 'mysql://fixture:synthetic-private-password@mysql/fixture_database',
+                'MYSQL_BACKUP_S3_BUCKET': 'fixture-backups', 'MYSQL_BACKUP_S3_REGION': 'ap-northeast-1'}
+            uploaded = None
+            wrong_checksum = False
+            def run(*args, **kwargs):
+                nonlocal uploaded
+                if args[0] in ('bash', 'gzip'):
+                    return subprocess.check_output(args, env={**os.environ, 'PATH': str(binary) + os.pathsep + os.environ['PATH']},
+                                                   timeout=kwargs['timeout']).decode()
+                if args[:3] == ('aws', 's3api', 'put-object'):
+                    uploaded = Path(args[args.index('--body') + 1])
+                    return '{}'
+                self.assertEqual(args[:3], ('aws', 's3api', 'head-object'))
+                raw = uploaded.read_bytes()
+                return json.dumps({'ContentLength': len(raw), 'ServerSideEncryption': 'AES256',
+                                   'ChecksumSHA256': 'wrong' if wrong_checksum else base64.b64encode(hashlib.sha256(raw).digest()).decode()})
+            d.run.side_effect = run
+            plan = {'commit': 'a' * 40, 'workflowRunId': '1'}
+            with patch.object(release, 'BASE', root):
+                result = release.fresh_scoped_backup(d, previous, plan)
+                self.assertTrue(result['s3Verified'])
+                self.assertEqual(result['retentionActions'], 0)
+                self.assertEqual(gzip.decompress(Path(result['path']).read_bytes()), b'TABLES-DATA\nROUTINES-DATA\n')
+                self.assertEqual(Path(result['path']).stat().st_mode & 0o777, 0o600)
+                wrong_checksum = True
+                with self.assertRaisesRegex(RuntimeError, 'BACKUP_S3_UNVERIFIED'):
+                    release.fresh_scoped_backup(d, previous, {**plan, 'workflowRunId': '2'})
+                failed = json.loads((root / 'backups' / ('recharge-record-' + plan['commit'] + '-2') / 'backup-operation.json').read_bytes())
+                self.assertEqual((failed['status'], failed['phase'], failed['retentionActions']), ('FAILED', 'S3_VERIFICATION', 0))
+            commands = repr(d.run.call_args_list)
+            for forbidden in ('synthetic-private-password', 'systemctl', '--apply', 'prune', 'retention-protection'):
+                self.assertNotIn(forbidden, commands)
+
     def test_native_application_reuse_requires_exact_sources_commands_and_validate_job(self):
         contract = json.loads((HERE / 'recharge-record-contract.json').read_bytes())
         prior = contract['priorApplicationValidation']
@@ -249,7 +302,7 @@ class RepairPublicationTests(unittest.TestCase):
         self.assertIn("'stop', 'online-recharge'", source)
         self.assertIn("'IMAGE_MISMATCH'", source)
         self.assertIn("'ONLINE_BINDING_INVALID'", source)
-        self.assertIn('d.fresh_backup(previous)', source)
+        self.assertIn('fresh_scoped_backup(d, previous, plan)', source)
 
 
 if __name__ == '__main__':
