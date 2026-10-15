@@ -56,7 +56,7 @@ const CONFIG = {
 const RECORD_VIDEO = String(process.env.RECORD_VIDEO || '1') !== '0';
 const VIDEO_DIR = path.join(__dirname, 'debug_screenshots', 'videos');
 const VIDEO_TAG = (process.env.JOB_KEY || process.env.CDK_CODE || `${Date.now()}`).replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 32) || `${Date.now()}`;
-const DEBUG_PAYMENT_BUTTON_PATTERNS = [/^Subscribe$/i, /^订阅$/, /^立即支付$/, /^Pay now$/i];
+const DEBUG_PAYMENT_BUTTON_PATTERNS = [/^Subscribe$/i, /^订阅$/, /^立即支付$/, /^Pay now$/i, /^Upgrade to Pro$/i];
 
 const waitForDebugPaymentStep = async (page, timeout = 60000) => {
     const deadline = Date.now() + timeout;
