@@ -15,6 +15,22 @@ export const rechargeRecordControlPaths = Object.freeze([
   'scripts/production-release/online-recharge-component-consumer.test.py',
   'scripts/ci-recharge-record.test.mjs'
 ]);
+const rechargeRecordControlsOnlyPaths = new Set([
+  ...rechargeRecordControlPaths.filter(
+    (path) => !path.includes('online-recharge-component-consumer')
+  ),
+  'scripts/ci-recharge-scope.mjs',
+  'scripts/ci-recharge-check.mjs',
+  'docs/AUTO_RECHARGE_RECORD_DIAGNOSTICS_20261015.md',
+  'docs/V2_TASKS.md'
+]);
+export function isRechargeRecordControlsOnly(paths) {
+  return (
+    paths.length > 0 &&
+    paths.some((path) => rechargeRecordControlPaths.includes(path)) &&
+    paths.every((path) => rechargeRecordControlsOnlyPaths.has(path))
+  );
+}
 const rechargeRecordApplicationPaths = new Set([
   'apps/admin/src/v2/features/auto-recharge/RechargePageContext.vue',
   'apps/admin/src/v2/features/auto-recharge/recharge-callback-diagnostics.ts',

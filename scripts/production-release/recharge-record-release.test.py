@@ -129,6 +129,14 @@ class RepairPublicationTests(unittest.TestCase):
                         'changedSources': {'apps/api/repair.ts': hashlib.sha256(repair.read_bytes()).hexdigest()}}
             with patch.object(build, 'ROOT', root):
                 build.verify_scope(contract)
+                synced.write_text('newer published Admin role\n')
+                role_sha = hashlib.sha256(synced.read_bytes()).hexdigest()
+                role_commit = commit('newer published role')
+                contract['publishedAdminSources'] = {'apps/api/synced.ts': role_sha}
+                contract['preservedAdminCommit'] = role_commit
+                synced.write_text('already published\n')
+                commit('keep original API source while preserving newer Admin')
+                build.verify_scope(contract)
                 synced.write_text('unpublished change\n')
                 commit('unpublished source')
                 with self.assertRaisesRegex(RuntimeError, 'SOURCE_SCOPE_CHANGED'):
@@ -190,7 +198,7 @@ class RepairPublicationTests(unittest.TestCase):
                              for name in value['changedSources']))
         self.assertEqual(release.PRESERVED, ('admin', 'mysql', 'caddy', 'media-resolver',
                                             'auto-recharge', 'auto-registration'))
-        self.assertEqual(value['preservedAdminCommit'], '6b4237006e8cc083d31f8ab146ee7186e13c6737')
+        self.assertEqual(value['preservedAdminCommit'], 'e474bc8ed3ecc1a942f2eeb54bccab30570ae2af')
         self.assertEqual(value['preservedEngineCommit'], 'adb3a3c7a63054520c284838189d85064e1c019a')
         self.assertEqual(value['services']['online-recharge']['image'],
                          'sha256:49f530475998ad007d675f6c73961f445fc5e989ce3bbfb9c9b3313939066137')

@@ -104,7 +104,8 @@ def verify_scope(contract):
                  'PUBLISHED_SOURCE_CHANGED')
             published[name] = commit
     need(set(sources) <= changed and all(
-        matches_published_source(name, published.get(name, contract['sourceBaseline']))
+        (matches_published_source(name, contract['sourceBaseline'])
+         or (name in published and matches_published_source(name, published[name])))
         for name in changed - set(sources)), 'SOURCE_SCOPE_CHANGED')
     need(all(digest((ROOT / name).read_bytes()) == sha
              for name, sha in sources.items()), 'REPAIR_SOURCE_CHANGED')
