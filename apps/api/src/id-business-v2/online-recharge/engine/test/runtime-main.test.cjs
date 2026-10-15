@@ -5,7 +5,7 @@ const http = require('node:http');
 const net = require('node:net');
 const fs = require('node:fs');
 const path = require('node:path');
-const { spawn } = require('node:child_process');
+const { spawn, spawnSync } = require('node:child_process');
 const credentials = require('../credentials.cjs');
 const { check } = require('../healthcheck.cjs');
 const { transientRoot, clearTransientRoot } = require('../paths.cjs');
@@ -135,6 +135,52 @@ test('task runtime and browser profiles use an owned 0700 transient directory, m
     assert.equal(env.ONLINE_RECHARGE_RUNTIME_DIR, path.join(root, 'tasks', task.id));
     assert.ok(!env.ONLINE_RECHARGE_RUNTIME_DIR.startsWith(`${engine}${path.sep}`));
     assert.ok(env.ONLINE_RECHARGE_MEDIA_DIR.startsWith(`${engine}${path.sep}`));
+    const mediaDirectory = env.ONLINE_RECHARGE_MEDIA_DIR;
+    const projectDirectory = fs.mkdtempSync(path.join(engine, 'media-path-test-'));
+    const resolveMedia = (media = mediaDirectory, runtime = env.ONLINE_RECHARGE_RUNTIME_DIR) =>
+      spawnSync(
+        process.execPath,
+        [
+          '-e',
+          'process.stdout.write(require(process.argv[1]).mediaRoot())',
+          path.join(engine, 'paths.cjs')
+        ],
+        {
+          cwd: engine,
+          env: { ...env, ONLINE_RECHARGE_RUNTIME_DIR: runtime, ONLINE_RECHARGE_MEDIA_DIR: media },
+          encoding: 'utf8'
+        }
+      );
+    try {
+      assert.equal(fs.existsSync(mediaDirectory), false);
+      const resolved = resolveMedia();
+      assert.equal(resolved.status, 0, resolved.stderr);
+      assert.equal(resolved.stdout, mediaDirectory);
+      assert.equal(fs.existsSync(mediaDirectory), false);
+      for (const [media, message] of [
+        ['relative-media', /项目内绝对路径/],
+        [path.join(root, 'outside-media'), /属于当前 ID 项目/]
+      ]) {
+        const rejected = resolveMedia(media);
+        assert.notEqual(rejected.status, 0);
+        assert.match(rejected.stderr, message);
+      }
+      const link = path.join(projectDirectory, 'outside-link');
+      fs.symlinkSync(root, link, 'dir');
+      for (const media of [link, path.join(link, 'not-created')]) {
+        const rejected = resolveMedia(media);
+        assert.notEqual(rejected.status, 0);
+        assert.match(rejected.stderr, /不能通过链接指向项目外/);
+      }
+      const fallback = resolveMedia('', path.join(projectDirectory, 'runtime'));
+      assert.equal(fallback.status, 0, fallback.stderr);
+      assert.equal(fallback.stdout, path.join(projectDirectory, 'runtime', 'media'));
+      const rejectedFallback = resolveMedia('');
+      assert.notEqual(rejectedFallback.status, 0);
+      assert.match(rejectedFallback.stderr, /属于当前 ID 项目/);
+    } finally {
+      fs.rmSync(projectDirectory, { recursive: true, force: true });
+    }
     assert.throws(
       () => require('../worker.cjs').childEnvironment({ id: '../other-project' }),
       /目录标识/

@@ -136,6 +136,13 @@
       "reason": "Credentials-only entrypoint boots/stops without RPC, browser or external execution."
     },
     {
+      "path": "test/debug-checkout.test.cjs",
+      "originalSha256": null,
+      "adaptedSha256": "380ba83883fe9d2710f37cac576b4f687bcad86282dcb1e3dcbbd930eae173d9",
+      "changed": true,
+      "reason": "Offline VM tests of the actual readonly debug helper: original four labels, exact Upgrade to Pro, unchanged 60-second no-match timeout, and zero click/fill calls; no upstream executor import or network."
+    },
+    {
       "path": "test/dispatch.test.cjs",
       "originalSha256": null,
       "adaptedSha256": "f556465b75cb0f75e860e81ef41666200e4f9f97854d3de281c9e416efe94368",
@@ -285,9 +292,9 @@
     {
       "path": "upstream/index.js",
       "originalSha256": "1694958e105ebe962494d3c88bbf2f0c6b22e49028e46cfc77801e2c9f814855",
-      "adaptedSha256": "0880c71f1943ce98029c1deed51b94c591eda97176ec95d7172ea375f4530925",
+      "adaptedSha256": "18de43630bf441925b13d9208c43191110e1169129b106bd4211be41dd0e32a3",
       "changed": true,
-      "reason": "保留Session/API优先及UI回退；结构化结果、严格账户/目标套餐确认、本地成功取消续费、强制脱敏媒体及context清理。"
+      "reason": "保留Session/API优先及UI回退；结构化结果、严格账户/目标套餐确认、本地成功取消续费、强制脱敏媒体及context清理。只读调试终点补充精确Upgrade to Pro按钮名；保留原四名、60秒超时与付款前停止，不改提交或卡池。"
     },
     {
       "path": "upstream/LICENSE",

@@ -4,7 +4,9 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
+import { runInNewContext } from 'node:vm';
 import {
+  adminCheckCommands,
   onlineRechargeRecoveryPolicy,
   productionDatabaseAccessHelper,
   productionDatabaseAccessTest,
@@ -36,6 +38,100 @@ const readonlyMetadataPrevious = readonlyMetadataCurrent
     "commit.get('commit', {}).get('tree', {}).get('sha')"
   );
 const readonlyMetadataFixture = { readonlyBaseSource: readonlyMetadataPrevious };
+
+test('ONLINE browser acceptance previews the completed Admin build without starting a server', () => {
+  const commands = adminCheckCommands('admin', [
+    'apps/admin/src/v2/features/online-recharge/OnlineActionDrawer.vue'
+  ]);
+  const buildIndex = commands.findIndex(
+    (args) => args.join(' ') === 'run build --workspace @apple-business/admin'
+  );
+  const acceptanceIndex = commands.findIndex(
+    (args) => args.join(' ') === 'run acceptance:v2-online-recharge-ui'
+  );
+  assert.ok(buildIndex >= 0 && acceptanceIndex > buildIndex);
+  const script = readFileSync(
+    resolve(root, 'scripts/acceptance-v2-online-recharge-ui.mjs'),
+    'utf8'
+  );
+  const start = script.indexOf('const root =');
+  const end = script.indexOf('const sections =', start);
+  assert.ok(start >= 0 && end > start);
+  const startup = script.slice(start, end).replace('import.meta.url', 'scriptUrl');
+  const calls = [];
+  let hasDist = true;
+  const context = {
+    assert,
+    resolve,
+    fileURLToPath,
+    URL,
+    scriptUrl: new URL('./acceptance-v2-online-recharge-ui.mjs', import.meta.url).href,
+    process: { execPath: 'synthetic-node' },
+    existsSync(path) {
+      assert.equal(path, resolve(root, 'apps/admin/dist/index.html'));
+      return hasDist;
+    },
+    mkdirSync: () => undefined,
+    spawn: (...args) => {
+      calls.push(args);
+      return {};
+    }
+  };
+  runInNewContext(startup, { ...context });
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0][0], 'synthetic-node');
+  assert.deepEqual(Array.from(calls[0][1]), [
+    resolve(root, 'node_modules/vite/bin/vite.js'),
+    'preview',
+    '--host',
+    '127.0.0.1',
+    '--port',
+    '5409',
+    '--strictPort'
+  ]);
+  assert.equal(calls[0][2].cwd, resolve(root, 'apps/admin'));
+  calls.length = 0;
+  hasDist = false;
+  assert.throws(
+    () => runInNewContext(startup, { ...context }),
+    /requires the completed Admin build/
+  );
+  assert.equal(calls.length, 0);
+});
+
+test('ONLINE browser fixture restores the current session contract without starting a server', async () => {
+  const script = readFileSync(
+    resolve(root, 'scripts/acceptance-v2-online-recharge-ui.mjs'),
+    'utf8'
+  );
+  const start = script.indexOf('async function fixture(context, state) {');
+  const end = script.indexOf('\ntry {', start);
+  assert.ok(start >= 0 && end > start);
+  const origin = 'http://127.0.0.1:5409';
+  const install = runInNewContext('(' + script.slice(start, end).trim() + ')', { origin, URL });
+  const actor = { id: 'synthetic-user', roles: ['admin'], permissions: [] };
+  let handler;
+  await install(
+    {
+      routeWebSocket: async () => {},
+      route: async (_pattern, callback) => {
+        handler = callback;
+      }
+    },
+    { actor }
+  );
+  let response;
+  await handler({
+    request: () => ({ url: () => origin + '/api/auth/session' }),
+    fulfill: async (value) => {
+      response = value;
+    }
+  });
+  assert.deepEqual(JSON.parse(response.body), {
+    success: true,
+    data: { accessToken: 'synthetic-access', user: actor }
+  });
+});
 
 test('new ONLINE controls retain pure diagnostics lifecycle and CI build tests without invoking Docker', () => {
   for (const part of ['guards', 'release-controls']) {
@@ -1025,7 +1121,9 @@ test('connection migration and registration mirror use only their disposable Doc
     'utf8'
   );
   assert.ok(
-    workflow.includes(`contains(fromJSON('["guards","admin","api","migration"]'), matrix.part)`)
+    workflow.includes(
+      `contains(fromJSON('["guards","admin","api","migration","online-engine"]'), matrix.part)`
+    )
   );
 });
 

@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { configGroups } from './configFields';
-import { onlineActionAllowedForRow, rowActions } from './sections';
+import { onlineActionAllowedForRow, onlineActionPayload, rowActions } from './sections';
+import type { OnlineQuery } from './contracts';
 const client = vi.hoisted(() => ({ post: vi.fn(), get: vi.fn(), patch: vi.fn() }));
 vi.mock('@/api/client', () => ({ http: client, request: (value: unknown) => value }));
 vi.mock('@/v2/composables/useV2Query', () => ({
@@ -55,5 +56,71 @@ describe('配置检测与执行器请求合同', () => {
       false
     );
     expect(onlineActionAllowedForRow('automation', action, original)).toBe(false);
+  });
+
+  it.each(['test', 'reload'])(
+    '浏览器池 %s 不提交空套餐筛选，控制任务可以进入队列',
+    async (action) => {
+      const filters: OnlineQuery = {
+        page: 1,
+        pageSize: 20,
+        keyword: '',
+        status: '',
+        plan: '',
+        dispatched: '',
+        sortOrder: 'desc'
+      };
+      const body = onlineActionPayload(filters, { id: 'browser-slot' });
+      const result = await onlineApi.action('browser-pool', action, body);
+      expect(client.post).toHaveBeenCalledWith(
+        `/id-business-v2/online-recharge/admin/browser-pool/${action}`,
+        { page: 1, pageSize: 20, sortOrder: 'desc', id: 'browser-slot' }
+      );
+      expect(body).not.toHaveProperty('plan');
+      expect(filters.plan).toBe('');
+      expect(result.status).toBe('queued');
+    }
+  );
+
+  it('批量操作保留实际筛选和操作参数，零与 false 不会被当作空值丢弃', async () => {
+    const filters = {
+      page: 0,
+      pageSize: 50,
+      keyword: 'selected-batch',
+      status: 'unused',
+      plan: 'pro_20x',
+      dispatched: 'false',
+      sortOrder: 'asc' as const,
+      enabled: false,
+      startDate: undefined
+    };
+    const body = onlineActionPayload(filters, { ids: ['code-1'], count: 0, dispatch: false });
+    await onlineApi.action('cdks', 'export', body);
+    expect(client.post).toHaveBeenCalledWith('/id-business-v2/online-recharge/admin/cdks/export', {
+      page: 0,
+      pageSize: 50,
+      keyword: 'selected-batch',
+      status: 'unused',
+      plan: 'pro_20x',
+      dispatched: 'false',
+      sortOrder: 'asc',
+      enabled: false,
+      ids: ['code-1'],
+      count: 0,
+      dispatch: false
+    });
+  });
+
+  it.each(['', 'invalid-plan'])('明确传入的无效套餐 %j 仍交给服务端校验', async (plan) => {
+    const body = onlineActionPayload(
+      { page: 1, pageSize: 20, keyword: '', status: '', plan: 'plus' },
+      { plan, id: 'browser-slot' }
+    );
+    client.post.mockRejectedValueOnce(new Error('套餐无效'));
+    await expect(onlineApi.action('browser-pool', 'test', body)).rejects.toThrow('套餐无效');
+    expect(client.post).toHaveBeenCalledWith(
+      '/id-business-v2/online-recharge/admin/browser-pool/test',
+      { page: 1, pageSize: 20, plan, id: 'browser-slot' }
+    );
   });
 });

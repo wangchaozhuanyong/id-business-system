@@ -481,7 +481,15 @@ if (
   !releaseArtifactOnly &&
   (part === 'guards' || (part === 'release-controls' && mode !== 'full')) &&
   (needsOnlineRechargeCiBuild(changed) ||
-    changed.some((path) => onlineCiBuildControlPaths.includes(path)))
+    changed.some(
+      (path) =>
+        onlineCiBuildControlPaths.includes(path) ||
+        [
+          'scripts/ci-recharge-check.mjs',
+          'scripts/ci-recharge-scope.mjs',
+          '.github/workflows/quality.yml'
+        ].includes(path)
+    ))
 ) {
   run('python3', ['-B', 'scripts/production-release/online-recharge-ci-build.test.py']);
   run('python3', ['-B', 'scripts/production-release/online-recharge-component-diagnostic.test.py']);

@@ -2,11 +2,15 @@
 // 完全合成夹具；禁止连接真实服务、账号、供应商或支付页面。
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { resolve } from 'node:path';
 import { chromium } from 'playwright';
 const root = fileURLToPath(new URL('..', import.meta.url));
+assert.ok(
+  existsSync(resolve(root, 'apps/admin/dist/index.html')),
+  'ONLINE UI acceptance requires the completed Admin build'
+);
 const evidence = resolve(root, '.runtime/online-recharge/ui');
 mkdirSync(evidence, { recursive: true });
 const origin = 'http://127.0.0.1:5409';
@@ -14,6 +18,7 @@ const server = spawn(
   process.execPath,
   [
     resolve(root, 'node_modules/vite/bin/vite.js'),
+    'preview',
     '--host',
     '127.0.0.1',
     '--port',
@@ -202,6 +207,14 @@ const report = {
   lifecycle: []
 };
 let browser, lastPage;
+const pageErrors = [];
+const requestFailures = [];
+function observeFailureDiagnostics(page) {
+  page.on('pageerror', (error) => pageErrors.push(error.message));
+  page.on('requestfailed', (request) =>
+    requestFailures.push({ url: request.url(), error: request.failure()?.errorText ?? '' })
+  );
+}
 const wait = async (check) => {
   const until = Date.now() + 25000;
   while (Date.now() < until) {
@@ -276,6 +289,39 @@ async function measure(page) {
     };
   });
 }
+async function switchFixtureIdentity(page, state, actor) {
+  if (page.url() === 'about:blank') {
+    await page.goto(origin + '/v2/dashboard');
+  } else {
+    await page.evaluate(async () => {
+      await document
+        .querySelector('#app')
+        .__vue_app__.config.globalProperties.$router.push('/v2/dashboard');
+    });
+  }
+  const accountMenu = page.getByRole('button', { name: '打开账户菜单', exact: true });
+  await accountMenu.waitFor();
+  const logout = page.waitForResponse(
+    (response) => new URL(response.url()).pathname === '/api/auth/logout'
+  );
+  await accountMenu.click();
+  await page.getByRole('menuitem', { name: '退出登录', exact: true }).click();
+  assert.equal((await logout).status(), 200, '合成退出请求失败');
+  await page.waitForURL((url) => url.pathname === '/login');
+  state.actor = actor;
+  await page.locator('#v2-admin-login-form input[name="username"]').fill(actor.username);
+  await page.locator('#v2-admin-login-form input[name="password"]').fill('synthetic-password');
+  await page.locator('#v2-admin-login-form input[name="one-time-code"]').fill('');
+  const login = page.waitForResponse(
+    (response) => new URL(response.url()).pathname === '/api/auth/login'
+  );
+  await page.getByRole('button', { name: '进入运营后台', exact: true }).click();
+  const response = await login;
+  assert.equal(response.status(), 200, '合成登录请求失败');
+  assert.equal((await response.json()).data.user.id, actor.id, '合成登录未切换到目标身份');
+  await page.waitForURL((url) => url.pathname.startsWith('/v2'));
+  await accountMenu.waitFor();
+}
 async function fixture(context, state) {
   const unexpected = [];
   const publicHeaders = [];
@@ -298,7 +344,7 @@ async function fixture(context, state) {
       return route.abort();
     }
     if (path === '/api/auth/me') return ok(state.actor);
-    if (path === '/api/auth/login')
+    if (path === '/api/auth/login' || path === '/api/auth/session')
       return ok({ accessToken: 'synthetic-access', user: state.actor });
     if (path === '/api/auth/logout') return ok({});
     if (path.endsWith('/change-events')) return route.abort();
@@ -389,7 +435,9 @@ async function fixture(context, state) {
     if (section === 'config' && req.method() === 'GET') return ok(settings);
     if (section === 'config' && req.method() === 'PATCH') {
       writes.push('config');
-      if (state.saveDelay) await new Promise((done) => setTimeout(done, state.saveDelayMs ?? 500));
+      if (state.configSaveGate) await state.configSaveGate;
+      else if (state.saveDelay)
+        await new Promise((done) => setTimeout(done, state.saveDelayMs ?? 500));
       state.configCompleted = Number(state.configCompleted ?? 0) + 1;
       if (state.saveFail)
         return route.fulfill({
@@ -482,14 +530,24 @@ try {
       const context = await browser.newContext({ viewport: { width, height: 1100 } });
       await context.addInitScript(
         ({ theme, user }) => {
-          localStorage.setItem('apple_business_access_token', 'synthetic-access');
-          localStorage.setItem('apple_business_current_user', JSON.stringify(user));
+          sessionStorage.setItem(
+            'apple_business_auth_v2',
+            JSON.stringify({
+              schemaVersion: 2,
+              credentialId: 'online-fixture-' + user.id,
+              token: 'synthetic-access',
+              tokenRevision: 1,
+              updatedAt: Date.now(),
+              userCache: user
+            })
+          );
           localStorage.setItem('id-business-v2-theme', theme);
         },
         { theme, user: administrator }
       );
       const page = await context.newPage();
       lastPage = page;
+      observeFailureDiagnostics(page);
       const state = {
         actor: administrator,
         empty: false,
@@ -569,11 +627,22 @@ try {
   // 生命周期采用同一个标签页内的真实路由切换，整页加载不代替草稿恢复验收。
   const context = await browser.newContext({ viewport: { width: 1440, height: 1100 } });
   await context.addInitScript((user) => {
-    localStorage.setItem('apple_business_access_token', 'synthetic-access');
-    localStorage.setItem('apple_business_current_user', JSON.stringify(user));
+    if (!sessionStorage.getItem('apple_business_auth_v2'))
+      sessionStorage.setItem(
+        'apple_business_auth_v2',
+        JSON.stringify({
+          schemaVersion: 2,
+          credentialId: 'online-fixture-' + user.id,
+          token: 'synthetic-access',
+          tokenRevision: 1,
+          updatedAt: Date.now(),
+          userCache: user
+        })
+      );
   }, administrator);
   const page = await context.newPage();
   lastPage = page;
+  observeFailureDiagnostics(page);
   const state = {
     actor: administrator,
     empty: false,
@@ -833,7 +902,10 @@ try {
   await navigate(page, '/v2/online-recharge/config');
   await providerSecret.fill('synthetic-config-before-identity');
   state.saveDelay = true;
-  state.saveDelayMs = 1800;
+  let releaseIdentitySave;
+  state.configSaveGate = new Promise((done) => {
+    releaseIdentitySave = done;
+  });
   const configCompletedBeforeIdentity = Number(state.configCompleted ?? 0);
   await Promise.all([
     page.waitForRequest(
@@ -841,19 +913,16 @@ try {
     ),
     page.getByRole('button', { name: '保存配置', exact: true }).click()
   ]);
-  state.actor = {
+  await switchFixtureIdentity(page, state, {
     ...administrator,
     id: 'online-fixture-admin-second',
     username: 'fixture-admin-second'
-  };
-  await page.evaluate(async () => {
-    const { sessionCoordinator } = await import('/src/auth/sessionCoordinator.ts');
-    sessionCoordinator.clearLocalSession();
-    await sessionCoordinator.login('fixture', 'synthetic');
   });
   await navigate(page, '/v2/online-recharge/config');
   assert.equal(await providerSecret.inputValue(), '', '身份变化未清空配置密钥');
   await providerSecret.fill('synthetic-config-new-identity');
+  releaseIdentitySave();
+  state.configSaveGate = null;
   await wait(async () => state.configCompleted > configCompletedBeforeIdentity);
   await page.waitForTimeout(150);
   assert.equal(
@@ -871,12 +940,7 @@ try {
     result: 'PASS'
   });
   state.saveDelay = false;
-  state.actor = administrator;
-  await page.evaluate(async () => {
-    const { sessionCoordinator } = await import('/src/auth/sessionCoordinator.ts');
-    sessionCoordinator.clearLocalSession();
-    await sessionCoordinator.login('fixture', 'synthetic');
-  });
+  await switchFixtureIdentity(page, state, administrator);
   await navigate(page, '/online-recharge');
   const privateSession = JSON.stringify({ accessToken: 'synthetic-private-session' });
   await page.getByPlaceholder('输入兑换码').fill('SYNTHETIC-CODE');
@@ -908,13 +972,28 @@ try {
     result: 'PASS'
   });
   await page.locator('textarea').fill(privateSession);
-  state.actor = reader;
-  await page.evaluate(async () => {
-    const { sessionCoordinator } = await import('/src/auth/sessionCoordinator.ts');
-    sessionCoordinator.clearLocalSession();
-    window.__onlineFixtureLogin = sessionCoordinator.login('fixture', 'synthetic');
-    await window.__onlineFixtureLogin;
+  const publicUrl = page.url();
+  const popup = page.waitForEvent('popup');
+  await page.evaluate(() => {
+    window.open('/v2/dashboard', 'online-fixture-identity');
   });
+  const identityPage = await popup;
+  lastPage = identityPage;
+  observeFailureDiagnostics(identityPage);
+  try {
+    await identityPage.getByRole('button', { name: '打开账户菜单', exact: true }).waitFor();
+    assert.equal(
+      await page.locator('textarea').inputValue(),
+      privateSession,
+      '辅助标签页清除了原公开输入'
+    );
+    await switchFixtureIdentity(identityPage, state, reader);
+    await wait(async () => (await page.locator('textarea').inputValue()) === '');
+    assert.equal(page.url(), publicUrl, '身份切换导航离开了原公开页面');
+  } finally {
+    await identityPage.close();
+    lastPage = page;
+  }
   assert.equal(await page.locator('textarea').inputValue(), '', '同页身份变化未清 Session');
   assert.equal(
     await page.getByPlaceholder('输入兑换码').inputValue(),
@@ -930,22 +1009,10 @@ try {
     case: 'public-same-page-identity-clears-session-task-capability',
     result: 'PASS'
   });
-  state.actor = administrator;
-  await page.evaluate(async () => {
-    const { sessionCoordinator } = await import('/src/auth/sessionCoordinator.ts');
-    sessionCoordinator.clearLocalSession();
-    window.__onlineFixtureLogin = sessionCoordinator.login('fixture', 'synthetic');
-    await window.__onlineFixtureLogin;
-  });
+  await switchFixtureIdentity(page, state, administrator);
   await navigate(page, '/v2/online-recharge/addresses');
   await page.getByPlaceholder('搜索当前清单').fill('身份草稿');
-  state.actor = employee;
-  await page.evaluate(async () => {
-    const { sessionCoordinator } = await import('/src/auth/sessionCoordinator.ts');
-    sessionCoordinator.clearLocalSession();
-    window.__onlineFixtureLogin = sessionCoordinator.login('fixture', 'synthetic');
-    await window.__onlineFixtureLogin;
-  });
+  await switchFixtureIdentity(page, state, employee);
   await page.evaluate(async () => {
     await document
       .querySelector('#app')
@@ -959,25 +1026,14 @@ try {
     await router.push('/v2/online-recharge/cards');
   });
   assert.ok(!page.url().includes('/v2/online-recharge/cards'), '导航权限守卫未拦截员工');
-  state.actor = administrator;
-  await page.evaluate(async () => {
-    const { sessionCoordinator } = await import('/src/auth/sessionCoordinator.ts');
-    window.__onlineFixtureLogin = sessionCoordinator.login('fixture', 'synthetic');
-    await window.__onlineFixtureLogin;
-  });
+  await switchFixtureIdentity(page, state, administrator);
   await navigate(page, '/v2/online-recharge/addresses');
   assert.equal(await page.getByPlaceholder('搜索当前清单').inputValue(), '', '身份变更未清除草稿');
   report.lifecycle.push({
     case: 'ordinary-employee-denied-identity-clears-drafts',
     result: 'PASS'
   });
-  state.actor = reader;
-  await page.evaluate(async () => {
-    const { sessionCoordinator } = await import('/src/auth/sessionCoordinator.ts');
-    sessionCoordinator.clearLocalSession();
-    window.__onlineFixtureLogin = sessionCoordinator.login('fixture', 'synthetic');
-    await window.__onlineFixtureLogin;
-  });
+  await switchFixtureIdentity(page, state, reader);
   await navigate(page, '/v2/online-recharge/jobs');
   assert.equal(await page.getByRole('button', { name: '管理员代提交', exact: true }).count(), 0);
   assert.equal(await page.getByRole('menuitem', { name: '核对原单', exact: true }).count(), 0);
@@ -1017,19 +1073,30 @@ try {
     })
   );
 } catch (error) {
+  const diagnostic = {
+    message: error.message,
+    url: lastPage && !lastPage.isClosed() ? lastPage.url() : null,
+    pageerrors: pageErrors.slice(-20),
+    body:
+      lastPage && !lastPage.isClosed()
+        ? (
+            await lastPage
+              .locator('body')
+              .innerText({ timeout: 3000 })
+              .catch(() => '')
+          ).slice(0, 1500)
+        : '',
+    requestfailed: requestFailures.slice(-20),
+    cases: report.cases.length,
+    lifecycle: report.lifecycle
+  };
+  console.log('ONLINE_RECHARGE_UI_FAILURE ' + JSON.stringify(diagnostic));
   if (lastPage && !lastPage.isClosed()) {
     await lastPage
       .screenshot({ path: resolve(evidence, 'failure.png'), fullPage: true })
       .catch(() => {});
   }
-  writeFileSync(
-    resolve(evidence, 'failure.json'),
-    JSON.stringify(
-      { message: error.message, cases: report.cases.length, lifecycle: report.lifecycle },
-      null,
-      2
-    )
-  );
+  writeFileSync(resolve(evidence, 'failure.json'), JSON.stringify(diagnostic, null, 2));
   throw error;
 } finally {
   await browser?.close();

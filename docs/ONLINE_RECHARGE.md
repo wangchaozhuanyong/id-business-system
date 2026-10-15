@@ -149,3 +149,9 @@
 `mysql-acceptance.json`、`source-verification.json`、`local-verification.json`，以及
 `ui/full-matrix.json`、`ui/affected-matrix.json`、`ui/result.json`、`ui/frontend-validation.json`。
 保留的是本地验证证据，不代表已部署或发生实际充值。
+
+## 只读调试终点名称兼容（2026-10-15）
+
+实际官网付款页的最终按钮为“Upgrade to Pro”，旧调试识别仅匹配四种名称而等待满 60 秒。仅在 `upstream/index.js` 的只读终点检测中增加该精确名称，保留原四种名称、60 秒超时、Checkout 页面验证和付款前停止边界；不修改真实提交、卡池或付款流程。来源清单保留固定上游与原始摘要，只更新适配摘要并登记离线测试。
+
+`engine/test/debug-checkout.test.cjs` 使用虚构页面与假时钟提取实际 helper：原四名、新名称及无匹配超时共 6 项通过，点击和填写调用均为 0。旧代码反例仅“Upgrade to Pro”失败。上述为离线检查，实际原单历史不改写，实际部署与在线验收结果以本次运行回执为准。

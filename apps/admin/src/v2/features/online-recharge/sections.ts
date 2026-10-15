@@ -1,4 +1,4 @@
-import type { OnlineAction, OnlineField, OnlineRow, OnlineSection } from './contracts';
+import type { OnlineAction, OnlineField, OnlineQuery, OnlineRow, OnlineSection } from './contracts';
 import { planOptions } from './labels';
 const plan: OnlineField = {
   key: 'plan',
@@ -306,4 +306,11 @@ export function initialFields(fields: readonly OnlineField[] = []) {
         field.initial ?? (field.type === 'switch' ? false : field.type === 'number' ? 1 : '')
       ])
   );
+}
+
+export function onlineActionPayload(filters: OnlineQuery, values: Record<string, unknown>) {
+  const selectedFilters = Object.fromEntries(
+    Object.entries(filters).filter(([, value]) => value !== '' && value != null)
+  );
+  return { ...selectedFilters, ...values };
 }
