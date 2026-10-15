@@ -1,6 +1,6 @@
 <template>
   <section v-if="canRead" class="v2-page-layout online-page">
-    <V2PageContext description="按原逻辑生成支付链接，浏览器执行到付款前停止，不填写或提交银行卡。"
+    <V2PageContext description="核对首次开通或升级的官网付款页面，执行到付款前停止，不提交付款。"
       ><template #actions
         ><AppButton v-if="canManage" variant="primary" @click="open = true"
           >生成支付链接</AppButton
@@ -14,7 +14,7 @@
       @retry="query.refresh"
       ><section class="online-panel">
         <V2SectionHeading title="支付链接调试" />
-        <p>默认使用已保存的地区和原版套餐映射；调试抽屉允许按原接口指定本次套餐标识。</p>
+        <p>使用已保存的地区和官网套餐标识；已有订阅可能进入套餐升级弹窗，执行在最终付款前停止。</p>
         <dl class="online-status-grid">
           <dt>支付地区</dt>
           <dd>{{ regionName }}</dd>
@@ -65,7 +65,7 @@ import OnlineActionDrawer from './OnlineActionDrawer.vue';
 import OnlineResultDialog from './OnlineResultDialog.vue';
 import OnlineTaskProgress from './OnlineTaskProgress.vue';
 import { onlineApi } from './api';
-import { planOptions, regionOptions } from './labels';
+import { planHelp, planOptions, regionOptions } from './labels';
 import type { OnlineAction, PublicTask } from './contracts';
 import { useOnlineTask } from './useOnlineTask';
 import './online-recharge.css';
@@ -130,7 +130,8 @@ const action = computed<OnlineAction>(() => ({
       type: 'select',
       initial: 'plus',
       options: planOptions,
-      required: true
+      required: true,
+      help: planHelp
     },
     {
       key: 'region',
@@ -140,7 +141,11 @@ const action = computed<OnlineAction>(() => ({
       options: regionOptions,
       required: true
     },
-    { key: 'planName', label: '原版套餐标识', help: '留空使用已保存的原版套餐映射。' }
+    {
+      key: 'planName',
+      label: '官网套餐标识',
+      help: '留空使用已保存的映射；Pro 500 未配置时通过官网界面选择，无法准确识别则停止。'
+    }
   ]
 }));
 function onSaved(value: Record<string, unknown>) {

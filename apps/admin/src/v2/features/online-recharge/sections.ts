@@ -1,12 +1,13 @@
 import type { OnlineAction, OnlineField, OnlineQuery, OnlineRow, OnlineSection } from './contracts';
-import { planOptions } from './labels';
+import { planHelp, planOptions } from './labels';
 const plan: OnlineField = {
   key: 'plan',
   label: '套餐',
   type: 'select',
   options: planOptions,
   initial: 'plus',
-  required: true
+  required: true,
+  help: planHelp
 };
 const count: OnlineField = {
   key: 'count',
@@ -80,7 +81,7 @@ export const sectionDescriptions: Record<OnlineSection, string> = {
   cdks: '生成、导入、出库和查询兑换码；已被任务占用的兑换码受保护。',
   sessions: '查看任务会话资料和订阅情况，查看敏感资料需要填写原因并记录审计。',
   renewal: '查询订阅到期和续费状态，按原逻辑取消或恢复自动续费。',
-  jobs: '提交会话资料执行原充值流程，查看进度、结果、日志及执行文件。',
+  jobs: '按目标套餐自动识别首次开通或升级，查看进度、官网应付、原单核对及执行文件。',
   automation: '查看实际自动化任务及执行阶段；待核对任务不能重复发起付款。',
   billing: '查看独立线上代充账单，筛选金额、币种和卡片消费并导出。',
   'runtime-logs': '查询执行器脱敏日志，查看阶段、消息和记录时间。',

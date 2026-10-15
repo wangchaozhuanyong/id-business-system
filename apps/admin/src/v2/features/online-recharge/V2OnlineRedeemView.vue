@@ -1,6 +1,8 @@
 <template>
   <section v-if="canRead" class="v2-page-layout online-page">
-    <V2PageContext description="使用兑换码和账号会话资料提交内部充值任务，充值套餐由兑换码决定。" />
+    <V2PageContext
+      description="使用兑换码和账号会话资料提交内部充值任务，目标套餐由兑换码决定，自动核对首次开通或升级。"
+    />
     <V2AsyncRegion
       :phase="config.phase.value"
       :error="config.error.value ? onlineError(config.error.value) : ''"
@@ -12,7 +14,7 @@
         <p v-if="config.data.value?.maintenanceMode || config.data.value?.available === false">
           当前暂停接收新任务，仍可查询已有兑换结果。
         </p>
-        <p v-else>先验证兑换码，再提交完整会话资料。兑换套餐由兑换码决定。</p>
+        <p v-else>先验证兑换码，再提交完整会话资料。同档、降档或当前套餐不明时停止执行。</p>
         <p>
           当前任务 {{ config.data.value?.activeJobs ?? 0 }}／{{
             config.data.value?.capacity ?? 0
@@ -43,7 +45,7 @@
                 >会话资料仅用于对应兑换任务；刷新页面后清除，请勿提交密码或银行卡信息。</small
               >
             </div></el-form-item
-          ><el-form-item label="充值套餐"
+          ><el-form-item label="目标套餐"
             ><span>{{
               verified ? onlineLabel(verified.plan) : '验证兑换码后显示'
             }}</span></el-form-item
