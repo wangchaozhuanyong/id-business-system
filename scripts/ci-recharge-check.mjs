@@ -1,4 +1,4 @@
-import { isSharedProxyPoolOnly } from './ci-shared-proxy-scope.mjs';
+import { isSharedProxyPoolOnly, sharedProxyAdminCommand } from './ci-shared-proxy-scope.mjs';
 import { execFileSync } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
@@ -820,7 +820,8 @@ if (releaseArtifactOnly && ['guards', 'release-controls'].includes(part)) {
   onlineBackupSourceRecoveryControls();
   backupRetentionProtectionControls();
 } else if (part === 'admin') {
-  for (const args of adminCheckCommands(mode, changed)) npm(...args);
+  for (const args of adminCheckCommands(mode, changed))
+    npm(...(sharedPoolOnly ? sharedProxyAdminCommand(args) : args));
 } else if (part === 'api') {
   npm('run', 'prisma:mysql:generate');
   npm('run', 'prisma:mysql:validate');

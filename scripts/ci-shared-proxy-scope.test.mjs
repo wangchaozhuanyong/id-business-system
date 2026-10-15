@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import {
   sharedProxyPullRequestBase,
+  sharedProxyAdminCommand,
   isSharedProxyPoolPaths,
   isSharedProxyPoolOnly,
   sharedProxyMigration
@@ -85,4 +86,23 @@ test('stale PR event base uses the verified actual merge parent only for the sha
     { after: after + '\nmodel Unrelated {}' }
   ])
     assert.equal(sharedProxyPullRequestBase({ ...input, ...override }), input.requestedBase);
+});
+
+test('shared-pool UI keeps responsive pool, guards and recharge checks while scoping unchanged pages', () => {
+  assert.deepEqual(sharedProxyAdminCommand(['run', 'acceptance:v2-online-recharge-ui']), [
+    'run',
+    'acceptance:v2-online-recharge-ui',
+    '--',
+    '--quick'
+  ]);
+  assert.deepEqual(
+    sharedProxyAdminCommand(['exec', '--', 'node', 'scripts/acceptance-v2-filter-layout.mjs']),
+    ['exec', '--', 'node', 'scripts/acceptance-v2-filter-layout.mjs', '--real-toolbar-only']
+  );
+  for (const args of [
+    ['run', 'check:v2-loading-standard'],
+    ['exec', '--', 'node', 'scripts/acceptance-v2-recharge-proxies-ui.mjs'],
+    ['run', 'acceptance:v2-auto-recharge']
+  ])
+    assert.deepEqual(sharedProxyAdminCommand(args), args);
 });

@@ -122,3 +122,12 @@ export function sharedProxyPullRequestBase(input) {
     ? input.parents[0]
     : input.requestedBase;
 }
+
+// The shared page owns six-width acceptance; unchanged online pages need their
+// compatibility and lifecycle checks, and the moved toolbars need their own routes.
+export function sharedProxyAdminCommand(args) {
+  if (args.includes('acceptance:v2-online-recharge-ui')) return [...args, '--', '--quick'];
+  if (args.includes('scripts/acceptance-v2-filter-layout.mjs'))
+    return [...args, '--real-toolbar-only'];
+  return args;
+}

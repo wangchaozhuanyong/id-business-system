@@ -1,27 +1,58 @@
 /* global document, window, getComputedStyle */
 // 完全合成夹具；禁止连接真实服务、账号、供应商或支付页面。
 import assert from 'node:assert/strict';
-import { spawn } from 'node:child_process';
-import { mkdirSync, writeFileSync } from 'node:fs';
+import {
+  appendFileSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  writeFileSync
+} from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { resolve } from 'node:path';
 import { chromium } from 'playwright';
+import { createLogger, createServer } from 'vite';
 const root = fileURLToPath(new URL('..', import.meta.url));
 const evidence = resolve(root, '.runtime/online-recharge/ui');
 mkdirSync(evidence, { recursive: true });
 const origin = 'http://127.0.0.1:5409';
-const server = spawn(
-  process.execPath,
-  [
-    resolve(root, 'node_modules/vite/bin/vite.js'),
-    '--host',
-    '127.0.0.1',
-    '--port',
-    '5409',
-    '--strictPort'
-  ],
-  { cwd: resolve(root, 'apps/admin'), stdio: 'ignore' }
+Object.assign(process.env, {
+  VITE_API_BASE_URL: '/api',
+  VITE_V2_REALTIME_CHANGES_ENABLED: 'false'
+});
+const logger = createLogger('silent');
+for (const level of ['info', 'warn', 'warnOnce', 'error']) {
+  logger[level] = (message) =>
+    appendFileSync(resolve(evidence, 'vite.log'), `[${level}] ${message}\n`);
+}
+const elementComponents = resolve(
+  fileURLToPath(new URL('.', import.meta.resolve('element-plus/package.json'))),
+  'es/components'
 );
+const styles = readdirSync(elementComponents)
+  .filter((name) => existsSync(resolve(elementComponents, name, 'style/css.mjs')))
+  .map((name) => `element-plus/es/components/${name}/style/css`);
+const server = await createServer({
+  root: resolve(root, 'apps/admin'),
+  configFile: resolve(root, 'apps/admin/vite.config.ts'),
+  cacheDir: mkdtempSync(resolve(evidence, 'vite-cache-')),
+  customLogger: logger,
+  optimizeDeps: {
+    entries: ['*.html'],
+    include: ['element-plus/es', ...styles],
+    holdUntilCrawlEnd: false
+  },
+  server: { host: '127.0.0.1', port: 5409, strictPort: true }
+});
+await server.listen();
+const optimizer = server.environments.client.depsOptimizer;
+assert.ok(optimizer, '验收必须启用依赖预优化');
+await optimizer.scanProcessing;
+await Promise.all(
+  Object.values(optimizer.metadata.discovered).map((dependency) => dependency.processing)
+);
+assert.ok(Object.keys(optimizer.metadata.optimized).length > 0, '浏览器启动前完成依赖预优化');
 const sections = process.argv.includes('--affected')
   ? ['config', 'addresses', 'cdks']
   : [
@@ -1032,5 +1063,5 @@ try {
   throw error;
 } finally {
   await browser?.close();
-  server.kill('SIGTERM');
+  await server.close();
 }
