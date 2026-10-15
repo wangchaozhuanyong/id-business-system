@@ -72,7 +72,7 @@ export function validateRechargeBitBrowserStart(value: unknown) {
       !input.billingName.trim() ||
       input.billingName.length > 120)
   )
-    throw new BadRequestException('银行卡或持卡人姓名格式无效');
+    throw new BadRequestException('银行卡或账单姓名格式无效');
   const windowName = String(input.windowName ?? '').trim();
   if (!windowName || windowName.length > 80 || hasControlCharacter(windowName)) {
     throw new BadRequestException('比特浏览器窗口名称格式无效');

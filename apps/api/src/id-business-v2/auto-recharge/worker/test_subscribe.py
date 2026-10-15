@@ -274,6 +274,35 @@ class CoreTests(unittest.TestCase):
     def test_conflicting_quote_not_accepted(self):
         self.assertIsNone(quote_from_text("Plus\nDue today USD 20.00\nDue today USD 22.00")["today"])
 
+    def test_official_vat_receipts_read_displayed_money_inline_and_on_next_line(self):
+        for total, tax, minor in (('6490.00', '695.36', 69536), ('32490.00', '3481.07', 348107)):
+            for separation in (' ', '\n'):
+                with self.subTest(total=total, separation=separation):
+                    text = (f'ChatGPT Pro\n月付订阅\nPHP {total}\n'
+                            f'增值税 (VAT) (12%){separation}PHP {tax}\n'
+                            f'今日应付金额\nPHP {total}\n将按 PHP {total}/月 收费。')
+                    quote = quote_from_text(text, 'PHP')
+                    self.assertEqual(quote['tax'], {'currency': 'PHP', 'amount': tax, 'amount_minor': minor})
+                    self.assertEqual(quote['tax_status'], 'displayed')
+                    self.assertEqual(quote['today']['amount'], total)
+                    self.assertEqual(quote['renewal']['amount'], total)
+
+    def test_vat_percentage_alone_and_unknown_tax_never_become_amount(self):
+        for tax in ('增值税 (VAT) (12%)', '增值税 (VAT) (12%) 未知\nPHP 3481.07',
+                    '增值税 (VAT) (12%) 待核实', '增值税 (VAT) (12%) 未知 PHP 3481.07',
+                    '增值税 (VAT) (12%) 待核实 PHP 3481.07'):
+            with self.subTest(tax=tax):
+                quote = quote_from_text(f'ChatGPT Pro\n{tax}\n今日应付金额\nPHP 32490.00', 'PHP')
+                self.assertIsNone(quote['tax'])
+
+    def test_duplicate_mixed_currency_or_multiple_vat_values_are_rejected(self):
+        for tax in ('增值税 (VAT) (12%) PHP 3481.07 USD 100.00',
+                    '增值税 (VAT) (12%) PHP 3481.07 PHP 3481.07',
+                    '增值税 (VAT) (12%) PHP 3481.07\n增值税 (VAT) (12%) PHP 3481.07',
+                    '增值税 (VAT) (12%) USD 3481.07'):
+            with self.subTest(tax=tax):
+                self.assertIsNone(quote_from_text(f'ChatGPT Pro\n{tax}\n今日应付金额\nPHP 32490.00', 'PHP')['tax'])
+
 
 class LedgerGuardTests(unittest.TestCase):
     def setUp(self):
