@@ -240,6 +240,33 @@ class RegistrationClosureControls(unittest.TestCase):
                 b.verify_engine_manifest(context)
 
 
+    def test_latest_native_production_artifact_matches_current_without_relabeling_old_test_build(self):
+        published, current = 'b' * 40, 'c' * 40
+        observed = {'runId': '2', 'runAttempt': 1, 'commit': current, 'artifactDigest': 'latest-digest',
+                    'workflowPath': '.github/workflows/recharge-checkout-validation.yml',
+                    'runtimeExactMatch': True, 'nodeEnv': 'production',
+                    'nativeAdminFileCount': 1, 'runtimeAdminFileCount': 1}
+        contract = {'expectedCurrent': current, 'adminBuildNodeEnv': 'production', 'baselineAdminFiles': {'index.html': 'hash'},
+                    'protectedPublishedRecovery': {'nativeRunId': '1', 'publicationCommit': published, 'nativeArtifactDigest': 'old-digest'},
+                    'observedAdminNativeBuild': observed}
+        responses = [
+            {'head_sha': published, 'conclusion': 'success', 'path': '.github/workflows/online-recharge-audit-validation.yml'},
+            {'artifacts': [{'digest': 'old-digest', 'expired': False, 'workflow_run': {'head_sha': published}}]},
+            {'head_sha': current, 'conclusion': 'success', 'run_attempt': 1, 'path': observed['workflowPath']},
+            {'artifacts': [{'digest': 'latest-digest', 'expired': False, 'name': 'recharge-checkout-' + current + '-1',
+                            'workflow_run': {'head_sha': current}}]}]
+        raw = [json.dumps(value).encode() for value in responses]
+        with patch.object(b.subprocess, 'check_output', side_effect=raw):
+            self.assertTrue(b.verify_published_native(contract)['verified'])
+        for field, value in [('runtimeExactMatch', False), ('workflowPath', '.github/workflows/online-recharge-audit-validation.yml'),
+                             ('nodeEnv', 'test'), ('runtimeAdminFileCount', 2)]:
+            invalid = copy.deepcopy(contract)
+            invalid['observedAdminNativeBuild'][field] = value
+            with patch.object(b.subprocess, 'check_output', side_effect=raw):
+                with self.assertRaisesRegex(RuntimeError, 'OBSERVED_ADMIN_NATIVE_CHANGED'):
+                    b.verify_published_native(invalid)
+
+
     def test_control_sources_keep_existing_frozen_channels_intact(self):
         release = (HERE / 'registration-closure-release.py').read_text()
         self.assertIn('acquire_release_lock', release)

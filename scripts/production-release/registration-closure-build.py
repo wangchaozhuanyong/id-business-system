@@ -117,10 +117,16 @@ def verify_published_native(contract):
     observed = contract['observedAdminNativeBuild']
     latest = json.loads(subprocess.check_output(['gh', 'api', prefix + 'actions/runs/' + observed['runId']], cwd=ROOT))
     latest_artifacts = json.loads(subprocess.check_output(['gh', 'api', prefix + 'actions/runs/' + observed['runId'] + '/artifacts'], cwd=ROOT))['artifacts']
-    need(latest['head_sha'] == observed['commit'] and latest['conclusion'] == 'success'
-         and latest['path'] == '.github/workflows/online-recharge-audit-validation.yml'
-         and any(a['digest'] == observed['artifactDigest'] and not a['expired'] for a in latest_artifacts)
-         and observed['runtimeExactMatch'] is False, 'OBSERVED_ADMIN_NATIVE_CHANGED')
+    latest_matches = [a for a in latest_artifacts if a['digest'] == observed['artifactDigest'] and not a['expired']
+                      and a['name'] == 'recharge-checkout-' + observed['commit'] + '-' + str(observed['runAttempt'])
+                      and a['workflow_run']['head_sha'] == observed['commit']]
+    need(latest['head_sha'] == observed['commit'] == contract['expectedCurrent']
+         and latest['conclusion'] == 'success' and latest['run_attempt'] == observed['runAttempt']
+         and latest['path'] == observed['workflowPath'] == '.github/workflows/recharge-checkout-validation.yml'
+         and len(latest_matches) == 1 and observed['runtimeExactMatch'] is True
+         and observed['nodeEnv'] == contract['adminBuildNodeEnv'] == 'production'
+         and observed['nativeAdminFileCount'] == observed['runtimeAdminFileCount'] == len(contract['baselineAdminFiles']),
+         'OBSERVED_ADMIN_NATIVE_CHANGED')
     return {'runId': protection['nativeRunId'], 'artifactDigest': protection['nativeArtifactDigest'], 'verified': True}
 
 
