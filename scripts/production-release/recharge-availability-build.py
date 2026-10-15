@@ -1,4 +1,5 @@
 """Reproduce published content, then build only the approved availability delta."""
+import ast
 import hashlib
 import importlib.util
 import io
@@ -6,6 +7,7 @@ import json
 import os
 from pathlib import Path
 import shutil
+import re
 import subprocess
 import sys
 import tarfile
@@ -93,6 +95,75 @@ def verify_published_admin(contract):
     return raw, receipt
 
 
+def verify_database_evidence(contract):
+    binding = contract['databaseValidationNative']
+    commit, run_id = binding['sourceCommit'], str(binding['runId'])
+    old_raw = git('show', commit + ':scripts/production-release/recharge-availability-contract.json')
+    old = json.loads(old_raw)
+    application = lambda c: {n: v for n, v in c['sources'].items() if n.startswith(('apps/', 'packages/'))}
+    need(old['sourceBaseline'] == contract['sourceBaseline'] and application(old) == application(contract)
+         and old['apiModules'] == contract['apiModules'], 'DATABASE_INPUTS_CHANGED')
+    path = '.github/workflows/recharge-availability-validation.yml'
+    workflow = git('show', commit + ':' + path)
+    current = (ROOT / path).read_bytes()
+    def commands(raw):
+        text = raw.decode()
+        start = text.index('      - name: Migrate only the disposable runner database\n')
+        end = text.index('      - name: Verify published provenance and build finite API and Admin artifacts\n')
+        return text[start:end].replace("        if: steps.database_evidence.outputs.reuse != 'true'\n", '')
+    def environment(raw):
+        text = raw.decode()
+        return text[text.index('    services:\n'):text.index('    steps:\n')]
+    need(digest(workflow) == binding['workflowSha256'] and commands(workflow) == commands(current)
+         and environment(workflow) == environment(current), 'DATABASE_COMMANDS_CHANGED')
+    previous_build = ast.parse(git('show', commit + ':scripts/production-release/recharge-availability-build.py'))
+    current_build = ast.parse(Path(__file__).read_bytes())
+    selected = {'prepare', 'verify_sources', 'helper', 'run', 'git'}
+    functions = lambda tree: {n.name: ast.dump(n) for n in tree.body if isinstance(n, ast.FunctionDef) and n.name in selected}
+    need(functions(previous_build) == functions(current_build)
+         and git('show', commit + ':scripts/production-release/recharge-record-build.py')
+             == Path(__file__).with_name('recharge-record-build.py').read_bytes(), 'DATABASE_PREPARATION_CHANGED')
+    native = platform_json('actions/runs/' + run_id)
+    need(native['head_sha'] == commit and native['head_branch'] == 'main' and native['status'] == 'completed'
+         and native['event'] == 'workflow_dispatch' and native['path'] == path and native['run_attempt'] == 1,
+         'DATABASE_RUN_CHANGED')
+    jobs = platform_json('actions/runs/' + run_id + '/attempts/1/jobs')['jobs']
+    validators = [j for j in jobs if j['name'] == 'validate']
+    required = {'Migrate only the disposable runner database',
+                'Verify availability queries, locking, idempotency and audit rollback in isolated MySQL'}
+    need(len(validators) == 1 and validators[0]['conclusion'] == 'success'
+         and required <= {s['name'] for s in validators[0]['steps'] if s['conclusion'] == 'success'},
+         'DATABASE_VALIDATION_NOT_SUCCESSFUL')
+    artifacts = platform_json('actions/runs/' + run_id + '/artifacts')['artifacts']
+    matches = [a for a in artifacts if a['id'] == binding['artifactId']]
+    need(len(matches) == 1 and matches[0]['name'] == binding['artifactName']
+         and not matches[0]['expired'] and matches[0]['digest'] == binding['artifactDigest'], 'DATABASE_ARTIFACT_CHANGED')
+    raw = platform_bytes('actions/artifacts/' + str(binding['artifactId']) + '/zip')
+    need('sha256:' + digest(raw) == binding['artifactDigest'], 'DATABASE_ARTIFACT_DIGEST_CHANGED')
+    with zipfile.ZipFile(io.BytesIO(raw)) as archive:
+        bundle = archive.read('recharge-availability-artifact.tar.gz')
+        need(digest(bundle) == archive.read('artifact-sha256.txt').decode().strip(), 'DATABASE_BUNDLE_CHANGED')
+    with tarfile.open(fileobj=io.BytesIO(bundle)) as archive:
+        proof = json.loads(archive.extractfile('payload/build-proof.json').read())
+        need(proof['commit'] == commit and proof['workflowRunId'] == run_id and proof['workflowRunAttempt'] == '1'
+             and proof['tree'] == git('rev-parse', commit + '^{tree}').decode().strip()
+             and proof['contractSha256'] == digest(old_raw), 'DATABASE_BUILD_IDENTITY_CHANGED')
+        for name, expected in old['sources'].items():
+            need(digest(archive.extractfile('payload/source/' + name).read()) == expected, 'DATABASE_TESTED_SOURCE_CHANGED')
+    log = re.sub(rb'\x1b\[[0-9;]*m', b'', platform_bytes('actions/jobs/' + str(validators[0]['id']) + '/logs'))
+    need(b'7 passed' in log and b'25 passed' in log, 'DATABASE_TEST_COUNTS_CHANGED')
+    return {**binding, 'verified': True, 'reused': True, 'testsPassed': 32}
+
+
+def database_evidence():
+    contract = json.loads(CONTRACT.read_bytes())
+    proof = verify_database_evidence(contract)
+    (OUTPUT / 'database-evidence.json').write_text(json.dumps(proof, sort_keys=True, indent=2) + '\n')
+    with Path(os.environ['GITHUB_OUTPUT']).open('a') as output:
+        output.write('reuse=true\n')
+    print(json.dumps(proof, sort_keys=True))
+
+
 def verify_sources(contract):
     need(not git('status', '--porcelain', '--untracked-files=no').strip(), 'SOURCE_DIRTY')
     changed = set(git('diff', '--name-only', contract['reviewBase'], 'HEAD', '--', 'apps/', 'packages/').decode().splitlines())
@@ -173,6 +244,7 @@ def build():
              'releaseUtilitySha256': digest(Path(__file__).with_name('remote-deploy.py').read_bytes()),
              'helperSha256': digest(Path(__file__).with_name('recharge-record-release.py').read_bytes()),
              'baselineApiReproduced': True, 'baselineAdminArtifactVerified': True,
+             'databaseVerification': json.loads((OUTPUT / 'database-evidence.json').read_bytes()),
              'baselineAdminVerification': admin_verification, 'files': inventory(payload),
              'apiModules': {name: after[name] for name in sorted(permitted)},
              'adminFiles': inventory(candidate / 'apps/admin/dist'), 'updatedServices': ['api', 'admin'],
@@ -186,4 +258,4 @@ def build():
 
 
 if __name__ == '__main__':
-    {'prepare': prepare, 'build': build}[sys.argv[1]]()
+    {'prepare': prepare, 'build': build, 'database-evidence': database_evidence}[sys.argv[1]]()

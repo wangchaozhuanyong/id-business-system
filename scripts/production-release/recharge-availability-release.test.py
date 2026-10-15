@@ -5,6 +5,7 @@ import zipfile
 import json
 from pathlib import Path
 import tempfile
+import tarfile
 import unittest
 from unittest.mock import Mock, patch
 
@@ -23,6 +24,72 @@ build = load('availability_test_build', 'recharge-availability-build.py')
 
 
 class AvailabilityPublicationTests(unittest.TestCase):
+    def test_database_reuse_requires_native_success_and_identical_source_commands_environment_and_artifact(self):
+        name='apps/api/src/id-business-v2/auto-recharge/recharge-availability.ts'
+        content=(build.ROOT/name).read_bytes()
+        old={'sourceBaseline':'b'*40,'sources':{name:build.digest(content)},'apiModules':{'fixture.js':None}}
+        old_raw=json.dumps(old).encode()
+        path='.github/workflows/recharge-availability-validation.yml'
+        workflow=(build.ROOT/path).read_bytes()
+        proof={'commit':'c'*40,'tree':'e'*40,'workflowRunId':'9','workflowRunAttempt':'1','contractSha256':build.digest(old_raw)}
+        def bundle(source=content):
+            tar=io.BytesIO()
+            with tarfile.open(fileobj=tar,mode='w:gz') as archive:
+                for n,raw in [('payload/build-proof.json',json.dumps(proof).encode()),('payload/source/'+name,source)]:
+                    item=tarfile.TarInfo(n);item.size=len(raw);archive.addfile(item,io.BytesIO(raw))
+            data=tar.getvalue();zipped=io.BytesIO()
+            with zipfile.ZipFile(zipped,'w') as archive:
+                archive.writestr('recharge-availability-artifact.tar.gz',data)
+                archive.writestr('artifact-sha256.txt',build.digest(data))
+            return zipped.getvalue()
+        raw=bundle()
+        binding={'sourceCommit':'c'*40,'runId':9,'workflowSha256':build.digest(workflow),'artifactId':7,
+                 'artifactName':'original-validated-source','artifactDigest':'sha256:'+build.digest(raw)}
+        contract={**old,'databaseValidationNative':binding}
+        native={'head_sha':'c'*40,'head_branch':'main','status':'completed','event':'workflow_dispatch','path':path,'run_attempt':1}
+        jobs={'jobs':[{'name':'validate','id':8,'conclusion':'success','steps':[
+            {'name':'Migrate only the disposable runner database','conclusion':'success'},
+            {'name':'Verify availability queries, locking, idempotency and audit rollback in isolated MySQL','conclusion':'success'}]}]}
+        artifact={'artifacts':[{'id':7,'name':binding['artifactName'],'expired':False,'digest':binding['artifactDigest']}]}
+        def git(*args):
+            if args[0]=='rev-parse':return ('e'*40).encode()
+            suffix=args[1].split(':',1)[1]
+            if suffix.endswith('contract.json'):return old_raw
+            if suffix==path:return workflow
+            return (build.ROOT/suffix).read_bytes()
+        def verify(c=contract,n=native,j=jobs,a=artifact,z=raw,log=b'7 passed\n25 passed',g=git):
+            with patch.object(build,'git',side_effect=g),patch.object(build,'platform_json',side_effect=[n,j,a]),patch.object(build,'platform_bytes',side_effect=[z,log]):
+                return build.verify_database_evidence(c)
+        self.assertEqual(verify()['testsPassed'],32)
+        for changed in [{**contract,'sourceBaseline':'f'*40},{**contract,'sources':{name:'0'*64}}]:
+            with self.assertRaisesRegex(RuntimeError,'DATABASE_INPUTS_CHANGED'):verify(c=changed)
+        with self.assertRaisesRegex(RuntimeError,'DATABASE_COMMANDS_CHANGED'):
+            verify(c={**contract,'databaseValidationNative':{**binding,'workflowSha256':'0'*64}})
+        for previous in [workflow.replace(b'MYSQL_ROOT_HOST: \'%\'',b'MYSQL_ROOT_HOST: localhost'),
+                         workflow.replace(b'run: npm run prisma:mysql:migrate:deploy',b'run: npm run different-migration')]:
+            self.assertNotEqual(previous,workflow)
+            def previous_workflow(*args):
+                return previous if args[0]=='show' and args[1].endswith(':'+path) else git(*args)
+            with self.assertRaisesRegex(RuntimeError,'DATABASE_COMMANDS_CHANGED'):
+                verify(c={**contract,'databaseValidationNative':{**binding,'workflowSha256':build.digest(previous)}},g=previous_workflow)
+        def changed_preparation(*args):
+            value=git(*args)
+            if args[0]=='show' and args[1].endswith(':scripts/production-release/recharge-availability-build.py'):
+                value=value.replace(b"run('npm', 'ci', '--no-audit'",b"run('npm', 'install', '--no-audit'")
+            return value
+        with self.assertRaisesRegex(RuntimeError,'DATABASE_PREPARATION_CHANGED'):verify(g=changed_preparation)
+        with self.assertRaisesRegex(RuntimeError,'DATABASE_RUN_CHANGED'):verify(n={**native,'head_sha':'f'*40})
+        failed=copy.deepcopy(jobs);failed['jobs'][0]['conclusion']='failure'
+        with self.assertRaisesRegex(RuntimeError,'DATABASE_VALIDATION_NOT_SUCCESSFUL'):verify(j=failed)
+        skipped=copy.deepcopy(jobs);skipped['jobs'][0]['steps'][1]['conclusion']='skipped'
+        with self.assertRaisesRegex(RuntimeError,'DATABASE_VALIDATION_NOT_SUCCESSFUL'):verify(j=skipped)
+        with self.assertRaisesRegex(RuntimeError,'DATABASE_ARTIFACT_DIGEST_CHANGED'):verify(z=raw+b'changed')
+        changed_raw=bundle(b'changed-source'); changed_binding={**binding,'artifactDigest':'sha256:'+build.digest(changed_raw)}
+        changed_artifact=copy.deepcopy(artifact);changed_artifact['artifacts'][0]['digest']=changed_binding['artifactDigest']
+        with self.assertRaisesRegex(RuntimeError,'DATABASE_TESTED_SOURCE_CHANGED'):
+            verify(c={**contract,'databaseValidationNative':changed_binding},a=changed_artifact,z=changed_raw)
+        with self.assertRaisesRegex(RuntimeError,'DATABASE_TEST_COUNTS_CHANGED'):verify(log=b'7 skipped\n25 passed')
+
     def test_original_native_admin_evidence_requires_exact_run_commands_artifact_and_live_bytes(self):
         workflow=b'synthetic-reviewed-workflow'
         content=b'synthetic-published-index'
@@ -153,10 +220,12 @@ class AvailabilityPublicationTests(unittest.TestCase):
         contract = {'scope': 'RECHARGE_PAYMENT_AVAILABILITY_ONLY', 'apiModules': {api: None},
                     'sources': {source: files['source/' + source]},
                     'publicFiles':{n.removeprefix('admin/html/'):v for n,v in files.items() if n.startswith('admin/html/')},
-                    'publishedAdminNative':{'artifactDigest':'sha256:'+files['baseline-admin-native.zip']}}
+                    'publishedAdminNative':{'artifactDigest':'sha256:'+files['baseline-admin-native.zip']},
+                    'databaseValidationNative':{'runId':9,'sourceCommit':'c'*40}}
         plan = {'commit': 'a' * 40, 'tree': 'b' * 40, 'workflowRunId': '1', 'workflowRunAttempt': '1', 'contractSha256': 'c' * 64}
         proof = {'version': 1, 'scope': contract['scope'], **plan, 'baselineApiReproduced': True,
                  'baselineAdminArtifactVerified': True,
+                 'databaseVerification':{**contract['databaseValidationNative'],'verified':True,'reused':True,'testsPassed':32},
                  'baselineAdminVerification':{**contract['publishedAdminNative'],'verified':True,'publicInventorySha256':build.digest(json.dumps(contract['publicFiles'],sort_keys=True,separators=(',',':')).encode())}, 'updatedServices': ['api', 'admin'], 'migrationPerformed': False,
                  'businessActions': 0, 'files': files,
                  'apiModules': {n.removeprefix('api/modules/'): v for n, v in files.items() if n.startswith('api/modules/')},
@@ -172,7 +241,7 @@ class AvailabilityPublicationTests(unittest.TestCase):
             helper = Mock(file_inventory=build.inventory)
             self.assertEqual(release.validate_proof(proof, plan, contract, root, helper), proof)
             for field, value in [('commit', 'd' * 40), ('tree', 'e' * 40), ('workflowRunId', '2'),
-                                 ('baselineApiReproduced', False), ('baselineAdminArtifactVerified', False),
+                                 ('baselineApiReproduced', False), ('baselineAdminArtifactVerified', False), ('databaseVerification', {}),
                                  ('businessActions', 1), ('migrationPerformed', True), ('updatedServices', ['api', 'online-recharge'])]:
                 with self.subTest(field=field):
                     changed = {**proof, field: value}
