@@ -16,6 +16,7 @@ export const rechargeAvailabilityControlPaths = Object.freeze([
   'scripts/ci-recharge-availability.test.mjs'
 ]);
 const rechargeAvailabilityApplicationPaths = new Set([
+  'apps/api/src/id-business-v2/auto-recharge/recharge-callback-receipts.spec.ts',
   'apps/admin/src/v2/features/auto-recharge/RechargeHistoryDrawer.vue',
   'apps/admin/src/v2/features/auto-recharge/RechargePaymentReview.vue',
   'apps/admin/src/v2/features/auto-recharge/RechargeResult.vue',

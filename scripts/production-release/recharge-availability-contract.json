@@ -388,6 +388,7 @@
     "apps/api/src/id-business-v2/auto-recharge/recharge-availability.mysql.integration.spec.ts": "0a995eabb0efcb4c93b71fe74ed5936618d5307ad5fa8b835936fa24a957c268",
     "apps/api/src/id-business-v2/auto-recharge/recharge-availability.spec.ts": "f9439139ef9b5d40e204166c6a6f9a8371253b0defc7576d50ae10be1f2c4175",
     "apps/api/src/id-business-v2/auto-recharge/recharge-availability.ts": "a7228b289a5ac38d755e5fbf7b7580dc6bc2a1d54824dc91f72afdf71979aa09",
+    "apps/api/src/id-business-v2/auto-recharge/recharge-callback-receipts.spec.ts": "b9505b186c388807e2cbb4e9dc29c4d42328d64efee15d02dd2a0c0b24fc9f77",
     "apps/api/src/id-business-v2/auto-recharge/recharge-checkout-recovery.ts": "fa87f5d3a43536875f3658ba14ae678f9b125cfae5679b0e5e7f62fadfcd1c63",
     "apps/api/src/id-business-v2/auto-recharge/recharge-cycle-state.ts": "de83ee3c6a1ae2fb1b61e606397aa3fd3d46875bcf82d0b70152d7d221a9332b",
     "apps/api/src/id-business-v2/auto-recharge/recharge-declined-resolution.ts": "4c056beda81cf1fcd507299f44e925585f86958b2ac28f99e09f118e911127cb",
