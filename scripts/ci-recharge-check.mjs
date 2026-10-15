@@ -1002,8 +1002,10 @@ if (releaseArtifactOnly && ['guards', 'release-controls'].includes(part)) {
   execFileSync('python3', ['-m', 'playwright', 'install', 'chromium'], workerOptions);
   if (rechargeFlowRegression) {
     // Native checkout contracts execute the real API sanitizer in Node.
-    if (!existsSync(resolve('node_modules/typescript/package.json'))) npm('ci', '--no-audit');
-    npm('run', 'prisma:mysql:generate', '--workspace', '@apple-business/api');
+    if (!existsSync(resolve('node_modules/typescript/package.json')))
+      npm('ci', '--ignore-scripts', '--no-audit');
+    // These contracts load Prisma types/Decimal but never connect to a database.
+    npm('run', 'prisma:mysql:generate', '--workspace', '@apple-business/api', '--', '--no-engine');
     shared();
   }
   execFileSync(
