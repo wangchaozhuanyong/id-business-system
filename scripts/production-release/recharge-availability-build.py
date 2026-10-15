@@ -283,7 +283,8 @@ def shared_proxy_receipt(contract):
 
 
 def verify_shared_proxy_archive(raw, binding):
-    need(len(raw) <= 16*1024**2 and 'sha256:'+digest(raw) == binding['artifactDigest'],
+    need(len(raw) == binding['artifactBytes'] and len(raw) <= 16*1024**2
+         and 'sha256:'+digest(raw) == binding['artifactDigest'],
          'SHARED_PROXY_ARTIFACT_CHANGED')
     with zipfile.ZipFile(io.BytesIO(raw)) as archive:
         names = archive.namelist()
@@ -496,7 +497,8 @@ def build():
     (payload / 'baseline-admin-successor-quality-native.zip').write_bytes(successor_quality_zip)
     (payload / 'baseline-admin-ancestor-native.tar.gz').write_bytes(ancestor_raw)
     (payload / 'baseline-admin-ancestor-quality-native.zip').write_bytes(ancestor_quality_zip)
-    (payload / 'baseline-shared-proxy-native.zip').write_bytes(shared_proxy_raw)
+    for index, part in enumerate((shared_proxy_raw[:6*1024**2], shared_proxy_raw[6*1024**2:])):
+        (payload / ('baseline-shared-proxy-native.zip.part0'+str(index))).write_bytes(part)
     for name in sorted(permitted):
         path = payload / 'api/modules' / name
         path.parent.mkdir(parents=True, exist_ok=True)

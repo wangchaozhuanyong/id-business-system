@@ -26,6 +26,19 @@ dispatch = load('availability_test_dispatch', 'recharge-availability-dispatch.py
 
 
 class AvailabilityPublicationTests(unittest.TestCase):
+    def test_native_evidence_parts_keep_the_legacy_eight_mib_limit_and_reassemble_exact_platform_bytes(self):
+        base = build.ROOT / '.runtime/recharge-payment-availability-20261015'
+        with tempfile.TemporaryDirectory(dir=base) as directory:
+            root=Path(directory);raw=b'a'*(6*1024**2)+b'original platform archive tail'
+            binding={'artifactBytes':len(raw),'artifactDigest':'sha256:'+build.digest(raw)}
+            (root/'baseline-shared-proxy-native.zip.part00').write_bytes(raw[:6*1024**2])
+            second=root/'baseline-shared-proxy-native.zip.part01';second.write_bytes(raw[6*1024**2:])
+            self.assertEqual(release.shared_proxy_native_payload(root,binding),raw)
+            self.assertTrue(all(p.stat().st_size<=8*1024**2 for p in root.iterdir()))
+            second.write_bytes(b'changed evidence')
+            with self.assertRaisesRegex(RuntimeError,'SHARED_PROXY_PAYLOAD_CHANGED'):
+                release.shared_proxy_native_payload(root,binding)
+
     def test_admin_origin_uses_the_finalized_proxy_projection_and_rejects_older_or_changed_metadata(self):
         contract={'publishedAdminSuccessor':{'roleProjection':{'commit':'old'},'nativeOrigin':{'sha256':'original'}},
                   'publishedSharedProxy':{'runtimeProjection':{'commit':'published-proxy'}}}
@@ -87,7 +100,7 @@ class AvailabilityPublicationTests(unittest.TestCase):
                 archive.writestr('shared-proxy-release/publication-sha256.txt',build.digest(bundle))
             raw=zipped.getvalue()
             return raw,{'sourceCommit':'a'*40,'sourceTree':'b'*40,'runId':1,
-                        'artifactDigest':'sha256:'+build.digest(raw),'archiveBytes':len(bundle),
+                        'artifactDigest':'sha256:'+build.digest(raw),'artifactBytes':len(raw),'archiveBytes':len(bundle),
                         'archiveSha256':build.digest(bundle),'metadataSha256':build.digest(metadata_raw),
                         'publicFiles':public,'publicInventorySha256':build.digest(json.dumps(public,sort_keys=True,separators=(',',':')).encode())}
         raw,binding=fixture();build.verify_shared_proxy_archive(raw,binding)

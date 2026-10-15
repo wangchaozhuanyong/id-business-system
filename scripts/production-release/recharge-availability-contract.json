@@ -1124,7 +1124,7 @@
     "apps/api/src/id-business-v2/auto-recharge/worker/pay.py": "dfd5d5cc51e055798ac89cb4683743cdc2d9227ceec08497c3239f70f72a2b32",
     "apps/api/src/id-business-v2/auto-recharge/worker/subscription_cycle.py": "7f6c5dd05db4d72922965f83c88e61ab4c0d4b781933ab2cdaf0064904997019",
     "apps/api/src/id-business-v2/auto-recharge/worker/test_declined_resolution.py": "971b0e2da304314c86e30ccc70bdef749d21646effa4f4548765ea37747f254b",
-    "docs/AUTO_RECHARGE_PAYMENT_AVAILABILITY_20261015.md": "fbaf19d2f1fae8439d60f087072eb63a301c19b5516f7ecaed487a2c57a20753",
+    "docs/AUTO_RECHARGE_PAYMENT_AVAILABILITY_20261015.md": "52385bade9bb6daae590af0b501cd55832d2d374fa1cac1a5b167c1f29cf613d",
     "packages/shared/src/v2/auto-recharge.ts": "da6fbc0efb928d99848e3661043a3583af912692650a4264b7b8fe5a509397f6"
   },
   "version": 1,
@@ -1449,6 +1449,7 @@
       "runtimeImageId": "sha256:92c81aee1a919885b1e2aa6fb6a8b73b2eb41aa49f9b60c010f0df1989e5231d",
       "scope": "SHARED_PROXY_POOL_ACCOUNT_SETTINGS_ONLY",
       "sourceTree": "81f2b3be7c06a0c13226ca16d0dc929252748b23"
-    }
+    },
+    "artifactBytes": 11950683
   }
 }
