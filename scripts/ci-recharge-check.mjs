@@ -4,6 +4,7 @@ import { resolve } from 'node:path';
 import {
   adminCheckCommands,
   rechargeRecordControlPaths,
+  isRechargeRecordControlsOnly,
   releaseArtifactRetentionControls,
   isReleaseArtifactRetentionOnly,
   adminUiGuardChecks,
@@ -418,6 +419,13 @@ if (part === 'guards') {
     'scripts/ci-recharge-release.test.mjs',
     'scripts/admin-layout-rules.test.mjs'
   ]);
+}
+// The finite diagnostic controls have their own native tests above. The common
+// format, lint and CI-selector contracts have also run. Business source remains
+// subject to the formal workflow's immutable source and prior-validation proof.
+if (part === 'guards' && mode === 'ci-only' && isRechargeRecordControlsOnly(changed)) {
+  console.log('Finite recharge record controls verified; unrelated release controls unchanged');
+  process.exit(0);
 }
 const readonlyQualityMetadataOnly = () => {
   const source = 'scripts/production-release/online-recharge-component-readonly.py';
