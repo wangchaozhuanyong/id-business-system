@@ -983,6 +983,16 @@ export function rechargeAvailabilityGuardChecks(paths) {
   ];
 }
 
+export function rechargeAvailabilityCommonControlTests(paths) {
+  if (!isRechargeAvailabilityRepairOnly(paths) && !isRechargeAvailabilityControlsOnly(paths))
+    return undefined;
+  return [
+    'scripts/ci-recharge-scope.test.mjs',
+    'scripts/ci-recharge-check.test.mjs',
+    'scripts/ci-change-scope.test.mjs'
+  ];
+}
+
 export function adminCheckCommands(mode, paths) {
   const commands = [['run', 'build', '--workspace', '@apple-business/shared']];
   if (mode === 'mailbox') {

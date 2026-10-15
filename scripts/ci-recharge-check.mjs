@@ -7,6 +7,7 @@ import {
   rechargeAvailabilityControlPaths,
   isRechargeAvailabilityControlsOnly,
   rechargeAvailabilityGuardChecks,
+  rechargeAvailabilityCommonControlTests,
   isRechargeRecordControlsOnly,
   releaseArtifactRetentionControls,
   isReleaseArtifactRetentionOnly,
@@ -418,8 +419,7 @@ if (part === 'guards') {
   const linted = existing.filter((p) => /\.(?:mjs|ts|vue)$/.test(p));
   if (formatted.length) npm('exec', '--', 'prettier', '--check', ...formatted);
   if (linted.length) npm('exec', '--', 'eslint', ...linted);
-  run('node', [
-    '--test',
+  const commonControlTests = rechargeAvailabilityCommonControlTests(changed) ?? [
     'scripts/ci-recharge-scope.test.mjs',
     'scripts/ci-recharge-check.test.mjs',
     'scripts/check-cloud-independence.test.mjs',
@@ -429,7 +429,8 @@ if (part === 'guards') {
     'scripts/ci-change-scope.test.mjs',
     'scripts/ci-recharge-release.test.mjs',
     'scripts/admin-layout-rules.test.mjs'
-  ]);
+  ];
+  run('node', ['--test', ...commonControlTests]);
 }
 // The finite diagnostic controls have their own native tests above. The common
 // format, lint and CI-selector contracts have also run. Business source remains
