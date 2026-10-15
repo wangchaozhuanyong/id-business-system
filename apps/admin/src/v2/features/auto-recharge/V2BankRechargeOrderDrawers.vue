@@ -3,7 +3,13 @@
     <V2FormDrawer
       v-model="drawerOpen"
       retain-draft
-      :title="correcting ? '更正比特订单' : creating ? '手工录入比特订单' : '比特订单资料'"
+      :title="
+        correcting
+          ? `更正${channelLabel}`
+          : creating
+            ? `手工录入${channelLabel}`
+            : `${channelLabel}资料`
+      "
       :description="
         creating
           ? '先记录实际代付和付款凭据，再补客户、手续费、收款与到期时间。'
@@ -100,8 +106,8 @@
               maxlength="300"
               placeholder="说明资料或账务更正原因"
           /></el-form-item>
-          <template v-if="selected?.source === 'manual' && !readonly">
-            <el-form-item label="ChatGPT 套餐" required
+          <template v-if="(selected?.source === 'manual' || missingPaymentEvidence) && !readonly">
+            <el-form-item v-if="selected?.source === 'manual'" label="ChatGPT 套餐" required
               ><el-select v-model="form.plan" aria-label="ChatGPT 套餐"
                 ><el-option
                   v-for="item in bankRechargePlanOptions"
@@ -116,10 +122,7 @@
               ><el-select
                 v-model="form.chargeCurrencyCode"
                 aria-label="代付币种"
-                @change="
-                  form.chargeFxRateToCny = '';
-                  form.cardId = '';
-                "
+                @change="changeChargeCurrency"
                 ><el-option
                   v-for="item in activeCurrencies"
                   :key="item.code"
@@ -131,10 +134,24 @@
             /></el-form-item>
           </template>
           <el-form-item v-else label="代付金额"
-            ><span
-              >{{ selected?.chargeAmount }} {{ selected?.chargeCurrencyCode }}</span
-            ></el-form-item
+            ><span>{{
+              selected?.onlineSourceSnapshot?.zeroAmountChange
+                ? '零元套餐变更（未扣款）'
+                : selected?.chargeAmount != null && selected?.chargeCurrencyCode
+                  ? `${selected.chargeAmount} ${selected.chargeCurrencyCode}`
+                  : '金额或币种待核对'
+            }}</span></el-form-item
           >
+          <el-form-item
+            v-if="channel === 'online' && selected?.source === 'automatic' && !readonly"
+            label="实付凭据编号"
+          >
+            <el-input
+              v-model="form.paymentEvidenceRef"
+              maxlength="220"
+              placeholder="缺少付款凭据时填写本次银行卡流水或官网付款凭据编号"
+            />
+          </el-form-item>
           <el-form-item label="付款来源"
             ><span>{{
               selected?.source === 'automatic' ? '自动充值 · 官网已核验' : '手工录入'
@@ -181,7 +198,12 @@
               clearable
               filterable
               aria-label="银行卡"
-              :disabled="readonly"
+              :disabled="
+                readonly ||
+                (channel === 'online' &&
+                  selected?.source === 'automatic' &&
+                  Boolean(selected?.onlineRechargeCardId))
+              "
               ><el-option
                 v-for="item in availableCards"
                 :key="item.id"
@@ -300,7 +322,7 @@
             type="datetime"
             value-format="YYYY-MM-DDTHH:mm"
             placeholder="选择开通时间"
-            :disabled="readonly || selected?.source === 'automatic'"
+            :disabled="readonly || (selected?.source === 'automatic' && channel === 'bitbrowser')"
         /></el-form-item>
         <el-form-item label="到期时间"
           ><el-date-picker
@@ -308,7 +330,7 @@
             type="datetime"
             value-format="YYYY-MM-DDTHH:mm"
             placeholder="选择到期时间"
-            :disabled="readonly || selected?.source === 'automatic'"
+            :disabled="readonly || (selected?.source === 'automatic' && channel === 'bitbrowser')"
         /></el-form-item>
         <p v-if="selected?.source === 'automatic'" class="bank-recharge-form-note">
           自动付款的日期须通过核对订阅确认；核验时间和官网旧账期不能代替实际开通时间。
@@ -324,7 +346,7 @@
     <V2FormDrawer
       v-model="currencyOpen"
       retain-draft
-      title="新增比特充值币种"
+      title="新增充值币种"
       description="只添加自动充值执行器支持的币种；币种精度与官网付款一致。"
       :confirm-loading="working"
       :dirty="Boolean(currencyForm.code || currencyForm.name)"
@@ -449,6 +471,7 @@
 </template>
 
 <script setup lang="ts">
+import { computed } from 'vue';
 import { financeCurrencyLabel } from '@apple-business/shared';
 import V2SubscriptionFeeFields from './V2SubscriptionFeeFields.vue';
 import AppButton from '@/components/ui/AppButton.vue';
@@ -458,9 +481,19 @@ import type { useBankRechargeOrdersPage } from './useBankRechargeOrdersPage';
 import { bankRechargePlanOptions } from './recharge-plan-options';
 
 const props = defineProps<{ state: ReturnType<typeof useBankRechargeOrdersPage> }>();
+const missingPaymentEvidence = computed(
+  () =>
+    props.state.channel === 'online' &&
+    props.state.selected.value?.source === 'automatic' &&
+    (props.state.selected.value.chargeAmount == null ||
+      !props.state.selected.value.chargeCurrencyCode)
+);
 const {
+  channel,
+  channelLabel,
   pricing,
   applyPricingDefaults,
+  changeChargeCurrency,
   drawerOpen,
   creating,
   correcting,

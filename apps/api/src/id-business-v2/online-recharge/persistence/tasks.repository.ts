@@ -7,13 +7,25 @@ import {
 } from '@nestjs/common';
 import { Prisma, type OnlineRechargeTask } from '@prisma/client';
 import { randomBytes } from 'node:crypto';
+import { acquireMysqlTransactionLock } from '../../../common/prisma/mysql-transaction-lock';
+import {
+  proxyConnectionVersion,
+  safeProxyTestTaskResult,
+  proxyTestFailureMessage
+} from '../../proxy-pool/public-api';
 import type { AuthenticatedUser } from '../../../auth/auth.types';
 import { FieldEncryptionService } from '../../../common/crypto/field-encryption.service';
-import { ONLINE_RECHARGE_DEFAULTS, type OnlineRechargeOperation } from '../contracts';
+import {
+  ONLINE_RECHARGE_DEFAULTS,
+  ONLINE_RECHARGE_PLAN_LABELS,
+  ONLINE_RECHARGE_PLANS,
+  type OnlineRechargeOperation
+} from '../contracts';
 import { OnlineRechargeSettingsService } from '../settings.service';
 import { OnlineRechargeRepository } from './online-recharge.repository';
 import { OnlineRechargeEphemeralCredentials } from '../ephemeral-credentials.service';
 import { assertOnlineSensitive } from '../assets.service';
+import { OnlineRechargeOrderSyncService } from '../order-sync.service';
 import {
   id,
   ids,
@@ -33,22 +45,93 @@ export class OnlineRechargeTasksRepository {
     private readonly repository: OnlineRechargeRepository,
     private readonly settings: OnlineRechargeSettingsService,
     private readonly encryption: FieldEncryptionService,
-    private readonly memory: OnlineRechargeEphemeralCredentials
+    private readonly memory: OnlineRechargeEphemeralCredentials,
+    private readonly orderSync: OnlineRechargeOrderSyncService
   ) {}
   map(row: OnlineRechargeTask, publicView = false) {
-    const result = sanitize(row.result);
+    const payload =
+      row.payload && typeof row.payload === 'object' && !Array.isArray(row.payload)
+        ? row.payload
+        : {};
+    const proxyTest = row.operation === 'proxy_test';
+    const legacyTerminalTest =
+      proxyTest &&
+      typeof payload.proxyConnectionVersion !== 'string' &&
+      !['queued', 'running'].includes(row.status);
+    const proxyResult = legacyTerminalTest
+      ? {
+          ok: false,
+          ip: null,
+          latencyMs: null,
+          errorCode: 'legacy_test',
+          message: '旧检测缺少连接版本，请重新检测'
+        }
+      : proxyTest
+        ? safeProxyTestTaskResult(row.result, payload.proxyId)
+        : null;
+    const result = proxyResult ?? sanitize(row.result);
+    const resultObject =
+      result && typeof result === 'object' && !Array.isArray(result)
+        ? (result as Record<string, unknown>)
+        : {};
+    const subscription =
+      resultObject.data &&
+      typeof resultObject.data === 'object' &&
+      !Array.isArray(resultObject.data)
+        ? (resultObject.data as Record<string, unknown>)
+        : resultObject;
+    const subscriptionVerified =
+      (resultObject.ok === true || resultObject.renewalVerified === true) &&
+      typeof subscription.hasActiveSubscription === 'boolean';
+    const payment = row.payload ? object(row.payload).paymentContext : null;
+    const change =
+      payment && typeof payment === 'object' && !Array.isArray(payment)
+        ? (payment as Record<string, unknown>)
+        : null;
     const base = {
       id: row.id,
       jobKey: row.id,
       operation: row.operation,
-      status: row.status,
+      status: legacyTerminalTest ? 'failed' : row.status,
       plan: row.plan,
       provider: row.provider,
       progress: row.progress,
       stage: row.stage,
-      message: redact(row.message),
+      message: proxyTest
+        ? legacyTerminalTest
+          ? '旧检测缺少连接版本，请重新检测'
+          : payload.proxyConnectionChanged === true
+            ? '连接资料已修改，请重新检测'
+            : row.status === 'queued'
+              ? '等待执行代理检测'
+              : row.status === 'running'
+                ? '正在检测代理连接和出口 IP'
+                : row.message === '管理员取消待执行任务'
+                  ? '已取消待执行的代理检测'
+                  : row.status === 'succeeded' && proxyResult?.ok === true
+                    ? '检测成功'
+                    : proxyTestFailureMessage(proxyResult?.errorCode)
+        : redact(row.message),
+      ...(proxyTest
+        ? {
+            proxyId: typeof payload.proxyId === 'string' ? payload.proxyId : null,
+            connectionChanged: payload.proxyConnectionChanged === true,
+            requiresResubmission: typeof payload.proxyConnectionVersion !== 'string'
+          }
+        : {}),
       cardLast4: row.cardLast4,
       email: maskEmail(this.encryption.decrypt(row.emailEncrypted)),
+      subscriptionChange: change
+        ? {
+            kind: change.kind,
+            sourcePlan: change.sourcePlan,
+            targetPlan: change.targetPlan,
+            amount: change.amount,
+            currency: change.currency,
+            ...(publicView ? {} : { cardLast4: change.cardLast4 }),
+            ...(change.quoteId ? { quoteId: change.quoteId } : {})
+          }
+        : null,
       result,
       createdAt: row.createdAt,
       updatedAt: row.updatedAt
@@ -61,7 +144,23 @@ export class OnlineRechargeTasksRepository {
           providerTaskId: row.providerTaskId,
           paymentStarted: row.paymentStarted,
           confirmedPaid: row.confirmedPaid,
-          hasSession: Boolean(row.sessionEncrypted)
+          hasSession: Boolean(row.sessionEncrypted),
+          sessionMasked: row.sessionEncrypted ? '已提供（加密保存）' : null,
+          subscriptionStatus: subscriptionVerified
+            ? subscription.hasActiveSubscription
+              ? 'active'
+              : 'inactive'
+            : null,
+          autoRenew:
+            subscriptionVerified && typeof subscription.autoRenewRaw === 'boolean'
+              ? subscription.autoRenewRaw
+              : null,
+          expiresAt:
+            subscriptionVerified &&
+            typeof subscription.expiresAt === 'string' &&
+            Number.isFinite(Date.parse(subscription.expiresAt))
+              ? subscription.expiresAt
+              : null
         };
   }
   async get(taskId: string, publicView = false) {
@@ -69,7 +168,9 @@ export class OnlineRechargeTasksRepository {
       db.onlineRechargeTask.findUnique({ where: { id: taskId } })
     );
     if (!row) throw new NotFoundException('任务不存在');
-    return this.map(row, publicView);
+    return publicView
+      ? this.map(row, true)
+      : { ...this.map(row), orderSync: await this.orderSync.summary(taskId) };
   }
   async publicConfig() {
     const { settings } = await this.settings.internal();
@@ -87,11 +188,7 @@ export class OnlineRechargeTasksRepository {
       maxConcurrent: settings.maxConcurrent,
       active,
       paymentRegion: settings.paymentRegion,
-      plans: [
-        { key: 'plus', label: 'Plus' },
-        { key: 'pro_5x', label: 'Pro 5x' },
-        { key: 'pro_20x', label: 'Pro 20x' }
-      ]
+      plans: ONLINE_RECHARGE_PLANS.map((key) => ({ key, label: ONLINE_RECHARGE_PLAN_LABELS[key] }))
     };
   }
   async verify(input: unknown) {
@@ -154,6 +251,62 @@ export class OnlineRechargeTasksRepository {
       throw new BadRequestException('请填写兑换码');
     const token = randomBytes(32).toString('base64url');
     const result = await this.repository.transaction('tasks-start', async (tx) => {
+      let testedProxy: { id: string; version: string } | undefined;
+      if (operation === 'proxy_test') {
+        const requested = id(input.proxyId);
+        const canonicalId =
+          input.proxyPoolReference === true
+            ? requested
+            : ((await tx.idBusinessV2ProxyAlias.findUnique({ where: { oldId: requested } }))
+                ?.proxyId ?? requested);
+        await acquireMysqlTransactionLock(tx, `proxy-pool:${canonicalId}`);
+        const proxy = await tx.idBusinessV2RechargeProxy.findUnique({ where: { id: canonicalId } });
+        if (!proxy || !proxy.active) throw new ConflictException('所选代理已停用或不存在');
+        testedProxy = { id: proxy.id, version: proxyConnectionVersion(proxy) };
+        const aliases = await tx.idBusinessV2ProxyAlias.findMany({
+          where: { proxyId: canonicalId },
+          select: { oldId: true }
+        });
+        const existing = await tx.onlineRechargeTask.findFirst({
+          where: {
+            operation: 'proxy_test',
+            status: { in: ['queued', 'running'] },
+            deletedAt: null,
+            OR: [canonicalId, ...aliases.map((row) => row.oldId)].flatMap((proxyId) => [
+              { payload: { path: '$.proxyId', equals: proxyId } },
+              { payload: { path: '$.ids', array_contains: proxyId } }
+            ])
+          },
+          orderBy: { createdAt: 'desc' }
+        });
+        if (existing) {
+          const prior = object(existing.payload);
+          if (!prior.proxyConnectionVersion && existing.status === 'queued') {
+            const retired = await tx.onlineRechargeTask.updateMany({
+              where: {
+                id: existing.id,
+                status: 'queued',
+                leaseOwner: null,
+                paymentStarted: false,
+                confirmedPaid: false
+              },
+              data: {
+                status: 'failed',
+                progress: 100,
+                stage: 'finished',
+                message: '旧检测缺少连接版本，已停止，请重新检测',
+                result: { ok: false, errorCode: 'legacy_test' }
+              }
+            });
+            if (!retired.count) return { row: existing, taskToken: '', reused: true };
+            await this.repository.log(tx, 'tasks.proxy_test.retire_legacy', operator, existing.id);
+          } else if (
+            !prior.proxyConnectionVersion ||
+            prior.proxyConnectionVersion === testedProxy.version
+          )
+            return { row: existing, taskToken: '', reused: true };
+        }
+      }
       const config = await tx.onlineRechargeConfig.findUnique({ where: { id: 'global' } });
       const settings = { ...ONLINE_RECHARGE_DEFAULTS, ...(config ? object(config.settings) : {}) };
       const codeRow = code
@@ -185,19 +338,22 @@ export class OnlineRechargeTasksRepository {
         });
         if (active >= Number(settings.maxConcurrent))
           throw new ConflictException('当前代充名额已满，请稍后再试');
-        if (
-          sessionData &&
-          (await tx.onlineRechargeTask.count({
-            where: {
-              sessionIdentityHash: this.encryption.hash(sessionData.identity),
-              operation: 'recharge',
-              status: { in: [...activeTaskStatuses] }
-            }
-          }))
-        )
-          throw new ConflictException('该账号已有执行中或待核对任务');
       }
+      if (
+        sessionData &&
+        (operation === 'recharge' || (operation === 'renewal' && input.action !== 'check')) &&
+        (await tx.onlineRechargeTask.count({
+          where: {
+            sessionIdentityHash: this.encryption.hash(sessionData.identity),
+            operation: { in: ['recharge', 'renewal'] },
+            status: { in: [...activeTaskStatuses] }
+          }
+        }))
+      )
+        throw new ConflictException('该账号已有充值或续费执行中或待核对任务，请先核对原任务');
       const selectedPlan = codeRow?.plan ?? plan(input.plan ?? 'plus');
+      if (operation === 'recharge' && settings.gptApiEnabled && selectedPlan === 'pro_500')
+        throw new BadRequestException('第三方通道尚未核实支持 Pro 500，请使用本地执行通道');
       const payload: Record<string, unknown> = {};
       for (const key of [
         'region',
@@ -212,21 +368,51 @@ export class OnlineRechargeTasksRepository {
         'reason',
         'recheckTaskId',
         'originalProvider',
+        'originalOperation',
+        'renewalAction',
         'providerOrderId',
         'providerTaskId',
         'targetPlan',
         'sourceVersion'
       ])
         if (input[key] !== undefined) payload[key] = input[key];
+      if (testedProxy) {
+        payload.proxyId = testedProxy.id;
+        payload.proxyPoolReference = true;
+        payload.proxyConnectionVersion = testedProxy.version;
+      }
       if (payload.region && !['US', 'PH', 'SG', 'MY'].includes(String(payload.region)))
         throw new BadRequestException('支付地区无效');
-      if (payload.planName) payload.planName = text(payload.planName, '套餐标识', 100);
+      if (payload.planName) {
+        if (operation !== 'debug')
+          throw new BadRequestException('自定义套餐标识仅允许用于付款前调试');
+        payload.planName = text(payload.planName, '套餐标识', 100);
+      }
       if (
         operation === 'renewal' &&
         !['cancel', 'disable', 'enable', 'check'].includes(String(payload.action))
       )
         throw new BadRequestException('续费操作无效');
       if (payload.action === 'cancel') payload.action = 'disable';
+      if (operation === 'subscription' && payload.recheckTaskId) {
+        const original = await tx.onlineRechargeTask.findUnique({
+          where: { id: id(payload.recheckTaskId) }
+        });
+        if (
+          !operator ||
+          !original ||
+          original.status !== 'awaiting_review' ||
+          original.leaseVersion !== payload.sourceVersion ||
+          original.plan !== selectedPlan ||
+          original.sessionIdentityHash !== this.encryption.hash(sessionData?.identity)
+        )
+          throw new ConflictException('原任务核对资料已变化，请重新打开原任务');
+        const originalPayload = original.payload ? object(original.payload) : {};
+        if (originalPayload.paymentContext) payload.paymentContext = originalPayload.paymentContext;
+        const originalResult = original.result ? object(original.result) : {};
+        if (originalResult.paymentEvidence)
+          payload.originalPaymentEvidence = originalResult.paymentEvidence;
+      }
       const row = await tx.onlineRechargeTask.create({
         data: {
           operation,
@@ -253,19 +439,34 @@ export class OnlineRechargeTasksRepository {
         plan: selectedPlan,
         provider: row.provider
       });
-      return { row, taskToken: token };
+      return { row, taskToken: token, reused: false };
     });
-    return { ...this.map(result.row, !operator), taskToken: result.taskToken };
+    return {
+      ...this.map(result.row, !operator),
+      taskToken: result.taskToken,
+      ...(operation === 'proxy_test' ? { reused: result.reused === true } : {})
+    };
   }
   async action(section: string, action: string, raw: unknown, operator: AuthenticatedUser) {
     const input = object(raw);
+    if (section === 'jobs' && action === 'sync-order')
+      return this.orderSync.enqueue(id(input.id), operator);
+    if (section === 'jobs' && action === 'order-backfill-preview')
+      return this.orderSync.preview(input, operator);
+    if (section === 'jobs' && action === 'order-backfill')
+      return this.orderSync.backfill(input, operator);
     if (action === 'start')
       return this.start(input, operator, section === 'checkout-debug' ? 'debug' : 'recharge');
     if (action === 'recheck') {
       const row = await this.repository.read((db) =>
         db.onlineRechargeTask.findUnique({ where: { id: id(input.id) } })
       );
-      if (!row || row.status !== 'awaiting_review' || !row.sessionEncrypted)
+      if (
+        !row ||
+        row.status !== 'awaiting_review' ||
+        !row.sessionEncrypted ||
+        !['recharge', 'renewal'].includes(row.operation)
+      )
         throw new ConflictException('仅允许复查具有会话资料的待核对任务');
       return this.start(
         {
@@ -274,6 +475,9 @@ export class OnlineRechargeTasksRepository {
           action: 'recheck',
           recheckTaskId: row.id,
           originalProvider: row.provider,
+          originalOperation: row.operation,
+          renewalAction:
+            row.operation === 'renewal' && row.payload ? object(row.payload).action : undefined,
           providerOrderId: row.providerOrderId,
           providerTaskId: row.providerTaskId,
           targetPlan: row.plan,
@@ -326,6 +530,7 @@ export class OnlineRechargeTasksRepository {
       if (action === 'detail')
         return {
           ...this.map(row),
+          orderSync: await this.orderSync.summary(taskId, tx),
           events: await tx.onlineRechargeEvent.findMany({
             where: { taskId },
             orderBy: { createdAt: 'asc' },

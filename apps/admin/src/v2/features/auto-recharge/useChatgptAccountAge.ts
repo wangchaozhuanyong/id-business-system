@@ -1,10 +1,10 @@
 import { onMounted, onUnmounted, ref } from 'vue';
 import { ensureV2BusinessNowMs, getV2BusinessNowMs } from '@/v2/runtime/businessClock';
 
-export function chatgptAccountRegisteredDays(createdAt: string, now: number | null) {
-  const registeredAt = Date.parse(createdAt);
-  if (now === null || !Number.isFinite(now) || !Number.isFinite(registeredAt)) return null;
-  return Math.max(0, Math.floor((now - registeredAt) / (24 * 60 * 60 * 1000)));
+export function chatgptAccountRegisteredDays(registeredAt: string | null, now: number | null) {
+  const timestamp = registeredAt ? Date.parse(registeredAt) : NaN;
+  if (now === null || !Number.isFinite(now) || !Number.isFinite(timestamp)) return null;
+  return Math.max(0, Math.floor((now - timestamp) / (24 * 60 * 60 * 1000)));
 }
 
 export function useChatgptAccountAge() {
@@ -19,9 +19,10 @@ export function useChatgptAccountAge() {
     disposed = true;
     if (timer) clearInterval(timer);
   });
-  function registeredDaysLabel(createdAt: string) {
+  function registeredDaysLabel(registeredAt: string | null) {
+    if (!registeredAt) return '未记录';
     if (now.value === null) return '时间同步中';
-    const days = chatgptAccountRegisteredDays(createdAt, now.value);
+    const days = chatgptAccountRegisteredDays(registeredAt, now.value);
     return days === null ? '未记录' : `${days} 天`;
   }
   return { registeredDaysLabel };

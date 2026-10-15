@@ -95,8 +95,18 @@ export class OnlineRechargeSettingsRepository {
       for (const key of ['planNamePlus', 'planNamePro5x', 'planNamePro20x'] as const)
         if (settings[key] !== ONLINE_RECHARGE_DEFAULTS[key])
           throw new BadRequestException(
-            '充值套餐映射必须保持原版，调试套餐标识请在支付链接调试中填写'
+            '充值套餐映射必须保持已核实值，调试套餐标识请在支付链接调试中填写'
           );
+      const pro500 = text(settings.planNamePro500, 'Pro 500 套餐标识', 100, false);
+      if (
+        pro500 &&
+        (['pro', 'plus', 'pro_5x', 'pro_20x'].includes(pro500.toLowerCase()) ||
+          [settings.planNamePlus, settings.planNamePro5x, settings.planNamePro20x].some(
+            (value) => String(value).toLowerCase() === pro500.toLowerCase()
+          ))
+      )
+        throw new BadRequestException('Pro 500 必须使用单独核实的官网标识，不能复用其他套餐');
+      settings.planNamePro500 = pro500;
       for (const key of ['gptApiBaseUrl', 'captchaPlatformBaseUrl', 'vlmBaseUrl']) {
         if (!settings[key]) continue;
         let url: URL;
@@ -194,7 +204,12 @@ export class OnlineRechargeSettingsRepository {
       checkoutMode: 'api',
       headful: true,
       region: s.paymentRegion,
-      planNames: { plus: s.planNamePlus, pro_5x: s.planNamePro5x, pro_20x: s.planNamePro20x }
+      planNames: {
+        plus: s.planNamePlus,
+        pro_5x: s.planNamePro5x,
+        pro_20x: s.planNamePro20x,
+        pro_500: s.planNamePro500
+      }
     };
   }
 }

@@ -1,0 +1,135 @@
+name: Registration Inventory and Proxy Closure Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      commit:
+        description: Exact reviewed main commit
+        required: true
+        type: string
+      expected_current:
+        description: Exact deployed predecessor commit
+        required: true
+        type: string
+      publish:
+        description: Publish after isolated validation
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: id-business-v2-production-release
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    if: github.ref == 'refs/heads/main' && inputs.commit == github.sha
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
+        with:
+          node-version: 24
+          cache: npm
+      - name: Verify finite publication controls
+        run: python3 -B scripts/production-release/registration-closure-release.test.py
+      - name: Prepare reproduced published sources and approved delta
+        run: python3 -B scripts/production-release/registration-closure-build.py prepare
+      - name: Prepare isolated Python dependencies
+        run: |
+          python3 -m venv .deploy/registration-closure-release/python
+          .deploy/registration-closure-release/python/bin/pip install --disable-pip-version-check -r .deploy/registration-closure-release/candidate/apps/api/src/id-business-v2/auto-registration/worker/requirements.lock.txt
+          .deploy/registration-closure-release/python/bin/pip check
+      - name: Compile API for isolated database acceptance
+        working-directory: .deploy/registration-closure-release/candidate
+        run: npm run build --workspace @apple-business/api
+      - name: Verify isolated registration MySQL SQLite and proxy MySQL scenarios
+        run: node scripts/production-release/registration-closure-database.mjs
+      - name: Verify encrypted SQLite persistence and old receipt compatibility
+        working-directory: .deploy/registration-closure-release/candidate/apps/api/src/id-business-v2/auto-registration/worker
+        run: |
+          $GITHUB_WORKSPACE/.deploy/registration-closure-release/python/bin/python -B -m unittest test_workspace
+          $GITHUB_WORKSPACE/.deploy/registration-closure-release/python/bin/python -B -m unittest test_apple_mailboxes
+          $GITHUB_WORKSPACE/.deploy/registration-closure-release/python/bin/python -B -m unittest test_release_safety
+          $GITHUB_WORKSPACE/.deploy/registration-closure-release/python/bin/python -B -m unittest test_registration_closed_loop_unit
+      - name: Verify seven V2 controls and affected application boundaries
+        working-directory: .deploy/registration-closure-release/candidate
+        run: |
+          npm run check:admin-ui
+          npm run check:v2-ui-language
+          npm run check:v2-color-contrast
+          npm run check:v2-table-standard
+          npm run check:v2-loading-standard
+          npm run check:v2-module-architecture
+          npm run check:v2-isolation
+          npm run typecheck --workspace @apple-business/api
+      - name: Verify proxy engine behavior without payment
+        working-directory: .deploy/registration-closure-release/candidate/apps/api/src/id-business-v2/online-recharge/engine
+        run: node --test test/proxy-test.test.cjs test/dispatch.test.cjs test/proxy-worker.test.cjs test/proxy-pool.test.cjs
+      - name: Reproduce predecessor and build finite API Admin engine artifacts
+        run: python3 -B scripts/production-release/registration-closure-build.py build
+      - name: Install isolated browser acceptance runtime
+        working-directory: .deploy/registration-closure-release/candidate
+        run: npx playwright install --with-deps chromium
+      - name: Verify combined account registration and proxy browser behavior
+        working-directory: .deploy/registration-closure-release/candidate
+        run: |
+          node scripts/acceptance-v2-registration-inventory-ui.mjs
+          node scripts/acceptance-v2-registration-native-ui.mjs --python=$GITHUB_WORKSPACE/.deploy/registration-closure-release/python/bin/python
+          node scripts/acceptance-v2-recharge-proxies-ui.mjs
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: registration-closure-${{ github.sha }}-${{ github.run_attempt }}
+          path: |
+            .deploy/registration-closure-release/registration-closure-artifact.tar.gz
+            .deploy/registration-closure-release/artifact-sha256.txt
+            .deploy/registration-closure-release/database-verification.json
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 30
+
+  publish:
+    needs: validate
+    if: inputs.publish && github.ref == 'refs/heads/main' && inputs.commit == github.sha
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: write
+      actions: read
+      id-token: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      AWS_REGION: ap-northeast-1
+      RELEASE_COMMIT: ${{ inputs.commit }}
+      EXPECTED_CURRENT: ${{ inputs.expected_current }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          fetch-depth: 0
+      - name: Configure existing production OIDC role
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd
+        with:
+          role-to-assume: arn:aws:iam::079740175286:role/id-business-v2-github-release
+          role-session-name: id-business-v2-registration-${{ github.run_id }}
+          aws-region: ap-northeast-1
+          role-duration-seconds: 3600
+      - name: Publish once and independently read back
+        run: python3 -B scripts/production-release/registration-closure-dispatch.py
+      - name: Preserve native publication evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: registration-closure-publication-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .deploy/registration-closure-release/
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 30

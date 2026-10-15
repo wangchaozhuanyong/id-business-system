@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { RechargeProxyService } from './proxy-pool.service';
 import { OnlineProxyPoolRepository } from './persistence/online-proxy.repository';
 import { parseRechargeProxy, rechargeProxyConnection } from './proxy-pool-validation';
+import { proxyConnectionVersion } from './proxy-test';
 const id = '123e4567-e89b-42d3-a456-426614174000';
 const oldId = '123e4567-e89b-42d3-a456-426614174001';
 const operator = { id: 'operator', roles: ['admin'] } as never;
@@ -10,10 +11,12 @@ function fixture() {
     list: vi.fn().mockResolvedValue([]),
     count: vi.fn().mockResolvedValue(0),
     byHash: vi.fn().mockResolvedValue(null),
+    lock: vi.fn(),
     create: vi.fn().mockResolvedValue({ id }),
     update: vi.fn(),
     delete: vi.fn(),
     hasJobs: vi.fn().mockResolvedValue(null),
+    hasActiveTest: vi.fn().mockResolvedValue(null),
     resolveOnlineId: vi.fn().mockResolvedValue({ proxyId: id }),
     findInTransaction: vi.fn().mockResolvedValue({ id, active: true }),
     active: vi.fn()
@@ -143,6 +146,7 @@ describe('shared proxy pool', () => {
     f.repository.active.mockResolvedValue([
       {
         id,
+        urlHash: 'hash',
         urlEncrypted: 'encrypted:http://user:pass@gateway.example.test:8080',
         protocol: 'http',
         connectionMode: 'direct'
@@ -153,7 +157,15 @@ describe('shared proxy pool', () => {
       proxy_url: expect.any(String)
     });
     expect(f.repository.active).toHaveBeenCalledWith({}, id);
-    await f.online.result({} as never, oldId, { ip: '8.8.8.8', latencyMs: 0, ok: true });
+    const snapshot = { id, urlHash: 'hash', protocol: 'http', connectionMode: 'direct' };
+    f.repository.findInTransaction.mockResolvedValue(snapshot);
+    await f.online.result(
+      {} as never,
+      oldId,
+      { ip: '8.8.8.8', latencyMs: 0, ok: true },
+      false,
+      proxyConnectionVersion(snapshot)
+    );
     expect(f.repository.update).toHaveBeenCalledWith(
       {},
       id,
@@ -178,5 +190,14 @@ describe('shared proxy pool', () => {
       )
     ).rejects.toThrow('已被修改');
     expect(f.repository.delete).not.toHaveBeenCalled();
+  });
+  it('temporarily protects active tests without permanently locking completed test resources', async () => {
+    const f = fixture();
+    f.repository.hasActiveTest.mockResolvedValueOnce({ id: 'active-test' });
+    await expect(f.service.delete(id, operator)).rejects.toThrow('代理正在检测');
+    expect(f.repository.delete).not.toHaveBeenCalled();
+    await f.service.delete(id, operator);
+    expect(f.repository.delete).toHaveBeenCalledWith({}, id);
+    expect(f.repository.lock).toHaveBeenCalledTimes(2);
   });
 });

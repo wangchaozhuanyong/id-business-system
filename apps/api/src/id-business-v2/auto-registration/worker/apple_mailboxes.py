@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 from contextlib import contextmanager
+from contextvars import ContextVar
 from datetime import datetime, timezone
 from enum import Enum
 import hashlib
@@ -20,14 +21,15 @@ import re
 import threading
 import time
 from typing import Any, Literal
+from urllib.parse import urlsplit
 import uuid
 
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, ConfigDict, Field, StrictInt, field_validator, model_validator
-from sqlalchemy import func, text
+from sqlalchemy import func, null, text
 
 from src.services.base import BaseEmailService, EmailServiceFactory, EmailServiceType
-from apple_closed_loop import (BATCH_PREFIX, ClosedLoopFacts, SYNC_ERRORS, PUBLIC_FIELDS as CLOSED_LOOP_PUBLIC_FIELDS,
+from apple_closed_loop import (BATCH_PREFIX, ClosedLoopFacts, RESULT_FIELDS, SYNC_ERRORS, PUBLIC_FIELDS as CLOSED_LOOP_PUBLIC_FIELDS,
                                resolve_system_proxy, verify_identity)
 from apple_registration_diagnostics import (RegistrationDiagnostics, STAGES, ERROR_KINDS,
                                              PUBLIC_FIELDS as DIAGNOSTIC_PUBLIC_FIELDS)
@@ -39,6 +41,57 @@ TASK_PREFIX = "id.apple-task."
 TASK_STATUSES = {"pending", "running", "completed", "failed", "cancelled"}
 ERRORS = {"mailbox_unavailable", "authorization_expired", "session_invalid", "address_changed", "mail_query_failed"}
 _context = threading.local()
+execution_actor = ContextVar("id_registration_execution_actor", default=None)
+
+
+def context_authorization_only(integration, task_uuid):
+    with integration.lock:
+        return bool(integration.contexts.get(task_uuid, {}).get("authorizationOnly"))
+
+
+def confirms_account_creation(request_url, response):
+    """Reject explicit transport/error pages without guessing success fields."""
+    def official(value):
+        if not isinstance(value, str):
+            return False
+        try:
+            parts = urlsplit(value)
+            return (parts.scheme == "https" and parts.hostname == "auth.openai.com"
+                    and parts.username is None and parts.password is None and parts.port in {None, 443})
+        except ValueError:
+            return False
+    if (not official(request_url) or not official(getattr(response, "url", None))
+            or getattr(response, "status_code", None) != 200):
+        return False
+    try:
+        value = response.json()
+        return (isinstance(value, dict) and "error" not in value and "errors" not in value
+                and value.get("success") is not False)
+    except Exception:
+        return False
+
+
+class DeferredDiagnosticsStore:
+    """A provider's address is unknown until create_email returns.
+
+    Pre-address diagnostics stay in this execution context. They cannot invent
+    an email or access a nonexistent durable task before provider binding.
+    """
+    def __init__(self, store, context):
+        self.store, self.context = store, context
+
+    def update_task(self, task_uuid, **updates):
+        pending = self.context.setdefault("diagnosticUpdates", {})
+        if not self.context.get("email"):
+            pending.update(updates)
+            return True
+        values = {**pending, **updates}
+        pending.clear()
+        return self.store.update_task(task_uuid, **values)
+
+    def record_failure(self, task_uuid, stage, error_kind, http_status, elapsed_ms):
+        if self.context.get("email"):
+            return self.store.record_failure(task_uuid, stage, error_kind, http_status, elapsed_ms)
 
 
 def now_iso() -> str:
@@ -79,12 +132,14 @@ def empty_record(email: str) -> dict[str, Any]:
         "registrationIp": None, "registrationIpSource": None, "source": None,
         "markedAt": None, "operatorId": None, "note": "",
         "activeTaskUuid": None, "attemptIp": None, "attemptCountry": None,
-        "registrationCountry": None, "lastTaskUuid": None,
+        "registrationCountry": None, "registeredAt": None, "lastTaskUuid": None,
         "lastResultKind": None, "taskStatus": None,
         "localSaveStatus": "not_started", "syncStatus": "not_started", "systemAccountId": None,
         "syncErrorKind": None, "identityStatus": "not_verified", "passwordStatus": "not_started",
         "stage": "queued", "reason": None, "lastHttpStatus": None,
         "proxySource": "default", "proxyId": None, "mailboxSelection": "specified", "firstFailure": None,
+        "manualSyncId": None,
+        "creationConfirmed": False, "authorizationStatus": None,
     }
 
 
@@ -108,6 +163,17 @@ class MarkInput(Input):
     registrationIp: str | None = None
     note: str = Field(default="", max_length=500)
     operatorId: str
+
+
+class ManualSyncPrepare(MailboxItem):
+    operatorId: str
+
+
+class ManualSyncAck(MailboxItem):
+    manualSyncId: str
+    accountId: str | None
+    status: Literal["saved", "failed", "conflict"]
+    errorKind: str | None = None
 
 
 class ExecutionOptions(Input):
@@ -154,6 +220,7 @@ class SyncAck(Input):
     accountId: str
     status: Literal["saved", "failed", "conflict"]
     errorKind: str | None = None
+    fingerprint: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
 
 
 class MailResponse(Input):
@@ -277,11 +344,14 @@ class RegistrationFacts(ClosedLoopFacts):
                 historical = db.query(self.models.Account).filter(func.lower(self.models.Account.email) == email).first()
                 if request.registrationStatus == "unregistered" and historical is not None and historical.status != "failed":
                     raise HTTPException(409, "邮箱已有历史账号，不能重新放入未注册池")
+                # Empty manual edits cannot erase an observed creation fact.
+                proven = self.reliable_registration(db, record)
+                registration_ip = record.get("registrationIp") if proven or address is None else address
                 record.update(
                     aliasId=safe_id(item.aliasId), registrationStatus=request.registrationStatus,
-                    registrationIp=address,
-                    registrationIpSource="manual" if address is not None else None,
-                    registrationCountry=None, source="manual", markedAt=now_iso(),
+                    registrationIp=registration_ip,
+                    registrationIpSource=(record.get("registrationIpSource") if proven or address is None else "manual"),
+                    source=record.get("source") if proven else "manual", markedAt=record.get("markedAt") if proven else now_iso(),
                     operatorId=operator_id, note=request.note.strip(),
                 )
                 records.append(self.write(db, record))
@@ -318,8 +388,65 @@ class RegistrationFacts(ClosedLoopFacts):
                                            "resultKind": None, "mirrorAccountId": str(uuid.uuid4()), "attempt": 1,
                                            "localSaveStatus": "not_started", "syncStatus": "not_started",
                                            "stage": "queued", "sideEffectPossible": False, "batchId": batch_id,
-                                           "startedAt": now_iso(), **diagnostics})))
+                                           "startedAt": now_iso(), "schemaVersion": 2,
+                                           "provider": "apple_hidden", **diagnostics})))
         return self.write(db, record)
+
+    def manual_sync_prepare(self, request):
+        with self.transaction() as db:
+            record = self.read(db, request.email)
+            self.compare(record, request.revision)
+            if (record.get("source") != "manual" or record.get("registrationStatus") != "registered"
+                    or record.get("activeTaskUuid") or record.get("aliasId") != safe_id(request.aliasId)):
+                raise HTTPException(409, "仅无占用任务的人工已注册邮箱可以补齐台账")
+            if self.reliable_registration(db, record):
+                raise HTTPException(409, "已有官网创建事实，请在原任务补存或同步")
+            if record.get("syncStatus") != "saved":
+                record.update(manualSyncId=record.get("manualSyncId") or str(uuid.uuid4()),
+                              operatorId=safe_id(request.operatorId), syncStatus="pending", syncErrorKind=None)
+                record = self.write(db, record)
+            return record
+
+    def manual_sync_ack(self, request):
+        if request.errorKind is not None and request.errorKind not in SYNC_ERRORS:
+            raise HTTPException(400, "同步错误类型无效")
+        if request.status == "saved" and not request.accountId:
+            raise HTTPException(400, "成功回执必须包含主账号标识")
+        with self.transaction() as db:
+            record = self.read(db, request.email)
+            if (record.get("manualSyncId") != request.manualSyncId or record.get("source") != "manual"
+                    or record.get("registrationStatus") != "registered" or record.get("activeTaskUuid")
+                    or record.get("aliasId") != safe_id(request.aliasId)):
+                raise HTTPException(409, "人工资料来源已变化，请重新核对")
+            if record.get("syncStatus") == "saved" and record.get("systemAccountId") == request.accountId:
+                return record
+            self.compare(record, request.revision)
+            record.update(syncStatus=request.status, syncErrorKind=request.errorKind,
+                          systemAccountId=safe_id(request.accountId) if request.status == "saved" else None)
+            return self.write(db, record)
+
+    def bind_provider(self, task_uuid, context, engine):
+        email = normalize_email(engine.email)
+        alias = safe_id(str((engine.email_info or {}).get("service_id") or email))
+        with self.transaction() as db:
+            if db.get(self.models.Setting, TASK_PREFIX + task_uuid) is not None:
+                raise ValueError("任务已绑定其他执行资料")
+            record = self.read(db, email)
+            if record.get("activeTaskUuid") or self.reliable_registration(db, record) or record["registrationStatus"] != "unregistered":
+                raise ValueError("邮箱已有注册事实或占用，不能重复创建")
+            record.update(aliasId=alias, operatorId=context["operatorId"], activeTaskUuid=task_uuid,
+                          lastTaskUuid=task_uuid, taskStatus="running", stage="signup", source="automatic",
+                          attemptIp=context.get("attemptIp"), attemptCountry=context.get("attemptCountry"))
+            provider = engine.email_service.service_type.value
+            db.add(self.models.Setting(key=TASK_PREFIX + task_uuid, category="general", description="邮箱注册任务关联",
+                   value=json.dumps({"email": email, "aliasId": alias, "operatorId": context["operatorId"],
+                     "mirrorAccountId": str(uuid.uuid4()), "schemaVersion": 2, "provider": provider,
+                     "resultKind": None, "attempt": 1, "sideEffectPossible": False, "startedAt": now_iso(),
+                     "localSaveStatus": "not_started", "syncStatus": "not_started", "stage": "signup",
+                     "providerCheckpoint": {"serviceType": provider, "config": engine.email_service.config,
+                                            "emailInfo": engine.email_info}})))
+            self.write(db, record)
+        context.update(email=email, aliasId=alias)
 
     def record_failure(self, task_uuid, stage, error_kind, http_status, elapsed_ms):
         if (stage not in STAGES or error_kind not in ERROR_KINDS or
@@ -367,6 +494,9 @@ class RegistrationFacts(ClosedLoopFacts):
                 task_data["resultKind"] = record["lastResultKind"]
                 if not existing:
                     task_data["creationConfirmed"] = True
+                    task_data.setdefault("creationConfirmedAt", now_iso())
+                    record["registeredAt"] = task_data["creationConfirmedAt"]
+                    record.update(creationConfirmed=True, authorizationStatus="pending")
                 elif identity and identity.get("identityStatus") == "verified":
                     task_data.update(verifiedExistingAccount=True, **identity)
                 task_fact.value = json.dumps(task_data)
@@ -459,6 +589,7 @@ class AppleMailboxIntegration:
         self.models, self.sessions, self.task_manager, self.redact = models, sessions, task_manager, redact
         self.store = RegistrationFacts(models, sessions)
         self.contexts: dict[str, dict[str, Any]] = {}
+        self.generic_actors: dict[str, str] = {}
         self.jobs: dict[str, asyncio.Task] = {}
         self.requests: dict[str, dict[str, Any]] = {}
         self.lock = threading.RLock()
@@ -474,6 +605,14 @@ class AppleMailboxIntegration:
 
     def public_record(self, record):
         record = {key: record.get(key, value) for key, value in empty_record(record["email"]).items()}
+        if record.get("lastTaskUuid"):
+            with self.sessions.get_db() as db:
+                row = db.get(self.models.Setting, TASK_PREFIX + record["lastTaskUuid"])
+                binding = json.loads(row.value) if row is not None else {}
+                if binding.get("email") == record["email"] and binding.get("creationConfirmed"):
+                    record["creationConfirmed"] = True
+                    record["authorizationStatus"] = "complete" if binding.get("identityStatus") == "verified" else "pending"
+                    record["registeredAt"] = binding.get("creationConfirmedAt") or record.get("registeredAt")
         if record["activeTaskUuid"] and not self.live(record["activeTaskUuid"]) and record.get("taskStatus") != "awaiting_review":
             return {**record, "taskStatus": "interrupted"}
         return record
@@ -743,6 +882,8 @@ class AppleMailboxIntegration:
             # Every replacement session keeps the same pre-submission durable
             # guard. Request bodies and response text never enter diagnostics.
             if url == endpoints["register"]:
+                if context_authorization_only(self, task_uuid):
+                    raise ValueError("授权续接不能再次提交注册密码")
                 with self.sessions.get_db() as db:
                     _, binding = self.store.task_data(db, task_uuid)
                 if not binding.get("passwordCheckpoint"):
@@ -750,10 +891,25 @@ class AppleMailboxIntegration:
                 if not self.store.update_task(task_uuid, sideEffectPossible=True,
                                               stage="password", passwordStatus="submitted"):
                     raise ValueError("邮箱占用已变化，不能提交")
+            if url == endpoints["signup"] and context_authorization_only(self, task_uuid):
+                # Reuse the frozen authorization request, selecting its login
+                # screen. Refuse every later account-creation side effect.
+                body = json.loads(kwargs.get("data") or "{}")
+                body["screen_hint"] = "login"
+                kwargs["data"] = json.dumps(body)
+                kwargs["headers"] = {**kwargs.get("headers", {}), "referer": "https://auth.openai.com/log-in"}
             diagnostics = getattr(engine, "_apple_diagnostics", None)
             if diagnostics is not None:
-                return diagnostics.request(original_post, url, *args, **kwargs)
-            return original_post(url, *args, **kwargs)
+                response = diagnostics.request(original_post, url, *args, **kwargs)
+            else:
+                response = original_post(url, *args, **kwargs)
+            if (url == endpoints.get("create_account") and getattr(response, "status_code", None) == 200
+                    and not confirms_account_creation(url, response)):
+                # The official side effect may already have happened. Raising
+                # keeps the existing lease and unknown-result recovery guard;
+                # it must never become an invitation to create another account.
+                raise ValueError("官网创建响应无法确认，请核对原任务；不要重复注册")
+            return response
 
         session.post = post
         session._id_apple_post = True
@@ -761,8 +917,19 @@ class AppleMailboxIntegration:
     def observe_engine(self, engine, provider):
         context = provider.context
         task_uuid = context["taskUuid"]
-        if hasattr(engine, "oauth_manager"):
+        if hasattr(engine, "oauth_manager") and context.get("email"):
             self.store.configuration_checkpoint(task_uuid, engine.oauth_manager.client_id, engine.proxy_url)
+        if context.get("generic"):
+            original_email = engine._create_email
+
+            def create_email(*args, **kwargs):
+                result = original_email(*args, **kwargs)
+                if result and not context.get("authorizationOnly"):
+                    self.store.bind_provider(task_uuid, context, engine)
+                    self.store.configuration_checkpoint(task_uuid, engine.oauth_manager.client_id, engine.proxy_url)
+                return result
+
+            engine._create_email = create_email
         original_get = engine.http_client.get
 
         def get(url, *args, **kwargs):
@@ -774,7 +941,10 @@ class AppleMailboxIntegration:
                     country = values.get("loc")
                     if country is not None and not re.fullmatch(r"[A-Z]{2}", country):
                         country = None
-                    self.store.observe(context["email"], context["taskUuid"], attemptIp=address, attemptCountry=country)
+                    if context.get("email"):
+                        self.store.observe(context["email"], context["taskUuid"], attemptIp=address, attemptCountry=country)
+                    else:
+                        context.update(attemptIp=address, attemptCountry=country)
                 except (ValueError, HTTPException):
                     pass
             return response
@@ -788,6 +958,9 @@ class AppleMailboxIntegration:
             if not self.store.update_task(task_uuid, stage="signup"):
                 raise ValueError("邮箱占用已变化，不能继续注册")
             result = original_signup(*args, **kwargs)
+            if context.get("authorizationOnly") and not result.is_existing_account:
+                result.success = False
+                result.error_message = "官网未返回已有账号登录验证，请人工核对；未再次注册"
             if result.is_existing_account:
                 # email_otp selects upstream's login branch but does not prove
                 # the requested account exists. Keep its lease until an
@@ -804,6 +977,8 @@ class AppleMailboxIntegration:
             return original_send(*args, **kwargs)
 
         def create(*args, **kwargs):
+            if context.get("authorizationOnly"):
+                raise ValueError("授权续接不能再次创建账号")
             if not self.store.update_task(task_uuid, stage="create_account", sideEffectPossible=True):
                 raise ValueError("邮箱占用已变化，不能创建账号")
             result = original_create(*args, **kwargs)
@@ -811,6 +986,7 @@ class AppleMailboxIntegration:
                 if not self.store.update_task(task_uuid, creationConfirmed=True):
                     raise ValueError("迟到的账号创建结果已隔离，请核对")
                 self.store.registered(context["email"], context["taskUuid"], existing=False)
+                self.persist_created_account(task_uuid, engine)
             else:
                 self.store.update_task(task_uuid, reason="account_creation_failed")
             return result
@@ -854,6 +1030,11 @@ class AppleMailboxIntegration:
             def run(*args, **kwargs):
                 result = original_run(*args, **kwargs)
                 if result.success:
+                    with self.sessions.get_db() as db:
+                        _, binding = self.store.task_data(db, task_uuid)
+                    if binding.get("creationConfirmed"):
+                        result.source = "register"
+                        result.password = binding.get("passwordCheckpoint") or result.password
                     self.store.update_task(task_uuid, stage="identity")
                     identity = verify_identity(engine.session, context["email"], result.access_token)
                     engine._apple_identity = identity
@@ -889,8 +1070,52 @@ class AppleMailboxIntegration:
 
             engine.save_to_database = save
 
-        engine._apple_diagnostics = RegistrationDiagnostics(self.store, task_uuid)
+        diagnostic_store = DeferredDiagnosticsStore(self.store, context) if context.get("generic") else self.store
+        engine._apple_diagnostics = RegistrationDiagnostics(diagnostic_store, task_uuid)
         engine._apple_diagnostics.install(engine)
+
+    def persist_created_account(self, task_uuid, engine):
+        """Save a real minimal row as soon as the official create call succeeds.
+
+        Missing OAuth identifiers and tokens stay NULL. The engine-assigned
+        SQLite row ID is the only upstream identifier passed to the mirror.
+        """
+        with self.store.transaction() as db:
+            task_row, binding = self.store.task_data(db, task_uuid)
+            if (not binding.get("creationConfirmed") or not binding.get("passwordCheckpoint")
+                    or self.store.current(db, task_uuid, binding) is None):
+                raise ValueError("官网创建事实或密码检查点需要核对")
+            if binding.get("schemaVersion") != 2 and not binding.get("syncPayload"):
+                record = self.store.current(db, task_uuid, binding)
+                if not binding.get("operatorId") or not binding.get("mirrorAccountId"):
+                    raise ValueError("历史任务来源不完整，请先核对")
+                observed_at = (record.get("registeredAt") or record.get("markedAt")) if (
+                    record.get("source") == "automatic" and record.get("registrationEvidenceTaskUuid") == task_uuid) else None
+                binding.update(schemaVersion=2, provider="apple_hidden", creationConfirmedAt=observed_at)
+                task_row.value = json.dumps(binding, ensure_ascii=False)
+            account = db.query(self.models.Account).filter(func.lower(self.models.Account.email) == binding["email"]).first()
+            if account is not None and (account.extra_data or {}).get("idSourceTaskUuid") != task_uuid:
+                raise ValueError("邮箱已有其他来源账号，请核对")
+            if account is None:
+                snapshot = binding.get("configurationCheckpoint") or {}
+                account = self.models.Account(email=binding["email"], password=binding["passwordCheckpoint"],
+                          client_id=snapshot.get("clientId"), proxy_used=snapshot.get("proxyUsed"),
+                          email_service=engine.email_service.service_type.value,
+                          email_service_id=(engine.email_info or {}).get("service_id"), source="register", status="expired",
+                          registered_at=(datetime.fromisoformat(binding["creationConfirmedAt"].replace("Z", "+00:00")).replace(tzinfo=None)
+                                         if binding.get("creationConfirmedAt") else null()),
+                          extra_data={"idSourceTaskUuid": task_uuid, "idAuthorizationStatus": "pending"})
+                db.add(account)
+                db.flush()
+            account_id = account.id
+        from types import SimpleNamespace
+        raw = {key: None for key in RESULT_FIELDS}
+        raw.update(success=False, email=binding["email"], password=binding["passwordCheckpoint"], source="register",
+                   metadata={"idSourceTaskUuid": task_uuid, "idAuthorizationStatus": "pending"})
+        identity = {"identityStatus": "awaiting_identity", "reason": "identity_missing", "identityEvidence": None}
+        self.store.update_task(task_uuid, rawResult=raw, localSaveStatus="saved", **identity)
+        account = SimpleNamespace(id=account_id, email=binding["email"], extra_data={"idSourceTaskUuid": task_uuid})
+        self.store.account_saved(task_uuid, account, identity)
 
     def persisted_account(self, email):
         from types import SimpleNamespace
@@ -933,6 +1158,15 @@ class AppleMailboxIntegration:
                 raise ValueError("原执行配置或账号来源需要核对")
             original.client_id = snapshot["clientId"]
             original.proxy_used = snapshot.get("proxyUsed")
+            # Complete the same minimal row; never create a second account or
+            # silently accept an old row without saving the new credentials.
+            for name in ("password", "access_token", "refresh_token", "id_token", "session_token", "account_id", "workspace_id"):
+                value = getattr(result, name, None)
+                if value:
+                    setattr(original, name, value)
+            original.extra_data = {**(original.extra_data or {}), **(result.metadata or {}),
+                                   "idAuthorizationStatus": "complete"}
+            original.status = "active"
         if not self.store.account_saved(task_uuid, account, identity):
             raise ValueError("邮箱占用已变化，迟到保存结果需要核对")
         return True
@@ -942,11 +1176,14 @@ class AppleMailboxIntegration:
             raise HTTPException(409, "原任务仍在执行，请稍后核对")
         with self.sessions.get_db() as db:
             _, data = self.store.task_data(db, task_uuid)
-            if self.store.current(db, task_uuid, data) is None or not data.get("rawResult"):
+            if self.store.current(db, task_uuid, data) is None or not (data.get("rawResult") or data.get("creationConfirmed")):
                 raise HTTPException(409, "原任务资料不满足恢复条件")
-            raw = dict(data["rawResult"])
-        if not raw.get("success"):
-            raise HTTPException(409, "原注册尚未取得成功结果")
+            raw = dict(data["rawResult"]) if data.get("rawResult") else {key: None for key in RESULT_FIELDS}
+            if not data.get("rawResult"):
+                raw.update(success=False, email=data["email"], password=data.get("passwordCheckpoint"), source="register",
+                           metadata={"idSourceTaskUuid": task_uuid})
+        if not raw.get("success") and not data.get("creationConfirmed"):
+            raise HTTPException(409, "原注册尚未取得成功结果或官网创建事实")
         if data.get("localSaveStatus") == "saved" and self.persisted_account(data["email"]) is None:
             self.store.update_task(task_uuid, syncStatus="conflict", syncErrorKind="deleted_account", reason="deleted_account")
             raise HTTPException(409, "原账号已删除，不能通过补存恢复")
@@ -954,7 +1191,7 @@ class AppleMailboxIntegration:
         # subscription operations are never called by this recovery endpoint.
         context = {"taskUuid": task_uuid, "email": data["email"], "aliasId": data["aliasId"],
                    "integration": self, "cancelled": False, "startedAt": time.time()}
-        provider = AppleHiddenMailboxProvider(self, context)
+        provider = self.recovery_provider(context, data)
         engine = self.route.RegistrationEngine(provider, task_uuid=task_uuid)
         engine.email_info = {"email": data["email"], "service_id": data["aliasId"]}
         snapshot = data.get("configurationCheckpoint")
@@ -964,10 +1201,113 @@ class AppleMailboxIntegration:
         registration = importlib.import_module("src.core.register")
         result = registration.RegistrationResult(**raw)
         try:
-            engine.save_to_database(result)
+            if raw.get("success"):
+                if data.get("provider", "apple_hidden") == "apple_hidden":
+                    engine.save_to_database(result)
+                else:
+                    identity = {key: data.get(key) for key in ("identityStatus", "identityEvidence", "reason")}
+                    self.persist_result(task_uuid, result, engine.save_to_database, identity)
+            else:
+                self.persist_created_account(task_uuid, engine)
         except Exception:
             raise HTTPException(409, "原注册结果仍未可靠保存，请核对保存状态") from None
         return {"accepted": True, "task": self.task(task_uuid)}
+
+    async def resume_authorization(self, task_uuid):
+        if self.live(task_uuid):
+            raise HTTPException(409, "原任务仍在执行，请稍后核对")
+        with self.sessions.get_db() as db:
+            _, checkpoint = self.store.task_data(db, task_uuid)
+            if (self.store.current(db, task_uuid, checkpoint) is None or not checkpoint.get("creationConfirmed")
+                    or not checkpoint.get("passwordCheckpoint") or not checkpoint.get("configurationCheckpoint")):
+                raise HTTPException(409, "只有原官网创建确认且检查点完整的任务可以续接授权")
+        # Historical OAuth failures may predate the minimal-account save.
+        # Restore that original checkpoint before any new network request.
+        if checkpoint.get("localSaveStatus") != "saved":
+            await asyncio.to_thread(self.local_save_retry, task_uuid)
+        with self.store.transaction() as db:
+            if self.live(task_uuid):
+                raise HTTPException(409, "原任务已在执行，请勿重复续接")
+            _, data = self.store.task_data(db, task_uuid)
+            record = self.store.current(db, task_uuid, data)
+            if (record is None or not data.get("creationConfirmed") or not data.get("passwordCheckpoint")
+                    or not data.get("configurationCheckpoint")):
+                raise HTTPException(409, "只有原官网创建确认且检查点完整的任务可以续接授权")
+            if data.get("provider", "apple_hidden") != "apple_hidden" and not data.get("providerCheckpoint"):
+                raise HTTPException(409, "原邮箱服务检查点不完整，请人工核对")
+            if data.get("identityStatus") == "verified":
+                raise HTTPException(409, "原账号已完成身份核验，无需重新授权")
+            record.update(activeTaskUuid=task_uuid, taskStatus="pending", stage="oauth", reason=None)
+            self.store.write(db, record)
+            task = db.query(self.models.RegistrationTask).filter_by(task_uuid=task_uuid).first()
+            if task is not None:
+                task.status = "pending"
+            proxy = data["configurationCheckpoint"].get("proxyUsed")
+        context = {"taskUuid": task_uuid, "email": data["email"], "aliasId": data["aliasId"],
+                   "integration": self, "startedAt": time.time(), "cancelled": False, "authorizationOnly": True}
+        with self.lock:
+            self.contexts[task_uuid] = context
+
+        async def execute():
+            try:
+                await asyncio.to_thread(self.run_authorization_task, context, data, proxy)
+            finally:
+                self.store.finish(context["email"], task_uuid, context["cancelled"])
+                with self.lock:
+                    self.contexts.pop(task_uuid, None)
+                    self.jobs.pop(task_uuid, None)
+
+        self.jobs[task_uuid] = asyncio.create_task(execute())
+        return {"accepted": True, "taskUuid": task_uuid,
+                "record": self.public_record(self.store.records([data["email"]])[0]), "task": self.task(task_uuid)}
+
+    def run_authorization_task(self, context, binding, proxy):
+        task_uuid = context["taskUuid"]
+        _context.task = context
+        with self.lock:
+            self.running_threads.add(task_uuid)
+        try:
+            provider = self.recovery_provider(context, binding)
+            engine = self.route.RegistrationEngine(provider, proxy_url=proxy, task_uuid=task_uuid,
+                     callback_logger=self.task_manager.create_log_callback(task_uuid))
+            engine.oauth_manager.client_id = binding["configurationCheckpoint"]["clientId"]
+            result = engine.run()
+            if result.success:
+                engine.save_to_database(result)
+            with self.store.transaction() as db:
+                task = db.query(self.models.RegistrationTask).filter_by(task_uuid=task_uuid).first()
+                if task is not None:
+                    task.status = "completed" if result.success else "failed"
+                    task.completed_at = datetime.now(timezone.utc).replace(tzinfo=None)
+                    task.error_message = None if result.success else "授权尚未完成，官网创建事实与密码已保留"
+            self.task_manager.update_status(task_uuid, "completed" if result.success else "failed")
+        except Exception:
+            with self.store.transaction() as db:
+                task = db.query(self.models.RegistrationTask).filter_by(task_uuid=task_uuid).first()
+                if task is not None:
+                    task.status = "failed"
+                    task.error_message = "授权续接未完成，原账号资料已保留，请核对后重试"
+            self.task_manager.update_status(task_uuid, "failed", error="授权续接未完成，请核对后重试")
+        finally:
+            _context.task = None
+            with self.lock:
+                self.running_threads.discard(task_uuid)
+
+    def recovery_provider(self, context, binding):
+        if binding.get("provider", "apple_hidden") == "apple_hidden":
+            return AppleHiddenMailboxProvider(self, context)
+        context["generic"] = True
+        snapshot = binding["providerCheckpoint"]
+        provider = EmailServiceFactory.create(EmailServiceType(snapshot["serviceType"]), snapshot["config"])
+        email_info = dict(snapshot["emailInfo"])
+        if normalize_email(email_info.get("email", "")) != context["email"]:
+            raise ValueError("原邮箱身份不一致")
+        provider.create_email = lambda config=None: dict(email_info)
+        if hasattr(provider, "_email_cache"):
+            provider._email_cache[context["email"]] = email_info
+        if hasattr(provider, "_emails_cache"):
+            provider._emails_cache[email_info.get("service_id") or email_info.get("id")] = email_info
+        return provider
 
     def sync_retry(self, task_uuid):
         with self.sessions.get_db() as db:
@@ -1007,6 +1347,8 @@ class AppleMailboxIntegration:
             identifiers = list(self.contexts)
         with self.sessions.get_db() as db:
             for task_uuid in identifiers:
+                if self.contexts.get(task_uuid, {}).get("generic"):
+                    continue
                 if not self.live(task_uuid):
                     continue
                 task = db.query(self.models.RegistrationTask).filter_by(task_uuid=task_uuid).first()
@@ -1021,6 +1363,31 @@ class AppleMailboxIntegration:
                               "previousId": record.get("lastMailId")})
         return {"tasks": tasks}
 
+    def account_summaries(self, identifiers):
+        result = {}
+        with self.sessions.get_db() as db:
+            for identifier in identifiers:
+                account = db.get(self.models.Account, identifier)
+                task_uuid = (account.extra_data or {}).get("idSourceTaskUuid") if account is not None else None
+                if not task_uuid:
+                    continue
+                row = db.get(self.models.Setting, TASK_PREFIX + task_uuid)
+                if row is None:
+                    continue
+                binding = json.loads(row.value)
+                record = self.store.current(db, task_uuid, binding)
+                result[identifier] = {"sourceTaskUuid": task_uuid, "provider": binding.get("provider", "apple_hidden"),
+                    "creationConfirmed": bool(binding.get("creationConfirmed")),
+                    "authorizationStatus": "complete" if binding.get("identityStatus") == "verified" else "pending",
+                    "syncStatus": binding.get("syncStatus", "not_started"),
+                    "taskRunning": self.live(task_uuid),
+                    "systemAccountId": binding.get("systemAccountId"),
+                    "canResume": bool(record is not None and not self.live(task_uuid) and binding.get("creationConfirmed")
+                        and binding.get("passwordCheckpoint") and binding.get("identityStatus") != "verified"),
+                    "canRetrySync": bool(record is not None and not self.live(task_uuid)
+                        and binding.get("syncStatus") in {"failed", "pending", "awaiting_identity"})}
+        return result
+
     def install_adapters(self):
         # Install global dispatch wrappers once. The integration object is held
         # only in a private thread-local context for a known leased task.
@@ -1029,7 +1396,7 @@ class AppleMailboxIntegration:
 
             def create(cls, service_type, config, name=None):
                 context = getattr(_context, "task", None)
-                if context is not None and service_type == EmailServiceType.TEMP_MAIL:
+                if context is not None and not context.get("generic") and service_type == EmailServiceType.TEMP_MAIL:
                     return AppleHiddenMailboxProvider(context["integration"], context)
                 return factory(cls, service_type, config, name)
 
@@ -1043,6 +1410,11 @@ class AppleMailboxIntegration:
                 original(engine, *args, **kwargs)
                 if isinstance(engine.email_service, AppleHiddenMailboxProvider):
                     engine.email_service.integration.observe_engine(engine, engine.email_service)
+                else:
+                    context = getattr(_context, "task", None)
+                    if context is not None and context.get("generic"):
+                        from types import SimpleNamespace
+                        context["integration"].observe_engine(engine, SimpleNamespace(context=context, otp_lower_bound=None))
 
             engine_class.__init__ = initialize
             engine_class._id_apple_adapter = True
@@ -1053,15 +1425,27 @@ class AppleMailboxIntegration:
                 integrations = getattr(self.route, "_id_apple_integrations", [])
                 integration = next((item for item in integrations if task_uuid in item.contexts), None)
                 if integration is None:
-                    return original_run(task_uuid, *args, **kwargs)
+                    integration = next((item for item in integrations if task_uuid in item.generic_actors), None)
+                    if integration is None:
+                        raise ValueError("注册任务缺少可信操作人，不能执行")
+                    context = {"taskUuid": task_uuid, "operatorId": integration.generic_actors[task_uuid],
+                               "integration": integration, "generic": True, "email": None,
+                               "startedAt": time.time(), "cancelled": False}
+                    integration.contexts[task_uuid] = context
                 context = integration.contexts[task_uuid]
                 _context.task = context
                 with integration.lock:
                     integration.running_threads.add(task_uuid)
                 try:
-                    integration.store.observe(context["email"], task_uuid, taskStatus="running")
+                    if context.get("email"):
+                        integration.store.observe(context["email"], task_uuid, taskStatus="running")
                     return original_run(task_uuid, *args, **kwargs)
                 finally:
+                    if context.get("generic"):
+                        if context.get("email"):
+                            integration.store.finish(context["email"], task_uuid, False)
+                        integration.contexts.pop(task_uuid, None)
+                        integration.generic_actors.pop(task_uuid, None)
                     _context.task = None
                     with integration.lock:
                         integration.running_threads.discard(task_uuid)
@@ -1070,6 +1454,20 @@ class AppleMailboxIntegration:
             self.route._run_sync_registration_task = run
             self.route._id_apple_integrations = []
         self.route._id_apple_integrations.append(self)
+        if not getattr(self.route.run_registration_task, "_id_actor_adapter", False):
+            original_async_run = self.route.run_registration_task
+
+            async def async_run(task_uuid, *args, **kwargs):
+                actor = execution_actor.get()
+                integrations = getattr(self.route, "_id_apple_integrations", [])
+                integration = next((item for item in integrations if task_uuid in item.contexts), None)
+                if integration is None and actor:
+                    integration = integrations[-1]
+                    integration.generic_actors[task_uuid] = safe_id(actor)
+                return await original_async_run(task_uuid, *args, **kwargs)
+
+            async_run._id_actor_adapter = True
+            self.route.run_registration_task = async_run
 
     async def shutdown(self):
         # A stopped worker does not certify that the remote account was never
@@ -1093,6 +1491,14 @@ def install_apple_mailboxes(app: FastAPI, models, sessions, task_manager, redact
     @app.post(base + "/mark")
     async def mark(request: MarkInput):
         return {"records": [integration.public_record(item) for item in integration.store.mark(request)]}
+
+    @app.post(base + "/manual-sync-prepare")
+    async def manual_sync_prepare(request: ManualSyncPrepare):
+        return {"record": integration.public_record(integration.store.manual_sync_prepare(request))}
+
+    @app.post(base + "/manual-sync-ack")
+    async def manual_sync_ack(request: ManualSyncAck):
+        return {"record": integration.public_record(integration.store.manual_sync_ack(request))}
 
     @app.post(base + "/start")
     async def start(request: StartInput):
@@ -1124,7 +1530,7 @@ def install_apple_mailboxes(app: FastAPI, models, sessions, task_manager, redact
 
     @app.post(base + "/tasks/{task_uuid}/sync-ack")
     async def sync_ack(task_uuid: str, request: SyncAck):
-        return integration.store.sync_ack(task_uuid, request.accountId, request.status, request.errorKind)
+        return integration.store.sync_ack(task_uuid, request.accountId, request.status, request.errorKind, request.fingerprint)
 
     @app.post(base + "/tasks/{task_uuid}/sync-retry")
     async def sync_retry(task_uuid: str):
@@ -1132,6 +1538,31 @@ def install_apple_mailboxes(app: FastAPI, models, sessions, task_manager, redact
 
     @app.post(base + "/tasks/{task_uuid}/local-save-retry")
     async def local_save_retry(task_uuid: str):
+        return await asyncio.to_thread(integration.local_save_retry, task_uuid)
+
+    @app.post(base + "/tasks/{task_uuid}/authorization-resume")
+    async def resume_authorization(task_uuid: str):
+        return await integration.resume_authorization(task_uuid)
+
+    def native_task_owner(task_uuid):
+        with sessions.get_db() as db:
+            _, binding = integration.store.task_data(db, task_uuid)
+            if not execution_actor.get() or binding.get("operatorId") != execution_actor.get():
+                raise HTTPException(403, "仅原任务操作人可以恢复注册结果")
+
+    @app.post("/api/registration/tasks/{task_uuid}/authorization-resume")
+    async def native_resume_authorization(task_uuid: str):
+        native_task_owner(task_uuid)
+        return await integration.resume_authorization(task_uuid)
+
+    @app.post("/api/registration/tasks/{task_uuid}/sync-retry")
+    async def native_sync_retry(task_uuid: str):
+        native_task_owner(task_uuid)
+        return await asyncio.to_thread(integration.sync_retry, task_uuid)
+
+    @app.post("/api/registration/tasks/{task_uuid}/local-save-retry")
+    async def native_local_save_retry(task_uuid: str):
+        native_task_owner(task_uuid)
         return await asyncio.to_thread(integration.local_save_retry, task_uuid)
 
     @app.post(base + "/recover")

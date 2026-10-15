@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ConfigService } from '@nestjs/config';
 import type { AuditLogsService } from '../../audit-logs/audit-logs.service';
 import { AutoRegistrationService } from './auto-registration.service';
+import type { AuthenticatedUser } from '../../auth/auth.types';
 
 const runtime = vi.hoisted(() => ({
   spawn: vi.fn(),
@@ -69,5 +70,29 @@ describe('自动注册运行环境与健康状态', () => {
     await create('production').status();
     vi.mocked(fetch).mockResolvedValue(new Response('{"status":"ready"}'));
     await expect(service.status()).rejects.toThrow('自动注册服务尚未就绪');
+  });
+
+  it('通用任务只透传当前已认证操作者，忽略浏览器伪造的私有身份', async () => {
+    await create('production').status();
+    const response = { setHeader: vi.fn(), end: vi.fn(), statusCode: 0 };
+    const actor = { id: 'trusted-actor', roles: ['admin'] } as AuthenticatedUser;
+    const observer = vi.fn();
+    service.onWorkspaceOperator = observer;
+    const revalidate = async () => true;
+    await service.proxy(
+      {
+        originalUrl: '/api/id-business-v2/auto-registration/workspace/accounts',
+        method: 'GET',
+        headers: { 'x-id-workspace-operator-id': 'forged-actor' }
+      } as never,
+      response as never,
+      actor,
+      revalidate
+    );
+    expect(vi.mocked(fetch).mock.calls.at(-1)?.[1]?.headers).toMatchObject({
+      'X-ID-Workspace-Operator-Id': 'trusted-actor'
+    });
+    expect(observer).toHaveBeenCalledWith(actor, revalidate);
+    expect(response.end).toHaveBeenCalledTimes(1);
   });
 });

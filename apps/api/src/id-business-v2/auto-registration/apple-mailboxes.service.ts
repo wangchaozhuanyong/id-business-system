@@ -16,6 +16,8 @@ import {
 } from '../auto-recharge/public-api';
 import { AutoRegistrationService } from './auto-registration.service';
 import { AppleMailboxTaskBridgeService } from './apple-mailboxes-task-bridge.service';
+import { AppleMailboxManualSync } from './apple-mailbox-manual-sync';
+import { AppleMailboxMainSync } from './apple-mailbox-main-sync';
 import {
   appleMailboxAlias,
   appleMailboxRow,
@@ -27,8 +29,7 @@ import type {
   AppleMailboxBatch,
   AppleMailboxRecord,
   AppleMailboxRegistrationStatus,
-  AppleMailboxTask,
-  AppleMailboxSyncPayload
+  AppleMailboxTask
 } from './apple-mailboxes.types';
 
 const privateBase = '/internal/apple-mailboxes';
@@ -38,10 +39,8 @@ type Input = Record<string, unknown>;
 
 @Injectable()
 export class AppleMailboxesService implements OnModuleDestroy {
-  private readonly syncing = new Map<
-    string,
-    Promise<{ accountId: string | null; syncStatus: 'saved' | 'failed' | 'conflict' }>
-  >();
+  private readonly manualSync: AppleMailboxManualSync;
+  private readonly mainSync: AppleMailboxMainSync;
 
   constructor(
     private readonly worker: AutoRegistrationService,
@@ -52,12 +51,18 @@ export class AppleMailboxesService implements OnModuleDestroy {
     private readonly encryption: FieldEncryptionService,
     private readonly bridge: AppleMailboxTaskBridgeService
   ) {
+    this.manualSync = new AppleMailboxManualSync(worker, mailboxes, accounts, audit);
+    this.mainSync = new AppleMailboxMainSync(worker, accounts, audit);
+    this.worker.onWorkspaceOperator = (operator, revalidate) =>
+      this.bridge.rememberOperator(operator, revalidate);
+    this.bridge.onReconcile = (operator, revalidate) =>
+      this.mainSync.reconcile(operator, revalidate);
     this.bridge.onTerminal = async (id, result, context) => {
       if (
         ['pending', 'failed'].includes(result.record.syncStatus ?? '') &&
         (await context.revalidate().catch(() => false))
       )
-        await this.syncTask(id, context.operator);
+        await this.mainSync.syncTask(id, context.operator);
     };
   }
 
@@ -173,7 +178,16 @@ export class AppleMailboxesService implements OnModuleDestroy {
       operatorId: operator.id
     });
     await this.log(operator, '标记邮箱注册状态完成', `数量 ${items.length}`);
+    if (status === 'registered') return this.manualSync.syncMarked(items, operator);
     return { updated: items.length };
+  }
+
+  manualSyncPreview(value: unknown, operator: AuthenticatedUser) {
+    return this.manualSync.preview(value, operator);
+  }
+
+  syncManual(value: unknown, operator: AuthenticatedUser) {
+    return this.manualSync.sync(value, operator);
   }
 
   async start(value: unknown, operator: AuthenticatedUser, revalidate: () => Promise<boolean>) {
@@ -366,15 +380,7 @@ export class AppleMailboxesService implements OnModuleDestroy {
 
   async sync(id: string, operator: AuthenticatedUser) {
     this.admin(operator);
-    const taskUuid = this.uuid(id);
-    await this.log(operator, '补存隐藏邮箱主账号', taskUuid);
-    // Only the persisted result is read. No registration or upload is started here.
-    await this.worker.appleMailboxRequest(
-      `${privateBase}/tasks/${taskUuid}/sync-retry`,
-      'POST',
-      {}
-    );
-    return this.syncTask(taskUuid, operator);
+    return this.mainSync.sync(this.uuid(id), operator);
   }
 
   async localSave(id: string, operator: AuthenticatedUser) {
@@ -387,6 +393,55 @@ export class AppleMailboxesService implements OnModuleDestroy {
       {}
     );
     return { localSaveStatus: result.task.record.localSaveStatus };
+  }
+
+  async resumeAuthorization(
+    id: string,
+    operator: AuthenticatedUser,
+    revalidate: () => Promise<boolean>
+  ) {
+    this.admin(operator);
+    const taskUuid = this.uuid(id);
+    if (!(await revalidate())) throw new ForbiddenException('登录状态已变化，请重新登录');
+    const original = await this.worker.appleMailboxRequest<AppleMailboxTask>(
+      `${privateBase}/tasks/${taskUuid}`
+    );
+    const record = original.record;
+    if (
+      !record.aliasId ||
+      !record.creationConfirmed ||
+      record.identityStatus === 'verified' ||
+      (record.activeTaskUuid && record.activeTaskUuid !== taskUuid)
+    )
+      throw new ConflictException('该任务没有可续接的创建确认，请核对原结果');
+    const mailbox = await this.mailboxes.registrationMailbox(record.aliasId, operator);
+    if (normalizeEmail(mailbox.email) !== normalizeEmail(record.email))
+      throw new ConflictException('邮箱地址已变化，请刷新后核对');
+    await this.log(operator, '续接已创建账号的登录授权', taskUuid);
+    if (!(await revalidate())) throw new ForbiddenException('登录状态已变化，请重新登录');
+    const startedAt = Date.now();
+    const result = await this.worker.appleMailboxRequest<{
+      taskUuid: string;
+      record: AppleMailboxRecord;
+    }>(`${privateBase}/tasks/${taskUuid}/authorization-resume`, 'POST', {});
+    if (
+      result.taskUuid !== taskUuid ||
+      result.record.aliasId !== record.aliasId ||
+      normalizeEmail(result.record.email) !== normalizeEmail(record.email)
+    )
+      throw new ConflictException('授权续接任务与原邮箱不匹配，请核对');
+    this.bridge.remember(taskUuid, {
+      aliasId: record.aliasId,
+      email: normalizeEmail(record.email),
+      operator,
+      revalidate,
+      startedAt,
+      expiresAt: startedAt + 30 * 60_000,
+      previousId: null,
+      lastCheckedAt: 0
+    });
+    this.bridge.rememberOperator(operator, revalidate);
+    return result;
   }
 
   async resume(operator: AuthenticatedUser, revalidate: () => Promise<boolean>) {
@@ -425,71 +480,9 @@ export class AppleMailboxesService implements OnModuleDestroy {
         // An unavailable alias cannot be rebound to another mailbox.
       }
     }
-    const pending = await this.worker.appleMailboxRequest<{ tasks: { taskUuid: string }[] }>(
-      `${privateBase}/sync-pending`
-    );
-    let synchronized = 0;
-    for (const task of pending.tasks.slice(0, 100)) {
-      if (!(await revalidate())) break;
-      try {
-        if ((await this.syncTask(this.uuid(task.taskUuid), operator)).syncStatus === 'saved')
-          synchronized += 1;
-      } catch {
-        /* Persisted pending facts remain available after a transport failure. */
-      }
-    }
+    this.bridge.rememberOperator(operator, revalidate);
+    const synchronized = await this.mainSync.reconcile(operator, revalidate);
     return { resumed, synchronized };
-  }
-
-  private syncTask(taskUuid: string, operator: AuthenticatedUser) {
-    const existing = this.syncing.get(taskUuid);
-    if (existing) return existing;
-    const work = this.saveMirror(taskUuid, operator).finally(() => this.syncing.delete(taskUuid));
-    this.syncing.set(taskUuid, work);
-    return work;
-  }
-
-  private async saveMirror(taskUuid: string, operator: AuthenticatedUser) {
-    const payload = await this.worker.appleMailboxRequest<AppleMailboxSyncPayload>(
-      `${privateBase}/tasks/${taskUuid}/sync-payload`
-    );
-    if (payload.sourceTaskUuid !== taskUuid)
-      throw new ConflictException('账号来源与任务不匹配，请核对原结果');
-    let result: { accountId: string | null; syncStatus: 'saved' | 'failed' | 'conflict' };
-    try {
-      const saved = await this.accounts.mirrorRegistration(
-        {
-          accountId: payload.accountId,
-          sourceTaskUuid: taskUuid,
-          upstreamAccountId: payload.upstreamAccountId,
-          email: payload.email,
-          ...(payload.password ? { password: payload.password } : {}),
-          registrationCountryCode: payload.registrationCountry,
-          source: payload.source,
-          fingerprint: payload.fingerprint
-        },
-        operator
-      );
-      result = { accountId: saved.accountId, syncStatus: 'saved' };
-    } catch (error) {
-      result = {
-        accountId: null,
-        syncStatus: error instanceof ConflictException ? 'conflict' : 'failed'
-      };
-    }
-    // On lost MySQL/SQLite receipts the stable account UUID and same-transaction source audit
-    // permit a later exact replay; raw exception messages must never cross the private bridge.
-    await this.worker.appleMailboxRequest(`${privateBase}/tasks/${taskUuid}/sync-ack`, 'POST', {
-      accountId: payload.accountId,
-      status: result.syncStatus,
-      ...(result.syncStatus === 'saved'
-        ? {}
-        : {
-            errorKind: result.syncStatus === 'conflict' ? 'email_conflict' : 'storage_unavailable'
-          })
-    });
-    await this.log(operator, '隐藏邮箱主账号同步结果', `${taskUuid} · ${result.syncStatus}`);
-    return result;
   }
 
   async task(taskUuid: string, operator: AuthenticatedUser) {

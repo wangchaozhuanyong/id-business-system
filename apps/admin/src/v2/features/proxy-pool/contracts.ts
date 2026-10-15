@@ -38,3 +38,29 @@ export interface RechargeProxyWrite {
 }
 
 export type RechargeProxyItem = ProxyPoolItem & { kind: ProxyKind };
+
+export type ProxyTestStatus =
+  | 'queued'
+  | 'running'
+  | 'awaiting_credentials'
+  | 'awaiting_review'
+  | 'succeeded'
+  | 'failed';
+export interface ProxyTestTask {
+  id: string;
+  proxyId: string;
+  status: ProxyTestStatus;
+  progress: number;
+  message: string;
+  requiresResubmission?: boolean;
+  connectionChanged?: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+export interface ProxyTestList {
+  items: ProxyTestTask[];
+  total: number;
+  page: number;
+  pageSize: number;
+  revalidateAt: string | null;
+}

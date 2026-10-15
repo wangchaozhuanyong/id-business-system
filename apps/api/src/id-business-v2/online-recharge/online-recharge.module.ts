@@ -27,9 +27,12 @@ import { OnlineRechargeSecurityNotificationService } from './security-notificati
 import { OnlineRechargeSecurityNotificationRepository } from './persistence/security-notification.repository';
 import { AuthLoginEventsModule } from '../../auth/login-events';
 import { OnlineRechargeLoginNotificationBridge } from './login-notification-bridge.service';
+import { RechargeModule } from '../auto-recharge/public-api';
+import { OnlineRechargeOrderSyncService } from './order-sync.service';
+import { OnlineRechargeOrderSyncRepository } from './persistence/order-sync.repository';
 
 @Module({
-  imports: [ProxyPoolModule, IdBusinessV2RuntimeModule, AuthLoginEventsModule],
+  imports: [ProxyPoolModule, IdBusinessV2RuntimeModule, AuthLoginEventsModule, RechargeModule],
   controllers: [
     OnlineRechargeAdminController,
     OnlineRechargePublicController,
@@ -40,6 +43,8 @@ import { OnlineRechargeLoginNotificationBridge } from './login-notification-brid
     FieldEncryptionService,
     OnlineRechargeRepository,
     OnlineRechargeWorkerRepository,
+    OnlineRechargeOrderSyncService,
+    OnlineRechargeOrderSyncRepository,
     OnlineRechargeAdminService,
     OnlineRechargeAssetsService,
     OnlineRechargeSettingsService,

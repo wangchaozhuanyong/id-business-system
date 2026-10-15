@@ -12,7 +12,9 @@ import type {
   AppleMailboxBatchInput,
   AppleMailboxBatch,
   AppleMailboxConsoleOptions,
-  AppleMailboxSyncStatus
+  AppleMailboxSyncStatus,
+  AppleMailboxManualSyncPreview,
+  AppleMailboxManualSyncResult
 } from './contracts';
 
 const base = '/id-business-v2/auto-registration';
@@ -40,7 +42,23 @@ export const autoRegistrationApi = {
     );
   },
   markAppleMailboxes(input: AppleMailboxMarkInput) {
-    return request<{ updated: number }>(http.post(`${base}/apple-mailboxes/mark`, input));
+    return request<{ updated: number; synchronization?: AppleMailboxManualSyncResult }>(
+      http.post(`${base}/apple-mailboxes/mark`, input)
+    );
+  },
+  previewManualMailboxSync(items: AppleMailboxTarget[], options: ApiRequestOptions = {}) {
+    return request<AppleMailboxManualSyncPreview>(
+      http.post(
+        `${base}/apple-mailboxes/manual-sync-preview`,
+        { items },
+        { signal: options.signal }
+      )
+    );
+  },
+  syncManualMailboxes(items: AppleMailboxTarget[]) {
+    return request<AppleMailboxManualSyncResult>(
+      http.post(`${base}/apple-mailboxes/manual-sync`, { items })
+    );
   },
   appleMailboxCandidates(options: ApiRequestOptions = {}) {
     return request<AppleMailboxConsoleOptions>(
@@ -70,6 +88,13 @@ export const autoRegistrationApi = {
   syncAppleMailboxTask(taskUuid: string) {
     return request<{ accountId: string | null; syncStatus: AppleMailboxSyncStatus }>(
       http.post(`${base}/apple-mailboxes/tasks/${encodeURIComponent(taskUuid)}/sync`)
+    );
+  },
+  resumeAppleMailboxAuthorization(taskUuid: string) {
+    return request<{ taskUuid: string; record: AppleMailboxRecord; task: AppleMailboxTask }>(
+      http.post(
+        `${base}/apple-mailboxes/tasks/${encodeURIComponent(taskUuid)}/authorization-resume`
+      )
     );
   },
   saveAppleMailboxLocalAccount(taskUuid: string) {

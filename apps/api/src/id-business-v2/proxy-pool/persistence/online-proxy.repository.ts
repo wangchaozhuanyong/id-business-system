@@ -6,6 +6,7 @@ import type { V2CommandTransaction } from '../../runtime/public-api';
 import { RechargeProxyRepository } from './proxy-pool.repository';
 import { RechargeProxyService } from '../proxy-pool.service';
 import { bankRechargeObject, bankRechargeId } from '../validation';
+import { proxyConnectionVersion, safeProxyTestResult } from '../proxy-test';
 
 function legacyProxy(value: string) {
   let url = value.trim();
@@ -64,18 +65,28 @@ export class OnlineProxyPoolRepository {
   async resolveId(tx: V2CommandTransaction, oldId: string) {
     return (await this.repository.resolveOnlineId(tx, oldId))?.proxyId ?? oldId;
   }
-  async active(tx: V2CommandTransaction, requested?: string, canonical = false) {
+  async active(
+    tx: V2CommandTransaction,
+    requested?: string,
+    canonical = false,
+    expectedVersion?: string
+  ) {
     const selected = requested
       ? canonical
         ? requested
         : await this.resolveId(tx, requested)
       : undefined;
+    if (selected) await this.repository.lock(tx, selected);
     const rows = await this.repository.active(tx, selected);
     if (!rows.length)
       throw new ConflictException(requested ? '所选代理已停用或不存在' : '共用代理池没有启用代理');
     const row = rows[randomInt(rows.length)]!;
+    const connectionVersion = proxyConnectionVersion(row);
+    if (expectedVersion && expectedVersion !== connectionVersion)
+      throw new ConflictException('代理连接资料已修改，请重新检测');
     return {
       id: row.id,
+      connectionVersion,
       proxy_url: this.encryption.decrypt(row.urlEncrypted),
       connectionMode: row.connectionMode,
       protocol: row.protocol,
@@ -85,16 +96,23 @@ export class OnlineProxyPoolRepository {
   async result(
     tx: V2CommandTransaction,
     requested: string,
-    result: { ip: string | null; latencyMs: number | null; ok: boolean },
-    canonical = false
+    result: { ip: string | null; latencyMs: number | null; ok: boolean; errorCode?: unknown },
+    canonical = false,
+    expectedVersion?: string
   ) {
     const id = canonical ? requested : await this.resolveId(tx, requested);
-    return this.repository.update(tx, id, {
-      exitIp: result.ip,
-      latencyMs: result.latencyMs,
-      testMessage: result.ok ? '检测成功' : '检测失败',
+    await this.repository.lock(tx, id);
+    const row = await this.repository.findInTransaction(tx, id);
+    if (!row || !expectedVersion || proxyConnectionVersion(row) !== expectedVersion)
+      return { applied: false };
+    const safe = safeProxyTestResult(result);
+    await this.repository.update(tx, id, {
+      exitIp: safe.ip,
+      latencyMs: safe.latencyMs,
+      testMessage: safe.message,
       testedAt: new Date()
     });
+    return { applied: true };
   }
   async action(action: string, raw: unknown, operator: AuthenticatedUser) {
     const input = bankRechargeObject(raw);

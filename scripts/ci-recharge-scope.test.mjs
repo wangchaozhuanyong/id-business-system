@@ -1,3 +1,12 @@
+import {
+  isRegistrationClosureOnly,
+  isRegistrationClosureControlsOnly,
+  registrationFactsSchemaProof,
+  registrationFactsMigration,
+  registrationPublishedBindingPath,
+  registrationPublishedRecoveryProof,
+  hasRegistrationPublishedRecovery
+} from './ci-registration-closure-scope.mjs';
 import { imageInputsChanged } from './ci-recharge-python-image.mjs';
 import { adminHtmlCachePaths, isAdminHtmlCacheOnly } from './ci-recharge-scope.mjs';
 import assert from 'node:assert/strict';
@@ -1634,10 +1643,9 @@ function recordScopeClassification(paths, snapshot, eventName = 'pull_request', 
   const script = `
     import childProcess from 'node:child_process';
     import fs from 'node:fs';
+    import { createHash } from 'node:crypto';
     import { syncBuiltinESMExports } from 'node:module';
-    const paths = JSON.parse(process.env.SCOPE_TEST_PATHS);
-    const snapshot = JSON.parse(process.env.SCOPE_TEST_SNAPSHOT);
-    const options = JSON.parse(process.env.SCOPE_TEST_OPTIONS);
+    const { paths, snapshot, options, schema: fixtureSchema } = JSON.parse(fs.readFileSync(0, 'utf8'));
     const gitCalls = [];
     const apiCalls = [];
     const writes = [];
@@ -1677,7 +1685,8 @@ function recordScopeClassification(paths, snapshot, eventName = 'pull_request', 
           return (mode ?? '100644') + ' blob ' + 'e'.repeat(40) + '\\t' + args[3] + '\\n';
         }
         if (args[0] === 'show' && args[1].endsWith(':apps/api/prisma-mysql/schema.prisma'))
-          return process.env.SCOPE_TEST_SCHEMA;
+          return (args[1].startsWith('HEAD:') ? options.schemaAfter : options.schemaBefore)
+            ?? fixtureSchema;
         throw new Error('Unexpected Git command: ' + JSON.stringify(args));
       }
       if (file === 'gh' && args[0] === 'run') return '';
@@ -1707,12 +1716,20 @@ function recordScopeClassification(paths, snapshot, eventName = 'pull_request', 
     console.log = (value) => { result = JSON.parse(value); };
     process.argv = ['node', 'scripts/ci-recharge-scope.mjs'];
     await import('./scripts/ci-recharge-scope.mjs');
-    process.stdout.write(JSON.stringify({ result, gitCalls, apiCalls, writes }));
+    process.stdout.write(JSON.stringify({ result, gitCalls, apiCalls, writes,
+      fixtureTransfer: options.fixtureTransferProbe ? {
+        beforeBytes: Buffer.byteLength(options.schemaBefore),
+        beforeSha256: createHash('sha256').update(options.schemaBefore).digest('hex'),
+        afterBytes: Buffer.byteLength(options.schemaAfter),
+        afterSha256: createHash('sha256').update(options.schemaAfter).digest('hex')
+      } : undefined
+    }));
   `;
   return JSON.parse(
     execFileSync(process.execPath, ['--input-type=module', '-e', script], {
       cwd: root,
       encoding: 'utf8',
+      input: JSON.stringify({ paths, snapshot, options, schema }),
       env: {
         ...process.env,
         GITHUB_EVENT_NAME: eventName,
@@ -1723,12 +1740,8 @@ function recordScopeClassification(paths, snapshot, eventName = 'pull_request', 
         GITHUB_REPOSITORY: 'fixture/id-business',
         GITHUB_SHA: 'c'.repeat(40),
         BASE_SHA: 'a'.repeat(40),
-        SCOPE_TEST_PATHS: JSON.stringify(paths),
-        SCOPE_TEST_SNAPSHOT: JSON.stringify(snapshot),
-        SCOPE_TEST_OPTIONS: JSON.stringify(options),
         SCOPE_TEST_HELPER: productionDatabaseAccessHelper,
-        SCOPE_TEST_ACCEPTANCE: productionDatabaseAccessAcceptance,
-        SCOPE_TEST_SCHEMA: schema
+        SCOPE_TEST_ACCEPTANCE: productionDatabaseAccessAcceptance
       }
     })
   );
@@ -3168,6 +3181,7 @@ test('combined BitBrowser orders and Apple scope retains every affected check wi
     'apps/admin/src/v2/features/customers/useCustomersPage.ts',
     'apps/admin/src/v2/features/tableSchemas.ts',
     'apps/admin/src/v2/styles/records.css',
+    'apps/admin/src/v2/features/online-recharge/OnlineOrderBackfill.vue',
     'apps/api/src/id-business-v2/auto-recharge/bank-recharge-finance.service.ts',
     'apps/api/src/id-business-v2/auto-recharge/worker/bitbrowser_connector.py',
     'apps/api/src/id-business-v2/auto-registration/apple-mailboxes.service.ts',
@@ -5195,4 +5209,342 @@ test('reviewed HTML cache directives keep Admin and real Nginx checks without ad
     assert.equal(isAdminHtmlCacheOnly([...paths, extra]), false, extra);
     assert.equal(needsOnlineRechargeCiBuild([...paths, extra]), true, extra);
   }
+});
+
+test('registration closure admits only its exact nullable facts and immutable migration', () => {
+  const after = readFileSync('apps/api/prisma-mysql/schema.prisma', 'utf8');
+  const facts = `  registrationIpEncrypted String?                      @map("registration_ip_encrypted") @db.Text
+  registeredAt        DateTime?                        @map("registered_at") @db.DateTime(6)
+`;
+  assert.equal(after.split(facts).length, 2);
+  const before = after.replace(facts, '');
+  const sql = readFileSync(registrationFactsMigration, 'utf8');
+  const paths = [
+    'apps/api/prisma-mysql/schema.prisma',
+    registrationFactsMigration,
+    'apps/api/src/id-business-v2/auto-registration/apple-mailboxes.service.ts',
+    'apps/api/src/id-business-v2/proxy-pool/proxy-test.ts',
+    'scripts/ci-registration-closure-scope.mjs'
+  ];
+  assert.equal(registrationFactsSchemaProof(paths, before, after, sql), true);
+  assert.equal(isRegistrationClosureOnly(paths, before, after, sql), true);
+  assert.equal(checkMode(paths, before, after), 'recharge');
+  assert.deepEqual(selectedParts(paths), ['guards', 'api', 'migration']);
+  for (const [changed, oldSource, newSource, migration] of [
+    [paths.filter((path) => path !== registrationFactsMigration), before, after, sql],
+    [paths.filter((path) => !path.endsWith('schema.prisma')), before, after, sql],
+    [
+      paths,
+      before,
+      after.replace('registeredAt        DateTime?', 'registeredAt        DateTime'),
+      sql
+    ],
+    [paths, before, after + '\nmodel Extra { id String }\n', sql],
+    [paths, before, after.replace(facts, '') + facts, sql],
+    [paths, before, after, sql + '\nDELETE FROM secret;'],
+    [paths, after, after, sql],
+    [paths, undefined, after, sql]
+  ])
+    assert.equal(registrationFactsSchemaProof(changed, oldSource, newSource, migration), false);
+  for (const extra of [
+    'apps/api/src/id-business-v2/auto-recharge/worker/pay.py',
+    'apps/api/src/auth/auth.service.ts',
+    'apps/api/prisma-mysql/migrations/unreviewed/migration.sql',
+    'apps/admin/src/v2/features/customers/CustomerPage.vue',
+    'docker-compose.aws-mysql.yml',
+    'package-lock.json',
+    'scripts/production-release/registration-closure-unreviewed.py'
+  ]) {
+    assert.equal(isRegistrationClosureOnly([...paths, extra], before, after, sql), false, extra);
+    assert.equal(checkMode([...paths, extra], before, after), 'full', extra);
+  }
+});
+
+test('registration closure selects independent browser, API and both database responsibilities', () => {
+  const paths = [
+    'apps/admin/src/v2/features/auto-registration/V2AppleMailboxes.vue',
+    'apps/api/src/id-business-v2/auto-registration/worker/test_registration_closed_loop_unit.py',
+    'apps/api/src/id-business-v2/auto-registration/apple-mailbox-main-sync.ts',
+    'apps/api/src/id-business-v2/auto-registration/apple-mailbox-manual-sync.ts',
+    'apps/api/src/id-business-v2/auto-recharge/bank-recharge-registration-mirror.service.ts',
+    'apps/api/src/id-business-v2/online-recharge/mysql.integration.spec.ts',
+    'apps/api/src/id-business-v2/online-recharge/proxy-tests.mysql.integration.spec.ts',
+    'scripts/acceptance-v2-registration-inventory-ui.mjs',
+    'scripts/acceptance-v2-registration-native-ui.mjs',
+    'scripts/acceptance-v2-shared-proxy-mysql.mjs'
+  ];
+  assert.equal(checkMode(paths, schema, schema), 'recharge');
+  assert.deepEqual(selectedParts(paths), ['guards', 'admin', 'api', 'migration']);
+  assert.equal(hasAppleMailboxScope(paths), true);
+  const commands = adminCheckCommands('recharge', paths).map((args) => args.join(' '));
+  for (const expected of [
+    'exec -- node scripts/acceptance-v2-registration-inventory-ui.mjs',
+    'run auto-registration:setup',
+    'exec -- node scripts/acceptance-v2-registration-native-ui.mjs'
+  ])
+    assert.equal(commands.filter((command) => command === expected).length, 1, expected);
+  assert.deepEqual(selectedParts(['scripts/acceptance-v2-shared-proxy-mysql.mjs']), [
+    'guards',
+    'migration'
+  ]);
+});
+
+test('registration runtime acceptance selects the exact API fixture without admitting adjacent worker files', () => {
+  const fixture = 'apps/api/src/id-business-v2/auto-registration/worker/acceptance_runtime.py';
+  const paths = [registrationPublishedBindingPath, fixture];
+  assert.equal(isRegistrationClosureOnly(paths, schema, schema), true);
+  assert.equal(isRegistrationClosureControlsOnly(paths), false);
+  assert.equal(checkMode(paths, schema, schema), 'recharge');
+  assert.deepEqual(selectedParts(paths), ['guards', 'api']);
+  assert.equal(hasAppleMailboxScope([fixture]), true);
+  for (const unknown of [
+    'apps/api/src/id-business-v2/auto-registration/worker/acceptance_unreviewed.py',
+    'apps/api/src/id-business-v2/auto-registration/worker/upstream/acceptance_runtime.py'
+  ]) {
+    assert.equal(isRegistrationClosureOnly([...paths, unknown], schema, schema), false);
+    assert.equal(checkMode([...paths, unknown], schema, schema), 'full');
+    assert.equal(hasAppleMailboxScope([unknown]), false);
+  }
+});
+
+test('registration closure controls stay finite without moving unrelated source into control-only checks', () => {
+  const paths = [
+    '.github/workflows/registration-closure-validation.yml',
+    'scripts/production-release/registration-closure-release.py',
+    'scripts/ci-registration-closure-scope.mjs',
+    'docs/REGISTRATION_CLOSURE_RELEASE_20261016.md'
+  ];
+  assert.equal(isRegistrationClosureControlsOnly(paths), true);
+  assert.equal(checkMode(paths, schema, schema), 'ci-only');
+  assert.deepEqual(selectedParts(paths), ['guards']);
+  assert.equal(isRegistrationClosureControlsOnly([]), false);
+  assert.equal(isRegistrationClosureControlsOnly([...paths, 'package.json']), false);
+  const business = [...paths, 'apps/api/src/id-business-v2/proxy-pool/proxy-test.ts'];
+  assert.equal(isRegistrationClosureControlsOnly(business), false);
+  assert.equal(checkMode(business, schema, schema), 'recharge');
+});
+
+test('registration closure uses its new image proof while unknown image and payment inputs keep historical checks', () => {
+  const paths = [
+    'apps/api/src/id-business-v2/online-recharge/engine/proxy-test.cjs',
+    'scripts/ci-recharge-scope.mjs',
+    '.github/workflows/registration-closure-validation.yml'
+  ];
+  assert.equal(needsOnlineRechargeCiBuild(paths), false);
+  for (const extra of [
+    'apps/api/Dockerfile.mysql',
+    'apps/admin/Dockerfile',
+    'package-lock.json',
+    'apps/api/src/id-business-v2/online-recharge/engine/upstream/payment.js',
+    'apps/api/src/id-business-v2/auto-recharge/worker/pay.py',
+    'scripts/production-release/registration-closure-unreviewed.py'
+  ])
+    assert.equal(needsOnlineRechargeCiBuild([...paths, extra]), true, extra);
+  assert.deepEqual(
+    selectedParts([
+      'apps/api/src/id-business-v2/online-recharge/proxy-tests.mysql.integration.spec.ts'
+    ]),
+    ['guards', 'api', 'migration']
+  );
+});
+
+test('published recovery authenticates the exact source receipt and retained combined files', () => {
+  const bindingBytes = readFileSync(registrationPublishedBindingPath);
+  const binding = JSON.parse(bindingBytes);
+  const paths = [registrationPublishedBindingPath, ...Object.keys(binding.sources)];
+  assert.equal(Object.keys(binding.sources).length, 69);
+  assert.equal(Object.keys(binding.combinedSources).length, 10);
+  assert.equal(Object.keys(binding.validationSources).length, 7);
+  assert.equal(hasRegistrationPublishedRecovery(paths), true);
+  assert.equal(registrationPublishedRecoveryProof(paths), true);
+  assert.equal(
+    binding.sources['apps/admin/src/v2/features/auto-recharge/recharge-proxies-manifest.ts'],
+    undefined
+  );
+  for (const invalidBytes of [
+    Buffer.alloc(0),
+    Buffer.concat([bindingBytes, Buffer.from(' ')]),
+    Buffer.from(JSON.stringify({ ...binding, nativeRunId: '0' }))
+  ]) {
+    assert.equal(registrationPublishedRecoveryProof(paths, { bindingBytes: invalidBytes }), false);
+  }
+  for (const changed of [
+    'apps/api/src/id-business-v2/auto-recharge/bank-recharge-finance.service.ts',
+    'apps/api/src/id-business-v2/auto-recharge/persistence/bank-recharge.repository.ts',
+    'apps/api/src/id-business-v2/online-recharge/persistence/worker.repository.ts',
+    'apps/api/prisma-mysql/migrations/20261015110000_online_recharge_pro_500/migration.sql',
+    'apps/api/prisma-mysql/migrations/20261016090000_online_recharge_orders/migration.sql',
+    ...Object.keys(binding.validationSources)
+  ]) {
+    const readSource = (path) =>
+      path === changed ? Buffer.from('UNREVIEWED') : readFileSync(path);
+    assert.equal(registrationPublishedRecoveryProof(paths, { readSource }), false, changed);
+  }
+  assert.equal(
+    registrationPublishedRecoveryProof(paths, {
+      readSource: () => {
+        throw new Error('missing');
+      }
+    }),
+    false
+  );
+});
+
+test('published recovery proves only two new fields above the recovered deployed schema and exact prior migrations', () => {
+  const binding = JSON.parse(readFileSync(registrationPublishedBindingPath));
+  const before = execFileSync(
+    'git',
+    ['show', '07e28beb3fbb1fc5c9dac8050e16b3f00e0b1083:apps/api/prisma-mysql/schema.prisma'],
+    { encoding: 'utf8' }
+  );
+  const after = readFileSync('apps/api/prisma-mysql/schema.prisma', 'utf8');
+  const paths = [
+    registrationPublishedBindingPath,
+    ...Object.keys(binding.sources),
+    registrationFactsMigration
+  ];
+  assert.equal(registrationFactsSchemaProof(paths, before, after), true);
+  assert.equal(isRegistrationClosureOnly(paths, before, after), true);
+  assert.equal(checkMode(paths, before, after), 'recharge');
+  assert.deepEqual(selectedParts(paths), ['guards', 'admin', 'api', 'migration']);
+  assert.equal(needsOnlineRechargeCiBuild(paths), false);
+  for (const omitted of Object.keys(binding.migrations)) {
+    const partial = paths.filter((path) => path !== omitted);
+    assert.equal(registrationFactsSchemaProof(partial, before, after), false, omitted);
+    assert.equal(checkMode(partial, before, after), 'full', omitted);
+    assert.equal(isTargetedOnly(partial, before, after), false, omitted);
+  }
+  for (const drift of [before + '\n', before.replace('chargeAmount', 'unreviewedAmount')])
+    assert.equal(registrationFactsSchemaProof(paths, drift, after), false);
+  assert.equal(
+    registrationFactsSchemaProof(paths, before, after.replace('pro_500', 'unreviewed_plan')),
+    false
+  );
+  for (const unreviewed of [
+    'apps/api/src/id-business-v2/auto-recharge/bank-recharge-payment-new.ts',
+    'apps/admin/src/v2/features/auto-recharge/recharge-proxies-manifest.ts',
+    'apps/api/prisma-mysql/migrations/20261016090000_online_recharge_orders/extra.sql',
+    'apps/api/src/id-business-v2/online-recharge/engine/upstream/payment.js',
+    'apps/api/src/auth/auth.service.ts',
+    'package-lock.json'
+  ]) {
+    assert.equal(checkMode([...paths, unreviewed], before, after), 'full', unreviewed);
+    assert.equal(isTargetedOnly([...paths, unreviewed], before, after), false, unreviewed);
+  }
+});
+
+test('published dynamic table control recovery stays exact and control-only', () => {
+  const controls = [
+    'scripts/check-v2-table-standard.mjs',
+    'scripts/lib/v2-table-schema-alias.mjs',
+    'scripts/v2-table-schema-alias.test.mjs'
+  ];
+  const paths = [registrationPublishedBindingPath, ...controls];
+  assert.equal(registrationPublishedRecoveryProof(paths), true);
+  assert.equal(isRegistrationClosureControlsOnly(paths), true);
+  assert.equal(checkMode(paths, schema, schema), 'ci-only');
+  assert.deepEqual(selectedParts(paths), ['guards']);
+  for (const changed of controls) {
+    const readSource = (path) =>
+      path === changed ? Buffer.from('UNREVIEWED') : readFileSync(path);
+    assert.equal(registrationPublishedRecoveryProof(paths, { readSource }), false, changed);
+  }
+  assert.equal(
+    checkMode([...paths, 'scripts/lib/unreviewed-table-alias.mjs'], schema, schema),
+    'full'
+  );
+});
+
+test('last published Admin layer preserves its real one-line successor without inventing native verification', () => {
+  const binding = JSON.parse(readFileSync(registrationPublishedBindingPath));
+  const [layer] = binding.publishedSuccessorLayers;
+  const path = 'apps/admin/src/v2/features/online-recharge/OnlineOrderBackfill.vue';
+  assert.equal(binding.publishedSuccessorLayers.length, 1);
+  assert.deepEqual(Object.keys(layer.sources), [path]);
+  assert.equal(layer.publicationCommit, '6d1db82cde92e8c02fea6254289c4b410e94016a');
+  assert.equal(layer.frontendNativeVerification, 'NOT_RECORDED_IN_MANIFEST');
+  assert.equal(layer.backendNativeRunId, binding.nativeRunId);
+  assert.equal(
+    createHash('sha256').update(readFileSync(path)).digest('hex'),
+    layer.sources[path].publishedSha256
+  );
+  assert.notEqual(layer.sources[path].publishedSha256, binding.sources[path].publishedSha256);
+  const readSource = (name) =>
+    name === path
+      ? execFileSync('git', ['show', binding.publicationCommit + ':' + name])
+      : readFileSync(name);
+  assert.equal(registrationPublishedRecoveryProof([registrationPublishedBindingPath, path]), true);
+  assert.equal(
+    registrationPublishedRecoveryProof([registrationPublishedBindingPath, path], { readSource }),
+    false
+  );
+});
+
+test('published fixture recovery admits only its three exact existing test sources', () => {
+  const paths = [
+    registrationPublishedBindingPath,
+    'apps/api/src/id-business-v2/auto-recharge/bank-recharge-plan-catalog.spec.ts',
+    'apps/api/src/id-business-v2/auto-recharge/persistence/bank-recharge-query.repository.spec.ts',
+    'apps/api/src/id-business-v2/online-recharge/validation.spec.ts'
+  ];
+  assert.equal(registrationPublishedRecoveryProof(paths), true);
+  assert.equal(checkMode(paths, schema, schema), 'recharge');
+  assert.deepEqual(selectedParts(paths), ['guards', 'api']);
+  for (const extra of [
+    'apps/api/src/id-business-v2/auto-recharge/bank-recharge-plan-catalog.ts',
+    'apps/api/src/id-business-v2/auto-recharge/persistence/unknown-query.repository.spec.ts'
+  ]) {
+    assert.equal(checkMode([...paths, extra], schema, schema), 'full', extra);
+  }
+});
+
+test('registration closure real CLI preserves schema blob bytes for exact published recovery', () => {
+  const { reviewBase: base } = JSON.parse(
+    readFileSync('scripts/production-release/registration-closure-contract.json', 'utf8')
+  );
+  assert.match(base, /^[a-f0-9]{40}$/);
+  const before = execFileSync('git', ['show', base + ':apps/api/prisma-mysql/schema.prisma'], {
+    encoding: 'utf8'
+  });
+  const after = readFileSync('apps/api/prisma-mysql/schema.prisma', 'utf8');
+  const paths = execFileSync('git', ['diff', '--name-only', base, 'HEAD'], { encoding: 'utf8' })
+    .trim()
+    .split('\n');
+  assert.ok(before.endsWith('\n') && after.endsWith('\n'));
+  assert.equal(checkMode(paths, before.trim(), after.trim()), 'full');
+  const classify = (changed, oldSource = before) =>
+    recordScopeClassification(changed, {}, 'pull_request', {
+      schemaBefore: oldSource,
+      schemaAfter: after
+    }).result;
+  const positive = classify(paths);
+  assert.equal(positive.mode, 'recharge');
+  assert.deepEqual(positive.checkParts, ['guards', 'admin', 'api', 'migration']);
+  assert.equal(positive.onlineCiBuild, false);
+  assert.equal(classify([...paths, 'apps/api/src/auth/auth.service.ts']).mode, 'full');
+  assert.equal(classify(paths, before + '\n').mode, 'full');
+});
+
+test('scope CLI fixture transport preserves schema blobs larger than a Linux environment item', () => {
+  const before = schema + '\n// ' + '原始字节'.repeat(20_000) + '\n';
+  const after = before + '\n';
+  assert.ok(Buffer.byteLength(before) > 128 * 1024);
+  const value = recordScopeClassification(['scripts/ci-recharge-scope.mjs'], {}, 'pull_request', {
+    schemaBefore: before,
+    schemaAfter: after,
+    fixtureTransferProbe: true
+  });
+  assert.equal(value.result.mode, 'ci-only');
+  assert.deepEqual(value.fixtureTransfer, {
+    beforeBytes: Buffer.byteLength(before),
+    beforeSha256: createHash('sha256').update(before).digest('hex'),
+    afterBytes: Buffer.byteLength(after),
+    afterSha256: createHash('sha256').update(after).digest('hex')
+  });
+  const source = readFileSync('scripts/ci-recharge-scope.test.mjs', 'utf8');
+  const fixture = source.slice(
+    source.indexOf('function recordScopeClassification('),
+    source.indexOf("test('bank-card policy controls")
+  );
+  assert.equal(/process\.env\.SCOPE_TEST_(?:PATHS|SNAPSHOT|OPTIONS|SCHEMA)/.test(fixture), false);
 });

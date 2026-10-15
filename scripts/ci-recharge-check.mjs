@@ -1,3 +1,4 @@
+import { readRegistrationNativeReuse } from './ci-registration-closure-native-reuse.mjs';
 import { isRechargeCheckoutOnly } from './ci-recharge-checkout-scope.mjs';
 import { isRechargeBillingOnly } from './ci-recharge-billing-scope.mjs';
 import { isSharedProxyPoolOnly, sharedProxyAdminCommand } from './ci-shared-proxy-scope.mjs';
@@ -119,6 +120,69 @@ const resumeOnlinePreflightReceiptFixGuard =
   process.env.GITHUB_EVENT_NAME === 'pull_request' &&
   base === 'b9f2e2b75a753b86a5057dd798d651c57496554e' &&
   canResumeOnlinePreflightReceiptFixGuard(base);
+// PR520 fixed native continuation starts here.
+if (
+  part === 'guards' &&
+  process.env.GITHUB_ACTIONS === 'true' &&
+  process.env.GITHUB_EVENT_NAME === 'pull_request' &&
+  process.env.GITHUB_REPOSITORY === 'wangchaozhuanyong/id-business-system' &&
+  base === '369c57fcb56f950c61b5fe4164a6c6d1d8102e95'
+) {
+  const registrationNativeEvidence = readRegistrationNativeReuse({
+    repo: process.env.GITHUB_REPOSITORY,
+    event: JSON.parse(readFileSync(process.env.GITHUB_EVENT_PATH, 'utf8')),
+    base,
+    mode,
+    currentTree: execFileSync('git', ['rev-parse', 'HEAD^{tree}'], { encoding: 'utf8' }).trim()
+  });
+  if (registrationNativeEvidence) {
+    run('node', [
+      '--test',
+      'scripts/ci-registration-closure-native-reuse.test.mjs',
+      'scripts/ci-recharge-scope.test.mjs',
+      'scripts/ci-recharge-check.test.mjs',
+      'scripts/ci-recharge-checkout-scope.test.mjs',
+      'scripts/check-v2-decimal-standard.test.mjs'
+    ]);
+    run('python3', ['-B', 'scripts/production-release/registration-closure-release.test.py']);
+    const repaired = registrationNativeEvidence.changed.filter((path) => existsSync(path));
+    npm(
+      'exec',
+      '--',
+      'prettier',
+      '--check',
+      ...repaired.filter((path) => /\.(?:mjs|json)$/.test(path))
+    );
+    npm('exec', '--', 'eslint', ...repaired.filter((path) => path.endsWith('.mjs')));
+    console.log('Authenticated PR520 guard prefix; continuing at the original failed command.');
+    const uiChecks = adminUiGuardChecks(mode, changed);
+    if (
+      changed.some(
+        (path) =>
+          path.includes('online-recharge') ||
+          /^scripts\/check-v2-(?:table|loading|input-retention|decimal)-standard/.test(path)
+      )
+    )
+      npm('run', 'test:online-recharge:controls');
+    const architectureChecks = backendArchitectureGuardChecks(mode, changed);
+    for (const name of new Set([...uiChecks, ...architectureChecks])) npm('run', name);
+    if (!uiChecks.length && mode !== 'ci-only' && mode !== 'audit-retention') {
+      npm(
+        'run',
+        'check:v2-decimal-standard',
+        '--',
+        'apps/admin/src/v2/features/auto-recharge',
+        'apps/api/src/id-business-v2/auto-recharge',
+        'packages/shared/src/v2'
+      );
+      npm('run', 'check:v2-ui-language', '--', 'apps/admin/src/v2/features/auto-recharge');
+    }
+    console.log(
+      JSON.stringify({ prefixEvidence: registrationNativeEvidence.prefix, remainder: 'PASS' })
+    );
+    process.exit(0);
+  }
+}
 const shared = () => npm('run', 'build', '--workspace', '@apple-business/shared');
 const onlineEngine = () => {
   const directory = 'apps/api/src/id-business-v2/online-recharge/engine/upstream';
@@ -427,6 +491,28 @@ const adminPendingReleaseControls = () => {
     run('python3', ['-B', 'scripts/production-release/admin-successor-diagnostic.test.py']);
   }
 };
+
+if (
+  ['guards', 'release-controls'].includes(part) &&
+  changed.some(
+    (path) =>
+      path.startsWith('scripts/production-release/registration-closure-') ||
+      path === '.github/workflows/registration-closure-validation.yml'
+  )
+)
+  run('python3', ['-B', 'scripts/production-release/registration-closure-release.test.py']);
+
+if (
+  ['guards', 'release-controls'].includes(part) &&
+  changed.some((path) =>
+    [
+      'scripts/check-v2-table-standard.mjs',
+      'scripts/lib/v2-table-schema-alias.mjs',
+      'scripts/v2-table-schema-alias.test.mjs'
+    ].includes(path)
+  )
+)
+  run('node', ['--test', 'scripts/v2-table-schema-alias.test.mjs']);
 
 if (part === 'guards') {
   if (!/^[a-f0-9]{40}$/.test(base)) throw new Error('Missing diff base');
@@ -919,6 +1005,7 @@ if (releaseArtifactOnly && ['guards', 'release-controls'].includes(part)) {
       'test_workspace.py',
       'test_apple_mailboxes.py',
       'test_release_safety.py',
+      'test_registration_closed_loop_unit.py',
       'test_upload_compat.py'
     ])
       run(python, ['-B', '-m', 'unittest', 'discover', '-s', worker, '-p', name]);
@@ -957,11 +1044,18 @@ if (releaseArtifactOnly && ['guards', 'release-controls'].includes(part)) {
     }
   } else {
     run('python3', ['scripts/ci-recharge-migration.py']);
-    if (changed.some((path) => path.includes('/proxy-pool/'))) {
+  }
+  // Shared-pool and registration changes can be in the same candidate. Keep
+  // both real database suites; the mirror branch must not hide proxy coverage.
+  if (
+    changed.some((path) => path.includes('/proxy-pool/')) ||
+    changed.includes('scripts/acceptance-v2-shared-proxy-mysql.mjs')
+  ) {
+    if (!connections && !mirror) {
       npm('run', 'prisma:mysql:generate');
       shared();
-      run('node', ['scripts/acceptance-v2-shared-proxy-mysql.mjs']);
     }
+    run('node', ['scripts/acceptance-v2-shared-proxy-mysql.mjs']);
   }
 } else if (part === 'connector') {
   const workerDirectory = 'apps/api/src/id-business-v2/auto-recharge/worker';

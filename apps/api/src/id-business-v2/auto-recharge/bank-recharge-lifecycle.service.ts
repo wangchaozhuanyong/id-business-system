@@ -1,3 +1,4 @@
+import { assertBankRechargeChannelAccess } from './bank-recharge-channel';
 import {
   BadRequestException,
   ConflictException,
@@ -30,7 +31,14 @@ export class BankRechargeLifecycleService {
     private readonly audit: V2TransactionalAuditService
   ) {}
 
-  private async context(tx: V2CommandTransaction, entity: Entity, id: string, action: Action) {
+  private async context(
+    tx: V2CommandTransaction,
+    entity: Entity,
+    id: string,
+    action: Action,
+    operator?: AuthenticatedUser,
+    manage = false
+  ) {
     if (entity === 'account') {
       if (action === 'restore')
         throw new ConflictException('软删除账号恢复需通过数据治理填写备份证据并由另一管理员审批');
@@ -54,6 +62,7 @@ export class BankRechargeLifecycleService {
     }
     const order = await this.repository.order(tx, id);
     if (!order) throw new NotFoundException('银充订单不存在');
+    assertBankRechargeChannelAccess(order.channel, operator, manage);
     if (action === 'restore' && order.deletedAt)
       throw new ConflictException('回收站订单恢复需通过数据治理填写备份证据并由另一管理员审批');
     if (action === 'restore' ? order.status !== 'cancelled' : Boolean(order.deletedAt))
@@ -70,6 +79,7 @@ export class BankRechargeLifecycleService {
       order.source !== 'manual' ||
       order.financeStatus !== 'unposted' ||
       order.rechargeJobId ||
+      order.onlineRechargeTaskId ||
       order.checkoutIdentifier ||
       order.paymentEvidenceId ||
       order.verifiedAt ||
@@ -90,10 +100,10 @@ export class BankRechargeLifecycleService {
     };
   }
 
-  async preview(entity: Entity, id: string, action: Action) {
+  async preview(entity: Entity, id: string, action: Action, operator?: AuthenticatedUser) {
     bankRechargeId(id, entity === 'account' ? 'ChatGPT 账号' : '银充订单');
     return this.repository.read(async (tx) => {
-      const context = await this.context(tx, entity, id, action);
+      const context = await this.context(tx, entity, id, action, operator);
       return { ...context, previewFingerprint: fingerprint(context) };
     });
   }
@@ -149,7 +159,7 @@ export class BankRechargeLifecycleService {
             throw new ConflictException('操作编号已用于其他确认内容');
           return data.outcome;
         }
-        const before = await this.context(tx, entity, id, action);
+        const before = await this.context(tx, entity, id, action, operator, true);
         if (
           before.expectedUpdatedAt !== expected.toISOString() ||
           fingerprint(before) !== input.previewFingerprint

@@ -27,4 +27,23 @@ describe('自动注册代理边界', () => {
     expect(isWorkspaceSensitiveRead('GET', '/api/email-services/2/full')).toBe(true);
     expect(isWorkspaceSensitiveRead('POST', '/api/accounts/export/json')).toBe(true);
   });
+  it.each([
+    '/payment',
+    '/api/payment/generate-link',
+    '/api/payment/open-incognito',
+    '/api/payment/accounts/1/mark-subscription',
+    '/api/payment/accounts/batch-check-subscription',
+    '/api/payment/accounts/1/upload-tm/extra'
+  ])('拒绝已退役的订阅支付入口 %s', (path) => {
+    expect(() => workspaceUpstreamPath(`${base}${path}`)).toThrow();
+  });
+  it('独立团队管理上传和凭据刷新导出继续保留', () => {
+    for (const path of [
+      '/api/payment/accounts/1/upload-tm',
+      '/api/payment/accounts/batch-upload-tm',
+      '/api/accounts/1/refresh-token',
+      '/api/accounts/export/json'
+    ])
+      expect(workspaceUpstreamPath(`${base}${path}`)).toBe(path);
+  });
 });

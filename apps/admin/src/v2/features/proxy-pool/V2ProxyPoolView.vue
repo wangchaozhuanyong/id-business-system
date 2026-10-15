@@ -8,12 +8,39 @@
       /></template>
       <template #actions>
         <AppButton v-if="canManage" @click="importOpen = true">批量导入</AppButton>
-        <AppButton v-if="canManage" @click="test()">检测启用代理</AppButton>
+        <AppButton
+          v-if="canManage"
+          :loading="tests.submitting.value"
+          :disabled="busy || tests.hasActive.value"
+          :title="tests.hasActive.value ? '已有检测任务正在排队或执行，结果将自动更新' : ''"
+          @click="tests.start()"
+          >检测启用代理</AppButton
+        >
         <AppButton v-if="canManage" variant="primary" @click="edit(null)">新增代理</AppButton>
-        <AppButton variant="ghost" allow-when-stale @click="query.refresh">刷新</AppButton>
+        <AppButton
+          variant="ghost"
+          allow-when-stale
+          :disabled="query.isRefreshing.value"
+          @click="refresh"
+          >刷新</AppButton
+        >
       </template>
     </V2PageContext>
     <p v-if="feedback" :role="failed ? 'alert' : 'status'">{{ feedback }}</p>
+    <p v-if="tests.feedback.value" :role="tests.failed.value ? 'alert' : 'status'">
+      {{ tests.feedback.value }}
+    </p>
+    <V2AsyncRegion
+      v-if="canManage && query.data.value?.items.length"
+      :phase="tests.query.phase.value"
+      :error="tests.query.error.value ? getApiErrorMessage(tests.query.error.value) : ''"
+      variant="field"
+      skeleton="inline"
+      loading-title="正在读取检测任务"
+      @retry="tests.query.refresh"
+    >
+      <p role="status">{{ tests.summary.value }}</p>
+    </V2AsyncRegion>
     <V2AsyncRegion
       :phase="query.phase.value"
       :previous-data="query.isParameterTransition.value"
@@ -92,7 +119,22 @@
                 ><template #dropdown
                   ><el-dropdown-menu>
                     <el-dropdown-item command="edit">编辑</el-dropdown-item
-                    ><el-dropdown-item command="test">检测连通性</el-dropdown-item
+                    ><el-dropdown-item
+                      command="test"
+                      :disabled="tests.submitting.value || isProxyTestActive(tests.taskFor(row.id))"
+                      >{{
+                        isProxyTestActive(tests.taskFor(row.id))
+                          ? '检测任务进行中'
+                          : tests.taskFor(row.id)?.requiresResubmission ||
+                              tests.taskFor(row.id)?.connectionChanged ||
+                              ['awaiting_credentials', 'awaiting_review'].includes(
+                                tests.taskFor(row.id)?.status ?? ''
+                              )
+                            ? '重新检测'
+                            : tests.taskFor(row.id)?.status === 'failed'
+                              ? '重试检测'
+                              : '检测连通性'
+                      }}</el-dropdown-item
                     ><el-dropdown-item command="status">{{
                       row.status === 'active' ? '停用' : '启用'
                     }}</el-dropdown-item
@@ -159,6 +201,7 @@ import { v2TableSchemas } from '@/v2/features/tableSchemas';
 import { proxyPoolApi } from './api';
 import type { ProxyPoolItem } from './contracts';
 import { proxyCountryLabel, proxyKindLabel, proxyProtocolLabel } from './options';
+import { isProxyTestActive, proxyTestTaskLabel, useProxyTests } from './useProxyTests';
 import ProxyPoolEditor from './ProxyPoolEditor.vue';
 import ProxyPoolImport from './ProxyPoolImport.vue';
 import ProxyPoolFilters from './ProxyPoolFilters.vue';
@@ -168,6 +211,7 @@ const auth = useAuthStore();
 const canManage = computed(() =>
   hasUserPermission(auth.user, 'id_business_v2.online_recharge.manage')
 );
+const canRead = computed(() => hasUserPermission(auth.user, 'id_business_v2.online_recharge.read'));
 const canReveal = computed(
   () =>
     hasUserPermission(auth.user, 'id_business_v2.online_recharge.sensitive') &&
@@ -192,7 +236,13 @@ const query = useV2ModuleQuery({
   scope: 'online-recharge',
   key: () => createV2QueryKey(filters.value),
   keepPreviousData: true,
+  enabled: () => canRead.value,
   query: ({ signal }) => proxyPoolApi.list(filters.value, { signal })
+});
+const tests = useProxyTests({
+  proxyIds: () => query.data.value?.items.map((row) => row.id) ?? [],
+  enabled: () => canManage.value && canRead.value,
+  onSettled: () => query.refresh()
 });
 const { listRef, listFrameStyle } = useV2StableListFrame({
   items: () => query.data.value?.items ?? [],
@@ -208,6 +258,16 @@ const editing = ref<ProxyPoolItem | null>(null),
   detailId = ref(''),
   feedback = ref('');
 function cell(row: ProxyPoolItem, key: string) {
+  if (key === 'testMessage') {
+    const task = tests.taskFor(row.id);
+    if (task) {
+      const previous =
+        isProxyTestActive(task) && row.testedAt
+          ? `；上次结果（${formatV2DateTime(row.testedAt)}）：${row.testMessage ?? '未记录'}`
+          : '';
+      return `${proxyTestTaskLabel(task)}${previous}`;
+    }
+  }
   if (key === 'countryCode') return proxyCountryLabel(row.countryCode);
   if (key === 'kind') return proxyKindLabel(row.kind);
   if (key === 'protocol') return proxyProtocolLabel(row.protocol);
@@ -223,26 +283,12 @@ function edit(row: ProxyPoolItem | null) {
   editing.value = row;
   editorOpen.value = true;
 }
-async function test(id?: string) {
-  if (busy.value) return;
-  busy.value = true;
-  failed.value = false;
-  feedback.value = '';
-  try {
-    const result = await proxyPoolApi.test(id);
-    feedback.value = result.tasks.length
-      ? `已排队 ${result.tasks.length} 个检测任务，请稍后刷新查看结果`
-      : '暂无启用代理可检测';
-  } catch (cause) {
-    failed.value = true;
-    feedback.value = getApiErrorMessage(cause);
-  } finally {
-    busy.value = false;
-  }
+async function refresh() {
+  await Promise.all([query.refresh(), tests.query.refresh()]);
 }
 async function action(key: string, row: ProxyPoolItem) {
   if (key === 'edit') return edit(row);
-  if (key === 'test') return test(row.id);
+  if (key === 'test') return tests.start(row.id);
   if (key === 'delete') {
     deleting.value = row;
     deleteOpen.value = true;

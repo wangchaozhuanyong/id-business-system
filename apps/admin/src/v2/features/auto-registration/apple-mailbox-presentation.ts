@@ -52,6 +52,41 @@ export function appleMailboxCanSync(value?: AppleMailboxSyncStatus) {
   return value === 'pending' || value === 'failed' || value === 'awaiting_identity';
 }
 
+export function appleMailboxCanResumeAuthorization(value?: {
+  creationConfirmed?: boolean;
+  authorizationStatus?: 'pending' | 'complete' | null;
+  activeTaskUuid?: string | null;
+  taskStatus: AppleMailboxTaskStatus | null;
+  taskUuid?: string | null;
+  lastTaskUuid?: string | null;
+}) {
+  return Boolean(
+    value?.creationConfirmed &&
+    value.authorizationStatus === 'pending' &&
+    (value.taskUuid || value.lastTaskUuid) &&
+    !value.activeTaskUuid &&
+    !appleMailboxTaskActive(value.taskStatus)
+  );
+}
+
+export function appleMailboxAuthorizationLabel(value: AppleMailboxRecord['authorizationStatus']) {
+  return value === 'complete' ? '授权已完成' : value === 'pending' ? '官网已创建·待授权' : '';
+}
+
+export function appleMailboxManualSyncPreviewLabel(
+  value: import('./contracts').AppleMailboxManualSyncPreview['items'][number]['status']
+) {
+  return {
+    create: '将新增为已注册·待补资料',
+    exists: '台账已有记录，保留现有资料',
+    conflict: '已有同邮箱账号，需核对来源',
+    deleted: '台账记录在回收站，需先核对',
+    busy: '邮箱有未结束任务，暂不处理',
+    stale: '邮箱状态已变化，请刷新后重新选择',
+    ineligible: '仅同步人工标记为已注册的邮箱'
+  }[value];
+}
+
 export function appleMailboxCanSaveLocal(
   value: AppleMailboxRecord['localSaveStatus'],
   status: AppleMailboxTaskStatus | null

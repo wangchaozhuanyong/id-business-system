@@ -2,7 +2,7 @@ import { createRenderer, h } from 'vue';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { clearV2QueryCache, getV2QueryData } from '@/v2/composables/useV2Query';
 import { clearV2SessionDrafts } from '@/v2/composables/useV2SessionDraft';
-import type { BitOrderPricingSettings } from './bank-recharge-api';
+import type { BitOrderPricingSettings, RechargeOrderChannel } from './bank-recharge-api';
 import { useBitOrderPricing } from './useBitOrderPricing';
 
 const api = vi.hoisted(() => ({ read: vi.fn(), update: vi.fn(), rates: vi.fn() }));
@@ -58,20 +58,57 @@ afterEach(() => {
   clearV2SessionDrafts();
 });
 
-async function mountPricing() {
+async function mountPricing(
+  channel: RechargeOrderChannel = 'bitbrowser',
+  expected = settings('2')
+) {
   let flow!: ReturnType<typeof useBitOrderPricing>;
   app = renderer.createApp({
     setup() {
-      flow = useBitOrderPricing();
+      flow = useBitOrderPricing(channel);
       return () => h('div');
     }
   });
   app.mount(node());
-  await vi.waitFor(() => expect(flow.query.data.value).toEqual(settings('2')));
+  await vi.waitFor(() => expect(flow.query.data.value).toEqual(expected));
   return flow;
 }
 
 describe('pricing settings module cache updates', () => {
+  it('两渠道收费配置、缓存与未保存草稿分别保留', async () => {
+    const bit = await mountPricing();
+    bit.draft.form.shoppingFeePercent = '7';
+    app!.unmount();
+    app = undefined;
+    api.read.mockResolvedValue(settings('4'));
+    const online = await mountPricing('online', settings('4'));
+    expect(online.draft.form.shoppingFeePercent).toBe('4');
+    expect(api.read).toHaveBeenLastCalledWith(
+      expect.objectContaining({ signal: expect.any(AbortSignal) }),
+      'online'
+    );
+    online.draft.form.shoppingFeePercent = '5';
+    api.update.mockResolvedValue(settings('5'));
+    await online.save();
+    expect(api.update).toHaveBeenCalledWith(
+      expect.objectContaining({ shoppingFeePercent: '5' }),
+      'online'
+    );
+    expect(
+      getV2QueryData('auto-recharge', 'online-orders-pricing-settings', {
+        moduleKey: 'bank-recharge-orders'
+      })
+    ).toEqual(settings('5'));
+    expect(
+      getV2QueryData('auto-recharge', 'bit-orders-pricing-settings', {
+        moduleKey: 'bank-recharge-orders'
+      })
+    ).toEqual(settings('2'));
+    app!.unmount();
+    app = undefined;
+    const restored = await mountPricing();
+    expect(restored.draft.form.shoppingFeePercent).toBe('7');
+  });
   it('updates the mounted pricing query after save without a second read', async () => {
     const flow = await mountPricing();
     api.update.mockResolvedValue(settings('3'));

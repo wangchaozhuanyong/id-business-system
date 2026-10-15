@@ -1,3 +1,4 @@
+import { acquireMysqlTransactionLock } from '../../../common/prisma/mysql-transaction-lock';
 import { Injectable } from '@nestjs/common';
 import type { Prisma } from '@prisma/client';
 import {
@@ -89,6 +90,9 @@ export class BankRechargeRepository {
       },
       select: {
         accountId: true,
+        channel: true,
+        onlineRechargeCardId: true,
+        onlineRechargeCard: { select: { id: true, last4: true, status: true } },
         cardId: true,
         cardLabelSnapshot: true,
         cardNumberSummaryEncrypted: true,
@@ -220,7 +224,39 @@ export class BankRechargeRepository {
   registrationMirrorAccounts(tx: V2CommandTransaction, accountId: string, emailHash: string) {
     return tx.idBusinessV2ChatgptAccount.findMany({
       where: { OR: [{ id: accountId }, { emailHash }] },
+      select: {
+        id: true,
+        emailHash: true,
+        deletedAt: true,
+        passwordEncrypted: true,
+        registrationCountryCode: true,
+        registrationIpEncrypted: true,
+        registeredAt: true,
+        updatedAt: true
+      }
+    });
+  }
+  registrationMirrorPreview(accountId: string, emailHash: string) {
+    return this.prisma.idBusinessV2ChatgptAccount.findMany({
+      where: { OR: [{ id: accountId }, { emailHash }] },
       select: { id: true, emailHash: true, deletedAt: true }
+    });
+  }
+  registrationSourceAudits(accountIds: string[]) {
+    return this.prisma.auditLog.findMany({
+      where: {
+        module: 'id_business_v2',
+        objectType: 'chatgpt_account',
+        objectId: { in: accountIds },
+        action: {
+          in: [
+            'id_business_v2.auto_registration.chatgpt_account.mirror',
+            'id_business_v2.auto_registration.chatgpt_account.manual_registered_mirror'
+          ]
+        }
+      },
+      select: { objectId: true, action: true, afterData: true },
+      orderBy: { createdAt: 'desc' }
     });
   }
   registrationMirrorAudit(tx: V2CommandTransaction, input: { accountId: string; action: string }) {
@@ -232,6 +268,17 @@ export class BankRechargeRepository {
         objectId: input.accountId
       },
       select: { afterData: true }
+    });
+  }
+  registrationCountryEdits(tx: V2CommandTransaction, accountId: string) {
+    return tx.auditLog.findMany({
+      where: {
+        module: 'id_business_v2',
+        objectType: 'chatgpt_account',
+        objectId: accountId,
+        action: 'id_business_v2.auto_recharge.chatgpt_account.update'
+      },
+      select: { beforeData: true, afterData: true }
     });
   }
   findAccountByEmailHash(tx: V2CommandTransaction, emailHash: string) {
@@ -306,6 +353,12 @@ export class BankRechargeRepository {
   findCard(tx: V2CommandTransaction, id: string) {
     return tx.idBusinessV2BankRechargeCard.findUnique({ where: { id } });
   }
+  findOnlineCard(tx: V2CommandTransaction, id: string) {
+    return tx.onlineRechargeCard.findUnique({
+      where: { id },
+      select: { id: true, last4: true, status: true }
+    });
+  }
   findCardsByTail(tx: V2CommandTransaction, last4: string, currencyCode: string) {
     return tx.idBusinessV2BankRechargeCard.findMany({
       where: { last4, currencyCode, active: true },
@@ -326,17 +379,47 @@ export class BankRechargeRepository {
   findOrderForCompletion(tx: V2CommandTransaction, id: string) {
     return tx.idBusinessV2BankRechargeOrder.findFirst({
       where: { id, deletedAt: null },
-      include: { card: true, account: true, customer: true }
+      include: {
+        card: true,
+        onlineRechargeCard: { select: { id: true, last4: true, status: true } },
+        account: true,
+        customer: true
+      }
     });
   }
-  findOrderByPaymentEvidence(
+  async findOtherOrderByPaymentReference(
+    tx: V2CommandTransaction,
+    reference: string,
+    id: string | null = null
+  ) {
+    await acquireMysqlTransactionLock(tx, 'bank-recharge-order-evidence');
+    return tx.idBusinessV2BankRechargeOrder.findFirst({
+      where: {
+        ...(id ? { id: { not: id } } : {}),
+        OR: [
+          { paymentEvidenceId: reference },
+          { manualEvidenceRef: reference },
+          { checkoutIdentifier: reference }
+        ]
+      }
+    });
+  }
+  async findOrderByPaymentEvidence(
     tx: V2CommandTransaction,
     rechargeJobId: string,
     checkoutIdentifier: string,
     paymentEvidenceId: string
   ) {
+    await acquireMysqlTransactionLock(tx, 'bank-recharge-order-evidence');
     return tx.idBusinessV2BankRechargeOrder.findFirst({
-      where: { OR: [{ rechargeJobId }, { checkoutIdentifier }, { paymentEvidenceId }] }
+      where: {
+        OR: [
+          { rechargeJobId },
+          { checkoutIdentifier },
+          { paymentEvidenceId },
+          { manualEvidenceRef: paymentEvidenceId }
+        ]
+      }
     });
   }
   createOrder(tx: V2CommandTransaction, args: Prisma.IdBusinessV2BankRechargeOrderCreateArgs) {

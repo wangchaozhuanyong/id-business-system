@@ -28,7 +28,16 @@ const input: RegistrationMirrorInput = {
 };
 
 function setup() {
-  let accounts: { id: string; emailHash: string; deletedAt: Date | null }[] = [];
+  let accounts: {
+    id: string;
+    emailHash: string;
+    deletedAt: Date | null;
+    passwordEncrypted?: string | null;
+    registrationCountryCode?: string | null;
+    registrationIpEncrypted?: string | null;
+    registeredAt?: Date | null;
+    updatedAt?: Date;
+  }[] = [];
   let receipts: { afterData: Record<string, unknown> }[] = [];
   const tx = {};
   const repository = {
@@ -36,13 +45,22 @@ function setup() {
     registrationMirrorAccounts: vi.fn(async (_tx, id: string, hash: string) =>
       accounts.filter((row) => row.id === id || row.emailHash === hash)
     ),
+    registrationMirrorPreview: vi.fn(async (id: string, hash: string) =>
+      accounts.filter((row) => row.id === id || row.emailHash === hash)
+    ),
+    registrationCountryEdits: vi.fn().mockResolvedValue([]),
+    updateAccount: vi.fn(async (_tx, args) => {
+      const row = accounts.find((row) => row.id === args.where.id)!;
+      Object.assign(row, args.data);
+      return row;
+    }),
     registrationMirrorAudit: vi.fn(async (tx: object, request: { accountId: string }) => {
       void tx;
       void request;
       return receipts;
     }),
     createAccount: vi.fn(async (_tx, args) => {
-      accounts.push({ id: args.data.id, emailHash: args.data.emailHash, deletedAt: null });
+      accounts.push({ ...args.data, deletedAt: null });
       return args.data;
     })
   };
@@ -66,7 +84,7 @@ function setup() {
     })
   };
   const encryption = {
-    encrypt: vi.fn((value: string) => `encrypted:${value}`),
+    encrypt: vi.fn((value: string | null) => (value == null ? null : `encrypted:${value}`)),
     hash: vi.fn((value: string) => `hash:${value}`)
   };
   const service = new BankRechargeRegistrationMirrorService(
@@ -304,7 +322,152 @@ describe('注册镜像查询的持久化范围', () => {
     );
     expect(findMany.mock.calls[1]?.[0]).toEqual({
       where: { OR: [{ id: accountId }, { emailHash: `hash:${email}` }] },
-      select: { id: true, emailHash: true, deletedAt: true }
+      select: {
+        id: true,
+        emailHash: true,
+        deletedAt: true,
+        passwordEncrypted: true,
+        registrationCountryCode: true,
+        registrationIpEncrypted: true,
+        registeredAt: true,
+        updatedAt: true
+      }
     });
+  });
+});
+
+describe('注册事实与人工补建', () => {
+  const manual = { email, aliasId: 'real-alias', revision: 3 };
+  const facts = {
+    ...input,
+    schemaVersion: 2 as const,
+    identityStatus: 'creation_confirmed' as const,
+    creationConfirmed: true,
+    registrationIp: '203.0.113.8',
+    registeredAt: '2026-01-01T01:02:03Z',
+    provider: 'apple_hidden'
+  };
+
+  it('加密真实注册出口，独立记录注册时间，审计不包含出口明文或密码', async () => {
+    const { service, repository, audit } = setup();
+    await service.mirrorRegistration(facts, operator);
+    expect(repository.createAccount.mock.calls[0]?.[1].data).toMatchObject({
+      registrationIpEncrypted: 'encrypted:203.0.113.8',
+      registeredAt: new Date(facts.registeredAt)
+    });
+    expect(JSON.stringify(audit.append.mock.calls)).not.toContain('203.0.113.8');
+    expect(JSON.stringify(audit.append.mock.calls)).not.toContain('synthetic-password');
+  });
+
+  it.each([
+    { schemaVersion: undefined },
+    { creationConfirmed: false },
+    { registrationIp: 'http://invalid.test' },
+    { registeredAt: 'tomorrow' },
+    { registeredAt: '2026-02-30T00:00:00Z' },
+    { registeredAt: '2026-01-01T24:00:00Z' },
+    { source: 'login' as const },
+    { registeredAt: '2999-01-01T00:00:00Z' }
+  ])('拒绝没有创建依据或无效注册事实 %#', async (patch) => {
+    const { service, transactions } = setup();
+    await expect(service.mirrorRegistration({ ...facts, ...patch }, operator)).rejects.toThrow();
+    expect(transactions.execute).not.toHaveBeenCalled();
+  });
+
+  it('创建后失败的原任务可以补齐缺失事实，保留已有人工改过的密码及国家', async () => {
+    const { service, accounts, repository } = setup();
+    await service.mirrorRegistration(
+      { ...facts, registrationIp: null, registeredAt: null },
+      operator
+    );
+    Object.assign(accounts()[0]!, {
+      passwordEncrypted: 'manual-password',
+      registrationCountryCode: 'PH'
+    });
+    await service.mirrorRegistration({ ...facts, fingerprint: 'b'.repeat(64) }, operator);
+    expect(accounts()[0]).toMatchObject({
+      passwordEncrypted: 'manual-password',
+      registrationCountryCode: 'PH',
+      registrationIpEncrypted: 'encrypted:203.0.113.8',
+      registeredAt: new Date(facts.registeredAt)
+    });
+    expect(repository.updateAccount).toHaveBeenCalledTimes(1);
+    await service.mirrorRegistration({ ...facts, fingerprint: 'b'.repeat(64) }, operator);
+    expect(repository.updateAccount).toHaveBeenCalledTimes(1);
+  });
+
+  it('原创建任务授权完成后登记新的来源回执，不重复建号或改写凭据', async () => {
+    const { service, repository, receipts } = setup();
+    await service.mirrorRegistration(facts, operator);
+    const completed = {
+      ...facts,
+      identityStatus: 'verified' as const,
+      fingerprint: 'c'.repeat(64)
+    };
+    await service.mirrorRegistration(completed, operator);
+    expect(repository.createAccount).toHaveBeenCalledTimes(1);
+    expect(repository.updateAccount).not.toHaveBeenCalled();
+    expect(receipts().at(-1)?.afterData.identityStatus).toBe('verified');
+    await service.mirrorRegistration(completed, operator);
+    expect(receipts()).toHaveLength(2);
+  });
+
+  it('人工明确清空过注册国家时，迟到补齐也不能重新填回', async () => {
+    const { service, accounts, repository } = setup();
+    await service.mirrorRegistration(facts, operator);
+    accounts()[0]!.registrationCountryCode = null;
+    repository.registrationCountryEdits.mockResolvedValue([
+      {
+        beforeData: { registrationCountryCode: 'MY' },
+        afterData: { registrationCountryCode: null }
+      }
+    ]);
+    await service.mirrorRegistration(
+      { ...facts, identityStatus: 'verified', fingerprint: 'c'.repeat(64) },
+      operator
+    );
+    expect(accounts()[0]!.registrationCountryCode).toBeNull();
+    expect(repository.updateAccount).not.toHaveBeenCalled();
+  });
+
+  it('人工已注册补建只保存已知事实，稳定去重且不伪造创建时间和凭据', async () => {
+    const { service, repository, audit } = setup();
+    expect((await service.previewManualRegistered(manual, operator)).status).toBe('create');
+    const first = await service.mirrorManualRegistered(manual, operator);
+    expect((await service.previewManualRegistered(manual, operator)).status).toBe('exists');
+    expect(await service.mirrorManualRegistered({ ...manual, revision: 4 }, operator)).toEqual({
+      ...first,
+      replayed: true
+    });
+    expect(repository.createAccount).toHaveBeenCalledTimes(1);
+    expect(repository.createAccount.mock.calls[0]?.[1].data).toMatchObject({
+      registeredAt: null,
+      registrationIpEncrypted: null
+    });
+    expect(repository.createAccount.mock.calls[0]?.[1].data).not.toHaveProperty(
+      'passwordEncrypted'
+    );
+    expect(audit.append.mock.calls[0]?.[1].afterData).toEqual({
+      aliasId: manual.aliasId,
+      revision: 3,
+      emailHash: `hash:${email}`,
+      source: 'manual',
+      hasRegistrationIp: false
+    });
+  });
+
+  it('现有活动账号保留原资料，回收站账号不恢复', async () => {
+    const { service, setAccounts, repository } = setup();
+    setAccounts([
+      { id: otherId, emailHash: `hash:${email}`, deletedAt: null, passwordEncrypted: 'saved' }
+    ]);
+    expect(await service.mirrorManualRegistered(manual, operator)).toEqual({
+      accountId: otherId,
+      replayed: true
+    });
+    expect(repository.updateAccount).not.toHaveBeenCalled();
+    setAccounts([{ id: otherId, emailHash: `hash:${email}`, deletedAt: new Date() }]);
+    expect((await service.previewManualRegistered(manual, operator)).status).toBe('deleted');
+    await expect(service.mirrorManualRegistered(manual, operator)).rejects.toThrow('回收站');
   });
 });

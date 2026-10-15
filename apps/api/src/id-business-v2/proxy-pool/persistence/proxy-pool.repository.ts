@@ -1,6 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import type { Prisma } from '@prisma/client';
 import { PrismaService } from '../../../common/prisma/prisma.service';
+import { acquireMysqlTransactionLock } from '../../../common/prisma/mysql-transaction-lock';
 import type { V2CommandTransaction } from '../../runtime/public-api';
 
 @Injectable()
@@ -60,6 +61,10 @@ export class RechargeProxyRepository {
     return tx.idBusinessV2RechargeProxy.findUnique({ where: { id } });
   }
 
+  lock(tx: V2CommandTransaction, id: string) {
+    return acquireMysqlTransactionLock(tx, `proxy-pool:${id}`);
+  }
+
   create(tx: V2CommandTransaction, data: Prisma.IdBusinessV2RechargeProxyCreateInput) {
     return tx.idBusinessV2RechargeProxy.create({ data });
   }
@@ -94,7 +99,30 @@ export class RechargeProxyRepository {
     const ids = [id, ...aliases.map((row) => row.oldId)];
     return tx.onlineRechargeTask.findFirst({
       where: {
-        OR: ids.flatMap((proxyId) => [
+        AND: [
+          {
+            OR: ids.flatMap((proxyId) => [
+              { payload: { path: '$.proxyId', equals: proxyId } },
+              { payload: { path: '$.ids', array_contains: proxyId } }
+            ])
+          },
+          { operation: { not: 'proxy_test' } }
+        ]
+      },
+      select: { id: true }
+    });
+  }
+  async hasActiveTest(tx: V2CommandTransaction, id: string) {
+    const aliases = await tx.idBusinessV2ProxyAlias.findMany({
+      where: { proxyId: id },
+      select: { oldId: true }
+    });
+    return tx.onlineRechargeTask.findFirst({
+      where: {
+        operation: 'proxy_test',
+        deletedAt: null,
+        status: { in: ['queued', 'running'] },
+        OR: [id, ...aliases.map((row) => row.oldId)].flatMap((proxyId) => [
           { payload: { path: '$.proxyId', equals: proxyId } },
           { payload: { path: '$.ids', array_contains: proxyId } }
         ])

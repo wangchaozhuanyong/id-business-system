@@ -94,19 +94,18 @@ try {
     ],
     { env }
   );
-  const output = run(
-    'npm',
-    [
-      'run',
-      'test',
-      '--workspace',
-      '@apple-business/api',
-      '--',
-      'src/id-business-v2/online-recharge/mysql.integration.spec.ts'
-    ],
-    { env, timeout: 240000 }
-  );
-  console.log(output);
+  const suites = [
+    'src/id-business-v2/online-recharge/mysql.integration.spec.ts',
+    'src/id-business-v2/online-recharge/proxy-tests.mysql.integration.spec.ts'
+  ];
+  // Both suites own fixture cleanup; separate processes keep their beforeEach operations serial.
+  for (const suite of suites)
+    console.log(
+      run('npm', ['run', 'test', '--workspace', '@apple-business/api', '--', suite], {
+        env,
+        timeout: 240000
+      })
+    );
   writeFileSync(
     resolve(directory, 'result.json'),
     JSON.stringify(
@@ -115,6 +114,7 @@ try {
         scope: 'OWNED_EMPTY_DOCKER_MYSQL_8_4_ONLY',
         migration: 'PASS',
         integration: 'PASS',
+        suites,
         realPayment: 'NOT_RUN'
       },
       null,

@@ -240,7 +240,18 @@ def transform_asset(source: str, *, html: bool = False, asset_name: str = "") ->
         if asset_name == "app.js":
             source = source.replace('<span class="password-hidden" title="点击查看">', '<span class="password-hidden" data-account-id="${account.id}" onclick="window.idWorkspaceTogglePassword(this, this.dataset.accountId)" title="点击查看">')
         source += "\n" + _PASSWORD_BRIDGE
+    if asset_name == "accounts.js":
+        source = re.sub(r"^.*elements\.batchCheckSubBtn\..*$", "", source, flags=re.M)
+        source = re.sub(r"// ============== 订阅状态 ==============.*?(?=// ============== Sub2API 上传)", "", source, flags=re.S)
+        source = re.sub(r'<a href="#" class="dropdown-item" onclick="[^"]*markSubscription\([^\n]*</a>', "", source)
+        source = re.sub(r'<td>\s*<div class="cpa-status">\s*\$\{account\.subscription_type.*?</td>',
+                        '<td>${window.idRegistrationAccountFacts(account)}</td>', source, flags=re.S)
+        source += "\n" + _REGISTRATION_ACCOUNT_BRIDGE
     if html:
+        source = source.replace("查看和管理已注册的 OpenAI 账号", "保存注册结果与授权凭据，并核对主账号台账同步状态")
+        source = source.replace("账号管理", "注册结果与凭据")
+        source = re.sub(r'<button\b[^>]*id="batch-check-sub-btn"[^>]*>.*?</button>', "", source, flags=re.S)
+        source = source.replace('<th style="width: 80px;">订阅</th>', '<th>注册资料与台账</th>')
         source = source.replace('onclick="openIncognito()">无痕打开浏览器', 'onclick="openIncognito()">在当前浏览器打开')
         source = source.replace('<p class="hint" id="open-status"></p>', '<p class="hint" id="open-status" role="status"></p><p class="hint">使用当前浏览器的登录状态；如需隔离账号，请复制链接后手动打开无痕窗口。</p>')
         source = source.replace('<html lang="zh-CN">', '<html lang="zh-CN" data-v2-registration-workspace>')
@@ -286,6 +297,59 @@ def install_payment_browser_adapter(app: FastAPI) -> None:
     open_link.__annotations__ = {"request": payment.OpenIncognitoRequest}
     app.add_api_route("/api/payment/generate-link", generate_link, methods=["POST"])
     app.add_api_route("/api/payment/open-incognito", open_link, methods=["POST"])
+
+
+_REGISTRATION_ACCOUNT_BRIDGE = r"""
+window.idRegistrationAccountFacts = (account) => {
+    const facts = account.registration_facts;
+    if (!facts) return '<span>历史资料 · 同步状态未记录</span>';
+    if (facts.taskRunning === true || facts.syncStatus === 'pending') window.idRegistrationPending = true;
+    const statuses = {not_started: '尚未同步', pending: '等待同步', saved: '已同步主台账', failed: '同步失败',
+        conflict: '资料冲突待核对', awaiting_identity: '待核验身份', blocked: '资料待核对', quarantined: '迟到资料待核对'};
+    const task = facts.sourceTaskUuid;
+    const safeTask = typeof task === 'string' && /^[0-9a-f-]{36}$/i.test(task);
+    let value = '<span>' + (facts.authorizationStatus === 'complete' ? '授权已完成' :
+        facts.creationConfirmed === true ? '官网已创建 · 待完成授权' : '身份待核实') + '</span><br>' +
+        '<span>' + (statuses[facts.syncStatus] || '同步状态待核对') + '</span>';
+    if (safeTask && facts.canResume) value += '<br><button type="button" class="btn btn-secondary btn-sm" onclick="window.idRegistrationRetry(\'' + task + '\',\'authorization-resume\',this)">继续授权</button>';
+    if (safeTask && facts.canRetrySync) value += '<br><button type="button" class="btn btn-secondary btn-sm" onclick="window.idRegistrationRetry(\'' + task + '\',\'sync-retry\',this)">重试同步</button>';
+    if (typeof facts.systemAccountId === 'string' && /^[0-9a-f-]{36}$/i.test(facts.systemAccountId))
+        value += '<br><button type="button" class="btn btn-secondary btn-sm" onclick="parent.postMessage({type:\'id-registration:account-open\',page:\'/accounts\',accountId:\'' + facts.systemAccountId + '\'},location.origin)">查看主台账</button>';
+    return value;
+};
+window.idRegistrationRetry = async (task, action, button) => {
+    if (!/^[0-9a-f-]{36}$/i.test(task) || !['authorization-resume', 'sync-retry'].includes(action)) return;
+    button.disabled = true;
+    try {
+        await api.post('/registration/tasks/' + task + '/' + action, {});
+        toast.success(action === 'authorization-resume' ? '已续接原账号授权，不会重新注册' : '已提交原资料同步');
+        window.idRegistrationPollCount = 0;
+        window.idRegistrationRefreshStats = true;
+        await loadAccounts();
+    } catch (failure) { toast.error(failure.message || '操作未完成，请刷新核对原任务'); }
+    finally { if (button.isConnected) button.disabled = false; }
+};
+(() => {
+    const original = window.loadAccounts;
+    let timer;
+    window.idRegistrationPollCount = 0;
+    window.loadAccounts = async (...args) => {
+        clearTimeout(timer);
+        const wasPending = window.idRegistrationPending === true;
+        window.idRegistrationPending = false;
+        await original(...args);
+        if (window.idRegistrationRefreshStats || (wasPending && !window.idRegistrationPending)) {
+            window.idRegistrationRefreshStats = false;
+            await loadStats();
+        }
+        if (window.idRegistrationPending && window.idRegistrationPollCount < 60) {
+            window.idRegistrationPollCount += 1;
+            timer = setTimeout(() => window.loadAccounts(), 2500);
+        }
+    };
+    window.addEventListener('pagehide', () => clearTimeout(timer), {once: true});
+})();
+"""
 
 
 _PAYMENT_BROWSER_BRIDGE = """
@@ -389,6 +453,11 @@ class WorkspaceGatewayBoundary:
             await JSONResponse({"detail": "自动注册正在维护，请稍后重试"}, status_code=503)(scope, receive, send)
             return
         path = scope["path"]
+        if (path == "/payment" or path in {"/api/payment/generate-link", "/api/payment/open-incognito",
+                "/api/payment/accounts/batch-check-subscription"}
+                or re.fullmatch(r"/api/payment/accounts/\d+/mark-subscription", path)):
+            await JSONResponse({"detail": "自动注册的订阅管理已移除，请使用现有充值业务"}, status_code=410)(scope, receive, send)
+            return
         if requires_sensitive_access(path, scope.get("method", "GET")) and headers.get("x-id-workspace-sensitive-access") != "audited":
             await JSONResponse({"detail": "敏感资料必须经过系统权限校验和审计"}, status_code=403)(scope, receive, send)
             return
@@ -443,7 +512,11 @@ class WorkspaceGatewayBoundary:
                         payload = sanitize_payload(json.loads(body))
                         if isinstance(payload, dict) and (path == "/api/accounts" or (scope.get("method") == "PATCH" and re.fullmatch(r"/api/accounts/\d+", path))):
                             accounts = payload.get("accounts", []) if path == "/api/accounts" else [payload]
+                            integration = getattr(getattr(scope.get("app"), "state", None), "apple_mailboxes", None)
+                            summaries = integration.account_summaries([item.get("id") for item in accounts]) if integration else {}
                             for account in accounts:
+                                if account.get("id") in summaries:
+                                    account["registration_facts"] = summaries[account["id"]]
                                 for key in ("password", "cookies"):
                                     account[key] = MASK if account.get(key) else account.get(key)
                                 if account.get("proxy_used"):
@@ -461,7 +534,12 @@ class WorkspaceGatewayBoundary:
                     await send({"type": "http.response.body", "body": body})
             else:
                 await send(message)
-        await self.app(scope, receive, safe_http_send)
+        from apple_mailboxes import execution_actor
+        actor_token = execution_actor.set(headers.get("x-id-workspace-operator-id"))
+        try:
+            await self.app(scope, receive, safe_http_send)
+        finally:
+            execution_actor.reset(actor_token)
 
 
 def create_workspace_app(config: dict[str, Any]) -> FastAPI:
@@ -547,11 +625,10 @@ def create_workspace_app(config: dict[str, Any]) -> FastAPI:
         os.chmod(backup_path, 0o600)
         return {"success": True, "message": "数据库备份成功", "backup_path": str(backup_path)}
 
-    install_payment_browser_adapter(app)
     app.include_router(api_router, prefix="/api")
     app.include_router(ws_router, prefix="/api")
     templates = Jinja2Templates(directory=str(UPSTREAM_DIR / "templates"))
-    for page, template in (("/", "index.html"), ("/accounts", "accounts.html"), ("/email-services", "email_services.html"), ("/settings", "settings.html"), ("/payment", "payment.html")):
+    for page, template in (("/", "index.html"), ("/accounts", "accounts.html"), ("/email-services", "email_services.html"), ("/settings", "settings.html")):
         def page_handler(template_name: str) -> Any:
             async def render_page(request: Request) -> HTMLResponse:
                 rendered = templates.get_template(template_name).render(request=request)

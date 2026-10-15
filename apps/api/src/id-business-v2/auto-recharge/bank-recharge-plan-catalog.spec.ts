@@ -19,6 +19,7 @@ function fixture() {
     requireActive: vi.fn().mockResolvedValue({ id: accountId })
   };
   const repository = {
+    findOtherOrderByPaymentReference: vi.fn().mockResolvedValue(null),
     createOrder: vi.fn(async (_tx: unknown, input: { data: Record<string, unknown> }) => ({
       id: 'order-fixture',
       ...input.data

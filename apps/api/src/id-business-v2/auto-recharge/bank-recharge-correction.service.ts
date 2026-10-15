@@ -1,3 +1,4 @@
+import { assertBankRechargeChannelAccess } from './bank-recharge-channel';
 import { ConflictException, Injectable, NotFoundException } from '@nestjs/common';
 import { randomUUID } from 'node:crypto';
 import type { AuthenticatedUser } from '../../auth/auth.types';
@@ -34,6 +35,7 @@ export class BankRechargeCorrectionService {
       async (tx, context) => {
         const previous = await this.repository.findOrder(tx, id);
         if (!previous) throw new NotFoundException('银充订单不存在');
+        assertBankRechargeChannelAccess(previous.channel, operator, true);
         assertV2ExpectedUpdatedAt(previous.updatedAt, expected, '银充订单');
         if (previous.status !== 'completed' || previous.financeStatus !== 'posted') {
           throw new ConflictException('仅未发生退款的已完成银充订单可以更正');

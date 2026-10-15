@@ -5,6 +5,7 @@ const { BlockList, isIP } = require('node:net');
 const https = require('node:https');
 const { rememberSecrets } = require('./security.cjs');
 const blocked = new BlockList();
+const blockedV6 = new BlockList();
 for (const [address, prefix] of [
   ['0.0.0.0', 8],
   ['10.0.0.0', 8],
@@ -22,9 +23,21 @@ for (const [address, prefix] of [
   ['240.0.0.0', 4]
 ])
   blocked.addSubnet(address, prefix, 'ipv4');
+for (const [address, prefix] of [
+  ['2001::', 23],
+  ['2001:db8::', 32],
+  ['2002::', 16],
+  ['3fff::', 20]
+])
+  blockedV6.addSubnet(address, prefix, 'ipv6');
 function isPublic(address) {
   if (isIP(address) === 4) return !blocked.check(address, 'ipv4');
-  return isIP(address) === 6 && /^[23]/i.test(address) && !/^2001:db8:/i.test(address);
+  return (
+    isIP(address) === 6 &&
+    /^[23]/i.test(address) &&
+    !address.includes('%') &&
+    !blockedV6.check(address, 'ipv6')
+  );
 }
 function hostName(host) {
   const value = host.replace(/^\[|\]$/g, '').toLowerCase();
@@ -156,7 +169,8 @@ async function resolveProxy(connection, fetcher = fetchExtraction) {
       connectionMode: 'direct',
       protocol: new URL(connection).protocol.slice(0, -1)
     };
-  if (!connection?.proxy_url) throw new Error('共用代理池没有可用代理');
+  if (!connection?.proxy_url)
+    throw Object.assign(new Error('共用代理池没有可用代理'), { code: 'proxy_unavailable' });
   rememberSecrets(connection);
   connection = {
     connectionMode: 'direct',
@@ -172,8 +186,14 @@ async function resolveProxy(connection, fetcher = fetchExtraction) {
     rememberSecrets(resolved, 'proxy');
     return resolved;
   } catch {
-    throw new Error(
-      connection.connectionMode === 'extraction' ? '代理提取失败或响应无效' : '代理地址无效'
+    throw Object.assign(
+      new Error(
+        connection.connectionMode === 'extraction' ? '代理提取失败或响应无效' : '代理地址无效'
+      ),
+      {
+        code:
+          connection.connectionMode === 'extraction' ? 'extraction_failed' : 'unsupported_protocol'
+      }
     );
   }
 }

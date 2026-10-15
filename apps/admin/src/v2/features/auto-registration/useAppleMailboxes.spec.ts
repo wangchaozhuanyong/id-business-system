@@ -13,6 +13,9 @@ const mocks = vi.hoisted(() => ({
   batch: vi.fn(),
   sync: vi.fn(),
   localSave: vi.fn(),
+  manualPreview: vi.fn(),
+  manualSync: vi.fn(),
+  authorizationResume: vi.fn(),
   invalidate: vi.fn(),
   queries: [] as Array<Record<string, unknown>>,
   auth: { writesAllowed: true, user: { roles: ['admin'] } }
@@ -34,7 +37,10 @@ vi.mock('./api', () => ({
     recoverAppleMailbox: mocks.recover,
     startAppleMailboxBatch: mocks.batch,
     syncAppleMailboxTask: mocks.sync,
-    saveAppleMailboxLocalAccount: mocks.localSave
+    saveAppleMailboxLocalAccount: mocks.localSave,
+    previewManualMailboxSync: mocks.manualPreview,
+    syncManualMailboxes: mocks.manualSync,
+    resumeAppleMailboxAuthorization: mocks.authorizationResume
   }
 }));
 vi.mock('@/v2/composables/useV2Query', async () => {
@@ -134,6 +140,20 @@ beforeEach(() => {
   });
   mocks.sync.mockResolvedValue({ accountId: 'account-1', syncStatus: 'saved' });
   mocks.localSave.mockResolvedValue({ localSaveStatus: 'saved' });
+  mocks.manualPreview.mockResolvedValue({
+    items: [
+      { aliasId: row.aliasId, email: row.email, revision: 3, status: 'create', accountId: null }
+    ],
+    total: 1,
+    creatable: 1
+  });
+  mocks.manualSync.mockResolvedValue({
+    items: [{ aliasId: row.aliasId, status: 'saved', accountId: 'account-1' }],
+    synchronized: 1,
+    failed: 0,
+    skipped: 0
+  });
+  mocks.authorizationResume.mockResolvedValue({ taskUuid: 'task-1', record });
   vi.spyOn(console, 'warn').mockImplementation(() => {});
 });
 afterEach(() => {
@@ -143,6 +163,97 @@ afterEach(() => {
 });
 
 describe('苹果隐藏邮箱草稿、CAS 和任务生命周期', () => {
+  it('人工历史同步先预览，关闭重开保留原始版本，成功后使主台账重新读取', async () => {
+    const page = createPage();
+    page.setSelection([{ ...row, registrationStatus: 'registered' }]);
+    page.openManualSync();
+    expect(page.manualSyncDisabledReason.value).not.toBe('');
+    const options = mocks.queries[2]!.options as {
+      query: (input: { signal: AbortSignal }) => Promise<unknown>;
+    };
+    page.manualSyncQuery.data.value = (await options.query({
+      signal: new AbortController().signal
+    })) as never;
+    expect(mocks.manualPreview).toHaveBeenCalledWith(
+      [{ aliasId: 'alias-1', revision: 3 }],
+      expect.anything()
+    );
+    page.manualSyncOpen.value = false;
+    page.query.data.value = { items: [{ ...row, revision: 8 }], total: 1, page: 1, pageSize: 20 };
+    page.setSelection([{ ...row, revision: 8 }]);
+    page.openManualSync();
+    await page.syncManualMailboxes();
+    expect(mocks.manualSync).toHaveBeenCalledWith([{ aliasId: 'alias-1', revision: 3 }]);
+    expect(page.manualSyncOpen.value).toBe(false);
+    expect(page.feedback.value).toContain('缺失密码、注册 IP 和注册时间保留待补');
+    expect(mocks.invalidate).toHaveBeenCalledWith('auto-recharge');
+  });
+  it('预览冲突或读取失败时不能写入历史同步', async () => {
+    const page = createPage();
+    page.setSelection([row]);
+    page.openManualSync();
+    page.manualSyncQuery.data.value = { items: [], total: 1, creatable: 0 };
+    await page.syncManualMailboxes();
+    expect(mocks.manualSync).not.toHaveBeenCalled();
+    page.manualSyncQuery.data.value = { items: [], total: 1, creatable: 1 };
+    (page.manualSyncQuery.error as Ref<Error | null>).value = new Error('预览不可用');
+    await page.syncManualMailboxes();
+    expect(mocks.manualSync).not.toHaveBeenCalled();
+  });
+  it('过期快照只有显式重新核对才更新版本，核对失败不替换原提交目标', async () => {
+    const page = createPage();
+    page.setSelection([row]);
+    page.openManualSync();
+    page.manualSyncQuery.data.value = { items: [], total: 1, creatable: 1 };
+    page.query.data.value = { items: [{ ...row, revision: 8 }], total: 1, page: 1, pageSize: 20 };
+    (page.query.error as Ref<Error | null>).value = new Error('读取失败');
+    await page.refreshManualSyncPreview();
+    expect(page.manualSyncDisabledReason.value).toContain('最新状态读取失败');
+    const options = mocks.queries[2]!.options as {
+      query: (input: { signal: AbortSignal }) => Promise<unknown>;
+    };
+    await options.query({ signal: new AbortController().signal });
+    expect(mocks.manualPreview).toHaveBeenLastCalledWith(
+      [{ aliasId: 'alias-1', revision: 3 }],
+      expect.anything()
+    );
+    (page.query.error as Ref<Error | null>).value = null;
+    await page.syncManualMailboxes();
+    expect(mocks.manualSync).not.toHaveBeenCalled();
+    await page.refreshManualSyncPreview();
+    await page.syncManualMailboxes();
+    expect(mocks.manualSync).toHaveBeenLastCalledWith([{ aliasId: 'alias-1', revision: 8 }]);
+  });
+  it('同步请求失败保留对话框和原始提交目标', async () => {
+    const page = createPage();
+    page.setSelection([row]);
+    page.openManualSync();
+    page.manualSyncQuery.data.value = { items: [], total: 1, creatable: 1 };
+    mocks.manualSync.mockRejectedValueOnce(new Error('暂时不可用'));
+    await page.syncManualMailboxes();
+    expect(page.manualSyncOpen.value).toBe(true);
+    expect(page.actionError.value).toBe('暂时不可用');
+    await page.syncManualMailboxes();
+    expect(mocks.manualSync).toHaveBeenLastCalledWith([{ aliasId: 'alias-1', revision: 3 }]);
+  });
+  it('只允许已创建且待授权的原任务继续授权，不触发重新注册', async () => {
+    const page = createPage();
+    const created = {
+      ...row,
+      taskUuid: 'task-1',
+      taskStatus: 'failed' as const,
+      creationConfirmed: true,
+      authorizationStatus: 'pending' as const,
+      registrationStatus: 'registered' as const
+    };
+    await page.resumeAuthorization(created);
+    expect(mocks.authorizationResume).toHaveBeenCalledWith('task-1');
+    expect(mocks.start).not.toHaveBeenCalled();
+    expect(page.feedback.value).toContain('原账号的登录与授权');
+    await page.resumeAuthorization({ ...created, activeTaskUuid: 'task-1' });
+    await page.resumeAuthorization({ ...created, creationConfirmed: false });
+    expect(mocks.authorizationResume).toHaveBeenCalledOnce();
+  });
   it('旧身份恢复请求迟到后不继续读取邮箱列表', async () => {
     const pending = deferred<{ resumed: number; synchronized: number }>();
     mocks.resume.mockReturnValueOnce(pending.promise);

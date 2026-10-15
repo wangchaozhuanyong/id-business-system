@@ -1,5 +1,14 @@
+import { readRegistrationNativeReuse } from './ci-registration-closure-native-reuse.mjs';
 import { isRechargeCheckoutOnly } from './ci-recharge-checkout-scope.mjs';
 import { isRechargeBillingOnly } from './ci-recharge-billing-scope.mjs';
+import {
+  isRegistrationClosureOnly,
+  isRegistrationClosurePaths,
+  isRegistrationClosureControlsOnly,
+  hasRegistrationClosureApplication,
+  hasRegistrationPublishedRecovery,
+  registrationPublishedRecoveryProof
+} from './ci-registration-closure-scope.mjs';
 import {
   isSharedProxyPoolPaths,
   isSharedProxyPoolOnly,
@@ -208,6 +217,20 @@ const onlineCiBuildTestInputs = new Set([
   'scripts/production-release/online-recharge-component-lifecycle.test.py'
 ]);
 export function needsOnlineRechargeCiBuild(paths) {
+  // This task has its own finite three-role image proof; retain normal API,
+  // engine and database checks instead of rebuilding a historical projection.
+  if (
+    isRegistrationClosurePaths(paths) &&
+    registrationPublishedRecoveryProof(paths) &&
+    (hasRegistrationClosureApplication(paths) ||
+      paths.some(
+        (path) =>
+          path === 'scripts/ci-registration-closure-scope.mjs' ||
+          path === '.github/workflows/registration-closure-validation.yml' ||
+          path.startsWith('scripts/production-release/registration-closure-')
+      ))
+  )
+    return false;
   if (isRechargeCheckoutOnly(paths)) return false;
   if (isRechargeBillingOnly(paths)) return false;
   if (isAdminHtmlCacheOnly(paths)) return false;
@@ -966,6 +989,10 @@ export function isMailboxOnly(paths) {
 }
 
 export function checkMode(paths, oldSchema, newSchema, grantHelperSnapshot) {
+  if (isRegistrationClosureOnly(paths, oldSchema, newSchema))
+    return isAdminOnly(paths) ? 'admin' : 'recharge';
+  if (isRegistrationClosureControlsOnly(paths)) return 'ci-only';
+  if (hasRegistrationPublishedRecovery(paths)) return 'full';
   if (isSharedProxyPoolOnly(paths, oldSchema, newSchema)) return 'recharge';
   if (paths.includes(rechargePricingProfile)) {
     if (!isRechargePricingOnly(paths)) return 'full';
@@ -1136,6 +1163,19 @@ export function adminCheckCommands(mode, paths) {
   if (
     paths.some(
       (path) =>
+        path.startsWith('apps/admin/src/v2/features/auto-registration/') ||
+        path === 'apps/admin/src/v2/features/auto-recharge/V2ChatgptAccountsView.vue' ||
+        path === 'scripts/acceptance-v2-registration-inventory-ui.mjs'
+    )
+  )
+    commands.push(['exec', '--', 'node', 'scripts/acceptance-v2-registration-inventory-ui.mjs']);
+  if (paths.includes('scripts/acceptance-v2-registration-native-ui.mjs')) {
+    commands.push(['run', 'auto-registration:setup']);
+    commands.push(['exec', '--', 'node', 'scripts/acceptance-v2-registration-native-ui.mjs']);
+  }
+  if (
+    paths.some(
+      (path) =>
         path === workspaceDockAcceptance ||
         path.startsWith('apps/admin/src/v2/components/workspace/') ||
         /^apps\/admin\/src\/v2\/(?:layouts\/V2AdminLayout\.vue|styles\/(?:base|layout|records|v2)\.css|testing\/(?:V2WorkspaceDesignFixture\.vue|workspace-design-fixture\.ts))$/.test(
@@ -1211,6 +1251,8 @@ export const hasRechargeConnectionMigrationScope = (paths) =>
       path === 'scripts/acceptance-v2-recharge-employee-concurrency.mjs'
   );
 const registrationMirrorSourcePaths = new Set([
+  'apps/api/prisma-mysql/migrations/20261016120000_registration_facts/migration.sql',
+  'apps/api/src/id-business-v2/auto-recharge/bank-recharge-registration-facts.spec.ts',
   'apps/api/src/id-business-v2/auto-recharge/bank-recharge-registration-mirror.service.ts',
   'apps/api/src/id-business-v2/auto-recharge/bank-recharge-registration-mirror.service.spec.ts',
   'scripts/fixtures/registration-closed-loop-worker.py',
@@ -1253,6 +1295,11 @@ function hasRechargeConnectionSchemaProof(paths, before, after) {
 const allowed =
   /^(?:apps\/admin\/src\/v2\/features\/auto-recharge\/|apps\/api\/src\/id-business-v2\/auto-recharge\/|packages\/shared\/src\/v2\/auto-recharge\.ts$|docs\/|scripts\/ci-recharge-[\w.-]+$|scripts\/check-v2-(?:decimal-standard|ui-language)\.mjs$|scripts\/acceptance-v2-(?:auto-recharge|recharge-billing)\.mjs$|\.github\/workflows\/quality\.yml$)/;
 const appleMailboxApiPaths = new Set([
+  'apps/api/src/id-business-v2/auto-registration/apple-mailbox-manual-sync.ts',
+  'apps/api/src/id-business-v2/auto-registration/apple-mailbox-manual-sync.spec.ts',
+  'apps/api/src/id-business-v2/auto-registration/apple-mailbox-main-sync.ts',
+  'apps/api/src/id-business-v2/auto-registration/apple-mailbox-reconciliation.spec.ts',
+  'apps/api/src/id-business-v2/auto-registration/worker/test_registration_closed_loop_unit.py',
   'apps/api/src/id-business-v2/auto-registration/apple-mailbox-pool.ts',
   'apps/api/src/id-business-v2/auto-registration/apple-mailboxes-task-bridge.service.ts',
   'apps/api/src/id-business-v2/auto-registration/apple-mailboxes.controller.ts',
@@ -1261,6 +1308,7 @@ const appleMailboxApiPaths = new Set([
   'apps/api/src/id-business-v2/auto-registration/apple-mailboxes.types.ts',
   'apps/api/src/id-business-v2/auto-registration/auto-registration.module.ts',
   'apps/api/src/id-business-v2/auto-registration/auto-registration.service.ts',
+  'apps/api/src/id-business-v2/auto-registration/worker/acceptance_runtime.py',
   'apps/api/src/id-business-v2/auto-registration/worker/apple_mailboxes.py',
   'apps/api/src/id-business-v2/auto-registration/worker/apple_closed_loop.py',
   'apps/api/src/id-business-v2/auto-registration/worker/apple_registration_diagnostics.py',
@@ -1359,6 +1407,8 @@ export function isRechargeOnly(paths, oldSchema, newSchema) {
 const securityPaths =
   /^(?:apps\/api\/src\/auth\/(?:auth\.service|password-hasher)(?:\.spec)?\.ts$|apps\/admin\/src\/v2\/features\/audit-logs\/audit-log-presentation(?:\.spec)?\.ts$|apps\/api\/src\/id-business-v2\/workspace\/media-resolver\/|scripts\/(?:audit-python-dependencies(?:\.test)?\.py|container-hardening\.test\.mjs|start-auto-recharge-connector\.sh)$|\.github\/workflows\/python-dependency-audit\.yml$)/;
 export function isTargetedOnly(paths, oldSchema, newSchema) {
+  if (isRegistrationClosureOnly(paths, oldSchema, newSchema)) return true;
+  if (hasRegistrationPublishedRecovery(paths)) return false;
   if (paths.includes(rechargePricingProfile)) return isRechargeOnly(paths, oldSchema, newSchema);
   if (hasRegistrationOnboardingScope(paths)) return isRechargeOnly(paths, oldSchema, newSchema);
   if (paths.includes(registrationInterstitialProfile))
@@ -1396,6 +1446,24 @@ export function isTargetedOnly(paths, oldSchema, newSchema) {
   );
 }
 export function selectedParts(paths, grantHelperSnapshot) {
+  if (isRegistrationClosureControlsOnly(paths)) return ['guards'];
+  if (isRegistrationClosurePaths(paths) && hasRegistrationClosureApplication(paths))
+    return [
+      'guards',
+      ...(paths.some((path) => path.startsWith('apps/admin/') || path.includes('-ui.mjs'))
+        ? ['admin']
+        : []),
+      ...(paths.some((path) => path.startsWith('apps/api/')) ? ['api'] : []),
+      ...(paths.some((path) => path.startsWith('apps/api/prisma-mysql/')) ||
+      hasRegistrationMirrorScope(paths) ||
+      paths.includes('scripts/acceptance-v2-shared-proxy-mysql.mjs') ||
+      paths.includes(
+        'apps/api/src/id-business-v2/online-recharge/proxy-tests.mysql.integration.spec.ts'
+      ) ||
+      paths.some((path) => path.includes('/proxy-pool/') && path.startsWith('apps/api/'))
+        ? ['migration']
+        : [])
+    ];
   if (isRechargeCheckoutOnly(paths))
     return [
       'guards',
@@ -4041,8 +4109,8 @@ async function main() {
   const grantHelperSnapshot = readProductionDatabaseAccessSnapshot(base, paths);
   const mode = checkMode(
     paths,
-    git('show', `${base}:${schema}`),
-    git('show', `HEAD:${schema}`),
+    execFileSync('git', ['show', `${base}:${schema}`], { encoding: 'utf8' }),
+    execFileSync('git', ['show', `HEAD:${schema}`], { encoding: 'utf8' }),
     grantHelperSnapshot
   );
   const currentTree = git('rev-parse', 'HEAD^{tree}');
@@ -4135,6 +4203,17 @@ async function main() {
       if (reused.size === parts.length) break;
     }
   }
+  const registrationNativeEvidence = readRegistrationNativeReuse({
+    repo,
+    event,
+    base,
+    mode,
+    currentTree
+  });
+  if (registrationNativeEvidence) {
+    for (const part of ['admin', 'api', 'migration']) reused.add(part);
+    evidence.push(...registrationNativeEvidence.parts);
+  }
   if (process.env.GITHUB_EVENT_NAME === 'pull_request') {
     const migrationEvidence = reuseCombinedMigration(repo, event, mode, paths, currentTree);
     if (migrationEvidence) {
@@ -4180,6 +4259,8 @@ async function main() {
       args.some(
         (arg) =>
           /^acceptance:v2-(?:auto-recharge|table-layout|online-recharge-ui)$/.test(arg) ||
+          arg === 'scripts/acceptance-v2-registration-inventory-ui.mjs' ||
+          arg === 'scripts/acceptance-v2-registration-native-ui.mjs' ||
           arg === 'scripts/acceptance-v2-order-archive-ui.mjs' ||
           arg === workspaceDockAcceptance
       )

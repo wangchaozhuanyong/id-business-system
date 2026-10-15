@@ -59,11 +59,34 @@ export async function listChatgptAccounts(
     where,
     ...(pagination ? { skip: pagination.skip, take: pagination.take } : {})
   });
-  const [subscriptions, networks, openingCards] = await Promise.all([
+  const [subscriptions, networks, openingCards, sources] = await Promise.all([
     repository.subscriptionsForAccounts(items.map((item) => item.id)),
     repository.loginNetworksByEmailHashes(items.map((item) => item.emailHash)),
-    repository.openingCardsForAccounts(items.map((item) => item.id))
+    repository.openingCardsForAccounts(items.map((item) => item.id)),
+    repository.registrationSourceAudits(items.map((item) => item.id))
   ]);
+  const sourcesByAccount = new Map<string, 'automatic' | 'manual'>();
+  const awaitingAuthorization = new Set<string>();
+  const verifiedAuthorization = new Set<string>();
+  for (const source of sources) {
+    if (source.objectId && !sourcesByAccount.has(source.objectId)) {
+      sourcesByAccount.set(
+        source.objectId,
+        source.action.endsWith('.manual_registered_mirror') ? 'manual' : 'automatic'
+      );
+    }
+    if (
+      source.objectId &&
+      source.afterData &&
+      typeof source.afterData === 'object' &&
+      !Array.isArray(source.afterData)
+    ) {
+      if (source.afterData.identityStatus === 'creation_confirmed')
+        awaitingAuthorization.add(source.objectId);
+      if (source.afterData.identityStatus === 'verified')
+        verifiedAuthorization.add(source.objectId);
+    }
+  }
   const subscriptionsByAccount = new Map(subscriptions.map((item) => [item.accountId, item]));
   const networksByEmail = new Map(networks.map((item) => [item.emailHash, item]));
   const openingByAccount = new Map<
@@ -87,7 +110,10 @@ export async function listChatgptAccounts(
         order.cardNumberSummaryEncrypted,
         order.card?.numberEncrypted
       ),
-      deleted: Boolean(order.cardDeletedAt) || (!order.card && Boolean(order.cardLabelSnapshot))
+      deleted:
+        order.channel === 'online'
+          ? !order.onlineRechargeCard
+          : Boolean(order.cardDeletedAt) || (!order.card && Boolean(order.cardLabelSnapshot))
     });
   }
   const total = pagination ? await repository.countAccounts(where) : items.length;
@@ -97,6 +123,14 @@ export async function listChatgptAccounts(
     pageSize: pagination?.pageSize ?? total,
     items: items.map((item) => ({
       ...accountListItem(item, subscriptionsByAccount.get(item.id), now, warningBoundary),
+      registrationIp: encryption.decrypt(item.registrationIpEncrypted) ?? null,
+      registrationSource: sourcesByAccount.get(item.id) ?? null,
+      needsSupplement:
+        (awaitingAuthorization.has(item.id) && !verifiedAuthorization.has(item.id)) ||
+        !item.passwordEncrypted ||
+        !item.registrationIpEncrypted ||
+        !item.registrationCountryCode ||
+        !item.registeredAt,
       ...loginNetworkSummary(networksByEmail.get(item.emailHash), encryption),
       openingCard: openingByAccount.get(item.id) ?? null
     }))

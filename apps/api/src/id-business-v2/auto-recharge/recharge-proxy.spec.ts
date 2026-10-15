@@ -8,6 +8,8 @@ const link = 'https://proxy.example.test/extract?token=synthetic-token';
 
 function setup() {
   const repository = {
+    lock: vi.fn(),
+    hasActiveTest: vi.fn().mockResolvedValue(null),
     create: vi.fn().mockResolvedValue({ id, countryCode: 'US', kind: 'dynamic_residential' }),
     findInTransaction: vi.fn().mockResolvedValue(null),
     hasJobs: vi.fn().mockResolvedValue(null),

@@ -2,16 +2,28 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { configGroups } from './configFields';
 import { onlineActionAllowedForRow, onlineActionPayload, rowActions } from './sections';
 import type { OnlineQuery } from './contracts';
-const client = vi.hoisted(() => ({ post: vi.fn(), get: vi.fn(), patch: vi.fn() }));
+const client = vi.hoisted(() => ({
+  post: vi.fn(),
+  get: vi.fn(),
+  patch: vi.fn(),
+  invalidate: vi.fn((value: unknown) => value)
+}));
 vi.mock('@/api/client', () => ({ http: client, request: (value: unknown) => value }));
 vi.mock('@/v2/composables/useV2Query', () => ({
-  withV2QueryInvalidation: (value: unknown) => value
+  withV2QueryInvalidation: client.invalidate
 }));
 import { onlineApi } from './api';
 describe('配置检测与执行器请求合同', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     client.post.mockResolvedValue({ id: 'test-job', status: 'queued', progress: 0 });
+  });
+  it('历史订单预览只读不失效自身查询，实际补录和补同步仍刷新缓存', async () => {
+    await onlineApi.action('jobs', 'order-backfill-preview');
+    expect(client.invalidate).not.toHaveBeenCalled();
+    await onlineApi.action('jobs', 'order-backfill', { previewToken: 'synthetic-preview' });
+    await onlineApi.action('jobs', 'sync-order', { id: 'original-job' });
+    expect(client.invalidate).toHaveBeenCalledTimes(2);
   });
   it('兑换提交、订阅查询及原任务读取全部使用带后台身份的同一客户端', async () => {
     const signal = new AbortController().signal;

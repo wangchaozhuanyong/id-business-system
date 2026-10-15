@@ -34,6 +34,16 @@ export class AppleMailboxesController {
     return this.service.mark(value, operator);
   }
 
+  @Post('manual-sync-preview')
+  manualSyncPreview(@Body() value: unknown, @CurrentUser() operator: AuthenticatedUser) {
+    return this.service.manualSyncPreview(value, operator);
+  }
+
+  @Post('manual-sync')
+  manualSync(@Body() value: unknown, @CurrentUser() operator: AuthenticatedUser) {
+    return this.service.syncManual(value, operator);
+  }
+
   @Post('start')
   start(
     @Body() value: unknown,
@@ -95,6 +105,24 @@ export class AppleMailboxesController {
   @Post('tasks/:id/local-save')
   localSave(@Param('id') id: string, @CurrentUser() operator: AuthenticatedUser) {
     return this.service.localSave(id, operator);
+  }
+
+  @Post('tasks/:id/authorization-resume')
+  resumeAuthorization(
+    @Param('id') id: string,
+    @CurrentUser() operator: AuthenticatedUser,
+    @Req() request: WorkspaceRequest & { user?: AuthenticatedUser },
+    @Res({ passthrough: true }) response: ServerResponse
+  ) {
+    const context = new ExecutionContextHost(
+      [request, response],
+      AppleMailboxesController,
+      this.resumeAuthorization
+    );
+    return this.service.resumeAuthorization(id, operator, async () => {
+      await this.authGuard.canActivate(context);
+      return request.user?.id === operator.id && (await this.permissionsGuard.canActivate(context));
+    });
   }
 
   @Post('resume')

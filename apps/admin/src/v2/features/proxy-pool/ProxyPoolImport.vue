@@ -9,16 +9,22 @@
     @update:model-value="$emit('update:modelValue', $event)"
     @confirm="save"
   >
+    <p v-if="message" :role="failed ? 'alert' : 'status'">{{ message }}</p>
     <el-form
+      ref="formRef"
+      :model="validationModel"
+      :rules="rules"
+      scroll-to-error
       label-position="left"
       label-width="110px"
       require-asterisk-position="right"
       @submit.prevent="save"
     >
       <ProxyPoolFields v-model="fields" />
-      <el-form-item label="代理列表" required
+      <el-form-item label="代理列表" prop="text" required
         ><el-input
           v-model="text"
+          :validate-event="!saving"
           type="textarea"
           :rows="10"
           :maxlength="1024000"
@@ -27,17 +33,18 @@
       /></el-form-item>
       <p>以上国家、属性和备注应用于本批代理。重复链接自动跳过。</p>
     </el-form>
-    <p v-if="message" :role="failed ? 'alert' : 'status'">{{ message }}</p>
   </V2FormDrawer>
 </template>
 <script setup lang="ts">
-import { computed, onBeforeUnmount, ref, watch } from 'vue';
+import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue';
+import type { FormInstance } from 'element-plus';
 import { sessionCoordinator } from '@/auth/sessionCoordinator';
 import { getApiErrorMessage } from '@/api/client';
 import V2FormDrawer from '@/v2/components/V2FormDrawer.vue';
 import { useV2FormDraft } from '@/v2/composables/useV2SessionDraft';
+import { validateV2Form } from '@/v2/utils/formValidation';
 import { proxyPoolApi } from './api';
-import { parseProxyCountry, protocolForProxyLink } from './options';
+import { createProxyFormRules, normalizeProxyImport, parseProxyCountry } from './options';
 import ProxyPoolFields, { type ProxyPoolForm } from './ProxyPoolFields.vue';
 const props = defineProps<{ modelValue: boolean }>();
 const emit = defineEmits<{ 'update:modelValue': [boolean]; saved: [] }>();
@@ -54,6 +61,13 @@ const fields = computed({
 });
 // 导入内容含代理凭据，关闭或身份改变时清除，不纳入会话草稿。
 const text = ref('');
+const formRef = ref<FormInstance>();
+const validationModel = computed(() => ({ ...draft.form, text: text.value }));
+const rules = createProxyFormRules({
+  field: 'text',
+  mode: () => draft.form.connectionMode,
+  protocol: () => draft.form.protocol
+});
 let active = true;
 function clearSensitiveInput() {
   text.value = '';
@@ -73,7 +87,10 @@ watch(
   () => props.modelValue,
   (open) => {
     text.value = '';
-    if (open) draft.open('create');
+    if (open) {
+      message.value = '';
+      draft.open('create');
+    }
   },
   { immediate: true }
 );
@@ -82,20 +99,16 @@ async function save() {
   failed.value = false;
   message.value = '';
   try {
+    if (!(await validateV2Form(formRef.value))) return;
     const countryCode = parseProxyCountry(draft.form.countryCode);
     const kind = draft.form.kind;
     if (!kind) throw new Error('请选择 IP 属性');
-    const rows = text.value
-      .split(/\r?\n/)
-      .map((url) => url.trim())
-      .filter(Boolean);
-    if (!rows.length || rows.length > 500) throw new Error('每次需要导入 1 至 500 条代理');
-    const input = rows.map((url) => ({
+    const rows = normalizeProxyImport(text.value, draft.form.connectionMode, draft.form.protocol);
+    const input = rows.map((connection) => ({
       ...draft.form,
       countryCode,
       kind,
-      url,
-      protocol: protocolForProxyLink(url, draft.form.connectionMode, draft.form.protocol)
+      ...connection
     }));
     const submittedText = text.value;
     const complete = draft.beginSave();
@@ -104,7 +117,11 @@ async function save() {
     const result = await proxyPoolApi.importMany(input);
     if (!active || identity !== sessionCoordinator.identityEpoch.value) return;
     message.value = `已导入 ${result.imported} 条，跳过重复 ${result.duplicates ?? 0} 条`;
-    if (text.value === submittedText && complete()) text.value = '';
+    if (text.value === submittedText && complete()) {
+      text.value = '';
+      await nextTick();
+      formRef.value?.clearValidate();
+    }
     emit('saved');
   } catch (cause) {
     failed.value = true;

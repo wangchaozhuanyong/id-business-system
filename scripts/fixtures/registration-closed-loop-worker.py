@@ -321,7 +321,7 @@ class JointFixture:
         for value in values:
             assert value["sourceTaskUuid"] in self.task_uuids
             ack = self.post("tasks/" + value["sourceTaskUuid"] + "/sync-ack",
-                            {"accountId": value["accountId"], "status": "saved"})
+                            {"accountId": value["accountId"], "status": "saved", "fingerprint": value["fingerprint"]})
             assert ack == {"accepted": True, "syncStatus": "saved"}
         # These APIs only read stored checkpoints and never invoke the runner.
         for task_uuid in self.task_uuids:

@@ -1,0 +1,331 @@
+{
+  "version": 1,
+  "publicationCommit": "b3fb8fe13de45a20c897287a0a77d2c253171ec6",
+  "manifestSha256": "e490d40e56cbe2cf7db74ccc82955068fe9c18bce9b1bc7b7e7742efb679f81c",
+  "nativeRunId": "38793051756",
+  "nativeArtifactDigest": "sha256:582089f3e785af30d7dd0cfd9657e6c6309e6573e65bc530a32e2e3dc5d7c450",
+  "schemaSha256": "2a29e6a296e795cb9d72101e5776711aebfd2444c2e5651a05713a35178c5f8d",
+  "sourceBaselineSchemaSha256": "43ce7e1cfe475c0056f0237dc4229e03c53b4f05ab95ed895f45fa570cdf3a47",
+  "migrations": {
+    "apps/api/prisma-mysql/migrations/20261015110000_online_recharge_pro_500/migration.sql": "84d8a1741287277a1e7e59bbff08cd9236da9b3f1ef07f9e6a2f3fbf091268f1",
+    "apps/api/prisma-mysql/migrations/20261016090000_online_recharge_orders/migration.sql": "79ee0f5765fd8d8f97b47017dcd25b41e2290b713a691ce448ce84feb76d5366"
+  },
+  "sources": {
+    "apps/admin/src/v2/features/auto-recharge/BitOrderPricingSettings.vue": {
+      "publishedSha256": "67d713d24010fb0a8449c33c986230b59ddf48ab6a519b9fc9dae293dcd09664",
+      "sourceCommit": "b3fb8fe13de45a20c897287a0a77d2c253171ec6"
+    },
+    "apps/admin/src/v2/features/auto-recharge/V2BankRechargeOrderDrawers.vue": {
+      "publishedSha256": "12a7489e5c74c7efc5ab354b7ec32a53ebce7a397c4db7a6ca6c261a8e65007b",
+      "sourceCommit": "b3fb8fe13de45a20c897287a0a77d2c253171ec6"
+    },
+    "apps/admin/src/v2/features/auto-recharge/V2BankRechargeOrdersView.vue": {
+      "publishedSha256": "b388f2e17825e2b61a67b84dff30e1063e95f66b7e8d4d8c22b41493cde26e0c",
+      "sourceCommit": "b3fb8fe13de45a20c897287a0a77d2c253171ec6"
+    },
+    "apps/admin/src/v2/features/auto-recharge/V2RechargeOrdersChannelView.vue": {
+      "publishedSha256": "e15027cc261bb3e737168746c4e37558f19b7ce85f00ec3e4efb80b07d399442",
+      "sourceCommit": "b3fb8fe13de45a20c897287a0a77d2c253171ec6"
+    },
+    "apps/admin/src/v2/features/auto-recharge/bank-orders-manifest.ts": {
+      "publishedSha256": "6a3c14adf49a1c042a6050a29fb32ab6c51fe343a08030a09b9de9747400b7e7",
+      "sourceCommit": "b3fb8fe13de45a20c897287a0a77d2c253171ec6"
+    },
+    "apps/admin/src/v2/features/auto-recharge/bank-recharge-api.ts": {
+      "publishedSha256": "df89aabb2cb090a732082dec0bf1de733d6f345e3a8a1caf964b8ec7c839ad13",
+      "sourceCommit": "b3fb8fe13de45a20c897287a0a77d2c253171ec6"
+    },
+    "apps/admin/src/v2/features/auto-recharge/bank-recharge-order-form.ts": {
+      "publishedSha256": "4169d2fae36453356ccc10bee9682e6a56840375a811d5308e0c3bd664637c20",
+      "sourceCommit": "b3fb8fe13de45a20c897287a0a77d2c253171ec6"
+    },
+    "apps/admin/src/v2/features/auto-recharge/bit-order-pricing.spec.ts": {
+      "publishedSha256": "24119221e2eed894ee4acc8afc19a6b632e2ff6774a99dcefa54053e6e645a84",
+      "sourceCommit": "b3fb8fe13de45a20c897287a0a77d2c253171ec6"
+    },
+    "apps/admin/src/v2/features/auto-recharge/bit-order-pricing.ts": {
+      "publishedSha256": "68e79e2b26ec0a1eaed384c2254dabaabc1100e9b34d6548b56794a895f1a56a",
+      "sourceCommit": "b3fb8fe13de45a20c897287a0a77d2c253171ec6"
+    },
+    "apps/admin/src/v2/features/auto-recharge/useBankRechargeOrderResources.ts": {
+      "publishedSha256": "cb733cd6023fb64ccc2cbec20187c6a708e485d94dcffd20309cc5ffb3f41d4e",
+      "sourceCommit": "b3fb8fe13de45a20c897287a0a77d2c253171ec6"
+    },
+    "apps/admin/src/v2/features/auto-recharge/useBankRechargeOrdersPage.spec.ts": {
+      "publishedSha256": "44f9f4271f8cce5f18c8d46bb921579959132d443e29675b69473ca0bc4eb67d",
+      "sourceCommit": "b3fb8fe13de45a20c897287a0a77d2c253171ec6"
+    },
+    "apps/admin/src/v2/features/auto-recharge/useBankRechargeOrdersPage.ts": {
+      "publishedSha256": "4e27e9146f484be6718700d7a03a381ff23cca3e459cd35374a9c183d95d43a1",
+      "sourceCommit": "b3fb8fe13de45a20c897287a0a77d2c253171ec6"
+    },
+    "apps/admin/src/v2/features/auto-recharge/useBitOrderPricing.spec.ts": {
+      "publishedSha256": "622124e6d2b51333fe8d6abf75629bb678269769bfd3964b590bbade062e31dc",
+      "sourceCommit": "b3fb8fe13de45a20c897287a0a77d2c253171ec6"
+    },
+    "apps/admin/src/v2/features/auto-recharge/useBitOrderPricing.ts": {
+      "publishedSha256": "5b44abef1b5bbeca9857be8b85120f28ea6c21436c117cc95ba32bf63802115b",
+      "sourceCommit": "b3fb8fe13de45a20c897287a0a77d2c253171ec6"
+    },
+    "apps/admin/src/v2/features/customers/useCustomersPage.ts": {
+      "publishedSha256": "24bfabac3df94d6d167953444a074eb3db04ff89ffc0cfa8a93f202a7906a23b",
+      "sourceCommit": "b3fb8fe13de45a20c897287a0a77d2c253171ec6"
+    },
+    "apps/admin/src/v2/features/data-analytics/useDataAnalyticsPage.ts": {
+      "publishedSha256": "b95f1e926785a71af11cd6ea9656f4491673d2fcf5602c389c6fc67f2b6afdb3",
+      "sourceCommit": "b3fb8fe13de45a20c897287a0a77d2c253171ec6"
+    },
+    "apps/admin/src/v2/features/data-governance/data-governance-presentation.ts": {
+      "publishedSha256": "6611edbe9e43f186ac5b25681d6052c650d28c068c6df4e6db495172ba0d58c9",
+      "sourceCommit": "b3fb8fe13de45a20c897287a0a77d2c253171ec6"
+    },
+    "apps/admin/src/v2/features/finance-ledger/financeLedgerPresentation.ts": {
+      "publishedSha256": "23a444f88bb59eca2e3a49e918c21c94fbb585a7eb45058fdc87e47d5288a73b",
+      "sourceCommit": "b3fb8fe13de45a20c897287a0a77d2c253171ec6"
+    },
+    "apps/admin/src/v2/features/online-recharge/OnlineOrderBackfill.vue": {
+      "publishedSha256": "732ddeffaf07a02ef60f1aba5b9948caa4c1b1553e1ea7f4b7433b391c8cbc26",
+      "sourceCommit": "b3fb8fe13de45a20c897287a0a77d2c253171ec6"
+    },
+    "apps/admin/src/v2/features/online-recharge/OnlineResultDialog.vue": {
+      "publishedSha256": "4c022203a84dd862e150f3701cf287010e89b9bbdc9eb494a27383e4f1e8b7bb",
+      "sourceCommit": "b3fb8fe13de45a20c897287a0a77d2c253171ec6"
+    },
+    "apps/admin/src/v2/features/online-recharge/api.spec.ts": {
+      "publishedSha256": "2822041007c9d8f8142a11958a88561409b8f83bf8949ae3a864d08a70f43283",
+      "sourceCommit": "b3fb8fe13de45a20c897287a0a77d2c253171ec6"
+    },
+    "apps/admin/src/v2/features/online-recharge/api.ts": {
+      "publishedSha256": "e175e00827a5a8bcadd363659a49621cb5a5129025094f6c6890f727b0d08114",
+      "sourceCommit": "b3fb8fe13de45a20c897287a0a77d2c253171ec6"
+    },
+    "apps/admin/src/v2/features/online-recharge/orderPermissions.ts": {
+      "publishedSha256": "444967e573b4ef7240f33f234d3f567c76a0a40ff7387523419abf8f35f217c9",
+      "sourceCommit": "b3fb8fe13de45a20c897287a0a77d2c253171ec6"
+    },
+    "apps/admin/src/v2/features/online-recharge/permissions.spec.ts": {
+      "publishedSha256": "a745763b27c00629dcdf3f18e38f0279ee0ebcf7799c87a77615501ca3fb617f",
+      "sourceCommit": "b3fb8fe13de45a20c897287a0a77d2c253171ec6"
+    },
+    "apps/admin/src/v2/features/online-recharge/public-api.ts": {
+      "publishedSha256": "2f04d6d38ae77ed62fbc21b127f3a9da911e81c05a460b9b3f31633f7648a5c5",
+      "sourceCommit": "b3fb8fe13de45a20c897287a0a77d2c253171ec6"
+    },
+    "apps/admin/src/v2/features/tableSchemas.ts": {
+      "publishedSha256": "3cae63091499e51d7dde133a8df3e5a316bb2c9acdd366281c039e4d829949a8",
+      "sourceCommit": "b3fb8fe13de45a20c897287a0a77d2c253171ec6"
+    },
+    "apps/api/prisma-mysql/migrations/20261015110000_online_recharge_pro_500/migration.sql": {
+      "publishedSha256": "84d8a1741287277a1e7e59bbff08cd9236da9b3f1ef07f9e6a2f3fbf091268f1",
+      "sourceCommit": "b3fb8fe13de45a20c897287a0a77d2c253171ec6"
+    },
+    "apps/api/prisma-mysql/migrations/20261016090000_online_recharge_orders/migration.sql": {
+      "publishedSha256": "79ee0f5765fd8d8f97b47017dcd25b41e2290b713a691ce448ce84feb76d5366",
+      "sourceCommit": "b3fb8fe13de45a20c897287a0a77d2c253171ec6"
+    },
+    "apps/api/prisma-mysql/schema.prisma": {
+      "publishedSha256": "2a29e6a296e795cb9d72101e5776711aebfd2444c2e5651a05713a35178c5f8d",
+      "sourceCommit": "b3fb8fe13de45a20c897287a0a77d2c253171ec6"
+    },
+    "apps/api/src/id-business-v2/auto-recharge/bank-recharge-account-list.ts": {
+      "publishedSha256": "9f224ac3909095404addfca0f1044c1fbede4fd2c44e0ab37d9b457b0f718d3c",
+      "sourceCommit": "b3fb8fe13de45a20c897287a0a77d2c253171ec6"
+    },
+    "apps/api/src/id-business-v2/auto-recharge/bank-recharge-channel.ts": {
+      "publishedSha256": "2d0e4209375e96311055393826c7f9052f6b4a333b543f9f1b8952f99aa2d4d3",
+      "sourceCommit": "b3fb8fe13de45a20c897287a0a77d2c253171ec6"
+    },
+    "apps/api/src/id-business-v2/auto-recharge/bank-recharge-correction.service.ts": {
+      "publishedSha256": "ba595e95d648beea9582cc69f36a2fb2cd1f7c343aa3ac7ef9ce9b889fe5eef9",
+      "sourceCommit": "b3fb8fe13de45a20c897287a0a77d2c253171ec6"
+    },
+    "apps/api/src/id-business-v2/auto-recharge/bank-recharge-finance.service.ts": {
+      "publishedSha256": "2abd17052177e96b7ffdc11e2f2ec496b0c92c9c5a24331f869f95b588317940",
+      "sourceCommit": "b3fb8fe13de45a20c897287a0a77d2c253171ec6"
+    },
+    "apps/api/src/id-business-v2/auto-recharge/bank-recharge-lifecycle.service.ts": {
+      "publishedSha256": "375152a2e04b0b54d5af5c1317b41195aefbf36aee23f09897cf3314e7046415",
+      "sourceCommit": "b3fb8fe13de45a20c897287a0a77d2c253171ec6"
+    },
+    "apps/api/src/id-business-v2/auto-recharge/bank-recharge-manual-order.ts": {
+      "publishedSha256": "3118aefc9a74f41e1dc757a72e7521cdd3f055c48e68b08243638a02e56986c7",
+      "sourceCommit": "b3fb8fe13de45a20c897287a0a77d2c253171ec6"
+    },
+    "apps/api/src/id-business-v2/auto-recharge/bank-recharge-online-order.service.ts": {
+      "publishedSha256": "9f50a9a556777ed400060b6720a28ca15160faa9ad6f0d36d7ef739415a68979",
+      "sourceCommit": "b3fb8fe13de45a20c897287a0a77d2c253171ec6"
+    },
+    "apps/api/src/id-business-v2/auto-recharge/bank-recharge-order-audit.ts": {
+      "publishedSha256": "7706e06e79368d821b6cca24228cbf964b3c3fc73cab8a72518e38eaf3d70201",
+      "sourceCommit": "b3fb8fe13de45a20c897287a0a77d2c253171ec6"
+    },
+    "apps/api/src/id-business-v2/auto-recharge/bank-recharge-order.service.ts": {
+      "publishedSha256": "f3ef2f48ca4b8cbddde2ca96116a27b5facec09234ed7637aa8ac5c36552c4bd",
+      "sourceCommit": "b3fb8fe13de45a20c897287a0a77d2c253171ec6"
+    },
+    "apps/api/src/id-business-v2/auto-recharge/bank-recharge-pricing.service.ts": {
+      "publishedSha256": "9ee1c0f0c1fe167f401a5703a7dfa36be545fb90bc24af8600ace423fcf9a325",
+      "sourceCommit": "b3fb8fe13de45a20c897287a0a77d2c253171ec6"
+    },
+    "apps/api/src/id-business-v2/auto-recharge/bank-recharge-subscription-review.service.ts": {
+      "publishedSha256": "47c27eb60cb795162b369caf899567bf13311e20e0232b2b10f3aed0dccd1e27",
+      "sourceCommit": "b3fb8fe13de45a20c897287a0a77d2c253171ec6"
+    },
+    "apps/api/src/id-business-v2/auto-recharge/bank-recharge-verified-order.ts": {
+      "publishedSha256": "7a2a8a1bcfd195c4d8e56d98a4dbadb4cbebf9a8ca564ac3e956362eba5b3e52",
+      "sourceCommit": "b3fb8fe13de45a20c897287a0a77d2c253171ec6"
+    },
+    "apps/api/src/id-business-v2/auto-recharge/bank-recharge.controller.ts": {
+      "publishedSha256": "43e494edd884ff885b474ca3fe784c8a658931037c9f5e4f6459d2012b3fc960",
+      "sourceCommit": "b3fb8fe13de45a20c897287a0a77d2c253171ec6"
+    },
+    "apps/api/src/id-business-v2/auto-recharge/persistence/bank-recharge-online-order.repository.ts": {
+      "publishedSha256": "cbddfee45ea66ebb4aaba0f9d376cf8238c55edf40bcc09eed76e23f59d5d3a4",
+      "sourceCommit": "b3fb8fe13de45a20c897287a0a77d2c253171ec6"
+    },
+    "apps/api/src/id-business-v2/auto-recharge/persistence/bank-recharge-query.repository.ts": {
+      "publishedSha256": "f08d5841f572970b9b8b5fd233715cbe3c328752b32bcc3f2efcecec7942671f",
+      "sourceCommit": "b3fb8fe13de45a20c897287a0a77d2c253171ec6"
+    },
+    "apps/api/src/id-business-v2/auto-recharge/persistence/bank-recharge.repository.ts": {
+      "publishedSha256": "377a70b65ab62e7b6763d757a2ea7b1cc5c8f704fd5f499f9ba6aa78cf2c5133",
+      "sourceCommit": "b3fb8fe13de45a20c897287a0a77d2c253171ec6"
+    },
+    "apps/api/src/id-business-v2/auto-recharge/persistence/recharge-settings.repository.ts": {
+      "publishedSha256": "0ee15681c821888f91a5628d54f26f5081cca7ce11d2f24001666beec812f287",
+      "sourceCommit": "b3fb8fe13de45a20c897287a0a77d2c253171ec6"
+    },
+    "apps/api/src/id-business-v2/auto-recharge/public-api.ts": {
+      "publishedSha256": "4c3fdbe3fc982dd5a5f74f97e92c46c4dbf3b57238910f3d6da933057797162b",
+      "sourceCommit": "b3fb8fe13de45a20c897287a0a77d2c253171ec6"
+    },
+    "apps/api/src/id-business-v2/auto-recharge/recharge.module.ts": {
+      "publishedSha256": "6eb79e0dd8d462f0310f4497cd5c5d4f60ee9a0e238fb020556e40c6547ed5ed",
+      "sourceCommit": "b3fb8fe13de45a20c897287a0a77d2c253171ec6"
+    },
+    "apps/api/src/id-business-v2/online-recharge/contracts.ts": {
+      "publishedSha256": "5a20685f7ca904245ca43dcf4dce387674aee970f47d45bcb3b9d462109682f5",
+      "sourceCommit": "b3fb8fe13de45a20c897287a0a77d2c253171ec6"
+    },
+    "apps/api/src/id-business-v2/online-recharge/engine/SOURCE_MANIFEST.json": {
+      "publishedSha256": "011234600d3092c33fead5f9f7a589271dd21640d7e00baea4c5ebaf62985c4a",
+      "sourceCommit": "b3fb8fe13de45a20c897287a0a77d2c253171ec6"
+    },
+    "apps/api/src/id-business-v2/online-recharge/engine/confirmation.cjs": {
+      "publishedSha256": "9433429d6bb24a96aa65acebca28264e1acd97306359ff4ff070eaf507ec7dcf",
+      "sourceCommit": "b3fb8fe13de45a20c897287a0a77d2c253171ec6"
+    },
+    "apps/api/src/id-business-v2/online-recharge/engine/plans.cjs": {
+      "publishedSha256": "08ca20d5ff83626a14f6abca6ab0645efd364d9d19b36c969289607daa0aeb0e",
+      "sourceCommit": "b3fb8fe13de45a20c897287a0a77d2c253171ec6"
+    },
+    "apps/api/src/id-business-v2/online-recharge/engine/test/order-sync-recheck.test.cjs": {
+      "publishedSha256": "fdb27f06a0c8beb0277223409adf4f9eb0fa607b0b807e610f2b0d417a32c3a3",
+      "sourceCommit": "b3fb8fe13de45a20c897287a0a77d2c253171ec6"
+    },
+    "apps/api/src/id-business-v2/online-recharge/online-recharge.module.ts": {
+      "publishedSha256": "47283895ba5b882e1b0c72f7ee706b8fa9247c388995b70b413415fa58b008e7",
+      "sourceCommit": "b3fb8fe13de45a20c897287a0a77d2c253171ec6"
+    },
+    "apps/api/src/id-business-v2/online-recharge/order-sync-facts.ts": {
+      "publishedSha256": "dfc921be337710252e8352803c2293311fabf7f9a79e09c16b9c0a0964b6ea0a",
+      "sourceCommit": "b3fb8fe13de45a20c897287a0a77d2c253171ec6"
+    },
+    "apps/api/src/id-business-v2/online-recharge/order-sync.service.ts": {
+      "publishedSha256": "032a5e27d6b7b074dea24178b58dbe7e80bdf107c504489f6fe8a5b77b6a6962",
+      "sourceCommit": "b3fb8fe13de45a20c897287a0a77d2c253171ec6"
+    },
+    "apps/api/src/id-business-v2/online-recharge/persistence/admin.repository.ts": {
+      "publishedSha256": "131c4a6f8639f7e9a0fb1a64f6f4fbe4447fbbfb4c2f86ef04035ed904814d50",
+      "sourceCommit": "b3fb8fe13de45a20c897287a0a77d2c253171ec6"
+    },
+    "apps/api/src/id-business-v2/online-recharge/persistence/online-recharge.repository.ts": {
+      "publishedSha256": "716c16d86666534b44ebef0db678412e700de8a4f4067b80a27468d961a4f48a",
+      "sourceCommit": "b3fb8fe13de45a20c897287a0a77d2c253171ec6"
+    },
+    "apps/api/src/id-business-v2/online-recharge/persistence/order-sync.repository.ts": {
+      "publishedSha256": "b8dde243333bbe8041a7b746e67ceaaf1dbf5832c26ef0f331a470a3cf992b23",
+      "sourceCommit": "b3fb8fe13de45a20c897287a0a77d2c253171ec6"
+    },
+    "apps/api/src/id-business-v2/online-recharge/persistence/settings.repository.ts": {
+      "publishedSha256": "481f239ad4cef1401209b5e2729950ef5804231f71e6cefe12e7a9d5d7110307",
+      "sourceCommit": "b3fb8fe13de45a20c897287a0a77d2c253171ec6"
+    },
+    "apps/api/src/id-business-v2/online-recharge/persistence/tasks.repository.ts": {
+      "publishedSha256": "8519455bcf4c2332b3e24dd559a182fa38b21940c69bd3c19b9222e1edec5367",
+      "sourceCommit": "b3fb8fe13de45a20c897287a0a77d2c253171ec6"
+    },
+    "apps/api/src/id-business-v2/online-recharge/persistence/webhooks.repository.ts": {
+      "publishedSha256": "90aab71e920463f906af0aed1383da240bc0bca41bb83123a44e816f3d298bee",
+      "sourceCommit": "b3fb8fe13de45a20c897287a0a77d2c253171ec6"
+    },
+    "apps/api/src/id-business-v2/online-recharge/persistence/worker.repository.ts": {
+      "publishedSha256": "862648fccd3026078b59ef6a179e0d237e55ffa7feaabb2a14e295c828060478",
+      "sourceCommit": "b3fb8fe13de45a20c897287a0a77d2c253171ec6"
+    },
+    "apps/api/src/id-business-v2/online-recharge/proxy-input.ts": {
+      "publishedSha256": "62ef04054179b9750d74185303f8d5aa85b534f147d8dcf5e61be81f6f6f430f",
+      "sourceCommit": "b3fb8fe13de45a20c897287a0a77d2c253171ec6"
+    },
+    "apps/api/src/id-business-v2/online-recharge/public.controller.ts": {
+      "publishedSha256": "a374266591df4d90633406236b4713a2cd3fddfd71c21f04ab07c8dedc4c565c",
+      "sourceCommit": "b3fb8fe13de45a20c897287a0a77d2c253171ec6"
+    },
+    "apps/api/src/id-business-v2/online-recharge/validation.ts": {
+      "publishedSha256": "b6e9349f5531b6656ac48d62b6559c8af6d9f6e32c6771e06492ba5b6ab0786e",
+      "sourceCommit": "b3fb8fe13de45a20c897287a0a77d2c253171ec6"
+    },
+    "scripts/check-v2-table-standard.mjs": {
+      "publishedSha256": "37f63dcd5e0c0f9246035af1dd3297759338106c53c856c3eb6f9d5465e07f3c",
+      "sourceCommit": "b3fb8fe13de45a20c897287a0a77d2c253171ec6"
+    },
+    "scripts/lib/v2-table-schema-alias.mjs": {
+      "publishedSha256": "2d0018b70430f332ca6aed56594c4b7fb25fda596928e84d773d1dbac8e4a058",
+      "sourceCommit": "b3fb8fe13de45a20c897287a0a77d2c253171ec6"
+    },
+    "scripts/v2-table-schema-alias.test.mjs": {
+      "publishedSha256": "aec7ea550274c0be4edb3d00b9cf6af4ed01b4319d81ae04b6881a047d536cfa",
+      "sourceCommit": "b3fb8fe13de45a20c897287a0a77d2c253171ec6"
+    }
+  },
+  "combinedSources": {
+    "apps/admin/src/v2/features/auto-recharge/bank-recharge-api.ts": "531357447d30888e22e8a1b6c9cbe4fcf59ca367e38503d24ed988c7474f0471",
+    "apps/admin/src/v2/features/tableSchemas.ts": "2b2ca7becc17c1a51b4ee98f4a292cf1bf96f881e13ebc3831135ac00d624cfe",
+    "apps/api/prisma-mysql/schema.prisma": "fb2d77e1ecf9b336da7db0f2fcf6385a804eb3a818f83748165d162b99bb8de8",
+    "apps/api/src/id-business-v2/auto-recharge/bank-recharge-account-list.ts": "9ba7eeac68f3a82f307bb8bf3bd477f89e14e90049d485bff17a9454d4f93858",
+    "apps/api/src/id-business-v2/auto-recharge/persistence/bank-recharge.repository.ts": "0ddf75dd21a30bc8f0d4d8a9b809eeb13b53fe3016dfcfebf263810c7ba7fb36",
+    "apps/api/src/id-business-v2/online-recharge/engine/SOURCE_MANIFEST.json": "16a88b1872cefb9e34ea51e535c8d4e0db50234d7d23db4340b43f65da07b6c4",
+    "apps/api/src/id-business-v2/online-recharge/persistence/admin.repository.ts": "1bbd308e2d86b5f8605cb4cd918da97bf94efc9a0b57d1594bd8f530e03afd59",
+    "apps/api/src/id-business-v2/online-recharge/persistence/online-recharge.repository.ts": "756c77683e8e0f4610e1ac21ec7116e8fa94d3ef49e4114188674075c1d32a08",
+    "apps/api/src/id-business-v2/online-recharge/persistence/tasks.repository.ts": "4f3ffb5b60e8b482aba71ec3e892da41da667f50cd7915f726428a9f7b69411f",
+    "apps/api/src/id-business-v2/online-recharge/persistence/worker.repository.ts": "7685d43457b20009d4d85a47defb7cff7667de02ab750d10896568c950036ba3"
+  },
+  "validationSources": {
+    "apps/api/src/id-business-v2/auto-recharge/bank-recharge-mysql.integration.spec.ts": "0f1e9f76f94c3453da3f630e0b3920b32dcd5b130df85ea8823b40d23ba99d9d",
+    "apps/api/src/id-business-v2/data-governance/bank-recharge-governance-mysql.integration.spec.ts": "50337297c8159738e07ed9fbf1e290ea2b279646bc16959adaefec9d426f162c",
+    "apps/api/src/id-business-v2/online-recharge/order-sync.spec.ts": "57be96987fd22de259026a393d89c4868a8cae305c6d1e931da93e5c5265f783",
+    "apps/api/src/id-business-v2/online-recharge/persistence/worker.repository.spec.ts": "5aed68a8bca0a584ff3696809c0ccfc1781324629b7a0e8cea6d1a460f9b17f6",
+    "apps/api/src/id-business-v2/auto-recharge/bank-recharge-plan-catalog.spec.ts": "2abdba461ab3d8f49d6c9ff5e2454f1ee2bbf3173a97510cafde17ba553dee4d",
+    "apps/api/src/id-business-v2/auto-recharge/persistence/bank-recharge-query.repository.spec.ts": "c72a2f857ad6ed05d95a33404b7c32bf7975b56b78da94894de5774dcf8adc55",
+    "apps/api/src/id-business-v2/online-recharge/validation.spec.ts": "03780003d1016bd1d3739d80ec049b48004e80e38479a1c90d640c86344ff4ec"
+  },
+  "publishedSuccessorLayers": [
+    {
+      "archiveSha256": "f4ae7e76ec117d97f29bbe1494d4023d0a288d93cbd41200833e2b27fda52a3a",
+      "backendNativeRunId": "38793051756",
+      "frontendNativeVerification": "NOT_RECORDED_IN_MANIFEST",
+      "manifestSha256": "cdd4302eb0198015edb59f97c4fed997feba279398c2cfc1dc66265a65c84311",
+      "publicationCommit": "6d1db82cde92e8c02fea6254289c4b410e94016a",
+      "publishedBaseImageId": "sha256:500ae9d79709535e416403ecc406336471c6eb6aefe39ee2e6f876731cb46c25",
+      "runtimeImageId": "sha256:53bb19a2b3612a4e2def9df0f9a5f29f794a9d948f3c9d16e0e43cde58626946",
+      "sourceCommit": "6d1db82cde92e8c02fea6254289c4b410e94016a",
+      "sources": {
+        "apps/admin/src/v2/features/online-recharge/OnlineOrderBackfill.vue": {
+          "publishedSha256": "56219b0e71b2cbe19ac08343fd8be2b518a58f49efb6008ad260362669d5a530",
+          "sourceCommit": "6d1db82cde92e8c02fea6254289c4b410e94016a"
+        }
+      },
+      "version": 1
+    }
+  ]
+}

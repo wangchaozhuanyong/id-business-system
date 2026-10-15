@@ -43,6 +43,7 @@ for (const sourceRoot of sourceRoots) {
     for (const rule of forbiddenPatterns) {
       for (const match of source.matchAll(rule.pattern)) {
         if (isCoordinateInputPrecision(relativePath, source, match.index, match[0])) continue;
+        if (isIsoTimestampFraction(source, match.index, match[0])) continue;
         if (isAllowedExchangeRatePrecision(source, match.index, match[0])) continue;
         const line = source.slice(0, match.index).split('\n').length;
         failures.push(`${relativePath}:${line} ${rule.message}：${match[0]}`);
@@ -58,6 +59,14 @@ if (failures.length) {
 }
 
 console.log('V2 金额四位、汇率八位小数标准检查通过。');
+
+function isIsoTimestampFraction(source, matchIndex, matchedText) {
+  const fraction = String.raw`\.\d{1,6}`;
+  const timestamp = String.raw`/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?(?:Z|[+-]\d{2}:\d{2})$/`;
+  if (matchedText !== fraction) return false;
+  const start = matchIndex - timestamp.indexOf(fraction);
+  return start >= 0 && source.startsWith(timestamp, start);
+}
 
 function isAllowedExchangeRatePrecision(source, matchIndex, matchedText) {
   const requestedPlaces = Math.max(

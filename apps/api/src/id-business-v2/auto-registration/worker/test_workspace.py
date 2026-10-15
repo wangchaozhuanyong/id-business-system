@@ -169,16 +169,14 @@ class WorkspaceTests(unittest.TestCase):
         self.assertNotIn('data-pwd="${escapeHtml(account.password)}"', script)
         self.assertEqual(self.client.get("/static/id-system-skin.css", headers=self.headers).status_code, 200)
 
-    def test_payment_page_explains_client_browser_and_manual_private_mode(self):
-        html = self.client.get("/payment", headers=self.headers).text
-        self.assertIn('onclick="openIncognito()">在当前浏览器打开', html)
-        self.assertIn("手动打开无痕窗口", html)
-        self.assertNotIn('onclick="openIncognito()">无痕打开浏览器', html)
-        script = self.client.get("/static/js/payment.js", headers=self.headers).text
-        self.assertIn("window.openIncognito = function()", script)
-        self.assertIn("tab.opener = null", script)
-        self.assertIn("toast.show('支付链接生成成功'", script)
-        self.assertNotIn("ui.showToast(", script)
+    def test_payment_page_is_retired_and_account_credentials_remain_available(self):
+        self.assertEqual(self.client.get("/payment", headers=self.headers).status_code, 410)
+        html = self.client.get("/accounts", headers=self.headers).text
+        self.assertIn("注册结果与凭据", html)
+        self.assertNotIn('id="batch-check-sub-btn"', html)
+        script = self.client.get("/static/js/accounts.js", headers=self.headers).text
+        self.assertIn("/batch-upload-tm", script)
+        self.assertNotIn("/mark-subscription", script)
 
     def test_payment_checkout_uses_original_parameters_without_server_browser(self):
         payment = importlib.import_module("src.web.routes.payment")
@@ -189,12 +187,8 @@ class WorkspaceTests(unittest.TestCase):
             response = self.client.post("/api/payment/generate-link", headers=self.headers, json={
                 "account_id": self.account_id, "plan_type": "team", "country": "JP", "proxy": "http://127.0.0.1:1234",
                 "workspace_name": "Synthetic Team", "price_interval": "year", "seat_quantity": 7, "auto_open": True})
-        self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.json()["link"], checkout)
-        self.assertFalse(response.json()["auto_opened"])
-        self.assertTrue(response.json()["client_open_required"])
-        self.assertEqual(generate.call_args.kwargs, {"workspace_name": "Synthetic Team", "price_interval": "year",
-            "seat_quantity": 7, "proxy": "http://127.0.0.1:1234", "country": "JP"})
+        self.assertEqual(response.status_code, 410)
+        generate.assert_not_called()
 
     def test_payment_open_route_requires_safe_checkout_and_never_launches_server_browser(self):
         payment = importlib.import_module("src.web.routes.payment")
@@ -203,9 +197,7 @@ class WorkspaceTests(unittest.TestCase):
                 patch("subprocess.Popen", side_effect=AssertionError("server-browser-forbidden")):
             response = self.client.post("/api/payment/open-incognito", headers=self.headers,
                                         json={"url": checkout, "account_id": self.account_id})
-            self.assertEqual(response.status_code, 200)
-            self.assertEqual(response.json(), {"success": False, "client_open_required": True,
-                "message": "请在当前浏览器打开链接；无痕模式需要手动开启。"})
+            self.assertEqual(response.status_code, 410)
             for url in ("javascript:alert(1)", "http://chatgpt.com/checkout/openai_llc/cs_synthetic_only",
                         "https://chatgpt.com.example.invalid/checkout/openai_llc/cs_synthetic_only",
                         "https://synthetic@chatgpt.com/checkout/openai_llc/cs_synthetic_only",
@@ -215,17 +207,16 @@ class WorkspaceTests(unittest.TestCase):
                         "https://chatgpt.com/checkout/openai_llc/cs_synthetic_only#fragment", checkout + "\n"):
                 with self.subTest(url=url):
                     blocked = self.client.post("/api/payment/open-incognito", headers=self.headers, json={"url": url})
-                    self.assertEqual(blocked.status_code, 400)
-                    self.assertEqual(blocked.json(), {"detail": "支付链接不在允许范围内"})
+                    self.assertEqual(blocked.status_code, 410)
 
     def test_payment_generation_rejects_untrusted_link_without_leaking_it(self):
         payment = importlib.import_module("src.web.routes.payment")
         with patch.object(payment, "generate_plus_link", return_value="https://example.invalid/unsafe-fixture"):
             response = self.client.post("/api/payment/generate-link", headers=self.headers,
                 json={"account_id": self.account_id, "plan_type": "plus", "country": "SG"})
-        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.status_code, 410)
         self.assertNotIn("unsafe-fixture", response.text)
-        self.assertEqual(response.json(), {"detail": "支付链接不在允许范围内"})
+        self.assertEqual(response.json(), {"detail": "自动注册的订阅管理已移除，请使用现有充值业务"})
 
     def test_websocket_internal_protocol_auth_and_ping(self):
         with self.assertRaises(Exception):

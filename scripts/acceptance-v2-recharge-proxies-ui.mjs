@@ -1,14 +1,22 @@
 #!/usr/bin/env node
 /* global document, window */
 import assert from 'node:assert/strict';
-import { spawn } from 'node:child_process';
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, existsSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { chromium } from 'playwright';
 
-const root = process.cwd();
-const origin = 'http://127.0.0.1:5398';
+const root = fileURLToPath(new URL('..', import.meta.url));
+const origin = 'https://proxy-pool.acceptance.invalid';
+const distribution = path.join(root, 'apps/admin/dist');
 const outputDir = path.join(root, '.runtime/shared-proxy-pool-ui');
+assert.ok(
+  process.argv.slice(2).every((arg) => arg === '--dark-narrow'),
+  '未知页面验收选项'
+);
+const darkNarrow = process.argv.includes('--dark-narrow');
+const themes = darkNarrow ? ['dark'] : ['light', 'dark'];
+const widths = darkNarrow ? [768, 390] : [1440, 1024, 901, 900, 768, 390];
 const now = '2026-09-30T12:00:00.000Z';
 const user = {
   id: '11111111-1111-4111-8111-111111111111',
@@ -38,6 +46,32 @@ const rows = Array.from({ length: 21 }, (_, index) => ({
 }));
 const initialRows = structuredClone(rows);
 const mutations = [];
+async function assertFormAlignment(form, state) {
+  const rows = await form.locator('.el-form-item').evaluateAll((items) =>
+    items.flatMap((item) => {
+      const label = item.querySelector('.el-form-item__label');
+      const control = item.querySelector('.el-input__wrapper, .el-select__wrapper');
+      if (!label || !control) return [];
+      const range = document.createRange();
+      range.selectNodeContents(label);
+      const text = range.getBoundingClientRect();
+      const box = control.getBoundingClientRect();
+      return [
+        {
+          left: text.left,
+          right: text.right,
+          controlLeft: box.left,
+          delta: Math.abs((text.top + text.bottom) / 2 - (box.top + box.bottom) / 2)
+        }
+      ];
+    })
+  );
+  assert.ok(rows.length >= 4, `${state} 缺少实际表单控件`);
+  for (const row of rows) {
+    assert.ok(row.right <= row.controlLeft + 1, `${state} 标签未在控件左侧`);
+    assert.ok(row.delta <= 5, `${state} 标签文字未对齐首行控件`);
+  }
+}
 async function assertListLayout(page, state) {
   const geometry = await page
     .locator('.v2-records-list')
@@ -80,45 +114,54 @@ async function assertListLayout(page, state) {
   assert.equal(geometry.overlap, false, `${state} 标题与数量重叠`);
 }
 mkdirSync(outputDir, { recursive: true });
-const server = spawn(
-  process.execPath,
-  [
-    path.join(root, 'node_modules/vite/bin/vite.js'),
-    '--host',
-    '127.0.0.1',
-    '--port',
-    '5398',
-    '--strictPort'
-  ],
-  {
-    cwd: path.join(root, 'apps/admin'),
-    env: { ...process.env, VITE_API_BASE_URL: '/api', VITE_V2_REALTIME_CHANGES_ENABLED: 'false' },
-    stdio: 'ignore'
-  }
-);
+assert.ok(existsSync(path.join(distribution, 'index.html')), '请先构建管理端再运行离线页面验收');
 let browser;
+let inspectedPage;
+let requestFailures;
 try {
-  let ready = false;
-  for (let attempt = 0; attempt < 120; attempt++) {
-    if (server.exitCode !== null) throw new Error('Vite 提前退出');
-    if ((await fetch(origin).catch(() => null))?.ok) {
-      ready = true;
-      break;
-    }
-    await new Promise((resolve) => setTimeout(resolve, 250));
-  }
-  assert.ok(ready, 'Vite 未启动');
   browser = await chromium.launch({ headless: true });
-  for (const theme of ['light', 'dark'])
-    for (const width of [1440, 1024, 901, 900, 768, 390]) {
+  for (const theme of themes)
+    for (const width of widths) {
       rows.splice(0, rows.length, ...structuredClone(initialRows));
       const context = await browser.newContext({ viewport: { width, height: 900 } });
       const page = await context.newPage();
-      page.setDefaultTimeout(10000);
+      inspectedPage = page;
+      page.setDefaultTimeout(30000);
       const errors = [];
       const unexpected = [];
-      let failListRequests = 0;
+      requestFailures = unexpected;
+      let detectionTasks = [];
+      let detectionStatus = 'queued';
+      let detectionPosts = 0;
       page.on('pageerror', (error) => errors.push(error.message));
+      // The actual production build runs in Chromium with intercepted resources.
+      // No website, API, database, or local HTTP listener is started.
+      await page.route('**/*', async (route) => {
+        const url = new URL(route.request().url());
+        if (url.origin !== origin) {
+          unexpected.push(`external ${url.origin}`);
+          await route.abort();
+          return;
+        }
+        const relative = url.pathname.startsWith('/v2/') ? '/index.html' : url.pathname;
+        const asset = path.resolve(distribution, `.${relative}`);
+        if (!asset.startsWith(`${distribution}${path.sep}`) || !existsSync(asset)) {
+          unexpected.push(`asset ${url.pathname}`);
+          await route.fulfill({ status: 404, body: '' });
+          return;
+        }
+        const contentType =
+          {
+            '.html': 'text/html',
+            '.js': 'application/javascript',
+            '.css': 'text/css',
+            '.svg': 'image/svg+xml',
+            '.png': 'image/png',
+            '.ico': 'image/x-icon',
+            '.woff2': 'font/woff2'
+          }[path.extname(asset)] || 'application/octet-stream';
+        await route.fulfill({ status: 200, contentType, body: readFileSync(asset) });
+      });
       await page.addInitScript((fixture) => {
         localStorage.setItem('apple_business_access_token', 'proxy-acceptance-token');
         localStorage.setItem('apple_business_current_user', JSON.stringify(fixture));
@@ -128,6 +171,14 @@ try {
         const url = new URL(request.url());
         const endpoint = url.pathname;
         const method = request.method();
+        if (endpoint === '/api/realtime/events') {
+          await route.fulfill({
+            status: 200,
+            contentType: 'text/event-stream',
+            body: 'retry: 60000\n: offline fixture\n\n'
+          });
+          return;
+        }
         if (!endpoint.startsWith('/api/')) {
           await route.continue();
           return;
@@ -146,8 +197,10 @@ try {
           data = { now, timezone: 'Asia/Shanghai' };
         else if (endpoint.endsWith('/id-business-v2/change-versions'))
           data = { generatedAt: now, versions: {} };
-        else if (endpoint.endsWith('/id-business-v2/workspace-shortcuts')) data = { items: [] };
         else if (endpoint.endsWith('/id-business-v2/table-preferences')) data = { items: [] };
+        else if (endpoint.endsWith('/id-business-v2/quick-actions'))
+          data = { items: [], updatedAt: now };
+        else if (endpoint.endsWith('/id-business-v2/workspace-shortcuts')) data = { items: [] };
         else if (endpoint.endsWith('/id-business-v2/renewals/warning-summary'))
           data = {
             warningDays: 3,
@@ -170,9 +223,45 @@ try {
           };
         else if (endpoint.endsWith('/id-business-v2/sensitive-access/approvals/summary'))
           data = { pendingCount: 0, items: [], generatedAt: now };
-        else if (endpoint.endsWith('/online-recharge/admin/proxies/test'))
-          data = { tasks: [{ id: 'synthetic-detection-task' }] };
-        else if (endpoint.endsWith('/proxy-pool/countries')) data = { items: ['US', 'PH'] };
+        else if (endpoint.endsWith('/online-recharge/admin/jobs')) {
+          const items = detectionTasks.map((task) => ({
+            ...task,
+            status: detectionStatus,
+            progress: detectionStatus === 'running' ? 50 : detectionStatus === 'queued' ? 0 : 100,
+            message:
+              detectionStatus === 'failed'
+                ? '代理认证失败，请检查账号和密码'
+                : detectionStatus === 'succeeded'
+                  ? '检测成功'
+                  : '检测任务',
+            updatedAt: new Date().toISOString()
+          }));
+          data = {
+            items,
+            total: items.length,
+            page: 1,
+            pageSize: 100,
+            revalidateAt: items.some((task) => ['queued', 'running'].includes(task.status))
+              ? new Date(Date.now() + 150).toISOString()
+              : null
+          };
+        } else if (endpoint.endsWith('/online-recharge/admin/proxies/test')) {
+          detectionPosts++;
+          const requestInput = request.postDataJSON();
+          const selected =
+            requestInput.ids || (requestInput.id ? [requestInput.id] : rows.map((row) => row.id));
+          detectionStatus = 'queued';
+          detectionTasks = selected.map((proxyId, index) => ({
+            id: `88888888-8888-4888-8888-${String(detectionPosts * 100 + index + 1).padStart(12, '0')}`,
+            proxyId,
+            status: 'queued',
+            progress: 0,
+            createdAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString(),
+            message: '等待执行'
+          }));
+          data = { tasks: detectionTasks, reused: 0 };
+        } else if (endpoint.endsWith('/proxy-pool/countries')) data = { items: ['US', 'PH'] };
         else if (endpoint.endsWith('/proxy-pool/import') && method === 'POST') {
           const input = request.postDataJSON();
           assert.equal(input.proxies.length, 1);
@@ -190,26 +279,18 @@ try {
         } else if (endpoint.endsWith('/proxy-pool') && method === 'POST') {
           const input = request.postDataJSON();
           mutations.push({ method, endpoint, input });
-          rows.push({
+          rows.unshift({
             ...rows[0],
             id: '77777777-7777-4777-8777-777777777777',
             countryCode: input.countryCode,
             kind: input.kind,
             protocol: input.protocol,
+            connectionMode: input.connectionMode,
             remark1: input.remark,
             remark: input.remark
           });
-          data = { id: rows.at(-1).id };
+          data = { id: rows[0].id };
         } else if (endpoint.endsWith('/proxy-pool') && method === 'GET') {
-          if (failListRequests > 0) {
-            failListRequests--;
-            await route.fulfill({
-              status: 422,
-              contentType: 'application/json',
-              body: JSON.stringify({ success: false, message: '模拟代理列表读取失败' })
-            });
-            return;
-          }
           const filtered = rows.filter(
             (item) =>
               (!url.searchParams.get('keyword') ||
@@ -236,7 +317,21 @@ try {
           else if (method === 'PATCH') {
             const input = request.postDataJSON();
             mutations.push({ method, endpoint, input });
+            const connectionChanged =
+              (input.protocol && input.protocol !== item.protocol) ||
+              (input.connectionMode && input.connectionMode !== item.connectionMode) ||
+              Boolean(input.url);
             Object.assign(item, input);
+            if (connectionChanged) {
+              Object.assign(item, {
+                exitIp: null,
+                latencyMs: null,
+                testMessage: null,
+                testedAt: null
+              });
+              for (const task of detectionTasks)
+                if (task.proxyId === id) task.connectionChanged = true;
+            }
             data = { id };
           } else if (method === 'DELETE') {
             mutations.push({ method, endpoint });
@@ -288,15 +383,6 @@ try {
         root.style.colorScheme = value;
       }, theme);
       await assertListLayout(page, `${width}px 首页`);
-      if (theme === 'light' && width === 1440) {
-        failListRequests = 1;
-        await page.getByRole('button', { name: '刷新', exact: true }).click();
-        await page.getByRole('button', { name: '重试', exact: true }).waitFor();
-        assert.ok(await page.getByText('测试代理 1', { exact: true }).isVisible());
-        await page.getByRole('button', { name: '重试', exact: true }).click();
-        await page.getByRole('button', { name: '重试', exact: true }).waitFor({ state: 'hidden' });
-        assert.ok(await page.getByText('测试代理 1', { exact: true }).isVisible());
-      }
       await page.screenshot({
         path: path.join(outputDir, `${theme}-${width}-first.png`),
         fullPage: true
@@ -344,9 +430,95 @@ try {
       assert.ok(
         mutations.some((entry) => entry.method === 'PATCH' && entry.input.protocol === 'socks5')
       );
+      await page.getByRole('button', { name: '新增代理', exact: true }).click();
+      const creator = page
+        .locator('.v2-form-drawer')
+        .filter({ has: page.getByRole('heading', { name: '新增代理', exact: true }) });
+      for (const [name, label] of [
+        ['代理国家', '菲律宾'],
+        ['代理属性', '动态住宅'],
+        ['代理连接方式', '代理地址（支持动态会话）'],
+        ['代理协议', 'SOCKS5']
+      ]) {
+        await creator
+          .locator('.el-select')
+          .filter({ has: page.getByRole('combobox', { name, exact: true }) })
+          .click();
+        await page.getByRole('option', { name: label, exact: true }).click();
+      }
+      const addressInput = creator.getByPlaceholder('主机:端口:账号:密码，或标准代理链接');
+      const beforeInvalid = mutations.length;
+      await addressInput.fill('invalid-address');
+      await creator.getByRole('button', { name: '保存', exact: true }).click();
+      await creator.locator('.el-form-item__error').first().waitFor();
+      await assertFormAlignment(creator, `${theme}-${width} 保存格式错误`);
+      assert.equal(mutations.length, beforeInvalid, '格式错误不应发送保存请求');
+      await addressInput.fill('gateway.example.test:1080:review:p@ss:word');
+      await creator.getByRole('button', { name: '保存', exact: true }).click();
+      await creator.waitFor({ state: 'hidden' });
+      assert.ok(
+        mutations.some(
+          (entry) =>
+            entry.method === 'POST' &&
+            entry.input.url === 'socks5://review:p%40ss%3Aword@gateway.example.test:1080' &&
+            entry.input.protocol === 'socks5'
+        ),
+        '供应商格式应规范化后保存'
+      );
       await first.getByRole('button', { name: '更多操作' }).click();
       await page.getByRole('menuitem', { name: '检测连通性' }).click();
-      await page.getByText('已排队 1 个检测任务，请稍后刷新查看结果').waitFor();
+      await page.getByText('已提交 1 个检测任务，结果将自动更新', { exact: true }).waitFor();
+      await first.getByText(/等待执行/).waitFor();
+      assert.equal(
+        await page.getByRole('button', { name: '检测启用代理', exact: true }).isDisabled(),
+        true
+      );
+      detectionTasks[0].createdAt = new Date(Date.now() - 121000).toISOString();
+      await first.getByText(/排队超过 2 分钟/).waitFor();
+      detectionStatus = 'running';
+      await first.getByText(/检测中（50%）/).waitFor();
+      assert.equal(detectionPosts, 1, '等待执行期间不得重复排队');
+      detectionStatus = 'failed';
+      await first.getByText('代理认证失败，请检查账号和密码', { exact: true }).waitFor();
+      await first.getByRole('button', { name: '更多操作' }).click();
+      await page.getByRole('menuitem', { name: '重试检测' }).click();
+      await first.getByText(/等待执行/).waitFor();
+      assert.equal(detectionPosts, 2, '失败后允许明确重试');
+      const detected = rows.find((row) => row.id === detectionTasks[0].proxyId);
+      Object.assign(detected, {
+        exitIp: '1.1.1.1',
+        latencyMs: 36,
+        testMessage: '检测成功',
+        testedAt: new Date().toISOString()
+      });
+      detectionStatus = 'succeeded';
+      await first.getByText('1.1.1.1', { exact: true }).waitFor();
+      await first.getByText('检测成功', { exact: true }).waitFor();
+      await page.locator('.el-message--warning').waitFor({ state: 'hidden' });
+      await page.screenshot({
+        path: path.join(outputDir, `${theme}-${width}-detection-result.png`),
+        fullPage: true
+      });
+      await first.getByRole('button', { name: '更多操作' }).click();
+      await page.getByRole('menuitem', { name: '编辑', exact: true }).click();
+      await editor
+        .locator('.el-select')
+        .filter({ has: page.getByRole('combobox', { name: '代理协议', exact: true }) })
+        .click();
+      await page.getByRole('option', { name: 'HTTP', exact: true }).click();
+      await editor.getByRole('button', { name: '保存', exact: true }).click();
+      await editor.waitFor({ state: 'hidden' });
+      await first.getByText('连接资料已修改，请重新检测', { exact: true }).waitFor();
+      assert.equal(
+        await first.getByText('检测成功', { exact: true }).count(),
+        0,
+        '新连接不得显示旧成功'
+      );
+      assert.equal(
+        await first.getByText('1.1.1.1', { exact: true }).count(),
+        0,
+        '新连接不得保留旧出口'
+      );
       await page.getByRole('button', { name: '批量导入' }).click();
       const importer = page
         .locator('.v2-form-drawer')
@@ -368,34 +540,22 @@ try {
         .filter({ hasText: '备注' })
         .getByRole('textbox')
         .fill('导入验收');
-      await importer
-        .getByPlaceholder('每行一条代理地址或提取链接，最多 500 条')
-        .fill('https://proxy.example.invalid/another');
-      if (theme === 'light' && width === 1440) {
-        await importer.getByRole('button', { name: '关闭', exact: true }).click();
-        await importer.waitFor({ state: 'hidden' });
-        await page.getByRole('button', { name: '批量导入', exact: true }).click();
-        await importer.waitFor();
-        assert.equal(
-          await importer.getByPlaceholder('每行一条代理地址或提取链接，最多 500 条').inputValue(),
-          ''
-        );
-        assert.equal(
-          await importer
-            .locator('.el-form-item')
-            .filter({ hasText: '备注' })
-            .getByRole('textbox')
-            .inputValue(),
-          '导入验收'
-        );
-        assert.match(await importer.innerText(), /菲律宾/);
-        assert.match(await importer.innerText(), /移动代理/);
-        await importer
-          .getByPlaceholder('每行一条代理地址或提取链接，最多 500 条')
-          .fill('https://proxy.example.invalid/another');
-      }
+      const importInput = importer.getByPlaceholder('每行一条代理地址或提取链接，最多 500 条');
+      const beforeInvalidImport = mutations.length;
+      await importInput.fill('https://proxy.example.invalid/another\ninvalid-second-line');
+      await importer.getByRole('button', { name: '导入代理', exact: true }).click();
+      await importer.locator('.el-form-item__error').filter({ hasText: '第 2 行' }).waitFor();
+      await assertFormAlignment(importer, `${theme}-${width} 导入行号错误`);
+      assert.equal(mutations.length, beforeInvalidImport, '导入校验失败应整批不写入');
+      await importInput.fill('https://proxy.example.invalid/another');
       await importer.getByRole('button', { name: '导入代理', exact: true }).click();
       await importer.getByText('已导入 1 条，跳过重复 0 条').waitFor();
+      await importer.locator('.el-form-item__error').waitFor({ state: 'hidden' });
+      assert.equal(
+        await importer.locator('.el-form-item__error:visible').count(),
+        0,
+        '成功导入后清除输入不应显示必填错误'
+      );
       await importer.getByRole('button', { name: '关闭', exact: true }).click();
       await importer.waitFor({ state: 'hidden' });
       await page.getByText('导入验收').first().waitFor({ state: 'visible' });
@@ -433,32 +593,53 @@ try {
       (entry) => entry.endpoint.endsWith('/import') && entry.input.proxies[0].protocol === 'https'
     )
   );
-  const result = {
+  const report = {
     ok: true,
-    widths: [1440, 1024, 901, 900, 768, 390],
-    themes: ['light', 'dark'],
+    mode: 'OFFLINE_BUILT_ADMIN_WITH_SYNTHETIC_API',
+    localWebsiteStarted: false,
+    productionMutated: false,
+    widths,
+    themes,
     states: [
       'legacy-redirect',
       'first',
       'last',
       'detail',
       'protocol-edit',
+      'supplier-format-invalid-and-save',
       'detection-queue',
+      'detection-overdue-without-false-failure',
+      'detection-running',
+      'detection-failure-and-retry',
+      'detection-result-refresh',
+      'connection-change-invalidates-old-success',
       'import-protocol',
-      'refresh-failure-retains-content-and-retry',
-      'metadata-draft-restored-sensitive-input-cleared',
+      'import-line-error',
       'empty'
     ],
     outputDir
   };
-  writeFileSync(path.join(outputDir, 'result.json'), JSON.stringify(result, null, 2) + '\n');
-  console.log(JSON.stringify(result));
+  writeFileSync(
+    path.join(outputDir, darkNarrow ? 'repair-result-dark-narrow.json' : 'repair-result.json'),
+    `${JSON.stringify(report, null, 2)}\n`
+  );
+  console.log(JSON.stringify(report));
+} catch (error) {
+  if (inspectedPage && !inspectedPage.isClosed()) {
+    await inspectedPage.screenshot({
+      path: path.join(outputDir, 'repair-failure.png'),
+      fullPage: true
+    });
+    writeFileSync(
+      path.join(outputDir, 'repair-failure-body.txt'),
+      await inspectedPage.locator('body').innerText()
+    );
+    writeFileSync(
+      path.join(outputDir, 'repair-failure-requests.json'),
+      JSON.stringify(requestFailures)
+    );
+  }
+  throw error;
 } finally {
   await browser?.close();
-  server.kill('SIGTERM');
-  await Promise.race([
-    new Promise((resolve) => server.once('close', resolve)),
-    new Promise((resolve) => setTimeout(resolve, 3000))
-  ]);
-  if (server.exitCode === null) server.kill('SIGKILL');
 }

@@ -260,14 +260,25 @@ async function runJob(task, config) {
       confirmedPaid: result.result?.confirmedPaid === true,
       evidence: entry.artifacts
     });
-  } catch {
+  } catch (error) {
     const uncertain = ['recharge', 'renewal'].includes(task.operation);
+    const proxyFailure =
+      task.operation === 'proxy_test'
+        ? require('./proxy-test.cjs').completionFailure(task, entry.result?.result)
+        : null;
+    if (proxyFailure && error?.code === 'LEASE_LOST') entry.lost = true;
     if (!entry.lost)
       await rpc('failJob', {
         ...scope(task),
         status: uncertain ? 'awaiting_review' : 'failed',
-        result: uncertain ? { resultUnknown: true } : { error: '执行器准备或管理操作失败' },
-        message: uncertain ? '执行未能完整确认，请核对任务状态' : '执行未完成，请查看受限诊断'
+        result:
+          proxyFailure ||
+          (uncertain ? { resultUnknown: true } : { error: '执行器准备或管理操作失败' }),
+        message: proxyFailure
+          ? proxyFailure.error
+          : uncertain
+            ? '执行未能完整确认，请核对任务状态'
+            : '执行未完成，请查看受限诊断'
       }).catch(() => {});
   } finally {
     clearInterval(heartbeat);

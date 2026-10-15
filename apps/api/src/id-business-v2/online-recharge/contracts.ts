@@ -1,11 +1,29 @@
 export const ONLINE_RECHARGE_SOURCE_SHA = 'ba6cf96312a6953e62edb9d74299d438d12549df';
-export const ONLINE_RECHARGE_PLANS = ['plus', 'pro_5x', 'pro_20x'] as const;
+export const ONLINE_RECHARGE_PLANS = ['plus', 'pro_5x', 'pro_20x', 'pro_500'] as const;
 export type OnlineRechargePlan = (typeof ONLINE_RECHARGE_PLANS)[number];
 export const ONLINE_RECHARGE_CONFIRMED_PLAN_NAMES: Record<OnlineRechargePlan, readonly string[]> = {
   plus: ['plus', 'chatgptplus', 'chatgptplusplan'],
   pro_5x: ['pro_5x', 'pro5x', 'chatgptprolite'],
-  pro_20x: ['pro_20x', 'pro20x', 'chatgptpro']
+  pro_20x: ['pro_20x', 'pro20x'],
+  pro_500: ['pro_500']
 };
+export const ONLINE_RECHARGE_PLAN_LABELS: Record<OnlineRechargePlan, string> = {
+  plus: 'Plus 套餐',
+  pro_5x: 'Pro 100 套餐',
+  pro_20x: 'Pro 200 套餐',
+  pro_500: 'Pro 500 套餐'
+};
+export interface OnlineRechargePaymentContext {
+  kind: 'initial' | 'upgrade';
+  sourcePlan: 'free' | OnlineRechargePlan;
+  targetPlan: OnlineRechargePlan;
+  accountId: string;
+  cardId: string;
+  cardLast4: string;
+  amount: string;
+  currency: string;
+  quoteId?: string;
+}
 export const ONLINE_RECHARGE_SECTIONS = [
   'cards',
   'proxies',
@@ -75,7 +93,8 @@ export const ONLINE_RECHARGE_DEFAULTS = {
   cdpPort: 9222,
   planNamePlus: 'chatgptplusplan',
   planNamePro5x: 'chatgptprolite',
-  planNamePro20x: 'chatgptpro'
+  planNamePro20x: 'chatgptpro',
+  planNamePro500: ''
 } as const;
 export const ONLINE_RECHARGE_SECRET_KEYS = [
   'gptApiKey',

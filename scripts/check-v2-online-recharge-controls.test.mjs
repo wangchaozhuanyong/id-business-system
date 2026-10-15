@@ -19,15 +19,14 @@ test('结果弹窗识别真实任务协议并按原编号刷新每类合成任�
     ),
     'utf8'
   );
+  const taskPredicateStart = component.indexOf('const taskOperations =');
+  const taskPredicateEnd = component.indexOf('\ninterface OrderSync {', taskPredicateStart);
+  assert.ok(taskPredicateStart >= 0 && taskPredicateEnd > taskPredicateStart);
   const predicateSource =
     component.slice(
       component.indexOf('function record('),
       component.indexOf('const resultRecord =')
-    ) +
-    component.slice(
-      component.indexOf('const taskOperations ='),
-      component.indexOf('const entries =')
-    );
+    ) + component.slice(taskPredicateStart, taskPredicateEnd);
   const predicate = runInNewContext(
     ts.transpileModule(predicateSource, { compilerOptions: { target: ts.ScriptTarget.ES2022 } })
       .outputText + '\nresultTask;'

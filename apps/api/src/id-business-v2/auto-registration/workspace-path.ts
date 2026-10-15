@@ -1,9 +1,12 @@
 import { BadRequestException } from '@nestjs/common';
 import { REGISTRATION_WORKSPACE_PATH } from '../../auth/registration-workspace-session';
 
-const pages = new Set(['/', '/accounts', '/email-services', '/payment', '/settings']);
+const pages = new Set(['/', '/accounts', '/email-services', '/settings']);
 const apiPath =
-  /^\/api\/(?:accounts|registration|settings|email-services|payment|cpa-services|tm-services|sub2api-services|ws)(?:\/|$)/;
+  /^\/api\/(?:accounts|registration|settings|email-services|cpa-services|tm-services|sub2api-services|ws)(?:\/|$)/;
+// The frozen payment router also owns independent Team Manager uploads.
+// Only those uploads remain available after subscription management is retired.
+const retainedPaymentPath = /^\/api\/payment\/accounts\/(?:\d+\/upload-tm|batch-upload-tm)$/;
 
 export function workspaceUpstreamPath(originalUrl: string) {
   const suffix = originalUrl.slice(REGISTRATION_WORKSPACE_PATH.length);
@@ -20,7 +23,12 @@ export function workspaceUpstreamPath(originalUrl: string) {
     [...decoded].some((character) => character.charCodeAt(0) <= 32) ||
     decoded.includes('//') ||
     decoded.split('/').some((part) => part === '.' || part === '..') ||
-    !(pages.has(decoded) || decoded.startsWith('/static/') || apiPath.test(decoded))
+    !(
+      pages.has(decoded) ||
+      decoded.startsWith('/static/') ||
+      apiPath.test(decoded) ||
+      retainedPaymentPath.test(decoded)
+    )
   ) {
     throw new BadRequestException('自动注册地址不在允许范围内');
   }

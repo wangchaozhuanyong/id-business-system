@@ -1,5 +1,5 @@
-import { OnlineProxyPoolRepository } from '../../proxy-pool/public-api';
-import { Injectable } from '@nestjs/common';
+import { OnlineProxyPoolRepository, proxyConnectionVersion } from '../../proxy-pool/public-api';
+import { BadRequestException, Injectable } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../../common/prisma/prisma.service';
 import { acquireMysqlTransactionLock } from '../../../common/prisma/mysql-transaction-lock';
@@ -12,7 +12,7 @@ import { V2CommandTransactionManager } from '../../runtime/public-api';
 import { randomUUID } from 'node:crypto';
 import type { AuthenticatedUser } from '../../../auth/auth.types';
 import type { OnlineRechargeSection } from '../contracts';
-import { integer, redact, sanitize } from '../validation';
+import { id, integer, redact, sanitize } from '../validation';
 
 @Injectable()
 export class OnlineRechargeRepository {
@@ -25,14 +25,20 @@ export class OnlineRechargeRepository {
   read<T>(work: (db: PrismaService) => Promise<T>) {
     return work(this.prisma);
   }
-  transaction<T>(key: string, work: (tx: V2CommandTransaction) => Promise<T>) {
+  transaction<T>(
+    key: string,
+    work: (tx: V2CommandTransaction) => Promise<T>,
+    changedScopes: Parameters<V2CommandTransactionManager['execute']>[1]['changedScopes'] = [
+      'online-recharge'
+    ]
+  ) {
     return this.transactions.execute(
       async (tx) => {
         await acquireMysqlTransactionLock(tx, `online-recharge:${key}`);
         return work(tx);
       },
       {
-        changedScopes: ['online-recharge'],
+        changedScopes,
         requestId: randomUUID(),
         isolationLevel: 'Serializable',
         timeoutMs: 20000,
@@ -65,8 +71,25 @@ export class OnlineRechargeRepository {
       .slice(0, 100);
     const options = { skip: (page - 1) * pageSize, take: pageSize };
     const order: 'asc' | 'desc' = query.sortOrder === 'asc' ? 'asc' : 'desc';
+    const queryIds = (value: unknown) => {
+      const values = String(value).split(',');
+      if (values.length > 500) throw new BadRequestException('查询编号数量超过限制');
+      return [...new Set(values.map(id))];
+    };
+    const proxyIds = query.proxyIds ? queryIds(query.proxyIds) : [];
     const taskWhere: Prisma.OnlineRechargeTaskWhereInput = {
       deletedAt: null,
+      ...(query.operation === 'proxy_test' ? { operation: 'proxy_test' } : {}),
+      ...(query.ids ? { id: { in: queryIds(query.ids) } } : {}),
+      ...(proxyIds.length && query.latestPerProxy !== 'true'
+        ? {
+            AND: [
+              {
+                OR: proxyIds.map((proxyId) => ({ payload: { path: '$.proxyId', equals: proxyId } }))
+              }
+            ]
+          }
+        : {}),
       ...(query.status
         ? { status: String(query.status) as Prisma.EnumOnlineRechargeStatusFilter }
         : {}),
@@ -202,6 +225,72 @@ export class OnlineRechargeRepository {
         case 'renewal':
         case 'jobs':
         case 'automation': {
+          if (
+            query.operation === 'proxy_test' &&
+            query.latestPerProxy === 'true' &&
+            proxyIds.length
+          ) {
+            // Bounded indexed lookups prevent one proxy's history from hiding another's live task.
+            const [aliases, currentProxies] = await Promise.all([
+              db.idBusinessV2ProxyAlias.findMany({
+                where: { proxyId: { in: proxyIds } },
+                select: { oldId: true, proxyId: true }
+              }),
+              db.idBusinessV2RechargeProxy.findMany({
+                where: { id: { in: proxyIds } },
+                select: { id: true, urlHash: true, protocol: true, connectionMode: true }
+              })
+            ]);
+            const currentVersions = new Map(
+              currentProxies.map((proxy) => [proxy.id, proxyConnectionVersion(proxy)])
+            );
+            const latest = await Promise.all(
+              proxyIds.map(async (proxyId) => {
+                const row = await db.onlineRechargeTask.findFirst({
+                  where: {
+                    ...taskWhere,
+                    AND: [
+                      {
+                        OR: [
+                          proxyId,
+                          ...aliases
+                            .filter((alias) => alias.proxyId === proxyId)
+                            .map((alias) => alias.oldId)
+                        ].flatMap((value) => [
+                          { payload: { path: '$.proxyId', equals: value } },
+                          { payload: { path: '$.ids', array_contains: value } }
+                        ])
+                      }
+                    ]
+                  },
+                  orderBy: [{ createdAt: 'desc' }, { id: 'desc' }]
+                });
+                const payload =
+                  row?.payload && typeof row.payload === 'object' && !Array.isArray(row.payload)
+                    ? row.payload
+                    : {};
+                return row
+                  ? {
+                      ...row,
+                      payload: {
+                        ...payload,
+                        proxyId,
+                        proxyConnectionChanged:
+                          typeof payload.proxyConnectionVersion === 'string' &&
+                          payload.proxyConnectionVersion !== currentVersions.get(proxyId)
+                      }
+                    }
+                  : null;
+              })
+            );
+            const rows = latest.filter((row) => row !== null);
+            return {
+              items: rows.slice(options.skip, options.skip + options.take),
+              total: rows.length,
+              page,
+              pageSize
+            };
+          }
           const where: Prisma.OnlineRechargeTaskWhereInput =
             section === 'sessions'
               ? { ...taskWhere, sessionEncrypted: { not: null } }

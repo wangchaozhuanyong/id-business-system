@@ -493,7 +493,7 @@ suite('bank recharge real MySQL lifecycle', () => {
       (await prisma.idBusinessV2ChatgptAccount.findUniqueOrThrow({ where: { id: saved.id } }))
         .officialAccountKey
     ).toBe(accountKey);
-    expect(automatic.chargeAmount.toString()).toBe('123.45');
+    expect(automatic.chargeAmount!.toString()).toBe('123.45');
     await prisma.$transaction(async (tx) => {
       await bindSavedChatgptAccount(tx, job, sanitizedResult, accounts);
       await recordVerifiedBankRecharge(tx, job, sanitizedResult, orders);
