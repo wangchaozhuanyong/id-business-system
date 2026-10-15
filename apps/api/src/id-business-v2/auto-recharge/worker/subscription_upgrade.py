@@ -503,30 +503,72 @@ async def read_subscription(page, target):
     return refreshed, identity, data
 
 
+def upgrade_result(ledger, guard, identity=None):
+    # Historical subscription observations cannot attest the current account.
+    identity = identity if identity and identity.get('account_matched') is True else {
+        'session_status': 'not_verified', 'account_matched': False, 'current_plan': None, 'current_tier': None}
+    match = subscription_match(ledger.target_plan, identity['current_plan'], identity.get('current_tier'))
+    record = ledger.record
+    status = outcome(record['payment_status'], identity['current_plan'], record.get('payment_evidence'),
+                     target_plan=ledger.target_plan, current_tier=identity.get('current_tier'))
+    result = {**record, **identity, 'status': status, 'stage': 'original_payment_recheck',
+            'subscription_status': ledger.target_plan if match == 'matched' else match,
+            'payment_outcome': status, 'payment_requests_sent': guard.sent,
+            **upgrade_authentication_summary(guard, record),
+            'repeated_payment': 'blocked', 'recheck_only': guard.sent == 0}
+    if guard.error and guard.error.report.get('reason') == 'upgrade_payment_evidence_conflict':
+        result.update(status='blocked', reason='upgrade_payment_evidence_conflict',
+                      last_reason='upgrade_payment_evidence_conflict',
+                      payment_outcome='paid_pending_activation' if status == 'subscription_activated' else status)
+    return result
+
+
 async def inspect_upgrade(page, target, ledger, guard, *, poll_count=1, poll_interval=20):
+    guard.read_only = True
     for i in range(poll_count):
-        refreshed, identity, subscription = await read_subscription(page, target)
-        if ledger.record.get('upgrade_invoice_identifier') or ledger.record.get('upgrade_payment_intent_identifier'):
-            invoices = await browser_read(page, INVOICES_PATH + '?' + urlencode({'account_id': target.account_id, 'limit': 100}), refreshed)
-            rows = invoices.get('data', invoices.get('invoices', [])) if isinstance(invoices, dict) else []
-            for invoice in rows if isinstance(rows, list) else []:
-                guard.observe(invoice)
+        try:
+            refreshed, identity, subscription = await read_subscription(page, target)
+            if identity.get('account_matched') is not True:
+                raise Stop('official_account_mismatch')
+        except Exception as exc:
+            result = upgrade_result(ledger, guard)
+            reason = exc.report['reason'] if isinstance(exc, Stop) else 'upgrade_result_unknown'
+            result.setdefault('reason', reason)
+            result.setdefault('last_reason', reason)
+            ledger.update(status=result['status'])
+            return result
         match = subscription_match(ledger.target_plan, identity['current_plan'], identity.get('current_tier'))
+        # Persist this fresh observation before an independent invoice read can
+        # fail; an invoice error cannot replace the account's current tier.
+        ledger.update(current_plan=identity['current_plan'], current_tier=identity.get('current_tier'),
+                      subscription_status=ledger.target_plan if match == 'matched' else match)
+        diagnostic = None
+        if ledger.record.get('upgrade_invoice_identifier') or ledger.record.get('upgrade_payment_intent_identifier'):
+            rows = []
+            try:
+                invoices = await browser_read(page, INVOICES_PATH + '?' + urlencode({'account_id': target.account_id, 'limit': 100}), refreshed)
+                rows = invoices.get('data', invoices.get('invoices', [])) if isinstance(invoices, dict) else []
+            except Exception as exc:
+                diagnostic = exc.report['reason'] if isinstance(exc, Stop) else 'upgrade_result_unknown'
+            for invoice in rows if isinstance(rows, list) else []:
+                try:
+                    guard.observe(invoice)
+                except Stop as exc:
+                    if exc.report['reason'] != 'upgrade_payment_evidence_conflict':
+                        raise
+                    guard.error = exc
+                    break
         # 本次官网 subscription 对象必须与核实的目标套餐一致，不能附旧Plus账期。
         raw_plan = {'plus': 'plus', 'pro-5x': 'prolite', 'pro-20x': 'pro', 'pro-500': 'promax'}[ledger.target_plan]
         period = safe_period(subscription, ledger) if (match == 'matched' and subscription.get('plan_type') == raw_plan
                  and ledger.record.get('payment_evidence')) else None
-        record = ledger.record
-        status = outcome(record['payment_status'], identity['current_plan'], record.get('payment_evidence'),
-                         target_plan=ledger.target_plan, current_tier=identity.get('current_tier'))
-        ledger.update(status=status, current_plan=identity['current_plan'], current_tier=identity.get('current_tier'),
-                      subscription_status=ledger.target_plan if match == 'matched' else match,
-                      **({'subscription_period': period} if period else {}))
-        if status == 'subscription_activated' or record['payment_status'] != 'paid' or i + 1 == poll_count:
-            return {**ledger.record, **identity, 'status': status, 'stage': 'original_payment_recheck',
-                    'payment_outcome': status, 'payment_requests_sent': guard.sent,
-                    **upgrade_authentication_summary(guard, ledger.record),
-                    'repeated_payment': 'blocked', 'recheck_only': guard.sent == 0}
+        result = upgrade_result(ledger, guard, identity)
+        ledger.update(status=result['status'], **({'subscription_period': period} if period else {}),
+                      **({'last_reason': diagnostic} if diagnostic else {}))
+        result = upgrade_result(ledger, guard, identity)
+        if (result['status'] == 'subscription_activated' or match == 'matched'
+                or ledger.record['payment_status'] in {'declined', 'requires_action'} or i + 1 == poll_count):
+            return result
         await asyncio.sleep(poll_interval)
 
 
@@ -584,12 +626,15 @@ async def run_upgrade_in_context(page, target, state_dir, target_plan, *, detail
         observers = UpgradeResponseObservers(context, guard)
         details = None
         result = None
+        identity = None
+        reconciled = False
         def cancelled():
             if guard.operation_cancelled() or session_budget and session_budget.cancelled():
                 raise Stop('operation_cancelled')
         try:
             if ledger.record:
                 await observers.finish()
+                reconciled = True
                 result = await inspect_upgrade(page, target, ledger, guard, poll_count=poll_count, poll_interval=poll_interval)
                 return result
             refreshed, identity, subscription = await read_subscription(page, target)
@@ -659,14 +704,33 @@ async def run_upgrade_in_context(page, target, state_dir, target_plan, *, detail
             else:
                 await wait_upgrade_authentication(guard, wait_seconds, cancelled, progress)
             await observers.finish()
+            reconciled = True
             result = await inspect_upgrade(page, target, ledger, guard, poll_count=poll_count, poll_interval=poll_interval)
             result.update(stage='payment_result', recheck_only=False)
-            if guard.error and not ledger.record.get('payment_evidence'):
-                result.update(guard.error.report)
+            if guard.error:
+                result.setdefault('last_reason', guard.error.report['reason'])
             return result
         except Stop as exc:
             await observers.finish()
-            result = {**exc.report, 'operation': 'subscription_upgrade', 'account_matched': True,
+            if ledger.record and (guard.sent or ledger.record.get('confirmation_requests_sent') == 1):
+                if not reconciled:
+                    reconciled = True
+                    try:
+                        result = await inspect_upgrade(page, target, ledger, guard,
+                            poll_count=1 if exc.report['reason'] == 'operation_cancelled' else poll_count,
+                            poll_interval=poll_interval)
+                    except Stop as recheck_error:
+                        result = upgrade_result(ledger, guard)
+                        result.update(reason=recheck_error.report['reason'], last_reason=recheck_error.report['reason'])
+                else:
+                    result = upgrade_result(ledger, guard)
+                result.setdefault('last_reason', exc.report['reason'])
+                if guard.sent:
+                    result.update(stage='payment_result', recheck_only=False)
+                return result
+            result = {**exc.report, 'operation': 'subscription_upgrade',
+                      'account_matched': bool(identity and identity.get('account_matched') is True
+                                              and exc.report['reason'] != 'official_account_mismatch'),
                       'target_plan': target_plan, 'stage': 'upgrade_checkout', 'payment_requests_sent': guard.sent}
             if ledger.record:
                 result.update({k: v for k, v in ledger.record.items() if k in {
