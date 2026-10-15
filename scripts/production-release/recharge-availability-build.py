@@ -51,7 +51,10 @@ def helper():
 def verify_sources(contract):
     need(not git('status', '--porcelain', '--untracked-files=no').strip(), 'SOURCE_DIRTY')
     changed = set(git('diff', '--name-only', contract['reviewBase'], 'HEAD', '--', 'apps/', 'packages/').decode().splitlines())
-    need(changed == {n for n in contract['sources'] if n.startswith(('apps/', 'packages/'))}, 'SOURCE_SCOPE_CHANGED')
+    approved = {n for n in contract['sources'] if n.startswith(('apps/', 'packages/'))}
+    need(approved <= changed and all(
+        git('ls-tree', 'HEAD', '--', name) == git('ls-tree', contract['sourceBaseline'], '--', name)
+        for name in changed - approved), 'SOURCE_SCOPE_CHANGED')
     for name, expected in contract['sources'].items():
         need(digest((ROOT / name).read_bytes()) == expected, 'SOURCE_CHANGED')
     need(git('show', contract['sourceBaseline'] + ':package-lock.json') == (ROOT / 'package-lock.json').read_bytes(), 'LOCKFILE_CHANGED')

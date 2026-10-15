@@ -22,6 +22,12 @@ def digest(raw):
     return hashlib.sha256(raw).hexdigest()
 
 
+def normalize_image_context(directory):
+    for path in (directory, *directory.rglob('*')):
+        need(not path.is_symlink() and (path.is_dir() or path.is_file()), 'IMAGE_CONTEXT_PATH_INVALID')
+        path.chmod(0o755 if path.is_dir() else 0o644)
+
+
 def load(path, name):
     spec = importlib.util.spec_from_file_location(name, path)
     module = importlib.util.module_from_spec(spec)
@@ -145,15 +151,11 @@ def release(plan, contract, d, h):
         for role in ('api', 'admin'):
             original = json.loads(d.run('docker', 'image', 'inspect', before[role]['image']))[0]
             reference = h.base_image_reference(d, before[role])
-            user = original['Config'].get('User') or ''
+            normalize_image_context(payload / role)
             lines = 'FROM ' + reference + '\n'
-            if role == 'admin' and user not in ('', 'root', '0'):
-                lines += 'USER root\n'
             lines += 'COPY modules/ /app/apps/api/dist/\n' if role == 'api' else (
-                'COPY html/ /usr/share/nginx/html/\nRUN find /usr/share/nginx/html -type d -exec chmod 755 {} + && find /usr/share/nginx/html -type f -exec chmod 644 {} +\n')
+                'COPY html/ /usr/share/nginx/html/\n')
             lines += 'LABEL org.opencontainers.image.revision="' + plan['commit'] + '" id-business-v2.recharge-record-build-proof-sha256="' + plan['buildProofSha256'] + '"\n'
-            if role == 'admin' and user not in ('', 'root', '0'):
-                lines += 'USER ' + user + '\n'
             (payload / role / 'Dockerfile').write_text(lines)
             image = 'id-business-v2-availability:' + plan['commit'] + '-' + plan['workflowRunId'] + '-' + role
             h.build_image(d, payload / role, image, role, before[role], stage)
@@ -164,6 +166,12 @@ def release(plan, contract, d, h):
                       'id-business-v2.recharge-record-build-proof-sha256': plan['buildProofSha256']}
             need(built['Config']['Labels'] == labels, 'IMAGE_LABELS_CHANGED')
             images[role] = {'reference': image, 'imageId': built['Id']}
+        # Load only the pure availability classifier; no database, volumes or external network.
+        d.run('docker', 'run', '--rm', '--network', 'none', '--read-only', '--entrypoint', 'node',
+              images['api']['reference'], '-e', "const m=require('/app/apps/api/dist/id-business-v2/auto-recharge/recharge-availability.js');if(typeof m.rechargeAvailability!=='function')process.exit(2)")
+        d.run('docker', 'run', '--rm', '--network', 'none', '--read-only', '--user', '101:101',
+              '--entrypoint', 'sh', images['admin']['reference'], '-c',
+              'test -r /usr/share/nginx/html/index.html && test -x /usr/share/nginx/html/assets')
         need(baseline(d, contract, h)[1:] == (raw_manifest, before), 'BASELINE_MOVED')
         backup = h.fresh_scoped_backup(d, previous, plan, normalizer_path=Path(contract['backupNormalizerPath']))
         need(backup.get('s3Verified') is True, 'BACKUP_UNVERIFIED')

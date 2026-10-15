@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 import tempfile
 import unittest
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 HERE = Path(__file__).resolve().parent
 
@@ -21,6 +21,42 @@ build = load('availability_test_build', 'recharge-availability-build.py')
 
 
 class AvailabilityPublicationTests(unittest.TestCase):
+    def test_published_baseline_bytes_can_be_merged_but_other_application_drift_cannot(self):
+        name='apps/api/src/id-business-v2/auto-recharge/recharge-availability.ts'
+        extra='apps/api/src/id-business-v2/online-recharge/already-published.ts'
+        contract={'reviewBase':'a'*40,'sourceBaseline':'b'*40,'sources':{name:build.digest((build.ROOT/name).read_bytes())}}
+        def git_result(*args):
+            if args[0]=='status':return b''
+            if args[0]=='diff':return (name+'\n'+extra+'\n').encode()
+            if args[0]=='show':return (build.ROOT/'package-lock.json').read_bytes()
+            if args[0]=='ls-tree':return b'100644 blob fixed-published-bytes\tpath'
+            raise AssertionError(args)
+        with patch.object(build,'git',side_effect=git_result):
+            build.verify_sources(contract)
+        def drift(*args):
+            if args[0]=='ls-tree' and args[1]=='HEAD':return b'100644 blob unreviewed-bytes\tpath'
+            return git_result(*args)
+        with patch.object(build,'git',side_effect=drift), self.assertRaisesRegex(RuntimeError,'SOURCE_SCOPE_CHANGED'):
+            build.verify_sources(contract)
+
+    def test_image_context_is_readable_by_existing_nonroot_runtime_without_changing_content(self):
+        temporary = build.ROOT / '.runtime/recharge-payment-availability-20261015'
+        temporary.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=temporary) as directory:
+            root=Path(directory)
+            module=root/'modules/id-business-v2/auto-recharge/classifier.js'
+            module.parent.mkdir(parents=True,mode=0o700)
+            module.write_bytes(b'synthetic-content')
+            module.chmod(0o600)
+            before=build.inventory(root)
+            release.normalize_image_context(root)
+            self.assertEqual(build.inventory(root),before)
+            self.assertEqual(module.stat().st_mode & 0o777,0o644)
+            self.assertEqual(module.parent.stat().st_mode & 0o777,0o755)
+            (root/'link').symlink_to(module)
+            with self.assertRaisesRegex(RuntimeError,'IMAGE_CONTEXT_PATH_INVALID'):
+                release.normalize_image_context(root)
+
     def test_build_excludes_incremental_cache_but_never_unrelated_executable_changes(self):
         name = 'id-business-v2/auto-recharge/fixture'
         modules = {name + '.js': None}
