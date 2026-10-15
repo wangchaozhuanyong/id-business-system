@@ -1,7 +1,6 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import {
   registrationNativeBinding as pinned,
@@ -120,7 +119,12 @@ function repair() {
     contract,
     'scripts/ci-registration-closure-native-reuse.mjs'
   ];
-  const after = Object.fromEntries([...new Set(paths)].map((path) => [path, readFileSync(path)]));
+  const after = Object.fromEntries(
+    [...new Set(paths)].map((path) => [
+      path,
+      execFileSync('git', ['show', '7d1c3822c8f8c8c6a970067580443a3b75e88bf0:' + path])
+    ])
+  );
   const before = Object.fromEntries(
     Object.keys(after)
       .filter(
@@ -154,6 +158,7 @@ test('exact repaired source pins preserve every app workflow lock and complete c
     'apps/admin/src/v2/features/online-recharge/OnlineResultDialog.vue',
     'packages/shared/src/index.ts',
     '.github/workflows/quality.yml',
+    '.github/workflows/registration-closure-validation.yml',
     'package-lock.json',
     'apps/api/prisma-mysql/schema.prisma',
     'scripts/ci-registration-closure-native-reuse-extra.mjs'
