@@ -16,8 +16,17 @@ test('direct proxy substitutes one session for all placeholders and keeps protoc
 });
 test('extraction understands JSON, plain endpoint and provider credentials', async () => {
   assert.equal(parseExtracted('8.8.8.8:8080', 'http'), 'http://8.8.8.8:8080');
-  assert.equal(parseExtracted(JSON.stringify({data:['8.8.8.8:8080:user:pass:word']}), 'http'), 'http://user:pass%3Aword@8.8.8.8:8080');
-  assert.equal(parseExtracted(JSON.stringify({data:{ip:'8.8.8.8',port:8080,user:'u',pwd:'p'}}), 'http'), 'http://u:p@8.8.8.8:8080');
+  assert.equal(
+    parseExtracted(JSON.stringify({ data: ['8.8.8.8:8080:user:pass:word'] }), 'http'),
+    'http://user:pass%3Aword@8.8.8.8:8080'
+  );
+  assert.equal(
+    parseExtracted(
+      JSON.stringify({ data: { ip: '8.8.8.8', port: 8080, user: 'u', pwd: 'p' } }),
+      'http'
+    ),
+    'http://u:p@8.8.8.8:8080'
+  );
   const result = await resolveProxy(
     {
       proxy_url: 'https://provider.example.test/api',

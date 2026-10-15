@@ -93,7 +93,12 @@ export class RechargeProxyRepository {
     });
     const ids = [id, ...aliases.map((row) => row.oldId)];
     return tx.onlineRechargeTask.findFirst({
-      where: { OR: ids.map((proxyId) => ({ payload: { path: '$.proxyId', equals: proxyId } })) },
+      where: {
+        OR: ids.flatMap((proxyId) => [
+          { payload: { path: '$.proxyId', equals: proxyId } },
+          { payload: { path: '$.ids', array_contains: proxyId } }
+        ])
+      },
       select: { id: true }
     });
   }

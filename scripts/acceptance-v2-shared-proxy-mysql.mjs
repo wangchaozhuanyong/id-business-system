@@ -44,7 +44,7 @@ try {
       '-e',
       'MYSQL_ROOT_PASSWORD',
       '-e',
-      'MYSQL_DATABASE=id_business_shared_proxy_fixture',
+      'MYSQL_DATABASE=id_business_v2_online_recharge_fixture',
       image
     ],
     { env: { ...process.env, MYSQL_ROOT_PASSWORD: password } }
@@ -77,7 +77,7 @@ try {
   const env = {
     ...process.env,
     NODE_ENV: 'test',
-    DATABASE_URL: `mysql://root:${password}@127.0.0.1:${port}/id_business_shared_proxy_fixture`,
+    DATABASE_URL: `mysql://root:${password}@127.0.0.1:${port}/id_business_v2_online_recharge_fixture`,
     FIELD_ENCRYPTION_KEY: randomBytes(32).toString('hex'),
     HASH_SECRET: randomBytes(32).toString('hex'),
     ONLINE_RECHARGE_WORKER_KEY: randomBytes(32).toString('base64url'),
