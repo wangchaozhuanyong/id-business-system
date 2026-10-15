@@ -1006,8 +1006,16 @@ try {
   await page.getByText(/兑换码验证成功/).waitFor();
   await page.locator('textarea').fill(privateSession);
   state.redeemFail = true;
-  await page.getByRole('button', { name: '提交充值', exact: true }).click();
-  await page.getByText('合成兑换失败，输入已保留', { exact: true }).waitFor();
+  const [redeemFailure] = await Promise.all([
+    page.waitForResponse(
+      (response) =>
+        new URL(response.url()).pathname === '/api/id-business-v2/online-recharge/public/redeem' &&
+        response.request().method() === 'POST'
+    ),
+    page.getByRole('button', { name: '提交充值', exact: true }).click()
+  ]);
+  assert.equal(redeemFailure.status(), 409, '合成兑换失败未进入原 HTTP 错误分支');
+  await page.getByText('操作失败，请稍后重试。', { exact: true }).waitFor();
   assert.equal(await page.getByPlaceholder('输入兑换码').inputValue(), 'SYNTHETIC-CODE');
   assert.equal(
     await page.locator('textarea').inputValue(),

@@ -1,0 +1,41 @@
+name: Online Recharge UI Lifecycle
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [codex/online-admin-redemption-20261015]
+    paths:
+      - scripts/acceptance-v2-online-recharge-ui.mjs
+      - .github/workflows/online-recharge-ui-lifecycle.yml
+
+permissions:
+  contents: read
+
+jobs:
+  lifecycle:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          fetch-depth: 0
+      - name: Verify application source matches completed layout checks
+        run: git diff --exit-code e474bc8ed3ecc1a942f2eeb54bccab30570ae2af -- apps/admin packages/shared package.json package-lock.json
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci --no-audit
+      - run: npm run build --workspace @apple-business/shared
+      - run: npm run build --workspace @apple-business/admin
+      - run: npx playwright install chromium
+      - name: Verify affected input and permission lifecycle only
+        run: npm run acceptance:v2-online-recharge-ui -- --lifecycle
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: online-recharge-ui-lifecycle-${{ github.sha }}
+          path: .runtime/online-recharge/ui/
+          include-hidden-files: true
+          if-no-files-found: warn
+          retention-days: 14
