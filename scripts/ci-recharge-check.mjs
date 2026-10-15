@@ -6,6 +6,7 @@ import {
   rechargeRecordControlPaths,
   rechargeAvailabilityControlPaths,
   isRechargeAvailabilityControlsOnly,
+  rechargeAvailabilityGuardChecks,
   isRechargeRecordControlsOnly,
   releaseArtifactRetentionControls,
   isReleaseArtifactRetentionOnly,
@@ -433,6 +434,14 @@ if (part === 'guards') {
 // The finite diagnostic controls have their own native tests above. The common
 // format, lint and CI-selector contracts have also run. Business source remains
 // subject to the formal workflow's immutable source and prior-validation proof.
+if (part === 'guards' && mode === 'recharge') {
+  const checks = rechargeAvailabilityGuardChecks(changed);
+  if (checks) {
+    for (const name of checks) npm('run', name);
+    console.log('Availability source, UI, architecture and release controls verified');
+    process.exit(0);
+  }
+}
 if (part === 'guards' && mode === 'ci-only' && isRechargeAvailabilityControlsOnly(changed))
   process.exit(0);
 if (part === 'guards' && mode === 'ci-only' && isRechargeRecordControlsOnly(changed)) {
