@@ -1,6 +1,10 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { billingControlPaths, isRechargeBillingOnly } from './ci-recharge-billing-scope.mjs';
+import {
+  billingControlPaths,
+  billingMigrationPath,
+  isRechargeBillingOnly
+} from './ci-recharge-billing-scope.mjs';
 import { checkMode, needsOnlineRechargeCiBuild, selectedParts } from './ci-recharge-scope.mjs';
 
 test('billing checks keep API/Admin and reject foreign ONLINE, schema and dependency changes', () => {
@@ -14,9 +18,13 @@ test('billing checks keep API/Admin and reject foreign ONLINE, schema and depend
   assert.equal(checkMode(paths), 'recharge');
   assert.equal(needsOnlineRechargeCiBuild(paths), false);
   assert.deepEqual(selectedParts(paths), ['guards', 'admin', 'api']);
+  assert.equal(checkMode([billingMigrationPath]), 'recharge');
+  assert.deepEqual(selectedParts([billingMigrationPath]), ['guards']);
+  assert.equal(isRechargeBillingOnly([...paths, billingMigrationPath]), true);
   for (const foreign of [
     'apps/api/src/id-business-v2/online-recharge/engine/payment.cjs',
     'apps/api/prisma-mysql/schema.prisma',
+    'apps/api/prisma-mysql/migrations/foreign/migration.sql',
     'package-lock.json',
     'scripts/production-release/recharge-billing-write.py'
   ])

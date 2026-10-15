@@ -1392,7 +1392,7 @@ export function selectedParts(paths, grantHelperSnapshot) {
       )
         ? ['admin']
         : []),
-      ...(paths.some((p) => p.startsWith('apps/api/')) ? ['api'] : [])
+      ...(paths.some((p) => p.startsWith('apps/api/src/')) ? ['api'] : [])
     ];
   if (isAdminHtmlCacheOnly(paths)) return ['guards', 'admin'];
   if (isSharedProxyPoolPaths(paths))

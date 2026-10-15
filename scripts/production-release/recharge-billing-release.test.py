@@ -44,9 +44,10 @@ class BillingReleaseTests(unittest.TestCase):
                 p.parent.mkdir(parents=True, exist_ok=True)
                 p.write_bytes(raw)
             inv = h.file_inventory(root)
-            contract = {'scope': 'billing', 'sources': {source: r.digest(b'source')}, 'apiModules': {module: None}, 'baselineNative': {'artifactDigest': 'original'}}
+            contract = {'scope': 'billing', 'sources': {source: r.digest(b'source')}, 'apiModules': {module: None}, 'baselineNative': {'artifactDigest': 'original'}, 'migration': {'name': 'reviewed'}}
             plan = {n: 'exact-' + n for n in ('commit', 'tree', 'workflowRunId', 'workflowRunAttempt', 'contractSha256', 'controllerSha256', 'releaseUtilitySha256', 'helperSha256')}
             proof = {**plan, 'version': 1, 'scope': 'billing', 'baselineApiReproduced': True, 'baselineNativeVerified': {**contract['baselineNative'], 'verified': True}, 'databaseVerification': {'isolated': True, 'suite': 'recharge-billing.mysql.integration.spec.ts'}, 'updatedServices': ['api', 'admin'], 'migrationPerformed': False, 'businessActions': 0, 'files': inv, 'apiModules': {n: inv['api/modules/' + n] for n in api}, 'adminFiles': {n.removeprefix('admin/html/'): v for n, v in inv.items() if n.startswith('admin/html/')}}
+            proof['plannedMigration'] = contract['migration']
             r.validate_proof(proof, plan, contract, root, h)
             for field in ('commit', 'tree', 'workflowRunId', 'workflowRunAttempt', 'contractSha256', 'baselineApiReproduced', 'baselineNativeVerified', 'databaseVerification', 'migrationPerformed', 'businessActions'):
                 bad = copy.deepcopy(proof)
@@ -61,13 +62,36 @@ class BillingReleaseTests(unittest.TestCase):
     def test_contract_contains_only_the_six_reviewed_modules_and_no_worker_or_schema(self):
         c = json.loads(b.CONTRACT.read_bytes())
         self.assertEqual(len(c['apiModules']), 6)
-        self.assertEqual(len(c['sources']), 20)
+        self.assertEqual(len(c['sources']), 21)
         for n, sha in c['sources'].items():
             self.assertNotIn('/worker/', n)
             self.assertNotIn('/online-recharge/', n)
-            self.assertNotIn('/prisma', n)
+            if '/prisma' in n:
+                self.assertEqual(n, c['migration']['path'])
             self.assertEqual(r.digest((ROOT / n).read_bytes()), sha)
         self.assertEqual(c['services']['online-recharge']['health'], 'healthy')
+
+    def test_migration_preserves_other_checks_and_requires_recorded_sql_checksum(self):
+        c = json.loads(b.CONTRACT.read_bytes())
+        before = {'checks': c['addressChecksBefore'], 'rows': [], 'pending': 0}
+        r.verify_migration_state(before, c)
+        m = c['migration']
+        after = {'checks': [x for x in before['checks'] if x['CONSTRAINT_NAME'] != m['oldCheck']] + [{'CONSTRAINT_NAME': m['newCheck'], 'CHECK_CLAUSE': 'reviewed new US check'}], 'rows': [{'checksum': m['sha256'], 'finished': True, 'rolledBack': False}], 'pending': 0}
+        r.verify_migration_state(after, c, applied=True)
+        for changed in ({**after, 'pending': 1}, {**after, 'rows': []}, {**after, 'checks': after['checks'][1:]}):
+            with self.assertRaises(RuntimeError):
+                r.verify_migration_state(changed, c, applied=True)
+        with self.assertRaisesRegex(RuntimeError, 'MIGRATION_BASELINE_CHANGED'):
+            r.verify_migration_state(after, c)
+        sql = (ROOT / m['path']).read_text()
+        self.assertEqual(r.digest(sql.encode()), m['sha256'])
+        self.assertEqual(sql.count('ALTER TABLE'), 1)
+        self.assertNotIn('DELETE ', sql)
+        self.assertNotIn('DROP TABLE', sql)
+        source = (HERE / 'recharge-billing-release.py').read_text()
+        self.assertNotIn("*command, 'migrate', 'deploy'", source)
+        self.assertIn("*command, 'migrate', 'resolve', '--applied'", source)
+        self.assertIn("'--no-build', '--pull', 'never'", source)
 
     def test_baseline_refuses_changed_current_before_touching_services(self):
         with tempfile.TemporaryDirectory(dir=ROOT / '.runtime/bit-recharge-billing-generation-20261016') as directory:

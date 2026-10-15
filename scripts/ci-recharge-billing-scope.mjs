@@ -8,14 +8,22 @@ export const billingControlPaths = Object.freeze([
   'scripts/ci-recharge-billing-scope.mjs',
   'scripts/ci-recharge-billing-scope.test.mjs'
 ]);
+export const billingMigrationPath =
+  'apps/api/prisma-mysql/migrations/20261016020000_recharge_generated_address_locations/migration.sql';
 export function isRechargeBillingOnly(paths) {
   return (
     paths.length > 0 &&
-    paths.some((p) => p.includes('recharge-billing') || p.includes('RechargeAddressGeneration')) &&
+    paths.some(
+      (p) =>
+        p.includes('recharge-billing') ||
+        p.includes('RechargeAddressGeneration') ||
+        p === billingMigrationPath
+    ) &&
     paths.every(
       (p) =>
         !p.includes('/worker/') &&
         (billingControlPaths.includes(p) ||
+          p === billingMigrationPath ||
           /^apps\/(?:admin\/src\/v2\/features|api\/src\/id-business-v2)\/auto-recharge\//.test(p) ||
           [
             'scripts/ci-recharge-scope.mjs',

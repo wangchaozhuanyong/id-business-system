@@ -7,6 +7,7 @@ from pathlib import Path
 import re
 import shutil
 import urllib.request
+from urllib.parse import urlsplit
 
 BASE = Path('/opt/id-business-v2')
 PRESERVED = ('mysql', 'caddy', 'media-resolver', 'auto-recharge', 'auto-registration')
@@ -32,6 +33,69 @@ def utilities():
     return load(Path(__file__).with_name('recharge-availability-release.py'), 'billing_generic_helpers')
 
 
+def migration_state(d, directory, contract):
+    name = contract['migration']['name']
+    need(re.fullmatch('[0-9]{14}_[a-z_]+', name), 'MIGRATION_NAME_INVALID')
+    code = """const {PrismaClient}=require('@prisma/client');const p=new PrismaClient({log:[]});
+(async()=>{const checks=await p.$queryRawUnsafe("SELECT c.CONSTRAINT_NAME,c.CHECK_CLAUSE FROM information_schema.CHECK_CONSTRAINTS c JOIN information_schema.TABLE_CONSTRAINTS t ON c.CONSTRAINT_SCHEMA=t.CONSTRAINT_SCHEMA AND c.CONSTRAINT_NAME=t.CONSTRAINT_NAME WHERE t.TABLE_SCHEMA=DATABASE() AND t.TABLE_NAME='id_business_v2_recharge_addresses' ORDER BY c.CONSTRAINT_NAME");
+const rows=await p.$queryRawUnsafe('SELECT checksum,finished_at,rolled_back_at FROM _prisma_migrations WHERE migration_name=?',MIGRATION_NAME_VALUE);
+const pending=await p.$queryRawUnsafe('SELECT COUNT(*) AS n FROM _prisma_migrations WHERE finished_at IS NULL AND rolled_back_at IS NULL');
+console.log(JSON.stringify({checks,rows:rows.map(r=>({checksum:r.checksum,finished:r.finished_at!==null,rolledBack:r.rolled_back_at!==null})),pending:Number(pending[0].n)}));})().catch(()=>process.exitCode=1).finally(()=>p.$disconnect());""".replace('MIGRATION_NAME_VALUE', json.dumps(name))
+    return json.loads(d.compose(directory, 'exec', '-T', 'api', 'node', '-e', code))
+
+
+def verify_migration_state(state, contract, *, applied=False):
+    need(state.get('pending') == 0, 'MIGRATION_IN_PROGRESS')
+    checks = {r['CONSTRAINT_NAME']: r['CHECK_CLAUSE'] for r in state['checks']}
+    original = {r['CONSTRAINT_NAME']: r['CHECK_CLAUSE'] for r in contract['addressChecksBefore']}
+    migration = contract['migration']
+    if not applied:
+        need(checks == original and state['rows'] == [], 'MIGRATION_BASELINE_CHANGED')
+        return
+    original.pop(migration['oldCheck'])
+    need(set(checks) == set(original) | {migration['newCheck']}
+         and all(checks[n] == value for n, value in original.items())
+         and state['rows'] == [{'checksum': migration['sha256'], 'finished': True, 'rolledBack': False}], 'MIGRATION_READBACK_CHANGED')
+
+
+def verify_migrate_image(d, directory, contract):
+    config = json.loads(d.compose(directory, 'config', '--format', 'json'))
+    migration = config['services']['migrate']
+    need(migration.get('image') == contract['migrateImage']['reference'], 'MIGRATE_REFERENCE_CHANGED')
+    image = json.loads(d.run('docker', 'image', 'inspect', migration['image']))[0]
+    need(image['Id'] == contract['migrateImage']['imageId'], 'MIGRATE_IMAGE_CHANGED')
+    api_url = urlsplit(config['services']['api']['environment']['DATABASE_URL'])
+    migration_url = urlsplit(migration['environment']['DATABASE_URL'])
+    need((api_url.scheme, api_url.hostname, api_url.port or 3306, api_url.path) ==
+         (migration_url.scheme, migration_url.hostname, migration_url.port or 3306, migration_url.path), 'MIGRATE_DATABASE_CHANGED')
+
+
+def apply_migration(d, target, contract, stage):
+    migration = contract['migration']
+    directory = target / Path(migration['path']).parent
+    need(not directory.is_symlink() and digest((directory / 'migration.sql').read_bytes()) == migration['sha256'], 'MIGRATION_SOURCE_CHANGED')
+    directory.chmod(0o755)
+    verify_migrate_image(d, target, contract)
+    verify_migration_state(migration_state(d, target, contract), contract)
+    journal = stage / 'migration-operation.json'
+    need(not journal.exists(), 'MIGRATION_ALREADY_ACCEPTED')
+    command = ['run', '--rm', '-T', '--no-deps', '--no-build', '--pull', 'never', '--volume',
+               str(directory) + ':/app/apps/api/prisma-mysql/migrations/' + migration['name'] + ':ro',
+               '--entrypoint', 'node', 'migrate', '/app/node_modules/prisma/build/index.js']
+    schema = ['--schema', '/app/apps/api/prisma-mysql/schema.prisma']
+    journal.write_text(json.dumps({'phase': 'STARTED', 'migration': migration}) + '\n')
+    # Only this atomic ALTER runs. Never deploy unrelated pending migrations.
+    d.compose(target, *command, 'db', 'execute', '--file',
+              '/app/apps/api/prisma-mysql/migrations/' + migration['name'] + '/migration.sql', *schema, timeout=180)
+    journal.write_text(json.dumps({'phase': 'SQL_APPLIED', 'migration': migration}) + '\n')
+    d.compose(target, *command, 'migrate', 'resolve', '--applied', migration['name'], *schema, timeout=180)
+    state = migration_state(d, target, contract)
+    verify_migration_state(state, contract, applied=True)
+    receipt = {'phase': 'VERIFIED', 'migration': migration, 'state': state, 'dataDeletion': False}
+    journal.write_text(json.dumps(receipt, sort_keys=True) + '\n')
+    return receipt
+
+
 def validate_proof(proof, plan, contract, payload, h):
     need(proof.get('version') == 1 and proof.get('scope') == contract['scope']
          and all(proof.get(k) == plan[k] for k in ('commit', 'tree', 'workflowRunId', 'workflowRunAttempt', 'contractSha256', 'controllerSha256', 'releaseUtilitySha256', 'helperSha256'))
@@ -39,6 +103,7 @@ def validate_proof(proof, plan, contract, payload, h):
          and proof.get('baselineNativeVerified') == {**contract['baselineNative'], 'verified': True}
          and proof.get('databaseVerification') == {'isolated': True, 'suite': 'recharge-billing.mysql.integration.spec.ts'}
          and proof.get('updatedServices') == ['api', 'admin'] and proof.get('migrationPerformed') is False
+         and proof.get('plannedMigration') == contract['migration']
          and type(proof.get('businessActions')) is int and proof['businessActions'] == 0, 'PROOF_INVALID')
     actual = h.file_inventory(payload)
     actual.pop('build-proof.json', None)
@@ -70,6 +135,8 @@ def baseline(d, contract, h, expected=None):
     need(d.run('docker', 'exec', states['admin']['containerId'], 'sha256sum', '/etc/nginx/conf.d/default.conf').split()[0]
          == contract['nginxSha256'], 'NGINX_CHANGED')
     h.guards(d, previous, states, contract)
+    verify_migrate_image(d, previous, contract)
+    verify_migration_state(migration_state(d, previous, contract), contract)
     if expected is not None:
         a.verify_runtime_receipt(a.runtime_receipt(previous, raw, states), expected)
     return previous, raw, states
@@ -88,6 +155,7 @@ def smoke(d, target, proof, states, contract, h):
         path = target / name
         need(not path.is_symlink() and path.resolve().is_relative_to(target) and digest(path.read_bytes()) == expected, 'HOST_SOURCE_CHANGED')
     h.guards(d, target, states, contract)
+    verify_migration_state(migration_state(d, target, contract), contract, applied=True)
     # Pure execution of the deployed availability and generator modules, without DB/network/payment.
     code = """const a=require('/app/apps/api/dist/id-business-v2/auto-recharge/recharge-availability.js');
 const g=require('/app/apps/api/dist/id-business-v2/auto-recharge/recharge-billing-generator.js');
@@ -116,7 +184,7 @@ def release(plan, contract, d, h):
             need(digest(raw) == plan['buildProofSha256'], 'READBACK_PROOF_CHANGED')
             need(all(digest((target / 'scripts/production-release' / n).read_bytes()) == v for n, v in plan['controlSources'].items()), 'READBACK_EXECUTOR_CHANGED')
             smoke(d, target, json.loads(raw), states, contract, h)
-            return {'status': 'RECHARGE_BILLING_INDEPENDENT_READBACK_VERIFIED', 'commit': plan['commit'], 'images': receipt['images'], 'preservedServices': list(PRESERVED), 'businessActions': 0, 'migrationPerformed': False}
+            return {'status': 'RECHARGE_BILLING_INDEPENDENT_READBACK_VERIFIED', 'commit': plan['commit'], 'images': receipt['images'], 'preservedServices': list(PRESERVED), 'businessActions': 0, 'migrationPerformed': True, 'migration': receipt['migration']}
         if plan['mode'] == 'release':
             need(type(plan.get('runtimeBaseline')) is dict, 'PREFLIGHT_RECEIPT_MISSING')
         previous, raw_manifest, before = baseline(d, contract, h, plan.get('runtimeBaseline'))
@@ -176,6 +244,8 @@ def release(plan, contract, d, h):
             override['services'][role]['image'] = images[role]['reference']
         a.write_release_override(target / 'compose.release.json', override)
         need(baseline(d, contract, h, plan['runtimeBaseline']) == (previous, raw_manifest, before), 'BASELINE_MOVED')
+        migration_receipt = apply_migration(d, target, contract, stage)
+        h.guards(d, previous, before, contract)
         state_path = stage / 'switch-state.json'
         state_path.write_text(json.dumps({'status': 'SWITCH_STARTED', 'target': str(target), 'previous': str(previous)}) + '\n')
         d.compose(previous, 'stop', 'online-recharge', timeout=90)
@@ -193,7 +263,7 @@ def release(plan, contract, d, h):
         online = json.loads(d.run('docker', 'inspect', after['online-recharge']['containerId']))[0]
         need(online['HostConfig']['NetworkMode'] == 'container:' + after['api']['containerId'], 'ONLINE_BINDING_CHANGED')
         smoke(d, target, proof, after, contract, h)
-        receipt = {'status': 'RECHARGE_BILLING_DEPLOYED', 'commit': plan['commit'], 'tree': plan['tree'], 'before': before, 'after': after, 'images': images, 'backup': backup, 'workflowRunId': plan['workflowRunId'], 'businessActions': 0, 'migrationPerformed': False}
+        receipt = {'status': 'RECHARGE_BILLING_DEPLOYED', 'commit': plan['commit'], 'tree': plan['tree'], 'before': before, 'after': after, 'images': images, 'backup': backup, 'workflowRunId': plan['workflowRunId'], 'businessActions': 0, 'migrationPerformed': True, 'migration': migration_receipt}
         (target / 'recharge-billing-preservation.json').write_text(json.dumps(receipt, sort_keys=True, indent=2) + '\n')
         (target / 'recharge-billing-build-proof.json').write_bytes(raw_proof)
         manifest = json.loads(raw_manifest)
@@ -205,6 +275,10 @@ def release(plan, contract, d, h):
             manifest.pop(field, None)
         for role in images:
             manifest['images'][role] = {'reference': images[role]['reference'], 'digest': images[role]['imageId'], 'sourceCommit': plan['commit']}
+        (target / 'release-manifest.json').write_text(json.dumps(manifest, sort_keys=True, indent=2) + '\n')
+        manifest['newMigrations'] = [contract['migration']['name']]
+        manifest['migrationPerformed'] = True
+        manifest['billingAddressMigration'] = migration_receipt
         (target / 'release-manifest.json').write_text(json.dumps(manifest, sort_keys=True, indent=2) + '\n')
         d.point_current(target, stamp + '-recharge-billing')
         state_path.write_text(json.dumps({'status': 'DEPLOYED', 'target': str(target), 'commit': plan['commit']}) + '\n')
