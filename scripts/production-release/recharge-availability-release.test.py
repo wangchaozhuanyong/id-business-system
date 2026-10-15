@@ -387,7 +387,7 @@ class AvailabilityPublicationTests(unittest.TestCase):
         self.assertEqual(len(contract['publishedAdminSuccessor']['repairSources']),1)
         self.assertEqual(len(contract['publishedAdminAncestor']['repairSources']),9)
         self.assertEqual(contract['publishedAdminAncestor']['sourceCommit'], '7f419903e9335c00524f5065f46920e8f24f2722')
-        self.assertEqual(contract['mainOnlySourceBaseline'],'970e0a05f2ca340a3b62f7083f6866e3c0c0fcdf')
+        self.assertEqual(contract['mainOnlySourceBaseline'],'d1c4778498c8fa590c9f74e2339ebf15805581b2')
         self.assertEqual(len(contract['mainOnlySources']),56)
         self.assertFalse(set(contract['mainOnlySources']) & set(contract['sources']))
         self.assertIn('apps/api/prisma-mysql/schema.prisma',contract['mainOnlySources'])
@@ -398,6 +398,28 @@ class AvailabilityPublicationTests(unittest.TestCase):
         self.assertFalse(any('prisma' in name or name.endswith('package-lock.json') for name in contract['sources']))
         self.assertTrue(all(name.startswith('id-business-v2/auto-recharge/') and name.endswith('.js') for name in contract['apiModules']))
         self.assertEqual(set(release.PRESERVED), {'mysql', 'caddy', 'media-resolver', 'auto-recharge', 'auto-registration'})
+
+    def test_frozen_availability_contract_still_rejects_unreviewed_presentation_drift(self):
+        name = 'apps/admin/src/v2/features/auto-recharge/recharge-presentation.ts'
+        contract = json.loads((HERE / 'recharge-availability-contract.json').read_bytes())
+        current = (build.ROOT / name).read_bytes()
+        changed = current + b'\n// unreviewed presentation drift\n'
+        self.assertNotEqual(build.digest(changed), contract['sources'][name])
+        temporary = build.ROOT / '.runtime/recharge-invocation-main-integration-20261015'
+        temporary.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=temporary) as directory:
+            root = Path(directory)
+            path = root / name
+            path.parent.mkdir(parents=True)
+            path.write_bytes(changed)
+            original = {**contract, 'sources': {name: contract['sources'][name]}, 'mainOnlySources': {}}
+            def fixture_git(*args):
+                if args[0] == 'status': return b''
+                if args[0] == 'diff': return (name + '\n').encode()
+                raise AssertionError('unexpected external operation')
+            with patch.object(build, 'ROOT', root), patch.object(build, 'git', side_effect=fixture_git), \
+                    self.assertRaisesRegex(RuntimeError, 'SOURCE_CHANGED'):
+                build.verify_sources(original)
 
     def fixture(self, root):
         api = 'id-business-v2/auto-recharge/fixture.js'

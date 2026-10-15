@@ -201,6 +201,10 @@ const onlineCiBuildInputs = new Set([
   'tsconfig.base.json',
   'deploy/nginx/admin.conf'
 ]);
+const onlineCiBuildTestInputs = new Set([
+  'scripts/production-release/online-recharge-ci-build.test.py',
+  'scripts/production-release/online-recharge-component-lifecycle.test.py'
+]);
 export function needsOnlineRechargeCiBuild(paths) {
   // This shared feature uses the normal API/engine builds, not the historical sealed ONLINE projection.
   if (isSharedProxyPoolPaths(paths)) return false;
@@ -208,6 +212,30 @@ export function needsOnlineRechargeCiBuild(paths) {
   if (isRechargeAvailabilityRepairOnly(paths) || isRechargeAvailabilityControlsOnly(paths))
     return false;
   if (isRechargeRecordRepairOnly(paths) || isRechargeRecordControlsOnly(paths)) return false;
+  if (
+    paths.some((path) => onlineCiBuildTestInputs.has(path)) &&
+    paths.every(
+      (path) =>
+        onlineCiBuildTestInputs.has(path) ||
+        path === 'scripts/ci-recharge-scope.mjs' ||
+        path === 'scripts/ci-recharge-scope.test.mjs' ||
+        path === 'scripts/ci-recharge-check.test.mjs' ||
+        /^docs\/.*\.md$/.test(path)
+    )
+  )
+    return false;
+  // Ordinary frontend changes keep the complete Admin build/UI checks. A
+  // selector repair may accompany them, but real image/build inputs may not.
+  if (
+    isAdminOnly(paths) &&
+    paths.every(
+      (path) =>
+        !onlineCiBuildInputs.has(path) ||
+        onlineCiBuildTestInputs.has(path) ||
+        path === 'scripts/ci-recharge-scope.mjs'
+    )
+  )
+    return false;
   return (
     !isReleaseArtifactRetentionOnly(paths) &&
     paths.some(
@@ -845,12 +873,18 @@ export function hasCombinedComponentScope(paths) {
   );
 }
 const adminInteractionAcceptance = new Set([
+  'scripts/acceptance-v2-online-recharge-ui.mjs',
   'scripts/acceptance-v2-bitbrowser-direct.mjs',
   'scripts/acceptance-v2-refresh-interaction.mjs',
   'scripts/acceptance-v2-auto-recharge.mjs',
   'scripts/acceptance-v2-bank-recharge-ui.mjs',
   workspaceDockAcceptance,
   'scripts/lib/vite-cli.mjs'
+]);
+const adminFrontendControlPaths = new Set([
+  'apps/admin/src/v2-router.ts',
+  'scripts/check-v2-input-retention.mjs',
+  'scripts/check-v2-online-recharge-controls.test.mjs'
 ]);
 export function isAdminOnly(paths) {
   const combined = hasCombinedComponentScope(paths);
@@ -859,6 +893,7 @@ export function isAdminOnly(paths) {
       (p) =>
         p.startsWith('apps/admin/src/v2/') ||
         adminInteractionAcceptance.has(p) ||
+        adminFrontendControlPaths.has(p) ||
         adminPublicDocument.test(p) ||
         p === 'scripts/acceptance-v2-order-archive-ui.mjs'
     ) &&
@@ -866,6 +901,7 @@ export function isAdminOnly(paths) {
       (p) =>
         p.startsWith('apps/admin/src/v2/') ||
         adminInteractionAcceptance.has(p) ||
+        adminFrontendControlPaths.has(p) ||
         p === 'apps/admin/src/components/ui/AppButton.vue' ||
         /^scripts\/(?:admin-skin-rules(?:\.test)?|check-v2-color-contrast|acceptance-v2-(?:color-contrast|skin-consistency|business-skin))\.mjs$/.test(
           p
@@ -1386,7 +1422,13 @@ export function affectsPart(part, paths) {
       paths.some((path) => ownedMysqlTestControlPaths.includes(path)))
   )
     return true;
-  if (part === 'admin' && paths.some((path) => adminInteractionAcceptance.has(path))) return true;
+  if (
+    part === 'admin' &&
+    paths.some(
+      (path) => adminInteractionAcceptance.has(path) || adminFrontendControlPaths.has(path)
+    )
+  )
+    return true;
   const common =
     /^(?:package(?:-lock)?\.json$|\.github\/workflows\/quality\.yml$|scripts\/ci-recharge-check\.mjs$|scripts\/ci-change-scope|tsconfig|eslint\.config|\.npmrc$)/;
   const inputs = {

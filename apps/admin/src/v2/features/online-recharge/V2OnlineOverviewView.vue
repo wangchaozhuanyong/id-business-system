@@ -4,10 +4,8 @@
       description="线上代充使用独立银行卡、代理、地址和兑换资格，账单与现有充值业务独立。"
       ><template #actions
         ><AppButton variant="ghost" allow-when-stale @click="query.refresh">刷新概览</AppButton
-        ><RouterLink to="/online-recharge" target="_blank">客户兑换入口</RouterLink
-        ><RouterLink to="/online-recharge/subscription" target="_blank"
-          >客户订阅查询</RouterLink
-        ></template
+        ><RouterLink to="/v2/online-recharge/redeem">兑换充值</RouterLink
+        ><RouterLink to="/v2/online-recharge/renewal">订阅与续费查询</RouterLink></template
       ></V2PageContext
     ><V2AsyncRegion
       :phase="query.phase.value"
@@ -15,7 +13,7 @@
       skeleton="cards"
       loading-title="正在加载概览"
       @retry="query.refresh"
-      ><V2PageOverview title="线上代充概览"
+      ><V2PageOverview title="线上代充概览" :columns="5"
         ><template #metrics
           ><V2OverviewMetric
             v-for="metric in metrics"
@@ -89,11 +87,28 @@ const billing = computed(() =>
     ? (query.data.value.billing as { currency: string; amount: string | null; count: number }[])
     : []
 );
+const confirmedRechargeCount = computed(() => {
+  const count = query.data.value?.confirmedRechargeCount;
+  return typeof count === 'number' && Number.isFinite(count) ? count : '—';
+});
 const metrics = computed(() => [
-  { label: '全部任务', value: grouped('tasks'), note: '当前线上代充任务' },
+  { label: '全部任务', value: grouped('tasks'), note: '包含检测、调试与充值操作' },
   { label: '正在执行', value: grouped('tasks', 'running'), note: '包含本地与第三方通道' },
-  { label: '确认成功', value: grouped('tasks', 'succeeded'), note: '已完成可靠结果确认' },
-  { label: '待核对', value: grouped('tasks', 'awaiting_review'), note: '结果确认前不能重复付款' }
+  {
+    label: '任务成功',
+    value: grouped('tasks', 'succeeded'),
+    note: '包含检测和调试，不等于充值成功'
+  },
+  {
+    label: '已确认充值',
+    value: confirmedRechargeCount.value,
+    note: '仅统计已确认付款的充值任务'
+  },
+  {
+    label: '充值待核对',
+    value: grouped('rechargeTasks', 'awaiting_review'),
+    note: '结果确认前不能重复付款'
+  }
 ]);
 function memory(key: string) {
   const value = host.value?.[key];
