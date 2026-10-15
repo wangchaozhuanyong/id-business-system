@@ -24,6 +24,10 @@ d = load('recharge-billing-dispatch.py')
 
 
 class BillingReleaseTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        (ROOT / '.runtime/bit-recharge-billing-generation-20261016').mkdir(parents=True, exist_ok=True)
+
     def test_proof_requires_exact_native_identity_and_finite_payload(self):
         output = ROOT / '.runtime/bit-recharge-billing-generation-20261016'
         output.mkdir(parents=True, exist_ok=True)
