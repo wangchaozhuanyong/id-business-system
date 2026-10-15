@@ -286,7 +286,7 @@ jobs:
           node-version: 24
           cache: npm
       - name: Install package dependencies
-        if: ${{ !contains(fromJSON(needs.change-scope.outputs.reused_parts), matrix.part) && contains(fromJSON('["guards","admin","api","migration"]'), matrix.part) }}
+        if: ${{ !contains(fromJSON(needs.change-scope.outputs.reused_parts), matrix.part) && contains(fromJSON('["guards","admin","api","migration","online-engine"]'), matrix.part) }}
         run: npm ci --no-audit
       - name: Install browser for recharge acceptance
         if: ${{ !contains(fromJSON(needs.change-scope.outputs.reused_parts), matrix.part) && matrix.part == 'admin' && needs.change-scope.outputs.admin_acceptance == 'true' }}

@@ -11,11 +11,9 @@ test('ONLINE CI build has finite inputs and read-only diagnostics remain control
     assert.deepEqual(selectedParts([path]), ['guards']);
   }
   for (const path of [
-    'scripts/production-release/online-recharge-ci-build.py',
     'scripts/production-release/online-recharge-component-runtime.py',
     'scripts/production-release/online-recharge-component-readonly.py',
     'scripts/production-release/build-images.sh',
-    '.github/workflows/quality.yml',
     'apps/api/Dockerfile.mysql',
     'apps/admin/Dockerfile',
     'apps/api/package.json',
@@ -26,8 +24,7 @@ test('ONLINE CI build has finite inputs and read-only diagnostics remain control
     'apps/api/src/id-business-v2/online-recharge/engine/requirements-hcaptcha.lock.txt',
     'apps/api/src/id-business-v2/online-recharge/engine/upstream/package-lock.json',
     'apps/api/src/id-business-v2/online-recharge/engine/upstream/payment.js',
-    'apps/api/src/id-business-v2/online-recharge/engine/Dockerfile',
-    'apps/admin/src/v2/features/online-recharge/OnlineRechargePage.vue'
+    'apps/api/src/id-business-v2/online-recharge/engine/Dockerfile'
   ])
     assert.equal(needsOnlineRechargeCiBuild([path]), true, path);
   for (const path of [
@@ -38,6 +35,9 @@ test('ONLINE CI build has finite inputs and read-only diagnostics remain control
     'scripts/production-release/online-recharge-component-recovery-readonly.py',
     '.github/workflows/online-recharge-recovery.yml',
     'docs/ONLINE_RECHARGE.md',
+    'scripts/production-release/online-recharge-ci-build.py',
+    '.github/workflows/quality.yml',
+    'apps/admin/src/v2/features/online-recharge/OnlineRechargePage.vue',
     'apps/admin/src/v2/features/customers/CustomerPage.vue'
   ])
     assert.equal(needsOnlineRechargeCiBuild([path]), false, path);
@@ -132,6 +132,7 @@ test('Admin successor diagnostics have a finite control scope', () => {
 });
 import { fileURLToPath } from 'node:url';
 import {
+  parts,
   affectsPart,
   releaseArtifactRetentionControls,
   isReleaseArtifactRetentionOnly,
@@ -2330,6 +2331,70 @@ test('disk retention scripts and reviewed policy use release control checks', ()
   ];
   for (const path of paths) assert.equal(checkMode([path], schema, schema), 'ci-only');
   assert.equal(checkMode(paths, schema, schema), 'ci-only');
+});
+
+test('ONLINE UI and CI projection repair select only frontend checks without four-image rebuild', () => {
+  const paths = [
+    'apps/admin/src/v2/features/online-recharge/OnlineResourceView.vue',
+    'apps/admin/src/v2/features/online-recharge/sections.ts',
+    'apps/admin/src/v2/features/online-recharge/api.spec.ts',
+    'scripts/production-release/online-recharge-ci-build.py',
+    'scripts/production-release/online-recharge-ci-build.test.py',
+    'scripts/acceptance-v2-online-recharge-ui.mjs',
+    'scripts/ci-recharge-check.test.mjs'
+  ];
+  for (const current of [
+    paths,
+    [
+      ...paths,
+      'scripts/ci-recharge-scope.mjs',
+      'scripts/ci-recharge-scope.test.mjs',
+      '.github/workflows/quality.yml'
+    ]
+  ]) {
+    assert.equal(checkMode(current, schema, schema), 'admin');
+    assert.deepEqual(selectedParts(current), ['guards', 'admin']);
+    assert.equal(needsOnlineRechargeCiBuild(current), false);
+  }
+});
+
+test('ONLINE wrapper-only edits retain engine evidence and select its existing targeted runner', () => {
+  const paths = [
+    'apps/api/src/id-business-v2/online-recharge/engine/paths.cjs',
+    'apps/api/src/id-business-v2/online-recharge/engine/test/runtime-main.test.cjs'
+  ];
+  assert.equal(checkMode(paths, schema, schema), 'recharge');
+  assert.deepEqual(selectedParts(paths), ['guards', 'online-engine']);
+  assert.equal(needsOnlineRechargeCiBuild(paths), false);
+  assert.ok(parts.includes('online-engine'));
+  for (const path of [...paths, 'package-lock.json', 'scripts/ci-recharge-check.mjs'])
+    assert.equal(affectsPart('online-engine', [path]), true, path);
+  assert.equal(
+    affectsPart('online-engine', ['apps/admin/src/v2/features/online-recharge/sections.ts']),
+    false
+  );
+  const workflow = readFileSync(
+    new URL('../.github/workflows/quality.yml', import.meta.url),
+    'utf8'
+  );
+  assert.match(workflow, /\["guards","admin","api","migration","online-engine"\]/);
+});
+
+test('ONLINE Docker dependencies upstream migration and backend edits retain conservative checks and images', () => {
+  const wrapper = 'apps/api/src/id-business-v2/online-recharge/engine/paths.cjs';
+  for (const path of [
+    'apps/api/src/id-business-v2/online-recharge/engine/Dockerfile',
+    'apps/api/src/id-business-v2/online-recharge/engine/package.json',
+    'apps/api/src/id-business-v2/online-recharge/engine/upstream/package-lock.json',
+    'apps/api/src/id-business-v2/online-recharge/engine/upstream/payment.js',
+    'apps/api/src/id-business-v2/online-recharge/tasks.service.ts',
+    'apps/api/prisma-mysql/schema.prisma',
+    'package-lock.json'
+  ]) {
+    const paths = [wrapper, path];
+    assert.notDeepEqual(selectedParts(paths), ['guards', 'online-engine'], path);
+    assert.equal(needsOnlineRechargeCiBuild(paths), true, path);
+  }
 });
 
 test('ordinary admin modules use frontend checks instead of backend and financial suites', () => {

@@ -4,7 +4,15 @@ import { createHash } from 'node:crypto';
 import { pathToFileURL } from 'node:url';
 import { matchesSourceEvidence } from './ci-recharge-evidence.mjs';
 
-export const parts = ['guards', 'admin', 'api', 'connector', 'migration', 'security'];
+export const parts = [
+  'guards',
+  'admin',
+  'api',
+  'connector',
+  'migration',
+  'security',
+  'online-engine'
+];
 export const rechargeRecordControlPaths = Object.freeze([
   '.github/workflows/recharge-record-validation.yml',
   'scripts/production-release/recharge-record-build.py',
@@ -90,8 +98,37 @@ const onlineCiBuildInputs = new Set([
   'tsconfig.base.json',
   'deploy/nginx/admin.conf'
 ]);
+const onlineEngineWrapperPath =
+  /^apps\/api\/src\/id-business-v2\/online-recharge\/engine\/(?:[^/]+\.cjs|test\/[^/]+\.test\.cjs)$/;
+const onlineFocusedCiControls = new Set([
+  'scripts/production-release/online-recharge-ci-build.py',
+  'scripts/production-release/online-recharge-ci-build.test.py',
+  'scripts/ci-recharge-scope.mjs',
+  'scripts/ci-recharge-scope.test.mjs',
+  'scripts/ci-recharge-check.mjs',
+  'scripts/ci-recharge-check.test.mjs',
+  'scripts/acceptance-v2-online-recharge-ui.mjs',
+  '.github/workflows/quality.yml'
+]);
+function isOnlineEngineWrapperOnly(paths) {
+  return (
+    paths.some((path) => onlineEngineWrapperPath.test(path)) &&
+    paths.every((path) => onlineEngineWrapperPath.test(path) || isCiOnly([path]))
+  );
+}
 export function needsOnlineRechargeCiBuild(paths) {
   if (isRechargeRecordRepairOnly(paths)) return false;
+  if (
+    paths.length &&
+    paths.every(
+      (path) =>
+        path.startsWith('apps/admin/src/v2/features/online-recharge/') ||
+        onlineEngineWrapperPath.test(path) ||
+        onlineFocusedCiControls.has(path) ||
+        path.startsWith('docs/')
+    )
+  )
+    return false;
   return (
     !isReleaseArtifactRetentionOnly(paths) &&
     paths.some(
@@ -728,6 +765,7 @@ export function hasCombinedComponentScope(paths) {
   );
 }
 const adminInteractionAcceptance = new Set([
+  'scripts/acceptance-v2-online-recharge-ui.mjs',
   'scripts/acceptance-v2-bitbrowser-direct.mjs',
   'scripts/acceptance-v2-refresh-interaction.mjs',
   'scripts/acceptance-v2-auto-recharge.mjs',
@@ -825,6 +863,7 @@ export function checkMode(paths, oldSchema, newSchema, grantHelperSnapshot) {
       ? 'ci-only'
       : 'full';
   if (isCiOnly(paths)) return 'ci-only';
+  if (isOnlineEngineWrapperOnly(paths)) return 'recharge';
   if (isMailboxOnly(paths)) return 'mailbox';
   if (isTargetedOnly(paths, oldSchema, newSchema)) return 'recharge';
   if (isAdminOnly(paths)) return 'admin';
@@ -1158,6 +1197,16 @@ export function isTargetedOnly(paths, oldSchema, newSchema) {
 }
 export function selectedParts(paths, grantHelperSnapshot) {
   if (isReleaseArtifactRetentionOnly(paths)) return ['guards'];
+  if (isOnlineEngineWrapperOnly(paths)) return ['guards', 'online-engine'];
+  if (
+    isAdminOnly(paths) &&
+    paths.some(
+      (path) =>
+        path.startsWith('apps/admin/src/v2/features/online-recharge/') ||
+        path === 'scripts/acceptance-v2-online-recharge-ui.mjs'
+    )
+  )
+    return ['guards', 'admin'];
   if (hasBankCardDeletePolicyProof(paths, grantHelperSnapshot)) return ['guards', 'security'];
   if (isRechargePricingOnly(paths))
     return paths.some((path) => rechargePricingSources.has(path))
@@ -1204,13 +1253,15 @@ export function selectedParts(paths, grantHelperSnapshot) {
       ? ['guards', 'connector']
       : ['guards'];
   return parts.filter((part) =>
-    part === 'migration'
-      ? hasRegistrationMirrorScope(paths) ||
-        hasRechargeConnectionMigrationScope(paths) ||
-        paths.some((p) => p.startsWith('apps/api/prisma-mysql/'))
-      : part === 'security'
-        ? paths.some((p) => securityPaths.test(p))
-        : affectsPart(part, paths)
+    part === 'online-engine'
+      ? false
+      : part === 'migration'
+        ? hasRegistrationMirrorScope(paths) ||
+          hasRechargeConnectionMigrationScope(paths) ||
+          paths.some((p) => p.startsWith('apps/api/prisma-mysql/'))
+        : part === 'security'
+          ? paths.some((p) => securityPaths.test(p))
+          : affectsPart(part, paths)
   );
 }
 
@@ -1232,6 +1283,7 @@ export function affectsPart(part, paths) {
       /^(?:apps\/admin\/|packages\/shared\/|scripts\/acceptance-v2-(?:auto-recharge|table-layout)\.mjs$)/,
     api: /^(?:apps\/api\/(?!src\/id-business-v2\/(?:auto-recharge\/worker|workspace\/media-resolver)\/)|packages\/shared\/)/,
     connector: /^apps\/api\/src\/id-business-v2\/auto-recharge\/worker\//,
+    'online-engine': /^apps\/api\/src\/id-business-v2\/online-recharge\/engine\//,
     migration: /^apps\/api\/prisma-mysql\//,
     security: securityPaths
   };
