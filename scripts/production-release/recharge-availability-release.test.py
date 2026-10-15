@@ -1,4 +1,5 @@
 import copy
+import ast
 import importlib.util
 import io
 import zipfile
@@ -25,6 +26,65 @@ dispatch = load('availability_test_dispatch', 'recharge-availability-dispatch.py
 
 
 class AvailabilityPublicationTests(unittest.TestCase):
+    def test_frontend_preparation_normalization_cannot_hide_api_or_other_preparation_changes(self):
+        old = "def prepare():\n    if name == 'candidate':\n        copy_sources(context, contract)\n"
+        current = "def prepare():\n    if name == 'candidate':\n        apply_preserved_admin_sources(context, contract)\n        copy_sources(context, contract)\n"
+        self.assertEqual(build.database_preparation_functions(ast.parse(old)),
+                         build.database_preparation_functions(ast.parse(current)))
+        for changed in (current.replace('context, contract)', 'other, contract)', 1),
+                        current.replace('copy_sources', 'copy_api_sources')):
+            self.assertNotEqual(build.database_preparation_functions(ast.parse(old)),
+                                build.database_preparation_functions(ast.parse(changed)))
+
+    def test_preserved_sources_only_change_frontend_files_inside_the_candidate(self):
+        base = build.ROOT / '.runtime/recharge-payment-availability-20261015'
+        with tempfile.TemporaryDirectory(dir=base) as directory:
+            root = Path(directory);name='apps/admin/src/v2/preserved.ts'
+            contract={'publishedSharedProxy':{'sourceCommit':'published'},
+                      'preservedAdminSources':{name:build.digest(b'published frontend')}}
+            with patch.object(build,'git',return_value=b'published frontend'):
+                build.apply_preserved_admin_sources(root,contract)
+                self.assertEqual((root/name).read_bytes(),b'published frontend')
+                with self.assertRaisesRegex(RuntimeError,'PRESERVED_ADMIN_SCOPE_INVALID'):
+                    build.apply_preserved_admin_sources(root,{'preservedAdminSources':{'apps/api/unapproved.ts':'bad'}})
+                self.assertFalse((root/'apps/api').exists())
+                contract['preservedAdminSources'][name]='changed'
+                with self.assertRaisesRegex(RuntimeError,'PRESERVED_ADMIN_SOURCE_CHANGED'):
+                    build.apply_preserved_admin_sources(root,contract)
+                contract['preservedAdminSources'][name]=None
+                build.apply_preserved_admin_sources(root,contract)
+                self.assertFalse((root/name).exists())
+
+    def test_shared_proxy_native_archive_requires_exact_identity_inventory_and_safe_members(self):
+        public={'index.html':build.digest(b'published index')}
+        metadata={'commit':'a'*40,'sourceTree':'b'*40,'runId':'1',
+                  'baseline':'04aa234505adccfe295776245b88fc56feac0588',
+                  'adminBaseline':'4aa49436239ab57e9deb3b5890e645ceeef25149',
+                  'files':{'admin/dist/index.html':public['index.html']}}
+        metadata_raw=json.dumps(metadata).encode()
+        def fixture(extra=None):
+            output=io.BytesIO()
+            with tarfile.open(fileobj=output,mode='w:gz') as archive:
+                files={'./publication.json':metadata_raw,'./admin/dist/index.html':b'published index'}
+                if extra:files[extra]=b'unreviewed'
+                for name,value in files.items():
+                    info=tarfile.TarInfo(name);info.size=len(value);archive.addfile(info,io.BytesIO(value))
+            bundle=output.getvalue();zipped=io.BytesIO()
+            with zipfile.ZipFile(zipped,'w') as archive:
+                archive.writestr('shared-proxy-release/publication.tar.gz',bundle)
+                archive.writestr('shared-proxy-release/publication-sha256.txt',build.digest(bundle))
+            raw=zipped.getvalue()
+            return raw,{'sourceCommit':'a'*40,'sourceTree':'b'*40,'runId':1,
+                        'artifactDigest':'sha256:'+build.digest(raw),'archiveBytes':len(bundle),
+                        'archiveSha256':build.digest(bundle),'metadataSha256':build.digest(metadata_raw),
+                        'publicFiles':public,'publicInventorySha256':build.digest(json.dumps(public,sort_keys=True,separators=(',',':')).encode())}
+        raw,binding=fixture();build.verify_shared_proxy_archive(raw,binding)
+        with self.assertRaisesRegex(RuntimeError,'SHARED_PROXY_ARTIFACT_CHANGED'):
+            build.verify_shared_proxy_archive(raw+b'changed',binding)
+        for extra,code in [('../escape','SHARED_PROXY_ARCHIVE_UNSAFE'),('./unreviewed','SHARED_PROXY_METADATA_CHANGED')]:
+            raw,binding=fixture(extra)
+            with self.assertRaisesRegex(RuntimeError,code):build.verify_shared_proxy_archive(raw,binding)
+
     def test_forward_main_sources_are_fixed_to_their_exact_commit_and_never_join_the_payload(self):
         approved={'apps/api/approved.ts'};foreign='apps/api/excluded.ts';commit='f'*40
         contract={'sourceBaseline':'original','mainOnlySourceBaseline':commit,
@@ -381,14 +441,15 @@ class AvailabilityPublicationTests(unittest.TestCase):
     def test_contract_only_replaces_reviewed_recharge_modules_and_no_schema(self):
         contract = json.loads((HERE / 'recharge-availability-contract.json').read_bytes())
         self.assertEqual(contract['scope'], 'RECHARGE_PAYMENT_AVAILABILITY_ONLY')
-        self.assertEqual(contract['expectedCurrent'], '4aa49436239ab57e9deb3b5890e645ceeef25149')
+        self.assertEqual(contract['expectedCurrent'], '3cf2293bdc1fb62ea44196b8a8775d42b1cc5c9c')
         self.assertEqual(contract['sourceBaseline'], '04aa234505adccfe295776245b88fc56feac0588')
-        self.assertEqual(contract['publishedAdminSuccessor']['sourceCommit'],contract['expectedCurrent'])
+        self.assertEqual(contract['publishedSharedProxy']['sourceCommit'],contract['expectedCurrent'])
         self.assertEqual(len(contract['publishedAdminSuccessor']['repairSources']),1)
         self.assertEqual(len(contract['publishedAdminAncestor']['repairSources']),9)
         self.assertEqual(contract['publishedAdminAncestor']['sourceCommit'], '7f419903e9335c00524f5065f46920e8f24f2722')
         self.assertEqual(contract['mainOnlySourceBaseline'],'d1c4778498c8fa590c9f74e2339ebf15805581b2')
-        self.assertEqual(len(contract['mainOnlySources']),56)
+        self.assertEqual(len(contract['mainOnlySources']),29)
+        self.assertEqual(len(contract['preservedAdminSources']),27)
         self.assertFalse(set(contract['mainOnlySources']) & set(contract['sources']))
         self.assertIn('apps/api/prisma-mysql/schema.prisma',contract['mainOnlySources'])
         for name in contract['sources']:
@@ -412,7 +473,8 @@ class AvailabilityPublicationTests(unittest.TestCase):
             path = root / name
             path.parent.mkdir(parents=True)
             path.write_bytes(changed)
-            original = {**contract, 'sources': {name: contract['sources'][name]}, 'mainOnlySources': {}}
+            original = {**contract, 'sources': {name: contract['sources'][name]},
+                        'mainOnlySources': {}, 'preservedAdminSources': {}}
             def fixture_git(*args):
                 if args[0] == 'status': return b''
                 if args[0] == 'diff': return (name + '\n').encode()

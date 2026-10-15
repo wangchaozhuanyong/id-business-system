@@ -38,7 +38,14 @@ def acquire_release_lock(lock):
 
 def published_admin_files(contract):
     return {**contract['publicFiles'],**contract.get('publishedAdminAncestor',{}).get('publicFiles',{}),
-            **contract.get('publishedAdminSuccessor',{}).get('publicFiles',{})}
+            **contract.get('publishedAdminSuccessor',{}).get('publicFiles',{}),
+            **contract.get('publishedSharedProxy',{}).get('publicFiles',{})}
+
+
+def shared_proxy_receipt(contract):
+    binding = contract['publishedSharedProxy']
+    return {n: binding[n] for n in ('sourceCommit', 'sourceTree', 'archiveSha256', 'artifactDigest',
+            'publicInventorySha256', 'inputSha256', 'sourceDeltaSha256', 'runId')} | {'verified': True}
 
 
 def successor_receipt(contract, field='publishedAdminSuccessor'):
@@ -150,6 +157,8 @@ def validate_proof(proof, plan, contract, payload, h):
         need(proof.get('baselineAdminSuccessorVerification') == successor_receipt(contract), 'SUCCESSOR_PROOF_INVALID')
     if contract.get('publishedAdminAncestor'):
         need(proof.get('baselineAdminAncestorVerification') == successor_receipt(contract,'publishedAdminAncestor'), 'SUCCESSOR_PROOF_INVALID')
+    if contract.get('publishedSharedProxy'):
+        need(proof.get('preservedSharedProxyVerification') == shared_proxy_receipt(contract), 'SHARED_PROXY_PROOF_INVALID')
     actual = h.file_inventory(payload)
     actual.pop('build-proof.json', None)
     need(actual == proof.get('files'), 'PAYLOAD_CHANGED')
@@ -159,6 +168,8 @@ def validate_proof(proof, plan, contract, payload, h):
         native_files.update(('baseline-admin-successor-native.tar.gz','baseline-admin-successor-quality-native.zip'))
     if contract.get('publishedAdminAncestor'):
         native_files.update(('baseline-admin-ancestor-native.tar.gz','baseline-admin-ancestor-quality-native.zip'))
+    if contract.get('publishedSharedProxy'):
+        native_files.add('baseline-shared-proxy-native.zip')
     need(set(proof['apiModules']) == expected_api and len(proof['adminFiles']) >= 250
          and {n.removeprefix('source/'): v for n, v in actual.items() if n.startswith('source/')} == contract['sources']
          and {n.removeprefix('api/modules/'): v for n, v in actual.items() if n.startswith('api/modules/')} == proof['apiModules']
@@ -176,6 +187,9 @@ def validate_proof(proof, plan, contract, payload, h):
         need(actual.get('baseline-admin-ancestor-native.tar.gz') == ancestor['archiveSha256']
              and actual.get('baseline-admin-ancestor-quality-native.zip') == ancestor['quality']['artifactDigest'].removeprefix('sha256:'),
              'SUCCESSOR_PAYLOAD_CHANGED')
+    if contract.get('publishedSharedProxy'):
+        need(actual.get('baseline-shared-proxy-native.zip') == contract['publishedSharedProxy']['artifactDigest'].removeprefix('sha256:'),
+             'SHARED_PROXY_PAYLOAD_CHANGED')
     return proof
 
 
@@ -344,13 +358,16 @@ def release(plan, contract, d, h):
         (target / 'recharge-availability-build-proof.json').write_bytes(raw_proof)
         (target / 'recharge-availability-baseline-admin-native.zip').write_bytes((payload / 'baseline-admin-native.zip').read_bytes())
         for name in ('baseline-admin-successor-native.tar.gz','baseline-admin-successor-quality-native.zip',
-                     'baseline-admin-ancestor-native.tar.gz','baseline-admin-ancestor-quality-native.zip'):
+                     'baseline-admin-ancestor-native.tar.gz','baseline-admin-ancestor-quality-native.zip',
+                     'baseline-shared-proxy-native.zip'):
             (target / ('recharge-availability-'+name)).write_bytes((payload / name).read_bytes())
         manifest = json.loads(raw_manifest)
         previous_admin_projection = manifest.get('adminSourceProjection')
         admin_projection = {'kind':'PUBLISHED_ADMIN_WITH_APPROVED_AVAILABILITY_OVERLAY','commit':plan['commit'],
                             'sourceTree':plan['tree'],'sourceBaseline':contract['sourceBaseline'],
                             'preservedPublishedAdminCommit':contract['publishedAdminSuccessor']['sourceCommit'],
+                            'preservedSharedProxy': shared_proxy_receipt(contract),
+                            'preservedAdminSources': contract['preservedAdminSources'],
                             'changedSources':{n:v for n,v in contract['sources'].items() if n.startswith('apps/admin/')},
                             'buildProofSha256':plan['buildProofSha256']}
         manifest['previousAdminSourceProjection'] = previous_admin_projection
