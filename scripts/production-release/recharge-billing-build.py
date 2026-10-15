@@ -136,13 +136,22 @@ def build():
         path = payload / 'source' / name
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes((ROOT / name).read_bytes())
+    finish(contract, payload, {n: after[n] for n in sorted(allowed)}, native, commit, tree)
+
+
+def finish(contract, payload, api_modules, native, commit, tree, reused=None):
+    database = {'isolated': True, 'suite': 'recharge-billing.mysql.integration.spec.ts'}
+    if reused:
+        database['reusedFrom'] = reused
     proof = {'version': 1, 'scope': contract['scope'], 'commit': commit, 'tree': tree,
              'workflowRunId': os.environ['GITHUB_RUN_ID'], 'workflowRunAttempt': os.environ['GITHUB_RUN_ATTEMPT'],
              'contractSha256': digest(CONTRACT.read_bytes()), 'baselineApiReproduced': True,
-             'baselineNativeVerified': native, 'databaseVerification': {'isolated': True, 'suite': 'recharge-billing.mysql.integration.spec.ts'},
-             'files': inventory(payload), 'apiModules': {n: after[n] for n in sorted(allowed)},
-             'adminFiles': inventory(candidate / 'apps/admin/dist'), 'updatedServices': ['api', 'admin'],
+             'baselineNativeVerified': native, 'databaseVerification': database,
+             'files': inventory(payload), 'apiModules': api_modules,
+             'adminFiles': inventory(payload / 'admin/html'), 'updatedServices': ['api', 'admin'],
              'migrationPerformed': False, 'plannedMigration': contract['migration'], 'businessActions': 0}
+    if reused:
+        proof['apiCompilationReused'] = {**reused, 'verified': True}
     for field, name in [('controllerSha256', 'recharge-billing-release.py'), ('releaseUtilitySha256', 'remote-deploy.py'), ('helperSha256', 'recharge-record-release.py')]:
         proof[field] = digest((HERE / name).read_bytes())
     (payload / 'build-proof.json').write_text(json.dumps(proof, sort_keys=True, indent=2) + '\n')
@@ -150,8 +159,89 @@ def build():
     with tarfile.open(bundle, 'w:gz') as archive:
         archive.add(payload, arcname='payload')
     (OUTPUT / 'artifact-sha256.txt').write_text(digest(bundle.read_bytes()) + '\n')
-    print(json.dumps({'status': 'BILLING_ARTIFACT_BUILT', 'apiFiles': len(allowed), 'adminFiles': len(proof['adminFiles'])}))
+    print(json.dumps({'status': 'BILLING_ARTIFACT_BUILT', 'apiFiles': len(api_modules), 'adminFiles': len(proof['adminFiles']), 'validationReused': bool(reused)}))
+
+
+def verify_reuse_inputs(contract, prior, old_contract):
+    # Control-only successor: all application, schema, dependency and compiler
+    # inputs must still equal the run that actually passed the database suites.
+    need({k: v for k, v in contract.items() if k != 'priorValidationNative'} == old_contract, 'REUSE_CONTRACT_CHANGED')
+    inputs = ('apps/', 'packages/', 'package.json', 'package-lock.json', 'tsconfig.base.json', '.npmrc')
+    need(not git('diff', '--name-only', prior['commit'], 'HEAD', '--', *inputs).strip(), 'REUSE_SOURCE_CHANGED')
+    need(git('rev-parse', prior['commit'] + '^{tree}').decode().strip() == prior['tree'], 'REUSE_TREE_CHANGED')
+
+
+def verified_prior_artifact(contract):
+    prior = contract['priorValidationNative']
+    prefix = 'repos/wangchaozhuanyong/id-business-system/'
+    def api(path):
+        return subprocess.check_output(['gh', 'api', prefix + path], cwd=ROOT)
+    old_raw = git('show', prior['commit'] + ':scripts/production-release/recharge-billing-contract.json')
+    need(digest(old_raw) == prior['contractSha256'], 'REUSE_CONTRACT_DIGEST_CHANGED')
+    old_contract = json.loads(old_raw)
+    verify_reuse_inputs(contract, prior, old_contract)
+    run_meta = json.loads(api('actions/runs/' + str(prior['runId'])))
+    need(run_meta['head_sha'] == prior['commit'] and run_meta['head_branch'] == 'main'
+         and run_meta['event'] == 'workflow_dispatch' and run_meta['run_attempt'] == prior['attempt']
+         and run_meta['path'] == '.github/workflows/recharge-billing-validation.yml', 'REUSE_NATIVE_CHANGED')
+    # The publication job failed, so bind the successful validation job itself.
+    jobs = json.loads(api('actions/runs/' + str(prior['runId']) + '/attempts/' + str(prior['attempt']) + '/jobs'))['jobs']
+    jobs = [j for j in jobs if j['name'] == 'validate']
+    need(len(jobs) == 1 and jobs[0]['id'] == prior['jobId'] and jobs[0]['status'] == 'completed'
+         and jobs[0]['conclusion'] == 'success', 'REUSE_JOB_NOT_SUCCESSFUL')
+    successful_steps = {s['name'] for s in jobs[0]['steps'] if s['conclusion'] == 'success'}
+    need(set(prior['requiredSteps']).issubset(successful_steps), 'REUSE_REQUIRED_STEP_MISSING')
+    metadata = json.loads(api('actions/artifacts/' + str(prior['artifactId'])))
+    need(not metadata['expired'] and metadata['workflow_run']['id'] == prior['runId']
+         and metadata['digest'] == prior['artifactDigest']
+         and metadata['name'] == 'recharge-billing-' + prior['commit'] + '-' + str(prior['attempt']), 'REUSE_ARTIFACT_CHANGED')
+    raw = api('actions/artifacts/' + str(prior['artifactId']) + '/zip')
+    need(len(raw) <= 32 * 1024**2 and 'sha256:' + digest(raw) == prior['artifactDigest'], 'REUSE_ARTIFACT_DIGEST_CHANGED')
+    with zipfile.ZipFile(io.BytesIO(raw)) as archive:
+        need(set(archive.namelist()) == {'recharge-billing-artifact.tar.gz', 'artifact-sha256.txt'}, 'REUSE_ARTIFACT_LAYOUT_CHANGED')
+        bundle = archive.read('recharge-billing-artifact.tar.gz')
+        need(digest(bundle) == archive.read('artifact-sha256.txt').decode().strip(), 'REUSE_BUNDLE_CHANGED')
+    h, r = load('recharge-record-release.py'), load('recharge-billing-release.py')
+    payload = h.safe_archive(bundle, OUTPUT / 'prior')
+    proof_raw = (payload / 'build-proof.json').read_bytes()
+    need(digest(proof_raw) == prior['proofSha256'], 'REUSE_PROOF_CHANGED')
+    proof = json.loads(proof_raw)
+    need(proof['commit'] == prior['commit'] and proof['tree'] == prior['tree']
+         and proof['workflowRunId'] == str(prior['runId']) and proof['workflowRunAttempt'] == str(prior['attempt'])
+         and proof['contractSha256'] == prior['contractSha256'], 'REUSE_PROOF_IDENTITY_CHANGED')
+    r.validate_proof(proof, proof, old_contract, payload, h)
+    (OUTPUT / 'reused-native-artifact.zip').write_bytes(raw)
+    (OUTPUT / 'reused-validation.json').write_text(json.dumps({**prior, 'verified': True}, sort_keys=True) + '\n')
+    return payload, proof
+
+
+def reuse():
+    contract = json.loads(CONTRACT.read_bytes())
+    verify_sources(contract)
+    need(not OUTPUT.exists(), 'OUTPUT_EXISTS')
+    OUTPUT.mkdir(parents=True)
+    prior_payload, prior_proof = verified_prior_artifact(contract)
+    # V2_BUILD_ID changes with this control successor; rebuild Admin for that
+    # changed input. API compilation and all 38 DB tests keep their native run.
+    candidate = OUTPUT / 'candidate'
+    load('recharge-record-build.py').extract_source(git('archive', contract['sourceBaseline']), candidate)
+    for name in contract['sources']:
+        path = candidate / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes((ROOT / name).read_bytes())
+    run('npm', 'ci', '--no-audit', cwd=candidate)
+    run('npm', 'run', 'build', '--workspace', 'packages/shared', cwd=candidate)
+    commit, tree = (git('rev-parse', ref).decode().strip() for ref in ('HEAD', 'HEAD^{tree}'))
+    run('npm', 'run', 'build', '--workspace', 'apps/admin', cwd=candidate,
+        env={**os.environ, 'NODE_ENV': 'test', 'V2_BUILD_ID': 'v2-' + commit})
+    payload = OUTPUT / 'payload'
+    payload.mkdir()
+    for name in ('api', 'source'):
+        shutil.copytree(prior_payload / name, payload / name)
+    shutil.copytree(candidate / 'apps/admin/dist', payload / 'admin/html')
+    finish(contract, payload, prior_proof['apiModules'], prior_proof['baselineNativeVerified'], commit, tree,
+           reused=contract['priorValidationNative'])
 
 
 if __name__ == '__main__':
-    {'prepare': prepare, 'build': build}[sys.argv[1]]()
+    {'prepare': prepare, 'build': build, 'reuse': reuse}[sys.argv[1]]()

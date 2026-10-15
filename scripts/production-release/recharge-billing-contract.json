@@ -310,6 +310,23 @@
     "sha256": "eb5ad7d01a4bacd754407be36015fe496ecd227f07997703a4502aceb304e5c9"
   },
   "nginxSha256": "0b73aedbebdc12065d922b35bbf428e8959fe3a3ea9ef9fa5dc7af2f995baa99",
+  "priorValidationNative": {
+    "artifactDigest": "sha256:752f3d17769066db19d459f83e9048134856aa7ca9c19da7c68d760140699b51",
+    "artifactId": 11996623698,
+    "attempt": 1,
+    "commit": "5e04700a1cf6d994502513cf61f617dbde05a037",
+    "contractSha256": "573e159b8ca1810ae73bccca6e4529619c7c5a0ed583a385bc92687fabbfb6a9",
+    "databaseTests": 38,
+    "jobId": 116587853041,
+    "proofSha256": "441015174a14d750ab51b9a88a32cf09bec84d3c180ec025827b3601ae5e1416",
+    "requiredSteps": [
+      "Migrate only the disposable runner database",
+      "Verify billing generation and execution record round trips in isolated MySQL",
+      "Verify published provenance and build finite API and Admin artifacts"
+    ],
+    "runId": 38783030303,
+    "tree": "f8e59472a772fe3ab84cbe273e104e5cb185e1b5"
+  },
   "publicFiles": {
     "_headers": "d4c6717ea046cf5b22007827eb6e4cebf372f13fd07031594ea11174bb4a4a18",
     "assets/AppButton-C7G0v0si.js": "079b598c1d9e65a8657e97837b47a4408dd255014ab22181aee78e44b0fde99c",

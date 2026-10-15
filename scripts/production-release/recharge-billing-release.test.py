@@ -104,6 +104,51 @@ class BillingReleaseTests(unittest.TestCase):
                 r.baseline(platform, {'current': str(base / 'releases/original')}, h)
             self.assertEqual(platform.mock_calls, [])
 
+    def test_image_marker_normalization_preserves_every_runtime_field(self):
+        original = {'Image': 'sha256:' + 'a' * 64, 'Env': ['fixture=value'], 'Cmd': ['node', 'app'], 'User': '101', 'Labels': {'old': 'label'}}
+        built = {**original, 'Image': '', 'Labels': {'new': 'label'}}
+        r.verify_image_configuration(original, built)
+        for key, value in [('Env', []), ('Cmd', ['sh']), ('User', '0'), ('WorkingDir', '/changed'), ('Healthcheck', {})]:
+            with self.subTest(key=key), self.assertRaisesRegex(RuntimeError, 'IMAGE_CONFIGURATION_CHANGED'):
+                r.verify_image_configuration(original, {**built, key: value})
+        with self.assertRaisesRegex(RuntimeError, 'IMAGE_PARENT_MARKER_INVALID'):
+            r.verify_image_configuration(original, {**built, 'Image': 'foreign:latest'})
+
+    def test_reuse_requires_unchanged_source_inputs_and_contract(self):
+        contract = json.loads(b.CONTRACT.read_bytes())
+        prior = contract['priorValidationNative']
+        old = {k: v for k, v in contract.items() if k != 'priorValidationNative'}
+        with patch.object(b, 'git', side_effect=[b'', prior['tree'].encode()]):
+            b.verify_reuse_inputs(contract, prior, old)
+        with patch.object(b, 'git', return_value=b'apps/api/changed.ts'), self.assertRaisesRegex(RuntimeError, 'REUSE_SOURCE_CHANGED'):
+            b.verify_reuse_inputs(contract, prior, old)
+        with self.assertRaisesRegex(RuntimeError, 'REUSE_CONTRACT_CHANGED'):
+            b.verify_reuse_inputs(contract, prior, {**old, 'scope': 'foreign'})
+        with patch.object(b, 'git', side_effect=[b'', b'foreign-tree']), self.assertRaisesRegex(RuntimeError, 'REUSE_TREE_CHANGED'):
+            b.verify_reuse_inputs(contract, prior, old)
+
+    def test_reused_proof_must_keep_successful_native_run_binding(self):
+        # Runtime rejection occurs before reading the payload on altered reuse identity.
+        with self.assertRaisesRegex(RuntimeError, 'REUSED_PROOF_INVALID'):
+            r.validate_proof({'apiCompilationReused': {}}, {}, {'priorValidationNative': {'runId': 1}}, None, h)
+
+    def test_native_reuse_rejects_failed_job_missing_step_or_forged_digest(self):
+        contract = json.loads(b.CONTRACT.read_bytes())
+        prior = contract['priorValidationNative']
+        old_raw = b.git('show', prior['commit'] + ':scripts/production-release/recharge-billing-contract.json')
+        run = {'head_sha': prior['commit'], 'head_branch': 'main', 'event': 'workflow_dispatch', 'run_attempt': 1, 'path': '.github/workflows/recharge-billing-validation.yml'}
+        job = {'name': 'validate', 'id': prior['jobId'], 'status': 'completed', 'conclusion': 'success', 'steps': [{'name': n, 'conclusion': 'success'} for n in prior['requiredSteps']]}
+        artifact = {'expired': False, 'workflow_run': {'id': prior['runId']}, 'digest': prior['artifactDigest'], 'name': 'recharge-billing-' + prior['commit'] + '-1'}
+        cases = [([{**run, 'head_sha': 'foreign'}], 'REUSE_NATIVE_CHANGED'),
+                 ([run, {'jobs': [{**job, 'conclusion': 'failure'}]}], 'REUSE_JOB_NOT_SUCCESSFUL'),
+                 ([run, {'jobs': [{**job, 'steps': []}]}], 'REUSE_REQUIRED_STEP_MISSING'),
+                 ([run, {'jobs': [job]}, {**artifact, 'digest': 'foreign'}], 'REUSE_ARTIFACT_CHANGED'),
+                 ([run, {'jobs': [job]}, artifact, b'forged-zip'], 'REUSE_ARTIFACT_DIGEST_CHANGED')]
+        for values, code in cases:
+            outputs = [json.dumps(v).encode() if not isinstance(v, bytes) else v for v in values]
+            with self.subTest(code=code), patch.object(b, 'git', return_value=old_raw), patch.object(b, 'verify_reuse_inputs'), patch.object(b.subprocess, 'check_output', side_effect=outputs), self.assertRaisesRegex(RuntimeError, code):
+                b.verified_prior_artifact(contract)
+
     def test_payload_scope_rejects_sibling_runtime_outputs(self):
         a = load('recharge-availability-build.py')
         modules = {'a.js': None}
@@ -120,11 +165,11 @@ class BillingReleaseTests(unittest.TestCase):
         workflow = (ROOT / '.github/workflows/recharge-billing-validation.yml').read_text()
         self.assertIn('group: id-business-v2-production-release', workflow)
         self.assertIn('cancel-in-progress: false', workflow)
-        self.assertIn('recharge-billing.mysql.integration.spec.ts', workflow)
-        self.assertEqual(workflow.count('recharge-billing.mysql.integration.spec.ts'), 1)
-        self.assertIn('recharge-availability.mysql.integration.spec.ts', workflow)
-        self.assertIn('recharge-callback-receipts.mysql.integration.spec.ts', workflow)
-        self.assertIn('working-directory: .deploy/recharge-billing-release/candidate', workflow)
+        prior = json.loads(b.CONTRACT.read_bytes())['priorValidationNative']
+        self.assertEqual(prior['databaseTests'], 38)
+        self.assertIn('Verify billing generation and execution record round trips in isolated MySQL', prior['requiredSteps'])
+        self.assertIn('recharge-billing-build.py reuse', workflow)
+        self.assertNotIn('services:', workflow)
         self.assertNotIn("database_evidence.outputs.reuse", workflow)
         self.assertNotIn('continue-on-error', workflow)
 
