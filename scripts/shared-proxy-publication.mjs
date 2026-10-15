@@ -76,7 +76,7 @@ if (process.argv[2] === 'controls') {
   run('npm', ['run', 'prisma:mysql:generate'], { cwd: source });
   run('npm', ['run', 'build'], {
     cwd: source,
-    env: { ...process.env, V2_BUILD_ID: 'v2-' + adminBaseline }
+    env: { ...process.env, NODE_ENV: 'production', V2_BUILD_ID: 'v2-' + adminBaseline }
   });
   const packageDir = resolve(output, 'content');
   mkdirSync(packageDir, { recursive: true });
@@ -157,6 +157,7 @@ if (process.argv[2] === 'controls') {
     sourceTree: git(['rev-parse', 'HEAD^{tree}']),
     baseline,
     adminBaseline,
+    adminBuildEnvironment: 'production',
     runId: process.env.GITHUB_RUN_ID,
     overlays,
     engineChanged: engineChanged.map((path) => path.slice(engineDir.length)),

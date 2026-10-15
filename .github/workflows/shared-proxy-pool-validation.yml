@@ -34,6 +34,8 @@ jobs:
       - run: npm ci --no-audit
       - run: npm run prisma:mysql:generate && npm run prisma:mysql:validate
       - run: npm run typecheck && npm run build
+        env:
+          NODE_ENV: production
       - name: Verify the seven V2 controls and affected source
         run: |
           for check in check:admin-ui check:v2-ui-language check:v2-color-contrast check:v2-table-standard check:v2-loading-standard check:v2-module-architecture check:v2-isolation check:v2-prisma-runtime-boundary check:v2-concurrency-standard; do npm run "$check"; done
@@ -69,9 +71,9 @@ jobs:
         if: ${{ !cancelled() }}
         run: |
           npx playwright install --with-deps chromium
-          if [[ "${{ steps.reuse.outputs.verified }}" != true ]]; then node scripts/acceptance-v2-recharge-proxies-ui.mjs; fi
+          node scripts/acceptance-v2-recharge-proxies-ui.mjs --built
           npm run acceptance:v2-online-recharge-ui -- --quick
-          npm run acceptance:v2-auto-recharge
+          npm run acceptance:v2-auto-recharge -- --built
       - name: Independently reproduce the published baseline and package the scoped overlay
         run: node scripts/shared-proxy-publication.mjs package
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02

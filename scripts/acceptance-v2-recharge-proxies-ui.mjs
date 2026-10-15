@@ -84,6 +84,7 @@ const server = spawn(
   process.execPath,
   [
     path.join(root, 'node_modules/vite/bin/vite.js'),
+    ...(process.argv.includes('--built') ? ['preview'] : []),
     '--host',
     '127.0.0.1',
     '--port',
@@ -435,6 +436,7 @@ try {
   );
   const result = {
     ok: true,
+    builtPreview: process.argv.includes('--built'),
     widths: [1440, 1024, 901, 900, 768, 390],
     themes: ['light', 'dark'],
     states: [

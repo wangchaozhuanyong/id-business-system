@@ -25,6 +25,7 @@ const controls = new Set([
   '.github/workflows/shared-proxy-pool-validation.yml',
   'scripts/shared-proxy-validation-reuse.mjs',
   'scripts/acceptance-v2-online-recharge-ui.mjs',
+  'scripts/acceptance-v2-recharge-proxies-ui.mjs',
   'apps/api/src/id-business-v2/online-recharge/engine/task-runner.cjs',
   'apps/api/src/id-business-v2/online-recharge/engine/SOURCE_MANIFEST.json'
 ]);
