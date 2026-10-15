@@ -229,6 +229,7 @@ def configuration(d, state):
     value = {key: copy.deepcopy(row[key]) for key in ('Config', 'HostConfig', 'Mounts')}
     value['Mounts'] = sorted(value['Mounts'], key=lambda m: (m.get('Destination', ''), m.get('Source', '')))
     config = value['Config']
+    config['Env'] = sorted(config.get('Env') or [])
     config['Hostname'] = '${CONTAINER}'
     config['Image'] = '${IMAGE}'
     labels = config.get('Labels', {})
@@ -236,6 +237,7 @@ def configuration(d, state):
         if key in ('org.opencontainers.image.revision', 'id-business-v2.recharge-record-build-proof-sha256'):
             labels.pop(key)
         elif key in ('com.docker.compose.image', 'com.docker.compose.config-hash',
+                     'com.docker.compose.version',
                      'com.docker.compose.project.config_files', 'com.docker.compose.project.working_dir',
                      'com.docker.compose.project.environment_file', 'com.docker.compose.depends_on',
                      'com.docker.compose.replace'):
