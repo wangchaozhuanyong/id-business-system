@@ -26,18 +26,20 @@ test('ONLINE CI build has finite inputs and read-only diagnostics remain control
     'apps/api/src/id-business-v2/online-recharge/engine/requirements-hcaptcha.lock.txt',
     'apps/api/src/id-business-v2/online-recharge/engine/upstream/package-lock.json',
     'apps/api/src/id-business-v2/online-recharge/engine/upstream/payment.js',
-    'apps/api/src/id-business-v2/online-recharge/engine/Dockerfile',
-    'apps/admin/src/v2/features/online-recharge/OnlineRechargePage.vue'
+    'apps/api/src/id-business-v2/online-recharge/engine/Dockerfile'
   ])
     assert.equal(needsOnlineRechargeCiBuild([path]), true, path);
   for (const path of [
     '.github/workflows/online-recharge-diagnostic.yml',
+    'scripts/production-release/online-recharge-ci-build.test.py',
+    'scripts/production-release/online-recharge-component-lifecycle.test.py',
     'scripts/production-release/online-recharge-component-diagnostic.py',
     'scripts/production-release/online-recharge-component-recovery.py',
     'scripts/production-release/online-recharge-component-recovery.test.py',
     'scripts/production-release/online-recharge-component-recovery-readonly.py',
     '.github/workflows/online-recharge-recovery.yml',
     'docs/ONLINE_RECHARGE.md',
+    'apps/admin/src/v2/features/online-recharge/OnlineRechargePage.vue',
     'apps/admin/src/v2/features/customers/CustomerPage.vue'
   ])
     assert.equal(needsOnlineRechargeCiBuild([path]), false, path);
@@ -51,6 +53,63 @@ test('ONLINE CI build has finite inputs and read-only diagnostics remain control
     '.github/workflows/online-recharge-recovery-write.yml'
   ])
     assert.equal(isCiOnly([path]), false, path);
+});
+
+test('ordinary Admin publication retains Admin build/UI without selecting historical four-image projection', () => {
+  const paths = [
+    'apps/admin/src/v2-router.ts',
+    'apps/admin/src/v2/features/online-recharge/V2OnlineRedeemView.vue',
+    'apps/admin/src/v2/features/auto-recharge/bitbrowser-direct-login.ts',
+    'scripts/check-v2-input-retention.mjs',
+    'scripts/check-v2-online-recharge-controls.test.mjs',
+    'scripts/acceptance-v2-online-recharge-ui.mjs',
+    'scripts/production-release/online-recharge-ci-build.test.py',
+    'scripts/production-release/online-recharge-component-lifecycle.test.py',
+    'scripts/ci-recharge-scope.mjs',
+    'scripts/ci-recharge-scope.test.mjs',
+    'docs/V2_TASKS.md'
+  ];
+  assert.equal(checkMode(paths, schema, schema), 'admin');
+  assert.deepEqual(selectedParts(paths), ['guards', 'admin']);
+  assert.equal(needsOnlineRechargeCiBuild(paths), false);
+  const commands = adminCheckCommands('admin', paths).map((args) => args.join(' '));
+  assert.ok(commands.includes('run test --workspace @apple-business/admin'));
+  assert.ok(commands.includes('run build --workspace @apple-business/admin'));
+  assert.ok(commands.includes('run acceptance:v2-online-recharge-ui'));
+  assert.ok(commands.includes('run acceptance:v2-auto-recharge'));
+  assert.equal(adminUiGuardChecks('admin', paths).length, 8);
+  for (const input of [
+    'apps/api/src/id-business-v2/online-recharge/online-recharge.service.ts',
+    'apps/api/src/id-business-v2/online-recharge/engine/worker.cjs',
+    'apps/api/Dockerfile.mysql',
+    'apps/admin/Dockerfile',
+    'apps/api/package.json',
+    'apps/admin/package.json',
+    'packages/shared/package.json',
+    'packages/shared/src/v2/auto-recharge.ts',
+    'package.json',
+    'package-lock.json',
+    '.dockerignore',
+    'tsconfig.base.json',
+    'deploy/nginx/admin.conf',
+    '.github/workflows/quality.yml',
+    '.github/workflows/production-release.yml',
+    'scripts/ci-recharge-check.mjs',
+    'scripts/production-release/build-images.sh',
+    'scripts/production-release/online-recharge-ci-build.py',
+    'scripts/production-release/online-recharge-component-runtime.py'
+  ])
+    assert.equal(needsOnlineRechargeCiBuild([...paths, input]), true, input);
+  assert.equal(needsOnlineRechargeCiBuild(['scripts/ci-recharge-scope.mjs']), true);
+  const testsOnly = [
+    'scripts/production-release/online-recharge-ci-build.test.py',
+    'scripts/production-release/online-recharge-component-lifecycle.test.py'
+  ];
+  for (const changed of [...testsOnly.map((path) => [path]), testsOnly]) {
+    assert.equal(checkMode(changed, schema, schema), 'ci-only');
+    assert.deepEqual(selectedParts(changed), ['guards']);
+    assert.equal(needsOnlineRechargeCiBuild(changed), false);
+  }
 });
 
 test('archive-only controls never select ONLINE images while mixed ONLINE changes retain the build gate', () => {
@@ -2511,6 +2570,7 @@ test('shared record spacing and its browser acceptance stay in the admin scope',
 });
 test('direct login and workspace browser acceptance stay in exact admin scope', () => {
   const scripts = [
+    'scripts/acceptance-v2-online-recharge-ui.mjs',
     'scripts/acceptance-v2-bitbrowser-direct.mjs',
     'scripts/acceptance-v2-refresh-interaction.mjs'
   ];

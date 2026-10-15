@@ -1,9 +1,90 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
+import { readFileSync } from 'node:fs';
+import { runInNewContext } from 'node:vm';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
+const acceptanceSource = () =>
+  readFileSync(new URL('./acceptance-v2-online-recharge-ui.mjs', import.meta.url), 'utf8');
+
+test('合成页面夹具按当前会话协议恢复账号并拦截全部外部连接', async () => {
+  const source = acceptanceSource();
+  const start = source.indexOf('async function fixture(context, state) {');
+  const end = source.indexOf('\ntry {\n  await wait(', start);
+  assert.ok(start >= 0 && end > start, '未找到实际页面请求夹具');
+  const origin = 'http://127.0.0.1:5409';
+  const actor = { id: 'fixture-admin', roles: ['admin'] };
+  const fixture = runInNewContext(source.slice(start, end) + '\nfixture;', {
+    URL,
+    origin,
+    date: '2026-10-15T00:00:00Z',
+    task: {},
+    settings: {},
+    rows: {},
+    setTimeout
+  });
+  let handler;
+  let socketClosed = false;
+  const network = await fixture(
+    {
+      routeWebSocket: async (_pattern, callback) =>
+        callback({ close: () => (socketClosed = true) }),
+      route: async (_pattern, callback) => (handler = callback)
+    },
+    { actor }
+  );
+  async function request(path, authorization = 'Bearer synthetic-access') {
+    let result;
+    await handler({
+      request: () => ({
+        url: () => new URL(path, origin).href,
+        method: () => 'GET',
+        headers: () => (authorization ? { authorization } : {})
+      }),
+      fulfill: async (value) => (result = JSON.parse(value.body)),
+      abort: async () => (result = 'ABORTED'),
+      continue: async () => (result = 'CONTINUED')
+    });
+    return result;
+  }
+  assert.deepEqual(await request('/api/auth/session'), {
+    success: true,
+    data: { accessToken: 'synthetic-access', user: actor }
+  });
+  assert.equal((await request('/api/id-business-v2/online-recharge/public/config')).success, true);
+  assert.deepEqual(Array.from(network.credentialHeaders), ['Bearer synthetic-access']);
+  assert.equal(
+    (await request('/api/id-business-v2/online-recharge/public/config', null)).success,
+    false
+  );
+  assert.equal(await request('https://outside.example.invalid/checkout'), 'ABORTED');
+  assert.deepEqual(Array.from(network.unexpected), ['https://outside.example.invalid']);
+  assert.equal(socketClosed, true);
+});
+
+test('合成兑换验收跟随已发布后台路由而不再等待旧匿名页面', () => {
+  const source = acceptanceSource();
+  const router = readFileSync(new URL('../apps/admin/src/v2-router.ts', import.meta.url), 'utf8');
+  const match = source.match(/const legacyRoutes = (\{[\s\S]*?\n\});/);
+  assert.ok(match, '验收缺少旧入口到后台的跳转契约');
+  const routes = runInNewContext('(' + match[1] + ')');
+  assert.equal(routes['/online-recharge'], '/v2/online-recharge/redeem');
+  assert.equal(routes['/online-recharge/subscription'], '/v2/online-recharge/renewal');
+  for (const [path, target] of Object.entries(routes)) {
+    const entry = router.slice(router.indexOf(`path: '${path}'`));
+    assert.ok(entry.slice(0, entry.indexOf('\n    }')).includes(`redirect: '${target}'`));
+  }
+  assert.ok(source.includes('await page.waitForURL(origin + legacyRoutes[path])'));
+  assert.ok(source.includes('await page.waitForURL(origin + (legacyRoutes[path] ?? path))'));
+  assert.ok(!source.includes("page.locator('.online-public').waitFor()"));
+  assert.ok(!source.includes('network.publicHeaders'));
+  assert.ok(
+    source.includes("'internal-session-volatile-capability-no-browser-storage-authenticated'")
+  );
+});
+
 function checkMutation(checker, file, from, to, expectedStatus = 1) {
   const runner = `
     import fs from 'node:fs';
