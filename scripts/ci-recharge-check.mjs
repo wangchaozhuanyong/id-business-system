@@ -5,6 +5,7 @@ import { resolve } from 'node:path';
 import {
   adminCheckCommands,
   adminHtmlCachePaths,
+  isAdminHtmlCacheOnly,
   rechargeRecordControlPaths,
   rechargeAvailabilityControlPaths,
   isRechargeAvailabilityControlsOnly,
@@ -456,6 +457,14 @@ if (part === 'guards' && sharedPoolOnly) {
 }
 if (part === 'guards' && changed.some((path) => adminHtmlCachePaths.includes(path)))
   run('python3', ['-B', 'scripts/acceptance-nginx-admin-cache.py', '--docker']);
+
+// The exact cache-only repair has completed the real dispatcher/selector controls
+// and real Nginx regression above. Retain all UI rules without selecting unchanged
+// historical publication simulations merely because the dispatcher gained this entry.
+if (part === 'guards' && mode === 'admin' && isAdminHtmlCacheOnly(changed)) {
+  for (const name of adminUiGuardChecks(mode, changed)) npm('run', name);
+  process.exit(0);
+}
 
 // The finite diagnostic controls have their own native tests above. The common
 // format, lint and CI-selector contracts have also run. Business source remains
