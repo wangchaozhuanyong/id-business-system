@@ -556,6 +556,9 @@ async def _execute_profile_flow(job, target, budget, original_checkout=None):
                 job.context, target, job.root, job.payload["plan"], job.payload["upgradeIdentifier"])
         with payment_state.PaymentLedger(job.root, target.account_id,
                                          target_plan=job.payload["plan"], read_only=True) as ledger:
+            if (not job.original_checkout_identifier
+                    or ledger.checkout_id != job.original_checkout_identifier):
+                raise Stop("checkout_identifier_changed")
             result = await payment_recovery.recheck_in_context(
                 job.context, target, ledger, timeout=25, poll_count=6, poll_interval=20)
             return target, pay.include_payment_record(result, ledger)

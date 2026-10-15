@@ -1,3 +1,4 @@
+import { resolvedDeclinedPayment, resolvedDeclinedCheckout } from './recharge-noncharge-proof';
 import { ConflictException } from '@nestjs/common';
 import type { IdBusinessV2RechargeJob } from '@prisma/client';
 import { isClosedCycleDocument } from './recharge-cycle-state';
@@ -47,6 +48,7 @@ export function unpaidCheckoutRecoveryIdentifier(
     current.some((record) => {
       if (record.ownerId !== job.ownerId) return true;
       if (!record.fileKey.startsWith('payments/')) return false;
+      if (resolvedDeclinedPayment(record.document)) return false;
       if (!record.document || typeof record.document !== 'object' || Array.isArray(record.document))
         return true;
       return ((record.document as Record<string, unknown>).target_plan ?? 'plus') === job.plan;
@@ -64,6 +66,8 @@ export function unpaidCheckoutRecoveryIdentifier(
   )
     return undefined;
   const document = record.document as Record<string, unknown>;
+  if ((document.target_plan ?? 'plus') === job.plan && resolvedDeclinedCheckout(document))
+    return rechargeCheckoutIdentifier(document);
   if (
     (document.target_plan ?? 'plus') !== job.plan ||
     document.status !== 'cancelled' ||
@@ -118,6 +122,7 @@ export function assertUnpaidCheckoutRecoverySources(
     )
       continue;
     const result = object(job.result);
+    if (resolvedDeclinedPayment(result)) continue;
     if (result.mode === 'open_browser' || result.recheck_only === true) continue;
     const identifier = rechargeCheckoutIdentifier(result);
     if (

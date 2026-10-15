@@ -173,6 +173,8 @@ const labels: Record<string, string> = {
   paid_tier_pending_verification: '已付款，档位待核验',
   payment_failed: '付款失败',
   payment_result_unknown: '付款结果待核验',
+  payment_decline_resolved: '拒付原单已核实结束',
+  confirmed_declined_no_charge: '已核实拒付且银行无扣款',
   payment_unknown_resolved: '历史付款锁已处理',
   payment_unknown_resolution: '正在处理历史付款记录',
   verification_required: '官网或银行验证尚未完成',

@@ -266,7 +266,7 @@ class RepairPublicationTests(unittest.TestCase):
                 path = payload / 'source' / name
                 path.parent.mkdir(parents=True, exist_ok=True)
                 path.write_bytes(subprocess.check_output(['git', 'show', contract['preservedAdminCommit'] + ':' + name], cwd=HERE.parents[1])
-                                 if name in contract['publishedAdminSources'] else (HERE.parents[1] / name).read_bytes())
+                                 if name in contract['publishedAdminSources'] else subprocess.check_output(['git', 'show', contract['priorApplicationValidation']['commit'] + ':' + name], cwd=HERE.parents[1]))
             proof = {'version': 4, 'scope': release.SCOPE, **plan,
                      'sourceBaseline': contract['sourceBaseline'],
                      'liveManifestSha256': contract['manifestSha256'],

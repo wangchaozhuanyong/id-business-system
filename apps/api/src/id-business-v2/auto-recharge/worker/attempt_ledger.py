@@ -30,6 +30,28 @@ def confirmed_no_bank_request(data: dict) -> bool:
     )
 
 
+
+def declined_resolution_metadata(data):
+    return bool(isinstance(data, dict) and data.get('operator_resolution') == 'confirmed_declined_no_charge'
+        and not data.get('payment_evidence') and isinstance(data.get('resolved_at'), str)
+        and RESOLUTION_TIME.fullmatch(data['resolved_at'])
+        and all(isinstance(data.get(k), str) and re.fullmatch(r'[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}', data[k])
+                for k in ('resolution_job_id', 'source_job_id', 'verification_job_id')))
+
+
+def declined_payment_resolved(data):
+    return bool(declined_resolution_metadata(data) and data.get('payment_status') == 'declined'
+        and data.get('payment_attempted') is True and type(data.get('confirmation_requests_sent')) is int
+        and data['confirmation_requests_sent'] == 1)
+
+
+def declined_checkout_resolved(data):
+    return bool(declined_resolution_metadata(data) and data.get('payment_status') == 'not_attempted'
+        and data.get('payment_attempted') is not True and (data.get('confirmation_requests_sent') is None
+            or type(data.get('confirmation_requests_sent')) is int and data['confirmation_requests_sent'] == 0)
+        and isinstance(data.get('checkout_identifier'), str)
+        and re.fullmatch(r'(?:cs|oaics)_[A-Za-z0-9_]{1,200}', data['checkout_identifier']))
+
 def checkout_record_path(state_dir, account_id, target_plan="plus"):
     plan_spec(target_plan)
     key = hashlib.sha256(account_id.encode()).hexdigest()
@@ -49,6 +71,8 @@ def assert_no_other_payment(state_dir, account_id, checkout_id=None, *, next_cyc
         if not isinstance(data, dict):
             raise Stop("invalid_payment_record")
         if data.get("account_key") == key and data.get("payment_attempted"):
+            if declined_payment_resolved(data):
+                continue
             from subscription_cycle import closed_payment_allowed, closed_payment_for_observation
             if closed_payment_allowed(data, next_cycle_grant) or read_only and closed_payment_for_observation(data):
                 continue
@@ -125,6 +149,8 @@ def rejected_retry_allowed(record: dict) -> bool:
 
 
 def unpaid_checkout_replacement_allowed(record: dict) -> bool:
+    if declined_checkout_resolved(record):
+        return True
     """官网已让原结算编号失效时，只允许替换从未确认或付款的原单。"""
     if (record.get("status") == "cancelled" and record.get("checkout_outcome") == "cancelled"
             and record.get("cancelled_before_confirmation") is True
@@ -143,6 +169,8 @@ def unpaid_checkout_replacement_allowed(record: dict) -> bool:
 
 
 def resolved_checkout_replacement_allowed(record: dict) -> bool:
+    if declined_checkout_resolved(record):
+        return True
     return bool(confirmed_no_bank_request(record)
                 and record.get("payment_status") == "not_attempted"
                 and record.get("payment_attempted") is not True

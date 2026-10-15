@@ -5,6 +5,86 @@ import { createHash } from 'node:crypto';
 import { pathToFileURL } from 'node:url';
 import { matchesSourceEvidence } from './ci-recharge-evidence.mjs';
 
+export const rechargeAvailabilityControlPaths = Object.freeze([
+  'scripts/production-release/recharge-record-release.test.py',
+  'scripts/production-release/recharge-record-release.py',
+  '.github/workflows/recharge-availability-validation.yml',
+  'scripts/production-release/recharge-availability-build.py',
+  'scripts/production-release/recharge-availability-contract.json',
+  'scripts/production-release/recharge-availability-release.py',
+  'scripts/production-release/recharge-availability-release.test.py',
+  'scripts/production-release/recharge-availability-dispatch.py',
+  'scripts/ci-recharge-availability.test.mjs'
+]);
+const rechargeAvailabilityApplicationPaths = new Set([
+  'apps/api/src/id-business-v2/auto-recharge/recharge-callback-receipts.spec.ts',
+  'apps/admin/src/v2/features/auto-recharge/RechargeHistoryDrawer.vue',
+  'apps/admin/src/v2/features/auto-recharge/RechargePaymentReview.vue',
+  'apps/admin/src/v2/features/auto-recharge/RechargeResult.vue',
+  'apps/admin/src/v2/features/auto-recharge/V2AutoRechargeView.vue',
+  'apps/admin/src/v2/features/auto-recharge/api.ts',
+  'apps/admin/src/v2/features/auto-recharge/contracts.ts',
+  'apps/admin/src/v2/features/auto-recharge/recharge-availability.spec.ts',
+  'apps/admin/src/v2/features/auto-recharge/recharge-availability.ts',
+  'apps/admin/src/v2/features/auto-recharge/recharge-presentation.ts',
+  'apps/admin/src/v2/features/auto-recharge/useAutoRecharge.spec.ts',
+  'apps/admin/src/v2/features/auto-recharge/useAutoRecharge.ts',
+  'apps/api/src/id-business-v2/auto-recharge/persistence/recharge.repository.ts',
+  'apps/api/src/id-business-v2/auto-recharge/recharge-account-restore.ts',
+  'apps/api/src/id-business-v2/auto-recharge/recharge-availability.spec.ts',
+  'apps/api/src/id-business-v2/auto-recharge/recharge-availability.ts',
+  'apps/api/src/id-business-v2/auto-recharge/recharge-checkout-recovery.ts',
+  'apps/api/src/id-business-v2/auto-recharge/recharge-cycle-state.ts',
+  'apps/api/src/id-business-v2/auto-recharge/recharge-declined-resolution.ts',
+  'apps/api/src/id-business-v2/auto-recharge/recharge-job-helpers.ts',
+  'apps/api/src/id-business-v2/auto-recharge/recharge-job-list.ts',
+  'apps/api/src/id-business-v2/auto-recharge/recharge-ledger-callback.ts',
+  'apps/api/src/id-business-v2/auto-recharge/recharge-local.service.ts',
+  'apps/api/src/id-business-v2/auto-recharge/recharge-noncharge-proof.ts',
+  'apps/api/src/id-business-v2/auto-recharge/recharge-resolution.ts',
+  'apps/api/src/id-business-v2/auto-recharge/recharge-review-binding.spec.ts',
+  'apps/api/src/id-business-v2/auto-recharge/recharge-review.ts',
+  'apps/api/src/id-business-v2/auto-recharge/recharge.controller.ts',
+  'apps/api/src/id-business-v2/auto-recharge/recharge.service.ts',
+  'apps/api/src/id-business-v2/auto-recharge/recharge.spec.ts',
+  'apps/api/src/id-business-v2/auto-recharge/worker/attempt_ledger.py',
+  'apps/api/src/id-business-v2/auto-recharge/worker/bitbrowser_retry.py',
+  'apps/api/src/id-business-v2/auto-recharge/worker/pay.py',
+  'apps/api/src/id-business-v2/auto-recharge/worker/subscription_cycle.py',
+  'apps/api/src/id-business-v2/auto-recharge/worker/test_declined_resolution.py',
+  'packages/shared/src/v2/auto-recharge.ts',
+  'apps/api/src/id-business-v2/auto-recharge/recharge-availability.mysql.integration.spec.ts'
+]);
+const rechargeAvailabilityDocumentationPaths = new Set([
+  'docs/V2_TASKS.md',
+  'docs/AUTO_RECHARGE_PAYMENT_AVAILABILITY_20261015.md',
+  'scripts/ci-recharge-scope.mjs',
+  'scripts/ci-recharge-check.mjs'
+]);
+export function isRechargeAvailabilityControlsOnly(paths) {
+  return (
+    paths.length > 0 &&
+    paths.some((p) => rechargeAvailabilityControlPaths.includes(p)) &&
+    paths.every(
+      (p) =>
+        rechargeAvailabilityControlPaths.includes(p) ||
+        rechargeAvailabilityDocumentationPaths.has(p)
+    )
+  );
+}
+export function isRechargeAvailabilityRepairOnly(paths) {
+  return (
+    paths.includes('scripts/production-release/recharge-availability-contract.json') &&
+    paths.some((p) => rechargeAvailabilityApplicationPaths.has(p)) &&
+    paths.every(
+      (p) =>
+        rechargeAvailabilityApplicationPaths.has(p) ||
+        rechargeAvailabilityControlPaths.includes(p) ||
+        rechargeAvailabilityDocumentationPaths.has(p)
+    )
+  );
+}
+
 export const parts = ['guards', 'admin', 'api', 'connector', 'migration', 'security'];
 export const rechargeRecordControlPaths = Object.freeze([
   '.github/workflows/recharge-record-validation.yml',
@@ -112,6 +192,9 @@ const onlineCiBuildInputs = new Set([
 export function needsOnlineRechargeCiBuild(paths) {
   // This shared feature uses the normal API/engine builds, not the historical sealed ONLINE projection.
   if (isSharedProxyPoolPaths(paths)) return false;
+
+  if (isRechargeAvailabilityRepairOnly(paths) || isRechargeAvailabilityControlsOnly(paths))
+    return false;
   if (isRechargeRecordRepairOnly(paths) || isRechargeRecordControlsOnly(paths)) return false;
   return (
     !isReleaseArtifactRetentionOnly(paths) &&
@@ -705,6 +788,7 @@ export function isCiOnly(paths) {
     paths.every(
       (p) =>
         releaseArtifactRetentionControls.includes(p) ||
+        rechargeAvailabilityControlPaths.includes(p) ||
         rechargeRecordControlPaths.includes(p) ||
         historicalReleaseControlPaths.includes(p) ||
         unpublishedComponentSuccessorControlPaths.includes(p) ||
@@ -892,6 +976,26 @@ export function backendArchitectureGuardChecks(mode, paths) {
         'check:v2-concurrency-standard'
       ]
     : [];
+}
+
+export function rechargeAvailabilityGuardChecks(paths) {
+  if (!isRechargeAvailabilityRepairOnly(paths)) return undefined;
+  return [
+    ...new Set([
+      ...adminUiGuardChecks('recharge', paths),
+      ...backendArchitectureGuardChecks('recharge', paths)
+    ])
+  ];
+}
+
+export function rechargeAvailabilityCommonControlTests(paths) {
+  if (!isRechargeAvailabilityRepairOnly(paths) && !isRechargeAvailabilityControlsOnly(paths))
+    return undefined;
+  return [
+    'scripts/ci-recharge-scope.test.mjs',
+    'scripts/ci-recharge-check.test.mjs',
+    'scripts/ci-change-scope.test.mjs'
+  ];
 }
 
 export function adminCheckCommands(mode, paths) {
@@ -1127,6 +1231,7 @@ export function isRechargeOnly(paths, oldSchema, newSchema) {
     !paths.every(
       (p) =>
         allowed.test(p) ||
+        rechargeAvailabilityControlPaths.includes(p) ||
         rechargeRecordControlPaths.includes(p) ||
         historicalReleaseControlPaths.includes(p) ||
         unpublishedComponentSuccessorControlPaths.includes(p) ||

@@ -5,6 +5,10 @@ import { resolve } from 'node:path';
 import {
   adminCheckCommands,
   rechargeRecordControlPaths,
+  rechargeAvailabilityControlPaths,
+  isRechargeAvailabilityControlsOnly,
+  rechargeAvailabilityGuardChecks,
+  rechargeAvailabilityCommonControlTests,
   isRechargeRecordControlsOnly,
   releaseArtifactRetentionControls,
   isReleaseArtifactRetentionOnly,
@@ -47,6 +51,13 @@ const changed = execFileSync('git', ['diff', '--name-only', base, 'HEAD'], { enc
   .trim()
   .split('\n')
   .filter(Boolean);
+if (
+  ['guards', 'release-controls'].includes(part) &&
+  changed.some((p) => rechargeAvailabilityControlPaths.includes(p))
+) {
+  run('python3', ['-B', 'scripts/production-release/recharge-availability-release.test.py']);
+  run('node', ['--test', 'scripts/ci-recharge-availability.test.mjs']);
+}
 const releaseArtifactOnly = mode === 'ci-only' && isReleaseArtifactRetentionOnly(changed);
 if (
   ['guards', 'release-controls'].includes(part) &&
@@ -409,8 +420,7 @@ if (part === 'guards') {
   const linted = existing.filter((p) => /\.(?:mjs|ts|vue)$/.test(p));
   if (formatted.length) npm('exec', '--', 'prettier', '--check', ...formatted);
   if (linted.length) npm('exec', '--', 'eslint', ...linted);
-  run('node', [
-    '--test',
+  const commonControlTests = rechargeAvailabilityCommonControlTests(changed) ?? [
     'scripts/ci-recharge-scope.test.mjs',
     'scripts/ci-recharge-check.test.mjs',
     'scripts/check-cloud-independence.test.mjs',
@@ -420,7 +430,8 @@ if (part === 'guards') {
     'scripts/ci-change-scope.test.mjs',
     'scripts/ci-recharge-release.test.mjs',
     'scripts/admin-layout-rules.test.mjs'
-  ]);
+  ];
+  run('node', ['--test', ...commonControlTests]);
 }
 // The shared pool changes business source and an additive migration. Keep all
 // applicable checks; unrelated historical publishers are unchanged inputs.
@@ -444,6 +455,16 @@ if (
 // The finite diagnostic controls have their own native tests above. The common
 // format, lint and CI-selector contracts have also run. Business source remains
 // subject to the formal workflow's immutable source and prior-validation proof.
+if (part === 'guards' && mode === 'recharge') {
+  const checks = rechargeAvailabilityGuardChecks(changed);
+  if (checks) {
+    for (const name of checks) npm('run', name);
+    console.log('Availability source, UI, architecture and release controls verified');
+    process.exit(0);
+  }
+}
+if (part === 'guards' && mode === 'ci-only' && isRechargeAvailabilityControlsOnly(changed))
+  process.exit(0);
 if (part === 'guards' && mode === 'ci-only' && isRechargeRecordControlsOnly(changed)) {
   console.log('Finite recharge record controls verified; unrelated release controls unchanged');
   process.exit(0);

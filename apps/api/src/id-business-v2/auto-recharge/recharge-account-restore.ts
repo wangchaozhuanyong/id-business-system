@@ -57,6 +57,34 @@ export async function restoreRechargeAccount(input: {
       ? []
       : await repository.finishedJobsForAccount(tx, job.ownerId, accountKey, job.id);
   let originalCheckoutIdentifier: string | undefined;
+  if (job.action === 'bitbrowser' && currentResult.recheck_only === true) {
+    const source =
+      typeof currentResult.source_job_id === 'string'
+        ? await repository.findJob(tx, currentResult.source_job_id)
+        : null;
+    if (
+      !source ||
+      source.ownerId !== job.ownerId ||
+      source.accountKey !== accountKey ||
+      source.plan !== job.plan
+    )
+      throw new ConflictException('原单账号或归属未核实，不能只读复查');
+    const sourceResult = object(source.result);
+    if (sourceResult.recheck_only === true)
+      throw new ConflictException('请复查原付款任务，不使用复查任务代替原单');
+    if (sourceResult.operation !== 'subscription_upgrade') {
+      const identifier = rechargeCheckoutIdentifier(sourceResult);
+      if (!identifier) throw new ConflictException('原订单编号未核实，不能只读复查');
+      originalCheckoutIdentifier = repository.restoreCheckoutIdentifier(
+        records,
+        accountKey,
+        job.plan,
+        [identifier]
+      );
+      if (originalCheckoutIdentifier !== identifier)
+        throw new ConflictException('原订单编号不一致，不能只读复查');
+    }
+  }
   if (
     job.action === 'bitbrowser' &&
     currentResult.mode !== 'open_browser' &&
