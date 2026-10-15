@@ -14,6 +14,26 @@
   "backupNormalizerPath": "/opt/id-business-v2/releases/20261015T091200Z-e197218c8b38-recharge-record/scripts/mysql-dump-restore-normalizer.sed",
   "backupNormalizerSha256": "ca9b05f832e9ed73bb36b7e76c083c99a40b13e067850166f8715bae469e5202",
   "baselineAdminBuildId": "v2-6d1db82cde92e8c02fea6254289c4b410e94016a",
+  "buildInputs": {
+    "admin": {
+      ".npmrc": null,
+      "apps/admin/package.json": "01f409413c63046256577fb997f2276430ef321cd320269d047cec2ed083fa55",
+      "apps/api/package.json": "f8a9cd054478af472964facc3b70012fef70a3e63f0b55376582d57e691acd2c",
+      "package-lock.json": "6104c1be6681361d002145c15c8bd1a15a9741a3b61a4694b3982daf7ba5b70f",
+      "package.json": "a8c2b692bbf74ad6df0f60577fede0eeda932e5a7afa8151bd072276fbb266bb",
+      "packages/shared/package.json": "e18c794dd7eb3e66ce5757be3f6c1e0419a23e0d6e07f762dd45f1dde69a1153",
+      "tsconfig.base.json": "d705dca337a84b21bcb51a8b2f7bcb9953916564f53d10b0b4c7e2d36259e5fe"
+    },
+    "api": {
+      ".npmrc": null,
+      "apps/admin/package.json": "01f409413c63046256577fb997f2276430ef321cd320269d047cec2ed083fa55",
+      "apps/api/package.json": "f8a9cd054478af472964facc3b70012fef70a3e63f0b55376582d57e691acd2c",
+      "package-lock.json": "6104c1be6681361d002145c15c8bd1a15a9741a3b61a4694b3982daf7ba5b70f",
+      "package.json": "569ed2d2bd3849ae7c79ea07f860ec1a66de90fc0161681df9064a7332091faf",
+      "packages/shared/package.json": "e18c794dd7eb3e66ce5757be3f6c1e0419a23e0d6e07f762dd45f1dde69a1153",
+      "tsconfig.base.json": "d705dca337a84b21bcb51a8b2f7bcb9953916564f53d10b0b4c7e2d36259e5fe"
+    }
+  },
   "configurationSha256": {
     ".env.aws.production": "088a61075fb2ba01f04249fc78e31150ee7cd571f0708fe0c28ba38ac53daafa",
     "compose.release.json": "c7daeb4c8c84aa776ae7ba5952a9b88ce85ee1d6bf3d8537bfa5d0e461c6c24a",

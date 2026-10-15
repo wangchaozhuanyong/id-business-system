@@ -61,7 +61,9 @@ def verify_sources(c):
         need(git('rev-parse', before + '^{tree}').decode().strip() == c[role + 'SourceBaselineTree'], 'BASE_TREE_CHANGED')
         for name in ('package.json', 'package-lock.json', 'tsconfig.base.json', '.npmrc',
                      'apps/api/package.json', 'apps/admin/package.json', 'packages/shared/package.json'):
-            need(git('ls-tree', 'HEAD', '--', name) == git('ls-tree', before, '--', name), 'DEPENDENCY_INPUT_CHANGED')
+            need(git('ls-tree', 'HEAD', '--', name) == git('ls-tree', c['reviewBase'], '--', name), 'DEPENDENCY_INPUT_CHANGED')
+            need((digest(git('show', before + ':' + name)) if git('ls-tree', before, '--', name).strip() else None)
+                 == c['buildInputs'][role][name], 'PUBLISHED_BUILD_INPUT_CHANGED')
     need(not git('diff', '--name-only', c['apiSourceBaseline'], 'HEAD', '--', 'apps/api/prisma-mysql/').strip(), 'SCHEMA_CHANGED')
     # Compare the actual Prisma call ASTs; the repository change is post-query qualification only.
     name = 'apps/api/src/id-business-v2/auto-recharge/persistence/recharge.repository.ts'
