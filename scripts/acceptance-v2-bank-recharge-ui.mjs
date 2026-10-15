@@ -838,8 +838,8 @@ try {
   );
   await pricingDrawer.getByRole('button', { name: '关闭', exact: true }).click();
   await pricingDrawer.waitFor({ state: 'hidden' });
-  await page.locator('a[href="/v2/auto-recharge/chatgpt-accounts"]').first().click();
-  await page.waitForURL('**/v2/auto-recharge/chatgpt-accounts');
+  await page.locator('a[href="/v2/account-settings/chatgpt-accounts"]').first().click();
+  await page.waitForURL('**/v2/account-settings/chatgpt-accounts');
   await page.locator('a[href="/v2/auto-recharge/bank-orders"]').first().click();
   await page.waitForURL('**/v2/auto-recharge/bank-orders');
   await page.getByRole('button', { name: '收费与手续费设置', exact: true }).click();
@@ -1137,7 +1137,7 @@ try {
   await page.locator('.bank-recharge-renewals').screenshot({
     path: path.join(outputDir, 'bank-renewals-390.png')
   });
-  await page.goto(`${baseUrl}/v2/auto-recharge/chatgpt-accounts`, {
+  await page.goto(`${baseUrl}/v2/account-settings/chatgpt-accounts`, {
     waitUntil: 'domcontentloaded'
   });
   await page.getByText(account.emailMasked).waitFor({ state: 'visible' });

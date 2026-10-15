@@ -145,9 +145,9 @@
     {
       "path": "task-runner.cjs",
       "originalSha256": null,
-      "adaptedSha256": "1dbcf546a488869e513a992109ad6c446acc204798f75b580b5cbd2ebfd17184",
+      "adaptedSha256": "c81e954fdfd652a95524bd5a2bf9a24377585b4705a3e54816ab038379a81461",
       "changed": true,
-      "reason": "审计修复：续费未知结果明确保留待核对，禁止清除未知提交状态。"
+      "reason": "审计修复：续费未知结果明确保留待核对，禁止清除未知提交状态。 共用代理池适配：按任务/租约缓存解析，提取失败回写失败检测，保留已发布升级与原单行为。"
     },
     {
       "path": "test/checkout-outcomes.test.cjs",
@@ -362,9 +362,9 @@
     {
       "path": "upstream/mysql-store.js",
       "originalSha256": "b8d120cdafac6884da0bf9ef2f062965f89b17efcb6f1978f3831a4d3c0267b9",
-      "adaptedSha256": "77c92fc674ed5fd09068d1f506094cfdacf351bb4800074dcb95b3a5ecef15dc",
+      "adaptedSha256": "c5a6c9764a2f4aa4fa977b918f2b032abcb8e0ab068ea29a717100a71a15d60a",
       "changed": true,
-      "reason": "2026-10-15 Pro档位及升级适配：精确目标、官网报价、单次提交、实际付款方式与原单证据保护；不猜Pro500上游ID。保留既有必要适配。"
+      "reason": "2026-10-15 Pro档位及升级适配：精确目标、官网报价、单次提交、实际付款方式与原单证据保护；不猜Pro500上游ID。保留既有必要适配。 共用代理池适配：按任务/租约缓存解析，提取失败回写失败检测，保留已发布升级与原单行为。"
     },
     {
       "path": "upstream/package-lock.json",
@@ -505,6 +505,20 @@
       "adaptedSha256": "464f1c1c0d41b00da1b3e08d376376dabe455d24c4f301ca6abf00792f1b93c6",
       "changed": true,
       "reason": "Native independent worker with private health, bounded signal shutdown, outcome transaction completion and lease-safe interrupted jobs; browser/solver transient data never enters persisted media/model volume."
+    },
+    {
+      "path": "proxy-connection.cjs",
+      "originalSha256": null,
+      "adaptedSha256": "c3908966fca3a5bcbd45939f8c898bbe3001fd967d835c699d44c4f56ce2912f",
+      "changed": true,
+      "reason": "Shared proxy pool connection compatibility and isolated fixture regression tests."
+    },
+    {
+      "path": "test/proxy-pool.test.cjs",
+      "originalSha256": null,
+      "adaptedSha256": "4ad357ce5e8317c1344dffc5f08cac773d7222162a6a21558284ee018854445c",
+      "changed": true,
+      "reason": "Shared proxy pool connection compatibility and isolated fixture regression tests."
     }
   ],
   "dependencySecurityPatches": [

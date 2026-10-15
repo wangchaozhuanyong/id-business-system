@@ -225,8 +225,8 @@ export class OnlineRechargeAdminRepository {
           ? ids(input)
           : (
               await this.repository.read((db) =>
-                db.onlineRechargeProxy.findMany({
-                  where: { status: 'active' },
+                db.idBusinessV2RechargeProxy.findMany({
+                  where: { active: true },
                   select: { id: true },
                   take: 500
                 })
@@ -234,7 +234,18 @@ export class OnlineRechargeAdminRepository {
             ).map((row) => row.id);
       const tasks: unknown[] = [];
       for (const proxyId of selected)
-        tasks.push(await this.tasks.start({ proxyId }, operator, 'proxy_test'));
+        tasks.push(
+          await this.tasks.start(
+            {
+              proxyId,
+              ...(input.proxyPoolReference === true || (!input.id && !input.ids)
+                ? { proxyPoolReference: true }
+                : {})
+            },
+            operator,
+            'proxy_test'
+          )
+        );
       return { tasks };
     }
     if (section === 'config' && action === 'test') {

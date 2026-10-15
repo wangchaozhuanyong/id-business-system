@@ -6,6 +6,7 @@ const LOCAL_MYSQL_HOSTS = new Set(['127.0.0.1', 'localhost']);
 
 export const V2_RUNTIME_DELETE_TABLES = Object.freeze([
   'id_business_v2_bank_recharge_cards',
+  'id_business_v2_recharge_proxies',
   'id_business_v2_exchange_rate_provider_snapshots',
   'id_business_v2_exchange_rate_quote_samples',
   'id_business_v2_exchange_rate_runs',

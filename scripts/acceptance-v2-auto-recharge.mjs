@@ -216,9 +216,8 @@ try {
           return success(route, { cardId: '44444444-4444-4444-8444-444444444444' });
         if (path.endsWith('/auto-recharge/payment-caps'))
           throw new Error('已移除的付款上限不应继续请求');
-        if (path.endsWith('/auto-recharge/proxies/countries'))
-          return success(route, { items: ['PH'] });
-        if (path.endsWith('/auto-recharge/proxies'))
+        if (path.endsWith('/proxy-pool/countries')) return success(route, { items: ['PH'] });
+        if (path.endsWith('/proxy-pool'))
           return success(route, {
             items: [
               {
@@ -887,7 +886,7 @@ try {
     await form.getByLabel('窗口名称', { exact: true }).fill('升级草稿保留验收');
     await fillPayment();
     await form.getByRole('link', { name: 'ChatGPT 账号', exact: true }).click();
-    await page.waitForURL('**/v2/auto-recharge/chatgpt-accounts');
+    await page.waitForURL('**/v2/account-settings/chatgpt-accounts');
     await page.goBack();
     await form.waitFor();
     assert.equal(

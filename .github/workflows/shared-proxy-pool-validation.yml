@@ -1,0 +1,65 @@
+name: Shared Proxy Pool Publication Validation
+on:
+  push:
+    branches: [codex/shared-proxy-pool-published-base-20261015]
+permissions:
+  contents: read
+concurrency:
+  group: shared-proxy-pool-publication-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      NODE_ENV: test
+      JWT_SECRET: synthetic-shared-proxy-ci-only
+      FIELD_ENCRYPTION_KEY: synthetic-shared-proxy-field-key
+      HASH_SECRET: synthetic-shared-proxy-hash-key
+      V2_BUILD_ID: v2-${{ github.sha }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci --no-audit
+      - run: npm run prisma:mysql:generate && npm run prisma:mysql:validate
+      - run: npm run typecheck && npm run build
+      - name: Verify the seven V2 controls and affected source
+        run: |
+          for check in check:admin-ui check:v2-ui-language check:v2-color-contrast check:v2-table-standard check:v2-loading-standard check:v2-module-architecture check:v2-isolation check:v2-prisma-runtime-boundary check:v2-concurrency-standard; do npm run "$check"; done
+          node scripts/shared-proxy-publication.mjs controls
+      - name: Verify both recharge systems and the shared pool
+        run: |
+          npm run test --workspace @apple-business/admin -- src/v2/features/auto-recharge src/v2/features/proxy-pool src/v2/features/online-recharge src/v2/features/registry.spec.ts src/v2/router/routes.spec.ts
+          npm run test --workspace @apple-business/api -- src/id-business-v2/auto-recharge src/id-business-v2/proxy-pool src/id-business-v2/online-recharge
+          npm ci --prefix apps/api/src/id-business-v2/online-recharge/engine/upstream --ignore-scripts --no-audit --no-fund
+          npm run test:online-recharge:engine
+          npm run test:online-recharge:controls
+      - name: Verify real migrations and repository operations on owned empty MySQL
+        run: |
+          python3 -B scripts/ci-recharge-migration.py
+          node scripts/acceptance-v2-shared-proxy-mysql.mjs
+          npm run acceptance:v2-production-database-access
+      - name: Verify actual routes with synthetic data
+        run: |
+          npx playwright install --with-deps chromium
+          node scripts/acceptance-v2-recharge-proxies-ui.mjs
+          npm run acceptance:v2-online-recharge-ui
+          npm run acceptance:v2-auto-recharge
+      - name: Independently reproduce the published baseline and package the scoped overlay
+        run: node scripts/shared-proxy-publication.mjs package
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: shared-proxy-publication-${{ github.sha }}
+          path: |
+            .runtime/shared-proxy-release/
+            .runtime/shared-proxy-mysql/result.json
+            .runtime/shared-proxy-pool-ui/
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 30

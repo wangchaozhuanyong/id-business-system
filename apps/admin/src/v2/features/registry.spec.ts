@@ -43,7 +43,7 @@ describe('V2 feature registry', () => {
     });
     try {
       const runtime = await import('./runtimeRegistry');
-      expect(runtime.v2RuntimeFeatureRegistry).toHaveLength(49);
+      expect(runtime.v2RuntimeFeatureRegistry).toHaveLength(48);
       expect(runtime.getV2RuntimeModuleDefinition('accounts')?.loadView).toBeTypeOf('function');
     } finally {
       vi.doUnmock('@/v2/features/tableSchemas');
@@ -58,7 +58,7 @@ describe('V2 feature registry', () => {
 
     expect(new Set(keys).size).toBe(keys.length);
     expect(new Set(routes).size).toBe(routes.length);
-    expect(v2FeatureRegistry).toHaveLength(49);
+    expect(v2FeatureRegistry).toHaveLength(48);
   });
 
   it('keeps the removed registration names module retired', () => {
@@ -85,7 +85,7 @@ describe('V2 feature registry', () => {
     ).toEqual(['auto-registration.apple-mailboxes']);
   });
 
-  it('registers all fifteen online recharge pages immediately after automatic recharge', () => {
+  it('registers online recharge pages without a duplicate proxy pool immediately after automatic recharge', () => {
     const sectionIndex = v2NavigationSections.findIndex(
       (section) => section.key === 'auto-recharge'
     );
@@ -108,7 +108,6 @@ describe('V2 feature registry', () => {
       'online-recharge-runtime-logs',
       'online-recharge-billing',
       'online-recharge-cards',
-      'online-recharge-proxies',
       'online-recharge-addresses',
       'online-recharge-browser-pool',
       'online-recharge-cdks',
@@ -132,25 +131,22 @@ describe('V2 feature registry', () => {
     });
     expect(
       v2NavigationSections.find((section) => section.key === 'auto-recharge')?.items
-    ).toHaveLength(8);
+    ).toHaveLength(5);
     expect(
       v2NavigationSections
         .find((section) => section.key === 'auto-recharge')
         ?.items.map((item) => item.key)
     ).toEqual([
       'auto-recharge',
-      'chatgpt-accounts',
       'bank-recharge-cards',
-      'recharge-proxies',
       'bank-recharge-orders',
-      'vendure-mailbox',
       'auto-recharge-addresses',
       'auto-recharge-names'
     ]);
     expect(v2FeatureRegistry.find((feature) => feature.key === 'vendure-mailbox')).toMatchObject({
       title: '邮件验证码查询',
-      route: '/v2/auto-recharge/mailbox',
-      group: '自动充值',
+      route: '/v2/account-settings/mailbox',
+      group: '账号设置',
       kind: 'list',
       requiredRoles: ['admin']
     });
@@ -162,6 +158,19 @@ describe('V2 feature registry', () => {
       kind: 'list',
       requiredRoles: ['admin']
     });
+  });
+
+  it('groups shared account resources under one account settings navigation', () => {
+    const section = v2NavigationSections.find((item) => item.key === 'account-settings');
+    expect(section?.title).toBe('账号设置');
+    expect(section?.items.map((item) => item.key)).toEqual([
+      'chatgpt-accounts',
+      'vendure-mailbox',
+      'recharge-proxies'
+    ]);
+    expect(section?.items.every((item) => item.route.startsWith('/v2/account-settings/'))).toBe(
+      true
+    );
   });
 
   it('keeps routing, access and loading behavior in each feature manifest', () => {

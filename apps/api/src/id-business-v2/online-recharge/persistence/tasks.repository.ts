@@ -254,6 +254,7 @@ export class OnlineRechargeTasksRepository {
         'action',
         'target',
         'proxyId',
+        'proxyPoolReference',
         'ids',
         'mode',
         'size',

@@ -159,7 +159,7 @@ try {
       })
     });
   });
-  await page.goto(`${url}/v2/auto-recharge/chatgpt-accounts`);
+  await page.goto(`${url}/v2/account-settings/chatgpt-accounts`);
   await page.getByText(accounts[0].emailMasked, { exact: true }).waitFor();
   for (const theme of ['light', 'dark']) {
     await page.evaluate((theme) => {

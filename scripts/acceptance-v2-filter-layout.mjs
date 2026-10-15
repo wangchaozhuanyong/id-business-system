@@ -309,7 +309,7 @@ try {
         sensitiveDisplayModeLabels: {},
         generatedAt: now
       };
-    } else if (url.pathname.endsWith('/auto-recharge/proxies')) {
+    } else if (url.pathname.endsWith('/proxy-pool')) {
       const number = Number(url.searchParams.get('page') || 1);
       const empty = url.searchParams.get('keyword') === 'empty';
       data = {
@@ -408,7 +408,7 @@ try {
         }
       }
       await page.setViewportSize({ width: 1440, height: 1000 });
-      await page.goto(new URL('/v2/auto-recharge/proxies', baseUrl).href);
+      await page.goto(new URL('/v2/account-settings/proxies', baseUrl).href);
       await page.getByRole('main').getByText('布局验收', { exact: true }).waitFor();
       await page.locator('.el-pagination .btn-next').click();
       await page.getByText('最后一页', { exact: true }).waitFor();

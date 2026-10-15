@@ -3,8 +3,8 @@ import { defineV2Feature } from '@/v2/features/feature';
 export const vendureMailboxFeature = defineV2Feature({
   key: 'vendure-mailbox',
   title: '邮件验证码查询',
-  group: '自动充值',
-  route: '/v2/auto-recharge/mailbox',
+  group: '账号设置',
+  route: '/v2/account-settings/mailbox',
   sourceSheet: 'Vendure 邮件验证码查询',
   requiredRoles: ['admin'],
   kind: 'list',

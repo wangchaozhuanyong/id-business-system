@@ -1,3 +1,4 @@
+import { isSharedProxyPoolOnly } from './ci-shared-proxy-scope.mjs';
 import { execFileSync } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
@@ -421,6 +422,25 @@ if (part === 'guards') {
     'scripts/admin-layout-rules.test.mjs'
   ]);
 }
+// The shared pool changes business source and an additive migration. Keep all
+// applicable checks; unrelated historical publishers are unchanged inputs.
+if (
+  part === 'guards' &&
+  mode === 'recharge' &&
+  isSharedProxyPoolOnly(
+    changed,
+    execFileSync('git', ['show', `${base}:apps/api/prisma-mysql/schema.prisma`], {
+      encoding: 'utf8'
+    }),
+    readFileSync('apps/api/prisma-mysql/schema.prisma', 'utf8')
+  )
+) {
+  run('node', ['--test', 'scripts/ci-shared-proxy-scope.test.mjs', productionDatabaseAccessTest]);
+  npm('run', 'test:online-recharge:controls');
+  for (const check of backendArchitectureGuardChecks(mode, changed)) npm('run', check);
+  console.log('Shared pool controls verified; API, UI and disposable MySQL run in their own jobs.');
+  process.exit(0);
+}
 // The finite diagnostic controls have their own native tests above. The common
 // format, lint and CI-selector contracts have also run. Business source remains
 // subject to the formal workflow's immutable source and prior-validation proof.
@@ -803,6 +823,7 @@ if (releaseArtifactOnly && ['guards', 'release-controls'].includes(part)) {
       '--',
       'src/id-business-v2/auto-recharge',
       ...(hasAppleMailboxScope(changed) ? ['src/id-business-v2/auto-registration'] : []),
+      ...(changed.some((p) => p.includes('/proxy-pool/')) ? ['src/id-business-v2/proxy-pool'] : []),
       ...(changed.some((p) => p.startsWith('apps/api/src/id-business-v2/online-recharge/'))
         ? ['src/id-business-v2/online-recharge']
         : []),
@@ -865,7 +886,14 @@ if (releaseArtifactOnly && ['guards', 'release-controls'].includes(part)) {
         '--python=' + resolve('.runtime/auto-registration/venv/bin/python')
       ]);
     }
-  } else run('python3', ['scripts/ci-recharge-migration.py']);
+  } else {
+    run('python3', ['scripts/ci-recharge-migration.py']);
+    if (changed.some((path) => path.includes('/proxy-pool/'))) {
+      npm('run', 'prisma:mysql:generate');
+      shared();
+      run('node', ['scripts/acceptance-v2-shared-proxy-mysql.mjs']);
+    }
+  }
 } else if (part === 'connector') {
   const workerDirectory = 'apps/api/src/id-business-v2/auto-recharge/worker';
   const fullPro = changed.some((path) =>

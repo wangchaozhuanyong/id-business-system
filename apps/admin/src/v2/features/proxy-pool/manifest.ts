@@ -3,10 +3,10 @@ import { defineV2Feature } from '@/v2/features/feature';
 export const rechargeProxiesFeature = defineV2Feature({
   key: 'recharge-proxies',
   title: '代理 IP 管理',
-  group: '自动充值',
-  route: '/v2/auto-recharge/proxies',
+  group: '账号设置',
+  route: '/v2/account-settings/proxies',
   sourceSheet: '充值代理 IP',
-  requiredRoles: ['admin'],
+  permission: 'id_business_v2.online_recharge.read',
   kind: 'list',
   freshnessPolicy: 'event-driven',
   filters: [
@@ -17,5 +17,5 @@ export const rechargeProxiesFeature = defineV2Feature({
     import('@/v2/features/tableSchemas').then(
       ({ v2TablesByFeature }) => v2TablesByFeature['recharge-proxies']
     ),
-  loadView: () => import('./V2RechargeProxiesView.vue')
+  loadView: () => import('./V2ProxyPoolView.vue')
 });
