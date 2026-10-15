@@ -973,6 +973,16 @@ export function backendArchitectureGuardChecks(mode, paths) {
     : [];
 }
 
+export function rechargeAvailabilityGuardChecks(paths) {
+  if (!isRechargeAvailabilityRepairOnly(paths)) return undefined;
+  return [
+    ...new Set([
+      ...adminUiGuardChecks('recharge', paths),
+      ...backendArchitectureGuardChecks('recharge', paths)
+    ])
+  ];
+}
+
 export function adminCheckCommands(mode, paths) {
   const commands = [['run', 'build', '--workspace', '@apple-business/shared']];
   if (mode === 'mailbox') {

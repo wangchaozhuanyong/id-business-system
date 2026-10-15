@@ -9,6 +9,7 @@ import {
   needsOnlineRechargeCiBuild,
   selectedParts
 } from './ci-recharge-scope.mjs';
+import { rechargeAvailabilityGuardChecks } from './ci-recharge-scope.mjs';
 
 const contract = JSON.parse(
   readFileSync('scripts/production-release/recharge-availability-contract.json', 'utf8')
@@ -33,6 +34,33 @@ test('publication controls alone do not repeat application checks', () => {
   assert.equal(isRechargeAvailabilityControlsOnly(paths), false);
   assert.equal(isRechargeAvailabilityControlsOnly([]), false);
   assert.equal(needsOnlineRechargeCiBuild(controls), false);
+});
+test('finite availability still runs every mandatory UI and backend architecture rule', () => {
+  const checks = rechargeAvailabilityGuardChecks(paths);
+  for (const name of [
+    'check:admin-ui',
+    'check:v2-ui-language',
+    'check:v2-color-contrast',
+    'check:v2-table-standard',
+    'check:v2-loading-standard',
+    'check:v2-module-architecture',
+    'check:v2-isolation',
+    'check:v2-decimal-standard',
+    'check:v2-prisma-runtime-boundary',
+    'check:v2-concurrency-standard'
+  ])
+    assert.ok(checks.includes(name));
+  assert.equal(rechargeAvailabilityGuardChecks(controls), undefined);
+  assert.equal(rechargeAvailabilityGuardChecks([...paths, 'apps/api/Dockerfile.mysql']), undefined);
+  const program = readFileSync('scripts/ci-recharge-check.mjs', 'utf8');
+  assert.ok(
+    program.indexOf('const checks = rechargeAvailabilityGuardChecks(changed)') >
+      program.indexOf("'scripts/ci-recharge-scope.test.mjs'")
+  );
+  assert.ok(
+    program.indexOf('const checks = rechargeAvailabilityGuardChecks(changed)') <
+      program.indexOf('const readonlyQualityMetadataOnly')
+  );
 });
 for (const extra of [
   'apps/api/src/id-business-v2/online-recharge/worker.service.ts',
