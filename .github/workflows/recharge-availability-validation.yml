@@ -55,10 +55,17 @@ jobs:
         run: python3 -B scripts/production-release/recharge-availability-release.test.py
       - name: Prepare exact published sources and approved delta
         run: python3 -B scripts/production-release/recharge-availability-build.py prepare
+      - name: Verify original isolated database evidence for unchanged inputs
+        id: database_evidence
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 -B scripts/production-release/recharge-availability-build.py database-evidence
       - name: Migrate only the disposable runner database
+        if: steps.database_evidence.outputs.reuse != 'true'
         working-directory: .deploy/recharge-availability-release/candidate
         run: npm run prisma:mysql:migrate:deploy
       - name: Verify availability queries, locking, idempotency and audit rollback in isolated MySQL
+        if: steps.database_evidence.outputs.reuse != 'true'
         working-directory: .deploy/recharge-availability-release/candidate
         env:
           V2_RECHARGE_TEST_DATABASE_URL: ${{ env.DATABASE_URL }}
