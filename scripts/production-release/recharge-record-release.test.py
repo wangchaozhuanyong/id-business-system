@@ -20,6 +20,33 @@ build_spec.loader.exec_module(build)
 
 
 class RepairPublicationTests(unittest.TestCase):
+    def test_native_application_reuse_requires_exact_sources_commands_and_validate_job(self):
+        contract = json.loads((HERE / 'recharge-record-contract.json').read_bytes())
+        prior = contract['priorApplicationValidation']
+        native = {'head_sha': prior['commit'], 'head_branch': 'main', 'event': 'workflow_dispatch',
+                  'run_attempt': 1, 'path': '.github/workflows/recharge-record-validation.yml'}
+        job = {'name': 'validate', 'status': 'completed', 'conclusion': 'success'}
+        with patch.object(build, 'platform_json', side_effect=[native, {'jobs': [job]}]):
+            result = build.verify_prior_application_validation(contract)
+            self.assertTrue(result['candidateSourceUnchanged'])
+            self.assertFalse(result['publicationReused'])
+        for bad in ({**native, 'head_sha': '0' * 40}, {**native, 'run_attempt': 2}):
+            with patch.object(build, 'platform_json', return_value=bad), self.assertRaisesRegex(
+                    RuntimeError, 'PRIOR_VALIDATION_IDENTITY_CHANGED'):
+                build.verify_prior_application_validation(contract)
+        with patch.object(build, 'platform_json', side_effect=[native, {'jobs': [{**job, 'conclusion': 'failure'}]}]), self.assertRaisesRegex(
+                RuntimeError, 'PRIOR_APPLICATION_CHECKS_NOT_SUCCESSFUL'):
+            build.verify_prior_application_validation(contract)
+        for field in ('changedSources', 'validationOnlySources'):
+            changed = copy.deepcopy(contract)
+            changed[field]['unpublished'] = '0' * 64
+            with self.assertRaisesRegex(RuntimeError, 'PRIOR_VALIDATION_SOURCE_CHANGED'):
+                build.verify_prior_application_validation(changed)
+        changed = copy.deepcopy(contract)
+        changed['priorApplicationValidation']['workflowSha256'] = '0' * 64
+        with self.assertRaisesRegex(RuntimeError, 'PRIOR_VALIDATION_COMMANDS_CHANGED'):
+            build.verify_prior_application_validation(changed)
+
     def test_main_sync_admits_only_exact_published_source_and_keeps_repair_hashes(self):
         runtime = HERE.parents[1] / '.runtime'
         runtime.mkdir(exist_ok=True)
@@ -108,8 +135,44 @@ class RepairPublicationTests(unittest.TestCase):
         self.assertEqual(len(value['changedSources']), 12)
         self.assertFalse(any('online-recharge/' in name or 'schema.prisma' in name
                              for name in value['changedSources']))
-        self.assertEqual(release.PRESERVED, ('mysql', 'caddy', 'media-resolver',
+        self.assertEqual(release.PRESERVED, ('admin', 'mysql', 'caddy', 'media-resolver',
                                             'auto-recharge', 'auto-registration'))
+        self.assertEqual(value['preservedAdminCommit'], '95d3e506d45522124598ec6af291eb22ff9f8f81')
+        self.assertEqual(value['engineHealth'], {'ready': True, 'mode': 'enabled', 'activeTasks': 0,
+                                               'stopping': False, 'rpcConnected': True})
+
+    def test_existing_enabled_engine_must_remain_idle_connected_and_exact(self):
+        contract = json.loads((HERE / 'recharge-record-contract.json').read_bytes())
+        expected = contract['engineHealth']
+        d = Mock()
+        d.run.side_effect = [json.dumps(expected), json.dumps({'readOnlyRpcReady': True})]
+        self.assertEqual(release.engine_idle(d, {'containerId': 'engine'}, contract), expected)
+        for changed in ({**expected, 'activeTasks': 1}, {**expected, 'mode': 'credentials-only'},
+                        {**expected, 'rpcConnected': False}):
+            with self.subTest(changed=changed), self.assertRaisesRegex(RuntimeError, 'ONLINE_NOT_IDLE'):
+                d.run.side_effect = [json.dumps(changed)]
+                release.engine_idle(d, {'containerId': 'engine'}, contract)
+        self.assertTrue(all(call.args[:2] == ('docker', 'exec') for call in d.run.call_args_list))
+        d.run.side_effect = [json.dumps({**expected, 'rpcConnected': False}), json.dumps(expected),
+                             json.dumps({'readOnlyRpcReady': True})]
+        with patch.object(release.time, 'sleep') as sleep:
+            self.assertEqual(release.engine_idle(d, {'containerId': 'engine'}, contract,
+                                                 wait_connected=True), expected)
+            sleep.assert_called_once_with(2)
+        d.run.side_effect = [json.dumps({**expected, 'activeTasks': 1})]
+        with self.assertRaisesRegex(RuntimeError, 'ONLINE_NOT_IDLE'):
+            release.engine_idle(d, {'containerId': 'engine'}, contract, wait_connected=True)
+
+    def test_preserved_admin_content_is_exact_and_never_part_of_candidate(self):
+        contract = json.loads((HERE / 'recharge-record-contract.json').read_bytes())
+        d = Mock()
+        rows = [sha + '  /usr/share/nginx/html/' + name for name, sha in contract['publicFiles'].items()]
+        d.run.return_value = '\n'.join(rows)
+        release.verify_admin_content(d, {'containerId': 'admin'}, contract)
+        d.run.return_value = '\n'.join(rows[:-1])
+        with self.assertRaisesRegex(RuntimeError, 'PRESERVED_ADMIN_CONTENT_CHANGED'):
+            release.verify_admin_content(d, {'containerId': 'admin'}, contract)
+        self.assertEqual(d.run.call_args.args[:4], ('docker', 'exec', 'admin', 'sha256sum'))
 
     def test_archive_rejects_escape_duplicate_links_and_oversize(self):
         for names, kind in [(['payload/../../secret'], tarfile.REGTYPE),
@@ -135,25 +198,32 @@ class RepairPublicationTests(unittest.TestCase):
             payload = Path(root)
             (payload / 'api').mkdir()
             (payload / 'api/recharge-validation.js').write_text('export const safe = true;')
-            (payload / 'admin/html').mkdir(parents=True)
-            (payload / 'admin/html/index.html').write_text('<html></html>')
             for name in contract['changedSources']:
                 path = payload / 'source' / name
                 path.parent.mkdir(parents=True, exist_ok=True)
                 path.write_bytes((HERE.parents[1] / name).read_bytes())
-            proof = {'version': 1, 'scope': release.SCOPE, **plan,
+            proof = {'version': 2, 'scope': release.SCOPE, **plan,
                      'sourceBaseline': contract['sourceBaseline'],
                      'liveManifestSha256': contract['manifestSha256'],
-                     'baselineApiReproduced': True, 'baselineAdminReproduced': True,
-                     'updatedServices': ['api', 'admin'], 'dependentServiceRebound': 'online-recharge',
+                     'baselineApiReproduced': True, 'baselineAdminPreserved': True,
+                     'preservedAdminImageId': contract['services']['admin']['image'],
+                     'preservedAdminFilesSha256': contract['preservedAdminFilesSha256'],
+                     'updatedServices': ['api'], 'dependentServiceRebound': 'online-recharge',
                      'migrationPerformed': False, 'businessActions': 0,
                      'files': release.file_inventory(payload)}
             self.assertEqual(release.validate_proof(proof, plan, contract, payload), proof)
+            (payload / 'admin/html').mkdir(parents=True)
+            (payload / 'admin/html/index.html').write_text('<html>must not deploy</html>')
+            with self.assertRaisesRegex(RuntimeError, 'BUILD_CONTENT_CHANGED'):
+                release.validate_proof({**proof, 'files': release.file_inventory(payload)}, plan, contract, payload)
+            (payload / 'admin/html/index.html').unlink()
             for field, value in [('commit', 'd' * 40), ('tree', 'e' * 40), ('workflowRunId', '999'),
                                  ('workflowRunAttempt', '2'), ('baselineApiReproduced', False),
-                                 ('baselineAdminReproduced', False), ('migrationPerformed', True),
-                                 ('businessActions', 1), ('businessActions', False), ('version', True),
-                                 ('updatedServices', ['api', 'admin', 'mysql'])]:
+                                 ('baselineAdminPreserved', False), ('migrationPerformed', True),
+                                 ('businessActions', 1), ('businessActions', False), ('version', True), ('version', 1),
+                                 ('preservedAdminImageId', 'sha256:' + '0' * 64),
+                                 ('preservedAdminFilesSha256', '0' * 64),
+                                 ('updatedServices', ['api', 'admin'])]:
                 with self.subTest(field=field), self.assertRaisesRegex(RuntimeError, 'BUILD_PROOF_INVALID'):
                     release.validate_proof({**proof, field: value}, plan, contract, payload)
             (payload / 'api/payment-executor.js').write_text('extra')

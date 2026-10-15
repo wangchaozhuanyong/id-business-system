@@ -1,4 +1,5 @@
 """Build the finite diagnostic repair and reproduce the live predecessor content."""
+import ast
 import hashlib
 import io
 import json
@@ -41,6 +42,43 @@ def git(*args):
     return subprocess.check_output(['git', *args], cwd=ROOT).decode().strip()
 
 
+def platform_json(path):
+    result = subprocess.run(['gh', 'api', 'repos/wangchaozhuanyong/id-business-system/' + path],
+                            cwd=ROOT, capture_output=True)
+    need(result.returncode == 0, 'PRIOR_VALIDATION_PLATFORM_UNAVAILABLE')
+    return json.loads(result.stdout)
+
+
+def verify_prior_application_validation(contract):
+    prior = contract['priorApplicationValidation']
+    need(prior['sourceBaseline'] == contract['sourceBaseline'], 'PRIOR_VALIDATION_SOURCE_CHANGED')
+    old = json.loads(git('show', prior['commit'] + ':scripts/production-release/recharge-record-contract.json'))
+    need(all(old.get(key) == contract.get(key) for key in
+             ('sourceBaseline', 'sourceBaselineTree', 'changedSources', 'validationOnlySources')),
+         'PRIOR_VALIDATION_SOURCE_CHANGED')
+    workflow = git('show', prior['commit'] + ':.github/workflows/recharge-record-validation.yml')
+    need(digest(workflow.encode()) == prior['workflowSha256'], 'PRIOR_VALIDATION_COMMANDS_CHANGED')
+    functions = {'prepare', 'extract_source', 'run'}
+    def preparation(source):
+        return {node.name: ast.dump(node, include_attributes=False) for node in ast.parse(source).body
+                if isinstance(node, ast.FunctionDef) and node.name in functions}
+    need(preparation(git('show', prior['commit'] + ':scripts/production-release/recharge-record-build.py'))
+         == preparation(Path(__file__).read_text()), 'PRIOR_VALIDATION_PREPARATION_CHANGED')
+    native = platform_json('actions/runs/' + prior['runId'])
+    need(native['head_sha'] == prior['commit'] and native['head_branch'] == 'main'
+         and native['event'] == 'workflow_dispatch' and native['run_attempt'] == 1
+         and native['path'] == '.github/workflows/recharge-record-validation.yml',
+         'PRIOR_VALIDATION_IDENTITY_CHANGED')
+    jobs = platform_json('actions/runs/' + prior['runId'] + '/attempts/1/jobs')['jobs']
+    validators = [job for job in jobs if job['name'] == 'validate']
+    need(len(validators) == 1 and validators[0]['status'] == 'completed'
+         and validators[0]['conclusion'] == 'success', 'PRIOR_APPLICATION_CHECKS_NOT_SUCCESSFUL')
+    return {'status': 'PRIOR_NATIVE_APPLICATION_CHECKS_REUSED', 'workflowRunId': prior['runId'],
+            'commit': prior['commit'], 'candidateSourceUnchanged': True,
+            'reused': ['diagnostic-and-form-tests', 'seven-ui-boundaries', 'connector-tests'],
+            'publicationReused': False}
+
+
 def matches_published_source(name, baseline):
     current = git('ls-tree', 'HEAD', '--', name)
     published = git('ls-tree', baseline, '--', name)
@@ -57,10 +95,17 @@ def verify_scope(contract):
     need(set(validation_only) <= {'apps/api/src/id-business-v2/auto-recharge/worker/test_payment.py'},
          'VALIDATION_SCOPE_CHANGED')
     sources = {**contract['changedSources'], **validation_only}
-    # Main may synchronize source that was already in the frozen live image.
-    # Admit it only with the identical Git blob and mode, never other WIP.
-    need(set(sources) <= changed and all(matches_published_source(name, contract['sourceBaseline'])
-                                       for name in changed - set(sources)), 'SOURCE_SCOPE_CHANGED')
+    # Admit only source already present in the immutable published API/Admin/engine roles.
+    published = {}
+    for role in ('Admin', 'Engine'):
+        for name, expected in contract.get('published' + role + 'Sources', {}).items():
+            commit = contract['preserved' + role + 'Commit']
+            need(digest(subprocess.check_output(['git', 'show', commit + ':' + name], cwd=ROOT)) == expected,
+                 'PUBLISHED_SOURCE_CHANGED')
+            published[name] = commit
+    need(set(sources) <= changed and all(
+        matches_published_source(name, published.get(name, contract['sourceBaseline']))
+        for name in changed - set(sources)), 'SOURCE_SCOPE_CHANGED')
     need(all(digest((ROOT / name).read_bytes()) == sha
              for name, sha in sources.items()), 'REPAIR_SOURCE_CHANGED')
     need(not git('status', '--porcelain', '--untracked-files=no'), 'SOURCE_DIRTY')
@@ -128,38 +173,30 @@ def build():
     verify_scope(contract)
     baseline, candidate = OUTPUT / 'baseline', OUTPUT / 'candidate'
     run('npm', 'run', 'build', '--workspace', 'apps/api', cwd=baseline)
-    admin_dependencies(baseline)
-    baseline_env = {**os.environ, 'NODE_ENV': 'production',
-                    'V2_BUILD_ID': 'v2-' + contract['sourceBaseline']}
-    run('npm', 'run', 'build', '--workspace', 'apps/admin', cwd=baseline, env=baseline_env)
     need(digest((baseline / MODULE).read_bytes()) == contract['apiValidationSha256'],
          'BASELINE_API_NOT_REPRODUCED')
-    need(inventory(baseline / 'apps/admin/dist') == contract['publicFiles'],
-         'BASELINE_ADMIN_NOT_REPRODUCED')
     run('npm', 'run', 'typecheck', '--workspace', 'apps/api', cwd=candidate)
     run('npm', 'run', 'build', '--workspace', 'apps/api', cwd=candidate)
-    admin_dependencies(candidate)
     commit, tree = git('rev-parse', 'HEAD'), git('rev-parse', 'HEAD^{tree}')
-    run('npm', 'run', 'build', '--workspace', 'apps/admin',
-        cwd=candidate, env={**os.environ, 'NODE_ENV': 'production', 'V2_BUILD_ID': 'v2-' + commit})
     payload = OUTPUT / 'payload'
     (payload / 'api').mkdir(parents=True)
     shutil.copyfile(candidate / MODULE, payload / 'api/recharge-validation.js')
-    shutil.copytree(candidate / 'apps/admin/dist', payload / 'admin/html')
     for name in contract['changedSources']:
         path = payload / 'source' / name
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes((candidate / name).read_bytes())
-    proof = {'version': 1, 'scope': 'RECHARGE_RECORD_DIAGNOSTICS_ONLY',
+    proof = {'version': 2, 'scope': 'RECHARGE_RECORD_DIAGNOSTICS_ONLY',
              'commit': commit, 'tree': tree, 'contractSha256': digest(CONTRACT.read_bytes()),
              'workflowRunId': os.environ['GITHUB_RUN_ID'],
              'workflowRunAttempt': os.environ['GITHUB_RUN_ATTEMPT'],
              'sourceBaseline': contract['sourceBaseline'],
              'liveManifestSha256': contract['manifestSha256'],
-             'baselineApiReproduced': True, 'baselineAdminReproduced': True,
+             'baselineApiReproduced': True, 'baselineAdminPreserved': True,
+             'preservedAdminImageId': contract['services']['admin']['image'],
+             'preservedAdminFilesSha256': contract['preservedAdminFilesSha256'],
              'controllerSha256': digest((ROOT / 'scripts/production-release/recharge-record-release.py').read_bytes()),
              'releaseUtilitySha256': digest((ROOT / 'scripts/production-release/remote-deploy.py').read_bytes()),
-             'files': inventory(payload), 'updatedServices': ['api', 'admin'],
+             'files': inventory(payload), 'updatedServices': ['api'],
              'dependentServiceRebound': 'online-recharge',
              'migrationPerformed': False, 'businessActions': 0}
     (payload / 'build-proof.json').write_text(json.dumps(proof, sort_keys=True, indent=2) + '\n')
@@ -172,5 +209,10 @@ def build():
 
 
 if __name__ == '__main__':
-    need(sys.argv[1:] in (['prepare'], ['build']), 'BUILD_MODE_INVALID')
-    prepare() if sys.argv[1] == 'prepare' else build()
+    need(sys.argv[1:] in (['prepare'], ['build'], ['verify-prior-validation']), 'BUILD_MODE_INVALID')
+    if sys.argv[1] == 'verify-prior-validation':
+        contract = json.loads(CONTRACT.read_bytes())
+        verify_scope(contract)
+        print(json.dumps(verify_prior_application_validation(contract), sort_keys=True))
+    else:
+        prepare() if sys.argv[1] == 'prepare' else build()
