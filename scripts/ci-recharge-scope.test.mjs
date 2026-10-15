@@ -9,7 +9,9 @@ import {
 } from './ci-registration-closure-scope.mjs';
 import {
   isRegistrationEnvironmentRepair,
-  registrationEnvironmentRepairBase
+  registrationEnvironmentRepairBase,
+  isRegistrationDeclarationRepair,
+  registrationDeclarationRepairBase
 } from './ci-registration-closure-scope.mjs';
 import { imageInputsChanged } from './ci-recharge-python-image.mjs';
 import { adminHtmlCachePaths, isAdminHtmlCacheOnly } from './ci-recharge-scope.mjs';
@@ -27,7 +29,9 @@ test('formal registration engine dependency repair is exact and never admits bus
   ];
   const options = {
     base: registrationEnvironmentRepairBase,
-    baseTree: 'a1ffd620d2b79630b9c1e9db700d6af765f33a50'
+    baseTree: 'a1ffd620d2b79630b9c1e9db700d6af765f33a50',
+    readSource: (path) =>
+      execFileSync('git', ['show', 'cd7bba03bec1742328e0829c215823bda1fd3fae:' + path])
   };
   assert.equal(isRegistrationEnvironmentRepair(paths, options), true);
   assert.equal(checkMode(paths, schema, schema), 'ci-only');
@@ -53,6 +57,53 @@ test('formal registration engine dependency repair is exact and never admits bus
   for (const drift of paths)
     assert.equal(
       isRegistrationEnvironmentRepair(paths, {
+        ...options,
+        readSource: (path) =>
+          path === drift ? Buffer.from('UNREVIEWED') : options.readSource(path)
+      }),
+      false,
+      drift
+    );
+});
+
+test('single proven Prisma declaration propagation has its own exact control-only case', () => {
+  const paths = [
+    'scripts/production-release/registration-closure-contract.json',
+    'scripts/production-release/registration-closure-release.test.py'
+  ];
+  const options = {
+    base: registrationDeclarationRepairBase,
+    baseTree: '874102957cbd6cc921e05e5bba252e63bd09fd85'
+  };
+  assert.equal(isRegistrationDeclarationRepair(paths, options), true);
+  assert.equal(checkMode(paths, schema, schema), 'ci-only');
+  assert.deepEqual(selectedParts(paths), ['guards']);
+  for (const extra of [
+    'apps/api/src/id-business-v2/auto-recharge/persistence/recharge-card-removal.repository.ts',
+    'apps/admin/src/v2/features/auto-registration/api.ts',
+    'packages/shared/src/index.ts',
+    'apps/api/prisma-mysql/schema.prisma',
+    'package-lock.json',
+    '.github/workflows/quality.yml',
+    '.github/workflows/registration-closure-validation.yml',
+    'scripts/production-release/registration-closure-build.py',
+    'scripts/production-release/registration-closure-release.py',
+    'scripts/ci-registration-closure-native-reuse.mjs',
+    'scripts/ci-registration-closure-native-reuse.test.mjs'
+  ])
+    assert.equal(isRegistrationDeclarationRepair([...paths, extra], options), false, extra);
+  assert.equal(
+    isRegistrationDeclarationRepair(paths, { ...options, base: registrationEnvironmentRepairBase }),
+    false
+  );
+  assert.equal(
+    isRegistrationDeclarationRepair(paths, { ...options, baseTree: 'a'.repeat(40) }),
+    false
+  );
+  assert.equal(isRegistrationDeclarationRepair(paths.slice(1), options), false);
+  for (const drift of paths)
+    assert.equal(
+      isRegistrationDeclarationRepair(paths, {
         ...options,
         readSource: (path) => (path === drift ? Buffer.from('UNREVIEWED') : readFileSync(path))
       }),

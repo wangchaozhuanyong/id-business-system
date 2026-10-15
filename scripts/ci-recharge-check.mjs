@@ -1,7 +1,9 @@
 import { readRegistrationNativeReuse } from './ci-registration-closure-native-reuse.mjs';
 import {
   isRegistrationEnvironmentRepair,
-  registrationEnvironmentRepairBase
+  registrationEnvironmentRepairBase,
+  isRegistrationDeclarationRepair,
+  registrationDeclarationRepairBase
 } from './ci-registration-closure-scope.mjs';
 import { isRechargeCheckoutOnly } from './ci-recharge-checkout-scope.mjs';
 import { isRechargeBillingOnly } from './ci-recharge-billing-scope.mjs';
@@ -68,6 +70,15 @@ const registrationEnvironmentRepair =
     base,
     baseTree: execFileSync('git', ['rev-parse', base + '^{tree}'], { encoding: 'utf8' }).trim()
   });
+const registrationDeclarationRepair =
+  part === 'guards' &&
+  mode === 'ci-only' &&
+  base === registrationDeclarationRepairBase &&
+  isRegistrationDeclarationRepair(changed, {
+    base,
+    baseTree: execFileSync('git', ['rev-parse', base + '^{tree}'], { encoding: 'utf8' }).trim()
+  });
+const registrationOwnControlRepair = registrationEnvironmentRepair || registrationDeclarationRepair;
 const sharedPoolOnly =
   mode === 'recharge' &&
   changed.some((path) => path.includes('/proxy-pool/')) &&
@@ -533,7 +544,7 @@ if (part === 'guards') {
   const linted = existing.filter((p) => /\.(?:mjs|ts|vue)$/.test(p));
   if (formatted.length) npm('exec', '--', 'prettier', '--check', ...formatted);
   if (linted.length) npm('exec', '--', 'eslint', ...linted);
-  const commonControlTests = registrationEnvironmentRepair
+  const commonControlTests = registrationOwnControlRepair
     ? [
         'scripts/ci-recharge-scope.test.mjs',
         'scripts/ci-recharge-check.test.mjs',
@@ -563,7 +574,7 @@ if (part === 'guards') {
         ]);
   run('node', ['--test', ...commonControlTests]);
 }
-if (registrationEnvironmentRepair) {
+if (registrationOwnControlRepair) {
   process.exit(0);
 }
 // The shared pool changes business source and an additive migration. Keep all
