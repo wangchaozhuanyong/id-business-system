@@ -107,7 +107,7 @@ const onlineCiBuildInputs = new Set([
   'deploy/nginx/admin.conf'
 ]);
 export function needsOnlineRechargeCiBuild(paths) {
-  if (isRechargeRecordRepairOnly(paths)) return false;
+  if (isRechargeRecordRepairOnly(paths) || isRechargeRecordControlsOnly(paths)) return false;
   return (
     !isReleaseArtifactRetentionOnly(paths) &&
     paths.some(

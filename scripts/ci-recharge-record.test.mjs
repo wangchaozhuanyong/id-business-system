@@ -61,6 +61,7 @@ const controlsOnly = [
 ];
 test('finite control updates keep their own and common selector checks without repeating unrelated controls', () => {
   assert.equal(isRechargeRecordControlsOnly(controlsOnly), true);
+  assert.equal(needsOnlineRechargeCiBuild(controlsOnly), false);
   assert.equal(isRechargeRecordControlsOnly([]), false);
   assert.equal(isRechargeRecordControlsOnly(['docs/V2_TASKS.md']), false);
   const program = readFileSync('scripts/ci-recharge-check.mjs', 'utf8');
@@ -83,5 +84,6 @@ for (const extra of [
 ]) {
   test(`control-only path excludes ${extra}`, () => {
     assert.equal(isRechargeRecordControlsOnly([...controlsOnly, extra]), false);
+    assert.equal(needsOnlineRechargeCiBuild([...controlsOnly, extra]), true);
   });
 }
