@@ -166,6 +166,11 @@ try {
         path = url.pathname;
       if (url.origin === origin && !path.startsWith('/api/')) return route.continue();
       if (url.origin === origin) {
+        if (path === '/api/realtime/events')
+          return route.fulfill({
+            contentType: 'text/event-stream',
+            body: ': synthetic heartbeat\n\n'
+          });
         if (path === '/api/auth/me') return success(route, user);
         if (path === '/api/auth/session')
           return success(route, { accessToken: 'browser-fixture', user });

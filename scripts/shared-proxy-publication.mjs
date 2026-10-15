@@ -6,7 +6,7 @@ import { resolve, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 const root = fileURLToPath(new URL('../', import.meta.url));
 const baseline = '04aa234505adccfe295776245b88fc56feac0588';
-const adminBaseline = '7f419903e9335c00524f5065f46920e8f24f2722';
+const adminBaseline = '4aa49436239ab57e9deb3b5890e645ceeef25149';
 const output = resolve(root, '.runtime/shared-proxy-release');
 const run = (file, args, options = {}) =>
   execFileSync(file, args, { cwd: root, stdio: 'inherit', ...options });
@@ -63,7 +63,7 @@ if (process.argv[2] === 'controls') {
   ])
     .split('\n')
     .filter(Boolean);
-  assert.equal(adminFiles.length, 9);
+  assert.equal(adminFiles.length, 10);
   assert.ok(
     adminFiles.every((path) => path.startsWith('apps/admin/src/v2/features/auto-recharge/'))
   );

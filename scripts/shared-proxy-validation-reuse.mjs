@@ -12,6 +12,7 @@ assert.equal(process.env.GITHUB_REPOSITORY, repository);
 const changed = command('git', ['diff', '--name-only', previous, 'HEAD']).split('\n');
 const controls = new Set([
   'scripts/shared-proxy-publication.mjs',
+  'apps/admin/src/v2/features/auto-recharge/RechargeResult.vue',
   'apps/admin/src/v2/features/auto-recharge/bitbrowser-direct-api.ts',
   'apps/admin/src/v2/features/auto-recharge/bitbrowser-direct-login.spec.ts',
   'apps/admin/src/v2/features/auto-recharge/bitbrowser-direct-login.ts',
@@ -26,6 +27,7 @@ const controls = new Set([
   'scripts/shared-proxy-validation-reuse.mjs',
   'scripts/acceptance-v2-online-recharge-ui.mjs',
   'scripts/acceptance-v2-recharge-proxies-ui.mjs',
+  'scripts/acceptance-v2-auto-recharge.mjs',
   'apps/api/src/id-business-v2/online-recharge/engine/task-runner.cjs',
   'apps/api/src/id-business-v2/online-recharge/engine/SOURCE_MANIFEST.json'
 ]);

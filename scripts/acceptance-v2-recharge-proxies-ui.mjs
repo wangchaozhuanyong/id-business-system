@@ -134,6 +134,13 @@ try {
           return;
         }
         let data;
+        if (endpoint === '/api/realtime/events') {
+          await route.fulfill({
+            contentType: 'text/event-stream',
+            body: ': synthetic heartbeat\n\n'
+          });
+          return;
+        }
         if (endpoint.endsWith('/auth/me') || endpoint.endsWith('/auth/session')) data = user;
         else if (endpoint.endsWith('/id-business-v2/branding/public'))
           data = {
