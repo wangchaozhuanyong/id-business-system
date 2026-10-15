@@ -4,6 +4,8 @@ import { resolve } from 'node:path';
 import {
   adminCheckCommands,
   rechargeRecordControlPaths,
+  rechargeAvailabilityControlPaths,
+  isRechargeAvailabilityControlsOnly,
   isRechargeRecordControlsOnly,
   releaseArtifactRetentionControls,
   isReleaseArtifactRetentionOnly,
@@ -46,6 +48,13 @@ const changed = execFileSync('git', ['diff', '--name-only', base, 'HEAD'], { enc
   .trim()
   .split('\n')
   .filter(Boolean);
+if (
+  ['guards', 'release-controls'].includes(part) &&
+  changed.some((p) => rechargeAvailabilityControlPaths.includes(p))
+) {
+  run('python3', ['-B', 'scripts/production-release/recharge-availability-release.test.py']);
+  run('node', ['--test', 'scripts/ci-recharge-availability.test.mjs']);
+}
 const releaseArtifactOnly = mode === 'ci-only' && isReleaseArtifactRetentionOnly(changed);
 if (
   ['guards', 'release-controls'].includes(part) &&
@@ -424,6 +433,8 @@ if (part === 'guards') {
 // The finite diagnostic controls have their own native tests above. The common
 // format, lint and CI-selector contracts have also run. Business source remains
 // subject to the formal workflow's immutable source and prior-validation proof.
+if (part === 'guards' && mode === 'ci-only' && isRechargeAvailabilityControlsOnly(changed))
+  process.exit(0);
 if (part === 'guards' && mode === 'ci-only' && isRechargeRecordControlsOnly(changed)) {
   console.log('Finite recharge record controls verified; unrelated release controls unchanged');
   process.exit(0);
