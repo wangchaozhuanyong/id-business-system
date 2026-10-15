@@ -1,8 +1,11 @@
 import copy
 import importlib.util
 import json
+import hashlib
+import io
 from pathlib import Path
 import tempfile
+import tarfile
 import types
 import unittest
 from unittest.mock import Mock
@@ -22,6 +25,33 @@ release = load('release', 'recharge-record-release.py')
 
 
 class ExistingSwitchTests(unittest.TestCase):
+    def test_original_archive_is_verified_without_reusing_the_modified_build_directory(self):
+        root = HERE.parents[1] / '.runtime'
+        with tempfile.TemporaryDirectory(prefix='record-proof-', dir=root) as directory:
+            stage = Path(directory)
+            modified = stage / 'content/payload/api/Dockerfile'
+            modified.parent.mkdir(parents=True)
+            modified.write_text('generated after original proof validation')
+            proof = {'files': {'api/module.js': 'fixture'}}
+            raw = json.dumps(proof).encode()
+            stream = io.BytesIO()
+            with tarfile.open(fileobj=stream, mode='w:gz') as archive:
+                info = tarfile.TarInfo('payload/build-proof.json')
+                info.size = len(raw)
+                archive.addfile(info, io.BytesIO(raw))
+            module = Mock()
+            module.safe_archive = release.safe_archive
+            module.digest = release.digest
+            def check(value, plan, contract, payload):
+                self.assertEqual(value, proof)
+                self.assertFalse((payload / 'api/Dockerfile').exists())
+                return value
+            module.validate_proof.side_effect = check
+            self.assertEqual(finalize.verified_proof(module, stream.getvalue(),
+                {'buildProofSha256': hashlib.sha256(raw).hexdigest()}, {}, stage), proof)
+            self.assertTrue(modified.exists())
+            self.assertEqual(list(stage.glob('finalization-proof-*')), [])
+
     def test_only_image_and_release_paths_may_change_in_resolved_declarations(self):
         old = {'services': {'api': {'image': 'old:api', 'environment': {'fixture': 'same'},
                                    'build': {'context': '/previous', 'dockerfile': '/previous/context'}},

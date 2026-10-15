@@ -4,6 +4,7 @@ import fcntl
 import hashlib
 import json
 from pathlib import Path
+import tempfile
 
 
 def need(condition, code):
@@ -13,6 +14,16 @@ def need(condition, code):
 
 def fingerprint(value):
     return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
+
+
+def verified_proof(m, artifact, plan, contract, stage):
+    # The original build added its Dockerfile to the extracted build directory.
+    # Revalidate the immutable archive, never that subsequently modified directory.
+    with tempfile.TemporaryDirectory(prefix='finalization-proof-', dir=stage) as directory:
+        payload = m.safe_archive(artifact, Path(directory) / 'original')
+        proof_raw = (payload / 'build-proof.json').read_bytes()
+        need(m.digest(proof_raw) == plan['buildProofSha256'], 'PROOF_CHANGED')
+        return m.validate_proof(json.loads(proof_raw), plan, contract, payload)
 
 
 def declared_models(d, previous, target, before_reference, after_reference):
@@ -92,10 +103,8 @@ def finalize(m, d, plan, contract, expected_after, original_failure, finalizer_c
                  for v in after.values()), 'SERVICE_UNHEALTHY')
         artifact = (stage / 'artifact.tar.gz').read_bytes()
         need(m.digest(artifact) == plan['artifactSha256'], 'ARTIFACT_CHANGED')
-        payload = stage / 'content/payload'
-        proof_raw = (payload / 'build-proof.json').read_bytes()
-        need(m.digest(proof_raw) == plan['buildProofSha256'], 'PROOF_CHANGED')
-        proof = m.validate_proof(json.loads(proof_raw), plan, contract, payload)
+        proof = verified_proof(m, artifact, plan, contract, stage)
+        payload = None  # The original completion tail only needs the verified proof.
         for name, expected in {**contract['changedSources'], **contract['publishedAdminSources']}.items():
             path = target / name
             need(path.resolve().is_relative_to(target) and not path.is_symlink()
