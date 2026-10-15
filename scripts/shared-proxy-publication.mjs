@@ -99,6 +99,20 @@ if (process.argv[2] === 'controls') {
   const schemaDir = resolve(packageDir, 'schema');
   mkdirSync(schemaDir, { recursive: true });
   cpSync(resolve(root, migration), resolve(schemaDir, 'migration.sql'));
+  cpSync(resolve(root, 'apps/api/prisma-mysql/migrations'), resolve(schemaDir, 'migrations'), {
+    recursive: true
+  });
+  for (const name of [
+    'package.json',
+    'package-lock.json',
+    'apps/api/package.json',
+    'apps/admin/package.json',
+    'packages/shared/package.json'
+  ]) {
+    const destination = resolve(packageDir, 'migration/npm', name);
+    mkdirSync(resolve(destination, '..'), { recursive: true });
+    cpSync(resolve(root, name), destination);
+  }
   cpSync(resolve(root, 'apps/api/prisma-mysql/schema.prisma'), resolve(schemaDir, 'schema.prisma'));
   cpSync(
     resolve(root, 'scripts/lib/v2-production-database-access.mjs'),

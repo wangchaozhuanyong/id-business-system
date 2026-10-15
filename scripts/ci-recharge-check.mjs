@@ -965,6 +965,19 @@ if (releaseArtifactOnly && ['guards', 'release-controls'].includes(part)) {
   );
 } else if (part === 'security') {
   if (
+    mode === 'recharge' &&
+    isSharedProxyPoolOnly(
+      changed,
+      execFileSync('git', ['show', `${base}:apps/api/prisma-mysql/schema.prisma`], {
+        encoding: 'utf8'
+      }),
+      readFileSync('apps/api/prisma-mysql/schema.prisma', 'utf8')
+    )
+  ) {
+    npm('ci', '--no-audit');
+    npm('run', 'prisma:mysql:generate');
+    npm('run', 'acceptance:v2-production-database-access');
+  } else if (
     mode === 'ci-only' &&
     changed.some((path) =>
       [productionDatabaseAccessHelper, productionDatabaseAccessAcceptance].includes(path)
