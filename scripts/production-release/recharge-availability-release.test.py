@@ -25,6 +25,62 @@ dispatch = load('availability_test_dispatch', 'recharge-availability-dispatch.py
 
 
 class AvailabilityPublicationTests(unittest.TestCase):
+    def test_lock_waits_for_an_existing_publication_and_returns_a_closed_busy_code(self):
+        lock=Mock()
+        with patch.object(release.fcntl,'flock',side_effect=[BlockingIOError,None]) as flock, \
+             patch.object(release.time,'monotonic',side_effect=[0,1]),patch.object(release.time,'sleep') as sleep:
+            release.acquire_release_lock(lock)
+            self.assertEqual(flock.call_count,2);sleep.assert_called_once_with(1)
+        with patch.object(release.fcntl,'flock',side_effect=BlockingIOError), \
+             patch.object(release.time,'monotonic',side_effect=[0,61]),patch.object(release.time,'sleep') as sleep:
+            with self.assertRaisesRegex(RuntimeError,'PUBLICATION_BUSY'):release.acquire_release_lock(lock)
+            sleep.assert_not_called()
+
+    def test_published_admin_inventory_keeps_both_generations_of_assets_and_the_actual_index(self):
+        c={'publicFiles':{'index.html':'old-index','assets/old.js':'old-asset'},
+           'publishedAdminSuccessor':{'publicFiles':{'index.html':'current-index','assets/new.js':'new-asset'}}}
+        self.assertEqual(release.published_admin_files(c),{
+            'index.html':'current-index','assets/old.js':'old-asset','assets/new.js':'new-asset'})
+
+    def test_successor_archive_rejects_wrong_origin_extra_files_and_changed_static_content(self):
+        binding={'sourceCommit':'a'*40,'archiveBytes':0,'archiveSha256':'',
+                 'publicFiles':{'index.html':build.digest(b'published-index')},'roleProjection':{'role':'admin'}}
+        binding['publicInventorySha256']=build.digest(json.dumps(binding['publicFiles'],sort_keys=True,separators=(',',':')).encode())
+        metadata={'commit':binding['sourceCommit'],'roleProjection':binding['roleProjection'],
+                  'newStaticFiles':binding['publicFiles'],'newStaticSha256':binding['publicInventorySha256']}
+        def bundle(meta,content=b'published-index',extra=False):
+            data={'compiled-manifest.json':json.dumps(meta).encode(),'admin/Dockerfile':b'FROM published-base',
+                  'admin/dist/index.html':content}
+            if extra:data['source/unapproved.ts']=b'unapproved'
+            out=io.BytesIO()
+            with tarfile.open(fileobj=out,mode='w:gz') as archive:
+                for name,raw in data.items():
+                    item=tarfile.TarInfo(name);item.size=len(raw);archive.addfile(item,io.BytesIO(raw))
+            return out.getvalue()
+        raw=bundle(metadata);reviewed={**binding,'archiveBytes':len(raw),'archiveSha256':build.digest(raw)}
+        build.verify_successor_archive(raw,reviewed)
+        with self.assertRaisesRegex(RuntimeError,'SUCCESSOR_ARCHIVE_CHANGED'):
+            build.verify_successor_archive(raw+b'changed',reviewed)
+        for value,code in [(bundle({**metadata,'commit':'b'*40}),'SUCCESSOR_MANIFEST_CHANGED'),
+                           (bundle(metadata,extra=True),'SUCCESSOR_ARCHIVE_SCOPE_INVALID'),
+                           (bundle(metadata,content=b'changed-index'),'SUCCESSOR_STATIC_CHANGED')]:
+            changed={**reviewed,'archiveBytes':len(value),'archiveSha256':build.digest(value)}
+            with self.assertRaisesRegex(RuntimeError,code):build.verify_successor_archive(value,changed)
+
+    def test_database_reuse_pins_all_api_and_shared_inputs_while_admin_is_validated_separately(self):
+        c={'sourceBaseline':'reviewed-base','apiModules':{'api.js':'compiled'},'sources':{
+            'apps/api/src/test.ts':'api-source','packages/shared/src/type.ts':'shared-source',
+            'apps/admin/src/page.vue':'admin-source'}}
+        expected=build.database_inputs(c)
+        changed=copy.deepcopy(c);changed['sources']['apps/admin/src/page.vue']='published-admin-repair'
+        self.assertEqual(build.database_inputs(changed),expected)
+        for path in ('apps/api/src/test.ts','packages/shared/src/type.ts'):
+            changed=copy.deepcopy(c);changed['sources'][path]='unverified'
+            self.assertNotEqual(build.database_inputs(changed),expected)
+        for field in ('sourceBaseline','apiModules'):
+            changed=copy.deepcopy(c);changed[field]='unverified'
+            self.assertNotEqual(build.database_inputs(changed),expected)
+
     def test_download_accepts_only_this_exact_compiled_asset_and_never_changes_the_legacy_helper(self):
         commit='a'*40
         url='https://github.com/wangchaozhuanyong/id-business-system/releases/download/recharge-availability-'+commit+'/recharge-availability-artifact.tar.gz'
@@ -300,7 +356,10 @@ class AvailabilityPublicationTests(unittest.TestCase):
     def test_contract_only_replaces_reviewed_recharge_modules_and_no_schema(self):
         contract = json.loads((HERE / 'recharge-availability-contract.json').read_bytes())
         self.assertEqual(contract['scope'], 'RECHARGE_PAYMENT_AVAILABILITY_ONLY')
-        self.assertEqual(contract['expectedCurrent'], '04aa234505adccfe295776245b88fc56feac0588')
+        self.assertEqual(contract['expectedCurrent'], '7f419903e9335c00524f5065f46920e8f24f2722')
+        self.assertEqual(contract['sourceBaseline'], '04aa234505adccfe295776245b88fc56feac0588')
+        self.assertEqual(contract['publishedAdminSuccessor']['sourceCommit'],contract['expectedCurrent'])
+        self.assertEqual(len(contract['publishedAdminSuccessor']['repairSources']),9)
         for name in contract['sources']:
             self.assertTrue(name.startswith(('apps/admin/src/v2/features/auto-recharge/',
                 'apps/api/src/id-business-v2/auto-recharge/', 'packages/shared/src/v2/auto-recharge.ts', 'docs/')))
@@ -372,6 +431,31 @@ class AvailabilityPublicationTests(unittest.TestCase):
             changed['apiModules']['id-business-v2/unrelated.js'] = build.digest(extra.read_bytes())
             with self.assertRaisesRegex(RuntimeError, 'PAYLOAD_SCOPE_INVALID'):
                 release.validate_proof(changed, plan, contract, root, helper)
+
+    def test_successor_native_proof_and_both_original_archives_are_required(self):
+        temporary=build.ROOT/'.runtime/recharge-payment-availability-20261015'
+        with tempfile.TemporaryDirectory(dir=temporary) as directory:
+            root=Path(directory);contract,plan,proof=self.fixture(root)
+            for name,raw in [('baseline-admin-successor-native.tar.gz',b'compiled-predecessor'),
+                             ('baseline-admin-successor-quality-native.zip',b'native-quality-evidence')]:
+                (root/name).write_bytes(raw)
+            files=build.inventory(root)
+            contract['publishedAdminSuccessor']={'sourceCommit':'a'*40,'sourceTree':'b'*40,
+                'archiveSha256':files['baseline-admin-successor-native.tar.gz'],'publicInventorySha256':'c'*64,
+                'roleProjection':{'inputSha256':'d'*64},'quality':{'runId':1,
+                    'artifactDigest':'sha256:'+files['baseline-admin-successor-quality-native.zip']}}
+            proof['files']=files
+            proof['baselineAdminSuccessorVerification']=build.successor_receipt(contract)
+            self.assertEqual(proof['baselineAdminSuccessorVerification'],release.successor_receipt(contract))
+            helper=Mock(file_inventory=build.inventory)
+            release.validate_proof(proof,plan,contract,root,helper)
+            changed=copy.deepcopy(proof);changed['baselineAdminSuccessorVerification']['verified']=False
+            with self.assertRaisesRegex(RuntimeError,'SUCCESSOR_PROOF_INVALID'):
+                release.validate_proof(changed,plan,contract,root,helper)
+            (root/'baseline-admin-successor-native.tar.gz').write_bytes(b'changed-predecessor')
+            proof['files']=build.inventory(root)
+            with self.assertRaisesRegex(RuntimeError,'SUCCESSOR_PAYLOAD_CHANGED'):
+                release.validate_proof(proof,plan,contract,root,helper)
 
     def test_module_probe_rejects_any_predecessor_drift_with_read_only_command(self):
         d = Mock()

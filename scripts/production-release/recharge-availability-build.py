@@ -107,14 +107,123 @@ def verify_published_admin(contract):
     return raw, receipt
 
 
+def published_admin_inputs(commit):
+    if subprocess.run(['git','cat-file','-e',commit+'^{commit}'],cwd=ROOT,
+                      stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL).returncode:
+        run('git','fetch','--no-tags','origin',commit)
+    entries = []
+    for row in filter(None, git('ls-tree','-r','-z',commit).split(b'\0')):
+        header, raw_name = row.split(b'\t',1)
+        mode, kind, oid = header.decode().split()
+        name = raw_name.decode()
+        if name.startswith(('apps/admin/','packages/shared/')) or name in {
+                'package.json','package-lock.json','tsconfig.base.json','.npmrc'} or name.endswith('/package.json'):
+            need(kind == 'blob' and mode in ('100644','100755'), 'SUCCESSOR_SOURCE_MODE_INVALID')
+            entries.append((name,mode,oid))
+    raw = subprocess.check_output(['git','cat-file','--batch'],cwd=ROOT,
+                                 input=''.join(oid+'\n' for _,_,oid in entries).encode())
+    position, files = 0, {}
+    for name,mode,oid in entries:
+        end = raw.index(b'\n',position)
+        header = raw[position:end].decode().split()
+        need(header[:2] == [oid,'blob'], 'SUCCESSOR_SOURCE_OBJECT_INVALID')
+        length = int(header[2])
+        content = raw[end+1:end+1+length]
+        need(raw[end+1+length:end+2+length] == b'\n', 'SUCCESSOR_SOURCE_OBJECT_INVALID')
+        files[name] = {'mode':mode,'sha256':digest(content)}
+        position = end+2+length
+    need(position == len(raw), 'SUCCESSOR_SOURCE_OBJECT_INVALID')
+    return files
+
+
+def successor_receipt(contract):
+    binding = contract['publishedAdminSuccessor']
+    return {key:binding[key] for key in ('sourceCommit','sourceTree','archiveSha256','publicInventorySha256')} | {
+        'inputSha256':binding['roleProjection']['inputSha256'],'qualityRunId':binding['quality']['runId'],'verified':True}
+
+
+def verify_successor_archive(raw, binding):
+    need(len(raw) == binding['archiveBytes'] and digest(raw) == binding['archiveSha256'], 'SUCCESSOR_ARCHIVE_CHANGED')
+    with tarfile.open(fileobj=io.BytesIO(raw)) as archive:
+        members = archive.getmembers()
+        names = [item.name for item in members]
+        expected = {'compiled-manifest.json','admin/Dockerfile'} | {'admin/dist/'+n for n in binding['publicFiles']}
+        need(len(names) == len(set(names)) and set(names) == expected
+             and all(item.isfile() and 0 <= item.size <= 8*1024**2 for item in members), 'SUCCESSOR_ARCHIVE_SCOPE_INVALID')
+        metadata = json.loads(archive.extractfile('compiled-manifest.json').read())
+        need(metadata == {'commit':binding['sourceCommit'],'roleProjection':binding['roleProjection'],
+                          'newStaticFiles':binding['publicFiles'],'newStaticSha256':binding['publicInventorySha256']},
+             'SUCCESSOR_MANIFEST_CHANGED')
+        actual = {name:digest(archive.extractfile('admin/dist/'+name).read()) for name in binding['publicFiles']}
+    need(actual == binding['publicFiles'] and digest(json.dumps(actual,sort_keys=True,separators=(',',':')).encode())
+         == binding['publicInventorySha256'], 'SUCCESSOR_STATIC_CHANGED')
+
+
+def verify_published_admin_successor(contract):
+    binding = contract['publishedAdminSuccessor']
+    quality = binding['quality']
+    projection = binding['roleProjection']
+    canonical = lambda value: json.dumps(value,sort_keys=True,separators=(',',':')).encode()
+    files = published_admin_inputs(binding['sourceCommit'])
+    need(projection['commit'] == binding['sourceCommit'] and projection['sourceTree'] == binding['sourceTree']
+         == git('rev-parse',binding['sourceCommit']+'^{tree}').decode().strip()
+         and projection['publishedBaseCommit'] == contract['sourceBaseline']
+         and projection['retainedPublishedAdminSource'] == contract['sourceBaseline']
+         and len(files) == projection['inputFileCount'] and digest(canonical(files)) == projection['inputSha256']
+         and {name:files[name] for name in binding['repairSources']} == binding['repairSources']
+         and digest(canonical(binding['repairSources'])) == projection['repairInputsSha256'], 'SUCCESSOR_INPUTS_CHANGED')
+    changed = set(git('diff','--name-only',contract['sourceBaseline'],binding['sourceCommit'],'--',*files).decode().splitlines())
+    need(changed == set(binding['repairSources']) and len(changed) == 9, 'SUCCESSOR_SOURCE_SCOPE_CHANGED')
+    native = platform_json('actions/runs/'+str(quality['runId']))
+    need(native['head_sha'] == binding['sourceCommit'] and native['head_branch'] == quality['headBranch']
+         and native['event'] == 'pull_request' and native['path'] == '.github/workflows/quality.yml'
+         and native['status'] == 'completed' and native['conclusion'] == 'success' and native['run_attempt'] == 1,
+         'SUCCESSOR_QUALITY_CHANGED')
+    jobs = platform_json('actions/runs/'+str(quality['runId'])+'/attempts/1/jobs?per_page=100')['jobs']
+    states = {job['name']:job['conclusion'] for job in jobs}
+    need(all(states.get(n) == 'success' for n in ('change-scope','recharge (guards)','recharge (admin)','quality'))
+         and all(v in ('success','skipped') for v in states.values()), 'SUCCESSOR_QUALITY_NOT_SUCCESSFUL')
+    artifacts = platform_json('actions/runs/'+str(quality['runId'])+'/artifacts')['artifacts']
+    matches = [a for a in artifacts if a['id'] == quality['artifactId']]
+    need(len(matches) == 1 and not matches[0]['expired'] and matches[0]['name'] == 'quality-source-evidence-1'
+         and matches[0]['digest'] == quality['artifactDigest'], 'SUCCESSOR_QUALITY_ARTIFACT_CHANGED')
+    quality_zip = platform_bytes('actions/artifacts/'+str(quality['artifactId'])+'/zip')
+    need('sha256:'+digest(quality_zip) == quality['artifactDigest'], 'SUCCESSOR_QUALITY_DIGEST_CHANGED')
+    with zipfile.ZipFile(io.BytesIO(quality_zip)) as archive:
+        need(archive.namelist() == ['evidence.json'] and json.loads(archive.read('evidence.json')) == quality['evidence'],
+             'SUCCESSOR_QUALITY_EVIDENCE_CHANGED')
+    need(quality['evidence']['headSha'] == binding['sourceCommit']
+         and quality['evidence']['testedTree'] == binding['sourceTree']
+         and quality['evidence']['repository'] == 'wangchaozhuanyong/id-business-system'
+         and quality['evidence']['runId'] == quality['runId'] and quality['evidence']['runAttempt'] == 1
+         and quality['evidence']['pullRequest'] == 502, 'SUCCESSOR_QUALITY_IDENTITY_CHANGED')
+    release = platform_json('releases/tags/'+binding['releaseTag'])
+    assets = [a for a in release['assets'] if a['id'] == binding['assetId']]
+    need(release['id'] == binding['releaseId'] and release['tag_name'] == binding['releaseTag']
+         and release['target_commitish'] == binding['sourceCommit'] and len(assets) == 1
+         and assets[0]['name'] == 'published-bit-login-admin-native.tar.gz'
+         and assets[0]['size'] == binding['archiveBytes'] and assets[0]['digest'] == 'sha256:'+binding['archiveSha256'],
+         'SUCCESSOR_ASSET_IDENTITY_CHANGED')
+    raw = subprocess.check_output(['gh','api','repos/wangchaozhuanyong/id-business-system/releases/assets/'+str(binding['assetId']),
+                                  '-H','Accept: application/octet-stream'],cwd=ROOT)
+    verify_successor_archive(raw,binding)
+    return raw, quality_zip, successor_receipt(contract)
+
+
+def database_inputs(contract):
+    # These MySQL suites import API/shared sources only. Published Admin-only
+    # repairs receive their own frontend validation and cannot change DB inputs.
+    return {'sourceBaseline': contract['sourceBaseline'], 'apiModules': contract['apiModules'],
+            'sources': {n: v for n, v in contract['sources'].items()
+                        if n.startswith(('apps/api/', 'packages/'))}}
+
+
 def verify_database_evidence(contract):
     binding = contract['databaseValidationNative']
     commit, run_id = binding['sourceCommit'], str(binding['runId'])
     old_raw = git('show', commit + ':scripts/production-release/recharge-availability-contract.json')
     old = json.loads(old_raw)
-    application = lambda c: {n: v for n, v in c['sources'].items() if n.startswith(('apps/', 'packages/'))}
-    need(old['sourceBaseline'] == contract['sourceBaseline'] and application(old) == application(contract)
-         and old['apiModules'] == contract['apiModules'], 'DATABASE_INPUTS_CHANGED')
+    need(database_inputs(old) == database_inputs(contract), 'DATABASE_INPUTS_CHANGED')
     path = '.github/workflows/recharge-availability-validation.yml'
     workflow = git('show', commit + ':' + path)
     current = (ROOT / path).read_bytes()
@@ -235,11 +344,14 @@ def build():
     permitted = verify_api_outputs(before, after, contract['apiModules'])
     # Reuse the exact original successful native Admin build; do not relabel a local rebuild.
     published_admin_zip, admin_verification = verify_published_admin(contract)
+    successor_raw, successor_quality_zip, successor_verification = verify_published_admin_successor(contract)
     run('npm', 'run', 'build', '--workspace', 'apps/admin', cwd=candidate,
         env={**os.environ, 'NODE_ENV': contract['adminNodeEnv'], 'V2_BUILD_ID': 'v2-' + git('rev-parse', 'HEAD').decode().strip()})
     payload = OUTPUT / 'payload'
     payload.mkdir()
     (payload / 'baseline-admin-native.zip').write_bytes(published_admin_zip)
+    (payload / 'baseline-admin-successor-native.tar.gz').write_bytes(successor_raw)
+    (payload / 'baseline-admin-successor-quality-native.zip').write_bytes(successor_quality_zip)
     for name in sorted(permitted):
         path = payload / 'api/modules' / name
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -257,7 +369,8 @@ def build():
              'helperSha256': digest(Path(__file__).with_name('recharge-record-release.py').read_bytes()),
              'baselineApiReproduced': True, 'baselineAdminArtifactVerified': True,
              'databaseVerification': json.loads((OUTPUT / 'database-evidence.json').read_bytes()),
-             'baselineAdminVerification': admin_verification, 'files': inventory(payload),
+             'baselineAdminVerification': admin_verification, 'baselineAdminSuccessorVerification': successor_verification,
+             'files': inventory(payload),
              'apiModules': {name: after[name] for name in sorted(permitted)},
              'adminFiles': inventory(candidate / 'apps/admin/dist'), 'updatedServices': ['api', 'admin'],
              'migrationPerformed': False, 'businessActions': 0}

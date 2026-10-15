@@ -16,6 +16,14 @@ export const rechargeAvailabilityControlPaths = Object.freeze([
   'scripts/ci-recharge-availability.test.mjs'
 ]);
 const rechargeAvailabilityApplicationPaths = new Set([
+  'apps/admin/src/v2/features/auto-recharge/bitbrowser-direct-api.ts',
+  'apps/admin/src/v2/features/auto-recharge/bitbrowser-direct-login.spec.ts',
+  'apps/admin/src/v2/features/auto-recharge/bitbrowser-direct-login.ts',
+  'apps/admin/src/v2/features/auto-recharge/bitbrowser-direct.spec.ts',
+  'apps/admin/src/v2/features/auto-recharge/bitbrowser-login-page.ts',
+  'apps/admin/src/v2/features/auto-recharge/recharge-presentation.spec.ts',
+  'apps/admin/src/v2/features/auto-recharge/useBitBrowserDirectOpen.spec.ts',
+  'apps/admin/src/v2/features/auto-recharge/useBitBrowserDirectOpen.ts',
   'apps/api/src/id-business-v2/auto-recharge/recharge-callback-receipts.spec.ts',
   'apps/admin/src/v2/features/auto-recharge/RechargeHistoryDrawer.vue',
   'apps/admin/src/v2/features/auto-recharge/RechargePaymentReview.vue',
