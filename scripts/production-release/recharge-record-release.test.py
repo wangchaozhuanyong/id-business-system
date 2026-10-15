@@ -7,7 +7,7 @@ import tarfile
 import tempfile
 import subprocess
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 HERE = Path(__file__).parent
 spec = importlib.util.spec_from_file_location('record_release', HERE / 'recharge-record-release.py')
@@ -16,6 +16,44 @@ spec.loader.exec_module(release)
 
 
 class RepairPublicationTests(unittest.TestCase):
+    def test_named_base_requires_exact_observed_image_id(self):
+        state = {'reference': 'id-business-v2-direct:f8a1612d-online-api', 'image': 'sha256:' + '1' * 64}
+        d = Mock()
+        d.run.return_value = json.dumps([{'Id': state['image']}])
+        self.assertEqual(release.base_image_reference(d, state), state['reference'])
+        d.run.assert_called_once_with('docker', 'image', 'inspect', state['reference'])
+        d.run.return_value = json.dumps([{'Id': 'sha256:' + '2' * 64}])
+        with self.assertRaisesRegex(RuntimeError, 'BASE_REFERENCE_CHANGED'):
+            release.base_image_reference(d, state)
+        with self.assertRaisesRegex(RuntimeError, 'BASE_REFERENCE_INVALID'):
+            release.base_image_reference(d, {**state, 'reference': state['reference'] + '\nRUN false'})
+        with self.assertRaisesRegex(RuntimeError, 'BASE_REFERENCE_INVALID'):
+            release.base_image_reference(d, {**state, 'reference': state['image']})
+
+    def test_actual_build_prefers_verified_local_base_and_preserves_safe_failure_receipt(self):
+        state = {'reference': 'id-business-v2-direct:f8a1612d-online-api', 'image': 'sha256:' + '1' * 64}
+        d = Mock()
+        with tempfile.TemporaryDirectory() as root:
+            stage = Path(root)
+            release.build_image(d, stage / 'api', 'candidate:1', 'api', state, stage)
+            d.run.assert_called_once_with('docker', 'build', '--pull=false', '--network', 'none',
+                                          '--tag', 'candidate:1', str(stage / 'api'), timeout=300)
+            self.assertEqual(json.loads((stage / 'api-image-build.json').read_text())['status'], 'BUILT')
+            d.run.side_effect = RuntimeError('pull access denied, insufficient_scope synthetic-private-registry-response')
+            with self.assertRaisesRegex(RuntimeError, 'API_IMAGE_BUILD_SOURCE_UNAVAILABLE'):
+                release.build_image(d, stage / 'api', 'candidate:1', 'api', state, stage)
+            raw = (stage / 'api-image-build.json').read_text()
+            receipt = json.loads(raw)
+            self.assertEqual(receipt['status'], 'FAILED')
+            self.assertEqual(receipt['failureKind'], 'SOURCE_UNAVAILABLE')
+            self.assertNotIn('synthetic-private-registry-response', raw)
+            for error, expected in ((subprocess.TimeoutExpired(['docker', 'build'], 300), 'TIMEOUT'),
+                                    (RuntimeError('synthetic-private-unknown-response'), 'COMMAND_FAILED')):
+                d.run.side_effect = error
+                with self.subTest(expected=expected), self.assertRaisesRegex(RuntimeError, 'IMAGE_BUILD_' + expected):
+                    release.build_image(d, stage / 'api', 'candidate:1', 'api', state, stage)
+                self.assertEqual(json.loads((stage / 'api-image-build.json').read_text())['failureKind'], expected)
+
     def test_actual_contract_preserves_latest_online_and_form_baseline(self):
         value = json.loads((HERE / 'recharge-record-contract.json').read_bytes())
         self.assertEqual(value['sourceBaseline'], 'f8a1612d9b465dc5cfb1534c9cc3c5640583cc80')
