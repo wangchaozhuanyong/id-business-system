@@ -26,7 +26,7 @@ LEFT JOIN `id_business_v2_recharge_proxies` i ON i.`id` = o.`id`;
 INSERT INTO `id_business_v2_recharge_proxies`
 (`id`, `country_code`, `kind`, `connection_mode`, `protocol`, `url_encrypted`, `url_hash`,
  `active`, `display_host`, `exit_ip`, `latency_ms`, `test_message`, `tested_at`, `created_at`, `updated_at`)
-SELECT a.`proxy_id`, NULL, NULL, 'direct', o.`protocol`, o.`connection_encrypted`, o.`connection_hash`,
+SELECT a.`proxy_id`, NULL, NULL, IF(o.`protocol` = 'extraction', 'extraction', 'direct'), IF(o.`protocol` = 'extraction', 'http', o.`protocol`), o.`connection_encrypted`, o.`connection_hash`,
  o.`status` = 'active', o.`display_host`, o.`exit_ip`, o.`latency_ms`, o.`test_message`, o.`tested_at`, o.`created_at`, o.`updated_at`
 FROM `online_recharge_proxies` o JOIN `id_business_v2_proxy_aliases` a ON a.`old_id` = o.`id`
 LEFT JOIN `id_business_v2_recharge_proxies` p ON p.`id` = a.`proxy_id`

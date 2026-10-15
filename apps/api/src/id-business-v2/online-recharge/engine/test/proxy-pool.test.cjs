@@ -16,6 +16,8 @@ test('direct proxy substitutes one session for all placeholders and keeps protoc
 });
 test('extraction understands JSON, plain endpoint and provider credentials', async () => {
   assert.equal(parseExtracted('8.8.8.8:8080', 'http'), 'http://8.8.8.8:8080');
+  assert.equal(parseExtracted(JSON.stringify({data:['8.8.8.8:8080:user:pass:word']}), 'http'), 'http://user:pass%3Aword@8.8.8.8:8080');
+  assert.equal(parseExtracted(JSON.stringify({data:{ip:'8.8.8.8',port:8080,user:'u',pwd:'p'}}), 'http'), 'http://u:p@8.8.8.8:8080');
   const result = await resolveProxy(
     {
       proxy_url: 'https://provider.example.test/api',
@@ -62,6 +64,7 @@ test('invalid responses and extraction failures cannot fall back to direct acces
 });
 test('one execution caches resolution and clears it with task credentials', async () => {
   store.clearCredentials();
+  rpc.configureTask({ id: 'shared-proxy-fixture', leaseVersion: 1 });
   let calls = 0;
   rpc.setTransportForTest(async (method) => {
     assert.equal(method, 'getActiveProxy');
@@ -83,10 +86,11 @@ test('one execution caches resolution and clears it with task credentials', asyn
 
 test('failed proxy resolution writes a failed detection instead of leaving stale success', async () => {
   store.clearCredentials();
+  rpc.configureTask({ id: 'shared-proxy-detection-fixture', leaseVersion: 1 });
   let report;
   rpc.setTransportForTest(async (method, args) => {
     if (method === 'getActiveProxy')
-      return { proxy_url: 'http://127.0.0.1:8080', protocol: 'http' };
+      return { proxy_url: 'http://127.0.0.1:8080', protocol: 'http', connectionMode: 'direct' };
     assert.equal(method, 'proxyTestResult');
     report = args;
     return { ok: true };

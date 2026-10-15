@@ -2,6 +2,7 @@ const schemaPath = 'apps/api/prisma-mysql/schema.prisma';
 export const sharedProxyMigration =
   'apps/api/prisma-mysql/migrations/20261015120000_shared_proxy_pool/migration.sql';
 const paths = new Set([
+  'scripts/acceptance-v2-production-database-access.mjs',
   'apps/admin/src/v2/features/auto-recharge/RechargePasswordLoginFields.vue',
   'apps/admin/src/v2/features/auto-recharge/RechargeProxyOptions.vue',
   'apps/admin/src/v2/features/auto-recharge/V2RechargeProxiesView.vue',

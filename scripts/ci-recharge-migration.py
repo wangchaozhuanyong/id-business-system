@@ -59,7 +59,8 @@ try:
     sql(f"INSERT INTO id_business_v2_recharge_proxies(id,country_code,kind,connection_mode,protocol,url_encrypted,url_hash,remark1,remark2,updated_at) VALUES ('{original}','PH','mobile','direct','http','synthetic-old','{'a'*64}','first','second',NOW(6));")
     sql(f"INSERT INTO id_business_v2_recharge_jobs(id,proxy_id) VALUES ('fixture-job','{original}');")
     for identity, digest, active in [(duplicate,'a', 'disabled'), (online,'b','active'), (original,'c','active')]:
-        sql(f"INSERT INTO online_recharge_proxies(id,connection_encrypted,connection_hash,display_host,protocol,status,exit_ip,latency_ms,test_message,tested_at,updated_at) VALUES ('{identity}','synthetic-online','{digest*64}','gateway.example.test:8080','http','{active}','8.8.8.8',25,'test fixture',NOW(6),NOW(6));")
+        protocol = 'extraction' if identity == online else 'http'
+        sql(f"INSERT INTO online_recharge_proxies(id,connection_encrypted,connection_hash,display_host,protocol,status,exit_ip,latency_ms,test_message,tested_at,updated_at) VALUES ('{identity}','synthetic-online','{digest*64}','gateway.example.test:8080','{protocol}','{active}','8.8.8.8',25,'test fixture',NOW(6),NOW(6));")
     sql((migrations / '20261015120000_shared_proxy_pool/migration.sql').read_text())
     assert sql('SELECT COUNT(*) FROM id_business_v2_recharge_proxies;') == '3'
     assert sql('SELECT COUNT(*) FROM id_business_v2_proxy_aliases;') == '3'
@@ -69,6 +70,7 @@ try:
     assert sql(f"SELECT proxy_id <> old_id FROM id_business_v2_proxy_aliases WHERE old_id='{original}';") == '1'
     assert sql(f"SELECT HEX(remark),active,exit_ip,latency_ms FROM id_business_v2_recharge_proxies WHERE id='{original}';") == '66697273740A7365636F6E64\t0\t8.8.8.8\t25'
     assert sql(f"SELECT country_code IS NULL AND kind IS NULL FROM id_business_v2_recharge_proxies WHERE id='{online}';") == '1'
+    assert sql(f"SELECT connection_mode,protocol FROM id_business_v2_recharge_proxies WHERE id='{online}';") == 'extraction\thttp'
     print('Shared proxy migration passed: deduplication, metadata gaps, collision aliases, history FK, notes, telemetry and retained source verified')
     print('Recharge migration passed: existing row retained, nullable defaults and new fields verified')
 finally:

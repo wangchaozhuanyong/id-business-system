@@ -106,12 +106,23 @@ function parseExtracted(raw, protocol) {
   } catch {
     /* Plain provider response. */
   }
-  if (value && typeof value === 'object' && value.data !== undefined) value = value.data;
+  for (let depth = 0; depth < 5; depth++) {
+    if (Array.isArray(value)) {
+      if (value.length !== 1) throw new Error('代理提取须返回一个连接端点');
+      value = value[0];
+    } else if (value && typeof value === 'object' && !(value.ip || value.host)) {
+      const key = ['data', 'proxy', 'proxy_url', 'list'].find(key => value[key] != null);
+      if (!key) break;
+      value = value[key];
+    } else if (typeof value === 'string' && /^[\[{"]/.test(value.trim())) {
+      try { value = JSON.parse(value); } catch { throw new Error('代理提取响应无效'); }
+    } else break;
+  }
   if (value && typeof value === 'object' && !Array.isArray(value)) {
     const host = value.host || value.ip;
     const port = Number(value.port);
     const username = value.username || value.user || '';
-    const password = value.password || value.pass || '';
+    const password = value.password || value.pass || value.pwd || '';
     if (
       typeof host !== 'string' ||
       !Number.isInteger(port) ||
@@ -125,8 +136,9 @@ function parseExtracted(raw, protocol) {
   if (typeof value !== 'string' || value.length > 2048 || /[\x00-\x20\x7f]/.test(value.trim()))
     throw new Error('代理提取响应无效');
   value = value.trim();
-  if (!value.includes('://') && value.split(':').length === 4) {
-    const [host, port, username, password] = value.split(':');
+  const credentials = !value.includes('://') && /^([^:/\s]+):(\d{1,5}):([^:\r\n]+):([^\r\n]+)$/.exec(value);
+  if (credentials) {
+    const [, host, port, username, password] = credentials;
     value = `${protocol}://${encodeURIComponent(username)}:${encodeURIComponent(password)}@${host}:${port}`;
   }
   if (!/:\d+\/?$/.test(value)) throw new Error('代理提取响应缺少端口');

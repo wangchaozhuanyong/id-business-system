@@ -439,14 +439,14 @@
     {
       "path": "proxy-connection.cjs",
       "originalSha256": null,
-      "adaptedSha256": "c3908966fca3a5bcbd45939f8c898bbe3001fd967d835c699d44c4f56ce2912f",
+      "adaptedSha256": "13c1ec938f322628f9aef96aceaf51a8c5bffd9c6ff81674112daf3972ae4c53",
       "changed": true,
       "reason": "Shared proxy pool connection compatibility and isolated fixture regression tests."
     },
     {
       "path": "test/proxy-pool.test.cjs",
       "originalSha256": null,
-      "adaptedSha256": "f04e7f741e46d591351a0513169b3f11e4dc800867f6e5086d688883beaa8f81",
+      "adaptedSha256": "0b0c8de8ef62f63051c2003e653c65366c35758636f19161f5cd33cbe8ec5530",
       "changed": true,
       "reason": "Shared proxy pool connection compatibility and isolated fixture regression tests."
     }
