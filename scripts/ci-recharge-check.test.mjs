@@ -37,6 +37,58 @@ const readonlyMetadataPrevious = readonlyMetadataCurrent
   );
 const readonlyMetadataFixture = { readonlyBaseSource: readonlyMetadataPrevious };
 
+test('exact registration dependency controls retain own tests and formatting before ending ahead of historical suites', () => {
+  const paths = [
+    '.github/workflows/registration-closure-validation.yml',
+    'scripts/production-release/registration-closure-release.test.py',
+    'scripts/ci-registration-closure-native-reuse.test.mjs',
+    'scripts/ci-registration-closure-scope.mjs',
+    'scripts/ci-recharge-check.mjs',
+    'scripts/ci-recharge-check.test.mjs',
+    'scripts/ci-recharge-scope.test.mjs'
+  ];
+  const options = { base: '7d1c3822c8f8c8c6a970067580443a3b75e88bf0' };
+  const calls = recordGuardCommands('ci-only', paths, 'guards', options);
+  assert.equal(
+    calls.filter(
+      (row) =>
+        row.join(' ') ===
+        'python3 -B scripts/production-release/registration-closure-release.test.py'
+    ).length,
+    1
+  );
+  assert.ok(calls.some((row) => row.slice(0, 5).join(' ') === 'npm exec -- prettier --check'));
+  assert.ok(calls.some((row) => row.slice(0, 4).join(' ') === 'npm exec -- eslint'));
+  const tests = calls.find((row) => row[0] === 'node' && row[1] === '--test');
+  for (const name of [
+    'ci-recharge-scope',
+    'ci-recharge-check',
+    'ci-recharge-checkout-scope',
+    'ci-registration-closure-native-reuse'
+  ])
+    assert.ok(tests.includes(`scripts/${name}.test.mjs`));
+  assert.deepEqual(calls.at(-1), ['process-exit', 0]);
+  assert.equal(
+    calls.some((row) =>
+      row.some(
+        (arg) =>
+          typeof arg === 'string' &&
+          /api-admin-pending-online.test.py|remote-deploy.test.py/.test(arg)
+      )
+    ),
+    false
+  );
+  const wider = recordGuardCommands(
+    'ci-only',
+    [...paths, 'apps/api/src/id-business-v2/online-recharge/public.controller.ts'],
+    'guards',
+    options
+  );
+  assert.ok(
+    wider.some((row) => row.includes('scripts/production-release/api-admin-pending-online.test.py'))
+  );
+});
+
 test('new ONLINE controls retain pure diagnostics lifecycle and CI build tests without invoking Docker', () => {
   for (const part of ['guards', 'release-controls']) {
     for (const path of [
@@ -453,6 +505,7 @@ function recordGuardCommands(
     }});
     childProcess.execFileSync = (file, args) => {
       if (file === 'git') {
+        if (args.join(' ') === 'rev-parse 7d1c3822c8f8c8c6a970067580443a3b75e88bf0^{tree}') return 'a1ffd620d2b79630b9c1e9db700d6af765f33a50\\n';
         if (args.join(' ') === 'rev-parse HEAD^{tree}') return 'a'.repeat(40) + '\\n';
         if (args[0] === 'show' && args[1] === process.env.GUARD_TEST_BASE + ':${readonlyMetadataPaths[0]}')
           return Buffer.from(${JSON.stringify(readonlyBaseSource)});

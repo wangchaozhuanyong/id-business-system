@@ -312,6 +312,43 @@ export function isRegistrationClosureControlsOnly(paths) {
     )
   );
 }
+export const registrationEnvironmentRepairBase = '7d1c3822c8f8c8c6a970067580443a3b75e88bf0';
+const registrationEnvironmentRepairTree = 'a1ffd620d2b79630b9c1e9db700d6af765f33a50';
+const registrationEnvironmentRepairPins = Object.freeze({
+  '.github/workflows/registration-closure-validation.yml':
+    'd050a0993865355efd79f31dfeed8e01a67e04133093f281e6a8beb5c6f9b9c5',
+  'scripts/production-release/registration-closure-release.test.py':
+    '5ff3bfd242e53d9c75a719990b804d26d67de16ff862a24261752015fe7c910e',
+  'scripts/ci-registration-closure-native-reuse.test.mjs':
+    'f8e32d39ed447ca00768ca66f411f07c87d57ef30aa7c3656330965b44930cb7'
+});
+export function isRegistrationEnvironmentRepair(
+  paths,
+  { base, baseTree, readSource = readFileSync }
+) {
+  const allowed = new Set([
+    ...Object.keys(registrationEnvironmentRepairPins),
+    'scripts/ci-registration-closure-scope.mjs',
+    'scripts/ci-registration-closure-native-reuse.test.mjs',
+    'scripts/ci-recharge-check.mjs',
+    'scripts/ci-recharge-check.test.mjs',
+    'scripts/ci-recharge-scope.test.mjs'
+  ]);
+  if (
+    base !== registrationEnvironmentRepairBase ||
+    baseTree !== registrationEnvironmentRepairTree ||
+    !isRegistrationClosureControlsOnly(paths) ||
+    paths.some((path) => !allowed.has(path))
+  )
+    return false;
+  try {
+    return Object.entries(registrationEnvironmentRepairPins).every(
+      ([path, digest]) => paths.includes(path) && sha256(readSource(path)) === digest
+    );
+  } catch {
+    return false;
+  }
+}
 export function hasRegistrationClosureApplication(paths) {
   return paths.some(
     (path) => path.startsWith('apps/') || path.startsWith('scripts/acceptance-v2-')

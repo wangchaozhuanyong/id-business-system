@@ -72,6 +72,9 @@ jobs:
           npm run check:v2-module-architecture
           npm run check:v2-isolation
           npm run typecheck --workspace @apple-business/api
+      - name: Install frozen engine dependency lock for proxy tests
+        working-directory: .deploy/registration-closure-release/candidate/apps/api/src/id-business-v2/online-recharge/engine/upstream
+        run: npm ci --ignore-scripts --no-audit --no-fund
       - name: Verify proxy engine behavior without payment
         working-directory: .deploy/registration-closure-release/candidate/apps/api/src/id-business-v2/online-recharge/engine
         run: node --test test/proxy-test.test.cjs test/dispatch.test.cjs test/proxy-worker.test.cjs test/proxy-pool.test.cjs

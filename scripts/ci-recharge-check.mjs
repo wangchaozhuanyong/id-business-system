@@ -1,4 +1,8 @@
 import { readRegistrationNativeReuse } from './ci-registration-closure-native-reuse.mjs';
+import {
+  isRegistrationEnvironmentRepair,
+  registrationEnvironmentRepairBase
+} from './ci-registration-closure-scope.mjs';
 import { isRechargeCheckoutOnly } from './ci-recharge-checkout-scope.mjs';
 import { isRechargeBillingOnly } from './ci-recharge-billing-scope.mjs';
 import { isSharedProxyPoolOnly, sharedProxyAdminCommand } from './ci-shared-proxy-scope.mjs';
@@ -56,6 +60,14 @@ const changed = execFileSync('git', ['diff', '--name-only', base, 'HEAD'], { enc
   .trim()
   .split('\n')
   .filter(Boolean);
+const registrationEnvironmentRepair =
+  part === 'guards' &&
+  mode === 'ci-only' &&
+  base === registrationEnvironmentRepairBase &&
+  isRegistrationEnvironmentRepair(changed, {
+    base,
+    baseTree: execFileSync('git', ['rev-parse', base + '^{tree}'], { encoding: 'utf8' }).trim()
+  });
 const sharedPoolOnly =
   mode === 'recharge' &&
   changed.some((path) => path.includes('/proxy-pool/')) &&
@@ -521,28 +533,38 @@ if (part === 'guards') {
   const linted = existing.filter((p) => /\.(?:mjs|ts|vue)$/.test(p));
   if (formatted.length) npm('exec', '--', 'prettier', '--check', ...formatted);
   if (linted.length) npm('exec', '--', 'eslint', ...linted);
-  const commonControlTests = isRechargeCheckoutOnly(changed)
+  const commonControlTests = registrationEnvironmentRepair
     ? [
+        'scripts/ci-recharge-scope.test.mjs',
+        'scripts/ci-recharge-check.test.mjs',
         'scripts/ci-recharge-checkout-scope.test.mjs',
-        'scripts/ci-recharge-scope.test.mjs',
-        'scripts/ci-recharge-check.test.mjs',
-        'scripts/check-cloud-independence.test.mjs',
-        'scripts/check-v2-prisma-runtime-boundary.test.mjs',
-        'scripts/check-v2-module-architecture.test.mjs',
-        'scripts/admin-layout-rules.test.mjs'
+        'scripts/ci-registration-closure-native-reuse.test.mjs'
       ]
-    : (rechargeAvailabilityCommonControlTests(changed) ?? [
-        'scripts/ci-recharge-scope.test.mjs',
-        'scripts/ci-recharge-check.test.mjs',
-        'scripts/check-cloud-independence.test.mjs',
-        'scripts/check-v2-prisma-runtime-boundary.test.mjs',
-        'scripts/check-v2-module-architecture.test.mjs',
-        'scripts/ci-recharge-precision.test.mjs',
-        'scripts/ci-change-scope.test.mjs',
-        'scripts/ci-recharge-release.test.mjs',
-        'scripts/admin-layout-rules.test.mjs'
-      ]);
+    : isRechargeCheckoutOnly(changed)
+      ? [
+          'scripts/ci-recharge-checkout-scope.test.mjs',
+          'scripts/ci-recharge-scope.test.mjs',
+          'scripts/ci-recharge-check.test.mjs',
+          'scripts/check-cloud-independence.test.mjs',
+          'scripts/check-v2-prisma-runtime-boundary.test.mjs',
+          'scripts/check-v2-module-architecture.test.mjs',
+          'scripts/admin-layout-rules.test.mjs'
+        ]
+      : (rechargeAvailabilityCommonControlTests(changed) ?? [
+          'scripts/ci-recharge-scope.test.mjs',
+          'scripts/ci-recharge-check.test.mjs',
+          'scripts/check-cloud-independence.test.mjs',
+          'scripts/check-v2-prisma-runtime-boundary.test.mjs',
+          'scripts/check-v2-module-architecture.test.mjs',
+          'scripts/ci-recharge-precision.test.mjs',
+          'scripts/ci-change-scope.test.mjs',
+          'scripts/ci-recharge-release.test.mjs',
+          'scripts/admin-layout-rules.test.mjs'
+        ]);
   run('node', ['--test', ...commonControlTests]);
+}
+if (registrationEnvironmentRepair) {
+  process.exit(0);
 }
 // The shared pool changes business source and an additive migration. Keep all
 // applicable checks; unrelated historical publishers are unchanged inputs.

@@ -137,6 +137,11 @@ class RegistrationClosureControls(unittest.TestCase):
                          [prefix + name for name in ('test_workspace', 'test_apple_mailboxes',
                                                      'test_release_safety', 'test_registration_closed_loop_unit')])
         self.assertIn('test/proxy-test.test.cjs', workflow)
+        engine_dependencies = ('      - name: Install frozen engine dependency lock for proxy tests\n'
+                               '        working-directory: .deploy/registration-closure-release/candidate/apps/api/src/id-business-v2/online-recharge/engine/upstream\n'
+                               '        run: npm ci --ignore-scripts --no-audit --no-fund\n')
+        self.assertIn(engine_dependencies, workflow)
+        self.assertLess(workflow.index(engine_dependencies), workflow.index('Verify proxy engine behavior without payment'))
         self.assertLess(workflow.index('Compile API for isolated database acceptance'), workflow.index('Verify isolated registration MySQL SQLite'))
         for name in ('proxy-test.test.cjs', 'dispatch.test.cjs', 'proxy-worker.test.cjs', 'proxy-pool.test.cjs'):
             self.assertTrue((ROOT / 'apps/api/src/id-business-v2/online-recharge/engine/test' / name).is_file())

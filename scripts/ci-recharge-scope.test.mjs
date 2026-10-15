@@ -7,6 +7,10 @@ import {
   registrationPublishedRecoveryProof,
   hasRegistrationPublishedRecovery
 } from './ci-registration-closure-scope.mjs';
+import {
+  isRegistrationEnvironmentRepair,
+  registrationEnvironmentRepairBase
+} from './ci-registration-closure-scope.mjs';
 import { imageInputsChanged } from './ci-recharge-python-image.mjs';
 import { adminHtmlCachePaths, isAdminHtmlCacheOnly } from './ci-recharge-scope.mjs';
 import assert from 'node:assert/strict';
@@ -14,6 +18,48 @@ import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import test from 'node:test';
+
+test('formal registration engine dependency repair is exact and never admits business or neighboring controls', () => {
+  const paths = [
+    '.github/workflows/registration-closure-validation.yml',
+    'scripts/production-release/registration-closure-release.test.py',
+    'scripts/ci-registration-closure-native-reuse.test.mjs'
+  ];
+  const options = {
+    base: registrationEnvironmentRepairBase,
+    baseTree: 'a1ffd620d2b79630b9c1e9db700d6af765f33a50'
+  };
+  assert.equal(isRegistrationEnvironmentRepair(paths, options), true);
+  assert.equal(checkMode(paths, schema, schema), 'ci-only');
+  assert.deepEqual(selectedParts(paths), ['guards']);
+  for (const extra of [
+    'apps/api/src/id-business-v2/online-recharge/public.controller.ts',
+    'apps/admin/src/v2/features/auto-registration/api.ts',
+    'packages/shared/src/index.ts',
+    '.github/workflows/quality.yml',
+    '.github/workflows/registration-other.yml',
+    'package-lock.json',
+    'scripts/production-release/registration-closure-release.py',
+    'scripts/production-release/registration-closure-contract.json',
+    'scripts/ci-registration-closure-native-reuse.mjs'
+  ])
+    assert.equal(isRegistrationEnvironmentRepair([...paths, extra], options), false, extra);
+  assert.equal(isRegistrationEnvironmentRepair(paths, { ...options, base: 'a'.repeat(40) }), false);
+  assert.equal(
+    isRegistrationEnvironmentRepair(paths, { ...options, baseTree: 'a'.repeat(40) }),
+    false
+  );
+  assert.equal(isRegistrationEnvironmentRepair(paths.slice(1), options), false);
+  for (const drift of paths)
+    assert.equal(
+      isRegistrationEnvironmentRepair(paths, {
+        ...options,
+        readSource: (path) => (path === drift ? Buffer.from('UNREVIEWED') : readFileSync(path))
+      }),
+      false,
+      drift
+    );
+});
 
 test('independent BitBrowser billing uses the recharge checks and its built-page acceptance', () => {
   const paths = [
