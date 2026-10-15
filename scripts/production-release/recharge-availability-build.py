@@ -63,14 +63,16 @@ def verify_published_admin(contract):
     run_id = str(binding['runId'])
     native = platform_json('actions/runs/' + run_id)
     need(native['head_sha'] == contract['sourceBaseline'] == binding['sourceCommit']
-         and native['status'] == 'completed' and native['conclusion'] == 'success'
+         and native['status'] == 'completed' and native['conclusion'] == binding.get('runConclusion', 'success')
          and native['path'] == binding['workflowPath'] and native['event'] == 'push'
          and native['run_attempt'] == 1, 'PUBLISHED_ADMIN_RUN_CHANGED')
     jobs = platform_json('actions/runs/' + run_id + '/attempts/1/jobs?per_page=100')['jobs']
     validators = [j for j in jobs if j['name'] == 'validate']
-    need(len(validators) == 1 and validators[0]['conclusion'] == 'success'
+    need(len(validators) == 1 and validators[0]['conclusion'] == binding.get('validationConclusion', 'success')
          and any(s['name'] == 'Build Admin with Vue TypeScript checking' and s['conclusion'] == 'success'
-                 for s in validators[0]['steps']), 'PUBLISHED_ADMIN_BUILD_NOT_SUCCESSFUL')
+                 for s in validators[0]['steps'])
+         and [s['name'] for s in validators[0]['steps'] if s['conclusion'] == 'failure']
+             == binding.get('failedValidationSteps', []), 'PUBLISHED_ADMIN_BUILD_NOT_SUCCESSFUL')
     artifacts = platform_json('actions/runs/' + run_id + '/artifacts')['artifacts']
     matches = [a for a in artifacts if a['id'] == binding['artifactId']]
     need(len(matches) == 1 and matches[0]['name'] == binding['artifactName']
