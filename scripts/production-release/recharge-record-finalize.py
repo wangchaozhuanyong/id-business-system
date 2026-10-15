@@ -92,7 +92,7 @@ def finalize(m, d, plan, contract, expected_after, original_failure, finalizer_c
              and target.parent == base / 'releases'
              and target.name.endswith('-' + plan['commit'][:12] + '-recharge-record'),
              'SWITCH_STAGE_CHANGED')
-        need(not (target / 'recharge-record-preservation.json').exists(), 'ALREADY_FINALIZED')
+        need(not (target / 'recharge-record-finalization.json').exists(), 'ALREADY_FINALIZED')
         before = contract['services']
         after = m.snapshot(d, target)
         need(after == expected_after and all(after[n] == before[n] for n in m.PRESERVED),
@@ -104,7 +104,9 @@ def finalize(m, d, plan, contract, expected_after, original_failure, finalizer_c
         artifact = (stage / 'artifact.tar.gz').read_bytes()
         need(m.digest(artifact) == plan['artifactSha256'], 'ARTIFACT_CHANGED')
         proof = verified_proof(m, artifact, plan, contract, stage)
-        payload = None  # The original completion tail only needs the verified proof.
+        payload = stage / 'content/payload'
+        need(m.digest((payload / 'build-proof.json').read_bytes()) == plan['buildProofSha256'],
+             'ORIGINAL_COMPLETION_PROOF_CHANGED')
         for name, expected in {**contract['changedSources'], **contract['publishedAdminSources']}.items():
             path = target / name
             need(path.resolve().is_relative_to(target) and not path.is_symlink()
@@ -158,15 +160,26 @@ def finalize(m, d, plan, contract, expected_after, original_failure, finalizer_c
              'BACKUP_S3_CHANGED')
         m.verify_admin_content(d, after['admin'], contract)
         m.guards(d, target, after, contract)
+        images = {'api': {'reference': reference, 'imageId': image['Id']}}
+        partial = target / 'recharge-record-preservation.json'
+        if partial.exists():
+            expected_receipt = {'status': 'RECHARGE_RECORD_DEPLOYED', 'commit': plan['commit'],
+                'tree': plan['tree'], 'images': images, 'before': before, 'after': after,
+                'backup': backup, 'apiValidationSha256': proof['files']['api/recharge-validation.js'],
+                'workflowRunId': plan['workflowRunId'], 'artifactSha256': plan['artifactSha256'],
+                'buildProofSha256': plan['buildProofSha256'], 'preservedServices': list(m.PRESERVED),
+                'onlineMode': contract['engineHealth']['mode'], 'migrationPerformed': False,
+                'businessActions': 0}
+            need(json.loads(partial.read_bytes()) == expected_receipt, 'PARTIAL_RECEIPT_CHANGED')
         if verify_only:
             return {'status': 'EXISTING_SWITCH_FINALIZATION_GUARDS_VERIFIED',
                     'commit': plan['commit'], 'servicesSha256': fingerprint(after),
                     'declaredConfigurationPreserved': True, 'backupReverified': True,
                     'newContainerOperations': 0, 'businessActions': 0}
-        images = {'api': {'reference': reference, 'imageId': image['Id']}}
         stamp = target.name.split('-', 1)[0]
         own_source = Path(__file__).read_bytes()
-        own_target = target / 'scripts/production-release/recharge-record-finalize.py'
+        own_target = target / ('scripts/production-release/recharge-record-finalize-'
+                               + finalizer_commit[:12] + '.py')
         need(not own_target.exists() or own_target.read_bytes() == own_source,
              'FINALIZER_SOURCE_CHANGED')
         own_target.write_bytes(own_source)
@@ -175,6 +188,7 @@ def finalize(m, d, plan, contract, expected_after, original_failure, finalizer_c
         completion = {'status': 'EXISTING_NATIVE_SWITCH_FINALIZED', 'deployedCommit': plan['commit'],
                       'finalizerCommit': finalizer_commit, 'originalWorkflowRunId': plan['workflowRunId'],
                       'finalizerSha256': hashlib.sha256(own_source).hexdigest(),
+                      'finalizerSource': own_target.relative_to(target).as_posix(),
                       'originalFailure': original_failure, 'originalWorkflowPublishResult': 'failure',
                       'declaredConfigurationPreserved': True, 'environmentValuesPreserved': True,
                       'sixContainersPreserved': True, 'newContainerOperations': 0,

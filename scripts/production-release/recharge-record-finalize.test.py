@@ -84,11 +84,19 @@ class ExistingSwitchTests(unittest.TestCase):
     with lock:
         raise RuntimeError('must not replay switch')
         need(True, 'IMAGE_MISMATCH')
+        (target / 'proof.json').write_bytes((payload / 'build-proof.json').read_bytes())
         return {'completed': True}
 """)
             module = types.SimpleNamespace(__file__=str(path), need=finalize.need)
             call = finalize.finish_function(module)
-            self.assertEqual(call(*([None] * 15)), {'completed': True})
+            payload, target = Path(directory) / 'payload', Path(directory) / 'target'
+            payload.mkdir()
+            target.mkdir()
+            (payload / 'build-proof.json').write_bytes(b'original immutable proof')
+            arguments = [None] * 15
+            arguments[7], arguments[11] = payload, target
+            self.assertEqual(call(*arguments), {'completed': True})
+            self.assertEqual((target / 'proof.json').read_bytes(), b'original immutable proof')
             path.write_text('def release():\n    with lock:\n        pass\n')
             with self.assertRaisesRegex(RuntimeError, 'COMPLETION_SOURCE_CHANGED'):
                 finalize.finish_function(module)
