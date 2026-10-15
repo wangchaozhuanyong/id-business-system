@@ -3,9 +3,12 @@ import type { OnlineRow, OnlineSection } from './contracts';
 import { formatV2DateTime } from '@/v2/utils/dateTime';
 export const planOptions = [
   { value: 'plus', label: 'Plus 套餐' },
-  { value: 'pro_5x', label: 'Pro 5 倍' },
-  { value: 'pro_20x', label: 'Pro 20 倍' }
+  { value: 'pro_5x', label: 'Pro 100 套餐' },
+  { value: 'pro_20x', label: 'Pro 200 套餐' },
+  { value: 'pro_500', label: 'Pro 500 套餐' }
 ] as const;
+export const planHelp =
+  'Pro 100／200／500 为美元月费档位名称，本次应付以官网实际币种、税费和折抵报价为准。';
 export const regionOptions = [
   { value: 'PH', label: '菲律宾' },
   { value: 'US', label: '美国' },
@@ -78,8 +81,12 @@ const states: Record<string, string> = {
   enabled: '启用',
   expired: '已过期',
   plus: 'Plus 套餐',
-  pro_5x: 'Pro 5 倍',
-  pro_20x: 'Pro 20 倍',
+  pro_5x: 'Pro 100 套餐',
+  pro_20x: 'Pro 200 套餐',
+  pro_500: 'Pro 500 套餐',
+  free: '免费版',
+  initial: '首次开通',
+  upgrade: '套餐升级',
   local: '本地浏览器',
   third_party: '第三方代充',
   recharge: '充值',
@@ -119,14 +126,26 @@ export function onlineLabel(value: unknown) {
   return states[str.toLowerCase()] ?? (/^[a-z_]+$/i.test(str) ? '待核对' : str || '—');
 }
 export function onlineCell(row: OnlineRow, key: string, kind = 'text') {
-  const value = row[key];
+  const change = onlineChangeDetails(row);
+  const changeFields: Record<string, string> = {
+    changeKind: 'kind',
+    sourcePlan: 'sourcePlan',
+    payableAmount: 'amount',
+    payableCurrency: 'currency'
+  };
+  const value = changeFields[key] ? change[changeFields[key]] : row[key];
   if (value === null || value === undefined || value === '') return '—';
   if (kind === 'date') return formatV2DateTime(String(value));
   if (key === 'country' || key === 'region')
     return regionOptions.find((item) => item.value === value)?.label ?? String(value);
   if (key === 'protocol')
     return value === 'extraction' ? '动态提取链接' : String(value).toUpperCase();
-  if (kind === 'status' || ['plan', 'provider', 'mode', 'level', 'stage', 'event'].includes(key))
+  if (
+    kind === 'status' ||
+    ['plan', 'provider', 'mode', 'level', 'stage', 'event', 'sourcePlan', 'changeKind'].includes(
+      key
+    )
+  )
     return onlineLabel(value);
   if (typeof value === 'boolean') return value ? '是' : '否';
   return typeof value === 'object' ? '查看详情' : String(value);
@@ -142,4 +161,28 @@ export function onlineSubscriptionDetails(result?: Record<string, unknown>) {
       ? (data as Record<string, unknown>)
       : {})
   };
+}
+export function onlineChangeDetails(value?: Record<string, unknown>): Record<string, unknown> {
+  const change = value?.subscriptionChange;
+  return change && typeof change === 'object' && !Array.isArray(change)
+    ? (change as Record<string, unknown>)
+    : {};
+}
+export function onlineChangeEntries(value?: Record<string, unknown>) {
+  const change = onlineChangeDetails(value);
+  if (!Object.keys(change).length) return [];
+  return [
+    { label: '开通方式', value: onlineLabel(change.kind) },
+    { label: '变更前套餐', value: onlineLabel(change.sourcePlan) },
+    { label: '目标套餐', value: onlineLabel(change.targetPlan) },
+    {
+      label: '官网本次应付',
+      value:
+        change.amount === null || change.amount === undefined || change.amount === ''
+          ? '待获取官网报价'
+          : String(change.amount)
+    },
+    { label: '付款币种', value: String(change.currency || '待核对') },
+    ...(change.cardLast4 ? [{ label: '实际付款卡尾号', value: String(change.cardLast4) }] : [])
+  ];
 }

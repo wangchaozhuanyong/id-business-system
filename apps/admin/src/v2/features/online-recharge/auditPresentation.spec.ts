@@ -1,6 +1,8 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createRenderer, h, nextTick, ref, ssrContextKey, type Component, type VNode } from 'vue';
-import { onlineCell } from './labels';
+import { onlineCell, onlineChangeEntries, onlineLabel, planOptions } from './labels';
+import { configGroups } from './configFields';
+import { topActions } from './sections';
 import { onlineTableSchemas } from './tableSchemas';
 import { onlineRechargeLoginLogsFeature } from './login-logs-manifest';
 
@@ -30,6 +32,7 @@ vi.mock('@/v2/composables/useV2Query', async () => {
   };
 });
 import OnlineResultDialog from './OnlineResultDialog.vue';
+import OnlineTaskProgress from './OnlineTaskProgress.vue';
 import V2OnlineOverviewView from './V2OnlineOverviewView.vue';
 
 type TestNode = { parent: TestNode | null; children: TestNode[] };
@@ -138,5 +141,103 @@ describe('线上代充审计发现的结果展示', () => {
     ).toBe('观测时间');
     expect(onlineCell({ id: 'proxy', protocol: 'extraction' }, 'protocol')).toBe('动态提取链接');
     expect(onlineRechargeLoginLogsFeature.requiredRoles).toEqual(['admin']);
+  });
+  it('目标套餐贯通旧兑换码与 Pro 500，不猜测新的官网创建标识', () => {
+    expect(planOptions).toEqual([
+      { value: 'plus', label: 'Plus 套餐' },
+      { value: 'pro_5x', label: 'Pro 100 套餐' },
+      { value: 'pro_20x', label: 'Pro 200 套餐' },
+      { value: 'pro_500', label: 'Pro 500 套餐' }
+    ]);
+    for (const action of topActions.cdks ?? []) {
+      const plan = action.fields?.find((field) => field.key === 'plan');
+      if (plan) expect(plan.options).toBe(planOptions);
+    }
+    const config = configGroups.find((group) => group.key === 'plans');
+    expect(config?.fields.find((field) => field.key === 'planNamePro500')?.initial).toBe('');
+    expect(onlineLabel('pro')).toBe('待核对');
+  });
+  it('升级详情保持官网精确差额，列表从同一套餐变更投影读取', () => {
+    const subscriptionChange = {
+      kind: 'upgrade',
+      sourcePlan: 'plus',
+      targetPlan: 'pro_500',
+      amount: '29008.93',
+      currency: 'PHP',
+      cardLast4: '0001'
+    };
+    const result = { subscriptionChange };
+    expect(onlineChangeEntries(result)).toContainEqual({
+      label: '官网本次应付',
+      value: '29008.93'
+    });
+    expect(onlineCell({ id: 'task', subscriptionChange }, 'changeKind', 'status')).toBe('套餐升级');
+    expect(onlineCell({ id: 'task', subscriptionChange }, 'sourcePlan', 'status')).toBe(
+      'Plus 套餐'
+    );
+    expect(onlineCell({ id: 'task', subscriptionChange }, 'payableAmount', 'numeric')).toBe(
+      '29008.93'
+    );
+    const state = resultState({ subscriptionChange, result });
+    const summary = state.entries.find((entry) => entry.label === '套餐变更与官网报价');
+    expect(summary?.value).toContain('目标套餐：Pro 500');
+    expect(summary?.value).toContain('官网本次应付：29008.93');
+    expect(summary?.value).toContain('付款币种：PHP');
+    expect(state.entries.find((entry) => entry.label === '执行结果')?.value).not.toContain(
+      '目标套餐'
+    );
+  });
+  it('缺失报价不显示零，官网明确零应付保持原数值', () => {
+    const missing = {
+      subscriptionChange: {
+        kind: 'initial',
+        sourcePlan: 'free',
+        targetPlan: 'pro_500',
+        amount: null,
+        currency: null
+      }
+    };
+    expect(onlineChangeEntries(missing)).toContainEqual({
+      label: '官网本次应付',
+      value: '待获取官网报价'
+    });
+    expect(
+      onlineChangeEntries({
+        subscriptionChange: { ...missing.subscriptionChange, amount: '0.00', currency: 'USD' }
+      })
+    ).toContainEqual({ label: '官网本次应付', value: '0.00' });
+    expect(onlineCell({ id: 'legacy-task' }, 'sourcePlan', 'status')).toBe('—');
+    expect(onlineCell({ id: 'legacy-task' }, 'payableAmount', 'numeric')).toBe('—');
+    expect(onlineChangeEntries()).toEqual([]);
+  });
+  it('实时任务优先读取服务端套餐变更投影，明确缺失不展示旧结果', () => {
+    const subscriptionChange = {
+      kind: 'upgrade',
+      sourcePlan: 'pro_5x',
+      targetPlan: 'pro_500',
+      amount: '0.00',
+      currency: 'USD'
+    };
+    const state = mount<{ changeEntries: { label: string; value: string }[] }>(
+      OnlineTaskProgress,
+      () => ({
+        task: {
+          id: 'original-task',
+          status: 'awaiting_review',
+          plan: 'pro_500',
+          subscriptionChange
+        }
+      })
+    );
+    expect(state.changeEntries).toContainEqual({ label: '变更前套餐', value: 'Pro 100 套餐' });
+    expect(state.changeEntries).toContainEqual({ label: '官网本次应付', value: '0.00' });
+    expect(
+      onlineChangeEntries({ subscriptionChange: null, result: { subscriptionChange } })
+    ).toEqual([]);
+    expect(onlineChangeEntries({ result: { subscriptionChange } })).toEqual([]);
+    expect(resultState({ stage: 'verification' }).entries).toContainEqual({
+      label: '执行阶段',
+      value: '验证结果'
+    });
   });
 });

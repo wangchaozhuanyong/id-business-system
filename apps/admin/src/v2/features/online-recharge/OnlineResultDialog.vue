@@ -46,7 +46,7 @@ import V2ConfirmDialog from '@/v2/components/V2ConfirmDialog.vue';
 import AppButton from '@/components/ui/AppButton.vue';
 import { http } from '@/api/client';
 import { copyOnlineText } from './api';
-import { onlineLabel } from './labels';
+import { onlineChangeEntries, onlineLabel } from './labels';
 import OnlineTaskProgress from './OnlineTaskProgress.vue';
 import { useOnlineTask } from './useOnlineTask';
 import type { PublicTask } from './contracts';
@@ -60,6 +60,10 @@ const labels: Record<string, string> = {
   progress: '进度',
   stage: '执行阶段',
   plan: '套餐',
+  subscriptionChange: '套餐变更与官网报价',
+  sourcePlan: '变更前套餐',
+  targetPlan: '目标套餐',
+  kind: '开通方式',
   provider: '执行通道',
   operation: '操作类型',
   paymentStarted: '已开始付款',
@@ -196,10 +200,18 @@ const entries = computed(() => {
     }));
 });
 function displayValue(key: string, value: unknown): string {
+  if (key === 'subscriptionChange')
+    return onlineChangeEntries({ subscriptionChange: value })
+      .map((entry) => `${entry.label}：${entry.value}`)
+      .join('\n');
   if (value && typeof value === 'object') return summarize(value);
   return [
     'status',
+    'stage',
     'plan',
+    'sourcePlan',
+    'targetPlan',
+    'kind',
     'provider',
     'operation',
     'subscriptionStatus',
@@ -215,7 +227,7 @@ function summarize(value: unknown): string {
   if (Array.isArray(value)) return value.map(summarize).join('\n\n');
   if (value && typeof value === 'object')
     return Object.entries(value as Record<string, unknown>)
-      .filter(([key]) => labels[key])
+      .filter(([key]) => labels[key] && key !== 'subscriptionChange')
       .map(([key, part]) => `${labels[key]}：${displayValue(key, part)}`)
       .join('\n');
   return onlineLabel(value);
