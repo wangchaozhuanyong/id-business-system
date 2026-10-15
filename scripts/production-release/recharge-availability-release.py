@@ -59,7 +59,9 @@ def verify_admin(d, state, files):
 def validate_proof(proof, plan, contract, payload, h):
     need(proof.get('version') == 1 and proof.get('scope') == contract['scope']
          and all(proof.get(k) == plan[k] for k in ('commit', 'tree', 'workflowRunId', 'workflowRunAttempt', 'contractSha256'))
-         and proof.get('baselineApiReproduced') is True and proof.get('baselineAdminReproduced') is True
+         and proof.get('baselineApiReproduced') is True and proof.get('baselineAdminArtifactVerified') is True
+         and proof.get('baselineAdminVerification') == {**contract['publishedAdminNative'], 'verified': True,
+             'publicInventorySha256': digest(json.dumps(contract['publicFiles'], sort_keys=True, separators=(',', ':')).encode())}
          and proof.get('updatedServices') == ['api', 'admin'] and proof.get('migrationPerformed') is False
          and type(proof.get('businessActions')) is int and proof.get('businessActions') == 0, 'PROOF_INVALID')
     actual = h.file_inventory(payload)
@@ -70,7 +72,8 @@ def validate_proof(proof, plan, contract, payload, h):
          and {n.removeprefix('source/'): v for n, v in actual.items() if n.startswith('source/')} == contract['sources']
          and {n.removeprefix('api/modules/'): v for n, v in actual.items() if n.startswith('api/modules/')} == proof['apiModules']
          and {n.removeprefix('admin/html/'): v for n, v in actual.items() if n.startswith('admin/html/')} == proof['adminFiles']
-         and all(n.startswith(('source/', 'api/modules/', 'admin/html/')) for n in actual), 'PAYLOAD_SCOPE_INVALID')
+         and actual.get('baseline-admin-native.zip') == contract['publishedAdminNative']['artifactDigest'].removeprefix('sha256:')
+         and all(n == 'baseline-admin-native.zip' or n.startswith(('source/', 'api/modules/', 'admin/html/')) for n in actual), 'PAYLOAD_SCOPE_INVALID')
     return proof
 
 
@@ -220,6 +223,7 @@ def release(plan, contract, d, h):
                    'buildProofSha256': plan['buildProofSha256'], 'businessActions': 0, 'migrationPerformed': False}
         (target / 'recharge-availability-preservation.json').write_text(json.dumps(receipt, sort_keys=True, indent=2) + '\n')
         (target / 'recharge-availability-build-proof.json').write_bytes(raw_proof)
+        (target / 'recharge-availability-baseline-admin-native.zip').write_bytes((payload / 'baseline-admin-native.zip').read_bytes())
         manifest = json.loads(raw_manifest)
         manifest.update(commit=plan['commit'], sourceTree=plan['tree'], sourceBranch='main', scope=contract['scope'], status='DEPLOYED',
                         previousCommit=contract['expectedCurrent'], previousRelease=str(previous), previousManifestSha256=digest(raw_manifest),
