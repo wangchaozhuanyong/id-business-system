@@ -2358,6 +2358,41 @@ test('ONLINE UI and CI projection repair select only frontend checks without fou
   }
 });
 
+test('ONLINE admin redemption integration stays frontend-only and retains mixed backend image checks', () => {
+  const integration = [
+    'apps/admin/src/v2-router.ts',
+    'apps/admin/src/v2/features/feature.ts',
+    'apps/admin/src/v2/features/registry.spec.ts',
+    'scripts/check-v2-input-retention.mjs',
+    'scripts/check-v2-online-recharge-controls.test.mjs'
+  ];
+  const paths = [
+    'apps/admin/src/v2/features/online-recharge/V2OnlineRedeemView.vue',
+    'apps/admin/src/v2/features/online-recharge/redeem-manifest.ts',
+    ...integration,
+    'scripts/acceptance-v2-online-recharge-ui.mjs',
+    'scripts/ci-recharge-scope.mjs',
+    'scripts/ci-recharge-scope.test.mjs',
+    'docs/ONLINE_RECHARGE.md'
+  ];
+  assert.equal(checkMode(paths, schema, schema), 'admin');
+  assert.deepEqual(selectedParts(paths), ['guards', 'admin']);
+  assert.equal(needsOnlineRechargeCiBuild(paths), false);
+  for (const extra of [
+    'apps/api/src/id-business-v2/online-recharge/application/tasks.service.ts',
+    'apps/api/prisma-mysql/schema.prisma',
+    'apps/api/Dockerfile.mysql',
+    'apps/admin/Dockerfile',
+    'apps/admin/package.json',
+    'package-lock.json',
+    'apps/admin/src/v2-router.ts.backup'
+  ]) {
+    assert.equal(needsOnlineRechargeCiBuild([...paths, extra]), true, extra);
+    assert.equal(isAdminOnly([...paths, extra]), false, extra);
+  }
+  assert.equal(isAdminOnly(integration), false, '没有线上代充页面时不能扩大普通路由分类');
+});
+
 test('ONLINE wrapper-only edits retain engine evidence and select its existing targeted runner', () => {
   const paths = [
     'apps/api/src/id-business-v2/online-recharge/engine/paths.cjs',

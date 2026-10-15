@@ -79,8 +79,7 @@ export const v2Router = createRouter({
     {
       path: '/online-recharge',
       name: 'public-online-recharge',
-      component: () => import('@/v2/features/online-recharge/PublicOnlineRechargeView.vue'),
-      meta: { title: '线上代充', public: true, publicStandalone: true }
+      redirect: '/v2/online-recharge/redeem'
     },
     {
       path: '/online-recharge/subscription',

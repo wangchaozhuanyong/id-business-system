@@ -157,6 +157,7 @@ export const onlineTableSchemas = Object.fromEntries(
 ) as unknown as Record<OnlineSection, ReturnType<typeof defineV2TableSchema>>;
 export const onlineTablesByFeature = {
   'online-recharge-overview': [],
+  'online-recharge-redeem': [],
   'online-recharge-config': [],
   'online-recharge-checkout-debug': [],
   'online-recharge-proxies': [onlineTableSchemas.proxies],

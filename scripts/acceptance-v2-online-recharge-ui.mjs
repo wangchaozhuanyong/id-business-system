@@ -28,9 +28,10 @@ const server = spawn(
   { cwd: resolve(root, 'apps/admin'), stdio: 'ignore' }
 );
 const sections = process.argv.includes('--affected')
-  ? ['config', 'addresses', 'cdks']
+  ? ['config', 'addresses', 'cdks', 'redeem']
   : [
       'overview',
+      'redeem',
       'jobs',
       'automation',
       'runtime-logs',
@@ -325,6 +326,7 @@ async function switchFixtureIdentity(page, state, actor) {
 async function fixture(context, state) {
   const unexpected = [];
   const publicHeaders = [];
+  const publicCalls = [];
   const writes = [];
   const rechecks = [];
   const configTargets = [];
@@ -343,6 +345,12 @@ async function fixture(context, state) {
       unexpected.push(url.origin);
       return route.abort();
     }
+    if (state.anonymous && ['/api/auth/me', '/api/auth/session'].includes(path))
+      return route.fulfill({
+        status: 401,
+        contentType: 'application/json',
+        body: JSON.stringify({ success: false, message: '合成匿名会话，请登录' })
+      });
     if (path === '/api/auth/me') return ok(state.actor);
     if (path === '/api/auth/login' || path === '/api/auth/session')
       return ok({ accessToken: 'synthetic-access', user: state.actor });
@@ -400,9 +408,16 @@ async function fixture(context, state) {
     if (endpoint.startsWith('public/')) {
       publicHeaders.push(req.headers().authorization ?? null);
       const method = endpoint.split('/')[1];
+      publicCalls.push(method);
       if (method === 'config')
         return ok({ maintenance: false, maxConcurrent: 1, active: 0, paymentRegion: 'PH' });
       if (method === 'verify') return ok({ valid: true, plan: 'plus', status: 'available' });
+      if (method === 'redeem' && state.redeemFail)
+        return route.fulfill({
+          status: 409,
+          contentType: 'application/json',
+          body: JSON.stringify({ success: false, message: '合成兑换失败，输入已保留' })
+        });
       if (method === 'redeem' || method === 'subscription')
         return ok({ ...task, status: 'queued', progress: 0, taskToken: 'synthetic-capability' });
       if (method === 'query') return ok({ task, taskToken: 'synthetic-capability' });
@@ -520,7 +535,7 @@ async function fixture(context, state) {
     }
     return ok({ success: true, message: '合成操作完成' });
   });
-  return { unexpected, publicHeaders, writes, configTargets, rechecks };
+  return { unexpected, publicHeaders, publicCalls, writes, configTargets, rechecks };
 }
 try {
   await wait(async () => (await fetch(origin).catch(() => null))?.ok);
@@ -571,6 +586,27 @@ try {
           await dialog.getByRole('button', { name: '关闭', exact: true }).click();
           await dialog.waitFor({ state: 'hidden' });
         }
+        if (section === 'redeem') {
+          assert.equal(await page.locator('.v2-shell').count(), 1, '兑换页未进入后台布局');
+          assert.equal(await page.locator('h1').count(), 1, '兑换页重复显示页面标题');
+          const label = await page.locator('.el-form-item__label').first().boundingBox();
+          const control = await page
+            .locator('.el-form-item .el-input,.el-form-item .el-textarea')
+            .first()
+            .boundingBox();
+          assert.ok(label.x + label.width <= control.x + 2, '后台兑换表单标签必须位于左侧');
+          if (process.argv.includes('--affected')) {
+            await page.getByPlaceholder('输入兑换码').fill('SYNTHETIC-CODE');
+            await page.getByRole('button', { name: '查询兑换结果', exact: true }).click();
+            await page.getByText('31天', { exact: true }).waitFor();
+            assert.equal(
+              await page
+                .getByRole('link', { name: '打开账单管理', exact: true })
+                .getAttribute('href'),
+              'https://chatgpt.com/account/manage'
+            );
+          }
+        }
         const measured = await measure(page);
         assert.ok(measured.documentWidth <= width + 1, `${theme} ${width} ${section}页面横向溢出`);
         assert.deepEqual(measured.overlaps, [], `${section}实际指标文字未对齐`);
@@ -583,20 +619,15 @@ try {
           });
         report.cases.push({ theme, width, section, measurements: measured, result: 'PASS' });
       }
-      for (const path of ['/online-recharge', '/online-recharge/subscription']) {
+      for (const path of ['/online-recharge/subscription']) {
         await page.goto(origin + path);
         await page.locator('.online-public').waitFor();
         if (process.argv.includes('--affected')) {
-          if (path.endsWith('/subscription')) {
-            await page
-              .locator('textarea')
-              .fill(JSON.stringify({ accessToken: 'synthetic-private-session' }));
-            await page.getByRole('button', { name: '查询订阅', exact: true }).click();
-            await page.getByRole('button', { name: '刷新结果', exact: true }).click();
-          } else {
-            await page.getByPlaceholder('输入兑换码').fill('SYNTHETIC-CODE');
-            await page.getByRole('button', { name: '查询兑换结果', exact: true }).click();
-          }
+          await page
+            .locator('textarea')
+            .fill(JSON.stringify({ accessToken: 'synthetic-private-session' }));
+          await page.getByRole('button', { name: '查询订阅', exact: true }).click();
+          await page.getByRole('button', { name: '刷新结果', exact: true }).click();
           await page.getByText('31天', { exact: true }).waitFor();
           assert.equal(
             await page
@@ -941,18 +972,49 @@ try {
   });
   state.saveDelay = false;
   await switchFixtureIdentity(page, state, administrator);
-  await navigate(page, '/online-recharge');
+  await page.goto(origin + '/online-recharge');
+  await page.waitForURL(origin + '/v2/online-recharge/redeem');
+  await page.locator('.online-page').waitFor();
+  assert.equal(await page.locator('.v2-shell').count(), 1, '旧兑换入口未进入后台');
+  assert.equal(await page.locator('h1').count(), 1, '旧兑换入口重复页面标题');
+  await navigate(page, '/v2/online-recharge/overview');
+  const pageCount = context.pages().length;
+  const redeemMenu = page.locator(
+    '#v2-navigation-section-online-recharge a[href="/v2/online-recharge/redeem"]'
+  );
+  assert.equal(await redeemMenu.count(), 1, '线上代充菜单未登记兑换表单');
+  assert.notEqual(await redeemMenu.getAttribute('target'), '_blank', '兑换菜单跳出后台');
+  await redeemMenu.click();
+  await page.waitForURL(origin + '/v2/online-recharge/redeem');
+  await page.locator('.online-page').waitFor();
+  assert.equal(context.pages().length, pageCount, '兑换菜单打开了新标签页');
+  report.lifecycle.push({ case: 'redeem-menu-and-legacy-redirect-stay-in-admin', result: 'PASS' });
   const privateSession = JSON.stringify({ accessToken: 'synthetic-private-session' });
   await page.getByPlaceholder('输入兑换码').fill('SYNTHETIC-CODE');
   await page.locator('textarea').fill(privateSession);
   await navigate(page, '/online-recharge/subscription');
   assert.equal(await page.locator('textarea').inputValue(), '');
   await page.locator('textarea').fill(privateSession);
-  await navigate(page, '/online-recharge');
+  await navigate(page, '/v2/online-recharge/redeem');
+  assert.equal(await page.getByPlaceholder('输入兑换码').inputValue(), 'SYNTHETIC-CODE');
   assert.equal(await page.locator('textarea').inputValue(), '');
+  report.lifecycle.push({
+    case: 'redeem-code-restores-session-clears-on-navigation',
+    result: 'PASS'
+  });
   await page.getByRole('button', { name: '验证兑换码', exact: true }).click();
   await page.getByText(/兑换码验证成功/).waitFor();
   await page.locator('textarea').fill(privateSession);
+  state.redeemFail = true;
+  await page.getByRole('button', { name: '提交充值', exact: true }).click();
+  await page.getByText('合成兑换失败，输入已保留', { exact: true }).waitFor();
+  assert.equal(await page.getByPlaceholder('输入兑换码').inputValue(), 'SYNTHETIC-CODE');
+  assert.equal(
+    await page.locator('textarea').inputValue(),
+    privateSession,
+    '兑换失败清除了会话输入'
+  );
+  state.redeemFail = false;
   await page.getByRole('button', { name: '提交充值', exact: true }).click();
   await page.getByText(taskId, { exact: true }).waitFor();
   assert.equal(await page.locator('textarea').inputValue(), '');
@@ -961,14 +1023,52 @@ try {
   );
   assert.ok(
     !stored.includes('synthetic-private-session') && !stored.includes('synthetic-capability'),
-    '公开凭据进入浏览器存储'
+    '兑换凭据进入浏览器存储'
   );
   assert.ok(
     network.publicHeaders.every((value) => value === null),
-    '公开提交附带后台身份'
+    '原兑换接口附带后台身份'
   );
   report.lifecycle.push({
-    case: 'public-session-volatile-capability-no-browser-storage-no-admin-header',
+    case: 'redeem-failure-retains-input-success-clears-session-no-storage-no-admin-header',
+    result: 'PASS'
+  });
+  await page.locator('textarea').fill(privateSession);
+  await switchFixtureIdentity(page, state, reader);
+  await navigate(page, '/v2/online-recharge/redeem');
+  assert.equal(await page.getByPlaceholder('输入兑换码').inputValue(), '', '身份变化未清兑换凭证');
+  assert.equal(await page.locator('textarea').inputValue(), '', '身份变化未清兑换会话');
+  assert.equal(await page.getByText(taskId, { exact: true }).count(), 0, '身份变化留下原兑换任务');
+  await page.getByPlaceholder('输入兑换码').fill('SYNTHETIC-CODE');
+  await page.getByRole('button', { name: '验证兑换码', exact: true }).click();
+  await page.getByText(/兑换码验证成功/).waitFor();
+  await page.locator('textarea').fill(privateSession);
+  const redeemButton = page.getByRole('button', { name: '提交充值', exact: true });
+  assert.ok(
+    (await redeemButton.count()) === 0 || (await redeemButton.isDisabled()),
+    '读取授权出现可执行的充值按钮'
+  );
+  report.lifecycle.push({
+    case: 'redeem-reader-cannot-submit-identity-clears-input',
+    result: 'PASS'
+  });
+  await switchFixtureIdentity(page, state, administrator);
+  await navigate(page, '/online-recharge/subscription');
+  assert.equal(await page.locator('textarea').inputValue(), '', '公开订阅返回后恢复了会话资料');
+  await page.locator('textarea').fill(privateSession);
+  await page.getByRole('button', { name: '查询订阅', exact: true }).click();
+  await page.getByText(taskId, { exact: true }).waitFor();
+  assert.equal(await page.locator('textarea').inputValue(), '', '订阅查询成功未清会话资料');
+  const subscriptionStored = await page.evaluate(() =>
+    JSON.stringify({ local: { ...localStorage }, session: { ...sessionStorage } })
+  );
+  assert.ok(
+    !subscriptionStored.includes('synthetic-private-session') &&
+      !subscriptionStored.includes('synthetic-capability'),
+    '公开订阅凭据进入浏览器存储'
+  );
+  report.lifecycle.push({
+    case: 'public-subscription-session-volatile-capability-no-browser-storage',
     result: 'PASS'
   });
   await page.locator('textarea').fill(privateSession);
@@ -996,17 +1096,12 @@ try {
   }
   assert.equal(await page.locator('textarea').inputValue(), '', '同页身份变化未清 Session');
   assert.equal(
-    await page.getByPlaceholder('输入兑换码').inputValue(),
-    '',
-    '同页身份变化未清兑换凭证'
-  );
-  assert.equal(
     await page.getByText(taskId, { exact: true }).count(),
     0,
     '同页身份变化留下旧客户任务'
   );
   report.lifecycle.push({
-    case: 'public-same-page-identity-clears-session-task-capability',
+    case: 'public-subscription-same-page-identity-clears-session-task-capability',
     result: 'PASS'
   });
   await switchFixtureIdentity(page, state, administrator);
@@ -1026,6 +1121,13 @@ try {
     await router.push('/v2/online-recharge/cards');
   });
   assert.ok(!page.url().includes('/v2/online-recharge/cards'), '导航权限守卫未拦截员工');
+  for (const target of ['/v2/online-recharge/redeem', '/online-recharge']) {
+    await page.evaluate(async (path) => {
+      await document.querySelector('#app').__vue_app__.config.globalProperties.$router.push(path);
+    }, target);
+    assert.ok(!page.url().includes('/v2/online-recharge/redeem'), '无权限员工进入兑换表单');
+    assert.equal(await page.getByPlaceholder('输入兑换码').count(), 0, '无权限员工看到兑换输入');
+  }
   await switchFixtureIdentity(page, state, administrator);
   await navigate(page, '/v2/online-recharge/addresses');
   assert.equal(await page.getByPlaceholder('搜索当前清单').inputValue(), '', '身份变更未清除草稿');
@@ -1051,7 +1153,41 @@ try {
     result: 'PASS'
   });
   assert.deepEqual(network.unexpected, []);
+  assert.ok(
+    network.publicHeaders.every((value) => value === null),
+    '客户接口附带后台身份'
+  );
   await context.close();
+  const anonymousContext = await browser.newContext();
+  const anonymousNetwork = await fixture(anonymousContext, { anonymous: true });
+  const anonymousPage = await anonymousContext.newPage();
+  lastPage = anonymousPage;
+  observeFailureDiagnostics(anonymousPage);
+  for (const path of ['/v2/online-recharge/redeem', '/online-recharge']) {
+    await anonymousPage.goto(origin + path);
+    await anonymousPage.waitForURL((url) => url.pathname === '/login');
+    assert.equal(
+      new URL(anonymousPage.url()).searchParams.get('redirect'),
+      '/v2/online-recharge/redeem',
+      '匿名兑换入口未保留受保护的登录回跳地址'
+    );
+    assert.equal(await anonymousPage.getByPlaceholder('输入兑换码').count(), 0);
+    assert.equal(await anonymousPage.locator('.online-page').count(), 0);
+  }
+  assert.deepEqual(anonymousNetwork.publicCalls, [], '匿名受保护入口仍读取了兑换服务');
+  await anonymousPage.goto(origin + '/online-recharge/subscription');
+  await anonymousPage.locator('.online-public').waitFor();
+  assert.equal(new URL(anonymousPage.url()).pathname, '/online-recharge/subscription');
+  assert.equal(
+    await anonymousPage.getByRole('button', { name: '查询订阅', exact: true }).count(),
+    1
+  );
+  assert.deepEqual(anonymousNetwork.unexpected, []);
+  report.lifecycle.push({
+    case: 'anonymous-redeem-login-required-public-subscription-preserved',
+    result: 'PASS'
+  });
+  await anonymousContext.close();
   writeFileSync(
     resolve(
       evidence,

@@ -4,7 +4,7 @@
       description="线上代充使用独立银行卡、代理、地址和兑换资格，账单与现有充值业务独立。"
       ><template #actions
         ><AppButton variant="ghost" allow-when-stale @click="query.refresh">刷新概览</AppButton
-        ><RouterLink to="/online-recharge" target="_blank">客户兑换入口</RouterLink
+        ><RouterLink to="/v2/online-recharge/redeem">兑换充值</RouterLink
         ><RouterLink to="/online-recharge/subscription" target="_blank"
           >客户订阅查询</RouterLink
         ></template

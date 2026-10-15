@@ -119,6 +119,13 @@ const onlineFocusedCiControls = new Set([
   'scripts/acceptance-v2-online-recharge-ui.mjs',
   '.github/workflows/quality.yml'
 ]);
+const onlineAdminIntegrationPaths = new Set([
+  'apps/admin/src/v2-router.ts',
+  'apps/admin/src/v2/features/feature.ts',
+  'apps/admin/src/v2/features/registry.spec.ts',
+  'scripts/check-v2-input-retention.mjs',
+  'scripts/check-v2-online-recharge-controls.test.mjs'
+]);
 function isOnlineRechargeRuntimeOnly(paths) {
   return (
     paths.some(isOnlineEngineRuntimePath) &&
@@ -130,6 +137,9 @@ function isOnlineRechargeRuntimeOnly(paths) {
 }
 export function needsOnlineRechargeCiBuild(paths) {
   if (isRechargeRecordRepairOnly(paths)) return false;
+  const onlineAdminFeatureChanged = paths.some((path) =>
+    path.startsWith('apps/admin/src/v2/features/online-recharge/')
+  );
   if (
     paths.length &&
     paths.every(
@@ -137,6 +147,7 @@ export function needsOnlineRechargeCiBuild(paths) {
         path.startsWith('apps/admin/src/v2/features/online-recharge/') ||
         onlineEngineWrapperPath.test(path) ||
         onlineFocusedCiControls.has(path) ||
+        (onlineAdminFeatureChanged && onlineAdminIntegrationPaths.has(path)) ||
         path.startsWith('docs/')
     )
   )
@@ -787,6 +798,9 @@ const adminInteractionAcceptance = new Set([
 ]);
 export function isAdminOnly(paths) {
   const combined = hasCombinedComponentScope(paths);
+  const onlineAdminFeatureChanged = paths.some((path) =>
+    path.startsWith('apps/admin/src/v2/features/online-recharge/')
+  );
   return (
     paths.some(
       (p) =>
@@ -798,6 +812,7 @@ export function isAdminOnly(paths) {
     paths.every(
       (p) =>
         p.startsWith('apps/admin/src/v2/') ||
+        (onlineAdminFeatureChanged && onlineAdminIntegrationPaths.has(p)) ||
         adminInteractionAcceptance.has(p) ||
         p === 'apps/admin/src/components/ui/AppButton.vue' ||
         /^scripts\/(?:admin-skin-rules(?:\.test)?|check-v2-color-contrast|acceptance-v2-(?:color-contrast|skin-consistency|business-skin))\.mjs$/.test(

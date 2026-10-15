@@ -67,11 +67,33 @@ test('新增次级路由必须登记其实际加载模块', () => {
     /统一模块查询入口缺少有效 moduleKey/
   );
 });
-test('客户 Session 临时边界必须在离页清除', () => {
+test('后台兑换 Session 临时边界必须在离页清除', () => {
   assert.match(
     checkMutation(
       'check-v2-input-retention.mjs',
-      'apps/admin/src/v2/features/online-recharge/PublicOnlineRechargeView.vue',
+      'apps/admin/src/v2/features/online-recharge/V2OnlineRedeemView.vue',
+      "session.value = '';",
+      "session.value = 'retained';"
+    ),
+    /临时敏感输入必须在离页时清除/
+  );
+});
+test('后台兑换 Session 临时边界不能写浏览器存储', () => {
+  assert.match(
+    checkMutation(
+      'check-v2-input-retention.mjs',
+      'apps/admin/src/v2/features/online-recharge/V2OnlineRedeemView.vue',
+      "const session = ref('');",
+      "const session = ref(''); sessionStorage.setItem('session', session.value);"
+    ),
+    /临时敏感输入不得进入浏览器存储/
+  );
+});
+test('公开订阅 Session 仍必须在离页清除', () => {
+  assert.match(
+    checkMutation(
+      'check-v2-input-retention.mjs',
+      'apps/admin/src/v2/features/online-recharge/PublicOnlineSubscriptionView.vue',
       "session.value = '';",
       "session.value = 'retained';"
     ),
