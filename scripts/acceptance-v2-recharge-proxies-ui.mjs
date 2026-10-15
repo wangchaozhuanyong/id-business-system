@@ -146,6 +146,7 @@ try {
           data = { now, timezone: 'Asia/Shanghai' };
         else if (endpoint.endsWith('/id-business-v2/change-versions'))
           data = { generatedAt: now, versions: {} };
+        else if (endpoint.endsWith('/id-business-v2/workspace-shortcuts')) data = { items: [] };
         else if (endpoint.endsWith('/id-business-v2/table-preferences')) data = { items: [] };
         else if (endpoint.endsWith('/id-business-v2/renewals/warning-summary'))
           data = {
