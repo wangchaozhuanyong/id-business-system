@@ -2,11 +2,15 @@
 // 完全合成夹具；禁止连接真实服务、账号、供应商或支付页面。
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { resolve } from 'node:path';
 import { chromium } from 'playwright';
 const root = fileURLToPath(new URL('..', import.meta.url));
+assert.ok(
+  existsSync(resolve(root, 'apps/admin/dist/index.html')),
+  'ONLINE UI acceptance requires the completed Admin build'
+);
 const evidence = resolve(root, '.runtime/online-recharge/ui');
 mkdirSync(evidence, { recursive: true });
 const origin = 'http://127.0.0.1:5409';
@@ -14,6 +18,7 @@ const server = spawn(
   process.execPath,
   [
     resolve(root, 'node_modules/vite/bin/vite.js'),
+    'preview',
     '--host',
     '127.0.0.1',
     '--port',

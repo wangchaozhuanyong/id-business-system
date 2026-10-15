@@ -6,6 +6,7 @@ import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { runInNewContext } from 'node:vm';
 import {
+  adminCheckCommands,
   onlineRechargeRecoveryPolicy,
   productionDatabaseAccessHelper,
   productionDatabaseAccessTest,
@@ -37,6 +38,66 @@ const readonlyMetadataPrevious = readonlyMetadataCurrent
     "commit.get('commit', {}).get('tree', {}).get('sha')"
   );
 const readonlyMetadataFixture = { readonlyBaseSource: readonlyMetadataPrevious };
+
+test('ONLINE browser acceptance previews the completed Admin build without starting a server', () => {
+  const commands = adminCheckCommands('admin', [
+    'apps/admin/src/v2/features/online-recharge/OnlineActionDrawer.vue'
+  ]);
+  const buildIndex = commands.findIndex(
+    (args) => args.join(' ') === 'run build --workspace @apple-business/admin'
+  );
+  const acceptanceIndex = commands.findIndex(
+    (args) => args.join(' ') === 'run acceptance:v2-online-recharge-ui'
+  );
+  assert.ok(buildIndex >= 0 && acceptanceIndex > buildIndex);
+  const script = readFileSync(
+    resolve(root, 'scripts/acceptance-v2-online-recharge-ui.mjs'),
+    'utf8'
+  );
+  const start = script.indexOf('const root =');
+  const end = script.indexOf('const sections =', start);
+  assert.ok(start >= 0 && end > start);
+  const startup = script.slice(start, end).replace('import.meta.url', 'scriptUrl');
+  const calls = [];
+  let hasDist = true;
+  const context = {
+    assert,
+    resolve,
+    fileURLToPath,
+    URL,
+    scriptUrl: new URL('./acceptance-v2-online-recharge-ui.mjs', import.meta.url).href,
+    process: { execPath: 'synthetic-node' },
+    existsSync(path) {
+      assert.equal(path, resolve(root, 'apps/admin/dist/index.html'));
+      return hasDist;
+    },
+    mkdirSync: () => undefined,
+    spawn: (...args) => {
+      calls.push(args);
+      return {};
+    }
+  };
+  runInNewContext(startup, { ...context });
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0][0], 'synthetic-node');
+  assert.deepEqual(Array.from(calls[0][1]), [
+    resolve(root, 'node_modules/vite/bin/vite.js'),
+    'preview',
+    '--host',
+    '127.0.0.1',
+    '--port',
+    '5409',
+    '--strictPort'
+  ]);
+  assert.equal(calls[0][2].cwd, resolve(root, 'apps/admin'));
+  calls.length = 0;
+  hasDist = false;
+  assert.throws(
+    () => runInNewContext(startup, { ...context }),
+    /requires the completed Admin build/
+  );
+  assert.equal(calls.length, 0);
+});
 
 test('ONLINE browser fixture restores the current session contract without starting a server', async () => {
   const script = readFileSync(
