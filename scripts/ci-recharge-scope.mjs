@@ -1168,6 +1168,8 @@ export function adminCheckCommands(mode, paths) {
     paths.some((p) => p.startsWith('apps/admin/src/v2/features/auto-recharge/'))
   )
     commands.push(['run', 'acceptance:v2-auto-recharge']);
+  if (paths.includes('scripts/acceptance-v2-recharge-billing.mjs'))
+    commands.push(['exec', '--', 'node', 'scripts/acceptance-v2-recharge-billing.mjs']);
   if (
     paths.some((p) =>
       /(?:layout\.css|V2(?:PageOverview|OverviewMetric|ListToolbar|PageContext)\.vue|admin-layout-rules|acceptance-v2-(?:filter|page)-layout)/.test(
@@ -1236,7 +1238,7 @@ function hasRechargeConnectionSchemaProof(paths, before, after) {
   );
 }
 const allowed =
-  /^(?:apps\/admin\/src\/v2\/features\/auto-recharge\/|apps\/api\/src\/id-business-v2\/auto-recharge\/|packages\/shared\/src\/v2\/auto-recharge\.ts$|docs\/|scripts\/ci-recharge-[\w.-]+$|scripts\/check-v2-(?:decimal-standard|ui-language)\.mjs$|scripts\/acceptance-v2-auto-recharge\.mjs$|\.github\/workflows\/quality\.yml$)/;
+  /^(?:apps\/admin\/src\/v2\/features\/auto-recharge\/|apps\/api\/src\/id-business-v2\/auto-recharge\/|packages\/shared\/src\/v2\/auto-recharge\.ts$|docs\/|scripts\/ci-recharge-[\w.-]+$|scripts\/check-v2-(?:decimal-standard|ui-language)\.mjs$|scripts\/acceptance-v2-(?:auto-recharge|recharge-billing)\.mjs$|\.github\/workflows\/quality\.yml$)/;
 const appleMailboxApiPaths = new Set([
   'apps/api/src/id-business-v2/auto-registration/apple-mailbox-pool.ts',
   'apps/api/src/id-business-v2/auto-registration/apple-mailboxes-task-bridge.service.ts',

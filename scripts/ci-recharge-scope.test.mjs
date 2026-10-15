@@ -6,6 +6,27 @@ import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import test from 'node:test';
 
+test('independent BitBrowser billing uses the recharge checks and its built-page acceptance', () => {
+  const paths = [
+    'apps/admin/src/v2/features/auto-recharge/useRechargeAddressGeneration.ts',
+    'apps/api/src/id-business-v2/auto-recharge/recharge-billing-generator.ts',
+    'scripts/acceptance-v2-recharge-billing.mjs',
+    'docs/BIT_RECHARGE_BILLING_GENERATION_20261016.md'
+  ];
+  const schema = readFileSync('apps/api/prisma-mysql/schema.prisma', 'utf8');
+  assert.equal(checkMode(paths, schema, schema), 'recharge');
+  assert.deepEqual(selectedParts(paths), ['guards', 'admin', 'api']);
+  assert.ok(
+    adminCheckCommands('recharge', paths).some(
+      (args) => args.join(' ') === 'exec -- node scripts/acceptance-v2-recharge-billing.mjs'
+    )
+  );
+  assert.equal(
+    checkMode([...paths, 'scripts/acceptance-v2-unreviewed.mjs'], schema, schema),
+    'full'
+  );
+});
+
 test('ONLINE CI build has finite inputs and read-only diagnostics remain control-only', () => {
   for (const path of onlineCiBuildControlPaths) {
     assert.equal(isCiOnly([path]), true, path);
