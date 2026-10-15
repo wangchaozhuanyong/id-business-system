@@ -1934,3 +1934,24 @@ test('artifact-only controls keep the shared prefix and verify actual dependenci
     assert.ok(onlineMixed.every((call) => !call.includes('docker')));
   }
 });
+
+test('HTML cache repair runs the real disposable Nginx regression once in guards only', () => {
+  const command = ['python3', '-B', 'scripts/acceptance-nginx-admin-cache.py', '--docker'];
+  for (const path of ['deploy/nginx/admin.conf', 'scripts/acceptance-nginx-admin-cache.py']) {
+    const calls = recordGuardCommands('admin', [path]);
+    assert.equal(calls.filter((row) => row.join(' ') === command.join(' ')).length, 1, path);
+    assert.equal(
+      recordGuardCommands('admin', [path], 'release-controls').some(
+        (row) => row.join(' ') === command.join(' ')
+      ),
+      false,
+      path
+    );
+  }
+  assert.equal(
+    recordGuardCommands('ci-only', ['scripts/ci-recharge-scope.mjs']).some((row) =>
+      row.includes('scripts/acceptance-nginx-admin-cache.py')
+    ),
+    false
+  );
+});
