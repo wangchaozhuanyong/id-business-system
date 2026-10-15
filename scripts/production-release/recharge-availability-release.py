@@ -9,6 +9,7 @@ from pathlib import Path
 import re
 import shutil
 import tempfile
+import time
 import urllib.request
 
 BASE = Path('/opt/id-business-v2')
@@ -22,6 +23,28 @@ def need(value, code):
 
 def digest(raw):
     return hashlib.sha256(raw).hexdigest()
+
+
+def acquire_release_lock(lock):
+    deadline = time.monotonic()+60
+    while True:
+        try:
+            fcntl.flock(lock.fileno(),fcntl.LOCK_EX | fcntl.LOCK_NB)
+            return
+        except BlockingIOError:
+            need(time.monotonic()<deadline,'PUBLICATION_BUSY')
+            time.sleep(1)
+
+
+def published_admin_files(contract):
+    return {**contract['publicFiles'],**contract.get('publishedAdminAncestor',{}).get('publicFiles',{}),
+            **contract.get('publishedAdminSuccessor',{}).get('publicFiles',{})}
+
+
+def successor_receipt(contract, field='publishedAdminSuccessor'):
+    binding = contract[field]
+    return {key:binding[key] for key in ('sourceCommit','sourceTree','archiveSha256','publicInventorySha256')} | {
+        'inputSha256':binding['roleProjection']['inputSha256'],'qualityRunId':binding['quality']['runId'],'verified':True}
 
 
 def download_payload(url, commit):
@@ -123,16 +146,36 @@ def validate_proof(proof, plan, contract, payload, h):
              'publicInventorySha256': digest(json.dumps(contract['publicFiles'], sort_keys=True, separators=(',', ':')).encode())}
          and proof.get('updatedServices') == ['api', 'admin'] and proof.get('migrationPerformed') is False
          and type(proof.get('businessActions')) is int and proof.get('businessActions') == 0, 'PROOF_INVALID')
+    if contract.get('publishedAdminSuccessor'):
+        need(proof.get('baselineAdminSuccessorVerification') == successor_receipt(contract), 'SUCCESSOR_PROOF_INVALID')
+    if contract.get('publishedAdminAncestor'):
+        need(proof.get('baselineAdminAncestorVerification') == successor_receipt(contract,'publishedAdminAncestor'), 'SUCCESSOR_PROOF_INVALID')
     actual = h.file_inventory(payload)
     actual.pop('build-proof.json', None)
     need(actual == proof.get('files'), 'PAYLOAD_CHANGED')
     expected_api = {n.removesuffix('.js') + ext for n in contract['apiModules'] for ext in ('.js', '.js.map', '.d.ts')}
+    native_files = {'baseline-admin-native.zip'}
+    if contract.get('publishedAdminSuccessor'):
+        native_files.update(('baseline-admin-successor-native.tar.gz','baseline-admin-successor-quality-native.zip'))
+    if contract.get('publishedAdminAncestor'):
+        native_files.update(('baseline-admin-ancestor-native.tar.gz','baseline-admin-ancestor-quality-native.zip'))
     need(set(proof['apiModules']) == expected_api and len(proof['adminFiles']) >= 250
          and {n.removeprefix('source/'): v for n, v in actual.items() if n.startswith('source/')} == contract['sources']
          and {n.removeprefix('api/modules/'): v for n, v in actual.items() if n.startswith('api/modules/')} == proof['apiModules']
          and {n.removeprefix('admin/html/'): v for n, v in actual.items() if n.startswith('admin/html/')} == proof['adminFiles']
          and actual.get('baseline-admin-native.zip') == contract['publishedAdminNative']['artifactDigest'].removeprefix('sha256:')
-         and all(n == 'baseline-admin-native.zip' or n.startswith(('source/', 'api/modules/', 'admin/html/')) for n in actual), 'PAYLOAD_SCOPE_INVALID')
+         and all(n in native_files
+                 or n.startswith(('source/', 'api/modules/', 'admin/html/')) for n in actual), 'PAYLOAD_SCOPE_INVALID')
+    if contract.get('publishedAdminSuccessor'):
+        successor = contract['publishedAdminSuccessor']
+        need(actual.get('baseline-admin-successor-native.tar.gz') == successor['archiveSha256']
+             and actual.get('baseline-admin-successor-quality-native.zip') == successor['quality']['artifactDigest'].removeprefix('sha256:'),
+             'SUCCESSOR_PAYLOAD_CHANGED')
+    if contract.get('publishedAdminAncestor'):
+        ancestor = contract['publishedAdminAncestor']
+        need(actual.get('baseline-admin-ancestor-native.tar.gz') == ancestor['archiveSha256']
+             and actual.get('baseline-admin-ancestor-quality-native.zip') == ancestor['quality']['artifactDigest'].removeprefix('sha256:'),
+             'SUCCESSOR_PAYLOAD_CHANGED')
     return proof
 
 
@@ -140,7 +183,7 @@ def smoke(d, target, proof, states, contract, h):
     verify_modules(d, target, proof['apiModules'])
     verify_admin(d, states['admin'], proof['adminFiles'])
     # Retain every previously served asset unless the new build explicitly replaces it.
-    old = {n: v for n, v in contract['publicFiles'].items() if n not in proof['adminFiles']}
+    old = {n: v for n, v in published_admin_files(contract).items() if n not in proof['adminFiles']}
     verify_admin(d, states['admin'], old)
     with urllib.request.urlopen(urllib.request.Request('https://54-249-61-238.sslip.io/',
             headers={'Cache-Control': 'no-cache'}), timeout=25) as response:
@@ -179,7 +222,11 @@ def baseline(d, contract, h, expected_runtime=None):
     normalizer=Path(contract['backupNormalizerPath'])
     need(normalizer.is_relative_to(BASE/'releases') and normalizer.is_file() and not normalizer.is_symlink() and digest(normalizer.read_bytes())=='ca9b05f832e9ed73bb36b7e76c083c99a40b13e067850166f8715bae469e5202','BACKUP_NORMALIZER_CHANGED')
     verify_modules(d,previous,contract['apiModules'])
-    verify_admin(d,states['admin'],contract['publicFiles'])
+    verify_admin(d,states['admin'],published_admin_files(contract))
+    if contract.get('publishedAdminSuccessor'):
+        manifest = json.loads(raw)
+        need(manifest.get('adminSourceProjection') == contract['publishedAdminSuccessor']['roleProjection']
+             and manifest.get('compiledArtifact') == contract['publishedAdminSuccessor']['nativeOrigin'], 'ADMIN_ORIGIN_CHANGED')
     h.guards(d,previous,states,contract)
     if expected_runtime is not None:
         verify_runtime_receipt(runtime_receipt(previous, raw, states), expected_runtime)
@@ -191,7 +238,7 @@ def release(plan, contract, d, h):
          and re.fullmatch('[a-f0-9]{40}', plan['tree']) and re.fullmatch('[0-9]+', plan['workflowRunId'])
          and re.fullmatch('[0-9]+', plan['workflowRunAttempt']), 'IDENTITY_INVALID')
     with (BASE / '.deploy.lock').open('a') as lock:
-        fcntl.flock(lock.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        acquire_release_lock(lock)
         if plan['mode'] == 'readback':
             target = (BASE / 'current').resolve()
             manifest = json.loads((target / 'release-manifest.json').read_bytes())
@@ -296,7 +343,20 @@ def release(plan, contract, d, h):
         (target / 'recharge-availability-preservation.json').write_text(json.dumps(receipt, sort_keys=True, indent=2) + '\n')
         (target / 'recharge-availability-build-proof.json').write_bytes(raw_proof)
         (target / 'recharge-availability-baseline-admin-native.zip').write_bytes((payload / 'baseline-admin-native.zip').read_bytes())
+        for name in ('baseline-admin-successor-native.tar.gz','baseline-admin-successor-quality-native.zip',
+                     'baseline-admin-ancestor-native.tar.gz','baseline-admin-ancestor-quality-native.zip'):
+            (target / ('recharge-availability-'+name)).write_bytes((payload / name).read_bytes())
         manifest = json.loads(raw_manifest)
+        previous_admin_projection = manifest.get('adminSourceProjection')
+        admin_projection = {'kind':'PUBLISHED_ADMIN_WITH_APPROVED_AVAILABILITY_OVERLAY','commit':plan['commit'],
+                            'sourceTree':plan['tree'],'sourceBaseline':contract['sourceBaseline'],
+                            'preservedPublishedAdminCommit':contract['publishedAdminSuccessor']['sourceCommit'],
+                            'changedSources':{n:v for n,v in contract['sources'].items() if n.startswith('apps/admin/')},
+                            'buildProofSha256':plan['buildProofSha256']}
+        manifest['previousAdminSourceProjection'] = previous_admin_projection
+        manifest['adminSourceProjection'] = admin_projection
+        manifest['roleSourceProjections'] = {**manifest.get('roleSourceProjections',{}),'admin':admin_projection}
+        manifest['previousCompiledArtifact'] = manifest.get('compiledArtifact')
         manifest.update(commit=plan['commit'], sourceTree=plan['tree'], sourceBranch='main', scope=contract['scope'], status='DEPLOYED',
                         previousCommit=contract['expectedCurrent'], previousRelease=str(previous), previousManifestSha256=digest(raw_manifest),
                         servicesUpdated=['api', 'admin'], dependentServiceRebound='online-recharge', newMigrations=[], migrationPerformed=False,
