@@ -2559,6 +2559,61 @@ test('direct login and workspace browser acceptance stay in exact admin scope', 
   ])
     assert.equal(checkMode([...paths, other], schema, schema), 'full', other);
 });
+test('published recharge router and exact input controls retain the complete admin scope', () => {
+  const frontend = [
+    'apps/admin/src/v2-router.ts',
+    'scripts/check-v2-input-retention.mjs',
+    'scripts/check-v2-online-recharge-controls.test.mjs'
+  ];
+  const paths = [
+    ...frontend,
+    'apps/admin/src/v2/features/online-recharge/V2OnlineRedeemView.vue',
+    'apps/admin/src/v2/features/auto-recharge/bitbrowser-direct-login.ts',
+    'scripts/ci-recharge-scope.mjs',
+    'scripts/ci-recharge-scope.test.mjs',
+    'docs/V2_TASKS.md'
+  ];
+  for (const changed of [...frontend.map((path) => [path]), paths]) {
+    assert.equal(isAdminOnly(changed), true);
+    assert.equal(checkMode(changed, schema, schema), 'admin');
+    assert.deepEqual(selectedParts(changed), ['guards', 'admin']);
+    assert.deepEqual(adminUiGuardChecks('admin', changed), [
+      'check:admin-ui',
+      'check:v2-ui-language',
+      'check:v2-color-contrast',
+      'check:v2-table-standard',
+      'check:v2-loading-standard',
+      'check:v2-module-architecture',
+      'check:v2-isolation',
+      'check:v2-decimal-standard'
+    ]);
+    for (const part of ['api', 'connector', 'migration', 'security'])
+      assert.equal(affectsPart(part, changed), false, part);
+  }
+  const commands = adminCheckCommands('admin', paths);
+  assert.ok(
+    commands.some((args) => args.join(' ') === 'run test --workspace @apple-business/admin')
+  );
+  assert.ok(commands.some((args) => args.includes('acceptance:v2-auto-recharge')));
+  for (const outside of [
+    'apps/admin/src/v2-router-other.ts',
+    'scripts/check-v2-input-retention-write.mjs',
+    'scripts/check-v2-input-retention.mjs.backup',
+    'scripts/check-v2-online-recharge-controls.mjs',
+    'scripts/check-v2-online-recharge-controls.test.mjs.backup',
+    'apps/admin/src/auth/login.ts',
+    'apps/api/src/id-business-v2/auto-recharge/recharge.service.ts',
+    'apps/api/src/id-business-v2/online-recharge/online-recharge.service.ts',
+    'apps/api/prisma-mysql/schema.prisma',
+    'apps/api/prisma-mysql/migrations/new/migration.sql',
+    'packages/shared/src/v2/auto-recharge.ts',
+    'package.json',
+    'package-lock.json'
+  ]) {
+    assert.equal(isAdminOnly([...paths, outside]), false, outside);
+    assert.equal(checkMode([...paths, outside], schema, schema), 'full', outside);
+  }
+});
 test('workspace dock acceptance stays in exact admin scope and retains every shared UI guard', () => {
   const acceptance = 'scripts/acceptance-v2-workspace-dock.mjs';
   const paths = [

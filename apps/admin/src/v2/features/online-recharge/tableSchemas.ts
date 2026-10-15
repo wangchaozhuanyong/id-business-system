@@ -45,10 +45,12 @@ const columns: Partial<Record<OnlineSection, Column[]>> = {
   ],
   jobs: [
     ['id', '任务编号', 'identifier'],
+    ['operation', '操作类型', 'status'],
     ['email', '账号', 'identifier'],
     ['plan', '套餐', 'status'],
     ['provider', '通道', 'status'],
     ['status', '状态', 'status'],
+    ['confirmedPaid', '已确认付款', 'status'],
     ['progress', '进度', 'numeric'],
     ['stage', '当前阶段'],
     ['cardLast4', '卡尾号', 'identifier'],
@@ -56,6 +58,7 @@ const columns: Partial<Record<OnlineSection, Column[]>> = {
   ],
   automation: [
     ['id', '任务编号', 'identifier'],
+    ['operation', '操作类型', 'status'],
     ['email', '账号', 'identifier'],
     ['provider', '通道', 'status'],
     ['status', '状态', 'status'],
@@ -97,7 +100,7 @@ const columns: Partial<Record<OnlineSection, Column[]>> = {
     ['mode', '运行模式', 'status'],
     ['status', '连接状态', 'status'],
     ['taskId', '当前任务', 'identifier'],
-    ['updatedAt', '更新时间', 'date']
+    ['updatedAt', '观测时间', 'date']
   ],
   'runtime-logs': [
     ['createdAt', '记录时间', 'date'],
@@ -157,6 +160,7 @@ export const onlineTableSchemas = Object.fromEntries(
 ) as unknown as Record<OnlineSection, ReturnType<typeof defineV2TableSchema>>;
 export const onlineTablesByFeature = {
   'online-recharge-overview': [],
+  'online-recharge-redeem': [],
   'online-recharge-config': [],
   'online-recharge-checkout-debug': [],
   'online-recharge-proxies': [onlineTableSchemas.proxies],

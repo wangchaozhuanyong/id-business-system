@@ -753,6 +753,11 @@ const adminInteractionAcceptance = new Set([
   workspaceDockAcceptance,
   'scripts/lib/vite-cli.mjs'
 ]);
+const adminFrontendControlPaths = new Set([
+  'apps/admin/src/v2-router.ts',
+  'scripts/check-v2-input-retention.mjs',
+  'scripts/check-v2-online-recharge-controls.test.mjs'
+]);
 export function isAdminOnly(paths) {
   const combined = hasCombinedComponentScope(paths);
   return (
@@ -760,6 +765,7 @@ export function isAdminOnly(paths) {
       (p) =>
         p.startsWith('apps/admin/src/v2/') ||
         adminInteractionAcceptance.has(p) ||
+        adminFrontendControlPaths.has(p) ||
         adminPublicDocument.test(p) ||
         p === 'scripts/acceptance-v2-order-archive-ui.mjs'
     ) &&
@@ -767,6 +773,7 @@ export function isAdminOnly(paths) {
       (p) =>
         p.startsWith('apps/admin/src/v2/') ||
         adminInteractionAcceptance.has(p) ||
+        adminFrontendControlPaths.has(p) ||
         p === 'apps/admin/src/components/ui/AppButton.vue' ||
         /^scripts\/(?:admin-skin-rules(?:\.test)?|check-v2-color-contrast|acceptance-v2-(?:color-contrast|skin-consistency|business-skin))\.mjs$/.test(
           p
@@ -1242,7 +1249,13 @@ export function affectsPart(part, paths) {
       paths.some((path) => ownedMysqlTestControlPaths.includes(path)))
   )
     return true;
-  if (part === 'admin' && paths.some((path) => adminInteractionAcceptance.has(path))) return true;
+  if (
+    part === 'admin' &&
+    paths.some(
+      (path) => adminInteractionAcceptance.has(path) || adminFrontendControlPaths.has(path)
+    )
+  )
+    return true;
   const common =
     /^(?:package(?:-lock)?\.json$|\.github\/workflows\/quality\.yml$|scripts\/ci-recharge-check\.mjs$|scripts\/ci-change-scope|tsconfig|eslint\.config|\.npmrc$)/;
   const inputs = {

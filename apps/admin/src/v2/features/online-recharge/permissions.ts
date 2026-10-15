@@ -15,6 +15,7 @@ export function canUseOnlineAction(
   section: OnlineSection,
   action: string
 ) {
+  if (section === 'login-logs' && !user?.roles.includes('admin')) return false;
   const read = hasUserPermission(user, 'id_business_v2.online_recharge.read');
   const manage = hasUserPermission(user, 'id_business_v2.online_recharge.manage');
   const sensitive =

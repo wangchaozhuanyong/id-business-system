@@ -5,6 +5,7 @@ import {
   directBrowserProfileExists,
   directProfileOptions,
   verifyDirectProfileConfiguration,
+  directBrowserFailure,
   DirectBrowserError,
   type DirectBrowserSettings
 } from './bitbrowser-direct-api';
@@ -226,6 +227,29 @@ export async function runDirectLogin(
       throw new DirectBrowserError('bitbrowser_profile_sync_unverified');
     }
     verifyDirectProfileConfiguration(detail, settings);
+    // Launch arguments cannot change a core that was already opened by the client.
+    // Keep that window intact if its control connection cannot be established.
+    let originallyRunning = false;
+    if (ownedProfile) {
+      const alive = (await api.post('/browser/pids/alive', { ids: [profileId] }, remaining())).data;
+      if (
+        !alive ||
+        typeof alive !== 'object' ||
+        Array.isArray(alive) ||
+        Object.keys(alive).some((id) => id !== profileId)
+      )
+        throw new DirectBrowserError('bitbrowser_direct_protocol', {
+          operation: 'browser_processes'
+        });
+      const pid = (alive as Record<string, unknown>)[profileId];
+      if (pid !== undefined && pid !== null && pid !== 0) {
+        if (!Number.isSafeInteger(pid) || Number(pid) < 1)
+          throw new DirectBrowserError('bitbrowser_direct_protocol', {
+            operation: 'browser_processes'
+          });
+        originallyRunning = true;
+      }
+    }
     let networkFailed = false;
     let networkReadNeedsProbe = false;
     let attempts = 0;
@@ -340,7 +364,21 @@ export async function runDirectLogin(
       const endpoint = (opened.data as Record<string, unknown>)?.ws;
       if (typeof endpoint !== 'string')
         throw new DirectBrowserError('bitbrowser_direct_debug_unavailable');
-      cdp = await BrowserCdp.connect(endpoint, signal);
+      await hooks.progress('browser_control_connect');
+      try {
+        cdp = await BrowserCdp.connect(endpoint, signal);
+      } catch (error) {
+        if (
+          originallyRunning &&
+          attempts === 1 &&
+          error instanceof DirectBrowserError &&
+          error.reason === 'bitbrowser_direct_debug_unavailable'
+        )
+          throw new DirectBrowserError('bitbrowser_existing_window_control_unavailable', {
+            operation: 'browser_control'
+          });
+        throw directBrowserFailure(error, 'browser_control');
+      }
       const version = await cdp.command('Browser.getVersion');
       const actualVersion = /(?:HeadlessChrome|Chrome)\/(\d+)\./.exec(
         String(version.product ?? '')

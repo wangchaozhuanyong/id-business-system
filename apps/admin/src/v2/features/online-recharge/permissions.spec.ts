@@ -40,6 +40,11 @@ describe('线上代充操作权限', () => {
   });
   it('管理员沿用现有权限助手默认通过', () =>
     expect(canUseOnlineAction({ ...user, roles: ['admin'] }, 'cards', 'reveal')).toBe(true));
+  it('登录日志与后端一致，只允许管理员读取', () => {
+    const reader = { ...user, permissions: ['id_business_v2.online_recharge.read'] };
+    expect(canUseOnlineAction(reader, 'login-logs', 'detail')).toBe(false);
+    expect(canUseOnlineAction({ ...reader, roles: ['admin'] }, 'login-logs', 'detail')).toBe(true);
+  });
   it('现有身份标记需要敏感审批时直接取密关闭', () => {
     const restricted = {
       ...user,

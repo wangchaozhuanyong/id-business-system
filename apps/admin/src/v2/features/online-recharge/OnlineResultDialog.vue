@@ -50,17 +50,20 @@ import { onlineLabel } from './labels';
 import OnlineTaskProgress from './OnlineTaskProgress.vue';
 import { useOnlineTask } from './useOnlineTask';
 import type { PublicTask } from './contracts';
-const props = defineProps<{ modelValue: boolean; result: Record<string, unknown> }>();
+const props = defineProps<{ modelValue: boolean; result: unknown }>();
 const emit = defineEmits<{ 'update:modelValue': [boolean]; copied: [] }>();
 const labels: Record<string, string> = {
   message: '结果说明',
-  id: '任务编号',
+  id: '记录编号',
   taskId: '任务编号',
   status: '状态',
   progress: '进度',
   stage: '执行阶段',
   plan: '套餐',
   provider: '执行通道',
+  operation: '操作类型',
+  paymentStarted: '已开始付款',
+  confirmedPaid: '已确认付款',
   email: '账号',
   createdAt: '创建时间',
   updatedAt: '更新时间',
@@ -143,37 +146,89 @@ const labels: Record<string, string> = {
   exitIp: '出口地址',
   latencyMs: '耗时（毫秒）'
 };
-const entries = computed(() =>
-  Object.entries({ ...props.result, ...liveTask.value })
+function record(value: unknown): Record<string, unknown> {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : {};
+}
+const resultRecord = computed(() => record(props.result));
+const taskOperations = new Set([
+  'recharge',
+  'debug',
+  'subscription',
+  'renewal',
+  'config_test',
+  'proxy_test',
+  'browser_manage',
+  'notification',
+  'recheck'
+]);
+const taskStatuses = new Set([
+  'queued',
+  'running',
+  'awaiting_credentials',
+  'awaiting_review',
+  'succeeded',
+  'failed',
+  'cancelled'
+]);
+function resultTask(value: unknown): PublicTask | undefined {
+  const item = record(value);
+  return typeof item.id === 'string' &&
+    taskOperations.has(String(item.operation)) &&
+    taskStatuses.has(String(item.status))
+    ? (item as unknown as PublicTask)
+    : undefined;
+}
+const entries = computed(() => {
+  if (Array.isArray(props.result))
+    return [
+      { label: '卡片消费汇总', value: summarize(props.result) || '暂无已确认成功的消费记录' }
+    ];
+  const details = resultTask(props.result)
+    ? { ...resultRecord.value, ...liveTask.value }
+    : resultRecord.value;
+  return Object.entries(details)
     .filter(([key]) => labels[key] && !['cvc', 'taskToken', 'ticket'].includes(key))
     .map(([key, value]) => ({
       label: labels[key],
-      value:
-        typeof value === 'object'
-          ? summarize(value)
-          : ['status', 'plan', 'provider', 'subscriptionStatus', 'renewalStatus'].includes(key)
-            ? onlineLabel(value)
-            : String(value ?? '—')
-    }))
-);
+      value: displayValue(key, value)
+    }));
+});
+function displayValue(key: string, value: unknown): string {
+  if (value && typeof value === 'object') return summarize(value);
+  return [
+    'status',
+    'plan',
+    'provider',
+    'operation',
+    'subscriptionStatus',
+    'renewalStatus',
+    'autoRenew',
+    'paymentStarted',
+    'confirmedPaid'
+  ].includes(key)
+    ? onlineLabel(value)
+    : String(value ?? '—');
+}
 function summarize(value: unknown): string {
-  if (Array.isArray(value)) return value.map(summarize).join('\n');
+  if (Array.isArray(value)) return value.map(summarize).join('\n\n');
   if (value && typeof value === 'object')
     return Object.entries(value as Record<string, unknown>)
       .filter(([key]) => labels[key])
-      .map(([key, part]) => `${labels[key]}：${summarize(part)}`)
+      .map(([key, part]) => `${labels[key]}：${displayValue(key, part)}`)
       .join('\n');
   return onlineLabel(value);
 }
 const copyValue = computed(() =>
   String(
-    props.result.code ??
-      props.result.number ??
-      props.result.cardNumber ??
-      props.result.session ??
-      props.result.sessionPayload ??
-      props.result.checkoutUrl ??
-      props.result.content ??
+    resultRecord.value.code ??
+      resultRecord.value.number ??
+      resultRecord.value.cardNumber ??
+      resultRecord.value.session ??
+      resultRecord.value.sessionPayload ??
+      resultRecord.value.checkoutUrl ??
+      resultRecord.value.content ??
       ''
   )
 );
@@ -182,8 +237,7 @@ const tracker = useOnlineTask(liveTask, ref(''), false);
 watch(
   () => [props.modelValue, props.result] as const,
   ([open, result]) => {
-    liveTask.value =
-      open && result.id && result.status ? (result as unknown as PublicTask) : undefined;
+    liveTask.value = open ? (resultTask(result) ?? resultTask(record(result).task)) : undefined;
   },
   { immediate: true }
 );
@@ -199,10 +253,10 @@ interface FileRecord {
 }
 const files = computed(
   () =>
-    (Array.isArray(props.result.files)
-      ? props.result.files
-      : Array.isArray(props.result.artifacts)
-        ? props.result.artifacts
+    (Array.isArray(resultRecord.value.files)
+      ? resultRecord.value.files
+      : Array.isArray(resultRecord.value.artifacts)
+        ? resultRecord.value.artifacts
         : []) as FileRecord[]
 );
 function clear() {
