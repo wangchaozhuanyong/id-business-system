@@ -83,3 +83,9 @@ PR #486 合并为 4998227550b2c795330f12a34ad7804aa7cab172。质量 38634843221�
 只读现场 6de992ba-1da8-49e9-9fc0-894f0b323a4a 确认当前目录、manifest f9de776d 和八项服务完全匹配前版；候选 API/Admin 镜像均未生成，switch-state 不存在。已下载产物并生成 API Dockerfile，尚未进入 Admin 构建。服务器 Docker 25.0.16 的该 API Dockerfile 使用 FROM sha256:312a8f02...；原时间窗口 daemon 日志确认 pull access denied 与 insufficient_scope。已发布前版的真实构建使用经核验的本地命名引用。
 
 定向补修只改变基底引用方式：先核验容器原命名引用仍精确指向冻结镜像 ID，Dockerfile 使用该引用并以 --pull=false 构建；完成后再次核验引用、原镜像层与完整配置。裸 image ID 不得进入该引用路径，引用漂移仍停止。新增私有构建阶段回执，失败只保留受控分类与角色，不保存 registry 正文或凭据。付款、数据库、业务源码和既有服务范围均未改变。
+
+## 主分支同步的来源准入
+
+等待 PR #487 的控制检查期间，main 合并 ae4499bd，将当前 F8 已上线的首次充值、Pro 与 ONLINE 源码同步入库。13 项诊断及验证源码摘要均未改变；新增 19 项业务／部署路径逐一核对 Git blob 和文件模式，全部等于固定 F8 Git 原件。检查证据保留于本工作树 `.runtime/recharge-record-release-20261015/latest-main-source-equivalence.json`。
+
+构建入口继续固定原 mainBase、F8 来源及 13 项摘要，只允许额外路径精确等于已发布 F8 的 blob 和模式；其他未发布改动仍拒绝。实际候选仍由 F8 原件叠加精确 12 项部署源码构成，不整体打包最新 main。真实临时 Git 样例验证已发布同步可通过、额外源码漂移与诊断摘要漂移分别拒绝。更新分支后重新取得受影响控制检查，再执行新正式候选；保留旧失败运行与已通过应用检查原件。

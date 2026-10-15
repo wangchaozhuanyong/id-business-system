@@ -1,4 +1,5 @@
 import copy
+import hashlib
 import importlib.util
 import io
 import json
@@ -13,9 +14,51 @@ HERE = Path(__file__).parent
 spec = importlib.util.spec_from_file_location('record_release', HERE / 'recharge-record-release.py')
 release = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(release)
+build_spec = importlib.util.spec_from_file_location('record_build', HERE / 'recharge-record-build.py')
+build = importlib.util.module_from_spec(build_spec)
+build_spec.loader.exec_module(build)
 
 
 class RepairPublicationTests(unittest.TestCase):
+    def test_main_sync_admits_only_exact_published_source_and_keeps_repair_hashes(self):
+        runtime = HERE.parents[1] / '.runtime'
+        runtime.mkdir(exist_ok=True)
+        with tempfile.TemporaryDirectory(prefix='record-source-gate-', dir=runtime) as root:
+            root = Path(root)
+            def command(*args):
+                return subprocess.check_output(['git', *args], cwd=root, stderr=subprocess.DEVNULL, text=True).strip()
+            def commit(message):
+                command('add', 'apps')
+                command('-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.test',
+                        'commit', '-qm', message)
+                return command('rev-parse', 'HEAD')
+            command('init', '-q')
+            directory = root / 'apps/api'
+            directory.mkdir(parents=True)
+            repair, synced = directory / 'repair.ts', directory / 'synced.ts'
+            repair.write_text('original repair\n')
+            synced.write_text('old source\n')
+            main_base = commit('original main')
+            synced.write_text('already published\n')
+            published = commit('published source')
+            published_tree = command('rev-parse', 'HEAD^{tree}')
+            repair.write_text('diagnostic repair\n')
+            commit('repair plus published sync')
+            contract = {'mainBase': main_base, 'sourceBaseline': published,
+                        'sourceBaselineTree': published_tree,
+                        'changedSources': {'apps/api/repair.ts': hashlib.sha256(repair.read_bytes()).hexdigest()}}
+            with patch.object(build, 'ROOT', root):
+                build.verify_scope(contract)
+                synced.write_text('unpublished change\n')
+                commit('unpublished source')
+                with self.assertRaisesRegex(RuntimeError, 'SOURCE_SCOPE_CHANGED'):
+                    build.verify_scope(contract)
+                synced.write_text('already published\n')
+                repair.write_text('different repair\n')
+                commit('repair hash drift')
+                with self.assertRaisesRegex(RuntimeError, 'REPAIR_SOURCE_CHANGED'):
+                    build.verify_scope(contract)
+
     def test_named_base_requires_exact_observed_image_id(self):
         state = {'reference': 'id-business-v2-direct:f8a1612d-online-api', 'image': 'sha256:' + '1' * 64}
         d = Mock()
