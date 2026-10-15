@@ -409,6 +409,7 @@
     "apps/api/src/id-business-v2/auto-recharge/worker/pay.py": "766764a46f840ec95981b581c95407b9b6a98179557ca4233a855dba020c8c3a",
     "apps/api/src/id-business-v2/auto-recharge/worker/payment_form.py": "a62d0f9c0650dcd610dff5f92482429052b15b069093e7e8a68f23e4cf60e481",
     "apps/api/src/id-business-v2/auto-recharge/worker/payment_network.py": "e72b9469d3f29d4967d87c1645f61b54372b21672d55a82caf041d0b8c69c2d7",
+    "apps/api/src/id-business-v2/auto-recharge/worker/test_connector_health.py": "4a664f82a89d2048082f718f9b9d49c3f7c840d25b4a1dd8d9882539d8861d78",
     "apps/api/src/id-business-v2/auto-recharge/worker/test_native_checkout.py": "4756581e212612bd9a7d6511d6237ab90ccf0555e179eeac83ef03a5b45cef32",
     "apps/api/src/id-business-v2/auto-recharge/worker/test_native_pro_checkout.py": "7905fd14d9d876d40dc47bed74244981586ad4d2e23d3fec33c88c5a5cecd41d",
     "packages/shared/src/v2/auto-recharge.ts": "6feee96f7b1e82e21e12c1c3e2232fe54ac42079c1539d50956024bec1eab730"
