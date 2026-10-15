@@ -191,6 +191,9 @@ class RepairPublicationTests(unittest.TestCase):
         self.assertEqual(release.PRESERVED, ('admin', 'mysql', 'caddy', 'media-resolver',
                                             'auto-recharge', 'auto-registration'))
         self.assertEqual(value['preservedAdminCommit'], '6b4237006e8cc083d31f8ab146ee7186e13c6737')
+        self.assertEqual(value['preservedEngineCommit'], 'adb3a3c7a63054520c284838189d85064e1c019a')
+        self.assertEqual(value['services']['online-recharge']['image'],
+                         'sha256:49f530475998ad007d675f6c73961f445fc5e989ce3bbfb9c9b3313939066137')
         self.assertEqual(value['engineHealth'], {'ready': True, 'mode': 'enabled', 'activeTasks': 0,
                                                'stopping': False, 'rpcConnected': True})
 
