@@ -105,12 +105,10 @@ onBeforeUnmount(() => {
 const busy = ref(false);
 const error = ref('');
 watch(
-  () => [props.modelValue, props.action.key, props.row?.id] as const,
+  [() => props.modelValue, () => props.action.key, () => props.row?.id],
   ([open]) => {
-    if (!open) {
-      for (const key of Object.keys(temporary)) delete temporary[key];
-      return;
-    }
+    clearTemporary();
+    if (!open) return;
     error.value = '';
     const initial = initialFields(props.action.fields);
     for (const field of props.action.fields ?? [])
