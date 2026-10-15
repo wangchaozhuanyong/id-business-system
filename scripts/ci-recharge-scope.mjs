@@ -108,8 +108,36 @@ const onlineCiBuildInputs = new Set([
   'tsconfig.base.json',
   'deploy/nginx/admin.conf'
 ]);
+const onlineCiBuildTestInputs = new Set([
+  'scripts/production-release/online-recharge-ci-build.test.py',
+  'scripts/production-release/online-recharge-component-lifecycle.test.py'
+]);
 export function needsOnlineRechargeCiBuild(paths) {
   if (isRechargeRecordRepairOnly(paths) || isRechargeRecordControlsOnly(paths)) return false;
+  if (
+    paths.some((path) => onlineCiBuildTestInputs.has(path)) &&
+    paths.every(
+      (path) =>
+        onlineCiBuildTestInputs.has(path) ||
+        path === 'scripts/ci-recharge-scope.mjs' ||
+        path === 'scripts/ci-recharge-scope.test.mjs' ||
+        path === 'scripts/ci-recharge-check.test.mjs' ||
+        /^docs\/.*\.md$/.test(path)
+    )
+  )
+    return false;
+  // Ordinary frontend changes keep the complete Admin build/UI checks. A
+  // selector repair may accompany them, but real image/build inputs may not.
+  if (
+    isAdminOnly(paths) &&
+    paths.every(
+      (path) =>
+        !onlineCiBuildInputs.has(path) ||
+        onlineCiBuildTestInputs.has(path) ||
+        path === 'scripts/ci-recharge-scope.mjs'
+    )
+  )
+    return false;
   return (
     !isReleaseArtifactRetentionOnly(paths) &&
     paths.some(
@@ -746,6 +774,7 @@ export function hasCombinedComponentScope(paths) {
   );
 }
 const adminInteractionAcceptance = new Set([
+  'scripts/acceptance-v2-online-recharge-ui.mjs',
   'scripts/acceptance-v2-bitbrowser-direct.mjs',
   'scripts/acceptance-v2-refresh-interaction.mjs',
   'scripts/acceptance-v2-auto-recharge.mjs',

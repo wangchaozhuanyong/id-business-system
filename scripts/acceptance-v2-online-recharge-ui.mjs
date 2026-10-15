@@ -10,6 +10,10 @@ const root = fileURLToPath(new URL('..', import.meta.url));
 const evidence = resolve(root, '.runtime/online-recharge/ui');
 mkdirSync(evidence, { recursive: true });
 const origin = 'http://127.0.0.1:5409';
+const legacyRoutes = {
+  '/online-recharge': '/v2/online-recharge/redeem',
+  '/online-recharge/subscription': '/v2/online-recharge/renewal'
+};
 const server = spawn(
   process.execPath,
   [
@@ -26,6 +30,7 @@ const sections = process.argv.includes('--affected')
   ? ['config', 'addresses', 'cdks']
   : [
       'overview',
+      'redeem',
       'jobs',
       'automation',
       'runtime-logs',
@@ -214,7 +219,7 @@ const navigate = async (page, path) => {
   await page.evaluate((target) => {
     void document.querySelector('#app').__vue_app__.config.globalProperties.$router.push(target);
   }, path);
-  await page.waitForURL(origin + path);
+  await page.waitForURL(origin + (legacyRoutes[path] ?? path));
   await page.locator('.online-page,.online-public').first().waitFor();
   await page
     .locator('.v2-async-region[data-v2-query-phase="ready"]')
@@ -278,7 +283,7 @@ async function measure(page) {
 }
 async function fixture(context, state) {
   const unexpected = [];
-  const publicHeaders = [];
+  const credentialHeaders = [];
   const writes = [];
   const rechecks = [];
   const configTargets = [];
@@ -298,6 +303,8 @@ async function fixture(context, state) {
       return route.abort();
     }
     if (path === '/api/auth/me') return ok(state.actor);
+    if (path === '/api/auth/session')
+      return ok({ accessToken: 'synthetic-access', user: state.actor });
     if (path === '/api/auth/login')
       return ok({ accessToken: 'synthetic-access', user: state.actor });
     if (path === '/api/auth/logout') return ok({});
@@ -352,7 +359,13 @@ async function fixture(context, state) {
     const base = '/api/id-business-v2/online-recharge/';
     const endpoint = path.slice(base.length);
     if (endpoint.startsWith('public/')) {
-      publicHeaders.push(req.headers().authorization ?? null);
+      credentialHeaders.push(req.headers().authorization ?? null);
+      if (req.headers().authorization !== 'Bearer synthetic-access')
+        return route.fulfill({
+          status: 401,
+          contentType: 'application/json',
+          body: JSON.stringify({ success: false, message: '合成后台身份缺失' })
+        });
       const method = endpoint.split('/')[1];
       if (method === 'config')
         return ok({ maintenance: false, maxConcurrent: 1, active: 0, paymentRegion: 'PH' });
@@ -472,7 +485,7 @@ async function fixture(context, state) {
     }
     return ok({ success: true, message: '合成操作完成' });
   });
-  return { unexpected, publicHeaders, writes, configTargets, rechecks };
+  return { unexpected, credentialHeaders, writes, configTargets, rechecks };
 }
 try {
   await wait(async () => (await fetch(origin).catch(() => null))?.ok);
@@ -502,7 +515,11 @@ try {
       page.on('pageerror', (error) => errors.push(error.message));
       for (const section of sections) {
         await page.goto(`${origin}/v2/online-recharge/${section}`);
-        await page.locator('.online-page').waitFor();
+        try {
+          await page.locator('.online-page').waitFor();
+        } catch {
+          throw new Error(`合成页面未显示：${section}；实际路由：${new URL(page.url()).pathname}`);
+        }
         await page.locator('.v2-async-region[data-v2-query-phase="ready"]').first().waitFor();
         if (process.argv.includes('--affected') && section === 'config') {
           await page.getByRole('button', { name: '检测视觉模型', exact: true }).click();
@@ -527,18 +544,12 @@ try {
       }
       for (const path of ['/online-recharge', '/online-recharge/subscription']) {
         await page.goto(origin + path);
-        await page.locator('.online-public').waitFor();
-        if (process.argv.includes('--affected')) {
-          if (path.endsWith('/subscription')) {
-            await page
-              .locator('textarea')
-              .fill(JSON.stringify({ accessToken: 'synthetic-private-session' }));
-            await page.getByRole('button', { name: '查询订阅', exact: true }).click();
-            await page.getByRole('button', { name: '刷新结果', exact: true }).click();
-          } else {
-            await page.getByPlaceholder('输入兑换码').fill('SYNTHETIC-CODE');
-            await page.getByRole('button', { name: '查询兑换结果', exact: true }).click();
-          }
+        await page.waitForURL(origin + legacyRoutes[path]);
+        await page.locator('.online-page').waitFor();
+        await page.locator('.v2-async-region[data-v2-query-phase="ready"]').first().waitFor();
+        if (process.argv.includes('--affected') && path === '/online-recharge') {
+          await page.getByPlaceholder('输入兑换码').fill('SYNTHETIC-CODE');
+          await page.getByRole('button', { name: '查询兑换结果', exact: true }).click();
           await page.getByText('31天', { exact: true }).waitFor();
           assert.equal(
             await page
@@ -549,17 +560,19 @@ try {
         }
         const measured = await measure(page);
         assert.ok(measured.documentWidth <= width + 1, `${path}页面横向溢出`);
-        const label = await page.locator('.el-form-item__label').first().boundingBox(),
-          control = await page
-            .locator('.el-form-item .el-input,.el-form-item .el-textarea')
-            .first()
-            .boundingBox();
-        assert.ok(label.x + label.width <= control.x + 2, '公开表单标签必须位于左侧');
+        if (path === '/online-recharge') {
+          const label = await page.locator('.el-form-item__label').first().boundingBox(),
+            control = await page
+              .locator('.el-form-item .el-input,.el-form-item .el-textarea')
+              .first()
+              .boundingBox();
+          assert.ok(label.x + label.width <= control.x + 2, '后台兑换表单标签必须位于左侧');
+        }
         report.cases.push({ theme, width, path, measurements: measured, result: 'PASS' });
       }
       assert.ok(
-        network.publicHeaders.every((value) => value === null),
-        '客户接口附带后台身份'
+        network.credentialHeaders.every((value) => value === 'Bearer synthetic-access'),
+        '内部兑换接口未携带当前后台身份'
       );
       assert.deepEqual(network.unexpected, [], '出现未拦截外部请求');
       assert.deepEqual(errors, [], '页面运行异常');
@@ -881,9 +894,7 @@ try {
   const privateSession = JSON.stringify({ accessToken: 'synthetic-private-session' });
   await page.getByPlaceholder('输入兑换码').fill('SYNTHETIC-CODE');
   await page.locator('textarea').fill(privateSession);
-  await navigate(page, '/online-recharge/subscription');
-  assert.equal(await page.locator('textarea').inputValue(), '');
-  await page.locator('textarea').fill(privateSession);
+  await navigate(page, '/v2/online-recharge/addresses');
   await navigate(page, '/online-recharge');
   assert.equal(await page.locator('textarea').inputValue(), '');
   await page.getByRole('button', { name: '验证兑换码', exact: true }).click();
@@ -897,14 +908,14 @@ try {
   );
   assert.ok(
     !stored.includes('synthetic-private-session') && !stored.includes('synthetic-capability'),
-    '公开凭据进入浏览器存储'
+    '兑换会话或任务凭据进入浏览器存储'
   );
   assert.ok(
-    network.publicHeaders.every((value) => value === null),
-    '公开提交附带后台身份'
+    network.credentialHeaders.every((value) => value === 'Bearer synthetic-access'),
+    '内部兑换提交未携带后台身份'
   );
   report.lifecycle.push({
-    case: 'public-session-volatile-capability-no-browser-storage-no-admin-header',
+    case: 'internal-session-volatile-capability-no-browser-storage-authenticated',
     result: 'PASS'
   });
   await page.locator('textarea').fill(privateSession);
@@ -927,7 +938,7 @@ try {
     '同页身份变化留下旧客户任务'
   );
   report.lifecycle.push({
-    case: 'public-same-page-identity-clears-session-task-capability',
+    case: 'internal-same-page-identity-clears-session-task-capability',
     result: 'PASS'
   });
   state.actor = administrator;
