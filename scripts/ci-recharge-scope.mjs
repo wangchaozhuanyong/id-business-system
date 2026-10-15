@@ -113,6 +113,7 @@ const onlineCiBuildTestInputs = new Set([
   'scripts/production-release/online-recharge-component-lifecycle.test.py'
 ]);
 export function needsOnlineRechargeCiBuild(paths) {
+  if (isAdminHtmlCacheOnly(paths)) return false;
   if (isRechargeRecordRepairOnly(paths) || isRechargeRecordControlsOnly(paths)) return false;
   if (
     paths.some((path) => onlineCiBuildTestInputs.has(path)) &&
@@ -742,6 +743,36 @@ export function isCiOnly(paths) {
     )
   );
 }
+// This finite exception covers the reviewed two-line HTML validator repair,
+// not arbitrary Nginx, Docker, API, dependency or deployment changes.
+export const adminHtmlCachePaths = Object.freeze([
+  'deploy/nginx/admin.conf',
+  'scripts/acceptance-nginx-admin-cache.py'
+]);
+const adminHtmlCacheSupport = new Set([
+  ...adminHtmlCachePaths,
+  'scripts/ci-recharge-scope.mjs',
+  'scripts/ci-recharge-scope.test.mjs',
+  'scripts/ci-recharge-check.mjs',
+  'scripts/ci-recharge-check.test.mjs'
+]);
+export function isAdminHtmlCacheOnly(paths, configuration) {
+  if (
+    !paths.some((path) => adminHtmlCachePaths.includes(path)) ||
+    !paths.every((path) => adminHtmlCacheSupport.has(path))
+  )
+    return false;
+  try {
+    const raw =
+      configuration ?? readFileSync(new URL('../deploy/nginx/admin.conf', import.meta.url));
+    return (
+      createHash('sha256').update(raw).digest('hex') ===
+      '0b73aedbebdc12065d922b35bbf428e8959fe3a3ea9ef9fa5dc7af2f995baa99'
+    );
+  } catch {
+    return false;
+  }
+}
 const adminPublicDocument = /^apps\/admin\/public\/[^/]+\.(?:html|css)$/;
 const registrationHydrationSourcePaths = new Set([
   'apps/api/src/id-business-v2/auto-recharge/worker/registration_browser.py',
@@ -788,6 +819,7 @@ const adminFrontendControlPaths = new Set([
   'scripts/check-v2-online-recharge-controls.test.mjs'
 ]);
 export function isAdminOnly(paths) {
+  if (isAdminHtmlCacheOnly(paths)) return true;
   const combined = hasCombinedComponentScope(paths);
   return (
     paths.some(
@@ -1211,6 +1243,7 @@ export function isTargetedOnly(paths, oldSchema, newSchema) {
   );
 }
 export function selectedParts(paths, grantHelperSnapshot) {
+  if (isAdminHtmlCacheOnly(paths)) return ['guards', 'admin'];
   if (isReleaseArtifactRetentionOnly(paths)) return ['guards'];
   if (hasBankCardDeletePolicyProof(paths, grantHelperSnapshot)) return ['guards', 'security'];
   if (isRechargePricingOnly(paths))
