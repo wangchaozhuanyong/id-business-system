@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 
-export const mailboxRealtimeBase = '13e52ad670c6b6daa94ab2df009aaa8a9d69b97c';
+export const mailboxRealtimeBase = 'c0238525bb4b2a1c3fe6688eaed5f74f504ee529';
 export const mailboxRealtimeParts = ['guards', 'api', 'admin', 'release-controls'];
 export function isMailboxRealtimeOnly(paths, context) {
   try {

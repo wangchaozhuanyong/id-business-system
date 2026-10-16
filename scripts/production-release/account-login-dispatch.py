@@ -37,6 +37,8 @@ def sha(raw):
 
 
 def prepare_plan():
+    if os.environ.get('VALIDATED_RUN'):
+        return prepare_reused_plan()
     commit, run_id, attempt = (os.environ[n] for n in ('GITHUB_SHA', 'GITHUB_RUN_ID', 'GITHUB_RUN_ATTEMPT'))
     need(os.environ['GITHUB_REPOSITORY'] == REPOSITORY and os.environ['GITHUB_REF'] == 'refs/heads/main'
          and os.environ['GITHUB_EVENT_NAME'] == 'workflow_dispatch' and os.environ['RELEASE_COMMIT'] == commit
@@ -97,9 +99,73 @@ def prepare_plan():
     return plan, contract
 
 
+def prepare_reused_plan():
+    # Reuse only the successful validator of the one known preflight failure.
+    source = '13e52ad670c6b6daa94ab2df009aaa8a9d69b97c'
+    run_id = '38878982040'
+    need(os.environ['VALIDATED_RUN'] == run_id and os.environ['GITHUB_REPOSITORY'] == REPOSITORY
+         and os.environ['GITHUB_REF'] == 'refs/heads/main'
+         and os.environ['GITHUB_EVENT_NAME'] == 'workflow_dispatch'
+         and os.environ['GITHUB_SHA'] == os.environ['RELEASE_COMMIT'], 'REUSE_SELECTION_INVALID')
+    current = os.environ['GITHUB_SHA']
+    meta = github('repos/' + REPOSITORY + '/actions/runs/' + run_id)
+    need(meta['head_sha'] == source and meta['head_branch'] == 'main'
+         and meta['path'] == '.github/workflows/account-login-validation.yml'
+         and meta['conclusion'] == 'failure' and meta['run_attempt'] == 1, 'REUSED_NATIVE_CHANGED')
+    jobs = github('repos/' + REPOSITORY + '/actions/runs/' + run_id + '/jobs')['jobs']
+    need(any(j['name'] == 'validate' and j['conclusion'] == 'success' for j in jobs), 'REUSED_VALIDATOR_NOT_SUCCESSFUL')
+    contract_raw = (ROOT / 'scripts/production-release/account-login-contract.json').read_bytes()
+    contract = json.loads(contract_raw)
+    need(execute('git', 'show', source + ':scripts/production-release/account-login-contract.json') == contract_raw
+         and os.environ['EXPECTED_CURRENT'] == contract['expectedCurrent'], 'REUSED_CONTRACT_CHANGED')
+    for name, expected in {**contract['sources'], **contract['supportSources']}.items():
+        need(sha((ROOT / name).read_bytes()) == expected == sha(execute('git', 'show', source + ':' + name)), 'REUSED_APPLICATION_CHANGED')
+    for role in ('api', 'admin'):
+        for name in contract['buildInputs'][role]:
+            need(execute('git','ls-tree',source,'--',name) == execute('git','ls-tree','HEAD','--',name), 'REUSED_DEPENDENCY_CHANGED')
+    publisher = github('repos/' + REPOSITORY + '/actions/runs/' + os.environ['GITHUB_RUN_ID'])
+    need(publisher['head_sha'] == current and publisher['head_branch'] == 'main'
+         and publisher['path'] == '.github/workflows/account-login-validation.yml', 'PUBLISHER_IDENTITY_CHANGED')
+    quality = github('repos/' + REPOSITORY + '/actions/runs?head_sha=' + current + '&event=push')['workflow_runs']
+    need(any(r['head_branch']=='main' and r['path']=='.github/workflows/quality.yml' and r['conclusion']=='success' for r in quality), 'PUBLISHER_QUALITY_NOT_SUCCESSFUL')
+    artifacts = github('repos/' + REPOSITORY + '/actions/runs/' + run_id + '/artifacts')['artifacts']
+    rows = [r for r in artifacts if r['name'] == 'account-login-' + source + '-1' and not r['expired']]
+    need(len(rows)==1, 'REUSED_ARTIFACT_MISSING')
+    zipped = execute('gh','api','repos/' + REPOSITORY + '/actions/artifacts/' + str(rows[0]['id']) + '/zip')
+    need(rows[0]['digest'] == 'sha256:' + sha(zipped), 'REUSED_ARCHIVE_CHANGED')
+    with zipfile.ZipFile(io.BytesIO(zipped)) as archive:
+        need(set(archive.namelist()) == {'account-login-artifact.tar.gz','artifact-sha256.txt'}, 'REUSED_LAYOUT_INVALID')
+        bundle = archive.read('account-login-artifact.tar.gz')
+        declared = archive.read('artifact-sha256.txt').decode().strip()
+    need(sha(bundle) == declared, 'REUSED_BUNDLE_CHANGED')
+    with tarfile.open(fileobj=io.BytesIO(bundle)) as archive:
+        raw = archive.extractfile('payload/build-proof.json').read()
+    proof = json.loads(raw)
+    need(proof['commit'] == source and proof['workflowRunId'] == run_id and proof['workflowRunAttempt'] == '1'
+         and proof['contractSha256'] == sha(contract_raw), 'REUSED_PROOF_IDENTITY_CHANGED')
+    checked = github('repos/' + REPOSITORY + '/actions/runs/' + proof['qualityVerification']['runId'])
+    need(checked['head_sha'] == source and checked['head_branch'] == 'main'
+         and checked['path'] == '.github/workflows/quality.yml' and checked['conclusion'] == 'success', 'REUSED_QUALITY_CHANGED')
+    OUTPUT.mkdir(parents=True,exist_ok=True)
+    (OUTPUT / 'account-login-artifact.tar.gz').write_bytes(bundle)
+    (OUTPUT / 'reused-build-proof.json').write_bytes(raw)
+    names = ('account-login-release.py','recharge-record-release.py','remote-deploy.py','recharge-availability-release.py','account-login-contract.json')
+    controls = {n:sha((ROOT / 'scripts/production-release' / n).read_bytes()) for n in names}
+    plan = {'commit': source,'tree':proof['tree'],'branch':'main','workflowRunId':os.environ['GITHUB_RUN_ID'],
+            'workflowRunAttempt':os.environ['GITHUB_RUN_ATTEMPT'],'validationRunId':run_id,'validationRunAttempt':'1',
+            'controllerCommit':current,'validatedControllerSha256':proof['controllerSha256'],
+            'qualityVerification':proof['qualityVerification'],'contractSha256':sha(contract_raw),
+            'artifactSha256':declared,'buildProofSha256':sha(raw),'controllerSha256':controls['account-login-release.py'],
+            'releaseUtilitySha256':controls['remote-deploy.py'],'helperSha256':controls['recharge-record-release.py'],
+            'availabilityHelperSha256':controls['recharge-availability-release.py'],'controlSources':controls,
+            'artifactUrl':'https://github.com/' + REPOSITORY + '/releases/download/account-login-' + source + '/account-login-artifact.tar.gz'}
+    (OUTPUT / 'publication-plan.json').write_text(json.dumps(plan,sort_keys=True,indent=2)+'\n')
+    return plan, contract
+
+
 def transport(plan, contract, mode):
     current = {**plan, 'mode': mode}
-    raw_base = 'https://raw.githubusercontent.com/' + REPOSITORY + '/' + plan['commit'] + '/scripts/production-release/'
+    raw_base = 'https://raw.githubusercontent.com/' + REPOSITORY + '/' + plan.get('controllerCommit', plan['commit']) + '/scripts/production-release/'
     code = """import hashlib,importlib.util,json,os,re,urllib.request
 from pathlib import Path
 os.umask(0o077)

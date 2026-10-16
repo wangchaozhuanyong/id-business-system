@@ -1177,6 +1177,7 @@
     "scripts/production-release/mailbox-realtime-build.py",
     "scripts/production-release/mailbox-realtime-contract.json",
     "scripts/production-release/mailbox-realtime-dispatch.py",
+    "scripts/production-release/mailbox-realtime-inspect.py",
     "scripts/production-release/mailbox-realtime-release.py",
     "scripts/production-release/mailbox-realtime-release.test.py"
   ],
@@ -1275,7 +1276,7 @@
   },
   "reviewedApplicationCommit": "d2f3acac6e490391c5c7d2cf4f3b0df7da027923",
   "reviewedFileHashes": {
-    ".github/workflows/mailbox-realtime-validation.yml": "68a5e780cae231b225e25ca37eab45e3e96e36f8c1448464f3837c3b991a5662",
+    ".github/workflows/mailbox-realtime-validation.yml": "42b8552e19bec8ab4be11970fbc8d8d798555724da4c78d54af9ec28cc072d04",
     "apps/admin/src/v2/features/auto-recharge/VendureMailboxHealth.vue": "29d99a1085a80eb5126b8a69bf8f659cae9a9689d503a9d3f6b9b093c30087eb",
     "apps/admin/src/v2/features/auto-recharge/VendureMailboxManager.vue": "07d84eb78a21ccd99b863aa846bc3827e0eaceb547b7dc722e86c47c8fc19eb3",
     "apps/admin/src/v2/features/auto-recharge/vendure-mailbox-api.ts": "52cf5917aea7684171f6da7ba1be3b08a80c65ce73656a108cdc1983c8e3b4b4",
@@ -1291,12 +1292,13 @@
     "docs/MAILBOX_REALTIME_REPAIR_20261016.md": "4b303e68e83648ccbd92d308b58b1cb7f6392ffdc41b6fa67f619cc2624c5271",
     "packages/shared/src/v2/vendure-mailbox.ts": "4b72d43152b07ebe9331583d8baf245028f0ddb96229ffcffbd5ec6d7dfa375e",
     "scripts/acceptance-v2-mailbox-realtime.mjs": "0fde62b43ee0686e5e9330c14e34621090f34ac5915528c719d5e9859a154c61",
-    "scripts/ci-mailbox-realtime-scope.mjs": "5350b5d1a9fc021c69292eb43d4f81f4caf1e9ddbc70a0a98450c2ea9cc9f56b",
+    "scripts/ci-mailbox-realtime-scope.mjs": "65be17140315be82950d079c571f6eb02041ca02a4c442e38c8a1031c5408c6f",
     "scripts/ci-mailbox-realtime-scope.test.mjs": "a6ff492b8563c470de0d246be18bc1033cb9252ecd671119c59e96dd80014a5a",
-    "scripts/ci-recharge-check.mjs": "4996810e18ad5511b706c653b90602482eb7795ddd08cc6f2fafa2a5290df4d9",
-    "scripts/ci-recharge-scope.mjs": "6561c255f5a20d61107d9b388d70291b04c1bd458f333ba175b59ddda06bfea9",
+    "scripts/ci-recharge-check.mjs": "4b82670df456d8f31b2357fa0d7ca321148ea259706ca40feaed3134eb646e66",
+    "scripts/ci-recharge-scope.mjs": "ddd41df7f3b03b3b60e58a491eef9aa603a354e47d30968627ff6a87063f984d",
     "scripts/production-release/mailbox-realtime-build.py": "c229b82d47d301db78a445dce95f6720ab74cfd211b42e6d7d5d37146b0e0707",
     "scripts/production-release/mailbox-realtime-dispatch.py": "b3ee5e4c40d2af93d6a8f58c76ad4ff5238843b86e5d7e1ceefeb9b8398bed13",
+    "scripts/production-release/mailbox-realtime-inspect.py": "301ba73f638ee5c2c2867f7f4bf1396996fe47aa12647189aa68c96c1ec771c5",
     "scripts/production-release/mailbox-realtime-release.py": "8997ec61dd659bf2a11583eb0720e8b2672bcbb003ddf5590cbf93c42f8a5eee",
     "scripts/production-release/mailbox-realtime-release.test.py": "6cfe799577c874175ec7aca183be15a82cdc73a583ad61cc484ae6b100be734e"
   },
@@ -2264,8 +2266,8 @@
     }
   },
   "sharedRuntimeUnchanged": true,
-  "sourceBaseline": "13e52ad670c6b6daa94ab2df009aaa8a9d69b97c",
-  "sourceBaselineTree": "26f7f4aa65e3286b978cf7e2e1807418af63ea3e",
+  "sourceBaseline": "c0238525bb4b2a1c3fe6688eaed5f74f504ee529",
+  "sourceBaselineTree": "1f71d02270d8f1a78303fa35320223b02ab3dfb0",
   "sourceProjectionSha256": {
     "adminSourceProjection": "b06bdf234d772e6b3eeb44709f7e14e2cd2e858552ca71b165f8d252d9eda24b",
     "roleSourceProjections": "62903f22df1bd66f1018b6bf5ab282870a85b6ffa1c6356f0956589d7a1e79e9"
