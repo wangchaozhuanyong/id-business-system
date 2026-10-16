@@ -5,6 +5,7 @@ import { readFileSync } from 'node:fs';
 export const gptRechargePaths = Object.freeze([
   '.env.example',
   '.github/workflows/gpt-recharge-validation.yml',
+  '.github/workflows/quality.yml',
   'apps/api/src/id-business-v2/online-recharge/online-recharge.module.ts',
   'apps/api/src/id-business-v2/online-recharge/persistence/tasks.repository.ts',
   'apps/api/src/id-business-v2/online-recharge/task-acceptance.ts',
@@ -30,10 +31,12 @@ export const gptRechargeFrozen = Object.freeze({
   '.env.example': '5d5eb3b30ca29cf2b1581e71ef5901956b004cd4b8a2e77e48e9b1b49c54babc',
   '.github/workflows/gpt-recharge-validation.yml':
     'e9ae51d23b71e133fb1a6080206c5861a96ecda8b6914052705d48368f63e1be',
+  '.github/workflows/quality.yml':
+    'dde08b02ba8d9fd807fbe28939fbe61351158e2e11435de504b9640591402c6f',
   'apps/api/src/id-business-v2/online-recharge/online-recharge.module.ts':
-    '5ebb28f4ca4592bfd2b92ad837d78f1036112f0c5780ec97f093dcd9e1fe113d',
+    'edbd04030f20d675932d9c360e653e3fc3ca8a0a870b1e97dc3a0b30772df59f',
   'apps/api/src/id-business-v2/online-recharge/persistence/tasks.repository.ts':
-    '15f3113b9ecd4353aabde76ea1358512f2d2c11820ce6b1257623feaad87676f',
+    'c40188f03a3f8bcf4819ef2c25c867dc979f44ae9d970a541648e87ca3ee8f36',
   'apps/api/src/id-business-v2/online-recharge/task-acceptance.ts':
     'd97e345a1935a20f7974aad0d28bb2d9af56c42f7fa373305b2e2636daff8fe3',
   'apps/api/src/id-business-v2/online-recharge/tasks.service.ts':
@@ -47,19 +50,19 @@ export const gptRechargeFrozen = Object.freeze({
   'apps/api/src/id-business-v2/online-recharge/worker-body-parser.ts':
     '2471cba84936dc8c36f25feef210d641a0f5c8c4a22ccde6e684396069e57619',
   'scripts/ci-recharge-check.mjs':
-    '74f08eefc8055630e59fc1ce1c08b7abc9e93ce8ecc1f80f43c9fecd155032c2',
+    'a4f49a02da6505e99066ee3aa5a317992cabeae1979755bdc0cd0bcb8901cb67',
   'scripts/ci-recharge-scope.mjs':
-    '6346a52e712a2420e46efcce99ffc8b4d0a789fc37f95d7b98e77842eaa6c5a1',
+    '5811f98422a655287da3e7403c9da605759505e18f88b313444df52c9a87f3ca',
   'scripts/ci-recharge-scope.test.mjs':
-    '07455e0799e29203b9af5e702a18b3dd54fc3512b71d3426a0cc556891abdc93',
+    '8199b4d89c0645e30ec54eeda82aece0af0bfc19268e5178c6d35a7cfecb5576',
   'scripts/production-release/api-admin-scope.test.py':
     '41d1b862c1beb9caa35e130d8268583c5f349c782d89aedb247824ce5b722c98',
   'scripts/production-release/gpt-recharge-build.py':
-    'fa68c7d52d0f7f908ecd865cad2bfa070cb1625cf648932bae331427f53417a7',
+    'a3bd39ee133103378b58bd2c083dada0ef14a0a148871ff41b4de63d93e4991e',
   'scripts/production-release/gpt-recharge-contract.json':
-    '67544e17f724f4cf994b5167f88e362e711bc8bffb6cffd7b0eae8f7b7597e6e',
+    '94173a2758bed2ebdf98970b108bc4c1865751e5aeb4daa11a83bdd155396ea2',
   'scripts/production-release/gpt-recharge-release.py':
-    '5f99d7358641d1d30b4b5313d846abd9618f7806b9fc2b6d620099543cbc9f5f',
+    'f842baebb19a980ed8ee0491f7c9bd25bbd94b32e19ce6f5d6d3284edfdf3a17',
   'scripts/production-release/gpt-recharge-release.test.py':
     'e247037925646fd86ac24b4820f531d03e4d54bc6fc98b8365c3527d13983801'
 });

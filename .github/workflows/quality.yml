@@ -309,6 +309,20 @@ jobs:
         timeout-minutes: 45
         run: python3 -B scripts/production-release/online-recharge-ci-build.py
 
+      # BEGIN GPT native API artifact retention
+      - name: Preserve the verified GPT API overlay
+        if: success() && matrix.part == 'api' && hashFiles('.deploy/gpt-recharge-build/gpt-recharge-artifact.tar.gz') != ''
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: gpt-recharge-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            .deploy/gpt-recharge-build/gpt-recharge-artifact.tar.gz
+            .deploy/gpt-recharge-build/artifact-sha256.txt
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 30
+      # END GPT native API artifact retention
+
       - name: Preserve CI-only ONLINE image verification
         if: ${{ !contains(fromJSON(needs.change-scope.outputs.reused_parts), matrix.part) && matrix.part == 'guards' && needs.change-scope.outputs.online_ci_build == 'true' }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4

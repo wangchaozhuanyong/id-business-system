@@ -35,25 +35,42 @@ def main():
     c = json.loads(contract_raw)
     need(not OUT.exists(), 'OUTPUT_EXISTS')
     for name, expected in c['sources'].items():
-        need(sha((ROOT / name).read_bytes()) == expected, 'REVIEWED_SOURCE_CHANGED')
-    spec = importlib.util.spec_from_file_location('published_browser_build', HERE / 'registration-browser-build.py')
+        need(sha(git('show', c['sourceReviewCommit'] + ':' + name)) == expected, 'REVIEWED_SOURCE_CHANGED')
+    # Load the published reconstruction controls, retaining their immutable recipe.
+    OUT.mkdir(parents=True, mode=0o700)
+    controls = OUT / 'published-controls/scripts/production-release'
+    controls.mkdir(parents=True)
+    names = git('ls-tree', '-r', '--name-only', c['browserPublishedCommit'], '--', 'scripts/production-release').decode().splitlines()
+    for name in names:
+        if name.endswith(('.py', '.json', '.sed')):
+            target = controls / Path(name).name
+            target.write_bytes(git('show', c['browserPublishedCommit'] + ':' + name))
+    # An explicit git directory prevents nested controls narrowing git archive.
+    os.environ['GIT_DIR'] = git('rev-parse', '--absolute-git-dir').decode().strip()
+    spec = importlib.util.spec_from_file_location('published_browser_build', controls / 'registration-browser-build.py')
     builder = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(builder)
-    predecessor = json.loads((HERE / 'registration-browser-contract.json').read_bytes())
-    OUT.mkdir(parents=True, mode=0o700)
+    predecessor = json.loads((controls / 'registration-browser-contract.json').read_bytes())
     for role in ('baseline', 'candidate'):
         context = OUT / role
         builder.reconstruct(context, predecessor)
         for name, expected in predecessor['sources'].items():
-            raw = git('show', c['expectedCurrent'] + ':' + name)
+            raw = git('show', c['browserPublishedCommit'] + ':' + name)
             need(sha(raw) == expected, 'PREDECESSOR_SOURCE_CHANGED')
             target = context / name
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_bytes(raw)
+        for overlay in c.get('publishedOverlays', []):
+            for name, expected in overlay['sources'].items():
+                raw = git('show', overlay['commit'] + ':' + name)
+                need(sha(raw) == expected, 'PUBLISHED_OVERLAY_CHANGED')
+                target = context / name
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_bytes(raw)
         if role == 'candidate':
             for name in c['sources']:
                 target = context / name
-                raw = (ROOT / name).read_bytes()
+                raw = git('show', c['sourceReviewCommit'] + ':' + name)
                 prior = subprocess.run(['git', 'show', c['reviewBase'] + ':' + name], cwd=ROOT, capture_output=True)
                 if prior.returncode == 0:
                     base, after = OUT / 'merge-base', OUT / 'merge-after'
@@ -82,7 +99,7 @@ def main():
 
 def package(builder, c, contract_raw):
     for name, expected in c['sources'].items():
-        need(sha((ROOT / name).read_bytes()) == expected, 'SOURCE_CHANGED')
+        need(sha(git('show', c['sourceReviewCommit'] + ':' + name)) == expected, 'SOURCE_CHANGED')
     h = builder.r.helper('recharge-record-release.py')
     runtime_files = lambda files: {n: v for n, v in files.items() if n.endswith(('.js', '.js.map', '.d.ts'))}
     before = runtime_files(h.file_inventory(OUT / 'baseline/apps/api/dist'))
@@ -109,7 +126,8 @@ def package(builder, c, contract_raw):
     proof = {'version': 1, 'scope': c['scope'], 'commit': git('rev-parse', 'HEAD').decode().strip(),
              'tree': git('rev-parse', 'HEAD^{tree}').decode().strip(),
              'workflowRunId': os.environ.get('GITHUB_RUN_ID', 'local'),
-             'contractSha256': sha(contract_raw), 'baselineApiJs': c['baselineApiJs'],
+             'contractSha256': sha(contract_raw), 'sourceReviewCommit': c['sourceReviewCommit'],
+             'headInputs': {name: sha((ROOT / name).read_bytes()) for name in json.loads(subprocess.check_output(['node', '--input-type=module', '-e', "import{gptRechargeFrozen}from'./scripts/ci-gpt-recharge-scope.mjs';process.stdout.write(JSON.stringify(Object.keys(gptRechargeFrozen)))"], cwd=ROOT))}, 'baselineApiJs': c['baselineApiJs'],
              'apiModules': hashes, 'sources': source_hashes, 'reviewedSources': c['sources'],
              'migrationPerformed': False, 'businessActions': 0, 'baselineApiReproduced': True}
     (payload / 'build-proof.json').write_text(json.dumps(proof, sort_keys=True, indent=2) + '\n')

@@ -133,7 +133,8 @@ def release(plan, c):
         raw_proof = (payload / 'build-proof.json').read_bytes()
         need(sha(raw_proof) == plan['buildProofSha256'], 'PROOF_CHANGED')
         proof = json.loads(raw_proof)
-        need(proof['commit'] == plan['commit'] and proof['tree'] == plan['tree']
+        need(proof['commit'] == plan.get('buildCommit', plan['commit']) and proof['tree'] == plan.get('buildTree', plan['tree'])
+             and proof['sourceReviewCommit'] == c['sourceReviewCommit']
              and proof['contractSha256'] == plan['contractSha256'] and proof['reviewedSources'] == c['sources']
              and proof['baselineApiReproduced'] is True and proof['businessActions'] == 0, 'PROOF_IDENTITY_CHANGED')
         expected_files = {**{'api/modules/' + n: v for n, v in proof['apiModules'].items()},

@@ -352,23 +352,24 @@
     "id-business-v2/online-recharge/artifacts.service.js": "f657157f1408127126bf4546e4b1bdac571551e0740e940c1fcf478c4b4d5aaf",
     "id-business-v2/online-recharge/assets.service.js": "bc5622eb0fd539b4c5dcb864f6a70ca3e04f0dbb9f8d93bed016c46f2e741355",
     "id-business-v2/online-recharge/cdk-generator.js": "ac2b3ade58fd356300d4629d8889088ad4efc04972b4afb9d428e8d23e053418",
-    "id-business-v2/online-recharge/contracts.js": "a36de0ecf2aa75d9bde35faea841be00b631f924611cad320d212587d7e791a8",
+    "id-business-v2/online-recharge/contracts.js": "159c273caa0b37dbf873d5c45527d11dab2b4308ec1ef8b8c5b25bf02dd0f2de",
     "id-business-v2/online-recharge/ephemeral-credentials.service.js": "6ea54fe1f12431fd720d864fd149446af1a90c2fe7837e50ebe258ea75c85bdd",
     "id-business-v2/online-recharge/login-notification-bridge.service.js": "92c10ea8bd60188e206d0e996056e72c8822b8e9624a019590ad2fb196a9da37",
     "id-business-v2/online-recharge/online-recharge.module.js": "e395cd893abb3526b0a89ca95825808531d38ac1b49e61e15fdce35797f052a6",
     "id-business-v2/online-recharge/order-sync-facts.js": "19294f4ce3944d52162b9cac8f952241e16db02f021e086433e4c9a06b9fb505",
     "id-business-v2/online-recharge/order-sync.service.js": "5d386ebe8c77f443f148c0478d0c81bd3a8367d9b07222df04b0c6194da79375",
-    "id-business-v2/online-recharge/persistence/admin.repository.js": "07e502ead032f9ade48fa0171fe994b7ed2fcfaea89db895b4bc6af663c31cb6",
+    "id-business-v2/online-recharge/persistence/admin.repository.js": "311af3832ae4e0cb27dc098f3d4f490581d753ecd9a32eb08dc9c183da911849",
     "id-business-v2/online-recharge/persistence/artifacts.repository.js": "64b4198b90df8fd978e5ad9337a9b7cfe64a1bff9b944ba60d2d43e105ccab7c",
     "id-business-v2/online-recharge/persistence/assets.repository.js": "214c4b6dd2ba70697b9364afbec350139d1593112145980b895f9fedced2d9c2",
     "id-business-v2/online-recharge/persistence/online-recharge.repository.js": "7d2d8e2bf39eadb4760b78b8c2fefc593e5ddf4beff08ac952a6838dc1b33bfc",
     "id-business-v2/online-recharge/persistence/order-sync.repository.js": "3f69413bc8efd9a6edeb755089a064ffee249cc39fd8c81341804b44d6c22ee9",
     "id-business-v2/online-recharge/persistence/security-notification.repository.js": "e3160383d8e466c8d18d31732ba8182c2df9187611873b2892441431de49b358",
-    "id-business-v2/online-recharge/persistence/settings.repository.js": "74e56c2465fee186319c480defa58ee9ac64de85380ad65643196b771cee0ac8",
-    "id-business-v2/online-recharge/persistence/tasks.repository.js": "1cab96da876c4746f6d2bbc5f7645803a5c4ad2fa593820fe37030f0c8934687",
+    "id-business-v2/online-recharge/persistence/settings.repository.js": "5076effcc7e339655939f9203bd2e0b8552951758be3fef363c32201ff9031e3",
+    "id-business-v2/online-recharge/persistence/tasks.repository.js": "fce7dd0441c6aeda7e3f8438cdb01a8d4f000cc95c0aa097d7f94251b491f380",
     "id-business-v2/online-recharge/persistence/webhooks.repository.js": "1a9f669cbbb14d6a1dec25f1eddad95bce84575117d73af55e4682dd129bfd14",
-    "id-business-v2/online-recharge/persistence/worker-rpc.repository.js": "a4beda7b72b06cddc6b8d36d3ec4a55120194bbe29d604234fe55f3af93322f3",
-    "id-business-v2/online-recharge/persistence/worker.repository.js": "9c78f5132d8cb822f51f8e5a888c91cb3a6d557296da6fd049df8ead561e6295",
+    "id-business-v2/online-recharge/persistence/worker-rpc.repository.js": "90f2d114c2e8faa48f15465ec96d2308f02782f81ebcd24563a320670d806ca2",
+    "id-business-v2/online-recharge/persistence/worker.repository.js": "b878d08515092012dd1be4de97af0c6759d65d3ca15d89234351d2542e974259",
+    "id-business-v2/online-recharge/plan-region.js": "cefa04a5d03206a879a9f33ef08a78f3ac02f979df1c8a5332858677b7611b37",
     "id-business-v2/online-recharge/progress-websocket.service.js": "810762e3f865766424d23eb0a33d5122fbba82eff09c66400273eb3e996c1f7e",
     "id-business-v2/online-recharge/proxy-input.js": "993fe31cb0b7b7038bde7f2ec7899f5e293e2a945dbbc13afd00b90e2215d2eb",
     "id-business-v2/online-recharge/public-api.js": "7fc92ea7dbe53823435a30edf8d58ae65305f748d185c70b5f315f0d386bae3a",
@@ -601,21 +602,22 @@
     "v2-auth/v2-auth.module.js": "783578939e3808c5bdf34ba7789d2f5957070e374d441ad85072636dca426a03",
     "v2-auth/v2-identity.service.js": "b4f8c9ade52ae2cf3aab282dd017e38a0888d4198da4c18b4c18e176880958fb"
   },
+  "browserPublishedCommit": "561b834dd3f481d98a99786667a2844c842b24bd",
   "configurationSha256": {
     ".env.aws.production": "088a61075fb2ba01f04249fc78e31150ee7cd571f0708fe0c28ba38ac53daafa",
-    "compose.release.json": "7f4ef7a7f01347b9fda0b0ab4af565d45bfe2279b443d62acfc5e3c40e48c7ee",
+    "compose.release.json": "c9979097d7b1b0a201ae48de992d6e8bbcd2599c46275f89182f114d59944232",
     "docker-compose.aws-mysql.yml": "953c6264f157b00218f2a019d5e2c0b6bc4a34f687f2ec42ad782e0009e7672c"
   },
   "controlSources": {
     "api-admin-scope.py": "50446ab528a288ca1c2129c84f1bf4a90f59fa313a92bcff0058a258c8b8e925",
-    "gpt-recharge-release.py": "5f99d7358641d1d30b4b5313d846abd9618f7806b9fc2b6d620099543cbc9f5f",
+    "gpt-recharge-release.py": "f842baebb19a980ed8ee0491f7c9bd25bbd94b32e19ce6f5d6d3284edfdf3a17",
     "proxy-result-identity-release.py": "97207252c12924dcbbfe3e86ebf397e928cd9545bbf9260337fd94ffd5109d45",
     "recharge-availability-release.py": "d98af117f3d80e705dd4f5eb3375a37cf4c0f058b65f4be77550d909ccbbe66c",
     "recharge-record-release.py": "4ca6d0053f5dc4368d85722ef0df272ace0947c1c91993a0a3da598507b5163f",
     "recharge-source-recovery-release.py": "e6f493ab7737bf77d23114a00ff9c970a77d18786726e690b27dbe98c9f099b8",
     "remote-deploy.py": "889aedb75bbcb53863a55dc2a4c40a84e06dea1d64d493f6a4fca6dc233f855c"
   },
-  "current": "/opt/id-business-v2/releases/20261016T132141Z-561b834dd3f4-registration-browser",
+  "current": "/opt/id-business-v2/releases/20261016T134722Z-55d5ee5504c9-online-settings",
   "engineHealth": {
     "activeTasks": 0,
     "mode": "enabled",
@@ -623,8 +625,8 @@
     "rpcConnected": true,
     "stopping": false
   },
-  "expectedCurrent": "561b834dd3f481d98a99786667a2844c842b24bd",
-  "manifestSha256": "1fc38706e33cf2ebf32356b96a708328f9041f3656bc1dc2ff14f3f85aad1eff",
+  "expectedCurrent": "55d5ee5504c9d8d4218632e8cb8eb508923ad9f8",
+  "manifestSha256": "9393fb5b20e4260a7261f8259d8de0cecbbd19c323da86e666328944d6c2c0e3",
   "predecessorArtifactId": 12048742480,
   "predecessorArtifactSha256": "b430c205cb6973fa10c1d5cd41008495ee7ec959bcfb7b499009304e1b231d4c",
   "protectedMigrations": {
@@ -634,6 +636,24 @@
     "20261016170000_chatgpt_account_sale_status": "6c601b9d0bdebfa8b6bd3bd0209eceee6cf8b9e25992c8fdfa081fd587a79d4a",
     "20261016210000_chatgpt_email_search": "f21d8b53e8c1f549fe90083158dee83ca798076e47508166b01c1148b736518f"
   },
+  "publishedOverlays": [
+    {
+      "commit": "55d5ee5504c9d8d4218632e8cb8eb508923ad9f8",
+      "sources": {
+        "apps/api/src/id-business-v2/online-recharge/contracts.ts": "8f1533462b4bb43e9df2ecb507e5b14e66131d7bcd4c336a6361cb3f46e77ffd",
+        "apps/api/src/id-business-v2/online-recharge/mysql.integration.spec.ts": "56a286f5d851f8a2728ec746e9d044a49cc1ea33025ecba18ec0053ea8c1da3a",
+        "apps/api/src/id-business-v2/online-recharge/persistence/admin.repository.spec.ts": "911882d33c7822b9c8689c0840dd17cec35fba40012824c0e9446a6ff2164548",
+        "apps/api/src/id-business-v2/online-recharge/persistence/admin.repository.ts": "d2fe07fee8a29acfa6808a6e620155e283596d197804741144466fffb82a5e6a",
+        "apps/api/src/id-business-v2/online-recharge/persistence/settings.repository.ts": "24737c3020469ca700f9426fc0a259f392aaa6176c222ce7dc0386d27dee4325",
+        "apps/api/src/id-business-v2/online-recharge/persistence/tasks.repository.ts": "cb49e701dddd07575626a6012732e230c5dbb7bf291a061fb4f4cb50f4c732b5",
+        "apps/api/src/id-business-v2/online-recharge/persistence/worker-rpc.repository.ts": "526ecdbad5a4554f5d2f55af6b5339ef31fa71339895abb2e1145503d2faeac3",
+        "apps/api/src/id-business-v2/online-recharge/persistence/worker.repository.spec.ts": "2843ef9191946469ab103a0d5f0a85e33e7b38204dc14a4409555ca0d02dd3c7",
+        "apps/api/src/id-business-v2/online-recharge/persistence/worker.repository.ts": "47d578112d82cd54d40872b162073f280146d7f6f8576cc3a814997e38d31ffe",
+        "apps/api/src/id-business-v2/online-recharge/plan-region.spec.ts": "0101f8f6748b2f23a47bc5f5d2e71b3d5ea5fe2a8edcf66d476b83d03a83e4bd",
+        "apps/api/src/id-business-v2/online-recharge/plan-region.ts": "9167e030cf51e8a853647bf110c87f61f8eddb1f01e471aedf5b0d3313c4cd51"
+      }
+    }
+  ],
   "reviewBase": "3714bd6a27859307f27ec3379b5e176e4e395636",
   "runtimeConfigurationSha256": {
     "admin": "dfc7d8d92987afc22a6c843fdac6ed3a40e0727065795a2c36fd9f90f43cd37a",
@@ -655,21 +675,21 @@
   "scope": "GPT_RECHARGE_VENDURE_INTEGRATION",
   "services": {
     "admin": {
-      "containerId": "f1bcc1710eb1bccb925fb0b710c304c51a7c66d6d04c17a47e353be66fac5fb0",
+      "containerId": "181c776e0b8c3f88bc972d4c931e0eecfd34a0c40429c0012456ac888bf00d25",
       "environmentSha256": "03ddab553858482dcbcc4a93d989902d31b41753eb155fb8162011e218bc0ad4",
       "health": "healthy",
-      "image": "sha256:0274310e3809cc0fa89b44fac405152b3a39e081bb99b53ae1072d698c78966d",
-      "reference": "id-business-v2-registration-browser:561b834dd3f481d98a99786667a2844c842b24bd-38906524387-admin",
-      "startedAtSha256": "b0f1498edabac66c134d10587dd2a3e49137832a97b490b008396ec03cddf1b6",
+      "image": "sha256:864c17ad0597077fe9a6a79aa99fd67906be21d6794916d03709a855b2298955",
+      "reference": "id-business-v2-online-settings:55d5ee5504c9d8d4218632e8cb8eb508923ad9f8-38909769886-admin",
+      "startedAtSha256": "78df2f35ef2100f60c0d0e2694db0d451496e0475db54d6c5b35f789b4f18839",
       "status": "running"
     },
     "api": {
-      "containerId": "d52873b529b44fcec8d8f203b98d77f907e72929c4becd9486da26f605f6c80e",
+      "containerId": "682b24d1511b64cfd3ab6ade033845b859935e3e0e3c0d5eafdc279be5049976",
       "environmentSha256": "9ffb49fbaa3c1b6d67df07fcedabc538678dc6a4aed2489b99a62a2368d10d9f",
       "health": "healthy",
-      "image": "sha256:dd822991c0c225453de737cb8360e0e0a22c006cd1205da0770658d1416da223",
-      "reference": "id-business-v2-registration-browser:561b834dd3f481d98a99786667a2844c842b24bd-38906524387-api",
-      "startedAtSha256": "d27c90f274cd7214ba25d06d0151468123491867d9f8cbb0d14b4e62b02a1e24",
+      "image": "sha256:abf5407679123af8f931e58c632e66b58f6e0e06e829ab6bea79cfaedccc2904",
+      "reference": "id-business-v2-online-settings:55d5ee5504c9d8d4218632e8cb8eb508923ad9f8-38909769886-api",
+      "startedAtSha256": "37516e13b213ca0d6b202c76d104b5ee3e91b83eb14e8603376b8cbca2307b94",
       "status": "running"
     },
     "auto-recharge": {
@@ -718,16 +738,17 @@
       "status": "running"
     },
     "online-recharge": {
-      "containerId": "1c5dd07dca4c7d5f7596b9443fd3c496a4d8a5c2a955bde44481a76554ebea10",
+      "containerId": "20000c967b4e8b34c48fdb27d563bae2af08d2859d90748c93e7f018419c26ce",
       "environmentSha256": "60bb48bbd6e03a4ceebe245c8405f248d0c682a27287aabb17c1d3573e50ad37",
       "health": "healthy",
-      "image": "sha256:37075014c7a58e2c7831c1b5e97cf09768978e7f7641798644cfc7a102a73e00",
-      "reference": "id-business-v2-proxy-result-identity:69eba563895bf083b24c8214a088454d5df34922-38832430638",
-      "startedAtSha256": "12c7a064165e7251961eb99292f07f873743761990978664b8aeb763e4b24704",
+      "image": "sha256:cc59767525bcd39755d02283aec537476d82772ae5b3aeabf67e5118efb06440",
+      "reference": "id-business-v2-online-settings:55d5ee5504c9d8d4218632e8cb8eb508923ad9f8-38909769886-online-recharge",
+      "startedAtSha256": "4d589d28c6b8d94a4a08d3f1befac18a74156fab40503294b4aff23b58e54c15",
       "status": "running"
     }
   },
-  "sourceIp": "52.196.65.143",
+  "sourceIp": "52.196.65.143,172.31.21.172",
+  "sourceReviewCommit": "0752e7b44654e9f6ba97c0af8f65f20828f14d57",
   "sources": {
     "apps/api/src/id-business-v2/online-recharge/online-recharge.module.ts": "5ebb28f4ca4592bfd2b92ad837d78f1036112f0c5780ec97f093dcd9e1fe113d",
     "apps/api/src/id-business-v2/online-recharge/persistence/tasks.repository.ts": "15f3113b9ecd4353aabde76ea1358512f2d2c11820ce6b1257623feaad87676f",
