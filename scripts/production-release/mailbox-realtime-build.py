@@ -69,18 +69,19 @@ def prepare(native_evidence=True):
     c = verify_sources()
     need(os.environ.get('GITHUB_ACTIONS') == 'true' and not OUTPUT.exists(), 'NATIVE_BUILD_REQUIRED')
     p = load('registration-parity-diagnostics-build.py')
-    parent = json.loads((HERE / 'registration-parity-diagnostics-contract.json').read_bytes())
-    # These are the three successful predecessor publications, not the later unfinished candidate.
+    # Verify the successful ancestor chain and the separately finalized 6fc publication.
     if native_evidence:
-        for field in ('parentNative', 'successorNative', 'dragNative', 'accountNative', 'checkoutNative'):
-            p.native_proof(parent[field])
+        published = load('mailbox-realtime-baseline.py')
+        published.verify_prior_chain()
+        proof = published.published_proof(c['predecessorNative'])
+        published.verify_baseline_union(c, proof)
     OUTPUT.mkdir(parents=True, mode=0o700)
     if native_evidence:
         (OUTPUT / 'predecessors-verified.json').write_text(json.dumps({
             'status': 'NATIVE_VERIFIED', 'contractSha256': digest(CONTRACT.read_bytes())}) + '\n')
     for role in ('baseline', 'candidate'):
         context = OUTPUT / role
-        p.reconstruct(context, parent)
+        load('mailbox-realtime-baseline.py').reconstruct(context, c)
         if role == 'candidate':
             for name in {**c['sources'], **c['validationSources']}:
                 destination = context / name
@@ -140,6 +141,7 @@ def build():
              'adminFiles': inventory(payload / 'admin/html'), 'files': inventory(payload),
              'baselineApiReproduced': True, 'baselineAdminReproduced': True, 'sharedRuntimeUnchanged': True,
              'updatedServices': ['api', 'admin'], 'migrationPerformed': False, 'businessActions': 0,
+             'predecessorNative': c['predecessorNative'], 'configurationNormalization': c['configurationNormalization'],
              'controlSources': {name: digest((HERE / name).read_bytes()) for name in c['controlFiles']}}
     (OUTPUT / 'prepared-build-proof.json').write_text(json.dumps(proof, sort_keys=True, indent=2) + '\n')
 
