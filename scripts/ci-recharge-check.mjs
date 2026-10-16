@@ -39,7 +39,10 @@ import {
   isRegistrationMigrationQueryRepair,
   registrationMigrationQueryRepairBase
 } from './ci-registration-closure-scope.mjs';
-import { isRechargeCheckoutOnly } from './ci-recharge-checkout-scope.mjs';
+import {
+  isRechargeCheckoutOnly,
+  isRechargeSourceRecoveryOnly
+} from './ci-recharge-checkout-scope.mjs';
 import { isRechargeBillingOnly } from './ci-recharge-billing-scope.mjs';
 import { isSharedProxyPoolOnly, sharedProxyAdminCommand } from './ci-shared-proxy-scope.mjs';
 import { execFileSync } from 'node:child_process';
@@ -877,10 +880,16 @@ if (part === 'guards' && mode === 'admin' && isAdminHtmlCacheOnly(changed)) {
 // subject to the formal workflow's immutable source and prior-validation proof.
 if (part === 'guards' && mode === 'recharge') {
   if (isRechargeCheckoutOnly(changed)) {
-    run('python3', ['-B', 'scripts/production-release/recharge-checkout-release.test.py']);
+    run('python3', [
+      '-B',
+      isRechargeSourceRecoveryOnly(changed)
+        ? 'scripts/production-release/recharge-source-recovery-release.test.py'
+        : 'scripts/production-release/recharge-checkout-release.test.py'
+    ]);
     for (const name of new Set([
       ...adminUiGuardChecks(mode, changed),
-      ...backendArchitectureGuardChecks(mode, changed)
+      ...backendArchitectureGuardChecks(mode, changed),
+      ...(isRechargeSourceRecoveryOnly(changed) ? ['check:v2-isolation'] : [])
     ]))
       npm('run', name);
     console.log('Native checkout controls and all affected architecture/UI rules verified');
