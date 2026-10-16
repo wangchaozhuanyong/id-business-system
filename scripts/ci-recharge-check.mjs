@@ -6,6 +6,10 @@ import {
 } from './ci-proxy-result-identity-scope.mjs';
 import { readRegistrationNativeReuse } from './ci-registration-closure-native-reuse.mjs';
 import {
+  isOnlineProxyCountryOnly,
+  onlineProxyCountryCommands
+} from './ci-online-proxy-country-scope.mjs';
+import {
   isRegistrationEnvironmentRepair,
   registrationEnvironmentRepairBase,
   isRegistrationDeclarationRepair,
@@ -70,6 +74,13 @@ const changed = execFileSync('git', ['diff', '--name-only', base, 'HEAD'], { enc
   .trim()
   .split('\n')
   .filter(Boolean);
+// This API/Admin feature preserves the deployed engine image. Run every affected
+// source/test/build/UI check; the main-only workflow verifies disposable MySQL.
+// Any additional runtime, schema or dependency path uses the existing dispatcher.
+if (mode === 'recharge' && isOnlineProxyCountryOnly(changed)) {
+  for (const [file, ...args] of onlineProxyCountryCommands(part, changed)) run(file, args);
+  process.exit(0);
+}
 // A byte-bound engine and registration static-asset repair has real tests and its own publisher.
 // Formal validation runs the new mock-browser regression; unchanged compiled API/Admin and databases are preserved.
 const proxyResultIdentityOnly =
