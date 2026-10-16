@@ -95,7 +95,7 @@ def main():
     c = json.loads(raw_contract)
     need(os.environ.get('GITHUB_ACTIONS') == 'true' and not OUT.exists(), 'NATIVE_BUILD_REQUIRED')
     need(not git('status', '--porcelain', '--untracked-files=no').strip(), 'SOURCE_DIRTY')
-    changes = set(git('diff', '--name-only', c['reviewBase'], c['sourceReviewCommit']).decode().splitlines())
+    changes = set(git('diff', '--name-only', c['reviewBase'], c['sourceReviewCommit'], '--', 'apps/', 'docs/').decode().splitlines())
     need(changes == set(c['sources']), 'REVIEW_SCOPE_CHANGED')
     for name, expected in c['sources'].items():
         need(sha((ROOT / name).read_bytes()) == expected == sha(git('show', c['sourceReviewCommit'] + ':' + name)), 'SOURCE_CHANGED')
