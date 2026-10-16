@@ -236,7 +236,16 @@ async function write(page, key, expected, deadline) {
     if (matched.length !== 1) throw new Error(`${labels[key]}选项无法唯一匹配`);
     await choices.nth(matched[0]).click({ timeout: timeout(deadline) });
   } else {
-    await item.el.fill(String(expected), { timeout: timeout(deadline) });
+    const maxLength = key === 'year' ? await item.el.getAttribute('maxlength') : null;
+    const text =
+      key === 'year'
+        ? maxLength === '2'
+          ? String(expected).slice(-2)
+          : String(expected).length === 2
+            ? '20' + expected
+            : String(expected)
+        : String(expected);
+    await item.el.fill(text, { timeout: timeout(deadline) });
     await item.el.press('Tab', { timeout: timeout(deadline) });
   }
   return true;

@@ -180,3 +180,12 @@ test('readonly country combobox uses its options and verifies the selection', as
     true
   );
 });
+
+test('separate expiry month and four-digit year controls use their own semantics', async (t) => {
+  const page = await pageFor(
+    t,
+    '<input autocomplete="cc-number"><select autocomplete="cc-exp-month"><option value="12">December</option></select><input autocomplete="cc-exp-year" pattern="[0-9]{4}" required><input autocomplete="cc-csc">'
+  );
+  assert.equal((await fillCard(page, card, { deadline: Date.now() + 4000 })).ok, true);
+  assert.equal(await page.locator('[autocomplete="cc-exp-year"]').inputValue(), '2030');
+});
