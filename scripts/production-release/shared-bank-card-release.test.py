@@ -117,6 +117,34 @@ class PublicationTests(unittest.TestCase):
                 with self.assertRaises(RuntimeError):
                     r.safe_archive(raw, root / ('invalid-' + str(i)))
 
+    def test_configuration_allows_only_complete_bind_entry_reordering(self):
+        from types import SimpleNamespace
+        h = SimpleNamespace()
+        h.fingerprint = lambda value: r.sha(json.dumps(value, sort_keys=True).encode())
+        model = {'HostConfig': {'Binds': ['volume-a:/a:rw', 'volume-b:/b:rw']}, 'Config': {'Env': ['FIXTURE=unchanged']}}
+        h.configuration = lambda d, state: h.fingerprint(copy.deepcopy(model))
+        expected = copy.deepcopy(model)
+        expected['HostConfig']['Binds'].reverse()
+        digest = h.fingerprint(expected)
+        original = h.fingerprint
+        self.assertTrue(r.configuration_matches(h, None, None, digest))
+        self.assertIs(h.fingerprint, original)
+        model['Config']['Env'] = ['FIXTURE=changed']
+        self.assertFalse(r.configuration_matches(h, None, None, digest))
+        model['Config']['Env'] = ['FIXTURE=unchanged']
+        model['HostConfig']['Binds'][0] = 'different-volume:/a:rw'
+        self.assertFalse(r.configuration_matches(h, None, None, digest))
+
+    def test_forward_finalizer_never_repeats_migration_backup_or_service_switch(self):
+        import ast
+        tree = ast.parse((HERE / 'shared-bank-card-release.py').read_text())
+        function = next(n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == 'finalize_forward')
+        calls = {n.func.attr if isinstance(n.func, ast.Attribute) else n.func.id
+                 for n in ast.walk(function) if isinstance(n, ast.Call) and isinstance(n.func, (ast.Name, ast.Attribute))}
+        self.assertFalse(calls & {'apply_migration', 'fresh_scoped_backup', 'build_image', 'compose'})
+        with self.assertRaisesRegex(RuntimeError, 'FINALIZE_IDENTITY_INVALID'):
+            r.finalize_forward({'mode': 'finalize', 'commit': 'unreviewed', 'workflowRunId': '38916394747'}, {})
+
     def test_failure_keeps_owned_maintenance_for_forward_repair(self):
         # Parse the actual finally block: cleanup cannot run there after an
         # uncertain ALTER or switch, while the SQL fence must always close.
