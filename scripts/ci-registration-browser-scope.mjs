@@ -1,9 +1,8 @@
 import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
 
-export const registrationBrowserBase = 'eb4b0384c695ee6f6d650b3168c1ced0f0964b63';
-export const registrationBrowserTree = '1c8c6f63335e17ad8e6e45a38a299e3d3e2cee43';
+export const registrationBrowserBase = '44c9134833242815d01ba666fe0f942f924347fb';
+export const registrationBrowserTree = 'c8b741f0cce60d0ecedf7bb7bb37d636ed39b41a';
 export const registrationBrowserCurrent = '6fc99d23c2918280a94c3f5b8be48f638190e02f';
 export const registrationBrowserWorker = 'apps/api/src/id-business-v2/auto-registration/worker';
 export const registrationBrowserApplications = Object.freeze([
@@ -49,6 +48,7 @@ export const registrationBrowserControls = Object.freeze([
     (name) => 'scripts/production-release/registration-browser-' + name
   ),
   '.github/workflows/registration-browser-validation.yml',
+  '.github/workflows/quality.yml',
   'scripts/ci-registration-browser-scope.mjs',
   'scripts/ci-registration-browser-scope.test.mjs',
   'scripts/ci-recharge-scope.mjs',
@@ -88,6 +88,33 @@ const sameKeys = (left, right) =>
   new Set(left).size === left.length &&
   left.every((name) => right.includes(name));
 const object = (value) => value && typeof value === 'object' && !Array.isArray(value);
+export const registrationBrowserQualityBaselineSha256 =
+  '966e3ee2015a08408c689d2062b30995b85fd5f862f5042bec3bb2dcddcc25ac';
+
+/** Only this candidate's API/Admin artifact reads receive the existing read token. */
+export function registrationBrowserQualityWorkflowMatches(source, baseline) {
+  if (
+    typeof source !== 'string' ||
+    typeof baseline !== 'string' ||
+    createHash('sha256').update(baseline).digest('hex') !== registrationBrowserQualityBaselineSha256
+  )
+    return false;
+  const output = '      online_ci_build: ${{ steps.recharge.outputs.online_ci_build }}\n';
+  const token = "          GH_TOKEN: ${{ matrix.part == 'guards' && github.token || '' }}\n";
+  if (baseline.split(output).length !== 2 || baseline.split(token).length !== 2) return false;
+  return (
+    source ===
+    baseline
+      .replace(
+        output,
+        output + '      browser_candidate: ${{ steps.recharge.outputs.browser_candidate }}\n'
+      )
+      .replace(
+        token,
+        "          GH_TOKEN: ${{ (matrix.part == 'guards' || (needs.change-scope.outputs.browser_candidate == 'true' && (matrix.part == 'api' || matrix.part == 'admin'))) && github.token || '' }}\n"
+      )
+  );
+}
 
 export function isRegistrationBrowserOnly(
   paths,
@@ -174,42 +201,7 @@ export function registrationBrowserCommands(part, paths) {
       ].map((name) => ['npm', 'run', 'check:' + name])
     ];
   }
-  const workspace = part === 'api' ? '@apple-business/api' : '@apple-business/admin';
-  const python = resolve('.runtime/auto-registration/venv/bin/python');
   return [
-    ['npm', 'ci', '--ignore-scripts', '--no-audit', '--no-fund'],
-    ['npm', 'run', 'prisma:mysql:generate'],
-    ['npm', 'run', 'build', '--workspace', '@apple-business/shared'],
-    ['npm', 'run', 'typecheck', '--workspace', workspace],
-    [
-      'npm',
-      'run',
-      'test',
-      '--workspace',
-      workspace,
-      '--',
-      part === 'api' ? 'src/id-business-v2/auto-registration' : 'src/v2/features/auto-registration'
-    ],
-    ['npm', 'run', 'build', '--workspace', workspace],
-    ['npm', 'run', 'auto-registration:setup'],
-    ...(part === 'api'
-      ? [
-          ...registrationBrowserPythonTests.map((name) => [
-            python,
-            '-B',
-            '-m',
-            'unittest',
-            'discover',
-            '-s',
-            registrationBrowserWorker,
-            '-p',
-            name
-          ]),
-          ['node', '--test', registrationBrowserWorker + '/test_payment_browser.mjs']
-        ]
-      : [
-          ['npm', 'exec', '--', 'playwright', 'install', '--with-deps', 'chromium'],
-          ['node', registrationBrowserAcceptance, '--python=' + python]
-        ])
+    ['python3', '-B', 'scripts/production-release/registration-browser-build.py', 'check-' + part]
   ];
 }

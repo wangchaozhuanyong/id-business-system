@@ -1,5 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { readFileSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
 import {
   isRegistrationBrowserOnly,
   registrationBrowserBase as base,
@@ -12,7 +14,8 @@ import {
   registrationBrowserContract as contractPath,
   registrationBrowserAcceptance as acceptance,
   registrationBrowserPythonTests,
-  registrationBrowserCommands
+  registrationBrowserCommands,
+  registrationBrowserQualityWorkflowMatches
 } from './ci-registration-browser-scope.mjs';
 
 const fixture = () => {
@@ -84,7 +87,7 @@ test('registration browser excludes schema dependencies recharge upstream and fr
     'apps/admin/src/v2/features/auto-recharge/useAutoRecharge.ts',
     'scripts/production-release/registration-parity-diagnostics-build.py',
     'scripts/production-release/registration-flow-evidence-release.py',
-    '.github/workflows/quality.yml'
+    '.github/workflows/unrelated.yml'
   ])
     assert.equal(isRegistrationBrowserOnly([...paths, name], fixture()), false, name);
 });
@@ -163,15 +166,9 @@ test('registration browser guards are pure and both control parts execute all se
 test('registration browser API includes every real adapter persistence contract and connector suite', () => {
   const commands = registrationBrowserCommands('api', paths);
   assert.equal(registrationBrowserPythonTests.length, 10);
-  for (const name of registrationBrowserPythonTests)
-    assert.ok(
-      commands.some((row) => row.includes('unittest') && row.includes(name)),
-      name
-    );
-  assert.ok(commands.some((row) => row.includes('src/id-business-v2/auto-registration')));
-  assert.ok(
-    commands.some((row) => row.join(' ') === 'npm run build --workspace @apple-business/api')
-  );
+  assert.deepEqual(commands, [
+    ['python3', '-B', 'scripts/production-release/registration-browser-build.py', 'check-api']
+  ]);
   assert.ok(
     commands.every(
       (row) => !row.some((arg) => /prisma:migrate|ci-recharge-migration|docker/.test(arg))
@@ -185,13 +182,40 @@ test('registration browser API includes every real adapter persistence contract 
 
 test('registration browser Admin retains typecheck build unit tests and offline browser acceptance', () => {
   const commands = registrationBrowserCommands('admin', paths);
-  assert.ok(
-    commands.some((row) => row.join(' ') === 'npm run typecheck --workspace @apple-business/admin')
-  );
-  assert.ok(
-    commands.some((row) => row.join(' ') === 'npm run build --workspace @apple-business/admin')
-  );
-  assert.ok(commands.some((row) => row.includes('src/v2/features/auto-registration')));
-  assert.ok(commands.some((row) => row.includes(acceptance)));
+  assert.deepEqual(commands, [
+    ['python3', '-B', 'scripts/production-release/registration-browser-build.py', 'check-admin']
+  ]);
   assert.ok(commands.every((row) => !row.includes('unittest')));
+});
+
+test('registration browser Quality adds only a frozen predicate output and bounded read token scope', () => {
+  const baseline = execFileSync('git', ['show', base + ':.github/workflows/quality.yml'], {
+    encoding: 'utf8'
+  });
+  const source = readFileSync('.github/workflows/quality.yml', 'utf8');
+  assert.equal(registrationBrowserQualityWorkflowMatches(source, baseline), true);
+  for (const changed of [
+    source.replace('actions: read', 'actions: write'),
+    source.replace('contents: read', 'contents: write'),
+    source.replace("needs.change-scope.outputs.browser_candidate == 'true'", 'true'),
+    source.replace("(matrix.part == 'api' || matrix.part == 'admin')", 'true'),
+    source.replace(
+      "(matrix.part == 'api' || matrix.part == 'admin')",
+      "(matrix.part == 'api' || matrix.part == 'connector')"
+    ),
+    source.replace(
+      '      browser_candidate: ${{ steps.recharge.outputs.browser_candidate }}\n',
+      ''
+    ),
+    source + '\n# unreviewed edit\n'
+  ])
+    assert.equal(registrationBrowserQualityWorkflowMatches(changed, baseline), false);
+  assert.equal(registrationBrowserQualityWorkflowMatches(source, baseline + '\n'), false);
+  const dispatcher = readFileSync('scripts/ci-recharge-scope.mjs', 'utf8');
+  assert.ok(
+    dispatcher.includes(
+      'const browserCandidate = isRegistrationBrowserOnly(paths, proxyIdentityContext);'
+    )
+  );
+  assert.ok(dispatcher.includes('browser_candidate=${browserCandidate}'));
 });

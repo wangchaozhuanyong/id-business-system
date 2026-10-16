@@ -1,7 +1,9 @@
 """Pure control checks. No socket, SQLite connection, website or production action."""
 import copy
+from contextlib import redirect_stdout
 import importlib.util
 import inspect
+import io
 import json
 from pathlib import Path
 import socket
@@ -276,6 +278,65 @@ class BrowserReleaseControls(unittest.TestCase):
             with self.subTest(changed=changed), self.assertRaisesRegex(RuntimeError, 'API_OUTPUT_SCOPE_CHANGED'):
                 b.api_delta(old, changed, approved)
 
+    def test_candidate_checks_refuse_local_execution_before_any_preparation(self):
+        with patch.dict(b.os.environ, {'GITHUB_ACTIONS': '', 'CHECK_MODE': 'recharge'}), \
+                patch.object(b, 'prepare') as prepare, patch.object(b, 'run') as run:
+            for action in (b.check_api, b.check_admin):
+                with self.assertRaisesRegex(RuntimeError, 'CHECKS_REQUIRE_ISOLATED_CI'):
+                    action()
+            prepare.assert_not_called()
+            run.assert_not_called()
+
+    def test_candidate_api_checks_target_reconstructed_sources_and_every_python_suite(self):
+        contract = self.contract
+        baseline = dict(contract['baselineApiFiles'])
+        changed = next(name for name in contract['apiModules'] if name in baseline)
+        after = {**baseline, changed: 'b' * 64}
+        old = types.SimpleNamespace(inventory=Mock(side_effect=[baseline, after]))
+        python = OUTPUT / 'synthetic-python'
+        with patch.object(b, 'check_context', return_value=(contract, old, python)), \
+                patch.object(b, 'run') as run, redirect_stdout(io.StringIO()):
+            b.check_api()
+        for call in run.call_args_list:
+            self.assertIn(call.kwargs['cwd'], (b.OUTPUT / 'baseline', b.OUTPUT / 'candidate', b.OUTPUT / 'candidate' / b.WORKER))
+        for module in contract['pythonTests']:
+            run.assert_any_call(str(python), '-B', '-m', 'unittest', module, cwd=b.OUTPUT / 'candidate' / b.WORKER)
+        run.assert_any_call('npm', 'run', 'typecheck', '--workspace', 'apps/api', cwd=b.OUTPUT / 'candidate')
+        run.assert_any_call('npm', 'run', 'test', '--workspace', 'apps/api', '--', *contract['apiTests'], cwd=b.OUTPUT / 'candidate')
+
+    def test_candidate_admin_checks_target_reconstructed_sources_and_actual_browser_acceptance(self):
+        contract = self.contract
+        old = types.SimpleNamespace(inventory=Mock(return_value=contract['baselineAdminFiles']))
+        python = OUTPUT / 'synthetic-python'
+        with patch.object(b, 'check_context', return_value=(contract, old, python)), \
+                patch.object(b, 'run') as run, patch.object(b, 'git', return_value=(r.CURRENT + '\n').encode()), \
+                redirect_stdout(io.StringIO()):
+            b.check_admin()
+        for call in run.call_args_list:
+            self.assertIn(call.kwargs['cwd'], (b.OUTPUT / 'baseline', b.OUTPUT / 'candidate'))
+        run.assert_any_call('npm', 'run', 'typecheck', '--workspace', 'apps/admin', cwd=b.OUTPUT / 'candidate')
+        run.assert_any_call('npm', 'run', 'test', '--workspace', 'apps/admin', '--', *contract['adminTests'], cwd=b.OUTPUT / 'candidate')
+        for script in contract['browserAcceptances']:
+            run.assert_any_call('node', script, '--python=' + str(python), cwd=b.OUTPUT / 'candidate')
+
+    def test_source_schema_pin_is_separate_from_reconstructed_runtime_schema(self):
+        name = 'apps/api/prisma-mysql/schema.prisma'
+        source_raw, runtime_raw = b'source schema', b'runtime schema'
+        contract = {'sourceTreeInputs': {name: r.digest(source_raw)},
+                    'unchangedInputs': {name: r.digest(runtime_raw)}, 'schemaSha256': r.digest(runtime_raw)}
+        with tempfile.TemporaryDirectory(dir=OUTPUT) as temporary:
+            root = Path(temporary)
+            path = root / name
+            path.parent.mkdir(parents=True)
+            path.write_bytes(source_raw)
+            with patch.object(b, 'ROOT', root), patch.object(b, 'git', return_value=source_raw) as git:
+                b.verify_immutable_inputs(contract)
+                git.assert_called_once_with('show', b.SOURCE_BASE + ':' + name)
+            with self.assertRaisesRegex(RuntimeError, 'RUNTIME_SCHEMA_CHANGED'):
+                r.helper('registration-parity-diagnostics-build.py').verify_runtime_schema(root, contract)
+            path.write_bytes(runtime_raw)
+            r.helper('registration-parity-diagnostics-build.py').verify_runtime_schema(root, contract)
+
     def test_workflow_is_manual_single_flight_and_has_all_validation_stages(self):
         source = (ROOT / '.github/workflows/registration-browser-validation.yml').read_text()
         self.assertIn('workflow_dispatch:', source)
@@ -307,6 +368,8 @@ with patch.object(subprocess,'run',forbidden),patch.object(subprocess,'check_out
 print(json.dumps(calls))
 '''
         for suffix, mode, arguments in [*[('build.py', m, [m]) for m in ('prepare', 'build', 'validate', 'package')],
+                                         ('build.py', 'check_api', ['check-api']),
+                                         ('build.py', 'check_admin', ['check-admin']),
                                          ('dispatch.py', 'publish', [])]:
             script = HERE / ('registration-browser-' + suffix)
             result = subprocess.run([sys.executable, '-B', '-c', harness, str(script), mode, json.dumps(arguments)],

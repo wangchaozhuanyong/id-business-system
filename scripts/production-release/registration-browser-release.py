@@ -17,8 +17,8 @@ ROOT = HERE.parents[1]
 SCOPE = 'REGISTRATION_BROWSER'
 CURRENT = '6fc99d23c2918280a94c3f5b8be48f638190e02f'
 CURRENT_TREE = '3c7ae119d97c8478f32f644485b7cd1b555830a6'
-SOURCE_BASE = 'eb4b0384c695ee6f6d650b3168c1ced0f0964b63'
-SOURCE_TREE = '1c8c6f63335e17ad8e6e45a38a299e3d3e2cee43'
+SOURCE_BASE = '44c9134833242815d01ba666fe0f942f924347fb'
+SOURCE_TREE = 'c8b741f0cce60d0ecedf7bb7bb37d636ed39b41a'
 WORKER = 'apps/api/src/id-business-v2/auto-registration/worker/'
 OLD_NAME = 'registration-parity-diagnostics'
 NAME = 'registration-browser'
@@ -151,7 +151,7 @@ def verify_contract(contract):
                 'baselineEngineFiles', 'runtimePythonDependencies', 'prismaPathMetadata',
                 'protectedMigrations', 'unchangedInputs', 'buildSupportHashes',
                 'qualityEvidenceHelperSha256', 'sqlFenceHelperSha256', 'backupNormalizerPath',
-                'sourceTreeInputs', 'validationBaselineSources', 'registrationNative', 'identityNative',
+                'validationBaselineSources', 'registrationNative', 'identityNative',
                 'parentControls', 'parentContractSha256', 'parentProofSha256', 'parentNative',
                 'successorControls', 'successorContractSha256', 'successorProofSha256',
                 'successorNative', 'publishedSuccessorSources', 'dragControls', 'dragContractSha256',
@@ -159,6 +159,11 @@ def verify_contract(contract):
                 'accountProofSha256', 'accountNative', 'accountSources', 'checkoutControls',
                 'checkoutContractSha256', 'checkoutProofSha256', 'checkoutNative', 'checkoutSources'):
         need(contract.get(key) == prior[key], 'PRESERVED_INPUT_CHANGED')
+    source_inputs = contract.get('sourceTreeInputs')
+    need(isinstance(source_inputs, dict) and set(source_inputs) == {'apps/api/prisma-mysql/schema.prisma'}
+         and re.fullmatch('[a-f0-9]{64}', source_inputs['apps/api/prisma-mysql/schema.prisma'])
+         and contract['unchangedInputs']['apps/api/prisma-mysql/schema.prisma'] == contract['schemaSha256'],
+         'PRESERVED_INPUT_CHANGED')
     need(isinstance(contract.get('runtimeEvidence'), dict)
          and contract['runtimeEvidence'].get('status') == 'VERIFIED'
          and contract['runtimeEvidence'].get('commit') == CURRENT

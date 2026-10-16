@@ -45,7 +45,8 @@ def verify_sources(contract):
     need(all(contract['reviewedFileHashes'].get(name) == value
              for name, value in {**contract['sources'], **contract['validationSources']}.items()),
          'SOURCE_HASH_CLOSURE_CHANGED')
-    for name, value in {**contract['unchangedInputs'], **contract['buildSupportHashes']}.items():
+    verify_immutable_inputs(contract)
+    for name, value in contract['buildSupportHashes'].items():
         need(digest((ROOT / name).read_bytes()) == value == digest(git('show', SOURCE_BASE + ':' + name)),
              'IMMUTABLE_INPUT_CHANGED')
     need(re.fullmatch('[a-f0-9]{40}', contract.get('reviewedApplicationCommit') or '')
@@ -53,10 +54,22 @@ def verify_sources(contract):
                  for name, value in contract['sources'].items()), 'REVIEWED_APPLICATION_CHANGED')
     need(set(contract['controlPaths']) <= set(contract['reviewedFileHashes'])
          | {'scripts/production-release/registration-browser-contract.json'}, 'CONTROL_CLOSURE_CHANGED')
-    command = "import {isRegistrationBrowserOnly as check} from './scripts/ci-registration-browser-scope.mjs';" \
+    workflow_baseline = git('show', SOURCE_BASE + ':.github/workflows/quality.yml').decode()
+    command = "import {readFileSync} from 'node:fs';import {isRegistrationBrowserOnly as check,registrationBrowserQualityWorkflowMatches as workflow} from './scripts/ci-registration-browser-scope.mjs';" \
         + 'if(!check(' + json.dumps(changed) + ',{base:' + json.dumps(SOURCE_BASE) \
-        + ',baseTree:' + json.dumps(SOURCE_TREE) + '}))process.exit(2);'
+        + ',baseTree:' + json.dumps(SOURCE_TREE) + "})||!workflow(readFileSync('.github/workflows/quality.yml','utf8')," \
+        + json.dumps(workflow_baseline) + '))process.exit(2);'
     run('node', '--input-type=module', '-e', command)
+
+
+def verify_immutable_inputs(contract):
+    # HEAD schema provenance and reconstructed runtime schema are separate pins.
+    # Reconstruct/prepare/build retain the prior runtime schema/client checks.
+    source_inputs = contract['sourceTreeInputs']
+    for name, expected in contract['unchangedInputs'].items():
+        source_expected = source_inputs.get(name, expected)
+        need(digest((ROOT / name).read_bytes()) == source_expected
+             == digest(git('show', SOURCE_BASE + ':' + name)), 'IMMUTABLE_INPUT_CHANGED')
 
 
 def published_proof(binding):
@@ -231,9 +244,65 @@ def package():
     build_namespace()['package']()
 
 
+def check_context():
+    need(os.environ.get('GITHUB_ACTIONS') == 'true' and os.environ.get('CHECK_MODE') == 'recharge',
+         'CHECKS_REQUIRE_ISOLATED_CI')
+    prepare()
+    contract = json.loads(CONTRACT.read_bytes())
+    old = r.helper(r.OLD_NAME + '-build.py')
+    need(old.unchanged_client(OUTPUT / 'baseline', contract)
+         == old.unchanged_client(OUTPUT / 'candidate', contract), 'UNCHANGED_CLIENT_NOT_REPRODUCED')
+    python = OUTPUT / 'python/bin/python'
+    run(sys.executable, '-m', 'venv', str(OUTPUT / 'python'))
+    run(str(python), '-m', 'pip', 'install', '--disable-pip-version-check', '-r',
+        str(OUTPUT / 'candidate' / WORKER / 'requirements.lock.txt'))
+    run(str(python), '-m', 'pip', 'check')
+    return contract, old, python
+
+
+def check_api():
+    contract, old, python = check_context()
+    baseline, candidate = OUTPUT / 'baseline', OUTPUT / 'candidate'
+    for context in (baseline, candidate):
+        run('npm', 'run', 'build', '--workspace', 'apps/api', cwd=context)
+    before, after = old.inventory(baseline / 'apps/api/dist'), old.inventory(candidate / 'apps/api/dist')
+    need({name: value for name, value in before.items() if name.endswith('.js')}
+         == contract['baselineApiFiles'], 'BASE_API_NOT_REPRODUCED')
+    api_delta(before, after, contract['apiModules'])
+    run('npm', 'run', 'typecheck', '--workspace', 'apps/api', cwd=candidate)
+    run('npm', 'run', 'test', '--workspace', 'apps/api', '--', *contract['apiTests'], cwd=candidate)
+    for module in contract['pythonTests']:
+        need(re.fullmatch('test_[a-z0-9_]+', module), 'PYTHON_TEST_PATH_INVALID')
+        run(str(python), '-B', '-m', 'unittest', module, cwd=candidate / WORKER)
+    run('node', '--test', str(candidate / WORKER / 'test_payment_browser.mjs'), cwd=candidate)
+    print(json.dumps({'status': SCOPE + '_API_CANDIDATE_VERIFIED', 'runtimeBaseline': CURRENT,
+        'sourceBaseline': SOURCE_BASE, 'migrationPerformed': False, 'businessActions': 0}))
+
+
+def check_admin():
+    contract, old, python = check_context()
+    baseline, candidate = OUTPUT / 'baseline', OUTPUT / 'candidate'
+    commit = git('rev-parse', 'HEAD').decode().strip()
+    for context, build_id in ((baseline, contract['baselineAdminBuildId']), (candidate, 'v2-' + commit)):
+        run('npm', 'run', 'build', '--workspace', 'apps/admin', cwd=context,
+            env={**os.environ, 'NODE_ENV': 'production', 'V2_BUILD_ID': build_id})
+    need(old.inventory(baseline / 'apps/admin/dist') == contract['baselineAdminFiles'], 'BASE_ADMIN_NOT_REPRODUCED')
+    run('npm', 'run', 'typecheck', '--workspace', 'apps/admin', cwd=candidate)
+    run('npm', 'run', 'test', '--workspace', 'apps/admin', '--', *contract['adminTests'], cwd=candidate)
+    run('npm', 'exec', '--', 'playwright', 'install', '--with-deps', 'chromium', cwd=candidate)
+    for script in contract['browserAcceptances']:
+        need(script in contract['validationSources'] and script.startswith('scripts/acceptance-v2-'),
+             'BROWSER_TEST_PATH_INVALID')
+        run('node', script, '--python=' + str(python), cwd=candidate)
+    print(json.dumps({'status': SCOPE + '_ADMIN_CANDIDATE_VERIFIED', 'runtimeBaseline': CURRENT,
+        'sourceBaseline': SOURCE_BASE, 'migrationPerformed': False, 'businessActions': 0}))
+
+
 def main(arguments):
-    need(arguments in (['prepare'], ['build'], ['validate'], ['package']), 'BUILD_MODE_INVALID')
-    globals()[arguments[0]]()
+    modes = {'prepare': prepare, 'build': build, 'validate': validate, 'package': package,
+             'check-api': check_api, 'check-admin': check_admin}
+    need(len(arguments) == 1 and arguments[0] in modes, 'BUILD_MODE_INVALID')
+    modes[arguments[0]]()
 
 
 if __name__ == '__main__':

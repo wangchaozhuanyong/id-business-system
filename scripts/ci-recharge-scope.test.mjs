@@ -46,6 +46,7 @@ import {
 import {
   registrationBrowserBase,
   registrationBrowserTree,
+  registrationBrowserCurrent,
   registrationBrowserPaths,
   registrationBrowserReviewedPaths,
   registrationBrowserApplications,
@@ -72,7 +73,7 @@ test('registration browser selects four affected checks only for the complete fr
       scope: 'REGISTRATION_BROWSER',
       sourceBaseline: registrationBrowserBase,
       sourceBaselineTree: registrationBrowserTree,
-      expectedCurrent: registrationBrowserBase,
+      expectedCurrent: registrationBrowserCurrent,
       migration: null,
       expectedGitChanges: [...registrationBrowserReviewedPaths],
       sourceDeltaPaths: paths,

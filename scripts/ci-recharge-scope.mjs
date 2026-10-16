@@ -4369,6 +4369,7 @@ async function main() {
   // END finite ONLINE build-proof reuse classifier admission
 
   const onlineCiBuild = needsOnlineRechargeCiBuild(paths);
+  const browserCandidate = isRegistrationBrowserOnly(paths, proxyIdentityContext);
   const result = {
     mode,
     reuseMain,
@@ -4392,7 +4393,7 @@ async function main() {
     );
   appendFileSync(
     process.env.GITHUB_OUTPUT,
-    `mode=${mode}\nreuse_main=${reuseMain}\nreused_parts=${JSON.stringify([...reused])}\ncheck_parts=${JSON.stringify(checkParts)}\nbase=${base}\nadmin_acceptance=${adminAcceptance}\nonline_ci_build=${onlineCiBuild}\n`
+    `mode=${mode}\nreuse_main=${reuseMain}\nreused_parts=${JSON.stringify([...reused])}\ncheck_parts=${JSON.stringify(checkParts)}\nbase=${base}\nadmin_acceptance=${adminAcceptance}\nonline_ci_build=${onlineCiBuild}\nbrowser_candidate=${browserCandidate}\n`
   );
   appendFileSync(
     process.env.GITHUB_STEP_SUMMARY,
