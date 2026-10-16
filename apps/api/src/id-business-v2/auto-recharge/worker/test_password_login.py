@@ -44,6 +44,28 @@ class PasswordLoginTests(unittest.IsolatedAsyncioTestCase):
         human_wait.assert_not_awaited()
         self.assertIn("login_code_submitted", [call.args[0] for call in progress.call_args_list])
 
+    async def test_no_password_chooses_email_code_and_never_submits_an_empty_password(self):
+        page = MagicMock(url="https://auth.openai.com/u/email-verification")
+        email_field = MagicMock(fill=AsyncMock(), press=AsyncMock())
+        password_field = MagicMock(fill=AsyncMock(), press=AsyncMock())
+        code_field = MagicMock(fill=AsyncMock(), press=AsyncMock(), input_value=AsyncMock(return_value="123456"))
+        identity = (BrowserCredential("", "account_fixture", "user_fixture"), {"account_matched": True})
+        email_code = AsyncMock(return_value="123456")
+        totp = AsyncMock()
+        with (patch.object(login, "official_identity", new=AsyncMock(side_effect=[None, None, identity])),
+              patch.object(login, "wait_for_input", new=AsyncMock(side_effect=[email_field, password_field])),
+              patch.object(login, "unique_visible", new=AsyncMock(return_value=code_field)),
+              patch.object(login, "choose_email_login", new=AsyncMock(return_value=True)) as choose,
+              patch.object(login, "login_code_type", new=AsyncMock(return_value="email")),
+              patch.object(login.asyncio, "sleep", new=AsyncMock())):
+            self.assertEqual(await login.login_with_password(page, "test@example.invalid", "", totp, AsyncMock(), MagicMock(), initial_loaded=True, wait_for_email_code=email_code), identity)
+        choose.assert_awaited_once()
+        password_field.fill.assert_not_awaited()
+        password_field.press.assert_not_awaited()
+        email_code.assert_awaited_once_with(120)
+        totp.assert_not_awaited()
+        code_field.fill.assert_awaited_once_with("123456")
+
     async def test_unexpected_provider_is_not_filled(self):
         page = MagicMock(url="https://accounts.google.com/")
         page.goto = AsyncMock()

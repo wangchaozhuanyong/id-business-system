@@ -19,7 +19,7 @@ function setup() {
   const encryption = {
     encrypt: vi.fn((value: string | null) => (value ? `encrypted:${value}` : null)),
     hash: vi.fn((value: string) => `hash:${value}`),
-    decrypt: vi.fn((value: string) => value.replace(/^encrypted:/, ''))
+    decrypt: vi.fn((value: string | null) => (value ? value.replace(/^encrypted:/, '') : null))
   };
   const service = new BankRechargeAccountService(
     repository as never,
@@ -153,13 +153,14 @@ describe('ChatGPT 账号批量导入和删除', () => {
     expect(repository.createAccount.mock.calls[0]?.[1].data.passwordEncrypted).toBeNull();
   });
 
-  it('无密码账号仍可生成 2FA 验证码，密码登录保留缺失提示', async () => {
+  it('无密码账号可生成 2FA 并启动邮箱验证码登录', async () => {
     const { service, repository, audit, operator } = setup();
     const id = '123e4567-e89b-42d3-a456-426614174000';
     repository.findAccount.mockResolvedValue({
       id,
       status: 'active',
       passwordEncrypted: null,
+      emailEncrypted: 'encrypted:test@example.invalid',
       totpSecretEncrypted: 'encrypted:JBSWY3DPEHPK3PXP',
       totpAlgorithm: 'sha1',
       totpDigits: 6,
@@ -169,7 +170,10 @@ describe('ChatGPT 账号批量导入和删除', () => {
     expect(code.token).toMatch(/^\d{6}$/);
     expect(code.expiresAt.getTime()).toBeGreaterThan(Date.now());
     expect(JSON.stringify(audit.append.mock.calls)).not.toContain(code.token);
-    await expect(service.launchCredential(id, operator)).rejects.toThrow('尚未保存登录密码');
+    await expect(service.launchCredential(id, operator)).resolves.toEqual({
+      email: 'test@example.invalid',
+      password: ''
+    });
   });
 
   it.each([null, 123, 'bad\npassword', 'x'.repeat(1025)])(

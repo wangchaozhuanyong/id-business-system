@@ -15,19 +15,17 @@
       aria-label="筛选币种"
       @change="page.applyFilters"
     />
-    <el-input
+    <V2SearchInput
       v-if="page.activeTab === 'journals'"
       v-model="page.filters.periodMonth"
+      draft-key="finance-ledger:periodMonth"
+      :min-length="7"
       placeholder="月份 YYYY-MM"
       maxlength="7"
       aria-label="筛选财务月份"
-      @keyup.enter="page.applyFilters"
+      @search="page.applyFilters"
     />
-    <template #actions
-      ><AppButton v-if="page.activeTab === 'journals'" variant="soft" @click="page.applyFilters">
-        <el-icon><Search /></el-icon>
-        查询流水
-      </AppButton>
+    <template #actions>
       <AppButton variant="ghost" :disabled="activeFilterCount === 0" @click="page.resetFilters">
         <el-icon><RefreshLeft /></el-icon>
         清除筛选
@@ -42,11 +40,12 @@
 </template>
 
 <script setup lang="ts">
+import V2SearchInput from '@/v2/components/V2SearchInput.vue';
 import V2ListToolbar from '@/v2/components/V2ListToolbar.vue';
 import V2FinanceCurrencySelect from '@/v2/components/V2FinanceCurrencySelect.vue';
 import { computed } from 'vue';
 import type { UnwrapNestedRefs } from 'vue';
-import { RefreshLeft, Search } from '@element-plus/icons-vue';
+import { RefreshLeft } from '@element-plus/icons-vue';
 import AppButton from '@/components/ui/AppButton.vue';
 import type { useFinanceLedgerPage } from '../useFinanceLedgerPage';
 

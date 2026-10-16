@@ -2824,6 +2824,7 @@ model IdBusinessV2ChatgptAccount {
   emailEncrypted      String                           @map("email_encrypted") @db.Text
   emailHash           String                           @unique @map("email_hash") @db.Char(64)
   emailMasked         String                           @map("email_masked") @db.VarChar(255)
+  emailSearchTokens   Json                             @default("[]") @map("email_search_tokens")
   registered          Boolean                          @default(true)
   saleStatus          IdBusinessV2ChatgptAccountSaleStatus @default(unsold) @map("sale_status")
   soldAt              DateTime?                        @map("sold_at") @db.DateTime(6)

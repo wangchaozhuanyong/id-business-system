@@ -20,13 +20,13 @@
     </header>
 
     <section class="v2-supplier-funds-toolbar" aria-label="供应商资金筛选">
-      <el-input
+      <V2SearchInput
         v-model="query.keyword"
+        draft-key="topup-records:V2TopupSupplierFundsPanel:query.keyword"
         clearable
         placeholder="搜索供应商"
         aria-label="搜索加卡供应商"
-        @keyup.enter="applyFilters"
-        @clear="applyFilters"
+        @search="applyFilters"
       />
       <el-select
         v-model="query.fundingStatus"
@@ -281,6 +281,7 @@
 </template>
 
 <script setup lang="ts">
+import V2SearchInput from '@/v2/components/V2SearchInput.vue';
 import { useV2FormDraft, useV2SessionDraft } from '@/v2/composables/useV2SessionDraft';
 
 import { computed, reactive, ref, watch } from 'vue';

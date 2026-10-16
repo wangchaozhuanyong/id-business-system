@@ -3,35 +3,48 @@
     <V2PageContext :description="sectionDescriptions[section]">
       <template #filters
         ><div class="online-filters">
-          <el-input
+          <V2SearchInput
             v-model="filters.keyword"
+            draft-key="online-recharge:OnlineResourceView:filters.keyword"
             clearable
             placeholder="搜索当前清单"
             aria-label="搜索当前清单"
-            @keyup.enter="search"
-          /><el-select v-if="statusOptions.length" v-model="filters.status" aria-label="状态"
+            @search="search"
+          /><el-select
+            v-if="statusOptions.length"
+            v-model="filters.status"
+            aria-label="状态"
+            @change="search"
             ><el-option label="全部状态" value="" /><el-option
               v-for="item in statusOptions"
               :key="item.value"
               :label="item.label"
               :value="item.value" /></el-select
-          ><el-select v-if="hasPlan" v-model="filters.plan" aria-label="套餐"
+          ><el-select v-if="hasPlan" v-model="filters.plan" aria-label="套餐" @change="search"
             ><el-option label="全部套餐" value="" /><el-option
               v-for="item in planOptions"
               :key="item.value"
               :label="item.label"
               :value="item.value" /></el-select
-          ><el-select v-if="section === 'cdks'" v-model="filters.dispatched" aria-label="出库状态"
+          ><el-select
+            v-if="section === 'cdks'"
+            v-model="filters.dispatched"
+            aria-label="出库状态"
+            @change="search"
             ><el-option label="全部出库状态" value="" /><el-option
               label="未出库"
               value="false" /><el-option label="已出库" value="true"
           /></el-select>
-          <el-select v-model="filters.sortOrder" aria-label="排序"
+          <el-select v-model="filters.sortOrder" aria-label="排序" @change="search"
             ><el-option label="时间从新到旧" value="desc" /><el-option
               label="时间从旧到新"
               value="asc"
           /></el-select>
-          <el-select v-if="section === 'addresses'" v-model="filters.region" aria-label="地址池地区"
+          <el-select
+            v-if="section === 'addresses'"
+            v-model="filters.region"
+            aria-label="地址池地区"
+            @change="search"
             ><el-option
               v-for="item in addressPoolOptions"
               :key="item.value"
@@ -45,9 +58,9 @@
             start-placeholder="开始日期"
             end-placeholder="结束日期"
             aria-label="账单日期范围"
-          /><AppButton variant="soft" @click="search">查询</AppButton>
-        </div></template
-      >
+            @change="search"
+          /></div
+      ></template>
       <template #actions
         ><AppButton
           v-for="action in visibleTopActions"
@@ -199,6 +212,7 @@
   </section>
 </template>
 <script setup lang="ts">
+import V2SearchInput from '@/v2/components/V2SearchInput.vue';
 import { computed, onBeforeUnmount, ref, watch } from 'vue';
 import { sessionCoordinator } from '@/auth/sessionCoordinator';
 import AppButton from '@/components/ui/AppButton.vue';
@@ -355,7 +369,7 @@ function changePageSize(value: number) {
 }
 function search() {
   filters.value.page = 1;
-  void query.refresh();
+  void query.ensureFresh();
 }
 function chooseRowAction(key: string, row: OnlineRow) {
   const action = actions.value.find((item) => item.key === key);

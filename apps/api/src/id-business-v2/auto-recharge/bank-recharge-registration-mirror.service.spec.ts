@@ -146,6 +146,7 @@ describe('隐藏邮箱注册的 ChatGPT 主账号保存', () => {
       data: {
         id: accountId,
         emailEncrypted: `encrypted:${email}`,
+        emailSearchTokens: expect.arrayContaining([expect.any(String)]),
         emailHash: `hash:${email}`,
         emailMasked: 'ne***@example.test',
         registered: true,

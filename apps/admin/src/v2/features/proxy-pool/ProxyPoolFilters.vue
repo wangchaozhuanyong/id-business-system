@@ -6,11 +6,12 @@
     @submit.prevent="$emit('search')"
   >
     <el-form-item label="搜索"
-      ><el-input
+      ><V2SearchInput
         v-model="model.keyword"
+        draft-key="proxy-pool:ProxyPoolFilters:model.keyword"
         clearable
         placeholder="代理地址、国家代码或备注"
-        @keyup.enter="$emit('search')"
+        @search="$emit('search')"
     /></el-form-item>
     <el-form-item label="国家"
       ><el-select
@@ -45,11 +46,10 @@
           label="更新从旧到新"
           value="asc" /></el-select
     ></el-form-item>
-    <el-form-item><AppButton @click="$emit('search')">查询</AppButton></el-form-item>
   </el-form>
 </template>
 <script setup lang="ts">
-import AppButton from '@/components/ui/AppButton.vue';
+import V2SearchInput from '@/v2/components/V2SearchInput.vue';
 import { proxyCountries, proxyKindLabels } from './options';
 const model = defineModel<{
   keyword: string;

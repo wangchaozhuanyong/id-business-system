@@ -1,3 +1,4 @@
+import { isAccountLoginOnly, accountLoginCommands } from './ci-account-login-scope.mjs';
 import { isWorkspaceDragOnly, workspaceDragCommands } from './ci-workspace-drag-scope.mjs';
 import {
   isChatgptSalesOnly,
@@ -14,6 +15,8 @@ import {
 } from './ci-registration-flow-evidence-scope.mjs';
 import {
   isRegistrationParityDiagnosticsOnly,
+  isRegistrationParityDiagnosticsControlRepair,
+  registrationParityDiagnosticsRepairBase,
   registrationParityDiagnosticsBase,
   registrationParityDiagnosticsParts,
   registrationParityDiagnosticsWorker,
@@ -99,6 +102,17 @@ const changed = execFileSync('git', ['diff', '--name-only', base, 'HEAD'], { enc
   .trim()
   .split('\n')
   .filter(Boolean);
+if (mode === 'recharge' && isAccountLoginOnly(changed)) {
+  for (const [file, ...args] of accountLoginCommands(part, changed)) run(file, args);
+  process.exit(0);
+}
+const registrationParityDiagnosticsControlRepair =
+  mode === 'ci-only' &&
+  base === registrationParityDiagnosticsRepairBase &&
+  isRegistrationParityDiagnosticsControlRepair(changed, {
+    base,
+    baseTree: execFileSync('git', ['rev-parse', base + '^{tree}'], { encoding: 'utf8' }).trim()
+  });
 const registrationParityDiagnosticsOnly =
   mode === 'recharge' &&
   base === registrationParityDiagnosticsBase &&
@@ -106,7 +120,9 @@ const registrationParityDiagnosticsOnly =
     base,
     baseTree: execFileSync('git', ['rev-parse', base + '^{tree}'], { encoding: 'utf8' }).trim()
   });
-if (registrationParityDiagnosticsOnly) {
+if (registrationParityDiagnosticsOnly || registrationParityDiagnosticsControlRepair) {
+  if (registrationParityDiagnosticsControlRepair && part !== 'guards')
+    throw new Error('Unsupported registration parity control repair check part');
   if (!registrationParityDiagnosticsParts.includes(part))
     throw new Error('Unsupported registration parity diagnostics check part');
   if (part === 'guards' || part === 'release-controls') {

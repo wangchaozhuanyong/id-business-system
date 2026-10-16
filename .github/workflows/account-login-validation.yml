@@ -1,0 +1,114 @@
+name: Account Login and Search Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      commit:
+        description: Exact reviewed main commit
+        required: true
+        type: string
+      expected_current:
+        description: Exact deployed predecessor commit
+        required: true
+        type: string
+      publish:
+        description: Publish after isolated validation
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: id-business-v2-production-release
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    if: github.ref == 'refs/heads/main' && inputs.commit == github.sha
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
+        with:
+          node-version: 24
+          cache: npm
+      - name: Verify finite publication controls
+        run: python3 -B scripts/production-release/account-login-release.test.py
+      - name: Reproduce predecessor and compile approved API Admin delta
+        run: python3 -B scripts/production-release/account-login-build.py prepare
+      - name: Verify legacy defaults and seven real isolated MySQL transactions
+        run: node scripts/production-release/account-login-database.mjs
+      - name: Install isolated browser runtime
+        working-directory: .deploy/account-login-release/candidate
+        run: npx playwright install --with-deps chromium
+      - name: Verify sale dialog tabs pagination themes and failure retry
+        working-directory: .deploy/account-login-release/candidate
+        run: node scripts/acceptance-v2-chatgpt-account-sales.mjs
+      - name: Bind validation to finite native artifact
+        run: python3 -B scripts/production-release/account-login-build.py package
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: account-login-${{ github.sha }}-${{ github.run_attempt }}
+          path: |
+            .deploy/account-login-release/account-login-artifact.tar.gz
+            .deploy/account-login-release/artifact-sha256.txt
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 30
+      - name: Preserve isolated validation counts
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: account-login-validation-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            .deploy/account-login-release/database-verification.json
+            .deploy/account-login-release/mysql-vitest.json
+            .deploy/account-login-release/candidate/.runtime/chatgpt-sale-status-20261016/browser/result.json
+          include-hidden-files: true
+          if-no-files-found: ignore
+          retention-days: 30
+
+  publish:
+    needs: validate
+    if: inputs.publish && github.ref == 'refs/heads/main' && inputs.commit == github.sha
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    permissions:
+      contents: write
+      actions: read
+      id-token: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      AWS_REGION: ap-northeast-1
+      RELEASE_COMMIT: ${{ inputs.commit }}
+      EXPECTED_CURRENT: ${{ inputs.expected_current }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          fetch-depth: 0
+      - name: Configure existing production OIDC role
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd
+        with:
+          role-to-assume: arn:aws:iam::079740175286:role/id-business-v2-github-release
+          role-session-name: id-business-v2-sales-${{ github.run_id }}
+          aws-region: ap-northeast-1
+          role-duration-seconds: 3600
+      - name: Publish migration API Admin once and independently read back
+        run: python3 -B scripts/production-release/account-login-dispatch.py
+      - name: Preserve native publication evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: account-login-publication-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .deploy/account-login-release/
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 30

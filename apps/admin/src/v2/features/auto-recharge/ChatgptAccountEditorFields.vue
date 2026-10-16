@@ -16,7 +16,7 @@
       type="email"
       maxlength="250"
       autocomplete="off"
-      :placeholder="`当前 ${editing.emailMasked}；留空保留`"
+      :placeholder="`当前 ${editing.email || editing.emailMasked}；留空保留`"
     />
   </el-form-item>
   <el-form-item label="国家" prop="registrationCountryCode">
@@ -34,6 +34,16 @@
         :value="code"
       />
     </el-select>
+  </el-form-item>
+  <el-form-item v-if="editing" label="注册日期" prop="registeredDate">
+    <el-date-picker
+      v-model="form.registeredDate"
+      type="date"
+      value-format="YYYY-MM-DD"
+      aria-label="注册日期"
+      placeholder="按核实的注册日期填写"
+      :clearable="false"
+    />
   </el-form-item>
   <el-form-item v-if="editing" label="优惠状况" prop="offerStatus">
     <ChatgptAccountOfferSelect
@@ -72,21 +82,12 @@
 
 <script setup lang="ts">
 import type { V2AccountOffer } from '@apple-business/shared';
+import type { ChatgptAccountEditorForm } from './chatgpt-account-editor';
 import type { BankChatgptAccount } from './bank-recharge-api';
 import ChatgptAccountOfferSelect from './ChatgptAccountOfferSelect.vue';
 import { chatgptCountries } from './chatgpt-country';
 
-interface AccountEditorForm {
-  email: string;
-  registrationCountryCode: string;
-  password: string;
-  totpSecret: string;
-  remark: string;
-  active: boolean;
-  offerStatus: V2AccountOffer;
-}
-
-const form = defineModel<AccountEditorForm>('form', { required: true });
+const form = defineModel<ChatgptAccountEditorForm>('form', { required: true });
 defineProps<{ editing: BankChatgptAccount | null }>();
 
 function setEditorOffer(value: V2AccountOffer | 'all') {

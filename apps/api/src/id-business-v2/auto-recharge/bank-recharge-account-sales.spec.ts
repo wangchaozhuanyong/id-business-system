@@ -158,7 +158,11 @@ describe('ChatGPT 出售状态列表', () => {
       registrationSourceAudits: vi.fn(async () => [])
     };
     const list = (query: Parameters<typeof listChatgptAccounts>[0]) =>
-      listChatgptAccounts(query, repository as never, { decrypt: () => null } as never);
+      listChatgptAccounts(
+        query,
+        repository as never,
+        { decrypt: () => null, hash: (value: string) => value } as never
+      );
     return { repository, list };
   }
   it('已出售分类在数据库内筛选、排序和分页，返回注册及出售事实', async () => {

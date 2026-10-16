@@ -29,7 +29,7 @@ describe('top-up records scheme 3 redesign contract', () => {
     ]) {
       expect(view).toContain(binding);
     }
-    expect(view).toContain('@keyup.enter="handleSearch"');
+    expect(view).toContain('@search="handleSearch"');
     expect(view).toContain('@change="handleFilterChange"');
     expect(view).toContain('@refresh="loadActiveTab"');
     expect(view).toContain('@click="resetFilters"');

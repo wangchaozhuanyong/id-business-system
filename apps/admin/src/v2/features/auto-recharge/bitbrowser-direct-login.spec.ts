@@ -107,7 +107,7 @@ const identity = {
 };
 const isInspection = (expression: string) =>
   expression.slice(expression.lastIndexOf(')(') + 2).startsWith('"inspect"');
-function automaticLogin(states: string[], submitWaits = 0) {
+function automaticLogin(states: (string | Record<string, unknown>)[], submitWaits = 0) {
   let index = 0;
   const actions: string[] = [];
   mock.evaluate.mockImplementation(async (_session, expression: string) => {
@@ -115,10 +115,15 @@ function automaticLogin(states: string[], submitWaits = 0) {
     actions.push(action);
     if (action === 'inspect') {
       const kind = states[Math.min(index++, states.length - 1)]!;
-      return kind === 'identity' ? identity : { kind };
+      return typeof kind === 'object' ? kind : kind === 'identity' ? identity : { kind };
     }
     if (action === 'submit' && submitWaits-- > 0) return { kind: 'loading' };
-    return { kind: action === 'login' || action === 'submit' ? 'submitted' : 'filled' };
+    return {
+      kind:
+        action === 'login' || action === 'email_login' || action === 'submit'
+          ? 'submitted'
+          : 'filled'
+    };
   });
   return actions;
 }
@@ -1954,5 +1959,58 @@ describe('等待2FA时持续核对官网与任务截止', () => {
     expect((await result).status).toBe('session_ready');
     expect(actions.filter((action) => action === 'submit')).toHaveLength(1);
     expect(pending.code).toHaveBeenCalledOnce();
+  });
+});
+
+describe('账号自动登录按官网挑战选择凭据', () => {
+  it('无密码使用邮箱验证码，然后继续2FA，两种验证码各领取一次', async () => {
+    vi.useFakeTimers();
+    const actions = automaticLogin([
+      'email',
+      'password',
+      { kind: 'code', codeType: 'email' },
+      { kind: 'code', codeType: 'email' },
+      { kind: 'code', codeType: 'totp' },
+      { kind: 'code', codeType: 'totp' },
+      'identity'
+    ]);
+    const code = vi.fn(async (challenge: { kind: string }) => {
+      void challenge;
+      return { token: '123456', expiresAt: new Date(Date.now() + 30_000).toISOString() };
+    });
+    const result = runDirectLogin(
+      settings,
+      { login: { email: 'user@example.com', password: '' } },
+      '测试窗口',
+      new AbortController().signal,
+      { progress: vi.fn(), code }
+    );
+    await vi.advanceTimersByTimeAsync(8000);
+    expect(await result).toMatchObject({ status: 'session_ready', account_matched: true });
+    expect(actions.filter((action) => action === 'password')).toHaveLength(0);
+    expect(actions.filter((action) => action === 'email_login')).toHaveLength(1);
+    expect(code.mock.calls.map((call) => call[0].kind)).toEqual(['email', 'totp']);
+  });
+  it('密码被明确拒绝后，只切换一次官网邮箱验证码入口', async () => {
+    vi.useFakeTimers();
+    const actions = automaticLogin([
+      'email',
+      'password',
+      { kind: 'password', passwordRejected: true },
+      { kind: 'code', codeType: 'email' },
+      'identity'
+    ]);
+    const result = runDirectLogin(
+      settings,
+      { login: { email: 'user@example.com', password: 'synthetic' } },
+      '测试窗口',
+      new AbortController().signal,
+      { progress: vi.fn(), code: vi.fn(async () => '123456') }
+    );
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(await result).toMatchObject({ status: 'session_ready' });
+    expect(actions.filter((action) => action === 'password')).toHaveLength(1);
+    expect(actions.filter((action) => action === 'email_login')).toHaveLength(1);
+    expect(mock.post.mock.calls.some(([path]) => path === '/browser/close')).toBe(false);
   });
 });

@@ -449,7 +449,8 @@ export class RechargeService {
             state = [
               'verification_required',
               'bank_verification_required',
-              'login_code_required'
+              'login_code_required',
+              'login_email_code_required'
             ].includes(String(report.stage))
               ? 'awaiting_human_verification'
               : 'running';

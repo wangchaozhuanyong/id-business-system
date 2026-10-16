@@ -7,7 +7,8 @@ const styles = readFileSync(new URL('../../styles/account-losses.css', import.me
 describe('account losses UI contract', () => {
   it('uses a titled command panel and readable text actions', () => {
     expect(view).toContain('title="报损档案筛选"');
-    expect(view).toContain('查询记录');
+    expect(view).toContain('<V2SearchInput');
+    expect(view).toContain('@search=');
     expect(view).toContain('刷新记录');
     expect(view).not.toContain('icon-only');
   });

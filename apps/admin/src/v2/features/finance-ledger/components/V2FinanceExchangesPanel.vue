@@ -42,20 +42,20 @@
           aria-label="换汇结束日期"
           @change="state.search"
         />
-        <el-input
+        <V2SearchInput
           v-model="state.filters.keyword"
+          draft-key="finance-ledger:V2FinanceExchangesPanel:state.filters.keyword"
           clearable
           placeholder="渠道、备注"
           aria-label="换汇搜索"
-          @keyup.enter="state.search"
-          @clear="state.search"
+          @search="state.search"
         />
         <el-select v-model="state.filters.sort" aria-label="换汇排序" @change="state.search"
           ><el-option label="时间从新到旧" value="newest" /><el-option
             label="时间从旧到新"
             value="oldest"
         /></el-select>
-        <AppButton variant="soft" @click="state.search">查询</AppButton>
+
         <AppButton v-if="page.canPost" variant="primary" @click="state.open()">换汇录入</AppButton>
       </div>
     </section>
@@ -196,6 +196,7 @@
   <V2FinanceExchangeDrawer :page="page" :state="state" />
 </template>
 <script setup lang="ts">
+import V2SearchInput from '@/v2/components/V2SearchInput.vue';
 import { reactive, ref, watch, type UnwrapNestedRefs } from 'vue';
 import { financeCurrencyLabel, type V2FinanceExchange } from '@apple-business/shared';
 import AppButton from '@/components/ui/AppButton.vue';

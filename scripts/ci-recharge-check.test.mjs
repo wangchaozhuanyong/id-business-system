@@ -11,6 +11,9 @@ import { resolve } from 'node:path';
 import test from 'node:test';
 import {
   registrationParityDiagnosticsBase,
+  registrationParityDiagnosticsRepairBase,
+  registrationParityDiagnosticsRepairTree,
+  registrationParityDiagnosticsRepairPaths,
   registrationParityDiagnosticsTree,
   registrationParityDiagnosticsPaths,
   registrationParityDiagnosticsWorker,
@@ -157,6 +160,36 @@ test('registration parity dispatcher runs both interfaces all persistence module
         parityFixture: true
       }),
     /Unsupported registration parity diagnostics check part/
+  );
+});
+
+test('registration client cwd control repair runs guards without repeating application or database suites', () => {
+  const calls = recordGuardCommands('ci-only', registrationParityDiagnosticsRepairPaths, 'guards', {
+    base: registrationParityDiagnosticsRepairBase,
+    parityFixture: true
+  });
+  assert.deepEqual(calls.at(-1), ['process-exit', 0]);
+  assert.ok(
+    calls.some((c) =>
+      c.includes('scripts/production-release/registration-parity-diagnostics-release.test.py')
+    )
+  );
+  assert.ok(
+    !calls.some(
+      (c) =>
+        c.includes('prisma:mysql:generate') ||
+        c.includes('auto-registration:setup') ||
+        c.includes('build') ||
+        c.includes('test')
+    )
+  );
+  assert.throws(
+    () =>
+      recordGuardCommands('ci-only', registrationParityDiagnosticsRepairPaths, 'api', {
+        base: registrationParityDiagnosticsRepairBase,
+        parityFixture: true
+      }),
+    /Unsupported registration parity control repair check part/
   );
 });
 
@@ -736,10 +769,12 @@ function recordGuardCommands(
       if (${JSON.stringify(parityFixture)} && specifier === './ci-registration-parity-diagnostics-scope.mjs' && context.parentURL?.endsWith('/scripts/ci-recharge-check.mjs')) {
         const url = new URL('./scripts/ci-registration-parity-diagnostics-scope.mjs', import.meta.url).href;
         const source = 'import * as m from ' + JSON.stringify(url) + ';export * from ' + JSON.stringify(url) + ';' +
-          'export function isRegistrationParityDiagnosticsOnly(paths, options) {' +
+          'function fixtureOptions(options) {' +
           'const hashes=Object.fromEntries(m.registrationParityDiagnosticsPaths.filter(p=>p!==m.registrationParityDiagnosticsContract).map(p=>[p,"a".repeat(64)]));' +
           'const contract={frozen:true,scope:"REGISTRATION_PARITY_DIAGNOSTICS",sourceBaseline:m.registrationParityDiagnosticsBase,sourceBaselineTree:m.registrationParityDiagnosticsTree,expectedCurrent:m.registrationParityDiagnosticsCurrent,migration:null,expectedGitChanges:m.registrationParityDiagnosticsPaths,allowedApplicationPaths:m.registrationParityDiagnosticsApplications,controlPaths:m.registrationParityDiagnosticsControls,sources:Object.fromEntries(m.registrationParityDiagnosticsApplications.map(p=>[p,hashes[p]])),validationSources:{[m.registrationParityDiagnosticsAcceptance]:hashes[m.registrationParityDiagnosticsAcceptance]},reviewedFileHashes:hashes};' +
-          'return m.isRegistrationParityDiagnosticsOnly(paths,{...options,contract,sourceDigest:p=>hashes[p]});}';
+          'return {...options,contract,sourceDigest:p=>hashes[p]};}' +
+          'export function isRegistrationParityDiagnosticsOnly(paths,options){return m.isRegistrationParityDiagnosticsOnly(paths,fixtureOptions(options));}' +
+          'export function isRegistrationParityDiagnosticsControlRepair(paths,options){return m.isRegistrationParityDiagnosticsControlRepair(paths,fixtureOptions(options));}';
         return {url:'data:text/javascript,'+encodeURIComponent(source),shortCircuit:true};
       }
       if (${JSON.stringify(identityFixture)} && specifier === './ci-proxy-result-identity-scope.mjs' && context.parentURL?.endsWith('/scripts/ci-recharge-check.mjs')) {
@@ -774,6 +809,7 @@ function recordGuardCommands(
     childProcess.execFileSync = (file, args) => {
       if (file === 'git') {
         if (args.join(' ') === ${JSON.stringify('rev-parse ' + registrationParityDiagnosticsBase + '^{tree}')}) return ${JSON.stringify(registrationParityDiagnosticsTree + '\n')};
+        if (args.join(' ') === ${JSON.stringify('rev-parse ' + registrationParityDiagnosticsRepairBase + '^{tree}')}) return ${JSON.stringify(registrationParityDiagnosticsRepairTree + '\n')};
         if (args.join(' ') === 'rev-parse 7c3c102c98539d33cb379ef018427371ba750cb7^{tree}') return 'f6ab4537e28437af244c2263dd591516ae8e2a22\\n';
         if (args.join(' ') === 'rev-parse d38c243b5727953aa96c0fa83e706fee253c9624^{tree}') return 'a331c3ab6b23c3331aa550b752d9d66860e62cdb\\n';
         if (args.join(' ') === 'rev-parse cd7bba03bec1742328e0829c215823bda1fd3fae^{tree}') return '874102957cbd6cc921e05e5bba252e63bd09fd85\\n';

@@ -1,3 +1,5 @@
+import { parseChatgptRegisteredDate } from './bank-recharge-account-input';
+import { chatgptEmailSearchTokens } from './chatgpt-account-email';
 import type { V2RechargePlan } from '@apple-business/shared';
 import { parseNewChatgptAccount, type NewChatgptAccount } from './bank-recharge-account-input';
 import { accountOfferUpdate, assertAccountEditVersion } from './bank-recharge-account-offers';
@@ -63,6 +65,7 @@ export class BankRechargeAccountService {
     const item = await this.repository.createAccount(tx, {
       data: {
         emailEncrypted: this.encryption.encrypt(email)!,
+        emailSearchTokens: chatgptEmailSearchTokens(email, this.encryption),
         emailHash: this.encryption.hash(email)!,
         emailMasked: bankRechargeMaskedEmail(email),
         registrationCountryCode,
@@ -153,6 +156,7 @@ export class BankRechargeAccountService {
           ![
             'email',
             'registrationCountryCode',
+            'registeredDate',
             'password',
             'totpSecret',
             'status',
@@ -170,11 +174,12 @@ export class BankRechargeAccountService {
       input.registrationCountryCode === undefined
         ? undefined
         : bankRechargeCountryCode(input.registrationCountryCode);
+    const registeredAt = parseChatgptRegisteredDate(input.registeredDate);
     const offerPatch = accountOfferUpdate(input.offerStatus);
     const saleStatus =
       input.saleStatus === undefined ? undefined : parseChatgptAccountSaleStatus(input.saleStatus);
-    const expectedSaleVersion =
-      saleStatus === undefined
+    const expectedEditVersion =
+      saleStatus === undefined && registeredAt === undefined
         ? undefined
         : normalizeV2ExpectedUpdatedAt(input.expectedUpdatedAt, '账号');
     const password =
@@ -213,9 +218,9 @@ export class BankRechargeAccountService {
           this.repository.updateAccount(tx, {
             where: {
               id,
-              ...(saleStatus !== undefined
+              ...(saleStatus !== undefined || registeredAt !== undefined
                 ? {
-                    updatedAt: expectedSaleVersion,
+                    updatedAt: expectedEditVersion,
                     deletedAt: null,
                     ...(saleStatus === 'sold' ? { registered: true } : {})
                   }
@@ -223,11 +228,13 @@ export class BankRechargeAccountService {
             },
             data: {
               ...offerPatch,
+              ...(registeredAt !== undefined ? { registeredAt } : {}),
               ...salePatch,
               ...(registrationCountryCode !== undefined ? { registrationCountryCode } : {}),
               ...(email
                 ? {
                     emailEncrypted: this.encryption.encrypt(email)!,
+                    emailSearchTokens: chatgptEmailSearchTokens(email, this.encryption),
                     emailHash: this.encryption.hash(email)!,
                     emailMasked: bankRechargeMaskedEmail(email)
                   }
@@ -261,6 +268,7 @@ export class BankRechargeAccountService {
             offerStatus: before.offerStatus,
             saleStatus: before.saleStatus,
             soldAt: before.soldAt?.toISOString() ?? null,
+            registeredAt: before.registeredAt?.toISOString() ?? null,
             registrationCountryCode: before.registrationCountryCode
           },
           afterData: {
@@ -269,6 +277,8 @@ export class BankRechargeAccountService {
             offerStatus: updated.offerStatus,
             saleStatus: updated.saleStatus,
             soldAt: updated.soldAt?.toISOString() ?? null,
+            registeredAt: updated.registeredAt?.toISOString() ?? null,
+            ...(registeredAt !== undefined ? { registrationDateSource: 'manual' } : {}),
             registrationCountryCode: updated.registrationCountryCode,
             passwordChanged: password !== undefined,
             totpChanged: totpInput !== undefined
@@ -300,7 +310,6 @@ export class BankRechargeAccountService {
     return this.transactions.execute(
       async (tx) => {
         const account = await this.requireActive(tx, id);
-        if (!account.passwordEncrypted) throw new ConflictException('该账号尚未保存登录密码');
         await this.audit.append(tx, {
           userId: operator.id,
           module: 'id_business_v2',
@@ -312,7 +321,7 @@ export class BankRechargeAccountService {
         });
         return {
           email: this.encryption.decrypt(account.emailEncrypted)!,
-          password: this.encryption.decrypt(account.passwordEncrypted)!
+          password: this.encryption.decrypt(account.passwordEncrypted) ?? ''
         };
       },
       { changedScopes: ['auto-recharge'], requestId: randomUUID(), operator, retryMode: 'none' }
@@ -340,10 +349,9 @@ export class BankRechargeAccountService {
   }
 
   savedLogin(account: IdBusinessV2ChatgptAccount) {
-    if (!account.passwordEncrypted) throw new ConflictException('该账号尚未保存登录密码');
     return {
       email: this.encryption.decrypt(account.emailEncrypted)!,
-      password: this.encryption.decrypt(account.passwordEncrypted)!
+      password: this.encryption.decrypt(account.passwordEncrypted) ?? ''
     };
   }
 
@@ -450,6 +458,7 @@ export class BankRechargeAccountService {
     const account = await this.repository.createAccount(tx, {
       data: {
         emailEncrypted: this.encryption.encrypt(email)!,
+        emailSearchTokens: chatgptEmailSearchTokens(email, this.encryption),
         emailHash,
         emailMasked: bankRechargeMaskedEmail(email),
         officialAccountKey: job.accountKey,
