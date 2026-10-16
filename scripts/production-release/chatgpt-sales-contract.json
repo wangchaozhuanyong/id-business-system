@@ -1,0 +1,75 @@
+{
+  "adminNodeEnv": "production",
+  "adminSourceBaseline": "88bce5ab09d20cd303f1fdd5fe310cb0b42e1451",
+  "adminSourceBaselineTree": "57a0d354276724e70945513c9db806919e245b09",
+  "apiModules": [
+    "id-business-v2/auto-recharge/bank-recharge-account-list.js",
+    "id-business-v2/auto-recharge/bank-recharge-account-sales.js",
+    "id-business-v2/auto-recharge/bank-recharge-account-subscription.js",
+    "id-business-v2/auto-recharge/bank-recharge-account.service.js",
+    "id-business-v2/auto-recharge/bank-recharge.controller.js"
+  ],
+  "apiSourceBaseline": "69eba563895bf083b24c8214a088454d5df34922",
+  "apiSourceBaselineTree": "283b0749281572da98f75bed317f81816d030591",
+  "backupNormalizerPath": "/opt/id-business-v2/releases/20261015T091200Z-e197218c8b38-recharge-record/scripts/mysql-dump-restore-normalizer.sed",
+  "backupNormalizerSha256": "ca9b05f832e9ed73bb36b7e76c083c99a40b13e067850166f8715bae469e5202",
+  "baselineAdminBuildId": "v2-88bce5ab09d20cd303f1fdd5fe310cb0b42e1451",
+  "buildInputs": {
+    "admin": {
+      ".npmrc": null,
+      "apps/admin/package.json": "01f409413c63046256577fb997f2276430ef321cd320269d047cec2ed083fa55",
+      "apps/api/package.json": "f8a9cd054478af472964facc3b70012fef70a3e63f0b55376582d57e691acd2c",
+      "package-lock.json": "6104c1be6681361d002145c15c8bd1a15a9741a3b61a4694b3982daf7ba5b70f",
+      "package.json": "569ed2d2bd3849ae7c79ea07f860ec1a66de90fc0161681df9064a7332091faf",
+      "packages/shared/package.json": "e18c794dd7eb3e66ce5757be3f6c1e0419a23e0d6e07f762dd45f1dde69a1153",
+      "tsconfig.base.json": "d705dca337a84b21bcb51a8b2f7bcb9953916564f53d10b0b4c7e2d36259e5fe"
+    },
+    "api": {
+      ".npmrc": null,
+      "apps/admin/package.json": "01f409413c63046256577fb997f2276430ef321cd320269d047cec2ed083fa55",
+      "apps/api/package.json": "f8a9cd054478af472964facc3b70012fef70a3e63f0b55376582d57e691acd2c",
+      "package-lock.json": "6104c1be6681361d002145c15c8bd1a15a9741a3b61a4694b3982daf7ba5b70f",
+      "package.json": "569ed2d2bd3849ae7c79ea07f860ec1a66de90fc0161681df9064a7332091faf",
+      "packages/shared/package.json": "e18c794dd7eb3e66ce5757be3f6c1e0419a23e0d6e07f762dd45f1dde69a1153",
+      "tsconfig.base.json": "d705dca337a84b21bcb51a8b2f7bcb9953916564f53d10b0b4c7e2d36259e5fe"
+    }
+  },
+  "current": "/opt/id-business-v2/releases/20261016T052613Z-88bce5ab09d2-order-layout",
+  "engineHealth": {
+    "activeTasks": 0,
+    "mode": "enabled",
+    "ready": true,
+    "rpcConnected": true,
+    "stopping": false
+  },
+  "expectedCurrent": "88bce5ab09d20cd303f1fdd5fe310cb0b42e1451",
+  "manifestSha256": "ab625e55e4461a852fff06942c76585d1caa2dc412fea062f77ad9db8cb53fed",
+  "migration": {
+    "name": "20261016170000_chatgpt_account_sale_status",
+    "path": "apps/api/prisma-mysql/migrations/20261016170000_chatgpt_account_sale_status/migration.sql",
+    "sha256": "6c601b9d0bdebfa8b6bd3bd0209eceee6cf8b9e25992c8fdfa081fd587a79d4a"
+  },
+  "reviewBase": "88bce5ab09d20cd303f1fdd5fe310cb0b42e1451",
+  "scope": "CHATGPT_ACCOUNT_SALES_20261016",
+  "sources": {
+    "apps/admin/src/v2/features/audit-logs/audit-change-labels.ts": "c56fcb421ff3eef8ea76346850e90bd86cf2c1f0362ccdb1caa77a1bcc46b40f",
+    "apps/admin/src/v2/features/audit-logs/audit-log-changes.spec.ts": "f07b76f79e644e2f8868d54f9555c55e0cee5a3723e7375daa63ea61078cc022",
+    "apps/admin/src/v2/features/audit-logs/audit-log-changes.ts": "7babfd1f496d78d52054644fbfdf406aaf199da7d1ab0410c4160a88e7eac7dc",
+    "apps/admin/src/v2/features/auto-recharge/ChatgptAccountSaleDialog.vue": "b8defce3f936875038dc51993508c8b8bd699de155877e8f317596b65766f817",
+    "apps/admin/src/v2/features/auto-recharge/V2ChatgptAccountsView.vue": "4339079a269b7920e26c363ef80e62e83266247bb922c0c1d936ca8069004d17",
+    "apps/admin/src/v2/features/auto-recharge/bank-recharge-api.ts": "0daca6027f29fd6d24018aaea5e8fa7dc51ee3c5dee6ee5c04a8ed24b53062f2",
+    "apps/admin/src/v2/features/auto-recharge/chatgpt-account-inventory.spec.ts": "5271652ea25e2f8cb9ed6ab07759c2fadde59c4deaa1165a7979445613ee5e76",
+    "apps/admin/src/v2/features/auto-recharge/chatgpt-account-inventory.ts": "7033a00648656e8a4512f631ea2a9f42a291d65bdb6307f9212f565fdf0ec38f",
+    "apps/admin/src/v2/features/tableSchemas.ts": "f1ed22126ab58a9602184ec9545fc2f39396f6bd29d31cc21320aae40a4a839b",
+    "apps/api/prisma-mysql/migrations/20261016170000_chatgpt_account_sale_status/migration.sql": "6c601b9d0bdebfa8b6bd3bd0209eceee6cf8b9e25992c8fdfa081fd587a79d4a",
+    "apps/api/prisma-mysql/schema.prisma": "bbae4d09d4301940354fbc6dbf62dbc191eb1bb0a4a0a44e6fed5bb4b703f3c5",
+    "apps/api/src/id-business-v2/auto-recharge/bank-recharge-account-list.ts": "afa3535a17d604aa5b620d55e264b939f09308eb747295ae012c39a5fe503c3d",
+    "apps/api/src/id-business-v2/auto-recharge/bank-recharge-account-sales.mysql.integration.spec.ts": "061b720ad42a92c06c0509f0b99f6f8cf782a726bc2d695d8345e4fddaadc5a3",
+    "apps/api/src/id-business-v2/auto-recharge/bank-recharge-account-sales.spec.ts": "eb7429d2621a8143cdf9229d3a598797708c78d1645f634013525a3010bc3ed7",
+    "apps/api/src/id-business-v2/auto-recharge/bank-recharge-account-sales.ts": "8c35d13bd37b3f83a03b9666e5e28c664445df9dc4165e3d6cefff3c1329f5b8",
+    "apps/api/src/id-business-v2/auto-recharge/bank-recharge-account-subscription.ts": "915551f318447d6b5a4e41c300ec7652f4ad1638d63f1c527759aa1eac08c6f3",
+    "apps/api/src/id-business-v2/auto-recharge/bank-recharge-account.service.ts": "6a9d793946772e13d20bd3082236186c2be393e551b6416ddba054bee67b71a6",
+    "apps/api/src/id-business-v2/auto-recharge/bank-recharge.controller.ts": "e9c0684fd7453a563ecced96e5ead00a0188743a20d7820f504a48c30782558f"
+  },
+  "version": 1
+}
