@@ -125,7 +125,7 @@ export class OnlineRechargeTasksRepository {
           }
         : {}),
       cardLast4: row.cardLast4,
-      email: publicView ? undefined : (this.encryption.decrypt(row.emailEncrypted) ?? ''),
+      email: publicView ? '' : (this.encryption.decrypt(row.emailEncrypted) ?? ''),
       subscriptionChange: change
         ? {
             kind: change.kind,
