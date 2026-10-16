@@ -4,6 +4,7 @@ import {
   checkoutControlPaths,
   checkoutSourceRecoveryControls,
   isRechargeCheckoutOnly,
+  isRechargeFormBudgetOnly,
   isRechargeSourceRecoveryOnly
 } from './ci-recharge-checkout-scope.mjs';
 import {
@@ -20,6 +21,28 @@ const paths = [
   'packages/shared/src/v2/auto-recharge.ts',
   'scripts/ci-recharge-check.mjs'
 ];
+test('form preparation budget selects bounded connector regression without other source or database', () => {
+  const form = [
+    'payment_form.py',
+    'pay.py',
+    'test_payment_form_budget.py',
+    'test_payment_form_focus.py'
+  ].map((name) => `apps/api/src/id-business-v2/auto-recharge/worker/${name}`);
+  assert.equal(isRechargeFormBudgetOnly(form), true);
+  assert.equal(isRechargeOnly(form, 'same', 'same'), true);
+  assert.deepEqual(selectedParts(form), ['guards', 'connector']);
+  assert.equal(needsOnlineRechargeCiBuild(form), false);
+  for (const extra of [
+    'package-lock.json',
+    'apps/api/prisma-mysql/schema.prisma',
+    'apps/api/src/auth/auth.service.ts',
+    'apps/api/src/id-business-v2/auto-recharge/recharge-local.service.ts',
+    'apps/api/src/id-business-v2/auto-recharge/worker/bitbrowser_retry.py'
+  ]) {
+    assert.equal(isRechargeFormBudgetOnly([...form, extra]), false, extra);
+    assert.equal(isRechargeCheckoutOnly([...form, extra]), false, extra);
+  }
+});
 test('native checkout selects UI/API/connector and retains filled-details acceptance', () => {
   assert.equal(isRechargeCheckoutOnly(paths), true);
   assert.equal(isRechargeOnly(paths, 'same', 'same'), true);
