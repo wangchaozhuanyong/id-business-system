@@ -1,5 +1,8 @@
 import { isProxyResultIdentityOnly } from './ci-proxy-result-identity-scope.mjs';
-import { isRegistrationFlowEvidenceOnly } from './ci-registration-flow-evidence-scope.mjs';
+import {
+  isRegistrationFlowEvidenceOnly,
+  isRegistrationFlowEvidenceControlRepair
+} from './ci-registration-flow-evidence-scope.mjs';
 import { readRegistrationNativeReuse } from './ci-registration-closure-native-reuse.mjs';
 import { isRechargeCheckoutOnly } from './ci-recharge-checkout-scope.mjs';
 import { isRechargeBillingOnly } from './ci-recharge-billing-scope.mjs';
@@ -219,6 +222,7 @@ const onlineCiBuildTestInputs = new Set([
   'scripts/production-release/online-recharge-component-lifecycle.test.py'
 ]);
 export function needsOnlineRechargeCiBuild(paths, context) {
+  if (isRegistrationFlowEvidenceControlRepair(paths, context)) return false;
   if (isRegistrationFlowEvidenceOnly(paths, context)) return false;
   if (isProxyResultIdentityOnly(paths, context)) return false;
   // This task has its own finite three-role image proof; retain normal API,
@@ -993,6 +997,8 @@ export function isMailboxOnly(paths) {
 }
 
 export function checkMode(paths, oldSchema, newSchema, grantHelperSnapshot, context) {
+  if (isRegistrationFlowEvidenceControlRepair(paths, context))
+    return oldSchema === newSchema ? 'ci-only' : 'full';
   if (isRegistrationFlowEvidenceOnly(paths, context))
     return oldSchema === newSchema ? 'recharge' : 'full';
   if (context && isRegistrationFlowEvidenceOnly(paths)) return 'full';
@@ -1458,6 +1464,7 @@ export function isTargetedOnly(paths, oldSchema, newSchema) {
   );
 }
 export function selectedParts(paths, grantHelperSnapshot, context) {
+  if (isRegistrationFlowEvidenceControlRepair(paths, context)) return ['guards'];
   if (isRegistrationFlowEvidenceOnly(paths, context)) return ['guards', 'api', 'admin'];
   if (isProxyResultIdentityOnly(paths, context)) return ['guards', 'online-engine'];
   if (isRegistrationClosureControlsOnly(paths)) return ['guards'];
