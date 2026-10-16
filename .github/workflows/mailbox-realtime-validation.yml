@@ -12,7 +12,7 @@ on:
         required: true
         type: string
       capture_only:
-        description: Read-only runtime evidence after the published account successor
+        description: Read-only caller health evidence from the exact published mailbox runtime
         default: false
         required: true
         type: boolean
