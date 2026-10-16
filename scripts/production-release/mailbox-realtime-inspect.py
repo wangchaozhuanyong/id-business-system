@@ -78,7 +78,7 @@ except BaseException as error:
 '''
 
 
-def capture_source():
+def legacy_account_capture_source():
     parent = load('registration-parity-diagnostics-release.py')
     finite = load('proxy-result-identity-release.py')
     original = json.loads((HERE / 'registration-parity-diagnostics-contract.json').read_bytes())
@@ -91,6 +91,60 @@ def capture_source():
               for name in ('recharge-record-release.py', 'remote-deploy.py')}
     return ('CURRENT=' + repr(CURRENT) + '\nPROOF=' + repr(PROOF) + '\nHASHES=' + repr(hashes)
             + '\nCONTRACT=' + repr(c) + '\n' + REMOTE_PREAMBLE + helpers + REMOTE_CAPTURE)
+
+
+
+HEALTH_CURRENT = '59b36f3aadef28a59f47a55ed1e66686fcc2c42c'
+HEALTH_PROOF = 'ecf5c6dc2cd93dc94133dbb38f6ef9b37aab5ebecac790c80e99226c0e365e2c'
+HEALTH_CLIENT = '12ec4b10839009c38c782697157ed0228439fa5d38f26f6bacf045bbce93db9a'
+HEALTH_PROBE = r"""const fs=require('fs'),crypto=require('crypto');
+const modulePath='/app/apps/api/dist/id-business-v2/workspace/providers/id-business-v2-vendure-mailbox.client.js';
+if(crypto.createHash('sha256').update(fs.readFileSync(modulePath)).digest('hex')!==CLIENT_HASH)process.exit(2);
+const healthQuery=`query IdBusinessMailHealth { icloudMailHealth { checkedAt listeners { primaryAccountId state reason leaseExpiresAt } delivery { configured pendingCount oldestPendingAt lastDeliveredAt } } }`;
+const primaryQuery='query IdBusinessPrimaryAccounts { icloudPrimaryAccounts { id } }';
+const fields=new Set('icloudMailHealth icloudPrimaryAccounts checkedAt listeners primaryAccountId state reason leaseExpiresAt delivery configured pendingCount oldestPendingAt lastDeliveredAt'.split(' '));
+const codes=new Set(['FORBIDDEN','UNAUTHENTICATED','GRAPHQL_VALIDATION_FAILED','INTERNAL_SERVER_ERROR','QUERY_TOO_COMPLEX','MAX_QUERY_DEPTH_EXCEEDED']);
+async function probe(query){
+ const r=await fetch(process.env.VENDURE_MAILBOX_ADMIN_API_URL,{method:'POST',headers:{'content-type':'application/json',accept:'application/json','cache-control':'no-store','vendure-api-key':process.env.VENDURE_MAILBOX_API_KEY},body:JSON.stringify({query,variables:{}}),signal:AbortSignal.timeout(20000)});
+ const mime=r.headers.get('content-type')||'';const out={httpStatus:r.status,json:mime.includes('json')};
+ if(!out.json){await r.body?.cancel();return out;}
+ const reader=r.body.getReader(),chunks=[];let bytes=0;for(;;){const x=await reader.read();if(x.done)break;bytes+=x.value.length;if(bytes>131072){await reader.cancel();throw Error('LIMIT');}chunks.push(x.value);}
+ const v=JSON.parse(Buffer.concat(chunks).toString());
+ out.errors=(v.errors||[]).slice(0,4).map(e=>({code:codes.has(e.extensions?.code)?e.extensions.code:'OTHER',path:Array.isArray(e.path)&&e.path.length<=8&&e.path.every(x=>fields.has(x)||(Number.isInteger(x)&&x>=0&&x<100000))?e.path:null,reason:/Cannot query field/.test(e.message||'')?'SCHEMA_MISMATCH':/Cannot return null/.test(e.message||'')?'NON_NULL_RESULT':/Unknown column|does not exist|doesn't exist/.test(e.message||'')?'DATABASE_COLUMN':'UPSTREAM_ERROR'}));
+ out.hasHealth=!!v.data?.icloudMailHealth;out.primaryCount=Array.isArray(v.data?.icloudPrimaryAccounts)?v.data.icloudPrimaryAccounts.length:null;
+ return out;
+}
+(async()=>{
+ const results={};for(const [name,query]of [['primary',primaryQuery],['health',healthQuery]]){try{results[name]=await probe(query);}catch(e){results[name]={failure:e.name==='TimeoutError'?'TIMEOUT':'REQUEST_FAILED'};}}
+ try{const {ConfigService}=require('@nestjs/config');const {IdBusinessV2VendureMailboxClient}=require(modulePath);const c=new IdBusinessV2VendureMailboxClient(new ConfigService());results.client={method:typeof c.mailHealth};if(typeof c.mailHealth==='function'){const v=await c.mailHealth();results.client.available=!!v;}}catch(e){results.client={failure:e.name==='ServiceUnavailableException'?'SERVICE_UNAVAILABLE':e.name==='TypeError'?'TYPE_ERROR':'CLIENT_ERROR'};}
+ console.log(JSON.stringify(results));
+})().catch(()=>process.exit(3));"""
+
+
+def capture_source():
+    hashes = {name: hashlib.sha256((HERE / name).read_bytes()).hexdigest()
+              for name in ('recharge-record-release.py', 'remote-deploy.py')}
+    node = HEALTH_PROBE.replace('CLIENT_HASH', json.dumps(HEALTH_CLIENT))
+    capture = r"""
+try:
+ with (BASE/'.deploy.lock').open('r')as lock:
+  fcntl.flock(lock,fcntl.LOCK_SH|fcntl.LOCK_NB)
+  current=(BASE/'current').resolve();need(current.parent==BASE/'releases','CURRENT_INVALID')
+  raw=(current/'release-manifest.json').read_bytes();manifest=json.loads(raw)
+  need(manifest['commit']==CURRENT and manifest['scope']=='MAILBOX_REALTIME_20261016','CURRENT_CHANGED')
+  need(digest((current/'mailbox-realtime-build-proof.json').read_bytes())==PROOF,'PROOF_CHANGED')
+  readback=json.loads((current/'mailbox-realtime-readback.json').read_bytes())
+  need(readback=={'status':'VERIFIED','commit':CURRENT,'maintenanceReleased':True,'migrationPerformed':False,'businessActions':0},'READBACK_CHANGED')
+  h=load('recharge-record-release.py');d=h.load_utilities(current/'scripts/production-release/remote-deploy.py',HASHES['remote-deploy.py'])
+  before=h.snapshot(d,current)
+  result=json.loads(d.run('docker','exec',before['api']['containerId'],'node','-e',PROBE_SOURCE,timeout=80))
+  need(h.snapshot(d,current)==before and (BASE/'current').resolve()==current and (current/'release-manifest.json').read_bytes()==raw,'CAPTURE_MOVED')
+  print(json.dumps({'status':'MAILBOX_RUNTIME_CAPTURED','kind':'UPSTREAM_HEALTH','commit':CURRENT,'currentStable':True,'probes':result,'businessActions':0},sort_keys=True))
+except BaseException as error:
+ print(json.dumps({'status':'MAILBOX_RUNTIME_CAPTURE_FAILED','errorType':type(error).__name__,'businessActions':0}));sys.exit(1)
+"""
+    return ('CURRENT=' + repr(HEALTH_CURRENT) + '\nPROOF=' + repr(HEALTH_PROOF)
+            + '\nHASHES=' + repr(hashes) + '\nPROBE_SOURCE=' + repr(node) + '\n' + REMOTE_PREAMBLE + capture)
 
 
 def await_invocation(command_id):
@@ -118,7 +172,7 @@ def await_invocation(command_id):
 
 def main():
     assert os.environ['GITHUB_REF']=='refs/heads/main' and os.environ['GITHUB_REPOSITORY']=='wangchaozhuanyong/id-business-system'
-    assert os.environ['EXPECTED_CURRENT']==CURRENT and os.environ['GITHUB_SHA']==os.environ['RELEASE_COMMIT']
+    assert os.environ['EXPECTED_CURRENT']==HEALTH_CURRENT and os.environ['GITHUB_SHA']==os.environ['RELEASE_COMMIT']
     latest=json.loads(execute('gh','api','repos/wangchaozhuanyong/id-business-system/git/ref/heads/main'))['object']['sha']
     assert latest==os.environ['RELEASE_COMMIT']
     assert not OUTPUT.exists();OUTPUT.mkdir(parents=True,mode=0o700)
@@ -128,7 +182,7 @@ def main():
     value=json.loads(execute('aws','ssm','send-command','--region','ap-northeast-1','--instance-ids','i-05836da38606e633c','--document-name','AWS-RunShellScript','--comment','mailbox-runtime-readonly','--parameters',json.dumps(parameters),'--output','json'))
     command_id=value['Command']['CommandId'];(OUTPUT/'accepted-command.json').write_text(json.dumps({'CommandId':command_id})+'\n')
     result = await_invocation(command_id)
-    print(json.dumps({'status':result['status'],'commit':CURRENT,'commandId':command_id,'businessActions':0}))
+    print(json.dumps({'status':result['status'],'commit':HEALTH_CURRENT,'commandId':command_id,'businessActions':0}))
 
 
 if __name__=='__main__':main()
