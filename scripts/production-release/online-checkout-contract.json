@@ -101,7 +101,8 @@
     "id-business-v2/online-recharge/persistence/worker.repository.js"
   ],
   "backupNormalizerPath": "/opt/id-business-v2/releases/20261015T091200Z-e197218c8b38-recharge-record/scripts/mysql-dump-restore-normalizer.sed",
-  "baselineAdminFilesSha256": "4227082af8473d02c31222516794df8bf315b0d9936572b50321082d9c35abab",
+  "baselineAdminBuildCommit": "123ea34df9bf74a1d65e74bd70f336eaa9344165",
+  "baselineAdminFilesSha256": "26c7d428b4996b3aa8faec6725c7c4367e649a559635dbb04a758426e8e687a2",
   "beforeApiOnlineFiles": {
     "contracts.d.ts": "5bc4ef59a11b07f6c98d1a08d408545b80bbab7422ed4d5224e24458d07570b2",
     "contracts.js": "eab70b27622a7143096690b702397a72abd3e8d0e21b812ccf0a64c5b2818333",
@@ -217,7 +218,7 @@
   },
   "configurationSha256": {
     ".env.aws.production": "3f3c22ac671ef185ffc98677ef3a2facce244e476e4583b8e7d16ff1deb00392",
-    "compose.release.json": "2be5ff483b0ec79691c67f6e455af7045303fbcb23e4f581856e82045db6d32c",
+    "compose.release.json": "d05dca3bc2ab181db927e2b9fe7e2e7ce01833e55f58a7587f4fce250a98b234",
     "docker-compose.aws-mysql.yml": "953c6264f157b00218f2a019d5e2c0b6bc4a34f687f2ec42ad782e0009e7672c"
   },
   "controlFiles": [
@@ -230,7 +231,7 @@
     "shared-bank-card-release.py",
     "api-admin-scope.py"
   ],
-  "current": "/opt/id-business-v2/releases/20261016T161811Z-46bea6e11c95-gpt-recharge",
+  "current": "/opt/id-business-v2/releases/20261016T163510Z-123ea34df9bf-table-container",
   "engineHealth": {
     "activeTasks": 0,
     "mode": "enabled",
@@ -240,9 +241,15 @@
   },
   "enginePublishedCommit": "d0c4f6215b396437685ce13201760ff93758726b",
   "engineRoot": "apps/api/src/id-business-v2/online-recharge/engine",
-  "expectedCurrent": "46bea6e11c9527e9b8930598de4cf2b13eb76635",
-  "manifestSha256": "758e5505773a17cbf4faefa09bfda12e169098e77d6dccf173a4816606e7d95f",
+  "expectedCurrent": "123ea34df9bf74a1d65e74bd70f336eaa9344165",
+  "manifestSha256": "680300b07867a2db63e62a2787e4c59bba77da331da87343cd2b53e34b354d77",
   "nginxSha256": "0b73aedbebdc12065d922b35bbf428e8959fe3a3ea9ef9fa5dc7af2f995baa99",
+  "postAdminSources": {
+    "apps/admin/src/v2/components/tableContentWidth.ts": {
+      "commit": "123ea34df9bf74a1d65e74bd70f336eaa9344165",
+      "sha256": "0141dc8063e5bf9c90158e685c98bafe18762f2647c1286c5b4b84318a0be5ab"
+    }
+  },
   "postGptSources": {
     "apps/api/src/common/prisma/bump-v2-scope-versions.ts": {
       "commit": "1c339754507f29459d17d75bb84afbee8fba5291",
@@ -253,6 +260,10 @@
     {
       "proofFile": "shared-bank-card-build-proof.json",
       "proofSha256": "92b37c740cc5b0db697d25380938a2f4e3450b9acecc23830d2f19f103b70363"
+    },
+    {
+      "proofFile": "table-container-build-proof.json",
+      "proofSha256": "ca7d1e80f765d488ff2d4c4765d938956684e49bf851a71d4008610eacd12f59"
     }
   ],
   "reviewBase": "dc3c022de71ee702d627ad8231828e1d89866105",
@@ -269,12 +280,12 @@
   "scope": "ONLINE_CHECKOUT_FORM_AND_VISIBILITY",
   "services": {
     "admin": {
-      "containerId": "ac4e862e387fab3a9532f27ce8d4e5b244f8829d3306e4ad05ff7e929c91e335",
+      "containerId": "8f2eab820a4ec4aaf77e12b14c116006d891c8c62d3903276605fdad84cd2c56",
       "environmentSha256": "03ddab553858482dcbcc4a93d989902d31b41753eb155fb8162011e218bc0ad4",
       "health": "healthy",
-      "image": "sha256:b40cfd99c641be531849442489a11f70679742e77e1c0bf8977833466e48b112",
-      "reference": "id-business-v2-shared-bank-card:e84a44d86c289354bc7ed15dcd0ec68f7210e18e-38916394747-admin",
-      "startedAtSha256": "fb0650f082d3b957ca3bbffb2864575e5a525150188905a93d6501e5fa674cb6",
+      "image": "sha256:fb9120071b7a5319573527ae3db968ea20efddf678b1caa80f5261009fe329cf",
+      "reference": "id-business-v2-table-container:123ea34df9bf74a1d65e74bd70f336eaa9344165",
+      "startedAtSha256": "1e4f09e20a475d06c410d99f147b9d48f9217b041976c7640a76d125c023d5d5",
       "status": "running"
     },
     "api": {

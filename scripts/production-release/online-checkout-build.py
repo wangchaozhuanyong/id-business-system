@@ -66,6 +66,10 @@ def reconstruct(context, contract, controls):
         raw = git('show', pin['commit'] + ':' + name)
         need(sha(raw) == pin['sha256'], 'POST_GPT_SOURCE_CHANGED')
         (context / name).write_bytes(raw)
+    for name, pin in contract['postAdminSources'].items():
+        raw = git('show', pin['commit'] + ':' + name)
+        need(sha(raw) == pin['sha256'], 'PUBLISHED_ADMIN_SOURCE_CHANGED')
+        (context / name).write_bytes(raw)
     overlay_engine(context, contract)
 
 
@@ -112,7 +116,7 @@ def main():
                 target.parent.mkdir(parents=True, exist_ok=True)
                 shutil.copyfile(ROOT / name, target)
         env = {**os.environ, 'NODE_ENV': 'production',
-               'V2_BUILD_ID': 'v2-' + (c['adminPublishedCommit'] if role == 'baseline' else git('rev-parse', 'HEAD').decode().strip())}
+               'V2_BUILD_ID': 'v2-' + (c['baselineAdminBuildCommit'] if role == 'baseline' else git('rev-parse', 'HEAD').decode().strip())}
         for command in [('npm', 'ci', '--include=dev', '--ignore-scripts', '--no-audit', '--no-fund'),
                         ('npm', 'run', 'prisma:mysql:generate'),
                         ('npm', 'run', 'build', '--workspace', '@apple-business/shared'),

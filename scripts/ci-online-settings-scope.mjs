@@ -1,4 +1,20 @@
 const applicationPaths = Object.freeze([
+  'apps/admin/src/v2/features/online-recharge/OnlineActionDrawer.vue',
+  'apps/admin/src/v2/features/online-recharge/OnlineResourceView.vue',
+  'apps/admin/src/v2/features/online-recharge/sections.ts',
+  'apps/admin/src/v2/features/online-recharge/tableSchemas.ts',
+  'apps/api/src/id-business-v2/bank-card-pool/shared-bank-card.spec.ts',
+  'apps/api/src/id-business-v2/online-recharge/engine/README.md',
+  'apps/api/src/id-business-v2/online-recharge/engine/checkout-form.cjs',
+  'apps/api/src/id-business-v2/online-recharge/engine/payment-limit.cjs',
+  'apps/api/src/id-business-v2/online-recharge/engine/security.cjs',
+  'apps/api/src/id-business-v2/online-recharge/engine/test/checkout-form.test.cjs',
+  'apps/api/src/id-business-v2/online-recharge/engine/test/media-browser.test.cjs',
+  'apps/api/src/id-business-v2/online-recharge/engine/upstream/tax-free-address.js',
+  'apps/api/src/id-business-v2/online-recharge/persistence/artifacts.repository.ts',
+  'apps/api/src/id-business-v2/online-recharge/persistence/online-recharge.repository.ts',
+  'apps/api/src/id-business-v2/online-recharge/validation.spec.ts',
+  'apps/api/src/id-business-v2/online-recharge/validation.ts',
   'apps/admin/src/components/ui/FeatureHelp.vue',
   'apps/admin/src/v2/features/online-recharge/OnlineResultDialog.vue',
   'apps/admin/src/v2/features/online-recharge/OnlineTaskProgress.vue',
@@ -58,6 +74,11 @@ const applicationPaths = Object.freeze([
   'apps/api/src/id-business-v2/online-recharge/plan-region.ts'
 ]);
 const controlPaths = Object.freeze([
+  '.github/workflows/online-checkout-validation.yml',
+  'scripts/production-release/online-checkout-build.py',
+  'scripts/production-release/online-checkout-contract.json',
+  'scripts/production-release/online-checkout-release.py',
+  'scripts/production-release/online-checkout-release.test.py',
   '.github/workflows/online-settings-validation.yml',
   'scripts/ci-online-settings-scope.mjs',
   'scripts/ci-online-settings-scope.test.mjs',
@@ -87,6 +108,13 @@ const required = [
   'persistence/admin.repository.ts',
   'persistence/tasks.repository.ts'
 ].map((name) => 'apps/api/src/id-business-v2/online-recharge/' + name);
+const checkoutRequired = [
+  'apps/admin/src/v2/features/online-recharge/OnlineActionDrawer.vue',
+  'apps/api/src/id-business-v2/online-recharge/validation.ts',
+  'apps/api/src/id-business-v2/online-recharge/persistence/worker.repository.ts',
+  'apps/api/src/id-business-v2/online-recharge/engine/checkout-form.cjs',
+  'apps/api/src/id-business-v2/online-recharge/engine/upstream/stripe-payment.js'
+];
 export function isOnlineSettingsOnly(paths) {
   const databaseTest = 'apps/api/src/id-business-v2/online-recharge/mysql.integration.spec.ts';
   const fixtureRepair =
@@ -97,7 +125,9 @@ export function isOnlineSettingsOnly(paths) {
     );
   return (
     new Set(paths).size === paths.length &&
-    (required.every((path) => paths.includes(path)) || fixtureRepair) &&
+    (required.every((path) => paths.includes(path)) ||
+      checkoutRequired.every((path) => paths.includes(path)) ||
+      fixtureRepair) &&
     paths.every((path) => onlineSettingsPaths.includes(path))
   );
 }
@@ -142,6 +172,9 @@ export function onlineSettingsCommands(part, paths) {
         'scripts/ci-change-scope.test.mjs'
       ],
       ['python3', '-B', 'scripts/production-release/online-settings-release.test.py'],
+      ...(paths.some((path) => path.includes('online-checkout-'))
+        ? [['python3', '-B', 'scripts/production-release/online-checkout-release.test.py']]
+        : []),
       ...(controlsOnly
         ? []
         : [
@@ -176,7 +209,8 @@ export function onlineSettingsCommands(part, paths) {
         '@apple-business/api',
         '--',
         'src/id-business-v2/online-recharge',
-        'src/id-business-v2/proxy-pool'
+        'src/id-business-v2/proxy-pool',
+        'src/id-business-v2/bank-card-pool/shared-bank-card.spec.ts'
       ),
       npm('run', 'build', '--workspace', '@apple-business/api')
     ];
