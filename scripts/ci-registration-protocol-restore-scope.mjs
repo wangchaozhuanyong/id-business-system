@@ -5,6 +5,22 @@ import { fileURLToPath } from 'node:url';
 // One forward-only browser withdrawal, bound to its exact reviewed ancestor.
 export const registrationProtocolRestoreBase = '123ea34df9bf74a1d65e74bd70f336eaa9344165';
 export const registrationProtocolRestoreTree = 'ea208f5e571ab6da0dd6c82a8bf46b4d99e42b98';
+export const registrationProtocolRestoreRepairBase = 'dc3c022de71ee702d627ad8231828e1d89866105';
+export const registrationProtocolRestoreRepairTree = '8b1a0b796acdce4ada06b21a0a7a9bc856f0e703';
+export const registrationProtocolRestoreRepairGuard = Object.freeze({
+  'scripts/check-v2-module-architecture.mjs':
+    '0abe913ace9e319c6ac6f0764efaea76b17c1a06bce018259fbc805765ab5383'
+});
+export const registrationProtocolRestoreRepairPaths = Object.freeze([
+  'scripts/production-release/registration-protocol-restore-release.test.py',
+  'scripts/production-release/registration-protocol-restore-contract.json',
+  'scripts/ci-registration-protocol-restore-scope.mjs',
+  'scripts/ci-registration-protocol-restore-scope.test.mjs',
+  'scripts/ci-recharge-scope.mjs',
+  'scripts/ci-recharge-scope.test.mjs',
+  'scripts/ci-recharge-check.mjs',
+  'scripts/ci-recharge-check.test.mjs'
+]);
 export const registrationProtocolRestorePaths = Object.freeze([
   '.github/workflows/quality.yml',
   '.github/workflows/registration-protocol-restore-validation.yml',
@@ -124,6 +140,24 @@ export const registrationProtocolRestoreCommands = Object.freeze({
   ]
 });
 
+const repairFormatted = registrationProtocolRestoreRepairPaths.filter((name) =>
+  /\.(?:[cm]?js|json)$/.test(name)
+);
+export const registrationProtocolRestoreRepairCommands = Object.freeze({
+  guards: [
+    ['python3', '-B', 'scripts/production-release/registration-protocol-restore-release.test.py'],
+    [
+      'node',
+      '--test',
+      'scripts/ci-registration-protocol-restore-scope.test.mjs',
+      'scripts/ci-recharge-scope.test.mjs',
+      'scripts/ci-recharge-check.test.mjs'
+    ],
+    ['npm', 'exec', '--', 'prettier', '--check', ...repairFormatted],
+    ['npm', 'exec', '--', 'eslint', ...repairFormatted.filter((name) => name.endsWith('.mjs'))]
+  ]
+});
+
 const projectRoot = fileURLToPath(new URL('..', import.meta.url));
 const hash = (raw) => createHash('sha256').update(raw).digest('hex');
 const localDigest = (name) => {
@@ -213,6 +247,62 @@ export function isRegistrationProtocolRestoreOnly(paths, options = {}) {
           baseSourceDigest(name) === registrationProtocolRestoreRemovedSources[name]
       )
     );
+  } catch {
+    return false;
+  }
+}
+
+/** A single controls repair may not reopen the reviewed application freeze. */
+export function isRegistrationProtocolRestoreControlRepair(paths, options = {}) {
+  const { base, baseTree, sourceDigest = localDigest, baseSourceDigest = ancestorDigest } = options;
+  if (
+    base !== registrationProtocolRestoreRepairBase ||
+    baseTree !== registrationProtocolRestoreRepairTree ||
+    !equalSet(paths, registrationProtocolRestoreRepairPaths)
+  )
+    return false;
+  try {
+    const contractPath = 'scripts/production-release/registration-protocol-restore-contract.json';
+    const c =
+      options.contract ??
+      JSON.parse(readFileSync(new URL('../' + contractPath, import.meta.url), 'utf8'));
+    const prior =
+      options.repairBaseContract ??
+      JSON.parse(
+        execFileSync('git', ['show', registrationProtocolRestoreRepairBase + ':' + contractPath], {
+          cwd: projectRoot,
+          encoding: 'utf8',
+          stdio: ['ignore', 'pipe', 'pipe']
+        })
+      );
+    const sameValue = (a, b) => hash(JSON.stringify(a)) === hash(JSON.stringify(b));
+    if (
+      c.reviewedApplicationCommit !== '2bcced63c834187ac5e69e344176da33ff82d4c9' ||
+      c.reviewedApplicationCommit !== prior.reviewedApplicationCommit ||
+      !sameMap(c.validationBaselineSources, {
+        ...prior.validationBaselineSources,
+        ...registrationProtocolRestoreRepairGuard
+      }) ||
+      !Object.entries(registrationProtocolRestoreRepairGuard).every(
+        ([name, value]) => sourceDigest(name) === value
+      ) ||
+      !['sources', 'validationSources', 'withdrawal', 'unchangedInputs'].every((key) =>
+        sameValue(c[key], prior[key])
+      ) ||
+      !Object.entries(prior.reviewedFileHashes).every(
+        ([name, value]) =>
+          registrationProtocolRestoreRepairPaths.includes(name) ||
+          c.reviewedFileHashes?.[name] === value
+      )
+    )
+      return false;
+    return isRegistrationProtocolRestoreOnly(registrationProtocolRestorePaths, {
+      base: registrationProtocolRestoreBase,
+      baseTree: registrationProtocolRestoreTree,
+      sourceDigest,
+      baseSourceDigest,
+      contract: c
+    });
   } catch {
     return false;
   }

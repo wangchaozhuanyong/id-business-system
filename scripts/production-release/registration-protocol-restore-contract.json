@@ -2427,16 +2427,16 @@
     "apps/api/src/id-business-v2/auto-registration/worker/test_registration_closed_loop_unit.py": "50faaedb25008f3b73dcc7e66060810b4c09ad6fc6587d6fbc796fce13ae35af",
     "apps/api/src/id-business-v2/auto-registration/worker/workspace.py": "6bcb2050633db830068fd1a1b1a30d3dd75bf45f24aef3ab5b9c398d632e7237",
     "docs/V2_TASKS.md": "2f0d07a9306993e3b36db68e7616a5b69f689564f13e781f39c9ab4572b8ab99",
-    "scripts/ci-recharge-check.mjs": "b0063f9ffb8541fbddd4cb22acfc9663337bc1c5bfea89c3f7b4b3d1e6917161",
-    "scripts/ci-recharge-check.test.mjs": "daf96e47ea3255aa3f50db7d0333957a8569033601bc95d29f4e1411a92eb8d9",
-    "scripts/ci-recharge-scope.mjs": "06516254e599aeb7e9937eca5dea24f1b960f9aef2fb2cf3dedc9ec7cb703516",
-    "scripts/ci-recharge-scope.test.mjs": "d80e31f4a5fbf945d4b96d71c61ccf00df7cf27583cc9ee1f6079d7db39aacf6",
-    "scripts/ci-registration-protocol-restore-scope.mjs": "15bd1324965250d2bd304ebad0a7e22236bd7a4be8cfa38bb27d39ec789c835b",
-    "scripts/ci-registration-protocol-restore-scope.test.mjs": "cd2d35146d7a146a0552e54c5debda8b23759ce275385f25a6cff29dc9c53417",
+    "scripts/ci-recharge-check.mjs": "94b9918f53688c32a843cd1a36a1c5a5421528cef38d084e407990eccdb3ac8e",
+    "scripts/ci-recharge-check.test.mjs": "0e9ee65631c4f7b78ff09ef060034c8595edd0815d48952439dba1713daa2a9e",
+    "scripts/ci-recharge-scope.mjs": "9fe42c61710680a9ddc27618974c73916c71b2545ae100b1c30815d5ecf6eb8a",
+    "scripts/ci-recharge-scope.test.mjs": "3d694b4d814ea3edbe53d09ffa64ea24f4f53757b7a9f26980f31a8cd60de70f",
+    "scripts/ci-registration-protocol-restore-scope.mjs": "8b62d1ade4543af6e2f3dfa52b4d461964f1c757dcded204628f079bd2194c11",
+    "scripts/ci-registration-protocol-restore-scope.test.mjs": "46256d46595587f0938cc63ec53d1d0a295f0a939d1689f9cc34b5da818cde85",
     "scripts/production-release/registration-protocol-restore-build.py": "8b31e34fe8be4c1e368b23346c977678401404d5d44fe17a390afffc624cbbb0",
     "scripts/production-release/registration-protocol-restore-dispatch.py": "9de7fb4c7157d3a363ca1f273f1a69a09834c86b495f45c28c22661475118b3e",
     "scripts/production-release/registration-protocol-restore-release.py": "77470594cbbeecf148b1ea9380f2118a40a48c0385859929ec364753bb4f03f6",
-    "scripts/production-release/registration-protocol-restore-release.test.py": "7d2bf6fbda4241bd55db3253ddb973e89faa729c22c16ed6884c462827848bca"
+    "scripts/production-release/registration-protocol-restore-release.test.py": "56e7b557c607af230f9a35eb74318297b83d2fa8eff14f8725d888076de3156c"
   },
   "roleSourceCommits": {
     "api": "46bea6e11c9527e9b8930598de4cf2b13eb76635",
@@ -4818,7 +4818,8 @@
     "tsconfig.base.json": "d705dca337a84b21bcb51a8b2f7bcb9953916564f53d10b0b4c7e2d36259e5fe"
   },
   "validationBaselineSources": {
-    "scripts/acceptance-v2-registration-parity-diagnostics.mjs": "fd269ea49a297ea0b98e75045cba1b4bc33d536a137cd7f2a36c815699acf448"
+    "scripts/acceptance-v2-registration-parity-diagnostics.mjs": "fd269ea49a297ea0b98e75045cba1b4bc33d536a137cd7f2a36c815699acf448",
+    "scripts/check-v2-module-architecture.mjs": "0abe913ace9e319c6ac6f0764efaea76b17c1a06bce018259fbc805765ab5383"
   },
   "validationSources": {
     "apps/api/src/id-business-v2/auto-registration/worker/test_registration_closed_loop_unit.py": "50faaedb25008f3b73dcc7e66060810b4c09ad6fc6587d6fbc796fce13ae35af"
