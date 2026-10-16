@@ -133,6 +133,8 @@ export function useRechargePaymentStart(context: PaymentStartContext) {
       checkConnectionSnapshot();
       const capabilities = await context.checkSavedConnection(current);
       if (!current()) return;
+      if (input.useSavedCredentials && !capabilities.includes('account-auto-login-v1'))
+        throw new Error('请更新本机充值助手后使用账号自动登录');
       checkConnectionSnapshot();
       const paymentCard = await bankRechargeApi.preparePaymentCard({
         number: payment.number,

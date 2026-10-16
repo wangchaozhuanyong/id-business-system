@@ -1,10 +1,11 @@
 /** Runs only inside the newly created official window. Returns no cookies, tokens or passwords. */
 export async function inspectLoginPage(
-  action: 'inspect' | 'login' | 'email' | 'password' | 'code' | 'submit' | 'clear',
+  action: 'inspect' | 'login' | 'email_login' | 'email' | 'password' | 'code' | 'submit' | 'clear',
   value = '',
   context?: {
     stage?: 'email' | 'password' | 'code';
     email?: string;
+    codeType?: 'email' | 'totp';
     sessionOnly?: boolean;
     refreshSession?: boolean;
     sessionReadBudgetMs?: number;
@@ -88,6 +89,37 @@ export async function inspectLoginPage(
     controls[0]!.click();
     return { kind: 'submitted' as const };
   }
+  if (action === 'email_login') {
+    const controls = Array.from(document.querySelectorAll<HTMLElement>('button, a')).filter(
+      (control) => {
+        if (
+          !control.getClientRects().length ||
+          getComputedStyle(control).visibility === 'hidden' ||
+          control.matches(':disabled, [aria-disabled="true"]')
+        )
+          return false;
+        if (
+          !/^(?:email me a (?:login |one.time )?code|(?:log in|continue|sign in) with (?:a |an )?(?:one.time |email )?code|use (?:a |an )?(?:one.time |email )?code|send (?:me )?(?:a |an )?(?:login |one.time )?code|使用(?:邮箱)?验证码(?:登录)?|通过邮箱验证码登录|发送(?:登录)?验证码)$/i.test(
+            (control.textContent ?? '').trim()
+          )
+        )
+          return false;
+        if (control instanceof HTMLAnchorElement) {
+          const target = new URL(control.href);
+          return (
+            target.protocol === 'https:' &&
+            ['chatgpt.com', 'auth.openai.com', 'auth0.openai.com'].includes(target.hostname) &&
+            !target.username &&
+            !target.password
+          );
+        }
+        return true;
+      }
+    );
+    if (controls.length !== 1) return { kind: 'manual' as const };
+    controls[0]!.click();
+    return { kind: 'submitted' as const };
+  }
   if (action !== 'inspect') {
     const stage = action === 'submit' ? context?.stage : action;
     if (!stage) return { kind: 'manual' as const };
@@ -95,7 +127,10 @@ export async function inspectLoginPage(
     const input = matches[0];
     const form = input?.form;
     if (matches.length !== 1 || !input || !form) return { kind: 'manual' as const };
-    if (stage === 'code' && codeType(input) !== 'totp')
+    if (
+      stage === 'code' &&
+      (!['email', 'totp'].includes(codeType(input)) || codeType(input) !== context?.codeType)
+    )
       return { kind: 'manual' as const, codeType: codeType(input) };
     const formEmails = Array.from(form.querySelectorAll<HTMLInputElement>(selectors.email)).filter(
       (email) => email.getClientRects().length && getComputedStyle(email).visibility !== 'hidden'
@@ -236,8 +271,25 @@ export async function inspectLoginPage(
     const inputs = visible(selectors[kind]);
     if (inputs.length > 1) return { kind: 'manual' as const };
     if (inputs.length === 1) {
-      if (kind === 'code' && codeType(inputs[0]!) !== 'totp')
-        return { kind: 'manual' as const, codeType: codeType(inputs[0]!) };
+      if (kind === 'code') {
+        const type = codeType(inputs[0]!);
+        if (type !== 'email' && type !== 'totp') return { kind: 'manual' as const, codeType: type };
+        return { kind, codeType: type };
+      }
+      if (kind === 'password') {
+        const alerts =
+          inputs[0]!.form?.querySelectorAll<HTMLElement>(
+            '[role="alert"], [aria-live="assertive"], [data-error="true"]'
+          ) ?? [];
+        const rejected = Array.from(alerts).some(
+          (alert) =>
+            alert.getClientRects().length &&
+            /incorrect password|wrong password|invalid (?:email or )?password|密码(?:错误|不正确)/i.test(
+              alert.innerText
+            )
+        );
+        return { kind, passwordRejected: rejected };
+      }
       return { kind };
     }
   }

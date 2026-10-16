@@ -18,13 +18,13 @@
         @select="emit('select', $event)"
     /></template>
     <template v-if="!showingLossRecords">
-      <el-input
+      <V2SearchInput
         v-model="page.query.keyword"
+        draft-key="accounts:V2AccountsToolbar:page.query.keyword"
         clearable
         placeholder="搜索 ID 账号、手机号或供应商"
         aria-label="搜索 ID 资料"
-        @keyup.enter="page.handleSearch"
-        @clear="page.handleSearch"
+        @search="page.handleSearch"
       />
       <el-select
         v-model="page.query.countryOptionId"
@@ -74,11 +74,7 @@
       </V2FilterDisclosure>
     </template>
     <template #actions
-      ><template v-if="!showingLossRecords"
-        ><AppButton variant="primary" @click="page.handleSearch">
-          <el-icon><Search /></el-icon>
-          查询 ID
-        </AppButton>
+      ><template v-if="!showingLossRecords">
         <AppButton v-if="page.activeFilterCount" variant="ghost" @click="page.resetFilters">
           重置
         </AppButton></template
@@ -98,9 +94,9 @@
 </template>
 
 <script setup lang="ts">
+import V2SearchInput from '@/v2/components/V2SearchInput.vue';
 import V2ListToolbar from '@/v2/components/V2ListToolbar.vue';
 import type { UnwrapNestedRefs } from 'vue';
-import { Search } from '@element-plus/icons-vue';
 import AppButton from '@/components/ui/AppButton.vue';
 import V2FilterDisclosure from '@/v2/components/V2FilterDisclosure.vue';
 import V2AccountLifecycleTabs from './V2AccountLifecycleTabs.vue';

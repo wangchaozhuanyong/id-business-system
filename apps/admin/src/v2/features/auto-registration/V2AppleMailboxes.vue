@@ -6,8 +6,9 @@
       <template #filters>
         <el-form inline label-position="left" require-asterisk-position="right" @submit.prevent>
           <el-form-item label="邮箱">
-            <el-input
+            <V2SearchInput
               v-model="page.filters.q"
+              draft-key="auto-registration:V2AppleMailboxes:page.filters.q"
               clearable
               aria-label="搜索隐藏邮箱"
               placeholder="搜索隐藏邮箱或主邮箱"
@@ -610,6 +611,7 @@
 </template>
 
 <script setup lang="ts">
+import V2SearchInput from '@/v2/components/V2SearchInput.vue';
 import { computed, reactive, ref } from 'vue';
 import AppButton from '@/components/ui/AppButton.vue';
 import V2AsyncRegion from '@/v2/components/V2AsyncRegion.vue';

@@ -4,12 +4,14 @@ import { IdBusinessV2VendureMailboxClient } from './providers/id-business-v2-ven
 import { IdBusinessV2VendureMailboxService } from './id-business-v2-vendure-mailbox.service';
 import { assertRegistrationMailboxEmail } from './registration-mailbox-summaries';
 import { registrationMail } from './registration-mail';
+import { MailEventsService } from './mail-events.service';
 
 @Injectable()
 export class IdBusinessV2RechargeMailboxService {
   constructor(
     private readonly client: IdBusinessV2VendureMailboxClient,
-    private readonly mailboxes: IdBusinessV2VendureMailboxService
+    private readonly mailboxes: IdBusinessV2VendureMailboxService,
+    private readonly events: MailEventsService
   ) {}
 
   async rechargeMailbox(emailValue: string, operator: AuthenticatedUser) {
@@ -36,7 +38,46 @@ export class IdBusinessV2RechargeMailboxService {
       result.items.filter((mail) => /^\d{6,8}$/.test(mail.extractedCode ?? '')),
       mailbox.email,
       since,
-      previousId
+      previousId,
+      aliasId
     );
+  }
+
+  async waitForRechargeCode(
+    aliasId: string,
+    email: string,
+    since: Date,
+    operator: AuthenticatedUser
+  ) {
+    const deadline = Date.now() + 120_000;
+    let changed = true;
+    let wake: (() => void) | undefined;
+    const unsubscribe = this.events.subscribe(async (receivedAliasId) => {
+      if (receivedAliasId !== null && receivedAliasId !== aliasId) return;
+      changed = true;
+      wake?.();
+    });
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      while (Date.now() < deadline) {
+        if (changed) {
+          changed = false;
+          const mail = await this.rechargeCode(aliasId, email, since, null, operator);
+          if (mail && /^\d{6,8}$/.test(mail.code)) return mail;
+          if (changed) continue;
+        }
+        await new Promise<void>((resolve) => {
+          wake = resolve;
+          timer = setTimeout(resolve, Math.max(1, deadline - Date.now()));
+          if (changed) resolve();
+        });
+        if (timer) clearTimeout(timer);
+        wake = undefined;
+      }
+      return null;
+    } finally {
+      if (timer) clearTimeout(timer);
+      unsubscribe();
+    }
   }
 }

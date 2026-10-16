@@ -1,3 +1,4 @@
+import { resetV2SearchInputs } from '@/v2/composables/useV2AutoSearch';
 import { useV2FormDraft, useV2SessionDraft } from '@/v2/composables/useV2SessionDraft';
 import { toRef, computed, reactive, ref } from 'vue';
 import type {
@@ -264,6 +265,7 @@ export function useFinanceLedgerPage(
   }
 
   function resetFilters() {
+    resetV2SearchInputs('finance-ledger:');
     filters.currency = '';
     filters.inflowNature = '';
     filters.periodMonth = '';

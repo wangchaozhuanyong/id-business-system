@@ -16,16 +16,16 @@
           @submit.prevent="search"
         >
           <el-form-item label="账号搜索"
-            ><el-input
+            ><V2SearchInput
               v-model="keywordInput"
+              draft-key="auto-recharge:V2ChatgptAccountsView:keywordInput"
               placeholder="邮箱或备注"
               clearable
-              @keyup.enter="search"
+              @search="search"
           /></el-form-item>
           <el-form-item label="优惠状况">
             <ChatgptAccountOfferSelect v-model="offerStatus" all />
           </el-form-item>
-          <el-form-item><AppButton @click="search">搜索</AppButton></el-form-item>
         </el-form>
       </template>
     </V2PageContext>
@@ -72,7 +72,7 @@
           </template>
           <V2TableColumn
             :definition="v2TableSchemas.chatgptAccounts.main.columns[0]"
-            prop="emailMasked"
+            prop="email"
             show-overflow-tooltip
           />
           <V2TableColumn :definition="v2TableSchemas.chatgptAccounts.main.columns[1]">
@@ -143,8 +143,8 @@
           />
           <V2TableColumn :definition="v2TableSchemas.chatgptAccounts.main.columns[11]">
             <template #default="{ row }">
-              <span title="已核实的真实注册时间">{{
-                row.registeredAt ? formatV2DateTime(row.registeredAt) : '未记录'
+              <span title="按北京时间展示核实的注册日期">{{
+                row.registeredAt ? formatRegisteredDate(row.registeredAt) : '未记录'
               }}</span>
             </template>
           </V2TableColumn>
@@ -271,6 +271,7 @@
 </template>
 
 <script setup lang="ts">
+import V2SearchInput from '@/v2/components/V2SearchInput.vue';
 import { useBankRechargeRestoreNavigation } from './useBankRechargeRestoreNavigation';
 const { requestRestore, restoreNavigationError } = useBankRechargeRestoreNavigation();
 import BankRechargeLifecycleDialog from './BankRechargeLifecycleDialog.vue';
@@ -296,17 +297,20 @@ import V2Table from '@/v2/components/V2Table.vue';
 import V2TableColumn from '@/v2/components/V2TableColumn.vue';
 import V2TableActionColumn from '@/v2/components/V2TableActionColumn.vue';
 import V2TableColumnSettings from '@/v2/components/V2TableColumnSettings.vue';
+import { resetV2SearchInputs } from '@/v2/composables/useV2AutoSearch';
 import { createV2QueryKey, useV2ModuleQuery } from '@/v2/composables/useV2Query';
 import { useV2StableListFrame } from '@/v2/composables/useV2StableListFrame';
 import { v2TableSchemas } from '@/v2/features/tableSchemas';
 import { ElMessage } from '@/v2/services/elementPlusMessage';
-import { formatV2DateTime } from '@/v2/utils/dateTime';
+import { formatV2DateTime, currentV2BusinessDate } from '@/v2/utils/dateTime';
+const formatRegisteredDate = (value: string) => currentV2BusinessDate(value);
 import { useChatgptAccountAge } from './useChatgptAccountAge';
 import { validateV2Form } from '@/v2/utils/formValidation';
 import { useV2FormDraft, useV2SessionDraft } from '@/v2/composables/useV2SessionDraft';
 import { bankRechargeApi, type BankChatgptAccount } from './bank-recharge-api';
 import ChatgptAccountImportDrawer from './ChatgptAccountImportDrawer.vue';
 import ChatgptAccountCopyButton from './ChatgptAccountCopyButton.vue';
+import { chatgptAccountEditPayload } from './chatgpt-account-editor';
 import ChatgptAccountCopySettings from './ChatgptAccountCopySettings.vue';
 import { proxyCountryLabel } from './recharge-proxy-options';
 import { V2_ACCOUNT_OFFER_LABELS, type V2AccountOffer } from '@apple-business/shared';
@@ -395,6 +399,7 @@ const formRef = ref<FormInstance>();
 const editorDraft = useV2FormDraft('chatgpt-accounts-editor', () => ({
   email: '',
   registrationCountryCode: '',
+  registeredDate: '',
   password: '',
   totpSecret: '',
   remark: '',
@@ -418,6 +423,7 @@ function openCreate() {
   drawerOpen.value = true;
 }
 function onAccountsImported() {
+  resetV2SearchInputs('auto-recharge:V2ChatgptAccountsView:');
   page.value = 1;
   keyword.value = '';
   keywordInput.value = '';
@@ -431,6 +437,7 @@ function openEdit(account: BankChatgptAccount) {
     account.id,
     {
       registrationCountryCode: account.registrationCountryCode ?? '',
+      registeredDate: account.registeredAt ? currentV2BusinessDate(account.registeredAt) : '',
       remark: account.remark ?? '',
       active: account.status === 'active',
       offerStatus: account.offerStatus ?? 'unknown'
@@ -446,18 +453,7 @@ async function save() {
   saveError.value = '';
   try {
     if (editing.value) {
-      const payload: Record<string, unknown> = {
-        remark: form.remark,
-        status: form.active ? 'active' : 'disabled',
-        expectedUpdatedAt: editorDraft.version.value
-      };
-      if (form.registrationCountryCode !== (editing.value.registrationCountryCode ?? ''))
-        payload.registrationCountryCode = form.registrationCountryCode || null;
-      if (form.offerStatus !== (editing.value.offerStatus ?? 'unknown'))
-        payload.offerStatus = form.offerStatus;
-      if (form.password) payload.password = form.password;
-      if (form.totpSecret) payload.totpSecret = form.totpSecret;
-      if (form.email.trim()) payload.email = form.email.trim();
+      const payload = chatgptAccountEditPayload(form, editing.value, editorDraft.version.value);
       await bankRechargeApi.updateAccount(editing.value.id, payload);
     } else {
       await bankRechargeApi.createAccount({

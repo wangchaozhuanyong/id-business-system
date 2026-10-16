@@ -1,3 +1,4 @@
+import type { RechargeLoginChallenge } from './recharge-login-code';
 import { BrowserCdp } from './bitbrowser-cdp';
 import {
   directBrowserApi,
@@ -26,7 +27,7 @@ export { parseDirectCredential, type DirectLoginCredential } from './bitbrowser-
 export type DirectLoginCode = string | { token: string; expiresAt: string };
 export interface DirectLoginHooks {
   progress: (stage: string, extra?: Record<string, unknown>) => Promise<void>;
-  code: () => Promise<DirectLoginCode>;
+  code: (challenge: RechargeLoginChallenge) => Promise<DirectLoginCode>;
   restore?: (accountKey: string) => Promise<{ ownedProfile?: V2RechargeOwnedBrowserProfile }>;
   accountKey?: string;
   ownedProfile?: V2RechargeOwnedBrowserProfile;
@@ -67,6 +68,7 @@ export async function runDirectLogin(
   hooks: DirectLoginHooks
 ) {
   const expected = parseDirectCredential(credential);
+  const passwordAvailable = Boolean(credential.login?.password);
   const callerSignal = signal;
   let deadline = Date.now() + 10 * 60_000;
   const hardDeadline = Date.now() + 30 * 60_000;
@@ -93,6 +95,8 @@ export async function runDirectLogin(
   let pendingSubmission:
     | {
         kind: 'email' | 'password' | 'code';
+        key: string;
+        challenge?: RechargeLoginChallenge;
         value: string;
         expiresAt?: string;
         waitingForCode: boolean;
@@ -487,6 +491,8 @@ export async function runDirectLogin(
     };
     await openSession();
     const submitted = new Set<string>();
+    const stateKey = (state: LoginPageState) =>
+      state.kind === 'code' ? `code:${'codeType' in state ? state.codeType : 'totp'}` : state.kind;
     let manualReported = false;
     let manualState = '';
     let lastState = '';
@@ -706,6 +712,16 @@ export async function runDirectLogin(
       }
       const observedKind = state.kind;
       if (
+        pendingSubmission?.kind === 'code' &&
+        ((state.kind === 'code' &&
+          pendingSubmission.challenge?.kind !== ('codeType' in state ? state.codeType : 'totp')) ||
+          (state.kind === 'manual' && 'codeType' in state))
+      ) {
+        submitted.add(pendingSubmission.key);
+        pendingSubmission.value = '';
+        pendingSubmission = undefined;
+      }
+      if (
         expected.token &&
         ownedProfile &&
         !suppliedSessionChecked &&
@@ -864,13 +880,39 @@ export async function runDirectLogin(
           (state?.kind === 'loading' && Date.now() >= automaticDeadline && !manualReported))
       )
         throw new DirectBrowserError('official_login_not_verified');
-      if (pendingSubmission?.failure) throw pendingSubmission.failure.cause;
+      if (pendingSubmission?.failure) {
+        pendingSubmission.value = '';
+        submitted.add(pendingSubmission.key);
+        pendingSubmission = undefined;
+        state = { kind: 'manual' };
+      }
+      if (
+        credential.login &&
+        state.kind === 'password' &&
+        !manualReported &&
+        (!passwordAvailable || ('passwordRejected' in state && state.passwordRejected))
+      ) {
+        if (submitted.has('email_login')) state = { kind: 'manual' };
+        else {
+          submitted.add('email_login');
+          await hooks.progress('login_email');
+          const switched = await activeCdp.evaluate<LoginPageState>(
+            sessionId,
+            loginPageExpression('email_login')
+          );
+          if (switched.kind !== 'submitted') state = { kind: 'manual' };
+          else {
+            await waitDirectLogin(signal);
+            continue;
+          }
+        }
+      }
       if (
         manualReported &&
         credential.login &&
         state.kind !== manualState &&
         ['login', 'email', 'password', 'code'].includes(state?.kind) &&
-        !submitted.has(state.kind)
+        !submitted.has(stateKey(state))
       ) {
         // After the user completes an official challenge, resume only stages never submitted.
         manualReported = false;
@@ -900,13 +942,25 @@ export async function runDirectLogin(
         Date.now() < automaticDeadline &&
         credential.login &&
         ['email', 'password', 'code'].includes(state?.kind) &&
-        !submitted.has(state.kind)
+        !submitted.has(stateKey(state))
       ) {
         const kind = state.kind as 'email' | 'password' | 'code';
-        if (!pendingSubmission || pendingSubmission.kind !== kind) {
+        if (!pendingSubmission || pendingSubmission.key !== stateKey(state)) {
           if (pendingSubmission) pendingSubmission.value = '';
           const submission: NonNullable<typeof pendingSubmission> = {
             kind,
+            key: stateKey(state),
+            ...(kind === 'code'
+              ? {
+                  challenge: {
+                    kind:
+                      'codeType' in state && state.codeType === 'email'
+                        ? ('email' as const)
+                        : ('totp' as const),
+                    challengeId: crypto.randomUUID()
+                  }
+                }
+              : {}),
             value:
               kind === 'email'
                 ? credential.login.email
@@ -916,9 +970,23 @@ export async function runDirectLogin(
             waitingForCode: kind === 'code'
           };
           pendingSubmission = submission;
+          await hooks.progress(kind === 'code' ? 'login_code_required' : `login_${kind}`, {
+            user_action_required: kind === 'code',
+            ...(submission.challenge
+              ? {
+                  login_code_type: submission.challenge.kind,
+                  login_challenge_id: submission.challenge.challengeId
+                }
+              : {})
+          });
           if (kind === 'code') {
+            if (submission.challenge?.kind === 'email')
+              automaticDeadline = Math.min(
+                deadline,
+                Math.max(automaticDeadline, Date.now() + 125_000)
+              );
             // Keep observing the official window while the task waits for a code.
-            void hooks.code().then(
+            void hooks.code(submission.challenge!).then(
               (value) => {
                 if (pendingSubmission !== submission || signal.aborted) return;
                 submission.value = typeof value === 'string' ? value : value.token;
@@ -931,15 +999,16 @@ export async function runDirectLogin(
                 submission.waitingForCode = false;
               }
             );
+            await Promise.resolve();
           }
-          await hooks.progress(kind === 'code' ? 'login_code_required' : `login_${kind}`, {
-            user_action_required: kind === 'code'
-          });
         }
         signal.throwIfAborted();
         if (Date.now() >= deadline) throw new DirectBrowserError('official_login_not_verified');
-        if (pendingSubmission.failure) throw pendingSubmission.failure.cause;
-        if (!pendingSubmission.waitingForCode && Date.now() < automaticDeadline) {
+        if (
+          !pendingSubmission.failure &&
+          !pendingSubmission.waitingForCode &&
+          Date.now() < automaticDeadline
+        ) {
           if (
             kind === 'code' &&
             pendingSubmission.expiresAt !== undefined &&
@@ -951,12 +1020,15 @@ export async function runDirectLogin(
           ) {
             pendingSubmission.value = '';
             pendingSubmission = undefined;
-            submitted.add('code');
+            submitted.add(stateKey(state));
             state = { kind: 'manual' };
           } else {
             const filled = await activeCdp.evaluate<LoginPageState>(
               sessionId,
-              loginPageExpression(kind, pendingSubmission.value, { email: expected.email })
+              loginPageExpression(kind, pendingSubmission.value, {
+                email: expected.email,
+                codeType: pendingSubmission.challenge?.kind
+              })
             );
             if (filled.kind === 'filled' && Date.now() < automaticDeadline) {
               signal.throwIfAborted();
@@ -971,7 +1043,7 @@ export async function runDirectLogin(
               ) {
                 pendingSubmission.value = '';
                 pendingSubmission = undefined;
-                submitted.add('code');
+                submitted.add(stateKey(state));
                 await activeCdp.evaluate(sessionId, loginPageExpression('clear'));
                 state = { kind: 'manual' };
               } else {
@@ -979,11 +1051,12 @@ export async function runDirectLogin(
                   sessionId,
                   loginPageExpression('submit', pendingSubmission.value, {
                     stage: kind,
-                    email: expected.email
+                    email: expected.email,
+                    codeType: pendingSubmission.challenge?.kind
                   })
                 );
                 if (confirmed.kind === 'submitted') {
-                  submitted.add(kind);
+                  submitted.add(pendingSubmission.key);
                   pendingSubmission.value = '';
                   pendingSubmission = undefined;
                   if (kind === 'password') credential.login.password = '';
@@ -998,7 +1071,7 @@ export async function runDirectLogin(
         // A code requested for one challenge must never survive a different challenge.
         pendingSubmission.value = '';
         pendingSubmission = undefined;
-        submitted.add('code');
+        submitted.add(stateKey(state));
       }
       if (!manualReported && (state?.kind === 'manual' || Date.now() >= automaticDeadline)) {
         enterManualWait();

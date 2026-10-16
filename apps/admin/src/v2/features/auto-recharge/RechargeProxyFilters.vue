@@ -7,11 +7,12 @@
     @submit.prevent="$emit('search')"
   >
     <el-form-item label="搜索"
-      ><el-input
+      ><V2SearchInput
         v-model="keyword"
+        draft-key="auto-recharge:RechargeProxyFilters:keyword"
         clearable
         placeholder="国家代码或备注"
-        @keyup.enter="$emit('search')"
+        @search="$emit('search')"
     /></el-form-item>
     <el-form-item label="国家">
       <el-select
@@ -40,19 +41,23 @@
       </el-select>
     </el-form-item>
     <el-form-item label="状态">
-      <el-select v-model="status" aria-label="筛选代理状态" placeholder="全部状态">
+      <el-select
+        v-model="status"
+        aria-label="筛选代理状态"
+        placeholder="全部状态"
+        @change="$emit('search')"
+      >
         <el-option label="全部状态" value="" /><el-option label="启用" value="active" /><el-option
           label="停用"
           value="disabled"
         />
       </el-select>
     </el-form-item>
-    <el-form-item><AppButton @click="$emit('search')">搜索</AppButton></el-form-item>
   </el-form>
 </template>
 
 <script setup lang="ts">
-import AppButton from '@/components/ui/AppButton.vue';
+import V2SearchInput from '@/v2/components/V2SearchInput.vue';
 import type { RechargeProxyItem } from './recharge-proxy-api';
 import { proxyCountries, proxyKindLabels, type ProxyKind } from './recharge-proxy-options';
 

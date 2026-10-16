@@ -535,12 +535,14 @@ async def _execute_profile_flow(job, target, budget, original_checkout=None):
         login = job.payload.pop("login")
         async def wait_for_login_code(seconds):
             return await budget.human_wait(lambda: job.wait_for_code(seconds))
+        async def wait_for_email_code(seconds):
+            return await budget.human_wait(lambda: job.wait_for_code(seconds, "email"))
         async def wait_for_login_user(reason, seconds):
             return await budget.human_wait(lambda: job.wait_for_user(reason, seconds))
         try:
             target, identity = await browser_password_login.login_with_password(
                 page, login["email"], login["password"], wait_for_login_code,
-                wait_for_login_user, job.progress)
+                wait_for_login_user, job.progress, wait_for_email_code=wait_for_email_code)
         finally:
             await browser_password_login.clear_visible_secrets(page)
             login.clear()

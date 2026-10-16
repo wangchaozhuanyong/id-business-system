@@ -1,3 +1,4 @@
+import { parseIdBusinessV2DateBoundary } from '../runtime/public-api';
 import { BadRequestException } from '@nestjs/common';
 import { parseIdBusinessV2TotpSecret } from '../workspace/public-api';
 import {
@@ -35,4 +36,12 @@ export function parseNewChatgptAccount(value: unknown): NewChatgptAccount {
   const remark = bankRechargeText(input.remark, '备注', 500, false);
   const registrationCountryCode = bankRechargeCountryCode(input.registrationCountryCode);
   return { email, registrationCountryCode, password, totp, remark };
+}
+
+export function parseChatgptRegisteredDate(value: unknown) {
+  if (value === undefined) return undefined;
+  const date = parseIdBusinessV2DateBoundary(value, '注册日期');
+  if (!date) throw new BadRequestException('注册日期不能为空');
+  if (date.getTime() > Date.now()) throw new BadRequestException('注册日期不能晚于今天');
+  return date;
 }

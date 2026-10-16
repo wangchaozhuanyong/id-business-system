@@ -62,13 +62,13 @@
         class="v2-topup-records-toolbar"
         aria-label="加卡记录筛选"
       >
-        <el-input
+        <V2SearchInput
           v-model="filters.keyword"
+          draft-key="topup-records:V2TopupRecordsView:filters.keyword"
           clearable
           placeholder="卡片名称、礼品卡尾号、ID、供应商"
           aria-label="搜索加卡记录"
-          @keyup.enter="handleSearch"
-          @clear="handleSearch"
+          @search="handleSearch"
         />
         <el-select
           v-if="activeTab === 'giftCards'"
@@ -151,10 +151,6 @@
           />
         </V2FilterDisclosure>
         <div class="v2-records-toolbar__actions">
-          <AppButton variant="primary" @click="handleSearch">
-            <el-icon><Search /></el-icon>
-            查询记录
-          </AppButton>
           <AppButton variant="ghost" @click="resetFilters">重置</AppButton>
         </div>
       </section>
@@ -376,9 +372,10 @@
 </template>
 
 <script setup lang="ts">
+import V2SearchInput from '@/v2/components/V2SearchInput.vue';
 import { computed, ref } from 'vue';
 import type { FormInstance } from 'element-plus';
-import { Close, Search } from '@element-plus/icons-vue';
+import { Close } from '@element-plus/icons-vue';
 import AppButton from '@/components/ui/AppButton.vue';
 import FeatureHelp from '@/components/ui/FeatureHelp.vue';
 import V2ConfirmDialog from '@/v2/components/V2ConfirmDialog.vue';

@@ -25,7 +25,7 @@ describe('orders scheme 3 redesign contract', () => {
     ]) {
       expect(toolbar).toContain(binding);
     }
-    expect(toolbar).toContain('@keyup.enter="page.handleSearch"');
+    expect(toolbar).toContain('@search="page.handleSearch"');
     expect(toolbar).toContain('@change="page.handleFilterChange"');
     expect(toolbar).toContain('@click="page.loadOrders"');
     expect(toolbar).toContain('@click="page.resetFilters"');
