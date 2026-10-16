@@ -1871,9 +1871,9 @@
     "tree": "f6ab4537e28437af244c2263dd591516ae8e2a22",
     "workflowPath": ".github/workflows/registration-closure-validation.yml"
   },
-  "reviewedApplicationCommit": null,
+  "reviewedApplicationCommit": "2bcced63c834187ac5e69e344176da33ff82d4c9",
   "reviewedFileHashes": {
-    ".github/workflows/quality.yml": "7d975a872183f079a5190ec493bf6188a8ef4869289945c7409164a158f1e2c1",
+    ".github/workflows/quality.yml": "234d288d7ab237c89dda1d993102305741a92dadbc9aabb150fcfc9ce10551da",
     ".github/workflows/registration-protocol-restore-validation.yml": "852b142e07558a2f0d6d175179d1c2070f0047bd8750d59bc8e6200a28a64074",
     "apps/admin/src/v2/features/auto-registration/V2AppleMailboxes.vue": "d756598b46ca8de34fc24eed9416372d336758e47611bf2313f8d521101252a3",
     "apps/admin/src/v2/features/auto-registration/api.ts": "f95f7d08604f773b38c4d17710848c4bf77c5704b6e298b30888728bd074b41f",
@@ -1889,16 +1889,16 @@
     "apps/api/src/id-business-v2/auto-registration/worker/apple_mailboxes.py": "b1cbea722f7d63c33181811c2446d43cf7af5b212ff2d379aadc3b3cb909c613",
     "apps/api/src/id-business-v2/auto-registration/worker/test_registration_closed_loop_unit.py": "50faaedb25008f3b73dcc7e66060810b4c09ad6fc6587d6fbc796fce13ae35af",
     "apps/api/src/id-business-v2/auto-registration/worker/workspace.py": "6bcb2050633db830068fd1a1b1a30d3dd75bf45f24aef3ab5b9c398d632e7237",
-    "docs/V2_TASKS.md": "5d5b5edda77b21cd5bf616eae4e9db513c47334fb0a116ed2ac582fa636a82d2",
-    "scripts/ci-recharge-check.mjs": "6364b9c8c7da714347d67292bc8b49e3b4ca2900c4f950de21401230daca94f7",
+    "docs/V2_TASKS.md": "397ff8522abe513938d8c950cdcff8de263531f0d0fe23623034f20b1eef4b1b",
+    "scripts/ci-recharge-check.mjs": "4dad209a07a82c1092b092414b0352f821c40d510c57ea4b02bd35e5532024a3",
     "scripts/ci-recharge-check.test.mjs": "ca07b49562487d470bee8819674352af87017010a021bc1af842b05c47015635",
-    "scripts/ci-recharge-scope.mjs": "21669111b2f0f9e984625d4fe0a9f162acbb81725a1277df3ad212cefae73319",
-    "scripts/ci-recharge-scope.test.mjs": "f311da9e3d44e3415e81b4f277e2a980044a1a7995b36849040e98312e8e9b69",
-    "scripts/ci-registration-protocol-restore-scope.mjs": "e34e252ab8adfab0edd8a8ee9bdf906b751e22898bb8b574d6fed2b0c25bcd4c",
+    "scripts/ci-recharge-scope.mjs": "7fd734b7622e82e35b04b518791302fe41075d5cfee586c86847d57564dffceb",
+    "scripts/ci-recharge-scope.test.mjs": "6a3bdc6afb81bb282714f0947613accd4e31e559f3cb999efbc3c296ae15892c",
+    "scripts/ci-registration-protocol-restore-scope.mjs": "cb87bf3575e0dd093fbf69127cabc385ba9c2aba8ea0e6079cca725ef09bf9da",
     "scripts/ci-registration-protocol-restore-scope.test.mjs": "0136066836fb40f001b13f7bfe41466b72316591446d23f821d5c760d8af9e33",
-    "scripts/production-release/registration-protocol-restore-build.py": "61982b271dee03855bc26b59ef15e500c4dca502247eb0a8af8138898ace1c18",
+    "scripts/production-release/registration-protocol-restore-build.py": "85cc2e856ee388699f16ef08373a0c2c43ed40424f8be4de7ca4c471a567f10c",
     "scripts/production-release/registration-protocol-restore-dispatch.py": "25ec6e5d49b76870795a96ad8aac438479c0fe86fbd2ca6453a904f8e869f1c0",
-    "scripts/production-release/registration-protocol-restore-release.py": "825663017dedbb5152fbe16925411367617ca851b2daa9dcc4b4c7cf636e1a02",
+    "scripts/production-release/registration-protocol-restore-release.py": "d83ec5e7452cfeb679b3cba1042e34f7df37158c014cb8d9e7daeb029525fd24",
     "scripts/production-release/registration-protocol-restore-release.test.py": "8a7f41b05fa3b391b7584558d5dcb8b0d87c9032ec99abf217feebeb0266403f"
   },
   "roleSourceCommits": {
@@ -3799,8 +3799,8 @@
       "status": "running"
     }
   },
-  "sourceBaseline": "d0c4f6215b396437685ce13201760ff93758726b",
-  "sourceBaselineTree": "3206c9600a465a6947c2dcaffab510bc73d98e29",
+  "sourceBaseline": "1c339754507f29459d17d75bb84afbee8fba5291",
+  "sourceBaselineTree": "06fc09408adb26dd753456a9e8ff490f3e3cd308",
   "sourceDeltaPaths": [
     ".github/workflows/quality.yml",
     ".github/workflows/registration-protocol-restore-validation.yml",
@@ -4424,5 +4424,25 @@
   },
   "apiDeclarationRestore": {
     "id-business-v2/auto-registration/apple-mailboxes.types.d.ts": "a41c23af90aaf305de8d0d42f3c7b31de580a78aae22f047c1d797a8871e66a4"
+  },
+  "sourceInputEvidence": {
+    "kind": "IMMUTABLE_GIT_INPUTS_ONLY",
+    "sourceCommit": "1c339754507f29459d17d75bb84afbee8fba5291",
+    "sourceTree": "06fc09408adb26dd753456a9e8ff490f3e3cd308",
+    "hostFileRead": false,
+    "runtimeFileRead": false,
+    "files": {
+      "apps/admin/package.json": "01f409413c63046256577fb997f2276430ef321cd320269d047cec2ed083fa55",
+      "apps/api/package.json": "f8a9cd054478af472964facc3b70012fef70a3e63f0b55376582d57e691acd2c",
+      "apps/api/prisma-mysql/schema.prisma": "51a4d25b1302458145f560acc32f25b89a7bd65fea64dc72b254dc56da430100",
+      "apps/api/src/id-business-v2/auto-registration/worker/requirements.lock.txt": "19d43ddcafae2938f27174b9aff47be43853e55d7de8c02d3f31e1cd622d1346",
+      "apps/api/src/id-business-v2/auto-registration/worker/test_upload_compat.py": "a5e9c985971bc94dc398d584cea5c32372b9f796cd0bc4816ded16d7fa81de31",
+      "apps/api/src/id-business-v2/auto-registration/worker/test_workspace.py": "b209874b0a8d7b640a3df1253356f206b2e98c7253eee43efe7a212c14f32154",
+      "apps/api/tsconfig.build.json": "143f714555b60bfbfdab39b9c4c143992e7848e50366c22de42ba5cc08d11100",
+      "apps/api/tsconfig.json": "3b9f945f1569222abe975bbdb19bdada193fb6a20833ab65a1cba45208e17781",
+      "package-lock.json": "6104c1be6681361d002145c15c8bd1a15a9741a3b61a4694b3982daf7ba5b70f",
+      "package.json": "569ed2d2bd3849ae7c79ea07f860ec1a66de90fc0161681df9064a7332091faf",
+      "tsconfig.base.json": "d705dca337a84b21bcb51a8b2f7bcb9953916564f53d10b0b4c7e2d36259e5fe"
+    }
   }
 }

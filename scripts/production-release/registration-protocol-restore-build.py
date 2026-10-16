@@ -50,6 +50,14 @@ def verify_sources(c):
              == digest(git('show', r.SOURCE_BASE + ':' + name)), 'IMMUTABLE_INPUT_CHANGED')
     need(all(c['reviewedFileHashes'].get(n) == v for n, v in {**c['sources'], **c['validationSources']}.items()),
          'SOURCE_HASH_CLOSURE_CHANGED')
+    need(re.fullmatch('[a-f0-9]{40}', c.get('reviewedApplicationCommit') or '')
+         and all(digest(git('show', c['reviewedApplicationCommit'] + ':' + n)) == value
+                 for n, value in {**c['sources'], **c['validationSources']}.items()),
+         'REVIEWED_APPLICATION_CHANGED')
+    for name in c['withdrawal']['sourceRemovals']:
+        present = subprocess.run(['git', 'cat-file', '-e', c['reviewedApplicationCommit'] + ':' + name],
+                                 cwd=ROOT, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        need(present.returncode == 128, 'REVIEWED_REMOVAL_CHANGED')
 
 
 def native_bundle(binding):
