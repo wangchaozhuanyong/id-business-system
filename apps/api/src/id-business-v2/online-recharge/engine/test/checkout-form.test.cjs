@@ -203,3 +203,20 @@ test('expiry appearing only after entering the number does not deadlock', async 
   );
   assert.equal((await fillCard(page, card, { deadline: Date.now() + 4000 })).ok, true);
 });
+
+test('country change clearing card fields is detected and repaired within the same deadline', async (t) => {
+  const { verifyCard } = require('../checkout-form.cjs');
+  const page = await pageFor(t, cardHtml + countryHtml + addressHtml),
+    deadline = Date.now() + 5000;
+  await page.locator('[autocomplete="billing country"]').evaluate((n) =>
+    n.addEventListener('change', () => {
+      for (const input of document.querySelectorAll('input[autocomplete^="cc-"]')) input.value = '';
+    })
+  );
+  assert.equal((await fillCard(page, card, { deadline })).ok, true);
+  assert.equal((await fillBilling(page, address, 'Synthetic Person', { deadline })).ok, true);
+  assert.ok((await verifyCard(page, card, { deadline })).length > 0);
+  assert.equal((await fillCard(page, card, { deadline })).ok, true);
+  assert.equal((await fillBilling(page, address, 'Synthetic Person', { deadline })).ok, true);
+  assert.deepEqual(await verifyCard(page, card, { deadline }), []);
+});

@@ -362,6 +362,17 @@ async function fillBilling(page, address, name, { deadline = Date.now() + 120000
     return result;
   });
 }
+async function verifyCard(page, card, { deadline = Date.now() + 120000 } = {}) {
+  const expected = { number: String(card.number).replace(/\D/g, ''), cvc: String(card.cvc) };
+  const parts = String(card.expiry).match(/^(\d{2})\/?(\d{2}|\d{4})$/);
+  if (!parts) return ['expiry'];
+  if (await locate(page, 'expiry', deadline)) expected.expiry = `${parts[1]}/${parts[2].slice(-2)}`;
+  else {
+    expected.month = parts[1];
+    expected.year = parts[2];
+  }
+  return verify(page, expected, deadline);
+}
 async function stableDue(page, read, deadline) {
   let previous = null,
     stable = 0;
@@ -375,4 +386,4 @@ async function stableDue(page, read, deadline) {
   }
   return null;
 }
-module.exports = { fillCard, fillBilling, diagnostic, verify, matches, stableDue };
+module.exports = { fillCard, fillBilling, diagnostic, verify, verifyCard, matches, stableDue };

@@ -553,6 +553,13 @@ async function completeStripeCardPayment(page, cardInfo, address, options = {}) 
             const screenshot = await saveDebugScreenshot(page, 'billing_address_not_filled');
             return { success: false, submitted: false, canRetryCard: false, error: billingResult.error, screenshot };
         }
+        const cardAfterBilling = await fillCardFieldsOpenAiCheckout(page, cardInfo, ELEMENT_TIMEOUT, formDeadline);
+        if (!cardAfterBilling.ok) {
+            const screenshot = await saveDebugScreenshot(page, 'card_fields_changed_after_billing');
+            return { success: false, submitted: false, canRetryCard: false, error: '账单更新后卡片字段未就绪，未提交付款', screenshot };
+        }
+        const billingAfterCard = await fillOpenAiCheckoutBilling(page, address, holderName, formDeadline);
+        if (!billingAfterCard.ok) return { success: false, submitted: false, canRetryCard: false, error: billingAfterCard.error, screenshot: await saveDebugScreenshot(page, 'billing_changed_after_card') };
         console.log('[Stripe] 账单字段已逐项回读校验');
 
         // Step 8: Check service agreement checkbox if present
@@ -602,6 +609,9 @@ async function completeStripeCardPayment(page, cardInfo, address, options = {}) 
             const expectedBilling = { country: address.country || address.region, line1: address.line1, city: address.city, postal: address.postal_code, name: holderName, ...(address.state ? { state: address.state } : {}) };
             const missing = await require('../checkout-form.cjs').verify(page, expectedBilling, formDeadline);
             if (missing.length) return { success: false, submitted: false, canRetryCard: false, error: '计税后账单字段变化，未提交付款' };
+        }
+        if ((await require('../checkout-form.cjs').verifyCard(page, cardInfo, { deadline: formDeadline })).length) {
+            return { success: false, submitted: false, canRetryCard: false, error: '付款前卡片字段发生变化，未提交付款', screenshot: await saveDebugScreenshot(page, 'card_changed_before_submit') };
         }
         require('../payment-limit.cjs').assertPaymentLimit(options.paymentLimit, finalDue);
         console.log(`[Stripe] 提交前最终应付已稳定: ${finalDue.currency} ${finalDue.amount}`);
