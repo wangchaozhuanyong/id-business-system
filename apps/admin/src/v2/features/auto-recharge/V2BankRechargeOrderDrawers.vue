@@ -55,10 +55,7 @@
             ><el-select
               v-model="form.chargeCurrencyCode"
               aria-label="代付币种"
-              @change="
-                form.chargeFxRateToCny = '';
-                form.cardId = '';
-              "
+              @change="form.chargeFxRateToCny = ''"
               ><el-option
                 v-for="item in activeCurrencies"
                 :key="item.code"
@@ -386,14 +383,6 @@
             inputmode="numeric"
             placeholder="仅后四位"
         /></el-form-item>
-        <el-form-item label="付款币种" required
-          ><el-select v-model="cardForm.currencyCode" aria-label="银行卡付款币种"
-            ><el-option
-              v-for="item in activeCurrencies"
-              :key="item.code"
-              :label="`${item.name}（${item.code}）`"
-              :value="item.code" /></el-select
-        ></el-form-item>
       </el-form>
       <p v-if="saveError" class="bank-recharge-error" role="alert">{{ saveError }}</p>
     </V2FormDrawer>

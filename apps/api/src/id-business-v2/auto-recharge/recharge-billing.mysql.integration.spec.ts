@@ -1,3 +1,4 @@
+import { SharedBankCardRepository } from '../bank-card-pool/public-api';
 import { randomUUID } from 'node:crypto';
 import { ConfigService } from '@nestjs/config';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -56,7 +57,8 @@ suite('比特账单生成真实MySQL事务与归属', () => {
       new RechargeNameRepository(prisma),
       tx,
       audit,
-      encryption
+      encryption,
+      new SharedBankCardRepository(prisma, encryption, tx, audit)
     );
     return { operator, service, names, addresses };
   }

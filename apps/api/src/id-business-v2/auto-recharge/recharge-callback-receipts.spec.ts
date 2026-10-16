@@ -4,6 +4,7 @@ import { RechargeService } from './recharge.service';
 import { RechargeLocalService } from './recharge-local.service';
 import { hash, safeDocument } from './recharge-validation';
 import { rechargeDocumentDigest } from './recharge-callback-receipts';
+import { SharedBankCardRepository } from '../bank-card-pool/persistence/shared-bank-card.repository';
 
 const id = '11111111-1111-4111-8111-111111111111';
 const addressId = '22222222-2222-4222-8222-222222222222';
@@ -61,8 +62,12 @@ function fixture() {
   };
   const records = new Map<string, Record<string, unknown>>();
   const tx = {
+    $queryRaw: vi.fn(),
+    $executeRaw: vi.fn(),
     idBusinessV2RechargeJob: {
-      findUnique: vi.fn(async () => job),
+      findUnique: vi.fn(async (input: { where: { id: string } }) =>
+        input.where.id === id ? job : null
+      ),
       findFirst: vi.fn(async () => null),
       update: vi.fn(async ({ data }) => Object.assign(job, data))
     },
@@ -91,13 +96,49 @@ function fixture() {
   const audit = { append: vi.fn() };
   const transactions = { execute: vi.fn(async (work) => work(tx)) };
   const orders = { recordVerifiedSuccess: vi.fn(async () => null) };
+  const shared = {
+    leaseOwner: null as string | null,
+    successCount: 0,
+    declineCount: 0,
+    status: 'active'
+  };
+  const cardTx = {
+    ...tx,
+    onlineRechargeConfig: { findUnique: vi.fn().mockResolvedValue(null) },
+    onlineRechargeCard: {
+      findFirst: vi.fn(async ({ where }) =>
+        shared.leaseOwner === where.leaseOwner ? shared : null
+      ),
+      updateMany: vi.fn(async ({ where, data }) => {
+        if (shared.leaseOwner !== where.leaseOwner) return { count: 0 };
+        shared.leaseOwner = data.leaseOwner;
+        shared.status = data.status;
+        if (data.successCount) shared.successCount++;
+        return { count: 1 };
+      })
+    }
+  };
+  const pool = new SharedBankCardRepository({} as never, {} as never, {} as never, {} as never);
+  const cards = {
+    finishSharedCard: vi.fn((_tx, jobId, report, verified) =>
+      pool.finishBitBrowser(cardTx as never, jobId, report, verified)
+    ),
+    bindVerifiedBilling: vi.fn().mockResolvedValue(true),
+    billingIdentity: vi.fn().mockResolvedValue({ numberHash: 'synthetic-card-hash' })
+  };
+  const names = { lock: vi.fn(), confirm: vi.fn() };
   const service = new RechargeService(
     repository,
     addresses as never,
     transactions as never,
     audit as never,
     undefined,
-    orders as never
+    orders as never,
+    undefined,
+    cards as never,
+    undefined,
+    undefined,
+    names as never
   );
   const local = new RechargeLocalService(
     repository,
@@ -137,7 +178,10 @@ function fixture() {
     local,
     callback,
     records,
-    payment
+    payment,
+    shared,
+    cards,
+    names
   };
 }
 
@@ -180,6 +224,78 @@ describe('本机回执恢复、单调取消和精确账本重放', () => {
     expect(f.records.size).toBe(0);
     expect(f.tx.idBusinessV2RechargeRecord.upsert).not.toHaveBeenCalled();
     expect(f.addresses.markUsed).not.toHaveBeenCalled();
+  });
+  it.each([false, true])(
+    '只读核对成功按原任务回收占卡和确认账单，重复回调只计一次；过期=%s',
+    async (expired) => {
+      const f = fixture();
+      const sourceId = '33333333-3333-4333-8333-333333333333';
+      const source = {
+        ...f.job,
+        id: sourceId,
+        state: 'finished',
+        cardId: 'original-card',
+        billingNameEncrypted: 'encrypted-name',
+        result: { ...f.payment(), addressId }
+      };
+      const report = { ...f.payment(true), recheck_only: true, payment_requests_sent: 0 };
+      f.job.result = { ...f.job.result, recheck_only: true, source_job_id: sourceId };
+      if (expired) f.job.leaseUntil = new Date(0);
+      f.shared.leaseOwner = sourceId;
+      f.tx.idBusinessV2RechargeJob.findUnique.mockImplementation(
+        async ({ where }) => (where.id === sourceId ? source : f.job) as never
+      );
+      f.orders.recordVerifiedSuccess.mockResolvedValue({
+        cardId: source.cardId,
+        rechargeJobId: sourceId
+      } as never);
+      const terminal = { type: 'finished', result: report };
+      await expect(f.callback(terminal)).resolves.toEqual({ ok: true });
+      expect(f.shared).toMatchObject({ leaseOwner: null, successCount: 1 });
+      expect(f.cards.bindVerifiedBilling).toHaveBeenCalledWith(
+        f.tx,
+        source.cardId,
+        source.billingNameEncrypted,
+        addressId,
+        source.ownerId,
+        sourceId
+      );
+      expect(f.names.confirm).toHaveBeenCalledWith(
+        f.tx,
+        'synthetic-card-hash',
+        source.billingNameEncrypted
+      );
+      await expect(f.callback(terminal)).resolves.toEqual({ ok: true });
+      expect(f.shared.successCount).toBe(1);
+      expect(f.cards.bindVerifiedBilling).toHaveBeenCalledTimes(1);
+    }
+  );
+
+  it('只读核对未核实成功时，零次付款回执不能释放原任务占卡', async () => {
+    const f = fixture();
+    f.shared.leaseOwner = 'original-job';
+    f.job.result = { ...f.job.result, recheck_only: true, source_job_id: 'original-job' };
+    await f.callback({
+      type: 'finished',
+      result: { status: 'subscription_pending', payment_attempted: false, payment_requests_sent: 0 }
+    });
+    expect(f.shared).toMatchObject({ leaseOwner: 'original-job', successCount: 0 });
+    expect(f.cards.finishSharedCard).not.toHaveBeenCalled();
+  });
+
+  it('成功订单指向其他原任务时不释放占卡或绑定账单', async () => {
+    const f = fixture();
+    f.shared.leaseOwner = 'original-job';
+    f.job.result = { ...f.job.result, recheck_only: true, source_job_id: 'original-job' };
+    f.orders.recordVerifiedSuccess.mockResolvedValue({
+      cardId: 'card',
+      rechargeJobId: 'other-job'
+    } as never);
+    await expect(
+      f.callback({ type: 'finished', result: { ...f.payment(true), payment_requests_sent: 0 } })
+    ).rejects.toThrow('原付款任务不一致');
+    expect(f.cards.finishSharedCard).not.toHaveBeenCalled();
+    expect(f.cards.bindVerifiedBilling).not.toHaveBeenCalled();
   });
   it('认证在事务锁内读取最新nonce，旧凭据无权写入任何结果', async () => {
     const f = fixture();

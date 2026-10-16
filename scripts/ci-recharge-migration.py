@@ -1,6 +1,7 @@
-"""Exercise additive recharge settings and shared proxy migrations in owned isolated MySQL."""
+"""Exercise additive recharge settings and shared pool migrations in owned isolated MySQL."""
 from pathlib import Path
 import argparse
+import json
 import subprocess
 import time
 import uuid
@@ -72,6 +73,44 @@ try:
     assert sql(f"SELECT country_code IS NULL AND kind IS NULL FROM id_business_v2_recharge_proxies WHERE id='{online}';") == '1'
     assert sql(f"SELECT connection_mode,protocol FROM id_business_v2_recharge_proxies WHERE id='{online}';") == 'extraction\thttp'
     print('Shared proxy migration passed: deduplication, metadata gaps, collision aliases, history FK, notes, telemetry and retained source verified')
+    # Shared cards: execute the real migration against historical task shapes.
+    # This fixture runs only in isolated CI; no production data or credentials.
+    for table in ['online_recharge_config', 'online_recharge_cards']:
+        start = source.index(f'CREATE TABLE `{table}`')
+        sql(source[start:source.index(';', start) + 1])
+    sql('''CREATE TABLE id_business_v2_bank_recharge_cards (
+        id CHAR(36) PRIMARY KEY, number_encrypted TEXT, number_hash CHAR(64), last4 CHAR(4),
+        expiry VARCHAR(5), active BOOLEAN, created_at DATETIME(6), updated_at DATETIME(6))
+        DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+        CREATE TABLE id_business_v2_bank_recharge_orders (
+        id CHAR(36) PRIMARY KEY, card_id CHAR(36), account_id CHAR(36), recharge_job_id CHAR(36),
+        verified_at DATETIME(6), status VARCHAR(30))
+        DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+        ALTER TABLE id_business_v2_recharge_jobs ADD card_id CHAR(36), ADD state VARCHAR(30),
+        ADD result JSON, ADD lease_until DATETIME(6);''')
+    cases = [
+        ('running', 'running', {'payment_attempted': False}, True),
+        ('unknown', 'finished', {'payment_attempted': True, 'payment_status': 'unknown', 'status': 'payment_result_unknown'}, True),
+        ('resolved', 'finished', {'payment_attempted': True, 'payment_status': 'unknown', 'status': 'payment_unknown_resolved', 'operator_resolution': 'confirmed_no_bank_request', 'resolution_job_id': str(uuid.UUID(int=999))}, False),
+        ('verified', 'finished', {'payment_attempted': True, 'payment_status': 'unknown', 'status': 'payment_result_unknown'}, False),
+        ('declined', 'finished', {'payment_attempted': True, 'payment_status': 'declined'}, False),
+        ('activated', 'finished', {'payment_attempted': True, 'status': 'subscription_activated'}, False),
+    ]
+    for index, (label, state, result, _) in enumerate(cases, 1):
+        card_id = str(uuid.UUID(int=100 + index))
+        job_id = str(uuid.UUID(int=200 + index))
+        digest = f'{index:064x}'
+        sql(f"INSERT INTO id_business_v2_bank_recharge_cards VALUES ('{card_id}','synthetic-encrypted','{digest}','{index:04d}','12/99',TRUE,NOW(6),NOW(6));")
+        sql(f"INSERT INTO id_business_v2_recharge_jobs(id,card_id,state,result,lease_until) VALUES ('{job_id}','{card_id}','{state}','{json.dumps(result)}','2000-01-01');")
+        if label == 'verified':
+            sql(f"INSERT INTO id_business_v2_bank_recharge_orders VALUES ('{uuid.UUID(int=300)}','{card_id}','{uuid.UUID(int=400)}','{job_id}',NOW(6),'completed');")
+    sql((migrations / '20261016150000_shared_bank_card_pool/migration.sql').read_text())
+    assert sql('SELECT COUNT(*) FROM online_recharge_cards;') == str(len(cases))
+    for index, (label, _, _, retained) in enumerate(cases, 1):
+        lease = sql(f"SELECT COALESCE(lease_owner,'none') FROM online_recharge_cards WHERE number_hash='{index:064x}';")
+        assert lease == (str(uuid.UUID(int=200 + index)) if retained else 'none'), label
+    assert sql("SELECT success_count,JSON_CONTAINS(allowed_plans,JSON_QUOTE('plus')) FROM online_recharge_cards WHERE last4='0004';") == '1\t1'
+    print('Shared card migration passed: unresolved leases retained; resolved, verified, declined and activated history stays unlocked')
     print('Recharge migration passed: existing row retained, nullable defaults and new fields verified')
 finally:
     if native_fixture is not None:

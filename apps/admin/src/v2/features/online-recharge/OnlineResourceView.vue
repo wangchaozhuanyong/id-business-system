@@ -22,7 +22,7 @@
               :value="item.value" /></el-select
           ><el-select v-if="hasPlan" v-model="filters.plan" aria-label="套餐" @change="search"
             ><el-option label="全部套餐" value="" /><el-option
-              v-for="item in planOptions"
+              v-for="item in section === 'cards' ? sharedCardPlanOptions : planOptions"
               :key="item.value"
               :label="item.label"
               :value="item.value" /></el-select
@@ -73,6 +73,10 @@
         ></template
       >
     </V2PageContext>
+    <p v-if="section === 'cards'" class="online-note">
+      连续明确拒付次数：仅累计支付方明确拒绝的付款，成功后清零，达到系统配置上限后停用；网络异常和结果待核对不计入。
+      账单地址：线上代充复用这张卡绑定的付款地址；未绑定时按支付地区分配。比特浏览器保留原有已核实地址规则。
+    </p>
     <p v-if="requiresOnlineSensitiveApproval(authStore.user)">
       敏感资料查看需要审批，当前页面暂不提供直接取密。
     </p>
@@ -257,6 +261,7 @@ import {
 } from './sections';
 import { onlineTableSchemas } from './tableSchemas';
 import type { OnlineAction, OnlineQuery, OnlineRow, OnlineSection } from './contracts';
+import { sharedCardPlanOptions } from './shared-card-plans';
 import '@/v2/styles/records.css';
 import './online-recharge.css';
 const props = defineProps<{ descriptor: { section: OnlineSection; moduleKey: V2ModuleKey } }>();
@@ -277,7 +282,7 @@ const dateRange = useV2SessionDraft(`online-recharge/${section}/dateRange`, () =
   ref<[string, string] | null>(null)
 );
 const hasPlan = computed(() =>
-  ['cdks', 'jobs', 'sessions', 'renewal', 'billing'].includes(section)
+  ['cards', 'cdks', 'jobs', 'sessions', 'renewal', 'billing'].includes(section)
 );
 const statusOptions = computed(() => onlineStatusOptions(section));
 const authStore = useAuthStore();

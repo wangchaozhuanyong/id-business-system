@@ -15,6 +15,7 @@ import {
 } from '../runtime/public-api';
 import { BankRechargeCardRepository } from './persistence/bank-recharge-card.repository';
 import { BankRechargeAccountService } from './bank-recharge-account.service';
+import { SharedBankCardRepository } from '../bank-card-pool/public-api';
 import {
   bankRechargeCurrency,
   bankRechargeId,
@@ -35,7 +36,8 @@ export class BankRechargeCardService {
     private readonly accounts: BankRechargeAccountService,
     private readonly transactions: V2CommandTransactionManager,
     private readonly audit: V2TransactionalAuditService,
-    private readonly encryption: FieldEncryptionService
+    private readonly encryption: FieldEncryptionService,
+    private readonly pool: SharedBankCardRepository
   ) {}
 
   async list(query: { page?: string; pageSize?: string; keyword?: string; status?: string } = {}) {
@@ -139,12 +141,23 @@ export class BankRechargeCardService {
     }
     const number = cardNumber(input.number);
     const card = await this.repository.findByNumberHash(this.encryption.hash(number)!);
-    if (card && !card.active) throw new ConflictException('该银行卡已停用，不能用于充值');
+    const shared = await this.pool.availability(this.encryption.hash(number)!);
+    if (shared ? shared.status !== 'active' || shared.leaseOwner : card && !card.active)
+      throw new ConflictException('该银行卡已停用或正在使用，不能用于充值');
     return { available: true };
   }
 
   billingIdentity(tx: V2CommandTransaction, id: string) {
     return this.repository.findInTransaction(tx, id);
+  }
+
+  finishSharedCard(
+    tx: V2CommandTransaction,
+    jobId: string,
+    report: Record<string, unknown>,
+    verified: boolean
+  ) {
+    return this.pool.finishBitBrowser(tx, jobId, report, verified);
   }
 
   encryptBillingName(value: string) {
@@ -160,15 +173,12 @@ export class BankRechargeCardService {
     addressId: string
   ) {
     bankRechargeId(id, '银行卡编号');
+    bankRechargeCurrency(currencyCode);
     const card = await this.repository.findInTransaction(tx, id);
-    if (
-      !card ||
-      !card.active ||
-      card.currencyCode !== currencyCode ||
-      card.numberHash !== this.encryption.hash(cardNumber(number))
-    ) {
-      throw new ConflictException('所选银行卡与本次卡号或币种不匹配');
+    if (!card || card.numberHash !== this.encryption.hash(cardNumber(number))) {
+      throw new ConflictException('所选银行卡与本次卡号不匹配');
     }
+    await this.pool.assertLegacyAvailable(tx, card);
     if (
       card.billingNameEncrypted &&
       this.encryption.decrypt(card.billingNameEncrypted) !== billingName
@@ -190,7 +200,7 @@ export class BankRechargeCardService {
     rechargeJobId: string
   ) {
     const card = await this.repository.findInTransaction(tx, cardId);
-    if (!card || !card.active) return false;
+    if (!card) return false;
     if (
       (card.billingNameEncrypted &&
         this.encryption.decrypt(card.billingNameEncrypted) !==
@@ -243,6 +253,7 @@ export class BankRechargeCardService {
       remark2: card.remark2 || null,
       createdByUserId: operator.id
     });
+    await this.pool.ensureLegacy(tx, item);
     await this.audit.append(tx, {
       userId: operator.id,
       module: 'id_business_v2',
@@ -264,7 +275,7 @@ export class BankRechargeCardService {
   async create(value: unknown, operator: AuthenticatedUser) {
     const card = parseManagedCard(value);
     return this.transactions.execute((tx) => this.insert(tx, card, operator), {
-      changedScopes: ['auto-recharge'],
+      changedScopes: ['auto-recharge', 'online-recharge'],
       requestId: randomUUID(),
       operator,
       retryMode: 'none',
@@ -294,7 +305,7 @@ export class BankRechargeCardService {
         return { imported: cards.length };
       },
       {
-        changedScopes: ['auto-recharge'],
+        changedScopes: ['auto-recharge', 'online-recharge'],
         requestId: randomUUID(),
         operator,
         retryMode: 'none',
@@ -388,6 +399,8 @@ export class BankRechargeCardService {
           ...(remark2 !== undefined ? { remark2: remark2 || null } : {}),
           ...(input.status ? { active: input.status === 'active' } : {})
         });
+        if (numberChanged) await this.pool.disableLegacy(tx, previous.numberHash);
+        await this.pool.syncLegacy(tx, item, input.status as 'active' | 'disabled' | undefined);
         await this.audit.append(tx, {
           userId: operator.id,
           module: 'id_business_v2',
@@ -406,7 +419,7 @@ export class BankRechargeCardService {
         return { id, last4: item.last4, status: item.active ? 'active' : 'disabled' };
       },
       {
-        changedScopes: ['auto-recharge'],
+        changedScopes: ['auto-recharge', 'online-recharge'],
         requestId: randomUUID(),
         operator,
         retryMode: 'none',
@@ -424,6 +437,7 @@ export class BankRechargeCardService {
           if (!card) throw new NotFoundException('银行卡不存在');
           if (await this.repository.hasOrders(tx, id))
             throw new ConflictException('银行卡已有订单，请改为停用');
+          await this.pool.removeLegacyData(tx, card.numberHash);
           await this.repository.delete(tx, id);
           await this.audit.append(tx, {
             userId: operator.id,
@@ -436,7 +450,12 @@ export class BankRechargeCardService {
           });
           return { id };
         },
-        { changedScopes: ['auto-recharge'], requestId: randomUUID(), operator, retryMode: 'none' }
+        {
+          changedScopes: ['auto-recharge', 'online-recharge'],
+          requestId: randomUUID(),
+          operator,
+          retryMode: 'none'
+        }
       );
     } catch (error) {
       if (error && typeof error === 'object' && 'code' in error && error.code === 'P2003') {

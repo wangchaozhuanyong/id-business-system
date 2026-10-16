@@ -40,6 +40,7 @@ const expectedFeatures = [
 ];
 const plannedFeatures = new Set();
 const expectedBackendDomains = [
+  'bank-card-pool',
   'proxy-pool',
   'online-recharge',
   'auto-registration',

@@ -224,7 +224,16 @@ const registrationAdvancedPaths = [
   'apps/api/src/id-business-v2/online-recharge/engine/plans.cjs',
   'apps/api/src/id-business-v2/online-recharge/persistence/admin.repository.ts',
   'apps/api/src/id-business-v2/online-recharge/persistence/worker.repository.spec.ts',
-  'apps/api/src/id-business-v2/online-recharge/persistence/worker.repository.ts'
+  'apps/api/src/id-business-v2/online-recharge/persistence/worker.repository.ts',
+  'apps/admin/src/v2/features/auto-recharge/V2BankRechargeOrderDrawers.vue',
+  'apps/admin/src/v2/features/auto-recharge/bank-orders-manifest.ts',
+  'apps/admin/src/v2/features/auto-recharge/useBankRechargeOrderResources.ts',
+  'apps/admin/src/v2/features/auto-recharge/useBankRechargeOrdersPage.spec.ts',
+  'apps/admin/src/v2/features/auto-recharge/useBankRechargeOrdersPage.ts',
+  'apps/api/src/id-business-v2/auto-recharge/bank-recharge-order.service.ts',
+  'apps/api/src/id-business-v2/auto-recharge/bank-recharge-verified-order.ts',
+  'apps/api/src/id-business-v2/online-recharge/online-recharge.module.ts',
+  'apps/api/src/id-business-v2/online-recharge/persistence/online-recharge.repository.ts'
 ];
 const registrationSourceFixtures = Object.fromEntries(
   [

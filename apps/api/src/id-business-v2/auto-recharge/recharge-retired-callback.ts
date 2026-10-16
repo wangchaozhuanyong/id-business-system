@@ -15,7 +15,7 @@ import { hasOfficialRechargeQuote, rechargeOperationIdentifier } from './recharg
 import { mergeRechargePaymentFacts, projectRechargePaymentRecord } from './recharge-payment-facts';
 import { recordVerifiedBankRecharge } from './recharge-bank-callback';
 import { consumeRechargeAddress } from './recharge-address-consumption';
-import { finalizeRechargeCardBilling } from './recharge-card-billing';
+import { finalizeRechargeCard } from './recharge-card-billing';
 import { completeCancellation } from './recharge-cancellation';
 import { completeRechargeLedgerCallback } from './recharge-ledger-callback';
 import { rechargeDocumentDigest, withRechargeReceipt } from './recharge-callback-receipts';
@@ -194,7 +194,15 @@ export async function completeRetiredRechargeCallback(input: {
   });
   if (zeroCancellation) await completeCancellation(tx, job, report, repository, audit);
   const order = await recordVerifiedBankRecharge(tx, job, result, input.orders);
-  await finalizeRechargeCardBilling(tx, job, order, input.cards, input.names);
+  await finalizeRechargeCard({
+    tx,
+    job,
+    report: result,
+    order,
+    repository,
+    cards: input.cards,
+    names: input.names
+  });
   const response = { ok: true };
   await repository.updateJob(tx, job.id, {
     state: 'finished',

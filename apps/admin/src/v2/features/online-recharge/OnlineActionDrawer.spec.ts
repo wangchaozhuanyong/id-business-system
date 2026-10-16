@@ -28,6 +28,10 @@ vi.mock('@/v2/components/V2FormDrawer.vue', async () => {
     })
   };
 });
+vi.mock('@/v2/services/elementPlusMessage', () => ({
+  ElMessage: { error: vi.fn(), success: vi.fn(), warning: vi.fn() }
+}));
+vi.mock('./OnlineCardSelect.vue', () => ({ default: { render: () => null } }));
 import OnlineActionDrawer from './OnlineActionDrawer.vue';
 import { clearV2SessionDrafts } from '@/v2/composables/useV2SessionDraft';
 

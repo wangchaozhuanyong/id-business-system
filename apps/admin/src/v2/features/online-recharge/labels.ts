@@ -1,6 +1,7 @@
 import { getApiErrorMessage } from '@/api/client';
 import type { OnlineRow, OnlineSection } from './contracts';
 import { formatV2DateTime } from '@/v2/utils/dateTime';
+import { sharedCardPlanLabel } from './shared-card-plans';
 export const planOptions = [
   { value: 'plus', label: 'Plus 套餐' },
   { value: 'pro_5x', label: 'Pro 100 套餐' },
@@ -127,6 +128,7 @@ export function onlineLabel(value: unknown) {
   return states[str.toLowerCase()] ?? (/^[a-z_]+$/i.test(str) ? '待核对' : str || '—');
 }
 export function onlineCell(row: OnlineRow, key: string, kind = 'text') {
+  if (key === 'allowedPlans') return sharedCardPlanLabel(row[key]);
   const change = onlineChangeDetails(row);
   const changeFields: Record<string, string> = {
     changeKind: 'kind',

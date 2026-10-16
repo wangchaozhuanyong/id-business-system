@@ -36,6 +36,8 @@ function fixture(overrides: Partial<OnlineRechargeTask> = {}, original?: OnlineR
     ...overrides
   } as OnlineRechargeTask;
   const tx = {
+    $executeRaw: vi.fn(async () => 1),
+    $queryRaw: vi.fn(async () => [{ lock_key: 'synthetic' }]),
     onlineRechargeTask: {
       findUnique: vi.fn(async (query?: { where: { id: string } }) =>
         query?.where.id === original?.id ? original! : row
@@ -58,6 +60,8 @@ function fixture(overrides: Partial<OnlineRechargeTask> = {}, original?: OnlineR
         last4: row.cardLast4,
         successCount: 0,
         declineCount: 0,
+        status: 'active',
+        allowedPlans: ['go', 'plus', 'pro_5x', 'pro_20x', 'pro_500'],
         leaseId: 'synthetic-card-lease',
         leaseVersion: 1,
         leaseOwner: row.id,
@@ -416,6 +420,7 @@ describe('准确升级与实际付款卡、报价的持久证据', () => {
   it('仅内部已保存卡路线可不要求安全码，普通新卡路线仍等待临时安全码', async () => {
     const saved = upgradeFixture();
     saved.available.mockResolvedValue([]);
+    saved.tx.onlineRechargeCard.updateMany.mockResolvedValueOnce({ count: 1 });
     expect(await saved.worker.reserveCard(saved.rpc({ requireCvc: false }))).toMatchObject({
       id: saved.context.cardId,
       hasCvc: false

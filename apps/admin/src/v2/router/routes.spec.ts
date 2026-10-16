@@ -40,7 +40,10 @@ describe('V2 route navigation state', () => {
       ['auto-recharge/proxies', 'proxies'],
       ['online-recharge/proxies', 'proxies'],
       ['auto-recharge/mailbox', 'mailbox'],
-      ['auto-recharge/chatgpt-accounts', 'chatgpt-accounts']
+      ['auto-recharge/chatgpt-accounts', 'chatgpt-accounts'],
+      ['auto-recharge/bank-cards', 'bank-cards'],
+      ['online-recharge/cards', 'bank-cards'],
+      ['auto-recharge/bank-orders', 'bank-orders']
     ]) {
       const redirect = children.find((route) => route.path === old)?.redirect;
       expect(typeof redirect).toBe('function');

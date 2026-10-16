@@ -147,15 +147,37 @@ export class OnlineRechargeAdminRepository {
       const available = await this.credentials.available(
         result.items.map((row) => (row as { id: string }).id)
       );
+      const addressIds = result.items.flatMap((row) => {
+        const addressId = (row as { addressId?: string }).addressId;
+        return addressId ? [addressId] : [];
+      });
+      const addresses = await this.repository.read((db) =>
+        db.onlineRechargeAddress.findMany({
+          where: { id: { in: addressIds } },
+          select: { id: true, country: true, city: true, street: true }
+        })
+      );
+      const addressById = new Map(addresses.map((address) => [address.id, address]));
       return {
         ...result,
-        items: result.items.map((row) => {
-          const item = sanitize(JSON.parse(JSON.stringify(row))) as Record<string, unknown>;
-          delete item.numberHash;
-          delete item.leaseId;
-          delete item.leaseOwner;
-          return { ...item, hasCvc: available.includes(String(item.id)) };
-        })
+        items: await Promise.all(
+          result.items.map((row) => {
+            const item = sanitize(JSON.parse(JSON.stringify(row))) as Record<string, unknown>;
+            const inUse = Boolean((row as { leaseOwner?: string }).leaseOwner);
+            const address = addressById.get(String(item.addressId));
+            delete item.numberHash;
+            delete item.leaseId;
+            delete item.leaseOwner;
+            return {
+              ...item,
+              inUse,
+              addressSummary: address
+                ? `${address.country} · ${address.city} · ${address.street}`
+                : '未绑定，按地区分配',
+              hasCvc: available.includes(String(item.id))
+            };
+          })
+        )
       };
     }
     if (section === 'login-logs')

@@ -1,5 +1,16 @@
 import type { OnlineAction, OnlineField, OnlineQuery, OnlineRow, OnlineSection } from './contracts';
 import { planHelp, planOptions } from './labels';
+import { sharedCardPlanOptions } from './shared-card-plans';
+const allowedPlans: OnlineField = {
+  key: 'allowedPlans',
+  label: '适用套餐',
+  type: 'select',
+  multiple: true,
+  options: sharedCardPlanOptions,
+  initial: sharedCardPlanOptions.map((option) => option.value),
+  required: true,
+  help: '两种充值共用此限制；手选和智能分配都只能使用勾选套餐的银行卡。'
+};
 const plan: OnlineField = {
   key: 'plan',
   label: '套餐',
@@ -58,7 +69,7 @@ export const sectionTitles: Record<OnlineSection, string> = {
   'browser-pool': '浏览器池',
   addresses: '免税地址',
   'checkout-debug': '支付链接调试',
-  cards: '银行卡池',
+  cards: '银行卡共享池',
   cdks: '兑换码管理',
   sessions: 'Session 管理',
   renewal: '续费管理',
@@ -77,7 +88,7 @@ export const sectionDescriptions: Record<OnlineSection, string> = {
   addresses: '管理银行卡关联的免税地址，生成美国地址并清理未绑定记录。',
   'checkout-debug': '使用原套餐和地区生成支付链接，执行在付款前停止。',
   cards:
-    '银行卡默认脱敏；安全码仅在执行器内存保留最多 30 分钟，任务结束、失去租约或执行器重启后清除，需要时重新补充。',
+    '比特浏览器充值与线上代充共用，按适用套餐匹配；安全码仅在执行器内存临时保留，任务结束、失去租约或重启后清除。',
   cdks: '生成、导入、出库和查询兑换码；已被任务占用的兑换码受保护。',
   sessions: '查看任务会话资料和订阅情况，查看敏感资料需要填写原因并记录审计。',
   renewal: '查询订阅到期和续费状态，按原逻辑取消或恢复自动续费。',
@@ -98,11 +109,55 @@ const taskTop: OnlineAction[] = [
   {
     key: 'start',
     label: '管理员代提交',
-    fields: [session, plan, { key: 'code', label: '兑换码' }]
+    fields: [
+      session,
+      plan,
+      {
+        key: 'cardId',
+        label: '银行卡',
+        type: 'card-select',
+        help: '留空时智能分配对应套餐的可用银行卡；使用兑换码时须与兑换码套餐一致。'
+      },
+      { key: 'code', label: '兑换码' }
+    ]
   }
 ];
 export const topActions: Partial<Record<OnlineSection, readonly OnlineAction[]>> = {
   cards: [
+    {
+      key: 'create',
+      label: '添加银行卡',
+      fields: [
+        { key: 'number', label: '卡号', type: 'secret', transient: true, required: true },
+        {
+          key: 'expiryMonth',
+          label: '有效月份',
+          type: 'number',
+          min: 1,
+          max: 12,
+          initial: 1,
+          required: true
+        },
+        {
+          key: 'expiryYear',
+          label: '有效年份',
+          type: 'number',
+          min: 2000,
+          max: 9999,
+          initial: new Date().getFullYear(),
+          required: true
+        },
+        { key: 'holderName', label: '账单姓名' },
+        {
+          key: 'cvc',
+          label: '临时安全码',
+          type: 'secret',
+          transient: true,
+          help: '仅线上代充执行器临时使用；比特浏览器充值仍逐笔输入。'
+        },
+        allowedPlans
+      ]
+    },
     {
       key: 'import',
       label: '导入银行卡',
@@ -114,7 +169,8 @@ export const topActions: Partial<Record<OnlineSection, readonly OnlineAction[]>>
           required: true,
           transient: true,
           help: '每行：卡号|月/年|安全码|持卡人。安全码不保存；单次最多 500 条。'
-        }
+        },
+        allowedPlans
       ]
     }
   ],
@@ -235,8 +291,16 @@ export const rowActions: Partial<Record<OnlineSection, readonly OnlineAction[]>>
     },
     {
       key: 'update',
-      label: '状态与地址',
-      fields: [status, { key: 'addressId', label: '关联地址编号' }]
+      label: '编辑适用套餐',
+      fields: [
+        status,
+        allowedPlans,
+        {
+          key: 'addressId',
+          label: '账单地址编号',
+          help: '线上代充复用此地址；留空时按支付地区分配。执行中的银行卡不能更改。'
+        }
+      ]
     },
     remove
   ],
