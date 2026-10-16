@@ -103,9 +103,28 @@ export function sharedBankCardSchemaMatches(before, after) {
     '  allowedPlans    Json                      @default("[\\"go\\",\\"plus\\",\\"pro_5x\\",\\"pro_20x\\",\\"pro_500\\"]") @map("allowed_plans")\n';
   return before !== after && after.split(line).length === 2 && after.replace(line, '') === before;
 }
+export function isSharedBankCardControlsOnly(paths) {
+  const controls = [
+    'scripts/ci-recharge-scope.mjs',
+    'scripts/ci-recharge-check.mjs',
+    'scripts/ci-shared-bank-card-scope.mjs',
+    'scripts/ci-shared-bank-card-scope.test.mjs',
+    'scripts/production-release/shared-bank-card-release.py',
+    'scripts/production-release/shared-bank-card-dispatch.py',
+    'scripts/production-release/shared-bank-card-release.test.py',
+    'docs/SHARED_BANK_CARD_POOL_20261016.md'
+  ];
+  return (
+    new Set(paths).size === paths.length &&
+    paths.some((p) => p.startsWith('scripts/production-release/shared-bank-card-')) &&
+    paths.every((p) => controls.includes(p))
+  );
+}
 export const sharedBankCardParts = Object.freeze(['guards', 'api', 'admin', 'migration']);
 export function sharedBankCardCommands(part, paths) {
-  if (!isSharedBankCardOnly(paths)) throw new Error('Unsupported shared bank card scope');
+  const controlsOnly = isSharedBankCardControlsOnly(paths);
+  if (!isSharedBankCardOnly(paths) && !controlsOnly)
+    throw new Error('Unsupported shared bank card scope');
   const npm = (...args) => ['npm', ...args];
   if (part === 'guards')
     return [
@@ -126,19 +145,22 @@ export function sharedBankCardCommands(part, paths) {
         'scripts/check-v2-module-architecture.test.mjs'
       ],
       ['python3', '-B', 'scripts/production-release/shared-bank-card-release.test.py'],
-      ...[
-        'admin-ui',
-        'v2-ui-language',
-        'v2-color-contrast',
-        'v2-table-standard',
-        'v2-loading-standard',
-        'v2-module-architecture',
-        'v2-isolation',
-        'v2-prisma-runtime-boundary',
-        'v2-concurrency-standard',
-        'v2-decimal-standard'
-      ].map((n) => npm('run', 'check:' + n))
+      ...(controlsOnly
+        ? []
+        : [
+            'admin-ui',
+            'v2-ui-language',
+            'v2-color-contrast',
+            'v2-table-standard',
+            'v2-loading-standard',
+            'v2-module-architecture',
+            'v2-isolation',
+            'v2-prisma-runtime-boundary',
+            'v2-concurrency-standard',
+            'v2-decimal-standard'
+          ].map((n) => npm('run', 'check:' + n)))
     ];
+  if (controlsOnly) throw new Error('Unsupported shared card control part');
   if (part === 'migration') return [['python3', '-B', 'scripts/ci-recharge-migration.py']];
   const shared = npm('run', 'build', '--workspace', '@apple-business/shared');
   if (part === 'api')

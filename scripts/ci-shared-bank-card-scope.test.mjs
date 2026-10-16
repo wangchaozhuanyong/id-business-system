@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import {
   sharedBankCardPaths,
+  isSharedBankCardControlsOnly,
   isSharedBankCardOnly,
   sharedBankCardSchemaMatches,
   sharedBankCardCommands
@@ -39,4 +40,20 @@ test('affected CI retains actual migration and every UI guard plus API and Admin
     ['python3', '-B', 'scripts/ci-recharge-migration.py']
   ]);
   assert.throws(() => sharedBankCardCommands('online-engine', [...sharedBankCardPaths]));
+});
+
+test('native control repair cannot admit schema build recipe or application changes', () => {
+  const paths = [
+    'scripts/production-release/shared-bank-card-release.py',
+    'scripts/production-release/shared-bank-card-release.test.py'
+  ];
+  assert.equal(isSharedBankCardControlsOnly(paths), true);
+  for (const extra of [
+    'apps/api/prisma-mysql/schema.prisma',
+    'scripts/production-release/shared-bank-card-contract.json',
+    'scripts/ci-recharge-migration.py',
+    'apps/api/src/id-business-v2/online-recharge/persistence/worker.repository.ts'
+  ])
+    assert.equal(isSharedBankCardControlsOnly([...paths, extra]), false);
+  assert.throws(() => sharedBankCardCommands('api', paths));
 });

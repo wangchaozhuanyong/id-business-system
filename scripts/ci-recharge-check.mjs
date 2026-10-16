@@ -1,5 +1,9 @@
 import { isGptRechargeOnly } from './ci-gpt-recharge-scope.mjs';
-import { isSharedBankCardOnly, sharedBankCardCommands } from './ci-shared-bank-card-scope.mjs';
+import {
+  isSharedBankCardOnly,
+  isSharedBankCardControlsOnly,
+  sharedBankCardCommands
+} from './ci-shared-bank-card-scope.mjs';
 import {
   isMailboxRealtimeOnly,
   isMailboxRealtimeControlsOnly
@@ -329,7 +333,10 @@ if (
   for (const [file, ...args] of chatgptSalesCommands(part, changed)) run(file, args);
   process.exit(0);
 }
-if (mode === 'recharge' && isSharedBankCardOnly(changed)) {
+if (
+  (mode === 'recharge' && isSharedBankCardOnly(changed)) ||
+  (mode === 'ci-only' && isSharedBankCardControlsOnly(changed))
+) {
   for (const [file, ...args] of sharedBankCardCommands(part, changed)) run(file, args);
   process.exit(0);
 }
