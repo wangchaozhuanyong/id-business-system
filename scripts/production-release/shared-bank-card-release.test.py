@@ -89,6 +89,34 @@ class PublicationTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, 'REUSED_EXECUTOR_SCOPE_CHANGED'):
                 r.verify_proof(proof, {**plan, field: value}, c, files)
 
+    def test_large_generated_declaration_has_a_bounded_scoped_archive_limit(self):
+        import io
+        import tarfile
+        import tempfile
+        runtime = HERE.parents[1] / '.runtime'
+        runtime.mkdir(exist_ok=True)
+
+        def bundle(name, size, duplicate=False):
+            buffer = io.BytesIO()
+            with tarfile.open(fileobj=buffer, mode='w:gz') as archive:
+                for _ in range(2 if duplicate else 1):
+                    info = tarfile.TarInfo(name)
+                    info.size = size
+                    archive.addfile(info, io.BytesIO(b'x' * size))
+            return buffer.getvalue()
+        with tempfile.TemporaryDirectory(dir=runtime) as owned:
+            root = Path(owned)
+            target = r.safe_archive(bundle('payload/api/prisma-client/index.d.ts', 13 * 1024**2), root / 'valid')
+            self.assertEqual((target / 'api/prisma-client/index.d.ts').stat().st_size, 13 * 1024**2)
+            for i, raw in enumerate([
+                bundle('payload/api/modules/other.js', 9 * 1024**2),
+                bundle('payload/api/prisma-client/index.d.ts', 17 * 1024**2),
+                bundle('payload/../../unowned', 1),
+                bundle('payload/duplicate.js', 1, True)
+            ]):
+                with self.assertRaises(RuntimeError):
+                    r.safe_archive(raw, root / ('invalid-' + str(i)))
+
     def test_failure_keeps_owned_maintenance_for_forward_repair(self):
         # Parse the actual finally block: cleanup cannot run there after an
         # uncertain ALTER or switch, while the SQL fence must always close.

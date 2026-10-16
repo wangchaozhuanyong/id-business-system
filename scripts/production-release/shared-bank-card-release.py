@@ -3,6 +3,8 @@ import datetime
 import hashlib
 import importlib.util
 import json
+import io
+import tarfile
 from pathlib import Path
 import re
 import shutil
@@ -174,7 +176,7 @@ def release(plan, contract):
         need(not stage.exists(), 'RELEASE_ALREADY_ACCEPTED')
         stage.mkdir(mode=0o700)
         artifact = download_artifact(plan)
-        payload = h.safe_archive(artifact, stage / 'content')
+        payload = safe_archive(artifact, stage / 'content')
         raw_proof = (payload / 'build-proof.json').read_bytes()
         need(sha(raw_proof) == plan['buildProofSha256'], 'PROOF_CHANGED')
         proof = json.loads(raw_proof)
@@ -349,3 +351,29 @@ def verify_contract(c):
 def verify_native_client(d, container, contract):
     code = "const fs=require('fs'),c=require('crypto'),root='/app/node_modules/.prisma/client/';console.log(JSON.stringify({version:require('@prisma/client/package.json').version,native:Object.fromEntries(fs.readdirSync(root).filter(n=>n.endsWith('.node')).map(n=>[n,c.createHash('sha256').update(fs.readFileSync(root+n)).digest('hex')]))}))"
     need(json.loads(d.run('docker', 'exec', container, 'node', '-e', code)) == contract['nativeClient'], 'NATIVE_DATABASE_ENGINE_CHANGED')
+
+
+def safe_archive(raw, directory):
+    need(not directory.exists(), 'ARTIFACT_OUTPUT_EXISTS')
+    directory.mkdir(mode=0o700)
+    total, names = 0, set()
+    with tarfile.open(fileobj=io.BytesIO(raw)) as archive:
+        members = archive.getmembers()
+        need(len(members) <= 1024, 'ARTIFACT_MEMBER_LIMIT')
+        for item in members:
+            parts = Path(item.name).parts
+            total += item.size
+            limit = 16 * 1024**2 if item.name == 'payload/api/prisma-client/index.d.ts' else 8 * 1024**2
+            need(parts and parts[0] == 'payload' and not item.name.startswith('/')
+                 and '..' not in parts and item.name not in names
+                 and (item.isfile() or item.isdir()) and item.size <= limit
+                 and total <= 32 * 1024**2, 'ARTIFACT_PATH_INVALID')
+            names.add(item.name)
+            path = directory / item.name
+            if item.isdir():
+                path.mkdir(parents=True, exist_ok=True)
+            else:
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(archive.extractfile(item).read())
+                path.chmod(0o644)
+    return directory / 'payload'
