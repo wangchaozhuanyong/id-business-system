@@ -57,8 +57,13 @@ const formBudgetPaths = new Set([
 ]);
 export function isRechargeFormBudgetOnly(paths) {
   return (
-    ['payment_form.py', 'pay.py', 'test_payment_form_budget.py'].every((name) =>
-      paths.includes(`apps/api/src/id-business-v2/auto-recharge/worker/${name}`)
+    [
+      ['payment_form.py', 'pay.py', 'test_payment_form_budget.py'],
+      ['pay.py', 'test_native_checkout.py', 'test_payment_form_budget.py']
+    ].some((required) =>
+      required.every((name) =>
+        paths.includes(`apps/api/src/id-business-v2/auto-recharge/worker/${name}`)
+      )
     ) && paths.every((path) => formBudgetPaths.has(path))
   );
 }

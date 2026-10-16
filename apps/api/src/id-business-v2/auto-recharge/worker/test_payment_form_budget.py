@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock, Mock, patch
 
 from browser_session import SessionBudget
 from checkout_core import Stop
-from pay import payment_handler
+from pay import payment_handler, current_quote
 from payment_form import CARD_FIELDS, fill_official_form, wait_for_payment_form
 from test_payment_form_focus import DeferredCheckout, DeferredFields, details
 from browser_checkout import quote_from_text
@@ -165,3 +165,59 @@ class PreparationBudgetTests(unittest.IsolatedAsyncioTestCase):
         self.ledger.begin.assert_not_called()
         self.page.reload.assert_not_awaited()
         self.assertFalse(self.card.number or self.card.cvc)
+
+class OriginalQuoteReadTests(unittest.IsolatedAsyncioTestCase):
+    def complete_quote(self):
+        return quote_from_text('ChatGPT Plus\n今日应付金额\nMYR 92.50\n预估税费\nMYR 0.00\n'
+                               '将按 每月 自动续订。将按 MYR 92.50/月 收费。', 'MYR')
+
+    async def short_poll(self, seconds):
+        await self.original_sleep(min(seconds, .002))
+
+    async def test_missing_binding_is_read_again_and_progress_uses_original_round(self):
+        self.original_sleep = asyncio.sleep
+        clock = Clock()
+        budget = SessionBudget(120, clock=clock)
+        clock.now = 40
+        guard = SimpleNamespace(official_binding_version=1)
+        value = self.complete_quote()
+
+        async def read():
+            guard.official_binding_version = 2
+
+        with (patch('pay.verified_quote_once', new=AsyncMock(return_value=value)),
+              patch('pay.asyncio.sleep', new=self.short_poll), patch('pay.progress') as report):
+            reader = AsyncMock(side_effect=read)
+            quote = await current_quote(object(), guard, 2, wait_seconds=.2,
+                                        binding_reader=reader, progress_budget=budget)
+        self.assertEqual(quote, value)
+        reader.assert_awaited_once()
+        self.assertEqual(report.call_args.kwargs['quote_elapsed_seconds'], 40)
+        self.assertEqual(report.call_args.kwargs['quote_wait_seconds'], 120)
+
+    async def test_read_limit_and_timeout_keep_page_and_never_accept_visible_old_price(self):
+        self.original_sleep = asyncio.sleep
+        page, guard, reader = SimpleNamespace(reload=AsyncMock()), SimpleNamespace(official_binding_version=2), AsyncMock()
+        with (patch('pay.verified_quote_once', new=AsyncMock(return_value=None)),
+              patch('pay.asyncio.sleep', new=self.short_poll), patch('pay.progress'),
+              patch('pay.NATIVE_QUOTE_READ_INTERVAL', 0), self.assertRaises(Stop) as stopped):
+            await current_quote(page, guard, wait_seconds=.04, binding_reader=reader)
+        self.assertEqual(reader.await_count, 3)
+        self.assertEqual(stopped.exception.report['reason'], 'payment_quote_not_ready')
+        page.reload.assert_not_awaited()
+
+    async def test_hanging_original_read_is_cancelled_at_remaining_deadline(self):
+        ended = asyncio.Event()
+
+        async def read():
+            try:
+                await asyncio.Event().wait()
+            finally:
+                ended.set()
+
+        with (patch('pay.verified_quote_once', new=AsyncMock(return_value=None)),
+              patch('pay.progress'), self.assertRaises(Stop) as stopped):
+            await current_quote(object(), SimpleNamespace(official_binding_version=1),
+                                wait_seconds=.03, binding_reader=read)
+        self.assertEqual(stopped.exception.report['reason'], 'payment_quote_not_ready')
+        self.assertTrue(ended.is_set())
