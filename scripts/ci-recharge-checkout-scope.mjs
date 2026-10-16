@@ -28,6 +28,7 @@ const sourceRecoveryPaths = new Set([
   ...checkoutSourceRecoveryControls,
   'apps/api/src/id-business-v2/auto-recharge/worker/payment_form.py',
   'apps/api/src/id-business-v2/auto-recharge/worker/test_payment_form_focus.py',
+  'apps/api/src/id-business-v2/auto-recharge/worker/test_connector_health.py',
   'apps/api/src/id-business-v2/auto-recharge/recharge-account-restore.ts',
   'apps/api/src/id-business-v2/auto-recharge/recharge-unidentified-checkout.ts',
   'apps/api/src/id-business-v2/auto-recharge/recharge-unidentified-checkout.spec.ts',
