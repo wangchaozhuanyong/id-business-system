@@ -44,6 +44,12 @@ def inventory(path):
     return load('registration-parity-diagnostics-build.py').inventory(path)
 
 
+def reviewed_source(name, expected):
+    raw = (ROOT / name).read_bytes()
+    need(digest(raw) == expected, 'REVIEWED_APPLICATION_CHANGED')
+    return raw
+
+
 def verify_sources():
     c = json.loads(CONTRACT.read_bytes())
     load('mailbox-realtime-release.py').verify_contract(c)
@@ -51,9 +57,9 @@ def verify_sources():
     need(git('rev-parse', c['sourceBaseline'] + '^{tree}').decode().strip() == c['sourceBaselineTree'], 'BASE_CHANGED')
     changed = set(git('diff', '--name-only', c['sourceBaseline'], 'HEAD').decode().splitlines())
     need(changed == set(c['expectedGitChanges']), 'SOURCE_SCOPE_CHANGED')
-    git('merge-base', '--is-ancestor', c['reviewedApplicationCommit'], 'HEAD')
+    # Squash merges change ancestry. Bind the nine shipped files to the exact checked tree bytes.
     for name, value in c['sources'].items():
-        need(digest(git('show', c['reviewedApplicationCommit'] + ':' + name)) == value, 'REVIEWED_APPLICATION_CHANGED')
+        reviewed_source(name, value)
     for name, value in {**c['validationSources'], **c['reviewedFileHashes']}.items():
         need(digest((ROOT / name).read_bytes()) == value, 'REVIEWED_SOURCE_CHANGED')
     return c
@@ -79,7 +85,7 @@ def prepare(native_evidence=True):
             for name in {**c['sources'], **c['validationSources']}:
                 destination = context / name
                 destination.parent.mkdir(parents=True, exist_ok=True)
-                raw = git('show', c['reviewedApplicationCommit'] + ':' + name) if name in c['sources'] else (ROOT / name).read_bytes()
+                raw = reviewed_source(name, c['sources'][name]) if name in c['sources'] else (ROOT / name).read_bytes()
                 if name.endswith('/auto-registration/apple-mailboxes.service.spec.ts'):
                     # Preserve the deployed fixture; add only this task's eight regression cases.
                     text = raw.decode()

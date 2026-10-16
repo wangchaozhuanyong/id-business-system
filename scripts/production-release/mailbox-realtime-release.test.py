@@ -87,6 +87,18 @@ class MailboxRelease(unittest.TestCase):
                 b.build()
             execute.assert_not_called()
 
+    def test_squash_safe_source_binding_rejects_changed_bytes(self):
+        output = ROOT / '.runtime/mailbox-release/control-tests'
+        output.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=output) as temporary, patch.object(b, 'ROOT', Path(temporary)):
+            source = Path(temporary) / 'reviewed.ts'
+            source.write_bytes(b'approved')
+            expected = b.digest(source.read_bytes())
+            self.assertEqual(b.reviewed_source('reviewed.ts', expected), b'approved')
+            source.write_bytes(b'unreviewed')
+            with self.assertRaisesRegex(RuntimeError, 'REVIEWED_APPLICATION_CHANGED'):
+                b.reviewed_source('reviewed.ts', expected)
+
     def test_unfrozen_release_stops_before_helpers_or_platform_calls(self):
         with patch.object(r, 'helper') as helper:
             helper.return_value.verify_contract = Mock()

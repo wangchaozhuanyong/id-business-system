@@ -1306,11 +1306,11 @@
     "scripts/ci-mailbox-realtime-scope.test.mjs": "a6ff492b8563c470de0d246be18bc1033cb9252ecd671119c59e96dd80014a5a",
     "scripts/ci-recharge-check.mjs": "a23f652eecb85416b378900a3afa095832ee0318808c375e7008086c3652602d",
     "scripts/ci-recharge-scope.mjs": "ddd41df7f3b03b3b60e58a491eef9aa603a354e47d30968627ff6a87063f984d",
-    "scripts/production-release/mailbox-realtime-build.py": "17ab6f84e8079f8db911e617dc1e8d0af1274a4fbc5d597941b22c16a0647bdf",
+    "scripts/production-release/mailbox-realtime-build.py": "350f26f5030d88fd93471681f51b4e8516cb3e2bccae7a1fc87ab2d3ff0f3f69",
     "scripts/production-release/mailbox-realtime-dispatch.py": "b3ee5e4c40d2af93d6a8f58c76ad4ff5238843b86e5d7e1ceefeb9b8398bed13",
     "scripts/production-release/mailbox-realtime-inspect.py": "6be3feb48ea26b68046bbed04d5084dfc047878b0c2d510a9434812a3bca0a64",
     "scripts/production-release/mailbox-realtime-release.py": "59cdacc6f28b93176ba744b806a54fa26e7c2e83ea2446f7de351ad4d8777d72",
-    "scripts/production-release/mailbox-realtime-release.test.py": "12e25abf814168de8b152ef064ac71fd8f700a455209a8f9b0146b2735450055"
+    "scripts/production-release/mailbox-realtime-release.test.py": "5ded2932b9ee08d1f95f8690bb43a1200fc827cc9bb4c4fe7e00a299731a71f7"
   },
   "roleSourceCommits": {
     "admin": "13e52ad670c6b6daa94ab2df009aaa8a9d69b97c",
