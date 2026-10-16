@@ -15,6 +15,7 @@ import {
 import { readRegistrationNativeReuse } from './ci-registration-closure-native-reuse.mjs';
 import {
   isOnlineProxyCountryOnly,
+  isOnlineProxyCountryValidationOnly,
   onlineProxyCountryCommands
 } from './ci-online-proxy-country-scope.mjs';
 import {
@@ -85,7 +86,10 @@ const changed = execFileSync('git', ['diff', '--name-only', base, 'HEAD'], { enc
 // This API/Admin feature preserves the deployed engine image. Run every affected
 // source/test/build/UI check; the main-only workflow verifies disposable MySQL.
 // Any additional runtime, schema or dependency path uses the existing dispatcher.
-if (mode === 'recharge' && isOnlineProxyCountryOnly(changed)) {
+if (
+  (mode === 'recharge' && isOnlineProxyCountryOnly(changed)) ||
+  (mode === 'ci-only' && isOnlineProxyCountryValidationOnly(changed))
+) {
   for (const [file, ...args] of onlineProxyCountryCommands(part, changed)) run(file, args);
   process.exit(0);
 }
