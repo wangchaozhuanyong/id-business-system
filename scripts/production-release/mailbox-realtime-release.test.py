@@ -7,6 +7,7 @@ import json
 from pathlib import Path
 import tarfile
 import tempfile
+import subprocess
 import unittest
 from unittest.mock import Mock, patch
 
@@ -23,6 +24,7 @@ def load(name):
 
 r = load('mailbox-realtime-release.py')
 b = load('mailbox-realtime-build.py')
+i = load('mailbox-realtime-inspect.py')
 
 
 class MailboxRelease(unittest.TestCase):
@@ -90,6 +92,28 @@ class MailboxRelease(unittest.TestCase):
             helper.return_value.verify_contract = Mock()
             with self.assertRaisesRegex(RuntimeError, 'CONTRACT_SCOPE_CHANGED'):
                 r.release({'mode': 'release'}, {**self.c, 'frozen': False}, Mock(), Mock())
+
+    def test_inspection_waits_for_accepted_command_without_resubmitting(self):
+        output = ROOT / '.runtime/mailbox-release/control-tests'
+        output.mkdir(parents=True, exist_ok=True)
+        pending = subprocess.CompletedProcess([], 254, b'', b'InvocationDoesNotExist')
+        success = subprocess.CompletedProcess([], 0, json.dumps({'Status': 'Success',
+            'StandardOutputContent': json.dumps({'status': 'MAILBOX_RUNTIME_CAPTURED'})}).encode(), b'')
+        with tempfile.TemporaryDirectory(dir=output) as temporary, \
+                patch.object(i, 'OUTPUT', Path(temporary)), \
+                patch.object(i.subprocess, 'run', side_effect=[pending, success]) as execute, \
+                patch.object(i.time, 'sleep'):
+            self.assertEqual(i.await_invocation('accepted')['status'], 'MAILBOX_RUNTIME_CAPTURED')
+            self.assertEqual(execute.call_count, 2)
+            self.assertTrue(all('get-command-invocation' in call.args[0] for call in execute.call_args_list))
+            self.assertTrue((Path(temporary) / 'runtime.json').is_file())
+
+    def test_inspection_program_compiles_and_has_no_write_or_business_command(self):
+        source = i.capture_source()
+        ast.parse(source)
+        for command in ('docker restart', 'docker compose', 'send-command', 'INSERT INTO', 'UPDATE ', 'DELETE FROM'):
+            self.assertNotIn(command, source)
+        self.assertIn("fcntl.LOCK_SH|fcntl.LOCK_NB", source)
 
 
 if __name__ == '__main__':

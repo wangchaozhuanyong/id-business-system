@@ -1003,7 +1003,9 @@
     "upload_compat.py": "457653d75fdab9a2bb73b7bbf0a5428d7bbd67535f7a2a7ea74306cb0193cc00",
     "workspace.py": "6bcb2050633db830068fd1a1b1a30d3dd75bf45f24aef3ab5b9c398d632e7237"
   },
-  "browserAcceptances": ["scripts/acceptance-v2-mailbox-realtime.mjs"],
+  "browserAcceptances": [
+    "scripts/acceptance-v2-mailbox-realtime.mjs"
+  ],
   "buildSupportHashes": {
     "scripts/production-release/api-admin-scope.py": "50446ab528a288ca1c2129c84f1bf4a90f59fa313a92bcff0058a258c8b8e925",
     "scripts/production-release/chatgpt-sales-build.py": "a55db7b0f04729d6f15d50ef3d7ae81a0746dceb2e95cd77408d0de74b9b7590",
@@ -1231,7 +1233,11 @@
       "nativeProofSha256": "2cb761e7d3073814125d3a7cbfe3b0c2cd9258cc6f2684c75fb8317bb2016448",
       "receiptSha256": "76c081426b98bb1094e40e5e6826a42209ea3a52cdb69027229aeec85314422b"
     },
-    "files": ["index.js", "edge.js", "wasm.js"],
+    "files": [
+      "index.js",
+      "edge.js",
+      "wasm.js"
+    ],
     "publishedContext": "/app"
   },
   "protectedMigrations": {
@@ -1294,13 +1300,13 @@
     "scripts/acceptance-v2-mailbox-realtime.mjs": "0fde62b43ee0686e5e9330c14e34621090f34ac5915528c719d5e9859a154c61",
     "scripts/ci-mailbox-realtime-scope.mjs": "65be17140315be82950d079c571f6eb02041ca02a4c442e38c8a1031c5408c6f",
     "scripts/ci-mailbox-realtime-scope.test.mjs": "a6ff492b8563c470de0d246be18bc1033cb9252ecd671119c59e96dd80014a5a",
-    "scripts/ci-recharge-check.mjs": "4b82670df456d8f31b2357fa0d7ca321148ea259706ca40feaed3134eb646e66",
+    "scripts/ci-recharge-check.mjs": "460d51e25649456e1b4a7c326b2b4fcebdc1d4ed7a96d6dbeae5e57b069f4556",
     "scripts/ci-recharge-scope.mjs": "ddd41df7f3b03b3b60e58a491eef9aa603a354e47d30968627ff6a87063f984d",
     "scripts/production-release/mailbox-realtime-build.py": "c229b82d47d301db78a445dce95f6720ab74cfd211b42e6d7d5d37146b0e0707",
     "scripts/production-release/mailbox-realtime-dispatch.py": "b3ee5e4c40d2af93d6a8f58c76ad4ff5238843b86e5d7e1ceefeb9b8398bed13",
-    "scripts/production-release/mailbox-realtime-inspect.py": "301ba73f638ee5c2c2867f7f4bf1396996fe47aa12647189aa68c96c1ec771c5",
+    "scripts/production-release/mailbox-realtime-inspect.py": "6be3feb48ea26b68046bbed04d5084dfc047878b0c2d510a9434812a3bca0a64",
     "scripts/production-release/mailbox-realtime-release.py": "8997ec61dd659bf2a11583eb0720e8b2672bcbb003ddf5590cbf93c42f8a5eee",
-    "scripts/production-release/mailbox-realtime-release.test.py": "6cfe799577c874175ec7aca183be15a82cdc73a583ad61cc484ae6b100be734e"
+    "scripts/production-release/mailbox-realtime-release.test.py": "12e25abf814168de8b152ef064ac71fd8f700a455209a8f9b0146b2735450055"
   },
   "roleSourceCommits": {
     "admin": "d44393c5bee8c30c82737fc3e00fa89785a95667",

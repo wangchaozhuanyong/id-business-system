@@ -93,6 +93,29 @@ def capture_source():
             + '\nCONTRACT=' + repr(c) + '\n' + REMOTE_PREAMBLE + helpers + REMOTE_CAPTURE)
 
 
+def await_invocation(command_id):
+    # An accepted SSM command can precede its invocation record. Never submit it twice.
+    for _ in range(24):
+        response = subprocess.run(('aws', 'ssm', 'get-command-invocation', '--region', 'ap-northeast-1',
+            '--command-id', command_id, '--instance-id', 'i-05836da38606e633c', '--output', 'json'),
+            cwd=ROOT, capture_output=True)
+        if response.returncode:
+            if b'InvocationDoesNotExist' in response.stderr:
+                time.sleep(5)
+                continue
+            raise RuntimeError('MAILBOX_RUNTIME_PLATFORM_FAILED')
+        value = json.loads(response.stdout)
+        if value['Status'] in ('Pending', 'InProgress', 'Delayed'):
+            time.sleep(5)
+            continue
+        (OUTPUT / 'invocation.json').write_bytes(response.stdout)
+        result = json.loads(value['StandardOutputContent'])
+        assert value['Status'] == 'Success' and result['status'] == 'MAILBOX_RUNTIME_CAPTURED'
+        (OUTPUT / 'runtime.json').write_text(json.dumps(result, sort_keys=True, indent=2) + '\n')
+        return result
+    raise RuntimeError('MAILBOX_RUNTIME_CAPTURE_PENDING')
+
+
 def main():
     assert os.environ['GITHUB_REF']=='refs/heads/main' and os.environ['GITHUB_REPOSITORY']=='wangchaozhuanyong/id-business-system'
     assert os.environ['EXPECTED_CURRENT']==CURRENT and os.environ['GITHUB_SHA']==os.environ['RELEASE_COMMIT']
@@ -104,15 +127,8 @@ def main():
     parameters={'commands':[command],'executionTimeout':['120']}
     value=json.loads(execute('aws','ssm','send-command','--region','ap-northeast-1','--instance-ids','i-05836da38606e633c','--document-name','AWS-RunShellScript','--comment','mailbox-runtime-readonly','--parameters',json.dumps(parameters),'--output','json'))
     command_id=value['Command']['CommandId'];(OUTPUT/'accepted-command.json').write_text(json.dumps({'CommandId':command_id})+'\n')
-    for _ in range(24):
-        raw=execute('aws','ssm','get-command-invocation','--region','ap-northeast-1','--command-id',command_id,'--instance-id','i-05836da38606e633c','--output','json');value=json.loads(raw)
-        if value['Status']in('Pending','InProgress','Delayed'):time.sleep(5);continue
-        (OUTPUT/'invocation.json').write_bytes(raw)
-        result=json.loads(value['StandardOutputContent'])
-        assert value['Status']=='Success' and result['status']=='MAILBOX_RUNTIME_CAPTURED'
-        (OUTPUT/'runtime.json').write_text(json.dumps(result,sort_keys=True,indent=2)+'\n')
-        print(json.dumps({'status':result['status'],'commit':CURRENT,'commandId':command_id,'businessActions':0}));return
-    raise RuntimeError('MAILBOX_RUNTIME_CAPTURE_PENDING')
+    result = await_invocation(command_id)
+    print(json.dumps({'status':result['status'],'commit':CURRENT,'commandId':command_id,'businessActions':0}))
 
 
 if __name__=='__main__':main()
