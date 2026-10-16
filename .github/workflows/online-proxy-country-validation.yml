@@ -8,6 +8,11 @@ on:
         type: string
         required: false
         default: ''
+      admin_projection_only:
+        description: Build Admin only; release packaging must bind prior unchanged API and MySQL evidence
+        type: boolean
+        required: false
+        default: false
 
 permissions:
   contents: read
@@ -38,21 +43,27 @@ jobs:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
         with:
           ref: ${{ github.sha }}
+          fetch-depth: 0
       - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
         with:
           node-version: 24
           cache: npm
       - run: npm ci --no-audit --no-fund
-      - run: npm run prisma:mysql:generate && npm run build --workspace @apple-business/shared
+      - run: npm run prisma:mysql:generate
+        if: ${{ !inputs.admin_projection_only }}
+      - run: npm run build --workspace @apple-business/shared
       - name: Apply migrations only to the empty isolated CI database
+        if: ${{ !inputs.admin_projection_only }}
         run: npm run prisma:mysql:migrate:deploy
       - name: Verify real MySQL country selection and existing online contracts
+        if: ${{ !inputs.admin_projection_only }}
         env:
           ONLINE_RECHARGE_MYSQL_TEST: '1'
         run: |
           mkdir -p .runtime/online-proxy-country-ci
           npm run test --workspace @apple-business/api -- --run src/id-business-v2/online-recharge/mysql.integration.spec.ts --reporter=default --reporter=json --outputFile=$GITHUB_WORKSPACE/.runtime/online-proxy-country-ci/mysql.json
       - name: Build exact Linux API artifacts
+        if: ${{ !inputs.admin_projection_only }}
         env:
           NODE_ENV: production
         run: npm run build --workspace @apple-business/api
@@ -60,6 +71,7 @@ jobs:
         env:
           ADMIN_BASE_COMMIT: ${{ inputs.admin_base_commit }}
         run: |
+          mkdir -p .runtime/online-proxy-country-ci
           python3 - <<'PY'
           import hashlib,json,os,pathlib,re,subprocess
           def git(*args,env=None):
@@ -85,9 +97,10 @@ jobs:
         env:
           NODE_ENV: production
           V2_BUILD_ID: v2-${{ github.sha }}
+          ADMIN_PROJECTION_ONLY: ${{ inputs.admin_projection_only }}
         run: |
           npm run build --workspace @apple-business/admin
-          node -e 'const fs=require("fs"),cp=require("child_process");fs.writeFileSync(".runtime/online-proxy-country-ci/source.json",JSON.stringify({commit:cp.execFileSync("git",["rev-parse","HEAD"],{encoding:"utf8"}).trim(),sourceTree:cp.execFileSync("git",["rev-parse","HEAD^{tree}"],{encoding:"utf8"}).trim(),adminProjection:JSON.parse(fs.readFileSync(".runtime/online-proxy-country-ci/admin-projection.json","utf8")),run:process.env.GITHUB_RUN_ID,productionAccess:false,paymentSubmitted:false},null,2));'
+          node -e 'const fs=require("fs"),cp=require("child_process");fs.writeFileSync(".runtime/online-proxy-country-ci/source.json",JSON.stringify({commit:cp.execFileSync("git",["rev-parse","HEAD"],{encoding:"utf8"}).trim(),sourceTree:cp.execFileSync("git",["rev-parse","HEAD^{tree}"],{encoding:"utf8"}).trim(),adminProjection:JSON.parse(fs.readFileSync(".runtime/online-proxy-country-ci/admin-projection.json","utf8")),verificationScope:process.env.ADMIN_PROJECTION_ONLY==="true"?"admin":"api-admin-mysql",run:process.env.GITHUB_RUN_ID,productionAccess:false,paymentSubmitted:false},null,2));'
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: online-proxy-country-${{ github.sha }}
