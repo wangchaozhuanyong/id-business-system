@@ -4224,7 +4224,8 @@ async function main() {
       const salesAfter = execFileSync('git', ['show', `HEAD:${schema}`], { encoding: 'utf8' });
       if (
         requestedBaseIsAncestor &&
-        ((isAccountLoginControlsOnly(salesPaths) && salesBefore === salesAfter) ||
+        ((isGptRechargeOnly(salesPaths) && salesBefore === salesAfter) ||
+          (isAccountLoginControlsOnly(salesPaths) && salesBefore === salesAfter) ||
           (isAccountLoginOnly(salesPaths) && accountLoginSchemaMatches(salesBefore, salesAfter)) ||
           (isChatgptSalesOnly(salesPaths) && chatgptSalesSchemaMatches(salesBefore, salesAfter)) ||
           (isChatgptSalesControlsOnly(salesPaths) && salesBefore === salesAfter) ||

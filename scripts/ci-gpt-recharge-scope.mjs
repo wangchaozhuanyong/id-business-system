@@ -49,7 +49,7 @@ export const gptRechargeFrozen = Object.freeze({
   'scripts/ci-recharge-check.mjs':
     '74f08eefc8055630e59fc1ce1c08b7abc9e93ce8ecc1f80f43c9fecd155032c2',
   'scripts/ci-recharge-scope.mjs':
-    '89d40e711a810580e783fcb3dc139637cdc90d733c70c87c9d58b204f8def3a9',
+    '6346a52e712a2420e46efcce99ffc8b4d0a789fc37f95d7b98e77842eaa6c5a1',
   'scripts/ci-recharge-scope.test.mjs':
     '07455e0799e29203b9af5e702a18b3dd54fc3512b71d3426a0cc556891abdc93',
   'scripts/production-release/api-admin-scope.test.py':
