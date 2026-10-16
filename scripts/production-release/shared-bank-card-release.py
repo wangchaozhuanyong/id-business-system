@@ -110,7 +110,7 @@ def baseline(d, contract, h):
              and sha((previous / overlay['proofFile']).read_bytes()) == overlay['proofSha256'], 'PUBLISHED_OVERLAY_PROOF_CHANGED')
     states = h.snapshot(d, previous)
     need(states == contract['services'], 'SERVICES_CHANGED')
-    need({role: h.configuration(d, state) for role, state in states.items()} == contract['runtimeConfigurationSha256'], 'RUNTIME_CONFIGURATION_CHANGED')
+    need(all(configuration_matches(h, d, state, contract['runtimeConfigurationSha256'][role]) for role, state in states.items()), 'RUNTIME_CONFIGURATION_CHANGED')
     need(all(sha((previous / name).read_bytes()) == expected for name, expected in contract['configurationSha256'].items()), 'CONFIGURATION_CHANGED')
     need(shutil.disk_usage(BASE).free > 6 * 1024**3, 'DISK_LOW')
     normalizer = Path(contract['backupNormalizerPath'])
@@ -136,7 +136,7 @@ def smoke(d, target, states, proof, contract, h):
     load('proxy-result-identity-release.py').engine_content(d, states['online-recharge'], contract['afterEngineFiles'])
     need(d.run('docker', 'exec', states['admin']['containerId'], 'sha256sum', '/etc/nginx/conf.d/default.conf').split()[0] == contract['nginxSha256'], 'NGINX_CHANGED')
     h.engine_idle(d, states['online-recharge'], contract, wait_connected=True)
-    need({role: h.configuration(d, state) for role, state in states.items()} == contract['runtimeConfigurationSha256'], 'RUNTIME_CONFIGURATION_CHANGED')
+    need(all(configuration_matches(h, d, state, contract['runtimeConfigurationSha256'][role]) for role, state in states.items()), 'RUNTIME_CONFIGURATION_CHANGED')
     need(all(states[role] == contract['services'][role] for role in PRESERVED), 'PRESERVED_SERVICE_CHANGED')
     need(all(states[role]['environmentSha256'] == contract['services'][role]['environmentSha256'] for role in UPDATED + REBOUND), 'ENVIRONMENT_CHANGED')
 
@@ -377,3 +377,123 @@ def safe_archive(raw, directory):
                 path.write_bytes(archive.extractfile(item).read())
                 path.chmod(0o644)
     return directory / 'payload'
+
+
+def configuration_matches(h, d, state, expected):
+    import copy
+    import itertools
+    fingerprint = h.fingerprint
+    try:
+        h.fingerprint = lambda value: value
+        model = h.configuration(d, state)
+    finally:
+        h.fingerprint = fingerprint
+    if fingerprint(model) == expected:
+        return True
+    # Bind order is not semantic. Compare every full original entry and every
+    # other field against the frozen hash; never drop mounts or configuration.
+    binds = model['HostConfig'].get('Binds')
+    if not isinstance(binds, list) or not 1 < len(binds) <= 5:
+        return False
+    for order in itertools.permutations(binds):
+        candidate = copy.deepcopy(model)
+        candidate['HostConfig']['Binds'] = list(order)
+        if fingerprint(candidate) == expected:
+            return True
+    return False
+
+
+def finalize_forward(plan, contract):
+    """Finish only the accepted healthy switch; never migrate or restart again."""
+    import base64
+    need(plan['mode'] == 'finalize' and plan['commit'] == 'e84a44d86c289354bc7ed15dcd0ec68f7210e18e'
+         and plan['workflowRunId'] == '38916394747', 'FINALIZE_IDENTITY_INVALID')
+    verify_contract(contract)
+    need(sha(Path(__file__).with_name('shared-bank-card-contract.json').read_bytes()) == plan['contractSha256'], 'CONTRACT_CHANGED')
+    need(set(plan['controlSources']) == set(contract['controlFiles']), 'CONTROL_SCOPE_CHANGED')
+    for name, expected in plan['controlSources'].items():
+        need(sha(Path(__file__).with_name(name).read_bytes()) == expected, 'CONTROL_SOURCE_CHANGED')
+    h = load('recharge-record-release.py')
+    d = h.load_utilities(Path(__file__).with_name('remote-deploy.py'), plan['controlSources']['remote-deploy.py'])
+    p = load('proxy-result-identity-release.py')
+    p.SCOPE = SCOPE
+    stage = BASE / '.staging' / ('shared-bank-card-' + plan['commit'] + '-' + plan['workflowRunId'])
+    with (BASE / '.deploy.lock').open('a') as lock:
+        load('recharge-availability-release.py').acquire_release_lock(lock)
+        journal = stage / 'switch-state.json'
+        failed = json.loads(journal.read_bytes())
+        need(failed['status'] == 'SWITCH_FAILED' and not (stage / 'forward-finalization.json').exists(), 'FINALIZE_ALREADY_ACCEPTED')
+        previous, target = Path(failed['previous']), Path(failed['target'])
+        need(previous == Path(contract['current']) and (BASE / 'current').resolve() == previous
+             and target.parent == BASE / 'releases' and target.name.endswith(plan['commit'][:12] + '-shared-bank-card'), 'FINALIZE_TARGET_CHANGED')
+        raw_manifest = (previous / 'release-manifest.json').read_bytes()
+        need(sha(raw_manifest) == contract['manifestSha256'], 'MANIFEST_CHANGED')
+        migration = json.loads((stage / 'migration-operation.json').read_bytes())
+        need(migration['phase'] == 'VERIFIED' and migration['migration'] == contract['migration'], 'MIGRATION_UNCERTAIN')
+        check_migration(migration_state(d, target, contract), contract, applied=True)
+        payload = stage / 'content/payload'
+        raw_proof = (payload / 'build-proof.json').read_bytes()
+        need(sha(raw_proof) == plan['buildProofSha256'], 'PROOF_CHANGED')
+        proof = json.loads(raw_proof)
+        files = h.file_inventory(payload)
+        files.pop('build-proof.json')
+        verify_proof(proof, plan, contract, files)
+        after = h.snapshot(d, target)
+        before = contract['services']
+        images = {}
+        for role in UPDATED:
+            built = json.loads((stage / (role + '-image-build.json')).read_bytes())
+            need(built['status'] == 'BUILT' and built['baseImageId'] == before[role]['image'], 'BUILT_IMAGE_CHANGED')
+            image = json.loads(d.run('docker', 'image', 'inspect', built['reference']))[0]
+            original = json.loads(d.run('docker', 'image', 'inspect', before[role]['image']))[0]
+            verify_image(original, image, plan)
+            need(after[role]['image'] == image['Id'], 'RUNTIME_IMAGE_CHANGED')
+            images[role] = {'reference': built['reference'], 'imageId': image['Id']}
+        smoke(d, target, after, proof, contract, h)
+        backup_dir = BASE / 'backups' / ('recharge-record-' + plan['commit'] + '-' + plan['workflowRunId'])
+        need(json.loads((backup_dir / 'backup-operation.json').read_bytes())['status'] == 'VERIFIED', 'BACKUP_UNVERIFIED')
+        backup = json.loads((backup_dir / 'backup-verification.json').read_bytes())
+        raw_backup = Path(backup['path']).read_bytes()
+        need(Path(backup['path']).parent == backup_dir and sha(raw_backup) == backup['sha256'] and len(raw_backup) == backup['size'], 'BACKUP_CHANGED')
+        values = d.environment_values(previous / '.env.aws.production')
+        head = json.loads(d.run('aws', 's3api', 'head-object', '--region', values.get('MYSQL_BACKUP_S3_REGION') or 'ap-northeast-1',
+            '--bucket', backup['s3Bucket'], '--key', backup['s3Key'], '--checksum-mode', 'ENABLED', timeout=60))
+        need(head.get('ContentLength') == len(raw_backup) and head.get('ChecksumSHA256') == base64.b64encode(hashlib.sha256(raw_backup).digest()).decode()
+             and head.get('ServerSideEncryption') == 'AES256', 'BACKUP_S3_CHANGED')
+        marker_raw = json.dumps({'scope': SCOPE, 'commit': plan['commit'], 'workflowRunId': plan['workflowRunId']}, sort_keys=True).encode()
+        marker = {'paths': [str(BASE / 'maintenance.json'), str(p.registration_marker(d, after))], 'ownerSha256': sha(marker_raw)}
+        p.verify_markers(marker)
+        d.assert_no_active_recharge(target)
+        d.assert_no_active_registration(target)
+        for name in plan['controlSources']:
+            (target / 'scripts/production-release' / name).write_bytes(Path(__file__).with_name(name).read_bytes())
+        (stage / 'forward-finalization.json').write_text(json.dumps({'status': 'STARTED', 'controlCommit': plan['controlCommit'], 'containersRecreated': False, 'migrationRepeated': False}) + '\n')
+        stamp = datetime.datetime.now(datetime.timezone.utc).strftime('%Y%m%dT%H%M%SZ')
+        p.release_markers(marker)
+        h.guards(d, target, after, contract)
+        receipt = {'status': 'DEPLOYED', 'commit': plan['commit'], 'before': before, 'after': after, 'images': images,
+                   'backup': backup, 'artifactSha256': plan['artifactSha256'], 'buildProofSha256': plan['buildProofSha256'],
+                   'preservedServices': list(PRESERVED), 'migrationPerformed': True, 'businessActions': 0,
+                   'controlCommit': plan.get('controlCommit', plan['commit']), 'validationRunId': plan['workflowRunId']}
+        (target / 'shared-bank-card-preservation.json').write_text(json.dumps(receipt, sort_keys=True, indent=2) + '\n')
+        (target / 'shared-bank-card-build-proof.json').write_bytes(raw_proof)
+        manifest = json.loads(raw_manifest)
+        manifest.update(commit=plan['commit'], sourceTree=plan['tree'], sourceBranch='main', scope=SCOPE,
+                        previousCommit=contract['expectedCurrent'], previousRelease=str(previous),
+                        previousManifestSha256=sha(raw_manifest), status='DEPLOYED', servicesUpdated=list(UPDATED), servicesRebound=list(REBOUND),
+                        newMigrations=[contract['migration']['name']], migrationPerformed=True, paymentActions=0, sharedBankCardPublication=receipt)
+        for role in UPDATED:
+            manifest['images'][role] = {'reference': images[role]['reference'], 'digest': images[role]['imageId'], 'sourceCommit': plan['commit']}
+            projections = manifest.setdefault('roleSourceProjections', {})
+            projections[role] = {'kind': 'PUBLISHED_PREDECESSOR_PLUS_SHARED_BANK_CARDS',
+                                 'commit': plan['commit'], 'parentProjection': projections.get(role),
+                                 'buildProofSha256': plan['buildProofSha256'],
+                                 'sources': {name: value for name, value in contract['sources'].items()
+                                             if (name.startswith('apps/admin/') if role == 'admin'
+                                                 else name.startswith(contract['engineRoot'] + '/') if role == 'online-recharge'
+                                                 else name.startswith('apps/api/') and not name.startswith(contract['engineRoot'] + '/'))}}
+        (target / 'release-manifest.json').write_text(json.dumps(manifest, sort_keys=True, indent=2) + '\n')
+        d.point_current(target, stamp + '-shared-bank-card')
+        journal.write_text(json.dumps({'status': 'DEPLOYED', 'target': str(target), 'commit': plan['commit']}) + '\n')
+        (stage / 'forward-finalization.json').write_text(json.dumps({'status': 'FINALIZED', 'controlCommit': plan['controlCommit'], 'containersRecreated': False, 'migrationRepeated': False}) + '\n')
+        return {'status': 'SHARED_BANK_CARD_FORWARD_FINALIZED', 'commit': plan['commit'], 'migrationRepeated': False, 'containersRecreated': False, 'businessActions': 0}
