@@ -38,6 +38,9 @@ def compose_contract(native, rebase):
          and mailbox['workflowRunId'] == '38925995056'
          and set(mailbox['sources']) == {'apps/api/src/common/prisma/bump-v2-scope-versions.ts'},
          'MAILBOX_PROVENANCE')
+    signature = 'common/prisma/bump-v2-scope-versions.d.ts'
+    need(rebase['mailboxBaselineModules'][signature] == mailbox['modules'][signature],
+         'MAILBOX_SIGNATURE_CHANGED')
     merged = copy.deepcopy(native)
     merged.update(copy.deepcopy(rebase['baseOverrides']))
     for name, delta in changes.items():

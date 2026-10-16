@@ -124,11 +124,11 @@ export const gptRechargeRebasePaths = Object.freeze([
 ]);
 export const gptRechargeRebaseFrozen = Object.freeze({
   'scripts/production-release/gpt-recharge-rebase-release.py':
-    '086a88e0051dd601449d9ad6f0e9a6290f5158fed3c76f743116f4d9b2b8a50b',
+    '9b4db2ee5331ff8de865cd2e3ccd6f0d2be039c0aaa2b06cb9d59fc844a7acdd',
   'scripts/production-release/gpt-recharge-rebase-release.test.py':
-    '6c7eee2b062ed5e3d5b95b2471e2d7d737ca513b92836bc71c2cc85b7518bdfa',
+    'fbd8e8f27af0559c8147420283fa311b6048cd013fb42a1e94c98430a3f46ba4',
   'scripts/production-release/gpt-recharge-rebase-contract.json':
-    '7506dc4731e7235ec6fe26f840922fce95286a0f696744bfd6edbf6c2e795d81'
+    '894e6aac58360770fe6de9338e79a2f1c37c4291d807888338689ac177a4e993'
 });
 export function isGptRechargeRebaseControlsOnly(paths, readSource = (name) => readFileSync(name)) {
   if (

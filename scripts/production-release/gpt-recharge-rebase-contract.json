@@ -103,6 +103,11 @@
   "businessActions": 0,
   "cowPublisherSha256": "ada30647832f361e74fed35f6aea0df9f5351a4358b66661ce1ddd9ed8422812",
   "mailboxArtifactSha256": "cfb91463004179d6cba6935355c9b8f924727a53d2ddcc1616247dfc314cb950",
+  "mailboxBaselineModules": {
+    "common/prisma/bump-v2-scope-versions.d.ts": "baf8b6b40b698ee3cd9accea37b12b053c967b6ef990a1cfda392f6cec818d45",
+    "common/prisma/bump-v2-scope-versions.js": "a8937f8a6e7c48b3161ae88c5bb40c13165ef81be57a3461d02e3e4cf33224c9",
+    "common/prisma/bump-v2-scope-versions.js.map": "02af1a68af2279cfc7070769c24bd51c768f0b5dfc0a152a504a1c8291955cd5"
+  },
   "mailboxNative": {
     "commit": "1c339754507f29459d17d75bb84afbee8fba5291",
     "modules": {

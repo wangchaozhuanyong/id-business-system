@@ -50,6 +50,11 @@ class RebaseTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, 'SCOPE'):
             m.compose_contract(self.native, self.rebase)
 
+    def test_changed_mailbox_signature_cannot_reuse_the_old_compiled_gpt_delta(self):
+        self.rebase['mailboxBaselineModules']['common/prisma/bump-v2-scope-versions.d.ts'] = '0' * 64
+        with self.assertRaisesRegex(RuntimeError, 'MAILBOX_SIGNATURE_CHANGED'):
+            m.compose_contract(self.native, self.rebase)
+
     def test_native_cow_publisher_calls_and_switch_behavior_are_unchanged(self):
         source = (HERE / 'gpt-recharge-release.py').read_text()
         original = ast.parse(source)
