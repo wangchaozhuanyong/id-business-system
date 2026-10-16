@@ -409,8 +409,11 @@ def runtime_namespace():
     namespace = dict(vars(original))
     for key, function in vars(original).items():
         if isinstance(function, types.FunctionType) and function.__globals__ is vars(original):
-            namespace[key] = types.FunctionType(function.__code__, namespace,
+            adapted = types.FunctionType(function.__code__, namespace,
                 function.__name__, function.__defaults__, function.__closure__)
+            adapted.__kwdefaults__ = copy.deepcopy(function.__kwdefaults__)
+            adapted.__annotations__ = dict(function.__annotations__)
+            namespace[key] = adapted
     namespace.update(CURRENT=CURRENT, sqlite_receipt=sqlite_receipt,
         sqlite_inspection_source=sqlite_inspection_source, validate_sqlite_receipt=validate_sqlite_receipt)
     return namespace
