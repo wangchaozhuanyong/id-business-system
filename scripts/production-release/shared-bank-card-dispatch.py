@@ -111,7 +111,7 @@ def prepare_plan():
 
 def transport(plan, mode):
     verified_contract()
-    need(mode in ('preflight', 'release', 'readback'), 'MODE_INVALID')
+    need(mode in ('preflight', 'release', 'readback', 'finalize'), 'MODE_INVALID')
     receipt = OUTPUT / (mode + '-accepted-command.json')
     need(not receipt.exists(), 'COMMAND_ALREADY_ACCEPTED')
     current = {**plan, 'mode': mode}
@@ -143,7 +143,8 @@ try:
  stage='LOAD_VERIFIED_EXECUTOR'
  path=entry/'shared-bank-card-release.py';spec=importlib.util.spec_from_file_location('finite_engine_identity',path);module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module)
  stage=plan['mode'].upper()
- print(json.dumps(module.release(plan,contract),sort_keys=True))
+ result=module.finalize_forward(plan,contract) if plan['mode']=='finalize' else module.release(plan,contract)
+ print(json.dumps(result,sort_keys=True))
 except BaseException as error:
  message=str(error);code=message if re.fullmatch('(?:SHARED_BANK_CARD|RECHARGE_RECORD|RECHARGE_AVAILABILITY|RECHARGE_BILLING|REGISTRATION_CLOSURE|API_ADMIN_ONLINE)_[A-Z0-9_]+',message) else 'SHARED_BANK_CARD_OPERATION_FAILED'
  frames=[{'file':Path(f.filename).name,'line':f.lineno,'function':f.name}for f in traceback.extract_tb(error.__traceback__)]
