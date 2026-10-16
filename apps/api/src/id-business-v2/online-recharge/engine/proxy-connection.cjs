@@ -127,7 +127,7 @@ function parseExtracted(raw, protocol) {
       const key = ['data', 'proxy', 'proxy_url', 'list'].find((key) => value[key] != null);
       if (!key) break;
       value = value[key];
-    } else if (typeof value === 'string' && /^[\[{"]/.test(value.trim())) {
+    } else if (typeof value === 'string' && /^[[{"]/.test(value.trim())) {
       try {
         value = JSON.parse(value);
       } catch {
@@ -150,7 +150,11 @@ function parseExtracted(raw, protocol) {
       throw new Error('代理提取响应无效');
     value = `${protocol}://${username || password ? `${encodeURIComponent(username)}:${encodeURIComponent(password)}@` : ''}${host.includes(':') ? `[${host}]` : host}:${port}`;
   }
-  if (typeof value !== 'string' || value.length > 2048 || /[\x00-\x20\x7f]/.test(value.trim()))
+  if (
+    typeof value !== 'string' ||
+    value.length > 2048 ||
+    Array.from(value.trim()).some((char) => char.charCodeAt(0) <= 32 || char.charCodeAt(0) === 127)
+  )
     throw new Error('代理提取响应无效');
   value = value.trim();
   const credentials =
