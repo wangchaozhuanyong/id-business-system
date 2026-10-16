@@ -12,7 +12,7 @@ import urllib.request
 BASE = Path('/opt/id-business-v2')
 HERE = Path(__file__).resolve().parent
 SCOPE = 'MAILBOX_REALTIME_20261016'
-CURRENT = 'd44393c5bee8c30c82737fc3e00fa89785a95667'
+CURRENT = 'c0238525bb4b2a1c3fe6688eaed5f74f504ee529'
 WORKER = 'apps/api/src/id-business-v2/auto-registration/worker/'
 APPLICATION_PATHS = (
     'packages/shared/src/v2/vendure-mailbox.ts',

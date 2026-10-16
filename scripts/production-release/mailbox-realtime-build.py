@@ -66,7 +66,7 @@ def prepare(native_evidence=True):
     parent = json.loads((HERE / 'registration-parity-diagnostics-contract.json').read_bytes())
     # These are the three successful predecessor publications, not the later unfinished candidate.
     if native_evidence:
-        for field in ('parentNative', 'successorNative', 'dragNative'):
+        for field in ('parentNative', 'successorNative', 'dragNative', 'accountNative', 'checkoutNative'):
             p.native_proof(parent[field])
     OUTPUT.mkdir(parents=True, mode=0o700)
     if native_evidence:
