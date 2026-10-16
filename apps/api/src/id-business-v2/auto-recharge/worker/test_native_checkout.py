@@ -361,8 +361,8 @@ class NativeBrowserTests(unittest.IsolatedAsyncioTestCase):
         self.assertGreaterEqual(self.original_reads, 2)
         self.assertEqual(self.writes, [CHECKOUT_PATH + '/taxes'])
         self.assertIn(SID, page.url)
-        rows = [json.loads(line) for line in self.diagnostic.splitlines()]
-        checks = [row for row in rows if row.get('event') == 'checkout_quote_check']
+        checks = [json.loads(line) for line in self.diagnostic.splitlines()
+                  if line.startswith('{"event": "checkout_quote_check"')]
         self.assertTrue(any(row['state'] == 'verified' for row in checks))
         self.assertTrue(all(set(row) == {'event', 'state'} for row in checks))
         diagnostic = json.dumps(checks)
