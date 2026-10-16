@@ -1,3 +1,4 @@
+import { isMailboxVersionOnly } from './ci-mailbox-version-scope.mjs';
 import {
   isSharedBankCardOnly,
   isSharedBankCardControlsOnly,
@@ -1075,6 +1076,7 @@ export function checkMode(paths, oldSchema, newSchema, grantHelperSnapshot, cont
   if (isChatgptSalesControlsOnly(paths)) return oldSchema === newSchema ? 'ci-only' : 'full';
   if (isChatgptSalesOnly(paths))
     return chatgptSalesSchemaMatches(oldSchema, newSchema) ? 'recharge' : 'full';
+  if (isMailboxVersionOnly(paths)) return oldSchema === newSchema ? 'recharge' : 'full';
   if (isSharedBankCardControlsOnly(paths)) return oldSchema === newSchema ? 'ci-only' : 'full';
   if (isSharedBankCardOnly(paths))
     return sharedBankCardSchemaMatches(oldSchema, newSchema) ? 'recharge' : 'full';
@@ -1550,6 +1552,7 @@ export function isTargetedOnly(paths, oldSchema, newSchema) {
   );
 }
 export function selectedParts(paths, grantHelperSnapshot, context) {
+  if (isMailboxVersionOnly(paths)) return ['guards', 'api', 'release-controls'];
   if (isRegistrationBrowserOnly(paths, context)) return [...registrationBrowserParts];
   if (isAccountLoginControlsOnly(paths)) return ['guards'];
   if (isAccountLoginOnly(paths)) return [...accountLoginParts];

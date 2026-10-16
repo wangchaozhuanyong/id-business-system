@@ -1,0 +1,129 @@
+name: Mailbox Version Recovery Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      commit:
+        description: Exact reviewed main commit
+        required: true
+        type: string
+      expected_current:
+        description: Exact independently verified deployed predecessor
+        required: true
+        type: string
+      publish:
+        description: Publish after isolated validation
+        default: false
+        required: true
+        type: boolean
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: id-business-v2-production-release
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    if: github.ref == 'refs/heads/main' && inputs.commit == github.sha
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    services:
+      mysql:
+        image: mysql:8.4@sha256:b3b90af2a6552ae30c266fdb7d5dd55f3afb72404bb78d37fe8a23eb857fd3fb
+        env:
+          MYSQL_ROOT_PASSWORD: mailbox-version-ci-fixture
+          MYSQL_DATABASE: id_business_v2_mailbox_version_fixture
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -pmailbox-version-ci-fixture"
+          --health-interval=5s --health-timeout=5s --health-retries=24
+    env:
+      NODE_ENV: test
+      DATABASE_URL: mysql://root:mailbox-version-ci-fixture@127.0.0.1:3306/id_business_v2_mailbox_version_fixture
+      FIELD_ENCRYPTION_KEY: synthetic-mailbox-version-ci
+      HASH_SECRET: synthetic-mailbox-version-ci-index
+      MAILBOX_VERSION: '1'
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci --include=dev --ignore-scripts --no-audit --no-fund
+      - run: npm run prisma:mysql:generate
+      - run: npm run build --workspace @apple-business/shared
+      - name: Apply schema only to disposable CI MySQL
+        run: npm run prisma:mysql:migrate:deploy
+      - name: Verify first mailbox version, concurrent receipts and rollback
+        env:
+          MAILBOX_VERSION_MYSQL_TEST: '1'
+        run: |
+          mkdir -p .deploy/mailbox-version-mysql
+          npm run test --workspace @apple-business/api -- src/id-business-v2/workspace/mail-events-version.mysql.integration.spec.ts --reporter=default --reporter=json --outputFile=$GITHUB_WORKSPACE/.deploy/mailbox-version-mysql/results.json
+      - name: Verify one-module publication and preservation controls
+        run: python3 -B scripts/production-release/mailbox-version-release.test.py
+      - name: Build only verified changes over reproduced live sources
+        env:
+          NODE_ENV: production
+        run: python3 -B scripts/production-release/mailbox-version-build.py
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: mailbox-version-${{ github.sha }}-${{ github.run_attempt }}
+          path: |
+            .deploy/mailbox-version/mailbox-version-artifact.tar.gz
+            .deploy/mailbox-version/artifact-sha256.txt
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 30
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: mailbox-version-mysql-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .deploy/mailbox-version-mysql/
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 30
+
+  publish:
+    needs: validate
+    if: inputs.publish && github.ref == 'refs/heads/main' && inputs.commit == github.sha
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: write
+      actions: read
+      id-token: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      AWS_REGION: ap-northeast-1
+      RELEASE_COMMIT: ${{ inputs.commit }}
+      EXPECTED_CURRENT: ${{ inputs.expected_current }}
+      MAILBOX_VERSION: '1'
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          fetch-depth: 0
+      - name: Configure existing production OIDC role
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd
+        with:
+          role-to-assume: arn:aws:iam::079740175286:role/id-business-v2-github-release
+          role-session-name: id-business-v2-mailbox-version-${{ github.run_id }}
+          aws-region: ap-northeast-1
+          role-duration-seconds: 3600
+      - name: Publish once and independently read back
+        run: python3 -B scripts/production-release/mailbox-version-dispatch.py
+      - name: Preserve native publication evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: mailbox-version-publication-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .deploy/mailbox-version/
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 30
