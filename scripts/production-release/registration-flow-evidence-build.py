@@ -17,7 +17,9 @@ OUTPUT = ROOT / '.deploy/registration-flow-evidence'
 CONTRACT = HERE / 'registration-flow-evidence-contract.json'
 SCOPE = 'REGISTRATION_FLOW_EVIDENCE'
 BASE = '69eba563895bf083b24c8214a088454d5df34922'
-SOURCE_BASE = '88bce5ab09d20cd303f1fdd5fe310cb0b42e1451'
+CURRENT = '88bce5ab09d20cd303f1fdd5fe310cb0b42e1451'
+SOURCE_BASE = 'b4beae76ac7ce69d5475473054a22b945bda5898'
+REVIEWED_APPLICATION = 'd9c9243c181b0524ccd2766a8f1f04a4075307c4'
 API = 'apps/api/src/id-business-v2/auto-registration/'
 ADMIN = 'apps/admin/src/v2/features/auto-registration/'
 WORKER = API + 'worker/'
@@ -56,20 +58,26 @@ def inventory(directory):
 
 def verify_sources(contract):
     need(contract.get('version') == 1 and contract.get('frozen') is True and contract.get('scope') == SCOPE
-         and contract.get('expectedCurrent') == BASE and contract.get('sourceBaseline') == SOURCE_BASE
+         and contract.get('expectedCurrent') == CURRENT and contract.get('sourceBaseline') == SOURCE_BASE
+         and contract.get('reviewedApplicationCommit') == REVIEWED_APPLICATION
          and contract.get('migration') is None,
          'CONTRACT_NOT_FROZEN')
     need(not git('status', '--porcelain', '--untracked-files=no').strip(), 'SOURCE_DIRTY')
     need(git('rev-parse', SOURCE_BASE + '^{tree}').decode().strip() == contract['sourceBaselineTree'], 'BASE_TREE_CHANGED')
     changed = set(git('diff', '--name-only', SOURCE_BASE, 'HEAD').decode().splitlines())
     sources = contract['sources']
-    need(sources and changed == set(sources) | set(contract['validationSources']) | set(contract['controlPaths']),
+    repair = {'scripts/production-release/registration-flow-evidence-' + n
+              for n in ('build.py', 'release.py', 'contract.json', 'release.test.py')}
+    repair |= {'scripts/ci-registration-flow-evidence-scope.mjs', 'scripts/ci-registration-flow-evidence-scope.test.mjs'}
+    need(sources and changed == set(contract['expectedGitChanges']) == repair,
          'SOURCE_SCOPE_CHANGED')
     need(all((name.startswith(API) or name.startswith(ADMIN)) and '/upstream/' not in name
              and name in contract['allowedApplicationPaths'] for name in sources), 'BUSINESS_SCOPE_CHANGED')
     for name, expected in {**sources, **contract['validationSources'], **contract['buildSupportHashes']}.items():
         need(re.fullmatch('[a-f0-9]{64}', expected) and digest((ROOT / name).read_bytes()) == expected,
              'SOURCE_CHANGED')
+    need(all(digest(git('show', REVIEWED_APPLICATION + ':' + name)) == expected
+             for name, expected in {**sources, **contract['validationSources']}.items()), 'REVIEWED_APPLICATION_CHANGED')
     for name, expected in contract['unchangedInputs'].items():
         need(digest((ROOT / name).read_bytes()) == expected == digest(git('show', SOURCE_BASE + ':' + name)),
              'IMMUTABLE_INPUT_CHANGED')
@@ -84,6 +92,9 @@ def verify_sources(contract):
          'WORKER_SCOPE_CHANGED')
     need(contract['apiModules'] and all(name.startswith('id-business-v2/auto-registration/')
          and name.endswith('.js') for name in contract['apiModules']), 'API_MODULE_SCOPE_CHANGED')
+    need(len(contract['baselinePrismaClientFiles']) == 18 and len(contract['runtimePrismaClientFiles']) == 27
+         and all(contract['runtimePrismaClientFiles'].get(n) == value
+                 for n, value in contract['baselinePrismaClientFiles'].items()), 'CLIENT_CORE_CHANGED')
 
 
 def native_proof(binding):
@@ -155,6 +166,16 @@ def reconstruct(context, contract):
     for name, expected in contract['baselineWorkerFiles'].items():
         need(digest((context / WORKER / name).read_bytes()) == expected, 'BASE_WORKER_NOT_REPRODUCED')
     need(inventory(context / ENGINE) == contract['baselineEngineFiles'], 'BASE_ENGINE_NOT_REPRODUCED')
+    need(binding['adminCommit'] == CURRENT and git('rev-parse', CURRENT + '^{tree}').decode().strip()
+         == binding['adminTree'], 'PUBLISHED_ADMIN_SOURCE_CHANGED')
+    shutil.rmtree(context / 'apps/admin')
+    with tarfile.open(fileobj=io.BytesIO(git('archive', CURRENT, 'apps/admin'))) as archive:
+        for item in archive:
+            if item.name == 'apps' and item.isdir():
+                continue
+            need(Path(item.name).parts[:2] == ('apps', 'admin') and '..' not in Path(item.name).parts
+                 and (item.isdir() or item.isfile()), 'PUBLISHED_ADMIN_PATH_CHANGED')
+            archive.extract(item, context)
 
 
 def prepare():
@@ -162,8 +183,13 @@ def prepare():
     verify_sources(contract)
     proof = native_proof(contract['registrationNative'])
     patch = native_proof(contract['identityNative'])
-    need(proof['adminFiles'] == contract['baselineAdminFiles']
-         and proof['prismaClientFiles'] == contract['baselinePrismaClientFiles']
+    admin = contract['publishedAdminProof']
+    need(digest(admin['content'].encode()) == admin['sha256'], 'PUBLISHED_ADMIN_PROOF_CHANGED')
+    admin_proof = json.loads(admin['content'])
+    need(admin_proof['commit'] == CURRENT and admin_proof['sourceTree'] == contract['reconstruction']['adminTree']
+         and {n.removeprefix('dist/'):v for n,v in admin_proof['files'].items() if n.startswith('dist/')}
+             == contract['baselineAdminFiles'], 'PUBLISHED_ADMIN_PROOF_CHANGED')
+    need(proof['prismaClientFiles'] == contract['baselinePrismaClientFiles']
          and {**json.loads(git('show', contract['reconstruction']['registrationCommit']
                 + ':scripts/production-release/registration-closure-contract.json'))['baselineApiFiles'],
               **{n: value for n, value in proof['apiModules'].items() if n.endswith('.js')}} == contract['baselineApiFiles']
@@ -251,12 +277,17 @@ def build():
         path.write_bytes(raw)
     proof = {'version': 1, 'scope': SCOPE, 'commit': commit, 'tree': tree,
              'sourceBaseline': contract['sourceBaseline'], 'sourceBaselineTree': contract['sourceBaselineTree'],
-             'runtimeBaselineCommit': BASE, 'sourceProjection': 'PUBLISHED_RUNTIME_PLUS_TASK_DELTA',
+             'runtimeBaselineCommit': contract['expectedCurrent'], 'roleSourceCommits': contract['roleSourceCommits'],
+             'reviewedApplicationCommit': REVIEWED_APPLICATION, 'sourceProjection': 'PUBLISHED_RUNTIME_PLUS_TASK_DELTA',
              'workflowRunId': os.environ['GITHUB_RUN_ID'], 'workflowRunAttempt': os.environ['GITHUB_RUN_ATTEMPT'],
              'contractSha256': digest(contract_raw), 'sources': contract['sources'], 'validationSources': contract['validationSources'],
              'apiModules': modules, 'workerFiles': contract['workerFiles'], 'adminFiles': inventory(payload / 'admin/html'),
              'baselineApiReproduced': True, 'baselineAdminReproduced': True, 'unchangedClientReproduced': True,
              'baselinePrismaClientFiles': contract['baselinePrismaClientFiles'], 'schemaSha256': contract['schemaSha256'],
+             'runtimePrismaClientFiles': contract['runtimePrismaClientFiles'],
+             'publishedAdminProofSha256': contract['publishedAdminProof']['sha256'],
+             'hostSourceInheritance': contract['hostSourceInheritance'],
+             'sqliteReviewPolicy': contract['sqliteReviewPolicy'],
              'prismaPathMetadata': contract['prismaPathMetadata'],
              'independentlyGeneratedClientFiles': {role: load('recharge-record-release.py').file_inventory(context / 'node_modules/.prisma/client')
                  for role, context in [('baseline', baseline), ('candidate', candidate)]},

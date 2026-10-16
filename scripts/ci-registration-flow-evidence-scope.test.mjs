@@ -27,7 +27,7 @@ const context = {
   baseTree: registrationFlowEvidenceTree,
   sourceDigest: (path) => registrationFlowEvidencePins[path]
 };
-test('the native fixture repair retains the application freeze and selects only controls', () => {
+test('the published predecessor repair retains the application freeze and selects only controls', () => {
   const repair = {
     ...context,
     base: registrationFlowEvidenceRepairBase,
@@ -272,7 +272,7 @@ test('dispatcher guards run publisher controls format lint and all seven UI rule
   ]);
 });
 
-test('the native fixture repair runs real control checks without repeating application checks', () => {
+test('the published predecessor repair runs real control checks without repeating application checks', () => {
   const input = {
     mode: 'ci-only',
     base: registrationFlowEvidenceRepairBase,
