@@ -39,6 +39,27 @@ export function isAccountLoginOnly(paths) {
     paths.every((n) => accountLoginPaths.includes(n))
   );
 }
+export function isAccountLoginControlsOnly(paths) {
+  const allowed = new Set(
+    accountLoginPaths.filter(
+      (n) =>
+        n.startsWith('scripts/production-release/account-login-') ||
+        n.startsWith('scripts/ci-account-login-') ||
+        [
+          'scripts/ci-recharge-scope.mjs',
+          'scripts/ci-recharge-check.mjs',
+          '.github/workflows/account-login-validation.yml',
+          'docs/ACCOUNT_LOGIN_SEARCH_20261016.md'
+        ].includes(n)
+    )
+  );
+  return (
+    paths.length > 0 &&
+    new Set(paths).size === paths.length &&
+    paths.some((n) => n.startsWith('scripts/production-release/account-login-')) &&
+    paths.every((n) => allowed.has(n))
+  );
+}
 export function accountLoginSchemaMatches(before, after) {
   const sha = (s) => createHash('sha256').update(s).digest('hex');
   return (
@@ -47,9 +68,21 @@ export function accountLoginSchemaMatches(before, after) {
   );
 }
 export function accountLoginCommands(part, paths) {
-  if (!isAccountLoginOnly(paths)) throw new Error('Unsupported account login publication scope');
+  if (!isAccountLoginOnly(paths) && !isAccountLoginControlsOnly(paths))
+    throw new Error('Unsupported account login publication scope');
   const npm = (...args) => ['npm', ...args];
   const shared = npm('run', 'build', '--workspace', '@apple-business/shared');
+  if (isAccountLoginControlsOnly(paths)) {
+    if (part !== 'guards') throw new Error('Unsupported account control repair check');
+    const formatted = paths.filter((n) => /\.(?:mjs|json|md|yml)$/.test(n));
+    const linted = paths.filter((n) => /\.mjs$/.test(n));
+    return [
+      ...(formatted.length ? [npm('exec', '--', 'prettier', '--check', ...formatted)] : []),
+      ...(linted.length ? [npm('exec', '--', 'eslint', ...linted)] : []),
+      ['python3', '-B', 'scripts/production-release/account-login-release.test.py'],
+      ['node', '--test', 'scripts/ci-account-login-scope.test.mjs']
+    ];
+  }
   if (part === 'guards')
     return [
       npm(

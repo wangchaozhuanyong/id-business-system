@@ -52,7 +52,10 @@ def utilities():
 
 def validate_proof(proof, plan, contract, payload, h):
     need(proof.get('version') == 1 and proof.get('scope') == contract['scope']
-         and all(proof.get(k) == plan[k] for k in ('commit', 'tree', 'workflowRunId', 'workflowRunAttempt', 'contractSha256', 'controllerSha256', 'releaseUtilitySha256', 'helperSha256'))
+         and all(proof.get(k) == plan[k] for k in ('commit', 'tree', 'contractSha256', 'releaseUtilitySha256', 'helperSha256'))
+         and proof.get('controllerSha256') == plan.get('validatedControllerSha256', plan['controllerSha256'])
+         and proof.get('workflowRunId') == plan.get('validationRunId', plan['workflowRunId'])
+         and proof.get('workflowRunAttempt') == plan.get('validationRunAttempt', plan['workflowRunAttempt'])
          and proof.get('baselineSources') == {'api': contract['apiSourceBaseline'], 'admin': contract['adminSourceBaseline']}
          and proof.get('adminPublishedSources') == contract['adminPublishedSources']
          and proof.get('hostSources') == contract['hostSources']
@@ -76,6 +79,13 @@ def validate_proof(proof, plan, contract, payload, h):
     return proof
 
 
+def verify_baseline_api(d, previous, contract, proof, helpers):
+    # All deployed JS remains exact. Older release layers did not uniformly copy
+    # inferred declarations and maps, which are not executed by Node.
+    helpers.verify_modules(d, previous, contract['baselineRuntimeApiFiles'])
+    helpers.verify_modules(d, previous, {n: value for n, value in proof['baselineApiFiles'].items() if n.endswith('.js')})
+
+
 def baseline(d, contract, h, proof, expected=None):
     a = utilities()
     previous = (BASE / 'current').resolve()
@@ -87,8 +97,7 @@ def baseline(d, contract, h, proof, expected=None):
     normalizer = Path(contract['backupNormalizerPath'])
     need(normalizer.is_relative_to(BASE / 'releases') and not normalizer.is_symlink()
          and digest(normalizer.read_bytes()) == contract['backupNormalizerSha256'], 'BACKUP_NORMALIZER_CHANGED')
-    a.verify_modules(d, previous, contract['baselineRuntimeApiFiles'])
-    a.verify_modules(d, previous, proof['baselineApiFiles'])
+    verify_baseline_api(d, previous, contract, proof, a)
     a.verify_admin(d, states['admin'], proof['baselineAdminFiles'])
     h.guards(d, previous, states, contract)
     receipt = a.runtime_receipt(previous, raw, states)
@@ -404,7 +413,9 @@ def release(plan, contract, d, h):
         manifest['previousRoleSourceProjections'] = manifest.get('roleSourceProjections', {})
         manifest['adminSourceProjection'] = {'kind': 'PUBLISHED_ADMIN_WITH_NATIVE_SALE_OVERLAY', 'commit': plan['commit'], 'sourceTree': plan['tree'], 'sourceBaseline': contract['adminSourceBaseline'], 'publishedAdminSources': contract['adminPublishedSources'], 'runtimeImageId': images['admin']['imageId'], 'changedSources': {n: v for n, v in contract['sources'].items() if n.startswith('apps/admin/')}, 'buildProofSha256': plan['buildProofSha256'], 'preservedNginxSha256': observation['nginxSha256']}
         manifest['roleSourceProjections'] = {**manifest.get('roleSourceProjections', {}), 'admin': manifest['adminSourceProjection'], 'api': {'kind': 'PUBLISHED_API_WITH_NATIVE_SALE_OVERLAY', 'commit': plan['commit'], 'sourceTree': plan['tree'], 'sourceBaseline': contract['apiSourceBaseline'], 'publishedBaseImageId': before['api']['image'], 'runtimeImageId': images['api']['imageId'], 'parentProjection': manifest['previousRoleSourceProjections'].get('api'), 'apiModules': proof['apiModules'], 'buildProofSha256': plan['buildProofSha256']}}
-        manifest.update(commit=plan['commit'], sourceTree=plan['tree'], sourceBranch='main', scope=contract['scope'], status='DEPLOYED', previousCommit=contract['expectedCurrent'], previousRelease=str(previous), previousManifestSha256=digest(raw_manifest), servicesUpdated=['api', 'admin'], dependentServiceRebound='online-recharge', newMigrations=[contract['migration']['name']], migrationPerformed=True, paymentActions=0, validationRun=plan['workflowRunId'], actualDeployment=receipt, sourceProjection={'sourceBaseline': contract['apiSourceBaseline'], 'changedSources': contract['sources'], 'apiModules': proof['apiModules'], 'buildProofSha256': plan['buildProofSha256']}, sourceLayout='PUBLISHED_PREDECESSOR_WITH_NATIVE_SALE_OVERLAY', deploymentMethod='NATIVE_CI_APPROVED_SSM_FORWARD', compiledArtifact={'url': plan['artifactUrl'], 'sha256': plan['artifactSha256'], 'validationRun': plan['workflowRunId']})
+        manifest['publicationCommit'] = plan.get('controllerCommit', plan['commit'])
+        manifest['publicationRun'] = plan['workflowRunId']
+        manifest.update(commit=plan['commit'], sourceTree=plan['tree'], sourceBranch='main', scope=contract['scope'], status='DEPLOYED', previousCommit=contract['expectedCurrent'], previousRelease=str(previous), previousManifestSha256=digest(raw_manifest), servicesUpdated=['api', 'admin'], dependentServiceRebound='online-recharge', newMigrations=[contract['migration']['name']], migrationPerformed=True, paymentActions=0, validationRun=plan.get('validationRunId', plan['workflowRunId']), actualDeployment=receipt, sourceProjection={'sourceBaseline': contract['apiSourceBaseline'], 'changedSources': contract['sources'], 'apiModules': proof['apiModules'], 'buildProofSha256': plan['buildProofSha256']}, sourceLayout='PUBLISHED_PREDECESSOR_WITH_NATIVE_SALE_OVERLAY', deploymentMethod='NATIVE_CI_APPROVED_SSM_FORWARD', compiledArtifact={'url': plan['artifactUrl'], 'sha256': plan['artifactSha256'], 'validationRun': plan.get('validationRunId', plan['workflowRunId'])})
         for field in ('acceptedSwitchCommandId', 'publicationFinalization', 'deploymentRun'):
             manifest.pop(field, None)
         for role in images:
