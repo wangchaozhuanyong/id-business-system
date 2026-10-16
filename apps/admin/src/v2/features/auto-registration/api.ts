@@ -14,8 +14,7 @@ import type {
   AppleMailboxConsoleOptions,
   AppleMailboxSyncStatus,
   AppleMailboxManualSyncPreview,
-  AppleMailboxManualSyncResult,
-  AppleMailboxBrowserLaunch
+  AppleMailboxManualSyncResult
 } from './contracts';
 
 const base = '/id-business-v2/auto-registration';
@@ -69,11 +68,6 @@ export const autoRegistrationApi = {
   startAppleMailbox(input: AppleMailboxStartInput) {
     return request<{ taskUuid: string; record: AppleMailboxRecord }>(
       http.post(`${base}/apple-mailboxes/start`, input)
-    );
-  },
-  startAppleMailboxBrowser(input: AppleMailboxStartInput) {
-    return request<AppleMailboxBrowserLaunch>(
-      http.post(`${base}/apple-mailboxes/browser/start`, input)
     );
   },
   startAppleMailboxBatch(input: AppleMailboxBatchInput) {

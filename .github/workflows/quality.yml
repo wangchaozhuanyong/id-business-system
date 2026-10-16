@@ -29,6 +29,7 @@ jobs:
       admin_acceptance: ${{ steps.recharge.outputs.admin_acceptance }}
       online_ci_build: ${{ steps.recharge.outputs.online_ci_build }}
       browser_candidate: ${{ steps.recharge.outputs.browser_candidate }}
+      protocol_restore_candidate: ${{ steps.recharge.outputs.protocol_restore_candidate }}
     steps:
       - name: Checkout
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
@@ -301,7 +302,7 @@ jobs:
           CHECK_PART: ${{ matrix.part }}
           CHECK_BASE: ${{ needs.change-scope.outputs.base }}
           CHECK_MODE: ${{ needs.change-scope.outputs.mode }}
-          GH_TOKEN: ${{ (matrix.part == 'guards' || matrix.part == 'api' || (needs.change-scope.outputs.browser_candidate == 'true' && matrix.part == 'admin')) && github.token || '' }}
+          GH_TOKEN: ${{ (matrix.part == 'guards' || matrix.part == 'api' || ((needs.change-scope.outputs.browser_candidate == 'true' || needs.change-scope.outputs.protocol_restore_candidate == 'true') && matrix.part == 'admin')) && github.token || '' }}
         run: node scripts/ci-recharge-check.mjs "$CHECK_PART" "$CHECK_BASE"
 
       - name: Build and verify sealed ONLINE images without production access
