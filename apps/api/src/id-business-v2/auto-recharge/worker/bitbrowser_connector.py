@@ -1141,7 +1141,9 @@ class LocalJob:
                 and isinstance(self.result.get('quote'), dict)
                 and not self.payment_request_sent and result.get('payment_attempted') is False
                 and not result.get('payment_evidence')
+                and not result.get('payment_record_write_failed')
                 and result.get('payment_status') in (None, 'not_attempted')
+                and result.get('payment_outcome') in (None, 'not_attempted')
                 and all(result.get(key, 0) == 0 for key in
                         ('payment_requests_sent', 'confirmation_requests_sent'))):
             result.update(status='payment_cancelled', stage='confirmation_cancelled',

@@ -122,6 +122,8 @@ class CancelledVerifiedQuoteTests(unittest.TestCase):
                      {'terminal': {'confirmation_requests_sent': 1}},
                      {'terminal': {'payment_attempted': True}},
                      {'terminal': {'payment_status': 'unknown'}},
+                     {'terminal': {'payment_outcome': 'paid_pending_activation'}},
+                     {'terminal': {'payment_record_write_failed': True}},
                      {'terminal': {'payment_evidence': {'status': 'paid'}}}):
             with self.subTest(args=args):
                 result, _ = self.run_cancel(**args)
