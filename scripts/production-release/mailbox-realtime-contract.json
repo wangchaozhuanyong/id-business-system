@@ -1021,8 +1021,8 @@
     "scripts/production-release/registration-flow-evidence-contract.json": "9d5f34916800fb885cb8aabd98bb550900775f47f17d666c8ad40a26f65215ae",
     "scripts/production-release/registration-flow-evidence-dispatch.py": "8801f3de8d6749121ab60c7d8a108e9cb293e383c415114decdc92f4f7078f82",
     "scripts/production-release/registration-flow-evidence-release.py": "f6243432411f637a648e19a728dc4e1744a9682553aecb252b15991c42e1a3f3",
-    "scripts/production-release/registration-parity-diagnostics-build.py": "70ba059895de82de6f91c976639871d1889cb947523d95c0bf76905accb65448",
-    "scripts/production-release/registration-parity-diagnostics-contract.json": "aab84417c44e6f9d091fc08b51551edbf94d56b9759ffa463f70bc5f8cd42439",
+    "scripts/production-release/registration-parity-diagnostics-build.py": "3e930a74848e5e8685658df4801271d3dac3bf6f1e49ccf68a968b4ab33f04b1",
+    "scripts/production-release/registration-parity-diagnostics-contract.json": "fb8eb4a3b7d1ef24d83408e347493a12581edaefc6a18593ce9759f6c0996868",
     "scripts/production-release/registration-parity-diagnostics-release.py": "65e1803a06a71bda3306e7da7cbdbabce810b79285807ab134368dee545e1a32",
     "scripts/production-release/remote-deploy.py": "889aedb75bbcb53863a55dc2a4c40a84e06dea1d64d493f6a4fca6dc233f855c",
     "scripts/production-release/workspace-drag-build.py": "e2dba4371c53a4ad53b5c6ee96a1ddea5f5a7c455b8985a16540f89f410e17a7",
@@ -1201,7 +1201,7 @@
     "tree": "283b0749281572da98f75bed317f81816d030591",
     "workflowPath": ".github/workflows/proxy-result-identity-validation.yml"
   },
-  "inheritedContractSha256": "aab84417c44e6f9d091fc08b51551edbf94d56b9759ffa463f70bc5f8cd42439",
+  "inheritedContractSha256": "fb8eb4a3b7d1ef24d83408e347493a12581edaefc6a18593ce9759f6c0996868",
   "manifestSha256": "422379af5f8cfd2aa0fd047552ff7bf31ece884b10a2a4338de764eca7c3b188",
   "migration": null,
   "parentContractSha256": "9d5f34916800fb885cb8aabd98bb550900775f47f17d666c8ad40a26f65215ae",
@@ -1273,7 +1273,7 @@
     "tree": "f6ab4537e28437af244c2263dd591516ae8e2a22",
     "workflowPath": ".github/workflows/registration-closure-validation.yml"
   },
-  "reviewedApplicationCommit": "dcf090eac55659680daa079a911e2e6dfd62c4d7",
+  "reviewedApplicationCommit": "d2f3acac6e490391c5c7d2cf4f3b0df7da027923",
   "reviewedFileHashes": {
     ".github/workflows/mailbox-realtime-validation.yml": "68a5e780cae231b225e25ca37eab45e3e96e36f8c1448464f3837c3b991a5662",
     "apps/admin/src/v2/features/auto-recharge/VendureMailboxHealth.vue": "29d99a1085a80eb5126b8a69bf8f659cae9a9689d503a9d3f6b9b093c30087eb",
@@ -1288,13 +1288,13 @@
     "apps/api/src/id-business-v2/workspace/id-business-v2-vendure-mailbox.service.ts": "b173813bfeca8232cf5035be8373496724d2a38a5c9b52c74e222c7d71c99361",
     "apps/api/src/id-business-v2/workspace/mail-health.spec.ts": "0dd168fe3032a5b46e4d3eaf9e43ea5f6a09b01aaf0e54fe87d93b6e3dbbf4c8",
     "apps/api/src/id-business-v2/workspace/providers/id-business-v2-vendure-mailbox.client.ts": "c1b7f1d091e10afab65dbf6c22b26f94f899d6e697982052fcba9d77866b5e4e",
-    "docs/MAILBOX_REALTIME_REPAIR_20261016.md": "124738f9f1e5b5462de12218371c4f34f98ea94c82f3ea0e9717a30d07a5d434",
+    "docs/MAILBOX_REALTIME_REPAIR_20261016.md": "330c68d80706490eef1ed64b41a8696ddb47c997215d6c584d76270d18d5b703",
     "packages/shared/src/v2/vendure-mailbox.ts": "4b72d43152b07ebe9331583d8baf245028f0ddb96229ffcffbd5ec6d7dfa375e",
     "scripts/acceptance-v2-mailbox-realtime.mjs": "0fde62b43ee0686e5e9330c14e34621090f34ac5915528c719d5e9859a154c61",
-    "scripts/ci-mailbox-realtime-scope.mjs": "c996e4e82bb5568f73a33bca20ec746e42bd98bd82d619383fb7aff75934b3fb",
+    "scripts/ci-mailbox-realtime-scope.mjs": "914e200fe7fc4c6f24cb888dccb1488d517391820de4f26eedad2980ee57dd2e",
     "scripts/ci-mailbox-realtime-scope.test.mjs": "a6ff492b8563c470de0d246be18bc1033cb9252ecd671119c59e96dd80014a5a",
-    "scripts/ci-recharge-check.mjs": "300eb1afef187c213ccd8792f35af67eb6113beb02977a87bb353d51c82cb56b",
-    "scripts/ci-recharge-scope.mjs": "7c7a092b6f3785a2722bb0cee194fa15f02e25950f6d95ea985a5ea754d536d7",
+    "scripts/ci-recharge-check.mjs": "85488dbbf684e3615d960adb19bf7771baf6007c41e3a84800721257e3f1d97e",
+    "scripts/ci-recharge-scope.mjs": "039a321de1b8ae2e66f553449c4a849a24215214eeb0c7c66c584a7948981f9f",
     "scripts/production-release/mailbox-realtime-build.py": "d693158d5c89ac7283ac0d4e387204e3138c6425266c157f012ee6f9dab57f8c",
     "scripts/production-release/mailbox-realtime-dispatch.py": "b3ee5e4c40d2af93d6a8f58c76ad4ff5238843b86e5d7e1ceefeb9b8398bed13",
     "scripts/production-release/mailbox-realtime-release.py": "8997ec61dd659bf2a11583eb0720e8b2672bcbb003ddf5590cbf93c42f8a5eee",
@@ -2264,8 +2264,8 @@
     }
   },
   "sharedRuntimeUnchanged": true,
-  "sourceBaseline": "4888fb01cfdc916b4e866cd2007d3a6da9518446",
-  "sourceBaselineTree": "f1984d0b589d84bb5ce73aefa866d0ab7e270692",
+  "sourceBaseline": "a214c729f7a2991148029afacba99f575bfedb9f",
+  "sourceBaselineTree": "a331a7175931fd7c29aeb257291ac34997a1a7c7",
   "sourceProjectionSha256": {
     "adminSourceProjection": "b06bdf234d772e6b3eeb44709f7e14e2cd2e858552ca71b165f8d252d9eda24b",
     "roleSourceProjections": "62903f22df1bd66f1018b6bf5ab282870a85b6ffa1c6356f0956589d7a1e79e9"
