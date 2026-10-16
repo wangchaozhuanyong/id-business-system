@@ -44,6 +44,18 @@ def structural_fixture():
 
 
 class RestoreControls(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        (ROOT / '.runtime').mkdir(mode=0o700, exist_ok=True)
+
+    def test_inventory_excludes_only_incremental_build_metadata(self):
+        with tempfile.TemporaryDirectory(prefix='restore-inventory-', dir=ROOT / '.runtime') as directory:
+            context = Path(directory)
+            for name in ['a.js', 'a.js.map', 'a.d.ts', 'tsconfig.tsbuildinfo', 'tsconfig.build.tsbuildinfo',
+                         'other.tsbuildinfo']:
+                (context / name).write_text(name)
+            self.assertEqual(set(b.inventory(context)), {'a.js', 'a.js.map', 'a.d.ts', 'other.tsbuildinfo'})
+
     def test_unfrozen_contract_never_admits_publication(self):
         c = contract()
         c['frozen'] = False

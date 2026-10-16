@@ -30,7 +30,8 @@ def run(*args, cwd=ROOT, env=None):
 
 
 def inventory(directory):
-    return r.helper('recharge-record-release.py').file_inventory(directory)
+    # Reuse the frozen publisher's exclusion of TypeScript incremental metadata.
+    return r.helper(r.OLD_NAME + '-build.py').inventory(directory)
 
 
 def verify_sources(c):
