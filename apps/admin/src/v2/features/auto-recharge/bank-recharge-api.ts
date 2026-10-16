@@ -66,6 +66,9 @@ export interface BankChatgptAccount {
   } | null;
   id: string;
   deletedAt?: string | null;
+  registered: boolean;
+  saleStatus: 'unsold' | 'sold';
+  soldAt: string | null;
   emailMasked: string;
   registrationCountryCode?: string | null;
   registrationIp: string | null;
@@ -251,6 +254,7 @@ export const bankRechargeApi = {
       pageSize?: number;
       keyword?: string;
       subscriptionState?: string;
+      saleStatus?: BankChatgptAccount['saleStatus'] | 'all';
       offerStatus?: V2AccountOffer | 'all';
       deleted?: 'active' | 'deleted';
     } = {}
@@ -291,7 +295,10 @@ export const bankRechargeApi = {
     );
   },
   updateAccount(id: string, input: Record<string, unknown>) {
-    return request<{ id: string }>(http.patch(`${base}/accounts/${id}`, input));
+    return withV2QueryInvalidation(
+      request<{ id: string }>(http.patch(`${base}/accounts/${id}`, input)),
+      'auto-recharge'
+    );
   },
   deleteAccount(id: string, input: Record<string, unknown> = {}) {
     return request<{ id: string }>(http.delete(`${base}/accounts/${id}`, { data: input }));

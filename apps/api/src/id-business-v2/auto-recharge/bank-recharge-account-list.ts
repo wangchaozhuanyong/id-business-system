@@ -13,6 +13,7 @@ import { loginNetworkSummary } from './recharge-login-network';
 import { readBankRechargeCardSummary } from './bank-recharge-card-summary';
 import { V2_ACCOUNT_OFFERS, type V2AccountOffer } from '@apple-business/shared';
 import { BadRequestException } from '@nestjs/common';
+import { parseChatgptAccountSaleStatus } from './bank-recharge-account-sales';
 
 export type ChatgptAccountListQuery = {
   page?: string;
@@ -20,6 +21,7 @@ export type ChatgptAccountListQuery = {
   keyword?: string;
   subscriptionState?: string;
   offerStatus?: string;
+  saleStatus?: string;
   deleted?: string;
 };
 
@@ -32,6 +34,10 @@ export async function listChatgptAccounts(
     query.page !== undefined || query.pageSize !== undefined ? getPagination(query) : null;
   const keyword = bankRechargeText(query.keyword, '搜索内容', 250, false);
   const subscriptionState = parseAccountSubscriptionState(query.subscriptionState);
+  const saleStatus =
+    query.saleStatus === undefined || query.saleStatus === 'all'
+      ? undefined
+      : parseChatgptAccountSaleStatus(query.saleStatus);
   const now = Date.now();
   const warningBoundary = now + (await repository.renewalWarningDays()) * 24 * 60 * 60 * 1000;
   if (
@@ -44,6 +50,7 @@ export async function listChatgptAccounts(
     throw new BadRequestException('删除状态筛选无效');
   const where = {
     deletedAt: query.deleted === 'deleted' ? { not: null } : null,
+    ...(saleStatus ? { saleStatus } : {}),
     ...bankRechargeAccountFilter(
       keyword,
       keyword.includes('@') ? encryption.hash(keyword.toLowerCase()) : null,
@@ -57,6 +64,9 @@ export async function listChatgptAccounts(
   };
   const items = await repository.listAccounts({
     where,
+    ...(saleStatus === 'sold'
+      ? { orderBy: [{ soldAt: 'desc' as const }, { id: 'desc' as const }] }
+      : {}),
     ...(pagination ? { skip: pagination.skip, take: pagination.take } : {})
   });
   const [subscriptions, networks, openingCards, sources] = await Promise.all([

@@ -37,6 +37,9 @@ export function accountListItem(
   return {
     id: item.id,
     deletedAt: item.deletedAt ?? null,
+    registered: item.registered,
+    saleStatus: item.saleStatus,
+    soldAt: item.soldAt ?? null,
     emailMasked: item.emailMasked,
     registrationCountryCode: item.registrationCountryCode,
     registeredAt: item.registeredAt ?? null,

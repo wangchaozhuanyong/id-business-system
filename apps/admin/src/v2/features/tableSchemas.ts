@@ -47,6 +47,8 @@ export const v2TableSchemas = {
           pin: 'start'
         },
         { key: 'status', label: '状态', kind: 'status', widthPreset: 'compact' },
+        { key: 'saleStatus', label: '出售情况', kind: 'status', widthPreset: 'standard' },
+        { key: 'soldAt', label: '出售标记时间', kind: 'date', widthPreset: 'dateTime' },
         { key: 'offerStatus', label: '优惠状况', kind: 'status', widthPreset: 'standard' },
         { key: 'hasPassword', label: '登录密码', kind: 'status', widthPreset: 'compact' },
         { key: 'hasTotp', label: '双重验证', kind: 'status', widthPreset: 'compact' },

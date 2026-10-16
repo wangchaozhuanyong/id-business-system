@@ -105,6 +105,7 @@ export class BankRechargeController {
       pageSize?: string;
       keyword?: string;
       subscriptionState?: string;
+      saleStatus?: string;
       offerStatus?: string;
       deleted?: string;
     }

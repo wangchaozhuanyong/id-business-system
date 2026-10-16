@@ -18,6 +18,20 @@ const row: V2AuditLogRecord = {
 };
 
 describe('readable audit changes', () => {
+  it('ChatGPT 出售变更显示中文情况和标记时间，不显示内部枚举', () => {
+    const changes = operationAuditChanges({
+      ...row,
+      action: 'id_business_v2.auto_recharge.chatgpt_account.update',
+      objectType: 'chatgpt_account',
+      beforeData: { saleStatus: 'unsold', soldAt: null },
+      afterData: { saleStatus: 'sold', soldAt: '2026-10-16T01:00:00.000Z' }
+    });
+    expect(changes).toEqual([
+      { key: 'saleStatus', label: '出售情况', before: '未出售', after: '已出售' },
+      { key: 'soldAt', label: '出售标记时间', before: '未填写', after: '2026/10/16 09:00:00' }
+    ]);
+    expect(auditChangeValue('other', 'saleStatus')).toBe('出售情况待核实');
+  });
   it.each(['archive', 'unarchive'])(
     'shows %s real snapshots without receipt hashes or fictitious status changes',
     (action) => {
