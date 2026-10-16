@@ -6,13 +6,37 @@ import {
   isMailboxRealtimeControlsOnly,
   mailboxControlBase,
   mailboxControlTree,
-  mailboxControlPaths
+  mailboxControlPaths,
+  mailboxHealthCaptureBase,
+  mailboxHealthCaptureTree,
+  mailboxHealthCapturePaths
 } from './ci-mailbox-realtime-scope.mjs';
 import { checkMode, selectedParts, needsOnlineRechargeCiBuild } from './ci-recharge-scope.mjs';
 const c = JSON.parse(
   readFileSync('scripts/production-release/mailbox-realtime-contract.json', 'utf8')
 );
 const context = { base: c.sourceBaseline, baseTree: c.sourceBaselineTree };
+test('read-only deployed caller health capture never selects business builds', () => {
+  const captured = { base: mailboxHealthCaptureBase, baseTree: mailboxHealthCaptureTree };
+  assert.equal(isMailboxRealtimeControlsOnly(mailboxHealthCapturePaths, captured), true);
+  assert.equal(
+    checkMode(mailboxHealthCapturePaths, 'same', 'same', undefined, captured),
+    'recharge'
+  );
+  assert.deepEqual(selectedParts(mailboxHealthCapturePaths, undefined, captured), [
+    'guards',
+    'release-controls'
+  ]);
+  assert.equal(
+    isMailboxRealtimeControlsOnly([...mailboxHealthCapturePaths, 'apps/api/src/main.ts'], captured),
+    false
+  );
+  assert.equal(isMailboxRealtimeControlsOnly(mailboxHealthCapturePaths.slice(1), captured), false);
+  assert.equal(
+    isMailboxRealtimeControlsOnly(mailboxHealthCapturePaths, { ...captured, base: 'a'.repeat(40) }),
+    false
+  );
+});
 test('mailbox source scope keeps API Admin and all seven UI checks without an ONLINE build', () => {
   assert.equal(isMailboxRealtimeOnly(c.expectedGitChanges, context), true);
   assert.equal(checkMode(c.expectedGitChanges, 'same', 'same', undefined, context), 'recharge');

@@ -211,6 +211,11 @@ class MailboxRelease(unittest.TestCase):
         for command in ('docker restart', 'docker compose', 'send-command', 'INSERT INTO', 'UPDATE ', 'DELETE FROM'):
             self.assertNotIn(command, source)
         self.assertIn("fcntl.LOCK_SH|fcntl.LOCK_NB", source)
+        self.assertIn(i.HEALTH_CURRENT, source)
+        self.assertIn('mailbox-realtime-readback.json', source)
+        self.assertIn('UPSTREAM_HEALTH', source)
+        subprocess.run(['node', '--check', '--input-type=commonjs'],
+            input=i.HEALTH_PROBE.replace('CLIENT_HASH', json.dumps(i.HEALTH_CLIENT)), text=True, check=True)
 
 
 if __name__ == '__main__':
