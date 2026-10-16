@@ -300,6 +300,8 @@ const registrationAdvancedPaths = [
 const registrationSourceFixtures = Object.fromEntries(
   [
     registrationManifestPath,
+    // The GPT successor advances this historical module without changing its receipt.
+    'apps/api/src/id-business-v2/online-recharge/online-recharge.module.ts',
     ...registrationLayoutPaths,
     ...registrationCountryPaths,
     ...registrationSalesPaths,
@@ -6105,4 +6107,15 @@ test('historical recovery never accepts advanced main or online settings source 
       path === changed ? actualReadFileSync(path) : readRegistrationFixture(path);
     assert.equal(registrationPublishedRecoveryProof(paths, { readSource }), false, changed);
   }
+});
+
+test('GPT integration cannot qualify the immutable historical registration receipt', () => {
+  const path = 'apps/api/src/id-business-v2/online-recharge/online-recharge.module.ts';
+  assert.equal(registrationPublishedRecoveryProof([registrationPublishedBindingPath, path]), true);
+  const readSource = (name) =>
+    name === path ? actualReadFileSync(name) : readRegistrationFixture(name);
+  assert.equal(
+    registrationPublishedRecoveryProof([registrationPublishedBindingPath, path], { readSource }),
+    false
+  );
 });

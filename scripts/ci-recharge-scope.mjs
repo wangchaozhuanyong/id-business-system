@@ -1,3 +1,5 @@
+import { isMailboxVersionOnly } from './ci-mailbox-version-scope.mjs';
+import { affectsGptRechargeArtifact, isGptRechargeOnly } from './ci-gpt-recharge-scope.mjs';
 import {
   isSharedBankCardOnly,
   isSharedBankCardControlsOnly,
@@ -266,7 +268,11 @@ const onlineCiBuildTestInputs = new Set([
   'scripts/production-release/online-recharge-component-lifecycle.test.py'
 ]);
 export function needsOnlineRechargeCiBuild(paths, context) {
+<<<<<<< HEAD
   if (isRegistrationProtocolRestoreOnly(paths, context)) return false;
+=======
+  if (isMailboxVersionOnly(paths)) return false;
+>>>>>>> origin/main
   if (isRegistrationBrowserOnly(paths, context)) return false;
   if (isAccountLoginOnly(paths) || isAccountLoginControlsOnly(paths)) return false;
   if (isRegistrationParityDiagnosticsControlRepair(paths, context)) return false;
@@ -1054,10 +1060,14 @@ export function isMailboxOnly(paths) {
 }
 
 export function checkMode(paths, oldSchema, newSchema, grantHelperSnapshot, context) {
+<<<<<<< HEAD
   if (isRegistrationProtocolRestoreOnly(paths, context))
     return oldSchema === newSchema ? 'recharge' : 'full';
   if (paths.includes('scripts/production-release/registration-protocol-restore-contract.json'))
     return 'full';
+=======
+  if (isGptRechargeOnly(paths)) return oldSchema === newSchema ? 'recharge' : 'full';
+>>>>>>> origin/main
   if (isRegistrationBrowserOnly(paths, context))
     return oldSchema === newSchema ? 'recharge' : 'full';
   if (paths.includes('scripts/production-release/registration-browser-contract.json'))
@@ -1081,6 +1091,7 @@ export function checkMode(paths, oldSchema, newSchema, grantHelperSnapshot, cont
   if (isChatgptSalesControlsOnly(paths)) return oldSchema === newSchema ? 'ci-only' : 'full';
   if (isChatgptSalesOnly(paths))
     return chatgptSalesSchemaMatches(oldSchema, newSchema) ? 'recharge' : 'full';
+  if (isMailboxVersionOnly(paths)) return oldSchema === newSchema ? 'recharge' : 'full';
   if (isSharedBankCardControlsOnly(paths)) return oldSchema === newSchema ? 'ci-only' : 'full';
   if (isSharedBankCardOnly(paths))
     return sharedBankCardSchemaMatches(oldSchema, newSchema) ? 'recharge' : 'full';
@@ -1556,7 +1567,12 @@ export function isTargetedOnly(paths, oldSchema, newSchema) {
   );
 }
 export function selectedParts(paths, grantHelperSnapshot, context) {
+<<<<<<< HEAD
   if (isRegistrationProtocolRestoreOnly(paths, context)) return ['guards', 'api', 'admin'];
+=======
+  if (isMailboxVersionOnly(paths)) return ['guards', 'api', 'release-controls'];
+  if (isGptRechargeOnly(paths)) return ['guards', 'api'];
+>>>>>>> origin/main
   if (isRegistrationBrowserOnly(paths, context)) return [...registrationBrowserParts];
   if (isAccountLoginControlsOnly(paths)) return ['guards'];
   if (isAccountLoginOnly(paths)) return [...accountLoginParts];
@@ -1691,6 +1707,12 @@ export function selectedParts(paths, grantHelperSnapshot, context) {
 
 export function affectsPart(part, paths) {
   if (part === 'guards') return paths.length > 0;
+  // GPT build and publication recipes are inputs to its native API artifact.
+  if (
+    part === 'api' &&
+    affectsGptRechargeArtifact(paths.filter((path) => path.includes('gpt-recharge')))
+  )
+    return true;
   if (part === 'api' && hasAppleMailboxScope(paths)) return true;
   if (part === 'migration' && hasRegistrationMirrorScope(paths)) return true;
   if (
@@ -4240,7 +4262,8 @@ async function main() {
       const salesAfter = execFileSync('git', ['show', `HEAD:${schema}`], { encoding: 'utf8' });
       if (
         requestedBaseIsAncestor &&
-        ((isAccountLoginControlsOnly(salesPaths) && salesBefore === salesAfter) ||
+        ((isGptRechargeOnly(salesPaths) && salesBefore === salesAfter) ||
+          (isAccountLoginControlsOnly(salesPaths) && salesBefore === salesAfter) ||
           (isAccountLoginOnly(salesPaths) && accountLoginSchemaMatches(salesBefore, salesAfter)) ||
           (isChatgptSalesOnly(salesPaths) && chatgptSalesSchemaMatches(salesBefore, salesAfter)) ||
           (isChatgptSalesControlsOnly(salesPaths) && salesBefore === salesAfter) ||
@@ -4345,6 +4368,8 @@ async function main() {
       for (const part of parts) {
         if (
           reused.has(part) ||
+          // Only the GPT candidate binds this complete artifact metadata closure.
+          (part === 'api' && isGptRechargeOnly(paths) && affectsGptRechargeArtifact(changed)) ||
           (affectsPart(part, changed) &&
             !hasRechargeFlowBusinessReuseProof(part, changed, dispatcherSnapshot))
         )
@@ -4392,9 +4417,11 @@ async function main() {
             : selectedParts(paths, undefined, proxyIdentityContext);
   // BEGIN finite ONLINE build-proof reuse classifier admission
   const needsOnlineRechargeCiBuild = (paths) =>
-    canResumeOnlineBuildProofReuseGuard(base, 'scope')
+    isGptRechargeOnly(paths)
       ? false
-      : onlineBuildProofReusePriorNeedsCiBuild(paths, proxyIdentityContext);
+      : canResumeOnlineBuildProofReuseGuard(base, 'scope')
+        ? false
+        : onlineBuildProofReusePriorNeedsCiBuild(paths, proxyIdentityContext);
   // END finite ONLINE build-proof reuse classifier admission
 
   const onlineCiBuild = needsOnlineRechargeCiBuild(paths);

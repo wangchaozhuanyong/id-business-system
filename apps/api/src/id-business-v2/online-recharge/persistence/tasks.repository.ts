@@ -1,3 +1,4 @@
+import { OnlineRechargeTaskNotAccepted } from '../task-acceptance';
 import { assertSharedCardPlan } from '../../bank-card-pool/public-api';
 import {
   BadRequestException,
@@ -244,7 +245,8 @@ export class OnlineRechargeTasksRepository {
     raw: unknown,
     operator?: AuthenticatedUser,
     operation: OnlineRechargeOperation = 'recharge',
-    requireFullSession = false
+    requireFullSession = false,
+    integrationSource?: string
   ) {
     const input = object(raw);
     const sessionData = ['recharge', 'debug', 'subscription', 'renewal'].includes(operation)
@@ -254,7 +256,7 @@ export class OnlineRechargeTasksRepository {
     if (operation === 'recharge' && !operator && !code)
       throw new BadRequestException('请填写兑换码');
     const token = randomBytes(32).toString('base64url');
-    const result = await this.repository.transaction('tasks-start', async (tx) => {
+    const pending = this.repository.transaction('tasks-start', async (tx) => {
       let testedProxy: { id: string; version: string } | undefined;
       if (operation === 'proxy_test') {
         const requested = id(input.proxyId);
@@ -359,6 +361,7 @@ export class OnlineRechargeTasksRepository {
       if (operation === 'recharge' && settings.gptApiEnabled && selectedPlan === 'pro_500')
         throw new BadRequestException('第三方通道尚未核实支持 Pro 500，请使用本地执行通道');
       const payload: Record<string, unknown> = {};
+      if (integrationSource) payload.integrationSource = integrationSource;
       if (input.cardId) {
         const cardId = id(input.cardId);
         const selectedCard = await tx.onlineRechargeCard.findUnique({ where: { id: cardId } });
@@ -484,6 +487,14 @@ export class OnlineRechargeTasksRepository {
         provider: row.provider
       });
       return { row, taskToken: token, reused: false };
+    });
+    const result = await pending.catch((error: unknown) => {
+      if (
+        integrationSource &&
+        (error instanceof BadRequestException || error instanceof ConflictException)
+      )
+        throw new OnlineRechargeTaskNotAccepted();
+      throw error;
     });
     return {
       ...this.map(result.row, !operator),

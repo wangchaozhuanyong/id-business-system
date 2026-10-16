@@ -14,7 +14,7 @@ function fixture() {
       create: vi.fn(async ({ data }) => ({ ...data, expiresAt: null }))
     },
     auditLog: { create: vi.fn(async ({ data }) => data) },
-    idBusinessV2ScopeVersion: { updateMany: vi.fn().mockResolvedValue({ count: 3 }) }
+    idBusinessV2ScopeVersion: { upsert: vi.fn().mockResolvedValue({ count: 3 }) }
   };
   const prisma = { $transaction: vi.fn(async (work) => work(tx)) };
   const publish = vi.fn();
@@ -143,7 +143,7 @@ describe('财务汇率复用外层事务', () => {
     f.tx.auditLog.create.mockRejectedValueOnce(new Error('audit failed'));
     await expect(f.resolve()).rejects.toThrow('audit failed');
     expect(f.prisma.$transaction).toHaveBeenCalledOnce();
-    expect(f.tx.idBusinessV2ScopeVersion.updateMany).not.toHaveBeenCalled();
+    expect(f.tx.idBusinessV2ScopeVersion.upsert).not.toHaveBeenCalled();
     expect(f.publish).not.toHaveBeenCalled();
   });
 });
