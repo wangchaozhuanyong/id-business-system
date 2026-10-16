@@ -10,6 +10,7 @@ from pathlib import Path
 import re
 import shutil
 import tarfile
+import types
 import urllib.request
 
 BASE = Path('/opt/id-business-v2')
@@ -62,9 +63,15 @@ def verify_proof(proof, plan, contract, payload, h):
          and proof.get('sourceBaseline') == contract['sourceBaseline']
          and proof.get('sourceBaselineTree') == contract['sourceBaselineTree']
          and proof.get('runtimeBaselineCommit') == contract['expectedCurrent']
+         and proof.get('roleSourceCommits') == contract['roleSourceCommits']
+         and proof.get('reviewedApplicationCommit') == contract['reviewedApplicationCommit']
          and proof.get('sourceProjection') == 'PUBLISHED_RUNTIME_PLUS_TASK_DELTA'
          and proof.get('workerFiles') == contract['workerFiles']
          and proof.get('baselinePrismaClientFiles') == contract['baselinePrismaClientFiles']
+         and proof.get('runtimePrismaClientFiles') == contract['runtimePrismaClientFiles']
+         and proof.get('publishedAdminProofSha256') == contract['publishedAdminProof']['sha256']
+         and proof.get('hostSourceInheritance') == contract['hostSourceInheritance']
+         and proof.get('sqliteReviewPolicy') == contract['sqliteReviewPolicy']
          and proof.get('prismaPathMetadata') == contract['prismaPathMetadata']
          and proof.get('baselineEngineFiles') == contract['baselineEngineFiles']
          and proof.get('schemaSha256') == contract['schemaSha256']
@@ -105,11 +112,128 @@ def unchanged_schema(d, directory, contract):
     need(d.compose(directory, 'exec', '-T', 'api', 'node', '-e', source) == contract['schemaSha256'], 'SCHEMA_CHANGED')
 
 
+def inherited_host_source(contract):
+    source = contract['hostSourceInheritance']
+    path = Path(source['release'])
+    need(path.parent == BASE / 'releases' and not path.is_symlink()
+         and source['commit'] == '69eba563895bf083b24c8214a088454d5df34922', 'HOST_SOURCE_INVALID')
+    raw = (path / 'release-manifest.json').read_bytes()
+    need(digest(raw) == source['manifestSha256'] and json.loads(raw)['commit'] == source['commit'], 'HOST_SOURCE_CHANGED')
+    need(source['files'] == {WORKER + 'release_safety.py': contract['baselineWorkerFiles']['release_safety.py']},
+         'HOST_SOURCE_SCOPE_CHANGED')
+    for name, expected in source['files'].items():
+        target = path / name
+        need(not target.is_symlink() and digest(target.read_bytes()) == expected, 'HOST_SOURCE_CHANGED')
+    return path
+
+
+def sqlite_inspection_source():
+    # Independent publication proof. The worker and its global safety gate stay unchanged.
+    return r"""import sys,json,sqlite3,hashlib,importlib.util,uuid
+from pathlib import Path
+cfg=json.loads(sys.stdin.readline());p=Path('/app/apps/api/src/id-business-v2/auto-registration/worker/release_safety.py');assert not p.is_symlink();helper_hash=hashlib.sha256(p.read_bytes()).hexdigest();assert helper_hash in cfg['safetyHashes']
+if helper_hash==cfg['candidateSafetyHash']:
+ q=p.with_name('flow_evidence.py');assert not q.is_symlink() and hashlib.sha256(q.read_bytes()).hexdigest()==cfg['candidateFlowHash']
+spec=importlib.util.spec_from_file_location('strict_readonly_lease_audit',p);s=importlib.util.module_from_spec(spec);spec.loader.exec_module(s)
+import os,stat
+database=Path('/app/.runtime/auto-registration/database.db');component=Path(database.anchor)
+for part in database.parts[1:]:
+ component/=part;mode=os.lstat(component).st_mode;assert not stat.S_ISLNK(mode)
+assert stat.S_ISREG(mode)
+for suffix in ('-wal','-shm','-journal'):
+ try:mode=os.lstat(str(database)+suffix).st_mode
+ except FileNotFoundError:continue
+ assert stat.S_ISREG(mode)
+with sqlite3.connect('file:/app/.runtime/auto-registration/database.db?mode=ro',uri=True,timeout=5)as db:
+ db.execute('PRAGMA query_only=ON');db.execute('BEGIN');assert db.execute('PRAGMA integrity_check').fetchall()==[('ok',)]
+ summary=s.logical_summary(db);leases=s.encrypted_proof(db,cfg['key']);assert leases==1;facts=[]
+ for name,value in db.execute('SELECT key,value FROM settings'):
+  if not name.startswith(s.APPLE_PREFIX):continue
+  record=s.strict_json(s.decrypt_value(value,cfg['key']));task=record.get('activeTaskUuid')
+  if task is None:continue
+  assert str(uuid.UUID(task))==task
+  binding_value=db.execute('SELECT value FROM settings WHERE key=?',(s.APPLE_TASK_PREFIX+task,)).fetchone()[0];binding=s.strict_json(s.decrypt_value(binding_value,cfg['key']))
+  task_row=db.execute('SELECT * FROM registration_tasks WHERE task_uuid=?',(task,)).fetchone();assert task_row is not None
+  task_status=db.execute('SELECT status FROM registration_tasks WHERE task_uuid=?',(task,)).fetchone()[0];assert task_status in s.TASK_STATUSES
+  record_status=record.get('taskStatus');assert record_status in {'pending','running','completed','failed','cancelled','awaiting_review','interrupted'}
+  h=lambda v:hashlib.sha256(s.canonical(v)).hexdigest()
+  facts.append({'taskUuid':task,'taskStatus':task_status,'recordTaskStatus':record_status,'sideEffectPossible':binding.get('sideEffectPossible')is True,'needsReview':binding.get('needsReview')is True,'recordSha256':h(value),'bindingSha256':h(binding_value),'taskRowSha256':h([s.sqlite_value(v)for v in task_row])})
+ assert len(facts)==leases
+ protected=[]
+ for task in ['f8ec17e1-036a-493e-ab3c-7a84ef026777','69f6a290-8de4-409f-86ee-d8b5c1f5865b']:
+  binding_value=db.execute('SELECT value FROM settings WHERE key=?',(s.APPLE_TASK_PREFIX+task,)).fetchone()[0];binding=s.strict_json(s.decrypt_value(binding_value,cfg['key']))
+  candidates=[]
+  for name,value in db.execute('SELECT key,value FROM settings'):
+   if name.startswith(s.APPLE_PREFIX):
+    record=s.strict_json(s.decrypt_value(value,cfg['key']))
+    if record['email']==binding['email']:candidates.append((record,value))
+  assert len(candidates)==1;record,value=candidates[0]
+  task_row=db.execute('SELECT * FROM registration_tasks WHERE task_uuid=?',(task,)).fetchone();assert task_row is not None
+  task_status=db.execute('SELECT status FROM registration_tasks WHERE task_uuid=?',(task,)).fetchone()[0];assert task_status in s.TASK_STATUSES
+  h=lambda v:hashlib.sha256(s.canonical(v)).hexdigest()
+  protected.append({'taskUuid':task,'taskStatus':task_status,'recordRegistrationStatus':record['registrationStatus'],'recordSource':record['source'],'recordSha256':h(value),'bindingSha256':h(binding_value),'taskRowSha256':h([s.sqlite_value(v)for v in task_row])})
+ assert summary['taskCounts']['pending']==0 and summary['taskCounts']['running']==0
+ print(json.dumps({'version':1,'status':'PASS',**summary,'activeAppleLeaseCount':leases,'executingTaskCount':0,'retainedReviewLeaseCount':len(facts),'corruptEncryptedValueCount':0,'leaseFacts':facts,'protectedTaskFacts':protected,'businessActions':0},sort_keys=True))
+"""
+
+
+def validate_sqlite_receipt(value, contract, expected_logical=None):
+    policy = contract['sqliteReviewPolicy']
+    leases = policy['leaseFacts']
+    protected = policy['protectedTaskFacts']
+    need(len(leases) == 1 and leases[0]['taskUuid'] == '69f6a290-8de4-409f-86ee-d8b5c1f5865b'
+         and leases[0]['taskStatus'] == 'failed' and leases[0]['recordTaskStatus'] == 'awaiting_review'
+         and leases[0]['needsReview'] is True and leases[0]['sideEffectPossible'] is True
+         and policy['summary']['taskCounts']['pending'] == 0 and policy['summary']['taskCounts']['running'] == 0,
+         'SQLITE_REVIEW_POLICY_INVALID')
+    need(len(protected) == 2 and protected[0]['taskUuid'] == 'f8ec17e1-036a-493e-ab3c-7a84ef026777'
+         and protected[0]['taskStatus'] == 'failed' and protected[0]['recordRegistrationStatus'] == 'registered'
+         and protected[0]['recordSource'] == 'manual'
+         and protected[1]['taskUuid'] == leases[0]['taskUuid'] and protected[1]['taskStatus'] == 'failed'
+         and all(re.fullmatch('[a-f0-9]{64}', fact[key]) for fact in [*leases, *protected]
+                 for key in ('recordSha256', 'bindingSha256', 'taskRowSha256')),
+         'SQLITE_REVIEW_POLICY_INVALID')
+    expected = {'version': 1, 'status': 'PASS', **policy['summary'], 'activeAppleLeaseCount': 1,
+                'executingTaskCount': 0, 'retainedReviewLeaseCount': 1, 'corruptEncryptedValueCount': 0,
+                'leaseFacts': leases, 'protectedTaskFacts': policy['protectedTaskFacts'], 'businessActions': 0}
+    need(value == expected and (expected_logical is None or value['logicalSha256'] == expected_logical),
+         'SQLITE_PRESERVATION_CHANGED')
+    return value
+
+
+def sqlite_receipt(d, directory, contract, expected_logical=None):
+    config = {'safetyHashes': [contract['baselineWorkerFiles']['release_safety.py'], contract['workerFiles']['release_safety.py']],
+              'candidateSafetyHash': contract['workerFiles']['release_safety.py'],
+              'candidateFlowHash': contract['workerFiles']['flow_evidence.py']}
+    source = "const{spawnSync}=require('child_process');const config=" + json.dumps(config) + ";config.key=process.env.FIELD_ENCRYPTION_KEY;" \
+        + "const result=spawnSync('/opt/id-registration/venv/bin/python',['-B','-c'," + json.dumps(sqlite_inspection_source()) \
+        + "],{input:JSON.stringify(config)+'\\n',encoding:'utf8',env:{PATH:process.env.PATH},timeout:45000});" \
+        + "if(result.status!==0)process.exit(2);console.log(JSON.stringify(JSON.parse(result.stdout)));"
+    value = json.loads(d.compose(directory, 'exec', '-T', 'api', 'node', '-e', source, timeout=60))
+    return validate_sqlite_receipt(value, contract, expected_logical)
+
+
+def backup_sqlite(old, d, directory, plan, states, marker, safety, contract):
+    # Rebind only the inspector in a fresh function namespace. No old module or file is edited.
+    need(digest(Path(old.__file__).read_bytes()) == contract['buildSupportHashes'][
+        'scripts/production-release/registration-closure-release.py'], 'SQLITE_BACKUP_HELPER_CHANGED')
+    original = old.backup_sqlite_locked
+    namespace = {**original.__globals__, 'inspect_sqlite': lambda driver, root, expected=None:
+                 sqlite_receipt(driver, root, contract, expected)}
+    adapted = types.FunctionType(original.__code__, namespace, original.__name__, original.__defaults__, original.__closure__)
+    return adapted(d, directory, plan, states, marker.parent, marker, marker.read_bytes(), safety)
+
+
 def baseline(d, h, a, finite, contract, expected=None):
     current = (BASE / 'current').resolve()
     need(str(current) == contract['current'] and current.parent == BASE / 'releases', 'CURRENT_CHANGED')
     raw = (current / 'release-manifest.json').read_bytes()
     need(digest(raw) == contract['manifestSha256'] and json.loads(raw)['commit'] == contract['expectedCurrent'], 'MANIFEST_CHANGED')
+    inherited_host_source(contract)
+    need({n: json.loads(raw)['roleSourceProjections'][n]['commit'] for n in contract['roleSourceCommits']}
+         == contract['roleSourceCommits'], 'ROLE_BASELINE_CHANGED')
+    need(json.loads(raw)['roleSourceProjections']['admin']['candidateProofSha256']
+         == contract['publishedAdminProof']['sha256'], 'ADMIN_BASELINE_PROOF_CHANGED')
     states = h.snapshot(d, current)
     need(states == contract['services'] and all(digest((current / n).read_bytes()) == value
          for n, value in contract['configurationSha256'].items()), 'RUNTIME_BASELINE_CHANGED')
@@ -119,12 +243,12 @@ def baseline(d, h, a, finite, contract, expected=None):
     h.guards(d, current, states, contract)
     finite.engine_content(d, states['online-recharge'], contract['baselineEngineFiles'])
     api_inventory(d, states['api'], '/app/apps/api/dist/', contract['baselineApiFiles'], javascript_only=True)
-    api_inventory(d, states['api'], '/app/node_modules/.prisma/client/', contract['baselinePrismaClientFiles'])
+    api_inventory(d, states['api'], '/app/node_modules/.prisma/client/', contract['runtimePrismaClientFiles'])
     worker_inventory(d, states['api'], contract['baselineWorkerFiles'])
     unchanged_schema(d, current, contract)
     a.verify_admin(d, states['admin'], contract['baselineAdminFiles'])
     observed = {**a.runtime_receipt(current, raw, states), 'database': finite.database_receipt(d, current, contract),
-                'sqlite': finite.sqlite_receipt(d, current)}
+                'sqlite': sqlite_receipt(d, current, contract)}
     if expected is not None:
         need(observed == expected, 'PREFLIGHT_MOVED')
     return current, raw, states, observed
@@ -144,11 +268,11 @@ def smoke(d, target, states, contract, proof, receipt, h, a, finite):
     api_inventory(d, states['api'], '/app/apps/api/dist/', {**contract['baselineApiFiles'],
         **{n: value for n, value in proof['apiModules'].items() if n.endswith('.js')}}, javascript_only=True)
     a.verify_modules(d, target, proof['apiModules'])
-    api_inventory(d, states['api'], '/app/node_modules/.prisma/client/', contract['baselinePrismaClientFiles'])
+    api_inventory(d, states['api'], '/app/node_modules/.prisma/client/', contract['runtimePrismaClientFiles'])
     worker_inventory(d, states['api'], {**contract['baselineWorkerFiles'], **contract['workerFiles']})
     unchanged_schema(d, target, contract)
     need(finite.database_receipt(d, target, contract) == receipt['database'], 'MYSQL_DATA_CHANGED')
-    need(finite.sqlite_receipt(d, target) == receipt['sqlite'], 'SQLITE_DATA_CHANGED')
+    need(sqlite_receipt(d, target, contract) == receipt['sqlite'], 'SQLITE_DATA_CHANGED')
     a.verify_admin(d, states['admin'], {**contract['baselineAdminFiles'], **proof['adminFiles']})
     request = urllib.request.Request('https://54-249-61-238.sslip.io/', headers={'Cache-Control': 'no-cache'})
     with urllib.request.urlopen(request, timeout=25) as response:
@@ -159,7 +283,7 @@ def smoke(d, target, states, contract, proof, receipt, h, a, finite):
 
 def release(plan, contract, d, h):
     need(plan['mode'] in ('preflight', 'release', 'readback') and contract['scope'] == SCOPE
-         and contract['expectedCurrent'] == '69eba563895bf083b24c8214a088454d5df34922'
+         and contract['expectedCurrent'] == '88bce5ab09d20cd303f1fdd5fe310cb0b42e1451'
          and contract['migration'] is None and contract.get('frozen') is True
          and all(re.fullmatch('[a-f0-9]{40}', plan[n]) for n in ('commit', 'tree'))
          and all(re.fullmatch('[1-9][0-9]*', plan[n]) for n in ('workflowRunId', 'workflowRunAttempt')), 'IDENTITY_INVALID')
@@ -231,6 +355,12 @@ def release(plan, contract, d, h):
         target = BASE / 'releases' / (stamp + '-' + plan['commit'][:12] + '-registration-flow-evidence')
         need(not target.exists(), 'TARGET_EXISTS')
         shutil.copytree(previous, target, symlinks=True)
+        inherited = inherited_host_source(contract)
+        for name in contract['hostSourceInheritance']['files']:
+            path = target / name
+            need(not path.is_symlink(), 'SOURCE_PATH_INVALID')
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes((inherited / name).read_bytes())
         for name in contract['sources']:
             path = target / name
             need(not path.is_symlink() and path.resolve().is_relative_to(target), 'SOURCE_PATH_INVALID')
@@ -242,6 +372,7 @@ def release(plan, contract, d, h):
             need(digest(raw) == expected, 'CONTROL_CHANGED')
             path = target / 'scripts/production-release' / name
             need(not path.is_symlink(), 'CONTROL_PATH_INVALID')
+            path.parent.mkdir(parents=True, exist_ok=True)
             path.write_bytes(raw)
         override = json.loads((target / 'compose.release.json').read_bytes())
         for role in ('api', 'admin'):
@@ -255,21 +386,20 @@ def release(plan, contract, d, h):
             d.assert_no_active_recharge(previous)
             d.assert_no_active_registration(previous)
             h.engine_idle(d, before['online-recharge'], contract)
-            need(finite.sqlite_receipt(d, previous) == observed['sqlite'], 'SQLITE_MOVED')
+            need(sqlite_receipt(d, previous, contract) == observed['sqlite'], 'SQLITE_MOVED')
             backup = h.fresh_scoped_backup(d, previous, plan, normalizer_path=Path(contract['backupNormalizerPath']))
             need(backup.get('s3Verified') is True, 'MYSQL_BACKUP_UNVERIFIED')
             old = helper('registration-closure-release.py')
             marker = Path(maintenance['paths'][1])
-            safety = previous / WORKER / 'release_safety.py'
+            safety = inherited / WORKER / 'release_safety.py'
             need(digest(safety.read_bytes()) == contract['baselineWorkerFiles']['release_safety.py'], 'BASE_SAFETY_CHANGED')
-            sqlite_backup = old.backup_sqlite_locked(d, previous, plan, before, marker.parent, marker,
-                marker.read_bytes(), safety)
+            sqlite_backup = backup_sqlite(old, d, previous, plan, before, marker, safety, contract)
             need(sqlite_backup['s3Verified'] and sqlite_backup['logical'] == observed['sqlite'], 'SQLITE_BACKUP_UNVERIFIED')
             fence = finite.sql_fence_class(contract)(d, previous)
             fence.acquire()
             fence.check_idle()
             finite.verify_markers(maintenance)
-            need(finite.sqlite_receipt(d, previous) == observed['sqlite'], 'SQLITE_MOVED_AFTER_FENCE')
+            need(sqlite_receipt(d, previous, contract) == observed['sqlite'], 'SQLITE_MOVED_AFTER_FENCE')
             journal.write_text(json.dumps({'status': 'SWITCH_STARTED', 'target': str(target), 'maintenance': maintenance}) + '\n')
             fence.stop(before['api'], grace=30)
             fence.stop(before['online-recharge'], grace=45)
@@ -289,6 +419,7 @@ def release(plan, contract, d, h):
                 'sqliteBackup': sqlite_backup, 'maintenance': maintenance, 'previousRoleProjections': projections,
                 'images': images, 'updatedServices': ['api', 'admin'], 'reboundServices': ['online-recharge'],
                 'migrationPerformed': False, 'businessActions': 0}
+            receipt['hostSourceInheritance'] = contract['hostSourceInheritance']
             smoke(d, target, after, contract, proof, receipt, h, a, finite)
             for role in ('api', 'admin'):
                 manifest['roleSourceProjections'][role] = {'kind': SCOPE, 'commit': plan['commit'], 'sourceTree': plan['tree'],
@@ -304,6 +435,9 @@ def release(plan, contract, d, h):
                 sourceProjection={'kind': SCOPE, 'baselineCommit': contract['expectedCurrent'],
                                   'sourceBaseline': contract['sourceBaseline'], 'sourceBaselineTree': contract['sourceBaselineTree'],
                                   'method': 'PUBLISHED_RUNTIME_PLUS_TASK_DELTA', 'sources': contract['sources'],
+                                  'roleSourceCommits': contract['roleSourceCommits'],
+                                  'reviewedApplicationCommit': contract['reviewedApplicationCommit'],
+                                  'hostSourceInheritance': contract['hostSourceInheritance'],
                                   'buildProofSha256': plan['buildProofSha256']},
                 servicesUpdated=['api', 'admin'], servicesRebound=['online-recharge'], newMigrations=[], migrationPerformed=False,
                 paymentActions=0, subscriptionChanged=False, externalNotification=False, validationRun=plan['workflowRunId'],
