@@ -59,8 +59,11 @@ import {
 import { readRegistrationNativeReuse } from './ci-registration-closure-native-reuse.mjs';
 import {
   isRegistrationProtocolRestoreOnly,
+  isRegistrationProtocolRestoreControlRepair,
+  registrationProtocolRestoreRepairBase,
   registrationProtocolRestoreBase,
-  registrationProtocolRestoreCommands
+  registrationProtocolRestoreCommands,
+  registrationProtocolRestoreRepairCommands
 } from './ci-registration-protocol-restore-scope.mjs';
 import {
   isRegistrationBrowserOnly,
@@ -175,6 +178,19 @@ if (
   } else if (part === 'api') {
     run('python3', ['-B', 'scripts/production-release/gpt-recharge-build.py']);
   } else throw new Error('Unsupported GPT recharge check part');
+  process.exit(0);
+}
+if (
+  mode === 'ci-only' &&
+  base === registrationProtocolRestoreRepairBase &&
+  isRegistrationProtocolRestoreControlRepair(changed, {
+    base,
+    baseTree: execFileSync('git', ['rev-parse', base + '^{tree}'], { encoding: 'utf8' }).trim()
+  })
+) {
+  if (part !== 'guards')
+    throw new Error('Unsupported registration protocol restore control repair check part');
+  for (const [file, ...args] of registrationProtocolRestoreRepairCommands.guards) run(file, args);
   process.exit(0);
 }
 if (

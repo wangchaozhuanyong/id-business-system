@@ -1,4 +1,8 @@
 import {
+  registrationProtocolRestoreRepairBase,
+  registrationProtocolRestoreRepairTree,
+  registrationProtocolRestoreRepairPaths,
+  registrationProtocolRestoreRepairGuard,
   registrationProtocolRestoreBase,
   registrationProtocolRestoreTree,
   registrationProtocolRestorePaths,
@@ -61,6 +65,57 @@ import {
   registrationBrowserAcceptance,
   registrationBrowserParts
 } from './ci-registration-browser-scope.mjs';
+
+test('registration protocol control repair selects guards only without ONLINE or candidate suites', () => {
+  const prior = JSON.parse(
+    execFileSync(
+      'git',
+      [
+        'show',
+        registrationProtocolRestoreRepairBase +
+          ':scripts/production-release/registration-protocol-restore-contract.json'
+      ],
+      { encoding: 'utf8' }
+    )
+  );
+  const contract = structuredClone(prior);
+  contract.validationBaselineSources = {
+    ...prior.validationBaselineSources,
+    ...registrationProtocolRestoreRepairGuard
+  };
+  const context = {
+    base: registrationProtocolRestoreRepairBase,
+    baseTree: registrationProtocolRestoreRepairTree,
+    contract,
+    repairBaseContract: prior,
+    sourceDigest: (name) =>
+      registrationProtocolRestoreRepairGuard[name] ?? contract.reviewedFileHashes[name] ?? null,
+    baseSourceDigest: (name) => registrationProtocolRestoreRemovedSources[name] ?? null
+  };
+  const paths = [...registrationProtocolRestoreRepairPaths];
+  assert.equal(checkMode(paths, 'same', 'same', undefined, context), 'ci-only');
+  assert.deepEqual(selectedParts(paths, undefined, context), ['guards']);
+  assert.equal(needsOnlineRechargeCiBuild(paths, context), false);
+  assert.equal(checkMode(paths, 'before', 'after', undefined, context), 'full');
+  for (const change of [
+    { base: registrationProtocolRestoreBase },
+    { baseTree: '0'.repeat(40) },
+    { sourceDigest: () => 'b'.repeat(64) },
+    { contract: { ...contract, reviewedApplicationCommit: '0'.repeat(40) } }
+  ])
+    assert.equal(checkMode(paths, 'same', 'same', undefined, { ...context, ...change }), 'full');
+  assert.equal(
+    checkMode(
+      [...paths, 'apps/api/prisma-mysql/schema.prisma'],
+      'same',
+      'same',
+      undefined,
+      context
+    ),
+    'full'
+  );
+  assert.equal(checkMode(paths.slice(1), 'same', 'same', undefined, context), 'full');
+});
 
 test('registration protocol restore admits only exact deletions and preserves the current schema', () => {
   const paths = [...registrationProtocolRestorePaths];
