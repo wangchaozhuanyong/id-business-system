@@ -923,11 +923,11 @@
     "registration-closure-contract.json": "4136417acd11234ac42059f2551905e8c97838364cdc7dba7ea6998aabea6899",
     "registration-flow-evidence-build.py": "0c6b8a100faa02019003daa037acbae55fc5d80891ffb9ce13ef373d8b4a7925",
     "registration-flow-evidence-contract.json": "9d5f34916800fb885cb8aabd98bb550900775f47f17d666c8ad40a26f65215ae",
-    "registration-parity-diagnostics-build.py": "70ba059895de82de6f91c976639871d1889cb947523d95c0bf76905accb65448",
-    "registration-parity-diagnostics-contract.json": "aab84417c44e6f9d091fc08b51551edbf94d56b9759ffa463f70bc5f8cd42439",
+    "registration-parity-diagnostics-build.py": "3e930a74848e5e8685658df4801271d3dac3bf6f1e49ccf68a968b4ab33f04b1",
+    "registration-parity-diagnostics-contract.json": "fb8eb4a3b7d1ef24d83408e347493a12581edaefc6a18593ce9759f6c0996868",
     "workspace-drag-contract.json": "577497d7a7ec82ab540062738e44f1ee024a1c026469880706c4f37b45585e08"
   },
-  "reviewBase": "4888fb01cfdc916b4e866cd2007d3a6da9518446",
+  "reviewBase": "a214c729f7a2991148029afacba99f575bfedb9f",
   "runtimeAdminFiles": {
     "_headers": "d4c6717ea046cf5b22007827eb6e4cebf372f13fd07031594ea11174bb4a4a18",
     "assets/AppButton-B2w7FZiW.js": "7b49c178986b0baadc1bb76d9a60ff3e9c3f343881f530510f539b27020fcc80",

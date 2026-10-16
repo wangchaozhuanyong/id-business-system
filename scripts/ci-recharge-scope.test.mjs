@@ -31,6 +31,9 @@ import { syncBuiltinESMExports } from 'node:module';
 import test from 'node:test';
 import {
   registrationParityDiagnosticsBase,
+  registrationParityDiagnosticsRepairBase,
+  registrationParityDiagnosticsRepairTree,
+  registrationParityDiagnosticsRepairPaths,
   registrationParityDiagnosticsTree,
   registrationParityDiagnosticsCurrent,
   registrationParityDiagnosticsApplications,
@@ -74,6 +77,43 @@ test('registration parity selects every affected check only with exact reviewed 
     ...registrationParityDiagnosticsParts
   ]);
   assert.equal(needsOnlineRechargeCiBuild(paths, context), false);
+  const repairContext = {
+    ...context,
+    base: registrationParityDiagnosticsRepairBase,
+    baseTree: registrationParityDiagnosticsRepairTree
+  };
+  assert.equal(
+    checkMode(registrationParityDiagnosticsRepairPaths, 'same', 'same', undefined, repairContext),
+    'ci-only'
+  );
+  assert.deepEqual(
+    selectedParts(registrationParityDiagnosticsRepairPaths, undefined, repairContext),
+    ['guards']
+  );
+  assert.equal(
+    needsOnlineRechargeCiBuild(registrationParityDiagnosticsRepairPaths, repairContext),
+    false
+  );
+  assert.equal(
+    checkMode(
+      registrationParityDiagnosticsRepairPaths,
+      'before',
+      'after',
+      undefined,
+      repairContext
+    ),
+    'full'
+  );
+  assert.equal(
+    checkMode(
+      [...registrationParityDiagnosticsRepairPaths, 'apps/api/prisma-mysql/schema.prisma'],
+      'before',
+      'after',
+      undefined,
+      repairContext
+    ),
+    'full'
+  );
   assert.equal(checkMode(paths, 'before', 'after', undefined, context), 'full');
   for (const path of [
     'apps/api/prisma-mysql/schema.prisma',
