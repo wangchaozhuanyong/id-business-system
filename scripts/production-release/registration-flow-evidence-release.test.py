@@ -43,17 +43,21 @@ class FlowEvidenceControls(unittest.TestCase):
 
     def test_current_baseline_and_no_schema_or_upstream_payload(self):
         c = self.contract
-        self.assertEqual(c['expectedCurrent'], '88bce5ab09d20cd303f1fdd5fe310cb0b42e1451')
-        self.assertEqual(c['manifestSha256'], 'ab625e55e4461a852fff06942c76585d1caa2dc412fea062f77ad9db8cb53fed')
+        self.assertEqual(c['expectedCurrent'], 'b4beae76ac7ce69d5475473054a22b945bda5898')
+        self.assertEqual(c['manifestSha256'], '9a03b6602adaa86cc0298a2c8e0b5dbc33c8f5398fa2659790b6d1e2182c66ea')
         self.assertIsNone(c['migration'])
         self.assertEqual((len(c['baselineApiFiles']), len(c['baselineAdminFiles']),
                           len(c['baselineEngineFiles']), len(c['baselinePrismaClientFiles'])), (584, 257, 83, 18))
-        self.assertEqual(c['baselineAdminBuildId'], 'v2-88bce5ab09d20cd303f1fdd5fe310cb0b42e1451')
+        self.assertEqual(c['baselineAdminBuildId'], 'v2-b4beae76ac7ce69d5475473054a22b945bda5898')
         self.assertEqual(c['identityNative']['commit'], c['roleSourceCommits']['online-recharge'])
-        self.assertEqual(c['sourceBaseline'], 'b4beae76ac7ce69d5475473054a22b945bda5898')
-        self.assertEqual(c['sourceBaselineTree'], 'd4195e8178416df1fd31985bb4bf9dc00e4aaeba')
+        self.assertEqual(c['sourceBaseline'], '6ea8030f54ab7dd3698884ac350d2562cdff8a1e')
+        self.assertEqual(c['sourceBaselineTree'], 'f65ca1a419e3d82858c086e68ba85f26b83fd210')
+        self.assertEqual(c['sourceTreeInputs'], {b.SCHEMA: 'bbae4d09d4301940354fbc6dbf62dbc191eb1bb0a4a0a44e6fed5bb4b703f3c5'})
+        self.assertEqual(c['unchangedInputs'][b.SCHEMA], c['schemaSha256'])
+        self.assertNotEqual(c['sourceTreeInputs'][b.SCHEMA], c['schemaSha256'])
         self.assertEqual(c['reviewedApplicationCommit'], 'd9c9243c181b0524ccd2766a8f1f04a4075307c4')
         self.assertEqual(len(c['runtimePrismaClientFiles']), 27)
+        self.assertEqual(len(c['runtimeAdminFiles']), 399)
         self.assertTrue(all(c['runtimePrismaClientFiles'][n] == v for n,v in c['baselinePrismaClientFiles'].items()))
         self.assertNotEqual(c['sourceBaseline'], c['expectedCurrent'])
         self.assertTrue(all('/upstream/' not in n for n in c['allowedApplicationPaths']))
@@ -119,6 +123,38 @@ class FlowEvidenceControls(unittest.TestCase):
                 b.api_delta(before, value, {module: 'old-js'})
         with self.assertRaisesRegex(RuntimeError, 'BASE_APPROVED_MODULE_NOT_REPRODUCED'):
             b.api_delta(before, after, {module: 'foreign'})
+
+    def test_only_git_schema_may_differ_and_runtime_context_keeps_published_schema(self):
+        c = copy.deepcopy(self.contract)
+        original = b.ROOT
+        with tempfile.TemporaryDirectory(dir=OUTPUT) as temporary:
+            root = Path(temporary)
+            for name in c['unchangedInputs']:
+                path = root / name
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes((original / name).read_bytes())
+            with patch.object(b, 'ROOT', root):
+                b.verify_immutable_inputs(c)
+                for source_inputs in ({}, {**c['sourceTreeInputs'], 'package-lock.json': c['unchangedInputs']['package-lock.json']},
+                                      {b.SCHEMA: c['schemaSha256']}):
+                    damaged = {**c, 'sourceTreeInputs': source_inputs}
+                    with self.subTest(source_inputs=source_inputs), self.assertRaisesRegex(
+                            RuntimeError, 'SOURCE_TREE_INPUT_SCOPE_CHANGED|IMMUTABLE_INPUT_CHANGED'):
+                        b.verify_immutable_inputs(damaged)
+                (root / b.SCHEMA).write_bytes(b'unreviewed schema drift')
+                with self.assertRaisesRegex(RuntimeError, 'IMMUTABLE_INPUT_CHANGED'):
+                    b.verify_immutable_inputs(c)
+            context = root / 'published-context'
+            (context / b.SCHEMA).parent.mkdir(parents=True, exist_ok=True)
+            (context / b.SCHEMA).write_bytes(b.git('show', b.BASE + ':' + b.SCHEMA))
+            b.verify_runtime_schema(context, c)
+            (context / b.SCHEMA).write_bytes((original / b.SCHEMA).read_bytes())
+            with self.assertRaisesRegex(RuntimeError, 'RUNTIME_SCHEMA_CHANGED'):
+                b.verify_runtime_schema(context, c)
+            (root / 'package-lock.json').write_bytes(b'unrelated input drift')
+            (root / b.SCHEMA).write_bytes((original / b.SCHEMA).read_bytes())
+            with patch.object(b, 'ROOT', root), self.assertRaisesRegex(RuntimeError, 'IMMUTABLE_INPUT_CHANGED'):
+                b.verify_immutable_inputs(c)
 
     def test_private_client_comparison_only_rewrites_two_metadata_fields_and_rejects_other_bytes(self):
         with tempfile.TemporaryDirectory(dir=OUTPUT) as temporary:
@@ -199,6 +235,26 @@ class FlowEvidenceControls(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertNotIn('@prisma/client', source)
             self.assertNotIn('process.env', source)
+
+    def test_admin_runtime_inventory_preserves_retained_assets_and_rejects_unknown_files(self):
+        prefix = '/usr/share/nginx/html/'
+        expected = {'index.html': 'a' * 64, 'assets/old.js': 'b' * 64, 'assets/new.js': 'c' * 64}
+        names = [prefix + n for n in expected]
+        rows = '\n'.join(value + '  ' + prefix + name for name,value in expected.items())
+        driver = Mock(run=Mock(side_effect=['', '\n'.join(names), rows]))
+        r.admin_inventory(driver, {'containerId': 'fake'}, expected)
+        self.assertEqual(driver.run.call_args_list[0].args,
+                         ('docker', 'exec', 'fake', 'find', prefix, '!', '-type', 'f', '!', '-type', 'd', '-print'))
+        driver.run.side_effect = ['', '\n'.join(names + [prefix + 'assets/unknown.js']),
+                                 rows + '\n' + 'd' * 64 + '  ' + prefix + 'assets/unknown.js']
+        with self.assertRaisesRegex(RuntimeError, 'ADMIN_RUNTIME_INVENTORY_CHANGED'):
+            r.admin_inventory(driver, {'containerId': 'fake'}, expected)
+        for kind in ('symlink', 'socket', 'fifo'):
+            driver.run.reset_mock()
+            driver.run.side_effect = [prefix + 'assets/unknown-' + kind]
+            with self.subTest(kind=kind), self.assertRaisesRegex(RuntimeError, 'ADMIN_RUNTIME_KIND_INVALID'):
+                r.admin_inventory(driver, {'containerId': 'fake'}, expected)
+            self.assertEqual(driver.run.call_count, 1)
 
     def sqlite_fixture(self):
         policy = self.contract['sqliteReviewPolicy']
@@ -285,10 +341,14 @@ class FlowEvidenceControls(unittest.TestCase):
                 'contractSha256': 'c' * 64, 'controlSources': {}}
         proof = {**plan, 'version': 1, 'scope': r.SCOPE, 'sources': c['sources'], 'validationSources': {},
                  'sourceBaseline': c['sourceBaseline'], 'sourceBaselineTree': c['sourceBaselineTree'],
+                 'sourceTreeInputs': c['sourceTreeInputs'],
                  'runtimeBaselineCommit': c['expectedCurrent'], 'sourceProjection': 'PUBLISHED_RUNTIME_PLUS_TASK_DELTA',
                  'roleSourceCommits': c['roleSourceCommits'], 'reviewedApplicationCommit': c['reviewedApplicationCommit'],
                  'workerFiles': c['workerFiles'], 'baselinePrismaClientFiles': c['baselinePrismaClientFiles'],
                  'runtimePrismaClientFiles': c['runtimePrismaClientFiles'],
+                 'runtimeAdminFiles': c['runtimeAdminFiles'],
+                 'observedApiSourceProjection': c['observedApiSourceProjection'],
+                 'observedAdminSourceProjection': c['observedAdminSourceProjection'],
                  'publishedAdminProofSha256': c['publishedAdminProof']['sha256'],
                  'hostSourceInheritance': c['hostSourceInheritance'],
                  'sqliteReviewPolicy': c['sqliteReviewPolicy'],
@@ -328,7 +388,7 @@ class FlowEvidenceControls(unittest.TestCase):
                     r.verify_proof(proof, plan, c, payload, h)
                 path.unlink()
             for field in ['workerFiles', 'baselinePrismaClientFiles', 'migrationPerformed', 'updatedServices', 'reboundServices',
-                          'validationSources', 'sources', 'unchangedClientReproduced']:
+                          'validationSources', 'sources', 'unchangedClientReproduced', 'sourceTreeInputs']:
                 changed = copy.deepcopy(proof)
                 changed[field] = 'foreign'
                 with self.subTest(field=field), self.assertRaisesRegex(RuntimeError, 'PROOF_INVALID'):
