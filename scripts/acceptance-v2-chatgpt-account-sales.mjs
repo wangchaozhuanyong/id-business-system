@@ -315,7 +315,8 @@ try {
     const editRow = row(searchPage, searchState.rows[2]);
     await editRow.getByRole('button', { name: '编辑', exact: true }).click();
     const editor = searchPage.getByRole('dialog').filter({ hasText: '修改 ChatGPT 账号' });
-    await editor.getByRole('textbox', { name: '注册日期', exact: true }).fill('2026-09-10');
+    await editor.getByPlaceholder('按核实的注册日期填写').fill('2026-09-10');
+    await editor.getByPlaceholder('按核实的注册日期填写').press('Tab');
     await editor.getByRole('button', { name: '保存', exact: true }).click();
     await editor.waitFor({ state: 'hidden' });
     await editRow.getByText('2026-09-10', { exact: true }).waitFor();
