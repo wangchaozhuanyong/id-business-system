@@ -75,6 +75,16 @@ class MailboxRelease(unittest.TestCase):
         current = current[current.index('def release(plan, contract, d, h):'):]
         self.assertEqual(ast.dump(ast.parse(current)), ast.dump(ast.parse(original)))
 
+    def test_check_only_preparation_cannot_be_packaged_for_production(self):
+        output = ROOT / '.runtime/mailbox-release/control-tests'
+        output.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=output) as temporary, \
+                patch.object(b, 'OUTPUT', Path(temporary)), patch.object(b, 'verify_sources', return_value={}), \
+                patch.object(b, 'run') as execute:
+            with self.assertRaisesRegex(RuntimeError, 'NATIVE_PREDECESSORS_MISSING'):
+                b.build()
+            execute.assert_not_called()
+
     def test_unfrozen_release_stops_before_helpers_or_platform_calls(self):
         with patch.object(r, 'helper') as helper:
             helper.return_value.verify_contract = Mock()

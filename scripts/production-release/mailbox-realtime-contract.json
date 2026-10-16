@@ -1288,17 +1288,17 @@
     "apps/api/src/id-business-v2/workspace/id-business-v2-vendure-mailbox.service.ts": "b173813bfeca8232cf5035be8373496724d2a38a5c9b52c74e222c7d71c99361",
     "apps/api/src/id-business-v2/workspace/mail-health.spec.ts": "0dd168fe3032a5b46e4d3eaf9e43ea5f6a09b01aaf0e54fe87d93b6e3dbbf4c8",
     "apps/api/src/id-business-v2/workspace/providers/id-business-v2-vendure-mailbox.client.ts": "c1b7f1d091e10afab65dbf6c22b26f94f899d6e697982052fcba9d77866b5e4e",
-    "docs/MAILBOX_REALTIME_REPAIR_20261016.md": "ff6ca4834aea02471fba3a15eec9e74567cbabb86b41388a184cc4eb02b45f3a",
+    "docs/MAILBOX_REALTIME_REPAIR_20261016.md": "4b303e68e83648ccbd92d308b58b1cb7f6392ffdc41b6fa67f619cc2624c5271",
     "packages/shared/src/v2/vendure-mailbox.ts": "4b72d43152b07ebe9331583d8baf245028f0ddb96229ffcffbd5ec6d7dfa375e",
     "scripts/acceptance-v2-mailbox-realtime.mjs": "0fde62b43ee0686e5e9330c14e34621090f34ac5915528c719d5e9859a154c61",
     "scripts/ci-mailbox-realtime-scope.mjs": "5350b5d1a9fc021c69292eb43d4f81f4caf1e9ddbc70a0a98450c2ea9cc9f56b",
     "scripts/ci-mailbox-realtime-scope.test.mjs": "a6ff492b8563c470de0d246be18bc1033cb9252ecd671119c59e96dd80014a5a",
-    "scripts/ci-recharge-check.mjs": "ddada791d11fe62d3a290c1cb7a4aeecc9e7c01912423e84dea069ac4f8ec22b",
+    "scripts/ci-recharge-check.mjs": "4996810e18ad5511b706c653b90602482eb7795ddd08cc6f2fafa2a5290df4d9",
     "scripts/ci-recharge-scope.mjs": "6561c255f5a20d61107d9b388d70291b04c1bd458f333ba175b59ddda06bfea9",
-    "scripts/production-release/mailbox-realtime-build.py": "c3ee7882534bf8b032a10d5bca42f96e9014361211c6340bb0e020f5fafbdc33",
+    "scripts/production-release/mailbox-realtime-build.py": "c229b82d47d301db78a445dce95f6720ab74cfd211b42e6d7d5d37146b0e0707",
     "scripts/production-release/mailbox-realtime-dispatch.py": "b3ee5e4c40d2af93d6a8f58c76ad4ff5238843b86e5d7e1ceefeb9b8398bed13",
     "scripts/production-release/mailbox-realtime-release.py": "8997ec61dd659bf2a11583eb0720e8b2672bcbb003ddf5590cbf93c42f8a5eee",
-    "scripts/production-release/mailbox-realtime-release.test.py": "ea2ad144486f506e37b2d86d540c82f49d4c42e1d5eda0c517f61e0a06ef856e"
+    "scripts/production-release/mailbox-realtime-release.test.py": "6cfe799577c874175ec7aca183be15a82cdc73a583ad61cc484ae6b100be734e"
   },
   "roleSourceCommits": {
     "admin": "d44393c5bee8c30c82737fc3e00fa89785a95667",

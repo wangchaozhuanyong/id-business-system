@@ -59,16 +59,19 @@ def verify_sources():
     return c
 
 
-def prepare():
+def prepare(native_evidence=True):
     c = verify_sources()
     need(os.environ.get('GITHUB_ACTIONS') == 'true' and not OUTPUT.exists(), 'NATIVE_BUILD_REQUIRED')
     p = load('registration-parity-diagnostics-build.py')
     parent = json.loads((HERE / 'registration-parity-diagnostics-contract.json').read_bytes())
     # These are the three successful predecessor publications, not the later unfinished candidate.
-    p.native_proof(parent['parentNative'])
-    p.native_proof(parent['successorNative'])
-    p.native_proof(parent['dragNative'])
+    if native_evidence:
+        for field in ('parentNative', 'successorNative', 'dragNative'):
+            p.native_proof(parent[field])
     OUTPUT.mkdir(parents=True, mode=0o700)
+    if native_evidence:
+        (OUTPUT / 'predecessors-verified.json').write_text(json.dumps({
+            'status': 'NATIVE_VERIFIED', 'contractSha256': digest(CONTRACT.read_bytes())}) + '\n')
     for role in ('baseline', 'candidate'):
         context = OUTPUT / role
         p.reconstruct(context, parent)
@@ -95,6 +98,10 @@ def prepare():
 
 def build():
     c = verify_sources()
+    native = OUTPUT / 'predecessors-verified.json'
+    need(native.is_file() and not native.is_symlink(), 'NATIVE_PREDECESSORS_MISSING')
+    need(json.loads(native.read_bytes()) == {
+         'status': 'NATIVE_VERIFIED', 'contractSha256': digest(CONTRACT.read_bytes())}, 'NATIVE_PREDECESSORS_MISSING')
     b, a = OUTPUT / 'baseline', OUTPUT / 'candidate'
     for context in (b, a):
         run('npm', 'run', 'build', '--workspace', 'apps/api', cwd=context)
@@ -164,7 +171,25 @@ def package():
     (OUTPUT / 'artifact-sha256.txt').write_text(digest(bundle.read_bytes()) + '\n')
 
 
+def check_part(part):
+    c = verify_sources()
+    need(part in ('api', 'admin'), 'CHECK_PART_INVALID')
+    context = OUTPUT / 'candidate'
+    target = 'apps/' + part
+    run('npm', 'run', 'typecheck', '--workspace', target, cwd=context)
+    run('npm', 'run', 'test', '--workspace', target, '--', *c[part + 'Tests'], cwd=context)
+    run('npm', 'run', 'build', '--workspace', target, cwd=context)
+    if part == 'admin':
+        run('npx', 'playwright', 'install', '--with-deps', 'chromium', cwd=context)
+        for args in ([], ['--actions-only']):
+            run('node', 'scripts/acceptance-v2-mailbox-realtime.mjs', *args, cwd=context)
+
+
 def main(args):
+    if args == ['prepare-checks']:
+        return prepare(native_evidence=False)
+    if args in (['check-api'], ['check-admin']):
+        return check_part(args[0].removeprefix('check-'))
     need(args in (['prepare'], ['build'], ['validate'], ['package']), 'BUILD_MODE_INVALID')
     globals()[args[0]]()
 

@@ -126,7 +126,6 @@ if (
     run('node', [
       '--test',
       'scripts/ci-mailbox-realtime-scope.test.mjs',
-      'scripts/ci-recharge-scope.test.mjs',
       'scripts/ci-recharge-check.test.mjs'
     ]);
     const formatted = changed.filter((n) => /\.(?:[cm]?js|json|yml|md|ts|vue)$/.test(n));
@@ -143,21 +142,13 @@ if (
     ])
       npm('run', 'check:' + name);
   } else {
-    npm('ci', '--ignore-scripts', '--no-audit', '--no-fund');
-    npm('run', 'prisma:mysql:generate');
-    npm('run', 'build', '--workspace', '@apple-business/shared');
-    const c = JSON.parse(
-      readFileSync('scripts/production-release/mailbox-realtime-contract.json', 'utf8')
-    );
-    const target = part === 'api' ? '@apple-business/api' : '@apple-business/admin';
-    npm('run', 'typecheck', '--workspace', target);
-    npm('run', 'test', '--workspace', target, '--', ...c[part + 'Tests']);
-    npm('run', 'build', '--workspace', target);
-    if (part === 'admin') {
-      npm('exec', '--', 'playwright', 'install', '--with-deps', 'chromium');
-      run('node', ['scripts/acceptance-v2-mailbox-realtime.mjs']);
-      run('node', ['scripts/acceptance-v2-mailbox-realtime.mjs', '--actions-only']);
-    }
+    // The current main also carries unpublished business changes. Check the exact production projection.
+    run('python3', [
+      '-B',
+      'scripts/production-release/mailbox-realtime-build.py',
+      'prepare-checks'
+    ]);
+    run('python3', ['-B', 'scripts/production-release/mailbox-realtime-build.py', 'check-' + part]);
   }
   process.exit(0);
 }
