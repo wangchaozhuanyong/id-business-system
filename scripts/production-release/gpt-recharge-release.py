@@ -222,13 +222,26 @@ def release(plan, c):
             smoke(d, h, target, after, proof, c)
         h.guards(d, target, after, c)
         receipt = {'status': 'DEPLOYED', 'commit': plan['commit'], 'before': before, 'after': after,
-                   'backup': backup, 'artifactSha256': plan['artifactSha256'], 'businessActions': 0, 'migrationPerformed': False}
+                   'backup': backup, 'artifactSha256': plan['artifactSha256'], 'businessActions': 0, 'migrationPerformed': False,
+                   'buildCommit': proof['commit'], 'buildTree': proof['tree'], 'apiModules': proof['apiModules']}
         (target / 'gpt-recharge-preservation.json').write_text(json.dumps(receipt, sort_keys=True, indent=2) + '\n')
         (target / 'gpt-recharge-build-proof.json').write_bytes(raw_proof)
         manifest = json.loads(raw_manifest)
         manifest.update(commit=plan['commit'], sourceTree=plan['tree'], scope=c['scope'], previousCommit=c['expectedCurrent'],
                         previousRelease=str(previous), servicesUpdated=['api'], servicesRebound=['online-recharge'],
                         migrationPerformed=False, paymentActions=0, gptRechargePublication=receipt)
+        projections = manifest.get('roleSourceProjections', {})
+        manifest['previousRoleSourceProjections'] = projections
+        manifest['roleSourceProjections'] = {**projections, 'api': {
+            'kind': c['scope'], 'commit': plan['commit'], 'sourceTree': plan['tree'],
+            'parentProjection': projections.get('api'), 'publishedBaseImageId': before['api']['image'],
+            'runtimeImageId': built['Id'], 'sourceDelta': proof['sources'],
+            'runtimeModules': proof['apiModules'], 'buildCommit': proof['commit'],
+            'buildTree': proof['tree'], 'buildProofSha256': plan['buildProofSha256']}}
+        manifest['previousSourceProjection'] = manifest.get('sourceProjection')
+        manifest['sourceProjection'] = {'kind': c['scope'], 'baselineCommit': c['expectedCurrent'],
+            'sources': proof['sources'], 'buildCommit': proof['commit'], 'buildTree': proof['tree'],
+            'buildProofSha256': plan['buildProofSha256']}
         manifest['images']['api'] = {'reference': reference, 'digest': built['Id'], 'sourceCommit': plan['commit']}
         (target / 'release-manifest.json').write_text(json.dumps(manifest, sort_keys=True, indent=2) + '\n')
         d.point_current(target, stamp + '-gpt-recharge')

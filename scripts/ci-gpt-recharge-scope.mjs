@@ -58,11 +58,11 @@ export const gptRechargeFrozen = Object.freeze({
   'scripts/production-release/api-admin-scope.test.py':
     '41d1b862c1beb9caa35e130d8268583c5f349c782d89aedb247824ce5b722c98',
   'scripts/production-release/gpt-recharge-build.py':
-    'a3bd39ee133103378b58bd2c083dada0ef14a0a148871ff41b4de63d93e4991e',
+    '30c8d0a909b784a84c42aee67d86c66c69f2e8717f5d9c401b9dd3f53097e362',
   'scripts/production-release/gpt-recharge-contract.json':
-    '4bf24d44db44d85853ace9645c5b7e153cecfd4c79c3dfe9dc67f7a0214560df',
+    '2ee7dd00ef1664b194734f8ce93084976d335413b2e8ff92d5957da564f16e89',
   'scripts/production-release/gpt-recharge-release.py':
-    '76d8597f5f1fb8837ca822b4b8ae8573abd45ba4baceeaff4f30ce298d8688c6',
+    '7c4c4d3c56cac3cc350197acb9b5f6d30a57d1efacc3b144780667cf35b6960c',
   'scripts/production-release/gpt-recharge-release.test.py':
     'dab38e8660abfe8ea8882817556ab426a177e3eb042b66bffcf266fcb01156bf'
 });

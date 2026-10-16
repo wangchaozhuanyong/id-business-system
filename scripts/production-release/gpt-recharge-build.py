@@ -87,7 +87,9 @@ def main():
             for name in tests:
                 shutil.copyfile(ROOT / prefix / name, context / prefix / name)
         run('npm', 'ci', '--ignore-scripts', '--no-audit', '--no-fund', cwd=context)
-        builder.r.helper(builder.r.OLD_NAME + '-build.py').generate_unchanged_client(context)
+        # Generate the already published shared-card schema for compilation only.
+        # The runtime image retains its existing client and native engine.
+        run('npm', 'run', 'prisma:mysql:generate', cwd=context)
         run('npm', 'run', 'build', '--workspace', '@apple-business/shared', cwd=context)
         run('npm', 'run', 'build', '--workspace', '@apple-business/api', cwd=context)
         if role == 'candidate':
