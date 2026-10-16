@@ -1,3 +1,4 @@
+import { isGptRechargeOnly } from './ci-gpt-recharge-scope.mjs';
 import {
   isMailboxRealtimeOnly,
   isMailboxRealtimeControlsOnly,
@@ -1045,6 +1046,7 @@ export function isMailboxOnly(paths) {
 }
 
 export function checkMode(paths, oldSchema, newSchema, grantHelperSnapshot, context) {
+  if (isGptRechargeOnly(paths)) return oldSchema === newSchema ? 'recharge' : 'full';
   if (isRegistrationBrowserOnly(paths, context))
     return oldSchema === newSchema ? 'recharge' : 'full';
   if (paths.includes('scripts/production-release/registration-browser-contract.json'))
@@ -1540,6 +1542,7 @@ export function isTargetedOnly(paths, oldSchema, newSchema) {
   );
 }
 export function selectedParts(paths, grantHelperSnapshot, context) {
+  if (isGptRechargeOnly(paths)) return ['guards', 'api'];
   if (isRegistrationBrowserOnly(paths, context)) return [...registrationBrowserParts];
   if (isAccountLoginControlsOnly(paths)) return ['guards'];
   if (isAccountLoginOnly(paths)) return [...accountLoginParts];
@@ -4373,9 +4376,11 @@ async function main() {
             : selectedParts(paths, undefined, proxyIdentityContext);
   // BEGIN finite ONLINE build-proof reuse classifier admission
   const needsOnlineRechargeCiBuild = (paths) =>
-    canResumeOnlineBuildProofReuseGuard(base, 'scope')
+    isGptRechargeOnly(paths)
       ? false
-      : onlineBuildProofReusePriorNeedsCiBuild(paths, proxyIdentityContext);
+      : canResumeOnlineBuildProofReuseGuard(base, 'scope')
+        ? false
+        : onlineBuildProofReusePriorNeedsCiBuild(paths, proxyIdentityContext);
   // END finite ONLINE build-proof reuse classifier admission
 
   const onlineCiBuild = needsOnlineRechargeCiBuild(paths);
