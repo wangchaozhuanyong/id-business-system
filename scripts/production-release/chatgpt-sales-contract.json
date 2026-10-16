@@ -44,7 +44,7 @@
       "tsconfig.base.json": "d705dca337a84b21bcb51a8b2f7bcb9953916564f53d10b0b4c7e2d36259e5fe"
     }
   },
-  "current": "/opt/id-business-v2/releases/20261016T062704Z-b4beae76ac7c-online-proxy-country",
+  "current": "/opt/id-business-v2/releases/20261016T072332Z-e3e1360f977e-registration-flow-evidence",
   "engineHealth": {
     "activeTasks": 0,
     "mode": "enabled",
@@ -52,14 +52,14 @@
     "rpcConnected": true,
     "stopping": false
   },
-  "expectedCurrent": "b4beae76ac7ce69d5475473054a22b945bda5898",
+  "expectedCurrent": "e3e1360f977e003987573f2d2e042b883a2f5ac8",
   "hostSourceBaseline": "69eba563895bf083b24c8214a088454d5df34922",
   "hostSources": {
     "scripts/lib/v2-data-integrity-audit.mjs": "9c982c6f6c4573715d6679d64eb898ea20080430aa18ac42ae093beac181f26e",
     "scripts/lib/v2-historical-cash-adjustment-audit.mjs": "13367df42cbf58102e8e014afddae32fe73785d9159334e98ed8a2474c2aa569",
     "scripts/v2-data-integrity-audit.mjs": "7b2b932490b2691d49882a545638b93c499454c64e7271bf0fc139aefb4b6778"
   },
-  "manifestSha256": "9a03b6602adaa86cc0298a2c8e0b5dbc33c8f5398fa2659790b6d1e2182c66ea",
+  "manifestSha256": "cbd59da91d820c052cf32314dcae4c6149355a71b0581ac28d1e9d076b295458",
   "migration": {
     "name": "20261016170000_chatgpt_account_sale_status",
     "path": "apps/api/prisma-mysql/migrations/20261016170000_chatgpt_account_sale_status/migration.sql",
