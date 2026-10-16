@@ -5,11 +5,12 @@ import {
   isMailboxVersionOnly,
   mailboxVersionCommands
 } from './ci-mailbox-version-scope.mjs';
-import { checkMode, selectedParts } from './ci-recharge-scope.mjs';
+import { checkMode, selectedParts, needsOnlineRechargeCiBuild } from './ci-recharge-scope.mjs';
 test('mailbox version scope keeps all API checks without publishing unrelated code', () => {
   assert.equal(isMailboxVersionOnly(mailboxVersionPaths), true);
   assert.equal(checkMode(mailboxVersionPaths, 'same', 'same'), 'recharge');
   assert.deepEqual(selectedParts(mailboxVersionPaths), ['guards', 'api', 'release-controls']);
+  assert.equal(needsOnlineRechargeCiBuild(mailboxVersionPaths), false);
   assert.equal(checkMode(mailboxVersionPaths, 'old', 'new'), 'full');
   for (const part of ['guards', 'api', 'release-controls'])
     assert.ok(mailboxVersionCommands(part, mailboxVersionPaths).length);

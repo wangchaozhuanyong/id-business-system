@@ -267,6 +267,7 @@ const onlineCiBuildTestInputs = new Set([
   'scripts/production-release/online-recharge-component-lifecycle.test.py'
 ]);
 export function needsOnlineRechargeCiBuild(paths, context) {
+  if (isMailboxVersionOnly(paths)) return false;
   if (isRegistrationBrowserOnly(paths, context)) return false;
   if (isAccountLoginOnly(paths) || isAccountLoginControlsOnly(paths)) return false;
   if (isRegistrationParityDiagnosticsControlRepair(paths, context)) return false;

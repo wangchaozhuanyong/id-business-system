@@ -7,6 +7,7 @@ export const mailboxVersionPaths = [
   '.github/workflows/mailbox-version-validation.yml',
   'scripts/ci-mailbox-version-scope.mjs',
   'scripts/ci-mailbox-version-scope.test.mjs',
+  'scripts/ci-gpt-recharge-scope.test.mjs',
   'scripts/ci-recharge-scope.mjs',
   'scripts/ci-recharge-check.mjs',
   'scripts/production-release/mailbox-version-build.py',
@@ -31,6 +32,7 @@ export function mailboxVersionCommands(part, paths) {
         'node',
         '--test',
         'scripts/ci-mailbox-version-scope.test.mjs',
+        'scripts/ci-gpt-recharge-scope.test.mjs',
         'scripts/ci-recharge-scope.test.mjs',
         'scripts/ci-recharge-check.test.mjs'
       ],
