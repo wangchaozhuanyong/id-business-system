@@ -45,6 +45,23 @@ test('the published predecessor repair retains the application freeze and select
     [...paths.slice(1), paths[1]]
   ])
     assert.equal(isRegistrationFlowEvidenceControlRepair(changed, repair), false);
+  for (const path of [
+    ...[
+      'contracts.ts',
+      'proxy-input.ts',
+      'persistence/settings.repository.ts',
+      'persistence/tasks.repository.ts',
+      'persistence/worker-rpc.repository.ts'
+    ].map((path) => 'apps/api/src/id-business-v2/online-recharge/' + path),
+    ...['online-proxy.repository.ts', 'proxy-pool.repository.ts'].map(
+      (path) => 'apps/api/src/id-business-v2/proxy-pool/persistence/' + path
+    )
+  ])
+    assert.equal(
+      isRegistrationFlowEvidenceControlRepair([...paths, path], repair),
+      false,
+      'published API inheritance cannot authorize a new country change: ' + path
+    );
   for (const drift of [
     { base: 'a'.repeat(40) },
     { baseTree: 'b'.repeat(40) },

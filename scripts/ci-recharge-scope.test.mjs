@@ -31,7 +31,7 @@ import { syncBuiltinESMExports } from 'node:module';
 import test from 'node:test';
 
 // The original registration recovery proves the already published 7c tree.
-// Later proxy and order-layout repairs intentionally advance these inputs, so
+// Later proxy, order-layout and Sales repairs intentionally advance these inputs, so
 // historical recovery cases read their immutable source bytes. Production
 // selectors still read current files and reject changes to the old receipt.
 const registrationPublishedHead = '7c3c102c98539d33cb379ef018427371ba750cb7';
@@ -49,13 +49,23 @@ const registrationCountryPaths = [
   'apps/api/src/id-business-v2/online-recharge/persistence/tasks.repository.ts',
   'apps/api/src/id-business-v2/online-recharge/proxy-input.ts'
 ];
+const registrationSalesPaths = [
+  'apps/admin/src/v2/features/auto-recharge/bank-recharge-api.ts',
+  'apps/admin/src/v2/features/tableSchemas.ts',
+  'apps/api/prisma-mysql/schema.prisma',
+  'apps/api/src/id-business-v2/auto-recharge/bank-recharge-account-list.ts',
+  'apps/api/src/id-business-v2/auto-recharge/bank-recharge.controller.ts'
+];
 const registrationSourceFixtures = Object.fromEntries(
-  [registrationManifestPath, ...registrationLayoutPaths, ...registrationCountryPaths].map(
-    (path) => [
-      path,
-      execFileSync('git', ['show', registrationPublishedHead + ':' + path]).toString('utf8')
-    ]
-  )
+  [
+    registrationManifestPath,
+    ...registrationLayoutPaths,
+    ...registrationCountryPaths,
+    ...registrationSalesPaths
+  ].map((path) => [
+    path,
+    execFileSync('git', ['show', registrationPublishedHead + ':' + path]).toString('utf8')
+  ])
 );
 const registrationFixtureBytes = new Map(
   Object.entries(registrationSourceFixtures).flatMap(([path, source]) =>
@@ -5632,6 +5642,39 @@ test('historical registration recovery rejects current layout and proxy-country 
       path === changed ? actualReadFileSync(path) : readRegistrationFixture(path);
     assert.equal(registrationPublishedRecoveryProof(paths, { readSource }), false, changed);
   }
+});
+
+test('historical registration recovery rejects current Sales sources schema and migration', () => {
+  const binding = JSON.parse(readFileSync(registrationPublishedBindingPath));
+  const paths = [
+    registrationPublishedBindingPath,
+    ...Object.keys(binding.sources),
+    registrationFactsMigration
+  ];
+  assert.equal(registrationPublishedRecoveryProof(paths), true);
+  for (const changed of registrationSalesPaths) {
+    const readSource = (path) =>
+      path === changed ? actualReadFileSync(path) : readRegistrationFixture(path);
+    assert.equal(registrationPublishedRecoveryProof(paths, { readSource }), false, changed);
+  }
+  const before = execFileSync(
+    'git',
+    ['show', '07e28beb3fbb1fc5c9dac8050e16b3f00e0b1083:apps/api/prisma-mysql/schema.prisma'],
+    { encoding: 'utf8' }
+  );
+  const schemaPath = 'apps/api/prisma-mysql/schema.prisma';
+  const historical = readRegistrationFixture(schemaPath, 'utf8');
+  const current = actualReadFileSync(schemaPath, 'utf8');
+  assert.notEqual(current, historical);
+  assert.equal(registrationFactsSchemaProof(paths, before, historical), true);
+  assert.equal(registrationFactsSchemaProof(paths, before, current), false);
+  assert.equal(checkMode(paths, before, current), 'full');
+  const withSaleMigration = [
+    ...paths,
+    'apps/api/prisma-mysql/migrations/20261016170000_chatgpt_account_sale_status/migration.sql'
+  ];
+  assert.equal(isRegistrationClosureOnly(withSaleMigration, before, historical), false);
+  assert.equal(checkMode(withSaleMigration, before, historical), 'full');
 });
 
 test('published recovery proves only two new fields above the recovered deployed schema and exact prior migrations', () => {

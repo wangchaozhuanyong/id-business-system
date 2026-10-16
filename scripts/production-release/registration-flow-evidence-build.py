@@ -17,9 +17,11 @@ OUTPUT = ROOT / '.deploy/registration-flow-evidence'
 CONTRACT = HERE / 'registration-flow-evidence-contract.json'
 SCOPE = 'REGISTRATION_FLOW_EVIDENCE'
 BASE = '69eba563895bf083b24c8214a088454d5df34922'
-CURRENT = '88bce5ab09d20cd303f1fdd5fe310cb0b42e1451'
-SOURCE_BASE = 'b4beae76ac7ce69d5475473054a22b945bda5898'
+CURRENT = 'b4beae76ac7ce69d5475473054a22b945bda5898'
+ADMIN_BASE = '88bce5ab09d20cd303f1fdd5fe310cb0b42e1451'
+SOURCE_BASE = '6ea8030f54ab7dd3698884ac350d2562cdff8a1e'
 REVIEWED_APPLICATION = 'd9c9243c181b0524ccd2766a8f1f04a4075307c4'
+SCHEMA = 'apps/api/prisma-mysql/schema.prisma'
 API = 'apps/api/src/id-business-v2/auto-registration/'
 ADMIN = 'apps/admin/src/v2/features/auto-registration/'
 WORKER = API + 'worker/'
@@ -56,6 +58,22 @@ def inventory(directory):
             if name not in ('tsconfig.tsbuildinfo', 'tsconfig.build.tsbuildinfo')}
 
 
+def verify_immutable_inputs(contract):
+    source_inputs = contract.get('sourceTreeInputs')
+    need(isinstance(source_inputs, dict) and set(source_inputs) == {SCHEMA}
+         and contract['unchangedInputs'].get(SCHEMA) == contract['schemaSha256']
+         and re.fullmatch('[a-f0-9]{64}', source_inputs[SCHEMA]), 'SOURCE_TREE_INPUT_SCOPE_CHANGED')
+    for name, expected in contract['unchangedInputs'].items():
+        source_expected = source_inputs.get(name, expected)
+        need(digest((ROOT / name).read_bytes()) == source_expected
+             == digest(git('show', SOURCE_BASE + ':' + name)), 'IMMUTABLE_INPUT_CHANGED')
+
+
+def verify_runtime_schema(context, contract):
+    need(digest((context / SCHEMA).read_bytes()) == contract['schemaSha256']
+         == contract['unchangedInputs'][SCHEMA], 'RUNTIME_SCHEMA_CHANGED')
+
+
 def verify_sources(contract):
     need(contract.get('version') == 1 and contract.get('frozen') is True and contract.get('scope') == SCOPE
          and contract.get('expectedCurrent') == CURRENT and contract.get('sourceBaseline') == SOURCE_BASE
@@ -69,6 +87,7 @@ def verify_sources(contract):
     repair = {'scripts/production-release/registration-flow-evidence-' + n
               for n in ('build.py', 'release.py', 'contract.json', 'release.test.py')}
     repair |= {'scripts/ci-registration-flow-evidence-scope.mjs', 'scripts/ci-registration-flow-evidence-scope.test.mjs'}
+    repair.add('scripts/ci-recharge-scope.test.mjs')
     need(sources and changed == set(contract['expectedGitChanges']) == repair,
          'SOURCE_SCOPE_CHANGED')
     need(all((name.startswith(API) or name.startswith(ADMIN)) and '/upstream/' not in name
@@ -78,9 +97,7 @@ def verify_sources(contract):
              'SOURCE_CHANGED')
     need(all(digest(git('show', REVIEWED_APPLICATION + ':' + name)) == expected
              for name, expected in {**sources, **contract['validationSources']}.items()), 'REVIEWED_APPLICATION_CHANGED')
-    for name, expected in contract['unchangedInputs'].items():
-        need(digest((ROOT / name).read_bytes()) == expected == digest(git('show', SOURCE_BASE + ':' + name)),
-             'IMMUTABLE_INPUT_CHANGED')
+    verify_immutable_inputs(contract)
     need(contract['validationBaselineSources'] and all(name.startswith(WORKER)
          and Path(name).name.startswith('test_') and name.endswith('.py')
          and contract['unchangedInputs'].get(name) == value
@@ -166,16 +183,23 @@ def reconstruct(context, contract):
     for name, expected in contract['baselineWorkerFiles'].items():
         need(digest((context / WORKER / name).read_bytes()) == expected, 'BASE_WORKER_NOT_REPRODUCED')
     need(inventory(context / ENGINE) == contract['baselineEngineFiles'], 'BASE_ENGINE_NOT_REPRODUCED')
-    need(binding['adminCommit'] == CURRENT and git('rev-parse', CURRENT + '^{tree}').decode().strip()
+    need(binding['adminCommit'] == ADMIN_BASE and git('rev-parse', ADMIN_BASE + '^{tree}').decode().strip()
          == binding['adminTree'], 'PUBLISHED_ADMIN_SOURCE_CHANGED')
     shutil.rmtree(context / 'apps/admin')
-    with tarfile.open(fileobj=io.BytesIO(git('archive', CURRENT, 'apps/admin'))) as archive:
+    with tarfile.open(fileobj=io.BytesIO(git('archive', ADMIN_BASE, 'apps/admin'))) as archive:
         for item in archive:
             if item.name == 'apps' and item.isdir():
                 continue
             need(Path(item.name).parts[:2] == ('apps', 'admin') and '..' not in Path(item.name).parts
                  and (item.isdir() or item.isfile()), 'PUBLISHED_ADMIN_PATH_CHANGED')
             archive.extract(item, context)
+    # These inherited country sources are already deployed, never new task scope.
+    need(binding['countryCommit'] == CURRENT, 'PUBLISHED_COUNTRY_SOURCE_CHANGED')
+    for name, expected in {**binding['countryApiSources'], **binding['countryAdminSources']}.items():
+        raw = git('show', CURRENT + ':' + name)
+        need(digest(raw) == expected, 'PUBLISHED_COUNTRY_SOURCE_CHANGED')
+        (context / name).write_bytes(raw)
+    verify_runtime_schema(context, contract)
 
 
 def prepare():
@@ -186,13 +210,21 @@ def prepare():
     admin = contract['publishedAdminProof']
     need(digest(admin['content'].encode()) == admin['sha256'], 'PUBLISHED_ADMIN_PROOF_CHANGED')
     admin_proof = json.loads(admin['content'])
-    need(admin_proof['commit'] == CURRENT and admin_proof['sourceTree'] == contract['reconstruction']['adminTree']
-         and {n.removeprefix('dist/'):v for n,v in admin_proof['files'].items() if n.startswith('dist/')}
+    need(contract['reconstruction']['countryAdminSources'] == admin_proof['adminProjection']['files']
+         and len(contract['reconstruction']['countryApiSources']) == 7
+         and set(contract['reconstruction']['countryApiSources']) == {
+             'apps/api/src/' + n.removeprefix('api/code/').removesuffix('.js') + '.ts'
+             for n in admin_proof['files'] if n.startswith('api/code/') and n.endswith('.js')},
+         'PUBLISHED_COUNTRY_SCOPE_CHANGED')
+    need(admin_proof['commit'] == CURRENT and admin_proof['sourceTree'] == contract['reconstruction']['countryTree']
+         and {n.removeprefix('admin/code/'):v for n,v in admin_proof['files'].items() if n.startswith('admin/code/')}
              == contract['baselineAdminFiles'], 'PUBLISHED_ADMIN_PROOF_CHANGED')
     need(proof['prismaClientFiles'] == contract['baselinePrismaClientFiles']
          and {**json.loads(git('show', contract['reconstruction']['registrationCommit']
                 + ':scripts/production-release/registration-closure-contract.json'))['baselineApiFiles'],
-              **{n: value for n, value in proof['apiModules'].items() if n.endswith('.js')}} == contract['baselineApiFiles']
+              **{n: value for n, value in proof['apiModules'].items() if n.endswith('.js')},
+              **{n.removeprefix('api/code/'):value for n,value in admin_proof['files'].items()
+                  if n.startswith('api/code/') and n.endswith('.js')}} == contract['baselineApiFiles']
          and patch['afterEngineFiles'] == contract['baselineEngineFiles'], 'PUBLISHED_INVENTORY_CHANGED')
     need(not OUTPUT.exists(), 'OUTPUT_EXISTS')
     OUTPUT.mkdir(parents=True, mode=0o700)
@@ -204,6 +236,7 @@ def prepare():
                 path = context / name
                 path.parent.mkdir(parents=True, exist_ok=True)
                 path.write_bytes((ROOT / name).read_bytes())
+        verify_runtime_schema(context, contract)
         run('npm', 'ci', '--ignore-scripts', '--no-audit', '--no-fund', cwd=context)
         run('npm', 'run', 'prisma:mysql:generate', '--workspace', 'apps/api', cwd=context)
         run('npm', 'run', 'build', '--workspace', 'packages/shared', cwd=context)
@@ -277,6 +310,7 @@ def build():
         path.write_bytes(raw)
     proof = {'version': 1, 'scope': SCOPE, 'commit': commit, 'tree': tree,
              'sourceBaseline': contract['sourceBaseline'], 'sourceBaselineTree': contract['sourceBaselineTree'],
+             'sourceTreeInputs': contract['sourceTreeInputs'],
              'runtimeBaselineCommit': contract['expectedCurrent'], 'roleSourceCommits': contract['roleSourceCommits'],
              'reviewedApplicationCommit': REVIEWED_APPLICATION, 'sourceProjection': 'PUBLISHED_RUNTIME_PLUS_TASK_DELTA',
              'workflowRunId': os.environ['GITHUB_RUN_ID'], 'workflowRunAttempt': os.environ['GITHUB_RUN_ATTEMPT'],
@@ -285,6 +319,9 @@ def build():
              'baselineApiReproduced': True, 'baselineAdminReproduced': True, 'unchangedClientReproduced': True,
              'baselinePrismaClientFiles': contract['baselinePrismaClientFiles'], 'schemaSha256': contract['schemaSha256'],
              'runtimePrismaClientFiles': contract['runtimePrismaClientFiles'],
+             'runtimeAdminFiles': contract['runtimeAdminFiles'],
+             'observedApiSourceProjection': contract['observedApiSourceProjection'],
+             'observedAdminSourceProjection': contract['observedAdminSourceProjection'],
              'publishedAdminProofSha256': contract['publishedAdminProof']['sha256'],
              'hostSourceInheritance': contract['hostSourceInheritance'],
              'sqliteReviewPolicy': contract['sqliteReviewPolicy'],
