@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { accountSaleUpdate, parseChatgptAccountSaleStatus } from './bank-recharge-account-sales';
 import { BankRechargeAccountService } from './bank-recharge-account.service';
 import { listChatgptAccounts } from './bank-recharge-account-list';
+import type { BankRechargeRepository } from './persistence/bank-recharge.repository';
 
 const id = '123e4567-e89b-42d3-a456-426614174000';
 const updatedAt = new Date('2026-10-16T01:00:00.000Z');
@@ -144,9 +145,11 @@ describe('ChatGPT 出售状态命令', () => {
 describe('ChatGPT 出售状态列表', () => {
   function listFixture() {
     const repository = {
-      listAccounts: vi.fn(async () => [
-        { id, registered: true, saleStatus: 'sold', soldAt: updatedAt }
-      ]),
+      listAccounts: vi
+        .fn<BankRechargeRepository['listAccounts']>()
+        .mockResolvedValue([
+          { id, registered: true, saleStatus: 'sold', soldAt: updatedAt }
+        ] as never),
       countAccounts: vi.fn(async () => 1),
       renewalWarningDays: vi.fn(async () => 3),
       subscriptionsForAccounts: vi.fn(async () => []),
@@ -185,9 +188,9 @@ describe('ChatGPT 出售状态列表', () => {
       }
     });
     await f.list({ saleStatus: 'all' });
-    expect(f.repository.listAccounts.mock.calls[1]?.[0].where).not.toHaveProperty('saleStatus');
+    expect(f.repository.listAccounts.mock.calls[1]?.[0]?.where).not.toHaveProperty('saleStatus');
     await f.list({ deleted: 'deleted' });
-    expect(f.repository.listAccounts.mock.calls[2]?.[0].where).toMatchObject({
+    expect(f.repository.listAccounts.mock.calls[2]?.[0]?.where).toMatchObject({
       deletedAt: { not: null }
     });
   });

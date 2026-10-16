@@ -193,9 +193,12 @@ async function fixture(width = 1440, theme = 'light') {
 const rows = (page) => page.locator('.el-table__body-wrapper tbody tr');
 const row = (page, account) => rows(page).filter({ hasText: account.emailMasked });
 async function action(page, account, name) {
-  await row(page, account).getByRole('button', { name: '更多操作', exact: true }).click();
+  const trigger = row(page, account).getByRole('button', { name: '更多操作', exact: true });
+  await trigger.click();
+  const menuId = await trigger.getAttribute('aria-controls');
+  assert.match(menuId ?? '', /^[A-Za-z0-9_-]+$/, '操作菜单必须关联到当前行');
   await page
-    .locator('.el-dropdown-menu:visible')
+    .locator('#' + menuId)
     .getByRole('menuitem', { name, exact: true })
     .click();
   const modal = page.getByRole('dialog', { name, exact: true });
