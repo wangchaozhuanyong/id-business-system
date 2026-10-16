@@ -276,11 +276,9 @@ const onlineCiBuildTestInputs = new Set([
   'scripts/production-release/online-recharge-component-lifecycle.test.py'
 ]);
 export function needsOnlineRechargeCiBuild(paths, context) {
-  if (
-    isRegistrationProtocolRestoreOnly(paths, context) ||
-    isRegistrationProtocolRestoreControlRepair(paths, context)
-  )
-    return false;
+  if (isRegistrationProtocolRestoreOnly(paths, context)) return false;
+  // The exact image-user controller repair needs no ONLINE image or business suites.
+  if (isRegistrationProtocolRestoreControlRepair(paths, context)) return false;
   if (isMailboxVersionOnly(paths) || isMailboxVersionControlsOnly(paths)) return false;
   if (isRegistrationBrowserOnly(paths, context)) return false;
   if (isAccountLoginOnly(paths) || isAccountLoginControlsOnly(paths)) return false;

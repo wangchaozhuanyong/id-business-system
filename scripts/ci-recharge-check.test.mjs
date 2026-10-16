@@ -60,7 +60,7 @@ import {
 } from './ci-recharge-scope.mjs';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
-test('registration protocol control repair exits after pure guards and refuses API Admin or migration', () => {
+test('registration protocol image-user repair stops on its pure gate and refuses API Admin or migration', () => {
   const options = { base: registrationProtocolRestoreRepairBase, restoreFixture: true };
   const calls = recordGuardCommands(
     'ci-only',
@@ -87,6 +87,11 @@ test('registration protocol control repair exits after pure guards and refuses A
       () => recordGuardCommands('ci-only', registrationProtocolRestoreRepairPaths, part, options),
       /Unsupported registration protocol restore control repair/
     );
+  assert.deepEqual(registrationProtocolRestoreRepairCommands.guards[0], [
+    'python3',
+    '-B',
+    'scripts/production-release/registration-protocol-restore-release.test.py'
+  ]);
   const failed = registrationProtocolRestoreRepairCommands.guards[0].join(' ');
   assert.throws(
     () =>
@@ -936,7 +941,7 @@ function recordGuardCommands(
           'const hashes=Object.fromEntries(m.registrationProtocolRestorePaths.filter(p=>!(p in removed)&&p!=="scripts/production-release/registration-protocol-restore-contract.json").map(p=>[p,"a".repeat(64)]));' +
           'const validation="apps/api/src/id-business-v2/auto-registration/worker/test_registration_closed_loop_unit.py";' +
           'const sources=Object.fromEntries(Object.entries(hashes).filter(([p])=>p.startsWith("apps/")&&p!==validation));' +
-          'const contract={version:1,frozen:true,scope:"REGISTRATION_PROTOCOL_RESTORE",migration:null,sourceBaseline:m.registrationProtocolRestoreBase,sourceBaselineTree:m.registrationProtocolRestoreTree,expectedCurrent:"123ea34df9bf74a1d65e74bd70f336eaa9344165",schemaSha256:"51a4d25b1302458145f560acc32f25b89a7bd65fea64dc72b254dc56da430100",runtimeEvidence:{status:"VERIFIED",commit:"123ea34df9bf74a1d65e74bd70f336eaa9344165"},expectedGitChanges:m.registrationProtocolRestorePaths,withdrawal:{sourceRemovals:{...removed}},reviewedFileHashes:hashes,reviewedApplicationCommit:"2bcced63c834187ac5e69e344176da33ff82d4c9",sources,validationSources:{[validation]:hashes[validation]},unchangedInputs:{},validationBaselineSources:{}};' +
+          'const contract={version:1,frozen:true,scope:"REGISTRATION_PROTOCOL_RESTORE",migration:null,sourceBaseline:m.registrationProtocolRestoreBase,sourceBaselineTree:m.registrationProtocolRestoreTree,expectedCurrent:"123ea34df9bf74a1d65e74bd70f336eaa9344165",schemaSha256:"51a4d25b1302458145f560acc32f25b89a7bd65fea64dc72b254dc56da430100",runtimeEvidence:{status:"VERIFIED",commit:"123ea34df9bf74a1d65e74bd70f336eaa9344165"},expectedGitChanges:m.registrationProtocolRestorePaths,withdrawal:{sourceRemovals:{...removed}},reviewedFileHashes:hashes,reviewedApplicationCommit:"2bcced63c834187ac5e69e344176da33ff82d4c9",sources,validationSources:{[validation]:hashes[validation]},unchangedInputs:{},validationBaselineSources:{...m.registrationProtocolRestoreRepairGuard}};' +
           'const repairBaseContract=structuredClone(contract);contract.validationBaselineSources={...m.registrationProtocolRestoreRepairGuard};' +
           'return {...options,contract,repairBaseContract,sourceDigest:p=>m.registrationProtocolRestoreRepairGuard[p]??hashes[p]??null,baseSourceDigest:p=>removed[p]??null};}' +
           'export function isRegistrationProtocolRestoreOnly(paths,options){return m.isRegistrationProtocolRestoreOnly(paths,restoreOptions(options));}' +

@@ -1,4 +1,5 @@
 """Pure release controls. Never open SQLite, connect a database, or call a platform."""
+import ast
 import copy
 import hashlib
 import importlib.util
@@ -210,10 +211,110 @@ class RestoreControls(unittest.TestCase):
         namespace = r.release_namespace(contract())
         code = namespace['release'].__code__
         self.assertIn('remove_host_sources', code.co_names)
+        self.assertIn('withdrawal_image_copies', code.co_names)
         strings = [v for v in code.co_consts if isinstance(v, str)]
-        self.assertTrue(any(v.startswith('RUN printf') for v in strings))
         self.assertIn('registration-protocol-restore-', ''.join(strings))
         self.assertNotIn('registration-parity-diagnostics-', ''.join(strings))
+
+    def test_real_publisher_image_loop_restores_user_and_checks_full_configuration(self):
+        captured = {}
+        original_compile = compile
+
+        def capture(tree, filename, mode):
+            captured['tree'] = copy.deepcopy(tree)
+            return original_compile(tree, filename, mode)
+
+        # Capture the actual adapted release AST, not a copy of its image logic.
+        with patch.object(r, 'compile', side_effect=capture, create=True):
+            namespace = r.release_namespace(contract())
+        loops = [node for node in ast.walk(captured['tree']) if isinstance(node, ast.For)
+            and isinstance(node.target, ast.Tuple)
+            and [getattr(value, 'id', '') for value in node.target.elts] == ['role', 'copies', 'count']]
+        self.assertEqual(len(loops), 1)
+        module = ast.parse('def image_loop(plan, contract, d, h, a, finite, billing, payload, before, stage):\n'
+                           '    images = {}\n    return images\n')
+        module.body[0].body.insert(1, copy.deepcopy(loops[0]))
+        exec(original_compile(ast.fix_missing_locations(module), '<actual-release-image-loop>', 'exec'), namespace)
+        finite = r.helper('proxy-result-identity-release.py')
+        billing = r.helper('recharge-billing-release.py')
+        plan = {'commit': 'a' * 40, 'workflowRunId': '1', 'buildProofSha256': 'b' * 64}
+        c = contract()
+        invalid = [None, 'node\nRUN injected', 'node root', 'node#bad', 'node;id', 'node\\',
+                   'node$var', 'node:', 'node:0:0']
+        for user in ['node', 'root', '0', '', *invalid]:
+            with self.subTest(user=user), tempfile.TemporaryDirectory(
+                    prefix='restore-image-user-', dir=ROOT / '.runtime') as directory:
+                payload = Path(directory) / 'payload'
+                for role in ('api', 'admin'):
+                    (payload / role).mkdir(parents=True)
+                before = {role: {'image': 'base-' + role, 'reference': 'retained-' + role}
+                          for role in ('api', 'admin')}
+                originals = {row['image']: {'Config': {'User': user if role == 'api' else 'nginx',
+                    'Env': ['PURE_FIXTURE=1'], 'WorkingDir': '/app', 'Cmd': ['node', 'main.js'],
+                    'Entrypoint': ['docker-entrypoint.sh'], 'Image': '', 'Labels': {'preserved': 'yes'}},
+                    'RootFS': {'Layers': ['retained-' + role]}}
+                    for role, row in before.items()}
+                built, instructions, run_users = {}, {}, []
+
+                class Driver:
+                    def run(self, *args):
+                        self_args = ('docker', 'image', 'inspect')
+                        if args[:3] != self_args or len(args) != 4:
+                            raise AssertionError('unexpected driver operation')
+                        return json.dumps([originals[args[3]] if args[3] in originals else built[args[3]]])
+
+                def build_image(driver, context, image, role, state, stage):
+                    text = (context / 'Dockerfile').read_text()
+                    instructions[role] = text
+                    value = copy.deepcopy(originals[state['image']])
+                    layers = 0
+                    for line in text.splitlines():
+                        if line.startswith('USER '):
+                            value['Config']['User'] = line.removeprefix('USER ')
+                        elif line.startswith('RUN '):
+                            run_users.append(value['Config']['User'])
+                            layers += 1
+                        elif line.startswith('COPY '):
+                            layers += 1
+                    value['RootFS']['Layers'].extend(['new-layer'] * layers)
+                    value['Config']['Labels'].update({'org.opencontainers.image.revision': plan['commit'],
+                        'id-business-v2.recharge-record-build-proof-sha256': plan['buildProofSha256']})
+                    value['Id'] = 'built-' + role
+                    built[image] = value
+
+                h = SimpleNamespace(base_image_reference=lambda _, state: state['reference'], build_image=build_image)
+                a = SimpleNamespace(normalize_image_context=lambda _: None)
+                if user in invalid:
+                    with self.assertRaisesRegex(RuntimeError, 'IMAGE_USER_INVALID'):
+                        namespace['image_loop'](plan, c, Driver(), h, a, finite, billing, payload, before, Path(directory))
+                    self.assertFalse((payload / 'api/Dockerfile').exists())
+                    self.assertEqual(built, {})
+                    continue
+                images = namespace['image_loop'](plan, c, Driver(), h, a, finite, billing, payload, before, Path(directory))
+                self.assertEqual(set(images), {'api', 'admin'})
+                api_text = instructions['api']
+                self.assertEqual(api_text.count(r.deletion_command(c)), 1)
+                self.assertEqual(api_text.count('RUN '), 1)
+                self.assertEqual(run_users, ['' if user == '' else 'root'])
+                self.assertEqual(built[images['api']['reference']]['Config']['User'], user)
+                if user == '':
+                    self.assertNotIn('USER ', api_text)
+                else:
+                    self.assertIn('USER root\n' + r.deletion_command(c) + 'USER ' + user + '\n', api_text)
+                self.assertNotIn('RUN ', instructions['admin'])
+                self.assertNotIn('USER ', instructions['admin'])
+                changed = copy.deepcopy(built[images['api']['reference']])
+                changed['Config']['Cmd'] = ['unexpected']
+                with self.assertRaisesRegex(RuntimeError, 'IMAGE_CONFIGURATION_CHANGED'):
+                    finite.verify_overlay_image(originals['base-api'], changed, plan, 3, billing)
+
+    def test_image_user_group_is_bounded_and_missing_user_is_rejected(self):
+        c = contract()
+        for user in ['node:node', '1000:1000']:
+            self.assertIn('USER ' + user + '\n', r.withdrawal_image_copies('api', '', {'Config': {'User': user}}, c))
+        for original in [{}, {'Config': {}}, {'Config': {'User': 'a' * 129}}, {'Config': {'User': 0}}]:
+            with self.assertRaisesRegex(RuntimeError, 'IMAGE_USER_INVALID'):
+                r.withdrawal_image_copies('api', '', original, c)
 
     def test_shared_schema_and_sources_do_not_overlap_removed_browser_paths(self):
         c = contract()

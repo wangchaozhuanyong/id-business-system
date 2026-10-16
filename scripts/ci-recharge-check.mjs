@@ -180,6 +180,7 @@ if (
   } else throw new Error('Unsupported GPT recharge check part');
   process.exit(0);
 }
+// A failed image-user controller gate must stop before any candidate build or publisher.
 if (
   mode === 'ci-only' &&
   base === registrationProtocolRestoreRepairBase &&
