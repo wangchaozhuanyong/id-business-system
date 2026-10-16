@@ -50,9 +50,9 @@ export const gptRechargeFrozen = Object.freeze({
   'apps/api/src/id-business-v2/online-recharge/worker-body-parser.ts':
     '2471cba84936dc8c36f25feef210d641a0f5c8c4a22ccde6e684396069e57619',
   'scripts/ci-recharge-check.mjs':
-    '60bf64dbab123f6c72098222db22dca891ef9cdcc119997d273709414619f056',
+    'dd6b7987f3c63bb20f63eb867421f67bd68f60faa66dded1182c6937bddae260',
   'scripts/ci-recharge-scope.mjs':
-    '8788b318d91d4500a63b1a1bb57767407dfb34943005c86b04073e850e3f31d9',
+    'ce72f7dbaa070bca039a1b9f599c827b71e2e60eff26425980b6bfad3441cf64',
   'scripts/ci-recharge-scope.test.mjs':
     '8199b4d89c0645e30ec54eeda82aece0af0bfc19268e5178c6d35a7cfecb5576',
   'scripts/production-release/api-admin-scope.test.py':
@@ -62,10 +62,35 @@ export const gptRechargeFrozen = Object.freeze({
   'scripts/production-release/gpt-recharge-contract.json':
     '2ee7dd00ef1664b194734f8ce93084976d335413b2e8ff92d5957da564f16e89',
   'scripts/production-release/gpt-recharge-release.py':
-    '7c4c4d3c56cac3cc350197acb9b5f6d30a57d1efacc3b144780667cf35b6960c',
+    'ada30647832f361e74fed35f6aea0df9f5351a4358b66661ce1ddd9ed8422812',
   'scripts/production-release/gpt-recharge-release.test.py':
-    'dab38e8660abfe8ea8882817556ab426a177e3eb042b66bffcf266fcb01156bf'
+    '9073de4025c46d1dcc58e336841594009e295414ad09042c73abd7dd23b39473'
 });
+export const gptRechargeControlRepairPaths = Object.freeze([
+  'scripts/production-release/gpt-recharge-release.py',
+  'scripts/production-release/gpt-recharge-release.test.py',
+  'scripts/ci-gpt-recharge-scope.mjs',
+  'scripts/ci-gpt-recharge-scope.test.mjs',
+  'scripts/ci-recharge-scope.mjs',
+  'scripts/ci-recharge-check.mjs'
+]);
+
+export function isGptRechargeControlsOnly(paths, readSource = (name) => readFileSync(name)) {
+  if (
+    !paths.includes('scripts/production-release/gpt-recharge-release.py') ||
+    !paths.includes('scripts/production-release/gpt-recharge-release.test.py') ||
+    !paths.every((name) => gptRechargeControlRepairPaths.includes(name))
+  )
+    return false;
+  try {
+    return Object.entries(gptRechargeFrozen).every(
+      ([name, expected]) => createHash('sha256').update(readSource(name)).digest('hex') === expected
+    );
+  } catch {
+    return false;
+  }
+}
+
 export function affectsGptRechargeArtifact(paths) {
   return paths.some(
     (name) => name === 'scripts/ci-gpt-recharge-scope.mjs' || Object.hasOwn(gptRechargeFrozen, name)

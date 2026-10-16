@@ -2,6 +2,8 @@
 import copy
 import importlib.util
 import json
+import shutil
+import stat
 from pathlib import Path
 import tempfile
 from types import SimpleNamespace
@@ -25,6 +27,9 @@ class Inspector:
 
 
 class RuntimePreservation(unittest.TestCase):
+    def setUp(self):
+        (path.parents[2] / '.deploy').mkdir(exist_ok=True)
+
     def fingerprint(self, env, allowed=True):
         return publisher.configuration(Inspector(env), {'containerId': 'api', 'reference': 'api:before'}, allowed)
 
@@ -40,6 +45,57 @@ class RuntimePreservation(unittest.TestCase):
 
     def test_preserved_service_does_not_receive_the_api_exception(self):
         self.assertNotEqual(self.fingerprint([], False), self.fingerprint(['ONLINE_RECHARGE_VENDURE_KEY=synthetic'], False))
+
+    def test_inherited_environment_and_compose_links_are_detached_before_any_write(self):
+        output = path.parents[2] / '.deploy'
+        with tempfile.TemporaryDirectory(dir=output) as directory:
+            root = Path(directory)
+            previous, shared, target = root / 'previous', root / 'shared', root / 'candidate'
+            previous.mkdir()
+            shared.mkdir()
+            for name in ('.env.aws.production', 'compose.release.json'):
+                (shared / name).write_text('synthetic original ' + name)
+                (previous / name).symlink_to(shared / name)
+            shutil.copytree(previous, target, symlinks=True)
+            publisher.copy_private_configuration(previous, target)
+            for name in ('.env.aws.production', 'compose.release.json'):
+                with self.subTest(name=name):
+                    self.assertFalse((target / name).is_symlink())
+                    self.assertEqual(stat.S_IMODE((target / name).stat().st_mode), 0o600)
+                    self.assertEqual((target / name).read_bytes(), (shared / name).read_bytes())
+                    (target / name).write_text('synthetic candidate only')
+                    self.assertEqual((shared / name).read_text(), 'synthetic original ' + name)
+                    self.assertTrue((previous / name).is_symlink())
+
+    def test_regular_configuration_is_also_private_and_preserves_original_bytes(self):
+        output = path.parents[2] / '.deploy'
+        with tempfile.TemporaryDirectory(dir=output) as directory:
+            previous, target = Path(directory) / 'previous', Path(directory) / 'candidate'
+            previous.mkdir()
+            for name in ('.env.aws.production', 'compose.release.json'):
+                (previous / name).write_text('synthetic original')
+            shutil.copytree(previous, target, symlinks=True)
+            publisher.copy_private_configuration(previous, target)
+            for name in ('.env.aws.production', 'compose.release.json'):
+                (target / name).write_text('synthetic candidate')
+                self.assertEqual((previous / name).read_text(), 'synthetic original')
+                self.assertEqual(stat.S_IMODE((target / name).stat().st_mode), 0o600)
+
+    def test_unexpected_candidate_link_is_rejected_without_writing_its_target(self):
+        output = path.parents[2] / '.deploy'
+        with tempfile.TemporaryDirectory(dir=output) as directory:
+            root = Path(directory)
+            previous, target = root / 'previous', root / 'candidate'
+            previous.mkdir()
+            target.mkdir()
+            external = root / 'other-owner'
+            external.write_text('protected original')
+            (previous / '.env.aws.production').write_text('protected original')
+            (target / '.env.aws.production').symlink_to(external)
+            with self.assertRaisesRegex(RuntimeError, 'CONFIGURATION_LINK_CHANGED'):
+                publisher.copy_private_configuration(previous, target)
+            self.assertEqual(external.read_text(), 'protected original')
+            self.assertTrue((target / '.env.aws.production').is_symlink())
 
     def test_switch_failure_closes_fence_and_retains_maintenance(self):
         events = []

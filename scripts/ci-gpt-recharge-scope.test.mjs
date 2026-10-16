@@ -1,8 +1,11 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import test from 'node:test';
 import {
   affectsGptRechargeArtifact,
+  gptRechargeControlRepairPaths,
+  isGptRechargeControlsOnly,
   gptRechargeFrozen,
   gptRechargePaths,
   isGptRechargeOnly
@@ -20,8 +23,16 @@ const frozenSource = (name) =>
     stdio: ['ignore', 'pipe', 'pipe']
   });
 
+const historicalRecipe = await import(
+  'data:text/javascript;base64,' +
+    frozenSource('scripts/ci-gpt-recharge-scope.mjs').toString('base64')
+);
+
 test('the exact recharge integration selects guards and the reproduced API only', () => {
-  assert.equal(isGptRechargeOnly(gptRechargePaths, frozenSource), true);
+  assert.equal(
+    historicalRecipe.isGptRechargeOnly(historicalRecipe.gptRechargePaths, frozenSource),
+    true
+  );
   const unchanged = isGptRechargeOnly(gptRechargePaths);
   assert.equal(checkMode(gptRechargePaths, 'same', 'same'), unchanged ? 'recharge' : 'full');
   if (unchanged) assert.deepEqual(selectedParts(gptRechargePaths), ['guards', 'api']);
@@ -42,7 +53,7 @@ test('schema or neighboring business and execution source cannot enter the finit
 
 test('every compiled source and release control must retain its reviewed bytes', () => {
   for (const changed of Object.keys(gptRechargeFrozen)) {
-    const read = (name) => (name === changed ? Buffer.from('changed') : frozenSource(name));
+    const read = (name) => (name === changed ? Buffer.from('changed') : readFileSync(name));
     assert.equal(isGptRechargeOnly(gptRechargePaths, read), false, changed);
   }
 });
@@ -98,4 +109,35 @@ test('the actual 55d to shared-pool reconstruction change invalidates the old na
   assert.ok(changed.includes('scripts/production-release/gpt-recharge-contract.json'));
   assert.equal(affectsPart('api', changed), true);
   assert.equal(hasRechargeFlowBusinessReuseProof('api', changed), false);
+});
+
+test('the exact COW publisher repair runs guards only and never recompiles application code', () => {
+  assert.equal(isGptRechargeControlsOnly(gptRechargeControlRepairPaths), true);
+  assert.equal(checkMode(gptRechargeControlRepairPaths, 'same', 'same'), 'ci-only');
+  assert.deepEqual(selectedParts(gptRechargeControlRepairPaths), ['guards']);
+  assert.equal(checkMode(gptRechargeControlRepairPaths, 'before', 'after'), 'full');
+  for (const extra of [
+    'apps/api/src/id-business-v2/online-recharge/tasks.service.ts',
+    'scripts/production-release/unreviewed-repair.py',
+    'docs/unrelated.md',
+    'scripts/production-release/gpt-recharge-contract.json'
+  ]) {
+    assert.equal(
+      isGptRechargeControlsOnly([...gptRechargeControlRepairPaths, extra]),
+      false,
+      extra
+    );
+  }
+  for (const changed of Object.keys(gptRechargeFrozen)) {
+    const read = (name) => (name === changed ? Buffer.from('unreviewed') : readFileSync(name));
+    assert.equal(isGptRechargeControlsOnly(gptRechargeControlRepairPaths, read), false, changed);
+  }
+  assert.equal(
+    isGptRechargeControlsOnly(
+      gptRechargeControlRepairPaths.filter(
+        (name) => name !== 'scripts/production-release/gpt-recharge-release.test.py'
+      )
+    ),
+    false
+  );
 });

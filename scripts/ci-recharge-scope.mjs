@@ -1,5 +1,9 @@
 import { isMailboxVersionOnly, isMailboxVersionControlsOnly } from './ci-mailbox-version-scope.mjs';
-import { affectsGptRechargeArtifact, isGptRechargeOnly } from './ci-gpt-recharge-scope.mjs';
+import {
+  affectsGptRechargeArtifact,
+  isGptRechargeControlsOnly,
+  isGptRechargeOnly
+} from './ci-gpt-recharge-scope.mjs';
 import {
   isSharedBankCardOnly,
   isSharedBankCardControlsOnly,
@@ -1055,6 +1059,7 @@ export function isMailboxOnly(paths) {
 }
 
 export function checkMode(paths, oldSchema, newSchema, grantHelperSnapshot, context) {
+  if (isGptRechargeControlsOnly(paths)) return oldSchema === newSchema ? 'ci-only' : 'full';
   if (isGptRechargeOnly(paths)) return oldSchema === newSchema ? 'recharge' : 'full';
   if (isRegistrationBrowserOnly(paths, context))
     return oldSchema === newSchema ? 'recharge' : 'full';
@@ -1556,6 +1561,7 @@ export function isTargetedOnly(paths, oldSchema, newSchema) {
   );
 }
 export function selectedParts(paths, grantHelperSnapshot, context) {
+  if (isGptRechargeControlsOnly(paths)) return ['guards'];
   if (isMailboxVersionControlsOnly(paths)) return ['guards', 'release-controls'];
   if (isMailboxVersionOnly(paths)) return ['guards', 'api', 'release-controls'];
   if (isGptRechargeOnly(paths)) return ['guards', 'api'];
@@ -4403,7 +4409,7 @@ async function main() {
             : selectedParts(paths, undefined, proxyIdentityContext);
   // BEGIN finite ONLINE build-proof reuse classifier admission
   const needsOnlineRechargeCiBuild = (paths) =>
-    isGptRechargeOnly(paths)
+    isGptRechargeOnly(paths) || isGptRechargeControlsOnly(paths)
       ? false
       : canResumeOnlineBuildProofReuseGuard(base, 'scope')
         ? false

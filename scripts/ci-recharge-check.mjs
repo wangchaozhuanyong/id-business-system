@@ -3,7 +3,7 @@ import {
   isMailboxVersionControlsOnly,
   mailboxVersionCommands
 } from './ci-mailbox-version-scope.mjs';
-import { isGptRechargeOnly } from './ci-gpt-recharge-scope.mjs';
+import { isGptRechargeControlsOnly, isGptRechargeOnly } from './ci-gpt-recharge-scope.mjs';
 import {
   isSharedBankCardOnly,
   isSharedBankCardControlsOnly,
@@ -131,7 +131,10 @@ const changed = execFileSync('git', ['diff', '--name-only', base, 'HEAD'], { enc
   .trim()
   .split('\n')
   .filter(Boolean);
-if (mode === 'recharge' && isGptRechargeOnly(changed)) {
+if (
+  (mode === 'recharge' && isGptRechargeOnly(changed)) ||
+  (mode === 'ci-only' && isGptRechargeControlsOnly(changed))
+) {
   if (part === 'guards' || part === 'release-controls') {
     npm('run', 'format:check');
     npm('run', 'lint');
