@@ -467,20 +467,33 @@ async function warmCustomerPage(browserInstance) {
 
 async function warmPage(page, pathname, readySelector) {
   const targetUrl = new URL(pathname, adminUrl).href;
-  for (let attempt = 1; attempt <= 3; attempt += 1) {
-    await page.goto(targetUrl, { waitUntil: 'domcontentloaded' });
-    const ready = await page
-      .locator(readySelector)
-      .first()
-      .waitFor({ state: 'attached', timeout: 5_000 })
-      .then(() => true)
-      .catch(() => false);
-    if (ready) {
-      await settleLayout(page);
-      return;
+  const errors = [];
+  const captureError = (error) => errors.push(error.message);
+  page.on('pageerror', captureError);
+  try {
+    for (let attempt = 1; attempt <= 3; attempt += 1) {
+      await page.goto(targetUrl, { waitUntil: 'domcontentloaded' });
+      const ready = await page
+        .locator(readySelector)
+        .first()
+        .waitFor({ state: 'attached', timeout: 5_000 })
+        .then(() => true)
+        .catch(() => false);
+      if (ready) {
+        await settleLayout(page);
+        return;
+      }
     }
+    const body = await page
+      .locator('body')
+      .innerText()
+      .catch(() => '');
+    throw new Error(
+      `布局验收预热失败：${targetUrl}\n页面：${body.slice(0, 1600)}\n浏览器错误：${errors.join('；')}`
+    );
+  } finally {
+    page.off('pageerror', captureError);
   }
-  throw new Error(`布局验收预热失败：${targetUrl}`);
 }
 
 async function verifyLayoutFixture(browserInstance) {
