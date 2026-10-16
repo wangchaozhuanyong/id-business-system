@@ -3,8 +3,8 @@ import { lstatSync, readFileSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 // One forward-only browser withdrawal, bound to its exact reviewed ancestor.
-export const registrationProtocolRestoreBase = '1c339754507f29459d17d75bb84afbee8fba5291';
-export const registrationProtocolRestoreTree = '06fc09408adb26dd753456a9e8ff490f3e3cd308';
+export const registrationProtocolRestoreBase = '7e19c6c78afb1d31e8e3a971653edefbfe48778f';
+export const registrationProtocolRestoreTree = '6cc7525f60aaa75a79ebf87227a5efcfc25a873b';
 export const registrationProtocolRestorePaths = Object.freeze([
   '.github/workflows/quality.yml',
   '.github/workflows/registration-protocol-restore-validation.yml',
