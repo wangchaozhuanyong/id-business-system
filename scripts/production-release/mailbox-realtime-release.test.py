@@ -8,6 +8,7 @@ from pathlib import Path
 import tarfile
 import tempfile
 import subprocess
+import shutil
 import unittest
 from unittest.mock import Mock, patch
 
@@ -98,6 +99,21 @@ class MailboxRelease(unittest.TestCase):
             source.write_bytes(b'unreviewed')
             with self.assertRaisesRegex(RuntimeError, 'REVIEWED_APPLICATION_CHANGED'):
                 b.reviewed_source('reviewed.ts', expected)
+
+    def test_transported_payload_contains_the_entire_verified_helper_closure(self):
+        output = ROOT / '.runtime/mailbox-release/control-tests'
+        output.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=output) as temporary:
+            entry = Path(temporary)
+            for name in self.c['controlFiles']:
+                shutil.copyfile(HERE / name, entry / name)
+            spec = importlib.util.spec_from_file_location('isolated_mailbox_entry', entry / 'mailbox-realtime-release.py')
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+            module.verify_contract(self.c)
+            (entry / 'account-login-contract.json').unlink()
+            with self.assertRaises(FileNotFoundError):
+                module.verify_contract(self.c)
 
     def test_unfrozen_release_stops_before_helpers_or_platform_calls(self):
         with patch.object(r, 'helper') as helper:

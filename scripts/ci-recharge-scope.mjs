@@ -1,4 +1,8 @@
-import { isMailboxRealtimeOnly, mailboxRealtimeParts } from './ci-mailbox-realtime-scope.mjs';
+import {
+  isMailboxRealtimeOnly,
+  isMailboxRealtimeControlsOnly,
+  mailboxRealtimeParts
+} from './ci-mailbox-realtime-scope.mjs';
 import {
   isAccountLoginOnly,
   isAccountLoginControlsOnly,
@@ -248,7 +252,8 @@ const onlineCiBuildTestInputs = new Set([
 export function needsOnlineRechargeCiBuild(paths, context) {
   if (isAccountLoginOnly(paths) || isAccountLoginControlsOnly(paths)) return false;
   if (isRegistrationParityDiagnosticsControlRepair(paths, context)) return false;
-  if (isMailboxRealtimeOnly(paths, context)) return false;
+  if (isMailboxRealtimeOnly(paths, context) || isMailboxRealtimeControlsOnly(paths, context))
+    return false;
   if (isRegistrationParityDiagnosticsOnly(paths, context)) return false;
   if (isWorkspaceDragOnly(paths)) return false;
   if (isChatgptSalesOnly(paths) || isChatgptSalesControlsOnly(paths)) return false;
@@ -1034,7 +1039,8 @@ export function checkMode(paths, oldSchema, newSchema, grantHelperSnapshot, cont
     return accountLoginSchemaMatches(oldSchema, newSchema) ? 'recharge' : 'full';
   if (isRegistrationParityDiagnosticsControlRepair(paths, context))
     return oldSchema === newSchema ? 'ci-only' : 'full';
-  if (isMailboxRealtimeOnly(paths, context)) return oldSchema === newSchema ? 'recharge' : 'full';
+  if (isMailboxRealtimeOnly(paths, context) || isMailboxRealtimeControlsOnly(paths, context))
+    return oldSchema === newSchema ? 'recharge' : 'full';
   if (isRegistrationParityDiagnosticsOnly(paths, context))
     return oldSchema === newSchema ? 'recharge' : 'full';
   if (context && isRegistrationParityDiagnosticsOnly(paths)) return 'full';
@@ -1520,6 +1526,7 @@ export function selectedParts(paths, grantHelperSnapshot, context) {
   if (isAccountLoginControlsOnly(paths)) return ['guards'];
   if (isAccountLoginOnly(paths)) return [...accountLoginParts];
   if (isRegistrationParityDiagnosticsControlRepair(paths, context)) return ['guards'];
+  if (isMailboxRealtimeControlsOnly(paths, context)) return ['guards', 'release-controls'];
   if (isMailboxRealtimeOnly(paths, context)) return [...mailboxRealtimeParts];
   if (isRegistrationParityDiagnosticsOnly(paths, context))
     return [...registrationParityDiagnosticsParts];

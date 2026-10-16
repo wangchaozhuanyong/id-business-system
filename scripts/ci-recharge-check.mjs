@@ -1,4 +1,7 @@
-import { isMailboxRealtimeOnly } from './ci-mailbox-realtime-scope.mjs';
+import {
+  isMailboxRealtimeOnly,
+  isMailboxRealtimeControlsOnly
+} from './ci-mailbox-realtime-scope.mjs';
 import {
   isAccountLoginOnly,
   isAccountLoginControlsOnly,
@@ -121,13 +124,21 @@ const registrationParityDiagnosticsControlRepair =
     base,
     baseTree: execFileSync('git', ['rev-parse', base + '^{tree}'], { encoding: 'utf8' }).trim()
   });
+const mailboxContext =
+  mode === 'recharge'
+    ? {
+        base,
+        baseTree: execFileSync('git', ['rev-parse', base + '^{tree}'], { encoding: 'utf8' }).trim()
+      }
+    : undefined;
+const mailboxControlsOnly =
+  mode === 'recharge' && isMailboxRealtimeControlsOnly(changed, mailboxContext);
 if (
   mode === 'recharge' &&
-  isMailboxRealtimeOnly(changed, {
-    base,
-    baseTree: execFileSync('git', ['rev-parse', base + '^{tree}'], { encoding: 'utf8' }).trim()
-  })
+  (isMailboxRealtimeOnly(changed, mailboxContext) || mailboxControlsOnly)
 ) {
+  if (mailboxControlsOnly && !['guards', 'release-controls'].includes(part))
+    throw new Error('Unsupported mailbox control repair check part');
   if (!['guards', 'release-controls', 'api', 'admin'].includes(part))
     throw new Error('Unsupported mailbox check part');
   if (part === 'guards' || part === 'release-controls') {
