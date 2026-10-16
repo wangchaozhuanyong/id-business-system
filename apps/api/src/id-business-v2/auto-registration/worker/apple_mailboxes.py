@@ -33,6 +33,7 @@ from apple_closed_loop import (BATCH_PREFIX, ClosedLoopFacts, RESULT_FIELDS, SYN
                                resolve_system_proxy, verify_identity)
 from apple_registration_diagnostics import (RegistrationDiagnostics, STAGES, ERROR_KINDS,
                                              PUBLIC_FIELDS as DIAGNOSTIC_PUBLIC_FIELDS)
+from flow_evidence import observation, validate_flow_evidence, validate_observation
 
 PUBLIC_FIELDS = CLOSED_LOOP_PUBLIC_FIELDS | DIAGNOSTIC_PUBLIC_FIELDS
 
@@ -470,6 +471,22 @@ class RegistrationFacts(ClosedLoopFacts):
                 self.write(db, record)
             row.value = json.dumps(data, ensure_ascii=False)
 
+    def record_flow_evidence(self, task_uuid, slot, evidence):
+        validate_observation(slot, evidence)
+        with self.transaction() as db:
+            row, data = self.task_data(db, task_uuid)
+            if self.current(db, task_uuid, data) is None:
+                return False
+            flow = data.get("flowEvidence", {"version": 1})
+            validate_flow_evidence(flow)
+            flow = {**flow, slot: evidence}
+            validate_flow_evidence(flow)
+            # This is task evidence only. Never advance the mailbox revision,
+            # account identity, first failure or immutable sync payload.
+            data["flowEvidence"] = flow
+            row.value = json.dumps(data, ensure_ascii=False)
+        return True
+
     def observe(self, email: str, task_uuid: str, **updates: Any) -> dict[str, Any]:
         with self.transaction() as db:
             record = self.read(db, email)
@@ -781,6 +798,9 @@ class AppleMailboxIntegration:
             if binding is None:
                 raise HTTPException(404, "隐藏邮箱注册任务不存在")
             task_data = json.loads(binding.value)
+            flow = task_data.get("flowEvidence")
+            if "flowEvidence" in task_data:
+                validate_flow_evidence(flow)
             record = self.store.read(db, task_data["email"])
             record = self.public_record(record)
             status = "interrupted" if (task.status in {"pending", "running"} or record["activeTaskUuid"] == task_uuid) and not self.live(task_uuid) else task.status
@@ -789,6 +809,7 @@ class AppleMailboxIntegration:
             return {"taskUuid": task_uuid, "status": status,
                     "logs": [self.redact(line) for line in (task.logs or "").splitlines()],
                     "record": record, "resultKind": task_data["resultKind"],
+                    **({"flowEvidence": flow} if "flowEvidence" in task_data else {}),
                     **{key: task_data.get(key) for key in PUBLIC_FIELDS}}
 
     def cancel(self, task_uuid):
@@ -876,7 +897,21 @@ class AppleMailboxIntegration:
         if getattr(session, "_id_apple_post", False):
             return
         original_post = session.post
+        original_get = session.get
         endpoints = importlib.import_module("src.core.register").OPENAI_API_ENDPOINTS
+
+        def get(url, *args, **kwargs):
+            diagnostics = getattr(engine, "_apple_diagnostics", None)
+            response = (diagnostics.request(original_get, url, *args, **kwargs)
+                        if diagnostics is not None else original_get(url, *args, **kwargs))
+            start = getattr(engine, "oauth_start", None)
+            if start is not None and url == getattr(start, "auth_url", None):
+                evidence = observation(response, "authorize")
+                if not self.store.record_flow_evidence(task_uuid, "authorize", evidence):
+                    raise ValueError("原任务占用已变化，不能继续授权")
+                if evidence["decision"] != "accepted":
+                    raise ValueError("授权入口响应未通过校验，已停止后续注册")
+            return response
 
         def post(url, *args, **kwargs):
             # Every replacement session keeps the same pre-submission durable
@@ -903,6 +938,15 @@ class AppleMailboxIntegration:
                 response = diagnostics.request(original_post, url, *args, **kwargs)
             else:
                 response = original_post(url, *args, **kwargs)
+            slot = "signup" if url == endpoints["signup"] else "password" if url == endpoints["register"] else None
+            if slot is not None:
+                evidence = observation(response, slot)
+                if not self.store.record_flow_evidence(task_uuid, slot, evidence):
+                    raise ValueError("原任务占用已变化，不能继续注册")
+                if slot == "signup":
+                    # The wrapper below validates the response before the
+                    # original algorithm can enter its password/login branch.
+                    engine._apple_signup_evidence = evidence
             if (url == endpoints.get("create_account") and getattr(response, "status_code", None) == 200
                     and not confirms_account_creation(url, response)):
                 # The official side effect may already have happened. Raising
@@ -911,7 +955,8 @@ class AppleMailboxIntegration:
                 raise ValueError("官网创建响应无法确认，请核对原任务；不要重复注册")
             return response
 
-        session.post = post
+        session.get, session.post = get, post
+        session._id_apple_get = True
         session._id_apple_post = True
 
     def observe_engine(self, engine, provider):
@@ -957,7 +1002,15 @@ class AppleMailboxIntegration:
             provider.otp_lower_bound = time.time()
             if not self.store.update_task(task_uuid, stage="signup"):
                 raise ValueError("邮箱占用已变化，不能继续注册")
+            engine._apple_signup_evidence = None
             result = original_signup(*args, **kwargs)
+            evidence = engine._apple_signup_evidence
+            if (result.success and (not isinstance(evidence, dict) or evidence.get("decision") != "accepted"
+                    or evidence.get("pageKind") != ("existing_account" if result.is_existing_account else "new_account")
+                    or result.page_type != ("email_otp_verification" if result.is_existing_account else "password"))):
+                result.success = False
+                result.error_message = "注册前置响应未通过校验，未提交密码或继续登录"
+                return result
             if context.get("authorizationOnly") and not result.is_existing_account:
                 result.success = False
                 result.error_message = "官网未返回已有账号登录验证，请人工核对；未再次注册"

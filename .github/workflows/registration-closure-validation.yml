@@ -11,6 +11,13 @@ on:
         description: Exact deployed predecessor commit
         required: true
         type: string
+      release_kind:
+        description: Finite registration publication contract
+        default: registration-inventory
+        type: choice
+        options:
+          - registration-inventory
+          - registration-flow-evidence
       publish:
         description: Publish after isolated validation
         required: true
@@ -32,6 +39,7 @@ jobs:
     timeout-minutes: 45
     env:
       GH_TOKEN: ${{ github.token }}
+      REGISTRATION_FLOW_EVIDENCE: ${{ inputs.release_kind == 'registration-flow-evidence' && '1' || '0' }}
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
         with:
@@ -41,20 +49,29 @@ jobs:
           node-version: 24
           cache: npm
       - name: Verify finite publication controls
-        run: python3 -B scripts/production-release/registration-closure-release.test.py
+        run: |
+          if [ "$REGISTRATION_FLOW_EVIDENCE" = 1 ]; then
+            python3 -B scripts/production-release/registration-flow-evidence-release.test.py
+          else
+            python3 -B scripts/production-release/registration-closure-release.test.py
+          fi
       - name: Prepare reproduced published sources and approved delta
         run: python3 -B scripts/production-release/registration-closure-build.py prepare
       - name: Prepare isolated Python dependencies
+        if: inputs.release_kind != 'registration-flow-evidence'
         run: |
           python3 -m venv .deploy/registration-closure-release/python
           .deploy/registration-closure-release/python/bin/pip install --disable-pip-version-check -r .deploy/registration-closure-release/candidate/apps/api/src/id-business-v2/auto-registration/worker/requirements.lock.txt
           .deploy/registration-closure-release/python/bin/pip check
       - name: Compile API for isolated database acceptance
+        if: inputs.release_kind != 'registration-flow-evidence'
         working-directory: .deploy/registration-closure-release/candidate
         run: npm run build --workspace @apple-business/api
       - name: Verify isolated registration MySQL SQLite and proxy MySQL scenarios
+        if: inputs.release_kind != 'registration-flow-evidence'
         run: node scripts/production-release/registration-closure-database.mjs
       - name: Verify encrypted SQLite persistence and old receipt compatibility
+        if: inputs.release_kind != 'registration-flow-evidence'
         working-directory: .deploy/registration-closure-release/candidate/apps/api/src/id-business-v2/auto-registration/worker
         run: |
           $GITHUB_WORKSPACE/.deploy/registration-closure-release/python/bin/python -B -m unittest test_workspace
@@ -62,6 +79,7 @@ jobs:
           $GITHUB_WORKSPACE/.deploy/registration-closure-release/python/bin/python -B -m unittest test_release_safety
           $GITHUB_WORKSPACE/.deploy/registration-closure-release/python/bin/python -B -m unittest test_registration_closed_loop_unit
       - name: Verify seven V2 controls and affected application boundaries
+        if: inputs.release_kind != 'registration-flow-evidence'
         working-directory: .deploy/registration-closure-release/candidate
         run: |
           npm run check:admin-ui
@@ -75,27 +93,60 @@ jobs:
       - name: Install frozen engine dependency lock for proxy tests
         working-directory: .deploy/registration-closure-release/candidate/apps/api/src/id-business-v2/online-recharge/engine/upstream
         run: npm ci --ignore-scripts --no-audit --no-fund
+        if: inputs.release_kind != 'registration-flow-evidence'
       - name: Verify proxy engine behavior without payment
+        if: inputs.release_kind != 'registration-flow-evidence'
         working-directory: .deploy/registration-closure-release/candidate/apps/api/src/id-business-v2/online-recharge/engine
         run: node --test test/proxy-test.test.cjs test/dispatch.test.cjs test/proxy-worker.test.cjs test/proxy-pool.test.cjs
       - name: Reproduce predecessor and build finite API Admin engine artifacts
+        if: inputs.release_kind != 'registration-flow-evidence'
         run: python3 -B scripts/production-release/registration-closure-build.py build
       - name: Install isolated browser acceptance runtime
+        if: inputs.release_kind != 'registration-flow-evidence'
         working-directory: .deploy/registration-closure-release/candidate
         run: npx playwright install --with-deps chromium
       - name: Verify combined account registration and proxy browser behavior
+        if: inputs.release_kind != 'registration-flow-evidence'
         working-directory: .deploy/registration-closure-release/candidate
         run: |
           node scripts/acceptance-v2-registration-inventory-ui.mjs
           node scripts/acceptance-v2-registration-native-ui.mjs --python=$GITHUB_WORKSPACE/.deploy/registration-closure-release/python/bin/python
           node scripts/acceptance-v2-recharge-proxies-ui.mjs
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: inputs.release_kind != 'registration-flow-evidence'
         with:
           name: registration-closure-${{ github.sha }}-${{ github.run_attempt }}
           path: |
             .deploy/registration-closure-release/registration-closure-artifact.tar.gz
             .deploy/registration-closure-release/artifact-sha256.txt
             .deploy/registration-closure-release/database-verification.json
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 30
+      - name: Prepare unchanged Python and browser runtime for flow evidence
+        if: inputs.release_kind == 'registration-flow-evidence'
+        run: |
+          python3 -m venv .deploy/registration-flow-evidence/python
+          .deploy/registration-flow-evidence/python/bin/pip install --disable-pip-version-check -r .deploy/registration-flow-evidence/candidate/apps/api/src/id-business-v2/auto-registration/worker/requirements.lock.txt
+          .deploy/registration-flow-evidence/python/bin/pip check
+          cd .deploy/registration-flow-evidence/candidate
+          npx playwright install --with-deps chromium
+      - name: Reproduce published API Admin and unchanged generated client before finite overlay
+        if: inputs.release_kind == 'registration-flow-evidence'
+        run: python3 -B scripts/production-release/registration-closure-build.py build
+      - name: Verify flow evidence persistence controlled schema and actual browser assets
+        if: inputs.release_kind == 'registration-flow-evidence'
+        run: python3 -B scripts/production-release/registration-closure-build.py validate
+      - name: Package only verified API module worker and Admin delta
+        if: inputs.release_kind == 'registration-flow-evidence'
+        run: python3 -B scripts/production-release/registration-closure-build.py package
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: inputs.release_kind == 'registration-flow-evidence'
+        with:
+          name: registration-flow-evidence-${{ github.sha }}-${{ github.run_attempt }}
+          path: |
+            .deploy/registration-flow-evidence/registration-flow-evidence-artifact.tar.gz
+            .deploy/registration-flow-evidence/artifact-sha256.txt
           include-hidden-files: true
           if-no-files-found: error
           retention-days: 30
@@ -114,6 +165,7 @@ jobs:
       AWS_REGION: ap-northeast-1
       RELEASE_COMMIT: ${{ inputs.commit }}
       EXPECTED_CURRENT: ${{ inputs.expected_current }}
+      REGISTRATION_FLOW_EVIDENCE: ${{ inputs.release_kind == 'registration-flow-evidence' && '1' || '0' }}
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
         with:
@@ -132,7 +184,9 @@ jobs:
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: registration-closure-publication-${{ github.run_id }}-${{ github.run_attempt }}
-          path: .deploy/registration-closure-release/
+          path: |
+            .deploy/registration-closure-release/
+            .deploy/registration-flow-evidence/
           include-hidden-files: true
           if-no-files-found: error
           retention-days: 30
