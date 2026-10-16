@@ -2357,7 +2357,8 @@ test('byte-bound proxy identity patch runs publisher/selectors and real engine s
   );
   assert.deepEqual(guards.at(-1), ['process-exit', 0]);
   const engine = recordGuardCommands('recharge', paths, 'online-engine', options);
-  assert.deepEqual(engine[0], [
+  assert.deepEqual(engine[0], ['npm', 'ci', '--ignore-scripts', '--no-audit', '--no-fund']);
+  assert.deepEqual(engine[1], [
     'npm',
     'ci',
     '--prefix',
@@ -2366,8 +2367,16 @@ test('byte-bound proxy identity patch runs publisher/selectors and real engine s
     '--no-audit',
     '--no-fund'
   ]);
-  assert.deepEqual(engine[1], ['node', '--test', ...proxyResultIdentityEngineTests]);
-  assert.deepEqual(engine[2], ['process-exit', 0]);
+  assert.deepEqual(engine[2], ['node', '--test', ...proxyResultIdentityEngineTests]);
+  assert.deepEqual(engine[3], ['process-exit', 0]);
+  assert.throws(
+    () =>
+      recordGuardCommands('recharge', paths, 'online-engine', {
+        ...options,
+        failCommand: 'npm ci --ignore-scripts --no-audit --no-fund'
+      }),
+    /SYNTHETIC_COMMAND_FAILURE/
+  );
   const wider = recordGuardCommands(
     'recharge',
     [...paths, 'apps/api/src/id-business-v2/online-recharge/engine/worker.cjs'],

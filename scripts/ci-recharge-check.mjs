@@ -81,6 +81,7 @@ const proxyResultIdentityOnly =
   });
 if (proxyResultIdentityOnly && ['guards', 'release-controls', 'online-engine'].includes(part)) {
   if (part === 'online-engine') {
+    npm('ci', '--ignore-scripts', '--no-audit', '--no-fund');
     npm(
       'ci',
       '--prefix',
