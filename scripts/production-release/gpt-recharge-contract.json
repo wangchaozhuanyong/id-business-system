@@ -610,7 +610,7 @@
   },
   "controlSources": {
     "api-admin-scope.py": "50446ab528a288ca1c2129c84f1bf4a90f59fa313a92bcff0058a258c8b8e925",
-    "gpt-recharge-release.py": "f842baebb19a980ed8ee0491f7c9bd25bbd94b32e19ce6f5d6d3284edfdf3a17",
+    "gpt-recharge-release.py": "76d8597f5f1fb8837ca822b4b8ae8573abd45ba4baceeaff4f30ce298d8688c6",
     "proxy-result-identity-release.py": "97207252c12924dcbbfe3e86ebf397e928cd9545bbf9260337fd94ffd5109d45",
     "recharge-availability-release.py": "d98af117f3d80e705dd4f5eb3375a37cf4c0f058b65f4be77550d909ccbbe66c",
     "recharge-record-release.py": "4ca6d0053f5dc4368d85722ef0df272ace0947c1c91993a0a3da598507b5163f",

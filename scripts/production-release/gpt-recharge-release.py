@@ -1,5 +1,6 @@
 """API-only forward publication; preserve payment engines, data and other services."""
 import datetime
+from contextlib import contextmanager
 import fcntl
 import hashlib
 import importlib.util
@@ -98,6 +99,21 @@ def smoke(d, h, target, states, proof, c):
     need(d.run('docker', 'exec', states['api']['containerId'], 'node', '-e', script) == 'GPT_UNAUTHORIZED_REJECTED', 'AUTH_SMOKE_FAILED')
 
 
+@contextmanager
+def guarded_switch(fence, marker, publisher, stage, plan):
+    try:
+        yield
+    except BaseException:
+        (stage / 'switch-recovery.json').write_text(json.dumps({
+            'status': 'NEEDS_FORWARD_DIAGNOSIS', 'commit': plan['commit'],
+            'maintenanceHeld': True, 'rollbackPerformed': False,
+            'switchMayHaveStarted': True}) + '\n')
+        raise
+    finally:
+        fence.close()
+    publisher.release_markers(marker)
+
+
 def release(plan, c):
     need(plan['mode'] in ('preflight', 'release', 'readback') and re.fullmatch('[a-f0-9]{40}', plan['commit'])
          and re.fullmatch('[a-f0-9]{40}', plan['tree']) and re.fullmatch('[1-9][0-9]*', plan['workflowRunId']), 'IDENTITY_INVALID')
@@ -190,7 +206,7 @@ def release(plan, c):
         baseline(d, h, c)
         marker = p.claim_markers(d, before, plan)
         fence = p.sql_fence_class(c)(d, previous)
-        try:
+        with guarded_switch(fence, marker, p, stage, plan):
             fence.acquire()
             d.compose(previous, 'stop', 'online-recharge', timeout=90)
             fence.check_idle()
@@ -204,9 +220,6 @@ def release(plan, c):
             after = h.snapshot(d, target)
             need(after['api']['image'] == built['Id'], 'API_IMAGE_CHANGED')
             smoke(d, h, target, after, proof, c)
-        finally:
-            fence.close()
-            p.release_markers(marker)
         h.guards(d, target, after, c)
         receipt = {'status': 'DEPLOYED', 'commit': plan['commit'], 'before': before, 'after': after,
                    'backup': backup, 'artifactSha256': plan['artifactSha256'], 'businessActions': 0, 'migrationPerformed': False}

@@ -60,11 +60,11 @@ export const gptRechargeFrozen = Object.freeze({
   'scripts/production-release/gpt-recharge-build.py':
     'a3bd39ee133103378b58bd2c083dada0ef14a0a148871ff41b4de63d93e4991e',
   'scripts/production-release/gpt-recharge-contract.json':
-    '94173a2758bed2ebdf98970b108bc4c1865751e5aeb4daa11a83bdd155396ea2',
+    '4bf24d44db44d85853ace9645c5b7e153cecfd4c79c3dfe9dc67f7a0214560df',
   'scripts/production-release/gpt-recharge-release.py':
-    'f842baebb19a980ed8ee0491f7c9bd25bbd94b32e19ce6f5d6d3284edfdf3a17',
+    '76d8597f5f1fb8837ca822b4b8ae8573abd45ba4baceeaff4f30ce298d8688c6',
   'scripts/production-release/gpt-recharge-release.test.py':
-    'e247037925646fd86ac24b4820f531d03e4d54bc6fc98b8365c3527d13983801'
+    'dab38e8660abfe8ea8882817556ab426a177e3eb042b66bffcf266fcb01156bf'
 });
 export function isGptRechargeOnly(paths, readSource = (name) => readFileSync(name)) {
   if (!paths.length || !paths.every((name) => gptRechargePaths.includes(name))) return false;

@@ -3,6 +3,8 @@ import copy
 import importlib.util
 import json
 from pathlib import Path
+import tempfile
+from types import SimpleNamespace
 import unittest
 
 path = Path(__file__).with_name('gpt-recharge-release.py')
@@ -38,6 +40,30 @@ class RuntimePreservation(unittest.TestCase):
 
     def test_preserved_service_does_not_receive_the_api_exception(self):
         self.assertNotEqual(self.fingerprint([], False), self.fingerprint(['ONLINE_RECHARGE_VENDURE_KEY=synthetic'], False))
+
+    def test_switch_failure_closes_fence_and_retains_maintenance(self):
+        events = []
+        fence = SimpleNamespace(close=lambda: events.append('closed'))
+        controls = SimpleNamespace(release_markers=lambda marker: events.append('released'))
+        output = path.parents[2] / '.deploy'
+        output.mkdir(exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=output) as directory:
+            stage = Path(directory)
+            with self.assertRaisesRegex(RuntimeError, 'synthetic startup failure'):
+                with publisher.guarded_switch(fence, {}, controls, stage, {'commit': 'synthetic'}):
+                    raise RuntimeError('synthetic startup failure')
+            receipt = json.loads((stage / 'switch-recovery.json').read_text())
+            self.assertEqual(events, ['closed'])
+            self.assertTrue(receipt['maintenanceHeld'])
+            self.assertFalse(receipt['rollbackPerformed'])
+
+    def test_success_releases_maintenance_only_after_fence_closes(self):
+        events = []
+        fence = SimpleNamespace(close=lambda: events.append('closed'))
+        controls = SimpleNamespace(release_markers=lambda marker: events.append('released'))
+        with publisher.guarded_switch(fence, {}, controls, path.parent, {'commit': 'synthetic'}):
+            events.append('healthy')
+        self.assertEqual(events, ['healthy', 'closed', 'released'])
 
 
 if __name__ == '__main__':
