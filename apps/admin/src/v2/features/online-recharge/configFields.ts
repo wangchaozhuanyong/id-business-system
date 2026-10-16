@@ -47,6 +47,13 @@ export const configGroups: {
         type: 'select',
         options: regionOptions,
         initial: 'PH'
+      },
+      {
+        key: 'proxyCountryCode',
+        label: '代理国家',
+        type: 'select',
+        initial: '',
+        help: '只使用所选国家的启用代理，同国多条可轮换；未设置或没有可用代理时无法创建新任务，不切换其他国家。代理国家与支付地区分别设置。'
       }
     ]
   },

@@ -6,6 +6,7 @@ import { FieldEncryptionService } from '../../../common/crypto/field-encryption.
 import { ONLINE_RECHARGE_DEFAULTS, ONLINE_RECHARGE_SECRET_KEYS } from '../contracts';
 import { OnlineRechargeRepository } from './online-recharge.repository';
 import { integer, object, text } from '../validation';
+import { onlineProxyCountry } from '../proxy-input';
 
 @Injectable()
 export class OnlineRechargeSettingsRepository {
@@ -90,6 +91,8 @@ export class OnlineRechargeSettingsRepository {
       }
       if (!['US', 'PH', 'SG', 'MY'].includes(String(settings.paymentRegion)))
         throw new BadRequestException('支付地区无效');
+      if (settings.proxyCountryCode !== '')
+        settings.proxyCountryCode = onlineProxyCountry(settings.proxyCountryCode);
       if (!['pool', 'standalone'].includes(String(settings.browserMode)))
         throw new BadRequestException('浏览器模式无效');
       for (const key of ['planNamePlus', 'planNamePro5x', 'planNamePro20x'] as const)

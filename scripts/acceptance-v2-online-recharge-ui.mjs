@@ -83,6 +83,7 @@ const settings = {
   maxConcurrent: 1,
   maintenance: false,
   paymentRegion: 'PH',
+  proxyCountryCode: 'CL',
   browserMode: 'standalone',
   cardMaxSubscriptionCount: 2,
   cardMaxDeclineCount: 3,
@@ -461,6 +462,7 @@ async function fixture(context, state) {
     if (path === '/api/auth/logout') return ok({});
     if (path.endsWith('/change-events')) return route.abort();
     if (path.endsWith('/change-versions')) return ok({ generatedAt: date, versions: {} });
+    if (path.endsWith('/proxy-pool/countries')) return ok({ items: ['CL', 'PH', 'US'] });
     if (path === '/api/id-business-v2/dashboard/overview')
       return ok({
         generatedAt: date,

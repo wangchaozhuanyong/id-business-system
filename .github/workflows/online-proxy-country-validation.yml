@@ -1,0 +1,66 @@
+name: Online Proxy Country Validation
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      mysql:
+        image: mysql:8.4@sha256:b3b90af2a6552ae30c266fdb7d5dd55f3afb72404bb78d37fe8a23eb857fd3fb
+        env:
+          MYSQL_ROOT_PASSWORD: proxy-country-ci-fixture
+          MYSQL_DATABASE: id_business_v2_online_recharge_fixture
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -pproxy-country-ci-fixture"
+          --health-interval=5s --health-timeout=5s --health-retries=24
+    env:
+      NODE_ENV: test
+      DATABASE_URL: mysql://root:proxy-country-ci-fixture@127.0.0.1:3306/id_business_v2_online_recharge_fixture
+      FIELD_ENCRYPTION_KEY: synthetic-country-ci-field-encryption
+      HASH_SECRET: synthetic-country-ci-blind-index
+      ONLINE_RECHARGE_WORKER_KEY: synthetic-country-ci-worker-key-32-characters
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          ref: ${{ github.sha }}
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci --no-audit --no-fund
+      - run: npm run prisma:mysql:generate && npm run build --workspace @apple-business/shared
+      - name: Apply migrations only to the empty isolated CI database
+        run: npm run prisma:mysql:migrate:deploy
+      - name: Verify real MySQL country selection and existing online contracts
+        env:
+          ONLINE_RECHARGE_MYSQL_TEST: '1'
+        run: |
+          mkdir -p .runtime/online-proxy-country-ci
+          npm run test --workspace @apple-business/api -- --run src/id-business-v2/online-recharge/mysql.integration.spec.ts --reporter=default --reporter=json --outputFile=$GITHUB_WORKSPACE/.runtime/online-proxy-country-ci/mysql.json
+      - name: Build exact Linux API and Admin artifacts
+        env:
+          NODE_ENV: production
+          V2_BUILD_ID: v2-${{ github.sha }}
+        run: |
+          npm run build --workspace @apple-business/api
+          npm run build --workspace @apple-business/admin
+          node -e 'const fs=require("fs"),cp=require("child_process");fs.writeFileSync(".runtime/online-proxy-country-ci/source.json",JSON.stringify({commit:cp.execFileSync("git",["rev-parse","HEAD"],{encoding:"utf8"}).trim(),sourceTree:cp.execFileSync("git",["rev-parse","HEAD^{tree}"],{encoding:"utf8"}).trim(),run:process.env.GITHUB_RUN_ID,productionAccess:false,paymentSubmitted:false},null,2));'
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: online-proxy-country-${{ github.sha }}
+          path: |
+            apps/api/dist/
+            apps/admin/dist/
+            .runtime/online-proxy-country-ci/
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 30

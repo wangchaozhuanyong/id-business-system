@@ -1,5 +1,9 @@
 import { isProxyResultIdentityOnly } from './ci-proxy-result-identity-scope.mjs';
 import {
+  isOnlineProxyCountryOnly,
+  onlineProxyCountryParts
+} from './ci-online-proxy-country-scope.mjs';
+import {
   isRegistrationFlowEvidenceOnly,
   isRegistrationFlowEvidenceControlRepair
 } from './ci-registration-flow-evidence-scope.mjs';
@@ -222,6 +226,7 @@ const onlineCiBuildTestInputs = new Set([
   'scripts/production-release/online-recharge-component-lifecycle.test.py'
 ]);
 export function needsOnlineRechargeCiBuild(paths, context) {
+  if (isOnlineProxyCountryOnly(paths)) return false;
   if (isRegistrationFlowEvidenceControlRepair(paths, context)) return false;
   if (isRegistrationFlowEvidenceOnly(paths, context)) return false;
   if (isProxyResultIdentityOnly(paths, context)) return false;
@@ -997,6 +1002,7 @@ export function isMailboxOnly(paths) {
 }
 
 export function checkMode(paths, oldSchema, newSchema, grantHelperSnapshot, context) {
+  if (isOnlineProxyCountryOnly(paths)) return oldSchema === newSchema ? 'recharge' : 'full';
   if (isRegistrationFlowEvidenceControlRepair(paths, context))
     return oldSchema === newSchema ? 'ci-only' : 'full';
   if (isRegistrationFlowEvidenceOnly(paths, context))
@@ -1464,6 +1470,7 @@ export function isTargetedOnly(paths, oldSchema, newSchema) {
   );
 }
 export function selectedParts(paths, grantHelperSnapshot, context) {
+  if (isOnlineProxyCountryOnly(paths)) return [...onlineProxyCountryParts];
   if (isRegistrationFlowEvidenceControlRepair(paths, context)) return ['guards'];
   if (isRegistrationFlowEvidenceOnly(paths, context)) return ['guards', 'api', 'admin'];
   if (isProxyResultIdentityOnly(paths, context)) return ['guards', 'online-engine'];

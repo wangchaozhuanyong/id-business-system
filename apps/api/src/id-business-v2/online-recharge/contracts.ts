@@ -70,6 +70,7 @@ export const ONLINE_RECHARGE_DEFAULTS = {
   cardMaxDeclineCount: 3,
   paymentMaxCardAttempts: 3,
   paymentRegion: 'PH',
+  proxyCountryCode: '',
   browserMode: 'pool',
   browserPoolSize: 2,
   gptApiEnabled: false,

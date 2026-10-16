@@ -22,6 +22,7 @@ import {
   type OnlineRechargeOperation
 } from '../contracts';
 import { OnlineRechargeSettingsService } from '../settings.service';
+import { onlineProxyCountry } from '../proxy-input';
 import { OnlineRechargeRepository } from './online-recharge.repository';
 import { OnlineRechargeEphemeralCredentials } from '../ephemeral-credentials.service';
 import { assertOnlineSensitive } from '../assets.service';
@@ -380,6 +381,13 @@ export class OnlineRechargeTasksRepository {
         payload.proxyId = testedProxy.id;
         payload.proxyPoolReference = true;
         payload.proxyConnectionVersion = testedProxy.version;
+      }
+      if (['recharge', 'debug', 'subscription', 'renewal'].includes(operation)) {
+        const countryCode = onlineProxyCountry(settings.proxyCountryCode);
+        if (!(await tx.idBusinessV2RechargeProxy.count({ where: { active: true, countryCode } })))
+          throw new ConflictException('所选代理国家暂无启用代理，请先在代理 IP 管理中添加或启用');
+        // 固定本次任务的国家，后续修改全局配置不改变已受理任务的代理范围。
+        payload.proxyCountryCode = countryCode;
       }
       if (payload.region && !['US', 'PH', 'SG', 'MY'].includes(String(payload.region)))
         throw new BadRequestException('支付地区无效');

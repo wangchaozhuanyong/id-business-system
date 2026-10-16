@@ -43,11 +43,19 @@ const registrationLayoutPaths = [
   'apps/admin/src/v2/features/auto-recharge/V2RechargeOrdersChannelView.vue',
   'apps/admin/src/v2/features/online-recharge/OnlineOrderBackfill.vue'
 ];
+const registrationCountryPaths = [
+  'apps/api/src/id-business-v2/online-recharge/contracts.ts',
+  'apps/api/src/id-business-v2/online-recharge/persistence/settings.repository.ts',
+  'apps/api/src/id-business-v2/online-recharge/persistence/tasks.repository.ts',
+  'apps/api/src/id-business-v2/online-recharge/proxy-input.ts'
+];
 const registrationSourceFixtures = Object.fromEntries(
-  [registrationManifestPath, ...registrationLayoutPaths].map((path) => [
-    path,
-    execFileSync('git', ['show', registrationPublishedHead + ':' + path]).toString('utf8')
-  ])
+  [registrationManifestPath, ...registrationLayoutPaths, ...registrationCountryPaths].map(
+    (path) => [
+      path,
+      execFileSync('git', ['show', registrationPublishedHead + ':' + path]).toString('utf8')
+    ]
+  )
 );
 const registrationFixtureBytes = new Map(
   Object.entries(registrationSourceFixtures).flatMap(([path, source]) =>
@@ -1848,7 +1856,7 @@ function recordScopeClassification(paths, snapshot, eventName = 'pull_request', 
     import fs from 'node:fs';
     import { createHash } from 'node:crypto';
     import { syncBuiltinESMExports } from 'node:module';
-    const { paths, snapshot, options, schema: fixtureSchema, registrationSourceFixtures } = JSON.parse(fs.readFileSync(0, 'utf8'));
+    const { paths, snapshot, options, schema: fixtureSchema, registrationSourceFixtures } = JSON.parse(fs.readFileSync(process.env.SCOPE_TEST_FIXTURE_FILE, 'utf8'));
     const fixtureSources = new Map(Object.entries(registrationSourceFixtures).flatMap(([path, source]) =>
       [path, new URL('./' + path, import.meta.url).href, new URL('./' + path, import.meta.url).pathname]
         .map(name => [name, source])));
@@ -1934,32 +1942,39 @@ function recordScopeClassification(paths, snapshot, eventName = 'pull_request', 
       } : undefined
     }));
   `;
-  return JSON.parse(
-    execFileSync(process.execPath, ['--input-type=module', '-e', script], {
-      cwd: root,
-      encoding: 'utf8',
-      input: JSON.stringify({
-        paths,
-        snapshot,
-        options,
-        schema,
-        registrationSourceFixtures
-      }),
-      env: {
-        ...process.env,
-        GITHUB_EVENT_NAME: eventName,
-        GITHUB_REF: 'refs/heads/synthetic-scope-fixture',
-        GITHUB_EVENT_PATH: root + '/.runtime/online-recharge-ci-synthetic-event.json',
-        GITHUB_OUTPUT: root + '/.runtime/online-recharge-ci-synthetic-output',
-        GITHUB_STEP_SUMMARY: root + '/.runtime/online-recharge-ci-synthetic-summary',
-        GITHUB_REPOSITORY: 'fixture/id-business',
-        GITHUB_SHA: 'c'.repeat(40),
-        BASE_SHA: 'a'.repeat(40),
-        SCOPE_TEST_HELPER: productionDatabaseAccessHelper,
-        SCOPE_TEST_ACCEPTANCE: productionDatabaseAccessAcceptance
-      }
-    })
+  const runtime = new URL('../.runtime/', import.meta.url);
+  fs.mkdirSync(runtime, { recursive: true });
+  const temporary = fs.mkdtempSync(new URL('ci-scope-fixture-', runtime));
+  const inputPath = temporary + '/input.json';
+  fs.writeFileSync(
+    inputPath,
+    JSON.stringify({ paths, snapshot, options, schema, registrationSourceFixtures })
   );
+  try {
+    return JSON.parse(
+      execFileSync(process.execPath, ['--input-type=module', '-e', script], {
+        cwd: root,
+        encoding: 'utf8',
+        timeout: 30_000,
+        env: {
+          ...process.env,
+          SCOPE_TEST_FIXTURE_FILE: inputPath,
+          GITHUB_EVENT_NAME: eventName,
+          GITHUB_REF: 'refs/heads/synthetic-scope-fixture',
+          GITHUB_EVENT_PATH: root + '/.runtime/online-recharge-ci-synthetic-event.json',
+          GITHUB_OUTPUT: root + '/.runtime/online-recharge-ci-synthetic-output',
+          GITHUB_STEP_SUMMARY: root + '/.runtime/online-recharge-ci-synthetic-summary',
+          GITHUB_REPOSITORY: 'fixture/id-business',
+          GITHUB_SHA: 'c'.repeat(40),
+          BASE_SHA: 'a'.repeat(40),
+          SCOPE_TEST_HELPER: productionDatabaseAccessHelper,
+          SCOPE_TEST_ACCEPTANCE: productionDatabaseAccessAcceptance
+        }
+      })
+    );
+  } finally {
+    fs.rmSync(temporary, { recursive: true, force: true });
+  }
 }
 
 test('bank-card policy controls require the exact paired source hashes and regular Git modes', () => {
@@ -5605,10 +5620,14 @@ test('published recovery authenticates the exact source receipt and retained com
   );
 });
 
-test('historical registration recovery rejects current order-layout source bytes', () => {
-  const paths = [registrationPublishedBindingPath, ...registrationLayoutPaths];
+test('historical registration recovery rejects current layout and proxy-country source bytes', () => {
+  const paths = [
+    registrationPublishedBindingPath,
+    ...registrationLayoutPaths,
+    ...registrationCountryPaths
+  ];
   assert.equal(registrationPublishedRecoveryProof(paths), true);
-  for (const changed of registrationLayoutPaths) {
+  for (const changed of [...registrationLayoutPaths, ...registrationCountryPaths]) {
     const readSource = (path) =>
       path === changed ? actualReadFileSync(path) : readRegistrationFixture(path);
     assert.equal(registrationPublishedRecoveryProof(paths, { readSource }), false, changed);

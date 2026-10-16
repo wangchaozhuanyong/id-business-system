@@ -133,9 +133,9 @@ export class RechargeProxyRepository {
   resolveOnlineId(tx: V2CommandTransaction, id: string) {
     return tx.idBusinessV2ProxyAlias.findUnique({ where: { oldId: id } });
   }
-  active(tx: V2CommandTransaction, id?: string) {
+  active(tx: V2CommandTransaction, id?: string, countryCode?: string) {
     return tx.idBusinessV2RechargeProxy.findMany({
-      where: { active: true, ...(id ? { id } : {}) },
+      where: { active: true, ...(id ? { id } : {}), ...(countryCode ? { countryCode } : {}) },
       take: 500
     });
   }

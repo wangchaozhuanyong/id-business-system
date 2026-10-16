@@ -1,6 +1,12 @@
 import { BadRequestException } from '@nestjs/common';
 import { text } from './validation';
 
+export function onlineProxyCountry(value: unknown) {
+  if (typeof value !== 'string' || !/^[A-Za-z]{2}$/.test(value.trim()))
+    throw new BadRequestException('请先在线上代充配置中选择有效的代理国家');
+  return value.trim().toUpperCase();
+}
+
 export function parseOnlineRechargeProxy(value: unknown) {
   let raw = text(value, '代理', 2048);
   if (!raw.includes('://')) {
