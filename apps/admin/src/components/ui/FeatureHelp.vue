@@ -1,11 +1,12 @@
 <template>
   <el-popover
-    v-model:visible="visible"
+    :visible="visible"
     :placement="placement"
     trigger="manual"
     :width="width"
     :z-index="popperZIndex"
     popper-class="feature-help-popper"
+    @after-leave="close"
   >
     <template #reference>
       <button

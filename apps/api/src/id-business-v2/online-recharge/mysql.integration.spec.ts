@@ -36,6 +36,7 @@ import { OnlineRechargeSecurityNotificationRepository } from './persistence/secu
 import { sessionAccountId } from './validation';
 import { OnlineRechargeOrderSyncService } from './order-sync.service';
 import { OnlineRechargeOrderSyncRepository } from './persistence/order-sync.repository';
+import { OnlineRechargeAdminRepository } from './persistence/admin.repository';
 
 const enabled = process.env.ONLINE_RECHARGE_MYSQL_TEST === '1';
 const suite = enabled ? describe : describe.skip;
@@ -73,6 +74,14 @@ suite('线上代充隔离MySQL事务验收', () => {
   );
   const tasks = new OnlineRechargeTasksService(
     new OnlineRechargeTasksRepository(repository, settings, encryption, memory, orderSync)
+  );
+  const admin = new OnlineRechargeAdminRepository(
+    repository,
+    assets,
+    settings,
+    tasks,
+    memory,
+    {} as never
   );
   const workers = new OnlineRechargeWorkerRepository(
     repository,
@@ -184,6 +193,122 @@ suite('线上代充隔离MySQL事务验收', () => {
   });
   afterAll(async () => {
     await db.$disconnect();
+  });
+
+  it('套餐规则保存后按四档冻结国家和币种；修改配置不改变原任务', async () => {
+    await pool.create(
+      {
+        countryCode: 'CL',
+        kind: 'mobile',
+        connectionMode: 'direct',
+        protocol: 'http',
+        url: 'http://chile-fixture.example.invalid:8080'
+      },
+      operator
+    );
+    const saved = await settings.update({ version: 0, planRegionRoutingEnabled: true }, operator);
+    for (const [plan, region, currency] of [
+      ['plus', 'PH', 'PHP'],
+      ['pro_5x', 'CL', 'CLP'],
+      ['pro_20x', 'PH', 'PHP'],
+      ['pro_500', 'CL', 'CLP']
+    ] as const) {
+      const task = await tasks.start(
+        { session: fullSession(), plan, region: 'US', proxyCountryCode: 'US' },
+        operator,
+        'debug'
+      );
+      const row = await db.onlineRechargeTask.findUniqueOrThrow({ where: { id: task.id } });
+      expect(row.payload).toMatchObject({
+        region,
+        proxyCountryCode: region,
+        planRegion: {
+          policy: 'plan',
+          configVersion: saved.version,
+          targetPlan: plan,
+          expectedCurrency: currency
+        }
+      });
+    }
+    const original = await db.onlineRechargeTask.findFirstOrThrow({ where: { plan: 'pro_5x' } });
+    await settings.update(
+      { version: saved.version, planPaymentRegionPro5x: 'PH', planProxyCountryPro5x: 'PH' },
+      operator
+    );
+    expect(
+      (await db.onlineRechargeTask.findUniqueOrThrow({ where: { id: original.id } })).payload
+    ).toEqual(original.payload);
+    const next = await tasks.start({ session: fullSession(), plan: 'pro_5x' }, operator, 'debug');
+    expect(
+      (await db.onlineRechargeTask.findUniqueOrThrow({ where: { id: next.id } })).payload
+    ).toMatchObject({
+      region: 'PH',
+      proxyCountryCode: 'PH',
+      planRegion: { expectedCurrency: 'PHP', configVersion: Number(saved.version) + 1 }
+    });
+  });
+
+  it('智利代理缺失时保留兑换码可用且不创建任务；客户端套餐不能改变代码绑定', async () => {
+    await settings.update({ planRegionRoutingEnabled: true }, operator);
+    const codes = (await assets.action(
+      'cdks',
+      'generate',
+      { count: 1, plan: 'pro_5x' },
+      operator
+    )) as { codes: string[] };
+    await expect(
+      tasks.start({ session: fullSession(), code: codes.codes[0], plan: 'plus' }, operator)
+    ).rejects.toThrow('暂无启用代理');
+    expect(await db.onlineRechargeTask.count()).toBe(0);
+    expect(await db.onlineRechargeCode.findFirst()).toMatchObject({
+      status: 'available',
+      plan: 'pro_5x',
+      taskId: null
+    });
+    expect(await db.onlineRechargeBill.count()).toBe(0);
+  });
+
+  it('兑换码创建十个、软删除、再创建十个，概览与清单均为 10→0→10', async () => {
+    const generate = async () =>
+      assets.action('cdks', 'generate', { plan: 'pro_20x', count: 10 }, operator) as Promise<{
+        ids: string[];
+        codes: string[];
+      }>;
+    const assertCount = async (expected: number) => {
+      const overview = await admin.overview();
+      expect(overview.codes.find((row) => row.status === 'available')?._count ?? 0).toBe(expected);
+      expect((await repository.list('cdks', { status: 'available' })).total).toBe(expected);
+    };
+    const first = await generate();
+    await assertCount(10);
+    const priorAudit = await db.auditLog.count({
+      where: { userId: operator.id, action: 'id_business_v2.online_recharge.cdks.delete' }
+    });
+    await assets.action('cdks', 'delete', { ids: first.ids }, operator);
+    await assertCount(0);
+    expect(
+      await db.onlineRechargeCode.count({
+        where: { id: { in: first.ids }, deletedAt: { not: null } }
+      })
+    ).toBe(10);
+    expect(
+      await db.auditLog.count({
+        where: { userId: operator.id, action: 'id_business_v2.online_recharge.cdks.delete' }
+      })
+    ).toBe(priorAudit + 1);
+    for (const code of first.codes)
+      await expect(tasks.verify({ code })).rejects.toThrow('兑换码无效');
+    const second = await generate();
+    await assertCount(10);
+    for (const code of second.codes)
+      await expect(tasks.verify({ code })).resolves.toMatchObject({
+        valid: true,
+        plan: 'pro_20x',
+        status: 'available'
+      });
+    expect(await db.onlineRechargeCode.count()).toBe(20);
+    expect(await db.onlineRechargeTask.count()).toBe(0);
+    expect(await db.onlineRechargeBill.count()).toBe(0);
   });
 
   it('并发同兑换码只创建一个任务且返回同一个恢复凭证', async () => {

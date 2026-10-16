@@ -50,8 +50,15 @@ function classifyChange(targetPlan, confirmation, active) {
   const raw = String(confirmation.observedPlan || '')
     .trim()
     .toLowerCase();
+  const expiry = String(confirmation.expiresAt || '');
+  const expired =
+    active === false &&
+    confirmation.tierVerified === true &&
+    /^\d{4}-\d{2}-\d{2}T.+(?:Z|[+-]\d{2}:\d{2})$/.test(expiry) &&
+    Number.isFinite(Date.parse(expiry)) &&
+    Date.parse(expiry) <= Date.now();
   const sourcePlan =
-    active === false && (!raw || ['free', 'chatgptfreeplan'].includes(raw))
+    expired || (active === false && (!raw || ['free', 'chatgptfreeplan'].includes(raw)))
       ? 'free'
       : active === true && confirmation.tierVerified
         ? confirmation.observedCanonicalPlan

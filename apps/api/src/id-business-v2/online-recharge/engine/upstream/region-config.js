@@ -5,6 +5,7 @@
  * 每个地区包含对应的币种和中文标签
  */
 const REGION_CONFIG = {
+    CL: { currency: 'CLP', label: '智利', locale: 'en-CL', timezone: 'America/Santiago' },
     PH: { currency: 'PHP', label: '菲律宾', locale: 'en-PH', timezone: 'Asia/Manila' },
     US: { currency: 'USD', label: '美国', locale: 'en-US', timezone: 'America/New_York' },
     SG: { currency: 'SGD', label: '新加坡', locale: 'en-SG', timezone: 'Asia/Singapore' },
@@ -20,7 +21,8 @@ const DEFAULT_REGION = 'PH';
 const PLAN_TYPE_LABELS = {
     plus: 'ChatGPT Plus',
     pro_5x: 'ChatGPT Pro 5x',
-    pro_20x: 'ChatGPT Pro 20x'
+    pro_20x: 'ChatGPT Pro 200',
+    pro_500: 'ChatGPT Pro 500'
 };
 
 /**

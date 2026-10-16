@@ -10,6 +10,7 @@ export const planOptions = [
 export const planHelp =
   'Pro 100／200／500 为美元月费档位名称，本次应付以官网实际币种、税费和折抵报价为准。';
 export const regionOptions = [
+  { value: 'CL', label: '智利' },
   { value: 'PH', label: '菲律宾' },
   { value: 'US', label: '美国' },
   { value: 'SG', label: '新加坡' },

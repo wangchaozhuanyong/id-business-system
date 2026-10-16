@@ -18,6 +18,9 @@ const active = new Map();
 let stopping = false;
 let pool = null;
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+const LEASE_SAFETY_MS = 5000;
+// Validation ceiling for the API's 90 second lease, never a local renewal.
+const MAX_CONFIRMED_LEASE_MS = 90000;
 function capacity(cfg, env = process.env) {
   const configured = Math.max(1, Math.min(100, Math.floor(Number(cfg.maxConcurrent) || 1)));
   const cap = Number(env.ONLINE_RECHARGE_WORKER_CONCURRENCY);
@@ -144,23 +147,109 @@ async function runJob(task, config) {
     evidence: Promise.resolve(),
     result: null,
     lost: false,
+    closed: false,
     slot: null
   };
   active.set(task.id, entry);
+  let leaseUntil = 0;
+  let lastHeartbeatAt = 0;
+  let leaseTimer;
+  let childStopTimer;
+  let childDeadline;
+  let childStopRequested = false;
+  function leaseDiagnostic(phase, error) {
+    const code =
+      phase === 'lease_expired'
+        ? 'LEASE_EXPIRED'
+        : ['LEASE_LOST', 'RPC_RESPONSE_INVALID', 'RESULT_UNKNOWN'].includes(error?.code)
+          ? error.code
+          : 'RPC_UNAVAILABLE';
+    const status = /^内部执行接口失败 (\d{3})$/.exec(error?.message || '');
+    process.stderr.write(
+      `${JSON.stringify({
+        event: 'online_recharge_lease',
+        taskId: task.id,
+        operation: task.operation,
+        leaseVersion: task.leaseVersion,
+        phase,
+        code,
+        ...(status ? { httpStatus: Number(status[1]) } : {}),
+        ...(lastHeartbeatAt ? { sinceHeartbeatMs: Date.now() - lastHeartbeatAt } : {})
+      })}\n`
+    );
+  }
+  function stopChild() {
+    const child = entry.child;
+    if (!child || childStopRequested || child.exitCode !== null || child.signalCode !== null)
+      return;
+    childStopRequested = true;
+    try {
+      child.kill('SIGTERM');
+    } catch {
+      /* The process may already have exited. */
+    }
+    childStopTimer = setTimeout(() => {
+      if (child.exitCode === null && child.signalCode === null) {
+        try {
+          child.kill('SIGKILL');
+        } catch {
+          /* The process may already have exited. */
+        }
+      }
+    }, 5000);
+    childStopTimer.unref();
+    child.once('exit', () => clearTimeout(childStopTimer));
+  }
+  function loseLease(phase, error) {
+    if (entry.lost || entry.closed) return;
+    entry.lost = true;
+    leaseDiagnostic(phase, error);
+    credentials.forgetTask(task.id);
+    stopChild();
+  }
+  function confirmLease(value) {
+    const until =
+      typeof value === 'string' || value instanceof Date ? new Date(value).getTime() : NaN;
+    const remaining = until - Date.now();
+    if (
+      !Number.isFinite(until) ||
+      remaining <= LEASE_SAFETY_MS ||
+      remaining > MAX_CONFIRMED_LEASE_MS
+    )
+      return false;
+    leaseUntil = until;
+    clearTimeout(leaseTimer);
+    leaseTimer = setTimeout(() => loseLease('lease_expired'), until - LEASE_SAFETY_MS - Date.now());
+    return true;
+  }
+  function requireLease() {
+    if (!entry.lost && (!leaseUntil || Date.now() >= leaseUntil - LEASE_SAFETY_MS))
+      loseLease('lease_expired');
+    if (entry.lost)
+      throw Object.assign(new Error('任务租约未确认或已失效'), { code: 'LEASE_LOST' });
+  }
   let heartbeatBusy = false;
-  const heartbeat = setInterval(async () => {
-    if (heartbeatBusy || entry.lost) return;
+  async function renewLease() {
+    if (heartbeatBusy || entry.lost || entry.closed) return;
     heartbeatBusy = true;
     try {
-      await rpc('heartbeat', scope(task));
-    } catch {
-      entry.lost = true;
-      credentials.forgetTask(task.id);
-      entry.child?.kill('SIGTERM');
+      const response = await rpc('heartbeat', scope(task));
+      if (entry.lost || entry.closed) return;
+      if (response?.ok !== true || !confirmLease(response.leaseExpiresAt))
+        throw Object.assign(new Error('心跳未返回有效租约期限'), { code: 'RPC_RESPONSE_INVALID' });
+      lastHeartbeatAt = Date.now();
+    } catch (error) {
+      if (entry.lost || entry.closed) return;
+      if (error?.code === 'LEASE_LOST') loseLease('lease_lost', error);
+      else if (!leaseUntil || Date.now() >= leaseUntil - LEASE_SAFETY_MS)
+        loseLease('lease_unconfirmed', error);
+      else leaseDiagnostic('heartbeat_transient', error);
     } finally {
       heartbeatBusy = false;
     }
-  }, 10000);
+  }
+  const claimedLeaseConfirmed = confirmLease(task.leaseExpiresAt);
+  const heartbeat = setInterval(renewLease, 10000);
   let flushBusy = false;
   async function flush() {
     if (flushBusy || !entry.logs.length || entry.lost) return;
@@ -178,6 +267,8 @@ async function runJob(task, config) {
     flush().catch(() => {});
   }, 1000);
   try {
+    if (!claimedLeaseConfirmed) await renewLease();
+    requireLease();
     if (task.operation === 'browser_manage') {
       entry.result = {
         status: 'succeeded',
@@ -189,9 +280,12 @@ async function runJob(task, config) {
         task.operation === 'debug' ||
         (task.operation === 'recharge' && task.provider !== 'third_party');
       await configurePool(config);
+      requireLease();
       if (requiresBrowser && pool.isEnabled()) {
         await pool.initBrowserPool();
+        requireLease();
         entry.slot = await pool.acquireSlot(task.id);
+        requireLease();
       }
       const env = require('./upstream/browser-runtime').buildWorkerRuntimeEnv(
         childEnvironment(task),
@@ -200,9 +294,11 @@ async function runJob(task, config) {
       );
       if (requiresBrowser && !entry.slot) {
         env.CDP_PORT = String(await allocateStandalonePort());
+        requireLease();
         env.CDP_URL = `http://127.0.0.1:${env.CDP_PORT}`;
       }
       await fs.mkdir(env.ONLINE_RECHARGE_RUNTIME_DIR, { recursive: true, mode: 0o700 });
+      requireLease();
       const child = fork(path.join(__dirname, 'task-runner.cjs'), [], {
         cwd: __dirname,
         env,
@@ -228,19 +324,14 @@ async function runJob(task, config) {
         } else if (message?.type === 'result')
           entry.result = { ...sanitize(message), result: sanitizeResult(message.result) };
       });
-      const deadline = setTimeout(
-        () => {
-          child.kill('SIGTERM');
-          setTimeout(() => child.kill('SIGKILL'), 5000).unref();
-        },
-        30 * 60 * 1000
-      );
+      childDeadline = setTimeout(stopChild, 30 * 60 * 1000);
       await new Promise((resolve, reject) => {
         child.once('error', reject);
         child.once('exit', resolve);
+        requireLease();
         child.send({ task });
       });
-      clearTimeout(deadline);
+      clearTimeout(childDeadline);
     }
     await flush();
     await entry.evidence;
@@ -251,6 +342,7 @@ async function runJob(task, config) {
       result: { resultUnknown: true },
       message: '执行器中断，等待核对，禁止自动重试'
     };
+    requireLease();
     await rpc('completeJob', {
       ...scope(task),
       status: result.status,
@@ -266,7 +358,9 @@ async function runJob(task, config) {
       task.operation === 'proxy_test'
         ? require('./proxy-test.cjs').completionFailure(task, entry.result?.result)
         : null;
-    if (proxyFailure && error?.code === 'LEASE_LOST') entry.lost = true;
+    if (proxyFailure && error?.code === 'LEASE_LOST') loseLease('lease_lost', error);
+    if (!entry.lost && (!leaseUntil || Date.now() >= leaseUntil - LEASE_SAFETY_MS))
+      loseLease('lease_expired');
     if (!entry.lost)
       await rpc('failJob', {
         ...scope(task),
@@ -281,8 +375,13 @@ async function runJob(task, config) {
             : '执行未完成，请查看受限诊断'
       }).catch(() => {});
   } finally {
+    entry.closed = true;
     clearInterval(heartbeat);
     clearInterval(logTimer);
+    clearTimeout(leaseTimer);
+    clearTimeout(childDeadline);
+    if (!entry.child || entry.child.exitCode !== null || entry.child.signalCode !== null)
+      clearTimeout(childStopTimer);
     credentials.forgetTask(task.id);
     if (entry.slot) {
       await pool.clearTaskContexts(entry.slot.slotId).catch(() => {});

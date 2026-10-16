@@ -39,7 +39,8 @@ async function execute(task, cfg) {
       const result = await require('./upstream/subscription-check')[method](token, {
         timezoneOffsetMin: payload.timezoneOffsetMin ?? 480
       });
-      if (!result.ok && wasSubmitted()) throw new ResultUnknownError('续费变更结果未能确认');
+      if (result.resultUnknown || (!result.ok && wasSubmitted()))
+        throw new ResultUnknownError('续费变更结果未能确认');
       require('./rpc.cjs').recordKnownOutcome();
       return result;
     }
@@ -136,6 +137,7 @@ async function runTask(task) {
   rememberSecrets(process.env.ONLINE_RECHARGE_WORKER_KEY, 'secret');
   installSafeConsole((log) => send({ type: 'log', log }));
   let config;
+  let phase = 'runtime_config';
   let executionStarted = false;
   try {
     config = await rpc('getRuntimeConfig');
@@ -149,6 +151,11 @@ async function runTask(task) {
       captcha_platform_api_url: config.hcaptcha?.platform_api_url,
       captcha_platform_timeout: config.hcaptcha?.platform_timeout
     };
+    phase = 'proxy';
+    const proxy = ['recharge', 'debug', 'subscription', 'renewal'].includes(task.operation)
+      ? (await require('./upstream/mysql-store').getActiveProxy()) || ''
+      : '';
+    phase = 'environment';
     Object.assign(
       process.env,
       require('./upstream/hcaptcha-runtime').buildHcaptchaEnvFromConfig(hcaptcha).env,
@@ -161,21 +168,23 @@ async function runTask(task) {
         CDK_CODE: task.code || '',
         CDK_PLAN_TYPE: task.plan || 'plus',
         PLAN_NAME_OVERRIDE: task.payload?.planName || config.planNames?.[task.plan] || '',
-        PAYMENT_REGION_OVERRIDE: task.payload?.region || config.region || 'PH',
+        PAYMENT_REGION_OVERRIDE:
+          config.planRegion?.paymentRegion || task.payload?.region || config.region || 'PH',
+        PLAN_REGION_EXPECTED_CURRENCY:
+          config.planRegion?.policy === 'plan' ? config.planRegion.expectedCurrency : '',
         PAYMENT_MAX_CARD_ATTEMPTS: String(config.paymentMaxCardAttempts || 3),
         CHECKOUT_MODE: config.checkoutMode || 'api',
         CHECKOUT_DEBUG_ONLY: task.operation === 'debug' ? '1' : '0',
         HEADFUL: config.headful ? '1' : '0',
         RECORD_VIDEO: '0',
-        PROXY: ['recharge', 'debug', 'subscription', 'renewal'].includes(task.operation)
-          ? (await require('./upstream/mysql-store').getActiveProxy()) || ''
-          : '',
+        PROXY: proxy,
         HCAPTCHA_SOLVER_OUT_DIR: path.join(
           process.env.ONLINE_RECHARGE_RUNTIME_DIR || path.join(__dirname, 'runtime', task.id),
           'solver'
         )
       }
     );
+    phase = 'execution';
     executionStarted = true;
     const result = await execute(task, config);
     if (task.operation === 'recharge' && !result?.resultUnknown && !result?.pendingCredentials) {
@@ -229,6 +238,15 @@ async function runTask(task) {
           break;
         }
       }
+    // installSafeConsole redacts registered credentials and sensitive text
+    // before sending this diagnostic to the parent or persisted task log.
+    console.error(
+      '[执行异常]',
+      phase,
+      error?.name || 'Error',
+      error?.code || '',
+      error?.message || '执行未完成'
+    );
     send({
       type: 'result',
       status:
@@ -239,7 +257,7 @@ async function runTask(task) {
               error.code === 'RESULT_UNKNOWN'
             ? 'awaiting_review'
             : 'failed',
-      result: proxyFailure || { code: error.code || 'EXECUTION_FAILED' },
+      result: proxyFailure || sanitizeResult({ code: error.code || 'EXECUTION_FAILED', phase }),
       message: proxyFailure ? proxyFailure.error : '执行未完成，请查看受限诊断'
     });
   } finally {
@@ -249,7 +267,8 @@ async function runTask(task) {
     clearSecrets();
     clearTask();
     for (const key of Object.keys(process.env))
-      if (/CHATGPT_|CDK_CODE|PROXY|API_KEY|WORKER_KEY/.test(key)) delete process.env[key];
+      if (/CHATGPT_|CDK_CODE|PROXY|API_KEY|WORKER_KEY|PLAN_REGION_EXPECTED_CURRENCY/.test(key))
+        delete process.env[key];
   }
 }
 if (require.main === module)
