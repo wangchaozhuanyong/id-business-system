@@ -1133,6 +1133,20 @@ class LocalJob:
         result.setdefault("payment_attempted", self.payment_request_sent)
         result.setdefault("payment_requests_sent", 1 if self.payment_request_sent else 0)
         result.setdefault("stale_profiles_cleaned", self.stale_profiles_cleaned)
+        # 主动停止已经核实最终报价的等待时，明确结束旧的填表前诊断。
+        # 只处理零付款的本次取消；保留任何付款风险及真实失败。
+        if (self.cancelled and result.get('reason') == 'operation_cancelled'
+                and self.result.get('status') == 'awaiting_confirmation'
+                and self.result.get('quote_authority') == 'official_checkout_response'
+                and isinstance(self.result.get('quote'), dict)
+                and not self.payment_request_sent and result.get('payment_attempted') is False
+                and not result.get('payment_evidence')
+                and result.get('payment_status') in (None, 'not_attempted')
+                and all(result.get(key, 0) == 0 for key in
+                        ('payment_requests_sent', 'confirmation_requests_sent'))):
+            result.update(status='payment_cancelled', stage='confirmation_cancelled',
+                          user_action_required=False, page_state='checkout',
+                          quote=self.result['quote'], quote_authority='official_checkout_response')
         if self.payment_request_sent:
             result.setdefault("payment_status", "unknown")
         result = {
