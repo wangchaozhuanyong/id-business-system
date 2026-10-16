@@ -6,6 +6,7 @@ import {
   chatgptSalesPaths,
   chatgptSalesParts,
   isChatgptSalesOnly,
+  isChatgptSalesControlsOnly,
   chatgptSalesCommands
 } from './ci-chatgpt-sales-scope.mjs';
 import { checkMode, selectedParts, needsOnlineRechargeCiBuild } from './ci-recharge-scope.mjs';
@@ -68,4 +69,26 @@ test('frontend acceptance and both packages retain tests and builds', () => {
     /acceptance-v2-chatgpt-account-sales.mjs/
   );
   assert.throws(() => chatgptSalesCommands('connector', chatgptSalesPaths));
+});
+
+test('control-only repair runs finite guards without rerunning unchanged business checks', () => {
+  const paths = [
+    'scripts/production-release/chatgpt-sales-build.py',
+    'scripts/production-release/chatgpt-sales-release.py',
+    'scripts/production-release/chatgpt-sales-release.test.py',
+    'scripts/ci-chatgpt-sales-scope.mjs'
+  ];
+  assert.equal(isChatgptSalesControlsOnly(paths), true);
+  assert.equal(checkMode(paths, after, after), 'ci-only');
+  assert.deepEqual(selectedParts(paths), ['guards']);
+  assert.equal(needsOnlineRechargeCiBuild(paths), false);
+  const commands = chatgptSalesCommands('guards', paths).flat().join(' ');
+  assert.match(commands, /chatgpt-sales-release.test.py/);
+  assert.doesNotMatch(commands, /database.mjs|acceptance-v2/);
+  assert.throws(() => chatgptSalesCommands('migration', paths));
+  assert.equal(
+    isChatgptSalesControlsOnly([...paths, 'apps/api/prisma-mysql/schema.prisma']),
+    false
+  );
+  assert.equal(checkMode(paths, before, after), 'full');
 });

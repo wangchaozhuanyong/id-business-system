@@ -61,6 +61,7 @@ def validate_proof(proof, plan, contract, payload, h):
          and proof.get('browserVerification') == {'status': 'PASS', 'realWrites': 0}
          and proof.get('updatedServices') == ['api', 'admin'] and proof.get('migration') == contract['migration']
          and type(proof.get('businessActions')) is int and proof['businessActions'] == 0, 'PROOF_INVALID')
+    need(all(n.endswith('.d.ts') or n == 'tsconfig.build.tsbuildinfo' for n in proof.get('omittedBuildOutputs', {})), 'UNEXPECTED_OMITTED_RUNTIME_OUTPUT')
     actual = h.file_inventory(payload)
     actual.pop('build-proof.json', None)
     allowed = {n.removesuffix('.js') + ext for n in contract['apiModules'] for ext in ('.js', '.js.map', '.d.ts')}

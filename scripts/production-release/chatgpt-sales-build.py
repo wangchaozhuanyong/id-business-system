@@ -113,7 +113,11 @@ def prepare(c):
 def api_delta(before, after, names):
     allowed = {n.removesuffix('.js') + ext for n in names for ext in ('.js', '.js.map', '.d.ts')}
     changed = {n for n in set(before) | set(after) if before.get(n) != after.get(n)}
-    need(changed <= allowed and all(n in after for n in allowed), 'API_OUTPUT_SCOPE_CHANGED')
+    # A new Prisma field also changes inferred declaration files. Neither those
+    # unrelated declarations nor TypeScript's incremental cache execute in Node.
+    nonruntime = {n for n in changed - allowed if n.endswith('.d.ts') or n == 'tsconfig.build.tsbuildinfo'}
+    need(changed <= allowed | nonruntime and not (set(before) - set(after))
+         and all(n in after for n in allowed), 'API_OUTPUT_SCOPE_CHANGED')
     need(any(before.get(n) != after.get(n) for n in names), 'API_DELTA_EMPTY')
     return allowed
 
@@ -152,6 +156,7 @@ def package(c):
         'adminPublishedSources': c['adminPublishedSources'], 'hostSources': c['hostSources'],
         'qualityVerification': passed, 'databaseVerification': database,
         'browserVerification': {'status': 'PASS', 'realWrites': 0},
+        'omittedBuildOutputs': {n: after[n] for n in sorted(set(before) | set(after)) if before.get(n) != after.get(n) and n not in allowed},
         'files': inventory(payload), 'apiModules': {n: after[n] for n in sorted(allowed)},
         'adminFiles': inventory(payload / 'admin/html'), 'updatedServices': ['api', 'admin'],
         'migration': c['migration'], 'businessActions': 0}

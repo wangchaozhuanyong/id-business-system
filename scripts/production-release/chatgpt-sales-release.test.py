@@ -39,6 +39,18 @@ class SalesReleaseTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, 'API_OUTPUT_SCOPE_CHANGED'):
             b.api_delta(before, after, names)
 
+    def test_prisma_inferred_declarations_and_build_cache_are_not_published(self):
+        name = 'id-business-v2/auto-recharge/test.js'
+        before = {name: 'a', name + '.map': 'b', name[:-3] + '.d.ts': 'c',
+                  'other.d.ts': 'old type', 'tsconfig.build.tsbuildinfo': 'old cache'}
+        after = {**before, name: 'new runtime', 'other.d.ts': 'new type',
+                 'tsconfig.build.tsbuildinfo': 'new cache'}
+        allowed = b.api_delta(before, after, [name])
+        self.assertNotIn('other.d.ts', allowed)
+        self.assertNotIn('tsconfig.build.tsbuildinfo', allowed)
+        with self.assertRaisesRegex(RuntimeError, 'API_OUTPUT_SCOPE_CHANGED'):
+            b.api_delta(before, {**after, 'other.js.map': 'unexpected runtime map'}, [name])
+
     def applied(self):
         return {'pending': 0, 'columns': [
             {'COLUMN_NAME': 'sale_status', 'IS_NULLABLE': 'NO', 'COLUMN_TYPE': "enum('unsold','sold')", 'COLUMN_DEFAULT': 'unsold'},

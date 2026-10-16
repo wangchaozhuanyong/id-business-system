@@ -27,6 +27,31 @@ export const chatgptSalesPaths = Object.freeze([
   'apps/api/src/id-business-v2/online-recharge/engine/proxy-connection.cjs',
   'apps/api/src/id-business-v2/online-recharge/engine/SOURCE_MANIFEST.json'
 ]);
+const controlPaths = new Set(
+  chatgptSalesPaths.filter(
+    (n) =>
+      n.startsWith('scripts/production-release/chatgpt-sales-') ||
+      n.startsWith('scripts/ci-chatgpt-sales-') ||
+      [
+        'scripts/ci-recharge-check.mjs',
+        'scripts/ci-recharge-scope.mjs',
+        '.github/workflows/chatgpt-sales-validation.yml',
+        'docs/CHATGPT_ACCOUNT_SALES_20261016.md'
+      ].includes(n)
+  )
+);
+export function isChatgptSalesControlsOnly(paths) {
+  return (
+    paths.length > 0 &&
+    new Set(paths).size === paths.length &&
+    paths.some(
+      (n) =>
+        n.startsWith('scripts/production-release/chatgpt-sales-') ||
+        n.startsWith('scripts/ci-chatgpt-sales-')
+    ) &&
+    paths.every((n) => controlPaths.has(n))
+  );
+}
 export const chatgptSalesParts = Object.freeze(['guards', 'api', 'admin', 'migration']);
 export function isChatgptSalesOnly(paths) {
   return (
@@ -44,9 +69,23 @@ export function chatgptSalesSchemaMatches(before, after) {
   );
 }
 export function chatgptSalesCommands(part, paths) {
-  if (!isChatgptSalesOnly(paths)) throw new Error('Unsupported account sales scope');
+  const controlsOnly = isChatgptSalesControlsOnly(paths);
+  if (!isChatgptSalesOnly(paths) && !controlsOnly)
+    throw new Error('Unsupported account sales scope');
   const npm = (...args) => ['npm', ...args];
   const shared = npm('run', 'build', '--workspace', '@apple-business/shared');
+  if (controlsOnly) {
+    if (part !== 'guards') throw new Error('Unsupported sale control check part');
+    const formatted = paths.filter((n) => /\.(?:mjs|json|md|yml)$/.test(n));
+    const linted = paths.filter((n) => /\.mjs$/.test(n));
+    return [
+      ...(formatted.length ? [npm('exec', '--', 'prettier', '--check', ...formatted)] : []),
+      ...(linted.length ? [npm('exec', '--', 'eslint', ...linted)] : []),
+      ['python3', '-B', 'scripts/production-release/chatgpt-sales-release.test.py'],
+      ['node', '--test', 'scripts/ci-chatgpt-sales-scope.test.mjs']
+    ];
+  }
+
   if (part === 'guards')
     return [
       npm(
