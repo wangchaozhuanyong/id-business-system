@@ -80,7 +80,7 @@ def main():
                 target = context / name
                 target.parent.mkdir(parents=True, exist_ok=True)
                 target.write_bytes(raw)
-        run('npm', 'ci', '--ignore-scripts', '--no-audit', '--no-fund', cwd=context)
+        run('npm', 'ci', '--include=dev', '--ignore-scripts', '--no-audit', '--no-fund', cwd=context)
         run('npm', 'run', 'prisma:mysql:generate', cwd=context)
         run('npm', 'run', 'build', '--workspace', '@apple-business/shared', cwd=context)
         run('npm', 'run', 'build', '--workspace', '@apple-business/api', cwd=context)
