@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 import re
 import shutil
+import urllib.request
 
 BASE = Path('/opt/id-business-v2')
 SCOPE = 'ONLINE_SETTINGS_REGIONS_HELP_AND_CDK_COUNT'
@@ -20,6 +21,17 @@ def need(value, code):
 
 def sha(raw):
     return hashlib.sha256(raw).hexdigest()
+
+
+def download_artifact(plan):
+    expected = ('https://github.com/wangchaozhuanyong/id-business-system/releases/download/'
+                'online-settings-' + plan['commit'] + '/online-settings-artifact.tar.gz')
+    need(plan['artifactUrl'] == expected, 'ARTIFACT_LOCATION_INVALID')
+    cap = 24 * 1024**2
+    with urllib.request.urlopen(expected, timeout=60) as response:
+        raw = response.read(cap + 1)
+    need(0 < len(raw) <= cap and sha(raw) == plan['artifactSha256'], 'ARTIFACT_CHANGED')
+    return raw
 
 
 def load(name):
@@ -131,8 +143,7 @@ def release(plan, contract):
         stage = BASE / '.staging' / ('online-settings-' + plan['commit'] + '-' + plan['workflowRunId'])
         need(not stage.exists(), 'RELEASE_ALREADY_ACCEPTED')
         stage.mkdir(mode=0o700)
-        artifact = h.download(plan['artifactUrl'], 24 * 1024**2)
-        need(sha(artifact) == plan['artifactSha256'], 'ARTIFACT_CHANGED')
+        artifact = download_artifact(plan)
         payload = h.safe_archive(artifact, stage / 'content')
         raw_proof = (payload / 'build-proof.json').read_bytes()
         need(sha(raw_proof) == plan['buildProofSha256'], 'PROOF_CHANGED')

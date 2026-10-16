@@ -4,7 +4,7 @@ import importlib.util
 from pathlib import Path
 import tempfile
 import unittest
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 HERE = Path(__file__).resolve().parent
 
@@ -67,6 +67,27 @@ class ReleaseGates(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             r.read_hashes(d, 'fixture', '/app/', {'../secret': '0' * 64})
         d.run.assert_not_called()
+
+    def test_artifact_url_is_bound_to_reviewed_commit_before_network(self):
+        raw = b'reviewed fixture'
+        plan = {'commit': 'a' * 40, 'artifactSha256': r.sha(raw)}
+        url = ('https://github.com/wangchaozhuanyong/id-business-system/releases/download/'
+               'online-settings-' + plan['commit'] + '/online-settings-artifact.tar.gz')
+        with patch.object(r.urllib.request, 'urlopen') as request:
+            request.return_value.__enter__.return_value.read.return_value = raw
+            self.assertEqual(r.download_artifact({**plan, 'artifactUrl': url}), raw)
+            request.assert_called_once_with(url, timeout=60)
+            for wrong in [url.replace(plan['commit'], 'b' * 40), url + '?token=fixture',
+                          url.replace('github.com/', 'github.com.example/'),
+                          url.replace('online-settings-', 'recharge-record-')]:
+                request.reset_mock()
+                with self.assertRaises(RuntimeError):
+                    r.download_artifact({**plan, 'artifactUrl': wrong})
+                request.assert_not_called()
+            for wrong in [b'', b'other artifact', b'0' * (24 * 1024**2 + 1)]:
+                request.return_value.__enter__.return_value.read.return_value = wrong
+                with self.assertRaises(RuntimeError):
+                    r.download_artifact({**plan, 'artifactUrl': url})
 
     def test_different_live_target_stops_before_runtime_calls(self):
         old = r.BASE
