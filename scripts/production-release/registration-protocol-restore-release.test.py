@@ -35,7 +35,7 @@ def contract():
 def structural_fixture():
     c = contract()
     c['frozen'] = True
-    c['runtimeEvidence'] = {'status': 'VERIFIED', 'commit': r.CURRENT}
+    c['runtimeEvidence'].update(status='VERIFIED', commit=r.CURRENT)
     c['predecessorReceipts'] = copy.deepcopy(r.PREDECESSOR_RECEIPTS)
     c['reviewedFileHashes'] = {n: r.digest((ROOT / n).read_bytes()) for n in c['expectedGitChanges']
         if n not in c['withdrawal']['sourceRemovals']
@@ -85,11 +85,16 @@ class RestoreControls(unittest.TestCase):
         c['protectedMigrations'].pop('20261016150000_shared_bank_card_pool')
         with self.assertRaisesRegex(RuntimeError, 'SHARED_CARD_MIGRATION_NOT_PROTECTED'):
             r.verify_contract(c)
-        for key in ['retainedMailboxVersion', 'mailboxVersionReceipts']:
+        for key in ['retainedMailboxVersion', 'mailboxVersionReceipts', 'retainedGptIntegration',
+                    'retainedTableContainer', 'recentSuccessorReceipts']:
             c = structural_fixture()
             c[key] = {}
             with self.assertRaises(RuntimeError):
                 r.verify_contract(c)
+        c = structural_fixture()
+        c['runtimeEvidence']['hostSourceFiles'] = {}
+        with self.assertRaisesRegex(RuntimeError, 'RECENT_SUCCESSOR_HOST_EVIDENCE_CHANGED'):
+            r.verify_contract(c)
 
     def test_historical_publishers_are_byte_exact(self):
         r.history(contract())
@@ -249,8 +254,10 @@ class RestoreControls(unittest.TestCase):
         c = contract()
         approved = c['apiModules']
         before = {**approved, **c['withdrawal']['apiRemovals'], **r.MAILBOX_VERSION_MODULES,
+                  **r.GPT_INTEGRATION['modules'],
                   r.TYPE_DECLARATION: 'b' * 64}
-        after = {**{n: 'a' * 64 for n in approved}, **r.MAILBOX_VERSION_MODULES}
+        after = {**{n: 'a' * 64 for n in approved}, **r.MAILBOX_VERSION_MODULES,
+                 **r.GPT_INTEGRATION['modules']}
         type_js = r.TYPE_DECLARATION.removesuffix('.d.ts') + '.js'
         after[type_js] = before[type_js]
         after[r.TYPE_DECLARATION] = r.TYPE_DECLARATION_SHA
@@ -265,6 +272,10 @@ class RestoreControls(unittest.TestCase):
         for name in r.MAILBOX_VERSION_MODULES:
             changed = {**after, name: 'f' * 64}
             with self.assertRaisesRegex(RuntimeError, 'RETAINED_MAILBOX_MODULE_CHANGED'):
+                b.api_delta(before, changed, approved)
+        for name in r.GPT_INTEGRATION['modules']:
+            changed = {**after, name: 'f' * 64}
+            with self.assertRaisesRegex(RuntimeError, 'RETAINED_GPT_MODULE_CHANGED'):
                 b.api_delta(before, changed, approved)
 
     def test_archive_path_traversal_and_duplicate_proof_are_refused(self):

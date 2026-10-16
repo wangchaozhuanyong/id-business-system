@@ -54,14 +54,16 @@ def prepare_plan():
     receipts = {}
     for prefix, bindings, stages in [
             ('shared-card', contract['predecessorReceipts'], {'finalize', 'readback'}),
-            ('mailbox-version', contract['mailboxVersionReceipts'], {'release', 'readback'})]:
+            ('mailbox-version', contract['mailboxVersionReceipts'], {'release', 'readback'}),
+            ('recent', contract['recentSuccessorReceipts'],
+             {'gptRelease', 'gptReadback', 'tableRelease', 'tableReadback'})]:
         need(set(bindings) == stages, 'PREDECESSOR_RECEIPT_SCOPE_CHANGED')
         for stage, binding in bindings.items():
             raw = execute('aws', 'ssm', 'get-command-invocation', '--region', 'ap-northeast-1',
                 '--command-id', binding['commandId'], '--instance-id', r.INSTANCE, '--output', 'json')
             verify_native_receipt(raw, binding)
             receipts[prefix + '-' + stage] = raw
-    need(len(receipts) == 4, 'PREDECESSOR_NOT_INDEPENDENTLY_VERIFIED')
+    need(len(receipts) == 8, 'PREDECESSOR_NOT_INDEPENDENTLY_VERIFIED')
     plan, admitted = namespace()['prepare_plan']()
     for stage, raw in receipts.items():
         (OUTPUT / (stage + '-native.json')).write_bytes(raw)

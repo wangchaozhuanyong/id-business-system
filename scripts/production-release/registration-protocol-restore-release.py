@@ -21,8 +21,10 @@ SCOPE = 'REGISTRATION_PROTOCOL_RESTORE'
 OLD_NAME = 'registration-parity-diagnostics'
 SHARED_CARD_COMMIT = 'e84a44d86c289354bc7ed15dcd0ec68f7210e18e'
 SHARED_CARD_TREE = '911664181fa938f4065e2cf5d175ffb522e155d1'
-CURRENT = '1c339754507f29459d17d75bb84afbee8fba5291'
-CURRENT_TREE = '06fc09408adb26dd753456a9e8ff490f3e3cd308'
+MAILBOX_COMMIT = '1c339754507f29459d17d75bb84afbee8fba5291'
+MAILBOX_TREE = '06fc09408adb26dd753456a9e8ff490f3e3cd308'
+CURRENT = '123ea34df9bf74a1d65e74bd70f336eaa9344165'
+CURRENT_TREE = 'ea208f5e571ab6da0dd6c82a8bf46b4d99e42b98'
 SOURCE_BASE = '123ea34df9bf74a1d65e74bd70f336eaa9344165'
 SOURCE_TREE = 'ea208f5e571ab6da0dd6c82a8bf46b4d99e42b98'
 WORKER = 'apps/api/src/id-business-v2/auto-registration/worker/'
@@ -48,7 +50,7 @@ PREDECESSOR_RECEIPTS = {'finalize': {'commandId': 'bca1e62a-39fb-4fc7-8805-bf215
 SOURCE_PATHS = ['.github/workflows/quality.yml', '.github/workflows/registration-protocol-restore-validation.yml', 'apps/admin/src/v2/features/auto-registration/V2AppleMailboxes.vue', 'apps/admin/src/v2/features/auto-registration/api.ts', 'apps/admin/src/v2/features/auto-registration/apple-mailbox-presentation.ts', 'apps/admin/src/v2/features/auto-registration/browser-connector.spec.ts', 'apps/admin/src/v2/features/auto-registration/browser-connector.ts', 'apps/admin/src/v2/features/auto-registration/browser-registration-presentation.spec.ts', 'apps/admin/src/v2/features/auto-registration/contracts.ts', 'apps/admin/src/v2/features/auto-registration/useAppleMailboxes.spec.ts', 'apps/admin/src/v2/features/auto-registration/useAppleMailboxes.ts', 'apps/api/src/id-business-v2/auto-registration/apple-mailboxes.controller.ts', 'apps/api/src/id-business-v2/auto-registration/apple-mailboxes.service.ts', 'apps/api/src/id-business-v2/auto-registration/apple-mailboxes.types.ts', 'apps/api/src/id-business-v2/auto-registration/auto-registration.module.ts', 'apps/api/src/id-business-v2/auto-registration/auto-registration.service.ts', 'apps/api/src/id-business-v2/auto-registration/browser-registration.controller.ts', 'apps/api/src/id-business-v2/auto-registration/browser-registration.service.spec.ts', 'apps/api/src/id-business-v2/auto-registration/browser-registration.service.ts', 'apps/api/src/id-business-v2/auto-registration/worker/apple_browser_registration.py', 'apps/api/src/id-business-v2/auto-registration/worker/apple_mailboxes.py', 'apps/api/src/id-business-v2/auto-registration/worker/browser_registration_connector.py', 'apps/api/src/id-business-v2/auto-registration/worker/browser_registration_flow.py', 'apps/api/src/id-business-v2/auto-registration/worker/test_apple_browser_registration_unit.py', 'apps/api/src/id-business-v2/auto-registration/worker/test_browser_registration_connector.py', 'apps/api/src/id-business-v2/auto-registration/worker/test_browser_registration_contract_unit.py', 'apps/api/src/id-business-v2/auto-registration/worker/test_registration_closed_loop_unit.py', 'apps/api/src/id-business-v2/auto-registration/worker/workspace.py', 'docs/AUTO_REGISTRATION_BROWSER_CONNECTOR.md', 'docs/V2_TASKS.md', 'scripts/ci-recharge-check.mjs', 'scripts/ci-recharge-check.test.mjs', 'scripts/ci-recharge-scope.mjs', 'scripts/ci-recharge-scope.test.mjs', 'scripts/ci-registration-protocol-restore-scope.mjs', 'scripts/ci-registration-protocol-restore-scope.test.mjs', 'scripts/production-release/registration-protocol-restore-build.py', 'scripts/production-release/registration-protocol-restore-contract.json', 'scripts/production-release/registration-protocol-restore-dispatch.py', 'scripts/production-release/registration-protocol-restore-release.py', 'scripts/production-release/registration-protocol-restore-release.test.py', 'scripts/start-auto-registration-connector.sh']
 
 PUBLISHED_BUILDS['mailboxVersion'] = {
-    'commit': CURRENT, 'tree': CURRENT_TREE, 'runId': '38925995056', 'attempt': 1,
+    'commit': MAILBOX_COMMIT, 'tree': MAILBOX_TREE, 'runId': '38925995056', 'attempt': 1,
     'workflowPath': '.github/workflows/mailbox-version-validation.yml', 'conclusion': 'failure',
     'validationJobId': 117057560334, 'artifactId': 12056691966,
     'artifactName': 'mailbox-version-1c339754507f29459d17d75bb84afbee8fba5291-1',
@@ -64,16 +66,22 @@ MAILBOX_VERSION_NATIVE_RECEIPTS = {
         'commandId': 'e8683c00-b4c3-41fb-8725-cbba140b164b',
         'sha256': '4e1be1df2bb32efd507a0403f219e2d506e9b8989a5ca7047fec11584776dc4c',
         'canonicalSha256': '42e81df043a26ee45fd8ca2e2de28c6129a6a7e00e3b01bc0666f7ca6dfefc34',
-        'result': {'businessActions': 0, 'commit': CURRENT, 'migrationPerformed': False,
+        'result': {'businessActions': 0, 'commit': MAILBOX_COMMIT, 'migrationPerformed': False,
                    'status': 'MAILBOX_SCOPE_VERSION_RECOVERY_DEPLOYED', 'updatedServices': ['api']}},
     'readback': {
         'commandId': 'c1ff7353-ebc4-4cc0-9367-8f54a2688bbe',
         'sha256': '91870ad9cfb39c54961668c63c59252c95efc3fd6a77ada779fecf210ae83a36',
         'canonicalSha256': 'e7dc973478d67e91583bdbf6aba34b482d3a1b7aed747d6f39431e191b9271b6',
-        'result': {'businessActions': 0, 'commit': CURRENT, 'migrationPerformed': False,
+        'result': {'businessActions': 0, 'commit': MAILBOX_COMMIT, 'migrationPerformed': False,
                    'status': 'MAILBOX_SCOPE_VERSION_RECOVERY_INDEPENDENT_READBACK_VERIFIED',
                    'updatedServices': ['api']}}}
 
+
+GPT_INTEGRATION = {'applicationCommit': 'b0d80c7f8cea818361d06873e3e432ee2c3b3229', 'buildCommit': '800dc9c761bb1b24423727e891174d59d05bddec', 'buildTree': '9c40204f408244797b825e79cf6e0e8ebf28d913', 'publicationCommit': '46bea6e11c9527e9b8930598de4cf2b13eb76635', 'publicationTree': '66f9412285c67bc691dcbb8e369df713d40cfdab', 'workflowRunId': '38922620650', 'nativeContractSha256': '2ee7dd00ef1664b194734f8ce93084976d335413b2e8ff92d5957da564f16e89', 'rebaseContractSha256': '894e6aac58360770fe6de9338e79a2f1c37c4291d807888338689ac177a4e993', 'artifactUrl': 'https://github.com/wangchaozhuanyong/id-business-system/releases/download/gpt-recharge-b0d80c7f8cea818361d06873e3e432ee2c3b3229/gpt-recharge-artifact.tar.gz', 'artifactSha256': '49a6432be83f495e0a2fea6e6feeced39ebc332e850a8b3a7abd2fce60b7e121', 'proofSha256': 'd5254c46631fb203013161db53641c6417f15569a1d7a404e01b31586aadce49', 'sources': {'apps/api/src/id-business-v2/online-recharge/online-recharge.module.ts': 'edbd04030f20d675932d9c360e653e3fc3ca8a0a870b1e97dc3a0b30772df59f', 'apps/api/src/id-business-v2/online-recharge/persistence/tasks.repository.ts': 'c40188f03a3f8bcf4819ef2c25c867dc979f44ae9d970a541648e87ca3ee8f36', 'apps/api/src/id-business-v2/online-recharge/task-acceptance.ts': 'd97e345a1935a20f7974aad0d28bb2d9af56c42f7fa373305b2e2636daff8fe3', 'apps/api/src/id-business-v2/online-recharge/tasks.service.ts': 'e4d8adfc2c0be3efc6cba4d3519c4ea2027a4170fcf28624624c5a1e11633a35', 'apps/api/src/id-business-v2/online-recharge/vendure-integration.controller.ts': '9d5ac1295565d819666d68e6e99ff56b97a234a535ec0a6028bb7fda2220d37a', 'apps/api/src/id-business-v2/online-recharge/vendure-integration.service.ts': '9f3a2085c4f8ae9b033346bb16831bdf78dc194f538f6d0390a5fe63b9bce3e9', 'apps/api/src/id-business-v2/online-recharge/worker-body-parser.ts': '2471cba84936dc8c36f25feef210d641a0f5c8c4a22ccde6e684396069e57619'}, 'modules': {'id-business-v2/online-recharge/online-recharge.module.js': 'f3bcb65e398ba150e6c3e5f000fc12f0a2354d090e88016ce178670340468c14', 'id-business-v2/online-recharge/online-recharge.module.js.map': '9fdabea6cfbb1e88791303d4004e0eace6bbaa4c1ca64802c550960fa13a6afa', 'id-business-v2/online-recharge/persistence/tasks.repository.d.ts': '9d07b6f3ec326a7265eb93abddd9fdcb4b04f219e9c1f6fbf5349b23e56eb71b', 'id-business-v2/online-recharge/persistence/tasks.repository.js': '3520866af3ed80061868d1a28ada84792a41c53c1d62d95f1654bfe8fc57b922', 'id-business-v2/online-recharge/persistence/tasks.repository.js.map': 'c5fe3d1a6c4d714b1d102d60d6f12f7329c5deb56e1dca944035bc561b521d7f', 'id-business-v2/online-recharge/task-acceptance.d.ts': '841b7fd373eeb435c3825c89b5299707a147a023461c0cae3da6e657147575e7', 'id-business-v2/online-recharge/task-acceptance.js': 'e648d7c52209194b5a22f10b1500e93d0a1a43cbb33f702948b1c9c82ab4a370', 'id-business-v2/online-recharge/task-acceptance.js.map': '300b9c271519452a93039712b8511ea279fcdb082cad3cd035e1edb1ce5baebd', 'id-business-v2/online-recharge/tasks.service.d.ts': '7c424b0501f98268ac61c1bbefd957407fec944eb80a9c55586db2fd01015c4f', 'id-business-v2/online-recharge/tasks.service.js': 'b94d3d649d2790ba56ad4974c7808485b8e9639b3a3dedb18837497ce813b2da', 'id-business-v2/online-recharge/tasks.service.js.map': '844a01613458948aab9e8a0767eb779f4de7df503d2ba8f420b5c8bafea9557c', 'id-business-v2/online-recharge/vendure-integration.controller.d.ts': '59124bb23c2082c99bf7b34ae49983ee2d03ce368ec3596c4a9ab7098a6f5eb5', 'id-business-v2/online-recharge/vendure-integration.controller.js': 'd19a6bbbac16ccfee05e9bd3175d7d608ce19c5de019dd9494bf59781245b00e', 'id-business-v2/online-recharge/vendure-integration.controller.js.map': 'c9f248101c0be96fb64c72a0204067e7375b07eb0639c3054cc2ecbaed87b647', 'id-business-v2/online-recharge/vendure-integration.service.d.ts': '56b8490823f614ce9ebe42982a30438de3939cfc0891691fcd20c4c78f99ec19', 'id-business-v2/online-recharge/vendure-integration.service.js': 'bdf6a1fa06494bfcf6b89b0fb667a8e91aae322ea5759b8da3cda9a583915488', 'id-business-v2/online-recharge/vendure-integration.service.js.map': 'b94e0f93483d1776a97f0940f2a3e1125f4baecc137a17a84379f51aab082c8b', 'id-business-v2/online-recharge/worker-body-parser.js': 'f05bc2c611bde545ac7de6dd4e18e73eec184651e1ad786a73f2d606c815e368', 'id-business-v2/online-recharge/worker-body-parser.js.map': '91a55dff5f6f24f1672d8d7ef4d407b4ed938d06b1cda05377106fe309f37c34'}, 'hostSources': {'apps/api/src/id-business-v2/online-recharge/online-recharge.module.ts': 'edbd04030f20d675932d9c360e653e3fc3ca8a0a870b1e97dc3a0b30772df59f', 'apps/api/src/id-business-v2/online-recharge/persistence/tasks.repository.ts': 'c40188f03a3f8bcf4819ef2c25c867dc979f44ae9d970a541648e87ca3ee8f36', 'apps/api/src/id-business-v2/online-recharge/task-acceptance.ts': 'd97e345a1935a20f7974aad0d28bb2d9af56c42f7fa373305b2e2636daff8fe3', 'apps/api/src/id-business-v2/online-recharge/tasks.service.ts': 'e4d8adfc2c0be3efc6cba4d3519c4ea2027a4170fcf28624624c5a1e11633a35', 'apps/api/src/id-business-v2/online-recharge/vendure-integration.controller.ts': '9d5ac1295565d819666d68e6e99ff56b97a234a535ec0a6028bb7fda2220d37a', 'apps/api/src/id-business-v2/online-recharge/vendure-integration.service.ts': '9f3a2085c4f8ae9b033346bb16831bdf78dc194f538f6d0390a5fe63b9bce3e9', 'apps/api/src/id-business-v2/online-recharge/worker-body-parser.ts': '2471cba84936dc8c36f25feef210d641a0f5c8c4a22ccde6e684396069e57619'}}
+
+TABLE_CONTAINER = {'commit': '123ea34df9bf74a1d65e74bd70f336eaa9344165', 'tree': 'ea208f5e571ab6da0dd6c82a8bf46b4d99e42b98', 'sources': {'apps/admin/src/v2/components/tableContentWidth.ts': '0141dc8063e5bf9c90158e685c98bafe18762f2647c1286c5b4b84318a0be5ab'}, 'artifactUrl': 'https://github.com/wangchaozhuanyong/id-business-system/releases/download/table-container-123ea34df9bf74a1d65e74bd70f336eaa9344165/compiled-admin.tar.gz', 'artifactSha256': '577d31a3576da604892ce803af072157c5be4a877ba6605334fe6e12eb340422', 'proofSha256': 'ca7d1e80f765d488ff2d4c4765d938956684e49bf851a71d4008610eacd12f59', 'adminFileCount': 261, 'adminFilesSha256': '26c7d428b4996b3aa8faec6725c7c4367e649a559635dbb04a758426e8e687a2'}
+
+RECENT_SUCCESSOR_RECEIPTS = {'gptRelease': {'commandId': '7a612248-f0bb-44f6-8f9a-81178ce02501', 'canonicalSha256': '416acf83db87fa315e71d9959df33cb0d6e07a602c1a99a67f86f768fe0d324e', 'result': {'baselineCommit': '1c339754507f29459d17d75bb84afbee8fba5291', 'businessActions': 0, 'commit': '46bea6e11c9527e9b8930598de4cf2b13eb76635', 'nativeApplicationCommit': 'b0d80c7f8cea818361d06873e3e432ee2c3b3229', 'status': 'GPT_RECHARGE_DEPLOYED', 'updatedServices': ['api']}}, 'gptReadback': {'commandId': '8918c75d-954b-489d-ab28-922641d4dbee', 'canonicalSha256': 'cd691e785985b3e3c1b826d068bc9df842a7c319ea0db4a040e43daad7be4175', 'result': {'baselineCommit': '1c339754507f29459d17d75bb84afbee8fba5291', 'businessActions': 0, 'commit': '46bea6e11c9527e9b8930598de4cf2b13eb76635', 'nativeApplicationCommit': 'b0d80c7f8cea818361d06873e3e432ee2c3b3229', 'status': 'GPT_RECHARGE_INDEPENDENT_READBACK_VERIFIED'}}, 'tableRelease': {'commandId': '6b220d3a-77d9-4a52-b88e-8ee4b0e61ecd', 'canonicalSha256': 'c2494bc3136188a23d47ddc49f78069d3e4f12dd7c8fa00ea54d388bb7bd54ee', 'result': {'adminImageId': 'sha256:fb9120071b7a5319573527ae3db968ea20efddf678b1caa80f5261009fe329cf', 'commit': '123ea34df9bf74a1d65e74bd70f336eaa9344165', 'currentRelease': '/opt/id-business-v2/releases/20261016T163510Z-123ea34df9bf-table-container', 'migrationPerformed': False, 'paymentActions': 0, 'preservedServices': ['api', 'auto-recharge', 'auto-registration', 'caddy', 'media-resolver', 'mysql', 'online-recharge'], 'preservedServicesMatch': True, 'rollbackPerformed': False, 'status': 'TABLE_CONTAINER_DEPLOYED', 'updatedServices': ['admin']}}, 'tableReadback': {'commandId': 'b4eb9403-f53e-42de-bd6f-cbdf80bddc81', 'canonicalSha256': '9fc7a3877af52393d69700c3686856acf2ac561858a75bb75dca7de18a5b9d81', 'result': {'adminImageId': 'sha256:fb9120071b7a5319573527ae3db968ea20efddf678b1caa80f5261009fe329cf', 'apiReady': True, 'businessActions': 0, 'commit': '123ea34df9bf74a1d65e74bd70f336eaa9344165', 'mergedStaticFiles': 1848, 'migrationPerformed': False, 'newStaticFiles': 261, 'preservedServices': ['api', 'auto-recharge', 'auto-registration', 'caddy', 'media-resolver', 'mysql', 'online-recharge'], 'preservedServicesMatch': True, 'publicIndexMatched': True, 'status': 'TABLE_CONTAINER_INDEPENDENT_READBACK_VERIFIED', 'updatedServices': ['admin']}}}
 
 def need(value, code):
     if not value:
@@ -119,11 +127,21 @@ def verify_contract(c):
          'afterEngineFiles': shared['afterEngineFiles'],
          'proofSha256': PUBLISHED_BUILDS['sharedCard']['proofSha256'],
          'contractSha256': PUBLISHED_BUILDS['sharedCard']['contractSha256']}, 'SHARED_CARD_INHERITANCE_CHANGED')
-    need(c.get('retainedMailboxVersion') == {'commit': CURRENT, 'tree': CURRENT_TREE,
+    need(c.get('retainedMailboxVersion') == {'commit': MAILBOX_COMMIT, 'tree': MAILBOX_TREE,
          'sources': MAILBOX_VERSION_SOURCES,
          'proofSha256': PUBLISHED_BUILDS['mailboxVersion']['proofSha256'],
          'contractSha256': PUBLISHED_BUILDS['mailboxVersion']['contractSha256']},
          'MAILBOX_VERSION_INHERITANCE_CHANGED')
+    need(c.get('retainedGptIntegration') == GPT_INTEGRATION
+         and c.get('retainedTableContainer') == TABLE_CONTAINER, 'RECENT_SUCCESSOR_INHERITANCE_CHANGED')
+    need(c.get('runtimeEvidence', {}).get('hostSourceFiles') ==
+         {**GPT_INTEGRATION['hostSources'], **TABLE_CONTAINER['sources']},
+         'RECENT_SUCCESSOR_HOST_EVIDENCE_CHANGED')
+    need(len(c['baselineAdminFiles']) == TABLE_CONTAINER['adminFileCount']
+         and digest(canonical(c['baselineAdminFiles'])) == TABLE_CONTAINER['adminFilesSha256'],
+         'TABLE_ADMIN_BASELINE_CHANGED')
+    need(all(c['baselineApiFiles'].get(name) == value for name, value in GPT_INTEGRATION['modules'].items()
+             if name.endswith('.js')), 'GPT_API_BASELINE_CHANGED')
     withdrawal = c['withdrawal']
     need(withdrawal['restorePaths'] == RESTORE_PATHS and c['publishedBuilds'] == PUBLISHED_BUILDS, 'FROZEN_SCOPE_CHANGED')
     need(set(c['controlFiles']) == set(HISTORICAL_CONTROLS) | {NAME + '-release.py', NAME + '-contract.json'}, 'EXECUTOR_SCOPE_CHANGED')
@@ -193,6 +211,8 @@ def verify_contract(c):
          'PREDECESSOR_PUBLICATION_NOT_VERIFIED')
     need(c.get('mailboxVersionReceipts') == MAILBOX_VERSION_NATIVE_RECEIPTS,
          'MAILBOX_VERSION_PUBLICATION_NOT_VERIFIED')
+    need(c.get('recentSuccessorReceipts') == RECENT_SUCCESSOR_RECEIPTS,
+         'RECENT_SUCCESSOR_PUBLICATION_NOT_VERIFIED')
 
 
 def renamed(code):
@@ -268,7 +288,9 @@ def sqlite_receipt(d, directory, c, expected_logical=None):
 
 def verify_proof(proof, plan, c, payload, h):
     need(proof.get('withdrawal') == c['withdrawal'] and proof.get('retainedSharedCard') == c['retainedSharedCard']
-         and proof.get('retainedMailboxVersion') == c['retainedMailboxVersion'],
+         and proof.get('retainedMailboxVersion') == c['retainedMailboxVersion']
+         and proof.get('retainedGptIntegration') == c['retainedGptIntegration']
+         and proof.get('retainedTableContainer') == c['retainedTableContainer'],
          'WITHDRAWAL_PROOF_CHANGED')
     need(proof.get('apiModules', {}).get(TYPE_DECLARATION) == TYPE_DECLARATION_SHA
          and not {TYPE_DECLARATION.removesuffix('.d.ts') + suffix for suffix in ('.js', '.js.map')}
@@ -284,10 +306,24 @@ def retained_mailbox(d, target, a):
     a.verify_modules(d, target, MAILBOX_VERSION_MODULES)
 
 
+def retained_recent_successors(d, target, a):
+    for name, expected in {**GPT_INTEGRATION['hostSources'], **TABLE_CONTAINER['sources']}.items():
+        path = target / name
+        need(not path.is_symlink() and path.is_file() and digest(path.read_bytes()) == expected,
+             'RECENT_SUCCESSOR_HOST_SOURCE_CHANGED')
+    for name, expected in {'gpt-recharge-build-proof.json': GPT_INTEGRATION['proofSha256'],
+                           'table-container-build-proof.json': TABLE_CONTAINER['proofSha256']}.items():
+        path = target / name
+        need(not path.is_symlink() and path.is_file() and digest(path.read_bytes()) == expected,
+             'RECENT_SUCCESSOR_HOST_PROOF_CHANGED')
+    a.verify_modules(d, target, GPT_INTEGRATION['modules'])
+
+
 def baseline(d, h, a, finite, c, expected=None):
     value = private_namespace(OLD_NAME + '-release.py', {'sqlite_receipt': sqlite_receipt})['baseline'](
         d, h, a, finite, c, expected)
     retained_mailbox(d, value[0], a)
+    retained_recent_successors(d, value[0], a)
     return value
 
 
@@ -302,6 +338,7 @@ def smoke(d, target, states, c, proof, receipt, h, a, finite):
     private_namespace(OLD_NAME + '-release.py', {'sqlite_receipt': sqlite_receipt})['smoke'](
         d, target, states, projected, proof, receipt, h, a, finite)
     retained_mailbox(d, target, a)
+    retained_recent_successors(d, target, a)
     for root, removed in [('/app/apps/api/dist/', c['withdrawal']['apiRemovals']),
                           ('/app/' + WORKER, c['withdrawal']['workerRemovals'])]:
         for name in removed:

@@ -184,7 +184,7 @@ export function isRegistrationProtocolRestoreOnly(paths, options = {}) {
     c.frozen !== true ||
     c.scope !== 'REGISTRATION_PROTOCOL_RESTORE' ||
     c.migration !== null ||
-    c.expectedCurrent !== '1c339754507f29459d17d75bb84afbee8fba5291' ||
+    c.expectedCurrent !== '123ea34df9bf74a1d65e74bd70f336eaa9344165' ||
     c.schemaSha256 !== '51a4d25b1302458145f560acc32f25b89a7bd65fea64dc72b254dc56da430100' ||
     c.runtimeEvidence?.status !== 'VERIFIED' ||
     c.runtimeEvidence.commit !== c.expectedCurrent ||

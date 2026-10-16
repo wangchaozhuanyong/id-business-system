@@ -8,6 +8,7 @@ import re
 import subprocess
 import sys
 import tarfile
+import urllib.request
 import zipfile
 from contextlib import contextmanager
 
@@ -132,6 +133,10 @@ def verify_bundle(bundle, binding):
 
 
 SHARED_DECLARATION_SHA = 'de0f432308f72e5e58cae4fa8a12a389f81d582d5342fd231a57c29c90c6c7cb'
+GPT_NATIVE_HEAD = '108b7d37d099d3ec6203deee5dd347dad2793c67'
+GPT_NATIVE_ARTIFACT_ID = 12054628125
+GPT_NATIVE_ARTIFACT_DIGEST = 'sha256:7dc065bfd7a962f8dfad60b6fa4968978c02c81eb7ea97018e0eb68d36b59721'
+SUCCESSOR_BUNDLES = {}
 
 
 def historical_member_limit(binding, name):
@@ -140,6 +145,153 @@ def historical_member_limit(binding, name):
     if binding == r.PUBLISHED_BUILDS['sharedCard'] and name == 'payload/api/prisma-client/index.d.ts':
         return 13060611
     return 8 * 1024**2
+
+
+def successor_files(bundle, expected):
+    need(len(bundle) <= 64 * 1024**2 and digest(bundle) == expected, 'SUCCESSOR_BUNDLE_CHANGED')
+    files, seen, total = {}, set(), 0
+    with tarfile.open(fileobj=io.BytesIO(bundle), mode='r:gz') as archive:
+        for member in archive:
+            name = member.name
+            total += member.size
+            need(len(seen) < 2048 and name not in seen and name == Path(name).as_posix()
+                 and not name.startswith('/') and '..' not in Path(name).parts
+                 and (member.isfile() or member.isdir()) and 0 <= member.size <= 8 * 1024**2
+                 and total <= 64 * 1024**2, 'SUCCESSOR_PAYLOAD_INVALID')
+            seen.add(name)
+            if member.isfile():
+                raw = archive.extractfile(member).read(8 * 1024**2 + 1)
+                need(len(raw) == member.size, 'SUCCESSOR_MEMBER_CHANGED')
+                files[name] = raw
+    return files
+
+
+def verify_gpt_bundle(bundle, binding):
+    need(binding == r.GPT_INTEGRATION, 'GPT_INHERITANCE_CHANGED')
+    files = successor_files(bundle, binding['artifactSha256'])
+    raw = files.get('payload/build-proof.json')
+    need(raw is not None and digest(raw) == binding['proofSha256'], 'GPT_PROOF_CHANGED')
+    proof = json.loads(raw)
+    need(proof['version'] == 1 and proof['scope'] == 'GPT_RECHARGE_VENDURE_INTEGRATION'
+         and proof['commit'] == binding['buildCommit'] and proof['tree'] == binding['buildTree']
+         and proof['workflowRunId'] == binding['workflowRunId']
+         and proof['contractSha256'] == binding['nativeContractSha256']
+         and proof['sources'] == binding['sources'] and proof['apiModules'] == binding['modules']
+         and proof['baselineApiReproduced'] is True and proof['migrationPerformed'] is False
+         and proof['businessActions'] == 0, 'GPT_PROOF_IDENTITY_CHANGED')
+    # The merged application b0 has exactly the native PR's tree. It is a
+    # permanent main ancestor; the transient PR/build commit need not survive.
+    source_commit = binding['applicationCommit']
+    recipe_raw = git('show', source_commit + ':scripts/production-release/gpt-recharge-contract.json')
+    need(digest(recipe_raw) == binding['nativeContractSha256'], 'GPT_NATIVE_CONTRACT_CHANGED')
+    recipe = json.loads(recipe_raw)
+    need(proof['sourceReviewCommit'] == recipe['sourceReviewCommit']
+         and proof['reviewedSources'] == recipe['sources']
+         and {n for n in proof['apiModules'] if n.endswith('.js')} == set(recipe['apiModules'])
+         and git('rev-parse', source_commit + '^{tree}').decode().strip() == binding['buildTree'],
+         'GPT_NATIVE_SOURCE_IDENTITY_CHANGED')
+    for name, value in proof['headInputs'].items():
+        need(digest(git('show', source_commit + ':' + name)) == value, 'GPT_NATIVE_INPUT_CHANGED')
+    for name, value in proof['reviewedSources'].items():
+        need(digest(git('show', source_commit + ':' + name)) == value,
+             'GPT_REVIEWED_SOURCE_CHANGED')
+    rebase_raw = git('show', binding['publicationCommit']
+                     + ':scripts/production-release/gpt-recharge-rebase-contract.json')
+    need(digest(rebase_raw) == binding['rebaseContractSha256']
+         and git('rev-parse', binding['publicationCommit'] + '^{tree}').decode().strip() == binding['publicationTree'],
+         'GPT_PUBLICATION_RECIPE_CHANGED')
+    rebase = json.loads(rebase_raw)
+    plan = rebase['nativePlan']
+    need(rebase['nativeApplicationCommit'] == source_commit
+         and rebase['nativeContractSha256'] == binding['nativeContractSha256']
+         and plan['buildCommit'] == binding['buildCommit'] and plan['buildTree'] == binding['buildTree']
+         and plan['workflowRunId'] == binding['workflowRunId'] and plan['workflowRunAttempt'] == '1'
+         and plan['buildProofSha256'] == binding['proofSha256']
+         and plan['artifactUrl'] == binding['artifactUrl'] and plan['artifactSha256'] == binding['artifactSha256']
+         and rebase['mailboxNative']['modules'] == r.MAILBOX_VERSION_MODULES,
+         'GPT_PUBLICATION_IDENTITY_CHANGED')
+    expected = {'payload/build-proof.json': binding['proofSha256'],
+                **{'payload/source/' + n: v for n, v in binding['sources'].items()},
+                **{'payload/api/modules/' + n: v for n, v in binding['modules'].items()}}
+    need({n: digest(raw) for n, raw in files.items()} == expected, 'GPT_PAYLOAD_SCOPE_CHANGED')
+    # These are the original merged payload bytes, not a later main checkout.
+    return proof, {name: files['payload/source/' + name] for name in binding['sources']}
+
+
+def verify_table_bundle(bundle, binding):
+    need(binding == r.TABLE_CONTAINER, 'TABLE_INHERITANCE_CHANGED')
+    files = successor_files(bundle, binding['artifactSha256'])
+    raw = files.get('compiled-manifest.json')
+    need(raw is not None and digest(raw) == binding['proofSha256'], 'TABLE_PROOF_CHANGED')
+    proof = json.loads(raw)
+    projection, static = proof['roleProjection'], proof['newStaticFiles']
+    need(proof['version'] == 1 and proof['commit'] == binding['commit']
+         and proof['sourceTree'] == binding['tree'] and proof['migrationPerformed'] is False
+         and proof['businessActions'] == 0 and proof['baselineReproducedFiles'] == 261
+         and proof['browserAcceptance']['ok'] is True
+         and projection['scope'] == 'TABLE_CONTAINER_FILL_20261017'
+         and projection['candidateCommit'] == binding['commit'] and projection['candidateTree'] == binding['tree']
+         and projection['productionOverlay'] == binding['sources']
+         and projection['runtimeChangedFiles'] == list(binding['sources'])
+         and projection['buildId'] == 'v2-' + binding['commit']
+         and projection['publishedAdminCommit'] == r.SHARED_CARD_COMMIT
+         and projection['publishedProofSha256'] == r.PUBLISHED_BUILDS['sharedCard']['proofSha256']
+         and len(static) == binding['adminFileCount']
+         and digest(r.canonical(static)) == binding['adminFilesSha256'], 'TABLE_PROOF_IDENTITY_CHANGED')
+    expected = {'compiled-manifest.json', 'admin/Dockerfile',
+                *('source/' + n for n in binding['sources']), *('admin/dist/' + n for n in static)}
+    need(set(files) == expected
+         and all(digest(files['admin/dist/' + n]) == value for n, value in static.items())
+         and ('v2-' + binding['commit']).encode() in files['admin/dist/index.html'], 'TABLE_PAYLOAD_SCOPE_CHANGED')
+    need(git('rev-parse', binding['commit'] + '^{tree}').decode().strip() == binding['tree'], 'TABLE_TREE_CHANGED')
+    for name, value in binding['sources'].items():
+        need(digest(files['source/' + name]) == value == digest(git('show', binding['commit'] + ':' + name)),
+             'TABLE_SOURCE_CHANGED')
+    return proof
+
+
+def native_gpt_bundle(c):
+    binding = c['retainedGptIntegration']
+    need(binding == r.GPT_INTEGRATION, 'GPT_INHERITANCE_CHANGED')
+    key = binding['artifactSha256']
+    if key not in SUCCESSOR_BUNDLES:
+        prefix = 'repos/wangchaozhuanyong/id-business-system/'
+        request = lambda path: subprocess.check_output(['gh', 'api', prefix + path], cwd=ROOT)
+        meta = json.loads(request('actions/runs/' + binding['workflowRunId']))
+        need(meta['id'] == 38922620650 and meta['head_sha'] == GPT_NATIVE_HEAD
+             and meta['head_branch'] == 'codex/gpt-recharge-integration-20261016'
+             and meta['head_commit']['tree_id'] == binding['buildTree']
+             and meta['event'] == 'pull_request' and meta['status'] == 'completed'
+             and meta['conclusion'] == 'success' and meta['path'] == '.github/workflows/quality.yml'
+             and meta['run_attempt'] == 1, 'GPT_NATIVE_RUN_CHANGED')
+        values = json.loads(request('actions/runs/' + binding['workflowRunId'] + '/artifacts?per_page=100'))['artifacts']
+        matches = [a for a in values if a['id'] == GPT_NATIVE_ARTIFACT_ID
+                   and a['name'] == 'gpt-recharge-38922620650-1' and a['digest'] == GPT_NATIVE_ARTIFACT_DIGEST
+                   and a['size_in_bytes'] == 69341 and not a['expired']
+                   and a['workflow_run']['head_sha'] == GPT_NATIVE_HEAD]
+        need(len(matches) == 1, 'GPT_NATIVE_ARTIFACT_CHANGED')
+        raw = request('actions/artifacts/' + str(GPT_NATIVE_ARTIFACT_ID) + '/zip')
+        need(len(raw) == 69341 and 'sha256:' + digest(raw) == GPT_NATIVE_ARTIFACT_DIGEST, 'GPT_NATIVE_ZIP_CHANGED')
+        with zipfile.ZipFile(io.BytesIO(raw)) as archive:
+            need(sorted(archive.namelist()) == ['artifact-sha256.txt', 'gpt-recharge-artifact.tar.gz']
+                 and archive.getinfo('gpt-recharge-artifact.tar.gz').file_size == 69213
+                 and archive.getinfo('artifact-sha256.txt').file_size == 65, 'GPT_NATIVE_MEMBER_CHANGED')
+            bundle = archive.read('gpt-recharge-artifact.tar.gz')
+            need(archive.read('artifact-sha256.txt') == (key + '\n').encode(), 'GPT_NATIVE_DIGEST_CHANGED')
+        SUCCESSOR_BUNDLES[key] = verify_gpt_bundle(bundle, binding)
+    return SUCCESSOR_BUNDLES[key]
+
+
+def native_table_bundle(c):
+    binding = c['retainedTableContainer']
+    need(binding == r.TABLE_CONTAINER, 'TABLE_INHERITANCE_CHANGED')
+    key = binding['artifactSha256']
+    if key not in SUCCESSOR_BUNDLES:
+        with urllib.request.urlopen(binding['artifactUrl'], timeout=60) as response:
+            bundle = response.read(1012170)
+        need(len(bundle) == 1012169, 'TABLE_NATIVE_ARTIFACT_CHANGED')
+        SUCCESSOR_BUNDLES[key] = verify_table_bundle(bundle, binding)
+    return SUCCESSOR_BUNDLES[key]
 
 
 def overlay(context, commit, sources):
@@ -169,6 +321,15 @@ def reconstruct(context, c, *, include_browser):
     overlay(context, settings['sourceReviewCommit'], settings['sources'])
     overlay(context, c['retainedSharedCard']['commit'], c['retainedSharedCard']['sources'])
     overlay(context, c['retainedMailboxVersion']['commit'], c['retainedMailboxVersion']['sources'])
+    _, gpt_sources = native_gpt_bundle(c)
+    need({n: digest(raw) for n, raw in gpt_sources.items()} == c['retainedGptIntegration']['sources'],
+         'GPT_OVERLAY_SOURCE_CHANGED')
+    for name, raw in gpt_sources.items():
+        path = context / name
+        need(not path.is_symlink() and path.resolve().is_relative_to(context.resolve()), 'GPT_OVERLAY_PATH_INVALID')
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(raw)
+    overlay(context, c['retainedTableContainer']['commit'], c['retainedTableContainer']['sources'])
     if include_browser:
         # Published validation bytes are not the installed runtime test bytes.
         # Restore the same three immutable e90 files used by the prior builder.
@@ -241,6 +402,8 @@ def api_delta(before, after, approved):
     need(after.get(r.TYPE_DECLARATION) == r.TYPE_DECLARATION_SHA, 'TYPE_DECLARATION_NOT_REPRODUCED')
     need(all(before.get(n) == after.get(n) == v for n, v in r.MAILBOX_VERSION_MODULES.items()),
          'RETAINED_MAILBOX_MODULE_CHANGED')
+    need(all(before.get(n) == after.get(n) == v for n, v in r.GPT_INTEGRATION['modules'].items()),
+         'RETAINED_GPT_MODULE_CHANGED')
     projected = {n: v for n, v in before.items() if n not in removed}
     return r.helper(r.OLD_NAME + '-build.py').api_delta(projected, after, approved)
 
@@ -256,16 +419,26 @@ def verify_baseline_union(c, proofs):
     need(proofs['browser']['sources'] == browser['sources']
          and proofs['sharedCard']['sources'] == c['retainedSharedCard']['sources']
          and proofs['mailboxVersion']['sources'] == c['retainedMailboxVersion']['sources']
-         and proofs['mailboxVersion']['modules'] == r.MAILBOX_VERSION_MODULES, 'PUBLISHED_CHAIN_CHANGED')
+         and proofs['mailboxVersion']['modules'] == r.MAILBOX_VERSION_MODULES
+         and proofs['gptIntegration']['sources'] == c['retainedGptIntegration']['sources']
+         and proofs['gptIntegration']['apiModules'] == c['retainedGptIntegration']['modules'], 'PUBLISHED_CHAIN_CHANGED')
     api = dict(browser['baselineApiFiles'])
     admin = dict(browser['runtimeAdminFiles'])
     for layer in ('browser', 'onlineSettings', 'sharedCard'):
         api.update({n: v for n, v in proofs[layer]['apiModules'].items() if n.endswith('.js')})
         admin.update(proofs[layer]['adminFiles'])
     api.update({n: v for n, v in proofs['mailboxVersion']['modules'].items() if n.endswith('.js')})
+    need(api == {**proofs['gptIntegration']['baselineApiJs'],
+                 **{n: v for n, v in r.MAILBOX_VERSION_MODULES.items() if n.endswith('.js')}},
+         'GPT_REBASED_BASELINE_CHANGED')
+    api.update({n: v for n, v in proofs['gptIntegration']['apiModules'].items() if n.endswith('.js')})
+    table = proofs['tableContainer']['newStaticFiles']
+    need(len(table) == c['retainedTableContainer']['adminFileCount']
+         and digest(r.canonical(table)) == c['retainedTableContainer']['adminFilesSha256'], 'TABLE_BASELINE_CHANGED')
+    admin.update(table)
     expected = {'baselineApiFiles': api, 'runtimeAdminFiles': admin,
         'baselineWorkerFiles': {**browser['baselineWorkerFiles'], **proofs['browser']['workerFiles']},
-        'baselineAdminFiles': proofs['sharedCard']['adminFiles'],
+        'baselineAdminFiles': table,
         'baselinePrismaClientFiles': {**browser['baselinePrismaClientFiles'], **proofs['sharedCard']['prismaClientFiles']},
         'runtimePrismaClientFiles': {**browser['runtimePrismaClientFiles'], **proofs['sharedCard']['prismaClientFiles']}}
     need(all(c.get(k) == value for k, value in expected.items()), 'PUBLISHED_BASELINE_UNION_CHANGED')
@@ -276,6 +449,8 @@ def prepare():
     verify_sources(c)
     r.helper('registration-browser-build.py').verify_prior_chain()
     proofs = {name: native_bundle(binding) for name, binding in c['publishedBuilds'].items()}
+    proofs['gptIntegration'] = native_gpt_bundle(c)[0]
+    proofs['tableContainer'] = native_table_bundle(c)
     verify_baseline_union(c, proofs)
     need(not OUTPUT.exists(), 'OUTPUT_EXISTS')
     OUTPUT.mkdir(parents=True, mode=0o700)
@@ -294,7 +469,9 @@ def build():
     proof = json.loads(path.read_bytes())
     c = json.loads(CONTRACT.read_bytes())
     proof.update(withdrawal=c['withdrawal'], retainedSharedCard=c['retainedSharedCard'],
-                 retainedMailboxVersion=c['retainedMailboxVersion'])
+                 retainedMailboxVersion=c['retainedMailboxVersion'],
+                 retainedGptIntegration=c['retainedGptIntegration'],
+                 retainedTableContainer=c['retainedTableContainer'])
     path.write_text(json.dumps(proof, sort_keys=True, indent=2) + '\n')
 
 
