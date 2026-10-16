@@ -7,6 +7,10 @@ const mocks = vi.hoisted(() => ({
   resume: vi.fn(),
   mark: vi.fn(),
   start: vi.fn(),
+  browserStart: vi.fn(),
+  connectorHealth: vi.fn(),
+  browserDispatch: vi.fn(),
+  candidates: vi.fn(),
   task: vi.fn(),
   cancel: vi.fn(),
   recover: vi.fn(),
@@ -32,6 +36,8 @@ vi.mock('./api', () => ({
     appleMailboxes: mocks.list,
     markAppleMailboxes: mocks.mark,
     startAppleMailbox: mocks.start,
+    startAppleMailboxBrowser: mocks.browserStart,
+    appleMailboxCandidates: mocks.candidates,
     appleMailboxTask: mocks.task,
     cancelAppleMailboxTask: mocks.cancel,
     recoverAppleMailbox: mocks.recover,
@@ -42,6 +48,10 @@ vi.mock('./api', () => ({
     syncManualMailboxes: mocks.manualSync,
     resumeAppleMailboxAuthorization: mocks.authorizationResume
   }
+}));
+vi.mock('./browser-connector', () => ({
+  checkRegistrationConnector: mocks.connectorHealth,
+  dispatchRegistrationBrowser: mocks.browserDispatch
 }));
 vi.mock('@/v2/composables/useV2Query', async () => {
   const { computed, ref } = await import('vue');
@@ -130,6 +140,19 @@ beforeEach(() => {
   mocks.mark.mockResolvedValue({ updated: 1 });
   mocks.resume.mockResolvedValue({ resumed: 0, synchronized: 0 });
   mocks.start.mockResolvedValue({ taskUuid: 'task-1', record });
+  mocks.browserStart.mockResolvedValue({
+    taskUuid: 'browser-task',
+    record,
+    launchToken: 'synthetic-private-launch',
+    callbackBaseUrl: 'https://example.invalid/callback',
+    expiresAt: new Date(Date.now() + 60_000).toISOString()
+  });
+  mocks.connectorHealth.mockResolvedValue({
+    service: 'id-business-v2-auto-registration-connector',
+    version: 1,
+    ok: true
+  });
+  mocks.browserDispatch.mockResolvedValue(undefined);
   mocks.recover.mockResolvedValue(record);
   mocks.cancel.mockResolvedValue({ accepted: true });
   mocks.batch.mockResolvedValue({
@@ -163,6 +186,125 @@ afterEach(() => {
 });
 
 describe('苹果隐藏邮箱草稿、CAS 和任务生命周期', () => {
+  function browserPage() {
+    const page = createPage();
+    vi.mocked(page.connectorQuery.refresh).mockImplementation(async () => {
+      page.connectorQuery.data.value = await mocks.connectorHealth();
+      return page.connectorQuery.data.value;
+    });
+    return page;
+  }
+  it('浏览器注册固定传递所选代理，失效选项不占用邮箱', async () => {
+    const page = browserPage();
+    page.browserOptions.proxyId = 'proxy-one';
+    page.browserProxyQuery.data.value = {
+      items: [],
+      total: 0,
+      available: 0,
+      proxies: [{ id: 'proxy-one', label: '测试代理' }]
+    };
+    await page.startBrowser(row);
+    expect(mocks.browserStart).toHaveBeenCalledWith({
+      aliasId: row.aliasId,
+      revision: row.revision,
+      proxyId: 'proxy-one'
+    });
+    mocks.browserStart.mockClear();
+    page.browserProxyQuery.data.value.proxies = [];
+    await page.startBrowser(row);
+    expect(mocks.browserStart).not.toHaveBeenCalled();
+    expect(page.actionError.value).toContain('所选注册代理已变化');
+  });
+  it('浏览器注册先检查助手，再创建和派发同一任务；不调用协议注册', async () => {
+    const page = browserPage();
+    await page.startBrowser(row);
+    expect(mocks.connectorHealth).toHaveBeenCalledOnce();
+    expect(mocks.browserStart).toHaveBeenCalledWith({
+      aliasId: row.aliasId,
+      revision: row.revision
+    });
+    expect(mocks.connectorHealth.mock.invocationCallOrder[0]).toBeLessThan(
+      mocks.browserStart.mock.invocationCallOrder[0]!
+    );
+    expect(mocks.browserStart.mock.invocationCallOrder[0]).toBeLessThan(
+      mocks.browserDispatch.mock.invocationCallOrder[0]!
+    );
+    expect(mocks.browserDispatch).toHaveBeenCalledOnce();
+    expect(mocks.start).not.toHaveBeenCalled();
+    expect(page.taskUuid.value).toBe('browser-task');
+    expect(page.feedback.value).toContain('保留比特浏览器窗口');
+    expect(
+      JSON.stringify({
+        filters: page.filters,
+        mark: page.markDraft.form,
+        task: page.taskUuid.value
+      })
+    ).not.toContain('synthetic-private-launch');
+    expect(Object.keys(page).some((key) => /token|grant/i.test(key))).toBe(false);
+  });
+  it('助手未连接时不创建或占用邮箱任务', async () => {
+    mocks.connectorHealth.mockRejectedValueOnce(new Error('助手离线'));
+    const page = browserPage();
+    await page.startBrowser(row);
+    expect(mocks.browserStart).not.toHaveBeenCalled();
+    expect(mocks.browserDispatch).not.toHaveBeenCalled();
+    expect(page.taskUuid.value).toBe('');
+    expect(page.busy.value).toBe(false);
+  });
+  it('派发失败保留服务端任务，提供原任务查看和取消，不自动重试或解除占用', async () => {
+    mocks.browserDispatch.mockRejectedValueOnce(new Error('synthetic-private-launch'));
+    const page = browserPage();
+    await page.startBrowser(row);
+    await nextTick();
+    expect(page.taskUuid.value).toBe('browser-task');
+    expect(page.actionError.value).toContain('任务已保留');
+    expect(page.actionError.value).toContain('查看原任务或取消');
+    expect(page.actionError.value).not.toContain('synthetic-private-launch');
+    expect(mocks.browserStart).toHaveBeenCalledOnce();
+    expect(mocks.browserDispatch).toHaveBeenCalledOnce();
+    expect(mocks.cancel).not.toHaveBeenCalled();
+    expect(mocks.recover).not.toHaveBeenCalled();
+  });
+  it('创建期间重复点击不会产生第二个浏览器任务', async () => {
+    const pending = deferred<unknown>();
+    mocks.browserStart.mockReturnValueOnce(pending.promise);
+    const page = browserPage();
+    const first = page.startBrowser(row);
+    await nextTick();
+    await page.startBrowser(row);
+    pending.resolve({ taskUuid: 'browser-task', record });
+    await first;
+    expect(mocks.browserStart).toHaveBeenCalledOnce();
+    expect(mocks.browserDispatch).toHaveBeenCalledOnce();
+  });
+  it('创建回执迟到且身份已变化时不把票据派发到助手或覆盖新身份任务', async () => {
+    const pending = deferred<unknown>();
+    mocks.browserStart.mockReturnValueOnce(pending.promise);
+    const page = browserPage();
+    const start = page.startBrowser(row);
+    await nextTick();
+    (sessionCoordinator.identityEpoch as Ref<number>).value += 1;
+    pending.resolve({ taskUuid: 'late-task', record, launchToken: 'synthetic-private-launch' });
+    await start;
+    expect(mocks.browserDispatch).not.toHaveBeenCalled();
+    expect(page.taskUuid.value).toBe('');
+    expect(page.query.refresh).not.toHaveBeenCalled();
+  });
+  it('离页时取消本机派发读取，保留已创建的原任务', async () => {
+    const pending = deferred<void>();
+    mocks.browserDispatch.mockReturnValueOnce(pending.promise);
+    const page = browserPage();
+    const start = page.startBrowser(row);
+    await vi.waitFor(() => expect(mocks.browserDispatch).toHaveBeenCalledOnce());
+    const options = mocks.browserDispatch.mock.calls[0]?.[1] as { signal: AbortSignal };
+    expect(options.signal.aborted).toBe(false);
+    scopes[0]!.stop();
+    expect(options.signal.aborted).toBe(true);
+    pending.resolve();
+    await start;
+    expect(page.feedback.value).toBe('');
+    expect(mocks.cancel).not.toHaveBeenCalled();
+  });
   it('人工历史同步先预览，关闭重开保留原始版本，成功后使主台账重新读取', async () => {
     const page = createPage();
     page.setSelection([{ ...row, registrationStatus: 'registered' }]);

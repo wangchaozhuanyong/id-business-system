@@ -96,6 +96,27 @@ export interface AppleMailboxRecord {
   authorizationStatus?: 'pending' | 'complete' | null;
 }
 
+export interface AppleMailboxBrowserRegistration {
+  phase:
+    | 'waiting_for_browser'
+    | 'claimed'
+    | 'browser_opened'
+    | 'email_submitting'
+    | 'password_submitting'
+    | 'email_code_required'
+    | 'profile_required'
+    | 'human_verification_required'
+    | 'official_identity_observed'
+    | 'identity_verifying'
+    | 'completed'
+    | 'failed'
+    | 'cancelled'
+    | 'expired'
+    | 'interrupted';
+  needAction: boolean;
+  profileId?: string;
+}
+
 export interface AppleMailboxFlowResponseDetails {
   errorSignal: 'none' | 'error' | 'errors' | 'both';
   errorShape: 'missing' | 'null' | 'object' | 'string' | 'list' | 'boolean' | 'number' | 'other';
@@ -139,6 +160,7 @@ export interface AppleMailboxFlowEvidence {
 
 export interface AppleMailboxTask {
   flowEvidence?: AppleMailboxFlowEvidence;
+  browserRegistration?: AppleMailboxBrowserRegistration;
   taskUuid: string;
   status: AppleMailboxTaskStatus;
   logs: string[];

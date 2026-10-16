@@ -190,7 +190,12 @@ export class AppleMailboxesService implements OnModuleDestroy {
     return this.manualSync.sync(value, operator);
   }
 
-  async start(value: unknown, operator: AuthenticatedUser, revalidate: () => Promise<boolean>) {
+  async start(
+    value: unknown,
+    operator: AuthenticatedUser,
+    revalidate: () => Promise<boolean>,
+    execution: 'protocol' | 'browser' = 'protocol'
+  ) {
     this.admin(operator);
     const input = this.object(value);
     this.only(input, ['aliasId', 'revision', 'proxyId', ...appleMailboxUploadKeys]);
@@ -222,10 +227,14 @@ export class AppleMailboxesService implements OnModuleDestroy {
     await this.log(operator, '发起隐藏邮箱注册', aliasId);
     if (!(await revalidate())) throw new ForbiddenException('登录状态已变化，请重新登录');
     const startedAt = Date.now();
-    const result = await this.worker.appleMailboxRequest<{
+    const transport = <T>(path: string, method: string, body: unknown) =>
+      execution === 'browser'
+        ? this.worker.appleMailboxRequest<T>(path, method, body, operator.id)
+        : this.worker.appleMailboxRequest<T>(path, method, body);
+    const result = await transport<{
       taskUuid: string;
       record: AppleMailboxRecord;
-    }>(`${privateBase}/start`, 'POST', {
+    }>(`${privateBase}/${execution === 'browser' ? 'browser/start' : 'start'}`, 'POST', {
       aliasId,
       email: normalizeEmail(mailbox.email),
       revision,
@@ -500,7 +509,8 @@ export class AppleMailboxesService implements OnModuleDestroy {
     return this.worker.appleMailboxRequest<{ accepted: boolean }>(
       `${privateBase}/tasks/${id}/cancel`,
       'POST',
-      {}
+      {},
+      operator.id
     );
   }
 
