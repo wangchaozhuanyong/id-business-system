@@ -29,6 +29,12 @@ test('form preparation budget selects bounded connector regression without other
     'test_payment_form_focus.py'
   ].map((name) => `apps/api/src/id-business-v2/auto-recharge/worker/${name}`);
   assert.equal(isRechargeFormBudgetOnly(form), true);
+  const originalRead = [
+    ...form.filter((path) => !path.endsWith('/payment_form.py')),
+    'apps/api/src/id-business-v2/auto-recharge/worker/test_native_checkout.py'
+  ];
+  assert.equal(isRechargeFormBudgetOnly(originalRead), true);
+  assert.deepEqual(selectedParts(originalRead), ['guards', 'connector']);
   assert.equal(isRechargeOnly(form, 'same', 'same'), true);
   assert.deepEqual(selectedParts(form), ['guards', 'connector']);
   assert.equal(needsOnlineRechargeCiBuild(form), false);

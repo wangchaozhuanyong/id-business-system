@@ -252,6 +252,7 @@ class NativeBrowserTests(unittest.IsolatedAsyncioTestCase):
         self.target = parse_browser_credential(fixture())
         self.writes = []
         self.total, self.tax = 110000, 11786
+        self.billing, self.partial_tax_response, self.original_reads = ADDRESS, False, 0
         self.original_plan = 'chatgptplusplan'
         await self.context.route('**/*', self.server)
 
@@ -268,7 +269,9 @@ class NativeBrowserTests(unittest.IsolatedAsyncioTestCase):
         if path.startswith('/backend-api/accounts/'):
             return await route.fulfill(json=account())
         if path == CHECKOUT_PATH + '/' + ENTITY + '/' + SID:
-            data = session();data['plan_name'] = self.original_plan
+            self.original_reads += 1
+            data = session(due=self.total, tax=self.tax, address=self.billing)
+            data['plan_name'] = self.original_plan
             return await route.fulfill(json=data)
         if path == CHECKOUT_PATH + '/taxes':
             self.writes.append(path)
@@ -277,7 +280,10 @@ class NativeBrowserTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(address['city'], 'Synthetic city')
             self.assertEqual(address['postal_code'], '97204')
             self.total, self.tax = 98214, 0
+            self.billing = address
             response = session(due=self.total, tax=self.tax, address=address)
+            if self.partial_tax_response:
+                return await route.fulfill(json={'tax_amount': 0})
             return await route.fulfill(json={'checkout_session': response})
         if request.method not in {'GET', 'HEAD', 'OPTIONS'}:
             self.writes.append(path)
@@ -328,6 +334,16 @@ class NativeBrowserTests(unittest.IsolatedAsyncioTestCase):
                 state_dir=self.root, browser_context=self.context, quote_handler=prepare,
                 guard_factory=lambda target, ledger: PaymentGuard(target, checkout_ledger=ledger))
         return page, result
+
+    async def test_partial_tax_reply_recovers_only_by_reading_same_original_checkout(self):
+        self.partial_tax_response = True
+        page, result = await self.prepare_original(form_budget=SessionBudget(30))
+        self.assertEqual(result.get('status'), 'payment_prepared', result)
+        self.assertEqual(result['quote']['today']['amount_minor'], 98214)
+        self.assertEqual(result['payment_requests_sent'], 0)
+        self.assertGreaterEqual(self.original_reads, 2)
+        self.assertEqual(self.writes, [CHECKOUT_PATH + '/taxes'])
+        self.assertIn(SID, page.url)
 
     async def test_round_budget_reprices_original_after_complete_billing_without_payment(self):
         page, result = await self.prepare_original(form_budget=SessionBudget(30))
