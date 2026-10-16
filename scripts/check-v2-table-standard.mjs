@@ -122,7 +122,7 @@ if (issues.length) {
       registeredSchemas: schemaByExpression.size,
       actionColumns: actionColumnCount,
       layout: 'fixed',
-      responsiveColumns: 'content-width-with-capped-text-growth',
+      responsiveColumns: 'container-fill-with-weighted-text-growth',
       mobileBreakpoint: 900
     })
   );
@@ -521,7 +521,7 @@ function validateSharedImplementation() {
     issues.push(`${tableColumnPath}: 数据列必须传递 schema columnKey`);
   }
   if (!/contentWidths\.columnWidth\(props\.definition\)/.test(columnSource)) {
-    issues.push(`${tableColumnPath}: 数据列必须使用共享内容宽度，禁止比例拉伸短列`);
+    issues.push(`${tableColumnPath}: 数据列必须使用共享内容测量和容器余量分配`);
   }
   for (const [source, projectPath] of [
     [columnSource, tableColumnPath],

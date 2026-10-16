@@ -2,7 +2,7 @@
 /* global document, getComputedStyle, location, requestAnimationFrame, window */
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
-import { mkdirSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { chromium } from 'playwright';
 import { loadV2TableSchemaRegistry } from './lib/v2-table-schema-registry.mjs';
@@ -11,6 +11,24 @@ const rootDir = process.cwd();
 const adminDir = path.join(rootDir, 'apps', 'admin');
 const viteCliPath = path.join(rootDir, 'node_modules', 'vite', 'bin', 'vite.js');
 const configuredAdminUrl = process.env.V2_TABLE_LAYOUT_ADMIN_URL;
+let distributionDirectory = null;
+let tableStatesOnly = false;
+let pageLayoutOnly = false;
+const args = process.argv.slice(2);
+for (let index = 0; index < args.length; index += 1) {
+  if (args[index] === '--dist-dir') {
+    const directory = args[++index];
+    assert.ok(directory && !directory.startsWith('--'), '--dist-dir 必须指定构建目录');
+    distributionDirectory = path.resolve(directory);
+  } else if (args[index] === '--table-states-only') {
+    tableStatesOnly = true;
+  } else if (args[index] === '--page-layout-only') {
+    pageLayoutOnly = true;
+  } else {
+    assert.fail(`未知验收选项：${args[index]}`);
+  }
+}
+assert.ok(!(tableStatesOnly && pageLayoutOnly), '不能同时指定表格状态和页面布局两个独立范围');
 const adminUrl = new URL(configuredAdminUrl ?? 'http://127.0.0.1:5384');
 const screenshotDirectory = process.env.V2_TABLE_LAYOUT_SCREENSHOT_DIR
   ? path.resolve(process.env.V2_TABLE_LAYOUT_SCREENSHOT_DIR)
@@ -20,6 +38,7 @@ const stabilityCheckpoints = [50, 100, 260, 500];
 const mobileBreakpoint = 900;
 const routeScrollRestoreTolerancePx = 8;
 const headerStabilityResults = [];
+const sectionSpacingResults = [];
 const blockedNetworkRequests = [];
 const registeredSchemaIds = loadRegisteredSchemaIds();
 const permissionScenarios = [
@@ -88,33 +107,56 @@ let adminServer = null;
 let browser = null;
 
 try {
-  if (!configuredAdminUrl) {
+  if (distributionDirectory) {
+    assert.ok(
+      distributionDirectory.startsWith(`${rootDir}${path.sep}`) &&
+        existsSync(path.join(distributionDirectory, 'table-layout-fixture.html')) &&
+        existsSync(path.join(distributionDirectory, 'index.html')),
+      '离线验收必须使用项目内已构建的管理端及表格夹具'
+    );
+  } else if (!configuredAdminUrl) {
     await buildSharedPackage();
     adminServer = startAdminServer(adminUrl);
   }
-  await waitForServer(adminUrl, adminServer);
+  if (!distributionDirectory) await waitForServer(adminUrl, adminServer);
 
   browser = await chromium.launch({ headless: true });
-  await warmLayoutFixture(browser);
-  await warmCustomerPage(browser);
-  await verifyLayoutFixture(browser);
-  await verifyRecordsSectionSpacing(browser);
-  await verifyHeaderAndEmptyStability(browser);
-  await verifyMailboxRelayWorkbench(browser);
-  await verifyPublicPageScroll(browser);
-  for (const scenario of permissionScenarios) {
-    await verifyCustomerPage(browser, scenario);
+  if (!pageLayoutOnly) await warmCustomerPage(browser);
+  if (!tableStatesOnly && !pageLayoutOnly) {
+    await warmLayoutFixture(browser);
+    await verifyLayoutFixture(browser);
+    console.log(
+      JSON.stringify({
+        ok: true,
+        scope: 'table-fixtures',
+        registeredSchemas: registeredSchemaIds.length
+      })
+    );
+  }
+  if (!tableStatesOnly) await verifyRecordsSectionSpacing(browser);
+  if (!pageLayoutOnly) await verifyHeaderAndEmptyStability(browser);
+  if (!tableStatesOnly) {
+    await verifyMailboxRelayWorkbench(browser);
+    await verifyPublicPageScroll(browser);
+  }
+  if (!pageLayoutOnly) {
+    for (const scenario of permissionScenarios) {
+      await verifyCustomerPage(browser, scenario);
+    }
   }
 
   console.log(
     JSON.stringify({
       ok: true,
-      actionLayouts: ['icon', 'single', 'double', 'triple', 'wide'],
-      permissionScenarios: permissionScenarios.map(({ key }) => key),
+      actionLayouts: pageLayoutOnly ? [] : ['icon', 'single', 'double', 'triple', 'wide'],
+      permissionScenarios: pageLayoutOnly ? [] : permissionScenarios.map(({ key }) => key),
       viewportWidths,
       stabilityCheckpoints: ['2rAF', ...stabilityCheckpoints.map((value) => `${value}ms`)],
-      registeredSchemas: registeredSchemaIds.length,
+      registeredSchemas: tableStatesOnly || pageLayoutOnly ? null : registeredSchemaIds.length,
+      scope: tableStatesOnly ? 'table-states' : pageLayoutOnly ? 'page-layout' : 'all',
+      offline: Boolean(distributionDirectory),
       headerStabilityResults,
+      sectionSpacingResults,
       blockedNetworkRequests
     })
   );
@@ -227,6 +269,25 @@ async function createLocalContext(browserInstance, options) {
         contentType: 'application/json',
         body: JSON.stringify({ success: false, message: '布局夹具未模拟此请求' })
       });
+      return;
+    }
+    if (distributionDirectory) {
+      const pathname =
+        url.pathname.startsWith('/v2/') || url.pathname === '/login' ? '/index.html' : url.pathname;
+      const asset = path.resolve(distributionDirectory, `.${pathname}`);
+      assert.ok(asset.startsWith(`${distributionDirectory}${path.sep}`), '离线资源越过构建目录');
+      assert.ok(existsSync(asset), `离线验收资源缺失：${pathname}`);
+      const contentType =
+        {
+          '.html': 'text/html',
+          '.js': 'application/javascript',
+          '.css': 'text/css',
+          '.svg': 'image/svg+xml',
+          '.png': 'image/png',
+          '.ico': 'image/x-icon',
+          '.woff2': 'font/woff2'
+        }[path.extname(asset)] ?? 'application/octet-stream';
+      await route.fulfill({ status: 200, contentType, body: readFileSync(asset) });
       return;
     }
     await route.continue();
@@ -457,6 +518,7 @@ async function verifyLayoutFixture(browserInstance) {
       assert.equal(await getDocumentOverflow(page), 0, `布局夹具 ${width}px 出现页面横向溢出`);
       await verifyPrimaryVerticalScroll(page, `布局夹具 ${width}px`);
     }
+    await verifyShortFieldFill(page);
     await verifyScrollLifecycle(page);
     assert.deepEqual(runtimeErrors, [], `布局夹具出现浏览器错误：${runtimeErrors.join('\n')}`);
   } finally {
@@ -521,6 +583,7 @@ async function assertRecordsSectionSpacing(page, label) {
     const pageRoot = document.querySelector('.vendure-mailbox-page');
     const selectors = [
       '.v2-page-context',
+      ':scope > .v2-async-region:has(.v2-page-overview)',
       '.vendure-mailbox-controls',
       '.vendure-mailbox-scope',
       '.v2-records-list',
@@ -544,7 +607,13 @@ async function assertRecordsSectionSpacing(page, label) {
       titleBounds: titleRect ? { width: titleRect.width, height: titleRect.height } : null
     };
   });
-  assert.ok(sections.length >= 4, `${label} 缺少待验收的页面区块`);
+  assert.ok(sections.length >= 5, `${label} 缺少待验收的页面区块`);
+  assert.ok(
+    sections.some(
+      (section) => section.selector === ':scope > .v2-async-region:has(.v2-page-overview)'
+    ),
+    `${label} 缺少自动收信健康状态区块`
+  );
   assert.ok(pageBounds, `${label} 缺少页面外框`);
   for (let index = 1; index < sections.length; index += 1) {
     const gap = sections[index].top - sections[index - 1].bottom;
@@ -567,6 +636,15 @@ async function assertRecordsSectionSpacing(page, label) {
     );
   }
   assert.equal(await getDocumentOverflow(page), 0, `${label} 出现页面横向溢出`);
+  sectionSpacingResults.push({ label, sections, pageBounds, titleBounds });
+  if (screenshotDirectory && label.startsWith('主邮箱管理')) {
+    await page.screenshot({
+      path: path.join(
+        screenshotDirectory,
+        `mailbox-spacing-${label.includes('390px') ? '390' : '1440'}.png`
+      )
+    });
+  }
 }
 
 async function verifyMailboxRelayWorkbench(browserInstance) {
@@ -1339,11 +1417,11 @@ function assertSemanticColumnLayout(measurement, label) {
     }
   }
 
-  const maximumWidths = { text: 160, identifier: 192, numeric: 128, date: 165, status: 112 };
-  for (const column of measurement.columns.filter((value) => value.kind !== 'index')) {
+  const maximumWidths = { numeric: 128, date: 165, status: 112 };
+  for (const column of measurement.columns.filter((value) => value.kind in maximumWidths)) {
     assert.ok(
       column.width <= maximumWidths[column.kind] + 1,
-      `${label} ${column.kind} 超出共享内容上限，短列不得按比例拉伸`
+      `${label} 有文本列时 ${column.kind} 未保持紧凑宽度`
     );
   }
 }
@@ -1378,6 +1456,7 @@ async function measureRegisteredSchemaFixtures(page) {
         mobileMode: table?.getAttribute('data-mobile-mode') ?? null,
         expectedColumns: Number(section.getAttribute('data-schema-columns')),
         renderedColumns: headers.length,
+        unfilledWidth: tableRect ? Math.abs(section.clientWidth - tableRect.width) : 0,
         visible,
         invalidVisibleColumnWidths: visible
           ? headers.filter((header) => {
@@ -1422,6 +1501,68 @@ function assertRegisteredSchemaFixtures(measurements, width) {
         `${width}px ${measurement.id} 存在无效列宽`
       );
       assert.ok(measurement.outsideContainer <= 1, `${width}px ${measurement.id} 表格超出容器`);
+      assert.ok(measurement.unfilledWidth <= 1, `${width}px ${measurement.id} 表格未铺满容器`);
+    }
+  }
+}
+
+async function verifyShortFieldFill(page) {
+  const section = page.locator('[data-short-fields-fixture]');
+  for (const theme of ['light', 'dark']) {
+    await page.evaluate((value) => {
+      document.documentElement.dataset.v2Theme = value;
+    }, theme);
+    for (const width of [1440, 1024, 901, 900, 768, 390]) {
+      await page.setViewportSize({ width, height: 1000 });
+      for (const textVisible of [false, true]) {
+        if (textVisible) await page.locator('[data-toggle-fixture-text]').click();
+        await settleLayout(page);
+        const measurement = await section.evaluate((container) => {
+          const table = container.querySelector('.v2-unified-table');
+          const headers = [...table.querySelectorAll('.el-table__header-wrapper th')];
+          const firstCell = table.querySelector(
+            '.el-table__body-wrapper td.v2-table-column--numeric'
+          );
+          const range = document.createRange();
+          range.selectNodeContents(firstCell.querySelector('.cell'));
+          const text = range.getBoundingClientRect();
+          const cell = firstCell.getBoundingClientRect();
+          return {
+            unfilledWidth: Math.abs(container.clientWidth - table.getBoundingClientRect().width),
+            contentWidth: headers.reduce(
+              (total, header) => total + header.getBoundingClientRect().width,
+              0
+            ),
+            frameWidth: table.getBoundingClientRect().width,
+            headers: headers.map((header) => ({
+              text: header.textContent.trim(),
+              width: header.getBoundingClientRect().width
+            })),
+            numericTextFits: text.left >= cell.left - 1 && text.right <= cell.right + 1
+          };
+        });
+        const label = `${theme} ${width}px ${textVisible ? '恢复文本列' : '仅短字段'}`;
+        assert.ok(measurement.unfilledWidth <= 1, `${label} 表格未铺满容器`);
+        assert.ok(
+          measurement.contentWidth >= measurement.frameWidth - 1,
+          `${label} 表内仍有尾部空白`
+        );
+        assert.ok(measurement.numericTextFits, `${label} 金额文字越过单元格`);
+        assert.equal(measurement.headers.length, textVisible ? 5 : 4, `${label} 隐藏列仍占空间`);
+        assertActionGroupsFit(
+          await measureActionGroups(page, '[data-short-fields-fixture]'),
+          label
+        );
+        if (screenshotDirectory && width === 1440) {
+          await section.screenshot({
+            path: path.join(
+              screenshotDirectory,
+              `fill-${theme}-${textVisible ? 'text' : 'short'}.png`
+            )
+          });
+        }
+      }
+      await page.locator('[data-toggle-fixture-text]').click();
     }
   }
 }

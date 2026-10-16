@@ -56,31 +56,35 @@ export function allocateV2TableContentWidths(
     0,
     Math.floor(containerWidth) - Object.values(widths).reduce((a, b) => a + b, 0)
   );
-  // Long text gets space first. Short status, numeric and date columns never stretch.
-  for (const presets of [['longText'], ['wide', 'identifier', 'inlineContent'], ['standard']]) {
-    const candidates = columns.filter(
-      (column) =>
-        isV2TableDataColumn(column) &&
-        !column.pin &&
-        ['text', 'identifier'].includes(column.kind) &&
-        presets.includes(column.widthPreset)
-    );
-    for (let remaining = candidates.length; remaining > 0; remaining -= 1) {
-      const column = candidates[candidates.length - remaining];
-      if (!isV2TableDataColumn(column)) continue;
-      const addition = Math.min(
-        Math.ceil(spare / remaining),
-        Math.max(0, V2_TABLE_COLUMN_WIDTH[column.widthPreset] - widths[column.key])
-      );
-      widths[column.key] += addition;
-      spare -= addition;
-    }
+  const dataColumns = columns.filter(isV2TableDataColumn);
+  const textColumns = dataColumns.filter((column) => ['text', 'identifier'].includes(column.kind));
+  // Prefer unpinned text. Short fields only grow when no text remains visible.
+  const candidates =
+    [
+      textColumns.filter((column) => !column.pin),
+      textColumns,
+      dataColumns.filter((column) => !column.pin && column.kind !== 'index'),
+      dataColumns.filter((column) => column.kind !== 'index')
+    ].find((group) => group.length) ?? [];
+  const weightedColumns = candidates.map((column) => ({
+    column,
+    weight: !textColumns.length
+      ? 1
+      : column.widthPreset === 'longText'
+        ? 3
+        : ['wide', 'identifier', 'inlineContent'].includes(column.widthPreset)
+          ? 2
+          : 1
+  }));
+  let remainingWeight = weightedColumns.reduce((total, { weight }) => total + weight, 0);
+  for (const { column, weight } of weightedColumns) {
+    const addition = Math.floor((spare * weight) / remainingWeight);
+    widths[column.key] += addition;
+    spare -= addition;
+    remainingWeight -= weight;
   }
   return {
     widths,
-    tableWidth: Math.min(
-      containerWidth,
-      Object.values(widths).reduce((a, b) => a + b, 0)
-    )
+    tableWidth: containerWidth
   };
 }

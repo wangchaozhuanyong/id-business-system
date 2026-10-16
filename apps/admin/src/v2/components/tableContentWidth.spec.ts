@@ -47,20 +47,82 @@ describe('content fitted table widths', () => {
     expect(getV2TableContentBaseWidth(columns[4], { header: 40, content: 24 })).toBe(52);
   });
 
-  it('gives spare room to text within its cap without stretching short fields', () => {
+  it('fills the container through text without stretching short fields or actions', () => {
     const base = { status: 78, amount: 108, remark: 80, createdAt: 165, actions: 340 };
     const narrow = allocateV2TableContentWidths(columns, base, 600);
     const wide = allocateV2TableContentWidths(columns, base, 1800);
     expect(narrow.widths).toEqual(base);
     expect(narrow.tableWidth).toBe(600);
-    expect(wide.widths).toEqual({ ...base, remark: 224 });
-    expect(wide.tableWidth).toBe(915);
+    expect(wide.widths).toEqual({ ...base, remark: 1109 });
+    expect(wide.tableWidth).toBe(1800);
+  });
+
+  it('shares spare room between text fields with more room for longer content', () => {
+    const textColumns = [
+      { key: 'name', label: '名称', kind: 'text', widthPreset: 'standard' },
+      { key: 'email', label: '邮箱', kind: 'identifier', widthPreset: 'identifier' },
+      columns[2],
+      columns[4]
+    ] as const satisfies readonly V2TableColumnDefinition[];
+    const fitted = allocateV2TableContentWidths(
+      textColumns,
+      { name: 80, email: 112, remark: 80, actions: 100 },
+      973.5
+    );
+    expect(fitted.widths).toEqual({ name: 180, email: 312, remark: 381, actions: 100 });
+    expect(fitted.tableWidth).toBe(973.5);
+    expect(Object.values(fitted.widths).reduce((total, width) => total + width, 0)).toBe(973);
+  });
+
+  it('keeps pinned identifiers compact when other text can fill the page', () => {
+    const pinned = { ...columns[2], key: 'id', kind: 'identifier', pin: 'start' } as const;
+    const fitted = allocateV2TableContentWidths(
+      [pinned, columns[2], columns[4]],
+      { id: 192, remark: 80, actions: 100 },
+      1000
+    );
+    expect(fitted.widths).toEqual({ id: 192, remark: 708, actions: 100 });
+
+    const onlyPinnedText = allocateV2TableContentWidths(
+      [pinned, columns[0], columns[4]],
+      { id: 192, status: 64, actions: 100 },
+      1000
+    );
+    expect(onlyPinnedText.widths).toEqual({ id: 836, status: 64, actions: 100 });
+  });
+
+  it('shares spare room between short fields only when no text is visible', () => {
+    const fixedColumns = [
+      { key: 'select', label: '选择', kind: 'control', control: 'selection', width: 46 },
+      { key: 'index', label: '序号', kind: 'index', widthPreset: 'index' }
+    ] as const satisfies readonly V2TableColumnDefinition[];
+    const fitted = allocateV2TableContentWidths(
+      [...fixedColumns, columns[0], columns[1], columns[3], columns[4]],
+      { status: 78, amount: 108, createdAt: 165, actions: 100 },
+      1200
+    );
+    expect(fitted.widths).toEqual({
+      select: 46,
+      index: 72,
+      status: 288,
+      amount: 318,
+      createdAt: 376,
+      actions: 100
+    });
+    expect(fitted.tableWidth).toBe(1200);
+  });
+
+  it('fills the frame without stretching action or control columns when all data is hidden', () => {
+    const fitted = allocateV2TableContentWidths([columns[4]], { actions: 100 }, 1200);
+    expect(fitted).toEqual({ widths: { actions: 100 }, tableWidth: 1200 });
+    expect(allocateV2TableContentWidths([], {}, 1200)).toEqual({ widths: {}, tableWidth: 1200 });
   });
 
   it('does not reserve space for hidden columns or allow column key collisions', () => {
     const visible = allocateV2TableContentWidths([columns[0], columns[4]], { status: 78 }, 1800);
     expect(Object.keys(visible.widths)).toEqual(['status', 'actions']);
-    expect(visible.tableWidth).toBe(418);
+    expect(visible.widths).toEqual({ status: 1460, actions: 340 });
+    expect(visible.tableWidth).toBe(1800);
     expect(getV2TableColumnKeyClass('国家')).toMatch(/^v2-table-key-[0-9a-f-]+$/);
     expect(getV2TableColumnKeyClass('a.b')).not.toBe(getV2TableColumnKeyClass('a-b'));
   });
