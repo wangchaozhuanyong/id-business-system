@@ -23,6 +23,8 @@ export const chatgptSalesPaths = Object.freeze([
   'scripts/ci-chatgpt-sales-scope.mjs',
   'scripts/ci-chatgpt-sales-scope.test.mjs',
   'scripts/ci-recharge-scope.mjs',
+  'scripts/lib/owned-mysql-test-instance.mjs',
+  'scripts/lib/owned-mysql-test-instance.test.mjs',
   'scripts/ci-recharge-check.mjs',
   'apps/api/src/id-business-v2/online-recharge/engine/proxy-connection.cjs',
   'apps/api/src/id-business-v2/online-recharge/engine/SOURCE_MANIFEST.json'
@@ -32,6 +34,7 @@ const controlPaths = new Set(
     (n) =>
       n.startsWith('scripts/production-release/chatgpt-sales-') ||
       n.startsWith('scripts/ci-chatgpt-sales-') ||
+      n.startsWith('scripts/lib/owned-mysql-test-instance') ||
       [
         'scripts/ci-recharge-check.mjs',
         'scripts/ci-recharge-scope.mjs',
@@ -82,7 +85,14 @@ export function chatgptSalesCommands(part, paths) {
       ...(formatted.length ? [npm('exec', '--', 'prettier', '--check', ...formatted)] : []),
       ...(linted.length ? [npm('exec', '--', 'eslint', ...linted)] : []),
       ['python3', '-B', 'scripts/production-release/chatgpt-sales-release.test.py'],
-      ['node', '--test', 'scripts/ci-chatgpt-sales-scope.test.mjs']
+      [
+        'node',
+        '--test',
+        'scripts/ci-chatgpt-sales-scope.test.mjs',
+        ...(paths.some((n) => n.startsWith('scripts/lib/owned-mysql-test-instance'))
+          ? ['scripts/lib/owned-mysql-test-instance.test.mjs']
+          : [])
+      ]
     ];
   }
 
