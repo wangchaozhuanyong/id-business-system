@@ -73,7 +73,17 @@ def prepare():
             for name in {**c['sources'], **c['validationSources']}:
                 destination = context / name
                 destination.parent.mkdir(parents=True, exist_ok=True)
-                destination.write_bytes((ROOT / name).read_bytes())
+                raw = (ROOT / name).read_bytes()
+                if name.endswith('/auto-registration/apple-mailboxes.service.spec.ts'):
+                    # Preserve the deployed fixture; add only this task's eight regression cases.
+                    text = raw.decode()
+                    first = text.index("  it.each(['unregistered', 'unknown'] as const)(")
+                    marker = "  it('自动选择固定服务器邮箱"
+                    last = text.index(marker, first)
+                    baseline_text = destination.read_text()
+                    need(baseline_text.count(marker) == 1, 'VALIDATION_FIXTURE_CHANGED')
+                    raw = baseline_text.replace(marker, text[first:last] + marker, 1).encode()
+                destination.write_bytes(raw)
         p.verify_runtime_schema(context, c)
         run('npm', 'ci', '--ignore-scripts', '--no-audit', '--no-fund', cwd=context)
         run('npm', 'run', 'prisma:mysql:generate', '--workspace', 'apps/api', cwd=context)

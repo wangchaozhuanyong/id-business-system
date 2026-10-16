@@ -1295,7 +1295,7 @@
     "scripts/ci-mailbox-realtime-scope.test.mjs": "a6ff492b8563c470de0d246be18bc1033cb9252ecd671119c59e96dd80014a5a",
     "scripts/ci-recharge-check.mjs": "300eb1afef187c213ccd8792f35af67eb6113beb02977a87bb353d51c82cb56b",
     "scripts/ci-recharge-scope.mjs": "7c7a092b6f3785a2722bb0cee194fa15f02e25950f6d95ea985a5ea754d536d7",
-    "scripts/production-release/mailbox-realtime-build.py": "8cfccc0d3a758f35dce25bd34de56b87a3ac1f765ef055a38f8f1e8c5f872f45",
+    "scripts/production-release/mailbox-realtime-build.py": "d693158d5c89ac7283ac0d4e387204e3138c6425266c157f012ee6f9dab57f8c",
     "scripts/production-release/mailbox-realtime-dispatch.py": "b3ee5e4c40d2af93d6a8f58c76ad4ff5238843b86e5d7e1ceefeb9b8398bed13",
     "scripts/production-release/mailbox-realtime-release.py": "8997ec61dd659bf2a11583eb0720e8b2672bcbb003ddf5590cbf93c42f8a5eee",
     "scripts/production-release/mailbox-realtime-release.test.py": "ea2ad144486f506e37b2d86d540c82f49d4c42e1d5eda0c517f61e0a06ef856e"
