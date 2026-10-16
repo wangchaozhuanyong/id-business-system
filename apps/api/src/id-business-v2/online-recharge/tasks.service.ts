@@ -37,14 +37,15 @@ export class OnlineRechargeTasksService {
     raw: unknown,
     operator?: AuthenticatedUser,
     operation: OnlineRechargeOperation = 'recharge',
-    full = false
+    full = false,
+    integrationSource?: string
   ) {
     const input = object(raw);
     if (['recharge', 'debug', 'subscription', 'renewal'].includes(operation))
       session(input.session, full);
     if (input.recheckTaskId && (!operator || input.action !== 'recheck'))
       throw new BadRequestException('原任务核对只允许授权管理流程');
-    return this.tasks.start(input, operator, operation, full);
+    return this.tasks.start(input, operator, operation, full, integrationSource);
   }
   action(section: string, action: string, raw: unknown, operator: AuthenticatedUser) {
     if (['reveal', 'export', 'checkout-link'].includes(action)) assertOnlineSensitive(operator);

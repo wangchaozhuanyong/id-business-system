@@ -58,6 +58,9 @@ workspace = load('api_workspace_scope', 'api-admin-scope.py', 'API_ADMIN_WORKSPA
 PRIVATE_INSPECT_ORIGINAL = workspace.workspace_private_inspect
 SUMMARY_READER_ORIGINAL = workspace.WorkspaceSqliteProtection.summary_reader
 REGISTRATION_FIXTURE_COMMIT = '4042b5f2c673344409e329607bd43a893ba521bb'
+# The old standalone reader tests belong to the immutable published B helper.
+LEGACY_WORKSPACE_SAFETY = subprocess.check_output(['git', 'show',
+    '31d2c6885a45817cd40d23fce8d6145bc9f18af2:' + workspace.WORKSPACE_SAFETY], cwd=ROOT)
 
 
 @contextmanager
@@ -3938,7 +3941,7 @@ class WorkspaceSqliteProtectionTests(unittest.TestCase):
         with self.fixture(wal=True) as f:
             helper=f.target/workspace.WORKSPACE_SAFETY
             helper.parent.mkdir(parents=True,mode=0o700)
-            helper.write_bytes((ROOT/workspace.WORKSPACE_SAFETY).read_bytes())
+            helper.write_bytes(LEGACY_WORKSPACE_SAFETY)
             before_crypto={name for name in sys.modules if name.startswith('cryptography')}
             summary=SUMMARY_READER_ORIGINAL(f.gate)
             self.assertEqual(before_crypto,{name for name in sys.modules if name.startswith('cryptography')})
@@ -3956,7 +3959,7 @@ class WorkspaceSqliteProtectionTests(unittest.TestCase):
     def test_real_source_loader_reproduces_cache_but_reader_preserves_source_and_summary(self):
         with self.fixture(wal=True) as f, patch.object(sys, 'dont_write_bytecode', False), patch.object(
                 sys, 'pycache_prefix', None):
-            raw = (ROOT / workspace.WORKSPACE_SAFETY).read_bytes()
+            raw = LEGACY_WORKSPACE_SAFETY
             helper = f.target / workspace.WORKSPACE_SAFETY
             helper.parent.mkdir(parents=True); helper.write_bytes(raw)
             legacy_root = f.target.parent / 'legacy-reader'
@@ -3992,7 +3995,7 @@ class WorkspaceSqliteProtectionTests(unittest.TestCase):
                 sys, 'pycache_prefix', None), patch.object(
                 workspace.WorkspaceSqliteProtection, 'summary_reader', SUMMARY_READER_ORIGINAL):
             helper = f.target / workspace.WORKSPACE_SAFETY
-            helper.parent.mkdir(parents=True); helper.write_bytes((ROOT / workspace.WORKSPACE_SAFETY).read_bytes())
+            helper.parent.mkdir(parents=True); helper.write_bytes(LEGACY_WORKSPACE_SAFETY)
             reader = SUMMARY_READER_ORIGINAL(f.gate)
             expected = reader(f.writer)
             inode = f.database.stat().st_ino
