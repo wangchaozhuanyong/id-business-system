@@ -15,7 +15,7 @@ const apiBindings = {
     compiled: '6e46a6ad29a90e3f7f5bfd625e46dedba7f9aea15a3818b9f466e610008ccaad'
   },
   'id-business-v2/proxy-pool/persistence/online-proxy.repository.js': {
-    source: 'e00a489a70481314d5a4e8c06e55b4d292ca0e35465aa87c1af40897496713d2',
+    source: 'e0987822497ca7e84cc862e5f5cc692f9dc66c050df3991cad37974483c5641a',
     compiled: 'a335c9f9fdcc61dc785856b4e6e7d36831af0156dce5604960784954cb624387'
   }
 };
@@ -29,11 +29,11 @@ function loadPublishedApi(relativePath, dependencies) {
   assert.equal(
     createHash('sha256').update(raw).digest('hex'),
     apiBindings[relativePath][publishedApiRoot ? 'compiled' : 'source'],
-    'The strict API consumer must remain the verified published 7c source'
+    'The API fixture must match the reviewed current source or the frozen published compiled base'
   );
   let code = raw.toString('utf8');
   if (!publishedApiRoot) {
-    // A pure transpile executes the exact frozen consumer without building an API or client.
+    // Execute the reviewed current consumer; compiled historical-image fixtures keep their own pin.
     const ts = require('typescript');
     const transpiled = ts.transpileModule(code, {
       fileName: filename,
@@ -85,7 +85,10 @@ const { OnlineProxyPoolRepository } = loadPublishedApi(
       bankRechargeObject: () => assert.fail('No command input is used in this receipt test'),
       bankRechargeId: () => assert.fail('No command input is used in this receipt test')
     },
-    '../proxy-test': apiProxyTest
+    '../proxy-test': apiProxyTest,
+    '../proxy-pool-validation': {
+      proxyCountry: () => assert.fail('The receipt identity fixture does not select a country')
+    }
   }
 );
 

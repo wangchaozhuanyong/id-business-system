@@ -229,9 +229,9 @@
     {
       "path": "test/proxy-result-identity.test.cjs",
       "originalSha256": null,
-      "adaptedSha256": "0e954be288783466bee0e69fb6863429b72e9d6e5d50c9a3ba6957b34479030e",
+      "adaptedSha256": "5d42501598b25091fc6e628aa75e04ac26c2b2eac63ac90d713de9c3023afb76",
       "changed": true,
-      "reason": "纯离线回归实际 API：子进程与父进程两次脱敏、规范及纯数字 UUID、同值秘密碰撞、凭据负例、失败原因、资源和连接版本严格匹配。"
+      "reason": "纯离线回归实际 API：子进程与父进程两次脱敏、规范及纯数字 UUID、同值秘密碰撞、凭据负例、失败原因、资源和连接版本严格匹配。 当前源码绑定新增国家筛选后的 API，历史镜像夹具保留原编译指纹；生产执行器镜像不变。"
     },
     {
       "path": "test/proxy-test.test.cjs",

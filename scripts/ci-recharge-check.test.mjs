@@ -9,6 +9,10 @@ import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import test from 'node:test';
+import {
+  onlineProxyCountryPaths,
+  onlineProxyCountryCommands
+} from './ci-online-proxy-country-scope.mjs';
 import { fileURLToPath } from 'node:url';
 import {
   onlineRechargeRecoveryPolicy,
@@ -42,6 +46,20 @@ const readonlyMetadataPrevious = readonlyMetadataCurrent
     "commit.get('commit', {}).get('tree', {}).get('sha')"
   );
 const readonlyMetadataFixture = { readonlyBaseSource: readonlyMetadataPrevious };
+
+test('proxy country dispatcher executes each affected part and closes before historical publishers', () => {
+  for (const part of ['guards', 'api', 'admin', 'online-engine']) {
+    const calls = recordGuardCommands('recharge', onlineProxyCountryPaths, part);
+    assert.deepEqual(calls, [
+      ...onlineProxyCountryCommands(part, onlineProxyCountryPaths),
+      ['process-exit', 0]
+    ]);
+  }
+  assert.throws(
+    () => recordGuardCommands('recharge', onlineProxyCountryPaths, 'migration'),
+    /Unsupported proxy country check part/
+  );
+});
 
 test('exact migration query repair retains fresh release tests and selector gates without the historical prefix', () => {
   const paths = [

@@ -1,5 +1,7 @@
 import {
   isRegistrationFlowEvidenceOnly,
+  isRegistrationFlowEvidenceControlRepair,
+  registrationFlowEvidenceRepairBase,
   registrationFlowEvidenceBase,
   registrationFlowEvidenceWorker,
   registrationFlowEvidenceAcceptance
@@ -11,6 +13,10 @@ import {
   proxyResultIdentityEngineTests
 } from './ci-proxy-result-identity-scope.mjs';
 import { readRegistrationNativeReuse } from './ci-registration-closure-native-reuse.mjs';
+import {
+  isOnlineProxyCountryOnly,
+  onlineProxyCountryCommands
+} from './ci-online-proxy-country-scope.mjs';
 import {
   isRegistrationEnvironmentRepair,
   registrationEnvironmentRepairBase,
@@ -76,6 +82,13 @@ const changed = execFileSync('git', ['diff', '--name-only', base, 'HEAD'], { enc
   .trim()
   .split('\n')
   .filter(Boolean);
+// This API/Admin feature preserves the deployed engine image. Run every affected
+// source/test/build/UI check; the main-only workflow verifies disposable MySQL.
+// Any additional runtime, schema or dependency path uses the existing dispatcher.
+if (mode === 'recharge' && isOnlineProxyCountryOnly(changed)) {
+  for (const [file, ...args] of onlineProxyCountryCommands(part, changed)) run(file, args);
+  process.exit(0);
+}
 const registrationFlowEvidenceOnly =
   mode === 'recharge' &&
   base === registrationFlowEvidenceBase &&
@@ -83,7 +96,17 @@ const registrationFlowEvidenceOnly =
     base,
     baseTree: execFileSync('git', ['rev-parse', base + '^{tree}'], { encoding: 'utf8' }).trim()
   });
-if (registrationFlowEvidenceOnly && ['guards', 'api', 'admin', 'release-controls'].includes(part)) {
+const registrationFlowEvidenceControlRepair =
+  mode === 'ci-only' &&
+  base === registrationFlowEvidenceRepairBase &&
+  isRegistrationFlowEvidenceControlRepair(changed, {
+    base,
+    baseTree: execFileSync('git', ['rev-parse', base + '^{tree}'], { encoding: 'utf8' }).trim()
+  });
+if (
+  (registrationFlowEvidenceOnly && ['guards', 'api', 'admin', 'release-controls'].includes(part)) ||
+  (registrationFlowEvidenceControlRepair && part === 'guards')
+) {
   if (part === 'guards' || part === 'release-controls') {
     run('python3', ['-B', 'scripts/production-release/registration-flow-evidence-release.test.py']);
     run('node', [
@@ -97,16 +120,17 @@ if (registrationFlowEvidenceOnly && ['guards', 'api', 'admin', 'release-controls
     if (formatted.length) npm('exec', '--', 'prettier', '--check', ...formatted);
     const linted = existing.filter((path) => /\.(?:[cm]?js|ts|vue)$/.test(path));
     if (linted.length) npm('exec', '--', 'eslint', ...linted);
-    for (const name of [
-      'check:admin-ui',
-      'check:v2-ui-language',
-      'check:v2-color-contrast',
-      'check:v2-table-standard',
-      'check:v2-loading-standard',
-      'check:v2-module-architecture',
-      'check:v2-isolation'
-    ])
-      npm('run', name);
+    if (registrationFlowEvidenceOnly)
+      for (const name of [
+        'check:admin-ui',
+        'check:v2-ui-language',
+        'check:v2-color-contrast',
+        'check:v2-table-standard',
+        'check:v2-loading-standard',
+        'check:v2-module-architecture',
+        'check:v2-isolation'
+      ])
+        npm('run', name);
   } else {
     npm('ci', '--ignore-scripts', '--no-audit', '--no-fund');
     npm('run', 'prisma:mysql:generate');

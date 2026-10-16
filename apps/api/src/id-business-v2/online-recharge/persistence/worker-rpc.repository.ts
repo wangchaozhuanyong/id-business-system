@@ -14,6 +14,7 @@ import { OnlineRechargeRepository } from './online-recharge.repository';
 import { OnlineRechargeArtifactsService } from '../artifacts.service';
 import { FieldEncryptionService } from '../../../common/crypto/field-encryption.service';
 import { id, object, text } from '../validation';
+import { onlineProxyCountry } from '../proxy-input';
 
 export function secureEqual(left: unknown, right: string | undefined) {
   if (typeof left !== 'string' || !right || right.length < 32) return false;
@@ -132,13 +133,21 @@ export class OnlineRechargeWorkerRpcRepository {
               : {};
           if (row.operation === 'proxy_test' && typeof payload.proxyConnectionVersion !== 'string')
             throw new ConflictException('旧检测缺少连接版本，请重新检测');
+          const countryCode =
+            row.operation === 'proxy_test'
+              ? undefined
+              : onlineProxyCountry(
+                  payload.proxyCountryCode ??
+                    (await this.settings.internal()).settings.proxyCountryCode
+                );
           const proxy = await this.proxies.active(
             tx,
             proxyId ?? undefined,
             payload.proxyPoolReference === true,
             row.operation === 'proxy_test' && typeof payload.proxyConnectionVersion === 'string'
               ? payload.proxyConnectionVersion
-              : undefined
+              : undefined,
+            countryCode
           );
           await tx.onlineRechargeTask.update({
             where: { id: row.id },
@@ -147,6 +156,7 @@ export class OnlineRechargeWorkerRpcRepository {
                 ...payload,
                 proxyId: proxy.id,
                 proxyPoolReference: true,
+                ...(countryCode ? { proxyCountryCode: countryCode } : {}),
                 ...(row.operation === 'proxy_test'
                   ? { proxyConnectionVersion: proxy.connectionVersion }
                   : {})

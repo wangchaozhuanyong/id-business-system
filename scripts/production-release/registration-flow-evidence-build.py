@@ -80,7 +80,7 @@ def verify_sources(contract):
     worker_files = {name.removeprefix(WORKER): value for name, value in sources.items()
                     if name.startswith(WORKER) and not Path(name).name.startswith('test_')}
     need(worker_files == contract['workerFiles'] and 'flow_evidence.py' in worker_files
-         and all('/' not in name and re.fullmatch('[a-z0-9_-]+\.(?:py|js|css)', name) for name in worker_files),
+         and all('/' not in name and re.fullmatch(r'[a-z0-9_-]+\.(?:py|js|css)', name) for name in worker_files),
          'WORKER_SCOPE_CHANGED')
     need(contract['apiModules'] and all(name.startswith('id-business-v2/auto-registration/')
          and name.endswith('.js') for name in contract['apiModules']), 'API_MODULE_SCOPE_CHANGED')
@@ -299,6 +299,7 @@ def validate():
     contract = json.loads(CONTRACT.read_bytes())
     context = OUTPUT / 'candidate'
     python = OUTPUT / 'python/bin/python'
+    (context / '.runtime').mkdir(parents=True, exist_ok=True)
     for module in contract['pythonTests']:
         need(re.fullmatch('test_[a-z0-9_]+', module), 'PYTHON_TEST_PATH_INVALID')
         run(str(python), '-B', '-m', 'unittest', module, cwd=context / WORKER)
