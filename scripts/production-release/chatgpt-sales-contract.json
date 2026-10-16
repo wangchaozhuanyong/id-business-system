@@ -1,6 +1,22 @@
 {
   "adminNodeEnv": "production",
   "adminPublishedSources": {
+    "apps/admin/src/v2/features/auto-registration/V2AppleMailboxes.vue": {
+      "commit": "e3e1360f977e003987573f2d2e042b883a2f5ac8",
+      "sha256": "02e301028cf6cf5cdc6d3ff2a469f315326e8274b06800a87c44d434ef7e6fd7"
+    },
+    "apps/admin/src/v2/features/auto-registration/apple-mailbox-presentation.spec.ts": {
+      "commit": "e3e1360f977e003987573f2d2e042b883a2f5ac8",
+      "sha256": "edd247d2e4f3271388a3d14ece0ebbb250009938843d521b106c35a9ac60fdd1"
+    },
+    "apps/admin/src/v2/features/auto-registration/apple-mailbox-presentation.ts": {
+      "commit": "e3e1360f977e003987573f2d2e042b883a2f5ac8",
+      "sha256": "2b3ff8c58c90d18cde3d3298f2f5d7af14e3882cf0a6a34f3dd1054d46e581e4"
+    },
+    "apps/admin/src/v2/features/auto-registration/contracts.ts": {
+      "commit": "e3e1360f977e003987573f2d2e042b883a2f5ac8",
+      "sha256": "66f36710063c4b08ac277aa4d4a2bea1d904d83b5632140b15582e5ebbcc78ee"
+    },
     "apps/admin/src/v2/features/online-recharge/V2OnlineConfigView.vue": {
       "commit": "b4beae76ac7ce69d5475473054a22b945bda5898",
       "sha256": "7b127a237170e9f28f8ce1537a3a2c950b9ba98f5dbbea1034ab8166c203b742"
@@ -23,7 +39,7 @@
   "apiSourceBaselineTree": "283b0749281572da98f75bed317f81816d030591",
   "backupNormalizerPath": "/opt/id-business-v2/releases/20261015T091200Z-e197218c8b38-recharge-record/scripts/mysql-dump-restore-normalizer.sed",
   "backupNormalizerSha256": "ca9b05f832e9ed73bb36b7e76c083c99a40b13e067850166f8715bae469e5202",
-  "baselineAdminBuildId": "v2-b4beae76ac7ce69d5475473054a22b945bda5898",
+  "baselineAdminBuildId": "v2-e3e1360f977e003987573f2d2e042b883a2f5ac8",
   "buildInputs": {
     "admin": {
       ".npmrc": null,
@@ -66,10 +82,10 @@
     "sha256": "6c601b9d0bdebfa8b6bd3bd0209eceee6cf8b9e25992c8fdfa081fd587a79d4a"
   },
   "publishedAdminOrigin": {
-    "commit": "b4beae76ac7ce69d5475473054a22b945bda5898",
-    "path": ".github/workflows/online-proxy-country-validation.yml",
-    "runId": "38860530544",
-    "sourceTree": "224afb961d72315c5412c62c75b4f228fc98e01d"
+    "commit": "e3e1360f977e003987573f2d2e042b883a2f5ac8",
+    "path": ".github/workflows/registration-closure-validation.yml",
+    "runId": "38866310737",
+    "sourceTree": "c08b181234ef15a07950cc9e3e1f334524d29c88"
   },
   "reviewBase": "88bce5ab09d20cd303f1fdd5fe310cb0b42e1451",
   "scope": "CHATGPT_ACCOUNT_SALES_20261016",
