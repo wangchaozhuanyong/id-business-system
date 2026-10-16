@@ -60,6 +60,7 @@ test('original checkout source recovery keeps API and control checks without unr
   assert.equal(needsOnlineRechargeCiBuild(recovery), false);
   for (const extra of [
     'package-lock.json',
+    'scripts/ci-recharge-scope.mjs',
     'apps/api/prisma-mysql/schema.prisma',
     'apps/api/src/auth/auth.service.ts',
     'apps/api/src/id-business-v2/online-recharge/public.controller.ts',

@@ -62,7 +62,10 @@ def verify_sources(c):
             need(git('ls-tree', 'HEAD', '--', name) == git('ls-tree', c['reviewBase'], '--', name), 'DEPENDENCY_INPUT_CHANGED')
             need((digest(git('show', before + ':' + name)) if git('ls-tree', before, '--', name).strip() else None)
                  == c['buildInputs'][role][name], 'PUBLISHED_BUILD_INPUT_CHANGED')
-    need(not git('diff', '--name-only', c['apiSourceBaseline'], 'HEAD', '--', 'apps/api/prisma-mysql/').strip(), 'SCHEMA_CHANGED')
+    # HEAD can contain other, separately released main work. The finite overlay
+    # is checked against its review base; both build contexts use the same
+    # published API schema and only the declared auto-recharge sources are copied.
+    need(not git('diff', '--name-only', c['reviewBase'], 'HEAD', '--', 'apps/api/prisma-mysql/').strip(), 'SCHEMA_CHANGED')
     # Compare the actual Prisma call ASTs; the repository change is post-query qualification only.
     name = 'apps/api/src/id-business-v2/auto-recharge/persistence/recharge.repository.ts'
     driver = """const fs=require('fs'),ts=require('typescript');const input=JSON.parse(fs.readFileSync(0,'utf8'));
@@ -105,6 +108,8 @@ def prepare(c):
             run('npm', 'run', 'build', '--workspace', '@apple-business/shared', cwd=context)
             if role == 'api':
                 run('npm', 'run', 'prisma:mysql:generate', '--workspace', '@apple-business/api', cwd=context)
+    need(inventory(OUTPUT / 'api-baseline/apps/api/prisma-mysql') ==
+         inventory(OUTPUT / 'api-candidate/apps/api/prisma-mysql'), 'DATABASE_INPUT_CHANGED')
 
 
 def build(c, passed):

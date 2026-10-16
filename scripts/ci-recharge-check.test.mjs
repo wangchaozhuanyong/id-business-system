@@ -67,6 +67,10 @@ test('checkout source recovery runs its native controls and the API suite withou
   assert.ok(guards.some((row) => row.includes('check:v2-module-architecture')));
   assert.ok(guards.some((row) => row.includes('check:v2-isolation')));
   assert.ok(guards.some((row) => row.includes('check:v2-prisma-runtime-boundary')));
+  const controlTests = guards.find((row) => row[0] === 'node' && row[1] === '--test');
+  assert.ok(controlTests.includes('scripts/ci-recharge-checkout-scope.test.mjs'));
+  assert.ok(controlTests.includes('scripts/ci-recharge-check.test.mjs'));
+  assert.equal(controlTests.includes('scripts/ci-recharge-scope.test.mjs'), false);
   assert.deepEqual(guards.at(-1), ['process-exit', 0]);
   assert.equal(
     guards.some((row) =>

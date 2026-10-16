@@ -845,27 +845,36 @@ if (part === 'guards') {
         'scripts/ci-recharge-checkout-scope.test.mjs',
         'scripts/ci-registration-closure-native-reuse.test.mjs'
       ]
-    : isRechargeCheckoutOnly(changed)
+    : isRechargeSourceRecoveryOnly(changed)
       ? [
           'scripts/ci-recharge-checkout-scope.test.mjs',
-          'scripts/ci-recharge-scope.test.mjs',
           'scripts/ci-recharge-check.test.mjs',
           'scripts/check-cloud-independence.test.mjs',
           'scripts/check-v2-prisma-runtime-boundary.test.mjs',
           'scripts/check-v2-module-architecture.test.mjs',
           'scripts/admin-layout-rules.test.mjs'
         ]
-      : (rechargeAvailabilityCommonControlTests(changed) ?? [
-          'scripts/ci-recharge-scope.test.mjs',
-          'scripts/ci-recharge-check.test.mjs',
-          'scripts/check-cloud-independence.test.mjs',
-          'scripts/check-v2-prisma-runtime-boundary.test.mjs',
-          'scripts/check-v2-module-architecture.test.mjs',
-          'scripts/ci-recharge-precision.test.mjs',
-          'scripts/ci-change-scope.test.mjs',
-          'scripts/ci-recharge-release.test.mjs',
-          'scripts/admin-layout-rules.test.mjs'
-        ]);
+      : isRechargeCheckoutOnly(changed)
+        ? [
+            'scripts/ci-recharge-checkout-scope.test.mjs',
+            'scripts/ci-recharge-scope.test.mjs',
+            'scripts/ci-recharge-check.test.mjs',
+            'scripts/check-cloud-independence.test.mjs',
+            'scripts/check-v2-prisma-runtime-boundary.test.mjs',
+            'scripts/check-v2-module-architecture.test.mjs',
+            'scripts/admin-layout-rules.test.mjs'
+          ]
+        : (rechargeAvailabilityCommonControlTests(changed) ?? [
+            'scripts/ci-recharge-scope.test.mjs',
+            'scripts/ci-recharge-check.test.mjs',
+            'scripts/check-cloud-independence.test.mjs',
+            'scripts/check-v2-prisma-runtime-boundary.test.mjs',
+            'scripts/check-v2-module-architecture.test.mjs',
+            'scripts/ci-recharge-precision.test.mjs',
+            'scripts/ci-change-scope.test.mjs',
+            'scripts/ci-recharge-release.test.mjs',
+            'scripts/admin-layout-rules.test.mjs'
+          ]);
   run('node', ['--test', ...commonControlTests]);
 }
 if (registrationOwnControlRepair) {

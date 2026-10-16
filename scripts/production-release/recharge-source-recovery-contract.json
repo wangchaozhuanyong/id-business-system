@@ -455,7 +455,7 @@
     "v2-boot.css": "293648ffe87b443a28c3711a54f57eb9feb82b0206ffaf7f7c007e22f9d77d46",
     "v2-boot.js": "c2fdaf3938e6ef8b58320965dba5a90edc564760f19d0b8d99248aefef4a2a52"
   },
-  "reviewBase": "4888fb01cfdc916b4e866cd2007d3a6da9518446",
+  "reviewBase": "13e52ad670c6b6daa94ab2df009aaa8a9d69b97c",
   "scope": "BIT_CHECKOUT_SOURCE_RECOVERY_20261016",
   "services": {
     "admin": {
