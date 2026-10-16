@@ -68,6 +68,26 @@ class ReleaseGates(unittest.TestCase):
             r.read_hashes(d, 'fixture', '/app/', {'../secret': '0' * 64})
         d.run.assert_not_called()
 
+    def test_only_exact_reviewed_transitive_declarations_are_accepted(self):
+        name = 'id-business-v2/online-recharge/settings.service.d.ts'
+        digest = '3' * 64
+        before = {'m.js': 'old', 'm.d.ts': 'same', 'm.js.map': 'old-map', name: 'old-type'}
+        after = {**before, 'm.js': 'new', 'm.js.map': 'new-map', name: digest}
+        self.assertEqual(set(b.module_delta(before, after, ['m.js'], {name: digest})), set(after))
+        for allowed in [{name: '4' * 64}, {'auth/extra.d.ts': digest},
+                        {'id-business-v2/online-recharge/settings.service.js': digest}]:
+            with self.assertRaises(RuntimeError):
+                b.module_delta(before, after, ['m.js'], allowed)
+        plan, c, proof, files = self.fixture()
+        c['apiDeclarationOnly'] = {name: digest}
+        proof['apiModules'][name] = digest
+        files['api/modules/' + name] = digest
+        r.verify_proof(proof, plan, c, files)
+        proof['apiModules'][name] = '4' * 64
+        files['api/modules/' + name] = '4' * 64
+        with self.assertRaises(RuntimeError):
+            r.verify_proof(proof, plan, c, files)
+
     def test_artifact_url_is_bound_to_reviewed_commit_before_network(self):
         raw = b'reviewed fixture'
         plan = {'commit': 'a' * 40, 'artifactSha256': r.sha(raw)}

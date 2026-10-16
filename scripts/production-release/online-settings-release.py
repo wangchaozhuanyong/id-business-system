@@ -49,8 +49,12 @@ def verify_proof(proof, plan, contract, files):
          and proof.get('afterEngineFiles') == contract['afterEngineFiles']
          and proof.get('baselineApiReproduced') is True and proof.get('baselineAdminSourceReproduced') is True
          and proof.get('migrationPerformed') is False and proof.get('businessActions') == 0, 'PROOF_CHANGED')
-    expected_modules = {name.removesuffix('.js') + ext for name in contract['apiModules'] for ext in ('.js', '.js.map', '.d.ts')}
+    declarations = contract.get('apiDeclarationOnly', {})
+    expected_modules = {name.removesuffix('.js') + ext for name in contract['apiModules'] for ext in ('.js', '.js.map', '.d.ts')} | set(declarations)
     need(set(proof.get('apiModules', {})) == expected_modules, 'API_MODULE_SCOPE_CHANGED')
+    need(all(name.startswith('id-business-v2/online-recharge/') and name.endswith('.d.ts')
+             and '..' not in Path(name).parts and re.fullmatch('[a-f0-9]{64}', digest)
+             and proof['apiModules'].get(name) == digest for name, digest in declarations.items()), 'API_DECLARATION_CHANGED')
     expected = {**{'source/' + name: value for name, value in contract['sources'].items()},
                 **{'api/modules/' + name: value for name, value in proof['apiModules'].items()},
                 **{'admin/html/' + name: value for name, value in proof['adminFiles'].items()},
