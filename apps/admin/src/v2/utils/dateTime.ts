@@ -114,3 +114,17 @@ function toValidDate(value: DateTimeValue | null | undefined) {
 function pad(value: number) {
   return String(value).padStart(2, '0');
 }
+
+export function currentV2BusinessDate(value: DateTimeValue | null | undefined) {
+  const date = toValidDate(value);
+  if (!date) return '';
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: V2_BUSINESS_TIME_ZONE,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit'
+  }).formatToParts(date);
+  const part = (type: Intl.DateTimeFormatPartTypes) =>
+    parts.find((item) => item.type === type)?.value ?? '';
+  return `${part('year')}-${part('month')}-${part('day')}`;
+}

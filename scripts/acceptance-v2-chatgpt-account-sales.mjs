@@ -50,6 +50,7 @@ const browser = await chromium.launch({ headless: true });
 function records() {
   return Array.from({ length: 25 }, (_, i) => ({
     id: `22222222-2222-4222-8222-${String(i).padStart(12, '0')}`,
+    email: `sale.account.${String(i).padStart(3, '0')}@example.invalid`,
     emailMasked: `sa***${String(i).padStart(3, '0')}@example.invalid`,
     registered: i !== 0,
     saleStatus: i === 22 || i === 23 ? 'sold' : 'unsold',
@@ -130,7 +131,7 @@ async function fixture(width = 1440, theme = 'light') {
         rows = rows.filter((a) => a.saleStatus === q.saleStatus);
       if (q.subscriptionState === 'never_subscribed')
         rows = rows.filter((a) => a.subscriptionState === 'never_subscribed');
-      if (q.keyword) rows = rows.filter((a) => `${a.emailMasked} ${a.remark}`.includes(q.keyword));
+      if (q.keyword) rows = rows.filter((a) => `${a.email} ${a.remark}`.includes(q.keyword));
       if (q.offerStatus && q.offerStatus !== 'all')
         rows = rows.filter((a) => a.offerStatus === q.offerStatus);
       if (q.saleStatus === 'sold')
@@ -183,7 +184,7 @@ async function fixture(width = 1440, theme = 'light') {
   const page = await context.newPage();
   page.on('pageerror', (e) => errors.push(e.message));
   await page.goto(`${base}${routePath}`);
-  await page.getByText(state.rows[0].emailMasked, { exact: true }).waitFor();
+  await page.getByText(state.rows[0].email, { exact: true }).waitFor();
   await page.evaluate((theme) => {
     document.documentElement.dataset.v2Theme = theme;
     document.documentElement.style.colorScheme = theme;
@@ -191,7 +192,7 @@ async function fixture(width = 1440, theme = 'light') {
   return { context, page, state };
 }
 const rows = (page) => page.locator('.el-table__body-wrapper tbody tr');
-const row = (page, account) => rows(page).filter({ hasText: account.emailMasked });
+const row = (page, account) => rows(page).filter({ hasText: account.email });
 async function action(page, account, name) {
   const trigger = row(page, account).getByRole('button', { name: '更多操作', exact: true });
   await trigger.click();
@@ -270,11 +271,10 @@ try {
       await modal.waitFor({ state: 'hidden' });
       assert.equal(state.writes.length, 0, '取消确认不得保存');
       await page.locator('.el-pagination .btn-next').click();
-      await page.getByText(state.rows[20].emailMasked, { exact: true }).waitFor();
+      await page.getByText(state.rows[20].email, { exact: true }).waitFor();
       const last = await dimensions(page);
       assert.ok(Math.abs(last.height - first.height) <= 2, '末页列表高度跳动');
       await page.getByPlaceholder('邮箱或备注').fill('不存在的合成账号');
-      await page.getByRole('button', { name: '搜索', exact: true }).click();
       await page.getByText('暂无 ChatGPT 账号', { exact: true }).waitFor();
       const empty = await dimensions(page);
       assert.ok(Math.abs(empty.height - first.height) <= 2, '空状态列表高度跳动');
@@ -310,46 +310,46 @@ try {
   checks.push({ name: 'failure-retry-and-submit-protection' });
 
   await tab(page, '已出售');
-  await page.getByText(state.rows[2].emailMasked, { exact: true }).waitFor();
+  await page.getByText(state.rows[2].email, { exact: true }).waitFor();
   assert.equal(await rows(page).count(), 3);
-  assert.ok((await rows(page).first().textContent()).includes(state.rows[2].emailMasked));
+  assert.ok((await rows(page).first().textContent()).includes(state.rows[2].email));
   await page.reload();
-  await page.getByText(state.rows[0].emailMasked, { exact: true }).waitFor();
+  await page.getByText(state.rows[0].email, { exact: true }).waitFor();
   await row(page, state.rows[2]).getByText('已出售', { exact: true }).waitFor();
   await tab(page, '待用账号');
-  await page.getByText(state.rows[3].emailMasked, { exact: true }).waitFor();
+  await page.getByText(state.rows[3].email, { exact: true }).waitFor();
   assert.equal(await row(page, state.rows[2]).count(), 0);
   await tab(page, '已出售');
-  await page.getByText(state.rows[2].emailMasked, { exact: true }).waitFor();
+  await page.getByText(state.rows[2].email, { exact: true }).waitFor();
   const unsoldModal = await action(page, state.rows[2], '改为未出售');
   await unsoldModal.getByRole('button', { name: '改为未出售', exact: true }).click();
   await unsoldModal.waitFor({ state: 'hidden' });
-  await page.getByText(state.rows[23].emailMasked, { exact: true }).waitFor();
+  await page.getByText(state.rows[23].email, { exact: true }).waitFor();
   assert.equal(await row(page, state.rows[2]).count(), 0);
   assert.equal(state.rows[2].soldAt, null);
   checks.push({ name: 'all-sold-pending-reload-and-reverse' });
 
   // 待用最后一页的最后一行售出后，页码回到有效页。
   await tab(page, '待用账号');
-  await page.getByText(state.rows[2].emailMasked, { exact: true }).waitFor();
+  await page.getByText(state.rows[2].email, { exact: true }).waitFor();
   await page.locator('.el-pagination .btn-next').click();
-  await page.getByText(state.rows[21].emailMasked, { exact: true }).waitFor();
+  await page.getByText(state.rows[21].email, { exact: true }).waitFor();
   const lastModal = await action(page, state.rows[21], '标记已出售');
   await lastModal.getByRole('button', { name: '标记已出售', exact: true }).click();
   await lastModal.waitFor({ state: 'hidden' });
-  await page.getByText(state.rows[0].emailMasked, { exact: true }).waitFor();
+  await page.getByText(state.rows[0].email, { exact: true }).waitFor();
   assert.equal((await page.locator('.el-pagination .number.is-active').textContent()).trim(), '1');
   checks.push({ name: 'sold-last-row-page-clamp' });
 
   await tab(page, '回收站');
-  await page.getByText(state.rows[24].emailMasked, { exact: true }).waitFor();
+  await page.getByText(state.rows[24].email, { exact: true }).waitFor();
   assert.equal(
     await row(page, state.rows[24]).getByRole('button', { name: '更多操作', exact: true }).count(),
     0
   );
   checks.push({ name: 'recycle-readonly' });
   await tab(page, '全部账号');
-  await page.getByText(state.rows[5].emailMasked, { exact: true }).waitFor();
+  await page.getByText(state.rows[5].email, { exact: true }).waitFor();
   const conflictModal = await action(page, state.rows[5], '标记已出售');
   state.rows[5].updatedAt = '2026-10-16T02:00:00.000Z';
   await conflictModal.getByRole('button', { name: '标记已出售', exact: true }).click();
@@ -360,7 +360,7 @@ try {
   checks.push({ name: 'concurrent-change-keeps-original-confirmation' });
 
   await tab(page, '全部账号');
-  await page.getByText(state.rows[0].emailMasked, { exact: true }).waitFor();
+  await page.getByText(state.rows[0].email, { exact: true }).waitFor();
   await page.getByRole('button', { name: '列设置', exact: true }).click();
   const drawer = page.getByRole('dialog').filter({ hasText: '列显示设置' });
   await drawer.getByText('出售情况', { exact: true }).click();
@@ -372,7 +372,7 @@ try {
   await drawer.waitFor({ state: 'hidden' });
   assert.equal(await page.getByRole('columnheader', { name: '出售情况', exact: true }).count(), 0);
   await page.reload();
-  await page.getByText(state.rows[0].emailMasked, { exact: true }).waitFor();
+  await page.getByText(state.rows[0].email, { exact: true }).waitFor();
   assert.equal(await page.getByRole('columnheader', { name: '出售情况', exact: true }).count(), 0);
   checks.push({ name: 'column-settings-persist' });
   await context.close();

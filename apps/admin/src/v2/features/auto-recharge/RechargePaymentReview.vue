@@ -5,19 +5,15 @@
     </p>
     <el-form label-position="left" require-asterisk-position="right" @submit.prevent="search">
       <el-form-item label="查找记录">
-        <el-input
+        <V2SearchInput
           v-model="draft.search"
+          draft-key="auto-recharge:payment-review:search"
           placeholder="任务编号或窗口名称"
           clearable
-          @keyup.enter="search"
+          @search="search"
         />
       </el-form-item>
       <div class="recharge-actions">
-        <AppButton
-          :disabled="busy || resolving || query.phase.value === 'refreshing'"
-          @click="search"
-          >查询记录</AppButton
-        >
         <AppButton
           :disabled="busy || resolving || query.phase.value === 'refreshing'"
           @click="query.refresh()"
@@ -96,6 +92,7 @@
 </template>
 
 <script setup lang="ts">
+import V2SearchInput from '@/v2/components/V2SearchInput.vue';
 import { computed, reactive, ref, toRefs, watch } from 'vue';
 import { ElMessageBox } from 'element-plus/es/components/message-box/index.mjs';
 import { getApiErrorMessage } from '@/api/client';

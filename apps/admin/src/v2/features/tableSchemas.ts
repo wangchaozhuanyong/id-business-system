@@ -40,7 +40,7 @@ export const v2TableSchemas = {
       rowKey: { kind: 'path', value: 'id' },
       columns: [
         {
-          key: 'emailMasked',
+          key: 'email',
           label: 'ChatGPT 账号',
           kind: 'identifier',
           widthPreset: 'wide',
@@ -61,7 +61,7 @@ export const v2TableSchemas = {
         { key: 'registrationSource', label: '资料来源', kind: 'status', widthPreset: 'standard' },
         { key: 'needsSupplement', label: '资料状态', kind: 'status', widthPreset: 'wide' },
         { key: 'remark', label: '备注', kind: 'text', widthPreset: 'longText' },
-        { key: 'registeredAt', label: '注册时间', kind: 'date', widthPreset: 'dateTime' },
+        { key: 'registeredAt', label: '注册日期', kind: 'date', widthPreset: 'dateTime' },
         { key: 'registeredDays', label: '已注册天数', kind: 'numeric', widthPreset: 'standard' },
         { key: 'updatedAt', label: '更新时间', kind: 'date', widthPreset: 'dateTime' },
         { key: 'openingCard', label: '银行卡信息', kind: 'identifier', widthPreset: 'wide' },

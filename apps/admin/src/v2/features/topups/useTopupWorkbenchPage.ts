@@ -1,3 +1,4 @@
+import { resetV2SearchInputs } from '@/v2/composables/useV2AutoSearch';
 import { useV2FormDraft, useV2SessionDraft } from '@/v2/composables/useV2SessionDraft';
 import { computed, reactive, ref, watch } from 'vue';
 import { useRouter } from 'vue-router';
@@ -272,6 +273,7 @@ export function useTopupWorkbenchPage() {
   }
 
   function resetFilters() {
+    resetV2SearchInputs('topups:');
     Object.assign(query, {
       keyword: '',
       countryOptionId: '',

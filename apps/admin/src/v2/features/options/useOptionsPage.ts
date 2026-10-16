@@ -1,3 +1,4 @@
+import { resetV2SearchInputs } from '@/v2/composables/useV2AutoSearch';
 import { useV2FormDraft, useV2SessionDraft } from '@/v2/composables/useV2SessionDraft';
 import { computed, markRaw, reactive, ref, watch, type Component } from 'vue';
 import { useRoute } from 'vue-router';
@@ -298,6 +299,7 @@ export function useOptionsPage() {
   }
 
   function resetFilters() {
+    resetV2SearchInputs('options:');
     query.page = 1;
     query.keyword = '';
     query.status = '';

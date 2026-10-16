@@ -8,14 +8,14 @@
       ' 卡片价值和卡商余额将在入账抽屉内实时核对。 '
     ]"
   >
-    <el-input
+    <V2SearchInput
       v-model="page.query.keyword"
+      draft-key="topups:V2TopupWorkbenchToolbar:page.query.keyword"
       clearable
       maxlength="255"
       placeholder="搜索 ID 或原销售订单号"
       aria-label="搜索 ID 或原销售订单号"
-      @keyup.enter="page.handleSearch"
-      @clear="page.handleSearch"
+      @search="page.handleSearch"
     />
     <el-select
       v-model="page.query.countryOptionId"
@@ -83,6 +83,7 @@
 </template>
 
 <script setup lang="ts">
+import V2SearchInput from '@/v2/components/V2SearchInput.vue';
 import V2ListToolbar from '@/v2/components/V2ListToolbar.vue';
 import { computed } from 'vue';
 import type { UnwrapNestedRefs } from 'vue';

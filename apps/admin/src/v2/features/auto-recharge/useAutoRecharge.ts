@@ -35,6 +35,7 @@ import { rechargeHistoryPaymentBlocked } from './recharge-callback-diagnostics';
 import { rechargeProxyApi, type RechargeProxyItem } from './recharge-proxy-api';
 import { useBitBrowserDirectOpen } from './useBitBrowserDirectOpen';
 import { parseDirectCredential, type DirectLoginCredential } from './bitbrowser-direct-credential';
+import { automaticLoginCode } from './recharge-login-code';
 import { isV2TotpCodeCurrent } from '@/v2/components/workspace/totp';
 import { isApiError } from '@/api/apiError';
 import { directOperationDeadline, rechargeExecutionFailure } from './recharge-direct-lifecycle';
@@ -503,13 +504,14 @@ export function useAutoRecharge(options: { clearPaymentValidation?: () => void }
   const credentialReady = computed(() =>
     loginMethod.value === 'json'
       ? Boolean(sessionJson.value && !importing.value && !jsonError.value)
-      : Boolean(selectedBankAccount.value?.hasPassword && selectedBankAccountEmail.value)
+      : Boolean(selectedBankAccount.value && selectedBankAccountEmail.value)
   );
   const automaticCodeReady = computed(
     () =>
       loginMethod.value === 'password' &&
       selected.value?.chatgptAccountId === selectedBankAccountId.value &&
-      Boolean(selectedBankAccount.value?.hasTotp)
+      (selected.value?.result.login_code_type === 'email' ||
+        Boolean(selectedBankAccount.value?.hasTotp))
   );
   const nameMatch = useRechargeNameMatch(
     details,
@@ -699,7 +701,9 @@ export function useAutoRecharge(options: { clearPaymentValidation?: () => void }
     () =>
       selected.value?.state === 'awaiting_human_verification' &&
       selected.value?.action === 'bitbrowser' &&
-      selected.value.result.stage === 'login_code_required' &&
+      ['login_code_required', 'login_email_code_required'].includes(
+        String(selected.value.result.stage)
+      ) &&
       (selected.value.result.transport !== 'web_direct' || directOpen.owns(selected.value.id))
   );
   const autoCodeBusy = ref(false);
@@ -717,7 +721,7 @@ export function useAutoRecharge(options: { clearPaymentValidation?: () => void }
     autoCodeSubmittedJobId.value === selected.value?.id
       ? '验证码已提交，等待官网确认…'
       : autoCodeBusy.value
-        ? '正在自动生成并提交 2FA 验证码…'
+        ? '正在自动读取并提交验证码…'
         : '正在等待自动取码…'
   );
   const needsHuman = computed(
@@ -1017,7 +1021,7 @@ export function useAutoRecharge(options: { clearPaymentValidation?: () => void }
 
   async function localCredential(savedLogin?: { email: string; password: string }) {
     if (loginMethod.value === 'password') {
-      if (!selectedBankAccountId.value) throw new Error('请先选择已保存密码的 ChatGPT 账号');
+      if (!selectedBankAccountId.value) throw new Error('请先选择 ChatGPT 账号');
       const credential =
         savedLogin ?? (await bankRechargeApi.loginCredential(selectedBankAccountId.value));
       return { login: { email: credential.email, password: credential.password } };
@@ -1283,7 +1287,13 @@ export function useAutoRecharge(options: { clearPaymentValidation?: () => void }
           updatedAt: now
         };
       }
-      const starting = directOpen.start(launch, credential, windowName.value.trim(), identityEpoch);
+      const starting = directOpen.start(
+        launch,
+        credential,
+        windowName.value.trim(),
+        identityEpoch,
+        loginMethod.value === 'password' ? selectedBankAccountId.value : undefined
+      );
       if (clearPendingOpenCredential === clearCredential) clearPendingOpenCredential = undefined;
       if (directOpen.owns(id)) busy.value = false;
       await starting;
@@ -1517,7 +1527,12 @@ export function useAutoRecharge(options: { clearPaymentValidation?: () => void }
         current.connectorUrl,
         current.connectorToken,
         current.job.id,
-        loginCode.value.trim()
+        loginCode.value.trim(),
+        undefined,
+        {
+          kind: current.job.result.login_code_type,
+          challengeId: current.job.result.login_challenge_id
+        }
       );
       autoCodeSubmittedJobId.value = current.job.id;
       loginCode.value = '';
@@ -1535,7 +1550,7 @@ export function useAutoRecharge(options: { clearPaymentValidation?: () => void }
     autoCodeController?.abort();
     const controller = new AbortController();
     autoCodeController = controller;
-    const signal = AbortSignal.any([controller.signal, AbortSignal.timeout(20_000)]);
+    const signal = AbortSignal.any([controller.signal, AbortSignal.timeout(125_000)]);
     const currentCodeRequest = () =>
       !disposed &&
       !signal.aborted &&
@@ -1543,44 +1558,20 @@ export function useAutoRecharge(options: { clearPaymentValidation?: () => void }
       selected.value?.id === jobId &&
       selected.value.chatgptAccountId === accountId &&
       selectedBankAccountId.value === accountId &&
-      automaticCodeReady.value;
+      automaticCodeReady.value &&
+      selected.value?.result.login_challenge_id === challengeIdAtStart;
+    const challengeIdAtStart = selected.value?.result.login_challenge_id;
     autoCodeBusy.value = true;
     error.value = '';
     const releaseSkippedAttempt = () => {
       if (autoCodeSubmittedJobId.value !== jobId) autoCodeAttempted.delete(jobId);
     };
     try {
-      let generated = await bankRechargeApi.totpCode(accountId, { signal });
-      if (!currentCodeRequest()) {
-        releaseSkippedAttempt();
-        return;
-      }
-      if (!isV2TotpCodeCurrent(generated.token, generated.expiresAt, Date.now()))
-        throw new Error('2FA 验证码已过期或格式无效，请重新取码');
-      if (!isV2TotpCodeCurrent(generated.token, generated.expiresAt, Date.now() + 8000)) {
-        const waitMs = Date.parse(generated.expiresAt) - Date.now() + 1000;
-        generated.token = '';
-        await new Promise<void>((resolve, reject) => {
-          signal.throwIfAborted();
-          const abort = () => {
-            clearTimeout(timer);
-            reject(new Error('本次自动取码已停止'));
-          };
-          const timer = setTimeout(
-            () => {
-              signal.removeEventListener('abort', abort);
-              resolve();
-            },
-            Math.min(9000, Math.max(1, waitMs))
-          );
-          signal.addEventListener('abort', abort, { once: true });
-        });
-        if (!currentCodeRequest()) {
-          releaseSkippedAttempt();
-          return;
-        }
-        generated = await bankRechargeApi.totpCode(accountId, { signal });
-      }
+      const kind = selected.value?.result.login_code_type;
+      const challengeId = selected.value?.result.login_challenge_id;
+      if ((kind !== 'email' && kind !== 'totp') || !challengeId)
+        throw new Error('原窗口尚未提供明确的验证码类型，请在原窗口核对');
+      const generated = await automaticLoginCode(jobId, accountId, { kind, challengeId }, signal);
       if (!currentCodeRequest()) {
         releaseSkippedAttempt();
         return;
@@ -1608,7 +1599,7 @@ export function useAutoRecharge(options: { clearPaymentValidation?: () => void }
         jobId,
         generated.token,
         generated.expiresAt,
-        { signal }
+        { signal, kind, challengeId }
       );
       autoCodeSubmittedJobId.value = jobId;
       await refresh();
@@ -1650,12 +1641,17 @@ export function useAutoRecharge(options: { clearPaymentValidation?: () => void }
     [
       () => (needsCode.value ? selected.value?.id : undefined),
       selectedBankAccountId,
-      automaticCodeReady
+      automaticCodeReady,
+      () => selected.value?.result.login_challenge_id
     ],
     ([jobId]) => {
       autoCodeController?.abort();
-      if (!jobId || disposed || !automaticCodeReady.value || autoCodeAttempted.has(jobId)) return;
-      autoCodeAttempted.add(jobId);
+      if (!jobId || disposed || directOpen.owns(jobId) || !automaticCodeReady.value) return;
+      const attempt = `${jobId}:${selected.value?.result.login_challenge_id ?? ''}`;
+      if (autoCodeAttempted.has(attempt)) return;
+      autoCodeAttempted.add(attempt);
+      autoCodeSubmittedJobId.value = '';
+      autoCodeFailureJobId.value = '';
       void submitAutomaticCode(jobId);
     },
     { flush: 'post' }

@@ -26,6 +26,19 @@ import type {
 } from './contracts';
 const base = '/id-business-v2/auto-recharge/jobs';
 export const rechargeApi = {
+  loginCode(
+    id: string,
+    input: { accountId: string; kind: 'email' | 'totp'; challengeId: string },
+    options: ApiRequestOptions = {}
+  ) {
+    return request<{
+      pending: boolean;
+      token?: string;
+      expiresAt?: string;
+      kind?: 'email' | 'totp';
+      challengeId?: string;
+    }>(http.post(`${base}/${id}/login-code`, input, { signal: options.signal }));
+  },
   resolveDeclined(id: string, verificationJobId: string) {
     return withV2QueryInvalidation(
       request<{ id: string; alreadyResolved: boolean }>(
@@ -230,12 +243,16 @@ export const rechargeConnectorApi = {
     id: string,
     code: string,
     expiresAt?: string,
-    options: { signal?: AbortSignal } = {}
+    options: { signal?: AbortSignal; kind?: 'email' | 'totp'; challengeId?: string } = {}
   ) {
     return connectorRequest(connectorUrl, `/jobs/${id}/code`, {
       token: connectorToken,
       signal: options.signal,
-      body: { code, ...(expiresAt === undefined ? {} : { expiresAt }) }
+      body: {
+        code,
+        ...(expiresAt === undefined ? {} : { expiresAt }),
+        ...(options.kind ? { kind: options.kind, challengeId: options.challengeId } : {})
+      }
     });
   },
   cancel(connectorUrl: string, connectorToken: string, id: string) {

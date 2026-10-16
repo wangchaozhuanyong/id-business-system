@@ -9,11 +9,10 @@ describe('exchange-rate filter row UI contract', () => {
     expect(tabs).not.toContain('v2-exchange-toolbar__summary');
   });
 
-  it('auto-applies select filters and keeps one explicit text query action', () => {
+  it('auto-applies select filters and shares automatic text search', () => {
     expect(tabs.match(/@change="page.searchRecords"/g)).toHaveLength(4);
-    expect(tabs).toContain(
-      '<AppButton variant="ghost" @click="page.searchManual">查询</AppButton>'
-    );
+    expect(tabs).toContain('<V2SearchInput');
+    expect(tabs).toContain('@search="page.searchManual"');
     expect(tabs).not.toContain('v2-exchange-toolbar__search');
     expect(tabs).not.toContain('icon-only');
   });

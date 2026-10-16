@@ -1,3 +1,4 @@
+import { resetV2SearchInputs } from '@/v2/composables/useV2AutoSearch';
 import { useV2SessionDraft } from '@/v2/composables/useV2SessionDraft';
 import 'element-plus/es/components/message-box/style/css.mjs';
 import { ElMessageBox } from 'element-plus/es/components/message-box/index.mjs';
@@ -287,6 +288,7 @@ export function useSecurityPage() {
   }
 
   function resetFilters() {
+    resetV2SearchInputs('security:');
     query.keyword = '';
     query.status = '';
     query.abnormal = '';

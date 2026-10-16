@@ -1,3 +1,4 @@
+import { chatgptEmailSearchTokens } from './chatgpt-account-email';
 import {
   BadRequestException,
   ConflictException,
@@ -240,6 +241,7 @@ export class BankRechargeRegistrationMirrorService {
           data: {
             id: accountId,
             emailEncrypted: this.encryption.encrypt(email)!,
+            emailSearchTokens: chatgptEmailSearchTokens(email, this.encryption),
             emailHash,
             emailMasked: bankRechargeMaskedEmail(email),
             registered: true,
@@ -331,6 +333,7 @@ export class BankRechargeRegistrationMirrorService {
           data: {
             id: accountId,
             emailEncrypted: this.encryption.encrypt(email)!,
+            emailSearchTokens: chatgptEmailSearchTokens(email, this.encryption),
             emailHash,
             emailMasked: bankRechargeMaskedEmail(email),
             registered: true,

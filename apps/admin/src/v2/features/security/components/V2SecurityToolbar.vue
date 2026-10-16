@@ -1,12 +1,12 @@
 <template>
   <V2ListToolbar class="v2-security-command-panel" aria-label="安全中心筛选" title="安全记录筛选">
-    <el-input
+    <V2SearchInput
       v-model="page.query.keyword"
+      draft-key="security:V2SecurityToolbar:page.query.keyword"
       clearable
       :placeholder="page.activeTab === 'policy' ? 'IP、CIDR 或说明' : '账号、IP 或客户端'"
       aria-label="搜索安全记录"
-      @keyup.enter="page.handleSearch"
-      @clear="page.handleSearch"
+      @search="page.handleSearch"
     />
     <el-select
       v-if="page.activeTab === 'login_logs'"
@@ -64,11 +64,7 @@
         <el-option label="停用" value="false" />
       </el-select>
     </template>
-    <template #actions
-      ><AppButton variant="primary" @click="page.handleSearch">
-        <el-icon><Search /></el-icon>
-        查询
-      </AppButton>
+    <template #actions>
       <AppButton :disabled="!page.activeFilterCount" @click="page.resetFilters">
         <el-icon><RefreshLeft /></el-icon>
         重置
@@ -83,9 +79,10 @@
 </template>
 
 <script setup lang="ts">
+import V2SearchInput from '@/v2/components/V2SearchInput.vue';
 import V2ListToolbar from '@/v2/components/V2ListToolbar.vue';
 import type { UnwrapNestedRefs } from 'vue';
-import { RefreshLeft, Search } from '@element-plus/icons-vue';
+import { RefreshLeft } from '@element-plus/icons-vue';
 import AppButton from '@/components/ui/AppButton.vue';
 import type { useSecurityPage } from '../useSecurityPage';
 

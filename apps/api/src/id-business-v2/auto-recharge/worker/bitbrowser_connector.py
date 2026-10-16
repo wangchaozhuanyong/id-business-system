@@ -16,6 +16,7 @@ import os
 from pathlib import Path
 import re
 import secrets
+import uuid
 import stat
 import tempfile
 import threading
@@ -82,6 +83,7 @@ SAFE_PUBLIC_KEYS.update({'cycle_review', 'subscription_inspection', 'has_active_
 SAFE_PUBLIC_KEYS.update({'checkout_request_body_state', 'checkout_request_plan_state',
                          'checkout_recovered_from_original'})
 SAFE_PUBLIC_KEYS.update(CALLBACK_METADATA_KEYS)
+SAFE_PUBLIC_KEYS.update({"login_code_type", "login_challenge_id"})
 TERMINAL_RESULT_KEYS.update(CALLBACK_METADATA_KEYS)
 
 
@@ -480,7 +482,7 @@ def validate_payload(value):
                 or not re.fullmatch(r"[^\s@]+@[^\s@]+\.[^\s@]+", login["email"])
                 or len(login["email"]) > 250
                 or not isinstance(login.get("password"), str)
-                or not 1 <= len(login["password"]) <= 1024):
+                or not 0 <= len(login["password"]) <= 1024):
             raise Stop("invalid_login_credentials")
     bit_browser = value.get("bitBrowser")
     if not isinstance(bit_browser, dict):
@@ -562,6 +564,7 @@ class LocalJob:
         self.code_event = threading.Event()
         self.login_code = None
         self.waiting_for_code = False
+        self.code_challenge = None
         self.cancelled = False
         self.done = False
         self.account_key = None
@@ -613,9 +616,11 @@ class LocalJob:
         self.code_event.set()
         self.confirmation_event.set()
 
-    def signal_code(self, code, expires_at=None):
+    def signal_code(self, code, expires_at=None, kind=None, challenge_id=None):
         if (not self.waiting_for_code or self.done or self.login_code is not None
                 or not isinstance(code, str) or not re.fullmatch(r"[0-9]{6,8}", code)):
+            raise Stop("login_code_not_requested")
+        if self.code_challenge is not None and self.code_challenge != (kind, challenge_id):
             raise Stop("login_code_not_requested")
         if expires_at is not None:
             expiry = browser_password_login.login_code_expiry(expires_at)
@@ -629,12 +634,14 @@ class LocalJob:
             self.login_code = code
         self.code_event.set()
 
-    async def wait_for_code(self, seconds):
+    async def wait_for_code(self, seconds, kind="totp"):
         self.code_event.clear()
         self.waiting_for_code = True
+        self.code_challenge = (kind, str(uuid.uuid4()))
         self.callback.send({"type": "progress", "result": {
             "status": "awaiting_human_verification", "stage": "login_code_required",
             "reason": "login_code_required", "user_action_required": True,
+            "login_code_type": kind, "login_challenge_id": self.code_challenge[1],
             "browser_profile_id": self.profile_id,
             "payment_attempted": False, "payment_requests_sent": 0,
         }})
@@ -655,6 +662,7 @@ class LocalJob:
         finally:
             self.waiting_for_code = False
             self.login_code = None
+            self.code_challenge = None
 
     def progress(self, stage, *, _during_cancel=False, **details):
         if not _during_cancel:
@@ -1341,7 +1349,7 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         if self.path == "/health":
             capabilities = ["browser-catalog", "browser-options", "browser-profile-v2", "session-load-retry",
-                            "same-window-page-refresh", "password-login", "login-code"]
+                            "same-window-page-refresh", "password-login", "login-code", "account-auto-login-v1"]
             capabilities += ["manual-payment-confirmation", "recharge-process-isolation",
                              "payment-unknown-resolution", "prepayment-page-recovery",
                              "stale-owned-profile-cleanup", "same-profile-proxy-recovery", "json-page-ready"]
@@ -1398,14 +1406,11 @@ class Handler(BaseHTTPRequestHandler):
                 body.clear()
             elif match.group(2) == "code":
                 if (not isinstance(body, dict) or set(body) not in (
-                        {"code"}, {"code", "expiresAt"})
+                        {"code"}, {"code", "expiresAt"}, {"code", "kind", "challengeId"}, {"code", "expiresAt", "kind", "challengeId"})
                         or ("expiresAt" in body and not isinstance(body["expiresAt"], str))):
                     raise Stop("invalid_login_code")
                 else:
-                    if "expiresAt" in body:
-                        job.signal_code(body["code"], body["expiresAt"])
-                    else:
-                        job.signal_code(body["code"])
+                    job.signal_code(body["code"], body.get("expiresAt"), body.get("kind"), body.get("challengeId"))
                 body.clear()
             elif match.group(2) == "resume":
                 job.signal_resume()

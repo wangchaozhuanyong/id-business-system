@@ -47,6 +47,7 @@ export async function startRechargeOpenProfile(input: {
     id: request.id,
     ownerId,
     chatgptAccountId: account?.id ?? null,
+    expectedEmailEncrypted: account?.emailEncrypted ?? null,
     ...(accountKey ? { accountKey } : {}),
     plan: 'plus',
     action: 'bitbrowser',

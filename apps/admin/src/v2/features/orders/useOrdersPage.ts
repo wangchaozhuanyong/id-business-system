@@ -1,3 +1,4 @@
+import { resetV2SearchInputs } from '@/v2/composables/useV2AutoSearch';
 import { useV2SessionDraft } from '@/v2/composables/useV2SessionDraft';
 import 'element-plus/es/components/message-box/style/css.mjs';
 import { computed, reactive, ref, watch } from 'vue';
@@ -42,12 +43,10 @@ import {
 import { useOrderUpgradeBalanceReturn } from './useOrderUpgradeBalanceReturn';
 import { useOrderRefund } from './useOrderRefund';
 import { useOrderArchive } from './useOrderArchive';
-
 interface OrdersReferenceOptions {
   services: V2OptionSelector[];
   settlementPlatforms: V2OptionSelector[];
 }
-
 interface OrdersPageSnapshot {
   list: V2OrderListResult;
   options: OrdersReferenceOptions;
@@ -227,6 +226,7 @@ export function useOrdersPage() {
   }
 
   function resetFilters() {
+    resetV2SearchInputs('orders:');
     query.keyword = '';
     query.serviceOptionId = '';
     query.settlementPlatformOptionId = '';

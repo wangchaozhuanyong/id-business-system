@@ -11,11 +11,12 @@
           @submit.prevent="search"
         >
           <el-form-item label="姓名搜索"
-            ><el-input
+            ><V2SearchInput
               v-model="state.keywordInput"
+              draft-key="auto-recharge:V2RechargeNamesView:state.keywordInput"
               placeholder="输入完整姓名"
               clearable
-              @keyup.enter="search"
+              @search="search"
           /></el-form-item>
           <el-form-item label="状态"
             ><el-select v-model="state.status" aria-label="姓名状态"
@@ -23,7 +24,6 @@
                 label="启用"
                 value="active" /><el-option label="停用" value="disabled" /></el-select
           ></el-form-item>
-          <el-form-item><AppButton @click="search">搜索</AppButton></el-form-item>
         </el-form>
       </template>
       <template #actions
@@ -153,6 +153,7 @@
   </section>
 </template>
 <script setup lang="ts">
+import V2SearchInput from '@/v2/components/V2SearchInput.vue';
 import { reactive, ref, watch } from 'vue';
 import AppButton from '@/components/ui/AppButton.vue';
 import { getApiErrorMessage } from '@/api/client';

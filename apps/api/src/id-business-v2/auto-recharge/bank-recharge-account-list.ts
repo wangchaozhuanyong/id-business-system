@@ -14,6 +14,10 @@ import { readBankRechargeCardSummary } from './bank-recharge-card-summary';
 import { V2_ACCOUNT_OFFERS, type V2AccountOffer } from '@apple-business/shared';
 import { BadRequestException } from '@nestjs/common';
 import { parseChatgptAccountSaleStatus } from './bank-recharge-account-sales';
+import {
+  buildIdBusinessV2BlindQueryTokens,
+  matchesIdBusinessV2BlindSearch
+} from '../runtime/public-api';
 
 export type ChatgptAccountListQuery = {
   page?: string;
@@ -52,23 +56,36 @@ export async function listChatgptAccounts(
     deletedAt: query.deleted === 'deleted' ? { not: null } : null,
     ...(saleStatus ? { saleStatus } : {}),
     ...bankRechargeAccountFilter(
-      keyword,
+      keyword.length < 2 ? '' : keyword,
       keyword.includes('@') ? encryption.hash(keyword.toLowerCase()) : null,
       subscriptionState,
       new Date(now),
-      new Date(warningBoundary)
+      new Date(warningBoundary),
+      buildIdBusinessV2BlindQueryTokens(keyword, 'chatgpt-email', (value) => encryption.hash(value))
     ),
     ...(query.offerStatus && query.offerStatus !== 'all'
       ? { offerStatus: query.offerStatus as V2AccountOffer }
       : {})
   };
-  const items = await repository.listAccounts({
+  const candidates = await repository.listAccounts({
     where,
     ...(saleStatus === 'sold'
       ? { orderBy: [{ soldAt: 'desc' as const }, { id: 'desc' as const }] }
       : {}),
-    ...(pagination ? { skip: pagination.skip, take: pagination.take } : {})
+    ...(pagination && !keyword ? { skip: pagination.skip, take: pagination.take } : {})
   });
+  // 先核对候选明文再分页，防止片段令牌碰撞导致总数或后续页面错误。
+  const matching = keyword
+    ? candidates.filter(
+        (item) =>
+          matchesIdBusinessV2BlindSearch(encryption.decrypt(item.emailEncrypted) ?? '', keyword) ||
+          matchesIdBusinessV2BlindSearch(item.remark ?? '', keyword)
+      )
+    : candidates;
+  const items =
+    keyword && pagination
+      ? matching.slice(pagination.skip, pagination.skip + pagination.take)
+      : matching;
   const [subscriptions, networks, openingCards, sources] = await Promise.all([
     repository.subscriptionsForAccounts(items.map((item) => item.id)),
     repository.loginNetworksByEmailHashes(items.map((item) => item.emailHash)),
@@ -126,18 +143,22 @@ export async function listChatgptAccounts(
           : Boolean(order.cardDeletedAt) || (!order.card && Boolean(order.cardLabelSnapshot))
     });
   }
-  const total = pagination ? await repository.countAccounts(where) : items.length;
+  const total = keyword
+    ? matching.length
+    : pagination
+      ? await repository.countAccounts(where)
+      : items.length;
   return {
     total,
     page: pagination?.page ?? 1,
     pageSize: pagination?.pageSize ?? total,
     items: items.map((item) => ({
       ...accountListItem(item, subscriptionsByAccount.get(item.id), now, warningBoundary),
+      email: encryption.decrypt(item.emailEncrypted) ?? '',
       registrationIp: encryption.decrypt(item.registrationIpEncrypted) ?? null,
       registrationSource: sourcesByAccount.get(item.id) ?? null,
       needsSupplement:
         (awaitingAuthorization.has(item.id) && !verifiedAuthorization.has(item.id)) ||
-        !item.passwordEncrypted ||
         !item.registrationIpEncrypted ||
         !item.registrationCountryCode ||
         !item.registeredAt,

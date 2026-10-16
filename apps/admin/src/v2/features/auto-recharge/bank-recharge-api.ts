@@ -69,6 +69,7 @@ export interface BankChatgptAccount {
   registered: boolean;
   saleStatus: 'unsold' | 'sold';
   soldAt: string | null;
+  email?: string;
   emailMasked: string;
   registrationCountryCode?: string | null;
   registrationIp: string | null;

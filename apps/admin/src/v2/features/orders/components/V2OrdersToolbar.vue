@@ -5,13 +5,13 @@
     title="订单筛选"
     help="搜索与筛选仅影响订单列表；已有内容刷新时继续保留，避免页面跳动。"
   >
-    <el-input
+    <V2SearchInput
       v-model="page.query.keyword"
+      draft-key="orders:V2OrdersToolbar:page.query.keyword"
       clearable
       placeholder="订单号、客户、平台订单号、ID 账号、网站账号"
       aria-label="搜索订单"
-      @keyup.enter="page.handleSearch"
-      @clear="page.handleSearch"
+      @search="page.handleSearch"
     />
     <el-select
       v-model="page.query.archived"
@@ -126,6 +126,7 @@
 </template>
 
 <script setup lang="ts">
+import V2SearchInput from '@/v2/components/V2SearchInput.vue';
 import V2ListToolbar from '@/v2/components/V2ListToolbar.vue';
 import type { UnwrapNestedRefs } from 'vue';
 import { Refresh, RefreshLeft, Search } from '@element-plus/icons-vue';
