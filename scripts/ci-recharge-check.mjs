@@ -1,4 +1,8 @@
-import { isChatgptSalesOnly, chatgptSalesCommands } from './ci-chatgpt-sales-scope.mjs';
+import {
+  isChatgptSalesOnly,
+  isChatgptSalesControlsOnly,
+  chatgptSalesCommands
+} from './ci-chatgpt-sales-scope.mjs';
 import {
   isRegistrationFlowEvidenceOnly,
   isRegistrationFlowEvidenceControlRepair,
@@ -85,7 +89,10 @@ const changed = execFileSync('git', ['diff', '--name-only', base, 'HEAD'], { enc
   .split('\n')
   .filter(Boolean);
 // Finite account inventory change: keep all affected checks and isolated MySQL.
-if (mode === 'recharge' && isChatgptSalesOnly(changed)) {
+if (
+  ['recharge', 'ci-only'].includes(mode) &&
+  (isChatgptSalesOnly(changed) || isChatgptSalesControlsOnly(changed))
+) {
   for (const [file, ...args] of chatgptSalesCommands(part, changed)) run(file, args);
   process.exit(0);
 }
