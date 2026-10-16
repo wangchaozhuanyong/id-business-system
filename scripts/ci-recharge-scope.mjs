@@ -1,5 +1,6 @@
 import {
   isSharedBankCardOnly,
+  isSharedBankCardControlsOnly,
   sharedBankCardSchemaMatches,
   sharedBankCardParts
 } from './ci-shared-bank-card-scope.mjs';
@@ -272,7 +273,7 @@ export function needsOnlineRechargeCiBuild(paths, context) {
   if (isRegistrationParityDiagnosticsOnly(paths, context)) return false;
   if (isWorkspaceDragOnly(paths)) return false;
   if (isChatgptSalesOnly(paths) || isChatgptSalesControlsOnly(paths)) return false;
-  if (isSharedBankCardOnly(paths)) return false;
+  if (isSharedBankCardOnly(paths) || isSharedBankCardControlsOnly(paths)) return false;
   if (isOnlineSettingsOnly(paths) || isOnlineSettingsControlsOnly(paths)) return false;
   if (isOnlineProxyCountryValidationOnly(paths)) return false;
   if (isOnlineProxyCountryOnly(paths)) return false;
@@ -1074,6 +1075,7 @@ export function checkMode(paths, oldSchema, newSchema, grantHelperSnapshot, cont
   if (isChatgptSalesControlsOnly(paths)) return oldSchema === newSchema ? 'ci-only' : 'full';
   if (isChatgptSalesOnly(paths))
     return chatgptSalesSchemaMatches(oldSchema, newSchema) ? 'recharge' : 'full';
+  if (isSharedBankCardControlsOnly(paths)) return oldSchema === newSchema ? 'ci-only' : 'full';
   if (isSharedBankCardOnly(paths))
     return sharedBankCardSchemaMatches(oldSchema, newSchema) ? 'recharge' : 'full';
   if (isOnlineSettingsControlsOnly(paths)) return oldSchema === newSchema ? 'ci-only' : 'full';
@@ -1559,6 +1561,7 @@ export function selectedParts(paths, grantHelperSnapshot, context) {
   if (isWorkspaceDragOnly(paths)) return workspaceDragParts(paths);
   if (isChatgptSalesControlsOnly(paths)) return ['guards'];
   if (isChatgptSalesOnly(paths)) return [...chatgptSalesParts];
+  if (isSharedBankCardControlsOnly(paths)) return ['guards'];
   if (isSharedBankCardOnly(paths)) return [...sharedBankCardParts];
   if (isOnlineSettingsControlsOnly(paths)) return ['guards'];
   if (isOnlineSettingsOnly(paths)) return [...onlineSettingsParts];

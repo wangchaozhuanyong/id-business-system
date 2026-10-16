@@ -115,14 +115,14 @@ def transport(plan, mode):
     receipt = OUTPUT / (mode + '-accepted-command.json')
     need(not receipt.exists(), 'COMMAND_ALREADY_ACCEPTED')
     current = {**plan, 'mode': mode}
-    raw_base = 'https://raw.githubusercontent.com/' + REPOSITORY + '/' + plan['commit'] + '/scripts/production-release/'
+    raw_base = 'https://raw.githubusercontent.com/' + REPOSITORY + '/' + plan.get('controlCommit', plan['commit']) + '/scripts/production-release/'
     code = """import sys
 sys.dont_write_bytecode=True
 import hashlib,importlib.util,json,os,re,traceback,urllib.request
 from pathlib import Path
 os.umask(0o077)
 plan=json.loads(PLAN_JSON)
-entry=Path('/opt/id-business-v2/.staging/shared-bank-card-entry-'+plan['commit']+'-'+plan['workflowRunId'])
+entry=Path('/opt/id-business-v2/.staging/shared-bank-card-entry-'+plan['commit']+'-'+plan['workflowRunId']+'-'+plan.get('controlCommit',plan['commit'])[:12])
 entry.mkdir(mode=0o700,parents=True,exist_ok=True)
 stage='ENTRY_DOWNLOAD'
 try:
