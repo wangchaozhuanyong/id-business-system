@@ -318,6 +318,11 @@ async function fillCard(page, card, { deadline = Date.now() + 120000 } = {}) {
     const expected = { number: String(card.number).replace(/\D/g, ''), cvc: String(card.cvc) };
     const split = String(card.expiry).match(/^(\d{2})\/?(\d{2}|\d{4})$/);
     if (!split) throw new Error('有效期资料无效');
+    // Some elements reveal the expiry only after the number has been entered.
+    while (Date.now() < deadline) {
+      if (await write(page, 'number', expected.number, deadline)) break;
+      await page.waitForTimeout(200);
+    }
     // Wait for either a combined expiry control or both explicitly labelled parts.
     while (Date.now() < deadline) {
       if (await locate(page, 'expiry', deadline)) {

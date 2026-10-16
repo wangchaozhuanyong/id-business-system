@@ -600,7 +600,7 @@
     {
       "path": "checkout-form.cjs",
       "originalSha256": null,
-      "adaptedSha256": "ba0b90b586d62de71feb83a2e176dc6dbb8185538bcacb6a41e69a9af2edcd7a",
+      "adaptedSha256": "482078e921e41641f5895a10dc722e6079e3e594e40ed3742037813b7f6dd087",
       "changed": true,
       "reason": "Semantic frame-safe checkout form readback and immutable per-task payment cap."
     },
@@ -614,7 +614,7 @@
     {
       "path": "test/checkout-form.test.cjs",
       "originalSha256": null,
-      "adaptedSha256": "3a8dcd84e2bc07a4e09d1fa49e2d0d606fddaabf2eacc82ffd49eeafa995d5d7",
+      "adaptedSha256": "bdc447aa60bb30df4b5171c888f9841562d15143752919b869673497480645ba",
       "changed": true,
       "reason": "Real Chromium regression coverage for semantic embedded fields, readback, deadline and payment limits."
     }

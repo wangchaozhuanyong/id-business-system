@@ -189,3 +189,17 @@ test('separate expiry month and four-digit year controls use their own semantics
   assert.equal((await fillCard(page, card, { deadline: Date.now() + 4000 })).ok, true);
   assert.equal(await page.locator('[autocomplete="cc-exp-year"]').inputValue(), '2030');
 });
+
+test('expiry appearing only after entering the number does not deadlock', async (t) => {
+  const page = await pageFor(t, '<input autocomplete="cc-number"><input autocomplete="cc-csc">');
+  await page.locator('[autocomplete="cc-number"]').evaluate((n) =>
+    n.addEventListener('input', () => {
+      if (!document.querySelector('[autocomplete="cc-exp"]')) {
+        const el = document.createElement('input');
+        el.autocomplete = 'cc-exp';
+        document.body.append(el);
+      }
+    })
+  );
+  assert.equal((await fillCard(page, card, { deadline: Date.now() + 4000 })).ok, true);
+});
