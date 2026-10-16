@@ -1,3 +1,5 @@
+import { OnlineRechargeVendureController } from './vendure-integration.controller';
+import { OnlineRechargeVendureIntegration } from './vendure-integration.service';
 import { ProxyPoolModule } from '../proxy-pool/public-api';
 import { SharedBankCardPoolModule } from '../bank-card-pool/public-api';
 import { Module } from '@nestjs/common';
@@ -41,12 +43,14 @@ import { OnlineRechargeOrderSyncRepository } from './persistence/order-sync.repo
     RechargeModule
   ],
   controllers: [
+    OnlineRechargeVendureController,
     OnlineRechargeAdminController,
     OnlineRechargePublicController,
     OnlineRechargeWorkerController
   ],
   exports: [OnlineRechargeSecurityNotificationService],
   providers: [
+    OnlineRechargeVendureIntegration,
     FieldEncryptionService,
     OnlineRechargeRepository,
     OnlineRechargeWorkerRepository,

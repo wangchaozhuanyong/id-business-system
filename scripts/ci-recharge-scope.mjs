@@ -1,3 +1,4 @@
+import { affectsGptRechargeArtifact, isGptRechargeOnly } from './ci-gpt-recharge-scope.mjs';
 import {
   isSharedBankCardOnly,
   isSharedBankCardControlsOnly,
@@ -1052,6 +1053,7 @@ export function isMailboxOnly(paths) {
 }
 
 export function checkMode(paths, oldSchema, newSchema, grantHelperSnapshot, context) {
+  if (isGptRechargeOnly(paths)) return oldSchema === newSchema ? 'recharge' : 'full';
   if (isRegistrationBrowserOnly(paths, context))
     return oldSchema === newSchema ? 'recharge' : 'full';
   if (paths.includes('scripts/production-release/registration-browser-contract.json'))
@@ -1550,6 +1552,7 @@ export function isTargetedOnly(paths, oldSchema, newSchema) {
   );
 }
 export function selectedParts(paths, grantHelperSnapshot, context) {
+  if (isGptRechargeOnly(paths)) return ['guards', 'api'];
   if (isRegistrationBrowserOnly(paths, context)) return [...registrationBrowserParts];
   if (isAccountLoginControlsOnly(paths)) return ['guards'];
   if (isAccountLoginOnly(paths)) return [...accountLoginParts];
@@ -1684,6 +1687,12 @@ export function selectedParts(paths, grantHelperSnapshot, context) {
 
 export function affectsPart(part, paths) {
   if (part === 'guards') return paths.length > 0;
+  // GPT build and publication recipes are inputs to its native API artifact.
+  if (
+    part === 'api' &&
+    affectsGptRechargeArtifact(paths.filter((path) => path.includes('gpt-recharge')))
+  )
+    return true;
   if (part === 'api' && hasAppleMailboxScope(paths)) return true;
   if (part === 'migration' && hasRegistrationMirrorScope(paths)) return true;
   if (
@@ -4233,7 +4242,8 @@ async function main() {
       const salesAfter = execFileSync('git', ['show', `HEAD:${schema}`], { encoding: 'utf8' });
       if (
         requestedBaseIsAncestor &&
-        ((isAccountLoginControlsOnly(salesPaths) && salesBefore === salesAfter) ||
+        ((isGptRechargeOnly(salesPaths) && salesBefore === salesAfter) ||
+          (isAccountLoginControlsOnly(salesPaths) && salesBefore === salesAfter) ||
           (isAccountLoginOnly(salesPaths) && accountLoginSchemaMatches(salesBefore, salesAfter)) ||
           (isChatgptSalesOnly(salesPaths) && chatgptSalesSchemaMatches(salesBefore, salesAfter)) ||
           (isChatgptSalesControlsOnly(salesPaths) && salesBefore === salesAfter) ||
@@ -4338,6 +4348,8 @@ async function main() {
       for (const part of parts) {
         if (
           reused.has(part) ||
+          // Only the GPT candidate binds this complete artifact metadata closure.
+          (part === 'api' && isGptRechargeOnly(paths) && affectsGptRechargeArtifact(changed)) ||
           (affectsPart(part, changed) &&
             !hasRechargeFlowBusinessReuseProof(part, changed, dispatcherSnapshot))
         )
@@ -4385,9 +4397,11 @@ async function main() {
             : selectedParts(paths, undefined, proxyIdentityContext);
   // BEGIN finite ONLINE build-proof reuse classifier admission
   const needsOnlineRechargeCiBuild = (paths) =>
-    canResumeOnlineBuildProofReuseGuard(base, 'scope')
+    isGptRechargeOnly(paths)
       ? false
-      : onlineBuildProofReusePriorNeedsCiBuild(paths, proxyIdentityContext);
+      : canResumeOnlineBuildProofReuseGuard(base, 'scope')
+        ? false
+        : onlineBuildProofReusePriorNeedsCiBuild(paths, proxyIdentityContext);
   // END finite ONLINE build-proof reuse classifier admission
 
   const onlineCiBuild = needsOnlineRechargeCiBuild(paths);

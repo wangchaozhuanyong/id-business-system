@@ -1,3 +1,4 @@
+import { isGptRechargeOnly } from './ci-gpt-recharge-scope.mjs';
 import {
   isSharedBankCardOnly,
   isSharedBankCardControlsOnly,
@@ -125,6 +126,37 @@ const changed = execFileSync('git', ['diff', '--name-only', base, 'HEAD'], { enc
   .trim()
   .split('\n')
   .filter(Boolean);
+if (mode === 'recharge' && isGptRechargeOnly(changed)) {
+  if (part === 'guards' || part === 'release-controls') {
+    npm('run', 'format:check');
+    npm('run', 'lint');
+    for (const name of [
+      'check:v2-module-architecture',
+      'check:v2-isolation',
+      'check:v2-concurrency-standard',
+      'check:v2-prisma-runtime-boundary'
+    ])
+      npm('run', name);
+    run('node', [
+      '--test',
+      'scripts/ci-gpt-recharge-scope.test.mjs',
+      'scripts/ci-recharge-scope.test.mjs',
+      'scripts/ci-recharge-check.test.mjs'
+    ]);
+    run('python3', ['-B', 'scripts/production-release/gpt-recharge-release.test.py']);
+    run('python3', [
+      '-B',
+      'scripts/production-release/api-admin-scope.test.py',
+      'WorkspaceSqliteProtectionTests.test_frozen_pure_helper_runs_on_host_and_wal_backup_shares_its_algorithm',
+      'WorkspaceSqliteProtectionTests.test_real_reader_locked_wal_backup_restores_same_summary_without_candidate_cache',
+      'WorkspaceSqliteProtectionTests.test_real_source_loader_reproduces_cache_but_reader_preserves_source_and_summary',
+      'WorkspaceSqliteProtectionTests.test_real_candidate_guard_survives_reader_and_rejects_actual_cache_or_source_drift'
+    ]);
+  } else if (part === 'api') {
+    run('python3', ['-B', 'scripts/production-release/gpt-recharge-build.py']);
+  } else throw new Error('Unsupported GPT recharge check part');
+  process.exit(0);
+}
 if (
   mode === 'recharge' &&
   base === registrationBrowserBase &&
