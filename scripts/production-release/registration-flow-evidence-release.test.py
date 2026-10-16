@@ -8,6 +8,7 @@ from pathlib import Path
 import subprocess
 import tarfile
 import tempfile
+import types
 import unittest
 from unittest.mock import Mock, patch
 
@@ -42,15 +43,18 @@ class FlowEvidenceControls(unittest.TestCase):
 
     def test_current_baseline_and_no_schema_or_upstream_payload(self):
         c = self.contract
-        self.assertEqual(c['expectedCurrent'], '69eba563895bf083b24c8214a088454d5df34922')
-        self.assertEqual(c['manifestSha256'], '1ac35c615202a5ee41c4c8197868f6dbefb16f19012a6cfaba5ee0bbd57f37c9')
+        self.assertEqual(c['expectedCurrent'], '88bce5ab09d20cd303f1fdd5fe310cb0b42e1451')
+        self.assertEqual(c['manifestSha256'], 'ab625e55e4461a852fff06942c76585d1caa2dc412fea062f77ad9db8cb53fed')
         self.assertIsNone(c['migration'])
         self.assertEqual((len(c['baselineApiFiles']), len(c['baselineAdminFiles']),
                           len(c['baselineEngineFiles']), len(c['baselinePrismaClientFiles'])), (584, 257, 83, 18))
-        self.assertEqual(c['baselineAdminBuildId'], 'v2-7c3c102c98539d33cb379ef018427371ba750cb7')
-        self.assertEqual(c['identityNative']['commit'], c['expectedCurrent'])
-        self.assertEqual(c['sourceBaseline'], '88bce5ab09d20cd303f1fdd5fe310cb0b42e1451')
-        self.assertEqual(c['sourceBaselineTree'], '57a0d354276724e70945513c9db806919e245b09')
+        self.assertEqual(c['baselineAdminBuildId'], 'v2-88bce5ab09d20cd303f1fdd5fe310cb0b42e1451')
+        self.assertEqual(c['identityNative']['commit'], c['roleSourceCommits']['online-recharge'])
+        self.assertEqual(c['sourceBaseline'], 'b4beae76ac7ce69d5475473054a22b945bda5898')
+        self.assertEqual(c['sourceBaselineTree'], 'd4195e8178416df1fd31985bb4bf9dc00e4aaeba')
+        self.assertEqual(c['reviewedApplicationCommit'], 'd9c9243c181b0524ccd2766a8f1f04a4075307c4')
+        self.assertEqual(len(c['runtimePrismaClientFiles']), 27)
+        self.assertTrue(all(c['runtimePrismaClientFiles'][n] == v for n,v in c['baselinePrismaClientFiles'].items()))
         self.assertNotEqual(c['sourceBaseline'], c['expectedCurrent'])
         self.assertTrue(all('/upstream/' not in n for n in c['allowedApplicationPaths']))
         self.assertTrue(all('/prisma' not in n for n in c['allowedApplicationPaths']))
@@ -81,7 +85,7 @@ class FlowEvidenceControls(unittest.TestCase):
 
     def test_git_review_base_is_separate_from_published_projection_and_scope_is_exact(self):
         contract = {**self.contract, 'frozen': True}
-        approved = set(contract['sources']) | set(contract['validationSources']) | set(contract['controlPaths'])
+        approved = set(contract['expectedGitChanges'])
         original = b.git
 
         def git_fixture(*args):
@@ -96,6 +100,10 @@ class FlowEvidenceControls(unittest.TestCase):
             b.verify_sources(contract)
             with self.assertRaisesRegex(RuntimeError, 'CONTRACT_NOT_FROZEN'):
                 b.verify_sources({**contract, 'sourceBaseline': contract['expectedCurrent']})
+            damaged = copy.deepcopy(contract)
+            damaged['runtimePrismaClientFiles']['index.js'] = '0' * 64
+            with self.assertRaisesRegex(RuntimeError, 'CLIENT_CORE_CHANGED'):
+                b.verify_sources(damaged)
         with patch.object(b, 'git', side_effect=lambda *args: b'foreign/path\n' if args[0] == 'diff' else git_fixture(*args)):
             with self.assertRaisesRegex(RuntimeError, 'SOURCE_SCOPE_CHANGED'):
                 b.verify_sources(contract)
@@ -192,6 +200,64 @@ class FlowEvidenceControls(unittest.TestCase):
             self.assertNotIn('@prisma/client', source)
             self.assertNotIn('process.env', source)
 
+    def sqlite_fixture(self):
+        policy = self.contract['sqliteReviewPolicy']
+        return {'version': 1, 'status': 'PASS', **policy['summary'], 'activeAppleLeaseCount': 1,
+                'executingTaskCount': 0, 'retainedReviewLeaseCount': 1, 'corruptEncryptedValueCount': 0,
+                'leaseFacts': copy.deepcopy(policy['leaseFacts']),
+                'protectedTaskFacts': copy.deepcopy(policy['protectedTaskFacts']), 'businessActions': 0}
+
+    def test_retained_review_proof_rejects_new_lease_unknown_task_running_and_any_changed_fingerprint(self):
+        value = self.sqlite_fixture()
+        self.assertEqual(r.validate_sqlite_receipt(value, self.contract), value)
+        changes = [lambda v: v.update(activeAppleLeaseCount=0), lambda v: v.update(activeAppleLeaseCount=2),
+                   lambda v: v['leaseFacts'].append(copy.deepcopy(v['leaseFacts'][0])),
+                   lambda v: v['leaseFacts'][0].update(taskUuid='0' * 36),
+                   lambda v: v['leaseFacts'][0].update(taskStatus='running'),
+                   lambda v: v['taskCounts'].update(running=1),
+                   lambda v: v['leaseFacts'][0].update(bindingSha256='0' * 64),
+                   lambda v: v['protectedTaskFacts'][0].update(recordRegistrationStatus='unregistered'),
+                   lambda v: v.update(logicalSha256='0' * 64), lambda v: v.update(corruptEncryptedValueCount=1)]
+        for change in changes:
+            candidate = copy.deepcopy(value)
+            change(candidate)
+            with self.assertRaisesRegex(RuntimeError, 'SQLITE_PRESERVATION_CHANGED'):
+                r.validate_sqlite_receipt(candidate, self.contract)
+        with self.assertRaisesRegex(RuntimeError, 'SQLITE_PRESERVATION_CHANGED'):
+            r.validate_sqlite_receipt(value, self.contract, '0' * 64)
+        driver = Mock(compose=Mock(return_value=json.dumps(value)))
+        self.assertEqual(r.sqlite_receipt(driver, Path('/fixed'), self.contract), value)
+        source = driver.compose.call_args.args[-1]
+        parsed = subprocess.run(['node', '--check'], input=source, text=True, capture_output=True)
+        self.assertEqual(parsed.returncode, 0, parsed.stderr)
+        self.assertIn('PRAGMA query_only=ON', source)
+        self.assertIn('encrypted_proof', source)
+        self.assertNotIn('.inspect_database(', source)
+
+    def test_backup_adapter_preserves_original_inspector_and_propagates_changed_backup_failure(self):
+        namespace = {'inspect_sqlite': lambda *_: (_ for _ in ()).throw(AssertionError('old inspector must stay untouched'))}
+        exec("def backup_sqlite_locked(d, directory, plan, states, volume, marker, content, safety):\n"
+             " before=inspect_sqlite(d,directory)\n"
+             " if d.copiedLogicalSha256!=before['logicalSha256']:raise RuntimeError('SQLITE_BACKUP_CHANGED')\n"
+             " if inspect_sqlite(d,directory,before['logicalSha256'])!=before:raise RuntimeError('SQLITE_SOURCE_MOVED')\n"
+             " return {'logical':before,'s3Verified':True}\n", namespace)
+        original = namespace['backup_sqlite_locked']
+        old = types.SimpleNamespace(__file__=str(HERE / 'registration-closure-release.py'), backup_sqlite_locked=original)
+        receipt = self.sqlite_fixture()
+        with tempfile.TemporaryDirectory(dir=OUTPUT) as temporary, patch.object(r, 'sqlite_receipt', return_value=receipt) as inspect:
+            marker = Path(temporary) / 'owned-marker'
+            marker.write_bytes(b'fixed-owner')
+            driver = types.SimpleNamespace(copiedLogicalSha256=receipt['logicalSha256'])
+            result = r.backup_sqlite(old, driver, Path('/fixed'), {}, {}, marker, Path('/fixed-safety'), self.contract)
+            self.assertEqual(result['logical']['activeAppleLeaseCount'], 1)
+            self.assertEqual(inspect.call_count, 2)
+            self.assertIs(old.backup_sqlite_locked, original)
+            with self.assertRaisesRegex(AssertionError, 'old inspector'):
+                old.backup_sqlite_locked(driver, None, None, None, None, None, None, None)
+            driver.copiedLogicalSha256 = '0' * 64
+            with self.assertRaisesRegex(RuntimeError, 'SQLITE_BACKUP_CHANGED'):
+                r.backup_sqlite(old, driver, Path('/fixed'), {}, {}, marker, Path('/fixed-safety'), self.contract)
+
     def test_existing_three_table_fence_and_owned_registration_gate_remain_real(self):
         klass = finite.sql_fence_class(self.contract)
         self.assertIn('id_business_v2_recharge_jobs', klass.QUERY)
@@ -220,7 +286,12 @@ class FlowEvidenceControls(unittest.TestCase):
         proof = {**plan, 'version': 1, 'scope': r.SCOPE, 'sources': c['sources'], 'validationSources': {},
                  'sourceBaseline': c['sourceBaseline'], 'sourceBaselineTree': c['sourceBaselineTree'],
                  'runtimeBaselineCommit': c['expectedCurrent'], 'sourceProjection': 'PUBLISHED_RUNTIME_PLUS_TASK_DELTA',
+                 'roleSourceCommits': c['roleSourceCommits'], 'reviewedApplicationCommit': c['reviewedApplicationCommit'],
                  'workerFiles': c['workerFiles'], 'baselinePrismaClientFiles': c['baselinePrismaClientFiles'],
+                 'runtimePrismaClientFiles': c['runtimePrismaClientFiles'],
+                 'publishedAdminProofSha256': c['publishedAdminProof']['sha256'],
+                 'hostSourceInheritance': c['hostSourceInheritance'],
+                 'sqliteReviewPolicy': c['sqliteReviewPolicy'],
                  'prismaPathMetadata': c['prismaPathMetadata'],
                  'baselineEngineFiles': c['baselineEngineFiles'], 'schemaSha256': c['schemaSha256'],
                  'baselineApiReproduced': True, 'baselineAdminReproduced': True, 'unchangedClientReproduced': True,
@@ -312,19 +383,27 @@ class FlowEvidenceControls(unittest.TestCase):
                 previous.mkdir(parents=True)
                 (base / '.staging').mkdir()
                 (base / 'current').symlink_to(previous)
-                source = previous / r.WORKER / 'release_safety.py'
+                inherited = base / 'releases/inherited69'
+                source = inherited / r.WORKER / 'release_safety.py'
                 source.parent.mkdir(parents=True)
                 source.write_bytes(b'old fixed safety')
                 (previous / 'compose.release.json').write_text(json.dumps({'services': {
                     name: {'image': 'original-' + name} for name in ('api', 'admin', 'online-recharge')}}))
                 projections = {name: {'kind': 'exact-published-' + name} for name in ('api', 'admin', 'online-recharge')}
-                raw_manifest = json.dumps({'roleSourceProjections': projections, 'images': {}, 'commit': b.BASE}).encode()
+                raw_manifest = json.dumps({'roleSourceProjections': projections, 'images': {}, 'commit': b.CURRENT}).encode()
                 (previous / 'release-manifest.json').write_bytes(raw_manifest)
+                inherited_manifest = json.dumps({'commit': b.BASE}).encode()
+                (inherited / 'release-manifest.json').write_bytes(inherited_manifest)
                 payload = base / 'fixture'
                 payload.mkdir()
                 c, plan, proof = self.proof_fixture(payload)
                 c.update(frozen=True, baselineWorkerFiles={'release_safety.py': sha(source.read_bytes())})
+                c['hostSourceInheritance'] = {'release': str(inherited), 'commit': b.BASE,
+                    'manifestSha256': sha(inherited_manifest), 'files': {r.WORKER + 'release_safety.py': sha(source.read_bytes())}}
                 plan.update(mode='release')
+                plan['controlSources'] = {'registration-flow-evidence-release.py': sha((HERE / 'registration-flow-evidence-release.py').read_bytes())}
+                proof['controlSources'] = plan['controlSources']
+                proof['hostSourceInheritance'] = c['hostSourceInheritance']
                 proof_raw = json.dumps(proof).encode()
                 (payload / 'build-proof.json').write_bytes(proof_raw)
                 stream = io.BytesIO()
@@ -387,6 +466,8 @@ class FlowEvidenceControls(unittest.TestCase):
                 marker = base / 'registration-marker'
                 with patch.object(r, 'BASE', base), patch.object(r, 'helper', side_effect=lambda name: helpers[name]), \
                         patch.object(r, 'baseline', return_value=(previous, raw_manifest, before, observed)), \
+                        patch.object(r, 'sqlite_receipt', return_value=observed['sqlite']), \
+                        patch.object(r, 'backup_sqlite', return_value={'s3Verified': True, 'logical': observed['sqlite']}), \
                         patch.object(r, 'verify_proof', side_effect=lambda *args: proof), patch.object(r, 'smoke') as smoke, \
                         patch.object(r.urllib.request, 'urlopen', return_value=io.BytesIO(bundle)), \
                         patch.object(finite, 'BASE', base), patch.object(finite, 'registration_marker', return_value=marker):
@@ -406,6 +487,10 @@ class FlowEvidenceControls(unittest.TestCase):
                         r.release({**plan, 'mode': 'readback'}, c, driver, adapter)
                         self.assertFalse(marker.exists())
                         self.assertEqual(smoke.call_count, 2)
+                        target = (base / 'current').resolve()
+                        self.assertTrue((target / 'scripts/production-release/registration-flow-evidence-release.py').is_file())
+                        self.assertEqual((target / r.WORKER / 'release_safety.py').read_bytes(), source.read_bytes())
+                        self.assertFalse((previous / r.WORKER).exists(), 'published current is intentionally sparse')
                 self.assertEqual(calls[:2], ['build-api', 'build-admin'])
                 self.assertIn(('stop', 'api-old', 30), calls)
                 self.assertIn(('stop', 'online-recharge-old', 45), calls)
