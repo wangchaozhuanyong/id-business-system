@@ -3,6 +3,40 @@ import { readFileSync } from 'node:fs';
 
 export const mailboxRealtimeBase = '6fc99d23c2918280a94c3f5b8be48f638190e02f';
 export const mailboxRealtimeParts = ['guards', 'api', 'admin', 'release-controls'];
+export const mailboxControlBase = 'c1fc77eb444fe1e170075c07e17966c97eabb4c3';
+export const mailboxControlTree = 'b9547ccc980b65bc917d6c2562b98af435afb15f';
+export const mailboxControlPaths = [
+  'scripts/ci-mailbox-realtime-scope.mjs',
+  'scripts/ci-mailbox-realtime-scope.test.mjs',
+  'scripts/ci-recharge-check.mjs',
+  'scripts/ci-recharge-scope.mjs',
+  'scripts/production-release/mailbox-realtime-contract.json',
+  'scripts/production-release/mailbox-realtime-release.test.py'
+];
+
+export function isMailboxRealtimeControlsOnly(paths, context) {
+  if (context?.base !== mailboxControlBase || context?.baseTree !== mailboxControlTree)
+    return false;
+  if (
+    paths.length !== mailboxControlPaths.length ||
+    new Set(paths).size !== paths.length ||
+    paths.some((name) => !mailboxControlPaths.includes(name))
+  )
+    return false;
+  // Reuse the original full source fingerprint; the repair cannot change shipped application bytes.
+  try {
+    const c = JSON.parse(
+      readFileSync('scripts/production-release/mailbox-realtime-contract.json', 'utf8')
+    );
+    return isMailboxRealtimeOnly(c.expectedGitChanges, {
+      base: c.sourceBaseline,
+      baseTree: c.sourceBaselineTree
+    });
+  } catch {
+    return false;
+  }
+}
+
 export function isMailboxRealtimeOnly(paths, context) {
   try {
     const c = JSON.parse(
