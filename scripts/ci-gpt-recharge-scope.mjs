@@ -50,9 +50,9 @@ export const gptRechargeFrozen = Object.freeze({
   'apps/api/src/id-business-v2/online-recharge/worker-body-parser.ts':
     '2471cba84936dc8c36f25feef210d641a0f5c8c4a22ccde6e684396069e57619',
   'scripts/ci-recharge-check.mjs':
-    'dd6b7987f3c63bb20f63eb867421f67bd68f60faa66dded1182c6937bddae260',
+    'a912d051da44a31eb3c5c8ebb0dfed222717ac049df72a1fbc1ed5c1c835a80c',
   'scripts/ci-recharge-scope.mjs':
-    'ce72f7dbaa070bca039a1b9f599c827b71e2e60eff26425980b6bfad3441cf64',
+    '9adf9c063e5ac8a021c721c5800aa20c6fbb058b562eaf277ed22ff1766c61f4',
   'scripts/ci-recharge-scope.test.mjs':
     '8199b4d89c0645e30ec54eeda82aece0af0bfc19268e5178c6d35a7cfecb5576',
   'scripts/production-release/api-admin-scope.test.py':
@@ -105,6 +105,39 @@ export function isGptRechargeOnly(paths, readSource = (name) => readFileSync(nam
   if (!application.every((name) => paths.includes(name))) return false;
   try {
     return Object.entries(gptRechargeFrozen).every(
+      ([name, expected]) => createHash('sha256').update(readSource(name)).digest('hex') === expected
+    );
+  } catch {
+    return false;
+  }
+}
+
+// This admission reuses one immutable native GPT delta above one measured mailbox baseline.
+export const gptRechargeRebasePaths = Object.freeze([
+  'scripts/production-release/gpt-recharge-rebase-release.py',
+  'scripts/production-release/gpt-recharge-rebase-release.test.py',
+  'scripts/production-release/gpt-recharge-rebase-contract.json',
+  'scripts/ci-gpt-recharge-scope.mjs',
+  'scripts/ci-gpt-recharge-scope.test.mjs',
+  'scripts/ci-recharge-scope.mjs',
+  'scripts/ci-recharge-check.mjs'
+]);
+export const gptRechargeRebaseFrozen = Object.freeze({
+  'scripts/production-release/gpt-recharge-rebase-release.py':
+    '9b4db2ee5331ff8de865cd2e3ccd6f0d2be039c0aaa2b06cb9d59fc844a7acdd',
+  'scripts/production-release/gpt-recharge-rebase-release.test.py':
+    'fbd8e8f27af0559c8147420283fa311b6048cd013fb42a1e94c98430a3f46ba4',
+  'scripts/production-release/gpt-recharge-rebase-contract.json':
+    '894e6aac58360770fe6de9338e79a2f1c37c4291d807888338689ac177a4e993'
+});
+export function isGptRechargeRebaseControlsOnly(paths, readSource = (name) => readFileSync(name)) {
+  if (
+    !Object.keys(gptRechargeRebaseFrozen).every((name) => paths.includes(name)) ||
+    !paths.every((name) => gptRechargeRebasePaths.includes(name))
+  )
+    return false;
+  try {
+    return Object.entries({ ...gptRechargeFrozen, ...gptRechargeRebaseFrozen }).every(
       ([name, expected]) => createHash('sha256').update(readSource(name)).digest('hex') === expected
     );
   } catch {

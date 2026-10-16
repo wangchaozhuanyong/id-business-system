@@ -5,6 +5,9 @@ import test from 'node:test';
 import {
   affectsGptRechargeArtifact,
   gptRechargeControlRepairPaths,
+  gptRechargeRebasePaths,
+  gptRechargeRebaseFrozen,
+  isGptRechargeRebaseControlsOnly,
   isGptRechargeControlsOnly,
   gptRechargeFrozen,
   gptRechargePaths,
@@ -140,4 +143,30 @@ test('the exact COW publisher repair runs guards only and never recompiles appli
     ),
     false
   );
+});
+
+test('the single published mailbox baseline rebase runs guards without regenerating native GPT code', () => {
+  assert.equal(isGptRechargeRebaseControlsOnly(gptRechargeRebasePaths), true);
+  assert.equal(checkMode(gptRechargeRebasePaths, 'same', 'same'), 'ci-only');
+  assert.deepEqual(selectedParts(gptRechargeRebasePaths), ['guards']);
+  assert.equal(checkMode(gptRechargeRebasePaths, 'old', 'new'), 'full');
+  for (const extra of [
+    'apps/api/src/common/prisma/bump-v2-scope-versions.ts',
+    'scripts/production-release/unreviewed.py',
+    'docs/unrelated.md'
+  ]) {
+    assert.equal(isGptRechargeRebaseControlsOnly([...gptRechargeRebasePaths, extra]), false);
+  }
+  for (const changed of [
+    ...Object.keys(gptRechargeFrozen),
+    ...Object.keys(gptRechargeRebaseFrozen)
+  ]) {
+    assert.equal(
+      isGptRechargeRebaseControlsOnly(gptRechargeRebasePaths, (name) =>
+        name === changed ? Buffer.from('unreviewed') : readFileSync(name)
+      ),
+      false,
+      changed
+    );
+  }
 });

@@ -3,7 +3,11 @@ import {
   isMailboxVersionControlsOnly,
   mailboxVersionCommands
 } from './ci-mailbox-version-scope.mjs';
-import { isGptRechargeControlsOnly, isGptRechargeOnly } from './ci-gpt-recharge-scope.mjs';
+import {
+  isGptRechargeControlsOnly,
+  isGptRechargeRebaseControlsOnly,
+  isGptRechargeOnly
+} from './ci-gpt-recharge-scope.mjs';
 import {
   isSharedBankCardOnly,
   isSharedBankCardControlsOnly,
@@ -133,7 +137,8 @@ const changed = execFileSync('git', ['diff', '--name-only', base, 'HEAD'], { enc
   .filter(Boolean);
 if (
   (mode === 'recharge' && isGptRechargeOnly(changed)) ||
-  (mode === 'ci-only' && isGptRechargeControlsOnly(changed))
+  (mode === 'ci-only' &&
+    (isGptRechargeControlsOnly(changed) || isGptRechargeRebaseControlsOnly(changed)))
 ) {
   if (part === 'guards' || part === 'release-controls') {
     npm('run', 'format:check');
@@ -152,6 +157,8 @@ if (
       'scripts/ci-recharge-check.test.mjs'
     ]);
     run('python3', ['-B', 'scripts/production-release/gpt-recharge-release.test.py']);
+    if (isGptRechargeRebaseControlsOnly(changed))
+      run('python3', ['-B', 'scripts/production-release/gpt-recharge-rebase-release.test.py']);
     run('python3', [
       '-B',
       'scripts/production-release/api-admin-scope.test.py',
