@@ -365,6 +365,9 @@ const registrationSourceFixtures = Object.fromEntries(
     'apps/api/src/id-business-v2/online-recharge/online-recharge.module.ts',
     // Table container wording advances independently of the immutable recovery receipt.
     'scripts/check-v2-table-standard.mjs',
+    // Checkout limits advance validation without changing historical registration evidence.
+    'apps/api/src/id-business-v2/online-recharge/validation.ts',
+    'apps/api/src/id-business-v2/online-recharge/validation.spec.ts',
     ...registrationLayoutPaths,
     ...registrationCountryPaths,
     ...registrationSalesPaths,

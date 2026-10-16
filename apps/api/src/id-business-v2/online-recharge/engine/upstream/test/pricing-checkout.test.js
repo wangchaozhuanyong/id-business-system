@@ -344,7 +344,7 @@ describe('pricing checkout plan button', () => {
         await expect(selectProVariantOnPricingPage(pricing.page, 'pro_500')).rejects.toThrow('Pro 档位未选中');
     });
 
-    it('emits only redacted Pro structure diagnostics on an invalid card boundary', async () => {
+    it('preserves business email in structural diagnostics on an invalid card boundary', async () => {
         const pricing = createProPricingPage({ tier: '500', cardCount: 0 });
         const original = console.warn;
         const messages = [];
@@ -357,7 +357,7 @@ describe('pricing checkout plan button', () => {
         expect(pricing.diagnostics).toHaveLength(1);
         const diagnostic = JSON.parse(messages[0][1]);
         expect(Object.keys(diagnostic[0][0])).toEqual(['role', 'tag', 'testid', 'aria-label', 'label', 'checked']);
-        expect(JSON.stringify(diagnostic)).not.toContain('private@example.invalid');
+        expect(JSON.stringify(diagnostic)).toContain('private@example.invalid');
         expect(pricing.diagnostics[0]).not.toMatch(/\.value|\.innerText|outerHTML|innerHTML/);
     });
 

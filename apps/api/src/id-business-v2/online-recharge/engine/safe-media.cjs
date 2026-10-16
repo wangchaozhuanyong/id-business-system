@@ -1,5 +1,5 @@
 'use strict';
-// Capture the actual page with mandatory masks; raw video is never enabled.
+// Preserve business fields while masking payment/authentication credentials in every frame.
 const path = require('node:path');
 const fs = require('node:fs/promises');
 const { spawn } = require('node:child_process');
@@ -26,19 +26,7 @@ async function screenshot(page, prefix = 'stage') {
   const current = recorder;
   const capture = async () => {
     if (current.stopped) return null;
-    // Only generic patterns enter the page; internal keys are never injected into an untrusted document.
-    await page.evaluate(() => {
-      for (const el of document.querySelectorAll('body *')) {
-        const text = el.children.length === 0 ? el.textContent || '' : '';
-        if (
-          text.length > 72 ||
-          /(?:\d[ -]?){12,19}|\b\d{3,4}\b|[A-Za-z0-9_-]{20,}|eyJ[A-Za-z0-9_-]+\.|(?:access.?token|refresh.?token|session.?token|password|cookie|cvc|cvv)\s*[:=]|[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i.test(
-            text
-          )
-        )
-          el.setAttribute('data-online-recharge-secret-mask', '1');
-      }
-    });
+    const frames = typeof page.frames === 'function' ? page.frames() : [page];
     const file = path.join(
       root(),
       `${String(prefix)
@@ -47,28 +35,67 @@ async function screenshot(page, prefix = 'stage') {
     );
     try {
       if (current.stopped) return null;
+      // A failed frame inspection aborts this capture; credentials never enter page scripts.
+      for (const frame of frames)
+        await frame.evaluate(() => {
+          const credential =
+            /(?:password|passwd|access.?token|refresh.?token|session.?token|(?:^|[\s_-])(?:token|session|pan)(?:$|[\s_-])|cookie|authorization|api.?key|secret|cvc|cvv|cc-csc|cc-number|one-time-code|security.?code|card.?number|密码|安全码|卡号|令牌)/i;
+          const secretValue =
+            /\b(?:\d[ -]?){13,19}\b|eyJ[A-Za-z0-9_-]+\.|\b(?:sk|pk)_(?:live|test)_/;
+          for (const el of document.querySelectorAll('body *')) {
+            const input = el.matches('input,textarea,[contenteditable]');
+            const description = [
+              ...[
+                'id',
+                'name',
+                'type',
+                'autocomplete',
+                'aria-label',
+                'placeholder',
+                'data-testid'
+              ].map((key) => el.getAttribute(key) || ''),
+              ...Array.from(el.labels || []).map((label) => label.textContent || '')
+            ].join(' ');
+            const text = input
+              ? el.value || el.textContent || ''
+              : el.children.length === 0
+                ? el.textContent || ''
+                : '';
+            if (
+              credential.test(description) ||
+              secretValue.test(text) ||
+              (!input && credential.test(text) && /[:：=]/.test(text))
+            )
+              el.setAttribute('data-online-recharge-secret-mask', '1');
+          }
+        });
+      if (current.stopped) return null;
       const buffer = await page.screenshot({
         fullPage: false,
         animations: 'disabled',
         timeout: 8000,
-        mask: [
-          page.locator(
-            'input,textarea,[contenteditable],iframe,pre,code,canvas,video,img,[data-sensitive],[data-online-recharge-secret-mask]'
+        mask: frames.map((frame) =>
+          frame.locator(
+            'input[type="password"],input[autocomplete="cc-number"],input[autocomplete="cc-csc"],canvas,video,[data-sensitive],[data-online-recharge-secret-mask]'
           )
-        ],
+        ),
         maskColor: '#142238'
       });
       await fs.writeFile(file, buffer, { mode: 0o600 });
       current.frames.push(file);
       return file;
     } finally {
-      await page
-        .evaluate(() => {
-          document
-            .querySelectorAll('[data-online-recharge-secret-mask]')
-            .forEach((el) => el.removeAttribute('data-online-recharge-secret-mask'));
-        })
-        .catch(() => {});
+      await Promise.all(
+        frames.map((frame) =>
+          frame
+            .evaluate(() => {
+              document
+                .querySelectorAll('[data-online-recharge-secret-mask]')
+                .forEach((el) => el.removeAttribute('data-online-recharge-secret-mask'));
+            })
+            .catch(() => {})
+        )
+      );
     }
   };
   current.chain = current.chain.catch(() => {}).then(capture);

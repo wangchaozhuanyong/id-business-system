@@ -1,5 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { readFileSync } from 'node:fs';
+import { checkMode, selectedParts } from './ci-recharge-scope.mjs';
 import {
   onlineSettingsPaths,
   isOnlineSettingsOnly,
@@ -103,5 +105,47 @@ test('Python-only release controls never invoke an unbounded formatter or lint c
   assert.ok(commands.some((command) => command[0] === 'python3'));
   assert.ok(
     commands.every((command) => !command.includes('eslint') && !command.includes('prettier'))
+  );
+});
+
+test('the finite checkout repair keeps API, Admin, browser and all interface guards', () => {
+  const contract = JSON.parse(
+    readFileSync(new URL('./production-release/online-checkout-contract.json', import.meta.url))
+  );
+  const paths = [
+    ...Object.keys(contract.sources),
+    '.github/workflows/online-checkout-validation.yml',
+    ...['build.py', 'contract.json', 'release.py', 'release.test.py'].map(
+      (name) => 'scripts/production-release/online-checkout-' + name
+    ),
+    'scripts/ci-online-settings-scope.mjs',
+    'scripts/ci-online-settings-scope.test.mjs'
+  ];
+  assert.equal(checkMode(paths, '', ''), 'recharge');
+  assert.deepEqual(selectedParts(paths), ['guards', 'api', 'admin', 'online-engine']);
+  assert.equal(isOnlineSettingsControlsOnly(paths), false);
+  for (const extra of [
+    'apps/api/prisma-mysql/schema.prisma',
+    'package-lock.json',
+    'apps/api/src/auth/auth.service.ts'
+  ])
+    assert.equal(checkMode([...paths, extra], '', ''), 'full');
+  assert.equal(isOnlineSettingsOnly(paths.filter((p) => !p.endsWith('/validation.ts'))), false);
+  const guards = onlineSettingsCommands('guards', paths).flat();
+  for (const name of [
+    'admin-ui',
+    'v2-ui-language',
+    'v2-color-contrast',
+    'v2-table-standard',
+    'v2-loading-standard',
+    'v2-module-architecture',
+    'v2-isolation'
+  ])
+    assert.ok(guards.includes('check:' + name));
+  assert.ok(guards.includes('scripts/production-release/online-checkout-release.test.py'));
+  assert.ok(
+    onlineSettingsCommands('api', paths)
+      .flat()
+      .includes('src/id-business-v2/bank-card-pool/shared-bank-card.spec.ts')
   );
 });

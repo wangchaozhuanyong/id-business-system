@@ -9,7 +9,7 @@ import { freemem, totalmem, cpus, uptime } from 'node:os';
 import { statfs } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import type { AuthenticatedUser } from '../../../auth/auth.types';
-import { maskLoginEventIp } from '../../../auth/login-events';
+import { FieldEncryptionService } from '../../../common/crypto/field-encryption.service';
 import {
   ONLINE_RECHARGE_PERMISSION,
   ONLINE_RECHARGE_PLAN_LABELS,
@@ -32,7 +32,8 @@ export class OnlineRechargeAdminRepository {
     private readonly settings: OnlineRechargeSettingsService,
     private readonly tasks: OnlineRechargeTasksService,
     private readonly credentials: OnlineRechargeEphemeralCredentials,
-    private readonly artifacts: OnlineRechargeArtifactsService
+    private readonly artifacts: OnlineRechargeArtifactsService,
+    private readonly encryption: FieldEncryptionService
   ) {}
   async overview() {
     const counts = await this.repository.read(async (db) => {
@@ -215,7 +216,7 @@ export class OnlineRechargeAdminRepository {
             userName: log.username,
             status: log.status,
             event,
-            ipMasked: maskLoginEventIp(log.ip) ?? '',
+            ipMasked: log.ip ?? '',
             failureReason:
               reasons[reason] ??
               (reason.startsWith('user_status_') ? '账号状态不可登录' : reason ? '认证未完成' : ''),
@@ -224,15 +225,44 @@ export class OnlineRechargeAdminRepository {
           };
         })
       };
+    const visibleCodes = new Map<string, string>();
+    const billingEmails = new Map<string, string>();
+    if (section === 'billing' && result.items.length) {
+      const taskIds = [...new Set(result.items.map((row) => (row as { taskId: string }).taskId))];
+      const tasks = await this.repository.read((db) =>
+        db.onlineRechargeTask.findMany({
+          where: { id: { in: taskIds } },
+          select: { id: true, emailEncrypted: true }
+        })
+      );
+      for (const task of tasks)
+        billingEmails.set(task.id, this.encryption.decrypt(task.emailEncrypted) ?? '');
+    }
+    if (section === 'cdks' && operator.roles.includes('admin') && result.items.length) {
+      await this.repository.transaction(
+        'cdks-list-view',
+        (tx) =>
+          this.repository.log(tx, 'cdks.list', operator, undefined, {
+            ids: result.items.map((row) => (row as { id: string }).id),
+            fields: ['兑换码']
+          }),
+        ['audit-logs']
+      );
+      for (const raw of result.items) {
+        const row = raw as { id: string; codeEncrypted: string };
+        visibleCodes.set(row.id, this.encryption.decrypt(row.codeEncrypted) ?? '');
+      }
+    }
     return {
       ...result,
       items: result.items.map((row) => {
         const item = sanitize(JSON.parse(JSON.stringify(row))) as Record<string, unknown>;
         if (section === 'cdks') {
           delete item.codeHash;
-          item.code = `····${item.codeLast4}`;
+          item.code = visibleCodes.get(String(item.id)) ?? `····${item.codeLast4}`;
         }
         if (section === 'proxies') delete item.connectionHash;
+        if (section === 'billing') item.email = billingEmails.get(String(item.taskId)) ?? '';
         return item;
       })
     };

@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto';
 import type { OnlineRechargeTask } from '@prisma/client';
 import { ONLINE_RECHARGE_DEFAULTS } from './contracts';
 import { confirmedSubscription, requireTaskLease } from './persistence/worker.repository';
-import { plan, redact, sanitize, session, sessionAccountId } from './validation';
+import { paymentLimit, plan, redact, sanitize, session, sessionAccountId } from './validation';
 import { secureEqual } from './worker.service';
 import { assertOnlineSensitive } from './assets.service';
 import { createOnlineRechargeCodes } from './cdk-generator';
@@ -167,7 +167,7 @@ describe('线上代充安全边界和原版默认行为', () => {
     ).toBe(false);
     expect(ONLINE_RECHARGE_DEFAULTS.planNamePro500).toBe('');
   });
-  it('日志和公开结果递归移除凭据、卡号和结账链接', () => {
+  it('业务结果保留完整邮箱，公开结果继续遮住联系方式，凭据仍移除', () => {
     const value = sanitize({
       session: 'secret',
       cvc: '123',
@@ -181,10 +181,11 @@ describe('线上代充安全边界和原版默认行为', () => {
     });
     expect(JSON.stringify(value)).not.toContain('4242424242424242');
     expect(JSON.stringify(value)).not.toContain('cs_synthetic');
-    expect(JSON.stringify(value)).toContain('f***@example.invalid');
+    expect(JSON.stringify(value)).toContain('fixture@example.invalid');
+    expect(JSON.stringify(sanitize(value, '', true))).toContain('f***@example.invalid');
     expect(redact('https://checkout.stripe.com/c/pay/cs_synthetic')).toBe('（支付链接已脱敏）');
   });
-  it('付款证据的合法UUID和固定报价摘要原样保留，日志脱敏规则不变', () => {
+  it('保留付款证据和日志中的合法资料编号及准确耗时', () => {
     const uuid = '12345678-1234-4567-8def-123456789012';
     const evidence = {
       accountId: uuid,
@@ -195,9 +196,12 @@ describe('线上代充安全边界和原版默认行为', () => {
       quoteId: 'quote:123456789012abcdefabcdefabcdefab'
     };
     expect(sanitize({ paymentEvidence: evidence })).toEqual({ paymentEvidence: evidence });
-    expect(redact(uuid)).not.toBe(uuid);
+    expect(redact(uuid)).toBe(uuid);
+    expect(redact('fixture@example.invalid 8.8.8.8 Timeout 29983.123456789ms')).toBe(
+      'fixture@example.invalid 8.8.8.8 Timeout 29983.123456789ms'
+    );
   });
-  it('相同元数据字段中的银行卡号码或令牌仍脱敏，其他字段不能借UUID形状绕过', () => {
+  it('银行卡和令牌仍隐藏，业务资料编号可见且不能使凭据字段绕过检查', () => {
     const pan = '4242424242424242';
     const token = 'eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJzeW50aGV0aWMifQ.synthetic';
     for (const value of [pan, token]) {
@@ -216,7 +220,7 @@ describe('线上代充安全边界和原版默认行为', () => {
       expect(JSON.stringify(safe)).not.toContain(value);
     }
     const uuid = '12345678-1234-4567-8def-123456789012';
-    expect(sanitize({ message: uuid })).not.toEqual({ message: uuid });
+    expect(sanitize({ message: uuid })).toEqual({ message: uuid });
     expect(sanitize({ accessToken: uuid, card_number: uuid })).toEqual({});
   });
   it('不允许旧版本、其他所有者、到期或待核对任务继续执行', () => {
@@ -309,7 +313,7 @@ describe('线上代充安全边界和原版默认行为', () => {
     expect(() => artifacts.download(randomUUID(), { ...user, roles: ['admin'] })).not.toThrow();
     expect(reads).toBe(1);
   });
-  it('数字卡号和驼峰字段脱敏，日志邮箱与不透明凭据遮盖而Decimal金额保留', () => {
+  it('保留邮箱与Decimal金额，同时隐藏数字卡号和不透明凭据', () => {
     const safe = sanitize({
       provider: {
         cardNumber: 4242424242424242,
@@ -324,11 +328,25 @@ describe('线上代充安全边界和原版默认行为', () => {
     const encoded = JSON.stringify(safe);
     expect(encoded).not.toContain('4242424242424242');
     expect(encoded).not.toContain('4000000000000002');
-    expect(encoded).not.toContain('fixture@example.invalid');
+    expect(encoded).toContain('fixture@example.invalid');
+    expect(JSON.stringify(sanitize(safe, '', true))).not.toContain('fixture@example.invalid');
     expect(encoded).not.toContain('synthetic-opaque-secret');
     expect(encoded).not.toContain('pk_live_synthetic');
     expect(encoded).not.toContain('opaque-json-credential');
     expect(encoded).not.toContain('opaque-bearer-credential');
     expect(encoded).toContain('10000000000000.1234');
+  });
+});
+
+describe('固定单次付款上限', () => {
+  it('仅接受正数十进制字符串并保留精度', () => {
+    expect(paymentLimit({ currency: 'PHP', maxAmount: '9990.0000' })).toEqual({
+      currency: 'PHP',
+      maxAmount: '9990.0000'
+    });
+    expect(paymentLimit({ currency: 'PHP', maxAmount: '0.0001' }).maxAmount).toBe('0.0001');
+    for (const maxAmount of [9990, '0', '000.0000', '-1', '1e4', '1.23456', 'NaN'])
+      expect(() => paymentLimit({ currency: 'PHP', maxAmount })).toThrow();
+    expect(() => paymentLimit({ currency: 'php', maxAmount: '9990' })).toThrow();
   });
 });

@@ -77,7 +77,7 @@ const columns: Partial<Record<OnlineSection, Column[]>> = {
     ['email', '账号', 'identifier'],
     ['plan', '套餐', 'status'],
     ['status', '任务状态', 'status'],
-    ['sessionMasked', '会话预览', 'identifier'],
+    ['sessionMasked', '会话状态', 'identifier'],
     ['createdAt', '创建时间', 'date']
   ],
   renewal: [

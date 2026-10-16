@@ -59,7 +59,7 @@ async function resolveBilledAmountForRecord(page, paymentResult, preTaxAmount, c
  * @returns {Promise<{ success: boolean, error?: string, cardLast4?: string, manualIntervention?: boolean, screenshots?: string[] }>}
  */
 async function executePaymentWithRetry(page, options) {
-    const { planType, cdkCode, email, onProgress, stripeSessionId, confirmPayment, operation, preflight, expectedCurrency, checkoutKind } = options || {};
+    const { planType, cdkCode, email, onProgress, stripeSessionId, confirmPayment, operation, preflight, expectedCurrency, checkoutKind, paymentLimit } = options || {};
     const maxCardAttempts = preflight ? 1 : MAX_CARD_ATTEMPTS;
     if (preflight && typeof confirmPayment !== 'function') return { success: false, submitted: false, error: '缺少原账号准确套餐核验，未提交付款' };
 
@@ -80,12 +80,7 @@ async function executePaymentWithRetry(page, options) {
     progress(`支付地区: ${region}, 币种: ${currency}`);
 
     let address = null;
-    if (operation !== 'upgrade' || checkoutKind === 'checkout') {
-        const lastUsedId = await store.getAppConfigValue('last_used_address_id', null);
-        address = await pickBillingAddressForCheckout(lastUsedId || null);
-        const addressSource = address.generated ? '随机生成' : `地址池 #${address.id}`;
-        progress(`已选取美国免税账单地址 (${addressSource}): ${address.line1}, ${address.city}, ${address.state}`);
-    }
+
 
     const ownerKey = require('../rpc.cjs').scope().taskId;
 
@@ -148,12 +143,18 @@ async function executePaymentWithRetry(page, options) {
 
         try {
             if (operation === 'upgrade' && checkoutKind === 'checkout' && !cardInfo.cvc) cardInfo.cvc = await store.requireCardCvc(card.id);
+            if (operation !== 'upgrade' || checkoutKind === 'checkout') {
+                const lastUsedId = await store.getAppConfigValue('last_used_address_id', null);
+                address = card.billing_address || await pickBillingAddressForCheckout(lastUsedId || null, card.address_id);
+                billingHolderName = card.card_holder || [address.firstName, address.lastName].filter(Boolean).join(' ');
+                progress('已读取现有账单地址，未生成随机资料');
+            }
             let paymentResult;
             try {
                 paymentResult = await completeStripeCardPayment(page, cardInfo, address, {
                     cardAttempt,
                     holderName: billingHolderName,
-                    planType, operation, preflight, expectedCurrency, checkoutKind
+                    planType, operation, preflight, expectedCurrency, checkoutKind, paymentLimit
                 });
             } catch (error) {
                 if (error.code !== 'RESULT_UNKNOWN') throw error;

@@ -57,7 +57,7 @@ function readPixels(png) {
     )
   ];
 }
-test('isolated Chromium masks actual input/session/PAN/CVC/email/iframe pixels and encodes safe video', async () => {
+test('isolated Chromium preserves business fields while masking credentials across frames and video', async () => {
   const output = path.join(__dirname, '..', 'runtime', 'verification', 'masked-media');
   await fs.mkdir(output, { recursive: true });
   const originalEnvironment = {
@@ -76,7 +76,7 @@ test('isolated Chromium masks actual input/session/PAN/CVC/email/iframe pixels a
         '--host-resolver-rules=MAP * ~NOTFOUND, EXCLUDE localhost'
       ]
     });
-    const context = await browser.newContext({ viewport: { width: 1000, height: 800 } });
+    const context = await browser.newContext({ viewport: { width: 1000, height: 1200 } });
     await context.route('**/*', (route) => {
       blocked++;
       return route.abort('blockedbyclient');
@@ -84,14 +84,18 @@ test('isolated Chromium masks actual input/session/PAN/CVC/email/iframe pixels a
     const page = await context.newPage();
     await page.setContent(`<style>body{font:18px sans-serif;background:white}.secret{display:block;width:600px;height:42px;margin:14px;box-sizing:border-box}input,textarea,iframe{border:1px solid #ccc}</style>
       <div id="normal" class="secret">合成隔离页面：所有内容仅为测试资料</div>
-      <input id="card" class="secret" value="4242424242424242">
+      <input id="card" autocomplete="cc-number" class="secret" value="4242424242424242">
       <textarea id="session" class="secret">synthetic_session_token_for_mask_test_only</textarea>
       <input id="cvc" class="secret" value="123">
       <div id="pan" class="secret">4242 4242 4242 4242</div>
       <div id="cvcText" class="secret">安全码：123</div>
       <div id="email" class="secret">synthetic@example.invalid</div>
-      <div id="token" class="secret">synthetic_opaque_token_abcdefghijklmnop</div>
-      <iframe id="frame" class="secret" srcdoc="&lt;input value='123'&gt;"></iframe>`);
+      <div id="token" class="secret">access_token=synthetic_opaque_token_abcdefghijklmnop</div>
+      <input id="holder" class="secret" value="Synthetic Customer">
+      <textarea id="address" class="secret">123 Main Street, Manila 1000</textarea>
+      <div id="error" class="secret">账单地址填写超时，请核对街道和城市。这里保留超过七十二个字符的完整业务说明，便于管理员识别真实错误，而不是把整个段落遮住。详细错误仍应能完整阅读，金额 PHP 9990.00。</div>
+      <iframe id="frame" class="secret" style="height:110px" srcdoc="&lt;input id='nestedCvc' autocomplete='cc-csc' value='123'&gt;&lt;input id='nestedCity' value='Manila'&gt;"></iframe>`);
+    await page.frameLocator('#frame').locator('#nestedCvc').waitFor();
     assert.equal(page.video(), null);
     const boxes = {};
     for (const id of [
@@ -103,13 +107,18 @@ test('isolated Chromium masks actual input/session/PAN/CVC/email/iframe pixels a
       'email',
       'token',
       'frame',
+      'holder',
+      'address',
+      'error',
       'normal'
     ])
       boxes[id] = await page.locator(`#${id}`).boundingBox();
     await media.start();
     const first = await media.screenshot(page, 'masked-real-page');
     const pixels = readPixels(await fs.readFile(first));
-    for (const id of ['card', 'session', 'cvc', 'pan', 'cvcText', 'email', 'token', 'frame']) {
+    const masked = ['card', 'session', 'cvc', 'pan', 'cvcText', 'token'];
+    const visible = ['email', 'holder', 'address', 'error', 'normal'];
+    for (const id of masked) {
       const box = boxes[id];
       assert.deepEqual(
         pixels(box.x + box.width / 2, box.y + box.height / 2),
@@ -117,11 +126,23 @@ test('isolated Chromium masks actual input/session/PAN/CVC/email/iframe pixels a
         `${id} must be fully masked`
       );
     }
-    const normal = boxes.normal;
-    assert.notDeepEqual(
-      pixels(normal.x + normal.width / 2, normal.y + normal.height / 2),
-      [20, 34, 56]
-    );
+    for (const id of visible) {
+      const box = boxes[id];
+      assert.notDeepEqual(
+        pixels(box.x + box.width / 2, box.y + box.height / 2),
+        [20, 34, 56],
+        `${id} business information must remain visible`
+      );
+    }
+    for (const [id, hidden] of [
+      ['nestedCvc', true],
+      ['nestedCity', false]
+    ]) {
+      const box = await page.frameLocator('#frame').locator(`#${id}`).boundingBox();
+      const sample = pixels(box.x + box.width / 2, box.y + box.height / 2);
+      if (hidden) assert.deepEqual(sample, [20, 34, 56]);
+      else assert.notDeepEqual(sample, [20, 34, 56]);
+    }
     await page.locator('#cvc').fill('456');
     await media.screenshot(page, 'masked-real-page-next');
     const files = await media.finish();
@@ -149,7 +170,8 @@ test('isolated Chromium masks actual input/session/PAN/CVC/email/iframe pixels a
       path.join(output, 'verification.json'),
       JSON.stringify(
         {
-          maskedFields: Object.keys(boxes).filter((id) => id !== 'normal'),
+          maskedFields: [...masked, 'nestedCvc'],
+          visibleFields: [...visible, 'nestedCity'],
           video: path.basename(video),
           screenshot: path.basename(first),
           codec: info.streams[0].codec_name,

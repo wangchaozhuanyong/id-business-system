@@ -452,6 +452,14 @@ test('log redaction hides dynamic secrets and protected debug URL only survives 
     /synthetic-secret/
   );
 });
+test('operational logs preserve business identity, full IP, amounts and durations', () => {
+  const taskId = '12345678-1234-4567-8def-123456789012';
+  security.rememberSecrets({ jobKey: taskId, card_cvc: '123', accessToken: 'synthetic-token' });
+  const business = `${taskId} fixture@example.invalid 8.8.8.123 PHP 9990.00 Timeout 29983.123456789ms`;
+  assert.equal(security.redactText(business), business);
+  const credentials = security.redactText('cvc=123 token=synthetic-token 4242424242424242');
+  assert.doesNotMatch(credentials, /123|synthetic-token|4242424242424242/);
+});
 test('worker concurrency uses runtime capacity and optional environment hard cap', () => {
   const { capacity, childEnvironment } = require('../worker.cjs');
   assert.equal(capacity({ maxConcurrent: 2 }, {}), 2);
@@ -503,8 +511,8 @@ test('real-page screenshots require masks and never fall back to raw capture', a
   const page = {
     evaluate: async () => {},
     locator: (selector) => {
-      assert.match(selector, /input,textarea/);
-      assert.match(selector, /iframe/);
+      assert.match(selector, /cc-number/);
+      assert.doesNotMatch(selector, /input,textarea|iframe/);
       return { selector };
     },
     screenshot: async (input) => {

@@ -33,9 +33,9 @@ import { OnlineRechargeOrderSyncService } from '../order-sync.service';
 import {
   id,
   ids,
-  maskEmail,
   object,
   plan,
+  paymentLimit,
   redact,
   sanitize,
   session,
@@ -73,7 +73,7 @@ export class OnlineRechargeTasksRepository {
       : proxyTest
         ? safeProxyTestTaskResult(row.result, payload.proxyId)
         : null;
-    const result = proxyResult ?? sanitize(row.result);
+    const result = proxyResult ?? sanitize(row.result, '', publicView);
     const resultObject =
       result && typeof result === 'object' && !Array.isArray(result)
         ? (result as Record<string, unknown>)
@@ -116,7 +116,7 @@ export class OnlineRechargeTasksRepository {
                   : row.status === 'succeeded' && proxyResult?.ok === true
                     ? '检测成功'
                     : proxyTestFailureMessage(proxyResult?.errorCode)
-        : redact(row.message),
+        : redact(row.message, publicView),
       ...(proxyTest
         ? {
             proxyId: typeof payload.proxyId === 'string' ? payload.proxyId : null,
@@ -125,7 +125,7 @@ export class OnlineRechargeTasksRepository {
           }
         : {}),
       cardLast4: row.cardLast4,
-      email: maskEmail(this.encryption.decrypt(row.emailEncrypted)),
+      email: publicView ? '' : (this.encryption.decrypt(row.emailEncrypted) ?? ''),
       subscriptionChange: change
         ? {
             kind: change.kind,
@@ -362,6 +362,11 @@ export class OnlineRechargeTasksRepository {
         throw new BadRequestException('第三方通道尚未核实支持 Pro 500，请使用本地执行通道');
       const payload: Record<string, unknown> = {};
       if (integrationSource) payload.integrationSource = integrationSource;
+      if (input.paymentLimit !== undefined) {
+        if (!operator || operation !== 'recharge' || settings.gptApiEnabled)
+          throw new BadRequestException('付款上限仅支持管理端官网充值任务');
+        payload.paymentLimit = paymentLimit(input.paymentLimit);
+      }
       if (input.cardId) {
         const cardId = id(input.cardId);
         const selectedCard = await tx.onlineRechargeCard.findUnique({ where: { id: cardId } });

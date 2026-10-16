@@ -206,6 +206,19 @@ function actionBody() {
   }
   if (body.cvc && !/^\d{3,4}$/.test(String(body.cvc)))
     throw new Error('安全码需要为 3 至 4 位数字');
+  const currency = String(body.paymentLimitCurrency ?? '').trim();
+  const maxAmount = String(body.paymentLimitAmount ?? '').trim();
+  if (currency || maxAmount) {
+    if (
+      !/^[A-Z]{3}$/.test(currency) ||
+      !/^\d{1,14}(?:\.\d{1,4})?$/.test(maxAmount) ||
+      !/[1-9]/.test(maxAmount)
+    )
+      throw new Error('请同时填写限额币种和有效的付款上限');
+    body.paymentLimit = { currency, maxAmount };
+  }
+  delete body.paymentLimitCurrency;
+  delete body.paymentLimitAmount;
   return body;
 }
 async function submit() {

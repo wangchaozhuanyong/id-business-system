@@ -286,5 +286,5 @@ test('result redaction preserves strictly typed payment identity and hash, never
   assert.equal(clean.paymentEvidence.cvc, '[已隐藏]');
   assert.equal(clean.paymentEvidence.card_number, '[已隐藏]');
   assert.equal(clean.accessToken, '[已隐藏]');
-  assert.notEqual(redactText(id), id);
+  assert.equal(redactText(id), id);
 });

@@ -183,10 +183,9 @@ test('normal finish preserves mandatory screenshot masks and encodes only comple
   assert.equal(options.timeout, 8000);
   assert.equal(options.maskColor, '#142238');
   assert.equal(options.mask.length, 1);
-  assert.equal(
-    options.mask[0].selector,
-    'input,textarea,[contenteditable],iframe,pre,code,canvas,video,img,[data-sensitive],[data-online-recharge-secret-mask]'
-  );
+  assert.match(options.mask[0].selector, /cc-number/);
+  assert.match(options.mask[0].selector, /cc-csc/);
+  assert.doesNotMatch(options.mask[0].selector, /input,textarea|iframe/);
   assert.equal(f.effects.encodes.length, 1);
   const listing = f.effects.writes.find((item) => item.file.endsWith('.txt'));
   assert.ok(listing.data.includes(frame));

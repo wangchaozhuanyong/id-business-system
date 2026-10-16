@@ -157,6 +157,7 @@ async function completeUpgradePayment(page, cardInfo, options = {}) {
         if (await selected.getAttribute('aria-checked') !== 'true' && !(await selected.isChecked().catch(() => false))) throw new Error('最终保存卡选择已变化，禁止扣款');
         const paymentContext = buildPaymentContext({ ...options, operation: 'upgrade' }, cardInfo, quote);
         const paymentEvidence = { ...paymentContext, source: 'subscription_change', quoteVerified: true, verified: quote.zeroDue };
+        require('../payment-limit.cjs').assertPaymentLimit(options.paymentLimit, quote);
         await beforeExternalSubmit({ provider: 'local', stage: 'upgrade_submit', paymentContext });
         await button.click({ timeout: 8000 });
         if (typeof page.waitForTimeout === 'function') await page.waitForTimeout(1500);

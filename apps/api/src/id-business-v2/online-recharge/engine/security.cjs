@@ -16,7 +16,9 @@ function rememberSecrets(value, key = '') {
   }
   if (
     typeof value === 'string' &&
-    /session|token|password|secret|key|cvv|cvc|card_number|number|proxy|chat.?id/i.test(key)
+    /session|token|password|secret|api.?key|cvv|cvc|card_number|proxy|^(?:number|pan|chat.?id)$/i.test(
+      key
+    )
   ) {
     if (value.length >= 3) secrets.add(value);
     if (/session/i.test(key)) {
@@ -30,15 +32,28 @@ function rememberSecrets(value, key = '') {
 }
 function redactText(value) {
   let out = String(value ?? '');
-  for (const secret of [...secrets].sort((a, b) => b.length - a.length))
-    out = out.split(secret).join('[已隐藏]');
+  for (const secret of [...secrets].sort((a, b) => b.length - a.length)) {
+    const escaped = secret.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    out =
+      secret.length <= 4
+        ? out.replace(new RegExp(`(?<![\\w.])${escaped}(?![\\w.])`, 'g'), '[已隐藏]')
+        : out.split(secret).join('[已隐藏]');
+  }
+  const identifiers = [];
   return out
+    .replace(
+      /\b[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\b/gi,
+      (identifier) => `__ONLINE_ID_${identifiers.push(identifier) - 1}__`
+    )
     .replace(/Bearer\s+\S+/gi, 'Bearer [已隐藏]')
-    .replace(/[A-Za-z0-9_-]{40,}/g, '[长凭据已隐藏]')
     .replace(/\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b/g, '[会话已隐藏]')
-    .replace(/(?:\d[ -]?){12,19}/g, '[敏感号码已隐藏]')
-    .replace(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi, '[邮箱已隐藏]')
-    .replace(/(https?:\/\/)[^\s/@]+:[^\s/@]+@/gi, '$1[凭据已隐藏]@')
+    .replace(/\b(?:\d[ -]?){13,19}\b/g, '[敏感号码已隐藏]')
+    .replace(
+      /((?:\w*token|authorization|cookie|session|cvc|cvv|api[_ -]?key|password|secret)["']?\s*[=:]\s*["']?)[^\s,;"'}]+/gi,
+      '$1[已隐藏]'
+    )
+    .replace(/\b(?:sk|pk)_(?:live|test)_[A-Za-z0-9_-]+\b/g, '[凭据已隐藏]')
+    .replace(/\b(?:https?|socks5h?):\/\/[^\s/@]+:[^\s/@]+@[^\s"'<>]+/gi, '[代理连接凭据已隐藏]')
     .replace(/https?:\/\/[^\s]+/gi, (raw) => {
       try {
         const u = new URL(raw);
@@ -47,6 +62,7 @@ function redactText(value) {
         return '[地址已隐藏]';
       }
     })
+    .replace(/__ONLINE_ID_(\d+)__/g, (_, index) => identifiers[Number(index)] || '')
     .slice(0, 4096);
 }
 function sanitize(value, key = '') {
