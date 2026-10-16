@@ -51,6 +51,17 @@ class SalesReleaseTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, 'API_OUTPUT_SCOPE_CHANGED'):
             b.api_delta(before, {**after, 'other.js.map': 'unexpected runtime map'}, [name])
 
+    def test_generated_client_schema_is_bound_to_canonical_native_output(self):
+        source = b'model A { id String @id }'
+        generated = b'model A {\n  id String @id\n}\n'
+        contract = {'sources': {'apps/api/prisma-mysql/schema.prisma': r.digest(source)}}
+        proof = {'generatedSchemaSha256': r.digest(generated)}
+        r.verify_client_schema(source, generated, contract, proof)
+        with self.assertRaisesRegex(RuntimeError, 'CLIENT_SCHEMA_CHANGED'):
+            r.verify_client_schema(source + b' ', generated, contract, proof)
+        with self.assertRaisesRegex(RuntimeError, 'CLIENT_SCHEMA_CHANGED'):
+            r.verify_client_schema(source, b'model B {}', contract, proof)
+
     def applied(self):
         return {'pending': 0, 'columns': [
             {'COLUMN_NAME': 'sale_status', 'IS_NULLABLE': 'NO', 'COLUMN_TYPE': "enum('unsold','sold')", 'COLUMN_DEFAULT': 'unsold'},
@@ -111,7 +122,7 @@ class SalesReleaseTests(unittest.TestCase):
                  **{'host/' + n: v for n, v in c['hostSources'].items()},
                  **{'api/modules/' + n: v for n, v in allowed.items()},
                  **{'admin/html/' + n: v for n, v in admin.items()}}
-        proof = {**plan, 'version': 1, 'scope': c['scope'],
+        proof = {**plan, 'version': 1, 'scope': c['scope'], 'generatedSchemaSha256': 'a' * 64,
                  'baselineSources': {'api': c['apiSourceBaseline'], 'admin': c['adminSourceBaseline']},
                  'adminPublishedSources': c['adminPublishedSources'], 'hostSources': c['hostSources'],
                  'databaseVerification': {'isolated': True, 'migration': c['migration']['name'], 'legacyDefaultsVerified': True, 'testsPassed': 5, 'testsSkipped': 0, 'businessActions': 0},

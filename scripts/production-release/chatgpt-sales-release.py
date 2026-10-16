@@ -61,6 +61,7 @@ def validate_proof(proof, plan, contract, payload, h):
          and proof.get('browserVerification') == {'status': 'PASS', 'realWrites': 0}
          and proof.get('updatedServices') == ['api', 'admin'] and proof.get('migration') == contract['migration']
          and type(proof.get('businessActions')) is int and proof['businessActions'] == 0, 'PROOF_INVALID')
+    need(re.fullmatch('[a-f0-9]{64}', proof.get('generatedSchemaSha256', '')) is not None, 'GENERATED_SCHEMA_PROOF_MISSING')
     need(all(n.endswith('.d.ts') or n == 'tsconfig.build.tsbuildinfo' for n in proof.get('omittedBuildOutputs', {})), 'UNEXPECTED_OMITTED_RUNTIME_OUTPUT')
     actual = h.file_inventory(payload)
     actual.pop('build-proof.json', None)
@@ -148,7 +149,14 @@ def migrate_image(d, directory):
     return {'reference': reference, 'imageId': row['Id']}
 
 
-def generate_client(d, previous, payload, stage, contract, before):
+def verify_client_schema(source, generated, contract, proof):
+    # Prisma canonicalizes whitespace and relation placement in its client schema.
+    # Bind the exact original input and the independently generated CI output.
+    need(digest(source) == contract['sources']['apps/api/prisma-mysql/schema.prisma']
+         and digest(generated) == proof['generatedSchemaSha256'], 'CLIENT_SCHEMA_CHANGED')
+
+
+def generate_client(d, previous, payload, stage, contract, before, proof):
     image = migrate_image(d, previous)
     (stage / 'migrate-image.json').write_text(json.dumps(image, sort_keys=True) + '\n')
     schema = payload / 'source/apps/api/prisma-mysql/schema.prisma'
@@ -170,7 +178,7 @@ def generate_client(d, previous, payload, stage, contract, before):
         destination = payload / 'api/prisma-client'
         destination.mkdir()
         d.run('docker', 'cp', container + ':/app/node_modules/.prisma/client/.', str(destination))
-        need((destination / 'schema.prisma').read_bytes() == schema.read_bytes(), 'CLIENT_SCHEMA_CHANGED')
+        verify_client_schema(schema.read_bytes(), (destination / 'schema.prisma').read_bytes(), contract, proof)
         expected = d.run('docker', 'exec', before['api']['containerId'], 'node', '-e',
             "console.log(JSON.stringify({v:require('@prisma/client/package.json').version,engines:require('fs').readdirSync('/app/node_modules/.prisma/client').filter(n=>n.startsWith('libquery_engine-')).sort()}))")
         actual = {'v': json.loads((destination / 'package.json').read_bytes())['version'],
@@ -282,7 +290,7 @@ def release(plan, contract, d, h):
         check_migration(migration_state(d, previous, contract), contract)
         if plan['mode'] == 'preflight':
             return {'status': 'CHATGPT_SALES_PREFLIGHT_VERIFIED', 'commit': plan['commit'], 'runtimeBaseline': observation, 'publishedBaselinesReproduced': True, 'businessActions': 0, 'migrationPerformed': False}
-        generate_client(d, previous, payload, stage, contract, before)
+        generate_client(d, previous, payload, stage, contract, before, proof)
         models = {n: h.configuration(d, before[n]) for n in ('api', 'admin', 'online-recharge')}
         images = {}
         for role in ('api', 'admin'):
