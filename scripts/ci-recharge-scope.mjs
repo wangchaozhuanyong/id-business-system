@@ -1,3 +1,4 @@
+import { isWorkspaceDragOnly, workspaceDragParts } from './ci-workspace-drag-scope.mjs';
 import {
   isChatgptSalesOnly,
   isChatgptSalesControlsOnly,
@@ -238,6 +239,7 @@ const onlineCiBuildTestInputs = new Set([
 ]);
 export function needsOnlineRechargeCiBuild(paths, context) {
   if (isRegistrationParityDiagnosticsOnly(paths, context)) return false;
+  if (isWorkspaceDragOnly(paths)) return false;
   if (isChatgptSalesOnly(paths) || isChatgptSalesControlsOnly(paths)) return false;
   if (isOnlineProxyCountryValidationOnly(paths)) return false;
   if (isOnlineProxyCountryOnly(paths)) return false;
@@ -1019,6 +1021,12 @@ export function checkMode(paths, oldSchema, newSchema, grantHelperSnapshot, cont
   if (isRegistrationParityDiagnosticsOnly(paths, context))
     return oldSchema === newSchema ? 'recharge' : 'full';
   if (context && isRegistrationParityDiagnosticsOnly(paths)) return 'full';
+  if (isWorkspaceDragOnly(paths))
+    return oldSchema === newSchema
+      ? workspaceDragParts(paths).includes('admin')
+        ? 'admin'
+        : 'ci-only'
+      : 'full';
   if (isChatgptSalesControlsOnly(paths)) return oldSchema === newSchema ? 'ci-only' : 'full';
   if (isChatgptSalesOnly(paths))
     return chatgptSalesSchemaMatches(oldSchema, newSchema) ? 'recharge' : 'full';
@@ -1494,6 +1502,7 @@ export function isTargetedOnly(paths, oldSchema, newSchema) {
 export function selectedParts(paths, grantHelperSnapshot, context) {
   if (isRegistrationParityDiagnosticsOnly(paths, context))
     return [...registrationParityDiagnosticsParts];
+  if (isWorkspaceDragOnly(paths)) return workspaceDragParts(paths);
   if (isChatgptSalesControlsOnly(paths)) return ['guards'];
   if (isChatgptSalesOnly(paths)) return [...chatgptSalesParts];
   if (isOnlineProxyCountryOnly(paths)) return [...onlineProxyCountryParts];
@@ -4165,7 +4174,8 @@ async function main() {
       if (
         requestedBaseIsAncestor &&
         ((isChatgptSalesOnly(salesPaths) && chatgptSalesSchemaMatches(salesBefore, salesAfter)) ||
-          (isChatgptSalesControlsOnly(salesPaths) && salesBefore === salesAfter))
+          (isChatgptSalesControlsOnly(salesPaths) && salesBefore === salesAfter) ||
+          (isWorkspaceDragOnly(salesPaths) && salesBefore === salesAfter))
       ) {
         base = recordedPullRequestBase({
           eventName: process.env.GITHUB_EVENT_NAME,

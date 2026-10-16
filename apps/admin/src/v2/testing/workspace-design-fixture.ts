@@ -77,6 +77,7 @@ let quickActions =
 let hasCustomQuickActionOrder = false;
 let quickActionReads = 0;
 let quickActionSaveAttempts = 0;
+let quickActionOrderAttempts = 0;
 const fixtureDelay = () =>
   new Promise<void>((resolve) =>
     window.setTimeout(resolve, fixtureParams.get('save') === 'slow' ? 600 : 0)
@@ -95,6 +96,10 @@ idBusinessV2WorkspaceApi.listQuickActions = async () => {
   return { items: [...quickActions], hasCustomOrder: hasCustomQuickActionOrder };
 };
 idBusinessV2WorkspaceApi.reorderQuickActions = async (input) => {
+  if (fixtureParams.get('order') === 'slow')
+    await new Promise((resolve) => window.setTimeout(resolve, 500));
+  if (fixtureParams.get('order') === 'fail-once' && quickActionOrderAttempts++ === 0)
+    throw new Error('验收模拟顺序保存失败，请重新拖动重试');
   if (!(input.initializeOnly && hasCustomQuickActionOrder)) {
     if (quickActions.some((item, index) => item.id !== input.expectedQuickActionIds[index]))
       throw new Error('回复顺序已变化，请刷新后重试');

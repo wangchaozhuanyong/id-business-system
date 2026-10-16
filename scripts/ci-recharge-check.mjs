@@ -1,3 +1,4 @@
+import { isWorkspaceDragOnly, workspaceDragCommands } from './ci-workspace-drag-scope.mjs';
 import {
   isChatgptSalesOnly,
   isChatgptSalesControlsOnly,
@@ -174,6 +175,10 @@ if (registrationParityDiagnosticsOnly) {
       run('node', [registrationParityDiagnosticsAcceptance, '--python=' + python]);
     }
   }
+  process.exit(0);
+}
+if (['admin', 'ci-only'].includes(mode) && isWorkspaceDragOnly(changed)) {
+  for (const [file, ...args] of workspaceDragCommands(part, changed)) run(file, args);
   process.exit(0);
 }
 // Finite account inventory change: keep all affected checks and isolated MySQL.

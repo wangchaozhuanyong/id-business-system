@@ -72,17 +72,26 @@ export function useV2QuickActionSorting(options: {
     ) {
       if (pointerY < bounds.top + 36) scroll.scrollTop -= 10;
       else if (pointerY > bounds.bottom - 36) scroll.scrollTop += 10;
+      let last: { id: string; bottom: number } | undefined;
       for (const candidate of scroll.querySelectorAll<HTMLElement>('[data-sort-id]')) {
         const row = candidate.closest<HTMLElement>(
           '.el-table__row, .v2-quick-actions-drawer__card'
         );
-        if (!row) continue;
+        const id = candidate.dataset.sortId;
+        if (!row || !id) continue;
         const rect = row.getBoundingClientRect();
-        if (pointerY >= rect.top && pointerY <= rect.bottom) {
-          drag.value.targetId = candidate.dataset.sortId ?? '';
+        if (rect.height === 0) continue;
+        last = { id, bottom: rect.bottom };
+        // Gaps belong to the following row; space below the last row means append.
+        if (pointerY <= rect.bottom) {
+          drag.value.targetId = id;
           drag.value.after = pointerY > rect.top + rect.height / 2;
           break;
         }
+      }
+      if (!drag.value.targetId && last && pointerY > last.bottom) {
+        drag.value.targetId = last.id;
+        drag.value.after = true;
       }
     }
   }
@@ -95,12 +104,17 @@ export function useV2QuickActionSorting(options: {
 
   function startDrag(event: PointerEvent, id: string) {
     if (!options.enabled() || !event.isPrimary || event.button !== 0) return;
+    event.preventDefault();
     cancelDrag();
     handle = event.currentTarget as HTMLElement;
     pointerId = event.pointerId;
     startY = pointerY = event.clientY;
     pointerX = event.clientX;
     drag.value = { id, targetId: '', after: false };
+    const focusTarget = handle.matches('[data-sort-id]')
+      ? handle
+      : handle.querySelector<HTMLElement>('[data-sort-id]');
+    focusTarget?.focus({ preventScroll: true });
     handle.setPointerCapture(pointerId);
     frame = requestAnimationFrame(trackDrag);
   }
