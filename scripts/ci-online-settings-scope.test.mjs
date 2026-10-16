@@ -76,3 +76,22 @@ test('control-only repairs retain guard tests without rerunning unrelated busine
   );
   assert.throws(() => onlineSettingsCommands('api', paths));
 });
+
+test('isolated MySQL fixture repair retains all four checks and rejects extra runtime source', () => {
+  const paths = [
+    'apps/api/src/id-business-v2/online-recharge/mysql.integration.spec.ts',
+    'scripts/production-release/online-settings-contract.json',
+    'scripts/ci-online-settings-scope.mjs',
+    'scripts/ci-online-settings-scope.test.mjs'
+  ];
+  assert.equal(isOnlineSettingsOnly(paths), true);
+  assert.equal(isOnlineSettingsControlsOnly(paths), false);
+  for (const part of ['guards', 'api', 'admin', 'online-engine'])
+    assert.ok(onlineSettingsCommands(part, paths).length);
+  for (const name of [
+    'apps/api/src/id-business-v2/online-recharge/plan-region.ts',
+    'apps/api/prisma-mysql/schema.prisma',
+    'package-lock.json'
+  ])
+    assert.equal(isOnlineSettingsOnly([...paths, name]), false);
+});

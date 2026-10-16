@@ -88,9 +88,16 @@ const required = [
   'persistence/tasks.repository.ts'
 ].map((name) => 'apps/api/src/id-business-v2/online-recharge/' + name);
 export function isOnlineSettingsOnly(paths) {
+  const databaseTest = 'apps/api/src/id-business-v2/online-recharge/mysql.integration.spec.ts';
+  const fixtureRepair =
+    paths.includes(databaseTest) &&
+    paths.every(
+      (path) =>
+        path === databaseTest || controlPaths.includes(path) || documentationPaths.includes(path)
+    );
   return (
     new Set(paths).size === paths.length &&
-    required.every((path) => paths.includes(path)) &&
+    (required.every((path) => paths.includes(path)) || fixtureRepair) &&
     paths.every((path) => onlineSettingsPaths.includes(path))
   );
 }
