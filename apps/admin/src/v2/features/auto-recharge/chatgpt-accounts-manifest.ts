@@ -3,7 +3,7 @@ import { defineV2Feature } from '@/v2/features/feature';
 export const chatgptAccountsFeature = defineV2Feature({
   key: 'chatgpt-accounts',
   title: 'ChatGPT 账号',
-  group: '账号设置',
+  group: '自充设置',
   route: '/v2/account-settings/chatgpt-accounts',
   sourceSheet: 'ChatGPT 账号',
   requiredRoles: ['admin'],

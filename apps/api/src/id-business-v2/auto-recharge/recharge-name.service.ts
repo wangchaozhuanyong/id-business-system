@@ -18,6 +18,7 @@ import {
 import { RechargeNameRepository } from './persistence/recharge-name.repository';
 import { generateRechargeBillingName } from './recharge-billing-generator';
 import { cardNumber, cardExpiry } from './bank-recharge-card-validation';
+import { SharedBankCardRepository } from '../bank-card-pool/public-api';
 import {
   bankRechargeCurrency,
   bankRechargeId,
@@ -31,7 +32,8 @@ export class RechargeNameService {
     private readonly repository: RechargeNameRepository,
     private readonly transactions: V2CommandTransactionManager,
     private readonly audit: V2TransactionalAuditService,
-    private readonly encryption: FieldEncryptionService
+    private readonly encryption: FieldEncryptionService,
+    private readonly pool: SharedBankCardRepository
   ) {}
   private name(value: unknown) {
     return bankRechargeText(value, '姓名', 120).replace(/\s+/g, ' ');
@@ -41,6 +43,17 @@ export class RechargeNameService {
   }
   lock(tx: V2CommandTransaction) {
     return this.repository.lock(tx);
+  }
+  releaseUnreceivedCard(tx: V2CommandTransaction, jobId: string) {
+    return this.pool.finishBitBrowser(
+      tx,
+      jobId,
+      { payment_attempted: false, payment_requests_sent: 0 },
+      false
+    );
+  }
+  removeSharedCard(tx: V2CommandTransaction, numberHash: string | null) {
+    return this.pool.removeLegacyData(tx, numberHash);
   }
   async list(query: { page?: string; pageSize?: string; keyword?: string; status?: string } = {}) {
     const pagination = getPagination(query);
@@ -161,7 +174,7 @@ export class RechargeNameService {
         await this.repository.lock(tx);
         const numberHash = this.encryption.hash(number)!;
         const card = await this.repository.card(tx, numberHash);
-        if (card && !card.active) throw new ConflictException('该银行卡已停用，不能用于充值');
+        if (card) await this.pool.assertLegacyAvailable(tx, card);
         const binding = await this.repository.binding(tx, numberHash);
         let nameEncrypted = binding?.confirmed
           ? binding.nameEncrypted
@@ -188,17 +201,30 @@ export class RechargeNameService {
           billingAddressId: card?.billingAddressId ?? null
         };
       },
-      { changedScopes: ['auto-recharge'], requestId: randomUUID(), operator, retryMode: 'none' }
+      {
+        changedScopes: ['auto-recharge', 'online-recharge'],
+        requestId: randomUUID(),
+        operator,
+        retryMode: 'none'
+      }
     );
   }
   async prepare(value: unknown, operator: AuthenticatedUser) {
     const input = bankRechargeObject(value);
     if (
-      Object.keys(input).some((key) => !['number', 'expiry', 'name', 'currencyCode'].includes(key))
+      Object.keys(input).some(
+        (key) => !['number', 'expiry', 'name', 'currencyCode', 'plan'].includes(key)
+      )
     )
       throw new BadRequestException('银行卡登记资料格式无效');
     return this.transactions.execute(
       async (tx) => {
+        await this.repository.lock(tx);
+        await this.pool.assertNumber(
+          tx,
+          this.encryption.hash(cardNumber(input.number))!,
+          typeof input.plan === 'string' ? input.plan : undefined
+        );
         const card = await this.prepareCard(
           tx,
           {
@@ -211,14 +237,26 @@ export class RechargeNameService {
         );
         return { cardId: card.id };
       },
-      { changedScopes: ['auto-recharge'], requestId: randomUUID(), operator, retryMode: 'none' }
+      {
+        changedScopes: ['auto-recharge', 'online-recharge'],
+        requestId: randomUUID(),
+        operator,
+        retryMode: 'none'
+      }
     );
   }
-  async localCard(tx: V2CommandTransaction, id: string, name: string, currency: string) {
+  async localCard(
+    tx: V2CommandTransaction,
+    id: string,
+    name: string,
+    currency: string,
+    plan?: string,
+    jobId?: string
+  ) {
     await this.repository.lock(tx);
     const card = await this.repository.cardById(tx, id);
-    if (!card || !card.active || card.currencyCode !== currency || !card.numberHash)
-      throw new ConflictException('所选银行卡不可用或币种不匹配');
+    bankRechargeCurrency(currency);
+    if (!card || !card.numberHash) throw new ConflictException('所选银行卡资料不完整');
     const binding = await this.repository.binding(tx, card.numberHash);
     for (const fixed of [
       card.billingNameEncrypted,
@@ -227,6 +265,8 @@ export class RechargeNameService {
       if (fixed && this.encryption.decrypt(fixed) !== this.name(name))
         throw new ConflictException('账单姓名与银行卡历史绑定不一致');
     }
+    if (plan && jobId) await this.pool.reserveLegacy(tx, card, plan, jobId);
+    else await this.pool.assertLegacyAvailable(tx, card);
     return card;
   }
   async prepareCard(
@@ -238,8 +278,7 @@ export class RechargeNameService {
     const number = cardNumber(value.number);
     const numberHash = this.encryption.hash(number)!;
     const card = await this.repository.card(tx, numberHash);
-    if (card && (!card.active || card.currencyCode !== value.currencyCode))
-      throw new ConflictException('银行卡已停用或付款币种不匹配');
+    if (card) await this.pool.assertLegacyAvailable(tx, card);
     const binding = await this.repository.binding(tx, numberHash);
     for (const fixedName of [
       card?.billingNameEncrypted,
@@ -248,7 +287,9 @@ export class RechargeNameService {
       if (fixedName && this.encryption.decrypt(fixedName) !== this.name(value.name))
         throw new ConflictException('账单姓名与银行卡历史绑定不一致');
     }
-    if (card) return card;
+    if (card) {
+      return card;
+    }
     const created = await this.repository.createCard(tx, {
       label: `银行卡 ····${number.slice(-4)}`,
       last4: number.slice(-4),
@@ -258,6 +299,7 @@ export class RechargeNameService {
       currency: { connect: { code: value.currencyCode } },
       createdByUserId: operator.id
     });
+    await this.pool.ensureLegacy(tx, created);
     await this.audit.append(tx, {
       userId: operator.id,
       module: 'id_business_v2',

@@ -2,8 +2,9 @@ import { defineV2Feature } from '@/v2/features/feature';
 
 export const bankRechargeCardsFeature = defineV2Feature({
   key: 'bank-recharge-cards',
-  title: '银行卡管理',
-  group: '自动充值',
+  title: '银行卡共享池',
+  navigation: false,
+  group: '自充设置',
   route: '/v2/auto-recharge/bank-cards',
   sourceSheet: '银行卡管理',
   requiredRoles: ['admin'],

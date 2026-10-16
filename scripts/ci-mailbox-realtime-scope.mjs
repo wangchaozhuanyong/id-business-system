@@ -11,14 +11,28 @@ export const mailboxControlPaths = [
   'scripts/production-release/mailbox-realtime-contract.json',
   'scripts/production-release/mailbox-realtime-release.test.py'
 ];
+export const mailboxHealthCaptureBase = 'd3e96b1b733a59223129bfe3620e7b4e3edecdef';
+export const mailboxHealthCaptureTree = '7e72bf371b2e760a6c52923195e4fc298fb73636';
+export const mailboxHealthCapturePaths = [
+  'scripts/ci-mailbox-realtime-scope.mjs',
+  'scripts/production-release/mailbox-realtime-contract.json',
+  'scripts/production-release/mailbox-realtime-inspect.py',
+  'scripts/production-release/mailbox-realtime-release.test.py'
+];
 
 export function isMailboxRealtimeControlsOnly(paths, context) {
-  if (context?.base !== mailboxControlBase || context?.baseTree !== mailboxControlTree)
-    return false;
+  const healthCapture =
+    context?.base === mailboxHealthCaptureBase && context?.baseTree === mailboxHealthCaptureTree;
   if (
-    paths.length !== mailboxControlPaths.length ||
+    !healthCapture &&
+    (context?.base !== mailboxControlBase || context?.baseTree !== mailboxControlTree)
+  )
+    return false;
+  const allowed = healthCapture ? mailboxHealthCapturePaths : mailboxControlPaths;
+  if (
+    paths.length !== allowed.length ||
     new Set(paths).size !== paths.length ||
-    paths.some((name) => !mailboxControlPaths.includes(name))
+    paths.some((name) => !allowed.includes(name))
   )
     return false;
   // Reuse the original full source fingerprint; the repair cannot change shipped application bytes.
@@ -26,6 +40,20 @@ export function isMailboxRealtimeControlsOnly(paths, context) {
     const c = JSON.parse(
       readFileSync('scripts/production-release/mailbox-realtime-contract.json', 'utf8')
     );
+    if (
+      healthCapture &&
+      (c.healthInspection?.readOnly !== true ||
+        c.healthInspection.publishedCommit !== '59b36f3aadef28a59f47a55ed1e66686fcc2c42c' ||
+        Object.keys(c.healthInspection.hashes).length !== allowed.length - 1 ||
+        allowed
+          .filter((n) => !n.endsWith('mailbox-realtime-contract.json'))
+          .some(
+            (n) =>
+              createHash('sha256').update(readFileSync(n)).digest('hex') !==
+              c.healthInspection.hashes[n]
+          ))
+    )
+      return false;
     return isMailboxRealtimeOnly(c.expectedGitChanges, {
       base: c.sourceBaseline,
       baseTree: c.sourceBaselineTree

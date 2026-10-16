@@ -224,16 +224,16 @@ describe('充值订单渠道隔离', () => {
     flow.openCreate();
     expect(flow.availableCards.value).toEqual([]);
   });
-  it('比特订单切换币种仍清空原币种银行卡', () => {
+  it('比特订单切换币种保留通用银行卡，重新填写对应汇率', () => {
     const flow = mount('bitbrowser');
     flow.openEdit(row('bitbrowser'));
     flow.form.cardId = 'bit-card';
     flow.form.chargeFxRateToCny = '0.1';
     flow.changeChargeCurrency();
-    expect(flow.form.cardId).toBe('');
+    expect(flow.form.cardId).toBe('bit-card');
     expect(flow.form.chargeFxRateToCny).toBe('');
   });
-  it('比特选项接口不含银行卡时，仍从原银行卡接口加载并按币种筛选', async () => {
+  it('比特订单加载不同登记币种的启用银行卡', async () => {
     api.options.mockResolvedValue({ customers: [], financeAccounts: [] });
     api.cards.mockResolvedValue({
       items: [
@@ -243,8 +243,8 @@ describe('充值订单渠道隔离', () => {
     });
     const flow = mount('bitbrowser');
     flow.openCreate();
-    await vi.waitFor(() => expect(flow.availableCards.value).toHaveLength(1));
-    expect(flow.availableCards.value[0]!.id).toBe('bit-card');
+    await vi.waitFor(() => expect(flow.availableCards.value).toHaveLength(2));
+    expect(flow.availableCards.value.map((card) => card.id)).toEqual(['bit-card', 'usd-card']);
     expect(api.cards).toHaveBeenCalledTimes(1);
   });
   it('线上订单只从线上选项卡池加载，不请求原比特银行卡库', async () => {

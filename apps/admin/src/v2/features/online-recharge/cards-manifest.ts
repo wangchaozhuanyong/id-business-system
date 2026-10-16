@@ -3,8 +3,8 @@ import { sectionTitles, sectionDescriptions } from './sections';
 export const onlineRechargeCardsFeature = defineV2Feature({
   key: 'online-recharge-cards',
   title: sectionTitles['cards'],
-  group: '线上代充',
-  route: '/v2/online-recharge/cards',
+  group: '自充设置',
+  route: '/v2/account-settings/bank-cards',
   sourceSheet: '线上代充',
   permission: 'id_business_v2.online_recharge.read',
   kind: 'list',

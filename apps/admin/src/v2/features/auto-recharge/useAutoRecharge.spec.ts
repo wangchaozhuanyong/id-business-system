@@ -160,6 +160,8 @@ vi.mock('./bank-recharge-api', () => ({
     matchCardName: mock.matchCardName,
     preparePaymentCard: mock.preparePaymentCard,
     listCards: vi.fn(),
+    listSharedCards: vi.fn(),
+    sharedCardDetail: mock.managedCardDetail,
     listAccounts: vi.fn(),
     listCurrencies: vi.fn(),
     managedCardDetail: mock.managedCardDetail,
@@ -388,6 +390,7 @@ beforeEach(() => {
   });
   mock.checkCardAvailability.mockResolvedValue({ available: true });
   mock.managedCardDetail.mockReset().mockResolvedValue({
+    allowedPlans: ['plus'],
     id: 'card-a',
     status: 'active',
     currencyCode: 'PHP',
@@ -603,6 +606,7 @@ describe('比特浏览器充值入口', () => {
   });
   it('选择未绑定姓名的已保存银行卡后自动从姓名库回填，无需手填或点击执行', async () => {
     mock.managedCardDetail.mockResolvedValueOnce({
+      allowedPlans: ['plus'],
       id: 'card-a',
       status: 'active',
       currencyCode: 'PHP',
@@ -614,7 +618,7 @@ describe('比特浏览器充值入口', () => {
     mock.matchCardName.mockResolvedValueOnce({
       name: 'Library Person',
       confirmed: false,
-      cardId: 'card-a',
+      cardId: 'legacy-card-a',
       billingAddressId: address.id
     });
     await flow.selectSavedCard('card-a');
@@ -622,6 +626,8 @@ describe('比特浏览器充值入口', () => {
     expect(mock.matchCardName).toHaveBeenCalledExactlyOnceWith('5555555555554444');
     expect(flow.details.value.name).toBe('Library Person');
     expect(flow.selectedPaymentCardId.value).toBe('card-a');
+    flow.details.value.number = '4111111111111111';
+    expect(flow.selectedPaymentCardId.value).toBe('');
     expect(mock.preparePaymentCard).not.toHaveBeenCalled();
     expect(mock.startBitBrowser).not.toHaveBeenCalled();
     expect(mock.connectorStart).not.toHaveBeenCalled();
@@ -730,6 +736,40 @@ describe('比特浏览器充值入口', () => {
     await expect(ready).rejects.toThrow('姓名库暂无启用姓名');
     expect(flow.workflowMessage.value).toBe('账单姓名匹配失败，请在账单姓名处重试。');
     expect(flow.canStart.value).toBe(false);
+    expect(mock.startBitBrowser).not.toHaveBeenCalled();
+  });
+  it('切换支付币种保留已选卡、有效期和账单地址，只清理临时安全码', async () => {
+    await flow.selectSavedCard('card-a');
+    await nextTick();
+    flow.details.value.cvc = '123';
+    const number = flow.details.value.number;
+    const expiry = flow.details.value.expiry;
+    const selectedAddress = flow.selectedAddressId.value;
+    flow.lockedCurrency.value = 'USD';
+    await nextTick();
+    expect(flow.selectedPaymentCardId.value).toBe('card-a');
+    expect(flow.details.value.number).toBe(number);
+    expect(flow.details.value.expiry).toBe(expiry);
+    expect(flow.selectedAddressId.value).toBe(selectedAddress);
+    expect(flow.details.value.cvc).toBe('');
+  });
+  it('手选只限 Pro 的卡不能用于 Plus，切换套餐清除旧卡和安全码', async () => {
+    mock.managedCardDetail.mockResolvedValueOnce({
+      id: 'card-a',
+      status: 'active',
+      number: '5555555555554444',
+      expiry: '12/30',
+      allowedPlans: ['pro_20x']
+    });
+    await flow.selectSavedCard('card-a');
+    expect(flow.error.value).toContain('不适用当前套餐');
+    expect(flow.selectedPaymentCardId.value).toBe('');
+    expect(mock.matchCardName).not.toHaveBeenCalled();
+    fillForm();
+    flow.plan.value = 'pro-20x';
+    await nextTick();
+    expect(flow.details.value.number).toBe('');
+    expect(flow.details.value.cvc).toBe('');
     expect(mock.startBitBrowser).not.toHaveBeenCalled();
   });
   it('银行卡和地址通过校验后显示就绪，不再要求重复补齐', async () => {

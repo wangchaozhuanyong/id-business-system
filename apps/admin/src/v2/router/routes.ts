@@ -128,7 +128,10 @@ export const v2Routes: RouteRecordRaw[] = [
         'auto-recharge/chatgpt-accounts': '/v2/account-settings/chatgpt-accounts',
         'auto-recharge/mailbox': '/v2/account-settings/mailbox',
         'auto-recharge/proxies': '/v2/account-settings/proxies',
-        'online-recharge/proxies': '/v2/account-settings/proxies'
+        'online-recharge/proxies': '/v2/account-settings/proxies',
+        'auto-recharge/bank-cards': '/v2/account-settings/bank-cards',
+        'online-recharge/cards': '/v2/account-settings/bank-cards',
+        'auto-recharge/bank-orders': '/v2/account-settings/bank-orders'
       }).map(
         ([path, target]): RouteRecordRaw => ({
           path,

@@ -14,6 +14,12 @@ import { OnlineRechargeEphemeralCredentials } from '../ephemeral-credentials.ser
 import { OnlineRechargeRepository } from './online-recharge.repository';
 import { id, ids, integer, object, plan, text, activeTaskStatuses } from '../validation';
 import { createOnlineRechargeCodes } from '../cdk-generator';
+import { assertV2ExpectedUpdatedAt, normalizeV2ExpectedUpdatedAt } from '../../runtime/public-api';
+import {
+  lockSharedBankCards,
+  sharedCardPlans,
+  SHARED_CARD_PLANS
+} from '../../bank-card-pool/public-api';
 
 const locations: [string, string, string[]][] = [
   ['Portland', 'Oregon', ['97201', '97205', '97209', '97214']],
@@ -81,7 +87,8 @@ export class OnlineRechargeAssetsRepository {
       const expiryMonth = integer(row.expiryMonth ?? expiry[0], '有效月份', 1, 12);
       let expiryYear = integer(row.expiryYear ?? expiry[1], '有效年份', 0, 9999);
       if (expiryYear < 100) expiryYear += 2000;
-      const cvc = row.cvc ?? row.card_cvc;
+      const rawCvc = row.cvc ?? row.card_cvc;
+      const cvc = rawCvc === '' || rawCvc === null ? undefined : rawCvc;
       if (cvc !== undefined && (typeof cvc !== 'string' || !/^\d{3,4}$/.test(cvc)))
         throw new BadRequestException('安全码格式无效');
       return {
@@ -89,11 +96,13 @@ export class OnlineRechargeAssetsRepository {
         expiryMonth,
         expiryYear,
         holderName: text(row.holderName ?? row.card_holder ?? '', '持卡姓名', 120, false),
+        allowedPlans: sharedCardPlans(row.allowedPlans ?? [...SHARED_CARD_PLANS]),
         addressId: row.addressId ? id(row.addressId) : null,
         cvc: cvc as string | undefined
       };
     });
     const saved = await this.repository.transaction('cards-import', async (tx) => {
+      await lockSharedBankCards(tx);
       const rows: { id: string; cvc?: string; inserted: boolean }[] = [];
       for (const card of parsed) {
         const numberHash = this.encryption.hash(card.number)!;
@@ -115,6 +124,7 @@ export class OnlineRechargeAssetsRepository {
               expiryMonth: card.expiryMonth,
               expiryYear: card.expiryYear,
               holderName: card.holderName,
+              allowedPlans: card.allowedPlans,
               addressId: card.addressId
             }
           });
@@ -148,6 +158,7 @@ export class OnlineRechargeAssetsRepository {
     };
   }
   private async cards(action: string, input: Record<string, unknown>, operator: AuthenticatedUser) {
+    if (action === 'create') return this.importCards([input], operator);
     if (action === 'import') return this.importCards(input.cards, operator);
     const rowId = id(input.id);
     if (action === 'cvc') {
@@ -166,8 +177,15 @@ export class OnlineRechargeAssetsRepository {
       return { success: true, hasCvc: true };
     }
     return this.repository.transaction(`card:${rowId}`, async (tx) => {
+      await lockSharedBankCards(tx);
       const row = await tx.onlineRechargeCard.findUnique({ where: { id: rowId } });
       if (!row) throw new NotFoundException('银行卡不存在');
+      if (input.version !== undefined)
+        assertV2ExpectedUpdatedAt(
+          row.updatedAt,
+          normalizeV2ExpectedUpdatedAt(input.version, '银行卡'),
+          '银行卡'
+        );
       if (action === 'reveal') {
         assertOnlineSensitive(operator);
         text(input.reason, '查看原因', 500);
@@ -190,6 +208,15 @@ export class OnlineRechargeAssetsRepository {
       )
         throw new ConflictException('银行卡关联执行中或待核对任务，不能更改');
       if (action === 'delete') {
+        const legacy = await tx.idBusinessV2BankRechargeCard.findUnique({
+          where: { numberHash: row.numberHash }
+        });
+        if (
+          legacy ||
+          (await tx.onlineRechargeTask.count({ where: { cardId: rowId } })) ||
+          (await tx.onlineRechargeBill.count({ where: { cardId: rowId } }))
+        )
+          throw new ConflictException('银行卡已有历史关联，请改为停用');
         await tx.onlineRechargeCard.delete({ where: { id: rowId } });
         await this.memory.forgetCvc(rowId);
       } else if (action === 'update' || action === 'status') {
@@ -197,7 +224,11 @@ export class OnlineRechargeAssetsRepository {
         if (!['active', 'disabled', 'exhausted', 'retired'].includes(String(status)))
           throw new BadRequestException('银行卡状态无效');
         const addressId =
-          input.addressId === null ? null : input.addressId ? id(input.addressId) : row.addressId;
+          input.addressId === null || input.addressId === ''
+            ? null
+            : input.addressId
+              ? id(input.addressId)
+              : row.addressId;
         if (
           addressId &&
           !(await tx.onlineRechargeAddress.findFirst({ where: { id: addressId, active: true } }))
@@ -205,7 +236,13 @@ export class OnlineRechargeAssetsRepository {
           throw new BadRequestException('地址不存在');
         await tx.onlineRechargeCard.update({
           where: { id: rowId },
-          data: { status: status as typeof row.status, addressId }
+          data: {
+            status: status as typeof row.status,
+            addressId,
+            ...(input.allowedPlans !== undefined
+              ? { allowedPlans: sharedCardPlans(input.allowedPlans) }
+              : {})
+          }
         });
       } else throw new BadRequestException('不支持该银行卡操作');
       await this.repository.log(tx, `cards.${action}`, operator, rowId);

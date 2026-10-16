@@ -95,6 +95,7 @@ export async function completeUnknownPaymentResolution(input: {
   callback: Record<string, unknown>;
   repository: RechargeRepository;
   audit: V2TransactionalAuditService;
+  cards?: import('./bank-recharge-card.service').BankRechargeCardService;
 }) {
   const { tx, job, callback, repository, audit } = input;
   const expectedKeys = new Set([
@@ -135,6 +136,12 @@ export async function completeUnknownPaymentResolution(input: {
     throw new ConflictException('历史付款状态或账号核验结果已经变化');
   }
   const resolvedAt = new Date().toISOString();
+  await input.cards?.finishSharedCard(
+    tx,
+    source.id,
+    { payment_attempted: false, payment_requests_sent: 0 },
+    false
+  );
   const resolution = {
     operator_resolution: 'confirmed_no_bank_request',
     resolved_at: resolvedAt,

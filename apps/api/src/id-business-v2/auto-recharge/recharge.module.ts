@@ -1,6 +1,7 @@
 import { ProxyPoolModule } from '../proxy-pool/public-api';
 import { BankRechargeOnlineOrderService } from './bank-recharge-online-order.service';
 import { BankRechargeOnlineOrderRepository } from './persistence/bank-recharge-online-order.repository';
+import { SharedBankCardPoolModule } from '../bank-card-pool/public-api';
 import { BankRechargeSubscriptionReviewService } from './bank-recharge-subscription-review.service';
 import { BankRechargeLifecycleService } from './bank-recharge-lifecycle.service';
 import { BankRechargeLifecycleRepository } from './persistence/bank-recharge-lifecycle.repository';
@@ -41,6 +42,7 @@ import { RechargeLoginCodeService } from './recharge-login-code.service';
 import { BankRechargePricingService } from './bank-recharge-pricing.service';
 @Module({
   imports: [
+    SharedBankCardPoolModule,
     ProxyPoolModule,
     IdBusinessV2RuntimeModule,
     IdBusinessV2FinanceModule,

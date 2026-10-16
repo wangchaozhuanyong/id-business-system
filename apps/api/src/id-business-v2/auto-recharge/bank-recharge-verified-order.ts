@@ -90,7 +90,7 @@ export async function recordVerifiedBankRechargeOrder(
       ? result.card_last4
       : null;
   const matchingCards = cardLast4
-    ? await deps.repository.findCardsByTail(tx, cardLast4, currencyCode)
+    ? await deps.repository.findCardsByTail(tx, cardLast4, job.cardId)
     : [];
   const card = job.cardId
     ? (matchingCards.find((candidate) => candidate.id === job.cardId) ?? null)

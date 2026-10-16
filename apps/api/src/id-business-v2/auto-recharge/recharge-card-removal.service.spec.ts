@@ -22,7 +22,7 @@ function setup() {
     remove: vi.fn()
   };
   const transactions = { execute: vi.fn(async (work) => work({})) };
-  const names = { confirm: vi.fn() },
+  const names = { confirm: vi.fn(), lock: vi.fn(), removeSharedCard: vi.fn() },
     audit = { append: vi.fn() };
   const input = {
     cardId: card.id,

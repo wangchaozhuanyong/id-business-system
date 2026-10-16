@@ -265,9 +265,10 @@ export function useAutoRecharge(options: { clearPaymentValidation?: () => void }
   });
   const paymentCardsQuery = useV2ModuleQuery({
     moduleKey: 'bank-recharge-cards',
-    scope: 'auto-recharge',
-    key: 'auto-recharge-payment-cards',
-    query: ({ signal }) => bankRechargeApi.listCards({ signal })
+    scope: 'online-recharge',
+    key: () => `auto-recharge-payment-cards:${plan.value}`,
+    keepPreviousData: false,
+    query: ({ signal }) => bankRechargeApi.listSharedCards(plan.value, { signal })
   });
   const proxyCountriesQuery = useV2ModuleQuery({
     moduleKey: 'recharge-proxies',
@@ -340,7 +341,8 @@ export function useAutoRecharge(options: { clearPaymentValidation?: () => void }
   );
   const savedPaymentCards = computed(() =>
     (paymentCardsQuery.data.value?.items ?? []).filter(
-      (item) => item.active && item.hasNumber && item.currencyCode === lockedCurrency.value
+      (item) =>
+        item.active && item.hasNumber && item.allowedPlans.includes(plan.value.replace(/-/g, '_'))
     )
   );
   const proxySelectionReady = computed(
@@ -368,7 +370,8 @@ export function useAutoRecharge(options: { clearPaymentValidation?: () => void }
     const addressRevision = manualAddressSelectionRevision.value;
     error.value = '';
     try {
-      const card = await bankRechargeApi.managedCardDetail(id);
+      const selectedPlan = plan.value;
+      const card = await bankRechargeApi.sharedCardDetail(id, selectedPlan);
       if (generation !== paymentCardGeneration || selectedPaymentCardId.value !== id || disposed)
         return;
       if (busy.value || active.value) {
@@ -378,11 +381,12 @@ export function useAutoRecharge(options: { clearPaymentValidation?: () => void }
       if (
         card.id !== id ||
         card.status !== 'active' ||
-        card.currencyCode !== lockedCurrency.value ||
+        plan.value !== selectedPlan ||
+        !card.allowedPlans.includes(selectedPlan.replace(/-/g, '_')) ||
         !card.number ||
         !card.expiry
       ) {
-        throw new Error('这张银行卡已停用、币种不符或资料不完整');
+        throw new Error('这张银行卡已停用、不适用当前套餐或资料不完整');
       }
       details.value.number = card.number;
       details.value.expiry = card.expiry;
@@ -413,7 +417,12 @@ export function useAutoRecharge(options: { clearPaymentValidation?: () => void }
     manualAddressSelectionRevision.value++;
   }
   watch(lockedCurrency, () => {
-    if (!selectedPaymentCardId.value) return;
+    // 卡片支持跨币种；付款上下文变化仅清理本次临时安全码。
+    details.value.cvc = '';
+  });
+  watch(plan, () => {
+    paymentCardGeneration++;
+    paymentCardLoading.value = false;
     selectedPaymentCardId.value = '';
     details.value.number = '';
     details.value.expiry = '';
@@ -515,7 +524,7 @@ export function useAutoRecharge(options: { clearPaymentValidation?: () => void }
   );
   const nameMatch = useRechargeNameMatch(
     details,
-    selectedPaymentCardId,
+    ref(''),
     computed(() => formLocked.value || active.value || operationMode.value !== 'payment'),
     (addressId, expectedManualRevision) => {
       selectedCardBillingAddressId.value = addressId ?? '';
@@ -570,6 +579,14 @@ export function useAutoRecharge(options: { clearPaymentValidation?: () => void }
   function generateBillingAddress() {
     return addressGeneration.generate();
   }
+  // 姓名库返回的是比特历史卡编号，共享池选择必须保留自己的编号。
+  watch(
+    () => details.value.number.replace(/[ -]/g, ''),
+    () => {
+      selectedPaymentCardId.value = '';
+    },
+    { flush: 'sync' }
+  );
   let paymentEditVersion = 0;
   watch(
     [

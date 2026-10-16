@@ -55,12 +55,7 @@ export function useBankRechargeOrderResources(
     (channel === 'online'
       ? (optionsQuery.data.value?.cards ?? [])
       : (bitCardsQuery.data.value?.items ?? [])
-    ).filter(
-      (item) =>
-        item.active &&
-        (channel === 'online' || item.currencyCode === form.chargeCurrencyCode) &&
-        (item.status !== 'exhausted' || item.id === selectedCardId())
-    )
+    ).filter((item) => item.active && (item.status !== 'exhausted' || item.id === selectedCardId()))
   );
   const fundingAccounts = computed(() =>
     (optionsQuery.data.value?.financeAccounts ?? []).filter((item) => item.currency === 'CNY')

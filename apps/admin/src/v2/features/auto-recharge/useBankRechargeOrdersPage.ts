@@ -94,7 +94,7 @@ export function useBankRechargeOrdersPage(channel: RechargeOrderChannel = 'bitbr
   const { cardForm, currencyForm } = useV2SessionDraft(
     draftKey('bank-order-related-create'),
     () => ({
-      cardForm: reactive({ label: '', last4: '', currencyCode: 'PHP' }),
+      cardForm: reactive({ label: '', last4: '' }),
       currencyForm: reactive({ code: '', name: '', minorUnits: 2 })
     })
   );
@@ -211,7 +211,7 @@ export function useBankRechargeOrdersPage(channel: RechargeOrderChannel = 'bitbr
   }
   function clearAccountFilter() {
     void router.replace({
-      path: '/v2/auto-recharge/bank-orders',
+      path: '/v2/account-settings/bank-orders',
       query: channel === 'online' ? { channel } : {}
     });
   }
@@ -224,7 +224,6 @@ export function useBankRechargeOrdersPage(channel: RechargeOrderChannel = 'bitbr
   }
   function changeChargeCurrency() {
     form.chargeFxRateToCny = '';
-    if (channel === 'bitbrowser') form.cardId = '';
   }
   function openCreate() {
     correcting.value = false;
@@ -488,16 +487,16 @@ export function useBankRechargeOrdersPage(channel: RechargeOrderChannel = 'bitbr
     try {
       const created = await bankRechargeApi.createCard({
         ...cardForm,
-        label: cardForm.label.trim()
+        label: cardForm.label.trim(),
+        currencyCode: form.chargeCurrencyCode
       });
       cardOpen.value = false;
       Object.assign(cardForm, {
         label: '',
-        last4: '',
-        currencyCode: 'PHP'
+        last4: ''
       });
       await cardsQuery.refresh();
-      if (selected.value?.chargeCurrencyCode === created.currencyCode) form.cardId = created.id;
+      form.cardId = created.id;
       ElMessage.success('银行卡标识已新增');
     } catch (error) {
       saveError.value = getApiErrorMessage(error);

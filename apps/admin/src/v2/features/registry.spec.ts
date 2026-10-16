@@ -107,7 +107,6 @@ describe('V2 feature registry', () => {
       'online-recharge-automation',
       'online-recharge-runtime-logs',
       'online-recharge-billing',
-      'online-recharge-cards',
       'online-recharge-addresses',
       'online-recharge-browser-pool',
       'online-recharge-cdks',
@@ -131,22 +130,16 @@ describe('V2 feature registry', () => {
     });
     expect(
       v2NavigationSections.find((section) => section.key === 'auto-recharge')?.items
-    ).toHaveLength(5);
+    ).toHaveLength(3);
     expect(
       v2NavigationSections
         .find((section) => section.key === 'auto-recharge')
         ?.items.map((item) => item.key)
-    ).toEqual([
-      'auto-recharge',
-      'bank-recharge-cards',
-      'bank-recharge-orders',
-      'auto-recharge-addresses',
-      'auto-recharge-names'
-    ]);
+    ).toEqual(['auto-recharge', 'auto-recharge-addresses', 'auto-recharge-names']);
     expect(v2FeatureRegistry.find((feature) => feature.key === 'vendure-mailbox')).toMatchObject({
       title: '邮件验证码查询',
       route: '/v2/account-settings/mailbox',
-      group: '账号设置',
+      group: '自充设置',
       kind: 'list',
       requiredRoles: ['admin']
     });
@@ -162,11 +155,13 @@ describe('V2 feature registry', () => {
 
   it('groups shared account resources under one account settings navigation', () => {
     const section = v2NavigationSections.find((item) => item.key === 'account-settings');
-    expect(section?.title).toBe('账号设置');
+    expect(section?.title).toBe('自充设置');
     expect(section?.items.map((item) => item.key)).toEqual([
       'chatgpt-accounts',
       'vendure-mailbox',
-      'recharge-proxies'
+      'recharge-proxies',
+      'bank-recharge-orders',
+      'online-recharge-cards'
     ]);
     expect(section?.items.every((item) => item.route.startsWith('/v2/account-settings/'))).toBe(
       true

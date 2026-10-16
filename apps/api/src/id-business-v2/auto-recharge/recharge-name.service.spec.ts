@@ -33,6 +33,7 @@ function setup() {
   const repository = {
     lock: vi.fn(),
     card: vi.fn().mockResolvedValue(null),
+    cardById: vi.fn().mockResolvedValue(null),
     binding: vi.fn(async (_tx, hash) => bindings.get(hash) ?? null),
     next: vi.fn(
       async () =>
@@ -66,7 +67,15 @@ function setup() {
       repository as never,
       transactions as never,
       audit as never,
-      encryption as never
+      encryption as never,
+      {
+        assertNumber: vi.fn(),
+        ensureLegacy: vi.fn(),
+        reserveLegacy: vi.fn(),
+        assertLegacyAvailable: vi.fn(async (_tx, card) => {
+          if (!card.active) throw new Error('银行卡已停用');
+        })
+      } as never
     )
   };
 }
@@ -142,7 +151,7 @@ describe('自动生成姓名及银行卡稳定绑定', () => {
     expect(JSON.stringify(audit.append.mock.calls)).not.toContain(number);
     expect(JSON.stringify(audit.append.mock.calls)).not.toContain('Chosen Person');
   });
-  it('确认后拒绝换姓名；新卡登记保存加密卡号且拒绝错误币种', async () => {
+  it('确认后拒绝换姓名；新卡加密保存，历史登记币种不限制本次支付', async () => {
     const { service, repository } = setup();
     const number = pan(1);
     await service.confirm({} as never, `hash:${number}`, encode('Existing Person'));
@@ -166,6 +175,6 @@ describe('自动生成姓名及银行卡稳定绑定', () => {
         { number, expiry: '12/39', name: 'Existing Person', currencyCode: 'USD' },
         operator
       )
-    ).rejects.toThrow('币种不匹配');
+    ).resolves.toMatchObject({ currencyCode: 'PHP' });
   });
 });

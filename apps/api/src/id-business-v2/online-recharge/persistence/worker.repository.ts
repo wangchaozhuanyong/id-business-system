@@ -23,6 +23,11 @@ import { id, integer, object, redact, sanitize, sessionAccountId, text } from '.
 import { safeProxyTestTaskResult } from '../../proxy-pool/public-api';
 import { OnlineRechargeOrderSyncService } from '../order-sync.service';
 import { taskPlanRegion } from '../plan-region';
+import {
+  assertSharedCardPlan,
+  sharedCardPlan,
+  lockSharedBankCards
+} from '../../bank-card-pool/public-api';
 
 const LEASE_MS = 90000;
 function hasRenewalSubmission(row: OnlineRechargeTask) {
@@ -308,6 +313,8 @@ export class OnlineRechargeWorkerRepository {
         throw new ConflictException('付款前必须预约当前任务的银行卡');
       if (row.paymentStarted) throw new ConflictException('付款已经提交，禁止再次建单或重复提交');
       const card = await this.requireCard(tx, row.id, row.cardId);
+      assertSharedCardPlan(card.allowedPlans, row.plan);
+      if (card.status !== 'active') throw new ConflictException('银行卡当前不可用于付款');
       if (
         !card.leaseExpiresAt ||
         card.leaseExpiresAt.getTime() <= Date.now() ||
@@ -715,20 +722,35 @@ export class OnlineRechargeWorkerRepository {
         ? ((args.excludedIds ?? args.excludedCardIds) as string[])
         : [];
     return this.repository.transaction('cards-reserve', async (tx) => {
+      await lockSharedBankCards(tx);
       const row = requireTaskLease(
         await tx.onlineRechargeTask.findUnique({ where: { id: id(rpc.taskId ?? args.ownerKey) } }),
         rpc
       );
       if (row.paymentStarted) throw new ConflictException('付款已经提交，不能更换银行卡或重新提交');
-      const prior = await tx.onlineRechargeCard.findFirst({ where: { leaseOwner: row.id } });
+      const requested = object(row.payload ?? {}).cardId;
+      const selectedId = requested ? id(requested) : undefined;
+      const eligible = {
+        status: 'active' as const,
+        allowedPlans: { array_contains: [sharedCardPlan(row.plan)] },
+        successCount: { lt: policy.maxSubscriptionCount },
+        declineCount: { lt: policy.maxDeclineCount },
+        ...(selectedId ? { id: selectedId } : {})
+      };
+      if (selectedId && excluded.includes(selectedId)) return null;
+      const prior = await tx.onlineRechargeCard.findFirst({
+        where: { ...eligible, leaseOwner: row.id }
+      });
       const resumed =
-        row.cardId && !row.paymentStarted && !excluded.includes(row.cardId)
+        row.cardId &&
+        (!selectedId || row.cardId === selectedId) &&
+        !row.paymentStarted &&
+        !excluded.includes(row.cardId)
           ? await tx.onlineRechargeCard.findFirst({
               where: {
+                ...eligible,
                 id: row.cardId,
-                status: 'active',
-                leaseOwner: null,
-                successCount: { lt: policy.maxSubscriptionCount }
+                leaseOwner: null
               }
             })
           : null;
@@ -737,10 +759,9 @@ export class OnlineRechargeWorkerRepository {
         resumed ??
         (await tx.onlineRechargeCard.findFirst({
           where: {
-            status: 'active',
-            successCount: { lt: policy.maxSubscriptionCount },
+            ...eligible,
             leaseOwner: null,
-            id: { notIn: excluded.map(id) }
+            id: selectedId ?? { notIn: excluded.map(id) }
           },
           orderBy: [{ successCount: 'asc' }, { lastUsedAt: 'asc' }, { id: 'asc' }]
         }));
@@ -761,10 +782,11 @@ export class OnlineRechargeWorkerRepository {
       }
       const leaseId = prior?.leaseId ?? randomUUID(),
         leaseVersion = prior?.leaseVersion ?? card.leaseVersion + 1;
-      await tx.onlineRechargeCard.update({
-        where: { id: card.id },
+      const reserved = await tx.onlineRechargeCard.updateMany({
+        where: { ...eligible, id: card.id, OR: [{ leaseOwner: null }, { leaseOwner: row.id }] },
         data: { leaseOwner: row.id, leaseId, leaseVersion, leaseExpiresAt: row.leaseExpiresAt }
       });
+      if (reserved.count !== 1) throw new ConflictException('银行卡已被占用或适用套餐已变化');
       await tx.onlineRechargeTask.update({
         where: { id: row.id },
         data: { cardId: card.id, cardLast4: card.last4 }

@@ -94,7 +94,7 @@ export const v2NavigationSections: readonly V2NavigationSection[] = [
   },
   { key: 'workspace', title: '工作台', items: v2WorkbenchModules },
   { key: 'auto-registration', title: '自动注册', items: navigationItems('自动注册') },
-  { key: 'account-settings', title: '账号设置', items: navigationItems('账号设置') },
+  { key: 'account-settings', title: '自充设置', items: navigationItems('自充设置') },
   { key: 'auto-recharge', title: '自动充值', items: navigationItems('自动充值') },
   { key: 'online-recharge', title: '线上代充', items: navigationItems('线上代充') },
   {

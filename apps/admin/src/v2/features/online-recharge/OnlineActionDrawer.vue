@@ -8,6 +8,10 @@
     @confirm="submit"
   >
     <el-form
+      ref="formRef"
+      :model="formModel"
+      :rules="formRules"
+      scroll-to-error
       label-position="left"
       label-width="112px"
       require-asterisk-position="right"
@@ -17,11 +21,18 @@
         v-for="field in action.fields ?? []"
         :key="field.key"
         :label="field.label"
+        :prop="field.key"
         :required="field.required"
       >
         <div class="online-field">
+          <OnlineCardSelect
+            v-if="field.type === 'card-select'"
+            :model-value="String(value(field.key))"
+            :plan="String(value('plan'))"
+            @update:model-value="setValue(field, $event)"
+          />
           <el-input-number
-            v-if="field.type === 'number'"
+            v-else-if="field.type === 'number'"
             :model-value="Number(value(field.key))"
             :min="field.min"
             :max="field.max"
@@ -29,7 +40,14 @@
           />
           <el-select
             v-else-if="field.type === 'select'"
-            :model-value="String(value(field.key))"
+            :model-value="
+              field.multiple
+                ? Array.isArray(value(field.key))
+                  ? (value(field.key) as string[])
+                  : []
+                : String(value(field.key))
+            "
+            :multiple="field.multiple"
             @update:model-value="setValue(field, $event)"
             ><el-option
               v-for="option in field.options"
@@ -69,6 +87,8 @@
 </template>
 <script setup lang="ts">
 import { computed, onBeforeUnmount, reactive, ref, watch } from 'vue';
+import type { FormInstance, FormRules } from 'element-plus';
+import { validateV2Form } from '@/v2/utils/formValidation';
 import { useAuthStore } from '@/stores/auth';
 import { sessionCoordinator } from '@/auth/sessionCoordinator';
 import V2FormDrawer from '@/v2/components/V2FormDrawer.vue';
@@ -78,6 +98,7 @@ import { initialFields } from './sections';
 import { onlineApi } from './api';
 import { onlineError } from './labels';
 import { importLines, parseImportedCards } from './importInput';
+import OnlineCardSelect from './OnlineCardSelect.vue';
 const props = defineProps<{
   modelValue: boolean;
   section: OnlineSection;
@@ -131,8 +152,19 @@ function setValue(field: OnlineField, input: FormValue) {
   if (field.transient) temporary[field.key] = input;
   else draft.form[field.key] = input;
 }
-const invalid = computed(() =>
-  (props.action.fields ?? []).some((field) => field.required && !String(value(field.key)).trim())
+const formRef = ref<FormInstance>();
+const formModel = computed(() =>
+  Object.fromEntries((props.action.fields ?? []).map((field) => [field.key, value(field.key)]))
+);
+const formRules = computed<FormRules>(() =>
+  Object.fromEntries(
+    (props.action.fields ?? [])
+      .filter((field) => field.required)
+      .map((field) => [
+        field.key,
+        [{ required: true, message: `请填写${field.label}`, trigger: 'change' }]
+      ])
+  )
 );
 async function loadFile(field: OnlineField, event: Event) {
   const target = event.target as HTMLInputElement;
@@ -154,7 +186,11 @@ function actionBody() {
   };
   if (props.action.key === 'import') {
     const lines = importLines(body.text);
-    if (props.section === 'cards') body.cards = parseImportedCards(body.text);
+    if (props.section === 'cards')
+      body.cards = parseImportedCards(body.text).map((card) => ({
+        ...card,
+        allowedPlans: body.allowedPlans
+      }));
     delete body.text;
     if (props.section === 'proxies') body.proxies = lines;
     else if (props.section === 'cdks') body.codes = lines;
@@ -174,10 +210,7 @@ function actionBody() {
 }
 async function submit() {
   if (busy.value) return;
-  if (invalid.value) {
-    error.value = '请填写所有必填字段后重试';
-    return;
-  }
+  if (!(await validateV2Form(formRef.value))) return;
   busy.value = true;
   error.value = '';
   const completeSave = draft.beginSave();

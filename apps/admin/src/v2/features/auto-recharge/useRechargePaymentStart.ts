@@ -140,7 +140,8 @@ export function useRechargePaymentStart(context: PaymentStartContext) {
         number: payment.number,
         expiry: payment.expiry,
         name: payment.name,
-        currencyCode: input.lockedCurrency
+        currencyCode: input.lockedCurrency,
+        plan: input.plan
       });
       if (!current()) return;
       checkConnectionSnapshot();

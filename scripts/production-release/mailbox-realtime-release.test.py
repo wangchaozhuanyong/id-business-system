@@ -211,6 +211,20 @@ class MailboxRelease(unittest.TestCase):
         for command in ('docker restart', 'docker compose', 'send-command', 'INSERT INTO', 'UPDATE ', 'DELETE FROM'):
             self.assertNotIn(command, source)
         self.assertIn("fcntl.LOCK_SH|fcntl.LOCK_NB", source)
+        self.assertIn(i.HEALTH_CURRENT, source)
+        self.assertIn('mailbox-realtime-readback.json', source)
+        self.assertIn('UPSTREAM_HEALTH', source)
+        subprocess.run(['node', '--check', '--input-type=commonjs'],
+            input=i.HEALTH_PROBE.replace('CLIENT_HASH', json.dumps(i.HEALTH_CLIENT)), text=True, check=True)
+
+    def test_health_inspection_accepts_only_native_verified_successors_retaining_mailbox_proof(self):
+        source = i.capture_source('561b834dd3f481d98a99786667a2844c842b24bd')
+        ast.parse(source)
+        self.assertIn('CURRENT_READBACK_CHANGED', source)
+        self.assertIn(i.HEALTH_PROOF, source)
+        self.assertIn('MAILBOX_ORIGIN', source)
+        with self.assertRaisesRegex(AssertionError, 'UNREVIEWED_SUCCESSOR'):
+            i.capture_source('a' * 40)
 
 
 if __name__ == '__main__':

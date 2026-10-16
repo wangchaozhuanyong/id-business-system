@@ -13,6 +13,7 @@ import { randomUUID } from 'node:crypto';
 import type { AuthenticatedUser } from '../../../auth/auth.types';
 import type { OnlineRechargeSection } from '../contracts';
 import { id, integer, redact, sanitize } from '../validation';
+import { sharedCardPlan } from '../../bank-card-pool/public-api';
 
 @Injectable()
 export class OnlineRechargeRepository {
@@ -109,6 +110,9 @@ export class OnlineRechargeRepository {
       switch (section) {
         case 'cards': {
           const where: Prisma.OnlineRechargeCardWhereInput = {
+            ...(query.plan
+              ? { allowedPlans: { array_contains: [sharedCardPlan(query.plan)] } }
+              : {}),
             ...(query.status
               ? { status: String(query.status) as Prisma.EnumOnlineRechargeAssetStatusFilter }
               : {}),

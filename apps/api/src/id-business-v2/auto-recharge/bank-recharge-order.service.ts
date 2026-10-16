@@ -97,7 +97,7 @@ export class BankRechargeOrderService {
       repository: this.repository,
       encryption: this.encryption,
       requireCustomer: (tx, id) => this.requireCustomer(tx, id),
-      requireCard: (tx, id, currency) => this.requireCard(tx, id, currency),
+      requireCard: (tx, id) => this.requireCard(tx, id),
       requireOnlineCard: (tx, id) => this.requireOnlineCard(tx, id),
       plan: (plan) => this.plan(plan),
       orderNo: () => this.orderNo(),
@@ -255,8 +255,7 @@ export class BankRechargeOrderService {
       }
     }
     if (customerId) await this.requireCustomer(tx, customerId);
-    const card =
-      cardId && !online && currencyCode ? await this.requireCard(tx, cardId, currencyCode) : null;
+    const card = cardId && !online && currencyCode ? await this.requireCard(tx, cardId) : null;
     const originalOnlineCardId =
       typeof onlineSnapshot.originalCardId === 'string'
         ? onlineSnapshot.originalCardId
@@ -521,10 +520,10 @@ export class BankRechargeOrderService {
     return card;
   }
 
-  private async requireCard(tx: V2CommandTransaction, id: string, currencyCode: string) {
+  private async requireCard(tx: V2CommandTransaction, id: string) {
     const card = await this.repository.findCard(tx, id);
-    if (!card || !card.active || card.currencyCode !== currencyCode) {
-      throw new BadRequestException('银行卡不存在、已停用或币种不一致');
+    if (!card || !card.active) {
+      throw new BadRequestException('银行卡不存在或已停用');
     }
     return card;
   }

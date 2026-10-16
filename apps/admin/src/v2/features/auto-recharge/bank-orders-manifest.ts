@@ -3,8 +3,8 @@ import { defineV2Feature } from '@/v2/features/feature';
 export const bankRechargeOrdersFeature = defineV2Feature({
   key: 'bank-recharge-orders',
   title: '充值订单',
-  group: '自动充值',
-  route: '/v2/auto-recharge/bank-orders',
+  group: '自充设置',
+  route: '/v2/account-settings/bank-orders',
   sourceSheet: '银充订单',
   requiredRoles: ['admin'],
   kind: 'list',
