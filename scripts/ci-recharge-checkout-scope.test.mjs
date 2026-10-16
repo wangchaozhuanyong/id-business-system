@@ -86,6 +86,11 @@ test('checkout foreground repair selects connector regression and rejects unrela
   assert.equal(isRechargeOnly(focus, 'same', 'same'), true);
   assert.deepEqual(selectedParts(focus), ['guards', 'connector']);
   assert.equal(needsOnlineRechargeCiBuild(focus), false);
+  const cancel = focus.map((path) =>
+    path.replace('/worker/payment_form.py', '/worker/bitbrowser_connector.py')
+  );
+  assert.equal(isRechargeSourceRecoveryOnly(cancel), true);
+  assert.deepEqual(selectedParts(cancel), ['guards', 'connector']);
   for (const extra of [
     'package-lock.json',
     'apps/api/prisma-mysql/schema.prisma',

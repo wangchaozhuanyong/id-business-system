@@ -1,10 +1,13 @@
 """后台原结算延迟挂载的纯单元回归；不连接浏览器或使用真实银行卡。"""
 from types import SimpleNamespace
 import unittest
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, Mock, patch
 
 from checkout_core import Stop
 from payment_form import PaymentDetails, fill_official_form
+from bitbrowser_connector import LocalJob
+from test_bitbrowser_connector import payload
+from browser_checkout import quote_from_text
 
 
 def details():
@@ -67,9 +70,61 @@ class PaymentFormFocusTests(unittest.IsolatedAsyncioTestCase):
             await fill_official_form(page, details())
         self.assertEqual(page.events, [])
 
+
     async def test_invalid_details_stop_before_activation(self):
         page, invalid = DeferredCheckout(), details()
         invalid.number = 'invalid'
         with self.assertRaises(Stop):
             await fill_official_form(page, invalid)
         self.assertEqual(page.events, [])
+
+
+class CancelledVerifiedQuoteTests(unittest.TestCase):
+    def run_cancel(self, *, previous=None, terminal=None, cancelled=True, sent=False):
+        job = LocalJob(payload())
+        job.callback.send = Mock(return_value={'ok': True})
+        quote = quote_from_text('ChatGPT Plus\n今日应付金额\nMYR 92.50\n预估税费\nMYR 0.00\n'
+                                '将按 每月 自动续订。将按 MYR 92.50/月 收费。', 'MYR')
+
+        async def execute():
+            job.cancelled, job.payment_request_sent = cancelled, sent
+            job.result = {'status': 'awaiting_confirmation', 'quote': quote,
+                          'quote_authority': 'official_checkout_response', **(previous or {})}
+            return {'status': 'blocked', 'reason': 'operation_cancelled',
+                    'quote': {'today': None}, **(terminal or {})}
+
+        job.execute = execute
+        job.run()
+        result = job.callback.send.call_args.args[0]
+        self.assertEqual(result['type'], 'finished')
+        return result['result'], quote
+
+    def test_cancel_keeps_verified_final_quote_and_clears_obsolete_prompt(self):
+        result, quote = self.run_cancel()
+        self.assertEqual(result['quote'], quote)
+        self.assertEqual(result['quote_authority'], 'official_checkout_response')
+        self.assertEqual(result['status'], 'payment_cancelled')
+        self.assertEqual(result['stage'], 'confirmation_cancelled')
+        self.assertEqual(result['page_state'], 'checkout')
+        self.assertFalse(result['user_action_required'])
+        self.assertFalse(result['payment_attempted'])
+        self.assertEqual(result['payment_requests_sent'], 0)
+
+    def test_real_failures_and_unverified_quote_are_not_rewritten(self):
+        for args in ({'terminal': {'reason': 'payment_quote_changed'}},
+                     {'previous': {'quote_authority': None}},
+                     {'previous': {'status': 'running'}}, {'cancelled': False}):
+            with self.subTest(args=args):
+                result, _ = self.run_cancel(**args)
+                self.assertNotEqual(result['status'], 'payment_cancelled')
+    def test_payment_evidence_and_request_risks_are_not_rewritten(self):
+        for args in ({'sent': True}, {'terminal': {'payment_requests_sent': 1}},
+                     {'terminal': {'confirmation_requests_sent': 1}},
+                     {'terminal': {'payment_attempted': True}},
+                     {'terminal': {'payment_status': 'unknown'}},
+                     {'terminal': {'payment_outcome': 'paid_pending_activation'}},
+                     {'terminal': {'payment_record_write_failed': True}},
+                     {'terminal': {'payment_evidence': {'status': 'paid'}}}):
+            with self.subTest(args=args):
+                result, _ = self.run_cancel(**args)
+                self.assertNotEqual(result['status'], 'payment_cancelled')
