@@ -1008,6 +1008,9 @@
   },
   "browserAcceptances": ["scripts/acceptance-v2-mailbox-realtime.mjs"],
   "buildSupportHashes": {
+    "scripts/production-release/account-login-build.py": "f2bc8a42fae093967230b77570f90e7a5914663bc77ccd1ae7f3e617a3a53998",
+    "scripts/production-release/account-login-contract.json": "856cc583bbb6f79e6a3dfa1e088bc4674892ff1c364712d808d9d5facba44fea",
+    "scripts/production-release/account-login-release.py": "68461ea869ba9447a9878653415c85fe961ac91bbb59389848baba302d7bc5c9",
     "scripts/production-release/api-admin-scope.py": "50446ab528a288ca1c2129c84f1bf4a90f59fa313a92bcff0058a258c8b8e925",
     "scripts/production-release/chatgpt-sales-build.py": "a55db7b0f04729d6f15d50ef3d7ae81a0746dceb2e95cd77408d0de74b9b7590",
     "scripts/production-release/chatgpt-sales-contract.json": "7bcbfb2b3a5ec288c8a10e1a3d7b7a57abd95363fb37297bf50a017607be300a",
@@ -1017,6 +1020,9 @@
     "scripts/production-release/recharge-billing-release.py": "eabb3473e5639edaf7073cb71562bfca4d7208bc7856d1262ce904202dedafd7",
     "scripts/production-release/recharge-record-build.py": "071696a021aa0956c626891b48c207cd68b68d6a4701254e715766cd0d6ec122",
     "scripts/production-release/recharge-record-release.py": "4ca6d0053f5dc4368d85722ef0df272ace0947c1c91993a0a3da598507b5163f",
+    "scripts/production-release/recharge-source-recovery-build.py": "927292b7467c9057a049ef9c1d89654100c506acb77f802f0c0d72fb081d1467",
+    "scripts/production-release/recharge-source-recovery-contract.json": "61e69d7a720baa61955be460b209082aaf5e01766ec4be6c882b4a5b6807d890",
+    "scripts/production-release/recharge-source-recovery-release.py": "e6f493ab7737bf77d23114a00ff9c970a77d18786726e690b27dbe98c9f099b8",
     "scripts/production-release/registration-closure-build.py": "4b7e414e024ad8e6da78662aef19a514ba918d5213eac78c739feeb71e216a9c",
     "scripts/production-release/registration-closure-dispatch.py": "4ee050b81065c59f440351ad78ad19a7f0875650f485e29418cb3a76b51ad1d6",
     "scripts/production-release/registration-closure-release.py": "0d2daaeff0a35e1e11666ace39560273fdc83ff9e5718cb244337c8b0f851274",
@@ -1062,7 +1068,13 @@
     "recharge-record-build.py",
     "registration-closure-build.py",
     "registration-closure-dispatch.py",
-    "registration-parity-diagnostics-build.py"
+    "registration-parity-diagnostics-build.py",
+    "account-login-build.py",
+    "account-login-contract.json",
+    "account-login-release.py",
+    "recharge-source-recovery-build.py",
+    "recharge-source-recovery-contract.json",
+    "recharge-source-recovery-release.py"
   ],
   "controlPaths": [
     "scripts/production-release/registration-parity-diagnostics-build.py",
@@ -1302,15 +1314,15 @@
     "docs/MAILBOX_REALTIME_REPAIR_20261016.md": "a77d4141543168b3996add753d5be8ea9f28a2151bb9df59cea5a84eb54264a6",
     "packages/shared/src/v2/vendure-mailbox.ts": "4b72d43152b07ebe9331583d8baf245028f0ddb96229ffcffbd5ec6d7dfa375e",
     "scripts/acceptance-v2-mailbox-realtime.mjs": "ec8ae2f1b5e62679942f30e25ac9df6afeecb9d421b95991a8e4c9f333fb4af5",
-    "scripts/ci-mailbox-realtime-scope.mjs": "9e8301253d923d42e2b38eaf3f535cca1385f8a72876599c87989335145b5532",
-    "scripts/ci-mailbox-realtime-scope.test.mjs": "a6ff492b8563c470de0d246be18bc1033cb9252ecd671119c59e96dd80014a5a",
-    "scripts/ci-recharge-check.mjs": "a23f652eecb85416b378900a3afa095832ee0318808c375e7008086c3652602d",
-    "scripts/ci-recharge-scope.mjs": "ddd41df7f3b03b3b60e58a491eef9aa603a354e47d30968627ff6a87063f984d",
+    "scripts/ci-mailbox-realtime-scope.mjs": "404e74ac1e2c0ec816342be021d57e2e5b99b1a79b664439f87dc415335ceaed",
+    "scripts/ci-mailbox-realtime-scope.test.mjs": "c0c32f754d9669cef8fb1f0e8b3b05577715cec504a6e82a4becc8ef96064f93",
+    "scripts/ci-recharge-check.mjs": "5ef59fbcb3c0904fe5fbb17be0e91a4d413bbbeddbe2ff2db9a5d54aa6d73112",
+    "scripts/ci-recharge-scope.mjs": "d114ffed69ced753ee0255d26d153da774ea0477368c63be2b4c3413a2b18d82",
     "scripts/production-release/mailbox-realtime-build.py": "350f26f5030d88fd93471681f51b4e8516cb3e2bccae7a1fc87ab2d3ff0f3f69",
     "scripts/production-release/mailbox-realtime-dispatch.py": "b3ee5e4c40d2af93d6a8f58c76ad4ff5238843b86e5d7e1ceefeb9b8398bed13",
     "scripts/production-release/mailbox-realtime-inspect.py": "6be3feb48ea26b68046bbed04d5084dfc047878b0c2d510a9434812a3bca0a64",
     "scripts/production-release/mailbox-realtime-release.py": "59cdacc6f28b93176ba744b806a54fa26e7c2e83ea2446f7de351ad4d8777d72",
-    "scripts/production-release/mailbox-realtime-release.test.py": "5ded2932b9ee08d1f95f8690bb43a1200fc827cc9bb4c4fe7e00a299731a71f7"
+    "scripts/production-release/mailbox-realtime-release.test.py": "d057faa018dd3189b5ff7a62ca0044b577b86b6bad5a6c5f7640af6620d8bd58"
   },
   "roleSourceCommits": {
     "admin": "13e52ad670c6b6daa94ab2df009aaa8a9d69b97c",

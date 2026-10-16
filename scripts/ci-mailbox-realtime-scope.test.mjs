@@ -1,7 +1,13 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
-import { isMailboxRealtimeOnly } from './ci-mailbox-realtime-scope.mjs';
+import {
+  isMailboxRealtimeOnly,
+  isMailboxRealtimeControlsOnly,
+  mailboxControlBase,
+  mailboxControlTree,
+  mailboxControlPaths
+} from './ci-mailbox-realtime-scope.mjs';
 import { checkMode, selectedParts, needsOnlineRechargeCiBuild } from './ci-recharge-scope.mjs';
 const c = JSON.parse(
   readFileSync('scripts/production-release/mailbox-realtime-contract.json', 'utf8')
@@ -36,4 +42,35 @@ test('extra files missing files duplicate paths and a different base are rejecte
     isMailboxRealtimeOnly(c.expectedGitChanges, { ...context, base: 'a'.repeat(40) }),
     false
   );
+});
+
+test('exact payload dependency repair runs only controls and rejects scope drift', () => {
+  const repair = { base: mailboxControlBase, baseTree: mailboxControlTree };
+  assert.equal(isMailboxRealtimeControlsOnly(mailboxControlPaths, repair), true);
+  assert.equal(checkMode(mailboxControlPaths, 'same', 'same', undefined, repair), 'recharge');
+  assert.deepEqual(selectedParts(mailboxControlPaths, undefined, repair), [
+    'guards',
+    'release-controls'
+  ]);
+  assert.equal(needsOnlineRechargeCiBuild(mailboxControlPaths, repair), false);
+  assert.equal(
+    isMailboxRealtimeControlsOnly(
+      [...mailboxControlPaths, 'apps/api/prisma-mysql/schema.prisma'],
+      repair
+    ),
+    false
+  );
+  assert.equal(isMailboxRealtimeControlsOnly(mailboxControlPaths.slice(1), repair), false);
+  assert.equal(
+    isMailboxRealtimeControlsOnly(
+      [...mailboxControlPaths.slice(1), mailboxControlPaths[1]],
+      repair
+    ),
+    false
+  );
+  assert.equal(
+    isMailboxRealtimeControlsOnly(mailboxControlPaths, { ...repair, base: 'a'.repeat(40) }),
+    false
+  );
+  assert.equal(checkMode(mailboxControlPaths, 'old', 'new', undefined, repair), 'full');
 });
