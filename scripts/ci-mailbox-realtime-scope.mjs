@@ -11,12 +11,10 @@ export const mailboxControlPaths = [
   'scripts/production-release/mailbox-realtime-contract.json',
   'scripts/production-release/mailbox-realtime-release.test.py'
 ];
-export const mailboxHealthCaptureBase = '3714bd6a27859307f27ec3379b5e176e4e395636';
-export const mailboxHealthCaptureTree = 'c297dfd5fd0353119a3a0c7ded14434b972fb829';
+export const mailboxHealthCaptureBase = 'd3e96b1b733a59223129bfe3620e7b4e3edecdef';
+export const mailboxHealthCaptureTree = '7e72bf371b2e760a6c52923195e4fc298fb73636';
 export const mailboxHealthCapturePaths = [
-  '.github/workflows/mailbox-realtime-validation.yml',
   'scripts/ci-mailbox-realtime-scope.mjs',
-  'scripts/ci-mailbox-realtime-scope.test.mjs',
   'scripts/production-release/mailbox-realtime-contract.json',
   'scripts/production-release/mailbox-realtime-inspect.py',
   'scripts/production-release/mailbox-realtime-release.test.py'
