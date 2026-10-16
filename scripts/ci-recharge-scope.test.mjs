@@ -31,28 +31,42 @@ import { syncBuiltinESMExports } from 'node:module';
 import test from 'node:test';
 
 // The original registration recovery proves the already published 7c tree.
-// The current proxy fix intentionally advances its engine manifest, so only
-// this historical fixture reads the immutable original manifest; production
-// selectors continue to read current bytes and reject this new workflow.
+// Later proxy and order-layout repairs intentionally advance these inputs, so
+// historical recovery cases read their immutable source bytes. Production
+// selectors still read current files and reject changes to the old receipt.
 const registrationPublishedHead = '7c3c102c98539d33cb379ef018427371ba750cb7';
 const registrationManifestPath =
   'apps/api/src/id-business-v2/online-recharge/engine/SOURCE_MANIFEST.json';
-const registrationManifestBytes = execFileSync('git', [
-  'show',
-  registrationPublishedHead + ':' + registrationManifestPath
-]);
-const registrationManifestNames = new Set([
-  registrationManifestPath,
-  new URL('../' + registrationManifestPath, import.meta.url).href,
-  new URL('../' + registrationManifestPath, import.meta.url).pathname
-]);
+const registrationLayoutPaths = [
+  'apps/admin/src/v2/features/auto-recharge/BitOrderPricingSettings.vue',
+  'apps/admin/src/v2/features/auto-recharge/V2BankRechargeOrdersView.vue',
+  'apps/admin/src/v2/features/auto-recharge/V2RechargeOrdersChannelView.vue',
+  'apps/admin/src/v2/features/online-recharge/OnlineOrderBackfill.vue'
+];
+const registrationSourceFixtures = Object.fromEntries(
+  [registrationManifestPath, ...registrationLayoutPaths].map((path) => [
+    path,
+    execFileSync('git', ['show', registrationPublishedHead + ':' + path]).toString('utf8')
+  ])
+);
+const registrationFixtureBytes = new Map(
+  Object.entries(registrationSourceFixtures).flatMap(([path, source]) =>
+    [
+      path,
+      new URL('../' + path, import.meta.url).href,
+      new URL('../' + path, import.meta.url).pathname
+    ].map((name) => [name, Buffer.from(source)])
+  )
+);
 const actualReadFileSync = fs.readFileSync;
-const readRegistrationFixture = (path, options) =>
-  registrationManifestNames.has(String(path))
+const readRegistrationFixture = (path, options) => {
+  const source = registrationFixtureBytes.get(String(path));
+  return source
     ? typeof options === 'string'
-      ? registrationManifestBytes.toString(options)
-      : Buffer.from(registrationManifestBytes)
+      ? source.toString(options)
+      : Buffer.from(source)
     : actualReadFileSync(path, options);
+};
 test.beforeEach(() => {
   fs.readFileSync = readRegistrationFixture;
   syncBuiltinESMExports();
@@ -1834,7 +1848,10 @@ function recordScopeClassification(paths, snapshot, eventName = 'pull_request', 
     import fs from 'node:fs';
     import { createHash } from 'node:crypto';
     import { syncBuiltinESMExports } from 'node:module';
-    const { paths, snapshot, options, schema: fixtureSchema, registrationManifestFixture } = JSON.parse(fs.readFileSync(0, 'utf8'));
+    const { paths, snapshot, options, schema: fixtureSchema, registrationSourceFixtures } = JSON.parse(fs.readFileSync(0, 'utf8'));
+    const fixtureSources = new Map(Object.entries(registrationSourceFixtures).flatMap(([path, source]) =>
+      [path, new URL('./' + path, import.meta.url).href, new URL('./' + path, import.meta.url).pathname]
+        .map(name => [name, source])));
     const gitCalls = [];
     const apiCalls = [];
     const writes = [];
@@ -1895,8 +1912,9 @@ function recordScopeClassification(paths, snapshot, eventName = 'pull_request', 
     };
     const readFile = fs.readFileSync;
     fs.readFileSync = (path, ...args) => {
-      if (String(path) === new URL('./${registrationManifestPath}', import.meta.url).href)
-        return typeof args[0] === 'string' ? registrationManifestFixture : Buffer.from(registrationManifestFixture);
+      const fixtureSource = fixtureSources.get(String(path));
+      if (fixtureSource !== undefined)
+        return typeof args[0] === 'string' ? fixtureSource : Buffer.from(fixtureSource);
       if (path === process.env.GITHUB_EVENT_PATH) return JSON.stringify({ pull_request: pr });
       if (path === '.deploy/ci-source-evidence/123-1/evidence.json') return JSON.stringify(proof);
       return readFile(path, ...args);
@@ -1925,7 +1943,7 @@ function recordScopeClassification(paths, snapshot, eventName = 'pull_request', 
         snapshot,
         options,
         schema,
-        registrationManifestFixture: registrationManifestBytes.toString('utf8')
+        registrationSourceFixtures
       }),
       env: {
         ...process.env,
@@ -5585,6 +5603,16 @@ test('published recovery authenticates the exact source receipt and retained com
     }),
     false
   );
+});
+
+test('historical registration recovery rejects current order-layout source bytes', () => {
+  const paths = [registrationPublishedBindingPath, ...registrationLayoutPaths];
+  assert.equal(registrationPublishedRecoveryProof(paths), true);
+  for (const changed of registrationLayoutPaths) {
+    const readSource = (path) =>
+      path === changed ? actualReadFileSync(path) : readRegistrationFixture(path);
+    assert.equal(registrationPublishedRecoveryProof(paths, { readSource }), false, changed);
+  }
 });
 
 test('published recovery proves only two new fields above the recovered deployed schema and exact prior migrations', () => {

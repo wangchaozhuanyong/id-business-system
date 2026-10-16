@@ -12,16 +12,27 @@
 .bank-recharge-toolbar {
   display: flex;
   flex-wrap: wrap;
-  gap: 10px;
+  gap: var(--v2-layout-control-gap);
   align-items: center;
-  margin: 14px 0;
 }
 
 .bank-recharge-toolbar .el-input {
-  max-width: 280px;
+  min-width: 0;
+  width: auto;
+  flex: 1 1 240px;
 }
 .bank-recharge-toolbar .el-select {
-  width: 180px;
+  min-width: 0;
+  width: 160px;
+  max-width: 100%;
+  flex: 0 1 160px;
+}
+
+@media (max-width: 700px) {
+  .bank-recharge-toolbar .el-select {
+    width: 128px;
+    flex: 1 1 128px;
+  }
 }
 .bank-recharge-form-note {
   color: var(--v2-text-soft);

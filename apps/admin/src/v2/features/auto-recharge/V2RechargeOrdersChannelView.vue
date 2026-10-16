@@ -3,6 +3,7 @@
     <V2PageContext
       :description="`记录${channelLabel}的当次官网实付、出口国家、手续费、客户实收与到期时间。升级只记录本次补付金额。`"
     >
+      <template #navigation><slot name="channel-navigation" /></template>
       <template #filters>
         <section class="bank-recharge-toolbar" :aria-label="`${channelLabel}筛选`">
           <el-select
@@ -28,37 +29,56 @@
             <el-option label="已退款" value="refunded" />
             <el-option label="已作废" value="cancelled" />
           </el-select>
+          <el-select v-model="expiry" :aria-label="`${channelLabel}到期状态`">
+            <el-option label="全部到期状态" value="all" />
+            <el-option label="已到期" value="expired" />
+          </el-select>
           <AppButton variant="soft" @click="applyFilters">查询</AppButton>
         </section>
       </template>
       <template #actions>
-        <BitOrderPricingSettings v-if="canManage" :state="pricing" />
-        <AppButton v-if="canManage" variant="ghost" @click="currencyOpen = true"
-          >新增币种</AppButton
-        >
-        <AppButton
-          v-if="channel === 'bitbrowser' && canManage"
-          variant="ghost"
-          @click="cardOpen = true"
-          >新增银行卡</AppButton
-        >
-        <RouterLink v-if="channel === 'online'" to="/v2/online-recharge/cards"
-          >管理线上卡池</RouterLink
-        >
-        <OnlineOrderBackfill v-if="channel === 'online'" @completed="ordersQuery.refresh" />
         <AppButton v-if="canManage" variant="primary" @click="openCreate"
           >手工录入{{ channelLabel }}</AppButton
         >
+        <el-dropdown v-if="canManage || channel === 'online'" trigger="click">
+          <AppButton variant="ghost">更多操作</AppButton>
+          <template #dropdown>
+            <el-dropdown-menu>
+              <el-dropdown-item v-if="canManage" @click="pricing.openSettings">
+                收费与手续费设置
+              </el-dropdown-item>
+              <el-dropdown-item v-if="canManage" @click="currencyOpen = true">
+                新增币种
+              </el-dropdown-item>
+              <el-dropdown-item
+                v-if="channel === 'bitbrowser' && canManage"
+                @click="cardOpen = true"
+                >新增银行卡</el-dropdown-item
+              >
+              <el-dropdown-item v-if="channel === 'online'" @click="openOnlineCards">
+                管理线上卡池
+              </el-dropdown-item>
+              <el-dropdown-item
+                v-if="channel === 'online' && canManage"
+                @click="orderBackfill?.openPreview()"
+              >
+                历史订单补录
+              </el-dropdown-item>
+            </el-dropdown-menu>
+          </template>
+        </el-dropdown>
       </template>
     </V2PageContext>
-
-    <el-tabs v-model="deletedFilter" :aria-label="`${channelLabel}记录范围`"
-      ><el-tab-pane label="业务清单" name="active" /><el-tab-pane label="回收站" name="deleted"
-    /></el-tabs>
-    <el-tabs v-model="expiry" :aria-label="`${channelLabel}分类`">
-      <el-tab-pane label="全部订单" name="all" />
-      <el-tab-pane label="已到期订单" name="expired" />
-    </el-tabs>
+    <BitOrderPricingSettings v-if="canManage" :state="pricing">
+      <template #trigger />
+    </BitOrderPricingSettings>
+    <OnlineOrderBackfill
+      v-if="channel === 'online' && canManage"
+      ref="orderBackfill"
+      @completed="ordersQuery.refresh"
+    >
+      <template #trigger />
+    </OnlineOrderBackfill>
 
     <p v-if="accountIdFilter" class="bank-recharge-form-note">
       正在查看所选 ChatGPT 账号的订单。
@@ -87,9 +107,15 @@
       <section ref="listRef" class="v2-records-list" :style="listFrameStyle">
         <header>
           <V2SectionHeading title="订单清单">
+            <template #navigation>
+              <el-tabs v-model="deletedFilter" :aria-label="`${channelLabel}记录范围`">
+                <el-tab-pane label="业务清单" name="active" />
+                <el-tab-pane label="回收站" name="deleted" />
+              </el-tabs>
+            </template>
             <template #actions>
-              <V2TableColumnSettings inline :schema="tableSchema" />
               <span>共 {{ data?.total ?? 0 }} 条</span>
+              <V2TableColumnSettings inline :schema="tableSchema" />
             </template>
           </V2SectionHeading>
         </header>
@@ -334,6 +360,12 @@
 import { useBankRechargeRestoreNavigation } from './useBankRechargeRestoreNavigation';
 const { requestRestore, restoreNavigationError } = useBankRechargeRestoreNavigation();
 import { ref } from 'vue';
+import { useRouter } from 'vue-router';
+import { navigateSafely } from '@/v2/router/navigateSafely';
+const router = useRouter();
+function openOnlineCards() {
+  void navigateSafely(router, '/v2/online-recharge/cards');
+}
 import BankRechargeLifecycleDialog from './BankRechargeLifecycleDialog.vue';
 import BankRechargeSubscriptionReviewDialog from './BankRechargeSubscriptionReviewDialog.vue';
 import type { BankLifecycleEntity, BankLifecycleAction } from './bank-recharge-api';
@@ -355,6 +387,7 @@ import V2TableActionColumn from '@/v2/components/V2TableActionColumn.vue';
 import V2TableColumnSettings from '@/v2/components/V2TableColumnSettings.vue';
 import { v2TableSchemas } from '@/v2/features/tableSchemas';
 import { OnlineOrderBackfill } from '@/v2/features/online-recharge/public-api';
+const orderBackfill = ref<InstanceType<typeof OnlineOrderBackfill> | null>(null);
 import { formatV2DateTime } from '@/v2/utils/dateTime';
 import V2BankRechargeOrderDrawers from './V2BankRechargeOrderDrawers.vue';
 import BitOrderPricingSettings from './BitOrderPricingSettings.vue';
