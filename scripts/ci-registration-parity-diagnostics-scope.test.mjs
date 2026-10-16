@@ -32,6 +32,7 @@ const fixture = () => {
       expectedCurrent: registrationParityDiagnosticsCurrent,
       migration: null,
       expectedGitChanges: [...paths],
+      sourceDeltaPaths: [...registrationParityDiagnosticsRepairPaths],
       allowedApplicationPaths: [...applications],
       controlPaths: [...controls],
       sources: Object.fromEntries(applications.map((name) => [name, hashes[name]])),
@@ -99,6 +100,7 @@ test('unfrozen missing malformed or mismatched review maps never enter the new e
     { sourceBaselineTree: 'c'.repeat(40) },
     { migration: 'new' },
     { expectedGitChanges: paths.slice(1) },
+    { sourceDeltaPaths: registrationParityDiagnosticsRepairPaths.slice(1) },
     { controlPaths: controls.slice(1) },
     { allowedApplicationPaths: [...applications, 'foreign/path'] },
     { sources: {} },
@@ -123,7 +125,7 @@ test('unfrozen missing malformed or mismatched review maps never enter the new e
   );
 });
 
-test('cwd repair admits only nine controls while preserving the original complete freeze', () => {
+test('published successor repair admits only eleven controls while preserving the original complete freeze', () => {
   const options = {
     ...fixture(),
     base: registrationParityDiagnosticsRepairBase,
@@ -138,10 +140,10 @@ test('cwd repair admits only nine controls while preserving the original complet
     false
   );
   assert.equal(
-    isRegistrationParityDiagnosticsControlRepair(
-      registrationParityDiagnosticsRepairPaths,
-      fixture()
-    ),
+    isRegistrationParityDiagnosticsControlRepair(registrationParityDiagnosticsRepairPaths, {
+      ...fixture(),
+      base: 'd44393c5bee8c30c82737fc3e00fa89785a95667'
+    }),
     false
   );
   for (const changed of [
@@ -149,6 +151,10 @@ test('cwd repair admits only nine controls while preserving the original complet
     [...registrationParityDiagnosticsRepairPaths, registrationParityDiagnosticsRepairPaths[0]],
     [...registrationParityDiagnosticsRepairPaths, applications[0]],
     [...registrationParityDiagnosticsRepairPaths, 'package-lock.json'],
+    [
+      ...registrationParityDiagnosticsRepairPaths,
+      'scripts/production-release/account-login-release.py'
+    ],
     [...registrationParityDiagnosticsRepairPaths, 'apps/api/prisma-mysql/schema.prisma'],
     [
       ...registrationParityDiagnosticsRepairPaths,

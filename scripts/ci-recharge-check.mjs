@@ -139,9 +139,12 @@ if (registrationParityDiagnosticsOnly || registrationParityDiagnosticsControlRep
       '-B',
       'scripts/production-release/registration-parity-diagnostics-release.test.py'
     ]);
+    run('node', ['--test', 'scripts/ci-registration-parity-diagnostics-scope.test.mjs']);
+    // These historical controls intentionally reject newer published source bytes.
+    // Check this channel's classifiers and dispatcher against its current frozen source.
     run('node', [
       '--test',
-      'scripts/ci-registration-parity-diagnostics-scope.test.mjs',
+      '--test-name-pattern=registration parity|registration client',
       'scripts/ci-recharge-scope.test.mjs',
       'scripts/ci-recharge-check.test.mjs'
     ]);
