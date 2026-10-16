@@ -250,6 +250,23 @@ def deletion_command(c):
     return "RUN printf '%b' '" + checks + "' | sha256sum -c - && rm -- " + ' '.join(sorted(files)) + '\n'
 
 
+def withdrawal_image_copies(role, copies, original, c):
+    need(role in ('api', 'admin') and isinstance(copies, str), 'IMAGE_COPY_ROLE_INVALID')
+    if role == 'admin':
+        return copies
+    config = original.get('Config') if isinstance(original, dict) else None
+    user = config.get('User') if isinstance(config, dict) else None
+    part = r'(?:[A-Za-z_][A-Za-z0-9_.-]*|[0-9]+)'
+    need(isinstance(user, str) and len(user) <= 128
+         and (user == '' or re.fullmatch(part + '(?::' + part + ')?', user)), 'IMAGE_USER_INVALID')
+    deletion = deletion_command(c)
+    # Empty User already means root. Do not replace it with an explicit User:
+    # the original full image-configuration comparison requires exact equality.
+    if user == '':
+        return deletion + copies
+    return 'USER root\n' + deletion + 'USER ' + user + '\n' + copies
+
+
 def remove_host_sources(target, c):
     for name, expected in c['withdrawal']['sourceRemovals'].items():
         path = target / name
@@ -350,7 +367,8 @@ def release_namespace(c):
     ns = private_namespace(OLD_NAME + '-release.py', {'verify_contract': verify_contract,
         'verify_proof': verify_proof, 'sqlite_inspection_source': sqlite_inspection_source,
         'sqlite_receipt': sqlite_receipt, 'validate_sqlite_receipt': validate_sqlite_receipt, 'smoke': smoke,
-        'remove_host_sources': remove_host_sources, 'baseline': baseline})
+        'remove_host_sources': remove_host_sources, 'baseline': baseline,
+        'withdrawal_image_copies': withdrawal_image_copies})
     tree = ast.parse((HERE / (OLD_NAME + '-release.py')).read_bytes())
     function = next(n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == 'release')
     patched_layers = patched_sources = 0
@@ -359,8 +377,28 @@ def release_namespace(c):
             api = n.iter.elts[0]
             need(isinstance(api, ast.Tuple) and api.elts[0].value == 'api' and api.elts[2].value == 2,
                  'PUBLISHER_IMAGE_BOUNDARY_CHANGED')
-            api.elts[1] = ast.BinOp(ast.Constant(deletion_command(c)), ast.Add(), api.elts[1])
             api.elts[2].value = 3
+            writes = [call for call in ast.walk(n) if isinstance(call, ast.Call)
+                and isinstance(call.func, ast.Attribute) and call.func.attr == 'write_text'
+                and isinstance(call.func.value, ast.BinOp) and isinstance(call.func.value.op, ast.Div)
+                and isinstance(call.func.value.left, ast.Name) and call.func.value.left.id == 'context'
+                and isinstance(call.func.value.right, ast.Constant) and call.func.value.right.value == 'Dockerfile']
+            need(len(writes) == 1 and len(writes[0].args) == 1 and not writes[0].keywords,
+                 'PUBLISHER_DOCKERFILE_BOUNDARY_CHANGED')
+
+            class ImageCopies(ast.NodeTransformer):
+                replaced = 0
+
+                def visit_Name(self, node):
+                    if node.id == 'copies' and isinstance(node.ctx, ast.Load):
+                        self.replaced += 1
+                        return ast.Call(ast.Name('withdrawal_image_copies', ast.Load()),
+                            [ast.Name(name, ast.Load()) for name in ('role', 'copies', 'original', 'contract')], [])
+                    return node
+
+            adapter = ImageCopies()
+            writes[0].args[0] = adapter.visit(writes[0].args[0])
+            need(adapter.replaced == 1, 'PUBLISHER_COPIES_BOUNDARY_CHANGED')
             patched_layers += 1
     for n in ast.walk(function):
         if isinstance(n, (ast.FunctionDef, ast.With, ast.Try, ast.If, ast.For)):

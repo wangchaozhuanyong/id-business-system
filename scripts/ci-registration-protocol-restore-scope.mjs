@@ -5,13 +5,14 @@ import { fileURLToPath } from 'node:url';
 // One forward-only browser withdrawal, bound to its exact reviewed ancestor.
 export const registrationProtocolRestoreBase = '123ea34df9bf74a1d65e74bd70f336eaa9344165';
 export const registrationProtocolRestoreTree = 'ea208f5e571ab6da0dd6c82a8bf46b4d99e42b98';
-export const registrationProtocolRestoreRepairBase = 'dc3c022de71ee702d627ad8231828e1d89866105';
-export const registrationProtocolRestoreRepairTree = '8b1a0b796acdce4ada06b21a0a7a9bc856f0e703';
+export const registrationProtocolRestoreRepairBase = '7e67492468c1481ed563a795cddb9ac8e44d097d';
+export const registrationProtocolRestoreRepairTree = '064e93d4e99fd09ab9c43e77be673a7768baf0f4';
 export const registrationProtocolRestoreRepairGuard = Object.freeze({
   'scripts/check-v2-module-architecture.mjs':
     '0abe913ace9e319c6ac6f0764efaea76b17c1a06bce018259fbc805765ab5383'
 });
 export const registrationProtocolRestoreRepairPaths = Object.freeze([
+  'scripts/production-release/registration-protocol-restore-release.py',
   'scripts/production-release/registration-protocol-restore-release.test.py',
   'scripts/production-release/registration-protocol-restore-contract.json',
   'scripts/ci-registration-protocol-restore-scope.mjs',
@@ -252,7 +253,7 @@ export function isRegistrationProtocolRestoreOnly(paths, options = {}) {
   }
 }
 
-/** A single controls repair may not reopen the reviewed application freeze. */
+/** The image-user repair may change only its nine controls, never the application freeze. */
 export function isRegistrationProtocolRestoreControlRepair(paths, options = {}) {
   const { base, baseTree, sourceDigest = localDigest, baseSourceDigest = ancestorDigest } = options;
   if (
