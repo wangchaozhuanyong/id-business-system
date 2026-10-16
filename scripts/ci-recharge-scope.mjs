@@ -1,3 +1,8 @@
+import {
+  isAccountLoginOnly,
+  accountLoginSchemaMatches,
+  accountLoginParts
+} from './ci-account-login-scope.mjs';
 import { isWorkspaceDragOnly, workspaceDragParts } from './ci-workspace-drag-scope.mjs';
 import {
   isChatgptSalesOnly,
@@ -1018,6 +1023,8 @@ export function isMailboxOnly(paths) {
 }
 
 export function checkMode(paths, oldSchema, newSchema, grantHelperSnapshot, context) {
+  if (isAccountLoginOnly(paths))
+    return accountLoginSchemaMatches(oldSchema, newSchema) ? 'recharge' : 'full';
   if (isRegistrationParityDiagnosticsOnly(paths, context))
     return oldSchema === newSchema ? 'recharge' : 'full';
   if (context && isRegistrationParityDiagnosticsOnly(paths)) return 'full';
@@ -1500,6 +1507,7 @@ export function isTargetedOnly(paths, oldSchema, newSchema) {
   );
 }
 export function selectedParts(paths, grantHelperSnapshot, context) {
+  if (isAccountLoginOnly(paths)) return [...accountLoginParts];
   if (isRegistrationParityDiagnosticsOnly(paths, context))
     return [...registrationParityDiagnosticsParts];
   if (isWorkspaceDragOnly(paths)) return workspaceDragParts(paths);
@@ -4173,7 +4181,8 @@ async function main() {
       const salesAfter = execFileSync('git', ['show', `HEAD:${schema}`], { encoding: 'utf8' });
       if (
         requestedBaseIsAncestor &&
-        ((isChatgptSalesOnly(salesPaths) && chatgptSalesSchemaMatches(salesBefore, salesAfter)) ||
+        ((isAccountLoginOnly(salesPaths) && accountLoginSchemaMatches(salesBefore, salesAfter)) ||
+          (isChatgptSalesOnly(salesPaths) && chatgptSalesSchemaMatches(salesBefore, salesAfter)) ||
           (isChatgptSalesControlsOnly(salesPaths) && salesBefore === salesAfter) ||
           (isWorkspaceDragOnly(salesPaths) && salesBefore === salesAfter))
       ) {

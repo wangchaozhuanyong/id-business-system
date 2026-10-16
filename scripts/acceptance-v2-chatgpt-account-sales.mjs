@@ -147,6 +147,24 @@ async function fixture(width = 1440, theme = 'light') {
     } else if (/\/bank-recharge\/accounts\/[^/]+$/.test(p) && method === 'PATCH') {
       const body = req.postDataJSON(),
         account = state.rows.find((a) => a.id === p.split('/').at(-1));
+      if (body.registeredDate) {
+        assert.deepEqual(Object.keys(body).sort(), [
+          'expectedUpdatedAt',
+          'registeredDate',
+          'remark',
+          'status'
+        ]);
+        assert.equal(body.expectedUpdatedAt, account.updatedAt);
+        assert.equal(body.registeredDate, '2026-09-10');
+        account.registeredAt = '2026-09-09T16:00:00.000Z';
+        account.updatedAt = new Date().toISOString();
+        state.writes.push(body);
+        return route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify({ data: { id: account.id } })
+        });
+      }
       assert.deepEqual(Object.keys(body).sort(), ['expectedUpdatedAt', 'saleStatus']);
       state.writes.push(body);
       if (state.delay) await new Promise((done) => setTimeout(done, state.delay));
@@ -282,6 +300,30 @@ try {
       checks.push({ name: `layout-${theme}-${width}`, first, last, empty });
       await context.close();
     }
+  {
+    const { context: searchContext, page: searchPage, state: searchState } = await fixture();
+    const search = searchPage.getByPlaceholder('邮箱或备注');
+    await search.fill('account.023');
+    await searchPage.getByText(searchState.rows[23].email, { exact: true }).waitFor();
+    await searchPage
+      .getByText(searchState.rows[0].email, { exact: true })
+      .waitFor({ state: 'hidden' });
+    assert.equal(searchState.reads.at(-1).keyword, 'account.023');
+    assert.equal(searchState.reads.at(-1).page, '1');
+    await search.fill('');
+    await searchPage.getByText(searchState.rows[0].email, { exact: true }).waitFor();
+    const editRow = row(searchPage, searchState.rows[2]);
+    await editRow.getByRole('button', { name: '编辑', exact: true }).click();
+    const editor = searchPage.getByRole('dialog').filter({ hasText: '修改 ChatGPT 账号' });
+    await editor.getByRole('textbox', { name: '注册日期', exact: true }).fill('2026-09-10');
+    await editor.getByRole('button', { name: '保存', exact: true }).click();
+    await editor.waitFor({ state: 'hidden' });
+    await editRow.getByText('2026-09-10', { exact: true }).waitFor();
+    assert.equal(searchState.writes.length, 1);
+    assert.ok(!('password' in searchState.writes[0]) && !('totpSecret' in searchState.writes[0]));
+    checks.push({ name: 'automatic-fragment-search-clear-and-date-without-credential-clearing' });
+    await searchContext.close();
+  }
   const { context, page, state } = await fixture();
   await row(page, state.rows[0]).getByRole('button', { name: '更多操作', exact: true }).click();
   assert.equal(
