@@ -14,6 +14,7 @@
 - 页面标题下需要补充数据口径、状态、更新时间或安全边界时，统一使用不带标题能力的
   `V2PageContext`；不得用卡片标题、粗体标题或禁用按钮重复表达页面名称。
 - 主要操作放在首个工具栏或 `V2PageContext` 的操作区，不再创建第二套页面头。
+- 渠道切换与操作同行时，使用 `V2PageContext.navigation` 插槽；筛选仍放 `filters`，操作放 `actions`。表格标题栏以记录范围切换代替重复标题时，使用 `V2SectionHeading.navigation`，数量和列设置继续放 `actions`。两项插槽均为可选，不传时保持原布局。
 - 筛选区、数据区和分页区使用稳定的纵向顺序。
 - 筛选条件和操作在空间足够时保持同一行，只有实际空间不足时才换行。带标题的分组筛选复用 `V2ListToolbar`，已有简单分组可继续使用
   `v2-filter-bar`、`v2-filter-bar__fields` 和 `v2-filter-bar__actions`；筛选组必须占用可用宽度，

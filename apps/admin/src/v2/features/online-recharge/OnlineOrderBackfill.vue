@@ -1,12 +1,15 @@
 <template>
-  <el-dropdown v-if="canManage" trigger="click">
-    <AppButton variant="ghost">更多操作</AppButton>
-    <template #dropdown
-      ><el-dropdown-menu
-        ><el-dropdown-item @click="openPreview">历史订单补录</el-dropdown-item></el-dropdown-menu
-      ></template
-    >
-  </el-dropdown>
+  <template v-if="canManage">
+    <slot v-if="$slots.trigger" name="trigger" :open="openPreview" />
+    <el-dropdown v-else trigger="click">
+      <AppButton variant="ghost">更多操作</AppButton>
+      <template #dropdown
+        ><el-dropdown-menu
+          ><el-dropdown-item @click="openPreview">历史订单补录</el-dropdown-item></el-dropdown-menu
+        ></template
+      >
+    </el-dropdown>
+  </template>
   <V2FormDrawer
     v-model="open"
     title="历史线上订单补录"
@@ -93,11 +96,13 @@ const query = useV2ModuleQuery({
 });
 const preview = computed(() => query.data.value);
 function openPreview() {
+  if (!canManage.value) return;
   cursor.value = '';
   message.value = '';
   open.value = true;
   void query.refresh();
 }
+defineExpose({ openPreview });
 function nextBatch() {
   if (preview.value?.nextCursor) {
     cursor.value = preview.value.nextCursor;

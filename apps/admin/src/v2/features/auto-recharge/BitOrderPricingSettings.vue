@@ -1,5 +1,6 @@
 <template>
-  <AppButton variant="ghost" @click="openSettings">收费与手续费设置</AppButton>
+  <slot v-if="$slots.trigger" name="trigger" :open="openSettings" />
+  <AppButton v-else variant="ghost" @click="openSettings">收费与手续费设置</AppButton>
   <V2FormDrawer
     v-model="open"
     retain-draft
