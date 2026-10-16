@@ -37,6 +37,9 @@ export function mailboxVersionCommands(part, paths) {
     throw new Error('Unsupported mailbox version scope');
   if (part === 'guards')
     return [
+      ...(isMailboxVersionControlsOnly(paths)
+        ? [['python3', '-B', 'scripts/production-release/mailbox-version-release.test.py']]
+        : []),
       [
         'node',
         '--test',

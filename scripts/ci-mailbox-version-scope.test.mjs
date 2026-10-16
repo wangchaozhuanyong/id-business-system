@@ -24,6 +24,7 @@ test('layout repair selects only controls and cannot admit application or schema
   assert.equal(checkMode(paths, 'same', 'same'), 'ci-only');
   assert.deepEqual(selectedParts(paths), ['guards', 'release-controls']);
   assert.equal(needsOnlineRechargeCiBuild(paths), false);
+  assert.ok(mailboxVersionCommands('guards', paths).some(([file]) => file === 'python3'));
   assert.throws(() => mailboxVersionCommands('api', paths));
   assert.equal(isMailboxVersionControlsOnly([...paths, mailboxVersionPaths[0]]), false);
 });
