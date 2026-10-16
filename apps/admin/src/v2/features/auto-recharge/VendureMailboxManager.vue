@@ -14,6 +14,21 @@
       </template>
     </V2PageContext>
 
+    <VendureMailboxHealth
+      :enabled="ready"
+      :api-connected="connected"
+      :refresh-version="healthRefreshVersion"
+    />
+
+    <p
+      v-if="mailChangesPending && activeTab === 'mails' && page > 1"
+      class="vendure-mailbox-scope"
+      role="status"
+    >
+      <span>邮件记录有更新，当前筛选和页码已保留。</span>
+      <AppButton variant="soft" @click="page = 1">查看第一页</AppButton>
+    </p>
+
     <p v-if="operationMessage" class="vendure-mailbox-message" role="status">
       {{ operationMessage }}
     </p>
@@ -74,6 +89,7 @@
                 v-model="statusInput"
                 aria-label="邮箱状态"
                 placeholder="全部状态"
+                @change="applyFilters"
               >
                 <el-option label="全部状态" value="" />
                 <el-option label="正常" value="ACTIVE" />
@@ -127,7 +143,7 @@
                 <AppButton variant="soft" @click="openAliasBatch">批量导入</AppButton>
                 <AppButton variant="primary" @click="openAliasCreate">新增虚拟邮箱</AppButton>
               </template>
-              <AppButton v-else variant="soft" @click="mailQuery.refresh">刷新收件</AppButton>
+              <AppButton variant="soft" @click="refreshCurrentList">刷新列表</AppButton>
             </div>
           </section>
         </div>
@@ -264,7 +280,7 @@
                         :loading="isPrimaryActionRunning(row.id, 'sync')"
                         :disabled="saving && !isPrimaryActionRunning(row.id, 'sync')"
                         @click="runPrimaryAction(row, 'sync')"
-                        >同步</AppButton
+                        >立即同步</AppButton
                       >
                       <el-dropdown trigger="click" @command="handlePrimaryCommand(row, $event)">
                         <AppButton size="small" variant="ghost" :disabled="saving"
@@ -394,7 +410,7 @@
                     :loading="isPrimaryActionRunning(item.id, 'sync')"
                     :disabled="saving && !isPrimaryActionRunning(item.id, 'sync')"
                     @click="runPrimaryAction(item, 'sync')"
-                    >同步</AppButton
+                    >立即同步</AppButton
                   >
                   <el-dropdown trigger="click" @command="handlePrimaryCommand(item, $event)">
                     <AppButton size="small" variant="ghost">更多操作</AppButton>
@@ -1328,6 +1344,7 @@ import { subscribeV2ScopeChanges } from '@/v2/runtime/changeSync';
 import { v2TableSchemas } from '@/v2/features/tableSchemas';
 import { formatV2DateTime } from '@/v2/utils/dateTime';
 import { vendureMailboxApi } from './vendure-mailbox-api';
+import VendureMailboxHealth from './VendureMailboxHealth.vue';
 import '@/v2/styles/records.css';
 import './vendure-mailbox.css';
 
@@ -1354,6 +1371,8 @@ const activeOperationKey = ref('');
 const saving = computed(() => Boolean(activeOperationKey.value));
 const operationMessage = ref('');
 const operationError = ref('');
+const healthRefreshVersion = ref(0);
+const mailChangesPending = ref(false);
 const primaryActionFeedback = ref<{
   primaryId: string;
   tone: 'success' | 'error';
@@ -1509,10 +1528,23 @@ watch(
   { flush: 'post' }
 );
 function applyFilters() {
+  const changed =
+    page.value !== 1 ||
+    keyword.value !== keywordInput.value.trim() ||
+    status.value !== statusInput.value;
   page.value = 1;
   keyword.value = keywordInput.value.trim();
   status.value = statusInput.value;
+  if (!changed) void refreshCurrentList();
+  else healthRefreshVersion.value += 1;
 }
+function refreshCurrentList() {
+  healthRefreshVersion.value += 1;
+  return activeQuery.value.refresh();
+}
+watch(page, (value) => {
+  if (value === 1) mailChangesPending.value = false;
+});
 function resetPage() {
   page.value = 1;
 }
@@ -1863,7 +1895,10 @@ function refreshRelayFromEvent() {
   void handleRelayQuery(true);
 }
 const unsubscribeMailChanges = subscribeV2ScopeChanges((scopes) => {
-  if (scopes.includes('vendure-mailbox')) refreshRelayFromEvent();
+  if (scopes.includes('vendure-mailbox')) {
+    if (activeTab.value === 'mails' && page.value > 1) mailChangesPending.value = true;
+    refreshRelayFromEvent();
+  }
 });
 
 onBeforeUnmount(() => {
@@ -1875,6 +1910,7 @@ function clearNotice() {
   operationError.value = '';
 }
 async function afterWrite(message: string) {
+  healthRefreshVersion.value += 1;
   operationMessage.value = message;
   const queries = [primaryQuery, aliasQuery, ...(activeTab.value === 'mails' ? [mailQuery] : [])];
   await Promise.allSettled(queries.map((query) => query.refresh()));
@@ -1998,7 +2034,7 @@ function runPrimaryAction(row: V2VendureMailboxPrimaryAccount, action: 'test' | 
         if (action === 'test') {
           const result = await vendureMailboxApi.testPrimary(row.id);
           if (!result.success) throw new Error(result.message || '邮箱连接测试失败');
-          operationMessage.value = result.message || '邮箱连接测试成功';
+          await afterWrite(result.message || '邮箱连接测试成功');
         } else {
           const result = await vendureMailboxApi.syncPrimary(row.id);
           if (!result.success) throw new Error(result.error || '邮箱同步失败');
@@ -2010,6 +2046,14 @@ function runPrimaryAction(row: V2VendureMailboxPrimaryAccount, action: 'test' | 
           message: action === 'test' ? '连接正常' : '同步完成'
         };
       } catch (error) {
+        if (action === 'sync') {
+          await Promise.allSettled([
+            primaryQuery.refresh(),
+            aliasQuery.refresh(),
+            ...(activeTab.value === 'mails' ? [mailQuery.refresh()] : [])
+          ]);
+          healthRefreshVersion.value += 1;
+        }
         primaryActionFeedback.value = {
           primaryId: row.id,
           tone: 'error',

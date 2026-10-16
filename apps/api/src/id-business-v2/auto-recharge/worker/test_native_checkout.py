@@ -25,6 +25,7 @@ from test_subscribe import fixture, account
 from checkout_core import parse_browser_credential
 from playwright.async_api import async_playwright
 from urllib.parse import urlsplit
+from browser_session import SessionBudget
 
 
 SID = 'oaics_synthetic_native'
@@ -251,6 +252,7 @@ class NativeBrowserTests(unittest.IsolatedAsyncioTestCase):
         self.target = parse_browser_credential(fixture())
         self.writes = []
         self.total, self.tax = 110000, 11786
+        self.billing, self.partial_tax_response, self.original_reads = ADDRESS, False, 0
         self.original_plan = 'chatgptplusplan'
         await self.context.route('**/*', self.server)
 
@@ -267,7 +269,9 @@ class NativeBrowserTests(unittest.IsolatedAsyncioTestCase):
         if path.startswith('/backend-api/accounts/'):
             return await route.fulfill(json=account())
         if path == CHECKOUT_PATH + '/' + ENTITY + '/' + SID:
-            data = session();data['plan_name'] = self.original_plan
+            self.original_reads += 1
+            data = session(due=self.total, tax=self.tax, address=self.billing)
+            data['plan_name'] = self.original_plan
             return await route.fulfill(json=data)
         if path == CHECKOUT_PATH + '/taxes':
             self.writes.append(path)
@@ -276,7 +280,10 @@ class NativeBrowserTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(address['city'], 'Synthetic city')
             self.assertEqual(address['postal_code'], '97204')
             self.total, self.tax = 98214, 0
+            self.billing = address
             response = session(due=self.total, tax=self.tax, address=address)
+            if self.partial_tax_response:
+                return await route.fulfill(json={'tax_amount': 0})
             return await route.fulfill(json={'checkout_session': response})
         if request.method not in {'GET', 'HEAD', 'OPTIONS'}:
             self.writes.append(path)
@@ -311,7 +318,7 @@ class NativeBrowserTests(unittest.IsolatedAsyncioTestCase):
                     .replace("'SID'", json.dumps(SID)).replace("'ENTITY'", json.dumps(ENTITY)))
         await route.abort()
 
-    async def prepare_original(self, *, pay=False, confirmer=lambda *_: False):
+    async def prepare_original(self, *, pay=False, confirmer=lambda *_: False, form_budget=None):
         page = await self.context.new_page()
         original = 'https://chatgpt.com/checkout/' + ENTITY + '/' + SID
         await page.goto(original)
@@ -321,12 +328,40 @@ class NativeBrowserTests(unittest.IsolatedAsyncioTestCase):
                 guard.attach_payment_ledger(ledger)
                 return await payment_handler(active, guard, identity, ledger, self.target, pay=pay,
                     details_reader=details, confirmer=confirmer, wait_seconds=0,
-                    poll_count=0, poll_interval=0, quote_wait_seconds=3)
-        with contextlib.redirect_stderr(io.StringIO()):
+                    poll_count=0, poll_interval=0, quote_wait_seconds=3, form_budget=form_budget)
+        diagnostic = io.StringIO()
+        with contextlib.redirect_stderr(diagnostic):
             result = await run_browser(self.target, inspect_existing=True, recover_unknown_checkout=True,
                 state_dir=self.root, browser_context=self.context, quote_handler=prepare,
                 guard_factory=lambda target, ledger: PaymentGuard(target, checkout_ledger=ledger))
+        self.diagnostic = diagnostic.getvalue()
         return page, result
+
+    async def test_partial_tax_reply_recovers_only_by_reading_same_original_checkout(self):
+        self.partial_tax_response = True
+        page, result = await self.prepare_original(form_budget=SessionBudget(30))
+        self.assertEqual(result.get('status'), 'payment_prepared', result)
+        self.assertEqual(result['quote']['today']['amount_minor'], 98214)
+        self.assertEqual(result['payment_requests_sent'], 0)
+        self.assertGreaterEqual(self.original_reads, 2)
+        self.assertEqual(self.writes, [CHECKOUT_PATH + '/taxes'])
+        self.assertIn(SID, page.url)
+        rows = [json.loads(line) for line in self.diagnostic.splitlines()]
+        checks = [row for row in rows if row.get('event') == 'checkout_quote_check']
+        self.assertTrue(any(row['state'] == 'verified' for row in checks))
+        self.assertTrue(all(set(row) == {'event', 'state'} for row in checks))
+        diagnostic = json.dumps(checks)
+        for private in (details().number, details().cvc, details().line1, self.target.old_token, SID):
+            self.assertNotIn(private, diagnostic)
+
+    async def test_round_budget_reprices_original_after_complete_billing_without_payment(self):
+        page, result = await self.prepare_original(form_budget=SessionBudget(30))
+        self.assertEqual(result.get('status'), 'payment_prepared', result)
+        self.assertEqual(result['quote_authority'], 'official_checkout_response')
+        self.assertEqual(result['initial_quote']['today']['amount_minor'], 110000)
+        self.assertEqual(result['quote']['today']['amount_minor'], 98214)
+        self.assertEqual(result['payment_requests_sent'], 0)
+        self.assertIn(SID, page.url)
 
     async def test_original_checkout_resumes_fills_all_fields_and_returns_recalculated_final_amount(self):
         page, result = await self.prepare_original()

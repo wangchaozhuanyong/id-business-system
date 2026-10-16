@@ -126,6 +126,41 @@ test('checkout source recovery runs its native controls and the API suite withou
   assert.ok(api.some((row) => row.includes('src/id-business-v2/auto-recharge')));
   assert.ok(api.some((row) => row.join(' ') === 'npm run build --workspace @apple-business/api'));
 });
+test('checkout foreground repair runs real connector selection with the focus and payment regressions', () => {
+  const paths = [
+    'apps/api/src/id-business-v2/auto-recharge/worker/payment_form.py',
+    'apps/api/src/id-business-v2/auto-recharge/worker/test_payment_form_focus.py',
+    'scripts/ci-recharge-checkout-scope.mjs',
+    'scripts/ci-recharge-check.mjs'
+  ];
+  const guards = recordGuardCommands('recharge', paths);
+  assert.ok(guards.some((row) => row.includes('check:v2-isolation')));
+  const connector = recordGuardCommands('recharge', paths, 'connector');
+  const tests = connector.find((row) => row.includes('unittest'));
+  for (const name of [
+    'test_payment_form_focus',
+    'test_payment',
+    'test_native_checkout',
+    'test_native_pro_checkout'
+  ])
+    assert.ok(tests.includes(name), name);
+});
+test('form wait budget keeps shared controls and the full payment connector regression', () => {
+  const paths = ['payment_form.py', 'pay.py', 'test_payment_form_budget.py'].map(
+    (name) => `apps/api/src/id-business-v2/auto-recharge/worker/${name}`
+  );
+  const guards = recordGuardCommands('recharge', paths);
+  assert.ok(guards.some((row) => row.includes('check:v2-isolation')));
+  const connector = recordGuardCommands('recharge', paths, 'connector');
+  const tests = connector.find((row) => row.includes('unittest'));
+  for (const name of [
+    'test_payment_form_budget',
+    'test_payment_form_focus',
+    'test_payment',
+    'test_native_checkout'
+  ])
+    assert.ok(tests.includes(name), name);
+});
 const readonlyMetadataPaths = [
   'scripts/production-release/online-recharge-component-readonly.py',
   'scripts/production-release/online-recharge-component-readonly.test.py'

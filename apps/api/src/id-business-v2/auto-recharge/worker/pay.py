@@ -26,6 +26,7 @@ from payment_handoff import challenge_frames, controller_cancelled
 from payment_state import PaymentLedger, outcome, quote_digest, validate_evidence
 from plans import PLANS, plan_spec, subscription_match
 from native_checkout import unknown_checkout_recoverable, read_original_native_checkout
+from browser_session import SessionBudget
 
 
 def focus_input_terminal():
@@ -80,16 +81,35 @@ def confirm_quote(quote, last4):
     return entered == phrase
 
 
+QUOTE_CHECK_STATES = frozenset({
+    'form_start', 'form_complete', 'billing_verified', 'card_verified', 'quote_wait_start',
+    'binding_missing', 'billing_mismatch', 'tier_pending', 'visible_incomplete',
+    'amount_mismatch', 'tax_mismatch', 'quote_invalid', 'verified', 'version_pending',
+    'original_read_start', 'original_read_complete',
+})
+
+
+def quote_check_state(guard, state):
+    """仅将受控阶段写入本机诊断；不记录网页正文、金额、地址、标识或凭据。"""
+    if state not in QUOTE_CHECK_STATES or getattr(guard, '_quote_check_state', None) == state:
+        return
+    guard._quote_check_state = state
+    print(json.dumps({'event': 'checkout_quote_check', 'state': state}), file=sys.stderr, flush=True)
+
+
 async def verified_quote_once(page, guard):
     binding = guard.official_quote_binding
     if not binding:
+        quote_check_state(guard, 'binding_missing')
         return None
     expected = getattr(guard, 'expected_billing_fingerprint', None)
     if binding.get('native') and expected and binding.get('billing_fingerprint') != expected:
+        quote_check_state(guard, 'billing_mismatch')
         return None
     if (getattr(guard, 'first_pro_checkout', False)
             and (guard.official_binding_version < guard.checkout_tier_binding_minimum
                  or guard.official_quote_binding_request_version < guard.checkout_tier_request_minimum)):
+        quote_check_state(guard, 'tier_pending')
         return None
     quote = await quote_from_page(page)
     if not quote.get("today"):
@@ -97,29 +117,48 @@ async def verified_quote_once(page, guard):
         quote = await quote_from_page(page, binding["currency"])
     today = quote.get("today")
     if (not today or quote.get("tax") is None or not quote.get("renewal")
-            or quote.get("renewal_interval") != "monthly"
-            or today.get("currency") != binding["currency"]
-            or today.get("amount_minor") != binding["amount_minor"]
-            or "tax_minor" in binding and quote["tax"].get("amount_minor") != binding["tax_minor"]):
+            or quote.get("renewal_interval") != "monthly"):
+        quote_check_state(guard, 'visible_incomplete')
+        return None
+    if (today.get("currency") != binding["currency"]
+            or today.get("amount_minor") != binding["amount_minor"]):
+        quote_check_state(guard, 'amount_mismatch')
+        return None
+    if "tax_minor" in binding and quote["tax"].get("amount_minor") != binding["tax_minor"]:
+        quote_check_state(guard, 'tax_mismatch')
         return None
     try:
         quote_digest(quote)
     except Stop:
+        quote_check_state(guard, 'quote_invalid')
         return None
+    quote_check_state(guard, 'verified')
     return quote
 
 
+NATIVE_QUOTE_READ_LIMIT = 3
+NATIVE_QUOTE_READ_INTERVAL = 3
+
+
 async def current_quote(page, guard, minimum_binding_version=0, *, wait_seconds=9,
-                        refresh_handler=None):
+                        refresh_handler=None, binding_reader=None, progress_budget=None):
     previous = None
+    quote_check_state(guard, 'quote_wait_start')
     started = time.monotonic()
     deadline = started + wait_seconds
     refreshed = False
     last_report = float("-inf")
+    binding_reads, next_binding_read = 0, started
+
+    def progress_time():
+        return ({'quote_elapsed_seconds': min(int(progress_budget.elapsed), int(progress_budget.seconds)),
+                 'quote_wait_seconds': int(progress_budget.seconds)} if progress_budget is not None else
+                {'quote_elapsed_seconds': int(time.monotonic() - started), 'quote_wait_seconds': wait_seconds})
 
     def not_ready():
-        return Stop("payment_quote_not_ready", quote_elapsed_seconds=wait_seconds,
-                    quote_wait_seconds=wait_seconds, quote_refresh_count=1 if refreshed else 0,
+        timing = progress_time() if progress_budget is not None else {
+            'quote_elapsed_seconds': wait_seconds, 'quote_wait_seconds': wait_seconds}
+        return Stop("payment_quote_not_ready", **timing, quote_refresh_count=1 if refreshed else 0,
                     page_state="quote_incomplete")
 
     async def remaining_call(operation):
@@ -139,17 +178,25 @@ async def current_quote(page, guard, minimum_binding_version=0, *, wait_seconds=
     while time.monotonic() < deadline:
         elapsed = time.monotonic() - started
         if elapsed - last_report >= 10:
-            progress("quote_waiting", quote_elapsed_seconds=int(elapsed),
-                     quote_wait_seconds=wait_seconds,
+            progress("quote_waiting", **progress_time(),
                      quote_refresh_count=1 if refreshed else 0,
                      page_state="quote_incomplete")
             last_report = elapsed
         quote = (await remaining_call(lambda: verified_quote_once(page, guard))
                  if guard.official_binding_version >= minimum_binding_version else None)
+        if guard.official_binding_version < minimum_binding_version:
+            quote_check_state(guard, 'version_pending')
         digest = quote_digest(quote) if quote else None
         if digest and digest == previous:
             return quote
         previous = digest
+        if (not digest and binding_reader is not None and binding_reads < NATIVE_QUOTE_READ_LIMIT
+                and time.monotonic() >= next_binding_read):
+            binding_reads += 1
+            quote_check_state(guard, 'original_read_start')
+            await remaining_call(binding_reader)
+            quote_check_state(guard, 'original_read_complete')
+            next_binding_read = time.monotonic() + NATIVE_QUOTE_READ_INTERVAL
         elapsed = time.monotonic() - started
         await remaining_call(lambda: asyncio.sleep(.3))
     raise not_ready()
@@ -208,7 +255,7 @@ async def original_payment_feedback(page, guard):
 
 async def payment_handler(page, guard, identity, ledger, target, *, pay, details_reader, confirmer,
                           wait_seconds, poll_count, poll_interval, quote_wait_seconds=9,
-                          expected_country=None):
+                          expected_country=None, form_budget=None):
     selected_plan = ledger.target_plan
     first_pro = getattr(guard, 'first_pro_checkout', False) is True
     tier_binding_minimum = getattr(guard, 'checkout_tier_binding_minimum', 0) if first_pro else 0
@@ -226,33 +273,72 @@ async def payment_handler(page, guard, identity, ledger, target, *, pay, details
         # 初始金额可能需要完整账单资料才出现；档位先核实，金额在填表后核实。
     details = await asyncio.to_thread(details_reader)
     try:
-        binding_before = guard.official_binding_version
-        prepared = await fill_official_form(page, details)
+        preparation_stage = 'payment_preparation'
+        budget = None
+        if form_budget is not None:
+            # 父预算从本轮结算阶段开始计时；控件、填写、核价及回读均不能另开时限。
+            budget = SessionBudget(form_budget.seconds, clock=form_budget.clock, parent=form_budget,
+                cancelled=lambda: form_budget.cancelled() or guard.operation_cancelled(),
+                report=lambda **_: progress(preparation_stage,
+                    quote_elapsed_seconds=min(int(form_budget.elapsed), int(form_budget.seconds)),
+                    quote_wait_seconds=int(form_budget.seconds), quote_refresh_count=0,
+                    page_state='quote_incomplete' if preparation_stage == 'quote_waiting' else 'loading'))
 
-        # A changed address must agree with the latest response for this checkout.
-        # Reading and calculating tax must never refresh the form or reuse old totals.
-        native = str(getattr(guard, 'checkout_id', '')).startswith('oaics_')
-        if native:
-            guard.expected_billing_fingerprint = await billing_snapshot_fingerprint(
-                page, details, prepared['billing_fields_filled'])
-            if not guard.expected_billing_fingerprint:
-                raise Stop('billing_fields_incomplete')
-            await verify_card_fields(page, details)
-            previous_binding = guard.official_quote_binding
-            if (guard.official_binding_version == binding_before and previous_binding
-                    and previous_binding.get('billing_fingerprint') == guard.expected_billing_fingerprint):
-                # 官网已保存相同完整地址时可能不重新计税。重新 GET 原单核对同一地址，
-                # 不刷新表单，也不为凑新版号伪造税费或提交订阅。
-                credential, latest_identity = await check_session(page, target, 0)
-                if latest_identity['current_plan'] != 'free':
-                    raise Stop('incompatible_existing_subscription')
-                await read_original_native_checkout(page, credential, selected_plan)
-        quote = await current_quote(page, guard, max(1, binding_before + 1, tier_binding_minimum),
-                                    wait_seconds=quote_wait_seconds)
-        if quote["plan"] != selected_plan:
-            raise Stop("payment_quote_plan_mismatch")
-        await verify_billing_fields(page, details, prepared["billing_fields_filled"])
-        await verify_card_fields(page, details)
+        async def prepare():
+            nonlocal preparation_stage
+            options = {'budget': budget} if budget is not None else {}
+            binding_before = guard.official_binding_version
+            quote_check_state(guard, 'form_start')
+            prepared = await fill_official_form(page, details, **options)
+            quote_check_state(guard, 'form_complete')
+            # A changed address must agree with the latest response for this checkout.
+            # Reading and calculating tax must never refresh the form or reuse old totals.
+            native = str(getattr(guard, 'checkout_id', '')).startswith('oaics_')
+            quote_options = {}
+            if native:
+                guard.expected_billing_fingerprint = await billing_snapshot_fingerprint(
+                    page, details, prepared['billing_fields_filled'], **options)
+                quote_check_state(guard, 'billing_verified')
+                if not guard.expected_billing_fingerprint:
+                    raise Stop('billing_fields_incomplete')
+                await verify_card_fields(page, details, **options)
+                quote_check_state(guard, 'card_verified')
+                read_credential = None
+
+                async def read_binding():
+                    nonlocal read_credential
+                    if read_credential is None:
+                        read_credential, latest_identity = await check_session(page, target, 0)
+                        if latest_identity['current_plan'] != 'free':
+                            raise Stop('incompatible_existing_subscription')
+                    # 仅 GET 同一个未付款原单；由既有观测器核对最新响应、账号及账单指纹。
+                    await read_original_native_checkout(page, read_credential, selected_plan)
+
+                quote_options['binding_reader'] = read_binding
+            if form_budget is not None:
+                quote_options['progress_budget'] = form_budget
+            preparation_stage = 'quote_waiting'
+            quote = await current_quote(page, guard, max(1, binding_before + 1, tier_binding_minimum),
+                wait_seconds=budget.remaining_ms() / 1000 if budget is not None else quote_wait_seconds,
+                **quote_options)
+            if quote['plan'] != selected_plan:
+                raise Stop('payment_quote_plan_mismatch')
+            await verify_billing_fields(page, details, prepared['billing_fields_filled'], **options)
+            await verify_card_fields(page, details, **options)
+            return prepared, quote
+
+        try:
+            prepared, quote = (await budget.run(prepare, 'payment_fields')
+                               if budget is not None else await prepare())
+        except Stop as exc:
+            if budget is None or exc.report.get('reason') not in {'session_load_timeout', 'payment_quote_not_ready'}:
+                raise
+            raise Stop('payment_quote_not_ready' if preparation_stage == 'quote_waiting'
+                       else 'official_payment_field_not_ready', stage='payment_preparation',
+                       error_type='TimeoutError', quote_refresh_count=0,
+                       quote_elapsed_seconds=min(int(form_budget.elapsed), int(form_budget.seconds)),
+                       quote_wait_seconds=int(form_budget.seconds),
+                       page_state='quote_incomplete' if preparation_stage == 'quote_waiting' else 'loading') from None
         guard.final_quote_verified = True
         if not pay:
             progress("payment_prepared", quote=quote, payment="blocked")
@@ -498,6 +584,7 @@ async def run_checkout_flow(target, state_dir, target_plan, *, details_reader, c
                                          wait_seconds=wait_seconds, poll_count=poll_count,
                                          poll_interval=poll_interval,
                                          expected_country=expected_country,
+                                         form_budget=session_budget,
                                          quote_wait_seconds=(session_budget.seconds
                                                              if session_budget else 9))
 

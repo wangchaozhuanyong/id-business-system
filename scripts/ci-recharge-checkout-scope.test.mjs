@@ -4,6 +4,7 @@ import {
   checkoutControlPaths,
   checkoutSourceRecoveryControls,
   isRechargeCheckoutOnly,
+  isRechargeFormBudgetOnly,
   isRechargeSourceRecoveryOnly
 } from './ci-recharge-checkout-scope.mjs';
 import {
@@ -20,6 +21,34 @@ const paths = [
   'packages/shared/src/v2/auto-recharge.ts',
   'scripts/ci-recharge-check.mjs'
 ];
+test('form preparation budget selects bounded connector regression without other source or database', () => {
+  const form = [
+    'payment_form.py',
+    'pay.py',
+    'test_payment_form_budget.py',
+    'test_payment_form_focus.py'
+  ].map((name) => `apps/api/src/id-business-v2/auto-recharge/worker/${name}`);
+  assert.equal(isRechargeFormBudgetOnly(form), true);
+  const originalRead = [
+    ...form.filter((path) => !path.endsWith('/payment_form.py')),
+    'apps/api/src/id-business-v2/auto-recharge/worker/test_native_checkout.py'
+  ];
+  assert.equal(isRechargeFormBudgetOnly(originalRead), true);
+  assert.deepEqual(selectedParts(originalRead), ['guards', 'connector']);
+  assert.equal(isRechargeOnly(form, 'same', 'same'), true);
+  assert.deepEqual(selectedParts(form), ['guards', 'connector']);
+  assert.equal(needsOnlineRechargeCiBuild(form), false);
+  for (const extra of [
+    'package-lock.json',
+    'apps/api/prisma-mysql/schema.prisma',
+    'apps/api/src/auth/auth.service.ts',
+    'apps/api/src/id-business-v2/auto-recharge/recharge-local.service.ts',
+    'apps/api/src/id-business-v2/auto-recharge/worker/bitbrowser_retry.py'
+  ]) {
+    assert.equal(isRechargeFormBudgetOnly([...form, extra]), false, extra);
+    assert.equal(isRechargeCheckoutOnly([...form, extra]), false, extra);
+  }
+});
 test('native checkout selects UI/API/connector and retains filled-details acceptance', () => {
   assert.equal(isRechargeCheckoutOnly(paths), true);
   assert.equal(isRechargeOnly(paths, 'same', 'same'), true);
@@ -70,5 +99,34 @@ test('original checkout source recovery keeps API and control checks without unr
   ]) {
     assert.equal(isRechargeSourceRecoveryOnly([...recovery, extra]), false, extra);
     assert.equal(isRechargeCheckoutOnly([...recovery, extra]), false, extra);
+  }
+});
+
+test('checkout foreground repair selects connector regression and rejects unrelated changes', () => {
+  const focus = [
+    'apps/api/src/id-business-v2/auto-recharge/worker/payment_form.py',
+    'apps/api/src/id-business-v2/auto-recharge/worker/test_payment_form_focus.py',
+    'scripts/ci-recharge-checkout-scope.mjs',
+    'scripts/ci-recharge-checkout-scope.test.mjs',
+    'scripts/ci-recharge-check.mjs',
+    'docs/CHECKOUT_SOURCE_RECOVERY_20261016.md'
+  ];
+  assert.equal(isRechargeSourceRecoveryOnly(focus), true);
+  assert.equal(isRechargeOnly(focus, 'same', 'same'), true);
+  assert.deepEqual(selectedParts(focus), ['guards', 'connector']);
+  assert.equal(needsOnlineRechargeCiBuild(focus), false);
+  const cancel = focus.map((path) =>
+    path.replace('/worker/payment_form.py', '/worker/bitbrowser_connector.py')
+  );
+  assert.equal(isRechargeSourceRecoveryOnly(cancel), true);
+  assert.deepEqual(selectedParts(cancel), ['guards', 'connector']);
+  for (const extra of [
+    'package-lock.json',
+    'apps/api/prisma-mysql/schema.prisma',
+    'apps/api/src/auth/auth.service.ts',
+    'apps/api/src/id-business-v2/online-recharge/worker/pay.py',
+    'apps/api/src/id-business-v2/auto-recharge/worker/pay.py'
+  ]) {
+    assert.equal(isRechargeCheckoutOnly([...focus, extra]), false, extra);
   }
 });

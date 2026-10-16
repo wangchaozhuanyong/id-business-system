@@ -135,6 +135,12 @@ function includesQuery(values: Array<string | null>, query: string) {
 }
 
 Object.assign(vendureMailboxApi, {
+  health: async () => ({
+    status: 'unsupported',
+    checkedAt: new Date().toISOString(),
+    listeners: [],
+    delivery: null
+  }),
   status: async () => ({ configured: true, connected: true, message: null }),
   primaryAccounts: async (query: V2VendureMailboxListQuery) =>
     page(
