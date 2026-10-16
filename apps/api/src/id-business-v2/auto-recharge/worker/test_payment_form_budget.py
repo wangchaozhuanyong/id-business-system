@@ -1,12 +1,14 @@
 """纯合成时间／控件回归；不连接官网，不使用真实付款资料。"""
 import asyncio
+import io
+import json
 from types import SimpleNamespace
 import unittest
 from unittest.mock import AsyncMock, Mock, patch
 
 from browser_session import SessionBudget
 from checkout_core import Stop
-from pay import payment_handler, current_quote
+from pay import payment_handler, current_quote, quote_check_state, verified_quote_once
 from payment_form import CARD_FIELDS, fill_official_form, wait_for_payment_form
 from test_payment_form_focus import DeferredCheckout, DeferredFields, details
 from browser_checkout import quote_from_text
@@ -221,3 +223,24 @@ class OriginalQuoteReadTests(unittest.IsolatedAsyncioTestCase):
                                 wait_seconds=.03, binding_reader=read)
         self.assertEqual(stopped.exception.report['reason'], 'payment_quote_not_ready')
         self.assertTrue(ended.is_set())
+
+
+class QuoteCheckDiagnosticTests(unittest.IsolatedAsyncioTestCase):
+    async def test_fixed_state_log_deduplicates_and_never_logs_unknown_input(self):
+        output, guard = io.StringIO(), SimpleNamespace()
+        with patch('pay.sys.stderr', output):
+            quote_check_state(guard, 'billing_mismatch')
+            quote_check_state(guard, 'billing_mismatch')
+            quote_check_state(guard, 'private input must not be logged')
+        rows = [json.loads(line) for line in output.getvalue().splitlines()]
+        self.assertEqual(rows, [{'event': 'checkout_quote_check', 'state': 'billing_mismatch'}])
+
+    async def test_bill_mismatch_diagnostic_does_not_read_page_or_expose_fingerprint(self):
+        guard = SimpleNamespace(official_quote_binding={'native': True, 'billing_fingerprint': 'old-private'},
+                                expected_billing_fingerprint='new-private')
+        output = io.StringIO()
+        with patch('pay.sys.stderr', output), patch('pay.quote_from_page', new=AsyncMock()) as read:
+            self.assertIsNone(await verified_quote_once(object(), guard))
+        read.assert_not_awaited()
+        self.assertEqual(json.loads(output.getvalue())['state'], 'billing_mismatch')
+        self.assertNotIn('private', output.getvalue())
