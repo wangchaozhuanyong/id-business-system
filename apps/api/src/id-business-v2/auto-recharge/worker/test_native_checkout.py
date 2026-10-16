@@ -329,10 +329,12 @@ class NativeBrowserTests(unittest.IsolatedAsyncioTestCase):
                 return await payment_handler(active, guard, identity, ledger, self.target, pay=pay,
                     details_reader=details, confirmer=confirmer, wait_seconds=0,
                     poll_count=0, poll_interval=0, quote_wait_seconds=3, form_budget=form_budget)
-        with contextlib.redirect_stderr(io.StringIO()):
+        diagnostic = io.StringIO()
+        with contextlib.redirect_stderr(diagnostic):
             result = await run_browser(self.target, inspect_existing=True, recover_unknown_checkout=True,
                 state_dir=self.root, browser_context=self.context, quote_handler=prepare,
                 guard_factory=lambda target, ledger: PaymentGuard(target, checkout_ledger=ledger))
+        self.diagnostic = diagnostic.getvalue()
         return page, result
 
     async def test_partial_tax_reply_recovers_only_by_reading_same_original_checkout(self):
@@ -344,6 +346,13 @@ class NativeBrowserTests(unittest.IsolatedAsyncioTestCase):
         self.assertGreaterEqual(self.original_reads, 2)
         self.assertEqual(self.writes, [CHECKOUT_PATH + '/taxes'])
         self.assertIn(SID, page.url)
+        rows = [json.loads(line) for line in self.diagnostic.splitlines()]
+        checks = [row for row in rows if row.get('event') == 'checkout_quote_check']
+        self.assertTrue(any(row['state'] == 'verified' for row in checks))
+        self.assertTrue(all(set(row) == {'event', 'state'} for row in checks))
+        diagnostic = json.dumps(checks)
+        for private in (details().number, details().cvc, details().line1, self.target.old_token, SID):
+            self.assertNotIn(private, diagnostic)
 
     async def test_round_budget_reprices_original_after_complete_billing_without_payment(self):
         page, result = await self.prepare_original(form_budget=SessionBudget(30))
