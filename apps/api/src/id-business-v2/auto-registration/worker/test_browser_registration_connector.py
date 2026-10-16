@@ -1,8 +1,10 @@
 """Pure fakes: no browser, external network, filesystem credentials or database."""
 import asyncio
+from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 import io
 import json
+import sys
 from pathlib import Path
 from types import SimpleNamespace
 import unittest
@@ -10,7 +12,7 @@ from unittest.mock import AsyncMock, Mock, patch
 
 import browser_registration_connector as connector
 from browser_registration_flow import (RegistrationFlow, Stop, TRACE_URL, SIGNUP_ENTRY_TEXT, observe_browser_exit,
-    parse_exit_trace, official, profile_details, submit_for, unique_visible)
+    parse_exit_trace, official, official_session_cookie, profile_details, submit_for, unique_visible)
 
 
 TASK = '11111111-1111-4111-8111-111111111111'
@@ -271,6 +273,50 @@ class FlowTests(unittest.IsolatedAsyncioTestCase):
             is_navigation_request=Mock(return_value=False), frame=SimpleNamespace(parent_frame=None)),
             abort=AsyncMock(), continue_=AsyncMock())
 
+    def session_cookie(self, **changes):
+        return {'name': '__Secure-next-auth.session-token', 'domain': '.chatgpt.com',
+                'secure': True, 'expires': -1, 'value': 'official-session-opaque-value', **changes}
+
+    async def test_only_exact_official_session_cookie_is_selected(self):
+        cookies = [self.session_cookie(),
+            self.session_cookie(name='cf_clearance', value='challenge-secret-never-export'),
+            self.session_cookie(name='__cf_bm', value='cf-secret-never-export'),
+            self.session_cookie(domain='.evil.test', value='foreign-secret-never-export'),
+            self.session_cookie(name='__Secure-next-auth.session-token.0', value='chunk-secret-never-export')]
+        context = SimpleNamespace(cookies=AsyncMock(return_value=cookies))
+        self.assertEqual(await official_session_cookie(context), 'official-session-opaque-value')
+        context.cookies.assert_awaited_once_with(['https://chatgpt.com'])
+
+    async def test_session_cookie_absent_is_optional_without_exporting_other_cookies(self):
+        context = SimpleNamespace(cookies=AsyncMock(return_value=[
+            self.session_cookie(name='cf_clearance', value='do-not-export'),
+            self.session_cookie(domain='auth.openai.com', value='not-chatgpt-domain')]))
+        self.assertIsNone(await official_session_cookie(context))
+
+    async def test_duplicate_or_invalid_official_session_cookie_stops_for_review(self):
+        invalid = [self.session_cookie(secure=False), self.session_cookie(expires=0),
+            self.session_cookie(expires=float('nan')), self.session_cookie(expires=float('inf')),
+            self.session_cookie(expires=True), self.session_cookie(expires=None),
+            self.session_cookie(value=''), self.session_cookie(value='x' * 32769),
+            self.session_cookie(value='has whitespace'), self.session_cookie(value='has;separator'),
+            self.session_cookie(value='has\\separator'), self.session_cookie(value='has\nnewline')]
+        groups = [[cookie] for cookie in invalid] + [[self.session_cookie(), self.session_cookie(domain='chatgpt.com')]]
+        for cookies in groups:
+            with self.subTest(shape=len(cookies)), self.assertRaises(Stop) as error:
+                await official_session_cookie(SimpleNamespace(cookies=AsyncMock(return_value=cookies)))
+            self.assertEqual(error.exception.reason, 'identity_unverified')
+
+    async def test_non_expired_persistent_session_cookie_is_accepted(self):
+        context = SimpleNamespace(cookies=AsyncMock(return_value=[
+            self.session_cookie(domain='chatgpt.com', expires=4102444800)]))
+        self.assertEqual(await official_session_cookie(context), 'official-session-opaque-value')
+
+    async def test_session_cookie_read_failure_never_becomes_an_empty_success(self):
+        context = SimpleNamespace(cookies=AsyncMock(side_effect=RuntimeError('private-cookie-not-logged')))
+        with self.assertRaises(Stop) as error:
+            await official_session_cookie(context)
+        self.assertEqual(str(error.exception), 'identity_unverified')
+
     async def test_trace_browser_navigation_validates_fixed_final_source_and_body(self):
         response = SimpleNamespace(status=200, url=TRACE_URL,
             request=SimpleNamespace(redirected_from=None),
@@ -396,6 +442,86 @@ class FlowTests(unittest.IsolatedAsyncioTestCase):
                 await flow.observe_creation(response, SimpleNamespace(main_frame=frame))
                 self.assertEqual(flow.creation_status, expected)
 
+    async def test_official_rejected_post_has_only_closed_stage_status_without_reading_body(self):
+        for endpoint, stage, status in (('user/register', 'password', 400),
+                ('email-otp/validate', 'verification_validate', 403),
+                ('create_account', 'create_account', 429), ('create_account', 'create_account', 503)):
+            flow = RegistrationFlow(claim(), Mock())
+            frame = object()
+            response = SimpleNamespace(url='https://auth.openai.com/api/accounts/' + endpoint,
+                request=SimpleNamespace(method='POST'), status=status, frame=frame,
+                body=AsyncMock(side_effect=AssertionError('error body must not be read')))
+            await flow.observe_creation(response, SimpleNamespace(main_frame=frame))
+            self.assertEqual(flow.official_failure, {'stage': stage, 'httpStatus': status})
+            response.body.assert_not_awaited()
+
+    async def test_get_iframe_foreign_and_unarmed_signup_are_not_registration_failures(self):
+        frame = object()
+        for url, method, current_frame in (
+            ('https://auth.openai.com/api/accounts/user/register', 'GET', frame),
+            ('https://auth.openai.com/api/accounts/user/register', 'POST', object()),
+            ('https://evil.test/api/accounts/user/register', 'POST', frame),
+            ('https://auth.openai.com/api/accounts/authorize/continue', 'POST', frame),
+            ('https://auth.openai.com/unrelated', 'POST', frame)):
+            flow = RegistrationFlow(claim(), Mock())
+            response = SimpleNamespace(url=url, request=SimpleNamespace(method=method), status=400,
+                frame=current_frame, body=AsyncMock())
+            await flow.observe_creation(response, SimpleNamespace(main_frame=frame))
+            self.assertIsNone(flow.official_failure)
+            response.body.assert_not_awaited()
+        flow.signup_request_armed = True
+        response.url = 'https://auth.openai.com/api/accounts/authorize/continue'
+        await flow.observe_creation(response, SimpleNamespace(main_frame=frame))
+        self.assertEqual(flow.official_failure, {'stage': 'signup', 'httpStatus': 400})
+
+    async def test_password_400_stops_without_false_manual_verification_or_timeout(self):
+        page = FakePage()
+        page.status_by_endpoint = {'user/register': 400}
+        callback = Mock()
+        callback.send.return_value = {'accepted': True}
+        flow = RegistrationFlow(claim(), callback)
+        page.flow = flow
+        original_sleep = asyncio.sleep
+
+        async def advance(_):
+            await original_sleep(0)
+
+        with patch('browser_registration_flow.asyncio.sleep', side_effect=advance):
+            with self.assertRaises(Stop) as error:
+                await flow.run(FakeContext(page), page, PROFILE)
+        self.assertEqual(error.exception.reason, 'official_rejected')
+        self.assertEqual(flow.official_failure, {'stage': 'password', 'httpStatus': 400})
+        self.assertEqual(page.submissions, ['email', 'password'])
+        events = [call.args[1]['event'] for call in callback.send.call_args_list if call.args[0] == 'event']
+        self.assertNotIn('human_verification_required', events)
+        self.assertFalse(any(call.args[0] == 'result' for call in callback.send.call_args_list))
+
+    async def test_execute_sends_only_approved_official_failure_diagnostics(self):
+        callback = Mock()
+        callback.send.side_effect = lambda action, body: claim() if action == 'claim' else {'accepted': True}
+        bit = Mock(created_profile_id=PROFILE, profile_diagnostic=None)
+        bit.create.return_value = PROFILE
+        bit.open.return_value = 'ws://127.0.0.1:59999/devtools/browser/synthetic'
+        flow = SimpleNamespace(official_failure={'stage': 'password', 'httpStatus': 400},
+            side_effect_possible=True, run=AsyncMock(side_effect=Stop('official_rejected')))
+        context = SimpleNamespace(cookies=AsyncMock(return_value=[]), new_page=AsyncMock(return_value=FakePage()))
+        chromium = SimpleNamespace(connect_over_cdp=AsyncMock(return_value=SimpleNamespace(contexts=[context])))
+
+        @asynccontextmanager
+        async def playwright():
+            yield SimpleNamespace(chromium=chromium)
+
+        state = {'status': 'accepted'}
+        with patch.object(connector, 'CallbackClient', return_value=callback), \
+                patch.object(connector, 'BitBrowserClient', return_value=bit), \
+                patch.object(connector, 'RegistrationFlow', return_value=flow), \
+                patch.object(connector, 'observe_browser_exit', new=AsyncMock(return_value={})), \
+                patch.dict(sys.modules, {'playwright.async_api': SimpleNamespace(async_playwright=playwright)}):
+            await connector.execute(payload(), state)
+        fails = [call.args[1] for call in callback.send.call_args_list if call.args[0] == 'fail']
+        self.assertEqual(fails, [{'reason': 'official_rejected', 'sideEffectPossible': True,
+                                 'stage': 'password', 'httpStatus': 400, 'profileId': PROFILE}])
+
     async def test_session_requires_full_email_match(self):
         flow = RegistrationFlow(claim(), Mock())
         page = SimpleNamespace(url='https://chatgpt.com/', evaluate=AsyncMock(return_value={
@@ -447,6 +573,9 @@ class FlowTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_full_visible_signup_manual_profile_and_official_identity(self):
         page = FakePage()
+        page.session_cookies = [self.session_cookie(),
+            self.session_cookie(name='cf_clearance', value='challenge-secret-never-export'),
+            self.session_cookie(domain='other.example.test', value='foreign-secret-never-export')]
         context = FakeContext(page)
         callback = Mock()
         replies = []
@@ -492,8 +621,13 @@ class FlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(results[0]['creationEvidence'], {'pathKind': 'create_account',
             'httpStatus': 200, 'noError': True, 'officialOrigin': True})
         self.assertNotIn('password', results[0])
+        self.assertEqual(results[0]['session']['sessionToken'], 'official-session-opaque-value')
+        self.assertNotIn('cookies', results[0])
+        for secret in ('challenge-secret-never-export', 'foreign-secret-never-export'):
+            self.assertNotIn(secret, json.dumps(replies))
         self.assertEqual(flow.creation_requests, 1)
         self.assertFalse(page.listener_attached)
+        self.assertEqual(context.unroutes, [('**/*', flow.guard_request)])
 
     async def test_full_flow_password_ack_failure_never_submits_password(self):
         page = FakePage()
@@ -513,12 +647,15 @@ class FlowTests(unittest.IsolatedAsyncioTestCase):
     async def test_navigation_timeout_detaches_listener_without_closing_window(self):
         page = FakePage()
         page.goto = AsyncMock(side_effect=TimeoutError('secret-url-not-reported'))
+        page.fail_unroute = True
+        context = FakeContext(page)
         callback = Mock()
         callback.send.return_value = {'accepted': True}
         flow = RegistrationFlow(claim(), callback)
         with self.assertRaises(TimeoutError):
-            await flow.run(FakeContext(page), page, PROFILE)
+            await flow.run(context, page, PROFILE)
         self.assertFalse(page.listener_attached)
+        self.assertEqual(context.unroutes, [('**/*', flow.guard_request)])
 
     async def test_initial_session_unknown_never_fills_or_submits_email(self):
         page = FakePage()
@@ -538,12 +675,20 @@ class FlowTests(unittest.IsolatedAsyncioTestCase):
 class FakeContext:
     def __init__(self, page):
         self.page = page
+        self.unroutes = []
 
     async def route(self, _pattern, guard):
         self.page.guard = guard
 
-    async def unroute(self, *_):
-        return None
+    async def unroute(self, pattern, handler):
+        self.unroutes.append((pattern, handler))
+        if getattr(self.page, 'fail_unroute', False):
+            raise RuntimeError('synthetic unroute failure')
+
+    async def cookies(self, urls):
+        if urls != ['https://chatgpt.com']:
+            raise AssertionError('unexpected cookie scope')
+        return getattr(self.page, 'session_cookies', [])
 
 
 class FakeLocator:
@@ -584,6 +729,7 @@ class FakePage:
         self.listener_attached = False
         self.manual_profile_ready = False
         self.password_ack_at_submit = False
+        self.status_by_endpoint = {}
 
     def is_closed(self):
         return False
@@ -622,12 +768,15 @@ class FakePage:
             await self.guard(route)
             if route.abort.await_count:
                 raise RuntimeError('blocked')
+            response = SimpleNamespace(url=request.url, request=request,
+                status=self.status_by_endpoint.get(endpoint, 200),
+                frame=self.main_frame, body=AsyncMock(return_value=b'{}'))
+            self.observed(response)
+            if response.status >= 400:
+                return
         if kind == 'password':
             self.password_ack_at_submit = self.flow.password_ack
         if kind == 'manual-profile':
-            response = SimpleNamespace(url=request.url, request=request, status=200,
-                frame=self.main_frame, body=AsyncMock(return_value=b'{}'))
-            self.observed(response)
             self.stage, self.url = 'complete', 'https://chatgpt.com/'
         else:
             self.stage, path = {'email': ('password', 'create-account/password'),

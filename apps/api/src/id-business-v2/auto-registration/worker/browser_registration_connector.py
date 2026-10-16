@@ -259,6 +259,7 @@ def failure_reason(reason):
             'identity_unverified': 'identity_missing',
             'existing_account_requires_review': 'existing_account',
             'official_source_invalid': 'official_rejected',
+            'official_rejected': 'official_rejected',
             'form_ambiguous': 'flow_changed', 'form_action_invalid': 'flow_changed',
             'bitbrowser_unavailable': 'browser_unavailable',
             'browser_unavailable': 'browser_unavailable'}.get(reason, 'connector_error')
@@ -289,7 +290,8 @@ async def execute(payload, state):
             await flow.run(context, page, profile_id, attempt_observation=observation)
         state['status'] = 'completed'
     except Exception as exc:
-        reason = exc.reason if isinstance(exc, Stop) else 'operation_failed'
+        reason = 'official_rejected' if flow and flow.official_failure else (
+            exc.reason if isinstance(exc, Stop) else 'operation_failed')
         if bit and bit.created_profile_id:
             state['profileId'] = bit.created_profile_id
             if isinstance(bit.profile_diagnostic, dict):
@@ -305,6 +307,7 @@ async def execute(payload, state):
             reply = await asyncio.to_thread(callback.send, 'fail', {
                 'reason': failure_reason(reason),
                 'sideEffectPossible': bool(flow and flow.side_effect_possible),
+                **(flow.official_failure if flow and reason == 'official_rejected' else {}),
                 **({'profileId': state['profileId']} if state.get('profileId') else {})})
             state['failureAcknowledged'] = reply.get('accepted') is True
         except Exception:

@@ -428,7 +428,7 @@ try {
               name: '浏览器注册代理',
               exact: true
             });
-            await proxyControl.click();
+            await proxyControl.press('Enter');
             await page.getByRole('option', { name: '菲律宾 · 动态住宅', exact: true }).click();
             const alignment = await page
               .locator('.el-form-item')

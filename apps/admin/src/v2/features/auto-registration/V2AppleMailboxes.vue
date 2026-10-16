@@ -68,36 +68,13 @@
       </template>
     </V2PageContext>
 
-    <section class="v2-records-list">
-      <header>
-        <strong>浏览器注册助手</strong>
-        <AppButton
-          variant="soft"
-          :disabled="
-            page.busy || page.connectorQuery.isRefreshing || page.connectorQuery.isInitialLoading
-          "
-          @click="page.connectorQuery.refresh"
-          >检查连接</AppButton
-        >
-      </header>
-      <p>
-        先打开比特浏览器，再运行项目中的自动注册助手启动文件
-        <code>scripts/start-auto-registration-connector.sh</code
-        >，允许当前网站连接本机助手。注册期间请保留原窗口。
-      </p>
+    <V2ListToolbar
+      title="浏览器注册助手"
+      help="正常注册步骤自动完成；官网需要本人验证或补齐资料时保留原窗口等待。"
+    >
       <V2AsyncRegion
-        skeleton="form"
-        :phase="page.connectorQuery.phase"
-        :error="page.connectorError"
-        loading-title="正在检查自动注册助手"
-        refreshing-title="正在重新检查助手连接"
-        error-title="自动注册助手尚未连接"
-        @retry="page.connectorQuery.refresh"
-      >
-        <p v-if="page.connectorQuery.data?.ok" role="status">助手已连接，可以使用浏览器注册。</p>
-      </V2AsyncRegion>
-      <V2AsyncRegion
-        skeleton="form"
+        variant="field"
+        skeleton="inline"
         :phase="page.browserProxyQuery.phase"
         :error="page.browserProxyError"
         loading-title="正在读取注册代理"
@@ -122,11 +99,35 @@
             </el-select>
           </el-form-item>
         </el-form>
-        <p>
-          任务启动后固定使用所选代理，不自动更换。默认设置不可用时，请选择代理管理中的可用代理。
-        </p>
       </V2AsyncRegion>
-    </section>
+      <template #actions>
+        <AppButton
+          variant="soft"
+          :disabled="
+            page.busy || page.connectorQuery.isRefreshing || page.connectorQuery.isInitialLoading
+          "
+          @click="page.connectorQuery.refresh"
+          >检查连接</AppButton
+        >
+      </template>
+      <template #feedback>
+        <V2AsyncRegion
+          variant="field"
+          skeleton="inline"
+          :phase="page.connectorQuery.phase"
+          :error="page.connectorError"
+          loading-title="正在检查自动注册助手"
+          refreshing-title="正在重新检查助手连接"
+          error-title="自动注册助手尚未连接"
+          @retry="page.connectorQuery.refresh"
+        >
+          <p v-if="page.connectorQuery.data?.ok" role="status">助手已连接，可以使用浏览器注册。</p>
+        </V2AsyncRegion>
+        <p>
+          先打开比特浏览器并启动自动注册助手，注册期间请保留原窗口。任务启动后固定使用所选代理。
+        </p>
+      </template>
+    </V2ListToolbar>
 
     <p v-if="page.feedback" role="status">{{ page.feedback }}</p>
     <p
@@ -696,6 +697,7 @@ import V2AsyncRegion from '@/v2/components/V2AsyncRegion.vue';
 import V2ConfirmDialog from '@/v2/components/V2ConfirmDialog.vue';
 import V2FormDrawer from '@/v2/components/V2FormDrawer.vue';
 import V2PageContext from '@/v2/components/V2PageContext.vue';
+import V2ListToolbar from '@/v2/components/V2ListToolbar.vue';
 import V2Table from '@/v2/components/V2Table.vue';
 import V2TableActionColumn from '@/v2/components/V2TableActionColumn.vue';
 import V2TableColumn from '@/v2/components/V2TableColumn.vue';

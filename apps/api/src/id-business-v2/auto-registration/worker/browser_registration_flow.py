@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 from datetime import date, datetime, timezone
 import ipaddress
+import math
 import re
 import time
 from urllib.parse import urljoin, urlsplit
@@ -18,6 +19,7 @@ REASONS = frozenset({
     'existing_account_requires_review', 'code_invalid', 'duplicate_submission',
     'password_ack_required', 'browser_closed', 'operation_failed', 'job_conflict',
     'origin_rejected', 'host_rejected', 'body_invalid', 'connector_busy',
+    'official_rejected',
 })
 TRACE_URL = 'https://cloudflare.com/cdn-cgi/trace'
 SIGNUP_ENTRY_TEXT = re.compile(r'^(?:Sign up|Sign up for free|Create account|Create an account|注册|免费注册|创建账号)$', re.I)
@@ -73,6 +75,32 @@ async def observe_browser_exit(page):
             await page.unroute('**/*', trace_only)
         except Exception:
             pass
+
+
+async def official_session_cookie(context):
+    """Return only the existing contract's exact official session cookie, never a cookie jar."""
+    try:
+        cookies = await context.cookies(['https://chatgpt.com'])
+    except Exception:
+        raise Stop('identity_unverified') from None
+    if not isinstance(cookies, list):
+        raise Stop('identity_unverified')
+    selected = [cookie for cookie in cookies if isinstance(cookie, dict)
+                and cookie.get('name') == '__Secure-next-auth.session-token'
+                and cookie.get('domain') in {'chatgpt.com', '.chatgpt.com'}]
+    if not selected:
+        return None
+    if len(selected) != 1:
+        raise Stop('identity_unverified')
+    cookie = selected[0]
+    value, expiry = cookie.get('value'), cookie.get('expires')
+    if (cookie.get('secure') is not True or not isinstance(value, str)
+            or not 1 <= len(value) <= 32_768
+            or any(ord(char) < 33 or ord(char) > 126 or char in '\",;\\' for char in value)
+            or type(expiry) not in {int, float} or not math.isfinite(expiry)
+            or (expiry != -1 and expiry <= time.time())):
+        raise Stop('identity_unverified')
+    return value
 
 
 class Stop(Exception):
@@ -149,6 +177,8 @@ class RegistrationFlow:
         self.critical_requests = {}
         self.observation_failed = False
         self.profile_id = None
+        self.official_failure = None
+        self.signup_request_armed = False
         self.last_event = None
         self.request_rejected_reason = None
         self.identity_user_present = False
@@ -156,6 +186,8 @@ class RegistrationFlow:
         self._observations = set()
 
     async def event(self, event, **facts):
+        if self.official_failure:
+            raise Stop('official_rejected')
         self.sequence += 1
         body = {'event': event, 'sequence': self.sequence, 'profileId': self.profile_id, **facts}
         data = await asyncio.to_thread(self.callback.send, 'event', body)
@@ -223,9 +255,20 @@ class RegistrationFlow:
         try:
             p = urlsplit(response.url)
             if (not official(response.url) or p.hostname != 'auth.openai.com'
-                    or p.path != '/api/accounts/create_account'
                     or response.request.method != 'POST'
                     or response.frame != page.main_frame):
+                return
+            stages = {'/api/accounts/user/register': 'password',
+                      '/api/accounts/email-otp/validate': 'verification_validate',
+                      '/api/accounts/create_account': 'create_account'}
+            if self.signup_request_armed:
+                stages['/api/accounts/authorize/continue'] = 'signup'
+            stage = stages.get(p.path)
+            if stage and type(response.status) is int and 400 <= response.status <= 599:
+                if self.official_failure is None:
+                    self.official_failure = {'stage': stage, 'httpStatus': response.status}
+                return
+            if p.path != '/api/accounts/create_account':
                 return
             if response.status not in {200, 201}:
                 return
@@ -329,6 +372,8 @@ class RegistrationFlow:
                     raise Stop('browser_closed')
                 if not official(page.url):
                     raise Stop('official_source_invalid')
+                if self.official_failure:
+                    raise Stop('official_rejected')
                 if self.observation_failed:
                     raise Stop(self.request_rejected_reason or 'duplicate_submission')
                 current = self.clock()
@@ -342,6 +387,9 @@ class RegistrationFlow:
                             raise Stop('creation_unverified')
                         identity['creationStatus'] = self.creation_status
                         identity['creationEvidence']['httpStatus'] = self.creation_status
+                        session_token = await official_session_cookie(context)
+                        if session_token is not None:
+                            identity['session']['sessionToken'] = session_token
                         await self.event('official_identity_observed')
                         result = await asyncio.to_thread(self.callback.send, 'result', identity)
                         if result.get('accepted') is not True:
@@ -378,6 +426,7 @@ class RegistrationFlow:
                     button = await submit_for(page, email)
                     await self.event('email_submitting')
                     await email.fill(self.claim['email'])
+                    self.signup_request_armed = True
                     after = datetime.now(timezone.utc).isoformat()
                     await button.click(timeout=5000)
                     sent_email = True

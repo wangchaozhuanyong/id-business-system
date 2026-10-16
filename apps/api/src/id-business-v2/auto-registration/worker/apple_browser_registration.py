@@ -181,6 +181,15 @@ class FailInput(PrivateInput):
         "cancelled", "connector_error"]
     sideEffectPossible: bool
     profileId: str | None = Field(default=None, pattern=r"^[A-Za-z0-9_-]{1,191}$")
+    stage: Literal["password", "verification_validate", "create_account", "signup"] | None = None
+    httpStatus: StrictInt | None = Field(default=None, ge=400, le=599)
+
+    @model_validator(mode="after")
+    def official_rejection_diagnostic(self):
+        if ((self.stage is None) != (self.httpStatus is None)
+                or (self.stage is not None and self.reason != "official_rejected")):
+            raise ValueError("官网拒绝诊断必须成对且属于官网拒绝结果")
+        return self
 
 
 def fixed_proxy(value):
@@ -437,6 +446,11 @@ class BrowserRegistration:
             task.error_message = "浏览器注册已停止，请核对原任务，勿重复创建账号"
         if context:
             context["cancelled"] = True
+        if request is not None and request.stage is not None:
+            observed = datetime.now(timezone.utc).timestamp()
+            elapsed_ms = max(0, int((observed - (context or {}).get("startedAt", observed)) * 1000))
+            self.store.record_failure(task_uuid, request.stage, "http_rejected", request.httpStatus, elapsed_ms)
+            self.store.observe(data["email"], task_uuid, lastHttpStatus=request.httpStatus)
         self.store.finish(data["email"], task_uuid, cancelled)
         self.cleanup(task_uuid)
         return {"accepted": True}

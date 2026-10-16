@@ -98,10 +98,24 @@ class MemoryStore:
         return deepcopy(self.record)
 
     def observe(self, email, task_uuid, *, db=None, **values):
+        if db is None:
+            with self.transaction() as connection:
+                return self.observe(email, task_uuid, db=connection, **values)
         assert db is self.db
         assert self.record["activeTaskUuid"] == task_uuid
         self.record.update(values)
         return self.write(db, self.record)
+
+    def record_failure(self, task_uuid, stage, error_kind, http_status, elapsed_ms):
+        with self.transaction():
+            data = json.loads(self.row.value)
+            if data.get("firstFailure") is not None:
+                return
+            failure = {"stage": stage, "errorKind": error_kind, "httpStatus": http_status,
+                       "elapsedMs": elapsed_ms, "observedAt": browser.timestamp()}
+            data.update(firstFailure=failure, lastHttpStatus=http_status)
+            self.row.value = json.dumps(data)
+            self.record.update(firstFailure=deepcopy(failure), lastHttpStatus=http_status)
 
     def update_task(self, task_uuid, **values):
         with self.transaction():
@@ -600,6 +614,48 @@ class BrowserUnitTests(unittest.TestCase):
         self.store.reject_commit = False
         self.assertTrue(self.adapter.finish(TASK, cancelled=True)["accepted"])
         self.assertEqual(self.store.record["activeTaskUuid"], TASK)
+
+    def test_official_password_400_records_safe_failure_and_keeps_uncertain_lease(self):
+        self.ready()
+        request = browser.FailInput(claimId=NONCE, reason="official_rejected", sideEffectPossible=True,
+                                    profileId=PROFILE, stage="password", httpStatus=400)
+        self.assertTrue(self.adapter.finish(TASK, request)["accepted"])
+        data = json.loads(self.store.row.value)
+        self.assertEqual(data["firstFailure"]["stage"], "password")
+        self.assertEqual(data["firstFailure"]["errorKind"], "http_rejected")
+        self.assertEqual(data["firstFailure"]["httpStatus"], 400)
+        self.assertGreaterEqual(data["firstFailure"]["elapsedMs"], 0)
+        self.assertEqual(self.store.record["lastHttpStatus"], 400)
+        self.assertEqual(self.store.record["note"], "keep this fact")
+        self.assertEqual(self.store.record["activeTaskUuid"], TASK)
+        self.assertEqual(self.store.record["registrationStatus"], "unknown")
+
+    def test_official_failure_diagnostic_rejects_invalid_stage_status_pairs_and_reason(self):
+        base = {"claimId": NONCE, "reason": "official_rejected", "sideEffectPossible": True, "profileId": PROFILE}
+        for extra in ({"stage": "oauth", "httpStatus": 400}, {"stage": "password"}, {"httpStatus": 400},
+                {"stage": "signup", "httpStatus": 200}, {"stage": "signup", "httpStatus": 600},
+                {"stage": "signup", "httpStatus": 400.0}, {"stage": "signup", "httpStatus": True},
+                {"stage": "signup", "httpStatus": 400, "reason": "connector_error"}):
+            with self.subTest(extra=extra), self.assertRaises(ValidationError):
+                browser.FailInput.model_validate({**base, **extra})
+        browser.FailInput.model_validate(base)
+        for stage in ("signup", "password", "verification_validate", "create_account"):
+            browser.FailInput.model_validate({**base, "stage": stage, "httpStatus": 599})
+
+    def test_rejection_never_replaces_original_failure_or_manual_note(self):
+        self.ready()
+        original = {"stage": "signup", "errorKind": "network_error", "httpStatus": None,
+                    "elapsedMs": 7, "observedAt": "2026-10-16T01:00:00Z"}
+        data = json.loads(self.store.row.value)
+        data["firstFailure"] = deepcopy(original)
+        self.store.row.value = json.dumps(data)
+        self.store.record["firstFailure"] = deepcopy(original)
+        self.adapter.finish(TASK, browser.FailInput(claimId=NONCE, reason="official_rejected", sideEffectPossible=True,
+            profileId=PROFILE, stage="create_account", httpStatus=500))
+        self.assertEqual(json.loads(self.store.row.value)["firstFailure"], original)
+        self.assertEqual(self.store.record["firstFailure"], original)
+        self.assertEqual(self.store.record["lastHttpStatus"], 500)
+        self.assertEqual(self.store.record["note"], "keep this fact")
 
 
 if __name__ == "__main__":
