@@ -107,6 +107,8 @@ if (registrationParityDiagnosticsOnly) {
   if (!registrationParityDiagnosticsParts.includes(part))
     throw new Error('Unsupported registration parity diagnostics check part');
   if (part === 'guards' || part === 'release-controls') {
+    // The shared workflow preinstalls guards only; pin tooling for this additional part.
+    if (part === 'release-controls') npm('ci', '--ignore-scripts', '--no-audit', '--no-fund');
     run('python3', [
       '-B',
       'scripts/production-release/registration-parity-diagnostics-release.test.py'

@@ -1288,8 +1288,8 @@
     ".github/workflows/registration-parity-diagnostics-validation.yml": "0ec8c92fcbfcb45a961930c4823cb9749bf8d898ab449692c1c81d1b885a87e7",
     "scripts/ci-recharge-scope.mjs": "4761d421c8466667c08bb8179277a4f5dee95b8ddaa9d8c4544db3a479bd7b8d",
     "scripts/ci-recharge-scope.test.mjs": "de9142c9648372646180c2f6d4d70a68be1bb9535d9219ddbbe58461cc2b8830",
-    "scripts/ci-recharge-check.mjs": "b0840b7297978e085e819b5254e4f857da7864a2010535dcb8f72d0a61612c85",
-    "scripts/ci-recharge-check.test.mjs": "201cf1edbb67ec9f70e64cf5908354f4bb0ca1b99a55ead4b7d7d7ebfc34e719",
+    "scripts/ci-recharge-check.mjs": "2cdbe51142d3c14daa2aee736d1fe98b65e83f9bc4cb3e04e9c686bb80be391c",
+    "scripts/ci-recharge-check.test.mjs": "60ea02516496db146af1a821efc33c613f05d6981e973268dd546734079c008d",
     "docs/AUTO_REGISTRATION_PARITY_20261016.md": "4ef9ab0eb1f82e7af6b93d18ae31fa28d41be42814114cac013625b62652f3b1",
     "docs/V2_TASKS.md": "5f8ecfd2da88bd702282f608702302316deba0a4529b8e8d00b7e1a408897060"
   },

@@ -62,6 +62,12 @@ test('registration parity dispatcher runs both interfaces all persistence module
     });
     assert.deepEqual(calls.at(-1), ['process-exit', 0]);
     if (part === 'guards' || part === 'release-controls') {
+      const install = calls.findIndex(
+        (c) => c.join(' ') === 'npm ci --ignore-scripts --no-audit --no-fund'
+      );
+      const format = calls.findIndex((c) => c.includes('prettier'));
+      if (part === 'release-controls') assert.ok(install >= 0 && format > install);
+      else assert.equal(install, -1);
       assert.ok(
         calls.some((c) =>
           c.includes('scripts/production-release/registration-parity-diagnostics-release.test.py')
