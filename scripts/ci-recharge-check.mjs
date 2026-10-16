@@ -48,6 +48,11 @@ import {
 } from './ci-online-settings-scope.mjs';
 import { readRegistrationNativeReuse } from './ci-registration-closure-native-reuse.mjs';
 import {
+  isRegistrationProtocolRestoreOnly,
+  registrationProtocolRestoreBase,
+  registrationProtocolRestoreCommands
+} from './ci-registration-protocol-restore-scope.mjs';
+import {
   isRegistrationBrowserOnly,
   registrationBrowserBase,
   registrationBrowserCommands
@@ -125,6 +130,21 @@ const changed = execFileSync('git', ['diff', '--name-only', base, 'HEAD'], { enc
   .trim()
   .split('\n')
   .filter(Boolean);
+if (
+  mode === 'recharge' &&
+  base === registrationProtocolRestoreBase &&
+  isRegistrationProtocolRestoreOnly(changed, {
+    base,
+    baseTree: execFileSync('git', ['rev-parse', base + '^{tree}'], { encoding: 'utf8' }).trim()
+  })
+) {
+  if (!Object.hasOwn(registrationProtocolRestoreCommands, part))
+    throw new Error('Unsupported registration protocol restore check part');
+  if ((part === 'api' || part === 'admin') && process.env.GITHUB_ACTIONS !== 'true')
+    throw new Error('Registration protocol restore candidate checks require isolated CI');
+  for (const [file, ...args] of registrationProtocolRestoreCommands[part]) run(file, args);
+  process.exit(0);
+}
 if (
   mode === 'recharge' &&
   base === registrationBrowserBase &&

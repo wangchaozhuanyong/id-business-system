@@ -43,6 +43,7 @@ import {
   registrationParityDiagnosticsParts
 } from './ci-registration-parity-diagnostics-scope.mjs';
 import { readRegistrationNativeReuse } from './ci-registration-closure-native-reuse.mjs';
+import { isRegistrationProtocolRestoreOnly } from './ci-registration-protocol-restore-scope.mjs';
 import {
   isRegistrationBrowserOnly,
   registrationBrowserParts
@@ -265,6 +266,7 @@ const onlineCiBuildTestInputs = new Set([
   'scripts/production-release/online-recharge-component-lifecycle.test.py'
 ]);
 export function needsOnlineRechargeCiBuild(paths, context) {
+  if (isRegistrationProtocolRestoreOnly(paths, context)) return false;
   if (isRegistrationBrowserOnly(paths, context)) return false;
   if (isAccountLoginOnly(paths) || isAccountLoginControlsOnly(paths)) return false;
   if (isRegistrationParityDiagnosticsControlRepair(paths, context)) return false;
@@ -1052,6 +1054,10 @@ export function isMailboxOnly(paths) {
 }
 
 export function checkMode(paths, oldSchema, newSchema, grantHelperSnapshot, context) {
+  if (isRegistrationProtocolRestoreOnly(paths, context))
+    return oldSchema === newSchema ? 'recharge' : 'full';
+  if (paths.includes('scripts/production-release/registration-protocol-restore-contract.json'))
+    return 'full';
   if (isRegistrationBrowserOnly(paths, context))
     return oldSchema === newSchema ? 'recharge' : 'full';
   if (paths.includes('scripts/production-release/registration-browser-contract.json'))
@@ -1550,6 +1556,7 @@ export function isTargetedOnly(paths, oldSchema, newSchema) {
   );
 }
 export function selectedParts(paths, grantHelperSnapshot, context) {
+  if (isRegistrationProtocolRestoreOnly(paths, context)) return ['guards', 'api', 'admin'];
   if (isRegistrationBrowserOnly(paths, context)) return [...registrationBrowserParts];
   if (isAccountLoginControlsOnly(paths)) return ['guards'];
   if (isAccountLoginOnly(paths)) return [...accountLoginParts];
@@ -4392,6 +4399,7 @@ async function main() {
 
   const onlineCiBuild = needsOnlineRechargeCiBuild(paths);
   const browserCandidate = isRegistrationBrowserOnly(paths, proxyIdentityContext);
+  const protocolRestoreCandidate = isRegistrationProtocolRestoreOnly(paths, proxyIdentityContext);
   const result = {
     mode,
     reuseMain,
@@ -4415,7 +4423,7 @@ async function main() {
     );
   appendFileSync(
     process.env.GITHUB_OUTPUT,
-    `mode=${mode}\nreuse_main=${reuseMain}\nreused_parts=${JSON.stringify([...reused])}\ncheck_parts=${JSON.stringify(checkParts)}\nbase=${base}\nadmin_acceptance=${adminAcceptance}\nonline_ci_build=${onlineCiBuild}\nbrowser_candidate=${browserCandidate}\n`
+    `mode=${mode}\nreuse_main=${reuseMain}\nreused_parts=${JSON.stringify([...reused])}\ncheck_parts=${JSON.stringify(checkParts)}\nbase=${base}\nadmin_acceptance=${adminAcceptance}\nonline_ci_build=${onlineCiBuild}\nbrowser_candidate=${browserCandidate}\nprotocol_restore_candidate=${protocolRestoreCandidate}\n`
   );
   appendFileSync(
     process.env.GITHUB_STEP_SUMMARY,

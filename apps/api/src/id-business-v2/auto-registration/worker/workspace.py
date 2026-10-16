@@ -79,18 +79,6 @@ def sanitize_payload(value: Any, *, log_context: bool = False, mask_secrets: boo
     return redact_text(value) if log_context and isinstance(value, str) else value
 
 
-def sanitize_http_payload(value: Any, path: str, method: str, status: int) -> Any:
-    result = sanitize_payload(value)
-    claim = re.fullmatch(r"/internal/apple-mailboxes/browser/tasks/([0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12})/claim", path)
-    if (claim and method == "POST" and status == 200 and isinstance(value, dict)
-            and set(value) == {"taskUuid", "email", "password", "proxy"} and value.get("taskUuid") == claim[1]):
-        # This owner/claim-authenticated private response is sent to Nest and
-        # then directly to the local connector over HTTPS. It never reaches a
-        # page/list/log. The connector needs the exact frozen proxy credentials.
-        result["proxy"] = value["proxy"]
-    return result
-
-
 class SecretLogFilter(logging.Filter):
     def filter(self, record: logging.LogRecord) -> bool:
         record.msg = redact_text(record.getMessage())
@@ -521,7 +509,7 @@ class WorkspaceGatewayBoundary:
                 if not message.get("more_body"):
                     body = b"".join(chunks)
                     try:
-                        payload = sanitize_http_payload(json.loads(body), path, scope.get("method", "GET"), start["status"])
+                        payload = sanitize_payload(json.loads(body))
                         if isinstance(payload, dict) and (path == "/api/accounts" or (scope.get("method") == "PATCH" and re.fullmatch(r"/api/accounts/\d+", path))):
                             accounts = payload.get("accounts", []) if path == "/api/accounts" else [payload]
                             integration = getattr(getattr(scope.get("app"), "state", None), "apple_mailboxes", None)
@@ -578,7 +566,6 @@ def create_workspace_app(config: dict[str, Any]) -> FastAPI:
     def verify_resources() -> None:
         required = [
             WORKER_DIR / "apple_mailboxes.py",
-            WORKER_DIR / "apple_browser_registration.py",
             WORKER_DIR / "apple_closed_loop.py",
             WORKER_DIR / "apple_registration_diagnostics.py",
             WORKER_DIR / "release_safety.py",

@@ -1,4 +1,10 @@
 import {
+  registrationProtocolRestoreBase,
+  registrationProtocolRestoreTree,
+  registrationProtocolRestorePaths,
+  registrationProtocolRestoreCommands
+} from './ci-registration-protocol-restore-scope.mjs';
+import {
   proxyResultIdentityPaths,
   proxyResultIdentityBase,
   proxyResultIdentityEngineTests,
@@ -50,6 +56,37 @@ import {
 } from './ci-recharge-scope.mjs';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
+test('registration protocol restore dispatches only scoped checks and requires isolated candidate verification', () => {
+  for (const part of ['guards', 'api', 'admin']) {
+    assert.deepEqual(
+      recordGuardCommands('recharge', registrationProtocolRestorePaths, part, {
+        base: registrationProtocolRestoreBase,
+        restoreFixture: true,
+        cloud: true
+      }),
+      [...registrationProtocolRestoreCommands[part], ['process-exit', 0]]
+    );
+  }
+  for (const part of ['api', 'admin'])
+    assert.throws(
+      () =>
+        recordGuardCommands('recharge', registrationProtocolRestorePaths, part, {
+          base: registrationProtocolRestoreBase,
+          restoreFixture: true
+        }),
+      /require isolated CI/
+    );
+  assert.throws(
+    () =>
+      recordGuardCommands('recharge', registrationProtocolRestorePaths, 'migration', {
+        base: registrationProtocolRestoreBase,
+        restoreFixture: true,
+        cloud: true
+      }),
+    /Unsupported registration protocol restore/
+  );
+});
+
 test('registration browser dispatcher runs every finite command and exits before historical publishers', () => {
   for (const part of ['guards', 'release-controls', 'api', 'admin']) {
     const calls = recordGuardCommands('recharge', registrationBrowserPaths, part, {
@@ -794,7 +831,8 @@ function recordGuardCommands(
     cacheConfiguration = null,
     identityFixture = false,
     parityFixture = false,
-    browserFixture = false
+    browserFixture = false,
+    restoreFixture = false
   } = {}
 ) {
   // Run the real dispatcher with process execution replaced before its named import resolves.
@@ -848,6 +886,16 @@ function recordGuardCommands(
     };
     const scopeUrl = new URL('./scripts/ci-recharge-scope.mjs', import.meta.url).href;
     registerHooks({resolve(specifier, context, nextResolve) {
+      if (${JSON.stringify(restoreFixture)} && specifier === './ci-registration-protocol-restore-scope.mjs' && context.parentURL?.endsWith('/scripts/ci-recharge-check.mjs')) {
+        const url = new URL('./scripts/ci-registration-protocol-restore-scope.mjs', import.meta.url).href;
+        const source = 'import * as m from ' + JSON.stringify(url) + ';export * from ' + JSON.stringify(url) + ';' +
+          'export function isRegistrationProtocolRestoreOnly(paths,options){' +
+          'const removed=m.registrationProtocolRestoreRemovedSources;' +
+          'const hashes=Object.fromEntries(m.registrationProtocolRestorePaths.filter(p=>!(p in removed)&&p!=="scripts/production-release/registration-protocol-restore-contract.json").map(p=>[p,"a".repeat(64)]));' +
+          'const contract={version:1,frozen:true,scope:"REGISTRATION_PROTOCOL_RESTORE",migration:null,sourceBaseline:m.registrationProtocolRestoreBase,sourceBaselineTree:m.registrationProtocolRestoreTree,expectedCurrent:"e84a44d86c289354bc7ed15dcd0ec68f7210e18e",schemaSha256:"51a4d25b1302458145f560acc32f25b89a7bd65fea64dc72b254dc56da430100",runtimeEvidence:{status:"VERIFIED",commit:"e84a44d86c289354bc7ed15dcd0ec68f7210e18e"},expectedGitChanges:m.registrationProtocolRestorePaths,withdrawal:{sourceRemovals:{...removed}},reviewedFileHashes:hashes};' +
+          'return m.isRegistrationProtocolRestoreOnly(paths,{...options,contract,sourceDigest:p=>hashes[p]??null,baseSourceDigest:p=>removed[p]??null});}';
+        return {url:'data:text/javascript,'+encodeURIComponent(source),shortCircuit:true};
+      }
       if (${JSON.stringify(browserFixture)} && specifier === './ci-registration-browser-scope.mjs' && context.parentURL?.endsWith('/scripts/ci-recharge-check.mjs')) {
         const url = new URL('./scripts/ci-registration-browser-scope.mjs', import.meta.url).href;
         const source = 'import * as m from ' + JSON.stringify(url) + ';export * from ' + JSON.stringify(url) + ';' +
@@ -899,6 +947,7 @@ function recordGuardCommands(
     }});
     childProcess.execFileSync = (file, args) => {
       if (file === 'git') {
+        if (args.join(' ') === ${JSON.stringify('rev-parse ' + registrationProtocolRestoreBase + '^{tree}')}) return ${JSON.stringify(registrationProtocolRestoreTree + '\n')};
         if (args.join(' ') === ${JSON.stringify('rev-parse ' + registrationBrowserBase + '^{tree}')}) return ${JSON.stringify(registrationBrowserTree + '\n')};
         if (args.join(' ') === ${JSON.stringify('rev-parse ' + registrationParityDiagnosticsBase + '^{tree}')}) return ${JSON.stringify(registrationParityDiagnosticsTree + '\n')};
         if (args.join(' ') === ${JSON.stringify('rev-parse ' + registrationParityDiagnosticsRepairBase + '^{tree}')}) return ${JSON.stringify(registrationParityDiagnosticsRepairTree + '\n')};
