@@ -1403,7 +1403,7 @@ suite('线上代充隔离MySQL事务验收', () => {
       },
       operator
     );
-    const proxy = (await pool.list()).items[0]!;
+    const proxy = (await pool.list({ keyword: 'api.ipdeep.com' })).items[0]!;
     expect(proxy).toMatchObject({ connectionMode: 'extraction', protocol: 'http' });
     const oldId = randomUUID();
     await db.idBusinessV2ProxyAlias.create({ data: { oldId, proxyId: proxy.id } });
@@ -1423,6 +1423,6 @@ suite('线上代充隔离MySQL事务验收', () => {
       data: { status: 'failed', message: 'synthetic ended batch' }
     });
     await pool.delete(proxy.id, operator);
-    expect((await pool.list()).total).toBe(0);
+    expect((await pool.list({ keyword: 'api.ipdeep.com' })).total).toBe(0);
   });
 });
