@@ -14,6 +14,10 @@ import {
   isRegistrationFlowEvidenceOnly,
   isRegistrationFlowEvidenceControlRepair
 } from './ci-registration-flow-evidence-scope.mjs';
+import {
+  isRegistrationParityDiagnosticsOnly,
+  registrationParityDiagnosticsParts
+} from './ci-registration-parity-diagnostics-scope.mjs';
 import { readRegistrationNativeReuse } from './ci-registration-closure-native-reuse.mjs';
 import { isRechargeCheckoutOnly } from './ci-recharge-checkout-scope.mjs';
 import { isRechargeBillingOnly } from './ci-recharge-billing-scope.mjs';
@@ -233,6 +237,7 @@ const onlineCiBuildTestInputs = new Set([
   'scripts/production-release/online-recharge-component-lifecycle.test.py'
 ]);
 export function needsOnlineRechargeCiBuild(paths, context) {
+  if (isRegistrationParityDiagnosticsOnly(paths, context)) return false;
   if (isChatgptSalesOnly(paths) || isChatgptSalesControlsOnly(paths)) return false;
   if (isOnlineProxyCountryValidationOnly(paths)) return false;
   if (isOnlineProxyCountryOnly(paths)) return false;
@@ -1011,6 +1016,9 @@ export function isMailboxOnly(paths) {
 }
 
 export function checkMode(paths, oldSchema, newSchema, grantHelperSnapshot, context) {
+  if (isRegistrationParityDiagnosticsOnly(paths, context))
+    return oldSchema === newSchema ? 'recharge' : 'full';
+  if (context && isRegistrationParityDiagnosticsOnly(paths)) return 'full';
   if (isChatgptSalesControlsOnly(paths)) return oldSchema === newSchema ? 'ci-only' : 'full';
   if (isChatgptSalesOnly(paths))
     return chatgptSalesSchemaMatches(oldSchema, newSchema) ? 'recharge' : 'full';
@@ -1484,6 +1492,8 @@ export function isTargetedOnly(paths, oldSchema, newSchema) {
   );
 }
 export function selectedParts(paths, grantHelperSnapshot, context) {
+  if (isRegistrationParityDiagnosticsOnly(paths, context))
+    return [...registrationParityDiagnosticsParts];
   if (isChatgptSalesControlsOnly(paths)) return ['guards'];
   if (isChatgptSalesOnly(paths)) return [...chatgptSalesParts];
   if (isOnlineProxyCountryOnly(paths)) return [...onlineProxyCountryParts];
