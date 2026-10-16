@@ -22,7 +22,9 @@
   "apiModules": {
     "id-business-v2/auto-registration/apple-mailboxes.types.js": "ca563d7d2bf165aa33d08019a28fb7376f90182926625d126a0e676110d90138"
   },
-  "apiTests": ["src/id-business-v2/auto-registration/apple-mailboxes.service.spec.ts"],
+  "apiTests": [
+    "src/id-business-v2/auto-registration/apple-mailboxes.service.spec.ts"
+  ],
   "backupNormalizerPath": "/opt/id-business-v2/releases/20261015T091200Z-e197218c8b38-recharge-record/scripts/mysql-dump-restore-normalizer.sed",
   "baselineAdminBuildId": "v2-d44393c5bee8c30c82737fc3e00fa89785a95667",
   "baselineAdminFiles": {
@@ -992,7 +994,9 @@
     "upload_compat.py": "457653d75fdab9a2bb73b7bbf0a5428d7bbd67535f7a2a7ea74306cb0193cc00",
     "workspace.py": "6bcb2050633db830068fd1a1b1a30d3dd75bf45f24aef3ab5b9c398d632e7237"
   },
-  "browserAcceptances": ["scripts/acceptance-v2-registration-parity-diagnostics.mjs"],
+  "browserAcceptances": [
+    "scripts/acceptance-v2-registration-parity-diagnostics.mjs"
+  ],
   "buildSupportHashes": {
     "scripts/production-release/api-admin-scope.py": "50446ab528a288ca1c2129c84f1bf4a90f59fa313a92bcff0058a258c8b8e925",
     "scripts/production-release/chatgpt-sales-build.py": "a55db7b0f04729d6f15d50ef3d7ae81a0746dceb2e95cd77408d0de74b9b7590",
@@ -1212,7 +1216,11 @@
       "nativeProofSha256": "2cb761e7d3073814125d3a7cbfe3b0c2cd9258cc6f2684c75fb8317bb2016448",
       "receiptSha256": "76c081426b98bb1094e40e5e6826a42209ea3a52cdb69027229aeec85314422b"
     },
-    "files": ["index.js", "edge.js", "wasm.js"],
+    "files": [
+      "index.js",
+      "edge.js",
+      "wasm.js"
+    ],
     "publishedContext": "/app"
   },
   "protectedMigrations": {
@@ -1279,10 +1287,10 @@
     "apps/api/src/id-business-v2/auto-registration/worker/test_apple_mailboxes.py": "a93bc5c367b74ab2715f88514e37b640d5213c056687f282ec9cf4bd1196d2a1",
     "apps/api/src/id-business-v2/auto-registration/worker/test_release_safety.py": "98025236c404b84e569b894c0e3d346bd60009445d3f4010b5967b80f518fe16",
     "scripts/acceptance-v2-registration-parity-diagnostics.mjs": "fd269ea49a297ea0b98e75045cba1b4bc33d536a137cd7f2a36c815699acf448",
-    "scripts/production-release/registration-parity-diagnostics-build.py": "6886ff124a96f2a1214cc9031f033514e7ab52579a48135d0bc56b7ee9ba11ee",
+    "scripts/production-release/registration-parity-diagnostics-build.py": "438a41ac8a4f87854644ad142f70a033d3096ffe13966d5098a3ffe385b30166",
     "scripts/production-release/registration-parity-diagnostics-release.py": "65e1803a06a71bda3306e7da7cbdbabce810b79285807ab134368dee545e1a32",
     "scripts/production-release/registration-parity-diagnostics-dispatch.py": "924bcbef38c1c0fa46c6a8beec5a50372232b2fc8e8cb015807a5f8bfb3435d1",
-    "scripts/production-release/registration-parity-diagnostics-release.test.py": "97eb7adeba5409e31b99cff7c427f9e2ae3638e12c55a2a012a1ba517847fad0",
+    "scripts/production-release/registration-parity-diagnostics-release.test.py": "b705fa1018362c377c34e4e28de6fc329b392c7a9249232fbc90dff528e04281",
     "scripts/ci-registration-parity-diagnostics-scope.mjs": "7132b7256197120a24ab4813f37886fcdae342fd2989c58bbf1298f1d93766f7",
     "scripts/ci-registration-parity-diagnostics-scope.test.mjs": "bcb4353fd8d744826f97abbadf5b7431225638044746683ae253f5a3c9f014a6",
     ".github/workflows/registration-parity-diagnostics-validation.yml": "0ec8c92fcbfcb45a961930c4823cb9749bf8d898ab449692c1c81d1b885a87e7",

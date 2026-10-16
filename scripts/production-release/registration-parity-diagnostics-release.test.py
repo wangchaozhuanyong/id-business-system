@@ -178,6 +178,24 @@ print(json.dumps(calls))
                              'DATABASE_URL': 'mysql://prisma:prisma@127.0.0.1:3306/id_business_v2'})
         self.assertNotIn('--workspace', execute.call_args.args)
 
+    def test_client_generation_omits_github_actions_only_from_child_environment(self):
+        context = ROOT / '.deploy/registration-parity-diagnostics/isolated-fixture'
+        for value in ('true', 'false'):
+            with self.subTest(value=value), patch.dict(
+                    os.environ, {'GITHUB_ACTIONS': value, 'GITHUB_RUN_ID': '123',
+                                 'PRISMA_UNRELATED': 'kept'}, clear=True), patch.object(b, 'run') as execute:
+                parent_environment = dict(os.environ)
+                b.generate_unchanged_client(context)
+                self.assertEqual(dict(os.environ), parent_environment)
+                child_environment = execute.call_args.kwargs['env']
+                self.assertNotIn('GITHUB_ACTIONS', child_environment)
+                self.assertEqual(child_environment['GITHUB_RUN_ID'], '123')
+                self.assertEqual(child_environment['PRISMA_UNRELATED'], 'kept')
+                self.assertEqual(child_environment['DATABASE_URL'],
+                                 'mysql://prisma:prisma@127.0.0.1:3306/id_business_v2')
+                self.assertEqual(set(child_environment) - {'DATABASE_URL'},
+                                 set(parent_environment) - {'GITHUB_ACTIONS'})
+
     @unittest.skipUnless(os.environ.get('GITHUB_ACTIONS') == 'true'
                          and os.environ.get('CHECK_MODE') == 'ci-only',
                          'Static Linux client generation runs only in GitHub CI-only guards')

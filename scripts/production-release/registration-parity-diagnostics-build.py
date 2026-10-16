@@ -248,8 +248,12 @@ def verify_drag_proof(proof, sales, contract):
 def generate_unchanged_client(context):
     # Sales generated from /app directly. npm workspace changes cwd and therefore
     # Prisma's index.js dirname fallback and bundler annotations.
+    # Production generated outside GitHub Actions. ci-info embeds ciName when
+    # GITHUB_ACTIONS is present, even with value false; omit it only for this child.
+    environment = {**os.environ, 'DATABASE_URL': 'mysql://prisma:prisma@127.0.0.1:3306/id_business_v2'}
+    environment.pop('GITHUB_ACTIONS', None)
     run('node', 'node_modules/prisma/build/index.js', 'generate', '--schema', SCHEMA,
-        cwd=context, env={**os.environ, 'DATABASE_URL': 'mysql://prisma:prisma@127.0.0.1:3306/id_business_v2'})
+        cwd=context, env=environment)
 
 
 def prepare():
