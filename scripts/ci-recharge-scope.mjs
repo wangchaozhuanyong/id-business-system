@@ -1,3 +1,4 @@
+import { isMailboxRealtimeOnly, mailboxRealtimeParts } from './ci-mailbox-realtime-scope.mjs';
 import { isWorkspaceDragOnly, workspaceDragParts } from './ci-workspace-drag-scope.mjs';
 import {
   isChatgptSalesOnly,
@@ -240,6 +241,7 @@ const onlineCiBuildTestInputs = new Set([
 ]);
 export function needsOnlineRechargeCiBuild(paths, context) {
   if (isRegistrationParityDiagnosticsControlRepair(paths, context)) return false;
+  if (isMailboxRealtimeOnly(paths, context)) return false;
   if (isRegistrationParityDiagnosticsOnly(paths, context)) return false;
   if (isWorkspaceDragOnly(paths)) return false;
   if (isChatgptSalesOnly(paths) || isChatgptSalesControlsOnly(paths)) return false;
@@ -1022,6 +1024,7 @@ export function isMailboxOnly(paths) {
 export function checkMode(paths, oldSchema, newSchema, grantHelperSnapshot, context) {
   if (isRegistrationParityDiagnosticsControlRepair(paths, context))
     return oldSchema === newSchema ? 'ci-only' : 'full';
+  if (isMailboxRealtimeOnly(paths, context)) return oldSchema === newSchema ? 'recharge' : 'full';
   if (isRegistrationParityDiagnosticsOnly(paths, context))
     return oldSchema === newSchema ? 'recharge' : 'full';
   if (context && isRegistrationParityDiagnosticsOnly(paths)) return 'full';
@@ -1505,6 +1508,7 @@ export function isTargetedOnly(paths, oldSchema, newSchema) {
 }
 export function selectedParts(paths, grantHelperSnapshot, context) {
   if (isRegistrationParityDiagnosticsControlRepair(paths, context)) return ['guards'];
+  if (isMailboxRealtimeOnly(paths, context)) return [...mailboxRealtimeParts];
   if (isRegistrationParityDiagnosticsOnly(paths, context))
     return [...registrationParityDiagnosticsParts];
   if (isWorkspaceDragOnly(paths)) return workspaceDragParts(paths);

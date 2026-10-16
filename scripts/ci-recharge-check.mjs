@@ -1,3 +1,4 @@
+import { isMailboxRealtimeOnly } from './ci-mailbox-realtime-scope.mjs';
 import { isWorkspaceDragOnly, workspaceDragCommands } from './ci-workspace-drag-scope.mjs';
 import {
   isChatgptSalesOnly,
@@ -105,6 +106,56 @@ const registrationParityDiagnosticsControlRepair =
     base,
     baseTree: execFileSync('git', ['rev-parse', base + '^{tree}'], { encoding: 'utf8' }).trim()
   });
+if (
+  mode === 'recharge' &&
+  isMailboxRealtimeOnly(changed, {
+    base,
+    baseTree: execFileSync('git', ['rev-parse', base + '^{tree}'], { encoding: 'utf8' }).trim()
+  })
+) {
+  if (!['guards', 'release-controls', 'api', 'admin'].includes(part))
+    throw new Error('Unsupported mailbox check part');
+  if (part === 'guards' || part === 'release-controls') {
+    if (part === 'release-controls') npm('ci', '--ignore-scripts', '--no-audit', '--no-fund');
+    run('python3', ['-B', 'scripts/production-release/mailbox-realtime-release.test.py']);
+    run('node', [
+      '--test',
+      'scripts/ci-mailbox-realtime-scope.test.mjs',
+      'scripts/ci-recharge-scope.test.mjs',
+      'scripts/ci-recharge-check.test.mjs'
+    ]);
+    const formatted = changed.filter((n) => /\.(?:[cm]?js|json|yml|md|ts|vue)$/.test(n));
+    npm('exec', '--', 'prettier', '--check', ...formatted);
+    npm('exec', '--', 'eslint', ...formatted.filter((n) => /\.(?:[cm]?js|ts|vue)$/.test(n)));
+    for (const name of [
+      'admin-ui',
+      'v2-ui-language',
+      'v2-color-contrast',
+      'v2-table-standard',
+      'v2-loading-standard',
+      'v2-module-architecture',
+      'v2-isolation'
+    ])
+      npm('run', 'check:' + name);
+  } else {
+    npm('ci', '--ignore-scripts', '--no-audit', '--no-fund');
+    npm('run', 'prisma:mysql:generate');
+    npm('run', 'build', '--workspace', '@apple-business/shared');
+    const c = JSON.parse(
+      readFileSync('scripts/production-release/mailbox-realtime-contract.json', 'utf8')
+    );
+    const target = part === 'api' ? '@apple-business/api' : '@apple-business/admin';
+    npm('run', 'typecheck', '--workspace', target);
+    npm('run', 'test', '--workspace', target, '--', ...c[part + 'Tests']);
+    npm('run', 'build', '--workspace', target);
+    if (part === 'admin') {
+      npm('exec', '--', 'playwright', 'install', '--with-deps', 'chromium');
+      run('node', ['scripts/acceptance-v2-mailbox-realtime.mjs']);
+      run('node', ['scripts/acceptance-v2-mailbox-realtime.mjs', '--actions-only']);
+    }
+  }
+  process.exit(0);
+}
 const registrationParityDiagnosticsOnly =
   mode === 'recharge' &&
   base === registrationParityDiagnosticsBase &&
