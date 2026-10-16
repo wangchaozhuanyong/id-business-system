@@ -51,6 +51,15 @@
     <p v-else-if="limitReached" class="v2-quick-actions-panel__notice" role="status">
       已达到每人 {{ V2_QUICK_ACTION_LIMITS.count }} 条的上限。
     </p>
+    <p v-if="canReorder" class="v2-quick-actions-panel__notice">
+      拖动卡片空白处或标题调整顺序，松开后自动保存。
+    </p>
+    <p v-else-if="sort !== 'custom'" class="v2-quick-actions-panel__notice">
+      选择“自定义排序”后可拖动卡片调整顺序。
+    </p>
+    <p v-else-if="keyword.trim()" class="v2-quick-actions-panel__notice">
+      清空搜索后可拖动卡片调整完整顺序。
+    </p>
     <p v-if="ordering" class="v2-quick-actions-panel__notice" role="status">正在保存顺序…</p>
 
     <V2AsyncRegion
@@ -87,7 +96,8 @@
           v-for="item in pageItems"
           :key="item.id"
           class="v2-quick-actions-panel__item v2-quick-actions-drawer__card"
-          :class="rowClass({ row: item })"
+          :class="[rowClass({ row: item }), { 'is-draggable': canReorder }]"
+          @pointerdown="startCardDrag($event, item.id)"
         >
           <button
             v-if="sort === 'custom'"
@@ -97,10 +107,10 @@
             :aria-label="`调整顺序：${item.title}`"
             :title="`${item.title}；拖动标题或使用上下方向键调整顺序`"
             :data-sort-id="item.id"
-            @pointerdown="startDrag($event, item.id)"
             @keydown="moveWithKeyboard($event, item.id)"
           >
-            {{ item.title }}
+            <el-icon aria-hidden="true"><Rank /></el-icon>
+            <span>{{ item.title }}</span>
           </button>
           <span v-else class="v2-quick-actions-panel__title" :title="item.title">
             {{ item.title }}
@@ -161,7 +171,7 @@
 
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue';
-import { ArrowDown } from '@element-plus/icons-vue';
+import { ArrowDown, Rank } from '@element-plus/icons-vue';
 import {
   V2_QUICK_ACTION_LIMITS,
   type V2QuickActionInput,
@@ -278,6 +288,15 @@ watch(
     page.value = Math.max(1, Math.min(page.value, Math.ceil(count / pageSize)));
   }
 );
+function startCardDrag(event: PointerEvent, id: string) {
+  const target = event.target;
+  if (
+    !(target instanceof Element) ||
+    target.closest('button:not([data-sort-id]), a, input, textarea, select, [role="menuitem"]')
+  )
+    return;
+  startDrag(event, id);
+}
 function changeSort(value: string | number | object) {
   if (value === 'custom' || value === 'updated' || value === 'title') sort.value = value;
 }
@@ -369,10 +388,23 @@ async function remove(id: string) {
   text-align: left;
 }
 .v2-quick-actions-panel__drag-title {
-  display: block;
+  display: flex;
+  align-items: center;
+  gap: 6px;
   width: 100%;
   min-height: 36px;
   padding: 0;
+  touch-action: none;
+  user-select: none;
+}
+.v2-quick-actions-panel__drag-title > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.v2-quick-actions-panel__drag-title > .el-icon {
+  flex-shrink: 0;
+}
+.v2-quick-actions-panel__item.is-draggable {
   touch-action: none;
   user-select: none;
 }

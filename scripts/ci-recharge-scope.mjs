@@ -1,3 +1,4 @@
+import { isWorkspaceDragOnly, workspaceDragParts } from './ci-workspace-drag-scope.mjs';
 import {
   isChatgptSalesOnly,
   isChatgptSalesControlsOnly,
@@ -233,6 +234,7 @@ const onlineCiBuildTestInputs = new Set([
   'scripts/production-release/online-recharge-component-lifecycle.test.py'
 ]);
 export function needsOnlineRechargeCiBuild(paths, context) {
+  if (isWorkspaceDragOnly(paths)) return false;
   if (isChatgptSalesOnly(paths) || isChatgptSalesControlsOnly(paths)) return false;
   if (isOnlineProxyCountryValidationOnly(paths)) return false;
   if (isOnlineProxyCountryOnly(paths)) return false;
@@ -1011,6 +1013,12 @@ export function isMailboxOnly(paths) {
 }
 
 export function checkMode(paths, oldSchema, newSchema, grantHelperSnapshot, context) {
+  if (isWorkspaceDragOnly(paths))
+    return oldSchema === newSchema
+      ? workspaceDragParts(paths).includes('admin')
+        ? 'admin'
+        : 'ci-only'
+      : 'full';
   if (isChatgptSalesControlsOnly(paths)) return oldSchema === newSchema ? 'ci-only' : 'full';
   if (isChatgptSalesOnly(paths))
     return chatgptSalesSchemaMatches(oldSchema, newSchema) ? 'recharge' : 'full';
@@ -1484,6 +1492,7 @@ export function isTargetedOnly(paths, oldSchema, newSchema) {
   );
 }
 export function selectedParts(paths, grantHelperSnapshot, context) {
+  if (isWorkspaceDragOnly(paths)) return workspaceDragParts(paths);
   if (isChatgptSalesControlsOnly(paths)) return ['guards'];
   if (isChatgptSalesOnly(paths)) return [...chatgptSalesParts];
   if (isOnlineProxyCountryOnly(paths)) return [...onlineProxyCountryParts];
@@ -4155,7 +4164,8 @@ async function main() {
       if (
         requestedBaseIsAncestor &&
         ((isChatgptSalesOnly(salesPaths) && chatgptSalesSchemaMatches(salesBefore, salesAfter)) ||
-          (isChatgptSalesControlsOnly(salesPaths) && salesBefore === salesAfter))
+          (isChatgptSalesControlsOnly(salesPaths) && salesBefore === salesAfter) ||
+          (isWorkspaceDragOnly(salesPaths) && salesBefore === salesAfter))
       ) {
         base = recordedPullRequestBase({
           eventName: process.env.GITHUB_EVENT_NAME,

@@ -1,3 +1,4 @@
+import { isWorkspaceDragOnly, workspaceDragCommands } from './ci-workspace-drag-scope.mjs';
 import {
   isChatgptSalesOnly,
   isChatgptSalesControlsOnly,
@@ -88,6 +89,10 @@ const changed = execFileSync('git', ['diff', '--name-only', base, 'HEAD'], { enc
   .trim()
   .split('\n')
   .filter(Boolean);
+if (['admin', 'ci-only'].includes(mode) && isWorkspaceDragOnly(changed)) {
+  for (const [file, ...args] of workspaceDragCommands(part, changed)) run(file, args);
+  process.exit(0);
+}
 // Finite account inventory change: keep all affected checks and isolated MySQL.
 if (
   ['recharge', 'ci-only'].includes(mode) &&
