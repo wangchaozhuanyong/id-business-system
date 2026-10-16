@@ -28,6 +28,17 @@ class SalesReleaseTests(unittest.TestCase):
         for n, expected in c['sources'].items():
             self.assertEqual(r.digest((HERE.parents[1] / n).read_bytes()), expected)
 
+    def test_published_registration_admin_successor_is_preserved(self):
+        origin = c['publishedAdminOrigin']['commit']
+        published = json.loads(b.git('show', origin + ':scripts/production-release/registration-flow-evidence-contract.json'))
+        inherited = {n: value for n, value in published['sources'].items() if n.startswith('apps/admin/')}
+        self.assertEqual(len(inherited), 4)
+        self.assertEqual(c['baselineAdminBuildId'], 'v2-' + origin)
+        for name, expected in inherited.items():
+            self.assertEqual(c['adminPublishedSources'][name], {'commit': origin, 'sha256': expected})
+            self.assertEqual(r.digest(b.git('show', origin + ':' + name)), expected)
+            self.assertNotIn(name, c['sources'])
+
     def test_api_delta_rejects_unrelated_output_or_deleted_module(self):
         names = ['id-business-v2/auto-recharge/test.js']
         before = {names[0]: 'a', names[0] + '.map': 'b', names[0][:-3] + '.d.ts': 'c', 'other.js': 'd'}
