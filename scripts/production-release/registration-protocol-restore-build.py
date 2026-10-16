@@ -9,6 +9,7 @@ import subprocess
 import sys
 import tarfile
 import zipfile
+from contextlib import contextmanager
 
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parents[1]
@@ -297,15 +298,41 @@ def build():
     path.write_text(json.dumps(proof, sort_keys=True, indent=2) + '\n')
 
 
+@contextmanager
+def published_workspace_validation(context, c):
+    # The installed image retains the older, unused test file. Validate the
+    # already-published retired-payment behavior without changing runtime bytes.
+    name = WORKER + 'test_workspace.py'
+    path = context / name
+    before = path.read_bytes()
+    need(digest(before) == c['baselineWorkerFiles']['test_workspace.py'], 'RUNTIME_TEST_SOURCE_CHANGED')
+    raw = git('show', '59b36f3aadef28a59f47a55ed1e66686fcc2c42c:' + name)
+    need(digest(raw) == c['sourceInputEvidence']['files'][name]
+         == 'b209874b0a8d7b640a3df1253356f206b2e98c7253eee43efe7a212c14f32154',
+         'PUBLISHED_VALIDATION_SOURCE_CHANGED')
+    try:
+        path.write_bytes(raw)
+        yield
+    finally:
+        path.write_bytes(before)
+        need(digest(path.read_bytes()) == c['baselineWorkerFiles']['test_workspace.py'],
+             'RUNTIME_TEST_NOT_RESTORED')
+
+
+def python_tests(context, c, python):
+    with published_workspace_validation(context, c):
+        for module in c['pythonTests']:
+            need(re.fullmatch('test_[a-z0-9_]+', module), 'TEST_PATH_INVALID')
+            run(str(python), '-B', '-m', 'unittest', module, cwd=context / WORKER)
+
+
 def validate():
     c = json.loads(CONTRACT.read_bytes())
     verify_sources(c)
     context = OUTPUT / 'candidate'
     python = OUTPUT / 'python/bin/python'
     (context / '.runtime').mkdir(parents=True, exist_ok=True)
-    for module in c['pythonTests']:
-        need(re.fullmatch('test_[a-z0-9_]+', module), 'TEST_PATH_INVALID')
-        run(str(python), '-B', '-m', 'unittest', module, cwd=context / WORKER)
+    python_tests(context, c, python)
     for workspace, tests in [('apps/api', c['apiTests']), ('apps/admin', c['adminTests'])]:
         run('npm', 'run', 'test', '--workspace', workspace, '--', *tests, cwd=context)
         run('npm', 'run', 'typecheck', '--workspace', workspace, cwd=context)
@@ -346,9 +373,7 @@ def check(mode):
         api_delta(before, after, c['apiModules'])
         run('npm', 'run', 'typecheck', '--workspace', 'apps/api', cwd=candidate)
         run('npm', 'run', 'test', '--workspace', 'apps/api', '--', *c['apiTests'], cwd=candidate)
-        for module in c['pythonTests']:
-            need(re.fullmatch('test_[a-z0-9_]+', module), 'TEST_PATH_INVALID')
-            run(str(python), '-B', '-m', 'unittest', module, cwd=candidate / WORKER)
+        python_tests(candidate, c, python)
     else:
         commit = git('rev-parse', 'HEAD').decode().strip()
         for context, build_id in [(baseline, c['baselineAdminBuildId']), (candidate, 'v2-' + commit)]:

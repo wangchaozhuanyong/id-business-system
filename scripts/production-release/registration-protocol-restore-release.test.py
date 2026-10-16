@@ -174,6 +174,25 @@ class RestoreControls(unittest.TestCase):
                 r.retained_mailbox('driver', target, Checker)
             self.assertEqual(len(Checker.calls), 1)
 
+    def test_published_validation_restores_installed_bytes_even_when_a_test_fails(self):
+        with tempfile.TemporaryDirectory(prefix='restore-validation-', dir=ROOT / '.runtime') as directory:
+            context = Path(directory)
+            c = contract()
+            name = r.WORKER + 'test_workspace.py'
+            path = context / name
+            path.parent.mkdir(parents=True)
+            old = subprocess.check_output(['git', 'show', 'e90f02a65cdf63b656e82eed6e25fd8a68a21b7b:' + name], cwd=ROOT)
+            path.write_bytes(old)
+            for fail in (False, True):
+                try:
+                    with b.published_workspace_validation(context, c):
+                        self.assertEqual(r.digest(path.read_bytes()), c['sourceInputEvidence']['files'][name])
+                        if fail:
+                            raise ValueError('synthetic-test-failure')
+                except ValueError:
+                    self.assertTrue(fail)
+                self.assertEqual(path.read_bytes(), old)
+
     def test_generator_child_matches_published_ci_metadata_without_changing_parent(self):
         with patch.dict(os.environ, {'GITHUB_ACTIONS': 'false'}, clear=True), patch.object(b, 'run') as run:
             b.generate_client(Path('/synthetic/context'))
