@@ -27,6 +27,8 @@ import uuid
 _flow_spec = importlib.util.spec_from_file_location("id_registration_flow_evidence", Path(__file__).with_name("flow_evidence.py"))
 _flow_module = importlib.util.module_from_spec(_flow_spec)
 _flow_spec.loader.exec_module(_flow_module)
+# The flow validator accepts closed v1/v2 records; validation never upgrades
+# stored evidence or imports the executor/its database initialization.
 validate_flow_evidence = _flow_module.validate_flow_evidence
 
 MAINTENANCE_FILE = ".id-release-maintenance.json"

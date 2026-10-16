@@ -96,6 +96,19 @@ export interface AppleMailboxRecord {
   authorizationStatus?: 'pending' | 'complete' | null;
 }
 
+export interface AppleMailboxFlowResponseDetails {
+  errorSignal: 'none' | 'error' | 'errors' | 'both';
+  errorShape: 'missing' | 'null' | 'object' | 'string' | 'list' | 'boolean' | 'number' | 'other';
+  errorsShape: 'missing' | 'null' | 'object' | 'string' | 'list' | 'boolean' | 'number' | 'other';
+  errorKind: 'none' | 'account_creation_failed' | 'user_exists' | 'other';
+  pageShape:
+    | 'missing'
+    | 'non_object'
+    | 'type_missing'
+    | 'type_non_string'
+    | 'type_known'
+    | 'type_unknown';
+}
 export interface AppleMailboxFlowObservation {
   observedAt: string;
   httpStatus: number | null;
@@ -108,10 +121,17 @@ export interface AppleMailboxFlowObservation {
   requestIdPresent: boolean;
   requestIdSha256: string | null;
   decision: 'accepted' | 'rejected' | 'observed';
-  reason: 'http_status' | 'untrusted_origin' | 'invalid_json' | 'unexpected_page' | null;
+  reason:
+    | 'http_status'
+    | 'untrusted_origin'
+    | 'invalid_json'
+    | 'upstream_error'
+    | 'unexpected_page'
+    | null;
+  responseDetails?: AppleMailboxFlowResponseDetails;
 }
 export interface AppleMailboxFlowEvidence {
-  version: 1;
+  version: 1 | 2;
   authorize?: AppleMailboxFlowObservation;
   signup?: AppleMailboxFlowObservation;
   password?: AppleMailboxFlowObservation;

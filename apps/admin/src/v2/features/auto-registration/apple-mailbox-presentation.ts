@@ -278,7 +278,7 @@ export function appleMailboxFlowEvidenceRows(value: unknown) {
     typeof value !== 'object' ||
     Array.isArray(value) ||
     !('version' in value) ||
-    value.version !== 1
+    (value.version !== 1 && value.version !== 2)
   )
     return [];
   const evidence = value as Record<string, unknown>;
@@ -346,10 +346,66 @@ export function appleMailboxFlowEvidenceRows(value: unknown) {
             http_status: '响应状态不符合预期',
             untrusted_origin: '来源未通过校验',
             invalid_json: '响应不是预期的结构化数据',
+            upstream_error: '官网响应携带错误',
             unexpected_page: '页面类型与预期不符'
           },
           row.reason,
           '判断原因待核对'
+        )
+      );
+    }
+    if (
+      evidence.version === 2 &&
+      stage === 'signup' &&
+      row.responseDetails &&
+      typeof row.responseDetails === 'object' &&
+      !Array.isArray(row.responseDetails)
+    ) {
+      const response = row.responseDetails as Record<string, unknown>;
+      const shapes = {
+        missing: '未提供',
+        null: '空值',
+        object: '对象',
+        string: '文本',
+        list: '列表',
+        boolean: '布尔值',
+        number: '数字',
+        other: '其他'
+      };
+      details.push(
+        label(
+          {
+            none: '响应错误：未携带错误',
+            error: '响应错误：携带单项错误',
+            errors: '响应错误：携带错误集合',
+            both: '响应错误：同时携带两类错误'
+          },
+          response.errorSignal,
+          '响应错误：待核对'
+        ),
+        `单项错误结构：${label(shapes, response.errorShape, '待核对')}`,
+        `错误集合结构：${label(shapes, response.errorsShape, '待核对')}`,
+        label(
+          {
+            none: '上游错误分类：无',
+            account_creation_failed: '上游错误分类：拒绝创建账号',
+            user_exists: '上游错误分类：账号已存在',
+            other: '上游错误分类：其他'
+          },
+          response.errorKind,
+          '上游错误分类：待核对'
+        ),
+        label(
+          {
+            missing: '页面结构异常：未提供页面信息',
+            non_object: '页面结构异常：页面信息不是对象',
+            type_missing: '页面结构异常：缺少页面类型',
+            type_non_string: '页面结构异常：页面类型不是文本',
+            type_known: '页面结构：类型已识别',
+            type_unknown: '未知页面：类型尚未识别'
+          },
+          response.pageShape,
+          '页面结构：待核对'
         )
       );
     }

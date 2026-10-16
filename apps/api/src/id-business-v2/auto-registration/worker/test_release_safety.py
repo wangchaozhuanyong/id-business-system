@@ -22,6 +22,7 @@ import uuid
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import flow_evidence as flow
 import release_safety as safety
 import workspace
 
@@ -222,6 +223,57 @@ class ReleaseSafetyTests(unittest.TestCase):
         self.assertEqual(exit_code, 0)
         self.assertEqual(source["logicalSha256"], restored["logicalSha256"])
         self.assertFalse(task["proxyId"].encode() in copied.read_bytes())
+
+    def test_encrypted_proof_accepts_v1_and_v2_flow_without_rewriting_history(self):
+        failure = {"stage": "password", "errorKind": "account_creation_failed", "httpStatus": 400,
+                   "elapsedMs": 17, "observedAt": "2026-10-11T00:00:00Z"}
+        response = SimpleNamespace(status_code=200, headers={"content-type": "application/json"},
+            url="https://auth.openai.com/api/accounts/authorize/continue", history=[],
+            json=lambda: {"page": {"type": "password"}, "error": {"code": "offline-private-code",
+                "message": "offline-private-response"}, "errors": ["offline-private-response"]})
+        for version in (1, 2):
+            with self.subTest(version=version):
+                evidence = flow.observation(response, "signup")
+                if version == 1:
+                    evidence = flow.observation_v1("signup", evidence)
+                stored = {"version": version, "signup": evidence}
+                task = self.closed_fixture(flowEvidence=stored, firstFailure=failure)
+                before, modified = self.path.read_bytes(), self.path.stat().st_mtime_ns
+                with sqlite3.connect(self.path.as_uri() + "?mode=ro", uri=True) as db:
+                    db.execute("PRAGMA query_only=ON")
+                    db.execute("BEGIN")
+                    self.assertEqual(safety.encrypted_proof(db, self.key), 0)
+                    cipher = db.execute("SELECT value FROM settings WHERE key=?",
+                        (safety.APPLE_TASK_PREFIX + self.uuid,)).fetchone()[0]
+                    binding = json.loads(safety.decrypt_value(cipher, self.key))
+                self.assertEqual(binding["flowEvidence"], stored)
+                self.assertEqual(binding["firstFailure"], failure)
+                self.assertEqual(binding["rawResult"], task["rawResult"])
+                self.assertTrue(cipher.startswith("idenc:v1:"))
+                self.assertNotIn("flowEvidence", cipher)
+                self.assertEqual(self.receipt()[0], 0)
+                self.assertEqual(self.path.read_bytes(), before)
+                self.assertEqual(self.path.stat().st_mtime_ns, modified)
+                for marker in ("offline-private-code", "offline-private-response"):
+                    self.assertNotIn(marker, json.dumps(binding))
+                    self.assertNotIn(marker.encode(), before)
+
+    def test_encrypted_proof_rejects_v2_missing_details_secret_fields_and_v1_upgrade(self):
+        response = SimpleNamespace(status_code=200, headers={}, url="https://auth.openai.com/", history=[],
+            json=lambda: {"page": {"type": "password"}})
+        valid = {"version": 2, "signup": flow.observation(response, "signup")}
+        mutations = [lambda item: item["signup"].pop("responseDetails"),
+            lambda item: item["signup"]["responseDetails"].update(errorKind="offline-private-code"),
+            lambda item: item["signup"]["responseDetails"].update(response="offline-private-response"),
+            lambda item: item.update(version=1)]
+        for mutate in mutations:
+            invalid = json.loads(json.dumps(valid))
+            mutate(invalid)
+            with self.subTest(value=invalid):
+                self.closed_fixture(flowEvidence=invalid)
+                before = self.path.read_bytes()
+                self.assert_blocked("APPLE_RECORD_INVALID")
+                self.assertEqual(self.path.read_bytes(), before)
 
     def test_first_failure_rejects_raw_values_extra_fields_and_invalid_numbers(self):
         valid = {"stage": "create_account", "errorKind": "account_creation_failed", "httpStatus": 400,

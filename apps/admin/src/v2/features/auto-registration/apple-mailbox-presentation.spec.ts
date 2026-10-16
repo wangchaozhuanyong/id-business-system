@@ -5,7 +5,8 @@ import { isAutoRegistrationPage } from './bridge';
 import {
   appleMailboxPage,
   type AppleMailboxRow,
-  type AppleMailboxFlowObservation
+  type AppleMailboxFlowObservation,
+  type AppleMailboxFlowResponseDetails
 } from './contracts';
 import {
   appleMailboxIpSourceLabel,
@@ -242,6 +243,13 @@ const flowObservation: AppleMailboxFlowObservation = {
   decision: 'accepted',
   reason: null
 };
+const flowResponseDetails: AppleMailboxFlowResponseDetails = {
+  errorSignal: 'none',
+  errorShape: 'missing',
+  errorsShape: 'missing',
+  errorKind: 'none',
+  pageShape: 'type_known'
+};
 function iframeFlowRows(value: unknown) {
   const source = readFileSync(
     new URL(
@@ -279,7 +287,7 @@ describe('注册任务流程证据的封闭中文展示', () => {
     expect(iframeFlowRows(evidence)).toEqual(rows);
   });
   it('兼容没有证据的旧任务，有新结构时明确区分尚未观察阶段', () => {
-    for (const value of [undefined, null, {}, { version: 2 }, []]) {
+    for (const value of [undefined, null, {}, { version: 3 }, { version: '2' }, []]) {
       expect(appleMailboxFlowEvidenceRows(value)).toEqual([]);
       expect(iframeFlowRows(value)).toEqual([]);
     }
@@ -314,6 +322,128 @@ describe('注册任务流程证据的封闭中文展示', () => {
       })
     ).toContain('首次失败：提交注册表单');
     expect(iframeFlowRows(evidence)).toEqual(rows);
+  });
+  it('新版错误响应与页面分类独立展示，不把已识别页面误写为未知', () => {
+    const evidence = {
+      version: 2,
+      signup: {
+        ...flowObservation,
+        decision: 'rejected',
+        reason: 'upstream_error',
+        responseDetails: {
+          ...flowResponseDetails,
+          errorSignal: 'error',
+          errorShape: 'object',
+          errorKind: 'account_creation_failed'
+        }
+      }
+    };
+    const rows = appleMailboxFlowEvidenceRows(evidence);
+    expect(rows[1]?.status).toBe('已停止，等待核对');
+    expect(rows[1]?.detail).toContain('官网响应携带错误');
+    expect(rows[1]?.detail).toContain('响应错误：携带单项错误');
+    expect(rows[1]?.detail).toContain('单项错误结构：对象');
+    expect(rows[1]?.detail).toContain('错误集合结构：未提供');
+    expect(rows[1]?.detail).toContain('上游错误分类：拒绝创建账号');
+    expect(rows[1]?.detail).toContain('页面类型：新账号注册');
+    expect(rows[1]?.detail).toContain('页面结构：类型已识别');
+    expect(rows[1]?.detail).not.toContain('未知页面');
+    expect(rows[1]?.detail).not.toContain('account_creation_failed');
+    expect(iframeFlowRows(evidence)).toEqual(rows);
+  });
+  it.each([
+    ['missing', '页面结构异常：未提供页面信息'],
+    ['non_object', '页面结构异常：页面信息不是对象'],
+    ['type_missing', '页面结构异常：缺少页面类型'],
+    ['type_non_string', '页面结构异常：页面类型不是文本'],
+    ['type_known', '页面结构：类型已识别'],
+    ['type_unknown', '未知页面：类型尚未识别']
+  ])('新版页面结构%s明确区分结构异常和未知页面', (pageShape, expected) => {
+    const evidence = {
+      version: 2,
+      signup: {
+        ...flowObservation,
+        pageKind: pageShape === 'type_known' ? 'new_account' : 'unknown',
+        responseDetails: { ...flowResponseDetails, pageShape }
+      }
+    };
+    const rows = appleMailboxFlowEvidenceRows(evidence);
+    expect(rows[1]?.detail).toContain(expected);
+    expect(iframeFlowRows(evidence)).toEqual(rows);
+  });
+  it.each([
+    ['none', 'none', '响应错误：未携带错误', '上游错误分类：无'],
+    ['error', 'user_exists', '响应错误：携带单项错误', '上游错误分类：账号已存在'],
+    ['errors', 'other', '响应错误：携带错误集合', '上游错误分类：其他'],
+    ['both', 'other', '响应错误：同时携带两类错误', '上游错误分类：其他']
+  ])('新版错误摘要%s始终使用封闭中文标签', (errorSignal, errorKind, signal, kind) => {
+    const evidence = {
+      version: 2,
+      signup: {
+        ...flowObservation,
+        responseDetails: { ...flowResponseDetails, errorSignal, errorKind }
+      }
+    };
+    const rows = appleMailboxFlowEvidenceRows(evidence);
+    expect(rows[1]?.detail).toContain(signal);
+    expect(rows[1]?.detail).toContain(kind);
+    expect(iframeFlowRows(evidence)).toEqual(rows);
+  });
+  it('旧版展示保持原样，新版非对象响应缺少摘要时不推断错误或页面结构', () => {
+    const v1 = { version: 1, signup: flowObservation };
+    const v2 = { version: 2, signup: flowObservation };
+    const oldRows = appleMailboxFlowEvidenceRows(v1);
+    expect(
+      appleMailboxFlowEvidenceRows({
+        version: 1,
+        signup: { ...flowObservation, responseDetails: flowResponseDetails }
+      })
+    ).toEqual(oldRows);
+    expect(appleMailboxFlowEvidenceRows(v2)).toEqual(oldRows);
+    expect(iframeFlowRows(v1)).toEqual(oldRows);
+    expect(iframeFlowRows(v2)).toEqual(oldRows);
+    const unrelated = {
+      version: 2,
+      authorize: { ...flowObservation, responseDetails: flowResponseDetails },
+      password: { ...flowObservation, responseDetails: flowResponseDetails }
+    };
+    expect(JSON.stringify(appleMailboxFlowEvidenceRows(unrelated))).not.toContain('响应错误');
+    expect(iframeFlowRows(unrelated)).toEqual(appleMailboxFlowEvidenceRows(unrelated));
+  });
+  it('新版摘要的未知字段、恶意枚举与非对象资料均不泄漏正文', () => {
+    const sensitive = 'https://synthetic-secret.invalid/?token=synthetic-token';
+    const evidence = {
+      version: 2,
+      signup: {
+        ...flowObservation,
+        responseDetails: {
+          errorSignal: sensitive,
+          errorShape: sensitive,
+          errorsShape: sensitive,
+          errorKind: sensitive,
+          pageShape: sensitive,
+          message: sensitive,
+          body: sensitive
+        }
+      }
+    };
+    const rows = appleMailboxFlowEvidenceRows(evidence);
+    const displayed = JSON.stringify(rows);
+    for (const secret of [sensitive, 'synthetic-token', 'synthetic-secret.invalid'])
+      expect(displayed).not.toContain(secret);
+    expect(rows[1]?.detail).toContain('响应错误：待核对');
+    expect(rows[1]?.detail).toContain('页面结构：待核对');
+    expect(iframeFlowRows(evidence)).toEqual(rows);
+    for (const responseDetails of [null, sensitive, [sensitive], 12, true]) {
+      const malformed = {
+        version: 2,
+        signup: { ...flowObservation, responseDetails }
+      };
+      expect(appleMailboxFlowEvidenceRows(malformed)).toEqual(
+        appleMailboxFlowEvidenceRows({ version: 2, signup: flowObservation })
+      );
+      expect(iframeFlowRows(malformed)).toEqual(appleMailboxFlowEvidenceRows(malformed));
+    }
   });
   it('不显示响应正文、原始网址、请求标识、凭据或未知枚举，即使传入受污染资料', () => {
     const sensitive =
@@ -353,7 +483,7 @@ describe('注册任务流程证据的封闭中文展示', () => {
     const admin = readFileSync(new URL('./contracts.ts', import.meta.url), 'utf8');
     const block = (source: string) =>
       source.slice(
-        source.indexOf('export interface AppleMailboxFlowObservation'),
+        source.indexOf('export interface AppleMailboxFlowResponseDetails'),
         source.indexOf('export interface AppleMailboxTask {')
       );
     expect(block(api)).toBe(block(admin));

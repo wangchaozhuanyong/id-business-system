@@ -197,6 +197,54 @@ describe('苹果隐藏邮箱：权限、登记与私有取码桥', () => {
     );
   });
 
+  it('读取新版错误分类不改首次失败、不同步失败账号，也不把任务证据写入邮箱事实', async () => {
+    const firstFailure = {
+      stage: 'signup' as const,
+      errorKind: 'unknown' as const,
+      httpStatus: 200,
+      elapsedMs: 848,
+      observedAt: '2026-10-16T07:43:10.000Z'
+    };
+    const task: AppleMailboxTask = {
+      taskUuid: taskId,
+      status: 'failed',
+      logs: [],
+      record: { ...baseRecord(), firstFailure },
+      resultKind: 'failed',
+      flowEvidence: {
+        version: 2,
+        signup: {
+          observedAt: firstFailure.observedAt,
+          httpStatus: 200,
+          contentType: 'json',
+          jsonKind: 'object',
+          pageKind: 'new_account',
+          officialOrigin: true,
+          redirectHosts: [],
+          redirectsTruncated: false,
+          requestIdPresent: false,
+          requestIdSha256: null,
+          decision: 'rejected',
+          reason: 'upstream_error',
+          responseDetails: {
+            errorSignal: 'error',
+            errorShape: 'object',
+            errorsShape: 'missing',
+            errorKind: 'account_creation_failed',
+            pageShape: 'type_known'
+          }
+        }
+      }
+    };
+    worker.appleMailboxRequest.mockResolvedValueOnce(task);
+    const result = await service.task(taskId, actor);
+    expect(result).toEqual(task);
+    expect(result.record.firstFailure).toEqual(firstFailure);
+    expect(accounts.mirrorRegistration).not.toHaveBeenCalled();
+    expect(result.record).not.toHaveProperty('flowEvidence');
+    expect((await service.list({}, actor)).items[0]).not.toHaveProperty('flowEvidence');
+  });
+
   it('新邮箱没有登记时默认未注册并自动进入候选，已有历史unknown保留', async () => {
     records = [];
     const result = await service.list({}, actor);
