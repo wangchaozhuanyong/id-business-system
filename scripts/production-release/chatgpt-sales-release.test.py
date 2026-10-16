@@ -96,10 +96,12 @@ class SalesReleaseTests(unittest.TestCase):
         allowed = {n.removesuffix('.js') + ext: 'a' for n in c['apiModules'] for ext in ('.js', '.js.map', '.d.ts')}
         admin = {'assets/' + str(i) + '.js': 'b' for i in range(250)}
         files = {**{'source/' + n: v for n, v in c['sources'].items()},
+                 **{'host/' + n: v for n, v in c['hostSources'].items()},
                  **{'api/modules/' + n: v for n, v in allowed.items()},
                  **{'admin/html/' + n: v for n, v in admin.items()}}
         proof = {**plan, 'version': 1, 'scope': c['scope'],
                  'baselineSources': {'api': c['apiSourceBaseline'], 'admin': c['adminSourceBaseline']},
+                 'adminPublishedSources': c['adminPublishedSources'], 'hostSources': c['hostSources'],
                  'databaseVerification': {'isolated': True, 'migration': c['migration']['name'], 'legacyDefaultsVerified': True, 'testsPassed': 5, 'testsSkipped': 0, 'businessActions': 0},
                  'browserVerification': {'status': 'PASS', 'realWrites': 0}, 'updatedServices': ['api', 'admin'],
                  'migration': c['migration'], 'businessActions': 0, 'apiModules': allowed,

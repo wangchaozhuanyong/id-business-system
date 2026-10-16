@@ -54,6 +54,8 @@ def validate_proof(proof, plan, contract, payload, h):
     need(proof.get('version') == 1 and proof.get('scope') == contract['scope']
          and all(proof.get(k) == plan[k] for k in ('commit', 'tree', 'workflowRunId', 'workflowRunAttempt', 'contractSha256', 'controllerSha256', 'releaseUtilitySha256', 'helperSha256'))
          and proof.get('baselineSources') == {'api': contract['apiSourceBaseline'], 'admin': contract['adminSourceBaseline']}
+         and proof.get('adminPublishedSources') == contract['adminPublishedSources']
+         and proof.get('hostSources') == contract['hostSources']
          and proof.get('databaseVerification') == {'isolated': True, 'migration': contract['migration']['name'], 'legacyDefaultsVerified': True, 'testsPassed': 5, 'testsSkipped': 0, 'businessActions': 0}
          and proof.get('qualityVerification') == plan['qualityVerification']
          and proof.get('browserVerification') == {'status': 'PASS', 'realWrites': 0}
@@ -67,7 +69,8 @@ def validate_proof(proof, plan, contract, payload, h):
          and {n.removeprefix('source/'): v for n, v in actual.items() if n.startswith('source/')} == contract['sources']
          and {n.removeprefix('api/modules/'): v for n, v in actual.items() if n.startswith('api/modules/')} == proof['apiModules']
          and {n.removeprefix('admin/html/'): v for n, v in actual.items() if n.startswith('admin/html/')} == proof['adminFiles']
-         and all(n.startswith(('source/', 'api/modules/', 'admin/html/')) for n in actual), 'PAYLOAD_SCOPE_CHANGED')
+         and {n.removeprefix('host/'): v for n, v in actual.items() if n.startswith('host/')} == contract['hostSources']
+         and all(n.startswith(('source/', 'host/', 'api/modules/', 'admin/html/')) for n in actual), 'PAYLOAD_SCOPE_CHANGED')
     return proof
 
 
@@ -100,7 +103,7 @@ def smoke(d, target, proof, states, contract, h, nginx):
     with urllib.request.urlopen(urllib.request.Request('https://54-249-61-238.sslip.io/', headers={'Cache-Control': 'no-cache'}), timeout=25) as response:
         html = response.read(2 * 1024**2)
     need(digest(html) == proof['adminFiles']['index.html'] and ('v2-' + proof['commit']).encode() in html, 'PUBLIC_BUILD_CHANGED')
-    for name, expected in contract['sources'].items():
+    for name, expected in {**contract['sources'], **contract['hostSources']}.items():
         path = target / name
         need(not path.is_symlink() and path.resolve().is_relative_to(target) and digest(path.read_bytes()) == expected, 'HOST_SOURCE_CHANGED')
     h.guards(d, target, states, contract)
@@ -226,6 +229,21 @@ def restore_runtime(d, previous, target, before, contract, h):
                  for n in ('api', 'admin', 'online-recharge')), 'RECOVERY_READBACK_CHANGED')
 
 
+def seed_audit_context(target, payload, contract):
+    # Admin-only predecessors intentionally carry config and metadata only.
+    # Add only the frozen, independently hashed read-only audit and its imports.
+    for n, expected in contract['hostSources'].items():
+        raw = (payload / 'host' / n).read_bytes()
+        need(n.startswith('scripts/') and '..' not in Path(n).parts and digest(raw) == expected, 'AUDIT_SOURCE_CHANGED')
+        p = target / n
+        need(not p.is_symlink() and p.resolve().is_relative_to(target), 'AUDIT_SOURCE_PATH_INVALID')
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_bytes(raw)
+        p.chmod(0o644)
+    (target / 'scripts').chmod(0o755)
+    (target / 'scripts/lib').chmod(0o755)
+
+
 def release(plan, contract, d, h):
     a = utilities()
     need(plan['mode'] in ('preflight', 'release', 'readback') and re.fullmatch('[a-f0-9]{40}', plan['commit'])
@@ -283,7 +301,10 @@ def release(plan, contract, d, h):
             images[role] = {'reference': image, 'imageId': built['Id']}
         d.run('docker', 'run', '--rm', '--network', 'none', '--read-only', '--user', '101:101', '--entrypoint', 'sh', images['admin']['reference'], '-c', 'test -r /usr/share/nginx/html/index.html && test -x /usr/share/nginx/html/assets')
         need(baseline(d, contract, h, proof, plan['runtimeBaseline']) == (previous, raw_manifest, before, observation), 'BASELINE_MOVED')
-        before_audit = d.audit(previous, stage / 'integrity-before.json', api_admin_only=True)
+        audit_context = stage / 'audit-before'
+        shutil.copytree(previous, audit_context, symlinks=True)
+        seed_audit_context(audit_context, payload, contract)
+        before_audit = d.audit(audit_context, stage / 'integrity-before.json', api_admin_only=True)
         need(before_audit == {'checkCount': 49, 'violationCount': 0}, 'PRE_MIGRATION_INTEGRITY_FAILED')
         backup = h.fresh_scoped_backup(d, previous, plan, normalizer_path=Path(contract['backupNormalizerPath']))
         need(backup.get('s3Verified') is True, 'BACKUP_UNVERIFIED')
@@ -291,6 +312,7 @@ def release(plan, contract, d, h):
         target = BASE / 'releases' / (stamp + '-' + plan['commit'][:12] + '-chatgpt-sales')
         need(not target.exists(), 'TARGET_EXISTS')
         shutil.copytree(previous, target, symlinks=True)
+        seed_audit_context(target, payload, contract)
         for name in contract['sources']:
             destination = target / name
             need(destination.resolve().is_relative_to(target) and not destination.is_symlink(), 'HOST_SOURCE_PATH_INVALID')

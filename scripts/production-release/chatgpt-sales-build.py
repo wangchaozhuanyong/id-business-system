@@ -58,6 +58,10 @@ def verify_sources(c):
             need(git('ls-tree', 'HEAD', '--', n) == git('ls-tree', c['reviewBase'], '--', n), 'DEPENDENCY_CHANGED')
     need(git('show', c['apiSourceBaseline'] + ':apps/api/prisma-mysql/schema.prisma')
          == git('show', c['reviewBase'] + ':apps/api/prisma-mysql/schema.prisma'), 'SCHEMA_BASE_CHANGED')
+    for n, expected in c['hostSources'].items():
+        need(digest(git('show', c['hostSourceBaseline'] + ':' + n)) == expected, 'AUDIT_SOURCE_CHANGED')
+    for n, entry in c['adminPublishedSources'].items():
+        need(n.startswith('apps/admin/src/v2/') and digest(git('show', entry['commit'] + ':' + n)) == entry['sha256'], 'PUBLISHED_ADMIN_SOURCE_CHANGED')
     need(digest((ROOT / c['migration']['path']).read_bytes()) == c['migration']['sha256'], 'MIGRATION_CHANGED')
 
 
@@ -81,6 +85,11 @@ def prepare(c):
         for variant in ('baseline', 'candidate'):
             context = OUTPUT / (role + '-' + variant)
             extract(raw, context)
+            if role == 'admin':
+                for n, entry in c['adminPublishedSources'].items():
+                    p = context / n
+                    p.parent.mkdir(parents=True, exist_ok=True)
+                    p.write_bytes(git('show', entry['commit'] + ':' + n))
             if variant == 'candidate':
                 for n in c['sources']:
                     if n.startswith('apps/' + role + '/'):
@@ -126,12 +135,17 @@ def package(c):
         p = payload / 'source' / n
         p.parent.mkdir(parents=True, exist_ok=True)
         p.write_bytes((ROOT / n).read_bytes())
+    for n in c['hostSources']:
+        p = payload / 'host' / n
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_bytes(git('show', c['hostSourceBaseline'] + ':' + n))
     proof = {'version': 1, 'scope': c['scope'], 'commit': os.environ['GITHUB_SHA'],
         'tree': git('rev-parse', 'HEAD^{tree}').decode().strip(), 'workflowRunId': os.environ['GITHUB_RUN_ID'],
         'workflowRunAttempt': os.environ['GITHUB_RUN_ATTEMPT'], 'contractSha256': digest(CONTRACT.read_bytes()),
         'baselineApiFiles': {n: before.get(n) for n in sorted(allowed)},
         'baselineAdminFiles': inventory(OUTPUT / 'admin-baseline/apps/admin/dist'),
         'baselineSources': {'api': c['apiSourceBaseline'], 'admin': c['adminSourceBaseline']},
+        'adminPublishedSources': c['adminPublishedSources'], 'hostSources': c['hostSources'],
         'qualityVerification': passed, 'databaseVerification': database,
         'browserVerification': {'status': 'PASS', 'realWrites': 0},
         'files': inventory(payload), 'apiModules': {n: after[n] for n in sorted(allowed)},

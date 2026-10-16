@@ -1,5 +1,6 @@
 {
   "adminNodeEnv": "production",
+  "adminPublishedSources": {},
   "adminSourceBaseline": "88bce5ab09d20cd303f1fdd5fe310cb0b42e1451",
   "adminSourceBaselineTree": "57a0d354276724e70945513c9db806919e245b09",
   "apiModules": [
@@ -43,6 +44,12 @@
     "stopping": false
   },
   "expectedCurrent": "88bce5ab09d20cd303f1fdd5fe310cb0b42e1451",
+  "hostSourceBaseline": "69eba563895bf083b24c8214a088454d5df34922",
+  "hostSources": {
+    "scripts/lib/v2-data-integrity-audit.mjs": "9c982c6f6c4573715d6679d64eb898ea20080430aa18ac42ae093beac181f26e",
+    "scripts/lib/v2-historical-cash-adjustment-audit.mjs": "13367df42cbf58102e8e014afddae32fe73785d9159334e98ed8a2474c2aa569",
+    "scripts/v2-data-integrity-audit.mjs": "7b2b932490b2691d49882a545638b93c499454c64e7271bf0fc139aefb4b6778"
+  },
   "manifestSha256": "ab625e55e4461a852fff06942c76585d1caa2dc412fea062f77ad9db8cb53fed",
   "migration": {
     "name": "20261016170000_chatgpt_account_sale_status",
