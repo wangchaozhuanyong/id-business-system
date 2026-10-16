@@ -39,7 +39,10 @@ export function createOnlineRechargeBodyParser(): RequestHandler {
   });
   return (request, response, next) => {
     if (request.path === '/worker/rpc') return next();
-    const parser = request.path.startsWith('/public/') ? publicParser : resourceParser;
+    const parser =
+      request.path.startsWith('/public/') || request.path.startsWith('/integrations/')
+        ? publicParser
+        : resourceParser;
     parser(request, response, next);
   };
 }

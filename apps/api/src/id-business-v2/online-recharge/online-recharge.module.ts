@@ -1,3 +1,5 @@
+import { OnlineRechargeVendureController } from './vendure-integration.controller';
+import { OnlineRechargeVendureIntegration } from './vendure-integration.service';
 import { ProxyPoolModule } from '../proxy-pool/public-api';
 import { Module } from '@nestjs/common';
 import { IdBusinessV2RuntimeModule } from '../runtime/public-api';
@@ -34,12 +36,14 @@ import { OnlineRechargeOrderSyncRepository } from './persistence/order-sync.repo
 @Module({
   imports: [ProxyPoolModule, IdBusinessV2RuntimeModule, AuthLoginEventsModule, RechargeModule],
   controllers: [
+    OnlineRechargeVendureController,
     OnlineRechargeAdminController,
     OnlineRechargePublicController,
     OnlineRechargeWorkerController
   ],
   exports: [OnlineRechargeSecurityNotificationService],
   providers: [
+    OnlineRechargeVendureIntegration,
     FieldEncryptionService,
     OnlineRechargeRepository,
     OnlineRechargeWorkerRepository,
