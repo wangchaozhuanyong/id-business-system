@@ -11,6 +11,36 @@ const { check } = require('../healthcheck.cjs');
 const { transientRoot, clearTransientRoot } = require('../paths.cjs');
 const key = 'synthetic-online-recharge-runtime-test-key-long-enough';
 const engine = path.join(__dirname, '..');
+test(
+  'headed task children retain virtual display authorization without database credentials',
+  {
+    skip: process.platform !== 'linux'
+  },
+  () => {
+    const probe = `
+    const assert = require('node:assert/strict');
+    const { spawnSync } = require('node:child_process');
+    const { childEnvironment } = require('./worker.cjs');
+    process.env.DATABASE_URL = 'synthetic-not-for-browser';
+    const env = childEnvironment({ id: 'authenticated-display-fixture' });
+    assert.ok(process.env.XAUTHORITY);
+    assert.equal(env.XAUTHORITY, process.env.XAUTHORITY);
+    assert.equal(env.DISPLAY, process.env.DISPLAY);
+    assert.equal(env.DATABASE_URL, undefined);
+    const script = "const {chromium}=require('./upstream/node_modules/playwright');(async()=>{const browser=await chromium.launch({headless:false,args:['--no-sandbox','--disable-background-networking']});try{const page=await browser.newPage();await page.route('**/*',r=>r.abort());await page.setContent('<p>synthetic isolated display</p>');if(await page.locator('p').innerText()!=='synthetic isolated display')throw Error('DISPLAY_CONTENT_MISMATCH');}finally{await browser.close();}})().catch(()=>{process.exitCode=1;});";
+    const child = spawnSync(process.execPath, ['-e', script], { cwd: process.cwd(), env, timeout: 30000 });
+    assert.equal(child.status, 0, 'authenticated headed task child must launch');
+  `;
+    const result = spawnSync('xvfb-run', ['-a', process.execPath, '-e', probe], {
+      cwd: engine,
+      env: process.env,
+      timeout: 45000,
+      encoding: 'utf8'
+    });
+    assert.equal(result.error, undefined);
+    assert.equal(result.status, 0, result.stderr);
+  }
+);
 async function freePort() {
   const listener = net.createServer();
   await new Promise((resolve) => listener.listen(0, '127.0.0.1', resolve));

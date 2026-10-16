@@ -285,7 +285,7 @@
     {
       "path": "test/runtime-main.test.cjs",
       "originalSha256": null,
-      "adaptedSha256": "23de99397726284aef901a1071859206a7c525c3ed64fac8853149cd8e828475",
+      "adaptedSha256": "f16785dae472a4065bac6f2dd4b23624d3aeba7708d668e55742b57a84be063b",
       "changed": true,
       "reason": "Keep transient heartbeat failures within the server-confirmed lease; stop expired ownership before execution or completion, with bounded child shutdown and secret-free diagnostics."
     },
@@ -593,9 +593,9 @@
     {
       "path": "worker.cjs",
       "originalSha256": null,
-      "adaptedSha256": "3d7c2368291ee8ab6d5eafddf7d03ea13bc1707cfba199257b0a10bafe48b9d7",
+      "adaptedSha256": "0260aabc3444d53b51cd2a56bbc29ea40c33d9968eac73c7d6ce38cb2990a9bc",
       "changed": true,
-      "reason": "Private worker lifecycle; preserve proxy detection evidence on completion failure and reject writes after lease loss."
+      "reason": "Forward the existing private XAUTHORITY file path with DISPLAY to headed task children; retain the restricted environment allowlist."
     },
     {
       "path": "checkout-form.cjs",

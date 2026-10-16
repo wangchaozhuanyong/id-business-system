@@ -149,3 +149,21 @@ test('the finite checkout repair keeps API, Admin, browser and all interface gua
       .includes('src/id-business-v2/bank-card-pool/shared-bank-card.spec.ts')
   );
 });
+test('display authorization repair is finite and retains real headed browser checks', () => {
+  const paths = ['worker.cjs', 'test/runtime-main.test.cjs', 'SOURCE_MANIFEST.json'].map(
+    (name) => 'apps/api/src/id-business-v2/online-recharge/engine/' + name
+  );
+  paths.push('scripts/production-release/online-browser-display-auth-release.py');
+  assert.equal(isOnlineSettingsOnly(paths), true);
+  assert.equal(isOnlineSettingsOnly(paths.slice(1)), false);
+  assert.equal(isOnlineSettingsOnly([...paths, 'apps/api/src/auth/auth.service.ts']), false);
+  assert.equal(isOnlineSettingsOnly([...paths, 'apps/api/prisma-mysql/schema.prisma']), false);
+  const commands = onlineSettingsCommands('online-engine', paths).flat();
+  assert.ok(commands.includes('xvfb') && commands.includes('xauth'));
+  assert.ok(commands.includes('test:online-recharge:engine'));
+  assert.ok(
+    onlineSettingsCommands('guards', paths)
+      .flat()
+      .includes('scripts/production-release/online-browser-display-auth-release.test.py')
+  );
+});
