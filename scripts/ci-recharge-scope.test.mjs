@@ -29,6 +29,63 @@ import { createHash } from 'node:crypto';
 import fs, { readFileSync } from 'node:fs';
 import { syncBuiltinESMExports } from 'node:module';
 import test from 'node:test';
+import {
+  registrationParityDiagnosticsBase,
+  registrationParityDiagnosticsTree,
+  registrationParityDiagnosticsCurrent,
+  registrationParityDiagnosticsApplications,
+  registrationParityDiagnosticsAcceptance,
+  registrationParityDiagnosticsContract,
+  registrationParityDiagnosticsControls,
+  registrationParityDiagnosticsPaths,
+  registrationParityDiagnosticsParts
+} from './ci-registration-parity-diagnostics-scope.mjs';
+
+test('registration parity selects every affected check only with exact reviewed bytes and unchanged schema', () => {
+  const paths = [...registrationParityDiagnosticsPaths];
+  const hashes = Object.fromEntries(
+    paths.filter((p) => p !== registrationParityDiagnosticsContract).map((p) => [p, 'a'.repeat(64)])
+  );
+  const context = {
+    base: registrationParityDiagnosticsBase,
+    baseTree: registrationParityDiagnosticsTree,
+    sourceDigest: (p) => hashes[p],
+    contract: {
+      frozen: true,
+      scope: 'REGISTRATION_PARITY_DIAGNOSTICS',
+      sourceBaseline: registrationParityDiagnosticsBase,
+      sourceBaselineTree: registrationParityDiagnosticsTree,
+      expectedCurrent: registrationParityDiagnosticsCurrent,
+      migration: null,
+      expectedGitChanges: paths,
+      allowedApplicationPaths: [...registrationParityDiagnosticsApplications],
+      controlPaths: [...registrationParityDiagnosticsControls],
+      sources: Object.fromEntries(
+        registrationParityDiagnosticsApplications.map((p) => [p, hashes[p]])
+      ),
+      validationSources: {
+        [registrationParityDiagnosticsAcceptance]: hashes[registrationParityDiagnosticsAcceptance]
+      },
+      reviewedFileHashes: hashes
+    }
+  };
+  assert.equal(checkMode(paths, 'same-schema', 'same-schema', undefined, context), 'recharge');
+  assert.deepEqual(selectedParts(paths, undefined, context), [
+    ...registrationParityDiagnosticsParts
+  ]);
+  assert.equal(needsOnlineRechargeCiBuild(paths, context), false);
+  assert.equal(checkMode(paths, 'before', 'after', undefined, context), 'full');
+  for (const path of [
+    'apps/api/prisma-mysql/schema.prisma',
+    'package-lock.json',
+    'apps/api/src/id-business-v2/auto-registration/upstream/src/core/register.py'
+  ])
+    assert.equal(checkMode([...paths, path], 'same', 'same', undefined, context), 'full');
+  assert.equal(
+    checkMode(paths, 'same', 'same', undefined, { ...context, base: 'b'.repeat(40) }),
+    'full'
+  );
+});
 
 // The original registration recovery proves the already published 7c tree.
 // Later proxy, order-layout and Sales repairs intentionally advance these inputs, so

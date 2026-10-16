@@ -13,6 +13,13 @@ import {
   registrationFlowEvidenceAcceptance
 } from './ci-registration-flow-evidence-scope.mjs';
 import {
+  isRegistrationParityDiagnosticsOnly,
+  registrationParityDiagnosticsBase,
+  registrationParityDiagnosticsParts,
+  registrationParityDiagnosticsWorker,
+  registrationParityDiagnosticsAcceptance
+} from './ci-registration-parity-diagnostics-scope.mjs';
+import {
   isProxyResultIdentityOnly,
   proxyResultIdentityBase,
   proxyResultIdentityEngineRoot,
@@ -89,6 +96,89 @@ const changed = execFileSync('git', ['diff', '--name-only', base, 'HEAD'], { enc
   .trim()
   .split('\n')
   .filter(Boolean);
+const registrationParityDiagnosticsOnly =
+  mode === 'recharge' &&
+  base === registrationParityDiagnosticsBase &&
+  isRegistrationParityDiagnosticsOnly(changed, {
+    base,
+    baseTree: execFileSync('git', ['rev-parse', base + '^{tree}'], { encoding: 'utf8' }).trim()
+  });
+if (registrationParityDiagnosticsOnly) {
+  if (!registrationParityDiagnosticsParts.includes(part))
+    throw new Error('Unsupported registration parity diagnostics check part');
+  if (part === 'guards' || part === 'release-controls') {
+    // The shared workflow preinstalls guards only; pin tooling for this additional part.
+    if (part === 'release-controls') npm('ci', '--ignore-scripts', '--no-audit', '--no-fund');
+    run('python3', [
+      '-B',
+      'scripts/production-release/registration-parity-diagnostics-release.test.py'
+    ]);
+    run('node', [
+      '--test',
+      'scripts/ci-registration-parity-diagnostics-scope.test.mjs',
+      'scripts/ci-recharge-scope.test.mjs',
+      'scripts/ci-recharge-check.test.mjs'
+    ]);
+    const existing = changed.filter((path) => existsSync(path));
+    const formatted = existing.filter((path) => /\.(?:[cm]?js|json|yml|md|ts|vue|css)$/.test(path));
+    if (formatted.length) npm('exec', '--', 'prettier', '--check', ...formatted);
+    const linted = existing.filter((path) => /\.(?:[cm]?js|ts|vue)$/.test(path));
+    if (linted.length) npm('exec', '--', 'eslint', ...linted);
+    for (const name of [
+      'check:admin-ui',
+      'check:v2-ui-language',
+      'check:v2-color-contrast',
+      'check:v2-table-standard',
+      'check:v2-loading-standard',
+      'check:v2-module-architecture',
+      'check:v2-isolation'
+    ])
+      npm('run', name);
+  } else {
+    npm('ci', '--ignore-scripts', '--no-audit', '--no-fund');
+    npm('run', 'prisma:mysql:generate');
+    npm('run', 'build', '--workspace', '@apple-business/shared');
+    const target = part === 'api' ? '@apple-business/api' : '@apple-business/admin';
+    npm('run', 'typecheck', '--workspace', target);
+    npm(
+      'run',
+      'test',
+      '--workspace',
+      target,
+      '--',
+      part === 'api' ? 'src/id-business-v2/auto-registration' : 'src/v2/features/auto-registration'
+    );
+    npm('run', 'build', '--workspace', target);
+    npm('run', 'auto-registration:setup');
+    const python = resolve('.runtime/auto-registration/venv/bin/python');
+    if (part === 'api') {
+      for (const name of [
+        'test_flow_evidence.py',
+        'test_registration_parity_unit.py',
+        'test_registration_closed_loop_unit.py',
+        'test_workspace.py',
+        'test_apple_mailboxes.py',
+        'test_release_safety.py',
+        'test_upload_compat.py'
+      ])
+        run(python, [
+          '-B',
+          '-m',
+          'unittest',
+          'discover',
+          '-s',
+          registrationParityDiagnosticsWorker,
+          '-p',
+          name
+        ]);
+      run('node', ['--test', registrationParityDiagnosticsWorker + '/test_payment_browser.mjs']);
+    } else {
+      npm('exec', '--', 'playwright', 'install', '--with-deps', 'chromium');
+      run('node', [registrationParityDiagnosticsAcceptance, '--python=' + python]);
+    }
+  }
+  process.exit(0);
+}
 if (['admin', 'ci-only'].includes(mode) && isWorkspaceDragOnly(changed)) {
   for (const [file, ...args] of workspaceDragCommands(part, changed)) run(file, args);
   process.exit(0);

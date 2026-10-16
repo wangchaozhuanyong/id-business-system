@@ -10,6 +10,13 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import test from 'node:test';
 import {
+  registrationParityDiagnosticsBase,
+  registrationParityDiagnosticsTree,
+  registrationParityDiagnosticsPaths,
+  registrationParityDiagnosticsWorker,
+  registrationParityDiagnosticsAcceptance
+} from './ci-registration-parity-diagnostics-scope.mjs';
+import {
   onlineProxyCountryPaths,
   onlineProxyCountryCommands
 } from './ci-online-proxy-country-scope.mjs';
@@ -46,6 +53,73 @@ const readonlyMetadataPrevious = readonlyMetadataCurrent
     "commit.get('commit', {}).get('tree', {}).get('sha')"
   );
 const readonlyMetadataFixture = { readonlyBaseSource: readonlyMetadataPrevious };
+
+test('registration parity dispatcher runs both interfaces all persistence modules and UI rules then closes its finite branch', () => {
+  for (const part of ['guards', 'release-controls', 'api', 'admin']) {
+    const calls = recordGuardCommands('recharge', registrationParityDiagnosticsPaths, part, {
+      base: registrationParityDiagnosticsBase,
+      parityFixture: true
+    });
+    assert.deepEqual(calls.at(-1), ['process-exit', 0]);
+    if (part === 'guards' || part === 'release-controls') {
+      const install = calls.findIndex(
+        (c) => c.join(' ') === 'npm ci --ignore-scripts --no-audit --no-fund'
+      );
+      const format = calls.findIndex((c) => c.includes('prettier'));
+      if (part === 'release-controls') assert.ok(install >= 0 && format > install);
+      else assert.equal(install, -1);
+      assert.ok(
+        calls.some((c) =>
+          c.includes('scripts/production-release/registration-parity-diagnostics-release.test.py')
+        )
+      );
+      for (const name of [
+        'check:admin-ui',
+        'check:v2-ui-language',
+        'check:v2-color-contrast',
+        'check:v2-table-standard',
+        'check:v2-loading-standard',
+        'check:v2-module-architecture',
+        'check:v2-isolation'
+      ])
+        assert.ok(
+          calls.some((c) => c.join(' ') === 'npm run ' + name),
+          name
+        );
+    } else if (part === 'api') {
+      for (const name of [
+        'test_registration_parity_unit.py',
+        'test_flow_evidence.py',
+        'test_workspace.py',
+        'test_apple_mailboxes.py',
+        'test_release_safety.py',
+        'test_registration_closed_loop_unit.py',
+        'test_upload_compat.py'
+      ])
+        assert.ok(
+          calls.some((c) => c.includes(registrationParityDiagnosticsWorker) && c.includes(name)),
+          name
+        );
+    } else assert.ok(calls.some((c) => c.includes(registrationParityDiagnosticsAcceptance)));
+    assert.ok(
+      !calls.some((c) =>
+        c.some(
+          (arg) =>
+            typeof arg === 'string' &&
+            /ci-recharge-migration|prisma:migrate|online-recharge.*engine\/test/.test(arg)
+        )
+      )
+    );
+  }
+  assert.throws(
+    () =>
+      recordGuardCommands('recharge', registrationParityDiagnosticsPaths, 'migration', {
+        base: registrationParityDiagnosticsBase,
+        parityFixture: true
+      }),
+    /Unsupported registration parity diagnostics check part/
+  );
+});
 
 test('proxy country dispatcher executes each affected part and closes before historical publishers', () => {
   for (const part of ['guards', 'api', 'admin', 'online-engine']) {
@@ -565,7 +639,8 @@ function recordGuardCommands(
     readonlyBaseSource = '',
     readonlyCurrentSource = null,
     cacheConfiguration = null,
-    identityFixture = false
+    identityFixture = false,
+    parityFixture = false
   } = {}
 ) {
   // Run the real dispatcher with process execution replaced before its named import resolves.
@@ -619,6 +694,15 @@ function recordGuardCommands(
     };
     const scopeUrl = new URL('./scripts/ci-recharge-scope.mjs', import.meta.url).href;
     registerHooks({resolve(specifier, context, nextResolve) {
+      if (${JSON.stringify(parityFixture)} && specifier === './ci-registration-parity-diagnostics-scope.mjs' && context.parentURL?.endsWith('/scripts/ci-recharge-check.mjs')) {
+        const url = new URL('./scripts/ci-registration-parity-diagnostics-scope.mjs', import.meta.url).href;
+        const source = 'import * as m from ' + JSON.stringify(url) + ';export * from ' + JSON.stringify(url) + ';' +
+          'export function isRegistrationParityDiagnosticsOnly(paths, options) {' +
+          'const hashes=Object.fromEntries(m.registrationParityDiagnosticsPaths.filter(p=>p!==m.registrationParityDiagnosticsContract).map(p=>[p,"a".repeat(64)]));' +
+          'const contract={frozen:true,scope:"REGISTRATION_PARITY_DIAGNOSTICS",sourceBaseline:m.registrationParityDiagnosticsBase,sourceBaselineTree:m.registrationParityDiagnosticsTree,expectedCurrent:m.registrationParityDiagnosticsCurrent,migration:null,expectedGitChanges:m.registrationParityDiagnosticsPaths,allowedApplicationPaths:m.registrationParityDiagnosticsApplications,controlPaths:m.registrationParityDiagnosticsControls,sources:Object.fromEntries(m.registrationParityDiagnosticsApplications.map(p=>[p,hashes[p]])),validationSources:{[m.registrationParityDiagnosticsAcceptance]:hashes[m.registrationParityDiagnosticsAcceptance]},reviewedFileHashes:hashes};' +
+          'return m.isRegistrationParityDiagnosticsOnly(paths,{...options,contract,sourceDigest:p=>hashes[p]});}';
+        return {url:'data:text/javascript,'+encodeURIComponent(source),shortCircuit:true};
+      }
       if (${JSON.stringify(identityFixture)} && specifier === './ci-proxy-result-identity-scope.mjs' && context.parentURL?.endsWith('/scripts/ci-recharge-check.mjs')) {
         const identityUrl = new URL('./scripts/ci-proxy-result-identity-scope.mjs', import.meta.url).href;
         const source = 'import {isProxyResultIdentityOnly as original, proxyResultIdentityPins} from ' + JSON.stringify(identityUrl) + ';' +
@@ -650,6 +734,7 @@ function recordGuardCommands(
     }});
     childProcess.execFileSync = (file, args) => {
       if (file === 'git') {
+        if (args.join(' ') === ${JSON.stringify('rev-parse ' + registrationParityDiagnosticsBase + '^{tree}')}) return ${JSON.stringify(registrationParityDiagnosticsTree + '\n')};
         if (args.join(' ') === 'rev-parse 7c3c102c98539d33cb379ef018427371ba750cb7^{tree}') return 'f6ab4537e28437af244c2263dd591516ae8e2a22\\n';
         if (args.join(' ') === 'rev-parse d38c243b5727953aa96c0fa83e706fee253c9624^{tree}') return 'a331c3ab6b23c3331aa550b752d9d66860e62cdb\\n';
         if (args.join(' ') === 'rev-parse cd7bba03bec1742328e0829c215823bda1fd3fae^{tree}') return '874102957cbd6cc921e05e5bba252e63bd09fd85\\n';

@@ -23,6 +23,7 @@ from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import flow_evidence as flow
 import workspace
 
 
@@ -241,6 +242,85 @@ class AppleMailboxTests(unittest.TestCase):
                 self.assertNotIn("198.51.100.9", value)
             tables = {row[0] for row in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
             self.assertFalse(any("apple" in name for name in tables))
+
+    def test_flow_v2_error_shapes_are_encrypted_and_returned_only_on_task(self):
+        context, _, _ = self.reservation()
+        task_uuid = context["taskUuid"]
+        response = self.diagnostic_response(200, {"page": {"type": "password"},
+            "error": {"code": "offline-private-code", "message": "offline-private-response"},
+            "errors": ["offline-private-response"], "access_token": "offline-private-token"})
+        evidence = flow.observation(response, "signup")
+        before_record = self.read()
+        self.assertTrue(self.store.record_flow_evidence(task_uuid, "signup", evidence))
+        with self.sessions.get_db() as db:
+            _, binding = self.store.task_data(db, task_uuid)
+        self.assertEqual(binding["flowEvidence"], {"version": 2, "signup": evidence})
+        self.assertEqual(binding["flowEvidence"]["signup"]["responseDetails"], {
+            "errorSignal": "both", "errorShape": "object", "errorsShape": "list",
+            "errorKind": "other", "pageShape": "type_known"})
+        self.assertEqual((evidence["pageKind"], evidence["decision"], evidence["reason"]),
+                         ("new_account", "rejected", "upstream_error"))
+        result = self.integration.task(task_uuid)
+        self.assertEqual(result["flowEvidence"], binding["flowEvidence"])
+        self.assertNotIn("flowEvidence", result["record"])
+        self.assertEqual(self.read(), before_record)
+        for marker in ("offline-private-code", "offline-private-response", "offline-private-token"):
+            self.assertNotIn(marker, json.dumps(binding))
+            self.assertNotIn(marker, json.dumps(result))
+        with sqlite3.connect(Path(self.runtime.name) / "database.db") as db:
+            cipher = db.execute("SELECT value FROM settings WHERE key=?", (self.apple.TASK_PREFIX + task_uuid,)).fetchone()[0]
+            self.assertTrue(cipher.startswith("idenc:v1:"))
+            self.assertNotIn("responseDetails", cipher)
+            self.assertNotIn(self.email, cipher)
+
+    def test_flow_v1_continuation_keeps_old_slots_first_failure_and_manual_facts(self):
+        context, _, _ = self.reservation()
+        task_uuid = context["taskUuid"]
+        self.store.observe(self.email, task_uuid, registrationStatus="registered", source="manual",
+            registrationIp="198.51.100.9", registrationIpSource="manual", registrationCountry="US",
+            note="离线人工登记不得被诊断覆盖", operatorId="offline-manual-admin")
+        self.store.record_failure(task_uuid, "password", "account_creation_failed", 400, 17)
+        old_signup = flow.observation_v1("signup", flow.observation(self.diagnostic_response(), "signup"))
+        with self.store.transaction() as db:
+            row, data = self.store.task_data(db, task_uuid)
+            data["flowEvidence"] = {"version": 1, "signup": old_signup}
+            row.value = json.dumps(data)
+        original_record = self.read()
+        original_failure = original_record["firstFailure"]
+        with sqlite3.connect(Path(self.runtime.name) / "database.db") as db:
+            original_cipher = db.execute("SELECT value FROM settings WHERE key=?", (self.apple.key_for(self.email),)).fetchone()[0]
+        rejected = flow.observation(self.diagnostic_response(200,
+            {"page": {"type": "email_otp_verification"}, "error": {"code": "user_exists"}}), "signup")
+        self.assertTrue(self.store.record_flow_evidence(task_uuid, "signup", rejected))
+        password = flow.observation(self.diagnostic_response(400), "password")
+        self.assertTrue(self.store.record_flow_evidence(task_uuid, "password", password))
+        self.store.record_failure(task_uuid, "signup", "user_exists", 200, 999)
+        with self.sessions.get_db() as db:
+            _, binding = self.store.task_data(db, task_uuid)
+        self.assertEqual(binding["flowEvidence"], {"version": 1, "signup": old_signup,
+            "password": flow.observation_v1("password", password)})
+        self.assertEqual(binding["firstFailure"], original_failure)
+        self.assertEqual(self.read(), original_record)
+        self.assertEqual(self.integration.task(task_uuid)["flowEvidence"], binding["flowEvidence"])
+        with sqlite3.connect(Path(self.runtime.name) / "database.db") as db:
+            current_cipher = db.execute("SELECT value FROM settings WHERE key=?", (self.apple.key_for(self.email),)).fetchone()[0]
+        self.assertEqual(current_cipher, original_cipher)
+
+    def test_invalid_v2_details_do_not_replace_existing_encrypted_task_evidence(self):
+        context, _, _ = self.reservation()
+        task_uuid = context["taskUuid"]
+        evidence = flow.observation(self.diagnostic_response(), "signup")
+        self.assertTrue(self.store.record_flow_evidence(task_uuid, "signup", evidence))
+        with sqlite3.connect(Path(self.runtime.name) / "database.db") as db:
+            original_cipher = db.execute("SELECT value FROM settings WHERE key=?", (self.apple.TASK_PREFIX + task_uuid,)).fetchone()[0]
+        invalid = json.loads(json.dumps(evidence))
+        invalid.pop("responseDetails")
+        with self.assertRaises(ValueError):
+            self.store.record_flow_evidence(task_uuid, "signup", invalid)
+        with sqlite3.connect(Path(self.runtime.name) / "database.db") as db:
+            current_cipher = db.execute("SELECT value FROM settings WHERE key=?", (self.apple.TASK_PREFIX + task_uuid,)).fetchone()[0]
+        self.assertEqual(current_cipher, original_cipher)
+        self.assertEqual(self.integration.task(task_uuid)["flowEvidence"], {"version": 2, "signup": evidence})
 
     def test_early_new_account_fact_survives_later_failure(self):
         context, _, _ = self.reservation()
