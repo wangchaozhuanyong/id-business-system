@@ -600,7 +600,7 @@
     {
       "path": "checkout-form.cjs",
       "originalSha256": null,
-      "adaptedSha256": "d7201f75dc4c3199f6dc71c1d4366ccb523970525d8f04a935159dbcfb375649",
+      "adaptedSha256": "b9d0536d76a41df7362e799629f5c6618e4432c496912c8f9a4cb37e4cbea803",
       "changed": true,
       "reason": "Semantic frame-safe checkout form readback and immutable per-task payment cap."
     },

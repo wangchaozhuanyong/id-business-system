@@ -301,9 +301,9 @@ async function diagnostic(page) {
     return [];
   }
 }
-async function guarded(page, action) {
+async function guarded(page, action, deadline) {
   try {
-    return await action();
+    return await within(action(), deadline);
   } catch (e) {
     return {
       ok: false,
@@ -313,54 +313,62 @@ async function guarded(page, action) {
   }
 }
 async function fillCard(page, card, { deadline = Date.now() + 120000 } = {}) {
-  return guarded(page, async () => {
-    if (!card.number || !card.expiry || !card.cvc) throw new Error('卡片资料缺失');
-    const expected = { number: String(card.number).replace(/\D/g, ''), cvc: String(card.cvc) };
-    const split = String(card.expiry).match(/^(\d{2})\/?(\d{2}|\d{4})$/);
-    if (!split) throw new Error('有效期资料无效');
-    // Some elements reveal the expiry only after the number has been entered.
-    while (Date.now() < deadline) {
-      if (await write(page, 'number', expected.number, deadline)) break;
-      await page.waitForTimeout(200);
-    }
-    // Wait for either a combined expiry control or both explicitly labelled parts.
-    while (Date.now() < deadline) {
-      if (await locate(page, 'expiry', deadline)) {
-        expected.expiry = `${split[1]}/${split[2].slice(-2)}`;
-        break;
+  return guarded(
+    page,
+    async () => {
+      if (!card.number || !card.expiry || !card.cvc) throw new Error('卡片资料缺失');
+      const expected = { number: String(card.number).replace(/\D/g, ''), cvc: String(card.cvc) };
+      const split = String(card.expiry).match(/^(\d{2})\/?(\d{2}|\d{4})$/);
+      if (!split) throw new Error('有效期资料无效');
+      // Some elements reveal the expiry only after the number has been entered.
+      while (Date.now() < deadline) {
+        if (await write(page, 'number', expected.number, deadline)) break;
+        await page.waitForTimeout(200);
       }
-      if ((await locate(page, 'month', deadline)) && (await locate(page, 'year', deadline))) {
-        expected.month = split[1];
-        expected.year = split[2];
-        break;
+      // Wait for either a combined expiry control or both explicitly labelled parts.
+      while (Date.now() < deadline) {
+        if (await locate(page, 'expiry', deadline)) {
+          expected.expiry = `${split[1]}/${split[2].slice(-2)}`;
+          break;
+        }
+        if ((await locate(page, 'month', deadline)) && (await locate(page, 'year', deadline))) {
+          expected.month = split[1];
+          expected.year = split[2];
+          break;
+        }
+        await page.waitForTimeout(200);
       }
-      await page.waitForTimeout(200);
-    }
-    if (!expected.expiry && !expected.month) throw new Error('有效期资料控件未在总时限内出现');
-    return fill(page, expected, deadline);
-  });
+      if (!expected.expiry && !expected.month) throw new Error('有效期资料控件未在总时限内出现');
+      return fill(page, expected, deadline);
+    },
+    deadline
+  );
 }
 async function fillBilling(page, address, name, { deadline = Date.now() + 120000 } = {}) {
-  return guarded(page, async () => {
-    const expected = {
-      country: address?.country || address?.region,
-      line1: address?.line1,
-      city: address?.city,
-      postal: address?.postal_code,
-      name
-    };
-    const absent = Object.entries(expected)
-      .filter(([, v]) => !String(v ?? '').trim())
-      .map(([key]) => labels[key]);
-    if (absent.length) throw new Error(`账单资料缺失：${absent.join('、')}`);
-    if (address.state) expected.state = address.state;
-    if (['us', 'ca', 'au'].includes(countryCode(expected.country)) && !expected.state)
-      throw new Error('账单资料缺失：州/省');
-    // Country changes can replace all address controls. Re-discover after every write.
-    const result = await fill(page, expected, deadline);
-    if (!result.ok) result.controls = await diagnostic(page);
-    return result;
-  });
+  return guarded(
+    page,
+    async () => {
+      const expected = {
+        country: address?.country || address?.region,
+        line1: address?.line1,
+        city: address?.city,
+        postal: address?.postal_code,
+        name
+      };
+      const absent = Object.entries(expected)
+        .filter(([, v]) => !String(v ?? '').trim())
+        .map(([key]) => labels[key]);
+      if (absent.length) throw new Error(`账单资料缺失：${absent.join('、')}`);
+      if (address.state) expected.state = address.state;
+      if (['us', 'ca', 'au'].includes(countryCode(expected.country)) && !expected.state)
+        throw new Error('账单资料缺失：州/省');
+      // Country changes can replace all address controls. Re-discover after every write.
+      const result = await fill(page, expected, deadline);
+      if (!result.ok) result.controls = await diagnostic(page);
+      return result;
+    },
+    deadline
+  );
 }
 async function verifyCard(page, card, { deadline = Date.now() + 120000 } = {}) {
   const expected = { number: String(card.number).replace(/\D/g, ''), cvc: String(card.cvc) };
