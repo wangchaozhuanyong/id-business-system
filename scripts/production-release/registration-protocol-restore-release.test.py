@@ -85,6 +85,11 @@ class RestoreControls(unittest.TestCase):
         c['protectedMigrations'].pop('20261016150000_shared_bank_card_pool')
         with self.assertRaisesRegex(RuntimeError, 'SHARED_CARD_MIGRATION_NOT_PROTECTED'):
             r.verify_contract(c)
+        for key in ['retainedMailboxVersion', 'mailboxVersionReceipts']:
+            c = structural_fixture()
+            c[key] = {}
+            with self.assertRaises(RuntimeError):
+                r.verify_contract(c)
 
     def test_historical_publishers_are_byte_exact(self):
         r.history(contract())
@@ -146,6 +151,29 @@ class RestoreControls(unittest.TestCase):
         self.assertEqual(len(c['baselinePrismaClientFiles']), 18)
         self.assertEqual(len(c['runtimePrismaClientFiles']), 27)
 
+    def test_retained_mailbox_host_and_all_three_modules_are_required(self):
+        class Checker:
+            calls = []
+
+            @classmethod
+            def verify_modules(cls, *args):
+                cls.calls.append(args)
+
+        with tempfile.TemporaryDirectory(prefix='restore-mailbox-', dir=ROOT / '.runtime') as directory:
+            target = Path(directory)
+            name, expected = next(iter(r.MAILBOX_VERSION_SOURCES.items()))
+            source = target / name
+            source.parent.mkdir(parents=True)
+            raw = subprocess.check_output(['git', 'show', r.CURRENT + ':' + name], cwd=ROOT)
+            self.assertEqual(r.digest(raw), expected)
+            source.write_bytes(raw)
+            r.retained_mailbox('driver', target, Checker)
+            self.assertEqual(Checker.calls, [('driver', target, r.MAILBOX_VERSION_MODULES)])
+            source.write_text('unexpected')
+            with self.assertRaisesRegex(RuntimeError, 'RETAINED_MAILBOX_HOST_SOURCE_CHANGED'):
+                r.retained_mailbox('driver', target, Checker)
+            self.assertEqual(len(Checker.calls), 1)
+
     def test_generator_child_matches_published_ci_metadata_without_changing_parent(self):
         with patch.dict(os.environ, {'GITHUB_ACTIONS': 'false'}, clear=True), patch.object(b, 'run') as run:
             b.generate_client(Path('/synthetic/context'))
@@ -198,8 +226,9 @@ class RestoreControls(unittest.TestCase):
     def test_api_delta_requires_exact_six_known_before_hashes(self):
         c = contract()
         approved = c['apiModules']
-        before = {**approved, **c['withdrawal']['apiRemovals'], r.TYPE_DECLARATION: 'b' * 64}
-        after = {n: 'a' * 64 for n in approved}
+        before = {**approved, **c['withdrawal']['apiRemovals'], **r.MAILBOX_VERSION_MODULES,
+                  r.TYPE_DECLARATION: 'b' * 64}
+        after = {**{n: 'a' * 64 for n in approved}, **r.MAILBOX_VERSION_MODULES}
         type_js = r.TYPE_DECLARATION.removesuffix('.d.ts') + '.js'
         after[type_js] = before[type_js]
         after[r.TYPE_DECLARATION] = r.TYPE_DECLARATION_SHA
@@ -211,6 +240,10 @@ class RestoreControls(unittest.TestCase):
                 b.api_delta(changed, after, approved)
         with self.assertRaisesRegex(RuntimeError, 'COMPILED_REMOVAL_SCOPE_CHANGED'):
             b.api_delta({**before, 'unrelated.js': 'c' * 64}, after, approved)
+        for name in r.MAILBOX_VERSION_MODULES:
+            changed = {**after, name: 'f' * 64}
+            with self.assertRaisesRegex(RuntimeError, 'RETAINED_MAILBOX_MODULE_CHANGED'):
+                b.api_delta(before, changed, approved)
 
     def test_archive_path_traversal_and_duplicate_proof_are_refused(self):
         for names in [['payload/../unsafe'], ['payload/build-proof.json', 'payload/build-proof.json']]:

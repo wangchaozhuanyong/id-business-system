@@ -19,10 +19,12 @@ BASE = Path('/opt/id-business-v2')
 NAME = 'registration-protocol-restore'
 SCOPE = 'REGISTRATION_PROTOCOL_RESTORE'
 OLD_NAME = 'registration-parity-diagnostics'
-CURRENT = 'e84a44d86c289354bc7ed15dcd0ec68f7210e18e'
-CURRENT_TREE = '911664181fa938f4065e2cf5d175ffb522e155d1'
-SOURCE_BASE = '7e19c6c78afb1d31e8e3a971653edefbfe48778f'
-SOURCE_TREE = '6cc7525f60aaa75a79ebf87227a5efcfc25a873b'
+SHARED_CARD_COMMIT = 'e84a44d86c289354bc7ed15dcd0ec68f7210e18e'
+SHARED_CARD_TREE = '911664181fa938f4065e2cf5d175ffb522e155d1'
+CURRENT = '1c339754507f29459d17d75bb84afbee8fba5291'
+CURRENT_TREE = '06fc09408adb26dd753456a9e8ff490f3e3cd308'
+SOURCE_BASE = '65e5f50a3550c451699b230f9d7b66f3e2d713b2'
+SOURCE_TREE = 'bd1666ddc644fbf65dc72e2c3af0f12c35c7abe7'
 WORKER = 'apps/api/src/id-business-v2/auto-registration/worker/'
 INSTANCE = 'i-05836da38606e633c'
 BROWSER_COMMIT = '561b834dd3f481d98a99786667a2844c842b24bd'
@@ -30,6 +32,12 @@ BROWSER_CONTRACT_SHA = 'ccb48583bb539e13b500f317e37395425bec571f0e369324fc4a5cba
 SAFE_READER_SHA = 'c6bda052bfab611c4798a40b8c637a48a23dc9c9da0912b7028e61d719b7146b'
 TYPE_DECLARATION = 'id-business-v2/auto-registration/apple-mailboxes.types.d.ts'
 TYPE_DECLARATION_SHA = 'a41c23af90aaf305de8d0d42f3c7b31de580a78aae22f047c1d797a8871e66a4'
+MAILBOX_VERSION_SOURCES = {'apps/api/src/common/prisma/bump-v2-scope-versions.ts':
+    'c775e89856c89e3a94138698b489c1be79b5fb26f94677ee58a8008024849b7e'}
+MAILBOX_VERSION_MODULES = {
+    'common/prisma/bump-v2-scope-versions.js': 'fa550e3611be675d6858529414ca534eab7d294e5f99f492f1f1eee98f9fec12',
+    'common/prisma/bump-v2-scope-versions.js.map': 'ba619085f3e3979f886aac5bb9b991cbe0ae80fb4dd9ee212d39275cca6f0dc4',
+    'common/prisma/bump-v2-scope-versions.d.ts': 'baf8b6b40b698ee3cd9accea37b12b053c967b6ef990a1cfda392f6cec818d45'}
 HISTORICAL_CONTROLS = {'account-login-build.py': 'f2bc8a42fae093967230b77570f90e7a5914663bc77ccd1ae7f3e617a3a53998', 'account-login-contract.json': '856cc583bbb6f79e6a3dfa1e088bc4674892ff1c364712d808d9d5facba44fea', 'account-login-release.py': '68461ea869ba9447a9878653415c85fe961ac91bbb59389848baba302d7bc5c9', 'api-admin-scope.py': '50446ab528a288ca1c2129c84f1bf4a90f59fa313a92bcff0058a258c8b8e925', 'chatgpt-sales-build.py': 'a55db7b0f04729d6f15d50ef3d7ae81a0746dceb2e95cd77408d0de74b9b7590', 'chatgpt-sales-contract.json': '7bcbfb2b3a5ec288c8a10e1a3d7b7a57abd95363fb37297bf50a017607be300a', 'chatgpt-sales-release.py': '16c27d9093fd2f0e2d8882f51f7584f3d68da3c6a714ee48d83b8cfee29979a5', 'mailbox-realtime-contract.json': '49d8f7a466c9e157305456da816afd00c19cf69192e269e478ba355f5c771831', 'online-settings-build.py': '081d3c2364ef6730f908a631ee35171875f7d22360833c70122fb9205e66dc1f', 'online-settings-contract.json': 'aeb7a5ee67f004beb2eb392964993538718515c3595efc8362c01329b4855887', 'online-settings-release.py': '1b6c94859764203af8aa27f6ff4caaee65470a215f3841a6b5a0bd0b676e8a27', 'proxy-result-identity-release.py': '97207252c12924dcbbfe3e86ebf397e928cd9545bbf9260337fd94ffd5109d45', 'recharge-availability-release.py': 'd98af117f3d80e705dd4f5eb3375a37cf4c0f058b65f4be77550d909ccbbe66c', 'recharge-billing-release.py': 'eabb3473e5639edaf7073cb71562bfca4d7208bc7856d1262ce904202dedafd7', 'recharge-record-release.py': '4ca6d0053f5dc4368d85722ef0df272ace0947c1c91993a0a3da598507b5163f', 'recharge-source-recovery-build.py': '927292b7467c9057a049ef9c1d89654100c506acb77f802f0c0d72fb081d1467', 'recharge-source-recovery-contract.json': '61e69d7a720baa61955be460b209082aaf5e01766ec4be6c882b4a5b6807d890', 'recharge-source-recovery-release.py': 'e6f493ab7737bf77d23114a00ff9c970a77d18786726e690b27dbe98c9f099b8', 'registration-browser-build.py': '5be135efb6785564cd3d6e7593ec699b50422ac351c2e3ad58469096a6d32133', 'registration-browser-contract.json': 'ccb48583bb539e13b500f317e37395425bec571f0e369324fc4a5cbabca456e4', 'registration-browser-release.py': 'e4b8c503b98267d117aea5e7333ca4a08e03f95e134d1f3f050b5da60954bfcd', 'registration-closure-release.py': '0d2daaeff0a35e1e11666ace39560273fdc83ff9e5718cb244337c8b0f851274', 'registration-flow-evidence-build.py': '0c6b8a100faa02019003daa037acbae55fc5d80891ffb9ce13ef373d8b4a7925', 'registration-flow-evidence-contract.json': '9d5f34916800fb885cb8aabd98bb550900775f47f17d666c8ad40a26f65215ae', 'registration-flow-evidence-dispatch.py': '8801f3de8d6749121ab60c7d8a108e9cb293e383c415114decdc92f4f7078f82', 'registration-flow-evidence-release.py': 'f6243432411f637a648e19a728dc4e1744a9682553aecb252b15991c42e1a3f3', 'registration-parity-diagnostics-build.py': '7bd0eb8a3b28261402782b2dbe01fc436c41331f0ecd47764c2d5abc5dc4e459', 'registration-parity-diagnostics-contract.json': 'ec58e314bfebe558c9bf793ca1b240fcd1144d56956ecf0de1fd18fd6aa03ae7', 'registration-parity-diagnostics-dispatch.py': 'c16f8a09a7a08771faa1071910a05a077d3c4e368f6a4938d3c8cec8cca74a8c', 'registration-parity-diagnostics-release.py': 'f5d3d6e3d5ee539a965cbbfa4401beee3e209c2258886ea7239ae667a13e3eb8', 'remote-deploy.py': '889aedb75bbcb53863a55dc2a4c40a84e06dea1d64d493f6a4fca6dc233f855c', 'shared-bank-card-build.py': '7a9ca67ee3f9803612ab6bcb7b054a248d7d5d9d8087d7d676ac4cf59fe09f37', 'shared-bank-card-contract.json': '22b6133b8b8b704475131604f36c56701377d159c0e5eb80ebce3b4f5bd21c67', 'shared-bank-card-release.py': '003ddac5dceb7388c79529bced489a008fa4597073df6c6b441629b5dfb46852', 'workspace-drag-build.py': 'e2dba4371c53a4ad53b5c6ee96a1ddea5f5a7c455b8985a16540f89f410e17a7', 'workspace-drag-contract.json': '577497d7a7ec82ab540062738e44f1ee024a1c026469880706c4f37b45585e08', 'workspace-drag-release.py': '28bcfed29eb45d66ece16b943e63b97f5f5500dacfc345cb23642bb4f9931fb0'}
 RESTORE_PATHS = ['apps/admin/src/v2/features/auto-registration/V2AppleMailboxes.vue', 'apps/admin/src/v2/features/auto-registration/api.ts', 'apps/admin/src/v2/features/auto-registration/apple-mailbox-presentation.ts', 'apps/admin/src/v2/features/auto-registration/contracts.ts', 'apps/admin/src/v2/features/auto-registration/useAppleMailboxes.spec.ts', 'apps/admin/src/v2/features/auto-registration/useAppleMailboxes.ts', 'apps/api/src/id-business-v2/auto-registration/apple-mailboxes.controller.ts', 'apps/api/src/id-business-v2/auto-registration/apple-mailboxes.service.ts', 'apps/api/src/id-business-v2/auto-registration/apple-mailboxes.types.ts', 'apps/api/src/id-business-v2/auto-registration/auto-registration.module.ts', 'apps/api/src/id-business-v2/auto-registration/auto-registration.service.ts', 'apps/api/src/id-business-v2/auto-registration/worker/apple_mailboxes.py', 'apps/api/src/id-business-v2/auto-registration/worker/release_safety.py', 'apps/api/src/id-business-v2/auto-registration/worker/workspace.py']
 API_REMOVALS = {'id-business-v2/auto-registration/browser-registration.controller.d.ts': '005a1a9db99e05641f4e9b54dd8fbe04266abf583b87dfdbfe219454e41e88ae', 'id-business-v2/auto-registration/browser-registration.controller.js': 'f60fbfcfb1f3ba594b83e03513e140ed653d5b6f83acd7b9eb25b24f9302043e', 'id-business-v2/auto-registration/browser-registration.controller.js.map': '109172c7b5f2f62f69dff1eda75d325c5dd0ddcef593688e487f92b3260094e2', 'id-business-v2/auto-registration/browser-registration.service.d.ts': '81ed9fa4625256cc3971005834e6f452cdc28da07b4521c344c5133320fd1097', 'id-business-v2/auto-registration/browser-registration.service.js': 'bbc44b9aba6aa848a2f543058ad18ed5eb95d67d45192d53efe9f7ab141a1505', 'id-business-v2/auto-registration/browser-registration.service.js.map': '0fe71726f381318a9de6945ca3b3c2b81c07b9019bb8aeab07bed4e335677514'}
@@ -38,6 +46,34 @@ PUBLISHED_BUILDS = {'browser': {'commit': '561b834dd3f481d98a99786667a2844c842b2
 PREDECESSOR_RECEIPTS = {'finalize': {'commandId': 'bca1e62a-39fb-4fc7-8805-bf2157dd7b84', 'sha256': '7a31c48f4e2a10e6ea28c509c90b1f11a8bf21fa8f008df4b14931afafae76b1', 'canonicalSha256': 'cbad7769303d5cf13761df26bae9e5a2bb98392cf82bae7fb7fe72b145b7d419', 'result': {'businessActions': 0, 'commit': 'e84a44d86c289354bc7ed15dcd0ec68f7210e18e', 'containersRecreated': False, 'migrationRepeated': False, 'status': 'SHARED_BANK_CARD_FORWARD_FINALIZED'}}, 'readback': {'commandId': 'b76dc765-3203-4991-b10c-b0219cba3dcc', 'sha256': '7094e0d467fb40c148dba6b218a7b1326d96df0e905dc7afd986a40485f40d2c', 'canonicalSha256': '9af5b264230d65076cceeb8a683f8a295f5ae6957dda3465cede2b244be2164d', 'result': {'businessActions': 0, 'commit': 'e84a44d86c289354bc7ed15dcd0ec68f7210e18e', 'migrationPerformed': True, 'preservedServices': ['mysql', 'caddy', 'media-resolver', 'auto-recharge', 'auto-registration'], 'status': 'SHARED_BANK_CARD_INDEPENDENT_READBACK_VERIFIED'}}}
 
 SOURCE_PATHS = ['.github/workflows/quality.yml', '.github/workflows/registration-protocol-restore-validation.yml', 'apps/admin/src/v2/features/auto-registration/V2AppleMailboxes.vue', 'apps/admin/src/v2/features/auto-registration/api.ts', 'apps/admin/src/v2/features/auto-registration/apple-mailbox-presentation.ts', 'apps/admin/src/v2/features/auto-registration/browser-connector.spec.ts', 'apps/admin/src/v2/features/auto-registration/browser-connector.ts', 'apps/admin/src/v2/features/auto-registration/browser-registration-presentation.spec.ts', 'apps/admin/src/v2/features/auto-registration/contracts.ts', 'apps/admin/src/v2/features/auto-registration/useAppleMailboxes.spec.ts', 'apps/admin/src/v2/features/auto-registration/useAppleMailboxes.ts', 'apps/api/src/id-business-v2/auto-registration/apple-mailboxes.controller.ts', 'apps/api/src/id-business-v2/auto-registration/apple-mailboxes.service.ts', 'apps/api/src/id-business-v2/auto-registration/apple-mailboxes.types.ts', 'apps/api/src/id-business-v2/auto-registration/auto-registration.module.ts', 'apps/api/src/id-business-v2/auto-registration/auto-registration.service.ts', 'apps/api/src/id-business-v2/auto-registration/browser-registration.controller.ts', 'apps/api/src/id-business-v2/auto-registration/browser-registration.service.spec.ts', 'apps/api/src/id-business-v2/auto-registration/browser-registration.service.ts', 'apps/api/src/id-business-v2/auto-registration/worker/apple_browser_registration.py', 'apps/api/src/id-business-v2/auto-registration/worker/apple_mailboxes.py', 'apps/api/src/id-business-v2/auto-registration/worker/browser_registration_connector.py', 'apps/api/src/id-business-v2/auto-registration/worker/browser_registration_flow.py', 'apps/api/src/id-business-v2/auto-registration/worker/test_apple_browser_registration_unit.py', 'apps/api/src/id-business-v2/auto-registration/worker/test_browser_registration_connector.py', 'apps/api/src/id-business-v2/auto-registration/worker/test_browser_registration_contract_unit.py', 'apps/api/src/id-business-v2/auto-registration/worker/test_registration_closed_loop_unit.py', 'apps/api/src/id-business-v2/auto-registration/worker/workspace.py', 'docs/AUTO_REGISTRATION_BROWSER_CONNECTOR.md', 'docs/V2_TASKS.md', 'scripts/ci-recharge-check.mjs', 'scripts/ci-recharge-check.test.mjs', 'scripts/ci-recharge-scope.mjs', 'scripts/ci-recharge-scope.test.mjs', 'scripts/ci-registration-protocol-restore-scope.mjs', 'scripts/ci-registration-protocol-restore-scope.test.mjs', 'scripts/production-release/registration-protocol-restore-build.py', 'scripts/production-release/registration-protocol-restore-contract.json', 'scripts/production-release/registration-protocol-restore-dispatch.py', 'scripts/production-release/registration-protocol-restore-release.py', 'scripts/production-release/registration-protocol-restore-release.test.py', 'scripts/start-auto-registration-connector.sh']
+
+PUBLISHED_BUILDS['mailboxVersion'] = {
+    'commit': CURRENT, 'tree': CURRENT_TREE, 'runId': '38925995056', 'attempt': 1,
+    'workflowPath': '.github/workflows/mailbox-version-validation.yml', 'conclusion': 'failure',
+    'validationJobId': 117057560334, 'artifactId': 12056691966,
+    'artifactName': 'mailbox-version-1c339754507f29459d17d75bb84afbee8fba5291-1',
+    'artifactDigest': 'sha256:cfe8d7c40a771687bf452728bc16552fa09e0b2a7e0e9c27c84e3c161377aa7b',
+    'bundleMember': 'mailbox-version-artifact.tar.gz',
+    'bundleSha256': 'cfb91463004179d6cba6935355c9b8f924727a53d2ddcc1616247dfc314cb950',
+    'proofSha256': '64940bbf316c8dcedfac1e8ccb6fa8f65243dbe23a4f28f40bf88b5aa34b7924',
+    'contractSha256': '4cec2f12a1e783072fb87380083c9bd5bff799087e0cfc535ee8033f4ccf1c90',
+    'contractFile': 'mailbox-version-contract.json'}
+
+MAILBOX_VERSION_NATIVE_RECEIPTS = {
+    'release': {
+        'commandId': 'e8683c00-b4c3-41fb-8725-cbba140b164b',
+        'sha256': '4e1be1df2bb32efd507a0403f219e2d506e9b8989a5ca7047fec11584776dc4c',
+        'canonicalSha256': '42e81df043a26ee45fd8ca2e2de28c6129a6a7e00e3b01bc0666f7ca6dfefc34',
+        'result': {'businessActions': 0, 'commit': CURRENT, 'migrationPerformed': False,
+                   'status': 'MAILBOX_SCOPE_VERSION_RECOVERY_DEPLOYED', 'updatedServices': ['api']}},
+    'readback': {
+        'commandId': 'c1ff7353-ebc4-4cc0-9367-8f54a2688bbe',
+        'sha256': '91870ad9cfb39c54961668c63c59252c95efc3fd6a77ada779fecf210ae83a36',
+        'canonicalSha256': 'e7dc973478d67e91583bdbf6aba34b482d3a1b7aed747d6f39431e191b9271b6',
+        'result': {'businessActions': 0, 'commit': CURRENT, 'migrationPerformed': False,
+                   'status': 'MAILBOX_SCOPE_VERSION_RECOVERY_INDEPENDENT_READBACK_VERIFIED',
+                   'updatedServices': ['api']}}}
+
 
 def need(value, code):
     if not value:
@@ -79,10 +115,15 @@ def verify_contract(c):
     browser = history(c)
     shared = json.loads((HERE / 'shared-bank-card-contract.json').read_bytes())
     retained = c['retainedSharedCard']
-    need(retained == {'commit': CURRENT, 'tree': CURRENT_TREE, 'sources': shared['sources'],
+    need(retained == {'commit': SHARED_CARD_COMMIT, 'tree': SHARED_CARD_TREE, 'sources': shared['sources'],
          'afterEngineFiles': shared['afterEngineFiles'],
          'proofSha256': PUBLISHED_BUILDS['sharedCard']['proofSha256'],
          'contractSha256': PUBLISHED_BUILDS['sharedCard']['contractSha256']}, 'SHARED_CARD_INHERITANCE_CHANGED')
+    need(c.get('retainedMailboxVersion') == {'commit': CURRENT, 'tree': CURRENT_TREE,
+         'sources': MAILBOX_VERSION_SOURCES,
+         'proofSha256': PUBLISHED_BUILDS['mailboxVersion']['proofSha256'],
+         'contractSha256': PUBLISHED_BUILDS['mailboxVersion']['contractSha256']},
+         'MAILBOX_VERSION_INHERITANCE_CHANGED')
     withdrawal = c['withdrawal']
     need(withdrawal['restorePaths'] == RESTORE_PATHS and c['publishedBuilds'] == PUBLISHED_BUILDS, 'FROZEN_SCOPE_CHANGED')
     need(set(c['controlFiles']) == set(HISTORICAL_CONTROLS) | {NAME + '-release.py', NAME + '-contract.json'}, 'EXECUTOR_SCOPE_CHANGED')
@@ -146,10 +187,12 @@ def verify_contract(c):
     need(c['predecessorReceipts'] == PREDECESSOR_RECEIPTS
          and set(c['predecessorReceipts']) == {'finalize', 'readback'}
          and c['predecessorReceipts']['finalize']['result'].get('status') == 'SHARED_BANK_CARD_FORWARD_FINALIZED'
-         and c['predecessorReceipts']['finalize']['result'].get('commit') == CURRENT
+         and c['predecessorReceipts']['finalize']['result'].get('commit') == SHARED_CARD_COMMIT
          and c['predecessorReceipts']['readback']['result'].get('status') == 'SHARED_BANK_CARD_INDEPENDENT_READBACK_VERIFIED'
-         and c['predecessorReceipts']['readback']['result'].get('commit') == CURRENT,
+         and c['predecessorReceipts']['readback']['result'].get('commit') == SHARED_CARD_COMMIT,
          'PREDECESSOR_PUBLICATION_NOT_VERIFIED')
+    need(c.get('mailboxVersionReceipts') == MAILBOX_VERSION_NATIVE_RECEIPTS,
+         'MAILBOX_VERSION_PUBLICATION_NOT_VERIFIED')
 
 
 def renamed(code):
@@ -224,12 +267,28 @@ def sqlite_receipt(d, directory, c, expected_logical=None):
 
 
 def verify_proof(proof, plan, c, payload, h):
-    need(proof.get('withdrawal') == c['withdrawal'] and proof.get('retainedSharedCard') == c['retainedSharedCard'],
+    need(proof.get('withdrawal') == c['withdrawal'] and proof.get('retainedSharedCard') == c['retainedSharedCard']
+         and proof.get('retainedMailboxVersion') == c['retainedMailboxVersion'],
          'WITHDRAWAL_PROOF_CHANGED')
     need(proof.get('apiModules', {}).get(TYPE_DECLARATION) == TYPE_DECLARATION_SHA
          and not {TYPE_DECLARATION.removesuffix('.d.ts') + suffix for suffix in ('.js', '.js.map')}
              & set(proof['apiModules']), 'TYPE_DECLARATION_SCOPE_CHANGED')
     return private_namespace(OLD_NAME + '-release.py')['verify_proof'](proof, plan, c, payload, h)
+
+
+def retained_mailbox(d, target, a):
+    for name, expected in MAILBOX_VERSION_SOURCES.items():
+        path = target / name
+        need(not path.is_symlink() and path.is_file() and digest(path.read_bytes()) == expected,
+             'RETAINED_MAILBOX_HOST_SOURCE_CHANGED')
+    a.verify_modules(d, target, MAILBOX_VERSION_MODULES)
+
+
+def baseline(d, h, a, finite, c, expected=None):
+    value = private_namespace(OLD_NAME + '-release.py', {'sqlite_receipt': sqlite_receipt})['baseline'](
+        d, h, a, finite, c, expected)
+    retained_mailbox(d, value[0], a)
+    return value
 
 
 def smoke(d, target, states, c, proof, receipt, h, a, finite):
@@ -242,6 +301,7 @@ def smoke(d, target, states, c, proof, receipt, h, a, finite):
         projected['baselineWorkerFiles'].pop(name)
     private_namespace(OLD_NAME + '-release.py', {'sqlite_receipt': sqlite_receipt})['smoke'](
         d, target, states, projected, proof, receipt, h, a, finite)
+    retained_mailbox(d, target, a)
     for root, removed in [('/app/apps/api/dist/', c['withdrawal']['apiRemovals']),
                           ('/app/' + WORKER, c['withdrawal']['workerRemovals'])]:
         for name in removed:
@@ -253,7 +313,7 @@ def release_namespace(c):
     ns = private_namespace(OLD_NAME + '-release.py', {'verify_contract': verify_contract,
         'verify_proof': verify_proof, 'sqlite_inspection_source': sqlite_inspection_source,
         'sqlite_receipt': sqlite_receipt, 'validate_sqlite_receipt': validate_sqlite_receipt, 'smoke': smoke,
-        'remove_host_sources': remove_host_sources})
+        'remove_host_sources': remove_host_sources, 'baseline': baseline})
     tree = ast.parse((HERE / (OLD_NAME + '-release.py')).read_bytes())
     function = next(n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == 'release')
     patched_layers = patched_sources = 0

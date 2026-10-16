@@ -3,8 +3,8 @@ import { lstatSync, readFileSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 // One forward-only browser withdrawal, bound to its exact reviewed ancestor.
-export const registrationProtocolRestoreBase = '7e19c6c78afb1d31e8e3a971653edefbfe48778f';
-export const registrationProtocolRestoreTree = '6cc7525f60aaa75a79ebf87227a5efcfc25a873b';
+export const registrationProtocolRestoreBase = '65e5f50a3550c451699b230f9d7b66f3e2d713b2';
+export const registrationProtocolRestoreTree = 'bd1666ddc644fbf65dc72e2c3af0f12c35c7abe7';
 export const registrationProtocolRestorePaths = Object.freeze([
   '.github/workflows/quality.yml',
   '.github/workflows/registration-protocol-restore-validation.yml',
@@ -184,7 +184,7 @@ export function isRegistrationProtocolRestoreOnly(paths, options = {}) {
     c.frozen !== true ||
     c.scope !== 'REGISTRATION_PROTOCOL_RESTORE' ||
     c.migration !== null ||
-    c.expectedCurrent !== 'e84a44d86c289354bc7ed15dcd0ec68f7210e18e' ||
+    c.expectedCurrent !== '1c339754507f29459d17d75bb84afbee8fba5291' ||
     c.schemaSha256 !== '51a4d25b1302458145f560acc32f25b89a7bd65fea64dc72b254dc56da430100' ||
     c.runtimeEvidence?.status !== 'VERIFIED' ||
     c.runtimeEvidence.commit !== c.expectedCurrent ||

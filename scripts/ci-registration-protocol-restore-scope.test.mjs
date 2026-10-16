@@ -19,9 +19,9 @@ function fixture() {
   const reviewed = Object.fromEntries(retained.map((name) => [name, 'a'.repeat(64)]));
   const contract = {
     version: 1,
-    expectedCurrent: 'e84a44d86c289354bc7ed15dcd0ec68f7210e18e',
+    expectedCurrent: '1c339754507f29459d17d75bb84afbee8fba5291',
     schemaSha256: '51a4d25b1302458145f560acc32f25b89a7bd65fea64dc72b254dc56da430100',
-    runtimeEvidence: { status: 'VERIFIED', commit: 'e84a44d86c289354bc7ed15dcd0ec68f7210e18e' },
+    runtimeEvidence: { status: 'VERIFIED', commit: '1c339754507f29459d17d75bb84afbee8fba5291' },
     frozen: true,
     scope: 'REGISTRATION_PROTOCOL_RESTORE',
     migration: null,

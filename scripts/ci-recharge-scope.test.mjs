@@ -86,9 +86,9 @@ test('registration protocol restore admits only exact deletions and preserves th
       migration: null,
       sourceBaseline: registrationProtocolRestoreBase,
       sourceBaselineTree: registrationProtocolRestoreTree,
-      expectedCurrent: 'e84a44d86c289354bc7ed15dcd0ec68f7210e18e',
+      expectedCurrent: '1c339754507f29459d17d75bb84afbee8fba5291',
       schemaSha256: '51a4d25b1302458145f560acc32f25b89a7bd65fea64dc72b254dc56da430100',
-      runtimeEvidence: { status: 'VERIFIED', commit: 'e84a44d86c289354bc7ed15dcd0ec68f7210e18e' },
+      runtimeEvidence: { status: 'VERIFIED', commit: '1c339754507f29459d17d75bb84afbee8fba5291' },
       expectedGitChanges: paths,
       withdrawal: { sourceRemovals: { ...removed } },
       reviewedFileHashes: reviewed

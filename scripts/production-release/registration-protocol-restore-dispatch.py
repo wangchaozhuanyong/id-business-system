@@ -52,16 +52,19 @@ def namespace(overrides=None):
 def prepare_plan():
     _, contract = verified_contract()
     receipts = {}
-    for stage, binding in contract['predecessorReceipts'].items():
-        need(stage in {'finalize', 'readback'}, 'PREDECESSOR_RECEIPT_SCOPE_CHANGED')
-        raw = execute('aws', 'ssm', 'get-command-invocation', '--region', 'ap-northeast-1',
-            '--command-id', binding['commandId'], '--instance-id', r.INSTANCE, '--output', 'json')
-        verify_native_receipt(raw, binding)
-        receipts[stage] = raw
-    need(set(receipts) == {'finalize', 'readback'}, 'PREDECESSOR_NOT_INDEPENDENTLY_VERIFIED')
+    for prefix, bindings, stages in [
+            ('shared-card', contract['predecessorReceipts'], {'finalize', 'readback'}),
+            ('mailbox-version', contract['mailboxVersionReceipts'], {'release', 'readback'})]:
+        need(set(bindings) == stages, 'PREDECESSOR_RECEIPT_SCOPE_CHANGED')
+        for stage, binding in bindings.items():
+            raw = execute('aws', 'ssm', 'get-command-invocation', '--region', 'ap-northeast-1',
+                '--command-id', binding['commandId'], '--instance-id', r.INSTANCE, '--output', 'json')
+            verify_native_receipt(raw, binding)
+            receipts[prefix + '-' + stage] = raw
+    need(len(receipts) == 4, 'PREDECESSOR_NOT_INDEPENDENTLY_VERIFIED')
     plan, admitted = namespace()['prepare_plan']()
     for stage, raw in receipts.items():
-        (OUTPUT / ('shared-card-' + stage + '-native.json')).write_bytes(raw)
+        (OUTPUT / (stage + '-native.json')).write_bytes(raw)
     return plan, admitted
 
 

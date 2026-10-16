@@ -166,7 +166,8 @@ def reconstruct(context, c, *, include_browser):
             continue
         overlay(context, layer['commit'], {**layer['sources'], **layer['validationSources']})
     overlay(context, settings['sourceReviewCommit'], settings['sources'])
-    overlay(context, r.CURRENT, c['retainedSharedCard']['sources'])
+    overlay(context, c['retainedSharedCard']['commit'], c['retainedSharedCard']['sources'])
+    overlay(context, c['retainedMailboxVersion']['commit'], c['retainedMailboxVersion']['sources'])
     if include_browser:
         # Published validation bytes are not the installed runtime test bytes.
         # Restore the same three immutable e90 files used by the prior builder.
@@ -237,6 +238,8 @@ def api_delta(before, after, approved):
         name = r.TYPE_DECLARATION.removesuffix('.d.ts') + suffix
         need(before.get(name) == after.get(name), 'TYPE_ONLY_JAVASCRIPT_CHANGED')
     need(after.get(r.TYPE_DECLARATION) == r.TYPE_DECLARATION_SHA, 'TYPE_DECLARATION_NOT_REPRODUCED')
+    need(all(before.get(n) == after.get(n) == v for n, v in r.MAILBOX_VERSION_MODULES.items()),
+         'RETAINED_MAILBOX_MODULE_CHANGED')
     projected = {n: v for n, v in before.items() if n not in removed}
     return r.helper(r.OLD_NAME + '-build.py').api_delta(projected, after, approved)
 
@@ -250,12 +253,15 @@ def namespace():
 def verify_baseline_union(c, proofs):
     browser = history_browser(c)
     need(proofs['browser']['sources'] == browser['sources']
-         and proofs['sharedCard']['sources'] == c['retainedSharedCard']['sources'], 'PUBLISHED_CHAIN_CHANGED')
+         and proofs['sharedCard']['sources'] == c['retainedSharedCard']['sources']
+         and proofs['mailboxVersion']['sources'] == c['retainedMailboxVersion']['sources']
+         and proofs['mailboxVersion']['modules'] == r.MAILBOX_VERSION_MODULES, 'PUBLISHED_CHAIN_CHANGED')
     api = dict(browser['baselineApiFiles'])
     admin = dict(browser['runtimeAdminFiles'])
     for layer in ('browser', 'onlineSettings', 'sharedCard'):
         api.update({n: v for n, v in proofs[layer]['apiModules'].items() if n.endswith('.js')})
         admin.update(proofs[layer]['adminFiles'])
+    api.update({n: v for n, v in proofs['mailboxVersion']['modules'].items() if n.endswith('.js')})
     expected = {'baselineApiFiles': api, 'runtimeAdminFiles': admin,
         'baselineWorkerFiles': {**browser['baselineWorkerFiles'], **proofs['browser']['workerFiles']},
         'baselineAdminFiles': proofs['sharedCard']['adminFiles'],
@@ -286,7 +292,8 @@ def build():
     path = OUTPUT / 'prepared-build-proof.json'
     proof = json.loads(path.read_bytes())
     c = json.loads(CONTRACT.read_bytes())
-    proof.update(withdrawal=c['withdrawal'], retainedSharedCard=c['retainedSharedCard'])
+    proof.update(withdrawal=c['withdrawal'], retainedSharedCard=c['retainedSharedCard'],
+                 retainedMailboxVersion=c['retainedMailboxVersion'])
     path.write_text(json.dumps(proof, sort_keys=True, indent=2) + '\n')
 
 

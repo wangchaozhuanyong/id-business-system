@@ -458,7 +458,7 @@
     "common/interceptors/server-timing.interceptor.js": "cb2cd004f86d065d32dac48e5a0edcb2d65116aac94446a7ac34288d7e1800cb",
     "common/interceptors/skip-api-response.decorator.js": "8c4da9336f81a81433cef3fc5af4a65eb6828c65473d2ea6be38bec4b19c3bcc",
     "common/pagination.js": "f52f1b27b338f40059e52146cd4c83d49acce5c6ba2eb63269e70ddf6ecde00c",
-    "common/prisma/bump-v2-scope-versions.js": "a8937f8a6e7c48b3161ae88c5bb40c13165ef81be57a3461d02e3e4cf33224c9",
+    "common/prisma/bump-v2-scope-versions.js": "fa550e3611be675d6858529414ca534eab7d294e5f99f492f1f1eee98f9fec12",
     "common/prisma/mysql-transaction-lock.js": "2428994bdd5c39d8de30f85c64138cd3cabc5dfcbf5fd0f7f080b87a5d11baf3",
     "common/prisma/prisma.module.js": "ad64cbc0b365a4b983c8675793fb9a959029cc7363054d2d7c6e7cde383452f9",
     "common/prisma/prisma.service.js": "60b5d78a14084d2ebefae9dfd8e4a7d4407412cf18b030067f5aff2649af4887",
@@ -1209,7 +1209,7 @@
   },
   "configurationSha256": {
     ".env.aws.production": "088a61075fb2ba01f04249fc78e31150ee7cd571f0708fe0c28ba38ac53daafa",
-    "compose.release.json": "0ab8c5b8c498f5bb5c45fe48cf4d82e36c6e3b5a0100dbc09c41ff1243c3057f",
+    "compose.release.json": "23d49e3557c2ab6352641e1f6324df80dba4bc0add0cd26a050e190ef6429514",
     "docker-compose.aws-mysql.yml": "953c6264f157b00218f2a019d5e2c0b6bc4a34f687f2ec42ad782e0009e7672c"
   },
   "controlFiles": [
@@ -1269,7 +1269,7 @@
     "scripts/production-release/registration-protocol-restore-release.py",
     "scripts/production-release/registration-protocol-restore-release.test.py"
   ],
-  "current": "/opt/id-business-v2/releases/20261016T145014Z-e84a44d86c28-shared-bank-card",
+  "current": "/opt/id-business-v2/releases/20261016T155600Z-1c339754507f-mailbox-version",
   "databaseReceipt": {
     "accountCount": 38,
     "accountsSha256": "f05c5ac13263609999fc88f3a228f675c459176112221decc28049168710bf38",
@@ -1656,7 +1656,7 @@
     "rpcConnected": true,
     "stopping": false
   },
-  "expectedCurrent": "e84a44d86c289354bc7ed15dcd0ec68f7210e18e",
+  "expectedCurrent": "1c339754507f29459d17d75bb84afbee8fba5291",
   "expectedGitChanges": [
     ".github/workflows/quality.yml",
     ".github/workflows/registration-protocol-restore-validation.yml",
@@ -1742,12 +1742,12 @@
     "workspace-drag-release.py": "28bcfed29eb45d66ece16b943e63b97f5f5500dacfc345cb23642bb4f9931fb0"
   },
   "hostSourceInheritance": {
-    "commit": "e84a44d86c289354bc7ed15dcd0ec68f7210e18e",
+    "commit": "1c339754507f29459d17d75bb84afbee8fba5291",
     "files": {
       "apps/api/src/id-business-v2/auto-registration/worker/release_safety.py": "c6bda052bfab611c4798a40b8c637a48a23dc9c9da0912b7028e61d719b7146b"
     },
-    "manifestSha256": "d078abcbd7c895b7e81f73d7893f231fc55eabca2012672725bbe114b9cb2e64",
-    "release": "/opt/id-business-v2/releases/20261016T145014Z-e84a44d86c28-shared-bank-card"
+    "manifestSha256": "844bc0bbcf1fba90a348c246160e4c61b2f684fc9cd8ba55f2db8f5725862f43",
+    "release": "/opt/id-business-v2/releases/20261016T155600Z-1c339754507f-mailbox-version"
   },
   "identityNative": {
     "artifactDigest": "sha256:3ab38342a84222474fcc02566c88e51719c9dd2424cc09118db050deb45f7861",
@@ -1798,7 +1798,33 @@
     "apps/api/src/id-business-v2/workspace/mail-health.spec.ts": "0dd168fe3032a5b46e4d3eaf9e43ea5f6a09b01aaf0e54fe87d93b6e3dbbf4c8",
     "scripts/acceptance-v2-mailbox-realtime.mjs": "ec8ae2f1b5e62679942f30e25ac9df6afeecb9d421b95991a8e4c9f333fb4af5"
   },
-  "manifestSha256": "d078abcbd7c895b7e81f73d7893f231fc55eabca2012672725bbe114b9cb2e64",
+  "mailboxVersionReceipts": {
+    "readback": {
+      "canonicalSha256": "e7dc973478d67e91583bdbf6aba34b482d3a1b7aed747d6f39431e191b9271b6",
+      "commandId": "c1ff7353-ebc4-4cc0-9367-8f54a2688bbe",
+      "result": {
+        "businessActions": 0,
+        "commit": "1c339754507f29459d17d75bb84afbee8fba5291",
+        "migrationPerformed": false,
+        "status": "MAILBOX_SCOPE_VERSION_RECOVERY_INDEPENDENT_READBACK_VERIFIED",
+        "updatedServices": ["api"]
+      },
+      "sha256": "91870ad9cfb39c54961668c63c59252c95efc3fd6a77ada779fecf210ae83a36"
+    },
+    "release": {
+      "canonicalSha256": "42e81df043a26ee45fd8ca2e2de28c6129a6a7e00e3b01bc0666f7ca6dfefc34",
+      "commandId": "e8683c00-b4c3-41fb-8725-cbba140b164b",
+      "result": {
+        "businessActions": 0,
+        "commit": "1c339754507f29459d17d75bb84afbee8fba5291",
+        "migrationPerformed": false,
+        "status": "MAILBOX_SCOPE_VERSION_RECOVERY_DEPLOYED",
+        "updatedServices": ["api"]
+      },
+      "sha256": "4e1be1df2bb32efd507a0403f219e2d506e9b8989a5ca7047fec11584776dc4c"
+    }
+  },
+  "manifestSha256": "844bc0bbcf1fba90a348c246160e4c61b2f684fc9cd8ba55f2db8f5725862f43",
   "migration": null,
   "parentContractSha256": "9d5f34916800fb885cb8aabd98bb550900775f47f17d666c8ad40a26f65215ae",
   "parentControls": {
@@ -1958,6 +1984,23 @@
       "validationJobId": 116991362286,
       "workflowPath": ".github/workflows/registration-browser-validation.yml"
     },
+    "mailboxVersion": {
+      "artifactDigest": "sha256:cfe8d7c40a771687bf452728bc16552fa09e0b2a7e0e9c27c84e3c161377aa7b",
+      "artifactId": 12056691966,
+      "artifactName": "mailbox-version-1c339754507f29459d17d75bb84afbee8fba5291-1",
+      "attempt": 1,
+      "bundleMember": "mailbox-version-artifact.tar.gz",
+      "bundleSha256": "cfb91463004179d6cba6935355c9b8f924727a53d2ddcc1616247dfc314cb950",
+      "commit": "1c339754507f29459d17d75bb84afbee8fba5291",
+      "conclusion": "failure",
+      "contractFile": "mailbox-version-contract.json",
+      "contractSha256": "4cec2f12a1e783072fb87380083c9bd5bff799087e0cfc535ee8033f4ccf1c90",
+      "proofSha256": "64940bbf316c8dcedfac1e8ccb6fa8f65243dbe23a4f28f40bf88b5aa34b7924",
+      "runId": "38925995056",
+      "tree": "06fc09408adb26dd753456a9e8ff490f3e3cd308",
+      "validationJobId": 117057560334,
+      "workflowPath": ".github/workflows/mailbox-version-validation.yml"
+    },
     "onlineSettings": {
       "artifactDigest": "sha256:1cb398fc3c82bfa5bafd9b66dd1bee58c010aead2f911daf7631e4f5a0dddad0",
       "artifactId": 12049742213,
@@ -2051,6 +2094,15 @@
     "docs/AUTO_REGISTRATION_BROWSER_CONNECTOR.md",
     "scripts/start-auto-registration-connector.sh"
   ],
+  "retainedMailboxVersion": {
+    "commit": "1c339754507f29459d17d75bb84afbee8fba5291",
+    "contractSha256": "4cec2f12a1e783072fb87380083c9bd5bff799087e0cfc535ee8033f4ccf1c90",
+    "proofSha256": "64940bbf316c8dcedfac1e8ccb6fa8f65243dbe23a4f28f40bf88b5aa34b7924",
+    "sources": {
+      "apps/api/src/common/prisma/bump-v2-scope-versions.ts": "c775e89856c89e3a94138698b489c1be79b5fb26f94677ee58a8008024849b7e"
+    },
+    "tree": "06fc09408adb26dd753456a9e8ff490f3e3cd308"
+  },
   "retainedSharedCard": {
     "afterEngineFiles": {
       ".dockerignore": "6eb0e0e877d4ee3c5c6b697383b0280890214db3d80b07d100f7a612d1e62858",
@@ -2233,20 +2285,20 @@
     "apps/api/src/id-business-v2/auto-registration/worker/test_registration_closed_loop_unit.py": "50faaedb25008f3b73dcc7e66060810b4c09ad6fc6587d6fbc796fce13ae35af",
     "apps/api/src/id-business-v2/auto-registration/worker/workspace.py": "6bcb2050633db830068fd1a1b1a30d3dd75bf45f24aef3ab5b9c398d632e7237",
     "docs/V2_TASKS.md": "397ff8522abe513938d8c950cdcff8de263531f0d0fe23623034f20b1eef4b1b",
-    "scripts/ci-recharge-check.mjs": "557dc6da5c079d3aa3a7abaaa7b7825b014a2c1482deb5a784c68f429331d5c8",
-    "scripts/ci-recharge-check.test.mjs": "ca07b49562487d470bee8819674352af87017010a021bc1af842b05c47015635",
-    "scripts/ci-recharge-scope.mjs": "e4571172b5ec9177bc59e574e222b367cd496300bbcc42054f5f7b6768aa5917",
-    "scripts/ci-recharge-scope.test.mjs": "6a3bdc6afb81bb282714f0947613accd4e31e559f3cb999efbc3c296ae15892c",
-    "scripts/ci-registration-protocol-restore-scope.mjs": "9e40ccdb86fd1a4f92e18377c20aedb5212518a4759a134286eb8b8308382422",
-    "scripts/ci-registration-protocol-restore-scope.test.mjs": "0136066836fb40f001b13f7bfe41466b72316591446d23f821d5c760d8af9e33",
-    "scripts/production-release/registration-protocol-restore-build.py": "7606c530e01f89893855a0e5e32994c978dcafc0c7f449762de6bfba2cb97d49",
-    "scripts/production-release/registration-protocol-restore-dispatch.py": "25ec6e5d49b76870795a96ad8aac438479c0fe86fbd2ca6453a904f8e869f1c0",
-    "scripts/production-release/registration-protocol-restore-release.py": "2612a778c977f8048beb45d6faa70beeb326f52adce2b6c4f65024c20802f2a4",
-    "scripts/production-release/registration-protocol-restore-release.test.py": "e6fc5b573522bbfd97bc9bde6ec4958a0e9ef0bc685da79d2d037b691075b5b4"
+    "scripts/ci-recharge-check.mjs": "bc111dd64ee84d58ca340ae96ad5145cc53a18df68bf2c5f934691e8d4a0fb45",
+    "scripts/ci-recharge-check.test.mjs": "75ba11f8cd22c9d9149723c1389fb6d3296c00e1d7985a34b71c5e3dab0656a3",
+    "scripts/ci-recharge-scope.mjs": "b747bf89be9f087291216b3310579d7102260bdc0b2de587f8bd28d66aa1a272",
+    "scripts/ci-recharge-scope.test.mjs": "8d225c4aa5ce0d0655611355412524d04637d955c46d928eac7de0181331cf4a",
+    "scripts/ci-registration-protocol-restore-scope.mjs": "83bfa5900045a1a334d6172701726fb540d200502a69475240c8fd83987ed402",
+    "scripts/ci-registration-protocol-restore-scope.test.mjs": "05c73dc95890682c91c3ce321d3da4e2ab82e3eb3386280075b169ffb7eba794",
+    "scripts/production-release/registration-protocol-restore-build.py": "d21c12e3202394b0c762c7d29f3cbf438b59540dbedae8a6652f4b992ca9ea2d",
+    "scripts/production-release/registration-protocol-restore-dispatch.py": "ddc29ef0751282c3e18ca231b2e32428dbb0e726278a421447876c7940796969",
+    "scripts/production-release/registration-protocol-restore-release.py": "323d7303b125d64d9ca8cd1a375eba5b2d8460dc958619fe7b40dd120ae877f6",
+    "scripts/production-release/registration-protocol-restore-release.test.py": "155958926f802237985fb3d43ecec9475a86944c0239d147e363b2609e475c06"
   },
   "roleSourceCommits": {
     "admin": "e84a44d86c289354bc7ed15dcd0ec68f7210e18e",
-    "api": "e84a44d86c289354bc7ed15dcd0ec68f7210e18e",
+    "api": "1c339754507f29459d17d75bb84afbee8fba5291",
     "online-recharge": "55d5ee5504c9d8d4218632e8cb8eb508923ad9f8"
   },
   "runtimeAdminFiles": {
@@ -3990,9 +4042,115 @@
       "sourceCommit": "561b834dd3f481d98a99786667a2844c842b24bd",
       "verifiedAlsoAtCommit": "d0c4f6215b396437685ce13201760ff93758726b"
     },
+    "businessTables": {
+      "id_business_v2_bank_recharge_cards": {
+        "count": 1,
+        "rowsSha256": "ae05fb4e25dcc763785a22a1df3fbdffdb39c86fb1cc97eb65d6ddefc32ba33f"
+      },
+      "id_business_v2_bank_recharge_currencies": {
+        "count": 29,
+        "rowsSha256": "f56c3ac05e558c409c6072560f2c6540afaba53fe7b5a66c8c5f575f8d9e92b2"
+      },
+      "id_business_v2_bank_recharge_orders": {
+        "count": 0,
+        "rowsSha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+      },
+      "id_business_v2_bank_recharge_subscriptions": {
+        "count": 0,
+        "rowsSha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+      },
+      "id_business_v2_chatgpt_accounts": {
+        "count": 38,
+        "rowsSha256": "01e29a0e662b43618dbd629e43e8ddc334882c6396235f8fac57bef86b3fe68e"
+      },
+      "id_business_v2_recharge_address_uses": {
+        "count": 0,
+        "rowsSha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+      },
+      "id_business_v2_recharge_addresses": {
+        "count": 22,
+        "rowsSha256": "538e46fc522f1450dbb5729e407ad316f6730dffb3ace7c413e6f6e167400eec"
+      },
+      "id_business_v2_recharge_browser_settings": {
+        "count": 2,
+        "rowsSha256": "9e3409d0fe10cf9b886c3961bec8766c9d4bae7672bf23f7ae3e625c740e5110"
+      },
+      "id_business_v2_recharge_card_names": {
+        "count": 2,
+        "rowsSha256": "c6b22c5a1f52ea2a805af2c9c7de1af7958abc2c3188ea08f811b4469107018f"
+      },
+      "id_business_v2_recharge_connection_profiles": {
+        "count": 0,
+        "rowsSha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+      },
+      "id_business_v2_recharge_jobs": {
+        "count": 26,
+        "rowsSha256": "9174548210b214cfe9835ed2d6f1732b263439c4a24a2ab53eb74fe0afa31d33"
+      },
+      "id_business_v2_recharge_login_networks": {
+        "count": 0,
+        "rowsSha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+      },
+      "id_business_v2_recharge_names": {
+        "count": 0,
+        "rowsSha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+      },
+      "id_business_v2_recharge_payment_caps": {
+        "count": 3,
+        "rowsSha256": "1accb4ceb757b5cc3eea13259f256a405cd7a8654d3a7fd1cd599f4d86db9cad"
+      },
+      "id_business_v2_recharge_proxies": {
+        "count": 2,
+        "rowsSha256": "4c406a31d6addf7838f85812a4a85f099e447a364af541b752bb57c8ee15d862"
+      },
+      "id_business_v2_recharge_records": {
+        "count": 1,
+        "rowsSha256": "3903d8e9d2a781c8d83e16d534c558ec08204f739ad070867fb33070513ae1cc"
+      },
+      "online_recharge_addresses": {
+        "count": 10,
+        "rowsSha256": "c754eb5db3fba42ef36ae91c716eafe9db07853e4ce29a3801563648a8e0fff5"
+      },
+      "online_recharge_bills": {
+        "count": 1,
+        "rowsSha256": "32170cdcc0f1b5827a20fea60c9818407a47123f15e3dba090e8ea3c4b58d1b2"
+      },
+      "online_recharge_cards": {
+        "count": 1,
+        "rowsSha256": "feacb350a550ebcf06f29578ef66cf3bae561b90171075d5e326744391fbb914"
+      },
+      "online_recharge_codes": {
+        "count": 20,
+        "rowsSha256": "6edf0b2b2804c5f680cdc2c1f86fe0e8050f6988cdfe1821c6368a8ea03bcc9a"
+      },
+      "online_recharge_config": {
+        "count": 1,
+        "rowsSha256": "72b959f6617ad784011704e120c3b6ec86d3fb013682b57188551eb3619e48b9"
+      },
+      "online_recharge_events": {
+        "count": 416,
+        "rowsSha256": "c3dac918cb6ed8c8ff7b922aa8bb2ab9c2185fa9a718f9a5eeb6b4ece89756d2"
+      },
+      "online_recharge_order_sync": {
+        "count": 0,
+        "rowsSha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+      },
+      "online_recharge_proxies": {
+        "count": 0,
+        "rowsSha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+      },
+      "online_recharge_tasks": {
+        "count": 32,
+        "rowsSha256": "c5229bbb547a511616a3f13aee547a09ed8d43160758391b4ecd02cab06f2619"
+      },
+      "online_recharge_webhook_receipts": {
+        "count": 0,
+        "rowsSha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+      }
+    },
     "businessWrites": 0,
-    "commandId": "2cd89d56-d0a1-4748-9235-fd23a3ca82b0",
-    "commit": "e84a44d86c289354bc7ed15dcd0ec68f7210e18e",
+    "commandId": "92521b9d-73d1-43f9-9da0-aaa132bea33f",
+    "commit": "1c339754507f29459d17d75bb84afbee8fba5291",
     "currentStable": true,
     "instanceId": "i-05836da38606e633c",
     "inventories": {
@@ -4001,7 +4159,7 @@
         "count": 1703
       },
       "api": {
-        "canonicalSha256": "86b79d46031efde7bc9a6862f346909f8ca2e996715a60129fb1d0dbf99803f4",
+        "canonicalSha256": "1dc4338f9a7cf5ebe9587d1d1c81e3e4c818ac7fa69fa39af7eb82fb40e0f510",
         "count": 595
       },
       "client": {
@@ -4018,8 +4176,8 @@
       }
     },
     "maintenanceReleased": true,
-    "nativeSha256": "a6f278ebff8fe8f8f238eecee56ec16818578368e09582c9528d378975731fd6",
-    "receiptSha256": "6d8474a468fad1a90e0756f54747c9465121b3a07917738b71c5f97e27bf5b05",
+    "nativeSha256": "2229134eabf828b6395915b312dad4ca3d6d5539dc450ab70dc75b5d98c3f3e1",
+    "receiptSha256": "b49333e5c38acfc62b6faa6c0723ca3a8b5049e5b372e7256eb71598525a71dc",
     "registrationStarts": 0,
     "runtimeDependencyFiles": {
       "apps/api/package.json": "f8a9cd054478af472964facc3b70012fef70a3e63f0b55376582d57e691acd2c",
@@ -4028,7 +4186,7 @@
       "packages/shared/package.json": "e18c794dd7eb3e66ce5757be3f6c1e0419a23e0d6e07f762dd45f1dde69a1153"
     },
     "status": "VERIFIED",
-    "tree": "911664181fa938f4065e2cf5d175ffb522e155d1"
+    "tree": "06fc09408adb26dd753456a9e8ff490f3e3cd308"
   },
   "runtimePrismaClientFiles": {
     "client.d.ts": "d5eb5865d4cbaa9985cc3cfb920b230cdcf3363f1e70903a08dc4baab80b0ce1",
@@ -4079,12 +4237,12 @@
       "status": "running"
     },
     "api": {
-      "containerId": "5b0800e3cc2dea623ea4e3ed2fba69728aeec7d1c89deab2673f589955dec7be",
+      "containerId": "4ab61ebf631334c826753b573c3426f2e8e611888dddca0ed4518fb78ff362ec",
       "environmentSha256": "9ffb49fbaa3c1b6d67df07fcedabc538678dc6a4aed2489b99a62a2368d10d9f",
       "health": "healthy",
-      "image": "sha256:b05a1e1ca5ceb590245df048f29cdce891da566071c33ccbbd1e3bb2afb43be8",
-      "reference": "id-business-v2-shared-bank-card:e84a44d86c289354bc7ed15dcd0ec68f7210e18e-38916394747-api",
-      "startedAtSha256": "753edefc7c0aed54158198675ebb5a3449f827784b45523bcfda1579327fd753",
+      "image": "sha256:4eedbb0749757d96e5fea6f51d7875b332e5e7acb834980ff6b1d7cc54322740",
+      "reference": "id-business-v2-mailbox-version:1c339754507f29459d17d75bb84afbee8fba5291-38925995056",
+      "startedAtSha256": "11c1f687be772faa24e812afbd9c7425fc9cd8b920a1feaa4bcac86de6f5b546",
       "status": "running"
     },
     "auto-recharge": {
@@ -4133,17 +4291,17 @@
       "status": "running"
     },
     "online-recharge": {
-      "containerId": "20e412e6dc7bc24e0838bc05826e7b1c1c62069d7d97a9ba5ab8576b7238deb2",
+      "containerId": "4b7e1c8697943b61269e6805fa5dbdb922b131d71d935a753043220ce46f6264",
       "environmentSha256": "60bb48bbd6e03a4ceebe245c8405f248d0c682a27287aabb17c1d3573e50ad37",
       "health": "healthy",
       "image": "sha256:cc59767525bcd39755d02283aec537476d82772ae5b3aeabf67e5118efb06440",
       "reference": "id-business-v2-online-settings:55d5ee5504c9d8d4218632e8cb8eb508923ad9f8-38909769886-online-recharge",
-      "startedAtSha256": "f44d0043d95317c514f5461be7d573c85d111fac85fcdddfd224ac1983e15a72",
+      "startedAtSha256": "7340a45b0cfe19476ce1ff87d1839a0777e06ee0a123714ae2e7d344995b7226",
       "status": "running"
     }
   },
-  "sourceBaseline": "7e19c6c78afb1d31e8e3a971653edefbfe48778f",
-  "sourceBaselineTree": "6cc7525f60aaa75a79ebf87227a5efcfc25a873b",
+  "sourceBaseline": "65e5f50a3550c451699b230f9d7b66f3e2d713b2",
+  "sourceBaselineTree": "bd1666ddc644fbf65dc72e2c3af0f12c35c7abe7",
   "sourceDeltaPaths": [
     ".github/workflows/quality.yml",
     ".github/workflows/registration-protocol-restore-validation.yml",
@@ -4205,12 +4363,12 @@
     "hostFileRead": false,
     "kind": "IMMUTABLE_GIT_INPUTS_ONLY",
     "runtimeFileRead": false,
-    "sourceCommit": "7e19c6c78afb1d31e8e3a971653edefbfe48778f",
-    "sourceTree": "6cc7525f60aaa75a79ebf87227a5efcfc25a873b"
+    "sourceCommit": "65e5f50a3550c451699b230f9d7b66f3e2d713b2",
+    "sourceTree": "bd1666ddc644fbf65dc72e2c3af0f12c35c7abe7"
   },
   "sourceProjectionSha256": {
     "adminSourceProjection": "49df5e2744558a2c5da46942353fef96bdd2a808731d907b45473f509088e048",
-    "roleSourceProjections": "c503fd32cabed9a48fa0470b17ee28ca2ff48685586232c3039091308e6c48f9"
+    "roleSourceProjections": "ee98a2f35075eee02e3a9b4c98c9096c437d78548c2292dde909dbd6ad772e13"
   },
   "sourceTreeInputs": {},
   "sources": {
