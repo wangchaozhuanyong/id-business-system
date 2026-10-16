@@ -1,5 +1,7 @@
 import {
   isRegistrationFlowEvidenceOnly,
+  isRegistrationFlowEvidenceControlRepair,
+  registrationFlowEvidenceRepairBase,
   registrationFlowEvidenceBase,
   registrationFlowEvidenceWorker,
   registrationFlowEvidenceAcceptance
@@ -83,7 +85,17 @@ const registrationFlowEvidenceOnly =
     base,
     baseTree: execFileSync('git', ['rev-parse', base + '^{tree}'], { encoding: 'utf8' }).trim()
   });
-if (registrationFlowEvidenceOnly && ['guards', 'api', 'admin', 'release-controls'].includes(part)) {
+const registrationFlowEvidenceControlRepair =
+  mode === 'ci-only' &&
+  base === registrationFlowEvidenceRepairBase &&
+  isRegistrationFlowEvidenceControlRepair(changed, {
+    base,
+    baseTree: execFileSync('git', ['rev-parse', base + '^{tree}'], { encoding: 'utf8' }).trim()
+  });
+if (
+  (registrationFlowEvidenceOnly && ['guards', 'api', 'admin', 'release-controls'].includes(part)) ||
+  (registrationFlowEvidenceControlRepair && part === 'guards')
+) {
   if (part === 'guards' || part === 'release-controls') {
     run('python3', ['-B', 'scripts/production-release/registration-flow-evidence-release.test.py']);
     run('node', [
@@ -97,16 +109,17 @@ if (registrationFlowEvidenceOnly && ['guards', 'api', 'admin', 'release-controls
     if (formatted.length) npm('exec', '--', 'prettier', '--check', ...formatted);
     const linted = existing.filter((path) => /\.(?:[cm]?js|ts|vue)$/.test(path));
     if (linted.length) npm('exec', '--', 'eslint', ...linted);
-    for (const name of [
-      'check:admin-ui',
-      'check:v2-ui-language',
-      'check:v2-color-contrast',
-      'check:v2-table-standard',
-      'check:v2-loading-standard',
-      'check:v2-module-architecture',
-      'check:v2-isolation'
-    ])
-      npm('run', name);
+    if (registrationFlowEvidenceOnly)
+      for (const name of [
+        'check:admin-ui',
+        'check:v2-ui-language',
+        'check:v2-color-contrast',
+        'check:v2-table-standard',
+        'check:v2-loading-standard',
+        'check:v2-module-architecture',
+        'check:v2-isolation'
+      ])
+        npm('run', name);
   } else {
     npm('ci', '--ignore-scripts', '--no-audit', '--no-fund');
     npm('run', 'prisma:mysql:generate');

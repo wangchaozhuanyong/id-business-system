@@ -59,6 +59,26 @@ class FlowEvidenceControls(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, 'CONTRACT_NOT_FROZEN'):
             b.verify_sources({**self.contract, 'frozen': False})
 
+    def test_validation_creates_runtime_before_first_isolated_python_test(self):
+        with tempfile.TemporaryDirectory(dir=OUTPUT) as temporary:
+            output = Path(temporary) / 'fresh-output'
+            contract_path = Path(temporary) / 'contract.json'
+            contract_path.write_text(json.dumps(self.contract))
+            context = output / 'candidate'
+            self.assertFalse(context.exists())
+
+            def observe_run(*args, **kwargs):
+                self.assertTrue((context / '.runtime').is_dir())
+
+            with patch.object(b, 'OUTPUT', output), patch.object(b, 'CONTRACT', contract_path), \
+                    patch.object(b, 'run', side_effect=observe_run) as execute:
+                b.validate()
+            first = execute.call_args_list[0]
+            self.assertEqual(first.args, (str(output / 'python/bin/python'), '-B', '-m', 'unittest', 'test_workspace'))
+            self.assertEqual(first.kwargs, {'cwd': context / b.WORKER})
+            self.assertEqual(json.loads((output / 'validation-receipt.json').read_bytes())['status'], 'PASS')
+            self.assertFalse(any((context / '.runtime').iterdir()), 'mock validation must create no database')
+
     def test_git_review_base_is_separate_from_published_projection_and_scope_is_exact(self):
         contract = {**self.contract, 'frozen': True}
         approved = set(contract['sources']) | set(contract['validationSources']) | set(contract['controlPaths'])

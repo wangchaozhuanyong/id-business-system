@@ -6,6 +6,10 @@ import { resolve } from 'node:path';
 import test from 'node:test';
 import {
   isRegistrationFlowEvidenceOnly,
+  isRegistrationFlowEvidenceControlRepair,
+  registrationFlowEvidenceRepairBase,
+  registrationFlowEvidenceRepairTree,
+  registrationFlowEvidenceRepairPaths,
   registrationFlowEvidenceBase,
   registrationFlowEvidenceTree,
   registrationFlowEvidencePins,
@@ -23,6 +27,31 @@ const context = {
   baseTree: registrationFlowEvidenceTree,
   sourceDigest: (path) => registrationFlowEvidencePins[path]
 };
+test('the native fixture repair retains the application freeze and selects only controls', () => {
+  const repair = {
+    ...context,
+    base: registrationFlowEvidenceRepairBase,
+    baseTree: registrationFlowEvidenceRepairTree
+  };
+  const paths = registrationFlowEvidenceRepairPaths;
+  assert.equal(isRegistrationFlowEvidenceControlRepair(paths, repair), true);
+  assert.equal(checkMode(paths, 'same', 'same', undefined, repair), 'ci-only');
+  assert.deepEqual(selectedParts(paths, undefined, repair), ['guards']);
+  assert.equal(needsOnlineRechargeCiBuild(paths, repair), false);
+  assert.equal(checkMode(paths, 'old', 'new', undefined, repair), 'full');
+  for (const changed of [
+    [...paths, registrationFlowEvidenceSources[0]],
+    paths.slice(1),
+    [...paths.slice(1), paths[1]]
+  ])
+    assert.equal(isRegistrationFlowEvidenceControlRepair(changed, repair), false);
+  for (const drift of [
+    { base: 'a'.repeat(40) },
+    { baseTree: 'b'.repeat(40) },
+    { sourceDigest: () => '0'.repeat(64) }
+  ])
+    assert.equal(isRegistrationFlowEvidenceControlRepair(paths, { ...repair, ...drift }), false);
+});
 test('the complete frozen application selects real API Admin and Worker checks', () => {
   assert.equal(
     Object.keys(registrationFlowEvidencePins).length,
@@ -203,7 +232,7 @@ function recordDispatcher(part, options = {}) {
       }),
       env: {
         ...process.env,
-        CHECK_MODE: 'recharge',
+        CHECK_MODE: options.mode || 'recharge',
         GITHUB_ACTIONS: '',
         GITHUB_REPOSITORY: '',
         GITHUB_EVENT_NAME: ''
@@ -241,6 +270,45 @@ test('dispatcher guards run publisher controls format lint and all seven UI rule
     ['npm', 'exec', '--', 'eslint', ...linted],
     ...uiChecks.map((name) => ['npm', 'run', name])
   ]);
+});
+
+test('the native fixture repair runs real control checks without repeating application checks', () => {
+  const input = {
+    mode: 'ci-only',
+    base: registrationFlowEvidenceRepairBase,
+    tree: registrationFlowEvidenceRepairTree,
+    paths: registrationFlowEvidenceRepairPaths
+  };
+  const result = recordDispatcher('guards', input);
+  assert.equal(result.outcome, 'RECORDED_EXIT');
+  assert.deepEqual(result.calls[0], [
+    'python3',
+    '-B',
+    'scripts/production-release/registration-flow-evidence-release.test.py'
+  ]);
+  assert.ok(result.calls[1].includes('scripts/ci-registration-flow-evidence-scope.test.mjs'));
+  assert.ok(result.calls.some((call) => call.includes('prettier')));
+  assert.ok(result.calls.some((call) => call.includes('eslint')));
+  assert.equal(
+    result.calls.some(
+      (call) => call.includes('--workspace') || uiChecks.some((name) => call.includes(name))
+    ),
+    false
+  );
+  assert.deepEqual(result.calls.at(-1), ['process-exit', 0]);
+  for (const drift of [
+    { base: 'a'.repeat(40) },
+    { tree: 'b'.repeat(40) },
+    { driftSource: registrationFlowEvidenceSources[0] },
+    { paths: [...input.paths, registrationFlowEvidenceSources[0]] }
+  ]) {
+    const rejected = recordDispatcher('guards', { ...input, ...drift, fallback: true });
+    assert.equal(rejected.outcome, 'RECORDED_FALLBACK');
+    assert.equal(
+      rejected.decisions.every((value) => value === false),
+      true
+    );
+  }
 });
 
 const workspaceCalls = (target) => [
