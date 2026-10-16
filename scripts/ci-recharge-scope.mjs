@@ -3,6 +3,7 @@ import {
   isOnlineProxyCountryOnly,
   onlineProxyCountryParts
 } from './ci-online-proxy-country-scope.mjs';
+import { isRegistrationFlowEvidenceOnly } from './ci-registration-flow-evidence-scope.mjs';
 import { readRegistrationNativeReuse } from './ci-registration-closure-native-reuse.mjs';
 import { isRechargeCheckoutOnly } from './ci-recharge-checkout-scope.mjs';
 import { isRechargeBillingOnly } from './ci-recharge-billing-scope.mjs';
@@ -223,6 +224,7 @@ const onlineCiBuildTestInputs = new Set([
 ]);
 export function needsOnlineRechargeCiBuild(paths, context) {
   if (isOnlineProxyCountryOnly(paths)) return false;
+  if (isRegistrationFlowEvidenceOnly(paths, context)) return false;
   if (isProxyResultIdentityOnly(paths, context)) return false;
   // This task has its own finite three-role image proof; retain normal API,
   // engine and database checks instead of rebuilding a historical projection.
@@ -997,6 +999,9 @@ export function isMailboxOnly(paths) {
 
 export function checkMode(paths, oldSchema, newSchema, grantHelperSnapshot, context) {
   if (isOnlineProxyCountryOnly(paths)) return oldSchema === newSchema ? 'recharge' : 'full';
+  if (isRegistrationFlowEvidenceOnly(paths, context))
+    return oldSchema === newSchema ? 'recharge' : 'full';
+  if (context && isRegistrationFlowEvidenceOnly(paths)) return 'full';
   if (isProxyResultIdentityOnly(paths, context))
     return oldSchema === newSchema ? 'recharge' : 'full';
   if (context && isProxyResultIdentityOnly(paths)) return 'full';
@@ -1460,6 +1465,7 @@ export function isTargetedOnly(paths, oldSchema, newSchema) {
 }
 export function selectedParts(paths, grantHelperSnapshot, context) {
   if (isOnlineProxyCountryOnly(paths)) return [...onlineProxyCountryParts];
+  if (isRegistrationFlowEvidenceOnly(paths, context)) return ['guards', 'api', 'admin'];
   if (isProxyResultIdentityOnly(paths, context)) return ['guards', 'online-engine'];
   if (isRegistrationClosureControlsOnly(paths)) return ['guards'];
   if (isRegistrationClosurePaths(paths) && hasRegistrationClosureApplication(paths))

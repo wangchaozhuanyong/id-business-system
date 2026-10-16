@@ -82,3 +82,13 @@ html[data-v2-registration-workspace] .recent-accounts-table {
     padding-block: 12px;
   }
 }
+
+html[data-v2-registration-workspace] #id-apple-flow-evidence {
+  overflow-wrap: anywhere;
+}
+
+html[data-v2-registration-workspace] #id-apple-flow-evidence ol {
+  display: grid;
+  gap: var(--spacing-sm);
+  margin: 0;
+}

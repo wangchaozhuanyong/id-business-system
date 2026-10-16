@@ -420,10 +420,11 @@ class AppleMailboxTests(unittest.TestCase):
 
     def test_existing_observer_captures_request_start_and_retains_return(self):
         _, provider, _ = self.reservation()
-        result = SimpleNamespace(is_existing_account=True)
+        result = SimpleNamespace(success=True, is_existing_account=True, page_type="email_otp_verification")
         engine = SimpleNamespace(http_client=SimpleNamespace(get=Mock()),
             _submit_signup_form=Mock(return_value=result), _send_verification_code=Mock(return_value=True),
             _create_user_account=Mock(return_value=True), _mark_email_as_registered=Mock())
+        self.observed_signup_fixture(engine, provider, result)
         self.integration.observe_engine(engine, provider)
         self.assertIs(engine._submit_signup_form("device", "fixture"), result)
         self.assertGreaterEqual(provider.otp_lower_bound, provider.context["startedAt"])
@@ -543,8 +544,10 @@ class AppleMailboxTests(unittest.TestCase):
         self.assertEqual(self.marked().status_code, 200)
 
         def signup(engine, *args):
+            engine.session.post(registration.OPENAI_API_ENDPOINTS["signup"])
             engine._is_existing_account = existing
-            return registration.SignupFormResult(success=True, is_existing_account=existing)
+            return registration.SignupFormResult(success=True, is_existing_account=existing,
+                page_type="email_otp_verification" if existing else "password")
 
         returns = {
             "_check_ip_location": (True, "US"), "_start_oauth": True,
@@ -567,6 +570,8 @@ class AppleMailboxTests(unittest.TestCase):
             stack.enter_context(patch.object(engine_class, "_submit_signup_form", signup))
             def initialize_session(engine):
                 engine.session = self.official_session(malformed=not verified_identity)
+                engine.session.post.return_value = self.diagnostic_response(200, {
+                    "page": {"type": "email_otp_verification" if existing else "password"}})
                 return True
 
             stack.enter_context(patch.object(engine_class, "_init_session", initialize_session))
@@ -642,6 +647,17 @@ class AppleMailboxTests(unittest.TestCase):
                                    json=Mock(return_value={} if malformed else payload))
         return SimpleNamespace(cookies={"__Secure-next-auth.session-token": "offline-cookie"} if cookie else {},
                                get=Mock(return_value=response), post=Mock(), close=Mock())
+
+    def observed_signup_fixture(self, engine, provider, result):
+        """A mocked signup method still supplies a real guarded fake response."""
+        registration = importlib.import_module("src.core.register")
+        response = self.diagnostic_response(200, {"page": {"type": result.page_type}})
+        session = SimpleNamespace(get=Mock(), post=Mock(return_value=response))
+        self.integration.guard_session(engine, provider.context["taskUuid"], session)
+        def signup(*_args, **_kwargs):
+            session.post(registration.OPENAI_API_ENDPOINTS["signup"])
+            return result
+        engine._submit_signup_form = signup
 
     def successful_saved_task(self, verified=True, creation=True):
         context, provider, _ = self.reservation()
@@ -1174,6 +1190,8 @@ class AppleMailboxTests(unittest.TestCase):
             _submit_signup_form=Mock(return_value=SimpleNamespace(is_existing_account=True)),
             _send_verification_code=Mock(return_value=True), _create_user_account=Mock(return_value=False),
             _mark_email_as_registered=Mock())
+        self.observed_signup_fixture(engine, provider,
+            SimpleNamespace(success=True, is_existing_account=True, page_type="email_otp_verification"))
         self.integration.observe_engine(engine, provider)
         engine._submit_signup_form()
         self.store.finish(self.email, context["taskUuid"], False)
@@ -1214,13 +1232,14 @@ class AppleMailboxTests(unittest.TestCase):
         if response is not None:
             session.get.return_value = response
             session.post.return_value = response
+        session._offline_get_transport = session.get
         session._offline_post_transport = session.post
         engine.http_client._session = session
         self.assertTrue(engine._init_session())
         return context, engine, session
 
     def diagnostic_response(self, status=200, payload=None):
-        return SimpleNamespace(status_code=status, json=Mock(return_value=payload or {}),
+        return SimpleNamespace(status_code=status, json=Mock(return_value=payload if payload is not None else {"page": {"type": "password"}}),
                                text="offline-secret-response", headers={},
                                url="https://auth.openai.com/api/accounts/create_account")
 
@@ -1393,13 +1412,14 @@ class AppleMailboxTests(unittest.TestCase):
 
     def replaced_device_session(self, engine):
         first = engine.session
-        first.get.return_value = self.diagnostic_response(503)
+        first._offline_get_transport.return_value = self.diagnostic_response(503)
         replacement = self.official_session()
+        replacement.get.return_value = self.diagnostic_response(200)
         transport = replacement.post
         replacement.cookies = {"oai-did": "offline-replaced-device"}
         http = importlib.import_module("src.core.http_client")
         registration = importlib.import_module("src.core.register")
-        engine.oauth_start = SimpleNamespace(auth_url="https://example.invalid/authorize?state=offline-secret")
+        engine.oauth_start = SimpleNamespace(auth_url="https://auth.openai.com/oauth/authorize?state=offline-secret")
         with patch.object(http, "Session", return_value=replacement) as factory, patch.object(registration.time, "sleep"):
             self.assertEqual(engine._get_device_id(), "offline-replaced-device")
             factory.assert_called_once()
@@ -1441,11 +1461,11 @@ class AppleMailboxTests(unittest.TestCase):
 
     def test_device_retry_records_only_the_final_failed_response(self):
         _, engine, first = self.diagnostic_engine()
-        first.get.return_value = self.diagnostic_response(503)
+        first._offline_get_transport.return_value = self.diagnostic_response(503)
         second, third = self.official_session(), self.official_session()
         second.get.return_value = self.diagnostic_response(502)
         third.get.return_value = self.diagnostic_response(403)
-        engine.oauth_start = SimpleNamespace(auth_url="https://example.invalid/authorize")
+        engine.oauth_start = SimpleNamespace(auth_url="https://auth.openai.com/oauth/authorize")
         http = importlib.import_module("src.core.http_client")
         registration = importlib.import_module("src.core.register")
         with patch.object(http, "Session", side_effect=[second, third]) as factory, patch.object(registration.time, "sleep"):

@@ -94,7 +94,8 @@ class RegistrationDiagnostics:
             guard(session)
         for name in ("get", "post"):
             # The password guard calls request() only after its durable check.
-            if name == "post" and getattr(session, "_id_apple_post", False):
+            if ((name == "post" and getattr(session, "_id_apple_post", False))
+                    or (name == "get" and getattr(session, "_id_apple_get", False))):
                 continue
             original = getattr(session, name, None)
             if callable(original):

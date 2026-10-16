@@ -10,6 +10,7 @@ from __future__ import annotations
 import base64
 from datetime import datetime
 import hashlib
+import importlib.util
 import ipaddress
 import json
 import os
@@ -20,6 +21,13 @@ import stat
 import sys
 from typing import Any
 import uuid
+
+# Release probes load this file by absolute path from outside the worker. Keep
+# that existing use independent of cwd/sys.path and avoid importing an app.
+_flow_spec = importlib.util.spec_from_file_location("id_registration_flow_evidence", Path(__file__).with_name("flow_evidence.py"))
+_flow_module = importlib.util.module_from_spec(_flow_spec)
+_flow_spec.loader.exec_module(_flow_module)
+validate_flow_evidence = _flow_module.validate_flow_evidence
 
 MAINTENANCE_FILE = ".id-release-maintenance.json"
 HEALTH_KEY = "id.integration.health"
@@ -41,7 +49,7 @@ PUBLIC_FACT_FIELDS = {"localSaveStatus", "syncStatus", "systemAccountId", "syncE
 OPTIONAL_RECORD_FIELDS = {"lastMailId", "consumedMailIds", "registrationEvidenceTaskUuid", "registeredAt",
                           "manualSyncId", "creationConfirmed", "authorizationStatus"} | PUBLIC_FACT_FIELDS
 TASK_FIELDS = {"email", "aliasId", "resultKind"}
-OPTIONAL_TASK_FIELDS = {"operatorId", "mirrorAccountId", "attempt", "sideEffectPossible", "batchId", "startedAt", "configurationCheckpoint", "passwordCheckpoint", "passwordSavedAt", "creationConfirmed", "existingAccountIndication", "verifiedExistingAccount", "rawResult", "identityEvidence", "upstreamAccountId", "syncPayload", "syncedAt", "needsReview", "lateFacts", "schemaVersion", "provider", "creationConfirmedAt", "syncRetryCount", "syncNextRetryAt", "providerCheckpoint"} | PUBLIC_FACT_FIELDS
+OPTIONAL_TASK_FIELDS = {"operatorId", "mirrorAccountId", "attempt", "sideEffectPossible", "batchId", "startedAt", "configurationCheckpoint", "passwordCheckpoint", "passwordSavedAt", "creationConfirmed", "existingAccountIndication", "verifiedExistingAccount", "rawResult", "identityEvidence", "upstreamAccountId", "syncPayload", "syncedAt", "needsReview", "lateFacts", "schemaVersion", "provider", "creationConfirmedAt", "syncRetryCount", "syncNextRetryAt", "providerCheckpoint", "flowEvidence"} | PUBLIC_FACT_FIELDS
 RESULT_FIELDS = {"success", "email", "password", "account_id", "workspace_id", "access_token", "refresh_token", "id_token", "session_token", "source", "metadata"}
 RESULT_METADATA_FIELDS = {"email_service", "proxy_used", "registered_at", "is_existing_account", "idSourceTaskUuid", "idAuthorizationStatus"}
 IDENTITY_FIELDS = {"source", "emailMatched", "officialUserIdHash", "observedAt"}
@@ -328,6 +336,11 @@ def validate_task(task_uuid: str, value: Any, *, late=False) -> None:
                 or not controlled(value.get("resultKind"), {None, "new_registration", "existing_account", "failed"})))):
         raise SafetyError("APPLE_RECORD_INVALID")
     validate_public_facts(value)
+    if "flowEvidence" in value:
+        try:
+            validate_flow_evidence(value["flowEvidence"])
+        except (ValueError, TypeError):
+            raise SafetyError("APPLE_RECORD_INVALID") from None
     if (any(field in value and not nullable_id(value[field]) for field in ("operatorId", "upstreamAccountId"))
             or any(field in value and not nullable_uuid(value[field]) for field in ("mirrorAccountId", "batchId"))
             or any(field in value and (value[field] is None or not nullable_date(value[field])) for field in ("startedAt", "passwordSavedAt", "observedAt"))

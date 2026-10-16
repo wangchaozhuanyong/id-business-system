@@ -219,4 +219,12 @@ def publish():
 
 
 if __name__ == '__main__':
+    if os.environ.get('REGISTRATION_FLOW_EVIDENCE') == '1':
+        import importlib.util
+        path = Path(__file__).with_name('registration-flow-evidence-dispatch.py')
+        spec = importlib.util.spec_from_file_location('registration_flow_evidence_dispatch', path)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        module.main()
+        raise SystemExit(0)
     publish()

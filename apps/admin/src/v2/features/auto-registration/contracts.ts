@@ -231,7 +231,29 @@ export interface AppleMailboxManualSyncResult {
   failed: number;
   skipped: number;
 }
+export interface AppleMailboxFlowObservation {
+  observedAt: string;
+  httpStatus: number | null;
+  contentType: 'json' | 'html' | 'other' | 'missing';
+  jsonKind: 'object' | 'other' | 'invalid' | 'not_checked';
+  pageKind: 'new_account' | 'existing_account' | 'missing' | 'unknown' | 'not_checked';
+  officialOrigin: boolean;
+  redirectHosts: Array<'auth_openai' | 'sentinel_openai' | 'chatgpt' | 'other'>;
+  redirectsTruncated: boolean;
+  requestIdPresent: boolean;
+  requestIdSha256: string | null;
+  decision: 'accepted' | 'rejected' | 'observed';
+  reason: 'http_status' | 'untrusted_origin' | 'invalid_json' | 'unexpected_page' | null;
+}
+export interface AppleMailboxFlowEvidence {
+  version: 1;
+  authorize?: AppleMailboxFlowObservation;
+  signup?: AppleMailboxFlowObservation;
+  password?: AppleMailboxFlowObservation;
+}
+
 export interface AppleMailboxTask {
+  flowEvidence?: AppleMailboxFlowEvidence;
   taskUuid: string;
   status: AppleMailboxTaskStatus;
   logs: string[];
