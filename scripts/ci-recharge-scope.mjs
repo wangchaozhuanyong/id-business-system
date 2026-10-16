@@ -6,6 +6,7 @@ import {
 import { isProxyResultIdentityOnly } from './ci-proxy-result-identity-scope.mjs';
 import {
   isOnlineProxyCountryOnly,
+  isOnlineProxyCountryValidationOnly,
   onlineProxyCountryParts
 } from './ci-online-proxy-country-scope.mjs';
 import {
@@ -232,6 +233,7 @@ const onlineCiBuildTestInputs = new Set([
 ]);
 export function needsOnlineRechargeCiBuild(paths, context) {
   if (isChatgptSalesOnly(paths)) return false;
+  if (isOnlineProxyCountryValidationOnly(paths)) return false;
   if (isOnlineProxyCountryOnly(paths)) return false;
   if (isRegistrationFlowEvidenceControlRepair(paths, context)) return false;
   if (isRegistrationFlowEvidenceOnly(paths, context)) return false;
@@ -1010,6 +1012,8 @@ export function isMailboxOnly(paths) {
 export function checkMode(paths, oldSchema, newSchema, grantHelperSnapshot, context) {
   if (isChatgptSalesOnly(paths))
     return chatgptSalesSchemaMatches(oldSchema, newSchema) ? 'recharge' : 'full';
+  if (isOnlineProxyCountryValidationOnly(paths))
+    return oldSchema === newSchema ? 'ci-only' : 'full';
   if (isOnlineProxyCountryOnly(paths)) return oldSchema === newSchema ? 'recharge' : 'full';
   if (isRegistrationFlowEvidenceControlRepair(paths, context))
     return oldSchema === newSchema ? 'ci-only' : 'full';

@@ -39,16 +39,33 @@ export function isOnlineProxyCountryOnly(paths) {
   );
 }
 export const onlineProxyCountryParts = Object.freeze(['guards', 'api', 'admin', 'online-engine']);
+export const onlineProxyCountryValidationPaths = Object.freeze([
+  '.github/workflows/online-proxy-country-validation.yml',
+  'scripts/ci-online-proxy-country-scope.mjs',
+  'scripts/ci-online-proxy-country-scope.test.mjs',
+  'scripts/ci-recharge-scope.mjs',
+  'scripts/ci-recharge-check.mjs',
+  'docs/ONLINE_PROXY_COUNTRY_RELEASE_20261016.md'
+]);
+export function isOnlineProxyCountryValidationOnly(paths) {
+  return (
+    paths.includes(onlineProxyCountryValidationPaths[0]) &&
+    new Set(paths).size === paths.length &&
+    paths.every((path) => onlineProxyCountryValidationPaths.includes(path))
+  );
+}
 export function onlineProxyCountryCommands(part, paths) {
-  if (!isOnlineProxyCountryOnly(paths)) throw new Error('Unsupported proxy country scope');
+  const validationOnly = isOnlineProxyCountryValidationOnly(paths);
+  if (!isOnlineProxyCountryOnly(paths) && !validationOnly)
+    throw new Error('Unsupported proxy country scope');
   const npm = (...args) => ['npm', ...args];
   const shared = npm('run', 'build', '--workspace', '@apple-business/shared');
   if (part === 'guards') {
     const formatted = paths.filter((path) => /\.(?:mjs|cjs|ts|vue|json|md|yml)$/.test(path));
     const linted = paths.filter((path) => /\.(?:mjs|ts|vue)$/.test(path));
-    return [
+    const controls = [
       npm('exec', '--', 'prettier', '--check', ...formatted),
-      npm('exec', '--', 'eslint', ...linted),
+      ...(linted.length ? [npm('exec', '--', 'eslint', ...linted)] : []),
       [
         'node',
         '--test',
@@ -56,7 +73,11 @@ export function onlineProxyCountryCommands(part, paths) {
         'scripts/ci-recharge-scope.test.mjs',
         'scripts/ci-recharge-check.test.mjs',
         'scripts/ci-change-scope.test.mjs'
-      ],
+      ]
+    ];
+    if (validationOnly) return controls;
+    return [
+      ...controls,
       npm('run', 'test:online-recharge:controls'),
       ...[
         'check:admin-ui',
@@ -72,6 +93,7 @@ export function onlineProxyCountryCommands(part, paths) {
       ].map((name) => npm('run', name))
     ];
   }
+  if (validationOnly) throw new Error('Unsupported proxy country check part');
   if (part === 'api')
     return [
       npm('run', 'prisma:mysql:generate'),
