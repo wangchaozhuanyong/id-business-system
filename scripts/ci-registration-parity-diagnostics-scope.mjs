@@ -1,17 +1,23 @@
 import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 
-export const registrationParityDiagnosticsBase = 'd44393c5bee8c30c82737fc3e00fa89785a95667';
-export const registrationParityDiagnosticsTree = '7bf8dc7a4702272adcec2979025233300db5df95';
-export const registrationParityDiagnosticsCurrent = 'd44393c5bee8c30c82737fc3e00fa89785a95667';
-export const registrationParityDiagnosticsRepairBase = 'a214c729f7a2991148029afacba99f575bfedb9f';
-export const registrationParityDiagnosticsRepairTree = 'a331a7175931fd7c29aeb257291ac34997a1a7c7';
+export const registrationParityDiagnosticsBase = '868e8e8f8fb06293b433bf861585cc734a478b96';
+export const registrationParityDiagnosticsTree = 'e7a593369d59a9b06baeb4ebc82287231354f9f3';
+export const registrationParityDiagnosticsCurrent = '13e52ad670c6b6daa94ab2df009aaa8a9d69b97c';
+export const registrationParityDiagnosticsRepairBase = registrationParityDiagnosticsBase;
+export const registrationParityDiagnosticsRepairTree = registrationParityDiagnosticsTree;
 export const registrationParityDiagnosticsRepairPaths = Object.freeze([
   'scripts/production-release/registration-parity-diagnostics-build.py',
+  'scripts/production-release/registration-parity-diagnostics-release.py',
+  'scripts/production-release/registration-parity-diagnostics-dispatch.py',
   'scripts/production-release/registration-parity-diagnostics-release.test.py',
   'scripts/production-release/registration-parity-diagnostics-contract.json',
   'scripts/ci-registration-parity-diagnostics-scope.mjs',
-  'scripts/ci-registration-parity-diagnostics-scope.test.mjs'
+  'scripts/ci-registration-parity-diagnostics-scope.test.mjs',
+  'docs/AUTO_REGISTRATION_PARITY_20261016.md',
+  'scripts/ci-recharge-check.mjs',
+  'scripts/ci-recharge-check.test.mjs',
+  'scripts/ci-recharge-scope.test.mjs'
 ]);
 export const registrationParityDiagnosticsWorker =
   'apps/api/src/id-business-v2/auto-registration/worker';
@@ -95,6 +101,7 @@ export function isRegistrationParityDiagnosticsOnly(
       value.expectedCurrent !== registrationParityDiagnosticsCurrent ||
       value.migration !== null ||
       !sameKeys(value.expectedGitChanges ?? [], paths) ||
+      !sameKeys(value.sourceDeltaPaths ?? [], registrationParityDiagnosticsRepairPaths) ||
       !sameKeys(value.allowedApplicationPaths ?? [], registrationParityDiagnosticsApplications) ||
       !sameKeys(value.controlPaths ?? [], registrationParityDiagnosticsControls) ||
       !object(value.sources) ||
@@ -121,7 +128,7 @@ export function isRegistrationParityDiagnosticsOnly(
   }
 }
 
-/** Diagnostics may change only these controls; the entire application stays frozen. */
+/** Successor repair may change only these controls; the entire application stays frozen. */
 export function isRegistrationParityDiagnosticsControlRepair(
   paths,
   { base, baseTree, sourceDigest, contract } = {}

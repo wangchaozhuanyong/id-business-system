@@ -61,6 +61,7 @@ test('registration parity selects every affected check only with exact reviewed 
       expectedCurrent: registrationParityDiagnosticsCurrent,
       migration: null,
       expectedGitChanges: paths,
+      sourceDeltaPaths: [...registrationParityDiagnosticsRepairPaths],
       allowedApplicationPaths: [...registrationParityDiagnosticsApplications],
       controlPaths: [...registrationParityDiagnosticsControls],
       sources: Object.fromEntries(

@@ -17,14 +17,20 @@ HERE = Path(__file__).resolve().parent
 OUTPUT = ROOT / '.deploy/registration-parity-diagnostics'
 CONTRACT = HERE / 'registration-parity-diagnostics-contract.json'
 SCOPE = 'REGISTRATION_PARITY_DIAGNOSTICS'
-CURRENT = 'd44393c5bee8c30c82737fc3e00fa89785a95667'
+CURRENT = '13e52ad670c6b6daa94ab2df009aaa8a9d69b97c'
+CURRENT_TREE = '26f7f4aa65e3286b978cf7e2e1807418af63ea3e'
+DRAG_COMMIT = 'd44393c5bee8c30c82737fc3e00fa89785a95667'
+DRAG_TREE = '7bf8dc7a4702272adcec2979025233300db5df95'
 SALES_COMMIT = '034f6cad0bc58f3c6025912096df312e07bbd85e'
 SALES_TREE = '1f351c9e04171ea3523e5163774c869c0de97557'
 DRAG_PROOF = '77e0abe68b486c15c0fe724dacd1885982a7ed054296514e874b67cf1f3f2d8b'
 ANCESTOR = 'e3e1360f977e003987573f2d2e042b883a2f5ac8'
 SUCCESSOR_PROOF = '2cb761e7d3073814125d3a7cbfe3b0c2cd9258cc6f2684c75fb8317bb2016448'
-SOURCE_BASE = 'd44393c5bee8c30c82737fc3e00fa89785a95667'
-SOURCE_TREE = '7bf8dc7a4702272adcec2979025233300db5df95'
+SOURCE_BASE = '868e8e8f8fb06293b433bf861585cc734a478b96'
+SOURCE_TREE = 'e7a593369d59a9b06baeb4ebc82287231354f9f3'
+ACCOUNT_PROOF = 'd48d4ebc5594c27d578be4d61578fc12bb62f34ee313f065c698f60573c5e2bb'
+ACCOUNT_VALIDATED_CONTROLLER = 'f09b6748d57719ee6b35589e717f47c5c99b6e626252cb4d09f4832649b19500'
+ACCOUNT_CONTROLS = {'account-login-build.py': 'f2bc8a42fae093967230b77570f90e7a5914663bc77ccd1ae7f3e617a3a53998', 'account-login-contract.json': '856cc583bbb6f79e6a3dfa1e088bc4674892ff1c364712d808d9d5facba44fea', 'account-login-release.py': '68461ea869ba9447a9878653415c85fe961ac91bbb59389848baba302d7bc5c9'}
 SCHEMA = 'apps/api/prisma-mysql/schema.prisma'
 API = 'apps/api/src/id-business-v2/auto-registration/'
 ADMIN = 'apps/admin/src/v2/features/auto-registration/'
@@ -107,13 +113,14 @@ def verify_sources(contract):
          and contract['successorNative'].get('proofSha256') == contract['successorProofSha256'],
          'PUBLISHED_SUCCESSOR_EVIDENCE_CHANGED')
     need(contract.get('dragControls') == DRAG_CONTROLS and all(
-         digest((HERE / name).read_bytes()) == value == digest(git('show', CURRENT + ':scripts/production-release/' + name))
+         digest((HERE / name).read_bytes()) == value == digest(git('show', DRAG_COMMIT + ':scripts/production-release/' + name))
          for name, value in DRAG_CONTROLS.items())
          and contract.get('dragContractSha256') == DRAG_CONTROLS['workspace-drag-contract.json']
          and contract.get('dragProofSha256') == DRAG_PROOF
-         and isinstance(contract.get('dragNative'), dict) and contract['dragNative'].get('commit') == CURRENT
-         and contract['dragNative'].get('tree') == SOURCE_TREE
+         and isinstance(contract.get('dragNative'), dict) and contract['dragNative'].get('commit') == DRAG_COMMIT
+         and contract['dragNative'].get('tree') == DRAG_TREE
          and contract['dragNative'].get('proofSha256') == DRAG_PROOF, 'PUBLISHED_ADMIN_SUCCESSOR_EVIDENCE_CHANGED')
+    verify_account_binding(contract)
     need(isinstance(contract.get('reviewedApplicationCommit'), str)
          and re.fullmatch('[a-f0-9]{40}', contract['reviewedApplicationCommit'])
          and isinstance(contract.get('runtimeEvidence'), dict)
@@ -127,11 +134,14 @@ def verify_sources(contract):
     need(git('rev-parse', SOURCE_BASE + '^{tree}').decode().strip() == SOURCE_TREE, 'BASE_TREE_CHANGED')
     changed = set(git('diff', '--name-only', SOURCE_BASE, 'HEAD').decode().splitlines())
     expected = contract.get('expectedGitChanges')
-    need(isinstance(expected, list) and len(expected) == len(set(expected)) and changed == set(expected)
-         and changed == set(contract['sources']) | set(contract['validationSources']) | set(contract['controlPaths']),
+    delta = contract.get('sourceDeltaPaths')
+    need(isinstance(expected, list) and len(expected) == len(set(expected))
+         and isinstance(delta, list) and len(delta) == len(set(delta)) and changed == set(delta)
+         and set(delta) <= set(expected)
+         and set(expected) == set(contract['sources']) | set(contract['validationSources']) | set(contract['controlPaths']),
          'SOURCE_SCOPE_CHANGED')
     # The JS predicate independently closes the file list, source base/tree and every reviewed digest.
-    command = "import {isRegistrationParityDiagnosticsOnly as check} from './scripts/ci-registration-parity-diagnostics-scope.mjs';" +         'if(!check(' + json.dumps(sorted(changed)) + ',{base:' + json.dumps(SOURCE_BASE) + ',baseTree:' + json.dumps(SOURCE_TREE) + '}))process.exit(2);'
+    command = "import {isRegistrationParityDiagnosticsOnly as check} from './scripts/ci-registration-parity-diagnostics-scope.mjs';" +         'if(!check(' + json.dumps(sorted(expected)) + ',{base:' + json.dumps(SOURCE_BASE) + ',baseTree:' + json.dumps(SOURCE_TREE) + '}))process.exit(2);'
     run('node', '--input-type=module', '-e', command)
     sources = contract['sources']
     need(sources and all((name.startswith(API) or name.startswith(ADMIN)) and '/upstream/' not in name
@@ -156,16 +166,97 @@ def verify_sources(contract):
          for n, value in contract['baselinePrismaClientFiles'].items()), 'CLIENT_CORE_CHANGED')
 
 
+def account_recipe(contract):
+    raw = git('show', CURRENT + ':scripts/production-release/account-login-contract.json')
+    need(digest(raw) == contract.get('accountContractSha256')
+         == ACCOUNT_CONTROLS['account-login-contract.json'], 'ACCOUNT_RECIPE_CHANGED')
+    recipe = json.loads(raw)
+    need(contract.get('accountSources') == {**recipe['sources'], **recipe['supportSources']},
+         'ACCOUNT_SOURCE_SCOPE_CHANGED')
+    return recipe
+
+
+def verify_account_native_binding(binding):
+    need(all(binding.get(key) == expected for key, expected in {
+        'commit': CURRENT, 'tree': CURRENT_TREE, 'controllerCommit': SOURCE_BASE,
+        'runId': '38881266999', 'runAttempt': 1,
+        'workflowPath': '.github/workflows/account-login-validation.yml',
+        'artifactId': 12037263102,
+        'artifactDigest': 'sha256:6e7114ea6da44ee721dfe2efa8e272f12559d457f8c0cb17a344b5a019d460a9',
+        'bundleName': 'account-login-artifact.tar.gz',
+        'bundleSha256': '08b9f8620560036810488f8a1cc15f24ce7d0771275b599421294f18155faf93',
+        'proofSha256': ACCOUNT_PROOF}.items()), 'ACCOUNT_NATIVE_BINDING_CHANGED')
+
+
+def verify_account_binding(contract):
+    need(contract.get('accountControls') == ACCOUNT_CONTROLS and all(
+         digest((HERE / name).read_bytes()) == value
+         == digest(git('show', SOURCE_BASE + ':scripts/production-release/' + name))
+         for name, value in ACCOUNT_CONTROLS.items())
+         and digest(git('show', CURRENT + ':scripts/production-release/account-login-release.py'))
+         == ACCOUNT_VALIDATED_CONTROLLER and contract.get('accountProofSha256') == ACCOUNT_PROOF,
+         'ACCOUNT_EVIDENCE_CHANGED')
+    need(isinstance(contract.get('accountNative'), dict), 'ACCOUNT_NATIVE_BINDING_CHANGED')
+    verify_account_native_binding(contract['accountNative'])
+    return account_recipe(contract)
+
+
+def verify_account_publication(archive, binding):
+    def read_json(name):
+        need(archive.namelist().count(name) == 1 and archive.getinfo(name).file_size <= 512 * 1024,
+             'ACCOUNT_PUBLICATION_LAYOUT_CHANGED')
+        return json.loads(archive.read(name))
+
+    plan = read_json('publication-plan.json')
+    controls = {name: digest(git('show', SOURCE_BASE + ':scripts/production-release/' + name))
+                for name in ('account-login-release.py', 'recharge-record-release.py', 'remote-deploy.py',
+                             'recharge-availability-release.py', 'account-login-contract.json')}
+    need(plan.get('commit') == CURRENT and plan.get('tree') == CURRENT_TREE
+         and plan.get('controllerCommit') == SOURCE_BASE
+         and plan.get('controllerSha256') == ACCOUNT_CONTROLS['account-login-release.py']
+         and plan.get('validatedControllerSha256') == ACCOUNT_VALIDATED_CONTROLLER
+         and plan.get('contractSha256') == ACCOUNT_CONTROLS['account-login-contract.json']
+         and plan.get('artifactSha256') == binding['bundleSha256']
+         and plan.get('buildProofSha256') == ACCOUNT_PROOF
+         and plan.get('workflowRunId') == binding['runId'] and plan.get('workflowRunAttempt') == '1'
+         and plan.get('validationRunId') == '38878982040' and plan.get('validationRunAttempt') == '1'
+         and plan.get('controlSources') == controls, 'ACCOUNT_PUBLICATION_PLAN_CHANGED')
+    outputs = {}
+    for mode, status in [('release', 'ACCOUNT_LOGIN_DEPLOYED'),
+                         ('readback', 'ACCOUNT_LOGIN_INDEPENDENT_READBACK_VERIFIED')]:
+        receipt = read_json(mode + '-native-invocation.json')
+        need(receipt.get('Status') == 'Success' and receipt.get('StatusDetails') == 'Success'
+             and type(receipt.get('ResponseCode')) is int and receipt['ResponseCode'] == 0
+             and not receipt.get('StandardErrorContent', '').strip(), 'ACCOUNT_PUBLICATION_NOT_SUCCESSFUL')
+        output = json.loads(receipt['StandardOutputContent'])
+        need(output.get('status') == status and output.get('commit') == CURRENT
+             and type(output.get('businessActions')) is int and output['businessActions'] == 0
+             and output.get('migrationPerformed') is True, 'ACCOUNT_PUBLICATION_READBACK_CHANGED')
+        outputs[mode] = output
+    need(outputs['release'].get('tree') == CURRENT_TREE
+         and outputs['release'].get('workflowRunId') == binding['runId']
+         and outputs['release'].get('images') == outputs['readback'].get('images')
+         and isinstance(outputs['release'].get('images'), dict)
+         and set(outputs['release']['images']) == {'api', 'admin'}
+         and outputs['readback'].get('preservedServices')
+         == ['mysql', 'caddy', 'media-resolver', 'auto-recharge', 'auto-registration'],
+         'ACCOUNT_PUBLICATION_READBACK_CHANGED')
+
+
 def native_proof(binding):
+    account = 'controllerCommit' in binding
+    if account:
+        verify_account_native_binding(binding)
+    native_commit = binding['controllerCommit'] if account else binding['commit']
     prefix = 'repos/wangchaozhuanyong/id-business-system/'
     meta = json.loads(subprocess.check_output(['gh', 'api', prefix + 'actions/runs/' + binding['runId']], cwd=ROOT))
-    need(meta['head_sha'] == binding['commit'] and meta['conclusion'] == 'success'
+    need(meta['head_sha'] == native_commit and meta['conclusion'] == 'success'
          and meta['path'] == binding['workflowPath'] and meta['run_attempt'] == binding['runAttempt'],
          'PUBLISHED_NATIVE_CHANGED')
     artifacts = json.loads(subprocess.check_output(['gh', 'api', prefix + 'actions/runs/'
         + binding['runId'] + '/artifacts?per_page=100'], cwd=ROOT))['artifacts']
     selected = [row for row in artifacts if row['id'] == binding['artifactId'] and not row['expired']
-                and row['digest'] == binding['artifactDigest'] and row['workflow_run']['head_sha'] == binding['commit']]
+                and row['digest'] == binding['artifactDigest'] and row['workflow_run']['head_sha'] == native_commit]
     need(len(selected) == 1 and selected[0]['size_in_bytes'] <= 64 * 1024**2, 'PUBLISHED_ARTIFACT_CHANGED')
     raw = subprocess.check_output(['gh', 'api', prefix + 'actions/artifacts/' + str(binding['artifactId']) + '/zip'], cwd=ROOT)
     need(len(raw) <= 64 * 1024**2 and 'sha256:' + digest(raw) == binding['artifactDigest'], 'PUBLISHED_ARTIFACT_BYTES_CHANGED')
@@ -173,6 +264,8 @@ def native_proof(binding):
         names = [name for name in archive.namelist() if name.endswith(binding['bundleName'])]
         need(len(names) == 1 and archive.getinfo(names[0]).file_size <= 64 * 1024**2, 'PUBLISHED_BUNDLE_INVALID')
         bundle = archive.read(names[0])
+        if account:
+            verify_account_publication(archive, binding)
     need(digest(bundle) == binding['bundleSha256'], 'PUBLISHED_BUNDLE_CHANGED')
     with tarfile.open(fileobj=io.BytesIO(bundle)) as archive:
         proof_raw = archive.extractfile('payload/build-proof.json').read()
@@ -211,11 +304,12 @@ def reconstruct(context, contract):
          and contract['dragSources'] == drag_recipe['sources'], 'PUBLISHED_ADMIN_SUCCESSOR_RECIPE_CHANGED')
     # The Admin-only successor inherits the Sales compilation before these three sources.
     for name, expected in drag_recipe['sources'].items():
-        raw = git('show', CURRENT + ':' + name)
+        raw = git('show', DRAG_COMMIT + ':' + name)
         need(digest(raw) == expected, 'PUBLISHED_ADMIN_SUCCESSOR_SOURCE_CHANGED')
         path = context / name
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(raw)
+    overlay_account_sources(context, contract)
     need(inventory(context / ENGINE) == contract['baselineEngineFiles'], 'BASE_ENGINE_NOT_REPRODUCED')
     expected_worker = {n: parent['sources'].get(WORKER + n, value) if n.startswith('test_') else value
                        for n, value in contract['baselineWorkerFiles'].items()}
@@ -230,7 +324,7 @@ def verify_drag_proof(proof, sales, contract):
     recipe = json.loads(raw)
     need(digest(raw) == contract['dragContractSha256'] == DRAG_CONTROLS['workspace-drag-contract.json']
          and proof.get('version') == 1 and proof.get('scope') == recipe['scope']
-         and proof.get('commit') == CURRENT and proof.get('tree') == SOURCE_TREE
+         and proof.get('commit') == DRAG_COMMIT and proof.get('tree') == DRAG_TREE
          and proof.get('contractSha256') == contract['dragContractSha256']
          and proof.get('controllerSha256') == DRAG_CONTROLS['workspace-drag-release.py']
          and proof.get('publishedProofSha256') == SUCCESSOR_PROOF
@@ -242,6 +336,65 @@ def verify_drag_proof(proof, sales, contract):
          and proof.get('browserChecks') == 13, 'PUBLISHED_ADMIN_SUCCESSOR_NATIVE_CHANGED')
     need(proof.get('files') == {**{'source/' + n: v for n, v in recipe['sources'].items()},
          **{'admin/html/' + n: v for n, v in proof['adminFiles'].items()}}, 'PUBLISHED_ADMIN_SUCCESSOR_PAYLOAD_CHANGED')
+    return proof
+
+
+def overlay_account_sources(context, contract):
+    recipe = account_recipe(contract)
+    # Inherit only the exact published source tree, including its three support files.
+    for name, expected in contract['accountSources'].items():
+        raw = git('show', CURRENT + ':' + name)
+        need(digest(raw) == expected, 'ACCOUNT_PUBLISHED_SOURCE_CHANGED')
+        path = context / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(raw)
+    for name, expected in recipe['hostSources'].items():
+        need(digest((context / name).read_bytes()) == expected
+             == digest(git('show', recipe['hostSourceBaseline'] + ':' + name)),
+             'ACCOUNT_HOST_INHERITANCE_CHANGED')
+
+
+def verify_account_proof(proof, drag, historical_api, contract):
+    recipe = account_recipe(contract)
+    allowed = {name.removesuffix('.js') + suffix for name in recipe['apiModules']
+               for suffix in ('.js', '.js.map', '.d.ts')}
+    need(proof.get('version') == 1 and proof.get('scope') == recipe['scope']
+         and proof.get('commit') == CURRENT and proof.get('tree') == CURRENT_TREE
+         and proof.get('workflowRunId') == '38878982040' and proof.get('workflowRunAttempt') == '1'
+         and proof.get('contractSha256') == contract['accountContractSha256']
+         and proof.get('controllerSha256') == ACCOUNT_VALIDATED_CONTROLLER
+         and proof.get('baselineSources') == {'api': recipe['apiSourceBaseline'], 'admin': recipe['adminSourceBaseline']}
+         and proof.get('adminPublishedSources') == recipe['adminPublishedSources']
+         and proof.get('hostSources') == recipe['hostSources']
+         and proof.get('baselineAdminFiles') == recipe['baselineAdminFiles'] == drag['adminFiles']
+         and recipe['baselineRuntimeApiFiles'] == historical_api
+         and isinstance(proof.get('baselineApiFiles'), dict) and set(proof['baselineApiFiles']) == allowed
+         and {name: value for name, value in proof['baselineApiFiles'].items() if name.endswith('.js')}
+         == {name: historical_api.get(name) for name in recipe['apiModules']}
+         and isinstance(proof.get('apiModules'), dict) and set(proof['apiModules']) == allowed
+         and proof.get('migration') == recipe['migration']
+         and proof.get('generatedSchemaSha256') == contract['baselinePrismaClientFiles']['schema.prisma']
+         and proof.get('updatedServices') == ['api', 'admin']
+         and type(proof.get('businessActions')) is int and proof['businessActions'] == 0,
+         'ACCOUNT_NATIVE_PROOF_CHANGED')
+    need(proof.get('qualityVerification') == {
+         'commit': CURRENT, 'conclusion': 'success', 'path': '.github/workflows/quality.yml',
+         'runId': '38878945118', 'sourceTree': CURRENT_TREE}
+         and proof.get('databaseVerification') == {
+             'businessActions': 0, 'isolated': True, 'legacyDefaultsVerified': True,
+             'migration': recipe['migration']['name'], 'testsPassed': 7, 'testsSkipped': 0}
+         and proof.get('browserVerification') == {'realWrites': 0, 'status': 'PASS'},
+         'ACCOUNT_NATIVE_VALIDATION_CHANGED')
+    need(proof.get('files') == {
+         **{'source/' + name: value for name, value in contract['accountSources'].items()},
+         **{'host/' + name: value for name, value in recipe['hostSources'].items()},
+         **{'api/modules/' + name: value for name, value in proof['apiModules'].items()},
+         **{'admin/html/' + name: value for name, value in proof['adminFiles'].items()}},
+         'ACCOUNT_NATIVE_PAYLOAD_CHANGED')
+    need(contract['baselineApiFiles'] == {**historical_api,
+         **{name: value for name, value in proof['apiModules'].items() if name.endswith('.js')}}
+         and contract['baselineAdminFiles'] == proof['adminFiles']
+         and contract['schemaSha256'] == recipe['sources'][SCHEMA], 'ACCOUNT_FINAL_BASELINE_CHANGED')
     return proof
 
 
@@ -280,18 +433,28 @@ def prepare():
     successor = native_proof(contract['successorNative'])
     sales = json.loads((HERE / 'chatgpt-sales-contract.json').read_bytes())
     drag = verify_drag_proof(native_proof(contract['dragNative']), successor, contract)
+    account = account_recipe(contract)
+    historical_raw = git('show', CURRENT + ':scripts/production-release/registration-parity-diagnostics-contract.json')
+    need(digest(historical_raw) == account['recipeControls']['registration-parity-diagnostics-contract.json'],
+         'ACCOUNT_PREDECESSOR_RECIPE_CHANGED')
+    historical = json.loads(historical_raw)
+    historical_api = {**ancestor['baselineApiFiles'],
+                      **{n: v for n, v in successor['apiModules'].items() if n.endswith('.js')}}
     need(successor['scope'] == sales['scope'] and successor['contractSha256'] == contract['successorContractSha256']
          and successor['controllerSha256'] == SUCCESSOR_CONTROLS['chatgpt-sales-release.py']
          and {n.removeprefix('source/'):v for n,v in successor['files'].items() if n.startswith('source/')} == sales['sources']
          and successor['adminPublishedSources'] == sales['adminPublishedSources']
          and successor['migration'] == sales['migration']
-         and successor['generatedSchemaSha256'] == contract['baselinePrismaClientFiles']['schema.prisma']
+         and successor['generatedSchemaSha256'] == historical['baselinePrismaClientFiles']['schema.prisma']
          and successor['adminFiles'] == drag['baselineAdminFiles']
-         and drag['adminFiles'] == contract['baselineAdminFiles']
-         and {**ancestor['baselineApiFiles'], **{n:v for n,v in successor['apiModules'].items() if n.endswith('.js')}} == contract['baselineApiFiles']
+         and drag['adminFiles'] == historical['baselineAdminFiles']
+         and historical_api == historical['baselineApiFiles']
          and contract['baselineWorkerFiles'] == ancestor['baselineWorkerFiles']
-         and {**ancestor['runtimeAdminFiles'], **successor['adminFiles'], **drag['adminFiles']} == contract['runtimeAdminFiles']
-         and contract['schemaSha256'] == sales['sources'][SCHEMA], 'PUBLISHED_SUCCESSOR_NATIVE_CHANGED')
+         and {**ancestor['runtimeAdminFiles'], **successor['adminFiles'], **drag['adminFiles']} == historical['runtimeAdminFiles']
+         and historical['schemaSha256'] == sales['sources'][SCHEMA], 'PUBLISHED_SUCCESSOR_NATIVE_CHANGED')
+    published = verify_account_proof(native_proof(contract['accountNative']), drag, historical_api, contract)
+    need({**historical['runtimeAdminFiles'], **published['adminFiles']} == contract['runtimeAdminFiles'],
+         'ACCOUNT_RUNTIME_ADMIN_UNION_CHANGED')
     need(not OUTPUT.exists(), 'OUTPUT_EXISTS')
     OUTPUT.mkdir(parents=True, mode=0o700)
     for role in ('baseline', 'candidate'):
@@ -424,6 +587,9 @@ def build():
              'parentProofSha256': contract['parentProofSha256'], 'parentControls': contract['parentControls'],
              'successorProofSha256': contract['successorProofSha256'], 'successorControls': contract['successorControls'],
              'dragProofSha256': contract['dragProofSha256'], 'dragControls': contract['dragControls'],
+             'accountProofSha256': contract['accountProofSha256'], 'accountControls': contract['accountControls'],
+             'accountContractSha256': contract['accountContractSha256'], 'accountSources': contract['accountSources'],
+             'accountNative': contract['accountNative'],
              'hostSourceInheritance': contract['hostSourceInheritance'],
              'sqliteReviewPolicy': contract['sqliteReviewPolicy'],
              'prismaPathMetadata': contract['prismaPathMetadata'],

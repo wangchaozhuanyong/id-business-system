@@ -15,6 +15,7 @@ import tempfile
 import types
 import unittest
 from unittest.mock import Mock, patch
+import zipfile
 
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parents[1]
@@ -148,7 +149,7 @@ print(json.dumps(calls))
             self.assertEqual(digest((HERE / name).read_bytes()), expected, name)
         recipe = json.loads((HERE / 'workspace-drag-contract.json').read_bytes())
         sales = {'adminFiles': {'index.html': 'a' * 64}}
-        proof = {'version': 1, 'scope': recipe['scope'], 'commit': b.CURRENT, 'tree': b.SOURCE_TREE,
+        proof = {'version': 1, 'scope': recipe['scope'], 'commit': b.DRAG_COMMIT, 'tree': b.DRAG_TREE,
                  'contractSha256': b.DRAG_CONTROLS['workspace-drag-contract.json'],
                  'controllerSha256': b.DRAG_CONTROLS['workspace-drag-release.py'],
                  'publishedProofSha256': b.SUCCESSOR_PROOF, 'sources': recipe['sources'],
@@ -166,6 +167,116 @@ print(json.dumps(calls))
                 b.verify_drag_proof({**proof, **changed}, sales, self.contract)
         with self.assertRaisesRegex(RuntimeError, 'PUBLISHED_ADMIN_SUCCESSOR_PAYLOAD_CHANGED'):
             b.verify_drag_proof({**proof, 'files': {}}, sales, self.contract)
+
+    def test_account_publication_is_bound_to_separate_source_and_controller_identities(self):
+        recipe = b.verify_account_binding(self.contract)
+        self.assertEqual(len(self.contract['accountSources']), 107)
+        self.assertEqual(self.contract['accountSources'], {**recipe['sources'], **recipe['supportSources']})
+        self.assertNotEqual(b.CURRENT, b.SOURCE_BASE)
+        self.assertNotEqual(b.CURRENT, b.DRAG_COMMIT)
+        for changed in [{'controllerCommit': b.CURRENT}, {'commit': b.SOURCE_BASE},
+                        {'runId': '38878982040'}, {'artifactId': 1}, {'proofSha256': '0' * 64}]:
+            with self.subTest(changed=changed), patch.object(b.subprocess, 'check_output') as remote, \
+                    self.assertRaisesRegex(RuntimeError, 'ACCOUNT_NATIVE_BINDING_CHANGED'):
+                b.native_proof({**self.contract['accountNative'], **changed})
+            remote.assert_not_called()
+        with self.assertRaisesRegex(RuntimeError, 'ACCOUNT_SOURCE_SCOPE_CHANGED'):
+            b.account_recipe({**self.contract, 'accountSources': recipe['sources']})
+
+    def test_account_overlay_uses_only_the_exact_published_tree(self):
+        values = {'apps/api/known.ts': b'published API', 'scripts/known.mjs': b'published support'}
+        contract = {'accountSources': {name: digest(raw) for name, raw in values.items()}}
+        with tempfile.TemporaryDirectory(dir=OUTPUT) as temporary, \
+                patch.object(b, 'account_recipe', return_value={'hostSources': {}}), \
+                patch.object(b, 'git', side_effect=lambda *args: values[args[1].split(':', 1)[1]]) as read:
+            context = Path(temporary)
+            b.overlay_account_sources(context, contract)
+            self.assertEqual({name: (context / name).read_bytes() for name in values}, values)
+            self.assertEqual(read.call_args_list, [unittest.mock.call('show', b.CURRENT + ':' + name)
+                                                  for name in values])
+            with self.assertRaisesRegex(RuntimeError, 'ACCOUNT_PUBLISHED_SOURCE_CHANGED'):
+                b.overlay_account_sources(context, {'accountSources': {'apps/api/known.ts': '0' * 64}})
+
+    def test_account_native_proof_closes_payload_validation_and_final_baseline(self):
+        recipe = b.account_recipe(self.contract)
+        historical_api = recipe['baselineRuntimeApiFiles']
+        modules = {name.removesuffix('.js') + suffix: 'a' * 64 for name in recipe['apiModules']
+                   for suffix in ('.js', '.js.map', '.d.ts')}
+        admin = {'index.html': 'b' * 64}
+        proof = {'version': 1, 'scope': recipe['scope'], 'commit': b.CURRENT, 'tree': b.CURRENT_TREE,
+                 'workflowRunId': '38878982040', 'workflowRunAttempt': '1',
+                 'contractSha256': self.contract['accountContractSha256'],
+                 'controllerSha256': b.ACCOUNT_VALIDATED_CONTROLLER,
+                 'baselineSources': {'api': recipe['apiSourceBaseline'], 'admin': recipe['adminSourceBaseline']},
+                 'adminPublishedSources': recipe['adminPublishedSources'], 'hostSources': recipe['hostSources'],
+                 'baselineAdminFiles': recipe['baselineAdminFiles'],
+                 'baselineApiFiles': {name: historical_api.get(name) for name in modules},
+                 'apiModules': modules, 'adminFiles': admin, 'migration': recipe['migration'],
+                 'generatedSchemaSha256': self.contract['baselinePrismaClientFiles']['schema.prisma'],
+                 'updatedServices': ['api', 'admin'], 'businessActions': 0,
+                 'qualityVerification': {'commit': b.CURRENT, 'conclusion': 'success',
+                     'path': '.github/workflows/quality.yml', 'runId': '38878945118', 'sourceTree': b.CURRENT_TREE},
+                 'databaseVerification': {'businessActions': 0, 'isolated': True, 'legacyDefaultsVerified': True,
+                     'migration': recipe['migration']['name'], 'testsPassed': 7, 'testsSkipped': 0},
+                 'browserVerification': {'realWrites': 0, 'status': 'PASS'}}
+        proof['files'] = {**{'source/' + n: v for n, v in self.contract['accountSources'].items()},
+                          **{'host/' + n: v for n, v in recipe['hostSources'].items()},
+                          **{'api/modules/' + n: v for n, v in modules.items()}, 'admin/html/index.html': 'b' * 64}
+        contract = {**self.contract, 'baselineAdminFiles': admin,
+                    'baselineApiFiles': {**historical_api, **{n: v for n, v in modules.items() if n.endswith('.js')}}}
+        drag = {'adminFiles': recipe['baselineAdminFiles']}
+        self.assertEqual(b.verify_account_proof(proof, drag, historical_api, contract), proof)
+        for changed, error in [({'businessActions': False}, 'ACCOUNT_NATIVE_PROOF_CHANGED'),
+                               ({'generatedSchemaSha256': '0' * 64}, 'ACCOUNT_NATIVE_PROOF_CHANGED'),
+                               ({'baselineAdminFiles': {}}, 'ACCOUNT_NATIVE_PROOF_CHANGED'),
+                               ({'databaseVerification': {}}, 'ACCOUNT_NATIVE_VALIDATION_CHANGED'),
+                               ({'browserVerification': {'status': 'PASS', 'realWrites': 1}}, 'ACCOUNT_NATIVE_VALIDATION_CHANGED'),
+                               ({'files': {**proof['files'], 'source/unpublished.ts': 'c' * 64}}, 'ACCOUNT_NATIVE_PAYLOAD_CHANGED')]:
+            with self.subTest(changed=changed), self.assertRaisesRegex(RuntimeError, error):
+                b.verify_account_proof({**proof, **changed}, drag, historical_api, contract)
+        with self.assertRaisesRegex(RuntimeError, 'ACCOUNT_FINAL_BASELINE_CHANGED'):
+            b.verify_account_proof(proof, drag, historical_api, {**contract, 'baselineApiFiles': historical_api})
+
+    def test_account_publication_requires_successful_release_and_independent_readback(self):
+        binding = self.contract['accountNative']
+        controls = {name: digest(b.git('show', b.SOURCE_BASE + ':scripts/production-release/' + name))
+                    for name in ('account-login-release.py', 'recharge-record-release.py', 'remote-deploy.py',
+                                 'recharge-availability-release.py', 'account-login-contract.json')}
+        plan = {'commit': b.CURRENT, 'tree': b.CURRENT_TREE, 'controllerCommit': b.SOURCE_BASE,
+                'controllerSha256': b.ACCOUNT_CONTROLS['account-login-release.py'],
+                'validatedControllerSha256': b.ACCOUNT_VALIDATED_CONTROLLER,
+                'contractSha256': self.contract['accountContractSha256'],
+                'artifactSha256': binding['bundleSha256'], 'buildProofSha256': b.ACCOUNT_PROOF,
+                'workflowRunId': binding['runId'], 'workflowRunAttempt': '1',
+                'validationRunId': '38878982040', 'validationRunAttempt': '1', 'controlSources': controls}
+        images = {'api': {'imageId': 'sha256:' + 'a' * 64}, 'admin': {'imageId': 'sha256:' + 'b' * 64}}
+        release = {'status': 'ACCOUNT_LOGIN_DEPLOYED', 'commit': b.CURRENT, 'tree': b.CURRENT_TREE,
+                   'workflowRunId': binding['runId'], 'businessActions': 0, 'migrationPerformed': True, 'images': images}
+        readback = {'status': 'ACCOUNT_LOGIN_INDEPENDENT_READBACK_VERIFIED', 'commit': b.CURRENT,
+                    'businessActions': 0, 'migrationPerformed': True, 'images': images,
+                    'preservedServices': ['mysql', 'caddy', 'media-resolver', 'auto-recharge', 'auto-registration']}
+        receipt = lambda output: {'Status': 'Success', 'StatusDetails': 'Success', 'ResponseCode': 0,
+                                  'StandardErrorContent': '', 'StandardOutputContent': json.dumps(output)}
+        original = {'publication-plan.json': plan, 'release-native-invocation.json': receipt(release),
+                    'readback-native-invocation.json': receipt(readback)}
+
+        def check(entries):
+            zipped = io.BytesIO()
+            with zipfile.ZipFile(zipped, 'w') as archive:
+                for name, value in entries.items():
+                    archive.writestr(name, json.dumps(value))
+            with zipfile.ZipFile(zipped) as archive:
+                b.verify_account_publication(archive, binding)
+
+        check(original)
+        for name, changed, error in [
+                ('publication-plan.json', {'controllerCommit': b.CURRENT}, 'ACCOUNT_PUBLICATION_PLAN_CHANGED'),
+                ('release-native-invocation.json', {'Status': 'Failed'}, 'ACCOUNT_PUBLICATION_NOT_SUCCESSFUL'),
+                ('readback-native-invocation.json', {'ResponseCode': True}, 'ACCOUNT_PUBLICATION_NOT_SUCCESSFUL'),
+                ('readback-native-invocation.json', {'StandardOutputContent': json.dumps({**readback, 'businessActions': 1})}, 'ACCOUNT_PUBLICATION_READBACK_CHANGED'),
+                ('readback-native-invocation.json', {'StandardOutputContent': json.dumps({**readback, 'images': {}})}, 'ACCOUNT_PUBLICATION_READBACK_CHANGED')]:
+            with self.subTest(name=name, changed=changed), self.assertRaisesRegex(RuntimeError, error):
+                check({**original, name: {**original[name], **changed}})
 
     def test_client_generation_uses_the_reconstructed_root_cwd_and_no_workspace(self):
         context = ROOT / '.deploy/registration-parity-diagnostics/isolated-fixture'
