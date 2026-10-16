@@ -3,6 +3,7 @@ import copy
 import importlib.util
 import json
 from pathlib import Path
+import tempfile
 import unittest
 
 HERE = Path(__file__).resolve().parent
@@ -69,6 +70,30 @@ class PublicationTests(unittest.TestCase):
         self.assertTrue(all(n.startswith('id-business-v2/online-recharge/') for n in c['apiModules']))
         self.assertFalse(any('/migrations/' in n or n.endswith('schema.prisma') or n.endswith('package.json') for n in c['sources']))
         self.assertEqual(set(c['beforeEngineFiles']) - set(c['afterEngineFiles']), set())
+
+    def test_published_removals_are_confined_to_exact_build_context_bytes(self):
+        output = HERE.parents[1] / '.runtime/online-checkout-control-tests'
+        output.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=output) as directory:
+            context = Path(directory)
+            source = context / 'apps/withdrawn.ts'
+            source.parent.mkdir()
+            source.write_bytes(b'published')
+            outside = context / 'outside.ts'
+            outside.write_bytes(b'published')
+            expected = b.sha(b'published')
+            for invalid in [{'apps/withdrawn.ts': '0' * 64}, {'apps/../outside.ts': expected},
+                            {'apps/withdrawn.ts': None}]:
+                with self.assertRaises(RuntimeError):
+                    b.remove_published_sources(context, invalid)
+                self.assertEqual(source.read_bytes(), b'published')
+                self.assertEqual(outside.read_bytes(), b'published')
+            link = context / 'apps/link.ts'
+            link.symlink_to(source)
+            with self.assertRaises(RuntimeError):
+                b.remove_published_sources(context, {'apps/link.ts': expected})
+            b.remove_published_sources(context, {'apps/withdrawn.ts': expected, 'apps/absent.ts': None})
+            self.assertFalse(source.exists())
 
 
 if __name__ == '__main__':

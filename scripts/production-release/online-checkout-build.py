@@ -65,12 +65,26 @@ def reconstruct(context, contract, controls):
     for name, pin in contract['postGptSources'].items():
         raw = git('show', pin['commit'] + ':' + name)
         need(sha(raw) == pin['sha256'], 'POST_GPT_SOURCE_CHANGED')
-        (context / name).write_bytes(raw)
+        target = context / name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(raw)
+    remove_published_sources(context, contract.get('postGptRemovals', {}))
     for name, pin in contract['postAdminSources'].items():
         raw = git('show', pin['commit'] + ':' + name)
         need(sha(raw) == pin['sha256'], 'PUBLISHED_ADMIN_SOURCE_CHANGED')
         (context / name).write_bytes(raw)
     overlay_engine(context, contract)
+
+
+def remove_published_sources(context, removals):
+    for name, expected in removals.items():
+        target = context / name
+        need(name.startswith('apps/') and '..' not in Path(name).parts and not target.is_symlink()
+             and target.resolve().is_relative_to(context.resolve()), 'PUBLISHED_REMOVAL_PATH_CHANGED')
+        need(not target.exists() if expected is None else target.is_file() and sha(target.read_bytes()) == expected,
+             'PUBLISHED_REMOVAL_SOURCE_CHANGED')
+        if expected is not None:
+            target.unlink()
 
 
 def overlay_engine(context, contract):

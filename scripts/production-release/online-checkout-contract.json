@@ -101,8 +101,8 @@
     "id-business-v2/online-recharge/persistence/worker.repository.js"
   ],
   "backupNormalizerPath": "/opt/id-business-v2/releases/20261015T091200Z-e197218c8b38-recharge-record/scripts/mysql-dump-restore-normalizer.sed",
-  "baselineAdminBuildCommit": "123ea34df9bf74a1d65e74bd70f336eaa9344165",
-  "baselineAdminFilesSha256": "26c7d428b4996b3aa8faec6725c7c4367e649a559635dbb04a758426e8e687a2",
+  "baselineAdminBuildCommit": "1bd89a110774ebb4cfcbcfeefa35752ae3c83fae",
+  "baselineAdminFilesSha256": "4ed0a74e834d50aff7b4e44164046ca7d1a7ee21f33ffbcc74736055009be8c0",
   "beforeApiOnlineFiles": {
     "contracts.d.ts": "5bc4ef59a11b07f6c98d1a08d408545b80bbab7422ed4d5224e24458d07570b2",
     "contracts.js": "eab70b27622a7143096690b702397a72abd3e8d0e21b812ccf0a64c5b2818333",
@@ -218,7 +218,7 @@
   },
   "configurationSha256": {
     ".env.aws.production": "3f3c22ac671ef185ffc98677ef3a2facce244e476e4583b8e7d16ff1deb00392",
-    "compose.release.json": "d05dca3bc2ab181db927e2b9fe7e2e7ce01833e55f58a7587f4fce250a98b234",
+    "compose.release.json": "1a5054c83319b3daaaf3410edd8f9f293d7cb7e8bf32251273830a482c14eeb9",
     "docker-compose.aws-mysql.yml": "953c6264f157b00218f2a019d5e2c0b6bc4a34f687f2ec42ad782e0009e7672c"
   },
   "controlFiles": [
@@ -231,7 +231,7 @@
     "shared-bank-card-release.py",
     "api-admin-scope.py"
   ],
-  "current": "/opt/id-business-v2/releases/20261016T163510Z-123ea34df9bf-table-container",
+  "current": "/opt/id-business-v2/releases/20261016T175415Z-1bd89a110774-registration-protocol-restore",
   "engineHealth": {
     "activeTasks": 0,
     "mode": "enabled",
@@ -241,8 +241,8 @@
   },
   "enginePublishedCommit": "d0c4f6215b396437685ce13201760ff93758726b",
   "engineRoot": "apps/api/src/id-business-v2/online-recharge/engine",
-  "expectedCurrent": "123ea34df9bf74a1d65e74bd70f336eaa9344165",
-  "manifestSha256": "680300b07867a2db63e62a2787e4c59bba77da331da87343cd2b53e34b354d77",
+  "expectedCurrent": "1bd89a110774ebb4cfcbcfeefa35752ae3c83fae",
+  "manifestSha256": "2b12a9500391d6f5175557fbf084680027364811cdc310d0d8555d1e3c769be4",
   "nginxSha256": "0b73aedbebdc12065d922b35bbf428e8959fe3a3ea9ef9fa5dc7af2f995baa99",
   "postAdminSources": {
     "apps/admin/src/v2/components/tableContentWidth.ts": {
@@ -250,10 +250,80 @@
       "sha256": "0141dc8063e5bf9c90158e685c98bafe18762f2647c1286c5b4b84318a0be5ab"
     }
   },
+  "postGptRemovals": {
+    "apps/admin/src/v2/features/auto-registration/browser-connector.spec.ts": "62a5e3d3d5385f6731ab9100818f604548e793dd225b146da2763c678a111eda",
+    "apps/admin/src/v2/features/auto-registration/browser-connector.ts": "b47b61493e3fa1e5df2ff42b69a958187fbcab1d415ebb4c8e72907f5aefe13a",
+    "apps/admin/src/v2/features/auto-registration/browser-registration-presentation.spec.ts": "66f50973d2d4be20b6c3c3d158805dbaeae0a1de057690c0652fc642dd1e9957",
+    "apps/api/src/id-business-v2/auto-registration/browser-registration.controller.ts": "d91743cde3dfb79ceb3395e70a2dbf2f601248c3471c4fd9353cc763a8629381",
+    "apps/api/src/id-business-v2/auto-registration/browser-registration.service.spec.ts": "5f4370d9b4d47097fae752fcc1e4ad1988d82da7e9eded5c094384e7359fcb21",
+    "apps/api/src/id-business-v2/auto-registration/browser-registration.service.ts": "d1c886ed9ae00ea17207ab2f864d635152e9164c1ef0e9ad0125c5eaba7092cf",
+    "apps/api/src/id-business-v2/auto-registration/worker/apple_browser_registration.py": "015a7220545a0888a732c7ec1ef4a02d6a410b852cd8b4bf0db0da66604eb853",
+    "apps/api/src/id-business-v2/auto-registration/worker/browser_registration_connector.py": "2f92676a00dfeb67d7fd6a8cbea1fb5d6703099ef8c466a7090486bd5143bf04",
+    "apps/api/src/id-business-v2/auto-registration/worker/browser_registration_flow.py": "8cd35491feb76f4c670ac1d26ed5c3c9b6a11ad88fb4664eea72d7930c9ae814",
+    "apps/api/src/id-business-v2/auto-registration/worker/test_apple_browser_registration_unit.py": "13e9268aefbe81f1bfc520f827eaf3bd2d1361033f52e490f3702d44f5fffcc2",
+    "apps/api/src/id-business-v2/auto-registration/worker/test_browser_registration_connector.py": "b85a7ee0ec6492da86f88f718dfa9e7cacc6977aa6467beff6ff3fdb18d0222f",
+    "apps/api/src/id-business-v2/auto-registration/worker/test_browser_registration_contract_unit.py": "db76c432ce2997d0a4aba12ddab27e28c4a4ab1620a6103de8c7e8ff9424b598"
+  },
   "postGptSources": {
+    "apps/admin/src/v2/features/auto-registration/V2AppleMailboxes.vue": {
+      "commit": "1bd89a110774ebb4cfcbcfeefa35752ae3c83fae",
+      "sha256": "d756598b46ca8de34fc24eed9416372d336758e47611bf2313f8d521101252a3"
+    },
+    "apps/admin/src/v2/features/auto-registration/api.ts": {
+      "commit": "1bd89a110774ebb4cfcbcfeefa35752ae3c83fae",
+      "sha256": "f95f7d08604f773b38c4d17710848c4bf77c5704b6e298b30888728bd074b41f"
+    },
+    "apps/admin/src/v2/features/auto-registration/apple-mailbox-presentation.ts": {
+      "commit": "1bd89a110774ebb4cfcbcfeefa35752ae3c83fae",
+      "sha256": "2bd18f67055d8a04abcb170f7bb3a7d8daf74832e107ff93ac6afd400e742601"
+    },
+    "apps/admin/src/v2/features/auto-registration/contracts.ts": {
+      "commit": "1bd89a110774ebb4cfcbcfeefa35752ae3c83fae",
+      "sha256": "ccb9bc76f5463e25823063203a271ac5717ce49ea14967b10e0e3332028cba39"
+    },
+    "apps/admin/src/v2/features/auto-registration/useAppleMailboxes.spec.ts": {
+      "commit": "1bd89a110774ebb4cfcbcfeefa35752ae3c83fae",
+      "sha256": "eb017433efd7adfd366ad3af2882260d574798567fc7202e7f1b0a7c4ccbe2db"
+    },
+    "apps/admin/src/v2/features/auto-registration/useAppleMailboxes.ts": {
+      "commit": "1bd89a110774ebb4cfcbcfeefa35752ae3c83fae",
+      "sha256": "da7affc9a61299b6a5f14c7faf9df96c6530e8ff7dd5096d4cd13765ed66bd4f"
+    },
     "apps/api/src/common/prisma/bump-v2-scope-versions.ts": {
       "commit": "1c339754507f29459d17d75bb84afbee8fba5291",
       "sha256": "c775e89856c89e3a94138698b489c1be79b5fb26f94677ee58a8008024849b7e"
+    },
+    "apps/api/src/id-business-v2/auto-registration/apple-mailboxes.controller.ts": {
+      "commit": "1bd89a110774ebb4cfcbcfeefa35752ae3c83fae",
+      "sha256": "027c289c56d8d3e6c6eeb7d3429d5ef414cb55238eef3e69d2423ec962e9cbbe"
+    },
+    "apps/api/src/id-business-v2/auto-registration/apple-mailboxes.service.ts": {
+      "commit": "1bd89a110774ebb4cfcbcfeefa35752ae3c83fae",
+      "sha256": "6a16e99c309657364de3af66fe7e4ea2a44e0b02cbb39ad110986f154e5360aa"
+    },
+    "apps/api/src/id-business-v2/auto-registration/apple-mailboxes.types.ts": {
+      "commit": "1bd89a110774ebb4cfcbcfeefa35752ae3c83fae",
+      "sha256": "2a710f67360b108dbb7fcfaf81d0c6dd71f18a7b4e80e29434a073569f394d34"
+    },
+    "apps/api/src/id-business-v2/auto-registration/auto-registration.module.ts": {
+      "commit": "1bd89a110774ebb4cfcbcfeefa35752ae3c83fae",
+      "sha256": "b43e24379321eb040f5258015ae51c076bd2b57dae0cc963966ce3546fa73079"
+    },
+    "apps/api/src/id-business-v2/auto-registration/auto-registration.service.ts": {
+      "commit": "1bd89a110774ebb4cfcbcfeefa35752ae3c83fae",
+      "sha256": "e92e23706fd3b82d1dac40c067d6b8ac111e70529a9b26e4691e891192771e46"
+    },
+    "apps/api/src/id-business-v2/auto-registration/worker/apple_mailboxes.py": {
+      "commit": "1bd89a110774ebb4cfcbcfeefa35752ae3c83fae",
+      "sha256": "b1cbea722f7d63c33181811c2446d43cf7af5b212ff2d379aadc3b3cb909c613"
+    },
+    "apps/api/src/id-business-v2/auto-registration/worker/test_registration_closed_loop_unit.py": {
+      "commit": "1bd89a110774ebb4cfcbcfeefa35752ae3c83fae",
+      "sha256": "50faaedb25008f3b73dcc7e66060810b4c09ad6fc6587d6fbc796fce13ae35af"
+    },
+    "apps/api/src/id-business-v2/auto-registration/worker/workspace.py": {
+      "commit": "1bd89a110774ebb4cfcbcfeefa35752ae3c83fae",
+      "sha256": "6bcb2050633db830068fd1a1b1a30d3dd75bf45f24aef3ab5b9c398d632e7237"
     }
   },
   "publishedOverlays": [
@@ -264,6 +334,10 @@
     {
       "proofFile": "table-container-build-proof.json",
       "proofSha256": "ca7d1e80f765d488ff2d4c4765d938956684e49bf851a71d4008610eacd12f59"
+    },
+    {
+      "proofFile": "registration-protocol-restore-build-proof.json",
+      "proofSha256": "6ce285517a0da4c157e70758b60edbb7099d33e77e8bd64877ea7fc4aee69a9b"
     }
   ],
   "reviewBase": "7e67492468c1481ed563a795cddb9ac8e44d097d",
@@ -280,21 +354,21 @@
   "scope": "ONLINE_CHECKOUT_FORM_AND_VISIBILITY",
   "services": {
     "admin": {
-      "containerId": "8f2eab820a4ec4aaf77e12b14c116006d891c8c62d3903276605fdad84cd2c56",
+      "containerId": "c1b0c7bda8401ae8e464b78a704155cca6db5d1158d454e12cd983a7fef9c547",
       "environmentSha256": "03ddab553858482dcbcc4a93d989902d31b41753eb155fb8162011e218bc0ad4",
       "health": "healthy",
-      "image": "sha256:fb9120071b7a5319573527ae3db968ea20efddf678b1caa80f5261009fe329cf",
-      "reference": "id-business-v2-table-container:123ea34df9bf74a1d65e74bd70f336eaa9344165",
-      "startedAtSha256": "1e4f09e20a475d06c410d99f147b9d48f9217b041976c7640a76d125c023d5d5",
+      "image": "sha256:c3c3ca7d675ea2a638eb4662c5f29bd05d5c3282587fc65eead091631c29ed82",
+      "reference": "id-business-v2-registration-protocol-restore:1bd89a110774ebb4cfcbcfeefa35752ae3c83fae-38942398236-admin",
+      "startedAtSha256": "700cdba6d0563f49926d298b15dacda4618e31d80e9a3ff82a9d8a3daf76bc2e",
       "status": "running"
     },
     "api": {
-      "containerId": "09104da1d7f967c10529effbb94e6d0d4be57e7bedd655bfb97196896550f30f",
+      "containerId": "d7dc73317ba544a1b2fc820a5509680bb5a0a80f42115b0a92e0d2b8b14bf661",
       "environmentSha256": "cc3662b8111310ec210a34ae642b9622da070f4fb94e1ea602ac355044136f5d",
       "health": "healthy",
-      "image": "sha256:1f59775176f1ec53d87c6b3659cf6dc2d530d724849eb5008877b094e4cc0f6f",
-      "reference": "id-business-v2-gpt-recharge:46bea6e11c9527e9b8930598de4cf2b13eb76635-38922620650",
-      "startedAtSha256": "225c2a8dd70886a7f4d3d7d38e46ec3c51dd1ed47c45a2a0859c260fd5dd0f07",
+      "image": "sha256:6adec07349bd2ba09e38f43a5664e6c26d210e52f6f90b37407372ee7857227d",
+      "reference": "id-business-v2-registration-protocol-restore:1bd89a110774ebb4cfcbcfeefa35752ae3c83fae-38942398236-api",
+      "startedAtSha256": "546d1f6d21a9bbde9db6113043b57e70dcddf67e4c6e4529d521a49502409174",
       "status": "running"
     },
     "auto-recharge": {
@@ -343,12 +417,12 @@
       "status": "running"
     },
     "online-recharge": {
-      "containerId": "03b121165bd9a6045cdb97262b4c0d5a15cbf33ef59109e1fb8b8191eb9a0999",
+      "containerId": "fcba2b5fe813e65346032d410e25f1d85efb1a58146e95970a67b3792230dc76",
       "environmentSha256": "60bb48bbd6e03a4ceebe245c8405f248d0c682a27287aabb17c1d3573e50ad37",
       "health": "healthy",
       "image": "sha256:cc59767525bcd39755d02283aec537476d82772ae5b3aeabf67e5118efb06440",
       "reference": "id-business-v2-online-settings:55d5ee5504c9d8d4218632e8cb8eb508923ad9f8-38909769886-online-recharge",
-      "startedAtSha256": "18c1950de24fbdf0d0921ceb6d8567d34bab36330ab8c66444075c618808f965",
+      "startedAtSha256": "2909e7bc61b32031f30637dc0cd973a47cc743167bc1c9a0fab5119bd7c4e71b",
       "status": "running"
     }
   },
