@@ -467,6 +467,16 @@
         >
           {{ appleMailboxSelectionLabel(page.taskQuery.data?.record) }}
         </p>
+        <section v-if="flowEvidenceRows.length" class="v2-apple-field" aria-label="注册流程观察">
+          <strong>注册流程观察</strong>
+          <p>以下观察只说明请求处理经过，账号创建、身份核验和同步结果以上方记录为准。</p>
+          <ol>
+            <li v-for="row in flowEvidenceRows" :key="row.stage">
+              <strong>{{ row.title }} · {{ row.status }}</strong>
+              <p class="v2-apple-task-source">{{ row.detail }}</p>
+            </li>
+          </ol>
+        </section>
         <pre class="v2-apple-task-log">{{
           page.taskQuery.data?.logs.join('\n') || '暂无任务记录'
         }}</pre>
@@ -600,7 +610,7 @@
 </template>
 
 <script setup lang="ts">
-import { reactive, ref } from 'vue';
+import { computed, reactive, ref } from 'vue';
 import AppButton from '@/components/ui/AppButton.vue';
 import V2AsyncRegion from '@/v2/components/V2AsyncRegion.vue';
 import V2ConfirmDialog from '@/v2/components/V2ConfirmDialog.vue';
@@ -634,12 +644,16 @@ import {
   appleMailboxSelectionLabel,
   appleMailboxCanResumeAuthorization,
   appleMailboxAuthorizationLabel,
-  appleMailboxManualSyncPreviewLabel
+  appleMailboxManualSyncPreviewLabel,
+  appleMailboxFlowEvidenceRows
 } from './apple-mailbox-presentation';
 import type { AppleMailboxRow } from './contracts';
 import { useAppleMailboxes } from './useAppleMailboxes';
 
 const page = reactive(useAppleMailboxes());
+const flowEvidenceRows = computed(() =>
+  appleMailboxFlowEvidenceRows(page.taskQuery.data?.flowEvidence)
+);
 const ipInput = ref<{ focus: () => void }>();
 const noteInput = ref<{ focus: () => void }>();
 async function saveMark() {

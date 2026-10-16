@@ -567,6 +567,13 @@ function recordGuardCommands(
         { encoding: 'utf8' }
       )
     : null;
+  const environmentWorkflowSource = priorRepairCommit
+    ? execFileSync(
+        'git',
+        ['show', priorRepairCommit + ':.github/workflows/registration-closure-validation.yml'],
+        { encoding: 'utf8' }
+      )
+    : null;
   const script = `
     import childProcess from 'node:child_process';
     import fs from 'node:fs';
@@ -579,8 +586,11 @@ function recordGuardCommands(
     const cacheConfigurationUrl = new URL('./deploy/nginx/admin.conf', import.meta.url).href;
     const cacheConfiguration = ${JSON.stringify(cacheConfiguration)};
     const environmentTestSource = ${JSON.stringify(environmentTestSource)};
+    const environmentWorkflowSource = ${JSON.stringify(environmentWorkflowSource)};
     const originalReadFileSync = fs.readFileSync;
     fs.readFileSync = (path, options) => {
+      if (String(path) === '.github/workflows/registration-closure-validation.yml' && typeof environmentWorkflowSource === 'string')
+        return typeof options === 'string' ? environmentWorkflowSource : Buffer.from(environmentWorkflowSource);
       if (String(path) === 'scripts/production-release/registration-closure-release.test.py' && typeof environmentTestSource === 'string')
         return typeof options === 'string' ? environmentTestSource : Buffer.from(environmentTestSource);
       if (String(path) === readonlyPath && typeof readonlySource === 'string')

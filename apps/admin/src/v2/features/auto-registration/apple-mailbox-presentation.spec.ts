@@ -1,6 +1,12 @@
 import { describe, expect, it } from 'vitest';
+import { readFileSync } from 'node:fs';
+import { runInNewContext } from 'node:vm';
 import { isAutoRegistrationPage } from './bridge';
-import { appleMailboxPage, type AppleMailboxRow } from './contracts';
+import {
+  appleMailboxPage,
+  type AppleMailboxRow,
+  type AppleMailboxFlowObservation
+} from './contracts';
 import {
   appleMailboxIpSourceLabel,
   appleMailboxMarkError,
@@ -18,7 +24,8 @@ import {
   appleMailboxCanRecover,
   appleMailboxCanResumeAuthorization,
   appleMailboxAuthorizationLabel,
-  appleMailboxManualSyncPreviewLabel
+  appleMailboxManualSyncPreviewLabel,
+  appleMailboxFlowEvidenceRows
 } from './apple-mailbox-presentation';
 
 const row: AppleMailboxRow = {
@@ -218,5 +225,143 @@ describe('苹果隐藏邮箱注册边界与中文展示', () => {
     expect(appleMailboxSourceLabel('automatic')).toBe('注册任务');
     expect(appleMailboxIpSourceLabel('observed')).toBe('任务检测出口');
     expect(appleMailboxIpSourceLabel('manual')).toBe('人工填写');
+  });
+});
+
+const flowObservation: AppleMailboxFlowObservation = {
+  observedAt: '2026-10-16T00:00:00.000Z',
+  httpStatus: 200,
+  contentType: 'json',
+  jsonKind: 'object',
+  pageKind: 'new_account',
+  officialOrigin: true,
+  redirectHosts: ['auth_openai'],
+  redirectsTruncated: false,
+  requestIdPresent: true,
+  requestIdSha256: 'a'.repeat(64),
+  decision: 'accepted',
+  reason: null
+};
+function iframeFlowRows(value: unknown) {
+  const source = readFileSync(
+    new URL(
+      '../../../../../../apps/api/src/id-business-v2/auto-registration/worker/id-workspace.js',
+      import.meta.url
+    ),
+    'utf8'
+  );
+  const start = source.indexOf('  function registrationFlowEvidenceRows(');
+  const end = source.indexOf('  function installAppleConsole()', start);
+  expect(start).toBeGreaterThan(0);
+  expect(end).toBeGreaterThan(start);
+  const execute = runInNewContext(
+    source.slice(start, end) + '\nregistrationFlowEvidenceRows',
+    Object.create(null)
+  );
+  return JSON.parse(JSON.stringify(execute(value)));
+}
+
+describe('注册任务流程证据的封闭中文展示', () => {
+  it('三阶段使用同型字段，观察和继续均不冒充注册成功', () => {
+    const evidence = {
+      version: 1,
+      authorize: { ...flowObservation, jsonKind: 'not_checked', pageKind: 'not_checked' },
+      signup: flowObservation,
+      password: { ...flowObservation, decision: 'observed', pageKind: 'not_checked' }
+    };
+    const rows = appleMailboxFlowEvidenceRows(evidence);
+    expect(rows.map((row) => row.title)).toEqual(['授权入口', '提交注册邮箱', '提交注册密码']);
+    expect(rows[0]?.status).toBe('已确认继续');
+    expect(rows[1]?.detail).toContain('页面类型：新账号注册');
+    expect(rows[2]?.status).toBe('已观察，不代表注册成功');
+    expect(rows[0]?.detail).toContain('官网来源已确认');
+    expect(rows[0]?.detail).not.toContain('a'.repeat(64));
+    expect(iframeFlowRows(evidence)).toEqual(rows);
+  });
+  it('兼容没有证据的旧任务，有新结构时明确区分尚未观察阶段', () => {
+    for (const value of [undefined, null, {}, { version: 2 }, []]) {
+      expect(appleMailboxFlowEvidenceRows(value)).toEqual([]);
+      expect(iframeFlowRows(value)).toEqual([]);
+    }
+    const evidence = { version: 1, authorize: flowObservation };
+    expect(appleMailboxFlowEvidenceRows(evidence)[1]?.status).toBe('尚未观察');
+    expect(iframeFlowRows(evidence)).toEqual(appleMailboxFlowEvidenceRows(evidence));
+  });
+  it('异常200明确停止，同时保留原首次失败判断', () => {
+    const evidence = {
+      version: 1,
+      signup: {
+        ...flowObservation,
+        pageKind: 'unknown',
+        decision: 'rejected',
+        reason: 'unexpected_page'
+      }
+    };
+    const rows = appleMailboxFlowEvidenceRows(evidence);
+    expect(rows[1]?.status).toBe('已停止，等待核对');
+    expect(rows[1]?.detail).toContain('响应状态 200');
+    expect(rows[1]?.detail).toContain('页面类型与预期不符');
+    expect(rows[2]?.status).toBe('尚未观察');
+    expect(
+      appleMailboxDiagnostic({
+        firstFailure: {
+          stage: 'signup',
+          errorKind: 'http_rejected',
+          httpStatus: 200,
+          elapsedMs: 10,
+          observedAt: flowObservation.observedAt
+        }
+      })
+    ).toContain('首次失败：提交注册表单');
+    expect(iframeFlowRows(evidence)).toEqual(rows);
+  });
+  it('不显示响应正文、原始网址、请求标识、凭据或未知枚举，即使传入受污染资料', () => {
+    const sensitive =
+      'https://synthetic-user:synthetic-password@example.invalid/path?token=synthetic-secret';
+    const evidence = {
+      version: 1,
+      signup: {
+        ...flowObservation,
+        contentType: sensitive,
+        pageKind: sensitive,
+        reason: sensitive,
+        decision: sensitive,
+        redirectHosts: [sensitive, {}, 'other'],
+        httpStatus: sensitive,
+        officialOrigin: sensitive,
+        observedAt: sensitive,
+        requestIdSha256: sensitive,
+        payload: sensitive,
+        rawUrl: sensitive
+      }
+    };
+    const rows = appleMailboxFlowEvidenceRows(evidence);
+    const displayed = JSON.stringify(rows);
+    for (const secret of [sensitive, 'synthetic-password', 'synthetic-secret', 'example.invalid'])
+      expect(displayed).not.toContain(secret);
+    expect(displayed).toContain('待核对');
+    expect(iframeFlowRows(evidence)).toEqual(rows);
+  });
+  it('API和Admin证据类型逐字同型且仅登记在任务，不写入邮箱及同步资料', () => {
+    const api = readFileSync(
+      new URL(
+        '../../../../../../apps/api/src/id-business-v2/auto-registration/apple-mailboxes.types.ts',
+        import.meta.url
+      ),
+      'utf8'
+    );
+    const admin = readFileSync(new URL('./contracts.ts', import.meta.url), 'utf8');
+    const block = (source: string) =>
+      source.slice(
+        source.indexOf('export interface AppleMailboxFlowObservation'),
+        source.indexOf('export interface AppleMailboxTask {')
+      );
+    expect(block(api)).toBe(block(admin));
+    for (const source of [api, admin]) {
+      expect(source.match(/flowEvidence\?:/g)).toHaveLength(1);
+      expect(source).toContain(
+        'export interface AppleMailboxTask {\n  flowEvidence?: AppleMailboxFlowEvidence;'
+      );
+    }
   });
 });

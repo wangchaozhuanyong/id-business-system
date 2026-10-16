@@ -9,7 +9,8 @@ import type { AutoRegistrationService } from './auto-registration.service';
 import type {
   AppleMailboxCodeRequest,
   AppleMailboxRecord,
-  AppleMailboxSummary
+  AppleMailboxSummary,
+  AppleMailboxTask
 } from './apple-mailboxes.types';
 
 const taskId = '11111111-1111-4111-8111-111111111111';
@@ -153,6 +154,48 @@ describe('苹果隐藏邮箱：权限、登记与私有取码桥', () => {
       call[0].endsWith(`/requests/${requestId}`)
     )?.[2];
   }
+
+  it('任务读取透传可选安全流程证据，旧任务不补造证据且邮箱池不携带', async () => {
+    const observation = {
+      observedAt: '2026-10-16T00:00:00.000Z',
+      httpStatus: 200,
+      contentType: 'json' as const,
+      jsonKind: 'object' as const,
+      pageKind: 'unknown' as const,
+      officialOrigin: true,
+      redirectHosts: ['auth_openai' as const],
+      redirectsTruncated: false,
+      requestIdPresent: true,
+      requestIdSha256: 'a'.repeat(64),
+      decision: 'rejected' as const,
+      reason: 'unexpected_page' as const
+    };
+    const task: AppleMailboxTask = {
+      taskUuid: taskId,
+      status: 'failed',
+      logs: [],
+      record: {
+        ...baseRecord(),
+        firstFailure: {
+          stage: 'signup',
+          errorKind: 'http_rejected',
+          httpStatus: 200,
+          elapsedMs: 15,
+          observedAt: observation.observedAt
+        }
+      },
+      resultKind: 'failed',
+      flowEvidence: { version: 1, signup: observation }
+    };
+    worker.appleMailboxRequest.mockResolvedValueOnce(task);
+    expect(await service.task(taskId, actor)).toEqual(task);
+    const legacy = await service.task(taskId, actor);
+    expect(legacy).not.toHaveProperty('flowEvidence');
+    expect((await service.list({}, actor)).items[0]).not.toHaveProperty('flowEvidence');
+    expect(audit.create).toHaveBeenCalledWith(
+      expect.objectContaining({ action: '查看隐藏邮箱任务' })
+    );
+  });
 
   it('新邮箱没有登记时默认未注册并自动进入候选，已有历史unknown保留', async () => {
     records = [];
