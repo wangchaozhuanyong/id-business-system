@@ -313,6 +313,35 @@ def api_delta(before, after, approved):
     return {name: after[name] for name in sorted(changed)}
 
 
+def client_inventory_diagnostic(expected, actual):
+    """Bounded names/digests only; unknown filenames and invalid digests stay private."""
+    known_names = {
+        'client.d.ts', 'client.js', 'default.d.ts', 'default.js', 'edge.d.ts', 'edge.js',
+        'index-browser.js', 'index.d.ts', 'index.js', 'package.json', 'query_engine_bg.js',
+        'query_engine_bg.wasm', 'schema.prisma', 'wasm-edge-light-loader.mjs',
+        'wasm-worker-loader.mjs', 'wasm.d.ts', 'wasm.js',
+        'libquery_engine-debian-openssl-3.0.x.so.node'
+    }
+    groups = {
+        'missing': sorted(expected.keys() - actual.keys()),
+        'unexpected': sorted(actual.keys() - expected.keys()),
+        'different': sorted(name for name in expected.keys() & actual.keys()
+                            if expected[name] != actual[name])
+    }
+    result = {'expectedCount': len(expected), 'actualCount': len(actual)}
+    remaining = 32
+    safe_digest = lambda value: value if isinstance(value, str) and re.fullmatch('[a-f0-9]{64}', value) else None
+    for group, names in groups.items():
+        selected = names[:remaining]
+        remaining -= len(selected)
+        result[group + 'Count'] = len(names)
+        result[group] = [{'file': name if name in known_names else '[unrecognized filename]',
+                          'expectedSha256': safe_digest(expected.get(name)),
+                          'actualSha256': safe_digest(actual.get(name))} for name in selected]
+    result['truncated'] = sum(map(len, groups.values())) > 32
+    return result
+
+
 def unchanged_client(context, contract):
     """Compare all runtime bytes, rewriting only two known generated metadata fields."""
     directory = context / 'node_modules/.prisma/client'
@@ -330,6 +359,10 @@ def unchanged_client(context, contract):
             need(raw.count(before) == 1, 'CLIENT_METADATA_FIELD_CHANGED')
             raw = raw.replace(before, after, 1)
         values[name] = digest(raw.encode())
+    if values != contract['baselinePrismaClientFiles']:
+        print(json.dumps({'status': 'PRISMA_CLIENT_INVENTORY_MISMATCH',
+                          **client_inventory_diagnostic(contract['baselinePrismaClientFiles'], values)},
+                         sort_keys=True), flush=True)
     need(values == contract['baselinePrismaClientFiles'], 'UNCHANGED_CLIENT_NOT_REPRODUCED')
     return values
 

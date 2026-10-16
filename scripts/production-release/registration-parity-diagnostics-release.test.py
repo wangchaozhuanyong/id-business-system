@@ -1,5 +1,6 @@
-"""Pure successor controls. No network, containers, database or production writes."""
+"""Successor controls; CI-only guards additionally generate one static client without a database."""
 import ast
+from contextlib import redirect_stdout
 import copy
 import hashlib
 import importlib.util
@@ -176,6 +177,67 @@ print(json.dumps(calls))
             cwd=context, env={'PATH': '/synthetic/bin', 'PRISMA_UNRELATED': 'kept',
                              'DATABASE_URL': 'mysql://prisma:prisma@127.0.0.1:3306/id_business_v2'})
         self.assertNotIn('--workspace', execute.call_args.args)
+
+    @unittest.skipUnless(os.environ.get('GITHUB_ACTIONS') == 'true'
+                         and os.environ.get('CHECK_MODE') == 'ci-only',
+                         'Static Linux client generation runs only in GitHub CI-only guards')
+    def test_ci_only_generates_real_locked_root_client_and_compares_all_files(self):
+        # Missing Prisma, engines or lock-installed dependencies is a failure.
+        # generate never connects to the dummy DATABASE_URL; no migration runs.
+        b.generate_unchanged_client(ROOT)
+        self.assertEqual(b.unchanged_client(ROOT, self.contract), self.contract['baselinePrismaClientFiles'])
+
+    def test_client_inventory_diagnostic_is_bounded_and_does_not_disclose_raw_values(self):
+        sensitive = 'https://secret-user:secret-password@example.invalid/?token=secret-token'
+        expected = {'schema.prisma': 'a' * 64, 'index.js': 'b' * 64, sensitive: sensitive}
+        actual = {'index.js': 'c' * 64, 'package.json': 'd' * 64}
+        diagnostic = b.client_inventory_diagnostic(expected, actual)
+        self.assertEqual(diagnostic['missingCount'], 2)
+        self.assertEqual(diagnostic['unexpectedCount'], 1)
+        self.assertEqual(diagnostic['different'], [{'file': 'index.js', 'expectedSha256': 'b' * 64,
+                                                  'actualSha256': 'c' * 64}])
+        encoded = json.dumps(diagnostic)
+        for value in [sensitive, 'secret-password', 'secret-token', 'example.invalid']:
+            self.assertNotIn(value, encoded)
+        many = b.client_inventory_diagnostic({}, {'untrusted-' + str(i): 'a' * 64 for i in range(100)})
+        self.assertEqual(many['unexpectedCount'], 100)
+        self.assertEqual(len(many['unexpected']), 32)
+        self.assertTrue(many['truncated'])
+        self.assertNotIn('untrusted-', json.dumps(many))
+
+    def test_client_mismatch_prints_safe_inventory_and_still_rejects(self):
+        with tempfile.TemporaryDirectory(dir=OUTPUT) as temporary:
+            context = Path(temporary)
+            directory = context / 'node_modules/.prisma/client'
+            directory.mkdir(parents=True)
+            raw = ('"output": {\n      "value": ' + json.dumps(str(context / 'node_modules/@prisma/client'), ensure_ascii=False)
+                   + ',\n  "sourceFilePath": '
+                   + json.dumps(str(context / 'apps/api/prisma-mysql/schema.prisma'), ensure_ascii=False)
+                   + '\n// synthetic-secret-body\n')
+            normalized = raw.replace(str(context) + '/', '/app/').encode()
+            actual = {}
+            expected = {}
+            for name in ['index.js', 'edge.js', 'wasm.js']:
+                (directory / name).write_text(raw)
+                actual[name] = digest(raw.encode())
+                expected[name] = digest(normalized)
+            expected['index.js'] = '0' * 64
+            actual['secret-token-filename'] = 'synthetic-secret-value'
+            contract = {'prismaPathMetadata': {'files': ['index.js', 'edge.js', 'wasm.js'],
+                        'publishedContext': '/app'}, 'baselinePrismaClientFiles': expected}
+            output = io.StringIO()
+            helper = types.SimpleNamespace(file_inventory=lambda _: actual.copy())
+            with patch.object(b, 'load', return_value=helper), redirect_stdout(output), \
+                    self.assertRaisesRegex(RuntimeError, 'UNCHANGED_CLIENT_NOT_REPRODUCED'):
+                b.unchanged_client(context, contract)
+            diagnostic = json.loads(output.getvalue())
+            self.assertEqual(diagnostic['status'], 'PRISMA_CLIENT_INVENTORY_MISMATCH')
+            self.assertEqual(diagnostic['expectedCount'], 3)
+            self.assertEqual(diagnostic['actualCount'], 4)
+            self.assertEqual(diagnostic['differentCount'], 1)
+            self.assertEqual(diagnostic['unexpectedCount'], 1)
+            for sensitive in ['synthetic-secret-body', 'synthetic-secret-value', 'secret-token-filename', str(context)]:
+                self.assertNotIn(sensitive, output.getvalue())
 
     def test_client_comparison_normalizes_only_two_known_metadata_fields_to_runtime_app(self):
         with tempfile.TemporaryDirectory(dir=OUTPUT) as temporary:
