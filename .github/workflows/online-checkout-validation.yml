@@ -38,6 +38,8 @@ jobs:
           npm run test --workspace @apple-business/api -- src/id-business-v2/online-recharge/validation.spec.ts src/id-business-v2/online-recharge/persistence/worker.repository.spec.ts src/id-business-v2/online-recharge/persistence/admin.repository.spec.ts src/id-business-v2/online-recharge/vendure-integration.spec.ts src/id-business-v2/online-recharge/worker-body-parser.spec.ts src/id-business-v2/bank-card-pool/shared-bank-card.spec.ts
       - name: Verify actual Chromium form and existing engine regressions
         run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends ffmpeg
           npm ci --prefix apps/api/src/id-business-v2/online-recharge/engine/upstream --ignore-scripts --no-audit --no-fund
           npx --prefix apps/api/src/id-business-v2/online-recharge/engine/upstream playwright install --with-deps chromium
           npm run test:online-recharge:engine
