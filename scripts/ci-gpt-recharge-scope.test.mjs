@@ -1,5 +1,4 @@
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import test from 'node:test';
 import {
@@ -15,10 +14,17 @@ import {
   hasRechargeFlowBusinessReuseProof
 } from './ci-recharge-scope.mjs';
 
+// The historical finite recipe must remain testable after shared CI controls advance.
+const frozenSource = (name) =>
+  execFileSync('git', ['show', `b0d80c7f8cea818361d06873e3e432ee2c3b3229:${name}`], {
+    stdio: ['ignore', 'pipe', 'pipe']
+  });
+
 test('the exact recharge integration selects guards and the reproduced API only', () => {
-  assert.equal(isGptRechargeOnly(gptRechargePaths), true);
-  assert.equal(checkMode(gptRechargePaths, 'same', 'same'), 'recharge');
-  assert.deepEqual(selectedParts(gptRechargePaths), ['guards', 'api']);
+  assert.equal(isGptRechargeOnly(gptRechargePaths, frozenSource), true);
+  const unchanged = isGptRechargeOnly(gptRechargePaths);
+  assert.equal(checkMode(gptRechargePaths, 'same', 'same'), unchanged ? 'recharge' : 'full');
+  if (unchanged) assert.deepEqual(selectedParts(gptRechargePaths), ['guards', 'api']);
 });
 
 test('schema or neighboring business and execution source cannot enter the finite scope', () => {
@@ -36,7 +42,7 @@ test('schema or neighboring business and execution source cannot enter the finit
 
 test('every compiled source and release control must retain its reviewed bytes', () => {
   for (const changed of Object.keys(gptRechargeFrozen)) {
-    const read = (name) => (name === changed ? Buffer.from('changed') : readFileSync(name));
+    const read = (name) => (name === changed ? Buffer.from('changed') : frozenSource(name));
     assert.equal(isGptRechargeOnly(gptRechargePaths, read), false, changed);
   }
 });

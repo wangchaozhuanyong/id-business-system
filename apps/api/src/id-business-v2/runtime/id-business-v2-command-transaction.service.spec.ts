@@ -96,7 +96,7 @@ describe('V2CommandTransactionManager', () => {
               }
             },
             idBusinessV2ScopeVersion: {
-              updateMany: async () => {
+              upsert: async () => {
                 staged.version += 1;
                 return { count: 1 };
               }
@@ -181,7 +181,7 @@ describe('V2CommandTransactionManager', () => {
 
   it('bumps only the declared portable scope versions in the same successful transaction', async () => {
     const tx = {
-      idBusinessV2ScopeVersion: { updateMany: vi.fn().mockResolvedValue({ count: 35 }) }
+      idBusinessV2ScopeVersion: { upsert: vi.fn().mockResolvedValue({ count: 35 }) }
     };
     const prisma = { $transaction: vi.fn(async (work) => work(tx)) };
     const manager = createManager(prisma);
@@ -192,15 +192,16 @@ describe('V2CommandTransactionManager', () => {
         requestId: 'request-scope'
       })
     ).resolves.toBe('created');
-    expect(tx.idBusinessV2ScopeVersion.updateMany).toHaveBeenCalledWith({
-      where: { scope: { in: ['orders'] } },
-      data: { version: { increment: 1 }, updatedAt: expect.any(Date) }
+    expect(tx.idBusinessV2ScopeVersion.upsert).toHaveBeenCalledWith({
+      where: { scope: 'orders' },
+      create: { scope: 'orders', version: 1, updatedAt: expect.any(Date) },
+      update: { version: { increment: 1 }, updatedAt: expect.any(Date) }
     });
   });
 
   it('publishes exact scopes only after the transaction commits', async () => {
     const tx = {
-      idBusinessV2ScopeVersion: { updateMany: vi.fn().mockResolvedValue({ count: 1 }) }
+      idBusinessV2ScopeVersion: { upsert: vi.fn().mockResolvedValue({ count: 1 }) }
     };
     const publishCommittedChangeBestEffort = vi.fn();
     const prisma = { $transaction: vi.fn(async (work) => work(tx)) };
@@ -359,13 +360,14 @@ describe('V2CommandTransactionManager', () => {
 
   it('commits nested command scopes once and closes registration before version writes', async () => {
     let mark: ((scopes: readonly ['exchange-rates']) => void) | undefined;
-    const updateMany = vi.fn(async () => {
+    const upsert = vi.fn(async (value: { where: { scope: string } }) => {
+      expect(value.where.scope).toBeTruthy();
       expect(() => mark?.(['exchange-rates'])).toThrow('registration is closed');
       return { count: 2 };
     });
     const publish = vi.fn();
     const prisma = {
-      $transaction: vi.fn(async (work) => work({ idBusinessV2ScopeVersion: { updateMany } }))
+      $transaction: vi.fn(async (work) => work({ idBusinessV2ScopeVersion: { upsert } }))
     };
     const manager = new V2CommandTransactionManager(
       prisma as never,
@@ -378,9 +380,10 @@ describe('V2CommandTransactionManager', () => {
       },
       { changedScopes: ['orders'], requestId: 'nested-scopes' }
     );
-    expect(updateMany).toHaveBeenCalledWith(
-      expect.objectContaining({ where: { scope: { in: ['orders', 'exchange-rates'] } } })
-    );
+    expect(upsert.mock.calls.map(([value]) => value.where.scope)).toEqual([
+      'orders',
+      'exchange-rates'
+    ]);
     expect(publish).toHaveBeenCalledWith(['orders', 'exchange-rates']);
     expect(() => mark?.(['exchange-rates'])).toThrow('registration is closed');
   });
@@ -389,13 +392,13 @@ describe('V2CommandTransactionManager', () => {
     'isolates nested scopes from failed %s attempts and replay',
     async (code) => {
       const publish = vi.fn();
-      const updateMany = vi.fn().mockResolvedValue({ count: 2 });
+      const upsert = vi.fn().mockResolvedValue({ count: 2 });
       const staleMarks: Array<() => void> = [];
       let attempts = 0;
       const prisma = {
         $transaction: vi.fn(async (work) => {
           attempts += 1;
-          const result = await work({ idBusinessV2ScopeVersion: { updateMany } });
+          const result = await work({ idBusinessV2ScopeVersion: { upsert } });
           if (attempts === 1) throw { code };
           return result;
         })
@@ -420,7 +423,7 @@ describe('V2CommandTransactionManager', () => {
         }
       );
       expect(publish).toHaveBeenCalledExactlyOnceWith(['orders', 'finance-reports']);
-      expect(updateMany.mock.calls.at(-1)?.[0].where.scope.in).toEqual([
+      expect(upsert.mock.calls.slice(-2).map(([value]) => value.where.scope)).toEqual([
         'orders',
         'finance-reports'
       ]);
@@ -429,10 +432,10 @@ describe('V2CommandTransactionManager', () => {
   );
 
   it('does not bump or publish nested scopes after an outer command failure', async () => {
-    const updateMany = vi.fn();
+    const upsert = vi.fn();
     const publish = vi.fn();
     const prisma = {
-      $transaction: vi.fn(async (work) => work({ idBusinessV2ScopeVersion: { updateMany } }))
+      $transaction: vi.fn(async (work) => work({ idBusinessV2ScopeVersion: { upsert } }))
     };
     const manager = new V2CommandTransactionManager(
       prisma as never,
@@ -447,7 +450,7 @@ describe('V2CommandTransactionManager', () => {
         { changedScopes: ['orders'], requestId: 'nested-rollback' }
       )
     ).rejects.toThrow('outer validation failed');
-    expect(updateMany).not.toHaveBeenCalled();
+    expect(upsert).not.toHaveBeenCalled();
     expect(publish).not.toHaveBeenCalled();
   });
 });
