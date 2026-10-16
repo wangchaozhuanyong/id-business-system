@@ -7,7 +7,7 @@ import json
 import math
 import re
 import time
-from urllib.parse import urlsplit
+from urllib.parse import urlsplit, urljoin
 
 from browser_checkout import ORIGIN, browser_read, check_session
 from checkout_core import BrowserCredential, Stop, parse_credential
@@ -158,12 +158,46 @@ async def official_identity(page, expected_email, *, budget=None, strict=False, 
         return None
 
 
+async def choose_email_login(page):
+    if not official_login_page(page.url):
+        return False
+    controls = page.locator("button, a")
+    matches = []
+    for index in range(await controls.count()):
+        control = controls.nth(index)
+        if not await control.is_visible() or not await control.is_enabled():
+            continue
+        text = (await control.inner_text()).strip()
+        if not re.fullmatch(r"email me a (?:login |one.time )?code|(?:log in|continue|sign in) with (?:a |an )?(?:one.time |email )?code|use (?:a |an )?(?:one.time |email )?code|send (?:me )?(?:a |an )?(?:login |one.time )?code|使用(?:邮箱)?验证码(?:登录)?|通过邮箱验证码登录|发送(?:登录)?验证码", text, re.I):
+            continue
+        href = await control.get_attribute("href")
+        if href and not official_login_page(urljoin(page.url, href)):
+            continue
+        matches.append(control)
+    if len(matches) != 1:
+        return False
+    await matches[0].click()
+    return True
+
+
+async def password_rejected(page):
+    if not re.search(r"password", urlsplit(page.url).path, re.I):
+        return False
+    alerts = page.locator('[role="alert"], [aria-live="assertive"], [data-error="true"]')
+    for index in range(await alerts.count()):
+        alert = alerts.nth(index)
+        if await alert.is_visible() and re.search(r"incorrect password|wrong password|invalid (?:email or )?password|密码(?:错误|不正确)", await alert.inner_text(), re.I):
+            return True
+    return False
+
+
 async def login_with_password(page, email, password, wait_for_code, wait_for_user, progress, *,
                               initial_loaded=False, prepare_email_code=None,
                               wait_for_email_code=None, email_code_accepted=None):
     """Submit one password and each explicit code type once; uncertain challenges stay here."""
     submitted_code_types = set()
     email_submitted = False
+    email_switched = False
 
     async def manual_completion():
         current = await official_identity(page, email)
@@ -212,8 +246,13 @@ async def login_with_password(page, email, password, wait_for_code, wait_for_use
                 raise
             return await manual_completion()
         if password_field:
-            await password_field.fill(password)
-            await password_field.press("Enter")
+            if password:
+                await password_field.fill(password)
+                await password_field.press("Enter")
+            else:
+                email_switched = True
+                if not await choose_email_login(page):
+                    return await manual_completion()
 
     deadline = time.monotonic() + 45
     while time.monotonic() < deadline:
@@ -224,6 +263,10 @@ async def login_with_password(page, email, password, wait_for_code, wait_for_use
             if email_submitted and email_code_accepted:
                 await email_code_accepted()
             return current
+        if password and not email_switched and await password_rejected(page):
+            email_switched = True
+            if not await choose_email_login(page):
+                return await manual_completion()
         try:
             code_field = await unique_visible(page, CODE_INPUT)
         except Stop as exc:
@@ -257,7 +300,7 @@ async def login_with_password(page, email, password, wait_for_code, wait_for_use
                         received_code.clear()
                     received_code = None
             except Stop as exc:
-                if exc.report["reason"] != "login_code_expired":
+                if exc.report["reason"] not in {"login_code_expired", "login_code_required"}:
                     raise
                 await clear_visible_secrets(page)
                 return await manual_completion()
@@ -292,7 +335,7 @@ async def login_with_password(page, email, password, wait_for_code, wait_for_use
                 code = ""
             submitted_code_types.add(code_type)
             email_submitted = email_submitted or code_type == "email"
-            progress("login_email_code_submitted" if email_submitted else "login_code_submitted")
+            progress("login_email_code_submitted" if code_type == "email" else "login_code_submitted")
             deadline = time.monotonic() + 45
         await asyncio.sleep(.5)
 

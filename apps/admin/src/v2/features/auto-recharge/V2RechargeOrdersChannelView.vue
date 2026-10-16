@@ -14,13 +14,13 @@
             <el-option label="比特浏览器订单" value="bitbrowser" />
             <el-option label="全部来源（含手工历史）" value="" />
           </el-select>
-          <el-input
+          <V2SearchInput
             v-model="keywordInput"
+            draft-key="auto-recharge:V2RechargeOrdersChannelView:keywordInput"
             clearable
             :aria-label="`搜索${channelLabel}`"
             placeholder="订单号、客户、账号或卡尾号"
-            @keyup.enter="applyFilters"
-            @clear="applyFilters"
+            @search="applyFilters"
           />
           <el-select v-model="statusInput" :aria-label="`${channelLabel}状态`">
             <el-option label="全部状态" value="" />
@@ -33,7 +33,6 @@
             <el-option label="全部到期状态" value="all" />
             <el-option label="已到期" value="expired" />
           </el-select>
-          <AppButton variant="soft" @click="applyFilters">查询</AppButton>
         </section>
       </template>
       <template #actions>
@@ -357,6 +356,7 @@
 </template>
 
 <script setup lang="ts">
+import V2SearchInput from '@/v2/components/V2SearchInput.vue';
 import { useBankRechargeRestoreNavigation } from './useBankRechargeRestoreNavigation';
 const { requestRestore, restoreNavigationError } = useBankRechargeRestoreNavigation();
 import { ref } from 'vue';

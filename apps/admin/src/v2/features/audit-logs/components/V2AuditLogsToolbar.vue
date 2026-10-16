@@ -1,12 +1,12 @@
 <template>
   <V2ListToolbar class="v2-audit-command-panel" aria-label="审计日志筛选" title="日志筛选">
-    <el-input
+    <V2SearchInput
       v-model="page.query.keyword"
+      draft-key="audit-logs:V2AuditLogsToolbar:page.query.keyword"
       clearable
       placeholder="资料名称、说明、员工"
       aria-label="搜索审计日志"
-      @keyup.enter="page.handleSearch"
-      @clear="page.handleSearch"
+      @search="page.handleSearch"
     />
     <el-select
       v-model="page.query.module"
@@ -20,13 +20,13 @@
         :label="option.label"
         :value="option.value"
     /></el-select>
-    <el-input
+    <V2SearchInput
       v-model="page.query.operator"
+      draft-key="audit-logs:V2AuditLogsToolbar:page.query.operator"
       clearable
       placeholder="操作人账号或姓名"
       aria-label="筛选操作人"
-      @keyup.enter="page.handleSearch"
-      @clear="page.handleSearch"
+      @search="page.handleSearch"
     />
     <el-select
       v-if="page.activeTab === 'operations'"
@@ -86,11 +86,7 @@
         @change="page.handleSearch"
       />
     </V2FilterDisclosure>
-    <template #actions
-      ><AppButton variant="primary" @click="page.handleSearch">
-        <el-icon><Search /></el-icon>
-        查询
-      </AppButton>
+    <template #actions>
       <AppButton :disabled="!page.activeFilterCount" @click="page.resetFilters">
         <el-icon><RefreshLeft /></el-icon>
         重置
@@ -105,9 +101,10 @@
 </template>
 
 <script setup lang="ts">
+import V2SearchInput from '@/v2/components/V2SearchInput.vue';
 import V2ListToolbar from '@/v2/components/V2ListToolbar.vue';
 import type { UnwrapNestedRefs } from 'vue';
-import { RefreshLeft, Search } from '@element-plus/icons-vue';
+import { RefreshLeft } from '@element-plus/icons-vue';
 import AppButton from '@/components/ui/AppButton.vue';
 import V2FilterDisclosure from '@/v2/components/V2FilterDisclosure.vue';
 import type { useAuditLogsPage } from '../useAuditLogsPage';

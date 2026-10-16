@@ -105,9 +105,6 @@ export class RechargeLocalService {
         if (input.chatgptAccountId && !account) {
           throw new BadRequestException('所选 ChatGPT 账号不可用');
         }
-        if (input.useSavedCredentials && !account?.passwordEncrypted) {
-          throw new ConflictException('所选 ChatGPT 账号尚未保存登录密码');
-        }
         const expectedEmail = input.expectedEmail ? bankRechargeEmail(input.expectedEmail) : null;
         if (
           account &&

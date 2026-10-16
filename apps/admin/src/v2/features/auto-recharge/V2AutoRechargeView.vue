@@ -66,7 +66,7 @@
               <el-form-item label="登录方式" required>
                 <el-radio-group v-model="loginMethod">
                   <el-radio-button value="json">授权 JSON</el-radio-button>
-                  <el-radio-button value="password">账号密码</el-radio-button>
+                  <el-radio-button value="password">账号自动登录</el-radio-button>
                 </el-radio-group>
               </el-form-item>
             </div>

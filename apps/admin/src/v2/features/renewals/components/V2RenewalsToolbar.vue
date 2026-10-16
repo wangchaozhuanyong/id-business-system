@@ -8,13 +8,13 @@
       ' 可查看任意日期，仅允许对 7 天内到期或已到期记录执行续费。 '
     ]"
   >
-    <el-input
+    <V2SearchInput
       v-model="page.query.keyword"
+      draft-key="renewals:V2RenewalsToolbar:page.query.keyword"
       clearable
       placeholder="订单、客户、ID账号、网站账号"
       aria-label="搜索续费记录"
-      @keyup.enter="page.handleSearch"
-      @clear="page.handleSearch"
+      @search="page.handleSearch"
     />
     <div class="v2-renewal-scope-control" role="group" aria-label="续费到期范围">
       <button
@@ -122,6 +122,7 @@
 </template>
 
 <script setup lang="ts">
+import V2SearchInput from '@/v2/components/V2SearchInput.vue';
 import V2ListToolbar from '@/v2/components/V2ListToolbar.vue';
 import { computed } from 'vue';
 import type { UnwrapNestedRefs } from 'vue';

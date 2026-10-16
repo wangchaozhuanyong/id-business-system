@@ -44,10 +44,7 @@ export function accountListItem(
     registrationCountryCode: item.registrationCountryCode,
     registeredAt: item.registeredAt ?? null,
     needsSupplement:
-      !item.passwordEncrypted ||
-      !item.registrationIpEncrypted ||
-      !item.registrationCountryCode ||
-      !item.registeredAt,
+      !item.registrationIpEncrypted || !item.registrationCountryCode || !item.registeredAt,
     status: item.status,
     offerStatus: item.offerStatus ?? 'unknown',
     offerSource: item.offerSource ?? null,

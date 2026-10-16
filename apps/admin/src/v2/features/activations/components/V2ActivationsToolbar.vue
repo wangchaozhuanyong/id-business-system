@@ -8,13 +8,13 @@
       ' 到期状态根据当前时间动态评估，刷新后会显示最新结果。 '
     ]"
   >
-    <el-input
+    <V2SearchInput
       v-model="page.query.keyword"
+      draft-key="activations:V2ActivationsToolbar:page.query.keyword"
       clearable
       placeholder="订单、客户、业务、ID账号"
       aria-label="搜索开通记录"
-      @keyup.enter="page.handleSearch"
-      @clear="page.handleSearch"
+      @search="page.handleSearch"
     />
     <el-select
       v-model="page.query.dueStatus"
@@ -42,11 +42,7 @@
         @change="page.handleFilterChange"
       />
     </V2FilterDisclosure>
-    <template #actions
-      ><AppButton variant="primary" @click="page.handleSearch">
-        <el-icon><Search /></el-icon>
-        查询记录
-      </AppButton>
+    <template #actions>
       <AppButton v-if="page.activeFilterCount" variant="ghost" @click="page.resetFilters">
         重置
       </AppButton></template
@@ -61,9 +57,9 @@
 </template>
 
 <script setup lang="ts">
+import V2SearchInput from '@/v2/components/V2SearchInput.vue';
 import V2ListToolbar from '@/v2/components/V2ListToolbar.vue';
 import type { UnwrapNestedRefs } from 'vue';
-import { Search } from '@element-plus/icons-vue';
 import AppButton from '@/components/ui/AppButton.vue';
 import V2FilterDisclosure from '@/v2/components/V2FilterDisclosure.vue';
 import type { useActivationsPage } from '../useActivationsPage';

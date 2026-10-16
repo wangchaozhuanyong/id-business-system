@@ -26,13 +26,13 @@
     </header>
 
     <section class="v2-supplier-payments-toolbar" aria-label="付款记录筛选">
-      <el-input
+      <V2SearchInput
         v-model="query.keyword"
+        draft-key="topup-records:V2TopupSupplierPaymentsPanel:query.keyword"
         clearable
         placeholder="交易哈希、网络、备注、供应商"
         aria-label="搜索付款记录"
-        @keyup.enter="applyFilters"
-        @clear="applyFilters"
+        @search="applyFilters"
       />
       <el-select
         v-model="query.supplierOptionId"
@@ -370,6 +370,7 @@
 </template>
 
 <script setup lang="ts">
+import V2SearchInput from '@/v2/components/V2SearchInput.vue';
 import { useV2FormDraft, useV2SessionDraft } from '@/v2/composables/useV2SessionDraft';
 
 import { toRef, computed, reactive, ref, watch } from 'vue';

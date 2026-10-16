@@ -64,12 +64,16 @@ describe('直连验证码只用于明确的身份验证器挑战', () => {
     ['/u/challenge', '请输入身份验证应用的验证码']
   ])('明确 TOTP 挑战可以获取、填入并提交当前验证码：%s', async (path, text) => {
     const { input, click } = challenge(path, text);
-    expect(await inspectLoginPage('inspect')).toEqual({ kind: 'code' });
-    expect(await inspectLoginPage('code', '123456')).toEqual({ kind: 'filled' });
-    expect(input.value).toBe('123456');
-    expect(await inspectLoginPage('submit', '123456', { stage: 'code' })).toEqual({
-      kind: 'submitted'
+    expect(await inspectLoginPage('inspect')).toEqual({ kind: 'code', codeType: 'totp' });
+    expect(await inspectLoginPage('code', '123456', { codeType: 'totp' })).toEqual({
+      kind: 'filled'
     });
+    expect(input.value).toBe('123456');
+    expect(await inspectLoginPage('submit', '123456', { stage: 'code', codeType: 'totp' })).toEqual(
+      {
+        kind: 'submitted'
+      }
+    );
     expect(click).toHaveBeenCalledOnce();
   });
   it.each([
@@ -81,24 +85,51 @@ describe('直连验证码只用于明确的身份验证器挑战', () => {
     ['/u/challenge', 'Enter verification code', 'unknown']
   ])('邮箱、短信及不明确挑战保留原窗口人工处理：%s %s', async (path, text, codeType) => {
     const { input, click } = challenge(path, text);
-    expect(await inspectLoginPage('inspect')).toEqual({ kind: 'manual', codeType });
-    expect(await inspectLoginPage('code', '123456')).toEqual({ kind: 'manual', codeType });
-    expect(await inspectLoginPage('submit', '123456', { stage: 'code' })).toEqual({
+    expect(await inspectLoginPage('inspect')).toEqual({
+      kind: codeType === 'email' ? 'code' : 'manual',
+      codeType
+    });
+    expect(await inspectLoginPage('code', '123456', { codeType: 'totp' })).toEqual({
       kind: 'manual',
       codeType
     });
+    expect(await inspectLoginPage('submit', '123456', { stage: 'code', codeType: 'totp' })).toEqual(
+      {
+        kind: 'manual',
+        codeType
+      }
+    );
     expect(input.value).toBe('');
     expect(input.dispatchEvent).not.toHaveBeenCalled();
     expect(click).not.toHaveBeenCalled();
   });
-  it('已填入后页面改为邮箱挑战时不点击提交', async () => {
-    const { form, click } = challenge('/u/mfa-otp-challenge', 'Use your authenticator app');
-    expect(await inspectLoginPage('code', '123456')).toEqual({ kind: 'filled' });
-    form.innerText = 'Enter the code sent to your email';
-    expect(await inspectLoginPage('submit', '123456', { stage: 'code' })).toEqual({
+  it('明确邮箱挑战只接受邮箱类型的验证码，不能填入TOTP', async () => {
+    const { input, click } = challenge('/u/email-verification', 'Check your inbox');
+    expect(await inspectLoginPage('code', '123456', { codeType: 'totp' })).toEqual({
       kind: 'manual',
       codeType: 'email'
     });
+    expect(await inspectLoginPage('code', '654321', { codeType: 'email' })).toEqual({
+      kind: 'filled'
+    });
+    expect(
+      await inspectLoginPage('submit', '654321', { stage: 'code', codeType: 'email' })
+    ).toEqual({ kind: 'submitted' });
+    expect(input.value).toBe('654321');
+    expect(click).toHaveBeenCalledOnce();
+  });
+  it('已填入后页面改为邮箱挑战时不点击提交', async () => {
+    const { form, click } = challenge('/u/mfa-otp-challenge', 'Use your authenticator app');
+    expect(await inspectLoginPage('code', '123456', { codeType: 'totp' })).toEqual({
+      kind: 'filled'
+    });
+    form.innerText = 'Enter the code sent to your email';
+    expect(await inspectLoginPage('submit', '123456', { stage: 'code', codeType: 'totp' })).toEqual(
+      {
+        kind: 'manual',
+        codeType: 'email'
+      }
+    );
     expect(click).not.toHaveBeenCalled();
   });
 });

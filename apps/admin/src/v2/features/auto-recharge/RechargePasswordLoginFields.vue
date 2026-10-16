@@ -15,7 +15,6 @@
         :key="account.id"
         :value="account.id"
         :label="rechargeAccountOptionLabel(account)"
-        :disabled="!account.hasPassword"
       />
     </el-select>
     <p v-if="error" class="recharge-error" role="alert">
@@ -23,9 +22,8 @@
       <AppButton size="small" variant="ghost" @click="emit('retry')">重试读取账号</AppButton>
     </p>
     <p class="recharge-note">
-      使用该账号已保存的登录密码。未保存密码时，请先到
-      <router-link to="/v2/account-settings/chatgpt-accounts">ChatGPT 账号</router-link
-      >补充登录密码。 已保存 2FA 时自动取码，其他验证在所属比特窗口完成。
+      已保存密码时使用密码登录，否则使用邮箱验证码登录。系统会按官网要求自动读取邮箱验证码或 2FA
+      验证码；其他验证请在原比特窗口完成。
     </p>
   </el-form-item>
 </template>

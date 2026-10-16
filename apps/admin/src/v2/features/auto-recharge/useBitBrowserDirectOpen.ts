@@ -8,6 +8,7 @@ import {
   type DirectBrowserOperation
 } from './bitbrowser-direct-api';
 import type { DirectLoginCredential } from './bitbrowser-direct-credential';
+import { automaticLoginCode } from './recharge-login-code';
 import type { DirectLoginCode } from './bitbrowser-direct-login';
 import { directOperationDeadline } from './recharge-direct-lifecycle';
 
@@ -73,7 +74,8 @@ export function useBitBrowserDirectOpen(
     launch: V2RechargeBitBrowserOpenLaunch,
     credential: DirectLoginCredential,
     windowName: string,
-    expectedIdentityEpoch = sessionCoordinator.identityEpoch.value
+    expectedIdentityEpoch = sessionCoordinator.identityEpoch.value,
+    accountId?: string
   ) {
     const clearCredentials = () => {
       if (credential.login) credential.login.password = '';
@@ -192,29 +194,31 @@ export function useBitBrowserDirectOpen(
                 throw directBrowserFailure(cause, 'record_restore');
               }
             },
-            code: () =>
-              new Promise<DirectLoginCode>((resolve, reject) => {
-                if (task.controller.signal.aborted)
-                  return reject(new DirectBrowserError('bitbrowser_direct_cancelled'));
-                const clear = () => {
-                  task.controller.signal.removeEventListener('abort', abort);
-                  task.clearCode = undefined;
-                  codeRequest = undefined;
-                };
-                const abort = () => {
-                  clear();
-                  reject(new DirectBrowserError('bitbrowser_direct_cancelled'));
-                };
-                task.clearCode = abort;
-                task.controller.signal.addEventListener('abort', abort, { once: true });
-                codeRequest = {
-                  id: launch.id,
-                  resolve: (code) => {
-                    clear();
-                    resolve(code);
-                  }
-                };
-              })
+            code: (challenge) =>
+              accountId
+                ? automaticLoginCode(launch.id, accountId, challenge, task.controller.signal)
+                : new Promise<DirectLoginCode>((resolve, reject) => {
+                    if (task.controller.signal.aborted)
+                      return reject(new DirectBrowserError('bitbrowser_direct_cancelled'));
+                    const clear = () => {
+                      task.controller.signal.removeEventListener('abort', abort);
+                      task.clearCode = undefined;
+                      codeRequest = undefined;
+                    };
+                    const abort = () => {
+                      clear();
+                      reject(new DirectBrowserError('bitbrowser_direct_cancelled'));
+                    };
+                    task.clearCode = abort;
+                    task.controller.signal.addEventListener('abort', abort, { once: true });
+                    codeRequest = {
+                      id: launch.id,
+                      resolve: (code) => {
+                        clear();
+                        resolve(code);
+                      }
+                    };
+                  })
           }
         );
         await callback('finished', result);

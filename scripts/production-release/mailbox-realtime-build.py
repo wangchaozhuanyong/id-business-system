@@ -51,7 +51,10 @@ def verify_sources():
     need(git('rev-parse', c['sourceBaseline'] + '^{tree}').decode().strip() == c['sourceBaselineTree'], 'BASE_CHANGED')
     changed = set(git('diff', '--name-only', c['sourceBaseline'], 'HEAD').decode().splitlines())
     need(changed == set(c['expectedGitChanges']), 'SOURCE_SCOPE_CHANGED')
-    for name, value in {**c['sources'], **c['validationSources'], **c['reviewedFileHashes']}.items():
+    git('merge-base', '--is-ancestor', c['reviewedApplicationCommit'], 'HEAD')
+    for name, value in c['sources'].items():
+        need(digest(git('show', c['reviewedApplicationCommit'] + ':' + name)) == value, 'REVIEWED_APPLICATION_CHANGED')
+    for name, value in {**c['validationSources'], **c['reviewedFileHashes']}.items():
         need(digest((ROOT / name).read_bytes()) == value, 'REVIEWED_SOURCE_CHANGED')
     return c
 
@@ -73,7 +76,7 @@ def prepare():
             for name in {**c['sources'], **c['validationSources']}:
                 destination = context / name
                 destination.parent.mkdir(parents=True, exist_ok=True)
-                raw = (ROOT / name).read_bytes()
+                raw = git('show', c['reviewedApplicationCommit'] + ':' + name) if name in c['sources'] else (ROOT / name).read_bytes()
                 if name.endswith('/auto-registration/apple-mailboxes.service.spec.ts'):
                     # Preserve the deployed fixture; add only this task's eight regression cases.
                     text = raw.decode()

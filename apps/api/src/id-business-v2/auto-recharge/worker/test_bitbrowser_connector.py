@@ -447,14 +447,25 @@ class BitBrowserConnectorTests(unittest.TestCase):
         value.pop("sessionJson")
         value["login"] = {"email": "test@example.invalid", "password": "local-only-password"}
         self.assertIs(connector.validate_payload(value), value)
+        empty = {**value, "login": {"email": "test@example.invalid", "password": ""}}
+        self.assertEqual(connector.validate_payload(empty)["login"]["password"], "")
         for changed in (
                 {**value, "sessionJson": "forbidden"},
-                {**value, "login": {"email": "test@example.invalid", "password": ""}},
                 {**value, "details": {**value["details"], "email": "other@example.invalid"}},
                 {**value, "login": {**value["login"], "code": "123456"}}):
             with self.subTest(changed=changed), self.assertRaises(Stop):
                 connector.validate_payload(changed)
         self.assertNotIn("login", connector.public_result(value))
+
+    def test_wrong_challenge_or_kind_never_wakes_the_waiter(self):
+        job = connector.LocalJob(payload())
+        job.waiting_for_code = True
+        job.code_challenge = ("email", "synthetic-challenge")
+        for kind, identifier in (("totp", "synthetic-challenge"), ("email", "other")):
+            with self.assertRaises(Stop):
+                job.signal_code("123456", None, kind, identifier)
+        self.assertFalse(job.code_event.is_set())
+        self.assertIsNone(job.login_code)
 
     def test_code_is_accepted_only_while_requested_and_never_sent_in_progress(self):
         value = payload()
@@ -463,7 +474,7 @@ class BitBrowserConnectorTests(unittest.TestCase):
         job = connector.LocalJob(value)
         job.callback.send = MagicMock(return_value={})
         with self.assertRaises(Stop):
-            job.signal_code("123456")
+            job.signal_code("123456", None, *(job.code_challenge or (None, None)))
 
         async def scenario():
             waiting = asyncio.create_task(job.wait_for_code(2))
@@ -471,7 +482,7 @@ class BitBrowserConnectorTests(unittest.TestCase):
                 if job.waiting_for_code:
                     break
                 await asyncio.sleep(.005)
-            job.signal_code("123456")
+            job.signal_code("123456", None, *(job.code_challenge or (None, None)))
             self.assertEqual(await waiting, "123456")
             self.assertFalse(job.waiting_for_code)
 
@@ -489,7 +500,7 @@ class BitBrowserConnectorTests(unittest.TestCase):
                 if job.waiting_for_code:
                     break
                 await asyncio.sleep(.005)
-            job.signal_code("123456", expiry)
+            job.signal_code("123456", expiry, *(job.code_challenge or (None, None)))
             self.assertEqual(await waiting, {"code": "123456", "expiresAt": expiry})
         with patch.object(connector.time, "time", return_value=100):
             asyncio.run(scenario())
@@ -509,7 +520,7 @@ class BitBrowserConnectorTests(unittest.TestCase):
                 if job.waiting_for_code:
                     break
                 await asyncio.sleep(.005)
-            job.signal_code("123456", expiry)
+            job.signal_code("123456", expiry, *(job.code_challenge or (None, None)))
             queued = job.login_code
             clock.return_value = 102
             with self.assertRaises(Stop) as stopped:
@@ -532,7 +543,7 @@ class BitBrowserConnectorTests(unittest.TestCase):
                     break
                 await asyncio.sleep(.005)
             with self.assertRaises(Stop) as stopped:
-                job.signal_code("123456", expiry)
+                job.signal_code("123456", expiry, *(job.code_challenge or (None, None)))
             self.assertEqual(stopped.exception.report["reason"], "login_code_expired")
             with self.assertRaises(Stop) as stopped:
                 await waiting
@@ -548,7 +559,7 @@ class BitBrowserConnectorTests(unittest.TestCase):
                 job = connector.LocalJob(payload())
                 job.waiting_for_code = True
                 with self.assertRaises(Stop) as stopped:
-                    job.signal_code("123456", expiry)
+                    job.signal_code("123456", expiry, *(job.code_challenge or (None, None)))
                 self.assertEqual(stopped.exception.report["reason"], "invalid_login_code")
                 self.assertIsNone(job.login_code)
                 self.assertFalse(job.code_event.is_set())

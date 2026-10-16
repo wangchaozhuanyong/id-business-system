@@ -1,3 +1,4 @@
+import { resetV2SearchInputs } from '@/v2/composables/useV2AutoSearch';
 import { useV2FormDraft, useV2SessionDraft } from '@/v2/composables/useV2SessionDraft';
 import { computed, reactive, ref, watch } from 'vue';
 import { getApiErrorMessage } from '@/api/client';
@@ -45,7 +46,6 @@ import type {
   V2OptionSelector,
   V2RecordStatus
 } from './contracts';
-
 export function useAccountsPage() {
   const items = ref<V2Account[]>([]);
   const total = ref(0);
@@ -87,7 +87,6 @@ export function useAccountsPage() {
   );
   const activeFilterCount = computed(() => countActiveAccountsFilters(query));
   const lifecycleLabel = computed(() => accountLifecycleLabel(query.lifecycle));
-
   const editorDraft = useV2FormDraft('accounts-editor', emptyAccountForm);
   const { form } = editorDraft;
   const purchaseSourceState = useAccountPurchaseSources(form, editingItem);
@@ -205,6 +204,7 @@ export function useAccountsPage() {
   }
 
   function resetFilters() {
+    resetV2SearchInputs('accounts:');
     resetAccountsListFilters(query);
     loadCurrentAccounts();
   }
