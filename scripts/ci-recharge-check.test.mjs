@@ -20,6 +20,12 @@ import {
   registrationParityDiagnosticsAcceptance
 } from './ci-registration-parity-diagnostics-scope.mjs';
 import {
+  registrationBrowserBase,
+  registrationBrowserTree,
+  registrationBrowserPaths,
+  registrationBrowserCommands
+} from './ci-registration-browser-scope.mjs';
+import {
   onlineProxyCountryPaths,
   onlineProxyCountryCommands
 } from './ci-online-proxy-country-scope.mjs';
@@ -44,6 +50,39 @@ import {
 } from './ci-recharge-scope.mjs';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
+test('registration browser dispatcher runs every finite command and exits before historical publishers', () => {
+  for (const part of ['guards', 'release-controls', 'api', 'admin']) {
+    const calls = recordGuardCommands('recharge', registrationBrowserPaths, part, {
+      base: registrationBrowserBase,
+      browserFixture: true,
+      cloud: true
+    });
+    assert.deepEqual(calls, [
+      ...registrationBrowserCommands(part, registrationBrowserPaths),
+      ['process-exit', 0]
+    ]);
+  }
+  assert.throws(
+    () =>
+      recordGuardCommands('recharge', registrationBrowserPaths, 'migration', {
+        base: registrationBrowserBase,
+        browserFixture: true,
+        cloud: true
+      }),
+    /Unsupported registration browser/
+  );
+});
+
+test('registration browser SQLite suites cannot run through this finite dispatcher on the local Mac', () => {
+  assert.throws(
+    () =>
+      recordGuardCommands('recharge', registrationBrowserPaths, 'api', {
+        base: registrationBrowserBase,
+        browserFixture: true
+      }),
+    /require isolated CI/
+  );
+});
 test('checkout source recovery runs its native controls and the API suite without historical registration publishers', () => {
   const paths = [
     '.github/workflows/recharge-source-recovery-validation.yml',
@@ -754,7 +793,8 @@ function recordGuardCommands(
     readonlyCurrentSource = null,
     cacheConfiguration = null,
     identityFixture = false,
-    parityFixture = false
+    parityFixture = false,
+    browserFixture = false
   } = {}
 ) {
   // Run the real dispatcher with process execution replaced before its named import resolves.
@@ -808,6 +848,15 @@ function recordGuardCommands(
     };
     const scopeUrl = new URL('./scripts/ci-recharge-scope.mjs', import.meta.url).href;
     registerHooks({resolve(specifier, context, nextResolve) {
+      if (${JSON.stringify(browserFixture)} && specifier === './ci-registration-browser-scope.mjs' && context.parentURL?.endsWith('/scripts/ci-recharge-check.mjs')) {
+        const url = new URL('./scripts/ci-registration-browser-scope.mjs', import.meta.url).href;
+        const source = 'import * as m from ' + JSON.stringify(url) + ';export * from ' + JSON.stringify(url) + ';' +
+          'export function isRegistrationBrowserOnly(paths,options){' +
+          'const hashes=Object.fromEntries(m.registrationBrowserReviewedPaths.filter(p=>p!==m.registrationBrowserContract).map(p=>[p,"a".repeat(64)]));' +
+          'const contract={version:1,frozen:true,scope:"REGISTRATION_BROWSER",sourceBaseline:m.registrationBrowserBase,sourceBaselineTree:m.registrationBrowserTree,expectedCurrent:m.registrationBrowserCurrent,migration:null,expectedGitChanges:m.registrationBrowserReviewedPaths,sourceDeltaPaths:m.registrationBrowserPaths,allowedApplicationPaths:m.registrationBrowserApplications,controlPaths:m.registrationBrowserControls,sources:Object.fromEntries(m.registrationBrowserApplications.map(p=>[p,hashes[p]])),validationSources:{[m.registrationBrowserAcceptance]:hashes[m.registrationBrowserAcceptance]},reviewedFileHashes:hashes};' +
+          'return m.isRegistrationBrowserOnly(paths,{...options,contract,sourceDigest:p=>hashes[p]});}';
+        return {url:'data:text/javascript,'+encodeURIComponent(source),shortCircuit:true};
+      }
       if (${JSON.stringify(parityFixture)} && specifier === './ci-registration-parity-diagnostics-scope.mjs' && context.parentURL?.endsWith('/scripts/ci-recharge-check.mjs')) {
         const url = new URL('./scripts/ci-registration-parity-diagnostics-scope.mjs', import.meta.url).href;
         const source = 'import * as m from ' + JSON.stringify(url) + ';export * from ' + JSON.stringify(url) + ';' +
@@ -850,6 +899,7 @@ function recordGuardCommands(
     }});
     childProcess.execFileSync = (file, args) => {
       if (file === 'git') {
+        if (args.join(' ') === ${JSON.stringify('rev-parse ' + registrationBrowserBase + '^{tree}')}) return ${JSON.stringify(registrationBrowserTree + '\n')};
         if (args.join(' ') === ${JSON.stringify('rev-parse ' + registrationParityDiagnosticsBase + '^{tree}')}) return ${JSON.stringify(registrationParityDiagnosticsTree + '\n')};
         if (args.join(' ') === ${JSON.stringify('rev-parse ' + registrationParityDiagnosticsRepairBase + '^{tree}')}) return ${JSON.stringify(registrationParityDiagnosticsRepairTree + '\n')};
         if (args.join(' ') === 'rev-parse 7c3c102c98539d33cb379ef018427371ba750cb7^{tree}') return 'f6ab4537e28437af244c2263dd591516ae8e2a22\\n';

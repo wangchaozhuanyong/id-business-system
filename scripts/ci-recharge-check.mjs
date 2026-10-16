@@ -43,6 +43,11 @@ import {
 } from './ci-online-settings-scope.mjs';
 import { readRegistrationNativeReuse } from './ci-registration-closure-native-reuse.mjs';
 import {
+  isRegistrationBrowserOnly,
+  registrationBrowserBase,
+  registrationBrowserCommands
+} from './ci-registration-browser-scope.mjs';
+import {
   isOnlineProxyCountryOnly,
   isOnlineProxyCountryValidationOnly,
   onlineProxyCountryCommands
@@ -115,6 +120,19 @@ const changed = execFileSync('git', ['diff', '--name-only', base, 'HEAD'], { enc
   .trim()
   .split('\n')
   .filter(Boolean);
+if (
+  mode === 'recharge' &&
+  base === registrationBrowserBase &&
+  isRegistrationBrowserOnly(changed, {
+    base,
+    baseTree: execFileSync('git', ['rev-parse', base + '^{tree}'], { encoding: 'utf8' }).trim()
+  })
+) {
+  if (part === 'api' && process.env.GITHUB_ACTIONS !== 'true')
+    throw new Error('Registration browser database checks require isolated CI');
+  for (const [file, ...args] of registrationBrowserCommands(part, changed)) run(file, args);
+  process.exit(0);
+}
 if (
   (mode === 'recharge' && isAccountLoginOnly(changed)) ||
   (mode === 'ci-only' && isAccountLoginControlsOnly(changed))

@@ -43,6 +43,66 @@ import {
   registrationParityDiagnosticsPaths,
   registrationParityDiagnosticsParts
 } from './ci-registration-parity-diagnostics-scope.mjs';
+import {
+  registrationBrowserBase,
+  registrationBrowserTree,
+  registrationBrowserCurrent,
+  registrationBrowserPaths,
+  registrationBrowserReviewedPaths,
+  registrationBrowserApplications,
+  registrationBrowserControls,
+  registrationBrowserContract,
+  registrationBrowserAcceptance,
+  registrationBrowserParts
+} from './ci-registration-browser-scope.mjs';
+
+test('registration browser selects four affected checks only for the complete frozen source and unchanged schema', () => {
+  const paths = [...registrationBrowserPaths];
+  const hashes = Object.fromEntries(
+    registrationBrowserReviewedPaths
+      .filter((name) => name !== registrationBrowserContract)
+      .map((name) => [name, 'a'.repeat(64)])
+  );
+  const context = {
+    base: registrationBrowserBase,
+    baseTree: registrationBrowserTree,
+    sourceDigest: (name) => hashes[name],
+    contract: {
+      version: 1,
+      frozen: true,
+      scope: 'REGISTRATION_BROWSER',
+      sourceBaseline: registrationBrowserBase,
+      sourceBaselineTree: registrationBrowserTree,
+      expectedCurrent: registrationBrowserCurrent,
+      migration: null,
+      expectedGitChanges: [...registrationBrowserReviewedPaths],
+      sourceDeltaPaths: paths,
+      allowedApplicationPaths: [...registrationBrowserApplications],
+      controlPaths: [...registrationBrowserControls],
+      sources: Object.fromEntries(
+        registrationBrowserApplications.map((name) => [name, hashes[name]])
+      ),
+      validationSources: { [registrationBrowserAcceptance]: hashes[registrationBrowserAcceptance] },
+      reviewedFileHashes: hashes
+    }
+  };
+  assert.equal(checkMode(paths, 'same', 'same', undefined, context), 'recharge');
+  assert.deepEqual(selectedParts(paths, undefined, context), [...registrationBrowserParts]);
+  assert.equal(needsOnlineRechargeCiBuild(paths, context), false);
+  assert.equal(checkMode(paths, 'before', 'after', undefined, context), 'full');
+  for (const changed of [
+    { base: '0'.repeat(40) },
+    { baseTree: '0'.repeat(40) },
+    { contract: { ...context.contract, frozen: false } }
+  ])
+    assert.equal(checkMode(paths, 'same', 'same', undefined, { ...context, ...changed }), 'full');
+  for (const name of [
+    'apps/api/prisma-mysql/schema.prisma',
+    'package-lock.json',
+    'apps/admin/src/v2/features/auto-recharge/useAutoRecharge.ts'
+  ])
+    assert.equal(checkMode([...paths, name], 'same', 'same', undefined, context), 'full');
+});
 
 test('registration parity selects every affected check only with exact reviewed bytes and unchanged schema', () => {
   const paths = [...registrationParityDiagnosticsPaths];

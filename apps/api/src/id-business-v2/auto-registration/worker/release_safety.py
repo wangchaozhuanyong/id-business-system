@@ -51,7 +51,7 @@ PUBLIC_FACT_FIELDS = {"localSaveStatus", "syncStatus", "systemAccountId", "syncE
 OPTIONAL_RECORD_FIELDS = {"lastMailId", "consumedMailIds", "registrationEvidenceTaskUuid", "registeredAt",
                           "manualSyncId", "creationConfirmed", "authorizationStatus"} | PUBLIC_FACT_FIELDS
 TASK_FIELDS = {"email", "aliasId", "resultKind"}
-OPTIONAL_TASK_FIELDS = {"operatorId", "mirrorAccountId", "attempt", "sideEffectPossible", "batchId", "startedAt", "configurationCheckpoint", "passwordCheckpoint", "passwordSavedAt", "creationConfirmed", "existingAccountIndication", "verifiedExistingAccount", "rawResult", "identityEvidence", "upstreamAccountId", "syncPayload", "syncedAt", "needsReview", "lateFacts", "schemaVersion", "provider", "creationConfirmedAt", "syncRetryCount", "syncNextRetryAt", "providerCheckpoint", "flowEvidence"} | PUBLIC_FACT_FIELDS
+OPTIONAL_TASK_FIELDS = {"operatorId", "mirrorAccountId", "attempt", "sideEffectPossible", "batchId", "startedAt", "configurationCheckpoint", "passwordCheckpoint", "passwordSavedAt", "creationConfirmed", "existingAccountIndication", "verifiedExistingAccount", "rawResult", "identityEvidence", "upstreamAccountId", "syncPayload", "syncedAt", "needsReview", "lateFacts", "schemaVersion", "provider", "creationConfirmedAt", "syncRetryCount", "syncNextRetryAt", "providerCheckpoint", "flowEvidence", "browserRegistration"} | PUBLIC_FACT_FIELDS
 RESULT_FIELDS = {"success", "email", "password", "account_id", "workspace_id", "access_token", "refresh_token", "id_token", "session_token", "source", "metadata"}
 RESULT_METADATA_FIELDS = {"email_service", "proxy_used", "registered_at", "is_existing_account", "idSourceTaskUuid", "idAuthorizationStatus"}
 IDENTITY_FIELDS = {"source", "emailMatched", "officialUserIdHash", "observedAt"}
@@ -329,6 +329,38 @@ def validate_sync(value: Any, task_uuid: str, binding: dict[str, Any]) -> None:
         raise SafetyError("APPLE_RECORD_INVALID")
 
 
+def validate_browser_checkpoint(value: Any) -> None:
+    # Keep the host's read-only proof stdlib-only; do not import the adapter,
+    # FastAPI, settings or a database just to validate encrypted JSON facts.
+    events = {"browser_opened", "email_submitting", "password_submitting", "email_code_required",
+              "profile_required", "human_verification_required", "official_identity_observed"}
+    phases = events | {"waiting_for_browser", "claimed", "identity_verifying", "completed", "failed", "cancelled", "expired", "interrupted"}
+    failures = {None, "browser_unavailable", "browser_disconnected", "official_rejected", "existing_account",
+        "human_verification_required", "identity_missing", "identity_mismatch", "flow_changed", "timeout", "cancelled", "connector_error"}
+    fields = {"version", "phase", "expiresAt", "claimIdHash", "sequence", "lastEvent", "lastEventHash", "profileId",
+              "passwordAcknowledged", "browserOpened", "emailSubmitted", "failureReason", "creationEvidence"}
+    if (not isinstance(value, dict) or set(value) != fields or type(value.get("version")) is not int or value["version"] != 1
+            or not controlled(value.get("phase"), phases) or type(value.get("sequence")) is not int
+            or not 0 <= value["sequence"] <= 1000 or not controlled(value.get("lastEvent"), events | {None})
+            or not controlled(value.get("failureReason"), failures) or value.get("expiresAt") is None
+            or not nullable_date(value["expiresAt"])
+            or any(type(value.get(key)) is not bool for key in ("passwordAcknowledged", "browserOpened", "emailSubmitted"))
+            or (value.get("claimIdHash") is not None and (not isinstance(value["claimIdHash"], str)
+                or not re.fullmatch(r"[0-9a-f]{64}", value["claimIdHash"])))
+            or (value.get("lastEventHash") is not None and (not isinstance(value["lastEventHash"], str)
+                or not re.fullmatch(r"[0-9a-f]{64}", value["lastEventHash"])))
+            or (value.get("profileId") is not None and (not isinstance(value["profileId"], str)
+                or not re.fullmatch(r"[A-Za-z0-9_-]{1,191}", value["profileId"])))):
+        raise SafetyError("APPLE_RECORD_INVALID")
+    evidence = value.get("creationEvidence")
+    if evidence is not None and (not isinstance(evidence, dict)
+            or set(evidence) != {"pathKind", "httpStatus", "noError", "officialOrigin"}
+            or evidence.get("pathKind") != "create_account" or type(evidence.get("httpStatus")) is not int
+            or evidence["httpStatus"] not in {200, 201} or evidence.get("noError") is not True
+            or evidence.get("officialOrigin") is not True):
+        raise SafetyError("APPLE_RECORD_INVALID")
+
+
 def validate_task(task_uuid: str, value: Any, *, late=False) -> None:
     required = {"observedAt"} if late else TASK_FIELDS
     allowed = (OPTIONAL_TASK_FIELDS - {"lateFacts", "syncPayload"}) | {"observedAt"} if late else TASK_FIELDS | OPTIONAL_TASK_FIELDS
@@ -338,6 +370,8 @@ def validate_task(task_uuid: str, value: Any, *, late=False) -> None:
                 or not controlled(value.get("resultKind"), {None, "new_registration", "existing_account", "failed"})))):
         raise SafetyError("APPLE_RECORD_INVALID")
     validate_public_facts(value)
+    if "browserRegistration" in value:
+        validate_browser_checkpoint(value["browserRegistration"])
     if "flowEvidence" in value:
         try:
             validate_flow_evidence(value["flowEvidence"])

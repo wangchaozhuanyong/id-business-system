@@ -1,7 +1,7 @@
 <template>
   <section class="v2-page-layout v2-records-page">
     <V2PageContext
-      description="邮箱模块新增的隐藏邮箱会进入同一注册池，无注册记录时默认未注册；历史待确认邮箱仍需核对。单个与批量仅使用可用的未注册邮箱。指定邮箱、代理及原上传选项可在注册控制台选择。"
+      description="默认通过本机比特浏览器逐个注册，只使用可用的未注册邮箱。需要本人验证时在原窗口完成；原协议方式保留在更多操作中。"
     >
       <template #filters>
         <el-form inline label-position="left" require-asterisk-position="right" @submit.prevent>
@@ -48,7 +48,7 @@
           variant="primary"
           :disabled="!page.canWrite || !page.hasSelection || page.busy"
           @click="page.startBatch"
-          >批量注册{{ page.selected.length ? `（${page.selected.length}）` : '' }}</AppButton
+          >协议批量注册{{ page.selected.length ? `（${page.selected.length}）` : '' }}</AppButton
         >
         <AppButton
           variant="soft"
@@ -67,6 +67,67 @@
         >
       </template>
     </V2PageContext>
+
+    <V2ListToolbar
+      title="浏览器注册助手"
+      help="正常注册步骤自动完成；官网需要本人验证或补齐资料时保留原窗口等待。"
+    >
+      <V2AsyncRegion
+        variant="field"
+        skeleton="inline"
+        :phase="page.browserProxyQuery.phase"
+        :error="page.browserProxyError"
+        loading-title="正在读取注册代理"
+        refreshing-title="正在更新注册代理"
+        error-title="注册代理选项加载失败"
+        @retry="page.browserProxyQuery.refresh"
+      >
+        <el-form label-position="left" label-width="110px" require-asterisk-position="right">
+          <el-form-item label="注册代理">
+            <el-select
+              v-model="page.browserOptions.proxyId"
+              aria-label="浏览器注册代理"
+              :disabled="page.busy"
+            >
+              <el-option label="使用注册默认代理" value="" />
+              <el-option
+                v-for="proxy in page.browserProxyQuery.data?.proxies ?? []"
+                :key="proxy.id"
+                :label="proxy.label"
+                :value="proxy.id"
+              />
+            </el-select>
+          </el-form-item>
+        </el-form>
+      </V2AsyncRegion>
+      <template #actions>
+        <AppButton
+          variant="soft"
+          :disabled="
+            page.busy || page.connectorQuery.isRefreshing || page.connectorQuery.isInitialLoading
+          "
+          @click="page.connectorQuery.refresh"
+          >检查连接</AppButton
+        >
+      </template>
+      <template #feedback>
+        <V2AsyncRegion
+          variant="field"
+          skeleton="inline"
+          :phase="page.connectorQuery.phase"
+          :error="page.connectorError"
+          loading-title="正在检查自动注册助手"
+          refreshing-title="正在重新检查助手连接"
+          error-title="自动注册助手尚未连接"
+          @retry="page.connectorQuery.refresh"
+        >
+          <p v-if="page.connectorQuery.data?.ok" role="status">助手已连接，可以使用浏览器注册。</p>
+        </V2AsyncRegion>
+        <p>
+          先打开比特浏览器并启动自动注册助手，注册期间请保留原窗口。任务启动后固定使用所选代理。
+        </p>
+      </template>
+    </V2ListToolbar>
 
     <p v-if="page.feedback" role="status">{{ page.feedback }}</p>
     <p
@@ -176,8 +237,8 @@
                 variant="ghost"
                 :disabled="!page.canWrite || page.busy || Boolean(appleMailboxRegisterReason(row))"
                 :title="appleMailboxRegisterReason(row)"
-                @click="page.start(row)"
-                >注册</AppButton
+                @click="page.startBrowser(row)"
+                >浏览器注册</AppButton
               >
               <el-dropdown trigger="click" @command="command(row, $event)"
                 ><AppButton size="small" variant="ghost">更多操作</AppButton
@@ -185,6 +246,12 @@
                   ><el-dropdown-menu
                     ><el-dropdown-item command="task" :disabled="!row.taskUuid"
                       >查看任务</el-dropdown-item
+                    ><el-dropdown-item
+                      command="protocol-register"
+                      :disabled="
+                        !page.canWrite || page.busy || Boolean(appleMailboxRegisterReason(row))
+                      "
+                      >协议注册（高级）</el-dropdown-item
                     ><el-dropdown-item
                       command="authorization"
                       :disabled="
@@ -320,14 +387,20 @@
                 size="small"
                 variant="ghost"
                 :disabled="!page.canWrite || page.busy || Boolean(appleMailboxRegisterReason(row))"
-                @click="page.start(row)"
-                >注册</AppButton
+                @click="page.startBrowser(row)"
+                >浏览器注册</AppButton
               ><el-dropdown trigger="click" @command="command(row, $event)"
                 ><AppButton size="small" variant="ghost">更多操作</AppButton
                 ><template #dropdown
                   ><el-dropdown-menu
                     ><el-dropdown-item command="task" :disabled="!row.taskUuid"
                       >查看任务</el-dropdown-item
+                    ><el-dropdown-item
+                      command="protocol-register"
+                      :disabled="
+                        !page.canWrite || page.busy || Boolean(appleMailboxRegisterReason(row))
+                      "
+                      >协议注册（高级）</el-dropdown-item
                     ><el-dropdown-item
                       command="authorization"
                       :disabled="
@@ -430,6 +503,12 @@
             >仅补同步</AppButton
           >
         </header>
+        <p v-if="browserRegistration" role="status">
+          {{ appleMailboxBrowserPhaseLabel(browserRegistration) }}
+        </p>
+        <p v-if="browserRegistration?.needAction">
+          请在原比特浏览器窗口完成官网要求的验证或资料填写，完成后助手会继续。请保留原窗口，不要重复注册。
+        </p>
         <p v-if="page.taskQuery.data?.resultKind === 'existing_account'">
           官网返回已有账号，已标记为已注册；该结果没有确认历史注册 IP。
         </p>
@@ -618,6 +697,7 @@ import V2AsyncRegion from '@/v2/components/V2AsyncRegion.vue';
 import V2ConfirmDialog from '@/v2/components/V2ConfirmDialog.vue';
 import V2FormDrawer from '@/v2/components/V2FormDrawer.vue';
 import V2PageContext from '@/v2/components/V2PageContext.vue';
+import V2ListToolbar from '@/v2/components/V2ListToolbar.vue';
 import V2Table from '@/v2/components/V2Table.vue';
 import V2TableActionColumn from '@/v2/components/V2TableActionColumn.vue';
 import V2TableColumn from '@/v2/components/V2TableColumn.vue';
@@ -647,7 +727,8 @@ import {
   appleMailboxCanResumeAuthorization,
   appleMailboxAuthorizationLabel,
   appleMailboxManualSyncPreviewLabel,
-  appleMailboxFlowEvidenceRows
+  appleMailboxFlowEvidenceRows,
+  appleMailboxBrowserPhaseLabel
 } from './apple-mailbox-presentation';
 import type { AppleMailboxRow } from './contracts';
 import { useAppleMailboxes } from './useAppleMailboxes';
@@ -655,6 +736,9 @@ import { useAppleMailboxes } from './useAppleMailboxes';
 const page = reactive(useAppleMailboxes());
 const flowEvidenceRows = computed(() =>
   appleMailboxFlowEvidenceRows(page.taskQuery.data?.flowEvidence)
+);
+const browserRegistration = computed(
+  () => page.taskQuery.data?.browserRegistration ?? page.taskQuery.data?.record.browserRegistration
 );
 const ipInput = ref<{ focus: () => void }>();
 const noteInput = ref<{ focus: () => void }>();
@@ -677,6 +761,7 @@ function mailboxBusy(row: AppleMailboxRow) {
   return appleMailboxBusy(row);
 }
 function command(row: AppleMailboxRow, value: string) {
+  if (value === 'protocol-register') void page.start(row);
   if (value === 'task') page.viewTask(row);
   if (value === 'recover') page.openRecovery(row);
   if (value === 'sync') void page.syncTask(row);
