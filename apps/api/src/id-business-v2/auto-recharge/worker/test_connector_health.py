@@ -26,7 +26,7 @@ class ConnectorHealthTests(unittest.TestCase):
                 'role': 'recharge',
                 'capabilities': [
                     'browser-catalog', 'browser-options', 'browser-profile-v2', 'session-load-retry',
-                    'same-window-page-refresh', 'password-login', 'login-code',
+                    'same-window-page-refresh', 'password-login', 'login-code', 'account-auto-login-v1',
                     'manual-payment-confirmation', 'recharge-process-isolation',
                     'payment-unknown-resolution',
                     'prepayment-page-recovery', 'stale-owned-profile-cleanup',
@@ -82,9 +82,11 @@ class ConnectorHealthTests(unittest.TestCase):
     def test_recharge_resume_cancel_and_login_code_routes_still_signal_original_job(self):
         job_id = '11111111-1111-4111-8111-111111111111'
         for action, body, method, args in (
-                ('code', {'code': '123456'}, 'signal_code', ('123456',)),
+                ('code', {'code': '123456'}, 'signal_code', ('123456', None, None, None)),
                 ('code', {'code': '123456', 'expiresAt': '2030-01-01T00:00:00.000Z'},
-                 'signal_code', ('123456', '2030-01-01T00:00:00.000Z')),
+                 'signal_code', ('123456', '2030-01-01T00:00:00.000Z', None, None)),
+                ('code', {'code': '123456', 'kind': 'email', 'challengeId': 'synthetic-challenge'},
+                 'signal_code', ('123456', None, 'email', 'synthetic-challenge')),
                 ('resume', {}, 'signal_resume', ()),
                 ('cancel', {}, 'signal_cancel', ())):
             with self.subTest(action=action):

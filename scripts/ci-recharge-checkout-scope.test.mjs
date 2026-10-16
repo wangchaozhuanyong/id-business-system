@@ -72,3 +72,27 @@ test('original checkout source recovery keeps API and control checks without unr
     assert.equal(isRechargeCheckoutOnly([...recovery, extra]), false, extra);
   }
 });
+
+test('checkout foreground repair selects connector regression and rejects unrelated changes', () => {
+  const focus = [
+    'apps/api/src/id-business-v2/auto-recharge/worker/payment_form.py',
+    'apps/api/src/id-business-v2/auto-recharge/worker/test_payment_form_focus.py',
+    'scripts/ci-recharge-checkout-scope.mjs',
+    'scripts/ci-recharge-checkout-scope.test.mjs',
+    'scripts/ci-recharge-check.mjs',
+    'docs/CHECKOUT_SOURCE_RECOVERY_20261016.md'
+  ];
+  assert.equal(isRechargeSourceRecoveryOnly(focus), true);
+  assert.equal(isRechargeOnly(focus, 'same', 'same'), true);
+  assert.deepEqual(selectedParts(focus), ['guards', 'connector']);
+  assert.equal(needsOnlineRechargeCiBuild(focus), false);
+  for (const extra of [
+    'package-lock.json',
+    'apps/api/prisma-mysql/schema.prisma',
+    'apps/api/src/auth/auth.service.ts',
+    'apps/api/src/id-business-v2/online-recharge/worker/pay.py',
+    'apps/api/src/id-business-v2/auto-recharge/worker/pay.py'
+  ]) {
+    assert.equal(isRechargeCheckoutOnly([...focus, extra]), false, extra);
+  }
+});

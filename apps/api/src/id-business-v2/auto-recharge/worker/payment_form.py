@@ -240,6 +240,9 @@ async def reject_external_billing_fields(page, scope):
 
 async def fill_official_form(page, details):
     validate_details(details)
+    # 恢复原结算时该页可能留在后台，Stripe 控件会延迟挂载；先激活已核实的原页。
+    # 激活失败直接停止，仍由原有唯一控件、可信来源及填后核价约束后续操作。
+    await page.bring_to_front()
     # 三个 autocomplete 已在当前官方 Stripe iframe 中实测；不依赖动态 iframe 名称。
     for selector, value in (("input[autocomplete='cc-number']", details.number),
                             ("input[autocomplete='cc-exp']", details.expiry),
