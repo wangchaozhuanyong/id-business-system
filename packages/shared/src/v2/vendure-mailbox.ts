@@ -52,6 +52,35 @@ export function normalizeV2MailboxVerificationMail<
 export type V2VendureMailboxPrimaryStatus = 'ACTIVE' | 'DISABLED' | 'AUTH_ERROR' | 'SYNCING';
 export type V2VendureMailboxAliasStatus = 'ACTIVE' | 'DISABLED';
 
+export interface V2VendureMailboxListenerHealth {
+  primaryAccountId: string;
+  state: 'listening' | 'recovering' | 'unavailable' | 'disabled' | 'unknown';
+  reason:
+    | 'connected'
+    | 'connecting'
+    | 'reconnecting'
+    | 'authorization_failed'
+    | 'unsupported'
+    | 'disabled'
+    | 'realtime_disabled'
+    | 'owned_elsewhere'
+    | 'capacity'
+    | 'not_started';
+  leaseExpiresAt: string | null;
+}
+
+export interface V2VendureMailboxHealth {
+  status: 'available' | 'unsupported' | 'unavailable';
+  checkedAt: string;
+  listeners: V2VendureMailboxListenerHealth[];
+  delivery: {
+    configured: boolean;
+    pendingCount: number;
+    oldestPendingAt: string | null;
+    lastDeliveredAt: string | null;
+  } | null;
+}
+
 export interface V2VendureMailboxPrimaryAccount {
   id: string;
   createdAt: string;
