@@ -386,12 +386,33 @@ try {
         continue;
       }
       let before = getCount('primary-accounts');
-      await clickAndRead('查询', 'primary-accounts');
+      await clickAndRead('刷新列表', 'primary-accounts');
       assert.equal(getCount('primary-accounts') - before, 1, '同条件查询应只读取一次');
-      await page.getByLabel('搜索邮箱或邮件', { exact: true }).fill('验收主邮箱');
       before = getCount('primary-accounts');
-      await clickAndRead('查询', 'primary-accounts');
-      assert.equal(getCount('primary-accounts') - before, 1, '改变条件查询应只读取一次');
+      const searchRead = page.waitForResponse((response) => {
+        const url = new URL(response.url());
+        return (
+          url.pathname === `${base}/primary-accounts` && url.searchParams.get('q') === '验收主邮箱'
+        );
+      });
+      await page.getByLabel('搜索邮箱或邮件', { exact: true }).fill('验收主邮箱');
+      await searchRead;
+      assert.equal(getCount('primary-accounts') - before, 1, '自动搜索改变条件应只读取一次');
+      before = getCount('primary-accounts');
+      await clickAndRead('刷新列表', 'primary-accounts');
+      assert.equal(getCount('primary-accounts') - before, 1, '同一搜索条件刷新应只读取一次');
+      before = getCount('primary-accounts');
+      const statusRead = page.waitForResponse((response) => {
+        const url = new URL(response.url());
+        return (
+          url.pathname === `${base}/primary-accounts` &&
+          url.searchParams.get('status') === 'DISABLED'
+        );
+      });
+      await page.getByRole('combobox', { name: '邮箱状态', exact: true }).click();
+      await page.getByRole('option', { name: '已禁用', exact: true }).click();
+      await statusRead;
+      assert.equal(getCount('primary-accounts') - before, 1, '状态筛选改变后应只读取一次');
       await page.getByRole('tab', { name: '虚拟邮箱管理', exact: true }).click();
       await page
         .getByText(alias.aliasEmail, { exact: true })

@@ -89,6 +89,7 @@
                 v-model="statusInput"
                 aria-label="邮箱状态"
                 placeholder="全部状态"
+                @change="applyFilters"
               >
                 <el-option label="全部状态" value="" />
                 <el-option label="正常" value="ACTIVE" />
