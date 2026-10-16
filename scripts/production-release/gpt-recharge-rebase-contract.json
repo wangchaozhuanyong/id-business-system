@@ -1,0 +1,148 @@
+{
+  "baseApiJsDelta": {
+    "common/prisma/bump-v2-scope-versions.js": {
+      "current": "fa550e3611be675d6858529414ca534eab7d294e5f99f492f1f1eee98f9fec12",
+      "old": "a8937f8a6e7c48b3161ae88c5bb40c13165ef81be57a3461d02e3e4cf33224c9"
+    }
+  },
+  "baseOverrides": {
+    "configurationSha256": {
+      ".env.aws.production": "088a61075fb2ba01f04249fc78e31150ee7cd571f0708fe0c28ba38ac53daafa",
+      "compose.release.json": "23d49e3557c2ab6352641e1f6324df80dba4bc0add0cd26a050e190ef6429514",
+      "docker-compose.aws-mysql.yml": "953c6264f157b00218f2a019d5e2c0b6bc4a34f687f2ec42ad782e0009e7672c"
+    },
+    "current": "/opt/id-business-v2/releases/20261016T155600Z-1c339754507f-mailbox-version",
+    "expectedCurrent": "1c339754507f29459d17d75bb84afbee8fba5291",
+    "manifestSha256": "844bc0bbcf1fba90a348c246160e4c61b2f684fc9cd8ba55f2db8f5725862f43",
+    "runtimeConfigurationSha256": {
+      "admin": "dfc7d8d92987afc22a6c843fdac6ed3a40e0727065795a2c36fd9f90f43cd37a",
+      "api": "87fdfe82b45f85689c95f0299fb9071b36c1efa0e00ee749e43bf0bc8d426822",
+      "auto-recharge": "71e8b8cf9d652276051212ca4add76538d53821d383aa839786d0bfc53ee93b4",
+      "auto-registration": "5ca164d0fe435be8da0a0d8bb2d9000d09c1dfdeabfaecc4250cc9cb7aaeb448",
+      "caddy": "d442c6b29921c8d2da4a798471099142d82f32455b089fff42a222c6b29857b6",
+      "media-resolver": "fe30f727d485d192ec3316fa5d8325451e1a681c9840ac08ff6961592645b71d",
+      "mysql": "7c4fc6fea1da1bd857bb2ab0a13486a0d09332f242b38bda895340d4526248bc",
+      "online-recharge": "0db8f5da6e8a49af82fb419ef81b2edc552752edc0c37cfd0383b9e5f963ee20"
+    },
+    "services": {
+      "admin": {
+        "containerId": "ac4e862e387fab3a9532f27ce8d4e5b244f8829d3306e4ad05ff7e929c91e335",
+        "environmentSha256": "03ddab553858482dcbcc4a93d989902d31b41753eb155fb8162011e218bc0ad4",
+        "health": "healthy",
+        "image": "sha256:b40cfd99c641be531849442489a11f70679742e77e1c0bf8977833466e48b112",
+        "reference": "id-business-v2-shared-bank-card:e84a44d86c289354bc7ed15dcd0ec68f7210e18e-38916394747-admin",
+        "startedAtSha256": "fb0650f082d3b957ca3bbffb2864575e5a525150188905a93d6501e5fa674cb6",
+        "status": "running"
+      },
+      "api": {
+        "containerId": "4ab61ebf631334c826753b573c3426f2e8e611888dddca0ed4518fb78ff362ec",
+        "environmentSha256": "9ffb49fbaa3c1b6d67df07fcedabc538678dc6a4aed2489b99a62a2368d10d9f",
+        "health": "healthy",
+        "image": "sha256:4eedbb0749757d96e5fea6f51d7875b332e5e7acb834980ff6b1d7cc54322740",
+        "reference": "id-business-v2-mailbox-version:1c339754507f29459d17d75bb84afbee8fba5291-38925995056",
+        "startedAtSha256": "11c1f687be772faa24e812afbd9c7425fc9cd8b920a1feaa4bcac86de6f5b546",
+        "status": "running"
+      },
+      "auto-recharge": {
+        "containerId": "0190045c800bd6cda576b66ccce0986de6792390d01cf19fe19e02cd16316f97",
+        "environmentSha256": "5169582dea47a65076d5f7a3a3defbc824fa4f772b2dc0904eb64659209757ae",
+        "health": "healthy",
+        "image": "sha256:5bd2ab25ebcadcd99f8d339d604e0268cec3fc2cfdac54e2a215f085e3fac00e",
+        "reference": "079740175286.dkr.ecr.ap-northeast-1.amazonaws.com/id-business-v2-release:04570d75c779fd91a0933ef9416f6d62698b6b91-37694009463-1-auto-recharge",
+        "startedAtSha256": "2e93090ec44036fb777194c57eea84f9503a39ca73a06c38a748f5dd6b54b0b7",
+        "status": "running"
+      },
+      "auto-registration": {
+        "containerId": "16de5229289255cd47c3f9336e24aa611c0f9bbc76af2fcdfc5e5e1928d68add",
+        "environmentSha256": "de69bd06209b17619f8cb7ae38bace36c27dc4203c67e09fd1b8d21023fbcb17",
+        "health": "healthy",
+        "image": "sha256:759f60543c2fc5661c5d21644fdc1e9cb0e5cb39c930e9c400f869e0c72be568",
+        "reference": "079740175286.dkr.ecr.ap-northeast-1.amazonaws.com/id-business-v2-release:18e23ee1ab1a8d5c988ff6ba24149e1c741d62f8-37788833835-1-auto-recharge",
+        "startedAtSha256": "c9a77b62c61fbba526248595098942e7d21f5ac9e51f0f70ef8c698f70ad6eb9",
+        "status": "running"
+      },
+      "caddy": {
+        "containerId": "0ee2a1ea26eec74fef64362fd77a69894e3dc4dddd412c38ebd59c747aa6e203",
+        "environmentSha256": "33ea62b4e1f4de93e333bdbbea4ec88904661f1cb616907b185fce31b22b7181",
+        "health": null,
+        "image": "sha256:aac61abc4024c323602ccb9ee38bd68b147601f518626b2a055e06944e01c510",
+        "reference": "caddy:2.10-alpine@sha256:4c6e91c6ed0e2fa03efd5b44747b625fec79bc9cd06ac5235a779726618e530d",
+        "startedAtSha256": "7124aaf366d285ac54e3abae821e422125202ffccb85379d30c009bb7a553ced",
+        "status": "running"
+      },
+      "media-resolver": {
+        "containerId": "0c4fd25ba8fbf2fdab7639e680c3a3433d814cdb2d71ebd7ad39531aaa639471",
+        "environmentSha256": "8473962ae5df6f8e5553ab658ccce662a8816f83631b221484daf5fa42e3b163",
+        "health": "healthy",
+        "image": "sha256:34c25f5474f9fdd043cfb39a838762cab9e87f88db9987d9cb9ad6706c331a56",
+        "reference": "079740175286.dkr.ecr.ap-northeast-1.amazonaws.com/id-business-v2-release:b8d643450ffa9012ccc09ead15e4681e3dee98d0-37302661631-1-media-resolver",
+        "startedAtSha256": "decd8646d9eae7910ed3789d7ae990a13202da1df6c171a10ace75ca43f9ea6f",
+        "status": "running"
+      },
+      "mysql": {
+        "containerId": "7e5a5abe42c5503e6196f736d532793aaec3796b7eb518f02db614d4025d0074",
+        "environmentSha256": "bb8d63d18769016c14d8664a551d2b3da9e251701ed62f87b04cba964fc9e299",
+        "health": "healthy",
+        "image": "sha256:bced325a4ab7aec848f4688371c7433351dcb5dba26fbcc29c67727d898ae5cb",
+        "reference": "mysql:8.4@sha256:b3b90af2a6552ae30c266fdb7d5dd55f3afb72404bb78d37fe8a23eb857fd3fb",
+        "startedAtSha256": "fadf08a3cf1878d9e477f0d1f3f262a12bebdb3d2869429eaac92e5e4418c988",
+        "status": "running"
+      },
+      "online-recharge": {
+        "containerId": "4b7e1c8697943b61269e6805fa5dbdb922b131d71d935a753043220ce46f6264",
+        "environmentSha256": "60bb48bbd6e03a4ceebe245c8405f248d0c682a27287aabb17c1d3573e50ad37",
+        "health": "healthy",
+        "image": "sha256:cc59767525bcd39755d02283aec537476d82772ae5b3aeabf67e5118efb06440",
+        "reference": "id-business-v2-online-settings:55d5ee5504c9d8d4218632e8cb8eb508923ad9f8-38909769886-online-recharge",
+        "startedAtSha256": "7340a45b0cfe19476ce1ff87d1839a0777e06ee0a123714ae2e7d344995b7226",
+        "status": "running"
+      }
+    }
+  },
+  "baselineCaptureCommand": "99945536-2fc3-4833-942a-90fc2a839529",
+  "businessActions": 0,
+  "cowPublisherSha256": "ada30647832f361e74fed35f6aea0df9f5351a4358b66661ce1ddd9ed8422812",
+  "mailboxArtifactSha256": "cfb91463004179d6cba6935355c9b8f924727a53d2ddcc1616247dfc314cb950",
+  "mailboxNative": {
+    "commit": "1c339754507f29459d17d75bb84afbee8fba5291",
+    "modules": {
+      "common/prisma/bump-v2-scope-versions.d.ts": "baf8b6b40b698ee3cd9accea37b12b053c967b6ef990a1cfda392f6cec818d45",
+      "common/prisma/bump-v2-scope-versions.js": "fa550e3611be675d6858529414ca534eab7d294e5f99f492f1f1eee98f9fec12",
+      "common/prisma/bump-v2-scope-versions.js.map": "ba619085f3e3979f886aac5bb9b991cbe0ae80fb4dd9ee212d39275cca6f0dc4"
+    },
+    "scope": "MAILBOX_SCOPE_VERSION_RECOVERY",
+    "sources": {
+      "apps/api/src/common/prisma/bump-v2-scope-versions.ts": "c775e89856c89e3a94138698b489c1be79b5fb26f94677ee58a8008024849b7e"
+    },
+    "workflowRunId": "38925995056"
+  },
+  "migrationPerformed": false,
+  "nativeApplicationCommit": "b0d80c7f8cea818361d06873e3e432ee2c3b3229",
+  "nativeContractSha256": "2ee7dd00ef1664b194734f8ce93084976d335413b2e8ff92d5957da564f16e89",
+  "nativePlan": {
+    "artifactSha256": "49a6432be83f495e0a2fea6e6feeced39ebc332e850a8b3a7abd2fce60b7e121",
+    "artifactUrl": "https://github.com/wangchaozhuanyong/id-business-system/releases/download/gpt-recharge-b0d80c7f8cea818361d06873e3e432ee2c3b3229/gpt-recharge-artifact.tar.gz",
+    "buildCommit": "800dc9c761bb1b24423727e891174d59d05bddec",
+    "buildProofSha256": "d5254c46631fb203013161db53641c6417f15569a1d7a404e01b31586aadce49",
+    "buildTree": "9c40204f408244797b825e79cf6e0e8ebf28d913",
+    "commit": "b0d80c7f8cea818361d06873e3e432ee2c3b3229",
+    "contractSha256": "2ee7dd00ef1664b194734f8ce93084976d335413b2e8ff92d5957da564f16e89",
+    "controlSources": {
+      "api-admin-scope.py": "50446ab528a288ca1c2129c84f1bf4a90f59fa313a92bcff0058a258c8b8e925",
+      "gpt-recharge-release.py": "7c4c4d3c56cac3cc350197acb9b5f6d30a57d1efacc3b144780667cf35b6960c",
+      "proxy-result-identity-release.py": "97207252c12924dcbbfe3e86ebf397e928cd9545bbf9260337fd94ffd5109d45",
+      "recharge-availability-release.py": "d98af117f3d80e705dd4f5eb3375a37cf4c0f058b65f4be77550d909ccbbe66c",
+      "recharge-record-release.py": "4ca6d0053f5dc4368d85722ef0df272ace0947c1c91993a0a3da598507b5163f",
+      "recharge-source-recovery-release.py": "e6f493ab7737bf77d23114a00ff9c970a77d18786726e690b27dbe98c9f099b8",
+      "remote-deploy.py": "889aedb75bbcb53863a55dc2a4c40a84e06dea1d64d493f6a4fca6dc233f855c"
+    },
+    "mode": "preflight",
+    "tree": "9c40204f408244797b825e79cf6e0e8ebf28d913",
+    "workflowRunAttempt": "1",
+    "workflowRunId": "38922620650"
+  },
+  "scope": "GPT_RECHARGE_MAILBOX_BASELINE_REBASE",
+  "supersededFailedCommand": "439c15b1-053e-4f89-9504-255eac32a1ce",
+  "unstartedSuffixCommand": "83894543-d1ec-49fa-9985-15d02292d53d",
+  "version": 1
+}
