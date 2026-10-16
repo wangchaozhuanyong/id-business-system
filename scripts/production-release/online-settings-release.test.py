@@ -63,6 +63,19 @@ class ReleaseGates(unittest.TestCase):
             with self.assertRaises(RuntimeError):
                 b.verify_source_review({**c, 'sources': {name: 'c' * 64}})
 
+    def test_published_overlay_only_restores_its_immutable_reviewed_bytes(self):
+        name = 'apps/admin/src/v2/features/auto-recharge/fixture.vue'
+        raw = b'published predecessor'
+        overlay = {'commit': 'b' * 40, 'sources': {name: b.sha(raw)}, 'validationSources': {}}
+        with tempfile.TemporaryDirectory() as folder, patch.object(b, 'git', return_value=raw) as git:
+            b.published_overlays(Path(folder), {'publishedOverlays': [overlay]})
+            self.assertEqual((Path(folder) / name).read_bytes(), raw)
+            git.assert_called_once_with('show', 'b' * 40 + ':' + name)
+            for changed in [{'sources': {'../secret': b.sha(raw)}},
+                            {'sources': {name: 'c' * 64}}, {'commit': 'unreviewed'}]:
+                with self.assertRaises(RuntimeError):
+                    b.published_overlays(Path(folder), {'publishedOverlays': [{**overlay, **changed}]})
+
     def test_wrong_commit_source_or_unverified_baseline_is_rejected(self):
         for change in [{'commit': '9' * 40}, {'migrationPerformed': True}, {'businessActions': 1},
                        {'baselineApiReproduced': False}, {'sources': {}}, {'afterEngineFiles': {}}]:
