@@ -20,6 +20,8 @@ ADDRESS_FIELDS = {
     "state": "input[autocomplete~='address-level1'], select[autocomplete~='address-level1']",
     "postal_code": "input[autocomplete~='postal-code']",
 }
+CARD_FIELDS = ("input[autocomplete='cc-number']", "input[autocomplete='cc-exp']",
+               "input[autocomplete='cc-csc']")
 
 # ISO 两位代码用于传输和审计；官网下拉框可能只暴露完整国家名称。
 COUNTRY_OPTION_LABELS = {
@@ -102,18 +104,46 @@ async def visible_fields(page, selector, scope=None):
     return found
 
 
-async def one_field(page, selector, *, required=True, timeout=15):
+async def one_field(page, selector, *, required=True, timeout=15, budget=None):
     end = time.monotonic() + timeout
     while True:
+        if budget is not None:
+            budget.remaining_ms()
         nodes = await visible_fields(page, selector)
         if len(nodes) == 1:
             return nodes[0]
         if len(nodes) > 1:
             raise Stop("ambiguous_official_payment_field")
-        if not required or time.monotonic() >= end:
+        if not required or budget is None and time.monotonic() >= end:
             if required:
                 raise Stop("official_payment_field_not_ready")
             return None
+        await asyncio.sleep(.2)
+
+
+async def wait_for_payment_form(page, *, budget=None, timeout=15):
+    """先等待全部卡片控件可编辑，再允许第一次填写；不刷新或重建结算。"""
+    end = time.monotonic() + timeout
+    while True:
+        if budget is not None:
+            budget.remaining_ms()
+        ready = True
+        for selector in CARD_FIELDS:
+            nodes = await visible_fields(page, selector)
+            if len(nodes) > 1:
+                raise Stop('ambiguous_official_payment_field')
+            if len(nodes) != 1:
+                ready = False
+                continue
+            try:
+                if not await nodes[0].is_enabled() or not await nodes[0].is_editable():
+                    ready = False
+            except Exception:
+                ready = False  # iframe 挂载中，只重读就绪状态，不重放任何写入。
+        if ready:
+            return
+        if budget is None and time.monotonic() >= end:
+            raise Stop('official_payment_field_not_ready')
         await asyncio.sleep(.2)
 
 
@@ -147,14 +177,16 @@ async def select_country_option(node, country_code):
 
 
 async def one_billing_field(page, field_name, selector, value, settle_timeout=2, scope=None,
-                            wait_for_presence=False):
+                            wait_for_presence=False, budget=None):
     end = time.monotonic() + settle_timeout
     while True:
+        if budget is not None:
+            budget.remaining_ms()
         nodes = await visible_fields(page, selector, scope)
         if len(nodes) == 1:
             return nodes[0]
         if not nodes:
-            if wait_for_presence and time.monotonic() < end:
+            if wait_for_presence and (budget is not None or time.monotonic() < end):
                 await asyncio.sleep(.2)
                 continue
             return None
@@ -187,16 +219,18 @@ async def one_billing_field(page, field_name, selector, value, settle_timeout=2,
             if len(matching) == 1:
                 return matching[0]
         # 卡片校验后 Stripe 会短暂保留新旧账单 iframe；只等待其自行收敛，绝不在重复控件中猜选。
-        if time.monotonic() >= end:
+        if budget is None and time.monotonic() >= end:
             raise Stop("ambiguous_official_payment_field")
         await asyncio.sleep(.2)
 
 
-async def billing_frame(page, country, timeout=5):
+async def billing_frame(page, country, timeout=5, *, budget=None):
     """选择国家后 Stripe 会短暂保留旧 iframe；后续账单字段只能在国家值一致的唯一 iframe 中操作。"""
     expected = country.strip().upper()
     end = time.monotonic() + timeout
     while True:
+        if budget is not None:
+            budget.remaining_ms()
         matching = []
         for frame in trusted_frames(page):
             try:
@@ -212,7 +246,7 @@ async def billing_frame(page, country, timeout=5):
                 continue
         if len(matching) == 1:
             return matching[0]
-        if time.monotonic() >= end:
+        if budget is None and time.monotonic() >= end:
             raise Stop("ambiguous_official_payment_field")
         await asyncio.sleep(.2)
 
@@ -238,31 +272,32 @@ async def reject_external_billing_fields(page, scope):
                 raise Stop("billing_fields_changed")
 
 
-async def fill_official_form(page, details):
+async def fill_official_form(page, details, *, budget=None):
     validate_details(details)
     # 恢复原结算时该页可能留在后台，Stripe 控件会延迟挂载；先激活已核实的原页。
     # 激活失败直接停止，仍由原有唯一控件、可信来源及填后核价约束后续操作。
     await page.bring_to_front()
+    await wait_for_payment_form(page, budget=budget)
     # 三个 autocomplete 已在当前官方 Stripe iframe 中实测；不依赖动态 iframe 名称。
     for selector, value in (("input[autocomplete='cc-number']", details.number),
                             ("input[autocomplete='cc-exp']", details.expiry),
                             ("input[autocomplete='cc-csc']", details.cvc)):
-        node = await one_field(page, selector)
+        node = await one_field(page, selector, budget=budget)
         await node.fill(value)
 
     filled, scope = [], None
     country_selector = ADDRESS_FIELDS["country"]
     country = await one_billing_field(page, "country", country_selector, details.country,
-                                      settle_timeout=5, wait_for_presence=True)
+                                      settle_timeout=5, wait_for_presence=True, budget=budget)
     if country is not None:
         await select_country_option(country, details.country)
         filled.append("country")
-        scope = await billing_frame(page, details.country)
+        scope = await billing_frame(page, details.country, budget=budget)
     for field_name, selector in ADDRESS_FIELDS.items():
         if field_name == "country":
             continue
         value = getattr(details, field_name)
-        node = await one_billing_field(page, field_name, selector, value, scope=scope)
+        node = await one_billing_field(page, field_name, selector, value, scope=scope, budget=budget)
         if node is None:
             continue  # 官网没有要求该字段时，不伪造网页请求添加字段。
         await fill_billing_node(node, value)
@@ -282,22 +317,23 @@ async def fill_official_form(page, details):
             "billing_fields_not_requested": [k for k in ADDRESS_FIELDS if k not in filled]}
 
 
-async def verify_card_fields(page, details):
+async def verify_card_fields(page, details, *, budget=None):
     for selector, expected in (("input[autocomplete='cc-number']", details.number),
                                ("input[autocomplete='cc-exp']", details.expiry),
                                ("input[autocomplete='cc-csc']", details.cvc)):
-        node = await one_field(page, selector)
+        node = await one_field(page, selector, budget=budget)
         actual = await node.input_value()
         if re.sub(r"\D", "", actual) != re.sub(r"\D", "", expected):
             raise Stop("payment_form_changed")
 
 
-async def verify_billing_fields(page, details, filled):
-    scope = await billing_frame(page, details.country) if "country" in filled else None
+async def verify_billing_fields(page, details, filled, *, budget=None):
+    scope = await billing_frame(page, details.country, budget=budget) if "country" in filled else None
     if scope is not None:
         await reject_external_billing_fields(page, scope)
     for name, selector in ADDRESS_FIELDS.items():
-        node = await one_billing_field(page, name, selector, getattr(details, name), scope=scope)
+        node = await one_billing_field(page, name, selector, getattr(details, name), scope=scope,
+                                       budget=budget)
         if node is None and name == "line1" and name in filled and scope is not None:
             # Stripe 的地址自动补全会在手工填入街道后把同一个官方控件改成
             # autocomplete="disabled"；只在已选定的唯一 Stripe 账单 iframe 内
@@ -320,14 +356,15 @@ async def verify_billing_fields(page, details, filled):
         raise Stop("payment_save_preference_changed")
 
 
-async def billing_snapshot_fingerprint(page, details, filled):
+async def billing_snapshot_fingerprint(page, details, filled, *, budget=None):
     """仅在内存绑定官网已核对的完整地址；州以下拉框实际值为准。"""
     from native_checkout import billing_fingerprint
-    await verify_billing_fields(page, details, filled)
+    await verify_billing_fields(page, details, filled, budget=budget)
     address = {key: getattr(details, key) for key in ('country', 'line1', 'line2', 'city', 'state', 'postal_code')}
-    scope = await billing_frame(page, details.country) if 'country' in filled else None
+    scope = await billing_frame(page, details.country, budget=budget) if 'country' in filled else None
     if 'state' in filled:
-        node = await one_billing_field(page, 'state', ADDRESS_FIELDS['state'], details.state, scope=scope)
+        node = await one_billing_field(page, 'state', ADDRESS_FIELDS['state'], details.state,
+                                       scope=scope, budget=budget)
         address['state'] = await node.input_value()
     return billing_fingerprint(address, details.name)
 

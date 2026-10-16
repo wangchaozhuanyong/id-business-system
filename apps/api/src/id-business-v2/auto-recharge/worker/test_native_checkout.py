@@ -25,6 +25,7 @@ from test_subscribe import fixture, account
 from checkout_core import parse_browser_credential
 from playwright.async_api import async_playwright
 from urllib.parse import urlsplit
+from browser_session import SessionBudget
 
 
 SID = 'oaics_synthetic_native'
@@ -311,7 +312,7 @@ class NativeBrowserTests(unittest.IsolatedAsyncioTestCase):
                     .replace("'SID'", json.dumps(SID)).replace("'ENTITY'", json.dumps(ENTITY)))
         await route.abort()
 
-    async def prepare_original(self, *, pay=False, confirmer=lambda *_: False):
+    async def prepare_original(self, *, pay=False, confirmer=lambda *_: False, form_budget=None):
         page = await self.context.new_page()
         original = 'https://chatgpt.com/checkout/' + ENTITY + '/' + SID
         await page.goto(original)
@@ -321,12 +322,21 @@ class NativeBrowserTests(unittest.IsolatedAsyncioTestCase):
                 guard.attach_payment_ledger(ledger)
                 return await payment_handler(active, guard, identity, ledger, self.target, pay=pay,
                     details_reader=details, confirmer=confirmer, wait_seconds=0,
-                    poll_count=0, poll_interval=0, quote_wait_seconds=3)
+                    poll_count=0, poll_interval=0, quote_wait_seconds=3, form_budget=form_budget)
         with contextlib.redirect_stderr(io.StringIO()):
             result = await run_browser(self.target, inspect_existing=True, recover_unknown_checkout=True,
                 state_dir=self.root, browser_context=self.context, quote_handler=prepare,
                 guard_factory=lambda target, ledger: PaymentGuard(target, checkout_ledger=ledger))
         return page, result
+
+    async def test_round_budget_reprices_original_after_complete_billing_without_payment(self):
+        page, result = await self.prepare_original(form_budget=SessionBudget(30))
+        self.assertEqual(result.get('status'), 'payment_prepared', result)
+        self.assertEqual(result['quote_authority'], 'official_checkout_response')
+        self.assertEqual(result['initial_quote']['today']['amount_minor'], 110000)
+        self.assertEqual(result['quote']['today']['amount_minor'], 98214)
+        self.assertEqual(result['payment_requests_sent'], 0)
+        self.assertIn(SID, page.url)
 
     async def test_original_checkout_resumes_fills_all_fields_and_returns_recalculated_final_amount(self):
         page, result = await self.prepare_original()

@@ -1537,6 +1537,7 @@ if (releaseArtifactOnly && ['guards', 'release-controls'].includes(part)) {
       'test_recharge_email_code',
       'test_payment_3ds',
       'test_payment_form_focus',
+      'test_payment_form_budget',
       'test_payment_handoff',
       'test_subscription_upgrade',
       'test_upgrade_card_selection',

@@ -29,6 +29,12 @@ class DeferredFields:
     def nth(self, _):
         return self
 
+    async def is_enabled(self):
+        return True
+
+    async def is_editable(self):
+        return True
+
     async def fill(self, _):
         if not self.page.active:
             raise AssertionError('background field was written')
