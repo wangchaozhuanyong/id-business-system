@@ -1,0 +1,17 @@
+{
+  "baselineAdminImage": "sha256:3d4cffda1bf83e0eb3fa00534b12fd8a9afdf84cfb2a36bfad5b13817c60c14d",
+  "current": "/opt/id-business-v2/releases/20261016T080227Z-034f6cad0bc5-chatgpt-sales",
+  "expectedCurrent": "034f6cad0bc58f3c6025912096df312e07bbd85e",
+  "manifestSha256": "6ec128c9101dceb8a7dfd59aa3f6a2fc6e071c9e00224e0c132e4d5b744a5e2c",
+  "publishedArtifactSha256": "2d47ceb221c09077ddbb2b7a282146c459a084c10165f9eaea95c0191409b241",
+  "publishedContractSha256": "7bcbfb2b3a5ec288c8a10e1a3d7b7a57abd95363fb37297bf50a017607be300a",
+  "publishedProofSha256": "2cb761e7d3073814125d3a7cbfe3b0c2cd9258cc6f2684c75fb8317bb2016448",
+  "publishedRunId": "38870425220",
+  "scope": "WORKSPACE_COPY_DRAG_20261016",
+  "sources": {
+    "apps/admin/src/v2/components/workspace/V2QuickActions.vue": "427f7040a4033f408d2b8c08d65db4ba46941de10307d45475c151f981de3069",
+    "apps/admin/src/v2/components/workspace/useV2QuickActionSorting.ts": "e65f301329b9955dacf3cb2da435864d9fd612f49316c420b089bc7f2e71c108",
+    "apps/admin/src/v2/styles/base.css": "b5c255fd5627f132df3748a49fdf29adb00725b9cdaebe075fb92931e0dd4fc9"
+  },
+  "version": 1
+}
