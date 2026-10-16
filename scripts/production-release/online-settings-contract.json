@@ -95,7 +95,7 @@
     "id-business-v2/online-recharge/persistence/worker.repository.js",
     "id-business-v2/online-recharge/plan-region.js"
   ],
-  "backupNormalizerPath": "/opt/id-business-v2/releases/20261016T100309Z-6fc99d23c291-registration-parity-diagnostics/scripts/mysql-dump-restore-normalizer.sed",
+  "backupNormalizerPath": "/opt/id-business-v2/releases/20261015T091200Z-e197218c8b38-recharge-record/scripts/mysql-dump-restore-normalizer.sed",
   "beforeApiOnlineFiles": {
     "admin.controller.js": "8de8391d8de599d0cda54f13aec08fab0112d476b0e809c485a143288f9f4f58",
     "admin.service.js": "c628dd88ee481d0fe0c214e6054d1b6af1d8c4184948acf033e17ff906d1ec86",
