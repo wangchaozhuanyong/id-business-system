@@ -2084,6 +2084,12 @@ p {
   font: inherit;
   text-align: left;
 }
+.v2-quick-actions-panel__item.is-draggable {
+  cursor: grab;
+}
+.v2-quick-actions-panel__item.is-draggable.is-sorting {
+  cursor: grabbing;
+}
 .v2-quick-actions-panel__drag-title:disabled {
   cursor: default;
 }

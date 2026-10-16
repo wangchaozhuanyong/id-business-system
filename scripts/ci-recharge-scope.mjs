@@ -1,3 +1,4 @@
+import { isWorkspaceDragOnly, workspaceDragParts } from './ci-workspace-drag-scope.mjs';
 import {
   isChatgptSalesOnly,
   isChatgptSalesControlsOnly,
@@ -14,6 +15,10 @@ import {
   isRegistrationFlowEvidenceOnly,
   isRegistrationFlowEvidenceControlRepair
 } from './ci-registration-flow-evidence-scope.mjs';
+import {
+  isRegistrationParityDiagnosticsOnly,
+  registrationParityDiagnosticsParts
+} from './ci-registration-parity-diagnostics-scope.mjs';
 import { readRegistrationNativeReuse } from './ci-registration-closure-native-reuse.mjs';
 import { isRechargeCheckoutOnly } from './ci-recharge-checkout-scope.mjs';
 import { isRechargeBillingOnly } from './ci-recharge-billing-scope.mjs';
@@ -34,7 +39,7 @@ import { appendFileSync, readFileSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { pathToFileURL } from 'node:url';
-import { matchesSourceEvidence } from './ci-recharge-evidence.mjs';
+import { matchesSourceEvidence, recordedPullRequestBase } from './ci-recharge-evidence.mjs';
 
 export const rechargeAvailabilityControlPaths = Object.freeze([
   'scripts/production-release/recharge-record-release.test.py',
@@ -233,6 +238,8 @@ const onlineCiBuildTestInputs = new Set([
   'scripts/production-release/online-recharge-component-lifecycle.test.py'
 ]);
 export function needsOnlineRechargeCiBuild(paths, context) {
+  if (isRegistrationParityDiagnosticsOnly(paths, context)) return false;
+  if (isWorkspaceDragOnly(paths)) return false;
   if (isChatgptSalesOnly(paths) || isChatgptSalesControlsOnly(paths)) return false;
   if (isOnlineProxyCountryValidationOnly(paths)) return false;
   if (isOnlineProxyCountryOnly(paths)) return false;
@@ -1011,6 +1018,15 @@ export function isMailboxOnly(paths) {
 }
 
 export function checkMode(paths, oldSchema, newSchema, grantHelperSnapshot, context) {
+  if (isRegistrationParityDiagnosticsOnly(paths, context))
+    return oldSchema === newSchema ? 'recharge' : 'full';
+  if (context && isRegistrationParityDiagnosticsOnly(paths)) return 'full';
+  if (isWorkspaceDragOnly(paths))
+    return oldSchema === newSchema
+      ? workspaceDragParts(paths).includes('admin')
+        ? 'admin'
+        : 'ci-only'
+      : 'full';
   if (isChatgptSalesControlsOnly(paths)) return oldSchema === newSchema ? 'ci-only' : 'full';
   if (isChatgptSalesOnly(paths))
     return chatgptSalesSchemaMatches(oldSchema, newSchema) ? 'recharge' : 'full';
@@ -1484,6 +1500,9 @@ export function isTargetedOnly(paths, oldSchema, newSchema) {
   );
 }
 export function selectedParts(paths, grantHelperSnapshot, context) {
+  if (isRegistrationParityDiagnosticsOnly(paths, context))
+    return [...registrationParityDiagnosticsParts];
+  if (isWorkspaceDragOnly(paths)) return workspaceDragParts(paths);
   if (isChatgptSalesControlsOnly(paths)) return ['guards'];
   if (isChatgptSalesOnly(paths)) return [...chatgptSalesParts];
   if (isOnlineProxyCountryOnly(paths)) return [...onlineProxyCountryParts];
@@ -4147,6 +4166,26 @@ async function main() {
         before: git('show', `${parents[0]}:${schema}`),
         after: git('show', `HEAD:${schema}`)
       });
+      const salesPaths = git('diff', '--name-only', parents[0], 'HEAD').split('\n').filter(Boolean);
+      const salesBefore = execFileSync('git', ['show', `${parents[0]}:${schema}`], {
+        encoding: 'utf8'
+      });
+      const salesAfter = execFileSync('git', ['show', `HEAD:${schema}`], { encoding: 'utf8' });
+      if (
+        requestedBaseIsAncestor &&
+        ((isChatgptSalesOnly(salesPaths) && chatgptSalesSchemaMatches(salesBefore, salesAfter)) ||
+          (isChatgptSalesControlsOnly(salesPaths) && salesBefore === salesAfter) ||
+          (isWorkspaceDragOnly(salesPaths) && salesBefore === salesAfter))
+      ) {
+        base = recordedPullRequestBase({
+          eventName: process.env.GITHUB_EVENT_NAME,
+          ref: process.env.GITHUB_REF,
+          prNumber: event.pull_request?.number,
+          headSha: event.pull_request?.head?.sha,
+          parents,
+          requestedBase: base
+        });
+      }
     }
   }
   const paths = git('diff', '--name-only', base, 'HEAD').split('\n').filter(Boolean);

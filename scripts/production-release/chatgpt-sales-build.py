@@ -153,6 +153,7 @@ def package(c):
         'baselineApiFiles': {n: before.get(n) for n in sorted(allowed)},
         'baselineAdminFiles': inventory(OUTPUT / 'admin-baseline/apps/admin/dist'),
         'baselineSources': {'api': c['apiSourceBaseline'], 'admin': c['adminSourceBaseline']},
+        'generatedSchemaSha256': digest((OUTPUT / 'api-candidate/node_modules/.prisma/client/schema.prisma').read_bytes()),
         'adminPublishedSources': c['adminPublishedSources'], 'hostSources': c['hostSources'],
         'qualityVerification': passed, 'databaseVerification': database,
         'browserVerification': {'status': 'PASS', 'realWrites': 0},

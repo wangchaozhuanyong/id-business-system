@@ -57,6 +57,11 @@ function harness(patch = {}) {
       };
     if (values[0] === 'exec') {
       state.queries++;
+      if (values.some((arg) => typeof arg === 'string' && arg.includes('--protocol=TCP'))) {
+        state.tcpReads = (state.tcpReads ?? 0) + 1;
+        if (state.tcpReads <= (state.tcpColdReads ?? 0))
+          return { status: 1, stdout: '', stderr: 'final server not ready' };
+      }
       if (state.neverReady || options.input === 'BAD SQL')
         return {
           status: 1,
@@ -281,4 +286,26 @@ test('auto-removal races require confirmed absence and never repeat the stop req
   const third = await start(unknown);
   await assert.rejects(third.cleanup());
   assert.equal(unknown.state.calls.filter((call) => call.args.includes('stop')).length, 1);
+});
+
+test('socket-ready bootstrap cannot be mistaken for the final TCP server', async () => {
+  const h = harness({ tcpColdReads: 3 });
+  const instance = await start(h);
+  assert.equal(h.state.tcpReads, 4);
+  const readiness = h.state.calls.filter((call) => call.args.includes('exec'));
+  assert.equal(readiness.length, 4);
+  assert.ok(
+    readiness.every((call) =>
+      call.args.some(
+        (arg) =>
+          typeof arg === 'string' && arg.includes('--protocol=TCP --host=127.0.0.1 --port=3306')
+      )
+    )
+  );
+  assert.equal(instance.query('SELECT 1'), '1');
+  const ordinary = h.state.calls.at(-1);
+  assert.ok(
+    ordinary.args.some((arg) => typeof arg === 'string' && arg.includes('--protocol=SOCKET'))
+  );
+  await instance.cleanup();
 });

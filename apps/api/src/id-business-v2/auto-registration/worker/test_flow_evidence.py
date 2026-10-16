@@ -78,7 +78,8 @@ NAMESPACE = {"__name__": __name__, "Any": Any, "Dict": Dict, "Optional": Optiona
     "dataclass": dataclass, "datetime": datetime, "json": json,
     "time": SimpleNamespace(sleep=lambda _: None, time=time.time),
     "uuid": uuid, "importlib": SimpleNamespace(import_module=lambda _: SimpleNamespace(OPENAI_API_ENDPOINTS=ENDPOINTS)),
-    "observation": flow.observation, "validate_flow_evidence": flow.validate_flow_evidence,
+    "observation": flow.observation, "observation_v1": flow.observation_v1,
+    "validate_flow_evidence": flow.validate_flow_evidence,
     "validate_observation": flow.validate_observation, "RegistrationDiagnostics": diagnostics.RegistrationDiagnostics,
     "STAGES": diagnostics.STAGES, "ERROR_KINDS": diagnostics.ERROR_KINDS, "now_iso": now_iso,
     "TASK_PREFIX": "id.apple-task.",
@@ -245,6 +246,143 @@ class FlowEvidenceTests(unittest.TestCase):
                 self.assertEqual([url for url, *_ in calls], [ENDPOINTS["signup"], ENDPOINTS["register"]])
                 self.assertEqual(integration.store.data["flowEvidence"]["signup"]["decision"], "accepted")
 
+    def test_truthy_upstream_errors_keep_known_page_but_block_password(self):
+        cases = [({"error": {"code": "account_creation_failed"}}, "error", "account_creation_failed"),
+                 ({"error": {"code": "user_exists"}}, "error", "user_exists"),
+                 ({"errors": [{"code": "private-value"}]}, "errors", "other"),
+                 ({"error": "private-value", "errors": True}, "both", "other")]
+        for page in ("password", "email_otp_verification"):
+            for extra, signal, error_kind in cases:
+                with self.subTest(page=page, signal=signal, error_kind=error_kind):
+                    integration, engine, _session, calls = self.engine(signup=FakeResponse(body={"page": {"type": page}, **extra}))
+                    self.assertFalse(engine.run().success)
+                    self.assertEqual([url for url, *_ in calls], [ENDPOINTS["signup"]])
+                    evidence = integration.store.data["flowEvidence"]["signup"]
+                    self.assertEqual(integration.store.data["flowEvidence"]["version"], 2)
+                    self.assertEqual(evidence["pageKind"], "new_account" if page == "password" else "existing_account")
+                    self.assertEqual((evidence["decision"], evidence["reason"]), ("rejected", "upstream_error"))
+                    self.assertEqual(evidence["responseDetails"]["errorSignal"], signal)
+                    self.assertEqual(evidence["responseDetails"]["errorKind"], error_kind)
+                    self.assertEqual(evidence["responseDetails"]["pageShape"], "type_known")
+                    self.assertEqual(integration.store.data["firstFailure"]["errorKind"],
+                                     error_kind if error_kind != "other" else "unknown")
+                    self.assertNotIn("existingAccountIndication", integration.store.data)
+                    self.assertNotIn("private-value", json.dumps(evidence))
+                    engine._offline_generate.assert_not_called()
+
+    def test_response_details_distinguish_missing_page_and_every_type_shape(self):
+        cases = [({}, "missing", "missing"), ({"page": None}, "non_object", "missing"),
+                 ({"page": []}, "non_object", "missing"), ({"page": "private-value"}, "non_object", "missing"),
+                 ({"page": {}}, "type_missing", "missing"), ({"page": {"type": None}}, "type_non_string", "missing"),
+                 ({"page": {"type": True}}, "type_non_string", "unknown"),
+                 ({"page": {"type": {"private-value": "private-value"}}}, "type_non_string", "unknown"),
+                 ({"page": {"type": ""}}, "type_unknown", "missing"),
+                 ({"page": {"type": "private-value"}}, "type_unknown", "unknown"),
+                 ({"page": {"type": "password"}}, "type_known", "new_account"),
+                 ({"page": {"type": "email_otp_verification"}}, "type_known", "existing_account")]
+        for body, shape, kind in cases:
+            with self.subTest(shape=shape, kind=kind):
+                value = flow.observation(FakeResponse(body=body), "signup")
+                self.assertEqual(value["responseDetails"]["pageShape"], shape)
+                self.assertEqual(value["pageKind"], kind)
+                self.assertEqual(value["responseDetails"]["errorSignal"], "none")
+                self.assertNotIn("private-value", json.dumps(value))
+
+    def test_error_shape_classifier_and_original_truthiness_are_preserved(self):
+        cases = [({}, "missing", False), ({"error": None}, "null", False),
+                 ({"error": {}}, "object", False), ({"error": {"code": "private-value"}}, "object", True),
+                 ({"error": ""}, "string", False), ({"error": "private-value"}, "string", True),
+                 ({"error": []}, "list", False), ({"error": ["private-value"]}, "list", True),
+                 ({"error": False}, "boolean", False), ({"error": True}, "boolean", True),
+                 ({"error": 0}, "number", False), ({"error": 1.5}, "number", True)]
+        for extra, shape, truthy in cases:
+            for key in ("error", "errors"):
+                renamed = {key: extra["error"]} if "error" in extra else {}
+                with self.subTest(key=key, shape=shape, truthy=truthy):
+                    value = flow.observation(FakeResponse(body={"page": {"type": "password"}, **renamed}), "signup")
+                    details = value["responseDetails"]
+                    self.assertEqual(details[key + "Shape"], shape)
+                    self.assertEqual(details["errorSignal"], key if truthy else "none")
+                    self.assertEqual(details["errorKind"], "other" if truthy else "none")
+                    self.assertEqual(value["reason"], "upstream_error" if truthy else None)
+                    self.assertNotIn("private-value", json.dumps(value))
+
+    def test_invalid_or_nonobject_json_and_non_signup_never_get_response_details(self):
+        for response in (FakeResponse(invalid=True), FakeResponse(body=[]), FakeResponse(body="private-value")):
+            value = flow.observation(response, "signup")
+            self.assertNotIn("responseDetails", value)
+            self.assertEqual(value["reason"], "invalid_json")
+        for stage in ("authorize", "password"):
+            response = FakeResponse(body={"error": {"code": "account_creation_failed"}})
+            value = flow.observation(response, stage)
+            self.assertNotIn("responseDetails", value)
+            self.assertEqual(response.json_calls, 0)
+
+    def test_error_reason_preserves_http_and_origin_gate_priority(self):
+        body = {"page": {"type": "password"}, "error": {"code": "account_creation_failed"}}
+        for status, url, reason in ((400, "https://auth.openai.com/", "http_status"),
+                                    (200, "https://other.invalid/", "untrusted_origin")):
+            value = flow.observation(FakeResponse(status, body, url=url), "signup")
+            self.assertEqual(value["reason"], reason)
+            self.assertEqual(value["responseDetails"]["errorKind"], "account_creation_failed")
+            self.assertEqual(value["pageKind"], "new_account")
+
+    def test_v1_projection_keeps_original_error_decision_and_closed_fields(self):
+        value = flow.observation(FakeResponse(body={"page": {"type": "password"}, "error": "private-value"}), "signup")
+        old = flow.observation_v1("signup", value)
+        self.assertEqual(set(old), flow.FIELDS)
+        self.assertEqual((old["pageKind"], old["decision"], old["reason"]), ("unknown", "rejected", "unexpected_page"))
+        flow.validate_flow_evidence({"version": 1, "signup": old})
+        self.assertEqual(value["pageKind"], "new_account")
+        self.assertEqual(value["reason"], "upstream_error")
+
+    def test_v1_active_continuation_never_upgrades_or_rewrites_existing_evidence(self):
+        store = MemoryStore()
+        original_failure = {"stage": "password", "errorKind": "account_creation_failed", "httpStatus": 400,
+                            "elapsedMs": 7, "observedAt": now_iso()}
+        old_signup = flow.observation_v1("signup", flow.observation(FakeResponse(), "signup"))
+        store.update_task(TASK, flowEvidence={"version": 1, "signup": old_signup}, firstFailure=original_failure)
+        changed_signup = flow.observation(FakeResponse(body={"error": "private-value"}), "signup")
+        self.assertTrue(store.record_flow_evidence(TASK, "signup", changed_signup))
+        self.assertEqual(store.data["flowEvidence"], {"version": 1, "signup": old_signup})
+        self.assertTrue(store.record_flow_evidence(TASK, "password", flow.observation(FakeResponse(400), "password")))
+        self.assertEqual(store.data["flowEvidence"]["version"], 1)
+        self.assertEqual(store.data["flowEvidence"]["signup"], old_signup)
+        self.assertEqual(set(store.data["flowEvidence"]["password"]), flow.FIELDS)
+        self.assertEqual(store.data["firstFailure"], original_failure)
+        self.assertEqual(store.writes, 0)
+
+    def test_v2_closed_details_reject_raw_values_wrong_stage_and_inconsistent_decisions(self):
+        value = flow.observation(FakeResponse(), "signup")
+        cases = [lambda x: x["responseDetails"].update(rawType="private-value"),
+                 lambda x: x["responseDetails"].update(errorSignal="private-value"),
+                 lambda x: x["responseDetails"].update(errorShape="private-value"),
+                 lambda x: x["responseDetails"].update(errorsShape=[]),
+                 lambda x: x["responseDetails"].update(errorKind="private-value"),
+                 lambda x: x["responseDetails"].update(pageShape="private-value"),
+                 lambda x: x["responseDetails"].update(errorSignal="error"),
+                 lambda x: x["responseDetails"].update(pageShape="type_missing"),
+                 lambda x: x.update(reason="upstream_error"),
+                 lambda x: x.update(jsonKind="invalid")]
+        for mutate in cases:
+            bad = copy.deepcopy(value)
+            mutate(bad)
+            with self.subTest(value=bad), self.assertRaises(ValueError):
+                flow.validate_flow_evidence({"version": 2, "signup": bad})
+        for version in (1, True, 3):
+            with self.subTest(version=version), self.assertRaises(ValueError):
+                flow.validate_flow_evidence({"version": version, "signup": value})
+        for stage in ("authorize", "password"):
+            with self.subTest(stage=stage), self.assertRaises(ValueError):
+                flow.validate_flow_evidence({"version": 2, stage: value})
+
+    def test_v2_object_requires_details_but_legacy_v1_never_does(self):
+        value = flow.observation(FakeResponse(), "signup")
+        value.pop("responseDetails")
+        with self.assertRaises(ValueError):
+            flow.validate_flow_evidence({"version": 2, "signup": value})
+        flow.validate_flow_evidence({"version": 1, "signup": value})
+
     def test_valid_existing_account_skips_password_without_claiming_identity(self):
         integration, engine, _session, calls = self.engine(signup=FakeResponse(body={"page": {"type": "email_otp_verification"}}))
         self.assertFalse(engine.run().success)
@@ -313,8 +451,12 @@ class FlowEvidenceTests(unittest.TestCase):
     def test_old_task_and_new_closed_structure_validate_without_database(self):
         legacy = {"email": "fixture@example.invalid", "aliasId": "fixture-alias", "resultKind": None}
         safety.validate_task(TASK, legacy)
-        value = {**legacy, "flowEvidence": {"version": 1, "signup": flow.observation(FakeResponse(), "signup")}}
-        safety.validate_task(TASK, value)
+        for version in (1, 2):
+            evidence = flow.observation(FakeResponse(), "signup")
+            if version == 1:
+                evidence = flow.observation_v1("signup", evidence)
+            value = {**legacy, "flowEvidence": {"version": version, "signup": evidence}}
+            safety.validate_task(TASK, value)
         self.assertNotIn("flowEvidence", safety.PUBLIC_FACT_FIELDS)
         self.assertNotIn("flowEvidence", safety.OPTIONAL_RECORD_FIELDS)
 
@@ -363,7 +505,7 @@ print('standalone stdlib load PASS')
         self.assertEqual(result.stderr, "")
 
     def test_unknown_or_secret_fields_invalid_enums_and_oversize_arrays_are_rejected(self):
-        good = {"version": 1, "signup": flow.observation(FakeResponse(), "signup")}
+        good = {"version": 2, "signup": flow.observation(FakeResponse(), "signup")}
         mutations = [lambda x: x.update(version=True), lambda x: x.update(cookie="fixture-secret"),
             lambda x: x["signup"].update(payload="fixture-secret"), lambda x: x["signup"].update(pageKind="raw page"),
             lambda x: x["signup"].update(pageKind=[]), lambda x: x["signup"].update(httpStatus=True),

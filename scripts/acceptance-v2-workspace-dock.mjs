@@ -514,6 +514,23 @@ try {
     );
     checks.push({ label: '键盘调整自定义顺序写入合成适配器并回读', passed: true });
 
+    const beforeDrag = await rows.locator('.v2-quick-actions-panel__title').allTextContents();
+    const fromCard = await rows.first().boundingBox();
+    const toCard = await rows.nth(2).boundingBox();
+    assert.ok(fromCard && toCard);
+    await page.mouse.move(fromCard.x + 3, fromCard.y + 20);
+    await page.mouse.down();
+    await page.mouse.move(toCard.x + 3, toCard.y + toCard.height - 4, { steps: 12 });
+    await page.mouse.up();
+    await settle(page);
+    assert.deepEqual(await rows.locator('.v2-quick-actions-panel__title').allTextContents(), [
+      beforeDrag[1],
+      beforeDrag[2],
+      beforeDrag[0],
+      ...beforeDrag.slice(3)
+    ]);
+    checks.push({ label: '从卡片空白处拖拽排序写入合成适配器并回读', passed: true });
+
     await sortBy(page, '最近修改');
     assert.equal(await rows.count(), 8);
     const firstPage = await geometry(page, '话术第一页');

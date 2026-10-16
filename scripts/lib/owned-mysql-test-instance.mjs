@@ -154,7 +154,7 @@ export async function startOwnedMysqlTestInstance(
   };
   const interrupt = () => stopForSignal(130);
   const terminate = () => stopForSignal(143);
-  function queryResult(statement, targetDatabase = database) {
+  function queryResult(statement, targetDatabase = database, tcp = false) {
     if (
       closed ||
       !containerId ||
@@ -172,7 +172,8 @@ export async function startOwnedMysqlTestInstance(
         'sh',
         '-c',
         'export MYSQL_PWD="$MYSQL_ROOT_PASSWORD"; exec mysql --no-defaults --no-login-paths ' +
-          '--protocol=SOCKET --user=root --batch --skip-column-names --raw --binary-mode ' +
+          (tcp ? '--protocol=TCP --host=127.0.0.1 --port=3306 ' : '--protocol=SOCKET ') +
+          '--user=root --batch --skip-column-names --raw --binary-mode ' +
           '--local-infile=0 --default-character-set=utf8mb4 --database="$1"',
         'sh',
         database
@@ -237,8 +238,11 @@ export async function startOwnedMysqlTestInstance(
     )
       throw new Error('隔离 MySQL 只能发布本机随机端口');
     for (let attempt = 0; attempt < 120; attempt += 1) {
-      if (queryResult('SELECT 1').status === 0) {
-        if (!/^8\.4\./.test(query('SELECT VERSION()')))
+      // The image's init server accepts Unix sockets before restarting. Only
+      // the final mysqld accepts TCP; use one authenticated version query.
+      const ready = queryResult('SELECT VERSION()', database, true);
+      if (ready.status === 0) {
+        if (!/^8\.4\./.test(ready.stdout.trim()))
           throw new Error('隔离 Docker MySQL 版本必须为 8.4');
         return {
           runtime: 'docker',

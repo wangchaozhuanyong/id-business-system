@@ -1,0 +1,105 @@
+name: Workspace Card Drag Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      commit:
+        description: Exact reviewed main commit
+        required: true
+        type: string
+      expected_current:
+        description: Exact published predecessor
+        required: true
+        type: string
+      publish:
+        description: Publish only Admin after native validation
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: id-business-v2-production-release
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    if: github.ref == 'refs/heads/main' && inputs.commit == github.sha
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
+        with:
+          node-version: 24
+          cache: npm
+      - run: python3 -B scripts/production-release/workspace-drag-release.test.py
+      - name: Reproduce published Admin and compile only the card drag overlay
+        run: python3 -B scripts/production-release/workspace-drag-build.py prepare
+      - name: Install isolated browser runtime
+        working-directory: .deploy/workspace-drag-release/candidate
+        run: npx playwright install --with-deps chromium
+      - name: Verify card drag gaps touch escape failure retry and themes
+        working-directory: .deploy/workspace-drag-release/candidate
+        run: node scripts/acceptance-v2-workspace-drag-static.mjs
+      - name: Bind native validation to immutable artifact
+        run: python3 -B scripts/production-release/workspace-drag-build.py package
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: workspace-drag-${{ github.sha }}-${{ github.run_attempt }}
+          path: |
+            .deploy/workspace-drag-release/workspace-drag-artifact.tar.gz
+            .deploy/workspace-drag-release/artifact-sha256.txt
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 30
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: workspace-drag-browser-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .deploy/workspace-drag-release/candidate/.runtime/workspace-copy-drag-20261016/browser/result.json
+          include-hidden-files: true
+          if-no-files-found: ignore
+          retention-days: 30
+
+  publish:
+    needs: validate
+    if: inputs.publish && github.ref == 'refs/heads/main' && inputs.commit == github.sha
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: write
+      actions: read
+      id-token: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      AWS_REGION: ap-northeast-1
+      RELEASE_COMMIT: ${{ inputs.commit }}
+      EXPECTED_CURRENT: ${{ inputs.expected_current }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          fetch-depth: 0
+      - uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd
+        with:
+          role-to-assume: arn:aws:iam::079740175286:role/id-business-v2-github-release
+          role-session-name: id-business-v2-drag-${{ github.run_id }}
+          aws-region: ap-northeast-1
+          role-duration-seconds: 3600
+      - name: Publish only Admin and independently read back
+        run: python3 -B scripts/production-release/workspace-drag-dispatch.py
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: workspace-drag-publication-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .deploy/workspace-drag-release/
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 30

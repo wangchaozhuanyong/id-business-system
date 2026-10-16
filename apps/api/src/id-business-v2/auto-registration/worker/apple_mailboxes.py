@@ -33,7 +33,7 @@ from apple_closed_loop import (BATCH_PREFIX, ClosedLoopFacts, RESULT_FIELDS, SYN
                                resolve_system_proxy, verify_identity)
 from apple_registration_diagnostics import (RegistrationDiagnostics, STAGES, ERROR_KINDS,
                                              PUBLIC_FIELDS as DIAGNOSTIC_PUBLIC_FIELDS)
-from flow_evidence import observation, validate_flow_evidence, validate_observation
+from flow_evidence import observation, observation_v1, validate_flow_evidence, validate_observation
 
 PUBLIC_FIELDS = CLOSED_LOOP_PUBLIC_FIELDS | DIAGNOSTIC_PUBLIC_FIELDS
 
@@ -477,9 +477,15 @@ class RegistrationFacts(ClosedLoopFacts):
             row, data = self.task_data(db, task_uuid)
             if self.current(db, task_uuid, data) is None:
                 return False
-            flow = data.get("flowEvidence", {"version": 1})
+            flow = data.get("flowEvidence", {"version": 2})
             validate_flow_evidence(flow)
-            flow = {**flow, slot: evidence}
+            if flow["version"] == 1:
+                # Retained/active old tasks keep their existing observations
+                # and format. Only missing stages receive the v1 projection.
+                if slot not in flow:
+                    flow = {**flow, slot: observation_v1(slot, evidence)}
+            else:
+                flow = {**flow, slot: evidence}
             validate_flow_evidence(flow)
             # This is task evidence only. Never advance the mailbox revision,
             # account identity, first failure or immutable sync payload.
@@ -947,6 +953,11 @@ class AppleMailboxIntegration:
                     # The wrapper below validates the response before the
                     # original algorithm can enter its password/login branch.
                     engine._apple_signup_evidence = evidence
+                    if (evidence.get("reason") == "upstream_error" and diagnostics is not None
+                            and diagnostics.active is not None):
+                        error_kind = evidence["responseDetails"]["errorKind"]
+                        if error_kind in {"account_creation_failed", "user_exists"}:
+                            diagnostics.active["errorKind"] = error_kind
             if (url == endpoints.get("create_account") and getattr(response, "status_code", None) == 200
                     and not confirms_account_creation(url, response)):
                 # The official side effect may already have happened. Raising
