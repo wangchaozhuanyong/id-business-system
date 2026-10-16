@@ -4,8 +4,7 @@ import type {
   AppleMailboxRow,
   AppleMailboxMarkInput,
   AppleMailboxSyncStatus,
-  AppleMailboxRecord,
-  AppleMailboxBrowserRegistration
+  AppleMailboxRecord
 } from './contracts';
 
 export const appleMailboxStatusOptions: Array<{
@@ -32,29 +31,6 @@ export function appleMailboxTaskLabel(value: AppleMailboxTaskStatus | null) {
     interrupted: '中断待核对',
     awaiting_review: '结果待核对'
   }[value];
-}
-
-export function appleMailboxBrowserPhaseLabel(value?: AppleMailboxBrowserRegistration) {
-  if (!value) return '';
-  const phases: Record<string, string> = {
-    waiting_for_browser: '等待助手接收原任务',
-    claimed: '助手已接管原注册任务',
-    browser_opened: '原比特浏览器窗口已打开',
-    email_submitting: '正在提交注册邮箱',
-    password_submitting: '正在设置账号密码',
-    email_code_required: '正在等待邮箱验证码',
-    profile_required: '等待补齐官网要求的资料',
-    human_verification_required: '等待本人完成官网验证',
-    official_identity_observed: '正在核验官网账号身份',
-    identity_verifying: '服务端正在核验官网账号身份',
-    saving: '正在保存账号资料',
-    completed: '浏览器步骤已完成，保存和同步以上方记录为准',
-    failed: '浏览器步骤未完成，请核对原任务',
-    cancelled: '浏览器任务已取消，请保留原记录',
-    expired: '浏览器任务已到期，请先核对原窗口与记录',
-    interrupted: '浏览器任务已中断，请先核对原窗口与记录'
-  };
-  return phases[value.phase] || '浏览器步骤待核对，请查看原窗口';
 }
 
 export function appleMailboxSyncLabel(value?: AppleMailboxSyncStatus) {
@@ -156,7 +132,6 @@ export function appleMailboxDiagnostic(
     redirect: '授权跳转',
     oauth: '注册后授权',
     account_save: '自动注册账号保存',
-    manual_verification: '等待本人完成官网验证',
     identity: '账号身份核验',
     sync: 'ChatGPT 账号同步'
   };

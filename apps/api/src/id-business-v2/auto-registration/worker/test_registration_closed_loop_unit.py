@@ -1,5 +1,6 @@
 """Pure memory/fake-transport regressions; never creates or opens a database."""
 import asyncio
+import copy
 from contextlib import contextmanager
 import hashlib
 import importlib
@@ -12,7 +13,7 @@ import sys
 import threading
 from types import SimpleNamespace
 import unittest
-from unittest.mock import MagicMock, Mock, patch
+from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import apple_closed_loop as closed
@@ -76,6 +77,95 @@ class RegistrationClosedLoopUnitTests(unittest.TestCase):
         self.stack.enter_context(patch.object(sqlite3, "connect", side_effect=AssertionError("database disabled")))
         self.stack.enter_context(patch.object(socket.socket, "connect", side_effect=AssertionError("network disabled")))
         self.addCleanup(self.stack.close)
+
+    @contextmanager
+    def protocol_dispatch(self, checkpoint=None, *, browser_context=False):
+        class Factory:
+            @classmethod
+            def create(cls, *args, **kwargs):
+                raise AssertionError("dispatcher test must not create a provider")
+
+        class Engine:
+            pass
+
+        original = Mock(return_value="original-http-dispatch", _id_apple_adapter=False)
+        original_async = AsyncMock(return_value="original-async-dispatch", _id_actor_adapter=False)
+        route = SimpleNamespace(RegistrationEngine=Engine, _run_sync_registration_task=original,
+                                run_registration_task=original_async)
+        integration = object.__new__(apple.AppleMailboxIntegration)
+        integration.route, integration.lock = route, threading.RLock()
+        integration.contexts = {TASK: {"email": None, "cancelled": False, "browserMode": browser_context}}
+        integration.generic_actors, integration.running_threads = {}, set()
+        integration.models, integration.store = SimpleNamespace(Setting=object()), Mock()
+        database = Mock()
+        row = SimpleNamespace(value=json.dumps(checkpoint)) if checkpoint is not None else None
+        database.get.return_value = row
+
+        @contextmanager
+        def get_db():
+            yield database
+
+        integration.sessions = SimpleNamespace(get_db=get_db)
+        with patch.object(apple, "EmailServiceFactory", Factory):
+            integration.install_adapters()
+            yield integration, original, original_async, row, database
+
+    def test_withdrawn_browser_tasks_never_enter_original_http_dispatch(self):
+        for checkpoint, context in (({"browserRegistration": {"phase": "failed"}}, False),
+                                    (None, True), ({"browserRegistration": None}, False)):
+            with self.subTest(checkpoint=checkpoint, context=context), \
+                    self.protocol_dispatch(checkpoint, browser_context=context) as (integration, sync, async_run, row, db):
+                before = row.value if row else None
+                for run in (lambda: integration.route._run_sync_registration_task(TASK),
+                            lambda: asyncio.run(integration.route.run_registration_task(TASK))):
+                    with self.assertRaisesRegex(ValueError, "历史浏览器注册任务"):
+                        run()
+                sync.assert_not_called()
+                async_run.assert_not_called()
+                integration.store.assert_not_called()
+                self.assertEqual(row.value if row else None, before)
+                self.assertEqual(integration.running_threads, set())
+                self.assertEqual({call[0] for call in db.mock_calls}, {"get"})
+
+    def test_original_protocol_dispatch_still_calls_existing_runners(self):
+        for checkpoint in (None, {"email": "unit@example.invalid", "resultKind": None}):
+            with self.subTest(checkpoint=checkpoint), self.protocol_dispatch(checkpoint) as (integration, sync, async_run, _, _):
+                self.assertEqual(integration.route._run_sync_registration_task(TASK), "original-http-dispatch")
+                self.assertEqual(asyncio.run(integration.route.run_registration_task(TASK)), "original-async-dispatch")
+                sync.assert_called_once_with(TASK)
+                async_run.assert_awaited_once_with(TASK)
+                self.assertEqual(integration.running_threads, set())
+
+    def test_withdrawn_browser_authorization_stops_before_recovery_or_mutation(self):
+        facts = MemoryFacts({"email": "unit@example.invalid", "browserRegistration": {"phase": "failed"}})
+        integration = object.__new__(apple.AppleMailboxIntegration)
+        integration.live = Mock(return_value=False)
+        integration.sessions, integration.store = facts.sessions, facts
+        integration.local_save_retry = Mock()
+        before = facts.row.value
+        with patch.object(facts, "current") as current, patch.object(facts, "transaction") as transaction, \
+                self.assertRaises(apple.HTTPException) as error:
+            asyncio.run(integration.resume_authorization(TASK))
+        self.assertEqual(error.exception.status_code, 409)
+        current.assert_not_called()
+        transaction.assert_not_called()
+        integration.local_save_retry.assert_not_called()
+        self.assertEqual(facts.row.value, before)
+
+    def test_strict_historical_browser_reader_preserves_records_without_executor_import(self):
+        checkpoint = {"version": 1, "phase": "failed", "expiresAt": STAMP, "claimIdHash": None,
+            "sequence": 0, "lastEvent": None, "lastEventHash": None, "profileId": None,
+            "passwordAcknowledged": False, "browserOpened": False, "emailSubmitted": False,
+            "failureReason": "connector_error", "creationEvidence": None}
+        binding = {"email": "unit@example.invalid", "aliasId": "fixture-alias", "resultKind": "failed",
+                   "browserRegistration": checkpoint}
+        before = copy.deepcopy(binding)
+        safety.validate_task(TASK, binding)
+        self.assertEqual(binding, before)
+        self.assertNotIn("apple_browser_registration", sys.modules)
+        for changes in ({"phase": "unknown_mode"}, {"passwordAcknowledged": "false"}, {"unexpected": "field"}):
+            with self.subTest(changes=changes), self.assertRaises(safety.SafetyError):
+                safety.validate_task(TASK, {**binding, "browserRegistration": {**checkpoint, **changes}})
 
     def test_legacy_fingerprint_keeps_original_receipt(self):
         value = payload(1, "verified")

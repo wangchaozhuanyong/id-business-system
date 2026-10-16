@@ -1,15 +1,4 @@
-import {
-  Body,
-  Controller,
-  Get,
-  Header,
-  Headers,
-  Param,
-  Post,
-  Query,
-  Req,
-  Res
-} from '@nestjs/common';
+import { Body, Controller, Get, Header, Param, Post, Query, Req, Res } from '@nestjs/common';
 import { ExecutionContextHost } from '@nestjs/core/helpers/execution-context-host';
 import type { ServerResponse } from 'node:http';
 import { CurrentUser, RequireRoles } from '../../auth/auth.decorators';
@@ -18,7 +7,6 @@ import { JwtAuthGuard } from '../../auth/jwt-auth.guard';
 import { PermissionsGuard } from '../../auth/permissions.guard';
 import type { WorkspaceRequest } from './auto-registration.service';
 import { AppleMailboxesService } from './apple-mailboxes.service';
-import { BrowserRegistrationService } from './browser-registration.service';
 
 @Controller('id-business-v2/auto-registration/apple-mailboxes')
 @RequireRoles('admin')
@@ -26,8 +14,7 @@ export class AppleMailboxesController {
   constructor(
     private readonly service: AppleMailboxesService,
     private readonly authGuard: JwtAuthGuard,
-    private readonly permissionsGuard: PermissionsGuard,
-    private readonly browser: BrowserRegistrationService
+    private readonly permissionsGuard: PermissionsGuard
   ) {}
 
   @Get()
@@ -73,33 +60,6 @@ export class AppleMailboxesController {
       await this.authGuard.canActivate(context);
       return request.user?.id === operator.id && (await this.permissionsGuard.canActivate(context));
     });
-  }
-
-  @Post('browser/start')
-  @Header('Cache-Control', 'private, no-store')
-  startBrowser(
-    @Body() value: unknown,
-    @CurrentUser() operator: AuthenticatedUser,
-    @Headers('origin') origin: unknown,
-    @Req() request: WorkspaceRequest & { user?: AuthenticatedUser },
-    @Res({ passthrough: true }) response: ServerResponse
-  ) {
-    const context = new ExecutionContextHost(
-      [request, response],
-      AppleMailboxesController,
-      this.startBrowser
-    );
-    return this.browser.start(
-      value,
-      operator,
-      async () => {
-        await this.authGuard.canActivate(context);
-        return (
-          request.user?.id === operator.id && (await this.permissionsGuard.canActivate(context))
-        );
-      },
-      origin
-    );
   }
 
   @Get('tasks/:id')

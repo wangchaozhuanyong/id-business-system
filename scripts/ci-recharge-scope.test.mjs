@@ -1,4 +1,10 @@
 import {
+  registrationProtocolRestoreBase,
+  registrationProtocolRestoreTree,
+  registrationProtocolRestorePaths,
+  registrationProtocolRestoreRemovedSources
+} from './ci-registration-protocol-restore-scope.mjs';
+import {
   proxyResultIdentityPaths,
   proxyResultIdentityBase,
   proxyResultIdentityTree,
@@ -55,6 +61,62 @@ import {
   registrationBrowserAcceptance,
   registrationBrowserParts
 } from './ci-registration-browser-scope.mjs';
+
+test('registration protocol restore admits only exact deletions and preserves the current schema', () => {
+  const paths = [...registrationProtocolRestorePaths];
+  const removed = registrationProtocolRestoreRemovedSources;
+  const reviewed = Object.fromEntries(
+    paths
+      .filter(
+        (name) =>
+          !(name in removed) &&
+          name !== 'scripts/production-release/registration-protocol-restore-contract.json'
+      )
+      .map((name) => [name, 'a'.repeat(64)])
+  );
+  const context = {
+    base: registrationProtocolRestoreBase,
+    baseTree: registrationProtocolRestoreTree,
+    sourceDigest: (name) => reviewed[name] ?? null,
+    baseSourceDigest: (name) => removed[name] ?? null,
+    contract: {
+      version: 1,
+      frozen: true,
+      scope: 'REGISTRATION_PROTOCOL_RESTORE',
+      migration: null,
+      sourceBaseline: registrationProtocolRestoreBase,
+      sourceBaselineTree: registrationProtocolRestoreTree,
+      expectedCurrent: '123ea34df9bf74a1d65e74bd70f336eaa9344165',
+      schemaSha256: '51a4d25b1302458145f560acc32f25b89a7bd65fea64dc72b254dc56da430100',
+      runtimeEvidence: { status: 'VERIFIED', commit: '123ea34df9bf74a1d65e74bd70f336eaa9344165' },
+      expectedGitChanges: paths,
+      withdrawal: { sourceRemovals: { ...removed } },
+      reviewedFileHashes: reviewed
+    }
+  };
+  assert.equal(checkMode(paths, 'same', 'same', undefined, context), 'recharge');
+  assert.deepEqual(selectedParts(paths, undefined, context), ['guards', 'api', 'admin']);
+  assert.equal(needsOnlineRechargeCiBuild(paths, context), false);
+  assert.equal(checkMode(paths, 'before', 'after', undefined, context), 'full');
+  for (const change of [
+    { base: '0'.repeat(40) },
+    { baseTree: '0'.repeat(40) },
+    { baseSourceDigest: () => '0'.repeat(64) },
+    { contract: { ...context.contract, frozen: false } }
+  ]) {
+    assert.equal(checkMode(paths, 'same', 'same', undefined, { ...context, ...change }), 'full');
+  }
+  assert.equal(
+    checkMode(
+      [...paths, 'apps/api/prisma-mysql/schema.prisma'],
+      'same',
+      'same',
+      undefined,
+      context
+    ),
+    'full'
+  );
+});
 
 test('registration browser selects four affected checks only for the complete frozen source and unchanged schema', () => {
   const paths = [...registrationBrowserPaths];
