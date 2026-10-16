@@ -79,6 +79,10 @@ def prepare(c):
     need(os.environ.get('GITHUB_ACTIONS') == 'true', 'REMOTE_VALIDATION_ONLY')
     need(not OUTPUT.exists(), 'OUTPUT_EXISTS')
     OUTPUT.mkdir(parents=True)
+    origin = c['publishedAdminOrigin']
+    checked = json.loads(subprocess.check_output(['gh', 'api', 'repos/wangchaozhuanyong/id-business-system/actions/runs/' + origin['runId']], cwd=ROOT))
+    need(checked['head_sha'] == origin['commit'] and checked['head_branch'] == 'main' and checked['path'] == origin['path']
+         and checked['conclusion'] == 'success', 'PUBLISHED_ADMIN_VALIDATION_CHANGED')
     extract = load('recharge-record-build.py').extract_source
     for role in ('api', 'admin'):
         raw = git('archive', c[role + 'SourceBaseline'])

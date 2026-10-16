@@ -1,6 +1,15 @@
 {
   "adminNodeEnv": "production",
-  "adminPublishedSources": {},
+  "adminPublishedSources": {
+    "apps/admin/src/v2/features/online-recharge/V2OnlineConfigView.vue": {
+      "commit": "b4beae76ac7ce69d5475473054a22b945bda5898",
+      "sha256": "7b127a237170e9f28f8ce1537a3a2c950b9ba98f5dbbea1034ab8166c203b742"
+    },
+    "apps/admin/src/v2/features/online-recharge/configFields.ts": {
+      "commit": "b4beae76ac7ce69d5475473054a22b945bda5898",
+      "sha256": "25e9ebb190fffb670549f914f895c33a867e6d1722d69140d4172f913df51eaf"
+    }
+  },
   "adminSourceBaseline": "88bce5ab09d20cd303f1fdd5fe310cb0b42e1451",
   "adminSourceBaselineTree": "57a0d354276724e70945513c9db806919e245b09",
   "apiModules": [
@@ -14,7 +23,7 @@
   "apiSourceBaselineTree": "283b0749281572da98f75bed317f81816d030591",
   "backupNormalizerPath": "/opt/id-business-v2/releases/20261015T091200Z-e197218c8b38-recharge-record/scripts/mysql-dump-restore-normalizer.sed",
   "backupNormalizerSha256": "ca9b05f832e9ed73bb36b7e76c083c99a40b13e067850166f8715bae469e5202",
-  "baselineAdminBuildId": "v2-88bce5ab09d20cd303f1fdd5fe310cb0b42e1451",
+  "baselineAdminBuildId": "v2-b4beae76ac7ce69d5475473054a22b945bda5898",
   "buildInputs": {
     "admin": {
       ".npmrc": null,
@@ -35,7 +44,7 @@
       "tsconfig.base.json": "d705dca337a84b21bcb51a8b2f7bcb9953916564f53d10b0b4c7e2d36259e5fe"
     }
   },
-  "current": "/opt/id-business-v2/releases/20261016T052613Z-88bce5ab09d2-order-layout",
+  "current": "/opt/id-business-v2/releases/20261016T062704Z-b4beae76ac7c-online-proxy-country",
   "engineHealth": {
     "activeTasks": 0,
     "mode": "enabled",
@@ -43,18 +52,24 @@
     "rpcConnected": true,
     "stopping": false
   },
-  "expectedCurrent": "88bce5ab09d20cd303f1fdd5fe310cb0b42e1451",
+  "expectedCurrent": "b4beae76ac7ce69d5475473054a22b945bda5898",
   "hostSourceBaseline": "69eba563895bf083b24c8214a088454d5df34922",
   "hostSources": {
     "scripts/lib/v2-data-integrity-audit.mjs": "9c982c6f6c4573715d6679d64eb898ea20080430aa18ac42ae093beac181f26e",
     "scripts/lib/v2-historical-cash-adjustment-audit.mjs": "13367df42cbf58102e8e014afddae32fe73785d9159334e98ed8a2474c2aa569",
     "scripts/v2-data-integrity-audit.mjs": "7b2b932490b2691d49882a545638b93c499454c64e7271bf0fc139aefb4b6778"
   },
-  "manifestSha256": "ab625e55e4461a852fff06942c76585d1caa2dc412fea062f77ad9db8cb53fed",
+  "manifestSha256": "9a03b6602adaa86cc0298a2c8e0b5dbc33c8f5398fa2659790b6d1e2182c66ea",
   "migration": {
     "name": "20261016170000_chatgpt_account_sale_status",
     "path": "apps/api/prisma-mysql/migrations/20261016170000_chatgpt_account_sale_status/migration.sql",
     "sha256": "6c601b9d0bdebfa8b6bd3bd0209eceee6cf8b9e25992c8fdfa081fd587a79d4a"
+  },
+  "publishedAdminOrigin": {
+    "commit": "b4beae76ac7ce69d5475473054a22b945bda5898",
+    "path": ".github/workflows/online-proxy-country-validation.yml",
+    "runId": "38860530544",
+    "sourceTree": "224afb961d72315c5412c62c75b4f228fc98e01d"
   },
   "reviewBase": "88bce5ab09d20cd303f1fdd5fe310cb0b42e1451",
   "scope": "CHATGPT_ACCOUNT_SALES_20261016",
