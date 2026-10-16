@@ -85,7 +85,9 @@ QUOTE_CHECK_STATES = frozenset({
     'form_start', 'form_complete', 'billing_verified', 'card_verified', 'quote_wait_start',
     'binding_missing', 'billing_mismatch', 'tier_pending', 'visible_incomplete',
     'amount_mismatch', 'tax_mismatch', 'quote_invalid', 'verified', 'version_pending',
-    'original_read_start', 'original_read_complete',
+    'original_read_start', 'original_read_complete', 'billing_fingerprint_absent',
+    *('billing_' + key + '_null' for key in ('line2', 'state')),
+    *('billing_' + key + '_different' for key in ('country', 'line1', 'line2', 'city', 'state', 'postal_code', 'name')),
 })
 
 
@@ -95,6 +97,26 @@ def quote_check_state(guard, state):
         return
     guard._quote_check_state = state
     print(json.dumps({'event': 'checkout_quote_check', 'state': state}), file=sys.stderr, flush=True)
+
+
+def note_native_billing_differences(guard, session, details):
+    """只输出差异字段枚举；姓名、地址及其散列都不离开本次内存。"""
+    from native_checkout import billing_fingerprint
+    billing = session.get('checkout_state', {}).get('billingAddress')
+    if not isinstance(billing, dict) or not isinstance(billing.get('address'), dict):
+        quote_check_state(guard, 'billing_fingerprint_absent')
+        return
+    address = billing['address']
+    if billing_fingerprint(address, billing.get('name')) is None:
+        quote_check_state(guard, 'billing_fingerprint_absent')
+    normalized = lambda value: ' '.join(str(value or '').strip().casefold().split())
+    for key in ('country', 'line1', 'line2', 'city', 'state', 'postal_code'):
+        if key in ('line2', 'state') and address.get(key) is None:
+            quote_check_state(guard, 'billing_' + key + '_null')
+        if normalized(address.get(key)) != normalized(getattr(details, key)):
+            quote_check_state(guard, 'billing_' + key + '_different')
+    if normalized(billing.get('name')) != normalized(details.name):
+        quote_check_state(guard, 'billing_name_different')
 
 
 async def verified_quote_once(page, guard):
@@ -312,7 +334,8 @@ async def payment_handler(page, guard, identity, ledger, target, *, pay, details
                         if latest_identity['current_plan'] != 'free':
                             raise Stop('incompatible_existing_subscription')
                     # 仅 GET 同一个未付款原单；由既有观测器核对最新响应、账号及账单指纹。
-                    await read_original_native_checkout(page, read_credential, selected_plan)
+                    latest = await read_original_native_checkout(page, read_credential, selected_plan)
+                    note_native_billing_differences(guard, latest, details)
 
                 quote_options['binding_reader'] = read_binding
             if form_budget is not None:

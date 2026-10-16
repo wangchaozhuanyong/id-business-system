@@ -8,7 +8,7 @@ from unittest.mock import AsyncMock, Mock, patch
 
 from browser_session import SessionBudget
 from checkout_core import Stop
-from pay import payment_handler, current_quote, quote_check_state, verified_quote_once
+from pay import payment_handler, current_quote, quote_check_state, verified_quote_once, note_native_billing_differences
 from payment_form import CARD_FIELDS, fill_official_form, wait_for_payment_form
 from test_payment_form_focus import DeferredCheckout, DeferredFields, details
 from browser_checkout import quote_from_text
@@ -244,3 +244,35 @@ class QuoteCheckDiagnosticTests(unittest.IsolatedAsyncioTestCase):
         read.assert_not_awaited()
         self.assertEqual(json.loads(output.getvalue())['state'], 'billing_mismatch')
         self.assertNotIn('private', output.getvalue())
+
+
+class EmptyBillingValueTests(unittest.TestCase):
+    def test_optional_null_is_equivalent_to_empty_but_required_fields_remain_strict(self):
+        from native_checkout import billing_fingerprint
+        card = details()
+        address = {key: getattr(card, key) for key in ('country', 'line1', 'line2', 'city', 'state', 'postal_code')}
+        expected = billing_fingerprint(address, card.name)
+        self.assertEqual(expected, billing_fingerprint({**address, 'line2': None}, card.name))
+        self.assertIsNone(billing_fingerprint({**address, 'state': None}, card.name))
+        for key in ('country', 'line1', 'city', 'postal_code'):
+            self.assertIsNone(billing_fingerprint({**address, key: None}, card.name))
+        for value in ([], {}, 0, False):
+            self.assertIsNone(billing_fingerprint({**address, 'line2': value}, card.name))
+        overseas = {**address, 'country': 'PH', 'state': ''}
+        self.assertEqual(billing_fingerprint(overseas, card.name),
+                         billing_fingerprint({**overseas, 'state': None}, card.name))
+        self.assertNotEqual(expected, billing_fingerprint({**address, 'line2': 'different'}, card.name))
+
+    def test_component_diagnostic_contains_only_fixed_field_names(self):
+        card = details()
+        address = {key: getattr(card, key) for key in ('country', 'line1', 'line2', 'city', 'state', 'postal_code')}
+        output = io.StringIO()
+        payload = {'checkout_state': {'billingAddress': {
+            'address': {**address, 'line2': None, 'city': 'Private city'}, 'name': 'Private name'}}}
+        with patch('pay.sys.stderr', output):
+            note_native_billing_differences(SimpleNamespace(), payload, card)
+        rows = [json.loads(line) for line in output.getvalue().splitlines()]
+        self.assertEqual([row['state'] for row in rows],
+                         ['billing_line2_null', 'billing_city_different', 'billing_name_different'])
+        self.assertTrue(all(set(row) == {'event', 'state'} for row in rows))
+        self.assertNotIn('Private', output.getvalue())
