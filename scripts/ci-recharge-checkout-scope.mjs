@@ -46,7 +46,8 @@ const formBudgetPaths = new Set([
     'pay.py',
     'test_payment_form_focus.py',
     'test_payment_form_budget.py',
-    'test_native_checkout.py'
+    'test_native_checkout.py',
+    'native_checkout.py'
   ].map((name) => `apps/api/src/id-business-v2/auto-recharge/worker/${name}`),
   'scripts/ci-recharge-checkout-scope.mjs',
   'scripts/ci-recharge-checkout-scope.test.mjs',
