@@ -4,6 +4,7 @@ import importlib.util
 import json
 from pathlib import Path
 import unittest
+import tempfile
 from unittest.mock import patch
 
 HERE = Path(__file__).resolve().parent
@@ -27,6 +28,18 @@ class PublicationTests(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             r.verify_contract(changed)
 
+    def test_measured_missing_host_source_is_accepted_but_unreviewed_content_is_not(self):
+        runtime = HERE.parents[1] / '.runtime'
+        runtime.mkdir(exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=runtime) as owned:
+            current = Path(owned)
+            r.verify_host_source_layout(current)
+            source = current / r.SOURCE
+            source.parent.mkdir(parents=True)
+            source.write_text('unreviewed host source')
+            with self.assertRaisesRegex(RuntimeError, 'BASE_SOURCE_LAYOUT_CHANGED'):
+                r.verify_host_source_layout(current)
+
     def test_payload_cannot_replace_client_admin_auth_or_another_module(self):
         c = self.contract
         plan = {'commit': 'a' * 40, 'tree': 'b' * 40, 'workflowRunId': '1', 'workflowRunAttempt': '1',
@@ -43,6 +56,14 @@ class PublicationTests(unittest.TestCase):
                 r.verify_proof({**proof, 'files': altered}, plan, c, altered)
         with self.assertRaises(RuntimeError):
             r.verify_proof({**proof, 'databaseVerification': {'isolated': False, 'passed': 4}}, plan, c, files)
+        original = 'f3dcc8781c6f07be70db11b7aa2e1f5116cdfbc41ed7eea6080d9bc4d22ea1a8'
+        reused = {**plan, 'commit': '1c339754507f29459d17d75bb84afbee8fba5291', 'workflowRunId': '38925995056',
+                  'controlSources': {'mailbox-version-release.py': 'e' * 64},
+                  'validatedControlSources': {'mailbox-version-release.py': original}}
+        reused_proof = {**proof, **reused, 'controlSources': reused['validatedControlSources']}
+        r.verify_proof(reused_proof, reused, c, files)
+        with self.assertRaisesRegex(RuntimeError, 'VALIDATED_CONTROL_REUSE_CHANGED'):
+            r.verify_proof(reused_proof, {**reused, 'workflowRunId': '1'}, c, files)
 
     def test_smoke_rejects_changes_to_any_preserved_service_before_content_checks(self):
         states = copy.deepcopy(self.contract['baseline']['services'])

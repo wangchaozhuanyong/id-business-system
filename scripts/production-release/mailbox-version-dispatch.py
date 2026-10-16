@@ -51,7 +51,10 @@ def verified_contract():
 
 def prepare_plan():
     contract_raw, contract = verified_contract()
-    commit = os.environ['RELEASE_COMMIT']
+    control_commit = os.environ['RELEASE_COMMIT']
+    reuse = os.environ.get('REUSE_VALIDATION_RUN', '')
+    need(reuse in ('', '38925995056'), 'VALIDATION_REUSE_NOT_APPROVED')
+    commit = control_commit
     need(re.fullmatch('[a-f0-9]{40}', commit) and os.environ['GITHUB_REF'] == 'refs/heads/main'
          and os.environ['GITHUB_REPOSITORY'] == REPOSITORY
          and os.environ['GITHUB_EVENT_NAME'] == 'workflow_dispatch'
@@ -65,7 +68,14 @@ def prepare_plan():
     spec.loader.exec_module(module)
     tree = execute('git', 'rev-parse', 'HEAD^{tree}').decode().strip()
     quality = module.quality_source_evidence(commit, tree)
-    run_id, attempt = os.environ['GITHUB_RUN_ID'], os.environ['GITHUB_RUN_ATTEMPT']
+    control_quality = quality
+    control_run = os.environ['GITHUB_RUN_ID']
+    if reuse:
+        commit = '1c339754507f29459d17d75bb84afbee8fba5291'
+        tree = execute('git', 'rev-parse', commit + '^{tree}').decode().strip()
+        need(all(sha((ROOT / n).read_bytes()) == value for n, value in contract['sources'].items()), 'REUSED_APPLICATION_CHANGED')
+        quality = module.quality_source_evidence(commit, tree)
+    run_id, attempt = reuse or control_run, '1' if reuse else os.environ['GITHUB_RUN_ATTEMPT']
     prefix = 'repos/' + REPOSITORY + '/'
     run = github(prefix + 'actions/runs/' + run_id)
     jobs = github(prefix + 'actions/runs/' + run_id + '/jobs?per_page=100')['jobs']
@@ -90,8 +100,26 @@ def prepare_plan():
     need(proof['commit'] == commit and proof['tree'] == tree and proof['workflowRunId'] == run_id
          and proof['workflowRunAttempt'] == attempt and proof['contractSha256'] == sha(contract_raw)
          and proof['sources'] == contract['sources'] and set(proof['controlSources']) == set(contract['controlFiles']), 'PROOF_CHANGED')
-    for name, expected in proof['controlSources'].items():
-        need(sha(Path(__file__).with_name(name).read_bytes()) == expected, 'EXECUTOR_CHANGED')
+    controls = {name: sha(Path(__file__).with_name(name).read_bytes()) for name in contract['controlFiles']}
+    validated = proof['controlSources']
+    if reuse:
+        need(run['status'] == 'completed' and run['conclusion'] == 'failure'
+             and validated == {**controls, 'mailbox-version-release.py': 'f3dcc8781c6f07be70db11b7aa2e1f5116cdfbc41ed7eea6080d9bc4d22ea1a8'}, 'REUSED_ARTIFACT_EXECUTORS_CHANGED')
+        native = json.loads(execute('aws', 'ssm', 'get-command-invocation', '--region', REGION, '--command-id', '789a08ac-d53b-4420-9bfe-8ad56a5a5a1e', '--instance-id', INSTANCE, '--output', 'json'))
+        failed = json.loads(native['StandardOutputContent'])
+        need(native['Status'] == 'Failed' and native['ResponseCode'] == 1 and failed['stage'] == 'PREFLIGHT'
+             and failed['mode'] == 'preflight' and failed['commit'] == commit and failed['errorType'] == 'FileNotFoundError'
+             and failed['businessActions'] == 0, 'ORIGINAL_FAILURE_NOT_BEFORE_SWITCH')
+        pubs = [a for a in artifacts if a['name'] == 'mailbox-version-publication-38925995056-1' and not a['expired']]
+        need(len(pubs) == 1, 'ORIGINAL_PUBLICATION_EVIDENCE_MISSING')
+        pub_raw = execute('gh', 'api', prefix + 'actions/artifacts/' + str(pubs[0]['id']) + '/zip')
+        need(pubs[0]['digest'] == 'sha256:' + sha(pub_raw), 'ORIGINAL_PUBLICATION_DIGEST_CHANGED')
+        with zipfile.ZipFile(io.BytesIO(pub_raw)) as pub:
+            names = [Path(n).name for n in pub.namelist()]
+            need('preflight-accepted-command.json' in names and 'release-accepted-command.json' not in names
+                 and 'readback-accepted-command.json' not in names, 'ORIGINAL_SWITCH_ALREADY_ACCEPTED')
+    else:
+        need(controls == validated, 'EXECUTOR_CHANGED')
     need(not OUTPUT.exists(), 'OUTPUT_EXISTS')
     OUTPUT.mkdir(parents=True, mode=0o700)
     bundle_path = OUTPUT / 'mailbox-version-artifact.tar.gz'
@@ -99,12 +127,20 @@ def prepare_plan():
     notes = OUTPUT / 'artifact-notes.md'
     notes.write_text('邮箱首个事件变更版本修复，仅替换后台单一模块；无数据库迁移。\n')
     tag = 'mailbox-version-' + commit
-    execute('gh', 'release', 'create', tag, str(bundle_path), '--target', commit, '--title',
-            'Mailbox version recovery ' + commit[:12], '--notes-file', str(notes), '--prerelease')
+    if reuse:
+        ref = github(prefix + 'git/ref/tags/' + tag)
+        need(ref['object']['type'] == 'commit' and ref['object']['sha'] == commit, 'ORIGINAL_RELEASE_TAG_CHANGED')
+        public = execute('gh', 'release', 'download', tag, '--pattern', 'mailbox-version-artifact.tar.gz', '--output', '-')
+        need(sha(public) == sha(bundle), 'ORIGINAL_RELEASE_ASSET_CHANGED')
+    else:
+        execute('gh', 'release', 'create', tag, str(bundle_path), '--target', commit, '--title',
+                'Mailbox version recovery ' + commit[:12], '--notes-file', str(notes), '--prerelease')
     plan = {'commit': commit, 'tree': tree, 'workflowRunId': run_id, 'workflowRunAttempt': attempt,
-            'contractSha256': sha(contract_raw), 'controlSources': proof['controlSources'],
+            'contractSha256': sha(contract_raw), 'controlSources': controls,
             'artifactSha256': sha(bundle), 'buildProofSha256': sha(raw), 'qualitySourceEvidence': quality,
             'artifactUrl': 'https://github.com/' + REPOSITORY + '/releases/download/' + tag + '/mailbox-version-artifact.tar.gz'}
+    if reuse:
+        plan.update(controlCommit=control_commit, controlWorkflowRunId=control_run, validatedControlSources=validated, controlQualitySourceEvidence=control_quality)
     (OUTPUT / 'publication-plan.json').write_text(json.dumps(plan, sort_keys=True, indent=2) + '\n')
     return plan, contract
 

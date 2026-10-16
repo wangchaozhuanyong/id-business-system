@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {
   mailboxVersionPaths,
   isMailboxVersionOnly,
+  isMailboxVersionControlsOnly,
   mailboxVersionCommands
 } from './ci-mailbox-version-scope.mjs';
 import { checkMode, selectedParts, needsOnlineRechargeCiBuild } from './ci-recharge-scope.mjs';
@@ -15,6 +16,16 @@ test('mailbox version scope keeps all API checks without publishing unrelated co
   for (const part of ['guards', 'api', 'release-controls'])
     assert.ok(mailboxVersionCommands(part, mailboxVersionPaths).length);
   assert.throws(() => mailboxVersionCommands('admin', mailboxVersionPaths));
+});
+
+test('layout repair selects only controls and cannot admit application or schema changes', () => {
+  const paths = mailboxVersionPaths.filter((name) => !name.startsWith('apps/'));
+  assert.equal(isMailboxVersionControlsOnly(paths), true);
+  assert.equal(checkMode(paths, 'same', 'same'), 'ci-only');
+  assert.deepEqual(selectedParts(paths), ['guards', 'release-controls']);
+  assert.equal(needsOnlineRechargeCiBuild(paths), false);
+  assert.throws(() => mailboxVersionCommands('api', paths));
+  assert.equal(isMailboxVersionControlsOnly([...paths, mailboxVersionPaths[0]]), false);
 });
 test('extra payment auth schema and missing regression paths cannot use the narrow checks', () => {
   for (const path of [
