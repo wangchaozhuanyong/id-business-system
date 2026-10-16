@@ -1,3 +1,9 @@
+import {
+  isProxyResultIdentityOnly,
+  proxyResultIdentityBase,
+  proxyResultIdentityEngineRoot,
+  proxyResultIdentityEngineTests
+} from './ci-proxy-result-identity-scope.mjs';
 import { readRegistrationNativeReuse } from './ci-registration-closure-native-reuse.mjs';
 import {
   isRegistrationEnvironmentRepair,
@@ -64,6 +70,44 @@ const changed = execFileSync('git', ['diff', '--name-only', base, 'HEAD'], { enc
   .trim()
   .split('\n')
   .filter(Boolean);
+// A byte-bound engine and registration static-asset repair has real tests and its own publisher.
+// Formal validation runs the new mock-browser regression; unchanged compiled API/Admin and databases are preserved.
+const proxyResultIdentityOnly =
+  mode === 'recharge' &&
+  base === proxyResultIdentityBase &&
+  isProxyResultIdentityOnly(changed, {
+    base,
+    baseTree: execFileSync('git', ['rev-parse', base + '^{tree}'], { encoding: 'utf8' }).trim()
+  });
+if (proxyResultIdentityOnly && ['guards', 'release-controls', 'online-engine'].includes(part)) {
+  if (part === 'online-engine') {
+    npm('ci', '--ignore-scripts', '--no-audit', '--no-fund');
+    npm(
+      'ci',
+      '--prefix',
+      proxyResultIdentityEngineRoot + '/upstream',
+      '--ignore-scripts',
+      '--no-audit',
+      '--no-fund'
+    );
+    run('node', ['--test', ...proxyResultIdentityEngineTests]);
+  } else {
+    run('python3', ['-B', 'scripts/production-release/proxy-result-identity-release.test.py']);
+    const existing = changed.filter((path) => existsSync(path));
+    const formatted = existing.filter((path) => /\.(?:[cm]?js|json|yml)$/.test(path));
+    if (formatted.length) npm('exec', '--', 'prettier', '--check', ...formatted);
+    const linted = existing.filter((path) => path.endsWith('.mjs'));
+    if (linted.length) npm('exec', '--', 'eslint', ...linted);
+    run('node', [
+      '--test',
+      'scripts/ci-proxy-result-identity-scope.test.mjs',
+      'scripts/ci-recharge-scope.test.mjs',
+      'scripts/ci-recharge-check.test.mjs',
+      'scripts/ci-recharge-checkout-scope.test.mjs'
+    ]);
+  }
+  process.exit(0);
+}
 const registrationEnvironmentRepair =
   part === 'guards' &&
   mode === 'ci-only' &&

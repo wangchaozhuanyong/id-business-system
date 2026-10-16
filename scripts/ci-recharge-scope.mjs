@@ -1,3 +1,4 @@
+import { isProxyResultIdentityOnly } from './ci-proxy-result-identity-scope.mjs';
 import { readRegistrationNativeReuse } from './ci-registration-closure-native-reuse.mjs';
 import { isRechargeCheckoutOnly } from './ci-recharge-checkout-scope.mjs';
 import { isRechargeBillingOnly } from './ci-recharge-billing-scope.mjs';
@@ -216,7 +217,8 @@ const onlineCiBuildTestInputs = new Set([
   'scripts/production-release/online-recharge-ci-build.test.py',
   'scripts/production-release/online-recharge-component-lifecycle.test.py'
 ]);
-export function needsOnlineRechargeCiBuild(paths) {
+export function needsOnlineRechargeCiBuild(paths, context) {
+  if (isProxyResultIdentityOnly(paths, context)) return false;
   // This task has its own finite three-role image proof; retain normal API,
   // engine and database checks instead of rebuilding a historical projection.
   if (
@@ -988,7 +990,10 @@ export function isMailboxOnly(paths) {
   );
 }
 
-export function checkMode(paths, oldSchema, newSchema, grantHelperSnapshot) {
+export function checkMode(paths, oldSchema, newSchema, grantHelperSnapshot, context) {
+  if (isProxyResultIdentityOnly(paths, context))
+    return oldSchema === newSchema ? 'recharge' : 'full';
+  if (context && isProxyResultIdentityOnly(paths)) return 'full';
   if (isRegistrationClosureOnly(paths, oldSchema, newSchema))
     return isAdminOnly(paths) ? 'admin' : 'recharge';
   if (isRegistrationClosureControlsOnly(paths)) return 'ci-only';
@@ -1332,6 +1337,7 @@ const bitOrdersAcceptancePaths = new Set([
 export const hasAppleMailboxScope = (paths) => paths.some((path) => appleMailboxApiPaths.has(path));
 
 export function isRechargeOnly(paths, oldSchema, newSchema) {
+  if (isProxyResultIdentityOnly(paths)) return oldSchema === newSchema;
   if (isRechargeCheckoutOnly(paths)) return oldSchema === newSchema;
   if (isRechargeBillingOnly(paths)) return true;
   if (paths.includes(rechargePricingProfile))
@@ -1407,6 +1413,7 @@ export function isRechargeOnly(paths, oldSchema, newSchema) {
 const securityPaths =
   /^(?:apps\/api\/src\/auth\/(?:auth\.service|password-hasher)(?:\.spec)?\.ts$|apps\/admin\/src\/v2\/features\/audit-logs\/audit-log-presentation(?:\.spec)?\.ts$|apps\/api\/src\/id-business-v2\/workspace\/media-resolver\/|scripts\/(?:audit-python-dependencies(?:\.test)?\.py|container-hardening\.test\.mjs|start-auto-recharge-connector\.sh)$|\.github\/workflows\/python-dependency-audit\.yml$)/;
 export function isTargetedOnly(paths, oldSchema, newSchema) {
+  if (isProxyResultIdentityOnly(paths)) return oldSchema === newSchema;
   if (isRegistrationClosureOnly(paths, oldSchema, newSchema)) return true;
   if (hasRegistrationPublishedRecovery(paths)) return false;
   if (paths.includes(rechargePricingProfile)) return isRechargeOnly(paths, oldSchema, newSchema);
@@ -1445,7 +1452,8 @@ export function isTargetedOnly(paths, oldSchema, newSchema) {
       ))
   );
 }
-export function selectedParts(paths, grantHelperSnapshot) {
+export function selectedParts(paths, grantHelperSnapshot, context) {
+  if (isProxyResultIdentityOnly(paths, context)) return ['guards', 'online-engine'];
   if (isRegistrationClosureControlsOnly(paths)) return ['guards'];
   if (isRegistrationClosurePaths(paths) && hasRegistrationClosureApplication(paths))
     return [
@@ -4107,11 +4115,13 @@ async function main() {
   }
   const paths = git('diff', '--name-only', base, 'HEAD').split('\n').filter(Boolean);
   const grantHelperSnapshot = readProductionDatabaseAccessSnapshot(base, paths);
+  const proxyIdentityContext = { base, baseTree: git('rev-parse', base + '^{tree}') };
   const mode = checkMode(
     paths,
     execFileSync('git', ['show', `${base}:${schema}`], { encoding: 'utf8' }),
     execFileSync('git', ['show', `HEAD:${schema}`], { encoding: 'utf8' }),
-    grantHelperSnapshot
+    grantHelperSnapshot,
+    proxyIdentityContext
   );
   const currentTree = git('rev-parse', 'HEAD^{tree}');
   let reuseMain = false;
@@ -4228,19 +4238,19 @@ async function main() {
   }
   const checkParts =
     mode === 'ci-only' && hasBankCardDeletePolicyProof(paths, grantHelperSnapshot)
-      ? selectedParts(paths, grantHelperSnapshot)
+      ? selectedParts(paths, grantHelperSnapshot, proxyIdentityContext)
       : mode === 'ci-only' || mode === 'audit-retention'
         ? ['guards']
         : mode === 'admin'
           ? ['guards', 'admin', ...(hasCombinedComponentScope(paths) ? ['migration'] : [])]
           : mode === 'mailbox'
             ? ['guards', 'admin', 'api']
-            : selectedParts(paths);
+            : selectedParts(paths, undefined, proxyIdentityContext);
   // BEGIN finite ONLINE build-proof reuse classifier admission
   const needsOnlineRechargeCiBuild = (paths) =>
     canResumeOnlineBuildProofReuseGuard(base, 'scope')
       ? false
-      : onlineBuildProofReusePriorNeedsCiBuild(paths);
+      : onlineBuildProofReusePriorNeedsCiBuild(paths, proxyIdentityContext);
   // END finite ONLINE build-proof reuse classifier admission
 
   const onlineCiBuild = needsOnlineRechargeCiBuild(paths);

@@ -1,8 +1,15 @@
 'use strict';
 
 const secrets = new Set();
+function isPublicProxyId(value, key) {
+  return (
+    key === 'proxyId' &&
+    typeof value === 'string' &&
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(value)
+  );
+}
 function rememberSecrets(value, key = '') {
-  if (!value) return;
+  if (!value || isPublicProxyId(value, key)) return;
   if (typeof value === 'object') {
     for (const [k, v] of Object.entries(value)) rememberSecrets(v, k);
     return;
@@ -43,6 +50,8 @@ function redactText(value) {
     .slice(0, 4096);
 }
 function sanitize(value, key = '') {
+  // This exact UUID metadata binds a result to its resource; it is never a proxy credential.
+  if (isPublicProxyId(value, key) && !secrets.has(value)) return value;
   if (
     /token|password|secret|api.?key|cvv|cvc|card_number|cookie|session_payload|accessToken|refresh_token|chat.?id|topup.?code|cdk/i.test(
       key
@@ -71,7 +80,17 @@ function sanitizeResult(value) {
     if (!original || typeof original !== 'object' || !sanitized || typeof sanitized !== 'object')
       return;
     for (const [key, child] of Object.entries(original)) {
+      // Preserve only strictly shaped, non-credential identifiers needed to bind
+      // payment evidence to its original task. Log redaction remains unchanged.
       if (
+        typeof child === 'string' &&
+        ((/^(?:accountId|expectedAccountId|cardId|recheckTaskId|recheckedByTaskId)$/.test(key) &&
+          /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(child)) ||
+          (key === 'quoteId' && /^quote:[0-9a-f]{32}$/.test(child)) ||
+          (key === 'amount' && /^\d{1,14}(?:\.\d{1,4})?$/.test(child)))
+      )
+        sanitized[key] = child;
+      else if (
         key === 'billingPageUrl' &&
         [
           'https://chatgpt.com/account/manage',

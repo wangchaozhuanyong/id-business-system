@@ -152,14 +152,14 @@
     {
       "path": "security.cjs",
       "originalSha256": null,
-      "adaptedSha256": "a80307ac306cc5e1186a153622e06881a998e4284e5bff7fbc224d88b6bb278b",
+      "adaptedSha256": "8c72522b9eeab4274c3289761f986c82efdebc63e86e77eb88b23dde5c879b3d",
       "changed": true,
-      "reason": "2026-10-15 Pro档位及升级适配：精确目标、官网报价、单次提交、实际付款方式与原单证据保护；不猜Pro500上游ID。保留既有必要适配。"
+      "reason": "2026-10-15 Pro档位及升级适配：精确目标、官网报价、单次提交、实际付款方式与原单证据保护；不猜Pro500上游ID。保留既有必要适配。 精确保留规范代理资源 UUID，维持检测回执关联；同值已知秘密仍脱敏，代理链接、认证资料和其他敏感字段继续脱敏。"
     },
     {
       "path": "task-runner.cjs",
       "originalSha256": null,
-      "adaptedSha256": "bf320fa22d440dc171484047314fa9ad6f891d21c12ba23751bab1ab0b19db90",
+      "adaptedSha256": "5ca7f0a93eefe2c256dc6137380f270b898584d2121ed484ffb7e6ea21bbbe02",
       "changed": true,
       "reason": "Scoped runtime dispatch with strict proxy detection, safe error receipts and existing payment behavior."
     },
@@ -225,6 +225,13 @@
       "adaptedSha256": "66ecbd07c80688060d06536441c8e733de6194a64750ea2bec6fff4887304674",
       "changed": true,
       "reason": "离线回归：四段网关/响应解析、并发只提取一次、下个任务重新提取与提取失败不直连。"
+    },
+    {
+      "path": "test/proxy-result-identity.test.cjs",
+      "originalSha256": null,
+      "adaptedSha256": "0e954be288783466bee0e69fb6863429b72e9d6e5d50c9a3ba6957b34479030e",
+      "changed": true,
+      "reason": "纯离线回归实际 API：子进程与父进程两次脱敏、规范及纯数字 UUID、同值秘密碰撞、凭据负例、失败原因、资源和连接版本严格匹配。"
     },
     {
       "path": "test/proxy-test.test.cjs",
@@ -572,7 +579,7 @@
     {
       "path": "worker.cjs",
       "originalSha256": null,
-      "adaptedSha256": "a0c09b22e77bd629321e847268150c14b311f1256899e8402e715d2f02d125e7",
+      "adaptedSha256": "3d7c2368291ee8ab6d5eafddf7d03ea13bc1707cfba199257b0a10bafe48b9d7",
       "changed": true,
       "reason": "Private worker lifecycle; preserve proxy detection evidence on completion failure and reject writes after lease loss."
     }

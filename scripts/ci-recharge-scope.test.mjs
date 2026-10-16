@@ -1,4 +1,10 @@
 import {
+  proxyResultIdentityPaths,
+  proxyResultIdentityBase,
+  proxyResultIdentityTree,
+  proxyResultIdentityPins
+} from './ci-proxy-result-identity-scope.mjs';
+import {
   isRegistrationClosureOnly,
   isRegistrationClosureControlsOnly,
   registrationFactsSchemaProof,
@@ -20,8 +26,41 @@ import { adminHtmlCachePaths, isAdminHtmlCacheOnly } from './ci-recharge-scope.m
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { readFileSync } from 'node:fs';
+import fs, { readFileSync } from 'node:fs';
+import { syncBuiltinESMExports } from 'node:module';
 import test from 'node:test';
+
+// The original registration recovery proves the already published 7c tree.
+// The current proxy fix intentionally advances its engine manifest, so only
+// this historical fixture reads the immutable original manifest; production
+// selectors continue to read current bytes and reject this new workflow.
+const registrationPublishedHead = '7c3c102c98539d33cb379ef018427371ba750cb7';
+const registrationManifestPath =
+  'apps/api/src/id-business-v2/online-recharge/engine/SOURCE_MANIFEST.json';
+const registrationManifestBytes = execFileSync('git', [
+  'show',
+  registrationPublishedHead + ':' + registrationManifestPath
+]);
+const registrationManifestNames = new Set([
+  registrationManifestPath,
+  new URL('../' + registrationManifestPath, import.meta.url).href,
+  new URL('../' + registrationManifestPath, import.meta.url).pathname
+]);
+const actualReadFileSync = fs.readFileSync;
+const readRegistrationFixture = (path, options) =>
+  registrationManifestNames.has(String(path))
+    ? typeof options === 'string'
+      ? registrationManifestBytes.toString(options)
+      : Buffer.from(registrationManifestBytes)
+    : actualReadFileSync(path, options);
+test.beforeEach(() => {
+  fs.readFileSync = readRegistrationFixture;
+  syncBuiltinESMExports();
+});
+test.afterEach(() => {
+  fs.readFileSync = actualReadFileSync;
+  syncBuiltinESMExports();
+});
 
 test('formal registration engine dependency repair is exact and never admits business or neighboring controls', () => {
   const paths = [
@@ -1795,7 +1834,7 @@ function recordScopeClassification(paths, snapshot, eventName = 'pull_request', 
     import fs from 'node:fs';
     import { createHash } from 'node:crypto';
     import { syncBuiltinESMExports } from 'node:module';
-    const { paths, snapshot, options, schema: fixtureSchema } = JSON.parse(fs.readFileSync(0, 'utf8'));
+    const { paths, snapshot, options, schema: fixtureSchema, registrationManifestFixture } = JSON.parse(fs.readFileSync(0, 'utf8'));
     const gitCalls = [];
     const apiCalls = [];
     const writes = [];
@@ -1856,6 +1895,8 @@ function recordScopeClassification(paths, snapshot, eventName = 'pull_request', 
     };
     const readFile = fs.readFileSync;
     fs.readFileSync = (path, ...args) => {
+      if (String(path) === new URL('./${registrationManifestPath}', import.meta.url).href)
+        return typeof args[0] === 'string' ? registrationManifestFixture : Buffer.from(registrationManifestFixture);
       if (path === process.env.GITHUB_EVENT_PATH) return JSON.stringify({ pull_request: pr });
       if (path === '.deploy/ci-source-evidence/123-1/evidence.json') return JSON.stringify(proof);
       return readFile(path, ...args);
@@ -1879,7 +1920,13 @@ function recordScopeClassification(paths, snapshot, eventName = 'pull_request', 
     execFileSync(process.execPath, ['--input-type=module', '-e', script], {
       cwd: root,
       encoding: 'utf8',
-      input: JSON.stringify({ paths, snapshot, options, schema }),
+      input: JSON.stringify({
+        paths,
+        snapshot,
+        options,
+        schema,
+        registrationManifestFixture: registrationManifestBytes.toString('utf8')
+      }),
       env: {
         ...process.env,
         GITHUB_EVENT_NAME: eventName,
@@ -5657,7 +5704,9 @@ test('registration closure real CLI preserves schema blob bytes for exact publis
     encoding: 'utf8'
   });
   const after = readFileSync('apps/api/prisma-mysql/schema.prisma', 'utf8');
-  const paths = execFileSync('git', ['diff', '--name-only', base, 'HEAD'], { encoding: 'utf8' })
+  const paths = execFileSync('git', ['diff', '--name-only', base, registrationPublishedHead], {
+    encoding: 'utf8'
+  })
     .trim()
     .split('\n');
   assert.ok(before.endsWith('\n') && after.endsWith('\n'));
@@ -5697,4 +5746,21 @@ test('scope CLI fixture transport preserves schema blobs larger than a Linux env
     source.indexOf("test('bank-card policy controls")
   );
   assert.equal(/process\.env\.SCOPE_TEST_(?:PATHS|SNAPSHOT|OPTIONS|SCHEMA)/.test(fixture), false);
+});
+
+test('proxy-result identity source remains application scope and rejects schema or unknown source drift', () => {
+  const paths = [...proxyResultIdentityPaths];
+  const context = {
+    base: proxyResultIdentityBase,
+    baseTree: proxyResultIdentityTree,
+    sourceDigest: (path) => proxyResultIdentityPins[path]
+  };
+  assert.equal(checkMode(paths, schema, schema, undefined, context), 'recharge');
+  assert.deepEqual(selectedParts(paths, undefined, context), ['guards', 'online-engine']);
+  assert.equal(needsOnlineRechargeCiBuild(paths, context), false);
+  assert.equal(checkMode(paths, schema, schema + '\n', undefined, context), 'full');
+  assert.equal(
+    checkMode([...paths, 'apps/api/src/auth/auth.service.ts'], schema, schema, undefined, context),
+    'full'
+  );
 });

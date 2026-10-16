@@ -1,0 +1,109 @@
+name: Proxy Results and Registration Draft Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      commit:
+        description: Exact main commit containing the finite proxy and static draft fixes
+        required: true
+        type: string
+      expected_current:
+        description: Exact published 7c predecessor
+        required: true
+        type: string
+      publish:
+        description: Publish the validated engine and one API static asset once
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: id-business-v2-production-release
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    if: github.ref == 'refs/heads/main' && inputs.commit == github.sha
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
+        with:
+          node-version: 24
+      - name: Verify finite engine publication controls
+        run: python3 -B scripts/production-release/proxy-result-identity-release.test.py
+      - name: Reproduce all actual published engine files and authenticate unchanged API fixtures
+        run: python3 -B scripts/production-release/proxy-result-identity-build.py prepare
+      - name: Install unchanged browser acceptance dependency lock
+        run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Install unchanged private engine dependency lock
+        working-directory: .deploy/proxy-result-identity/candidate-engine/upstream
+        run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Verify sanitizer, terminal result identity and stale source isolation
+        working-directory: .deploy/proxy-result-identity/candidate-engine
+        env:
+          PROXY_RESULT_API_MODULE_ROOT: ${{ github.workspace }}/.deploy/proxy-result-identity/fixtures/api
+        run: node --test test/regressions.test.cjs test/dispatch.test.cjs test/proxy-test.test.cjs test/proxy-worker.test.cjs test/proxy-pool.test.cjs test/proxy-result-identity.test.cjs
+      - name: Prepare isolated Python and Chromium for registration console draft acceptance
+        run: |
+          python3 -m venv .deploy/proxy-result-identity/python
+          .deploy/proxy-result-identity/python/bin/pip install --disable-pip-version-check -r apps/api/src/id-business-v2/auto-registration/worker/requirements.lock.txt
+          .deploy/proxy-result-identity/python/bin/pip check
+          npx playwright install --with-deps chromium
+      - name: Verify actual static asset asynchronous options and route draft lifecycle
+        run: node scripts/acceptance-v2-registration-console-draft.mjs --python=$GITHUB_WORKSPACE/.deploy/proxy-result-identity/python/bin/python --workspace-js=$GITHUB_WORKSPACE/.deploy/proxy-result-identity/api-static/id-workspace.js
+      - name: Package only reviewed engine source and consumer fixtures
+        run: python3 -B scripts/production-release/proxy-result-identity-build.py package
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: proxy-result-identity-${{ github.sha }}-${{ github.run_attempt }}
+          path: |
+            .deploy/proxy-result-identity/proxy-result-identity-artifact.tar.gz
+            .deploy/proxy-result-identity/artifact-sha256.txt
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 30
+
+  publish:
+    needs: validate
+    if: inputs.publish && github.ref == 'refs/heads/main' && inputs.commit == github.sha
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: write
+      actions: read
+      id-token: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      AWS_REGION: ap-northeast-1
+      RELEASE_COMMIT: ${{ inputs.commit }}
+      EXPECTED_CURRENT: ${{ inputs.expected_current }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          fetch-depth: 0
+      - uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd
+        with:
+          role-to-assume: arn:aws:iam::079740175286:role/id-business-v2-github-release
+          role-session-name: id-business-v2-proxy-result-${{ github.run_id }}
+          aws-region: ap-northeast-1
+          role-duration-seconds: 3600
+      - name: Publish one static asset and engine then independently read back preservation guards
+        run: python3 -B scripts/production-release/proxy-result-identity-dispatch.py
+      - name: Preserve accepted commands and native results
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: proxy-result-identity-publication-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .deploy/proxy-result-identity/
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 30

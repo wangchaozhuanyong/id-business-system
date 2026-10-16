@@ -23,7 +23,8 @@
       !secretField.test(key) &&
       !['password', 'hidden', 'file', 'submit', 'button'].includes(field.type) &&
       !field.readOnly &&
-      !field.disabled
+      !field.disabled &&
+      field.dataset.v2DraftPending !== 'true'
     );
   }
 
@@ -218,9 +219,9 @@
     group.id = 'id-apple-console';
     group.hidden = true;
     group.innerHTML =
-      '<div class="form-group"><label for="id-apple-choice">注册邮箱</label><select id="id-apple-choice"><option value="">自动选择一个未注册邮箱</option></select></div>' +
+      '<div class="form-group"><label for="id-apple-choice">注册邮箱</label><select id="id-apple-choice" data-v2-draft-pending="true"><option value="">自动选择一个未注册邮箱</option></select></div>' +
       '<div class="form-group" id="id-apple-batch-group" hidden><label for="id-apple-targets">批量邮箱</label><select id="id-apple-targets" multiple size="5" aria-label="指定批量注册邮箱"></select><small>未选择时按数量从可用未注册邮箱中选取；可以选择部分邮箱。</small></div>' +
-      '<div class="form-group"><label for="id-system-route">注册代理</label><select id="id-system-route"><option value="">沿用原系统设置的代理</option></select></div>' +
+      '<div class="form-group"><label for="id-system-route">注册代理</label><select id="id-system-route" data-v2-draft-pending="true"><option value="">沿用原系统设置的代理</option></select></div>' +
       '<p id="id-apple-pool-status" role="status">正在读取隐藏邮箱候选</p>' +
       '<p id="id-apple-pool-error" role="alert"></p>' +
       '<button type="button" class="btn btn-ghost" id="id-apple-refresh">刷新邮箱池</button>';
@@ -318,6 +319,11 @@
             route.appendChild(option(oldRoute, '原选代理已不可用，请重新选择', true));
           route.value = oldRoute;
         }
+        // Upstream rebuilds the service selector asynchronously and emits change.
+        // Its empty candidate controls must not replace the shared session draft.
+        delete choice.dataset.v2DraftPending;
+        delete route.dataset.v2DraftPending;
+        captureDraft();
       } catch (failure) {
         if (current !== generation) return;
         error.textContent = failure.message;
