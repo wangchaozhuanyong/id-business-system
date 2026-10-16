@@ -15,11 +15,12 @@
           @submit.prevent="search"
         >
           <el-form-item label="银行卡搜索">
-            <el-input
+            <V2SearchInput
               v-model="keywordInput"
+              draft-key="auto-recharge:V2BankRechargeCardsView:keywordInput"
               placeholder="名称、卡尾号或备注"
               clearable
-              @keyup.enter="search"
+              @search="search"
             />
           </el-form-item>
           <el-form-item label="状态">
@@ -29,7 +30,6 @@
               <el-option label="停用" value="disabled" />
             </el-select>
           </el-form-item>
-          <el-form-item><AppButton @click="search">搜索</AppButton></el-form-item>
         </el-form>
       </template>
     </V2PageContext>
@@ -227,6 +227,7 @@
 </template>
 
 <script setup lang="ts">
+import V2SearchInput from '@/v2/components/V2SearchInput.vue';
 import { computed, ref, watch } from 'vue';
 import type { FormRules } from 'element-plus';
 import AppButton from '@/components/ui/AppButton.vue';

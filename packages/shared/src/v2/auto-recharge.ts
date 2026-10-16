@@ -147,6 +147,8 @@ export interface V2RechargeNextCyclePreparationResult {
   records?: { fileKey: string; revision: number; document: unknown }[];
 }
 export interface V2RechargeResult {
+  login_code_type?: 'email' | 'totp';
+  login_challenge_id?: string;
   status?: string;
   reason?: string;
   stage?: string;

@@ -12,14 +12,14 @@
       </V2SectionHeading>
 
       <div class="v2-account-loss-filter-grid">
-        <el-input
+        <V2SearchInput
           v-model="page.query.keyword"
+          draft-key="account-losses:V2AccountLossesView:page.query.keyword"
           class="v2-account-loss-filter-grid__search"
           clearable
           placeholder="ID、订单、原因、操作人"
           aria-label="搜索 ID 报损记录"
-          @keyup.enter="page.handleSearch"
-          @clear="page.handleSearch"
+          @search="page.handleSearch"
         />
         <el-select
           v-model="page.query.countryOptionId"
@@ -67,10 +67,7 @@
             @change="page.handleFilterChange"
           />
         </V2FilterDisclosure>
-        <AppButton variant="primary" @click="page.handleSearch">
-          <el-icon><Search /></el-icon>
-          查询记录
-        </AppButton>
+
         <AppButton v-if="page.activeFilterCount" variant="ghost" @click="page.resetFilters">
           重置筛选
         </AppButton>
@@ -308,12 +305,13 @@
 </template>
 
 <script setup lang="ts">
+import V2SearchInput from '@/v2/components/V2SearchInput.vue';
 import V2Table from '@/v2/components/V2Table.vue';
 import { v2TableSchemas } from '@/v2/features/tableSchemas';
 import V2TableColumn from '@/v2/components/V2TableColumn.vue';
 import V2TableActionColumn from '@/v2/components/V2TableActionColumn.vue';
 import { reactive } from 'vue';
-import { Refresh, Search } from '@element-plus/icons-vue';
+import { Refresh } from '@element-plus/icons-vue';
 import AppButton from '@/components/ui/AppButton.vue';
 import V2AsyncRegion from '@/v2/components/V2AsyncRegion.vue';
 import V2FilterDisclosure from '@/v2/components/V2FilterDisclosure.vue';

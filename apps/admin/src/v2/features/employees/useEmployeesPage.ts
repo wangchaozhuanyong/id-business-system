@@ -1,3 +1,4 @@
+import { resetV2SearchInputs } from '@/v2/composables/useV2AutoSearch';
 import { useV2FormDraft, useV2SessionDraft } from '@/v2/composables/useV2SessionDraft';
 import 'element-plus/es/components/message-box/style/css.mjs';
 import { ElMessageBox } from 'element-plus/es/components/message-box/index.mjs';
@@ -160,6 +161,7 @@ export function useEmployeesPage() {
   }
 
   function resetFilters() {
+    resetV2SearchInputs('employees:');
     query.page = 1;
     query.keyword = '';
     query.status = '';

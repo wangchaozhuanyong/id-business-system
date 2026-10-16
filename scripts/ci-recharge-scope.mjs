@@ -1,3 +1,9 @@
+import {
+  isAccountLoginOnly,
+  isAccountLoginControlsOnly,
+  accountLoginSchemaMatches,
+  accountLoginParts
+} from './ci-account-login-scope.mjs';
 import { isWorkspaceDragOnly, workspaceDragParts } from './ci-workspace-drag-scope.mjs';
 import {
   isChatgptSalesOnly,
@@ -239,6 +245,7 @@ const onlineCiBuildTestInputs = new Set([
   'scripts/production-release/online-recharge-component-lifecycle.test.py'
 ]);
 export function needsOnlineRechargeCiBuild(paths, context) {
+  if (isAccountLoginOnly(paths) || isAccountLoginControlsOnly(paths)) return false;
   if (isRegistrationParityDiagnosticsControlRepair(paths, context)) return false;
   if (isRegistrationParityDiagnosticsOnly(paths, context)) return false;
   if (isWorkspaceDragOnly(paths)) return false;
@@ -1020,6 +1027,9 @@ export function isMailboxOnly(paths) {
 }
 
 export function checkMode(paths, oldSchema, newSchema, grantHelperSnapshot, context) {
+  if (isAccountLoginControlsOnly(paths)) return oldSchema === newSchema ? 'ci-only' : 'full';
+  if (isAccountLoginOnly(paths))
+    return accountLoginSchemaMatches(oldSchema, newSchema) ? 'recharge' : 'full';
   if (isRegistrationParityDiagnosticsControlRepair(paths, context))
     return oldSchema === newSchema ? 'ci-only' : 'full';
   if (isRegistrationParityDiagnosticsOnly(paths, context))
@@ -1504,6 +1514,8 @@ export function isTargetedOnly(paths, oldSchema, newSchema) {
   );
 }
 export function selectedParts(paths, grantHelperSnapshot, context) {
+  if (isAccountLoginControlsOnly(paths)) return ['guards'];
+  if (isAccountLoginOnly(paths)) return [...accountLoginParts];
   if (isRegistrationParityDiagnosticsControlRepair(paths, context)) return ['guards'];
   if (isRegistrationParityDiagnosticsOnly(paths, context))
     return [...registrationParityDiagnosticsParts];
@@ -4178,7 +4190,9 @@ async function main() {
       const salesAfter = execFileSync('git', ['show', `HEAD:${schema}`], { encoding: 'utf8' });
       if (
         requestedBaseIsAncestor &&
-        ((isChatgptSalesOnly(salesPaths) && chatgptSalesSchemaMatches(salesBefore, salesAfter)) ||
+        ((isAccountLoginControlsOnly(salesPaths) && salesBefore === salesAfter) ||
+          (isAccountLoginOnly(salesPaths) && accountLoginSchemaMatches(salesBefore, salesAfter)) ||
+          (isChatgptSalesOnly(salesPaths) && chatgptSalesSchemaMatches(salesBefore, salesAfter)) ||
           (isChatgptSalesControlsOnly(salesPaths) && salesBefore === salesAfter) ||
           (isWorkspaceDragOnly(salesPaths) && salesBefore === salesAfter))
       ) {

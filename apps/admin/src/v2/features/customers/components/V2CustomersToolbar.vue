@@ -8,13 +8,13 @@
       '手机号和 WhatsApp 默认脱敏，查看操作受权限与审核策略控制并保留审计。'
     ]"
   >
-    <el-input
+    <V2SearchInput
       v-model="page.query.keyword"
+      draft-key="customers:V2CustomersToolbar:page.query.keyword"
       clearable
       placeholder="客户名称、手机、微信、QQ、WhatsApp"
       aria-label="搜索客户"
-      @keyup.enter="page.handleSearch"
-      @clear="page.handleSearch"
+      @search="page.handleSearch"
     />
     <el-select
       v-model="page.query.sourceOptionId"
@@ -99,6 +99,7 @@
 </template>
 
 <script setup lang="ts">
+import V2SearchInput from '@/v2/components/V2SearchInput.vue';
 import V2ListToolbar from '@/v2/components/V2ListToolbar.vue';
 import type { UnwrapNestedRefs } from 'vue';
 import { Search } from '@element-plus/icons-vue';

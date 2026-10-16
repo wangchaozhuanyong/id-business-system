@@ -1,3 +1,4 @@
+import { resetV2SearchInputs } from '@/v2/composables/useV2AutoSearch';
 import { useV2SessionDraft } from '@/v2/composables/useV2SessionDraft';
 import { computed, reactive, ref } from 'vue';
 import { useRouter } from 'vue-router';
@@ -196,6 +197,7 @@ export function useAuditLogsPage() {
   }
 
   function resetFilters() {
+    resetV2SearchInputs('audit-logs:');
     query.page = 1;
     query.keyword = '';
     query.module = '';

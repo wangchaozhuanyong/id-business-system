@@ -82,13 +82,13 @@
           </div>
         </el-form-item>
       </el-form>
-      <el-input
+      <V2SearchInput
         v-model="keywordInput"
+        draft-key="auto-recharge:V2RechargeAddressesView:keywordInput"
         clearable
         aria-label="搜索街道地址"
         placeholder="搜索街道地址"
-        @keyup.enter="applyFilters"
-        @clear="applyFilters"
+        @search="applyFilters"
       />
       <el-select v-model="statusInput" aria-label="地址状态">
         <el-option label="全部状态" value="all" />
@@ -96,7 +96,7 @@
         <el-option label="已使用" value="used" />
         <el-option label="已停用" value="disabled" />
       </el-select>
-      <AppButton variant="soft" @click="applyFilters">查询</AppButton>
+
       <template v-if="operationMessage || operationError" #feedback>
         <p v-if="operationMessage" class="recharge-address-message" role="status">
           {{ operationMessage }}
@@ -237,6 +237,7 @@
 </template>
 
 <script setup lang="ts">
+import V2SearchInput from '@/v2/components/V2SearchInput.vue';
 import { computed, ref } from 'vue';
 import { useV2SessionDraft } from '@/v2/composables/useV2SessionDraft';
 import AppButton from '@/components/ui/AppButton.vue';

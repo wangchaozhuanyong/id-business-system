@@ -135,6 +135,48 @@ suite('bank recharge real MySQL lifecycle', () => {
     await prisma?.$disconnect();
   });
 
+  it('searches encrypted email fragments and updates registration date with a version guard', async () => {
+    const email = `fragment-fixture-${randomUUID()}@example.invalid`;
+    const created = await accounts.createAccount(
+      { email, registrationCountryCode: 'PH' },
+      operator
+    );
+    const before = await prisma.idBusinessV2ChatgptAccount.findUniqueOrThrow({
+      where: { id: created.id }
+    });
+    expect(before.emailSearchTokens).not.toEqual([]);
+    expect(JSON.stringify(before.emailSearchTokens)).not.toContain(email);
+    const list = await accounts.listAccounts({
+      keyword: email.slice(4, 26),
+      page: '1',
+      pageSize: '20'
+    });
+    expect(list.items).toEqual(
+      expect.arrayContaining([expect.objectContaining({ id: created.id, email })])
+    );
+    await accounts.updateAccount(
+      created.id,
+      { registeredDate: '2026-09-10', expectedUpdatedAt: before.updatedAt.toISOString() },
+      operator
+    );
+    const after = await prisma.idBusinessV2ChatgptAccount.findUniqueOrThrow({
+      where: { id: created.id }
+    });
+    expect(after.registeredAt?.toISOString()).toBe('2026-09-09T16:00:00.000Z');
+    expect(after.registrationCountryCode).toBe('PH');
+    expect(after.passwordEncrypted).toBeNull();
+    await expect(
+      accounts.updateAccount(
+        created.id,
+        {
+          registeredDate: '2026-09-13',
+          expectedUpdatedAt: new Date(before.updatedAt.getTime() - 1).toISOString()
+        },
+        operator
+      )
+    ).rejects.toThrow('已变化');
+  });
+
   it('persists account, manual order, fee, active subscription, prepaid debit and refund', async () => {
     const seededCurrencies = await prisma.idBusinessV2BankRechargeCurrency.findMany({
       where: { code: { in: seededCurrencyCodes } }

@@ -12,15 +12,14 @@
       <div class="v2-security-mfa-users__tools">
         <span>仅显示绑定状态和恢复码数量，不返回密钥或恢复码哈希。</span>
         <div class="v2-security-mfa-users__search">
-          <el-input
+          <V2SearchInput
             v-model="page.query.mfaUserKeyword"
+            draft-key="security:V2SecurityMfaUsersPanel:page.query.mfaUserKeyword"
             clearable
             placeholder="账号或姓名"
             aria-label="搜索用户 MFA 状态"
-            @keyup.enter="page.handleMfaUserSearch"
-            @clear="page.handleMfaUserSearch"
+            @search="page.handleMfaUserSearch"
           />
-          <AppButton size="small" variant="ghost" @click="page.handleMfaUserSearch">搜索</AppButton>
         </div>
       </div>
     </header>
@@ -154,6 +153,7 @@
 </template>
 
 <script setup lang="ts">
+import V2SearchInput from '@/v2/components/V2SearchInput.vue';
 import type { UnwrapNestedRefs } from 'vue';
 import AppButton from '@/components/ui/AppButton.vue';
 import V2SectionHeading from '@/v2/components/V2SectionHeading.vue';

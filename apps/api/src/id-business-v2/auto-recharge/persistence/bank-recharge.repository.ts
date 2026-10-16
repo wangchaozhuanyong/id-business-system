@@ -7,6 +7,7 @@ import {
 } from '../../renewals/public-api';
 import { PrismaService } from '../../../common/prisma/prisma.service';
 import type { V2CommandTransaction } from '../../runtime/public-api';
+import { buildV2StringArrayContainsFilter } from '../../runtime/public-api';
 import type { AccountSubscriptionState } from '../bank-recharge-account-subscription';
 
 export type BankRechargeOrderFeeUpdate = Prisma.IdBusinessV2BankRechargeOrderUncheckedUpdateInput;
@@ -16,13 +17,24 @@ export function bankRechargeAccountFilter(
   emailHash: string | null,
   subscriptionState: AccountSubscriptionState = 'all',
   now = new Date(),
-  warningBoundary = new Date()
+  warningBoundary = new Date(),
+  emailSearchTokens: string[] = []
 ): Prisma.IdBusinessV2ChatgptAccountWhereInput {
   const textFilter: Prisma.IdBusinessV2ChatgptAccountWhereInput = keyword
     ? {
         OR: [
           { emailMasked: { contains: keyword } },
           { remark: { contains: keyword } },
+          ...(emailSearchTokens.length
+            ? [
+                {
+                  emailSearchTokens:
+                    buildV2StringArrayContainsFilter<
+                      Prisma.JsonFilter<'IdBusinessV2ChatgptAccount'>
+                    >(emailSearchTokens)
+                }
+              ]
+            : []),
           ...(emailHash ? [{ emailHash }] : [])
         ]
       }

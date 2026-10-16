@@ -1,3 +1,4 @@
+import { resetV2SearchInputs } from '@/v2/composables/useV2AutoSearch';
 import { useV2SessionDraft } from '@/v2/composables/useV2SessionDraft';
 import { computed, reactive, ref, watch } from 'vue';
 import type { TagProps } from 'element-plus';
@@ -128,6 +129,7 @@ export function useActivationsPage() {
   }
 
   function resetFilters() {
+    resetV2SearchInputs('activations:');
     Object.assign(query, {
       page: 1,
       keyword: '',

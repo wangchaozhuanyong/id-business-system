@@ -131,7 +131,7 @@ class RechargeEmailCodeTests(unittest.IsolatedAsyncioTestCase):
             return challenges[len(submissions)]
         async def ack():
             self.assertTrue(verified)
-            self.assertEqual(progress.call_args.args[0], "login_email_code_submitted")
+            self.assertIn(progress.call_args.args[0], {"login_email_code_submitted", "login_code_submitted"})
         accepted = AsyncMock(side_effect=ack)
         fields[2].press.side_effect = submit
         with (patch.object(login, "official_identity", new=AsyncMock(side_effect=identity)),

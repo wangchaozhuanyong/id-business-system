@@ -1,3 +1,8 @@
+import {
+  isAccountLoginOnly,
+  isAccountLoginControlsOnly,
+  accountLoginCommands
+} from './ci-account-login-scope.mjs';
 import { isWorkspaceDragOnly, workspaceDragCommands } from './ci-workspace-drag-scope.mjs';
 import {
   isChatgptSalesOnly,
@@ -98,6 +103,13 @@ const changed = execFileSync('git', ['diff', '--name-only', base, 'HEAD'], { enc
   .trim()
   .split('\n')
   .filter(Boolean);
+if (
+  (mode === 'recharge' && isAccountLoginOnly(changed)) ||
+  (mode === 'ci-only' && isAccountLoginControlsOnly(changed))
+) {
+  for (const [file, ...args] of accountLoginCommands(part, changed)) run(file, args);
+  process.exit(0);
+}
 const registrationParityDiagnosticsControlRepair =
   mode === 'ci-only' &&
   base === registrationParityDiagnosticsRepairBase &&

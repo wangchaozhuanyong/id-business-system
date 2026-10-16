@@ -1,4 +1,5 @@
 export type IdBusinessV2BlindSearchNamespace =
+  | 'chatgpt-email'
   | 'apple-id'
   | 'account-phone'
   | 'customer-phone'

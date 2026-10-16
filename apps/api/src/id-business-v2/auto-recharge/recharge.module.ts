@@ -37,6 +37,7 @@ import { IdBusinessV2FinanceModule } from '../finance/public-api';
 import { V2IdentityService } from '../../v2-auth/v2-identity.service';
 import { RechargeEmailCodeController } from './recharge-email-code.controller';
 import { RechargeEmailCodeService } from './recharge-email-code.service';
+import { RechargeLoginCodeService } from './recharge-login-code.service';
 import { BankRechargePricingService } from './bank-recharge-pricing.service';
 @Module({
   imports: [
@@ -59,6 +60,7 @@ import { BankRechargePricingService } from './bank-recharge-pricing.service';
     BankRechargeOnlineOrderService
   ],
   providers: [
+    RechargeLoginCodeService,
     BankRechargeOnlineOrderService,
     BankRechargeOnlineOrderRepository,
     BankRechargeSubscriptionReviewService,

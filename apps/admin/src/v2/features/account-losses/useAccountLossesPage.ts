@@ -1,3 +1,4 @@
+import { resetV2SearchInputs } from '@/v2/composables/useV2AutoSearch';
 import { useV2SessionDraft } from '@/v2/composables/useV2SessionDraft';
 import { computed, reactive, ref } from 'vue';
 import { getApiErrorMessage } from '@/api/client';
@@ -103,6 +104,7 @@ export function useAccountLossesPage() {
   }
 
   function resetFilters() {
+    resetV2SearchInputs('account-losses:');
     query.page = 1;
     query.keyword = '';
     query.countryOptionId = '';

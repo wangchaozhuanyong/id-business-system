@@ -81,6 +81,8 @@ export function mergeRechargeCallbackResult(
   verifiedAt?: string
 ) {
   const previous = object(job.result ?? {});
+  if (report.stage === 'login_email' && !previous.login_mail_requested_at)
+    previous.login_mail_requested_at = new Date().toISOString();
   // 首次成功时间只来自 API 已通过身份和出口核实的回调，执行器不能伪造。
   const workerReport = { ...report };
   delete workerReport.first_session_verified_at;

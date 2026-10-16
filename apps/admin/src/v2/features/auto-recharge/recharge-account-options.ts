@@ -8,5 +8,5 @@ export function canSelectRechargeAccount(account: BankChatgptAccount) {
 
 export function rechargeAccountOptionLabel(account: BankChatgptAccount) {
   const current = account.currentPlan ? ` · ${statusLabel(account.currentPlan)}（历史记录）` : '';
-  return `${account.emailMasked}${current}${account.hasPassword ? '' : ' · 请先补充登录密码'}`;
+  return `${account.email || account.emailMasked}${current}${account.hasPassword ? '' : ' · 邮箱验证码登录'}`;
 }

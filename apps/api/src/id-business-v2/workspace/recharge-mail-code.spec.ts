@@ -20,6 +20,7 @@ function fixture() {
   };
   const mail = {
     id: 'mail-fixture',
+    virtualEmailId: 'alias-fixture',
     targetEmail: alias.aliasEmail,
     fromAddress: 'noreply@tm.openai.com',
     subject: 'Your verification code',
@@ -36,11 +37,70 @@ function fixture() {
     createPrimary: vi.fn()
   };
   const existing = new IdBusinessV2VendureMailboxService(client as never, {} as never, {} as never);
-  const service = new IdBusinessV2RechargeMailboxService(client as never, existing);
-  return { service, alias, mail, client };
+  let handler: ((aliasId: string | null) => Promise<void>) | undefined;
+  const unsubscribe = vi.fn();
+  const events = {
+    subscribe: vi.fn((work) => {
+      handler = work;
+      return unsubscribe;
+    })
+  };
+  const service = new IdBusinessV2RechargeMailboxService(
+    client as never,
+    existing,
+    events as never
+  );
+  return {
+    service,
+    alias,
+    mail,
+    client,
+    unsubscribe,
+    notify: (id: string | null) => handler?.(id)
+  };
 }
 
 describe('充值复用现有邮箱授权', () => {
+  it('掩码收件人必须通过精确别名关联，其他别名的邮件不能匹配', async () => {
+    const f = fixture();
+    f.mail.targetEmail = 'ow***@example.invalid';
+    expect(
+      await f.service.rechargeCode(
+        'alias-fixture',
+        f.alias.aliasEmail,
+        new Date(Date.now() - 1000),
+        null,
+        operator
+      )
+    ).toMatchObject({ code: '123456' });
+    f.mail.virtualEmailId = 'other-alias';
+    expect(
+      await f.service.rechargeCode(
+        'alias-fixture',
+        f.alias.aliasEmail,
+        new Date(Date.now() - 1000),
+        null,
+        operator
+      )
+    ).toBeNull();
+  });
+  it('首次读取后只响应本邮箱事件，不定时轮询外部邮件，完成后解除订阅', async () => {
+    const f = fixture();
+    f.client.publicQuery.mockResolvedValueOnce({ success: true, items: [] });
+    const pending = f.service.waitForRechargeCode(
+      'alias-fixture',
+      f.alias.aliasEmail,
+      new Date(Date.now() - 1000),
+      operator
+    );
+    await vi.waitFor(() => expect(f.client.publicQuery).toHaveBeenCalledOnce());
+    await f.notify('other-alias');
+    expect(f.client.publicQuery).toHaveBeenCalledOnce();
+    await f.notify('alias-fixture');
+    expect(await pending).toEqual({ mailId: 'mail-fixture', code: '123456' });
+    expect(f.client.publicQuery).toHaveBeenCalledTimes(2);
+    expect(f.unsubscribe).toHaveBeenCalledOnce();
+  });
   it('只精确匹配已有唯一授权邮箱，不创建任何邮箱或别名，也不返回查询码', async () => {
     const f = fixture();
     expect(await f.service.rechargeMailbox('OWNER@example.invalid', operator)).toEqual({

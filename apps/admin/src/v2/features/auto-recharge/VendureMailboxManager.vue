@@ -61,13 +61,13 @@
             aria-label="邮件验证码查询筛选"
           >
             <div class="v2-filter-bar__fields vendure-mailbox-toolbar__filters">
-              <el-input
+              <V2SearchInput
                 v-model="keywordInput"
+                draft-key="auto-recharge:VendureMailboxManager:keywordInput"
                 clearable
                 aria-label="搜索邮箱或邮件"
                 :placeholder="activeTab === 'mails' ? '搜索发件人、主题或验证码' : '搜索邮箱或备注'"
-                @keyup.enter="applyFilters"
-                @clear="applyFilters"
+                @search="applyFilters"
               />
               <el-select
                 v-if="activeTab !== 'mails'"
@@ -118,7 +118,6 @@
                 @change="handleUnassignedFilterChange"
                 >只看未分配</el-checkbox
               >
-              <AppButton variant="soft" @click="applyFilters">查询</AppButton>
             </div>
             <div class="v2-filter-bar__actions vendure-mailbox-toolbar__actions">
               <AppButton v-if="activeTab === 'primary'" variant="primary" @click="openPrimaryCreate"
@@ -1296,6 +1295,7 @@
 </template>
 
 <script setup lang="ts">
+import V2SearchInput from '@/v2/components/V2SearchInput.vue';
 import { useV2FormDraft, useV2SessionDraft } from '@/v2/composables/useV2SessionDraft';
 import {
   isV2MailboxVerificationCode,

@@ -1,3 +1,4 @@
+import { resetV2SearchInputs } from '@/v2/composables/useV2AutoSearch';
 import { useV2FormDraft, useV2SessionDraft } from '@/v2/composables/useV2SessionDraft';
 import { computed, reactive, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
@@ -313,6 +314,7 @@ export function useTopupRecordsPage() {
   }
 
   function resetFilters() {
+    resetV2SearchInputs('topup-records:');
     Object.assign(filters, {
       keyword: '',
       cardNameOptionId: '',

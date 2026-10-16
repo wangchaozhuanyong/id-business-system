@@ -12,6 +12,7 @@ import {
 } from '@nestjs/common';
 import { CurrentUser, Public, RequireRoles } from '../../auth/auth.decorators';
 import type { AuthenticatedUser } from '../../auth/auth.types';
+import { RechargeLoginCodeService } from './recharge-login-code.service';
 import { RechargeService } from './recharge.service';
 import { RechargeLocalService } from './recharge-local.service';
 import { RechargeSettingsService } from './recharge-settings.service';
@@ -22,7 +23,8 @@ export class RechargeController {
   constructor(
     private readonly service: RechargeService,
     private readonly local: RechargeLocalService,
-    private readonly settings: RechargeSettingsService
+    private readonly settings: RechargeSettingsService,
+    private readonly loginCodes: RechargeLoginCodeService
   ) {}
   @Get('bitbrowser-settings')
   @Header('Cache-Control', 'no-store')
@@ -103,6 +105,15 @@ export class RechargeController {
   @Post('jobs/bitbrowser-recheck')
   recheckBitBrowser(@Body() input: unknown, @CurrentUser() operator: AuthenticatedUser) {
     return this.local.recheck(input, operator);
+  }
+  @Post('jobs/:id/login-code')
+  @Header('Cache-Control', 'no-store')
+  loginCode(
+    @Param('id') id: string,
+    @Body() input: unknown,
+    @CurrentUser() operator: AuthenticatedUser
+  ) {
+    return this.loginCodes.request(id, input, operator);
   }
   @Post('jobs/:id/resolve-declined')
   resolveDeclined(

@@ -169,18 +169,18 @@
         </header>
 
         <div class="v2-exchange-filterbar v2-exchange-filterbar--manual" aria-label="人工记录筛选">
-          <el-input
+          <V2SearchInput
             v-model="page.manualQuery.keyword"
+            draft-key="exchange-rates:V2ExchangeRateTabs:page.manualQuery.keyword"
             clearable
             placeholder="搜索原因、来源或操作人"
             aria-label="搜索人工汇率记录"
-            @keyup.enter="page.searchManual"
-            @clear="page.searchManual"
+            @search="page.searchManual"
           >
             <template #prefix>
               <el-icon><Search /></el-icon>
             </template>
-          </el-input>
+          </V2SearchInput>
           <el-select
             v-model="page.manualQuery.currency"
             clearable
@@ -205,7 +205,6 @@
             aria-label="筛选人工汇率记录日期"
             @change="page.searchManual"
           />
-          <AppButton variant="ghost" @click="page.searchManual">查询</AppButton>
         </div>
 
         <V2AsyncRegion
@@ -288,6 +287,7 @@
 </template>
 
 <script setup lang="ts">
+import V2SearchInput from '@/v2/components/V2SearchInput.vue';
 import type { UnwrapNestedRefs } from 'vue';
 import { Search } from '@element-plus/icons-vue';
 import AppButton from '@/components/ui/AppButton.vue';
