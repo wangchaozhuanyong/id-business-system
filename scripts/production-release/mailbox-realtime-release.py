@@ -12,7 +12,7 @@ import urllib.request
 BASE = Path('/opt/id-business-v2')
 HERE = Path(__file__).resolve().parent
 SCOPE = 'MAILBOX_REALTIME_20261016'
-CURRENT = 'c0238525bb4b2a1c3fe6688eaed5f74f504ee529'
+CURRENT = '6fc99d23c2918280a94c3f5b8be48f638190e02f'
 WORKER = 'apps/api/src/id-business-v2/auto-registration/worker/'
 APPLICATION_PATHS = (
     'packages/shared/src/v2/vendure-mailbox.ts',
@@ -45,8 +45,7 @@ def helper(name):
 def verify_contract(c):
     raw = (HERE / 'registration-parity-diagnostics-contract.json').read_bytes()
     need(digest(raw) == c.get('inheritedContractSha256'), 'INHERITED_CONTRACT_CHANGED')
-    parent = json.loads(raw)
-    helper('registration-parity-diagnostics-release.py').verify_contract(parent)
+    parent = helper('mailbox-realtime-baseline.py').published_baseline()
     need(c.get('version') == 1 and c.get('frozen') is True and c.get('scope') == SCOPE
          and c.get('expectedCurrent') == CURRENT and c.get('migration') is None
          and set(c.get('sources', {})) == set(APPLICATION_PATHS)
@@ -58,7 +57,8 @@ def verify_contract(c):
                 'baselineApiFiles', 'baselineAdminFiles', 'runtimeAdminFiles', 'baselineWorkerFiles',
                 'baselineEngineFiles', 'baselinePrismaClientFiles', 'runtimePrismaClientFiles',
                 'schemaSha256', 'configurationSha256', 'runtimeConfigurationSha256', 'databaseReceipt',
-                'runtimePythonDependencies', 'backupNormalizerPath')
+                'runtimePythonDependencies', 'backupNormalizerPath', 'baselineAdminBuildId',
+                'predecessorNative', 'configurationNormalization', 'runtimeConfigurationRawSha256')
     need(all(c.get(n) == parent.get(n) for n in retained), 'BASELINE_PROTECTION_CHANGED')
     modules = {'id-business-v2/auto-registration/apple-mailbox-pool.js',
                'id-business-v2/workspace/id-business-v2-vendure-mailbox.controller.js',
@@ -84,23 +84,25 @@ def runtime_contract(c):
 
 
 def baseline(d, h, a, finite, c, expected=None):
-    return helper('registration-parity-diagnostics-release.py').baseline(d, h, a, finite, runtime_contract(c), expected)
+    b = helper('mailbox-realtime-baseline.py')
+    return b.runtime_namespace()['baseline'](d, b.configuration_helper(h), a, finite, runtime_contract(c), expected)
 
 
 def smoke(d, target, states, c, proof, receipt, h, a, finite):
-    return helper('registration-parity-diagnostics-release.py').smoke(d, target, states, runtime_contract(c), proof, receipt, h, a, finite)
+    b = helper('mailbox-realtime-baseline.py')
+    return b.runtime_namespace()['smoke'](d, target, states, runtime_contract(c), proof, receipt, b.configuration_helper(h), a, finite)
 
 
 def inherited_host_source(c):
-    return helper('registration-parity-diagnostics-release.py').inherited_host_source(c)
+    return helper('mailbox-realtime-baseline.py').runtime_namespace()['inherited_host_source'](c)
 
 
 def sqlite_receipt(d, directory, c, expected_logical=None):
-    return helper('registration-parity-diagnostics-release.py').sqlite_receipt(d, directory, runtime_contract(c), expected_logical)
+    return helper('mailbox-realtime-baseline.py').sqlite_receipt(d, directory, runtime_contract(c), expected_logical)
 
 
 def backup_sqlite(old, d, directory, plan, states, marker, safety, c):
-    return helper('registration-parity-diagnostics-release.py').backup_sqlite(old, d, directory, plan, states, marker, safety, runtime_contract(c))
+    return helper('mailbox-realtime-baseline.py').runtime_namespace()['backup_sqlite'](old, d, directory, plan, states, marker, safety, runtime_contract(c))
 
 
 def archive(raw, destination):
@@ -110,6 +112,8 @@ def archive(raw, destination):
 def verify_proof(proof, plan, c, payload, h):
     need(all(proof.get(n) == plan[n] for n in ('commit', 'tree', 'contractSha256', 'controlSources'))
          and proof.get('scope') == SCOPE and proof.get('sources') == c['sources']
+         and proof.get('predecessorNative') == c['predecessorNative']
+         and proof.get('configurationNormalization') == c['configurationNormalization']
          and proof.get('workerFiles') == {} and proof.get('sharedRuntimeUnchanged') is True
          and proof.get('baselineApiReproduced') is True and proof.get('baselineAdminReproduced') is True
          and proof.get('updatedServices') == ['api', 'admin'] and proof.get('migrationPerformed') is False,
