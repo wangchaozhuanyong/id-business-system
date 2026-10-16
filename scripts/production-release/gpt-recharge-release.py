@@ -99,6 +99,31 @@ def smoke(d, h, target, states, proof, c):
     need(d.run('docker', 'exec', states['api']['containerId'], 'node', '-e', script) == 'GPT_UNAUTHORIZED_REJECTED', 'AUTH_SMOKE_FAILED')
 
 
+def copy_private_configuration(previous, target):
+    """Detach inherited config links before writing candidate-only credentials or images."""
+    for name in ('.env.aws.production', 'compose.release.json'):
+        source, destination = previous / name, target / name
+        need(source.is_file() and destination.is_file(), 'CONFIGURATION_SOURCE_MISSING')
+        need(not destination.is_symlink() or destination.resolve() == source.resolve(),
+             'CONFIGURATION_LINK_CHANGED')
+        raw = source.read_bytes()
+        need(destination.read_bytes() == raw, 'CONFIGURATION_COPY_CHANGED')
+        temporary = destination.with_name('.' + name + '.gpt-private-' + secrets.token_hex(8))
+        try:
+            descriptor = os.open(temporary, os.O_CREAT | os.O_EXCL | os.O_WRONLY | os.O_NOFOLLOW, 0o600)
+            with os.fdopen(descriptor, 'wb') as output:
+                os.fchmod(output.fileno(), 0o600)
+                output.write(raw)
+                output.flush()
+                os.fsync(output.fileno())
+            os.replace(temporary, destination)
+            need(not destination.is_symlink() and destination.read_bytes() == raw,
+                 'PRIVATE_CONFIGURATION_NOT_DETACHED')
+        finally:
+            if temporary.exists():
+                temporary.unlink()
+
+
 @contextmanager
 def guarded_switch(fence, marker, publisher, stage, plan):
     try:
@@ -175,6 +200,7 @@ def release(plan, c):
         target = BASE / 'releases' / (stamp + '-' + plan['commit'][:12] + '-gpt-recharge')
         need(not target.exists(), 'TARGET_EXISTS')
         shutil.copytree(previous, target, symlinks=True)
+        copy_private_configuration(previous, target)
         for name in proof['sources']:
             path = target / name
             need(not path.is_symlink() and path.resolve().is_relative_to(target), 'SOURCE_PATH_CHANGED')

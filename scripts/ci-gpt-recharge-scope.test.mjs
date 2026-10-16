@@ -4,6 +4,8 @@ import { execFileSync } from 'node:child_process';
 import test from 'node:test';
 import {
   affectsGptRechargeArtifact,
+  gptRechargeControlRepairPaths,
+  isGptRechargeControlsOnly,
   gptRechargeFrozen,
   gptRechargePaths,
   isGptRechargeOnly
@@ -92,4 +94,35 @@ test('the actual 55d to shared-pool reconstruction change invalidates the old na
   assert.ok(changed.includes('scripts/production-release/gpt-recharge-contract.json'));
   assert.equal(affectsPart('api', changed), true);
   assert.equal(hasRechargeFlowBusinessReuseProof('api', changed), false);
+});
+
+test('the exact COW publisher repair runs guards only and never recompiles application code', () => {
+  assert.equal(isGptRechargeControlsOnly(gptRechargeControlRepairPaths), true);
+  assert.equal(checkMode(gptRechargeControlRepairPaths, 'same', 'same'), 'ci-only');
+  assert.deepEqual(selectedParts(gptRechargeControlRepairPaths), ['guards']);
+  assert.equal(checkMode(gptRechargeControlRepairPaths, 'before', 'after'), 'full');
+  for (const extra of [
+    'apps/api/src/id-business-v2/online-recharge/tasks.service.ts',
+    'scripts/production-release/unreviewed-repair.py',
+    'docs/unrelated.md',
+    'scripts/production-release/gpt-recharge-contract.json'
+  ]) {
+    assert.equal(
+      isGptRechargeControlsOnly([...gptRechargeControlRepairPaths, extra]),
+      false,
+      extra
+    );
+  }
+  for (const changed of Object.keys(gptRechargeFrozen)) {
+    const read = (name) => (name === changed ? Buffer.from('unreviewed') : readFileSync(name));
+    assert.equal(isGptRechargeControlsOnly(gptRechargeControlRepairPaths, read), false, changed);
+  }
+  assert.equal(
+    isGptRechargeControlsOnly(
+      gptRechargeControlRepairPaths.filter(
+        (name) => name !== 'scripts/production-release/gpt-recharge-release.test.py'
+      )
+    ),
+    false
+  );
 });
