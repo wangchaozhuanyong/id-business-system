@@ -54,11 +54,22 @@ def module_delta(before, after, allowed, declaration_only=None):
     return {name: after[name] for name in sorted(expected)}
 
 
+def verify_source_review(c):
+    reviewed = c['sourceReviewCommit']
+    need(re.fullmatch('[a-f0-9]{40}', reviewed), 'SOURCE_REVIEW_INVALID')
+    git('merge-base', '--is-ancestor', reviewed, 'HEAD')
+    need(set(git('diff', '--name-only', c['reviewBase'], reviewed, '--', 'apps/', 'packages/').decode().splitlines()) == set(c['sources']), 'SOURCE_SCOPE_CHANGED')
+    for name, expected in c['sources'].items():
+        need(sha(git('show', reviewed + ':' + name)) == expected, 'REVIEWED_SOURCE_CHANGED')
+
+
 def main():
     contract_raw = (HERE / 'online-settings-contract.json').read_bytes()
     c = json.loads(contract_raw)
     need(not git('status', '--porcelain', '--untracked-files=no').strip(), 'SOURCE_DIRTY')
-    need(set(git('diff', '--name-only', c['reviewBase'], 'HEAD', '--', 'apps/', 'packages/').decode().splitlines()) == set(c['sources']), 'SOURCE_SCOPE_CHANGED')
+    # Other work may enter main while this finite publication is validated. It is
+    # never overlaid: only these immutable reviewed bytes may enter the payload.
+    verify_source_review(c)
     for name, expected in c['sources'].items():
         need(sha((ROOT / name).read_bytes()) == expected, 'SOURCE_CHANGED')
     need(sha((HERE / 'registration-parity-diagnostics-build.py').read_bytes()) == c['reconstructionHelperSha256']

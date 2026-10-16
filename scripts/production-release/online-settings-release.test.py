@@ -41,6 +41,28 @@ class ReleaseGates(unittest.TestCase):
         plan, c, proof, files = self.fixture()
         r.verify_proof(proof, plan, c, files)
 
+    def test_source_review_remains_closed_when_unrelated_work_enters_main(self):
+        name = 'apps/api/src/id-business-v2/online-recharge/fixture.ts'
+        raw = b'reviewed fixture'
+        c = {'reviewBase': 'a' * 40, 'sourceReviewCommit': 'b' * 40, 'sources': {name: b.sha(raw)}}
+        def git_fixture(*args):
+            if args[0] == 'merge-base':
+                self.assertEqual(args, ('merge-base', '--is-ancestor', 'b' * 40, 'HEAD'))
+                return b''
+            if args[0] == 'diff':
+                self.assertEqual(args[3], 'b' * 40)
+                return (name + '\n').encode()
+            self.assertEqual(args, ('show', 'b' * 40 + ':' + name))
+            return raw
+        with patch.object(b, 'git', side_effect=git_fixture):
+            b.verify_source_review(c)
+        with patch.object(b, 'git', return_value=(name + '\napps/api/src/auth/extra.ts\n').encode()):
+            with self.assertRaises(RuntimeError):
+                b.verify_source_review(c)
+        with patch.object(b, 'git', side_effect=git_fixture):
+            with self.assertRaises(RuntimeError):
+                b.verify_source_review({**c, 'sources': {name: 'c' * 64}})
+
     def test_wrong_commit_source_or_unverified_baseline_is_rejected(self):
         for change in [{'commit': '9' * 40}, {'migrationPerformed': True}, {'businessActions': 1},
                        {'baselineApiReproduced': False}, {'sources': {}}, {'afterEngineFiles': {}}]:
