@@ -3,6 +3,16 @@ import { readFileSync } from 'node:fs';
 
 export const registrationFlowEvidenceBase = '88bce5ab09d20cd303f1fdd5fe310cb0b42e1451';
 export const registrationFlowEvidenceTree = '57a0d354276724e70945513c9db806919e245b09';
+export const registrationFlowEvidenceRepairBase = 'd9c9243c181b0524ccd2766a8f1f04a4075307c4';
+export const registrationFlowEvidenceRepairTree = '2e39a7fc6faa7d754a2b11689c941ee356eec4c7';
+export const registrationFlowEvidenceRepairPaths = Object.freeze([
+  'scripts/production-release/registration-flow-evidence-build.py',
+  'scripts/production-release/registration-flow-evidence-release.test.py',
+  'scripts/ci-registration-flow-evidence-scope.mjs',
+  'scripts/ci-registration-flow-evidence-scope.test.mjs',
+  'scripts/ci-recharge-scope.mjs',
+  'scripts/ci-recharge-check.mjs'
+]);
 export const registrationFlowEvidenceWorker =
   'apps/api/src/id-business-v2/auto-registration/worker';
 export const registrationFlowEvidenceSources = Object.freeze([
@@ -97,7 +107,7 @@ export const registrationFlowEvidencePins = Object.freeze({
   'scripts/production-release/registration-closure-dispatch.py':
     '4ee050b81065c59f440351ad78ad19a7f0875650f485e29418cb3a76b51ad1d6',
   'scripts/production-release/registration-flow-evidence-build.py':
-    'ce1c31a1d0b6dc8ee3b8d5b26ee5d4c49d02bc60451cfe1c24696efa814d70a3',
+    '5864952d9c30b655381e38a0cbaa1fc22054ba8588b16b623a28385af7682d91',
   'scripts/production-release/registration-flow-evidence-release.py':
     '2250a323ccf9d7e53fcbbeb99a36a32f91925ab99b327d313b35aaa4ffe17a8b',
   'scripts/production-release/registration-flow-evidence-dispatch.py':
@@ -105,7 +115,7 @@ export const registrationFlowEvidencePins = Object.freeze({
   'scripts/production-release/registration-flow-evidence-contract.json':
     '8e837c77fe8f8cfb9b08d14f08bb5e357cb4cc0636794b72c64dda890eed5de9',
   'scripts/production-release/registration-flow-evidence-release.test.py':
-    'b5426e1daa004bfb897f2f70946608a845027aac7859e917b30c345c9e20bcee',
+    '75e2880d4ec5dde5318eb4b6a1db1238bcf1c29a7cd90a5f1ab5dbae675c28ee',
   'scripts/acceptance-v2-registration-flow-evidence.mjs':
     '7bf536b5c9e65557682695adc331ff96af85a8da13fef3108b3fa9c79eb15417'
 });
@@ -137,4 +147,21 @@ export function isRegistrationFlowEvidenceOnly(
   } catch {
     return false;
   }
+}
+
+// The first native run stopped before publication because a fresh test context
+// lacked its private runtime directory. Admit only this control repair; every
+// application and publication input must still match the reviewed freeze.
+export function isRegistrationFlowEvidenceControlRepair(
+  paths,
+  { base, baseTree, sourceDigest } = {}
+) {
+  return (
+    base === registrationFlowEvidenceRepairBase &&
+    baseTree === registrationFlowEvidenceRepairTree &&
+    paths.length === registrationFlowEvidenceRepairPaths.length &&
+    new Set(paths).size === paths.length &&
+    paths.every((path) => registrationFlowEvidenceRepairPaths.includes(path)) &&
+    isRegistrationFlowEvidenceOnly(registrationFlowEvidenceRequired, { sourceDigest })
+  );
 }
