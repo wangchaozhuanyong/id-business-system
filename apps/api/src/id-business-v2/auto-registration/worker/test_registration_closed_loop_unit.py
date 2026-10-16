@@ -407,7 +407,7 @@ class RegistrationClosedLoopUnitTests(unittest.TestCase):
         integration.contexts = {TASK: {"authorizationOnly": True}}
         integration.lock = threading.RLock()
         original = Mock()
-        session = SimpleNamespace(post=original)
+        session = SimpleNamespace(post=original, get=Mock())
         endpoints = {"register": "https://auth.example.invalid/register", "signup": "https://auth.example.invalid/continue"}
         engine = SimpleNamespace()
         with patch.object(apple.importlib, "import_module", return_value=SimpleNamespace(OPENAI_API_ENDPOINTS=endpoints)):
@@ -420,8 +420,10 @@ class RegistrationClosedLoopUnitTests(unittest.TestCase):
         integration = object.__new__(apple.AppleMailboxIntegration)
         integration.contexts = {TASK: {"authorizationOnly": True}}
         integration.lock = threading.RLock()
-        original = Mock()
-        session = SimpleNamespace(post=original)
+        original = Mock(return_value=SimpleNamespace(status_code=200, url="https://auth.openai.com/continue",
+                        headers={}, history=[], json=Mock(return_value={"page": {"type": "email_otp_verification"}})))
+        integration.store = Mock()
+        session = SimpleNamespace(post=original, get=Mock())
         endpoints = {"register": "https://auth.example.invalid/register", "signup": "https://auth.example.invalid/continue"}
         with patch.object(apple.importlib, "import_module", return_value=SimpleNamespace(OPENAI_API_ENDPOINTS=endpoints)):
             integration.guard_session(SimpleNamespace(), TASK, session)

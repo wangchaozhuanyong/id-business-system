@@ -204,6 +204,111 @@
     });
   }
 
+  function registrationFlowEvidenceRows(value) {
+    if (
+      !value ||
+      typeof value !== 'object' ||
+      Array.isArray(value) ||
+      !('version' in value) ||
+      value.version !== 1
+    )
+      return [];
+    const evidence = value;
+    const label = (labels, item, fallback) =>
+      typeof item === 'string' && Object.hasOwn(labels, item) ? labels[item] : fallback;
+    return [
+      ['authorize', '授权入口'],
+      ['signup', '提交注册邮箱'],
+      ['password', '提交注册密码']
+    ].map(([stage, title]) => {
+      const candidate = evidence[stage];
+      if (!candidate || typeof candidate !== 'object' || Array.isArray(candidate))
+        return { stage, title, status: '尚未观察', detail: '尚未取得该阶段的流程证据' };
+      const row = candidate;
+      const status = label(
+        {
+          accepted: '已确认继续',
+          rejected: '已停止，等待核对',
+          observed: '已观察，不代表注册成功'
+        },
+        row.decision,
+        '观察结果待核对'
+      );
+      const details = [
+        Number.isInteger(row.httpStatus) &&
+        Number(row.httpStatus) >= 100 &&
+        Number(row.httpStatus) <= 599
+          ? `响应状态 ${row.httpStatus}`
+          : '未取得响应状态',
+        row.officialOrigin === true ? '官网来源已确认' : '官网来源未确认',
+        label(
+          {
+            json: '响应类型：结构化数据',
+            html: '响应类型：网页',
+            other: '响应类型：其他',
+            missing: '响应类型：未记录'
+          },
+          row.contentType,
+          '响应类型：待核对'
+        ),
+        label(
+          {
+            object: '数据结构：对象',
+            other: '数据结构：非对象',
+            invalid: '数据结构：解析失败',
+            not_checked: '数据结构：未检查'
+          },
+          row.jsonKind,
+          '数据结构：待核对'
+        ),
+        label(
+          {
+            new_account: '页面类型：新账号注册',
+            existing_account: '页面类型：已有账号',
+            missing: '页面类型：缺失',
+            unknown: '页面类型：未知',
+            not_checked: '页面类型：未检查'
+          },
+          row.pageKind,
+          '页面类型：待核对'
+        )
+      ];
+      if (row.reason !== null) {
+        details.push(
+          label(
+            {
+              http_status: '响应状态不符合预期',
+              untrusted_origin: '来源未通过校验',
+              invalid_json: '响应不是预期的结构化数据',
+              unexpected_page: '页面类型与预期不符'
+            },
+            row.reason,
+            '判断原因待核对'
+          )
+        );
+      }
+      if (Array.isArray(row.redirectHosts) && row.redirectHosts.length) {
+        const hosts = row.redirectHosts.slice(0, 5).map((host) =>
+          label(
+            {
+              auth_openai: '官网授权服务',
+              sentinel_openai: '官网安全服务',
+              chatgpt: '官网账号服务',
+              other: '其他来源'
+            },
+            host,
+            '来源待核对'
+          )
+        );
+        details.push(
+          `跳转来源：${hosts.join('、')}${row.redirectsTruncated === true ? '（仅记录前段）' : ''}`
+        );
+      }
+      details.push(row.requestIdPresent === true ? '请求标识已记录' : '未记录请求标识');
+      return { stage, title, status, detail: details.join(' · ') };
+    });
+  }
+
   function installAppleConsole() {
     const service = document.getElementById('email-service');
     const form = document.getElementById('registration-form');
@@ -232,6 +337,39 @@
     const hint = document.getElementById('id-apple-pool-status');
     const error = document.getElementById('id-apple-pool-error');
     const refresh = document.getElementById('id-apple-refresh');
+    const flowPanel = document.createElement('section');
+    flowPanel.id = 'id-apple-flow-evidence';
+    flowPanel.className = 'card-body';
+    flowPanel.hidden = true;
+    flowPanel.setAttribute('aria-label', '注册流程观察');
+    document.getElementById('task-status-row')?.after(flowPanel);
+    function renderFlowEvidence(tasks) {
+      flowPanel.replaceChildren();
+      for (const [index, task] of tasks.entries()) {
+        const rows = registrationFlowEvidenceRows(task.flowEvidence);
+        if (!rows.length) continue;
+        const title = document.createElement('strong');
+        title.textContent =
+          tasks.length > 1 ? '注册流程观察 · 任务 ' + (index + 1) : '注册流程观察';
+        flowPanel.appendChild(title);
+        const note = document.createElement('p');
+        note.textContent =
+          '以下观察只说明请求处理经过，账号创建、身份核验和同步结果以任务记录为准。';
+        flowPanel.appendChild(note);
+        const list = document.createElement('ol');
+        for (const row of rows) {
+          const item = document.createElement('li');
+          const label = document.createElement('strong');
+          label.textContent = row.title + ' · ' + row.status;
+          const detail = document.createElement('p');
+          detail.textContent = row.detail;
+          item.append(label, detail);
+          list.appendChild(item);
+        }
+        flowPanel.appendChild(list);
+      }
+      flowPanel.hidden = flowPanel.children.length === 0;
+    }
     const mode = document.getElementById('reg-mode');
     const start = document.getElementById('start-btn');
     const cancel = document.getElementById('cancel-btn');
@@ -412,6 +550,7 @@
             });
         } else tasks = [await appleRequest('task', { taskUuid: active.taskUuid })];
         if (disposed || active !== snapshot || attempt !== progressGeneration) return;
+        renderFlowEvidence(tasks);
         let running = false;
         for (const task of tasks) {
           (task.logs || []).forEach((line) => log(line));
@@ -548,6 +687,7 @@
         document.getElementById('console-log').replaceChildren();
         try {
           const result = await appleRequest(batch ? 'batch' : 'start', options);
+          renderFlowEvidence([]);
           active = batch
             ? { batchId: result.batchId, taskUuids: result.taskUuids }
             : { taskUuid: result.taskUuid };

@@ -1,4 +1,10 @@
 import {
+  isRegistrationFlowEvidenceOnly,
+  registrationFlowEvidenceBase,
+  registrationFlowEvidenceWorker,
+  registrationFlowEvidenceAcceptance
+} from './ci-registration-flow-evidence-scope.mjs';
+import {
   isProxyResultIdentityOnly,
   proxyResultIdentityBase,
   proxyResultIdentityEngineRoot,
@@ -70,6 +76,82 @@ const changed = execFileSync('git', ['diff', '--name-only', base, 'HEAD'], { enc
   .trim()
   .split('\n')
   .filter(Boolean);
+const registrationFlowEvidenceOnly =
+  mode === 'recharge' &&
+  base === registrationFlowEvidenceBase &&
+  isRegistrationFlowEvidenceOnly(changed, {
+    base,
+    baseTree: execFileSync('git', ['rev-parse', base + '^{tree}'], { encoding: 'utf8' }).trim()
+  });
+if (registrationFlowEvidenceOnly && ['guards', 'api', 'admin', 'release-controls'].includes(part)) {
+  if (part === 'guards' || part === 'release-controls') {
+    run('python3', ['-B', 'scripts/production-release/registration-flow-evidence-release.test.py']);
+    run('node', [
+      '--test',
+      'scripts/ci-registration-flow-evidence-scope.test.mjs',
+      'scripts/ci-recharge-scope.test.mjs',
+      'scripts/ci-recharge-check.test.mjs'
+    ]);
+    const existing = changed.filter((path) => existsSync(path));
+    const formatted = existing.filter((path) => /\.(?:[cm]?js|json|yml|md|ts|vue|css)$/.test(path));
+    if (formatted.length) npm('exec', '--', 'prettier', '--check', ...formatted);
+    const linted = existing.filter((path) => /\.(?:[cm]?js|ts|vue)$/.test(path));
+    if (linted.length) npm('exec', '--', 'eslint', ...linted);
+    for (const name of [
+      'check:admin-ui',
+      'check:v2-ui-language',
+      'check:v2-color-contrast',
+      'check:v2-table-standard',
+      'check:v2-loading-standard',
+      'check:v2-module-architecture',
+      'check:v2-isolation'
+    ])
+      npm('run', name);
+  } else {
+    npm('ci', '--ignore-scripts', '--no-audit', '--no-fund');
+    npm('run', 'prisma:mysql:generate');
+    npm('run', 'build', '--workspace', '@apple-business/shared');
+    const target = part === 'api' ? '@apple-business/api' : '@apple-business/admin';
+    npm('run', 'typecheck', '--workspace', target);
+    npm(
+      'run',
+      'test',
+      '--workspace',
+      target,
+      '--',
+      part === 'api' ? 'src/id-business-v2/auto-registration' : 'src/v2/features/auto-registration'
+    );
+    npm('run', 'build', '--workspace', target);
+    npm('run', 'auto-registration:setup');
+    const python = resolve('.runtime/auto-registration/venv/bin/python');
+    if (part === 'api') {
+      for (const name of [
+        'test_flow_evidence.py',
+        'test_registration_closed_loop_unit.py',
+        'test_workspace.py',
+        'test_apple_mailboxes.py',
+        'test_release_safety.py',
+        'test_upload_compat.py'
+      ])
+        run(python, [
+          '-B',
+          '-m',
+          'unittest',
+          'discover',
+          '-s',
+          registrationFlowEvidenceWorker,
+          '-p',
+          name
+        ]);
+      run('node', ['--test', registrationFlowEvidenceWorker + '/test_payment_browser.mjs']);
+      run(python, ['-B', registrationFlowEvidenceWorker + '/acceptance_runtime.py']);
+    } else {
+      npm('exec', '--', 'playwright', 'install', '--with-deps', 'chromium');
+      run('node', [registrationFlowEvidenceAcceptance, '--python=' + python]);
+    }
+  }
+  process.exit(0);
+}
 // A byte-bound engine and registration static-asset repair has real tests and its own publisher.
 // Formal validation runs the new mock-browser regression; unchanged compiled API/Admin and databases are preserved.
 const proxyResultIdentityOnly =

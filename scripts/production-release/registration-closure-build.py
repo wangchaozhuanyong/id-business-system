@@ -321,5 +321,8 @@ def build():
 
 
 if __name__ == '__main__':
+    if os.environ.get('REGISTRATION_FLOW_EVIDENCE') == '1':
+        load('registration-flow-evidence-build.py').main(sys.argv[1:])
+        raise SystemExit(0)
     need(len(sys.argv) == 2 and sys.argv[1] in ('prepare', 'build'), 'BUILD_MODE_INVALID')
     globals()[sys.argv[1]]()
