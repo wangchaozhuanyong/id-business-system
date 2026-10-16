@@ -131,8 +131,8 @@ export function onlineSettingsCommands(part, paths) {
       (path) => /\.(?:mjs|cjs|ts|vue)$/.test(path) && !path.includes('/engine/upstream/')
     );
     return [
-      npm('exec', '--', 'prettier', '--check', ...formatted),
-      npm('exec', '--', 'eslint', ...linted),
+      ...(formatted.length ? [npm('exec', '--', 'prettier', '--check', ...formatted)] : []),
+      ...(linted.length ? [npm('exec', '--', 'eslint', ...linted)] : []),
       [
         'node',
         '--test',

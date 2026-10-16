@@ -95,3 +95,13 @@ test('isolated MySQL fixture repair retains all four checks and rejects extra ru
   ])
     assert.equal(isOnlineSettingsOnly([...paths, name]), false);
 });
+
+test('Python-only release controls never invoke an unbounded formatter or lint command', () => {
+  const commands = onlineSettingsCommands('guards', [
+    'scripts/production-release/online-settings-release.py'
+  ]);
+  assert.ok(commands.some((command) => command[0] === 'python3'));
+  assert.ok(
+    commands.every((command) => !command.includes('eslint') && !command.includes('prettier'))
+  );
+});

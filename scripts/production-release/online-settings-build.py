@@ -4,6 +4,7 @@ import importlib.util
 import json
 import os
 from pathlib import Path
+import re
 import shutil
 import subprocess
 import tarfile
@@ -41,19 +42,34 @@ def run(*args, cwd=ROOT, env=None):
     subprocess.run(args, cwd=cwd, env=env, check=True)
 
 
-def module_delta(before, after, allowed):
+def module_delta(before, after, allowed, declaration_only=None):
+    declarations = declaration_only or {}
+    need(all(name.startswith('id-business-v2/online-recharge/') and name.endswith('.d.ts')
+             and '..' not in Path(name).parts and re.fullmatch('[a-f0-9]{64}', digest)
+             and after.get(name) == digest for name, digest in declarations.items()), 'DECLARATION_DELTA_CHANGED')
     changed = {name for name in set(before) | set(after) if before.get(name) != after.get(name)}
-    expected = {name.removesuffix('.js') + ext for name in allowed for ext in ('.js', '.js.map', '.d.ts')}
+    expected = {name.removesuffix('.js') + ext for name in allowed for ext in ('.js', '.js.map', '.d.ts')} | set(declarations)
     need({name for name in changed if name.endswith('.js')} == set(allowed)
          and changed <= expected and expected <= set(after), 'API_DELTA_CHANGED')
     return {name: after[name] for name in sorted(expected)}
+
+
+def verify_source_review(c):
+    reviewed = c['sourceReviewCommit']
+    need(re.fullmatch('[a-f0-9]{40}', reviewed), 'SOURCE_REVIEW_INVALID')
+    git('merge-base', '--is-ancestor', reviewed, 'HEAD')
+    need(set(git('diff', '--name-only', c['reviewBase'], reviewed, '--', 'apps/', 'packages/').decode().splitlines()) == set(c['sources']), 'SOURCE_SCOPE_CHANGED')
+    for name, expected in c['sources'].items():
+        need(sha(git('show', reviewed + ':' + name)) == expected, 'REVIEWED_SOURCE_CHANGED')
 
 
 def main():
     contract_raw = (HERE / 'online-settings-contract.json').read_bytes()
     c = json.loads(contract_raw)
     need(not git('status', '--porcelain', '--untracked-files=no').strip(), 'SOURCE_DIRTY')
-    need(set(git('diff', '--name-only', c['reviewBase'], 'HEAD', '--', 'apps/', 'packages/').decode().splitlines()) == set(c['sources']), 'SOURCE_SCOPE_CHANGED')
+    # Other work may enter main while this finite publication is validated. It is
+    # never overlaid: only these immutable reviewed bytes may enter the payload.
+    verify_source_review(c)
     for name, expected in c['sources'].items():
         need(sha((ROOT / name).read_bytes()) == expected, 'SOURCE_CHANGED')
     need(sha((HERE / 'registration-parity-diagnostics-build.py').read_bytes()) == c['reconstructionHelperSha256']
@@ -95,7 +111,7 @@ def main():
     # never copies worker assets or the sidecar source bundled by Nest assets.
     api_files = lambda files: {name: value for name, value in files.items()
         if name.endswith(('.js', '.js.map', '.d.ts')) and '/engine/' not in name}
-    modules = module_delta(api_files(baseline_api), api_files(candidate_api), c['apiModules'])
+    modules = module_delta(api_files(baseline_api), api_files(candidate_api), c['apiModules'], c['apiDeclarationOnly'])
     payload = OUTPUT / 'payload'
     for name in modules:
         target = payload / 'api/modules' / name
