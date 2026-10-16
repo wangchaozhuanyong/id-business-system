@@ -178,20 +178,23 @@ class RestoreControls(unittest.TestCase):
         with tempfile.TemporaryDirectory(prefix='restore-validation-', dir=ROOT / '.runtime') as directory:
             context = Path(directory)
             c = contract()
-            name = r.WORKER + 'test_workspace.py'
-            path = context / name
-            path.parent.mkdir(parents=True)
-            old = subprocess.check_output(['git', 'show', 'e90f02a65cdf63b656e82eed6e25fd8a68a21b7b:' + name], cwd=ROOT)
-            path.write_bytes(old)
+            old, expected = {}, {}
+            for filename in ['test_workspace.py', 'test_apple_mailboxes.py', 'test_release_safety.py']:
+                name = r.WORKER + filename
+                path = context / name
+                path.parent.mkdir(parents=True, exist_ok=True)
+                old[name] = subprocess.check_output(['git', 'show', 'e90f02a65cdf63b656e82eed6e25fd8a68a21b7b:' + name], cwd=ROOT)
+                expected[name] = subprocess.check_output(['git', 'show', '59b36f3aadef28a59f47a55ed1e66686fcc2c42c:' + name], cwd=ROOT)
+                path.write_bytes(old[name])
             for fail in (False, True):
                 try:
-                    with b.published_workspace_validation(context, c):
-                        self.assertEqual(r.digest(path.read_bytes()), c['sourceInputEvidence']['files'][name])
+                    with b.published_worker_validation(context, c):
+                        self.assertTrue(all((context / n).read_bytes() == raw for n, raw in expected.items()))
                         if fail:
                             raise ValueError('synthetic-test-failure')
                 except ValueError:
                     self.assertTrue(fail)
-                self.assertEqual(path.read_bytes(), old)
+                self.assertTrue(all((context / n).read_bytes() == raw for n, raw in old.items()))
 
     def test_generator_child_matches_published_ci_metadata_without_changing_parent(self):
         with patch.dict(os.environ, {'GITHUB_ACTIONS': 'false'}, clear=True), patch.object(b, 'run') as run:

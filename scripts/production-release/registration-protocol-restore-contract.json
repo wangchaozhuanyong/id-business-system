@@ -2291,10 +2291,10 @@
     "scripts/ci-recharge-scope.test.mjs": "8d225c4aa5ce0d0655611355412524d04637d955c46d928eac7de0181331cf4a",
     "scripts/ci-registration-protocol-restore-scope.mjs": "d98909f4de5fb4e1f1330df74b9e7e1dc163ed95b5556ffed5c62eb36ed8b36c",
     "scripts/ci-registration-protocol-restore-scope.test.mjs": "05c73dc95890682c91c3ce321d3da4e2ab82e3eb3386280075b169ffb7eba794",
-    "scripts/production-release/registration-protocol-restore-build.py": "e0391089bed610fc9af8be6ee5ac32f87e54b2f4f5e8bd85964095f471aac19d",
+    "scripts/production-release/registration-protocol-restore-build.py": "e836d5e20d77a5c8c92b08ee287a1f6197e70a73819362094e2eb6ebc687873b",
     "scripts/production-release/registration-protocol-restore-dispatch.py": "ddc29ef0751282c3e18ca231b2e32428dbb0e726278a421447876c7940796969",
     "scripts/production-release/registration-protocol-restore-release.py": "5d76ce72743a51ee6b31013367e8b01fbc4a8a499669a76c0defd4e30e9dbc07",
-    "scripts/production-release/registration-protocol-restore-release.test.py": "9bf39d8d3aad7d0bcf2c7064e92dcc603f196f478ad684511f2f8c256a1a16ab"
+    "scripts/production-release/registration-protocol-restore-release.test.py": "e4b9c59eb7d7360fe73b866e410d3fb5290b6427527be3770901302fc15bc57d"
   },
   "roleSourceCommits": {
     "admin": "e84a44d86c289354bc7ed15dcd0ec68f7210e18e",

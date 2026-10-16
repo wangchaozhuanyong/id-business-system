@@ -299,28 +299,38 @@ def build():
 
 
 @contextmanager
-def published_workspace_validation(context, c):
-    # The installed image retains the older, unused test file. Validate the
-    # already-published retired-payment behavior without changing runtime bytes.
-    name = WORKER + 'test_workspace.py'
-    path = context / name
-    before = path.read_bytes()
-    need(digest(before) == c['baselineWorkerFiles']['test_workspace.py'], 'RUNTIME_TEST_SOURCE_CHANGED')
-    raw = git('show', '59b36f3aadef28a59f47a55ed1e66686fcc2c42c:' + name)
-    need(digest(raw) == c['sourceInputEvidence']['files'][name]
-         == 'b209874b0a8d7b640a3df1253356f206b2e98c7253eee43efe7a212c14f32154',
-         'PUBLISHED_VALIDATION_SOURCE_CHANGED')
+def published_worker_validation(context, c):
+    # The image retains three older unused tests. Use the same validated tests
+    # as its published predecessor, then restore every installed byte.
+    recipe_raw = (HERE / (r.OLD_NAME + '-contract.json')).read_bytes()
+    need(digest(recipe_raw) == r.HISTORICAL_CONTROLS[r.OLD_NAME + '-contract.json'],
+         'PUBLISHED_VALIDATION_RECIPE_CHANGED')
+    recipe = json.loads(recipe_raw)
+    names = {WORKER + n for n in ('test_workspace.py', 'test_apple_mailboxes.py', 'test_release_safety.py')}
+    sources = {n: v for n, v in {**recipe['sources'], **recipe['validationBaselineSources']}.items() if n in names}
+    need(set(sources) == names, 'PUBLISHED_VALIDATION_SCOPE_CHANGED')
+    before, validated = {}, {}
+    for name, expected in sources.items():
+        path = context / name
+        need(not path.is_symlink() and path.resolve().is_relative_to(context.resolve()), 'VALIDATION_PATH_INVALID')
+        before[name] = path.read_bytes()
+        need(digest(before[name]) == c['baselineWorkerFiles'][Path(name).name], 'RUNTIME_TEST_SOURCE_CHANGED')
+        raw = git('show', '59b36f3aadef28a59f47a55ed1e66686fcc2c42c:' + name)
+        need(digest(raw) == expected, 'PUBLISHED_VALIDATION_SOURCE_CHANGED')
+        validated[name] = raw
     try:
-        path.write_bytes(raw)
+        for name, raw in validated.items():
+            (context / name).write_bytes(raw)
         yield
     finally:
-        path.write_bytes(before)
-        need(digest(path.read_bytes()) == c['baselineWorkerFiles']['test_workspace.py'],
+        for name, raw in before.items():
+            (context / name).write_bytes(raw)
+        need(all(digest((context / n).read_bytes()) == c['baselineWorkerFiles'][Path(n).name] for n in before),
              'RUNTIME_TEST_NOT_RESTORED')
 
 
 def python_tests(context, c, python):
-    with published_workspace_validation(context, c):
+    with published_worker_validation(context, c):
         for module in c['pythonTests']:
             need(re.fullmatch('test_[a-z0-9_]+', module), 'TEST_PATH_INVALID')
             run(str(python), '-B', '-m', 'unittest', module, cwd=context / WORKER)
