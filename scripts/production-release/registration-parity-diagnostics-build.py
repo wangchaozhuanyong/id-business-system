@@ -245,6 +245,13 @@ def verify_drag_proof(proof, sales, contract):
     return proof
 
 
+def generate_unchanged_client(context):
+    # Sales generated from /app directly. npm workspace changes cwd and therefore
+    # Prisma's index.js dirname fallback and bundler annotations.
+    run('node', 'node_modules/prisma/build/index.js', 'generate', '--schema', SCHEMA,
+        cwd=context, env={**os.environ, 'DATABASE_URL': 'mysql://prisma:prisma@127.0.0.1:3306/id_business_v2'})
+
+
 def prepare():
     contract = json.loads(CONTRACT.read_bytes())
     verify_sources(contract)
@@ -293,7 +300,7 @@ def prepare():
                 path.write_bytes((ROOT / name).read_bytes())
         verify_runtime_schema(context, contract)
         run('npm', 'ci', '--ignore-scripts', '--no-audit', '--no-fund', cwd=context)
-        run('npm', 'run', 'prisma:mysql:generate', '--workspace', 'apps/api', cwd=context)
+        generate_unchanged_client(context)
         run('npm', 'run', 'build', '--workspace', 'packages/shared', cwd=context)
     print(json.dumps({'status': SCOPE + '_PREPARED', 'separatePrismaClients': True, 'migrationPerformed': False}))
 

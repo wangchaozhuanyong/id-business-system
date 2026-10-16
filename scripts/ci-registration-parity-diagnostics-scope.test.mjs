@@ -2,6 +2,10 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
   isRegistrationParityDiagnosticsOnly,
+  isRegistrationParityDiagnosticsControlRepair,
+  registrationParityDiagnosticsRepairBase,
+  registrationParityDiagnosticsRepairTree,
+  registrationParityDiagnosticsRepairPaths,
   registrationParityDiagnosticsBase as base,
   registrationParityDiagnosticsTree as baseTree,
   registrationParityDiagnosticsCurrent,
@@ -114,6 +118,80 @@ test('unfrozen missing malformed or mismatched review maps never enter the new e
       sourceDigest: () => {
         throw Error('absent');
       }
+    }),
+    false
+  );
+});
+
+test('cwd repair admits only nine controls while preserving the original complete freeze', () => {
+  const options = {
+    ...fixture(),
+    base: registrationParityDiagnosticsRepairBase,
+    baseTree: registrationParityDiagnosticsRepairTree
+  };
+  assert.equal(
+    isRegistrationParityDiagnosticsControlRepair(registrationParityDiagnosticsRepairPaths, options),
+    true
+  );
+  assert.equal(
+    isRegistrationParityDiagnosticsOnly(registrationParityDiagnosticsRepairPaths, options),
+    false
+  );
+  assert.equal(
+    isRegistrationParityDiagnosticsControlRepair(
+      registrationParityDiagnosticsRepairPaths,
+      fixture()
+    ),
+    false
+  );
+  for (const changed of [
+    registrationParityDiagnosticsRepairPaths.slice(1),
+    [...registrationParityDiagnosticsRepairPaths, registrationParityDiagnosticsRepairPaths[0]],
+    [...registrationParityDiagnosticsRepairPaths, applications[0]],
+    [...registrationParityDiagnosticsRepairPaths, 'package-lock.json'],
+    [...registrationParityDiagnosticsRepairPaths, 'apps/api/prisma-mysql/schema.prisma'],
+    [
+      ...registrationParityDiagnosticsRepairPaths,
+      '.github/workflows/registration-parity-diagnostics-validation.yml'
+    ]
+  ])
+    assert.equal(isRegistrationParityDiagnosticsControlRepair(changed, options), false);
+  for (const drift of [{ base: 'a'.repeat(40) }, { baseTree: 'b'.repeat(40) }])
+    assert.equal(
+      isRegistrationParityDiagnosticsControlRepair(registrationParityDiagnosticsRepairPaths, {
+        ...options,
+        ...drift
+      }),
+      false
+    );
+});
+
+test('cwd repair still rejects any drift in the full application or validation freeze', () => {
+  const options = {
+    ...fixture(),
+    base: registrationParityDiagnosticsRepairBase,
+    baseTree: registrationParityDiagnosticsRepairTree
+  };
+  for (const name of paths.filter((item) => item !== contractPath))
+    assert.equal(
+      isRegistrationParityDiagnosticsControlRepair(registrationParityDiagnosticsRepairPaths, {
+        ...options,
+        sourceDigest: (item) => (item === name ? '0'.repeat(64) : 'a'.repeat(64))
+      }),
+      false,
+      name
+    );
+  assert.equal(
+    isRegistrationParityDiagnosticsControlRepair(registrationParityDiagnosticsRepairPaths, {
+      ...options,
+      contract: { ...options.contract, frozen: false }
+    }),
+    false
+  );
+  assert.equal(
+    isRegistrationParityDiagnosticsControlRepair(registrationParityDiagnosticsRepairPaths, {
+      ...options,
+      contract: { ...options.contract, sources: {} }
     }),
     false
   );

@@ -5,6 +5,7 @@ import hashlib
 import importlib.util
 import io
 import json
+import os
 from pathlib import Path
 import subprocess
 import sys
@@ -165,6 +166,17 @@ print(json.dumps(calls))
         with self.assertRaisesRegex(RuntimeError, 'PUBLISHED_ADMIN_SUCCESSOR_PAYLOAD_CHANGED'):
             b.verify_drag_proof({**proof, 'files': {}}, sales, self.contract)
 
+    def test_client_generation_uses_the_reconstructed_root_cwd_and_no_workspace(self):
+        context = ROOT / '.deploy/registration-parity-diagnostics/isolated-fixture'
+        with patch.dict(os.environ, {'PATH': '/synthetic/bin', 'PRISMA_UNRELATED': 'kept'}, clear=True), \
+                patch.object(b, 'run') as execute:
+            b.generate_unchanged_client(context)
+        execute.assert_called_once_with(
+            'node', 'node_modules/prisma/build/index.js', 'generate', '--schema', b.SCHEMA,
+            cwd=context, env={'PATH': '/synthetic/bin', 'PRISMA_UNRELATED': 'kept',
+                             'DATABASE_URL': 'mysql://prisma:prisma@127.0.0.1:3306/id_business_v2'})
+        self.assertNotIn('--workspace', execute.call_args.args)
+
     def test_client_comparison_normalizes_only_two_known_metadata_fields_to_runtime_app(self):
         with tempfile.TemporaryDirectory(dir=OUTPUT) as temporary:
             context = Path(temporary)
@@ -176,6 +188,8 @@ print(json.dumps(calls))
                 raw = ('"output": {\n      "value": ' + json.dumps(str(context / 'node_modules/@prisma/client'), ensure_ascii=False)
                        + ',\n      "fromEnvVar": null\n    },\n  "sourceFilePath": '
                        + json.dumps(str(context / 'apps/api/prisma-mysql/schema.prisma'), ensure_ascii=False) + ',\n')
+                if name == 'index.js':
+                    raw += 'const alternativePaths = ["node_modules/.prisma/client", ".prisma/client"];\n'
                 originals[name] = raw
                 (directory / name).write_text(raw)
                 expected[name] = digest(raw.replace(str(context) + '/', '/app/').encode())
@@ -186,6 +200,11 @@ print(json.dumps(calls))
             self.assertEqual(b.unchanged_client(context, contract), expected)
             (directory / 'index.js').write_text(originals['index.js'].replace('"sourceFilePath": ', '"foreign": '))
             with self.assertRaisesRegex(RuntimeError, 'CLIENT_METADATA_FIELD_CHANGED'):
+                b.unchanged_client(context, contract)
+            (directory / 'index.js').write_text(originals['index.js'])
+            (directory / 'index.js').write_text(originals['index.js'].replace(
+                '"node_modules/.prisma/client"', '"../../node_modules/.prisma/client"'))
+            with self.assertRaisesRegex(RuntimeError, 'UNCHANGED_CLIENT_NOT_REPRODUCED'):
                 b.unchanged_client(context, contract)
             (directory / 'index.js').write_text(originals['index.js'])
             (directory / 'unexpected.js').write_text('unreviewed')
