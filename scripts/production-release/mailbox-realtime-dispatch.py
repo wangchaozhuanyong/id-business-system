@@ -126,8 +126,8 @@ entry=Path('/opt/id-business-v2/.staging/mailbox-realtime-entry-'+plan['commit']
 entry.mkdir(mode=0o700,parents=True,exist_ok=True)
 stage='ENTRY_DOWNLOAD'
 try:
- with urllib.request.urlopen(RAW_BASE+'mailbox-realtime-contract.json',timeout=30) as response:raw=response.read(256*1024+1)
- if len(raw)>256*1024 or hashlib.sha256(raw).hexdigest()!=plan['contractSha256']:raise RuntimeError('MAILBOX_REALTIME_20261016_CONTRACT_CHANGED')
+ with urllib.request.urlopen(RAW_BASE+'mailbox-realtime-contract.json',timeout=30) as response:raw=response.read(512*1024+1)
+ if len(raw)>512*1024 or hashlib.sha256(raw).hexdigest()!=plan['contractSha256']:raise RuntimeError('MAILBOX_REALTIME_20261016_CONTRACT_CHANGED')
  contract=json.loads(raw)
  for name,expected in plan['controlSources'].items():
   if not re.fullmatch('[a-z0-9.-]+',name):raise RuntimeError('MAILBOX_REALTIME_20261016_EXECUTOR_PATH_INVALID')
@@ -143,7 +143,7 @@ try:
  stage=plan['mode'].upper()
  print(json.dumps(module.release(plan,contract,d,h),sort_keys=True))
 except BaseException as error:
- message=str(error);code=message if re.fullmatch('(?:MAILBOX_REALTIME_20261016|RECHARGE_RECORD|RECHARGE_AVAILABILITY|RECHARGE_BILLING|REGISTRATION_CLOSURE|API_ADMIN_ONLINE)_[A-Z0-9_]+',message) else 'MAILBOX_REALTIME_20261016_OPERATION_FAILED'
+ message=str(error);code=message if re.fullmatch('(?:MAILBOX_REALTIME(?:_20261016)?|REGISTRATION_PARITY_DIAGNOSTICS|RECHARGE_RECORD|RECHARGE_AVAILABILITY|RECHARGE_BILLING|REGISTRATION_CLOSURE|API_ADMIN_ONLINE)_[A-Z0-9_]+',message) else 'MAILBOX_REALTIME_20261016_OPERATION_FAILED'
  frames=[{'file':Path(f.filename).name,'line':f.lineno,'function':f.name}for f in traceback.extract_tb(error.__traceback__)]
  print(json.dumps({'status':'MAILBOX_REALTIME_20261016_FAILED','code':code,'stage':stage,'mode':plan['mode'],'commit':plan['commit'],'errorType':type(error).__name__,'frames':frames,'businessActions':0}))
  raise SystemExit(1) from None

@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 
-export const mailboxRealtimeBase = '6fc99d23c2918280a94c3f5b8be48f638190e02f';
+export const mailboxRealtimeBase = '44c9134833242815d01ba666fe0f942f924347fb';
 export const mailboxRealtimeParts = ['guards', 'api', 'admin', 'release-controls'];
 export const mailboxControlBase = 'c1fc77eb444fe1e170075c07e17966c97eabb4c3';
 export const mailboxControlTree = 'b9547ccc980b65bc917d6c2562b98af435afb15f';

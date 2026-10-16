@@ -26,6 +26,7 @@ def load(name):
 r = load('mailbox-realtime-release.py')
 b = load('mailbox-realtime-build.py')
 i = load('mailbox-realtime-inspect.py')
+published = load('mailbox-realtime-baseline.py')
 
 
 class MailboxRelease(unittest.TestCase):
@@ -115,11 +116,72 @@ class MailboxRelease(unittest.TestCase):
             with self.assertRaises(FileNotFoundError):
                 module.verify_contract(self.c)
 
+    def test_current_inventory_contract_fits_the_bounded_remote_download(self):
+        raw = (HERE / 'mailbox-realtime-contract.json').read_bytes()
+        self.assertLess(len(raw), 512 * 1024)
+        dispatcher = (HERE / 'mailbox-realtime-dispatch.py').read_text()
+        self.assertIn('response.read(512*1024+1)', dispatcher)
+        self.assertIn('len(raw)>512*1024', dispatcher)
+
     def test_unfrozen_release_stops_before_helpers_or_platform_calls(self):
-        with patch.object(r, 'helper') as helper:
-            helper.return_value.verify_contract = Mock()
+        with patch.object(r, 'baseline') as baseline:
             with self.assertRaisesRegex(RuntimeError, 'CONTRACT_SCOPE_CHANGED'):
                 r.release({'mode': 'release'}, {**self.c, 'frozen': False}, Mock(), Mock())
+            baseline.assert_not_called()
+
+    def test_failed_run_needs_the_exact_forward_finalization_and_independent_readback(self):
+        record = json.loads((HERE / 'mailbox-realtime-predecessor.json').read_bytes())
+        native = record['forwardNative']
+        binding = self.c['predecessorNative']
+        published.verify_forward_native(native, binding)
+        for key, value in [('Status', 'Failed'), ('ResponseCode', 1), ('CommandId', 'other'),
+                           ('InstanceId', 'other'), ('StandardErrorContent', 'error')]:
+            with self.assertRaisesRegex(RuntimeError, 'FORWARD_RECEIPT_CHANGED'):
+                published.verify_forward_native({**native, key: value}, binding)
+        result = json.loads(native['StandardOutputContent'])
+        result['maintenanceReleased'] = False
+        with self.assertRaisesRegex(RuntimeError, 'FORWARD_RECEIPT_CHANGED'):
+            published.verify_forward_native({**native, 'StandardOutputContent': json.dumps(result)}, binding)
+
+    def test_mount_order_is_equivalent_but_sources_modes_and_destinations_are_not(self):
+        row = {'HostConfig': {'Binds': ['/one:/app/.runtime/online-recharge:rw',
+                                      '/two:/app/.runtime/auto-registration:rw']}}
+        reverse = copy.deepcopy(row)
+        reverse['HostConfig']['Binds'].reverse()
+        canonical = published.canonical_bindings(row)
+        self.assertEqual(canonical, published.canonical_bindings(reverse))
+        for declaration in ['/changed:/app/.runtime/online-recharge:rw',
+                            '/one:/app/.runtime/online-recharge:ro']:
+            changed = copy.deepcopy(row)
+            changed['HostConfig']['Binds'][0] = declaration
+            self.assertNotEqual(canonical, published.canonical_bindings(changed))
+        for binds in [row['HostConfig']['Binds'][:1], [*row['HostConfig']['Binds'], '/extra:/other:rw'],
+                      ['/one:/same:rw', '/two:/same:rw']]:
+            with self.assertRaisesRegex(RuntimeError, 'API_BIND_SCOPE_CHANGED'):
+                published.canonical_bindings({'HostConfig': {'Binds': binds}})
+        self.assertEqual(row['HostConfig']['Binds'][0], '/one:/app/.runtime/online-recharge:rw')
+
+    def test_current_sqlite_policy_keeps_all_four_tasks_and_the_existing_review_lease(self):
+        policy = self.c['sqliteReviewPolicy']
+        receipt = {'version': 1, 'status': 'PASS', **policy['summary'],
+            'activeAppleLeaseCount': 1, 'executingTaskCount': 0, 'retainedReviewLeaseCount': 1,
+            'corruptEncryptedValueCount': 0, 'leaseFacts': policy['leaseFacts'],
+            'protectedTaskFacts': policy['protectedTaskFacts'],
+            'dependencies': self.c['runtimePythonDependencies'], 'businessActions': 0}
+        self.assertEqual(len(receipt['protectedTaskFacts']), 4)
+        published.validate_sqlite_receipt(receipt, self.c)
+        for field in ('leaseFacts', 'protectedTaskFacts'):
+            changed = copy.deepcopy(receipt)
+            changed[field].pop()
+            with self.assertRaisesRegex(RuntimeError, 'SQLITE_PRESERVATION_CHANGED'):
+                published.validate_sqlite_receipt(changed, self.c)
+
+    def test_inspection_namespace_rebinds_guards_without_changing_the_historical_publisher(self):
+        namespace = published.runtime_namespace()
+        self.assertEqual(namespace['CURRENT'], self.c['expectedCurrent'])
+        self.assertIs(namespace['sqlite_receipt'], published.sqlite_receipt)
+        self.assertIs(namespace['baseline'].__globals__, namespace)
+        self.assertIs(namespace['backup_sqlite'].__globals__, namespace)
 
     def test_inspection_waits_for_accepted_command_without_resubmitting(self):
         output = ROOT / '.runtime/mailbox-release/control-tests'
