@@ -222,6 +222,14 @@ def release(plan, contract):
                         newMigrations=[], migrationPerformed=False, paymentActions=0, onlineSettingsPublication=receipt)
         for role in UPDATED:
             manifest['images'][role] = {'reference': images[role]['reference'], 'digest': images[role]['imageId'], 'sourceCommit': plan['commit']}
+            projections = manifest.setdefault('roleSourceProjections', {})
+            projections[role] = {'kind': 'PUBLISHED_PREDECESSOR_PLUS_ONLINE_SETTINGS',
+                                 'commit': plan['commit'], 'parentProjection': projections.get(role),
+                                 'buildProofSha256': plan['buildProofSha256'],
+                                 'sources': {name: value for name, value in contract['sources'].items()
+                                             if (name.startswith('apps/admin/') if role == 'admin'
+                                                 else name.startswith(contract['engineRoot'] + '/') if role == 'online-recharge'
+                                                 else name.startswith('apps/api/') and not name.startswith(contract['engineRoot'] + '/'))}}
         (target / 'release-manifest.json').write_text(json.dumps(manifest, sort_keys=True, indent=2) + '\n')
         d.point_current(target, stamp + '-online-settings')
         journal.write_text(json.dumps({'status': 'DEPLOYED', 'target': str(target), 'commit': plan['commit']}) + '\n')
