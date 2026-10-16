@@ -381,6 +381,26 @@ class BrowserReleaseControls(unittest.TestCase):
         self.assertIn('registration-browser-dispatch.py', source)
         self.assertIn('if: always()', source)
 
+    def test_isolated_ci_prepares_private_runtime_before_workspace_tests(self):
+        with tempfile.TemporaryDirectory(dir=OUTPUT) as temporary:
+            output = Path(temporary)
+            (output / 'candidate').mkdir()
+            old = Mock()
+            old.unchanged_client.return_value = {'unchanged': True}
+            with patch.object(b, 'OUTPUT', output), patch.object(b, 'prepare') as prepare, \
+                    patch.object(b.r, 'helper', return_value=old), patch.object(b, 'run'), \
+                    patch.dict(b.os.environ, {'GITHUB_ACTIONS': 'false', 'CHECK_MODE': 'recharge'}):
+                with self.assertRaisesRegex(RuntimeError, 'CHECKS_REQUIRE_ISOLATED_CI'):
+                    b.check_context()
+                prepare.assert_not_called()
+                self.assertFalse((output / 'candidate' / '.runtime').exists())
+                with patch.dict(b.os.environ, {'GITHUB_ACTIONS': 'true'}):
+                    b.check_context()
+                    b.check_context()
+                runtime = output / 'candidate' / '.runtime'
+                self.assertTrue(runtime.is_dir())
+                self.assertEqual(runtime.stat().st_mode & 0o777, 0o700)
+
     def test_actual_cli_entries_dispatch_only_the_requested_public_mode(self):
         harness = r'''import json,runpy,subprocess,socket,sqlite3,sys
 from pathlib import Path

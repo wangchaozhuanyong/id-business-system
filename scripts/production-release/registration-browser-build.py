@@ -285,6 +285,7 @@ def check_context():
     need(os.environ.get('GITHUB_ACTIONS') == 'true' and os.environ.get('CHECK_MODE') == 'recharge',
          'CHECKS_REQUIRE_ISOLATED_CI')
     prepare()
+    (OUTPUT / 'candidate' / '.runtime').mkdir(mode=0o700, exist_ok=True)
     contract = json.loads(CONTRACT.read_bytes())
     old = r.helper(r.OLD_NAME + '-build.py')
     need(old.unchanged_client(OUTPUT / 'baseline', contract)
