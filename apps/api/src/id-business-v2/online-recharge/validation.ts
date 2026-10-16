@@ -1,6 +1,5 @@
 import { BadRequestException } from '@nestjs/common';
 import { ONLINE_RECHARGE_PLANS, type OnlineRechargePlan } from './contracts';
-import { Prisma } from '@prisma/client';
 
 export interface OnlineRechargePaymentLimit {
   currency: string;
@@ -14,7 +13,7 @@ export function paymentLimit(value: unknown): OnlineRechargePaymentLimit {
     !/^[A-Z]{3}$/.test(input.currency) ||
     typeof input.maxAmount !== 'string' ||
     !/^\d{1,14}(?:\.\d{1,4})?$/.test(input.maxAmount) ||
-    new Prisma.Decimal(input.maxAmount).lessThanOrEqualTo(0)
+    !/[1-9]/.test(input.maxAmount)
   )
     throw new BadRequestException('付款上限格式无效');
   return { currency: input.currency, maxAmount: input.maxAmount };

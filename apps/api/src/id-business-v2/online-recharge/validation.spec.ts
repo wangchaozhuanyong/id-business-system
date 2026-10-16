@@ -344,7 +344,8 @@ describe('固定单次付款上限', () => {
       currency: 'PHP',
       maxAmount: '9990.0000'
     });
-    for (const maxAmount of [9990, '0', '-1', '1e4', '1.23456', 'NaN'])
+    expect(paymentLimit({ currency: 'PHP', maxAmount: '0.0001' }).maxAmount).toBe('0.0001');
+    for (const maxAmount of [9990, '0', '000.0000', '-1', '1e4', '1.23456', 'NaN'])
       expect(() => paymentLimit({ currency: 'PHP', maxAmount })).toThrow();
     expect(() => paymentLimit({ currency: 'php', maxAmount: '9990' })).toThrow();
   });

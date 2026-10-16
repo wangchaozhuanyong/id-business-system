@@ -1,4 +1,5 @@
 'use strict';
+/* global document, window */
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const { chromium } = require('../upstream/node_modules/playwright');

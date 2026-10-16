@@ -106,7 +106,7 @@ async function controls(page, deadline) {
         all.evaluateAll((nodes) =>
           nodes
             .map((n, index) => {
-              const style = getComputedStyle(n),
+              const style = n.ownerDocument.defaultView.getComputedStyle(n),
                 box = n.getBoundingClientRect();
               if (
                 !box.width ||
@@ -163,7 +163,7 @@ async function controls(page, deadline) {
               : null;
         if (el) result.push({ frame, el, meta });
       }
-    } catch (_) {
+    } catch {
       /* A detached frame is rediscovered on the next bounded pass. */
     }
   }
@@ -297,7 +297,7 @@ async function diagnostic(page) {
       ...meta,
       fields: Object.keys(rules).filter((key) => score(meta, key) > 0)
     }));
-  } catch (_) {
+  } catch {
     return [];
   }
 }
