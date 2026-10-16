@@ -2285,15 +2285,15 @@
     "apps/api/src/id-business-v2/auto-registration/worker/test_registration_closed_loop_unit.py": "50faaedb25008f3b73dcc7e66060810b4c09ad6fc6587d6fbc796fce13ae35af",
     "apps/api/src/id-business-v2/auto-registration/worker/workspace.py": "6bcb2050633db830068fd1a1b1a30d3dd75bf45f24aef3ab5b9c398d632e7237",
     "docs/V2_TASKS.md": "397ff8522abe513938d8c950cdcff8de263531f0d0fe23623034f20b1eef4b1b",
-    "scripts/ci-recharge-check.mjs": "bc111dd64ee84d58ca340ae96ad5145cc53a18df68bf2c5f934691e8d4a0fb45",
+    "scripts/ci-recharge-check.mjs": "b0063f9ffb8541fbddd4cb22acfc9663337bc1c5bfea89c3f7b4b3d1e6917161",
     "scripts/ci-recharge-check.test.mjs": "75ba11f8cd22c9d9149723c1389fb6d3296c00e1d7985a34b71c5e3dab0656a3",
-    "scripts/ci-recharge-scope.mjs": "b747bf89be9f087291216b3310579d7102260bdc0b2de587f8bd28d66aa1a272",
+    "scripts/ci-recharge-scope.mjs": "06516254e599aeb7e9937eca5dea24f1b960f9aef2fb2cf3dedc9ec7cb703516",
     "scripts/ci-recharge-scope.test.mjs": "8d225c4aa5ce0d0655611355412524d04637d955c46d928eac7de0181331cf4a",
-    "scripts/ci-registration-protocol-restore-scope.mjs": "83bfa5900045a1a334d6172701726fb540d200502a69475240c8fd83987ed402",
+    "scripts/ci-registration-protocol-restore-scope.mjs": "d98909f4de5fb4e1f1330df74b9e7e1dc163ed95b5556ffed5c62eb36ed8b36c",
     "scripts/ci-registration-protocol-restore-scope.test.mjs": "05c73dc95890682c91c3ce321d3da4e2ab82e3eb3386280075b169ffb7eba794",
     "scripts/production-release/registration-protocol-restore-build.py": "d21c12e3202394b0c762c7d29f3cbf438b59540dbedae8a6652f4b992ca9ea2d",
     "scripts/production-release/registration-protocol-restore-dispatch.py": "ddc29ef0751282c3e18ca231b2e32428dbb0e726278a421447876c7940796969",
-    "scripts/production-release/registration-protocol-restore-release.py": "323d7303b125d64d9ca8cd1a375eba5b2d8460dc958619fe7b40dd120ae877f6",
+    "scripts/production-release/registration-protocol-restore-release.py": "5d76ce72743a51ee6b31013367e8b01fbc4a8a499669a76c0defd4e30e9dbc07",
     "scripts/production-release/registration-protocol-restore-release.test.py": "155958926f802237985fb3d43ecec9475a86944c0239d147e363b2609e475c06"
   },
   "roleSourceCommits": {
@@ -4300,8 +4300,8 @@
       "status": "running"
     }
   },
-  "sourceBaseline": "65e5f50a3550c451699b230f9d7b66f3e2d713b2",
-  "sourceBaselineTree": "bd1666ddc644fbf65dc72e2c3af0f12c35c7abe7",
+  "sourceBaseline": "46bea6e11c9527e9b8930598de4cf2b13eb76635",
+  "sourceBaselineTree": "66f9412285c67bc691dcbb8e369df713d40cfdab",
   "sourceDeltaPaths": [
     ".github/workflows/quality.yml",
     ".github/workflows/registration-protocol-restore-validation.yml",
@@ -4363,8 +4363,8 @@
     "hostFileRead": false,
     "kind": "IMMUTABLE_GIT_INPUTS_ONLY",
     "runtimeFileRead": false,
-    "sourceCommit": "65e5f50a3550c451699b230f9d7b66f3e2d713b2",
-    "sourceTree": "bd1666ddc644fbf65dc72e2c3af0f12c35c7abe7"
+    "sourceCommit": "46bea6e11c9527e9b8930598de4cf2b13eb76635",
+    "sourceTree": "66f9412285c67bc691dcbb8e369df713d40cfdab"
   },
   "sourceProjectionSha256": {
     "adminSourceProjection": "49df5e2744558a2c5da46942353fef96bdd2a808731d907b45473f509088e048",
