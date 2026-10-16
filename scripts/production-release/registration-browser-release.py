@@ -15,10 +15,12 @@ import types
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parents[1]
 SCOPE = 'REGISTRATION_BROWSER'
-CURRENT = '6fc99d23c2918280a94c3f5b8be48f638190e02f'
-CURRENT_TREE = '3c7ae119d97c8478f32f644485b7cd1b555830a6'
-SOURCE_BASE = '44c9134833242815d01ba666fe0f942f924347fb'
-SOURCE_TREE = 'c8b741f0cce60d0ecedf7bb7bb37d636ed39b41a'
+PARITY_COMMIT = '6fc99d23c2918280a94c3f5b8be48f638190e02f'
+PARITY_TREE = '3c7ae119d97c8478f32f644485b7cd1b555830a6'
+CURRENT = '59b36f3aadef28a59f47a55ed1e66686fcc2c42c'
+CURRENT_TREE = 'e6c4c72aefb68b979f1bee201e510de07fc29a0d'
+SOURCE_BASE = '0161e8f92da0c2df5c58ddb4373dbc4d18b04412'
+SOURCE_TREE = '5d2e0a8b6243545f9929a69b2ef7eaddbdaf9f19'
 WORKER = 'apps/api/src/id-business-v2/auto-registration/worker/'
 OLD_NAME = 'registration-parity-diagnostics'
 NAME = 'registration-browser'
@@ -32,6 +34,20 @@ PRIOR_PROOF = '7b3a49d2ebc6111143d73e022230c0f591827a5e82bfefea7f2f80d190e5abdb'
 PRIOR_BUNDLE = '89ba4b0cbb3fe204bef628646b4263af0e12bffcafd9fac1408f02bf47223787'
 FORWARD_COMMAND = 'ba29bee4-9b71-4ad3-9647-fbcd55a72110'
 INSTANCE = 'i-05836da38606e633c'
+MAILBOX_CONTRACT = '39a94abae3b20ae8bd378176d254abcd1a08d12b6f01df731a8484d0d8035f71'
+MAILBOX_PROOF = 'ecf5c6dc2cd93dc94133dbb38f6ef9b37aab5ebecac790c80e99226c0e365e2c'
+MAILBOX_BINDING = {
+    'commit': CURRENT, 'tree': CURRENT_TREE, 'runId': '38902937350', 'runAttempt': 1,
+    'workflowPath': '.github/workflows/mailbox-realtime-validation.yml',
+    'validationJobId': 116979377339, 'artifactId': 12046373539,
+    'artifactDigest': 'sha256:c7d76459c76654535568052b3b0065e838ba0be348c8eb63a40938d05ba58832',
+    'bundleName': 'mailbox-realtime-artifact.tar.gz',
+    'bundleSha256': '101321d273c51fc3d780dd9151f0cd144e8f1d70542c6b115321737534dfcacf',
+    'proofSha256': MAILBOX_PROOF, 'contractSha256': MAILBOX_CONTRACT,
+    'releaseCommandId': 'fc954eeb-3dc2-400d-a0c6-b893e56f5bbf',
+    'readbackCommandId': '78c9a386-d36f-4783-b248-ce28528c8957', 'instanceId': INSTANCE,
+    'releaseNativeSha256': '95d4fb37d2f80f65c8eec413a7f7ebde497b94e0aad778589c029d4bde608416',
+    'readbackNativeSha256': 'cf3fadaecdf5536f268cb0b30dd42ac1fc0f3b3dbed3ff0db3983343f190a2be'}
 BIND_DESTINATIONS = ('/app/.runtime/auto-registration', '/app/.runtime/online-recharge')
 NORMALIZATION = {'version': 1, 'role': 'api', 'field': 'HostConfig.Binds',
                  'method': 'SORT_COMPLETE_DECLARATIONS_BY_DISTINCT_DESTINATION',
@@ -66,6 +82,41 @@ def prior_recipe():
     return recipe
 
 
+def mailbox_recipe():
+    raw = (HERE / 'mailbox-realtime-contract.json').read_bytes()
+    need(digest(raw) == MAILBOX_CONTRACT, 'MAILBOX_CONTRACT_CHANGED')
+    recipe = json.loads(raw)
+    need(recipe.get('frozen') is True and recipe.get('scope') == 'MAILBOX_REALTIME_20261016'
+         and recipe.get('expectedCurrent') == PARITY_COMMIT and recipe.get('migration') is None
+         and recipe.get('workerFiles') == {} and recipe.get('sharedRuntimeUnchanged') is True,
+         'MAILBOX_RECIPE_CHANGED')
+    return recipe
+
+
+def verify_mailbox_binding(binding):
+    need(binding == MAILBOX_BINDING, 'MAILBOX_NATIVE_BINDING_CHANGED')
+
+
+def verify_mailbox_native(native, binding, mode):
+    verify_mailbox_binding(binding)
+    need(mode in ('release', 'readback'), 'MAILBOX_NATIVE_MODE_INVALID')
+    need(digest(canonical(native)) == binding[mode + 'NativeSha256']
+         and native.get('CommandId') == binding[mode + 'CommandId']
+         and native.get('InstanceId') == INSTANCE and native.get('DocumentName') == 'AWS-RunShellScript'
+         and native.get('Status') == 'Success' and native.get('ResponseCode') == 0
+         and not native.get('StandardErrorContent'), 'MAILBOX_NATIVE_RECEIPT_CHANGED')
+    result = json.loads(native['StandardOutputContent'])
+    status = 'DEPLOYED' if mode == 'release' else 'INDEPENDENT_READBACK_VERIFIED'
+    need(result.get('status') == 'MAILBOX_REALTIME_20261016_' + status
+         and result.get('commit') == CURRENT and result.get('migrationPerformed') is False
+         and type(result.get('businessActions')) is int and result['businessActions'] == 0
+         and result.get('updatedServices') == ['api', 'admin']
+         and result.get('reboundServices') == ['online-recharge']
+         and (result.get('tree') == CURRENT_TREE if mode == 'release'
+              else result.get('maintenanceReleased') is True), 'MAILBOX_NATIVE_RESULT_CHANGED')
+    return result
+
+
 def renamed_code(code):
     """Rename literal release identities only; never modify historical code/files."""
     return code.replace(co_consts=tuple(
@@ -92,7 +143,7 @@ def private_namespace(name, overrides):
 
 
 def verify_predecessor_binding(binding):
-    expected = {'commit': CURRENT, 'tree': CURRENT_TREE, 'runId': '38883922525', 'runAttempt': 1,
+    expected = {'commit': PARITY_COMMIT, 'tree': PARITY_TREE, 'runId': '38883922525', 'runAttempt': 1,
         'workflowPath': '.github/workflows/registration-parity-diagnostics-validation.yml',
         'originalRunConclusion': 'failure', 'validationJobId': 116916962577,
         'artifactId': 12038657136,
@@ -117,7 +168,7 @@ def verify_forward_native(native, binding):
          and not native.get('StandardErrorContent'), 'PREDECESSOR_FORWARD_RECEIPT_CHANGED')
     result = json.loads(native['StandardOutputContent'])
     need(result.get('status') == 'ORIGINAL_RELEASE_FORWARD_FINALIZED'
-         and result.get('commit') == CURRENT and result.get('workflowRunId') == binding['runId']
+         and result.get('commit') == PARITY_COMMIT and result.get('workflowRunId') == binding['runId']
          and result.get('originalGithubRunConclusion') == 'failure'
          and result.get('originalReleaseCommandId') == binding['originalReleaseCommandId']
          and result.get('maintenanceReleased') is True and result.get('migrationPerformed') is False
@@ -126,12 +177,12 @@ def verify_forward_native(native, binding):
          'PREDECESSOR_FORWARD_RESULT_CHANGED')
     need(result.get('independentReadback') == {
         'status': 'REGISTRATION_PARITY_DIAGNOSTICS_INDEPENDENT_READBACK_VERIFIED',
-        'commit': CURRENT, 'maintenanceReleased': True, 'migrationPerformed': False,
+        'commit': PARITY_COMMIT, 'maintenanceReleased': True, 'migrationPerformed': False,
         'businessActions': 0, 'updatedServices': ['api', 'admin'], 'reboundServices': ['online-recharge']},
         'PREDECESSOR_READBACK_CHANGED')
     tail = result.get('originalTailResult', {})
     need(tail.get('status') == 'REGISTRATION_PARITY_DIAGNOSTICS_DEPLOYED'
-         and tail.get('commit') == CURRENT and tail.get('tree') == CURRENT_TREE
+         and tail.get('commit') == PARITY_COMMIT and tail.get('tree') == PARITY_TREE
          and tail.get('migrationPerformed') is False and type(tail.get('businessActions')) is int
          and tail['businessActions'] == 0 and tail.get('updatedServices') == ['api', 'admin']
          and tail.get('reboundServices') == ['online-recharge'], 'PREDECESSOR_TAIL_CHANGED')
@@ -147,6 +198,10 @@ def verify_contract(contract):
     need(contract.get('priorControls') == PRIOR_CONTROLS
          and contract.get('configurationNormalization') == NORMALIZATION, 'INHERITANCE_CHANGED')
     verify_predecessor_binding(contract.get('predecessorNative'))
+    verify_mailbox_binding(contract.get('mailboxNative'))
+    mailbox = mailbox_recipe()
+    need(contract.get('mailboxSources') == mailbox['sources']
+         and contract.get('mailboxValidationSources') == mailbox['validationSources'], 'MAILBOX_SOURCE_SCOPE_CHANGED')
     for key in ('schemaSha256', 'baselinePrismaClientFiles', 'runtimePrismaClientFiles',
                 'baselineEngineFiles', 'runtimePythonDependencies', 'prismaPathMetadata',
                 'protectedMigrations', 'unchangedInputs', 'buildSupportHashes',
@@ -201,7 +256,7 @@ def verify_contract(contract):
          and all(re.fullmatch('[a-f0-9]{64}', value) for value in contract['reviewedFileHashes'].values()),
          'SOURCE_CLOSURE_CHANGED')
     need(set(contract.get('controlFiles', [])) == set(prior['controlFiles']) | set(PRIOR_CONTROLS)
-         | {NAME + '-release.py', NAME + '-contract.json'}, 'EXECUTOR_SCOPE_CHANGED')
+         | {NAME + '-release.py', NAME + '-contract.json', 'mailbox-realtime-contract.json'}, 'EXECUTOR_SCOPE_CHANGED')
 
 
 def canonical_bindings(row):
@@ -282,6 +337,8 @@ def sqlite_receipt(d, directory, contract, expected_logical=None):
 
 def verify_proof(proof, plan, contract, payload, h):
     need(proof.get('predecessorNative') == contract['predecessorNative']
+         and proof.get('mailboxNative') == contract['mailboxNative']
+         and proof.get('mailboxSources') == contract['mailboxSources']
          and proof.get('configurationNormalization') == NORMALIZATION, 'PROOF_INHERITANCE_CHANGED')
     return private_namespace(OLD_NAME + '-release.py', {})['verify_proof'](proof, plan, contract, payload, h)
 

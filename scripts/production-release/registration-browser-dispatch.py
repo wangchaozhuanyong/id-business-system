@@ -45,11 +45,20 @@ def prepare_plan():
         '--command-id', r.FORWARD_COMMAND, '--instance-id', r.INSTANCE, '--output', 'json')
     native = json.loads(raw)
     r.verify_forward_native(native, contract['predecessorNative'])
+    mailbox_receipts = {}
+    for mode in ('release', 'readback'):
+        receipt = execute('aws', 'ssm', 'get-command-invocation', '--region', 'ap-northeast-1',
+            '--command-id', contract['mailboxNative'][mode + 'CommandId'], '--instance-id', r.INSTANCE,
+            '--output', 'json')
+        r.verify_mailbox_native(json.loads(receipt), contract['mailboxNative'], mode)
+        mailbox_receipts[mode] = receipt
     # Call its frozen implementation, not our override of its public entry.
     original = r.private_namespace(r.OLD_NAME + '-dispatch.py', {'ROOT': ROOT, 'OUTPUT': OUTPUT,
         'execute': execute, 'github': github, 'verified_contract': verified_contract})
     plan, admitted = original['prepare_plan']()
     (OUTPUT / 'predecessor-forward-native.json').write_bytes(raw)
+    for mode, receipt in mailbox_receipts.items():
+        (OUTPUT / ('mailbox-' + mode + '-native.json')).write_bytes(receipt)
     return plan, admitted
 
 

@@ -45,7 +45,7 @@ const fixture = () => {
   };
 };
 
-test('registration browser accepts only its fixed source base tree and actual 6fc runtime', () => {
+test('registration browser accepts only its fixed source base tree and published Mailbox runtime', () => {
   assert.equal(isRegistrationBrowserOnly(paths, fixture()), true);
   for (const changed of [{ base: 'a'.repeat(40) }, { baseTree: 'b'.repeat(40) }])
     assert.equal(isRegistrationBrowserOnly(paths, { ...fixture(), ...changed }), false);

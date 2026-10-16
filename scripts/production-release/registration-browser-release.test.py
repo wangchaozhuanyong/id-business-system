@@ -109,16 +109,16 @@ class BrowserReleaseControls(unittest.TestCase):
             external.assert_not_called()
 
     def forward_fixture(self):
-        result = {'status': 'ORIGINAL_RELEASE_FORWARD_FINALIZED', 'commit': r.CURRENT,
+        result = {'status': 'ORIGINAL_RELEASE_FORWARD_FINALIZED', 'commit': r.PARITY_COMMIT,
             'workflowRunId': '38883922525', 'originalGithubRunConclusion': 'failure',
             'originalReleaseCommandId': self.contract['predecessorNative']['originalReleaseCommandId'],
             'maintenanceReleased': True, 'migrationPerformed': False, 'businessActions': 0,
             'newBuilds': 0, 'newBackups': 0, 'restarts': 0,
             'independentReadback': {'status': 'REGISTRATION_PARITY_DIAGNOSTICS_INDEPENDENT_READBACK_VERIFIED',
-                'commit': r.CURRENT, 'maintenanceReleased': True, 'migrationPerformed': False,
+                'commit': r.PARITY_COMMIT, 'maintenanceReleased': True, 'migrationPerformed': False,
                 'businessActions': 0, 'updatedServices': ['api', 'admin'], 'reboundServices': ['online-recharge']},
             'originalTailResult': {'status': 'REGISTRATION_PARITY_DIAGNOSTICS_DEPLOYED',
-                'commit': r.CURRENT, 'tree': r.CURRENT_TREE, 'migrationPerformed': False,
+                'commit': r.PARITY_COMMIT, 'tree': r.PARITY_TREE, 'migrationPerformed': False,
                 'businessActions': 0, 'updatedServices': ['api', 'admin'], 'reboundServices': ['online-recharge']}}
         native = {'CommandId': r.FORWARD_COMMAND, 'InstanceId': r.INSTANCE, 'DocumentName': 'AWS-RunShellScript',
             'Status': 'Success', 'ResponseCode': 0, 'StandardErrorContent': '',
@@ -128,7 +128,7 @@ class BrowserReleaseControls(unittest.TestCase):
 
     def test_forward_receipt_needs_original_identity_and_independent_readback(self):
         native, binding = self.forward_fixture()
-        self.assertEqual(r.verify_forward_native(native, binding)['commit'], r.CURRENT)
+        self.assertEqual(r.verify_forward_native(native, binding)['commit'], r.PARITY_COMMIT)
         for changed in ({'Status': 'Failed'}, {'ResponseCode': 1}, {'CommandId': 'different'},
                         {'StandardErrorContent': 'unsafe'}, {'InstanceId': 'different'}):
             with self.subTest(changed=changed), self.assertRaisesRegex(RuntimeError, 'FORWARD_RECEIPT_CHANGED'):
@@ -147,6 +147,119 @@ class BrowserReleaseControls(unittest.TestCase):
             d.prepare_plan()
         self.assertEqual(execute.call_count, 1)
         self.assertEqual(execute.call_args.args[:3], ('aws', 'ssm', 'get-command-invocation'))
+
+    def test_mailbox_identity_is_separate_and_unknown_native_binding_stops_before_network(self):
+        self.assertNotEqual(r.PARITY_COMMIT, r.CURRENT)
+        self.assertEqual(self.contract['predecessorNative']['commit'], r.PARITY_COMMIT)
+        self.assertEqual(self.contract['mailboxNative']['commit'], r.CURRENT)
+        for changed in ({'runId': '38902937351'}, {'commit': r.PARITY_COMMIT},
+                        {'releaseCommandId': r.FORWARD_COMMAND}, {'artifactId': 1},
+                        {'readbackNativeSha256': '0' * 64}, {'unexpected': True}):
+            with self.subTest(changed=changed), patch.object(b.subprocess, 'check_output') as request, \
+                    self.assertRaisesRegex(RuntimeError, 'MAILBOX_NATIVE_BINDING_CHANGED'):
+                b.published_mailbox_proof({**self.contract['mailboxNative'], **changed})
+            request.assert_not_called()
+
+    def mailbox_fixture(self, mode):
+        result = {'status': 'MAILBOX_REALTIME_20261016_' + ('DEPLOYED' if mode == 'release'
+                else 'INDEPENDENT_READBACK_VERIFIED'), 'commit': r.CURRENT,
+            'migrationPerformed': False, 'businessActions': 0,
+            'updatedServices': ['api', 'admin'], 'reboundServices': ['online-recharge']}
+        result.update({'tree': r.CURRENT_TREE} if mode == 'release' else {'maintenanceReleased': True})
+        native = {'CommandId': r.MAILBOX_BINDING[mode + 'CommandId'], 'InstanceId': r.INSTANCE,
+            'DocumentName': 'AWS-RunShellScript', 'Status': 'Success', 'ResponseCode': 0,
+            'StandardErrorContent': '', 'StandardOutputContent': json.dumps(result)}
+        return native
+
+    def test_mailbox_native_requires_exact_receipt_identity_and_successful_readback(self):
+        for mode in ('release', 'readback'):
+            native = self.mailbox_fixture(mode)
+            binding = {**r.MAILBOX_BINDING, mode + 'NativeSha256': r.digest(r.canonical(native))}
+            with patch.dict(r.MAILBOX_BINDING, binding, clear=True):
+                self.assertEqual(r.verify_mailbox_native(native, binding, mode)['commit'], r.CURRENT)
+                for key, value in (('Status', 'Failed'), ('CommandId', r.FORWARD_COMMAND),
+                                   ('ResponseCode', 1), ('StandardErrorContent', 'unexpected')):
+                    with self.subTest(mode=mode, key=key), self.assertRaisesRegex(RuntimeError, 'MAILBOX_NATIVE_RECEIPT_CHANGED'):
+                        r.verify_mailbox_native({**native, key: value}, binding, mode)
+            result = json.loads(native['StandardOutputContent'])
+            result['businessActions'] = True
+            native['StandardOutputContent'] = json.dumps(result)
+            binding[mode + 'NativeSha256'] = r.digest(r.canonical(native))
+            with patch.dict(r.MAILBOX_BINDING, binding, clear=True), \
+                    self.assertRaisesRegex(RuntimeError, 'MAILBOX_NATIVE_RESULT_CHANGED'):
+                r.verify_mailbox_native(native, binding, mode)
+
+    def test_dispatch_checks_both_mailbox_receipts_before_new_release_preparation(self):
+        with patch.object(d, 'verified_contract', return_value=(b'', self.contract)), \
+                patch.object(d.r, 'verify_forward_native'), patch.object(d, 'execute', return_value=b'{}') as execute, \
+                patch.object(d.r, 'private_namespace') as original, \
+                self.assertRaisesRegex(RuntimeError, 'MAILBOX_NATIVE_RECEIPT_CHANGED'):
+            d.prepare_plan()
+        self.assertEqual(execute.call_count, 2)
+        original.assert_not_called()
+        seen = []
+
+        def mailbox(native, binding, mode):
+            seen.append(mode)
+            if mode == 'readback':
+                raise RuntimeError('MAILBOX_NATIVE_RECEIPT_CHANGED')
+
+        with patch.object(d, 'verified_contract', return_value=(b'', self.contract)), \
+                patch.object(d.r, 'verify_forward_native'), patch.object(d.r, 'verify_mailbox_native', side_effect=mailbox), \
+                patch.object(d, 'execute', return_value=b'{}') as execute, patch.object(d.r, 'private_namespace') as original, \
+                self.assertRaisesRegex(RuntimeError, 'MAILBOX_NATIVE_RECEIPT_CHANGED'):
+            d.prepare_plan()
+        self.assertEqual(seen, ['release', 'readback'])
+        self.assertEqual(execute.call_count, 3)
+        original.assert_not_called()
+
+    def test_mailbox_source_overlay_uses_only_published_nine_and_rejects_modified_bytes(self):
+        contract = self.contract
+        with tempfile.TemporaryDirectory(dir=OUTPUT) as temporary:
+            context = Path(temporary)
+            b.overlay_mailbox_sources(context, contract)
+            self.assertEqual({str(path.relative_to(context)): r.digest(path.read_bytes())
+                for path in context.rglob('*') if path.is_file()}, contract['mailboxSources'])
+            before = {str(path.relative_to(context)): path.read_bytes()
+                for path in context.rglob('*') if path.is_file()}
+            with patch.object(b, 'git', return_value=b'untrusted'), \
+                    self.assertRaisesRegex(RuntimeError, 'MAILBOX_PUBLISHED_SOURCE_CHANGED'):
+                b.overlay_mailbox_sources(context, contract)
+            self.assertEqual({str(path.relative_to(context)): path.read_bytes()
+                for path in context.rglob('*') if path.is_file()}, before)
+            with self.assertRaisesRegex(RuntimeError, 'MAILBOX_SOURCE_SCOPE_CHANGED'):
+                b.overlay_mailbox_sources(context, {**contract, 'mailboxSources': {}})
+
+    def test_mailbox_validation_projects_eight_cases_without_replacing_published_fixture(self):
+        name = 'apps/api/src/id-business-v2/auto-registration/apple-mailboxes.service.spec.ts'
+        baseline = b'// retain the deployed fixture\n' + b.git('show', b.PARITY_COMMIT + ':' + name)
+        with tempfile.TemporaryDirectory(dir=OUTPUT) as temporary:
+            context = Path(temporary)
+            path = context / name
+            path.parent.mkdir(parents=True)
+            path.write_bytes(baseline)
+            b.overlay_mailbox_validation(context, self.contract)
+            marker = "  it('自动选择固定服务器邮箱"
+            first = "  it.each(['unregistered', 'unknown'] as const)("
+            published = b.git('show', b.CURRENT + ':' + name).decode()
+            expected = baseline.decode().replace(marker,
+                published[published.index(first):published.index(marker, published.index(first))] + marker, 1)
+            self.assertEqual(path.read_text(), expected)
+            self.assertNotEqual(r.digest(path.read_bytes()), self.contract['mailboxValidationSources'][name])
+            with self.assertRaisesRegex(RuntimeError, 'MAILBOX_VALIDATION_FIXTURE_CHANGED'):
+                b.overlay_mailbox_validation(context, self.contract)
+
+    def test_mailbox_full_inventory_union_preserves_all_runtime_families(self):
+        mailbox = r.mailbox_recipe()
+        parity = {'apiModules': mailbox['baselineApiFiles'], 'workerFiles': mailbox['baselineWorkerFiles'],
+                  'adminFiles': mailbox['baselineAdminFiles']}
+        published = {'apiModules': {name: self.contract['baselineApiFiles'][name] for name in mailbox['apiModules']},
+                     'adminFiles': self.contract['baselineAdminFiles']}
+        b.verify_baseline_union(self.contract, parity, published)
+        for key in ('baselineApiFiles', 'baselineWorkerFiles', 'runtimeAdminFiles', 'baselineAdminFiles'):
+            changed = {**self.contract, key: {}}
+            with self.subTest(key=key), self.assertRaisesRegex(RuntimeError, 'BASELINE_UNION_CHANGED'):
+                b.verify_baseline_union(changed, parity, published)
 
     def row(self):
         return {'Config': {'Labels': {'com.docker.compose.service': 'api'}, 'Env': ['B=2', 'A=1'],
@@ -346,7 +459,7 @@ class BrowserReleaseControls(unittest.TestCase):
             context = Path(temporary)
             (context / b.WORKER).mkdir(parents=True)
             for name in names:
-                (context / b.WORKER / name).write_bytes(b.git('show', b.CURRENT + ':' + b.WORKER + name))
+                (context / b.WORKER / name).write_bytes(b.git('show', b.PARITY_COMMIT + ':' + b.WORKER + name))
             b.restore_runtime_worker_tests(context, contract, prior)
             for name in names:
                 self.assertEqual(r.digest((context / b.WORKER / name).read_bytes()), unchanged[name])

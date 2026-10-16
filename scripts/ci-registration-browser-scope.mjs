@@ -1,9 +1,9 @@
 import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 
-export const registrationBrowserBase = '44c9134833242815d01ba666fe0f942f924347fb';
-export const registrationBrowserTree = 'c8b741f0cce60d0ecedf7bb7bb37d636ed39b41a';
-export const registrationBrowserCurrent = '6fc99d23c2918280a94c3f5b8be48f638190e02f';
+export const registrationBrowserBase = '0161e8f92da0c2df5c58ddb4373dbc4d18b04412';
+export const registrationBrowserTree = '5d2e0a8b6243545f9929a69b2ef7eaddbdaf9f19';
+export const registrationBrowserCurrent = '59b36f3aadef28a59f47a55ed1e66686fcc2c42c';
 export const registrationBrowserWorker = 'apps/api/src/id-business-v2/auto-registration/worker';
 export const registrationBrowserApplications = Object.freeze([
   ...[
