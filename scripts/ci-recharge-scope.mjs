@@ -27,6 +27,10 @@ import {
   registrationParityDiagnosticsParts
 } from './ci-registration-parity-diagnostics-scope.mjs';
 import { readRegistrationNativeReuse } from './ci-registration-closure-native-reuse.mjs';
+import {
+  isRegistrationBrowserOnly,
+  registrationBrowserParts
+} from './ci-registration-browser-scope.mjs';
 import { isRechargeCheckoutOnly } from './ci-recharge-checkout-scope.mjs';
 import { isRechargeBillingOnly } from './ci-recharge-billing-scope.mjs';
 import {
@@ -245,6 +249,7 @@ const onlineCiBuildTestInputs = new Set([
   'scripts/production-release/online-recharge-component-lifecycle.test.py'
 ]);
 export function needsOnlineRechargeCiBuild(paths, context) {
+  if (isRegistrationBrowserOnly(paths, context)) return false;
   if (isAccountLoginOnly(paths) || isAccountLoginControlsOnly(paths)) return false;
   if (isRegistrationParityDiagnosticsControlRepair(paths, context)) return false;
   if (isRegistrationParityDiagnosticsOnly(paths, context)) return false;
@@ -1027,6 +1032,10 @@ export function isMailboxOnly(paths) {
 }
 
 export function checkMode(paths, oldSchema, newSchema, grantHelperSnapshot, context) {
+  if (isRegistrationBrowserOnly(paths, context))
+    return oldSchema === newSchema ? 'recharge' : 'full';
+  if (paths.includes('scripts/production-release/registration-browser-contract.json'))
+    return 'full';
   if (isAccountLoginControlsOnly(paths)) return oldSchema === newSchema ? 'ci-only' : 'full';
   if (isAccountLoginOnly(paths))
     return accountLoginSchemaMatches(oldSchema, newSchema) ? 'recharge' : 'full';
@@ -1514,6 +1523,7 @@ export function isTargetedOnly(paths, oldSchema, newSchema) {
   );
 }
 export function selectedParts(paths, grantHelperSnapshot, context) {
+  if (isRegistrationBrowserOnly(paths, context)) return [...registrationBrowserParts];
   if (isAccountLoginControlsOnly(paths)) return ['guards'];
   if (isAccountLoginOnly(paths)) return [...accountLoginParts];
   if (isRegistrationParityDiagnosticsControlRepair(paths, context)) return ['guards'];

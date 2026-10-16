@@ -9,15 +9,22 @@ import { AppleMailboxesService } from './apple-mailboxes.service';
 import { RechargeModule } from '../auto-recharge/public-api';
 import { FieldEncryptionService } from '../../common/crypto/field-encryption.service';
 import { AppleMailboxTaskBridgeService } from './apple-mailboxes-task-bridge.service';
+import { BrowserRegistrationController } from './browser-registration.controller';
+import { BrowserRegistrationService } from './browser-registration.service';
 
 @Module({
   imports: [AuditLogsModule, V2AuthModule, IdBusinessV2WorkspaceModule, RechargeModule],
-  controllers: [AutoRegistrationController, AppleMailboxesController],
+  controllers: [
+    AutoRegistrationController,
+    AppleMailboxesController,
+    BrowserRegistrationController
+  ],
   providers: [
     AutoRegistrationService,
     AppleMailboxesService,
     FieldEncryptionService,
-    AppleMailboxTaskBridgeService
+    AppleMailboxTaskBridgeService,
+    BrowserRegistrationService
   ],
   exports: [AutoRegistrationService]
 })

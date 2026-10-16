@@ -493,13 +493,15 @@ class RegistrationFacts(ClosedLoopFacts):
             row.value = json.dumps(data, ensure_ascii=False)
         return True
 
-    def observe(self, email: str, task_uuid: str, **updates: Any) -> dict[str, Any]:
-        with self.transaction() as db:
-            record = self.read(db, email)
-            if record["activeTaskUuid"] != task_uuid:
-                raise HTTPException(409, "注册任务与邮箱占用不一致")
-            record.update(updates)
-            return self.write(db, record)
+    def observe(self, email: str, task_uuid: str, *, db=None, **updates: Any) -> dict[str, Any]:
+        if db is None:
+            with self.transaction() as connection:
+                return self.observe(email, task_uuid, db=connection, **updates)
+        record = self.read(db, email)
+        if record["activeTaskUuid"] != task_uuid:
+            raise HTTPException(409, "注册任务与邮箱占用不一致")
+        record.update(updates)
+        return self.write(db, record)
 
     def registered(self, email: str, task_uuid: str, existing: bool, identity=None):
         with self.transaction() as db:
@@ -624,7 +626,10 @@ class AppleMailboxIntegration:
     def live(self, task_uuid):
         with self.lock:
             job = self.jobs.get(task_uuid)
-            return bool((job is not None and not job.done()) or task_uuid in self.running_threads)
+            context = self.contexts.get(task_uuid)
+            browser_live = bool(context and context.get("browserMode") and not context["cancelled"]
+                and datetime.fromisoformat(context["expiresAt"].replace("Z", "+00:00")) > datetime.now(timezone.utc))
+            return bool(browser_live or (job is not None and not job.done()) or task_uuid in self.running_threads)
 
     def public_record(self, record):
         record = {key: record.get(key, value) for key, value in empty_record(record["email"]).items()}
@@ -815,10 +820,16 @@ class AppleMailboxIntegration:
             return {"taskUuid": task_uuid, "status": status,
                     "logs": [self.redact(line) for line in (task.logs or "").splitlines()],
                     "record": record, "resultKind": task_data["resultKind"],
+                    **({"browserRegistration": self.browser_summary(task_uuid, task_data["browserRegistration"])}
+                       if "browserRegistration" in task_data else {}),
                     **({"flowEvidence": flow} if "flowEvidence" in task_data else {}),
                     **{key: task_data.get(key) for key in PUBLIC_FIELDS}}
 
     def cancel(self, task_uuid):
+        with self.sessions.get_db() as db:
+            _, binding = self.store.task_data(db, task_uuid)
+        if "browserRegistration" in binding:
+            return self.browser.finish(task_uuid, cancelled=True)
         with self.lock:
             context = self.contexts.get(task_uuid)
             if context is None or not self.live(task_uuid):
@@ -830,6 +841,10 @@ class AppleMailboxIntegration:
                     pending["event"].set()
         # Keep the lease until the real executor returns, even after cancellation.
         return {"accepted": True}
+
+    def browser_summary(self, task_uuid, checkpoint):
+        from apple_browser_registration import public_summary
+        return public_summary(checkpoint, live=self.live(task_uuid))
 
     def pending_requests(self):
         with self.lock:
@@ -1282,6 +1297,8 @@ class AppleMailboxIntegration:
             raise HTTPException(409, "原任务仍在执行，请稍后核对")
         with self.sessions.get_db() as db:
             _, checkpoint = self.store.task_data(db, task_uuid)
+            if "browserRegistration" in checkpoint:
+                raise HTTPException(409, "浏览器注册请核对原任务，不能切换协议执行器续接")
             if (self.store.current(db, task_uuid, checkpoint) is None or not checkpoint.get("creationConfirmed")
                     or not checkpoint.get("passwordCheckpoint") or not checkpoint.get("configurationCheckpoint")):
                 raise HTTPException(409, "只有原官网创建确认且检查点完整的任务可以续接授权")
@@ -1497,6 +1514,8 @@ class AppleMailboxIntegration:
                                "startedAt": time.time(), "cancelled": False}
                     integration.contexts[task_uuid] = context
                 context = integration.contexts[task_uuid]
+                if context.get("browserMode"):
+                    raise ValueError("浏览器注册任务不能调用协议执行器")
                 _context.task = context
                 with integration.lock:
                     integration.running_threads.add(task_uuid)
@@ -1525,6 +1544,8 @@ class AppleMailboxIntegration:
                 actor = execution_actor.get()
                 integrations = getattr(self.route, "_id_apple_integrations", [])
                 integration = next((item for item in integrations if task_uuid in item.contexts), None)
+                if integration is not None and integration.contexts[task_uuid].get("browserMode"):
+                    raise ValueError("浏览器注册任务不能调用协议执行器")
                 if integration is None and actor:
                     integration = integrations[-1]
                     integration.generic_actors[task_uuid] = safe_id(actor)
@@ -1546,6 +1567,8 @@ class AppleMailboxIntegration:
 
 def install_apple_mailboxes(app: FastAPI, models, sessions, task_manager, redact):
     integration = AppleMailboxIntegration(models, sessions, task_manager, redact)
+    from apple_browser_registration import install_browser_registration
+    install_browser_registration(app, integration, StartInput, execution_actor)
     base = "/internal/apple-mailboxes"
 
     @app.post(base + "/records")

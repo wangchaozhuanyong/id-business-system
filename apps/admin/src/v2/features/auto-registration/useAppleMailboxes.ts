@@ -9,6 +9,7 @@ import {
 } from '@/v2/composables/useV2Query';
 import { useV2FormDraft, useV2SessionDraft } from '@/v2/composables/useV2SessionDraft';
 import { autoRegistrationApi } from './api';
+import { checkRegistrationConnector, dispatchRegistrationBrowser } from './browser-connector';
 import {
   appleMailboxMarkError,
   appleMailboxRegisterReason,
@@ -68,6 +69,9 @@ export function useAppleMailboxes() {
     ref<string[]>([])
   );
   const taskUuid = useV2SessionDraft('auto-registration:apple:task', () => ref(''));
+  const browserOptions = useV2SessionDraft('auto-registration:apple:browser-options', () =>
+    reactive({ proxyId: '' })
+  );
   let restoredTasks = false;
   const query = useV2ModuleQuery<AppleMailboxPageResult>({
     moduleKey: 'auto-registration',
@@ -251,11 +255,65 @@ export function useAppleMailboxes() {
       });
       if (!canAccess.value) return;
       taskUuid.value = result.taskUuid;
-      feedback.value = '注册任务已提交';
+      feedback.value = '协议注册任务已提交';
       await refreshMailboxes();
     } catch (error) {
       if (canAccess.value) actionError.value = getApiErrorMessage(error);
     } finally {
+      busy.value = false;
+    }
+  }
+  let browserDispatch: AbortController | undefined;
+  async function startBrowser(row: AppleMailboxRow) {
+    if (!canWrite.value || busy.value) return;
+    const reason = appleMailboxRegisterReason(row);
+    if (reason) {
+      actionError.value = reason;
+      return;
+    }
+    busy.value = true;
+    actionError.value = '';
+    feedback.value = '';
+    let taskCreated = false;
+    try {
+      await connectorQuery.refresh();
+      if (!canAccess.value) return;
+      if (connectorQuery.error.value || !connectorQuery.data.value?.ok)
+        throw new Error('自动注册助手未连接，请先打开比特浏览器并启动助手，再检查连接');
+      if (browserOptions.proxyId) {
+        await browserProxyQuery.refresh();
+        if (!canAccess.value) return;
+        if (
+          browserProxyQuery.error.value ||
+          !browserProxyQuery.data.value?.proxies.some((item) => item.id === browserOptions.proxyId)
+        )
+          throw new Error('所选注册代理已变化，请刷新代理选项后重新选择');
+      }
+      const launch = await autoRegistrationApi.startAppleMailboxBrowser({
+        aliasId: row.aliasId,
+        revision: row.revision,
+        ...(browserOptions.proxyId ? { proxyId: browserOptions.proxyId } : {})
+      });
+      taskCreated = true;
+      if (!canAccess.value) return;
+      taskUuid.value = launch.taskUuid;
+      browserDispatch = new AbortController();
+      await dispatchRegistrationBrowser(launch, { signal: browserDispatch.signal });
+      if (!canAccess.value) return;
+      feedback.value = '助手已接收原注册任务，请保留比特浏览器窗口；需要本人验证时请在原窗口完成';
+    } catch (error) {
+      if (canAccess.value)
+        actionError.value = taskCreated
+          ? '任务已保留，但助手接收结果尚未确认；请查看原任务或取消，不要重新注册'
+          : getApiErrorMessage(error);
+    } finally {
+      // The block-local grant never enters reactive state, query caches or drafts.
+      browserDispatch = undefined;
+      if (canAccess.value)
+        await Promise.allSettled([
+          refreshMailboxes(),
+          ...(taskUuid.value ? [taskQuery.refresh()] : [])
+        ]);
       busy.value = false;
     }
   }
@@ -452,6 +510,29 @@ export function useAppleMailboxes() {
   const manualSyncError = computed(() =>
     manualSyncQuery.error.value ? getApiErrorMessage(manualSyncQuery.error.value) : ''
   );
+  const connectorQuery = useV2ModuleQuery({
+    moduleKey: 'auto-registration',
+    scope: 'auto-registration',
+    key: () => createV2QueryKey({ registrationBrowserConnector: true }),
+    enabled: () => canAccess.value,
+    query: ({ signal }) => checkRegistrationConnector({ signal })
+  });
+  const browserProxyQuery = useV2ModuleQuery({
+    moduleKey: 'auto-registration',
+    scope: 'auto-registration',
+    key: () => createV2QueryKey({ registrationBrowserProxies: true }),
+    enabled: () => canAccess.value,
+    query: ({ signal }) => autoRegistrationApi.appleMailboxCandidates({ signal })
+  });
+  const browserProxyError = computed(() =>
+    browserProxyQuery.error.value ? '注册代理选项暂不可用，请刷新后重试' : ''
+  );
+  const connectorError = computed(() =>
+    connectorQuery.error.value ? '自动注册助手未连接，请先打开比特浏览器并启动助手，再检查连接' : ''
+  );
+  watch(canAccess, (allowed) => {
+    if (!allowed) browserDispatch?.abort();
+  });
   const manualSyncDisabledReason = computed(() => {
     if (!canAccess.value) return '请先确认当前登录状态';
     if (manualSyncReadError.value) return manualSyncReadError.value;
@@ -591,6 +672,7 @@ export function useAppleMailboxes() {
   onScopeDispose(() => {
     disposed.value = true;
     clearTaskTimer();
+    browserDispatch?.abort();
   });
 
   return {
@@ -633,6 +715,12 @@ export function useAppleMailboxes() {
     refreshManualSyncPreview,
     syncManualMailboxes,
     start,
+    startBrowser,
+    browserOptions,
+    browserProxyQuery,
+    browserProxyError,
+    connectorQuery,
+    connectorError,
     startBatch,
     syncTask,
     saveLocalAccount,

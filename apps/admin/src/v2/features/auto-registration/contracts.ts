@@ -57,7 +57,28 @@ export type AppleMailboxRegistrationStage =
   | 'oauth'
   | 'identity'
   | 'account_save'
+  | 'manual_verification'
   | 'sync';
+export interface AppleMailboxBrowserRegistration {
+  phase:
+    | 'waiting_for_browser'
+    | 'claimed'
+    | 'browser_opened'
+    | 'email_submitting'
+    | 'password_submitting'
+    | 'email_code_required'
+    | 'profile_required'
+    | 'human_verification_required'
+    | 'official_identity_observed'
+    | 'identity_verifying'
+    | 'completed'
+    | 'failed'
+    | 'cancelled'
+    | 'expired'
+    | 'interrupted';
+  needAction: boolean;
+  profileId?: string;
+}
 export interface AppleMailboxFailure {
   stage: AppleMailboxRegistrationStage;
   errorKind:
@@ -72,6 +93,7 @@ export interface AppleMailboxFailure {
 }
 
 export interface AppleMailboxRecord {
+  browserRegistration?: AppleMailboxBrowserRegistration;
   revision: number;
   registrationStatus: AppleMailboxRegistrationStatus;
   registrationIp: string | null;
@@ -180,6 +202,14 @@ export interface AppleMailboxStartInput extends AppleMailboxRegistrationOptions 
   aliasId?: string;
   revision?: number;
 }
+/** One-use launch grant: transient memory only; never a session draft. */
+export interface AppleMailboxBrowserLaunch {
+  taskUuid: string;
+  record: AppleMailboxRecord;
+  launchToken: string;
+  callbackBaseUrl: string;
+  expiresAt: string;
+}
 export interface AppleMailboxBatchInput extends AppleMailboxRegistrationOptions {
   targets?: AppleMailboxTarget[];
   count: number;
@@ -274,6 +304,7 @@ export interface AppleMailboxFlowEvidence {
 
 export interface AppleMailboxTask {
   flowEvidence?: AppleMailboxFlowEvidence;
+  browserRegistration?: AppleMailboxBrowserRegistration;
   taskUuid: string;
   status: AppleMailboxTaskStatus;
   logs: string[];

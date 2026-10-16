@@ -70,7 +70,12 @@ export class AutoRegistrationService implements OnModuleInit, OnModuleDestroy {
     };
   }
 
-  async appleMailboxRequest<T = unknown>(path: string, method = 'GET', body?: unknown): Promise<T> {
+  async appleMailboxRequest<T = unknown>(
+    path: string,
+    method = 'GET',
+    body?: unknown,
+    operatorId?: string
+  ): Promise<T> {
     if (!/^\/internal\/apple-mailboxes(?:\/[a-z0-9-]+)*$/.test(path)) throw this.unavailable();
     await this.start();
     let response: globalThis.Response;
@@ -79,11 +84,16 @@ export class AutoRegistrationService implements OnModuleInit, OnModuleDestroy {
         method,
         headers: {
           'X-ID-Workspace-Token': this.internalToken,
+          ...(operatorId ? { 'X-ID-Workspace-Operator-Id': operatorId } : {}),
           'Content-Type': 'application/json'
         },
         body: body === undefined ? undefined : JSON.stringify(body),
         redirect: 'error',
-        signal: AbortSignal.timeout(20_000)
+        signal: AbortSignal.timeout(
+          /^\/internal\/apple-mailboxes\/browser\/tasks\/[a-f0-9-]{36}\/result$/.test(path)
+            ? 60_000
+            : 20_000
+        )
       });
     } catch {
       throw this.unavailable();
