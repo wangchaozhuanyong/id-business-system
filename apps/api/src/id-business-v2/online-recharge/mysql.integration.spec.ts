@@ -206,7 +206,18 @@ suite('线上代充隔离MySQL事务验收', () => {
       },
       operator
     );
-    const saved = await settings.update({ version: 0, planRegionRoutingEnabled: true }, operator);
+    const initial = await settings.get();
+    await expect(
+      settings.update(
+        { version: Number(initial.version) - 1, planRegionRoutingEnabled: true },
+        operator
+      )
+    ).rejects.toThrow('设置已变化');
+    expect((await settings.get()).version).toBe(initial.version);
+    const saved = await settings.update(
+      { version: initial.version, planRegionRoutingEnabled: true },
+      operator
+    );
     for (const [plan, region, currency] of [
       ['plus', 'PH', 'PHP'],
       ['pro_5x', 'CL', 'CLP'],
