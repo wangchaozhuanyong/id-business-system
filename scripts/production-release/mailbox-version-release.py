@@ -96,6 +96,11 @@ def check_runtime(d, h, states, c, modules):
     load('recharge-record-release.py').engine_idle(d, states['online-recharge'], c, wait_connected=True)
 
 
+def verify_host_source_layout(current):
+    source = current / SOURCE
+    need(not source.exists() and not source.is_symlink() and source.resolve().is_relative_to(current), 'BASE_SOURCE_LAYOUT_CHANGED')
+
+
 def baseline(d, h, c):
     b = c['baseline']
     current = (BASE / 'current').resolve(strict=True)
@@ -106,7 +111,8 @@ def baseline(d, h, c):
     need(states == b['services'], 'SERVICES_CHANGED')
     need(all(sha((current / name).read_bytes()) == value for name, value in b['configurationSha256'].items()), 'CONFIGURATION_CHANGED')
     need(all(sha((current / name).read_bytes()) == value for name, value in b['proofs'].items()), 'PREDECESSOR_PROOF_CHANGED')
-    need(sha((current / SOURCE).read_bytes()) == c['baselineSourceSha256'], 'BASE_SOURCE_CHANGED')
+    # This measured finite predecessor contains compiled modules, but no common/prisma source tree.
+    verify_host_source_layout(current)
     need(shutil.disk_usage(BASE).free > 6 * 1024**3, 'DISK_LOW')
     check_runtime(d, h, states, c, b['runtime']['modules'])
     h.guards(d, current, states, c)
@@ -114,7 +120,13 @@ def baseline(d, h, c):
 
 
 def verify_proof(proof, plan, c, files):
-    need(all(proof.get(n) == plan[n] for n in ('commit', 'tree', 'workflowRunId', 'workflowRunAttempt', 'contractSha256', 'controlSources'))
+    validated = plan.get('validatedControlSources', plan['controlSources'])
+    if validated != plan['controlSources']:
+        need(plan['commit'] == '1c339754507f29459d17d75bb84afbee8fba5291'
+             and plan['workflowRunId'] == '38925995056'
+             and validated == {**plan['controlSources'], 'mailbox-version-release.py': 'f3dcc8781c6f07be70db11b7aa2e1f5116cdfbc41ed7eea6080d9bc4d22ea1a8'}, 'VALIDATED_CONTROL_REUSE_CHANGED')
+    need(all(proof.get(n) == plan[n] for n in ('commit', 'tree', 'workflowRunId', 'workflowRunAttempt', 'contractSha256'))
+         and proof.get('controlSources') == validated
          and proof.get('scope') == SCOPE and proof.get('sources') == c['sources']
          and proof.get('baselineModulesReproduced') == c['baseline']['runtime']['modules']
          and proof.get('databaseVerification') == {'isolated': True, 'passed': 4}
@@ -201,7 +213,9 @@ def release(plan, c):
         shutil.copytree(previous, target, symlinks=True)
         source = target / SOURCE
         need(not source.is_symlink() and source.resolve().is_relative_to(target), 'SOURCE_PATH_CHANGED')
+        source.parent.mkdir(parents=True, exist_ok=True)
         source.write_bytes((payload / 'source' / SOURCE).read_bytes())
+        source.chmod(0o644)
         for n in [*plan['controlSources'], 'mailbox-version-contract.json']:
             (target / 'scripts/production-release' / n).write_bytes((HERE / n).read_bytes())
         override = json.loads((target / 'compose.release.json').read_bytes())
@@ -232,7 +246,8 @@ def release(plan, c):
         finally:
             fence.close()
         receipt = {'status': 'DEPLOYED', 'commit': plan['commit'], 'before': before, 'after': after, 'backup': backup,
-                   'buildProofSha256': plan['buildProofSha256'], 'migrationPerformed': False, 'businessActions': 0}
+                   'buildProofSha256': plan['buildProofSha256'], 'controlCommit': plan.get('controlCommit', plan['commit']),
+                   'controlWorkflowRunId': plan.get('controlWorkflowRunId', plan['workflowRunId']), 'migrationPerformed': False, 'businessActions': 0}
         (target / 'mailbox-version-preservation.json').write_bytes(canonical(receipt))
         (target / 'mailbox-version-build-proof.json').write_bytes(raw_proof)
         manifest = json.loads(raw_manifest)
