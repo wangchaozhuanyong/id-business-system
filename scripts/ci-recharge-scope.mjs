@@ -4264,6 +4264,8 @@ async function main() {
       if (
         requestedBaseIsAncestor &&
         ((isGptRechargeOnly(salesPaths) && salesBefore === salesAfter) ||
+          ((isOnlineSettingsOnly(salesPaths) || isOnlineSettingsControlsOnly(salesPaths)) &&
+            salesBefore === salesAfter) ||
           (isAccountLoginControlsOnly(salesPaths) && salesBefore === salesAfter) ||
           (isAccountLoginOnly(salesPaths) && accountLoginSchemaMatches(salesBefore, salesAfter)) ||
           (isChatgptSalesOnly(salesPaths) && chatgptSalesSchemaMatches(salesBefore, salesAfter)) ||
