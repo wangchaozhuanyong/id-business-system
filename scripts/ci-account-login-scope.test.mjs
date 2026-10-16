@@ -5,6 +5,7 @@ import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import {
   accountLoginPaths,
+  isAccountLoginControlsOnly,
   accountLoginParts,
   isAccountLoginOnly,
   accountLoginSchemaMatches,
@@ -75,4 +76,18 @@ test('shared CI dispatch selects all affected parts and refuses unrelated paths'
     checkMode([...accountLoginPaths, 'apps/api/src/auth/unauthorized.ts'], before, after),
     'full'
   );
+});
+
+test('publication repair is control only and cannot admit business or schema edits', () => {
+  const paths = [
+    'scripts/production-release/account-login-release.py',
+    'scripts/ci-recharge-scope.mjs'
+  ];
+  assert.equal(isAccountLoginControlsOnly(paths), true);
+  assert.equal(checkMode(paths, 'same', 'same'), 'ci-only');
+  assert.equal(checkMode(paths, 'before', 'after'), 'full');
+  assert.deepEqual(selectedParts(paths), ['guards']);
+  assert.equal(isAccountLoginControlsOnly([...paths, 'apps/api/src/auth/auth.service.ts']), false);
+  assert.equal(needsOnlineRechargeCiBuild(paths), false);
+  assert.throws(() => accountLoginCommands('api', paths));
 });

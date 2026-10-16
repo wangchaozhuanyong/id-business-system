@@ -17,6 +17,8 @@ def load(name):
 r = load('account-login-release.py')
 b = load('account-login-build.py')
 c = json.loads((HERE / 'account-login-contract.json').read_bytes())
+TEST_TMP = HERE.parents[1] / '.runtime/account-login-release-tests'
+TEST_TMP.mkdir(parents=True, exist_ok=True)
 
 class AccountReleaseTests(unittest.TestCase):
     def test_source_and_reconstruction_hashes_are_frozen(self):
@@ -58,7 +60,7 @@ class AccountReleaseTests(unittest.TestCase):
 
     def test_backfill_preserves_receipt_and_requires_empty_final_preview(self):
         d=Mock(); d.compose.side_effect=[json.dumps({'apply':False,'candidates':37,'updated':0,'conflicts':0}),json.dumps({'apply':True,'candidates':37,'updated':37,'conflicts':0}),json.dumps({'apply':False,'candidates':0,'updated':0,'conflicts':0})]
-        with tempfile.TemporaryDirectory() as directory:
+        with tempfile.TemporaryDirectory(dir=TEST_TMP) as directory:
             result=r.run_backfill(d,Path('/fixture'),Path(directory))
             self.assertEqual(result['phase'],'VERIFIED')
             self.assertEqual(result['applied']['updated'],37)
@@ -66,9 +68,23 @@ class AccountReleaseTests(unittest.TestCase):
 
     def test_backfill_conflict_stops_without_retry(self):
         d=Mock(); d.compose.return_value=json.dumps({'apply':False,'candidates':37,'updated':0,'conflicts':1})
-        with tempfile.TemporaryDirectory() as directory:
+        with tempfile.TemporaryDirectory(dir=TEST_TMP) as directory:
             with self.assertRaises(RuntimeError):r.run_backfill(d,Path('/fixture'),Path(directory))
         self.assertEqual(d.compose.call_count,1)
+
+    def test_every_runtime_module_and_new_js_absence_remain_strict(self):
+        helper=Mock()
+        before={'a.js':'old','a.d.ts':'metadata','a.js.map':'debug','new.js':None}
+        r.verify_baseline_api(Mock(),Path('/fixture'),{'baselineRuntimeApiFiles':{'a.js':'old'}},{'baselineApiFiles':before},helper)
+        self.assertEqual(helper.verify_modules.call_args_list[0].args[-1],{'a.js':'old'})
+        self.assertEqual(helper.verify_modules.call_args_list[1].args[-1],{'a.js':'old','new.js':None})
+        helper.verify_modules.side_effect=RuntimeError('runtime changed')
+        with self.assertRaises(RuntimeError): r.verify_baseline_api(Mock(),Path('/fixture'),c,{'baselineApiFiles':before},helper)
+
+    def test_reuse_is_limited_to_the_successful_native_validator(self):
+        dispatch=load('account-login-dispatch.py')
+        with unittest.mock.patch.dict(dispatch.os.environ,{'VALIDATED_RUN':'arbitrary'}):
+            with self.assertRaisesRegex(RuntimeError,'REUSE_SELECTION_INVALID'):dispatch.prepare_reused_plan()
 
     def test_runtime_configuration_does_not_change(self):
         r.verify_image_configuration({'Env':['a=b'],'Image':'','Labels':{}},{'Env':['a=b'],'Image':'','Labels':{'new':'proof'}})
