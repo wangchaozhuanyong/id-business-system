@@ -2,7 +2,10 @@ import { describe, expect, it, vi } from 'vitest';
 import { restoreRechargeAccount } from './recharge-account-restore';
 import { findOriginalRechargeCheckout } from './recharge-job-helpers';
 import { RechargeRepository } from './persistence/recharge.repository';
-import { isUnidentifiedUnpaidCheckout } from './recharge-unidentified-checkout';
+import {
+  findUnidentifiedCheckoutSource,
+  isUnidentifiedUnpaidCheckout
+} from './recharge-unidentified-checkout';
 import { safeDocument } from './recharge-validation';
 
 const accountKey = 'a'.repeat(64);
@@ -45,6 +48,7 @@ function fixture() {
       .fn()
       .mockResolvedValue({ sourceJobId: sourceId, profileId, accountKey }),
     findJob: vi.fn().mockResolvedValue(previous),
+    finishedJobsForAccount: vi.fn().mockResolvedValue([previous]),
     updateJob: vi.fn(),
     restoreCheckoutIdentifier: actual.restoreCheckoutIdentifier,
     originalCheckoutForAccount: actual.originalCheckoutForAccount
@@ -83,6 +87,125 @@ describe('unidentified original checkout discovery', () => {
     expect(result.originalCheckoutIdentifier).toBeUndefined();
     expect(result.ownedProfile?.profileId).toBe(profileId);
     expect(repository.updateJob).toHaveBeenCalledOnce();
+  });
+  const login = (id: string, profile: string, parent?: string, verified = true) => ({
+    ...source(),
+    id,
+    result: {
+      mode: 'open_browser',
+      status: verified ? 'session_ready' : 'blocked',
+      account_matched: verified,
+      payment_attempted: false,
+      payment_requests_sent: 0,
+      browser_profile_id: profile,
+      ...(parent
+        ? { browser_profile_missing_confirmed: true, replaced_browser_profile_id: parent }
+        : {})
+    }
+  });
+  const loginId = '44444444-4444-4444-8444-444444444444';
+  const replacement = 'd'.repeat(32);
+  const latest = 'e'.repeat(32);
+
+  it('finds the checkout source after another login retained the same window', async () => {
+    const { input, previous, repository } = fixture();
+    const loggedIn = login(loginId, profileId);
+    repository.findJob.mockResolvedValue(loggedIn as never);
+    repository.retainedProfileForAccount.mockResolvedValue({
+      sourceJobId: loginId,
+      profileId,
+      accountKey
+    });
+    repository.finishedJobsForAccount.mockResolvedValue([loggedIn, previous] as never);
+    const result = await restoreRechargeAccount(input as never);
+    expect(result.unidentifiedCheckoutRecovery).toBe(true);
+    expect(result.originalCheckoutIdentifier).toBeUndefined();
+    expect(result.ownedProfile?.sourceJobId).toBe(loginId);
+  });
+
+  it('recovers through confirmed replacements only after every replacement identity is verified', async () => {
+    const { input, previous, repository } = fixture();
+    const firstAttempt = login(
+      '55555555-5555-4555-8555-555555555555',
+      replacement,
+      profileId,
+      false
+    );
+    const firstReady = login('66666666-6666-4666-8666-666666666666', replacement);
+    const lastReady = login(loginId, latest, replacement);
+    const history = [lastReady, firstReady, firstAttempt, previous];
+    repository.findJob.mockResolvedValue(lastReady as never);
+    repository.retainedProfileForAccount.mockResolvedValue({
+      sourceJobId: loginId,
+      profileId: latest,
+      accountKey
+    });
+    repository.finishedJobsForAccount.mockResolvedValue(history as never);
+    const result = await restoreRechargeAccount(input as never);
+    expect(result.unidentifiedCheckoutRecovery).toBe(true);
+    expect(result.ownedProfile?.profileId).toBe(latest);
+    expect(result.originalCheckoutIdentifier).toBeUndefined();
+    expect(input.tx.idBusinessV2RechargeJob.findMany).toHaveBeenCalled();
+  });
+
+  it.each([
+    'missing-link',
+    'unverified',
+    'other-owner',
+    'other-account',
+    'payment',
+    'conflicting-parent',
+    'cycle'
+  ])('does not grant replacement discovery for %s', (kind) => {
+    const edge = login(loginId, replacement, profileId);
+    const history = [edge, source()];
+    if (kind === 'missing-link') delete edge.result.replaced_browser_profile_id;
+    if (kind === 'unverified') edge.result.account_matched = false;
+    if (kind === 'other-owner') edge.ownerId = 'other';
+    if (kind === 'other-account') edge.accountKey = 'c'.repeat(64);
+    if (kind === 'payment') edge.result.payment_attempted = true;
+    if (kind === 'conflicting-parent')
+      history.push(login('77777777-7777-4777-8777-777777777777', replacement, latest));
+    if (kind === 'cycle') edge.result.replaced_browser_profile_id = replacement;
+    expect(
+      findUnidentifiedCheckoutSource(history, 'owner', accountKey, 'plus', replacement)
+    ).toBeUndefined();
+  });
+
+  it('does not choose between two unidentified original checkout attempts', () => {
+    expect(
+      findUnidentifiedCheckoutSource(
+        [
+          login(loginId, profileId),
+          source(),
+          { ...source(), id: '77777777-7777-4777-8777-777777777777' }
+        ],
+        'owner',
+        accountKey,
+        'plus',
+        profileId
+      )
+    ).toBeUndefined();
+  });
+
+  it('rejects truncated history instead of assuming a unique checkout source', async () => {
+    const { input, previous, repository } = fixture();
+    const loggedIn = login(loginId, profileId);
+    repository.findJob.mockResolvedValue(loggedIn as never);
+    repository.finishedJobsForAccount.mockResolvedValue([
+      loggedIn,
+      previous,
+      ...Array(28).fill(loggedIn)
+    ]);
+    await expect(restoreRechargeAccount(input as never)).rejects.toThrow();
+    expect(repository.updateJob).not.toHaveBeenCalled();
+  });
+
+  it('rejects a checkout record for another plan', async () => {
+    const { input, records, repository } = fixture();
+    records[0]!.document.target_plan = 'pro-5x';
+    await expect(restoreRechargeAccount(input as never)).rejects.toThrow();
+    expect(repository.updateJob).not.toHaveBeenCalled();
   });
   it.each(['owner', 'account', 'profile', 'payment', 'record'])(
     'rejects discovery when the %s binding is wrong',
