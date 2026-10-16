@@ -39,7 +39,11 @@ export class OnlineRechargeAdminRepository {
       const [tasks, codes, cards, billing, active, rechargeTasks, confirmedRechargeCount] =
         await Promise.all([
           db.onlineRechargeTask.groupBy({ by: ['status'], _count: true }),
-          db.onlineRechargeCode.groupBy({ by: ['status'], _count: true }),
+          db.onlineRechargeCode.groupBy({
+            by: ['status'],
+            where: { deletedAt: null },
+            _count: true
+          }),
           db.onlineRechargeCard.groupBy({ by: ['status'], _count: true }),
           db.onlineRechargeBill.groupBy({
             by: ['currency'],

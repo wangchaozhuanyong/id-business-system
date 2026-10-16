@@ -15,6 +15,7 @@ import { OnlineRechargeArtifactsService } from '../artifacts.service';
 import { FieldEncryptionService } from '../../../common/crypto/field-encryption.service';
 import { id, object, text } from '../validation';
 import { onlineProxyCountry } from '../proxy-input';
+import { runtimePlanRegion } from '../plan-region';
 
 export function secureEqual(left: unknown, right: string | undefined) {
   if (typeof left !== 'string' || !right || right.length < 32) return false;
@@ -92,17 +93,45 @@ export class OnlineRechargeWorkerRpcRepository {
             browserPool: { enabled: config.browserMode === 'pool', size: config.browserPoolSize }
           };
         }
-        await this.workers.withLease(rpc, async (tx, row) => {
+        const task = await this.workers.withLease(rpc, async (tx, row) => {
           await this.repository.log(tx, 'worker.config.credentials', undefined, row.id);
+          return row;
         });
-        return this.settings.runtime();
+        const config = await this.settings.runtime();
+        const route = runtimePlanRegion(
+          task.payload ? object(task.payload) : {},
+          task.plan,
+          task.operation,
+          config
+        );
+        return route
+          ? {
+              ...config,
+              region: route.paymentRegion,
+              paymentRegion: route.paymentRegion,
+              proxyCountryCode: route.proxyCountryCode,
+              planRegion: route,
+              gptApi: {
+                ...config.gptApi,
+                country: route.paymentRegion,
+                currency: route.expectedCurrency
+              }
+            }
+          : config;
       }
       case 'getCardPolicy':
         await this.assertLease(rpc);
         return this.settings.cardPolicy();
       case 'getPaymentRegion':
-        await this.assertLease(rpc);
-        return (await this.settings.internal()).settings.paymentRegion;
+        return this.workers.withLease(rpc, async (_tx, row) => {
+          const { settings } = await this.settings.internal();
+          const payload = row.payload ? object(row.payload) : {};
+          return (
+            runtimePlanRegion(payload, row.plan, row.operation, settings)?.paymentRegion ??
+            payload.region ??
+            settings.paymentRegion
+          );
+        });
       case 'verifyCdkDetails':
         return this.workers.withLease(rpc, async (tx, row) => {
           const code = row.codeId

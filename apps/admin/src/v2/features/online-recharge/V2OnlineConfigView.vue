@@ -1,6 +1,7 @@
 <template>
   <section v-if="canRead" class="v2-page-layout online-page">
-    <V2PageContext description="按原软件保存执行与供应商配置；密钥默认隐藏，留空保留已保存值。"
+    <V2PageContext
+      description="点击标题或配置项右侧的小问号查看说明。修改后请保存；密钥留空保留已保存值。"
       ><template #actions
         ><AppButton v-if="canManage" variant="primary" :loading="saving" @click="save"
           >保存配置</AppButton
@@ -20,7 +21,7 @@
       @retry="query.refresh"
     >
       <section v-for="group in visibleGroups" :key="group.key" class="online-panel">
-        <V2SectionHeading :title="group.title"
+        <V2SectionHeading :title="group.title" :help="group.help" placement="bottom"
           ><template #actions
             ><AppButton
               v-for="test in canManage ? (group.tests ?? []) : []"
@@ -48,7 +49,11 @@
             :label="field.label"
             :prop="field.key"
             :required="field.required"
-            ><div class="online-field">
+            ><template #label>
+              <span>{{ field.label }}</span>
+              <FeatureHelp :title="field.label" :text="field.explanation" placement="bottom" />
+            </template>
+            <div class="online-field">
               <el-switch
                 v-if="field.type === 'switch'"
                 :model-value="Boolean(draft.form[field.key])"
@@ -101,6 +106,7 @@ import { sessionCoordinator } from '@/auth/sessionCoordinator';
 import { canUseOnlineAction } from './permissions';
 import { getApiErrorMessage } from '@/api/client';
 import AppButton from '@/components/ui/AppButton.vue';
+import FeatureHelp from '@/components/ui/FeatureHelp.vue';
 import V2PageContext from '@/v2/components/V2PageContext.vue';
 import V2AsyncRegion from '@/v2/components/V2AsyncRegion.vue';
 import V2SectionHeading from '@/v2/components/V2SectionHeading.vue';
@@ -110,6 +116,7 @@ import { validateV2Form } from '@/v2/utils/formValidation';
 import { proxyPoolApi, proxyCountryLabel } from '@/v2/features/proxy-pool/public-api';
 import { onlineApi, copyOnlineText } from './api';
 import { configGroups } from './configFields';
+import { paymentCurrencyLabels } from './planRegionFields';
 import { onlineError } from './labels';
 import { initialFields } from './sections';
 import OnlineResultDialog from './OnlineResultDialog.vue';
@@ -174,14 +181,21 @@ const visibleGroups = computed(() =>
     fields: group.fields.map((field) => ({
       ...field,
       saved: secretSaved(field.key),
+      ...(field.key.startsWith('planPaymentRegion')
+        ? {
+            help: `预期结算币种：${paymentCurrencyLabels[String(draft.form[field.key])] ?? '未选择'}。付款前会核对官网真实币种与应付金额；不一致时暂停。`
+          }
+        : {}),
       emptyText:
-        field.key === 'proxyCountryCode' ? '暂无启用代理，请先在代理 IP 管理中添加' : '暂无选项',
-      ...(field.key === 'proxyCountryCode'
+        field.key === 'proxyCountryCode' || field.key.startsWith('planProxyCountry')
+          ? '暂无启用代理，请先在代理 IP 管理中添加'
+          : '暂无选项',
+      ...(field.key === 'proxyCountryCode' || field.key.startsWith('planProxyCountry')
         ? {
             options: [
               ...new Set([
                 ...(query.data.value?.proxyCountries ?? []),
-                ...(draft.form.proxyCountryCode ? [String(draft.form.proxyCountryCode)] : [])
+                ...(draft.form[field.key] ? [String(draft.form[field.key])] : [])
               ])
             ].map((value) => ({ value, label: proxyCountryLabel(value) }))
           }

@@ -67,6 +67,7 @@
   </V2ConfirmDialog>
 </template>
 <script setup lang="ts">
+import { proxyCountryLabel } from '@/v2/features/proxy-pool/public-api';
 import { computed, onBeforeUnmount, ref, watch } from 'vue';
 import V2ConfirmDialog from '@/v2/components/V2ConfirmDialog.vue';
 import AppButton from '@/components/ui/AppButton.vue';
@@ -89,6 +90,7 @@ const labels: Record<string, string> = {
   stage: '执行阶段',
   plan: '套餐',
   subscriptionChange: '套餐变更与官网报价',
+  planRegion: '本次套餐地区',
   sourcePlan: '变更前套餐',
   targetPlan: '目标套餐',
   kind: '开通方式',
@@ -276,6 +278,10 @@ const entries = computed(() => {
     }));
 });
 function displayValue(key: string, value: unknown): string {
+  if (key === 'planRegion' && value && typeof value === 'object') {
+    const route = value as Record<string, unknown>;
+    return `代理国家：${proxyCountryLabel(String(route.proxyCountryCode ?? ''))}\n支付地区：${proxyCountryLabel(String(route.paymentRegion ?? ''))}\n预期结算币种：${String(route.expectedCurrency ?? '—')}\n规则版本：${String(route.configVersion ?? '—')}`;
+  }
   if (key === 'subscriptionChange')
     return onlineChangeEntries({ subscriptionChange: value })
       .map((entry) => `${entry.label}：${entry.value}`)

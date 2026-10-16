@@ -154,12 +154,25 @@ const registrationSalesPaths = [
   'apps/api/src/id-business-v2/auto-recharge/bank-recharge-account-list.ts',
   'apps/api/src/id-business-v2/auto-recharge/bank-recharge.controller.ts'
 ];
+const registrationAdvancedPaths = [
+  'apps/admin/src/v2/features/customers/useCustomersPage.ts',
+  'apps/api/src/id-business-v2/auto-recharge/recharge.module.ts',
+  'apps/api/src/id-business-v2/auto-recharge/bank-recharge-mysql.integration.spec.ts',
+  'apps/api/src/id-business-v2/auto-recharge/persistence/bank-recharge.repository.ts',
+  'apps/admin/src/v2/features/online-recharge/OnlineResultDialog.vue',
+  'apps/api/src/id-business-v2/online-recharge/engine/confirmation.cjs',
+  'apps/api/src/id-business-v2/online-recharge/engine/plans.cjs',
+  'apps/api/src/id-business-v2/online-recharge/persistence/admin.repository.ts',
+  'apps/api/src/id-business-v2/online-recharge/persistence/worker.repository.spec.ts',
+  'apps/api/src/id-business-v2/online-recharge/persistence/worker.repository.ts'
+];
 const registrationSourceFixtures = Object.fromEntries(
   [
     registrationManifestPath,
     ...registrationLayoutPaths,
     ...registrationCountryPaths,
-    ...registrationSalesPaths
+    ...registrationSalesPaths,
+    ...registrationAdvancedPaths
   ].map((path) => [
     path,
     execFileSync('git', ['show', registrationPublishedHead + ':' + path]).toString('utf8')
@@ -5951,4 +5964,14 @@ test('proxy-result identity source remains application scope and rejects schema 
     checkMode([...paths, 'apps/api/src/auth/auth.service.ts'], schema, schema, undefined, context),
     'full'
   );
+});
+
+test('historical recovery never accepts advanced main or online settings source bytes', () => {
+  const paths = [registrationPublishedBindingPath, ...registrationAdvancedPaths];
+  assert.equal(registrationPublishedRecoveryProof(paths), true);
+  for (const changed of registrationAdvancedPaths) {
+    const readSource = (path) =>
+      path === changed ? actualReadFileSync(path) : readRegistrationFixture(path);
+    assert.equal(registrationPublishedRecoveryProof(paths, { readSource }), false, changed);
+  }
 });

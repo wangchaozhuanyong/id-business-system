@@ -47,6 +47,7 @@ function evaluateSubscription(targetPlan, expectedAccountId, result, options = {
     observedPlan,
     observedCanonicalPlan: canonicalPlan,
     tierVerified: Boolean(canonicalPlan),
+    ...(typeof data.expiresAt === 'string' ? { expiresAt: data.expiresAt } : {}),
     currency:
       result?.ok === true &&
       Boolean(expectedAccountId) &&
@@ -62,9 +63,17 @@ function evaluateSubscription(targetPlan, expectedAccountId, result, options = {
   };
 }
 function resolvePaymentCurrency(preflight, configuredCurrency, { debugOnly = false } = {}) {
+  const expected = String(process.env.PLAN_REGION_EXPECTED_CURRENCY || '');
+  const checked = (currency) => {
+    if (expected && currency !== expected)
+      throw new Error(
+        `套餐地区要求 ${expected}，官网原订阅币种为 ${currency || '未知'}，本次未提交付款`
+      );
+    return currency;
+  };
   if (preflight?.allowed !== true || !['initial', 'upgrade'].includes(preflight.kind))
     throw new Error('付款前账号或套餐核验未通过');
-  if (preflight.kind === 'initial') return configuredCurrency;
+  if (preflight.kind === 'initial') return checked(configuredCurrency);
   const confirmation = preflight.confirmation;
   const currency = confirmation?.currency;
   if (
@@ -73,8 +82,8 @@ function resolvePaymentCurrency(preflight, configuredCurrency, { debugOnly = fal
     confirmation.accountId === confirmation.expectedAccountId &&
     /^[A-Z]{3}$/.test(String(currency || ''))
   )
-    return currency;
-  if (debugOnly) return null;
+    return checked(currency);
+  if (debugOnly && !expected) return null;
   throw new Error('无法核实原订阅币种，本次未提交付款');
 }
 async function confirmSubscription(targetPlan, token, injected = {}) {

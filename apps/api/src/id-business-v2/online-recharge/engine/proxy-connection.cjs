@@ -153,7 +153,9 @@ function parseExtracted(raw, protocol) {
   if (
     typeof value !== 'string' ||
     value.length > 2048 ||
-    Array.from(value.trim()).some((char) => char.charCodeAt(0) <= 32 || char.charCodeAt(0) === 127)
+    Array.from(value.trim()).some(
+      (character) => character.charCodeAt(0) <= 0x20 || character === '\x7f'
+    )
   )
     throw new Error('代理提取响应无效');
   value = value.trim();

@@ -264,6 +264,7 @@ function thirdFixture(
       store,
       sleep: async () => {},
       beforeSubmit: async () => {},
+      preflight: async () => ({ allowed: true }),
       confirm: async () => ({ verified: true, source: 'subscription', targetPlan: 'pro_5x' })
     }
   };
@@ -469,7 +470,12 @@ test('browser management validation failure does not become an unknown payment',
     return { ok: true };
   });
   await require('../worker.cjs').runJob(
-    { ...task(), operation: 'browser_manage', payload: { action: 'invalid' } },
+    {
+      ...task(),
+      operation: 'browser_manage',
+      payload: { action: 'invalid' },
+      leaseExpiresAt: new Date(Date.now() + 90000).toISOString()
+    },
     { browserPool: { enabled: false, size: 2 } }
   );
   assert.equal(finish.status, 'failed');
@@ -562,3 +568,102 @@ test('private CVC service returns availability only, binds task ownership, clear
     await service.close();
   }
 });
+
+for (const response of [
+  { order_id: 'other-order', task_id: 'provider-task' },
+  { order_id: 'provider-order', task_id: 'other-task' },
+  {}
+])
+  test(`third party failed response must identify the original order: ${JSON.stringify(response)}`, async () => {
+    rpc.configureTask(task());
+    rpc.setTransportForTest(async () => ({ ok: true }));
+    const fixture = thirdFixture('failed');
+    let releases = 0;
+    let declines = 0;
+    fixture.injected.beforeSubmit = rpc.beforeExternalSubmit;
+    fixture.injected.store.releaseCard = async () => {
+      releases++;
+    };
+    fixture.injected.store.recordCardDecline = async () => {
+      declines++;
+    };
+    fixture.injected.client.queryTask = async () => ({
+      success: true,
+      rawStatus: 'failed',
+      data: { ...response, result: { ok: false, error: 'card_declined' } }
+    });
+    const result = await executeThirdParty(
+      task(),
+      { gptApi: {}, gptApiMaxPolls: 1 },
+      fixture.injected
+    );
+    assert.equal(result.resultUnknown, true);
+    assert.notEqual(result.definitiveFailure, true);
+    assert.equal(fixture.calls.submit, 1);
+    assert.equal(fixture.calls.reserve, 1);
+    assert.equal(fixture.calls.usage, 0);
+    assert.equal(releases, 0);
+    assert.equal(declines, 0);
+    assert.equal(rpc.wasSubmitted(), true);
+  });
+
+test('a matching original supplier failure remains a definitive failure', async () => {
+  const fixture = thirdFixture('failed');
+  fixture.injected.client.queryTask = async () => ({
+    success: true,
+    rawStatus: 'failed',
+    data: { order_id: 'provider-order', task_id: 'provider-task', result: { ok: false } }
+  });
+  const result = await executeThirdParty(
+    task(),
+    { gptApi: {}, gptApiMaxPolls: 1 },
+    fixture.injected
+  );
+  assert.equal(result.definitiveFailure, true);
+  assert.notEqual(result.resultUnknown, true);
+  assert.equal(fixture.calls.submit, 1);
+});
+
+for (const data of [{}, { order_id: 'other-order' }, { task_id: 'other-task' }])
+  test(`recheck cannot release an original order without matching identity: ${JSON.stringify(data)}`, async () => {
+    const t = {
+      ...task(),
+      payload: {
+        recheckTaskId: 'original',
+        originalProvider: 'third_party',
+        providerOrderId: 'original-order',
+        providerTaskId: 'original-task'
+      }
+    };
+    let subscriptionReads = 0;
+    const result = await recheck(
+      t,
+      {},
+      {
+        client: { queryTask: async () => ({ success: true, rawStatus: 'failed', data }) },
+        query: async () => {
+          subscriptionReads++;
+          return { ok: true, data: {} };
+        }
+      }
+    );
+    assert.equal(result.resultUnknown, true);
+    assert.notEqual(result.definitiveFailure, true);
+    assert.equal(subscriptionReads, 0);
+  });
+
+for (const result of [
+  { allowed: false, alreadyActive: true, error: 'Synthetic already active' },
+  { allowed: false, alreadyActive: false, error: 'Synthetic account mismatch' }
+])
+  test(`third party cannot submit for failed subscription preflight: ${result.alreadyActive}`, async () => {
+    const fixture = thirdFixture('success');
+    fixture.injected.preflight = async () => result;
+    const out = await executeThirdParty(task(), { gptApi: {} }, fixture.injected);
+    assert.equal(out.success, false);
+    assert.equal(out.submitted, false);
+    assert.equal(out.alreadyActive, result.alreadyActive);
+    assert.equal(fixture.calls.submit, 0);
+    assert.equal(fixture.calls.reserve, 0);
+    assert.equal(fixture.calls.billing, 0);
+  });

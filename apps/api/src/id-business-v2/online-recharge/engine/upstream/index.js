@@ -56,7 +56,7 @@ const CONFIG = {
 const RECORD_VIDEO = String(process.env.RECORD_VIDEO || '1') !== '0';
 const VIDEO_DIR = path.join(__dirname, 'debug_screenshots', 'videos');
 const VIDEO_TAG = (process.env.JOB_KEY || process.env.CDK_CODE || `${Date.now()}`).replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 32) || `${Date.now()}`;
-const DEBUG_PAYMENT_BUTTON_PATTERNS = [/^Subscribe$/i, /^订阅$/, /^立即支付$/, /^Pay now$/i];
+const DEBUG_PAYMENT_BUTTON_PATTERNS = [/^Subscribe$/i, /^订阅$/, /^立即支付$/, /^Pay now$/i, /^Upgrade to Pro$/i];
 
 const waitForDebugPaymentStep = async (page, timeout = 60000) => {
     const deadline = Date.now() + timeout;
@@ -166,6 +166,7 @@ async function run() {
     let context = null;
     let page = null;
     let paymentSucceeded = false;
+    let lastPaymentResult = null;
 
     const preparedProxy = await preparePlaywrightProxy(CONFIG.proxy);
     proxyCleanup = preparedProxy.cleanup;
@@ -475,9 +476,7 @@ async function run() {
                 // CDK lookup failed, use default
             }
         }
-        if (!planType) {
-            planType = 'plus';
-        }
+        if (!['plus', 'pro_5x', 'pro_20x', 'pro_500'].includes(planType)) throw new Error('未提供受支持的准确目标套餐');
 
         // Resolve region and currency (与浏览器 profile 一致)
         const billingCountry = paymentRegion;
@@ -496,13 +495,22 @@ async function run() {
             console.log(`[Info] 账号邮箱: ${loginInfo.email}`);
         }
 
+        // Account and exact tier are checked before opening a new checkout. An
+        // existing subscription must follow the original plan-change UI.
+        const accessToken = String(loginInfo.session?.accessToken || CONFIG.chatgptToken).trim();
+        const preflight = await require('../confirmation.cjs').preflightPayment(planType, accessToken, { allowUnverifiedTarget: debugOnly });
+        if (!preflight.allowed) return { success: false, submitted: false, ...preflight };
+        const operation = preflight.kind;
+        if (!['initial', 'upgrade'].includes(operation)) throw new Error('无法确定首次开通或升级操作');
+        const expectedCurrency = require('../confirmation.cjs').resolvePaymentCurrency(preflight, billingCurrency, { debugOnly });
+
         // --- Phase 2: API 创建 Checkout（注入账单地区），失败时回退 UI 定价页 ---
         const checkoutMode = String(process.env.CHECKOUT_MODE || 'api').toLowerCase();
         let checkoutOpened = false;
         let checkoutResult = null;
         const planNameOverride = String(CONFIG.planNameOverride || '').trim() || undefined;
 
-        if (checkoutMode !== 'ui') {
+        if (checkoutMode !== 'ui' && operation === 'initial' && planType !== 'pro_500') {
             try {
                 checkoutResult = await openApiCheckout(page, {
                     accessToken: loginInfo.session?.accessToken || CONFIG.chatgptToken,
@@ -525,20 +533,27 @@ async function run() {
 
         if (!checkoutOpened) {
             console.log('🧭 [步骤] 正在打开定价页并选择升级套餐...');
-            await openPricingCheckout(page, {
+            checkoutResult = await openPricingCheckout(page, {
                 region: billingCountry,
-                planType
+                planType,
+                operation,
+                debugOnly
             });
-            checkoutResult = { checkoutUrl: page.url() };
         }
 
         if (debugOnly) {
             await waitForDebugPaymentStep(page);
+            const observedDue = await require('./stripe-payment').readCheckoutDueAmount(page);
+            const observedCurrency = observedDue?.currency || null;
+            const pricingRegionVerified = operation === 'initial' ? checkoutResult?.pricingRegionVerified ?? null : null;
+            if (pricingRegionVerified === false) {
+                console.warn(`[调试] 仅观察官网付款页：配置地区 ${billingCountry} 未核验，实际应付币种 ${observedCurrency || '未识别'}；不可作为正式付款验收`);
+            }
             const checkoutUrl = checkoutResult?.checkoutUrl || page.url();
             console.log(`🔗 [调试] 支付链接: ${checkoutUrl}`);
             console.log(`CHECKOUT_URL: ${checkoutUrl}`);
             console.log('CHECKOUT_DEBUG_SUCCESS');
-            return { success: true, debugOnly: true, checkoutUrl }; 
+            return { success: true, debugOnly: true, checkoutUrl, requestedRegion: operation === 'initial' ? billingCountry : null, observedCurrency, pricingRegionVerified };
         }
 
         console.log('✅ [步骤] Checkout 页面已打开，开始信用卡支付流程...');
@@ -552,27 +567,28 @@ async function run() {
             planType,
             cdkCode,
             email,
-            stripeSessionId
+            stripeSessionId,
+            operation, preflight, expectedCurrency, checkoutKind: checkoutResult?.kind,
+            confirmPayment: () => require('../confirmation.cjs').confirmSubscription(planType, accessToken)
         });
 
+        lastPaymentResult = paymentResult;
         if (paymentResult.success) {
             paymentSucceeded = true;
-            console.log(`    [+] 最终校验：支付成功! (stripe_card_payment)`);
-            const accessToken = String(loginInfo.session?.accessToken || CONFIG.chatgptToken).trim();
-            const confirmation = await require('../confirmation.cjs').confirmSubscription(planType, accessToken);
-            if (!confirmation.verified) return { success: false, resultUnknown: true, confirmedPaid: false, confirmation, cardLast4: paymentResult.cardLast4 };
+            console.log(paymentResult.confirmedPaid ? '    [+] 最终校验：支付成功! (stripe_card_payment)' : '    [+] 最终校验：零应付套餐变更已生效，未记实际扣款');
+            const confirmation = paymentResult.confirmation;
+            if (!confirmation.verified) return { ...paymentResult, success: false, resultUnknown: true, confirmedPaid: false, confirmation };
             const cancellationEmail = loginInfo.email ? loginInfo.email : email;
-            const cancellationResult = await cancelAutoRenew(accessToken, { email: cancellationEmail });
-            if (cancellationResult.ok) {
-                console.log(`✅ [订阅] ${cancellationResult.data.message}`);
-            } else {
-                console.warn(`⚠️ [订阅] 支付成功，但取消自动续费失败: ${cancellationResult.error}`);
+            const cancellationResult = await require('./upgrade-checkout').applyPostPaymentRenewalPolicy(operation, accessToken, cancellationEmail, cancelAutoRenew);
+            if (cancellationResult) {
+                if (cancellationResult.ok) console.log(`✅ [订阅] ${cancellationResult.data.message}`);
+                else console.warn(`⚠️ [订阅] 支付成功，但取消自动续费失败: ${cancellationResult.error}`);
             }
-            console.log("PAYMENT_SUCCESS");
+            console.log(paymentResult.confirmedPaid ? "PAYMENT_SUCCESS" : "SUBSCRIPTION_CHANGE_SUCCESS");
             for (const screenshotPath of paymentResult.screenshots || []) {
                 console.log(`SUCCESS_SCREENSHOT: ${screenshotPath}`);
             }
-            return { success: true, confirmedPaid: true, confirmation, cardLast4: paymentResult.cardLast4, autoRenewCancellation: { ok: cancellationResult.ok } };
+            return { ...paymentResult, success: true, confirmedPaid: paymentResult.confirmedPaid === true, confirmation, operation, ...(cancellationResult ? { autoRenewCancellation: { ok: cancellationResult.ok } } : {}) };
         } else {
             const errorMsg = paymentResult.error || '支付失败（未知原因）';
             for (const screenshotPath of paymentResult.screenshots || []) {
@@ -593,7 +609,7 @@ async function run() {
             console.error(`⚠️ [系统] 异常截图保存失败: ${err.message}`);
         }
         // 用 exitCode 而非 process.exit()，确保下方 finally 能完整执行（录像需 context 关闭后才落盘）
-        return { success: false, pendingCredentials: e.code === 'PENDING_CREDENTIALS', resultUnknown: wasSubmitted() || require('../rpc.cjs').wasPaymentConfirmed() || paymentSucceeded || e.code === 'RESULT_UNKNOWN', error: e.code === 'LEASE_LOST' ? '任务租约已失效' : '执行未完成，请查看受限诊断' };
+        return { ...(lastPaymentResult?.paymentEvidence ? { paymentEvidence: lastPaymentResult.paymentEvidence, confirmation: lastPaymentResult.confirmation, cardLast4: lastPaymentResult.cardLast4, confirmedPaid: lastPaymentResult.confirmedPaid === true, subscriptionChangedVerified: lastPaymentResult.subscriptionChangedVerified === true } : {}), success: false, pendingCredentials: e.code === 'PENDING_CREDENTIALS', resultUnknown: wasSubmitted() || require('../rpc.cjs').wasPaymentConfirmed() || paymentSucceeded || e.code === 'RESULT_UNKNOWN', error: e.code === 'LEASE_LOST' ? '任务租约已失效' : '执行未完成，请查看受限诊断' };
     } finally {
         console.log("👋 [系统] 流程结束，正在关闭浏览器...");
         // 先关闭 context 以 flush 录像并取回路径，再关浏览器

@@ -7,6 +7,7 @@ import { ONLINE_RECHARGE_DEFAULTS, ONLINE_RECHARGE_SECRET_KEYS } from '../contra
 import { OnlineRechargeRepository } from './online-recharge.repository';
 import { integer, object, text } from '../validation';
 import { onlineProxyCountry } from '../proxy-input';
+import { validatePlanRegions, PAYMENT_REGION_CURRENCIES, paymentRegion } from '../plan-region';
 
 @Injectable()
 export class OnlineRechargeSettingsRepository {
@@ -89,8 +90,7 @@ export class OnlineRechargeSettingsRepository {
           );
         else settings[key] = text(input[key], '配置内容', 2048, defaultValue !== '');
       }
-      if (!['US', 'PH', 'SG', 'MY'].includes(String(settings.paymentRegion)))
-        throw new BadRequestException('支付地区无效');
+      validatePlanRegions(settings);
       if (settings.proxyCountryCode !== '')
         settings.proxyCountryCode = onlineProxyCountry(settings.proxyCountryCode);
       if (!['pool', 'standalone'].includes(String(settings.browserMode)))
@@ -168,14 +168,7 @@ export class OnlineRechargeSettingsRepository {
         api_key: k.gptApiKey ?? '',
         plan_key: 'plus',
         country: s.paymentRegion,
-        currency:
-          s.paymentRegion === 'PH'
-            ? 'PHP'
-            : s.paymentRegion === 'MY'
-              ? 'MYR'
-              : s.paymentRegion === 'SG'
-                ? 'SGD'
-                : 'USD'
+        currency: PAYMENT_REGION_CURRENCIES[paymentRegion(s.paymentRegion)]
       },
       hcaptcha: {
         solver_enabled: s.hcaptchaEnabled,

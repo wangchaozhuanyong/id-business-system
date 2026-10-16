@@ -23,6 +23,7 @@ import {
 } from '../contracts';
 import { OnlineRechargeSettingsService } from '../settings.service';
 import { onlineProxyCountry } from '../proxy-input';
+import { resolvePlanRegion, paymentRegion, taskPlanRegion } from '../plan-region';
 import { OnlineRechargeRepository } from './online-recharge.repository';
 import { OnlineRechargeEphemeralCredentials } from '../ephemeral-credentials.service';
 import { assertOnlineSensitive } from '../assets.service';
@@ -96,6 +97,7 @@ export class OnlineRechargeTasksRepository {
       status: legacyTerminalTest ? 'failed' : row.status,
       plan: row.plan,
       provider: row.provider,
+      planRegion: payload.planRegion ? sanitize(payload.planRegion) : null,
       progress: row.progress,
       stage: row.stage,
       message: proxyTest
@@ -382,15 +384,32 @@ export class OnlineRechargeTasksRepository {
         payload.proxyPoolReference = true;
         payload.proxyConnectionVersion = testedProxy.version;
       }
-      if (['recharge', 'debug', 'subscription', 'renewal'].includes(operation)) {
-        const countryCode = onlineProxyCountry(settings.proxyCountryCode);
+      if (operation === 'recharge' || operation === 'debug') {
+        const route = resolvePlanRegion(
+          settings,
+          selectedPlan,
+          config?.version ?? 0,
+          operation === 'debug' ? payload.region : undefined
+        );
+        if (operation === 'recharge' && settings.gptApiEnabled && route.paymentRegion === 'CL')
+          throw new BadRequestException('第三方通道尚未核实支持智利，请使用官网银行卡通道');
+        payload.planRegion = route;
+        payload.region = route.paymentRegion;
+        payload.proxyCountryCode = route.proxyCountryCode;
+      }
+      if (
+        ['recharge', 'debug', 'subscription', 'renewal'].includes(operation) &&
+        !(operation === 'subscription' && payload.recheckTaskId)
+      ) {
+        const countryCode = onlineProxyCountry(
+          payload.proxyCountryCode ?? settings.proxyCountryCode
+        );
         if (!(await tx.idBusinessV2RechargeProxy.count({ where: { active: true, countryCode } })))
           throw new ConflictException('所选代理国家暂无启用代理，请先在代理 IP 管理中添加或启用');
         // 固定本次任务的国家，后续修改全局配置不改变已受理任务的代理范围。
         payload.proxyCountryCode = countryCode;
       }
-      if (payload.region && !['US', 'PH', 'SG', 'MY'].includes(String(payload.region)))
-        throw new BadRequestException('支付地区无效');
+      if (payload.region) paymentRegion(payload.region);
       if (payload.planName) {
         if (operation !== 'debug')
           throw new BadRequestException('自定义套餐标识仅允许用于付款前调试');
@@ -416,6 +435,14 @@ export class OnlineRechargeTasksRepository {
         )
           throw new ConflictException('原任务核对资料已变化，请重新打开原任务');
         const originalPayload = original.payload ? object(original.payload) : {};
+        const originalRegion = taskPlanRegion(originalPayload, original.plan);
+        payload.proxyCountryCode = onlineProxyCountry(originalPayload.proxyCountryCode);
+        if (originalRegion) {
+          payload.planRegion = originalRegion;
+          payload.region = originalRegion.paymentRegion;
+        } else if (originalPayload.region) payload.region = paymentRegion(originalPayload.region);
+        else
+          throw new ConflictException('原任务缺少固定支付地区，请先人工核对，不自动套用当前配置');
         if (originalPayload.paymentContext) payload.paymentContext = originalPayload.paymentContext;
         const originalResult = original.result ? object(original.result) : {};
         if (originalResult.paymentEvidence)

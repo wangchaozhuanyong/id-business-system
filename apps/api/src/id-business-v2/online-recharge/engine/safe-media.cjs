@@ -3,13 +3,14 @@
 const path = require('node:path');
 const fs = require('node:fs/promises');
 const { spawn } = require('node:child_process');
+const FINISH_CAPTURE_TIMEOUT_MS = 10000;
 let recorder = null;
 function root() {
   return require('./paths.cjs').mediaRoot();
 }
 async function start() {
   await fs.mkdir(root(), { recursive: true, mode: 0o700 });
-  recorder = { page: null, frames: [], chain: Promise.resolve(), timer: null };
+  recorder = { page: null, frames: [], chain: Promise.resolve(), timer: null, stopped: false };
 }
 function attach(page) {
   if (!recorder) return;
@@ -24,6 +25,7 @@ async function screenshot(page, prefix = 'stage') {
   if (!recorder || !page || recorder.frames.length >= 600) return null;
   const current = recorder;
   const capture = async () => {
+    if (current.stopped) return null;
     // Only generic patterns enter the page; internal keys are never injected into an untrusted document.
     await page.evaluate(() => {
       for (const el of document.querySelectorAll('body *')) {
@@ -44,6 +46,7 @@ async function screenshot(page, prefix = 'stage') {
         .slice(0, 40)}_${Date.now()}_${current.frames.length}.png`
     );
     try {
+      if (current.stopped) return null;
       const buffer = await page.screenshot({
         fullPage: false,
         animations: 'disabled',
@@ -75,14 +78,28 @@ async function finish() {
   if (!recorder) return [];
   const current = recorder;
   recorder = null;
+  current.stopped = true;
   clearInterval(current.timer);
-  await current.chain.catch(() => {});
-  if (!current.frames.length) return [];
+  let captureTimer;
+  const settled = await Promise.race([
+    current.chain.then(
+      () => true,
+      () => true
+    ),
+    new Promise((resolve) => {
+      captureTimer = setTimeout(() => resolve(false), FINISH_CAPTURE_TIMEOUT_MS);
+    })
+  ]);
+  clearTimeout(captureTimer);
+  // Late captures may finish while the caller closes the context. Only hand off
+  // completed masked files, and never wait for encoding after capture timeout.
+  const frames = [...current.frames];
+  if (!settled || !frames.length) return frames;
   const listing = path.join(root(), `frames_${Date.now()}.txt`);
   const output = path.join(root(), `redacted_${Date.now()}.webm`);
   await fs.writeFile(
     listing,
-    current.frames.map((f) => `file '${f.replace(/'/g, "'\\''")}'\nduration 2.5`).join('\n'),
+    frames.map((f) => `file '${f.replace(/'/g, "'\\''")}'\nduration 2.5`).join('\n'),
     { mode: 0o600 }
   );
   const encoded = await new Promise((resolve) => {
@@ -122,6 +139,6 @@ async function finish() {
     });
   });
   await fs.unlink(listing).catch(() => {});
-  return encoded ? [...current.frames, output] : current.frames;
+  return encoded ? [...frames, output] : frames;
 }
 module.exports = { start, attach, stage, screenshot, finish, root };
