@@ -1,3 +1,4 @@
+import { isMailboxVersionOnly } from './ci-mailbox-version-scope.mjs';
 import {
   affectsGptRechargeArtifact,
   isGptRechargeControlsOnly,
@@ -270,6 +271,7 @@ const onlineCiBuildTestInputs = new Set([
   'scripts/production-release/online-recharge-component-lifecycle.test.py'
 ]);
 export function needsOnlineRechargeCiBuild(paths, context) {
+  if (isMailboxVersionOnly(paths)) return false;
   if (isRegistrationBrowserOnly(paths, context)) return false;
   if (isAccountLoginOnly(paths) || isAccountLoginControlsOnly(paths)) return false;
   if (isRegistrationParityDiagnosticsControlRepair(paths, context)) return false;
@@ -1082,6 +1084,7 @@ export function checkMode(paths, oldSchema, newSchema, grantHelperSnapshot, cont
   if (isChatgptSalesControlsOnly(paths)) return oldSchema === newSchema ? 'ci-only' : 'full';
   if (isChatgptSalesOnly(paths))
     return chatgptSalesSchemaMatches(oldSchema, newSchema) ? 'recharge' : 'full';
+  if (isMailboxVersionOnly(paths)) return oldSchema === newSchema ? 'recharge' : 'full';
   if (isSharedBankCardControlsOnly(paths)) return oldSchema === newSchema ? 'ci-only' : 'full';
   if (isSharedBankCardOnly(paths))
     return sharedBankCardSchemaMatches(oldSchema, newSchema) ? 'recharge' : 'full';
@@ -1558,6 +1561,7 @@ export function isTargetedOnly(paths, oldSchema, newSchema) {
 }
 export function selectedParts(paths, grantHelperSnapshot, context) {
   if (isGptRechargeControlsOnly(paths)) return ['guards'];
+  if (isMailboxVersionOnly(paths)) return ['guards', 'api', 'release-controls'];
   if (isGptRechargeOnly(paths)) return ['guards', 'api'];
   if (isRegistrationBrowserOnly(paths, context)) return [...registrationBrowserParts];
   if (isAccountLoginControlsOnly(paths)) return ['guards'];

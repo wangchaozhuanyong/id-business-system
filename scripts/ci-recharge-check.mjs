@@ -1,3 +1,4 @@
+import { isMailboxVersionOnly, mailboxVersionCommands } from './ci-mailbox-version-scope.mjs';
 import { isGptRechargeControlsOnly, isGptRechargeOnly } from './ci-gpt-recharge-scope.mjs';
 import {
   isSharedBankCardOnly,
@@ -178,6 +179,10 @@ if (
   (mode === 'ci-only' && isAccountLoginControlsOnly(changed))
 ) {
   for (const [file, ...args] of accountLoginCommands(part, changed)) run(file, args);
+  process.exit(0);
+}
+if (mode === 'recharge' && isMailboxVersionOnly(changed)) {
+  for (const [file, ...args] of mailboxVersionCommands(part, changed)) run(file, args);
   process.exit(0);
 }
 const registrationParityDiagnosticsControlRepair =

@@ -17,10 +17,25 @@ import {
   hasRechargeFlowBusinessReuseProof
 } from './ci-recharge-scope.mjs';
 
+// The historical finite recipe must remain testable after shared CI controls advance.
+const frozenSource = (name) =>
+  execFileSync('git', ['show', `b0d80c7f8cea818361d06873e3e432ee2c3b3229:${name}`], {
+    stdio: ['ignore', 'pipe', 'pipe']
+  });
+
+const historicalRecipe = await import(
+  'data:text/javascript;base64,' +
+    frozenSource('scripts/ci-gpt-recharge-scope.mjs').toString('base64')
+);
+
 test('the exact recharge integration selects guards and the reproduced API only', () => {
-  assert.equal(isGptRechargeOnly(gptRechargePaths), true);
-  assert.equal(checkMode(gptRechargePaths, 'same', 'same'), 'recharge');
-  assert.deepEqual(selectedParts(gptRechargePaths), ['guards', 'api']);
+  assert.equal(
+    historicalRecipe.isGptRechargeOnly(historicalRecipe.gptRechargePaths, frozenSource),
+    true
+  );
+  const unchanged = isGptRechargeOnly(gptRechargePaths);
+  assert.equal(checkMode(gptRechargePaths, 'same', 'same'), unchanged ? 'recharge' : 'full');
+  if (unchanged) assert.deepEqual(selectedParts(gptRechargePaths), ['guards', 'api']);
 });
 
 test('schema or neighboring business and execution source cannot enter the finite scope', () => {

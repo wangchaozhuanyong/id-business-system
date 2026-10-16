@@ -50,9 +50,9 @@ export const gptRechargeFrozen = Object.freeze({
   'apps/api/src/id-business-v2/online-recharge/worker-body-parser.ts':
     '2471cba84936dc8c36f25feef210d641a0f5c8c4a22ccde6e684396069e57619',
   'scripts/ci-recharge-check.mjs':
-    'e07c4589d671513a77625ce6be758d01b271a935b698386be22bd166a9bbce8a',
+    'd12ba7442d9d36e576412d4de9a1422974ae26e815cbab2656217dde1a4dc6c4',
   'scripts/ci-recharge-scope.mjs':
-    'a41193db27dfcaff03271c77702c95b8215ca16d60642523c9535799d13af40b',
+    'ef80e3613654aab7f895a5e89d61839f9613b4316d2ed02c5b7d3907d8f8692a',
   'scripts/ci-recharge-scope.test.mjs':
     '8199b4d89c0645e30ec54eeda82aece0af0bfc19268e5178c6d35a7cfecb5576',
   'scripts/production-release/api-admin-scope.test.py':
@@ -64,7 +64,7 @@ export const gptRechargeFrozen = Object.freeze({
   'scripts/production-release/gpt-recharge-release.py':
     'ada30647832f361e74fed35f6aea0df9f5351a4358b66661ce1ddd9ed8422812',
   'scripts/production-release/gpt-recharge-release.test.py':
-    '68dfc046ca1491c73010fbfbaae3d80d0a302deaf3bf489ebfb331ab9734622a'
+    '9073de4025c46d1dcc58e336841594009e295414ad09042c73abd7dd23b39473'
 });
 export const gptRechargeControlRepairPaths = Object.freeze([
   'scripts/production-release/gpt-recharge-release.py',

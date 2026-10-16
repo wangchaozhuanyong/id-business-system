@@ -12,10 +12,15 @@ export async function bumpV2ScopeVersions(
     throw new Error('Scope version update requires at least one changed scope');
   }
   const repository = (client as Partial<ScopeVersionClient>).idBusinessV2ScopeVersion;
-  if (!repository || typeof repository.updateMany !== 'function') return;
+  if (!repository) return;
 
-  await repository.updateMany({
-    where: { scope: { in: [...new Set(scopes)] } },
-    data: { version: { increment: 1 }, updatedAt }
-  });
+  // A newly introduced scope may not have been seeded in an existing database.
+  // Create its first version in the command transaction, then increment normally.
+  for (const scope of new Set(scopes)) {
+    await repository.upsert({
+      where: { scope },
+      create: { scope, version: 1, updatedAt },
+      update: { version: { increment: 1 }, updatedAt }
+    });
+  }
 }

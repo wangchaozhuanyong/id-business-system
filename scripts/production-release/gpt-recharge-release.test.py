@@ -27,6 +27,9 @@ class Inspector:
 
 
 class RuntimePreservation(unittest.TestCase):
+    def setUp(self):
+        (path.parents[2] / '.deploy').mkdir(exist_ok=True)
+
     def fingerprint(self, env, allowed=True):
         return publisher.configuration(Inspector(env), {'containerId': 'api', 'reference': 'api:before'}, allowed)
 
