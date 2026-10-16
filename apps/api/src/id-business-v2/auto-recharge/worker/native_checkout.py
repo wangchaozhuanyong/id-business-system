@@ -49,6 +49,11 @@ def billing_fingerprint(address, name):
     if not isinstance(address, dict) or not isinstance(name, str) or not name.strip():
         return None
     fields = ('country', 'line1', 'line2', 'city', 'state', 'postal_code')
+    address = dict(address)
+    # 官网可选字段可能返回 null；空第二行和不要求州的国家与表单留空等价。
+    for key in ('line2', 'state'):
+        if address.get(key) is None:
+            address[key] = ''
     if any(not isinstance(address.get(k, ''), str) for k in fields):
         return None
     values = {k: ' '.join(address.get(k, '').strip().casefold().split()) for k in fields}

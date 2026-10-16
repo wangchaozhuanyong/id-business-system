@@ -130,3 +130,15 @@ test('checkout foreground repair selects connector regression and rejects unrela
     assert.equal(isRechargeCheckoutOnly([...focus, extra]), false, extra);
   }
 });
+
+// Native billing value normalization remains in the finite prepayment connector scope.
+test('native optional billing normalization retains connector scope and database exclusion', () => {
+  const root = 'apps/api/src/id-business-v2/auto-recharge/worker/';
+  const paths = [
+    'pay.py',
+    'native_checkout.py',
+    'test_native_checkout.py',
+    'test_payment_form_budget.py'
+  ].map((n) => root + n);
+  assert.equal(isRechargeFormBudgetOnly(paths), true);
+});
