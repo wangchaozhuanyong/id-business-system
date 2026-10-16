@@ -1867,7 +1867,7 @@
     "packages/shared/src/v2/auto-recharge.ts": "819ea5e6d782551e5ba23e2b362e170a48e95f4d838d768fa97ecc568104d873"
   },
   "supportSources": {
-    "scripts/acceptance-v2-chatgpt-account-sales.mjs": "2c24bd260dd7c4ceb83195a3dd8f49f31971b272bb511797d4b4cf776c8b73c9",
+    "scripts/acceptance-v2-chatgpt-account-sales.mjs": "c56d2aa9bbd01bb3f0a1f11e1d7e409b11ae0f5ed67a91c511f110ae0ee6443c",
     "scripts/backfill-chatgpt-email-search.mjs": "6e893692179969eaeaec4d8b69f4ab52201d189690fca1f125c15afcae9ebdf5",
     "scripts/backfill-chatgpt-email-search.test.mjs": "a4aaa9d246a3c124f30b263ef939c54cbcb9b5dc1d1e13d683a8eba95ed96c1d"
   },

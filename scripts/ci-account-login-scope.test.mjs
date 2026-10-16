@@ -1,4 +1,4 @@
-import { checkMode, selectedParts } from './ci-recharge-scope.mjs';
+import { checkMode, selectedParts, needsOnlineRechargeCiBuild } from './ci-recharge-scope.mjs';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
@@ -70,6 +70,7 @@ test('shared CI dispatch selects all affected parts and refuses unrelated paths'
   );
   assert.equal(checkMode(accountLoginPaths, before, after), 'recharge');
   assert.deepEqual(selectedParts(accountLoginPaths), accountLoginParts);
+  assert.equal(needsOnlineRechargeCiBuild(accountLoginPaths), false);
   assert.equal(
     checkMode([...accountLoginPaths, 'apps/api/src/auth/unauthorized.ts'], before, after),
     'full'

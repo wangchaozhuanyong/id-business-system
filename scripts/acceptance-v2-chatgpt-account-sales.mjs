@@ -162,7 +162,7 @@ async function fixture(width = 1440, theme = 'light') {
         return route.fulfill({
           status: 200,
           contentType: 'application/json',
-          body: JSON.stringify({ data: { id: account.id } })
+          body: JSON.stringify({ success: true, data: { id: account.id }, message: 'OK' })
         });
       }
       assert.deepEqual(Object.keys(body).sort(), ['expectedUpdatedAt', 'saleStatus']);
