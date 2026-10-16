@@ -11,6 +11,7 @@
  */
 
 const fs = require('fs');
+const { createHash } = require('node:crypto');
 const { beforeExternalSubmit, wasSubmitted, ResultUnknownError } = require('../rpc.cjs');
 const { isVerifiedPaymentRedirect } = require('../outcomes.cjs');
 const safeMedia = require('../safe-media.cjs');
@@ -108,6 +109,26 @@ function normalizeCardExpiry(expiry) {
         return `${raw.slice(0, 2)}/${raw.slice(2)}`;
     }
     return raw;
+}
+
+function isVerifiedCheckoutOutcome(originalUrl, resultUrl) {
+    if (!isVerifiedPaymentRedirect(resultUrl)) return false;
+    try {
+        const original = new URL(originalUrl);
+        const result = new URL(resultUrl);
+        const trusted = ['chatgpt.com', 'pay.openai.com', 'checkout.stripe.com'];
+        if (original.protocol !== 'https:' || !trusted.includes(original.hostname)) return false;
+        if (original.origin === result.origin) return true;
+        // A different origin is accepted only when the original checkout URL
+        // explicitly named that return destination. Do not guess provider flows.
+        for (const key of ['return_url', 'success_url']) {
+            const raw = original.searchParams.get(key);
+            if (!raw) continue;
+            const expected = new URL(raw);
+            if (expected.protocol === 'https:' && trusted.includes(expected.hostname) && result.origin === expected.origin && result.pathname === expected.pathname) return true;
+        }
+    } catch (_) { /* no reliable original checkout/return identity */ }
+    return false;
 }
 
 function normalizeCardNumber(number) {
@@ -283,28 +304,41 @@ function isOpenAiCustomCheckout(page) {
 
 /**
  * 从 Checkout 页面读取「今日应付」金额（随汇率浮动）
- * @returns {Promise<{ amount: number, currency: string }|null>}
+ * @returns {Promise<{ amount: string, currency: string }|null>}
  */
+function parseCheckoutDueAmount(bodyText, { allowZero = false } = {}) {
+    // Only an explicitly labelled payable total is a billing fact. A monthly price,
+    // subtotal or credit elsewhere on the page must never stand in for this total.
+    const label = '(?:Due today|Total due(?: today)?|Pay today|Amount due|今日应付(?:总额|金额)?|今天应付(?:总额|金额)?|应付总额)';
+    const currency = '(USD|PHP|EUR|GBP|MYR|SGD|AUD|CAD|HKD|JPY|CNY|THB|IDR|US\\$|HK\\$|CA\\$|A\\$|S\\$|RM|₱|\\$|€|£)';
+    const amount = '((?:[0-9]{1,3}(?:,[0-9]{3})+|[0-9]+)(?:\\.[0-9]{2})?)(?![0-9.,])';
+    const patterns = [
+        new RegExp(label + '[\\s:：]*' + currency + '[\\s]*' + amount, 'gi'),
+        new RegExp(label + '[\\s:：]*' + amount + '[\\s]*' + currency + '(?![A-Z])', 'gi'),
+        new RegExp('(?:^|\\n)[\\t ]*(?:Total|总计|合计)[\\s:：]*' + currency + '[\\s]*' + amount, 'gi')
+    ];
+    const currencyMap = { '₱': 'PHP', '$': 'USD', 'US$': 'USD', '€': 'EUR', '£': 'GBP', RM: 'MYR', 'S$': 'SGD', 'A$': 'AUD', 'CA$': 'CAD', 'HK$': 'HKD' };
+    const chile = require('./chile-money').parseLabelledChileMoney(bodyText, label);
+    const candidates = chile && (allowZero || /[1-9]/.test(chile.amount)) ? [chile] : [];
+    for (const [index, pattern] of patterns.entries()) {
+        for (const match of String(bodyText || '').matchAll(pattern)) {
+            const rawAmount = (index === 1 ? match[1] : match[2]).replace(/,/g, '');
+            const rawCurrency = (index === 1 ? match[2] : match[1]).toUpperCase();
+            const normalized = rawAmount.includes('.') ? rawAmount : `${rawAmount}.00`;
+            if (!allowZero && !/[1-9]/.test(normalized)) continue;
+            candidates.push({ amount: normalized, currency: currencyMap[rawCurrency] || rawCurrency });
+        }
+        // Explicit payable labels take precedence over a standalone "Total".
+        if (index === 1 && candidates.length) break;
+    }
+    const unique = new Map(candidates.map((due) => [`${due.currency}:${due.amount}`, due]));
+    return unique.size === 1 ? unique.values().next().value : null;
+}
+
 async function readCheckoutDueAmount(page) {
     try {
-        const bodyText = String(await page.textContent('body', { timeout: 8000 }).catch(() => '') || '');
-        const patterns = [
-            /Due today[^\n₱$€£]{0,48}?([₱$€£])\s*([\d,]+\.\d{2})/i,
-            /(?:Total due|Pay today|今日应付|应付)[^\n₱$€£]{0,48}?([₱$€£])\s*([\d,]+\.\d{2})/i,
-            /([₱$€£])\s*([\d,]+\.\d{2})\s*(?:\n|$)/,
-        ];
-        const currencyMap = { '₱': 'PHP', '$': 'USD', '€': 'EUR', '£': 'GBP' };
-        for (const re of patterns) {
-            const match = bodyText.match(re);
-            if (!match) continue;
-            const sym = match[1];
-            const amount = parseFloat(String(match[2] || '').replace(/,/g, ''));
-            if (Number.isFinite(amount) && amount > 0) {
-                return { amount, currency: currencyMap[sym] || null };
-            }
-        }
-    } catch (_) { /* ignore */ }
-    return null;
+        return parseCheckoutDueAmount(await page.textContent('body', { timeout: 8000 }));
+    } catch (_) { return null; }
 }
 
 /** 菲律宾 VAT 12%：1100 PHP 含税 → 约 982.14 PHP 免税 */
@@ -327,6 +361,7 @@ async function blurActiveBillingField(page) {
  * 填写美国免税州后等待 Stripe 重算「Due today」
  */
 async function waitForCheckoutTaxRecalculation(page, options = {}) {
+    if (process.env.PAYMENT_REGION_OVERRIDE === 'CL') return waitForStableChileAmount(page);
     const {
         baselineAmount = null,
         maxWaitMs = 18000,
@@ -366,7 +401,22 @@ async function waitForCheckoutTaxRecalculation(page, options = {}) {
     return { ok: true, due: finalDue };
 }
 
+async function waitForStableChileAmount(page) {
+    let last = null;
+    let stable = 0;
+    for (let attempt = 0; attempt < 20; attempt++) {
+        const current = await readCheckoutDueAmount(page);
+        if (current?.currency === 'CLP' && current.amount === last?.amount) stable++;
+        else stable = 0;
+        last = current;
+        if (stable >= 2) return { ok: true, due: current };
+        await page.waitForTimeout(350);
+    }
+    return { ok: false, due: last, error: '智利结算的最终应付金额或币种尚未稳定，未提交付款' };
+}
+
 async function ensureCheckoutTaxFreeAmount(page, address, baselineAmount) {
+    if (process.env.PAYMENT_REGION_OVERRIDE === 'CL') return waitForStableChileAmount(page);
     const due = await readCheckoutDueAmount(page);
     if (!baselineAmount || !due?.amount) {
         return { ok: true, due };
@@ -451,6 +501,11 @@ async function completeStripeCardPayment(page, cardInfo, address, options = {}) 
     const isCardRetry = cardAttempt > 1;
     let holderName = String(options.holderName || '').trim();
     let checkoutDue = null;
+
+    if (options.operation === 'upgrade' && await require('./upgrade-checkout').findUpgradeDialog(page)) {
+        return require('./upgrade-checkout').completeUpgradePayment(page, cardInfo, options);
+    }
+    if (options.operation === 'upgrade' && options.checkoutKind !== 'checkout') return { success: false, submitted: false, canRetryCard: false, error: '未核实升级付款页面，未提交付款' };
 
     try {
         if (isCardRetry) {
@@ -635,12 +690,19 @@ async function completeStripeCardPayment(page, cardInfo, address, options = {}) 
             console.log(`[Stripe] 提交前确认应付: ${checkoutDue.currency || ''} ${checkoutDue.amount}`);
         }
 
-        const payResult = await finalizeCheckoutPayment(page, holderName);
-        if (checkoutDue?.amount) {
-            payResult.dueAmount = checkoutDue.amount;
-            payResult.dueCurrency = checkoutDue.currency;
+        // Only the final official payable total can authorize a submission.
+        // Re-read after billing/tax updates rather than trusting a stale estimate.
+        const finalDue = parseCheckoutDueAmount(await page.textContent('body'), { allowZero: options.operation === 'upgrade' });
+        if (!finalDue || !options.expectedCurrency || finalDue.currency !== options.expectedCurrency) {
+            return { success: false, error: '付款前官网应付金额或币种不明确，未提交付款', canRetryCard: false };
         }
-        return payResult;
+        const paymentContext = require('./upgrade-checkout').buildPaymentContext(options, cardInfo, finalDue);
+        const originalCheckoutUrl = page.url();
+        const originalCheckoutId = String(originalCheckoutUrl).match(/(?:oaics_[a-f0-9]+|cs_(?:live|test)_[A-Za-z0-9]+)/)?.[0];
+        if (originalCheckoutId) paymentContext.quoteId = 'quote:' + createHash('sha256').update(originalCheckoutId).digest('hex').slice(0, 32);
+        const payResult = await finalizeCheckoutPayment(page, holderName, { paymentContext });
+        const paymentEvidence = { ...paymentContext, source: 'checkout', quoteVerified: true, verified: payResult.success === true && isVerifiedCheckoutOutcome(originalCheckoutUrl, page.url()) };
+        return { ...payResult, dueAmount: finalDue.amount, dueCurrency: finalDue.currency, paymentEvidence };
 
     } catch (error) {
         if (['LEASE_LOST', 'RESULT_UNKNOWN'].includes(error.code) || wasSubmitted()) throw error.code === 'LEASE_LOST' ? error : new ResultUnknownError();
@@ -668,36 +730,32 @@ const PAYMENT_SUCCESS_PATTERNS = [
     /已成功订阅/i
 ];
 
+// Generic failures (including plan-change errors) cannot establish a card decline.
+// Only explicit card/issuer rejection permits another card submission.
 const PAYMENT_DECLINE_PATTERNS = [
-    /your card was declined/i,
-    /your card has been declined/i,
-    /card was declined/i,
-    /card has been declined/i,
-    /payment was not approved/i,
-    /payment was declined/i,
-    /payment could not be processed/i,
-    /payment method could not be verified/i,
-    /your bank may have declined/i,
-    /payment details may be incorrect/i,
-    /we are unable to authenticate your payment method/i,
-    /payment failed/i,
-    /payment was not successful/i,
-    /could not be completed/i,
-    /transaction (was )?(declined|failed)/i,
+    /(?:your )?card (?:was|has been|is) declined/i,
+    /\bcard_declined\b/i,
+    /(?:payment|transaction) (?:was )?declined/i,
     /insufficient funds/i,
-    /do not honor/i,
+    /do not hono[u]?r/i,
     /incorrect.*cvc/i,
     /expired card/i,
     /card number is (incorrect|invalid)/i,
-    /银行卡被拒绝/i,
-    /支付未(通过|成功|获批)/i,
-    /未获批准/i,
-    /拒付/i,
-    /被拒绝/i,
-    /try another (payment )?method/i,
-    /try a different (card|payment)/i,
-    /unable to authenticate/i
+    /银行卡(?:被拒绝|被拒|拒付)/i,
+    /余额不足/i
 ];
+const PAYMENT_UNCERTAIN_PATTERNS = [
+    /payment failed/i,
+    /payment was not successful/i,
+    /could not be completed/i,
+    /transaction (?:was )?failed/i,
+    /payment could not be processed/i,
+    /(?:未能|无法)完成(?:此次|本次)?套餐变更/,
+    /支付未成功/
+];
+function hasUncertainPaymentError(text) {
+    return PAYMENT_UNCERTAIN_PATTERNS.some((pattern) => pattern.test(String(text || '')));
+}
 
 function buildDeclinedPaymentResult(page, msg, screenshotPath) {
     return {
@@ -780,6 +838,8 @@ async function handlePostSubmitPhase(page) {
                 screenshot: screenshotPath
             };
         }
+        const bodyText = await page.textContent('body', { timeout: 3000 }).catch(() => '');
+        if (hasUncertainPaymentError(bodyText)) return { action: 'unknown' };
 
         if (await hasAnyCheckoutCaptchaSignal(page)) {
             captchaDetected = true;
@@ -837,15 +897,23 @@ async function handlePostSubmitPhase(page) {
     return { action: 'continue', captcha: postCaptcha };
 }
 
-async function finalizeCheckoutPayment(page, holderName) {
+async function finalizeCheckoutPayment(page, holderName, options = {}) {
+    // Do not treat an earlier card's lingering error as a fresh rejection of the
+    // next card. If it cannot be cleared, stop before a further submission.
+    if (await detectPaymentDeclineOnPage(page)) {
+        return { success: false, error: '上一笔拒付提示尚未清除，请核对原单后继续', canRetryCard: false };
+    }
     console.log('[Stripe] Step 9: 点击订阅/支付...');
-    const submitted = await clickCheckoutSubmitButton(page);
+    const submitted = await clickCheckoutSubmitButton(page, options);
     if (!submitted) {
         const screenshotPath = await saveDebugScreenshot(page, 'submit_not_found');
         return { success: false, error: '无法找到提交/支付按钮', screenshot: screenshotPath };
     }
 
     const postResult = await handlePostSubmitPhase(page);
+    if (postResult.action === 'unknown') {
+        return { success: false, resultUnknown: true, error: '支付页面结果不明确，等待原单核对' };
+    }
     if (postResult.action === 'declined') {
         return buildDeclinedPaymentResult(page, postResult.declineMsg, postResult.screenshot);
     }
@@ -940,7 +1008,6 @@ async function waitForPaymentResult(page, holderName) {
         // A login/error/home redirect leaves the outcome unresolved.
 
         const bodyText = String(await page.textContent('body', { timeout: 8000 }).catch(() => '') || '');
-
         for (const re of PAYMENT_DECLINE_PATTERNS) {
             if (re.test(bodyText)) {
                 const match = bodyText.match(re);
@@ -949,6 +1016,10 @@ async function waitForPaymentResult(page, holderName) {
                 const screenshotPath = await saveDebugScreenshot(page, 'payment_declined');
                 return buildDeclinedPaymentResult(page, msg, screenshotPath);
             }
+        }
+
+        if (hasUncertainPaymentError(bodyText)) {
+            return { success: false, resultUnknown: true, error: '支付页面结果不明确，等待原单核对' };
         }
 
         for (const re of PAYMENT_SUCCESS_PATTERNS) {
@@ -1484,26 +1555,33 @@ async function selectBillingComboboxItem(page, item, optionLabels, logLabel) {
     return false;
 }
 
+function billingCountryOptions(address) {
+    const code = String(address.country || 'US').trim().toUpperCase();
+    if (!/^[A-Z]{2}$/.test(code)) throw new Error('账单地址国家无效，请核对原始资料');
+    const names = { US: ['United States', '美国'], PH: ['Philippines', '菲律宾'], CL: ['Chile', '智利'], SG: ['Singapore', '新加坡'], MY: ['Malaysia', '马来西亚'] };
+    return [code, ...(names[code] || [])];
+}
+
+function matchesBillingCountry(current, address) {
+    return billingCountryOptions(address).some(value => value.toUpperCase() === String(current.value || '').toUpperCase() || value.toUpperCase() === String(current.label || '').toUpperCase());
+}
+
 async function fillOpenAiBillingDirect(page, address, fullName, baselineAmount = null) {
     const stateFullName = normalizeStateFullName(address.state);
-    const countryCode = String(address.country || 'US').trim().toUpperCase() || 'US';
     const filled = { name: false, country: false, line1: false, city: false, postal: false, state: false };
 
     const directWait = 2500;
     console.log('  [Stripe] 税区优先：国家 → 州 → 邮编 → 街道/城市 → 姓名');
 
     const currentCountry = await getCurrentBillingCountryValue(page);
-    const alreadyUs = currentCountry.value === 'US'
-        || /united states/i.test(currentCountry.label)
-        || /美国/.test(currentCountry.label);
-    if (alreadyUs) {
+    if (matchesBillingCountry(currentCountry, address)) {
         filled.country = true;
-        console.log('  [Stripe] ✅ 国家已是 United States');
+        console.log('  [Stripe] ✅ 国家与原始账单地址一致');
     } else {
         filled.country = await selectFirstVisibleSelect(
             page,
             OPENAI_BILLING_FIELD_SELECTORS.country,
-            ['United States', '美国', 'US', countryCode],
+            billingCountryOptions(address),
             '国家',
             directWait
         );
@@ -1575,7 +1653,7 @@ async function fillOpenAiBillingDirect(page, address, fullName, baselineAmount =
 
 async function fillOpenAiBillingBySectionMeta(page, address, fullName) {
     const stateFullName = normalizeStateFullName(address.state);
-    const countryOptions = ['United States', '美国', 'US'];
+    const countryOptions = billingCountryOptions(address);
     const filled = { name: false, country: false, line1: false, city: false, postal: false, state: false };
 
     await focusOpenAiBillingSection(page);
@@ -1597,12 +1675,9 @@ async function fillOpenAiBillingBySectionMeta(page, address, fullName) {
     const afterName = nameIndex >= 0 ? items.slice(nameIndex + 1) : items;
     const countryItem = await pickBillingItem(afterName, [/country/, /region/, /国家/, /地区/])
         || afterName.find((item) => item.meta.tag === 'select' || item.meta.role === 'combobox');
-    const countryAlreadyUs = await page.getByText(/^United States$|^美国$/).first()
-        .isVisible({ timeout: 600 })
-        .catch(() => false);
-    if (countryAlreadyUs) {
+    if (matchesBillingCountry(await getCurrentBillingCountryValue(page), address)) {
         filled.country = true;
-        console.log('  [Stripe] ✅ 国家已是 United States');
+        console.log('  [Stripe] ✅ 国家与原始账单地址一致');
     } else if (countryItem) {
         filled.country = await selectBillingComboboxItem(page, countryItem, countryOptions, '国家');
         if (filled.country) {
@@ -1839,7 +1914,7 @@ async function fillBillingByDomOrder(page, fullName, address, stateFullName) {
             const ok = await selectBillingComboboxItem(
                 page,
                 item,
-                ['United States', '美国', 'US'],
+                billingCountryOptions(address),
                 '国家'
             );
             if (ok) {
@@ -1909,7 +1984,7 @@ async function fillOpenAiCheckoutBilling(page, address, fullName) {
     const preBillingDue = await readCheckoutDueAmount(page);
     const baselineAmount = preBillingDue?.amount || null;
     if (baselineAmount) {
-        const taxFree = estimateTaxFreeAmount(baselineAmount);
+        const taxFree = preBillingDue.currency === 'PHP' ? estimateTaxFreeAmount(baselineAmount) : null;
         console.log(
             `  [Stripe] 填地址前应付: ${preBillingDue.currency || ''} ${baselineAmount}`
             + (taxFree ? `（免税州目标约 ${taxFree.toFixed(2)}）` : '')
@@ -1965,7 +2040,7 @@ async function fillOpenAiCheckoutBilling(page, address, fullName) {
             filled.name = await fillBillingFullNameStrict(page, fullName);
         }
         if (!status.country) {
-            filled.country = await selectBillingCountry(page, ['United States', '美国', 'US']);
+            filled.country = await selectBillingCountry(page, billingCountryOptions(address));
             if (filled.country) await page.waitForTimeout(800);
         }
         if (!status.line1) {
@@ -2452,7 +2527,9 @@ async function fillBillingLine1Strict(page, value) {
     return ok;
 }
 
-async function clickCheckoutSubmitButton(page) {
+async function clickCheckoutSubmitButton(page, options = {}) {
+    const currentUrl = new URL(page.url());
+    if (!((currentUrl.hostname === 'chatgpt.com' && currentUrl.pathname.startsWith('/checkout/')) || currentUrl.hostname === 'pay.openai.com' || currentUrl.hostname === 'checkout.stripe.com')) return false;
     await dismissAddressAutocomplete(page);
     await page.keyboard.press('Escape').catch(() => {});
     await page.evaluate(() => {
@@ -2462,7 +2539,8 @@ async function clickCheckoutSubmitButton(page) {
 
     const tryClick = async (locator, label) => {
         try {
-            const target = locator.first ? locator.first() : locator;
+            if (await locator.count() !== 1) return false;
+            const target = locator;
             if (!(await target.isVisible({ timeout: 2000 }).catch(() => false))) {
                 return false;
             }
@@ -2472,12 +2550,14 @@ async function clickCheckoutSubmitButton(page) {
             }
             await target.scrollIntoViewIfNeeded({ timeout: 3000 }).catch(() => {});
             await page.waitForTimeout(randomBetween(150, 350));
-            await beforeExternalSubmit({ provider: 'local', stage: 'payment_submit' });
+            if (!options.paymentContext || wasSubmitted()) throw new Error('付款提交资料缺失或已提交过，禁止重复付款');
+            await beforeExternalSubmit({ provider: 'local', stage: 'payment_submit', paymentContext: options.paymentContext });
             await target.click({ timeout: 8000, delay: randomBetween(40, 120) });
             console.log(`[Stripe] ✅ 已点击提交按钮 (${label})`);
             return true;
         } catch (error) {
-            if (error.code === 'LEASE_LOST' || wasSubmitted()) throw new ResultUnknownError();
+            if (error.code === 'LEASE_LOST') throw error;
+            if (wasSubmitted()) throw new ResultUnknownError();
             console.log(`[Stripe] 提交按钮点击失败 (${label}): ${error.message}`);
             return false;
         }
@@ -2486,7 +2566,7 @@ async function clickCheckoutSubmitButton(page) {
     const strategies = [
         () => tryClick(page.getByRole('button', { name: /^Subscribe$/i }), 'role=Subscribe'),
         () => tryClick(page.getByRole('button', { name: /^订阅$/ }), 'role=订阅'),
-        () => tryClick(page.getByRole('button', { name: /subscribe|订阅|pay/i }), 'role=subscribe'),
+        () => tryClick(page.getByRole('button', { name: /^(?:Pay|Pay now|立即支付|Subscribe and pay)$/i }), 'role=pay'),
         () => tryClick(page.locator('button').filter({ hasText: /^Subscribe$/i }), 'button Subscribe'),
         () => tryClick(page.locator('button').filter({ hasText: /^订阅$/ }), 'button 订阅'),
         () => tryClick(page.locator('[role="button"]').filter({ hasText: /^Subscribe$/i }), 'role=button Subscribe'),
@@ -2788,11 +2868,13 @@ module.exports = {
     getTypingDelay,
     normalizeCardExpiry,
     normalizeCardNumber,
+    isVerifiedCheckoutOutcome,
     // Internal helpers exported for testing
     humanTypeInFrame,
     saveDebugScreenshot,
     waitForPaymentResult,
     handlePostSubmitPhase,
+    finalizeCheckoutPayment,
     waitForStripeFrame,
     waitForBillingFields,
     fillBillingAddress,
@@ -2800,6 +2882,8 @@ module.exports = {
     discoverCardInputs,
     prepareCheckoutCardSection,
     readCheckoutDueAmount,
+    parseCheckoutDueAmount,
+    billingCountryOptions,
     estimateTaxFreeAmount,
     waitForCheckoutTaxRecalculation,
     ensureCheckoutTaxFreeAmount,

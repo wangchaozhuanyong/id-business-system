@@ -29,11 +29,11 @@ function loadPublishedApi(relativePath, dependencies) {
   assert.equal(
     createHash('sha256').update(raw).digest('hex'),
     apiBindings[relativePath][publishedApiRoot ? 'compiled' : 'source'],
-    'The API fixture must match the reviewed current source or the frozen published compiled base'
+    'The strict API consumer must match its pinned source or published build'
   );
   let code = raw.toString('utf8');
   if (!publishedApiRoot) {
-    // Execute the reviewed current consumer; compiled historical-image fixtures keep their own pin.
+    // A pure transpile executes the exact frozen consumer without building an API or client.
     const ts = require('typescript');
     const transpiled = ts.transpileModule(code, {
       fileName: filename,
@@ -85,10 +85,10 @@ const { OnlineProxyPoolRepository } = loadPublishedApi(
       bankRechargeObject: () => assert.fail('No command input is used in this receipt test'),
       bankRechargeId: () => assert.fail('No command input is used in this receipt test')
     },
-    '../proxy-test': apiProxyTest,
     '../proxy-pool-validation': {
-      proxyCountry: () => assert.fail('The receipt identity fixture does not select a country')
-    }
+      proxyCountry: () => assert.fail('No country input is used in this receipt test')
+    },
+    '../proxy-test': apiProxyTest
   }
 );
 

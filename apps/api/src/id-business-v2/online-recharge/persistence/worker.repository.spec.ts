@@ -438,6 +438,47 @@ describe('准确升级与实际付款卡、报价的持久证据', () => {
     expect(f.tx.onlineRechargeTask.update).toHaveBeenCalledTimes(1);
   });
 
+  it('套餐规则币种与原订阅报价不一致时不提交；一致才继续原有付款校验', async () => {
+    const f = upgradeFixture('28095');
+    f.row.payload = {
+      region: 'CL',
+      proxyCountryCode: 'CL',
+      planRegion: {
+        policy: 'plan',
+        configVersion: 17,
+        targetPlan: 'pro_500',
+        paymentRegion: 'CL',
+        proxyCountryCode: 'CL',
+        expectedCurrency: 'CLP'
+      }
+    };
+    await expect(f.worker.beforeSubmit(f.submit())).rejects.toThrow();
+    expect(f.row.paymentStarted).toBe(false);
+    expect(f.tx.onlineRechargeTask.update).not.toHaveBeenCalled();
+    await f.worker.beforeSubmit(f.submit({ currency: 'CLP' }));
+    expect(f.row.paymentStarted).toBe(true);
+  });
+
+  it('套餐路由普通档位同样必须提供官网报价，不能绕过最终币种核验', async () => {
+    const f = upgradeFixture();
+    f.row.plan = 'pro_5x';
+    f.row.payload = {
+      region: 'CL',
+      proxyCountryCode: 'CL',
+      planRegion: {
+        policy: 'plan',
+        configVersion: 17,
+        targetPlan: 'pro_5x',
+        paymentRegion: 'CL',
+        proxyCountryCode: 'CL',
+        expectedCurrency: 'CLP'
+      }
+    };
+    await expect(f.worker.beforeSubmit(f.rpc({ stage: 'payment' }))).rejects.toThrow('缺少可核实');
+    expect(f.row.paymentStarted).toBe(false);
+    expect(f.tx.onlineRechargeTask.update).not.toHaveBeenCalled();
+  });
+
   it('错误账号、卡、币种、缺失报价、同档、降档或未纳入来源均不能提交', async () => {
     for (const changes of [
       { accountId: randomUUID() },

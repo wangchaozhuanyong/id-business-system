@@ -13,6 +13,16 @@
       <dd>{{ onlineLabel(task.status) }}</dd>
       <dt>目标套餐</dt>
       <dd>{{ onlineLabel(task.plan) }}</dd>
+      <template v-if="task.planRegion">
+        <dt>代理国家</dt>
+        <dd>{{ proxyCountryLabel(task.planRegion.proxyCountryCode) }}</dd>
+        <dt>支付地区</dt>
+        <dd>{{ proxyCountryLabel(task.planRegion.paymentRegion) }}</dd>
+        <dt>预期结算币种</dt>
+        <dd>{{ task.planRegion.expectedCurrency }}</dd>
+        <dt>地区规则版本</dt>
+        <dd>{{ task.planRegion.configVersion }}</dd>
+      </template>
       <dt>完成进度</dt>
       <dd>{{ task.progress ?? 0 }}%</dd>
       <dt>执行说明</dt>
@@ -45,6 +55,7 @@
 </template>
 <script setup lang="ts">
 import { computed } from 'vue';
+import { proxyCountryLabel } from '@/v2/features/proxy-pool/public-api';
 import AppButton from '@/components/ui/AppButton.vue';
 import V2SectionHeading from '@/v2/components/V2SectionHeading.vue';
 import type { PublicTask } from './contracts';

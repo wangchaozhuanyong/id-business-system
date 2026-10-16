@@ -46,7 +46,16 @@ export interface OnlineQuery {
   startDate?: string;
   endDate?: string;
 }
+export interface OnlineTaskRegion {
+  policy: 'plan' | 'global';
+  configVersion: number;
+  targetPlan: OnlinePlan;
+  proxyCountryCode: string;
+  paymentRegion: string;
+  expectedCurrency: string;
+}
 export interface PublicTask {
+  planRegion?: OnlineTaskRegion | null;
   id: string;
   status: string;
   createdAt?: string;

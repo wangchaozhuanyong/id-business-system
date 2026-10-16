@@ -36,6 +36,11 @@ import {
   proxyResultIdentityEngineRoot,
   proxyResultIdentityEngineTests
 } from './ci-proxy-result-identity-scope.mjs';
+import {
+  isOnlineSettingsOnly,
+  isOnlineSettingsControlsOnly,
+  onlineSettingsCommands
+} from './ci-online-settings-scope.mjs';
 import { readRegistrationNativeReuse } from './ci-registration-closure-native-reuse.mjs';
 import {
   isRegistrationBrowserOnly,
@@ -289,6 +294,13 @@ if (
   (isChatgptSalesOnly(changed) || isChatgptSalesControlsOnly(changed))
 ) {
   for (const [file, ...args] of chatgptSalesCommands(part, changed)) run(file, args);
+  process.exit(0);
+}
+if (
+  (mode === 'recharge' && isOnlineSettingsOnly(changed)) ||
+  (mode === 'ci-only' && isOnlineSettingsControlsOnly(changed))
+) {
+  for (const [file, ...args] of onlineSettingsCommands(part, changed)) run(file, args);
   process.exit(0);
 }
 // This API/Admin feature preserves the deployed engine image. Run every affected

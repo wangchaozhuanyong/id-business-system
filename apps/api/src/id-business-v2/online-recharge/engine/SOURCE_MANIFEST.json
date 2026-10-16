@@ -54,9 +54,9 @@
     {
       "path": "confirmation.cjs",
       "originalSha256": null,
-      "adaptedSha256": "9433429d6bb24a96aa65acebca28264e1acd97306359ff4ff070eaf507ec7dcf",
+      "adaptedSha256": "b2679aa7b6c7f1ed189347471ef9ee892153d8ace22c6f2d85db35e97631a6f0",
       "changed": true,
-      "reason": "Whitelist bounded original-provider order facts after read-only recheck; preserve all payment guards, omit credentials and arbitrary supplier metadata."
+      "reason": "Carry verified expiry into subscription classification and require plan snapshot currency; preserve original upgrade and Pro500 identity guards."
     },
     {
       "path": "credential-client.cjs",
@@ -103,16 +103,16 @@
     {
       "path": "plans.cjs",
       "originalSha256": null,
-      "adaptedSha256": "08ca20d5ff83626a14f6abca6ab0645efd364d9d19b36c969289607daa0aeb0e",
+      "adaptedSha256": "6e4ce6f43a0dc20747d13814e62f1d0c89412e89cd39151b8a60ca90f0408527",
       "changed": true,
-      "reason": "Recognize the exact observed chatgptfreeplan alias only with verified inactive subscription and matching account; reserve free aliases from paid plan mapping."
+      "reason": "Treat known paid plans as initial only after verified inactive subscription and explicit expired timestamp; keep unknown, active, same-tier and downgrade guards."
     },
     {
       "path": "proxy-connection.cjs",
       "originalSha256": null,
-      "adaptedSha256": "b10d2652e04b2ee0fffe097aeec0a028e47bc475ab5a11cfa22b7e8571afdc01",
+      "adaptedSha256": "c4e06f6bdbeaefb58c12e18340ce066762b3211994993b7b885b98d998e05c24",
       "changed": true,
-      "reason": "Shared proxy connection and dynamic session resolver with public-address checks and sanitized extraction errors. Equivalent character detection removes lint-only regex escapes without changing proxy acceptance."
+      "reason": "Equivalent proxy validation syntax for ESLint; retain rejection of controls, whitespace and malformed endpoints."
     },
     {
       "path": "proxy-resolver.cjs",
@@ -159,9 +159,9 @@
     {
       "path": "task-runner.cjs",
       "originalSha256": null,
-      "adaptedSha256": "5ca7f0a93eefe2c256dc6137380f270b898584d2121ed484ffb7e6ea21bbbe02",
+      "adaptedSha256": "c2b4c89784eb0c006a614136689404ef2b9eaf96ac2e0bb955e65a07a78ceefd",
       "changed": true,
-      "reason": "Scoped runtime dispatch with strict proxy detection, safe error receipts and existing payment behavior."
+      "reason": "Pass task-frozen payment region and plan expected currency into the isolated task subprocess; clear expected currency at exit."
     },
     {
       "path": "test/checkout-outcomes.test.cjs",
@@ -213,6 +213,13 @@
       "reason": "2026-10-15 Pro档位及升级适配：精确目标、官网报价、单次提交、实际付款方式与原单证据保护；不猜Pro500上游ID。保留既有必要适配。"
     },
     {
+      "path": "test/plan-regions.test.cjs",
+      "originalSha256": null,
+      "adaptedSha256": "24c6d56a7557d310e5d983b749a55bb81def3f490529efad715ff84e9f780c39",
+      "changed": true,
+      "reason": "Synthetic Chile region, official currency, whole-peso quotes, tax recalculation and address-country regressions; no real payments."
+    },
+    {
       "path": "test/proxy-pool.test.cjs",
       "originalSha256": null,
       "adaptedSha256": "c3bf54ef56dd51bd70766391c5a63da921c2c9ee0348f098979d82b90e8123f0",
@@ -229,9 +236,9 @@
     {
       "path": "test/proxy-result-identity.test.cjs",
       "originalSha256": null,
-      "adaptedSha256": "5d42501598b25091fc6e628aa75e04ac26c2b2eac63ac90d713de9c3023afb76",
+      "adaptedSha256": "4fff43c266cec0c3c7863ab14de36ac684a50470bb2d345d025807997ba80c5d",
       "changed": true,
-      "reason": "纯离线回归实际 API：子进程与父进程两次脱敏、规范及纯数字 UUID、同值秘密碰撞、凭据负例、失败原因、资源和连接版本严格匹配。 当前源码绑定新增国家筛选后的 API，历史镜像夹具保留原编译指纹；生产执行器镜像不变。"
+      "reason": "Pin the current main source consumer with country filtering while retaining the existing published compiled consumer binding."
     },
     {
       "path": "test/proxy-test.test.cjs",
@@ -271,9 +278,9 @@
     {
       "path": "test/rpc-response.test.cjs",
       "originalSha256": null,
-      "adaptedSha256": "78a6378432e5381ea782997666387982667f7be5c2b9013f571a60a8a961a5e3",
+      "adaptedSha256": "9ab7124c1a10ca61cd273db24abf5d9277056c28bc00dd5db3219f3812e8a128",
       "changed": true,
-      "reason": "离线回归真实HTTP响应解析、空代理池初始化、付款授权拒绝空响应、错误阶段与凭据脱敏。"
+      "reason": "Use explicit synthetic proxy, reject empty pool, verify frozen server region takes precedence and expected currency is cleared."
     },
     {
       "path": "test/runtime-main.test.cjs",
@@ -390,9 +397,16 @@
     {
       "path": "upstream/chatgpt.js",
       "originalSha256": "cc94972036ccc614fe02276328b2ac82090a3893219d6d351772f659de88d550",
-      "adaptedSha256": "1a8b4a1c92f25cc285a53e1eb3dab7bad7a9f8fc0716a5936f17ca55e24e9cf6",
+      "adaptedSha256": "3bc182b365c642247b24e90f7deec45ba8976fca798ddf01b07b939d59fae582",
       "changed": true,
-      "reason": "2026-10-15 Pro档位及升级适配：精确目标、官网报价、单次提交、实际付款方式与原单证据保护；不猜Pro500上游ID。保留既有必要适配。"
+      "reason": "Never estimate Chilean checkout amounts from numeric plan names; require official quote."
+    },
+    {
+      "path": "upstream/chile-money.js",
+      "originalSha256": null,
+      "adaptedSha256": "cc72bffe960b689aa9288f4e44f809dcae452f73ee5406ad326ce5ed5018758f",
+      "changed": true,
+      "reason": "Parse explicitly labelled whole Chilean pesos as exact strings; reject ambiguous grouping, nonzero decimals and contradictory quotes."
     },
     {
       "path": "upstream/gpt-api-client.js",
@@ -474,9 +488,9 @@
     {
       "path": "upstream/pricing-checkout.js",
       "originalSha256": "b3f7914013cfbc7b17469396fc51b80f32acc99e940b810d48ba8cea4237f894",
-      "adaptedSha256": "e7c8f44b66f0c065ae3b9585a2809f62c238dbbf0054d038d5398f20d9d1bb8e",
+      "adaptedSha256": "37285cbccd90da1c03a64cc2938e83b6f97abc2b0418add0d76a3fe2c5c39bac",
       "changed": true,
-      "reason": "Wait up to ten seconds for the exact official Pro Checkout tile to mount; reject ambiguous or wrong tiers and never infer an account/API plan_name."
+      "reason": "Support Chile region selection and explicit CLP evidence; reject contradictory currency and bare dollar ambiguity."
     },
     {
       "path": "upstream/proxy-pool.js",
@@ -488,9 +502,9 @@
     {
       "path": "upstream/region-config.js",
       "originalSha256": "057c54db616846692bb942f037f6be3860a644a8d03b269cc41a9328187e3fd5",
-      "adaptedSha256": "538d4cbb9096e0483cd38f2f93a4b54dee323cad8a215a3ab9bad70ca8a3a40a",
+      "adaptedSha256": "627661ad53b00ca4bd73fcea7a762790df3430637ddbc5823bcf3a9fc7adea7f",
       "changed": true,
-      "reason": "2026-10-15 Pro档位及升级适配：精确目标、官网报价、单次提交、实际付款方式与原单证据保护；不猜Pro500上游ID。保留既有必要适配。"
+      "reason": "Add Chile CLP locale and timezone without changing other regions."
     },
     {
       "path": "upstream/requirements-hcaptcha.txt",
@@ -509,9 +523,9 @@
     {
       "path": "upstream/stripe-payment.js",
       "originalSha256": "007a6ae1abb633fd283e48f4ceac02bf3d2e2fc30aaca87520565b34eb29743e",
-      "adaptedSha256": "0b6c54931ca60e5c36f288ac7b5cea24681f7884e2733794b17aaf95a435517a",
+      "adaptedSha256": "931f9fa565548cdde1fe1a8bf6904fc3445c59c641cbdbd335d375decc46b782",
       "changed": true,
-      "reason": "2026-10-15 Pro档位及升级适配：精确目标、官网报价、单次提交、实际付款方式与原单证据保护；不猜Pro500上游ID。保留既有必要适配。"
+      "reason": "Read exact whole-peso CLP totals, wait for official Chilean tax total, preserve address country and existing final payment gates."
     },
     {
       "path": "upstream/subscription-check.js",
@@ -558,9 +572,9 @@
     {
       "path": "upstream/upgrade-checkout.js",
       "originalSha256": null,
-      "adaptedSha256": "02a79eeb491cad80ad247c54ee1cfd9d8183b24c291d257c978a29e8cef32ad1",
+      "adaptedSha256": "896a93a826a50c37686019328927513726c692998529edcf77b24b27bda9e7d8",
       "changed": true,
-      "reason": "本模块新增：明确档位与套餐升级兼容、保存卡及官网报价核验，缺少证据不付款或不报成功。"
+      "reason": "Accept explicit CLP integer upgrade quotes, credits and taxes without relaxing exact-tier, account or card verification."
     },
     {
       "path": "upstream/vitest.config.js",

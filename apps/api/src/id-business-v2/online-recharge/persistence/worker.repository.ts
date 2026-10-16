@@ -22,6 +22,7 @@ import {
 import { id, integer, object, redact, sanitize, sessionAccountId, text } from '../validation';
 import { safeProxyTestTaskResult } from '../../proxy-pool/public-api';
 import { OnlineRechargeOrderSyncService } from '../order-sync.service';
+import { taskPlanRegion } from '../plan-region';
 
 const LEASE_MS = 90000;
 function hasRenewalSubmission(row: OnlineRechargeTask) {
@@ -98,7 +99,9 @@ function validatedPaymentContext(
     (context.kind === 'upgrade' &&
       ['plus', 'pro_5x', 'pro_20x'].includes(source) &&
       ranks[source]! < ranks[row.plan]!);
+  const region = taskPlanRegion(row.payload ? object(row.payload) : {}, row.plan);
   if (
+    (region?.policy === 'plan' && context.currency !== region.expectedCurrency) ||
     !validRoute ||
     !ONLINE_RECHARGE_PLANS.includes(context.targetPlan as OnlineRechargePlan) ||
     context.targetPlan !== row.plan ||
@@ -321,8 +324,8 @@ export class OnlineRechargeWorkerRepository {
           sessionAccountId(this.encryption.decrypt(row.sessionEncrypted)),
           card.last4
         );
-      } else if (row.plan === 'pro_500')
-        throw new ConflictException('Pro 500 缺少可核实的付款报价与实际卡资料');
+      } else if (row.plan === 'pro_500' || taskPlanRegion(payload, row.plan)?.policy === 'plan')
+        throw new ConflictException('缺少可核实的付款报价与实际卡资料');
       await tx.onlineRechargeTask.update({
         where: { id: row.id },
         data: {

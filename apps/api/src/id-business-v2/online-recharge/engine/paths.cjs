@@ -60,10 +60,9 @@ function runtimeRoot() {
   );
 }
 function mediaRoot() {
-  return resolveProjectPath(
-    process.env.ONLINE_RECHARGE_MEDIA_DIR,
-    path.join(runtimeRoot(), 'media')
-  );
+  if (process.env.ONLINE_RECHARGE_MEDIA_DIR)
+    return resolveProjectPath(process.env.ONLINE_RECHARGE_MEDIA_DIR);
+  return resolveProjectPath(undefined, path.join(runtimeRoot(), 'media'));
 }
 module.exports = {
   projectRoots,

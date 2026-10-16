@@ -73,7 +73,25 @@ async function rpc(method, args = {}) {
   }
   if ([401, 403, 409, 410].includes(response.status)) throw new LeaseLostError();
   if (!response.ok) throw new Error(`内部执行接口失败 ${response.status}`);
-  const body = await response.json();
+  // Nest sends null (and empty strings) as an empty successful HTTP body.
+  // Only methods whose contract permits absence may accept that response.
+  const raw = await response.text();
+  let body;
+  if (!raw.trim()) {
+    if (['claimJob', 'getActiveProxy', 'reserveCard'].includes(method)) return null;
+    if (method === 'getAppConfigValue') return '';
+    throw Object.assign(new Error('内部执行接口返回了空响应'), { code: 'RPC_RESPONSE_INVALID' });
+  }
+  if (
+    ['getPaymentRegion', 'getAppConfigValue'].includes(method) &&
+    !/\bapplication\/(?:[\w.-]+\+)?json\b/i.test(response.headers.get('content-type') || '')
+  )
+    return raw;
+  try {
+    body = JSON.parse(raw);
+  } catch {
+    throw Object.assign(new Error('内部执行接口响应格式无效'), { code: 'RPC_RESPONSE_INVALID' });
+  }
   if (body === null) return null;
   if (body.ok === false || body.success === false) {
     if (body.code === 'LEASE_LOST') throw new LeaseLostError();

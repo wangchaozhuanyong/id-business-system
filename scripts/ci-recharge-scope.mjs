@@ -16,6 +16,11 @@ import {
   chatgptSalesSchemaMatches,
   chatgptSalesParts
 } from './ci-chatgpt-sales-scope.mjs';
+import {
+  isOnlineSettingsOnly,
+  isOnlineSettingsControlsOnly,
+  onlineSettingsParts
+} from './ci-online-settings-scope.mjs';
 import { isProxyResultIdentityOnly } from './ci-proxy-result-identity-scope.mjs';
 import {
   isOnlineProxyCountryOnly,
@@ -262,6 +267,7 @@ export function needsOnlineRechargeCiBuild(paths, context) {
   if (isRegistrationParityDiagnosticsOnly(paths, context)) return false;
   if (isWorkspaceDragOnly(paths)) return false;
   if (isChatgptSalesOnly(paths) || isChatgptSalesControlsOnly(paths)) return false;
+  if (isOnlineSettingsOnly(paths) || isOnlineSettingsControlsOnly(paths)) return false;
   if (isOnlineProxyCountryValidationOnly(paths)) return false;
   if (isOnlineProxyCountryOnly(paths)) return false;
   if (isRegistrationFlowEvidenceControlRepair(paths, context)) return false;
@@ -1062,6 +1068,8 @@ export function checkMode(paths, oldSchema, newSchema, grantHelperSnapshot, cont
   if (isChatgptSalesControlsOnly(paths)) return oldSchema === newSchema ? 'ci-only' : 'full';
   if (isChatgptSalesOnly(paths))
     return chatgptSalesSchemaMatches(oldSchema, newSchema) ? 'recharge' : 'full';
+  if (isOnlineSettingsControlsOnly(paths)) return oldSchema === newSchema ? 'ci-only' : 'full';
+  if (isOnlineSettingsOnly(paths)) return oldSchema === newSchema ? 'recharge' : 'full';
   if (isOnlineProxyCountryValidationOnly(paths))
     return oldSchema === newSchema ? 'ci-only' : 'full';
   if (isOnlineProxyCountryOnly(paths)) return oldSchema === newSchema ? 'recharge' : 'full';
@@ -1543,6 +1551,8 @@ export function selectedParts(paths, grantHelperSnapshot, context) {
   if (isWorkspaceDragOnly(paths)) return workspaceDragParts(paths);
   if (isChatgptSalesControlsOnly(paths)) return ['guards'];
   if (isChatgptSalesOnly(paths)) return [...chatgptSalesParts];
+  if (isOnlineSettingsControlsOnly(paths)) return ['guards'];
+  if (isOnlineSettingsOnly(paths)) return [...onlineSettingsParts];
   if (isOnlineProxyCountryOnly(paths)) return [...onlineProxyCountryParts];
   if (isRegistrationFlowEvidenceControlRepair(paths, context)) return ['guards'];
   if (isRegistrationFlowEvidenceOnly(paths, context)) return ['guards', 'api', 'admin'];

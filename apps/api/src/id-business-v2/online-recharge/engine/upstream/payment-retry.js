@@ -18,19 +18,18 @@ const { getRegionConfig } = require('./region-config');
 
 const MAX_CARD_ATTEMPTS = Number(process.env.PAYMENT_MAX_CARD_ATTEMPTS) || 3;
 const MAX_AUTOMATION_ATTEMPTS = MAX_CARD_ATTEMPTS;
+const isZeroAmount = (value) => typeof value === 'string' && /^0+(?:\.0{1,2})?$/.test(value);
 
 function isPaymentDeclined(errorMsg) {
-    if (!errorMsg) return false;
-    const declinedKeywords = [
-        'declined', 'card_declined', 'insufficient_funds',
-        'expired_card', 'incorrect_cvc', 'processing_error',
-        'lost_card', 'stolen_card', 'do_not_honor',
-        '拒绝', '被拒', 'your card was declined',
-        'payment was not successful', 'payment was not approved',
-        'not approved'
-    ];
-    const lower = errorMsg.toLowerCase();
-    return declinedKeywords.some((kw) => lower.includes(kw));
+    const text = String(errorMsg || '');
+    return [
+        /\b(?:card_declined|insufficient_funds|expired_card|incorrect_cvc|lost_card|stolen_card|do_not_honor)\b/i,
+        /(?:your )?card (?:was |has been |is )?declined/i,
+        /(?:payment|transaction) (?:was )?declined/i,
+        /^declined$/i,
+        /insufficient funds|do not hono[u]?r|expired card/i,
+        /银行卡(?:被拒绝|被拒|拒付)|余额不足/
+    ].some((pattern) => pattern.test(text));
 }
 
 /**
@@ -60,7 +59,9 @@ async function resolveBilledAmountForRecord(page, paymentResult, preTaxAmount, c
  * @returns {Promise<{ success: boolean, error?: string, cardLast4?: string, manualIntervention?: boolean, screenshots?: string[] }>}
  */
 async function executePaymentWithRetry(page, options) {
-    const { planType, cdkCode, email, onProgress, stripeSessionId } = options || {};
+    const { planType, cdkCode, email, onProgress, stripeSessionId, confirmPayment, operation, preflight, expectedCurrency, checkoutKind } = options || {};
+    const maxCardAttempts = preflight ? 1 : MAX_CARD_ATTEMPTS;
+    if (preflight && typeof confirmPayment !== 'function') return { success: false, submitted: false, error: '缺少原账号准确套餐核验，未提交付款' };
 
     const progress = (msg) => {
         console.log(`[PaymentRetry] ${msg}`);
@@ -78,12 +79,13 @@ async function executePaymentWithRetry(page, options) {
     const { currency } = regionConfig;
     progress(`支付地区: ${region}, 币种: ${currency}`);
 
-    const lastUsedIdRaw = await store.getAppConfigValue('last_used_address_id', null);
-    const lastUsedId = lastUsedIdRaw || null;
-
-    const address = await pickBillingAddressForCheckout(lastUsedId);
-    const addressSource = address.generated ? '随机生成' : `地址池 #${address.id}`;
-    progress(`已选取美国免税账单地址 (${addressSource}): ${address.line1}, ${address.city}, ${address.state}`);
+    let address = null;
+    if (operation !== 'upgrade' || checkoutKind === 'checkout') {
+        const lastUsedId = await store.getAppConfigValue('last_used_address_id', null);
+        address = await pickBillingAddressForCheckout(lastUsedId || null);
+        const addressSource = address.generated ? '随机生成' : `地址池 #${address.id}`;
+        progress(`已选取美国免税账单地址 (${addressSource}): ${address.line1}, ${address.city}, ${address.state}`);
+    }
 
     const ownerKey = require('../rpc.cjs').scope().taskId;
 
@@ -105,13 +107,14 @@ async function executePaymentWithRetry(page, options) {
         }
     } catch (_) { /* ignore */ }
 
-    progress(`开始支付（最多尝试 ${MAX_CARD_ATTEMPTS} 张卡）...`);
+    progress(`开始支付（最多尝试 ${maxCardAttempts} 张卡）...`);
 
-    for (let cardAttempt = 1; cardAttempt <= MAX_CARD_ATTEMPTS; cardAttempt += 1) {
-        const card = await store.reserveCard(ownerKey, [...attemptedCardIds]);
+    for (let cardAttempt = 1; cardAttempt <= maxCardAttempts; cardAttempt += 1) {
+        const card = await store.reserveCard(ownerKey, [...attemptedCardIds], { requireCvc: operation !== 'upgrade' });
         if (!card) {
             progress(cardAttempt === 1 ? '卡池无可用卡，终止支付' : `卡池已无更多可用卡（已拒 ${declinedLast4s.length} 张）`);
             if (cardAttempt === 1) {
+                if (preflight) return { success: false, submitted: false, error: '卡池资产枯竭', cardPoolEmpty: true };
                 await store.createBillingRecord({
                     card_last4: '----',
                     amount: billedAmount,
@@ -130,6 +133,7 @@ async function executePaymentWithRetry(page, options) {
         }
 
         const cardInfo = {
+            id: card.id,
             number: card.card_number,
             expiry: card.card_expiry,
             cvc: card.card_cvc,
@@ -143,64 +147,115 @@ async function executePaymentWithRetry(page, options) {
         let cardHandled = false;
 
         try {
-            const paymentResult = await completeStripeCardPayment(page, cardInfo, address, {
-                cardAttempt,
-                holderName: billingHolderName
-            });
+            if (operation === 'upgrade' && checkoutKind === 'checkout' && !cardInfo.cvc) cardInfo.cvc = await store.requireCardCvc(card.id);
+            let paymentResult;
+            try {
+                paymentResult = await completeStripeCardPayment(page, cardInfo, address, {
+                    cardAttempt,
+                    holderName: billingHolderName,
+                    planType, operation, preflight, expectedCurrency, checkoutKind
+                });
+            } catch (error) {
+                if (error.code !== 'RESULT_UNKNOWN') throw error;
+                paymentResult = { success: false, resultUnknown: true };
+            }
+            // Authenticate the original account before any success bookkeeping or
+            // handling an ambiguous post-submit page. Never submit a second payment
+            // just because the first page failed to refresh after charging.
+            let confirmation = null;
+            if (typeof confirmPayment === 'function' && (
+                paymentResult.success || paymentResult.resultUnknown || paymentResult.declined ||
+                require('../rpc.cjs').wasSubmitted()
+            )) {
+                try {
+                    for (let queryAttempt = 0; queryAttempt < 3; queryAttempt += 1) {
+                        confirmation = await confirmPayment();
+                        if (confirmation?.verified || (confirmation?.querySucceeded && confirmation.expectedAccountId && confirmation.accountId !== confirmation.expectedAccountId)) break;
+                        if (queryAttempt < 2 && typeof page.waitForTimeout === 'function') await page.waitForTimeout(1500);
+                    }
+                } catch (error) {
+                    if (error.code === 'LEASE_LOST') throw error;
+                    confirmation = { verified: false, querySucceeded: false };
+                }
+                if (confirmation?.verified) {
+                    const exactZeroUpgrade = operation === 'upgrade' && isZeroAmount(paymentResult.dueAmount);
+                    const actualPaymentProven = !preflight || paymentResult.paymentEvidence?.verified === true || (exactZeroUpgrade && paymentResult.paymentEvidence?.quoteVerified === true);
+                    paymentResult = { ...paymentResult, success: actualPaymentProven, resultUnknown: !actualPaymentProven, confirmation, subscriptionChangedVerified: operation === 'upgrade' };
+                } else if (paymentResult.success || (confirmation?.querySucceeded &&
+                    confirmation.expectedAccountId && confirmation.accountId !== confirmation.expectedAccountId)) {
+                    paymentResult = { ...paymentResult, success: false, resultUnknown: true, confirmation };
+                }
+            }
+
 
             if (paymentResult.holderName) {
                 billingHolderName = paymentResult.holderName;
             }
 
             if (paymentResult.success) {
+                if (preflight && !paymentResult.paymentEvidence?.verified) throw new ResultUnknownError('付款证据缺失，等待原单核对');
+                const zeroDue = operation === 'upgrade' && isZeroAmount(paymentResult.dueAmount);
+                if (zeroDue) {
+                    cardHandled = true;
+                    return { success: true, confirmedPaid: false, subscriptionChangedVerified: true, cardLast4, screenshots, confirmation, paymentEvidence: paymentResult.paymentEvidence, upgradeQuote: paymentResult.upgradeQuote };
+                }
                 require('../rpc.cjs').recordKnownOutcome('success');
-                const resolved = await resolveBilledAmountForRecord(
-                    page,
-                    paymentResult,
-                    billedAmount,
-                    billedCurrency
-                );
-                billedAmount = resolved.amount;
-                billedCurrency = resolved.currency;
-                progress(`实际扣款金额（免税后）: ${billedCurrency} ${billedAmount}`);
+                try {
+                    const resolved = await resolveBilledAmountForRecord(
+                        page,
+                        paymentResult,
+                        billedAmount,
+                        billedCurrency
+                    );
+                    billedAmount = resolved.amount;
+                    billedCurrency = resolved.currency;
+                    progress(`实际扣款金额（免税后）: ${billedCurrency} ${billedAmount}`);
 
-                const holderName = paymentResult.holderName || card.card_holder || billingHolderName || '';
-                await store.bindCardPaymentProfile(card.id, { holderName, address });
-                if (address.id) {
-                    await markAddressBound(address.id, card.id);
+                    const holderName = paymentResult.holderName || card.card_holder || billingHolderName || '';
+                    if (operation !== 'upgrade') {
+                        await store.bindCardPaymentProfile(card.id, { holderName, address });
+                        if (address?.id) await markAddressBound(address.id, card.id);
+                    }
+                    const usageResult = await store.recordCardUsage(card.id, { paymentEvidence: paymentResult.paymentEvidence });
+                    await store.createBillingRecord({
+                        card_number: card.card_number,
+                        card_last4: cardLast4,
+                        amount: billedAmount,
+                        currency: billedCurrency,
+                        plan_type: planType || 'plus',
+                        cdk_code: cdkCode,
+                        email,
+                        stripe_session_id: stripeSessionId || null,
+                        status: 'success', amountSource: resolved.amountSource || 'checkout', paymentEvidence: paymentResult.paymentEvidence
+                    });
+                    cardHandled = true;
+                    progress(operation === 'upgrade' ? `套餐升级成功，实际付款卡片: ...${cardLast4}` : `支付成功！卡片: ...${cardLast4}，姓名: ${holderName}，地址: ${address.line1}, ${address.city}`);
+                    if (usageResult.exhausted) {
+                        progress(`卡 ...${cardLast4} 已达到订阅绑定上限，已标记为订阅额度用尽`);
+                    }
+                    if (paymentResult.screenshot) {
+                        screenshots.push(paymentResult.screenshot);
+                        progress(`SUCCESS_SCREENSHOT: ${paymentResult.screenshot}`);
+                    }
+                    return { success: true, confirmedPaid: true, subscriptionChangedVerified: operation === 'upgrade', cardLast4, holderName, screenshots, confirmation, paymentEvidence: paymentResult.paymentEvidence, upgradeQuote: paymentResult.upgradeQuote };
+                } catch (error) {
+                    if (preflight) return { ...paymentResult, success: false, confirmedPaid: true, resultUnknown: true, localAccountingPending: true, cardLast4, confirmation, screenshots, error: '付款已证实，本地记账待原单核对，禁止重复付款' };
+                    throw error;
                 }
-                const usageResult = await store.recordCardUsage(card.id);
-                await store.createBillingRecord({
-                    card_number: card.card_number,
-                    card_last4: cardLast4,
-                    amount: billedAmount,
-                    currency: billedCurrency,
-                    plan_type: planType || 'plus',
-                    cdk_code: cdkCode,
-                    email,
-                    stripe_session_id: stripeSessionId || null,
-                    status: 'success', amountSource: resolved.amountSource || 'checkout'
-                });
-                cardHandled = true;
-                progress(`支付成功！卡片: ...${cardLast4}，姓名: ${holderName}，地址: ${address.line1}, ${address.city}`);
-                if (usageResult.exhausted) {
-                    progress(`卡 ...${cardLast4} 已达到订阅绑定上限，已标记为订阅额度用尽`);
-                }
-                if (paymentResult.screenshot) {
-                    screenshots.push(paymentResult.screenshot);
-                    progress(`SUCCESS_SCREENSHOT: ${paymentResult.screenshot}`);
-                }
-                return { success: true, confirmedPaid: true, cardLast4, holderName, screenshots };
             }
 
-            if (paymentResult.resultUnknown) throw new ResultUnknownError();
+            if (paymentResult.resultUnknown) {
+                if (preflight) return { ...paymentResult, success: false, confirmedPaid: false, cardLast4, confirmation, error: confirmation?.verified ? '套餐已变更，实际扣款凭证仍待核对，禁止重复付款' : '原单结果仍待核对，禁止重复付款' };
+                throw new ResultUnknownError();
+            }
             lastError = paymentResult.error || '支付失败';
             if (paymentResult.screenshot) {
                 screenshots.push(paymentResult.screenshot);
                 progress(`FAILURE_SCREENSHOT: ${paymentResult.screenshot}`);
             }
 
-            const declined = paymentResult.declined || isPaymentDeclined(lastError);
+            const declined = operation !== 'upgrade' && paymentResult.declined === true && isPaymentDeclined(lastError);
+            if (require('../rpc.cjs').wasSubmitted() && !declined) throw new ResultUnknownError();
             if (declined) {
                 await store.createBillingRecord({
                     card_number: card.card_number,
@@ -223,8 +278,8 @@ async function executePaymentWithRetry(page, options) {
                 );
                 declinedLast4s.push(cardLast4);
 
-                if (cardAttempt < MAX_CARD_ATTEMPTS && paymentResult.canRetryCard !== false) {
-                    progress(`卡 ...${cardLast4} 被拒，换上下一张卡 (${cardAttempt}/${MAX_CARD_ATTEMPTS})`);
+                if (cardAttempt < maxCardAttempts && paymentResult.canRetryCard !== false) {
+                    progress(`卡 ...${cardLast4} 被拒，换上下一张卡 (${cardAttempt}/${maxCardAttempts})`);
                     continue;
                 }
 
