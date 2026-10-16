@@ -166,6 +166,19 @@ suite('线上代充隔离MySQL事务验收', () => {
     ]) {
       await (model.deleteMany as () => Promise<unknown>)();
     }
+    await db.onlineRechargeConfig.create({
+      data: { id: 'global', settings: { proxyCountryCode: 'PH' } }
+    });
+    await pool.create(
+      {
+        countryCode: 'PH',
+        kind: 'mobile',
+        connectionMode: 'direct',
+        protocol: 'http',
+        url: 'http://country-fixture.example.invalid:8080'
+      },
+      operator
+    );
     credentials.mockImplementation(async (ids) => ids);
     putCards.mockReset().mockResolvedValue(undefined);
   });
@@ -1291,22 +1304,70 @@ suite('线上代充隔离MySQL事务验收', () => {
       })
     ).rejects.toThrow('脱敏');
   });
+  it('只从指定国家的启用代理中选择，并保存任务国家快照', async () => {
+    await settings.update({ proxyCountryCode: 'CL' }, operator);
+    const chile = await pool.create(
+      {
+        countryCode: 'CL',
+        kind: 'mobile',
+        connectionMode: 'direct',
+        protocol: 'socks5',
+        url: 'socks5://country-cl.example.invalid:1080'
+      },
+      operator
+    );
+    await pool.create(
+      {
+        countryCode: 'US',
+        kind: 'static_residential',
+        connectionMode: 'direct',
+        protocol: 'http',
+        url: 'http://country-us.example.invalid:8080'
+      },
+      operator
+    );
+    await repository.transaction('country-filter-fixture', async (tx) => {
+      for (let i = 0; i < 10; i++)
+        expect(await proxiesPool.active(tx, undefined, false, undefined, 'CL')).toMatchObject({
+          id: chile.id,
+          countryCode: 'CL'
+        });
+      const philippines = await tx.idBusinessV2RechargeProxy.findFirst({
+        where: { countryCode: 'PH' }
+      });
+      await expect(proxiesPool.active(tx, philippines!.id, true, undefined, 'CL')).rejects.toThrow(
+        '不属于任务指定国家'
+      );
+    });
+    const task = await start();
+    await settings.update({ proxyCountryCode: 'PH' }, operator);
+    expect(
+      (await db.onlineRechargeTask.findUnique({ where: { id: task.id } }))?.payload
+    ).toMatchObject({ proxyCountryCode: 'CL' });
+  });
+  it('未设置国家或该国没有启用代理时不创建业务任务', async () => {
+    await settings.update({ proxyCountryCode: 'CL' }, operator);
+    await expect(start()).rejects.toThrow('暂无启用代理');
+    await settings.update({ proxyCountryCode: '' }, operator);
+    await expect(start()).rejects.toThrow('代理国家');
+    expect(await db.onlineRechargeTask.count()).toBe(0);
+  });
   it('uses one pool for legacy online imports, country completion and canonical detection', async () => {
     const url = 'socks5://fixture:fixture@gateway.example.test:1080';
     await proxiesPool.action('import', { proxies: [url] }, operator);
-    const result = await pool.list();
+    const result = await pool.list({ keyword: 'gateway.example.test' });
     expect(result.total).toBe(1);
     const proxy = result.items[0]!;
     expect(proxy.countryCode).toBe('');
     expect(proxy.kind).toBeNull();
-    expect((await pool.countries()).items).toEqual([]);
+    expect((await pool.countries()).items).toEqual(['PH']);
     await pool.update(
       proxy.id,
-      { countryCode: 'PH', kind: 'mobile', remark: '共用代理' },
+      { countryCode: 'CL', kind: 'mobile', remark: '共用代理' },
       operator
     );
-    expect((await pool.countries()).items).toEqual(['PH']);
-    expect((await pool.forCharge(proxy.id, operator, 'PH')).mode).toBe('static');
+    expect((await pool.countries()).items).toEqual(['CL', 'PH']);
+    expect((await pool.forCharge(proxy.id, operator, 'CL')).mode).toBe('static');
     const oldId = '55555555-5555-4555-8555-555555555555';
     await db.idBusinessV2ProxyAlias.create({ data: { oldId, proxyId: proxy.id } });
     await repository.transaction('shared-proxy-test', async (tx) => {
@@ -1322,7 +1383,10 @@ suite('线上代充隔离MySQL事务验收', () => {
         )
       ).toEqual({ applied: true });
     });
-    expect((await pool.list()).items[0]).toMatchObject({ exitIp: '8.8.8.8', latencyMs: 25 });
+    expect((await pool.list({ keyword: 'gateway.example.test' })).items[0]).toMatchObject({
+      exitIp: '8.8.8.8',
+      latencyMs: 25
+    });
     await pool.update(proxy.id, { status: 'disabled' }, operator);
     await repository.transaction('shared-proxy-disabled', async (tx) => {
       await expect(proxiesPool.active(tx, oldId)).rejects.toThrow('已停用');

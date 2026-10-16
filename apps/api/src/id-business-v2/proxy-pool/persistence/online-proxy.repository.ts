@@ -7,6 +7,7 @@ import { RechargeProxyRepository } from './proxy-pool.repository';
 import { RechargeProxyService } from '../proxy-pool.service';
 import { bankRechargeObject, bankRechargeId } from '../validation';
 import { proxyConnectionVersion, safeProxyTestResult } from '../proxy-test';
+import { proxyCountry } from '../proxy-pool-validation';
 
 function legacyProxy(value: string) {
   let url = value.trim();
@@ -69,7 +70,8 @@ export class OnlineProxyPoolRepository {
     tx: V2CommandTransaction,
     requested?: string,
     canonical = false,
-    expectedVersion?: string
+    expectedVersion?: string,
+    countryCode?: string
   ) {
     const selected = requested
       ? canonical
@@ -77,9 +79,20 @@ export class OnlineProxyPoolRepository {
         : await this.resolveId(tx, requested)
       : undefined;
     if (selected) await this.repository.lock(tx, selected);
-    const rows = await this.repository.active(tx, selected);
+    const rows =
+      countryCode === undefined
+        ? await this.repository.active(tx, selected)
+        : await this.repository.active(tx, selected, proxyCountry(countryCode));
     if (!rows.length)
-      throw new ConflictException(requested ? '所选代理已停用或不存在' : '共用代理池没有启用代理');
+      throw new ConflictException(
+        countryCode
+          ? requested
+            ? '所选代理已停用、不存在或不属于任务指定国家'
+            : '任务指定国家没有启用代理，不会切换其他国家'
+          : requested
+            ? '所选代理已停用或不存在'
+            : '共用代理池没有启用代理'
+      );
     const row = rows[randomInt(rows.length)]!;
     const connectionVersion = proxyConnectionVersion(row);
     if (expectedVersion && expectedVersion !== connectionVersion)
@@ -90,6 +103,7 @@ export class OnlineProxyPoolRepository {
       proxy_url: this.encryption.decrypt(row.urlEncrypted),
       connectionMode: row.connectionMode,
       protocol: row.protocol,
+      countryCode: row.countryCode,
       host: row.displayHost
     };
   }

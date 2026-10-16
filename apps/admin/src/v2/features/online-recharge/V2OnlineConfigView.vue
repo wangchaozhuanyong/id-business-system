@@ -33,15 +33,20 @@
           ></V2SectionHeading
         >
         <el-form
+          ref="configForms"
+          :model="draft.form"
+          :rules="formRules"
           :disabled="!canManage"
           label-position="left"
           label-width="160px"
           require-asterisk-position="right"
+          scroll-to-error
           @submit.prevent="save"
           ><el-form-item
             v-for="field in group.fields"
             :key="field.key"
             :label="field.label"
+            :prop="field.key"
             :required="field.required"
             ><div class="online-field">
               <el-switch
@@ -54,7 +59,12 @@
                 :min="field.min"
                 :max="field.max"
                 @update:model-value="draft.form[field.key] = $event ?? 0"
-              /><el-select v-else-if="field.type === 'select'" v-model="draft.form[field.key]"
+              /><el-select
+                v-else-if="field.type === 'select'"
+                v-model="draft.form[field.key]"
+                :aria-label="field.label"
+                :placeholder="`请选择${field.label}`"
+                :no-data-text="field.emptyText"
                 ><el-option
                   v-for="option in field.options"
                   :key="option.value"
@@ -85,6 +95,7 @@
 </template>
 <script setup lang="ts">
 import { computed, onBeforeUnmount, reactive, ref, watch } from 'vue';
+import type { FormInstance, FormRules } from 'element-plus';
 import { useAuthStore } from '@/stores/auth';
 import { sessionCoordinator } from '@/auth/sessionCoordinator';
 import { canUseOnlineAction } from './permissions';
@@ -95,6 +106,8 @@ import V2AsyncRegion from '@/v2/components/V2AsyncRegion.vue';
 import V2SectionHeading from '@/v2/components/V2SectionHeading.vue';
 import { useV2FormDraft } from '@/v2/composables/useV2SessionDraft';
 import { useV2ModuleQuery } from '@/v2/composables/useV2Query';
+import { validateV2Form } from '@/v2/utils/formValidation';
+import { proxyPoolApi, proxyCountryLabel } from '@/v2/features/proxy-pool/public-api';
 import { onlineApi, copyOnlineText } from './api';
 import { configGroups } from './configFields';
 import { onlineError } from './labels';
@@ -114,10 +127,20 @@ const query = useV2ModuleQuery({
   scope: 'online-recharge',
   enabled: () => canUseOnlineAction(authStore.user, 'config', 'detail'),
   key: 'config',
-  query: ({ signal }) => onlineApi.config(signal),
+  query: async ({ signal }): Promise<Record<string, unknown> & { proxyCountries: string[] }> => {
+    const [config, countries] = await Promise.all([
+      onlineApi.config(signal),
+      proxyPoolApi.countries({ signal })
+    ]);
+    return { ...config, proxyCountries: countries.items };
+  },
   keepPreviousData: true
 });
 const secrets = reactive<Record<string, string>>({});
+const configForms = ref<FormInstance[]>([]);
+const formRules: FormRules = {
+  proxyCountryCode: [{ pattern: /^[A-Z]{2}$/, message: '请选择有效的代理国家', trigger: 'change' }]
+};
 const saving = ref(false);
 const testing = ref('');
 const message = ref('');
@@ -148,7 +171,22 @@ function secretSaved(key: string) {
 const visibleGroups = computed(() =>
   configGroups.map((group) => ({
     ...group,
-    fields: group.fields.map((field) => ({ ...field, saved: secretSaved(field.key) }))
+    fields: group.fields.map((field) => ({
+      ...field,
+      saved: secretSaved(field.key),
+      emptyText:
+        field.key === 'proxyCountryCode' ? '暂无启用代理，请先在代理 IP 管理中添加' : '暂无选项',
+      ...(field.key === 'proxyCountryCode'
+        ? {
+            options: [
+              ...new Set([
+                ...(query.data.value?.proxyCountries ?? []),
+                ...(draft.form.proxyCountryCode ? [String(draft.form.proxyCountryCode)] : [])
+              ])
+            ].map((value) => ({ value, label: proxyCountryLabel(value) }))
+          }
+        : {})
+    }))
   }))
 );
 function clearSecrets() {
@@ -168,6 +206,7 @@ onBeforeUnmount(() => {
 });
 async function save() {
   if (saving.value) return;
+  for (const form of configForms.value) if (!(await validateV2Form(form))) return;
   saving.value = true;
   message.value = '';
   const finish = draft.beginSave();
