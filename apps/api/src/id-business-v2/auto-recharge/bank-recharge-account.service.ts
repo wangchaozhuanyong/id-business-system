@@ -1,6 +1,7 @@
 import type { V2RechargePlan } from '@apple-business/shared';
 import { parseNewChatgptAccount, type NewChatgptAccount } from './bank-recharge-account-input';
 import { accountOfferUpdate, assertAccountEditVersion } from './bank-recharge-account-offers';
+import { accountSaleUpdate, parseChatgptAccountSaleStatus } from './bank-recharge-account-sales';
 import {
   BadRequestException,
   ConflictException,
@@ -16,6 +17,8 @@ import { BankRechargeRepository } from './persistence/bank-recharge.repository';
 import {
   V2CommandTransactionManager,
   V2TransactionalAuditService,
+  normalizeV2ExpectedUpdatedAt,
+  runV2OptimisticUpdate,
   type V2CommandTransaction
 } from '../runtime/public-api';
 import { generateIdBusinessV2TotpCode, parseIdBusinessV2TotpSecret } from '../workspace/public-api';
@@ -155,6 +158,7 @@ export class BankRechargeAccountService {
             'status',
             'remark',
             'offerStatus',
+            'saleStatus',
             'expectedUpdatedAt'
           ].includes(key)
       )
@@ -167,6 +171,12 @@ export class BankRechargeAccountService {
         ? undefined
         : bankRechargeCountryCode(input.registrationCountryCode);
     const offerPatch = accountOfferUpdate(input.offerStatus);
+    const saleStatus =
+      input.saleStatus === undefined ? undefined : parseChatgptAccountSaleStatus(input.saleStatus);
+    const expectedSaleVersion =
+      saleStatus === undefined
+        ? undefined
+        : normalizeV2ExpectedUpdatedAt(input.expectedUpdatedAt, '账号');
     const password =
       input.password === undefined ? undefined : bankRechargePassword(input.password);
     const totpInput =
@@ -191,6 +201,7 @@ export class BankRechargeAccountService {
         const before = await this.repository.findAccount(tx, id);
         if (!before || before.deletedAt) throw new NotFoundException('ChatGPT 账号不存在或已删除');
         assertAccountEditVersion(input.expectedUpdatedAt, before.updatedAt);
+        const salePatch = accountSaleUpdate(before, saleStatus);
         if (
           email &&
           email !== this.encryption.decrypt(before.emailEncrypted) &&
@@ -198,34 +209,46 @@ export class BankRechargeAccountService {
         ) {
           throw new ConflictException('已核验的官网账号不能直接更换邮箱，请建立新账号');
         }
-        const updated = await this.repository.updateAccount(tx, {
-          where: { id },
-          data: {
-            ...offerPatch,
-            ...(registrationCountryCode !== undefined ? { registrationCountryCode } : {}),
-            ...(email
-              ? {
-                  emailEncrypted: this.encryption.encrypt(email)!,
-                  emailHash: this.encryption.hash(email)!,
-                  emailMasked: bankRechargeMaskedEmail(email)
-                }
-              : {}),
-            ...(password !== undefined
-              ? { passwordEncrypted: this.encryption.encrypt(password) }
-              : {}),
-            ...(totpInput !== undefined
-              ? {
-                  totpSecretEncrypted: this.encryption.encrypt(totp?.secret),
-                  totpAlgorithm: totp?.algorithm ?? 'sha1',
-                  totpDigits: totp?.digits ?? 6,
-                  totpPeriod: totp?.period ?? 30
-                }
-              : {}),
-            ...(input.status ? { status: input.status as 'active' | 'disabled' } : {}),
-            ...(remark !== undefined ? { remark: remark || null } : {}),
-            updatedByUserId: operator.id
-          }
-        });
+        const updated = await runV2OptimisticUpdate('账号', () =>
+          this.repository.updateAccount(tx, {
+            where: {
+              id,
+              ...(saleStatus !== undefined
+                ? {
+                    updatedAt: expectedSaleVersion,
+                    deletedAt: null,
+                    ...(saleStatus === 'sold' ? { registered: true } : {})
+                  }
+                : {})
+            },
+            data: {
+              ...offerPatch,
+              ...salePatch,
+              ...(registrationCountryCode !== undefined ? { registrationCountryCode } : {}),
+              ...(email
+                ? {
+                    emailEncrypted: this.encryption.encrypt(email)!,
+                    emailHash: this.encryption.hash(email)!,
+                    emailMasked: bankRechargeMaskedEmail(email)
+                  }
+                : {}),
+              ...(password !== undefined
+                ? { passwordEncrypted: this.encryption.encrypt(password) }
+                : {}),
+              ...(totpInput !== undefined
+                ? {
+                    totpSecretEncrypted: this.encryption.encrypt(totp?.secret),
+                    totpAlgorithm: totp?.algorithm ?? 'sha1',
+                    totpDigits: totp?.digits ?? 6,
+                    totpPeriod: totp?.period ?? 30
+                  }
+                : {}),
+              ...(input.status ? { status: input.status as 'active' | 'disabled' } : {}),
+              ...(remark !== undefined ? { remark: remark || null } : {}),
+              updatedByUserId: operator.id
+            }
+          })
+        );
         await this.audit.append(tx, {
           userId: operator.id,
           module: 'id_business_v2',
@@ -236,12 +259,16 @@ export class BankRechargeAccountService {
             emailMasked: before.emailMasked,
             status: before.status,
             offerStatus: before.offerStatus,
+            saleStatus: before.saleStatus,
+            soldAt: before.soldAt?.toISOString() ?? null,
             registrationCountryCode: before.registrationCountryCode
           },
           afterData: {
             emailMasked: updated.emailMasked,
             status: updated.status,
             offerStatus: updated.offerStatus,
+            saleStatus: updated.saleStatus,
+            soldAt: updated.soldAt?.toISOString() ?? null,
             registrationCountryCode: updated.registrationCountryCode,
             passwordChanged: password !== undefined,
             totpChanged: totpInput !== undefined

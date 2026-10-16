@@ -860,6 +860,7 @@ async function main() {
         'src/id-business-v2/finance/finance-exchange-costs-mysql.integration.spec.ts',
         'src/id-business-v2/orders/order-cash-cost-mysql.integration.spec.ts',
         'src/id-business-v2/auto-recharge/bank-recharge-lifecycle-mysql.integration.spec.ts',
+        'src/id-business-v2/auto-recharge/bank-recharge-account-sales.mysql.integration.spec.ts',
         'src/id-business-v2/auto-recharge/bank-recharge-mysql.integration.spec.ts',
         'src/id-business-v2/data-governance/bank-recharge-governance-mysql.integration.spec.ts',
         'src/id-business-v2/workspace/id-business-v2-website-visit-mysql.integration.spec.ts',

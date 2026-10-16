@@ -110,9 +110,9 @@
     {
       "path": "proxy-connection.cjs",
       "originalSha256": null,
-      "adaptedSha256": "467bca6e0f5c4be4bb1343f36901959de233c4b7f1b655b7665b166dead792da",
+      "adaptedSha256": "b10d2652e04b2ee0fffe097aeec0a028e47bc475ab5a11cfa22b7e8571afdc01",
       "changed": true,
-      "reason": "Shared proxy connection and dynamic session resolver with public-address checks and sanitized extraction errors."
+      "reason": "Shared proxy connection and dynamic session resolver with public-address checks and sanitized extraction errors. Equivalent character detection removes lint-only regex escapes without changing proxy acceptance."
     },
     {
       "path": "proxy-resolver.cjs",

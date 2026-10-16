@@ -1,3 +1,8 @@
+import {
+  isChatgptSalesOnly,
+  chatgptSalesSchemaMatches,
+  chatgptSalesParts
+} from './ci-chatgpt-sales-scope.mjs';
 import { isProxyResultIdentityOnly } from './ci-proxy-result-identity-scope.mjs';
 import {
   isOnlineProxyCountryOnly,
@@ -227,6 +232,7 @@ const onlineCiBuildTestInputs = new Set([
   'scripts/production-release/online-recharge-component-lifecycle.test.py'
 ]);
 export function needsOnlineRechargeCiBuild(paths, context) {
+  if (isChatgptSalesOnly(paths)) return false;
   if (isOnlineProxyCountryValidationOnly(paths)) return false;
   if (isOnlineProxyCountryOnly(paths)) return false;
   if (isRegistrationFlowEvidenceControlRepair(paths, context)) return false;
@@ -1004,6 +1010,8 @@ export function isMailboxOnly(paths) {
 }
 
 export function checkMode(paths, oldSchema, newSchema, grantHelperSnapshot, context) {
+  if (isChatgptSalesOnly(paths))
+    return chatgptSalesSchemaMatches(oldSchema, newSchema) ? 'recharge' : 'full';
   if (isOnlineProxyCountryValidationOnly(paths))
     return oldSchema === newSchema ? 'ci-only' : 'full';
   if (isOnlineProxyCountryOnly(paths)) return oldSchema === newSchema ? 'recharge' : 'full';
@@ -1474,6 +1482,7 @@ export function isTargetedOnly(paths, oldSchema, newSchema) {
   );
 }
 export function selectedParts(paths, grantHelperSnapshot, context) {
+  if (isChatgptSalesOnly(paths)) return [...chatgptSalesParts];
   if (isOnlineProxyCountryOnly(paths)) return [...onlineProxyCountryParts];
   if (isRegistrationFlowEvidenceControlRepair(paths, context)) return ['guards'];
   if (isRegistrationFlowEvidenceOnly(paths, context)) return ['guards', 'api', 'admin'];

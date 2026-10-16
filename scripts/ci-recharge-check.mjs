@@ -1,3 +1,4 @@
+import { isChatgptSalesOnly, chatgptSalesCommands } from './ci-chatgpt-sales-scope.mjs';
 import {
   isRegistrationFlowEvidenceOnly,
   isRegistrationFlowEvidenceControlRepair,
@@ -83,6 +84,11 @@ const changed = execFileSync('git', ['diff', '--name-only', base, 'HEAD'], { enc
   .trim()
   .split('\n')
   .filter(Boolean);
+// Finite account inventory change: keep all affected checks and isolated MySQL.
+if (mode === 'recharge' && isChatgptSalesOnly(changed)) {
+  for (const [file, ...args] of chatgptSalesCommands(part, changed)) run(file, args);
+  process.exit(0);
+}
 // This API/Admin feature preserves the deployed engine image. Run every affected
 // source/test/build/UI check; the main-only workflow verifies disposable MySQL.
 // Any additional runtime, schema or dependency path uses the existing dispatcher.

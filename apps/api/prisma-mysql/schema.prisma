@@ -2781,6 +2781,11 @@ enum IdBusinessV2ChatgptAccountStatus {
   disabled
 }
 
+enum IdBusinessV2ChatgptAccountSaleStatus {
+  unsold
+  sold
+}
+
 enum IdBusinessV2BankRechargeOrderSource {
   automatic
   manual
@@ -2820,6 +2825,8 @@ model IdBusinessV2ChatgptAccount {
   emailHash           String                           @unique @map("email_hash") @db.Char(64)
   emailMasked         String                           @map("email_masked") @db.VarChar(255)
   registered          Boolean                          @default(true)
+  saleStatus          IdBusinessV2ChatgptAccountSaleStatus @default(unsold) @map("sale_status")
+  soldAt              DateTime?                        @map("sold_at") @db.DateTime(6)
   registrationCountryCode String?                      @map("registration_country_code") @db.Char(2)
   registrationIpEncrypted String?                      @map("registration_ip_encrypted") @db.Text
   registeredAt        DateTime?                        @map("registered_at") @db.DateTime(6)
@@ -2847,6 +2854,7 @@ model IdBusinessV2ChatgptAccount {
 
   @@index([deletedAt, updatedAt])
   @@index([status, updatedAt])
+  @@index([deletedAt, saleStatus, soldAt, id], map: "chatgpt_accounts_sale_list_idx")
   @@map("id_business_v2_chatgpt_accounts")
 }
 

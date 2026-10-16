@@ -23,6 +23,8 @@ export const auditChangeFieldLabels: Record<string, string> = {
   passwordVerified: '密码已核实',
   mfaVerified: '双重验证已核实',
   offerStatus: '优惠状况',
+  saleStatus: '出售情况',
+  soldAt: '出售标记时间',
   proxyId: '代理资料',
   nameId: '名字资料',
   registrationAge: '注册年龄',

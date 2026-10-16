@@ -99,6 +99,8 @@ export function auditChangeValue(value: unknown, field: string): string {
   }
   const text = String(value);
   if (field === 'offerStatus') return V2_ACCOUNT_OFFER_LABELS[text as V2AccountOffer] ?? '待核实';
+  if (field === 'saleStatus')
+    return text === 'sold' ? '已出售' : text === 'unsold' ? '未出售' : '出售情况待核实';
   if (field === 'step') return historicalRegistrationStepLabels[text] ?? '阶段待核对';
   if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(text)) {
     const date = new Date(text);
