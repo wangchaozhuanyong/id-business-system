@@ -220,3 +220,46 @@ test('country change clearing card fields is detected and repaired within the sa
   assert.equal((await fillBilling(page, address, 'Synthetic Person', { deadline })).ok, true);
   assert.deepEqual(await verifyCard(page, card, { deadline }), []);
 });
+
+test('actual submit boundary rereads the official amount and stops before any click', async (t) => {
+  const rpc = require('../rpc.cjs'),
+    original = rpc.beforeExternalSubmit;
+  let calls = 0;
+  rpc.beforeExternalSubmit = async () => {
+    calls++;
+    throw Object.assign(new Error('SYNTHETIC_STOP_AT_RPC'), { code: 'LEASE_LOST' });
+  };
+  const modulePath = require.resolve('../upstream/stripe-payment');
+  delete require.cache[modulePath];
+  const stripe = require(modulePath);
+  try {
+    for (const [due, quoted, error, count] of [
+      ['10000.00', '9990.00', /付款上限/, 0],
+      ['9000.00', '8919.64', /报价已变化/, 0],
+      ['9990.00', '9990.00', /SYNTHETIC_STOP_AT_RPC/, 1]
+    ]) {
+      const page = await pageFor(t, '');
+      await page.route('https://chatgpt.com/checkout/online-checkout-synthetic', (route) =>
+        route.fulfill({
+          contentType: 'text/html',
+          body: `<p>Due today PHP ${due}</p><button onclick="window.didClick=true">Subscribe</button>`
+        })
+      );
+      await page.goto('https://chatgpt.com/checkout/online-checkout-synthetic');
+      calls = 0;
+      await assert.rejects(
+        () =>
+          stripe.finalizeCheckoutPayment(page, 'Synthetic Person', {
+            paymentContext: { currency: 'PHP', amount: quoted },
+            paymentLimit: { currency: 'PHP', maxAmount: '9990.00' }
+          }),
+        error
+      );
+      assert.equal(calls, count);
+      assert.equal(await page.evaluate(() => Boolean(window.didClick)), false);
+    }
+  } finally {
+    rpc.beforeExternalSubmit = original;
+    delete require.cache[modulePath];
+  }
+});

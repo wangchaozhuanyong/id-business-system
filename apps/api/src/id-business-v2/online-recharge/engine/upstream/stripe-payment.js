@@ -619,7 +619,7 @@ async function completeStripeCardPayment(page, cardInfo, address, options = {}) 
         const originalCheckoutUrl = page.url();
         const originalCheckoutId = String(originalCheckoutUrl).match(/(?:oaics_[a-f0-9]+|cs_(?:live|test)_[A-Za-z0-9]+)/)?.[0];
         if (originalCheckoutId) paymentContext.quoteId = 'quote:' + createHash('sha256').update(originalCheckoutId).digest('hex').slice(0, 32);
-        const payResult = await finalizeCheckoutPayment(page, holderName, { paymentContext });
+        const payResult = await finalizeCheckoutPayment(page, holderName, { paymentContext, paymentLimit: options.paymentLimit });
         const paymentEvidence = { ...paymentContext, source: 'checkout', quoteVerified: true, verified: payResult.success === true && isVerifiedCheckoutOutcome(originalCheckoutUrl, page.url()) };
         return { ...payResult, dueAmount: finalDue.amount, dueCurrency: finalDue.currency, paymentEvidence };
 
@@ -2349,12 +2349,19 @@ async function clickCheckoutSubmitButton(page, options = {}) {
             await target.scrollIntoViewIfNeeded({ timeout: 3000 }).catch(() => {});
             await page.waitForTimeout(randomBetween(150, 350));
             if (!options.paymentContext || wasSubmitted()) throw new Error('付款提交资料缺失或已提交过，禁止重复付款');
+            if (options.paymentLimit) {
+                const currentDue = parseCheckoutDueAmount(await page.textContent('body', { timeout: 2000 }), { allowZero: options.paymentContext.kind === 'upgrade' });
+                require('../payment-limit.cjs').assertPaymentLimit(options.paymentLimit, currentDue);
+                if (currentDue.currency !== options.paymentContext.currency || currentDue.amount !== options.paymentContext.amount) {
+                    throw Object.assign(new Error('付款前官网报价已变化，未提交付款'), { code: 'QUOTE_CHANGED' });
+                }
+            }
             await beforeExternalSubmit({ provider: 'local', stage: 'payment_submit', paymentContext: options.paymentContext });
             await target.click({ timeout: 8000, delay: randomBetween(40, 120) });
             console.log(`[Stripe] ✅ 已点击提交按钮 (${label})`);
             return true;
         } catch (error) {
-            if (error.code === 'LEASE_LOST') throw error;
+            if (['LEASE_LOST', 'PAYMENT_LIMIT', 'QUOTE_CHANGED'].includes(error.code)) throw error;
             if (wasSubmitted()) throw new ResultUnknownError();
             console.log(`[Stripe] 提交按钮点击失败 (${label}): ${error.message}`);
             return false;

@@ -523,7 +523,7 @@
     {
       "path": "upstream/stripe-payment.js",
       "originalSha256": "007a6ae1abb633fd283e48f4ceac02bf3d2e2fc30aaca87520565b34eb29743e",
-      "adaptedSha256": "7879167ec50cea309917ba45ca01856ef22464d80ba768237315170a4094ff89",
+      "adaptedSha256": "f31b714600c81774a91b0dc855a89148a58feccb31d7b8dc3f8de520ab20d7ac",
       "changed": true,
       "reason": "Read exact whole-peso CLP totals, wait for official Chilean tax total, preserve address country and existing final payment gates."
     },
@@ -607,14 +607,14 @@
     {
       "path": "payment-limit.cjs",
       "originalSha256": null,
-      "adaptedSha256": "e5656a4c06e39d738f008e76d637af56c997a683e149a87d9333a40b7f7a2ab0",
+      "adaptedSha256": "2b54b1b1d6e3b9e6034b4a896c38e61f00061537d89b077d28e263744ef6f5dd",
       "changed": true,
       "reason": "Semantic frame-safe checkout form readback and immutable per-task payment cap."
     },
     {
       "path": "test/checkout-form.test.cjs",
       "originalSha256": null,
-      "adaptedSha256": "bd573db48899b49f41c08cc616f17acafaa546cc6c151da5f9a1016af0981eff",
+      "adaptedSha256": "38f3f827fbdf4fc8af196ef92a4b002925fa8d921c3be4bedad83b623b1dad06",
       "changed": true,
       "reason": "Real Chromium regression coverage for semantic embedded fields, readback, deadline and payment limits."
     }
