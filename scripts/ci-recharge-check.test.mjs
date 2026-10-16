@@ -1,3 +1,9 @@
+import {
+  proxyResultIdentityPaths,
+  proxyResultIdentityBase,
+  proxyResultIdentityEngineTests,
+  proxyResultIdentityEngineRoot
+} from './ci-proxy-result-identity-scope.mjs';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
@@ -540,7 +546,8 @@ function recordGuardCommands(
     base = 'a'.repeat(40),
     readonlyBaseSource = '',
     readonlyCurrentSource = null,
-    cacheConfiguration = null
+    cacheConfiguration = null,
+    identityFixture = false
   } = {}
 ) {
   // Run the real dispatcher with process execution replaced before its named import resolves.
@@ -584,6 +591,14 @@ function recordGuardCommands(
     };
     const scopeUrl = new URL('./scripts/ci-recharge-scope.mjs', import.meta.url).href;
     registerHooks({resolve(specifier, context, nextResolve) {
+      if (${JSON.stringify(identityFixture)} && specifier === './ci-proxy-result-identity-scope.mjs' && context.parentURL?.endsWith('/scripts/ci-recharge-check.mjs')) {
+        const identityUrl = new URL('./scripts/ci-proxy-result-identity-scope.mjs', import.meta.url).href;
+        const source = 'import {isProxyResultIdentityOnly as original, proxyResultIdentityPins} from ' + JSON.stringify(identityUrl) + ';' +
+          'export * from ' + JSON.stringify(identityUrl) + ';' +
+          'export function isProxyResultIdentityOnly(paths, options) {' +
+          'return original(paths, {...options, sourceDigest: (path) => proxyResultIdentityPins[path]}); }';
+        return {url: 'data:text/javascript,' + encodeURIComponent(source), shortCircuit: true};
+      }
       if (specifier === './ci-recharge-scope.mjs' && context.parentURL?.endsWith('/scripts/ci-recharge-check.mjs')) {
         const source = 'export * from ' + JSON.stringify(scopeUrl) + ';' +
           'export function canResumeCombinedGuard(base) {' +
@@ -607,6 +622,7 @@ function recordGuardCommands(
     }});
     childProcess.execFileSync = (file, args) => {
       if (file === 'git') {
+        if (args.join(' ') === 'rev-parse 7c3c102c98539d33cb379ef018427371ba750cb7^{tree}') return 'f6ab4537e28437af244c2263dd591516ae8e2a22\\n';
         if (args.join(' ') === 'rev-parse d38c243b5727953aa96c0fa83e706fee253c9624^{tree}') return 'a331c3ab6b23c3331aa550b752d9d66860e62cdb\\n';
         if (args.join(' ') === 'rev-parse cd7bba03bec1742328e0829c215823bda1fd3fae^{tree}') return '874102957cbd6cc921e05e5bba252e63bd09fd85\\n';
         if (args.join(' ') === 'rev-parse 7d1c3822c8f8c8c6a970067580443a3b75e88bf0^{tree}') return 'a1ffd620d2b79630b9c1e9db700d6af765f33a50\\n';
@@ -2321,4 +2337,50 @@ test('exact published table alias controls run their pure positive and negative 
       );
     }
   }
+});
+
+test('byte-bound proxy identity patch runs publisher/selectors and real engine suites without historical database or image checks', () => {
+  const paths = [...proxyResultIdentityPaths];
+  const options = { base: proxyResultIdentityBase, identityFixture: true };
+  const guards = recordGuardCommands('recharge', paths, 'guards', options);
+  assert.deepEqual(guards[0], [
+    'python3',
+    '-B',
+    'scripts/production-release/proxy-result-identity-release.test.py'
+  ]);
+  for (const command of ['prettier', 'eslint'])
+    assert.ok(guards.some((row) => row.includes(command)));
+  assert.ok(guards.some((row) => row.includes('scripts/ci-proxy-result-identity-scope.test.mjs')));
+  assert.equal(
+    guards.some((row) => row.join(' ').includes('api-admin-pending-online')),
+    false
+  );
+  assert.deepEqual(guards.at(-1), ['process-exit', 0]);
+  const engine = recordGuardCommands('recharge', paths, 'online-engine', options);
+  assert.deepEqual(engine[0], [
+    'npm',
+    'ci',
+    '--prefix',
+    proxyResultIdentityEngineRoot + '/upstream',
+    '--ignore-scripts',
+    '--no-audit',
+    '--no-fund'
+  ]);
+  assert.deepEqual(engine[1], ['node', '--test', ...proxyResultIdentityEngineTests]);
+  assert.deepEqual(engine[2], ['process-exit', 0]);
+  const wider = recordGuardCommands(
+    'recharge',
+    [...paths, 'apps/api/src/id-business-v2/online-recharge/engine/worker.cjs'],
+    'guards',
+    options
+  );
+  assert.ok(wider.some((row) => row.join(' ').includes('api-admin-pending-online')));
+  assert.throws(
+    () =>
+      recordGuardCommands('recharge', paths, 'guards', {
+        ...options,
+        failCommand: 'python3 -B scripts/production-release/proxy-result-identity-release.test.py'
+      }),
+    /SYNTHETIC_COMMAND_FAILURE/
+  );
 });
