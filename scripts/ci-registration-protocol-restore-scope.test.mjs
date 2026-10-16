@@ -120,7 +120,8 @@ function repairFixture() {
   options.contract.validationSources = { [validation]: application[validation] };
   options.contract.unchangedInputs = { 'package-lock.json': 'c'.repeat(64) };
   options.contract.validationBaselineSources = {
-    'scripts/acceptance-v2-registration-parity-diagnostics.mjs': 'd'.repeat(64)
+    'scripts/acceptance-v2-registration-parity-diagnostics.mjs': 'd'.repeat(64),
+    ...repairGuard
   };
   const repairBaseContract = structuredClone(options.contract);
   options.contract.validationBaselineSources = {
@@ -136,8 +137,8 @@ function repairFixture() {
   };
 }
 
-test('the exact eight-control repair preserves the full original source closure', () => {
-  assert.equal(repairPaths.length, 8);
+test('the exact nine-control image-user repair preserves the full original source closure', () => {
+  assert.equal(repairPaths.length, 9);
   const options = repairFixture();
   assert.equal(isRegistrationProtocolRestoreControlRepair(repairPaths, options), true);
   assert.equal(isRegistrationProtocolRestoreOnly(repairPaths, options), false);
@@ -155,6 +156,8 @@ test('repair rejects missing duplicate extra business dependency schema and buil
     ...[
       'apps/admin/src/v2/features/auto-registration/V2AppleMailboxes.vue',
       'apps/api/prisma-mysql/schema.prisma',
+      'apps/api/src/id-business-v2/online-recharge/tasks.service.ts',
+      'apps/api/src/id-business-v2/auto-registration/worker/apple_browser_registration.py',
       'package-lock.json',
       'scripts/production-release/registration-protocol-restore-build.py'
     ].map((name) => [...repairPaths, name])
@@ -162,6 +165,7 @@ test('repair rejects missing duplicate extra business dependency schema and buil
     assert.equal(isRegistrationProtocolRestoreControlRepair(names, repairFixture()), false);
   for (const change of [
     { base: base },
+    { base: 'dc3c022de71ee702d627ad8231828e1d89866105' },
     { baseTree: baseTree },
     { sourceDigest: () => 'b'.repeat(64) },
     { baseSourceDigest: () => 'b'.repeat(64) }
@@ -202,7 +206,7 @@ test('repair cannot rewrite the application anchor retained source or removed so
   }
 });
 
-test('repair adds only the one published architecture guard with exact local bytes', () => {
+test('image-user repair retains the published architecture guard with exact local bytes', () => {
   for (const mutate of [
     (c) => {
       delete c.validationBaselineSources[Object.keys(repairGuard)[0]];
@@ -227,6 +231,19 @@ test('repair adds only the one published architecture guard with exact local byt
     isRegistrationProtocolRestoreControlRepair(repairPaths, {
       ...options,
       sourceDigest: (name) => (name in repairGuard ? 'b'.repeat(64) : options.sourceDigest(name))
+    }),
+    false
+  );
+});
+
+test('an unpinned image-user controller cannot enter the pure guard route', () => {
+  const options = repairFixture();
+  const controller = 'scripts/production-release/registration-protocol-restore-release.py';
+  assert.equal(repairPaths.includes(controller), true);
+  assert.equal(
+    isRegistrationProtocolRestoreControlRepair(repairPaths, {
+      ...options,
+      sourceDigest: (name) => (name === controller ? 'b'.repeat(64) : options.sourceDigest(name))
     }),
     false
   );

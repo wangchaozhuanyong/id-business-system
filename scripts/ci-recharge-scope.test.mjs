@@ -66,7 +66,7 @@ import {
   registrationBrowserParts
 } from './ci-registration-browser-scope.mjs';
 
-test('registration protocol control repair selects guards only without ONLINE or candidate suites', () => {
+test('registration protocol image-user repair selects guards only without ONLINE or candidate suites', () => {
   const prior = JSON.parse(
     execFileSync(
       'git',
@@ -93,12 +93,18 @@ test('registration protocol control repair selects guards only without ONLINE or
     baseSourceDigest: (name) => registrationProtocolRestoreRemovedSources[name] ?? null
   };
   const paths = [...registrationProtocolRestoreRepairPaths];
+  assert.equal(paths.length, 9);
+  assert.equal(
+    paths.includes('scripts/production-release/registration-protocol-restore-release.py'),
+    true
+  );
   assert.equal(checkMode(paths, 'same', 'same', undefined, context), 'ci-only');
   assert.deepEqual(selectedParts(paths, undefined, context), ['guards']);
   assert.equal(needsOnlineRechargeCiBuild(paths, context), false);
   assert.equal(checkMode(paths, 'before', 'after', undefined, context), 'full');
   for (const change of [
     { base: registrationProtocolRestoreBase },
+    { base: 'dc3c022de71ee702d627ad8231828e1d89866105' },
     { baseTree: '0'.repeat(40) },
     { sourceDigest: () => 'b'.repeat(64) },
     { contract: { ...contract, reviewedApplicationCommit: '0'.repeat(40) } }
