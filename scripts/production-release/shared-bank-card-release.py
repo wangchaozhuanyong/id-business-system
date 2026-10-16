@@ -44,8 +44,16 @@ def load(name):
 
 
 def verify_proof(proof, plan, contract, files):
+    validated_controls = plan.get('validatedControlSources', plan['controlSources'])
+    if validated_controls != plan['controlSources']:
+        # Reuse only the exact five-test native artifact whose read-only
+        # preflight stopped before any migration or switch was accepted.
+        need(plan['commit'] == 'e84a44d86c289354bc7ed15dcd0ec68f7210e18e'
+             and plan['workflowRunId'] == '38916394747'
+             and validated_controls == {**plan['controlSources'], 'shared-bank-card-release.py': '7b727c352ed133b84e7188df5a54c7776819acee2cebdf02a5ffc5023444f89d'}, 'REUSED_EXECUTOR_SCOPE_CHANGED')
     need(proof.get('version') == 1 and proof.get('scope') == SCOPE == contract['scope']
-         and all(proof.get(key) == plan[key] for key in ('commit', 'tree', 'workflowRunId', 'workflowRunAttempt', 'contractSha256', 'controlSources'))
+         and all(proof.get(key) == plan[key] for key in ('commit', 'tree', 'workflowRunId', 'workflowRunAttempt', 'contractSha256'))
+         and proof.get('controlSources') == validated_controls
          and proof.get('sources') == contract['sources']
          and proof.get('afterEngineFiles') == contract['afterEngineFiles']
          and proof.get('baselineApiReproduced') is True and proof.get('baselineAdminSourceReproduced') is True
@@ -136,6 +144,7 @@ def release(plan, contract):
     need(plan['mode'] in ('preflight', 'release', 'readback') and re.fullmatch('[a-f0-9]{40}', plan['commit'])
          and re.fullmatch('[a-f0-9]{40}', plan['tree']) and re.fullmatch('[1-9][0-9]*', plan['workflowRunId']), 'IDENTITY_INVALID')
     need(sha(Path(__file__).with_name('shared-bank-card-contract.json').read_bytes()) == plan['contractSha256'], 'CONTRACT_CHANGED')
+    need(set(plan['controlSources']) == set(contract['controlFiles']), 'CONTROL_SCOPE_CHANGED')
     for name, expected in plan['controlSources'].items():
         need(sha(Path(__file__).with_name(name).read_bytes()) == expected, 'CONTROL_SOURCE_CHANGED')
     h = load('recharge-record-release.py')
@@ -247,7 +256,8 @@ def release(plan, contract):
         h.guards(d, target, after, contract)
         receipt = {'status': 'DEPLOYED', 'commit': plan['commit'], 'before': before, 'after': after, 'images': images,
                    'backup': backup, 'artifactSha256': plan['artifactSha256'], 'buildProofSha256': plan['buildProofSha256'],
-                   'preservedServices': list(PRESERVED), 'migrationPerformed': True, 'businessActions': 0}
+                   'preservedServices': list(PRESERVED), 'migrationPerformed': True, 'businessActions': 0,
+                   'controlCommit': plan.get('controlCommit', plan['commit']), 'validationRunId': plan['workflowRunId']}
         (target / 'shared-bank-card-preservation.json').write_text(json.dumps(receipt, sort_keys=True, indent=2) + '\n')
         (target / 'shared-bank-card-build-proof.json').write_bytes(raw_proof)
         manifest = json.loads(raw_manifest)
@@ -272,7 +282,13 @@ def release(plan, contract):
 
 
 def mysql_read(d, directory, query):
-    return d.compose(directory, 'exec', '-T', 'mysql', 'sh', '-c',
+    from urllib.parse import urlsplit
+    configuration = json.loads(d.compose(directory, 'config', '--format', 'json'))
+    database = urlsplit(configuration['services']['api']['environment']['DATABASE_URL']).path.strip('/')
+    need(re.fullmatch(r'[A-Za-z0-9_]{1,64}', database), 'DATABASE_IDENTITY_INVALID')
+    # The retained MySQL container can still carry its original database name.
+    # Select the verified current application database explicitly for every read.
+    return d.compose(directory, 'exec', '-e', 'MYSQL_DATABASE=' + database, '-T', 'mysql', 'sh', '-c',
         'MYSQL_PWD="$MYSQL_ROOT_PASSWORD" exec mysql --batch --raw --skip-column-names -uroot "$MYSQL_DATABASE" -e "$1"',
         'shared-bank-card-read', query, timeout=60)
 
