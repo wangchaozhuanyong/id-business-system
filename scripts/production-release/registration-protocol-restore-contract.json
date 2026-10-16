@@ -2284,16 +2284,16 @@
     "apps/api/src/id-business-v2/auto-registration/worker/apple_mailboxes.py": "b1cbea722f7d63c33181811c2446d43cf7af5b212ff2d379aadc3b3cb909c613",
     "apps/api/src/id-business-v2/auto-registration/worker/test_registration_closed_loop_unit.py": "50faaedb25008f3b73dcc7e66060810b4c09ad6fc6587d6fbc796fce13ae35af",
     "apps/api/src/id-business-v2/auto-registration/worker/workspace.py": "6bcb2050633db830068fd1a1b1a30d3dd75bf45f24aef3ab5b9c398d632e7237",
-    "docs/V2_TASKS.md": "397ff8522abe513938d8c950cdcff8de263531f0d0fe23623034f20b1eef4b1b",
+    "docs/V2_TASKS.md": "2f0d07a9306993e3b36db68e7616a5b69f689564f13e781f39c9ab4572b8ab99",
     "scripts/ci-recharge-check.mjs": "b0063f9ffb8541fbddd4cb22acfc9663337bc1c5bfea89c3f7b4b3d1e6917161",
     "scripts/ci-recharge-check.test.mjs": "75ba11f8cd22c9d9149723c1389fb6d3296c00e1d7985a34b71c5e3dab0656a3",
     "scripts/ci-recharge-scope.mjs": "06516254e599aeb7e9937eca5dea24f1b960f9aef2fb2cf3dedc9ec7cb703516",
-    "scripts/ci-recharge-scope.test.mjs": "8d225c4aa5ce0d0655611355412524d04637d955c46d928eac7de0181331cf4a",
-    "scripts/ci-registration-protocol-restore-scope.mjs": "d98909f4de5fb4e1f1330df74b9e7e1dc163ed95b5556ffed5c62eb36ed8b36c",
+    "scripts/ci-recharge-scope.test.mjs": "f146a3740f48cd9007927fc587df3bd229bd7a59c1e7b670621e0c70466bce12",
+    "scripts/ci-registration-protocol-restore-scope.mjs": "e4298d02d0dc0f0953a48b5c011d4d6a65d833d6b61e79bafbd083f126f0bf1e",
     "scripts/ci-registration-protocol-restore-scope.test.mjs": "05c73dc95890682c91c3ce321d3da4e2ab82e3eb3386280075b169ffb7eba794",
     "scripts/production-release/registration-protocol-restore-build.py": "e836d5e20d77a5c8c92b08ee287a1f6197e70a73819362094e2eb6ebc687873b",
     "scripts/production-release/registration-protocol-restore-dispatch.py": "ddc29ef0751282c3e18ca231b2e32428dbb0e726278a421447876c7940796969",
-    "scripts/production-release/registration-protocol-restore-release.py": "5d76ce72743a51ee6b31013367e8b01fbc4a8a499669a76c0defd4e30e9dbc07",
+    "scripts/production-release/registration-protocol-restore-release.py": "e9363a1d57c1782c8b7e9eb0ffb5109c83562ac1b23e8259eaaf8daa76fe743b",
     "scripts/production-release/registration-protocol-restore-release.test.py": "e4b9c59eb7d7360fe73b866e410d3fb5290b6427527be3770901302fc15bc57d"
   },
   "roleSourceCommits": {
@@ -4300,8 +4300,8 @@
       "status": "running"
     }
   },
-  "sourceBaseline": "46bea6e11c9527e9b8930598de4cf2b13eb76635",
-  "sourceBaselineTree": "66f9412285c67bc691dcbb8e369df713d40cfdab",
+  "sourceBaseline": "123ea34df9bf74a1d65e74bd70f336eaa9344165",
+  "sourceBaselineTree": "ea208f5e571ab6da0dd6c82a8bf46b4d99e42b98",
   "sourceDeltaPaths": [
     ".github/workflows/quality.yml",
     ".github/workflows/registration-protocol-restore-validation.yml",
@@ -4363,8 +4363,8 @@
     "hostFileRead": false,
     "kind": "IMMUTABLE_GIT_INPUTS_ONLY",
     "runtimeFileRead": false,
-    "sourceCommit": "46bea6e11c9527e9b8930598de4cf2b13eb76635",
-    "sourceTree": "66f9412285c67bc691dcbb8e369df713d40cfdab"
+    "sourceCommit": "123ea34df9bf74a1d65e74bd70f336eaa9344165",
+    "sourceTree": "ea208f5e571ab6da0dd6c82a8bf46b4d99e42b98"
   },
   "sourceProjectionSha256": {
     "adminSourceProjection": "49df5e2744558a2c5da46942353fef96bdd2a808731d907b45473f509088e048",
