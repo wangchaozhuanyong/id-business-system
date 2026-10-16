@@ -211,7 +211,7 @@ def restore_runtime(d, previous, target, before, contract, h):
     d.assert_no_active_recharge(target)
     d.assert_no_active_registration(target)
     states = h.snapshot(d, target)
-    if states['online-recharge']['state'] == 'running':
+    if states['online-recharge']['status'] == 'running':
         h.engine_idle(d, states['online-recharge'], contract)
     d.compose(target, 'stop', 'online-recharge', timeout=90)
     d.compose(previous, 'up', '-d', '--no-deps', 'api', 'admin', timeout=180)
