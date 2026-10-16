@@ -2,9 +2,20 @@
   <component
     :is="as"
     class="v2-section-heading"
-    :class="{ 'v2-section-heading--compact': compact }"
+    :class="{
+      'v2-section-heading--compact': compact,
+      'v2-section-heading--navigation': !!$slots.navigation
+    }"
   >
-    <div class="v2-section-heading__heading">
+    <div
+      v-if="$slots.navigation"
+      class="v2-section-heading__navigation"
+      role="group"
+      :aria-label="title"
+    >
+      <slot name="navigation" />
+    </div>
+    <div v-else class="v2-section-heading__heading">
       <component :is="level" :id="titleId || undefined" class="v2-section-heading__title">
         <span v-if="step !== undefined && step !== ''" class="v2-section-heading__step">
           {{ step }}
@@ -82,6 +93,15 @@ const hasHelp = computed(() => {
   gap: 4px;
 }
 
+.v2-section-heading__navigation {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.v2-section-heading__navigation :deep(.el-tabs__header) {
+  margin: 0;
+}
+
 .v2-section-heading__title {
   gap: 8px;
   margin: 0;
@@ -128,5 +148,10 @@ h3.v2-section-heading__title,
   gap: var(--v2-layout-control-gap);
   font-size: 15px;
   line-height: var(--v3-line-height-tight);
+}
+
+.v2-section-heading--navigation .v2-section-heading__actions {
+  font-size: var(--v3-font-size-body);
+  line-height: var(--v3-line-height-body);
 }
 </style>

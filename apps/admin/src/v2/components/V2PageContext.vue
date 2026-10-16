@@ -1,9 +1,15 @@
 <template>
   <section
     class="v2-page-context"
-    :class="{ 'v2-page-context--toolbar': !!$slots.filters }"
+    :class="{
+      'v2-page-context--toolbar': !!$slots.filters,
+      'v2-page-context--navigation': !!$slots.navigation
+    }"
     :aria-label="ariaLabel || ($slots.filters ? '筛选与操作' : '页面说明')"
   >
+    <div v-if="$slots.navigation" class="v2-page-context__navigation">
+      <slot name="navigation" />
+    </div>
     <div v-if="$slots.filters" class="v2-page-context__filters">
       <slot name="filters" />
     </div>
@@ -93,6 +99,32 @@ withDefaults(
   justify-content: flex-end;
 }
 
+.v2-page-context--navigation {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-areas:
+    'navigation aside'
+    'filters filters';
+  gap: var(--v2-layout-control-gap);
+}
+
+.v2-page-context__navigation {
+  grid-area: navigation;
+  min-width: 0;
+}
+
+.v2-page-context__navigation :deep(.el-tabs__header) {
+  margin: 0;
+}
+
+.v2-page-context--navigation .v2-page-context__filters {
+  grid-area: filters;
+}
+
+.v2-page-context--navigation .v2-page-context__aside {
+  grid-area: aside;
+}
+
 @media (max-width: 700px) {
   .v2-page-context {
     align-items: flex-start;
@@ -107,6 +139,14 @@ withDefaults(
   .v2-page-context__filters {
     width: 100%;
     flex-basis: auto;
+  }
+
+  .v2-page-context--navigation {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-areas:
+      'navigation'
+      'aside'
+      'filters';
   }
 }
 </style>

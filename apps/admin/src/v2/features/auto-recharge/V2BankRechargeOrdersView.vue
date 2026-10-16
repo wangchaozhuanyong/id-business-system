@@ -1,15 +1,23 @@
 <template>
   <section class="v2-page-layout">
-    <el-tabs v-model="channel" aria-label="充值订单渠道">
-      <el-tab-pane label="比特订单" name="bitbrowser" />
-      <el-tab-pane v-if="canReadOnline" label="线上订单" name="online" />
-    </el-tabs>
     <V2RechargeOrdersChannelView
       v-if="channel === 'bitbrowser' || canReadOnline"
       :key="channel"
       :channel="channel"
-    />
-    <p v-else role="alert">没有线上代充查看权限，请联系管理员。</p>
+    >
+      <template #channel-navigation>
+        <el-tabs v-model="channel" aria-label="充值订单渠道">
+          <el-tab-pane label="比特订单" name="bitbrowser" />
+          <el-tab-pane v-if="canReadOnline" label="线上订单" name="online" />
+        </el-tabs>
+      </template>
+    </V2RechargeOrdersChannelView>
+    <template v-else>
+      <el-tabs v-model="channel" aria-label="充值订单渠道">
+        <el-tab-pane label="比特订单" name="bitbrowser" />
+      </el-tabs>
+      <p role="alert">没有线上代充查看权限，请联系管理员。</p>
+    </template>
   </section>
 </template>
 <script setup lang="ts">
