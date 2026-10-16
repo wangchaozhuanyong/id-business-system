@@ -50,7 +50,10 @@ import {
   registrationParityDiagnosticsParts
 } from './ci-registration-parity-diagnostics-scope.mjs';
 import { readRegistrationNativeReuse } from './ci-registration-closure-native-reuse.mjs';
-import { isRegistrationProtocolRestoreOnly } from './ci-registration-protocol-restore-scope.mjs';
+import {
+  isRegistrationProtocolRestoreOnly,
+  isRegistrationProtocolRestoreControlRepair
+} from './ci-registration-protocol-restore-scope.mjs';
 import {
   isRegistrationBrowserOnly,
   registrationBrowserParts
@@ -273,7 +276,11 @@ const onlineCiBuildTestInputs = new Set([
   'scripts/production-release/online-recharge-component-lifecycle.test.py'
 ]);
 export function needsOnlineRechargeCiBuild(paths, context) {
-  if (isRegistrationProtocolRestoreOnly(paths, context)) return false;
+  if (
+    isRegistrationProtocolRestoreOnly(paths, context) ||
+    isRegistrationProtocolRestoreControlRepair(paths, context)
+  )
+    return false;
   if (isMailboxVersionOnly(paths) || isMailboxVersionControlsOnly(paths)) return false;
   if (isRegistrationBrowserOnly(paths, context)) return false;
   if (isAccountLoginOnly(paths) || isAccountLoginControlsOnly(paths)) return false;
@@ -1062,6 +1069,8 @@ export function isMailboxOnly(paths) {
 }
 
 export function checkMode(paths, oldSchema, newSchema, grantHelperSnapshot, context) {
+  if (isRegistrationProtocolRestoreControlRepair(paths, context))
+    return oldSchema === newSchema ? 'ci-only' : 'full';
   if (isRegistrationProtocolRestoreOnly(paths, context))
     return oldSchema === newSchema ? 'recharge' : 'full';
   if (paths.includes('scripts/production-release/registration-protocol-restore-contract.json'))
@@ -1569,6 +1578,7 @@ export function isTargetedOnly(paths, oldSchema, newSchema) {
   );
 }
 export function selectedParts(paths, grantHelperSnapshot, context) {
+  if (isRegistrationProtocolRestoreControlRepair(paths, context)) return ['guards'];
   if (isRegistrationProtocolRestoreOnly(paths, context)) return ['guards', 'api', 'admin'];
   if (isGptRechargeControlsOnly(paths) || isGptRechargeRebaseControlsOnly(paths)) return ['guards'];
   if (isMailboxVersionControlsOnly(paths)) return ['guards', 'release-controls'];

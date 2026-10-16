@@ -1,4 +1,8 @@
 import {
+  registrationProtocolRestoreRepairBase,
+  registrationProtocolRestoreRepairTree,
+  registrationProtocolRestoreRepairPaths,
+  registrationProtocolRestoreRepairCommands,
   registrationProtocolRestoreBase,
   registrationProtocolRestoreTree,
   registrationProtocolRestorePaths,
@@ -56,6 +60,44 @@ import {
 } from './ci-recharge-scope.mjs';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
+test('registration protocol control repair exits after pure guards and refuses API Admin or migration', () => {
+  const options = { base: registrationProtocolRestoreRepairBase, restoreFixture: true };
+  const calls = recordGuardCommands(
+    'ci-only',
+    registrationProtocolRestoreRepairPaths,
+    'guards',
+    options
+  );
+  assert.deepEqual(calls, [
+    ...registrationProtocolRestoreRepairCommands.guards,
+    ['process-exit', 0]
+  ]);
+  assert.equal(
+    calls.some((row) =>
+      row.some(
+        (arg) =>
+          typeof arg === 'string' &&
+          /check-api|check-admin|unittest|prisma|acceptance|check:v2-/.test(arg)
+      )
+    ),
+    false
+  );
+  for (const part of ['api', 'admin', 'migration', 'release-controls'])
+    assert.throws(
+      () => recordGuardCommands('ci-only', registrationProtocolRestoreRepairPaths, part, options),
+      /Unsupported registration protocol restore control repair/
+    );
+  const failed = registrationProtocolRestoreRepairCommands.guards[0].join(' ');
+  assert.throws(
+    () =>
+      recordGuardCommands('ci-only', registrationProtocolRestoreRepairPaths, 'guards', {
+        ...options,
+        failCommand: failed
+      }),
+    /SYNTHETIC_COMMAND_FAILURE/
+  );
+});
+
 test('registration protocol restore dispatches only scoped checks and requires isolated candidate verification', () => {
   for (const part of ['guards', 'api', 'admin']) {
     assert.deepEqual(
@@ -889,11 +931,16 @@ function recordGuardCommands(
       if (${JSON.stringify(restoreFixture)} && specifier === './ci-registration-protocol-restore-scope.mjs' && context.parentURL?.endsWith('/scripts/ci-recharge-check.mjs')) {
         const url = new URL('./scripts/ci-registration-protocol-restore-scope.mjs', import.meta.url).href;
         const source = 'import * as m from ' + JSON.stringify(url) + ';export * from ' + JSON.stringify(url) + ';' +
-          'export function isRegistrationProtocolRestoreOnly(paths,options){' +
+          'function restoreOptions(options){' +
           'const removed=m.registrationProtocolRestoreRemovedSources;' +
           'const hashes=Object.fromEntries(m.registrationProtocolRestorePaths.filter(p=>!(p in removed)&&p!=="scripts/production-release/registration-protocol-restore-contract.json").map(p=>[p,"a".repeat(64)]));' +
-          'const contract={version:1,frozen:true,scope:"REGISTRATION_PROTOCOL_RESTORE",migration:null,sourceBaseline:m.registrationProtocolRestoreBase,sourceBaselineTree:m.registrationProtocolRestoreTree,expectedCurrent:"123ea34df9bf74a1d65e74bd70f336eaa9344165",schemaSha256:"51a4d25b1302458145f560acc32f25b89a7bd65fea64dc72b254dc56da430100",runtimeEvidence:{status:"VERIFIED",commit:"123ea34df9bf74a1d65e74bd70f336eaa9344165"},expectedGitChanges:m.registrationProtocolRestorePaths,withdrawal:{sourceRemovals:{...removed}},reviewedFileHashes:hashes};' +
-          'return m.isRegistrationProtocolRestoreOnly(paths,{...options,contract,sourceDigest:p=>hashes[p]??null,baseSourceDigest:p=>removed[p]??null});}';
+          'const validation="apps/api/src/id-business-v2/auto-registration/worker/test_registration_closed_loop_unit.py";' +
+          'const sources=Object.fromEntries(Object.entries(hashes).filter(([p])=>p.startsWith("apps/")&&p!==validation));' +
+          'const contract={version:1,frozen:true,scope:"REGISTRATION_PROTOCOL_RESTORE",migration:null,sourceBaseline:m.registrationProtocolRestoreBase,sourceBaselineTree:m.registrationProtocolRestoreTree,expectedCurrent:"123ea34df9bf74a1d65e74bd70f336eaa9344165",schemaSha256:"51a4d25b1302458145f560acc32f25b89a7bd65fea64dc72b254dc56da430100",runtimeEvidence:{status:"VERIFIED",commit:"123ea34df9bf74a1d65e74bd70f336eaa9344165"},expectedGitChanges:m.registrationProtocolRestorePaths,withdrawal:{sourceRemovals:{...removed}},reviewedFileHashes:hashes,reviewedApplicationCommit:"2bcced63c834187ac5e69e344176da33ff82d4c9",sources,validationSources:{[validation]:hashes[validation]},unchangedInputs:{},validationBaselineSources:{}};' +
+          'const repairBaseContract=structuredClone(contract);contract.validationBaselineSources={...m.registrationProtocolRestoreRepairGuard};' +
+          'return {...options,contract,repairBaseContract,sourceDigest:p=>m.registrationProtocolRestoreRepairGuard[p]??hashes[p]??null,baseSourceDigest:p=>removed[p]??null};}' +
+          'export function isRegistrationProtocolRestoreOnly(paths,options){return m.isRegistrationProtocolRestoreOnly(paths,restoreOptions(options));}' +
+          'export function isRegistrationProtocolRestoreControlRepair(paths,options){return m.isRegistrationProtocolRestoreControlRepair(paths,restoreOptions(options));}';
         return {url:'data:text/javascript,'+encodeURIComponent(source),shortCircuit:true};
       }
       if (${JSON.stringify(browserFixture)} && specifier === './ci-registration-browser-scope.mjs' && context.parentURL?.endsWith('/scripts/ci-recharge-check.mjs')) {
@@ -947,6 +994,7 @@ function recordGuardCommands(
     }});
     childProcess.execFileSync = (file, args) => {
       if (file === 'git') {
+        if (args.join(' ') === ${JSON.stringify('rev-parse ' + registrationProtocolRestoreRepairBase + '^{tree}')}) return ${JSON.stringify(registrationProtocolRestoreRepairTree + '\n')};
         if (args.join(' ') === ${JSON.stringify('rev-parse ' + registrationProtocolRestoreBase + '^{tree}')}) return ${JSON.stringify(registrationProtocolRestoreTree + '\n')};
         if (args.join(' ') === ${JSON.stringify('rev-parse ' + registrationBrowserBase + '^{tree}')}) return ${JSON.stringify(registrationBrowserTree + '\n')};
         if (args.join(' ') === ${JSON.stringify('rev-parse ' + registrationParityDiagnosticsBase + '^{tree}')}) return ${JSON.stringify(registrationParityDiagnosticsTree + '\n')};

@@ -10,6 +10,7 @@ import subprocess
 import sys
 import tarfile
 import tempfile
+from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
@@ -65,6 +66,72 @@ class RestoreControls(unittest.TestCase):
     def test_exact_ancestor_tree(self):
         result = subprocess.check_output(['git', 'rev-parse', r.SOURCE_BASE + '^{tree}'], cwd=ROOT)
         self.assertEqual(result.decode().strip(), r.SOURCE_TREE)
+
+    def test_candidate_validation_pins_the_published_shared_card_architecture_guard(self):
+        c = contract()
+        name = 'scripts/check-v2-module-architecture.mjs'
+        expected = '0abe913ace9e319c6ac6f0764efaea76b17c1a06bce018259fbc805765ab5383'
+        self.assertEqual(c['validationBaselineSources'], {
+            'scripts/acceptance-v2-registration-parity-diagnostics.mjs':
+                'fd269ea49a297ea0b98e75045cba1b4bc33d536a137cd7f2a36c815699acf448',
+            name: expected})
+        published = b.git('show', r.SHARED_CARD_COMMIT + ':' + name)
+        self.assertEqual(published, b.git('show', r.SOURCE_BASE + ':' + name))
+        self.assertEqual(r.digest(published), expected)
+        self.assertIn(b"'bank-card-pool'", published)
+        self.assertNotIn(name, c['sources'])
+
+    def test_candidate_reconstruction_overlays_the_guard_and_refuses_changed_or_missing_source(self):
+        name = 'scripts/check-v2-module-architecture.mjs'
+        raw = b.git('show', r.SOURCE_BASE + ':' + name)
+        old = b.git('show', '55d5ee5504c9d8d4218632e8cb8eb508923ad9f8:' + name)
+        self.assertNotEqual(raw, old)
+        self.assertNotIn(b"'bank-card-pool'", old)
+        original_git, original_overlay = b.git, b.overlay
+        for failure in (None, 'hash', 'missing'):
+            with self.subTest(failure=failure), tempfile.TemporaryDirectory(
+                    prefix='restore-architecture-', dir=ROOT / '.runtime') as directory:
+                context = Path(directory) / 'candidate'
+                c = contract()
+                c.update(sources={}, validationSources={}, baselineWorkerFiles={}, workerFiles={},
+                         schemaSha256=r.digest(b'isolated-schema'))
+                c['retainedGptIntegration'] = {'sources': {}}
+                if failure == 'hash':
+                    c['validationBaselineSources'][name] = '0' * 64
+
+                def base(target, _):
+                    (target / 'scripts').mkdir(parents=True)
+                    (target / name).write_bytes(old)
+                    schema = target / 'apps/api/prisma-mysql/schema.prisma'
+                    schema.parent.mkdir(parents=True)
+                    schema.write_bytes(b'isolated-schema')
+
+                helper = SimpleNamespace(prior_recipe=lambda: {'sources': {}, 'validationSources': {}},
+                    reconstruct=base, restore_runtime_worker_tests=lambda *_: None)
+
+                def validation_overlay(target, commit, sources):
+                    if commit == r.SOURCE_BASE and set(sources) <= set(c['validationBaselineSources']):
+                        original_overlay(target, commit, sources)
+
+                def source(*args):
+                    if failure == 'missing' and args == ('show', r.SOURCE_BASE + ':' + name):
+                        raise subprocess.CalledProcessError(128, ['git', *args])
+                    return original_git(*args)
+
+                with patch.object(b.r, 'helper', return_value=helper), \
+                     patch.object(b, 'history_browser', return_value={}), \
+                     patch.object(b, 'native_gpt_bundle', return_value=({}, {})), \
+                     patch.object(b, 'overlay', side_effect=validation_overlay), \
+                     patch.object(b, 'git', side_effect=source):
+                    if failure == 'hash':
+                        with self.assertRaisesRegex(RuntimeError, 'PUBLISHED_SOURCE_CHANGED'):
+                            b.reconstruct(context, c, include_browser=False)
+                    elif failure == 'missing':
+                        with self.assertRaises(subprocess.CalledProcessError):
+                            b.reconstruct(context, c, include_browser=False)
+                    else:
+                        b.reconstruct(context, c, include_browser=False)
+                self.assertEqual((context / name).read_bytes(), old if failure else raw)
 
     def test_frozen_structural_contract_refuses_boundary_and_schema_drift(self):
         r.verify_contract(structural_fixture())
