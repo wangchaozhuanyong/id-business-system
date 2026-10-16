@@ -17,8 +17,8 @@ HERE = Path(__file__).resolve().parent
 OUTPUT = ROOT / '.deploy/registration-parity-diagnostics'
 CONTRACT = HERE / 'registration-parity-diagnostics-contract.json'
 SCOPE = 'REGISTRATION_PARITY_DIAGNOSTICS'
-CURRENT = '13e52ad670c6b6daa94ab2df009aaa8a9d69b97c'
-CURRENT_TREE = '26f7f4aa65e3286b978cf7e2e1807418af63ea3e'
+CURRENT = 'c0238525bb4b2a1c3fe6688eaed5f74f504ee529'
+CURRENT_TREE = '1f71d02270d8f1a78303fa35320223b02ab3dfb0'
 DRAG_COMMIT = 'd44393c5bee8c30c82737fc3e00fa89785a95667'
 DRAG_TREE = '7bf8dc7a4702272adcec2979025233300db5df95'
 SALES_COMMIT = '034f6cad0bc58f3c6025912096df312e07bbd85e'
@@ -26,11 +26,18 @@ SALES_TREE = '1f351c9e04171ea3523e5163774c869c0de97557'
 DRAG_PROOF = '77e0abe68b486c15c0fe724dacd1885982a7ed054296514e874b67cf1f3f2d8b'
 ANCESTOR = 'e3e1360f977e003987573f2d2e042b883a2f5ac8'
 SUCCESSOR_PROOF = '2cb761e7d3073814125d3a7cbfe3b0c2cd9258cc6f2684c75fb8317bb2016448'
-SOURCE_BASE = '868e8e8f8fb06293b433bf861585cc734a478b96'
-SOURCE_TREE = 'e7a593369d59a9b06baeb4ebc82287231354f9f3'
+SOURCE_BASE = 'c0238525bb4b2a1c3fe6688eaed5f74f504ee529'
+SOURCE_TREE = '1f71d02270d8f1a78303fa35320223b02ab3dfb0'
+ACCOUNT_COMMIT = '13e52ad670c6b6daa94ab2df009aaa8a9d69b97c'
+ACCOUNT_TREE = '26f7f4aa65e3286b978cf7e2e1807418af63ea3e'
+ACCOUNT_CONTROLLER = '868e8e8f8fb06293b433bf861585cc734a478b96'
 ACCOUNT_PROOF = 'd48d4ebc5594c27d578be4d61578fc12bb62f34ee313f065c698f60573c5e2bb'
 ACCOUNT_VALIDATED_CONTROLLER = 'f09b6748d57719ee6b35589e717f47c5c99b6e626252cb4d09f4832649b19500'
 ACCOUNT_CONTROLS = {'account-login-build.py': 'f2bc8a42fae093967230b77570f90e7a5914663bc77ccd1ae7f3e617a3a53998', 'account-login-contract.json': '856cc583bbb6f79e6a3dfa1e088bc4674892ff1c364712d808d9d5facba44fea', 'account-login-release.py': '68461ea869ba9447a9878653415c85fe961ac91bbb59389848baba302d7bc5c9'}
+CHECKOUT_COMMIT = 'c0238525bb4b2a1c3fe6688eaed5f74f504ee529'
+CHECKOUT_TREE = '1f71d02270d8f1a78303fa35320223b02ab3dfb0'
+CHECKOUT_PROOF = 'a172906736117ed57da9a958a79c51e86709add403a49233494b6b2e368ddc81'
+CHECKOUT_CONTROLS = {'recharge-source-recovery-build.py': '927292b7467c9057a049ef9c1d89654100c506acb77f802f0c0d72fb081d1467', 'recharge-source-recovery-contract.json': '61e69d7a720baa61955be460b209082aaf5e01766ec4be6c882b4a5b6807d890', 'recharge-source-recovery-release.py': 'e6f493ab7737bf77d23114a00ff9c970a77d18786726e690b27dbe98c9f099b8'}
 SCHEMA = 'apps/api/prisma-mysql/schema.prisma'
 API = 'apps/api/src/id-business-v2/auto-registration/'
 ADMIN = 'apps/admin/src/v2/features/auto-registration/'
@@ -121,6 +128,7 @@ def verify_sources(contract):
          and contract['dragNative'].get('tree') == DRAG_TREE
          and contract['dragNative'].get('proofSha256') == DRAG_PROOF, 'PUBLISHED_ADMIN_SUCCESSOR_EVIDENCE_CHANGED')
     verify_account_binding(contract)
+    verify_checkout_binding(contract)
     need(isinstance(contract.get('reviewedApplicationCommit'), str)
          and re.fullmatch('[a-f0-9]{40}', contract['reviewedApplicationCommit'])
          and isinstance(contract.get('runtimeEvidence'), dict)
@@ -167,7 +175,7 @@ def verify_sources(contract):
 
 
 def account_recipe(contract):
-    raw = git('show', CURRENT + ':scripts/production-release/account-login-contract.json')
+    raw = git('show', ACCOUNT_COMMIT + ':scripts/production-release/account-login-contract.json')
     need(digest(raw) == contract.get('accountContractSha256')
          == ACCOUNT_CONTROLS['account-login-contract.json'], 'ACCOUNT_RECIPE_CHANGED')
     recipe = json.loads(raw)
@@ -178,7 +186,7 @@ def account_recipe(contract):
 
 def verify_account_native_binding(binding):
     need(all(binding.get(key) == expected for key, expected in {
-        'commit': CURRENT, 'tree': CURRENT_TREE, 'controllerCommit': SOURCE_BASE,
+        'commit': ACCOUNT_COMMIT, 'tree': ACCOUNT_TREE, 'controllerCommit': ACCOUNT_CONTROLLER,
         'runId': '38881266999', 'runAttempt': 1,
         'workflowPath': '.github/workflows/account-login-validation.yml',
         'artifactId': 12037263102,
@@ -191,9 +199,9 @@ def verify_account_native_binding(binding):
 def verify_account_binding(contract):
     need(contract.get('accountControls') == ACCOUNT_CONTROLS and all(
          digest((HERE / name).read_bytes()) == value
-         == digest(git('show', SOURCE_BASE + ':scripts/production-release/' + name))
+         == digest(git('show', ACCOUNT_CONTROLLER + ':scripts/production-release/' + name))
          for name, value in ACCOUNT_CONTROLS.items())
-         and digest(git('show', CURRENT + ':scripts/production-release/account-login-release.py'))
+         and digest(git('show', ACCOUNT_COMMIT + ':scripts/production-release/account-login-release.py'))
          == ACCOUNT_VALIDATED_CONTROLLER and contract.get('accountProofSha256') == ACCOUNT_PROOF,
          'ACCOUNT_EVIDENCE_CHANGED')
     need(isinstance(contract.get('accountNative'), dict), 'ACCOUNT_NATIVE_BINDING_CHANGED')
@@ -208,11 +216,11 @@ def verify_account_publication(archive, binding):
         return json.loads(archive.read(name))
 
     plan = read_json('publication-plan.json')
-    controls = {name: digest(git('show', SOURCE_BASE + ':scripts/production-release/' + name))
+    controls = {name: digest(git('show', ACCOUNT_CONTROLLER + ':scripts/production-release/' + name))
                 for name in ('account-login-release.py', 'recharge-record-release.py', 'remote-deploy.py',
                              'recharge-availability-release.py', 'account-login-contract.json')}
-    need(plan.get('commit') == CURRENT and plan.get('tree') == CURRENT_TREE
-         and plan.get('controllerCommit') == SOURCE_BASE
+    need(plan.get('commit') == ACCOUNT_COMMIT and plan.get('tree') == ACCOUNT_TREE
+         and plan.get('controllerCommit') == ACCOUNT_CONTROLLER
          and plan.get('controllerSha256') == ACCOUNT_CONTROLS['account-login-release.py']
          and plan.get('validatedControllerSha256') == ACCOUNT_VALIDATED_CONTROLLER
          and plan.get('contractSha256') == ACCOUNT_CONTROLS['account-login-contract.json']
@@ -229,11 +237,11 @@ def verify_account_publication(archive, binding):
              and type(receipt.get('ResponseCode')) is int and receipt['ResponseCode'] == 0
              and not receipt.get('StandardErrorContent', '').strip(), 'ACCOUNT_PUBLICATION_NOT_SUCCESSFUL')
         output = json.loads(receipt['StandardOutputContent'])
-        need(output.get('status') == status and output.get('commit') == CURRENT
+        need(output.get('status') == status and output.get('commit') == ACCOUNT_COMMIT
              and type(output.get('businessActions')) is int and output['businessActions'] == 0
              and output.get('migrationPerformed') is True, 'ACCOUNT_PUBLICATION_READBACK_CHANGED')
         outputs[mode] = output
-    need(outputs['release'].get('tree') == CURRENT_TREE
+    need(outputs['release'].get('tree') == ACCOUNT_TREE
          and outputs['release'].get('workflowRunId') == binding['runId']
          and outputs['release'].get('images') == outputs['readback'].get('images')
          and isinstance(outputs['release'].get('images'), dict)
@@ -243,10 +251,136 @@ def verify_account_publication(archive, binding):
          'ACCOUNT_PUBLICATION_READBACK_CHANGED')
 
 
+def checkout_recipe(contract):
+    raw = git('show', CHECKOUT_COMMIT + ':scripts/production-release/recharge-source-recovery-contract.json')
+    need(digest(raw) == contract.get('checkoutContractSha256')
+         == CHECKOUT_CONTROLS['recharge-source-recovery-contract.json'], 'CHECKOUT_RECIPE_CHANGED')
+    recipe = json.loads(raw)
+    need(contract.get('checkoutSources') == recipe['sources'] and len(recipe['sources']) == 3
+         and all(name.startswith('apps/api/src/id-business-v2/auto-recharge/')
+                 for name in recipe['sources']), 'CHECKOUT_SOURCE_SCOPE_CHANGED')
+    return recipe
+
+
+def verify_checkout_native_binding(binding):
+    need('controllerCommit' not in binding and all(binding.get(key) == expected for key, expected in {
+        'commit': CHECKOUT_COMMIT, 'tree': CHECKOUT_TREE,
+        'runId': '38882778676', 'runAttempt': 1,
+        'workflowPath': '.github/workflows/recharge-source-recovery-validation.yml',
+        'artifactId': 12038273219,
+        'artifactDigest': 'sha256:1c50a921f49473bda538fe84128df2e7a358d8e44946fd760dc8ff1d31d6e56d',
+        'bundleName': 'recharge-source-recovery-artifact.tar.gz',
+        'bundleSha256': 'e022d3a9f4da4691e8e3cd1834111db52cded51eb3fec5d9874bfbc2d11b211d',
+        'proofSha256': CHECKOUT_PROOF}.items()), 'CHECKOUT_NATIVE_BINDING_CHANGED')
+
+
+def verify_checkout_binding(contract):
+    need(contract.get('checkoutControls') == CHECKOUT_CONTROLS and all(
+         digest((HERE / name).read_bytes()) == value
+         == digest(git('show', CHECKOUT_COMMIT + ':scripts/production-release/' + name))
+         for name, value in CHECKOUT_CONTROLS.items())
+         and contract.get('checkoutProofSha256') == CHECKOUT_PROOF, 'CHECKOUT_EVIDENCE_CHANGED')
+    need(isinstance(contract.get('checkoutNative'), dict), 'CHECKOUT_NATIVE_BINDING_CHANGED')
+    verify_checkout_native_binding(contract['checkoutNative'])
+    return checkout_recipe(contract)
+
+
+def verify_checkout_publication(archive, binding):
+    def read_json(name):
+        need(archive.namelist().count(name) == 1 and archive.getinfo(name).file_size <= 512 * 1024,
+             'CHECKOUT_PUBLICATION_LAYOUT_CHANGED')
+        return json.loads(archive.read(name))
+
+    plan = read_json('publication-plan.json')
+    controls = {name: digest(git('show', CHECKOUT_COMMIT + ':scripts/production-release/' + name))
+                for name in ('recharge-source-recovery-release.py', 'recharge-record-release.py',
+                             'remote-deploy.py', 'recharge-availability-release.py',
+                             'recharge-source-recovery-contract.json')}
+    need(plan.get('commit') == CHECKOUT_COMMIT and plan.get('tree') == CHECKOUT_TREE
+         and plan.get('controllerSha256') == CHECKOUT_CONTROLS['recharge-source-recovery-release.py']
+         and plan.get('contractSha256') == CHECKOUT_CONTROLS['recharge-source-recovery-contract.json']
+         and plan.get('artifactSha256') == binding['bundleSha256']
+         and plan.get('buildProofSha256') == CHECKOUT_PROOF
+         and plan.get('workflowRunId') == binding['runId'] and plan.get('workflowRunAttempt') == '1'
+         and plan.get('controlSources') == controls, 'CHECKOUT_PUBLICATION_PLAN_CHANGED')
+    outputs = {}
+    for mode, status in [('release', 'RECHARGE_SOURCE_RECOVERY_DEPLOYED'),
+                         ('readback', 'RECHARGE_SOURCE_RECOVERY_INDEPENDENT_READBACK_VERIFIED')]:
+        receipt = read_json(mode + '-native-invocation.json')
+        need(receipt.get('Status') == 'Success' and receipt.get('StatusDetails') == 'Success'
+             and type(receipt.get('ResponseCode')) is int and receipt['ResponseCode'] == 0
+             and not receipt.get('StandardErrorContent', '').strip(), 'CHECKOUT_PUBLICATION_NOT_SUCCESSFUL')
+        output = json.loads(receipt['StandardOutputContent'])
+        need(output.get('status') == status and output.get('commit') == CHECKOUT_COMMIT
+             and type(output.get('businessActions')) is int and output['businessActions'] == 0
+             and output.get('migrationPerformed') is False, 'CHECKOUT_PUBLICATION_READBACK_CHANGED')
+        outputs[mode] = output
+    need(outputs['release'].get('tree') == CHECKOUT_TREE
+         and outputs['release'].get('workflowRunId') == binding['runId']
+         and outputs['release'].get('images') == outputs['readback'].get('images')
+         and isinstance(outputs['release'].get('images'), dict)
+         and set(outputs['release']['images']) == {'api'}
+         and outputs['readback'].get('preservedServices')
+         == ['admin', 'mysql', 'caddy', 'media-resolver', 'auto-recharge', 'auto-registration'],
+         'CHECKOUT_PUBLICATION_READBACK_CHANGED')
+
+
+def overlay_checkout_sources(context, contract):
+    checkout_recipe(contract)
+    for name, expected in contract['checkoutSources'].items():
+        raw = git('show', CHECKOUT_COMMIT + ':' + name)
+        need(digest(raw) == expected, 'CHECKOUT_PUBLISHED_SOURCE_CHANGED')
+        path = context / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(raw)
+
+
+def verify_checkout_proof(proof, account, account_api, contract):
+    recipe = checkout_recipe(contract)
+    allowed = {name.removesuffix('.js') + suffix for name in recipe['apiModules']
+               for suffix in ('.js', '.js.map', '.d.ts')}
+    need(proof.get('version') == 1 and proof.get('scope') == recipe['scope']
+         and proof.get('commit') == CHECKOUT_COMMIT and proof.get('tree') == CHECKOUT_TREE
+         and proof.get('workflowRunId') == '38882778676' and proof.get('workflowRunAttempt') == '1'
+         and proof.get('contractSha256') == contract['checkoutContractSha256']
+         and proof.get('controllerSha256') == CHECKOUT_CONTROLS['recharge-source-recovery-release.py']
+         and proof.get('baselineApiReproduced') is True and proof.get('baselineAdminPreserved') is True
+         and proof.get('baselinePublishedVerified') == {
+             'apiSource': ACCOUNT_COMMIT, 'adminSource': ACCOUNT_COMMIT, 'verified': True}
+         and recipe['apiSourceBaseline'] == recipe['adminSourceBaseline'] == ACCOUNT_COMMIT
+         and recipe['apiSourceBaselineTree'] == recipe['adminSourceBaselineTree'] == ACCOUNT_TREE
+         and recipe['publicFiles'] == contract['runtimeAdminFiles']
+         and all(account_api.get(name) == value for name, value in recipe['apiModules'].items())
+         and isinstance(proof.get('apiModules'), dict) and set(proof['apiModules']) == allowed
+         and len(allowed) == 6 and proof.get('adminFiles') == {}
+         and proof.get('updatedServices') == ['api'] and proof.get('migrationPerformed') is False
+         and type(proof.get('businessActions')) is int and proof['businessActions'] == 0,
+         'CHECKOUT_NATIVE_PROOF_CHANGED')
+    need(proof.get('qualityVerification') == {
+         'commit': CHECKOUT_COMMIT, 'conclusion': 'success', 'path': '.github/workflows/quality.yml',
+         'runId': '38882646810', 'sourceTree': CHECKOUT_TREE}
+         and proof.get('databaseVerification') == recipe['databaseVerification']
+         == {'databaseStarted': False, 'schemaChanged': False, 'sqlChanged': False},
+         'CHECKOUT_NATIVE_VALIDATION_CHANGED')
+    need(proof.get('files') == {
+         **{'source/' + name: value for name, value in recipe['sources'].items()},
+         **{'api/modules/' + name: value for name, value in proof['apiModules'].items()}},
+         'CHECKOUT_NATIVE_PAYLOAD_CHANGED')
+    need(contract['baselineApiFiles'] == {**account_api,
+         **{name: value for name, value in proof['apiModules'].items() if name.endswith('.js')}}
+         and contract['baselineAdminFiles'] == account['adminFiles']
+         and contract['baselineAdminBuildId'] == recipe['baselineAdminBuildId']
+         == 'v2-' + ACCOUNT_COMMIT, 'CHECKOUT_FINAL_BASELINE_CHANGED')
+    return proof
+
+
 def native_proof(binding):
     account = 'controllerCommit' in binding
     if account:
         verify_account_native_binding(binding)
+    checkout = binding.get('commit') == CHECKOUT_COMMIT
+    if checkout:
+        verify_checkout_native_binding(binding)
     native_commit = binding['controllerCommit'] if account else binding['commit']
     prefix = 'repos/wangchaozhuanyong/id-business-system/'
     meta = json.loads(subprocess.check_output(['gh', 'api', prefix + 'actions/runs/' + binding['runId']], cwd=ROOT))
@@ -266,6 +400,8 @@ def native_proof(binding):
         bundle = archive.read(names[0])
         if account:
             verify_account_publication(archive, binding)
+        if checkout:
+            verify_checkout_publication(archive, binding)
     need(digest(bundle) == binding['bundleSha256'], 'PUBLISHED_BUNDLE_CHANGED')
     with tarfile.open(fileobj=io.BytesIO(bundle)) as archive:
         proof_raw = archive.extractfile('payload/build-proof.json').read()
@@ -310,6 +446,7 @@ def reconstruct(context, contract):
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(raw)
     overlay_account_sources(context, contract)
+    overlay_checkout_sources(context, contract)
     need(inventory(context / ENGINE) == contract['baselineEngineFiles'], 'BASE_ENGINE_NOT_REPRODUCED')
     expected_worker = {n: parent['sources'].get(WORKER + n, value) if n.startswith('test_') else value
                        for n, value in contract['baselineWorkerFiles'].items()}
@@ -343,7 +480,7 @@ def overlay_account_sources(context, contract):
     recipe = account_recipe(contract)
     # Inherit only the exact published source tree, including its three support files.
     for name, expected in contract['accountSources'].items():
-        raw = git('show', CURRENT + ':' + name)
+        raw = git('show', ACCOUNT_COMMIT + ':' + name)
         need(digest(raw) == expected, 'ACCOUNT_PUBLISHED_SOURCE_CHANGED')
         path = context / name
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -359,7 +496,7 @@ def verify_account_proof(proof, drag, historical_api, contract):
     allowed = {name.removesuffix('.js') + suffix for name in recipe['apiModules']
                for suffix in ('.js', '.js.map', '.d.ts')}
     need(proof.get('version') == 1 and proof.get('scope') == recipe['scope']
-         and proof.get('commit') == CURRENT and proof.get('tree') == CURRENT_TREE
+         and proof.get('commit') == ACCOUNT_COMMIT and proof.get('tree') == ACCOUNT_TREE
          and proof.get('workflowRunId') == '38878982040' and proof.get('workflowRunAttempt') == '1'
          and proof.get('contractSha256') == contract['accountContractSha256']
          and proof.get('controllerSha256') == ACCOUNT_VALIDATED_CONTROLLER
@@ -378,8 +515,8 @@ def verify_account_proof(proof, drag, historical_api, contract):
          and type(proof.get('businessActions')) is int and proof['businessActions'] == 0,
          'ACCOUNT_NATIVE_PROOF_CHANGED')
     need(proof.get('qualityVerification') == {
-         'commit': CURRENT, 'conclusion': 'success', 'path': '.github/workflows/quality.yml',
-         'runId': '38878945118', 'sourceTree': CURRENT_TREE}
+         'commit': ACCOUNT_COMMIT, 'conclusion': 'success', 'path': '.github/workflows/quality.yml',
+         'runId': '38878945118', 'sourceTree': ACCOUNT_TREE}
          and proof.get('databaseVerification') == {
              'businessActions': 0, 'isolated': True, 'legacyDefaultsVerified': True,
              'migration': recipe['migration']['name'], 'testsPassed': 7, 'testsSkipped': 0}
@@ -391,9 +528,7 @@ def verify_account_proof(proof, drag, historical_api, contract):
          **{'api/modules/' + name: value for name, value in proof['apiModules'].items()},
          **{'admin/html/' + name: value for name, value in proof['adminFiles'].items()}},
          'ACCOUNT_NATIVE_PAYLOAD_CHANGED')
-    need(contract['baselineApiFiles'] == {**historical_api,
-         **{name: value for name, value in proof['apiModules'].items() if name.endswith('.js')}}
-         and contract['baselineAdminFiles'] == proof['adminFiles']
+    need(contract['baselineAdminFiles'] == proof['adminFiles']
          and contract['schemaSha256'] == recipe['sources'][SCHEMA], 'ACCOUNT_FINAL_BASELINE_CHANGED')
     return proof
 
@@ -434,7 +569,7 @@ def prepare():
     sales = json.loads((HERE / 'chatgpt-sales-contract.json').read_bytes())
     drag = verify_drag_proof(native_proof(contract['dragNative']), successor, contract)
     account = account_recipe(contract)
-    historical_raw = git('show', CURRENT + ':scripts/production-release/registration-parity-diagnostics-contract.json')
+    historical_raw = git('show', ACCOUNT_COMMIT + ':scripts/production-release/registration-parity-diagnostics-contract.json')
     need(digest(historical_raw) == account['recipeControls']['registration-parity-diagnostics-contract.json'],
          'ACCOUNT_PREDECESSOR_RECIPE_CHANGED')
     historical = json.loads(historical_raw)
@@ -455,6 +590,9 @@ def prepare():
     published = verify_account_proof(native_proof(contract['accountNative']), drag, historical_api, contract)
     need({**historical['runtimeAdminFiles'], **published['adminFiles']} == contract['runtimeAdminFiles'],
          'ACCOUNT_RUNTIME_ADMIN_UNION_CHANGED')
+    account_api = {**historical_api,
+                   **{name: value for name, value in published['apiModules'].items() if name.endswith('.js')}}
+    verify_checkout_proof(native_proof(contract['checkoutNative']), published, account_api, contract)
     need(not OUTPUT.exists(), 'OUTPUT_EXISTS')
     OUTPUT.mkdir(parents=True, mode=0o700)
     for role in ('baseline', 'candidate'):
@@ -590,6 +728,9 @@ def build():
              'accountProofSha256': contract['accountProofSha256'], 'accountControls': contract['accountControls'],
              'accountContractSha256': contract['accountContractSha256'], 'accountSources': contract['accountSources'],
              'accountNative': contract['accountNative'],
+             'checkoutProofSha256': contract['checkoutProofSha256'], 'checkoutControls': contract['checkoutControls'],
+             'checkoutContractSha256': contract['checkoutContractSha256'], 'checkoutSources': contract['checkoutSources'],
+             'checkoutNative': contract['checkoutNative'],
              'hostSourceInheritance': contract['hostSourceInheritance'],
              'sqliteReviewPolicy': contract['sqliteReviewPolicy'],
              'prismaPathMetadata': contract['prismaPathMetadata'],

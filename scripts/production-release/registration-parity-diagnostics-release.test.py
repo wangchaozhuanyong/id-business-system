@@ -172,9 +172,9 @@ print(json.dumps(calls))
         recipe = b.verify_account_binding(self.contract)
         self.assertEqual(len(self.contract['accountSources']), 107)
         self.assertEqual(self.contract['accountSources'], {**recipe['sources'], **recipe['supportSources']})
-        self.assertNotEqual(b.CURRENT, b.SOURCE_BASE)
-        self.assertNotEqual(b.CURRENT, b.DRAG_COMMIT)
-        for changed in [{'controllerCommit': b.CURRENT}, {'commit': b.SOURCE_BASE},
+        self.assertNotEqual(b.ACCOUNT_COMMIT, b.ACCOUNT_CONTROLLER)
+        self.assertNotEqual(b.ACCOUNT_COMMIT, b.DRAG_COMMIT)
+        for changed in [{'controllerCommit': b.ACCOUNT_COMMIT}, {'commit': b.ACCOUNT_CONTROLLER},
                         {'runId': '38878982040'}, {'artifactId': 1}, {'proofSha256': '0' * 64}]:
             with self.subTest(changed=changed), patch.object(b.subprocess, 'check_output') as remote, \
                     self.assertRaisesRegex(RuntimeError, 'ACCOUNT_NATIVE_BINDING_CHANGED'):
@@ -192,7 +192,7 @@ print(json.dumps(calls))
             context = Path(temporary)
             b.overlay_account_sources(context, contract)
             self.assertEqual({name: (context / name).read_bytes() for name in values}, values)
-            self.assertEqual(read.call_args_list, [unittest.mock.call('show', b.CURRENT + ':' + name)
+            self.assertEqual(read.call_args_list, [unittest.mock.call('show', b.ACCOUNT_COMMIT + ':' + name)
                                                   for name in values])
             with self.assertRaisesRegex(RuntimeError, 'ACCOUNT_PUBLISHED_SOURCE_CHANGED'):
                 b.overlay_account_sources(context, {'accountSources': {'apps/api/known.ts': '0' * 64}})
@@ -203,7 +203,7 @@ print(json.dumps(calls))
         modules = {name.removesuffix('.js') + suffix: 'a' * 64 for name in recipe['apiModules']
                    for suffix in ('.js', '.js.map', '.d.ts')}
         admin = {'index.html': 'b' * 64}
-        proof = {'version': 1, 'scope': recipe['scope'], 'commit': b.CURRENT, 'tree': b.CURRENT_TREE,
+        proof = {'version': 1, 'scope': recipe['scope'], 'commit': b.ACCOUNT_COMMIT, 'tree': b.ACCOUNT_TREE,
                  'workflowRunId': '38878982040', 'workflowRunAttempt': '1',
                  'contractSha256': self.contract['accountContractSha256'],
                  'controllerSha256': b.ACCOUNT_VALIDATED_CONTROLLER,
@@ -214,8 +214,8 @@ print(json.dumps(calls))
                  'apiModules': modules, 'adminFiles': admin, 'migration': recipe['migration'],
                  'generatedSchemaSha256': self.contract['baselinePrismaClientFiles']['schema.prisma'],
                  'updatedServices': ['api', 'admin'], 'businessActions': 0,
-                 'qualityVerification': {'commit': b.CURRENT, 'conclusion': 'success',
-                     'path': '.github/workflows/quality.yml', 'runId': '38878945118', 'sourceTree': b.CURRENT_TREE},
+                 'qualityVerification': {'commit': b.ACCOUNT_COMMIT, 'conclusion': 'success',
+                     'path': '.github/workflows/quality.yml', 'runId': '38878945118', 'sourceTree': b.ACCOUNT_TREE},
                  'databaseVerification': {'businessActions': 0, 'isolated': True, 'legacyDefaultsVerified': True,
                      'migration': recipe['migration']['name'], 'testsPassed': 7, 'testsSkipped': 0},
                  'browserVerification': {'realWrites': 0, 'status': 'PASS'}}
@@ -235,14 +235,14 @@ print(json.dumps(calls))
             with self.subTest(changed=changed), self.assertRaisesRegex(RuntimeError, error):
                 b.verify_account_proof({**proof, **changed}, drag, historical_api, contract)
         with self.assertRaisesRegex(RuntimeError, 'ACCOUNT_FINAL_BASELINE_CHANGED'):
-            b.verify_account_proof(proof, drag, historical_api, {**contract, 'baselineApiFiles': historical_api})
+            b.verify_account_proof(proof, drag, historical_api, {**contract, 'baselineAdminFiles': {}})
 
     def test_account_publication_requires_successful_release_and_independent_readback(self):
         binding = self.contract['accountNative']
-        controls = {name: digest(b.git('show', b.SOURCE_BASE + ':scripts/production-release/' + name))
+        controls = {name: digest(b.git('show', b.ACCOUNT_CONTROLLER + ':scripts/production-release/' + name))
                     for name in ('account-login-release.py', 'recharge-record-release.py', 'remote-deploy.py',
                                  'recharge-availability-release.py', 'account-login-contract.json')}
-        plan = {'commit': b.CURRENT, 'tree': b.CURRENT_TREE, 'controllerCommit': b.SOURCE_BASE,
+        plan = {'commit': b.ACCOUNT_COMMIT, 'tree': b.ACCOUNT_TREE, 'controllerCommit': b.ACCOUNT_CONTROLLER,
                 'controllerSha256': b.ACCOUNT_CONTROLS['account-login-release.py'],
                 'validatedControllerSha256': b.ACCOUNT_VALIDATED_CONTROLLER,
                 'contractSha256': self.contract['accountContractSha256'],
@@ -250,9 +250,9 @@ print(json.dumps(calls))
                 'workflowRunId': binding['runId'], 'workflowRunAttempt': '1',
                 'validationRunId': '38878982040', 'validationRunAttempt': '1', 'controlSources': controls}
         images = {'api': {'imageId': 'sha256:' + 'a' * 64}, 'admin': {'imageId': 'sha256:' + 'b' * 64}}
-        release = {'status': 'ACCOUNT_LOGIN_DEPLOYED', 'commit': b.CURRENT, 'tree': b.CURRENT_TREE,
+        release = {'status': 'ACCOUNT_LOGIN_DEPLOYED', 'commit': b.ACCOUNT_COMMIT, 'tree': b.ACCOUNT_TREE,
                    'workflowRunId': binding['runId'], 'businessActions': 0, 'migrationPerformed': True, 'images': images}
-        readback = {'status': 'ACCOUNT_LOGIN_INDEPENDENT_READBACK_VERIFIED', 'commit': b.CURRENT,
+        readback = {'status': 'ACCOUNT_LOGIN_INDEPENDENT_READBACK_VERIFIED', 'commit': b.ACCOUNT_COMMIT,
                     'businessActions': 0, 'migrationPerformed': True, 'images': images,
                     'preservedServices': ['mysql', 'caddy', 'media-resolver', 'auto-recharge', 'auto-registration']}
         receipt = lambda output: {'Status': 'Success', 'StatusDetails': 'Success', 'ResponseCode': 0,
@@ -270,11 +270,115 @@ print(json.dumps(calls))
 
         check(original)
         for name, changed, error in [
-                ('publication-plan.json', {'controllerCommit': b.CURRENT}, 'ACCOUNT_PUBLICATION_PLAN_CHANGED'),
+                ('publication-plan.json', {'controllerCommit': b.ACCOUNT_COMMIT}, 'ACCOUNT_PUBLICATION_PLAN_CHANGED'),
                 ('release-native-invocation.json', {'Status': 'Failed'}, 'ACCOUNT_PUBLICATION_NOT_SUCCESSFUL'),
                 ('readback-native-invocation.json', {'ResponseCode': True}, 'ACCOUNT_PUBLICATION_NOT_SUCCESSFUL'),
                 ('readback-native-invocation.json', {'StandardOutputContent': json.dumps({**readback, 'businessActions': 1})}, 'ACCOUNT_PUBLICATION_READBACK_CHANGED'),
                 ('readback-native-invocation.json', {'StandardOutputContent': json.dumps({**readback, 'images': {}})}, 'ACCOUNT_PUBLICATION_READBACK_CHANGED')]:
+            with self.subTest(name=name, changed=changed), self.assertRaisesRegex(RuntimeError, error):
+                check({**original, name: {**original[name], **changed}})
+
+    def test_checkout_inheritance_is_bound_to_three_fixed_sources_and_its_successful_run(self):
+        recipe = b.verify_checkout_binding(self.contract)
+        self.assertEqual(len(recipe['sources']), 3)
+        self.assertEqual(self.contract['checkoutSources'], recipe['sources'])
+        self.assertEqual(b.SOURCE_BASE, b.CHECKOUT_COMMIT)
+        self.assertNotEqual(b.ACCOUNT_COMMIT, b.CURRENT)
+        self.assertNotEqual(b.ACCOUNT_CONTROLLER, b.SOURCE_BASE)
+        for changed in [{'tree': b.ACCOUNT_TREE}, {'runId': '38878982040'},
+                        {'artifactId': 1}, {'proofSha256': '0' * 64}]:
+            with self.subTest(changed=changed), patch.object(b.subprocess, 'check_output') as remote, \
+                    self.assertRaisesRegex(RuntimeError, 'CHECKOUT_NATIVE_BINDING_CHANGED'):
+                b.native_proof({**self.contract['checkoutNative'], **changed})
+            remote.assert_not_called()
+        with self.assertRaisesRegex(RuntimeError, 'CHECKOUT_SOURCE_SCOPE_CHANGED'):
+            b.checkout_recipe({**self.contract, 'checkoutSources': {}})
+
+    def test_checkout_overlay_copies_only_the_pinned_checkout_tree(self):
+        values = {'apps/api/source1.ts': b'published source 1', 'apps/api/source2.ts': b'published source 2'}
+        contract = {'checkoutSources': {name: digest(raw) for name, raw in values.items()}}
+        with tempfile.TemporaryDirectory(dir=OUTPUT) as temporary, patch.object(b, 'checkout_recipe'), \
+                patch.object(b, 'git', side_effect=lambda *args: values[args[1].split(':', 1)[1]]) as read:
+            context = Path(temporary)
+            b.overlay_checkout_sources(context, contract)
+            self.assertEqual({name: (context / name).read_bytes() for name in values}, values)
+            self.assertEqual(read.call_args_list, [unittest.mock.call('show', b.CHECKOUT_COMMIT + ':' + name)
+                                                  for name in values])
+            with self.assertRaisesRegex(RuntimeError, 'CHECKOUT_PUBLISHED_SOURCE_CHANGED'):
+                b.overlay_checkout_sources(context, {'checkoutSources': {'apps/api/source1.ts': '0' * 64}})
+
+    def test_checkout_proof_preserves_account_admin_schema_and_closes_the_final_api_union(self):
+        recipe = b.checkout_recipe(self.contract)
+        account_api = {**self.contract['baselineApiFiles'], **recipe['apiModules']}
+        modules = {name.removesuffix('.js') + suffix: 'a' * 64 for name in recipe['apiModules']
+                   for suffix in ('.js', '.js.map', '.d.ts')}
+        account = {'adminFiles': self.contract['baselineAdminFiles']}
+        proof = {'version': 1, 'scope': recipe['scope'], 'commit': b.CHECKOUT_COMMIT, 'tree': b.CHECKOUT_TREE,
+                 'workflowRunId': '38882778676', 'workflowRunAttempt': '1',
+                 'contractSha256': self.contract['checkoutContractSha256'],
+                 'controllerSha256': b.CHECKOUT_CONTROLS['recharge-source-recovery-release.py'],
+                 'baselineApiReproduced': True, 'baselineAdminPreserved': True,
+                 'baselinePublishedVerified': {'apiSource': b.ACCOUNT_COMMIT,
+                                              'adminSource': b.ACCOUNT_COMMIT, 'verified': True},
+                 'apiModules': modules, 'adminFiles': {}, 'updatedServices': ['api'],
+                 'migrationPerformed': False, 'businessActions': 0,
+                 'qualityVerification': {'commit': b.CHECKOUT_COMMIT, 'conclusion': 'success',
+                     'path': '.github/workflows/quality.yml', 'runId': '38882646810', 'sourceTree': b.CHECKOUT_TREE},
+                 'databaseVerification': {'databaseStarted': False, 'schemaChanged': False, 'sqlChanged': False}}
+        proof['files'] = {**{'source/' + n: v for n, v in recipe['sources'].items()},
+                          **{'api/modules/' + n: v for n, v in modules.items()}}
+        contract = {**self.contract, 'baselineApiFiles': {
+                    **account_api, **{n: v for n, v in modules.items() if n.endswith('.js')}}}
+        self.assertEqual(b.verify_checkout_proof(proof, account, account_api, contract), proof)
+        for changed, error in [({'businessActions': False}, 'CHECKOUT_NATIVE_PROOF_CHANGED'),
+                               ({'updatedServices': ['api', 'admin']}, 'CHECKOUT_NATIVE_PROOF_CHANGED'),
+                               ({'adminFiles': {'index.html': 'b' * 64}}, 'CHECKOUT_NATIVE_PROOF_CHANGED'),
+                               ({'migrationPerformed': True}, 'CHECKOUT_NATIVE_PROOF_CHANGED'),
+                               ({'databaseVerification': {}}, 'CHECKOUT_NATIVE_VALIDATION_CHANGED'),
+                               ({'files': {**proof['files'], 'source/unpublished.ts': 'c' * 64}}, 'CHECKOUT_NATIVE_PAYLOAD_CHANGED')]:
+            with self.subTest(changed=changed), self.assertRaisesRegex(RuntimeError, error):
+                b.verify_checkout_proof({**proof, **changed}, account, account_api, contract)
+        with self.assertRaisesRegex(RuntimeError, 'CHECKOUT_FINAL_BASELINE_CHANGED'):
+            b.verify_checkout_proof(proof, account, account_api, {**contract, 'baselineApiFiles': account_api})
+
+    def test_checkout_publication_requires_api_only_release_and_independent_preservation_readback(self):
+        binding = self.contract['checkoutNative']
+        controls = {name: digest(b.git('show', b.CHECKOUT_COMMIT + ':scripts/production-release/' + name))
+                    for name in ('recharge-source-recovery-release.py', 'recharge-record-release.py',
+                                 'remote-deploy.py', 'recharge-availability-release.py',
+                                 'recharge-source-recovery-contract.json')}
+        plan = {'commit': b.CHECKOUT_COMMIT, 'tree': b.CHECKOUT_TREE,
+                'controllerSha256': b.CHECKOUT_CONTROLS['recharge-source-recovery-release.py'],
+                'contractSha256': self.contract['checkoutContractSha256'],
+                'artifactSha256': binding['bundleSha256'], 'buildProofSha256': b.CHECKOUT_PROOF,
+                'workflowRunId': binding['runId'], 'workflowRunAttempt': '1', 'controlSources': controls}
+        images = {'api': {'imageId': 'sha256:' + 'a' * 64}}
+        release = {'status': 'RECHARGE_SOURCE_RECOVERY_DEPLOYED', 'commit': b.CHECKOUT_COMMIT,
+                   'tree': b.CHECKOUT_TREE, 'workflowRunId': binding['runId'],
+                   'businessActions': 0, 'migrationPerformed': False, 'images': images}
+        readback = {'status': 'RECHARGE_SOURCE_RECOVERY_INDEPENDENT_READBACK_VERIFIED',
+                    'commit': b.CHECKOUT_COMMIT, 'businessActions': 0, 'migrationPerformed': False, 'images': images,
+                    'preservedServices': ['admin', 'mysql', 'caddy', 'media-resolver', 'auto-recharge', 'auto-registration']}
+        receipt = lambda output: {'Status': 'Success', 'StatusDetails': 'Success', 'ResponseCode': 0,
+                                  'StandardErrorContent': '', 'StandardOutputContent': json.dumps(output)}
+        original = {'publication-plan.json': plan, 'release-native-invocation.json': receipt(release),
+                    'readback-native-invocation.json': receipt(readback)}
+
+        def check(entries):
+            zipped = io.BytesIO()
+            with zipfile.ZipFile(zipped, 'w') as archive:
+                for name, value in entries.items():
+                    archive.writestr(name, json.dumps(value))
+            with zipfile.ZipFile(zipped) as archive:
+                b.verify_checkout_publication(archive, binding)
+
+        check(original)
+        for name, changed, error in [
+                ('publication-plan.json', {'tree': b.ACCOUNT_TREE}, 'CHECKOUT_PUBLICATION_PLAN_CHANGED'),
+                ('release-native-invocation.json', {'Status': 'Failed'}, 'CHECKOUT_PUBLICATION_NOT_SUCCESSFUL'),
+                ('readback-native-invocation.json', {'ResponseCode': True}, 'CHECKOUT_PUBLICATION_NOT_SUCCESSFUL'),
+                ('readback-native-invocation.json', {'StandardOutputContent': json.dumps({**readback, 'migrationPerformed': True})}, 'CHECKOUT_PUBLICATION_READBACK_CHANGED'),
+                ('readback-native-invocation.json', {'StandardOutputContent': json.dumps({**readback, 'preservedServices': []})}, 'CHECKOUT_PUBLICATION_READBACK_CHANGED')]:
             with self.subTest(name=name, changed=changed), self.assertRaisesRegex(RuntimeError, error):
                 check({**original, name: {**original[name], **changed}})
 

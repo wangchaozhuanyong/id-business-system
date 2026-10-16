@@ -403,7 +403,7 @@
     "id-business-v2/auto-recharge/persistence/recharge-settings.repository.js": "98b8afa2ab6b003ba580f06910e486cb770df557133dae9d5dc3a231d6e2ec38",
     "id-business-v2/auto-recharge/persistence/recharge.repository.js": "883f25763fbaf054802582897f776df3ac0c5234422af5cf797c692c9da5b6b7",
     "id-business-v2/auto-recharge/public-api.js": "9ce7fa16acaf28af4e1f68f326e0db31b14aef24d032d2c0d44f99005bd8c263",
-    "id-business-v2/auto-recharge/recharge-account-restore.js": "37f775d83fc99ceb534713c5e8ff75aded86b9bfde0c925766b47698fe167ece",
+    "id-business-v2/auto-recharge/recharge-account-restore.js": "1e0353725899504e50ac7e2209ab59bac7e0e24afe188cb7f63725a35e753148",
     "id-business-v2/auto-recharge/recharge-address-consumption.js": "ba0129396175d9d4e6f5fa65b56e8527a56eeb58e44ced15f6a130ca5c1d8fee",
     "id-business-v2/auto-recharge/recharge-address-validation.js": "fbb4afcde0fcf2772726970c3bb296820d7d8ffde8ca96aa8f510c48d6a9b906",
     "id-business-v2/auto-recharge/recharge-availability.js": "2686beef567db6ef6a64fca4b839b941821ed622655e2e83f43a0f2b9ad3c1b5",
@@ -447,7 +447,7 @@
     "id-business-v2/auto-recharge/recharge-settings.service.js": "dd294077dc73e416235e1bc8d85fe2e394d454ea60dc9b5b1db96c82fe1bb916",
     "id-business-v2/auto-recharge/recharge-start.js": "0cb6130e3b5bc7acea514778e1d8ea7c46f5d6b43668fd73d541c96c5fc1acde",
     "id-business-v2/auto-recharge/recharge-subscription-cycle.js": "5d61b89e2cbb8dd6ff298c5a09c994d90e8223fe1d691baad6dee01226e12efb",
-    "id-business-v2/auto-recharge/recharge-unidentified-checkout.js": "ecbdf30cd443763f12f01fb047a9671d4b32bd4de436220680a12e74f886f12b",
+    "id-business-v2/auto-recharge/recharge-unidentified-checkout.js": "0aa54768e7417dfed32db45a7a01670713b94a13e2736bae92037bd39b1a0f58",
     "id-business-v2/auto-recharge/recharge-upgrade-protocol.js": "3658b2bfb7bfc490a5778b23f230dd8bce34538b77072e69cb914a60b9bfa988",
     "id-business-v2/auto-recharge/recharge-validation.js": "93be0956ac5d145212400d37fcd4eaa9b7658cf8b67fed16c1615e1a374e588b",
     "id-business-v2/auto-recharge/recharge-worker-client.js": "0cff4c7bff4f96dcbda4699e9642af7d501d0f1b68c7a97926ce845a5b76e75e",
@@ -1019,11 +1019,14 @@
     "scripts/production-release/workspace-drag-release.py": "28bcfed29eb45d66ece16b943e63b97f5f5500dacfc345cb23642bb4f9931fb0",
     "scripts/production-release/account-login-build.py": "f2bc8a42fae093967230b77570f90e7a5914663bc77ccd1ae7f3e617a3a53998",
     "scripts/production-release/account-login-contract.json": "856cc583bbb6f79e6a3dfa1e088bc4674892ff1c364712d808d9d5facba44fea",
-    "scripts/production-release/account-login-release.py": "68461ea869ba9447a9878653415c85fe961ac91bbb59389848baba302d7bc5c9"
+    "scripts/production-release/account-login-release.py": "68461ea869ba9447a9878653415c85fe961ac91bbb59389848baba302d7bc5c9",
+    "scripts/production-release/recharge-source-recovery-build.py": "927292b7467c9057a049ef9c1d89654100c506acb77f802f0c0d72fb081d1467",
+    "scripts/production-release/recharge-source-recovery-contract.json": "61e69d7a720baa61955be460b209082aaf5e01766ec4be6c882b4a5b6807d890",
+    "scripts/production-release/recharge-source-recovery-release.py": "e6f493ab7737bf77d23114a00ff9c970a77d18786726e690b27dbe98c9f099b8"
   },
   "configurationSha256": {
     ".env.aws.production": "088a61075fb2ba01f04249fc78e31150ee7cd571f0708fe0c28ba38ac53daafa",
-    "compose.release.json": "bc689c7975918f5be79a00e4101b231ea9c28c28b803d71ce21d3d1dee587b38",
+    "compose.release.json": "6a3dd34da30d92e9368e64e98c14230990b3030e57886ecc3bcf512f856586e9",
     "docker-compose.aws-mysql.yml": "953c6264f157b00218f2a019d5e2c0b6bc4a34f687f2ec42ad782e0009e7672c"
   },
   "controlFiles": [
@@ -1048,7 +1051,10 @@
     "workspace-drag-contract.json",
     "account-login-build.py",
     "account-login-contract.json",
-    "account-login-release.py"
+    "account-login-release.py",
+    "recharge-source-recovery-build.py",
+    "recharge-source-recovery-contract.json",
+    "recharge-source-recovery-release.py"
   ],
   "controlPaths": [
     "scripts/production-release/registration-parity-diagnostics-build.py",
@@ -1066,10 +1072,10 @@
     "docs/AUTO_REGISTRATION_PARITY_20261016.md",
     "docs/V2_TASKS.md"
   ],
-  "current": "/opt/id-business-v2/releases/20261016T093420Z-13e52ad670c6-account-login",
+  "current": "/opt/id-business-v2/releases/20261016T094835Z-c0238525bb4b-recharge-source-recovery",
   "databaseReceipt": {
     "accountCount": 38,
-    "accountsSha256": "452bdf845bd5f4f930b49f6719b12dae27e9ec5802118cf30f7bf34a067ca09a",
+    "accountsSha256": "f05c5ac13263609999fc88f3a228f675c459176112221decc28049168710bf38",
     "columns": [
       {
         "COLUMN_NAME": "registered_at",
@@ -1147,7 +1153,7 @@
     "rpcConnected": true,
     "stopping": false
   },
-  "expectedCurrent": "13e52ad670c6b6daa94ab2df009aaa8a9d69b97c",
+  "expectedCurrent": "c0238525bb4b2a1c3fe6688eaed5f74f504ee529",
   "expectedGitChanges": [
     "apps/admin/src/v2/features/auto-registration/apple-mailbox-presentation.spec.ts",
     "apps/admin/src/v2/features/auto-registration/apple-mailbox-presentation.ts",
@@ -1180,12 +1186,12 @@
   ],
   "frozen": true,
   "hostSourceInheritance": {
-    "commit": "13e52ad670c6b6daa94ab2df009aaa8a9d69b97c",
+    "commit": "c0238525bb4b2a1c3fe6688eaed5f74f504ee529",
     "files": {
       "apps/api/src/id-business-v2/auto-registration/worker/release_safety.py": "acd390001c40c1635eb4d7e15b21b58fda51ca78c664ac6970c9b3cf00df7012"
     },
-    "manifestSha256": "25dbe2d5e881182dd6cf0937ef82834e9a6a0c06b0d99a0155d4d30b02443e80",
-    "release": "/opt/id-business-v2/releases/20261016T093420Z-13e52ad670c6-account-login"
+    "manifestSha256": "76542a0e9790c11c8eb960f25c6c9fc5cf3db6de11b336a022eff7172bf6d0fd",
+    "release": "/opt/id-business-v2/releases/20261016T094835Z-c0238525bb4b-recharge-source-recovery"
   },
   "identityNative": {
     "artifactDigest": "sha256:3ab38342a84222474fcc02566c88e51719c9dd2424cc09118db050deb45f7861",
@@ -1199,7 +1205,7 @@
     "tree": "283b0749281572da98f75bed317f81816d030591",
     "workflowPath": ".github/workflows/proxy-result-identity-validation.yml"
   },
-  "manifestSha256": "25dbe2d5e881182dd6cf0937ef82834e9a6a0c06b0d99a0155d4d30b02443e80",
+  "manifestSha256": "76542a0e9790c11c8eb960f25c6c9fc5cf3db6de11b336a022eff7172bf6d0fd",
   "migration": null,
   "parentContractSha256": "9d5f34916800fb885cb8aabd98bb550900775f47f17d666c8ad40a26f65215ae",
   "parentControls": {
@@ -1295,19 +1301,19 @@
     "apps/api/src/id-business-v2/auto-registration/worker/test_apple_mailboxes.py": "a93bc5c367b74ab2715f88514e37b640d5213c056687f282ec9cf4bd1196d2a1",
     "apps/api/src/id-business-v2/auto-registration/worker/test_release_safety.py": "98025236c404b84e569b894c0e3d346bd60009445d3f4010b5967b80f518fe16",
     "scripts/acceptance-v2-registration-parity-diagnostics.mjs": "fd269ea49a297ea0b98e75045cba1b4bc33d536a137cd7f2a36c815699acf448",
-    "scripts/production-release/registration-parity-diagnostics-build.py": "cdde32ba1f1da6eec3683ac4e1957a75fbbba7444743c8b64a9eb403dd7f9842",
-    "scripts/production-release/registration-parity-diagnostics-release.py": "0308b263f1b04a30ea8df23adceed49fe419477ff9cdd95c8fc4909f0b8eb3a3",
+    "scripts/production-release/registration-parity-diagnostics-build.py": "7bd0eb8a3b28261402782b2dbe01fc436c41331f0ecd47764c2d5abc5dc4e459",
+    "scripts/production-release/registration-parity-diagnostics-release.py": "f5d3d6e3d5ee539a965cbbfa4401beee3e209c2258886ea7239ae667a13e3eb8",
     "scripts/production-release/registration-parity-diagnostics-dispatch.py": "c16f8a09a7a08771faa1071910a05a077d3c4e368f6a4938d3c8cec8cca74a8c",
-    "scripts/production-release/registration-parity-diagnostics-release.test.py": "a318a0ff56677f0897d5780db4ebe7a28073d1fed8bef7be87dd1a84c312f30d",
-    "scripts/ci-registration-parity-diagnostics-scope.mjs": "c862a50cb6525343cf53dfc4069cf3971b770d81ae19e00d9e62f59b751578e8",
+    "scripts/production-release/registration-parity-diagnostics-release.test.py": "8e3630a0ee837f71b685df4b1b9c787904e7ef341b74ca07612cdfb01e608e32",
+    "scripts/ci-registration-parity-diagnostics-scope.mjs": "d088088ed8c55a5f5169f7463beb24c900b41fd42fac106a3a544c5c4bc27dfd",
     "scripts/ci-registration-parity-diagnostics-scope.test.mjs": "c0029205804883285bb1a8d9889083b719ca20f47f4e5ce98f081a3db57db896",
     ".github/workflows/registration-parity-diagnostics-validation.yml": "0ec8c92fcbfcb45a961930c4823cb9749bf8d898ab449692c1c81d1b885a87e7",
     "scripts/ci-recharge-scope.mjs": "c56bb176ca8dafce0580b871c5d8fa309e69c986285c9ff15239f1580816b5fb",
     "scripts/ci-recharge-scope.test.mjs": "4de7c1d9b179364dabf58581b7704a32f58ce556983f3c73657533ed68ace3df",
-    "scripts/ci-recharge-check.mjs": "7bd1ac22fd82ded0a1b8febd0c60a5592662a4bf36608726010ba9a4331d3f36",
-    "scripts/ci-recharge-check.test.mjs": "6529b27c294a88edb78288633cfe67cbd4d5432a95787c29e308deb681959af8",
-    "docs/AUTO_REGISTRATION_PARITY_20261016.md": "33217a3d864c667d3151327da82cf9ca66eef09948c41545ed8556035238b30b",
-    "docs/V2_TASKS.md": "91d7d08547f710e735882fd7efc4563c9d85a0b020b4098cef64a244a5d406cc"
+    "scripts/ci-recharge-check.mjs": "8b0465bf9707bb51e625fe04464d78b46074a6f7e011d9780b83b8a317f60654",
+    "scripts/ci-recharge-check.test.mjs": "1e742088baeae163666c900c16a4cec2d1d19083b2518e4f85802c6954666b75",
+    "docs/AUTO_REGISTRATION_PARITY_20261016.md": "0e86de73c8fc97093e33b9302e130b63af44e14ed5aab26d9e802e75620fe070",
+    "docs/V2_TASKS.md": "508e47b672b63338b85f1cdf79ddd1eb2f7fa4ef4fac7dff486574643d46ef25"
   },
   "roleSourceCommits": {
     "admin": "13e52ad670c6b6daa94ab2df009aaa8a9d69b97c",
@@ -2306,9 +2312,9 @@
     "online-recharge": "0db8f5da6e8a49af82fb419ef81b2edc552752edc0c37cfd0383b9e5f963ee20"
   },
   "runtimeEvidence": {
-    "commandId": "9a50b540-1033-4688-98e2-81fdab60b09f",
-    "commit": "13e52ad670c6b6daa94ab2df009aaa8a9d69b97c",
-    "receiptSha256": "419e75b44fe9c4d0d44e79c695fe3f57e490c398b14c979126b945e9c4ac9f2c",
+    "commandId": "c1f4d9cc-fc1d-43a5-9526-4d3060667f67",
+    "commit": "c0238525bb4b2a1c3fe6688eaed5f74f504ee529",
+    "receiptSha256": "cdf272f83703ce09ec5974593ebeecf10b9fc05c1b30d140a17d35e6af86576f",
     "status": "VERIFIED"
   },
   "runtimePrismaClientFiles": {
@@ -2360,12 +2366,12 @@
       "status": "running"
     },
     "api": {
-      "containerId": "e0f0cad165d4cf6116cf9fc4bfe4dc87154031af618edb9271cdfa2ed60e3009",
+      "containerId": "61ac8f249d1bca7a8d7a2fbf6d294003e7414532077ef28f8ce59e8a91061669",
       "environmentSha256": "9ffb49fbaa3c1b6d67df07fcedabc538678dc6a4aed2489b99a62a2368d10d9f",
       "health": "healthy",
-      "image": "sha256:ae72429e0bdba1faa0f176070b040408cac462714d2bdc2b6625413729a16c31",
-      "reference": "id-business-v2-sales:13e52ad670c6b6daa94ab2df009aaa8a9d69b97c-38881266999-api",
-      "startedAtSha256": "a2adab5fa52dd38aabbce0b6169f337308611ce7619e330b03d621ec16a9245c",
+      "image": "sha256:c744b4f2a2a251a1d1f98c9d8f2c26e452fbcc25b385f6424014c36554eed965",
+      "reference": "id-business-v2-checkout:c0238525bb4b2a1c3fe6688eaed5f74f504ee529-38882778676-api",
+      "startedAtSha256": "d2a5062530e8471c212ebd5df64caf71d10cd8eefb4ee34f00cec871d7deecf9",
       "status": "running"
     },
     "auto-recharge": {
@@ -2414,17 +2420,17 @@
       "status": "running"
     },
     "online-recharge": {
-      "containerId": "84f3a3e811971f43b45fd51530d071f56423f3aaec17197cfd97cbc6773afb48",
+      "containerId": "b4a61dc177ada2c7ac52bee9593d4d1d37f0a12516f7008e3eb8be337b3118c4",
       "environmentSha256": "60bb48bbd6e03a4ceebe245c8405f248d0c682a27287aabb17c1d3573e50ad37",
       "health": "healthy",
       "image": "sha256:37075014c7a58e2c7831c1b5e97cf09768978e7f7641798644cfc7a102a73e00",
       "reference": "id-business-v2-proxy-result-identity:69eba563895bf083b24c8214a088454d5df34922-38832430638",
-      "startedAtSha256": "0b2e6936a717c5e9da27e2dd095a08da2ebd4b217184f5f85a6f8741a07656c7",
+      "startedAtSha256": "b25829215544dfe52451739dd3c96d641c6954f205b26db136307791cefad093",
       "status": "running"
     }
   },
-  "sourceBaseline": "868e8e8f8fb06293b433bf861585cc734a478b96",
-  "sourceBaselineTree": "e7a593369d59a9b06baeb4ebc82287231354f9f3",
+  "sourceBaseline": "c0238525bb4b2a1c3fe6688eaed5f74f504ee529",
+  "sourceBaselineTree": "1f71d02270d8f1a78303fa35320223b02ab3dfb0",
   "sourceProjectionSha256": {
     "adminSourceProjection": "49df5e2744558a2c5da46942353fef96bdd2a808731d907b45473f509088e048",
     "roleSourceProjections": "b436a9309f3269322bc90c3d2d02e334c675b38fc2af77dcfb5ab746c590be72"
@@ -2711,5 +2717,29 @@
     "scripts/ci-recharge-check.mjs",
     "scripts/ci-recharge-check.test.mjs",
     "scripts/ci-recharge-scope.test.mjs"
-  ]
+  ],
+  "checkoutControls": {
+    "recharge-source-recovery-build.py": "927292b7467c9057a049ef9c1d89654100c506acb77f802f0c0d72fb081d1467",
+    "recharge-source-recovery-contract.json": "61e69d7a720baa61955be460b209082aaf5e01766ec4be6c882b4a5b6807d890",
+    "recharge-source-recovery-release.py": "e6f493ab7737bf77d23114a00ff9c970a77d18786726e690b27dbe98c9f099b8"
+  },
+  "checkoutContractSha256": "61e69d7a720baa61955be460b209082aaf5e01766ec4be6c882b4a5b6807d890",
+  "checkoutProofSha256": "a172906736117ed57da9a958a79c51e86709add403a49233494b6b2e368ddc81",
+  "checkoutSources": {
+    "apps/api/src/id-business-v2/auto-recharge/recharge-account-restore.ts": "db7e9cac0b2a0ff80de23ab53bb93b7d1f3507cd5f1e6eb668a2c1a236ee36d6",
+    "apps/api/src/id-business-v2/auto-recharge/recharge-unidentified-checkout.spec.ts": "03262f0823cb45f160dacd239a4bd2d8a1d7d7200996378cccc6019fac1edb8e",
+    "apps/api/src/id-business-v2/auto-recharge/recharge-unidentified-checkout.ts": "770a34020c5788d11f56cc94b01a6fe563755eaf6471b9874a31ff13ef169c55"
+  },
+  "checkoutNative": {
+    "artifactDigest": "sha256:1c50a921f49473bda538fe84128df2e7a358d8e44946fd760dc8ff1d31d6e56d",
+    "artifactId": 12038273219,
+    "bundleName": "recharge-source-recovery-artifact.tar.gz",
+    "bundleSha256": "e022d3a9f4da4691e8e3cd1834111db52cded51eb3fec5d9874bfbc2d11b211d",
+    "proofSha256": "a172906736117ed57da9a958a79c51e86709add403a49233494b6b2e368ddc81",
+    "commit": "c0238525bb4b2a1c3fe6688eaed5f74f504ee529",
+    "tree": "1f71d02270d8f1a78303fa35320223b02ab3dfb0",
+    "runId": "38882778676",
+    "runAttempt": 1,
+    "workflowPath": ".github/workflows/recharge-source-recovery-validation.yml"
+  }
 }
