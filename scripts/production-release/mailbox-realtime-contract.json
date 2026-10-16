@@ -1284,11 +1284,11 @@
     "tree": "f6ab4537e28437af244c2263dd591516ae8e2a22",
     "workflowPath": ".github/workflows/registration-closure-validation.yml"
   },
-  "reviewedApplicationCommit": "6d602a4749e9a304e332c04a6736c5d7d6023d10",
+  "reviewedApplicationCommit": "f62fa65c20ad93292ad7c09792a4049cda03fab5",
   "reviewedFileHashes": {
     ".github/workflows/mailbox-realtime-validation.yml": "42b8552e19bec8ab4be11970fbc8d8d798555724da4c78d54af9ec28cc072d04",
     "apps/admin/src/v2/features/auto-recharge/VendureMailboxHealth.vue": "29d99a1085a80eb5126b8a69bf8f659cae9a9689d503a9d3f6b9b093c30087eb",
-    "apps/admin/src/v2/features/auto-recharge/VendureMailboxManager.vue": "07d84eb78a21ccd99b863aa846bc3827e0eaceb547b7dc722e86c47c8fc19eb3",
+    "apps/admin/src/v2/features/auto-recharge/VendureMailboxManager.vue": "dc70a5955dabb97698cc837db1432f0b28702b082445057c52dcf39a08ca1948",
     "apps/admin/src/v2/features/auto-recharge/vendure-mailbox-api.ts": "52cf5917aea7684171f6da7ba1be3b08a80c65ce73656a108cdc1983c8e3b4b4",
     "apps/admin/src/v2/features/auto-recharge/vendure-mailbox-health.spec.ts": "e82e088ba9977917ea8d847ebc195d6982b5f9fcab2817e9f7bf011e3c4e3a54",
     "apps/admin/src/v2/features/auto-recharge/vendure-mailbox-health.ts": "5368c66004ab0b73b4296d53ec154ad736375d18c54f6f12db623db35dee53b9",
@@ -1299,9 +1299,9 @@
     "apps/api/src/id-business-v2/workspace/id-business-v2-vendure-mailbox.service.ts": "b173813bfeca8232cf5035be8373496724d2a38a5c9b52c74e222c7d71c99361",
     "apps/api/src/id-business-v2/workspace/mail-health.spec.ts": "0dd168fe3032a5b46e4d3eaf9e43ea5f6a09b01aaf0e54fe87d93b6e3dbbf4c8",
     "apps/api/src/id-business-v2/workspace/providers/id-business-v2-vendure-mailbox.client.ts": "c1b7f1d091e10afab65dbf6c22b26f94f899d6e697982052fcba9d77866b5e4e",
-    "docs/MAILBOX_REALTIME_REPAIR_20261016.md": "4b303e68e83648ccbd92d308b58b1cb7f6392ffdc41b6fa67f619cc2624c5271",
+    "docs/MAILBOX_REALTIME_REPAIR_20261016.md": "a77d4141543168b3996add753d5be8ea9f28a2151bb9df59cea5a84eb54264a6",
     "packages/shared/src/v2/vendure-mailbox.ts": "4b72d43152b07ebe9331583d8baf245028f0ddb96229ffcffbd5ec6d7dfa375e",
-    "scripts/acceptance-v2-mailbox-realtime.mjs": "0fde62b43ee0686e5e9330c14e34621090f34ac5915528c719d5e9859a154c61",
+    "scripts/acceptance-v2-mailbox-realtime.mjs": "ec8ae2f1b5e62679942f30e25ac9df6afeecb9d421b95991a8e4c9f333fb4af5",
     "scripts/ci-mailbox-realtime-scope.mjs": "9e8301253d923d42e2b38eaf3f535cca1385f8a72876599c87989335145b5532",
     "scripts/ci-mailbox-realtime-scope.test.mjs": "a6ff492b8563c470de0d246be18bc1033cb9252ecd671119c59e96dd80014a5a",
     "scripts/ci-recharge-check.mjs": "a23f652eecb85416b378900a3afa095832ee0318808c375e7008086c3652602d",
@@ -2438,7 +2438,7 @@
   },
   "sources": {
     "apps/admin/src/v2/features/auto-recharge/VendureMailboxHealth.vue": "29d99a1085a80eb5126b8a69bf8f659cae9a9689d503a9d3f6b9b093c30087eb",
-    "apps/admin/src/v2/features/auto-recharge/VendureMailboxManager.vue": "07d84eb78a21ccd99b863aa846bc3827e0eaceb547b7dc722e86c47c8fc19eb3",
+    "apps/admin/src/v2/features/auto-recharge/VendureMailboxManager.vue": "dc70a5955dabb97698cc837db1432f0b28702b082445057c52dcf39a08ca1948",
     "apps/admin/src/v2/features/auto-recharge/vendure-mailbox-api.ts": "52cf5917aea7684171f6da7ba1be3b08a80c65ce73656a108cdc1983c8e3b4b4",
     "apps/admin/src/v2/features/auto-recharge/vendure-mailbox-health.ts": "5368c66004ab0b73b4296d53ec154ad736375d18c54f6f12db623db35dee53b9",
     "apps/api/src/id-business-v2/auto-registration/apple-mailbox-pool.ts": "0e6be87ae9a268f5eb3587bc652723e42824bc30bc9d8ed5f7bfc509aef6c944",
@@ -2565,7 +2565,7 @@
     "apps/admin/src/v2/testing/V2VendureMailboxDesignFixture.vue": "858e9caa080e52f89986498b2221987262616efc7c2c5021c5564189c6a7ea76",
     "apps/api/src/id-business-v2/auto-registration/apple-mailboxes.service.spec.ts": "307250d2b62de027a676f08b9f306dd040da5b653e2bf1bdbd3a4cddc8f7da4c",
     "apps/api/src/id-business-v2/workspace/mail-health.spec.ts": "0dd168fe3032a5b46e4d3eaf9e43ea5f6a09b01aaf0e54fe87d93b6e3dbbf4c8",
-    "scripts/acceptance-v2-mailbox-realtime.mjs": "0fde62b43ee0686e5e9330c14e34621090f34ac5915528c719d5e9859a154c61"
+    "scripts/acceptance-v2-mailbox-realtime.mjs": "ec8ae2f1b5e62679942f30e25ac9df6afeecb9d421b95991a8e4c9f333fb4af5"
   },
   "version": 1,
   "workerFiles": {}

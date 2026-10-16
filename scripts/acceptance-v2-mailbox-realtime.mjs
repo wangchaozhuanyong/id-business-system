@@ -409,9 +409,16 @@ try {
           url.searchParams.get('status') === 'DISABLED'
         );
       });
-      await page.getByRole('combobox', { name: '邮箱状态', exact: true }).click();
-      await page.getByRole('option', { name: '已禁用', exact: true }).click();
-      await statusRead;
+      await Promise.all([
+        statusRead,
+        (async () => {
+          await page
+            .locator('.el-select')
+            .filter({ has: page.getByRole('combobox', { name: '邮箱状态', exact: true }) })
+            .click();
+          await page.getByRole('option', { name: '已禁用', exact: true }).click();
+        })()
+      ]);
       assert.equal(getCount('primary-accounts') - before, 1, '状态筛选改变后应只读取一次');
       await page.getByRole('tab', { name: '虚拟邮箱管理', exact: true }).click();
       await page
