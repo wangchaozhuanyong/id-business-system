@@ -13,7 +13,10 @@ import {
 } from './recharge-job-helpers';
 import { cycleContext, readCycleState } from './recharge-cycle-state';
 import { unpaidCheckoutRecoveryIdentifier } from './recharge-checkout-recovery';
-import { isUnidentifiedUnpaidCheckout } from './recharge-unidentified-checkout';
+import {
+  findUnidentifiedCheckoutSource,
+  isUnidentifiedUnpaidCheckout
+} from './recharge-unidentified-checkout';
 
 export async function restoreRechargeAccount(input: {
   tx: V2CommandTransaction;
@@ -63,12 +66,32 @@ export async function restoreRechargeAccount(input: {
       r.fileKey === `${accountKey}${job.plan === 'plus' ? '' : `-${job.plan}`}.json` &&
       Number.isSafeInteger(r.revision) &&
       r.revision >= 0 &&
+      (object(r.document).target_plan ?? 'plus') === job.plan &&
       isUnidentifiedUnpaidCheckout(r.document)
   );
-  const unidentifiedSource =
+  let unidentifiedSource =
     unidentifiedRecord && ownedProfile
       ? await repository.findJob(tx, ownedProfile.sourceJobId)
       : null;
+  if (
+    unidentifiedRecord &&
+    ownedProfile &&
+    unidentifiedSource &&
+    !isUnidentifiedUnpaidCheckout(unidentifiedSource.result)
+  ) {
+    const history = await repository.finishedJobsForAccount(tx, job.ownerId, accountKey, job.id);
+    // 现有查询最多30条；不能把截断历史当作唯一来源的证明。
+    unidentifiedSource =
+      history.length < 30
+        ? (findUnidentifiedCheckoutSource(
+            history,
+            job.ownerId,
+            accountKey,
+            job.plan,
+            ownedProfile.profileId
+          ) ?? null)
+        : null;
+  }
   const unidentifiedRecovery = Boolean(
     unidentifiedRecord &&
     ownedProfile &&
@@ -87,7 +110,9 @@ export async function restoreRechargeAccount(input: {
     unidentifiedSource.action === 'bitbrowser' &&
     unidentifiedSource.state === 'finished' &&
     isUnidentifiedUnpaidCheckout(unidentifiedSource.result) &&
-    object(unidentifiedSource.result).browser_profile_id === ownedProfile.profileId
+    (object(unidentifiedSource.result).target_plan ?? 'plus') === job.plan &&
+    (object(unidentifiedSource.result).browser_profile_id === ownedProfile.profileId ||
+      unidentifiedSource.id !== ownedProfile.sourceJobId)
   );
   if (job.action === 'bitbrowser' && currentResult.recheck_only === true) {
     const source =
@@ -139,7 +164,7 @@ export async function restoreRechargeAccount(input: {
       job.plan,
       job.id,
       undefined,
-      unidentifiedRecovery ? ownedProfile?.sourceJobId : undefined
+      unidentifiedRecovery ? unidentifiedSource?.id : undefined
     );
     if (
       persistedIdentifier &&
