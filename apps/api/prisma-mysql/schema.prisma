@@ -75,6 +75,7 @@ model OnlineRechargeCard {
   status          OnlineRechargeAssetStatus  @default(active)
   successCount    Int                       @default(0) @map("success_count")
   declineCount    Int                       @default(0) @map("decline_count")
+  allowedPlans    Json                      @default("[\"go\",\"plus\",\"pro_5x\",\"pro_20x\",\"pro_500\"]") @map("allowed_plans")
   leaseOwner      String?                    @map("lease_owner") @db.Char(36)
   leaseId         String?                    @map("lease_id") @db.Char(36)
   leaseVersion    Int                       @default(0) @map("lease_version")

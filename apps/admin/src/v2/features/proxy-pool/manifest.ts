@@ -3,7 +3,7 @@ import { defineV2Feature } from '@/v2/features/feature';
 export const rechargeProxiesFeature = defineV2Feature({
   key: 'recharge-proxies',
   title: '代理 IP 管理',
-  group: '账号设置',
+  group: '自充设置',
   route: '/v2/account-settings/proxies',
   sourceSheet: '充值代理 IP',
   permission: 'id_business_v2.online_recharge.read',

@@ -49,7 +49,7 @@ import { hasOfficialRechargeQuote } from './recharge-upgrade-protocol';
 import { RechargeSettingsService } from './recharge-settings.service';
 import { RechargeProxyService } from './recharge-proxy.service';
 import { RechargeNameService } from './recharge-name.service';
-import { finalizeRechargeCardBilling } from './recharge-card-billing';
+import { finalizeRechargeCard } from './recharge-card-billing';
 import { startRechargeJob } from './recharge-start';
 import { startServerRecheck } from './recharge-server-recheck';
 import { listRechargeJobs } from './recharge-job-list';
@@ -291,7 +291,8 @@ export class RechargeService {
             job,
             callback: input,
             repository: this.repository,
-            audit: this.audit
+            audit: this.audit,
+            cards: this.bankCards
           });
         }
         if (input.type === 'restore') {
@@ -515,7 +516,15 @@ export class RechargeService {
           });
           await completeCancellation(tx, job, report, this.repository, this.audit);
           const verifiedOrder = await recordVerifiedBankRecharge(tx, job, report, this.bankOrders);
-          await finalizeRechargeCardBilling(tx, job, verifiedOrder, this.bankCards, this.names);
+          await finalizeRechargeCard({
+            tx,
+            job,
+            report: object(mergeRechargeCallbackResult(job, report, verifiedAt)),
+            order: verifiedOrder,
+            repository: this.repository,
+            cards: this.bankCards,
+            names: this.names
+          });
           state = 'finished';
           nonceHash = null;
         }
@@ -552,7 +561,7 @@ export class RechargeService {
         });
         return { ok: true };
       },
-      { changedScopes: ['auto-recharge'], requestId: id, retryMode: 'none' }
+      { changedScopes: ['auto-recharge', 'online-recharge'], requestId: id, retryMode: 'none' }
     );
   }
 }

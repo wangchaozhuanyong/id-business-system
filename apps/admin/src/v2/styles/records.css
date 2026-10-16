@@ -265,7 +265,7 @@
 
 .v2-records-pagination {
   display: flex;
-  min-height: 58px;
+  min-height: max(var(--v2-records-pagination-min-height, 0px), 58px);
   align-items: center;
   justify-content: space-between;
   gap: 16px;

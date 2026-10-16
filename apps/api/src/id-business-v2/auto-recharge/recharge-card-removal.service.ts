@@ -92,6 +92,8 @@ export class RechargeCardRemovalService {
           throw new ConflictException('这张银行卡还有未结束的充值任务，暂不能删除');
         if (card.numberHash && card.billingNameEncrypted)
           await this.names.confirm(tx, card.numberHash, card.billingNameEncrypted);
+        await this.names.lock(tx);
+        await this.names.removeSharedCard(tx, card.numberHash);
         await this.repository.remove(
           tx,
           card,
@@ -109,7 +111,12 @@ export class RechargeCardRemovalService {
         });
         return { deleted: true };
       },
-      { changedScopes: ['auto-recharge'], requestId: randomUUID(), operator, retryMode: 'none' }
+      {
+        changedScopes: ['auto-recharge', 'online-recharge'],
+        requestId: randomUUID(),
+        operator,
+        retryMode: 'none'
+      }
     );
   }
 }

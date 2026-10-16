@@ -34,7 +34,16 @@ function setup() {
     accounts as never,
     transactions as never,
     audit as never,
-    encryption as never
+    encryption as never,
+    {
+      ensureLegacy: vi.fn(),
+      assertNumber: vi.fn(),
+      availability: vi.fn(),
+      assertLegacyAvailable: vi.fn(),
+      syncLegacy: vi.fn(),
+      disableLegacy: vi.fn(),
+      removeLegacyData: vi.fn()
+    } as never
   );
   return { service, repository, transactions, audit, encryption };
 }

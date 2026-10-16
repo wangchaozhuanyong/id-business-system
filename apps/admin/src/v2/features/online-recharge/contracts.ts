@@ -77,11 +77,12 @@ export interface PublicConfig {
   currency?: string;
   plans?: { value: OnlinePlan; label: string }[];
 }
-export type FormValue = string | number | boolean;
+export type FormValue = string | number | boolean | string[];
 export interface OnlineField {
   key: string;
   label: string;
-  type?: 'text' | 'textarea' | 'number' | 'select' | 'switch' | 'secret';
+  type?: 'text' | 'textarea' | 'number' | 'select' | 'switch' | 'secret' | 'card-select';
+  multiple?: boolean;
   required?: boolean;
   help?: string;
   options?: readonly { value: string; label: string }[];

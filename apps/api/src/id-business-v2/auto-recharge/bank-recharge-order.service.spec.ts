@@ -2,6 +2,7 @@ import { BankRechargeFeesService } from './bank-recharge-fees.service';
 import { describe, expect, it, vi } from 'vitest';
 import { BankRechargeOrderService } from './bank-recharge-order.service';
 import { recordVerifiedBankRecharge } from './recharge-bank-callback';
+import { BankRechargeRepository } from './persistence/bank-recharge.repository';
 import {
   bankRechargeFee,
   bankRechargeFeeRate,
@@ -85,6 +86,31 @@ function fixture() {
 }
 
 describe('银充付款入单', () => {
+  it('跨币种成功仍按原卡编号和尾号关联，不受历史币种或停用投影限制', async () => {
+    const { service, tx, job, repository } = fixture();
+    const cards = new BankRechargeRepository({} as never);
+    repository.findCardsByTail.mockImplementation(
+      (...args: unknown[]) =>
+        cards.findCardsByTail(args[0] as never, args[1] as string, args[2] as string) as never
+    );
+    tx.idBusinessV2BankRechargeCard.findMany.mockResolvedValue([
+      { id: 'original-card', last4: '1111', currencyCode: 'USD', active: false }
+    ] as never);
+    await service.recordVerifiedSuccess(tx as never, { ...job, cardId: 'original-card' } as never, {
+      ...verified,
+      card_last4: '1111'
+    });
+    expect(tx.idBusinessV2BankRechargeCard.findMany).toHaveBeenCalledWith({
+      where: { last4: '1111', id: 'original-card' },
+      take: 2
+    });
+    expect(repository.createOrder).toHaveBeenCalledWith(
+      tx,
+      expect.objectContaining({
+        data: expect.objectContaining({ cardId: 'original-card', chargeCurrencyCode: 'PHP' })
+      })
+    );
+  });
   it('GO 开通与 Plus 升级分别记录菲律宾币当次实付，升级重放和复查不重复建单', async () => {
     const { service, tx, job, order, repository } = fixture();
     const stored: Array<typeof order> = [];

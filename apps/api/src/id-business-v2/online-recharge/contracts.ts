@@ -1,3 +1,4 @@
+import { SHARED_CARD_DEFAULT_LIMITS } from '../bank-card-pool/public-api';
 export const ONLINE_RECHARGE_SOURCE_SHA = 'ba6cf96312a6953e62edb9d74299d438d12549df';
 export const ONLINE_RECHARGE_PLANS = ['plus', 'pro_5x', 'pro_20x', 'pro_500'] as const;
 export type OnlineRechargePlan = (typeof ONLINE_RECHARGE_PLANS)[number];
@@ -66,8 +67,8 @@ export interface OnlineRechargeWorkerRpc {
 export const ONLINE_RECHARGE_DEFAULTS = {
   maxConcurrent: 1,
   maintenance: false,
-  cardMaxSubscriptionCount: 2,
-  cardMaxDeclineCount: 3,
+  cardMaxSubscriptionCount: SHARED_CARD_DEFAULT_LIMITS.maxSubscriptionCount,
+  cardMaxDeclineCount: SHARED_CARD_DEFAULT_LIMITS.maxDeclineCount,
   paymentMaxCardAttempts: 3,
   paymentRegion: 'PH',
   proxyCountryCode: '',

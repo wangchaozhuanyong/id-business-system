@@ -1,3 +1,4 @@
+import { isSharedBankCardOnly, sharedBankCardCommands } from './ci-shared-bank-card-scope.mjs';
 import {
   isMailboxRealtimeOnly,
   isMailboxRealtimeControlsOnly
@@ -294,6 +295,10 @@ if (
   (isChatgptSalesOnly(changed) || isChatgptSalesControlsOnly(changed))
 ) {
   for (const [file, ...args] of chatgptSalesCommands(part, changed)) run(file, args);
+  process.exit(0);
+}
+if (mode === 'recharge' && isSharedBankCardOnly(changed)) {
+  for (const [file, ...args] of sharedBankCardCommands(part, changed)) run(file, args);
   process.exit(0);
 }
 if (

@@ -8,9 +8,10 @@ const columns: Partial<Record<OnlineSection, Column[]>> = {
     ['expiryYear', '有效年', 'numeric'],
     ['holderName', '持卡人'],
     ['status', '状态', 'status'],
+    ['allowedPlans', '适用套餐'],
     ['successCount', '成功订阅数', 'numeric'],
-    ['declineCount', '明确拒付数', 'numeric'],
-    ['addressId', '关联地址', 'identifier'],
+    ['declineCount', '连续明确拒付次数', 'numeric'],
+    ['addressSummary', '账单地址'],
     ['hasCvc', '临时安全码', 'status'],
     ['updatedAt', '更新时间', 'date']
   ],

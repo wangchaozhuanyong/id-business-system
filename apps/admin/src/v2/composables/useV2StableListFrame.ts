@@ -9,12 +9,16 @@ interface V2StableListFrameOptions {
 export function useV2StableListFrame(options: V2StableListFrameOptions) {
   const listRef = ref<HTMLElement>();
   const stableListBodyHeight = ref(0);
+  const stablePaginationHeight = ref(0);
   let mobileMediaQuery: MediaQueryList | undefined;
   let listResizeObserver: ResizeObserver | undefined;
 
   const listFrameStyle = computed(() =>
     stableListBodyHeight.value
-      ? { '--v2-records-list-body-min-height': `${stableListBodyHeight.value}px` }
+      ? {
+          '--v2-records-list-body-min-height': `${stableListBodyHeight.value}px`,
+          '--v2-records-pagination-min-height': `${stablePaginationHeight.value}px`
+        }
       : undefined
   );
 
@@ -33,10 +37,17 @@ export function useV2StableListFrame(options: V2StableListFrameOptions) {
       stableListBodyHeight.value,
       Math.ceil(visibleBody.getBoundingClientRect().height)
     );
+    const pagination = listRef.value?.querySelector<HTMLElement>('.v2-records-pagination');
+    if (pagination)
+      stablePaginationHeight.value = Math.max(
+        stablePaginationHeight.value,
+        Math.ceil(pagination.getBoundingClientRect().height)
+      );
   }
 
   function resetStableListBodyHeight() {
     stableListBodyHeight.value = 0;
+    stablePaginationHeight.value = 0;
     void rememberListBodyHeight();
   }
 
@@ -48,7 +59,9 @@ export function useV2StableListFrame(options: V2StableListFrameOptions) {
     (element) => {
       listResizeObserver?.disconnect();
       element
-        ?.querySelectorAll<HTMLElement>('.v2-unified-table-shell, .v2-records-mobile-list')
+        ?.querySelectorAll<HTMLElement>(
+          '.v2-unified-table-shell, .v2-records-mobile-list, .v2-records-pagination'
+        )
         .forEach((body) => listResizeObserver?.observe(body));
       if (element) void rememberListBodyHeight();
     },
@@ -62,7 +75,9 @@ export function useV2StableListFrame(options: V2StableListFrameOptions) {
       void rememberListBodyHeight();
     });
     listRef.value
-      ?.querySelectorAll<HTMLElement>('.v2-unified-table-shell, .v2-records-mobile-list')
+      ?.querySelectorAll<HTMLElement>(
+        '.v2-unified-table-shell, .v2-records-mobile-list, .v2-records-pagination'
+      )
       .forEach((body) => listResizeObserver?.observe(body));
     void rememberListBodyHeight();
   });

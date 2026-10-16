@@ -27,6 +27,8 @@ import { localBitBrowserLaunchOptions } from './recharge-browser-options';
 import { RechargeSettingsService } from './recharge-settings.service';
 import { RechargeProxyService } from './recharge-proxy.service';
 import { RechargeNameService } from './recharge-name.service';
+import { resolveLocalRechargeCard } from './recharge-card-billing';
+import { SHARED_CARD_SCOPES } from '../bank-card-pool/public-api';
 import { BankRechargeAccountService } from './bank-recharge-account.service';
 import { FieldEncryptionService } from '../../common/crypto/field-encryption.service';
 import { bankRechargeEmail } from './bank-recharge-validation';
@@ -113,10 +115,7 @@ export class RechargeLocalService {
         ) {
           throw new ConflictException('所选 ChatGPT 账号与本次登录邮箱不一致');
         }
-        const card =
-          input.cardId && this.names
-            ? await this.names.localCard(tx, input.cardId, input.billingName!, input.lockedCurrency)
-            : null;
+        const card = await resolveLocalRechargeCard(tx, input, this.names);
         const accountKey = account?.officialAccountKey;
         const ownedProfile = accountKey
           ? await this.repository.retainedProfileForAccount(
@@ -178,7 +177,7 @@ export class RechargeLocalService {
         return { job, address, account, ownedProfile };
       },
       {
-        changedScopes: ['auto-recharge'],
+        changedScopes: SHARED_CARD_SCOPES,
         requestId: input.id,
         operator,
         retryMode: 'none'
@@ -540,9 +539,10 @@ export class RechargeLocalService {
           objectId: id,
           remark: '本机连接器未接收，安全结束任务'
         });
+        await this.names?.releaseUnreceivedCard(tx, id);
         return { id };
       },
-      { changedScopes: ['auto-recharge'], requestId: id, operator, retryMode: 'none' }
+      { changedScopes: SHARED_CARD_SCOPES, requestId: id, operator, retryMode: 'none' }
     );
   }
 

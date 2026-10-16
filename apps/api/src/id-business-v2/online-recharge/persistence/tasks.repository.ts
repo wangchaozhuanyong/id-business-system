@@ -1,3 +1,4 @@
+import { assertSharedCardPlan } from '../../bank-card-pool/public-api';
 import {
   BadRequestException,
   ConflictException,
@@ -358,6 +359,14 @@ export class OnlineRechargeTasksRepository {
       if (operation === 'recharge' && settings.gptApiEnabled && selectedPlan === 'pro_500')
         throw new BadRequestException('第三方通道尚未核实支持 Pro 500，请使用本地执行通道');
       const payload: Record<string, unknown> = {};
+      if (input.cardId) {
+        const cardId = id(input.cardId);
+        const selectedCard = await tx.onlineRechargeCard.findUnique({ where: { id: cardId } });
+        if (!selectedCard || selectedCard.status !== 'active' || selectedCard.leaseOwner)
+          throw new ConflictException('所选银行卡当前不可用');
+        assertSharedCardPlan(selectedCard.allowedPlans, selectedPlan);
+        payload.cardId = cardId;
+      }
       for (const key of [
         'region',
         'planName',

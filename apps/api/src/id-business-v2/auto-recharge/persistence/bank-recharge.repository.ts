@@ -371,9 +371,9 @@ export class BankRechargeRepository {
       select: { id: true, last4: true, status: true }
     });
   }
-  findCardsByTail(tx: V2CommandTransaction, last4: string, currencyCode: string) {
+  findCardsByTail(tx: V2CommandTransaction, last4: string, cardId?: string | null) {
     return tx.idBusinessV2BankRechargeCard.findMany({
-      where: { last4, currencyCode, active: true },
+      where: { last4, ...(cardId ? { id: cardId } : {}) },
       take: 2
     });
   }

@@ -110,6 +110,15 @@ export interface BankRechargeCard {
   expiry?: string | null;
 }
 
+export interface SharedPaymentCard {
+  id: string;
+  label: string;
+  last4: string;
+  active: boolean;
+  hasNumber: boolean;
+  allowedPlans: string[];
+}
+
 export interface ManagedBankRechargeCard {
   billingName: string | null;
   id: string;
@@ -370,6 +379,25 @@ export const bankRechargeApi = {
       http.get(`${base}/cards`, { signal: options.signal })
     );
   },
+  listSharedCards(plan: string, options: ApiRequestOptions = {}) {
+    return request<{ items: SharedPaymentCard[] }>(
+      http.get('/id-business-v2/bank-card-pool/options', {
+        params: { plan },
+        signal: options.signal
+      })
+    );
+  },
+  sharedCardDetail(id: string, plan: string) {
+    return request<{
+      id: string;
+      number: string;
+      expiry: string;
+      status: string;
+      allowedPlans: string[];
+      billingName: string | null;
+      billingAddressId: string | null;
+    }>(http.get(`/id-business-v2/bank-card-pool/${id}/payment-details`, { params: { plan } }));
+  },
   createCard(input: { label: string; last4: string; currencyCode: string }) {
     return request<BankRechargeCard>(http.post(`${base}/cards`, input));
   },
@@ -409,7 +437,7 @@ export const bankRechargeApi = {
   createManagedCard(input: Record<string, unknown>) {
     return withV2QueryInvalidation(
       request<{ id: string }>(http.post(`${base}/cards/management`, input)),
-      'auto-recharge'
+      ['auto-recharge', 'online-recharge']
     );
   },
   importManagedCards(
@@ -420,7 +448,7 @@ export const bankRechargeApi = {
       request<{ imported: number }>(
         http.post(`${base}/cards/management/import`, { currencyCode, cards })
       ),
-      'auto-recharge'
+      ['auto-recharge', 'online-recharge']
     );
   },
   openingCardDeletion(id: string) {
@@ -439,10 +467,11 @@ export const bankRechargeApi = {
           }
         })
       ),
-      'auto-recharge'
+      ['auto-recharge', 'online-recharge']
     );
   },
   preparePaymentCard(input: {
+    plan?: string;
     number: string;
     expiry: string;
     name: string;
@@ -468,13 +497,13 @@ export const bankRechargeApi = {
   updateManagedCard(id: string, input: Record<string, unknown>) {
     return withV2QueryInvalidation(
       request<{ id: string }>(http.patch(`${base}/cards/management/${id}`, input)),
-      'auto-recharge'
+      ['auto-recharge', 'online-recharge']
     );
   },
   deleteManagedCard(id: string) {
     return withV2QueryInvalidation(
       request<{ id: string }>(http.delete(`${base}/cards/management/${id}`)),
-      'auto-recharge'
+      ['auto-recharge', 'online-recharge']
     );
   },
   renewalWarnings(options: ApiRequestOptions = {}) {
