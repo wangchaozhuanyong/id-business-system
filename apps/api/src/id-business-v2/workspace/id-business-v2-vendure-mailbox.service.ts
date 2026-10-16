@@ -10,7 +10,8 @@ import type {
   CreateV2VendureMailboxAliasInput,
   CreateV2VendureMailboxPrimaryInput,
   UpdateV2VendureMailboxAliasInput,
-  UpdateV2VendureMailboxPrimaryInput
+  UpdateV2VendureMailboxPrimaryInput,
+  V2VendureMailboxHealth
 } from '@apple-business/shared';
 import type { AuthenticatedUser } from '../../auth/auth.types';
 import {
@@ -64,6 +65,17 @@ export class IdBusinessV2VendureMailboxService {
         connected: false,
         message: error instanceof Error ? error.message : 'Vendure 邮箱服务暂时不可用，请稍后重试'
       };
+    }
+  }
+
+  async health(operator?: AuthenticatedUser): Promise<V2VendureMailboxHealth> {
+    this.requireAdmin(operator);
+    const unknown = { checkedAt: new Date().toISOString(), listeners: [], delivery: null };
+    try {
+      const result = await this.client.mailHealth();
+      return result ? { ...result, status: 'available' } : { ...unknown, status: 'unsupported' };
+    } catch {
+      return { ...unknown, status: 'unavailable' };
     }
   }
 

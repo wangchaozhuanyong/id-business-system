@@ -1,3 +1,4 @@
+import { isMailboxRealtimeOnly } from './ci-mailbox-realtime-scope.mjs';
 import {
   isAccountLoginOnly,
   isAccountLoginControlsOnly,
@@ -120,6 +121,47 @@ const registrationParityDiagnosticsControlRepair =
     base,
     baseTree: execFileSync('git', ['rev-parse', base + '^{tree}'], { encoding: 'utf8' }).trim()
   });
+if (
+  mode === 'recharge' &&
+  isMailboxRealtimeOnly(changed, {
+    base,
+    baseTree: execFileSync('git', ['rev-parse', base + '^{tree}'], { encoding: 'utf8' }).trim()
+  })
+) {
+  if (!['guards', 'release-controls', 'api', 'admin'].includes(part))
+    throw new Error('Unsupported mailbox check part');
+  if (part === 'guards' || part === 'release-controls') {
+    if (part === 'release-controls') npm('ci', '--ignore-scripts', '--no-audit', '--no-fund');
+    run('python3', ['-B', 'scripts/production-release/mailbox-realtime-release.test.py']);
+    run('node', [
+      '--test',
+      'scripts/ci-mailbox-realtime-scope.test.mjs',
+      'scripts/ci-recharge-check.test.mjs'
+    ]);
+    const formatted = changed.filter((n) => /\.(?:[cm]?js|json|yml|md|ts|vue)$/.test(n));
+    npm('exec', '--', 'prettier', '--check', ...formatted);
+    npm('exec', '--', 'eslint', ...formatted.filter((n) => /\.(?:[cm]?js|ts|vue)$/.test(n)));
+    for (const name of [
+      'admin-ui',
+      'v2-ui-language',
+      'v2-color-contrast',
+      'v2-table-standard',
+      'v2-loading-standard',
+      'v2-module-architecture',
+      'v2-isolation'
+    ])
+      npm('run', 'check:' + name);
+  } else {
+    // The current main also carries unpublished business changes. Check the exact production projection.
+    run('python3', [
+      '-B',
+      'scripts/production-release/mailbox-realtime-build.py',
+      'prepare-checks'
+    ]);
+    run('python3', ['-B', 'scripts/production-release/mailbox-realtime-build.py', 'check-' + part]);
+  }
+  process.exit(0);
+}
 const registrationParityDiagnosticsOnly =
   mode === 'recharge' &&
   base === registrationParityDiagnosticsBase &&

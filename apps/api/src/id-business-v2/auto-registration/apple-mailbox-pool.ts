@@ -19,9 +19,12 @@ export function appleMailboxRow(
   record?: AppleMailboxRecord,
   systemRegistered = false
 ): AppleMailboxRow {
-  const registrationStatus = systemRegistered
-    ? 'registered'
-    : (record?.registrationStatus ?? 'unregistered');
+  // 主台账可能仅由人工标记补建；Worker 已校验的人工纠正不能再被该记录覆盖。
+  const manuallyMarked = record?.source === 'manual' && record.revision > 0;
+  const registrationStatus =
+    record?.creationConfirmed || (systemRegistered && !manuallyMarked)
+      ? 'registered'
+      : (record?.registrationStatus ?? 'unregistered');
   const blockedReason = record?.activeTaskUuid
     ? '邮箱已被任务占用，请查看进度或核对中断任务'
     : registrationStatus === 'unknown'

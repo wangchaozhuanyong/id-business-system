@@ -285,6 +285,93 @@ describe('苹果隐藏邮箱：权限、登记与私有取码桥', () => {
     );
   });
 
+  it.each(['unregistered', 'unknown'] as const)(
+    '人工纠正为 %s 后，主台账同邮箱记录不能覆盖保存后的状态',
+    async (registrationStatus) => {
+      records[0] = {
+        ...baseRecord(),
+        registrationStatus: 'registered',
+        syncStatus: 'saved',
+        systemAccountId: requestId,
+        lastTaskUuid: taskId,
+        taskStatus: 'interrupted'
+      };
+      accounts.registeredEmailHashes.mockResolvedValue(new Set([`hash:${alias.email}`]));
+      worker.appleMailboxRequest.mockImplementationOnce(async () => {
+        records[0] = { ...records[0]!, registrationStatus, revision: 2 };
+        return { records };
+      });
+
+      expect(
+        await service.mark(
+          { items: [{ aliasId: alias.id, revision: 1 }], registrationStatus },
+          actor
+        )
+      ).toEqual({ updated: 1 });
+      const expected = {
+        registrationStatus,
+        source: 'manual',
+        revision: 2,
+        canRegister: registrationStatus === 'unregistered',
+        syncStatus: 'saved',
+        systemAccountId: requestId
+      };
+      expect((await service.list({}, actor)).items[0]).toMatchObject(expected);
+      expect(await service.list({ registrationStatus }, actor)).toMatchObject({
+        items: [expect.objectContaining(expected)],
+        total: 1
+      });
+      expect(await service.candidates(actor)).toMatchObject({
+        items: [expect.objectContaining(expected)],
+        available: registrationStatus === 'unregistered' ? 1 : 0
+      });
+      expect(accounts.mirrorRegistration).not.toHaveBeenCalled();
+      expect(worker.appleMailboxRequest.mock.calls.some((call) => call[0].endsWith('/start'))).toBe(
+        false
+      );
+    }
+  );
+
+  it('官网已确认创建的邮箱不因旧人工状态被放回未注册池', async () => {
+    records[0] = { ...baseRecord(), creationConfirmed: true };
+    expect((await service.list({}, actor)).items[0]).toMatchObject({
+      registrationStatus: 'registered',
+      canRegister: false
+    });
+    expect((await service.candidates(actor)).available).toBe(0);
+  });
+
+  it.each(['automatic', 'account_history', null] as const)(
+    '来源为 %s 的旧记录仍保留主台账已有账号保护',
+    async (source) => {
+      records[0] = { ...baseRecord(), source };
+      accounts.registeredEmailHashes.mockResolvedValue(new Set([`hash:${alias.email}`]));
+      expect((await service.list({}, actor)).items[0]).toMatchObject({
+        registrationStatus: 'registered',
+        canRegister: false
+      });
+    }
+  );
+
+  it('未保存的人工默认状态不能覆盖主台账已有账号', async () => {
+    records[0] = { ...baseRecord(), revision: 0 };
+    accounts.registeredEmailHashes.mockResolvedValue(new Set([`hash:${alias.email}`]));
+    expect((await service.list({}, actor)).items[0]).toMatchObject({
+      registrationStatus: 'registered',
+      canRegister: false
+    });
+  });
+
+  it('人工改为未注册仍保留进行中任务的占用保护', async () => {
+    records[0] = { ...baseRecord(), activeTaskUuid: taskId, taskStatus: 'running' };
+    accounts.registeredEmailHashes.mockResolvedValue(new Set([`hash:${alias.email}`]));
+    expect((await service.list({}, actor)).items[0]).toMatchObject({
+      registrationStatus: 'unregistered',
+      canRegister: false,
+      blockedReason: expect.stringContaining('占用')
+    });
+  });
+
   it('自动选择固定服务器邮箱；零候选或旧版本不会改用临时邮箱', async () => {
     await service.start({}, actor, revalidate);
     expect(worker.appleMailboxRequest).toHaveBeenCalledWith(

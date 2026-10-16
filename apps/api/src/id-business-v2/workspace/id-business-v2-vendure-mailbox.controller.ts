@@ -35,6 +35,12 @@ export class IdBusinessV2VendureMailboxController {
     return this.service.status(operator);
   }
 
+  @Get('health')
+  @Header('Cache-Control', 'private, no-store')
+  health(@CurrentUser() operator?: AuthenticatedUser) {
+    return this.service.health(operator);
+  }
+
   @Get('primary-accounts')
   @Header('Cache-Control', 'private, no-store')
   listPrimary(
