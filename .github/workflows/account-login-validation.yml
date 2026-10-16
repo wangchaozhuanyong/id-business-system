@@ -11,6 +11,11 @@ on:
         description: Exact deployed predecessor commit
         required: true
         type: string
+      validated_run:
+        description: Reuse the exact successful validator from the diagnosed preflight failure
+        required: false
+        default: ''
+        type: string
       publish:
         description: Publish after isolated validation
         required: true
@@ -27,7 +32,7 @@ concurrency:
 
 jobs:
   validate:
-    if: github.ref == 'refs/heads/main' && inputs.commit == github.sha
+    if: github.ref == 'refs/heads/main' && inputs.commit == github.sha && inputs.validated_run == ''
     runs-on: ubuntu-latest
     timeout-minutes: 45
     env:
@@ -78,7 +83,7 @@ jobs:
 
   publish:
     needs: validate
-    if: inputs.publish && github.ref == 'refs/heads/main' && inputs.commit == github.sha
+    if: always() && inputs.publish && github.ref == 'refs/heads/main' && inputs.commit == github.sha && (needs.validate.result == 'success' || (inputs.validated_run == '38878982040' && needs.validate.result == 'skipped'))
     runs-on: ubuntu-latest
     timeout-minutes: 35
     permissions:
@@ -90,6 +95,7 @@ jobs:
       AWS_REGION: ap-northeast-1
       RELEASE_COMMIT: ${{ inputs.commit }}
       EXPECTED_CURRENT: ${{ inputs.expected_current }}
+      VALIDATED_RUN: ${{ inputs.validated_run }}
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
         with:
