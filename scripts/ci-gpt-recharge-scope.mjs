@@ -52,7 +52,7 @@ export const gptRechargeFrozen = Object.freeze({
   'scripts/ci-recharge-check.mjs':
     '60bf64dbab123f6c72098222db22dca891ef9cdcc119997d273709414619f056',
   'scripts/ci-recharge-scope.mjs':
-    '320255d1b0448f12e7128080dd1bf696a36df0da96c0601a688fe0fb4e39ef37',
+    '8788b318d91d4500a63b1a1bb57767407dfb34943005c86b04073e850e3f31d9',
   'scripts/ci-recharge-scope.test.mjs':
     '8199b4d89c0645e30ec54eeda82aece0af0bfc19268e5178c6d35a7cfecb5576',
   'scripts/production-release/api-admin-scope.test.py':
@@ -66,6 +66,12 @@ export const gptRechargeFrozen = Object.freeze({
   'scripts/production-release/gpt-recharge-release.test.py':
     'dab38e8660abfe8ea8882817556ab426a177e3eb042b66bffcf266fcb01156bf'
 });
+export function affectsGptRechargeArtifact(paths) {
+  return paths.some(
+    (name) => name === 'scripts/ci-gpt-recharge-scope.mjs' || Object.hasOwn(gptRechargeFrozen, name)
+  );
+}
+
 export function isGptRechargeOnly(paths, readSource = (name) => readFileSync(name)) {
   if (!paths.length || !paths.every((name) => gptRechargePaths.includes(name))) return false;
   const application = Object.keys(gptRechargeFrozen).filter(

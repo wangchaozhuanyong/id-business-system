@@ -1,4 +1,4 @@
-import { isGptRechargeOnly } from './ci-gpt-recharge-scope.mjs';
+import { affectsGptRechargeArtifact, isGptRechargeOnly } from './ci-gpt-recharge-scope.mjs';
 import {
   isSharedBankCardOnly,
   isSharedBankCardControlsOnly,
@@ -1687,6 +1687,12 @@ export function selectedParts(paths, grantHelperSnapshot, context) {
 
 export function affectsPart(part, paths) {
   if (part === 'guards') return paths.length > 0;
+  // GPT build and publication recipes are inputs to its native API artifact.
+  if (
+    part === 'api' &&
+    affectsGptRechargeArtifact(paths.filter((path) => path.includes('gpt-recharge')))
+  )
+    return true;
   if (part === 'api' && hasAppleMailboxScope(paths)) return true;
   if (part === 'migration' && hasRegistrationMirrorScope(paths)) return true;
   if (
@@ -4342,6 +4348,8 @@ async function main() {
       for (const part of parts) {
         if (
           reused.has(part) ||
+          // Only the GPT candidate binds this complete artifact metadata closure.
+          (part === 'api' && isGptRechargeOnly(paths) && affectsGptRechargeArtifact(changed)) ||
           (affectsPart(part, changed) &&
             !hasRechargeFlowBusinessReuseProof(part, changed, dispatcherSnapshot))
         )
