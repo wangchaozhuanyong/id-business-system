@@ -11,6 +11,11 @@ on:
         description: Exact independently verified deployed predecessor
         required: true
         type: string
+      reuse_validated_run:
+        description: Exact failed-before-switch run whose validated artifact is reused
+        default: ''
+        required: false
+        type: string
       publish:
         description: Publish after isolated validation
         default: false
@@ -27,7 +32,7 @@ concurrency:
 
 jobs:
   validate:
-    if: github.ref == 'refs/heads/main' && inputs.commit == github.sha
+    if: inputs.reuse_validated_run == '' && github.ref == 'refs/heads/main' && inputs.commit == github.sha
     runs-on: ubuntu-latest
     timeout-minutes: 40
     services:
@@ -92,7 +97,7 @@ jobs:
 
   publish:
     needs: validate
-    if: inputs.publish && github.ref == 'refs/heads/main' && inputs.commit == github.sha
+    if: ${{ always() && inputs.publish && github.ref == 'refs/heads/main' && inputs.commit == github.sha && ((inputs.reuse_validated_run == '' && needs.validate.result == 'success') || (inputs.reuse_validated_run == '38925995056' && needs.validate.result == 'skipped')) }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
@@ -103,6 +108,7 @@ jobs:
       GH_TOKEN: ${{ github.token }}
       AWS_REGION: ap-northeast-1
       RELEASE_COMMIT: ${{ inputs.commit }}
+      REUSE_VALIDATION_RUN: ${{ inputs.reuse_validated_run }}
       EXPECTED_CURRENT: ${{ inputs.expected_current }}
       MAILBOX_VERSION: '1'
     steps:

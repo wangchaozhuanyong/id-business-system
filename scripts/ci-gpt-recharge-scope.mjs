@@ -50,9 +50,9 @@ export const gptRechargeFrozen = Object.freeze({
   'apps/api/src/id-business-v2/online-recharge/worker-body-parser.ts':
     '2471cba84936dc8c36f25feef210d641a0f5c8c4a22ccde6e684396069e57619',
   'scripts/ci-recharge-check.mjs':
-    'd12ba7442d9d36e576412d4de9a1422974ae26e815cbab2656217dde1a4dc6c4',
+    'dd6b7987f3c63bb20f63eb867421f67bd68f60faa66dded1182c6937bddae260',
   'scripts/ci-recharge-scope.mjs':
-    'ef80e3613654aab7f895a5e89d61839f9613b4316d2ed02c5b7d3907d8f8692a',
+    'ce72f7dbaa070bca039a1b9f599c827b71e2e60eff26425980b6bfad3441cf64',
   'scripts/ci-recharge-scope.test.mjs':
     '8199b4d89c0645e30ec54eeda82aece0af0bfc19268e5178c6d35a7cfecb5576',
   'scripts/production-release/api-admin-scope.test.py':

@@ -24,10 +24,22 @@ export function isMailboxVersionOnly(paths) {
     paths.every((name) => mailboxVersionPaths.includes(name))
   );
 }
+export function isMailboxVersionControlsOnly(paths) {
+  return (
+    paths.includes('scripts/production-release/mailbox-version-release.py') &&
+    paths.includes('scripts/production-release/mailbox-version-release.test.py') &&
+    paths.length === new Set(paths).size &&
+    paths.every((name) => mailboxVersionPaths.includes(name) && !name.startsWith('apps/'))
+  );
+}
 export function mailboxVersionCommands(part, paths) {
-  if (!isMailboxVersionOnly(paths)) throw new Error('Unsupported mailbox version scope');
+  if (!isMailboxVersionOnly(paths) && !isMailboxVersionControlsOnly(paths))
+    throw new Error('Unsupported mailbox version scope');
   if (part === 'guards')
     return [
+      ...(isMailboxVersionControlsOnly(paths)
+        ? [['python3', '-B', 'scripts/production-release/mailbox-version-release.test.py']]
+        : []),
       [
         'node',
         '--test',
@@ -52,7 +64,7 @@ export function mailboxVersionCommands(part, paths) {
     ];
   if (part === 'release-controls')
     return [['python3', '-B', 'scripts/production-release/mailbox-version-release.test.py']];
-  if (part === 'api')
+  if (part === 'api' && !isMailboxVersionControlsOnly(paths))
     return [
       ['npm', 'run', 'prisma:mysql:generate'],
       ['npm', 'run', 'build', '--workspace', '@apple-business/shared'],
