@@ -23,6 +23,7 @@ export const chatgptSalesPaths = Object.freeze([
   'scripts/ci-chatgpt-sales-scope.mjs',
   'scripts/ci-chatgpt-sales-scope.test.mjs',
   'scripts/ci-recharge-scope.mjs',
+  'scripts/ci-recharge-evidence.mjs',
   'scripts/lib/owned-mysql-test-instance.mjs',
   'scripts/lib/owned-mysql-test-instance.test.mjs',
   'scripts/ci-recharge-check.mjs',
@@ -38,6 +39,7 @@ const controlPaths = new Set(
       [
         'scripts/ci-recharge-check.mjs',
         'scripts/ci-recharge-scope.mjs',
+        'scripts/ci-recharge-evidence.mjs',
         '.github/workflows/chatgpt-sales-validation.yml',
         'docs/CHATGPT_ACCOUNT_SALES_20261016.md'
       ].includes(n)

@@ -34,7 +34,7 @@ import { appendFileSync, readFileSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { pathToFileURL } from 'node:url';
-import { matchesSourceEvidence } from './ci-recharge-evidence.mjs';
+import { matchesSourceEvidence, recordedPullRequestBase } from './ci-recharge-evidence.mjs';
 
 export const rechargeAvailabilityControlPaths = Object.freeze([
   'scripts/production-release/recharge-record-release.test.py',
@@ -4147,6 +4147,25 @@ async function main() {
         before: git('show', `${parents[0]}:${schema}`),
         after: git('show', `HEAD:${schema}`)
       });
+      const salesPaths = git('diff', '--name-only', parents[0], 'HEAD').split('\n').filter(Boolean);
+      const salesBefore = execFileSync('git', ['show', `${parents[0]}:${schema}`], {
+        encoding: 'utf8'
+      });
+      const salesAfter = execFileSync('git', ['show', `HEAD:${schema}`], { encoding: 'utf8' });
+      if (
+        requestedBaseIsAncestor &&
+        ((isChatgptSalesOnly(salesPaths) && chatgptSalesSchemaMatches(salesBefore, salesAfter)) ||
+          (isChatgptSalesControlsOnly(salesPaths) && salesBefore === salesAfter))
+      ) {
+        base = recordedPullRequestBase({
+          eventName: process.env.GITHUB_EVENT_NAME,
+          ref: process.env.GITHUB_REF,
+          prNumber: event.pull_request?.number,
+          headSha: event.pull_request?.head?.sha,
+          parents,
+          requestedBase: base
+        });
+      }
     }
   }
   const paths = git('diff', '--name-only', base, 'HEAD').split('\n').filter(Boolean);

@@ -1,3 +1,4 @@
+import { recordedPullRequestBase } from './ci-recharge-evidence.mjs';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
@@ -91,4 +92,24 @@ test('control-only repair runs finite guards without rerunning unchanged busines
     false
   );
   assert.equal(checkMode(paths, before, after), 'full');
+});
+
+test('source evidence binds the actual PR merge parent and rejects unrelated shapes', () => {
+  const input = {
+    eventName: 'pull_request',
+    ref: 'refs/pull/535/merge',
+    prNumber: 535,
+    parents: ['a'.repeat(40), 'b'.repeat(40)],
+    headSha: 'b'.repeat(40),
+    requestedBase: 'c'.repeat(40)
+  };
+  assert.equal(recordedPullRequestBase(input), input.parents[0]);
+  for (const patch of [
+    { ref: 'refs/heads/main' },
+    { eventName: 'push' },
+    { headSha: 'd'.repeat(40) },
+    { parents: [] },
+    { parents: ['invalid', input.headSha] }
+  ])
+    assert.equal(recordedPullRequestBase({ ...input, ...patch }), input.requestedBase);
 });
