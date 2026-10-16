@@ -1015,7 +1015,7 @@
     "scripts/production-release/chatgpt-sales-build.py": "a55db7b0f04729d6f15d50ef3d7ae81a0746dceb2e95cd77408d0de74b9b7590",
     "scripts/production-release/chatgpt-sales-contract.json": "7bcbfb2b3a5ec288c8a10e1a3d7b7a57abd95363fb37297bf50a017607be300a",
     "scripts/production-release/chatgpt-sales-release.py": "16c27d9093fd2f0e2d8882f51f7584f3d68da3c6a714ee48d83b8cfee29979a5",
-    "scripts/production-release/mailbox-realtime-baseline.py": "1b57969fc7634c724f1eba4c8045ba6166a62ab9d60de8894f59c009324b2185",
+    "scripts/production-release/mailbox-realtime-baseline.py": "09adcaf56d61617c5f4352c6934674789e2d4ae4e24e46e3546617cf56b908ab",
     "scripts/production-release/mailbox-realtime-predecessor.json": "5e5166247fd77b0487582cb90694061c9243d33bc526c637e19e24572206713a",
     "scripts/production-release/proxy-result-identity-release.py": "97207252c12924dcbbfe3e86ebf397e928cd9545bbf9260337fd94ffd5109d45",
     "scripts/production-release/recharge-availability-release.py": "d98af117f3d80e705dd4f5eb3375a37cf4c0f058b65f4be77550d909ccbbe66c",
@@ -1309,13 +1309,13 @@
   "reviewedApplicationCommit": "f62fa65c20ad93292ad7c09792a4049cda03fab5",
   "reviewedFileHashes": {
     "docs/MAILBOX_REALTIME_REPAIR_20261016.md": "5a827174abaec6148abccecda0da9bbdb92a49ee4a42d5e695d946940576e735",
-    "scripts/ci-mailbox-realtime-scope.mjs": "187a6ee85057e163f2b40fbc496e4071ac6c904d9444e72051eb0966e0a54db6",
-    "scripts/production-release/mailbox-realtime-baseline.py": "1b57969fc7634c724f1eba4c8045ba6166a62ab9d60de8894f59c009324b2185",
+    "scripts/ci-mailbox-realtime-scope.mjs": "2a70eecb9c79b7372480963a151c00f9cf854f29c25db59bda15b7aa593cd6c9",
+    "scripts/production-release/mailbox-realtime-baseline.py": "09adcaf56d61617c5f4352c6934674789e2d4ae4e24e46e3546617cf56b908ab",
     "scripts/production-release/mailbox-realtime-build.py": "573de2797683ff152b08b5754ec780bd31333378e3f7d65d8202b5e20e5cb3f6",
     "scripts/production-release/mailbox-realtime-dispatch.py": "7fc558f44216b72f180d1b43b06dffc1f489518a4db7f1e8512cfbc0352900e4",
     "scripts/production-release/mailbox-realtime-predecessor.json": "5e5166247fd77b0487582cb90694061c9243d33bc526c637e19e24572206713a",
     "scripts/production-release/mailbox-realtime-release.py": "a72af1a88b0023da1e814a1c93c7fe1ea3e86dabe3a20d6238835a61d6e4588d",
-    "scripts/production-release/mailbox-realtime-release.test.py": "ec0cc6c3d575fabbf55f8b3e35f7d8fa6b8b23cd2ab688817d207568b6f8e57f"
+    "scripts/production-release/mailbox-realtime-release.test.py": "e0789d01e652f2c47c1dc26e2f277f2119bd900e7999ea5dcbe9155dce298f8a"
   },
   "roleSourceCommits": {
     "admin": "6fc99d23c2918280a94c3f5b8be48f638190e02f",

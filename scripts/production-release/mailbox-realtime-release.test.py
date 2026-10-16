@@ -182,6 +182,13 @@ class MailboxRelease(unittest.TestCase):
         self.assertIs(namespace['sqlite_receipt'], published.sqlite_receipt)
         self.assertIs(namespace['baseline'].__globals__, namespace)
         self.assertIs(namespace['backup_sqlite'].__globals__, namespace)
+        original = published.helper('registration-parity-diagnostics-release.py')
+        self.assertEqual(namespace['api_inventory'].__kwdefaults__, original.api_inventory.__kwdefaults__)
+        self.assertIsNot(namespace['api_inventory'].__kwdefaults__, original.api_inventory.__kwdefaults__)
+        driver = Mock()
+        driver.run.return_value = '{}'
+        namespace['api_inventory'](driver, {'containerId': 'read-only'}, '/client/', {})
+        driver.run.assert_called_once()
 
     def test_inspection_waits_for_accepted_command_without_resubmitting(self):
         output = ROOT / '.runtime/mailbox-release/control-tests'
