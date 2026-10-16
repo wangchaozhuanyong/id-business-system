@@ -268,11 +268,8 @@ const onlineCiBuildTestInputs = new Set([
   'scripts/production-release/online-recharge-component-lifecycle.test.py'
 ]);
 export function needsOnlineRechargeCiBuild(paths, context) {
-<<<<<<< HEAD
   if (isRegistrationProtocolRestoreOnly(paths, context)) return false;
-=======
   if (isMailboxVersionOnly(paths)) return false;
->>>>>>> origin/main
   if (isRegistrationBrowserOnly(paths, context)) return false;
   if (isAccountLoginOnly(paths) || isAccountLoginControlsOnly(paths)) return false;
   if (isRegistrationParityDiagnosticsControlRepair(paths, context)) return false;
@@ -1060,14 +1057,11 @@ export function isMailboxOnly(paths) {
 }
 
 export function checkMode(paths, oldSchema, newSchema, grantHelperSnapshot, context) {
-<<<<<<< HEAD
   if (isRegistrationProtocolRestoreOnly(paths, context))
     return oldSchema === newSchema ? 'recharge' : 'full';
   if (paths.includes('scripts/production-release/registration-protocol-restore-contract.json'))
     return 'full';
-=======
   if (isGptRechargeOnly(paths)) return oldSchema === newSchema ? 'recharge' : 'full';
->>>>>>> origin/main
   if (isRegistrationBrowserOnly(paths, context))
     return oldSchema === newSchema ? 'recharge' : 'full';
   if (paths.includes('scripts/production-release/registration-browser-contract.json'))
@@ -1567,12 +1561,9 @@ export function isTargetedOnly(paths, oldSchema, newSchema) {
   );
 }
 export function selectedParts(paths, grantHelperSnapshot, context) {
-<<<<<<< HEAD
   if (isRegistrationProtocolRestoreOnly(paths, context)) return ['guards', 'api', 'admin'];
-=======
   if (isMailboxVersionOnly(paths)) return ['guards', 'api', 'release-controls'];
   if (isGptRechargeOnly(paths)) return ['guards', 'api'];
->>>>>>> origin/main
   if (isRegistrationBrowserOnly(paths, context)) return [...registrationBrowserParts];
   if (isAccountLoginControlsOnly(paths)) return ['guards'];
   if (isAccountLoginOnly(paths)) return [...accountLoginParts];
