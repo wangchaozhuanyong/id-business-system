@@ -46,7 +46,10 @@ import {
   isRegistrationMigrationQueryRepair,
   registrationMigrationQueryRepairBase
 } from './ci-registration-closure-scope.mjs';
-import { isRechargeCheckoutOnly } from './ci-recharge-checkout-scope.mjs';
+import {
+  isRechargeCheckoutOnly,
+  isRechargeSourceRecoveryOnly
+} from './ci-recharge-checkout-scope.mjs';
 import { isRechargeBillingOnly } from './ci-recharge-billing-scope.mjs';
 import { isSharedProxyPoolOnly, sharedProxyAdminCommand } from './ci-shared-proxy-scope.mjs';
 import { execFileSync } from 'node:child_process';
@@ -852,27 +855,36 @@ if (part === 'guards') {
         'scripts/ci-recharge-checkout-scope.test.mjs',
         'scripts/ci-registration-closure-native-reuse.test.mjs'
       ]
-    : isRechargeCheckoutOnly(changed)
+    : isRechargeSourceRecoveryOnly(changed)
       ? [
           'scripts/ci-recharge-checkout-scope.test.mjs',
-          'scripts/ci-recharge-scope.test.mjs',
           'scripts/ci-recharge-check.test.mjs',
           'scripts/check-cloud-independence.test.mjs',
           'scripts/check-v2-prisma-runtime-boundary.test.mjs',
           'scripts/check-v2-module-architecture.test.mjs',
           'scripts/admin-layout-rules.test.mjs'
         ]
-      : (rechargeAvailabilityCommonControlTests(changed) ?? [
-          'scripts/ci-recharge-scope.test.mjs',
-          'scripts/ci-recharge-check.test.mjs',
-          'scripts/check-cloud-independence.test.mjs',
-          'scripts/check-v2-prisma-runtime-boundary.test.mjs',
-          'scripts/check-v2-module-architecture.test.mjs',
-          'scripts/ci-recharge-precision.test.mjs',
-          'scripts/ci-change-scope.test.mjs',
-          'scripts/ci-recharge-release.test.mjs',
-          'scripts/admin-layout-rules.test.mjs'
-        ]);
+      : isRechargeCheckoutOnly(changed)
+        ? [
+            'scripts/ci-recharge-checkout-scope.test.mjs',
+            'scripts/ci-recharge-scope.test.mjs',
+            'scripts/ci-recharge-check.test.mjs',
+            'scripts/check-cloud-independence.test.mjs',
+            'scripts/check-v2-prisma-runtime-boundary.test.mjs',
+            'scripts/check-v2-module-architecture.test.mjs',
+            'scripts/admin-layout-rules.test.mjs'
+          ]
+        : (rechargeAvailabilityCommonControlTests(changed) ?? [
+            'scripts/ci-recharge-scope.test.mjs',
+            'scripts/ci-recharge-check.test.mjs',
+            'scripts/check-cloud-independence.test.mjs',
+            'scripts/check-v2-prisma-runtime-boundary.test.mjs',
+            'scripts/check-v2-module-architecture.test.mjs',
+            'scripts/ci-recharge-precision.test.mjs',
+            'scripts/ci-change-scope.test.mjs',
+            'scripts/ci-recharge-release.test.mjs',
+            'scripts/admin-layout-rules.test.mjs'
+          ]);
   run('node', ['--test', ...commonControlTests]);
 }
 if (registrationOwnControlRepair) {
@@ -903,10 +915,16 @@ if (part === 'guards' && mode === 'admin' && isAdminHtmlCacheOnly(changed)) {
 // subject to the formal workflow's immutable source and prior-validation proof.
 if (part === 'guards' && mode === 'recharge') {
   if (isRechargeCheckoutOnly(changed)) {
-    run('python3', ['-B', 'scripts/production-release/recharge-checkout-release.test.py']);
+    run('python3', [
+      '-B',
+      isRechargeSourceRecoveryOnly(changed)
+        ? 'scripts/production-release/recharge-source-recovery-release.test.py'
+        : 'scripts/production-release/recharge-checkout-release.test.py'
+    ]);
     for (const name of new Set([
       ...adminUiGuardChecks(mode, changed),
-      ...backendArchitectureGuardChecks(mode, changed)
+      ...backendArchitectureGuardChecks(mode, changed),
+      ...(isRechargeSourceRecoveryOnly(changed) ? ['check:v2-isolation'] : [])
     ]))
       npm('run', name);
     console.log('Native checkout controls and all affected architecture/UI rules verified');

@@ -18,7 +18,33 @@ const support = new Set([
   'docs/V2_TASKS.md',
   'docs/AUTO_RECHARGE_NATIVE_CHECKOUT_20261016.md'
 ]);
+export const checkoutSourceRecoveryControls = Object.freeze([
+  '.github/workflows/recharge-source-recovery-validation.yml',
+  ...['build.py', 'contract.json', 'release.py', 'release.test.py', 'dispatch.py'].map(
+    (name) => `scripts/production-release/recharge-source-recovery-${name}`
+  )
+]);
+const sourceRecoveryPaths = new Set([
+  ...checkoutSourceRecoveryControls,
+  'apps/api/src/id-business-v2/auto-recharge/recharge-account-restore.ts',
+  'apps/api/src/id-business-v2/auto-recharge/recharge-unidentified-checkout.ts',
+  'apps/api/src/id-business-v2/auto-recharge/recharge-unidentified-checkout.spec.ts',
+  'scripts/ci-recharge-checkout-scope.mjs',
+  'scripts/ci-recharge-checkout-scope.test.mjs',
+  'scripts/ci-recharge-check.mjs',
+  'scripts/ci-recharge-check.test.mjs',
+  'docs/V2_TASKS.md',
+  'docs/CHECKOUT_SOURCE_RECOVERY_20261016.md'
+]);
+export function isRechargeSourceRecoveryOnly(paths) {
+  return (
+    paths.length > 0 &&
+    paths.some((path) => checkoutSourceRecoveryControls.includes(path)) &&
+    paths.every((path) => sourceRecoveryPaths.has(path))
+  );
+}
 export function isRechargeCheckoutOnly(paths) {
+  if (isRechargeSourceRecoveryOnly(paths)) return true;
   return (
     paths.length > 0 &&
     paths.some((p) => checkoutControlPaths.includes(p) || p.endsWith('/native_checkout.py')) &&

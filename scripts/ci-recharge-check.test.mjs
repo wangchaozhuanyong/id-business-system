@@ -44,6 +44,49 @@ import {
 } from './ci-recharge-scope.mjs';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
+test('checkout source recovery runs its native controls and the API suite without historical registration publishers', () => {
+  const paths = [
+    '.github/workflows/recharge-source-recovery-validation.yml',
+    'scripts/production-release/recharge-source-recovery-contract.json',
+    'scripts/production-release/recharge-source-recovery-release.py',
+    'apps/api/src/id-business-v2/auto-recharge/recharge-account-restore.ts',
+    'apps/api/src/id-business-v2/auto-recharge/recharge-unidentified-checkout.ts',
+    'scripts/ci-recharge-check.mjs',
+    'scripts/ci-recharge-check.test.mjs',
+    'scripts/ci-recharge-checkout-scope.mjs',
+    'scripts/ci-recharge-checkout-scope.test.mjs'
+  ];
+  const guards = recordGuardCommands('recharge', paths);
+  assert.ok(
+    guards.some((row) =>
+      row.includes('scripts/production-release/recharge-source-recovery-release.test.py')
+    )
+  );
+  assert.ok(guards.some((row) => row.includes('prettier')));
+  assert.ok(guards.some((row) => row.includes('eslint')));
+  assert.ok(guards.some((row) => row.includes('check:v2-module-architecture')));
+  assert.ok(guards.some((row) => row.includes('check:v2-isolation')));
+  assert.ok(guards.some((row) => row.includes('check:v2-prisma-runtime-boundary')));
+  const controlTests = guards.find((row) => row[0] === 'node' && row[1] === '--test');
+  assert.ok(controlTests.includes('scripts/ci-recharge-checkout-scope.test.mjs'));
+  assert.ok(controlTests.includes('scripts/ci-recharge-check.test.mjs'));
+  assert.equal(controlTests.includes('scripts/ci-recharge-scope.test.mjs'), false);
+  assert.deepEqual(guards.at(-1), ['process-exit', 0]);
+  assert.equal(
+    guards.some((row) =>
+      row.some(
+        (arg) =>
+          typeof arg === 'string' &&
+          /api-admin-scope.test.py|recharge-checkout-release.test.py/.test(arg)
+      )
+    ),
+    false
+  );
+  const api = recordGuardCommands('recharge', paths, 'api');
+  assert.ok(api.some((row) => row.includes('prisma:mysql:validate')));
+  assert.ok(api.some((row) => row.includes('src/id-business-v2/auto-recharge')));
+  assert.ok(api.some((row) => row.join(' ') === 'npm run build --workspace @apple-business/api'));
+});
 const readonlyMetadataPaths = [
   'scripts/production-release/online-recharge-component-readonly.py',
   'scripts/production-release/online-recharge-component-readonly.test.py'
@@ -799,7 +842,7 @@ function recordGuardCommands(
       if (error.message !== 'SYNTHETIC_PREPARE_EXIT' ||
           calls.at(-1)?.[0] !== 'process-exit' || calls.at(-1)?.[1] !== 0) throw error;
     }
-    process.stdout.write(JSON.stringify(calls));
+    process.stdout.write(String.fromCharCode(10) + JSON.stringify(calls));
   `;
   return JSON.parse(
     execFileSync(process.execPath, ['--input-type=module', '-e', script], {
@@ -822,6 +865,9 @@ function recordGuardCommands(
         GUARD_TEST_PATHS: JSON.stringify(paths)
       }
     })
+      .trim()
+      .split('\n')
+      .at(-1)
   );
 }
 
