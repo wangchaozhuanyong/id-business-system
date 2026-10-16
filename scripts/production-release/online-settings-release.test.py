@@ -41,6 +41,28 @@ class ReleaseGates(unittest.TestCase):
         plan, c, proof, files = self.fixture()
         r.verify_proof(proof, plan, c, files)
 
+    def test_source_review_remains_closed_when_unrelated_work_enters_main(self):
+        name = 'apps/api/src/id-business-v2/online-recharge/fixture.ts'
+        raw = b'reviewed fixture'
+        c = {'reviewBase': 'a' * 40, 'sourceReviewCommit': 'b' * 40, 'sources': {name: b.sha(raw)}}
+        def git_fixture(*args):
+            if args[0] == 'merge-base':
+                self.assertEqual(args, ('merge-base', '--is-ancestor', 'b' * 40, 'HEAD'))
+                return b''
+            if args[0] == 'diff':
+                self.assertEqual(args[3], 'b' * 40)
+                return (name + '\n').encode()
+            self.assertEqual(args, ('show', 'b' * 40 + ':' + name))
+            return raw
+        with patch.object(b, 'git', side_effect=git_fixture):
+            b.verify_source_review(c)
+        with patch.object(b, 'git', return_value=(name + '\napps/api/src/auth/extra.ts\n').encode()):
+            with self.assertRaises(RuntimeError):
+                b.verify_source_review(c)
+        with patch.object(b, 'git', side_effect=git_fixture):
+            with self.assertRaises(RuntimeError):
+                b.verify_source_review({**c, 'sources': {name: 'c' * 64}})
+
     def test_wrong_commit_source_or_unverified_baseline_is_rejected(self):
         for change in [{'commit': '9' * 40}, {'migrationPerformed': True}, {'businessActions': 1},
                        {'baselineApiReproduced': False}, {'sources': {}}, {'afterEngineFiles': {}}]:
@@ -67,6 +89,26 @@ class ReleaseGates(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             r.read_hashes(d, 'fixture', '/app/', {'../secret': '0' * 64})
         d.run.assert_not_called()
+
+    def test_only_exact_reviewed_transitive_declarations_are_accepted(self):
+        name = 'id-business-v2/online-recharge/settings.service.d.ts'
+        digest = '3' * 64
+        before = {'m.js': 'old', 'm.d.ts': 'same', 'm.js.map': 'old-map', name: 'old-type'}
+        after = {**before, 'm.js': 'new', 'm.js.map': 'new-map', name: digest}
+        self.assertEqual(set(b.module_delta(before, after, ['m.js'], {name: digest})), set(after))
+        for allowed in [{name: '4' * 64}, {'auth/extra.d.ts': digest},
+                        {'id-business-v2/online-recharge/settings.service.js': digest}]:
+            with self.assertRaises(RuntimeError):
+                b.module_delta(before, after, ['m.js'], allowed)
+        plan, c, proof, files = self.fixture()
+        c['apiDeclarationOnly'] = {name: digest}
+        proof['apiModules'][name] = digest
+        files['api/modules/' + name] = digest
+        r.verify_proof(proof, plan, c, files)
+        proof['apiModules'][name] = '4' * 64
+        files['api/modules/' + name] = '4' * 64
+        with self.assertRaises(RuntimeError):
+            r.verify_proof(proof, plan, c, files)
 
     def test_artifact_url_is_bound_to_reviewed_commit_before_network(self):
         raw = b'reviewed fixture'
