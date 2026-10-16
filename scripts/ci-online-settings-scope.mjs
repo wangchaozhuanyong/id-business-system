@@ -74,6 +74,8 @@ const applicationPaths = Object.freeze([
   'apps/api/src/id-business-v2/online-recharge/plan-region.ts'
 ]);
 const controlPaths = Object.freeze([
+  'scripts/production-release/online-browser-display-auth-release.py',
+  'scripts/production-release/online-browser-display-auth-release.test.py',
   '.github/workflows/online-checkout-validation.yml',
   'scripts/production-release/online-checkout-build.py',
   'scripts/production-release/online-checkout-contract.json',
@@ -115,6 +117,11 @@ const checkoutRequired = [
   'apps/api/src/id-business-v2/online-recharge/engine/checkout-form.cjs',
   'apps/api/src/id-business-v2/online-recharge/engine/upstream/stripe-payment.js'
 ];
+const displayRuntimeRequired = [
+  'worker.cjs',
+  'test/runtime-main.test.cjs',
+  'SOURCE_MANIFEST.json'
+].map((name) => 'apps/api/src/id-business-v2/online-recharge/engine/' + name);
 export function isOnlineSettingsOnly(paths) {
   const databaseTest = 'apps/api/src/id-business-v2/online-recharge/mysql.integration.spec.ts';
   const fixtureRepair =
@@ -127,7 +134,11 @@ export function isOnlineSettingsOnly(paths) {
     new Set(paths).size === paths.length &&
     (required.every((path) => paths.includes(path)) ||
       checkoutRequired.every((path) => paths.includes(path)) ||
-      fixtureRepair) &&
+      fixtureRepair ||
+      (displayRuntimeRequired.every((path) => paths.includes(path)) &&
+        paths.every(
+          (path) => displayRuntimeRequired.includes(path) || controlPaths.includes(path)
+        ))) &&
     paths.every((path) => onlineSettingsPaths.includes(path))
   );
 }
@@ -174,6 +185,15 @@ export function onlineSettingsCommands(part, paths) {
       ['python3', '-B', 'scripts/production-release/online-settings-release.test.py'],
       ...(paths.some((path) => path.includes('online-checkout-'))
         ? [['python3', '-B', 'scripts/production-release/online-checkout-release.test.py']]
+        : []),
+      ...(paths.some((path) => path.includes('online-browser-display-auth-'))
+        ? [
+            [
+              'python3',
+              '-B',
+              'scripts/production-release/online-browser-display-auth-release.test.py'
+            ]
+          ]
         : []),
       ...(controlsOnly
         ? []
@@ -250,7 +270,7 @@ export function onlineSettingsCommands(part, paths) {
         '--with-deps',
         'chromium'
       ],
-      ['sudo', 'apt-get', 'install', '-y', '--no-install-recommends', 'ffmpeg'],
+      ['sudo', 'apt-get', 'install', '-y', '--no-install-recommends', 'ffmpeg', 'xvfb', 'xauth'],
       npm('run', 'test:online-recharge:engine')
     ];
   throw new Error('Unsupported online settings check part');
