@@ -8,6 +8,7 @@ import type {
   V2VendureMailboxBatchResult,
   V2VendureMailboxConnectionResult,
   V2VendureMailboxHistoryResult,
+  V2VendureMailboxHealth,
   V2VendureMailboxListQuery,
   V2VendureMailboxMail,
   V2VendureMailboxPage,
@@ -21,6 +22,9 @@ import { http, request, type ApiRequestOptions } from '@/api/client';
 const base = '/id-business-v2/vendure-mailboxes';
 
 export const vendureMailboxApi = {
+  health(options: ApiRequestOptions = {}) {
+    return request<V2VendureMailboxHealth>(http.get(`${base}/health`, { signal: options.signal }));
+  },
   status(options: ApiRequestOptions = {}) {
     return request<V2VendureMailboxStatus>(http.get(`${base}/status`, { signal: options.signal }));
   },

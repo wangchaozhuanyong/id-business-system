@@ -15,15 +15,25 @@ import urllib.request
 
 BASE = Path('/opt/id-business-v2')
 SCOPE = 'REGISTRATION_PARITY_DIAGNOSTICS'
-CURRENT = 'd44393c5bee8c30c82737fc3e00fa89785a95667'
+CURRENT = 'c0238525bb4b2a1c3fe6688eaed5f74f504ee529'
+CHECKOUT_TREE = '1f71d02270d8f1a78303fa35320223b02ab3dfb0'
+CHECKOUT_PROOF = 'a172906736117ed57da9a958a79c51e86709add403a49233494b6b2e368ddc81'
+ACCOUNT_COMMIT = '13e52ad670c6b6daa94ab2df009aaa8a9d69b97c'
+ACCOUNT_TREE = '26f7f4aa65e3286b978cf7e2e1807418af63ea3e'
+ACCOUNT_CONTROLLER = '868e8e8f8fb06293b433bf861585cc734a478b96'
+ACCOUNT_PROOF = 'd48d4ebc5594c27d578be4d61578fc12bb62f34ee313f065c698f60573c5e2bb'
 SALES_COMMIT = '034f6cad0bc58f3c6025912096df312e07bbd85e'
 SALES_TREE = '1f351c9e04171ea3523e5163774c869c0de97557'
+DRAG_COMMIT = 'd44393c5bee8c30c82737fc3e00fa89785a95667'
+DRAG_TREE = '7bf8dc7a4702272adcec2979025233300db5df95'
 DRAG_PROOF = '77e0abe68b486c15c0fe724dacd1885982a7ed054296514e874b67cf1f3f2d8b'
 ANCESTOR = 'e3e1360f977e003987573f2d2e042b883a2f5ac8'
 SUCCESSOR_PROOF = '2cb761e7d3073814125d3a7cbfe3b0c2cd9258cc6f2684c75fb8317bb2016448'
 PARENT_CONTROLS = {'registration-flow-evidence-build.py': '0c6b8a100faa02019003daa037acbae55fc5d80891ffb9ce13ef373d8b4a7925', 'registration-flow-evidence-contract.json': '9d5f34916800fb885cb8aabd98bb550900775f47f17d666c8ad40a26f65215ae', 'registration-flow-evidence-dispatch.py': '8801f3de8d6749121ab60c7d8a108e9cb293e383c415114decdc92f4f7078f82', 'registration-flow-evidence-release.py': 'f6243432411f637a648e19a728dc4e1744a9682553aecb252b15991c42e1a3f3'}
 SUCCESSOR_CONTROLS = {'chatgpt-sales-build.py': 'a55db7b0f04729d6f15d50ef3d7ae81a0746dceb2e95cd77408d0de74b9b7590', 'chatgpt-sales-contract.json': '7bcbfb2b3a5ec288c8a10e1a3d7b7a57abd95363fb37297bf50a017607be300a', 'chatgpt-sales-release.py': '16c27d9093fd2f0e2d8882f51f7584f3d68da3c6a714ee48d83b8cfee29979a5'}
 DRAG_CONTROLS = {'workspace-drag-build.py': 'e2dba4371c53a4ad53b5c6ee96a1ddea5f5a7c455b8985a16540f89f410e17a7', 'workspace-drag-release.py': '28bcfed29eb45d66ece16b943e63b97f5f5500dacfc345cb23642bb4f9931fb0', 'workspace-drag-contract.json': '577497d7a7ec82ab540062738e44f1ee024a1c026469880706c4f37b45585e08'}
+ACCOUNT_CONTROLS = {'account-login-build.py': 'f2bc8a42fae093967230b77570f90e7a5914663bc77ccd1ae7f3e617a3a53998', 'account-login-contract.json': '856cc583bbb6f79e6a3dfa1e088bc4674892ff1c364712d808d9d5facba44fea', 'account-login-release.py': '68461ea869ba9447a9878653415c85fe961ac91bbb59389848baba302d7bc5c9'}
+CHECKOUT_CONTROLS = {'recharge-source-recovery-build.py': '927292b7467c9057a049ef9c1d89654100c506acb77f802f0c0d72fb081d1467', 'recharge-source-recovery-contract.json': '61e69d7a720baa61955be460b209082aaf5e01766ec4be6c882b4a5b6807d890', 'recharge-source-recovery-release.py': 'e6f493ab7737bf77d23114a00ff9c970a77d18786726e690b27dbe98c9f099b8'}
 APPLICATION_PATHS = ('apps/admin/src/v2/features/auto-registration/apple-mailbox-presentation.spec.ts', 'apps/admin/src/v2/features/auto-registration/apple-mailbox-presentation.ts', 'apps/admin/src/v2/features/auto-registration/contracts.ts', 'apps/api/src/id-business-v2/auto-registration/apple-mailboxes.types.ts', 'apps/api/src/id-business-v2/auto-registration/apple-mailboxes.service.spec.ts', 'apps/api/src/id-business-v2/auto-registration/worker/apple_mailboxes.py', 'apps/api/src/id-business-v2/auto-registration/worker/flow_evidence.py', 'apps/api/src/id-business-v2/auto-registration/worker/release_safety.py', 'apps/api/src/id-business-v2/auto-registration/worker/id-workspace.js', 'apps/api/src/id-business-v2/auto-registration/worker/test_flow_evidence.py', 'apps/api/src/id-business-v2/auto-registration/worker/test_registration_parity_unit.py', 'apps/api/src/id-business-v2/auto-registration/worker/test_apple_mailboxes.py', 'apps/api/src/id-business-v2/auto-registration/worker/test_release_safety.py')
 PRESERVED = ('mysql', 'caddy', 'media-resolver', 'auto-recharge', 'auto-registration')
 WORKER = 'apps/api/src/id-business-v2/auto-registration/worker/'
@@ -62,7 +72,40 @@ def verify_contract(contract):
          digest(Path(__file__).with_name(name).read_bytes()) == value
          for name, value in DRAG_CONTROLS.items())
          and contract.get('dragContractSha256') == DRAG_CONTROLS['workspace-drag-contract.json']
-         and contract.get('dragProofSha256') == DRAG_PROOF, 'PUBLISHED_ADMIN_SUCCESSOR_EVIDENCE_CHANGED')
+         and contract.get('dragProofSha256') == DRAG_PROOF
+         and isinstance(contract.get('dragNative'), dict)
+         and contract['dragNative'].get('commit') == DRAG_COMMIT
+         and contract['dragNative'].get('tree') == DRAG_TREE
+         and contract['dragNative'].get('proofSha256') == DRAG_PROOF, 'PUBLISHED_ADMIN_SUCCESSOR_EVIDENCE_CHANGED')
+    need(contract.get('accountControls') == ACCOUNT_CONTROLS and all(
+         digest(Path(__file__).with_name(name).read_bytes()) == value
+         for name, value in ACCOUNT_CONTROLS.items())
+         and contract.get('accountContractSha256') == ACCOUNT_CONTROLS['account-login-contract.json']
+         and contract.get('accountProofSha256') == ACCOUNT_PROOF
+         and isinstance(contract.get('accountNative'), dict)
+         and contract['accountNative'].get('commit') == ACCOUNT_COMMIT
+         and contract['accountNative'].get('tree') == ACCOUNT_TREE
+         and contract['accountNative'].get('controllerCommit') == ACCOUNT_CONTROLLER
+         and contract['accountNative'].get('proofSha256') == ACCOUNT_PROOF,
+         'PUBLISHED_ACCOUNT_SUCCESSOR_EVIDENCE_CHANGED')
+    account = json.loads(Path(__file__).with_name('account-login-contract.json').read_bytes())
+    need(account.get('expectedCurrent') == DRAG_COMMIT
+         and contract.get('accountSources') == {**account['sources'], **account['supportSources']},
+         'PUBLISHED_ACCOUNT_SOURCE_CHANGED')
+    need(contract.get('checkoutControls') == CHECKOUT_CONTROLS and all(
+         digest(Path(__file__).with_name(name).read_bytes()) == value
+         for name, value in CHECKOUT_CONTROLS.items())
+         and contract.get('checkoutContractSha256') == CHECKOUT_CONTROLS['recharge-source-recovery-contract.json']
+         and contract.get('checkoutProofSha256') == CHECKOUT_PROOF
+         and isinstance(contract.get('checkoutNative'), dict)
+         and contract['checkoutNative'].get('commit') == CURRENT
+         and contract['checkoutNative'].get('tree') == CHECKOUT_TREE
+         and contract['checkoutNative'].get('proofSha256') == CHECKOUT_PROOF,
+         'PUBLISHED_CHECKOUT_SUCCESSOR_EVIDENCE_CHANGED')
+    checkout = json.loads(Path(__file__).with_name('recharge-source-recovery-contract.json').read_bytes())
+    need(checkout.get('expectedCurrent') == ACCOUNT_COMMIT and checkout.get('migration') is None
+         and len(checkout['sources']) == 3 and contract.get('checkoutSources') == checkout['sources'],
+         'PUBLISHED_CHECKOUT_SOURCE_CHANGED')
     need(isinstance(contract.get('runtimeEvidence'), dict) and contract['runtimeEvidence'].get('status') == 'VERIFIED'
          and contract['runtimeEvidence'].get('commit') == CURRENT
          and isinstance(contract.get('current'), str) and contract['current'].startswith('/opt/id-business-v2/releases/')
@@ -131,6 +174,16 @@ def verify_proof(proof, plan, contract, payload, h):
          and proof.get('successorControls') == contract['successorControls']
          and proof.get('dragProofSha256') == contract['dragProofSha256']
          and proof.get('dragControls') == contract['dragControls']
+         and proof.get('accountProofSha256') == contract['accountProofSha256']
+         and proof.get('accountControls') == contract['accountControls']
+         and proof.get('accountContractSha256') == contract['accountContractSha256']
+         and proof.get('accountNative') == contract['accountNative']
+         and proof.get('accountSources') == contract['accountSources']
+         and proof.get('checkoutProofSha256') == contract['checkoutProofSha256']
+         and proof.get('checkoutControls') == contract['checkoutControls']
+         and proof.get('checkoutContractSha256') == contract['checkoutContractSha256']
+         and proof.get('checkoutNative') == contract['checkoutNative']
+         and proof.get('checkoutSources') == contract['checkoutSources']
          and proof.get('hostSourceInheritance') == contract['hostSourceInheritance']
          and proof.get('sqliteReviewPolicy') == contract['sqliteReviewPolicy']
          and proof.get('prismaPathMetadata') == contract['prismaPathMetadata']
@@ -309,6 +362,8 @@ def baseline(d, h, a, finite, contract, expected=None):
     inherited_host_source(contract)
     need({n: json.loads(raw)['roleSourceProjections'][n]['commit'] for n in contract['roleSourceCommits']}
          == contract['roleSourceCommits'], 'ROLE_BASELINE_CHANGED')
+    # Checkout kept the prior role metadata; verify that historical claim
+    # exactly, then bind its actual successor through full runtime inventories.
     need(projection_hashes(json.loads(raw)) == contract['sourceProjectionSha256'],
          'PUBLISHED_ROLE_SOURCE_CHANGED')
     states = h.snapshot(d, current)

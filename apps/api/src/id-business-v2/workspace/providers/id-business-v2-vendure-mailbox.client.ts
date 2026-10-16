@@ -11,6 +11,7 @@ import type {
   V2VendureMailboxBatchResult,
   V2VendureMailboxConnectionResult,
   V2VendureMailboxHistoryResult,
+  V2VendureMailboxHealth,
   V2VendureMailboxMail,
   V2VendureMailboxPrimaryAccount,
   V2VendureMailboxPublicQueryResult,
@@ -23,6 +24,7 @@ interface GraphqlEnvelope<T> {
 }
 
 class VendureMailboxAuthorizationError extends Error {}
+class VendureMailboxHealthUnsupportedError extends Error {}
 
 const PRIMARY_FIELDS = `
   id createdAt updatedAt email note status imapHost imapPort masterQueryCode codeExpiresAt
@@ -49,6 +51,21 @@ export class IdBusinessV2VendureMailboxClient {
   async checkConnection() {
     await this.primaryAccounts();
     return true;
+  }
+
+  async mailHealth() {
+    try {
+      const data = await this.admin<{ icloudMailHealth: Omit<V2VendureMailboxHealth, 'status'> }>(
+        `query IdBusinessMailHealth { icloudMailHealth {
+          checkedAt listeners { primaryAccountId state reason leaseExpiresAt }
+          delivery { configured pendingCount oldestPendingAt lastDeliveredAt }
+        } }`
+      );
+      return data.icloudMailHealth;
+    } catch (error) {
+      if (error instanceof VendureMailboxHealthUnsupportedError) return null;
+      throw error;
+    }
   }
 
   async primaryAccounts() {
@@ -294,9 +311,19 @@ export class IdBusinessV2VendureMailboxClient {
       ) {
         throw new VendureMailboxAuthorizationError();
       }
+      if (
+        query.includes('query IdBusinessMailHealth') &&
+        envelope.errors?.some(
+          (error) =>
+            typeof error.message === 'string' &&
+            /Cannot query field ["']icloudMailHealth["']/.test(error.message)
+        )
+      )
+        throw new VendureMailboxHealthUnsupportedError();
       if (envelope.errors?.length || !envelope.data) throw new Error('GraphQL request failed');
       return envelope.data;
     } catch (error) {
+      if (error instanceof VendureMailboxHealthUnsupportedError) throw error;
       if (error instanceof VendureMailboxAuthorizationError) {
         throw new ServiceUnavailableException(
           'Vendure 邮箱授权无效或权限不足，请管理员检查专用 API Key'

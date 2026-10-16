@@ -186,12 +186,15 @@ test('registration parity dispatcher runs both interfaces all persistence module
   );
 });
 
-test('registration client cwd control repair runs guards without repeating application or database suites', () => {
+test('registration client successor control repair runs guards without repeating application or database suites', () => {
   const calls = recordGuardCommands('ci-only', registrationParityDiagnosticsRepairPaths, 'guards', {
     base: registrationParityDiagnosticsRepairBase,
     parityFixture: true
   });
   assert.deepEqual(calls.at(-1), ['process-exit', 0]);
+  assert.ok(
+    calls.some((c) => c.includes('--test-name-pattern=registration parity|registration client'))
+  );
   assert.ok(
     calls.some((c) =>
       c.includes('scripts/production-release/registration-parity-diagnostics-release.test.py')
@@ -794,7 +797,7 @@ function recordGuardCommands(
         const source = 'import * as m from ' + JSON.stringify(url) + ';export * from ' + JSON.stringify(url) + ';' +
           'function fixtureOptions(options) {' +
           'const hashes=Object.fromEntries(m.registrationParityDiagnosticsPaths.filter(p=>p!==m.registrationParityDiagnosticsContract).map(p=>[p,"a".repeat(64)]));' +
-          'const contract={frozen:true,scope:"REGISTRATION_PARITY_DIAGNOSTICS",sourceBaseline:m.registrationParityDiagnosticsBase,sourceBaselineTree:m.registrationParityDiagnosticsTree,expectedCurrent:m.registrationParityDiagnosticsCurrent,migration:null,expectedGitChanges:m.registrationParityDiagnosticsPaths,allowedApplicationPaths:m.registrationParityDiagnosticsApplications,controlPaths:m.registrationParityDiagnosticsControls,sources:Object.fromEntries(m.registrationParityDiagnosticsApplications.map(p=>[p,hashes[p]])),validationSources:{[m.registrationParityDiagnosticsAcceptance]:hashes[m.registrationParityDiagnosticsAcceptance]},reviewedFileHashes:hashes};' +
+          'const contract={frozen:true,scope:"REGISTRATION_PARITY_DIAGNOSTICS",sourceBaseline:m.registrationParityDiagnosticsBase,sourceBaselineTree:m.registrationParityDiagnosticsTree,expectedCurrent:m.registrationParityDiagnosticsCurrent,migration:null,expectedGitChanges:m.registrationParityDiagnosticsPaths,sourceDeltaPaths:m.registrationParityDiagnosticsRepairPaths,allowedApplicationPaths:m.registrationParityDiagnosticsApplications,controlPaths:m.registrationParityDiagnosticsControls,sources:Object.fromEntries(m.registrationParityDiagnosticsApplications.map(p=>[p,hashes[p]])),validationSources:{[m.registrationParityDiagnosticsAcceptance]:hashes[m.registrationParityDiagnosticsAcceptance]},reviewedFileHashes:hashes};' +
           'return {...options,contract,sourceDigest:p=>hashes[p]};}' +
           'export function isRegistrationParityDiagnosticsOnly(paths,options){return m.isRegistrationParityDiagnosticsOnly(paths,fixtureOptions(options));}' +
           'export function isRegistrationParityDiagnosticsControlRepair(paths,options){return m.isRegistrationParityDiagnosticsControlRepair(paths,fixtureOptions(options));}';

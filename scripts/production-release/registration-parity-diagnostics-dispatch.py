@@ -126,8 +126,8 @@ entry=Path('/opt/id-business-v2/.staging/registration-parity-diagnostics-entry-'
 entry.mkdir(mode=0o700,parents=True,exist_ok=True)
 stage='ENTRY_DOWNLOAD'
 try:
- with urllib.request.urlopen(RAW_BASE+'registration-parity-diagnostics-contract.json',timeout=30) as response:raw=response.read(256*1024+1)
- if len(raw)>256*1024 or hashlib.sha256(raw).hexdigest()!=plan['contractSha256']:raise RuntimeError('REGISTRATION_PARITY_DIAGNOSTICS_CONTRACT_CHANGED')
+ with urllib.request.urlopen(RAW_BASE+'registration-parity-diagnostics-contract.json',timeout=30) as response:raw=response.read(512*1024+1)
+ if len(raw)>512*1024 or hashlib.sha256(raw).hexdigest()!=plan['contractSha256']:raise RuntimeError('REGISTRATION_PARITY_DIAGNOSTICS_CONTRACT_CHANGED')
  contract=json.loads(raw)
  for name,expected in plan['controlSources'].items():
   if not re.fullmatch('[a-z0-9.-]+',name):raise RuntimeError('REGISTRATION_PARITY_DIAGNOSTICS_EXECUTOR_PATH_INVALID')
