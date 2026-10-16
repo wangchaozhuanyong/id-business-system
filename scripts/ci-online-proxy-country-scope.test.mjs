@@ -3,10 +3,36 @@ import test from 'node:test';
 import { checkMode, selectedParts, needsOnlineRechargeCiBuild } from './ci-recharge-scope.mjs';
 import {
   onlineProxyCountryPaths,
+  onlineProxyCountryValidationPaths,
+  isOnlineProxyCountryValidationOnly,
   onlineProxyCountrySources,
   onlineProxyCountryCommands,
   isOnlineProxyCountryOnly
 } from './ci-online-proxy-country-scope.mjs';
+
+test('Admin projection controls cannot admit application, dependency or schema changes', () => {
+  const paths = [...onlineProxyCountryValidationPaths];
+  assert.equal(isOnlineProxyCountryValidationOnly(paths), true);
+  assert.equal(checkMode(paths, 'same', 'same'), 'ci-only');
+  assert.equal(checkMode(paths, 'before', 'after'), 'full');
+  assert.equal(needsOnlineRechargeCiBuild(paths), false);
+  assert.equal(
+    onlineProxyCountryCommands('guards', paths).some((args) => args.includes('check:admin-ui')),
+    false
+  );
+  assert.throws(
+    () => onlineProxyCountryCommands('api', paths),
+    /Unsupported proxy country check part/
+  );
+  for (const extra of [
+    onlineProxyCountrySources[0],
+    'package-lock.json',
+    'apps/api/prisma-mysql/schema.prisma'
+  ]) {
+    assert.equal(isOnlineProxyCountryValidationOnly([...paths, extra]), false);
+    assert.equal(checkMode([...paths, extra], 'same', 'same'), 'full');
+  }
+});
 
 test('country feature keeps API, Admin and engine checks without a historical image projection', () => {
   assert.equal(isOnlineProxyCountryOnly(onlineProxyCountryPaths), true);

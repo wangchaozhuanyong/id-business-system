@@ -2,6 +2,12 @@ name: Online Proxy Country Validation
 
 on:
   workflow_dispatch:
+    inputs:
+      admin_base_commit:
+        description: Verified deployed Admin commit; overlay only the two proxy-country files
+        type: string
+        required: false
+        default: ''
 
 permissions:
   contents: read
@@ -46,14 +52,42 @@ jobs:
         run: |
           mkdir -p .runtime/online-proxy-country-ci
           npm run test --workspace @apple-business/api -- --run src/id-business-v2/online-recharge/mysql.integration.spec.ts --reporter=default --reporter=json --outputFile=$GITHUB_WORKSPACE/.runtime/online-proxy-country-ci/mysql.json
-      - name: Build exact Linux API and Admin artifacts
+      - name: Build exact Linux API artifacts
+        env:
+          NODE_ENV: production
+        run: npm run build --workspace @apple-business/api
+      - name: Bind Admin source to the deployed base and exact country changes
+        env:
+          ADMIN_BASE_COMMIT: ${{ inputs.admin_base_commit }}
+        run: |
+          python3 - <<'PY'
+          import hashlib,json,os,pathlib,re,subprocess
+          def git(*args,env=None):
+              return subprocess.check_output(['git',*args],env=env).decode().strip()
+          head=git('rev-parse','HEAD');base=os.environ['ADMIN_BASE_COMMIT'] or head
+          assert re.fullmatch('[a-f0-9]{40}',base)
+          subprocess.run(['git','merge-base','--is-ancestor',base,head],check=True)
+          assert not git('diff','--name-only',base,head,'--','packages/shared','package.json','package-lock.json','apps/admin/package.json','apps/admin/vite.config.ts','tsconfig.base.json')
+          paths=['apps/admin/src/v2/features/online-recharge/V2OnlineConfigView.vue','apps/admin/src/v2/features/online-recharge/configFields.ts']
+          source={path:pathlib.Path(path).read_bytes() for path in paths}
+          subprocess.run(['git','restore','--source',base,'--worktree','--','apps/admin'],check=True)
+          for path,raw in source.items(): pathlib.Path(path).write_bytes(raw)
+          env={**os.environ,'GIT_INDEX_FILE':str(pathlib.Path('.runtime/online-proxy-country-ci/admin.index').resolve())}
+          subprocess.run(['git','read-tree',head],env=env,check=True)
+          subprocess.run(['git','add','--','apps/admin'],env=env,check=True)
+          tree=git('write-tree',env=env)
+          assert set(git('diff','--name-only',base,tree,'--','apps/admin').splitlines()) <= set(paths)
+          proof={'kind':'DEPLOYED_BASE_WITH_COUNTRY_FILES','baseCommit':base,'sourceCommit':head,'sourceTree':tree,'files':{path:hashlib.sha256(raw).hexdigest() for path,raw in source.items()}}
+          pathlib.Path('.runtime/online-proxy-country-ci/admin-projection.json').write_text(json.dumps(proof,indent=2))
+          pathlib.Path(env['GIT_INDEX_FILE']).unlink()
+          PY
+      - name: Build and record projected Linux Admin artifacts
         env:
           NODE_ENV: production
           V2_BUILD_ID: v2-${{ github.sha }}
         run: |
-          npm run build --workspace @apple-business/api
           npm run build --workspace @apple-business/admin
-          node -e 'const fs=require("fs"),cp=require("child_process");fs.writeFileSync(".runtime/online-proxy-country-ci/source.json",JSON.stringify({commit:cp.execFileSync("git",["rev-parse","HEAD"],{encoding:"utf8"}).trim(),sourceTree:cp.execFileSync("git",["rev-parse","HEAD^{tree}"],{encoding:"utf8"}).trim(),run:process.env.GITHUB_RUN_ID,productionAccess:false,paymentSubmitted:false},null,2));'
+          node -e 'const fs=require("fs"),cp=require("child_process");fs.writeFileSync(".runtime/online-proxy-country-ci/source.json",JSON.stringify({commit:cp.execFileSync("git",["rev-parse","HEAD"],{encoding:"utf8"}).trim(),sourceTree:cp.execFileSync("git",["rev-parse","HEAD^{tree}"],{encoding:"utf8"}).trim(),adminProjection:JSON.parse(fs.readFileSync(".runtime/online-proxy-country-ci/admin-projection.json","utf8")),run:process.env.GITHUB_RUN_ID,productionAccess:false,paymentSubmitted:false},null,2));'
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: online-proxy-country-${{ github.sha }}
