@@ -123,7 +123,7 @@ test('unfrozen missing malformed or mismatched review maps never enter the new e
   );
 });
 
-test('cwd repair admits only nine controls while preserving the original complete freeze', () => {
+test('client diagnostic repair admits only five controls while preserving the original complete freeze', () => {
   const options = {
     ...fixture(),
     base: registrationParityDiagnosticsRepairBase,
@@ -149,6 +149,7 @@ test('cwd repair admits only nine controls while preserving the original complet
     [...registrationParityDiagnosticsRepairPaths, registrationParityDiagnosticsRepairPaths[0]],
     [...registrationParityDiagnosticsRepairPaths, applications[0]],
     [...registrationParityDiagnosticsRepairPaths, 'package-lock.json'],
+    [...registrationParityDiagnosticsRepairPaths, 'scripts/ci-recharge-check.mjs'],
     [...registrationParityDiagnosticsRepairPaths, 'apps/api/prisma-mysql/schema.prisma'],
     [
       ...registrationParityDiagnosticsRepairPaths,

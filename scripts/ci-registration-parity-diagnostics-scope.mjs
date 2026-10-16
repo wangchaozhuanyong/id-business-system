@@ -4,18 +4,14 @@ import { readFileSync } from 'node:fs';
 export const registrationParityDiagnosticsBase = 'd44393c5bee8c30c82737fc3e00fa89785a95667';
 export const registrationParityDiagnosticsTree = '7bf8dc7a4702272adcec2979025233300db5df95';
 export const registrationParityDiagnosticsCurrent = 'd44393c5bee8c30c82737fc3e00fa89785a95667';
-export const registrationParityDiagnosticsRepairBase = '4888fb01cfdc916b4e866cd2007d3a6da9518446';
-export const registrationParityDiagnosticsRepairTree = 'f1984d0b589d84bb5ce73aefa866d0ab7e270692';
+export const registrationParityDiagnosticsRepairBase = 'a214c729f7a2991148029afacba99f575bfedb9f';
+export const registrationParityDiagnosticsRepairTree = 'a331a7175931fd7c29aeb257291ac34997a1a7c7';
 export const registrationParityDiagnosticsRepairPaths = Object.freeze([
   'scripts/production-release/registration-parity-diagnostics-build.py',
   'scripts/production-release/registration-parity-diagnostics-release.test.py',
   'scripts/production-release/registration-parity-diagnostics-contract.json',
   'scripts/ci-registration-parity-diagnostics-scope.mjs',
-  'scripts/ci-registration-parity-diagnostics-scope.test.mjs',
-  'scripts/ci-recharge-check.mjs',
-  'scripts/ci-recharge-check.test.mjs',
-  'scripts/ci-recharge-scope.mjs',
-  'scripts/ci-recharge-scope.test.mjs'
+  'scripts/ci-registration-parity-diagnostics-scope.test.mjs'
 ]);
 export const registrationParityDiagnosticsWorker =
   'apps/api/src/id-business-v2/auto-registration/worker';
@@ -125,7 +121,7 @@ export function isRegistrationParityDiagnosticsOnly(
   }
 }
 
-/** The cwd repair may change only these controls; the entire application stays frozen. */
+/** Diagnostics may change only these controls; the entire application stays frozen. */
 export function isRegistrationParityDiagnosticsControlRepair(
   paths,
   { base, baseTree, sourceDigest, contract } = {}
