@@ -60,6 +60,31 @@
           </V2Table>
         </section>
 
+        <section data-short-fields-fixture>
+          <div class="v2-table-layout-fixture__controls">
+            <button
+              type="button"
+              data-toggle-fixture-text
+              @click="showShortFixtureText = !showShortFixtureText"
+            >
+              切换文字列
+            </button>
+          </div>
+          <V2Table
+            :schema="fixtureSchemas.shortFields"
+            :data="alignmentRows"
+            :apply-default-column-visibility="!showShortFixtureText"
+          >
+            <V2TableColumn :definition="fixtureSchemas.shortFields.columns[0]" prop="customer" />
+            <V2TableColumn :definition="fixtureSchemas.shortFields.columns[1]" prop="status" />
+            <V2TableColumn :definition="fixtureSchemas.shortFields.columns[2]" prop="amount" />
+            <V2TableColumn :definition="fixtureSchemas.shortFields.columns[3]" prop="createdAt" />
+            <V2TableActionColumn :definition="fixtureSchemas.shortFields.columns[4]">
+              <AppButton size="small" variant="ghost">详情</AppButton>
+            </V2TableActionColumn>
+          </V2Table>
+        </section>
+
         <section data-layout-fixture="icon">
           <V2Table :schema="fixtureSchemas.icon" :data="rows">
             <V2TableColumn :definition="fixtureSchemas.icon.columns[0]" prop="name" />
@@ -232,6 +257,21 @@ const fixtureSchemas = {
     rowKey: null,
     columns: alignmentColumns
   }),
+  shortFields: defineV2TableSchema({
+    id: 'fixture.short-fields',
+    feature: 'table-layout-fixture',
+    role: 'embedded',
+    mobileMode: 'scroll',
+    rowKey: null,
+    defaultHiddenColumnKeys: ['customer'],
+    columns: [
+      alignmentColumns[1],
+      alignmentColumns[5],
+      alignmentColumns[3],
+      alignmentColumns[4],
+      { key: 'actions', label: '操作', kind: 'actions', layout: 'single', pin: 'end' }
+    ]
+  }),
   icon: actionFixtureSchema('icon'),
   single: actionFixtureSchema('single'),
   double: actionFixtureSchema('double'),
@@ -260,6 +300,7 @@ const lifecycleSchemas = [
 
 const lifecycleSchemaIndex = ref(0);
 const lifecycleRevision = ref(0);
+const showShortFixtureText = ref(false);
 const lifecycleSchema = computed(() => lifecycleSchemas[lifecycleSchemaIndex.value]);
 const lifecycleRows = computed(() =>
   alignmentRows.map((row) => ({
@@ -325,6 +366,7 @@ section[data-layout-fixture],
 section[data-alignment-fixture],
 section[data-narrow-container],
 section[data-scroll-lifecycle],
+section[data-short-fields-fixture],
 section[data-schema-fixture] {
   min-width: 0;
   overflow: hidden;

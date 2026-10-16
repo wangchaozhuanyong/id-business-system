@@ -302,6 +302,8 @@ const registrationSourceFixtures = Object.fromEntries(
     registrationManifestPath,
     // The GPT successor advances this historical module without changing its receipt.
     'apps/api/src/id-business-v2/online-recharge/online-recharge.module.ts',
+    // Table container wording advances independently of the immutable recovery receipt.
+    'scripts/check-v2-table-standard.mjs',
     ...registrationLayoutPaths,
     ...registrationCountryPaths,
     ...registrationSalesPaths,
@@ -5980,6 +5982,15 @@ test('published dynamic table control recovery stays exact and control-only', ()
       path === changed ? Buffer.from('UNREVIEWED') : readFileSync(path);
     assert.equal(registrationPublishedRecoveryProof(paths, { readSource }), false, changed);
   }
+  assert.equal(
+    registrationPublishedRecoveryProof(paths, {
+      readSource: (path) =>
+        path === 'scripts/check-v2-table-standard.mjs'
+          ? actualReadFileSync(path)
+          : readRegistrationFixture(path)
+    }),
+    false
+  );
   assert.equal(
     checkMode([...paths, 'scripts/lib/unreviewed-table-alias.mjs'], schema, schema),
     'full'
