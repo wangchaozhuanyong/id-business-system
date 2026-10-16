@@ -1549,10 +1549,10 @@
     "scripts/ci-recharge-scope.test.mjs": "5033a52726e3982869b6939fc782742d465f8f3c196fe8b2f6f3f29239a5bc59",
     "scripts/ci-registration-browser-scope.mjs": "26be8063e3aa9529e6a46931971d73aa1b9669e49347f71f22947540f1db6d9e",
     "scripts/ci-registration-browser-scope.test.mjs": "8a9877e0f1442fa4b65897090dc85b747e7e8c6827645aea2183aeaa651b3626",
-    "scripts/production-release/registration-browser-build.py": "b08e50727c2f77952c2b90b9910c64e0f2ab3a3fb68ac384cfe137928d530895",
+    "scripts/production-release/registration-browser-build.py": "f158c5243dfd6cf3137cf444520207628ee44c2a8d9a0d274827963f5322e027",
     "scripts/production-release/registration-browser-dispatch.py": "dbd5e0baf387170d1314e28dc6cff91b27a47de4f0a964134af055cdbe4dd53b",
     "scripts/production-release/registration-browser-release.py": "e427a1b71d6abae3cfcf7c860cf65fe79b12c84660135555d1e72be0dcfcad54",
-    "scripts/production-release/registration-browser-release.test.py": "9a4180f843c5c1bc463ec60de298a8fd3d850e5b7de9b437edb4e0d4d2c09150",
+    "scripts/production-release/registration-browser-release.test.py": "ff5ed5e5db986ccc72be82e8a14cb7303b8bd04bb73b0c2b5804a1d7519e0012",
     "scripts/start-auto-registration-connector.sh": "bc37cb8a767c2fbc37ae29919c58968aaa38c771021157553f63c54681ac2104"
   },
   "roleSourceCommits": {

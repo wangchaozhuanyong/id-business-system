@@ -186,9 +186,45 @@ def reconstruct(context, contract):
         path = context / name
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(raw)
+    restore_runtime_worker_tests(context, contract, prior)
     need({name: digest((context / WORKER / name).read_bytes()) for name in contract['baselineWorkerFiles']}
          == contract['baselineWorkerFiles'], 'BASE_WORKER_NOT_REPRODUCED')
     old.verify_runtime_schema(context, contract)
+
+
+def restore_runtime_worker_tests(context, contract, prior):
+    # Prior publishers stored validation sources in Git while their overlay
+    # images retained these three original test files. Keep runtime bytes and
+    # the newer validation layer separate instead of changing inventory facts.
+    raw = (HERE / 'registration-flow-evidence-contract.json').read_bytes()
+    need(digest(raw) == prior['parentContractSha256'], 'RUNTIME_TEST_RECIPE_CHANGED')
+    sources = json.loads(raw)['reconstruction']['runtimeSources']
+    need(set(sources) == {WORKER + name for name in (
+        'test_apple_mailboxes.py', 'test_release_safety.py', 'test_workspace.py')}, 'RUNTIME_TEST_SCOPE_CHANGED')
+    contents = {}
+    for name, source in sources.items():
+        need(source['commit'] == 'e90f02a65cdf63b656e82eed6e25fd8a68a21b7b'
+             and source['sha256'] == contract['baselineWorkerFiles'][name.removeprefix(WORKER)],
+             'RUNTIME_TEST_BINDING_CHANGED')
+        value = git('show', source['commit'] + ':' + name)
+        need(digest(value) == source['sha256'], 'RUNTIME_TEST_SOURCE_CHANGED')
+        contents[name] = value
+    for name, value in contents.items():
+        path = context / name
+        need(not path.is_symlink() and path.resolve().is_relative_to(context.resolve()), 'RUNTIME_TEST_PATH_INVALID')
+        path.write_bytes(value)
+
+
+def overlay_published_validation_tests(context, prior):
+    sources = {name: value for name, value in {**prior['sources'], **prior['validationBaselineSources']}.items()
+               if name.startswith(WORKER) and Path(name).name.startswith('test_') and name.endswith('.py')}
+    for name, expected in sources.items():
+        raw = git('show', CURRENT + ':' + name)
+        need(digest(raw) == expected, 'PUBLISHED_VALIDATION_SOURCE_CHANGED')
+        path = context / name
+        need(not path.is_symlink() and path.resolve().is_relative_to(context.resolve()), 'VALIDATION_PATH_INVALID')
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(raw)
 
 
 def api_delta(before, after, approved):
@@ -216,6 +252,7 @@ def prepare():
         context = OUTPUT / role
         reconstruct(context, contract)
         if role == 'candidate':
+            overlay_published_validation_tests(context, r.prior_recipe())
             for name in {**contract['sources'], **contract['validationSources'], **contract['validationBaselineSources']}:
                 path = context / name
                 path.parent.mkdir(parents=True, exist_ok=True)

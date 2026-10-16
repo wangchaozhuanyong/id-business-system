@@ -337,6 +337,38 @@ class BrowserReleaseControls(unittest.TestCase):
             path.write_bytes(runtime_raw)
             r.helper('registration-parity-diagnostics-build.py').verify_runtime_schema(root, contract)
 
+    def test_original_runtime_tests_and_published_validation_tests_keep_separate_bytes(self):
+        contract = copy.deepcopy(self.contract)
+        unchanged = copy.deepcopy(contract['baselineWorkerFiles'])
+        prior = r.prior_recipe()
+        names = ('test_apple_mailboxes.py', 'test_release_safety.py', 'test_workspace.py')
+        with tempfile.TemporaryDirectory(dir=OUTPUT) as temporary:
+            context = Path(temporary)
+            (context / b.WORKER).mkdir(parents=True)
+            for name in names:
+                (context / b.WORKER / name).write_bytes(b.git('show', b.CURRENT + ':' + b.WORKER + name))
+            b.restore_runtime_worker_tests(context, contract, prior)
+            for name in names:
+                self.assertEqual(r.digest((context / b.WORKER / name).read_bytes()), unchanged[name])
+            snapshot = {name: (context / b.WORKER / name).read_bytes() for name in names}
+            with patch.object(b, 'git', return_value=b'untrusted source'), \
+                    self.assertRaisesRegex(RuntimeError, 'RUNTIME_TEST_SOURCE_CHANGED'):
+                b.restore_runtime_worker_tests(context, contract, prior)
+            self.assertEqual({name: (context / b.WORKER / name).read_bytes() for name in names}, snapshot)
+            bad = copy.deepcopy(contract)
+            bad['baselineWorkerFiles'][names[0]] = '0' * 64
+            with self.assertRaisesRegex(RuntimeError, 'RUNTIME_TEST_BINDING_CHANGED'):
+                b.restore_runtime_worker_tests(context, bad, prior)
+            b.overlay_published_validation_tests(context, prior)
+            expected = {name: value for name, value in {**prior['sources'], **prior['validationBaselineSources']}.items()
+                        if name.startswith(b.WORKER) and Path(name).name.startswith('test_') and name.endswith('.py')}
+            for name, value in expected.items():
+                self.assertEqual(r.digest((context / name).read_bytes()), value)
+            self.assertEqual(contract['baselineWorkerFiles'], unchanged)
+            with patch.object(b, 'git', return_value=b'untrusted validation'), \
+                    self.assertRaisesRegex(RuntimeError, 'PUBLISHED_VALIDATION_SOURCE_CHANGED'):
+                b.overlay_published_validation_tests(context, prior)
+
     def test_workflow_is_manual_single_flight_and_has_all_validation_stages(self):
         source = (ROOT / '.github/workflows/registration-browser-validation.yml').read_text()
         self.assertIn('workflow_dispatch:', source)
