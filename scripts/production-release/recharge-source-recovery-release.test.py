@@ -86,7 +86,7 @@ class CheckoutPublicationTests(unittest.TestCase):
         self.assertEqual(c['databaseVerification'], {'schemaChanged': False, 'sqlChanged': False, 'databaseStarted': False})
         self.assertEqual(len(c['apiModules']), 2)
         self.assertGreaterEqual(len(c['publicFiles']), 250)
-        self.assertNotEqual(c['apiSourceBaseline'], c['adminSourceBaseline'])
+        self.assertEqual(c['baselineAdminBuildId'], 'v2-' + c['adminSourceBaseline'])
         for name, sha in c['sources'].items():
             self.assertEqual(r.digest((ROOT / name).read_bytes()), sha, name)
             self.assertTrue(name.startswith('apps/api/src/id-business-v2/auto-recharge/'))
