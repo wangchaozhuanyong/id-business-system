@@ -63,6 +63,18 @@ def verify_source_review(c):
         need(sha(git('show', reviewed + ':' + name)) == expected, 'REVIEWED_SOURCE_CHANGED')
 
 
+def published_overlays(context, c):
+    for overlay in c['publishedOverlays']:
+        need(re.fullmatch('[a-f0-9]{40}', overlay['commit']), 'PUBLISHED_OVERLAY_INVALID')
+        for name, expected in {**overlay['sources'], **overlay['validationSources']}.items():
+            need(name.startswith(('apps/', 'packages/', 'scripts/')) and '..' not in Path(name).parts, 'PUBLISHED_SOURCE_PATH_INVALID')
+            raw = git('show', overlay['commit'] + ':' + name)
+            need(sha(raw) == expected, 'PUBLISHED_OVERLAY_SOURCE_CHANGED')
+            target = context / name
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(raw)
+
+
 def main():
     contract_raw = (HERE / 'online-settings-contract.json').read_bytes()
     c = json.loads(contract_raw)
@@ -83,11 +95,12 @@ def main():
         builder.reconstruct(context, recipe)
         # These exact sources were already independently published by the predecessor.
         for name, expected in recipe['sources'].items():
-            raw = git('show', c['expectedCurrent'] + ':' + name)
+            raw = git('show', c['reconstructionBaseCommit'] + ':' + name)
             need(sha(raw) == expected, 'PUBLISHED_PREDECESSOR_SOURCE_CHANGED')
             target = context / name
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_bytes(raw)
+        published_overlays(context, c)
         need(inventory(context / c['engineRoot']) == c['beforeEngineFiles'], 'ENGINE_BASELINE_CHANGED')
         if role == 'candidate':
             for name, expected in c['sources'].items():
@@ -104,6 +117,8 @@ def main():
             env={**os.environ, 'NODE_ENV': 'production', 'V2_BUILD_ID': 'v2-' + (c['expectedCurrent'] if role == 'baseline' else git('rev-parse', 'HEAD').decode().strip())})
     before, after = OUTPUT / 'baseline', OUTPUT / 'candidate'
     baseline_api, candidate_api = inventory(before / 'apps/api/dist'), inventory(after / 'apps/api/dist')
+    baseline_admin = inventory(before / 'apps/admin/dist')
+    need(sha(json.dumps(baseline_admin, sort_keys=True, separators=(',', ':')).encode()) == c['baselineAdminFilesSha256'], 'ADMIN_BASELINE_NOT_REPRODUCED')
     prefix = 'id-business-v2/online-recharge/'
     observed = {name.removeprefix(prefix): value for name, value in baseline_api.items() if name.startswith(prefix) and name.endswith('.js') and '/engine/' not in name}
     need(observed == c['beforeApiOnlineFiles'], 'API_BASELINE_NOT_REPRODUCED')
@@ -134,7 +149,7 @@ def main():
              'tree': git('rev-parse', 'HEAD^{tree}').decode().strip(), 'workflowRunId': os.environ['GITHUB_RUN_ID'],
              'workflowRunAttempt': os.environ['GITHUB_RUN_ATTEMPT'], 'contractSha256': sha(contract_raw),
              'controlSources': controls, 'sources': c['sources'], 'apiModules': modules,
-             'baselineAdminFiles': inventory(before / 'apps/admin/dist'), 'adminFiles': inventory(payload / 'admin/html'),
+             'baselineAdminFiles': baseline_admin, 'adminFiles': inventory(payload / 'admin/html'),
              'afterEngineFiles': after_engine, 'files': inventory(payload), 'baselineApiReproduced': True,
              'baselineAdminSourceReproduced': True, 'migrationPerformed': False, 'businessActions': 0}
     (payload / 'build-proof.json').write_text(json.dumps(proof, sort_keys=True, indent=2) + '\n')

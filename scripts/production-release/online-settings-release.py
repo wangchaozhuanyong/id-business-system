@@ -90,6 +90,9 @@ def baseline(d, contract, h):
     need(str(previous) == contract['current'] and previous.parent == BASE / 'releases', 'CURRENT_CHANGED')
     raw = (previous / 'release-manifest.json').read_bytes()
     need(sha(raw) == contract['manifestSha256'] and json.loads(raw)['commit'] == contract['expectedCurrent'], 'MANIFEST_CHANGED')
+    for overlay in contract['publishedOverlays']:
+        need(re.fullmatch('[a-z0-9-]+-build-proof.json', overlay['proofFile'])
+             and sha((previous / overlay['proofFile']).read_bytes()) == overlay['proofSha256'], 'PUBLISHED_OVERLAY_PROOF_CHANGED')
     states = h.snapshot(d, previous)
     need(states == contract['services'], 'SERVICES_CHANGED')
     need({role: h.configuration(d, state) for role, state in states.items()} == contract['runtimeConfigurationSha256'], 'RUNTIME_CONFIGURATION_CHANGED')
