@@ -67,7 +67,7 @@ def published_overlays(context, c):
     for overlay in c['publishedOverlays']:
         need(re.fullmatch('[a-f0-9]{40}', overlay['commit']), 'PUBLISHED_OVERLAY_INVALID')
         for name, expected in {**overlay['sources'], **overlay['validationSources']}.items():
-            need(name.startswith(('apps/', 'packages/', 'scripts/')) and '..' not in Path(name).parts, 'PUBLISHED_SOURCE_PATH_INVALID')
+            need(name.startswith(('apps/', 'packages/', 'scripts/', 'docs/')) and '..' not in Path(name).parts, 'PUBLISHED_SOURCE_PATH_INVALID')
             raw = git('show', overlay['commit'] + ':' + name)
             need(sha(raw) == expected, 'PUBLISHED_OVERLAY_SOURCE_CHANGED')
             target = context / name

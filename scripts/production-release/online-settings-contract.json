@@ -221,7 +221,7 @@
   "configurationSha256": {
     ".env.aws.production": "088a61075fb2ba01f04249fc78e31150ee7cd571f0708fe0c28ba38ac53daafa",
     "docker-compose.aws-mysql.yml": "953c6264f157b00218f2a019d5e2c0b6bc4a34f687f2ec42ad782e0009e7672c",
-    "compose.release.json": "e56a9f318875c6a3981d559e246eb4bec3699e91f63b3fbe1fa8d94f7f37a510"
+    "compose.release.json": "7f4ef7a7f01347b9fda0b0ab4af565d45bfe2279b443d62acfc5e3c40e48c7ee"
   },
   "controlFiles": [
     "online-settings-release.py",
@@ -232,7 +232,7 @@
     "recharge-source-recovery-release.py",
     "api-admin-scope.py"
   ],
-  "current": "/opt/id-business-v2/releases/20261016T125248Z-59b36f3aadef-mailbox-realtime",
+  "current": "/opt/id-business-v2/releases/20261016T132141Z-561b834dd3f4-registration-browser",
   "engineHealth": {
     "activeTasks": 0,
     "mode": "enabled",
@@ -241,14 +241,14 @@
     "stopping": false
   },
   "engineRoot": "apps/api/src/id-business-v2/online-recharge/engine",
-  "expectedCurrent": "59b36f3aadef28a59f47a55ed1e66686fcc2c42c",
-  "manifestSha256": "ad9c6f7a7404556cacd6089a78253742ffeb3a23f429c117e1cbeae4da66ace5",
+  "expectedCurrent": "561b834dd3f481d98a99786667a2844c842b24bd",
+  "manifestSha256": "1fc38706e33cf2ebf32356b96a708328f9041f3656bc1dc2ff14f3f85aad1eff",
   "nginxSha256": "0b73aedbebdc12065d922b35bbf428e8959fe3a3ea9ef9fa5dc7af2f995baa99",
   "reconstructionContractSha256": "ec58e314bfebe558c9bf793ca1b240fcd1144d56956ecf0de1fd18fd6aa03ae7",
   "reconstructionHelperSha256": "7bd0eb8a3b28261402782b2dbe01fc436c41331f0ecd47764c2d5abc5dc4e459",
   "reviewBase": "44c9134833242815d01ba666fe0f942f924347fb",
   "runtimeConfigurationSha256": {
-    "api": "4e6736f142e91a476a5a329c10b196ca0617ca2c9413a01ca668bd03f11387ec",
+    "api": "87fdfe82b45f85689c95f0299fb9071b36c1efa0e00ee749e43bf0bc8d426822",
     "admin": "dfc7d8d92987afc22a6c843fdac6ed3a40e0727065795a2c36fd9f90f43cd37a",
     "online-recharge": "0db8f5da6e8a49af82fb419ef81b2edc552752edc0c37cfd0383b9e5f963ee20",
     "auto-recharge": "71e8b8cf9d652276051212ca4add76538d53821d383aa839786d0bfc53ee93b4",
@@ -260,21 +260,21 @@
   "scope": "ONLINE_SETTINGS_REGIONS_HELP_AND_CDK_COUNT",
   "services": {
     "api": {
-      "image": "sha256:bff976aa88867d0351eb76e1ddd213714081b13c21647be68dbbe224f5d140ea",
-      "reference": "id-business-v2-mailbox-realtime:59b36f3aadef28a59f47a55ed1e66686fcc2c42c-38902937350-api",
+      "image": "sha256:dd822991c0c225453de737cb8360e0e0a22c006cd1205da0770658d1416da223",
+      "reference": "id-business-v2-registration-browser:561b834dd3f481d98a99786667a2844c842b24bd-38906524387-api",
       "status": "running",
       "health": "healthy",
-      "containerId": "215eb45430a89890439cd162af7f0966152ba87ecf3c5fb8d3714a3d092cf142",
-      "startedAtSha256": "89c9943144e41573cc6ad0dc28fb1d73e707a2c5b39bb0c94fdc861081a8a4c3",
+      "containerId": "d52873b529b44fcec8d8f203b98d77f907e72929c4becd9486da26f605f6c80e",
+      "startedAtSha256": "d27c90f274cd7214ba25d06d0151468123491867d9f8cbb0d14b4e62b02a1e24",
       "environmentSha256": "9ffb49fbaa3c1b6d67df07fcedabc538678dc6a4aed2489b99a62a2368d10d9f"
     },
     "admin": {
-      "image": "sha256:e98ee897ccec382092fd2f4a6b4927f22b8c6712e7acfc629f570a73d0e7878a",
-      "reference": "id-business-v2-mailbox-realtime:59b36f3aadef28a59f47a55ed1e66686fcc2c42c-38902937350-admin",
+      "image": "sha256:0274310e3809cc0fa89b44fac405152b3a39e081bb99b53ae1072d698c78966d",
+      "reference": "id-business-v2-registration-browser:561b834dd3f481d98a99786667a2844c842b24bd-38906524387-admin",
       "status": "running",
       "health": "healthy",
-      "containerId": "faf7a29d97caa736e64ef0afc81632c0a32b55fcf44a7c38245961e6760f5f68",
-      "startedAtSha256": "086d00182a678b64889075767f6c149aeb35681eabe71c3e0f4836538c013131",
+      "containerId": "f1bcc1710eb1bccb925fb0b710c304c51a7c66d6d04c17a47e353be66fac5fb0",
+      "startedAtSha256": "b0f1498edabac66c134d10587dd2a3e49137832a97b490b008396ec03cddf1b6",
       "environmentSha256": "03ddab553858482dcbcc4a93d989902d31b41753eb155fb8162011e218bc0ad4"
     },
     "online-recharge": {
@@ -282,8 +282,8 @@
       "reference": "id-business-v2-proxy-result-identity:69eba563895bf083b24c8214a088454d5df34922-38832430638",
       "status": "running",
       "health": "healthy",
-      "containerId": "0c5f187c6f46169243e072443f77fc8cf886c23a36ae00336a341828c1d43ea8",
-      "startedAtSha256": "9430281bdf07a03635a0d371ca7c9775513c5c07b643a7749214699ecda72089",
+      "containerId": "1c5dd07dca4c7d5f7596b9443fd3c496a4d8a5c2a955bde44481a76554ebea10",
+      "startedAtSha256": "12c7a064165e7251961eb99292f07f873743761990978664b8aeb763e4b24704",
       "environmentSha256": "60bb48bbd6e03a4ceebe245c8405f248d0c682a27287aabb17c1d3573e50ad37"
     },
     "auto-recharge": {
@@ -402,7 +402,7 @@
   },
   "sourceReviewCommit": "0161e8f92da0c2df5c58ddb4373dbc4d18b04412",
   "reconstructionBaseCommit": "6fc99d23c2918280a94c3f5b8be48f638190e02f",
-  "baselineAdminFilesSha256": "e90398e83d1d856387f4410ac7e62b26f42b22978735db849d521ad848bb9e58",
+  "baselineAdminFilesSha256": "0b3ca187255264f351f43f9f94644663de190ebb39e94dc1161058aa9e45f715",
   "publishedOverlays": [
     {
       "commit": "59b36f3aadef28a59f47a55ed1e66686fcc2c42c",
@@ -426,6 +426,46 @@
       },
       "proofFile": "mailbox-realtime-build-proof.json",
       "proofSha256": "ecf5c6dc2cd93dc94133dbb38f6ef9b37aab5ebecac790c80e99226c0e365e2c"
+    },
+    {
+      "commit": "561b834dd3f481d98a99786667a2844c842b24bd",
+      "sources": {
+        "apps/admin/src/v2/features/auto-registration/V2AppleMailboxes.vue": "bfb60a303be4cbf2e906deb04c9d59028111a1b3eaa7326b86b326d72a5317cb",
+        "apps/admin/src/v2/features/auto-registration/api.ts": "40ac8deb6f10ca124daa4a104c7aa549a7cdb255a03b2143ef21e1e2a980ada1",
+        "apps/admin/src/v2/features/auto-registration/apple-mailbox-presentation.ts": "438d2c60ff2d51913b6190ab6dab1c901497a0ec15276e835377433c2fe04ab3",
+        "apps/admin/src/v2/features/auto-registration/browser-connector.spec.ts": "62a5e3d3d5385f6731ab9100818f604548e793dd225b146da2763c678a111eda",
+        "apps/admin/src/v2/features/auto-registration/browser-connector.ts": "b47b61493e3fa1e5df2ff42b69a958187fbcab1d415ebb4c8e72907f5aefe13a",
+        "apps/admin/src/v2/features/auto-registration/browser-registration-presentation.spec.ts": "66f50973d2d4be20b6c3c3d158805dbaeae0a1de057690c0652fc642dd1e9957",
+        "apps/admin/src/v2/features/auto-registration/contracts.ts": "0168897778f038d939961fffe54dbe05b27766b68d562f645209c4c4bb232f75",
+        "apps/admin/src/v2/features/auto-registration/useAppleMailboxes.spec.ts": "cb79535f62d23d70a1cc4c14c4864c8de471c57572f21b74aa0db304980544f4",
+        "apps/admin/src/v2/features/auto-registration/useAppleMailboxes.ts": "1a38eee5d85f348c16521a16482c2d6bc6cdee6271a2be426bba0e2a1c515b47",
+        "apps/api/src/id-business-v2/auto-registration/apple-mailboxes.controller.ts": "23397f3ac7df123281e9a211360b65e49ba98dfcb943c646db7e0abdfaa211b3",
+        "apps/api/src/id-business-v2/auto-registration/apple-mailboxes.service.ts": "d59791c9df94e23e2180797f152f4a4b7ebe62163e8bfd02c9bafc1590770dfb",
+        "apps/api/src/id-business-v2/auto-registration/apple-mailboxes.types.ts": "23e0f8311c7fd81c7e91ea7e59ea22c4d8bfd0feed34a2083f287b644099b6f5",
+        "apps/api/src/id-business-v2/auto-registration/auto-registration.module.ts": "42daed14cd9af7955acebc33fba220f52d878c1786c1d9c9ed9bc437b8232658",
+        "apps/api/src/id-business-v2/auto-registration/auto-registration.service.ts": "5a8b6c0e4f25e064a926f6ef4b89b2d3e0990ddfcc37a5e0b2d4ff0fd991fd06",
+        "apps/api/src/id-business-v2/auto-registration/browser-registration.controller.ts": "d91743cde3dfb79ceb3395e70a2dbf2f601248c3471c4fd9353cc763a8629381",
+        "apps/api/src/id-business-v2/auto-registration/browser-registration.service.spec.ts": "5f4370d9b4d47097fae752fcc1e4ad1988d82da7e9eded5c094384e7359fcb21",
+        "apps/api/src/id-business-v2/auto-registration/browser-registration.service.ts": "d1c886ed9ae00ea17207ab2f864d635152e9164c1ef0e9ad0125c5eaba7092cf",
+        "apps/api/src/id-business-v2/auto-registration/worker/apple_browser_registration.py": "015a7220545a0888a732c7ec1ef4a02d6a410b852cd8b4bf0db0da66604eb853",
+        "apps/api/src/id-business-v2/auto-registration/worker/apple_mailboxes.py": "ae567fdac56b85d21cb9335f4960fa759ee6e676daffed5193d27a27b3b0d721",
+        "apps/api/src/id-business-v2/auto-registration/worker/browser_registration_connector.py": "2f92676a00dfeb67d7fd6a8cbea1fb5d6703099ef8c466a7090486bd5143bf04",
+        "apps/api/src/id-business-v2/auto-registration/worker/browser_registration_flow.py": "8cd35491feb76f4c670ac1d26ed5c3c9b6a11ad88fb4664eea72d7930c9ae814",
+        "apps/api/src/id-business-v2/auto-registration/worker/release_safety.py": "c6bda052bfab611c4798a40b8c637a48a23dc9c9da0912b7028e61d719b7146b",
+        "apps/api/src/id-business-v2/auto-registration/worker/test_apple_browser_registration_unit.py": "13e9268aefbe81f1bfc520f827eaf3bd2d1361033f52e490f3702d44f5fffcc2",
+        "apps/api/src/id-business-v2/auto-registration/worker/test_browser_registration_connector.py": "b85a7ee0ec6492da86f88f718dfa9e7cacc6977aa6467beff6ff3fdb18d0222f",
+        "apps/api/src/id-business-v2/auto-registration/worker/test_browser_registration_contract_unit.py": "db76c432ce2997d0a4aba12ddab27e28c4a4ab1620a6103de8c7e8ff9424b598",
+        "apps/api/src/id-business-v2/auto-registration/worker/workspace.py": "9756744a89a903e0dfa2fb237b354e61c3165f4855170b6db1051b796fbc9b77",
+        "docs/AUTO_REGISTRATION_BROWSER_CONNECTOR.md": "55f680d1192c5265bd82f1291497853d27c11c486d2766ebf60dbef403fc29dc",
+        "scripts/start-auto-registration-connector.sh": "bc37cb8a767c2fbc37ae29919c58968aaa38c771021157553f63c54681ac2104"
+      },
+      "validationSources": {
+        "scripts/acceptance-v2-registration-browser.mjs": "2f3311dcd4604b6666b3ee2b666cf41721b9c4de9954a0335c549eb0bf4a6b4d",
+        "apps/api/src/id-business-v2/auto-registration/worker/test_upload_compat.py": "a5e9c985971bc94dc398d584cea5c32372b9f796cd0bc4816ded16d7fa81de31",
+        "apps/api/src/id-business-v2/auto-registration/worker/test_workspace.py": "b209874b0a8d7b640a3df1253356f206b2e98c7253eee43efe7a212c14f32154"
+      },
+      "proofFile": "registration-browser-build-proof.json",
+      "proofSha256": "2e8dca2eb348fb65c9ecbe66cd8ee6acddf3b929422e010b4f32d57c92e94909"
     }
   ]
 }
