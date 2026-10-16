@@ -32,7 +32,7 @@ export const gptRechargeFrozen = Object.freeze({
   '.github/workflows/gpt-recharge-validation.yml':
     'e9ae51d23b71e133fb1a6080206c5861a96ecda8b6914052705d48368f63e1be',
   '.github/workflows/quality.yml':
-    'dde08b02ba8d9fd807fbe28939fbe61351158e2e11435de504b9640591402c6f',
+    '671e0783eda037a1937bf417f7f731b694df8cd2bbcc8c859c839ed58f0f0ff6',
   'apps/api/src/id-business-v2/online-recharge/online-recharge.module.ts':
     'edbd04030f20d675932d9c360e653e3fc3ca8a0a870b1e97dc3a0b30772df59f',
   'apps/api/src/id-business-v2/online-recharge/persistence/tasks.repository.ts':
