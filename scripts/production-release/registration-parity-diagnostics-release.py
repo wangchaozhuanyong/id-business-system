@@ -15,11 +15,15 @@ import urllib.request
 
 BASE = Path('/opt/id-business-v2')
 SCOPE = 'REGISTRATION_PARITY_DIAGNOSTICS'
-CURRENT = '034f6cad0bc58f3c6025912096df312e07bbd85e'
+CURRENT = 'd44393c5bee8c30c82737fc3e00fa89785a95667'
+SALES_COMMIT = '034f6cad0bc58f3c6025912096df312e07bbd85e'
+SALES_TREE = '1f351c9e04171ea3523e5163774c869c0de97557'
+DRAG_PROOF = '77e0abe68b486c15c0fe724dacd1885982a7ed054296514e874b67cf1f3f2d8b'
 ANCESTOR = 'e3e1360f977e003987573f2d2e042b883a2f5ac8'
 SUCCESSOR_PROOF = '2cb761e7d3073814125d3a7cbfe3b0c2cd9258cc6f2684c75fb8317bb2016448'
 PARENT_CONTROLS = {'registration-flow-evidence-build.py': '0c6b8a100faa02019003daa037acbae55fc5d80891ffb9ce13ef373d8b4a7925', 'registration-flow-evidence-contract.json': '9d5f34916800fb885cb8aabd98bb550900775f47f17d666c8ad40a26f65215ae', 'registration-flow-evidence-dispatch.py': '8801f3de8d6749121ab60c7d8a108e9cb293e383c415114decdc92f4f7078f82', 'registration-flow-evidence-release.py': 'f6243432411f637a648e19a728dc4e1744a9682553aecb252b15991c42e1a3f3'}
 SUCCESSOR_CONTROLS = {'chatgpt-sales-build.py': 'a55db7b0f04729d6f15d50ef3d7ae81a0746dceb2e95cd77408d0de74b9b7590', 'chatgpt-sales-contract.json': '7bcbfb2b3a5ec288c8a10e1a3d7b7a57abd95363fb37297bf50a017607be300a', 'chatgpt-sales-release.py': '16c27d9093fd2f0e2d8882f51f7584f3d68da3c6a714ee48d83b8cfee29979a5'}
+DRAG_CONTROLS = {'workspace-drag-build.py': 'e2dba4371c53a4ad53b5c6ee96a1ddea5f5a7c455b8985a16540f89f410e17a7', 'workspace-drag-release.py': '28bcfed29eb45d66ece16b943e63b97f5f5500dacfc345cb23642bb4f9931fb0', 'workspace-drag-contract.json': '577497d7a7ec82ab540062738e44f1ee024a1c026469880706c4f37b45585e08'}
 APPLICATION_PATHS = ('apps/admin/src/v2/features/auto-registration/apple-mailbox-presentation.spec.ts', 'apps/admin/src/v2/features/auto-registration/apple-mailbox-presentation.ts', 'apps/admin/src/v2/features/auto-registration/contracts.ts', 'apps/api/src/id-business-v2/auto-registration/apple-mailboxes.types.ts', 'apps/api/src/id-business-v2/auto-registration/apple-mailboxes.service.spec.ts', 'apps/api/src/id-business-v2/auto-registration/worker/apple_mailboxes.py', 'apps/api/src/id-business-v2/auto-registration/worker/flow_evidence.py', 'apps/api/src/id-business-v2/auto-registration/worker/release_safety.py', 'apps/api/src/id-business-v2/auto-registration/worker/id-workspace.js', 'apps/api/src/id-business-v2/auto-registration/worker/test_flow_evidence.py', 'apps/api/src/id-business-v2/auto-registration/worker/test_registration_parity_unit.py', 'apps/api/src/id-business-v2/auto-registration/worker/test_apple_mailboxes.py', 'apps/api/src/id-business-v2/auto-registration/worker/test_release_safety.py')
 PRESERVED = ('mysql', 'caddy', 'media-resolver', 'auto-recharge', 'auto-registration')
 WORKER = 'apps/api/src/id-business-v2/auto-registration/worker/'
@@ -54,6 +58,11 @@ def verify_contract(contract):
          and contract.get('successorContractSha256') == SUCCESSOR_CONTROLS['chatgpt-sales-contract.json']
          and contract.get('successorProofSha256') == SUCCESSOR_PROOF,
          'PUBLISHED_SUCCESSOR_EVIDENCE_CHANGED')
+    need(contract.get('dragControls') == DRAG_CONTROLS and all(
+         digest(Path(__file__).with_name(name).read_bytes()) == value
+         for name, value in DRAG_CONTROLS.items())
+         and contract.get('dragContractSha256') == DRAG_CONTROLS['workspace-drag-contract.json']
+         and contract.get('dragProofSha256') == DRAG_PROOF, 'PUBLISHED_ADMIN_SUCCESSOR_EVIDENCE_CHANGED')
     need(isinstance(contract.get('runtimeEvidence'), dict) and contract['runtimeEvidence'].get('status') == 'VERIFIED'
          and contract['runtimeEvidence'].get('commit') == CURRENT
          and isinstance(contract.get('current'), str) and contract['current'].startswith('/opt/id-business-v2/releases/')
@@ -120,6 +129,8 @@ def verify_proof(proof, plan, contract, payload, h):
          and proof.get('parentControls') == contract['parentControls']
          and proof.get('successorProofSha256') == contract['successorProofSha256']
          and proof.get('successorControls') == contract['successorControls']
+         and proof.get('dragProofSha256') == contract['dragProofSha256']
+         and proof.get('dragControls') == contract['dragControls']
          and proof.get('hostSourceInheritance') == contract['hostSourceInheritance']
          and proof.get('sqliteReviewPolicy') == contract['sqliteReviewPolicy']
          and proof.get('prismaPathMetadata') == contract['prismaPathMetadata']

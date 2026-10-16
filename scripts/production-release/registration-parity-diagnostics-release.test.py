@@ -140,6 +140,31 @@ print(json.dumps(calls))
                     self.assertRaisesRegex(RuntimeError, 'PUBLISHED_SUCCESSOR_EVIDENCE_CHANGED'):
                 r.verify_contract({**self.contract, 'frozen': True, **patch_value})
 
+    def test_admin_successor_is_only_three_sources_over_the_exact_sales_compilation(self):
+        self.assertEqual(b.DRAG_CONTROLS, r.DRAG_CONTROLS)
+        for name, expected in b.DRAG_CONTROLS.items():
+            self.assertEqual(digest((HERE / name).read_bytes()), expected, name)
+        recipe = json.loads((HERE / 'workspace-drag-contract.json').read_bytes())
+        sales = {'adminFiles': {'index.html': 'a' * 64}}
+        proof = {'version': 1, 'scope': recipe['scope'], 'commit': b.CURRENT, 'tree': b.SOURCE_TREE,
+                 'contractSha256': b.DRAG_CONTROLS['workspace-drag-contract.json'],
+                 'controllerSha256': b.DRAG_CONTROLS['workspace-drag-release.py'],
+                 'publishedProofSha256': b.SUCCESSOR_PROOF, 'sources': recipe['sources'],
+                 'baselineAdminFiles': sales['adminFiles'], 'adminFiles': {'index.html': 'b' * 64},
+                 'updatedServices': ['admin'], 'migrationPerformed': False, 'businessActions': 0,
+                 'browserChecks': 13}
+        proof['files'] = {**{'source/' + n: v for n, v in recipe['sources'].items()},
+                          'admin/html/index.html': 'b' * 64}
+        self.assertEqual(b.verify_drag_proof(proof, sales, self.contract), proof)
+        for changed in [{'sources': {**proof['sources'], 'unreviewed.ts': 'c' * 64}},
+                        {'baselineAdminFiles': {}}, {'publishedProofSha256': '0' * 64},
+                        {'updatedServices': ['api', 'admin']}, {'migrationPerformed': True},
+                        {'businessActions': False}, {'controllerSha256': '0' * 64}]:
+            with self.subTest(changed=changed), self.assertRaisesRegex(RuntimeError, 'PUBLISHED_ADMIN_SUCCESSOR_NATIVE_CHANGED'):
+                b.verify_drag_proof({**proof, **changed}, sales, self.contract)
+        with self.assertRaisesRegex(RuntimeError, 'PUBLISHED_ADMIN_SUCCESSOR_PAYLOAD_CHANGED'):
+            b.verify_drag_proof({**proof, 'files': {}}, sales, self.contract)
+
     def test_client_comparison_normalizes_only_two_known_metadata_fields_to_runtime_app(self):
         with tempfile.TemporaryDirectory(dir=OUTPUT) as temporary:
             context = Path(temporary)

@@ -1,9 +1,9 @@
 import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 
-export const registrationParityDiagnosticsBase = '034f6cad0bc58f3c6025912096df312e07bbd85e';
-export const registrationParityDiagnosticsTree = '1f351c9e04171ea3523e5163774c869c0de97557';
-export const registrationParityDiagnosticsCurrent = '034f6cad0bc58f3c6025912096df312e07bbd85e';
+export const registrationParityDiagnosticsBase = 'd44393c5bee8c30c82737fc3e00fa89785a95667';
+export const registrationParityDiagnosticsTree = '7bf8dc7a4702272adcec2979025233300db5df95';
+export const registrationParityDiagnosticsCurrent = 'd44393c5bee8c30c82737fc3e00fa89785a95667';
 export const registrationParityDiagnosticsWorker =
   'apps/api/src/id-business-v2/auto-registration/worker';
 export const registrationParityDiagnosticsApplications = Object.freeze([
