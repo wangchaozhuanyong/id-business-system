@@ -40,9 +40,9 @@
     {
       "path": "README.md",
       "originalSha256": null,
-      "adaptedSha256": "920e45b462d434319202f460fe8f0095ed68df476ebb0e748f0608eb68ae90ff",
+      "adaptedSha256": "ed8d0b0f8b85aa8c8fcc506ec20100bdb6f72da2f6e12fcb05a463f7b8cafa48",
       "changed": true,
-      "reason": "Document targeted ws8.21.0 security exception, separate root/upstream audits and regression evidence, and require a new patched image proof; retain existing runtime guidance."
+      "reason": "Document targeted ws8.21.0 security exception, separate root/upstream audits and regression evidence, and require a new patched image proof; retain existing runtime guidance. Authorized administrator business visibility: preserve operational data and mask credentials only."
     },
     {
       "path": "UPSTREAM.json",
@@ -145,21 +145,21 @@
     {
       "path": "safe-media.cjs",
       "originalSha256": null,
-      "adaptedSha256": "3e72084292eb92de5016cad49fcc8239ed49f4ebd795032560d9f8f46bf24105",
+      "adaptedSha256": "0299ff3e553afcec81c297aeccdc0a21e4b3870a5368f8d6fdf7c24ad480bee0",
       "changed": true,
-      "reason": "Bound masked media finalization to preserve finished evidence; recognize exact native Pro plan groups and report only redacted radio structure when exact tier remains unavailable."
+      "reason": "Bound masked media finalization to preserve finished evidence; recognize exact native Pro plan groups and report only redacted radio structure when exact tier remains unavailable. Authorized administrator business visibility: preserve operational data and mask credentials only."
     },
     {
       "path": "security.cjs",
       "originalSha256": null,
-      "adaptedSha256": "8c72522b9eeab4274c3289761f986c82efdebc63e86e77eb88b23dde5c879b3d",
+      "adaptedSha256": "601b90c65a7be22987fb79759ece74db62b0b18d7ebb6e2906bc80243c3375da",
       "changed": true,
-      "reason": "2026-10-15 Pro档位及升级适配：精确目标、官网报价、单次提交、实际付款方式与原单证据保护；不猜Pro500上游ID。保留既有必要适配。 精确保留规范代理资源 UUID，维持检测回执关联；同值已知秘密仍脱敏，代理链接、认证资料和其他敏感字段继续脱敏。"
+      "reason": "2026-10-15 Pro档位及升级适配：精确目标、官网报价、单次提交、实际付款方式与原单证据保护；不猜Pro500上游ID。保留既有必要适配。 精确保留规范代理资源 UUID，维持检测回执关联；同值已知秘密仍脱敏，代理链接、认证资料和其他敏感字段继续脱敏。 Authorized administrator business visibility: preserve operational data and mask credentials only."
     },
     {
       "path": "task-runner.cjs",
       "originalSha256": null,
-      "adaptedSha256": "c2b4c89784eb0c006a614136689404ef2b9eaf96ac2e0bb955e65a07a78ceefd",
+      "adaptedSha256": "315a9bcc23c4d0befdbd5c18aecd978ad1eb90c8a1349916f26fca44ae41ec40",
       "changed": true,
       "reason": "Pass task-frozen payment region and plan expected currency into the isolated task subprocess; clear expected currency at exit."
     },
@@ -194,9 +194,9 @@
     {
       "path": "test/media-browser.test.cjs",
       "originalSha256": null,
-      "adaptedSha256": "592d9b8a260bcbc2c61c2ac13b8808e15d55488f989175336172fc6c4cd72e15",
+      "adaptedSha256": "82fd057fce2ba499ec46f8511a16d7692b862b48b66080bc0b8c208160d7af7a",
       "changed": true,
-      "reason": "Synthetic isolated browser verifies masked real pixels and encoded video; portable media tools and caller environment restoration for CI."
+      "reason": "Synthetic isolated browser verifies masked real pixels and encoded video; portable media tools and caller environment restoration for CI. Authorized administrator business visibility: preserve operational data and mask credentials only."
     },
     {
       "path": "test/order-sync-recheck.test.cjs",
@@ -257,9 +257,9 @@
     {
       "path": "test/regressions.test.cjs",
       "originalSha256": null,
-      "adaptedSha256": "fe7c984130b09cde6a548f8a4ae14f43e9530c88d9806ce120a205c6ab6f972f",
+      "adaptedSha256": "aa060d1c6cc4c31d31c1d4c2cfe50e7a002480d162cfd723da58d9baf028cbfa",
       "changed": true,
-      "reason": "Keep transient heartbeat failures within the server-confirmed lease; stop expired ownership before execution or completion, with bounded child shutdown and secret-free diagnostics."
+      "reason": "Keep transient heartbeat failures within the server-confirmed lease; stop expired ownership before execution or completion, with bounded child shutdown and secret-free diagnostics. Authorized administrator business visibility: preserve operational data and mask credentials only."
     },
     {
       "path": "test/renewal-recheck.test.cjs",
@@ -278,9 +278,9 @@
     {
       "path": "test/rpc-response.test.cjs",
       "originalSha256": null,
-      "adaptedSha256": "9ab7124c1a10ca61cd273db24abf5d9277056c28bc00dd5db3219f3812e8a128",
+      "adaptedSha256": "f9c9cb74bc7a05c61fc2037c696e1b83c386f834d345e703adf015c0b46864f8",
       "changed": true,
-      "reason": "Use explicit synthetic proxy, reject empty pool, verify frozen server region takes precedence and expected currency is cleared."
+      "reason": "Use explicit synthetic proxy, reject empty pool, verify frozen server region takes precedence and expected currency is cleared. Authorized administrator business visibility: preserve operational data and mask credentials only."
     },
     {
       "path": "test/runtime-main.test.cjs",
@@ -292,9 +292,9 @@
     {
       "path": "test/safe-media-finish.test.cjs",
       "originalSha256": null,
-      "adaptedSha256": "9a1dc7840e268e5a72793ebc98a38e5f925fac0fc5441c14e2df6feb762f1945",
+      "adaptedSha256": "8ca819f3a37fecf43702b031f23d6308155671ba36103cd1b2d3b5a18678b329",
       "changed": true,
-      "reason": "Synthetic bounded media finish regression tests; no browser, services or raw media."
+      "reason": "Synthetic bounded media finish regression tests; no browser, services or raw media. Authorized administrator business visibility: preserve operational data and mask credentials only."
     },
     {
       "path": "test/upgrade-checkout.test.cjs",
@@ -313,9 +313,9 @@
     {
       "path": "test/upgrade-plans.test.cjs",
       "originalSha256": null,
-      "adaptedSha256": "2c88927059ed59f4aaf379c55acf5e0a38dc4cb3b7661f24c0362feec9300ee8",
+      "adaptedSha256": "a0f8f5146ad9e77d13b1a1b11c80a02240c8fe4fcfdf1e4e7e286cb7123bf9d2",
       "changed": true,
-      "reason": "Cover actual free plan parser output, identity and active-state rejection, and prevention of mapping free aliases to paid tiers."
+      "reason": "Cover actual free plan parser output, identity and active-state rejection, and prevention of mapping free aliases to paid tiers. Authorized administrator business visibility: preserve operational data and mask credentials only."
     },
     {
       "path": "test/worker-heartbeat.test.cjs",
@@ -446,9 +446,9 @@
     {
       "path": "upstream/index.js",
       "originalSha256": "1694958e105ebe962494d3c88bbf2f0c6b22e49028e46cfc77801e2c9f814855",
-      "adaptedSha256": "7649040b33dceb55a56659424b0128ab3dc57605219a31794a9fad2d837fd10e",
+      "adaptedSha256": "eaaf4bb6b12b4568939c74f168e30883fa5dc4506228dc64542d837d9931a04f",
       "changed": true,
-      "reason": "Verify the unique canonical Pro CTA independently of its top-half container; require a visible unique Pro card for deferred debug, exact checkout tier and all real payment guards. Keep debug-only region evidence explicit."
+      "reason": "Verify the unique canonical Pro CTA independently of its top-half container; require a visible unique Pro card for deferred debug, exact checkout tier and all real payment guards. Keep debug-only region evidence explicit. Authorized administrator business visibility: preserve operational data and mask credentials only."
     },
     {
       "path": "upstream/mysql-store.js",
@@ -474,7 +474,7 @@
     {
       "path": "upstream/payment-retry.js",
       "originalSha256": "41d4f3fad99d2f0b8036fa7da597bd251134361232fe96b4515a1d2b5bd80597",
-      "adaptedSha256": "682430ca8bdf534dabac7813d8190341b6fc73668ba66a96a84727dc2b3ff646",
+      "adaptedSha256": "23c031f0c2ec54dd4be8216c2766b473034ea33beddf2cf2b72348edfda2b92e",
       "changed": true,
       "reason": "2026-10-15 Pro档位及升级适配：精确目标、官网报价、单次提交、实际付款方式与原单证据保护；不猜Pro500上游ID。保留既有必要适配。"
     },
@@ -523,7 +523,7 @@
     {
       "path": "upstream/stripe-payment.js",
       "originalSha256": "007a6ae1abb633fd283e48f4ceac02bf3d2e2fc30aaca87520565b34eb29743e",
-      "adaptedSha256": "931f9fa565548cdde1fe1a8bf6904fc3445c59c641cbdbd335d375decc46b782",
+      "adaptedSha256": "81509d52db51656b65022856b873c35a15aa41cb9b15f685e19d61435b5dee32",
       "changed": true,
       "reason": "Read exact whole-peso CLP totals, wait for official Chilean tax total, preserve address country and existing final payment gates."
     },
@@ -537,7 +537,7 @@
     {
       "path": "upstream/tax-free-address.js",
       "originalSha256": "978e2fd1a1634aa28487dbfc3f26a9e1de9969058e693bfe98ebbb59b2f6c506",
-      "adaptedSha256": "5f5eb1a5b958f624e177a81df7467d9ba45fd678a10cac94e75e71731a9c9e06",
+      "adaptedSha256": "0c063e0e201a37628542db2f87c93cb1057f3f29671eb6a2887deeda88ec3162",
       "changed": true,
       "reason": "保留原免税地址选择/随机生成逻辑，将地址持久操作映射当前系统RPC，不复制旧SQL CRUD。"
     },
@@ -565,14 +565,14 @@
     {
       "path": "upstream/test/pricing-checkout.test.js",
       "originalSha256": "d5354791a21258f84f523943d381f25d89d00bf85cb8cfe78ed1c73b9f85c619",
-      "adaptedSha256": "026b23f7af812c30b3c5050a1fa818645732f26b27b5309919ad9840a778e64d",
+      "adaptedSha256": "3fb4529f1f9864671ef4dc6d0c84be2ce2d20ea6ec96715ba5e053fca4ea1e24",
       "changed": true,
       "reason": "Wait up to ten seconds for the exact official Pro Checkout tile to mount; reject ambiguous or wrong tiers and never infer an account/API plan_name."
     },
     {
       "path": "upstream/upgrade-checkout.js",
       "originalSha256": null,
-      "adaptedSha256": "896a93a826a50c37686019328927513726c692998529edcf77b24b27bda9e7d8",
+      "adaptedSha256": "4e61471849fb3fab60a1da87220d6c225912a527f148ce25d85e68e5884f7ba6",
       "changed": true,
       "reason": "Accept explicit CLP integer upgrade quotes, credits and taxes without relaxing exact-tier, account or card verification."
     },
@@ -596,6 +596,20 @@
       "adaptedSha256": "3d7c2368291ee8ab6d5eafddf7d03ea13bc1707cfba199257b0a10bafe48b9d7",
       "changed": true,
       "reason": "Private worker lifecycle; preserve proxy detection evidence on completion failure and reject writes after lease loss."
+    },
+    {
+      "path": "checkout-form.cjs",
+      "originalSha256": null,
+      "adaptedSha256": "b09e3423bcdf661236865f67d824da126a6cb593c80da88f6df01f81a4d806cb",
+      "changed": true,
+      "reason": "Semantic frame-safe checkout form readback and immutable per-task payment cap."
+    },
+    {
+      "path": "payment-limit.cjs",
+      "originalSha256": null,
+      "adaptedSha256": "e5656a4c06e39d738f008e76d637af56c997a683e149a87d9333a40b7f7a2ab0",
+      "changed": true,
+      "reason": "Semantic frame-safe checkout form readback and immutable per-task payment cap."
     }
   ],
   "dependencySecurityPatches": [

@@ -14,6 +14,10 @@ export const ONLINE_RECHARGE_PLAN_LABELS: Record<OnlineRechargePlan, string> = {
   pro_20x: 'Pro 200 套餐',
   pro_500: 'Pro 500 套餐'
 };
+export interface OnlineRechargePaymentLimit {
+  currency: string;
+  maxAmount: string;
+}
 export interface OnlineRechargePaymentContext {
   kind: 'initial' | 'upgrade';
   sourcePlan: 'free' | OnlineRechargePlan;

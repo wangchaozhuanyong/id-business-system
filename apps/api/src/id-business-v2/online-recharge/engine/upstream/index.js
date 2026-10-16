@@ -155,7 +155,7 @@ async function recoverConnectionClosed(page, fallbackUrl = '') {
 /**
  * Main Automation logic
  */
-async function run() {
+async function run(runOptions = {}) {
     // 切到有头模式调试：HEADFUL=1 node server.js 或 HEADFUL=1 node index.js
     const DEBUG_HEADFUL = process.env.HEADFUL === '1';
     const CHROMIUM_CHANNEL = (process.env.CHROMIUM_CHANNEL || '').trim();
@@ -442,8 +442,7 @@ async function run() {
                 });
                 if (probeResponse.ok()) {
                     const ip = (await probeResponse.text()).trim();
-                    const ipMasked = String(ip).replace(/^(\d+)\.(\d+)\.(\d+)\.(\d+)$/, '***.***.$3.$4');
-                    console.log(`✅ [系统] 代理连接成功! 代理公网 IP: ${ipMasked}`);
+                    console.log(`✅ [系统] 代理连接成功! 代理公网 IP: ${ip}`);
                 } else {
                     throw new Error(`代理响应异常: HTTP ${probeResponse.status()}`);
                 }
@@ -569,6 +568,7 @@ async function run() {
             email,
             stripeSessionId,
             operation, preflight, expectedCurrency, checkoutKind: checkoutResult?.kind,
+            paymentLimit: runOptions.paymentLimit,
             confirmPayment: () => require('../confirmation.cjs').confirmSubscription(planType, accessToken)
         });
 

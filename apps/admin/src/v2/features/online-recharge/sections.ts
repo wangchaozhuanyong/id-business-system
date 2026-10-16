@@ -95,7 +95,7 @@ export const sectionDescriptions: Record<OnlineSection, string> = {
   jobs: '按目标套餐自动识别首次开通或升级，查看进度、官网应付、原单核对及执行文件。',
   automation: '查看实际自动化任务及执行阶段；待核对任务不能重复发起付款。',
   billing: '查看独立线上代充账单，筛选金额、币种和卡片消费并导出。',
-  'runtime-logs': '查询执行器脱敏日志，查看阶段、消息和记录时间。',
+  'runtime-logs': '查看完整业务日志和错误详情；截图与录像请在对应任务中查看。',
   'login-logs': '使用现有用户系统的安全日志，查看线上代充权限相关事件。'
 };
 const remove: OnlineAction = {
@@ -117,6 +117,22 @@ const taskTop: OnlineAction[] = [
         label: '银行卡',
         type: 'card-select',
         help: '留空时智能分配对应套餐的可用银行卡；使用兑换码时须与兑换码套餐一致。'
+      },
+      {
+        key: 'paymentLimitCurrency',
+        label: '限额币种',
+        type: 'select',
+        options: [
+          { value: '', label: '不设置单次限额' },
+          { value: 'PHP', label: '菲律宾比索（PHP）' },
+          { value: 'CLP', label: '智利比索（CLP）' },
+          { value: 'USD', label: '美元（USD）' }
+        ]
+      },
+      {
+        key: 'paymentLimitAmount',
+        label: '付款上限',
+        help: '可选，与限额币种一起填写。超过上限或官网币种不一致时停止付款。'
       },
       { key: 'code', label: '兑换码' }
     ]

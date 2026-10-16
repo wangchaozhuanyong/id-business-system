@@ -443,6 +443,28 @@ describe('准确升级与实际付款卡、报价的持久证据', () => {
     expect(f.tx.onlineRechargeTask.update).toHaveBeenCalledTimes(1);
   });
 
+  it('单次上限从任务读取，执行器不能抬高或更换币种', async () => {
+    for (const [amount, currency] of [
+      ['9990.0001', 'PHP'],
+      ['1', 'USD']
+    ]) {
+      const f = upgradeFixture(amount);
+      f.row.payload = { paymentLimit: { currency: 'PHP', maxAmount: '9990.0000' } };
+      await expect(
+        f.worker.beforeSubmit(
+          f.submit({ currency, paymentLimit: { currency, maxAmount: '999999' } })
+        )
+      ).rejects.toThrow('付款上限');
+      expect(f.row.paymentStarted).toBe(false);
+      expect(f.tx.onlineRechargeTask.update).not.toHaveBeenCalled();
+    }
+    const f = upgradeFixture('9990.0000');
+    f.row.payload = { paymentLimit: { currency: 'PHP', maxAmount: '9990.0000' } };
+    await f.worker.beforeSubmit(f.submit({ currency: 'PHP' }));
+    expect(f.row.paymentStarted).toBe(true);
+    expect(f.row.payload).toMatchObject({ paymentLimit: { maxAmount: '9990.0000' } });
+  });
+
   it('套餐规则币种与原订阅报价不一致时不提交；一致才继续原有付款校验', async () => {
     const f = upgradeFixture('28095');
     f.row.payload = {

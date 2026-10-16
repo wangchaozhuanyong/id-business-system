@@ -75,11 +75,13 @@ async function pickTaxFreeAddress(region, lastUsedId = null) {
     await store.setAppConfigValue('last_used_address_id', String(picked.id));
     return picked;
 }
-async function pickBillingAddressForCheckout(lastUsedId = null) {
-    let picked;
-    try { picked = await pickTaxFreeAddress('US', lastUsedId); }
-    catch (error) { if (['LEASE_LOST', 'RESULT_UNKNOWN'].includes(error.code)) throw error; picked = { id: null, ...generateRandomUsTaxFreeAddress() }; }
-    return { ...picked, state: normalizeUsStateName(picked.state) };
+async function pickBillingAddressForCheckout(lastUsedId = null, addressId = null) {
+    const addresses = (await store.listAddresses()).filter((a) => a.is_active !== false && a.is_active !== 0);
+    const picked = addressId ? addresses.find((a) => a.id === addressId)
+        : addresses.find((a) => !a.is_bound && String(a.id) !== String(lastUsedId)) || addresses.find((a) => !a.is_bound);
+    if (!picked) throw new Error('缺少现有账单地址，请先为银行卡添加账单资料');
+    return { ...picked, country: picked.country || picked.region, state: normalizeUsStateName(picked.state) };
 }
+
 const markAddressBound = (addressId, cardId) => store.markAddressBound(addressId, cardId);
 module.exports = { pickTaxFreeAddress, pickBillingAddressForCheckout, generateRandomUsTaxFreeAddress, normalizeUsStateName, markAddressBound, US_STATE_LABELS };

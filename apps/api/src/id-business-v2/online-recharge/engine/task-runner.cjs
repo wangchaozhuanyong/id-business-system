@@ -22,9 +22,9 @@ async function execute(task, cfg) {
     case 'recharge':
       if (task.provider === 'third_party')
         return require('./third-party.cjs').executeThirdParty(task, cfg, { progress });
-      return require('./upstream/index').run();
+      return require('./upstream/index').run({ paymentLimit: payload.paymentLimit });
     case 'debug':
-      return require('./upstream/index').run();
+      return require('./upstream/index').run({ paymentLimit: payload.paymentLimit });
     case 'subscription':
       if (payload.recheckTaskId) return require('./confirmation.cjs').recheck(task, cfg);
       return require('./upstream/subscription-check').querySubscriptionBySession(token, {

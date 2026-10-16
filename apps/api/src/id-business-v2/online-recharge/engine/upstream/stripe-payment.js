@@ -252,50 +252,8 @@ async function collectStripeInputFrameLocators(page, timeout = 45000) {
     return [];
 }
 
-async function fillCardFieldsOpenAiCheckout(page, cardInfo, timeout = 45000) {
-    const cardNumber = normalizeCardNumber(cardInfo.number);
-    const cardExpiry = normalizeCardExpiry(cardInfo.expiry);
-    const cardCvc = String(cardInfo.cvc || '').trim();
-
-    const frames = await collectStripeInputFrameLocators(page, timeout);
-    if (frames.length >= 3) {
-        await typeIntoFrameLocator(frames[0], cardNumber);
-        console.log('[Stripe] ✅ 卡号已填写 (iframe[0])');
-        await typeIntoFrameLocator(frames[1], cardExpiry);
-        console.log('[Stripe] ✅ 有效期已填写 (iframe[1])');
-        await typeIntoFrameLocator(frames[2], cardCvc);
-        console.log('[Stripe] ✅ CVC 已填写 (iframe[2])');
-        return { ok: true };
-    }
-
-    if (frames.length === 1) {
-        const fl = frames[0];
-        const inputs = fl.locator('input:not([type="hidden"])');
-        const count = await inputs.count();
-        console.log(`[Stripe] 单 iframe 内含 ${count} 个 input，按顺序填写`);
-        if (count >= 3) {
-            const in0 = inputs.nth(0);
-            await in0.click(); await in0.fill(''); await in0.pressSequentially(cardNumber, { delay: 60 });
-            const in1 = inputs.nth(1);
-            await in1.click(); await in1.fill(''); await in1.pressSequentially(cardExpiry, { delay: 60 });
-            const in2 = inputs.nth(2);
-            await in2.click(); await in2.fill(''); await in2.pressSequentially(cardCvc, { delay: 60 });
-            console.log('[Stripe] ✅ 卡号/有效期/CVC 已填写 (单 iframe 多 input)');
-            return { ok: true };
-        }
-    }
-
-    // 回退：discoverCardInputs 扫描所有 frame
-    const fields = await discoverCardInputs(page, 8000);
-    if (fields?.card) {
-        await fillLocatedInput(fields.card, cardNumber);
-        if (fields.expiry) await fillLocatedInput(fields.expiry, cardExpiry);
-        if (fields.cvc) await fillLocatedInput(fields.cvc, cardCvc);
-        console.log('[Stripe] ✅ 卡号/有效期/CVC 已填写 (frame 扫描回退)');
-        return { ok: true };
-    }
-
-    return { ok: false, error: '无法定位信用卡输入框（iframe/input）' };
+async function fillCardFieldsOpenAiCheckout(page, cardInfo, timeout = 45000, deadline = Date.now() + timeout) {
+    return require('../checkout-form.cjs').fillCard(page, cardInfo, { deadline });
 }
 
 function isOpenAiCustomCheckout(page) {
@@ -501,6 +459,7 @@ async function completeStripeCardPayment(page, cardInfo, address, options = {}) 
     const isCardRetry = cardAttempt > 1;
     let holderName = String(options.holderName || '').trim();
     let checkoutDue = null;
+    let formDeadline = Date.now() + 120000;
 
     if (options.operation === 'upgrade' && await require('./upgrade-checkout').findUpgradeDialog(page)) {
         return require('./upgrade-checkout').completeUpgradePayment(page, cardInfo, options);
@@ -514,7 +473,8 @@ async function completeStripeCardPayment(page, cardInfo, address, options = {}) 
             await prepareCheckoutCardSection(page);
             await page.waitForTimeout(800);
             console.log('[Stripe] Step 2 (重试): 填写新信用卡...');
-            const retryFill = await fillCardFieldsOpenAiCheckout(page, cardInfo, ELEMENT_TIMEOUT);
+            formDeadline = Date.now() + 120000;
+            const retryFill = await fillCardFieldsOpenAiCheckout(page, cardInfo, ELEMENT_TIMEOUT, formDeadline);
             if (!retryFill.ok) {
                 const screenshotPath = await saveDebugScreenshot(page, 'card_fields_not_found');
                 return { success: false, error: retryFill.error || '无法定位信用卡输入框', screenshot: screenshotPath };
@@ -578,80 +538,22 @@ async function completeStripeCardPayment(page, cardInfo, address, options = {}) 
         }
 
         console.log('[Stripe] Step 2: 填写信用卡字段（iframe 自动识别）...');
-        const fillResult = await fillCardFieldsOpenAiCheckout(page, cardInfo, ELEMENT_TIMEOUT);
+        formDeadline = Date.now() + 120000;
+        const fillResult = await fillCardFieldsOpenAiCheckout(page, cardInfo, ELEMENT_TIMEOUT, formDeadline);
         if (!fillResult.ok) {
             const screenshotPath = await saveDebugScreenshot(page, 'card_fields_not_found');
             return { success: false, error: fillResult.error || '无法定位信用卡输入框', screenshot: screenshotPath };
         }
 
-        // 离开卡号 iframe，点击账单区确保主文档获得焦点
-        await focusOpenAiBillingSection(page);
-
-        // 等待账单地址区域出现（chatgpt.com/checkout 在填完卡号后才会展示）
-        console.log('[Stripe] Step 5: 等待账单地址表单出现...');
-        await waitForBillingFields(page, 25000);
-        await page.waitForTimeout(1200);
-
-        holderName = generateRandomName();
-
-        // Step 6: Fill billing address (after card fields) — 仅填必填项
-        console.log('[Stripe] Step 6: 填写账单地址与姓名...');
-        if (openAiCheckout) {
-            const billingResult = await fillOpenAiCheckoutBilling(page, address, holderName);
-            if (!billingResult.ok) {
-                const screenshotPath = await saveDebugScreenshot(page, 'billing_address_not_filled');
-                return {
-                    success: false,
-                    error: billingResult.error || '账单地址填写失败',
-                    screenshot: screenshotPath
-                };
-            }
-            if (billingResult.dueAmount) {
-                checkoutDue = {
-                    amount: billingResult.dueAmount,
-                    currency: billingResult.dueCurrency || null,
-                };
-                console.log(
-                    `[Stripe] ✅ 免税后应付: ${checkoutDue.currency || ''} ${checkoutDue.amount}`
-                );
-            }
-            await dismissAddressAutocomplete(page);
-            console.log(`[Stripe] ✅ OpenAI 账单地址已填写，姓名: ${holderName}`);
-        } else {
-            await fillBillingAddress(page, address);
-            console.log('[Stripe] ✅ 账单地址已填写');
-
-            // Step 7: Fill cardholder name if visible (Stripe hosted)
-            console.log('[Stripe] Step 7: 填写持卡人姓名（如有）...');
-            const stripeHolderName = (cardInfo.holder && cardInfo.holder.trim()) ? cardInfo.holder.trim() : holderName;
-            const nameSelectors = [
-                '#billingName',
-                'input[name="billingName"]',
-                'input[name="name"]',
-                'input[autocomplete="cc-name"]',
-                'input[autocomplete="name"]',
-                'input[placeholder*="name" i]',
-                'input[placeholder*="Name" i]',
-                'input[placeholder*="全名" i]',
-                '[data-testid="billingName"]'
-            ];
-
-            let nameFilled = false;
-            for (const sel of nameSelectors) {
-                try {
-                    const el = page.locator(sel).first();
-                    if (await el.isVisible({ timeout: 2000 })) {
-                        await el.fill('');
-                        await humanType(page, sel, stripeHolderName);
-                        nameFilled = true;
-                        break;
-                    }
-                } catch (_) { /* try next */ }
-            }
-            if (nameFilled) {
-                console.log(`[Stripe] ✅ 持卡人姓名已填写: ${stripeHolderName}`);
-            }
+        holderName = holderName || String(cardInfo.holder || '').trim();
+        console.log('[Stripe] Step 6: 填写并回读账单地址与姓名...');
+        const billingResult = await fillOpenAiCheckoutBilling(page, address, holderName, formDeadline);
+        if (!billingResult.ok) {
+            console.log('[Stripe] 账单控件诊断:', JSON.stringify(billingResult.controls || []));
+            const screenshot = await saveDebugScreenshot(page, 'billing_address_not_filled');
+            return { success: false, submitted: false, canRetryCard: false, error: billingResult.error, screenshot };
         }
+        console.log('[Stripe] 账单字段已逐项回读校验');
 
         // Step 8: Check service agreement checkbox if present
         console.log('[Stripe] Step 8: 检查服务协议...');
@@ -687,15 +589,22 @@ async function completeStripeCardPayment(page, cardInfo, address, options = {}) 
 
         checkoutDue = await captureCheckoutDueAmount(page, checkoutDue);
         if (checkoutDue?.amount) {
-            console.log(`[Stripe] 提交前确认应付: ${checkoutDue.currency || ''} ${checkoutDue.amount}`);
+            console.log(`[Stripe] 填表后读取应付: ${checkoutDue.currency || ''} ${checkoutDue.amount}`);
         }
 
         // Only the final official payable total can authorize a submission.
         // Re-read after billing/tax updates rather than trusting a stale estimate.
-        const finalDue = parseCheckoutDueAmount(await page.textContent('body'), { allowZero: options.operation === 'upgrade' });
+        const finalDue = await require('../checkout-form.cjs').stableDue(page, async () => parseCheckoutDueAmount(await page.textContent('body'), { allowZero: options.operation === 'upgrade' }), Math.min(formDeadline, Date.now() + 15000));
         if (!finalDue || !options.expectedCurrency || finalDue.currency !== options.expectedCurrency) {
             return { success: false, error: '付款前官网应付金额或币种不明确，未提交付款', canRetryCard: false };
         }
+        if (address) {
+            const expectedBilling = { country: address.country || address.region, line1: address.line1, city: address.city, postal: address.postal_code, name: holderName, ...(address.state ? { state: address.state } : {}) };
+            const missing = await require('../checkout-form.cjs').verify(page, expectedBilling, formDeadline);
+            if (missing.length) return { success: false, submitted: false, canRetryCard: false, error: '计税后账单字段变化，未提交付款' };
+        }
+        require('../payment-limit.cjs').assertPaymentLimit(options.paymentLimit, finalDue);
+        console.log(`[Stripe] 提交前最终应付已稳定: ${finalDue.currency} ${finalDue.amount}`);
         const paymentContext = require('./upgrade-checkout').buildPaymentContext(options, cardInfo, finalDue);
         const originalCheckoutUrl = page.url();
         const originalCheckoutId = String(originalCheckoutUrl).match(/(?:oaics_[a-f0-9]+|cs_(?:live|test)_[A-Za-z0-9]+)/)?.[0];
@@ -1973,129 +1882,8 @@ async function hasBillingValidationError(page) {
 /**
  * OpenAI custom checkout 账单区 — getByLabel / combobox 为主
  */
-async function fillOpenAiCheckoutBilling(page, address, fullName) {
-    const stateFullName = normalizeStateFullName(address.state);
-    let filled = { name: false, country: false, line1: false, city: false, postal: false, state: false };
-
-    console.log('  [Stripe] 开始填写账单地址（必填项）...');
-    await suppressGoogleAddressAutocomplete(page);
-    await dismissAddressAutocomplete(page);
-
-    const preBillingDue = await readCheckoutDueAmount(page);
-    const baselineAmount = preBillingDue?.amount || null;
-    if (baselineAmount) {
-        const taxFree = preBillingDue.currency === 'PHP' ? estimateTaxFreeAmount(baselineAmount) : null;
-        console.log(
-            `  [Stripe] 填地址前应付: ${preBillingDue.currency || ''} ${baselineAmount}`
-            + (taxFree ? `（免税州目标约 ${taxFree.toFixed(2)}）` : '')
-        );
-    }
-
-    if (await isOpenAiBillingFormComplete(page)) {
-        console.log('  [Stripe] ✅ 账单表单已完整，跳过重复填写');
-        const taxCheck = await ensureCheckoutTaxFreeAmount(page, address, baselineAmount);
-        if (!taxCheck.ok) {
-            return { ok: false, error: taxCheck.error, filled, skipped: true };
-        }
-        return {
-            ok: true,
-            filled,
-            skipped: true,
-            ...(await resolveBillingDueResult(page, taxCheck)),
-        };
-    }
-
-    try {
-        await locateOpenAiBillingHeading(page);
-        console.log('  [Stripe] ✅ 已定位账单地址区块');
-    } catch (e) {
-        console.warn(`  [Stripe] ⚠️ 账单标题不可见: ${e.message}`);
-    }
-
-    await focusOpenAiBillingSection(page);
-    filled = await fillOpenAiBillingDirect(page, address, fullName, baselineAmount);
-    filled = await syncFilledFlags(page, filled);
-    await dismissAddressAutocomplete(page);
-
-    if (await isOpenAiBillingFormComplete(page, filled)) {
-        console.log('  [Stripe] ✅ 账单地址校验通过（直连填写）');
-        const taxCheck = await ensureCheckoutTaxFreeAmount(page, address, baselineAmount);
-        if (!taxCheck.ok) {
-            return { ok: false, error: taxCheck.error, filled };
-        }
-        return {
-            ok: true,
-            filled,
-            ...(await resolveBillingDueResult(page, taxCheck)),
-        };
-    }
-
-    let status = getBillingFieldStatus(await readBillingInputValues(page), filled);
-    let missing = listBillingMissing(status);
-
-    if (missing.length > 0) {
-        console.log(`  [Stripe] 仍需补填: ${missing.join(', ')}`);
-
-        if (!status.name) {
-            filled.name = await fillBillingFullNameStrict(page, fullName);
-        }
-        if (!status.country) {
-            filled.country = await selectBillingCountry(page, billingCountryOptions(address));
-            if (filled.country) await page.waitForTimeout(800);
-        }
-        if (!status.line1) {
-            filled.line1 = await fillBillingLine1Strict(page, address.line1);
-        }
-        if (!filled.line1 && !status.line1) {
-            console.log('  [Stripe] 街道地址仍失败，尝试 section-meta 兜底...');
-            const sectionFilled = await fillOpenAiBillingBySectionMeta(page, address, fullName);
-            filled.line1 = filled.line1 || sectionFilled.line1;
-            filled = await syncFilledFlags(page, filled);
-        }
-        if (!status.city) {
-            filled.city = await fillBillingControl(page, [/^city$/i, /^城市$/i], address.city, '城市');
-        }
-        if (!status.postal) {
-            filled.postal = await fillBillingControl(
-                page,
-                [/postal code/i, /zip code/i, /邮政编码/i, /^zip$/i],
-                address.postal_code,
-                '邮编'
-            );
-        }
-        if (!status.state) {
-            filled.state = await selectBillingState(page, stateFullName, address.state);
-        }
-        filled = await syncFilledFlags(page, filled);
-        await dismissAddressAutocomplete(page);
-    }
-
-    status = getBillingFieldStatus(await readBillingInputValues(page), filled);
-    missing = listBillingMissing(status);
-
-    if (missing.length > 0) {
-        console.warn(`  [Stripe] ⚠️ 账单字段未全部填写: ${missing.join(', ')}`);
-        const stillError = await hasBillingValidationError(page);
-        if (stillError || missing.includes('line1')) {
-            return {
-                ok: false,
-                error: `账单地址未完整填写 (缺失: ${missing.join(', ') || '校验未通过'})`,
-                filled
-            };
-        }
-    }
-
-    console.log('  [Stripe] ✅ 账单地址校验通过');
-
-    const taxCheck = await ensureCheckoutTaxFreeAmount(page, address, baselineAmount);
-    if (!taxCheck.ok) {
-        return { ok: false, error: taxCheck.error, filled };
-    }
-    return {
-        ok: true,
-        filled,
-        ...(await resolveBillingDueResult(page, taxCheck)),
-    };
+async function fillOpenAiCheckoutBilling(page, address, fullName, deadline = Date.now() + 120000) {
+    return require('../checkout-form.cjs').fillBilling(page, address, fullName, { deadline });
 }
 
 const BILLING_FULL_NAME_SELECTORS = [

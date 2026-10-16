@@ -81,7 +81,8 @@ suite('线上代充隔离MySQL事务验收', () => {
     settings,
     tasks,
     memory,
-    {} as never
+    {} as never,
+    encryption
   );
   const workers = new OnlineRechargeWorkerRepository(
     repository,

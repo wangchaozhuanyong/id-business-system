@@ -80,6 +80,7 @@ function fixture(plan = 'plus', preferred?: string) {
         return { count: found.length };
       })
     },
+    idBusinessV2BankRechargeCard: { findUnique: vi.fn().mockResolvedValue(null) },
     onlineRechargeConfig: { findUnique: vi.fn().mockResolvedValue(null) },
     onlineRechargeTask: {
       findUnique: vi.fn(async () => task),

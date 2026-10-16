@@ -1,5 +1,23 @@
 import { BadRequestException } from '@nestjs/common';
-import { ONLINE_RECHARGE_PLANS, type OnlineRechargePlan } from './contracts';
+import {
+  ONLINE_RECHARGE_PLANS,
+  type OnlineRechargePlan,
+  type OnlineRechargePaymentLimit
+} from './contracts';
+import { Prisma } from '@prisma/client';
+
+export function paymentLimit(value: unknown): OnlineRechargePaymentLimit {
+  const input = object(value);
+  if (
+    typeof input.currency !== 'string' ||
+    !/^[A-Z]{3}$/.test(input.currency) ||
+    typeof input.maxAmount !== 'string' ||
+    !/^\d{1,14}(?:\.\d{1,4})?$/.test(input.maxAmount) ||
+    new Prisma.Decimal(input.maxAmount).lessThanOrEqualTo(0)
+  )
+    throw new BadRequestException('付款上限格式无效');
+  return { currency: input.currency, maxAmount: input.maxAmount };
+}
 
 export function object(value: unknown): Record<string, unknown> {
   if (!value || typeof value !== 'object' || Array.isArray(value))
@@ -89,8 +107,8 @@ export function sessionAccountId(value: string | null): string {
     return '';
   }
 }
-export function sanitize(value: unknown, field = ''): unknown {
-  if (Array.isArray(value)) return value.map((item) => sanitize(item));
+export function sanitize(value: unknown, field = '', publicView = false): unknown {
+  if (Array.isArray(value)) return value.map((item) => sanitize(item, '', publicView));
   if (value && typeof value === 'object')
     return Object.fromEntries(
       Object.entries(value)
@@ -102,7 +120,9 @@ export function sanitize(value: unknown, field = ''): unknown {
         )
         .map(([key, item]) => [
           key,
-          /email/i.test(key) && typeof item === 'string' ? maskEmail(item) : sanitize(item, key)
+          publicView && /email/i.test(key) && typeof item === 'string'
+            ? maskEmail(item)
+            : sanitize(item, key, publicView)
         ])
     );
   if (typeof value === 'number' && Number.isInteger(value) && Math.abs(value) >= 1000000000000)
@@ -120,11 +140,17 @@ export function sanitize(value: unknown, field = ''): unknown {
     /^-?\d+(\.\d{1,4})?$/.test(value)
   )
     return value;
-  if (typeof value === 'string') return redact(value);
+  if (typeof value === 'string') return redact(value, publicView);
   return value;
 }
-export function redact(value: string): string {
-  return value
+export function redact(value: string, publicView = false): string {
+  // Protect diagnostic identifiers before checking for unlabelled card numbers.
+  const identifiers: string[] = [];
+  const result = value
+    .replace(
+      /\b[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\b/gi,
+      (identifier) => `__ONLINE_ID_${identifiers.push(identifier) - 1}__`
+    )
     .replace(/\b(?:\d[ -]?){13,19}\b/g, '（银行卡已脱敏）')
     .replace(
       /https?:\/\/(?:checkout\.stripe\.com|pay\.openai\.com|chatgpt\.com\/checkout)[^\s"']*/gi,
@@ -137,8 +163,11 @@ export function redact(value: string): string {
     )
     .replace(/\bBearer\s+[A-Za-z0-9._~-]+/gi, 'Bearer （已脱敏）')
     .replace(/\b(?:sk|pk)_(?:live|test)_[A-Za-z0-9_-]+\b/g, '（凭据已脱敏）')
-    .replace(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi, (value) => maskEmail(value))
-    .replace(/([a-z]+:\/\/)[^/@\s]+:[^/@\s]+@/gi, '$1（已脱敏）@');
+    .replace(/([a-z]+:\/\/)[^/@\s]+:[^/@\s]+@/gi, '$1（已脱敏）@')
+    .replace(/__ONLINE_ID_(\d+)__/g, (_, index: string) => identifiers[Number(index)] ?? '');
+  return publicView
+    ? result.replace(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi, (email) => maskEmail(email))
+    : result;
 }
 export function maskEmail(value: string | null): string {
   return value ? value.replace(/^(.).+(@.*)$/, '$1***$2') : '';

@@ -149,6 +149,7 @@
             :key="column.key"
             :definition="column"
             :prop="column.key"
+            show-overflow-tooltip
             ><template #default="{ row }">{{
               onlineCell(row, column.fieldName, column.kind)
             }}</template></V2TableColumn

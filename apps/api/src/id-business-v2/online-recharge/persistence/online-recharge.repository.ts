@@ -207,6 +207,8 @@ export class OnlineRechargeRepository {
             orderBy: { createdAt: 'desc' }
           });
           const where = {
+            // Media remains available through the task's files, without one feed row per frame.
+            OR: [{ stage: null }, { stage: { not: 'artifact' } }],
             ...(reset ? { createdAt: { gt: reset.createdAt } } : {}),
             ...(query.taskId ? { taskId: String(query.taskId) } : {}),
             ...(keyword ? { message: { contains: keyword } } : {})

@@ -19,7 +19,16 @@ import {
   type OnlineRechargePlan,
   type OnlineRechargeWorkerRpc
 } from '../contracts';
-import { id, integer, object, redact, sanitize, sessionAccountId, text } from '../validation';
+import {
+  id,
+  integer,
+  object,
+  paymentLimit,
+  redact,
+  sanitize,
+  sessionAccountId,
+  text
+} from '../validation';
 import { safeProxyTestTaskResult } from '../../proxy-pool/public-api';
 import { OnlineRechargeOrderSyncService } from '../order-sync.service';
 import { taskPlanRegion } from '../plan-region';
@@ -333,6 +342,17 @@ export class OnlineRechargeWorkerRepository {
         );
       } else if (row.plan === 'pro_500' || taskPlanRegion(payload, row.plan)?.policy === 'plan')
         throw new ConflictException('缺少可核实的付款报价与实际卡资料');
+      if (payload.paymentLimit !== undefined) {
+        const limit = paymentLimit(payload.paymentLimit);
+        const context = payload.paymentContext as OnlineRechargePaymentContext | undefined;
+        if (
+          !context ||
+          args.paymentContext === undefined ||
+          context.currency !== limit.currency ||
+          new Prisma.Decimal(context.amount).greaterThan(limit.maxAmount)
+        )
+          throw new ConflictException('官网应付金额超过本次付款上限或币种不符，未提交付款');
+      }
       await tx.onlineRechargeTask.update({
         where: { id: row.id },
         data: {
@@ -778,7 +798,7 @@ export class OnlineRechargeWorkerRepository {
             message: '安全码仅临时保留，当前缺失，请管理员补充'
           }
         });
-        return { pendingCredentials: true, cardId: card.id };
+        return { pendingCredentials: true, cardId: card.id, id: undefined };
       }
       const leaseId = prior?.leaseId ?? randomUUID(),
         leaseVersion = prior?.leaseVersion ?? card.leaseVersion + 1;
@@ -796,12 +816,33 @@ export class OnlineRechargeWorkerRepository {
       });
       const number = this.encryption.decrypt(card.numberEncrypted),
         expiry = `${String(card.expiryMonth).padStart(2, '0')}/${String(card.expiryYear).slice(-2)}`;
+      const legacy = card.numberHash
+        ? await tx.idBusinessV2BankRechargeCard.findUnique({
+            where: { numberHash: card.numberHash },
+            include: { billingAddress: true }
+          })
+        : null;
+      const billing = legacy?.billingAddress;
+      const holder = legacy?.billingNameEncrypted
+        ? this.encryption.decrypt(legacy.billingNameEncrypted)
+        : card.paymentName || card.holderName;
       return {
+        ...(billing && billing.status !== 'disabled'
+          ? {
+              billing_address: {
+                line1: billing.line1,
+                city: billing.city,
+                state: billing.state,
+                postal_code: billing.postalCode,
+                country: billing.country
+              }
+            }
+          : {}),
         id: card.id,
         card_number: number,
         card_expiry: expiry,
         hasCvc,
-        card_holder: card.holderName,
+        card_holder: holder,
         exp_month: card.expiryMonth,
         exp_year: card.expiryYear,
         name: card.holderName,

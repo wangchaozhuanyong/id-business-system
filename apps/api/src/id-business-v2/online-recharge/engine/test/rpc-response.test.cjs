@@ -122,7 +122,8 @@ test('task initialization failure records its phase without exposing credentials
     assert.equal(finish.status, 'failed');
     assert.equal(finish.result.phase, phase === 'empty' ? 'proxy' : phase);
     assert.ok(result.messages.some((item) => item.type === 'log'));
-    assert.doesNotMatch(JSON.stringify(result), /synthetic-secret-token-value|private@example/);
+    assert.doesNotMatch(JSON.stringify(result), /synthetic-secret-token-value/);
+    if (phase === 'execution') assert.match(JSON.stringify(result), /private@example.invalid/);
   }
 });
 

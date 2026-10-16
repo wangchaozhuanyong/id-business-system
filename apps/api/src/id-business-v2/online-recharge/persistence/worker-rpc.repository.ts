@@ -201,7 +201,7 @@ export class OnlineRechargeWorkerRpcRepository {
         return this.workers.withLease(rpc, async (tx) =>
           (
             await tx.onlineRechargeAddress.findMany({
-              where: { active: true, region: String(args.region ?? 'US') },
+              where: { active: true, ...(args.region ? { region: String(args.region) } : {}) },
               orderBy: [{ successCount: 'asc' }, { createdAt: 'desc' }]
             })
           ).map((row) => ({

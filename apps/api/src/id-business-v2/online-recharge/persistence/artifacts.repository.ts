@@ -84,7 +84,7 @@ export class OnlineRechargeArtifactsRepository {
           id: artifactId,
           taskId: row.id,
           stage: 'artifact',
-          message: '已保存脱敏运行资料',
+          message: input.kind === 'video' ? '已保存执行录像' : '已保存执行截图',
           metadata: metadata as Prisma.InputJsonValue
         }
       });
