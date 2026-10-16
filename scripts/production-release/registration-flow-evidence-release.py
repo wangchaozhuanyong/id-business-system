@@ -62,6 +62,7 @@ def verify_proof(proof, plan, contract, payload, h):
          and proof.get('sources') == contract['sources'] and proof.get('validationSources') == contract['validationSources']
          and proof.get('sourceBaseline') == contract['sourceBaseline']
          and proof.get('sourceBaselineTree') == contract['sourceBaselineTree']
+         and proof.get('sourceTreeInputs') == contract['sourceTreeInputs']
          and proof.get('runtimeBaselineCommit') == contract['expectedCurrent']
          and proof.get('roleSourceCommits') == contract['roleSourceCommits']
          and proof.get('reviewedApplicationCommit') == contract['reviewedApplicationCommit']
@@ -69,6 +70,9 @@ def verify_proof(proof, plan, contract, payload, h):
          and proof.get('workerFiles') == contract['workerFiles']
          and proof.get('baselinePrismaClientFiles') == contract['baselinePrismaClientFiles']
          and proof.get('runtimePrismaClientFiles') == contract['runtimePrismaClientFiles']
+         and proof.get('runtimeAdminFiles') == contract['runtimeAdminFiles']
+         and proof.get('observedApiSourceProjection') == contract['observedApiSourceProjection']
+         and proof.get('observedAdminSourceProjection') == contract['observedAdminSourceProjection']
          and proof.get('publishedAdminProofSha256') == contract['publishedAdminProof']['sha256']
          and proof.get('hostSourceInheritance') == contract['hostSourceInheritance']
          and proof.get('sqliteReviewPolicy') == contract['sqliteReviewPolicy']
@@ -110,6 +114,23 @@ def worker_inventory(d, state, expected):
 def unchanged_schema(d, directory, contract):
     source = "console.log(require('crypto').createHash('sha256').update(require('fs').readFileSync('/app/apps/api/prisma-mysql/schema.prisma')).digest('hex'))"
     need(d.compose(directory, 'exec', '-T', 'api', 'node', '-e', source) == contract['schemaSha256'], 'SCHEMA_CHANGED')
+
+
+def admin_inventory(d, state, expected):
+    prefix = '/usr/share/nginx/html/'
+    need(not d.run('docker', 'exec', state['containerId'], 'find', prefix,
+                   '!', '-type', 'f', '!', '-type', 'd', '-print', timeout=60), 'ADMIN_RUNTIME_KIND_INVALID')
+    names = d.run('docker', 'exec', state['containerId'], 'find', prefix, '-type', 'f', timeout=60).splitlines()
+    need(names and len(names) == len(set(names)) and all(name.startswith(prefix)
+         and re.fullmatch(r'[A-Za-z0-9_./-]+', name) and '..' not in Path(name).parts for name in names),
+         'ADMIN_RUNTIME_PATH_INVALID')
+    rows = d.run('docker', 'exec', state['containerId'], 'sha256sum', *names, timeout=60).splitlines()
+    actual = {}
+    for row in rows:
+        value, name = row.split('  ', 1)
+        need(name.startswith(prefix) and name.removeprefix(prefix) not in actual, 'ADMIN_RUNTIME_PATH_INVALID')
+        actual[name.removeprefix(prefix)] = value
+    need(actual == expected, 'ADMIN_RUNTIME_INVENTORY_CHANGED')
 
 
 def inherited_host_source(contract):
@@ -232,8 +253,9 @@ def baseline(d, h, a, finite, contract, expected=None):
     inherited_host_source(contract)
     need({n: json.loads(raw)['roleSourceProjections'][n]['commit'] for n in contract['roleSourceCommits']}
          == contract['roleSourceCommits'], 'ROLE_BASELINE_CHANGED')
-    need(json.loads(raw)['roleSourceProjections']['admin']['candidateProofSha256']
-         == contract['publishedAdminProof']['sha256'], 'ADMIN_BASELINE_PROOF_CHANGED')
+    need(json.loads(raw)['roleSourceProjections']['api'] == contract['observedApiSourceProjection']
+         and json.loads(raw)['adminSourceProjection'] == contract['observedAdminSourceProjection'],
+         'PUBLISHED_ROLE_SOURCE_CHANGED')
     states = h.snapshot(d, current)
     need(states == contract['services'] and all(digest((current / n).read_bytes()) == value
          for n, value in contract['configurationSha256'].items()), 'RUNTIME_BASELINE_CHANGED')
@@ -246,7 +268,7 @@ def baseline(d, h, a, finite, contract, expected=None):
     api_inventory(d, states['api'], '/app/node_modules/.prisma/client/', contract['runtimePrismaClientFiles'])
     worker_inventory(d, states['api'], contract['baselineWorkerFiles'])
     unchanged_schema(d, current, contract)
-    a.verify_admin(d, states['admin'], contract['baselineAdminFiles'])
+    admin_inventory(d, states['admin'], contract['runtimeAdminFiles'])
     observed = {**a.runtime_receipt(current, raw, states), 'database': finite.database_receipt(d, current, contract),
                 'sqlite': sqlite_receipt(d, current, contract)}
     if expected is not None:
@@ -273,7 +295,7 @@ def smoke(d, target, states, contract, proof, receipt, h, a, finite):
     unchanged_schema(d, target, contract)
     need(finite.database_receipt(d, target, contract) == receipt['database'], 'MYSQL_DATA_CHANGED')
     need(sqlite_receipt(d, target, contract) == receipt['sqlite'], 'SQLITE_DATA_CHANGED')
-    a.verify_admin(d, states['admin'], {**contract['baselineAdminFiles'], **proof['adminFiles']})
+    admin_inventory(d, states['admin'], {**contract['runtimeAdminFiles'], **proof['adminFiles']})
     request = urllib.request.Request('https://54-249-61-238.sslip.io/', headers={'Cache-Control': 'no-cache'})
     with urllib.request.urlopen(request, timeout=25) as response:
         raw = response.read(2 * 1024**2)
@@ -283,7 +305,7 @@ def smoke(d, target, states, contract, proof, receipt, h, a, finite):
 
 def release(plan, contract, d, h):
     need(plan['mode'] in ('preflight', 'release', 'readback') and contract['scope'] == SCOPE
-         and contract['expectedCurrent'] == '88bce5ab09d20cd303f1fdd5fe310cb0b42e1451'
+         and contract['expectedCurrent'] == 'b4beae76ac7ce69d5475473054a22b945bda5898'
          and contract['migration'] is None and contract.get('frozen') is True
          and all(re.fullmatch('[a-f0-9]{40}', plan[n]) for n in ('commit', 'tree'))
          and all(re.fullmatch('[1-9][0-9]*', plan[n]) for n in ('workflowRunId', 'workflowRunAttempt')), 'IDENTITY_INVALID')
@@ -424,6 +446,8 @@ def release(plan, contract, d, h):
             for role in ('api', 'admin'):
                 manifest['roleSourceProjections'][role] = {'kind': SCOPE, 'commit': plan['commit'], 'sourceTree': plan['tree'],
                     'parentProjection': projections[role], 'publishedBaseImageId': before[role]['image'],
+                    'parentObservedSourceProjection': contract['observedApiSourceProjection'] if role == 'api'
+                        else contract['observedAdminSourceProjection'],
                     'runtimeImageId': images[role]['imageId'], 'buildProofSha256': plan['buildProofSha256'],
                     'runtimeFiles': proof['apiModules'] if role == 'api' else proof['adminFiles'],
                     'workerFiles': proof['workerFiles'] if role == 'api' else {},

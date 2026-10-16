@@ -3,15 +3,16 @@ import { readFileSync } from 'node:fs';
 
 export const registrationFlowEvidenceBase = '88bce5ab09d20cd303f1fdd5fe310cb0b42e1451';
 export const registrationFlowEvidenceTree = '57a0d354276724e70945513c9db806919e245b09';
-export const registrationFlowEvidenceRepairBase = 'b4beae76ac7ce69d5475473054a22b945bda5898';
-export const registrationFlowEvidenceRepairTree = 'd4195e8178416df1fd31985bb4bf9dc00e4aaeba';
+export const registrationFlowEvidenceRepairBase = '6ea8030f54ab7dd3698884ac350d2562cdff8a1e';
+export const registrationFlowEvidenceRepairTree = 'f65ca1a419e3d82858c086e68ba85f26b83fd210';
 export const registrationFlowEvidenceRepairPaths = Object.freeze([
   'scripts/production-release/registration-flow-evidence-build.py',
   'scripts/production-release/registration-flow-evidence-release.py',
   'scripts/production-release/registration-flow-evidence-contract.json',
   'scripts/production-release/registration-flow-evidence-release.test.py',
   'scripts/ci-registration-flow-evidence-scope.mjs',
-  'scripts/ci-registration-flow-evidence-scope.test.mjs'
+  'scripts/ci-registration-flow-evidence-scope.test.mjs',
+  'scripts/ci-recharge-scope.test.mjs'
 ]);
 export const registrationFlowEvidenceWorker =
   'apps/api/src/id-business-v2/auto-registration/worker';
@@ -107,15 +108,15 @@ export const registrationFlowEvidencePins = Object.freeze({
   'scripts/production-release/registration-closure-dispatch.py':
     '4ee050b81065c59f440351ad78ad19a7f0875650f485e29418cb3a76b51ad1d6',
   'scripts/production-release/registration-flow-evidence-build.py':
-    'f0c4c2a4f74f227cb7855fd0d448bdb69fede447d62afff66ae1def920df1ee1',
+    '0c6b8a100faa02019003daa037acbae55fc5d80891ffb9ce13ef373d8b4a7925',
   'scripts/production-release/registration-flow-evidence-release.py':
-    '2fbd5ae3d5cdb7ecdc051df8393883190144bc79d1f61807b7c69110147a2918',
+    'f6243432411f637a648e19a728dc4e1744a9682553aecb252b15991c42e1a3f3',
   'scripts/production-release/registration-flow-evidence-dispatch.py':
     '8801f3de8d6749121ab60c7d8a108e9cb293e383c415114decdc92f4f7078f82',
   'scripts/production-release/registration-flow-evidence-contract.json':
-    '0748f9ca074c34289b49fe3396e47cc4d4f9ebbae6c2daafefca727c82be532f',
+    '9d5f34916800fb885cb8aabd98bb550900775f47f17d666c8ad40a26f65215ae',
   'scripts/production-release/registration-flow-evidence-release.test.py':
-    'b70d9cb2850a6c57d2dbd209247e5e217e7bee906cf61439c61d7767327d59d2',
+    '1b4cbee218cf1d41dd37e96cddc902bf8a75ae0e3879eb70375f13294e1861da',
   'scripts/acceptance-v2-registration-flow-evidence.mjs':
     '7bf536b5c9e65557682695adc331ff96af85a8da13fef3108b3fa9c79eb15417'
 });
@@ -149,8 +150,8 @@ export function isRegistrationFlowEvidenceOnly(
   }
 }
 
-// The native validation passed, but preflight found an already published Admin
-// successor. Bind only this publication baseline repair; every application and
+// Native validation passed, but preflight found a published runtime successor.
+// Bind only this publication baseline repair; every application and
 // publication input must still match the reviewed freeze.
 export function isRegistrationFlowEvidenceControlRepair(
   paths,
