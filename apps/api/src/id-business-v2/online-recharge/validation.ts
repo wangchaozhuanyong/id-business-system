@@ -1,10 +1,11 @@
 import { BadRequestException } from '@nestjs/common';
-import {
-  ONLINE_RECHARGE_PLANS,
-  type OnlineRechargePlan,
-  type OnlineRechargePaymentLimit
-} from './contracts';
+import { ONLINE_RECHARGE_PLANS, type OnlineRechargePlan } from './contracts';
 import { Prisma } from '@prisma/client';
+
+export interface OnlineRechargePaymentLimit {
+  currency: string;
+  maxAmount: string;
+}
 
 export function paymentLimit(value: unknown): OnlineRechargePaymentLimit {
   const input = object(value);
