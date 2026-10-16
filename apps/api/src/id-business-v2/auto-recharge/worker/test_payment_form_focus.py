@@ -7,7 +7,7 @@ from checkout_core import Stop
 from payment_form import PaymentDetails, fill_official_form
 from bitbrowser_connector import LocalJob
 from test_bitbrowser_connector import payload
-from test_payment import quote as fixture_quote
+from browser_checkout import quote_from_text
 
 
 def details():
@@ -83,7 +83,8 @@ class CancelledVerifiedQuoteTests(unittest.TestCase):
     def run_cancel(self, *, previous=None, terminal=None, cancelled=True, sent=False):
         job = LocalJob(payload())
         job.callback.send = Mock(return_value={'ok': True})
-        quote = fixture_quote()
+        quote = quote_from_text('ChatGPT Plus\n今日应付金额\nMYR 92.50\n预估税费\nMYR 0.00\n'
+                                '将按 每月 自动续订。将按 MYR 92.50/月 收费。', 'MYR')
 
         async def execute():
             job.cancelled, job.payment_request_sent = cancelled, sent
