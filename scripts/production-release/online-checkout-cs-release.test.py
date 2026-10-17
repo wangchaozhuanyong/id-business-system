@@ -85,6 +85,44 @@ class PublicationTests(unittest.TestCase):
                                      fresh / '.runtime/online-checkout-cs-fix-20261017')
                     self.assertTrue(Path(directory).is_dir())
 
+    def reuse_fixture(self):
+        run = {'id': int(b.REUSED_RUN['runId']), 'head_sha': b.REUSED_RUN['commit'],
+               'head_branch': 'main', 'event': 'workflow_dispatch',
+               'path': '.github/workflows/online-checkout-cs-validation.yml',
+               'status': 'completed', 'conclusion': 'success'}
+        jobs = [{'name': 'validate', 'conclusion': 'success',
+                 'steps': [{'name': name, 'conclusion': 'success'} for name in b.REUSED_STEPS]}]
+        return run, jobs, sorted(b.REUSE_CONTROLS)
+
+    def test_reuse_authenticates_the_exact_successful_native_run_and_only_control_changes(self):
+        run, jobs, changes = self.reuse_fixture()
+        self.assertTrue(b.validate_reuse(run, jobs, changes))
+        for changed in [{'id': 123}, {'head_sha': 'f' * 40}, {'head_branch': 'other'},
+                        {'event': 'push'}, {'path': '.github/workflows/quality.yml'},
+                        {'status': 'in_progress'}, {'conclusion': 'failure'}]:
+            with self.subTest(changed=changed), self.assertRaises(RuntimeError):
+                b.validate_reuse({**run, **changed}, jobs, changes)
+        for changed in [[], changes + ['apps/api/src/id-business-v2/online-recharge/contracts.ts'],
+                        changes + ['package-lock.json'], changes + ['scripts/production-release/api-admin-scope.py']]:
+            with self.subTest(changed=changed), self.assertRaises(RuntimeError):
+                b.validate_reuse(run, jobs, changed)
+
+    def test_reuse_rejects_missing_duplicate_skipped_failed_or_unrelated_native_checks(self):
+        run, jobs, changes = self.reuse_fixture()
+        variants = [[], jobs + jobs, [{**jobs[0], 'name': 'other'}],
+                    [{**jobs[0], 'conclusion': 'failure'}]]
+        for index in range(len(b.REUSED_STEPS)):
+            for status in ('skipped', 'failure', 'cancelled'):
+                bad = copy.deepcopy(jobs)
+                bad[0]['steps'][index]['conclusion'] = status
+                variants.append(bad)
+        variants.extend([[{**jobs[0], 'steps': jobs[0]['steps'][:1]}],
+                         [{**jobs[0], 'steps': jobs[0]['steps'] + [jobs[0]['steps'][0]]}],
+                         [{**jobs[0], 'steps': jobs[0]['steps'] + [{'name': 'other', 'conclusion': 'failure'}]}]])
+        for changed in variants:
+            with self.subTest(jobs=changed), self.assertRaises(RuntimeError):
+                b.validate_reuse(run, changed, changes)
+
     def test_finite_contract_accepts_new_runtime_and_review_base_without_guessing_them(self):
         c = self.contract()
         r.validate_contract(c)
@@ -100,6 +138,61 @@ class PublicationTests(unittest.TestCase):
         self.assertEqual(len(r.BUSINESS_ENGINE_DELTA), 10)
         self.assertEqual(len(r.ENGINE_DELTA), 11)
         self.assertEqual(r.UPDATED, ('api', 'online-recharge'))
+
+    def test_actual_frozen_contract_runs_reviewed_sql_helper_admission_without_a_process_or_database(self):
+        c = json.loads((HERE / r.CONTRACT_FILE).read_bytes())
+        self.assertEqual(c['sqlFenceHelperSha256'], r.SQL_FENCE_HELPER_SHA256)
+        self.assertEqual(r.sha((HERE / 'api-admin-scope.py').read_bytes()), r.SQL_FENCE_HELPER_SHA256)
+        original_load = r.load
+        admitted = []
+        def traced_load(name):
+            module = original_load(name)
+            if name == 'proxy-result-identity-release.py':
+                actual_admission = module.sql_fence_class
+                def admission(contract):
+                    fence = actual_admission(contract)
+                    admitted.append(fence)
+                    return fence
+                module.sql_fence_class = admission
+            return module
+        with patch.object(r, 'load', side_effect=traced_load), \
+                patch('subprocess.Popen', side_effect=AssertionError('admission cannot start a process')), \
+                patch('subprocess.run', side_effect=AssertionError('admission cannot run a command')):
+            r.validate_contract(c)
+        self.assertEqual(len(admitted), 1)
+        fence = admitted[0]
+        self.assertEqual(fence.__name__, 'OnlineSqlFence')
+        self.assertIn('id_business_v2_recharge_jobs', fence.QUERY)
+        self.assertTrue(any(isinstance(value, str) and 'id_business_v2_recharge_jobs WRITE' in value
+                            for value in fence.acquire.__code__.co_consts))
+
+    def test_missing_or_changed_sql_helper_binding_stops_before_any_admission(self):
+        c = self.contract()
+        for value in [None, '', '0' * 64]:
+            damaged = {**c, 'sqlFenceHelperSha256': value}
+            if value is None:
+                damaged.pop('sqlFenceHelperSha256')
+            with self.subTest(value=value), patch.object(r, 'load') as loader, \
+                    self.assertRaisesRegex(RuntimeError, 'SQL_FENCE_BINDING_CHANGED'):
+                r.validate_contract(damaged)
+            loader.assert_not_called()
+
+    def test_actual_sql_helper_file_is_checked_before_admission(self):
+        c = self.contract()
+        with self.temporary() as directory:
+            controls = Path(directory)
+            helper = controls / 'api-admin-scope.py'
+            for kind in ['missing', 'changed', 'symlink']:
+                if kind == 'changed':
+                    helper.write_bytes(b'changed helper')
+                elif kind == 'symlink':
+                    helper.unlink()
+                    helper.symlink_to(HERE / 'api-admin-scope.py')
+                with self.subTest(kind=kind), patch.object(r, 'HERE', controls), \
+                        patch.object(r, 'load') as loader, \
+                        self.assertRaisesRegex(RuntimeError, 'SQL_FENCE_SOURCE_CHANGED'):
+                    r.validate_contract(c)
+                loader.assert_not_called()
 
     def test_contract_rejects_extra_source_module_engine_changes_and_old_check_reuse(self):
         c = self.contract()
@@ -287,14 +380,18 @@ class PublicationTests(unittest.TestCase):
                     with self.assertRaises(RuntimeError):
                         r.verify_runtime(d, object(), states, c)
 
-    def test_preflight_rejects_invalid_identity_before_any_runtime_dependency_load(self):
+    def test_preflight_rejects_invalid_identity_before_any_runtime_driver_load(self):
         c, plan, _, _ = self.fixture()
+        admission = load('proxy-result-identity-release.py')
+        def only_admission(name):
+            self.assertEqual(name, 'proxy-result-identity-release.py')
+            return admission
         for changed in [{'mode': 'finalize'}, {'commit': 'invalid'}, {'tree': 'invalid'},
                         {'workflowRunId': '0'}, {'workflowRunAttempt': '0'}]:
-            with self.subTest(changed=changed), patch.object(r, 'load') as loader, \
+            with self.subTest(changed=changed), patch.object(r, 'load', side_effect=only_admission) as loader, \
                     self.assertRaises(RuntimeError):
                 r.release({**plan, 'mode': 'preflight', **changed}, c)
-            loader.assert_not_called()
+            self.assertEqual([call.args for call in loader.call_args_list], [('proxy-result-identity-release.py',)])
 
     def test_delta_images_retain_the_parent_layers_command_environment_and_labels(self):
         verifier = load('online-checkout-release.py').verify_image
@@ -392,7 +489,7 @@ class PublicationTests(unittest.TestCase):
         fence = types.SimpleNamespace(acquire=lambda: events.append('acquire'), check_idle=idle,
                                       close=lambda: events.append('close'))
         p = types.SimpleNamespace(claim_markers=lambda *args: events.append('markers') or {'owner': 'candidate'},
-                                 sql_fence_class=lambda c: lambda *args: fence,
+                                 sql_fence_class=lambda c: lambda *args: events.append('fence-init') or fence,
                                  release_markers=lambda *args: events.append('release-markers'))
         d = types.SimpleNamespace(compose=lambda directory, *args, **kwargs: events.append(('compose', args)),
                                  wait_healthy=lambda directory, role: events.append(('healthy', role)))
@@ -407,7 +504,7 @@ class PublicationTests(unittest.TestCase):
                                        before, images, proof, c, journal)
         self.assertEqual(result, after)
         self.assertEqual(events, [
-            'markers', 'SWITCH_STARTED', 'acquire', ('compose', ('stop', 'online-recharge')), 'idle',
+            'fence-init', 'markers', 'SWITCH_STARTED', 'acquire', ('compose', ('stop', 'online-recharge')), 'idle',
             ('compose', ('stop', 'api')), 'idle', 'close',
             ('compose', ('up', '-d', '--no-deps', 'api')), ('healthy', 'api'),
             ('compose', ('up', '-d', '--no-deps', '--force-recreate', 'online-recharge')),
@@ -418,9 +515,33 @@ class PublicationTests(unittest.TestCase):
         with patch.object(r, 'smoke') as smoke, self.assertRaisesRegex(RuntimeError, 'busy'):
             r.switch_services(d, h, p, Path('/previous'), Path('/target'), plan,
                               before, images, proof, c, journal)
-        self.assertEqual(events, ['markers', 'SWITCH_STARTED', 'acquire',
+        self.assertEqual(events, ['fence-init', 'markers', 'SWITCH_STARTED', 'acquire',
                                  ('compose', ('stop', 'online-recharge')), 'idle', 'SWITCH_FAILED', 'close'])
         smoke.assert_not_called()
+
+    def test_fence_admission_failure_does_not_claim_markers_or_begin_a_switch(self):
+        c, plan, proof, before, images, _, events, d, h, p, journal = self.switch_fixture()
+        p.sql_fence_class = Mock(side_effect=RuntimeError('helper admission failed'))
+        p.claim_markers = Mock()
+        with self.assertRaisesRegex(RuntimeError, 'helper admission failed'):
+            r.switch_services(d, h, p, Path('/previous'), Path('/target'), plan,
+                              before, images, proof, c, journal)
+        p.claim_markers.assert_not_called()
+        self.assertEqual(events, [])
+
+    def test_actual_fence_constructor_failure_does_not_claim_markers_or_start_a_database_process(self):
+        c, plan, proof, before, images, _, events, d, h, _, journal = self.switch_fixture()
+        p = load('proxy-result-identity-release.py')
+        p.claim_markers = Mock()
+        d.service_state = Mock(side_effect=RuntimeError('mysql snapshot unavailable'))
+        with patch.object(p.subprocess, 'Popen', side_effect=AssertionError('constructor cannot open database')), \
+                self.assertRaisesRegex(RuntimeError, 'mysql snapshot unavailable'):
+            r.switch_services(d, h, p, Path('/previous'), Path('/target'), plan,
+                              before, images, proof, c, journal)
+        d.service_state.assert_called_once_with(Path('/previous'), 'mysql',
+                                                include_container_id=True, include_environment_hash=True)
+        p.claim_markers.assert_not_called()
+        self.assertEqual(events, [])
 
     def test_failed_post_switch_verification_never_releases_markers_or_reports_success(self):
         c, plan, proof, before, images, _, events, d, h, p, journal = self.switch_fixture()

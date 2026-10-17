@@ -35,9 +35,15 @@ jobs:
           node-version: 24
       - name: Verify finite publication and preservation controls
         run: python3 -B scripts/production-release/online-checkout-cs-release.test.py
+      - name: Authenticate unchanged API and engine validation
+        id: prior
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 -B scripts/production-release/online-checkout-cs-build.py --verify-reuse >> "$GITHUB_OUTPUT"
       - run: npm ci --include=dev --ignore-scripts --no-audit --no-fund
       - run: npm run prisma:mysql:generate && npm run build --workspace @apple-business/shared
       - name: Verify source-bound original checkout and submission protection
+        if: steps.prior.outputs.reused != 'true'
         run: |
           npm run typecheck --workspace @apple-business/api
           npm run test --workspace @apple-business/api -- src/id-business-v2/online-recharge
@@ -47,6 +53,7 @@ jobs:
           npm run check:v2-concurrency-standard
           npm run check:v2-decimal-standard
       - name: Verify intercepted Chromium checkout and engine regressions
+        if: steps.prior.outputs.reused != 'true'
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends ffmpeg xvfb xauth
@@ -54,6 +61,8 @@ jobs:
           npx --prefix apps/api/src/id-business-v2/online-recharge/engine/upstream playwright install --with-deps chromium
           npm run test:online-recharge:engine
       - name: Reproduce published API and build only the reviewed API and engine delta
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: python3 -B scripts/production-release/online-checkout-cs-build.py
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
