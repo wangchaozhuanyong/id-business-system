@@ -68,6 +68,15 @@ class CheckoutPublicationTests(unittest.TestCase):
                      'businessActions': 0, 'files': inv, 'apiModules': {n: inv['api/modules/' + n] for n in api},
                      'adminFiles': {n.removeprefix('admin/html/'): v for n, v in inv.items() if n.startswith('admin/html/')}}
             r.validate_proof(proof, plan, contract, root, h)
+            inherited = 'apps/api/src/id-business-v2/online-recharge/checkout-recovery.ts'
+            inherited_path = root / 'source' / inherited
+            inherited_path.parent.mkdir(parents=True, exist_ok=True)
+            inherited_path.write_bytes(b'inherited-not-for-publication')
+            injected = {**proof, 'files': h.file_inventory(root)}
+            with self.subTest(inherited_payload=True), self.assertRaisesRegex(RuntimeError, 'PAYLOAD_SCOPE_CHANGED'):
+                r.validate_proof(injected, plan, {**contract, 'inheritedReview': {'sources': {
+                    inherited: r.digest(inherited_path.read_bytes())}}}, root, h)
+            inherited_path.unlink()
             for field in ('commit', 'tree', 'workflowRunId', 'workflowRunAttempt', 'contractSha256', 'baselineApiReproduced',
                           'baselineAdminReproduced', 'baselinePublishedVerified', 'databaseVerification', 'qualityVerification',
                           'migrationPerformed', 'businessActions', 'isolatedMysqlVerification'):
@@ -109,6 +118,66 @@ class CheckoutPublicationTests(unittest.TestCase):
             self.assertNotIn('/prisma', name)
         functions = [node.name for node in ast.parse((HERE / 'recharge-checkout-release.py').read_text()).body if isinstance(node, ast.FunctionDef)]
         self.assertNotIn('apply_migration', functions)
+
+    def test_review_scope_accepts_only_exact_pinned_inherited_projection(self):
+        c = json.loads(b.CONTRACT.read_bytes())
+        self.assertEqual(c['inheritedReview']['commit'], '81b8f63d5d18c85330c0dddfca7fe3bca87f7d3b')
+        self.assertEqual(c['inheritedReview']['tree'], 'bec9db6b59ce181b884674105ef5bbab57ac3595')
+        self.assertEqual(len(c['inheritedReview']['sources']), 14)
+        before = copy.deepcopy(c['sources'])
+        b.verify_review_source_scope(c)
+        self.assertEqual(c['sources'], before)
+
+    def test_review_scope_rejects_missing_extra_or_falsified_inherited_hashes(self):
+        original = json.loads(b.CONTRACT.read_bytes())
+        name = next(iter(original['inheritedReview']['sources']))
+        for mutation in ('missing', 'extra', 'hash'):
+            c = copy.deepcopy(original)
+            inherited = c['inheritedReview']['sources']
+            if mutation == 'missing':
+                inherited.pop(name)
+            elif mutation == 'extra':
+                inherited['apps/api/src/id-business-v2/online-recharge/unreviewed.ts'] = 'a' * 64
+            else:
+                inherited[name] = 'a' * 64
+            with self.subTest(mutation=mutation), self.assertRaisesRegex(RuntimeError, 'INHERITED_SOURCE_'):
+                b.verify_review_source_scope(c)
+
+    def test_review_scope_rejects_inherited_owned_overlap_and_database_paths(self):
+        original = json.loads(b.CONTRACT.read_bytes())
+        for name in (next(iter(original['sources'])), 'apps/api/prisma-mysql/schema.prisma'):
+            c = copy.deepcopy(original)
+            c['inheritedReview']['sources'][name] = 'a' * 64
+            with self.subTest(path=name), self.assertRaisesRegex(RuntimeError, 'INHERITED_SOURCE_SCOPE_CHANGED'):
+                b.verify_review_source_scope(c)
+
+    def test_review_scope_rejects_source_tampering_or_unpinned_head_changes(self):
+        c = json.loads(b.CONTRACT.read_bytes())
+        target = ROOT / next(iter(c['inheritedReview']['sources']))
+        read_bytes = Path.read_bytes
+        with patch.object(Path, 'read_bytes', lambda path: b'changed-after-review' if path == target else read_bytes(path)):
+            with self.assertRaisesRegex(RuntimeError, 'INHERITED_SOURCE_CHANGED'):
+                b.verify_review_source_scope(c)
+        git = b.git
+        def changed_head(*args):
+            value = git(*args)
+            if args == ('diff', '--name-only', c['reviewBase'], 'HEAD', '--', 'apps/', 'packages/'):
+                return value + b'apps/api/src/id-business-v2/online-recharge/unreviewed.ts\n'
+            return value
+        with patch.object(b, 'git', side_effect=changed_head), self.assertRaisesRegex(RuntimeError, 'SOURCE_SCOPE_CHANGED'):
+            b.verify_review_source_scope(c)
+
+    def test_review_scope_rejects_wrong_tree_or_nonancestor_review(self):
+        c = json.loads(b.CONTRACT.read_bytes())
+        bad = copy.deepcopy(c)
+        bad['inheritedReview']['tree'] = 'a' * 40
+        with self.assertRaisesRegex(RuntimeError, 'INHERITED_SOURCE_PROVENANCE_CHANGED'):
+            b.verify_review_source_scope(bad)
+        git = b.git
+        def not_ancestor(*args):
+            return b'0' * 40 if args == ('merge-base', c['inheritedReview']['commit'], 'HEAD') else git(*args)
+        with patch.object(b, 'git', side_effect=not_ancestor), self.assertRaisesRegex(RuntimeError, 'INHERITED_SOURCE_PROVENANCE_CHANGED'):
+            b.verify_review_source_scope(c)
 
     def test_isolated_mysql_proof_rejects_skips_identity_changes_and_wrong_database(self):
         c = json.loads(b.CONTRACT.read_bytes())
