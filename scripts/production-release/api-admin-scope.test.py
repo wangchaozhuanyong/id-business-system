@@ -58,6 +58,7 @@ workspace = load('api_workspace_scope', 'api-admin-scope.py', 'API_ADMIN_WORKSPA
 PRIVATE_INSPECT_ORIGINAL = workspace.workspace_private_inspect
 SUMMARY_READER_ORIGINAL = workspace.WorkspaceSqliteProtection.summary_reader
 REGISTRATION_FIXTURE_COMMIT = '4042b5f2c673344409e329607bd43a893ba521bb'
+PRE_RETIREMENT_FIXTURE_COMMIT = 'c28551daa8a510a6922ae842d746ce8093898115'
 # The old standalone reader tests belong to the immutable published B helper.
 LEGACY_WORKSPACE_SAFETY = subprocess.check_output(['git', 'show',
     '31d2c6885a45817cd40d23fce8d6145bc9f18af2:' + workspace.WORKSPACE_SAFETY], cwd=ROOT)
@@ -414,7 +415,15 @@ class BaselineAndReadbackTests(unittest.TestCase):
                 scope.baseline(controller, COMMIT, check_jobs=False)
 
     def test_worker95_retains815_build_proof_through_closed_registration_getter(self):
-        d.load_registration_interstitial95()
+        # The retired helper stays absent from the checkout. Exercise its original
+        # closed/hash-checked loader with only this immutable historical Git blob.
+        helper = Path(d.__file__).with_name('registration-interstitial-95.py')
+        raw_helper = subprocess.check_output(['git', 'show', PRE_RETIREMENT_FIXTURE_COMMIT
+            + ':scripts/production-release/registration-interstitial-95.py'], cwd=ROOT)
+        original_reader = d.fixed_recharge_bytes
+        with patch.object(d, 'fixed_recharge_bytes', side_effect=lambda path, **kwargs:
+                raw_helper if path == helper else original_reader(path, **kwargs)):
+            d.load_registration_interstitial95()
         with tempfile.TemporaryDirectory(dir=RUNTIME) as temporary, ExitStack() as stack:
             base = Path(temporary); current = base / 'releases/current'; current.mkdir(parents=True)
             (base / 'current').symlink_to(current)
@@ -4325,12 +4334,17 @@ class OnlineWorkspaceCompatibilityTests(unittest.TestCase):
     def fixture(self):
         with tempfile.TemporaryDirectory(dir=RUNTIME) as temporary:
             base=Path(temporary).resolve();previous=base/'releases/origin';current=base/'releases/current'
+            # This compatibility case describes the fixed pre-retirement online
+            # workspace; current Compose deliberately has no registration mount.
+            config = {name: subprocess.check_output(['git', 'show',
+                      PRE_RETIREMENT_FIXTURE_COMMIT + ':' + name], cwd=ROOT)
+                      for name in workspace.CONFIG_FILES[:2]}
             for directory in (previous,current):
-                directory.mkdir(parents=True);(directory/workspace.CONFIG_FILES[0]).write_bytes((ROOT/workspace.CONFIG_FILES[0]).read_bytes())
+                directory.mkdir(parents=True);(directory/workspace.CONFIG_FILES[0]).write_bytes(config[workspace.CONFIG_FILES[0]])
                 (directory/'.env.aws.production').write_text('APP_DOMAIN=fixture.example\n')
                 (directory/'compose.release.json').write_text('{"services":{}}')
                 (directory/workspace.CONFIG_FILES[1]).parent.mkdir(parents=True)
-                (directory/workspace.CONFIG_FILES[1]).write_bytes((ROOT/workspace.CONFIG_FILES[1]).read_bytes())
+                (directory/workspace.CONFIG_FILES[1]).write_bytes(config[workspace.CONFIG_FILES[1]])
             original=states();original['online-recharge']=copy.deepcopy(original['api'])
             metadata={};calls=[]
             for index,(name,row) in enumerate(original.items(),1):
