@@ -245,6 +245,7 @@ export class OnlineRechargeWorkerRepository {
       }
       const leaseId = randomUUID(),
         leaseVersion = row.leaseVersion + 1;
+      const firstRechargeStart = row.operation === 'recharge' && row.leaseVersion === 0;
       const updated = await tx.onlineRechargeTask.update({
         where: { id: row.id },
         data: {
@@ -256,6 +257,21 @@ export class OnlineRechargeWorkerRepository {
           stage: 'started'
         }
       });
+      if (firstRechargeStart) {
+        const dedupeKey = `recharge-start:${row.id}`;
+        await tx.onlineRechargeEvent.upsert({
+          where: { dedupeKey },
+          update: {},
+          create: {
+            taskId: row.id,
+            stage: 'recharge_started',
+            dedupeKey,
+            message: '充值任务开始执行',
+            metadata: { plan: row.plan },
+            createdAt: new Date()
+          }
+        });
+      }
       const code = row.codeId
         ? await tx.onlineRechargeCode.findUnique({ where: { id: row.codeId } })
         : null;

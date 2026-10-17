@@ -1606,6 +1606,72 @@ test('private CVC service returns availability only, binds task ownership, clear
   }
 });
 
+test('private CVC lasts 24 hours from the last save without extending task ownership', async () => {
+  let now = Date.UTC(2026, 0, 1);
+  const initial = now;
+  const hour = 60 * 60 * 1000;
+  const module = { exports: {} };
+  vm.runInNewContext(await fs.readFile(path.join(__dirname, '../credentials.cjs'), 'utf8'), {
+    module,
+    require,
+    Date: class extends Date {
+      static now() {
+        return now;
+      }
+    },
+    URL,
+    Buffer,
+    process: { env: {} },
+    setInterval,
+    clearInterval
+  });
+  const credentials = module.exports;
+  const key = 'synthetic-cvc-ttl-internal-key-32-characters';
+  const service = await credentials.start({ url: 'http://127.0.0.1:0', key });
+  const post = async (route, body) => {
+    const response = await fetch(`http://127.0.0.1:${service.server.address().port}${route}`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-online-recharge-worker': key },
+      body: JSON.stringify(body)
+    });
+    assert.equal(response.status, 200);
+    return response.json();
+  };
+  try {
+    const saved = await post('/credentials', {
+      cards: [
+        { id: 'primary', cvc: '123' },
+        { id: 'refreshed', cvc: '456' }
+      ]
+    });
+    assert.deepEqual(saved, { ok: true, expiresInSeconds: 86400 });
+    now = initial + hour / 2;
+    assert.equal(credentials.take('primary', 'task-a'), '123');
+    assert.equal(credentials.take('primary', 'task-b'), '');
+    now = initial + 23 * hour;
+    await post('/credentials', { cards: [{ id: 'refreshed', cvc: '789' }] });
+    now = initial + 24 * hour - 1;
+    assert.equal(credentials.take('primary', 'task-a'), '123');
+    now += 1;
+    assert.equal(credentials.take('primary', 'task-a'), '');
+    assert.deepEqual(await post('/credentials/status', { ids: ['primary', 'refreshed'] }), {
+      availableIds: ['refreshed']
+    });
+    await post('/credentials', { cards: [{ id: 'primary', cvc: '123' }] });
+    assert.equal(credentials.take('primary', 'task-b'), '123');
+    credentials.forgetTask('task-b');
+    assert.equal(credentials.take('primary', 'task-b'), '');
+    now = initial + 47 * hour - 1;
+    assert.equal(credentials.take('refreshed', 'task-a'), '789');
+    now += 1;
+    assert.equal(credentials.take('refreshed', 'task-a'), '');
+    await post('/credentials', { cards: [{ id: 'close-check', cvc: '123' }] });
+  } finally {
+    await service.close();
+  }
+  assert.equal(credentials.take('close-check', 'task-a'), '');
+});
+
 for (const response of [
   { order_id: 'other-order', task_id: 'provider-task' },
   { order_id: 'provider-order', task_id: 'other-task' },

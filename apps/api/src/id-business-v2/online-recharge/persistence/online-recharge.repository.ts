@@ -14,6 +14,7 @@ import type { AuthenticatedUser } from '../../../auth/auth.types';
 import type { OnlineRechargeSection } from '../contracts';
 import { id, integer, redact, sanitize } from '../validation';
 import { sharedCardPlan } from '../../bank-card-pool/public-api';
+import { readRechargeVoiceEvents } from './recharge-voice-events';
 
 @Injectable()
 export class OnlineRechargeRepository {
@@ -65,6 +66,8 @@ export class OnlineRechargeRepository {
     });
   }
   async list(section: OnlineRechargeSection, query: Record<string, unknown>) {
+    if (section === 'runtime-logs' && query.voiceCursor !== undefined)
+      return this.read((db) => readRechargeVoiceEvents(db, query.voiceCursor));
     const page = integer(query.page ?? 1, '页码', 1, 1000000);
     const pageSize = integer(query.pageSize ?? 20, '每页数量', 1, 100);
     const keyword = String(query.keyword ?? query.search ?? '')

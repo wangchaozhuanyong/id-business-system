@@ -30,8 +30,301 @@ import {
   onlineLoginVisibilityScope,
   isOnlineAuthStabilityOnly,
   onlineAuthStabilityScope,
+  isOnlinePendingFeaturesOnly,
+  isOnlinePendingFeaturesControlsOnly,
+  onlinePendingFeaturesScope,
+  onlinePendingFeaturesPaths,
+  onlinePendingFeaturesControls,
   onlineSettingsCommands
 } from './ci-online-settings-scope.mjs';
+
+test('the four pending features admit exactly 26 mandatory paths and eight finite controls', () => {
+  assert.equal(onlinePendingFeaturesScope, 'ONLINE_PENDING_COPY_CVC_VOICE');
+  assert.equal(onlinePendingFeaturesPaths.length, 26);
+  assert.equal(new Set(onlinePendingFeaturesPaths).size, 26);
+  assert.equal(onlinePendingFeaturesControls.length, 8);
+  assert.equal(new Set(onlinePendingFeaturesControls).size, 8);
+  assert.equal(
+    onlinePendingFeaturesPaths.filter((name) => name.startsWith('apps/admin/')).length,
+    13
+  );
+  assert.equal(
+    onlinePendingFeaturesPaths.filter((name) => name.startsWith('apps/api/')).length,
+    10
+  );
+  for (let mask = 0; mask < 256; mask++) {
+    const paths = [
+      ...onlinePendingFeaturesPaths,
+      ...onlinePendingFeaturesControls.filter((_, index) => mask & (1 << index))
+    ];
+    assert.equal(isOnlinePendingFeaturesOnly(paths), true);
+    assert.equal(isOnlineSettingsOnly(paths), true);
+    assert.equal(isOnlineSettingsControlsOnly(paths), false);
+    assert.equal(checkMode(paths, 'unchanged', 'unchanged'), 'recharge');
+    assert.equal(checkMode(paths, 'before', 'after'), 'full');
+    assert.deepEqual(selectedParts(paths), ['guards', 'api', 'admin', 'online-engine']);
+  }
+});
+
+test('pending features reject missing sources, duplicates and every neighboring module or dependency', () => {
+  const complete = [...onlinePendingFeaturesPaths, ...onlinePendingFeaturesControls];
+  const rejected = (paths) => {
+    assert.equal(isOnlinePendingFeaturesOnly(paths), false);
+    assert.equal(isOnlineSettingsOnly(paths), false);
+    assert.equal(isOnlineSettingsControlsOnly(paths), false);
+    assert.equal(checkMode(paths, '', ''), 'full');
+    assert.throws(() => onlineSettingsCommands('guards', paths), /Unsupported online settings/);
+  };
+  for (const missing of onlinePendingFeaturesPaths)
+    rejected(complete.filter((name) => name !== missing));
+  for (const duplicate of complete) rejected([...complete, duplicate]);
+  for (const extra of [
+    'apps/admin/src/v2/features/online-recharge/OnlineTaskProgress.vue',
+    'apps/admin/src/v2/styles/base.css',
+    'apps/admin/src/v2/layouts/OtherLayout.vue',
+    'apps/api/src/id-business-v2/online-recharge/persistence/tasks.repository.ts',
+    'apps/api/src/id-business-v2/online-recharge/engine/worker.cjs',
+    'apps/api/src/id-business-v2/online-recharge/engine/credential-client.cjs',
+    'apps/api/src/id-business-v2/online-recharge/engine/test/unreviewed.test.cjs',
+    'apps/api/src/auth/auth.service.ts',
+    'apps/api/prisma-mysql/schema.prisma',
+    'apps/api/prisma-mysql/migrations/unreviewed/migration.sql',
+    'package.json',
+    'package-lock.json',
+    'scripts/ci-recharge-check.mjs',
+    'scripts/production-release/online-checkout-load-release.py',
+    '.github/workflows/quality.yml'
+  ])
+    rejected([...complete, extra]);
+  assert.equal(onlineSettingsPaths.includes('apps/admin/src/v2/styles/v2.css'), false);
+  assert.equal(
+    onlineSettingsPaths.includes(
+      'apps/api/src/id-business-v2/online-recharge/engine/credentials.cjs'
+    ),
+    false
+  );
+});
+
+test('pending control-only changes select their own publisher and no business checks', () => {
+  const releaseControls = onlinePendingFeaturesControls.filter(
+    (name) => !name.startsWith('scripts/ci-')
+  );
+  for (const paths of [
+    ...releaseControls.map((name) => [name]),
+    [...onlinePendingFeaturesControls, 'docs/ONLINE_RECHARGE.md', 'docs/V2_TASKS.md']
+  ]) {
+    assert.equal(isOnlinePendingFeaturesControlsOnly(paths), true);
+    assert.equal(isOnlineSettingsControlsOnly(paths), true);
+    assert.equal(isOnlineSettingsOnly(paths), false);
+    assert.equal(checkMode(paths, '', ''), 'ci-only');
+    assert.deepEqual(selectedParts(paths), ['guards']);
+    const commands = onlineSettingsCommands('guards', paths);
+    assert.deepEqual(
+      commands.filter((command) => command[0] === 'python3'),
+      [['python3', '-B', 'scripts/production-release/online-pending-features-release.test.py']]
+    );
+    assert.ok(!commands.flat().some((arg) => /@apple-business|check:v2-|check:admin-ui/.test(arg)));
+    for (const part of ['api', 'admin', 'online-engine'])
+      assert.throws(() => onlineSettingsCommands(part, paths), /controls-only/);
+  }
+  for (const paths of [
+    [],
+    ['docs/ONLINE_RECHARGE.md'],
+    ['scripts/ci-online-settings-scope.mjs'],
+    [...onlinePendingFeaturesControls, onlinePendingFeaturesPaths[0]]
+  ])
+    assert.equal(isOnlinePendingFeaturesControlsOnly(paths), false);
+});
+
+test('pending feature checks retain seven UI rules, every architecture boundary and CSS formatting', () => {
+  const commands = onlineSettingsCommands('guards', [
+    ...onlinePendingFeaturesPaths,
+    ...onlinePendingFeaturesControls
+  ]);
+  for (const name of [
+    'check:admin-ui',
+    'check:v2-ui-language',
+    'check:v2-color-contrast',
+    'check:v2-table-standard',
+    'check:v2-loading-standard',
+    'check:v2-module-architecture',
+    'check:v2-isolation',
+    'check:v2-prisma-runtime-boundary',
+    'check:v2-concurrency-standard',
+    'check:v2-decimal-standard',
+    'test:online-recharge:controls',
+    'scripts/production-release/online-pending-features-release.test.py'
+  ])
+    assert.ok(commands.flat().includes(name), name);
+  assert.ok(
+    commands.some(
+      (command) =>
+        command.includes('prettier') && command.includes('apps/admin/src/v2/styles/v2.css')
+    )
+  );
+  assert.ok(
+    commands.some(
+      (command) =>
+        command.includes('eslint') &&
+        command.includes('apps/admin/src/v2/layouts/V2AdminLayout.vue')
+    )
+  );
+  assert.ok(!commands.flat().some((arg) => /mysql\.integration|migrate|docker|finance/.test(arg)));
+});
+
+test('pending API and Admin retain affected types, specs, builds and tracked lifecycle without database work', () => {
+  const api = onlineSettingsCommands('api', onlinePendingFeaturesPaths);
+  const admin = onlineSettingsCommands('admin', onlinePendingFeaturesPaths);
+  for (const commands of [api, admin])
+    for (const name of ['typecheck', 'build', 'test']) assert.ok(commands.flat().includes(name));
+  for (const name of [
+    'persistence/recharge-voice-events.spec.ts',
+    'persistence/worker.repository.spec.ts',
+    'persistence/admin.repository.spec.ts',
+    'persistence/worker-rpc.repository.spec.ts',
+    'validation.spec.ts',
+    'local-chain-acceptance.spec.ts'
+  ])
+    assert.ok(api.flat().includes('src/id-business-v2/online-recharge/' + name), name);
+  assert.ok(api.flat().includes('prisma:mysql:generate'));
+  assert.ok(admin.flat().includes('src/v2/features/online-recharge'));
+  assert.ok(
+    admin.some(
+      (command) =>
+        command.join(' ') === 'node scripts/acceptance-v2-online-recharge-ui.mjs --lifecycle'
+    )
+  );
+  assert.ok(
+    ![...api, ...admin]
+      .flat()
+      .some((arg) =>
+        /mysql\.integration|migrate|docker|finance|acceptance-v2-online-settings/.test(arg)
+      )
+  );
+  assert.ok(
+    !admin.flat().some((arg) => /voice-ui-acceptance/.test(arg)),
+    'private local browser proof is not claimed as a remote test'
+  );
+});
+
+test('pending engine checks run credentials regressions and isolated credential boot without repeating all suites', () => {
+  const commands = onlineSettingsCommands('online-engine', onlinePendingFeaturesPaths);
+  assert.ok(
+    commands.some(
+      (command) =>
+        command.join(' ') ===
+        'node --test --test-concurrency=1 apps/api/src/id-business-v2/online-recharge/engine/test/regressions.test.cjs'
+    )
+  );
+  assert.ok(
+    commands.some(
+      (command) =>
+        command[0] === 'node' &&
+        command.includes(
+          '--test-name-pattern=credentials-only worker has private health and exits cleanly on SIGINT without RPC'
+        ) &&
+        command.at(-1).endsWith('/test/runtime-main.test.cjs')
+    )
+  );
+  assert.ok(
+    commands.some(
+      (command) =>
+        command[0] === 'node' &&
+        command[1].endsWith('/upstream/node_modules/playwright/cli.js') &&
+        command.includes('chromium')
+    )
+  );
+  assert.ok(
+    !commands
+      .flat()
+      .some((arg) =>
+        /test:online-recharge:engine|test:upstream|readdirSync|mysql|migrate|docker|finance/.test(
+          arg
+        )
+      )
+  );
+});
+
+test('pending engine fingerprint verification rejects changed, missing, unsafe and symlinked inputs', () => {
+  const command = onlineSettingsCommands('guards', onlinePendingFeaturesPaths).find((args) =>
+    args.at(-1).includes?.('Online pending features engine source fingerprints passed.')
+  );
+  const source = command.at(-1).replace(/^import .+;$/gm, '');
+  const root = resolve('apps/api/src/id-business-v2/online-recharge/engine');
+  const names = ['credentials.cjs', 'test/regressions.test.cjs', 'unchanged.cjs'];
+  const bodies = new Map(names.map((name) => [resolve(root, name), `synthetic ${name}\n`]));
+  const manifest = {
+    repository: 'https://github.com/nowtostudeyday/PAY-GPT-UPGRADE.git',
+    commit: 'ba6cf96312a6953e62edb9d74299d438d12549df',
+    files: names.map((path) => ({
+      path,
+      adaptedSha256: createHash('sha256')
+        .update(bodies.get(resolve(root, path)))
+        .digest('hex')
+    }))
+  };
+  const verify = (value, files = bodies, symlink = false) =>
+    runInNewContext(source, {
+      assert,
+      createHash,
+      resolve,
+      sep,
+      isAbsolute,
+      win32,
+      lstatSync: () => ({ isFile: () => true, isSymbolicLink: () => symlink }),
+      readFileSync: (path) => {
+        if (path === resolve(root, 'SOURCE_MANIFEST.json')) return JSON.stringify(value);
+        assert.ok(files.has(path), 'no unknown or escaped files');
+        return files.get(path);
+      },
+      console: { log() {} }
+    });
+  assert.doesNotThrow(() => verify(manifest));
+  assert.throws(() => verify(manifest, bodies, true));
+  for (const required of names.slice(0, 2))
+    assert.throws(() =>
+      verify({ ...manifest, files: manifest.files.filter((row) => row.path !== required) })
+    );
+  assert.throws(() => verify({ ...manifest, files: [...manifest.files, manifest.files[0]] }));
+  for (const path of ['../escaped.cjs', '/absolute.cjs', 'C:\\escaped.cjs'])
+    assert.throws(() =>
+      verify({ ...manifest, files: [...manifest.files, { path, adaptedSha256: '0'.repeat(64) }] })
+    );
+  const changed = new Map(bodies);
+  changed.set(resolve(root, 'unchanged.cjs'), 'modified');
+  assert.throws(() => verify(manifest, changed));
+});
+
+test('pending native workflow is main-bound, serialized and packages only authenticated Quality results', () => {
+  const source = readFileSync(
+    new URL('../.github/workflows/online-pending-features-validation.yml', import.meta.url),
+    'utf8'
+  );
+  assert.ok(source.includes("if: github.ref == 'refs/heads/main' && inputs.commit == github.sha"));
+  assert.ok(source.includes('group: id-business-v2-production-release'));
+  assert.ok(source.includes('cancel-in-progress: false'));
+  assert.ok(source.includes('GH_TOKEN: ${{ github.token }}'));
+  assert.ok(
+    source.includes(
+      'python3 -B scripts/production-release/online-pending-features-build.py --check'
+    )
+  );
+  assert.ok(
+    source.includes('python3 -B scripts/production-release/online-pending-features-release.test.py')
+  );
+  assert.ok(
+    source.includes('run: python3 -B scripts/production-release/online-pending-features-build.py\n')
+  );
+  assert.ok(source.includes('online-pending-features-${{ github.sha }}-${{ github.run_attempt }}'));
+  for (const name of ['online-pending-features-artifact.tar.gz', 'artifact-sha256.txt'])
+    assert.ok(source.includes('.deploy/online-pending-features/' + name));
+  assert.ok(
+    !/services:|mysql:|prisma:.*migrate|npm run test|ci-recharge-check|recharge-flow-acceptance/.test(
+      source
+    )
+  );
+  assert.ok(!source.includes('contents: write'));
+});
 
 test('complete declared three-feature scope is accepted with every affected check', () => {
   assert.equal(isOnlineSettingsOnly(onlineSettingsPaths), true);

@@ -14,6 +14,15 @@ vi.mock('@/v2/composables/useV2Query', () => ({
 }));
 import { onlineApi } from './api';
 describe('配置检测与执行器请求合同', () => {
+  it('语音事件仅通过原有只读入口取游标，传递取消信号且不失效缓存', async () => {
+    const signal = new AbortController().signal;
+    await onlineApi.rechargeAnnouncements('baseline', signal);
+    expect(client.get).toHaveBeenCalledWith('/id-business-v2/online-recharge/admin/runtime-logs', {
+      params: { voiceCursor: 'baseline' },
+      signal
+    });
+    expect(client.invalidate).not.toHaveBeenCalled();
+  });
   it('管理端详情传递取消信号且不触发资料失效', async () => {
     const signal = new AbortController().signal;
     await onlineApi.action('jobs', 'detail', { id: 'task-1', includeEvents: false }, signal);

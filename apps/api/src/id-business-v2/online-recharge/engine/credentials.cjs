@@ -3,7 +3,7 @@ const http = require('node:http');
 const { timingSafeEqual } = require('node:crypto');
 const values = new Map();
 const owners = new Map();
-const TTL = 30 * 60 * 1000;
+const TTL = 24 * 60 * 60 * 1000;
 const cardId = (v) => typeof v === 'string' && /^[a-zA-Z0-9_-]{1,100}$/.test(v);
 function forget(ids) {
   for (const id of ids) {

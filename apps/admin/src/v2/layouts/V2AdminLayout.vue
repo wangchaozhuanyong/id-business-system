@@ -194,6 +194,32 @@
               </span>
             </button>
             <div v-if="notificationOpen" class="v2-notification__panel">
+              <section v-if="rechargeVoice.allowed.value" class="v2-notification__section">
+                <header><strong>充值订单语音</strong></header>
+                <p :role="rechargeVoice.state.error ? 'alert' : 'status'">
+                  {{ rechargeVoice.state.message }}
+                </p>
+                <AppButton
+                  v-if="rechargeVoice.state.status === 'off'"
+                  size="small"
+                  variant="primary"
+                  :disabled="!rechargeVoice.supported"
+                  @click="rechargeVoice.enable"
+                >
+                  开启语音播报
+                </AppButton>
+                <AppButton v-else size="small" variant="soft" @click="rechargeVoice.stop()">
+                  {{ rechargeVoice.state.status === 'starting' ? '取消开启' : '关闭语音播报' }}
+                </AppButton>
+                <AppButton
+                  v-if="rechargeVoice.state.status === 'on'"
+                  size="small"
+                  variant="ghost"
+                  @click="rechargeVoice.test"
+                >
+                  测试播报
+                </AppButton>
+              </section>
               <section v-if="isAdmin" class="v2-notification__section">
                 <header>
                   <strong>敏感资料审批</strong>
@@ -436,6 +462,7 @@ import { useAuthStore } from '@/stores/auth';
 import { hasUserFeatureAccess, hasUserPermission, hasUserRouteAccess } from '@/utils/permissions';
 import { idBusinessV2RenewalsApi } from '@/v2/api/renewals';
 import { bankRechargeApi } from '@/v2/features/auto-recharge/public-api';
+import { useOnlineRechargeVoice } from '@/v2/features/online-recharge/public-api';
 import type { BankRechargeRenewalWarnings } from '@/v2/features/auto-recharge/public-api';
 import { idBusinessV2SensitiveAccessApi } from '@/v2/api/sensitiveAccess';
 import V2BrandLogo from '@/v2/components/V2BrandLogo.vue';
@@ -473,6 +500,7 @@ const RENEWAL_WARNING_REFRESH_EVENT = 'v2:renewal-warning-refresh';
 const route = useRoute();
 const router = useRouter();
 const authStore = useAuthStore();
+const rechargeVoice = useOnlineRechargeVoice();
 const { branding, loadBranding } = useV2Branding();
 const routePrefetch = createV2RoutePrefetchController({
   currentPath: () => route.path,
