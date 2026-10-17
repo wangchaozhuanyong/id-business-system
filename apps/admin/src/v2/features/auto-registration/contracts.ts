@@ -46,6 +46,7 @@ export type AppleMailboxSyncStatus =
 
 export type AppleMailboxRegistrationStage =
   | 'queued'
+  | 'sentinel'
   | 'signup'
   | 'password'
   | 'verification_code'
@@ -243,6 +244,12 @@ export interface AppleMailboxFlowResponseDetails {
     | 'type_non_string'
     | 'type_known'
     | 'type_unknown';
+  pageTypeSha256?: string | null;
+}
+export interface AppleMailboxFlowSentinelDetails {
+  tokenPresent: boolean;
+  proofOfWorkRequired: 'required' | 'not_required' | 'missing' | 'invalid';
+  turnstileRequired: 'required' | 'not_required' | 'missing' | 'invalid';
 }
 export interface AppleMailboxFlowObservation {
   observedAt: string;
@@ -262,12 +269,17 @@ export interface AppleMailboxFlowObservation {
     | 'invalid_json'
     | 'upstream_error'
     | 'unexpected_page'
+    | 'challenge_required'
+    | 'challenge_invalid'
+    | 'missing_token'
     | null;
   responseDetails?: AppleMailboxFlowResponseDetails;
+  sentinelDetails?: AppleMailboxFlowSentinelDetails;
 }
 export interface AppleMailboxFlowEvidence {
-  version: 1 | 2;
+  version: 1 | 2 | 3;
   authorize?: AppleMailboxFlowObservation;
+  sentinel?: AppleMailboxFlowObservation;
   signup?: AppleMailboxFlowObservation;
   password?: AppleMailboxFlowObservation;
 }

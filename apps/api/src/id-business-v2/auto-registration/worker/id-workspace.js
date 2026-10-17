@@ -210,7 +210,7 @@
       typeof value !== 'object' ||
       Array.isArray(value) ||
       !('version' in value) ||
-      (value.version !== 1 && value.version !== 2)
+      (value.version !== 1 && value.version !== 2 && value.version !== 3)
     )
       return [];
     const evidence = value;
@@ -218,6 +218,7 @@
       typeof item === 'string' && Object.hasOwn(labels, item) ? labels[item] : fallback;
     return [
       ['authorize', '授权入口'],
+      ...(evidence.version === 3 ? [['sentinel', '注册前置校验']] : []),
       ['signup', '提交注册邮箱'],
       ['password', '提交注册密码']
     ].map(([stage, title]) => {
@@ -281,7 +282,10 @@
               untrusted_origin: '来源未通过校验',
               invalid_json: '响应不是预期的结构化数据',
               upstream_error: '官网响应携带错误',
-              unexpected_page: '页面类型与预期不符'
+              unexpected_page: '页面类型与预期不符',
+              challenge_required: '官网要求额外验证，当前流程已停止',
+              challenge_invalid: '官网验证要求无法确认',
+              missing_token: '未取得官网验证凭据'
             },
             row.reason,
             '判断原因待核对'
@@ -289,8 +293,8 @@
         );
       }
       if (
-        evidence.version === 2 &&
-        stage === 'signup' &&
+        ((evidence.version === 2 && stage === 'signup') ||
+          (evidence.version === 3 && (stage === 'signup' || stage === 'password'))) &&
         row.responseDetails &&
         typeof row.responseDetails === 'object' &&
         !Array.isArray(row.responseDetails)
@@ -328,19 +332,58 @@
             },
             response.errorKind,
             '上游错误分类：待核对'
-          ),
-          label(
-            {
-              missing: '页面结构异常：未提供页面信息',
-              non_object: '页面结构异常：页面信息不是对象',
-              type_missing: '页面结构异常：缺少页面类型',
-              type_non_string: '页面结构异常：页面类型不是文本',
-              type_known: '页面结构：类型已识别',
-              type_unknown: '未知页面：类型尚未识别'
-            },
-            response.pageShape,
-            '页面结构：待核对'
           )
+        );
+        if (stage === 'signup') {
+          details.push(
+            label(
+              {
+                missing: '页面结构异常：未提供页面信息',
+                non_object: '页面结构异常：页面信息不是对象',
+                type_missing: '页面结构异常：缺少页面类型',
+                type_non_string: '页面结构异常：页面类型不是文本',
+                type_known: '页面结构：类型已识别',
+                type_unknown: '未知页面：类型尚未识别'
+              },
+              response.pageShape,
+              '页面结构：待核对'
+            )
+          );
+        }
+        if (evidence.version === 3 && response.pageShape === 'type_unknown') {
+          details.push(
+            typeof response.pageTypeSha256 === 'string' &&
+              /^[a-f0-9]{64}$/.test(response.pageTypeSha256)
+              ? '未知页面标识摘要已记录'
+              : '未知页面标识摘要未记录'
+          );
+        }
+      }
+      if (evidence.version === 3 && stage === 'password' && row.pageKind === 'missing') {
+        details[4] = '此阶段未要求页面类型';
+      }
+      if (
+        evidence.version === 3 &&
+        stage === 'sentinel' &&
+        row.sentinelDetails &&
+        typeof row.sentinelDetails === 'object' &&
+        !Array.isArray(row.sentinelDetails)
+      ) {
+        const challenge = row.sentinelDetails;
+        const required = {
+          required: '官网要求',
+          not_required: '官网未要求',
+          missing: '官网未说明',
+          invalid: '要求格式无效'
+        };
+        details.push(
+          challenge.tokenPresent === true
+            ? '官网验证凭据：已取得'
+            : challenge.tokenPresent === false
+              ? '官网验证凭据：未取得'
+              : '官网验证凭据：待核对',
+          `额外计算验证：${label(required, challenge.proofOfWorkRequired, '待核对')}`,
+          `交互验证：${label(required, challenge.turnstileRequired, '待核对')}`
         );
       }
       if (Array.isArray(row.redirectHosts) && row.redirectHosts.length) {
@@ -618,6 +661,7 @@
           if (failure) {
             const stages = {
               queued: '注册初始化',
+              sentinel: '注册前置校验',
               signup: '提交注册表单',
               password: '注册密码提交',
               verification_code: '邮箱验证码',

@@ -27,7 +27,7 @@ import uuid
 _flow_spec = importlib.util.spec_from_file_location("id_registration_flow_evidence", Path(__file__).with_name("flow_evidence.py"))
 _flow_module = importlib.util.module_from_spec(_flow_spec)
 _flow_spec.loader.exec_module(_flow_module)
-# The flow validator accepts closed v1/v2 records; validation never upgrades
+# The flow validator accepts closed v1/v2/v3 records; validation never upgrades
 # stored evidence or imports the executor/its database initialization.
 validate_flow_evidence = _flow_module.validate_flow_evidence
 
@@ -65,7 +65,7 @@ FACT_ENUMS = {
     "syncStatus": {"not_started", "awaiting_identity", "blocked", "quarantined", "pending", "saved", "failed", "conflict"},
     "identityStatus": {"not_verified", "awaiting_identity", "mismatch", "verified"},
     "passwordStatus": {"not_started", "saved", "submitted"},
-    "stage": {"queued", "signup", "password", "verification_code", "verification_validate", "create_account", "workspace", "select_workspace", "redirect", "oauth", "identity", "account_save", "sync"},
+    "stage": {"queued", "sentinel", "signup", "password", "verification_code", "verification_validate", "create_account", "workspace", "select_workspace", "redirect", "oauth", "identity", "account_save", "sync"},
     "reason": {None, "existing_account_suspected", "account_creation_failed", "identity_missing", "identity_mismatch", "password_missing", "email_conflict", "local_save_failed", "deleted_account"},
     "syncErrorKind": {None} | SYNC_ERRORS,
     "proxySource": {"default", "explicit", "system"},

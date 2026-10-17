@@ -33,7 +33,7 @@ from apple_closed_loop import (BATCH_PREFIX, ClosedLoopFacts, RESULT_FIELDS, SYN
                                resolve_system_proxy, verify_identity)
 from apple_registration_diagnostics import (RegistrationDiagnostics, STAGES, ERROR_KINDS,
                                              PUBLIC_FIELDS as DIAGNOSTIC_PUBLIC_FIELDS)
-from flow_evidence import observation, observation_v1, validate_flow_evidence, validate_observation
+from flow_evidence import observation, observation_for_version, validate_flow_evidence, validate_observation
 
 PUBLIC_FIELDS = CLOSED_LOOP_PUBLIC_FIELDS | DIAGNOSTIC_PUBLIC_FIELDS
 
@@ -489,15 +489,20 @@ class RegistrationFacts(ClosedLoopFacts):
             row, data = self.task_data(db, task_uuid)
             if self.current(db, task_uuid, data) is None:
                 return False
-            flow = data.get("flowEvidence", {"version": 2})
+            flow = data.get("flowEvidence", {"version": 3})
             validate_flow_evidence(flow)
+            projected = observation_for_version(slot, evidence, flow["version"])
+            if projected is None:
+                # Historical formats have no Sentinel slot. The live guard
+                # still uses the full observation, never this projection.
+                return True
             if flow["version"] == 1:
                 # Retained/active old tasks keep their existing observations
                 # and format. Only missing stages receive the v1 projection.
                 if slot not in flow:
-                    flow = {**flow, slot: observation_v1(slot, evidence)}
+                    flow = {**flow, slot: projected}
             else:
-                flow = {**flow, slot: evidence}
+                flow = {**flow, slot: projected}
             validate_flow_evidence(flow)
             # This is task evidence only. Never advance the mailbox revision,
             # account identity, first failure or immutable sync payload.
@@ -965,11 +970,13 @@ class AppleMailboxIntegration:
                     # The wrapper below validates the response before the
                     # original algorithm can enter its password/login branch.
                     engine._apple_signup_evidence = evidence
-                    if (evidence.get("reason") == "upstream_error" and diagnostics is not None
-                            and diagnostics.active is not None):
-                        error_kind = evidence["responseDetails"]["errorKind"]
-                        if error_kind in {"account_creation_failed", "user_exists"}:
-                            diagnostics.active["errorKind"] = error_kind
+                if (evidence.get("reason") == "upstream_error" and diagnostics is not None
+                        and diagnostics.active is not None):
+                    error_kind = evidence["responseDetails"]["errorKind"]
+                    if error_kind in {"account_creation_failed", "user_exists"}:
+                        diagnostics.active["errorKind"] = error_kind
+                if slot == "password" and evidence["decision"] != "accepted":
+                    raise ValueError("密码响应未通过校验，已停止验证码和账号创建；请核对原任务")
             if (url == endpoints.get("create_account") and getattr(response, "status_code", None) == 200
                     and not confirms_account_creation(url, response)):
                 # The official side effect may already have happened. Raising
@@ -1018,10 +1025,53 @@ class AppleMailboxIntegration:
             return response
 
         engine.http_client.get = get
+        original_client_post = engine.http_client.post
+        endpoints = importlib.import_module("src.core.register").OPENAI_API_ENDPOINTS
+
+        def client_post(url, *args, **kwargs):
+            if url != endpoints["sentinel"]:
+                return original_client_post(url, *args, **kwargs)
+            engine._apple_sentinel_evidence = None
+            engine._apple_sentinel_session = None
+            diagnostics = getattr(engine, "_apple_diagnostics", None)
+            # Frozen HTTPClient.post uses Session.request, not Session.post.
+            # Keep its retries/config intact and observe its final response.
+            response = (diagnostics.request(original_client_post, url, *args, **kwargs)
+                        if diagnostics is not None else original_client_post(url, *args, **kwargs))
+            evidence = observation(response, "sentinel")
+            if not self.store.record_flow_evidence(task_uuid, "sentinel", evidence):
+                raise ValueError("原任务占用已变化，不能继续前置校验")
+            engine._apple_sentinel_evidence = evidence
+            engine._apple_sentinel_session = engine.http_client.session
+            return response
+
+        engine.http_client.post = client_post
         original_signup, original_send = engine._submit_signup_form, engine._send_verification_code
         original_create, original_mark = engine._create_user_account, engine._mark_email_as_registered
 
+        if hasattr(engine, "_check_sentinel"):
+            original_sentinel = engine._check_sentinel
+
+            def sentinel(*args, **kwargs):
+                # Upstream catches transport/JSON errors and then continues.
+                # Enforce this decision outside that catch, on the same session.
+                engine._apple_sentinel_evidence = None
+                engine._apple_sentinel_session = None
+                result = original_sentinel(*args, **kwargs)
+                evidence = engine._apple_sentinel_evidence
+                if (not isinstance(evidence, dict) or evidence.get("decision") != "accepted"
+                        or engine._apple_sentinel_session is not engine.session
+                        or not isinstance(result, str) or not result.strip()):
+                    raise ValueError("官网前置安全校验未通过，已停止提交邮箱和密码；请查看任务诊断")
+                return result
+
+            engine._check_sentinel = sentinel
+
         def signup(*args, **kwargs):
+            evidence = getattr(engine, "_apple_sentinel_evidence", None)
+            if (not isinstance(evidence, dict) or evidence.get("decision") != "accepted"
+                    or getattr(engine, "_apple_sentinel_session", None) is not engine.session):
+                raise ValueError("官网前置安全校验未通过，不能提交邮箱或密码")
             provider.otp_lower_bound = time.time()
             if not self.store.update_task(task_uuid, stage="signup"):
                 raise ValueError("邮箱占用已变化，不能继续注册")

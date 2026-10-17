@@ -56,10 +56,54 @@ import {
   onlinePreflightReceiptFixGuardCommands,
   onlinePreflightReceiptFixGuardBinding,
   onlineBuildProofReuseCommands,
-  onlinePreflightReceiptFixGuardPaths
+  onlinePreflightReceiptFixGuardPaths,
+  registrationProtocolRepairBase,
+  registrationProtocolRepairTree,
+  registrationProtocolRepairContract,
+  registrationProtocolRepairApplications,
+  registrationProtocolRepairAcceptance,
+  registrationProtocolRepairPaths,
+  registrationProtocolRepairCommands
 } from './ci-recharge-scope.mjs';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
+test('registration protocol repair dispatches its four finite parts and blocks local candidate checks', () => {
+  const options = {
+    base: registrationProtocolRepairBase,
+    protocolRepairFixture: true,
+    cloud: true
+  };
+  for (const part of ['guards', 'api', 'admin', 'release-controls']) {
+    assert.deepEqual(
+      recordGuardCommands('recharge', registrationProtocolRepairPaths, part, options),
+      [...registrationProtocolRepairCommands[part], ['process-exit', 0]]
+    );
+  }
+  for (const part of ['api', 'admin']) {
+    assert.throws(
+      () =>
+        recordGuardCommands('recharge', registrationProtocolRepairPaths, part, {
+          ...options,
+          cloud: false
+        }),
+      /require isolated CI/
+    );
+  }
+  assert.throws(
+    () => recordGuardCommands('recharge', registrationProtocolRepairPaths, 'migration', options),
+    /Unsupported registration protocol repair/
+  );
+  const failCommand = registrationProtocolRepairCommands.guards[0].join(' ');
+  assert.throws(
+    () =>
+      recordGuardCommands('recharge', registrationProtocolRepairPaths, 'guards', {
+        ...options,
+        failCommand
+      }),
+    /SYNTHETIC_COMMAND_FAILURE/
+  );
+});
+
 test('registration protocol image-user repair stops on its pure gate and refuses API Admin or migration', () => {
   const options = { base: registrationProtocolRestoreRepairBase, restoreFixture: true };
   const calls = recordGuardCommands(
@@ -879,7 +923,8 @@ function recordGuardCommands(
     identityFixture = false,
     parityFixture = false,
     browserFixture = false,
-    restoreFixture = false
+    restoreFixture = false,
+    protocolRepairFixture = false
   } = {}
 ) {
   // Run the real dispatcher with process execution replaced before its named import resolves.
@@ -906,6 +951,31 @@ function recordGuardCommands(
         { encoding: 'utf8' }
       )
     : null;
+  const repairHashes = Object.fromEntries(
+    registrationProtocolRepairPaths
+      .filter((name) => name !== registrationProtocolRepairContract)
+      .map((name) => [name, 'a'.repeat(64)])
+  );
+  const repairContract = {
+    version: 1,
+    scope: 'REGISTRATION_PROTOCOL_REPAIR_20261017',
+    name: 'registration-protocol-repair-20261017',
+    frozen: true,
+    admission: 'VERIFIED',
+    migration: null,
+    businessActions: 0,
+    sourceBaseline: registrationProtocolRepairBase,
+    sourceBaselineTree: registrationProtocolRepairTree,
+    expectedGitChanges: [...registrationProtocolRepairPaths],
+    applicationPaths: [...registrationProtocolRepairApplications],
+    sources: Object.fromEntries(
+      registrationProtocolRepairApplications.map((name) => [name, repairHashes[name]])
+    ),
+    validationSources: {
+      [registrationProtocolRepairAcceptance]: repairHashes[registrationProtocolRepairAcceptance]
+    },
+    reviewedFileHashes: repairHashes
+  };
   const script = `
     import childProcess from 'node:child_process';
     import fs from 'node:fs';
@@ -977,7 +1047,13 @@ function recordGuardCommands(
         return {url: 'data:text/javascript,' + encodeURIComponent(source), shortCircuit: true};
       }
       if (specifier === './ci-recharge-scope.mjs' && context.parentURL?.endsWith('/scripts/ci-recharge-check.mjs')) {
-        const source = 'export * from ' + JSON.stringify(scopeUrl) + ';' +
+        const repairFixtureSource = ${JSON.stringify(protocolRepairFixture)}
+          ? 'import * as realScope from ' + JSON.stringify(scopeUrl) + ';' +
+            'export function isRegistrationProtocolRepairOnly(paths, options){' +
+            'const contract=' + ${JSON.stringify(JSON.stringify(repairContract))} + ';' +
+            'return realScope.isRegistrationProtocolRepairOnly(paths,{...options,contract,sourceDigest:name=>contract.reviewedFileHashes[name]??null});}'
+          : '';
+        const source = 'export * from ' + JSON.stringify(scopeUrl) + ';' + repairFixtureSource +
           'export function canResumeCombinedGuard(base) {' +
           'globalThis.guardTestCalls.push(["resume-helper", base]);' +
           'return process.env.GUARD_TEST_RESUME === "true"; }' +
@@ -999,6 +1075,7 @@ function recordGuardCommands(
     }});
     childProcess.execFileSync = (file, args) => {
       if (file === 'git') {
+        if (args.join(' ') === ${JSON.stringify('rev-parse ' + registrationProtocolRepairBase + '^{tree}')}) return ${JSON.stringify(registrationProtocolRepairTree + '\n')};
         if (args.join(' ') === ${JSON.stringify('rev-parse ' + registrationProtocolRestoreRepairBase + '^{tree}')}) return ${JSON.stringify(registrationProtocolRestoreRepairTree + '\n')};
         if (args.join(' ') === ${JSON.stringify('rev-parse ' + registrationProtocolRestoreBase + '^{tree}')}) return ${JSON.stringify(registrationProtocolRestoreTree + '\n')};
         if (args.join(' ') === ${JSON.stringify('rev-parse ' + registrationBrowserBase + '^{tree}')}) return ${JSON.stringify(registrationBrowserTree + '\n')};
