@@ -496,7 +496,7 @@ function fixture() {
 afterEach(() => vi.unstubAllGlobals());
 
 describe('本地后端链路验收（隔离存储，无官网、银行或数据库连接）', () => {
-  it.each(['success', 'recover', 'unknown', 'readiness'] as const)(
+  it.each(['success', 'recover', 'unknown', 'readiness', 'prepared'] as const)(
     '真实Chromium任务子进程与实际API服务图贯通：%s',
     async (scene) => {
       type BrowserAcceptance = {
@@ -518,6 +518,7 @@ describe('本地后端链路验收（隔离存储，无官网、银行或数据�
             task: Row;
             cardFields: string;
             billingFields: string;
+            outputDir?: string;
             diagnosticDelay?: { stage: 'verify'; milliseconds: number };
             rpc: (method: string, args: Row) => Promise<unknown>;
           }
@@ -529,18 +530,25 @@ describe('本地后端链路验收（隔离存储，无官网、银行或数据�
         success: 'legacy-names',
         recover: 'legacy-placeholders',
         unknown: 'legacy-stable-nested',
-        readiness: 'standard'
+        readiness: 'standard',
+        prepared: 'prepared-visible-shadow'
       }[scene];
       const billingFields = {
         success: 'legacy-names',
         recover: 'legacy-collapsed',
         unknown: 'legacy-testids',
-        readiness: 'standard'
+        readiness: 'standard',
+        prepared: 'standard'
       }[scene];
-      const actual = await harness.runSyntheticRecharge(scene, {
+      const actual = await harness.runSyntheticRecharge(scene === 'prepared' ? 'success' : scene, {
         task: claim,
         cardFields,
         billingFields,
+        outputDir: resolve(
+          process.cwd(),
+          '../../.runtime/online-checkout-repair-20261018',
+          `api-${scene}-${claim.id}`
+        ),
         ...(scene === 'recover'
           ? { diagnosticDelay: { stage: 'verify' as const, milliseconds: 350 } }
           : {}),
@@ -586,6 +594,18 @@ describe('本地后端链路验收（隔离存储，无官网、银行或数据�
         unexpectedNetwork: 0
       });
       expect(actual.metrics.formReadFailures).toEqual([]);
+      if (scene === 'prepared') {
+        expect(actual.metrics).toMatchObject({
+          loginCookieVerified: 1,
+          checkboxClicks: 1,
+          checkboxCleared: true,
+          cardMounts: 1,
+          animationCallbacks: 0
+        });
+        expect(actual.metrics.preparationScrolls).toBeGreaterThan(0);
+        expect(actual.metrics.emptyCardRecordingCaptures).toBeGreaterThan(0);
+        expect(actual.metrics.filledCardRecordingCaptures).toBeGreaterThan(0);
+      }
       if (scene === 'readiness') {
         expect(actual.metrics).toMatchObject({
           loginCookieVerified: 1,
@@ -600,13 +620,14 @@ describe('本地后端链路验收（隔离存储，无官网、银行或数据�
             hiddenCloudflareResidueAtPayment: true
           }
         });
+      }
+      if (scene === 'readiness' || scene === 'prepared')
         expect(actual.result.result).toMatchObject({
           success: true,
           confirmedPaid: true,
           paymentEvidence: { verified: true, amount: '8919.64', currency: 'PHP' },
           confirmation: { verified: true, observedCanonicalPlan: 'pro_20x' }
         });
-      }
       if (scene === 'recover')
         expect(actual.metrics.injectedReadDelay).toEqual({
           stage: 'verify',
@@ -650,7 +671,7 @@ describe('本地后端链路验收（隔离存储，无官网、银行或数据�
         expect(f.row(claim)).toMatchObject({ status: 'succeeded', confirmedPaid: true });
         expect(f.storage.rows('onlineRechargeBill')).toHaveLength(1);
         expect(f.storage.rows('idBusinessV2BankRechargeOrder')).toHaveLength(1);
-        if (scene === 'readiness') {
+        if (scene === 'readiness' || scene === 'prepared') {
           const bill = f.storage.rows('onlineRechargeBill')[0]!;
           expect(bill).toMatchObject({
             taskId: claim.id,
@@ -679,6 +700,10 @@ describe('本地后端链路验收（隔离存储，无官网、银行或数据�
       expect(f.storage.rows('idBusinessV2BankRechargeOrder')).toHaveLength(
         scene === 'unknown' ? 0 : 1
       );
+      expect(f.card()).toMatchObject({
+        successCount: scene === 'unknown' ? 0 : 1,
+        declineCount: 0
+      });
       await writeFile(
         resolve(actual.directory, 'backend-acceptance.json'),
         JSON.stringify(
@@ -686,6 +711,18 @@ describe('本地后端链路验收（隔离存储，无官网、银行或数据�
             scene,
             cardFields,
             billingFields,
+            ...(scene === 'prepared'
+              ? {
+                  cardPreparation: {
+                    mounts: actual.metrics.cardMounts,
+                    scrolls: actual.metrics.preparationScrolls,
+                    emptyCardCaptures: actual.metrics.emptyCardRecordingCaptures,
+                    filledCardCaptures: actual.metrics.filledCardRecordingCaptures,
+                    animationCallbacks: actual.metrics.animationCallbacks,
+                    paymentRequests: actual.metrics.paymentRequests
+                  }
+                }
+              : {}),
             taskId: claim.id,
             backendEntry:
               'TasksService → WorkerService/RpcRepository → WorkerRepository → OrderSyncService/Repository → BankRechargeOnlineOrderService/Repository',

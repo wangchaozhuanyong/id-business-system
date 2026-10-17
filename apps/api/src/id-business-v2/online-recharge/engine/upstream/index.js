@@ -639,10 +639,21 @@ async function run(runOptions = {}) {
         const readPhaseLabels = { frame_scan: '页面扫描', candidate_handles: '候选控件获取', candidate_eligibility: '控件可交互性检查', value: '填写结果回读', control_read: '控件读取' };
         const numberCandidates = checkoutOpenDiagnostics?.candidateCounts?.find(item => item.field === 'number');
         const inspection = checkoutOpenDiagnostics?.inspection;
+        const rejectionLabels = { zero_geometry: '没有显示尺寸', hidden: '隐藏属性', inert: '禁止交互',
+            aria_hidden: '辅助功能隐藏', display_none: '未显示', visibility_hidden: '可见性隐藏',
+            opacity_zero: '完全透明', content_visibility_hidden: '内容隐藏', aria_disabled: '辅助功能禁用',
+            disabled: '控件禁用', readonly: '只读控件', excluded_type: '非填写控件', no_locator: '缺少定位标识' };
+        const rejectionSummary = (counts) => Object.entries(counts || {})
+            .filter(([, count]) => count > 0).map(([key, count]) => `${rejectionLabels[key]}${count}`).join('、');
+        const skippedReasons = rejectionSummary(inspection?.frameSkipCounts);
+        const rejectedReasons = rejectionSummary(inspection?.controlRejectCounts);
         const diagnosticDetails = [
             checkoutOpenDiagnostics?.missing?.length ? `未就绪字段：${checkoutOpenDiagnostics.missing.map(field => fieldLabels[field]).join('、')}` : '',
             numberCandidates ? `卡号候选：${numberCandidates.count}` : '',
             typeof inspection?.framesChecked === 'number' ? `已检查页面数：${inspection.framesChecked}` : '',
+            inspection?.framesSkipped > 0 ? `跳过页面数：${inspection.framesSkipped}${skippedReasons ? `（${skippedReasons}）` : ''}` : '',
+            typeof inspection?.controlCounts?.scanned === 'number' ? `扫描控件数：${inspection.controlCounts.scanned}` : '',
+            rejectedReasons ? `控件排除原因：${rejectedReasons}` : '',
             inspection?.complete === false ? '控件读取未完成' : '',
             inspection?.framesFailed > 0 ? `读取失败页面数：${inspection.framesFailed}` : '',
             inspection?.readPhase ? `读取阶段：${readPhaseLabels[inspection.readPhase]}` : ''

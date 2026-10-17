@@ -39,6 +39,7 @@ import {
   isOnlineCheckoutLoadParentRpcOnly,
   isOnlineCheckoutNavigationReadyOnly,
   isOnlineCoreParityOnly,
+  isOnlineCheckoutPreparedFieldsOnly,
   onlineSettingsParts
 } from './ci-online-settings-scope.mjs';
 import { isProxyResultIdentityOnly } from './ci-proxy-result-identity-scope.mjs';
@@ -2500,6 +2501,7 @@ export function selectedParts(paths, grantHelperSnapshot, context) {
   if (isOnlineCheckoutLoadRecoveryOnly(paths)) return ['guards', 'api', 'online-engine'];
   if (isOnlineCheckoutNavigationReadyOnly(paths)) return ['guards', 'api', 'online-engine'];
   if (isOnlineCoreParityOnly(paths)) return ['guards', 'api', 'online-engine'];
+  if (isOnlineCheckoutPreparedFieldsOnly(paths)) return ['guards', 'api', 'online-engine'];
   if (isOnlineCheckoutCsRecoveryOnly(paths)) return ['guards', 'api', 'online-engine'];
   if (isOnlineSettingsOnly(paths)) return [...onlineSettingsParts];
   if (isOnlineProxyCountryOnly(paths)) return [...onlineProxyCountryParts];
