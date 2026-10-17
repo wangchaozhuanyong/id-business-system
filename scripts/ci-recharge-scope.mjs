@@ -82,8 +82,8 @@ import { createHash } from 'node:crypto';
 import { pathToFileURL } from 'node:url';
 import { matchesSourceEvidence, recordedPullRequestBase } from './ci-recharge-evidence.mjs';
 
-export const registrationTerminalStopBase = 'a92ea492754781f0b84011321a65b684617e7ce2';
-export const registrationTerminalStopTree = '6e346195950ef727705c5ef7d181e96a037ed046';
+export const registrationTerminalStopBase = '81b8f63d5d18c85330c0dddfca7fe3bca87f7d3b';
+export const registrationTerminalStopTree = 'bec9db6b59ce181b884674105ef5bbab57ac3595';
 export const registrationTerminalStopContract =
   'scripts/production-release/registration-terminal-stop-contract.json';
 export const registrationTerminalStopApplications = Object.freeze(

@@ -21,7 +21,10 @@ NAME = 'registration-terminal-stop-20261017'
 PREFIX = 'registration-terminal-stop'
 SCOPE = 'REGISTRATION_TERMINAL_STOP_20261017'
 CURRENT = 'a92ea492754781f0b84011321a65b684617e7ce2'
-SOURCE_TREE = '6e346195950ef727705c5ef7d181e96a037ed046'
+SOURCE_BASE = '81b8f63d5d18c85330c0dddfca7fe3bca87f7d3b'
+SOURCE_TREE = 'bec9db6b59ce181b884674105ef5bbab57ac3595'
+REGISTRATION_ORIGIN = 'a92ea492754781f0b84011321a65b684617e7ce2'
+REGISTRATION_ORIGIN_TREE = '6e346195950ef727705c5ef7d181e96a037ed046'
 BASELINE_PROJECTION_SHA256 = '16798bebef459ea29cbbd38c612a34cd4932498c4beff6dc13b6e31838489d57'
 WORKER = 'apps/api/src/id-business-v2/auto-registration/worker/'
 SOURCE = WORKER + 'apple_mailboxes.py'
@@ -37,10 +40,10 @@ TASK_PATHS = (*APPLICATION_PATHS, 'docs/V2_TASKS.md',
 PRESERVED = ('admin', 'mysql', 'caddy', 'media-resolver', 'auto-recharge', 'auto-registration')
 HEX = r'[a-f0-9]{64}'
 PUBLISHED_PREVIOUS = {
-    'commit': CURRENT, 'tree': SOURCE_TREE, 'runId': '39022831680', 'attempt': 1,
+    'commit': REGISTRATION_ORIGIN, 'tree': REGISTRATION_ORIGIN_TREE, 'runId': '39022831680', 'attempt': 1,
     'workflowPath': '.github/workflows/registration-flow-v4-validation.yml',
     'artifactId': 12097058027,
-    'artifactName': 'registration-flow-v4-20261017-' + CURRENT + '-1',
+    'artifactName': 'registration-flow-v4-20261017-' + REGISTRATION_ORIGIN + '-1',
     'artifactDigest': 'sha256:2881b4aff67a20bf47e9766f5e464f27c995fd450d92b6ecff67525e55a1630a',
     'artifactSize': 1218890,
     'artifactSha256': '1816301115b203145d9e9297bf232902979dc201a479318059157b6cfed049b6',
@@ -95,7 +98,7 @@ def verify_contract(c):
          and c.get('scope') == SCOPE and c.get('frozen') is True and c.get('admission') == 'VERIFIED'
          and c.get('pendingEvidence') == [] and c.get('migration') is None
          and type(c.get('businessActions')) is int and c['businessActions'] == 0, 'CONTRACT_NOT_ADMITTED')
-    need(c.get('expectedCurrent') == CURRENT and c.get('sourceBaseline') == CURRENT
+    need(c.get('expectedCurrent') == CURRENT and c.get('sourceBaseline') == SOURCE_BASE
          and c.get('sourceBaselineTree') == SOURCE_TREE and c.get('publishedPrevious') == PUBLISHED_PREVIOUS
          and digest(canonical(c.get('baseline'))) == BASELINE_PROJECTION_SHA256, 'PREDECESSOR_CHANGED')
     old = prior_contract()

@@ -79,9 +79,9 @@ def verify_previous_bundle(raw, c):
          and proof['afterInventory'] == c['baseline']['inventory'] == c['publishedInventory']
          and proof['adminFiles']['index.html'] == c['publicIndexSha256'], 'PUBLISHED_CONTENT_CHANGED')
     for name, expected in proof['sources'].items():
-        need(digest(git('show', r.CURRENT + ':' + name)) == expected, 'PUBLISHED_SOURCE_CHANGED')
+        need(digest(git('show', binding['commit'] + ':' + name)) == expected, 'PUBLISHED_SOURCE_CHANGED')
     for name, expected in proof['controlSources'].items():
-        need(digest(git('show', r.CURRENT + ':scripts/production-release/' + name)) == expected,
+        need(digest(git('show', binding['commit'] + ':scripts/production-release/' + name)) == expected,
              'PUBLISHED_CONTROL_CHANGED')
     return proof
 
@@ -99,7 +99,7 @@ def previous_artifact(c):
     need(value['id'] == binding['artifactId'] and value['name'] == binding['artifactName']
          and value['digest'] == binding['artifactDigest'] and value['size_in_bytes'] == binding['artifactSize']
          and value['expired'] is False and value['workflow_run']['id'] == int(binding['runId'])
-         and value['workflow_run']['head_sha'] == r.CURRENT, 'PUBLISHED_NATIVE_ARTIFACT_CHANGED')
+         and value['workflow_run']['head_sha'] == binding['commit'], 'PUBLISHED_NATIVE_ARTIFACT_CHANGED')
     zipped = request('actions/artifacts/' + str(binding['artifactId']) + '/zip')
     need(len(zipped) == binding['artifactSize'] and 'sha256:' + digest(zipped) == binding['artifactDigest'],
          'PUBLISHED_NATIVE_DIGEST_CHANGED')
@@ -119,7 +119,7 @@ def prepare():
     previous_artifact(c)
     OUT.mkdir(parents=True, mode=0o700)
     candidate = OUT / 'candidate'
-    with tarfile.open(fileobj=io.BytesIO(git('archive', r.CURRENT))) as archive:
+    with tarfile.open(fileobj=io.BytesIO(git('archive', r.SOURCE_BASE))) as archive:
         for item in archive:
             need(not item.name.startswith('/') and '..' not in Path(item.name).parts
                  and (item.isdir() or item.isfile()), 'SOURCE_ARCHIVE_INVALID')

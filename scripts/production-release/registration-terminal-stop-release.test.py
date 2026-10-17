@@ -44,7 +44,7 @@ class TerminalControls(unittest.TestCase):
         baseline['inventory']['worker'] = r.signature(rows)
         c = {'version': 1, 'name': r.NAME, 'scope': r.SCOPE, 'frozen': True, 'admission': 'VERIFIED',
              'pendingEvidence': [], 'migration': None, 'businessActions': 0, 'expectedCurrent': r.CURRENT,
-             'sourceBaseline': r.CURRENT, 'sourceBaselineTree': r.SOURCE_TREE, 'publishedPrevious': r.PUBLISHED_PREVIOUS,
+             'sourceBaseline': r.SOURCE_BASE, 'sourceBaselineTree': r.SOURCE_TREE, 'publishedPrevious': r.PUBLISHED_PREVIOUS,
              'applicationPaths': list(r.APPLICATION_PATHS), 'expectedGitChanges': list(r.TASK_PATHS),
              'sources': {n: r.digest((r.ROOT / n).read_bytes()) for n in r.APPLICATION_PATHS},
              'validationSources': {}, 'pythonTests': list(r.PYTHON_TESTS), 'apiJavascriptDelta': [],
