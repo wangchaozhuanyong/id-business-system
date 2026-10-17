@@ -90,6 +90,9 @@
     "verify-image-runtime.cjs": "fb1bafb7220664c4a220c410580ceeae78bedd4a9986ae2ef01b4bd6a9efcc4a",
     "worker.cjs": "5a05d9838f47a4e69cd9fd1f5658a5d58729094ee1e5cf73b1f6c4a9972281f2"
   },
+  "apiDeclarationOnly": {
+    "id-business-v2/online-recharge/tasks.service.d.ts": "5f00a5f821deb9d0e224de77d499bb9b6d7eda727869604644a114749e014ae7"
+  },
   "apiModules": ["id-business-v2/online-recharge/persistence/tasks.repository.js"],
   "backupNormalizerPath": "/opt/id-business-v2/releases/20261015T091200Z-e197218c8b38-recharge-record/scripts/mysql-dump-restore-normalizer.sed",
   "baselineAdminBuildCommit": "c8ce1a01a1a1e61bcc8de778dad331191319d645",
@@ -116,6 +119,7 @@
     "persistence/worker.repository.d.ts": "e0adfa4552105d7721de0b15f7cabad3e2fbc8226a113c6a87736c1b1af0c560",
     "persistence/worker.repository.js": "663ef156dd87f81f5ad755e66c029f9f8d95c650f2813712d4312f256a5b1a01",
     "persistence/worker.repository.js.map": "02814b3502a53684fed4d7b7523dc8270cbd73db37ad30905d03f85580f9963c",
+    "tasks.service.d.ts": "7c424b0501f98268ac61c1bbefd957407fec944eb80a9c55586db2fd01015c4f",
     "validation.d.ts": "a4a4e3f44b9fcb56d6e0716bfde38e7e5293e40adf65a8fb2d7355b542b9ac6a",
     "validation.js": "a31a49691e681d623a3d622a200cb09cbda5b61a7bfac222882098ebfb49c1e7",
     "validation.js.map": "44b8050167dd0150a888a2754eda644adcf77be6e458be5adba6c2e2b510dee4"
@@ -483,5 +487,9 @@
     "docs/V2_TASKS.md": "dd3ae20aa1a4fc3a3ec2e6c5559edb1a8078de5cbe9a545b99a78629f1642c1e"
   },
   "sqlFenceHelperSha256": "50446ab528a288ca1c2129c84f1bf4a90f59fa313a92bcff0058a258c8b8e925",
+  "validationReuse": {
+    "commit": "c71568852416fd62a41557e926b3d47df3acef89",
+    "runId": "39004100959"
+  },
   "version": 1
 }

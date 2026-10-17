@@ -48,6 +48,7 @@ def verify_proof(proof, plan, contract, files):
          and all(proof.get(key) == plan[key] for key in ('commit', 'tree', 'workflowRunId', 'workflowRunAttempt', 'contractSha256', 'controlSources'))
          and proof.get('sources') == contract['sources']
          and proof.get('afterEngineFiles') == contract['afterEngineFiles']
+         and proof.get('validationReuse') == contract.get('validationReuse')
          and proof.get('baselineApiReproduced') is True and proof.get('baselineAdminSourceReproduced') is True
          and proof.get('migrationPerformed') is False and proof.get('businessActions') == 0, 'PROOF_CHANGED')
     declarations = contract.get('apiDeclarationOnly', {})
