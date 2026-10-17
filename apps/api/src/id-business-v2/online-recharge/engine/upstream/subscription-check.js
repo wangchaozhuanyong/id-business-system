@@ -11,6 +11,7 @@ const CANCEL_SUBSCRIPTION_URL = 'https://chatgpt.com/backend-api/subscriptions/c
 const RESUME_SUBSCRIPTION_URL = 'https://chatgpt.com/backend-api/subscriptions/resume';
 const BILLING_PAGE_URL = 'https://chatgpt.com/account/manage';
 const USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136.0.0.0 Safari/537.36';
+const ACCOUNT_MISMATCH_MESSAGE = '官网会话账号或用户与原任务不一致，已停止后续操作';
 
 const PLAN_LABELS = {
     plus: 'ChatGPT Plus',
@@ -295,7 +296,7 @@ function transportCode(error) {
         ? 'ETIMEDOUT' : 'UNKNOWN';
 }
 function queryErrorCode(error) {
-    if (['HUMAN_VERIFICATION_REQUIRED', 'SESSION_INVALID'].includes(error?.code)) return error.code;
+    if (['HUMAN_VERIFICATION_REQUIRED', 'SESSION_INVALID', 'ACCOUNT_MISMATCH'].includes(error?.code)) return error.code;
     if (/^(?:VERIFICATION_(?:TIMEOUT|CANCELLED|PAGE_CLOSED|FRAME_AMBIGUOUS|NOT_READY|NETWORK_UNAVAILABLE|PROVIDER_UNAVAILABLE|PROVIDER_REJECTED|RATE_LIMITED|CHALLENGE_REJECTED|CHALLENGE_UNCHANGED|ROUNDS_EXHAUSTED|SOLVER_DISABLED|SOLVER_FAILED|RUNTIME_FAILED|PAGE_BINDING_REQUIRED|PAGE_BINDING_MISMATCH|UNSUPPORTED)|VLM_(?:AUTH_FAILED|RATE_LIMITED|TIMEOUT|NETWORK_UNAVAILABLE|REQUEST_UNSUPPORTED|INVALID_RESPONSE|INVALID_DECISION|PROVIDER_UNAVAILABLE|IMAGE_UNSUPPORTED|NOT_CONFIGURED|API_REJECTED))$/.test(error?.code)) return error.code;
     const network = transportCode(error);
     if (network === 'ETIMEDOUT') return 'NETWORK_TIMEOUT';
@@ -439,9 +440,11 @@ async function withRenewalBrowserContext(accessToken, options, operation) {
             browserContext: context, signal: budget.signal, deadlineAt: budget.deadlineAt });
     } catch (error) {
         if (error.code === 'LEASE_LOST') throw error;
+        const errorCode = queryErrorCode(error);
         return { ok: false, resultUnknown: require('../rpc.cjs').wasSubmitted(),
-            statusCode: 502, errorCode: queryErrorCode(error),
-            error: '续费操作未能完成核验，请核对原任务，禁止重复提交' };
+            statusCode: errorCode === 'ACCOUNT_MISMATCH' ? 409 : 502, errorCode,
+            error: errorCode === 'ACCOUNT_MISMATCH' ? ACCOUNT_MISMATCH_MESSAGE
+                : '续费操作未能完成核验，请核对原任务，禁止重复提交' };
     } finally {
         finished = true;
         await closeQueryPage(page);
@@ -846,11 +849,12 @@ async function querySubscriptionBySession(accessToken, options = {}) {
         response = await fetchAccountCheck(token, options);
     } catch (error) {
         if (error.code === 'LEASE_LOST') throw error;
+        const mismatch = error.code === 'ACCOUNT_MISMATCH';
         return {
             ok: false,
-            statusCode: 502,
-            errorCode: 'NETWORK_UNAVAILABLE',
-            error: '订阅查询网络不可用，本次未取得账号订阅结果'
+            statusCode: mismatch ? 409 : 502,
+            errorCode: mismatch ? 'ACCOUNT_MISMATCH' : 'NETWORK_UNAVAILABLE',
+            error: mismatch ? ACCOUNT_MISMATCH_MESSAGE : '订阅查询网络不可用，本次未取得账号订阅结果'
         };
     }
 
@@ -860,9 +864,10 @@ async function querySubscriptionBySession(accessToken, options = {}) {
             NETWORK_TIMEOUT: '订阅查询网络超时，本次未取得账号订阅结果',
             PROXY_UNAVAILABLE: '任务代理连接失败，请检查代理服务',
             SESSION_INVALID: '账号尚未登录或 Session 已失效，请更新登录资料',
+            ACCOUNT_MISMATCH: ACCOUNT_MISMATCH_MESSAGE,
             NETWORK_UNAVAILABLE: '订阅查询网络不可用，本次未取得账号订阅结果'
         };
-        const statuses = { NETWORK_TIMEOUT: 504, SESSION_INVALID: 401, HUMAN_VERIFICATION_REQUIRED: 403 };
+        const statuses = { NETWORK_TIMEOUT: 504, SESSION_INVALID: 401, HUMAN_VERIFICATION_REQUIRED: 403, ACCOUNT_MISMATCH: 409 };
         return { ok: false, errorCode: response.errorCode,
             statusCode: statuses[response.errorCode] || (/TIMEOUT$/.test(response.errorCode) ? 504
                 : /^(?:VERIFICATION_|VLM_)/.test(response.errorCode) ? 503 : 502),

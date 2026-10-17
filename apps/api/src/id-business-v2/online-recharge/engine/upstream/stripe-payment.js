@@ -203,13 +203,35 @@ async function discoverCardInputs(page, timeout = 45000) {
     return null;
 }
 
-async function prepareCheckoutCardSection(page) {
-    // Scrolling is preparation only. A swallowed text/URL wait cannot establish readiness.
-    const cardLabel = page.getByText(/^Card number$/i).first();
-    if (await cardLabel.isVisible({ timeout: 800 }).catch(() => false)) {
-        await cardLabel.scrollIntoViewIfNeeded().catch(() => {});
+async function prepareCheckoutCardSection(page, options = {}) {
+    // Preparation may mount lazy fields, but never establishes readiness or submits.
+    const { createVerificationBudget } = require('./verification-runtime');
+    const budget = createVerificationBudget({
+        maxWaitMs: Math.min(1000, Math.max(1, Number(options.maxWaitMs) || 1000)),
+        deadlineAt: options.deadlineAt,
+        signal: options.signal
+    });
+    try {
+        const labels = page.getByText(/^Card number$/i);
+        const count = await budget.run(labels.count());
+        const visible = [];
+        for (let index = 0; index < count; index++) {
+            budget.assert();
+            const label = labels.nth(index);
+            if (await budget.run(label.evaluate(require('../checkout-form.cjs').elementRendered))) visible.push(label);
+        }
+        if (visible.length !== 1) return;
+        budget.assert();
+        await budget.run(visible[0].scrollIntoViewIfNeeded({ timeout: budget.timeout(800) }));
+    } catch (error) {
+        if (options.signal?.aborted) throw options.signal.reason || error;
+        if (Number.isFinite(options.deadlineAt) && performance.now() >= options.deadlineAt) throw error;
+        // A short optional preparation probe must not replace the original opening
+        // deadline. The caller still verifies the actual editable card field.
+        if (error.code !== 'VERIFICATION_TIMEOUT' && error.name !== 'TimeoutError') throw error;
+    } finally {
+        budget.dispose();
     }
-
 }
 
 function checkoutReloadStopped(page) {
@@ -486,7 +508,8 @@ async function completeStripeCardPayment(page, cardInfo, address, options = {}) 
         maxWaitMs: Math.max(1, loadDeadline - performance.now()), maxBypassRounds: 3,
         signal: options.signal || taskSignal?.(),
         checkoutReadyWaitMs: Number(process.env.CHECKOUT_READY_WAIT_MS || 45000),
-        isSubmitted: wasSubmitted };
+        isSubmitted: wasSubmitted,
+        prepareCheckout: (preparation) => prepareCheckoutCardSection(page, preparation) };
 
     if (options.operation === 'upgrade' && await require('./upgrade-checkout').findUpgradeDialog(page)) {
         return require('./upgrade-checkout').completeUpgradePayment(page, cardInfo, options);

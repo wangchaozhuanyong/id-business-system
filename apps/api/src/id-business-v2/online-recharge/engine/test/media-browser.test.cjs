@@ -196,3 +196,198 @@ test('isolated Chromium preserves business fields while masking credentials acro
     }
   }
 });
+
+test('isolated Chromium masks credentials labelled inside nested open shadow roots', async () => {
+  const output = path.join(__dirname, '..', 'runtime', 'verification', 'masked-shadow-media');
+  await fs.mkdir(output, { recursive: true });
+  const originalMediaDir = process.env.ONLINE_RECHARGE_MEDIA_DIR;
+  process.env.ONLINE_RECHARGE_MEDIA_DIR = output;
+  let browser,
+    externalRequests = 0;
+  try {
+    browser = await chromium.launch({
+      headless: true,
+      args: [
+        '--disable-background-networking',
+        '--host-resolver-rules=MAP * ~NOTFOUND, EXCLUDE localhost'
+      ]
+    });
+    const context = await browser.newContext({ viewport: { width: 400, height: 500 } });
+    await context.route('**/*', (route) => {
+      externalRequests++;
+      return route.abort('blockedbyclient');
+    });
+    const page = await context.newPage();
+    await page.setContent(`<span hidden id="label-a">Billing name</span>
+      <span hidden id="label-b">City</span><span hidden id="label-c">Card number</span>
+      <div id="billing-widget"></div>`);
+    await page.evaluate(() => {
+      const outer = document.getElementById('billing-widget').attachShadow({ mode: 'open' });
+      outer.innerHTML = '<div id="field-group"></div>';
+      const fields = outer.getElementById('field-group').attachShadow({ mode: 'open' });
+      fields.innerHTML = `<style>
+          input,textarea{display:block;width:300px;height:36px;margin:12px;background:white;color:black}
+        </style>
+        <span hidden id="label-a">Card number</span><input id="field-a" aria-labelledby="label-a">
+        <span hidden id="label-b">Security code</span><input id="field-b" aria-labelledby="label-b">
+        <span hidden id="label-c">Billing name</span><input id="field-c" aria-labelledby="label-c" value="Synthetic Customer">
+        <span hidden id="label-d">Email</span><input id="field-d" aria-labelledby="label-d" value="synthetic@example.invalid">
+        <span hidden id="label-e">Street address</span><textarea id="field-e" aria-labelledby="label-e">123 Main Street</textarea>`;
+    });
+    await media.start();
+    for (const phase of ['empty', 'filled']) {
+      if (phase === 'filled') {
+        await page.locator('#field-a').fill('4242424242424242');
+        await page.locator('#field-b').fill('123');
+      }
+      const screenshot = await media.screenshot(page, `shadow-${phase}`);
+      assert.ok(screenshot, 'shadow credentials require a real masked screenshot');
+      const pixels = readPixels(await fs.readFile(screenshot));
+      for (const [id, hidden] of [
+        ['field-a', true],
+        ['field-b', true],
+        ['field-c', false],
+        ['field-d', false],
+        ['field-e', false]
+      ]) {
+        const box = await page.locator(`#${id}`).boundingBox();
+        const sample = pixels(box.x + box.width / 2, box.y + box.height / 2);
+        if (hidden) assert.deepEqual(sample, [20, 34, 56], `${id} must be masked when ${phase}`);
+        else assert.notDeepEqual(sample, [20, 34, 56], `${id} must retain business visibility`);
+      }
+      assert.equal(await page.locator('[data-online-recharge-secret-mask]').count(), 0);
+    }
+    await media.finish();
+    assert.equal(await page.locator('[data-online-recharge-secret-mask]').count(), 0);
+    assert.equal(externalRequests, 0);
+    await context.close();
+  } finally {
+    try {
+      await media.finish();
+      await browser?.close();
+    } finally {
+      if (originalMediaDir === undefined) delete process.env.ONLINE_RECHARGE_MEDIA_DIR;
+      else process.env.ONLINE_RECHARGE_MEDIA_DIR = originalMediaDir;
+    }
+  }
+});
+
+test('masked recording preserves checkout animation lifecycle and payment frames', async (t) => {
+  const output = path.join(__dirname, '..', 'runtime', 'verification', 'media-animations');
+  await fs.mkdir(output, { recursive: true });
+  const originalEnvironment = {
+    ONLINE_RECHARGE_MEDIA_DIR: process.env.ONLINE_RECHARGE_MEDIA_DIR,
+    ONLINE_RECHARGE_FFMPEG_PATH: process.env.ONLINE_RECHARGE_FFMPEG_PATH
+  };
+  process.env.ONLINE_RECHARGE_MEDIA_DIR = output;
+  process.env.ONLINE_RECHARGE_FFMPEG_PATH = process.env.ONLINE_RECHARGE_FFMPEG_PATH || 'ffmpeg';
+  let browser,
+    externalRequests = 0;
+  try {
+    browser = await chromium.launch({
+      headless: true,
+      args: [
+        '--disable-background-networking',
+        '--host-resolver-rules=MAP * ~NOTFOUND, EXCLUDE localhost'
+      ]
+    });
+    for (const kind of ['transition', 'finite-animation', 'infinite-animation']) {
+      await t.test(kind, { timeout: 20000 }, async () => {
+        const context = await browser.newContext({ viewport: { width: 400, height: 240 } });
+        await context.route('**/*', (route) => {
+          externalRequests++;
+          return route.abort('blockedbyclient');
+        });
+        try {
+          const page = await context.newPage();
+          await page.setContent(`<style>
+            body{margin:8px;background:white}
+            #motion{width:30px;height:20px;background:blue}
+            #motion.transition{transition:width 300s linear}
+            #motion.finite-animation{animation:checkout-motion 300s linear 1}
+            #motion.infinite-animation{animation:checkout-motion 300s linear infinite}
+            @keyframes checkout-motion{from{transform:translateX(0)}to{transform:translateX(100px)}}
+            iframe{width:320px;height:80px}
+          </style>
+          <div id="motion"></div>
+          <iframe id="payment-frame" srcdoc="&lt;input id='synthetic-card-number' autocomplete='cc-number' value='4242424242424242'&gt;"></iframe>`);
+          await page.frameLocator('#payment-frame').locator('#synthetic-card-number').waitFor();
+          await page.evaluate(async (animationKind) => {
+            const motion = document.getElementById('motion');
+            const paymentFrame = document.getElementById('payment-frame');
+            window.syntheticLifecycleEvents = [];
+            for (const event of [
+              'transitionend',
+              'transitioncancel',
+              'animationend',
+              'animationcancel'
+            ]) {
+              motion.addEventListener(event, () => {
+                window.syntheticLifecycleEvents.push(event);
+                paymentFrame.hidden = true;
+              });
+            }
+            motion.className = animationKind;
+            // Start a real transition after its initial style has been resolved.
+            if (animationKind === 'transition') {
+              const initialWidth = motion.getBoundingClientRect().width;
+              motion.style.width = `${initialWidth + 100}px`;
+            }
+            await new Promise((resolve) =>
+              requestAnimationFrame(() => requestAnimationFrame(resolve))
+            );
+          }, kind);
+          const state = () =>
+            page.evaluate(() => ({
+              events: [...window.syntheticLifecycleEvents],
+              hidden: document.getElementById('payment-frame').hidden,
+              animationStates: document.getAnimations().map((animation) => animation.playState),
+              maskMarkers: document.querySelectorAll('[data-online-recharge-secret-mask]').length
+            }));
+          const before = await state();
+          assert.deepEqual(before.events, []);
+          assert.deepEqual(before.animationStates, ['running']);
+          assert.equal(before.hidden, false);
+          await media.start();
+          const screenshot = await media.screenshot(page, `animation-${kind}`);
+          const afterScreenshot = await state();
+          const files = await media.finish();
+          const afterFinish = await state();
+          assert.ok(screenshot, 'recording must capture a real masked PNG');
+          assert.ok(files.includes(screenshot));
+          assert.ok(
+            files.some((file) => file.endsWith('.webm')),
+            'recording must finish encoding'
+          );
+          for (const [phase, observed] of [
+            ['screenshot', afterScreenshot],
+            ['finish', afterFinish]
+          ]) {
+            assert.deepEqual(observed.events, [], `${phase} must not advance or cancel animations`);
+            assert.equal(observed.hidden, false, `${phase} must not hide the payment frame`);
+            assert.deepEqual(observed.animationStates, ['running']);
+            assert.equal(observed.maskMarkers, 0, `${phase} must clean temporary masking markers`);
+          }
+          assert.equal(
+            await page.frameLocator('#payment-frame').locator('#synthetic-card-number').isVisible(),
+            true
+          );
+        } finally {
+          await media.finish();
+          await context.close();
+        }
+      });
+    }
+    assert.equal(externalRequests, 0);
+  } finally {
+    try {
+      await media.finish();
+      await browser?.close();
+    } finally {
+      for (const [key, value] of Object.entries(originalEnvironment)) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+    }
+  }
+});

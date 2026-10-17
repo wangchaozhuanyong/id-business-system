@@ -1,4 +1,5 @@
 'use strict';
+/* global window */
 // Runs the production task child and payment core. Only browser allocation,
 // official-network transport, temporary credentials and server RPC are fixtures.
 const assert = require('node:assert/strict');
@@ -8,6 +9,7 @@ const { fork } = require('node:child_process');
 const { randomUUID } = require('node:crypto');
 const project = path.resolve(__dirname, '../../../../../../..');
 const outputRoot = path.join(project, '.runtime/online-recharge-local-acceptance-20261017');
+const repairOutputRoot = path.join(project, '.runtime/online-checkout-repair-20261018');
 const origin = 'https://chatgpt.com';
 const fixtureAccount = '11111111-1111-4111-8111-111111111111';
 const fixtureCard = '22222222-2222-4222-8222-222222222222';
@@ -24,10 +26,10 @@ const fixtureAddress = {
   is_active: true
 };
 
-function syntheticTask(scene) {
+function syntheticTask(scene, { sessionRefresh } = {}) {
   const claims = {
     iss: 'https://auth.openai.com',
-    exp: Math.floor(Date.now() / 1000) + 3600,
+    exp: Math.floor(Date.now() / 1000) + (sessionRefresh ? -60 : 3600),
     'https://api.openai.com/auth': {
       chatgpt_account_id: fixtureAccount,
       chatgpt_user_id: 'fixture-user'
@@ -159,12 +161,20 @@ async function runSyntheticRecharge(scene, options = {}) {
   assert.ok(['success', 'recover', 'unknown', 'readiness'].includes(scene));
   const cardFields = options.cardFields || 'standard';
   assert.ok(
-    ['standard', 'legacy-names', 'legacy-placeholders', 'legacy-stable-nested'].includes(cardFields)
+    [
+      'standard',
+      'legacy-names',
+      'legacy-placeholders',
+      'legacy-stable-nested',
+      'prepared-visible-shadow'
+    ].includes(cardFields)
   );
   const billingFields = options.billingFields || 'standard';
   assert.ok(
     ['standard', 'legacy-names', 'legacy-testids', 'legacy-collapsed'].includes(billingFields)
   );
+  const sessionRefresh = options.sessionRefresh || null;
+  assert.ok(sessionRefresh === null || ['same-account', 'wrong-account'].includes(sessionRefresh));
   if (options.diagnosticDelay) {
     assert.ok(['verify', 'verifyCard'].includes(options.diagnosticDelay.stage));
     assert.ok(Number.isFinite(options.diagnosticDelay.milliseconds));
@@ -177,11 +187,15 @@ async function runSyntheticRecharge(scene, options = {}) {
     );
     if (options.diagnosticDelay.kind) assert.equal(options.diagnosticDelay.stage, 'verifyCard');
   }
-  const task = options.task || syntheticTask(scene);
+  const task = options.task || syntheticTask(scene, { sessionRefresh });
   const rpc = options.rpc || strictRpcFixture(task);
   const directory =
     options.outputDir || path.join(outputRoot, `engine-${scene}-${randomUUID().slice(0, 8)}`);
-  assert.ok(path.resolve(directory).startsWith(outputRoot + path.sep));
+  assert.ok(
+    [outputRoot, repairOutputRoot].some((root) =>
+      path.resolve(directory).startsWith(root + path.sep)
+    )
+  );
   await fs.mkdir(directory, { recursive: true, mode: 0o700 });
   const child = fork(__filename, [], {
     cwd: project,
@@ -260,7 +274,8 @@ async function runSyntheticRecharge(scene, options = {}) {
     task,
     diagnosticDelay: options.diagnosticDelay,
     cardFields,
-    billingFields
+    billingFields,
+    sessionRefresh
   });
   const exit = await new Promise((resolve, reject) => {
     child.once('error', reject);
@@ -270,6 +285,7 @@ async function runSyntheticRecharge(scene, options = {}) {
     scene,
     cardFields,
     billingFields,
+    ...(sessionRefresh ? { sessionRefresh } : {}),
     ...(options.diagnosticDelay ? { diagnosticDelay: { ...options.diagnosticDelay } } : {}),
     entry: 'task-runner.runTask → execute → upstream/index.run',
     exit,
@@ -320,18 +336,41 @@ function billingHtml(mode) {
     : controls;
 }
 
-function checkoutHtml(checkoutId, scene, billingFields) {
-  return `<!doctype html><html><head>${scene === 'readiness' ? '<script type="module" src="/fixture-checkout-pending-module.js"></script>' : ''}</head><body><h1>Configure your plan</h1><p>Due today PHP 8919.64</p>
+function checkoutHtml(checkoutId, scene, billingFields, cardFields) {
+  const preparedCard = cardFields === 'prepared-visible-shadow';
+  return `<!doctype html><html><head>${scene === 'readiness' ? '<script type="module" src="/fixture-checkout-pending-module.js"></script>' : ''}${preparedCard ? '<style>@keyframes fixture-lifecycle {from {opacity:.99} to {opacity:1}} #fixture-animation {animation:fixture-lifecycle 100s linear}</style>' : ''}</head><body><h1>Configure your plan</h1><p>Due today PHP 8919.64</p>
     ${scene === 'readiness' ? '<section hidden><iframe src="https://challenges.cloudflare.com/fixture-hidden-residue" style="width:300px;height:90px"></iframe></section>' : ''}
     <div id="fixture-verification-overlay">One more step before you are done. Select the checkbox below.</div>
     <iframe id="fixture-verification" style="width:300px;height:90px" src="https://newassets.hcaptcha.com/captcha/v1/fixture/static/hcaptcha.html?kind=checkbox#frame=checkbox"></iframe>
-    <iframe style="width:900px;height:190px" src="https://js.stripe.com/fixture-card?session=${checkoutId}"></iframe>
+    ${preparedCard ? '<div id="fixture-animation">Payment UI animation</div><div style="height:1800px" aria-hidden="true"></div><p id="fixture-card-anchor">Card number</p><div id="fixture-card-host" style="visibility:hidden"></div>' : `<iframe style="width:900px;height:190px" src="https://js.stripe.com/fixture-card?session=${checkoutId}"></iframe>`}
     <section aria-label="Link"><input autocomplete="billing name" name="linkName" placeholder="Optional Link name"></section>
     <section aria-label="Billing address"><h2>Billing address</h2>
       ${billingHtml(billingFields)}
     </section><label><input name="terms" type="checkbox">I agree</label><button type="submit">Subscribe</button>
     <div id="outcome"></div><script>
       window.actualClicks=0; window.cardReady=false; window.fixtureCheckoutDomContentLoaded=0; window.billingOpens=0; window.countryChoices=0;
+      window.preparationScrolls=0; window.cardMounts=0; window.animationCallbacks=0;
+      ${
+        preparedCard
+          ? `
+      document.querySelector('#fixture-animation').addEventListener('animationend',()=>{
+        window.animationCallbacks++;
+        document.querySelector('#fixture-card-host').hidden=true;
+      });
+      addEventListener('scroll',()=>window.preparationScrolls++,{passive:true});
+      const cardObserver=new IntersectionObserver(entries=>{
+        if(!entries.some(entry=>entry.isIntersecting)||window.cardMounts)return;
+        window.cardMounts++;
+        const card=document.createElement('iframe');
+        card.style.cssText='width:900px;height:190px;visibility:visible';
+        card.src='https://js.stripe.com/fixture-card?session=${checkoutId}';
+        document.querySelector('#fixture-card-host').append(card);
+        cardObserver.disconnect();
+      },{threshold:.5});
+      cardObserver.observe(document.querySelector('#fixture-card-anchor'));
+      `
+          : ''
+      }
       document.querySelector('#fixture-billing-toggle')?.addEventListener('click',event=>{
         if(!event.isTrusted)throw Error('Synthetic billing toggle must be a real click');
         window.billingOpens++;event.currentTarget.setAttribute('aria-expanded','true');document.querySelector('#fixture-billing-fields').hidden=false;
@@ -358,6 +397,7 @@ function checkoutHtml(checkoutId, scene, billingFields) {
           body:JSON.stringify({checkout_session_id:'${checkoutId}',actualClicks:window.actualClicks,
             trustedClick:event.isTrusted,cardReady:window.cardReady,billingReady,billingOpens:window.billingOpens,countryChoices:window.countryChoices,terms:document.querySelector('[name=terms]').checked,
             domContentLoaded:window.fixtureCheckoutDomContentLoaded,documentReadyState:document.readyState,
+            preparationScrolls:window.preparationScrolls,cardMounts:window.cardMounts,animationCallbacks:window.animationCallbacks,
             hiddenCloudflareResidue:Boolean(document.querySelector('section[hidden] iframe[src*="challenges.cloudflare.com"]'))})});
         await response.json();
         document.querySelector('#outcome').textContent=${JSON.stringify(
@@ -374,12 +414,16 @@ async function fixtureChild(
   task,
   diagnosticDelay,
   cardFields = 'standard',
-  billingFields = 'standard'
+  billingFields = 'standard',
+  sessionRefresh = null
 ) {
   const { chromium, request } = require('../upstream/node_modules/playwright');
   const rpc = require('../rpc.cjs');
   const metrics = {
     loginCookieVerified: 0,
+    refreshedAuthResponses: 0,
+    originalBearerRequests: 0,
+    refreshedBearerRequests: 0,
     checkoutCreations: 0,
     checkoutDocuments: 0,
     checkoutDomContentLoaded: 0,
@@ -397,6 +441,12 @@ async function fixtureChild(
     cookieLessRequests: 0,
     cardFields,
     cardFrameDocuments: 0,
+    preparationScrolls: 0,
+    cardMounts: 0,
+    animationCallbacks: 0,
+    checkoutRecordingCaptures: 0,
+    emptyCardRecordingCaptures: 0,
+    filledCardRecordingCaptures: 0,
     subscriptionChecksBefore: 0,
     subscriptionChecksAfter: 0,
     duplicateAdmissionBlocked: false,
@@ -406,6 +456,30 @@ async function fixtureChild(
     unexpectedNetwork: 0
   };
   const session = JSON.parse(task.session);
+  const originalClaims = sessionRefresh
+    ? JSON.parse(Buffer.from(session.accessToken.split('.')[1], 'base64url').toString('utf8'))
+    : null;
+  const refreshedAccount =
+    sessionRefresh === 'wrong-account'
+      ? '99999999-9999-4999-8999-999999999999'
+      : originalClaims?.['https://api.openai.com/auth'].chatgpt_account_id;
+  const refreshedClaims = sessionRefresh
+    ? {
+        ...originalClaims,
+        exp: Math.floor(Date.now() / 1000) + 3600,
+        'https://api.openai.com/auth': {
+          ...originalClaims['https://api.openai.com/auth'],
+          chatgpt_account_id: refreshedAccount
+        }
+      }
+    : null;
+  const refreshedSession = sessionRefresh
+    ? {
+        ...session,
+        accessToken: `${session.accessToken.split('.')[0]}.${Buffer.from(JSON.stringify(refreshedClaims)).toString('base64url')}.synthetic-refreshed`,
+        account: { id: refreshedAccount }
+      }
+    : session;
   let willRenew = true;
   const accountId = require('../upstream/session-auth').extractProfileFromToken(
     session.accessToken
@@ -700,8 +774,9 @@ async function fixtureChild(
   const handle = async (route) => {
     const req = route.request(),
       url = new URL(req.url());
-    const json = (value) =>
+    const json = (value, status = 200) =>
       route.fulfill({
+        status,
         contentType: 'application/json',
         headers: { 'access-control-allow-origin': '*' },
         body: JSON.stringify(value)
@@ -714,16 +789,24 @@ async function fixtureChild(
     if (url.origin === origin && url.pathname === '/api/auth/session') {
       assert.match(req.headers().cookie || '', /__Secure-next-auth\.session-token/);
       metrics.loginCookieVerified++;
-      return json(session);
+      if (sessionRefresh) metrics.refreshedAuthResponses++;
+      return json(sessionRefresh ? refreshedSession : session);
     }
     if (req.method() === 'GET' && url.pathname === '/backend-api/accounts/check/v4-2023-04-27') {
-      assert.equal(req.headers().authorization, `Bearer ${session.accessToken}`);
+      if (sessionRefresh) {
+        if (req.headers().authorization === `Bearer ${session.accessToken}`) {
+          metrics.originalBearerRequests++;
+          return json({}, 401);
+        }
+        assert.equal(req.headers().authorization, `Bearer ${refreshedSession.accessToken}`);
+        metrics.refreshedBearerRequests++;
+      } else assert.equal(req.headers().authorization, `Bearer ${session.accessToken}`);
       if (metrics.paymentRequests) metrics.subscriptionChecksAfter++;
       else metrics.subscriptionChecksBefore++;
       return json({
         accounts: {
           default: {
-            account: { account_id: accountId },
+            account: { account_id: sessionRefresh ? refreshedAccount : accountId },
             entitlement: {
               has_active_subscription: subscribed,
               subscription_plan: subscribed ? 'pro_20x' : 'free'
@@ -744,7 +827,10 @@ async function fixtureChild(
     ) {
       assert.equal(subscribed, true);
       assert.equal(req.postDataJSON().account_id, accountId);
-      assert.equal(req.headers().authorization, `Bearer ${session.accessToken}`);
+      assert.equal(
+        req.headers().authorization,
+        `Bearer ${(sessionRefresh ? refreshedSession : session).accessToken}`
+      );
       assert.match(req.headers().cookie || '', /__Secure-next-auth\.session-token/);
       assert.equal(rpc.wasSubmitted(), true);
       metrics.renewalRequests++;
@@ -758,6 +844,8 @@ async function fixtureChild(
       url.pathname === '/backend-api/payments/checkout'
     ) {
       const body = req.postDataJSON();
+      if (sessionRefresh)
+        assert.equal(req.headers().authorization, `Bearer ${refreshedSession.accessToken}`);
       assert.equal(body.plan_name, 'chatgptpro');
       assert.equal(body.billing_details.currency, 'PHP');
       metrics.checkoutCreations++;
@@ -775,7 +863,7 @@ async function fixtureChild(
         body:
           scene === 'recover' && metrics.checkoutDocuments === 1
             ? '<html><body><h1>Content failed to load</h1><button>Try again</button></body></html>'
-            : checkoutHtml(checkoutId, scene, billingFields)
+            : checkoutHtml(checkoutId, scene, billingFields, cardFields)
       });
     }
     if (
@@ -850,15 +938,19 @@ async function fixtureChild(
         'legacy-placeholders':
           '<input autocomplete="off" placeholder="CVC"><input autocomplete="off" placeholder="1234 1234 1234 1234"><input autocomplete="off" placeholder="MM / YY">',
         'legacy-stable-nested':
-          '<input autocomplete="off" data-elements-stable-field-name="cardCvc"><input autocomplete="off" data-elements-stable-field-name="cardNumber"><input autocomplete="off" data-elements-stable-field-name="cardExpiry">'
+          '<input autocomplete="off" data-elements-stable-field-name="cardCvc"><input autocomplete="off" data-elements-stable-field-name="cardNumber"><input autocomplete="off" data-elements-stable-field-name="cardExpiry">',
+        'prepared-visible-shadow':
+          '<label id="fixture-control-label-a">Security code</label><input autocomplete="off" aria-labelledby="fixture-control-label-a"><label id="fixture-control-label-b">Card number</label><input autocomplete="off" aria-labelledby="fixture-control-label-b"><label id="fixture-control-label-c">Expiration date</label><input autocomplete="off" aria-labelledby="fixture-control-label-c">'
       }[cardFields];
       const parentOrigin = cardFields === 'legacy-stable-nested' ? 'https://js.stripe.com' : origin;
       if (cardFields === 'legacy-stable-nested') metrics.cardFrameDocuments++;
       return route.fulfill({
         contentType: 'text/html',
-        body: `<html><body>${fields}<script>
-        const publish=()=>parent.postMessage({type:'fixture-card-ready',ready:Array.from(document.querySelectorAll('input')).every(input=>Boolean(input.value))},'${parentOrigin}');
-        addEventListener('input',publish);addEventListener('change',publish);
+        body: `<html><body>${cardFields === 'prepared-visible-shadow' ? '<div id="fixture-shadow-host"></div>' : fields}<script>
+        const fieldRoot=${cardFields === 'prepared-visible-shadow' ? `document.querySelector('#fixture-shadow-host').attachShadow({mode:'open'})` : 'document'};
+        ${cardFields === 'prepared-visible-shadow' ? `fieldRoot.innerHTML=${JSON.stringify(fields)};` : ''}
+        const publish=()=>parent.postMessage({type:'fixture-card-ready',ready:Array.from(fieldRoot.querySelectorAll('input')).every(input=>Boolean(input.value))},'${parentOrigin}');
+        fieldRoot.addEventListener('input',publish);fieldRoot.addEventListener('change',publish);
         fetch('https://api.stripe.com/v1/payment_pages/${checkoutId}/init',{method:'POST',body:'key=pk_test_fixture'}).catch(()=>{});
         </script></body></html>`
       });
@@ -884,6 +976,8 @@ async function fixtureChild(
       url.pathname === '/backend-api/payments/checkout/confirm'
     ) {
       const body = req.postDataJSON();
+      if (sessionRefresh)
+        assert.equal(req.headers().authorization, `Bearer ${refreshedSession.accessToken}`);
       assert.equal(body.checkout_session_id, checkoutId);
       assert.equal(body.actualClicks, 1);
       assert.equal(body.trustedClick, true);
@@ -913,6 +1007,15 @@ async function fixtureChild(
       metrics.billingOpens = body.billingOpens;
       metrics.countryChoices = body.countryChoices;
       metrics.billingReadBack = body.billingReady;
+      if (cardFields === 'prepared-visible-shadow') {
+        assert.equal(body.cardMounts, 1);
+        assert.equal(body.preparationScrolls >= 1, true);
+        assert.equal(body.animationCallbacks, 0);
+        assert.equal(metrics.checkoutRecordingCaptures >= 1, true);
+        metrics.preparationScrolls = body.preparationScrolls;
+        metrics.cardMounts = body.cardMounts;
+        metrics.animationCallbacks = body.animationCallbacks;
+      }
       assert.equal(metrics.paymentRequests, 1);
       progress('actual-payment-request');
       if (scene === 'unknown') {
@@ -1048,6 +1151,23 @@ async function fixtureChild(
             }
           };
         }
+        if (cardFields === 'prepared-visible-shadow') {
+          const capture = page.screenshot.bind(page);
+          page.screenshot = async (...args) => {
+            const image = await capture(...args);
+            if (page.url() === checkoutUrl) {
+              metrics.checkoutRecordingCaptures++;
+              const observed = await page.evaluate(() => ({
+                filled: window.cardReady === true,
+                animationCallbacks: window.animationCallbacks
+              }));
+              if (observed.filled) metrics.filledCardRecordingCaptures++;
+              else metrics.emptyCardRecordingCaptures++;
+              metrics.animationCallbacks = observed.animationCallbacks;
+            }
+            return image;
+          };
+        }
         return page;
       };
       if (context.routeWebSocket) await context.routeWebSocket('**/*', (socket) => socket.close());
@@ -1084,7 +1204,8 @@ if (process.env.RECHARGE_FLOW_FIXTURE_CHILD === '1') {
       message.task,
       message.diagnosticDelay,
       message.cardFields,
-      message.billingFields
+      message.billingFields,
+      message.sessionRefresh
     ).then(
       () => process.exit(0),
       (error) => {
@@ -1100,6 +1221,22 @@ if (process.env.RECHARGE_FLOW_FIXTURE_CHILD === '1') {
     ['recover', {}, 'recover'],
     ['unknown', {}, 'unknown'],
     ['readiness', {}, 'readiness'],
+    [
+      'success',
+      {
+        sessionRefresh: 'same-account',
+        outputDir: path.join(repairOutputRoot, `session-refresh-same-${randomUUID().slice(0, 8)}`)
+      },
+      'cookie-refreshed session reaches one payment'
+    ],
+    [
+      'success',
+      {
+        cardFields: 'prepared-visible-shadow',
+        outputDir: path.join(repairOutputRoot, `full-flow-${randomUUID().slice(0, 8)}`)
+      },
+      'prepared native card with visible frame and shadow labels'
+    ],
     [
       'success',
       { cardFields: 'legacy-names', billingFields: 'legacy-names' },
@@ -1141,6 +1278,12 @@ if (process.env.RECHARGE_FLOW_FIXTURE_CHILD === '1') {
         const metrics = actual.metrics;
         assert.equal(actual.failure, '');
         assert.equal(metrics.loginCookieVerified, 1);
+        if (fixtureOptions.sessionRefresh) {
+          assert.equal(metrics.refreshedAuthResponses, 1);
+          assert.equal(metrics.originalBearerRequests, 0);
+          assert.equal(metrics.refreshedBearerRequests >= 2, true);
+          assert.equal(actual.result.result.confirmation.observedCanonicalPlan, 'pro_20x');
+        }
         assert.equal(metrics.checkoutCreations, 1);
         assert.equal(metrics.checkoutDocuments, scene === 'recover' ? 2 : 1);
         assert.equal(metrics.initializations, 1);
@@ -1171,6 +1314,17 @@ if (process.env.RECHARGE_FLOW_FIXTURE_CHILD === '1') {
         assert.equal(metrics.checkboxClicks, 1);
         assert.equal(metrics.checkboxCleared, true);
         assert.deepEqual(metrics.formReadFailures, []);
+        if (fixtureOptions.cardFields === 'prepared-visible-shadow') {
+          assert.equal(metrics.cardMounts, 1);
+          assert.equal(metrics.preparationScrolls >= 1, true);
+          assert.equal(metrics.animationCallbacks, 0);
+          assert.equal(metrics.checkoutRecordingCaptures >= 1, true);
+          assert.equal(metrics.emptyCardRecordingCaptures >= 1, true);
+          assert.equal(metrics.filledCardRecordingCaptures >= 1, true);
+          assert.equal(actual.result.result.paymentEvidence.amount, '8919.64');
+          assert.equal(actual.result.result.paymentEvidence.currency, 'PHP');
+          assert.equal(actual.result.result.confirmation.observedCanonicalPlan, 'pro_20x');
+        }
         if (scene === 'readiness') {
           assert.equal(metrics.checkoutDomContentLoaded, 0);
           assert.equal(metrics.pendingModuleRequests, 1);
@@ -1234,4 +1388,42 @@ if (process.env.RECHARGE_FLOW_FIXTURE_CHILD === '1') {
         }
       }
     );
+  test(
+    'cookie refresh rejects a different account before any subscription or payment request',
+    { timeout: 50000 },
+    async () => {
+      const actual = await runSyntheticRecharge('success', {
+        sessionRefresh: 'wrong-account',
+        outputDir: path.join(repairOutputRoot, `session-refresh-wrong-${randomUUID().slice(0, 8)}`)
+      });
+      assert.equal(actual.failure, '');
+      assert.equal(actual.result.status, 'failed');
+      assert.equal(actual.result.result.code, 'ACCOUNT_MISMATCH');
+      assert.equal(actual.metrics.loginCookieVerified, 1);
+      assert.equal(actual.metrics.refreshedAuthResponses, 1);
+      for (const key of [
+        'originalBearerRequests',
+        'refreshedBearerRequests',
+        'checkoutCreations',
+        'checkoutDocuments',
+        'initializations',
+        'actualPaymentClicks',
+        'paymentRequests',
+        'unexpectedNetwork'
+      ])
+        assert.equal(actual.metrics[key], 0, key);
+      assert.equal(
+        actual.actions.some((action) =>
+          [
+            'reserveCard',
+            'beforeExternalSubmit',
+            'recordCardUsage',
+            'recordCardDecline',
+            'createBillingRecord'
+          ].includes(action.method)
+        ),
+        false
+      );
+    }
+  );
 }
