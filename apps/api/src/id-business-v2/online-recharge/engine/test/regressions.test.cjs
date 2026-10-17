@@ -263,7 +263,130 @@ test('Cookie probe timeout retains the original credential without manufacturing
   assert.equal(installed.sessionData.accessToken, f.session.accessToken);
   assert.equal(f.calls.realSessionRequests, 1);
 });
-test('independent subscription and renewal preserve an authentication identity rejection', async () => {
+test('rendered authentication ignores hidden login text and preserves visible login rejection', async (t) => {
+  const bootstrapLogs = [];
+  t.mock.method(console, 'log', (...items) => bootstrapLogs.push(items));
+  t.mock.method(console, 'warn', (...items) => bootstrapLogs.push(items));
+  const { chromium } = require('../upstream/node_modules/playwright');
+  const detect = require('../upstream/auth-page-detect');
+  const auth = require('../upstream/session-auth');
+  const browser = await chromium.launch({
+    headless: true,
+    args: [
+      '--disable-background-networking',
+      '--host-resolver-rules=MAP * ~NOTFOUND, EXCLUDE localhost'
+    ]
+  });
+  try {
+    const page = await browser.newPage();
+    const chatUi =
+      '<button>New chat</button><textarea id="prompt-textarea" placeholder="Ask anything"></textarea>';
+    for (const [label, markup] of [
+      ['hidden attribute', '<div hidden>Log in Sign up</div>'],
+      ['display none', '<div style="display:none">Sign in with Google</div>'],
+      ['visibility hidden', '<div style="visibility:hidden">Sign in to continue</div>'],
+      [
+        'transparent controls',
+        '<div style="opacity:0"><button>Log in</button><button>Sign up for free</button><h1>Sign in to continue</h1></div>'
+      ],
+      [
+        'inert controls',
+        '<div inert><button>Log in</button><button>Sign up for free</button><h1>Sign in to continue</h1></div>'
+      ],
+      [
+        'aria hidden controls',
+        '<div aria-hidden="true"><button>Log in</button><button>Sign up for free</button><h1>Sign in to continue</h1></div>'
+      ],
+      [
+        'conversation quote',
+        '<article data-message-author-role="user"><p>Earlier message: Sign in to continue, Log in Sign up, Sign in with Google.</p></article>'
+      ],
+      [
+        'script and template',
+        '<script type="application/json">{"message":"登录 ChatGPT"}</script><template>使用 Google 登录</template>'
+      ]
+    ])
+      await t.test(`hidden authentication copy: ${label}`, async () => {
+        await page.setContent(`<html><body>${chatUi}${markup}</body></html>`);
+        assert.equal(await detect.isLoginPageContent(page), false);
+        assert.equal(await detect.hasVisibleLoginChrome(page), false);
+        assert.equal(await detect.hasLoggedInChatUi(page), true);
+        await auth.assertChatGptLoggedIn(page, 'synthetic homepage');
+      });
+    await t.test('visible authentication content overrides chat markers', async () => {
+      await page.setContent(`<html><body>${chatUi}<h1>Sign in to continue</h1></body></html>`);
+      assert.equal(await detect.isLoginPageContent(page), true);
+      await assert.rejects(
+        auth.assertChatGptLoggedIn(page, 'synthetic homepage'),
+        (error) => error.code === 'SESSION_NOT_CONFIRMED'
+      );
+    });
+    await t.test('hidden chat markers cannot manufacture a logged in page', async () => {
+      await page.setContent(
+        `<main>Loading account</main><div style="opacity:0">${chatUi}</div><div inert>${chatUi}</div><div aria-hidden="true">${chatUi}</div>`
+      );
+      assert.equal(await detect.hasLoggedInChatUi(page), false);
+      assert.equal(await detect.hasVisibleLoginChrome(page), false);
+    });
+    await t.test('visible login controls remain a blocker with hidden duplicates', async () => {
+      await page.setContent(
+        `${chatUi}<button hidden>Log in</button><button style="opacity:0">Log in</button><button>Log in</button><button>Sign up</button>`
+      );
+      assert.equal(await detect.hasVisibleLoginChrome(page), true);
+      assert.equal(await detect.hasLoggedInChatUi(page), false);
+      await assert.rejects(
+        auth.assertChatGptLoggedIn(page, 'synthetic homepage'),
+        (error) => error.code === 'SESSION_NOT_CONFIRMED'
+      );
+    });
+    await t.test('a real browser login redirect remains rejected', async () => {
+      await page.route('**/*', (route) =>
+        route.fulfill({ contentType: 'text/html', body: '<h1>Sign in to continue</h1>' })
+      );
+      await page.goto('https://auth.openai.com/u/login');
+      await assert.rejects(
+        auth.assertChatGptLoggedIn(page, 'synthetic homepage'),
+        (error) => error.code === 'SESSION_NOT_CONFIRMED'
+      );
+    });
+    await t.test(
+      'unknown coded bootstrap exceptions are controlled without relabeling real network failures',
+      async () => {
+        const nativeGoto = page.goto.bind(page);
+        const session = JSON.stringify({
+          accessToken: sessionBearer(),
+          user: { id: 'fixture-user' }
+        });
+        try {
+          page.goto = async () => {
+            throw Object.assign(new Error('PRIVATE_AUTH_VALUE'), { code: 'PRIVATE_AUTH_VALUE' });
+          };
+          await assert.rejects(
+            auth.bootstrapChatGptSession(page, session, { cookieVerified: true }),
+            (error) =>
+              error.code === 'SESSION_BOOTSTRAP_FAILED' && !/PRIVATE_AUTH_VALUE/.test(error.message)
+          );
+          const networkError = Object.assign(new Error('PRIVATE_AUTH_VALUE'), {
+            code: 'ECONNRESET'
+          });
+          page.goto = async () => {
+            throw networkError;
+          };
+          await assert.rejects(
+            auth.bootstrapChatGptSession(page, session, { cookieVerified: true }),
+            (error) => error === networkError
+          );
+        } finally {
+          page.goto = nativeGoto;
+        }
+      }
+    );
+    assert.doesNotMatch(JSON.stringify(bootstrapLogs), /PRIVATE_AUTH_VALUE/);
+  } finally {
+    await browser.close();
+  }
+});
+async function authenticationQueryFixture(authError, phase = 'session_install') {
   const filename = path.resolve(__dirname, '../upstream/subscription-check.js');
   const module = { exports: {} };
   let mismatches = 0,
@@ -288,12 +411,16 @@ test('independent subscription and renewal preserve an authentication identity r
       if (name === '../rpc.cjs') return { taskSignal: () => undefined, wasSubmitted: () => false };
       if (name === './session-auth')
         return {
+          ...require('../upstream/session-auth'),
           extractProfileFromToken: () => ({ accountId: 'fixture-account' }),
           installChatGptSession: async () => {
+            if (phase === 'session_bootstrap') return { sessionData: {}, cookieVerified: true };
             mismatches++;
-            throw Object.assign(new Error('Synthetic identity rejection'), {
-              code: 'ACCOUNT_MISMATCH'
-            });
+            throw authError;
+          },
+          bootstrapChatGptSession: async () => {
+            mismatches++;
+            throw authError;
           }
         };
       if (name === './playwright-proxy')
@@ -320,8 +447,17 @@ test('independent subscription and renewal preserve an authentication identity r
     }
   });
   const options = { sessionRaw: 'synthetic-session', allowBrowserFallback: true };
+  return {
+    run: (operation) => module.exports[operation](sessionBearer(), options),
+    calls: () => ({ mismatches, resourcesClosed })
+  };
+}
+test('independent subscription and renewal preserve an authentication identity rejection', async () => {
+  const f = await authenticationQueryFixture(
+    Object.assign(new Error('Synthetic identity rejection'), { code: 'ACCOUNT_MISMATCH' })
+  );
   for (const operation of ['querySubscriptionBySession', 'cancelAutoRenew', 'resumeAutoRenew']) {
-    const result = await module.exports[operation](sessionBearer(), options);
+    const result = await f.run(operation);
     assert.equal(result.ok, false);
     assert.equal(result.errorCode, 'ACCOUNT_MISMATCH');
     assert.equal(result.statusCode, 409);
@@ -329,8 +465,85 @@ test('independent subscription and renewal preserve an authentication identity r
     assert.doesNotMatch(result.error, /网络|fixture-account|synthetic-session/);
     assert.notEqual(result.resultUnknown, true);
   }
-  assert.equal(mismatches, 3);
-  assert.equal(resourcesClosed, 9);
+  assert.deepEqual(f.calls(), { mismatches: 3, resourcesClosed: 9 });
+});
+test('bootstrap diagnostics keep controlled reasons and real booleans without credentials or page values', () => {
+  const { safeBootstrapDiagnostics } = require('../upstream/session-auth');
+  const diagnostic = {
+    reason: 'visible_login_content',
+    authApiVerified: true,
+    visibleLogin: false,
+    loggedInUi: true,
+    redirectDetected: false,
+    challengeDetected: false,
+    pageClosed: false
+  };
+  assert.deepEqual(
+    safeBootstrapDiagnostics({
+      ...diagnostic,
+      accessToken: 'PRIVATE_AUTH_VALUE',
+      sessionToken: 'PRIVATE_AUTH_VALUE',
+      cookieVerified: true,
+      url: 'https://PRIVATE_AUTH_VALUE.invalid',
+      inputValue: 'PRIVATE_AUTH_VALUE',
+      unknown: 'PRIVATE_AUTH_VALUE'
+    }),
+    diagnostic
+  );
+  const filtered = safeBootstrapDiagnostics({
+    reason: 'PRIVATE_AUTH_VALUE',
+    authApiVerified: 'true',
+    visibleLogin: 1,
+    loggedInUi: 'PRIVATE_AUTH_VALUE',
+    redirectDetected: null,
+    challengeDetected: {},
+    pageClosed: false,
+    unknown: true
+  });
+  assert.deepEqual(filtered, { pageClosed: false });
+  assert.doesNotMatch(JSON.stringify(filtered), /PRIVATE_AUTH_VALUE|cookie|token|input/i);
+  for (const input of [
+    null,
+    [],
+    'PRIVATE_AUTH_VALUE',
+    { reason: 'PRIVATE_AUTH_VALUE', visibleLogin: 'true' }
+  ])
+    assert.equal(safeBootstrapDiagnostics(input), undefined);
+});
+test('bootstrap failure keeps its code and safe diagnostics through subscription and final confirmation', async () => {
+  for (const code of ['SESSION_NOT_CONFIRMED', 'SESSION_BOOTSTRAP_FAILED']) {
+    const diagnostic = {
+      reason: code === 'SESSION_NOT_CONFIRMED' ? 'visible_login_content' : 'runtime_failed',
+      authApiVerified: true,
+      visibleLogin: true,
+      loggedInUi: false,
+      redirectDetected: false,
+      challengeDetected: false,
+      pageClosed: false
+    };
+    const f = await authenticationQueryFixture(
+      Object.assign(new Error('PRIVATE_AUTH_VALUE'), {
+        code,
+        bootstrapDiagnostics: {
+          ...diagnostic,
+          token: 'PRIVATE_AUTH_VALUE',
+          unknown: 'PRIVATE_AUTH_VALUE'
+        }
+      }),
+      'session_bootstrap'
+    );
+    const result = await f.run('querySubscriptionBySession');
+    assert.equal(result.ok, false);
+    assert.equal(result.errorCode, code);
+    assert.deepEqual(JSON.parse(JSON.stringify(result.bootstrapDiagnostics)), diagnostic);
+    assert.doesNotMatch(result.error, /PRIVATE_AUTH_VALUE|网络不可用/);
+    const confirmation = evaluateSubscription('pro_20x', 'fixture-account', result);
+    assert.equal(confirmation.verified, false);
+    assert.equal(confirmation.queryErrorCode, code);
+    assert.deepEqual(confirmation.queryBootstrapDiagnostics, diagnostic);
+    assert.doesNotMatch(JSON.stringify(result), /PRIVATE_AUTH_VALUE|token|unknown/);
+    assert.deepEqual(f.calls(), { mismatches: 1, resourcesClosed: 3 });
+  }
 });
 test('authentication redirect never proves payment', () => {
   assert.equal(outcomes.isVerifiedPaymentRedirect('https://chatgpt.com/auth/login'), false);

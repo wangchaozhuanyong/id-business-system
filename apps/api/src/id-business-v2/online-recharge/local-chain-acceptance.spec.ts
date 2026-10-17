@@ -496,7 +496,19 @@ function fixture() {
 afterEach(() => vi.unstubAllGlobals());
 
 describe('本地后端链路验收（隔离存储，无官网、银行或数据库连接）', () => {
-  it.each(['success', 'recover', 'unknown', 'readiness', 'prepared', 'refresh'] as const)(
+  it.each([
+    'success',
+    'recover',
+    'unknown',
+    'readiness',
+    'prepared',
+    'refresh',
+    'hidden-login',
+    'visible-login',
+    'login-redirect',
+    'unconfirmed',
+    'challenge'
+  ] as const)(
     '真实Chromium任务子进程与实际API服务图贯通：%s',
     async (scene) => {
       type BrowserAcceptance = {
@@ -519,6 +531,12 @@ describe('本地后端链路验收（隔离存储，无官网、银行或数据�
             cardFields: string;
             billingFields: string;
             sessionRefresh?: 'same-account' | 'wrong-account';
+            authUi?:
+              | 'hidden-login'
+              | 'visible-login'
+              | 'login-redirect'
+              | 'unconfirmed'
+              | 'challenge';
             outputDir?: string;
             diagnosticDelay?: { stage: 'verify'; milliseconds: number };
             rpc: (method: string, args: Row) => Promise<unknown>;
@@ -533,7 +551,12 @@ describe('本地后端链路验收（隔离存储，无官网、银行或数据�
         unknown: 'legacy-stable-nested',
         readiness: 'standard',
         prepared: 'prepared-visible-shadow',
-        refresh: 'standard'
+        refresh: 'standard',
+        'hidden-login': 'standard',
+        'visible-login': 'standard',
+        'login-redirect': 'standard',
+        unconfirmed: 'standard',
+        challenge: 'standard'
       }[scene];
       const billingFields = {
         success: 'legacy-names',
@@ -541,15 +564,35 @@ describe('本地后端链路验收（隔离存储，无官网、银行或数据�
         unknown: 'legacy-testids',
         readiness: 'standard',
         prepared: 'standard',
-        refresh: 'standard'
+        refresh: 'standard',
+        'hidden-login': 'standard',
+        'visible-login': 'standard',
+        'login-redirect': 'standard',
+        unconfirmed: 'standard',
+        challenge: 'standard'
       }[scene];
+      const authUi = [
+        'hidden-login',
+        'visible-login',
+        'login-redirect',
+        'unconfirmed',
+        'challenge'
+      ].includes(scene)
+        ? (scene as
+            | 'hidden-login'
+            | 'visible-login'
+            | 'login-redirect'
+            | 'unconfirmed'
+            | 'challenge')
+        : undefined;
       const actual = await harness.runSyntheticRecharge(
-        ['prepared', 'refresh'].includes(scene) ? 'success' : scene,
+        ['prepared', 'refresh'].includes(scene) || authUi ? 'success' : scene,
         {
           task: claim,
           cardFields,
           billingFields,
           ...(scene === 'refresh' ? { sessionRefresh: 'same-account' as const } : {}),
+          ...(authUi ? { authUi } : {}),
           outputDir: resolve(
             process.cwd(),
             '../../.runtime/online-checkout-repair-20261018',
@@ -582,6 +625,104 @@ describe('本地后端链路验收（隔离存储，无官网、银行或数据�
         }
       );
       expect(actual.failure).toBe('');
+      if (authUi && authUi !== 'hidden-login') {
+        const authConfirmation = actual.result.result.confirmation as Row | undefined;
+        const authCode = actual.result.result.errorCode ?? authConfirmation?.queryErrorCode;
+        const authDiagnostic =
+          actual.result.result.bootstrapDiagnostics ?? authConfirmation?.queryBootstrapDiagnostics;
+        expect(actual.result.status).toBe('failed');
+        expect(authCode).toBe(
+          authUi === 'challenge' ? 'VERIFICATION_TIMEOUT' : 'SESSION_NOT_CONFIRMED'
+        );
+        expect(authDiagnostic).toMatchObject({
+          authApiVerified: authUi !== 'unconfirmed',
+          reason: {
+            'visible-login': 'visible_login_content',
+            'login-redirect': 'login_redirect',
+            unconfirmed: 'login_not_confirmed',
+            challenge: 'verification_failed'
+          }[authUi]
+        });
+        expect(actual.metrics).toMatchObject({
+          authUi,
+          authRedirectDocuments: authUi === 'login-redirect' ? actual.metrics.authPageDocuments : 0,
+          authProbeIdentityResponses: authUi === 'unconfirmed' ? 0 : 1,
+          subscriptionChecksBefore: 0,
+          subscriptionChecksAfter: 0,
+          checkoutCreations: 0,
+          checkoutDocuments: 0,
+          actualPaymentClicks: 0,
+          paymentRequests: 0,
+          renewalRequests: 0,
+          unexpectedNetwork: 0
+        });
+        if (authUi === 'login-redirect')
+          expect(actual.metrics.authRedirectDocuments).toBeGreaterThan(0);
+        expect(
+          actual.actions.some((action) =>
+            [
+              'reserveCard',
+              'beforeExternalSubmit',
+              'recordCardUsage',
+              'recordCardDecline',
+              'createBillingRecord'
+            ].includes(action.method)
+          )
+        ).toBe(false);
+        await f.rpc('completeJob', claim, {
+          status: actual.result.status,
+          result: actual.result.result,
+          message: actual.result.message,
+          definitiveFailure: actual.result.result.definitiveFailure === true,
+          confirmedPaid: false,
+          evidence: []
+        });
+        await f.sync.processPending();
+        expect(f.row(claim)).toMatchObject({
+          status: 'failed',
+          paymentStarted: false,
+          confirmedPaid: false
+        });
+        expect(f.storage.rows('onlineRechargeBill')).toHaveLength(0);
+        expect(f.storage.rows('idBusinessV2BankRechargeOrder')).toHaveLength(0);
+        expect(f.card()).toMatchObject({ successCount: 0, declineCount: 0 });
+        await expect(
+          f.rpc('completeJob', claim, {
+            status: actual.result.status,
+            result: actual.result.result
+          })
+        ).rejects.toThrow('租约失效');
+        await f.sync.processPending();
+        expect(f.storage.rows('onlineRechargeBill')).toHaveLength(0);
+        expect(f.storage.rows('idBusinessV2BankRechargeOrder')).toHaveLength(0);
+        await writeFile(
+          resolve(actual.directory, 'backend-acceptance.json'),
+          JSON.stringify(
+            {
+              scene,
+              taskStatus: f.row(claim).status,
+              paymentStarted: f.row(claim).paymentStarted,
+              confirmedPaid: f.row(claim).confirmedPaid,
+              queryErrorCode: authCode,
+              bootstrapDiagnostics: authDiagnostic,
+              paymentRequests: actual.metrics.paymentRequests,
+              bills: 0,
+              orders: 0,
+              cardSuccessCount: f.card().successCount,
+              cardDeclineCount: f.card().declineCount,
+              lateDuplicateCompletionRejected: true,
+              storageBoundary:
+                'in-memory Prisma substitute; real command transaction manager and business services',
+              productionUsed: false,
+              realPaymentUsed: false
+            },
+            null,
+            2
+          ) + '\n',
+          { mode: 0o600 }
+        );
+        return;
+      }
       expect(actual.metrics).toMatchObject({
         checkoutCreations: 1,
         checkoutDocuments: scene === 'recover' ? 2 : 1,
@@ -608,6 +749,13 @@ describe('本地后端链路验收（隔离存储，无官网、银行或数据�
           originalBearerRequests: 0
         });
         expect(actual.metrics.refreshedBearerRequests).toBeGreaterThanOrEqual(2);
+      }
+      if (scene === 'hidden-login') {
+        expect(actual.metrics).toMatchObject({
+          authUi,
+          authProbeIdentityResponses: 1,
+          authRedirectDocuments: 0
+        });
       }
       if (scene === 'prepared') {
         expect(actual.metrics).toMatchObject({
@@ -636,7 +784,7 @@ describe('本地后端链路验收（隔离存储，无官网、银行或数据�
           }
         });
       }
-      if (['readiness', 'prepared', 'refresh'].includes(scene))
+      if (['readiness', 'prepared', 'refresh', 'hidden-login'].includes(scene))
         expect(actual.result.result).toMatchObject({
           success: true,
           confirmedPaid: true,
@@ -686,7 +834,7 @@ describe('本地后端链路验收（隔离存储，无官网、银行或数据�
         expect(f.row(claim)).toMatchObject({ status: 'succeeded', confirmedPaid: true });
         expect(f.storage.rows('onlineRechargeBill')).toHaveLength(1);
         expect(f.storage.rows('idBusinessV2BankRechargeOrder')).toHaveLength(1);
-        if (['readiness', 'prepared', 'refresh'].includes(scene)) {
+        if (['readiness', 'prepared', 'refresh', 'hidden-login'].includes(scene)) {
           const bill = f.storage.rows('onlineRechargeBill')[0]!;
           expect(bill).toMatchObject({
             taskId: claim.id,

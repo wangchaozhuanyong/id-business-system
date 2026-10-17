@@ -26,6 +26,9 @@ function providerOrderReceipt(provider) {
 }
 function evaluateSubscription(targetPlan, expectedAccountId, result, options = {}) {
   const data = result?.data || {};
+  const bootstrapDiagnostics = result?.bootstrapDiagnostics
+    ? require('./upstream/session-auth').safeBootstrapDiagnostics(result.bootstrapDiagnostics)
+    : undefined;
   const observedPlan = String(data.rawPlan || '')
     .trim()
     .toLowerCase();
@@ -42,6 +45,7 @@ function evaluateSubscription(targetPlan, expectedAccountId, result, options = {
     querySucceeded: result?.ok === true,
     ...(result?.ok === false ? { queryErrorCode: result.errorCode, queryError: result.error } : {}),
     ...(Array.isArray(result?.diagnostics) ? { queryDiagnostics: result.diagnostics } : {}),
+    ...(bootstrapDiagnostics ? { queryBootstrapDiagnostics: bootstrapDiagnostics } : {}),
     ...(result?.verificationDiagnostics
       ? { verificationDiagnostics: result.verificationDiagnostics }
       : {}),
