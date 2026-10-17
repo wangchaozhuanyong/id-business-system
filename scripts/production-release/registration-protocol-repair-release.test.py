@@ -271,6 +271,68 @@ class ProtocolRepairControls(unittest.TestCase):
                 with self.assertRaisesRegex(RuntimeError, 'PREPARED_SOURCE_MOVED'):
                     b.verify_candidate_sources(c)
 
+    def test_real_baseline_keeps_expected_receipt_separate_from_published_proofs(self):
+        c = self.ready()
+        with tempfile.TemporaryDirectory(prefix='baseline-', dir=self.temporary_parent()) as name:
+            base = Path(name)
+            previous = base / 'releases/fixture'
+            previous.mkdir(parents=True)
+            (base / 'current').symlink_to(previous)
+            c['current'] = str(previous)
+            bound = c['baseline']
+            projections = {'api': {'fixture': 'published-api'}}
+            admin_projection = {'fixture': 'published-admin'}
+            raw = r.canonical({'commit': r.CURRENT, 'roleSourceProjections': projections,
+                               'adminSourceProjection': admin_projection})
+            (previous / 'release-manifest.json').write_bytes(raw)
+            c['manifestSha256'] = r.digest(raw)
+            bound['roleSourceProjectionsSha256'] = r.digest(r.canonical(projections))
+            bound['adminSourceProjectionSha256'] = r.digest(r.canonical(admin_projection))
+            safety = previous / r.WORKER / 'release_safety.py'
+            safety.parent.mkdir(parents=True)
+            safety.write_bytes(subprocess.check_output(['git', 'show', b.C8 + ':' + r.WORKER + 'release_safety.py'], cwd=r.ROOT))
+            normalizer = previous / 'scripts/mysql-dump-restore-normalizer.sed'
+            normalizer.parent.mkdir(parents=True)
+            normalizer.write_bytes((r.ROOT / 'scripts/mysql-dump-restore-normalizer.sed').read_bytes())
+            c['backupNormalizerPath'] = str(normalizer)
+            for source in bound['configurationSha256']:
+                content = ('synthetic non-secret configuration ' + source).encode()
+                (previous / source).write_bytes(content)
+                bound['configurationSha256'][source] = r.digest(content)
+            for source, proof in bound['publishedProofs'].items():
+                content = r.canonical({'fixture': source})
+                (previous / source).write_bytes(content)
+                proof['sha256'] = r.digest(content)
+            states = bound['services']
+            def configuration(_driver, state):
+                role = next(role for role, expected_state in states.items() if state == expected_state)
+                return bound['runtimeConfigurationSha256'][role]
+            def readonly_hash(*args, **_kwargs):
+                self.assertEqual(args[:2], ('docker', 'exec'))
+                self.assertEqual(args[3], 'sha256sum')
+                expected = bound['schemaSha256'] if args[4].endswith('schema.prisma') else bound['nginxSha256']
+                return expected + '  fixture-path\n'
+            driver = types.SimpleNamespace(run=readonly_hash)
+            h = types.SimpleNamespace(snapshot=Mock(return_value=states), configuration=configuration, guards=Mock())
+            expected = {'sqlite': bound['sqlite'], 'database': bound['mysql']}
+            with patch.object(r, 'BASE', base), patch.object(r, 'runtime', return_value=bound['inventory']), \
+                    patch.object(r.shutil, 'disk_usage', return_value=types.SimpleNamespace(free=7 * 1024**3)), \
+                    patch.object(r, 'sqlite_receipt', return_value=bound['sqlite']), \
+                    patch.object(r, 'mysql_receipt', return_value=bound['mysql']) as mysql:
+                # Nonempty publishedProofs must not replace the optional expected
+                # receipt used by either the first preflight or release CAS.
+                self.assertEqual(r.baseline(driver, h, object(), object(), c)[3], expected)
+                self.assertEqual(r.baseline(driver, h, object(), object(), c, copy.deepcopy(expected))[3], expected)
+                mismatch = copy.deepcopy(expected)
+                mismatch['database']['accountsSha256'] = '0' * 64
+                with self.assertRaisesRegex(RuntimeError, 'DATA_BASELINE_CHANGED'):
+                    r.baseline(driver, h, object(), object(), c, mismatch)
+                for change in ({'accountsSha256': '0' * 64}, {'accountCount': bound['mysql']['accountCount'] + 1},
+                               {'migrationsSha256': '0' * 64}, {'migrationCount': bound['mysql']['migrationCount'] + 1}):
+                    mysql.return_value = {**bound['mysql'], **change}
+                    with self.subTest(change=change), self.assertRaisesRegex(RuntimeError, 'DATA_BASELINE_CHANGED'):
+                        r.baseline(driver, h, object(), object(), c)
+
     def test_real_adapted_release_runs_backup_fence_switch_manifest_and_readback(self):
         c, plan = self.ready(), self.plan('release')
         observed = {'database': c['baseline']['mysql'], 'sqlite': c['baseline']['sqlite']}
