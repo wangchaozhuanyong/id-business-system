@@ -204,19 +204,37 @@ async function discoverCardInputs(page, timeout = 45000) {
 }
 
 async function prepareCheckoutCardSection(page) {
-    await page.waitForURL(/checkout\/openai_llc|pay\.openai|checkout\.stripe|stripe\.com/i, { timeout: 5000 }).catch(() => {});
-    await page.getByText(/Configure your plan|Card number|Pay with/i).first()
-        .waitFor({ state: 'visible', timeout: 3000 }).catch(() => {});
-
+    // Scrolling is preparation only. A swallowed text/URL wait cannot establish readiness.
     const cardLabel = page.getByText(/^Card number$/i).first();
     if (await cardLabel.isVisible({ timeout: 800 }).catch(() => false)) {
         await cardLabel.scrollIntoViewIfNeeded().catch(() => {});
     }
 
-    const orSep = page.getByText(/^OR$/i).first();
-    if (await orSep.isVisible({ timeout: 800 }).catch(() => false)) {
-        await orSep.click({ timeout: 1000 }).catch(() => {});
-    }
+}
+
+function checkoutReloadStopped(page) {
+    const state = checkoutRecovery.originalCheckoutReloadDiagnostics(page);
+    return state.reloadAttempts && !['CHECKOUT_RELOAD_READONLY', 'CHECKOUT_RELOAD_READY'].includes(state.code)
+        ? state : null;
+}
+function formFailure(result, screenshot, message, page) {
+    const stopped = page ? checkoutReloadStopped(page) : null;
+    return { success: false, submitted: false, canRetryCard: false,
+        error: stopped ? '官网结账页恢复已停止，未提交付款'
+            : message || result.error || '支付表单未能就绪，未提交付款', screenshot,
+        ...(stopped ? { errorCode: stopped.code }
+            : /^CHECKOUT_[A-Z0-9_]{1,80}$/.test(result.errorCode || result.code || '')
+            ? { errorCode: result.errorCode || result.code } : {}),
+        formDiagnostics: { missing: result.missing || [], controls: result.controls || [],
+            ...(result.inspection ? { inspection: result.inspection } : {}),
+            ...(stopped || result.diagnostics ? { loading: stopped || result.diagnostics } : {}) } };
+}
+
+function checkoutLoadFailure(result, screenshot) {
+    const failed = /CONTENT_LOAD|RELOAD/.test(result.code || '');
+    return formFailure(result, screenshot, failed
+        ? '官网支付页面内容加载失败，原单未恢复，未提交付款'
+        : '官网支付表单未能就绪，未提交付款');
 }
 
 async function typeIntoFrameLocator(frameLocator, text) {
@@ -462,6 +480,13 @@ async function completeStripeCardPayment(page, cardInfo, address, options = {}) 
     let holderName = String(options.holderName || '').trim();
     let checkoutDue = null;
     let formDeadline = Date.now() + 120000;
+    const loadDeadline = performance.now() + Math.max(1, Math.min(180000,
+        Number(process.env.CAPTCHA_CLEAR_TIMEOUT_MS) || 90000));
+    const loadingOptions = { phase: 'pre-fill-card', deadlineAt: loadDeadline,
+        maxWaitMs: Math.max(1, loadDeadline - performance.now()), maxBypassRounds: 3,
+        signal: options.signal || taskSignal?.(),
+        checkoutReadyWaitMs: Number(process.env.CHECKOUT_READY_WAIT_MS || 45000),
+        isSubmitted: wasSubmitted };
 
     if (options.operation === 'upgrade' && await require('./upgrade-checkout').findUpgradeDialog(page)) {
         return require('./upgrade-checkout').completeUpgradePayment(page, cardInfo, options);
@@ -479,25 +504,18 @@ async function completeStripeCardPayment(page, cardInfo, address, options = {}) 
             const retryFill = await fillCardFieldsOpenAiCheckout(page, cardInfo, ELEMENT_TIMEOUT, formDeadline);
             if (!retryFill.ok) {
                 const screenshotPath = await saveDebugScreenshot(page, 'card_fields_not_found');
-                return { success: false, error: retryFill.error || '无法定位信用卡输入框', screenshot: screenshotPath };
+                return formFailure(retryFill, screenshotPath, undefined, page);
             }
         } else {
         console.log('[Stripe] Step 0: 等待 Checkout 支付页就绪...');
-        const captchaClear = await clearHumanVerification(page, {
-            phase: 'pre-fill-card',
-            maxWaitMs: Number(process.env.CAPTCHA_CLEAR_TIMEOUT_MS || 90000),
-            maxBypassRounds: 3,
-            requireCheckoutReady: true,
-            checkoutReadyWaitMs: Number(process.env.CHECKOUT_READY_WAIT_MS || 45000)
-        });
+        // Verification may precede hosted payment-method selection. Form readiness is
+        // checked separately after that selection, within this same loading deadline.
+        const captchaClear = await clearHumanVerification(page, { ...loadingOptions,
+            requireCheckoutReady: false, checkCheckoutLoad: true, allowCheckoutReload: true });
         if (!captchaClear.cleared) {
             const screenshotPath = await saveDebugScreenshot(page, captchaClear.checkoutNotReady ? 'checkout_not_ready' : 'captcha_before_card_fill');
             if (captchaClear.checkoutNotReady) {
-                return {
-                    success: false,
-                    error: 'Checkout 支付表单未能加载',
-                    screenshot: screenshotPath
-                };
+                return checkoutLoadFailure(captchaClear, screenshotPath);
             }
             return {
                 success: false,
@@ -539,12 +557,33 @@ async function completeStripeCardPayment(page, cardInfo, address, options = {}) 
             console.log('[Stripe] OpenAI checkout 页面，跳过支付方式选择，直接填卡');
         }
 
+        const formReady = await clearHumanVerification(page, { ...loadingOptions,
+            requireCheckoutReady: true, allowCheckoutReload: true });
+        if (!formReady.cleared) {
+            const screenshot = await saveDebugScreenshot(page, 'checkout_not_ready');
+            if (formReady.checkoutNotReady) return checkoutLoadFailure(formReady, screenshot);
+            return { success: false, submitted: false, canRetryCard: false,
+                error: buildCaptchaRequiredError(), screenshot, captchaRequired: true };
+        }
         console.log('[Stripe] Step 2: 填写信用卡字段（iframe 自动识别）...');
         formDeadline = Date.now() + 120000;
-        const fillResult = await fillCardFieldsOpenAiCheckout(page, cardInfo, ELEMENT_TIMEOUT, formDeadline);
+        let fillResult = await fillCardFieldsOpenAiCheckout(page, cardInfo, ELEMENT_TIMEOUT, formDeadline);
+        if (!fillResult.ok && fillResult.errorCode === 'CHECKOUT_CONTENT_LOAD_FAILED'
+            && !checkoutRecovery.originalCheckoutReloadDiagnostics(page).reloadAttempts) {
+            const remaining = formDeadline - Date.now();
+            if (remaining > 0) {
+                const recovered = await clearHumanVerification(page, { ...loadingOptions,
+                    phase: 'fill-card-recovery', requireCheckoutReady: true, allowCheckoutReload: true,
+                    maxWaitMs: remaining, checkoutReadyWaitMs: remaining,
+                    deadlineAt: performance.now() + remaining });
+                if (!recovered.cleared) return checkoutLoadFailure(recovered,
+                    await saveDebugScreenshot(page, 'checkout_load_failed_during_fill'));
+                fillResult = await fillCardFieldsOpenAiCheckout(page, cardInfo, ELEMENT_TIMEOUT, formDeadline);
+            }
+        }
         if (!fillResult.ok) {
             const screenshotPath = await saveDebugScreenshot(page, 'card_fields_not_found');
-            return { success: false, error: fillResult.error || '无法定位信用卡输入框', screenshot: screenshotPath, formDiagnostics: { missing: fillResult.missing || [], controls: fillResult.controls || [] } };
+            return formFailure(fillResult, screenshotPath, undefined, page);
         }
 
         holderName = holderName || String(cardInfo.holder || '').trim();
@@ -553,15 +592,16 @@ async function completeStripeCardPayment(page, cardInfo, address, options = {}) 
         if (!billingResult.ok) {
             console.log('[Stripe] 账单控件诊断:', JSON.stringify(billingResult.controls || []));
             const screenshot = await saveDebugScreenshot(page, 'billing_address_not_filled');
-            return { success: false, submitted: false, canRetryCard: false, error: billingResult.error, screenshot, formDiagnostics: { missing: billingResult.missing || [], controls: billingResult.controls || [] } };
+            return formFailure(billingResult, screenshot, undefined, page);
         }
         const cardAfterBilling = await fillCardFieldsOpenAiCheckout(page, cardInfo, ELEMENT_TIMEOUT, formDeadline);
         if (!cardAfterBilling.ok) {
             const screenshot = await saveDebugScreenshot(page, 'card_fields_changed_after_billing');
-            return { success: false, submitted: false, canRetryCard: false, error: '账单更新后卡片字段未就绪，未提交付款', screenshot };
+            return formFailure(cardAfterBilling, screenshot, '账单更新后卡片字段未就绪，未提交付款', page);
         }
         const billingAfterCard = await fillOpenAiCheckoutBilling(page, address, holderName, formDeadline);
-        if (!billingAfterCard.ok) return { success: false, submitted: false, canRetryCard: false, error: billingAfterCard.error, screenshot: await saveDebugScreenshot(page, 'billing_changed_after_card') };
+        if (!billingAfterCard.ok) return formFailure(billingAfterCard,
+            await saveDebugScreenshot(page, 'billing_changed_after_card'), undefined, page);
         console.log('[Stripe] 账单字段已逐项回读校验');
 
         // Step 8: Check service agreement checkbox if present
@@ -2434,6 +2474,10 @@ async function clickCheckoutSubmitButton(page, options = {}) {
                     throw Object.assign(new Error('付款前官网报价已变化，未提交付款'), { code: 'QUOTE_CHANGED' });
                 }
             }
+            const reload = checkoutRecovery.originalCheckoutReloadDiagnostics(page);
+            if (reload.reloadAttempts && reload.code !== 'CHECKOUT_RELOAD_READY') {
+                throw Object.assign(new Error('官网结账页恢复未就绪或已停止，未提交付款'), { code: reload.code });
+            }
             await beforeExternalSubmit({ provider: 'local', stage: 'payment_submit', paymentContext: options.paymentContext,
                 checkoutRecovery: options.checkoutRecovery });
             options.paymentObservation?.arm();
@@ -2441,7 +2485,8 @@ async function clickCheckoutSubmitButton(page, options = {}) {
             console.log(`[Stripe] ✅ 已点击提交按钮 (${label})`);
             return true;
         } catch (error) {
-            if (['LEASE_LOST', 'PAYMENT_LIMIT', 'QUOTE_CHANGED'].includes(error.code)) throw error;
+            if (['LEASE_LOST', 'PAYMENT_LIMIT', 'QUOTE_CHANGED'].includes(error.code)
+                || /^CHECKOUT_RELOAD_[A-Z0-9_]+$/.test(error.code || '')) throw error;
             if (wasSubmitted()) throw new ResultUnknownError();
             console.log(`[Stripe] 提交按钮点击失败 (${label}): ${error.message}`);
             return false;

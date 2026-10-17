@@ -512,7 +512,10 @@ function checkoutServiceFixture(options = {}) {
       if (name === './mysql-store')
         return { resolvePlanName: () => options.planName ?? 'chatgptpro' };
       if (name === './region-config') return { getRegionConfig: () => ({ currency: 'PHP' }) };
-      if (name === './session-auth') return {};
+      if (name === './session-auth')
+        return {
+          assertChatGptLoggedIn: async () => {}
+        };
       if (name === './auth-page-detect')
         return {
           isCheckoutLoginGate: async () => options.loginGate === true,
@@ -521,7 +524,12 @@ function checkoutServiceFixture(options = {}) {
         };
       if (name === './human-verification')
         return {
-          clearHumanVerification: async () => ({ cleared: false, checkoutNotReady: true }),
+          clearHumanVerification: async (_, verificationOptions) => {
+            options.onVerification?.(verificationOptions);
+            return options.verification || { cleared: false, checkoutNotReady: true };
+          },
+          isCloudflareWallPage: async () => false,
+          isCheckoutPaymentReady: async () => false,
           buildCaptchaRequiredError: () => 'Synthetic verification not ready'
         };
       if (name === '../checkout-recovery.cjs') return recovery;
@@ -755,6 +763,87 @@ function checkoutPhaseFixture(page, Service) {
     }
   });
   return { pending, uiCalls: () => uiCalls };
+}
+
+test('the official hosted opener defers strict card readiness until payment-method selection', async () => {
+  let verificationOptions,
+    apiCalls = 0;
+  const Service = checkoutServiceFixture({
+    verification: { cleared: true },
+    onVerification: (options) => {
+      verificationOptions = options;
+    }
+  });
+  const page = {
+    context: () => ({
+      request: {
+        post: async () => {
+          apiCalls++;
+          return { status: () => 200, text: async () => JSON.stringify({ url: hostedUrl }) };
+        }
+      }
+    }),
+    goto: async () => {},
+    waitForLoadState: async () => {},
+    waitForTimeout: async () => {},
+    title: async () => 'Synthetic page',
+    innerText: async () => 'Credit or debit card',
+    url: () => hostedUrl
+  };
+  const phase = checkoutPhaseFixture(page, Service);
+  await phase.pending;
+  assert.equal(apiCalls, 1);
+  assert.equal(phase.uiCalls(), 0);
+  assert.equal(verificationOptions.requireCheckoutReady, false);
+  assert.equal(verificationOptions.checkCheckoutLoad, true);
+  assert.equal(verificationOptions.allowCheckoutReload, true);
+});
+
+for (const code of [
+  'CHECKOUT_CONTENT_LOAD_FAILED',
+  'CHECKOUT_FORM_NOT_READY',
+  'CHECKOUT_RELOAD_TIMEOUT'
+]) {
+  test(`accepted checkout retains ${code} and never falls back to creating a UI checkout`, async () => {
+    let verificationOptions,
+      apiCalls = 0;
+    const Service = checkoutServiceFixture({
+      verification: { cleared: false, checkoutNotReady: true, code },
+      onVerification: (options) => {
+        verificationOptions = options;
+      }
+    });
+    const page = {
+      context: () => ({
+        request: {
+          post: async () => {
+            apiCalls++;
+            return {
+              status: () => 200,
+              text: async () =>
+                JSON.stringify({
+                  checkout_session_id: embeddedSource.checkoutId,
+                  processor_entity: embeddedSource.processorEntity
+                })
+            };
+          }
+        }
+      }),
+      goto: async () => {},
+      waitForLoadState: async () => {},
+      waitForTimeout: async () => {},
+      title: async () => 'Synthetic page',
+      url: () => embeddedUrl
+    };
+    const phase = checkoutPhaseFixture(page, Service);
+    await assert.rejects(phase.pending, { code, checkoutCreationState: 'accepted' });
+    assert.equal(apiCalls, 1);
+    assert.equal(phase.uiCalls(), 0);
+    assert.equal(verificationOptions.requireCheckoutReady, true);
+    assert.equal(verificationOptions.allowCheckoutReload, true);
+    assert.equal(typeof verificationOptions.isSubmitted, 'function');
+    assert.deepEqual(recovery.officialCheckoutForPage(page), embeddedSource);
+  });
 }
 
 for (const failure of ['navigation timeout', 'login gate', 'page verification']) {

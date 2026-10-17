@@ -54,16 +54,16 @@
     {
       "path": "checkout-form.cjs",
       "originalSha256": null,
-      "adaptedSha256": "5cae5a9f846a9056ecedd7ae5e040b72717b137c2324257fcbfd86b897e66416",
+      "adaptedSha256": "69c3ccc95ee84f8c64cc01c89848a1d77720faa2e661c22387e5b3b8b9636531",
       "changed": true,
-      "reason": "Semantic frame-safe checkout form readback and immutable per-task payment cap.; 2026-10-17 controlled checkout form, subscription context and progress repair."
+      "reason": "Semantic frame-safe checkout form readback and immutable per-task payment cap.; 2026-10-17 controlled checkout form, subscription context and progress repair. Reject false form readiness; recover one original load before payment and retain controlled diagnostics."
     },
     {
       "path": "checkout-recovery.cjs",
       "originalSha256": null,
-      "adaptedSha256": "d1f19e1735d15deabd236244ae4776e8a9ae50c23b23dbf08472be703a1ec8cc",
+      "adaptedSha256": "bbb1d3b3fe2d3ee9338243fd4e9477a5649f9326fa12e3b3e3c8b7930d388eae",
       "changed": true,
-      "reason": "Unattended verification, bounded cancellation and original-checkout read-only reconciliation; synthetic regression coverage. 2026-10-17 embedded checkout source binding, exact original payment evidence and read-only recovery; stop duplicate checkout creation on accepted or uncertain POST; synthetic regression coverage."
+      "reason": "Unattended verification, bounded cancellation and original-checkout read-only reconciliation; synthetic regression coverage. 2026-10-17 embedded checkout source binding, exact original payment evidence and read-only recovery; stop duplicate checkout creation on accepted or uncertain POST; synthetic regression coverage. Reject false form readiness; recover one original load before payment and retain controlled diagnostics."
     },
     {
       "path": "confirmation.cjs",
@@ -194,9 +194,16 @@
     {
       "path": "test/checkout-form.test.cjs",
       "originalSha256": null,
-      "adaptedSha256": "545241f33c459dddedf2fa081addcf907e8854ad70713cfcfba2754f1ea8ea25",
+      "adaptedSha256": "19cd447871d936a3538dd117d296f71e2b6dd9f70a7f7d7467feece09a6897a9",
       "changed": true,
-      "reason": "Real Chromium regression coverage for semantic embedded fields, readback, deadline and payment limits.; 2026-10-17 controlled checkout form, subscription context and progress repair."
+      "reason": "Real Chromium regression coverage for semantic embedded fields, readback, deadline and payment limits.; 2026-10-17 controlled checkout form, subscription context and progress repair. Reject false form readiness; recover one original load before payment and retain controlled diagnostics."
+    },
+    {
+      "path": "test/checkout-load-recovery.test.cjs",
+      "originalSha256": null,
+      "adaptedSha256": "29840320284c325846b52acc87b310b96f948405f080171cc6e5221d3019f794",
+      "changed": true,
+      "reason": "Synthetic browser coverage for original-checkout loading, bounded recovery, redirects and single-payment protection. Reject false form readiness; recover one original load before payment and retain controlled diagnostics."
     },
     {
       "path": "test/checkout-outcomes.test.cjs",
@@ -204,6 +211,13 @@
       "adaptedSha256": "ce562c3ff76d615ef80fc175bec05ec3e87af9fb7d39ef35572a2a63a6c060b6",
       "changed": true,
       "reason": "离线回归：真实Checkout辅助函数、今日应付与一般错误、同账号Free首次开通预检，不使用真实资料。"
+    },
+    {
+      "path": "test/checkout-page-loading.test.cjs",
+      "originalSha256": null,
+      "adaptedSha256": "8f2244d5247cc33284e079bb5e32b55a99b7adcf50556c9283b4f0cffbb533ab",
+      "changed": true,
+      "reason": "Synthetic browser coverage for original-checkout loading, bounded recovery, redirects and single-payment protection. Reject false form readiness; recover one original load before payment and retain controlled diagnostics."
     },
     {
       "path": "test/checkout-recheck.test.cjs",
@@ -222,9 +236,9 @@
     {
       "path": "test/checkout-recovery.test.cjs",
       "originalSha256": null,
-      "adaptedSha256": "2a6223def3108d2de2d0fee61d4a3dc3dafad427d0f99a340b15eb01a20dd929",
+      "adaptedSha256": "8f4cd48f4c9db14797af3f269cc2fa0f17b41d8841914256deb1193dd783450c",
       "changed": true,
-      "reason": "Unattended verification, bounded cancellation and original-checkout read-only reconciliation; synthetic regression coverage. 2026-10-17 embedded checkout source binding, exact original payment evidence and read-only recovery; stop duplicate checkout creation on accepted or uncertain POST; synthetic regression coverage."
+      "reason": "Unattended verification, bounded cancellation and original-checkout read-only reconciliation; synthetic regression coverage. 2026-10-17 embedded checkout source binding, exact original payment evidence and read-only recovery; stop duplicate checkout creation on accepted or uncertain POST; synthetic regression coverage. Reject false form readiness; recover one original load before payment and retain controlled diagnostics."
     },
     {
       "path": "test/credentials-main.test.cjs",
@@ -318,6 +332,13 @@
       "reason": "Synthetic completion and lease loss regression; no filesystem, network or payment execution."
     },
     {
+      "path": "test/recharge-flow-acceptance.test.cjs",
+      "originalSha256": null,
+      "adaptedSha256": "0860b7d08f65edf321d2576e66e719a44276951c8587e4dc6ba6eb763eb4cc12",
+      "changed": true,
+      "reason": "Synthetic browser coverage for original-checkout loading, bounded recovery, redirects and single-payment protection. Reject false form readiness; recover one original load before payment and retain controlled diagnostics."
+    },
+    {
       "path": "test/regressions.test.cjs",
       "originalSha256": null,
       "adaptedSha256": "aa060d1c6cc4c31d31c1d4c2cfe50e7a002480d162cfd723da58d9baf028cbfa",
@@ -397,9 +418,9 @@
     {
       "path": "test/verification-state.test.cjs",
       "originalSha256": null,
-      "adaptedSha256": "41a76f8b4b51ea570ac669f546d9b48fbbaa47e9f895b14eae148912aa923f1a",
+      "adaptedSha256": "598c04ff6f46c9cd790678da474c1bc0067f59a9376d789514ee8c04e91e7ac2",
       "changed": true,
-      "reason": "Unattended verification, bounded cancellation and original-checkout read-only reconciliation; synthetic regression coverage."
+      "reason": "Unattended verification, bounded cancellation and original-checkout read-only reconciliation; synthetic regression coverage. Reject false form readiness; recover one original load before payment and retain controlled diagnostics."
     },
     {
       "path": "test/worker-heartbeat.test.cjs",
@@ -481,9 +502,9 @@
     {
       "path": "upstream/chatgpt.js",
       "originalSha256": "cc94972036ccc614fe02276328b2ac82090a3893219d6d351772f659de88d550",
-      "adaptedSha256": "4c657ed2ca426a0922c153fb9d207e9fe140a4f563de29ceed469192145d658f",
+      "adaptedSha256": "15db57189fda8f787a22f0f145465fc879ba8868de8ee73e3be1dd5ae1baf047",
       "changed": true,
-      "reason": "Never estimate Chilean checkout amounts from numeric plan names; require official quote. 2026-10-17 embedded checkout source binding, exact original payment evidence and read-only recovery; stop duplicate checkout creation on accepted or uncertain POST; synthetic regression coverage."
+      "reason": "Never estimate Chilean checkout amounts from numeric plan names; require official quote. 2026-10-17 embedded checkout source binding, exact original payment evidence and read-only recovery; stop duplicate checkout creation on accepted or uncertain POST; synthetic regression coverage. Reject false form readiness; recover one original load before payment and retain controlled diagnostics."
     },
     {
       "path": "upstream/chile-money.js",
@@ -523,9 +544,9 @@
     {
       "path": "upstream/human-verification.js",
       "originalSha256": "13056c91e1e2a77563ca29206446c783ee33774003555422bb2694d7fb9cd317",
-      "adaptedSha256": "0cfa8b8fd5e63ddd87485e8eaaca5993253cbbfde727e3c9ec5c4e6bef4b8bed",
+      "adaptedSha256": "ac260712be20416cc952da34cddaf28897fc9ababe32cdef153fa84e7cbd7309",
       "changed": true,
-      "reason": "冻结原版保持不变。; 2026-10-17 unattended verification and original-checkout reconciliation."
+      "reason": "冻结原版保持不变。; 2026-10-17 unattended verification and original-checkout reconciliation. Reject false form readiness; recover one original load before payment and retain controlled diagnostics."
     },
     {
       "path": "upstream/index.js",
@@ -607,9 +628,9 @@
     {
       "path": "upstream/stripe-payment.js",
       "originalSha256": "007a6ae1abb633fd283e48f4ceac02bf3d2e2fc30aaca87520565b34eb29743e",
-      "adaptedSha256": "7274bcf3819f70783995cef3b695303fcb8ebdb30da29c339b8c64575af52993",
+      "adaptedSha256": "11b942c576996868d8c598b0d972838de07f662bdd584bec3fb3e819da4fb6b8",
       "changed": true,
-      "reason": "Read exact whole-peso CLP totals, wait for official Chilean tax total, preserve address country and existing final payment gates.; 2026-10-17 controlled checkout form, subscription context and progress repair.; 2026-10-17 unattended verification and original-checkout reconciliation. 2026-10-17 embedded checkout source binding, exact original payment evidence and read-only recovery; stop duplicate checkout creation on accepted or uncertain POST; synthetic regression coverage."
+      "reason": "Read exact whole-peso CLP totals, wait for official Chilean tax total, preserve address country and existing final payment gates.; 2026-10-17 controlled checkout form, subscription context and progress repair.; 2026-10-17 unattended verification and original-checkout reconciliation. 2026-10-17 embedded checkout source binding, exact original payment evidence and read-only recovery; stop duplicate checkout creation on accepted or uncertain POST; synthetic regression coverage. Reject false form readiness; recover one original load before payment and retain controlled diagnostics."
     },
     {
       "path": "upstream/subscription-check.js",

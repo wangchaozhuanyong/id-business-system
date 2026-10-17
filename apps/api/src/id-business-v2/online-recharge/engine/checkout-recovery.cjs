@@ -3,6 +3,7 @@
 // Original-checkout identity and payment receipts stay separate from a quote or a redirect.
 // Credentials are consumed only in memory; only the bounded receipt projection leaves this file.
 const { createHash } = require('node:crypto');
+const { EventEmitter } = require('node:events');
 const { performance } = require('node:perf_hooks');
 const { setTimeout, clearTimeout } = require('node:timers');
 const TRUSTED = new Set(['chatgpt.com', 'pay.openai.com', 'checkout.stripe.com']);
@@ -20,6 +21,7 @@ const CONTEXT_FIELDS = [
 const CHECKOUT_PATH = '/backend-api/payments/checkout';
 const MAX_BODY = 512 * 1024;
 const officialCheckouts = new WeakMap();
+const originalCheckoutReloads = new WeakMap();
 const SOURCE_KEYS = ['kind', 'checkoutId', 'processorEntity'];
 
 function identityFailure() {
@@ -326,6 +328,512 @@ async function bounded(operation, options, maximum) {
   } finally {
     clearTimeout(timer);
     options.signal?.removeEventListener('abort', onAbort);
+  }
+}
+function reloadFailure(code) {
+  const message =
+    code === 'LEASE_LOST'
+      ? '任务已停止'
+      : code === 'CHECKOUT_RELOAD_TIMEOUT'
+        ? '原结账页重载超过本次总时限'
+        : code === 'CHECKOUT_RELOAD_PAYMENT_STARTED'
+          ? '原任务已提交付款，未重载结账页'
+          : code === 'CHECKOUT_RELOAD_ALREADY_ATTEMPTED'
+            ? '原结账页已使用一次重载机会'
+            : code === 'CHECKOUT_RELOAD_NOT_REQUIRED'
+              ? '未确认原结账页存在可见加载失败'
+              : code === 'CHECKOUT_RELOAD_ORIGINAL_CHANGED'
+                ? '原结账页身份发生变化，未继续恢复'
+                : '原结账页恢复条件未通过核验';
+  return Object.assign(new Error(message), { code });
+}
+function submittedState(check) {
+  if (typeof check !== 'function') throw reloadFailure('CHECKOUT_RELOAD_STATE_UNAVAILABLE');
+  let submitted;
+  try {
+    submitted = check();
+  } catch (error) {
+    if (error?.code === 'LEASE_LOST') throw error;
+    throw reloadFailure('CHECKOUT_RELOAD_STATE_UNAVAILABLE');
+  }
+  if (submitted !== false)
+    throw reloadFailure(
+      submitted === true ? 'CHECKOUT_RELOAD_PAYMENT_STARTED' : 'CHECKOUT_RELOAD_STATE_UNAVAILABLE'
+    );
+}
+function reloadClock(options) {
+  if (!Number.isFinite(options?.deadlineAt))
+    throw reloadFailure('CHECKOUT_RELOAD_STATE_UNAVAILABLE');
+  if (options.signal?.aborted || options.ownerSignal?.aborted) throw reloadFailure('LEASE_LOST');
+  if (performance.now() >= options.deadlineAt) throw reloadFailure('CHECKOUT_RELOAD_TIMEOUT');
+  submittedState(options.isSubmitted);
+}
+function haltOriginalReload(state, error) {
+  if (state.phase !== 'halted') {
+    state.phase = 'halted';
+    state.code =
+      error?.code === 'LEASE_LOST' || /^CHECKOUT_[A-Z0-9_]+$/.test(error?.code || '')
+        ? error.code
+        : 'CHECKOUT_RELOAD_FAILED';
+  }
+  clearTimeout(state.timer);
+  return reloadFailure(state.code);
+}
+function assertOriginalReload(page, state, options = state.options) {
+  if (state.phase === 'halted') throw reloadFailure(state.code);
+  reloadClock(state.options);
+  reloadClock({ ...options, deadlineAt: Math.min(state.options.deadlineAt, options.deadlineAt) });
+  if (page.isClosed?.() || page.context() !== state.context)
+    throw reloadFailure('CHECKOUT_RELOAD_ORIGINAL_CHANGED');
+  let identity;
+  try {
+    identity = checkoutIdentity(page.url(), officialCheckoutForPage(page));
+  } catch {
+    throw reloadFailure('CHECKOUT_RELOAD_ORIGINAL_CHANGED');
+  }
+  if (
+    identity.checkoutUrl !== state.original.checkoutUrl ||
+    identity.checkoutId !== state.original.checkoutId ||
+    identity.processorEntity !== state.original.processorEntity ||
+    JSON.stringify(identity.source) !== JSON.stringify(state.original.source)
+  )
+    throw reloadFailure('CHECKOUT_RELOAD_ORIGINAL_CHANGED');
+}
+function originalCheckoutReloadDiagnostics(page) {
+  const state = originalCheckoutReloads.get(page);
+  return {
+    reloadAttempts: state?.reloadAttempts || 0,
+    blockedWrites: state?.blockedWrites || 0,
+    code: state?.code || 'CHECKOUT_RELOAD_NOT_ATTEMPTED'
+  };
+}
+async function reloadOriginalCheckout(page, options = {}) {
+  const existing = originalCheckoutReloads.get(page);
+  if (existing)
+    throw haltOriginalReload(existing, reloadFailure('CHECKOUT_RELOAD_ALREADY_ATTEMPTED'));
+  reloadClock(options);
+  const original = checkoutIdentity(page.url(), officialCheckoutForPage(page));
+  const clock = { deadlineAt: options.deadlineAt, signal: options.signal };
+  let loadFailed;
+  try {
+    loadFailed = await bounded(
+      () => require('./checkout-form.cjs').checkoutPageLoadFailed?.(page),
+      clock
+    );
+  } catch (error) {
+    if (error?.code === 'LEASE_LOST') throw error;
+    throw reloadFailure(
+      error?.code === 'ORIGINAL_PAYMENT_READ_TIMEOUT'
+        ? 'CHECKOUT_RELOAD_TIMEOUT'
+        : 'CHECKOUT_RELOAD_FAILED'
+    );
+  }
+  reloadClock(options);
+  if (loadFailed !== true) throw reloadFailure('CHECKOUT_RELOAD_NOT_REQUIRED');
+  // Reserve before the first async route mutation so concurrent calls cannot reload twice.
+  const reserved = originalCheckoutReloads.get(page);
+  if (reserved)
+    throw haltOriginalReload(reserved, reloadFailure('CHECKOUT_RELOAD_ALREADY_ATTEMPTED'));
+  const state = {
+    options: { ...options },
+    original,
+    context: page.context(),
+    phase: 'readonly',
+    code: 'CHECKOUT_RELOAD_READONLY',
+    reloadAttempts: 1,
+    blockedWrites: 0,
+    inFlight: true,
+    childTargets: new Map(),
+    channels: new Set(),
+    commandSequence: 0
+  };
+  originalCheckoutReloads.set(page, state);
+  const leaseLost = () =>
+    (state.phase === 'finished'
+      ? state.options.ownerSignal || state.options.signal
+      : state.options.signal
+    )?.aborted || state.options.ownerSignal?.aborted;
+  const abort = () => {
+    if (leaseLost()) haltOriginalReload(state, reloadFailure('LEASE_LOST'));
+  };
+  state.options.signal?.addEventListener('abort', abort, { once: true });
+  state.options.ownerSignal?.addEventListener('abort', abort, { once: true });
+  state.timer = setTimeout(
+    () => haltOriginalReload(state, reloadFailure('CHECKOUT_RELOAD_TIMEOUT')),
+    Math.max(1, state.options.deadlineAt - performance.now())
+  );
+  page.once?.('close', () => {
+    haltOriginalReload(state, reloadFailure('CHECKOUT_RELOAD_PAGE_CLOSED'));
+    state.options.signal?.removeEventListener('abort', abort);
+    state.options.ownerSignal?.removeEventListener('abort', abort);
+    for (const channel of state.channels) channel.close();
+  });
+  const guard = async (cdp, event) => {
+    const raw = event.request;
+    const request = {
+      url: () => raw.url,
+      method: () => raw.method,
+      postData: () => raw.postData || ''
+    };
+    const writing = !['GET', 'HEAD', 'OPTIONS'].includes(raw.method);
+    const reject = async () => {
+      if (writing) state.blockedWrites += 1;
+      await cdp
+        .send('Fetch.failRequest', { requestId: event.requestId, errorReason: 'BlockedByClient' })
+        .catch(() => {});
+    };
+    const proceed = () => cdp.send('Fetch.continueRequest', { requestId: event.requestId });
+    let url;
+    try {
+      url = new URL(request.url());
+      if (
+        request.method() === 'POST' &&
+        decodeURIComponent(url.pathname).replace(/\/+$/, '') === CHECKOUT_PATH
+      ) {
+        return await reject();
+      }
+      if (state.phase === 'finished') {
+        if (leaseLost()) throw reloadFailure('LEASE_LOST');
+        return await proceed();
+      }
+      assertOriginalReload(page, state);
+      if (
+        event.resourceType === 'Document' &&
+        event.frameId === state.mainFrameId &&
+        url.href !== state.original.checkoutUrl
+      )
+        throw reloadFailure('CHECKOUT_RELOAD_ORIGINAL_CHANGED');
+      // An omitted large POST body cannot be assumed to be a safe empty initialization.
+      if (
+        (writing && raw.hasPostData && typeof raw.postData !== 'string') ||
+        !readOnlyRecoveryRequest(request, state.original)
+      )
+        return await reject();
+      return await proceed();
+    } catch (error) {
+      haltOriginalReload(state, error);
+      await reject();
+    }
+  };
+  const bindGuard = (cdp) => {
+    cdp.on('Fetch.requestPaused', (event) => {
+      guard(cdp, event).catch((error) => {
+        haltOriginalReload(state, error);
+        cdp
+          .send('Fetch.failRequest', { requestId: event.requestId, errorReason: 'BlockedByClient' })
+          .catch(() => {});
+      });
+    });
+  };
+  const autoAttach = {
+    autoAttach: true,
+    waitForDebuggerOnStart: true,
+    flatten: false,
+    filter: [{ type: 'iframe', exclude: false }, { exclude: true }]
+  };
+  const commandClock = (rejectOnly = false) => ({
+    // This is only a protocol-command bound. Finished loading must not create
+    // a new recharge budget or keep using the expired loading deadline.
+    deadlineAt:
+      rejectOnly || state.phase === 'finished'
+        ? performance.now() + 2000
+        : Math.min(state.options.deadlineAt, performance.now() + 2000),
+    signal: rejectOnly
+      ? undefined
+      : state.phase === 'finished'
+        ? state.options.ownerSignal || state.options.signal
+        : state.options.signal
+  });
+  const assertGuardLive = () => {
+    if (state.phase === 'halted') throw reloadFailure(state.code);
+    if (leaseLost()) throw reloadFailure('LEASE_LOST');
+    if (page.isClosed?.() || page.context() !== state.context)
+      throw reloadFailure('CHECKOUT_RELOAD_PAGE_CLOSED');
+    if (state.phase !== 'finished') assertOriginalReload(page, state);
+  };
+  const childChannel = (parent, sessionId) => {
+    const channel = new EventEmitter();
+    const pending = new Map();
+    let closed = false;
+    const receive = (event) => {
+      if (event.sessionId !== sessionId || closed) return;
+      let message;
+      try {
+        message = JSON.parse(event.message);
+      } catch {
+        haltOriginalReload(state, reloadFailure('CHECKOUT_RELOAD_GUARD_UNAVAILABLE'));
+        channel.close();
+        return;
+      }
+      if (message.id) {
+        const entry = pending.get(message.id);
+        if (!entry) return;
+        pending.delete(message.id);
+        if (message.error) entry.reject(reloadFailure('CHECKOUT_RELOAD_GUARD_UNAVAILABLE'));
+        else entry.resolve(message.result || {});
+      } else if (message.method) channel.emit(message.method, message.params || {});
+    };
+    parent.on('Target.receivedMessageFromTarget', receive);
+    channel.send = async (method, params = {}, rejectingAncestor = false) => {
+      if (closed) throw reloadFailure('CHECKOUT_RELOAD_GUARD_UNAVAILABLE');
+      const id = ++state.commandSequence;
+      const rejectOnly = method === 'Fetch.failRequest' || rejectingAncestor;
+      try {
+        return await bounded(
+          () =>
+            new Promise((resolve, reject) => {
+              pending.set(id, { resolve, reject });
+              if (
+                method === 'Runtime.runIfWaitingForDebugger' ||
+                method === 'Fetch.continueRequest'
+              ) {
+                try {
+                  assertGuardLive();
+                } catch (error) {
+                  pending.delete(id);
+                  reject(error);
+                  return;
+                }
+              }
+              parent
+                .send(
+                  'Target.sendMessageToTarget',
+                  {
+                    sessionId,
+                    message: JSON.stringify({ id, method, params })
+                  },
+                  rejectOnly
+                )
+                .catch(() => {
+                  const entry = pending.get(id);
+                  if (!entry) return;
+                  pending.delete(id);
+                  entry.reject(reloadFailure('CHECKOUT_RELOAD_GUARD_UNAVAILABLE'));
+                });
+            }),
+          commandClock(rejectOnly)
+        );
+      } finally {
+        pending.delete(id);
+      }
+    };
+    channel.close = () => {
+      if (closed) return;
+      closed = true;
+      parent.removeListener('Target.receivedMessageFromTarget', receive);
+      for (const entry of pending.values())
+        entry.reject(reloadFailure('CHECKOUT_RELOAD_GUARD_UNAVAILABLE'));
+      pending.clear();
+      channel.emit('close');
+      channel.removeAllListeners();
+      state.channels.delete(channel);
+    };
+    parent.once('close', channel.close);
+    channel.once('close', () => parent.removeListener('close', channel.close));
+    state.channels.add(channel);
+    return channel;
+  };
+  const bindTargets = (parent, legacyParent = false) => {
+    const children = new Map();
+    parent.on('Page.frameAttached', ({ frameId, parentFrameId }) => {
+      if (state.ownedFrameIds.has(parentFrameId)) state.ownedFrameIds.add(frameId);
+    });
+    parent.on('Target.detachedFromTarget', ({ sessionId }) => {
+      const child = children.get(sessionId);
+      if (child) {
+        child.detached = true;
+        children.delete(sessionId);
+        if (state.childTargets.get(child.targetId) === child)
+          state.childTargets.delete(child.targetId);
+        child.channel.close();
+      }
+    });
+    parent.on('Target.attachedToTarget', (event) => {
+      const info = event.targetInfo || {};
+      const channel = childChannel(parent, event.sessionId);
+      const child = { channel, targetId: info.targetId, ready: false };
+      children.set(event.sessionId, child);
+      // Only this page's iframe descendants can be resumed. Existing running
+      // targets cannot retroactively prove that their first writes were guarded.
+      const legacy = event.waitingForDebugger === false && (!state.reloadStarted || legacyParent);
+      const owned =
+        info.type === 'iframe' &&
+        typeof info.targetId === 'string' &&
+        state.ownedFrameIds.has(info.parentFrameId) &&
+        (event.waitingForDebugger === true || legacy) &&
+        !state.childTargets.has(info.targetId);
+      if (!owned) {
+        haltOriginalReload(state, reloadFailure('CHECKOUT_RELOAD_FRAME_WRITE_UNPROVEN'));
+        return;
+      }
+      state.childTargets.set(info.targetId, child);
+      state.ownedFrameIds.add(info.targetId);
+      bindGuard(channel);
+      bindTargets(channel, legacy);
+      (async () => {
+        assertGuardLive();
+        await channel.send('Page.enable');
+        await channel.send('Fetch.enable', {
+          patterns: [{ urlPattern: '*', requestStage: 'Request' }]
+        });
+        await channel.send('Target.setAutoAttach', autoAttach);
+        assertGuardLive();
+        // A running target from the failed document is never retroactively
+        // writable or resumed. Reload must destroy it before a fresh paused
+        // target can receive this capability.
+        if (legacy) return;
+        child.ready = true;
+        await channel.send('Runtime.runIfWaitingForDebugger');
+      })().catch((error) => {
+        child.ready = false;
+        if (child.detached || page.isClosed?.()) return;
+        haltOriginalReload(state, error);
+        // Keep the target paused and its interception installed until page close.
+        // Disabling auto-attach or detaching here could resume unprotected code.
+      });
+    });
+  };
+  const ensureFrameGuard = async (frame) => {
+    while (frame && frame !== page.mainFrame()) {
+      let identity;
+      try {
+        identity = await bounded(() => state.context.newCDPSession(frame), commandClock());
+      } catch (error) {
+        if (
+          error?.message ===
+          "browserContext.newCDPSession: This frame does not have a separate CDP session, it is a part of the parent frame's session"
+        ) {
+          frame = frame.parentFrame();
+          continue;
+        }
+        throw reloadFailure('CHECKOUT_RELOAD_FRAME_WRITE_UNPROVEN');
+      }
+      try {
+        const { targetInfo } = await bounded(
+          () => identity.send('Target.getTargetInfo'),
+          commandClock()
+        );
+        if (state.childTargets.get(targetInfo?.targetId)?.ready === true) return;
+        throw reloadFailure('CHECKOUT_RELOAD_FRAME_WRITE_UNPROVEN');
+      } finally {
+        await identity.detach().catch(() => {});
+      }
+    }
+    if (!state.guardReady || !state.autoAttachReady)
+      throw reloadFailure('CHECKOUT_RELOAD_GUARD_UNAVAILABLE');
+  };
+  const childFrameGuard = async (route) => {
+    const request = route.request();
+    const writing = !['GET', 'HEAD', 'OPTIONS'].includes(request.method());
+    const reject = async () => {
+      if (writing) state.blockedWrites += 1;
+      await route.abort('blockedbyclient').catch(() => {});
+    };
+    try {
+      if (state.phase === 'halted') throw reloadFailure(state.code);
+      if (leaseLost()) throw reloadFailure('LEASE_LOST');
+      if (request.frame() === page.mainFrame()) {
+        if (!state.guardReady && writing) return await reject();
+        return await route.fallback();
+      }
+      const url = new URL(request.url());
+      if (
+        request.method() === 'POST' &&
+        decodeURIComponent(url.pathname).replace(/\/+$/, '') === CHECKOUT_PATH
+      )
+        return await reject();
+      if (state.phase !== 'finished') {
+        assertOriginalReload(page, state);
+        if (!readOnlyRecoveryRequest(request, state.original)) return await reject();
+      }
+      if (writing) {
+        // This exact frame target was paused before scripts started, and only
+        // resumed after its Fetch guard and recursive auto-attach were ACKed.
+        await ensureFrameGuard(request.frame());
+        if (state.phase === 'halted') throw reloadFailure(state.code);
+        if (leaseLost()) throw reloadFailure('LEASE_LOST');
+        if (state.phase !== 'finished') assertOriginalReload(page, state);
+      }
+      return await route.fallback();
+    } catch (error) {
+      haltOriginalReload(
+        state,
+        error?.code === 'ORIGINAL_PAYMENT_READ_TIMEOUT'
+          ? reloadFailure('CHECKOUT_RELOAD_TIMEOUT')
+          : error
+      );
+      await reject();
+    }
+  };
+  try {
+    // Keep a deny-write fallback even when CDP admission fails or a concurrent
+    // recovery attempt halts the state before Fetch has finished installing.
+    await bounded(() => page.route('**/*', childFrameGuard), clock);
+    // Playwright routes only the first URL of an HTTP redirect. This same-target
+    // Fetch guard also pauses redirected requests before any network write.
+    await bounded(async () => {
+      if (typeof state.context.newCDPSession !== 'function')
+        throw reloadFailure('CHECKOUT_RELOAD_GUARD_UNAVAILABLE');
+      state.cdp = await state.context.newCDPSession(page);
+      const { frameTree } = await state.cdp.send('Page.getFrameTree');
+      state.mainFrameId = frameTree?.frame?.id;
+      if (!state.mainFrameId) throw reloadFailure('CHECKOUT_RELOAD_GUARD_UNAVAILABLE');
+      state.ownedFrameIds = new Set();
+      const ownTree = (tree) => {
+        state.ownedFrameIds.add(tree.frame.id);
+        for (const child of tree.childFrames || []) ownTree(child);
+      };
+      ownTree(frameTree);
+      bindGuard(state.cdp);
+      bindTargets(state.cdp);
+      await state.cdp.send('Page.enable');
+      await state.cdp.send('Fetch.enable', {
+        patterns: [{ urlPattern: '*', requestStage: 'Request' }]
+      });
+      state.guardReady = true;
+      await state.cdp.send('Target.setAutoAttach', autoAttach);
+      state.autoAttachReady = true;
+    }, clock);
+    assertOriginalReload(page, state);
+    await bounded(async () => {
+      assertOriginalReload(page, state);
+      try {
+        state.reloadStarted = true;
+        await page.reload({
+          waitUntil: 'domcontentloaded',
+          timeout: Math.min(10000, checkLive(clock))
+        });
+      } finally {
+        state.inFlight = false;
+      }
+    }, clock);
+    assertOriginalReload(page, state);
+    return originalCheckoutReloadDiagnostics(page);
+  } catch (error) {
+    throw haltOriginalReload(
+      state,
+      error?.code === 'ORIGINAL_PAYMENT_READ_TIMEOUT'
+        ? reloadFailure('CHECKOUT_RELOAD_TIMEOUT')
+        : !state.guardReady && !error?.code
+          ? reloadFailure('CHECKOUT_RELOAD_GUARD_UNAVAILABLE')
+          : error
+    );
+  }
+}
+async function finishOriginalCheckoutReload(page, options = {}) {
+  const state = originalCheckoutReloads.get(page);
+  if (!state || state.inFlight || state.phase !== 'readonly')
+    throw reloadFailure(
+      state?.phase === 'halted' ? state.code : 'CHECKOUT_RELOAD_STATE_UNAVAILABLE'
+    );
+  try {
+    assertOriginalReload(page, state, options);
+    state.phase = 'finished';
+    state.code = 'CHECKOUT_RELOAD_READY';
+    clearTimeout(state.timer);
+    return originalCheckoutReloadDiagnostics(page);
+  } catch (error) {
+    throw haltOriginalReload(state, error);
   }
 }
 function observePayment(page, rawRecovery, options = {}) {
@@ -687,6 +1195,9 @@ async function recoverOriginalPayment(rawRecovery, options = {}) {
   }
 }
 module.exports = {
+  reloadOriginalCheckout,
+  finishOriginalCheckoutReload,
+  originalCheckoutReloadDiagnostics,
   rememberOfficialCheckout,
   officialCheckoutForPage,
   readOnlyRecoveryRequest,

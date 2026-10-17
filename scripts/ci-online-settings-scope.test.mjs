@@ -14,6 +14,9 @@ import {
   isOnlineCheckoutCsRecoveryOnly,
   isOnlineCheckoutCsRecoveryControlsOnly,
   onlineCheckoutCsRecoveryScope,
+  isOnlineCheckoutLoadRecoveryOnly,
+  isOnlineCheckoutLoadRecoveryControlsOnly,
+  onlineCheckoutLoadRecoveryScope,
   onlineSettingsCommands
 } from './ci-online-settings-scope.mjs';
 
@@ -707,4 +710,289 @@ test('checkout CS recovery commands retain affected API and engine checks withou
       arg
     );
   assert.throws(() => onlineSettingsCommands('admin', paths), /Admin/);
+});
+
+const checkoutLoadRecoverySources = [
+  ...[
+    'SOURCE_MANIFEST.json',
+    'checkout-form.cjs',
+    'checkout-recovery.cjs',
+    'test/checkout-form.test.cjs',
+    'test/checkout-load-recovery.test.cjs',
+    'test/checkout-page-loading.test.cjs',
+    'test/checkout-recovery.test.cjs',
+    'test/recharge-flow-acceptance.test.cjs',
+    'test/verification-state.test.cjs',
+    'upstream/chatgpt.js',
+    'upstream/human-verification.js',
+    'upstream/stripe-payment.js'
+  ].map((name) => 'apps/api/src/id-business-v2/online-recharge/engine/' + name),
+  'apps/api/src/id-business-v2/online-recharge/local-chain-acceptance.spec.ts'
+];
+const checkoutLoadRecoveryReleaseControls = [
+  '.github/workflows/online-checkout-load-validation.yml',
+  ...['build.py', 'contract.json', 'release.py', 'release.test.py'].map(
+    (name) => 'scripts/production-release/online-checkout-load-' + name
+  )
+];
+const checkoutLoadRecoveryOptional = [
+  ...checkoutLoadRecoveryReleaseControls,
+  'scripts/ci-online-settings-scope.mjs',
+  'scripts/ci-online-settings-scope.test.mjs',
+  'scripts/ci-recharge-scope.mjs',
+  'docs/ONLINE_RECHARGE.md',
+  'docs/V2_TASKS.md'
+];
+
+test('checkout load recovery has an independent exact thirteen-source scope and no Admin check', () => {
+  assert.equal(onlineCheckoutLoadRecoveryScope, 'ONLINE_CHECKOUT_LOAD_RECOVERY');
+  for (const paths of [
+    checkoutLoadRecoverySources,
+    [...checkoutLoadRecoverySources, ...checkoutLoadRecoveryOptional],
+    [...checkoutLoadRecoverySources, 'docs/ONLINE_RECHARGE.md', 'docs/V2_TASKS.md']
+  ]) {
+    assert.equal(isOnlineCheckoutLoadRecoveryOnly(paths), true);
+    assert.equal(isOnlineSettingsOnly(paths), true);
+    assert.equal(isOnlineSettingsControlsOnly(paths), false);
+    assert.equal(isOnlineCheckoutCsRecoveryOnly(paths), false);
+    assert.equal(checkMode(paths, '', ''), 'recharge');
+    assert.deepEqual(selectedParts(paths), ['guards', 'api', 'online-engine']);
+    assert.equal(checkMode(paths, 'before', 'after'), 'full');
+  }
+  for (const path of [
+    ...checkoutLoadRecoveryReleaseControls,
+    ...checkoutLoadRecoverySources.filter((path) =>
+      /checkout-load-recovery|checkout-page-loading|recharge-flow-acceptance|local-chain-acceptance/.test(
+        path
+      )
+    )
+  ])
+    assert.equal(onlineSettingsPaths.includes(path), false, 'older scopes must stay unchanged');
+});
+
+test('every load-recovery source is mandatory and adjacent API, Admin, schema and dependencies fall back', () => {
+  const exact = [...checkoutLoadRecoverySources, ...checkoutLoadRecoveryOptional];
+  for (const required of checkoutLoadRecoverySources) {
+    const paths = exact.filter((path) => path !== required);
+    assert.equal(isOnlineCheckoutLoadRecoveryOnly(paths), false, required);
+    assert.equal(isOnlineSettingsOnly(paths), false, required);
+    assert.equal(checkMode(paths, '', ''), 'full', required);
+    assert.throws(() => onlineSettingsCommands('guards', paths));
+  }
+  for (const extra of [
+    'apps/api/prisma-mysql/schema.prisma',
+    'apps/api/prisma-mysql/migrations/unreviewed/migration.sql',
+    'package.json',
+    'package-lock.json',
+    'apps/api/src/id-business-v2/online-recharge/engine/upstream/package-lock.json',
+    'apps/api/src/id-business-v2/online-recharge/engine/package.json',
+    'apps/admin/src/v2/features/online-recharge/OnlineActionDrawer.vue',
+    'apps/api/src/id-business-v2/online-recharge/persistence/worker.repository.ts',
+    'apps/api/src/id-business-v2/online-recharge/contracts.ts',
+    'apps/api/src/id-business-v2/online-recharge/mysql.integration.spec.ts',
+    'apps/api/src/auth/auth.service.ts',
+    'scripts/production-release/online-checkout-cs-release.py',
+    'scripts/ci-recharge-check.mjs',
+    exact[0],
+    checkoutLoadRecoveryOptional[0]
+  ]) {
+    const paths = [...exact, extra];
+    assert.equal(isOnlineCheckoutLoadRecoveryOnly(paths), false, extra);
+    assert.equal(isOnlineSettingsOnly(paths), false, extra);
+    assert.equal(checkMode(paths, '', ''), 'full', extra);
+    assert.throws(() => onlineSettingsCommands('guards', paths));
+  }
+});
+
+test('load-recovery control-only changes select only their own protected publisher and guards', () => {
+  for (const paths of [
+    ...checkoutLoadRecoveryReleaseControls.map((path) => [path]),
+    checkoutLoadRecoveryOptional
+  ]) {
+    assert.equal(isOnlineCheckoutLoadRecoveryControlsOnly(paths), true);
+    assert.equal(isOnlineSettingsControlsOnly(paths), true);
+    assert.equal(isOnlineSettingsOnly(paths), false);
+    assert.equal(checkMode(paths, '', ''), 'ci-only');
+    assert.deepEqual(selectedParts(paths), ['guards']);
+    const commands = onlineSettingsCommands('guards', paths);
+    assert.deepEqual(
+      commands.filter((command) => command[0] === 'python3'),
+      [['python3', '-B', 'scripts/production-release/online-checkout-load-release.test.py']]
+    );
+    assert.ok(!commands.flat().some((arg) => /@apple-business|check:v2-|check:admin-ui/.test(arg)));
+    for (const part of ['api', 'admin', 'online-engine'])
+      assert.throws(() => onlineSettingsCommands(part, paths), /controls-only/);
+  }
+  for (const paths of [
+    [],
+    ['docs/ONLINE_RECHARGE.md'],
+    ['scripts/ci-online-settings-scope.mjs'],
+    [...checkoutLoadRecoveryOptional, checkoutLoadRecoverySources[0]],
+    [...checkoutLoadRecoveryOptional, checkoutLoadRecoveryReleaseControls[0]],
+    [...checkoutLoadRecoveryOptional, 'package-lock.json']
+  ])
+    assert.equal(isOnlineCheckoutLoadRecoveryControlsOnly(paths), false);
+});
+
+test('load-recovery commands prepare fixed Chromium for only the new API spec and cap engine concurrency', () => {
+  const paths = [...checkoutLoadRecoverySources, ...checkoutLoadRecoveryOptional];
+  const guards = onlineSettingsCommands('guards', paths);
+  const api = onlineSettingsCommands('api', paths);
+  const engine = onlineSettingsCommands('online-engine', paths);
+  for (const name of [
+    'scripts/production-release/online-checkout-load-release.test.py',
+    'check:v2-module-architecture',
+    'check:v2-isolation',
+    'check:v2-prisma-runtime-boundary',
+    'check:v2-concurrency-standard',
+    'check:v2-decimal-standard'
+  ])
+    assert.ok(guards.flat().includes(name), name);
+  assert.ok(
+    guards.some((command) =>
+      command.at(-1).includes?.('Online checkout load source fingerprints passed.')
+    )
+  );
+  assert.ok(api.flat().includes('prisma:mysql:generate'));
+  assert.ok(api.flat().includes('typecheck'));
+  const apiTest = api.filter((command) => command.includes('test'));
+  assert.deepEqual(apiTest, [
+    [
+      'npm',
+      'run',
+      'test',
+      '--workspace',
+      '@apple-business/api',
+      '--',
+      'src/id-business-v2/online-recharge/local-chain-acceptance.spec.ts'
+    ]
+  ]);
+  for (const commands of [api, engine]) {
+    assert.ok(
+      commands.some(
+        (command) =>
+          command[0] === 'npm' &&
+          command.includes('ci') &&
+          command.includes('apps/api/src/id-business-v2/online-recharge/engine/upstream')
+      )
+    );
+    assert.ok(
+      commands.some(
+        (command) =>
+          command[0] === 'node' &&
+          command[1].endsWith('/upstream/node_modules/playwright/cli.js') &&
+          command.slice(2).join(' ') === 'install --with-deps chromium'
+      )
+    );
+  }
+  const engineText = engine.map((command) => command.join(' ')).join('\n');
+  assert.ok(engineText.includes('--test-concurrency=2'));
+  assert.ok(engineText.includes('.test.cjs'));
+  assert.ok(engine.some((command) => command.includes('test:upstream')));
+  for (const arg of [...guards, ...api, ...engine].flat())
+    assert.ok(
+      !/@apple-business\/admin|check:admin-ui|check:v2-(?:ui-language|color-contrast|table-standard|loading-standard)|mysql\.integration|migrate|docker|finance|test:online-recharge:controls/.test(
+        arg
+      ),
+      arg
+    );
+  assert.ok(!api.flat().includes('src/id-business-v2/online-recharge'));
+  assert.ok(!api.flat().includes('prisma:mysql:validate'));
+  assert.throws(() => onlineSettingsCommands('admin', paths), /Admin/);
+});
+
+test('load-recovery source verification executes every fingerprint and rejects incomplete or tampered manifests', () => {
+  const command = onlineSettingsCommands('guards', checkoutLoadRecoverySources).find((args) =>
+    args.at(-1).includes?.('Online checkout load source fingerprints passed.')
+  );
+  assert.ok(command && command[0] === 'node');
+  const source = command.at(-1).replace(/^import .+;$/gm, '');
+  const root = resolve('apps/api/src/id-business-v2/online-recharge/engine');
+  const names = checkoutLoadRecoverySources
+    .filter((path) => path.includes('/engine/') && !path.endsWith('/SOURCE_MANIFEST.json'))
+    .map((path) => path.split('/engine/')[1]);
+  const bodies = new Map(names.map((name) => [resolve(root, name), `synthetic ${name}\n`]));
+  const manifest = {
+    repository: 'https://github.com/nowtostudeyday/PAY-GPT-UPGRADE.git',
+    commit: 'ba6cf96312a6953e62edb9d74299d438d12549df',
+    files: names.map((path) => ({
+      path,
+      adaptedSha256: createHash('sha256')
+        .update(bodies.get(resolve(root, path)))
+        .digest('hex')
+    }))
+  };
+  const verify = (value, files = bodies) =>
+    runInNewContext(source, {
+      assert,
+      createHash,
+      resolve,
+      sep,
+      isAbsolute,
+      win32,
+      readFileSync: (path) => {
+        if (path === resolve(root, 'SOURCE_MANIFEST.json')) return JSON.stringify(value);
+        assert.ok(files.has(path), 'source verification cannot read unknown or escaped files');
+        return files.get(path);
+      },
+      console: { log() {} }
+    });
+  assert.doesNotThrow(() => verify(manifest));
+  assert.throws(() => verify({ ...manifest, commit: 'unreviewed' }));
+  assert.throws(() => verify({ ...manifest, files: manifest.files.slice(1) }));
+  assert.throws(() => verify({ ...manifest, files: [...manifest.files, manifest.files[0]] }));
+  for (const path of ['../escaped.cjs', '/absolute.cjs', 'C:\\escaped.cjs'])
+    assert.throws(() =>
+      verify({
+        ...manifest,
+        files: [...manifest.files, { path, adaptedSha256: '0'.repeat(64) }]
+      })
+    );
+  assert.throws(() =>
+    verify({
+      ...manifest,
+      files: manifest.files.map((row, index) =>
+        index === 0 ? { ...row, adaptedSha256: '0'.repeat(64) } : row
+      )
+    })
+  );
+  const tampered = new Map(bodies);
+  tampered.set(resolve(root, names.at(-1)), 'changed after the reviewed manifest');
+  assert.throws(() => verify(manifest, tampered));
+});
+
+test('load-recovery engine command discovers all current tests once with two workers and preserves failure', () => {
+  const command = onlineSettingsCommands('online-engine', checkoutLoadRecoverySources).find(
+    (args) => args.at(-1).includes?.('--test-concurrency=2')
+  );
+  assert.ok(command && command[0] === 'node');
+  const source = command.at(-1).replace(/^import .+;$/gm, '');
+  const root = 'apps/api/src/id-business-v2/online-recharge/engine/test';
+  const execute = (files, status = 0) => {
+    const observed = { calls: [], exits: [] };
+    runInNewContext(source, {
+      readdirSync: (path) => {
+        assert.equal(path, root);
+        return files;
+      },
+      spawnSync: (file, args, options) => {
+        observed.calls.push({ file, args: Array.from(args), inherit: options.stdio });
+        return { status };
+      },
+      process: { execPath: '/synthetic/node', exit: (code) => observed.exits.push(code) }
+    });
+    return observed;
+  };
+  const result = execute(['z.test.cjs', 'README.md', 'a.test.cjs', 'unrelated.mjs']);
+  assert.deepEqual(result.calls, [
+    {
+      file: '/synthetic/node',
+      args: ['--test', '--test-concurrency=2', root + '/a.test.cjs', root + '/z.test.cjs'],
+      inherit: 'inherit'
+    }
+  ]);
+  assert.deepEqual(result.exits, [0]);
+  assert.deepEqual(execute(['a.test.cjs'], 2).exits, [2]);
+  assert.deepEqual(execute(['a.test.cjs'], null).exits, [1]);
+  assert.throws(() => execute(['README.md']), /Missing online engine regression files/);
 });
