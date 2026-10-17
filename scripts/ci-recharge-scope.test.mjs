@@ -48,7 +48,13 @@ import {
   registrationProtocolRepairControlBase,
   registrationProtocolRepairControlTree,
   registrationProtocolRepairControlPaths,
-  registrationProtocolRepairControlCommands
+  registrationProtocolRepairControlCommands,
+  isRegistrationProtocolRepairPreservationOnly,
+  registrationProtocolRepairPreservationAdmission,
+  registrationProtocolRepairPreservationProjection,
+  registrationProtocolRepairPreservationBase,
+  registrationProtocolRepairPreservationTree,
+  registrationProtocolRepairPreservationPaths
 } from './ci-recharge-scope.mjs';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
@@ -168,6 +174,202 @@ function protocolPreflightControlFixture() {
     validatedSourceDigest: (name) => validatedHashes[name] ?? null
   };
 }
+
+function protocolPreservationFixture() {
+  const earlier = protocolPreflightControlFixture();
+  const prior = structuredClone(earlier.contract);
+  prior.controlHashes['registration-protocol-repair-build.py'] = 'a'.repeat(64);
+  const contract = structuredClone(prior);
+  contract.sourceBaseline = registrationProtocolRepairPreservationBase;
+  contract.sourceBaselineTree = registrationProtocolRepairPreservationTree;
+  contract.expectedCurrent = registrationProtocolRepairControlBase;
+  contract.expectedGitChanges = [...registrationProtocolRepairPreservationPaths];
+  contract.baseline = {
+    published: registrationProtocolRepairControlBase,
+    api: 'fixture-published-api'
+  };
+  contract.reconstruction = { publishedSources: 'fixture-published-49-source-map' };
+  contract.reviewedFileHashes = Object.fromEntries(
+    registrationProtocolRepairPreservationPaths
+      .filter((name) => name !== registrationProtocolRepairContract)
+      .map((name) => [name, 'c'.repeat(64)])
+  );
+  for (const name of ['build.py', 'release.py', 'release.test.py'])
+    contract.controlHashes['registration-protocol-repair-' + name] = 'c'.repeat(64);
+  const actual = {
+    ...prior.sources,
+    ...prior.validationSources,
+    ...prior.validationSupportSources,
+    ...prior.buildSupportHashes,
+    ...Object.fromEntries(
+      Object.entries(contract.controlHashes).map(([name, hash]) => [
+        'scripts/production-release/' + name,
+        hash
+      ])
+    ),
+    ...contract.reviewedFileHashes
+  };
+  return {
+    base: registrationProtocolRepairPreservationBase,
+    baseTree: registrationProtocolRepairPreservationTree,
+    contract,
+    repairBaseContract: prior,
+    repairSourcePaths: [...registrationProtocolRepairPreservationPaths],
+    sourceDigest: (name) => actual[name] ?? null,
+    approvedProjection: registrationProtocolRepairPreservationProjection(contract)
+  };
+}
+
+test('registration published-baseline preservation admits only an approved eight-path reconstruction', () => {
+  const context = protocolPreservationFixture(),
+    paths = [...registrationProtocolRepairPreservationPaths];
+  const admits = (options) =>
+    registrationProtocolRepairPreservationAdmission(paths, options, context.approvedProjection);
+  assert.equal(paths.length, 8);
+  assert.equal(admits(context), true);
+  assert.equal(
+    isRegistrationProtocolRepairPreservationOnly(paths, context),
+    false,
+    'the production classifier cannot accept a caller supplied synthetic approval'
+  );
+  for (const change of [
+    { base: registrationProtocolRepairControlBase },
+    { baseTree: '0'.repeat(40) },
+    { repairSourcePaths: paths.slice(1) },
+    { sourceDigest: () => '0'.repeat(64) }
+  ])
+    assert.equal(admits({ ...context, ...change }), false);
+  for (const changed of [
+    paths.slice(1),
+    [...paths, paths[0]],
+    [...paths, 'apps/api/prisma-mysql/schema.prisma'],
+    [...paths, '.github/workflows/quality.yml'],
+    [...paths, registrationProtocolRepairApplications[0]],
+    [...paths, 'apps/api/src/id-business-v2/auto-registration/upstream/src/core/register.py']
+  ])
+    assert.equal(
+      registrationProtocolRepairPreservationAdmission(changed, context, context.approvedProjection),
+      false
+    );
+  assert.equal(
+    registrationProtocolRepairPreservationAdmission(paths, context, '0'.repeat(64)),
+    false
+  );
+});
+
+test('registration published-baseline preservation selects only PR controls under a fixed synthetic approval', async () => {
+  const context = protocolPreservationFixture(),
+    paths = [...registrationProtocolRepairPreservationPaths],
+    scopeUrl = new URL('./ci-recharge-scope.mjs', import.meta.url);
+  // Replace the immutable approval only in this in-memory module; callers cannot replace the real pin.
+  const source = readFileSync(scopeUrl, 'utf8')
+    .replace(
+      /export const registrationProtocolRepairPreservationProjectionSha256\s*=[\s\S]*?;/,
+      'export const registrationProtocolRepairPreservationProjectionSha256 = ' +
+        JSON.stringify(context.approvedProjection) +
+        ';'
+    )
+    .replace(
+      /from '(\.\/[^']+)'/g,
+      (_, name) => 'from ' + JSON.stringify(new URL(name, scopeUrl).href)
+    );
+  const approved = await import('data:text/javascript,' + encodeURIComponent(source));
+  assert.equal(approved.isRegistrationProtocolRepairPreservationOnly(paths, context), true);
+  assert.equal(approved.checkMode(paths, 'same', 'same', undefined, context), 'ci-only');
+  assert.deepEqual(approved.selectedParts(paths, undefined, context), ['guards']);
+  assert.equal(approved.needsOnlineRechargeCiBuild(paths, context), false);
+  assert.equal(approved.checkMode(paths, 'old', 'new', undefined, context), 'full');
+  for (const options of [
+    { ...context, base: registrationProtocolRepairControlBase },
+    { ...context, baseTree: '0'.repeat(40) },
+    { ...context, sourceDigest: () => '0'.repeat(64) }
+  ])
+    assert.equal(approved.checkMode(paths, 'same', 'same', undefined, options), 'full');
+  for (const changed of [
+    paths.slice(1),
+    [...paths, registrationProtocolRepairApplications[0]],
+    [...paths, 'apps/api/prisma-mysql/schema.prisma']
+  ])
+    assert.equal(approved.checkMode(changed, 'same', 'same', undefined, context), 'full');
+});
+
+test('registration published-baseline preservation rejects production shape application and excluded-map tampering', () => {
+  for (const update of [
+    (c) => {
+      c.admission = 'DRAFT';
+    },
+    (c) => {
+      c.migration = 'new.sql';
+    },
+    (c) => {
+      c.sourceBaseline = registrationProtocolRepairControlBase;
+    },
+    (c) => {
+      c.expectedCurrent = registrationProtocolRepairBase;
+    },
+    (c) => {
+      c.baseline.api = 'unreviewed-api';
+    },
+    (c) => {
+      c.reconstruction.publishedSources = 'unreviewed-source-map';
+    },
+    (c) => {
+      c.reviewedFileHashes[registrationProtocolRepairApplications[0]] = 'd'.repeat(64);
+    },
+    (c) => {
+      c.reviewedFileHashes[registrationProtocolRepairPreservationPaths[0]] = 'd'.repeat(64);
+    },
+    (c) => {
+      c.controlHashes['unchanged-helper.py'] = 'd'.repeat(64);
+    },
+    (c) => {
+      c.controlHashes['registration-protocol-repair-build.py'] = 'd'.repeat(64);
+    },
+    (c) => {
+      c.sources[registrationProtocolRepairApplications[0]] = 'd'.repeat(64);
+    }
+  ]) {
+    const context = protocolPreservationFixture();
+    update(context.contract);
+    assert.equal(
+      registrationProtocolRepairPreservationAdmission(
+        registrationProtocolRepairPreservationPaths,
+        context,
+        context.approvedProjection
+      ),
+      false
+    );
+    assert.equal(
+      checkMode(registrationProtocolRepairPreservationPaths, 'same', 'same', undefined, context),
+      'full'
+    );
+  }
+  const context = protocolPreservationFixture();
+  const required = new Set([
+    ...Object.keys(context.contract.sources),
+    ...Object.keys(context.contract.validationSources),
+    ...Object.keys(context.contract.validationSupportSources),
+    ...Object.keys(context.contract.buildSupportHashes),
+    ...Object.keys(context.contract.controlHashes).map(
+      (name) => 'scripts/production-release/' + name
+    ),
+    ...Object.keys(context.contract.reviewedFileHashes)
+  ]);
+  for (const name of required)
+    assert.equal(
+      registrationProtocolRepairPreservationAdmission(
+        registrationProtocolRepairPreservationPaths,
+        {
+          ...context,
+          sourceDigest: (candidate) =>
+            candidate === name ? '0'.repeat(64) : context.sourceDigest(candidate)
+        },
+        context.approvedProjection
+      ),
+      false,
+      name
+    );
+});
 
 test('registration protocol preflight control repair selects only controls above the validated application', () => {
   const context = protocolPreflightControlFixture(),

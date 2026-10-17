@@ -21,27 +21,27 @@
   ],
   "backupNormalizerPath": "/opt/id-business-v2/releases/20261015T091200Z-e197218c8b38-recharge-record/scripts/mysql-dump-restore-normalizer.sed",
   "baseline": {
-    "adminBuildId": "v2-0222adf9d5225669b73e8e8f9ec711564eb6163a",
+    "adminBuildId": "v2-055b308bf357d460ee7746c9e60ae46d575f7661",
     "adminSourceProjectionSha256": "61205317a75fa87fba8d266d66209d831b5e65591feeff0aa98d5f915bcc6fe2",
-    "commit": "0222adf9d5225669b73e8e8f9ec711564eb6163a",
+    "commit": "055b308bf357d460ee7746c9e60ae46d575f7661",
     "configurationSha256": {
       ".env.aws.production": "3f3c22ac671ef185ffc98677ef3a2facce244e476e4583b8e7d16ff1deb00392",
-      "compose.release.json": "1ac759799161dc06fa8f5400fa8bd931401be05352e544eaf131eae8ac1328ea",
+      "compose.release.json": "6ad361b3592c0517ad605f07d43bfe6565ee4cc87e40c898f978428367647588",
       "docker-compose.aws-mysql.yml": "953c6264f157b00218f2a019d5e2c0b6bc4a34f687f2ec42ad782e0009e7672c"
     },
-    "current": "/opt/id-business-v2/releases/20261017T051518Z-0222adf9d522-online-checkout",
+    "current": "/opt/id-business-v2/releases/20261017T072149Z-055b308bf357-online-checkout",
     "databaseWrites": 0,
     "images": {
       "admin": {
         "health": "healthy",
-        "image": "sha256:c6a8c9ea557375997dc252e1e9c1cb2ab79707448bd55edf0ead8f771dcd119a",
-        "revision": "0222adf9d5225669b73e8e8f9ec711564eb6163a",
+        "image": "sha256:2fe37579bde7f0a62874b2a78f09883e17a2a225dda8b8672c7c08aeb8b9afc8",
+        "revision": "055b308bf357d460ee7746c9e60ae46d575f7661",
         "user": "root"
       },
       "api": {
         "health": "healthy",
-        "image": "sha256:ccff89f4cfebaf094c6ba4228295713db511bac079bb64836bca7703c71bd2cb",
-        "revision": "0222adf9d5225669b73e8e8f9ec711564eb6163a",
+        "image": "sha256:0d85d4e653ce13a4017bf2c034c3ed3e6a1ee10fc10a3760f082ff467943dfad",
+        "revision": "055b308bf357d460ee7746c9e60ae46d575f7661",
         "user": "node"
       },
       "auto-recharge": {
@@ -76,27 +76,27 @@
       },
       "online-recharge": {
         "health": "healthy",
-        "image": "sha256:b2767e3fdbb44cc249a8d9f553b217c10b947164eff0f8e91c448ccbc9a69908",
-        "revision": "0222adf9d5225669b73e8e8f9ec711564eb6163a",
+        "image": "sha256:e283524eeea95ddea36ef45187c003739f18c8009fd12bb8dbfd704aa5317545",
+        "revision": "055b308bf357d460ee7746c9e60ae46d575f7661",
         "user": "node"
       }
     },
     "inventory": {
       "admin": {
-        "fileCount": 2283,
-        "sha256": "f502495356758ae1c5d807a1a82e2462e32f0e3ece566d5c06ac4add57f1e3ed"
+        "fileCount": 2428,
+        "sha256": "07eba1a453cecf560f6680aa4d325fe4005d73efc17c4e674c6099aed9475160"
       },
       "api": {
-        "fileCount": 1783,
-        "sha256": "9adfcccc3b32f9505819f726ad3bd54c5f08a254b5a53321d2b68a2303596268"
+        "fileCount": 1792,
+        "sha256": "c2bf7419332f4ed6354810b5745cc827ae5b30dcd2b947fd399785016f2bdf2c"
       },
       "apiJavascript": {
-        "fileCount": 596,
-        "sha256": "12ab2e7689b5e3b17e5982493cd8e5a760d591f39e43926362683ced2471ac97"
+        "fileCount": 599,
+        "sha256": "a50bb38e51ad911a8974d9fa1ee25bdd1bc3484f7a89a3633b48d67288d53ffb"
       },
       "engine": {
-        "fileCount": 88,
-        "sha256": "353a39453e1364f5d6bb386be7426ec52961e78aa4aa2971566af84c123b8f29"
+        "fileCount": 96,
+        "sha256": "10e16859cb9a5bddb737c04caeeacda90baaf16bdb7846a1031d966381542be6"
       },
       "prisma": {
         "fileCount": 27,
@@ -107,7 +107,7 @@
         "sha256": "b20bf4c9d2240edad4b89ac24297748e4de35e6f5e30f3ca5259b33d19196d9e"
       }
     },
-    "manifestSha256": "772724afb095635cc31fc8159e85618c86f74224eeb3e8496d481681a559083e",
+    "manifestSha256": "c59c467349be890f6d1bd18d038128500dbb40bcf702a2a85807bb745ceadd24",
     "mysql": {
       "accountCount": 38,
       "accountsSha256": "f05c5ac13263609999fc88f3a228f675c459176112221decc28049168710bf38",
@@ -126,16 +126,16 @@
       "online-checkout-build-proof.json": {
         "adminFiles": {
           "fileCount": 261,
-          "sha256": "121aac8acc69414d0ceb3ebd240d98f6a37cedd1df5074e38874742353256fbc"
+          "sha256": "47c78f5127494a702e338d2862ff5f4a2f4591cee0db5c15e929962b024e5369"
         },
         "apiModules": {
-          "fileCount": 4,
-          "sha256": "21a1ebb9bae4edb30b3c7c3749fee6ae1b7ea237fbc2abe47a34806f6ab70341"
+          "fileCount": 27,
+          "sha256": "5c60c7cbe4e54e0233f1d45b21e7c7ac6c9894b322cc9b12b43754f96d44e834"
         },
-        "commit": "0222adf9d5225669b73e8e8f9ec711564eb6163a",
-        "scope": "ONLINE_CHECKOUT_FIELD_CONTEXT_PROGRESS",
-        "sha256": "4230b5df595416a698f545775da38fd0ec37f3f766eadfb27d9b8967e709a979",
-        "tree": "0d8319bcfc032b8f4e38a99642be0819cbfa7c85"
+        "commit": "055b308bf357d460ee7746c9e60ae46d575f7661",
+        "scope": "ONLINE_UNATTENDED_RECHARGE_RECONCILIATION",
+        "sha256": "d9ed5b7a62af6fb9f8e1e125fbe3caec194700f2c9f65eb75703ac9a15c5a061",
+        "tree": "1776d653307f970385aead7597f55c0071c2e63a"
       },
       "registration-protocol-restore-build-proof.json": {
         "adminFiles": {
@@ -153,7 +153,7 @@
       }
     },
     "registrationStarts": 0,
-    "roleSourceProjectionsSha256": "93482e994548d59f6a9fe811440129b49d727d03633ebea31b83a10a3c68d530",
+    "roleSourceProjectionsSha256": "5edc74d0001b38bbf6f810069b01d54b11b2440da356e8f96809dfaf8465b3e8",
     "runtimeConfigurationSha256": {
       "admin": "dfc7d8d92987afc22a6c843fdac6ed3a40e0727065795a2c36fd9f90f43cd37a",
       "api": "cb346b8db7d99162a0413764c604c6f45e8f7bbf1f2bdf40d2f2b8602fe8bdb7",
@@ -165,23 +165,24 @@
       "online-recharge": "0db8f5da6e8a49af82fb419ef81b2edc552752edc0c37cfd0383b9e5f963ee20"
     },
     "schemaSha256": "51a4d25b1302458145f560acc32f25b89a7bd65fea64dc72b254dc56da430100",
+    "scope": "ONLINE_UNATTENDED_RECHARGE_RECONCILIATION",
     "services": {
       "admin": {
-        "containerId": "8b9a3b64916bf85a5438122a415574ede073dadeb0d067bf028329b38e4af808",
+        "containerId": "ef898e987fa5ffab6cfef5bf1b5a981453bcc8a3ce27bbc8bdff4b411b99acf3",
         "environmentSha256": "03ddab553858482dcbcc4a93d989902d31b41753eb155fb8162011e218bc0ad4",
         "health": "healthy",
-        "image": "sha256:c6a8c9ea557375997dc252e1e9c1cb2ab79707448bd55edf0ead8f771dcd119a",
-        "reference": "id-business-v2-online-checkout:0222adf9d5225669b73e8e8f9ec711564eb6163a-39004813003-admin",
-        "startedAtSha256": "b911b261ac1bfaaf0190619271250c4ee14d39f2034b1fbc84c28fcc013e9551",
+        "image": "sha256:2fe37579bde7f0a62874b2a78f09883e17a2a225dda8b8672c7c08aeb8b9afc8",
+        "reference": "id-business-v2-online-checkout:055b308bf357d460ee7746c9e60ae46d575f7661-39012826133-admin",
+        "startedAtSha256": "bfc8e674325798d2fc88e7f27ca40ca843f75c23eabe3c12421bc75060d84c10",
         "status": "running"
       },
       "api": {
-        "containerId": "aa2335ffbbcbc396e6b97ccb8280bcd750e6b70c543d9ac95540625ec3d34186",
+        "containerId": "dd1ef46305aaabc3aa13378af220056fc3aa78045a85021c7ef8951c1499a0aa",
         "environmentSha256": "cc3662b8111310ec210a34ae642b9622da070f4fb94e1ea602ac355044136f5d",
         "health": "healthy",
-        "image": "sha256:ccff89f4cfebaf094c6ba4228295713db511bac079bb64836bca7703c71bd2cb",
-        "reference": "id-business-v2-online-checkout:0222adf9d5225669b73e8e8f9ec711564eb6163a-39004813003-api",
-        "startedAtSha256": "a656cbe011aa4a39830ed398adc9f137aa2103834eb27e0e671856631367e439",
+        "image": "sha256:0d85d4e653ce13a4017bf2c034c3ed3e6a1ee10fc10a3760f082ff467943dfad",
+        "reference": "id-business-v2-online-checkout:055b308bf357d460ee7746c9e60ae46d575f7661-39012826133-api",
+        "startedAtSha256": "b9449d27673e0e09b0e905b0f22d842be5f684fdeea8ab50546ae61967e60db9",
         "status": "running"
       },
       "auto-recharge": {
@@ -230,12 +231,12 @@
         "status": "running"
       },
       "online-recharge": {
-        "containerId": "9a5d8c651961d3b6b07ed70f70617d9a93393eac6e8cbe6a42b93a908e4377da",
+        "containerId": "66128ffc09f666ccb083099e9453046bd559a1f2a43f8af50fca4b4ba38ede88",
         "environmentSha256": "60bb48bbd6e03a4ceebe245c8405f248d0c682a27287aabb17c1d3573e50ad37",
         "health": "healthy",
-        "image": "sha256:b2767e3fdbb44cc249a8d9f553b217c10b947164eff0f8e91c448ccbc9a69908",
-        "reference": "id-business-v2-online-checkout:0222adf9d5225669b73e8e8f9ec711564eb6163a-39004813003-online-recharge",
-        "startedAtSha256": "9a90846513da7d8151cad695e6c559e08b9544a0af676b870c6c1d889da2c781",
+        "image": "sha256:e283524eeea95ddea36ef45187c003739f18c8009fd12bb8dbfd704aa5317545",
+        "reference": "id-business-v2-online-checkout:055b308bf357d460ee7746c9e60ae46d575f7661-39012826133-online-recharge",
+        "startedAtSha256": "1cca412f38519a961a0a10d0f142b479d87cfd182fcb20c38ef43d93eb1a688b",
         "status": "running"
       }
     },
@@ -284,7 +285,7 @@
   "businessActions": 0,
   "configurationSha256": {
     ".env.aws.production": "3f3c22ac671ef185ffc98677ef3a2facce244e476e4583b8e7d16ff1deb00392",
-    "compose.release.json": "1ac759799161dc06fa8f5400fa8bd931401be05352e544eaf131eae8ac1328ea",
+    "compose.release.json": "6ad361b3592c0517ad605f07d43bfe6565ee4cc87e40c898f978428367647588",
     "docker-compose.aws-mysql.yml": "953c6264f157b00218f2a019d5e2c0b6bc4a34f687f2ec42ad782e0009e7672c"
   },
   "controlFiles": [
@@ -304,10 +305,10 @@
     "remote-deploy.py"
   ],
   "controlHashes": {
-    "registration-protocol-repair-build.py": "c0ec346203b26d37da0d2573f54957f59bec69ed8b94de5150306381d27daefa",
-    "registration-protocol-repair-release.py": "6ca762c1633f98b51d04cd0950970cc28c9d1e9519a8ab3092596e9b2adf76be",
+    "registration-protocol-repair-build.py": "8a6cfd40bab638ef6f8756d29bcbb4dc1a7a38636cac2821d23bc46fe7794857",
+    "registration-protocol-repair-release.py": "5171a0a2ff6d3e4e9488f4c1134346f9b8ca0725668b3b03042aa294769cbb76",
     "registration-protocol-repair-dispatch.py": "ec663618df477ef92663ae83809a87519292e2ca63a83a15e81bbd8f12587bac",
-    "registration-protocol-repair-release.test.py": "6063ec827eb8cf7ca20f37d2b9d994ba2facd0a9a45afd983b567a11506f0d88",
+    "registration-protocol-repair-release.test.py": "20b2016b19daf45218444552bc3395f5bcfd9f4c836af9337a0c819c5781e50c",
     "registration-parity-diagnostics-release.py": "f5d3d6e3d5ee539a965cbbfa4401beee3e209c2258886ea7239ae667a13e3eb8",
     "registration-parity-diagnostics-dispatch.py": "c16f8a09a7a08771faa1071910a05a077d3c4e368f6a4938d3c8cec8cca74a8c",
     "registration-closure-release.py": "0d2daaeff0a35e1e11666ace39560273fdc83ff9e5718cb244337c8b0f851274",
@@ -319,7 +320,7 @@
     "api-admin-scope.py": "50446ab528a288ca1c2129c84f1bf4a90f59fa313a92bcff0058a258c8b8e925",
     "remote-deploy.py": "889aedb75bbcb53863a55dc2a4c40a84e06dea1d64d493f6a4fca6dc233f855c"
   },
-  "current": "/opt/id-business-v2/releases/20261017T051518Z-0222adf9d522-online-checkout",
+  "current": "/opt/id-business-v2/releases/20261017T072149Z-055b308bf357-online-checkout",
   "engineHealth": {
     "activeTasks": 0,
     "mode": "enabled",
@@ -327,22 +328,23 @@
     "rpcConnected": true,
     "stopping": false
   },
-  "expectedCurrent": "0222adf9d5225669b73e8e8f9ec711564eb6163a",
+  "expectedCurrent": "055b308bf357d460ee7746c9e60ae46d575f7661",
   "expectedGitChanges": [
     "scripts/ci-recharge-check.mjs",
     "scripts/ci-recharge-check.test.mjs",
     "scripts/ci-recharge-scope.mjs",
     "scripts/ci-recharge-scope.test.mjs",
+    "scripts/production-release/registration-protocol-repair-build.py",
     "scripts/production-release/registration-protocol-repair-contract.json",
     "scripts/production-release/registration-protocol-repair-release.py",
     "scripts/production-release/registration-protocol-repair-release.test.py"
   ],
   "frozen": true,
   "hostSourceInheritance": {
-    "release": "/opt/id-business-v2/releases/20261017T051518Z-0222adf9d522-online-checkout",
+    "release": "/opt/id-business-v2/releases/20261017T072149Z-055b308bf357-online-checkout",
     "files": {}
   },
-  "manifestSha256": "772724afb095635cc31fc8159e85618c86f74224eeb3e8496d481681a559083e",
+  "manifestSha256": "c59c467349be890f6d1bd18d038128500dbb40bcf702a2a85807bb745ceadd24",
   "migration": null,
   "name": "registration-protocol-repair-20261017",
   "pythonTests": [
@@ -370,6 +372,10 @@
       "sources": {
         "fileCount": 24,
         "sha256": "7d098e093f46ffac38bd01db55b794e03f723a6fcfbc2e3d26b42ef599b00a2c"
+      },
+      "engineFiles": {
+        "fileCount": 88,
+        "sha256": "353a39453e1364f5d6bb386be7426ec52961e78aa4aa2971566af84c123b8f29"
       }
     },
     "previousAdminProof": {
@@ -443,20 +449,48 @@
         "commit": "c8ce1a01a1a1e61bcc8de778dad331191319d645",
         "sha256": "6bcb2050633db830068fd1a1b1a30d3dd75bf45f24aef3ab5b9c398d632e7237"
       }
+    },
+    "successorAdminProof": {
+      "adminFiles": {
+        "fileCount": 261,
+        "sha256": "121aac8acc69414d0ceb3ebd240d98f6a37cedd1df5074e38874742353256fbc"
+      },
+      "apiModules": {
+        "fileCount": 4,
+        "sha256": "21a1ebb9bae4edb30b3c7c3749fee6ae1b7ea237fbc2abe47a34806f6ab70341"
+      },
+      "commit": "0222adf9d5225669b73e8e8f9ec711564eb6163a",
+      "scope": "ONLINE_CHECKOUT_FIELD_CONTEXT_PROGRESS",
+      "sha256": "4230b5df595416a698f545775da38fd0ec37f3f766eadfb27d9b8967e709a979",
+      "tree": "0d8319bcfc032b8f4e38a99642be0819cbfa7c85"
+    },
+    "publishedRecharge": {
+      "commit": "055b308bf357d460ee7746c9e60ae46d575f7661",
+      "contractSha256": "37a7c190f75bfefceae563e07a1d63e9d80ccb0e838c11d014640e7227452954",
+      "sourceReviewCommit": "fc51da593302cc8535a5adfe199d7768949eb419",
+      "sources": {
+        "fileCount": 49,
+        "sha256": "1360975eac93948899a28ad1513f012cc0015aa67f1ea16632433d467cfd09c0"
+      },
+      "engineFiles": {
+        "fileCount": 96,
+        "sha256": "10e16859cb9a5bddb737c04caeeacda90baaf16bdb7846a1031d966381542be6"
+      }
     }
   },
   "reviewedFileHashes": {
-    "scripts/ci-recharge-check.mjs": "b970ddd42a52a1dbb52b5f41e9e5012ccd9456bce2c73c5996e57e26e01ffd38",
-    "scripts/ci-recharge-check.test.mjs": "0e265939a8990bedf371eb2512aea21ed13998509323388a2a8acc1b895453b5",
-    "scripts/ci-recharge-scope.mjs": "ed9e3420f40a7be5f5978b4e3f24e54830ab6b1f0860f21a39270ac88c886372",
-    "scripts/ci-recharge-scope.test.mjs": "358c4542fb2e0f93a783a90ef6175eb4b5db396e7593b73721bcb6af148b0521",
-    "scripts/production-release/registration-protocol-repair-release.py": "6ca762c1633f98b51d04cd0950970cc28c9d1e9519a8ab3092596e9b2adf76be",
-    "scripts/production-release/registration-protocol-repair-release.test.py": "6063ec827eb8cf7ca20f37d2b9d994ba2facd0a9a45afd983b567a11506f0d88"
+    "scripts/ci-recharge-check.mjs": "0ec5a559265da3afd9f1799f7262fdd8721aec2fd6b2976b38d5ce477fddf748",
+    "scripts/ci-recharge-check.test.mjs": "342fa1112726b7ea0593f29293b8c8ea96809873337fb137f2126e32b1fdfe7c",
+    "scripts/ci-recharge-scope.mjs": "3a9e41e0c94d25c9636426b424161ecb66798a58e9dc7bbc12a8d88ba1a6fea5",
+    "scripts/ci-recharge-scope.test.mjs": "171cd2c68a35a8d58d0f4b70550d77f59c194583fbe698227abed17826e39e40",
+    "scripts/production-release/registration-protocol-repair-release.py": "5171a0a2ff6d3e4e9488f4c1134346f9b8ca0725668b3b03042aa294769cbb76",
+    "scripts/production-release/registration-protocol-repair-release.test.py": "20b2016b19daf45218444552bc3395f5bcfd9f4c836af9337a0c819c5781e50c",
+    "scripts/production-release/registration-protocol-repair-build.py": "8a6cfd40bab638ef6f8756d29bcbb4dc1a7a38636cac2821d23bc46fe7794857"
   },
   "roleSourceCommits": {
-    "api": "0222adf9d5225669b73e8e8f9ec711564eb6163a",
-    "admin": "0222adf9d5225669b73e8e8f9ec711564eb6163a",
-    "online-recharge": "0222adf9d5225669b73e8e8f9ec711564eb6163a"
+    "api": "055b308bf357d460ee7746c9e60ae46d575f7661",
+    "admin": "055b308bf357d460ee7746c9e60ae46d575f7661",
+    "online-recharge": "055b308bf357d460ee7746c9e60ae46d575f7661"
   },
   "runtimeConfigurationSha256": {
     "admin": "dfc7d8d92987afc22a6c843fdac6ed3a40e0727065795a2c36fd9f90f43cd37a",
@@ -470,11 +504,11 @@
   },
   "schemaSha256": "51a4d25b1302458145f560acc32f25b89a7bd65fea64dc72b254dc56da430100",
   "scope": "REGISTRATION_PROTOCOL_REPAIR_20261017",
-  "sourceBaseline": "055b308bf357d460ee7746c9e60ae46d575f7661",
-  "sourceBaselineTree": "1776d653307f970385aead7597f55c0071c2e63a",
+  "sourceBaseline": "b54c4f629c32afa3bcf4705db9b3fb1bbc26eeeb",
+  "sourceBaselineTree": "bedeb772a3c526840193519aef446f85b9124abb",
   "sourceProjectionSha256": {
     "adminSourceProjection": "61205317a75fa87fba8d266d66209d831b5e65591feeff0aa98d5f915bcc6fe2",
-    "roleSourceProjections": "93482e994548d59f6a9fe811440129b49d727d03633ebea31b83a10a3c68d530"
+    "roleSourceProjections": "5edc74d0001b38bbf6f810069b01d54b11b2440da356e8f96809dfaf8465b3e8"
   },
   "sources": {
     "apps/admin/src/v2/features/auto-registration/apple-mailbox-presentation.spec.ts": "8a2f92354a1ae416eeebf522c4ff554bfebc520d7c6b3e0269cdb17841e277e9",

@@ -67,10 +67,39 @@ import {
   registrationProtocolRepairControlBase,
   registrationProtocolRepairControlTree,
   registrationProtocolRepairControlPaths,
-  registrationProtocolRepairControlCommands
+  registrationProtocolRepairControlCommands,
+  registrationProtocolRepairPreservationBase,
+  registrationProtocolRepairPreservationTree,
+  registrationProtocolRepairPreservationPaths
 } from './ci-recharge-scope.mjs';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
+test('registration published-baseline preservation runs only PR controls and propagates failure', () => {
+  const options = {
+    base: registrationProtocolRepairPreservationBase,
+    protocolRepairFixture: true,
+    cloud: false
+  };
+  assert.deepEqual(
+    recordGuardCommands('ci-only', registrationProtocolRepairPreservationPaths, 'guards', options),
+    [...registrationProtocolRepairControlCommands.guards, ['process-exit', 0]]
+  );
+  assert.throws(
+    () =>
+      recordGuardCommands('ci-only', registrationProtocolRepairPreservationPaths, 'guards', {
+        ...options,
+        failCommand: registrationProtocolRepairControlCommands.guards[0].join(' ')
+      }),
+    /SYNTHETIC_COMMAND_FAILURE/
+  );
+  for (const part of ['api', 'admin', 'release-controls', 'migration'])
+    assert.throws(
+      () =>
+        recordGuardCommands('ci-only', registrationProtocolRepairPreservationPaths, part, options),
+      /Unsupported registration published-baseline preservation/
+    );
+});
+
 test('registration protocol preflight control repair runs only the finite controller checks and propagates failure', () => {
   const options = { base: registrationProtocolRepairControlBase, protocolRepairFixture: true };
   assert.deepEqual(
@@ -1002,6 +1031,7 @@ function recordGuardCommands(
     },
     reviewedFileHashes: repairHashes,
     controlHashes: {
+      'registration-protocol-repair-build.py': 'a'.repeat(64),
       'registration-protocol-repair-release.py': 'a'.repeat(64),
       'registration-protocol-repair-release.test.py': 'a'.repeat(64),
       'unchanged-helper.py': 'a'.repeat(64)
@@ -1091,7 +1121,12 @@ function recordGuardCommands(
             'const prior=' + ${JSON.stringify(JSON.stringify(repairContract))} + ';' +
             'const contract={...structuredClone(prior),sourceBaseline:realScope.registrationProtocolRepairControlBase,sourceBaselineTree:realScope.registrationProtocolRepairControlTree,expectedGitChanges:realScope.registrationProtocolRepairControlPaths,reviewedFileHashes:Object.fromEntries(realScope.registrationProtocolRepairControlPaths.filter(n=>n!==realScope.registrationProtocolRepairContract).map(n=>[n,prior.reviewedFileHashes[n]]))};' +
             'const sourceDigest=name=>contract.reviewedFileHashes[name]??prior.reviewedFileHashes[name]??prior.validationSupportSources[name]??prior.buildSupportHashes[name]??prior.controlHashes[name.replace("scripts/production-release/","")]??null;' +
-            'return realScope.isRegistrationProtocolRepairControlRepair(paths,{...options,contract,repairBaseContract:prior,repairSourcePaths:realScope.registrationProtocolRepairControlPaths,sourceDigest,validatedSourceDigest:name=>prior.reviewedFileHashes[name]??null});}'
+            'return realScope.isRegistrationProtocolRepairControlRepair(paths,{...options,contract,repairBaseContract:prior,repairSourcePaths:realScope.registrationProtocolRepairControlPaths,sourceDigest,validatedSourceDigest:name=>prior.reviewedFileHashes[name]??null});}' +
+            'export function isRegistrationProtocolRepairPreservationOnly(paths, options){' +
+            'const prior=' + ${JSON.stringify(JSON.stringify(repairContract))} + ';' +
+            'const contract={...structuredClone(prior),sourceBaseline:realScope.registrationProtocolRepairPreservationBase,sourceBaselineTree:realScope.registrationProtocolRepairPreservationTree,expectedCurrent:realScope.registrationProtocolRepairControlBase,expectedGitChanges:realScope.registrationProtocolRepairPreservationPaths,reviewedFileHashes:Object.fromEntries(realScope.registrationProtocolRepairPreservationPaths.filter(n=>n!==realScope.registrationProtocolRepairContract).map(n=>[n,prior.reviewedFileHashes[n]]))};' +
+            'const sourceDigest=name=>contract.reviewedFileHashes[name]??prior.sources[name]??prior.validationSources[name]??prior.validationSupportSources[name]??prior.buildSupportHashes[name]??prior.controlHashes[name.replace("scripts/production-release/","")]??null;' +
+            'return realScope.registrationProtocolRepairPreservationAdmission(paths,{...options,contract,repairBaseContract:prior,repairSourcePaths:realScope.registrationProtocolRepairPreservationPaths,sourceDigest},realScope.registrationProtocolRepairPreservationProjection(contract));}'
           : '';
         const source = 'export * from ' + JSON.stringify(scopeUrl) + ';' + repairFixtureSource +
           'export function canResumeCombinedGuard(base) {' +
@@ -1115,6 +1150,7 @@ function recordGuardCommands(
     }});
     childProcess.execFileSync = (file, args) => {
       if (file === 'git') {
+        if (args.join(' ') === ${JSON.stringify('rev-parse ' + registrationProtocolRepairPreservationBase + '^{tree}')}) return ${JSON.stringify(registrationProtocolRepairPreservationTree + '\n')};
         if (args.join(' ') === ${JSON.stringify('rev-parse ' + registrationProtocolRepairControlBase + '^{tree}')}) return ${JSON.stringify(registrationProtocolRepairControlTree + '\n')};
         if (args.join(' ') === ${JSON.stringify('rev-parse ' + registrationProtocolRepairBase + '^{tree}')}) return ${JSON.stringify(registrationProtocolRepairTree + '\n')};
         if (args.join(' ') === ${JSON.stringify('rev-parse ' + registrationProtocolRestoreRepairBase + '^{tree}')}) return ${JSON.stringify(registrationProtocolRestoreRepairTree + '\n')};

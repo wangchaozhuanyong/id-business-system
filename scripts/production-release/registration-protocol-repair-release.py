@@ -20,7 +20,7 @@ ROOT = HERE.parents[1]
 NAME = 'registration-protocol-repair-20261017'
 PREFIX = 'registration-protocol-repair'
 SCOPE = 'REGISTRATION_PROTOCOL_REPAIR_20261017'
-CURRENT = '0222adf9d5225669b73e8e8f9ec711564eb6163a'
+CURRENT = '055b308bf357d460ee7746c9e60ae46d575f7661'
 BASE = Path('/opt/id-business-v2')
 WORKER = 'apps/api/src/id-business-v2/auto-registration/worker/'
 TYPE_MODULE = 'id-business-v2/auto-registration/apple-mailboxes.types.d.ts'
@@ -73,8 +73,8 @@ def verify_contract(c):
          and c.get('scope') == SCOPE and c.get('expectedCurrent') == CURRENT
          and c.get('migration') is None and type(c.get('businessActions')) is int
          and c['businessActions'] == 0, 'CONTRACT_NOT_ADMITTED')
-    need(c.get('current') == '/opt/id-business-v2/releases/20261017T051518Z-0222adf9d522-online-checkout'
-         and c.get('manifestSha256') == '772724afb095635cc31fc8159e85618c86f74224eeb3e8496d481681a559083e',
+    need(c.get('current') == '/opt/id-business-v2/releases/20261017T072149Z-055b308bf357-online-checkout'
+         and c.get('manifestSha256') == 'c59c467349be890f6d1bd18d038128500dbb40bcf702a2a85807bb745ceadd24',
          'PREDECESSOR_CHANGED')
     sources = c.get('sources')
     need(isinstance(sources, dict) and set(sources) == set(c.get('applicationPaths', [])) == set(APPLICATION_PATHS)
@@ -92,9 +92,9 @@ def verify_contract(c):
     need(set(support) == {'scripts/check-v2-module-architecture.mjs'}
          and all(re.fullmatch(HEX, value) for value in support.values()), 'VALIDATION_SUPPORT_SCOPE_CHANGED')
     b = c.get('baseline', {})
-    image_ids = {'api': 'sha256:ccff89f4cfebaf094c6ba4228295713db511bac079bb64836bca7703c71bd2cb',
-                 'admin': 'sha256:c6a8c9ea557375997dc252e1e9c1cb2ab79707448bd55edf0ead8f771dcd119a',
-                 'online-recharge': 'sha256:b2767e3fdbb44cc249a8d9f553b217c10b947164eff0f8e91c448ccbc9a69908'}
+    image_ids = {'api': 'sha256:0d85d4e653ce13a4017bf2c034c3ed3e6a1ee10fc10a3760f082ff467943dfad',
+                 'admin': 'sha256:2fe37579bde7f0a62874b2a78f09883e17a2a225dda8b8672c7c08aeb8b9afc8',
+                 'online-recharge': 'sha256:e283524eeea95ddea36ef45187c003739f18c8009fd12bb8dbfd704aa5317545'}
     need(set(b.get('services', {})) == set(helper('recharge-record-release.py').SERVICES)
          and all(b.get('images', {}).get(role, {}).get('revision') == CURRENT
                  and b['images'][role]['image'] == image for role, image in image_ids.items()),
@@ -115,16 +115,37 @@ def verify_contract(c):
                  for name, pin in pins.items()), 'RUNTIME_WORKER_SOURCE_SCOPE_CHANGED')
     successor = reconstruction.get('successor', {})
     previous = reconstruction.get('previousAdminProof', {})
-    need(successor.get('commit') == CURRENT
+    need(successor.get('commit') == '0222adf9d5225669b73e8e8f9ec711564eb6163a'
          and successor.get('contractSha256') == '3495ac990a3966dfcbba0009ca9671ba2ba3b77ac06e3adbc2e6ea012441afea'
          and successor.get('sourceReviewCommit') == 'f404926fc4eca91a413ed29567f9048eedceb83e'
-         and successor.get('sources', {}).get('fileCount') == 24
-         and re.fullmatch(HEX, successor['sources'].get('sha256', ''))
+         and successor.get('sources') == {'fileCount': 24,
+             'sha256': '7d098e093f46ffac38bd01db55b794e03f723a6fcfbc2e3d26b42ef599b00a2c'}
+         and successor.get('engineFiles') == {'fileCount': 88,
+             'sha256': '353a39453e1364f5d6bb386be7426ec52961e78aa4aa2971566af84c123b8f29'}
          and previous.get('commit') == 'c8ce1a01a1a1e61bcc8de778dad331191319d645'
          and previous.get('sha256') == 'f9e7154e2574a6c487690459a16808a60bdbec88113817ece367f1ecb03f278b'
          and previous.get('adminFiles') == {'fileCount': 261,
              'sha256': 'b136a739d66ffcbbea3f6a0fe48881e5bca912e8b2c1955cd7d7de062ae1adfb'},
          'PUBLISHED_SUCCESSOR_BINDING_CHANGED')
+    recharge = reconstruction.get('publishedRecharge', {})
+    successor_admin = reconstruction.get('successorAdminProof', {})
+    published = b.get('publishedProofs', {}).get('online-checkout-build-proof.json', {})
+    need(recharge == {'commit': CURRENT,
+             'contractSha256': '37a7c190f75bfefceae563e07a1d63e9d80ccb0e838c11d014640e7227452954',
+             'sourceReviewCommit': 'fc51da593302cc8535a5adfe199d7768949eb419',
+             'sources': {'fileCount': 49, 'sha256': '1360975eac93948899a28ad1513f012cc0015aa67f1ea16632433d467cfd09c0'},
+             'engineFiles': {'fileCount': 96, 'sha256': '10e16859cb9a5bddb737c04caeeacda90baaf16bdb7846a1031d966381542be6'}}
+         and recharge['engineFiles'] == b['inventory']['engine']
+         and successor_admin.get('commit') == successor['commit']
+         and successor_admin.get('sha256') == '4230b5df595416a698f545775da38fd0ec37f3f766eadfb27d9b8967e709a979'
+         and successor_admin.get('adminFiles') == {'fileCount': 261,
+             'sha256': '121aac8acc69414d0ceb3ebd240d98f6a37cedd1df5074e38874742353256fbc'}
+         and published.get('commit') == CURRENT
+         and published.get('scope') == 'ONLINE_UNATTENDED_RECHARGE_RECONCILIATION'
+         and published.get('sha256') == 'd9ed5b7a62af6fb9f8e1e125fbe3caec194700f2c9f65eb75703ac9a15c5a061'
+         and published.get('adminFiles') == {'fileCount': 261,
+             'sha256': '47c78f5127494a702e338d2862ff5f4a2f4591cee0db5c15e929962b024e5369'},
+         'PUBLISHED_RECHARGE_BINDING_CHANGED')
     need(isinstance(b.get('sqlite'), dict) and re.fullmatch(HEX, b['sqlite'].get('logicalSha256', ''))
          and not b['sqlite']['taskCounts'].get('pending', 0) and not b['sqlite']['taskCounts'].get('running', 0)
          and isinstance(b.get('mysql'), dict) and re.fullmatch(HEX, b['mysql'].get('accountsSha256', ''))
