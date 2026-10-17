@@ -246,6 +246,7 @@ export interface V2RechargeResult {
   upgrade_identifier?: string;
   upgrade_invoice_identifier?: string;
   upgrade_payment_intent_identifier?: string;
+  payment_intent_identifier?: string;
   subscription_period?: V2RechargeSubscriptionPeriod;
   subscription_inspection?: V2RechargeSubscriptionInspection;
   cycle_review?: V2RechargeCycleReview;
@@ -269,7 +270,10 @@ export interface V2RechargeResult {
   subscription_status?: string;
   recheck_plan?: V2RechargePlan;
   checkout_identifier?: string;
-  /** 仅本机助手当前状态中可读取，禁止持久化单次确认凭据。 */
+  transport?: 'web_direct' | 'official_browser';
+  billing_fingerprint?: string;
+  expired_checkout_replacement?: V2RechargeExpiredCheckoutProof;
+  /** 单次确认凭据仅在执行页内存中持有，禁止持久化。 */
   nonce?: string;
   quote_digest?: string;
   confirmation_expires_at?: string;
@@ -546,7 +550,36 @@ export interface UpdateV2RechargeBitBrowserSettingsInput {
   clearStaticProxyCredentials?: boolean;
 }
 
+export interface V2RechargeExpiredCheckoutProof {
+  checkout_identifier: string;
+  processor_entity: string;
+  target_plan: V2RechargePlan;
+  account_key: string;
+  status: 'expired';
+  payment_status: 'unpaid';
+}
+
+export interface V2RechargeDirectQuoteConfirmation {
+  ok: true;
+  nonce: string;
+  quote_digest: string;
+  confirmation_expires_at: string;
+}
+
+export interface V2RechargeDirectPaymentConfirmationInput {
+  nonce: string;
+  quoteDigest: string;
+  checkoutIdentifier: string;
+}
+
+export interface V2RechargeDirectPaymentGrant {
+  id: string;
+  paymentAllowed: true;
+  paymentRecordRevision: number;
+}
+
 export interface V2RechargeBitBrowserStart {
+  directMode?: boolean;
   subscriptionCycleProtocol?: 1;
   connectionProfileId?: string | null;
   cardId?: string;
@@ -566,6 +599,7 @@ export interface V2RechargeBitBrowserStart {
 }
 
 export interface V2RechargeBitBrowserRecheckStart {
+  directMode?: boolean;
   connectionProfileId?: string | null;
   id: string;
   sourceJobId: string;
@@ -591,6 +625,7 @@ export interface V2RechargeBrowserRestore {
 }
 
 export interface V2RechargeBitBrowserLaunch {
+  transport?: 'web_direct';
   subscriptionCycleProtocol?: 1;
   id: string;
   mode: 'payment';
@@ -648,6 +683,7 @@ export interface V2RechargeBitBrowserOpenLaunch {
 }
 
 export interface V2RechargeBitBrowserRecheckLaunch {
+  transport?: 'web_direct';
   id: string;
   mode: 'recheck';
   upgradeIdentifier?: string;
@@ -660,6 +696,7 @@ export interface V2RechargeBitBrowserRecheckLaunch {
 export interface V2RechargeResolveNoBankRequest {
   confirmNoBankRequest: true;
   verificationJobId: string;
+  directMode?: true;
 }
 
 export interface V2RechargeBitBrowserResolutionLaunch {

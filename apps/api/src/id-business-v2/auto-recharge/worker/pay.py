@@ -526,7 +526,8 @@ async def run_payment(target, ledger, *, pay=False, details_reader=read_details,
 async def run_flow(target, state_dir, target_plan, *, details_reader, confirmer,
                    wait_seconds=120, poll_count=6, poll_interval=20, browser=None,
                    browser_context=None, session_budget=None, allow_checkout_replacement=True,
-                   expected_country=None, subscription_check_only=False, next_cycle_grant=None):
+                   expected_country=None, subscription_check_only=False, next_cycle_grant=None,
+                   expired_checkout_authorizer=None):
     from subscription_upgrade import run_upgrade_in_context
     from plans import subscription_transition
     if session_budget:
@@ -577,7 +578,8 @@ async def run_flow(target, state_dir, target_plan, *, details_reader, confirmer,
             poll_interval=poll_interval, browser_context=page.context,
             session_budget=session_budget.restart(phase="checkout_check") if session_budget else None,
             allow_checkout_replacement=allow_checkout_replacement, expected_country=expected_country,
-            next_cycle_grant=cycle_grant)
+            next_cycle_grant=cycle_grant,
+            expired_checkout_authorizer=expired_checkout_authorizer)
 
     return await run_browser(target, target_plan=target_plan, state_dir=state_dir,
                              browser=browser, browser_context=browser_context,
@@ -589,7 +591,7 @@ async def run_checkout_flow(target, state_dir, target_plan, *, details_reader, c
                    wait_seconds=120, poll_count=6, poll_interval=20, browser=None,
                    browser_context=None, session_budget=None, allow_checkout_replacement=True,
                    expected_country=None, expected_checkout_identifier=None, next_cycle_grant=None,
-                   allow_unknown_checkout_recovery=False):
+                   allow_unknown_checkout_recovery=False, expired_checkout_authorizer=None):
     ledger_holder = {}
 
     async def handler(page, guard, identity, original_quote):
@@ -645,6 +647,17 @@ async def run_checkout_flow(target, state_dir, target_plan, *, details_reader, c
                     "stage": "quote_read", "checkout_identifier": expected_checkout_identifier,
                     "payment_attempted": False, "payment_requests_sent": 0,
                     "confirmation_requests_sent": 0}
+        if expired_checkout_authorizer is not None and not allow_unknown_checkout_recovery:
+            from expired_checkout import expired_checkout_proof
+            proof = await expired_checkout_proof(browser_context, target, state_dir, target_plan,
+                                                 record, session_budget)
+            if proof is not None:
+                await expired_checkout_authorizer(proof)
+                progress('existing_checkout_rebuilding', reason='expired_unpaid_verified')
+                result = await run_browser(target, create=True, replace_unpaid_checkout=True,
+                    expired_checkout_replacement=proof, **browser_args)
+                result['checkout_replacement_performed'] = True
+                return include_payment_record(result, ledger_holder.get('ledger'))
         if (record.get("status") == "cancelled"
                 and record.get("cancelled_before_confirmation") is True):
             if not allow_checkout_replacement:

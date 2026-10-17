@@ -1,7 +1,7 @@
 <template>
   <section class="v2-page-layout recharge-page">
     <RechargePageContext
-      :direct-mode="operationMode === 'open_browser'"
+      :direct-mode="true"
       :connector-status="connectorStatus"
       :connector-message="connectorMessage"
       @settings="openProxySettings"

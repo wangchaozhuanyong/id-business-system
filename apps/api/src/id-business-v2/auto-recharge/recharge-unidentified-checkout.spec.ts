@@ -38,9 +38,12 @@ const source = () => ({
 function fixture() {
   const actual = new RechargeRepository({} as never);
   const previous = source();
-  const records = [
-    { ownerId: 'owner', fileKey: `${accountKey}.json`, revision: 2, document: document() }
-  ];
+  const records: {
+    ownerId: string;
+    fileKey: string;
+    revision: number;
+    document: Record<string, unknown>;
+  }[] = [{ ownerId: 'owner', fileKey: `${accountKey}.json`, revision: 2, document: document() }];
   const tx = { idBusinessV2RechargeJob: { findMany: vi.fn().mockResolvedValue([previous]) } };
   const repository = {
     records: vi.fn().mockResolvedValue(records),
@@ -87,6 +90,104 @@ describe('unidentified original checkout discovery', () => {
     expect(result.originalCheckoutIdentifier).toBeUndefined();
     expect(result.ownedProfile?.profileId).toBe(profileId);
     expect(repository.updateJob).toHaveBeenCalledOnce();
+  });
+  it('preserves exact unidentified discovery when another expired checkout is archived', async () => {
+    const { input, previous, records, repository } = fixture();
+    const expired = 'oaics_expired_before_unidentified';
+    records.push({
+      ownerId: 'owner',
+      fileKey: `history/${'c'.repeat(64)}.json`,
+      revision: 1,
+      document: {
+        kind: 'expired_checkout',
+        document: { checkout_identifier: expired, payment_status: 'not_attempted' },
+        proof: {
+          account_key: accountKey,
+          target_plan: 'plus',
+          checkout_identifier: expired,
+          status: 'expired',
+          payment_status: 'unpaid'
+        }
+      }
+    });
+    input.tx.idBusinessV2RechargeJob.findMany.mockResolvedValue([
+      {
+        ...previous,
+        id: '33333333-3333-4333-8333-333333333333',
+        result: { ...document(), checkout_identifier: expired }
+      },
+      previous
+    ] as never);
+    const result = await restoreRechargeAccount(input as never);
+    expect(result.unidentifiedCheckoutRecovery).toBe(true);
+    expect(result.originalCheckoutIdentifier).toBeUndefined();
+    expect(result.ownedProfile?.profileId).toBe(profileId);
+    expect(repository.updateJob).toHaveBeenCalledOnce();
+  });
+  it('ignores empty, scalar and ordinary failed history before exact original discovery', async () => {
+    const { input, previous } = fixture();
+    input.tx.idBusinessV2RechargeJob.findMany.mockResolvedValue([
+      { ...previous, id: '33333333-3333-4333-8333-333333333333', result: null },
+      { ...previous, id: '44444444-4444-4444-8444-444444444444', result: 'synthetic_failure' },
+      {
+        ...previous,
+        id: '55555555-5555-4555-8555-555555555555',
+        result: { status: 'blocked', reason: 'browser_operation_failed', checkout_requests_sent: 0 }
+      },
+      previous
+    ] as never);
+    const repository = new RechargeRepository({} as never);
+    await expect(
+      repository.originalCheckoutForAccount(
+        input.tx as never,
+        'owner',
+        accountKey,
+        'plus',
+        input.job.id,
+        undefined,
+        sourceId,
+        ['oaics_other_expired']
+      )
+    ).resolves.toBeUndefined();
+  });
+  it.each([
+    'missing-source',
+    'different-source',
+    'payment',
+    'confirmation',
+    'unknown-checkout',
+    'invalid-identifier'
+  ])('nonempty expired exclusions do not permit an unidentified %s', async (kind) => {
+    const { input, previous } = fixture();
+    const allowedSource =
+      kind === 'missing-source'
+        ? undefined
+        : kind === 'different-source'
+          ? '33333333-3333-4333-8333-333333333333'
+          : sourceId;
+    if (kind === 'payment') previous.result.payment_attempted = true;
+    if (kind === 'confirmation') previous.result.confirmation_requests_sent = 1;
+    if (kind === 'unknown-checkout')
+      Object.assign(previous.result, {
+        checkout_requests_sent: 0,
+        checkout_outcome: 'unknown',
+        reason: 'browser_operation_failed'
+      });
+    if (kind === 'invalid-identifier')
+      Object.assign(previous.result, { checkout_identifier: 'invalid' });
+    const repository = new RechargeRepository({} as never);
+    await expect(
+      repository.originalCheckoutForAccount(
+        input.tx as never,
+        'owner',
+        accountKey,
+        'plus',
+        input.job.id,
+        undefined,
+        allowedSource,
+        ['oaics_other_expired']
+      )
+    ).rejects.toThrow('原订单编号未核实');
   });
   const login = (id: string, profile: string, parent?: string, verified = true) => ({
     ...source(),

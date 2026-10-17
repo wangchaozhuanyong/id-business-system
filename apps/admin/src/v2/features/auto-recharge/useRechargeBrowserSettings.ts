@@ -1,5 +1,8 @@
 import { computed, onScopeDispose, ref, watch, type Ref } from 'vue';
-import { normalizeV2RechargeBrowserOptions } from '@apple-business/shared';
+import {
+  normalizeV2RechargeBrowserOptions,
+  V2_RECHARGE_SUBSCRIPTION_CYCLE_CAPABILITY
+} from '@apple-business/shared';
 import type {
   UpdateV2RechargeBitBrowserSettingsInput,
   V2RechargeBitBrowserSettings
@@ -184,7 +187,9 @@ export function useRechargeBrowserSettings(
       connectorMessage.value = direct
         ? '比特浏览器直连、分组／标签检测通过'
         : '连接器、比特接口和分组／标签检测通过';
-      return catalog.connectorCapabilities ?? [];
+      return direct
+        ? [V2_RECHARGE_SUBSCRIPTION_CYCLE_CAPABILITY, 'account-auto-login-v1']
+        : (catalog.connectorCapabilities ?? []);
     } catch (cause) {
       if (connectionCheck === check && current()) {
         connectorStatus.value = 'offline';

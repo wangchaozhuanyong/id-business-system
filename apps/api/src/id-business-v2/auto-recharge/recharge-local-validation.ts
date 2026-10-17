@@ -35,6 +35,7 @@ export function validateRechargeBitBrowserStart(value: unknown) {
   const allowedKeys = new Set([
     'id',
     'subscriptionCycleProtocol',
+    'directMode',
     'connectionProfileId',
     'plan',
     'addressId',
@@ -53,6 +54,7 @@ export function validateRechargeBitBrowserStart(value: unknown) {
   if (
     Object.keys(input).some((key) => !allowedKeys.has(key)) ||
     (input.subscriptionCycleProtocol !== undefined && input.subscriptionCycleProtocol !== 1) ||
+    (input.directMode !== undefined && typeof input.directMode !== 'boolean') ||
     typeof input.id !== 'string' ||
     !uuidPattern.test(input.id) ||
     !V2_RECHARGE_PLANS.includes(input.plan as never) ||
@@ -114,6 +116,7 @@ export function validateRechargeBitBrowserStart(value: unknown) {
   }
   return {
     ...(input.subscriptionCycleProtocol === 1 ? { subscriptionCycleProtocol: 1 as const } : {}),
+    ...(input.directMode !== undefined ? { directMode: input.directMode } : {}),
     ...connectionSelection(input),
     cardId: input.cardId as string | undefined,
     billingName: input.billingName as string | undefined,
@@ -138,11 +141,19 @@ export function validateRechargeBitBrowserStart(value: unknown) {
 
 export function validateRechargeBitBrowserRecheckStart(value: unknown) {
   const input = object(value);
-  const allowedKeys = new Set(['id', 'connectionProfileId', 'sourceJobId', 'plan', 'windowName']);
+  const allowedKeys = new Set([
+    'id',
+    'directMode',
+    'connectionProfileId',
+    'sourceJobId',
+    'plan',
+    'windowName'
+  ]);
   if (
     Object.keys(input).some((key) => !allowedKeys.has(key)) ||
     typeof input.id !== 'string' ||
     !uuidPattern.test(input.id) ||
+    (input.directMode !== undefined && typeof input.directMode !== 'boolean') ||
     typeof input.sourceJobId !== 'string' ||
     !uuidPattern.test(input.sourceJobId) ||
     input.id === input.sourceJobId ||
@@ -158,6 +169,7 @@ export function validateRechargeBitBrowserRecheckStart(value: unknown) {
     ...connectionSelection(input),
     id: input.id,
     sourceJobId: input.sourceJobId,
+    ...(input.directMode !== undefined ? { directMode: input.directMode } : {}),
     plan: input.plan,
     windowName
   } as V2RechargeBitBrowserRecheckStart;
@@ -197,10 +209,11 @@ export function validateRechargeBitBrowserOpenStart(value: unknown): V2RechargeB
 
 export function validateRechargeNoBankRequest(value: unknown) {
   const input = object(value);
-  const allowedKeys = new Set(['confirmNoBankRequest', 'verificationJobId']);
+  const allowedKeys = new Set(['confirmNoBankRequest', 'verificationJobId', 'directMode']);
   if (
     Object.keys(input).some((key) => !allowedKeys.has(key)) ||
     input.confirmNoBankRequest !== true ||
+    (input.directMode !== undefined && input.directMode !== true) ||
     typeof input.verificationJobId !== 'string' ||
     !uuidPattern.test(input.verificationJobId)
   ) {
@@ -208,6 +221,7 @@ export function validateRechargeNoBankRequest(value: unknown) {
   }
   return {
     confirmNoBankRequest: true,
-    verificationJobId: input.verificationJobId
+    verificationJobId: input.verificationJobId,
+    ...(input.directMode === true ? { directMode: true as const } : {})
   } as V2RechargeResolveNoBankRequest;
 }

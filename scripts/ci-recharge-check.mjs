@@ -1674,6 +1674,8 @@ if (releaseArtifactOnly && ['guards', 'release-controls'].includes(part)) {
       'bitbrowser_retry.py',
       'browser_checkout.py',
       'native_checkout.py',
+      'expired_checkout.py',
+      'test_expired_checkout.py',
       'callback_observation.py',
       'pay.py',
       'payment_form.py',
@@ -1729,7 +1731,9 @@ if (releaseArtifactOnly && ['guards', 'release-controls'].includes(part)) {
       'test_fingerprint_runtime',
       'test_password_login',
       'test_subscribe',
-      ...(rechargeFlowRegression ? ['test_native_checkout', 'test_native_pro_checkout'] : []),
+      ...(rechargeFlowRegression
+        ? ['test_native_checkout', 'test_native_pro_checkout', 'test_expired_checkout']
+        : []),
       rechargeFlowRegression ? 'test_payment' : 'test_payment.StateTests',
       ...(rechargeFlowRegression
         ? ['test_callback_observation', 'test_response_settlement', 'test_subscription_cycle']

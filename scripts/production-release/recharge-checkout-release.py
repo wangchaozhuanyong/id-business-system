@@ -1,4 +1,4 @@
-"""Finite native checkout publication; preserve the current API/Admin images and all other roles."""
+"""Finite web checkout publication; preserve the current API/Admin images and all other roles."""
 import datetime
 import hashlib
 import importlib.util
@@ -42,15 +42,57 @@ def utilities():
     return load(Path(__file__).with_name('recharge-availability-release.py'), 'billing_generic_helpers')
 
 
+def verify_mysql_verification(value, plan, contract):
+    expected = contract['isolatedMysqlTest']
+    need(type(value) is dict and value.get('version') == 1
+         and value.get('scope') == 'OWNED_EMPTY_DATABASE'
+         and value.get('runtime') == 'github-actions-mysql-service'
+         and value.get('database') == expected['database'] == 'id_business_v2_recharge_direct_fixture'
+         and all(value.get(key) == plan[key] for key in ('commit', 'tree', 'workflowRunId', 'workflowRunAttempt'))
+         and value.get('testFile') == expected['testFile']
+         and value.get('testFileSha256') == contract['sources'][expected['testFile']]
+         and isinstance(value.get('reportSha256'), str) and re.fullmatch('[a-f0-9]{64}', value['reportSha256'])
+         and type(value.get('testsTotal')) is int and value['testsTotal'] == expected['tests'] == 8
+         and value.get('testsPassed') == value['testsTotal']
+         and all(type(value.get(key)) is int and value[key] == 0
+                 for key in ('testsSkipped', 'testsTodo', 'productionActions', 'browserRequests')),
+         'ISOLATED_MYSQL_PROOF_INVALID')
+    return value
 
 
+def admin_inventory(d, state):
+    script = 'cd /usr/share/nginx/html && test -z "$(find . -type l -print -quit)" && find . -type f -exec sha256sum {} +'
+    result = {}
+    for row in d.run('docker', 'exec', state['containerId'], 'sh', '-c', script, timeout=90).splitlines():
+        value, path = row.split('  ', 1)
+        need(path.startswith('./') and re.fullmatch('[a-f0-9]{64}', value), 'ADMIN_INVENTORY_INVALID')
+        name = path.removeprefix('./')
+        need(re.fullmatch('[A-Za-z0-9_./-]+', name) and '..' not in Path(name).parts and name not in result,
+             'ADMIN_INVENTORY_INVALID')
+        result[name] = value
+    return result
 
 
+def verify_admin_inventory(actual, expected):
+    need(type(expected) is dict and len(actual) == expected.get('count')
+         and digest(json.dumps(actual, sort_keys=True, separators=(',', ':')).encode()) == expected.get('sha256'),
+         'ADMIN_HISTORY_CHANGED')
 
 
-
+def source_projections(previous, plan, contract, proof):
+    shared = {'commit': plan['commit'], 'sourceTree': plan['tree'], 'buildProofSha256': plan['buildProofSha256']}
+    return {**previous,
+            'admin': {**shared, 'kind': 'PUBLISHED_ADMIN_WITH_WEB_DIRECT_CHECKOUT_OVERLAY',
+                      'sourceBaseline': contract['adminSourceBaseline'],
+                      'publishedAdminRecipe': contract['publishedAdminRecipe'],
+                      'changedSources': {n: v for n, v in contract['sources'].items() if n.startswith('apps/admin/')},
+                      'preservedNginxSha256': contract['nginxSha256']},
+            'api': {**shared, 'kind': 'PUBLISHED_API_WITH_WEB_DIRECT_CHECKOUT_OVERLAY',
+                    'sourceBaseline': contract['apiSourceBaseline'], 'apiModules': proof['apiModules']}}
 
 def validate_proof(proof, plan, contract, payload, h):
+    verify_mysql_verification(proof.get('isolatedMysqlVerification'), plan, contract)
+    need(proof['isolatedMysqlVerification'] == plan.get('isolatedMysqlVerification'), 'ISOLATED_MYSQL_PROOF_CHANGED')
     database = contract['databaseVerification']
     need(proof.get('version') == 1 and proof.get('scope') == contract['scope']
          and all(proof.get(k) == plan[k] for k in ('commit', 'tree', 'workflowRunId', 'workflowRunAttempt', 'contractSha256', 'controllerSha256', 'releaseUtilitySha256', 'helperSha256'))
@@ -83,6 +125,10 @@ def baseline(d, contract, h, expected=None):
     need(previous == Path(contract['current']) and previous.parent == BASE / 'releases', 'CURRENT_CHANGED')
     raw = (previous / 'release-manifest.json').read_bytes()
     need(digest(raw) == contract['manifestSha256'] and json.loads(raw)['commit'] == contract['expectedCurrent'], 'MANIFEST_CHANGED')
+    admin_recipe = contract['publishedAdminRecipe']
+    need(json.loads(raw).get('roleSourceProjections', {}).get('admin', {}).get('commit') == admin_recipe['commit']
+         and digest((previous / admin_recipe['proofFile']).read_bytes()) == admin_recipe['proofSha256'],
+         'PUBLISHED_ADMIN_PROVENANCE_CHANGED')
     states = h.snapshot(d, previous)
     need(states == contract['services'], 'SERVICES_CHANGED')
     need(all(digest((previous / n).read_bytes()) == v for n, v in contract['configurationSha256'].items()), 'CONFIGURATION_CHANGED')
@@ -90,8 +136,11 @@ def baseline(d, contract, h, expected=None):
     normalizer = Path(contract['backupNormalizerPath'])
     need(normalizer.is_relative_to(BASE / 'releases') and not normalizer.is_symlink()
          and digest(normalizer.read_bytes()) == contract['backupNormalizerSha256'], 'BACKUP_NORMALIZER_CHANGED')
-    a.verify_modules(d, previous, contract['apiModules'])
+    a.verify_modules(d, previous, contract['apiBaselineFiles'])
     a.verify_admin(d, states['admin'], contract['publicFiles'])
+    verify_admin_inventory(admin_inventory(d, states['admin']), contract['preservedAdminInventory'])
+    need(all(h.fingerprint(h.configuration(d, states[name])) == expected
+             for name, expected in contract['runtimeConfigurationSha256'].items()), 'RUNTIME_CONFIGURATION_CHANGED')
     need(d.run('docker', 'exec', states['admin']['containerId'], 'sha256sum', '/etc/nginx/conf.d/default.conf').split()[0]
          == contract['nginxSha256'], 'NGINX_CHANGED')
     h.guards(d, previous, states, contract)
@@ -116,11 +165,18 @@ def smoke(d, target, proof, states, contract, h):
     # Pure classification only: no database, new checkout or payment.
     code = """const a=require('/app/apps/api/dist/id-business-v2/auto-recharge/recharge-availability.js');
 const g=require('/app/apps/api/dist/id-business-v2/auto-recharge/recharge-unidentified-checkout.js');
+const direct=require('/app/apps/api/dist/id-business-v2/auto-recharge/recharge-direct-payment.js');
+const expired=require('/app/apps/api/dist/id-business-v2/auto-recharge/recharge-expired-checkout.js');
 const r=a.rechargeAvailability({state:'finished',leaseUntil:new Date(0),ownerId:'fixture',accountKey:null,result:{payment_attempted:true,payment_requests_sent:1,payment_status:'unknown'}},[]);
 const x={status:'blocked',reason:'checkout_unknown_write',stage:'checkout_create',account_matched:true,payment_status:'not_attempted',payment_attempted:false,checkout_requests_sent:1,payment_requests_sent:0};
-console.log(JSON.stringify({released:r.execution==='released',unknownProtected:r.accountPaymentRestricted&&r.payment==='unknown',discoveryOnly:g.isUnidentifiedUnpaidCheckout(x)&&!g.isUnidentifiedUnpaidCheckout({...x,payment_attempted:true})}));"""
+const job={action:'bitbrowser',result:{transport:'web_direct',mode:'payment'}};
+let ungrantedBlocked=false;try{direct.assertDirectRechargeReport(job,{payment_attempted:true})}catch{ungrantedBlocked=true}
+const observed={...job,result:{...job.result,_direct_unexpected_payment_v1:{observed:true},_direct_confirmation_v1:{consumed:true}}};
+const proof=expired.expiredCheckoutProof({checkout_identifier:'oaics_synthetic_smoke',processor_entity:'openai_llc',target_plan:'plus',account_key:'a'.repeat(64),status:'expired',payment_status:'unpaid'});
+console.log(JSON.stringify({released:r.execution==='released',unknownProtected:r.accountPaymentRestricted&&r.payment==='unknown',discoveryOnly:g.isUnidentifiedUnpaidCheckout(x)&&!g.isUnidentifiedUnpaidCheckout({...x,payment_attempted:true}),ungrantedBlocked,observedNotAuthorized:!direct.directRechargeAuthorized(observed),expiredProof:proof.status==='expired'&&proof.payment_status==='unpaid'}));"""
     need(json.loads(d.compose(target, 'exec', '-T', 'api', 'node', '-e', code)) == {
-        'released': True, 'unknownProtected': True, 'discoveryOnly': True}, 'BUSINESS_MODULE_SMOKE_FAILED')
+        'released': True, 'unknownProtected': True, 'discoveryOnly': True, 'ungrantedBlocked': True,
+        'observedNotAuthorized': True, 'expiredProof': True}, 'BUSINESS_MODULE_SMOKE_FAILED')
 
 
 
@@ -136,18 +192,23 @@ def release(plan, contract, d, h):
             manifest = json.loads((target / 'release-manifest.json').read_bytes())
             need(manifest.get('commit') == plan['commit'] and manifest.get('scope') == contract['scope'], 'READBACK_CURRENT_CHANGED')
             receipt = json.loads((target / 'recharge-checkout-preservation.json').read_bytes())
+            verify_admin_inventory(receipt['beforeAdminFiles'], contract['preservedAdminInventory'])
             states = h.snapshot(d, target)
             need(states == receipt['after'] and all(states[n] == receipt['before'][n] for n in PRESERVED), 'READBACK_SERVICES_CHANGED')
             raw = (target / 'recharge-checkout-build-proof.json').read_bytes()
             need(digest(raw) == plan['buildProofSha256'], 'READBACK_PROOF_CHANGED')
             need(all(digest((target / 'scripts/production-release' / n).read_bytes()) == v for n, v in plan['controlSources'].items()), 'READBACK_EXECUTOR_CHANGED')
             smoke(d, target, json.loads(raw), states, contract, h)
+            need(admin_inventory(d, states['admin']) == {**receipt['beforeAdminFiles'], **json.loads(raw)['adminFiles']},
+                 'READBACK_ADMIN_HISTORY_CHANGED')
             return {'status': 'RECHARGE_CHECKOUT_INDEPENDENT_READBACK_VERIFIED', 'commit': plan['commit'], 'images': receipt['images'], 'preservedServices': list(PRESERVED), 'businessActions': 0, 'migrationPerformed': False}
         if plan['mode'] == 'release':
             need(type(plan.get('runtimeBaseline')) is dict, 'PREFLIGHT_RECEIPT_MISSING')
         previous, raw_manifest, before = baseline(d, contract, h, plan.get('runtimeBaseline'))
         if plan['mode'] == 'preflight':
             return {'status': 'RECHARGE_CHECKOUT_PREFLIGHT_VERIFIED', 'commit': plan['commit'], 'runtimeBaseline': a.runtime_receipt(previous, raw_manifest, before), 'businessActions': 0, 'migrationPerformed': False}
+        before_admin = admin_inventory(d, before['admin'])
+        verify_admin_inventory(before_admin, contract['preservedAdminInventory'])
         stage = BASE / '.staging' / ('recharge-checkout-' + plan['commit'] + '-' + plan['workflowRunId'])
         need(not stage.exists(), 'RELEASE_ALREADY_ACCEPTED')
         stage.mkdir(mode=0o700)
@@ -221,14 +282,15 @@ def release(plan, contract, d, h):
         online = json.loads(d.run('docker', 'inspect', after['online-recharge']['containerId']))[0]
         need(online['HostConfig']['NetworkMode'] == 'container:' + after['api']['containerId'], 'ONLINE_BINDING_CHANGED')
         smoke(d, target, proof, after, contract, h)
-        receipt = {'status': 'RECHARGE_CHECKOUT_DEPLOYED', 'commit': plan['commit'], 'tree': plan['tree'], 'before': before, 'after': after, 'images': images, 'backup': backup, 'workflowRunId': plan['workflowRunId'], 'businessActions': 0, 'migrationPerformed': False}
+        need(admin_inventory(d, after['admin']) == {**before_admin, **proof['adminFiles']}, 'ADMIN_HISTORY_CHANGED')
+        receipt = {'status': 'RECHARGE_CHECKOUT_DEPLOYED', 'commit': plan['commit'], 'tree': plan['tree'], 'before': before, 'after': after, 'beforeAdminFiles': before_admin, 'images': images, 'backup': backup, 'workflowRunId': plan['workflowRunId'], 'businessActions': 0, 'migrationPerformed': False}
         (target / 'recharge-checkout-preservation.json').write_text(json.dumps(receipt, sort_keys=True, indent=2) + '\n')
         (target / 'recharge-checkout-build-proof.json').write_bytes(raw_proof)
         manifest = json.loads(raw_manifest)
         manifest['previousAdminSourceProjection'] = manifest.get('adminSourceProjection')
-        manifest['adminSourceProjection'] = {'kind': 'PUBLISHED_ADMIN_WITH_NATIVE_CHECKOUT_OVERLAY', 'commit': plan['commit'], 'sourceTree': plan['tree'], 'sourceBaseline': contract['adminSourceBaseline'], 'changedSources': {n: v for n, v in contract['sources'].items() if n.startswith('apps/admin/')}, 'buildProofSha256': plan['buildProofSha256'], 'preservedNginxSha256': contract['nginxSha256']}
-        manifest['roleSourceProjections'] = {**manifest.get('roleSourceProjections', {}), 'admin': manifest['adminSourceProjection']}
-        manifest.update(commit=plan['commit'], sourceTree=plan['tree'], sourceBranch='main', scope=contract['scope'], status='DEPLOYED', previousCommit=contract['expectedCurrent'], previousRelease=str(previous), previousManifestSha256=digest(raw_manifest), servicesUpdated=['api', 'admin'], dependentServiceRebound='online-recharge', newMigrations=[], migrationPerformed=False, paymentActions=0, validationRun=plan['workflowRunId'], actualDeployment=receipt, sourceProjection={'sourceBaseline': contract['sourceBaseline'], 'changedSources': contract['sources'], 'apiModules': proof['apiModules'], 'buildProofSha256': plan['buildProofSha256']}, sourceLayout='PUBLISHED_PREDECESSOR_WITH_NATIVE_CHECKOUT_OVERLAY', deploymentMethod='NATIVE_CI_APPROVED_SSM_FORWARD', compiledArtifact={'url': plan['artifactUrl'], 'sha256': plan['artifactSha256'], 'validationRun': plan['workflowRunId']})
+        manifest['roleSourceProjections'] = source_projections(manifest.get('roleSourceProjections', {}), plan, contract, proof)
+        manifest['adminSourceProjection'] = manifest['roleSourceProjections']['admin']
+        manifest.update(commit=plan['commit'], sourceTree=plan['tree'], sourceBranch='main', scope=contract['scope'], status='DEPLOYED', previousCommit=contract['expectedCurrent'], previousRelease=str(previous), previousManifestSha256=digest(raw_manifest), servicesUpdated=['api', 'admin'], dependentServiceRebound='online-recharge', newMigrations=[], migrationPerformed=False, paymentActions=0, validationRun=plan['workflowRunId'], actualDeployment=receipt, sourceProjection={'sourceBaseline': contract['sourceBaseline'], 'changedSources': contract['sources'], 'apiModules': proof['apiModules'], 'buildProofSha256': plan['buildProofSha256']}, sourceLayout='PUBLISHED_PREDECESSOR_WITH_WEB_DIRECT_CHECKOUT_OVERLAY', deploymentMethod='NATIVE_CI_APPROVED_SSM_FORWARD', compiledArtifact={'url': plan['artifactUrl'], 'sha256': plan['artifactSha256'], 'validationRun': plan['workflowRunId']})
         for field in ('acceptedSwitchCommandId', 'publicationFinalization', 'deploymentRun'):
             manifest.pop(field, None)
         for role in images:

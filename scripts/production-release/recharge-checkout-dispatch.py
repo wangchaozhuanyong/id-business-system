@@ -1,6 +1,7 @@
 """Bind successful native Actions validation to one accepted SSM publication."""
 import hashlib
 import io
+import importlib.util
 import json
 import os
 from pathlib import Path
@@ -22,8 +23,8 @@ def need(value, code):
         raise RuntimeError('RECHARGE_CHECKOUT_' + code)
 
 
-def execute(*args):
-    result = subprocess.run(args, cwd=ROOT, capture_output=True)
+def execute(*args, env=None):
+    result = subprocess.run(args, cwd=ROOT, capture_output=True, env=env)
     need(result.returncode == 0, 'PLATFORM_REQUEST_FAILED')
     return result.stdout
 
@@ -71,6 +72,10 @@ def prepare_plan():
          and proof['workflowRunAttempt'] == attempt and proof['contractSha256'] == sha(contract_raw)
          and os.environ['EXPECTED_CURRENT'] == contract['expectedCurrent'], 'BUILD_IDENTITY_CHANGED')
     quality = proof.get('qualityVerification', {})
+    spec = importlib.util.spec_from_file_location('checkout_controller', ROOT / 'scripts/production-release/recharge-checkout-release.py')
+    controller = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(controller)
+    controller.verify_mysql_verification(proof.get('isolatedMysqlVerification'), proof, contract)
     need(quality.get('commit') == commit and quality.get('sourceTree') == tree
          and quality.get('path') == '.github/workflows/quality.yml'
          and quality.get('conclusion') == 'success' and re.fullmatch('[1-9][0-9]*', str(quality.get('runId', ''))), 'QUALITY_PROOF_INVALID')
@@ -84,11 +89,12 @@ def prepare_plan():
     (OUTPUT / 'native-artifact.zip').write_bytes(zipped)
     tag = 'recharge-checkout-' + commit
     notes = OUTPUT / 'artifact-notes.md'
-    notes.write_text('比特充值原生结算识别与完整资料核价的原生构建产物。main `' + commit + '`；验证运行 https://github.com/'
+    notes.write_text('比特充值跨电脑网页直连与过期结账修复的原生构建产物。main `' + commit + '`；验证运行 https://github.com/'
                      + REPOSITORY + '/actions/runs/' + run_id + '。产物保存不代表服务器切换或付款成功。\n')
     execute('gh', 'release', 'create', tag, str(bundle_path), '--target', commit, '--title',
-            'Recharge native checkout repair ' + commit[:12], '--notes-file', str(notes), '--prerelease')
-    plan = {'qualityVerification': quality, 'commit': commit, 'tree': tree, 'branch': 'main', 'workflowRunId': run_id,
+            'Recharge web direct checkout repair ' + commit[:12], '--notes-file', str(notes), '--prerelease')
+    plan = {'qualityVerification': quality, 'isolatedMysqlVerification': proof['isolatedMysqlVerification'],
+            'commit': commit, 'tree': tree, 'branch': 'main', 'workflowRunId': run_id,
             'workflowRunAttempt': attempt, 'contractSha256': sha(contract_raw), 'artifactSha256': declared,
             'buildProofSha256': sha(proof_raw), 'controllerSha256': proof['controllerSha256'],
             'releaseUtilitySha256': proof['releaseUtilitySha256'], 'helperSha256': proof['helperSha256'], 'availabilityHelperSha256': sha((ROOT / 'scripts/production-release/recharge-availability-release.py').read_bytes()), 'controlSources': {n: sha((ROOT / 'scripts/production-release' / n).read_bytes()) for n in ('recharge-checkout-release.py', 'recharge-record-release.py', 'remote-deploy.py', 'recharge-availability-release.py', 'recharge-checkout-contract.json')}, 'artifactUrl': 'https://github.com/'
@@ -135,10 +141,18 @@ except Exception as error:
     source += '\nRAW_BASE=' + repr(raw_base) + '\n' + code
     parameters = {'commands': ["python3 - <<'RECORD_RELEASE'\n" + source + '\nRECORD_RELEASE'], 'executionTimeout': ['900']}
     receipt_path = OUTPUT / (mode + '-accepted-command.json')
-    need(not receipt_path.exists(), 'COMMAND_ALREADY_ACCEPTED')
+    intent_path = OUTPUT / (mode + '-command-intent.json')
+    need(not receipt_path.exists() and not receipt_path.is_symlink()
+         and not intent_path.exists() and not intent_path.is_symlink(), 'COMMAND_ALREADY_ACCEPTED_OR_UNCERTAIN')
+    with intent_path.open('x') as intent:
+        json.dump({'mode': mode, 'commit': plan['commit'], 'workflowRunId': plan['workflowRunId'],
+                   'parametersSha256': sha(json.dumps(parameters, sort_keys=True).encode())}, intent)
+        intent.flush()
+        os.fsync(intent.fileno())
     response = json.loads(execute('aws', 'ssm', 'send-command', '--region', REGION, '--instance-ids', INSTANCE,
                                   '--document-name', 'AWS-RunShellScript', '--comment', 'recharge-checkout-' + mode
-                                  + '-' + plan['commit'][:12], '--parameters', json.dumps(parameters), '--output', 'json'))
+                                  + '-' + plan['commit'][:12], '--parameters', json.dumps(parameters), '--output', 'json',
+                                  env={**os.environ, 'AWS_MAX_ATTEMPTS': '1'}))
     command = response['Command']['CommandId']
     receipt_path.write_text(json.dumps({'CommandId': command, 'InstanceId': INSTANCE}) + '\n')
     print(json.dumps({'mode': mode, 'acceptedCommandId': command}), flush=True)

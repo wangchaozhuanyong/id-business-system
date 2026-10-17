@@ -125,6 +125,11 @@ async def cancellable_flow(job, target, **kwargs):
     flow = pay.run_checkout_flow if expected_checkout or recovery else pay.run_flow
     if recovery:
         kwargs['allow_unknown_checkout_recovery'] = True
+    if (job.payload.get('mode') == 'payment' and not recovery
+            and not getattr(job, 'subscription_check_only', False)
+            and not getattr(job, 'checkout_replacement_performed', False)
+            and callable(getattr(job, 'authorize_expired_checkout', None))):
+        kwargs['expired_checkout_authorizer'] = job.authorize_expired_checkout
     if expected_checkout:
         kwargs["expected_checkout_identifier"] = expected_checkout
     task = asyncio.create_task(flow(target, job.root, job.payload["plan"], **kwargs))

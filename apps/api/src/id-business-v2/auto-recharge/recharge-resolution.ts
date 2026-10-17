@@ -1,12 +1,21 @@
 import { declinedResolutionEligible } from './recharge-noncharge-proof';
-import { BadRequestException, ConflictException } from '@nestjs/common';
+import { BadRequestException, ConflictException, ForbiddenException } from '@nestjs/common';
+import { randomBytes, randomUUID } from 'node:crypto';
+import { normalizeV2RechargeConnectorUrl } from '@apple-business/shared';
+import type { AuthenticatedUser } from '../../auth/auth.types';
 import {
   toV2JsonDocument,
   type V2CommandTransaction,
+  type V2CommandTransactionManager,
   type V2TransactionalAuditService
 } from '../runtime/public-api';
+import { SHARED_CARD_SCOPES } from '../bank-card-pool/public-api';
 import { RechargeRepository } from './persistence/recharge.repository';
-import { object, uuidPattern } from './recharge-validation';
+import { hash, object, uuidPattern } from './recharge-validation';
+import { assertOriginalRechargeConnection } from './recharge-connection-access';
+import { validateRechargeNoBankRequest } from './recharge-local-validation';
+import type { RechargeSettingsService } from './recharge-settings.service';
+import type { BankRechargeCardService } from './bank-recharge-card.service';
 
 export interface RechargeResolutionJob {
   id: string;
@@ -35,6 +44,8 @@ export function unknownPaymentCanBeResolved(job: RechargeResolutionJob) {
     /^[a-f0-9]{64}$/.test(job.accountKey) &&
     result.payment_attempted === true &&
     hasSingleHistoricalRequest &&
+    (!object(result._direct_unexpected_payment_v1 ?? {}).observed ||
+      object(result._direct_unexpected_payment_v1 ?? {}).observedRequests === 1) &&
     result.payment_status === 'unknown' &&
     !result.payment_evidence &&
     result.status !== 'subscription_activated' &&
@@ -87,6 +98,117 @@ export function withResolutionVerification<T extends Record<string, unknown>>(
         candidate.createdAt.getTime() > (job.updatedAt ?? job.createdAt).getTime())
   );
   return verification ? { ...result, resolution_verification_job_id: verification.id } : result;
+}
+
+export async function startUnknownPaymentResolution(input: {
+  sourceId: string;
+  value: unknown;
+  operator: AuthenticatedUser;
+  repository: RechargeRepository;
+  transactions: V2CommandTransactionManager;
+  audit: V2TransactionalAuditService;
+  settings: RechargeSettingsService;
+  cards?: BankRechargeCardService;
+}) {
+  const { sourceId, operator, repository, transactions, audit, settings, cards } = input;
+  if (!uuidPattern.test(sourceId)) throw new BadRequestException('原任务编号无效');
+  const request = validateRechargeNoBankRequest(input.value);
+  const id = randomUUID();
+  const agentToken = randomBytes(32).toString('hex');
+  return transactions.execute(
+    async (tx) => {
+      await repository.lock(tx);
+      const source = await repository.findJob(tx, sourceId);
+      if (!source || source.ownerId !== operator.id)
+        throw new ForbiddenException('无权处理此付款记录');
+      if (resolvedUnknownPayment(source))
+        return {
+          alreadyResolved: true as const,
+          id: String(object(source.result).resolution_job_id)
+        };
+      if (!unknownPaymentCanBeResolved(source))
+        throw new ConflictException('该记录不是可处理的付款结果未知记录');
+      if (await repository.findRunningJob(tx, operator.id))
+        throw new ConflictException('本人已有一笔充值任务执行中，请先处理原任务');
+      const verification = await repository.findJob(tx, request.verificationJobId);
+      if (!verification || !isFreeAccountVerification(source, verification))
+        throw new ConflictException('找不到该账号付款后的 Free 状态核验记录');
+      const sourceResult = object(source.result);
+      const checkoutIdentifier = String(sourceResult.checkout_identifier);
+      const direct = request.directMode === true || sourceResult.transport === 'web_direct';
+      const runtime = direct ? undefined : await settings.runtime(operator.id);
+      if (runtime) assertOriginalRechargeConnection(sourceResult, runtime.connectionMetadata);
+      const created = await repository.createJob(tx, {
+        id,
+        ownerId: operator.id,
+        plan: source.plan,
+        action: 'bitbrowser',
+        state: 'running',
+        accountKey: source.accountKey,
+        nonceHash: direct ? null : hash(agentToken),
+        leaseUntil: new Date(Date.now() + 5 * 60000),
+        result: toV2JsonDocument({
+          ...runtime?.connectionMetadata,
+          ...(direct ? { transport: 'web_direct' } : {}),
+          status: direct ? 'running' : 'waiting_local_connector',
+          stage: 'connector_dispatch',
+          resolution_only: true,
+          source_job_id: source.id,
+          verification_job_id: verification.id,
+          checkout_identifier: checkoutIdentifier,
+          target_plan: source.plan,
+          payment_attempted: false,
+          confirmation_requests_sent: 0,
+          payment_requests_sent: 0
+        })
+      });
+      await audit.append(tx, {
+        userId: operator.id,
+        module: 'id_business_v2',
+        action: 'id_business_v2.auto_recharge.payment_resolution.start',
+        objectType: 'recharge_job',
+        objectId: source.id,
+        afterData: {
+          resolutionJobId: created.id,
+          verificationJobId: verification.id,
+          plan: source.plan,
+          confirmation: 'confirmed_no_bank_request'
+        },
+        remark: '创建银行卡未收到付款请求的历史记录处理任务'
+      });
+      if (direct) {
+        await completeUnknownPaymentResolution({
+          tx,
+          job: created,
+          repository,
+          audit,
+          cards,
+          callback: {
+            type: 'resolve_unknown_payment',
+            plan: source.plan,
+            accountKey: source.accountKey,
+            checkoutIdentifier,
+            sourceJobId: source.id,
+            verificationJobId: verification.id
+          }
+        });
+        return { id: created.id, alreadyResolved: true as const };
+      }
+      return {
+        id: created.id,
+        plan: source.plan,
+        accountKey: source.accountKey!,
+        checkoutIdentifier,
+        sourceJobId: source.id,
+        verificationJobId: verification.id,
+        mode: 'resolve_unknown_payment' as const,
+        connectorUrl: normalizeV2RechargeConnectorUrl(runtime!.connectorUrl),
+        connectorToken: runtime!.connectorToken,
+        agentToken
+      };
+    },
+    { changedScopes: SHARED_CARD_SCOPES, requestId: id, operator, retryMode: 'none' }
+  );
 }
 
 export async function completeUnknownPaymentResolution(input: {
