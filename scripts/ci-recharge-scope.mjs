@@ -193,6 +193,168 @@ export function isRegistrationProtocolRepairOnly(paths, options = {}) {
   }
 }
 
+export const registrationProtocolRepairControlBase = '055b308bf357d460ee7746c9e60ae46d575f7661';
+export const registrationProtocolRepairValidatedBase = '1ea95b6a7fff294941c992afe957e4586c066819';
+export const registrationProtocolRepairControlTree = '1776d653307f970385aead7597f55c0071c2e63a';
+export const registrationProtocolRepairControlPaths = Object.freeze([
+  'scripts/production-release/registration-protocol-repair-release.py',
+  'scripts/production-release/registration-protocol-repair-release.test.py',
+  registrationProtocolRepairContract,
+  ...['scope.mjs', 'scope.test.mjs', 'check.mjs', 'check.test.mjs'].map(
+    (name) => 'scripts/ci-recharge-' + name
+  )
+]);
+
+/** Preserve the validated application; repair only the failed preflight and its controls. */
+export function isRegistrationProtocolRepairControlRepair(paths, options = {}) {
+  const sameKeys = (left, right) =>
+    Array.isArray(left) &&
+    left.length === new Set(left).size &&
+    left.length === right.length &&
+    left.every((name) => right.includes(name));
+  const canonical = (value) =>
+    Array.isArray(value)
+      ? value.map(canonical)
+      : value && typeof value === 'object'
+        ? Object.fromEntries(
+            Object.keys(value)
+              .sort()
+              .map((key) => [key, canonical(value[key])])
+          )
+        : value;
+  if (
+    options?.base !== registrationProtocolRepairControlBase ||
+    options?.baseTree !== registrationProtocolRepairControlTree ||
+    !sameKeys(paths, registrationProtocolRepairControlPaths)
+  )
+    return false;
+  try {
+    const contract =
+      options.contract ??
+      JSON.parse(
+        readFileSync(new URL('../' + registrationProtocolRepairContract, import.meta.url), 'utf8')
+      );
+    const prior =
+      options.repairBaseContract ??
+      JSON.parse(
+        execFileSync(
+          'git',
+          [
+            'show',
+            registrationProtocolRepairValidatedBase + ':' + registrationProtocolRepairContract
+          ],
+          {
+            cwd: new URL('..', import.meta.url),
+            encoding: 'utf8',
+            stdio: ['ignore', 'pipe', 'pipe'],
+            maxBuffer: 16 * 1024 * 1024
+          }
+        )
+      );
+    const sourceDigest =
+      options.sourceDigest ??
+      ((name) => {
+        const target = new URL('../' + name, import.meta.url),
+          info = lstatSync(target);
+        if (!info.isFile() || info.isSymbolicLink()) throw new Error('Unexpected repair source');
+        return createHash('sha256').update(readFileSync(target)).digest('hex');
+      });
+    const changedPaths = registrationProtocolRepairControlPaths.filter(
+      (name) => name !== registrationProtocolRepairContract
+    );
+    const unchangedContract = (value) =>
+      Object.fromEntries(
+        Object.entries(value).filter(
+          ([name]) =>
+            ![
+              'sourceBaseline',
+              'sourceBaselineTree',
+              'expectedGitChanges',
+              'reviewedFileHashes',
+              'controlHashes'
+            ].includes(name)
+        )
+      );
+    if (
+      JSON.stringify(canonical(unchangedContract(contract))) !==
+        JSON.stringify(canonical(unchangedContract(prior))) ||
+      contract.sourceBaseline !== registrationProtocolRepairControlBase ||
+      contract.sourceBaselineTree !== registrationProtocolRepairControlTree ||
+      !sameKeys(contract.expectedGitChanges, registrationProtocolRepairControlPaths) ||
+      !sameKeys(Object.keys(contract.reviewedFileHashes ?? {}), changedPaths) ||
+      !sameKeys(
+        Object.keys(contract.controlHashes ?? {}),
+        Object.keys(prior.controlHashes ?? {})
+      ) ||
+      typeof sourceDigest !== 'function'
+    )
+      return false;
+    if (
+      !changedPaths.every(
+        (name) =>
+          typeof contract.reviewedFileHashes[name] === 'string' &&
+          /^[a-f0-9]{64}$/.test(contract.reviewedFileHashes[name]) &&
+          sourceDigest(name) === contract.reviewedFileHashes[name]
+      )
+    )
+      return false;
+    const changedControls = [
+      'registration-protocol-repair-release.py',
+      'registration-protocol-repair-release.test.py'
+    ];
+    if (
+      !Object.entries(prior.controlHashes).every(([name, hash]) => {
+        const actual = contract.controlHashes[name],
+          relative = 'scripts/production-release/' + name;
+        return (
+          actual ===
+            (changedControls.includes(name) ? contract.reviewedFileHashes[relative] : hash) &&
+          sourceDigest(relative) === actual
+        );
+      }) ||
+      !['sources', 'validationSources', 'validationSupportSources', 'buildSupportHashes'].every(
+        (key) =>
+          prior[key] &&
+          Object.entries(prior[key]).every(([name, hash]) => sourceDigest(name) === hash)
+      )
+    )
+      return false;
+    const actualPaths =
+      options.repairSourcePaths ??
+      execFileSync('git', ['diff', '--name-only', registrationProtocolRepairControlBase, 'HEAD'], {
+        cwd: new URL('..', import.meta.url),
+        encoding: 'utf8',
+        stdio: ['ignore', 'pipe', 'pipe']
+      })
+        .trim()
+        .split('\n')
+        .filter(Boolean);
+    const validatedSourceDigest =
+      options.validatedSourceDigest ??
+      ((name) =>
+        createHash('sha256')
+          .update(
+            execFileSync('git', ['show', registrationProtocolRepairValidatedBase + ':' + name], {
+              cwd: new URL('..', import.meta.url),
+              stdio: ['ignore', 'pipe', 'pipe'],
+              maxBuffer: 16 * 1024 * 1024
+            })
+          )
+          .digest('hex'));
+    return (
+      sameKeys(actualPaths, registrationProtocolRepairControlPaths) &&
+      isRegistrationProtocolRepairOnly(registrationProtocolRepairPaths, {
+        base: registrationProtocolRepairBase,
+        baseTree: registrationProtocolRepairTree,
+        contract: prior,
+        sourceDigest: validatedSourceDigest
+      })
+    );
+  } catch {
+    return false;
+  }
+}
+
 const registrationProtocolRepairFormatted = registrationProtocolRepairPaths.filter((name) =>
   /\.(?:[cm]?js|json|yml|md|ts|vue)$/.test(name)
 );
@@ -240,6 +402,27 @@ export const registrationProtocolRepairCommands = Object.freeze({
     ]
   ],
   'release-controls': [registrationProtocolRepairControlTest]
+});
+export const registrationProtocolRepairControlCommands = Object.freeze({
+  guards: [
+    registrationProtocolRepairControlTest,
+    ['node', '--test', 'scripts/ci-recharge-scope.test.mjs', 'scripts/ci-recharge-check.test.mjs'],
+    [
+      'npm',
+      'exec',
+      '--',
+      'prettier',
+      '--check',
+      ...registrationProtocolRepairControlPaths.filter((name) => /\.(?:mjs|json)$/.test(name))
+    ],
+    [
+      'npm',
+      'exec',
+      '--',
+      'eslint',
+      ...registrationProtocolRepairControlPaths.filter((name) => name.endsWith('.mjs'))
+    ]
+  ]
 });
 
 export const rechargeAvailabilityControlPaths = Object.freeze([
@@ -439,6 +622,7 @@ const onlineCiBuildTestInputs = new Set([
   'scripts/production-release/online-recharge-component-lifecycle.test.py'
 ]);
 export function needsOnlineRechargeCiBuild(paths, context) {
+  if (isRegistrationProtocolRepairControlRepair(paths, context)) return false;
   if (isRegistrationProtocolRepairOnly(paths, context)) return false;
   if (isRegistrationProtocolRestoreOnly(paths, context)) return false;
   // The exact image-user controller repair needs no ONLINE image or business suites.
@@ -1231,6 +1415,13 @@ export function isMailboxOnly(paths) {
 }
 
 export function checkMode(paths, oldSchema, newSchema, grantHelperSnapshot, context) {
+  if (isRegistrationProtocolRepairControlRepair(paths, context))
+    return oldSchema === newSchema ? 'ci-only' : 'full';
+  if (
+    context?.base === registrationProtocolRepairControlBase &&
+    paths.some((name) => registrationProtocolRepairControlPaths.includes(name))
+  )
+    return 'full';
   if (isRegistrationProtocolRepairOnly(paths, context))
     return oldSchema === newSchema ? 'recharge' : 'full';
   if (paths.includes(registrationProtocolRepairContract)) return 'full';
@@ -1743,6 +1934,7 @@ export function isTargetedOnly(paths, oldSchema, newSchema) {
   );
 }
 export function selectedParts(paths, grantHelperSnapshot, context) {
+  if (isRegistrationProtocolRepairControlRepair(paths, context)) return ['guards'];
   if (isRegistrationProtocolRepairOnly(paths, context)) return [...registrationProtocolRepairParts];
   if (isRegistrationProtocolRestoreControlRepair(paths, context)) return ['guards'];
   if (isRegistrationProtocolRestoreOnly(paths, context)) return ['guards', 'api', 'admin'];

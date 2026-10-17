@@ -43,7 +43,12 @@ import {
   registrationProtocolRepairAcceptance,
   registrationProtocolRepairPaths,
   registrationProtocolRepairParts,
-  registrationProtocolRepairCommands
+  registrationProtocolRepairCommands,
+  isRegistrationProtocolRepairControlRepair,
+  registrationProtocolRepairControlBase,
+  registrationProtocolRepairControlTree,
+  registrationProtocolRepairControlPaths,
+  registrationProtocolRepairControlCommands
 } from './ci-recharge-scope.mjs';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
@@ -110,6 +115,202 @@ function protocolRepairFixture() {
     }
   };
 }
+
+function protocolPreflightControlFixture() {
+  const original = protocolRepairFixture();
+  original.contract.controlHashes = {
+    'registration-protocol-repair-release.py': 'a'.repeat(64),
+    'registration-protocol-repair-release.test.py': 'a'.repeat(64),
+    'unchanged-helper.py': 'a'.repeat(64)
+  };
+  original.contract.validationSupportSources = {
+    'scripts/check-v2-module-architecture.mjs': 'a'.repeat(64)
+  };
+  original.contract.buildSupportHashes = {
+    'scripts/production-release/registration-closure-release.py': 'a'.repeat(64)
+  };
+  const prior = structuredClone(original.contract),
+    contract = structuredClone(prior);
+  contract.sourceBaseline = registrationProtocolRepairControlBase;
+  contract.sourceBaselineTree = registrationProtocolRepairControlTree;
+  contract.expectedGitChanges = [...registrationProtocolRepairControlPaths];
+  contract.reviewedFileHashes = Object.fromEntries(
+    registrationProtocolRepairControlPaths
+      .filter((name) => name !== registrationProtocolRepairContract)
+      .map((name) => [name, 'b'.repeat(64)])
+  );
+  for (const name of [
+    'registration-protocol-repair-release.py',
+    'registration-protocol-repair-release.test.py'
+  ])
+    contract.controlHashes[name] =
+      contract.reviewedFileHashes['scripts/production-release/' + name];
+  const actualHashes = {
+    ...prior.reviewedFileHashes,
+    ...prior.validationSupportSources,
+    ...prior.buildSupportHashes,
+    ...Object.fromEntries(
+      Object.entries(contract.controlHashes).map(([name, hash]) => [
+        'scripts/production-release/' + name,
+        hash
+      ])
+    ),
+    ...contract.reviewedFileHashes
+  };
+  const validatedHashes = { ...prior.reviewedFileHashes };
+  return {
+    base: registrationProtocolRepairControlBase,
+    baseTree: registrationProtocolRepairControlTree,
+    contract,
+    repairBaseContract: prior,
+    repairSourcePaths: [...registrationProtocolRepairControlPaths],
+    sourceDigest: (name) => actualHashes[name] ?? null,
+    validatedSourceDigest: (name) => validatedHashes[name] ?? null
+  };
+}
+
+test('registration protocol preflight control repair selects only controls above the validated application', () => {
+  const context = protocolPreflightControlFixture(),
+    paths = [...registrationProtocolRepairControlPaths];
+  assert.equal(paths.length, 7);
+  assert.equal(isRegistrationProtocolRepairControlRepair(paths, context), true);
+  assert.equal(checkMode(paths, 'same', 'same', undefined, context), 'ci-only');
+  assert.deepEqual(selectedParts(paths, undefined, context), ['guards']);
+  assert.equal(needsOnlineRechargeCiBuild(paths, context), false);
+  assert.equal(
+    isRegistrationProtocolRepairControlRepair(paths, {
+      ...context,
+      sourceDigest: (name) =>
+        name === 'docs/V2_TASKS.md' ? '0'.repeat(64) : context.sourceDigest(name)
+    }),
+    true,
+    'an unrelated document already merged into the new base is not an application drift'
+  );
+  assert.equal(checkMode(paths, 'before', 'after', undefined, context), 'full');
+  assert.deepEqual(Object.keys(registrationProtocolRepairControlCommands), ['guards']);
+  const commands = registrationProtocolRepairControlCommands.guards;
+  assert.ok(
+    commands.some(
+      (command) =>
+        command.includes('registration-protocol-repair-release.test.py') ||
+        command.includes('scripts/production-release/registration-protocol-repair-release.test.py')
+    )
+  );
+  assert.ok(
+    commands.some(
+      (command) =>
+        command.includes('scripts/ci-recharge-scope.test.mjs') &&
+        command.includes('scripts/ci-recharge-check.test.mjs')
+    )
+  );
+  assert.ok(commands.some((command) => command.includes('prettier')));
+  assert.ok(commands.some((command) => command.includes('eslint')));
+  assert.equal(
+    commands.some((command) =>
+      command.some((arg) => /check-api|check-admin|check:v2-|prisma|acceptance/.test(arg))
+    ),
+    false
+  );
+  for (const override of [
+    { base: registrationProtocolRepairBase },
+    { base: '0'.repeat(40) },
+    { baseTree: '0'.repeat(40) },
+    { sourceDigest: () => '0'.repeat(64) },
+    { repairSourcePaths: registrationProtocolRepairControlPaths.slice(1) },
+    { repairSourcePaths: [...registrationProtocolRepairControlPaths, 'package-lock.json'] }
+  ]) {
+    const changed = { ...context, ...override };
+    assert.equal(isRegistrationProtocolRepairControlRepair(paths, changed), false);
+    assert.equal(checkMode(paths, 'same', 'same', undefined, changed), 'full');
+  }
+  for (const missing of paths) {
+    const changed = paths.filter((name) => name !== missing);
+    assert.equal(isRegistrationProtocolRepairControlRepair(changed, context), false);
+    assert.equal(checkMode(changed, 'same', 'same', undefined, context), 'full');
+  }
+  for (const extra of [
+    paths[0],
+    registrationProtocolRepairApplications[0],
+    registrationProtocolRepairAcceptance,
+    'apps/api/prisma-mysql/schema.prisma',
+    '.github/workflows/quality.yml',
+    '.github/workflows/registration-protocol-repair-validation.yml',
+    'apps/api/src/id-business-v2/auto-registration/upstream/src/core/register.py'
+  ]) {
+    const changed = [...paths, extra];
+    assert.equal(isRegistrationProtocolRepairControlRepair(changed, context), false);
+    assert.equal(checkMode(changed, 'same', 'same', undefined, context), 'full');
+  }
+});
+
+test('registration protocol preflight control repair cannot rehash application baseline evidence or migration', () => {
+  const paths = [...registrationProtocolRepairControlPaths];
+  const initial = protocolPreflightControlFixture();
+  const currentSources = new Set([
+    ...registrationProtocolRepairApplications,
+    registrationProtocolRepairAcceptance,
+    ...Object.keys(initial.contract.validationSupportSources),
+    ...Object.keys(initial.contract.buildSupportHashes),
+    ...Object.keys(initial.contract.controlHashes).map(
+      (name) => 'scripts/production-release/' + name
+    ),
+    ...registrationProtocolRepairControlPaths.filter(
+      (name) => name !== registrationProtocolRepairContract
+    )
+  ]);
+  for (const name of currentSources) {
+    const context = protocolPreflightControlFixture();
+    assert.equal(
+      isRegistrationProtocolRepairControlRepair(paths, {
+        ...context,
+        sourceDigest: (candidate) =>
+          candidate === name ? '0'.repeat(64) : context.sourceDigest(candidate)
+      }),
+      false,
+      name
+    );
+  }
+  assert.equal(
+    isRegistrationProtocolRepairControlRepair(paths, {
+      ...initial,
+      validatedSourceDigest: () => '0'.repeat(64)
+    }),
+    false,
+    'the original validated Git objects remain independently pinned'
+  );
+  for (const update of [
+    (contract) => {
+      contract.migration = 'new.sql';
+    },
+    (contract) => {
+      contract.admission = 'DRAFT';
+    },
+    (contract) => {
+      contract.sourceBaseline = registrationProtocolRepairBase;
+    },
+    (contract) => {
+      contract.expectedGitChanges = [...registrationProtocolRepairPaths];
+    },
+    (contract) => {
+      contract.baseline = { replacement: true };
+    },
+    (contract) => {
+      contract.controlHashes['unchanged-helper.py'] = 'c'.repeat(64);
+    },
+    (contract) => {
+      contract.controlHashes['registration-protocol-repair-release.py'] = 'c'.repeat(64);
+    },
+    (contract) => {
+      const name = registrationProtocolRepairApplications[0];
+      contract.sources[name] = contract.reviewedFileHashes[name] = 'c'.repeat(64);
+    }
+  ]) {
+    const context = protocolPreflightControlFixture();
+    update(context.contract);
+    assert.equal(isRegistrationProtocolRepairControlRepair(paths, context), false);
+    assert.equal(checkMode(paths, 'same', 'same', undefined, context), 'full');
+  }
+});
 
 test('registration protocol repair admits only its exact verified unchanged-schema source', () => {
   const context = protocolRepairFixture(),
