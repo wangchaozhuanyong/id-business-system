@@ -46,7 +46,7 @@ jobs:
         run: python3 -B scripts/production-release/registration-protocol-repair-build.py check-api
       - name: Verify both task interfaces and retained published assets
         run: python3 -B scripts/production-release/registration-protocol-repair-build.py check-admin
-      - name: Package only validated declarations Worker and Admin
+      - name: Package only validated Worker and Admin with inherited API dist
         run: python3 -B scripts/production-release/registration-protocol-repair-build.py package
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:

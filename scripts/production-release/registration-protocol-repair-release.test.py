@@ -61,7 +61,7 @@ class ProtocolRepairControls(unittest.TestCase):
         after['worker'] = r.signature({**c['baselineWorkerFiles'], **c['workerFiles']})
         value = {name: plan[name] for name in ('commit', 'tree', 'workflowRunId', 'workflowRunAttempt', 'contractSha256', 'controlSources')}
         value.update(version=1, scope=r.SCOPE, sources=c['sources'], validationSources=c['validationSources'],
-                     workerFiles=c['workerFiles'], apiModules={r.TYPE_MODULE: 'd' * 64}, apiJavascriptDelta=[],
+                     workerFiles=c['workerFiles'], apiModules={}, apiJavascriptDelta=[],
                      adminFiles={'index.html': 'e' * 64}, baselineInventory=c['baseline']['inventory'],
                      afterInventory=after, validation={'status': 'PASS', 'api': True, 'admin': True,
                                                        'offlineBrowser': True, 'isolatedPersistence': True},
@@ -86,6 +86,8 @@ class ProtocolRepairControls(unittest.TestCase):
                        lambda c: c.update(version=True), lambda c: c.update(businessActions=False),
                        lambda c: c['baseline']['images']['api'].update(image='sha256:' + '0' * 64),
                        lambda c: c.update(apiJavascriptDelta=['unrelated.js']),
+                       lambda c: c.update(apiRuntimeDelta=[r.TYPE_MODULE]),
+                       lambda c: c.update(validationSupportSources={'apps/api/unrelated.ts': '0' * 64}),
                        lambda c: c.update(apiDeclarationPaths=[])):
             c = self.ready()
             mutate(c)
@@ -159,6 +161,7 @@ class ProtocolRepairControls(unittest.TestCase):
         self.assertEqual(r.verify_proof(good, plan, c, Path('/unused'), h), good)
         for update in ({'version': True}, {'scope': 'other'}, {'unexpected': 'field'},
                        {'files': {**good['files'], 'api/modules/unrelated.js': '0' * 64}},
+                       {'apiModules': {r.TYPE_MODULE: '0' * 64}},
                        {'apiModules': {'unrelated.js': '0' * 64}}):
             value = {**good, **update}
             with self.assertRaises(RuntimeError):
@@ -253,7 +256,7 @@ class ProtocolRepairControls(unittest.TestCase):
             path = output / 'candidate/apps/fixture.txt'
             path.parent.mkdir(parents=True)
             path.write_text('approved')
-            c = {'sources': {'apps/fixture.txt': r.digest(path.read_bytes())}, 'validationSources': {}}
+            c = {'sources': {'apps/fixture.txt': r.digest(path.read_bytes())}, 'validationSources': {}, 'validationSupportSources': {}}
             with patch.object(b, 'OUT', output):
                 b.verify_candidate_sources(c)
                 path.write_text('changed after prepare')
@@ -297,14 +300,11 @@ class ProtocolRepairControls(unittest.TestCase):
                 path = payload / 'api/worker' / source
                 path.parent.mkdir(parents=True, exist_ok=True)
                 path.write_bytes((r.ROOT / r.WORKER / source).read_bytes())
-            declaration = payload / 'api/modules' / r.TYPE_MODULE
-            declaration.parent.mkdir(parents=True)
-            declaration.write_text('fixture declaration')
+            (payload / 'api/modules').mkdir(parents=True)
             index = payload / 'admin/html/index.html'
             index.parent.mkdir(parents=True)
             index.write_text('fixture management page')
             proof = self.proof(c, plan)
-            proof['apiModules'] = {r.TYPE_MODULE: r.digest(declaration.read_bytes())}
             proof['adminFiles'] = {'index.html': r.digest(index.read_bytes())}
             real_h = r.helper('recharge-record-release.py')
             proof['files'] = real_h.file_inventory(payload)

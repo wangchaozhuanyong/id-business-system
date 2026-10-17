@@ -86,7 +86,10 @@ def verify_contract(c):
          and all(c['workerFiles'][Path(n).name] == value for n, value in sources.items()
                  if n.startswith(WORKER) and not Path(n).name.startswith('test_')), 'WORKER_SCOPE_CHANGED')
     need(set(c.get('apiDeclarationPaths', [])) == {TYPE_MODULE}
-         and c.get('apiJavascriptDelta') == [], 'API_SCOPE_CHANGED')
+         and c.get('apiJavascriptDelta') == [] and c.get('apiRuntimeDelta') == [], 'API_SCOPE_CHANGED')
+    support = c.get('validationSupportSources', {})
+    need(set(support) == {'scripts/check-v2-module-architecture.mjs'}
+         and all(re.fullmatch(HEX, value) for value in support.values()), 'VALIDATION_SUPPORT_SCOPE_CHANGED')
     b = c.get('baseline', {})
     need(set(b.get('services', {})) == set(helper('recharge-record-release.py').SERVICES)
          and b.get('images', {}).get('api', {}).get('revision') == 'c8ce1a01a1a1e61bcc8de778dad331191319d645'
@@ -233,14 +236,14 @@ def verify_proof(proof, plan, c, payload, h):
          and proof.get('validation') == {'status': 'PASS', 'api': True, 'admin': True, 'offlineBrowser': True,
                                          'isolatedPersistence': True}, 'PROOF_CHANGED')
     need(proof.get('baselineInventory') == c['baseline']['inventory']
-         and proof.get('apiJavascriptDelta') == [] and set(proof.get('apiModules', {})) == {TYPE_MODULE}, 'COMPILED_SCOPE_CHANGED')
+         and proof.get('apiJavascriptDelta') == [] and proof.get('apiModules') == {}, 'COMPILED_SCOPE_CHANGED')
     expected_files = {**{'source/' + n: value for n, value in c['sources'].items()},
                       **{'api/modules/' + n: value for n, value in proof['apiModules'].items()},
                       **{'api/worker/' + n: value for n, value in c['workerFiles'].items()},
                       **{'admin/html/' + n: value for n, value in proof['adminFiles'].items()}}
     need(proof['files'] == expected_files and set(proof['afterInventory']) == set(c['baseline']['inventory'])
          and all(proof['afterInventory'][n] == c['baseline']['inventory'][n]
-                 for n in ('apiJavascript', 'prisma', 'engine'))
+                 for n in ('api', 'apiJavascript', 'prisma', 'engine'))
          and proof['afterInventory']['worker'] == signature({**c['baselineWorkerFiles'], **c['workerFiles']}), 'PAYLOAD_SCOPE_CHANGED')
     actual = h.file_inventory(payload)
     actual.pop('build-proof.json', None)

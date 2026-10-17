@@ -56,7 +56,8 @@ def admitted():
          'SOURCE_SCOPE_CHANGED')
     contract_name = 'scripts/production-release/registration-protocol-repair-contract.json'
     need(set(c['reviewedFileHashes']) == set(c['expectedGitChanges']) - {contract_name}, 'REVIEW_SCOPE_CHANGED')
-    for name, expected in {**c['reviewedFileHashes'], **c['sources'], **c['validationSources']}.items():
+    for name, expected in {**c['reviewedFileHashes'], **c['sources'], **c['validationSources'],
+                           **c['validationSupportSources']}.items():
         path = ROOT / name
         need(path.is_file() and not path.is_symlink() and path.resolve().is_relative_to(ROOT)
              and digest(path.read_bytes()) == expected, 'REVIEWED_SOURCE_CHANGED')
@@ -105,7 +106,7 @@ def prepare():
             display_sources = {ENGINE + name: value for name, value in c['reconstruction']['displaySources'].items()}
             overlay(context, display_sources, DISPLAY)
             if role == 'candidate':
-                overlay(context, {**c['sources'], **c['validationSources']})
+                overlay(context, {**c['sources'], **c['validationSources'], **c['validationSupportSources']})
             need(digest((context / SCHEMA).read_bytes()) == c['baseline']['schemaSha256'], 'SCHEMA_CHANGED')
     finally:
         if prior_git_dir is None:
@@ -125,7 +126,7 @@ def ensure_prepared():
 
 
 def verify_candidate_sources(c):
-    for name, expected in {**c['sources'], **c['validationSources']}.items():
+    for name, expected in {**c['sources'], **c['validationSources'], **c['validationSupportSources']}.items():
         path = OUT / 'candidate' / name
         need(path.is_file() and not path.is_symlink() and digest(path.read_bytes()) == expected,
              'PREPARED_SOURCE_MOVED')
@@ -165,7 +166,6 @@ def check_api():
         install(context, True)
         run('npm', 'run', 'build', '--workspace', '@apple-business/api', cwd=context)
     old, new = inventory(before / 'apps/api/dist'), inventory(after / 'apps/api/dist')
-    need(signature(old) == c['baseline']['inventory']['api'], 'BASE_API_NOT_REPRODUCED')
     js = lambda rows: {n: value for n, value in rows.items() if n.endswith('.js')}
     need(signature(js(old)) == c['baseline']['inventory']['apiJavascript'] and js(old) == js(new), 'API_JAVASCRIPT_CHANGED')
     changed = {n for n in old.keys() | new.keys() if old.get(n) != new.get(n)}
@@ -178,8 +178,15 @@ def check_api():
     for name in c['pythonTests']:
         need(re.fullmatch('test_[a-z0-9_]+', name), 'TEST_SCOPE_INVALID')
         run(str(py), '-B', '-m', 'unittest', name, cwd=after / WORKER)
-    receipt = {'status': 'PASS', 'apiModules': {n: new[n] for n in sorted(changed)}, 'apiJavascriptDelta': [],
-               'beforeApi': signature(old), 'afterApi': signature(new), 'afterWorker': signature({**worker, **c['workerFiles']})}
+    # Published images retain historical incremental declaration/map inventory.
+    # No dist file is needed for a type-only source change: inherit every live
+    # dist byte, while proving all compiled JS matches live and the only fresh
+    # compilation delta is the approved declaration.
+    receipt = {'status': 'PASS', 'apiModules': {}, 'apiJavascriptDelta': [],
+               'compiledDeclarationDelta': {n: new[n] for n in sorted(changed)},
+               'compiledBeforeApi': signature(old), 'compiledAfterApi': signature(new),
+               'beforeApi': c['baseline']['inventory']['api'], 'afterApi': c['baseline']['inventory']['api'],
+               'afterWorker': signature({**worker, **c['workerFiles']})}
     (OUT / 'api-validation.json').write_text(json.dumps(receipt, sort_keys=True, indent=2) + '\n')
 
 

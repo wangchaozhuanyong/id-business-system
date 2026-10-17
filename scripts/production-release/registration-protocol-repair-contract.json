@@ -304,10 +304,10 @@
     "remote-deploy.py"
   ],
   "controlHashes": {
-    "registration-protocol-repair-build.py": "6d998231cc1fa44355ac232a38064cd2fc3efb115d07bc3f006dd37e827b8391",
-    "registration-protocol-repair-release.py": "9fcecd3deb9837e5a0bb0ae5b4114c0bfcafad6630934b86da66a8c919f8eeb3",
+    "registration-protocol-repair-build.py": "c0fed521549174839443f68b01640eee50593929dc6522ef1db34fce11d727da",
+    "registration-protocol-repair-release.py": "613e0d4275e0d81454666b4368da54e02686d20d88a099b54fb70413cd4a5cd6",
     "registration-protocol-repair-dispatch.py": "ec663618df477ef92663ae83809a87519292e2ca63a83a15e81bbd8f12587bac",
-    "registration-protocol-repair-release.test.py": "34edee6b32fda20d6266ed4961a274349b6b48af0cc8ea113145fd558ee9df33",
+    "registration-protocol-repair-release.test.py": "0198396eea02834c02b17a9d41ea677a0fefa43fe60f589ef874c24e96d71052",
     "registration-parity-diagnostics-release.py": "f5d3d6e3d5ee539a965cbbfa4401beee3e209c2258886ea7239ae667a13e3eb8",
     "registration-parity-diagnostics-dispatch.py": "c16f8a09a7a08771faa1071910a05a077d3c4e368f6a4938d3c8cec8cca74a8c",
     "registration-closure-release.py": "0d2daaeff0a35e1e11666ace39560273fdc83ff9e5718cb244337c8b0f851274",
@@ -402,17 +402,17 @@
     "apps/api/src/id-business-v2/auto-registration/worker/test_release_safety.py": "e7eeae045a281090e328a48d17be155bb4e5ffc8866e666f6fe64d629df9ec35",
     "apps/api/src/id-business-v2/auto-registration/worker/test_flow_contract_unit.py": "53410cf3de35c8b37cfc2022428931c9b139f7f39cbf04d889ea4a1866407627",
     "scripts/acceptance-v2-registration-parity-diagnostics.mjs": "97d13853fbee1091b807ba6bb518a41c4783211041d7781af6ccc543b49fd022",
-    ".github/workflows/registration-protocol-repair-validation.yml": "e7ec41dd01c8f8ce69b4448b944516fbb3443631c7bb64dba5e06370ad12cc41",
+    ".github/workflows/registration-protocol-repair-validation.yml": "d9d0878f94076d8a62298eb6d00e787091a495fa5f62e1cc2e8a87a9e8d56494",
     "docs/V2_TASKS.md": "b9db869dc1f5a822d40f4aa93aac381fc43ebdfb28932de79c203c31257d79fc",
-    "docs/AUTO_REGISTRATION_PROTOCOL_REPAIR_20261017.md": "e39da28af6c8070ba283c391dc5c31441a33060388c2de4b9e46580fb9f44c16",
+    "docs/AUTO_REGISTRATION_PROTOCOL_REPAIR_20261017.md": "5e97598b05c480362e1e7b0f1b2298f4b2b4f3e455263786b4b7d6b8e32727aa",
     "scripts/ci-recharge-scope.mjs": "937b66698319f6141df1c1364806136cfa2b72a43ebbe754149f0c01dd71c64c",
     "scripts/ci-recharge-scope.test.mjs": "892da96875916e0cb77702832e1711560815cd7fefe2d770e3f9630d010c6d5b",
     "scripts/ci-recharge-check.mjs": "d696302582a712c2e945116bdad056b4057dada57c64709a7d96d2f7d7ffb9fc",
     "scripts/ci-recharge-check.test.mjs": "ab632a370f849813269f31675beaa76f250daa4fca1cecd80efd29bdd490c2ae",
-    "scripts/production-release/registration-protocol-repair-build.py": "6d998231cc1fa44355ac232a38064cd2fc3efb115d07bc3f006dd37e827b8391",
+    "scripts/production-release/registration-protocol-repair-build.py": "c0fed521549174839443f68b01640eee50593929dc6522ef1db34fce11d727da",
     "scripts/production-release/registration-protocol-repair-dispatch.py": "ec663618df477ef92663ae83809a87519292e2ca63a83a15e81bbd8f12587bac",
-    "scripts/production-release/registration-protocol-repair-release.py": "9fcecd3deb9837e5a0bb0ae5b4114c0bfcafad6630934b86da66a8c919f8eeb3",
-    "scripts/production-release/registration-protocol-repair-release.test.py": "34edee6b32fda20d6266ed4961a274349b6b48af0cc8ea113145fd558ee9df33"
+    "scripts/production-release/registration-protocol-repair-release.py": "613e0d4275e0d81454666b4368da54e02686d20d88a099b54fb70413cd4a5cd6",
+    "scripts/production-release/registration-protocol-repair-release.test.py": "0198396eea02834c02b17a9d41ea677a0fefa43fe60f589ef874c24e96d71052"
   },
   "roleSourceCommits": {
     "admin": "c8ce1a01a1a1e61bcc8de778dad331191319d645",
@@ -465,5 +465,9 @@
     "flow_evidence.py": "30b6a1dedca5ad8a95350f133f664d206c183ee259a518ec0015ed31c68eb7cf",
     "id-workspace.js": "91eb350d9c6be1c8a9df7feb178f5650db3017eeb4d290fb74a8dc87b7663351",
     "release_safety.py": "57d9fd12af70c91633bed325690c4ffdd9f2d7a1f9abfcac87f8cd63cfa0b24f"
+  },
+  "apiRuntimeDelta": [],
+  "validationSupportSources": {
+    "scripts/check-v2-module-architecture.mjs": "0abe913ace9e319c6ac6f0764efaea76b17c1a06bce018259fbc805765ab5383"
   }
 }
