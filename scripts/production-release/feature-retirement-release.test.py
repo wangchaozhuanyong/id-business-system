@@ -268,12 +268,14 @@ class IdentityTests(Fixture):
 
 
 class ConfigurationTests(Fixture):
-    def test_compose_removes_only_registration_and_keeps_data_declarations(self):
+    def test_compose_removes_registration_volume_declaration_and_keeps_online_volume(self):
         result = m.retirement_compose(COMPOSE)
         self.assertNotIn('  auto-registration:', result)
         self.assertNotIn('registration-control', result)
         self.assertNotIn('AUTO_REGISTRATION_WORKER_URL', result)
-        self.assertIn('  auto_registration_data:', result)
+        self.assertNotIn('auto_registration_data', result)
+        self.assertIn('  online_recharge_data:', result)
+        self.assertIn('online_recharge_data:/app/.runtime/online-recharge', result)
         self.assertIn('AUTO_RECHARGE_WORKER_URL: http://auto-recharge:8051', result)
         self.assertIn('network_mode: service:api', result)
         self.assertIn('image: mysql:pinned', result)
@@ -292,7 +294,8 @@ class ConfigurationTests(Fixture):
                                       'networks': ['default', 'registration-control']}, 'admin': {},
                               'auto-registration': {'image': 'old'}, 'mysql': {'image': 'mysql:pinned'},
                               'caddy': {'volumes': ['data:/data']}},
-                 'networks': {'registration-control': {}, 'registration-egress': {}, 'default': {}}}
+                 'networks': {'registration-control': {}, 'registration-egress': {}, 'default': {}},
+                 'volumes': {'auto_registration_data': {'name': 'formal-registration'}, 'online_recharge_data': {'name': 'formal-online'}}}
         original = copy.deepcopy(value)
         result = m.retirement_override(value, {'api': {'reference': 'new-api'}, 'admin': {'reference': 'new-admin'}}, self.base / 'releases/new')
         self.assertEqual(value, original)
@@ -302,6 +305,24 @@ class ConfigurationTests(Fixture):
         self.assertEqual(result['services']['api']['networks'], ['default'])
         self.assertEqual(result['services']['api']['volumes'], ['online:/app/.runtime/online-recharge'])
         self.assertIn('data:/data', result['services']['caddy']['volumes'])
+        self.assertEqual(result['volumes'], {'online_recharge_data': {'name': 'formal-online'}})
+
+    def test_other_service_volume_reference_prevents_text_retirement(self):
+        text = COMPOSE.replace('  mysql:\n    image: mysql:pinned\n',
+                               '  mysql:\n    image: mysql:pinned\n    volumes:\n      - auto_registration_data:/keep\n')
+        with self.assertRaisesRegex(RuntimeError, 'REGISTRATION_VOLUME_STILL_REFERENCED'):
+            m.retirement_compose(text)
+
+    def test_override_shared_volume_reference_prevents_declaration_removal(self):
+        for volume in ('auto_registration_data:/keep',
+                       {'type': 'volume', 'source': 'auto_registration_data', 'target': '/keep'}):
+            value = {'services': {'api': {}, 'admin': {}, 'mysql': {'volumes': [volume]}},
+                     'volumes': {'auto_registration_data': {'name': 'formal-registration'},
+                                 'online_recharge_data': {'name': 'formal-online'}}}
+            original = copy.deepcopy(value)
+            with self.subTest(volume=volume), self.assertRaisesRegex(RuntimeError, 'REGISTRATION_VOLUME_STILL_REFERENCED'):
+                m.retirement_override(value, {'api': {'reference': 'api:new'}, 'admin': {'reference': 'admin:new'}}, self.base / 'releases/new')
+            self.assertEqual(value, original)
 
     def test_caddy_removal_is_exact_and_does_not_mutate_original(self):
         result = m.retirement_caddy(CADDY)
@@ -358,6 +379,30 @@ class ConfigurationTests(Fixture):
         for bad in ({**actual, 'unrelated.js': OLD}, {**actual, 'deleted.js': OLD}, {**actual, 'keep.js': OLD}):
             with self.assertRaises(RuntimeError):
                 m.verify_readback_delta(bad, {'keep.js': NEW, 'added.js': NEW}, {'deleted.js': OLD}, baseline, m.fingerprint(before))
+
+    def test_exact_pinned_contract_is_published_and_drift_refused(self):
+        target = self.root / 'published-contract'
+        target.mkdir()
+        raw = (self.here / 'feature-retirement-contract.json').read_bytes()
+        m.publish_contract(target, self.plan)
+        copied = target / 'scripts/production-release/feature-retirement-contract.json'
+        self.assertEqual(copied.read_bytes(), raw)
+        self.assertEqual(m.digest(copied.read_bytes()), self.plan['contractSha256'])
+        (self.here / 'feature-retirement-contract.json').write_text('{}')
+        with self.assertRaisesRegex(RuntimeError, 'CONTRACT_CHANGED_BEFORE_COPY'):
+            m.publish_contract(target, self.plan)
+        self.assertEqual(copied.read_bytes(), raw)
+
+    def test_published_contract_target_cannot_follow_symlink(self):
+        target = self.root / 'symlink-contract-target'
+        path = target / 'scripts/production-release/feature-retirement-contract.json'
+        path.parent.mkdir(parents=True)
+        unrelated = self.root / 'unrelated-contract.json'
+        unrelated.write_text('keep')
+        path.symlink_to(unrelated)
+        with self.assertRaisesRegex(RuntimeError, 'CONTRACT_TARGET_PATH_INVALID'):
+            m.publish_contract(target, self.plan)
+        self.assertEqual(unrelated.read_text(), 'keep')
 
     def test_source_apply_deletes_exact_code_and_never_follows_symlink(self):
         payload, _ = self.payload()
@@ -643,17 +688,22 @@ class AdditionalProofTests(Fixture):
                           'volumes': [{'target': '/app/.runtime/auto-registration'}, {'target': '/app/.runtime/online-recharge'}],
                           'networks': {'default': {}, 'registration-control': {}}, 'image': 'api:old'},
                   'admin': {'image': 'admin:old'}, 'caddy': {'volumes': [{'source': str(previous / 'deploy/caddy/Caddyfile.aws'), 'target': '/etc/caddy/Caddyfile', 'bind': {'create_host_path': True}}]}},
-                  'networks': {'registration-control': {}, 'registration-egress': {}, 'default': {}}, 'volumes': {'auto_registration_data': {}}}
+                  'networks': {'registration-control': {}, 'registration-egress': {}, 'default': {}}, 'volumes': {'auto_registration_data': {}, 'online_recharge_data': {'name': 'formal-online'}}}
         after = copy.deepcopy(before)
         after['services'].pop('auto-registration')
         after['services']['api']['environment'].pop('AUTO_REGISTRATION_WORKER_URL')
         after['services']['api']['volumes'] = after['services']['api']['volumes'][1:]
         after['services']['api']['networks'].pop('registration-control')
+        after['volumes'].pop('auto_registration_data')
         for name in ('registration-control', 'registration-egress'): after['networks'].pop(name)
         images = {'api': {'reference': 'api:new'}, 'admin': {'reference': 'admin:new'}}
         for name, image in images.items(): after['services'][name]['image'] = image['reference']
         after['services']['caddy']['volumes'][0]['source'] = str(target / 'deploy/caddy/Caddyfile.aws')
         m.verify_rendered(before, after, images, previous, target)
+        self.assertEqual(after['volumes'], {'online_recharge_data': {'name': 'formal-online'}})
+        restored = copy.deepcopy(after); restored['volumes']['auto_registration_data'] = {}
+        with self.assertRaisesRegex(RuntimeError, 'COMPOSE_UNRELATED_CONFIGURATION_CHANGED'):
+            m.verify_rendered(before, restored, images, previous, target)
         after['services']['mysql']['environment']['SECRET'] = 'changed'
         with self.assertRaisesRegex(RuntimeError, 'COMPOSE_UNRELATED_CONFIGURATION_CHANGED'):
             m.verify_rendered(before, after, images, previous, target)

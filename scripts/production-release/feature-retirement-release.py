@@ -462,7 +462,13 @@ def retirement_compose(text):
                 continue
         output.append(line)
     need(counts == {'mount': 1, 'env': 1, 'network': 1}, 'COMPOSE_API_REMOVAL_CHANGED')
-    return ''.join(output)
+    result = remove_blocks(''.join(output), 'volumes', {'auto_registration_data'})
+    # The removed declaration must not be referenced by another service, profile,
+    # or YAML anchor. Fail closed rather than deleting a still-shared volume.
+    need(not any(re.search(r'(?<![A-Za-z0-9_-])auto_registration_data(?![A-Za-z0-9_-])',
+                           line.split('#', 1)[0]) for line in result.splitlines()),
+         'REGISTRATION_VOLUME_STILL_REFERENCED')
+    return result
 
 
 def retirement_caddy(raw):
@@ -473,6 +479,13 @@ def retirement_caddy(raw):
     output = text.replace(block, '', 1).encode()
     need(b'@registrationWorkspace' not in output and b'auto-registration' not in output, 'CADDY_RETIRED_HANDLE_REMAINS')
     return output
+
+
+def verify_registration_volume_unused(services):
+    for service in services.values():
+        for volume in service.get('volumes', []):
+            source = volume.get('source') if isinstance(volume, dict) else volume.split(':', 1)[0]
+            need(source != 'auto_registration_data', 'REGISTRATION_VOLUME_STILL_REFERENCED')
 
 
 def retirement_override(value, images, target):
@@ -497,6 +510,9 @@ def retirement_override(value, images, target):
     if isinstance(result.get('networks'), dict):
         for n in ('registration-control', 'registration-egress'):
             result['networks'].pop(n, None)
+    verify_registration_volume_unused(services)
+    if isinstance(result.get('volumes'), dict):
+        result['volumes'].pop('auto_registration_data', None)
     # Override just this bind, preserving existing named Caddy data/config volumes.
     caddy = services.setdefault('caddy', {})
     binds = [v for v in caddy.get('volumes', []) if (v.get('target') if isinstance(v, dict) else v.split(':')[1]) != '/etc/caddy/Caddyfile']
@@ -527,6 +543,9 @@ def verify_rendered(before, after, images, previous, target):
     api['environment'].pop('AUTO_REGISTRATION_WORKER_URL')
     api['volumes'] = [v for v in api.get('volumes', []) if v.get('target') != '/app/.runtime/auto-registration']
     api['networks'].pop('registration-control', None)
+    verify_registration_volume_unused(services)
+    need('auto_registration_data' in expected.get('volumes', {}), 'COMPOSE_RETIRED_VOLUME_MISSING')
+    expected['volumes'].pop('auto_registration_data')
     for n in ('registration-control', 'registration-egress'):
         expected.get('networks', {}).pop(n, None)
     for role in ('api', 'admin'):
@@ -567,6 +586,17 @@ def apply_sources(target, payload, c):
         # Only empty directories may remain after the exact contract source deletions.
         need(not any(p.is_file() or p.is_symlink() for p in retired.rglob('*')), 'UNREVIEWED_RETIRED_SOURCE_REMAINS')
         shutil.rmtree(retired)
+
+
+def publish_contract(target, plan):
+    source = HERE / 'feature-retirement-contract.json'
+    raw = source.read_bytes()
+    need(not source.is_symlink() and digest(raw) == plan['contractSha256'], 'CONTRACT_CHANGED_BEFORE_COPY')
+    path = target / 'scripts/production-release/feature-retirement-contract.json'
+    need(not path.is_symlink() and path.resolve().is_relative_to(target), 'CONTRACT_TARGET_PATH_INVALID')
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(raw)
+    path.chmod(0o644)
 
 
 def image_dockerfile(role, reference, original, proof, plan, c=None):
@@ -690,6 +720,9 @@ def write_json(path, value):
 def readback(plan, c, d, h):
     target = (BASE / 'current').resolve()
     need(target.parent == BASE / 'releases' and target != Path(c['current']), 'READBACK_TARGET_INVALID')
+    contract_path = target / 'scripts/production-release/feature-retirement-contract.json'
+    need(not contract_path.is_symlink() and contract_path.resolve().is_relative_to(target)
+         and digest(contract_path.read_bytes()) == plan['contractSha256'], 'READBACK_CONTRACT_CHANGED')
     manifest = closed_json((target / 'release-manifest.json').read_bytes())
     need(manifest.get('scope') == SCOPE and manifest.get('commit') == plan['commit'] and manifest.get('sourceTree') == plan['tree']
          and manifest.get('previousRelease') == c['current'] and manifest.get('previousManifestSha256') == c['manifestSha256']
@@ -856,6 +889,7 @@ def release(plan, c, d, h=None):
             previous = before['directory']
             shutil.copytree(previous, target, symlinks=True)
             apply_sources(target, payload, c)
+            publish_contract(target, plan)
             (target / 'docker-compose.aws-mysql.yml').write_text(retirement_compose((previous / 'docker-compose.aws-mysql.yml').read_text()))
             caddy_path = target / 'deploy/caddy/Caddyfile.aws'
             need(not caddy_path.is_symlink(), 'CADDY_TARGET_SYMLINK')
