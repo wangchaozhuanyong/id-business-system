@@ -1,12 +1,16 @@
 """Pure finite-admission and switch tests. No Docker, network or database."""
 import copy
 import base64
+import builtins
+import contextlib
 import importlib.util
 import io
 import json
+import os
 from pathlib import Path
 import socket
 import sqlite3
+import sys
 import tempfile
 import types
 import unittest
@@ -313,6 +317,131 @@ class TerminalControls(unittest.TestCase):
         with patch.dict('os.environ', {'GITHUB_ACTIONS': 'false'}), patch.object(b, 'OUT', Path('/missing')):
             with self.assertRaisesRegex(RuntimeError, 'ISOLATED_CI_REQUIRED'):
                 b.check_worker()
+
+    def generated_transport_fixture(self, parent, existing=None):
+        # Execute the exact generated SSM Python, redirecting only its absolute
+        # host path and platform/HTTP boundaries into this project's fixture.
+        entry, output = parent / 'entry', parent / 'receipts'
+        output.mkdir()
+        real_path, real_import = type(parent), builtins.__import__
+        real_spec = importlib.util.spec_from_file_location
+        release_source = (HERE / 'registration-terminal-stop-release.py').read_bytes()
+        controls = {'registration-terminal-stop-release.py': release_source,
+                    'recharge-record-release.py': b'# synthetic platform helper\n',
+                    'remote-deploy.py': b'# synthetic platform utility\n'}
+        hashes = {name: r.digest(raw) for name, raw in controls.items()}
+        raw = json.dumps({'controlHashes': hashes}, sort_keys=True).encode()
+        contract_path = entry / 'registration-terminal-stop-contract.json'
+        if existing is not None:
+            entry.mkdir()
+            if existing == 'different':
+                contract_path.write_bytes(b'pre-existing different contract')
+            elif existing in ('symlink', 'dangling'):
+                target = parent / 'contract-target.json'
+                if existing == 'symlink': target.write_bytes(raw)
+                contract_path.symlink_to(target)
+        completed, invoked, downloads, native = [], [], [], {}
+        commit, run_id = 'a' * 40, '123'
+        expected_entry = '/opt/id-business-v2/.staging/' + d.NAME + '-entry-' + commit + '-' + run_id
+        def path(value, *parts):
+            if str(value).startswith('/opt/id-business-v2/.staging/'):
+                self.assertEqual(str(value), expected_entry)
+                return entry.joinpath(*parts)
+            return real_path(value, *parts)
+        def imports(name, globals=None, locals=None, fromlist=(), level=0):
+            if name == 'pathlib' and 'Path' in fromlist:
+                return types.SimpleNamespace(Path=path)
+            return real_import(name, globals, locals, fromlist, level)
+        accepted_code = compile("def release(plan, contract, d, h):\n"
+            " completed.append(plan['mode'])\n"
+            " return {'status':'SYNTHETIC_ENTRY_VERIFIED','commit':plan['commit']}\n", '<synthetic-pure-platform>', 'exec').co_consts[0]
+        old = types.SimpleNamespace(release=lambda: None, completed=completed)
+        platform = types.SimpleNamespace(load_utilities=lambda *args: object())
+        def spec(name, filename, *args, **kwargs):
+            value = real_spec(name, filename, *args, **kwargs)
+            loader = value.loader
+            class Loader:
+                def create_module(self, current): return loader.create_module(current)
+                def exec_module(self, module):
+                    loader.exec_module(module)
+                    # Keep the new release() own-contract read and digest check
+                    # real; unrelated hardware/admission is outside this fixture.
+                    module.verify_contract = Mock()
+                    module.helper = lambda helper: {'recharge-record-release.py': platform,
+                        'registration-parity-diagnostics-release.py': old,
+                        'registration-flow-v4-release.py': types.SimpleNamespace(sqlite_receipt=lambda: None)}[helper]
+                    module.adapted_release_code = lambda original: accepted_code
+                    original = module.release
+                    def release(*values):
+                        invoked.append(1)
+                        return original(*values)
+                    module.release = release
+            value.loader = Loader()
+            return value
+        def urlopen(url, **kwargs):
+            name = url.rsplit('/', 1)[-1]
+            downloads.append(name)
+            self.assertIn(name, {'registration-terminal-stop-contract.json', *controls})
+            return io.BytesIO(raw if name == 'registration-terminal-stop-contract.json' else controls[name])
+        def execute(*args):
+            self.assertEqual(args[:3], ('aws', 'ssm', 'send-command'))
+            parameters = json.loads(args[args.index('--parameters') + 1])
+            command = parameters['commands'][0]
+            source = '\n'.join(command.splitlines()[1:-1])
+            stream = io.StringIO()
+            previous_mask = os.umask(0o077)
+            previous_bytecode = sys.dont_write_bytecode
+            code = 0
+            try:
+                with patch.object(builtins, '__import__', side_effect=imports), \
+                        patch.object(importlib.util, 'spec_from_file_location', side_effect=spec), \
+                        patch.object(r.urllib.request, 'urlopen', side_effect=urlopen), contextlib.redirect_stdout(stream):
+                    try: exec(compile(source, '<generated-ssm-transport>', 'exec'), {'__name__': '__main__'})
+                    except SystemExit as error: code = error.code
+            finally:
+                os.umask(previous_mask)
+                sys.dont_write_bytecode = previous_bytecode
+            native.update(Status='Success' if code == 0 else 'Failed', ResponseCode=code,
+                          StandardErrorContent='', StandardOutputContent=stream.getvalue())
+            return json.dumps({'Command': {'CommandId': 'synthetic-command'}}).encode()
+        values = d.namespace()
+        values.update(OUTPUT=output, execute=execute, verified_contract=lambda: (raw, json.loads(raw)))
+        values['subprocess'] = types.SimpleNamespace(run=lambda *args, **kwargs: types.SimpleNamespace(
+            returncode=0, stdout=json.dumps(native).encode()))
+        plan = {'commit': commit, 'tree': 'b' * 40, 'workflowRunId': run_id, 'workflowRunAttempt': '1',
+                'controlSources': hashes, 'contractSha256': r.digest(raw)}
+        return values['transport'], plan, contract_path, raw, completed, invoked, downloads, native
+
+    def test_generated_transport_saves_verified_contract_and_reuses_identical_file(self):
+        parent = r.ROOT / '.runtime/registration-terminal-stop-20261017/control-tests'
+        parent.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(prefix='transport-', dir=parent) as directory:
+            transport, plan, path, raw, completed, invoked, _, _ = self.generated_transport_fixture(Path(directory))
+            with contextlib.redirect_stdout(io.StringIO()): transport(plan, 'preflight')
+            self.assertEqual(path.read_bytes(), raw)
+            self.assertEqual(path.stat().st_mode & 0o777, 0o600)
+            original_inode = path.stat().st_ino
+            with contextlib.redirect_stdout(io.StringIO()): transport(plan, 'release')
+            self.assertEqual(path.stat().st_ino, original_inode)
+            self.assertEqual(path.read_bytes(), raw)
+            self.assertEqual(completed, ['preflight', 'release'])
+            self.assertEqual(len(invoked), 2)
+
+    def test_generated_transport_rejects_different_or_symlink_contract_before_release(self):
+        parent = r.ROOT / '.runtime/registration-terminal-stop-20261017/control-tests'
+        parent.mkdir(parents=True, exist_ok=True)
+        for existing in ('different', 'symlink', 'dangling'):
+            with self.subTest(existing=existing), tempfile.TemporaryDirectory(prefix='transport-', dir=parent) as directory:
+                transport, plan, path, _, completed, invoked, downloads, native = self.generated_transport_fixture(
+                    Path(directory), existing)
+                with contextlib.redirect_stdout(io.StringIO()), self.assertRaisesRegex(RuntimeError, 'NATIVE_PREFLIGHT_FAILED'):
+                    transport(plan, 'preflight')
+                self.assertEqual(completed, [])
+                self.assertEqual(invoked, [])
+                self.assertEqual(downloads, ['registration-terminal-stop-contract.json'])
+                self.assertEqual(json.loads(native['StandardOutputContent'])['code'], r.SCOPE + '_CONTRACT_ENTRY_CHANGED')
+                if existing == 'different': self.assertEqual(path.read_bytes(), b'pre-existing different contract')
+                else: self.assertTrue(path.is_symlink())
 
     def test_frozen_switch_adaptation_fails_closed_if_recipe_changes(self):
         old = r.helper('registration-parity-diagnostics-release.py')

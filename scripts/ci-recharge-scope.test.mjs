@@ -37,6 +37,10 @@ import {
   isRegistrationTerminalStopOnly,
   registrationTerminalStopBase,
   registrationTerminalStopTree,
+  registrationTerminalStopRepairBase,
+  registrationTerminalStopRepairTree,
+  registrationTerminalStopRepairPaths,
+  registrationTerminalStopRepairParts,
   registrationTerminalStopContract,
   registrationTerminalStopApplications,
   registrationTerminalStopPaths,
@@ -7060,4 +7064,37 @@ test('GPT integration cannot qualify the immutable historical registration recei
     registrationPublishedRecoveryProof([registrationPublishedBindingPath, path], { readSource }),
     false
   );
+});
+
+test('terminal entry contract repair stays on its exact published tree and control paths', () => {
+  const context = {
+    ...terminalStopFixture(),
+    base: registrationTerminalStopRepairBase,
+    baseTree: registrationTerminalStopRepairTree
+  };
+  const paths = [...registrationTerminalStopRepairPaths];
+  assert.equal(paths.length, 8);
+  assert.equal(isRegistrationTerminalStopOnly(paths, context), true);
+  assert.equal(checkMode(paths, 'same', 'same', undefined, context), 'recharge');
+  assert.deepEqual(selectedParts(paths, undefined, context), [
+    ...registrationTerminalStopRepairParts
+  ]);
+  assert.equal(needsOnlineRechargeCiBuild(paths, context), false);
+  for (const changed of [
+    paths.slice(1),
+    [...paths, paths[0]],
+    [...paths, ...registrationTerminalStopApplications],
+    [...paths, 'scripts/production-release/registration-terminal-stop-release.py']
+  ]) {
+    assert.equal(isRegistrationTerminalStopOnly(changed, context), false);
+    assert.equal(checkMode(changed, 'same', 'same', undefined, context), 'full');
+  }
+  for (const override of [
+    { base: '0'.repeat(40) },
+    { baseTree: '0'.repeat(40) },
+    { sourceDigest: () => 'b'.repeat(64) }
+  ]) {
+    assert.equal(isRegistrationTerminalStopOnly(paths, { ...context, ...override }), false);
+  }
+  assert.equal(checkMode(paths, 'old', 'new', undefined, context), 'full');
 });

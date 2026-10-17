@@ -84,6 +84,18 @@ import { matchesSourceEvidence, recordedPullRequestBase } from './ci-recharge-ev
 
 export const registrationTerminalStopBase = '6da10d2e4bd9de6df145899648e234000f84b72b';
 export const registrationTerminalStopTree = 'afa73ff2e4c258b811e310873daab8c71fc72bba';
+export const registrationTerminalStopRepairBase = 'aa8431d67fad57ff7f439150deced567ca65d8cf';
+export const registrationTerminalStopRepairTree = '414aeea82c903a3af33bd59a9a7bbb8b79fb780f';
+export const registrationTerminalStopRepairPaths = Object.freeze([
+  'scripts/production-release/registration-terminal-stop-dispatch.py',
+  'scripts/production-release/registration-terminal-stop-release.test.py',
+  'scripts/production-release/registration-terminal-stop-contract.json',
+  'docs/AUTO_REGISTRATION_TERMINAL_STOP_20261017.md',
+  ...['scope.mjs', 'scope.test.mjs', 'check.mjs', 'check.test.mjs'].map(
+    (name) => 'scripts/ci-recharge-' + name
+  )
+]);
+export const registrationTerminalStopRepairParts = Object.freeze(['guards', 'release-controls']);
 export const registrationTerminalStopContract =
   'scripts/production-release/registration-terminal-stop-contract.json';
 export const registrationTerminalStopApplications = Object.freeze(
@@ -112,12 +124,15 @@ export function isRegistrationTerminalStopOnly(paths, options = {}) {
     left.length === right.length &&
     left.every((name) => right.includes(name));
   const object = (value) => value && typeof value === 'object' && !Array.isArray(value);
-  if (
-    options?.base !== registrationTerminalStopBase ||
-    options?.baseTree !== registrationTerminalStopTree ||
-    !sameKeys(paths, registrationTerminalStopPaths)
-  )
-    return false;
+  const initial =
+    options?.base === registrationTerminalStopBase &&
+    options?.baseTree === registrationTerminalStopTree &&
+    sameKeys(paths, registrationTerminalStopPaths);
+  const controlRepair =
+    options?.base === registrationTerminalStopRepairBase &&
+    options?.baseTree === registrationTerminalStopRepairTree &&
+    sameKeys(paths, registrationTerminalStopRepairPaths);
+  if (!initial && !controlRepair) return false;
   try {
     const c =
       options.contract ??
@@ -2447,7 +2462,10 @@ export function isTargetedOnly(paths, oldSchema, newSchema) {
   );
 }
 export function selectedParts(paths, grantHelperSnapshot, context) {
-  if (isRegistrationTerminalStopOnly(paths, context)) return [...registrationTerminalStopParts];
+  if (isRegistrationTerminalStopOnly(paths, context))
+    return context?.base === registrationTerminalStopRepairBase
+      ? [...registrationTerminalStopRepairParts]
+      : [...registrationTerminalStopParts];
   if (isRegistrationFlowV4Only(paths, context)) return [...registrationFlowV4Parts];
   if (isRegistrationProtocolRepairPreservationOnly(paths, context)) return ['guards'];
   if (isRegistrationProtocolRepairControlRepair(paths, context)) return ['guards'];
