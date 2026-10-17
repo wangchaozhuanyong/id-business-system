@@ -652,14 +652,15 @@ class AppleMailboxTests(unittest.TestCase):
                 stack.enter_context(patch.object(self.integration, "persist_result", side_effect=unavailable))
             stack.enter_context(patch.object(engine_class, "_submit_signup_form", signup))
             def initialize_session(engine):
-                engine.http_client._session = self.official_session(malformed=not verified_identity)
-                engine.session = engine.http_client.session
+                session = self.official_session(malformed=not verified_identity)
                 def post(url, *_args, **_kwargs):
                     response = self.diagnostic_response(200, {
                         "page": {"type": "email_otp_verification" if existing else "password"}})
                     response.url = url
                     return response
-                engine.session.post.side_effect = post
+                session._offline_post_transport.side_effect = post
+                engine.http_client._session = session
+                engine.session = engine.http_client.session
                 return True
 
             stack.enter_context(patch.object(engine_class, "_init_session", initialize_session))
