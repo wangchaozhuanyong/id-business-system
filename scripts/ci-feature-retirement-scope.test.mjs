@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
 import test from 'node:test';
 import { isFeatureRetirementOnly } from './ci-feature-retirement-scope.mjs';
 import { checkMode, needsOnlineRechargeCiBuild } from './ci-recharge-scope.mjs';
@@ -29,11 +30,28 @@ test('unrelated and duplicated paths cannot suppress the historical image build'
     assert.equal(isFeatureRetirementOnly(paths, context()), false);
 });
 
+test('real CI rename paths qualify only with the complete canonical source proof', () => {
+  const renamed = execFileSync('git', ['diff', '--name-only', c.reviewBase, 'HEAD'], {
+    cwd: new URL('../', import.meta.url),
+    encoding: 'utf8'
+  })
+    .trim()
+    .split('\n')
+    .filter(Boolean);
+  assert.ok(renamed.length < c.allowedPaths.length);
+  assert.equal(isFeatureRetirementOnly(renamed, context()), true);
+  assert.equal(needsOnlineRechargeCiBuild(renamed, context()), false);
+  assert.equal(isFeatureRetirementOnly(renamed.slice(1), context()), false);
+  assert.equal(isFeatureRetirementOnly([...renamed, 'unreviewed.cjs'], context()), false);
+  assert.equal(isFeatureRetirementOnly(renamed, context(c, { verifySource: () => false })), false);
+});
+
 test('business source, original baselines and retirement boundaries remain fixed', () => {
   for (const mutate of [
     (v) => (v.sources[Object.keys(v.sources)[0]] = 'a'.repeat(64)),
     (v) => (v.apiSourceBaseline = 'a'.repeat(40)),
     (v) => (v.apiMainBase = 'a'.repeat(40)),
+    (v) => (v.reviewBase = '--output=unreviewed'),
     (v) => (v.adminSourceBaseline = 'a'.repeat(40)),
     (v) => (v.scope = 'OTHER'),
     (v) => (v.backupCreated = true),

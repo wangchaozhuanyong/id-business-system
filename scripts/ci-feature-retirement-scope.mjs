@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
-import { spawnSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
@@ -11,6 +11,12 @@ const sourceHash = '1c91563df6fbdabb7c7724292fe9c637681c237560d9fbddee043eb87af3
 const verifierHash = '02ae8491ff41d9de2803115c7fe14b487630b2faf6ad2eea6d203e00931ac6bf';
 const workflowHash = '7c5fb7c5f845ef94a9ddd117f5002b8d33bc0f3155c254c1acf6a340e5308c64';
 const digest = (value) => createHash('sha256').update(value).digest('hex');
+const samePaths = (left, right) =>
+  Array.isArray(right) &&
+  new Set(left).size === left.length &&
+  new Set(right).size === right.length &&
+  left.length === right.length &&
+  left.every((name) => right.includes(name));
 
 function verifySource() {
   const code =
@@ -38,6 +44,8 @@ export function isFeatureRetirementOnly(paths, context = {}) {
       c.scope !== 'AUTO_REGISTRATION_RETIREMENT_20261018' ||
       c.apiSourceBaseline !== 'c28551daa8a510a6922ae842d746ce8093898115' ||
       c.apiMainBase !== c.apiSourceBaseline ||
+      typeof c.reviewBase !== 'string' ||
+      !/^[a-f0-9]{40}$/.test(c.reviewBase) ||
       c.adminSourceBaseline !== '6da10d2e4bd9de6df145899648e234000f84b72b' ||
       c.backupCreated !== false ||
       c.cleanupDataInRelease !== false ||
@@ -47,13 +55,25 @@ export function isFeatureRetirementOnly(paths, context = {}) {
       digest(read(verifierPath)) !== verifierHash ||
       digest(read(workflowPath)) !== workflowHash ||
       !Array.isArray(c.allowedPaths) ||
-      new Set(paths).size !== paths.length ||
-      paths.length !== c.allowedPaths.length ||
       new Set(c.allowedPaths).size !== c.allowedPaths.length ||
-      paths.some((name) => !c.allowedPaths.includes(name)) ||
-      paths.some((name) => name.startsWith('apps/api/src/id-business-v2/online-recharge/'))
+      c.allowedPaths.some((name) => name.startsWith('apps/api/src/id-business-v2/online-recharge/'))
     )
       return false;
+    // CI's normal Git diff represents a rename by its destination only. The
+    // source verifier below still checks the complete --no-renames inventory.
+    if (!samePaths(paths, c.allowedPaths)) {
+      const changed =
+        context.changedPaths ??
+        ((base) =>
+          execFileSync('git', ['diff', '--name-only', base, 'HEAD'], {
+            cwd: root,
+            encoding: 'utf8'
+          })
+            .trim()
+            .split('\n')
+            .filter(Boolean));
+      if (!samePaths(paths, changed(c.reviewBase))) return false;
+    }
     return (context.verifySource ?? verifySource)() === true;
   } catch {
     return false;
