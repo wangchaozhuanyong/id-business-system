@@ -6,12 +6,21 @@ import os
 from pathlib import Path
 import shutil
 import subprocess
+import sys
 import tarfile
+import urllib.request
 
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parents[1]
 OUT = ROOT / '.deploy/online-checkout-cs'
 CONTRACT_FILE = 'online-checkout-cs-contract.json'
+REUSED_RUN = {'runId': '39027140507', 'commit': '81b8f63d5d18c85330c0dddfca7fe3bca87f7d3b'}
+REUSED_STEPS = ('Verify source-bound original checkout and submission protection',
+                'Verify intercepted Chromium checkout and engine regressions')
+REUSE_CONTROLS = frozenset([
+    '.github/workflows/online-checkout-cs-validation.yml',
+    *['scripts/production-release/online-checkout-cs-' + name
+      for name in ('build.py', 'contract.json', 'release.py', 'release.test.py')]])
 
 
 def load(name):
@@ -32,6 +41,40 @@ def sha(raw):
 
 def git(*args):
     return subprocess.check_output(['git', *args], cwd=ROOT)
+
+
+def validate_reuse(run, jobs, changes):
+    need(str(run.get('id')) == REUSED_RUN['runId']
+         and run.get('head_sha') == REUSED_RUN['commit']
+         and run.get('head_branch') == 'main' and run.get('event') == 'workflow_dispatch'
+         and run.get('path') == '.github/workflows/online-checkout-cs-validation.yml'
+         and run.get('status') == 'completed' and run.get('conclusion') == 'success'
+         and len(jobs) == 1 and jobs[0].get('name') == 'validate'
+         and jobs[0].get('conclusion') == 'success'
+         and bool(changes) and set(changes) <= REUSE_CONTROLS, 'VALIDATION_REUSE_CHANGED')
+    steps = jobs[0].get('steps', [])
+    need(all(sum(step.get('name') == name and step.get('conclusion') == 'success'
+                 for step in steps) == 1 for name in REUSED_STEPS)
+         and not any(step.get('conclusion') == 'failure' for step in steps),
+         'VALIDATION_REUSE_STEPS_CHANGED')
+    return True
+
+
+def verify_reuse():
+    def api(suffix):
+        request = urllib.request.Request(
+            'https://api.github.com/repos/wangchaozhuanyong/id-business-system/actions/runs/'
+            + REUSED_RUN['runId'] + suffix,
+            headers={'Authorization': 'Bearer ' + os.environ['GH_TOKEN'],
+                     'Accept': 'application/vnd.github+json'})
+        with urllib.request.urlopen(request, timeout=30) as response:
+            return json.load(response)
+    need(subprocess.run(['git', 'merge-base', '--is-ancestor', REUSED_RUN['commit'], 'HEAD'],
+                        cwd=ROOT, capture_output=True).returncode == 0, 'REUSE_ANCESTRY_CHANGED')
+    run = api('')
+    jobs = api('/attempts/' + str(run['run_attempt']) + '/jobs')['jobs']
+    changes = git('diff', '--name-only', REUSED_RUN['commit'], 'HEAD').decode().splitlines()
+    return validate_reuse(run, jobs, changes)
 
 
 def run(*args, cwd=ROOT):
@@ -80,6 +123,7 @@ def validation_sources(context, contract):
 
 
 def main():
+    verify_reuse()
     raw_contract = (HERE / CONTRACT_FILE).read_bytes()
     contract = json.loads(raw_contract)
     publisher = load('online-checkout-cs-release.py')
@@ -161,4 +205,9 @@ def main():
 
 
 if __name__ == '__main__':
-    main()
+    if sys.argv[1:] == ['--verify-reuse']:
+        print('reused=' + str(verify_reuse()).lower())
+    elif sys.argv[1:]:
+        raise RuntimeError('ONLINE_CHECKOUT_CS_ARGUMENTS_INVALID')
+    else:
+        main()

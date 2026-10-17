@@ -3271,6 +3271,7 @@
     "docs/ONLINE_RECHARGE.md": "12e9d264db71e4d5db1595de8ce5746927a907b923bd2186ea758f6289591d3a",
     "docs/V2_TASKS.md": "309d05f6ef9c056f109540c24eb4ca505125588aa39fe995ad557fb825c91786"
   },
+  "sqlFenceHelperSha256": "50446ab528a288ca1c2129c84f1bf4a90f59fa313a92bcff0058a258c8b8e925",
   "validationOnlySources": {
     "apps/api/src/id-business-v2/online-recharge/engine/test/payment-observation.test.cjs": {
       "commit": "8df81dca0f08ebdebe6b01b942b033053b8a5c3b",

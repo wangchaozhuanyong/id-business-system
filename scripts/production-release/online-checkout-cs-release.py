@@ -18,6 +18,7 @@ UPDATED = ('api', 'online-recharge')
 PRESERVED = ('admin', 'mysql', 'caddy', 'media-resolver', 'auto-recharge', 'auto-registration')
 API_MODULE = 'id-business-v2/online-recharge/checkout-recovery.js'
 DECLARATION = 'id-business-v2/online-recharge/contracts.d.ts'
+SQL_FENCE_HELPER_SHA256 = '50446ab528a288ca1c2129c84f1bf4a90f59fa313a92bcff0058a258c8b8e925'
 BUSINESS_ENGINE_DELTA = frozenset(['SOURCE_MANIFEST.json', 'checkout-recovery.cjs',
     'upstream/chatgpt.js', 'upstream/index.js', 'upstream/payment-retry.js',
     'upstream/stripe-payment.js', 'test/checkout-recovery.test.cjs', 'test/payment-core.test.cjs',
@@ -54,6 +55,12 @@ def load(name):
 
 
 def validate_contract(c):
+    need(c.get('sqlFenceHelperSha256') == SQL_FENCE_HELPER_SHA256, 'SQL_FENCE_BINDING_CHANGED')
+    helper = HERE / 'api-admin-scope.py'
+    need(not helper.is_symlink() and helper.is_file() and sha(helper.read_bytes()) == SQL_FENCE_HELPER_SHA256,
+         'SQL_FENCE_SOURCE_CHANGED')
+    # Admission compiles only the reviewed class; no driver, subprocess or database is opened.
+    load('proxy-result-identity-release.py').sql_fence_class(c)
     need(c.get('version') == 1 and c.get('scope') == SCOPE
          and c.get('publishedSourceCommit') == PUBLISHED_SOURCE_COMMIT,
          'PUBLISHED_PREDECESSOR_CHANGED')
@@ -200,8 +207,8 @@ def smoke(d, h, target, states, proof, c):
 
 
 def switch_services(d, h, p, previous, target, plan, before, images, proof, c, journal):
-    marker = p.claim_markers(d, before, plan)
     fence = p.sql_fence_class(c)(d, previous)
+    marker = p.claim_markers(d, before, plan)
     journal.write_text(json.dumps({'status': 'SWITCH_STARTED', 'target': str(target), 'previous': str(previous)}) + '\n')
     try:
         fence.acquire()
