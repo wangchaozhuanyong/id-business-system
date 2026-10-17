@@ -231,8 +231,8 @@ def baseline(d, h, a, finite, c, expected=None):
     need(all(digest((previous / n).read_bytes()) == value for n, value in b['configurationSha256'].items())
          and {role: h.configuration(d, state) for role, state in states.items()} == b['runtimeConfigurationSha256'],
          'CONFIGURATION_CHANGED')
-    for name, expected in b['publishedProofs'].items():
-        need(digest((previous / name).read_bytes()) == expected['sha256'], 'PUBLISHED_PROOF_CHANGED')
+    for name, proof_expected in b['publishedProofs'].items():
+        need(digest((previous / name).read_bytes()) == proof_expected['sha256'], 'PUBLISHED_PROOF_CHANGED')
     need(d.run('docker', 'exec', states['api']['containerId'], 'sha256sum',
                '/app/apps/api/prisma-mysql/schema.prisma').split()[0] == b['schemaSha256']
          and d.run('docker', 'exec', states['admin']['containerId'], 'sha256sum',
