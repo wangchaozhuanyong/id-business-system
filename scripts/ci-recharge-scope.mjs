@@ -32,6 +32,7 @@ import {
 import {
   isOnlineSettingsOnly,
   isOnlineSettingsControlsOnly,
+  isOnlineSettingsTestsOnly,
   onlineSettingsParts
 } from './ci-online-settings-scope.mjs';
 import { isProxyResultIdentityOnly } from './ci-proxy-result-identity-scope.mjs';
@@ -1462,6 +1463,24 @@ export function checkMode(paths, oldSchema, newSchema, grantHelperSnapshot, cont
   if (isSharedBankCardControlsOnly(paths)) return oldSchema === newSchema ? 'ci-only' : 'full';
   if (isSharedBankCardOnly(paths))
     return sharedBankCardSchemaMatches(oldSchema, newSchema) ? 'recharge' : 'full';
+  if (
+    paths.some((path) =>
+      [
+        'apps/api/src/id-business-v2/online-recharge/engine/test/payment-observation.test.cjs',
+        'apps/api/src/id-business-v2/online-recharge/engine/SOURCE_MANIFEST.json'
+      ].includes(path)
+    ) &&
+    paths.every((path) =>
+      [
+        'apps/api/src/id-business-v2/online-recharge/engine/test/payment-observation.test.cjs',
+        'apps/api/src/id-business-v2/online-recharge/engine/SOURCE_MANIFEST.json',
+        'scripts/ci-online-settings-scope.mjs',
+        'scripts/ci-online-settings-scope.test.mjs',
+        'scripts/ci-recharge-scope.mjs'
+      ].includes(path)
+    )
+  )
+    return isOnlineSettingsTestsOnly(paths) && oldSchema === newSchema ? 'recharge' : 'full';
   if (isOnlineSettingsControlsOnly(paths)) return oldSchema === newSchema ? 'ci-only' : 'full';
   if (isOnlineSettingsOnly(paths)) return oldSchema === newSchema ? 'recharge' : 'full';
   if (isOnlineProxyCountryValidationOnly(paths))
@@ -1955,6 +1974,7 @@ export function selectedParts(paths, grantHelperSnapshot, context) {
   if (isChatgptSalesOnly(paths)) return [...chatgptSalesParts];
   if (isSharedBankCardControlsOnly(paths)) return ['guards'];
   if (isSharedBankCardOnly(paths)) return [...sharedBankCardParts];
+  if (isOnlineSettingsTestsOnly(paths)) return ['guards', 'online-engine'];
   if (isOnlineSettingsControlsOnly(paths)) return ['guards'];
   if (isOnlineSettingsOnly(paths)) return [...onlineSettingsParts];
   if (isOnlineProxyCountryOnly(paths)) return [...onlineProxyCountryParts];

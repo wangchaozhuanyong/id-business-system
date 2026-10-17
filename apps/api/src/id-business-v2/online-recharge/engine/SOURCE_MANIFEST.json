@@ -257,9 +257,9 @@
     {
       "path": "test/payment-observation.test.cjs",
       "originalSha256": null,
-      "adaptedSha256": "16223656351035245bef19aab12ebd3c166a4ce64086e0641bde249c5c834f88",
+      "adaptedSha256": "954a2542c2451d72e9e062dfb095315c57530feecf3617343a6e1f2e408a91f3",
       "changed": true,
-      "reason": "Unattended verification, bounded cancellation and original-checkout read-only reconciliation; synthetic regression coverage."
+      "reason": "Unattended verification, bounded cancellation and original-checkout read-only reconciliation; synthetic regression coverage. Chromium single-submit flows count intercepted payment POSTs through verification success, failure and changed-challenge retry; no new checkout is permitted."
     },
     {
       "path": "test/plan-regions.test.cjs",
