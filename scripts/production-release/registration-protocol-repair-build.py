@@ -75,6 +75,11 @@ def overlay(context, sources, commit=None):
         path.write_bytes(raw)
 
 
+def overlay_runtime_worker(context, c):
+    for name, pin in c['reconstruction']['runtimeWorkerSources'].items():
+        overlay(context, {WORKER + name: pin['sha256']}, pin['commit'])
+
+
 def prepare():
     c = admitted()
     need(not OUT.exists(), 'OUTPUT_EXISTS')
@@ -91,6 +96,12 @@ def prepare():
          and digest((old_here / 'online-checkout-contract.json').read_bytes()) == c['reconstruction']['contractSha256'],
          'PUBLISHED_RECIPE_CHANGED')
     recipe = json.loads((old_here / 'online-checkout-contract.json').read_bytes())
+    successor = c['reconstruction']['successor']
+    successor_raw = git('show', successor['commit'] + ':scripts/production-release/online-checkout-retest-contract.json')
+    need(digest(successor_raw) == successor['contractSha256'], 'PUBLISHED_SUCCESSOR_RECIPE_CHANGED')
+    successor_recipe = json.loads(successor_raw)
+    need(successor_recipe['sourceReviewCommit'] == successor['sourceReviewCommit']
+         and signature(successor_recipe['sources']) == successor['sources'], 'PUBLISHED_SUCCESSOR_SOURCES_CHANGED')
     builder = load(old_here / 'online-checkout-build.py')
     builder.OUT = OUT / 'historical-merge'
     builder.OUT.mkdir(mode=0o700)
@@ -99,12 +110,18 @@ def prepare():
     try:
         legacy = OUT / 'legacy-admin'
         builder.reconstruct(legacy, recipe, None)
-        for role in ('baseline', 'candidate'):
+        for role in ('previous-admin', 'baseline', 'candidate'):
             context = OUT / role
             shutil.copytree(legacy, context)
             overlay(context, recipe['sources'], recipe['sourceReviewCommit'])
             display_sources = {ENGINE + name: value for name, value in c['reconstruction']['displaySources'].items()}
             overlay(context, display_sources, DISPLAY)
+            if role != 'previous-admin':
+                overlay(context, successor_recipe['sources'], successor['commit'])
+                need(inventory(context / ENGINE) == successor_recipe['afterEngineFiles']
+                     and signature(successor_recipe['afterEngineFiles']) == c['baseline']['inventory']['engine'],
+                     'PUBLISHED_ENGINE_NOT_REPRODUCED')
+            overlay_runtime_worker(context, c)
             if role == 'candidate':
                 overlay(context, {**c['sources'], **c['validationSources'], **c['validationSupportSources']})
             need(digest((context / SCHEMA).read_bytes()) == c['baseline']['schemaSha256'], 'SCHEMA_CHANGED')
@@ -120,7 +137,7 @@ def ensure_prepared():
     c = admitted()
     if not OUT.exists():
         prepare()
-    need((OUT / 'candidate').is_dir() and (OUT / 'baseline').is_dir(), 'PREPARATION_MISSING')
+    need(all((OUT / role).is_dir() for role in ('candidate', 'baseline', 'previous-admin')), 'PREPARATION_MISSING')
     verify_candidate_sources(c)
     return c
 
@@ -194,6 +211,7 @@ def check_admin():
     c = ensure_prepared()
     baseline_dist = {}
     for role, build_id in [('legacy-admin', 'v2-1bd89a110774ebb4cfcbcfeefa35752ae3c83fae'),
+                           ('previous-admin', 'v2-' + C8),
                            ('baseline', c['baseline']['adminBuildId']),
                            ('candidate', 'v2-' + git('rev-parse', 'HEAD').decode().strip())]:
         context = OUT / role
@@ -203,10 +221,13 @@ def check_admin():
         baseline_dist[role] = inventory(context / 'apps/admin/dist')
     c8 = json.loads(git('show', C8 + ':scripts/production-release/online-checkout-contract.json'))
     need(r.digest(r.canonical(baseline_dist['legacy-admin'])) == c8['baselineAdminFilesSha256'], 'LEGACY_ADMIN_NOT_REPRODUCED')
+    need(signature(baseline_dist['previous-admin']) == c['reconstruction']['previousAdminProof']['adminFiles'],
+         'PREVIOUS_ADMIN_NOT_REPRODUCED')
     expected = c['baseline']['publishedProofs']['online-checkout-build-proof.json']['adminFiles']
     need(signature(baseline_dist['baseline']) == expected, 'PUBLISHED_ADMIN_NOT_REPRODUCED')
     old = json.loads(git('show', '1bd89a110774ebb4cfcbcfeefa35752ae3c83fae:scripts/production-release/registration-protocol-restore-contract.json'))
-    retained = {**old['runtimeAdminFiles'], **baseline_dist['legacy-admin'], **baseline_dist['baseline']}
+    retained = {**old['runtimeAdminFiles'], **baseline_dist['legacy-admin'],
+                **baseline_dist['previous-admin'], **baseline_dist['baseline']}
     need(signature(retained) == c['baseline']['inventory']['admin'], 'ADMIN_HISTORY_NOT_REPRODUCED')
     final = {**retained, **baseline_dist['candidate']}
     context = OUT / 'candidate'

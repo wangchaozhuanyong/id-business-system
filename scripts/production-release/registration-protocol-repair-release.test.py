@@ -88,6 +88,9 @@ class ProtocolRepairControls(unittest.TestCase):
                        lambda c: c.update(apiJavascriptDelta=['unrelated.js']),
                        lambda c: c.update(apiRuntimeDelta=[r.TYPE_MODULE]),
                        lambda c: c.update(validationSupportSources={'apps/api/unrelated.ts': '0' * 64}),
+                       lambda c: c['reconstruction']['successor'].update(commit='0' * 40),
+                       lambda c: c['reconstruction']['previousAdminProof']['adminFiles'].update(sha256='0' * 64),
+                       lambda c: c['reconstruction']['runtimeWorkerSources']['test_workspace.py'].update(commit=b.C8),
                        lambda c: c.update(apiDeclarationPaths=[])):
             c = self.ready()
             mutate(c)
@@ -138,6 +141,11 @@ class ProtocolRepairControls(unittest.TestCase):
     def test_worker_runtime_history_matches_the_independent_native_digest(self):
         c = self.ready()
         self.assertEqual(r.signature(b.runtime_worker_map(c)), c['baseline']['inventory']['worker'])
+        with tempfile.TemporaryDirectory(prefix='worker-pins-', dir=self.temporary_parent()) as name:
+            context = Path(name)
+            b.overlay_runtime_worker(context, c)
+            self.assertEqual(b.inventory(context / b.WORKER), c['baselineWorkerFiles'])
+            self.assertEqual(r.signature(b.inventory(context / b.WORKER)), c['baseline']['inventory']['worker'])
 
     def test_transport_renames_only_this_new_operation(self):
         self.assertEqual(d.rename('registration-parity-diagnostics-contract.json'), 'registration-protocol-repair-contract.json')

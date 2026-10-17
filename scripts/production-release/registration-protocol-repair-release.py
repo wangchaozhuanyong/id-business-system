@@ -20,7 +20,7 @@ ROOT = HERE.parents[1]
 NAME = 'registration-protocol-repair-20261017'
 PREFIX = 'registration-protocol-repair'
 SCOPE = 'REGISTRATION_PROTOCOL_REPAIR_20261017'
-CURRENT = '626620f09b9fc27e32cc1d3e8a93cb1c51513387'
+CURRENT = '0222adf9d5225669b73e8e8f9ec711564eb6163a'
 BASE = Path('/opt/id-business-v2')
 WORKER = 'apps/api/src/id-business-v2/auto-registration/worker/'
 TYPE_MODULE = 'id-business-v2/auto-registration/apple-mailboxes.types.d.ts'
@@ -73,8 +73,8 @@ def verify_contract(c):
          and c.get('scope') == SCOPE and c.get('expectedCurrent') == CURRENT
          and c.get('migration') is None and type(c.get('businessActions')) is int
          and c['businessActions'] == 0, 'CONTRACT_NOT_ADMITTED')
-    need(c.get('current') == '/opt/id-business-v2/releases/20261016T190438Z-626620f09b9f-online-display-auth'
-         and c.get('manifestSha256') == '1eb55e3b534e6153f7669f2a5298e63ad36e12c9b5fb8c20621712473ecd2034',
+    need(c.get('current') == '/opt/id-business-v2/releases/20261017T051518Z-0222adf9d522-online-checkout'
+         and c.get('manifestSha256') == '772724afb095635cc31fc8159e85618c86f74224eeb3e8496d481681a559083e',
          'PREDECESSOR_CHANGED')
     sources = c.get('sources')
     need(isinstance(sources, dict) and set(sources) == set(c.get('applicationPaths', [])) == set(APPLICATION_PATHS)
@@ -92,15 +92,39 @@ def verify_contract(c):
     need(set(support) == {'scripts/check-v2-module-architecture.mjs'}
          and all(re.fullmatch(HEX, value) for value in support.values()), 'VALIDATION_SUPPORT_SCOPE_CHANGED')
     b = c.get('baseline', {})
+    image_ids = {'api': 'sha256:ccff89f4cfebaf094c6ba4228295713db511bac079bb64836bca7703c71bd2cb',
+                 'admin': 'sha256:c6a8c9ea557375997dc252e1e9c1cb2ab79707448bd55edf0ead8f771dcd119a',
+                 'online-recharge': 'sha256:b2767e3fdbb44cc249a8d9f553b217c10b947164eff0f8e91c448ccbc9a69908'}
     need(set(b.get('services', {})) == set(helper('recharge-record-release.py').SERVICES)
-         and b.get('images', {}).get('api', {}).get('revision') == 'c8ce1a01a1a1e61bcc8de778dad331191319d645'
-         and b['images']['api']['image'] == 'sha256:056398a189335216f30dedd882d219136d3013c1c88b01ab6eb6e32fb0a177cb',
+         and all(b.get('images', {}).get(role, {}).get('revision') == CURRENT
+                 and b['images'][role]['image'] == image for role, image in image_ids.items()),
          'LIVE_COMPONENT_BASELINE_MISSING')
     for slot in ('api', 'apiJavascript', 'worker', 'admin', 'prisma', 'engine'):
         value = b.get('inventory', {}).get(slot)
         need(isinstance(value, dict) and set(value) == {'fileCount', 'sha256'}
              and type(value['fileCount']) is int and value['fileCount'] > 0
              and re.fullmatch(HEX, value['sha256']), 'INVENTORY_BASELINE_MISSING')
+    reconstruction = c.get('reconstruction', {})
+    pins = reconstruction.get('runtimeWorkerSources', {})
+    old_tests = {'test_apple_mailboxes.py', 'test_release_safety.py', 'test_workspace.py'}
+    need(set(pins) == set(c.get('baselineWorkerFiles', {}))
+         and signature(c['baselineWorkerFiles']) == b['inventory']['worker']
+         and all(set(pin) == {'commit', 'sha256'} and pin['sha256'] == c['baselineWorkerFiles'][name]
+                 and pin['commit'] == ('e90f02a65cdf63b656e82eed6e25fd8a68a21b7b' if name in old_tests
+                                       else 'c8ce1a01a1a1e61bcc8de778dad331191319d645')
+                 for name, pin in pins.items()), 'RUNTIME_WORKER_SOURCE_SCOPE_CHANGED')
+    successor = reconstruction.get('successor', {})
+    previous = reconstruction.get('previousAdminProof', {})
+    need(successor.get('commit') == CURRENT
+         and successor.get('contractSha256') == '3495ac990a3966dfcbba0009ca9671ba2ba3b77ac06e3adbc2e6ea012441afea'
+         and successor.get('sourceReviewCommit') == 'f404926fc4eca91a413ed29567f9048eedceb83e'
+         and successor.get('sources', {}).get('fileCount') == 24
+         and re.fullmatch(HEX, successor['sources'].get('sha256', ''))
+         and previous.get('commit') == 'c8ce1a01a1a1e61bcc8de778dad331191319d645'
+         and previous.get('sha256') == 'f9e7154e2574a6c487690459a16808a60bdbec88113817ece367f1ecb03f278b'
+         and previous.get('adminFiles') == {'fileCount': 261,
+             'sha256': 'b136a739d66ffcbbea3f6a0fe48881e5bca912e8b2c1955cd7d7de062ae1adfb'},
+         'PUBLISHED_SUCCESSOR_BINDING_CHANGED')
     need(isinstance(b.get('sqlite'), dict) and re.fullmatch(HEX, b['sqlite'].get('logicalSha256', ''))
          and not b['sqlite']['taskCounts'].get('pending', 0) and not b['sqlite']['taskCounts'].get('running', 0)
          and isinstance(b.get('mysql'), dict) and re.fullmatch(HEX, b['mysql'].get('accountsSha256', ''))
