@@ -169,6 +169,23 @@ class CheckoutPublicationTests(unittest.TestCase):
         self.assertIn('RECHARGE_DIRECT_MYSQL_TEST:', section)
         self.assertIn('cancel-in-progress: false', workflow)
 
+    def test_workflow_preserves_mysql_diagnostics_without_bypassing_failure(self):
+        workflow = (ROOT / '.github/workflows/recharge-checkout-validation.yml').read_text()
+        mysql = workflow.split('name: Verify real payment gates in a dedicated isolated MySQL fixture', 1)[1].split('      - name:', 1)[0]
+        self.assertIn('--reporter=default --reporter=json', mysql)
+        self.assertNotIn('continue-on-error', mysql)
+        self.assertNotIn('|| true', mysql)
+        diagnostic = workflow.split('name: Preserve isolated MySQL diagnostics', 1)[1].split('      - name:', 1)[0]
+        self.assertIn('if: always()', diagnostic)
+        self.assertIn('actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02', diagnostic)
+        self.assertIn('name: recharge-checkout-mysql-diagnostics-${{ github.run_id }}-${{ github.run_attempt }}', diagnostic)
+        self.assertIn('path: .runtime/recharge-web-direct-release/mysql-vitest.json', diagnostic)
+        self.assertIn('include-hidden-files: true', diagnostic)
+        self.assertIn('if-no-files-found: warn', diagnostic)
+        self.assertLess(workflow.index('name: Preserve isolated MySQL diagnostics'),
+                        workflow.index('name: Verify successful quality gate and reproduce exact published API and Admin inputs'))
+        self.assertIn('needs: validate', workflow)
+
     def test_complete_admin_history_fingerprint_rejects_any_loss_or_mutation(self):
         actual = {'index.html': 'a' * 64, 'assets/old.js': 'b' * 64}
         expected = {'count': len(actual), 'sha256': r.digest(json.dumps(actual, sort_keys=True, separators=(',', ':')).encode())}

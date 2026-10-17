@@ -59,7 +59,16 @@ jobs:
           npm run prisma:mysql:migrate:deploy --workspace @apple-business/api
           mkdir -p .runtime/recharge-web-direct-release
           test ! -e .runtime/recharge-web-direct-release/mysql-vitest.json
-          npm run test --workspace @apple-business/api -- src/id-business-v2/auto-recharge/recharge-direct-payment.mysql.integration.spec.ts --reporter=json --outputFile="$GITHUB_WORKSPACE/.runtime/recharge-web-direct-release/mysql-vitest.json"
+          npm run test --workspace @apple-business/api -- src/id-business-v2/auto-recharge/recharge-direct-payment.mysql.integration.spec.ts --reporter=default --reporter=json --outputFile="$GITHUB_WORKSPACE/.runtime/recharge-web-direct-release/mysql-vitest.json"
+      - name: Preserve isolated MySQL diagnostics
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: recharge-checkout-mysql-diagnostics-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .runtime/recharge-web-direct-release/mysql-vitest.json
+          include-hidden-files: true
+          if-no-files-found: warn
+          retention-days: 30
       - name: Verify successful quality gate and reproduce exact published API and Admin inputs
         env:
           GH_TOKEN: ${{ github.token }}
