@@ -1,5 +1,5 @@
 import { ConflictException } from '@nestjs/common';
-import { Prisma } from '@prisma/client';
+import { Amount4 } from '../runtime/public-api';
 import { createHash } from 'node:crypto';
 import type { OnlineRechargeCheckoutRecovery, OnlineRechargePaymentContext } from './contracts';
 import { object } from './validation';
@@ -16,7 +16,7 @@ export function checkoutRecovery(value: unknown, context: OnlineRechargePaymentC
     input.checkoutUrl.length > 16000 ||
     typeof input.amount !== 'string' ||
     !/^\d{1,14}(\.\d{1,4})?$/.test(input.amount) ||
-    !new Prisma.Decimal(input.amount).equals(context.amount) ||
+    !Amount4.from(input.amount).equals(context.amount) ||
     !['kind', 'sourcePlan', 'targetPlan', 'accountId', 'cardId', 'cardLast4', 'currency'].every(
       (key) => input[key] === context[key as keyof OnlineRechargePaymentContext]
     ) ||
