@@ -132,7 +132,10 @@ import {
   onlinePrepareFixGuardCommands,
   needsOnlineRechargeCiBuild,
   onlineCiBuildControlPaths,
-  readProductionDatabaseAccessSnapshot
+  readProductionDatabaseAccessSnapshot,
+  isRegistrationProtocolRepairOnly,
+  registrationProtocolRepairBase,
+  registrationProtocolRepairCommands
 } from './ci-recharge-scope.mjs';
 
 const [part, base] = process.argv.slice(2);
@@ -143,6 +146,21 @@ const changed = execFileSync('git', ['diff', '--name-only', base, 'HEAD'], { enc
   .trim()
   .split('\n')
   .filter(Boolean);
+if (
+  mode === 'recharge' &&
+  base === registrationProtocolRepairBase &&
+  isRegistrationProtocolRepairOnly(changed, {
+    base,
+    baseTree: execFileSync('git', ['rev-parse', base + '^{tree}'], { encoding: 'utf8' }).trim()
+  })
+) {
+  if (!Object.hasOwn(registrationProtocolRepairCommands, part))
+    throw new Error('Unsupported registration protocol repair check part');
+  if ((part === 'api' || part === 'admin') && process.env.GITHUB_ACTIONS !== 'true')
+    throw new Error('Registration protocol repair candidate checks require isolated CI');
+  for (const [file, ...args] of registrationProtocolRepairCommands[part]) run(file, args);
+  process.exit(0);
+}
 if (
   (mode === 'recharge' && isGptRechargeOnly(changed)) ||
   (mode === 'ci-only' &&

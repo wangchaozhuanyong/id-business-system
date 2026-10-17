@@ -32,7 +32,19 @@ import {
   registrationMigrationQueryRepairBase
 } from './ci-registration-closure-scope.mjs';
 import { imageInputsChanged } from './ci-recharge-python-image.mjs';
-import { adminHtmlCachePaths, isAdminHtmlCacheOnly } from './ci-recharge-scope.mjs';
+import {
+  adminHtmlCachePaths,
+  isAdminHtmlCacheOnly,
+  isRegistrationProtocolRepairOnly,
+  registrationProtocolRepairBase,
+  registrationProtocolRepairTree,
+  registrationProtocolRepairContract,
+  registrationProtocolRepairApplications,
+  registrationProtocolRepairAcceptance,
+  registrationProtocolRepairPaths,
+  registrationProtocolRepairParts,
+  registrationProtocolRepairCommands
+} from './ci-recharge-scope.mjs';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
@@ -65,6 +77,156 @@ import {
   registrationBrowserAcceptance,
   registrationBrowserParts
 } from './ci-registration-browser-scope.mjs';
+
+function protocolRepairFixture() {
+  const hashes = Object.fromEntries(
+    registrationProtocolRepairPaths
+      .filter((name) => name !== registrationProtocolRepairContract)
+      .map((name) => [name, 'a'.repeat(64)])
+  );
+  return {
+    base: registrationProtocolRepairBase,
+    baseTree: registrationProtocolRepairTree,
+    sourceDigest: (name) => hashes[name] ?? null,
+    contract: {
+      version: 1,
+      scope: 'REGISTRATION_PROTOCOL_REPAIR_20261017',
+      name: 'registration-protocol-repair-20261017',
+      frozen: true,
+      admission: 'VERIFIED',
+      migration: null,
+      businessActions: 0,
+      sourceBaseline: registrationProtocolRepairBase,
+      sourceBaselineTree: registrationProtocolRepairTree,
+      expectedGitChanges: [...registrationProtocolRepairPaths],
+      applicationPaths: [...registrationProtocolRepairApplications],
+      sources: Object.fromEntries(
+        registrationProtocolRepairApplications.map((name) => [name, hashes[name]])
+      ),
+      validationSources: {
+        [registrationProtocolRepairAcceptance]: hashes[registrationProtocolRepairAcceptance]
+      },
+      reviewedFileHashes: hashes
+    }
+  };
+}
+
+test('registration protocol repair admits only its exact verified unchanged-schema source', () => {
+  const context = protocolRepairFixture(),
+    paths = [...registrationProtocolRepairPaths];
+  assert.equal(paths.length, 28);
+  assert.equal(isRegistrationProtocolRepairOnly(paths, context), true);
+  assert.equal(checkMode(paths, 'same', 'same', undefined, context), 'recharge');
+  assert.deepEqual(selectedParts(paths, undefined, context), [...registrationProtocolRepairParts]);
+  assert.equal(needsOnlineRechargeCiBuild(paths, context), false);
+  assert.equal(checkMode(paths, 'old', 'new', undefined, context), 'full');
+  for (const override of [
+    { base: '0'.repeat(40) },
+    { baseTree: '0'.repeat(40) },
+    { sourceDigest: () => 'b'.repeat(64) },
+    { sourceDigest: null },
+    {
+      sourceDigest: () => {
+        throw new Error('SYNTHETIC_READ_FAILURE');
+      }
+    }
+  ]) {
+    const changed = { ...context, ...override };
+    assert.equal(isRegistrationProtocolRepairOnly(paths, changed), false);
+    assert.equal(checkMode(paths, 'same', 'same', undefined, changed), 'full');
+    assert.equal(needsOnlineRechargeCiBuild(paths, changed), true);
+  }
+  for (const name of paths.filter((name) => name !== registrationProtocolRepairContract)) {
+    assert.equal(
+      isRegistrationProtocolRepairOnly(paths, {
+        ...context,
+        sourceDigest: (candidate) =>
+          candidate === name ? 'b'.repeat(64) : context.sourceDigest(candidate)
+      }),
+      false,
+      name
+    );
+  }
+  for (const changed of [
+    paths.slice(1),
+    [...paths, paths[0]],
+    [...paths, 'apps/api/prisma-mysql/schema.prisma'],
+    [...paths, 'package-lock.json'],
+    [...paths, '.github/workflows/quality.yml'],
+    [...paths, 'apps/api/src/id-business-v2/auto-registration/upstream/src/core/register.py']
+  ]) {
+    assert.equal(isRegistrationProtocolRepairOnly(changed, context), false);
+    assert.equal(checkMode(changed, 'same', 'same', undefined, context), 'full');
+  }
+});
+
+test('registration protocol repair rejects contract widening draft admission or detached hashes', () => {
+  const context = protocolRepairFixture(),
+    paths = [...registrationProtocolRepairPaths];
+  for (const override of [
+    { version: 2 },
+    { frozen: false },
+    { admission: 'DRAFT' },
+    { admission: { status: 'VERIFIED' } },
+    { scope: 'REGISTRATION_PROTOCOL_RESTORE' },
+    { name: 'other' },
+    { migration: 'new.sql' },
+    { businessActions: 1 },
+    { sourceBaseline: '0'.repeat(40) },
+    { sourceBaselineTree: '0'.repeat(40) },
+    { applicationPaths: [...context.contract.applicationPaths, 'apps/api/src/main.ts'] },
+    { expectedGitChanges: paths.slice(1) },
+    {
+      sources: {
+        ...context.contract.sources,
+        [registrationProtocolRepairApplications[0]]: 'b'.repeat(64)
+      }
+    },
+    {
+      validationSources: {
+        ...context.contract.validationSources,
+        'scripts/other.mjs': 'a'.repeat(64)
+      }
+    },
+    {
+      reviewedFileHashes: {
+        ...context.contract.reviewedFileHashes,
+        [registrationProtocolRepairContract]: 'a'.repeat(64)
+      }
+    },
+    { reviewedFileHashes: { ...context.contract.reviewedFileHashes, [paths[0]]: 'NOT_A_HASH' } }
+  ])
+    assert.equal(
+      isRegistrationProtocolRepairOnly(paths, {
+        ...context,
+        contract: { ...context.contract, ...override }
+      }),
+      false,
+      JSON.stringify(override)
+    );
+  const controls = registrationProtocolRepairCommands.guards;
+  for (const name of [
+    'admin-ui',
+    'v2-ui-language',
+    'v2-color-contrast',
+    'v2-table-standard',
+    'v2-loading-standard',
+    'v2-module-architecture',
+    'v2-isolation'
+  ]) {
+    assert.ok(controls.some((command) => command.join(' ') === 'npm run check:' + name));
+  }
+  assert.deepEqual(registrationProtocolRepairCommands['release-controls'], [controls[0]]);
+  assert.ok(
+    controls.some(
+      (command) =>
+        command.includes('scripts/ci-recharge-scope.test.mjs') &&
+        command.includes('scripts/ci-recharge-check.test.mjs')
+    )
+  );
+  assert.ok(controls.some((command) => command.includes('prettier')));
+  assert.ok(controls.some((command) => command.includes('eslint')));
+});
 
 test('registration protocol image-user repair selects guards only without ONLINE or candidate suites', () => {
   const prior = JSON.parse(

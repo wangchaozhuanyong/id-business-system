@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-/* global document, window */
+/* global document, window, getComputedStyle */
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
@@ -12,11 +12,23 @@ const root = fileURLToPath(new URL('..', import.meta.url));
 const worker = path.join(root, 'apps/api/src/id-business-v2/auto-registration/worker');
 const distribution = path.join(root, 'apps/admin/dist');
 const args = process.argv.slice(2);
-assert.ok(args.length <= 1 && args.every((arg) => arg.startsWith('--python=')));
-const python = args[0]?.slice(9) || path.join(root, '.runtime/auto-registration/venv/bin/python');
+assert.ok(
+  args.length <= 2 &&
+    args.every((arg) => arg.startsWith('--python=') || arg === '--protocol-repair') &&
+    new Set(args.map((arg) => arg.split('=')[0])).size === args.length
+);
+const protocolRepair = args.includes('--protocol-repair');
+const python =
+  args.find((arg) => arg.startsWith('--python='))?.slice(9) ||
+  path.join(root, '.runtime/auto-registration/venv/bin/python');
 assert.ok(path.isAbsolute(python) && existsSync(python));
 assert.ok(existsSync(path.join(distribution, 'index.html')), '请先构建管理端');
-const output = path.join(root, '.runtime/registration-parity-20261016/browser');
+const output = path.join(
+  root,
+  protocolRepair
+    ? '.runtime/registration-parity-20261016/protocol-repair-20261017/browser'
+    : '.runtime/registration-parity-20261016/browser'
+);
 mkdirSync(output, { recursive: true });
 const exported = spawnSync(
   python,
@@ -28,7 +40,7 @@ import json,re,socket,sqlite3,sys
 from pathlib import Path
 from unittest.mock import patch
 directory,project=map(Path,sys.argv[1:3]);sys.path.insert(0,str(directory))
-with patch.object(sqlite3,'connect',side_effect=AssertionError('database disabled')),patch.object(socket.socket,'connect',side_effect=AssertionError('network disabled')):
+with patch.object(sqlite3,'connect',side_effect=AssertionError('database disabled')),patch.object(socket.socket,'connect',side_effect=AssertionError('network disabled')),patch.object(socket.socket,'connect_ex',side_effect=AssertionError('network disabled')),patch.object(socket,'create_connection',side_effect=AssertionError('network disabled')),patch.object(socket,'getaddrinfo',side_effect=AssertionError('DNS disabled')):
  import workspace
  resources={'index.html':workspace.transform_asset((workspace.UPSTREAM_DIR/'templates/index.html').read_text(),html=True)}
  for name in ('app.js','utils.js'):
@@ -80,8 +92,91 @@ const details = (extra = {}) => ({
   pageShape: 'type_known',
   ...extra
 });
+const protocolEvidence = (phase) => {
+  const value = {
+    version: 3,
+    authorize: observation({
+      contentType: 'html',
+      jsonKind: 'not_checked',
+      pageKind: 'not_checked'
+    }),
+    sentinel: observation({
+      pageKind: 'not_checked',
+      sentinelDetails: {
+        tokenPresent: true,
+        proofOfWorkRequired: 'not_required',
+        turnstileRequired: 'not_required'
+      }
+    })
+  };
+  if (['v3_required', 'v3_missing_token', 'v3_invalid_challenge'].includes(phase)) {
+    value.sentinel.decision = 'rejected';
+    value.sentinel.reason =
+      phase === 'v3_required'
+        ? 'challenge_required'
+        : phase === 'v3_missing_token'
+          ? 'missing_token'
+          : 'challenge_invalid';
+    value.sentinel.sentinelDetails = {
+      tokenPresent: phase !== 'v3_missing_token',
+      proofOfWorkRequired:
+        phase === 'v3_required'
+          ? 'required'
+          : phase === 'v3_invalid_challenge'
+            ? 'invalid'
+            : 'not_required',
+      turnstileRequired: phase === 'v3_required' ? 'required' : 'missing'
+    };
+    return value;
+  }
+  value.signup = observation({ responseDetails: details({ pageTypeSha256: null }) });
+  if (phase === 'v3_unknown_page' || phase === 'v3_malicious') {
+    value.signup = observation({
+      pageKind: 'unknown',
+      decision: 'rejected',
+      reason: 'unexpected_page',
+      responseDetails: details({ pageShape: 'type_unknown', pageTypeSha256: 'b'.repeat(64) })
+    });
+    if (phase === 'v3_malicious') {
+      const secret = 'secret-fixture-body<script>window.rawFixtureExecuted=true</script>';
+      value.signup.reason = secret;
+      value.signup.rawUrl = 'https://secret-fixture-url.invalid/?token=secret-fixture-token';
+      value.signup.responseDetails = details({
+        pageShape: secret,
+        pageTypeSha256: secret,
+        errorSignal: secret,
+        errorShape: secret,
+        errorsShape: secret,
+        errorKind: secret,
+        body: secret
+      });
+      value.sentinel.sentinelDetails = {
+        tokenPresent: secret,
+        proofOfWorkRequired: secret,
+        turnstileRequired: secret,
+        token: secret
+      };
+    }
+    return value;
+  }
+  value.password = observation({
+    pageKind: 'missing',
+    decision: 'rejected',
+    reason: phase === 'v3_untrusted_password' ? 'untrusted_origin' : 'upstream_error',
+    officialOrigin: phase !== 'v3_untrusted_password',
+    responseDetails: details({
+      pageShape: 'missing',
+      pageTypeSha256: null,
+      errorSignal: 'error',
+      errorShape: 'object',
+      errorKind: 'account_creation_failed'
+    })
+  });
+  return value;
+};
 const evidence = (phase) => {
   if (phase === 'legacy') return undefined;
+  if (phase.startsWith('v3_')) return protocolEvidence(phase);
   let signup = observation({ responseDetails: details() });
   if (phase === 'invalid')
     signup = observation({
@@ -176,14 +271,23 @@ const task = (phase) => ({
   logs: ['合成原始失败记录'],
   record: {
     email: mailbox.email,
-    stage: phase === 'invalid' ? 'signup' : 'password',
+    stage: ['v3_required', 'v3_missing_token', 'v3_invalid_challenge'].includes(phase)
+      ? 'sentinel'
+      : phase === 'invalid' || ['v3_unknown_page', 'v3_malicious'].includes(phase)
+        ? 'signup'
+        : 'password',
     syncStatus: 'not_started',
     localSaveStatus: 'not_started',
     identityStatus: 'not_verified',
     firstFailure: {
-      stage: phase === 'invalid' ? 'signup' : 'password',
-      errorKind: phase === 'invalid' ? 'unknown' : 'account_creation_failed',
-      httpStatus: phase === 'invalid' ? 200 : 400,
+      stage: ['v3_required', 'v3_missing_token', 'v3_invalid_challenge'].includes(phase)
+        ? 'sentinel'
+        : phase === 'invalid' || ['v3_unknown_page', 'v3_malicious'].includes(phase)
+          ? 'signup'
+          : 'password',
+      errorKind:
+        phase === 'invalid' || phase.startsWith('v3_') ? 'unknown' : 'account_creation_failed',
+      httpStatus: phase === 'invalid' || phase.startsWith('v3_') ? 200 : 400,
       elapsedMs: 649,
       observedAt: stamp
     }
@@ -192,6 +296,7 @@ const task = (phase) => ({
 });
 const report = {
   status: 'RUNNING',
+  mode: protocolRepair ? 'PROTOCOL_REPAIR_V3' : 'PARITY_DIAGNOSTICS_V2',
   scope: 'ACTUAL_ADMIN_BUILD_AND_TRANSFORMED_IFRAME_WITH_SYNTHETIC_REQUESTS',
   databaseOpened: false,
   websiteStarted: false,
@@ -214,16 +319,29 @@ try {
   for (const surface of ['admin', 'iframe'])
     for (const theme of ['light', 'dark'])
       for (const width of [1440, 390])
-        for (const phase of [
-          'accepted',
-          'invalid',
-          'legacy',
-          'malicious',
-          'upstream_error',
-          'unknown_page',
-          'bad_page',
-          'old_v1'
-        ]) {
+        for (const phase of protocolRepair
+          ? [
+              'legacy',
+              'old_v1',
+              'accepted',
+              'v3_required',
+              'v3_missing_token',
+              'v3_invalid_challenge',
+              'v3_password_error',
+              'v3_untrusted_password',
+              'v3_unknown_page',
+              'v3_malicious'
+            ]
+          : [
+              'accepted',
+              'invalid',
+              'legacy',
+              'malicious',
+              'upstream_error',
+              'unknown_page',
+              'bad_page',
+              'old_v1'
+            ]) {
           const origin = `https://${surface}-flow.acceptance.invalid`;
           const context = await browser.newContext({
             viewport: { width, height: 1100 },
@@ -255,7 +373,7 @@ try {
               if (url.pathname === '/')
                 return route.fulfill({
                   contentType: 'text/html',
-                  body: `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head><body style="margin:0"><iframe id="workspace" title="自动注册工作区" style="display:block;width:100%;height:1080px;border:0" src="${prefix}/"></iframe><script>window.addEventListener('message',event=>{if(event.origin!==location.origin||event.source!==document.getElementById('workspace').contentWindow)return;let m=event.data;if(m?.type==='id-registration:ready')event.source.postMessage({type:'id-registration:state',theme:${JSON.stringify(theme)},tokens:{},draft:{'email-service':'apple_hidden','storage:appleTask':${JSON.stringify(JSON.stringify({ taskUuid }))}}},location.origin);if(m?.type==='id-registration:apple-request'){let data=m.action==='candidates'?{items:[],proxies:[]}:m.action==='task'?${JSON.stringify(task(phase))}:null;event.source.postMessage({type:'id-registration:apple-response',requestId:m.requestId,ok:data!==null,data,error:'离线验收禁止执行注册'},location.origin);}});</script></body></html>`
+                  body: `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head><body style="margin:0"><iframe id="workspace" title="自动注册工作区" style="display:block;width:100%;height:1080px;border:0" src="${prefix}/"></iframe><script>window.addEventListener('message',event=>{if(event.origin!==location.origin||event.source!==document.getElementById('workspace').contentWindow)return;let m=event.data;if(m?.type==='id-registration:ready')event.source.postMessage({type:'id-registration:state',theme:${JSON.stringify(theme)},tokens:{},draft:{'email-service':'apple_hidden','storage:appleTask':${JSON.stringify(JSON.stringify({ taskUuid }))}}},location.origin);if(m?.type==='id-registration:apple-request'){let data=m.action==='candidates'?{items:[],proxies:[]}:m.action==='task'?${JSON.stringify(task(phase)).replaceAll('<', '\\u003c')}:null;event.source.postMessage({type:'id-registration:apple-response',requestId:m.requestId,ok:data!==null,data,error:'离线验收禁止执行注册'},location.origin);}});</script></body></html>`
                 });
               if (url.pathname === `${prefix}/`)
                 return route.fulfill({ contentType: 'text/html', body: assets['index.html'] });
@@ -426,12 +544,41 @@ try {
             );
           else {
             await panel.waitFor({ state: 'visible' });
-            assert.equal(await panel.getByRole('listitem').count(), 3);
+            assert.equal(
+              await panel.getByRole('listitem').count(),
+              phase.startsWith('v3_') ? 4 : 3
+            );
             const text = await panel.innerText();
             for (const title of ['授权入口', '提交注册邮箱', '提交注册密码'])
               assert.ok(text.includes(title));
-            assert.ok(text.includes(phase === 'invalid' ? '已停止，等待核对' : '已确认继续'));
-            if (!['accepted', 'old_v1'].includes(phase)) assert.ok(text.includes('尚未观察'));
+            assert.ok(
+              text.includes(
+                phase === 'invalid' || phase.startsWith('v3_') ? '已停止，等待核对' : '已确认继续'
+              )
+            );
+            if (
+              !['accepted', 'old_v1', 'v3_password_error', 'v3_untrusted_password'].includes(phase)
+            )
+              assert.ok(text.includes('尚未观察'));
+            if (phase.startsWith('v3_')) assert.ok(text.includes('注册前置校验'));
+            if (phase === 'v3_required') {
+              for (const expected of [
+                '官网要求额外验证，当前流程已停止',
+                '官网验证凭据：已取得',
+                '交互验证：官网要求'
+              ])
+                assert.ok(text.includes(expected));
+            }
+            if (phase === 'v3_missing_token') assert.ok(text.includes('未取得官网验证凭据'));
+            if (phase === 'v3_invalid_challenge') assert.ok(text.includes('官网验证要求无法确认'));
+            if (phase === 'v3_password_error') {
+              assert.ok(text.includes('官网响应携带错误'));
+              assert.ok(text.includes('上游错误分类：拒绝创建账号'));
+              assert.ok(text.includes('此阶段未要求页面类型'));
+              assert.ok(!text.includes('页面结构异常'));
+            }
+            if (phase === 'v3_untrusted_password') assert.ok(text.includes('来源未通过校验'));
+            if (phase === 'v3_unknown_page') assert.ok(text.includes('未知页面标识摘要已记录'));
             if (phase === 'upstream_error') {
               assert.ok(text.includes('官网响应携带错误'));
               assert.ok(text.includes('上游错误分类：拒绝创建账号'));
@@ -442,6 +589,18 @@ try {
             if (phase === 'old_v1') assert.ok(!text.includes('单项错误结构'));
             assert.ok(!text.includes('secret-fixture-'), '恶意或秘密字符串不能进入诊断详情');
             assert.ok(!text.includes('a'.repeat(64)), '请求编号摘要不应直接展示');
+            assert.ok(!text.includes('b'.repeat(64)), '未知页面摘要不应直接展示');
+            if (protocolRepair) {
+              assert.ok(
+                !(await target.locator('body').innerText()).includes('secret-fixture-'),
+                '恶意资料不能泄漏到任务其他区域'
+              );
+              assert.equal(
+                await target.locator('body').evaluate(() => window.rawFixtureExecuted),
+                undefined,
+                '恶意正文不能执行'
+              );
+            }
             await panel.scrollIntoViewIfNeeded();
           }
           await page.evaluate(() =>
@@ -468,6 +627,37 @@ try {
             );
           assert.deepEqual(errors, []);
           const filename = `${surface}-${theme}-${width}-${phase}.png`;
+          const appearance =
+            protocolRepair && phase !== 'legacy'
+              ? await panel.evaluate((element) => ({
+                  theme: document.documentElement.dataset.v2Theme,
+                  textColor: getComputedStyle(element).color,
+                  bodyBackground: getComputedStyle(document.body).backgroundColor
+                }))
+              : undefined;
+          if (appearance) assert.equal(appearance.theme, theme, '实际详情主题应与验收主题一致');
+          const detailGeometry =
+            protocolRepair && phase !== 'legacy'
+              ? await panel.getByRole('listitem').evaluateAll((items) =>
+                  items.map((item) => {
+                    const box = item.getBoundingClientRect(),
+                      title = item.querySelector('strong').getBoundingClientRect(),
+                      detail = item.querySelector('p').getBoundingClientRect();
+                    return {
+                      leftDelta: Math.abs(title.left - detail.left),
+                      withinRow: title.left >= box.left - 1 && detail.right <= box.right + 1,
+                      ordered: detail.top >= title.bottom - 1
+                    };
+                  })
+                )
+              : undefined;
+          if (detailGeometry)
+            for (const item of detailGeometry) {
+              assert.ok(
+                item.leftDelta <= 1 && item.withinRow && item.ordered,
+                '阶段标题与说明应对齐且不重叠、不溢出'
+              );
+            }
           await page.screenshot({ path: path.join(output, filename), fullPage: true });
           const detail = phase === 'legacy' ? undefined : filename.replace('.png', '-detail.png');
           if (detail) await panel.screenshot({ path: path.join(output, detail) });
@@ -478,7 +668,9 @@ try {
             phase,
             screenshot: filename,
             detailScreenshot: detail,
-            geometry
+            geometry,
+            detailGeometry,
+            appearance
           });
           await context.close();
           activePage = undefined;
@@ -486,6 +678,23 @@ try {
   assert.deepEqual(report.externalRequests, []);
   assert.deepEqual(report.unexpectedRequests, []);
   assert.equal(report.realRegistrationStarts, 0);
+  if (protocolRepair)
+    for (const variant of report.variants.filter(
+      (row) => row.theme === 'light' && row.appearance
+    )) {
+      const dark = report.variants.find(
+        (row) =>
+          row.surface === variant.surface &&
+          row.width === variant.width &&
+          row.phase === variant.phase &&
+          row.theme === 'dark'
+      );
+      assert.ok(
+        dark.appearance.textColor !== variant.appearance.textColor ||
+          dark.appearance.bodyBackground !== variant.appearance.bodyBackground,
+        '深浅主题实际颜色应有区别'
+      );
+    }
   report.status = 'PASS';
 } catch (error) {
   report.status = 'FAIL';

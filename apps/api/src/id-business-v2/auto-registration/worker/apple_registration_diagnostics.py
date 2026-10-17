@@ -4,7 +4,7 @@ from functools import wraps
 import time
 from types import FunctionType, MethodType
 
-STAGES = {"queued", "signup", "password", "verification_code", "verification_validate",
+STAGES = {"queued", "sentinel", "signup", "password", "verification_code", "verification_validate",
           "create_account", "workspace", "select_workspace", "redirect", "oauth",
           "identity", "account_save", "sync"}
 ERROR_KINDS = {"http_rejected", "network_error", "unknown", "account_creation_failed", "user_exists"}
@@ -169,6 +169,7 @@ class RegistrationDiagnostics:
             "_init_session": ("queued", lambda result: not result),
             "_start_oauth": ("queued", lambda result: not result),
             "_get_device_id": ("queued", lambda result: not result),
+            "_check_sentinel": ("sentinel", lambda result: not result),
             "_submit_signup_form": ("signup", lambda result: not getattr(result, "success", True)),
             "_register_password": ("password", lambda result: not result[0]),
             "_send_verification_code": ("verification_code", lambda result: not result),
