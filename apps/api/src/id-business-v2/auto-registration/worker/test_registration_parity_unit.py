@@ -75,6 +75,9 @@ NAMESPACE = {"__name__": __name__, "Any": Any, "Callable": Callable, "Dict": Dic
     "observation": flow_evidence.observation, "observation_for_version": flow_evidence.observation_for_version,
     "validate_flow_evidence": flow_evidence.validate_flow_evidence,
     "validate_observation": flow_evidence.validate_observation, "RegistrationDiagnostics": diagnostics.RegistrationDiagnostics,
+    "EvidenceStorageError": diagnostics.EvidenceStorageError,
+    **{name: getattr(flow_evidence, name) for name in ("append_attempt", "attempt_evidence", "configuration_summary",
+       "device_cookie_presence", "new_flow_evidence", "response_admitted", "response_classification", "validate_configuration_summary")},
     "STAGES": diagnostics.STAGES, "ERROR_KINDS": diagnostics.ERROR_KINDS,
     "now": lambda: STAMP, "now_iso": lambda: STAMP, "PUBLIC_FIELDS": {"stage", "firstFailure", "lastHttpStatus"},
     "generate_random_user_info": lambda: {"name": "Differential Fixture", "birthdate": "1990-01-01"},
@@ -82,8 +85,8 @@ NAMESPACE = {"__name__": __name__, "Any": Any, "Callable": Callable, "Dict": Dic
     "cffi_requests": SimpleNamespace(RequestsError=type("FixtureRequestsError", (Exception,), {})),
     **CONSTANTS}
 source_definitions(HERE / "apple_closed_loop.py", {"ClosedLoopFacts": {"update_task", "password_checkpoint"}}, set(), NAMESPACE)
-source_definitions(HERE / "apple_mailboxes.py", {"RegistrationFacts": {"record_failure", "record_flow_evidence"},
-    "AppleMailboxIntegration": {"observe_engine", "guard_session"}},
+source_definitions(HERE / "apple_mailboxes.py", {"RegistrationFacts": {"record_failure", "record_flow_evidence", "record_configuration_summary"},
+    "AppleMailboxIntegration": {"observe_engine", "guard_session", "observe_flow_request"}},
     {"context_authorization_only", "confirms_account_creation"}, NAMESPACE)
 source_definitions(HERE.parent / "upstream/src/core/register.py", {"SignupFormResult": None, "RegistrationResult": None,
     "RegistrationEngine": {"run", "_init_session", "_get_device_id", "_check_sentinel", "_submit_signup_form",
@@ -398,8 +401,8 @@ class RegistrationParityTests(unittest.TestCase):
 
     def test_sentinel_observation_must_be_saved_before_signup(self):
         original = MemoryFacts.record_flow_evidence
-        def record(store, task, slot, evidence):
-            return False if slot == "sentinel" else original(store, task, slot, evidence)
+        def record(store, task, slot, evidence, **kwargs):
+            return False if slot == "sentinel" else original(store, task, slot, evidence, **kwargs)
         with patch.object(MemoryFacts, "record_flow_evidence", record):
             integrated = execute(True)
         self.assertEqual([item[1] for item in integrated.requests], [AUTHORIZE, ENDPOINTS["sentinel"]])

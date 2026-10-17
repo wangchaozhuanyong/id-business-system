@@ -254,7 +254,7 @@ class AppleMailboxTests(unittest.TestCase):
         self.assertTrue(self.store.record_flow_evidence(task_uuid, "signup", evidence))
         with self.sessions.get_db() as db:
             _, binding = self.store.task_data(db, task_uuid)
-        self.assertEqual(binding["flowEvidence"], {"version": 3, "signup": evidence})
+        self.assertEqual(binding["flowEvidence"], flow.append_attempt(flow.new_flow_evidence(), flow.attempt_evidence("signup", evidence)))
         self.assertEqual(binding["flowEvidence"]["signup"]["responseDetails"], {
             "errorSignal": "both", "errorShape": "object", "errorsShape": "list",
             "errorKind": "other", "pageShape": "type_known", "pageTypeSha256": None})
@@ -297,8 +297,7 @@ class AppleMailboxTests(unittest.TestCase):
         self.store.record_failure(task_uuid, "signup", "user_exists", 200, 999)
         with self.sessions.get_db() as db:
             _, binding = self.store.task_data(db, task_uuid)
-        self.assertEqual(binding["flowEvidence"], {"version": 1, "signup": old_signup,
-            "password": flow.observation_v1("password", password)})
+        self.assertEqual(binding["flowEvidence"], {"version": 1, "signup": old_signup})
         self.assertEqual(binding["firstFailure"], original_failure)
         self.assertEqual(self.read(), original_record)
         self.assertEqual(self.integration.task(task_uuid)["flowEvidence"], binding["flowEvidence"])
@@ -320,7 +319,7 @@ class AppleMailboxTests(unittest.TestCase):
         with sqlite3.connect(Path(self.runtime.name) / "database.db") as db:
             current_cipher = db.execute("SELECT value FROM settings WHERE key=?", (self.apple.TASK_PREFIX + task_uuid,)).fetchone()[0]
         self.assertEqual(current_cipher, original_cipher)
-        self.assertEqual(self.integration.task(task_uuid)["flowEvidence"], {"version": 3, "signup": evidence})
+        self.assertEqual(self.integration.task(task_uuid)["flowEvidence"], flow.append_attempt(flow.new_flow_evidence(), flow.attempt_evidence("signup", evidence)))
 
     def test_early_new_account_fact_survives_later_failure(self):
         context, _, _ = self.reservation()
@@ -1598,7 +1597,7 @@ class AppleMailboxTests(unittest.TestCase):
         third.close.assert_not_called()
         failure = self.read()["firstFailure"]
         self.assertEqual((failure["stage"], failure["errorKind"], failure["httpStatus"]),
-                         ("queued", "http_rejected", 403))
+                         ("authorize", "http_rejected", 403))
 
     def test_created_fact_survives_exact_oauth_failure_and_cannot_reregister(self):
         context, engine, _ = self.diagnostic_engine(response=self.diagnostic_response(200))

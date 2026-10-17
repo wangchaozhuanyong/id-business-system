@@ -469,7 +469,7 @@
           {{ appleMailboxSelectionLabel(page.taskQuery.data?.record) }}
         </p>
         <section v-if="flowEvidenceRows.length" class="v2-apple-field" aria-label="注册流程观察">
-          <strong>注册流程观察</strong>
+          <strong>{{ hasFlowTimeline ? '注册请求过程与配置核对' : '注册流程观察' }}</strong>
           <p>以下观察只说明请求处理经过，账号创建、身份核验和同步结果以上方记录为准。</p>
           <ol>
             <li v-for="row in flowEvidenceRows" :key="row.stage">
@@ -656,6 +656,7 @@ const page = reactive(useAppleMailboxes());
 const flowEvidenceRows = computed(() =>
   appleMailboxFlowEvidenceRows(page.taskQuery.data?.flowEvidence)
 );
+const hasFlowTimeline = computed(() => page.taskQuery.data?.flowEvidence?.version === 4);
 const ipInput = ref<{ focus: () => void }>();
 const noteInput = ref<{ focus: () => void }>();
 async function saveMark() {
