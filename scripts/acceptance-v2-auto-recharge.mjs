@@ -18,11 +18,10 @@ const evidence = resolve(
     '.runtime/bitbrowser-recharge-rebuild-20261009/browser'
 );
 mkdirSync(evidence, { recursive: true });
-let assets = resolve(adminDirectory, 'dist');
+const assets = resolve(adminDirectory, 'dist');
 if (!process.argv.includes('--built')) {
-  assets = resolve(evidence, 'compiled-admin');
   const { build } = await import('vite');
-  await build({ root: adminDirectory, build: { outDir: assets, emptyOutDir: true } });
+  await build({ root: adminDirectory });
 }
 const staticAsset = (route) => {
   const path = decodeURIComponent(new URL(route.request().url()).pathname);
