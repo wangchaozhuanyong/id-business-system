@@ -71,8 +71,19 @@ class PublicationTests(unittest.TestCase):
         return c, plan, proof, files
 
     def temporary(self):
-        # All transient files belong to the existing project evidence directory.
-        return tempfile.TemporaryDirectory(dir=ROOT / '.runtime/online-checkout-cs-fix-20261017')
+        # A fresh CI checkout has no ignored evidence directory yet.
+        parent = ROOT / '.runtime/online-checkout-cs-fix-20261017'
+        parent.mkdir(parents=True, exist_ok=True)
+        return tempfile.TemporaryDirectory(dir=parent)
+
+    def test_temporary_evidence_initializes_a_clean_project_checkout(self):
+        with self.temporary() as outer:
+            fresh = Path(outer) / 'fresh-checkout'
+            with patch.dict(self.temporary.__func__.__globals__, {'ROOT': fresh}):
+                with self.temporary() as directory:
+                    self.assertEqual(Path(directory).parent,
+                                     fresh / '.runtime/online-checkout-cs-fix-20261017')
+                    self.assertTrue(Path(directory).is_dir())
 
     def test_finite_contract_accepts_new_runtime_and_review_base_without_guessing_them(self):
         c = self.contract()
