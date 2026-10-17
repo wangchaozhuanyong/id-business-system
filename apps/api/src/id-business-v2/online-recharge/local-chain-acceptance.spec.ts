@@ -507,7 +507,11 @@ describe('本地后端链路验收（隔离存储，无官网、银行或数据�
     'visible-login',
     'login-redirect',
     'unconfirmed',
-    'challenge'
+    'challenge',
+    'transient-login',
+    'chat-guest-recover',
+    'permanent-guest',
+    'late-guest'
   ] as const)(
     '真实Chromium任务子进程与实际API服务图贯通：%s',
     async (scene) => {
@@ -536,7 +540,11 @@ describe('本地后端链路验收（隔离存储，无官网、银行或数据�
               | 'visible-login'
               | 'login-redirect'
               | 'unconfirmed'
-              | 'challenge';
+              | 'challenge'
+              | 'transient-login'
+              | 'chat-guest-recover'
+              | 'permanent-guest'
+              | 'late-guest';
             outputDir?: string;
             diagnosticDelay?: { stage: 'verify'; milliseconds: number };
             rpc: (method: string, args: Row) => Promise<unknown>;
@@ -556,7 +564,11 @@ describe('本地后端链路验收（隔离存储，无官网、银行或数据�
         'visible-login': 'standard',
         'login-redirect': 'standard',
         unconfirmed: 'standard',
-        challenge: 'standard'
+        challenge: 'standard',
+        'transient-login': 'standard',
+        'chat-guest-recover': 'standard',
+        'permanent-guest': 'standard',
+        'late-guest': 'standard'
       }[scene];
       const billingFields = {
         success: 'legacy-names',
@@ -569,21 +581,33 @@ describe('本地后端链路验收（隔离存储，无官网、银行或数据�
         'visible-login': 'standard',
         'login-redirect': 'standard',
         unconfirmed: 'standard',
-        challenge: 'standard'
+        challenge: 'standard',
+        'transient-login': 'standard',
+        'chat-guest-recover': 'standard',
+        'permanent-guest': 'standard',
+        'late-guest': 'standard'
       }[scene];
       const authUi = [
         'hidden-login',
         'visible-login',
         'login-redirect',
         'unconfirmed',
-        'challenge'
+        'challenge',
+        'transient-login',
+        'chat-guest-recover',
+        'permanent-guest',
+        'late-guest'
       ].includes(scene)
         ? (scene as
             | 'hidden-login'
             | 'visible-login'
             | 'login-redirect'
             | 'unconfirmed'
-            | 'challenge')
+            | 'challenge'
+            | 'transient-login'
+            | 'chat-guest-recover'
+            | 'permanent-guest'
+            | 'late-guest')
         : undefined;
       const actual = await harness.runSyntheticRecharge(
         ['prepared', 'refresh'].includes(scene) || authUi ? 'success' : scene,
@@ -625,7 +649,14 @@ describe('本地后端链路验收（隔离存储，无官网、银行或数据�
         }
       );
       expect(actual.failure).toBe('');
-      if (authUi && authUi !== 'hidden-login') {
+      if (
+        authUi === 'visible-login' ||
+        authUi === 'login-redirect' ||
+        authUi === 'unconfirmed' ||
+        authUi === 'challenge' ||
+        authUi === 'permanent-guest' ||
+        authUi === 'late-guest'
+      ) {
         const authConfirmation = actual.result.result.confirmation as Row | undefined;
         const authCode = actual.result.result.errorCode ?? authConfirmation?.queryErrorCode;
         const authDiagnostic =
@@ -640,7 +671,9 @@ describe('本地后端链路验收（隔离存储，无官网、银行或数据�
             'visible-login': 'visible_login_content',
             'login-redirect': 'login_redirect',
             unconfirmed: 'login_not_confirmed',
-            challenge: 'verification_failed'
+            challenge: 'verification_failed',
+            'permanent-guest': 'visible_login_controls',
+            'late-guest': 'visible_login_controls'
           }[authUi]
         });
         expect(actual.metrics).toMatchObject({
@@ -750,12 +783,21 @@ describe('本地后端链路验收（隔离存储，无官网、银行或数据�
         });
         expect(actual.metrics.refreshedBearerRequests).toBeGreaterThanOrEqual(2);
       }
-      if (scene === 'hidden-login') {
+      if (['hidden-login', 'transient-login', 'chat-guest-recover'].includes(scene)) {
         expect(actual.metrics).toMatchObject({
           authUi,
           authProbeIdentityResponses: 1,
           authRedirectDocuments: 0
         });
+        if (['transient-login', 'chat-guest-recover'].includes(scene)) {
+          expect(actual.metrics.authStateAtCheckoutCreation).toBe('recovered');
+          expect(actual.metrics.authStateTransitions).toEqual(
+            expect.arrayContaining([
+              expect.objectContaining({ phase: 'guest' }),
+              expect.objectContaining({ phase: 'recovered' })
+            ])
+          );
+        }
       }
       if (scene === 'prepared') {
         expect(actual.metrics).toMatchObject({
@@ -784,7 +826,16 @@ describe('本地后端链路验收（隔离存储，无官网、银行或数据�
           }
         });
       }
-      if (['readiness', 'prepared', 'refresh', 'hidden-login'].includes(scene))
+      if (
+        [
+          'readiness',
+          'prepared',
+          'refresh',
+          'hidden-login',
+          'transient-login',
+          'chat-guest-recover'
+        ].includes(scene)
+      )
         expect(actual.result.result).toMatchObject({
           success: true,
           confirmedPaid: true,
@@ -834,7 +885,16 @@ describe('本地后端链路验收（隔离存储，无官网、银行或数据�
         expect(f.row(claim)).toMatchObject({ status: 'succeeded', confirmedPaid: true });
         expect(f.storage.rows('onlineRechargeBill')).toHaveLength(1);
         expect(f.storage.rows('idBusinessV2BankRechargeOrder')).toHaveLength(1);
-        if (['readiness', 'prepared', 'refresh', 'hidden-login'].includes(scene)) {
+        if (
+          [
+            'readiness',
+            'prepared',
+            'refresh',
+            'hidden-login',
+            'transient-login',
+            'chat-guest-recover'
+          ].includes(scene)
+        ) {
           const bill = f.storage.rows('onlineRechargeBill')[0]!;
           expect(bill).toMatchObject({
             taskId: claim.id,

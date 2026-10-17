@@ -140,15 +140,26 @@ async function hasLoggedInChatUi(page) {
     return false;
 }
 
-/** 等待已登录 UI 出现（首页 hydration 可能较慢） */
-async function waitForLoggedInChatUi(page, timeoutMs = 15000) {
-    const deadline = Date.now() + timeoutMs;
-    while (Date.now() < deadline) {
-        if (await hasLoggedInChatUi(page)) {
-            return true;
-        }
-        await page.waitForTimeout(500);
+/** 等待首页 hydration 稳定；访客内容消失后连续两轮核实已登录 UI。 */
+async function waitForLoggedInChatUi(page, timeoutMs = 15000, options = {}) {
+    const deadline = Math.min(performance.now() + timeoutMs,
+        Number.isFinite(options.deadlineAt) ? options.deadlineAt : Infinity);
+    let stable = 0;
+    while (performance.now() < deadline) {
+        options.signal?.throwIfAborted();
+        if (await options.stopWhen?.()) return false;
+        const ready = !isLoginRedirectUrl(page.url())
+            && !await hasVisibleLoginChrome(page)
+            && !await isLoginPageContent(page)
+            && await hasLoggedInChatUi(page);
+        stable = ready ? stable + 1 : 0;
+        options.signal?.throwIfAborted();
+        if (stable >= 2 && performance.now() < deadline) return true;
+        const remaining = Math.min(500, Math.floor(deadline - performance.now()));
+        if (remaining <= 0) break;
+        await page.waitForTimeout(remaining);
     }
+    options.signal?.throwIfAborted();
     return false;
 }
 

@@ -191,6 +191,10 @@ function queryFixture({
   postReadbackAccount = accountId,
   unchangedAfterPost = false,
   loginAccountId,
+  verifiedCookie = false,
+  installedToken,
+  failedLoginPage,
+  onRead,
   onPost,
   connectBrowser
 } = {}) {
@@ -245,13 +249,20 @@ function queryFixture({
     }),
     installChatGptSession: async (context, raw) => {
       context.installed = raw;
-      return { sessionData: {} };
+      return {
+        sessionData: { ...(installedToken ? { accessToken: installedToken } : {}) },
+        cookieVerified: verifiedCookie
+      };
     },
+    safeBootstrapDiagnostics: require('../upstream/session-auth').safeBootstrapDiagnostics,
     bootstrapChatGptSession: async (page, _raw, options) => {
       effects.logins++;
       assert.equal(typeof options.deadlineAt, 'number');
       assert.notEqual(options.manualVerification, true);
-      if (loginFailure) throw loginFailure;
+      if (loginFailure) {
+        if (failedLoginPage) await page.goto(failedLoginPage);
+        throw loginFailure;
+      }
       await page.goto('https://chatgpt.com/');
       return { session: { accessToken: loginAccountId ? 'synthetic-refreshed-token' : token } };
     }
@@ -282,6 +293,7 @@ function queryFixture({
             assert.match(String(fn), /credentials: 'include'/);
             assert.ok(args.timeoutMs <= 10000);
             effects.requests.push({ context, page, args, transport: 'browser-page' });
+            await onRead?.(args);
             const nextFailure = failures.shift() || failure;
             if (nextFailure) throw nextFailure;
             return { status: statuses.shift() ?? 403, text: JSON.stringify(liveBody) };
@@ -739,6 +751,184 @@ test('browser verification failure retains its actual controlled code and closes
   assert.equal(f.effects.requests.length, 0);
 });
 
+for (const [status, responseBody, hasFacts, matches] of [
+  [401, { private: 'PRIVATE_ACCOUNT_DETAILS' }, false, false],
+  [403, '<h1>PRIVATE_ACCOUNT_DETAILS</h1>', false, false],
+  [200, account(true), true, true],
+  [200, account(true, 'another-account'), true, false],
+  [200, { private: 'PRIVATE_ACCOUNT_DETAILS' }, false, false]
+])
+  test(`unconfirmed independent login preserves failure after one same-page diagnostic GET: ${status}/${hasFacts}/${matches}`, async () => {
+    const f = queryFixture({
+      verifiedCookie: true,
+      failedLoginPage: 'https://chatgpt.com/',
+      statuses: [status],
+      responseBody,
+      loginFailure: Object.assign(new Error('PRIVATE_LOGIN_DETAILS'), {
+        code: 'SESSION_NOT_CONFIRMED',
+        bootstrapDiagnostics: {
+          reason: 'visible_login_controls',
+          authApiVerified: true,
+          visibleLogin: true
+        }
+      })
+    });
+    const result = await f.api.querySubscriptionBySession(token, {
+      sessionRaw: 'synthetic',
+      allowBrowserFallback: true
+    });
+    assert.equal(result.ok, false);
+    assert.equal(result.errorCode, 'SESSION_NOT_CONFIRMED');
+    assert.equal(result.bootstrapDiagnostics.accountCheckHttpStatus, status);
+    assert.equal(result.bootstrapDiagnostics.accountCheckHasAccountFacts, hasFacts);
+    assert.equal(result.bootstrapDiagnostics.accountCheckIdentityMatches, matches);
+    assert.equal(f.effects.requests.length, 1);
+    assert.equal(f.effects.requests[0].page, f.effects.preparedPages[0]);
+    assert.ok(
+      f.effects.requests[0].args.timeoutMs > 0 && f.effects.requests[0].args.timeoutMs <= 5000
+    );
+    assert.equal(f.effects.logins, 1);
+    assert.equal(f.effects.proxies.length, 1);
+    assert.equal(f.effects.contexts.length, 1);
+    assert.equal(f.browserContexts.length, 1);
+    assert.equal(f.effects.requests[0].context, f.browserContexts[0]);
+    assert.equal(f.effects.disposes, 0);
+    assert.equal(f.effects.posts.length + f.effects.guards.length, 0);
+    assert.equal(f.effects.closes, 1);
+    assert.equal(f.effects.pageCloses, 1);
+    assert.equal(f.effects.cleanups, 1);
+    assert.equal(JSON.stringify(result).includes('PRIVATE_'), false);
+  });
+
+test('unconfirmed login diagnostic does not retry a failed GET or expose transport details', async () => {
+  const f = queryFixture({
+    verifiedCookie: true,
+    failedLoginPage: 'https://chatgpt.com/',
+    failure: Object.assign(new Error('PRIVATE_TRANSPORT_DETAILS'), { code: 'ECONNRESET' }),
+    loginFailure: Object.assign(new Error('PRIVATE_LOGIN_DETAILS'), {
+      code: 'SESSION_NOT_CONFIRMED',
+      bootstrapDiagnostics: {
+        reason: 'visible_login_controls',
+        authApiVerified: true,
+        visibleLogin: true
+      }
+    })
+  });
+  const result = await f.api.querySubscriptionBySession(token, {
+    sessionRaw: 'synthetic',
+    allowBrowserFallback: true
+  });
+  assert.equal(result.errorCode, 'SESSION_NOT_CONFIRMED');
+  assert.equal(f.effects.requests.length, 1);
+  assert.equal(result.diagnostics[0].networkCode, 'ECONNRESET');
+  assert.equal(f.effects.posts.length + f.effects.guards.length, 0);
+  assert.equal(f.effects.closes, 1);
+  assert.equal(JSON.stringify(result).includes('PRIVATE_'), false);
+});
+
+test('unconfirmed login diagnostic rechecks a newly visible challenge before any GET', async () => {
+  const f = queryFixture({
+    verifiedCookie: true,
+    failedLoginPage: 'https://chatgpt.com/',
+    verificationResult: { cleared: false, code: 'VERIFICATION_TIMEOUT' },
+    loginFailure: Object.assign(new Error('private'), {
+      code: 'SESSION_NOT_CONFIRMED',
+      bootstrapDiagnostics: {
+        reason: 'visible_login_controls',
+        authApiVerified: true,
+        challengeDetected: false
+      }
+    })
+  });
+  const result = await f.api.querySubscriptionBySession(token, {
+    sessionRaw: 'synthetic',
+    allowBrowserFallback: true
+  });
+  assert.equal(result.errorCode, 'SESSION_NOT_CONFIRMED');
+  assert.equal(f.effects.requests.length, 0);
+  assert.equal(f.effects.posts.length + f.effects.guards.length, 0);
+  assert.equal(f.effects.closes, 1);
+});
+
+test('unconfirmed login diagnostic uses only the verified refreshed token on its original page', async () => {
+  const f = queryFixture({
+    verifiedCookie: true,
+    installedToken: 'synthetic-refreshed-token',
+    loginAccountId: accountId,
+    failedLoginPage: 'https://chatgpt.com/',
+    statuses: [200],
+    loginFailure: Object.assign(new Error('private'), {
+      code: 'SESSION_NOT_CONFIRMED',
+      bootstrapDiagnostics: { reason: 'visible_login_controls', authApiVerified: true }
+    })
+  });
+  const result = await f.api.querySubscriptionBySession(token, {
+    sessionRaw: 'synthetic',
+    allowBrowserFallback: true
+  });
+  assert.equal(result.errorCode, 'SESSION_NOT_CONFIRMED');
+  assert.equal(result.bootstrapDiagnostics.accountCheckIdentityMatches, true);
+  assert.equal(f.effects.requests.length, 1);
+  assert.equal(f.effects.requests[0].args.token, 'synthetic-refreshed-token');
+  assert.equal(f.effects.requests[0].page, f.effects.preparedPages[0]);
+  assert.equal(f.effects.posts.length + f.effects.guards.length, 0);
+});
+
+test('unconfirmed login diagnostic stops on lease cancellation and releases its original context', async () => {
+  const control = new AbortController();
+  const f = queryFixture({
+    verifiedCookie: true,
+    failedLoginPage: 'https://chatgpt.com/',
+    onRead: () => control.abort(),
+    loginFailure: Object.assign(new Error('private'), {
+      code: 'SESSION_NOT_CONFIRMED',
+      bootstrapDiagnostics: { reason: 'visible_login_controls', authApiVerified: true }
+    })
+  });
+  await assert.rejects(
+    f.api.querySubscriptionBySession(token, {
+      sessionRaw: 'synthetic',
+      allowBrowserFallback: true,
+      signal: control.signal
+    }),
+    { code: 'LEASE_LOST' }
+  );
+  assert.equal(f.effects.requests.length, 1);
+  assert.equal(f.effects.posts.length + f.effects.guards.length, 0);
+  assert.equal(f.effects.closes, 1);
+  assert.equal(f.effects.pageCloses, 1);
+  assert.equal(f.effects.cleanups, 1);
+});
+
+for (const [verifiedCookie, failedLoginPage, code, reason] of [
+  [false, 'https://chatgpt.com/', 'SESSION_NOT_CONFIRMED', 'visible_login_controls'],
+  [true, 'https://auth.openai.com/', 'SESSION_NOT_CONFIRMED', 'login_redirect'],
+  [true, 'https://chatgpt.com/', 'VERIFICATION_TIMEOUT', 'verification_failed'],
+  [true, 'https://chatgpt.com/', 'ACCOUNT_MISMATCH', 'runtime_failed']
+])
+  test(`unconfirmed login never starts a diagnostic outside the guarded same-page case: ${verifiedCookie}/${code}/${reason}`, async () => {
+    const f = queryFixture({
+      verifiedCookie,
+      failedLoginPage,
+      loginFailure: Object.assign(new Error('PRIVATE_LOGIN_DETAILS'), {
+        code,
+        bootstrapDiagnostics: {
+          reason,
+          authApiVerified: verifiedCookie,
+          challengeDetected: reason === 'verification_failed'
+        }
+      })
+    });
+    const result = await f.api.querySubscriptionBySession(token, {
+      sessionRaw: 'synthetic',
+      allowBrowserFallback: true
+    });
+    assert.equal(result.ok, false);
+    assert.equal(f.effects.requests.length, 0);
+    assert.equal(f.effects.closes, 1);
+    assert.equal(f.effects.posts.length + f.effects.guards.length, 0);
+  });
+
 test('sequential independent tasks get different contexts and never inherit previous cookies', async () => {
   const f = queryFixture({ statuses: [200, 200] });
   for (const sessionRaw of ['synthetic-A', 'synthetic-B'])
@@ -807,6 +997,90 @@ test('an aborted query stops before creating a context or making any request', a
   );
   assert.equal(f.effects.requests.length, 0);
   assert.equal(f.effects.contexts.length, 0);
+});
+
+test('real Chromium failed-login diagnostic reads once in its original authenticated context and cannot authorize success', async () => {
+  const { chromium } = require('../upstream/node_modules/playwright');
+  const browser = await chromium.launch({ headless: true });
+  try {
+    for (const status of [401, 200]) {
+      const seen = [];
+      let contexts = 0,
+        closed = 0;
+      const f = queryFixture({
+        verifiedCookie: true,
+        failedLoginPage: 'https://chatgpt.com/',
+        loginFailure: Object.assign(new Error('PRIVATE_LOGIN_DETAILS'), {
+          code: 'SESSION_NOT_CONFIRMED',
+          bootstrapDiagnostics: {
+            reason: 'visible_login_controls',
+            authApiVerified: true,
+            visibleLogin: true
+          }
+        }),
+        connectBrowser: async () => ({
+          browser: {
+            newContext: async (options) => {
+              contexts++;
+              assert.equal(options.proxy.server, 'http://task-proxy.invalid:8123');
+              const context = await browser.newContext();
+              await context.addCookies([
+                {
+                  name: 'fixture-session',
+                  value: 'same-diagnostic-context',
+                  domain: 'chatgpt.com',
+                  path: '/',
+                  secure: true
+                }
+              ]);
+              const close = context.close.bind(context);
+              context.close = async () => {
+                closed++;
+                await close();
+              };
+              await context.route('**/*', async (route) => {
+                const request = route.request();
+                assert.equal(request.method(), 'GET');
+                assert.equal(new URL(request.url()).origin, 'https://chatgpt.com');
+                if (request.url().includes('/backend-api/accounts/check/')) {
+                  seen.push({
+                    cookie: request.headers().cookie,
+                    bearer: request.headers().authorization
+                  });
+                  return route.fulfill({
+                    status,
+                    contentType: 'application/json',
+                    body: JSON.stringify({ ...account(true), private: 'PRIVATE_ACCOUNT_DETAILS' })
+                  });
+                }
+                return route.fulfill({ contentType: 'text/html', body: '<button>Log in</button>' });
+              });
+              return context;
+            }
+          }
+        })
+      });
+      const result = await f.api.querySubscriptionBySession(token, {
+        sessionRaw: 'synthetic',
+        allowBrowserFallback: true
+      });
+      assert.equal(result.ok, false);
+      assert.equal(result.errorCode, 'SESSION_NOT_CONFIRMED');
+      assert.equal(result.bootstrapDiagnostics.accountCheckHttpStatus, status);
+      assert.equal(result.bootstrapDiagnostics.accountCheckIdentityMatches, status === 200);
+      assert.equal(contexts, 1);
+      assert.equal(closed, 1);
+      assert.equal(seen.length, 1);
+      assert.equal(seen[0].cookie.includes('fixture-session=same-diagnostic-context'), true);
+      assert.equal(seen[0].bearer, `Bearer ${token}`);
+      assert.equal(f.effects.posts.length + f.effects.guards.length, 0);
+      assert.equal(f.effects.disposes, 0);
+      assert.equal(f.effects.proxies.length, 1);
+      assert.equal(JSON.stringify(result).includes('PRIVATE_'), false);
+    }
+  } finally {
+    await browser.close();
+  }
 });
 
 test('real Chromium subscription GET shares only its own context cookies and bypasses APIRequestContext', async () => {
