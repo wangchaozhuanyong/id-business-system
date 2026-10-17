@@ -1,11 +1,15 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { readFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { resolve, sep, isAbsolute, win32 } from 'node:path';
+import { runInNewContext } from 'node:vm';
 import { checkMode, selectedParts } from './ci-recharge-scope.mjs';
 import {
   onlineSettingsPaths,
   isOnlineSettingsOnly,
   isOnlineSettingsControlsOnly,
+  isOnlineSettingsTestsOnly,
   onlineSettingsCommands
 } from './ci-online-settings-scope.mjs';
 
@@ -303,5 +307,159 @@ test('unattended scope rejects auth, schema and unreviewed files even inside acc
   ]) {
     assert.equal(checkMode([...paths, extra], '', ''), 'full');
     assert.equal(checkMode([...unattendedControls, extra], '', ''), 'full');
+  }
+});
+
+const paymentObservationTestsOnly = [
+  'apps/api/src/id-business-v2/online-recharge/engine/test/payment-observation.test.cjs',
+  'apps/api/src/id-business-v2/online-recharge/engine/SOURCE_MANIFEST.json'
+];
+const paymentObservationCi = [
+  'scripts/ci-online-settings-scope.mjs',
+  'scripts/ci-online-settings-scope.test.mjs',
+  'scripts/ci-recharge-scope.mjs'
+];
+
+test('the exact supplemental test and manifest pair select only guards and online engine', () => {
+  for (let mask = 0; mask < 8; mask++) {
+    const paths = [
+      ...paymentObservationTestsOnly,
+      ...paymentObservationCi.filter((_, index) => mask & (1 << index))
+    ];
+    assert.equal(isOnlineSettingsTestsOnly(paths), true);
+    assert.equal(isOnlineSettingsOnly(paths), true);
+    assert.equal(isOnlineSettingsControlsOnly(paths), false);
+    assert.equal(checkMode(paths, '', ''), 'recharge');
+    assert.deepEqual(selectedParts(paths), ['guards', 'online-engine']);
+  }
+});
+
+test('supplemental test routing rejects missing inputs, duplicates and every adjacent change', () => {
+  const exact = [...paymentObservationTestsOnly, ...paymentObservationCi];
+  for (const paths of [
+    [paymentObservationTestsOnly[0]],
+    [paymentObservationTestsOnly[1]],
+    [paymentObservationTestsOnly[0], ...paymentObservationCi],
+    [paymentObservationTestsOnly[1], ...paymentObservationCi],
+    [...exact, paymentObservationTestsOnly[0]],
+    [...exact, paymentObservationCi[0]],
+    ...[
+      'apps/api/src/id-business-v2/online-recharge/engine/upstream/stripe-payment.js',
+      'apps/api/src/id-business-v2/online-recharge/engine/test/solver-process.test.cjs',
+      'apps/api/src/id-business-v2/online-recharge/persistence/tasks.repository.ts',
+      'apps/admin/src/v2/features/online-recharge/OnlineTaskProgress.vue',
+      'apps/api/src/auth/auth.service.ts',
+      'apps/api/prisma-mysql/schema.prisma',
+      'package.json',
+      'package-lock.json',
+      'docs/V2_TASKS.md',
+      'scripts/ci-recharge-check.mjs',
+      'scripts/ci-online-settings-unreviewed.mjs'
+    ].map((path) => [...exact, path])
+  ]) {
+    assert.equal(isOnlineSettingsTestsOnly(paths), false);
+    assert.equal(isOnlineSettingsOnly(paths), false);
+    assert.equal(checkMode(paths, '', ''), 'full');
+    assert.throws(() => onlineSettingsCommands('guards', paths));
+  }
+});
+
+test('supplemental test commands retain controls and source checks without UI, API or MySQL work', () => {
+  const paths = [...paymentObservationTestsOnly, ...paymentObservationCi];
+  const guards = onlineSettingsCommands('guards', paths);
+  const args = guards.flat();
+  for (const name of [
+    'prettier',
+    'eslint',
+    'scripts/ci-online-settings-scope.test.mjs',
+    'scripts/ci-recharge-scope.test.mjs',
+    'scripts/ci-recharge-check.test.mjs',
+    'scripts/ci-change-scope.test.mjs',
+    'check:v2-isolation'
+  ])
+    assert.ok(args.includes(name));
+  assert.equal(guards.filter((command) => command.includes('-e')).length, 1);
+  assert.ok(args.some((arg) => arg.includes('Online engine source fingerprints passed.')));
+  for (const name of [
+    'check:admin-ui',
+    'check:v2-ui-language',
+    'check:v2-color-contrast',
+    'check:v2-table-standard',
+    'check:v2-loading-standard',
+    'check:v2-module-architecture',
+    'test:online-recharge:controls',
+    '@apple-business/api',
+    '@apple-business/admin',
+    'prisma:mysql:generate',
+    'prisma:mysql:validate'
+  ])
+    assert.ok(!args.includes(name));
+  assert.ok(!guards.some((command) => command[0] === 'python3'));
+  assert.ok(
+    onlineSettingsCommands('online-engine', paths).flat().includes('test:online-recharge:engine')
+  );
+  for (const part of ['api', 'admin'])
+    assert.throws(() => onlineSettingsCommands(part, paths), /tests-only/);
+});
+
+test('the supplemental source command validates all hashes and retains the original upstream pin', () => {
+  const command = onlineSettingsCommands('guards', paymentObservationTestsOnly).find((args) =>
+    args.includes('-e')
+  );
+  assert.ok(command && command[0] === 'node' && command.includes('--input-type=module'));
+  const source = command.at(-1).replace(/^import .+;$/gm, '');
+  const root = resolve('apps/api/src/id-business-v2/online-recharge/engine');
+  const body = 'synthetic source\n';
+  const manifest = {
+    repository: 'https://github.com/nowtostudeyday/PAY-GPT-UPGRADE.git',
+    commit: 'ba6cf96312a6953e62edb9d74299d438d12549df',
+    files: [
+      {
+        path: 'test/synthetic.cjs',
+        adaptedSha256: createHash('sha256').update(body).digest('hex')
+      },
+      {
+        path: 'test/payment-observation.test.cjs',
+        adaptedSha256: createHash('sha256').update(body).digest('hex')
+      }
+    ]
+  };
+  const verify = (value) =>
+    runInNewContext(source, {
+      assert,
+      createHash,
+      resolve,
+      sep,
+      isAbsolute,
+      win32,
+      console: { log() {} },
+      readFileSync(file) {
+        if (file === resolve(root, 'SOURCE_MANIFEST.json')) return JSON.stringify(value);
+        assert.ok(
+          ['test/synthetic.cjs', 'test/payment-observation.test.cjs'].some(
+            (path) => file === resolve(root, path)
+          )
+        );
+        return body;
+      }
+    });
+  assert.doesNotThrow(() => verify(manifest));
+  for (const change of [
+    (copy) => (copy.files[0].adaptedSha256 = 'a'.repeat(64)),
+    (copy) => delete copy.files[0].adaptedSha256,
+    (copy) => (copy.files[0].path = '/outside/source.cjs'),
+    (copy) => (copy.files[0].path = 'C:\\outside\\source.cjs'),
+    (copy) => (copy.files[0].path = 'test/../synthetic.cjs'),
+    (copy) => (copy.files[0].path = '..\\synthetic.cjs'),
+    (copy) => copy.files.push({ ...copy.files[0] }),
+    (copy) => (copy.files = []),
+    (copy) =>
+      (copy.files = copy.files.filter((row) => row.path !== 'test/payment-observation.test.cjs')),
+    (copy) => (copy.commit = 'a'.repeat(40)),
+    (copy) => (copy.repository = 'https://synthetic.invalid/other.git')
+  ]) {
+    const copy = structuredClone(manifest);
+    change(copy);
+    assert.throws(() => verify(copy));
   }
 });

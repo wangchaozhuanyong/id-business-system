@@ -171,7 +171,23 @@ const unattendedRequired = [
   'persistence/worker-rpc.repository.ts',
   'engine/upstream/human-verification.js'
 ].map((name) => 'apps/api/src/id-business-v2/online-recharge/' + name);
+const testsOnlyRequired = ['test/payment-observation.test.cjs', 'SOURCE_MANIFEST.json'].map(
+  (name) => 'apps/api/src/id-business-v2/online-recharge/engine/' + name
+);
+const testsOnlyControls = [
+  'scripts/ci-online-settings-scope.mjs',
+  'scripts/ci-online-settings-scope.test.mjs',
+  'scripts/ci-recharge-scope.mjs'
+];
+export function isOnlineSettingsTestsOnly(paths) {
+  return (
+    new Set(paths).size === paths.length &&
+    testsOnlyRequired.every((path) => paths.includes(path)) &&
+    paths.every((path) => testsOnlyRequired.includes(path) || testsOnlyControls.includes(path))
+  );
+}
 export function isOnlineSettingsOnly(paths) {
+  if (isOnlineSettingsTestsOnly(paths)) return true;
   const databaseTest = 'apps/api/src/id-business-v2/online-recharge/mysql.integration.spec.ts';
   const fixtureRepair =
     paths.includes(databaseTest) &&
@@ -211,6 +227,7 @@ export function isOnlineSettingsControlsOnly(paths) {
 export const onlineSettingsParts = Object.freeze(['guards', 'api', 'admin', 'online-engine']);
 export function onlineSettingsCommands(part, paths) {
   const controlsOnly = isOnlineSettingsControlsOnly(paths);
+  const testsOnly = isOnlineSettingsTestsOnly(paths);
   if (!isOnlineSettingsOnly(paths) && !controlsOnly)
     throw new Error('Unsupported online settings scope');
   const npm = (...args) => ['npm', ...args];
@@ -222,7 +239,7 @@ export function onlineSettingsCommands(part, paths) {
     const linted = paths.filter(
       (path) => /\.(?:mjs|cjs|ts|vue)$/.test(path) && !path.includes('/engine/upstream/')
     );
-    return [
+    const controls = [
       ...(formatted.length ? [npm('exec', '--', 'prettier', '--check', ...formatted)] : []),
       ...(linted.length ? [npm('exec', '--', 'eslint', ...linted)] : []),
       [
@@ -232,7 +249,42 @@ export function onlineSettingsCommands(part, paths) {
         'scripts/ci-recharge-scope.test.mjs',
         'scripts/ci-recharge-check.test.mjs',
         'scripts/ci-change-scope.test.mjs'
-      ],
+      ]
+    ];
+    if (testsOnly)
+      return [
+        ...controls,
+        npm('run', 'check:v2-isolation'),
+        [
+          'node',
+          '--input-type=module',
+          '-e',
+          [
+            "import assert from 'node:assert/strict';",
+            "import { readFileSync } from 'node:fs';",
+            "import { createHash } from 'node:crypto';",
+            "import { resolve, sep, isAbsolute, win32 } from 'node:path';",
+            "const root = resolve('apps/api/src/id-business-v2/online-recharge/engine');",
+            "const manifest = JSON.parse(readFileSync(resolve(root, 'SOURCE_MANIFEST.json'), 'utf8'));",
+            "assert.equal(manifest.repository, 'https://github.com/nowtostudeyday/PAY-GPT-UPGRADE.git');",
+            "assert.equal(manifest.commit, 'ba6cf96312a6953e62edb9d74299d438d12549df');",
+            'const rows = manifest.files;',
+            'assert.ok(Array.isArray(rows) && rows.length > 0);',
+            "assert.ok(rows.some(row => row.path === 'test/payment-observation.test.cjs'));",
+            'assert.equal(new Set(rows.map(row => row.path)).size, rows.length);',
+            'for (const row of rows) {',
+            "  assert.ok(typeof row.path === 'string' && row.path.length > 0 && !isAbsolute(row.path) && !win32.isAbsolute(row.path));",
+            "  assert.ok(row.path.split(/[\\\\/]/).every(part => part && part !== '.' && part !== '..'));",
+            '  const file = resolve(root, row.path);',
+            '  assert.ok(file.startsWith(root + sep) && /^[a-f0-9]{64}$/.test(row.adaptedSha256));',
+            "  assert.equal(createHash('sha256').update(readFileSync(file)).digest('hex'), row.adaptedSha256, row.path);",
+            '}',
+            "console.log('Online engine source fingerprints passed.');"
+          ].join('\n')
+        ]
+      ];
+    return [
+      ...controls,
       ['python3', '-B', 'scripts/production-release/online-settings-release.test.py'],
       ['python3', '-B', 'scripts/production-release/online-unattended-release.test.py'],
       ...(paths.some((path) => path.includes('online-checkout-'))
@@ -270,6 +322,7 @@ export function onlineSettingsCommands(part, paths) {
     ];
   }
   if (controlsOnly) throw new Error('Unsupported controls-only check');
+  if (testsOnly && ['api', 'admin'].includes(part)) throw new Error('Unsupported tests-only check');
   const shared = npm('run', 'build', '--workspace', '@apple-business/shared');
   if (part === 'api')
     return [
