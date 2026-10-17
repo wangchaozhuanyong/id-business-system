@@ -508,14 +508,16 @@ test('real-page screenshots require masks and never fall back to raw capture', a
   process.env.ONLINE_RECHARGE_MEDIA_DIR = dir;
   process.env.ONLINE_RECHARGE_FFMPEG_PATH = '/nonexistent/synthetic-ffmpeg';
   let options;
+  let captureCalls = 0;
   const page = {
-    evaluate: async () => {},
+    evaluate: async (callback) => (String(callback).includes('document.fonts') ? true : undefined),
     locator: (selector) => {
       assert.match(selector, /cc-number/);
       assert.doesNotMatch(selector, /input,textarea|iframe/);
       return { selector };
     },
     screenshot: async (input) => {
+      captureCalls++;
       options = input;
       return Buffer.from('synthetic-redacted-image');
     }
@@ -529,11 +531,13 @@ test('real-page screenshots require masks and never fall back to raw capture', a
   await media.start();
   const failure = {
     ...page,
-    evaluate: async () => {
+    evaluate: async (callback) => {
+      if (String(callback).includes('document.fonts')) return true;
       throw new Error('synthetic page unavailable');
     }
   };
-  await assert.rejects(() => media.screenshot(failure));
+  assert.equal(await media.screenshot(failure), null);
+  assert.equal(captureCalls, 1, 'failed masking must never produce another raw or masked image');
   assert.deepEqual(await media.finish(), []);
   await fs.rm(dir, { recursive: true, force: true });
   delete process.env.ONLINE_RECHARGE_MEDIA_DIR;

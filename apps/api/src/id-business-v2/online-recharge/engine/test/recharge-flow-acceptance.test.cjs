@@ -146,7 +146,7 @@ function strictRpcFixture(task) {
 // Reusable by the API service-graph acceptance: raw RPC arguments travel only
 // over this child IPC boundary into the supplied handler and are never logged.
 async function runSyntheticRecharge(scene, options = {}) {
-  assert.ok(['success', 'recover', 'unknown'].includes(scene));
+  assert.ok(['success', 'recover', 'unknown', 'readiness'].includes(scene));
   if (options.diagnosticDelay) {
     assert.ok(['verify', 'verifyCard'].includes(options.diagnosticDelay.stage));
     assert.ok(Number.isFinite(options.diagnosticDelay.milliseconds));
@@ -191,7 +191,8 @@ async function runSyntheticRecharge(scene, options = {}) {
     failure = '',
     output = '';
   const actions = [],
-    logs = [];
+    logs = [],
+    progress = [];
   const timeout = setTimeout(() => child.kill('SIGKILL'), 45000);
   child.stdout.on('data', (data) => {
     output += data;
@@ -233,6 +234,7 @@ async function runSyntheticRecharge(scene, options = {}) {
     } else if (message.type === 'result') result = message;
     else if (message.type === 'log') logs.push(message.log);
     else if (message.type === 'fixture_report') report = message.report;
+    else if (message.type === 'fixture_progress') progress.push(message.projection);
     else if (message.type === 'fixture_error') failure = message.code;
   });
   child.send({ type: 'fixture_start', task, diagnosticDelay: options.diagnosticDelay });
@@ -247,6 +249,7 @@ async function runSyntheticRecharge(scene, options = {}) {
     exit,
     result,
     metrics: report,
+    ...(progress.length ? { progress } : {}),
     actions,
     failure,
     boundaries: [
@@ -276,7 +279,8 @@ async function runSyntheticRecharge(scene, options = {}) {
 }
 
 function checkoutHtml(checkoutId, scene) {
-  return `<!doctype html><html><body><h1>Configure your plan</h1><p>Due today PHP 8919.64</p>
+  return `<!doctype html><html><head>${scene === 'readiness' ? '<script type="module" src="/fixture-checkout-pending-module.js"></script>' : ''}</head><body><h1>Configure your plan</h1><p>Due today PHP 8919.64</p>
+    ${scene === 'readiness' ? '<section hidden><iframe src="https://challenges.cloudflare.com/fixture-hidden-residue" style="width:300px;height:90px"></iframe></section>' : ''}
     <div id="fixture-verification-overlay">One more step before you are done. Select the checkbox below.</div>
     <iframe id="fixture-verification" style="width:300px;height:90px" src="https://newassets.hcaptcha.com/captcha/v1/fixture/static/hcaptcha.html?kind=checkbox#frame=checkbox"></iframe>
     <iframe style="width:900px;height:190px" src="https://js.stripe.com/fixture-card?session=${checkoutId}"></iframe>
@@ -289,7 +293,8 @@ function checkoutHtml(checkoutId, scene) {
       <input autocomplete="billing postal-code">
     </section><label><input name="terms" type="checkbox">I agree</label><button type="submit">Subscribe</button>
     <div id="outcome"></div><script>
-      window.actualClicks=0; window.cardReady=false;
+      window.actualClicks=0; window.cardReady=false; window.fixtureCheckoutDomContentLoaded=0;
+      addEventListener('DOMContentLoaded',()=>window.fixtureCheckoutDomContentLoaded++);
       addEventListener('message',event=>{if(event.origin==='https://js.stripe.com'&&event.data?.type==='fixture-card-ready')window.cardReady=event.data.ready;});
       addEventListener('message',event=>{if(event.origin==='https://newassets.hcaptcha.com'&&event.data==='fixture-verified'){
         document.querySelector('#fixture-verification').hidden=true;
@@ -302,7 +307,9 @@ function checkoutHtml(checkoutId, scene) {
         const response=await fetch('/backend-api/payments/checkout/confirm',{method:'POST',
           headers:{'Content-Type':'application/json',Authorization:'Bearer '+window.__CHATGPT_BOOTSTRAP_SESSION__.accessToken},
           body:JSON.stringify({checkout_session_id:'${checkoutId}',actualClicks:window.actualClicks,
-            trustedClick:event.isTrusted,cardReady:window.cardReady,billingReady,terms:document.querySelector('[name=terms]').checked})});
+            trustedClick:event.isTrusted,cardReady:window.cardReady,billingReady,terms:document.querySelector('[name=terms]').checked,
+            domContentLoaded:window.fixtureCheckoutDomContentLoaded,documentReadyState:document.readyState,
+            hiddenCloudflareResidue:Boolean(document.querySelector('section[hidden] iframe[src*="challenges.cloudflare.com"]'))})});
         await response.json();
         document.querySelector('#outcome').textContent=${JSON.stringify(
           scene === 'unknown'
@@ -320,6 +327,8 @@ async function fixtureChild(scene, task, diagnosticDelay) {
     loginCookieVerified: 0,
     checkoutCreations: 0,
     checkoutDocuments: 0,
+    checkoutDomContentLoaded: 0,
+    pendingModuleRequests: 0,
     initializations: 0,
     actualPaymentClicks: 0,
     trustedPaymentClicks: 0,
@@ -400,11 +409,14 @@ async function fixtureChild(scene, task, diagnosticDelay) {
     }
     metrics.formReadFailures.push(failure);
   }
-  let delayedRead = false;
+  let delayedRead = false,
+    activeFormStage = null;
   for (const stage of ['verify', 'verifyCard', 'fillCard', 'fillBilling']) {
     const original = form[stage];
     form[stage] = async (...args) => {
       let restore;
+      const priorStage = activeFormStage;
+      activeFormStage = stage;
       if (!delayedRead && diagnosticDelay?.stage === stage) {
         const frame = args[0]
           .frames()
@@ -479,6 +491,7 @@ async function fixtureChild(scene, task, diagnosticDelay) {
         throw error;
       } finally {
         restore?.();
+        activeFormStage = priorStage;
       }
     };
   }
@@ -486,6 +499,109 @@ async function fixtureChild(scene, task, diagnosticDelay) {
     activeContext,
     browser,
     requestId = 0;
+  let releasePendingModule;
+  const pendingModule = new Promise((resolve) => {
+    releasePendingModule = resolve;
+  });
+  const startedAt = Date.now();
+  const progress = (stage, extra = {}) => {
+    if (scene === 'readiness')
+      process.send({
+        type: 'fixture_progress',
+        projection: { stage, elapsedMs: Date.now() - startedAt, metrics: { ...metrics }, ...extra }
+      });
+  };
+  const tracedHandles = new WeakSet();
+  const traceBrowserRead = async (operation, frame, action) => {
+    const started = Date.now();
+    const readStage = activeFormStage || 'opening';
+    try {
+      return await action();
+    } finally {
+      if (Date.now() - started >= 200)
+        progress('slow-browser-read', {
+          operation,
+          readStage,
+          frameKind:
+            frame.parentFrame() === null
+              ? 'main'
+              : frame.url().includes('stripe.com')
+                ? 'card'
+                : frame.url().includes('hcaptcha.com')
+                  ? 'captcha'
+                  : 'other',
+          durationMs: Date.now() - started
+        });
+    }
+  };
+  const traceHandle = (frame, handle) => {
+    if (!handle || tracedHandles.has(handle)) return handle;
+    tracedHandles.add(handle);
+    const evaluate = handle.evaluate.bind(handle);
+    handle.evaluate = (...args) =>
+      traceBrowserRead('element_evaluate', frame, () => evaluate(...args));
+    return handle;
+  };
+  const traceFrame = (frame) => {
+    const evaluate = frame.evaluate.bind(frame);
+    frame.evaluate = (...args) =>
+      traceBrowserRead('frame_evaluate', frame, () => evaluate(...args));
+    const frameElement = frame.frameElement.bind(frame);
+    frame.frameElement = async (...args) =>
+      traceHandle(
+        frame,
+        await traceBrowserRead('frame_element', frame, () => frameElement(...args))
+      );
+    const locator = frame.locator.bind(frame);
+    frame.locator = (...args) => {
+      const found = locator(...args);
+      const elementHandles = found.elementHandles.bind(found);
+      found.elementHandles = async (...args) =>
+        (await elementHandles(...args)).map((handle) => traceHandle(frame, handle));
+      return found;
+    };
+  };
+  if (scene === 'readiness') {
+    for (const stage of ['checkoutPageLoadFailed', 'inspectCardReadiness']) {
+      const read = form[stage];
+      form[stage] = async (...args) => {
+        const started = Date.now();
+        progress('checkout-read-start', { operation: stage });
+        try {
+          const result = await read(...args);
+          progress('checkout-read-settled', {
+            operation: stage,
+            durationMs: Date.now() - started,
+            ...(typeof result === 'boolean'
+              ? { visibleLoadFailed: result }
+              : {
+                  ready: result.ready,
+                  code: result.code,
+                  inspection: safeInspection(result.inspection)
+                })
+          });
+          return result;
+        } catch (error) {
+          progress('checkout-read-failed', {
+            operation: stage,
+            durationMs: Date.now() - started,
+            code: /^CHECKOUT_[A-Z_]+$/.test(error.code || '') ? error.code : 'READ_FAILED'
+          });
+          throw error;
+        }
+      };
+    }
+    const media = require('../safe-media.cjs');
+    const finish = media.finish;
+    media.finish = async (...args) => {
+      progress('media-finish-start');
+      try {
+        return await finish(...args);
+      } finally {
+        progress('media-finish-settled');
+      }
+    };
+  }
   const pending = new Map();
   const receive = (message) => {
     if (message.type !== 'fixture_rpc_response') return;
@@ -584,6 +700,28 @@ async function fixtureChild(scene, task, diagnosticDelay) {
             : checkoutHtml(checkoutId, scene)
       });
     }
+    if (
+      scene === 'readiness' &&
+      req.method() === 'GET' &&
+      url.origin === origin &&
+      url.pathname === '/fixture-checkout-pending-module.js'
+    ) {
+      metrics.pendingModuleRequests++;
+      await pendingModule;
+      return route
+        .fulfill({ contentType: 'application/javascript', body: 'export {};' })
+        .catch(() => {});
+    }
+    if (
+      scene === 'readiness' &&
+      req.method() === 'GET' &&
+      url.hostname === 'challenges.cloudflare.com' &&
+      url.pathname === '/fixture-hidden-residue'
+    )
+      return route.fulfill({
+        contentType: 'text/html',
+        body: '<div role="checkbox" aria-checked="false" style="width:220px;height:40px">Cloudflare. Verify you are human.</div>'
+      });
     if (req.method() === 'GET' && url.hostname === 'newassets.hcaptcha.com')
       return route.fulfill({
         contentType: 'text/html',
@@ -646,12 +784,26 @@ async function fixtureChild(scene, task, diagnosticDelay) {
       assert.equal(body.billingReady, true);
       assert.equal(body.terms, true);
       assert.equal(rpc.wasSubmitted(), true);
+      if (scene === 'readiness') {
+        assert.equal(metrics.pendingModuleRequests, 1);
+        assert.equal(metrics.checkoutDomContentLoaded, 0);
+        assert.equal(body.domContentLoaded, 0);
+        assert.equal(body.documentReadyState, 'interactive');
+        assert.equal(body.hiddenCloudflareResidue, true);
+        metrics.readinessProof = {
+          domContentLoadedAtPayment: metrics.checkoutDomContentLoaded,
+          pageDomContentLoadedAtPayment: body.domContentLoaded,
+          documentReadyStateAtPayment: body.documentReadyState,
+          hiddenCloudflareResidueAtPayment: body.hiddenCloudflareResidue
+        };
+      }
       metrics.paymentRequests++;
       metrics.actualPaymentClicks = body.actualClicks;
       metrics.trustedPaymentClicks++;
       metrics.cardReadBack = body.cardReady;
       metrics.billingReadBack = body.billingReady;
       assert.equal(metrics.paymentRequests, 1);
+      progress('actual-payment-request');
       if (scene === 'unknown') {
         await assert.rejects(
           rpc.beforeExternalSubmit({ stage: 'payment_submit' }),
@@ -729,14 +881,53 @@ async function fixtureChild(scene, task, diagnosticDelay) {
         '--host-resolver-rules=MAP * ~NOTFOUND, EXCLUDE localhost'
       ]
     });
+    const closeBrowser = browser.close.bind(browser);
+    browser.close = async (...args) => {
+      progress('browser-close-start');
+      try {
+        return await closeBrowser(...args);
+      } finally {
+        progress('browser-close-settled');
+      }
+    };
     const nativeContext = browser.newContext.bind(browser);
     browser.newContext = async (options) => {
       const context = await nativeContext({ ...options, serviceWorkers: 'block' });
+      const closeContext = context.close.bind(context);
+      context.close = async (...args) => {
+        progress('context-close-start');
+        try {
+          return await closeContext(...args);
+        } finally {
+          progress('context-close-settled');
+        }
+      };
       activeContext = context;
       const nativePage = context.newPage.bind(context);
       context.newPage = async () => {
         const page = await nativePage();
         await page.route('**/*', handle);
+        page.on('domcontentloaded', () => {
+          if (page.url() === checkoutUrl) metrics.checkoutDomContentLoaded++;
+        });
+        if (scene === 'readiness') {
+          traceFrame(page.mainFrame());
+          page.on('frameattached', (frame) => traceFrame(frame));
+          const capture = page.screenshot.bind(page);
+          page.screenshot = async (...args) => {
+            progress('native-screenshot-start');
+            try {
+              const image = await capture(...args);
+              progress('native-screenshot-completed');
+              return image;
+            } catch (error) {
+              progress('native-screenshot-failed', {
+                failure: error.name === 'TimeoutError' ? 'timeout' : 'capture_failed'
+              });
+              throw error;
+            }
+          };
+        }
         return page;
       };
       if (context.routeWebSocket) await context.routeWebSocket('**/*', (socket) => socket.close());
@@ -752,13 +943,16 @@ async function fixtureChild(scene, task, diagnosticDelay) {
     };
   };
   try {
+    progress('task-runner-start');
     await require('../task-runner.cjs').runTask(task);
+    progress('task-runner-returned');
     process.send({ type: 'fixture_report', report: metrics });
   } finally {
     process.removeListener('message', receive);
     for (const entry of pending.values()) entry.reject(new Error('Synthetic task finished'));
     pending.clear();
     await browser?.close();
+    releasePendingModule();
   }
 }
 
@@ -783,6 +977,7 @@ if (process.env.RECHARGE_FLOW_FIXTURE_CHILD === '1') {
     ['success', {}, 'success'],
     ['recover', {}, 'recover'],
     ['unknown', {}, 'unknown'],
+    ['readiness', {}, 'readiness'],
     [
       'success',
       { diagnosticDelay: { stage: 'verify', milliseconds: 350 } },
@@ -823,6 +1018,19 @@ if (process.env.RECHARGE_FLOW_FIXTURE_CHILD === '1') {
         assert.equal(metrics.checkboxClicks, 1);
         assert.equal(metrics.checkboxCleared, true);
         assert.deepEqual(metrics.formReadFailures, []);
+        if (scene === 'readiness') {
+          assert.equal(metrics.checkoutDomContentLoaded, 0);
+          assert.equal(metrics.pendingModuleRequests, 1);
+          assert.deepEqual(metrics.readinessProof, {
+            domContentLoadedAtPayment: 0,
+            pageDomContentLoadedAtPayment: 0,
+            documentReadyStateAtPayment: 'interactive',
+            hiddenCloudflareResidueAtPayment: true
+          });
+          assert.equal(actual.result.result.paymentEvidence.amount, '8919.64');
+          assert.equal(actual.result.result.paymentEvidence.currency, 'PHP');
+          assert.equal(actual.result.result.confirmation.observedCanonicalPlan, 'pro_20x');
+        }
         if (fixtureOptions.diagnosticDelay) {
           assert.deepEqual(metrics.injectedReadDelay, {
             stage: fixtureOptions.diagnosticDelay.stage,

@@ -38,6 +38,7 @@ async function fixture(t, options = {}) {
     accepted.push({ method: request.method(), url: request.url() });
     if (request.isNavigationRequest() && request.url() === url) {
       loads += 1;
+      if (loads > 1) await options.onReloadRequested?.();
       if (loads > 1 && options.delay) await pause(options.delay);
       if (loads > 1) options.onReload?.();
       if (loads > 1 && options.redirect)
@@ -748,14 +749,69 @@ test('expired deadlines and pre-aborted leases never start a reload', async (t) 
   assert.equal(f.loads(), 1);
 });
 
+for (const stop of ['lease', 'deadline', 'incomplete']) {
+  test(`an ${stop} load probe cannot start a reload and preserves its controlled failure`, async (t) => {
+    const f = await fixture(t);
+    const controller = new AbortController();
+    const frame = f.page.mainFrame(),
+      getByText = frame.getByText;
+    let entered,
+      reads = 0;
+    const reading = new Promise((resolve) => (entered = resolve));
+    frame.getByText = function (text, ...options) {
+      const result = getByText.call(this, text, ...options);
+      if (text === 'Content failed to load')
+        result.count = () => {
+          reads++;
+          entered();
+          return new Promise(() => {});
+        };
+      return result;
+    };
+    t.after(() => {
+      frame.getByText = getByText;
+    });
+    const pending = recovery.reloadOriginalCheckout(
+      f.page,
+      scope({
+        signal: controller.signal,
+        deadlineAt: performance.now() + (stop === 'deadline' ? 250 : 3000)
+      })
+    );
+    const rejected = assert.rejects(pending, {
+      code:
+        stop === 'lease'
+          ? 'LEASE_LOST'
+          : stop === 'deadline'
+            ? 'CHECKOUT_RELOAD_TIMEOUT'
+            : 'CHECKOUT_RELOAD_FAILED'
+    });
+    await Promise.race([reading, pending]);
+    if (stop === 'lease') controller.abort();
+    await rejected;
+    assert.equal(reads, stop === 'incomplete' ? 2 : 1);
+    assert.equal(f.loads(), 1);
+    assert.equal(
+      recovery.originalCheckoutReloadDiagnostics(f.page).code,
+      'CHECKOUT_RELOAD_NOT_ATTEMPTED'
+    );
+  });
+}
+
 for (const stop of ['lease', 'deadline']) {
   test(`${stop} loss keeps real late page scripts protected after the reload promise has failed`, async (t) => {
     const controller = new AbortController();
     const checkoutId = 'cs_test_lateReload' + stop;
     const attempted = writes(checkoutId);
+    let onReloadRequested, deadlineAt;
+    const reloadAccepted = new Promise((resolve) => (onReloadRequested = resolve));
     const f = await fixture(t, {
       checkoutId,
-      delay: 250,
+      onReloadRequested: async () => {
+        onReloadRequested();
+        if (stop === 'deadline') await pause(Math.max(0, deadlineAt - performance.now()) + 100);
+      },
+      delay: stop === 'lease' ? 250 : 0,
       formHtml: formHtml.replace(
         '</body>',
         `<script>
@@ -766,16 +822,20 @@ for (const stop of ['lease', 'deadline']) {
     });
     const options = scope({
       signal: controller.signal,
-      deadlineAt: performance.now() + (stop === 'deadline' ? 120 : 3000)
+      deadlineAt: performance.now() + 3000
     });
+    deadlineAt = options.deadlineAt;
     const pending = recovery.reloadOriginalCheckout(f.page, options);
-    if (stop === 'lease') setTimeout(() => controller.abort(), 100);
-    await assert.rejects(pending, {
+    const rejected = assert.rejects(pending, {
       code: stop === 'lease' ? 'LEASE_LOST' : 'CHECKOUT_RELOAD_TIMEOUT'
     });
+    // Cancellation must follow the accepted second navigation, not guard setup.
+    await Promise.race([reloadAccepted, pending]);
+    if (stop === 'lease') controller.abort();
+    await rejected;
     // The browser may still finish the already accepted navigation after cancellation.
     // Its real POST attempts must continue to hit our retained page guard.
-    await f.page.waitForFunction(() => window.attemptedWrites > 0, { timeout: 2000 });
+    await f.page.waitForFunction(() => window.attemptedWrites > 0, null, { timeout: 2000 });
     await f.page.evaluate(() => window.lateWrites);
     assert.equal(await f.page.evaluate(() => window.attemptedWrites), attempted.length);
     assert.equal(acceptedWrites(f).length, 0);

@@ -533,6 +533,8 @@ function checkoutServiceFixture(options = {}) {
           buildCaptchaRequiredError: () => 'Synthetic verification not ready'
         };
       if (name === '../checkout-recovery.cjs') return recovery;
+      if (name === './verification-runtime') return require('../upstream/verification-runtime');
+      if (name === '../rpc.cjs') return require('../rpc.cjs');
       throw new Error('Unexpected fixture import ' + name);
     }
   });
@@ -783,7 +785,7 @@ test('the official hosted opener defers strict card readiness until payment-meth
         }
       }
     }),
-    goto: async () => {},
+    goto: async () => ({ status: () => 200 }),
     waitForLoadState: async () => {},
     waitForTimeout: async () => {},
     title: async () => 'Synthetic page',
@@ -829,7 +831,7 @@ for (const code of [
           }
         }
       }),
-      goto: async () => {},
+      goto: async () => ({ status: () => 200 }),
       waitForLoadState: async () => {},
       waitForTimeout: async () => {},
       title: async () => 'Synthetic page',
@@ -871,6 +873,7 @@ for (const failure of ['navigation timeout', 'login gate', 'page verification'])
         openedUrl = url;
         if (failure === 'navigation timeout')
           throw Object.assign(new Error('Synthetic navigation timeout'), { name: 'TimeoutError' });
+        return { status: () => 200 };
       },
       waitForLoadState: async () => {},
       waitForTimeout: async () => {},
@@ -888,6 +891,143 @@ for (const failure of ['navigation timeout', 'login gate', 'page verification'])
     assert.deepEqual(recovery.officialCheckoutForPage(page), embeddedSource);
   });
 }
+
+function publicCheckoutFailure(error, submitted = false, confirmed = false) {
+  const source = fs.readFileSync(path.join(__dirname, '../upstream/index.js'), 'utf8');
+  const start = source.indexOf('        // 用 exitCode');
+  const end = source.indexOf('\n    } finally {', start);
+  assert.ok(start > 0 && end > start);
+  const Service = checkoutServiceFixture();
+  const result = runInNewContext('(function(){' + source.slice(start, end) + '})()', {
+    e: error,
+    lastPaymentResult: null,
+    paymentSucceeded: false,
+    wasSubmitted: () => submitted,
+    require(name) {
+      if (name === './chatgpt') return Service;
+      if (name === '../rpc.cjs') return { wasPaymentConfirmed: () => confirmed };
+      throw new Error('Unexpected result projection import');
+    }
+  });
+  return require('../security.cjs').sanitizeResult(result);
+}
+
+test('public failure retains only controlled checkout stage diagnostics and keeps payment uncertainty', () => {
+  const error = {
+    code: 'CHECKOUT_OPEN_FAILED',
+    checkoutCreationState: 'accepted',
+    message: 'PRIVATE_SENTINEL https://private.invalid/token',
+    checkoutOpenDiagnostics: {
+      stage: 'navigation',
+      reason: 'http_error',
+      httpStatus: 503,
+      url: 'https://private.invalid/token',
+      token: 'PRIVATE_SENTINEL'
+    }
+  };
+  const result = publicCheckoutFailure(error, true);
+  assert.deepEqual(JSON.parse(JSON.stringify(result.checkoutOpenDiagnostics)), {
+    stage: 'navigation',
+    reason: 'http_error',
+    httpStatus: 503
+  });
+  assert.equal(result.errorCode, 'CHECKOUT_OPEN_FAILED');
+  assert.equal(result.success, false);
+  assert.equal(result.resultUnknown, true);
+  assert.match(result.error, /支付页面导航收到异常响应/);
+  assert.doesNotMatch(JSON.stringify(result), /PRIVATE_SENTINEL|private\.invalid|token/);
+});
+
+test('accepted checkout form failure reaches the public result without arbitrary diagnostic text', () => {
+  const result = publicCheckoutFailure({
+    code: 'CHECKOUT_FORM_NOT_READY',
+    checkoutCreationState: 'accepted',
+    checkoutOpenDiagnostics: { stage: 'readiness', reason: 'not_ready', httpStatus: 200 }
+  });
+  assert.equal(result.resultUnknown, false);
+  assert.equal(result.errorCode, 'CHECKOUT_OPEN_FAILED');
+  assert.deepEqual(JSON.parse(JSON.stringify(result.checkoutOpenDiagnostics)), {
+    stage: 'readiness',
+    reason: 'not_ready'
+  });
+  assert.match(result.error, /支付控件检查尚未就绪/);
+  for (const diagnostics of [
+    { stage: 'PRIVATE_SENTINEL', reason: 'timeout' },
+    { stage: 'navigation', reason: 'PRIVATE_SENTINEL' },
+    { stage: 'navigation', reason: { value: 'timeout' } }
+  ]) {
+    const rejected = publicCheckoutFailure({
+      code: 'CHECKOUT_OPEN_FAILED',
+      checkoutOpenDiagnostics: diagnostics
+    });
+    assert.equal(rejected.checkoutOpenDiagnostics, undefined);
+    assert.doesNotMatch(JSON.stringify(rejected), /PRIVATE_SENTINEL/);
+  }
+});
+
+for (const diagnostics of [undefined, { stage: 'PRIVATE_SENTINEL', reason: 'timeout' }]) {
+  test(`checkout failure with ${diagnostics ? 'invalid' : 'missing'} diagnostics cannot claim no payment after submission`, () => {
+    for (const code of [
+      'CHECKOUT_RECOVERY_INVALID',
+      'CHECKOUT_RECOVERY_UNSUPPORTED',
+      'CHECKOUT_CREATION_UNKNOWN',
+      'CHECKOUT_CREATION_REJECTED',
+      'CHECKOUT_OPEN_FAILED'
+    ]) {
+      for (const state of [
+        [true, false],
+        [false, true]
+      ]) {
+        const result = publicCheckoutFailure(
+          { code, checkoutCreationState: 'accepted', checkoutOpenDiagnostics: diagnostics },
+          ...state
+        );
+        assert.equal(result.resultUnknown, true);
+        assert.equal(result.success, false);
+        assert.match(result.error, /付款结果待核对/);
+        assert.doesNotMatch(result.error, /未提交付款|未.*提交付款|未.*提交支付|PRIVATE_SENTINEL/);
+      }
+    }
+  });
+}
+
+test('an unfinished checkout page close goes directly to task context cleanup before diagnostics or lease propagation', async () => {
+  const source = fs.readFileSync(path.join(__dirname, '../upstream/index.js'), 'utf8');
+  const start = source.indexOf('    } catch (e) {\n        if (e.checkoutOpenCleanupFailed');
+  const end = source.indexOf('\n    } finally {', start);
+  assert.ok(start > 0 && end > start);
+  for (const code of ['CHECKOUT_OPEN_FAILED', 'LEASE_LOST']) {
+    const calls = [];
+    const Service = checkoutServiceFixture();
+    const pending = runInNewContext(
+      '(async function(){' + source.slice(start + '    } catch (e) {'.length, end) + '})()',
+      {
+        e: { code, checkoutOpenCleanupFailed: true },
+        page: {},
+        context: { close: async () => calls.push('context-close') },
+        taskSignal: () => undefined,
+        console: { error: () => {} },
+        captureDebugScreenshot: async () => {
+          calls.push('screenshot');
+          throw new Error('No screenshot may delay cleanup');
+        },
+        lastPaymentResult: null,
+        paymentSucceeded: false,
+        wasSubmitted: () => false,
+        require(name) {
+          if (name === './human-verification')
+            return { disposeVerificationPage: () => calls.push('dispose') };
+          if (name === './chatgpt') return Service;
+          if (name === '../rpc.cjs') return { wasPaymentConfirmed: () => false };
+          throw new Error('Unexpected cleanup import');
+        }
+      }
+    );
+    if (code === 'LEASE_LOST') await assert.rejects(pending, { code });
+    else assert.equal((await pending).success, false);
+    assert.deepEqual(calls, ['dispose', 'context-close']);
+  }
+});
 
 for (const status of ['network unknown', 400, 500]) {
   test(`a sent checkout POST with ${status} does not trigger another UI creation`, async () => {

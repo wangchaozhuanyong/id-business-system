@@ -13,14 +13,14 @@ HERE = Path(__file__).resolve().parent
 SCOPE = 'ONLINE_CHECKOUT_LOAD_RECOVERY'
 CONTRACT_FILE = 'online-checkout-load-contract.json'
 ENGINE = 'apps/api/src/id-business-v2/online-recharge/engine'
+SOURCE_BASE = 'a0e633a610ff67400cc2fa8bd2926148a2479ecd'
 FILES = frozenset(('SOURCE_MANIFEST.json', 'checkout-form.cjs', 'checkout-recovery.cjs',
-    'rpc.cjs', 'upstream/chatgpt.js', 'upstream/human-verification.js', 'upstream/stripe-payment.js',
+    'safe-media.cjs', 'upstream/chatgpt.js', 'upstream/human-verification.js', 'upstream/index.js',
     'test/checkout-form.test.cjs', 'test/checkout-recovery.test.cjs', 'test/verification-state.test.cjs',
-    'test/rpc-response.test.cjs',
-    'test/checkout-load-recovery.test.cjs', 'test/checkout-page-loading.test.cjs',
-    'test/recharge-flow-acceptance.test.cjs'))
-ADDED = frozenset(('test/checkout-load-recovery.test.cjs', 'test/checkout-page-loading.test.cjs',
-    'test/recharge-flow-acceptance.test.cjs'))
+    'test/checkout-load-recovery.test.cjs', 'test/checkout-navigation.test.cjs',
+    'test/recharge-flow-acceptance.test.cjs', 'test/regressions.test.cjs',
+    'test/safe-media-finish.test.cjs'))
+ADDED = frozenset(('test/checkout-navigation.test.cjs',))
 VALIDATION = frozenset(('apps/api/src/id-business-v2/online-recharge/local-chain-acceptance.spec.ts',
     'docs/ONLINE_RECHARGE.md', 'docs/V2_TASKS.md'))
 PRESERVED = ('api', 'admin', 'mysql', 'caddy', 'media-resolver', 'auto-recharge', 'auto-registration')
@@ -68,7 +68,7 @@ def inventory_valid(value):
 def validate_contract(c, *, require_baseline=True):
     need(c.get('version') == 1 and c.get('scope') == SCOPE and c.get('engineRoot') == ENGINE,
          'CONTRACT_IDENTITY_INVALID')
-    need(re.fullmatch('[a-f0-9]{40}', c.get('sourceBaseCommit', '')) is not None,
+    need(c.get('sourceBaseCommit') == SOURCE_BASE,
          'SOURCE_BASE_INVALID')
     need(set(c.get('runtimeSources', {})) == {ENGINE + '/' + name for name in FILES}
          and set(c.get('validationSources', {})) == VALIDATION

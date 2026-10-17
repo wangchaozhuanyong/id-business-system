@@ -1,5 +1,5 @@
 'use strict';
-/* global document */
+/* global document, window */
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -43,6 +43,7 @@ function human(
         return { ...platform, isCaptchaPlatformEnabled: () => false };
       if (name === './verification-runtime') return runtime;
       if (name === './auth-page-detect') return require('../upstream/auth-page-detect');
+      if (name === '../checkout-form.cjs') return require('../checkout-form.cjs');
       throw Error(name);
     },
     URL,
@@ -93,6 +94,23 @@ async function fixture(t, { image = false, hiddenChallenge = false, duplicate = 
   return page;
 }
 
+function assertUnreadyCheckoutInspection(result) {
+  assert.equal(result.cleared, false);
+  assert.equal(result.checkoutNotReady, true);
+  assert.equal(result.captchaRequired, false);
+  assert.deepEqual(Array.from(result.missing), ['number']);
+  assert.ok(result.inspection, 'the failure must carry actual field inspection evidence');
+  if (result.inspection.complete) {
+    assert.equal(result.inspection.timedOut, false);
+    assert.equal(result.code, 'CHECKOUT_FORM_NOT_READY');
+  } else {
+    // A final read may meet its real deadline under load. Do not relabel an
+    // incomplete inspection as a confirmed absence of payment controls.
+    assert.equal(result.inspection.timedOut, true);
+    assert.equal(result.code, 'CHECKOUT_FORM_TIMEOUT');
+  }
+}
+
 test('checkbox-only instructions are never image prompts', () => {
   for (const instruction of [
     'Select the checkbox below.',
@@ -105,6 +123,256 @@ test('checkbox-only instructions are never image prompts', () => {
   assert.equal(runtime.isImagePrompt('Please select all squares'), true);
   assert.equal(runtime.isImagePrompt('Please try again. Skip EN'), false);
 });
+
+const cloudflareUrl = 'https://challenges.cloudflare.com/turnstile/v0/synthetic/expired';
+async function cloudflareFixture(
+  t,
+  markup,
+  pageUrl = 'https://chatgpt.com/checkout/openai_llc/cs_test_visibleCf'
+) {
+  const context = await browser.newContext({ serviceWorkers: 'block' });
+  t.after(() => context.close());
+  await context.route('**/*', (route) => {
+    const url = new URL(route.request().url());
+    if (url.hostname === 'challenges.cloudflare.com')
+      return route.fulfill({
+        contentType: 'text/html',
+        body: '<div role="checkbox" aria-checked="false" tabindex="0" style="width:220px;height:40px">Verify you are human</div>'
+      });
+    if (url.hostname !== 'chatgpt.com') return route.abort();
+    return route.fulfill({
+      contentType: 'text/html',
+      body:
+        '<h1>Configure your plan</h1><p>Due today PHP 9990</p><input autocomplete="cc-number"><input autocomplete="cc-exp"><input autocomplete="cc-csc"><button id="subscribe">Subscribe</button>' +
+        markup +
+        '<script>window.paymentClicks=0;document.querySelector("#subscribe").onclick=()=>window.paymentClicks++;</script>'
+    });
+  });
+  if (context.routeWebSocket) await context.routeWebSocket('**/*', (socket) => socket.close());
+  const page = await context.newPage();
+  await page.goto(pageUrl);
+  await page.waitForTimeout(50);
+  t.after(() => runtime.disposeVerificationPage(page));
+  return page;
+}
+
+for (const [name, markup] of [
+  ['hidden stale Cloudflare iframe', `<iframe hidden src="${cloudflareUrl}"></iframe>`],
+  [
+    'hidden ancestor of an expired iframe',
+    `<section style="display:none"><iframe src="${cloudflareUrl}?expired=1"></iframe></section>`
+  ],
+  [
+    'opacity-zero stale iframe',
+    `<iframe style="opacity:0;width:300px;height:90px" src="${cloudflareUrl}"></iframe>`
+  ],
+  [
+    'aria-hidden ancestor of a stale iframe',
+    `<section aria-hidden="true"><iframe src="${cloudflareUrl}"></iframe></section>`
+  ],
+  [
+    'inert ancestor of a stale iframe',
+    `<section inert><iframe src="${cloudflareUrl}"></iframe></section>`
+  ],
+  ['zero-size Turnstile placeholder', '<div class="cf-turnstile"></div>'],
+  [
+    'visible empty Turnstile placeholder',
+    '<div class="cf-turnstile" style="width:300px;height:90px"></div>'
+  ],
+  [
+    'hidden challenge text',
+    '<div hidden id="challenge-running">Verify you are human. Cloudflare.</div>'
+  ],
+  [
+    'opacity-zero challenge text',
+    '<section style="opacity:0"><div id="challenge-stage">One more step. Select the checkbox below. Cloudflare.</div></section>'
+  ],
+  [
+    'aria-hidden challenge text',
+    '<section aria-hidden="true"><div id="turnstile-stale">I am human. Cloudflare.</div></section>'
+  ]
+]) {
+  test(`${name} does not block the internal precheck before real checkout readiness`, async (t) => {
+    const page = await cloudflareFixture(t, markup);
+    const actual = human();
+    assert.equal(await actual.isCheckoutPaymentReady(page), true);
+    assert.equal((await runtime.inspectCaptchaFrames(page)).length, 0);
+    assert.equal(await actual.hasAnyCheckoutCaptchaSignal(page), false);
+    assert.equal(await actual.isBlockingHumanVerificationVisible(page), false);
+    assert.equal(await actual.isCloudflareWallPage(page), false);
+    // The production loop explicitly uses false before it inspects real card controls.
+    // Do not let the helper's default ready-control shortcut mask a stale DOM block.
+    assert.equal(await actual.isVerificationCleared(page, { requireCheckoutReady: false }), true);
+    const result = await actual.clearHumanVerification(page, {
+      requireCheckoutReady: true,
+      maxWaitMs: 3000
+    });
+    assert.equal(result.cleared, true, JSON.stringify(result));
+    assert.equal(await page.evaluate(() => window.paymentClicks), 0);
+  });
+}
+for (const [name, markup] of [
+  [
+    'visible Cloudflare iframe',
+    `<iframe style="width:300px;height:90px" src="${cloudflareUrl}"></iframe>`
+  ],
+  [
+    'visible full-page Cloudflare instruction',
+    '<section id="challenge-stage">Cloudflare. Verify you are human.</section>'
+  ],
+  [
+    'visible interactive Turnstile',
+    '<section class="cf-turnstile"><div role="checkbox" aria-checked="false" style="width:220px;height:40px">I am human</div></section>'
+  ]
+]) {
+  test(`${name} still blocks even with real checkout controls behind it`, async (t) => {
+    const page = await cloudflareFixture(t, markup);
+    const actual = human();
+    assert.equal(await actual.isCheckoutPaymentReady(page), true);
+    assert.equal(await actual.isBlockingHumanVerificationVisible(page), true);
+    assert.equal(await actual.isCloudflareWallPage(page), true);
+    assert.equal(await actual.isVerificationCleared(page, { requireCheckoutReady: false }), false);
+    assert.equal(await actual.isVerificationCleared(page, { requireCheckoutReady: true }), false);
+    const result = await actual.clearHumanVerification(page, {
+      requireCheckoutReady: true,
+      maxWaitMs: 1200
+    });
+    assert.equal(result.cleared, false);
+    assert.equal(await page.evaluate(() => window.paymentClicks), 0);
+  });
+}
+
+test('ignoring a hidden Cloudflare residue still requires real checkout fields before clearing', async (t) => {
+  const page = await cloudflareFixture(t, `<iframe hidden src="${cloudflareUrl}"></iframe>`);
+  await page.locator('input').evaluateAll((nodes) => nodes.forEach((node) => node.remove()));
+  const actual = human();
+  assert.equal(await actual.isVerificationCleared(page, { requireCheckoutReady: false }), true);
+  assert.equal(await actual.isCheckoutPaymentReady(page), false);
+  const result = await actual.clearHumanVerification(page, {
+    requireCheckoutReady: true,
+    maxWaitMs: 8000,
+    checkoutReadyWaitMs: 4000
+  });
+  assertUnreadyCheckoutInspection(result);
+  assert.equal(await page.evaluate(() => window.paymentClicks), 0);
+  t.diagnostic(
+    JSON.stringify({
+      code: result.code,
+      inspectionComplete: result.inspection.complete,
+      timedOut: result.inspection.timedOut,
+      captchaRequired: result.captchaRequired,
+      paymentClicks: 0
+    })
+  );
+});
+
+test('an expired checkout-read deadline reports incomplete inspection without inventing a captcha or readiness', async (t) => {
+  const page = await cloudflareFixture(t, `<iframe hidden src="${cloudflareUrl}"></iframe>`);
+  await page.locator('input').evaluateAll((nodes) => nodes.forEach((node) => node.remove()));
+  const actual = human();
+  assert.equal(await actual.isVerificationCleared(page, { requireCheckoutReady: false }), true);
+  const result = await actual.clearHumanVerification(page, {
+    requireCheckoutReady: true,
+    maxWaitMs: 8000,
+    checkoutReadyWaitMs: 1
+  });
+  assert.equal(result.cleared, false);
+  assert.equal(result.checkoutNotReady, true);
+  assert.equal(result.captchaRequired, false);
+  assert.equal(result.code, 'CHECKOUT_FORM_TIMEOUT');
+  assert.equal(result.inspection.complete, false);
+  assert.equal(result.inspection.timedOut, true);
+  assert.deepEqual(Array.from(result.missing), ['number']);
+  assert.equal(await page.evaluate(() => window.paymentClicks), 0);
+  t.diagnostic(
+    JSON.stringify({
+      code: result.code,
+      inspectionComplete: result.inspection.complete,
+      timedOut: result.inspection.timedOut,
+      captchaRequired: result.captchaRequired,
+      paymentClicks: 0
+    })
+  );
+});
+
+for (const mount of [
+  '<div class="cf-turnstile" role="checkbox" aria-checked="false" tabindex="0" style="width:220px;height:40px"></div>',
+  '<input id="challenge-stage" type="checkbox" aria-label="Security checkbox">'
+]) {
+  test(`a Cloudflare mount that is itself the unchecked control stays blocked: ${mount.startsWith('<input') ? 'input' : 'role'}`, async (t) => {
+    const page = await cloudflareFixture(t, mount);
+    const actual = human();
+    assert.equal(await actual.isCheckoutPaymentReady(page), true);
+    assert.equal(await actual.isBlockingHumanVerificationVisible(page), true);
+    assert.equal(await actual.isCloudflareWallPage(page), true);
+    assert.equal(await actual.isVerificationCleared(page, { requireCheckoutReady: false }), false);
+    const result = await actual.clearHumanVerification(page, {
+      requireCheckoutReady: true,
+      maxWaitMs: 800
+    });
+    assert.equal(result.cleared, false);
+    assert.equal(await page.evaluate(() => window.paymentClicks), 0);
+  });
+}
+
+test('a checked Cloudflare mount without challenge text does not become an unchecked control', async (t) => {
+  const page = await cloudflareFixture(
+    t,
+    '<div class="cf-turnstile" role="checkbox" aria-checked="true" style="width:220px;height:40px"></div>'
+  );
+  const actual = human();
+  assert.equal(await actual.isCloudflareWallPage(page), false);
+  assert.equal(await actual.isVerificationCleared(page, { requireCheckoutReady: false }), true);
+  assert.equal(
+    (await actual.clearHumanVerification(page, { requireCheckoutReady: true, maxWaitMs: 2000 }))
+      .cleared,
+    true
+  );
+  assert.equal(await page.evaluate(() => window.paymentClicks), 0);
+});
+
+for (const pageUrl of [
+  'https://chatgpt.com/?redirect_status=succeeded',
+  'https://chatgpt.com/checkout/verify'
+]) {
+  test(`a completion URL cannot clear a real visible challenge: ${new URL(pageUrl).pathname}`, async (t) => {
+    const page = await cloudflareFixture(
+      t,
+      `<iframe style="width:300px;height:90px" src="${cloudflareUrl}"></iframe>`,
+      pageUrl
+    );
+    const actual = human();
+    for (const options of [{}, { requireCheckoutReady: false }, { requireCheckoutReady: true }])
+      assert.equal(await actual.isVerificationCleared(page, options), false);
+    assert.equal((await actual.clearHumanVerification(page, { maxWaitMs: 900 })).cleared, false);
+    assert.equal(await page.evaluate(() => window.paymentClicks), 0);
+  });
+  test(`a clear completion page preserves post-submit defaults but explicit readiness still needs controls: ${new URL(pageUrl).pathname}`, async (t) => {
+    const page = await cloudflareFixture(
+      t,
+      `<iframe hidden src="${cloudflareUrl}"></iframe>`,
+      pageUrl
+    );
+    await page.locator('input').evaluateAll((nodes) => nodes.forEach((node) => node.remove()));
+    const actual = human();
+    assert.equal(await actual.isVerificationCleared(page), true);
+    assert.equal(await actual.isVerificationCleared(page, { requireCheckoutReady: false }), true);
+    assert.equal(await actual.isVerificationCleared(page, { requireCheckoutReady: true }), false);
+    assert.equal((await actual.clearHumanVerification(page, { maxWaitMs: 3000 })).cleared, true);
+    assert.equal(
+      (await actual.clearHumanVerification(page, { requireCheckoutReady: false, maxWaitMs: 3000 }))
+        .cleared,
+      true
+    );
+    const required = await actual.clearHumanVerification(page, {
+      requireCheckoutReady: true,
+      maxWaitMs: 8000,
+      checkoutReadyWaitMs: 4000
+    });
+    assertUnreadyCheckoutInspection(required);
+    assert.equal(await page.evaluate(() => window.paymentClicks), 0);
+  });
+}
 
 test('hidden challenge placeholder and checkout main-page instructions do not become image tasks', async (t) => {
   const page = await fixture(t, { hiddenChallenge: true });

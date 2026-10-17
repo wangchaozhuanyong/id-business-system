@@ -496,7 +496,7 @@ function fixture() {
 afterEach(() => vi.unstubAllGlobals());
 
 describe('本地后端链路验收（隔离存储，无官网、银行或数据库连接）', () => {
-  it.each(['success', 'recover', 'unknown'] as const)(
+  it.each(['success', 'recover', 'unknown', 'readiness'] as const)(
     '真实Chromium任务子进程与实际API服务图贯通：%s',
     async (scene) => {
       type BrowserAcceptance = {
@@ -563,6 +563,27 @@ describe('本地后端链路验收（隔离存储，无官网、银行或数据�
         unexpectedNetwork: 0
       });
       expect(actual.metrics.formReadFailures).toEqual([]);
+      if (scene === 'readiness') {
+        expect(actual.metrics).toMatchObject({
+          loginCookieVerified: 1,
+          checkboxClicks: 1,
+          checkboxCleared: true,
+          checkoutDomContentLoaded: 0,
+          pendingModuleRequests: 1,
+          readinessProof: {
+            domContentLoadedAtPayment: 0,
+            pageDomContentLoadedAtPayment: 0,
+            documentReadyStateAtPayment: 'interactive',
+            hiddenCloudflareResidueAtPayment: true
+          }
+        });
+        expect(actual.result.result).toMatchObject({
+          success: true,
+          confirmedPaid: true,
+          paymentEvidence: { verified: true, amount: '8919.64', currency: 'PHP' },
+          confirmation: { verified: true, observedCanonicalPlan: 'pro_20x' }
+        });
+      }
       if (scene === 'recover')
         expect(actual.metrics.injectedReadDelay).toEqual({
           stage: 'verify',
@@ -598,6 +619,16 @@ describe('本地后端链路验收（隔离存储，无官网、银行或数据�
         expect(f.row(claim)).toMatchObject({ status: 'succeeded', confirmedPaid: true });
         expect(f.storage.rows('onlineRechargeBill')).toHaveLength(1);
         expect(f.storage.rows('idBusinessV2BankRechargeOrder')).toHaveLength(1);
+        if (scene === 'readiness') {
+          const bill = f.storage.rows('onlineRechargeBill')[0]!;
+          expect(bill).toMatchObject({
+            taskId: claim.id,
+            status: 'success',
+            currency: 'PHP',
+            cardId: f.cardId
+          });
+          expect(new Prisma.Decimal(String(bill.amount)).equals('8919.64')).toBe(true);
+        }
         const order = f.storage.rows('idBusinessV2BankRechargeOrder')[0]!;
         expect(order).toMatchObject({
           onlineRechargeTaskId: claim.id,

@@ -18,6 +18,8 @@ import {
   isOnlineCheckoutLoadRecoveryControlsOnly,
   isOnlineCheckoutLoadParentRpcOnly,
   onlineCheckoutLoadRecoveryScope,
+  isOnlineCheckoutNavigationReadyOnly,
+  onlineCheckoutNavigationReadyScope,
   onlineSettingsCommands
 } from './ci-online-settings-scope.mjs';
 
@@ -746,6 +748,123 @@ const checkoutLoadRecoveryOptional = [
   'docs/ONLINE_RECHARGE.md',
   'docs/V2_TASKS.md'
 ];
+const checkoutNavigationReadySources = [
+  ...[
+    'SOURCE_MANIFEST.json',
+    'checkout-form.cjs',
+    'checkout-recovery.cjs',
+    'safe-media.cjs',
+    'test/checkout-form.test.cjs',
+    'test/checkout-load-recovery.test.cjs',
+    'test/checkout-navigation.test.cjs',
+    'test/checkout-recovery.test.cjs',
+    'test/recharge-flow-acceptance.test.cjs',
+    'test/regressions.test.cjs',
+    'test/safe-media-finish.test.cjs',
+    'test/verification-state.test.cjs',
+    'upstream/chatgpt.js',
+    'upstream/human-verification.js',
+    'upstream/index.js'
+  ].map((name) => 'apps/api/src/id-business-v2/online-recharge/engine/' + name),
+  'apps/api/src/id-business-v2/online-recharge/local-chain-acceptance.spec.ts',
+  'docs/ONLINE_RECHARGE.md'
+];
+const checkoutNavigationReadyControls = [
+  ...['build.py', 'contract.json', 'release.py', 'release.test.py'].map(
+    (name) => 'scripts/production-release/online-checkout-load-' + name
+  ),
+  'scripts/ci-online-settings-scope.mjs',
+  'scripts/ci-online-settings-scope.test.mjs',
+  'scripts/ci-recharge-scope.mjs'
+];
+
+test('navigation readiness admits its exact seventeen core paths with only seven reviewed controls', () => {
+  assert.equal(onlineCheckoutNavigationReadyScope, 'ONLINE_CHECKOUT_NAVIGATION_READY');
+  assert.equal(checkoutNavigationReadySources.length, 17);
+  assert.equal(new Set(checkoutNavigationReadySources).size, 17);
+  assert.equal(checkoutNavigationReadyControls.length, 7);
+  for (let mask = 0; mask < 128; mask++) {
+    const paths = [
+      ...checkoutNavigationReadySources,
+      ...checkoutNavigationReadyControls.filter((_, index) => mask & (1 << index))
+    ];
+    assert.equal(isOnlineCheckoutNavigationReadyOnly(paths), true);
+    assert.equal(isOnlineSettingsOnly(paths), true);
+    assert.equal(isOnlineSettingsControlsOnly(paths), false);
+    assert.equal(isOnlineCheckoutLoadRecoveryOnly(paths), false);
+    assert.equal(isOnlineCheckoutLoadParentRpcOnly(paths), false);
+    assert.equal(isOnlineCheckoutCsRecoveryOnly(paths), false);
+    assert.equal(checkMode(paths, 'unchanged', 'unchanged'), 'recharge');
+    assert.equal(checkMode(paths, 'before', 'after'), 'full');
+    assert.deepEqual(selectedParts(paths), ['guards', 'api', 'online-engine']);
+  }
+  assert.equal(isOnlineCheckoutNavigationReadyOnly(checkoutLoadRecoverySources), false);
+});
+
+test('navigation readiness rejects every missing core, duplicate and adjacent business or control path', () => {
+  const complete = [...checkoutNavigationReadySources, ...checkoutNavigationReadyControls];
+  const rejected = (paths) => {
+    assert.equal(isOnlineCheckoutNavigationReadyOnly(paths), false);
+    assert.equal(isOnlineSettingsOnly(paths), false);
+    assert.equal(isOnlineSettingsControlsOnly(paths), false);
+    assert.equal(checkMode(paths, '', ''), 'full');
+    assert.throws(() => onlineSettingsCommands('guards', paths));
+  };
+  for (const required of checkoutNavigationReadySources)
+    rejected(complete.filter((path) => path !== required));
+  for (const path of complete) rejected([...complete, path]);
+  for (const extra of [
+    '.github/workflows/online-checkout-load-validation.yml',
+    'scripts/ci-recharge-check.mjs',
+    'scripts/ci-recharge-scope.test.mjs',
+    'scripts/production-release/online-checkout-load-unreviewed.py',
+    'scripts/production-release/online-checkout-cs-release.py',
+    'docs/V2_TASKS.md',
+    'apps/api/src/id-business-v2/online-recharge/engine/rpc.cjs',
+    'apps/api/src/id-business-v2/online-recharge/engine/test/rpc-response.test.cjs',
+    'apps/api/src/id-business-v2/online-recharge/engine/upstream/stripe-payment.js',
+    'apps/api/src/id-business-v2/online-recharge/engine/worker.cjs',
+    'apps/api/src/id-business-v2/online-recharge/persistence/tasks.repository.ts',
+    'apps/api/src/id-business-v2/online-recharge/unreviewed.spec.ts',
+    'apps/admin/src/v2/features/online-recharge/OnlineTaskProgress.vue',
+    'apps/api/src/auth/auth.service.ts',
+    'apps/api/prisma-mysql/schema.prisma',
+    'apps/api/prisma-mysql/migrations/unreviewed/migration.sql',
+    'package.json',
+    'package-lock.json',
+    'apps/api/src/id-business-v2/online-recharge/engine/upstream/package-lock.json'
+  ])
+    rejected([...complete, extra]);
+});
+
+test('navigation readiness preserves guards, API local-chain and complete two-worker engine checks', () => {
+  const paths = [...checkoutNavigationReadySources, ...checkoutNavigationReadyControls];
+  for (const part of ['api', 'online-engine'])
+    assert.deepEqual(
+      onlineSettingsCommands(part, paths),
+      onlineSettingsCommands(part, checkoutLoadRecoverySources)
+    );
+  assert.throws(() => onlineSettingsCommands('admin', paths), /Admin/);
+  const guard = onlineSettingsCommands('guards', paths);
+  for (const name of [
+    'scripts/production-release/online-checkout-load-release.test.py',
+    'check:v2-module-architecture',
+    'check:v2-isolation',
+    'check:v2-prisma-runtime-boundary',
+    'check:v2-concurrency-standard',
+    'check:v2-decimal-standard'
+  ])
+    assert.ok(guard.flat().includes(name), name);
+  for (const path of checkoutNavigationReadyControls.slice(0, 4)) {
+    assert.equal(isOnlineSettingsOnly([path]), false);
+    assert.equal(isOnlineSettingsControlsOnly([path]), true);
+    assert.deepEqual(selectedParts([path]), ['guards']);
+  }
+  const ciControls = checkoutNavigationReadyControls.slice(4);
+  assert.equal(isOnlineSettingsControlsOnly(ciControls), true);
+  assert.deepEqual(selectedParts(ciControls), ['guards']);
+  assert.equal(isOnlineSettingsControlsOnly(['scripts/ci-recharge-scope.mjs']), false);
+});
 
 test('checkout load recovery has an independent exact fifteen-source scope and no Admin check', () => {
   assert.equal(onlineCheckoutLoadRecoveryScope, 'ONLINE_CHECKOUT_LOAD_RECOVERY');
@@ -991,65 +1110,72 @@ test('load-recovery commands prepare fixed Chromium for only the new API spec an
   assert.throws(() => onlineSettingsCommands('admin', paths), /Admin/);
 });
 
-test('load-recovery source verification executes every fingerprint and rejects incomplete or tampered manifests', () => {
-  const command = onlineSettingsCommands('guards', checkoutLoadRecoverySources).find((args) =>
-    args.at(-1).includes?.('Online checkout load source fingerprints passed.')
-  );
-  assert.ok(command && command[0] === 'node');
-  const source = command.at(-1).replace(/^import .+;$/gm, '');
-  const root = resolve('apps/api/src/id-business-v2/online-recharge/engine');
-  const names = checkoutLoadRecoverySources
-    .filter((path) => path.includes('/engine/') && !path.endsWith('/SOURCE_MANIFEST.json'))
-    .map((path) => path.split('/engine/')[1]);
-  const bodies = new Map(names.map((name) => [resolve(root, name), `synthetic ${name}\n`]));
-  const manifest = {
-    repository: 'https://github.com/nowtostudeyday/PAY-GPT-UPGRADE.git',
-    commit: 'ba6cf96312a6953e62edb9d74299d438d12549df',
-    files: names.map((path) => ({
-      path,
-      adaptedSha256: createHash('sha256')
-        .update(bodies.get(resolve(root, path)))
-        .digest('hex')
-    }))
-  };
-  const verify = (value, files = bodies) =>
-    runInNewContext(source, {
-      assert,
-      createHash,
-      resolve,
-      sep,
-      isAbsolute,
-      win32,
-      readFileSync: (path) => {
-        if (path === resolve(root, 'SOURCE_MANIFEST.json')) return JSON.stringify(value);
-        assert.ok(files.has(path), 'source verification cannot read unknown or escaped files');
-        return files.get(path);
-      },
-      console: { log() {} }
-    });
-  assert.doesNotThrow(() => verify(manifest));
-  assert.throws(() => verify({ ...manifest, commit: 'unreviewed' }));
-  assert.throws(() => verify({ ...manifest, files: manifest.files.slice(1) }));
-  assert.throws(() => verify({ ...manifest, files: [...manifest.files, manifest.files[0]] }));
-  for (const path of ['../escaped.cjs', '/absolute.cjs', 'C:\\escaped.cjs'])
+for (const [name, paths] of [
+  ['load-recovery', checkoutLoadRecoverySources],
+  ['navigation readiness', checkoutNavigationReadySources]
+])
+  test(`${name} source verification executes every fingerprint and rejects incomplete or tampered manifests`, () => {
+    const command = onlineSettingsCommands('guards', paths).find((args) =>
+      args.at(-1).includes?.('Online checkout load source fingerprints passed.')
+    );
+    assert.ok(command && command[0] === 'node');
+    const source = command.at(-1).replace(/^import .+;$/gm, '');
+    const root = resolve('apps/api/src/id-business-v2/online-recharge/engine');
+    const names = paths
+      .filter((path) => path.includes('/engine/') && !path.endsWith('/SOURCE_MANIFEST.json'))
+      .map((path) => path.split('/engine/')[1]);
+    const bodies = new Map(names.map((name) => [resolve(root, name), `synthetic ${name}\n`]));
+    const manifest = {
+      repository: 'https://github.com/nowtostudeyday/PAY-GPT-UPGRADE.git',
+      commit: 'ba6cf96312a6953e62edb9d74299d438d12549df',
+      files: names.map((path) => ({
+        path,
+        adaptedSha256: createHash('sha256')
+          .update(bodies.get(resolve(root, path)))
+          .digest('hex')
+      }))
+    };
+    const verify = (value, files = bodies) =>
+      runInNewContext(source, {
+        assert,
+        createHash,
+        resolve,
+        sep,
+        isAbsolute,
+        win32,
+        readFileSync: (path) => {
+          if (path === resolve(root, 'SOURCE_MANIFEST.json')) return JSON.stringify(value);
+          assert.ok(files.has(path), 'source verification cannot read unknown or escaped files');
+          return files.get(path);
+        },
+        console: { log() {} }
+      });
+    assert.doesNotThrow(() => verify(manifest));
+    assert.throws(() => verify({ ...manifest, commit: 'unreviewed' }));
+    for (const required of names)
+      assert.throws(() =>
+        verify({ ...manifest, files: manifest.files.filter((row) => row.path !== required) })
+      );
+    assert.throws(() => verify({ ...manifest, files: [...manifest.files, manifest.files[0]] }));
+    for (const path of ['../escaped.cjs', '/absolute.cjs', 'C:\\escaped.cjs'])
+      assert.throws(() =>
+        verify({
+          ...manifest,
+          files: [...manifest.files, { path, adaptedSha256: '0'.repeat(64) }]
+        })
+      );
     assert.throws(() =>
       verify({
         ...manifest,
-        files: [...manifest.files, { path, adaptedSha256: '0'.repeat(64) }]
+        files: manifest.files.map((row, index) =>
+          index === 0 ? { ...row, adaptedSha256: '0'.repeat(64) } : row
+        )
       })
     );
-  assert.throws(() =>
-    verify({
-      ...manifest,
-      files: manifest.files.map((row, index) =>
-        index === 0 ? { ...row, adaptedSha256: '0'.repeat(64) } : row
-      )
-    })
-  );
-  const tampered = new Map(bodies);
-  tampered.set(resolve(root, names.at(-1)), 'changed after the reviewed manifest');
-  assert.throws(() => verify(manifest, tampered));
-});
+    const tampered = new Map(bodies);
+    tampered.set(resolve(root, names.at(-1)), 'changed after the reviewed manifest');
+    assert.throws(() => verify(manifest, tampered));
+  });
 
 test('load-recovery engine command discovers all current tests once with two workers and preserves failure', () => {
   const command = onlineSettingsCommands('online-engine', checkoutLoadRecoverySources).find(

@@ -37,10 +37,9 @@ def tracked_inventory(commit, prefix):
 
 def freeze_sources():
     p = publisher()
-    c = json.loads(CONTRACT.read_bytes()) if CONTRACT.exists() else {
-        'version': 1, 'scope': p.SCOPE, 'engineRoot': p.ENGINE,
-        'sourceBaseCommit': '6da10d2e4bd9de6df145899648e234000f84b72b',
-        'engineHealth': p.HEALTH, 'sqlFenceHelperSha256': p.SQL_FENCE, 'baseline': None}
+    p.need(CONTRACT.is_file() and not CONTRACT.is_symlink(), 'CONTRACT_REQUIRED')
+    c = json.loads(CONTRACT.read_bytes())
+    p.need(c.get('sourceBaseCommit') == p.SOURCE_BASE, 'SOURCE_BASE_INVALID')
     expected_before = tracked_inventory(c['sourceBaseCommit'], p.ENGINE)
     if c['baseline'] is not None:
         p.need(c['baseline']['engineFiles'] == expected_before, 'PUBLISHED_SOURCE_BASE_CHANGED')

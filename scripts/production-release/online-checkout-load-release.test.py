@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 from types import SimpleNamespace
 import unittest
+from unittest.mock import patch
 
 HERE = Path(__file__).resolve().parent
 spec = importlib.util.spec_from_file_location('checkout_load_tests', HERE / 'online-checkout-load-release.py')
@@ -12,34 +13,59 @@ p = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(p)
 
 
+def contract_fixture():
+    c = json.loads((HERE / p.CONTRACT_FILE).read_bytes())
+    # Synthetic values exercise the offline gates; they are never saved as a
+    # production baseline or used by the publisher.
+    c['baseline'] = {
+        'current': '/opt/id-business-v2/releases/synthetic-navigation-baseline',
+        'commit': p.SOURCE_BASE, 'manifestSha256': 'a' * 64,
+        'services': {role: {'synthetic': True} for role in p.SERVICES},
+        'runtimeConfigurationSha256': {role: 'b' * 64 for role in p.SERVICES},
+        'configurationSha256': {name: 'c' * 64 for name in (
+            '.env.aws.production', 'compose.release.json', 'docker-compose.aws-mysql.yml')},
+        'engineFiles': copy.deepcopy(c['beforeEngineFiles']), 'engineHealth': p.HEALTH,
+        'backupNormalizerPath': '/opt/id-business-v2/releases/synthetic/scripts/normalizer.sed',
+        'backupNormalizerSha256':
+            'ca9b05f832e9ed73bb36b7e76c083c99a40b13e067850166f8715bae469e5202'}
+    return c
+
+
 class ContractTests(unittest.TestCase):
     def setUp(self):
-        self.c = json.loads((HERE / p.CONTRACT_FILE).read_bytes())
+        self.c = contract_fixture()
 
     def test_exact_engine_delta_and_no_api_or_admin_overlay(self):
         p.validate_contract(self.c)
         before, after = self.c['beforeEngineFiles'], self.c['afterEngineFiles']
-        self.assertEqual(len(after) - len(before), 3)
+        self.assertEqual(len(after) - len(before), 1)
         self.assertEqual({name for name in after if before.get(name) != after[name]}, p.FILES)
-        self.assertEqual(len(p.FILES), 14)
+        self.assertEqual(len(p.FILES), 15)
+        self.assertEqual(p.ADDED, {'test/checkout-navigation.test.cjs'})
         self.assertEqual(set(p.PRESERVED), {'api', 'admin', 'mysql', 'caddy', 'media-resolver',
                                           'auto-recharge', 'auto-registration'})
 
-    def test_rpc_recovery_changes_existing_files_without_expanding_the_engine_inventory(self):
-        rpc = {'rpc.cjs', 'test/rpc-response.test.cjs'}
-        self.assertTrue(rpc <= p.FILES)
-        self.assertTrue(rpc <= self.c['beforeEngineFiles'].keys())
-        self.assertTrue(rpc <= self.c['afterEngineFiles'].keys())
-        self.assertFalse(rpc & p.ADDED)
-        self.assertEqual(len(p.ADDED), 3)
-        self.assertEqual(len(self.c['beforeEngineFiles']), 98)
-        self.assertEqual(len(self.c['afterEngineFiles']), 101)
+    def test_previous_rpc_payment_and_loading_sources_are_preserved_without_repackaging(self):
+        for name in ('rpc.cjs', 'test/rpc-response.test.cjs', 'upstream/stripe-payment.js',
+                     'test/checkout-page-loading.test.cjs'):
+            self.assertNotIn(name, p.FILES)
+            self.assertEqual(self.c['beforeEngineFiles'][name], self.c['afterEngineFiles'][name])
+        self.assertEqual(len(self.c['beforeEngineFiles']), 101)
+        self.assertEqual(len(self.c['afterEngineFiles']), 102)
+
+    def test_the_previous_published_source_is_fixed_and_cannot_be_replaced_by_the_old_baseline(self):
+        self.assertEqual(self.c['sourceBaseCommit'], 'a0e633a610ff67400cc2fa8bd2926148a2479ecd')
+        for commit in ('6da10d2e4bd9de6df145899648e234000f84b72b', 'd' * 40, '', None):
+            with self.subTest(commit=commit), self.assertRaisesRegex(RuntimeError, 'SOURCE_BASE_INVALID'):
+                p.validate_contract({**self.c, 'sourceBaseCommit': commit})
 
     def test_unbound_baseline_never_authorizes_preflight_or_publication(self):
         self.c['baseline'] = None
         p.validate_contract(self.c, require_baseline=False)
         with self.assertRaisesRegex(RuntimeError, 'BASELINE_NOT_BOUND'):
             p.validate_contract(self.c)
+        with self.assertRaisesRegex(RuntimeError, 'BASELINE_NOT_BOUND'):
+            p.validate_plan({}, self.c)
 
     def test_added_missing_or_cross_module_sources_are_rejected(self):
         for name in ('apps/api/src/id-business-v2/online-recharge/worker.service.ts',
@@ -80,25 +106,31 @@ class ContractTests(unittest.TestCase):
             p.validate_contract(self.c)
 
     def test_exact_plan_is_bound_to_contract_and_native_artifact_identity(self):
+        raw_contract = json.dumps(self.c, sort_keys=True).encode()
         plan = {'mode': 'preflight', 'commit': 'a' * 40, 'tree': 'b' * 40,
                 'workflowRunId': '123', 'workflowRunAttempt': '1',
-                'contractSha256': p.sha((HERE / p.CONTRACT_FILE).read_bytes()),
+                'contractSha256': p.sha(raw_contract),
                 'controlSources': self.c['controlPins'], 'artifactSha256': 'c' * 64,
                 'buildProofSha256': 'd' * 64, 'artifactUrl': p.artifact_url('a' * 40),
                 'qualitySourceEvidence': {'runId': '1234', 'runAttempt': 1, 'testedTree': 'b' * 40,
                                           'kind': 'EXACT_MAIN_SUCCESS', 'commit': 'a' * 40}}
-        p.validate_plan(plan, self.c)
-        for key, value in (('mode', 'retry-payment'), ('commit', '../outside'), ('tree', 'invalid'),
-                           ('workflowRunId', '0'), ('contractSha256', 'e' * 64),
-                           ('controlSources', {}), ('artifactSha256', 'invalid'),
-                           ('artifactUrl', 'https://example.invalid/other.tar.gz')):
-            with self.assertRaises(RuntimeError):
-                p.validate_plan({**plan, key: value}, self.c)
+        read_bytes = Path.read_bytes
+        # Bind this synthetic plan to synthetic bytes without changing the
+        # repository's deliberately unbound production contract.
+        with patch.object(Path, 'read_bytes', lambda path: raw_contract
+                          if path == HERE / p.CONTRACT_FILE else read_bytes(path)):
+            p.validate_plan(plan, self.c)
+            for key, value in (('mode', 'retry-payment'), ('commit', '../outside'), ('tree', 'invalid'),
+                               ('workflowRunId', '0'), ('contractSha256', 'e' * 64),
+                               ('controlSources', {}), ('artifactSha256', 'invalid'),
+                               ('artifactUrl', 'https://example.invalid/other.tar.gz')):
+                with self.assertRaises(RuntimeError):
+                    p.validate_plan({**plan, key: value}, self.c)
 
 
 class ArtifactTests(unittest.TestCase):
     def setUp(self):
-        self.c = json.loads((HERE / p.CONTRACT_FILE).read_bytes())
+        self.c = contract_fixture()
         self.plan = {'commit': 'a' * 40, 'tree': 'b' * 40, 'workflowRunId': '123',
                      'workflowRunAttempt': '1', 'contractSha256': 'c' * 64,
                      'controlSources': self.c['controlPins'],
@@ -116,8 +148,8 @@ class ArtifactTests(unittest.TestCase):
     def test_exact_native_proof_and_runtime_payload(self):
         p.verify_proof(self.proof, self.plan, self.c, self.files)
 
-    def test_both_rpc_sources_are_required_and_digest_bound_in_the_native_payload(self):
-        for name in ('engine/rpc.cjs', 'engine/test/rpc-response.test.cjs'):
+    def test_every_current_delta_is_required_and_digest_bound_in_the_native_payload(self):
+        for name in self.files:
             for change in ('missing', 'changed'):
                 files = {**self.files}
                 if change == 'missing':
@@ -126,6 +158,20 @@ class ArtifactTests(unittest.TestCase):
                     files[name] = 'a' * 64
                 with self.subTest(name=name, change=change), self.assertRaisesRegex(RuntimeError, 'NATIVE_PROOF_CHANGED'):
                     p.verify_proof({**self.proof, 'files': files}, self.plan, self.c, files)
+
+    def test_previous_artifact_scope_and_old_original_source_cannot_be_reused(self):
+        files = {**self.files}
+        files.pop('engine/test/checkout-navigation.test.cjs')
+        files['engine/rpc.cjs'] = self.c['beforeEngineFiles']['rpc.cjs']
+        with self.assertRaisesRegex(RuntimeError, 'NATIVE_PROOF_CHANGED'):
+            p.verify_proof({**self.proof, 'files': files}, self.plan, self.c, files)
+        old = {**self.proof, 'beforeEngineFiles': {
+            name: value for name, value in self.c['beforeEngineFiles'].items()
+            if name not in ('test/checkout-load-recovery.test.cjs',
+                            'test/checkout-page-loading.test.cjs',
+                            'test/recharge-flow-acceptance.test.cjs')}}
+        with self.assertRaisesRegex(RuntimeError, 'NATIVE_PROOF_CHANGED'):
+            p.verify_proof(old, self.plan, self.c, self.files)
 
     def test_payload_cannot_include_validation_sources_or_other_runtime_modules(self):
         for extra in ('source/docs/ONLINE_RECHARGE.md', 'api/modules/worker.repository.js',
@@ -181,9 +227,37 @@ class SourceBindingTests(unittest.TestCase):
         spec.loader.exec_module(self.builder)
 
     def test_current_sources_manifest_and_workflow_match_the_frozen_contract(self):
-        self.builder.check(self.c, require_baseline=True)
+        self.builder.check(self.c, require_baseline=self.c['baseline'] is not None)
         self.assertEqual(self.builder.tracked_inventory(self.c['sourceBaseCommit'], p.ENGINE),
-                         self.c['baseline']['engineFiles'])
+                         self.c['beforeEngineFiles'])
+        if self.c['baseline'] is not None:
+            self.assertEqual(self.c['baseline']['engineFiles'], self.c['beforeEngineFiles'])
+
+    def test_freezing_requires_an_explicit_contract_instead_of_a_stale_default(self):
+        missing = SimpleNamespace(is_file=lambda: False, is_symlink=lambda: False)
+        with patch.object(self.builder, 'CONTRACT', missing), self.assertRaisesRegex(
+                RuntimeError, 'CONTRACT_REQUIRED'):
+            self.builder.freeze_sources()
+
+    def test_native_build_check_rejects_an_unbound_production_baseline(self):
+        c = copy.deepcopy(self.c)
+        c['baseline'] = None
+        with self.assertRaisesRegex(RuntimeError, 'BASELINE_NOT_BOUND'):
+            self.builder.check(c, require_baseline=True)
+
+    def test_freezing_rejects_wrong_source_commit_or_mismatching_published_inventory(self):
+        for change, code in (('source', 'SOURCE_BASE_INVALID'),
+                             ('inventory', 'PUBLISHED_SOURCE_BASE_CHANGED')):
+            c = contract_fixture()
+            if change == 'source':
+                c['sourceBaseCommit'] = '6da10d2e4bd9de6df145899648e234000f84b72b'
+            else:
+                c['baseline']['engineFiles']['worker.cjs'] = 'd' * 64
+            contract = SimpleNamespace(is_file=lambda: True, is_symlink=lambda: False,
+                                       read_bytes=lambda: json.dumps(c).encode())
+            with self.subTest(change=change), patch.object(self.builder, 'CONTRACT', contract), \
+                    self.assertRaisesRegex(RuntimeError, code):
+                self.builder.freeze_sources()
 
     def test_runtime_or_validation_source_hash_change_is_not_silently_refrozen(self):
         for group, name in (('runtimeSources', p.ENGINE + '/checkout-form.cjs'),
