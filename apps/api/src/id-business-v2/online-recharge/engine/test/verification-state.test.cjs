@@ -177,11 +177,13 @@ test('a nested challenge is excluded when its outer iframe is hidden', async (t)
 test('one visible checkbox completes normally without starting vision or clicking merchant controls', async (t) => {
   const page = await fixture(t, { hiddenChallenge: true });
   let visionCalls = 0;
+  // This is a functional success case with real cross-origin rendering, not a
+  // short-deadline test. Timeout/cancellation cases retain their own small limits.
   const result = await human(async () => {
     visionCalls++;
     throw Error('Vision is forbidden for a checkbox');
-  }).clearHumanVerification(page, { requireCheckoutReady: false, maxWaitMs: 3000 });
-  assert.equal(result.cleared, true);
+  }).clearHumanVerification(page, { requireCheckoutReady: false, maxWaitMs: 10000 });
+  assert.equal(result.cleared, true, JSON.stringify(result));
   assert.equal(visionCalls, 0);
   assert.equal(await page.locator('[autocomplete="cc-number"]').inputValue(), '');
 });

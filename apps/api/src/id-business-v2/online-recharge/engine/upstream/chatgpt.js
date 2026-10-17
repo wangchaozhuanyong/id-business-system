@@ -377,24 +377,14 @@ async function activateSubscription({ page, accessToken, planType, cdkCode, emai
 /**
  * 判断 Checkout 页面是否已正常加载（避免 body 里 incidental "404" 误报）
  */
-async function assertCheckoutPageReady(page) {
+async function assertCheckoutPageReady(page, { requireCardReady = true } = {}) {
     const { isCloudflareWallPage, isCheckoutPaymentReady } = require('./human-verification');
     const currentUrl = page.url();
-    const pageText = String(await page.textContent('body', { timeout: 8000 }).catch(() => '') || '');
+    const pageText = String(await page.innerText('body', { timeout: 8000 }).catch(() => '') || '');
     const title = String(await page.title().catch(() => '') || '');
 
     if (await isCloudflareWallPage(page)) {
         throw new Error('Checkout 页面仍被 Cloudflare 人机验证拦截');
-    }
-
-    if (await isCheckoutPaymentReady(page)) {
-        return currentUrl;
-    }
-
-    const checkoutReady = /Configure your plan|Subscribe|Plus plan|Pro plan|Due today|Card number|Expiration date|Security code|Monthly subscription/i.test(pageText);
-
-    if (checkoutReady) {
-        return currentUrl;
     }
 
     if (/Page not found|could not be found|Something went wrong|contact the merchant/i.test(pageText)) {
@@ -409,7 +399,12 @@ async function assertCheckoutPageReady(page) {
         throw new Error(`支付链接无效 (404): ${currentUrl.slice(0, 120)}`);
     }
 
-    throw new Error(`无法确认 Checkout 支付表单已加载: ${currentUrl.slice(0, 120)}`);
+    if (!requireCardReady && ['pay.openai.com', 'checkout.stripe.com'].includes(new URL(currentUrl).hostname)) {
+        require('../checkout-recovery.cjs').quoteIdForUrl(currentUrl);
+        return currentUrl;
+    }
+    if (await isCheckoutPaymentReady(page)) return currentUrl;
+    throw Object.assign(new Error('无法确认 Checkout 支付表单已加载'), { code: 'CHECKOUT_FORM_NOT_READY' });
 }
 
 /**
@@ -456,11 +451,17 @@ async function openApiCheckout(page, { accessToken, planType, country, currency,
         }
 
         const { clearHumanVerification, buildCaptchaRequiredError } = require('./human-verification');
+        // Hosted Checkout can require selecting Card before it creates card fields.
+        // Detect load errors now; stripe-payment performs strict readiness after selection.
+        const hostedCheckout = ['pay.openai.com', 'checkout.stripe.com'].includes(new URL(page.url()).hostname);
         const captchaResult = await clearHumanVerification(page, {
             phase: 'checkout-open',
             maxWaitMs: Number(process.env.CAPTCHA_CLEAR_TIMEOUT_MS || 120000),
             maxBypassRounds: 6,
-            requireCheckoutReady: true,
+            requireCheckoutReady: !hostedCheckout,
+            checkCheckoutLoad: true,
+            allowCheckoutReload: true,
+            isSubmitted: () => require('../rpc.cjs').wasSubmitted(),
             checkoutReadyWaitMs: Number(process.env.CHECKOUT_READY_WAIT_MS || 60000)
         });
         if (!captchaResult.cleared) {
@@ -469,19 +470,22 @@ async function openApiCheckout(page, { accessToken, planType, country, currency,
                 : captchaResult.checkoutNotReady
                     ? 'Checkout 支付表单未能加载，请检查网络或稍后重试'
                     : buildCaptchaRequiredError();
-            throw new Error(err);
+            throw Object.assign(new Error(err), { code: captchaResult.code });
         }
 
-        const currentUrl = await assertCheckoutPageReady(page);
+        const currentUrl = await assertCheckoutPageReady(page, { requireCardReady: !hostedCheckout });
 
         await assertChatGptLoggedIn(page, 'Checkout');
         console.log(`✅ [步骤] Checkout 页面已打开: ${currentUrl.slice(0, 100)}...`);
         return { checkoutUrl: currentUrl, sessionId: checkout.sessionId };
     } catch (error) {
         if (error.code === 'LEASE_LOST') throw Object.assign(error, { checkoutCreationState: 'accepted' });
-        const code = ['CHECKOUT_RECOVERY_INVALID', 'CHECKOUT_RECOVERY_UNSUPPORTED'].includes(error.code)
+        const loadingFailure = /^CHECKOUT_(?:RELOAD_|CONTENT_LOAD_FAILED|FORM_|CONTROL_|CARD_|PAGE_CLOSED)/.test(error.code || '');
+        const code = loadingFailure || ['CHECKOUT_RECOVERY_INVALID', 'CHECKOUT_RECOVERY_UNSUPPORTED'].includes(error.code)
             ? error.code : 'CHECKOUT_OPEN_FAILED';
-        throw Object.assign(new Error('原结账单已创建，页面打开或验证未完成；未另建结账单'),
+        throw Object.assign(new Error(loadingFailure
+            ? '原结账单已创建，官网支付页面加载或控件检查未完成；未另建结账单'
+            : '原结账单已创建，页面打开或验证未完成；未另建结账单'),
             { code, checkoutCreationState: 'accepted' });
     }
 }
