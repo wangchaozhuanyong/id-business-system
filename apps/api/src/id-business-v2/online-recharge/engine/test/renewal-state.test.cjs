@@ -41,6 +41,7 @@ function fixture({ reads, postStatus = 200, postThrows = false, guardThrows = fa
   runInNewContext(source, {
     module,
     require(name) {
+      if (name.startsWith('node:')) return require(name);
       if (name === 'axios')
         return {
           get: async () => {
@@ -176,7 +177,15 @@ test('GET subscription query uses no external-submit guard', async () => {
 });
 
 // No real upstream or proxy connections: all transports and browser sessions are isolated fakes.
-function queryFixture({ statuses = [200], failure, loginFailure, contextFailure } = {}) {
+function queryFixture({
+  statuses = [200],
+  failure,
+  failures = [],
+  loginFailure,
+  contextFailure,
+  verificationResult,
+  responseBody = account(true)
+} = {}) {
   const effects = {
     proxies: [],
     requests: [],
@@ -185,12 +194,15 @@ function queryFixture({ statuses = [200], failure, loginFailure, contextFailure 
     disposes: 0,
     cleanups: 0,
     logins: 0,
-    browserConnections: []
+    browserConnections: [],
+    pageCloses: 0,
+    preparedPages: [],
+    disposedPages: []
   };
   const browserContexts = [];
   const response = () => ({
     status: () => statuses.shift() ?? 403,
-    json: async () => account(true)
+    json: async () => responseBody
   });
   const sessionAuth = {
     extractProfileFromToken: () => ({ accountId }),
@@ -198,22 +210,54 @@ function queryFixture({ statuses = [200], failure, loginFailure, contextFailure 
       context.installed = raw;
       return { sessionData: {} };
     },
-    bootstrapChatGptSession: async (_page, _raw, options) => {
+    bootstrapChatGptSession: async (page, _raw, options) => {
       effects.logins++;
-      assert.equal(options.manualVerification, true);
+      assert.equal(typeof options.deadlineAt, 'number');
+      assert.notEqual(options.manualVerification, true);
       if (loginFailure) throw loginFailure;
+      await page.goto('https://chatgpt.com/');
       return { session: { accessToken: token } };
     }
   };
   const newBrowserContext = () => {
+    const pages = [];
     const context = {
+      pages: () => pages,
       request: {
         get: async (...args) => {
           effects.requests.push({ context, args });
           return response();
         }
       },
-      newPage: async () => ({}),
+      newPage: async () => {
+        let currentUrl = 'about:blank',
+          closed = false;
+        const page = {
+          url: () => currentUrl,
+          isClosed: () => closed,
+          context: () => context,
+          goto: async (url) => {
+            currentUrl = url;
+          },
+          evaluate: async (fn, args) => {
+            assert.match(String(fn), /method: 'GET'/);
+            assert.match(String(fn), /credentials: 'include'/);
+            assert.ok(args.timeoutMs <= 10000);
+            effects.requests.push({ context, page, args, transport: 'browser-page' });
+            const nextFailure = failures.shift() || failure;
+            if (nextFailure) throw nextFailure;
+            return { status: statuses.shift() ?? 403, text: JSON.stringify(responseBody) };
+          },
+          close: async () => {
+            effects.pageCloses++;
+            closed = true;
+          },
+          on: () => {},
+          off: () => {}
+        };
+        pages.push(page);
+        return page;
+      },
       close: async () => {
         effects.closes++;
       }
@@ -230,6 +274,19 @@ function queryFixture({ statuses = [200], failure, loginFailure, contextFailure 
     console,
     process: { env: { PROXY: 'http://task-proxy.invalid:8123' } },
     require(name) {
+      if (name.startsWith('node:')) return require(name);
+      if (name === '../rpc.cjs') return {};
+      if (name === './human-verification')
+        return {
+          prepareVerificationPage: async (page) => {
+            effects.preparedPages.push(page);
+          },
+          disposeVerificationPage: async (page) => {
+            effects.disposedPages.push(page);
+          },
+          isBlockingHumanVerificationVisible: async () => Boolean(verificationResult),
+          clearHumanVerification: async () => verificationResult
+        };
       if (name === 'playwright')
         return {
           request: {
@@ -284,19 +341,22 @@ function queryFixture({ statuses = [200], failure, loginFailure, contextFailure 
   return { api: module.exports, effects, newBrowserContext, browserContexts };
 }
 
-test('logged-in recharge uses the same cookie request context, without recreating or disposing it', async () => {
+test('logged-in recharge reads through its existing Chromium page and never a Node request context', async () => {
   const f = queryFixture();
   const context = f.newBrowserContext();
-  const result = await f.api.querySubscriptionBySession(token, { browserContext: context });
+  const page = await context.newPage();
+  await page.goto('https://chatgpt.com/');
+  const result = await f.api.querySubscriptionBySession(token, { browserContext: context, page });
   assert.equal(result.ok, true);
   assert.equal(f.effects.requests[0].context, context);
+  assert.equal(f.effects.requests[0].transport, 'browser-page');
   assert.equal(f.effects.contexts.length, 0);
   assert.equal(f.effects.proxies.length, 0);
-  assert.equal(f.effects.closes + f.effects.disposes, 0);
+  assert.equal(f.effects.closes + f.effects.disposes + f.effects.pageCloses, 0);
 });
 
-test('independent 403 enters one normal isolated login using the same resolved task proxy', async () => {
-  const f = queryFixture({ statuses: [403, 200] });
+test('independent query logs in once in an isolated browser using only the resolved task proxy', async () => {
+  const f = queryFixture({ statuses: [200] });
   assert.equal(
     (
       await f.api.querySubscriptionBySession(token, {
@@ -308,15 +368,16 @@ test('independent 403 enters one normal isolated login using the same resolved t
   );
   assert.equal(f.effects.logins, 1);
   assert.equal(new Set(f.effects.proxies).size, 1);
-  assert.equal(f.effects.contexts[0].proxy.server, f.effects.contexts[1].proxy.server);
   assert.equal(
-    f.effects.contexts[1].proxy.server,
+    f.effects.contexts[0].proxy.server,
     f.effects.browserConnections[0].proxyConfig.server
   );
   assert.equal(f.browserContexts[0].installed, 'synthetic-session-A');
   assert.equal(f.effects.closes, 1);
-  assert.equal(f.effects.disposes, 1);
-  assert.equal(f.effects.cleanups, 2);
+  assert.equal(f.effects.disposes, 0);
+  assert.equal(f.effects.cleanups, 1);
+  assert.equal(f.effects.preparedPages[0], f.effects.requests[0].page);
+  assert.equal(f.effects.disposedPages[0], f.effects.requests[0].page);
 });
 
 test('repeated 403 stops after one browser check and does not label the session expired', async () => {
@@ -326,54 +387,45 @@ test('repeated 403 stops after one browser check and does not label the session 
     allowBrowserFallback: true
   });
   assert.equal(result.errorCode, 'UPSTREAM_FORBIDDEN');
-  assert.equal(f.effects.requests.length, 2);
+  assert.equal(f.effects.requests.length, 1);
   assert.equal(f.effects.logins, 1);
   assert.equal(f.effects.closes, 1);
 });
 
 test('401 is login failure and never creates a fallback browser', async () => {
   const f = queryFixture({ statuses: [401] });
-  assert.equal(
-    (
-      await f.api.querySubscriptionBySession(token, {
-        sessionRaw: 'synthetic',
-        allowBrowserFallback: true
-      })
-    ).errorCode,
-    'SESSION_INVALID'
-  );
+  assert.equal((await f.api.querySubscriptionBySession(token)).errorCode, 'SESSION_INVALID');
   assert.equal(f.effects.logins, 0);
 });
 
-for (const [message, code] of [
-  ['Timeout 20000ms exceeded', 'NETWORK_TIMEOUT'],
-  ['SOCKS proxy connection refused', 'PROXY_UNAVAILABLE']
+for (const [message, networkCode, code] of [
+  ['Timeout 20000ms exceeded synthetic-secret', 'ETIMEDOUT', 'NETWORK_TIMEOUT'],
+  ['SOCKS proxy connection refused synthetic-secret', 'ECONNREFUSED', 'PROXY_UNAVAILABLE']
 ])
   test(`query classifies ${code} without exposing the raw transport error`, async () => {
-    const f = queryFixture({ failure: new Error(message) });
+    const f = queryFixture({ failure: Object.assign(new Error(message), { code: networkCode }) });
     const result = await f.api.querySubscriptionBySession(token);
     assert.equal(result.errorCode, code);
     assert.equal(JSON.stringify(result).includes(message), false);
     assert.equal(f.effects.disposes, 1);
   });
 
-test('browser manual verification stops and always closes the isolated context', async () => {
+test('browser verification failure retains its actual controlled code and closes the isolated context', async () => {
   const f = queryFixture({
     statuses: [403],
-    loginFailure: Object.assign(new Error('challenge'), { code: 'HUMAN_VERIFICATION_REQUIRED' })
+    loginFailure: Object.assign(new Error('challenge'), { code: 'VERIFICATION_UNSUPPORTED' })
   });
   const result = await f.api.querySubscriptionBySession(token, {
     sessionRaw: 'synthetic',
     allowBrowserFallback: true
   });
-  assert.equal(result.errorCode, 'HUMAN_VERIFICATION_REQUIRED');
-  assert.equal(result.statusCode, 403);
+  assert.equal(result.errorCode, 'VERIFICATION_UNSUPPORTED');
   assert.equal(f.effects.closes, 1);
-  assert.equal(f.effects.requests.length, 1);
+  assert.equal(f.effects.requests.length, 0);
 });
 
 test('sequential independent tasks get different contexts and never inherit previous cookies', async () => {
-  const f = queryFixture({ statuses: [403, 200, 403, 200] });
+  const f = queryFixture({ statuses: [200, 200] });
   for (const sessionRaw of ['synthetic-A', 'synthetic-B'])
     assert.equal(
       (await f.api.querySubscriptionBySession(token, { sessionRaw, allowBrowserFallback: true }))
@@ -392,4 +444,103 @@ test('request context creation failure still cleans the proxy adapter', async ()
   const f = queryFixture({ contextFailure: new Error('proxy context failure') });
   assert.equal((await f.api.querySubscriptionBySession(token)).ok, false);
   assert.equal(f.effects.cleanups, 1);
+});
+
+test('a transient GET reset retries only once on the same page and resolved proxy', async () => {
+  const f = queryFixture({
+    failures: [Object.assign(new Error('private headers must not escape'), { code: 'ECONNRESET' })]
+  });
+  const result = await f.api.querySubscriptionBySession(token, {
+    sessionRaw: 'fixture',
+    allowBrowserFallback: true
+  });
+  assert.equal(result.ok, true);
+  assert.equal(f.effects.requests.length, 2);
+  assert.equal(f.effects.requests[0].page, f.effects.requests[1].page);
+  assert.equal(f.effects.proxies.length, 1);
+  assert.equal(result.diagnostics[0].networkCode, 'ECONNRESET');
+  assert.equal(JSON.stringify(result).includes('private headers'), false);
+});
+
+test('failed GET attempts are bounded and never enter an alternate browser or proxy', async () => {
+  const f = queryFixture({ failure: Object.assign(new Error('reset'), { code: 'ECONNRESET' }) });
+  const result = await f.api.querySubscriptionBySession(token, {
+    sessionRaw: 'fixture',
+    allowBrowserFallback: true
+  });
+  assert.equal(result.ok, false);
+  assert.equal(f.effects.requests.length, 2);
+  assert.equal(f.effects.logins, 1);
+  assert.equal(f.effects.proxies.length, 1);
+  assert.equal(result.diagnostics.length, 2);
+});
+
+test('a valid HTTP response without account facts is never a successful subscription query', async () => {
+  const f = queryFixture({ responseBody: {} });
+  const result = await f.api.querySubscriptionBySession(token);
+  assert.equal(result.ok, false);
+  assert.equal(result.errorCode, 'UPSTREAM_INVALID_RESPONSE');
+});
+
+test('an aborted query stops before creating a context or making any request', async () => {
+  const f = queryFixture();
+  const controller = new AbortController();
+  controller.abort();
+  await assert.rejects(
+    () => f.api.querySubscriptionBySession(token, { signal: controller.signal }),
+    { code: 'LEASE_LOST' }
+  );
+  assert.equal(f.effects.requests.length, 0);
+  assert.equal(f.effects.contexts.length, 0);
+});
+
+test('real Chromium subscription GET shares only its own context cookies and bypasses APIRequestContext', async () => {
+  const { chromium } = require('../upstream/node_modules/playwright');
+  const api = require('../upstream/subscription-check');
+  const browser = await chromium.launch({ headless: true });
+  const contexts = [],
+    seen = [];
+  try {
+    for (const id of ['first-account', 'second-account']) {
+      const context = await browser.newContext();
+      contexts.push(context);
+      await context.addCookies([
+        { name: 'fixture-session', value: id, domain: 'chatgpt.com', path: '/', secure: true }
+      ]);
+      await context.route('**/*', async (route) => {
+        const request = route.request();
+        if (!request.url().startsWith('https://chatgpt.com/')) return route.abort();
+        if (request.url().includes('/backend-api/accounts/check/')) {
+          const cookie = request.headers().cookie || '';
+          seen.push({ id, cookie, method: request.method() });
+          return route.fulfill({
+            contentType: 'application/json',
+            body: JSON.stringify(account(true, id))
+          });
+        }
+        return route.fulfill({
+          contentType: 'text/html',
+          body: '<html><body>Fixture homepage</body></html>'
+        });
+      });
+      context.request.get = async () =>
+        assert.fail('Query must use Chromium fetch, never Node HTTP');
+      const page = await context.newPage();
+      await page.goto('https://chatgpt.com/');
+      const result = await api.querySubscriptionBySession(token, { page, browserContext: context });
+      assert.equal(result.ok, true);
+      assert.equal(result.data.upstreamAccountId, id);
+      assert.equal(page.isClosed(), false);
+    }
+    assert.equal(seen.length, 2);
+    assert.equal(seen[0].method, 'GET');
+    assert.equal(seen[1].method, 'GET');
+    assert.equal(seen[0].cookie.includes('first-account'), true);
+    assert.equal(seen[0].cookie.includes('second-account'), false);
+    assert.equal(seen[1].cookie.includes('second-account'), true);
+    assert.equal(seen[1].cookie.includes('first-account'), false);
+  } finally {
+    for (const context of contexts) await context.close();
+    await browser.close();
+  }
 });

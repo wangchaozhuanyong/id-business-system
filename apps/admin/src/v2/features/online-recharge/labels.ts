@@ -103,7 +103,13 @@ const states: Record<string, string> = {
   session: '恢复会话',
   checkout: '获取支付链接',
   payment: '提交付款',
+  payment_submitted: '付款已提交',
   verification: '验证结果',
+  human_verification: '官网验证',
+  subscription_check: '查询订阅',
+  reconciliation: '原单核对',
+  accounting: '登记账单与订单',
+  paid_pending_activation: '付款已确认，等待套餐生效',
   completed: '执行完成',
   pending_verification: '待验证',
   gpt_api: '第三方代充',
@@ -164,6 +170,73 @@ export function onlineSubscriptionDetails(result?: Record<string, unknown>) {
       ? (data as Record<string, unknown>)
       : {})
   };
+}
+export function onlineFailureLabel(value: unknown): string {
+  const code = String(value ?? '').toUpperCase();
+  const labels: Record<string, string> = {
+    SESSION_INVALID: '登录资料失效',
+    NETWORK_TIMEOUT: '官网查询超时',
+    NETWORK_UNAVAILABLE: '官网网络连接失败',
+    PROXY_UNAVAILABLE: '任务代理连接失败',
+    UPSTREAM_BLOCKED: '官网要求进一步验证',
+    UPSTREAM_FORBIDDEN: '官网拒绝此次查询',
+    UPSTREAM_INVALID_RESPONSE: '官网响应无法确认订阅',
+    HUMAN_VERIFICATION_REQUIRED: '官网验证尚未完成',
+    VERIFICATION_TIMEOUT: '官网验证超时',
+    VERIFICATION_CANCELLED: '官网验证已停止',
+    VERIFICATION_FRAME_AMBIGUOUS: '无法唯一确认验证题目',
+    VERIFICATION_CHALLENGE_UNCHANGED: '验证题目未更新',
+    VERIFICATION_ROUNDS_EXHAUSTED: '官网验证达到尝试上限',
+    VERIFICATION_UNSUPPORTED: '暂不支持此验证题型',
+    VERIFICATION_PAGE_BINDING_REQUIRED: '未能绑定任务验证页面',
+    VERIFICATION_PAGE_BINDING_MISMATCH: '任务验证页面不匹配',
+    VLM_AUTH_FAILED: '视觉模型鉴权失败',
+    VLM_RATE_LIMITED: '视觉模型请求受限',
+    VLM_TIMEOUT: '视觉模型请求超时',
+    VLM_REQUEST_UNSUPPORTED: '视觉模型请求参数不兼容',
+    VLM_IMAGE_UNSUPPORTED: '模型不支持图像输入',
+    VLM_INVALID_RESPONSE: '视觉模型未返回有效结果',
+    VLM_INVALID_DECISION: '视觉模型结果无法用于当前题目',
+    VLM_NOT_CONFIGURED: '尚未配置视觉模型',
+    VLM_VISION_CHECK_FAILED: '视觉模型未通过合成图片检测',
+    VLM_VISION_JSON_VERIFIED: '图像输入与结果解析通过',
+    SUBSCRIPTION_QUERY_FAILED: '订阅查询未成功',
+    ACCOUNT_MISMATCH: '原单账号不一致',
+    TARGET_SUBSCRIPTION_UNVERIFIED: '目标准确套餐尚未核实',
+    LEGACY_ORIGINAL_IDENTITY_MISSING: '旧任务缺少可验证的原结账单标识',
+    CHECKOUT_RECOVERY_INVALID: '原结账单与付款资料不一致',
+    CHECKOUT_RECOVERY_UNSUPPORTED: '当前原结账单格式尚未核实支持，未提交付款',
+    ORIGINAL_PAYMENT_READ_TIMEOUT: '原单付款状态读取超时',
+    ORIGINAL_PAYMENT_READ_FAILED: '原单付款状态读取未成功',
+    ORIGINAL_PAYMENT_EVIDENCE_MISSING: '缺少绑定原单的实际付款证据',
+    LEASE_LOST: '任务执行权限已失效'
+  };
+  if (labels[code]) return labels[code];
+  if (code.startsWith('VERIFICATION_')) return '官网验证未通过';
+  if (code.startsWith('VLM_')) return '视觉模型调用失败';
+  return code ? '本次结果未能核实' : '';
+}
+export function onlineResultIssue(result?: Record<string, unknown>): string {
+  const details = onlineSubscriptionDetails(result);
+  const confirmation = details.confirmation;
+  const query =
+    confirmation && typeof confirmation === 'object' && !Array.isArray(confirmation)
+      ? (confirmation as Record<string, unknown>)
+      : details;
+  if (query.querySucceeded === false)
+    return `订阅查询未成功${query.queryErrorCode ? `：${onlineFailureLabel(query.queryErrorCode)}` : ''}`;
+  const code = details.errorCode ?? details.queryErrorCode;
+  return code ? onlineFailureLabel(code) : '';
+}
+export function onlineReconciliationReason(value: unknown): string {
+  const reasons: Record<string, string> = {
+    legacy_original_identity_missing: '旧任务未保存可验证的原结账单标识，保留待核对',
+    original_session_missing: '原任务登录资料缺失，无法读取原单',
+    original_submission_missing: '原任务缺少付款提交记录',
+    original_route_missing: '原任务地区资料缺失，停止自动核对',
+    attempts_exhausted: '三次自动核对后仍未确认，继续保留付款保护'
+  };
+  return reasons[String(value ?? '')] ?? '原单结果仍待核实';
 }
 export function onlineChangeDetails(value?: Record<string, unknown>): Record<string, unknown> {
   const change = value?.subscriptionChange;

@@ -1,0 +1,91 @@
+name: Online Unattended Recharge Validation
+
+on:
+  workflow_dispatch:
+    inputs:
+      commit:
+        description: Exact reviewed main commit
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: id-business-v2-production-release
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    if: github.ref == 'refs/heads/main' && inputs.commit == github.sha
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    services:
+      mysql:
+        image: mysql:8.4@sha256:b3b90af2a6552ae30c266fdb7d5dd55f3afb72404bb78d37fe8a23eb857fd3fb
+        env:
+          MYSQL_ROOT_PASSWORD: unattended-ci-fixture
+          MYSQL_DATABASE: id_business_v2_online_recharge_fixture
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -punattended-ci-fixture"
+          --health-interval=5s --health-timeout=5s --health-retries=24
+    env:
+      NODE_ENV: test
+      DATABASE_URL: mysql://root:unattended-ci-fixture@127.0.0.1:3306/id_business_v2_online_recharge_fixture
+      FIELD_ENCRYPTION_KEY: synthetic-unattended-ci-encryption
+      HASH_SECRET: synthetic-unattended-ci-index
+      ONLINE_RECHARGE_WORKER_KEY: synthetic-unattended-ci-worker-key-32-characters
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci --include=dev --ignore-scripts --no-audit --no-fund
+      - run: npm run prisma:mysql:generate && npm run build --workspace @apple-business/shared
+      - name: Verify protected finite publication and API behavior
+        run: |
+          python3 -B scripts/production-release/online-checkout-release.test.py
+          python3 -B scripts/production-release/online-unattended-release.test.py
+          npm run typecheck --workspace @apple-business/api
+          npm run test --workspace @apple-business/api -- src/id-business-v2/online-recharge
+      - name: Verify disposable MySQL concurrency and accounting
+        env:
+          ONLINE_RECHARGE_MYSQL_TEST: '1'
+        run: |
+          npm run prisma:mysql:migrate:deploy
+          npm run test --workspace @apple-business/api -- src/id-business-v2/online-recharge/mysql.integration.spec.ts
+      - name: Verify Chromium forms, verification isolation and engine regressions
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends ffmpeg xvfb xauth
+          npm ci --prefix apps/api/src/id-business-v2/online-recharge/engine/upstream --ignore-scripts --no-audit --no-fund
+          npx --prefix apps/api/src/id-business-v2/online-recharge/engine/upstream playwright install --with-deps chromium
+          npm run test:online-recharge:engine
+      - name: Verify task presentation and management interface rules
+        run: |
+          npm run test --workspace @apple-business/admin -- src/v2/features/online-recharge
+          npm run typecheck --workspace @apple-business/admin
+          npm run check:admin-ui
+          npm run check:v2-ui-language
+          npm run check:v2-color-contrast
+          npm run check:v2-table-standard
+          npm run check:v2-loading-standard
+          npm run check:v2-module-architecture
+          npm run check:v2-isolation
+      - name: Reproduce published roles and build only this repair
+        run: python3 -B scripts/production-release/online-unattended-build.py
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: online-unattended-${{ github.sha }}-${{ github.run_attempt }}
+          path: |
+            .deploy/online-unattended/online-checkout-artifact.tar.gz
+            .deploy/online-unattended/artifact-sha256.txt
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 30

@@ -67,6 +67,8 @@ export class OnlineRechargeWorkerRpcRepository {
         return this.workers.progress(rpc);
       case 'beforeExternalSubmit':
         return this.workers.beforeSubmit(rpc);
+      case 'getCheckoutRecovery':
+        return { checkoutRecovery: await this.workers.getCheckoutRecovery(rpc) };
       case 'completeJob':
         return this.workers.finish(rpc, false);
       case 'failJob':

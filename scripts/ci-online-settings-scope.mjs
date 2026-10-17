@@ -1,4 +1,25 @@
 const applicationPaths = Object.freeze([
+  'apps/admin/src/v2/features/online-recharge/auditPresentation.spec.ts',
+  'apps/api/src/id-business-v2/online-recharge/checkout-recovery.spec.ts',
+  'apps/api/src/id-business-v2/online-recharge/checkout-recovery.ts',
+  'apps/api/src/id-business-v2/online-recharge/engine/checkout-recovery.cjs',
+  'apps/api/src/id-business-v2/online-recharge/engine/test/checkout-recheck.test.cjs',
+  'apps/api/src/id-business-v2/online-recharge/engine/test/checkout-recovery.test.cjs',
+  'apps/api/src/id-business-v2/online-recharge/engine/test/payment-observation.test.cjs',
+  'apps/api/src/id-business-v2/online-recharge/engine/test/solver-process.test.cjs',
+  'apps/api/src/id-business-v2/online-recharge/engine/test/unattended-task-control.test.cjs',
+  'apps/api/src/id-business-v2/online-recharge/engine/test/verification-state.test.cjs',
+  'apps/api/src/id-business-v2/online-recharge/engine/upstream/captcha-platform.js',
+  'apps/api/src/id-business-v2/online-recharge/engine/upstream/hcaptcha-solver.js',
+  'apps/api/src/id-business-v2/online-recharge/engine/upstream/hcaptcha/solver.py',
+  'apps/api/src/id-business-v2/online-recharge/engine/upstream/human-verification.js',
+  'apps/api/src/id-business-v2/online-recharge/engine/upstream/verification-runtime.js',
+  'apps/api/src/id-business-v2/online-recharge/online-recharge.module.ts',
+  'apps/api/src/id-business-v2/online-recharge/persistence/worker-rpc.repository.spec.ts',
+  'apps/api/src/id-business-v2/online-recharge/proxy-country.spec.ts',
+  'apps/api/src/id-business-v2/online-recharge/reconciliation.service.ts',
+  'apps/api/src/id-business-v2/online-recharge/reconciliation.spec.ts',
+  'apps/api/src/id-business-v2/online-recharge/reconciliation.ts',
   'apps/admin/src/v2/features/online-recharge/api.ts',
   'apps/admin/src/v2/features/online-recharge/api.spec.ts',
   'apps/admin/src/v2/features/online-recharge/useOnlineTask.ts',
@@ -79,6 +100,11 @@ const applicationPaths = Object.freeze([
   'apps/api/src/id-business-v2/online-recharge/plan-region.ts'
 ]);
 const controlPaths = Object.freeze([
+  '.github/workflows/online-unattended-validation.yml',
+  'scripts/production-release/online-unattended-build.py',
+  'scripts/production-release/online-unattended-contract.json',
+  'scripts/production-release/online-unattended-release.py',
+  'scripts/production-release/online-unattended-release.test.py',
   '.github/workflows/online-checkout-retest-validation.yml',
   'scripts/production-release/online-checkout-retest-build.py',
   'scripts/production-release/online-checkout-retest-contract.json',
@@ -138,6 +164,13 @@ const displayRuntimeRequired = [
   'test/runtime-main.test.cjs',
   'SOURCE_MANIFEST.json'
 ].map((name) => 'apps/api/src/id-business-v2/online-recharge/engine/' + name);
+const unattendedRequired = [
+  'checkout-recovery.ts',
+  'reconciliation.service.ts',
+  'online-recharge.module.ts',
+  'persistence/worker-rpc.repository.ts',
+  'engine/upstream/human-verification.js'
+].map((name) => 'apps/api/src/id-business-v2/online-recharge/' + name);
 export function isOnlineSettingsOnly(paths) {
   const databaseTest = 'apps/api/src/id-business-v2/online-recharge/mysql.integration.spec.ts';
   const fixtureRepair =
@@ -151,6 +184,7 @@ export function isOnlineSettingsOnly(paths) {
     (required.every((path) => paths.includes(path)) ||
       checkoutRequired.every((path) => paths.includes(path)) ||
       retestRequired.every((path) => paths.includes(path)) ||
+      unattendedRequired.every((path) => paths.includes(path)) ||
       fixtureRepair ||
       (displayRuntimeRequired.every((path) => paths.includes(path)) &&
         paths.every(
@@ -200,6 +234,7 @@ export function onlineSettingsCommands(part, paths) {
         'scripts/ci-change-scope.test.mjs'
       ],
       ['python3', '-B', 'scripts/production-release/online-settings-release.test.py'],
+      ['python3', '-B', 'scripts/production-release/online-unattended-release.test.py'],
       ...(paths.some((path) => path.includes('online-checkout-'))
         ? [['python3', '-B', 'scripts/production-release/online-checkout-release.test.py']]
         : []),

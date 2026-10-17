@@ -45,6 +45,7 @@ function fixture(overrides = {}, codePlan?: OnlineRechargePlan) {
     idBusinessV2RechargeProxy: { count: vi.fn(async () => 1) },
     onlineRechargeTask: {
       findUnique: vi.fn(),
+      findFirst: vi.fn(async () => null as Record<string, unknown> | null),
       count: vi.fn(async () => 0),
       create: vi.fn(async ({ data }) => ({ id: taskId, status: 'queued', ...data }))
     }
@@ -165,6 +166,34 @@ describe('套餐地区规则与任务快照', () => {
     await expect(f.tasks.start(input, operator, 'subscription')).rejects.toThrow(
       '缺少固定支付地区'
     );
+    expect(f.tx.onlineRechargeTask.create).not.toHaveBeenCalled();
+  });
+
+  it('手工核对复用已经排队的同原单任务，不重复创建', async () => {
+    const f = fixture();
+    f.tx.onlineRechargeTask.findUnique.mockResolvedValue({
+      id: taskId,
+      status: 'awaiting_review',
+      leaseVersion: 2,
+      plan: 'plus',
+      sessionIdentityHash: 'fixture',
+      payload: { region: 'PH', proxyCountryCode: 'PH' }
+    });
+    const queued = {
+      id: 'queued-read-only',
+      message: '',
+      status: 'queued',
+      operation: 'subscription',
+      payload: { recheckTaskId: taskId, sourceVersion: 2 }
+    };
+    f.tx.onlineRechargeTask.findFirst.mockResolvedValue(queued);
+    expect(
+      await f.tasks.start(
+        { session, plan: 'plus', recheckTaskId: taskId, sourceVersion: 2 },
+        operator,
+        'subscription'
+      )
+    ).toMatchObject({ id: queued.id });
     expect(f.tx.onlineRechargeTask.create).not.toHaveBeenCalled();
   });
 

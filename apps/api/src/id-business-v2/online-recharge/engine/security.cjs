@@ -16,7 +16,7 @@ function rememberSecrets(value, key = '') {
   }
   if (
     typeof value === 'string' &&
-    /session|token|password|secret|api.?key|cvv|cvc|card_number|proxy|^(?:number|pan|chat.?id)$/i.test(
+    /session|token|password|secret|api.?key|cvv|cvc|card_number|proxy|^(?:number|pan|chat.?id|checkoutId|checkoutUrl)$/i.test(
       key
     )
   ) {
@@ -53,6 +53,7 @@ function redactText(value) {
       '$1[已隐藏]'
     )
     .replace(/\b(?:sk|pk)_(?:live|test)_[A-Za-z0-9_-]+\b/g, '[凭据已隐藏]')
+    .replace(/\b(?:oaics_[A-Za-z0-9_]+|cs_(?:live|test)_[A-Za-z0-9]+)\b/g, '[原结账标识已隐藏]')
     .replace(/\b(?:https?|socks5h?):\/\/[^\s/@]+:[^\s/@]+@[^\s"'<>]+/gi, '[代理连接凭据已隐藏]')
     .replace(/https?:\/\/[^\s]+/gi, (raw) => {
       try {
@@ -69,7 +70,7 @@ function sanitize(value, key = '') {
   // This exact UUID metadata binds a result to its resource; it is never a proxy credential.
   if (isPublicProxyId(value, key) && !secrets.has(value)) return value;
   if (
-    /token|password|secret|api.?key|cvv|cvc|card_number|cookie|session_payload|accessToken|refresh_token|chat.?id|topup.?code|cdk/i.test(
+    /token|password|secret|api.?key|cvv|cvc|card_number|cookie|session_payload|accessToken|refresh_token|chat.?id|topup.?code|cdk|^(?:checkoutRecovery(?:Encrypted)?|checkoutId|checkoutUrl)$/i.test(
       key
     )
   )
@@ -82,7 +83,11 @@ function sanitize(value, key = '') {
 function clearSensitive(value) {
   if (!value || typeof value !== 'object') return;
   for (const [key, child] of Object.entries(value)) {
-    if (/session|token|password|secret|key|cvv|cvc|card_number|number|proxy|chat.?id/i.test(key))
+    if (
+      /session|token|password|secret|key|cvv|cvc|card_number|number|proxy|chat.?id|checkoutRecovery|checkoutUrl|checkoutId/i.test(
+        key
+      )
+    )
       value[key] = null;
     else if (child && typeof child === 'object') clearSensitive(child);
   }

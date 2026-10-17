@@ -1,6 +1,7 @@
 'use strict';
 
-const { beforeExternalSubmit, wasSubmitted, ResultUnknownError } = require('../rpc.cjs');
+const { beforeExternalSubmit, wasSubmitted, ResultUnknownError, taskSignal } = require('../rpc.cjs');
+const checkoutRecovery = require('../checkout-recovery.cjs');
 
 const UPGRADE_DIALOG_TITLE = /确认套餐变更|Confirm (?:your )?plan change|Confirm subscription change/i;
 const TARGET_LABELS = Object.freeze({ pro_5x: '100', pro_20x: '200', pro_500: '500' });
@@ -129,6 +130,16 @@ async function completeUpgradePayment(page, cardInfo, options = {}) {
     if (!dialog) return { success: false, submitted: false, error: '未识别到套餐变更确认窗口', canRetryCard: false };
     try {
         const quote = parseUpgradeQuote(await dialog.innerText(), options.planType, options.expectedCurrency);
+        let recovery;
+        try {
+            const candidate = buildPaymentContext({ ...options, operation: 'upgrade' }, cardInfo, quote);
+            candidate.quoteId = checkoutRecovery.quoteIdForUrl(originalPageUrl);
+            recovery = checkoutRecovery.buildCheckoutRecovery(originalPageUrl, candidate);
+        } catch (_) {
+            return { success: false, submitted: false, canRetryCard: false, dueAmount: quote.amount, dueCurrency: quote.currency,
+                upgradeQuote: quote, errorCode: 'CHECKOUT_RECOVERY_UNAVAILABLE',
+                error: '当前套餐变更窗口缺少可核实的原单恢复标识，本次未提交订阅变更或付款' };
+        }
         const card = matchSavedCard(await readSavedCards(dialog), cardInfo);
         const radios = dialog.locator('[role="radio"], input[type="radio"]');
         const selected = radios.nth(card.index);
@@ -156,15 +167,20 @@ async function completeUpgradePayment(page, cardInfo, options = {}) {
         }
         if (await selected.getAttribute('aria-checked') !== 'true' && !(await selected.isChecked().catch(() => false))) throw new Error('最终保存卡选择已变化，禁止扣款');
         const paymentContext = buildPaymentContext({ ...options, operation: 'upgrade' }, cardInfo, quote);
-        const paymentEvidence = { ...paymentContext, source: 'subscription_change', quoteVerified: true, verified: quote.zeroDue };
+        paymentContext.quoteId = recovery.quoteId;
         require('../payment-limit.cjs').assertPaymentLimit(options.paymentLimit, quote);
-        await beforeExternalSubmit({ provider: 'local', stage: 'upgrade_submit', paymentContext });
-        await button.click({ timeout: 8000 });
-        if (typeof page.waitForTimeout === 'function') await page.waitForTimeout(1500);
-        if (require('./stripe-payment').isVerifiedCheckoutOutcome(originalPageUrl, page.url())) paymentEvidence.verified = true;
-        // UI errors cannot authorize a replay. The caller now queries only the
-        // original authenticated account and records the exact target if proven.
-        return { success: false, submitted: true, resultUnknown: true, canRetryCard: false, dueAmount: quote.amount, dueCurrency: quote.currency, paymentEvidence, upgradeQuote: quote };
+        const observation = checkoutRecovery.observePayment(page, recovery, { signal: options.signal || taskSignal?.() });
+        try {
+            await beforeExternalSubmit({ provider: 'local', stage: 'upgrade_submit', paymentContext, checkoutRecovery: recovery });
+            observation.arm();
+            await button.click({ timeout: 8000 });
+            if (typeof page.waitForTimeout === 'function') await page.waitForTimeout(1500);
+            const receipt = await observation.flush();
+            const paymentEvidence = receipt || { ...paymentContext, source: 'subscription_change', quoteVerified: true, verified: false };
+            // A zero quote, redirect or activated target is not a payment receipt.
+            return { success: Boolean(receipt), submitted: true, resultUnknown: !receipt, canRetryCard: false,
+                dueAmount: quote.amount, dueCurrency: quote.currency, paymentEvidence, upgradeQuote: quote };
+        } finally { await observation.dispose(); }
     } catch (error) {
         if (['LEASE_LOST', 'PENDING_CREDENTIALS'].includes(error.code)) throw error;
         if (wasSubmitted()) throw new ResultUnknownError();

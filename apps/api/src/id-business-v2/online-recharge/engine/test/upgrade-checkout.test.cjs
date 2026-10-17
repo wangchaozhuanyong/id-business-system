@@ -2,6 +2,8 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const rpc = require('../rpc.cjs');
+const recovery = require('../checkout-recovery.cjs');
+const originalCheckoutUrl = 'https://chatgpt.com/checkout/openai_llc/oaics_fixtureUpgradeCheckout';
 const {
   parseUpgradeQuote,
   matchSavedCard,
@@ -34,7 +36,8 @@ const options = { planType: 'pro_500', operation: 'upgrade', expectedCurrency: '
 function mockPage({
   text = body(),
   methods = [{ index: 0, last4: '4242', brand: 'visa', expiry: '12/29' }],
-  clickError = null
+  clickError = null,
+  url = originalCheckoutUrl
 } = {}) {
   let selected = false;
   const calls = { choose: 0, submit: 0 };
@@ -67,7 +70,7 @@ function mockPage({
       selector.startsWith('input') ? { count: async () => 0 } : { nth: () => radio },
     getByRole: () => button
   };
-  return { page: { getByRole: () => dialog, url: () => 'https://chatgpt.com/#pricing' }, calls };
+  return { page: { getByRole: () => dialog, url: () => url, on: () => {}, off: () => {} }, calls };
 }
 test.beforeEach(() => {
   rpc.configureTask({ id: 'synthetic-upgrade', leaseId: 'synthetic-lease' });
@@ -135,10 +138,12 @@ test('saved card needs unique last4 plus matching brand and visible expiry', () 
 test('durable gate contains original account, original tier, exact target, card lease and actual due before one click', async () => {
   const { page, calls } = mockPage();
   let intent;
+  let recoveryIdentity;
   rpc.setTransportForTest(async (method, input) => {
     assert.equal(method, 'beforeExternalSubmit');
     assert.equal(calls.submit, 0);
     intent = input.paymentContext;
+    recoveryIdentity = input.checkoutRecovery;
     return { ok: true };
   });
   const result = await completeUpgradePayment(page, card, options);
@@ -154,8 +159,11 @@ test('durable gate contains original account, original tier, exact target, card 
     cardId: 'synthetic-card',
     cardLast4: '4242',
     amount: '28095.37',
-    currency: 'PHP'
+    currency: 'PHP',
+    quoteId: recovery.quoteIdForUrl(originalCheckoutUrl)
   });
+  assert.equal(recoveryIdentity.checkoutUrl, originalCheckoutUrl);
+  assert.equal(recoveryIdentity.quoteId, intent.quoteId);
   assert.equal(JSON.stringify(intent).includes(card.number), false);
   assert.equal(result.paymentEvidence.verified, false);
   assert.equal(result.paymentEvidence.quoteVerified, true);
@@ -165,6 +173,27 @@ test('durable gate contains original account, original tier, exact target, card 
   );
   assert.equal(calls.submit, 1);
 });
+
+for (const due of ['28,095.37', '0.00'])
+  test(`an upgrade quote ${due} without an actual original checkout identity stops before any submission`, async () => {
+    const { page, calls } = mockPage({
+      text: body('500', due),
+      url: 'https://chatgpt.com/#pricing'
+    });
+    let submissions = 0;
+    rpc.setTransportForTest(async () => {
+      submissions++;
+      return { ok: true };
+    });
+    const result = await completeUpgradePayment(page, card, options);
+    assert.equal(result.submitted, false);
+    assert.equal(result.errorCode, 'CHECKOUT_RECOVERY_UNAVAILABLE');
+    assert.equal(result.upgradeQuote.zeroDue, due === '0.00');
+    assert.equal(calls.submit, 0);
+    assert.equal(calls.choose, 0);
+    assert.equal(submissions, 0);
+    assert.equal(rpc.wasSubmitted(), false);
+  });
 test('default selected unrelated or unverifiable saved card is never paid', async () => {
   const { page, calls } = mockPage({
     methods: [{ index: 0, last4: '4242', brand: 'visa', expiry: null }]

@@ -9,6 +9,9 @@ const { spawn } = require('child_process');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
+const { randomInt } = require('node:crypto');
+const { deflateSync } = require('node:zlib');
+const { createVerificationBudget, controlledVerificationCode, safeVerificationDiagnostics } = require('./verification-runtime');
 
 const DEFAULT_SOLVER_SCRIPT = path.join(__dirname, 'hcaptcha', 'solver.py');
 const DEFAULT_OUT_DIR = path.join(__dirname, '..', 'runtime', 'solver');
@@ -116,7 +119,7 @@ function isSolverSuccessResult(parsed) {
  * 通过 CDP 在当前 checkout 页面上运行 Python hCaptcha solver
  * @param {object} options
  * @param {string} [options.cdpUrl]
- * @param {string} [options.pageUrlSubstr]
+ * @param {string} options.pageBinding Exact task page identity installed before checkout.
  * @param {number} [options.timeoutSec]
  * @param {string} [options.locale]
  * @param {string} [options.timezoneId]
@@ -125,132 +128,70 @@ function isSolverSuccessResult(parsed) {
  */
 function solveHcaptchaOnPage(options = {}) {
     const cdpUrl = String(options.cdpUrl || getCdpUrl() || '').trim();
-    if (!cdpUrl) {
-        return Promise.resolve({
-            ok: false,
-            error: '未配置 CDP_URL，无法启动 hCaptcha solver（请在浏览器 launch 时开启 remote-debugging-port）'
-        });
-    }
-
-    const pythonBin = resolveSolverPython();
+    if (!cdpUrl) return Promise.resolve({ ok: false, code: 'VERIFICATION_SOLVER_DISABLED', retryable: false });
+    if (!/^[0-9a-f-]{36}$/i.test(String(options.pageBinding || '')))
+        return Promise.resolve({ ok: false, code: 'VERIFICATION_PAGE_BINDING_REQUIRED', retryable: false });
     const scriptPath = process.env.HCAPTCHA_SOLVER_SCRIPT || DEFAULT_SOLVER_SCRIPT;
-    if (!fs.existsSync(scriptPath)) {
-        return Promise.resolve({
-            ok: false,
-            error: `hCaptcha solver 脚本不存在: ${scriptPath}`
-        });
-    }
-
-    const timeoutSec = Number(options.timeoutSec || process.env.HCAPTCHA_SOLVER_TIMEOUT || 240);
+    if (!fs.existsSync(scriptPath)) return Promise.resolve({ ok: false, code: 'VERIFICATION_SOLVER_DISABLED', retryable: false });
+    const budget = createVerificationBudget({ signal: options.signal,
+        maxWaitMs: Math.min(Number(options.timeoutMs) || Number(options.timeoutSec || process.env.HCAPTCHA_SOLVER_TIMEOUT || 180) * 1000, 180000) });
+    try { budget.assert(); } catch (error) { budget.dispose(); return Promise.resolve({ ok: false, code: error.code, retryable: true }); }
     const outDir = process.env.HCAPTCHA_SOLVER_OUT_DIR || DEFAULT_OUT_DIR;
-    fs.mkdirSync(outDir, { recursive: true });
-
-    const logPath = path.join(outDir, `solver_node_${Date.now()}.log`);
-    const pageUrlSubstr = String(
-        options.pageUrlSubstr
-        || options.pageUrl
-        || 'checkout'
-    ).trim();
-
-    const args = [
-        '-u',
-        scriptPath,
-        '--timeout',
-        String(Math.max(60, timeoutSec)),
-        '--out-dir',
-        outDir,
-        '--cdp-url',
-        cdpUrl,
-        '--attached-page-url-substr',
-        pageUrlSubstr
-    ];
-
-    const locale = String(options.locale || process.env.HCAPTCHA_BROWSER_LOCALE || 'en-US').trim();
-    const timezoneId = String(options.timezoneId || process.env.HCAPTCHA_BROWSER_TIMEZONE || 'America/Chicago').trim();
-    const acceptLanguage = String(
-        options.acceptLanguage
-        || process.env.HCAPTCHA_ACCEPT_LANGUAGE
-        || `${locale},${locale.split('-', 1)[0]};q=0.9`
-    ).trim();
-
-    args.push('--browser-locale', locale);
-    args.push('--browser-timezone', timezoneId);
-    args.push('--accept-language', acceptLanguage);
-
-    if (process.env.CTF_VLM_BASE_URL) {
-        args.push('--vlm-base-url', process.env.CTF_VLM_BASE_URL);
-    }
-    if (process.env.CTF_VLM_MODEL) {
-        args.push('--vlm-model', process.env.CTF_VLM_MODEL);
-    }
-    if (process.env.CTF_VLM_TIMEOUT) {
-        args.push('--vlm-timeout', String(process.env.CTF_VLM_TIMEOUT));
-    }
-    if (process.env.HCAPTCHA_SOLVER_NO_VLM === '1') {
-        args.push('--no-vlm');
-    }
-    if (process.env.HEADFUL === '1' || process.env.HCAPTCHA_SOLVER_HEADED === '1') {
-        args.push('--headed');
-    }
-
-    console.log(`[hCaptcha] 启动视觉求解器: ${pythonBin} ${args.join(' ')}`);
-    console.log(`[hCaptcha] solver 日志: ${logPath}`);
-
+    fs.mkdirSync(outDir, { recursive: true, mode: 0o700 });
+    const args = ['-u', scriptPath, '--timeout', String(budget.remaining() / 1000),
+        '--out-dir', outDir, '--cdp-url', cdpUrl, '--attached-page-binding', options.pageBinding, '--initial-state-stdin'];
+    const locale = String(options.locale || process.env.HCAPTCHA_BROWSER_LOCALE || 'en-US');
+    args.push('--browser-locale', locale, '--browser-timezone',
+        String(options.timezoneId || process.env.HCAPTCHA_BROWSER_TIMEZONE || 'America/Chicago'),
+        '--accept-language', String(options.acceptLanguage || process.env.HCAPTCHA_ACCEPT_LANGUAGE || `${locale},en;q=0.9`));
+    if (process.env.HCAPTCHA_SOLVER_NO_VLM === '1') args.push('--no-vlm');
+    if (process.env.HEADFUL === '1') args.push('--headed');
     return new Promise((resolve) => {
-        const logStream = { write: () => {}, end: () => {} }; // Solver stdout is parsed in memory only.
-        const proc = spawn(pythonBin, args, {
-            env: buildSolverEnv(),
-            cwd: path.dirname(scriptPath)
-        });
-
-        let stdout = '';
+        let proc, stdout = '', settled = false, terminationCode = null, forceTimer;
+        const finish = (value) => {
+            if (settled) return;
+            settled = true;
+            clearTimeout(forceTimer);
+            budget.signal.removeEventListener('abort', abort);
+            budget.dispose();
+            resolve(value);
+        };
+        const abort = () => {
+            if (forceTimer || settled) return;
+            terminationCode ||= budget.signal.reason?.code || 'VERIFICATION_CANCELLED';
+            if (!proc) return finish({ ok: false, code: terminationCode, retryable: true });
+            try { proc.kill('SIGTERM'); } catch (_) { /* Already exited. */ }
+            forceTimer = setTimeout(() => {
+                try { proc.kill('SIGKILL'); } catch (_) { /* Already exited. */ }
+            }, 1000);
+            forceTimer.unref?.();
+        };
+        budget.signal.addEventListener('abort', abort, { once: true });
+        try {
+            proc = spawn(resolveSolverPython(), args, { env: buildSolverEnv(), cwd: path.dirname(scriptPath), stdio: ['pipe', 'pipe', 'pipe'] });
+        } catch (_) { return finish({ ok: false, code: 'VERIFICATION_SOLVER_FAILED', retryable: false }); }
+        proc.stdin?.on('error', () => {});
+        proc.stdin?.end(JSON.stringify({ challenge: options.challenge || null }));
         proc.stdout.on('data', (chunk) => {
-            const text = chunk.toString();
-            stdout += text;
-            logStream.write(text);
-            for (const line of text.split('\n')) {
-                const trimmed = line.trim();
-                if (trimmed) {
-                    console.log(`[hCaptcha] ${trimmed}`);
-                }
-            }
-        });
-        proc.stderr.on('data', (chunk) => {
-            const text = chunk.toString();
-            logStream.write(text);
-            for (const line of text.split('\n')) {
-                const trimmed = line.trim();
-                if (trimmed) {
-                    console.log(`[hCaptcha][stderr] ${trimmed}`);
-                }
-            }
-        });
-
-        proc.on('error', (err) => {
-            logStream.end();
-            resolve({
-                ok: false,
-                error: `启动 solver 失败: ${err.message}`,
-                logPath
-            });
-        });
-
-        proc.on('close', (code) => {
-            logStream.end();
-            const parsed = extractJsonFromOutput(stdout);
-            if (code === 0 && isSolverSuccessResult(parsed)) {
-                resolve({ ok: true, result: parsed, logPath });
+            if (stdout.length + chunk.length > 1024 * 1024) {
+                terminationCode = 'VERIFICATION_SOLVER_FAILED';
+                abort();
                 return;
             }
-            resolve({
-                ok: false,
-                error: code === 0
-                    ? 'solver 未返回有效 JSON 结果'
-                    : `solver 退出码 ${code}`,
-                result: parsed || undefined,
-                logPath
-            });
+            stdout += chunk.toString();
         });
+        // Never forward solver stdout/stderr: response tokens, screenshots and model payloads stay private.
+        proc.stderr.on('data', () => {});
+        proc.on('error', () => finish({ ok: false, code: 'VERIFICATION_SOLVER_FAILED', retryable: false }));
+        proc.on('close', (code) => {
+            if (terminationCode) return finish({ ok: false, code: terminationCode, retryable: terminationCode === 'VERIFICATION_TIMEOUT' });
+            const parsed = extractJsonFromOutput(stdout);
+            if (code === 0 && isSolverSuccessResult(parsed)) return finish({ ok: true, result: parsed });
+            const resultCode = controlledVerificationCode(parsed?.code, 'VERIFICATION_SOLVER_FAILED');
+            finish({ ok: false, code: resultCode, retryable: parsed?.retryable === true,
+                diagnostics: safeVerificationDiagnostics(parsed) });
+        });
+        if (budget.signal.aborted) abort();
     });
 }
 
@@ -325,85 +266,104 @@ function normalizeVlmBaseUrl(baseUrl) {
     return String(baseUrl || 'https://api.openai.com/v1').trim().replace(/\/+$/, '');
 }
 
-/**
- * 真实调用 VLM API 测试连通性
- */
+function buildVlmPayload(model, messages, maxTokens = 1024) {
+    const payload = { model, messages };
+    if (/^gpt-5(?:[.:-]|$)/i.test(model)) payload.max_completion_tokens = maxTokens;
+    else Object.assign(payload, { temperature: 0, max_tokens: maxTokens });
+    if (!/claude/i.test(model)) payload.response_format = { type: 'json_object' };
+    return payload;
+}
+
+function adaptVlmParameter(payload, error) {
+    if (error?.code !== 'unsupported_parameter') return false;
+    const param = error.param;
+    if (param === 'max_tokens' && 'max_tokens' in payload) {
+        payload.max_completion_tokens = payload.max_tokens; delete payload.max_tokens;
+    } else if (param === 'max_completion_tokens' && 'max_completion_tokens' in payload) {
+        payload.max_tokens = payload.max_completion_tokens; delete payload.max_completion_tokens;
+    } else if (['temperature', 'response_format'].includes(param) && param in payload) delete payload[param];
+    else return false;
+    return true;
+}
+
+function visionProbe() {
+    const colours = [['red', [235, 32, 32]], ['blue', [31, 80, 230]], ['green', [20, 170, 50]]];
+    const [colour, rgb] = colours[randomInt(colours.length)];
+    const side = 48, raw = Buffer.alloc(side * (side * 3 + 1), 255);
+    for (let y = 0; y < side; y++) {
+        raw[y * (side * 3 + 1)] = 0;
+        for (let x = 10; x < 38 && y >= 10 && y < 38; x++)
+            rgb.forEach((value, c) => { raw[y * (side * 3 + 1) + 1 + x * 3 + c] = value; });
+    }
+    const crc = (bytes) => {
+        let value = 0xffffffff;
+        for (const byte of bytes) {
+            value ^= byte;
+            for (let bit = 0; bit < 8; bit++) value = value & 1 ? 0xedb88320 ^ value >>> 1 : value >>> 1;
+        }
+        return (value ^ 0xffffffff) >>> 0;
+    };
+    const chunk = (name, data) => {
+        const kind = Buffer.from(name), length = Buffer.alloc(4), sum = Buffer.alloc(4);
+        length.writeUInt32BE(data.length); sum.writeUInt32BE(crc(Buffer.concat([kind, data])));
+        return Buffer.concat([length, kind, data, sum]);
+    };
+    const header = Buffer.alloc(13); header.writeUInt32BE(side, 0); header.writeUInt32BE(side, 4); header[8] = 8; header[9] = 2;
+    const png = Buffer.concat([Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]), chunk('IHDR', header), chunk('IDAT', deflateSync(raw)), chunk('IEND', Buffer.alloc(0))]);
+    return { colour, image: `data:image/png;base64,${png.toString('base64')}` };
+}
+
+function vlmHttpCode(status, error) {
+    if (['image_unsupported', 'unsupported_content_type', 'invalid_image_format'].includes(error?.code)) return 'VLM_IMAGE_UNSUPPORTED';
+    return [401, 403].includes(status) ? 'VLM_AUTH_FAILED' : status === 429 ? 'VLM_RATE_LIMITED'
+        : status >= 500 ? 'VLM_PROVIDER_UNAVAILABLE' : status === 400 ? 'VLM_REQUEST_UNSUPPORTED' : 'VLM_API_REJECTED';
+}
+
+/** A synthetic picture checks vision and JSON together; no checkout screenshot is used. */
 async function testVlmConnectivity(cfg = {}) {
     const apiKey = String(cfg.vlm_api_key || process.env.CTF_VLM_API_KEY || '').trim();
     const baseUrl = normalizeVlmBaseUrl(cfg.vlm_base_url || process.env.CTF_VLM_BASE_URL);
-    const model = String(cfg.vlm_model || process.env.CTF_VLM_MODEL || 'gpt-4o').trim();
-    const timeoutMs = Math.max(5000, Number(cfg.vlm_timeout || process.env.CTF_VLM_TIMEOUT || 45) * 1000);
-
-    if (!apiKey) {
-        return { ok: false, message: '未配置 VLM API Key' };
-    }
-
-    const endpoint = `${baseUrl}/chat/completions`;
-    const started = Date.now();
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), timeoutMs);
-
+    const model = String(cfg.vlm_model || process.env.CTF_VLM_MODEL || 'gpt-5.5').trim();
+    if (!apiKey) return { ok: false, code: 'VLM_NOT_CONFIGURED', message: '未配置视觉服务凭据', image_json_verified: false };
+    const started = Date.now(), probe = visionProbe();
+    const payload = buildVlmPayload(model, [{ role: 'user', content: [
+        { type: 'text', text: 'Inspect the image. Return ONLY a JSON object with keys colour (red, blue or green) and shape for the single coloured shape on the white background.' },
+        { type: 'image_url', image_url: { url: probe.image, detail: 'high' } }
+    ] }]);
+    const budget = createVerificationBudget({ signal: cfg.signal, maxWaitMs: Number(cfg.vlm_timeout || process.env.CTF_VLM_TIMEOUT || 45) * 1000 });
+    const failed = (code, status, providerCode) => ({ ok: false, code, message: '视觉图像与结构化结果检测未通过',
+        model, latency_ms: Date.now() - started, image_json_verified: false,
+        ...(status ? { http_status: status } : {}),
+        ...(/^[a-zA-Z0-9_]{1,60}$/.test(providerCode || '') ? { provider_code: providerCode } : {}) });
     try {
-        const response = await fetch(endpoint, {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-                Authorization: `Bearer ${apiKey}`
-            },
-            body: JSON.stringify({
-                model,
-                temperature: 0,
-                max_tokens: 32,
-                messages: [
-                    {
-                        role: 'user',
-                        content: 'Reply with exactly this JSON and nothing else: {"ok":true,"ping":"pong"}'
-                    }
-                ]
-            }),
-            signal: controller.signal
-        });
-        const latencyMs = Date.now() - started;
-        const text = await response.text();
-        let body = {};
-        try {
-            body = text ? JSON.parse(text) : {};
-        } catch (_) {
-            body = { raw: text.slice(0, 500) };
+        for (let attempt = 0; attempt < 2; attempt++) {
+            budget.assert();
+            const response = await budget.run(fetch(`${baseUrl}/chat/completions`, {
+                method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
+                body: JSON.stringify(payload), signal: budget.signal
+            }));
+            let body;
+            try { body = await budget.run(response.json()); }
+            catch (_) { if (budget.signal.aborted) throw budget.signal.reason; return failed('VLM_INVALID_RESPONSE', response.status); }
+            if (!response.ok) {
+                const error = body?.error || {};
+                if (attempt === 0 && response.status === 400 && adaptVlmParameter(payload, error)) continue;
+                return failed(vlmHttpCode(response.status, error), response.status, error.code);
+            }
+            const content = body?.choices?.[0]?.message?.content;
+            let parsed;
+            try { parsed = JSON.parse(typeof content === 'string' ? content : ''); }
+            catch (_) { return failed('VLM_INVALID_RESPONSE', response.status); }
+            if (String(parsed.colour || '').toLowerCase() !== probe.colour || String(parsed.shape || '').toLowerCase() !== 'square')
+                return failed('VLM_VISION_CHECK_FAILED', response.status);
+            return { ok: true, code: 'VLM_VISION_JSON_VERIFIED', message: '视觉图像及结构化结果检测通过',
+                model, latency_ms: Date.now() - started, http_status: response.status, image_json_verified: true };
         }
-
-        if (!response.ok) {
-            const errMsg = body?.error?.message || body?.message || text.slice(0, 300) || `HTTP ${response.status}`;
-            return {
-                ok: false,
-                message: `VLM 请求失败: ${errMsg}`,
-                endpoint,
-                model,
-                latency_ms: latencyMs,
-                http_status: response.status,
-                response_preview: text.slice(0, 400)
-            };
-        }
-
-        const content = body?.choices?.[0]?.message?.content || '';
-        return {
-            ok: true,
-            message: `VLM 连通成功（${latencyMs}ms）`,
-            endpoint,
-            model,
-            latency_ms: latencyMs,
-            http_status: response.status,
-            response_preview: String(content).slice(0, 200)
-        };
+        return failed('VLM_REQUEST_UNSUPPORTED');
     } catch (error) {
-        const latencyMs = Date.now() - started;
-        const msg = error.name === 'AbortError'
-            ? `VLM 请求超时（>${timeoutMs}ms）`
-            : `VLM 请求异常: ${error.message}`;
-        return { ok: false, message: msg, endpoint, model, latency_ms: latencyMs };
-    } finally {
-        clearTimeout(timer);
-    }
+        if (budget.signal.reason?.code === 'LEASE_LOST') throw budget.signal.reason;
+        return failed(budget.signal.aborted ? 'VLM_TIMEOUT' : error?.name === 'AbortError' ? 'VLM_TIMEOUT' : 'VLM_NETWORK_UNAVAILABLE');
+    } finally { budget.dispose(); }
 }
 
 function listSolverLogFiles(limit = 20) {
@@ -451,5 +411,7 @@ module.exports = {
     readSolverLogTail,
     getCdpUrl,
     resolveSolverPython,
-    DEFAULT_SOLVER_SCRIPT
+    DEFAULT_SOLVER_SCRIPT,
+    buildVlmPayload,
+    adaptVlmParameter
 };

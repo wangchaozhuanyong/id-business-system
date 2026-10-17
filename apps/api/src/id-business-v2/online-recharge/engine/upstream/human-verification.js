@@ -7,10 +7,14 @@ const {
     isCaptchaPlatformEnabled,
     extractHcaptchaParamsFromPage,
     solveHcaptchaViaPlatform,
-    injectHcaptchaTokenOnPage,
-    clickCheckoutContinueAfterCaptcha
+    injectHcaptchaTokenOnPage
 } = require('./captcha-platform');
 const { isLoginPageContent, isHardLoginRedirectUrl, isCheckoutPageUrl, hasVisibleLoginChrome, isCheckoutLoginGate, buildSessionNotLoggedInError } = require('./auth-page-detect');
+const {
+    createVerificationBudget, isCheckboxInstruction, inspectCaptchaFrames,
+    prepareVerificationPage, disposeVerificationPage, verificationState,
+    controlledVerificationCode, safeVerificationDiagnostics
+} = require('./verification-runtime');
 
 const BLOCKING_TEXT_PATTERNS = [
     /one more step before you'?re done/i,
@@ -56,10 +60,6 @@ function isInvisibleStripeHcaptchaUrl(url) {
     if (u.includes('js.stripe.com') && u.includes('hcaptcha')) {
         return true;
     }
-    // Stripe 后台静态资源帧，不是可见 challenge
-    if (u.includes('hcaptcha') && (u.includes('/static/') || u.includes('#debugmod'))) {
-        return true;
-    }
     return false;
 }
 
@@ -89,59 +89,12 @@ function isHcaptchaChallengeFrameUrl(url) {
 }
 
 async function hasHcaptchaImageChallenge(page) {
-    for (const frame of page.frames()) {
-        if (isHcaptchaChallengeFrameUrl(frame.url() || '')) {
-            return true;
-        }
-    }
-    for (const frame of page.frames()) {
-        const url = String(frame.url() || '').toLowerCase();
-        if (isInvisibleStripeHcaptchaUrl(url)) {
-            continue;
-        }
-        if (!/hcaptcha|newassets/i.test(url)) {
-            continue;
-        }
-        try {
-            const looksLikeChallenge = await frame.evaluate(() => {
-                const body = String(document.body?.innerText || '').toLowerCase();
-                if (/click the|please click|please select|drag the|different from|matching shape|choose all|identify/i.test(body)) {
-                    return true;
-                }
-                if (document.querySelector('.challenge-container, .button-submit, .task-grid, canvas')) {
-                    return true;
-                }
-                return false;
-            });
-            if (looksLikeChallenge) {
-                return true;
-            }
-        } catch (_) { /* cross-origin frame */ }
-    }
-    try {
-        const mainHasChallenge = await page.evaluate(() => {
-            const body = String(document.body?.innerText || '').toLowerCase();
-            return /click the .+ (different|arrow|select)/i.test(body)
-                || /please click|please select|drag the matching|that are different/i.test(body);
-        });
-        if (mainHasChallenge) {
-            return true;
-        }
-    } catch (_) { /* ignore */ }
-    return false;
+    return (await inspectCaptchaFrames(page)).some((item) => item.raster
+        && item.prompts.some((prompt) => !isCheckboxInstruction(prompt)));
 }
 
 async function hasHcaptchaSolverTarget(page) {
-    if (await hasHcaptchaImageChallenge(page)) {
-        return true;
-    }
-    for (const frame of page.frames()) {
-        const url = String(frame.url() || '').toLowerCase();
-        if (isHcaptchaCheckboxFrameUrl(url)) {
-            return true;
-        }
-    }
-    return false;
+    return await hasHcaptchaImageChallenge(page);
 }
 
 async function waitForPassiveCheckboxClear(page, phase, verifyOpts, timeoutMs = 45000) {
@@ -173,49 +126,16 @@ async function logCaptchaFrameSnapshot(page, phase) {
     }
 }
 
-async function clickHcaptchaCheckboxFrames(page, phase = 'hcaptcha-checkbox') {
-    let clicked = false;
-    const selectors = ['#checkbox', '#anchor', '[id="checkbox"]', '[role="checkbox"]', 'div[aria-checked]', '.checkbox'];
-
-    for (const frame of page.frames()) {
-        const url = frame.url() || '';
-        if (!isHcaptchaCheckboxFrameUrl(url)) {
-            continue;
-        }
-        for (const sel of selectors) {
-            try {
-                const loc = frame.locator(sel).first();
-                if (!(await loc.isVisible({ timeout: 600 }).catch(() => false))) {
-                    continue;
-                }
-                const box = await loc.boundingBox({ timeout: 1000 }).catch(() => null);
-                if (box) {
-                    await humanClickBoundingBox(page, box, 'checkbox-left');
-                } else {
-                    await loc.click({ timeout: 2000, delay: randomBetween(40, 120) });
-                }
-                captchaLog(phase, `已点击 hCaptcha checkbox frame (${url.slice(0, 70)}...)`);
-                clicked = true;
-                break;
-            } catch (_) { /* next selector */ }
-        }
-    }
-
-    if (!clicked) {
-        const iframes = await collectCaptchaIframeLocators(page);
-        for (const iframe of iframes) {
-            const src = await iframe.getAttribute('src').catch(() => '') || '';
-            if (!/hcaptcha/i.test(src)) {
-                continue;
-            }
-            if (await humanClickLocator(page, iframe, 'checkbox-left')) {
-                captchaLog(phase, `已点击 hCaptcha iframe bbox (${src.slice(0, 70)}...)`);
-                clicked = true;
-                break;
-            }
-        }
-    }
-    return clicked;
+async function clickHcaptchaCheckboxFrames(page, phase = 'hcaptcha-checkbox', budget = null) {
+    const frames = (await inspectCaptchaFrames(page)).filter((item) =>
+        ['checkbox', 'turnstile'].includes(item.kind) && !item.checked && item.checkboxCount === 1);
+    if (frames.length !== 1) return false;
+    const checkbox = frames[0].frame.locator(':is(#checkbox, #anchor, [role="checkbox"], input[type="checkbox"]):visible');
+    if (await checkbox.count() !== 1) return false;
+    budget?.assert();
+    await checkbox.click({ timeout: budget ? budget.timeout(2000) : 2000 });
+    captchaLog(phase, '已操作唯一可见的验证复选框');
+    return true;
 }
 
 async function waitForHcaptchaSolverTarget(page, phase, timeoutMs = 20000) {
@@ -279,37 +199,9 @@ async function hasCheckoutCaptchaOverlayText(page) {
 }
 
 async function hasVisiblePostSubmitHcaptchaWidget(page) {
-    if (!/checkout/i.test(page.url() || '')) {
-        return false;
-    }
-    try {
-        const iframes = page.locator('iframe');
-        const count = await iframes.count().catch(() => 0);
-        for (let i = 0; i < count; i += 1) {
-            const iframe = iframes.nth(i);
-            const src = String(await iframe.getAttribute('src').catch(() => '') || '').toLowerCase();
-            const title = String(await iframe.getAttribute('title').catch(() => '') || '').toLowerCase();
-            if (isInvisibleStripeHcaptchaUrl(src)) continue;
-            const isHcaptcha = src.includes('hcaptcha.com')
-                || (src.includes('hcaptcha') && (src.includes('frame=checkbox') || src.includes('frame=challenge')))
-                || title.includes('hcaptcha');
-            if (!isHcaptcha) continue;
-            if (!(await iframe.isVisible({ timeout: 250 }).catch(() => false))) continue;
-            const box = await iframe.boundingBox().catch(() => null);
-            if (box && box.width > 36 && box.height > 18) {
-                return true;
-            }
-        }
-    } catch (_) { /* ignore */ }
-
-    for (const frame of page.frames()) {
-        const url = String(frame.url() || '').toLowerCase();
-        if (isInvisibleStripeHcaptchaUrl(url)) continue;
-        if (/hcaptcha\.com.*frame=(checkbox|challenge)/i.test(url)) {
-            return true;
-        }
-    }
-    return false;
+    if (!/checkout/i.test(page.url() || '')) return false;
+    return (await inspectCaptchaFrames(page)).some((item) =>
+        item.kind === 'challenge' || item.raster || !item.checked);
 }
 
 async function hasAnyCheckoutCaptchaSignal(page) {
@@ -332,21 +224,18 @@ async function hasAnyCheckoutCaptchaSignal(page) {
     return false;
 }
 
-async function waitForCheckoutOverlayCaptcha(page, timeoutMs = 45000) {
-    const deadline = Date.now() + timeoutMs;
-    let lastLog = 0;
-    while (Date.now() < deadline) {
-        if (await hasAnyCheckoutCaptchaSignal(page)) {
-            return true;
+async function waitForCheckoutOverlayCaptcha(page, timeoutMs = 45000, options = {}) {
+    const budget = createVerificationBudget({ ...options, maxWaitMs: timeoutMs });
+    try {
+        while (budget.remaining() > 0) {
+            if (await budget.run(hasAnyCheckoutCaptchaSignal(page))) return true;
+            await budget.wait(500);
         }
-        const now = Date.now();
-        if (now - lastLog >= 5000) {
-            captchaLog('overlay-wait', `仍在等待 hCaptcha 弹层… (${Math.round((now - (deadline - timeoutMs)) / 1000)}s)`);
-            lastLog = now;
-        }
-        await page.waitForTimeout(500);
-    }
-    return false;
+        return false;
+    } catch (error) {
+        if (error.code === 'VERIFICATION_TIMEOUT') return false;
+        throw error;
+    } finally { budget.dispose(); }
 }
 
 /** Checkout 上「One more step」hCaptcha 弹层 */
@@ -409,10 +298,8 @@ async function isBlockingHumanVerificationVisible(page) {
         } catch (_) { /* next */ }
     }
 
-    for (const frame of page.frames()) {
-        if (isBlockingCaptchaFrameUrl(frame.url())) {
-            return true;
-        }
+    for (const item of await inspectCaptchaFrames(page)) {
+        if (item.raster || !item.checked) return true;
     }
 
     // 支付表单在弹层背后仍可见 — 不能据此判定「无验证」
@@ -1013,20 +900,22 @@ async function attemptCaptchaPlatformSolver(page, phase = 'platform', verifyOpts
         websiteUrls: params.websiteUrls,
         isInvisible: true,
         userAgent
-    });
+    }, null, { budget: verifyOpts.budget });
 
     if (!solveResult.ok) {
-        captchaLog(phase, `打码平台失败: ${solveResult.error || 'unknown'}`, 'error');
-        return false;
+        captchaLog(phase, `验证服务停止：${solveResult.code || 'VERIFICATION_PROVIDER_UNAVAILABLE'}`, 'error');
+        throw Object.assign(new Error('验证服务未能完成'), {
+            code: controlledVerificationCode(solveResult.code, 'VERIFICATION_PROVIDER_UNAVAILABLE')
+        });
     }
 
     captchaLog(phase, `打码平台返回 token（${solveResult.token.length} chars），注入页面…`);
     await injectHcaptchaTokenOnPage(page, solveResult.token, solveResult.ekey);
-    await page.waitForTimeout(2500);
-    await clickCheckoutContinueAfterCaptcha(page);
-
-    const deadline = Date.now() + 35000;
-    while (Date.now() < deadline) {
+    const budget = verifyOpts.budget || createVerificationBudget({ maxWaitMs: 35000 });
+    const ownedBudget = !verifyOpts.budget;
+    try {
+    await budget.wait(500);
+    while (budget.remaining() > 0) {
         const pageUrl = page.url() || '';
         if (/redirect_status=succeeded|checkout\/verify/i.test(pageUrl)) {
             captchaLog(phase, '打码平台 token 注入后支付已跳转成功页');
@@ -1036,281 +925,120 @@ async function attemptCaptchaPlatformSolver(page, phase = 'platform', verifyOpts
             captchaLog(phase, '打码平台 token 注入后验证已通过');
             return true;
         }
-        await page.waitForTimeout(1500);
+        await budget.wait(500);
     }
-
-    captchaLog(phase, '打码平台 token 注入后验证仍在', 'warn');
     return false;
+    } finally { if (ownedBudget) budget.dispose(); }
 }
 
-async function attemptHcaptchaVisualSolver(page, phase = 'visual') {
-    if (!isHcaptchaSolverEnabled()) {
-        captchaLog(phase, '视觉求解器未启用', 'warn');
-        return false;
-    }
-
-    const cloudflareWall = await isCloudflareWallPage(page);
-    await clickHcaptchaCheckboxFrames(page, `${phase}-pre`);
-    await page.waitForTimeout(cloudflareWall ? 3500 : 2000);
-
-    const solverReady = await waitForHcaptchaSolverTarget(page, phase, cloudflareWall ? 12000 : 20000);
-    if (!solverReady) {
-        if (cloudflareWall) {
-            captchaLog(phase, 'Cloudflare 勾选验证：无 hCaptcha 图片 challenge frame，跳过 VLM 求解器', 'warn');
-        } else {
-            captchaLog(phase, '未发现 hCaptcha challenge/checkbox frame，跳过 VLM 求解器', 'warn');
-        }
-        return false;
-    }
-
-    captchaLog(phase, '检测到 hCaptcha solver frame，启动视觉求解器（VLM + CLIP/OpenCV）...');
-    const pageUrlSubstr = (() => {
-        try {
-            const url = page.url() || '';
-            if (/checkout|stripe|chatgpt/i.test(url)) {
-                return url.includes('checkout') ? 'checkout' : 'chatgpt.com';
-            }
-        } catch (_) { /* ignore */ }
-        return 'checkout';
-    })();
-
-    const solverResult = await solveHcaptchaOnPage({
-        pageUrlSubstr,
-        locale: process.env.HCAPTCHA_BROWSER_LOCALE,
-        timezoneId: process.env.HCAPTCHA_BROWSER_TIMEZONE,
-        acceptLanguage: process.env.HCAPTCHA_ACCEPT_LANGUAGE
-    });
-
-    if (!solverResult.ok) {
-        captchaLog(phase, `视觉求解器失败: ${solverResult.error || 'unknown'}`, 'error');
-        if (solverResult.logPath) {
-            captchaLog(phase, `solver 日志: ${solverResult.logPath}`);
-        }
-        return false;
-    }
-
-    if (solverResult.result?.type === 'passive_checkbox') {
-        captchaLog(phase, '视觉求解器：被动 checkbox 信号，等待页面确认...');
-    } else {
-        captchaLog(phase, '视觉求解器已完成，等待页面继续...');
-    }
-    const deadline = Date.now() + 25000;
-    while (Date.now() < deadline) {
-        if (await isVerificationCleared(page, { requireCheckoutReady: /checkout/i.test(page.url() || '') })) {
-            captchaLog(phase, '视觉求解器已通过验证');
-            return true;
-        }
-        await page.waitForTimeout(1500);
-    }
-    const cleared = await isVerificationCleared(page, { requireCheckoutReady: /checkout/i.test(page.url() || '') });
-    if (!cleared) {
-        captchaLog(phase, '视觉求解器结束后验证仍在', 'warn');
-    }
-    return cleared;
+async function attemptHcaptchaVisualSolver(page, phase = 'visual', options = {}) {
+    const ownedBudget = !options.budget;
+    const budget = options.budget || createVerificationBudget(options);
+    try {
+        if (!isHcaptchaSolverEnabled()) return { ok: false, code: 'VERIFICATION_SOLVER_DISABLED', retryable: false };
+        const state = await budget.run(prepareVerificationPage(page, { signal: options.signal }));
+        const candidates = (await budget.run(inspectCaptchaFrames(page))).filter((item) => item.raster
+            && item.prompts.some((prompt) => !isCheckboxInstruction(prompt)));
+        if (candidates.length !== 1) return { ok: false,
+            code: candidates.length ? 'VERIFICATION_FRAME_AMBIGUOUS' : 'VERIFICATION_NOT_READY', retryable: !candidates.length };
+        budget.assert();
+        const result = await solveHcaptchaOnPage({
+            pageBinding: state.bindingId, timeoutMs: budget.remaining(), signal: budget.signal,
+            challenge: state.challenge || null,
+            locale: process.env.HCAPTCHA_BROWSER_LOCALE,
+            timezoneId: process.env.HCAPTCHA_BROWSER_TIMEZONE,
+            acceptLanguage: process.env.HCAPTCHA_ACCEPT_LANGUAGE
+        });
+        captchaLog(phase, result.ok ? '验证处理结束，正在检查原页面状态' : `验证处理停止：${result.code || 'VERIFICATION_SOLVER_FAILED'}`,
+            result.ok ? 'info' : 'warn');
+        return result;
+    } finally { if (ownedBudget) budget.dispose(); }
 }
 
 function buildCaptchaRequiredError() {
-    const parts = [];
-    if (isCaptchaPlatformEnabled()) {
-        parts.push('打码平台');
-    }
-    if (isHcaptchaSolverEnabled()) {
-        parts.push('视觉求解');
-    }
-    const solverHint = parts.length
-        ? `已尝试自动点击与${parts.join('、')}仍失败，`
-        : '自动化无法可靠通过，';
-    const configHint = isCaptchaPlatformEnabled()
-        ? ''
-        : '请在后台配置打码平台 API Key（推荐）或 VLM API Key，';
-    return `需要人工验证：触发 Cloudflare/hCaptcha 人机验证，${solverHint}`
-        + `${configHint}或换住宅代理 IP，或 HEADFUL=1 有头模式人工勾选`;
+    return '自动验证未能在本次期限内完成；保留原任务核对结果，禁止重复提交付款';
 }
 
 /**
  * 统一清除人机验证（登录、Checkout、支付各阶段调用）
  */
 async function clearHumanVerification(page, options = {}) {
-    const {
-        phase = 'page',
-        maxWaitMs = Number(process.env.CAPTCHA_CLEAR_TIMEOUT_MS || 120000),
-        maxBypassRounds = 4,
-        useVisualSolver = true,
-        requireCheckoutReady = /checkout/i.test(page.url() || ''),
-        checkoutReadyWaitMs = Number(process.env.CHECKOUT_READY_WAIT_MS || 60000)
-    } = options;
-
-    const verifyOpts = { requireCheckoutReady };
-    const effectiveMaxRounds = requireCheckoutReady
-        ? Math.max(maxBypassRounds, Number(process.env.CAPTCHA_CHECKOUT_MAX_ROUNDS || 15))
-        : maxBypassRounds;
-
-    const onCheckout = /checkout/i.test(page.url() || '');
-    const waitOverlayMs = Number(options.overlayWaitMs || 0);
-    const isPostSubmitCheckout = onCheckout && String(phase).startsWith('post_submit');
-    if (onCheckout && (isPostSubmitCheckout || waitOverlayMs > 0)) {
-        const overlayMs = waitOverlayMs || Number(process.env.CAPTCHA_OVERLAY_WAIT_MS || 45000);
-        captchaLog(phase, `等待 Checkout 提交后 hCaptcha 弹层（最长 ${Math.round(overlayMs / 1000)}s，弹层可能延迟 15–35s）...`);
-        const appeared = await waitForCheckoutOverlayCaptcha(page, overlayMs);
-        if (appeared) {
-            captchaLog(phase, '已检测到 hCaptcha 弹层');
-        } else {
-            captchaLog(phase, '等待期内未检测到弹层，仍将尝试自动处理', 'warn');
-        }
-    }
-
-    const captchaStill = await hasAnyCheckoutCaptchaSignal(page);
-    if (await isVerificationCleared(page, verifyOpts)) {
-        if (!isPostSubmitCheckout || !captchaStill) {
-            return { cleared: true, skipped: true };
-        }
-        captchaLog(phase, '提交后 checkout 仍有人机验证信号，进入自动处理', 'warn');
-    }
-
-    if (requireCheckoutReady) {
-        captchaLog(phase, `等待 Checkout 支付表单加载（最长 ${Math.round(checkoutReadyWaitMs / 1000)}s）...`);
-        const ready = await waitForCheckoutPaymentReady(page, checkoutReadyWaitMs);
-        if (ready === true) {
-            captchaLog(phase, '支付表单已就绪，无需验证处理');
-            return { cleared: true, skipped: true, via: 'checkout-ready' };
-        }
-        if (ready === 'login_required' || ready === 'login_redirect') {
-            captchaLog(phase, 'Checkout 出现登录页，Session 未在支付页生效', 'error');
-            return {
-                cleared: false,
-                sessionRequired: true,
-                checkoutNotReady: true,
-                message: buildSessionNotLoggedInError('Checkout 支付页')
-            };
-        }
-    }
-
-    await logCaptchaFrameSnapshot(page, phase);
-
-    const cloudflareWall = await isCloudflareWallPage(page);
-    const blockingVisible = await isBlockingHumanVerificationVisible(page);
-
-    if (requireCheckoutReady && !blockingVisible && !cloudflareWall) {
-        captchaLog(phase, '未发现可见人机验证（已忽略 Stripe 隐形 hCaptcha），继续等待支付表单...', 'warn');
-        const slowDeadline = Date.now() + maxWaitMs;
-        while (Date.now() < slowDeadline) {
-            if (await isCheckoutLoginGate(page) || await hasVisibleLoginChrome(page)) {
-                captchaLog(phase, 'Checkout 显示登录界面，停止空等', 'error');
-                return {
-                    cleared: false,
-                    sessionRequired: true,
-                    checkoutNotReady: true,
-                    message: buildSessionNotLoggedInError('Checkout 支付页')
-                };
+    let state = verificationState(page) || { revision: 0 };
+    const budget = createVerificationBudget({ ...options, signal: options.signal || state.signal });
+    const phase = options.phase || 'page';
+    const requireCheckoutReady = options.requireCheckoutReady ?? /checkout/i.test(page.url() || '');
+    const maxRounds = Math.max(1, Math.min(4, Number(options.maxBypassRounds) || 4));
+    const attempted = new Set();
+    const clicked = new WeakSet();
+    let rounds = 0, lastCode = 'VERIFICATION_NOT_READY', platformUsed = false, solverDiagnostics = {}, completedKey = null;
+    const unknown = (code, retryable = false) => ({ cleared: false, captchaRequired: true,
+        code, retryable, rounds, diagnostics: { state: lastCode, revision: state.revision, ...solverDiagnostics } });
+    try {
+        state = await budget.run(prepareVerificationPage(page, { signal: options.signal || budget.signal }));
+        while (budget.remaining() > 0) {
+            budget.assert();
+            if (page.isClosed?.()) return unknown('VERIFICATION_PAGE_CLOSED');
+            if (await budget.run(isCheckoutLoginGate(page)) || await budget.run(hasVisibleLoginChrome(page)))
+                return { ...unknown('SESSION_INVALID'), sessionRequired: true, message: buildSessionNotLoggedInError('验证页面') };
+            const frames = await budget.run(inspectCaptchaFrames(page));
+            const images = frames.filter((item) => item.raster
+                && item.prompts.some((prompt) => !isCheckboxInstruction(prompt)));
+            const boxes = frames.filter((item) => ['checkbox', 'turnstile'].includes(item.kind)
+                && item.checkboxCount === 1 && !item.checked);
+            if (images.length > 1 || boxes.length > 1) return unknown('VERIFICATION_FRAME_AMBIGUOUS');
+            if (!frames.some((item) => item.raster || !item.checked)
+                && await budget.run(isVerificationCleared(page, { requireCheckoutReady })))
+                return { cleared: true, rounds, via: state.passed ? 'verified-response' : 'page-readback' };
+            if (state.error && !['VERIFICATION_CHALLENGE_REJECTED'].includes(state.error))
+                return unknown(state.error, ['VERIFICATION_NETWORK_UNAVAILABLE', 'VERIFICATION_PROVIDER_UNAVAILABLE', 'VERIFICATION_RATE_LIMITED'].includes(state.error));
+            if (images.length === 1) {
+                lastCode = 'VERIFICATION_CHALLENGE_READY';
+                const frame = images[0];
+                const key = `${state.challenge?.key || state.revision}:${frame.prompts.join('|')}`;
+                if (attempted.has(key)) {
+                    // A successful response may precede the frame/navigation update. Observe only;
+                    // never re-open the solver or re-submit the same challenge while it settles.
+                    if (completedKey === key) { await budget.wait(250); continue; }
+                    return unknown('VERIFICATION_CHALLENGE_UNCHANGED');
+                }
+                if (rounds >= maxRounds) return unknown('VERIFICATION_ROUNDS_EXHAUSTED');
+                attempted.add(key); rounds++;
+                const result = await attemptHcaptchaVisualSolver(page, phase, { budget, signal: state.signal });
+                budget.assert();
+                const solverCode = controlledVerificationCode(result.code, 'VERIFICATION_SOLVER_FAILED');
+                solverDiagnostics = { solverCode: result.ok ? null : solverCode, ...safeVerificationDiagnostics(result.diagnostics) };
+                if (!result.ok && result.retryable !== true) return unknown(solverCode);
+                if (result.ok) completedKey = key;
+                // A solver response is never payment evidence. Re-observe this same page.
+                await budget.wait(500);
+                continue;
             }
-            if (await isCheckoutPaymentReady(page)) {
-                captchaLog(phase, '支付表单已加载（慢加载）');
-                return { cleared: true, via: 'checkout-slow-load' };
+            if (boxes.length === 1 && !clicked.has(boxes[0].frame)) {
+                lastCode = 'VERIFICATION_CHECKBOX_READY';
+                clicked.add(boxes[0].frame);
+                await budget.run(clickHcaptchaCheckboxFrames(page, phase, budget));
+                await budget.wait(700);
+                continue;
             }
-            await page.waitForTimeout(1500);
-        }
-        captchaLog(phase, '支付表单长时间未出现（非验证拦截）', 'error');
-        return { cleared: false, checkoutNotReady: true, captchaRequired: false };
-    }
-
-    if (cloudflareWall) {
-        captchaLog(phase, '检测到 Cloudflare 全页验证墙');
-    } else if (blockingVisible || await hasCheckoutCaptchaOverlayText(page)) {
-        captchaLog(phase, 'Checkout 被可见人机验证拦截（hCaptcha/Cloudflare）');
-    } else if (requireCheckoutReady) {
-        captchaLog(phase, 'Checkout 被可见人机验证拦截');
-    }
-
-    captchaLog(phase, `开始处理可见人机验证（最长 ${Math.round(maxWaitMs / 1000)}s，maxRounds=${effectiveMaxRounds}）...`);
-    const deadline = Date.now() + maxWaitMs;
-    let round = 0;
-
-    while (Date.now() < deadline) {
-        if (await isVerificationCleared(page, verifyOpts)) {
-            captchaLog(phase, '验证已清除，页面内容就绪');
-            return { cleared: true, rounds: round };
-        }
-
-        round += 1;
-        captchaLog(phase, `第 ${round} 轮自动绕过...`);
-
-        await attemptBypassHumanVerification(page, { phase: `${phase}-r${round}` });
-        await page.waitForTimeout(cloudflareWall ? 10000 : 5000);
-
-        if (await isVerificationCleared(page, verifyOpts)) {
-            captchaLog(phase, `第 ${round} 轮模拟点击后验证已通过`);
-            return { cleared: true, rounds: round };
-        }
-
-        let overlayCaptcha = await hasAnyCheckoutCaptchaSignal(page);
-        let imageChallenge = await hasHcaptchaImageChallenge(page);
-        if (overlayCaptcha && !imageChallenge) {
-            const passiveOk = await waitForPassiveCheckboxClear(page, `${phase}-r${round}`, verifyOpts, 35000);
-            if (passiveOk) {
-                return { cleared: true, rounds: round, via: 'passive-checkbox' };
+            lastCode = frames.length ? 'VERIFICATION_LOADING' : 'VERIFICATION_NOT_READY';
+            if (boxes.length === 1 && !platformUsed && isCaptchaPlatformEnabled()) {
+                platformUsed = true;
+                const passed = await budget.run(attemptCaptchaPlatformSolver(page, phase, { requireCheckoutReady, budget }));
+                if (passed) continue;
             }
+            await budget.wait(500);
         }
-
-        if (await isVerificationCleared(page, verifyOpts)) {
-            captchaLog(phase, `被动验证等待后页面已就绪`);
-            return { cleared: true, rounds: round };
-        }
-
-        overlayCaptcha = await hasAnyCheckoutCaptchaSignal(page);
-        imageChallenge = await hasHcaptchaImageChallenge(page);
-
-        // 图片题优先走 VLM 实点（参考 Gpt-Agreement-Payment：浏览器侧解题优先，打码平台仅 passive 兜底）
-        const shouldRunSolver = useVisualSolver
-            && isHcaptchaSolverEnabled()
-            && (imageChallenge || overlayCaptcha);
-
-        if (shouldRunSolver && imageChallenge) {
-            const solved = await attemptHcaptchaVisualSolver(page, `${phase}-vlm-${round}`);
-            if (solved && await isVerificationCleared(page, verifyOpts)) {
-                return { cleared: true, rounds: round, via: 'visual-solver' };
-            }
-        }
-
-        if (overlayCaptcha && isCaptchaPlatformEnabled() && !imageChallenge) {
-            const platformOk = await attemptCaptchaPlatformSolver(page, `${phase}-platform-${round}`, verifyOpts);
-            if (platformOk && await isVerificationCleared(page, verifyOpts)) {
-                return { cleared: true, rounds: round, via: 'captcha-platform' };
-            }
-        }
-
-        if (shouldRunSolver && !imageChallenge) {
-            const solved = await attemptHcaptchaVisualSolver(page, `${phase}-vlm-${round}`);
-            if (solved && await isVerificationCleared(page, verifyOpts)) {
-                return { cleared: true, rounds: round, via: 'visual-solver' };
-            }
-        } else if (useVisualSolver && isHcaptchaSolverEnabled() && round >= 2 && !imageChallenge) {
-            captchaLog(phase, '无可见 hCaptcha 图片题，跳过 VLM 求解器');
-        }
-
-        if (process.env.HEADFUL === '1') {
-            captchaLog(phase, '有头模式：等待人工勾选（10s）...');
-            await page.waitForTimeout(10000);
-            if (await isVerificationCleared(page, verifyOpts)) {
-                captchaLog(phase, '人工勾选后验证已通过');
-                return { cleared: true, rounds: round, via: 'manual-headful' };
-            }
-        }
-
-        if (round >= effectiveMaxRounds && !process.env.HEADFUL) {
-            break;
-        }
-        await page.waitForTimeout(2000);
-    }
-
-    if (await isVerificationCleared(page, verifyOpts)) {
-        return { cleared: true, rounds: round };
-    }
-
-    captchaLog(phase, '验证未能自动通过（页面仍无支付表单）', 'error');
-    return { cleared: false, captchaRequired: true, rounds: round };
+        return unknown('VERIFICATION_TIMEOUT', true);
+    } catch (error) {
+        if (error?.code === 'LEASE_LOST') throw error;
+        return unknown(page.isClosed?.() ? 'VERIFICATION_PAGE_CLOSED' : controlledVerificationCode(error?.code),
+            error?.code === 'VERIFICATION_TIMEOUT');
+    } finally { budget.dispose(); }
 }
 
 module.exports = {
+    prepareVerificationPage,
+    disposeVerificationPage,
     isCheckoutOverlayCaptchaVisible,
     hasCheckoutCaptchaOverlayText,
     hasAnyCheckoutCaptchaSignal,

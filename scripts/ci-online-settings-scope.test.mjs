@@ -187,3 +187,121 @@ test('billing, subscription context and progress follow-on repair uses all affec
     assert.ok(onlineSettingsCommands(part, scope).length);
   assert.equal(isOnlineSettingsOnly([...scope, 'apps/api/src/auth/auth.service.ts']), false);
 });
+
+const unattendedControls = [
+  '.github/workflows/online-unattended-validation.yml',
+  ...['build.py', 'contract.json', 'release.py', 'release.test.py'].map(
+    (name) => 'scripts/production-release/online-unattended-' + name
+  ),
+  'scripts/ci-online-settings-scope.mjs',
+  'scripts/ci-online-settings-scope.test.mjs'
+];
+const unattendedSources = [
+  ...[
+    'OnlineResultDialog.vue',
+    'OnlineTaskProgress.vue',
+    'auditPresentation.spec.ts',
+    'contracts.ts',
+    'labels.ts'
+  ].map((name) => 'apps/admin/src/v2/features/online-recharge/' + name),
+  ...[
+    'checkout-recovery.spec.ts',
+    'checkout-recovery.ts',
+    'contracts.ts',
+    'mysql.integration.spec.ts',
+    'online-recharge.module.ts',
+    'persistence/tasks.repository.ts',
+    'persistence/worker-rpc.repository.spec.ts',
+    'persistence/worker-rpc.repository.ts',
+    'persistence/worker.repository.spec.ts',
+    'persistence/worker.repository.ts',
+    'plan-region.spec.ts',
+    'proxy-country.spec.ts',
+    'reconciliation.service.ts',
+    'reconciliation.spec.ts',
+    'reconciliation.ts',
+    'engine/SOURCE_MANIFEST.json',
+    'engine/checkout-recovery.cjs',
+    'engine/confirmation.cjs',
+    'engine/rpc.cjs',
+    'engine/security.cjs',
+    'engine/task-runner.cjs',
+    'engine/test/checkout-recheck.test.cjs',
+    'engine/test/checkout-recovery.test.cjs',
+    'engine/test/debug-checkout.test.cjs',
+    'engine/test/payment-core.test.cjs',
+    'engine/test/payment-observation.test.cjs',
+    'engine/test/renewal-state.test.cjs',
+    'engine/test/solver-process.test.cjs',
+    'engine/test/unattended-task-control.test.cjs',
+    'engine/test/upgrade-checkout.test.cjs',
+    'engine/test/verification-state.test.cjs',
+    'engine/upstream/captcha-platform.js',
+    'engine/upstream/hcaptcha-solver.js',
+    'engine/upstream/hcaptcha/solver.py',
+    'engine/upstream/human-verification.js',
+    'engine/upstream/index.js',
+    'engine/upstream/payment-retry.js',
+    'engine/upstream/session-auth.js',
+    'engine/upstream/stripe-payment.js',
+    'engine/upstream/subscription-check.js',
+    'engine/upstream/upgrade-checkout.js',
+    'engine/upstream/verification-runtime.js'
+  ].map((name) => 'apps/api/src/id-business-v2/online-recharge/' + name),
+  'docs/ONLINE_RECHARGE.md',
+  'docs/V2_TASKS.md'
+];
+
+test('complete finite unattended repair selects recharge and every affected application check', () => {
+  const paths = [...unattendedSources, ...unattendedControls];
+  assert.equal(isOnlineSettingsOnly(paths), true);
+  assert.equal(checkMode(paths, '', ''), 'recharge');
+  assert.deepEqual(selectedParts(paths), ['guards', 'api', 'admin', 'online-engine']);
+  assert.equal(isOnlineSettingsControlsOnly(paths), false);
+  const guards = onlineSettingsCommands('guards', paths).flat();
+  for (const name of [
+    'check:admin-ui',
+    'check:v2-ui-language',
+    'check:v2-color-contrast',
+    'check:v2-table-standard',
+    'check:v2-loading-standard',
+    'check:v2-module-architecture',
+    'check:v2-isolation'
+  ])
+    assert.ok(guards.includes(name));
+  assert.ok(guards.includes('scripts/production-release/online-unattended-release.test.py'));
+  for (const part of ['api', 'admin', 'online-engine'])
+    assert.ok(onlineSettingsCommands(part, paths).length);
+  assert.equal(
+    isOnlineSettingsOnly(paths.filter((path) => !path.endsWith('/reconciliation.service.ts'))),
+    false
+  );
+});
+
+test('unattended controls alone run guards and release controls without application checks', () => {
+  assert.equal(checkMode(unattendedControls, '', ''), 'ci-only');
+  assert.deepEqual(selectedParts(unattendedControls), ['guards']);
+  assert.equal(isOnlineSettingsControlsOnly(unattendedControls), true);
+  const commands = onlineSettingsCommands('guards', unattendedControls);
+  assert.ok(
+    commands.flat().includes('scripts/production-release/online-unattended-release.test.py')
+  );
+  assert.ok(commands.every((command) => !command.some((part) => /^(?:check:|test:)/.test(part))));
+  for (const part of ['api', 'admin', 'online-engine'])
+    assert.throws(() => onlineSettingsCommands(part, unattendedControls));
+});
+
+test('unattended scope rejects auth, schema and unreviewed files even inside accepted directories', () => {
+  const paths = [...unattendedSources, ...unattendedControls];
+  for (const extra of [
+    'apps/api/src/auth/auth.service.ts',
+    'apps/api/prisma-mysql/schema.prisma',
+    'apps/api/src/id-business-v2/online-recharge/unreviewed.ts',
+    'apps/api/src/id-business-v2/online-recharge/engine/upstream/unreviewed.js',
+    'scripts/production-release/online-unattended-unreviewed.py',
+    'package-lock.json'
+  ]) {
+    assert.equal(checkMode([...paths, extra], '', ''), 'full');
+    assert.equal(checkMode([...unattendedControls, extra], '', ''), 'full');
+  }
+});

@@ -3,6 +3,8 @@
  * 用于浏览器 passive hCaptcha 兜底。
  */
 
+const { createVerificationBudget, controlledVerificationCode } = require('./verification-runtime');
+
 const DEFAULT_API_URL = 'https://api.capsolver.com';
 const STRIPE_HCAPTCHA_SITEKEY_FALLBACK = 'c7faac4c-1cd7-4b1b-b2d4-42ba98d09c7a';
 
@@ -175,9 +177,11 @@ function applyCaptchaPlatformConfigToEnv(cfg = {}) {
     return patch;
 }
 
-async function postJson(url, payload, timeoutMs = 20000) {
+async function postJson(url, payload, timeoutMs = 20000, signal) {
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    const cancel = () => controller.abort(signal.reason);
+    if (signal?.aborted) cancel(); else signal?.addEventListener('abort', cancel, { once: true });
+    const timer = setTimeout(() => controller.abort(), Math.max(1, timeoutMs));
     try {
         const response = await fetch(url, {
             method: 'POST',
@@ -185,22 +189,21 @@ async function postJson(url, payload, timeoutMs = 20000) {
             body: JSON.stringify(payload),
             signal: controller.signal
         });
-        const text = await response.text();
         let data = {};
         try {
-            data = text ? JSON.parse(text) : {};
+            data = await response.json();
         } catch (_) {
-            const hint = response.status === 405 || /<html|nginx/i.test(text)
-                ? '（API 地址可能填错：请用 api 子域名，如 https://api.anti-captcha.com，不要用官网 https://anti-captcha.com）'
-                : '';
-            throw new Error(`非 JSON 响应 (${response.status})${hint}: ${text.slice(0, 120)}`);
+            throw Object.assign(new Error('验证服务返回格式错误'), { code: 'VERIFICATION_SOLVER_FAILED' });
         }
         if (!response.ok) {
-            throw new Error(data.errorDescription || data.message || `HTTP ${response.status}`);
+            const code = response.status === 429 ? 'VERIFICATION_RATE_LIMITED'
+                : response.status >= 500 ? 'VERIFICATION_PROVIDER_UNAVAILABLE' : 'VERIFICATION_PROVIDER_REJECTED';
+            throw Object.assign(new Error('验证服务请求未通过'), { code });
         }
         return data;
     } finally {
         clearTimeout(timer);
+        signal?.removeEventListener('abort', cancel);
     }
 }
 
@@ -209,56 +212,39 @@ async function createCaptchaTask(task, config = null) {
     const data = await postJson(`${cfg.apiUrl}/createTask`, {
         clientKey: cfg.apiKey,
         task
-    });
+    }, cfg.budget ? cfg.budget.timeout(20000) : 20000, cfg.budget?.signal);
     if (Number(data.errorId) !== 0) {
-        throw new Error(data.errorDescription || data.errorCode || 'createTask 失败');
+        throw Object.assign(new Error('验证服务拒绝创建任务'), { code: 'VERIFICATION_PROVIDER_REJECTED' });
     }
     if (!data.taskId) {
-        throw new Error('createTask 未返回 taskId');
+        throw Object.assign(new Error('验证服务未返回任务标识'), { code: 'VERIFICATION_SOLVER_FAILED' });
     }
     return data.taskId;
 }
 
 async function pollCaptchaTaskResult(taskId, config = null, options = {}) {
     const cfg = config || getCaptchaPlatformConfig();
-    const timeoutSec = Math.max(30, Number(options.timeoutSec || cfg.timeoutSec) || cfg.timeoutSec);
+    const budget = options.budget || cfg.budget || createVerificationBudget({ maxWaitMs: Number(options.timeoutSec || cfg.timeoutSec) * 1000 });
+    const owned = !options.budget && !cfg.budget;
     const tokenFields = options.tokenFields || ['gRecaptchaResponse', 'hcaptchaToken', 'token'];
-    const deadline = Date.now() + timeoutSec * 1000;
     let polls = 0;
-
-    while (Date.now() < deadline) {
-        polls += 1;
-        await new Promise((resolve) => setTimeout(resolve, polls === 1 ? 1200 : 3000));
-        let data;
-        try {
-            data = await postJson(`${cfg.apiUrl}/getTaskResult`, {
-                clientKey: cfg.apiKey,
-                taskId
-            });
-        } catch (error) {
-            platformLog('platform', `getTaskResult 异常: ${error.message}`, 'warn');
-            continue;
-        }
-        if (Number(data.errorId) !== 0) {
-            throw new Error(data.errorDescription || data.errorCode || 'getTaskResult 失败');
-        }
-        if (data.status !== 'ready') {
-            if (polls % 5 === 0) {
-                platformLog('platform', `打码平台解题中… (${polls} 次轮询)`);
+    try {
+        while (budget.remaining() > 0) {
+            await budget.wait(++polls === 1 ? 1200 : 3000);
+            const data = await budget.run(postJson(`${cfg.apiUrl}/getTaskResult`, {
+                clientKey: cfg.apiKey, taskId
+            }, budget.timeout(20000), budget.signal));
+            if (Number(data.errorId) !== 0) throw Object.assign(new Error('验证服务拒绝请求'), { code: 'VERIFICATION_PROVIDER_REJECTED' });
+            if (data.status !== 'ready') continue;
+            const solution = data.solution || {};
+            for (const field of tokenFields) {
+                const token = solution[field] || data[field];
+                if (token) return { token: String(token), ekey: String(solution.eKey || solution.respKey || solution.ekey || ''), taskId };
             }
-            continue;
+            throw Object.assign(new Error('验证服务返回结果不完整'), { code: 'VERIFICATION_SOLVER_FAILED' });
         }
-        const solution = data.solution || {};
-        for (const field of tokenFields) {
-            const token = solution[field] || data[field];
-            if (token) {
-                const ekey = solution.eKey || solution.respKey || solution.ekey || '';
-                return { token: String(token), ekey: String(ekey || ''), solution, taskId };
-            }
-        }
-        throw new Error('打码平台返回 ready 但无 token 字段');
-    }
-    throw new Error(`打码平台解题超时 (${timeoutSec}s)`);
+        throw Object.assign(new Error('验证服务超过本次期限'), { code: 'VERIFICATION_TIMEOUT' });
+    } finally { if (owned) budget.dispose(); }
 }
 
 function buildHcaptchaTaskVariants({
@@ -321,53 +307,31 @@ function buildHcaptchaTaskVariants({
     return strategies;
 }
 
-async function solveHcaptchaViaPlatform(params = {}, config = null) {
+async function solveHcaptchaViaPlatform(params = {}, config = null, options = {}) {
     const rawCfg = config || getCaptchaPlatformConfig();
+    const budget = options.budget || createVerificationBudget({ signal: options.signal,
+        deadlineAt: options.deadlineAt, maxWaitMs: Number(rawCfg.timeoutSec || 180) * 1000 });
     const resolved = resolveCaptchaPlatformCredentials(rawCfg.apiKey, rawCfg.apiUrl);
-    const cfg = { ...rawCfg, apiKey: resolved.apiKey, apiUrl: resolved.apiUrl };
-    if (!cfg.apiKey || !cfg.apiUrl) {
-        return { ok: false, error: '未配置打码平台 API Key' };
-    }
-
-    const siteKey = String(params.siteKey || STRIPE_HCAPTCHA_SITEKEY_FALLBACK).trim();
-    const rqdata = String(params.rqdata || '').trim();
-    const websiteUrls = Array.isArray(params.websiteUrls) ? params.websiteUrls : [];
-    const isInvisible = params.isInvisible !== false;
-    const userAgent = String(params.userAgent || process.env.HCAPTCHA_USER_AGENT || '').trim();
-    const strategies = buildHcaptchaTaskVariants({
-        siteKey,
-        websiteUrls,
-        rqdata,
-        isInvisible,
-        userAgent,
-        provider: resolved.provider
-    });
-
-    let lastError = '';
-    for (let i = 0; i < strategies.length; i += 1) {
-        const task = strategies[i];
-        platformLog(
-            'platform',
-            `createTask 策略 ${i + 1}/${strategies.length}: enterprise=${task.isEnterprise} url=${String(task.websiteURL).slice(0, 72)}`
-        );
-        try {
-            const taskId = await createCaptchaTask(task, cfg);
-            platformLog('platform', `任务已创建 taskId=${taskId}，轮询结果…`);
-            const result = await pollCaptchaTaskResult(taskId, cfg, { timeoutSec: cfg.timeoutSec });
-            platformLog('platform', `打码平台已返回 token（${result.token.length} chars）`);
-            return {
-                ok: true,
-                token: result.token,
-                ekey: result.ekey,
-                taskId,
-                strategy: task
-            };
-        } catch (error) {
-            lastError = error.message || String(error);
-            platformLog('platform', `策略 ${i + 1} 失败: ${lastError}`, 'warn');
-        }
-    }
-    return { ok: false, error: lastError || '所有打码策略均失败' };
+    const cfg = { ...rawCfg, apiKey: resolved.apiKey, apiUrl: resolved.apiUrl, budget };
+    try {
+        if (!cfg.apiKey || !cfg.apiUrl) return { ok: false, code: 'VERIFICATION_SOLVER_DISABLED' };
+        const strategies = buildHcaptchaTaskVariants({
+            siteKey: String(params.siteKey || STRIPE_HCAPTCHA_SITEKEY_FALLBACK).trim(),
+            websiteUrls: Array.isArray(params.websiteUrls) ? params.websiteUrls : [],
+            rqdata: String(params.rqdata || ''), isInvisible: params.isInvisible !== false,
+            userAgent: String(params.userAgent || process.env.HCAPTCHA_USER_AGENT || ''), provider: resolved.provider
+        });
+        // One provider task per observed challenge. A rejected/unknown task is not recreated with guesses.
+        const task = strategies[0];
+        budget.assert();
+        const taskId = await budget.run(createCaptchaTask(task, cfg));
+        const result = await pollCaptchaTaskResult(taskId, cfg, { budget });
+        return { ok: true, token: result.token, ekey: result.ekey, taskId };
+    } catch (error) {
+        const code = budget.signal.aborted ? budget.signal.reason?.code : error.code;
+        if (code === 'LEASE_LOST') throw error;
+        return { ok: false, code: controlledVerificationCode(code, 'VERIFICATION_PROVIDER_UNAVAILABLE') };
+    } finally { if (!options.budget) budget.dispose(); }
 }
 
 async function extractHcaptchaParamsFromPage(page) {
@@ -555,18 +519,8 @@ async function injectHcaptchaTokenOnPage(page, token, ekey = '') {
     return { ok: true };
 }
 
-async function clickCheckoutContinueAfterCaptcha(page) {
-    const patterns = [
-        () => page.getByRole('button', { name: /continue|pay|subscribe|确认|继续|支付/i }).first().click({ timeout: 2000 }),
-        () => page.locator('button[type="submit"]').first().click({ timeout: 2000 })
-    ];
-    for (const action of patterns) {
-        try {
-            if (await action()) {
-                return true;
-            }
-        } catch (_) { /* next */ }
-    }
+async function clickCheckoutContinueAfterCaptcha() {
+    // Compatibility export only. Verification recovery must never click a merchant payment button.
     return false;
 }
 

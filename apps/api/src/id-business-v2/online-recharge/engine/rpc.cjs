@@ -16,7 +16,19 @@ let taskContext = null;
 let submitted = false;
 let paymentConfirmed = false;
 let transportOverride = null;
+let taskAbortController = new AbortController();
+function taskSignal() {
+  return taskAbortController.signal;
+}
+function abortTask(reason) {
+  if (!taskAbortController.signal.aborted)
+    taskAbortController.abort(
+      reason || Object.assign(new Error('任务已停止'), { code: 'TASK_ABORTED' })
+    );
+}
 function configureTask(task) {
+  abortTask();
+  taskAbortController = new AbortController();
   taskContext = task;
   submitted = false;
   paymentConfirmed = false;
@@ -45,6 +57,7 @@ function scope() {
     : {};
 }
 async function rpc(method, args = {}) {
+  taskSignal().throwIfAborted();
   const scoped = { ...args, ...scope() };
   if (transportOverride) return transportOverride(method, scoped);
   const url = process.env.ONLINE_RECHARGE_RPC_URL;
@@ -64,14 +77,19 @@ async function rpc(method, args = {}) {
       method: 'POST',
       headers: { 'content-type': 'application/json', 'x-online-recharge-worker': key },
       body: JSON.stringify({ method, args: scoped, ...scope() }),
-      signal: AbortSignal.timeout(20000)
+      signal: AbortSignal.any([AbortSignal.timeout(20000), taskSignal()])
     });
   } catch {
+    taskSignal().throwIfAborted();
     throw submitted
       ? new ResultUnknownError('外部提交后的内部连接中断，等待核对')
       : new Error('内部执行接口暂不可用');
   }
-  if ([401, 403, 409, 410].includes(response.status)) throw new LeaseLostError();
+  if ([401, 403, 409, 410].includes(response.status)) {
+    const error = new LeaseLostError();
+    abortTask(error);
+    throw error;
+  }
   if (!response.ok) throw new Error(`内部执行接口失败 ${response.status}`);
   // Nest sends null (and empty strings) as an empty successful HTTP body.
   // Only methods whose contract permits absence may accept that response.
@@ -94,7 +112,11 @@ async function rpc(method, args = {}) {
   }
   if (body === null) return null;
   if (body.ok === false || body.success === false) {
-    if (body.code === 'LEASE_LOST') throw new LeaseLostError();
+    if (body.code === 'LEASE_LOST') {
+      const error = new LeaseLostError();
+      abortTask(error);
+      throw error;
+    }
     throw new Error('内部执行操作未完成');
   }
   if (Object.prototype.hasOwnProperty.call(body, 'result')) return body.result;
@@ -102,16 +124,22 @@ async function rpc(method, args = {}) {
   return body;
 }
 async function beforeExternalSubmit(detail = {}) {
+  taskSignal().throwIfAborted();
+  if (submitted) throw new ResultUnknownError('原付款已经提交，禁止重复提交');
+  require('./security.cjs').rememberSecrets(detail);
   await rpc('beforeExternalSubmit', {
     ...require('./upstream/mysql-store').currentCardLease(),
     ...detail
   });
   submitted = true;
+  taskSignal().throwIfAborted();
 }
 function clearTask() {
+  abortTask();
   taskContext = null;
   submitted = false;
   paymentConfirmed = false;
+  taskAbortController = new AbortController();
 }
 module.exports = {
   rpc,
@@ -124,5 +152,7 @@ module.exports = {
   wasPaymentConfirmed,
   LeaseLostError,
   ResultUnknownError,
-  setTransportForTest
+  setTransportForTest,
+  taskSignal,
+  abortTask
 };
