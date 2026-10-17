@@ -243,7 +243,7 @@ class AppleMailboxTests(unittest.TestCase):
             tables = {row[0] for row in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
             self.assertFalse(any("apple" in name for name in tables))
 
-    def test_flow_v2_error_shapes_are_encrypted_and_returned_only_on_task(self):
+    def test_flow_v3_error_shapes_are_encrypted_and_returned_only_on_task(self):
         context, _, _ = self.reservation()
         task_uuid = context["taskUuid"]
         response = self.diagnostic_response(200, {"page": {"type": "password"},
@@ -254,10 +254,10 @@ class AppleMailboxTests(unittest.TestCase):
         self.assertTrue(self.store.record_flow_evidence(task_uuid, "signup", evidence))
         with self.sessions.get_db() as db:
             _, binding = self.store.task_data(db, task_uuid)
-        self.assertEqual(binding["flowEvidence"], {"version": 2, "signup": evidence})
+        self.assertEqual(binding["flowEvidence"], {"version": 3, "signup": evidence})
         self.assertEqual(binding["flowEvidence"]["signup"]["responseDetails"], {
             "errorSignal": "both", "errorShape": "object", "errorsShape": "list",
-            "errorKind": "other", "pageShape": "type_known"})
+            "errorKind": "other", "pageShape": "type_known", "pageTypeSha256": None})
         self.assertEqual((evidence["pageKind"], evidence["decision"], evidence["reason"]),
                          ("new_account", "rejected", "upstream_error"))
         result = self.integration.task(task_uuid)
@@ -306,7 +306,7 @@ class AppleMailboxTests(unittest.TestCase):
             current_cipher = db.execute("SELECT value FROM settings WHERE key=?", (self.apple.key_for(self.email),)).fetchone()[0]
         self.assertEqual(current_cipher, original_cipher)
 
-    def test_invalid_v2_details_do_not_replace_existing_encrypted_task_evidence(self):
+    def test_invalid_v3_details_do_not_replace_existing_encrypted_task_evidence(self):
         context, _, _ = self.reservation()
         task_uuid = context["taskUuid"]
         evidence = flow.observation(self.diagnostic_response(), "signup")
@@ -320,7 +320,7 @@ class AppleMailboxTests(unittest.TestCase):
         with sqlite3.connect(Path(self.runtime.name) / "database.db") as db:
             current_cipher = db.execute("SELECT value FROM settings WHERE key=?", (self.apple.TASK_PREFIX + task_uuid,)).fetchone()[0]
         self.assertEqual(current_cipher, original_cipher)
-        self.assertEqual(self.integration.task(task_uuid)["flowEvidence"], {"version": 2, "signup": evidence})
+        self.assertEqual(self.integration.task(task_uuid)["flowEvidence"], {"version": 3, "signup": evidence})
 
     def test_early_new_account_fact_survives_later_failure(self):
         context, _, _ = self.reservation()
@@ -631,7 +631,7 @@ class AppleMailboxTests(unittest.TestCase):
 
         returns = {
             "_check_ip_location": (True, "US"), "_start_oauth": True,
-            "_get_device_id": "offline-device", "_check_sentinel": None,
+            "_get_device_id": "offline-device",
             "_send_verification_code": True,
             "_get_verification_code": "123456", "_validate_verification_code": True,
             "_create_user_account": True,
@@ -650,8 +650,13 @@ class AppleMailboxTests(unittest.TestCase):
             stack.enter_context(patch.object(engine_class, "_submit_signup_form", signup))
             def initialize_session(engine):
                 engine.session = self.official_session(malformed=not verified_identity)
-                engine.session.post.return_value = self.diagnostic_response(200, {
-                    "page": {"type": "email_otp_verification" if existing else "password"}})
+                def post(url, *_args, **_kwargs):
+                    response = self.diagnostic_response(200, {"token": "offline-sentinel-token"} if
+                        url == registration.OPENAI_API_ENDPOINTS["sentinel"] else {
+                            "page": {"type": "email_otp_verification" if existing else "password"}})
+                    response.url = url
+                    return response
+                engine.session.post.side_effect = post
                 return True
 
             stack.enter_context(patch.object(engine_class, "_init_session", initialize_session))
@@ -667,7 +672,13 @@ class AppleMailboxTests(unittest.TestCase):
             stack.enter_context(patch.object(engine_class, "_register_password", password))
             methods["_register_password"] = password_calls
             client_class = importlib.import_module("src.core.http_client").HTTPClient
-            stack.enter_context(patch.object(client_class, "request", side_effect=AssertionError("禁止离线测试访问网络")))
+            def client_request(_client, method, url, **_kwargs):
+                if method == "POST" and url == registration.OPENAI_API_ENDPOINTS["sentinel"]:
+                    response = self.diagnostic_response(200, {"token": "offline-sentinel-token"})
+                    response.url = url
+                    return response
+                raise AssertionError("禁止离线测试访问网络")
+            stack.enter_context(patch.object(client_class, "request", new=client_request))
             response = self.post("start", {"aliasId": self.alias, "email": self.email,
                 "revision": self.read()["revision"], "operatorId": "offline-admin"})
             self.assertEqual(response.status_code, 200)

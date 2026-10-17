@@ -1,0 +1,469 @@
+{
+  "admission": "VERIFIED",
+  "apiDeclarationPaths": ["id-business-v2/auto-registration/apple-mailboxes.types.d.ts"],
+  "apiJavascriptDelta": [],
+  "applicationPaths": [
+    "apps/admin/src/v2/features/auto-registration/apple-mailbox-presentation.spec.ts",
+    "apps/admin/src/v2/features/auto-registration/apple-mailbox-presentation.ts",
+    "apps/admin/src/v2/features/auto-registration/contracts.ts",
+    "apps/api/src/id-business-v2/auto-registration/apple-mailboxes.types.ts",
+    "apps/api/src/id-business-v2/auto-registration/worker/apple_mailboxes.py",
+    "apps/api/src/id-business-v2/auto-registration/worker/apple_registration_diagnostics.py",
+    "apps/api/src/id-business-v2/auto-registration/worker/flow_evidence.py",
+    "apps/api/src/id-business-v2/auto-registration/worker/id-workspace.js",
+    "apps/api/src/id-business-v2/auto-registration/worker/release_safety.py",
+    "apps/api/src/id-business-v2/auto-registration/worker/test_apple_mailboxes.py",
+    "apps/api/src/id-business-v2/auto-registration/worker/test_flow_evidence.py",
+    "apps/api/src/id-business-v2/auto-registration/worker/test_registration_closed_loop_unit.py",
+    "apps/api/src/id-business-v2/auto-registration/worker/test_registration_parity_unit.py",
+    "apps/api/src/id-business-v2/auto-registration/worker/test_release_safety.py",
+    "apps/api/src/id-business-v2/auto-registration/worker/test_flow_contract_unit.py"
+  ],
+  "backupNormalizerPath": "/opt/id-business-v2/releases/20261015T091200Z-e197218c8b38-recharge-record/scripts/mysql-dump-restore-normalizer.sed",
+  "baseline": {
+    "adminBuildId": "v2-c8ce1a01a1a1e61bcc8de778dad331191319d645",
+    "adminSourceProjectionSha256": "61205317a75fa87fba8d266d66209d831b5e65591feeff0aa98d5f915bcc6fe2",
+    "commit": "626620f09b9fc27e32cc1d3e8a93cb1c51513387",
+    "configurationSha256": {
+      ".env.aws.production": "3f3c22ac671ef185ffc98677ef3a2facce244e476e4583b8e7d16ff1deb00392",
+      "compose.release.json": "db6955ab184632b78d79303f4b6b5dc5629ecbd292e10dbf338029328957e63c",
+      "docker-compose.aws-mysql.yml": "953c6264f157b00218f2a019d5e2c0b6bc4a34f687f2ec42ad782e0009e7672c"
+    },
+    "current": "/opt/id-business-v2/releases/20261016T190438Z-626620f09b9f-online-display-auth",
+    "databaseWrites": 0,
+    "images": {
+      "admin": {
+        "health": "healthy",
+        "image": "sha256:a8554f64fadb9a5d2690c8f51e41b1eea352d210c44cfd2258a3ae8edd6e8e51",
+        "revision": "c8ce1a01a1a1e61bcc8de778dad331191319d645",
+        "user": "root"
+      },
+      "api": {
+        "health": "healthy",
+        "image": "sha256:056398a189335216f30dedd882d219136d3013c1c88b01ab6eb6e32fb0a177cb",
+        "revision": "c8ce1a01a1a1e61bcc8de778dad331191319d645",
+        "user": "node"
+      },
+      "auto-recharge": {
+        "health": "healthy",
+        "image": "sha256:5bd2ab25ebcadcd99f8d339d604e0268cec3fc2cfdac54e2a215f085e3fac00e",
+        "revision": "04570d75c779fd91a0933ef9416f6d62698b6b91",
+        "user": "recharge"
+      },
+      "auto-registration": {
+        "health": "healthy",
+        "image": "sha256:759f60543c2fc5661c5d21644fdc1e9cb0e5cb39c930e9c400f869e0c72be568",
+        "revision": "18e23ee1ab1a8d5c988ff6ba24149e1c741d62f8",
+        "user": "recharge"
+      },
+      "caddy": {
+        "health": null,
+        "image": "sha256:aac61abc4024c323602ccb9ee38bd68b147601f518626b2a055e06944e01c510",
+        "revision": null,
+        "user": ""
+      },
+      "media-resolver": {
+        "health": "healthy",
+        "image": "sha256:34c25f5474f9fdd043cfb39a838762cab9e87f88db9987d9cb9ad6706c331a56",
+        "revision": "b8d643450ffa9012ccc09ead15e4681e3dee98d0",
+        "user": "resolver"
+      },
+      "mysql": {
+        "health": "healthy",
+        "image": "sha256:bced325a4ab7aec848f4688371c7433351dcb5dba26fbcc29c67727d898ae5cb",
+        "revision": null,
+        "user": ""
+      },
+      "online-recharge": {
+        "health": "healthy",
+        "image": "sha256:c7590b94ec27f4dee046be5b786a0353bd00b133379f5e28f8884610ce02d896",
+        "revision": "626620f09b9fc27e32cc1d3e8a93cb1c51513387",
+        "user": "node"
+      }
+    },
+    "inventory": {
+      "admin": {
+        "fileCount": 2138,
+        "sha256": "faf5025fd365fd3e0069ed7516a3b3272f4ab3a6ac33adbaa30e087412b4a6ca"
+      },
+      "api": {
+        "fileCount": 1783,
+        "sha256": "54d6cd68d5d9e1c12b9f27597f12f793008b2d54a2dec41e9185216e1cc05c1e"
+      },
+      "apiJavascript": {
+        "fileCount": 596,
+        "sha256": "2348c789f79a9cfc391caef212cbacb599cacae73fdf05cb410231394a9bb2ba"
+      },
+      "engine": {
+        "fileCount": 88,
+        "sha256": "3e8758696960cba35761276dfb436c63f59d3aaaabf7df885ae5f59d6c190695"
+      },
+      "prisma": {
+        "fileCount": 27,
+        "sha256": "46cebf0e0e3bc37a0d49570c56d8f3cb08d2237aa525161665afef7fd5b60cdc"
+      },
+      "worker": {
+        "fileCount": 14,
+        "sha256": "b20bf4c9d2240edad4b89ac24297748e4de35e6f5e30f3ca5259b33d19196d9e"
+      }
+    },
+    "manifestSha256": "1eb55e3b534e6153f7669f2a5298e63ad36e12c9b5fb8c20621712473ecd2034",
+    "mysql": {
+      "accountCount": 38,
+      "accountsSha256": "f05c5ac13263609999fc88f3a228f675c459176112221decc28049168710bf38",
+      "migrationCount": 56,
+      "migrationsSha256": "2524b2aa47f6697590dc9d0831efb2cac8a0b03b7cbccd8d306b91b08e078918"
+    },
+    "nginxSha256": "0b73aedbebdc12065d922b35bbf428e8959fe3a3ea9ef9fa5dc7af2f995baa99",
+    "openaiRequests": 0,
+    "publishedProofs": {
+      "online-browser-display-auth-preservation.json": {
+        "commit": "626620f09b9fc27e32cc1d3e8a93cb1c51513387",
+        "scope": null,
+        "sha256": "021a1964811b0dff5ffeb58a09d528b260039c36b45e5eadce75506d6a098e1e",
+        "tree": null
+      },
+      "online-checkout-build-proof.json": {
+        "adminFiles": {
+          "fileCount": 261,
+          "sha256": "b136a739d66ffcbbea3f6a0fe48881e5bca912e8b2c1955cd7d7de062ae1adfb"
+        },
+        "apiModules": {
+          "fileCount": 21,
+          "sha256": "cb487fd3635f983ea864efa032d5a8a546da9e73af7655644340c77ec06cd90b"
+        },
+        "commit": "c8ce1a01a1a1e61bcc8de778dad331191319d645",
+        "scope": "ONLINE_CHECKOUT_FORM_AND_VISIBILITY",
+        "sha256": "f9e7154e2574a6c487690459a16808a60bdbec88113817ece367f1ecb03f278b",
+        "tree": "8a8f803f5fce092cc0b0c4ea36f349a0c306c332"
+      },
+      "registration-protocol-restore-build-proof.json": {
+        "adminFiles": {
+          "fileCount": 261,
+          "sha256": "4ed0a74e834d50aff7b4e44164046ca7d1a7ee21f33ffbcc74736055009be8c0"
+        },
+        "apiModules": {
+          "fileCount": 12,
+          "sha256": "3b2c729d54e65f4c66decab220e021134e817f481f9a187e65f890c97fa071ce"
+        },
+        "commit": "1bd89a110774ebb4cfcbcfeefa35752ae3c83fae",
+        "scope": "REGISTRATION_PROTOCOL_RESTORE",
+        "sha256": "6ce285517a0da4c157e70758b60edbb7099d33e77e8bd64877ea7fc4aee69a9b",
+        "tree": "e1eb74a181c20893d3071150aaeb1689d0311cc0"
+      }
+    },
+    "registrationStarts": 0,
+    "roleSourceProjectionsSha256": "c9392f13179ea12f0a41b491a21ef3987bdb378e3b5def51e676ec959cdedb9c",
+    "runtimeConfigurationSha256": {
+      "admin": "dfc7d8d92987afc22a6c843fdac6ed3a40e0727065795a2c36fd9f90f43cd37a",
+      "api": "cb346b8db7d99162a0413764c604c6f45e8f7bbf1f2bdf40d2f2b8602fe8bdb7",
+      "auto-recharge": "71e8b8cf9d652276051212ca4add76538d53821d383aa839786d0bfc53ee93b4",
+      "auto-registration": "5ca164d0fe435be8da0a0d8bb2d9000d09c1dfdeabfaecc4250cc9cb7aaeb448",
+      "caddy": "b0ff215378c964b3111a1a5f7d04eb927693116b118d55caa466235357f741d6",
+      "media-resolver": "fe30f727d485d192ec3316fa5d8325451e1a681c9840ac08ff6961592645b71d",
+      "mysql": "7c4fc6fea1da1bd857bb2ab0a13486a0d09332f242b38bda895340d4526248bc",
+      "online-recharge": "0db8f5da6e8a49af82fb419ef81b2edc552752edc0c37cfd0383b9e5f963ee20"
+    },
+    "schemaSha256": "51a4d25b1302458145f560acc32f25b89a7bd65fea64dc72b254dc56da430100",
+    "services": {
+      "admin": {
+        "containerId": "437d8c9f9d457d71475b3adec3a8cc64344d5400960482d9093baf6eeae0a9c6",
+        "environmentSha256": "03ddab553858482dcbcc4a93d989902d31b41753eb155fb8162011e218bc0ad4",
+        "health": "healthy",
+        "image": "sha256:a8554f64fadb9a5d2690c8f51e41b1eea352d210c44cfd2258a3ae8edd6e8e51",
+        "reference": "id-business-v2-online-checkout:c8ce1a01a1a1e61bcc8de778dad331191319d645-38948569039-admin",
+        "startedAtSha256": "18586a5f587355421900b65ef08eee1747d01389aa9bf37dbf34d516032db269",
+        "status": "running"
+      },
+      "api": {
+        "containerId": "dbb515bd59a93df44ab0758ac0139759b30d3499fd561106e659f1edddd432a8",
+        "environmentSha256": "cc3662b8111310ec210a34ae642b9622da070f4fb94e1ea602ac355044136f5d",
+        "health": "healthy",
+        "image": "sha256:056398a189335216f30dedd882d219136d3013c1c88b01ab6eb6e32fb0a177cb",
+        "reference": "id-business-v2-online-checkout:c8ce1a01a1a1e61bcc8de778dad331191319d645-38948569039-api",
+        "startedAtSha256": "f4e7043deeb6226dff104b9bfa693a6f29bf88de9d05ba2443b9c3cf9fd3c253",
+        "status": "running"
+      },
+      "auto-recharge": {
+        "containerId": "0190045c800bd6cda576b66ccce0986de6792390d01cf19fe19e02cd16316f97",
+        "environmentSha256": "5169582dea47a65076d5f7a3a3defbc824fa4f772b2dc0904eb64659209757ae",
+        "health": "healthy",
+        "image": "sha256:5bd2ab25ebcadcd99f8d339d604e0268cec3fc2cfdac54e2a215f085e3fac00e",
+        "reference": "079740175286.dkr.ecr.ap-northeast-1.amazonaws.com/id-business-v2-release:04570d75c779fd91a0933ef9416f6d62698b6b91-37694009463-1-auto-recharge",
+        "startedAtSha256": "2e93090ec44036fb777194c57eea84f9503a39ca73a06c38a748f5dd6b54b0b7",
+        "status": "running"
+      },
+      "auto-registration": {
+        "containerId": "16de5229289255cd47c3f9336e24aa611c0f9bbc76af2fcdfc5e5e1928d68add",
+        "environmentSha256": "de69bd06209b17619f8cb7ae38bace36c27dc4203c67e09fd1b8d21023fbcb17",
+        "health": "healthy",
+        "image": "sha256:759f60543c2fc5661c5d21644fdc1e9cb0e5cb39c930e9c400f869e0c72be568",
+        "reference": "079740175286.dkr.ecr.ap-northeast-1.amazonaws.com/id-business-v2-release:18e23ee1ab1a8d5c988ff6ba24149e1c741d62f8-37788833835-1-auto-recharge",
+        "startedAtSha256": "c9a77b62c61fbba526248595098942e7d21f5ac9e51f0f70ef8c698f70ad6eb9",
+        "status": "running"
+      },
+      "caddy": {
+        "containerId": "0ee2a1ea26eec74fef64362fd77a69894e3dc4dddd412c38ebd59c747aa6e203",
+        "environmentSha256": "33ea62b4e1f4de93e333bdbbea4ec88904661f1cb616907b185fce31b22b7181",
+        "health": null,
+        "image": "sha256:aac61abc4024c323602ccb9ee38bd68b147601f518626b2a055e06944e01c510",
+        "reference": "caddy:2.10-alpine@sha256:4c6e91c6ed0e2fa03efd5b44747b625fec79bc9cd06ac5235a779726618e530d",
+        "startedAtSha256": "7124aaf366d285ac54e3abae821e422125202ffccb85379d30c009bb7a553ced",
+        "status": "running"
+      },
+      "media-resolver": {
+        "containerId": "0c4fd25ba8fbf2fdab7639e680c3a3433d814cdb2d71ebd7ad39531aaa639471",
+        "environmentSha256": "8473962ae5df6f8e5553ab658ccce662a8816f83631b221484daf5fa42e3b163",
+        "health": "healthy",
+        "image": "sha256:34c25f5474f9fdd043cfb39a838762cab9e87f88db9987d9cb9ad6706c331a56",
+        "reference": "079740175286.dkr.ecr.ap-northeast-1.amazonaws.com/id-business-v2-release:b8d643450ffa9012ccc09ead15e4681e3dee98d0-37302661631-1-media-resolver",
+        "startedAtSha256": "decd8646d9eae7910ed3789d7ae990a13202da1df6c171a10ace75ca43f9ea6f",
+        "status": "running"
+      },
+      "mysql": {
+        "containerId": "7e5a5abe42c5503e6196f736d532793aaec3796b7eb518f02db614d4025d0074",
+        "environmentSha256": "bb8d63d18769016c14d8664a551d2b3da9e251701ed62f87b04cba964fc9e299",
+        "health": "healthy",
+        "image": "sha256:bced325a4ab7aec848f4688371c7433351dcb5dba26fbcc29c67727d898ae5cb",
+        "reference": "mysql:8.4@sha256:b3b90af2a6552ae30c266fdb7d5dd55f3afb72404bb78d37fe8a23eb857fd3fb",
+        "startedAtSha256": "fadf08a3cf1878d9e477f0d1f3f262a12bebdb3d2869429eaac92e5e4418c988",
+        "status": "running"
+      },
+      "online-recharge": {
+        "containerId": "69385db9b739c2da9ba7beee95853f3297057b3dc5ccb4b5208f2f6bf430d717",
+        "environmentSha256": "60bb48bbd6e03a4ceebe245c8405f248d0c682a27287aabb17c1d3573e50ad37",
+        "health": "healthy",
+        "image": "sha256:c7590b94ec27f4dee046be5b786a0353bd00b133379f5e28f8884610ce02d896",
+        "reference": "id-business-v2-online-display-auth:626620f09b9fc27e32cc1d3e8a93cb1c51513387",
+        "startedAtSha256": "dc8ff8d649300a71fb901a6fa07270ee5f69838d3c7069025d32c513f04feef7",
+        "status": "running"
+      }
+    },
+    "sqlite": {
+      "logicalSha256": "ab2417585da800709b64d88b6a4b58ffad44ec606a2fdc5ae6e47474b8701019",
+      "schemaSha256": "ea6fe631c507f8a4016dd0eb40ff7d5b3f24c63e36fe120aae99cd0ad8525a2e",
+      "tableCounts": {
+        "accounts": 0,
+        "cpa_services": 0,
+        "email_services": 0,
+        "proxies": 0,
+        "registration_tasks": 6,
+        "settings": 100,
+        "sub2api_services": 0,
+        "tm_services": 0
+      },
+      "taskCounts": {
+        "cancelled": 0,
+        "completed": 0,
+        "failed": 6,
+        "pending": 0,
+        "running": 0
+      }
+    },
+    "status": "READ_ONLY_RELEASE_BASELINE_INSPECTED"
+  },
+  "baselineWorkerFiles": {
+    "acceptance_runtime.py": "e5ec8bcc4932a3bfc7a14d6f8c8f01f952ca097699c987f0ba90202e9f831d1c",
+    "apple_closed_loop.py": "f71dc93773fdc9f636d07b051a9738263ef6219234b28dafe909ff253b647391",
+    "apple_mailboxes.py": "b1cbea722f7d63c33181811c2446d43cf7af5b212ff2d379aadc3b3cb909c613",
+    "apple_registration_diagnostics.py": "c325e7624eddadbf3a6c9d205de25e59d6086ec3b89d0b37e1da421fce72415c",
+    "flow_evidence.py": "dd3b7e262b7e41d6864f59cceddbadc4d0c74862dfa1eee0ffd35e134e841752",
+    "id-workspace.css": "8676e884447fa7cd43ecedc1b8986d0cb45747c53d3142f0b4bad7b68b7397ad",
+    "id-workspace.js": "f08eafa67ce0ed07ec00228b8f3cee02d54082b3364c703a0a8507c99a6cc896",
+    "release_safety.py": "c6bda052bfab611c4798a40b8c637a48a23dc9c9da0912b7028e61d719b7146b",
+    "test_apple_mailboxes.py": "46f33e574d8fba39ed631c8b0f89787fa91c6b4536e12327f262b91dca7a2700",
+    "test_release_safety.py": "d912a3ef4d91b35280b4dd82dc6026b32af783021fb122984c83a9cd648a2fce",
+    "test_upload_compat.py": "a5e9c985971bc94dc398d584cea5c32372b9f796cd0bc4816ded16d7fa81de31",
+    "test_workspace.py": "82ca385ed50e61cd8b6d5dd01e560504989b2ced0363af1ce26d0728a62b523c",
+    "upload_compat.py": "457653d75fdab9a2bb73b7bbf0a5428d7bbd67535f7a2a7ea74306cb0193cc00",
+    "workspace.py": "6bcb2050633db830068fd1a1b1a30d3dd75bf45f24aef3ab5b9c398d632e7237"
+  },
+  "buildSupportHashes": {
+    "scripts/production-release/registration-closure-release.py": "0d2daaeff0a35e1e11666ace39560273fdc83ff9e5718cb244337c8b0f851274"
+  },
+  "businessActions": 0,
+  "configurationSha256": {
+    ".env.aws.production": "3f3c22ac671ef185ffc98677ef3a2facce244e476e4583b8e7d16ff1deb00392",
+    "compose.release.json": "db6955ab184632b78d79303f4b6b5dc5629ecbd292e10dbf338029328957e63c",
+    "docker-compose.aws-mysql.yml": "953c6264f157b00218f2a019d5e2c0b6bc4a34f687f2ec42ad782e0009e7672c"
+  },
+  "controlFiles": [
+    "registration-protocol-repair-build.py",
+    "registration-protocol-repair-release.py",
+    "registration-protocol-repair-dispatch.py",
+    "registration-protocol-repair-release.test.py",
+    "registration-parity-diagnostics-release.py",
+    "registration-parity-diagnostics-dispatch.py",
+    "registration-closure-release.py",
+    "registration-closure-dispatch.py",
+    "recharge-record-release.py",
+    "recharge-availability-release.py",
+    "proxy-result-identity-release.py",
+    "recharge-billing-release.py",
+    "api-admin-scope.py",
+    "remote-deploy.py"
+  ],
+  "controlHashes": {
+    "registration-protocol-repair-build.py": "6d998231cc1fa44355ac232a38064cd2fc3efb115d07bc3f006dd37e827b8391",
+    "registration-protocol-repair-release.py": "9fcecd3deb9837e5a0bb0ae5b4114c0bfcafad6630934b86da66a8c919f8eeb3",
+    "registration-protocol-repair-dispatch.py": "ec663618df477ef92663ae83809a87519292e2ca63a83a15e81bbd8f12587bac",
+    "registration-protocol-repair-release.test.py": "34edee6b32fda20d6266ed4961a274349b6b48af0cc8ea113145fd558ee9df33",
+    "registration-parity-diagnostics-release.py": "f5d3d6e3d5ee539a965cbbfa4401beee3e209c2258886ea7239ae667a13e3eb8",
+    "registration-parity-diagnostics-dispatch.py": "c16f8a09a7a08771faa1071910a05a077d3c4e368f6a4938d3c8cec8cca74a8c",
+    "registration-closure-release.py": "0d2daaeff0a35e1e11666ace39560273fdc83ff9e5718cb244337c8b0f851274",
+    "registration-closure-dispatch.py": "4ee050b81065c59f440351ad78ad19a7f0875650f485e29418cb3a76b51ad1d6",
+    "recharge-record-release.py": "4ca6d0053f5dc4368d85722ef0df272ace0947c1c91993a0a3da598507b5163f",
+    "recharge-availability-release.py": "d98af117f3d80e705dd4f5eb3375a37cf4c0f058b65f4be77550d909ccbbe66c",
+    "proxy-result-identity-release.py": "97207252c12924dcbbfe3e86ebf397e928cd9545bbf9260337fd94ffd5109d45",
+    "recharge-billing-release.py": "eabb3473e5639edaf7073cb71562bfca4d7208bc7856d1262ce904202dedafd7",
+    "api-admin-scope.py": "50446ab528a288ca1c2129c84f1bf4a90f59fa313a92bcff0058a258c8b8e925",
+    "remote-deploy.py": "889aedb75bbcb53863a55dc2a4c40a84e06dea1d64d493f6a4fca6dc233f855c"
+  },
+  "current": "/opt/id-business-v2/releases/20261016T190438Z-626620f09b9f-online-display-auth",
+  "engineHealth": {
+    "activeTasks": 0,
+    "mode": "enabled",
+    "ready": true,
+    "rpcConnected": true,
+    "stopping": false
+  },
+  "expectedCurrent": "626620f09b9fc27e32cc1d3e8a93cb1c51513387",
+  "expectedGitChanges": [
+    "apps/admin/src/v2/features/auto-registration/apple-mailbox-presentation.spec.ts",
+    "apps/admin/src/v2/features/auto-registration/apple-mailbox-presentation.ts",
+    "apps/admin/src/v2/features/auto-registration/contracts.ts",
+    "apps/api/src/id-business-v2/auto-registration/apple-mailboxes.types.ts",
+    "apps/api/src/id-business-v2/auto-registration/worker/apple_mailboxes.py",
+    "apps/api/src/id-business-v2/auto-registration/worker/apple_registration_diagnostics.py",
+    "apps/api/src/id-business-v2/auto-registration/worker/flow_evidence.py",
+    "apps/api/src/id-business-v2/auto-registration/worker/id-workspace.js",
+    "apps/api/src/id-business-v2/auto-registration/worker/release_safety.py",
+    "apps/api/src/id-business-v2/auto-registration/worker/test_apple_mailboxes.py",
+    "apps/api/src/id-business-v2/auto-registration/worker/test_flow_evidence.py",
+    "apps/api/src/id-business-v2/auto-registration/worker/test_registration_closed_loop_unit.py",
+    "apps/api/src/id-business-v2/auto-registration/worker/test_registration_parity_unit.py",
+    "apps/api/src/id-business-v2/auto-registration/worker/test_release_safety.py",
+    "apps/api/src/id-business-v2/auto-registration/worker/test_flow_contract_unit.py",
+    "scripts/acceptance-v2-registration-parity-diagnostics.mjs",
+    ".github/workflows/registration-protocol-repair-validation.yml",
+    "docs/V2_TASKS.md",
+    "docs/AUTO_REGISTRATION_PROTOCOL_REPAIR_20261017.md",
+    "scripts/ci-recharge-scope.mjs",
+    "scripts/ci-recharge-scope.test.mjs",
+    "scripts/ci-recharge-check.mjs",
+    "scripts/ci-recharge-check.test.mjs",
+    "scripts/production-release/registration-protocol-repair-build.py",
+    "scripts/production-release/registration-protocol-repair-contract.json",
+    "scripts/production-release/registration-protocol-repair-dispatch.py",
+    "scripts/production-release/registration-protocol-repair-release.py",
+    "scripts/production-release/registration-protocol-repair-release.test.py"
+  ],
+  "frozen": true,
+  "hostSourceInheritance": {
+    "files": {},
+    "release": "/opt/id-business-v2/releases/20261016T190438Z-626620f09b9f-online-display-auth"
+  },
+  "manifestSha256": "1eb55e3b534e6153f7669f2a5298e63ad36e12c9b5fb8c20621712473ecd2034",
+  "migration": null,
+  "name": "registration-protocol-repair-20261017",
+  "pythonTests": [
+    "test_flow_contract_unit",
+    "test_flow_evidence",
+    "test_registration_parity_unit",
+    "test_registration_closed_loop_unit",
+    "test_apple_mailboxes",
+    "test_release_safety"
+  ],
+  "qualityEvidenceHelperSha256": "4ee050b81065c59f440351ad78ad19a7f0875650f485e29418cb3a76b51ad1d6",
+  "reconstruction": {
+    "commit": "c8ce1a01a1a1e61bcc8de778dad331191319d645",
+    "contractSha256": "d6419c331fbe1eeb203a5cac0f41369657ea3dd3b1c35758be77ab03f12a3220",
+    "displaySources": {
+      "SOURCE_MANIFEST.json": "bea246699549bf5fa6c7984494e426c0b286e98e74ac2af5f881651ff4175faf",
+      "test/runtime-main.test.cjs": "f16785dae472a4065bac6f2dd4b23624d3aeba7708d668e55742b57a84be063b",
+      "worker.cjs": "0260aabc3444d53b51cd2a56bbc29ea40c33d9968eac73c7d6ce38cb2990a9bc"
+    },
+    "helperSha256": "cd3d57bc25a4ef4555c04489ccfecb401bedc4f56f1755d7d8765de830bd9d0e"
+  },
+  "reviewedFileHashes": {
+    "apps/admin/src/v2/features/auto-registration/apple-mailbox-presentation.spec.ts": "8a2f92354a1ae416eeebf522c4ff554bfebc520d7c6b3e0269cdb17841e277e9",
+    "apps/admin/src/v2/features/auto-registration/apple-mailbox-presentation.ts": "665778284474d71c4a9c570ef996105297cc01b1accc175dba9266ba76f937b6",
+    "apps/admin/src/v2/features/auto-registration/contracts.ts": "fe758af86912ee323c5145981a2560742ccd7782c496b6fb61767dbf07260fbd",
+    "apps/api/src/id-business-v2/auto-registration/apple-mailboxes.types.ts": "a152a57e4cad0bfdcbdade0787babdfec5ccf16c54e54cf9826a41dbfc2c27c6",
+    "apps/api/src/id-business-v2/auto-registration/worker/apple_mailboxes.py": "de35ebdbd2c256a69a7bb19329eac7185cf417803df923b8a400ee889cdbfe20",
+    "apps/api/src/id-business-v2/auto-registration/worker/apple_registration_diagnostics.py": "9f7f0b1dce2077fa8e9d9f3cbf911d2f07f239f8ed29a4ea4a3f696cb8d32e4e",
+    "apps/api/src/id-business-v2/auto-registration/worker/flow_evidence.py": "30b6a1dedca5ad8a95350f133f664d206c183ee259a518ec0015ed31c68eb7cf",
+    "apps/api/src/id-business-v2/auto-registration/worker/id-workspace.js": "91eb350d9c6be1c8a9df7feb178f5650db3017eeb4d290fb74a8dc87b7663351",
+    "apps/api/src/id-business-v2/auto-registration/worker/release_safety.py": "57d9fd12af70c91633bed325690c4ffdd9f2d7a1f9abfcac87f8cd63cfa0b24f",
+    "apps/api/src/id-business-v2/auto-registration/worker/test_apple_mailboxes.py": "a2adaaa9981b0e9ad8b9ce0ba8b51428be639d50c07ded197933c9772a64b6af",
+    "apps/api/src/id-business-v2/auto-registration/worker/test_flow_evidence.py": "bce81a8a573dc1013eeebd9f7466a714323abcb66bcfb4213a7090f2a2b6cc09",
+    "apps/api/src/id-business-v2/auto-registration/worker/test_registration_closed_loop_unit.py": "e38b3dd48b3e9d50b87a637681b89f70d0ebe7104132d0ef2fb448036c8af7ec",
+    "apps/api/src/id-business-v2/auto-registration/worker/test_registration_parity_unit.py": "91dba35f91abc302a51cb6baf1b615a6d9c65e51a7e1847b3507d8b98cd728e0",
+    "apps/api/src/id-business-v2/auto-registration/worker/test_release_safety.py": "e7eeae045a281090e328a48d17be155bb4e5ffc8866e666f6fe64d629df9ec35",
+    "apps/api/src/id-business-v2/auto-registration/worker/test_flow_contract_unit.py": "53410cf3de35c8b37cfc2022428931c9b139f7f39cbf04d889ea4a1866407627",
+    "scripts/acceptance-v2-registration-parity-diagnostics.mjs": "97d13853fbee1091b807ba6bb518a41c4783211041d7781af6ccc543b49fd022",
+    ".github/workflows/registration-protocol-repair-validation.yml": "e7ec41dd01c8f8ce69b4448b944516fbb3443631c7bb64dba5e06370ad12cc41",
+    "docs/V2_TASKS.md": "d81b76a05d5724453a633a0aa215c2d4420aa7328edb4bb97641f279cfe8c8b0",
+    "docs/AUTO_REGISTRATION_PROTOCOL_REPAIR_20261017.md": "e39da28af6c8070ba283c391dc5c31441a33060388c2de4b9e46580fb9f44c16",
+    "scripts/ci-recharge-scope.mjs": "c850e7693d2e1f43fb137524284afcb369c9c887686c87890b8ba7d3ff8d7bb1",
+    "scripts/ci-recharge-scope.test.mjs": "f1070b7f9f59b4ba17a21cf0099190407fff4026dfb0877893990d7bc7879303",
+    "scripts/ci-recharge-check.mjs": "d696302582a712c2e945116bdad056b4057dada57c64709a7d96d2f7d7ffb9fc",
+    "scripts/ci-recharge-check.test.mjs": "ab632a370f849813269f31675beaa76f250daa4fca1cecd80efd29bdd490c2ae",
+    "scripts/production-release/registration-protocol-repair-build.py": "6d998231cc1fa44355ac232a38064cd2fc3efb115d07bc3f006dd37e827b8391",
+    "scripts/production-release/registration-protocol-repair-dispatch.py": "ec663618df477ef92663ae83809a87519292e2ca63a83a15e81bbd8f12587bac",
+    "scripts/production-release/registration-protocol-repair-release.py": "9fcecd3deb9837e5a0bb0ae5b4114c0bfcafad6630934b86da66a8c919f8eeb3",
+    "scripts/production-release/registration-protocol-repair-release.test.py": "34edee6b32fda20d6266ed4961a274349b6b48af0cc8ea113145fd558ee9df33"
+  },
+  "roleSourceCommits": {
+    "admin": "c8ce1a01a1a1e61bcc8de778dad331191319d645",
+    "api": "c8ce1a01a1a1e61bcc8de778dad331191319d645",
+    "online-recharge": "626620f09b9fc27e32cc1d3e8a93cb1c51513387"
+  },
+  "runtimeConfigurationSha256": {
+    "admin": "dfc7d8d92987afc22a6c843fdac6ed3a40e0727065795a2c36fd9f90f43cd37a",
+    "api": "cb346b8db7d99162a0413764c604c6f45e8f7bbf1f2bdf40d2f2b8602fe8bdb7",
+    "auto-recharge": "71e8b8cf9d652276051212ca4add76538d53821d383aa839786d0bfc53ee93b4",
+    "auto-registration": "5ca164d0fe435be8da0a0d8bb2d9000d09c1dfdeabfaecc4250cc9cb7aaeb448",
+    "caddy": "b0ff215378c964b3111a1a5f7d04eb927693116b118d55caa466235357f741d6",
+    "media-resolver": "fe30f727d485d192ec3316fa5d8325451e1a681c9840ac08ff6961592645b71d",
+    "mysql": "7c4fc6fea1da1bd857bb2ab0a13486a0d09332f242b38bda895340d4526248bc",
+    "online-recharge": "0db8f5da6e8a49af82fb419ef81b2edc552752edc0c37cfd0383b9e5f963ee20"
+  },
+  "schemaSha256": "51a4d25b1302458145f560acc32f25b89a7bd65fea64dc72b254dc56da430100",
+  "scope": "REGISTRATION_PROTOCOL_REPAIR_20261017",
+  "sourceBaseline": "626620f09b9fc27e32cc1d3e8a93cb1c51513387",
+  "sourceBaselineTree": "fd750f25a8481d13859596937d6d4c12dda51ca9",
+  "sourceProjectionSha256": {
+    "adminSourceProjection": "61205317a75fa87fba8d266d66209d831b5e65591feeff0aa98d5f915bcc6fe2",
+    "roleSourceProjections": "c9392f13179ea12f0a41b491a21ef3987bdb378e3b5def51e676ec959cdedb9c"
+  },
+  "sources": {
+    "apps/admin/src/v2/features/auto-registration/apple-mailbox-presentation.spec.ts": "8a2f92354a1ae416eeebf522c4ff554bfebc520d7c6b3e0269cdb17841e277e9",
+    "apps/admin/src/v2/features/auto-registration/apple-mailbox-presentation.ts": "665778284474d71c4a9c570ef996105297cc01b1accc175dba9266ba76f937b6",
+    "apps/admin/src/v2/features/auto-registration/contracts.ts": "fe758af86912ee323c5145981a2560742ccd7782c496b6fb61767dbf07260fbd",
+    "apps/api/src/id-business-v2/auto-registration/apple-mailboxes.types.ts": "a152a57e4cad0bfdcbdade0787babdfec5ccf16c54e54cf9826a41dbfc2c27c6",
+    "apps/api/src/id-business-v2/auto-registration/worker/apple_mailboxes.py": "de35ebdbd2c256a69a7bb19329eac7185cf417803df923b8a400ee889cdbfe20",
+    "apps/api/src/id-business-v2/auto-registration/worker/apple_registration_diagnostics.py": "9f7f0b1dce2077fa8e9d9f3cbf911d2f07f239f8ed29a4ea4a3f696cb8d32e4e",
+    "apps/api/src/id-business-v2/auto-registration/worker/flow_evidence.py": "30b6a1dedca5ad8a95350f133f664d206c183ee259a518ec0015ed31c68eb7cf",
+    "apps/api/src/id-business-v2/auto-registration/worker/id-workspace.js": "91eb350d9c6be1c8a9df7feb178f5650db3017eeb4d290fb74a8dc87b7663351",
+    "apps/api/src/id-business-v2/auto-registration/worker/release_safety.py": "57d9fd12af70c91633bed325690c4ffdd9f2d7a1f9abfcac87f8cd63cfa0b24f",
+    "apps/api/src/id-business-v2/auto-registration/worker/test_apple_mailboxes.py": "a2adaaa9981b0e9ad8b9ce0ba8b51428be639d50c07ded197933c9772a64b6af",
+    "apps/api/src/id-business-v2/auto-registration/worker/test_flow_evidence.py": "bce81a8a573dc1013eeebd9f7466a714323abcb66bcfb4213a7090f2a2b6cc09",
+    "apps/api/src/id-business-v2/auto-registration/worker/test_registration_closed_loop_unit.py": "e38b3dd48b3e9d50b87a637681b89f70d0ebe7104132d0ef2fb448036c8af7ec",
+    "apps/api/src/id-business-v2/auto-registration/worker/test_registration_parity_unit.py": "91dba35f91abc302a51cb6baf1b615a6d9c65e51a7e1847b3507d8b98cd728e0",
+    "apps/api/src/id-business-v2/auto-registration/worker/test_release_safety.py": "e7eeae045a281090e328a48d17be155bb4e5ffc8866e666f6fe64d629df9ec35",
+    "apps/api/src/id-business-v2/auto-registration/worker/test_flow_contract_unit.py": "53410cf3de35c8b37cfc2022428931c9b139f7f39cbf04d889ea4a1866407627"
+  },
+  "sqlFenceHelperSha256": "50446ab528a288ca1c2129c84f1bf4a90f59fa313a92bcff0058a258c8b8e925",
+  "validationSources": {
+    "scripts/acceptance-v2-registration-parity-diagnostics.mjs": "97d13853fbee1091b807ba6bb518a41c4783211041d7781af6ccc543b49fd022"
+  },
+  "version": 1,
+  "workerFiles": {
+    "apple_mailboxes.py": "de35ebdbd2c256a69a7bb19329eac7185cf417803df923b8a400ee889cdbfe20",
+    "apple_registration_diagnostics.py": "9f7f0b1dce2077fa8e9d9f3cbf911d2f07f239f8ed29a4ea4a3f696cb8d32e4e",
+    "flow_evidence.py": "30b6a1dedca5ad8a95350f133f664d206c183ee259a518ec0015ed31c68eb7cf",
+    "id-workspace.js": "91eb350d9c6be1c8a9df7feb178f5650db3017eeb4d290fb74a8dc87b7663351",
+    "release_safety.py": "57d9fd12af70c91633bed325690c4ffdd9f2d7a1f9abfcac87f8cd63cfa0b24f"
+  }
+}

@@ -464,7 +464,7 @@ class RegistrationClosedLoopUnitTests(unittest.TestCase):
         integration = object.__new__(apple.AppleMailboxIntegration)
         integration.store = store
         response = SimpleNamespace(status_code=200, text="ip=8.8.8.8\nloc=PH\n")
-        engine = SimpleNamespace(http_client=SimpleNamespace(get=Mock(return_value=response)),
+        engine = SimpleNamespace(http_client=SimpleNamespace(get=Mock(return_value=response), post=Mock()),
              oauth_manager=SimpleNamespace(client_id="fixture-client"), proxy_url=None,
              _submit_signup_form=Mock(), _send_verification_code=Mock(),
              _create_user_account=Mock(), _mark_email_as_registered=Mock(), _start_oauth=lambda: True)
@@ -498,7 +498,8 @@ class RegistrationClosedLoopUnitTests(unittest.TestCase):
         integration.lock = threading.RLock()
         original = Mock()
         session = SimpleNamespace(post=original, get=Mock())
-        endpoints = {"register": "https://auth.example.invalid/register", "signup": "https://auth.example.invalid/continue"}
+        endpoints = {"register": "https://auth.example.invalid/register", "signup": "https://auth.example.invalid/continue",
+                     "sentinel": "https://sentinel.openai.com/backend-api/sentinel/req"}
         engine = SimpleNamespace()
         with patch.object(apple.importlib, "import_module", return_value=SimpleNamespace(OPENAI_API_ENDPOINTS=endpoints)):
             integration.guard_session(engine, TASK, session)
@@ -514,7 +515,8 @@ class RegistrationClosedLoopUnitTests(unittest.TestCase):
                         headers={}, history=[], json=Mock(return_value={"page": {"type": "email_otp_verification"}})))
         integration.store = Mock()
         session = SimpleNamespace(post=original, get=Mock())
-        endpoints = {"register": "https://auth.example.invalid/register", "signup": "https://auth.example.invalid/continue"}
+        endpoints = {"register": "https://auth.example.invalid/register", "signup": "https://auth.example.invalid/continue",
+                     "sentinel": "https://sentinel.openai.com/backend-api/sentinel/req"}
         with patch.object(apple.importlib, "import_module", return_value=SimpleNamespace(OPENAI_API_ENDPOINTS=endpoints)):
             integration.guard_session(SimpleNamespace(), TASK, session)
         session.post(endpoints["signup"], data=json.dumps({"username": {"value": "unit@example.invalid"}, "screen_hint": "signup"}))
@@ -547,7 +549,7 @@ class RegistrationClosedLoopUnitTests(unittest.TestCase):
         integration.persist_created_account = Mock(side_effect=AssertionError("invalid response cannot save created account"))
         invalid = SimpleNamespace(status_code=200, url=endpoint, json=Mock(return_value={"error": "fixture error"}))
         session = SimpleNamespace(post=Mock(return_value=invalid), get=Mock())
-        engine = SimpleNamespace(session=session, http_client=SimpleNamespace(get=Mock()),
+        engine = SimpleNamespace(session=session, http_client=SimpleNamespace(get=Mock(), post=Mock()),
             _submit_signup_form=Mock(), _send_verification_code=Mock(), _mark_email_as_registered=Mock())
         # Reproduce the frozen method's exact status-only contract. The real
         # adapter must reject the explicit error before this can return True.

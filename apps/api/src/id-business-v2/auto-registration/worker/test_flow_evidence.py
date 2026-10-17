@@ -34,7 +34,8 @@ TASK = "82b25c6d-404f-47e9-a624-e106bd1a22cb"
 AUTHORIZE = "https://auth.openai.com/oauth/authorize?state=fixture-state"
 ENDPOINTS = {"signup": "https://auth.openai.com/api/accounts/authorize/continue",
              "register": "https://auth.openai.com/api/accounts/user/register",
-             "create_account": "https://auth.openai.com/api/accounts/create_account"}
+             "create_account": "https://auth.openai.com/api/accounts/create_account",
+             "sentinel": "https://sentinel.openai.com/backend-api/sentinel/req"}
 
 
 def definitions(path, classes, namespace):
@@ -79,6 +80,7 @@ NAMESPACE = {"__name__": __name__, "Any": Any, "Dict": Dict, "Optional": Optiona
     "time": SimpleNamespace(sleep=lambda _: None, time=time.time),
     "uuid": uuid, "importlib": SimpleNamespace(import_module=lambda _: SimpleNamespace(OPENAI_API_ENDPOINTS=ENDPOINTS)),
     "observation": flow.observation, "observation_v1": flow.observation_v1,
+    "observation_for_version": flow.observation_for_version,
     "validate_flow_evidence": flow.validate_flow_evidence,
     "validate_observation": flow.validate_observation, "RegistrationDiagnostics": diagnostics.RegistrationDiagnostics,
     "STAGES": diagnostics.STAGES, "ERROR_KINDS": diagnostics.ERROR_KINDS, "now_iso": now_iso,
@@ -91,7 +93,7 @@ NAMESPACE = {"__name__": __name__, "Any": Any, "Dict": Dict, "Optional": Optiona
 definitions(HERE / "apple_mailboxes.py", {"RegistrationFacts": {"record_flow_evidence", "record_failure"},
     "AppleMailboxIntegration": {"guard_session", "observe_engine", "task"}}, NAMESPACE)
 definitions(HERE.parent / "upstream/src/core/register.py", {"SignupFormResult": None, "RegistrationResult": None,
-    "RegistrationEngine": {"run", "_get_device_id", "_submit_signup_form", "_register_password"}}, NAMESPACE)
+    "RegistrationEngine": {"run", "_get_device_id", "_check_sentinel", "_submit_signup_form", "_register_password"}}, NAMESPACE)
 
 
 class MemoryStore(NAMESPACE["RegistrationFacts"]):
@@ -147,18 +149,27 @@ class FlowEvidenceTests(unittest.TestCase):
         calls = []
         def post(url, *args, **kwargs):
             calls.append((url, args, kwargs))
+            if url == ENDPOINTS["sentinel"]:
+                return FakeResponse(body={"token": "fixture-only-sentinel-token",
+                                          "proofofwork": {"required": False}, "turnstile": {"required": False}},
+                                    url=ENDPOINTS["sentinel"])
             if url == ENDPOINTS["signup"]:
                 return signup or FakeResponse()
             if url == ENDPOINTS["register"]:
                 return password or FakeResponse(400, {"error": {"code": "account_creation_failed"}})
             raise AssertionError("unexpected request")
         session.post = Mock(side_effect=post)
+        # Frozen HTTPClient.post uses Session.request directly; it does not
+        # dispatch through the Session.post method guarded for signup/password.
+        session.request = Mock(side_effect=lambda method, url, *args, **kwargs: post(url, *args, **kwargs))
         engine = NAMESPACE["RegistrationEngine"]()
         engine.email, engine.email_info = "fixture@example.invalid", {}
         engine.logs, engine._is_existing_account = [], False
         engine.session = None
         engine.oauth_start = SimpleNamespace(auth_url=AUTHORIZE)
-        engine.http_client = SimpleNamespace(get=Mock(return_value=FakeResponse()), session=session, close=Mock())
+        engine.http_client = SimpleNamespace(get=Mock(return_value=FakeResponse()),
+                                              post=lambda url, *args, **kwargs: session.request("POST", url, *args, **kwargs),
+                                              session=session, close=Mock())
         engine._log = lambda *_args: None
         engine._check_ip_location = lambda: (True, "PH")
         engine._create_email = lambda: True
@@ -167,7 +178,6 @@ class FlowEvidenceTests(unittest.TestCase):
             return True
         engine._init_session = initialize
         engine._start_oauth = lambda: True
-        engine._check_sentinel = lambda _did: None
         engine._send_verification_code = Mock(return_value=False)
         engine._create_user_account = Mock(return_value=False)
         engine._mark_email_as_registered = Mock()
@@ -207,7 +217,7 @@ class FlowEvidenceTests(unittest.TestCase):
             with self.subTest(body=response.body, invalid=response.invalid):
                 integration, engine, _session, calls = self.engine(signup=response)
                 self.assertFalse(engine.run().success)
-                self.assertEqual([url for url, *_ in calls], [ENDPOINTS["signup"]])
+                self.assertEqual([url for url, *_ in calls], [ENDPOINTS["sentinel"], ENDPOINTS["signup"]])
                 evidence = integration.store.data["flowEvidence"]["signup"]
                 self.assertEqual(evidence["decision"], "rejected")
                 self.assertEqual(integration.store.data["firstFailure"]["stage"], "signup")
@@ -219,21 +229,21 @@ class FlowEvidenceTests(unittest.TestCase):
             integration, engine, _session, calls = self.engine(signup=FakeResponse(
                 body={"page": {"type": page}}, url="https://other.invalid/"))
             self.assertFalse(engine.run().success)
-            self.assertEqual(len(calls), 1)
+            self.assertEqual(len(calls), 2)
             self.assertNotIn("existingAccountIndication", integration.store.data)
 
     def test_valid_new_account_submits_original_password_body_once(self):
         integration, engine, session, calls = self.engine()
         self.assertFalse(engine.run().success)  # Synthetic official rejection, not an external account.
-        self.assertEqual([url for url, *_ in calls], [ENDPOINTS["signup"], ENDPOINTS["register"]])
-        sent = json.loads(calls[1][2]["data"])
+        self.assertEqual([url for url, *_ in calls], [ENDPOINTS["sentinel"], ENDPOINTS["signup"], ENDPOINTS["register"]])
+        sent = json.loads(calls[2][2]["data"])
         self.assertEqual(sent, {"password": "fixture-only-password", "username": "fixture@example.invalid"})
-        self.assertEqual(calls[1][2]["headers"], {"referer": "https://auth.openai.com/create-account/password",
+        self.assertEqual(calls[2][2]["headers"], {"referer": "https://auth.openai.com/create-account/password",
             "accept": "application/json", "content-type": "application/json"})
         flow_value = integration.store.data["flowEvidence"]
-        self.assertEqual(set(flow_value), {"version", "authorize", "signup", "password"})
+        self.assertEqual(set(flow_value), {"version", "authorize", "sentinel", "signup", "password"})
         self.assertEqual(flow_value["signup"]["pageKind"], "new_account")
-        self.assertEqual(flow_value["password"]["decision"], "observed")
+        self.assertEqual(flow_value["password"]["decision"], "rejected")
         self.assertEqual(integration.store.data["firstFailure"]["errorKind"], "account_creation_failed")
         self.assertIs(engine.session, session)
 
@@ -243,7 +253,7 @@ class FlowEvidenceTests(unittest.TestCase):
                 response = FakeResponse(body={"page": {"type": "password"}, **extra})
                 integration, engine, _session, calls = self.engine(signup=response)
                 self.assertFalse(engine.run().success)
-                self.assertEqual([url for url, *_ in calls], [ENDPOINTS["signup"], ENDPOINTS["register"]])
+                self.assertEqual([url for url, *_ in calls], [ENDPOINTS["sentinel"], ENDPOINTS["signup"], ENDPOINTS["register"]])
                 self.assertEqual(integration.store.data["flowEvidence"]["signup"]["decision"], "accepted")
 
     def test_truthy_upstream_errors_keep_known_page_but_block_password(self):
@@ -256,9 +266,9 @@ class FlowEvidenceTests(unittest.TestCase):
                 with self.subTest(page=page, signal=signal, error_kind=error_kind):
                     integration, engine, _session, calls = self.engine(signup=FakeResponse(body={"page": {"type": page}, **extra}))
                     self.assertFalse(engine.run().success)
-                    self.assertEqual([url for url, *_ in calls], [ENDPOINTS["signup"]])
+                    self.assertEqual([url for url, *_ in calls], [ENDPOINTS["sentinel"], ENDPOINTS["signup"]])
                     evidence = integration.store.data["flowEvidence"]["signup"]
-                    self.assertEqual(integration.store.data["flowEvidence"]["version"], 2)
+                    self.assertEqual(integration.store.data["flowEvidence"]["version"], 3)
                     self.assertEqual(evidence["pageKind"], "new_account" if page == "password" else "existing_account")
                     self.assertEqual((evidence["decision"], evidence["reason"]), ("rejected", "upstream_error"))
                     self.assertEqual(evidence["responseDetails"]["errorSignal"], signal)
@@ -307,16 +317,18 @@ class FlowEvidenceTests(unittest.TestCase):
                     self.assertEqual(value["reason"], "upstream_error" if truthy else None)
                     self.assertNotIn("private-value", json.dumps(value))
 
-    def test_invalid_or_nonobject_json_and_non_signup_never_get_response_details(self):
+    def test_invalid_or_nonobject_json_and_authorize_never_get_response_details(self):
         for response in (FakeResponse(invalid=True), FakeResponse(body=[]), FakeResponse(body="private-value")):
             value = flow.observation(response, "signup")
             self.assertNotIn("responseDetails", value)
             self.assertEqual(value["reason"], "invalid_json")
-        for stage in ("authorize", "password"):
-            response = FakeResponse(body={"error": {"code": "account_creation_failed"}})
-            value = flow.observation(response, stage)
-            self.assertNotIn("responseDetails", value)
-            self.assertEqual(response.json_calls, 0)
+        response = FakeResponse(body={"error": {"code": "account_creation_failed"}})
+        value = flow.observation(response, "authorize")
+        self.assertNotIn("responseDetails", value)
+        self.assertEqual(response.json_calls, 0)
+        value = flow.observation(response, "password")
+        self.assertEqual(response.json_calls, 1)
+        self.assertEqual(value["reason"], "upstream_error")
 
     def test_error_reason_preserves_http_and_origin_gate_priority(self):
         body = {"page": {"type": "password"}, "error": {"code": "account_creation_failed"}}
@@ -353,7 +365,7 @@ class FlowEvidenceTests(unittest.TestCase):
         self.assertEqual(store.writes, 0)
 
     def test_v2_closed_details_reject_raw_values_wrong_stage_and_inconsistent_decisions(self):
-        value = flow.observation(FakeResponse(), "signup")
+        value = flow.observation_for_version("signup", flow.observation(FakeResponse(), "signup"), 2)
         cases = [lambda x: x["responseDetails"].update(rawType="private-value"),
                  lambda x: x["responseDetails"].update(errorSignal="private-value"),
                  lambda x: x["responseDetails"].update(errorShape="private-value"),
@@ -377,7 +389,7 @@ class FlowEvidenceTests(unittest.TestCase):
                 flow.validate_flow_evidence({"version": 2, stage: value})
 
     def test_v2_object_requires_details_but_legacy_v1_never_does(self):
-        value = flow.observation(FakeResponse(), "signup")
+        value = flow.observation_for_version("signup", flow.observation(FakeResponse(), "signup"), 2)
         value.pop("responseDetails")
         with self.assertRaises(ValueError):
             flow.validate_flow_evidence({"version": 2, "signup": value})
@@ -386,7 +398,7 @@ class FlowEvidenceTests(unittest.TestCase):
     def test_valid_existing_account_skips_password_without_claiming_identity(self):
         integration, engine, _session, calls = self.engine(signup=FakeResponse(body={"page": {"type": "email_otp_verification"}}))
         self.assertFalse(engine.run().success)
-        self.assertEqual([url for url, *_ in calls], [ENDPOINTS["signup"]])
+        self.assertEqual([url for url, *_ in calls], [ENDPOINTS["sentinel"], ENDPOINTS["signup"]])
         self.assertEqual(integration.store.data["flowEvidence"]["signup"]["pageKind"], "existing_account")
         self.assertTrue(integration.store.data["existingAccountIndication"])
         self.assertNotIn("creationConfirmed", integration.store.data)
@@ -396,7 +408,7 @@ class FlowEvidenceTests(unittest.TestCase):
         integration, engine, _session, calls = self.engine()
         integration.contexts[TASK]["authorizationOnly"] = True
         self.assertFalse(engine.run().success)
-        self.assertEqual([url for url, *_ in calls], [ENDPOINTS["signup"]])
+        self.assertEqual([url for url, *_ in calls], [ENDPOINTS["sentinel"], ENDPOINTS["signup"]])
         engine._offline_generate.assert_not_called()
 
     def test_only_exact_authorize_url_is_gated_and_recorded(self):
@@ -406,11 +418,11 @@ class FlowEvidenceTests(unittest.TestCase):
         self.assertIsNotNone(response)
         self.assertNotIn("flowEvidence", integration.store.data)
 
-    def test_evidence_does_not_read_authorize_or_password_body(self):
+    def test_authorize_stays_unparsed_and_password_is_parsed_for_error_gate(self):
         for stage in ("authorize", "password"):
             response = FakeResponse()
             flow.observation(response, stage)
-            self.assertEqual(response.json_calls, 0)
+            self.assertEqual(response.json_calls, 0 if stage == "authorize" else 1)
 
     def test_sensitive_values_and_query_never_leave_closed_evidence(self):
         marker = "fixture-private-value"
@@ -451,10 +463,8 @@ class FlowEvidenceTests(unittest.TestCase):
     def test_old_task_and_new_closed_structure_validate_without_database(self):
         legacy = {"email": "fixture@example.invalid", "aliasId": "fixture-alias", "resultKind": None}
         safety.validate_task(TASK, legacy)
-        for version in (1, 2):
-            evidence = flow.observation(FakeResponse(), "signup")
-            if version == 1:
-                evidence = flow.observation_v1("signup", evidence)
+        for version in (1, 2, 3):
+            evidence = flow.observation_for_version("signup", flow.observation(FakeResponse(), "signup"), version)
             value = {**legacy, "flowEvidence": {"version": version, "signup": evidence}}
             safety.validate_task(TASK, value)
         self.assertNotIn("flowEvidence", safety.PUBLIC_FACT_FIELDS)
@@ -505,7 +515,7 @@ print('standalone stdlib load PASS')
         self.assertEqual(result.stderr, "")
 
     def test_unknown_or_secret_fields_invalid_enums_and_oversize_arrays_are_rejected(self):
-        good = {"version": 2, "signup": flow.observation(FakeResponse(), "signup")}
+        good = {"version": 3, "signup": flow.observation(FakeResponse(), "signup")}
         mutations = [lambda x: x.update(version=True), lambda x: x.update(cookie="fixture-secret"),
             lambda x: x["signup"].update(payload="fixture-secret"), lambda x: x["signup"].update(pageKind="raw page"),
             lambda x: x["signup"].update(pageKind=[]), lambda x: x["signup"].update(httpStatus=True),

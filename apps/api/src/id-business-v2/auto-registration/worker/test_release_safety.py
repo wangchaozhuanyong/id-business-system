@@ -224,18 +224,16 @@ class ReleaseSafetyTests(unittest.TestCase):
         self.assertEqual(source["logicalSha256"], restored["logicalSha256"])
         self.assertFalse(task["proxyId"].encode() in copied.read_bytes())
 
-    def test_encrypted_proof_accepts_v1_and_v2_flow_without_rewriting_history(self):
+    def test_encrypted_proof_accepts_v1_v2_v3_flow_without_rewriting_history(self):
         failure = {"stage": "password", "errorKind": "account_creation_failed", "httpStatus": 400,
                    "elapsedMs": 17, "observedAt": "2026-10-11T00:00:00Z"}
         response = SimpleNamespace(status_code=200, headers={"content-type": "application/json"},
             url="https://auth.openai.com/api/accounts/authorize/continue", history=[],
             json=lambda: {"page": {"type": "password"}, "error": {"code": "offline-private-code",
                 "message": "offline-private-response"}, "errors": ["offline-private-response"]})
-        for version in (1, 2):
+        for version in (1, 2, 3):
             with self.subTest(version=version):
-                evidence = flow.observation(response, "signup")
-                if version == 1:
-                    evidence = flow.observation_v1("signup", evidence)
+                evidence = flow.observation_for_version("signup", flow.observation(response, "signup"), version)
                 stored = {"version": version, "signup": evidence}
                 task = self.closed_fixture(flowEvidence=stored, firstFailure=failure)
                 before, modified = self.path.read_bytes(), self.path.stat().st_mtime_ns
@@ -261,7 +259,7 @@ class ReleaseSafetyTests(unittest.TestCase):
     def test_encrypted_proof_rejects_v2_missing_details_secret_fields_and_v1_upgrade(self):
         response = SimpleNamespace(status_code=200, headers={}, url="https://auth.openai.com/", history=[],
             json=lambda: {"page": {"type": "password"}})
-        valid = {"version": 2, "signup": flow.observation(response, "signup")}
+        valid = {"version": 2, "signup": flow.observation_for_version("signup", flow.observation(response, "signup"), 2)}
         mutations = [lambda item: item["signup"].pop("responseDetails"),
             lambda item: item["signup"]["responseDetails"].update(errorKind="offline-private-code"),
             lambda item: item["signup"]["responseDetails"].update(response="offline-private-response"),

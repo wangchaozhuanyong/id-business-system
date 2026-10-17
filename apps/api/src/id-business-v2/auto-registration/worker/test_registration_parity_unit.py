@@ -69,14 +69,17 @@ def literal_constants(*names):
 CONSTANTS = literal_constants("OPENAI_API_ENDPOINTS", "OPENAI_PAGE_TYPES", "PASSWORD_CHARSET", "DEFAULT_PASSWORD_LENGTH", "OTP_CODE_PATTERN")
 ENDPOINTS = CONSTANTS["OPENAI_API_ENDPOINTS"]
 NAMESPACE = {"__name__": __name__, "Any": Any, "Callable": Callable, "Dict": Dict, "Optional": Optional,
-    "Tuple": Tuple, "dataclass": dataclass, "datetime": datetime, "json": json, "urlsplit": urlsplit,
+    "Tuple": Tuple, "Response": Any, "dataclass": dataclass, "datetime": datetime, "json": json, "urlsplit": urlsplit,
     "time": SimpleNamespace(sleep=lambda _seconds: None, time=lambda: 1770000000.0),
     "importlib": SimpleNamespace(import_module=lambda _name: SimpleNamespace(OPENAI_API_ENDPOINTS=ENDPOINTS)),
-    "observation": flow_evidence.observation, "validate_flow_evidence": flow_evidence.validate_flow_evidence,
+    "observation": flow_evidence.observation, "observation_for_version": flow_evidence.observation_for_version,
+    "validate_flow_evidence": flow_evidence.validate_flow_evidence,
     "validate_observation": flow_evidence.validate_observation, "RegistrationDiagnostics": diagnostics.RegistrationDiagnostics,
     "STAGES": diagnostics.STAGES, "ERROR_KINDS": diagnostics.ERROR_KINDS,
     "now": lambda: STAMP, "now_iso": lambda: STAMP, "PUBLIC_FIELDS": {"stage", "firstFailure", "lastHttpStatus"},
     "generate_random_user_info": lambda: {"name": "Differential Fixture", "birthdate": "1990-01-01"},
+    "logger": SimpleNamespace(warning=Mock()), "HTTPClientError": RuntimeError,
+    "cffi_requests": SimpleNamespace(RequestsError=type("FixtureRequestsError", (Exception,), {})),
     **CONSTANTS}
 source_definitions(HERE / "apple_closed_loop.py", {"ClosedLoopFacts": {"update_task", "password_checkpoint"}}, set(), NAMESPACE)
 source_definitions(HERE / "apple_mailboxes.py", {"RegistrationFacts": {"record_failure", "record_flow_evidence"},
@@ -86,6 +89,7 @@ source_definitions(HERE.parent / "upstream/src/core/register.py", {"SignupFormRe
     "RegistrationEngine": {"run", "_init_session", "_get_device_id", "_check_sentinel", "_submit_signup_form",
         "_generate_password", "_register_password", "_send_verification_code", "_get_verification_code",
         "_validate_verification_code", "_create_user_account"}}, set(), NAMESPACE)
+source_definitions(HERE.parent / "upstream/src/core/http_client.py", {"HTTPClient": {"request", "get", "post"}}, set(), NAMESPACE)
 
 
 class Response:
@@ -105,8 +109,10 @@ class Response:
 
 
 class MemoryFacts(NAMESPACE["RegistrationFacts"], NAMESPACE["ClosedLoopFacts"]):
-    def __init__(self, events, *, checkpoint=None, fail_password_commit=False):
+    def __init__(self, events, *, checkpoint=None, fail_password_commit=False, flow_version=None):
         data = {"email": EMAIL, "syncStatus": "not_started", "firstFailure": None}
+        if flow_version is not None:
+            data["flowEvidence"] = {"version": flow_version}
         if checkpoint is not None:
             data["passwordCheckpoint"] = checkpoint
         self.row = SimpleNamespace(value=json.dumps(data))
@@ -159,7 +165,7 @@ class Transport:
         if url == AUTHORIZE:
             return copy.deepcopy(self.scenario.get("authorize", Response()))
         if url == ENDPOINTS["sentinel"]:
-            return Response(body={"token": "synthetic-sentinel-only"}, url=url)
+            return copy.deepcopy(self.scenario.get("sentinel", Response(body={"token": "synthetic-sentinel-only"}, url=url)))
         if url == ENDPOINTS["signup"]:
             return copy.deepcopy(self.scenario.get("signup", Response()))
         if url == ENDPOINTS["register"]:
@@ -176,11 +182,13 @@ class Transport:
         return self.request("POST", url, *args, **kwargs)
 
 
-class Client:
+class Client(NAMESPACE["HTTPClient"]):
     def __init__(self, scenario, requests, events):
         self.scenario, self.requests, self.events = scenario, requests, events
         self.index, self.sessions = 0, []
         self._session = None
+        self.config = SimpleNamespace(timeout=30, follow_redirects=True, max_retries=3, retry_delay=1)
+        self.proxies = {"http": "socks5://fixture.invalid:1080", "https": "socks5://fixture.invalid:1080"}
 
     @property
     def session(self):
@@ -194,18 +202,11 @@ class Client:
         self.index += 1
         self._session = None
 
-    def get(self, url, *args, **kwargs):
-        return self.session.get(url, *args, **kwargs)
-
-    def post(self, url, *args, **kwargs):
-        return self.session.post(url, *args, **kwargs)
-
-
-def execute(integrated, scenario=None, *, checkpoint=None, fail_password_commit=False):
+def execute(integrated, scenario=None, *, checkpoint=None, fail_password_commit=False, flow_version=None):
     scenario = scenario or {}
     requests, events, logs = [], [], []
     client = Client(scenario, requests, events)
-    facts = MemoryFacts(events, checkpoint=checkpoint, fail_password_commit=fail_password_commit)
+    facts = MemoryFacts(events, checkpoint=checkpoint, fail_password_commit=fail_password_commit, flow_version=flow_version)
     engine = NAMESPACE["RegistrationEngine"]()
     engine.email, engine.password, engine.email_info = EMAIL, None, {"service_id": "fixture-mailbox"}
     engine.logs, engine._is_existing_account, engine.session, engine._otp_sent_at = logs, False, None, None
@@ -247,6 +248,8 @@ class RegistrationParityTests(unittest.TestCase):
         self.assertTrue(NAMESPACE["RegistrationEngine"].run.__code__.co_filename.endswith("upstream/src/core/register.py"))
         self.assertTrue(NAMESPACE["AppleMailboxIntegration"].observe_engine.__code__.co_filename.endswith("worker/apple_mailboxes.py"))
         self.assertTrue(MemoryFacts.password_checkpoint.__code__.co_filename.endswith("worker/apple_closed_loop.py"))
+        self.assertTrue(Client.post.__code__.co_filename.endswith("upstream/src/core/http_client.py"))
+        self.assertTrue(Client.request.__code__.co_filename.endswith("upstream/src/core/http_client.py"))
         for operation in (lambda: socket.socket(), lambda: socket.create_connection(("example.invalid", 443)),
                           lambda: socket.getaddrinfo("example.invalid", 443), lambda: sqlite3.connect(":memory:")):
             with self.assertRaises(AssertionError):
@@ -362,6 +365,93 @@ class RegistrationParityTests(unittest.TestCase):
         self.assertTrue(any(item[1] == ENDPOINTS["register"] for item in bare.requests))
         self.assertEqual([item[1] for item in integrated.requests], [AUTHORIZE] * 3)
         self.assertEqual(integrated.facts.data["flowEvidence"]["authorize"]["reason"], "untrusted_origin")
+
+    def test_required_challenges_stop_before_signup_even_with_a_token(self):
+        for name in ("proofofwork", "turnstile"):
+            with self.subTest(challenge=name):
+                response = Response(body={"token": "synthetic-sentinel-only", name: {"required": True}},
+                                    url=ENDPOINTS["sentinel"])
+                bare, integrated = self.pair({"sentinel": response})
+                self.assertEqual(integrated.requests, bare.requests[:2])
+                self.assertEqual(integrated.generated.call_count, 0)
+                self.assertNotIn("sideEffectPossible", integrated.facts.data)
+                self.assertNotIn("creationConfirmed", integrated.facts.data)
+                self.assertEqual(integrated.facts.data["firstFailure"]["stage"], "sentinel")
+                self.assertEqual(integrated.facts.data["flowEvidence"]["sentinel"]["reason"], "challenge_required")
+
+    def test_bad_sentinel_cannot_be_swallowed_by_the_original_catch(self):
+        cases = [(Response(503, {}, url=ENDPOINTS["sentinel"]), "http_status"),
+                 (Response(invalid=True, url=ENDPOINTS["sentinel"]), "invalid_json"),
+                 (Response(body={}, url=ENDPOINTS["sentinel"]), "missing_token"),
+                 (Response(body={"token": True}, url=ENDPOINTS["sentinel"]), "missing_token"),
+                 (Response(body={"token": "synthetic-sentinel-only"}, url="https://other.invalid/"), "untrusted_origin"),
+                 (Response(body={"token": "synthetic-sentinel-only", "turnstile": {"required": "false"}},
+                           url=ENDPOINTS["sentinel"]), "challenge_invalid")]
+        for response, reason in cases:
+            with self.subTest(reason=reason, body=response.body):
+                integrated = execute(True, {"sentinel": response})
+                self.assertEqual([item[1] for item in integrated.requests],
+                                 [AUTHORIZE] + [ENDPOINTS["sentinel"]] * (3 if response.status_code >= 500 else 1))
+                self.assertEqual(integrated.generated.call_count, 0)
+                self.assertFalse(integrated.result.success)
+                self.assertEqual(integrated.facts.data["flowEvidence"]["sentinel"]["reason"], reason)
+
+    def test_sentinel_observation_must_be_saved_before_signup(self):
+        original = MemoryFacts.record_flow_evidence
+        def record(store, task, slot, evidence):
+            return False if slot == "sentinel" else original(store, task, slot, evidence)
+        with patch.object(MemoryFacts, "record_flow_evidence", record):
+            integrated = execute(True)
+        self.assertEqual([item[1] for item in integrated.requests], [AUTHORIZE, ENDPOINTS["sentinel"]])
+        self.assertEqual(integrated.generated.call_count, 0)
+        self.assertFalse(integrated.result.success)
+
+    def test_discarded_session_evidence_cannot_allow_another_signup(self):
+        integrated = execute(True)
+        count = len(integrated.requests)
+        integrated.client.close()
+        integrated.engine.session = integrated.client.session
+        with self.assertRaises(ValueError):
+            integrated.engine._submit_signup_form("fixture-device", "synthetic-sentinel-only")
+        self.assertEqual(len(integrated.requests), count)
+
+    def test_password_200_errors_and_untrusted_responses_stop_all_later_requests(self):
+        cases = [(Response(body={"error": {"code": "account_creation_failed"}}), "upstream_error"),
+                 (Response(body={"errors": ["synthetic-error"]}), "upstream_error"),
+                 (Response(invalid=True), "invalid_json"),
+                 (Response(body=[]), "invalid_json"),
+                 (Response(body={}, url="https://other.invalid/"), "untrusted_origin")]
+        for response, reason in cases:
+            with self.subTest(reason=reason, body=response.body):
+                bare, integrated = self.pair({"password": response})
+                self.assertEqual(integrated.requests, bare.requests[:4])
+                self.assertFalse(integrated.result.success)
+                self.assertNotIn("creationConfirmed", integrated.facts.data)
+                self.assertEqual(integrated.facts.data["flowEvidence"]["password"]["reason"], reason)
+                self.assertEqual(integrated.facts.data["firstFailure"]["stage"], "password")
+                if isinstance(response.body, dict) and response.body.get("error", {}).get("code") == "account_creation_failed":
+                    self.assertEqual(integrated.facts.data["firstFailure"]["errorKind"], "account_creation_failed")
+
+    def test_valid_password_objects_do_not_need_an_invented_page_whitelist(self):
+        for body in ({}, {"success": True}, {"continue_url": "https://auth.openai.com/fixture-next"}):
+            with self.subTest(body=body):
+                bare, integrated = self.pair({"password": Response(body=body)})
+                self.assertEqual(bare.requests, integrated.requests)
+                self.assertTrue(integrated.facts.data["creationConfirmed"])
+
+    def test_historical_evidence_projection_does_not_weaken_live_guards(self):
+        for version in (1, 2):
+            for slot, response in (("sentinel", Response(body={"token": "synthetic-sentinel-only",
+                                           "turnstile": {"required": True}}, url=ENDPOINTS["sentinel"])),
+                                   ("password", Response(body={"error": {"code": "account_creation_failed"}}))):
+                with self.subTest(version=version, slot=slot):
+                    integrated = execute(True, {slot: response}, flow_version=version)
+                    flow = integrated.facts.data["flowEvidence"]
+                    self.assertEqual(flow["version"], version)
+                    self.assertNotIn("sentinel", flow)
+                    self.assertEqual(len(integrated.requests), 2 if slot == "sentinel" else 4)
+                    self.assertNotIn("creationConfirmed", integrated.facts.data)
+                    flow_evidence.validate_flow_evidence(flow)
 
     def test_diagnostic_only_state_does_not_capture_queries_headers_or_response_body(self):
         integrated = execute(True)

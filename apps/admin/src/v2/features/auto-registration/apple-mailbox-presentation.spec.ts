@@ -287,7 +287,7 @@ describe('注册任务流程证据的封闭中文展示', () => {
     expect(iframeFlowRows(evidence)).toEqual(rows);
   });
   it('兼容没有证据的旧任务，有新结构时明确区分尚未观察阶段', () => {
-    for (const value of [undefined, null, {}, { version: 3 }, { version: '2' }, []]) {
+    for (const value of [undefined, null, {}, { version: 4 }, { version: '2' }, []]) {
       expect(appleMailboxFlowEvidenceRows(value)).toEqual([]);
       expect(iframeFlowRows(value)).toEqual([]);
     }
@@ -310,6 +310,18 @@ describe('注册任务流程证据的封闭中文展示', () => {
     expect(rows[1]?.detail).toContain('响应状态 200');
     expect(rows[1]?.detail).toContain('页面类型与预期不符');
     expect(rows[2]?.status).toBe('尚未观察');
+    expect(
+      appleMailboxDiagnostic({
+        stage: 'sentinel',
+        firstFailure: {
+          stage: 'sentinel',
+          errorKind: 'unknown',
+          httpStatus: 200,
+          elapsedMs: 1,
+          observedAt: flowObservation.observedAt
+        }
+      })
+    ).toContain('首次失败：注册前置校验');
     expect(
       appleMailboxDiagnostic({
         firstFailure: {
@@ -493,5 +505,160 @@ describe('注册任务流程证据的封闭中文展示', () => {
         'export interface AppleMailboxTask {\n  flowEvidence?: AppleMailboxFlowEvidence;'
       );
     }
+  });
+  it('第三版增加前置校验并说明必须验证，即使已取得凭据也不表示可以继续', () => {
+    const evidence = {
+      version: 3,
+      sentinel: {
+        ...flowObservation,
+        pageKind: 'not_checked',
+        decision: 'rejected',
+        reason: 'challenge_required',
+        sentinelDetails: {
+          tokenPresent: true,
+          proofOfWorkRequired: 'required',
+          turnstileRequired: 'required'
+        }
+      }
+    };
+    const rows = appleMailboxFlowEvidenceRows(evidence);
+    expect(rows.map((row) => row.title)).toEqual([
+      '授权入口',
+      '注册前置校验',
+      '提交注册邮箱',
+      '提交注册密码'
+    ]);
+    expect(rows[1]?.status).toBe('已停止，等待核对');
+    expect(rows[1]?.detail).toContain('官网要求额外验证，当前流程已停止');
+    expect(rows[1]?.detail).toContain('官网验证凭据：已取得');
+    expect(rows[1]?.detail).toContain('额外计算验证：官网要求');
+    expect(rows[1]?.detail).toContain('交互验证：官网要求');
+    expect(rows[2]?.status).toBe('尚未观察');
+    expect(iframeFlowRows(evidence)).toEqual(rows);
+    for (const version of [1, 2]) {
+      const legacy = { ...evidence, version };
+      expect(appleMailboxFlowEvidenceRows(legacy)).toEqual(
+        appleMailboxFlowEvidenceRows({ version })
+      );
+      expect(iframeFlowRows(legacy)).toEqual(appleMailboxFlowEvidenceRows(legacy));
+    }
+  });
+  it.each([
+    [
+      'missing_token',
+      false,
+      'not_required',
+      'missing',
+      '未取得官网验证凭据',
+      '官网验证凭据：未取得'
+    ],
+    [
+      'challenge_invalid',
+      true,
+      'invalid',
+      'missing',
+      '官网验证要求无法确认',
+      '额外计算验证：要求格式无效'
+    ]
+  ])(
+    '第三版前置校验%s映射为明确中文原因',
+    (reason, tokenPresent, proofOfWorkRequired, turnstileRequired, expected, detail) => {
+      const evidence = {
+        version: 3,
+        sentinel: {
+          ...flowObservation,
+          decision: 'rejected',
+          reason,
+          sentinelDetails: { tokenPresent, proofOfWorkRequired, turnstileRequired }
+        }
+      };
+      const rows = appleMailboxFlowEvidenceRows(evidence);
+      expect(rows[1]?.detail).toContain(expected);
+      expect(rows[1]?.detail).toContain(detail);
+      expect(rows[1]?.detail).toContain('交互验证：官网未说明');
+      expect(iframeFlowRows(evidence)).toEqual(rows);
+    }
+  );
+  it('第三版密码200的错误和来源问题明确展示，不因缺少页面信息误报结构异常', () => {
+    const evidence = {
+      version: 3,
+      password: {
+        ...flowObservation,
+        pageKind: 'missing',
+        decision: 'rejected',
+        reason: 'upstream_error',
+        responseDetails: {
+          ...flowResponseDetails,
+          errorSignal: 'error',
+          errorShape: 'object',
+          errorKind: 'account_creation_failed',
+          pageShape: 'missing',
+          pageTypeSha256: null
+        }
+      }
+    };
+    const rows = appleMailboxFlowEvidenceRows(evidence);
+    expect(rows[3]?.status).toBe('已停止，等待核对');
+    expect(rows[3]?.detail).toContain('官网响应携带错误');
+    expect(rows[3]?.detail).toContain('上游错误分类：拒绝创建账号');
+    expect(rows[3]?.detail).toContain('此阶段未要求页面类型');
+    expect(rows[3]?.detail).not.toContain('页面结构异常');
+    expect(iframeFlowRows(evidence)).toEqual(rows);
+    const originFailure = {
+      version: 3,
+      password: { ...evidence.password, officialOrigin: false, reason: 'untrusted_origin' }
+    };
+    expect(appleMailboxFlowEvidenceRows(originFailure)[3]?.detail).toContain('来源未通过校验');
+    expect(iframeFlowRows(originFailure)).toEqual(appleMailboxFlowEvidenceRows(originFailure));
+  });
+  it('第三版未知页面只显示摘要存在性，受污染字段和挑战字段不泄漏正文', () => {
+    const secret = 'https://fixture.invalid/?token=private-fixture';
+    const digest = 'b'.repeat(64);
+    const evidence = {
+      version: 3,
+      signup: {
+        ...flowObservation,
+        pageKind: 'unknown',
+        decision: 'rejected',
+        reason: 'unexpected_page',
+        responseDetails: {
+          ...flowResponseDetails,
+          pageShape: 'type_unknown',
+          pageTypeSha256: digest
+        }
+      },
+      sentinel: {
+        ...flowObservation,
+        decision: 'rejected',
+        reason: secret,
+        sentinelDetails: {
+          tokenPresent: secret,
+          proofOfWorkRequired: secret,
+          turnstileRequired: secret,
+          token: secret
+        }
+      }
+    };
+    const rows = appleMailboxFlowEvidenceRows(evidence);
+    const shown = JSON.stringify(rows);
+    expect(rows[2]?.detail).toContain('未知页面标识摘要已记录');
+    expect(rows[1]?.detail).toContain('官网验证凭据：待核对');
+    expect(rows[1]?.detail).toContain('额外计算验证：待核对');
+    expect(rows[1]?.detail).toContain('交互验证：待核对');
+    for (const value of [secret, 'private-fixture', 'fixture.invalid', digest])
+      expect(shown).not.toContain(value);
+    expect(iframeFlowRows(evidence)).toEqual(rows);
+    const malformedDigest = {
+      version: 3,
+      signup: {
+        ...evidence.signup,
+        responseDetails: { ...evidence.signup.responseDetails, pageTypeSha256: secret }
+      }
+    };
+    expect(appleMailboxFlowEvidenceRows(malformedDigest)[2]?.detail).toContain(
+      '未知页面标识摘要未记录'
+    );
+    expect(JSON.stringify(appleMailboxFlowEvidenceRows(malformedDigest))).not.toContain(secret);
+    expect(iframeFlowRows(malformedDigest)).toEqual(appleMailboxFlowEvidenceRows(malformedDigest));
   });
 });
