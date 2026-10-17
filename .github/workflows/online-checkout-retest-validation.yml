@@ -10,6 +10,7 @@ on:
 
 permissions:
   contents: read
+  actions: read
 
 concurrency:
   group: id-business-v2-production-release
@@ -32,13 +33,20 @@ jobs:
           cache: npm
       - run: npm ci --include=dev --ignore-scripts --no-audit --no-fund
       - run: npm run prisma:mysql:generate && npm run build --workspace @apple-business/shared
+      - name: Reuse passed checks only for unchanged application inputs
+        id: prior
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 -B scripts/production-release/online-checkout-retest-build.py --verify-reuse >> "$GITHUB_OUTPUT"
       - name: Verify protected publication and affected API behavior
+        if: steps.prior.outputs.reused != 'true'
         run: |
           python3 -B scripts/production-release/online-checkout-release.test.py
           python3 -B scripts/production-release/online-checkout-retest-release.test.py
           npm run typecheck --workspace @apple-business/api
           npm run test --workspace @apple-business/api -- src/id-business-v2/online-recharge/validation.spec.ts src/id-business-v2/online-recharge/persistence/worker.repository.spec.ts src/id-business-v2/online-recharge/persistence/admin.repository.spec.ts src/id-business-v2/online-recharge/vendure-integration.spec.ts src/id-business-v2/online-recharge/worker-body-parser.spec.ts src/id-business-v2/bank-card-pool/shared-bank-card.spec.ts
       - name: Verify actual Chromium form and existing engine regressions
+        if: steps.prior.outputs.reused != 'true'
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends ffmpeg xvfb xauth
@@ -46,10 +54,12 @@ jobs:
           npx --prefix apps/api/src/id-business-v2/online-recharge/engine/upstream playwright install --with-deps chromium
           npm run test:online-recharge:engine
       - name: Verify task progress lifecycle
+        if: steps.prior.outputs.reused != 'true'
         run: |
           npm run test --workspace @apple-business/admin -- src/v2/features/online-recharge
           npm run typecheck --workspace @apple-business/admin
       - name: Verify management interface rules
+        if: steps.prior.outputs.reused != 'true'
         run: |
           npm run check:admin-ui
           npm run check:v2-ui-language
@@ -59,6 +69,8 @@ jobs:
           npm run check:v2-module-architecture
           npm run check:v2-isolation
       - name: Reproduce current three roles and build only this repair
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: python3 -B scripts/production-release/online-checkout-retest-build.py
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:

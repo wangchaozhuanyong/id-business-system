@@ -17,6 +17,8 @@ def validate_contract(contract):
     need(contract['scope'] == SCOPE and contract['expectedCurrent'] == EXPECTED_PREDECESSOR
         and contract['reviewBase'] == EXPECTED_PREDECESSOR, 'PREDECESSOR_CHANGED')
     need(set(contract['apiModules']) == {'id-business-v2/online-recharge/persistence/tasks.repository.js'}, 'API_SCOPE_CHANGED')
+    need(contract.get('apiDeclarationOnly') == {'id-business-v2/online-recharge/tasks.service.d.ts':
+        '5f00a5f821deb9d0e224de77d499bb9b6d7eda727869604644a114749e014ae7'}, 'DECLARATION_SCOPE_CHANGED')
     need(set(contract['beforeEngineFiles']) == set(contract['afterEngineFiles']), 'ENGINE_SET_CHANGED')
     need(contract['beforeEngineFiles']['worker.cjs'] != contract['afterEngineFiles']['worker.cjs'], 'ENGINE_UNCHANGED')
     need(set(contract['sources']) == ALLOWED_SOURCES, 'FINITE_SCOPE_CHANGED')

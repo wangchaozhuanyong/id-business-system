@@ -100,10 +100,15 @@ def overlay_engine(context, contract):
         target.write_bytes(raw)
 
 
-def module_delta(before, after, allowed):
+def module_delta(before, after, allowed, declaration_only=None):
+    declarations = declaration_only or {}
+    need(all(name.startswith('id-business-v2/online-recharge/') and name.endswith('.d.ts')
+             and '..' not in Path(name).parts and len(digest) == 64
+             and all(char in '0123456789abcdef' for char in digest) and after.get(name) == digest
+             for name, digest in declarations.items()), 'DECLARATION_DELTA_CHANGED')
     changed = {n for n in before.keys() | after.keys()
                if n.endswith(('.js', '.js.map', '.d.ts')) and '/engine/' not in n and before.get(n) != after.get(n)}
-    expected = {n.removesuffix('.js') + ext for n in allowed for ext in ('.js', '.js.map', '.d.ts')}
+    expected = {n.removesuffix('.js') + ext for n in allowed for ext in ('.js', '.js.map', '.d.ts')} | set(declarations)
     need({n for n in changed if n.endswith('.js')} == set(allowed)
          and changed <= expected and expected <= after.keys(), 'COMPILED_SCOPE_CHANGED')
     return {n: after[n] for n in sorted(expected)}
@@ -144,7 +149,7 @@ def main():
     before_admin = inventory(before / 'apps/admin/dist')
     need(helper.fingerprint(before_admin) == c['baselineAdminFilesSha256'], 'BASE_ADMIN_NOT_REPRODUCED')
     need(inventory(before / c['engineRoot']) == c['beforeEngineFiles'], 'BASE_ENGINE_NOT_REPRODUCED')
-    modules = module_delta(before_api, after_api, c['apiModules'])
+    modules = module_delta(before_api, after_api, c['apiModules'], c.get('apiDeclarationOnly'))
     payload = OUT / 'payload'
     for name in modules:
         target = payload / 'api/modules' / name
@@ -169,6 +174,7 @@ def main():
              'adminFiles': inventory(payload / 'admin/html'), 'afterEngineFiles': c['afterEngineFiles'],
              'files': inventory(payload), 'baselineApiReproduced': True, 'baselineAdminSourceReproduced': True,
              'migrationPerformed': False, 'businessActions': 0}
+    if c.get('validationReuse'): proof['validationReuse'] = c['validationReuse']
     (payload / 'build-proof.json').write_text(json.dumps(proof, sort_keys=True, indent=2) + '\n')
     bundle = OUT / 'online-checkout-artifact.tar.gz'
     with tarfile.open(bundle, 'w:gz') as archive:
