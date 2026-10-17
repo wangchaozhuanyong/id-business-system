@@ -178,9 +178,17 @@ async function runSyntheticRecharge(scene, options = {}) {
   const authUi = options.authUi || null;
   assert.ok(
     authUi === null ||
-      ['hidden-login', 'visible-login', 'login-redirect', 'unconfirmed', 'challenge'].includes(
-        authUi
-      )
+      [
+        'hidden-login',
+        'visible-login',
+        'login-redirect',
+        'unconfirmed',
+        'challenge',
+        'transient-login',
+        'chat-guest-recover',
+        'permanent-guest',
+        'late-guest'
+      ].includes(authUi)
   );
   if (options.diagnosticDelay) {
     assert.ok(['verify', 'verifyCard'].includes(options.diagnosticDelay.stage));
@@ -438,6 +446,8 @@ async function fixtureChild(
     authPageDocuments: 0,
     authRedirectDocuments: 0,
     authProbeIdentityResponses: 0,
+    authStateTransitions: [],
+    authStateAtCheckoutCreation: null,
     checkoutCreations: 0,
     checkoutDocuments: 0,
     checkoutDomContentLoaded: 0,
@@ -804,6 +814,34 @@ async function fixtureChild(
         });
       const chatUi =
         '<button>New chat</button><textarea id="prompt-textarea" placeholder="Ask anything"></textarea>';
+      if (
+        ['transient-login', 'chat-guest-recover', 'permanent-guest', 'late-guest'].includes(authUi)
+      ) {
+        const initial = ['transient-login', 'permanent-guest'].includes(authUi)
+          ? 'guest'
+          : 'initial';
+        const transitions = {
+          'transient-login': [{ after: 3800, phase: 'recovered' }],
+          'chat-guest-recover': [
+            { after: 2600, phase: 'guest' },
+            { after: 3800, phase: 'recovered' }
+          ],
+          'permanent-guest': [],
+          'late-guest': [{ after: 2800, phase: 'guest' }]
+        }[authUi];
+        return route.fulfill({
+          contentType: 'text/html',
+          body: `<html><body><main id="fixture-auth"></main><script>
+            const setAuthPhase = phase => {
+              document.getElementById('fixture-auth').innerHTML = phase === 'guest' ? ${JSON.stringify(`${chatUi}<button>Log in</button>`)} : ${JSON.stringify(chatUi)};
+              document.body.dataset.authPhase = phase;
+              window.reportSyntheticAuthPhase({ phase, document: ${metrics.authPageDocuments} });
+            };
+            setAuthPhase(${JSON.stringify(initial)});
+            for (const step of ${JSON.stringify(transitions)}) setTimeout(() => setAuthPhase(step.phase), step.after);
+          </script></body></html>`
+        });
+      }
       const authMarkup =
         {
           'hidden-login': `${chatUi}<div hidden>Log in Sign up</div><div style="display:none">Sign in with Google</div><div style="visibility:hidden">Sign in to continue</div><div style="opacity:0"><button>Log in</button><button>Sign up for free</button><h1>Sign in to continue</h1></div><div inert><button>Log in</button><h1>Sign in to continue</h1></div><div aria-hidden="true"><button>Log in</button><h1>Sign in to continue</h1></div><article data-message-author-role="user"><p>Earlier message: Sign in to continue, Log in Sign up, Sign in with Google.</p></article><script type="application/json">{"message":"登录 ChatGPT"}</script><template>使用 Google 登录</template>`,
@@ -893,6 +931,17 @@ async function fixtureChild(
       assert.equal(body.billing_details.currency, 'PHP');
       metrics.checkoutCreations++;
       assert.equal(metrics.checkoutCreations, 1);
+      if (
+        ['transient-login', 'chat-guest-recover', 'permanent-guest', 'late-guest'].includes(authUi)
+      ) {
+        const authPage = activeContext.pages().find((page) => page.url() === origin + '/');
+        assert.ok(authPage);
+        metrics.authStateAtCheckoutCreation = await authPage.getAttribute(
+          'body',
+          'data-auth-phase'
+        );
+        assert.equal(metrics.authStateAtCheckoutCreation, 'recovered');
+      }
       return json({
         checkout_session_id: checkoutId,
         processor_entity: 'openai_llc',
@@ -1172,6 +1221,20 @@ async function fixtureChild(
       const nativePage = context.newPage.bind(context);
       context.newPage = async () => {
         const page = await nativePage();
+        if (
+          ['transient-login', 'chat-guest-recover', 'permanent-guest', 'late-guest'].includes(
+            authUi
+          )
+        ) {
+          await page.exposeFunction('reportSyntheticAuthPhase', (observation) => {
+            assert.ok(['initial', 'guest', 'recovered'].includes(observation.phase));
+            assert.ok(Number.isSafeInteger(observation.document) && observation.document > 0);
+            metrics.authStateTransitions.push({
+              phase: observation.phase,
+              document: observation.document
+            });
+          });
+        }
         await page.route('**/*', handle);
         page.on('domcontentloaded', () => {
           if (page.url() === checkoutUrl) metrics.checkoutDomContentLoaded++;
@@ -1273,6 +1336,17 @@ if (process.env.RECHARGE_FLOW_FIXTURE_CHILD === '1') {
       },
       'hidden login content preserves authenticated chat'
     ],
+    ...['transient-login', 'chat-guest-recover'].map((authUi) => [
+      'success',
+      {
+        authUi,
+        outputDir: path.join(
+          repairOutputRoot,
+          `auth-stability-${authUi}-${randomUUID().slice(0, 8)}`
+        )
+      },
+      `stable authentication recovery: ${authUi}`
+    ]),
     [
       'success',
       {
@@ -1331,9 +1405,14 @@ if (process.env.RECHARGE_FLOW_FIXTURE_CHILD === '1') {
         assert.equal(actual.failure, '');
         assert.equal(metrics.loginCookieVerified, 1);
         if (fixtureOptions.authUi) {
-          assert.equal(metrics.authUi, 'hidden-login');
+          assert.equal(metrics.authUi, fixtureOptions.authUi);
           assert.equal(metrics.authProbeIdentityResponses, 1);
           assert.equal(metrics.authRedirectDocuments, 0);
+          if (['transient-login', 'chat-guest-recover'].includes(fixtureOptions.authUi)) {
+            assert.equal(metrics.authStateAtCheckoutCreation, 'recovered');
+            assert.ok(metrics.authStateTransitions.some((item) => item.phase === 'guest'));
+            assert.ok(metrics.authStateTransitions.some((item) => item.phase === 'recovered'));
+          }
         }
         if (fixtureOptions.sessionRefresh) {
           assert.equal(metrics.refreshedAuthResponses, 1);
@@ -1487,7 +1566,9 @@ if (process.env.RECHARGE_FLOW_FIXTURE_CHILD === '1') {
     ['visible-login', 'SESSION_NOT_CONFIRMED'],
     ['login-redirect', 'SESSION_NOT_CONFIRMED'],
     ['unconfirmed', 'SESSION_NOT_CONFIRMED'],
-    ['challenge', 'VERIFICATION_TIMEOUT']
+    ['challenge', 'VERIFICATION_TIMEOUT'],
+    ['permanent-guest', 'SESSION_NOT_CONFIRMED'],
+    ['late-guest', 'SESSION_NOT_CONFIRMED']
   ])
     test(`unconfirmed login never reaches a payment: ${authUi}`, { timeout: 50000 }, async () => {
       const actual = await runSyntheticRecharge('success', {
@@ -1509,12 +1590,18 @@ if (process.env.RECHARGE_FLOW_FIXTURE_CHILD === '1') {
           'visible-login': 'visible_login_content',
           'login-redirect': 'login_redirect',
           unconfirmed: 'login_not_confirmed',
-          challenge: 'verification_failed'
+          challenge: 'verification_failed',
+          'permanent-guest': 'visible_login_controls',
+          'late-guest': 'visible_login_controls'
         }[authUi]
       );
       assert.equal(diagnostic.authApiVerified, authUi !== 'unconfirmed');
       assert.equal(diagnostic.redirectDetected, authUi === 'login-redirect');
       assert.equal(diagnostic.pageClosed, false);
+      if (['permanent-guest', 'late-guest'].includes(authUi)) {
+        assert.equal(actual.metrics.authStateAtCheckoutCreation, null);
+        assert.ok(actual.metrics.authStateTransitions.some((item) => item.phase === 'guest'));
+      }
       assert.equal(
         Object.values(diagnostic).every(
           (value) => typeof value === 'boolean' || value === diagnostic.reason

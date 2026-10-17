@@ -41,12 +41,12 @@ class ContractTests(unittest.TestCase):
         self.assertEqual(len(after) - len(before), 0)
         self.assertEqual({name for name in after if before.get(name) != after[name]}, p.FILES)
         self.assertEqual(p.FILES, {
-            'SOURCE_MANIFEST.json', 'confirmation.cjs', 'upstream/auth-page-detect.js',
-            'upstream/index.js', 'upstream/session-auth.js', 'upstream/subscription-check.js',
+            'SOURCE_MANIFEST.json', 'upstream/auth-page-detect.js',
+            'upstream/session-auth.js', 'upstream/subscription-check.js',
             'test/regressions.test.cjs',
-            'test/recharge-flow-acceptance.test.cjs'})
-        self.assertEqual(len(p.FILES), 8)
-        self.assertEqual(len(set(before) - p.FILES), 94)
+            'test/recharge-flow-acceptance.test.cjs', 'test/renewal-state.test.cjs'})
+        self.assertEqual(len(p.FILES), 7)
+        self.assertEqual(len(set(before) - p.FILES), 95)
         self.assertEqual(p.ADDED, set())
         self.assertEqual(set(p.PRESERVED), {'api', 'admin', 'mysql', 'caddy', 'media-resolver',
                                           'auto-recharge', 'auto-registration'})
@@ -55,6 +55,7 @@ class ContractTests(unittest.TestCase):
         for name in ('rpc.cjs', 'test/rpc-response.test.cjs', 'task-runner.cjs', 'worker.cjs',
                      'upstream/payment-retry.js', 'payment-limit.cjs', 'checkout-recovery.cjs',
                      'test/checkout-page-loading.test.cjs', 'checkout-form.cjs', 'safe-media.cjs',
+                     'confirmation.cjs', 'upstream/index.js',
                      'upstream/chatgpt.js', 'upstream/human-verification.js',
                      'upstream/stripe-payment.js', 'test/checkout-form.test.cjs',
                      'test/checkout-navigation.test.cjs', 'test/checkout-recovery.test.cjs',
@@ -65,8 +66,9 @@ class ContractTests(unittest.TestCase):
         self.assertEqual(len(self.c['afterEngineFiles']), 102)
 
     def test_the_previous_published_source_is_fixed_and_cannot_be_replaced_by_the_old_baseline(self):
-        self.assertEqual(self.c['sourceBaseCommit'], '1ec294fc5f5835d40af16b915e2d83000c4fd084')
-        for commit in ('9ccc464613615f95d54f2adf63bd573b80adaa0e',
+        self.assertEqual(self.c['sourceBaseCommit'], '3c3c915c837074abfa3904e22e2db132f652cdb0')
+        for commit in ('1ec294fc5f5835d40af16b915e2d83000c4fd084',
+                       '9ccc464613615f95d54f2adf63bd573b80adaa0e',
                        '3f8f2bb4978e3a839c82d2ecc73857449d4b94d3',
                        '4e0037a458330f58914eebeccd2a2d892c8405b0',
                        'a0e633a610ff67400cc2fa8bd2926148a2479ecd',

@@ -341,14 +341,14 @@
     {
       "path": "test/recharge-flow-acceptance.test.cjs",
       "originalSha256": null,
-      "adaptedSha256": "607a6a7ff132e690baff92eb7b0b4a6f9a863aeaeb574335345a0b06bbb3c494",
+      "adaptedSha256": "7843deaffd895e42fe8cd1813b6e5a10c502f4839c502c5c0e07e0d3f0bf2b1c",
       "changed": true,
       "reason": "Drive the real task child through same-account cookie refresh to exactly one synthetic payment and reconciliation; wrong-account refresh stops before subscription queries, checkout or payment. 2026-10-18 Distinguish rendered authentication gates from hidden or conversational text; preserve controlled session-bootstrap diagnostics and prepayment stop conditions, with isolated browser and service-chain coverage."
     },
     {
       "path": "test/regressions.test.cjs",
       "originalSha256": null,
-      "adaptedSha256": "9a5d0e4a7591975d7360073a03f21373e381b95aec18bb8854a8894fd42fbaac",
+      "adaptedSha256": "2fbe08b37d8ae83ccdcc209267f794ef6cce9e084b8664fe46f82cf2e95b6edb",
       "changed": true,
       "reason": "Exercise trusted session refresh, strict account and user binding, HTTP/challenge and malformed response classification, route/fetch propagation and refreshed credential redaction. 2026-10-18 Distinguish rendered authentication gates from hidden or conversational text; preserve controlled session-bootstrap diagnostics and prepayment stop conditions, with isolated browser and service-chain coverage."
     },
@@ -362,7 +362,7 @@
     {
       "path": "test/renewal-state.test.cjs",
       "originalSha256": null,
-      "adaptedSha256": "dea663877851a2c87203df3502483527e9b3cf5b36b294b0a563897dc177f8ea",
+      "adaptedSha256": "87f7ba0842b6b4076160c189de92ee0964560a15c654fa05b6579b89cb9469a4",
       "changed": true,
       "reason": "2026-10-15 Pro档位及升级适配：精确目标、官网报价、单次提交、实际付款方式与原单证据保护；不猜Pro500上游ID。保留既有必要适配。; 2026-10-17 controlled checkout form, subscription context and progress repair.; 2026-10-17 unattended verification and original-checkout reconciliation.; 2026-10-18 restore reachable frozen-upstream billing/Pro/renewal compatibility, preserve authenticated task context and existing payment protections; isolated complete-flow regressions."
     },
@@ -453,7 +453,7 @@
     {
       "path": "upstream/auth-page-detect.js",
       "originalSha256": "32d6fae901ccd9b7831b35e99560973eebf8629ea8b0038602ea0a020f346fc3",
-      "adaptedSha256": "7ccab6dbbbd247550951c7604162e07db421b8a361ac3c8f1bcf3260bc5c36d0",
+      "adaptedSha256": "52587b771158665561f4c6276ba2423c1da1053a1886c78cdc459879e648fb41",
       "changed": false,
       "reason": "冻结原版保持不变。 2026-10-18 Distinguish rendered authentication gates from hidden or conversational text; preserve controlled session-bootstrap diagnostics and prepayment stop conditions, with isolated browser and service-chain coverage."
     },
@@ -628,7 +628,7 @@
     {
       "path": "upstream/session-auth.js",
       "originalSha256": "0c3aeaba4e60f77746e399c2d5c1037b3632f7430b5559c43f81e2c413c2deca",
-      "adaptedSha256": "1b55cdb2a7fe0e0d9f5c1e447a02869a803290932ae1562360c6799271995bb0",
+      "adaptedSha256": "547c6801b16f93c145d1e01c2378023eb188728b7c98f0621edc11a298fc20d3",
       "changed": true,
       "reason": "Adopt only a verified fresh bearer bound to the original account and user across bootstrap, page fetch and routes; classify real session responses before trusting identity; protect refreshed credentials in existing log redaction. 2026-10-18 Distinguish rendered authentication gates from hidden or conversational text; preserve controlled session-bootstrap diagnostics and prepayment stop conditions, with isolated browser and service-chain coverage."
     },
@@ -642,7 +642,7 @@
     {
       "path": "upstream/subscription-check.js",
       "originalSha256": "e1f8f285a318389c055c0438f1c143e01023bdc42c619c6ea9eb7abe7238a11e",
-      "adaptedSha256": "c1d655be7e6161f46d00fb40edf68d6be4d64d153e781b91b8e594fd46589c93",
+      "adaptedSha256": "a7e467eb23be4b72036a3ac98bef63a0be1985d25dfb87d7042158d676f03d40",
       "changed": true,
       "reason": "2026-10-15 Pro档位及升级适配：精确目标、官网报价、单次提交、实际付款方式与原单证据保护；不猜Pro500上游ID。保留既有必要适配。; 2026-10-17 controlled checkout form, subscription context and progress repair.; 2026-10-17 unattended verification and original-checkout reconciliation.; 2026-10-18 restore reachable frozen-upstream billing/Pro/renewal compatibility, preserve authenticated task context and existing payment protections; isolated complete-flow regressions.; 2026-10-18 preserve account-identity rejection across independent subscription and renewal queries after trusted session refresh. 2026-10-18 Distinguish rendered authentication gates from hidden or conversational text; preserve controlled session-bootstrap diagnostics and prepayment stop conditions, with isolated browser and service-chain coverage."
     },
