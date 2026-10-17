@@ -81,6 +81,91 @@ class ProtocolRepairControls(unittest.TestCase):
     def test_complete_bound_metadata_can_be_admitted_without_a_database(self):
         r.verify_contract(self.ready())
 
+    def test_published_055_identity_and_0222_history_are_both_required(self):
+        c = self.ready()
+        self.assertEqual(c['baseline']['commit'], r.CURRENT)
+        self.assertEqual(c['baseline']['inventory']['api']['fileCount'], 1792)
+        self.assertEqual(c['baseline']['inventory']['apiJavascript']['fileCount'], 599)
+        self.assertEqual(c['baseline']['inventory']['admin']['fileCount'], 2428)
+        self.assertEqual(c['baseline']['inventory']['engine']['fileCount'], 96)
+        for mutate in (
+                lambda value: value.update(expectedCurrent='0222adf9d5225669b73e8e8f9ec711564eb6163a'),
+                lambda value: value.update(current='/opt/id-business-v2/releases/20261017T051518Z-0222adf9d522-online-checkout'),
+                lambda value: value.update(manifestSha256='772724afb095635cc31fc8159e85618c86f74224eeb3e8496d481681a559083e'),
+                lambda value: value['baseline']['images']['online-recharge'].update(image='sha256:' + '0' * 64),
+                lambda value: value['baseline']['inventory'].update(engine=value['reconstruction']['successor']['engineFiles']),
+                lambda value: value['reconstruction']['publishedRecharge'].update(commit=value['reconstruction']['successor']['commit']),
+                lambda value: value['reconstruction']['publishedRecharge']['sources'].update(sha256='0' * 64),
+                lambda value: value['reconstruction']['successorAdminProof']['adminFiles'].update(sha256='0' * 64),
+                lambda value: value['baseline']['publishedProofs']['online-checkout-build-proof.json'].update(sha256='0' * 64)):
+            value = copy.deepcopy(c)
+            mutate(value)
+            with self.subTest(mutate=mutate), self.assertRaises(RuntimeError):
+                r.verify_contract(value)
+
+    def test_fixed_history_reproduces_0222_then_preserves_all_055_sources(self):
+        c = self.ready()
+        old = b.published_recipe(c, 'successor', 'online-checkout-retest-contract.json')
+        published = b.published_recipe(c, 'publishedRecharge', 'online-unattended-contract.json')
+        c8 = json.loads(b.git('show', b.C8 + ':scripts/production-release/online-checkout-contract.json'))
+        self.assertFalse(set(published['sources']) & set(c['sources']))
+        self.assertEqual(r.signature(published['afterEngineFiles']), c['baseline']['inventory']['engine'])
+        with tempfile.TemporaryDirectory(prefix='published-history-', dir=self.temporary_parent()) as name:
+            context = Path(name)
+            b.overlay(context, {b.ENGINE + path: value for path, value in old['afterEngineFiles'].items()},
+                      c['reconstruction']['successor']['commit'])
+            b.overlay_published_sources(context, '0222-admin', c, c8, old, published)
+            self.assertEqual(b.inventory(context / b.ENGINE), old['afterEngineFiles'])
+            b.overlay_published_sources(context, 'baseline', c, c8, old, published)
+            self.assertEqual(b.inventory(context / b.ENGINE), published['afterEngineFiles'])
+            self.assertTrue(all(r.digest((context / path).read_bytes()) == value
+                                for path, value in published['sources'].items()))
+            b.overlay_runtime_worker(context, c)
+            self.assertEqual(b.inventory(context / b.WORKER), c['baselineWorkerFiles'])
+            b.overlay(context, c['sources'])
+            self.assertTrue(all(r.digest((context / path).read_bytes()) == value
+                                for path, value in published['sources'].items()))
+            self.assertEqual(b.inventory(context / b.ENGINE), published['afterEngineFiles'])
+        wrong = copy.deepcopy(c)
+        wrong['reconstruction']['publishedRecharge']['contractSha256'] = '0' * 64
+        with self.assertRaisesRegex(RuntimeError, 'PUBLISHED_SUCCESSOR_RECIPE_CHANGED'):
+            b.published_recipe(wrong, 'publishedRecharge', 'online-unattended-contract.json')
+
+    def test_admin_build_preserves_every_historical_stage_before_overlay(self):
+        c = self.ready()
+        roles = ('legacy-admin', 'previous-admin', '0222-admin', 'baseline', 'candidate')
+        maps = {role: {role + '.js': r.digest(role.encode()), 'index.html': r.digest((role + '-index').encode())}
+                for role in roles}
+        retained = {'pre-restore.js': r.digest(b'old asset')}
+        for role in roles[:-1]:
+            retained.update(maps[role])
+        c['reconstruction']['previousAdminProof']['adminFiles'] = r.signature(maps['previous-admin'])
+        c['reconstruction']['successorAdminProof']['adminFiles'] = r.signature(maps['0222-admin'])
+        c['baseline']['publishedProofs']['online-checkout-build-proof.json']['adminFiles'] = r.signature(maps['baseline'])
+        c['baseline']['inventory']['admin'] = r.signature(retained)
+        c8 = {'baselineAdminFilesSha256': r.digest(r.canonical(maps['legacy-admin']))}
+        restore = {'runtimeAdminFiles': {'pre-restore.js': r.digest(b'old asset')}}
+        def read_git(*args):
+            if args == ('rev-parse', 'HEAD'):
+                return ('a' * 40).encode()
+            return json.dumps(c8 if args[1].startswith(b.C8 + ':') else restore).encode()
+        with tempfile.TemporaryDirectory(prefix='admin-history-', dir=self.temporary_parent()) as name:
+            output = Path(name)
+            with patch.object(b, 'OUT', output), patch.object(b, 'ensure_prepared', return_value=c), \
+                    patch.object(b, 'git', side_effect=read_git), patch.object(b, 'install'), \
+                    patch.object(b, 'run') as run, patch.object(b, 'python', return_value=output / 'unused-python'), \
+                    patch.object(b, 'inventory', side_effect=lambda path: maps[path.parents[2].name]):
+                b.check_admin()
+            proof = json.loads((output / 'admin-validation.json').read_bytes())
+            self.assertEqual(proof['beforeAdmin'], r.signature(retained))
+            self.assertEqual(proof['afterAdmin'], r.signature({**retained, **maps['candidate']}))
+            self.assertEqual(proof['adminFiles'], maps['candidate'])
+            self.assertEqual(proof['retainedAssetCount'], len(retained))
+            builds = [call for call in run.call_args_list if call.args[:3] == ('npm', 'run', 'build')]
+            self.assertEqual([call.kwargs['cwd'].name for call in builds], list(roles))
+            self.assertEqual(builds[2].kwargs['env']['V2_BUILD_ID'], 'v2-' + c['reconstruction']['successor']['commit'])
+            self.assertEqual(builds[3].kwargs['env']['V2_BUILD_ID'], c['baseline']['adminBuildId'])
+
     def test_baseline_component_identity_and_empty_runtime_js_delta_are_required(self):
         for mutate in (lambda c: c.update(expectedCurrent='0' * 40),
                        lambda c: c.update(version=True), lambda c: c.update(businessActions=False),

@@ -138,7 +138,9 @@ import {
   registrationProtocolRepairCommands,
   isRegistrationProtocolRepairControlRepair,
   registrationProtocolRepairControlBase,
-  registrationProtocolRepairControlCommands
+  registrationProtocolRepairControlCommands,
+  isRegistrationProtocolRepairPreservationOnly,
+  registrationProtocolRepairPreservationBase
 } from './ci-recharge-scope.mjs';
 
 const [part, base] = process.argv.slice(2);
@@ -149,6 +151,19 @@ const changed = execFileSync('git', ['diff', '--name-only', base, 'HEAD'], { enc
   .trim()
   .split('\n')
   .filter(Boolean);
+if (
+  mode === 'ci-only' &&
+  base === registrationProtocolRepairPreservationBase &&
+  isRegistrationProtocolRepairPreservationOnly(changed, {
+    base,
+    baseTree: execFileSync('git', ['rev-parse', base + '^{tree}'], { encoding: 'utf8' }).trim()
+  })
+) {
+  if (!Object.hasOwn(registrationProtocolRepairControlCommands, part))
+    throw new Error('Unsupported registration published-baseline preservation check part');
+  for (const [file, ...args] of registrationProtocolRepairControlCommands[part]) run(file, args);
+  process.exit(0);
+}
 if (
   mode === 'ci-only' &&
   base === registrationProtocolRepairControlBase &&
