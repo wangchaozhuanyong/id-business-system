@@ -192,6 +192,7 @@ async function runTask(task) {
     phase = 'execution';
     executionStarted = true;
     const result = await execute(task, config);
+    if (require('./rpc.cjs').taskSignal().aborted) return;
     if (task.operation === 'recharge' && !result?.resultUnknown && !result?.pendingCredentials) {
       const event = result?.success
         ? 'success'
@@ -207,6 +208,7 @@ async function runTask(task) {
         })
         .catch(() => {});
     }
+    require('./rpc.cjs').taskSignal().throwIfAborted();
     const status = result?.pendingCredentials
       ? 'pending_credentials'
       : result?.resultUnknown
@@ -231,6 +233,9 @@ async function runTask(task) {
               : '执行未完成'
     });
   } catch (error) {
+    // Cancellation has no business outcome. The parent/server lease recovery
+    // retains the original payment state instead of persisting a guessed failure.
+    if (require('./rpc.cjs').taskSignal().aborted) return;
     const proxyFailure =
       task.operation === 'proxy_test' ? require('./proxy-test.cjs').taskFailure(task, error) : null;
     // Preparation failures must also reach the proxy row while this task still owns its lease.
@@ -276,8 +281,17 @@ async function runTask(task) {
         delete process.env[key];
   }
 }
-if (require.main === module)
+if (require.main === module) {
+  const stop = () => {
+    require('./rpc.cjs').abortTask();
+    // Allow cancellation listeners to terminate solvers before this task process exits.
+    setTimeout(() => process.exit(0), 1500).unref();
+  };
+  process.once('SIGTERM', stop);
+  process.once('SIGINT', stop);
+  process.once('disconnect', stop);
   process.once('message', (message) => {
     runTask(message.task).finally(() => setTimeout(() => process.exit(0), 20));
   });
+}
 module.exports = { runTask, execute };

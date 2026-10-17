@@ -26,6 +26,7 @@ import json
 import math
 import os
 import re
+import sys
 import time
 import urllib.parse
 from dataclasses import dataclass
@@ -60,6 +61,24 @@ DEFAULT_VLM_API_KEY = os.environ.get("CTF_VLM_API_KEY", "")
 DEFAULT_VLM_MODEL = os.environ.get("CTF_VLM_MODEL", "gpt-4o")
 _CLIP_MODEL: CLIPModel | None = None
 _CLIP_PROCESSOR: CLIPProcessor | None = None
+
+
+_SOLVER_DEADLINE: float | None = None
+
+
+class VerificationFailure(RuntimeError):
+    def __init__(self, code: str, *, http_status: int | None = None, provider_code: str = ""):
+        super().__init__(code)
+        self.code = code
+        self.http_status = http_status
+        self.provider_code = provider_code if re.fullmatch(r"[a-zA-Z0-9_]{1,60}", provider_code or "") else ""
+
+
+def _remaining_seconds(limit: float = 45.0) -> float:
+    remaining = limit if _SOLVER_DEADLINE is None else min(limit, _SOLVER_DEADLINE - time.monotonic())
+    if remaining <= 0:
+        raise VerificationFailure("VERIFICATION_TIMEOUT")
+    return max(0.001, remaining)
 
 
 def log(msg: str):
@@ -301,80 +320,83 @@ def _candidate_metadata(candidates: list[CandidateBox], full_shape: tuple[int, i
     return meta
 
 
-def _vlm_chat_completion(
-    *,
-    base_url: str,
-    api_key: str,
-    model: str,
-    system_prompt: str,
-    user_text: str,
-    images: list[np.ndarray],
-    timeout_s: int = 45,
-) -> dict[str, Any]:
-    endpoint = _normalize_api_base(base_url) + "/chat/completions"
-    content: list[dict[str, Any]] = [{"type": "text", "text": user_text}]
-    for arr in images:
-        content.append(
-            {
-                "type": "image_url",
-                "image_url": {
-                    "url": _png_data_url(arr),
-                    "detail": "high",
-                },
-            }
-        )
-    # Claude 模型不支持 response_format，改用 prompt 约束 JSON 输出
-    _is_claude = "claude" in model.lower()
-    if _is_claude:
-        system_prompt = system_prompt.rstrip() + (
-            "\n\nIMPORTANT: You MUST respond with ONLY a valid JSON object. "
-            "No explanation, no markdown, no text before or after the JSON. "
-            "Start your response with '{' and end with '}'."
-        )
-    payload: dict[str, Any] = {
-        "model": model,
-        "temperature": 0,
-        "messages": [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": content},
-        ],
-        "max_tokens": 1024,
-    }
-    if not _is_claude:
+def _vlm_payload(model: str, system_prompt: str, content: list[dict[str, Any]]) -> dict[str, Any]:
+    payload = {"model": model, "messages": [{"role": "system", "content": system_prompt}, {"role": "user", "content": content}]}
+    if re.match(r"^gpt-5(?:[.:-]|$)", model.lower()):
+        payload["max_completion_tokens"] = 1024
+    else:
+        payload.update({"temperature": 0, "max_tokens": 1024})
+    if "claude" not in model.lower():
         payload["response_format"] = {"type": "json_object"}
-    headers = {
-        "Authorization": f"Bearer {api_key}",
-        "Content-Type": "application/json",
-    }
-    # 对 Claude 模型：首次失败后用更强约束重试一次
-    for _attempt in range(2 if _is_claude else 1):
-        resp = requests.post(endpoint, headers=headers, json=payload, timeout=timeout_s)
-        resp.raise_for_status()
-        data = resp.json()
-        choices = data.get("choices") or []
-        if not choices:
-            raise RuntimeError(f"VLM 无 choices: {json.dumps(data, ensure_ascii=False)[:500]}")
+    return payload
+
+
+def _adapt_vlm_parameter(payload: dict[str, Any], error: dict[str, Any]) -> bool:
+    if error.get("code") != "unsupported_parameter":
+        return False
+    param = error.get("param")
+    if param == "max_tokens" and "max_tokens" in payload:
+        payload["max_completion_tokens"] = payload.pop("max_tokens")
+    elif param == "max_completion_tokens" and "max_completion_tokens" in payload:
+        payload["max_tokens"] = payload.pop("max_completion_tokens")
+    elif param in {"temperature", "response_format"} and param in payload:
+        payload.pop(param)
+    else:
+        return False
+    return True
+
+
+def _vlm_http_failure(status: int, error: dict[str, Any]) -> VerificationFailure:
+    provider_code = str(error.get("code") or "")
+    code = "VLM_AUTH_FAILED" if status in {401, 403} else "VLM_RATE_LIMITED" if status == 429 else "VLM_PROVIDER_UNAVAILABLE" if status >= 500 else "VLM_REQUEST_UNSUPPORTED" if status == 400 else "VLM_API_REJECTED"
+    if provider_code in {"image_unsupported", "unsupported_content_type", "invalid_image_format"}:
+        code = "VLM_IMAGE_UNSUPPORTED"
+    return VerificationFailure(code, http_status=status, provider_code=provider_code)
+
+
+def _vlm_chat_completion(
+    *, base_url: str, api_key: str, model: str, system_prompt: str,
+    user_text: str, images: list[np.ndarray], timeout_s: int = 45,
+) -> dict[str, Any]:
+    if not api_key:
+        raise VerificationFailure("VLM_NOT_CONFIGURED")
+    if not images:
+        raise VerificationFailure("VLM_IMAGE_UNSUPPORTED")
+    endpoint = _normalize_api_base(base_url) + "/chat/completions"
+    content = [{"type": "text", "text": user_text}]
+    for arr in images:
+        content.append({"type": "image_url", "image_url": {"url": _png_data_url(arr), "detail": "high"}})
+    payload = _vlm_payload(model, system_prompt, content)
+    headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+    for attempt in range(2):
+        try:
+            resp = requests.post(endpoint, headers=headers, json=payload, timeout=_remaining_seconds(timeout_s))
+        except requests.Timeout:
+            raise VerificationFailure("VLM_TIMEOUT") from None
+        except requests.RequestException:
+            raise VerificationFailure("VLM_NETWORK_UNAVAILABLE") from None
+        try:
+            data = resp.json()
+        except Exception:
+            raise VerificationFailure("VLM_INVALID_RESPONSE", http_status=resp.status_code) from None
+        if not resp.ok:
+            error = data.get("error") if isinstance(data, dict) and isinstance(data.get("error"), dict) else {}
+            if attempt == 0 and resp.status_code == 400 and _adapt_vlm_parameter(payload, error):
+                continue
+            raise _vlm_http_failure(resp.status_code, error)
+        choices = data.get("choices") if isinstance(data, dict) else None
+        if not isinstance(choices, list) or not choices:
+            raise VerificationFailure("VLM_INVALID_RESPONSE", http_status=resp.status_code)
         message = choices[0].get("message") or {}
         raw_content = message.get("content")
-        if isinstance(raw_content, list):
-            text = "".join(str(item.get("text") or "") for item in raw_content if isinstance(item, dict))
-        else:
-            text = str(raw_content or "")
+        text = "".join(str(item.get("text") or "") for item in raw_content if isinstance(item, dict)) if isinstance(raw_content, list) else str(raw_content or "")
         try:
             decision = _extract_json_object(text)
-            decision["_raw_text"] = text
-            return decision
-        except RuntimeError:
-            if _attempt == 0 and _is_claude:
-                # 重试：在 user message 末尾追加强制 JSON 提示
-                retry_msg = {"role": "user", "content": "You did not return valid JSON. Reply with ONLY a JSON object, nothing else. Start with {"}
-                payload["messages"] = list(payload["messages"]) + [
-                    {"role": "assistant", "content": text[:200]},
-                    retry_msg,
-                ]
-                log(f"VLM 首次返回非 JSON，重试 ...")
-                continue
-            raise
+        except Exception:
+            raise VerificationFailure("VLM_INVALID_RESPONSE", http_status=resp.status_code) from None
+        decision["_raw_text"] = text
+        return decision
+    raise VerificationFailure("VLM_REQUEST_UNSUPPORTED")
 
 
 def _vlm_click_decision(
@@ -2653,92 +2675,78 @@ def _should_ignore_hcaptcha_frame(url: str) -> bool:
         for token in (
             "hcaptcha-invisible",
             "hcaptchainvisible",
-            "/static/",
-            "#debugmod",
             "stripecdn.com",
             "js.stripe.com",
         )
     )
 
 
-def _frame_looks_like_challenge(frame) -> bool:
+def _locator_is_displayed(element) -> bool:
     try:
-        text = _normalize_prompt_text(frame.locator("body").inner_text(timeout=1_000))
-        lower = text.lower()
-        if text and _looks_like_prompt_line(text):
-            return True
-        markers = (
-            "drag the matching",
-            "matching shape",
-            "drag the object",
-            "please drag",
-            "please click",
-            "please select",
-            "tap on",
-            "one more step",
-        )
-        if any(marker in lower for marker in markers):
-            return True
-        if frame.locator("canvas").count() > 0:
-            return True
-        if frame.locator(".button-submit, .challenge-container, [class*='challenge']").count() > 0:
-            return True
+        return element.is_visible() and element.evaluate("""node => {
+            for (let current = node; current; current = current.parentElement) {
+                const style = getComputedStyle(current);
+                if (current.hidden || current.inert || current.getAttribute('aria-hidden') === 'true'
+                    || style.display === 'none' || style.visibility === 'hidden'
+                    || style.visibility === 'collapse' || Number(style.opacity) === 0) return false;
+            }
+            return true;
+        }""")
     except Exception:
         return False
-    return False
+
+
+def _frame_is_visible(frame) -> bool:
+    try:
+        if frame.parent_frame is None:
+            return False
+        parsed = urllib.parse.urlsplit(str(frame.url or ""))
+        host = (parsed.hostname or "").lower()
+        if not (host == "hcaptcha.com" or host.endswith(".hcaptcha.com")):
+            return False
+        current = frame
+        while current.parent_frame is not None:
+            element = current.frame_element()
+            try:
+                box = element.bounding_box(timeout=500)
+                if not _locator_is_displayed(element) or not box or box["width"] <= 4 or box["height"] <= 4:
+                    return False
+            finally:
+                element.dispose()
+            current = current.parent_frame
+        return True
+    except Exception:
+        return False
+
+
+def _frame_looks_like_challenge(frame) -> bool:
+    if not _frame_is_visible(frame):
+        return False
+    try:
+        text = _normalize_prompt_text(frame.locator("body").inner_text(timeout=500))
+        prompt = get_prompt(frame)
+        if not prompt or _is_checkbox_only_overlay_text(prompt):
+            return False
+        rasters = frame.locator("canvas:visible, .task-grid img:visible, .task-image:visible, .challenge-image:visible, [class*='task-image']:visible")
+        return any(_locator_is_displayed(rasters.nth(index)) for index in range(rasters.count()))
+    except Exception:
+        return False
 
 
 def _hcaptcha_frame(page, kind: str):
-    for frame in page.frames:
-        url = str(frame.url or "")
-        if _should_ignore_hcaptcha_frame(url):
-            continue
-        if _frame_url_has_kind(url, kind):
-            return frame
-    return None
+    matches = [frame for frame in page.frames if not _should_ignore_hcaptcha_frame(str(frame.url or ""))
+               and _frame_url_has_kind(str(frame.url or ""), kind) and _frame_is_visible(frame)]
+    if len(matches) > 1:
+        raise VerificationFailure("VERIFICATION_FRAME_AMBIGUOUS")
+    return matches[0] if matches else None
 
 
 def challenge_frame(page):
-    ch = _hcaptcha_frame(page, "challenge")
-    if ch is not None:
-        return ch
-
-    # 某些 checkout 弹层会在 checkbox frame 内直接切换到 challenge，URL 不变
-    cb = checkbox_frame(page)
-    if cb is not None and _frame_looks_like_challenge(cb):
-        return cb
-
-    best = None
-    best_score = -1
-    for frame in page.frames:
-        url = str(frame.url or "")
-        if _should_ignore_hcaptcha_frame(url):
-            continue
-        url_lower = url.lower()
-        if "hcaptcha" not in url_lower and "newassets" not in url_lower:
-            if not _frame_looks_like_challenge(frame):
-                continue
-        score = 0
-        if _frame_url_has_kind(url, "challenge"):
-            score += 120
-        if "hcaptcha.com" in url_lower or "newassets" in url_lower:
-            score += 25
-        if _frame_url_has_kind(url, "checkbox"):
-            score -= 20
-        if _frame_looks_like_challenge(frame):
-            score += 80
-        try:
-            box = frame.locator("body").bounding_box(timeout=400)
-            if box and float(box.get("width") or 0) > 180 and float(box.get("height") or 0) > 120:
-                score += 35
-        except Exception:
-            pass
-        if score > best_score:
-            best_score = score
-            best = frame
-    if best is not None and best_score >= 55:
-        return best
-    return None
+    matches = [frame for frame in page.frames if _frame_is_visible(frame)
+               and not _should_ignore_hcaptcha_frame(str(frame.url or "")) and _frame_looks_like_challenge(frame)]
+    if len(matches) > 1:
+        raise VerificationFailure("VERIFICATION_FRAME_AMBIGUOUS")
+    return matches[0] if matches else None
 
 
 def checkbox_frame(page):
@@ -2746,52 +2754,12 @@ def checkbox_frame(page):
 
 
 def _is_checkbox_only_overlay_text(text: str) -> bool:
-    t = str(text or "").lower()
-    if re.search(
-        r"click the|click on|please click|please select|drag the|select all|"
-        r"matching shape|identify|choose all|different from|arrows",
-        t,
-    ):
-        return False
-    if "one more step" in t and "select the checkbox" in t:
-        return True
-    if "i am human" in t and not re.search(
-        r"click on|drag the|select all|matching shape|identify|choose all",
-        t,
-    ):
-        return True
-    return False
+    t = _normalize_prompt_text(text).lower()
+    return bool(re.search(r"select the checkbox(?: below)?|one more step before|\bi am human\b|verify (?:that )?you are human", t))
 
 
 def _page_has_visible_hcaptcha_challenge(page) -> bool:
-    """主文档或 iframe 内仍有可见图片/交互 challenge（不能只看主页面 innerText）。"""
-    ch = challenge_frame(page)
-    if ch is not None and _frame_looks_like_challenge(ch):
-        return True
-    try:
-        for frame in page.frames:
-            url = str(frame.url or "").lower()
-            if _should_ignore_hcaptcha_frame(url):
-                continue
-            if "hcaptcha" not in url and "newassets" not in url:
-                continue
-            try:
-                if frame.locator("canvas").count() > 0:
-                    return True
-                if frame.locator(".challenge-container, .button-submit, .task-grid").count() > 0:
-                    return True
-                body = str(frame.locator("body").inner_text(timeout=600) or "").lower()
-                if body and re.search(
-                    r"click the|please click|please select|drag the|"
-                    r"different from|matching shape|choose all|identify",
-                    body,
-                ):
-                    return True
-            except Exception:
-                continue
-    except Exception:
-        pass
-    return False
+    return challenge_frame(page) is not None
 
 
 def _checkout_overlay_cleared(page) -> bool:
@@ -2815,8 +2783,8 @@ def _checkout_overlay_cleared(page) -> bool:
 
 
 def _wait_passive_checkbox_clear(page, observed_network_solution, deadline: float) -> dict[str, Any] | None:
-    passive_deadline = min(deadline, time.time() + 45.0)
-    while time.time() < passive_deadline:
+    passive_deadline = min(deadline, time.monotonic() + 45.0)
+    while time.monotonic() < passive_deadline:
         if observed_network_solution:
             return None
         try:
@@ -2840,34 +2808,16 @@ def _wait_passive_checkbox_clear(page, observed_network_solution, deadline: floa
 
 
 def click_checkbox(page) -> bool:
-    existing = challenge_frame(page)
-    if existing is not None and _frame_looks_like_challenge(existing):
+    if challenge_frame(page) is not None:
         return False
     cb = checkbox_frame(page)
-    if not cb:
+    if cb is None:
         return False
-    for sel in ["#checkbox", '[role="checkbox"]', 'div[aria-checked]']:
-        try:
-            loc = cb.locator(sel).first
-            for force in (False, True):
-                try:
-                    loc.click(timeout=1_500, force=force)
-                    return True
-                except Exception:
-                    continue
-            try:
-                box = loc.bounding_box(timeout=1_500)
-            except Exception:
-                box = None
-            if box:
-                page.mouse.click(
-                    float(box["x"] + box["width"] / 2.0),
-                    float(box["y"] + box["height"] / 2.0),
-                )
-                return True
-        except Exception:
-            continue
-    return False
+    loc = cb.locator(':is(#checkbox, #anchor, [role="checkbox"], input[type="checkbox"]):visible')
+    if loc.count() != 1 or loc.get_attribute("aria-checked") == "true":
+        return False
+    loc.click(timeout=min(1500, int(_remaining_seconds(1.5) * 1000)))
+    return True
 
 
 def _human_move(page, x: float, y: float, *, steps: int = 10, hover_ms: int = 40):
@@ -2923,7 +2873,7 @@ def _looks_like_prompt_line(line: str) -> bool:
     lower = _normalize_prompt_text(line).lower()
     if not lower:
         return False
-    if lower.startswith("please try again"):
+    if lower.startswith("please try again") or _is_checkbox_only_overlay_text(lower):
         return False
     prompt_markers = (
         "please click",
@@ -3011,8 +2961,11 @@ def get_prompt(ch, network_prompt: str = "") -> str:
         ".challenge-example .prompt-text",
     ]:
         try:
-            txt = _normalize_prompt_text(ch.locator(sel).first.inner_text(timeout=2_000))
-            if txt:
+            locator = ch.locator(sel).first
+            if not _locator_is_displayed(locator):
+                continue
+            txt = _normalize_prompt_text(locator.inner_text(timeout=2_000))
+            if txt and not _is_checkbox_only_overlay_text(txt) and _looks_like_prompt_line(txt):
                 return txt
         except Exception:
             continue
@@ -3030,7 +2983,7 @@ def get_prompt(ch, network_prompt: str = "") -> str:
         if _looks_like_prompt_line(text):
             return text
     fallback_prompt = _normalize_prompt_text(network_prompt)
-    if fallback_prompt:
+    if fallback_prompt and not _is_checkbox_only_overlay_text(fallback_prompt):
         return fallback_prompt
     first = _normalize_prompt_text(lines[0])
     if _looks_like_prompt_line(first):
@@ -3071,6 +3024,10 @@ def resolve_effective_prompt(
     """在 DOM 题面与网络题面不一致时，尽量选用更接近当前真实 challenge 的 prompt。"""
     dom = _normalize_prompt_text(dom_prompt)
     net = _normalize_prompt_text(network_prompt)
+    if _is_checkbox_only_overlay_text(dom):
+        dom = ""
+    if _is_checkbox_only_overlay_text(net):
+        net = ""
     req = str(request_type or "").strip().lower()
 
     if not net:
@@ -3091,7 +3048,7 @@ def resolve_effective_prompt(
 
     # 若刚收到新的 getcaptcha，而 DOM 还没同步，短时间内优先信任网络题面。
     if req and dom != net and network_updated_at:
-        if (time.time() - float(network_updated_at)) <= 8.0:
+        if 0 <= (time.monotonic() - float(network_updated_at)) <= 8.0:
             return net
 
     return dom
@@ -3240,6 +3197,8 @@ def _raster_is_visually_empty(arr: np.ndarray) -> bool:
 
 
 def get_body_raster(ch) -> tuple[np.ndarray, dict, str]:
+    if not _frame_is_visible(ch) or not _frame_looks_like_challenge(ch):
+        raise VerificationFailure("VERIFICATION_NOT_READY")
     body_loc = ch.locator("body")
     body_box = body_loc.bounding_box(timeout=1_500)
     if not body_box:
@@ -3297,6 +3256,23 @@ def save_debug_artifacts(out_dir: Path, round_idx: int, prompt: str, arr: np.nda
     return None
 
 
+def _select_attached_page(browser, binding: str):
+    if not re.fullmatch(r"[0-9a-fA-F-]{36}", binding or ""):
+        raise VerificationFailure("VERIFICATION_PAGE_BINDING_REQUIRED")
+    matches = []
+    for context in browser.contexts:
+        for page in context.pages:
+            try:
+                marker = page.evaluate("window.__onlineRechargeVerificationBinding")
+            except Exception:
+                continue
+            if marker == binding:
+                matches.append(page)
+    if len(matches) != 1:
+        raise VerificationFailure("VERIFICATION_PAGE_BINDING_MISMATCH")
+    return matches[0]
+
+
 def solve_bridge(
     bridge_url: str,
     timeout_s: int,
@@ -3311,8 +3287,12 @@ def solve_bridge(
     accept_language: str = "en-US,en;q=0.9",
     cdp_url: str = "",
     attached_page_url_substr: str = "",
+    attached_page_binding: str = "",
+    initial_challenge: dict[str, Any] | None = None,
 ) -> dict | None:
-    deadline = time.time() + timeout_s
+    global _SOLVER_DEADLINE
+    deadline = time.monotonic() + timeout_s
+    _SOLVER_DEADLINE = deadline
     parsed_bridge_url = urllib.parse.urlsplit(bridge_url)
     bridge_origin = f"{parsed_bridge_url.scheme}://{parsed_bridge_url.netloc}" if parsed_bridge_url.scheme and parsed_bridge_url.netloc else ""
     effective_vlm_cfg = {
@@ -3351,7 +3331,7 @@ def solve_bridge(
     def _write_session_meta(**extra):
         try:
             payload = {
-                "created_at": int(time.time() * 1000),
+                "created_at": int(time.monotonic() * 1000),
                 "bridge_url": bridge_url,
                 "verify_url": verify_url,
                 "headless": headless,
@@ -3359,7 +3339,7 @@ def solve_bridge(
                 **extra,
             }
             out_dir.mkdir(parents=True, exist_ok=True)
-            _discard_debug_text((out_dir / f"session_meta_{int(time.time() * 1000)}.json"),
+            _discard_debug_text((out_dir / f"session_meta_{int(time.monotonic() * 1000)}.json"),
                 json.dumps(payload, ensure_ascii=False, indent=2),
                 encoding="utf-8",
             )
@@ -3382,7 +3362,7 @@ def solve_bridge(
             session.close()
 
     def _report_to_bridge(path: str, payload: dict[str, Any]):
-        if not bridge_origin:
+        if cdp_url or not bridge_origin:
             return
         try:
             _local_http_request(
@@ -3454,16 +3434,7 @@ def solve_bridge(
         attached_page = None
         if cdp_attach:
             browser = p.chromium.connect_over_cdp(str(cdp_url).strip())
-            needle = str(attached_page_url_substr or "").strip()
-            for ctx in browser.contexts:
-                for pg in ctx.pages:
-                    if not needle or needle in (pg.url or ""):
-                        attached_page = pg
-                        break
-                if attached_page:
-                    break
-            if attached_page is None:
-                raise RuntimeError(f"CDP attach 未找到页面 (match={needle or '*'})")
+            attached_page = _select_attached_page(browser, attached_page_binding)
             log(f"CDP attach 已连接页面: {attached_page.url}")
             launch_kwargs = {}
         else:
@@ -3607,10 +3578,12 @@ def solve_bridge(
                 context.route("https://js.stripe.com/**", _synthetic_route_handler)
             page = context.new_page()
         observed_network_solution: dict[str, str] = {}
+        initial_challenge = initial_challenge or {}
         observed_challenge_state: dict[str, Any] = {
-            "prompt": "",
-            "request_type": "",
-            "task_count": 0,
+            "prompt": str(initial_challenge.get("prompt") or ""),
+            "request_type": str(initial_challenge.get("requestType") or ""),
+            "task_count": int(initial_challenge.get("taskCount") or 0),
+            "challenge_key": str(initial_challenge.get("key") or ""),
             "ekey": "",
             "last_getcaptcha_url": "",
             "updated_at": 0.0,
@@ -3628,6 +3601,8 @@ def solve_bridge(
                 return
             observed_network_solution.clear()
             observed_network_solution.update(payload)
+            if cdp_attach:
+                return
             log(
                 "监听到 hCaptcha checkcaptcha pass=true，"
                 f"直接回填真实 P1/E1 (token={len(response_token)} chars, ekey={len(response_ekey)} chars)"
@@ -3652,6 +3627,8 @@ def solve_bridge(
             _report_to_bridge("/result", payload)
 
         def _push_augmented_result(payload: dict[str, Any]):
+            if cdp_attach:
+                return
             try:
                 page.evaluate(
                     """async (payload) => {
@@ -3706,7 +3683,7 @@ def solve_bridge(
                     },
                 }
                 out_dir.mkdir(parents=True, exist_ok=True)
-                stamp = int(time.time() * 1000)
+                stamp = int(time.monotonic() * 1000)
                 suffix = "pass" if pass_value is True else "fail"
                 _discard_debug_text((out_dir / f"checkcaptcha_{suffix}_{stamp}.json"),
                     json.dumps(snapshot, ensure_ascii=False, indent=2),
@@ -3719,7 +3696,7 @@ def solve_bridge(
             try:
                 url = resp.url or ""
                 host = (urllib.parse.urlsplit(url).hostname or "").lower()
-                if "hcaptcha.com" not in host:
+                if not (host == "hcaptcha.com" or host.endswith(".hcaptcha.com")):
                     return
 
                 if "getcaptcha/" in url or "/getcaptcha?" in url:
@@ -3734,11 +3711,12 @@ def solve_bridge(
                         task_count = len(tasklist)
                     observed_challenge_state.update(
                         {
-                            "prompt": prompt or observed_challenge_state.get("prompt") or "",
+                            "prompt": prompt or "",
                             "request_type": request_type,
                             "task_count": task_count,
                             "last_getcaptcha_url": url,
-                            "updated_at": time.time(),
+                            "challenge_key": str(data.get("key") or ""),
+                            "updated_at": time.monotonic(),
                         }
                     )
                     key_hint = str(data.get("key") or data.get("generated_pass_UUID") or "").strip()
@@ -3766,6 +3744,7 @@ def solve_bridge(
 
                 pass_value = data.get("pass")
                 if pass_value is False:
+                    observed_challenge_state.update({"prompt": "", "request_type": "", "task_count": 0, "challenge_key": ""})
                     _persist_checkcaptcha_snapshot(resp, data, pass_value=pass_value, ekey=ekey)
                     next_req = ((data.get("c") or {}).get("req") or "")
                     if next_req:
@@ -3853,7 +3832,7 @@ def solve_bridge(
                 )
                 try:
                     out_dir.mkdir(parents=True, exist_ok=True)
-                    stamp = int(time.time() * 1000)
+                    stamp = int(time.monotonic() * 1000)
                     _discard_debug_text((out_dir / f"browser_verify_{stamp}.json"),
                         json.dumps(
                             {
@@ -3879,7 +3858,7 @@ def solve_bridge(
                 except Exception:
                     pass
 
-        context.on("response", _handle_response)
+        # Page events include nested frames; context events also include unrelated pages.
         page.on("response", _handle_response)
         if not cdp_attach:
             page_target = synthetic_bridge_url if use_synthetic_stripe_origin else bridge_url
@@ -3890,7 +3869,7 @@ def solve_bridge(
         prompt_attempt_counts: dict[str, int] = {}
 
         try:
-            while time.time() < deadline:
+            while time.monotonic() < deadline:
                 if observed_network_solution:
                     verify_result = _browser_verify(observed_network_solution)
                     if verify_result is not None:
@@ -3899,11 +3878,13 @@ def solve_bridge(
                         _push_augmented_result(observed_network_solution)
                     log("challenge 已完成，拿到网络侧真实 checkcaptcha 结果")
                     return dict(observed_network_solution)
+                if round_idx >= 4:
+                    raise VerificationFailure("VERIFICATION_ROUNDS_EXHAUSTED")
                 result = page.evaluate("window.__stripeChallengeResult")
                 if result:
                     if str((result.get("raw") or {}).get("source") or "") != "network_checkcaptcha":
-                        wait_deadline = time.time() + 1.2
-                        while time.time() < wait_deadline and not observed_network_solution:
+                        wait_deadline = time.monotonic() + 1.2
+                        while time.monotonic() < wait_deadline and not observed_network_solution:
                             page.wait_for_timeout(100)
                         if observed_network_solution:
                             log("bridge result 已出现，但随后抓到网络侧真实 checkcaptcha，优先使用网络侧结果")
@@ -3938,9 +3919,16 @@ def solve_bridge(
                 if ch is None and _page_has_visible_hcaptcha_challenge(page):
                     ch = challenge_frame(page)
                 if ch is None:
+                    loading = _hcaptcha_frame(page, "challenge")
+                    if loading is not None:
+                        body = _normalize_prompt_text(loading.locator("body").inner_text(timeout=500))
+                        if body.lower().startswith("please try again"):
+                            raise VerificationFailure("VERIFICATION_CHALLENGE_REJECTED")
+                        page.wait_for_timeout(min(500, int(_remaining_seconds(0.5) * 1000)))
+                        continue
                     if click_checkbox(page):
                         log("已点击 checkbox，等待 challenge ...")
-                    elif time.time() - last_wait_log_at >= 5:
+                    elif time.monotonic() - last_wait_log_at >= 5:
                         try:
                             frame_urls = [
                                 str(f.url or "")[:140]
@@ -3951,7 +3939,7 @@ def solve_bridge(
                         except Exception:
                             preview = "<unavailable>"
                         log(f"等待 challenge frame 出现 ... hcaptcha_frames={preview}")
-                        last_wait_log_at = time.time()
+                        last_wait_log_at = time.monotonic()
                     page.wait_for_timeout(1000)
                     continue
 
@@ -3969,6 +3957,10 @@ def solve_bridge(
                         "检测到 DOM prompt 与网络题面不一致，优先使用网络题面: "
                         f"dom={prompt_dom!r} network={network_prompt!r} request_type={request_type!r}"
                     )
+                if _is_checkbox_only_overlay_text(prompt):
+                    click_checkbox(page)
+                    page.wait_for_timeout(500)
+                    continue
                 if not prompt:
                     try:
                         body_preview = ch.locator("body").inner_text(timeout=1_000)[:220]
@@ -3986,7 +3978,7 @@ def solve_bridge(
                         continue
                     if click_checkbox(page):
                         log("prompt 为空，补点 checkbox ...")
-                    elif time.time() - last_wait_log_at >= 5:
+                    elif time.monotonic() - last_wait_log_at >= 5:
                         try:
                             body_preview = ch.locator("body").inner_text(timeout=1_000)[:120]
                         except Exception:
@@ -3997,27 +3989,31 @@ def solve_bridge(
                             f" network_prompt={observed_challenge_state.get('prompt')!r}"
                             f" request_type={observed_challenge_state.get('request_type')!r}"
                         )
-                        last_wait_log_at = time.time()
+                        last_wait_log_at = time.monotonic()
                     page.wait_for_timeout(1000)
                     continue
 
                 try:
                     arr, raster_box, raster_source = get_challenge_raster(ch)
                 except Exception:
-                    if time.time() - last_wait_log_at >= 5:
+                    if time.monotonic() - last_wait_log_at >= 5:
                         log(f"等待 challenge 图像就绪 ... prompt={prompt!r}")
-                        last_wait_log_at = time.time()
+                        last_wait_log_at = time.monotonic()
                     page.wait_for_timeout(1000)
                     continue
                 if (not _looks_like_full_grid_fallback(arr)):
                     _cur_request_type = str(observed_challenge_state.get("request_type") or "").strip().lower()
                     _non_grid_type = _cur_request_type in ("image_label_area_select",)
-                    if not _non_grid_type and (time.time() - last_wait_log_at) < 3.0:
+                    if not _non_grid_type and (time.monotonic() - last_wait_log_at) < 3.0:
                         page.wait_for_timeout(1200)
                         continue
-                    if time.time() - last_wait_log_at >= 5:
+                    if time.monotonic() - last_wait_log_at >= 5:
                         log(f"challenge 图像非标准网格，放行 ... prompt={prompt!r} source={raster_source!r} type={_cur_request_type!r}")
-                        last_wait_log_at = time.time()
+                        last_wait_log_at = time.monotonic()
+                image_hash = hashlib.sha1(arr.tobytes()).hexdigest()[:16]
+                attempt_key = str(observed_challenge_state.get("challenge_key") or f"{prompt}\n{image_hash}")
+                if prompt_attempt_counts.get(attempt_key, 0):
+                    raise VerificationFailure("VERIFICATION_CHALLENGE_UNCHANGED")
                 submit_text = get_submit_text(ch)
                 log(
                     f"round {round_idx + 1}: prompt={prompt!r} "
@@ -4051,7 +4047,9 @@ def solve_bridge(
                             if action and action.debug is not None:
                                 action.debug["solver_path"] = "vlm_first"
                         except Exception as e:
-                            vlm_error = str(e)
+                            vlm_error = getattr(e, "code", "VLM_INVALID_DECISION")
+                            if vlm_error not in {"VLM_INVALID_DECISION", "VLM_INVALID_RESPONSE"}:
+                                raise
                             log(f"  VLM 候选框决策失败: {vlm_error}")
                             if is_drag_completion_prompt(prompt):
                                 try:
@@ -4065,7 +4063,9 @@ def solve_bridge(
                                     if action.debug is not None:
                                         action.debug["solver_path"] = "vlm_direct_drag_fallback"
                                 except Exception as direct_drag_e:
-                                    vlm_error = f"{vlm_error}; direct_drag={direct_drag_e}"
+                                    vlm_error = getattr(direct_drag_e, "code", "VLM_INVALID_DECISION")
+                                    if vlm_error not in {"VLM_INVALID_DECISION", "VLM_INVALID_RESPONSE"}:
+                                        raise
                                     log(f"  VLM 直出拖拽坐标也失败，回退 heuristic: {direct_drag_e}")
                             else:
                                 try:
@@ -4099,7 +4099,9 @@ def solve_bridge(
                                         except Exception as heuristic_alt_error:
                                             action.debug["heuristic_alt_error"] = str(heuristic_alt_error)
                                 except Exception as direct_e:
-                                    vlm_error = f"{vlm_error}; direct={direct_e}"
+                                    vlm_error = getattr(direct_e, "code", "VLM_INVALID_DECISION")
+                                    if vlm_error not in {"VLM_INVALID_DECISION", "VLM_INVALID_RESPONSE"}:
+                                        raise
                                     log(f"  VLM 直出坐标也失败，回退 heuristic: {direct_e}")
 
                     if action is None:
@@ -4146,12 +4148,14 @@ def solve_bridge(
                                     "vlm_error": vlm_error,
                                 },
                             )
-                            raise RuntimeError(f"未知 challenge prompt: {prompt}")
+                            raise VerificationFailure(vlm_error if vlm_error and re.fullmatch(r"VLM_[A-Z_]+", vlm_error) else "VERIFICATION_UNSUPPORTED")
                         if action.debug is None:
                             action.debug = {}
                         action.debug.setdefault("solver_path", "heuristic")
                         if vlm_error:
                             action.debug["vlm_error"] = vlm_error
+                except VerificationFailure:
+                    raise
                 except RuntimeError as e:
                     msg = str(e)
                     transient_errors = [
@@ -4163,16 +4167,14 @@ def solve_bridge(
                         "未识别到可点击候选物体",
                     ]
                     if any(token in msg for token in transient_errors):
-                        if time.time() - last_wait_log_at >= 5:
+                        if time.monotonic() - last_wait_log_at >= 5:
                             log(f"题面内容尚未稳定，等待重试 ... prompt={prompt!r} err={msg}")
-                            last_wait_log_at = time.time()
+                            last_wait_log_at = time.monotonic()
                         page.wait_for_timeout(1000)
                         continue
                     save_debug_artifacts(out_dir, round_idx + 1, prompt, arr, {"submit_text": submit_text, "error": msg})
                     raise
 
-                image_hash = hashlib.sha1(arr.tobytes()).hexdigest()[:16]
-                attempt_key = f"{prompt}\n{image_hash}"
 
                 if action.kind == "drag":
                     attempt_index = int(prompt_attempt_counts.get(attempt_key, 0))
@@ -4402,7 +4404,7 @@ def solve_bridge(
 
                 round_idx += 1
 
-            raise TimeoutError(f"solver 超时 ({timeout_s}s)")
+            raise VerificationFailure("VERIFICATION_TIMEOUT")
         finally:
             if own_browser:
                 context.close()
@@ -4412,7 +4414,7 @@ def solve_bridge(
 def main():
     parser = argparse.ArgumentParser(description="Auto-solve Stripe hCaptcha bridge")
     parser.add_argument("bridge_url", nargs="?", default="", help="例如 http://127.0.0.1:42625/index.html；CDP 模式可省略")
-    parser.add_argument("--timeout", type=int, default=180, help="求解超时秒数")
+    parser.add_argument("--timeout", type=float, default=180, help="求解超时秒数")
     parser.add_argument("--out-dir", default="/tmp/hcaptcha_auto_solver", help="调试截图输出目录")
     parser.add_argument("--headed", action="store_true", help="用有头浏览器运行")
     parser.add_argument("--proxy-url", default="", help="浏览器代理 URL，如 http://user:pass@host:port")
@@ -4452,7 +4454,10 @@ def main():
         default="",
         help="CDP attach 时匹配页面 URL 的子串（默认匹配第一个页面）",
     )
+    parser.add_argument("--attached-page-binding", default="")
+    parser.add_argument("--initial-state-stdin", action="store_true")
     args = parser.parse_args()
+    initial = json.loads(sys.stdin.read()) if args.initial_state_stdin else {}
 
     cdp_url = str(args.cdp_url or "").strip()
     if not cdp_url and not str(args.bridge_url or "").strip():
@@ -4483,10 +4488,23 @@ def main():
         accept_language=args.accept_language or f"{args.browser_locale},{args.browser_locale.split('-', 1)[0]};q=0.9",
         cdp_url=cdp_url,
         attached_page_url_substr=str(args.attached_page_url_substr or "").strip(),
+        attached_page_binding=str(args.attached_page_binding or "").strip(),
+        initial_challenge=initial.get("challenge"),
     )
     if result:
-        print(json.dumps(result, ensure_ascii=False, indent=2))
+        print(json.dumps(result, ensure_ascii=False))
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except Exception as error:
+        code = getattr(error, "code", "VERIFICATION_TIMEOUT" if isinstance(error, TimeoutError) else "VERIFICATION_SOLVER_FAILED")
+        result = {"type": "error", "code": code, "retryable": code in {"VERIFICATION_TIMEOUT", "VLM_TIMEOUT", "VLM_NETWORK_UNAVAILABLE", "VLM_RATE_LIMITED", "VLM_PROVIDER_UNAVAILABLE"}}
+        if isinstance(error, VerificationFailure):
+            if error.http_status is not None:
+                result["httpStatus"] = error.http_status
+            if error.provider_code:
+                result["providerCode"] = error.provider_code
+        print(json.dumps(result))
+        sys.exit(1)

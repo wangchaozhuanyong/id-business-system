@@ -1,6 +1,8 @@
 'use strict';
 
 const { request: playwrightRequest } = require('playwright');
+const { performance } = require('node:perf_hooks');
+const { setTimeout, clearTimeout } = require('node:timers');
 const { extractProfileFromToken } = require('./session-auth');
 const { preparePlaywrightProxy } = require('./playwright-proxy');
 
@@ -282,65 +284,203 @@ function isCloudflareBlock(status, data) {
     return /cloudflare|cf-ray|attention required|just a moment|cf_chl/i.test(text);
 }
 
-async function fetchAccountCheckWithPlaywright(accessToken, timezoneOffsetMin = 0, browserContext = null) {
-    let cleanup = async () => {}, ctx = browserContext?.request;
-    const owned = !ctx;
-    try {
-      if (owned) {
-        const prepared = await preparePlaywrightProxy(String(process.env.PROXY || '').trim());
-        cleanup = prepared.cleanup;
-        ctx = await playwrightRequest.newContext({ userAgent: USER_AGENT,
-            proxy: prepared.proxyConfig || undefined, extraHTTPHeaders: buildCheckHeaders(accessToken) });
-      }
-        const response = await ctx.get(buildCheckUrl(timezoneOffsetMin), {
-            timeout: 20000, headers: { Authorization: `Bearer ${accessToken}`, Accept: 'application/json' }
-        });
-        const status = response.status();
-        let data;
-        try { data = await response.json(); } catch (_) { data = await response.text().catch(() => ''); }
-        return { status, data, via: owned ? 'proxy-request' : 'browser-context' };
-    } finally {
-        if (owned && ctx) await ctx.dispose().catch(() => {});
-        await cleanup().catch(() => {});
-    }
+const NETWORK_CODES = new Set(['ECONNRESET', 'ECONNREFUSED', 'ETIMEDOUT', 'ENOTFOUND', 'EAI_AGAIN',
+    'ECONNABORTED', 'CERT_HAS_EXPIRED', 'DEPTH_ZERO_SELF_SIGNED_CERT', 'UNABLE_TO_VERIFY_LEAF_SIGNATURE']);
+function transportCode(error) {
+    for (const value of [error?.networkCode, error?.code, error?.cause?.code])
+        if (NETWORK_CODES.has(value) || /^net::ERR_[A-Z_]+$/.test(String(value || ''))) return value;
+    const browser = String(error?.message || '').match(/\bnet::ERR_[A-Z_]+\b/);
+    if (browser) return browser[0];
+    return /timeout|timed out|AbortError/i.test(String(error?.name || '') + ' ' + String(error?.message || ''))
+        ? 'ETIMEDOUT' : 'UNKNOWN';
 }
-
-async function fetchAccountCheckInBrowser(accessToken, timezoneOffsetMin, sessionRaw) {
-    const runtime = require('./browser-runtime');
-    const sessionAuth = require('./session-auth');
-    const prepared = await preparePlaywrightProxy(String(process.env.PROXY || '').trim());
-    let session, context;
-    try {
-        session = await runtime.connectTaskBrowser({ proxyConfig: prepared.proxyConfig, headful: process.env.HEADFUL === '1' });
-        context = await session.browser.newContext({ proxy: prepared.proxyConfig || undefined,
-            userAgent: session.realUserAgent, locale: 'en-US' });
-        const installed = await sessionAuth.installChatGptSession(context, sessionRaw);
-        const page = await context.newPage();
-        const login = await sessionAuth.bootstrapChatGptSession(page, sessionRaw, {
-            sessionData: installed?.sessionData || installed, cookieVerified: installed?.cookieVerified === true,
-            manualVerification: true
-        });
-        return await fetchAccountCheckWithPlaywright(login.session?.accessToken || accessToken, timezoneOffsetMin, context);
-    } finally {
-        if (context) await context.close().catch(() => {});
-        if (session) await runtime.closeTaskBrowser(session, session.browser);
-        await prepared.cleanup().catch(() => {});
-    }
+function queryErrorCode(error) {
+    if (['HUMAN_VERIFICATION_REQUIRED', 'SESSION_INVALID'].includes(error?.code)) return error.code;
+    if (/^(?:VERIFICATION_(?:TIMEOUT|CANCELLED|PAGE_CLOSED|FRAME_AMBIGUOUS|NOT_READY|NETWORK_UNAVAILABLE|PROVIDER_UNAVAILABLE|PROVIDER_REJECTED|RATE_LIMITED|CHALLENGE_REJECTED|CHALLENGE_UNCHANGED|ROUNDS_EXHAUSTED|SOLVER_DISABLED|SOLVER_FAILED|RUNTIME_FAILED|PAGE_BINDING_REQUIRED|PAGE_BINDING_MISMATCH|UNSUPPORTED)|VLM_(?:AUTH_FAILED|RATE_LIMITED|TIMEOUT|NETWORK_UNAVAILABLE|REQUEST_UNSUPPORTED|INVALID_RESPONSE|INVALID_DECISION|PROVIDER_UNAVAILABLE|IMAGE_UNSUPPORTED|NOT_CONFIGURED|API_REJECTED))$/.test(error?.code)) return error.code;
+    const network = transportCode(error);
+    if (network === 'ETIMEDOUT') return 'NETWORK_TIMEOUT';
+    if (/PROXY|TUNNEL|SOCKS/.test(network) || network === 'ECONNREFUSED') return 'PROXY_UNAVAILABLE';
+    return 'NETWORK_UNAVAILABLE';
 }
-
+function safeVerificationDiagnostics(value) {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+    const result = {};
+    for (const key of ['state', 'solverCode', 'providerCode']) {
+        if (typeof value[key] === 'string' && /^[A-Za-z][A-Za-z0-9_]{0,70}$/.test(value[key])) result[key] = value[key];
+    }
+    if (Number.isSafeInteger(value.revision) && value.revision >= 0) result.revision = value.revision;
+    if (Number.isSafeInteger(value.httpStatus) && value.httpStatus >= 100 && value.httpStatus <= 599) result.httpStatus = value.httpStatus;
+    return Object.keys(result).length ? result : undefined;
+}
+function queryBudget(options) {
+    const owned = !options.page && !options.browserContext;
+    const signal = options.signal || require('../rpc.cjs').taskSignal?.();
+    const deadlineAt = performance.now() + (owned ? 180000 : 45000);
+    return { deadlineAt: Number.isFinite(options.deadlineAt) ? Math.min(deadlineAt, options.deadlineAt) : deadlineAt,
+        signal, diagnostics: [], attempts: 0 };
+}
+function checkBudget(budget) {
+    if (budget.signal?.aborted) throw Object.assign(new Error('任务已停止'), { code: 'LEASE_LOST' });
+    if (performance.now() >= budget.deadlineAt)
+        throw Object.assign(new Error('订阅查询已到期限'), { code: 'NETWORK_TIMEOUT', networkCode: 'ETIMEDOUT' });
+    return Math.max(1, Math.ceil(budget.deadlineAt - performance.now()));
+}
+async function boundedQuery(operation, budget, phase) {
+    const remaining = checkBudget(budget);
+    let timer, onAbort;
+    const halted = new Promise((_, reject) => {
+        timer = setTimeout(() => reject(Object.assign(new Error('订阅查询已到期限'), {
+            code: 'NETWORK_TIMEOUT', networkCode: 'ETIMEDOUT', phase
+        })), remaining);
+        onAbort = () => reject(Object.assign(new Error('任务已停止'), { code: 'LEASE_LOST' }));
+        budget.signal?.addEventListener('abort', onAbort, { once: true });
+    });
+    try { return await Promise.race([Promise.resolve().then(operation), halted]); }
+    catch (error) { if (!error.phase) error.phase = phase; throw error; }
+    finally { clearTimeout(timer); budget.signal?.removeEventListener('abort', onAbort); }
+}
+async function queryGet(read, budget, transport) {
+    while (budget.attempts < 2) {
+        const started = performance.now(), attempt = ++budget.attempts;
+        try {
+            const timeoutMs = Math.min(10000, checkBudget(budget));
+            const attemptBudget = { ...budget, deadlineAt: Math.min(budget.deadlineAt, started + timeoutMs) };
+            const value = await boundedQuery(() => read(timeoutMs), attemptBudget, 'account_check');
+            budget.diagnostics.push({ transport, phase: 'account_check', httpStatus: value.status,
+                attempt, elapsedMs: Math.round(performance.now() - started) });
+            return value;
+        } catch (error) {
+            if (error.code === 'LEASE_LOST') throw error;
+            const code = transportCode(error);
+            budget.diagnostics.push({ transport, phase: 'account_check', networkCode: code,
+                attempt, elapsedMs: Math.round(performance.now() - started) });
+            if (attempt >= 2 || !['ECONNRESET', 'ETIMEDOUT', 'EAI_AGAIN',
+                'net::ERR_CONNECTION_RESET', 'net::ERR_TIMED_OUT', 'net::ERR_NETWORK_CHANGED'].includes(code)) throw error;
+            await boundedQuery(() => new Promise((resolve) => setTimeout(resolve, Math.min(500, checkBudget(budget)))), budget, 'retry_wait');
+        }
+    }
+    throw Object.assign(new Error('订阅查询读取次数已耗尽'), { code: 'NETWORK_UNAVAILABLE' });
+}
+function officialPage(page) {
+    try { const url = new URL(page.url()); return url.origin === 'https://chatgpt.com' && !page.isClosed?.(); }
+    catch (_) { return false; }
+}
+async function readCheckInPage(page, accessToken, timezoneOffsetMin, budget) {
+    if (!officialPage(page)) throw Object.assign(new Error('订阅查询页面来源不符'), { code: 'NETWORK_UNAVAILABLE' });
+    return queryGet(async (timeoutMs) => {
+        let observed;
+        const failed = (request) => {
+            if (request.url() !== buildCheckUrl(timezoneOffsetMin)) return;
+            const code = String(request.failure()?.errorText || '').match(/\bnet::ERR_[A-Z_]+\b/)?.[0];
+            if (code) observed = code;
+        };
+        page.on?.('requestfailed', failed);
+        try {
+            const result = await page.evaluate(async ({ url, token, timeoutMs }) => {
+                if (location.origin !== 'https://chatgpt.com') return { status: 0, readError: 'ORIGIN_MISMATCH' };
+                const control = new AbortController(), timer = setTimeout(() => control.abort(), timeoutMs);
+                try {
+                    const response = await fetch(url, { method: 'GET', credentials: 'include', cache: 'no-store',
+                        redirect: 'error', headers: { Authorization: `Bearer ${token}`, Accept: 'application/json' }, signal: control.signal });
+                    const text = await response.text();
+                    return { status: response.status, text: text.length <= 512 * 1024 ? text : null };
+                } catch (error) { return { status: 0, readError: error.name === 'AbortError' ? 'ETIMEDOUT' : 'NETWORK' }; }
+                finally { clearTimeout(timer); }
+            }, { url: buildCheckUrl(timezoneOffsetMin), token: accessToken, timeoutMs });
+            if (result.readError) throw Object.assign(new Error('页面订阅读取未完成'), {
+                networkCode: observed || (result.readError === 'ETIMEDOUT' ? 'ETIMEDOUT' : 'UNKNOWN')
+            });
+            if (result.text === null) throw Object.assign(new Error('订阅响应超过限制'), { code: 'RESPONSE_TOO_LARGE' });
+            return { status: result.status, data: normalizeResponseBody(result.text), via: 'browser-page' };
+        } finally { page.off?.('requestfailed', failed); }
+    }, budget, 'browser-page');
+}
+async function prepareQueryPage(context, budget) {
+    const page = await boundedQuery(() => context.newPage(), budget, 'page_create');
+    const verification = require('./human-verification');
+    try {
+        await verification.prepareVerificationPage?.(page, { signal: budget.signal });
+        return page;
+    } catch (error) { await page.close().catch(() => {}); throw error; }
+}
+async function closeQueryPage(page) {
+    if (!page) return;
+    await Promise.resolve(require('./human-verification').disposeVerificationPage?.(page)).catch(() => {});
+    await page.close().catch(() => {});
+}
 async function fetchAccountCheck(accessToken, options = {}) {
+    const budget = queryBudget(options);
+    let cleanup = async () => {}, ownedContext, session, ownedPage, requestContext;
     try {
-        const result = await fetchAccountCheckWithPlaywright(accessToken, options.timezoneOffsetMin, options.browserContext);
-        if (result.status === 403 && !options.browserContext && options.sessionRaw && options.allowBrowserFallback === true)
-            return await fetchAccountCheckInBrowser(accessToken, options.timezoneOffsetMin, options.sessionRaw);
-        return result;
+        let page = options.page;
+        const context = options.browserContext || page?.context?.();
+        if (context && !officialPage(page)) {
+            page = context.pages?.().find(officialPage);
+            if (!page) {
+                ownedPage = page = await prepareQueryPage(context, budget);
+                await boundedQuery(() => page.goto('https://chatgpt.com/', {
+                    waitUntil: 'domcontentloaded', timeout: Math.min(20000, checkBudget(budget))
+                }), budget, 'navigation');
+            }
+        }
+        if (!page && options.sessionRaw && options.allowBrowserFallback === true) {
+            const prepared = await boundedQuery(() => preparePlaywrightProxy(String(process.env.PROXY || '').trim()), budget, 'proxy_prepare');
+            cleanup = prepared.cleanup;
+            const runtime = require('./browser-runtime');
+            session = await boundedQuery(() => runtime.connectTaskBrowser({ proxyConfig: prepared.proxyConfig,
+                headful: process.env.HEADFUL === '1' }), budget, 'browser_connect');
+            ownedContext = await boundedQuery(() => session.browser.newContext({ proxy: prepared.proxyConfig || undefined,
+                userAgent: session.realUserAgent, locale: 'en-US' }), budget, 'context_create');
+            ownedPage = page = await prepareQueryPage(ownedContext, budget);
+            const auth = require('./session-auth');
+            const installed = await boundedQuery(() => auth.installChatGptSession(ownedContext, options.sessionRaw), budget, 'session_install');
+            const login = await boundedQuery(() => auth.bootstrapChatGptSession(page, options.sessionRaw, {
+                sessionData: installed?.sessionData || installed, cookieVerified: installed?.cookieVerified === true,
+                deadlineAt: budget.deadlineAt, signal: budget.signal
+            }), budget, 'session_bootstrap');
+            accessToken = login.session?.accessToken || accessToken;
+        }
+        if (page) {
+            const verification = require('./human-verification');
+            if (await boundedQuery(() => verification.isBlockingHumanVerificationVisible(page), budget, 'verification_probe')) {
+                const result = await boundedQuery(() => verification.clearHumanVerification(page, {
+                    phase: 'subscription-query', deadlineAt: budget.deadlineAt, signal: budget.signal,
+                    maxWaitMs: checkBudget(budget), useVisualSolver: true, requireCheckoutReady: false
+                }), budget, 'verification');
+                if (!result.cleared) throw Object.assign(new Error('订阅查询验证未完成'), {
+                    code: result.code || 'HUMAN_VERIFICATION_REQUIRED', diagnostics: result.diagnostics
+                });
+            }
+            const result = await readCheckInPage(page, accessToken, options.timezoneOffsetMin, budget);
+            return { ...result, diagnostics: budget.diagnostics };
+        }
+        // Token-only callers retain the explicit task-proxy transport; browser callers never
+        // silently leave their Chromium network stack or change the resolved proxy.
+        const prepared = await boundedQuery(() => preparePlaywrightProxy(String(process.env.PROXY || '').trim()), budget, 'proxy_prepare');
+        cleanup = prepared.cleanup;
+        requestContext = await boundedQuery(() => playwrightRequest.newContext({ userAgent: USER_AGENT,
+            proxy: prepared.proxyConfig || undefined, extraHTTPHeaders: buildCheckHeaders(accessToken) }), budget, 'request_create');
+        const result = await queryGet(async (timeout) => {
+            const response = await requestContext.get(buildCheckUrl(options.timezoneOffsetMin), { timeout,
+                headers: { Authorization: `Bearer ${accessToken}`, Accept: 'application/json' } });
+            let data;
+            try { data = await response.json(); } catch (_) { data = await response.text().catch(() => ''); }
+            return { status: response.status(), data, via: 'proxy-request' };
+        }, budget, 'proxy-request');
+        return { ...result, diagnostics: budget.diagnostics };
     } catch (error) {
         if (error.code === 'LEASE_LOST') throw error;
-        const code = error.code === 'HUMAN_VERIFICATION_REQUIRED' ? 'HUMAN_VERIFICATION_REQUIRED'
-            : /timeout|timed out/i.test(error.message) ? 'NETWORK_TIMEOUT'
-                : /proxy|tunnel|socks|ECONNREFUSED/i.test(error.message) ? 'PROXY_UNAVAILABLE'
-                    : /Session|尚未登录|未登录/.test(error.message) ? 'SESSION_INVALID' : 'NETWORK_UNAVAILABLE';
-        return { status: 0, errorCode: code, data: null };
+        return { status: 0, errorCode: queryErrorCode(error), data: null, diagnostics: budget.diagnostics,
+            verificationDiagnostics: safeVerificationDiagnostics(error.diagnostics),
+            failure: { phase: ['account_check', 'session_install', 'session_bootstrap', 'navigation', 'proxy_prepare',
+                'browser_connect', 'context_create', 'page_create', 'request_create', 'verification', 'verification_probe'].includes(error.phase)
+                ? error.phase : 'query', networkCode: transportCode(error) } };
+    } finally {
+        await closeQueryPage(ownedPage);
+        if (ownedContext) await ownedContext.close().catch(() => {});
+        if (session) await require('./browser-runtime').closeTaskBrowser(session, session.browser);
+        if (requestContext) await requestContext.dispose().catch(() => {});
+        await cleanup().catch(() => {});
     }
 }
 
@@ -622,12 +762,9 @@ function mapCheckError(status, data) {
         return { statusCode: 502, error: `无法连接 OpenAI 订阅接口：${String(body || 'network error')}` };
     }
 
-    const detail = typeof body === 'string'
-        ? body.slice(0, 200)
-        : JSON.stringify(body || {}).slice(0, 200);
     return {
         statusCode: status || 502,
-        error: `OpenAI 返回异常 (${status})${detail ? `：${detail}` : ''}`
+        error: `官网订阅接口返回异常 (${status})，本次未取得有效订阅结果`
     };
 }
 
@@ -665,22 +802,27 @@ async function querySubscriptionBySession(accessToken, options = {}) {
         };
         const statuses = { NETWORK_TIMEOUT: 504, SESSION_INVALID: 401, HUMAN_VERIFICATION_REQUIRED: 403 };
         return { ok: false, errorCode: response.errorCode,
-            statusCode: statuses[response.errorCode] || 502,
-            error: messages[response.errorCode] };
+            statusCode: statuses[response.errorCode] || (/TIMEOUT$/.test(response.errorCode) ? 504
+                : /^(?:VERIFICATION_|VLM_)/.test(response.errorCode) ? 503 : 502),
+            error: messages[response.errorCode] || '官网验证未完成，本次订阅查询未取得有效结果', diagnostics: response.diagnostics,
+            verificationDiagnostics: response.verificationDiagnostics, failure: response.failure };
     }
     const body = normalizeResponseBody(response.data);
     if (response.status !== 200) {
         const mapped = mapCheckError(response.status, body);
-        return { ok: false, ...mapped };
+        return { ok: false, ...mapped, diagnostics: response.diagnostics };
     }
 
-    if (!body || typeof body !== 'object') {
-        return { ok: false, statusCode: 502, error: 'OpenAI 返回数据格式异常' };
+    if (!body || typeof body !== 'object' || Array.isArray(body) ||
+        typeof body.accounts?.default?.account?.account_id !== 'string' ||
+        typeof body.accounts?.default?.entitlement?.has_active_subscription !== 'boolean') {
+        return { ok: false, statusCode: 502, errorCode: 'UPSTREAM_INVALID_RESPONSE',
+            error: '官网订阅响应缺少有效账号或订阅状态', diagnostics: response.diagnostics };
     }
 
     return {
         ok: true,
-        data: parseAccountCheckResponse(body, profile)
+        data: parseAccountCheckResponse(body, profile), diagnostics: response.diagnostics
     };
 }
 

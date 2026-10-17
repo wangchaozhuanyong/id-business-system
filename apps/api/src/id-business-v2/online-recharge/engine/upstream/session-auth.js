@@ -410,7 +410,7 @@ async function verifyRealSessionApi(context) {
         });
         const status = response?.status() || 0;
         const headers = response?.headers?.() || {};
-        const headerText = Object.keys(headers).map((k) => `${k}:${headers[k]}`).join('\n').toLowerCase();
+        const challengeHeader = String(headers['cf-mitigated'] || '').toLowerCase() === 'challenge';
         const bodyText = await probe.evaluate(() => document.body?.innerText || '').catch(() => '');
         let data = null;
         try {
@@ -421,25 +421,27 @@ async function verifyRealSessionApi(context) {
         if (data?.accessToken || data?.user?.email || data?.user?.id) {
             return { ok: true, data, status };
         }
-        const isCloudflareChallenge = headerText.includes('cf-mitigated: challenge')
+        const isCloudflareChallenge = challengeHeader
             || /just a moment|verify you are human/i.test(bodyText);
         if (isCloudflareChallenge) {
             return {
                 ok: false,
                 status,
                 challenge: true,
-                error: `Cloudflare 人机验证拦截（HTTP ${status}，cf-mitigated: challenge）`
-                    + '。当前出口/代理 IP 被 ChatGPT 风控，请更换干净的住宅代理后重试'
+                code: 'UPSTREAM_BLOCKED',
+                error: `官网要求验证（HTTP ${status}），尚未确认登录状态`
             };
         }
-        const snippet = String(bodyText || '').replace(/\s+/g, ' ').slice(0, 120);
         return {
             ok: false,
             status,
-            error: `session-token 未被 ChatGPT 接受（/api/auth/session 无用户信息，HTTP ${status}${snippet ? `，响应: ${snippet}` : ''}）`
+            code: status === 401 || (status === 200 && data && typeof data === 'object')
+                ? 'SESSION_INVALID' : status === 403 ? 'UPSTREAM_FORBIDDEN' : 'NETWORK_UNAVAILABLE',
+            error: `登录状态尚未核实（HTTP ${status}）`
         };
     } catch (err) {
-        return { ok: false, error: `无法验证 session Cookie: ${err.message}` };
+        return { ok: false, code: err.name === 'TimeoutError' ? 'NETWORK_TIMEOUT' : 'NETWORK_UNAVAILABLE',
+            error: err.name === 'TimeoutError' ? '登录状态查询超时' : '登录状态查询网络失败' };
     } finally {
         await probe.close().catch(() => {});
     }
@@ -589,10 +591,10 @@ async function installChatGptSession(context, sessionRaw) {
             cookieVerified = true;
             const email = apiCheck.data?.user?.email || '';
             console.log(`[Session] Cookie 校验通过${email ? `: ${email}` : ''}`);
-        } else if (apiCheck.error && !/cloudflare|challenge|captcha/i.test(apiCheck.error)) {
-            throw new Error(
+        } else if (apiCheck.code === 'SESSION_INVALID') {
+            throw Object.assign(new Error(
                 `${apiCheck.error}。请确认 Cookie 未过期，并尽量粘贴浏览器全部 chatgpt.com Cookies（cookies[] 或 cookieHeader）`
-            );
+            ), { code: 'SESSION_INVALID' });
         } else {
             console.warn(`[Session] Cookie 在线校验跳过: ${apiCheck.error || 'unknown'}`);
         }
@@ -677,6 +679,14 @@ function setupChatGptSessionAuth(context, accessToken) {
  * 打开 ChatGPT 并验证 Session 在浏览器 UI 中生效
  */
 async function bootstrapChatGptSession(page, sessionRaw, options = {}) {
+    const signal = options.signal;
+    const deadlineAt = Number.isFinite(options.deadlineAt) ? options.deadlineAt : performance.now() + 180000;
+    const remaining = (cap) => {
+        signal?.throwIfAborted();
+        const value = Math.min(cap, Math.floor(deadlineAt - performance.now()));
+        if (value <= 0) throw Object.assign(new Error('登录核验超时'), { code: 'NETWORK_TIMEOUT' });
+        return value;
+    };
     const resolved = resolveSessionInput(sessionRaw);
     if (!resolved?.accessToken) {
         throw new Error('缺少 Session：请粘贴完整 Session JSON');
@@ -694,32 +704,38 @@ async function bootstrapChatGptSession(page, sessionRaw, options = {}) {
 
     await page.goto(`${CHATGPT_ORIGIN}/`, {
         waitUntil: 'domcontentloaded',
-        timeout: 90000
+        timeout: remaining(90000)
     });
-    await page.waitForTimeout(2500);
+    await page.waitForTimeout(remaining(2500));
 
     const { clearHumanVerification, isBlockingHumanVerificationVisible } = require('./human-verification');
     if (options.manualVerification === true && await isBlockingHumanVerificationVisible(page))
         throw Object.assign(new Error('官网需要人工验证'), { code: 'HUMAN_VERIFICATION_REQUIRED' });
     const captchaResult = options.manualVerification === true ? { cleared: true } : await clearHumanVerification(page, {
         phase: 'session-bootstrap',
-        maxWaitMs: Number(process.env.CAPTCHA_CLEAR_TIMEOUT_MS || 180000),
+        maxWaitMs: remaining(Number(process.env.CAPTCHA_CLEAR_TIMEOUT_MS || 180000)),
+        deadlineAt,
+        signal,
         maxBypassRounds: 6
     });
     if (!captchaResult.cleared) {
-        throw new Error('Cloudflare 人机验证未能通过，请换住宅代理 IP 或 HEADFUL=1 人工勾选');
+        throw Object.assign(new Error('官网验证未通过，登录核验未完成'), {
+            code: captchaResult.code || 'HUMAN_VERIFICATION_REQUIRED',
+            diagnostics: captchaResult.diagnostics
+        });
     }
 
     if (await hasVisibleLoginChrome(page)) {
-        await page.reload({ waitUntil: 'domcontentloaded', timeout: 90000 }).catch(() => {});
-        await page.waitForTimeout(2000);
+        await page.reload({ waitUntil: 'domcontentloaded', timeout: remaining(90000) }).catch(() => {});
+        await page.waitForTimeout(remaining(2000));
     }
 
     await assertChatGptLoggedIn(page, '首页');
 
     const cookieVerified = options.cookieVerified === true;
-    const uiReady = await waitForLoggedInChatUi(page, cookieVerified ? 12000 : 8000);
+    const uiReady = await waitForLoggedInChatUi(page, remaining(cookieVerified ? 12000 : 8000));
     const apiReady = cookieVerified ? await hasLoggedInSessionApi(page) : false;
+    remaining(1);
 
     if (await hasVisibleLoginChrome(page)) {
         throw new Error(buildSessionNotLoggedInError('ChatGPT 首页'));

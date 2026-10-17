@@ -36,19 +36,15 @@ function isPaymentDeclined(errorMsg) {
  * 解析应写入账单的实际扣款金额（优先免税后应付）
  */
 async function resolveBilledAmountForRecord(page, paymentResult, preTaxAmount, currency) {
-    if (paymentResult?.dueAmount > 0) {
+    const evidence = paymentResult?.paymentEvidence;
+    if (evidence?.verified === true && /^\d+(?:\.\d{1,4})?$/.test(String(evidence.amount)) && /^[A-Z]{3}$/.test(evidence.currency)) {
         return {
-            amount: paymentResult.dueAmount,
-            currency: paymentResult.dueCurrency || currency,
+            amount: evidence.amount,
+            currency: evidence.currency,
+            amountSource: 'checkout'
         };
     }
-    try {
-        const due = await readCheckoutDueAmount(page);
-        if (due?.amount > 0) {
-            return { amount: due.amount, currency: due.currency || currency };
-        }
-    } catch (_) { /* ignore */ }
-    // The tax estimate remains a UI validation aid only, never a billing fact.
+    // A quote or a post-submit page amount is not an actual payment receipt.
     return { amount: null, currency, amountSource: 'unknown' };
 }
 
@@ -169,18 +165,13 @@ async function executePaymentWithRetry(page, options) {
                 require('../rpc.cjs').wasSubmitted()
             )) {
                 try {
-                    for (let queryAttempt = 0; queryAttempt < 3; queryAttempt += 1) {
-                        confirmation = await confirmPayment();
-                        if (confirmation?.verified || (confirmation?.querySucceeded && confirmation.expectedAccountId && confirmation.accountId !== confirmation.expectedAccountId)) break;
-                        if (queryAttempt < 2 && typeof page.waitForTimeout === 'function') await page.waitForTimeout(1500);
-                    }
+                    confirmation = await confirmPayment({ deadlineAt: performance.now() + 45000 });
                 } catch (error) {
                     if (error.code === 'LEASE_LOST') throw error;
-                    confirmation = { verified: false, querySucceeded: false };
+                    confirmation = { verified: false, querySucceeded: false, queryErrorCode: error.code || 'NETWORK_UNAVAILABLE' };
                 }
                 if (confirmation?.verified) {
-                    const exactZeroUpgrade = operation === 'upgrade' && isZeroAmount(paymentResult.dueAmount);
-                    const actualPaymentProven = !preflight || paymentResult.paymentEvidence?.verified === true || (exactZeroUpgrade && paymentResult.paymentEvidence?.quoteVerified === true);
+                    const actualPaymentProven = !preflight || paymentResult.paymentEvidence?.verified === true;
                     paymentResult = { ...paymentResult, success: actualPaymentProven, resultUnknown: !actualPaymentProven, confirmation, subscriptionChangedVerified: operation === 'upgrade' };
                 } else if (paymentResult.success || (confirmation?.querySucceeded &&
                     confirmation.expectedAccountId && confirmation.accountId !== confirmation.expectedAccountId)) {
@@ -246,7 +237,10 @@ async function executePaymentWithRetry(page, options) {
             }
 
             if (paymentResult.resultUnknown) {
-                if (preflight) return { ...paymentResult, success: false, confirmedPaid: false, cardLast4, confirmation, error: confirmation?.verified ? '套餐已变更，实际扣款凭证仍待核对，禁止重复付款' : '原单结果仍待核对，禁止重复付款' };
+                if (preflight) return { ...paymentResult, success: false, confirmedPaid: paymentResult.paymentEvidence?.verified === true, cardLast4, confirmation,
+                    error: paymentResult.paymentEvidence?.verified === true ? '付款已确认，等待准确目标套餐生效或完成入账，禁止重复付款'
+                        : confirmation?.querySucceeded === false ? '订阅查询未成功，原单付款结果待核对，禁止重复付款'
+                            : confirmation?.verified ? '套餐已变更，实际扣款凭证仍待核对，禁止重复付款' : '原单结果仍待核对，禁止重复付款' };
                 throw new ResultUnknownError();
             }
             lastError = paymentResult.error || '支付失败';
@@ -316,10 +310,11 @@ async function executePaymentWithRetry(page, options) {
                 error_message: lastError
             });
 
-            progress('支付自动化失败，需人工操作');
+            progress('本次自动充值未完成');
             return {
                 success: false,
-                error: `需要人工操作：${lastError}`,
+                error: lastError,
+                ...(paymentResult.errorCode ? { errorCode: paymentResult.errorCode } : {}),
                 ...(paymentResult.formDiagnostics ? { formDiagnostics: paymentResult.formDiagnostics } : {}),
                 cardLast4,
                 manualIntervention: true,

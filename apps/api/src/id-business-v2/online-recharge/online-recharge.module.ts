@@ -33,6 +33,7 @@ import { OnlineRechargeLoginNotificationBridge } from './login-notification-brid
 import { RechargeModule } from '../auto-recharge/public-api';
 import { OnlineRechargeOrderSyncService } from './order-sync.service';
 import { OnlineRechargeOrderSyncRepository } from './persistence/order-sync.repository';
+import { OnlineRechargeReconciliationService } from './reconciliation.service';
 
 @Module({
   imports: [
@@ -55,6 +56,7 @@ import { OnlineRechargeOrderSyncRepository } from './persistence/order-sync.repo
     OnlineRechargeRepository,
     OnlineRechargeWorkerRepository,
     OnlineRechargeOrderSyncService,
+    OnlineRechargeReconciliationService,
     OnlineRechargeOrderSyncRepository,
     OnlineRechargeAdminService,
     OnlineRechargeAssetsService,

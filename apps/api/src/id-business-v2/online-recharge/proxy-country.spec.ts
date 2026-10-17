@@ -74,6 +74,18 @@ function rpcFixture(
 }
 
 describe('线上代充代理国家限制', () => {
+  it('新本地充值的恢复版本由服务端固定，调用方不能移除或放宽', async () => {
+    for (const checkoutRecoveryVersion of [undefined, null, 0, false, 99]) {
+      const f = taskFixture();
+      await f.tasks.start({ session, checkoutRecoveryVersion }, operator);
+      expect(f.tx.onlineRechargeTask.create).toHaveBeenCalledWith({
+        data: expect.objectContaining({
+          provider: 'local',
+          payload: expect.objectContaining({ checkoutRecoveryVersion: 1 })
+        })
+      });
+    }
+  });
   it('国家必须明确选择且只接受两位国家代码', () => {
     expect(onlineProxyCountry(' cl ')).toBe('CL');
     for (const value of [undefined, null, '', 'CL,PH', 'CHL', 1])

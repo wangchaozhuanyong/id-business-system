@@ -75,7 +75,7 @@ import { http } from '@/api/client';
 import { copyOnlineText, onlineApi } from './api';
 import { useAuthStore } from '@/stores/auth';
 import { canReadOnlineOrders, canManageOnlineOrders } from './orderPermissions';
-import { onlineChangeEntries, onlineLabel } from './labels';
+import { onlineChangeEntries, onlineFailureLabel, onlineLabel } from './labels';
 import OnlineTaskProgress from './OnlineTaskProgress.vue';
 import { useOnlineTask } from './useOnlineTask';
 import type { PublicTask } from './contracts';
@@ -98,6 +98,17 @@ const labels: Record<string, string> = {
   operation: '操作类型',
   paymentStarted: '已开始付款',
   confirmedPaid: '已确认付款',
+  querySucceeded: '订阅查询成功',
+  queryError: '订阅查询失败原因',
+  queryErrorCode: '订阅查询结果',
+  errorCode: '失败原因',
+  paymentVerified: '付款证据已核实',
+  paymentEvidence: '原单付款证据',
+  confirmation: '账号与套餐核验',
+  verified: '核验通过',
+  observedPlan: '查询到的套餐',
+  tierVerified: '套餐档位已核实',
+  reconciliationReason: '原单核对结果',
   email: '账号',
   createdAt: '创建时间',
   updatedAt: '更新时间',
@@ -278,11 +289,17 @@ const entries = computed(() => {
         !(key === 'result' && ['queued', 'running'].includes(liveTask.value?.status ?? ''))
     )
     .map(([key, value]) => ({
-      label: labels[key],
+      label: resultLabel(key, value),
       value: displayValue(key, value)
     }));
 });
 function displayValue(key: string, value: unknown): string {
+  if (key === 'paymentEvidence' && record(value).verified !== true)
+    return '尚未取得绑定原单的付款证据';
+  if (key === 'code' && /^(VLM_|VERIFICATION_)/.test(String(value)))
+    return onlineFailureLabel(value);
+  if (['errorCode', 'queryErrorCode', 'reconciliationReason'].includes(key))
+    return onlineFailureLabel(value);
   if (key === 'planRegion' && value && typeof value === 'object') {
     const route = value as Record<string, unknown>;
     return `代理国家：${proxyCountryLabel(String(route.proxyCountryCode ?? ''))}\n支付地区：${proxyCountryLabel(String(route.paymentRegion ?? ''))}\n预期结算币种：${String(route.expectedCurrency ?? '—')}\n规则版本：${String(route.configVersion ?? '—')}`;
@@ -305,17 +322,25 @@ function displayValue(key: string, value: unknown): string {
     'renewalStatus',
     'autoRenew',
     'paymentStarted',
-    'confirmedPaid'
+    'confirmedPaid',
+    'querySucceeded',
+    'paymentVerified',
+    'verified',
+    'observedPlan',
+    'tierVerified'
   ].includes(key)
     ? onlineLabel(value)
     : String(value ?? '—');
+}
+function resultLabel(key: string, value: unknown): string {
+  return key === 'code' && /^(VLM_|VERIFICATION_)/.test(String(value)) ? '检测结果' : labels[key];
 }
 function summarize(value: unknown): string {
   if (Array.isArray(value)) return value.map(summarize).join('\n\n');
   if (value && typeof value === 'object')
     return Object.entries(value as Record<string, unknown>)
       .filter(([key]) => labels[key] && key !== 'subscriptionChange')
-      .map(([key, part]) => `${labels[key]}：${displayValue(key, part)}`)
+      .map(([key, part]) => `${resultLabel(key, part)}：${displayValue(key, part)}`)
       .join('\n');
   return onlineLabel(value);
 }

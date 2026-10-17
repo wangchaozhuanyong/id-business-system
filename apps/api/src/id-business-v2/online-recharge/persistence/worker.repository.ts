@@ -32,6 +32,9 @@ import {
 import { safeProxyTestTaskResult } from '../../proxy-pool/public-api';
 import { OnlineRechargeOrderSyncService } from '../order-sync.service';
 import { taskPlanRegion } from '../plan-region';
+import { checkoutRecovery } from '../checkout-recovery';
+import { originalRecheckSchedule } from '../reconciliation';
+import { acquireMysqlTransactionLock } from '../../../common/prisma/mysql-transaction-lock';
 import {
   assertSharedCardPlan,
   sharedCardPlan,
@@ -200,6 +203,7 @@ export class OnlineRechargeWorkerRepository {
           task.confirmedPaid ||
           Boolean(task.providerOrderId) ||
           hasRenewalSubmission(task);
+        const expiredPayload = task.payload ? object(task.payload) : {};
         await tx.onlineRechargeTask.update({
           where: { id: task.id },
           data: {
@@ -207,6 +211,17 @@ export class OnlineRechargeWorkerRepository {
             leaseOwner: null,
             leaseId: null,
             leaseExpiresAt: null,
+            ...(uncertain && ['recharge', 'renewal'].includes(task.operation)
+              ? {
+                  payload: {
+                    ...expiredPayload,
+                    reconciliation: originalRecheckSchedule(
+                      expiredPayload.reconciliation,
+                      new Date()
+                    )
+                  } as unknown as Prisma.InputJsonValue
+                }
+              : {}),
             message: uncertain
               ? '执行器离线且存在外部提交，等待核对，禁止自动重放'
               : '执行器离线，尚未提交付款，等待重新领取'
@@ -353,6 +368,17 @@ export class OnlineRechargeWorkerRepository {
         )
           throw new ConflictException('官网应付金额超过本次付款上限或币种不符，未提交付款');
       }
+      if (
+        args.checkoutRecovery !== undefined ||
+        (row.provider === 'local' && payload.checkoutRecoveryVersion === 1)
+      ) {
+        const context = payload.paymentContext as OnlineRechargePaymentContext | undefined;
+        if (!context) throw new ConflictException('缺少原结账单付款上下文，未提交付款');
+        const recovery = checkoutRecovery(args.checkoutRecovery, context);
+        const encrypted = this.encryption.encrypt(JSON.stringify(recovery));
+        if (!encrypted) throw new ConflictException('原结账单恢复资料未保存，未提交付款');
+        payload.checkoutRecoveryEncrypted = encrypted;
+      }
       await tx.onlineRechargeTask.update({
         where: { id: row.id },
         data: {
@@ -365,6 +391,73 @@ export class OnlineRechargeWorkerRepository {
         leaseVersion: row.leaseVersion
       });
       return { ok: true, idempotencyKey: row.codeId ?? row.id };
+    });
+  }
+  async getCheckoutRecovery(rpc: OnlineRechargeWorkerRpc) {
+    return this.withLease(rpc, async (tx, row) => {
+      const payload = row.payload ? object(row.payload) : {};
+      if (row.operation !== 'subscription' || !payload.recheckTaskId)
+        throw new ConflictException('仅原单核对任务可读取结账单恢复资料');
+      const original = await tx.onlineRechargeTask.findUnique({
+        where: { id: id(payload.recheckTaskId) }
+      });
+      if (
+        !original ||
+        original.deletedAt ||
+        original.operation !== 'recharge' ||
+        original.provider !== 'local' ||
+        original.status !== 'awaiting_review' ||
+        !original.paymentStarted ||
+        original.leaseVersion !== payload.sourceVersion ||
+        original.sessionIdentityHash !== row.sessionIdentityHash ||
+        original.plan !== row.plan ||
+        payload.originalOperation !== 'recharge' ||
+        payload.originalProvider !== 'local'
+      )
+        throw new ConflictException('原任务核对资料已变化，禁止读取恢复资料');
+      const originalPayload = original.payload ? object(original.payload) : {};
+      if (typeof originalPayload.checkoutRecoveryEncrypted !== 'string') return null;
+      const context = paymentContext(original);
+      const requestedContext = paymentContext(row);
+      const accountId = sessionAccountId(this.encryption.decrypt(row.sessionEncrypted));
+      if (
+        !context ||
+        !requestedContext ||
+        !accountId ||
+        context.accountId !== accountId ||
+        context.cardId !== original.cardId ||
+        context.cardLast4 !== original.cardLast4 ||
+        ![
+          'kind',
+          'sourcePlan',
+          'targetPlan',
+          'accountId',
+          'cardId',
+          'cardLast4',
+          'currency',
+          'quoteId'
+        ].every(
+          (key) =>
+            context[key as keyof OnlineRechargePaymentContext] ===
+            requestedContext[key as keyof OnlineRechargePaymentContext]
+        ) ||
+        !new Prisma.Decimal(context.amount).equals(requestedContext.amount)
+      )
+        throw new ConflictException('原结账单与当前账号、卡片或报价不一致');
+      let recovery: unknown;
+      try {
+        recovery = JSON.parse(
+          this.encryption.decrypt(originalPayload.checkoutRecoveryEncrypted) || ''
+        );
+      } catch {
+        throw new ConflictException('原结账单恢复资料不可用，保留待核对');
+      }
+      const validated = checkoutRecovery(recovery, context);
+      await this.repository.log(tx, 'worker.checkout_recovery.read', undefined, original.id, {
+        recheckTaskId: row.id,
+        sourceVersion: original.leaseVersion
+      });
+      return validated;
     });
   }
   private async beforeRenewalSubmit(
@@ -430,6 +523,12 @@ export class OnlineRechargeWorkerRepository {
           : args.result
             ? object(args.result)
             : {};
+      const previousResult = row.result ? object(row.result) : {};
+      if (
+        matchesPaymentEvidence(previousResult.paymentEvidence, row) &&
+        result.paymentEvidence === undefined
+      )
+        result.paymentEvidence = previousResult.paymentEvidence;
       if (
         row.operation === 'proxy_test' &&
         (typeof payload.proxyConnectionVersion !== 'string' ||
@@ -490,30 +589,40 @@ export class OnlineRechargeWorkerRepository {
       )
         status = 'awaiting_review';
       if (status === 'awaiting_credentials' && row.paymentStarted) status = 'awaiting_review';
+      if (status === 'awaiting_review' && ['recharge', 'renewal'].includes(row.operation))
+        payload.reconciliation = originalRecheckSchedule(payload.reconciliation, new Date());
       const terminal = status === 'succeeded' || status === 'failed';
       await tx.onlineRechargeTask.update({
         where: { id: row.id },
         data: {
           status: status as OnlineRechargeTask['status'],
-          result: sanitize(result) as Prisma.InputJsonValue,
+          result: sanitize({
+            ...result,
+            ...(matchesPaymentEvidence(previousResult.paymentEvidence, row) &&
+            !matchesPaymentEvidence(result.paymentEvidence, row)
+              ? { paymentEvidence: previousResult.paymentEvidence }
+              : {})
+          }) as Prisma.InputJsonValue,
           payload: payload as Prisma.InputJsonValue,
           confirmedPaid: row.confirmedPaid || paid,
           progress: terminal ? 100 : row.progress,
-          stage: terminal ? 'finished' : status,
+          stage: terminal ? 'finished' : paid && !verified ? 'paid_pending_activation' : status,
           message:
-            row.operation === 'proxy_test'
-              ? String(result.message)
-              : redact(
-                  String(
-                    args.message ??
-                      result.message ??
-                      (status === 'awaiting_review'
-                        ? row.operation === 'renewal'
-                          ? '续费变更结果待核对，禁止自动重试'
-                          : '付款结果待核对，禁止自动重试'
-                        : '任务结束')
-                  )
-                ).slice(0, 12000),
+            paid && !verified
+              ? '付款已确认，等待目标套餐生效，禁止再次付款'
+              : row.operation === 'proxy_test'
+                ? String(result.message)
+                : redact(
+                    String(
+                      args.message ??
+                        result.message ??
+                        (status === 'awaiting_review'
+                          ? row.operation === 'renewal'
+                            ? '续费变更结果待核对，禁止自动重试'
+                            : '付款结果待核对，禁止自动重试'
+                          : '任务结束')
+                    )
+                  ).slice(0, 12000),
           leaseOwner: null,
           leaseId: null,
           leaseExpiresAt: null
@@ -563,6 +672,7 @@ export class OnlineRechargeWorkerRepository {
     verified: boolean,
     definitiveFailure: boolean
   ) {
+    await acquireMysqlTransactionLock(tx, `online-recharge:task:${id(payload.recheckTaskId)}`);
     const original = await tx.onlineRechargeTask.findUnique({
       where: { id: id(payload.recheckTaskId) }
     });
@@ -625,18 +735,18 @@ export class OnlineRechargeWorkerRepository {
     const context = paymentContext(original);
     const evidenceVerified = context
       ? matchesPaymentEvidence(result.paymentEvidence, original)
-      : original.plan !== 'pro_500';
+      : original.provider === 'third_party' && original.plan !== 'pro_500';
     const zeroChange =
       context?.kind === 'upgrade' &&
       new Prisma.Decimal(context.amount).isZero() &&
       evidenceVerified &&
       verified &&
       result.subscriptionChangedVerified === true;
-    const paid =
-      verified &&
+    const paymentProven =
       evidenceVerified &&
       (!context || new Prisma.Decimal(context.amount).greaterThan(0)) &&
       result.confirmedPaid === true;
+    const paid = verified && paymentProven;
     const proof = subscriptionProof(
       result,
       original.plan,
@@ -654,7 +764,38 @@ export class OnlineRechargeWorkerRepository {
           Object.values(ONLINE_RECHARGE_CONFIRMED_PLAN_NAMES).some((names) =>
             names.includes(String(proof.observedPlan).trim().toLowerCase())
           )));
-    if (!paid && !zeroChange && !conclusivelyFailed) return;
+    if (!paid && !zeroChange && !conclusivelyFailed) {
+      const previous = original.result ? object(original.result) : {};
+      const keptEvidence = matchesPaymentEvidence(result.paymentEvidence, original)
+        ? result.paymentEvidence
+        : previous.paymentEvidence;
+      await tx.onlineRechargeTask.update({
+        where: { id: original.id },
+        data: {
+          confirmedPaid: original.confirmedPaid || paymentProven,
+          stage:
+            original.confirmedPaid || paymentProven ? 'paid_pending_activation' : 'awaiting_review',
+          message:
+            original.confirmedPaid || paymentProven
+              ? '付款已确认，等待目标套餐生效，禁止再次付款'
+              : '原单结果仍待核对，禁止再次付款',
+          result: sanitize({
+            ...previous,
+            ...result,
+            ...(keptEvidence ? { paymentEvidence: keptEvidence } : {}),
+            success: false,
+            resultUnknown: true,
+            confirmedPaid: original.confirmedPaid || paymentProven,
+            recheckedByTaskId: recheck.id
+          }) as Prisma.InputJsonValue
+        }
+      });
+      await this.repository.log(tx, 'tasks.recheck.pending', undefined, original.id, {
+        recheckTaskId: recheck.id,
+        confirmedPaid: original.confirmedPaid || paymentProven
+      });
+      return;
+    }
     const status = paid || zeroChange ? 'succeeded' : 'failed';
     await tx.onlineRechargeTask.update({
       where: { id: original.id },
@@ -918,7 +1059,22 @@ export class OnlineRechargeWorkerRepository {
         });
         await tx.onlineRechargeTask.update({
           where: { id: row.id },
-          data: { confirmedPaid: true }
+          data: {
+            confirmedPaid: true,
+            ...(context
+              ? {
+                  result: sanitize({
+                    ...(row.result ? object(row.result) : {}),
+                    confirmedPaid: true,
+                    paymentEvidence: {
+                      ...context,
+                      source: object(args.paymentEvidence).source,
+                      verified: true
+                    }
+                  }) as Prisma.InputJsonValue
+                }
+              : {})
+          }
         });
       } else if (action === 'recordCardDecline') {
         const declineCount = card.declineCount + 1;

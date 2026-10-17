@@ -1,4 +1,5 @@
 'use strict';
+const { performance } = require('node:perf_hooks');
 const { PLAN_NAMES, assertPlan, observedCanonicalPlan, classifyChange } = require('./plans.cjs');
 function providerOrderReceipt(provider) {
   const data = provider.data || {};
@@ -40,6 +41,10 @@ function evaluateSubscription(targetPlan, expectedAccountId, result, options = {
     verified,
     querySucceeded: result?.ok === true,
     ...(result?.ok === false ? { queryErrorCode: result.errorCode, queryError: result.error } : {}),
+    ...(Array.isArray(result?.diagnostics) ? { queryDiagnostics: result.diagnostics } : {}),
+    ...(result?.verificationDiagnostics
+      ? { verificationDiagnostics: result.verificationDiagnostics }
+      : {}),
     hasActiveSubscription: data.hasActiveSubscription === true,
     source: 'subscription',
     accountId: observedAccountId,
@@ -95,6 +100,9 @@ async function confirmSubscription(targetPlan, token, injected = {}) {
   const result = await query(token, {
     timezoneOffsetMin: 480,
     ...(injected.browserContext ? { browserContext: injected.browserContext } : {}),
+    ...(injected.page ? { page: injected.page } : {}),
+    ...(injected.signal ? { signal: injected.signal } : {}),
+    ...(Number.isFinite(injected.deadlineAt) ? { deadlineAt: injected.deadlineAt } : {}),
     ...(injected.sessionRaw ? { sessionRaw: injected.sessionRaw, allowBrowserFallback: true } : {})
   });
   return evaluateSubscription(targetPlan, expectedAccountId, result, {
@@ -172,6 +180,13 @@ async function preflightPayment(targetPlan, token, injected = {}) {
 }
 
 async function recheck(task, cfg, injected = {}) {
+  injected = {
+    ...injected,
+    deadlineAt: Math.min(
+      Number.isFinite(injected.deadlineAt) ? injected.deadlineAt : Infinity,
+      performance.now() + 180000
+    )
+  };
   const payload = task.payload || {};
   const token = require('./upstream/session-auth').extractAccessTokenFromRaw(task.session || '');
   if (payload.originalOperation === 'renewal') {
@@ -193,6 +208,10 @@ async function recheck(task, cfg, injected = {}) {
     try {
       result = await query(token, {
         timezoneOffsetMin: payload.timezoneOffsetMin ?? 480,
+        ...(injected.page ? { page: injected.page } : {}),
+        ...(injected.browserContext ? { browserContext: injected.browserContext } : {}),
+        ...(injected.signal ? { signal: injected.signal } : {}),
+        deadlineAt: injected.deadlineAt,
         ...(injected.sessionRaw
           ? { sessionRaw: injected.sessionRaw, allowBrowserFallback: true }
           : {})
@@ -236,7 +255,45 @@ async function recheck(task, cfg, injected = {}) {
     )
       return { success: false, resultUnknown: true, error: '原单身份不一致' };
   }
-  const confirmation = await confirmSubscription(targetPlan, token, injected);
+  const context = payload.paymentContext;
+  let evidence = payload.originalPaymentEvidence;
+  let recoveryReason = null;
+  let confirmation;
+  if (!provider && context && evidence?.verified !== true) {
+    try {
+      const recovery = injected.getCheckoutRecovery
+        ? await injected.getCheckoutRecovery()
+        : await require('./rpc.cjs').rpc('getCheckoutRecovery');
+      const recovered = await (
+        injected.recoverOriginalPayment || require('./checkout-recovery.cjs').recoverOriginalPayment
+      )(
+        recovery && Object.hasOwn(recovery, 'checkoutRecovery')
+          ? recovery.checkoutRecovery
+          : recovery,
+        {
+          sessionRaw: task.session,
+          paymentContext: context,
+          signal: injected.signal,
+          deadlineAt: injected.deadlineAt,
+          confirmSubscription: (scope) =>
+            confirmSubscription(targetPlan, token, { ...injected, ...scope })
+        }
+      );
+      evidence = recovered.paymentEvidence || evidence;
+      recoveryReason = recovered.reason;
+      confirmation = recovered.confirmation;
+      if (!confirmation && recovered.queryFailure)
+        confirmation = evaluateSubscription(
+          targetPlan,
+          require('./upstream/session-auth').extractProfileFromToken(token).accountId || '',
+          recovered.queryFailure
+        );
+    } catch (error) {
+      if (error.code === 'LEASE_LOST') throw error;
+      recoveryReason = 'ORIGINAL_PAYMENT_READ_FAILED';
+    }
+  }
+  confirmation ||= await confirmSubscription(targetPlan, token, injected);
   if (
     provider &&
     (!require('./outcomes.cjs').isSuccessGptApiStatus(provider.rawStatus) ||
@@ -261,8 +318,6 @@ async function recheck(task, cfg, injected = {}) {
       providerTaskId: payload.providerTaskId || null
     };
   }
-  const context = payload.paymentContext;
-  const evidence = payload.originalPaymentEvidence;
   const decimal = (value) => {
     const match = /^(\d+)(?:\.(\d{1,4}))?$/.exec(String(value ?? ''));
     return match ? BigInt(match[1]) * 10000n + BigInt((match[2] || '').padEnd(4, '0')) : null;
@@ -278,9 +333,28 @@ async function recheck(task, cfg, injected = {}) {
     decimal(context.amount) !== null &&
     decimal(context.amount) === decimal(evidence.amount);
   const verified = confirmation.verified && (!context || evidenceMatches);
+  const reconciliationReason = !confirmation.querySucceeded
+    ? 'SUBSCRIPTION_QUERY_FAILED'
+    : !confirmation.expectedAccountId || confirmation.accountId !== confirmation.expectedAccountId
+      ? 'ACCOUNT_MISMATCH'
+      : !confirmation.verified
+        ? 'TARGET_SUBSCRIPTION_UNVERIFIED'
+        : context && !evidenceMatches
+          ? recoveryReason || 'ORIGINAL_PAYMENT_EVIDENCE_MISSING'
+          : null;
+  const reasonMessages = {
+    SUBSCRIPTION_QUERY_FAILED: confirmation.queryError || '本次订阅查询未成功，原单仍待核对',
+    ACCOUNT_MISMATCH: '原单核对账号不一致，付款结果仍待核对',
+    TARGET_SUBSCRIPTION_UNVERIFIED: '尚未核实原账号目标套餐生效，原单仍待核对',
+    LEGACY_ORIGINAL_IDENTITY_MISSING: '原任务缺少可恢复的原单标识，付款结果仍待核对',
+    CHECKOUT_RECOVERY_INVALID: '原单恢复资料与付款绑定不一致，付款结果仍待核对',
+    ORIGINAL_PAYMENT_READ_TIMEOUT: '原单付款状态读取超时，付款结果仍待核对',
+    ORIGINAL_PAYMENT_READ_FAILED: '原单付款状态读取未成功，付款结果仍待核对',
+    ORIGINAL_PAYMENT_EVIDENCE_MISSING: '目标套餐已核实，但缺少绑定原单的实际付款证据，原单仍待核对'
+  };
   return {
     success: Boolean(verified),
-    confirmedPaid: Boolean(verified && (!context || decimal(context.amount) > 0n)),
+    confirmedPaid: Boolean(context ? evidenceMatches && decimal(context.amount) > 0n : verified),
     ...(context
       ? {
           subscriptionChangedVerified: confirmation.verified,
@@ -288,8 +362,11 @@ async function recheck(task, cfg, injected = {}) {
         }
       : {}),
     resultUnknown: !verified,
-    ...(context && !evidenceMatches
-      ? { error: '已核对订阅，但缺少对应原单的实际付款证据，请继续核对原单' }
+    ...(reconciliationReason
+      ? {
+          reconciliationReason,
+          error: reasonMessages[reconciliationReason] || '原单付款结果仍待核对'
+        }
       : {}),
     confirmation,
     recheckTaskId: payload.recheckTaskId || null,

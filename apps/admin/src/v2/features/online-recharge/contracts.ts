@@ -65,6 +65,14 @@ export interface PublicTask {
   message?: string;
   plan?: OnlinePlan;
   subscriptionChange?: OnlineSubscriptionChange;
+  confirmedPaid?: boolean;
+  paymentStarted?: boolean;
+  reconciliation?: {
+    attempts: number;
+    nextAttemptAt: string | null;
+    stopped: boolean;
+    reasonCode?: string;
+  } | null;
   result?: Record<string, unknown> & { subscriptionChange?: OnlineSubscriptionChange };
   taskToken?: string;
 }

@@ -1,6 +1,6 @@
 import { ConflictException } from '@nestjs/common';
 import { Prisma, type OnlineRechargeTask } from '@prisma/client';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { describe, expect, it, vi } from 'vitest';
 import type { FieldEncryptionService } from '../../../common/crypto/field-encryption.service';
 import type { V2CommandTransaction } from '../../runtime/public-api';
@@ -99,12 +99,16 @@ function fixture(overrides: Partial<OnlineRechargeTask> = {}, original?: OnlineR
   };
   const available = vi.fn(async (ids: string[]) => ids);
   const orderSync = { enqueueInTransaction: vi.fn(async () => undefined) };
+  const encryption = {
+    decrypt: vi.fn<(value?: string | null) => string>(() => syntheticSession),
+    encrypt: vi.fn<(value: string) => string>(() => 'synthetic-encrypted-recovery')
+  };
   const worker = new OnlineRechargeWorkerRepository(
     repository as unknown as OnlineRechargeRepository,
     {
       cardPolicy: async () => ({ maxSubscriptionCount: 2, maxDeclineCount: 3 })
     } as OnlineRechargeSettingsService,
-    { decrypt: () => syntheticSession } as unknown as FieldEncryptionService,
+    encryption as unknown as FieldEncryptionService,
     { available } as unknown as OnlineRechargeEphemeralCredentials,
     orderSync as unknown as OnlineRechargeOrderSyncService
   );
@@ -116,8 +120,168 @@ function fixture(overrides: Partial<OnlineRechargeTask> = {}, original?: OnlineR
     leaseVersion: row.leaseVersion,
     args: { stage: 'renewal_update', renewalAction: 'disable', ...args }
   });
-  return { row, tx, repository, worker, rpc, available, orderSync };
+  return { row, tx, repository, worker, rpc, available, orderSync, encryption };
 }
+
+describe('原结账单的受保护恢复资料', () => {
+  function paymentFixture() {
+    const cardId = randomUUID(),
+      checkoutId = 'oaics_synthetic_original';
+    const context = {
+      kind: 'initial',
+      sourcePlan: 'free',
+      targetPlan: 'pro_20x',
+      accountId,
+      cardId,
+      cardLast4: '4242',
+      amount: '9990',
+      currency: 'PHP',
+      quoteId: `quote:${createHash('sha256').update(checkoutId).digest('hex').slice(0, 32)}`
+    };
+    const recovery = {
+      ...context,
+      version: 1,
+      checkoutId,
+      processorEntity: 'openai',
+      checkoutUrl: `https://chatgpt.com/checkout/openai/${checkoutId}`
+    };
+    const f = fixture({
+      operation: 'recharge',
+      plan: 'pro_20x',
+      cardId,
+      cardLast4: '4242',
+      payload: { checkoutRecoveryVersion: 1, paymentLimit: { currency: 'PHP', maxAmount: '9990' } }
+    });
+    const submit = (changes: Record<string, unknown> = {}) =>
+      f.rpc({ stage: 'payment', paymentContext: context, checkoutRecovery: recovery, ...changes });
+    return { ...f, context, recovery, submit };
+  }
+
+  it('新任务必须在付款开始标记的同一次更新中加密保存原单，审计没有恢复 URL', async () => {
+    const f = paymentFixture();
+    await f.worker.beforeSubmit(f.submit());
+    expect(f.encryption.encrypt).toHaveBeenCalledWith(JSON.stringify(f.recovery));
+    expect(f.tx.onlineRechargeTask.update).toHaveBeenCalledTimes(1);
+    expect(f.tx.onlineRechargeTask.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          paymentStarted: true,
+          payload: expect.objectContaining({
+            checkoutRecoveryEncrypted: 'synthetic-encrypted-recovery',
+            paymentContext: f.context
+          })
+        })
+      })
+    );
+    expect(JSON.stringify(f.repository.log.mock.calls)).not.toContain(f.recovery.checkoutUrl);
+  });
+  it('恢复资料缺失、账号或报价错绑、加密失败及超额时，均不写付款开始标记', async () => {
+    for (const change of [
+      { checkoutRecovery: undefined },
+      { checkoutRecovery: { accountId: randomUUID() } },
+      { checkoutRecovery: { amount: '9991' } },
+      { paymentContext: { amount: '9990.01' } },
+      { encryptFails: true }
+    ]) {
+      const f = paymentFixture();
+      const changes: Record<string, unknown> = {};
+      if ('checkoutRecovery' in change)
+        changes.checkoutRecovery =
+          change.checkoutRecovery === undefined
+            ? undefined
+            : { ...f.recovery, ...change.checkoutRecovery };
+      if ('paymentContext' in change)
+        changes.paymentContext = { ...f.context, ...change.paymentContext };
+      if ('encryptFails' in change)
+        f.encryption.encrypt.mockImplementation(() => {
+          throw new Error('fixture encryption unavailable');
+        });
+      await expect(f.worker.beforeSubmit(f.submit(changes))).rejects.toThrow();
+      expect(f.row.paymentStarted).toBe(false);
+      expect(f.tx.onlineRechargeTask.update).not.toHaveBeenCalled();
+    }
+  });
+  function recheckFixture() {
+    const original = paymentFixture();
+    Object.assign(original.row, {
+      status: 'awaiting_review',
+      paymentStarted: true,
+      leaseVersion: 2,
+      payload: {
+        checkoutRecoveryVersion: 1,
+        paymentContext: original.context,
+        checkoutRecoveryEncrypted: 'synthetic-encrypted-recovery'
+      }
+    });
+    const f = fixture(
+      {
+        operation: 'subscription',
+        plan: 'pro_20x',
+        payload: {
+          recheckTaskId: original.row.id,
+          sourceVersion: 2,
+          originalOperation: 'recharge',
+          originalProvider: 'local',
+          paymentContext: original.context
+        }
+      },
+      original.row
+    );
+    f.encryption.decrypt.mockImplementation((value) =>
+      value === 'synthetic-encrypted-recovery'
+        ? JSON.stringify(original.recovery)
+        : syntheticSession
+    );
+    return { ...f, original };
+  }
+  it('仅有效租约且绑定原任务版本、账号、卡及报价的核对任务可解密', async () => {
+    const f = recheckFixture();
+    expect(await f.worker.getCheckoutRecovery(f.rpc())).toEqual(f.original.recovery);
+    expect(f.repository.log).toHaveBeenCalledWith(
+      f.tx,
+      'worker.checkout_recovery.read',
+      undefined,
+      f.original.row.id,
+      { recheckTaskId: f.row.id, sourceVersion: 2 }
+    );
+    expect(JSON.stringify(f.repository.log.mock.calls)).not.toContain(
+      f.original.recovery.checkoutUrl
+    );
+    for (const mutate of [
+      (item: ReturnType<typeof recheckFixture>) => {
+        item.row.operation = 'recharge';
+      },
+      (item: ReturnType<typeof recheckFixture>) => {
+        item.row.leaseExpiresAt = new Date(0);
+      },
+      (item: ReturnType<typeof recheckFixture>) => {
+        item.original.row.leaseVersion = 3;
+      },
+      (item: ReturnType<typeof recheckFixture>) => {
+        item.original.row.cardId = randomUUID();
+      },
+      (item: ReturnType<typeof recheckFixture>) => {
+        item.row.sessionIdentityHash = 'different';
+      },
+      (item: ReturnType<typeof recheckFixture>) => {
+        (item.row.payload as Record<string, unknown>).paymentContext = {
+          ...item.original.context,
+          amount: '9989'
+        };
+      }
+    ]) {
+      const item = recheckFixture();
+      mutate(item);
+      await expect(item.worker.getCheckoutRecovery(item.rpc())).rejects.toThrow();
+    }
+  });
+  it('旧单缺少原始来源只返回空资料，不补造原单，也不接受参数中的其他原任务编号', async () => {
+    const f = recheckFixture();
+    delete (f.original.row.payload as Record<string, unknown>).checkoutRecoveryEncrypted;
+    expect(await f.worker.getCheckoutRecovery(f.rpc({ recheckTaskId: randomUUID() }))).toBeNull();
+    expect(f.encryption.encrypt).not.toHaveBeenCalled();
+  });
+});
 
 describe('续费提交与付款提交隔离', () => {
   for (const action of ['enable', 'disable']) {
@@ -347,11 +511,23 @@ describe('续费原单核对与付款核对隔离', () => {
     }
   });
 
-  it('普通充值核对仍接受同账号精确套餐付款证据', async () => {
+  it('普通充值核对仍接受同账号精确套餐及原单付款证据', async () => {
+    const context = {
+      kind: 'initial',
+      sourcePlan: 'free',
+      targetPlan: 'plus',
+      accountId,
+      cardId: randomUUID(),
+      cardLast4: '4242',
+      amount: '20',
+      currency: 'USD',
+      quoteId: 'synthetic-original-quote'
+    };
     const f = recheckFixture(
-      { operation: 'recharge', payload: {}, paymentStarted: true },
+      { operation: 'recharge', payload: { paymentContext: context }, paymentStarted: true },
       {
-        originalOperation: 'recharge'
+        originalOperation: 'recharge',
+        paymentContext: context
       }
     );
     await f.worker.finish(
@@ -360,6 +536,7 @@ describe('续费原单核对与付款核对隔离', () => {
         result: {
           success: true,
           confirmedPaid: true,
+          paymentEvidence: { ...context, source: 'checkout', verified: true },
           confirmation: {
             source: 'subscription',
             querySucceeded: true,
@@ -704,6 +881,170 @@ describe('准确升级与实际付款卡、报价的持久证据', () => {
         });
       }
     }
+  });
+
+  it('计卡事务保存付款证据，进程重启后只读核对只补账单和订单，不再次计卡', async () => {
+    const original = upgradeFixture();
+    await original.worker.beforeSubmit(original.submit());
+    original.row.result = { diagnostic: 'preserved' };
+    await original.worker.cardAction(
+      original.rpc({
+        cardId: original.context.cardId,
+        paymentEvidence: { ...original.evidence, checkoutUrl: 'https://example.invalid/private' }
+      }),
+      'recordCardUsage'
+    );
+    expect(original.row.result).toMatchObject({
+      diagnostic: 'preserved',
+      confirmedPaid: true,
+      paymentEvidence: original.evidence
+    });
+    expect(original.row.result).not.toHaveProperty('paymentEvidence.checkoutUrl');
+    expect(original.tx.onlineRechargeTask.update).toHaveBeenLastCalledWith({
+      where: { id: original.row.id },
+      data: {
+        confirmedPaid: true,
+        result: expect.objectContaining({ paymentEvidence: original.evidence })
+      }
+    });
+    Object.assign(original.row, {
+      status: 'awaiting_review',
+      leaseOwner: null,
+      leaseId: null,
+      leaseExpiresAt: null
+    });
+    const stored = (original.row.result as Record<string, unknown>)
+      .paymentEvidence as Prisma.JsonValue;
+    const recheck = fixture(
+      {
+        operation: 'subscription',
+        plan: 'pro_500',
+        payload: {
+          originalOperation: 'recharge',
+          recheckTaskId: original.row.id,
+          sourceVersion: 1,
+          paymentContext: original.context,
+          originalPaymentEvidence: stored
+        }
+      },
+      original.row
+    );
+    recheck.tx.onlineRechargeEvent.findUnique.mockResolvedValue({
+      id: 'usage-already-recorded'
+    } as never);
+    await recheck.worker.finish(
+      recheck.rpc({
+        status: 'succeeded',
+        result: {
+          confirmedPaid: true,
+          paymentEvidence: stored,
+          confirmation: original.confirmation
+        }
+      }),
+      false
+    );
+    expect(original.row.status).toBe('succeeded');
+    expect(recheck.tx.onlineRechargeCard.update).not.toHaveBeenCalled();
+    expect(recheck.tx.onlineRechargeBill.create).toHaveBeenCalledTimes(1);
+    expect(recheck.orderSync.enqueueInTransaction).toHaveBeenCalledTimes(1);
+  });
+
+  it('计卡后本地失败回执不能丢弃事务内已保存的付款证据', async () => {
+    const f = upgradeFixture();
+    await f.worker.beforeSubmit(f.submit());
+    await f.worker.cardAction(
+      f.rpc({ cardId: f.context.cardId, paymentEvidence: f.evidence }),
+      'recordCardUsage'
+    );
+    await f.worker.finish(
+      f.rpc({ status: 'failed', message: '本地后续步骤失败', result: { confirmedPaid: false } }),
+      true
+    );
+    expect(f.row).toMatchObject({
+      status: 'awaiting_review',
+      confirmedPaid: true,
+      result: { paymentEvidence: f.evidence }
+    });
+  });
+
+  it('原单已付但套餐延迟时保留卡占用，后续准确核对和迟到回执只记账一次', async () => {
+    const original = upgradeFixture();
+    await original.worker.beforeSubmit(original.submit());
+    Object.assign(original.row, { status: 'awaiting_review', leaseVersion: 2 });
+    const recheck = () =>
+      fixture(
+        {
+          operation: 'subscription',
+          plan: 'pro_500',
+          payload: {
+            originalOperation: 'recharge',
+            recheckTaskId: original.row.id,
+            sourceVersion: 2,
+            paymentContext: original.context
+          }
+        },
+        original.row
+      );
+    const first = recheck();
+    await first.worker.finish(
+      first.rpc({
+        status: 'succeeded',
+        result: {
+          confirmedPaid: true,
+          paymentEvidence: original.evidence,
+          confirmation: { ...original.confirmation, hasActiveSubscription: false }
+        }
+      }),
+      false
+    );
+    expect(original.row).toMatchObject({
+      status: 'awaiting_review',
+      confirmedPaid: true,
+      stage: 'paid_pending_activation'
+    });
+    expect(first.tx.onlineRechargeCard.updateMany).not.toHaveBeenCalledWith(
+      expect.objectContaining({ where: { leaseOwner: original.row.id } })
+    );
+    expect(first.tx.onlineRechargeCard.update).not.toHaveBeenCalled();
+    expect(first.tx.onlineRechargeBill.create).not.toHaveBeenCalled();
+    expect(first.orderSync.enqueueInTransaction).not.toHaveBeenCalled();
+    const later = recheck();
+    later.tx.onlineRechargeCard.findUnique.mockResolvedValue({
+      id: original.context.cardId,
+      successCount: 0,
+      declineCount: 0,
+      status: 'active'
+    });
+    await later.worker.finish(
+      later.rpc({
+        status: 'succeeded',
+        result: {
+          confirmedPaid: true,
+          paymentEvidence: original.evidence,
+          confirmation: original.confirmation
+        }
+      }),
+      false
+    );
+    expect(original.row.status).toBe('succeeded');
+    expect(later.tx.onlineRechargeCard.update).toHaveBeenCalledTimes(1);
+    expect(later.tx.onlineRechargeBill.create).toHaveBeenCalledTimes(1);
+    expect(later.orderSync.enqueueInTransaction).toHaveBeenCalledTimes(1);
+    const duplicate = recheck();
+    await duplicate.worker.finish(
+      duplicate.rpc({
+        status: 'succeeded',
+        result: {
+          confirmedPaid: true,
+          paymentEvidence: original.evidence,
+          confirmation: original.confirmation
+        }
+      }),
+      false
+    );
+    expect(duplicate.tx.onlineRechargeCard.update).not.toHaveBeenCalled();
+    expect(duplicate.tx.onlineRechargeBill.create).not.toHaveBeenCalled();
+    expect(duplicate.orderSync.enqueueInTransaction).not.toHaveBeenCalled();
   });
 
   it('只有Pro或未来未生效档位保留待核对，不用旧订阅冒充500成功', async () => {

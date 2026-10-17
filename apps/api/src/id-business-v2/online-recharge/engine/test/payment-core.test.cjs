@@ -73,7 +73,10 @@ test.beforeEach(() => {
   };
   rpc.configureTask({ id: 'synthetic-payment' });
 });
-test.afterEach(() => rpc.clearTask());
+test.afterEach(() => {
+  rpc.setTransportForTest(null);
+  rpc.clearTask();
+});
 test('actual local core never rotates cards after an unknown payment result', async () => {
   responses = [
     { success: false, resultUnknown: true, error: 'synthetic timeout' },
@@ -92,7 +95,12 @@ test('actual local core retains original max-three decline card rotation', async
   responses = [
     { success: false, declined: true, error: 'card_declined' },
     { success: false, declined: true, error: 'card_declined' },
-    { success: true, dueAmount: '200.25', dueCurrency: 'PHP' }
+    {
+      success: true,
+      dueAmount: '200.25',
+      dueCurrency: 'PHP',
+      paymentEvidence: { verified: true, amount: '200.25', currency: 'PHP' }
+    }
   ];
   const result = await executePaymentWithRetry({}, { planType: 'plus' });
   assert.equal(result.success, true);
@@ -390,6 +398,36 @@ test('new payment without exact original-account confirmation is stopped before 
   assert.equal(result.submitted, false);
   assert.equal(calls.reserve, 0);
   assert.equal(calls.pay, 0);
+});
+
+test('pending paid receipt runs one bounded subscription query without losing payment evidence', async () => {
+  rpc.setTransportForTest(async () => ({ ok: true }));
+  await rpc.beforeExternalSubmit({});
+  const proof = { ...upgradeEvidence, verified: true };
+  responses = [{ success: false, resultUnknown: true, paymentEvidence: proof }];
+  let queries = 0;
+  const started = performance.now();
+  const result = await executePaymentWithRetry(
+    {},
+    {
+      planType: 'pro_500',
+      operation: 'upgrade',
+      preflight: exactUpgradePreflight,
+      confirmPayment: async ({ deadlineAt }) => {
+        queries++;
+        assert.ok(deadlineAt >= started + 44000 && deadlineAt <= performance.now() + 45000);
+        return { verified: false, querySucceeded: false, queryErrorCode: 'NETWORK_TIMEOUT' };
+      }
+    }
+  );
+  assert.equal(queries, 1);
+  assert.equal(result.confirmedPaid, true);
+  assert.equal(result.resultUnknown, true);
+  assert.equal(result.paymentEvidence, proof);
+  assert.equal(calls.bills.length, 0);
+  assert.equal(calls.usage, 0);
+  assert.equal(calls.pay, 1);
+  assert.equal(calls.release, 0);
 });
 
 test('verified paid upgrade preserves the existing saved-card billing profile and address', async () => {

@@ -16,6 +16,7 @@ import {
   proxyTestFailureMessage
 } from '../../proxy-pool/public-api';
 import type { AuthenticatedUser } from '../../../auth/auth.types';
+import type { V2CommandTransaction } from '../../runtime/public-api';
 import { FieldEncryptionService } from '../../../common/crypto/field-encryption.service';
 import {
   ONLINE_RECHARGE_DEFAULTS,
@@ -30,6 +31,7 @@ import { OnlineRechargeRepository } from './online-recharge.repository';
 import { OnlineRechargeEphemeralCredentials } from '../ephemeral-credentials.service';
 import { assertOnlineSensitive } from '../assets.service';
 import { OnlineRechargeOrderSyncService } from '../order-sync.service';
+import { originalRecheckSchedule, ORIGINAL_RECHECK_DELAYS_MS } from '../reconciliation';
 import {
   id,
   ids,
@@ -45,6 +47,7 @@ import {
 
 @Injectable()
 export class OnlineRechargeTasksRepository {
+  private recheckScanCursor?: string;
   constructor(
     private readonly repository: OnlineRechargeRepository,
     private readonly settings: OnlineRechargeSettingsService,
@@ -92,6 +95,9 @@ export class OnlineRechargeTasksRepository {
       payment && typeof payment === 'object' && !Array.isArray(payment)
         ? (payment as Record<string, unknown>)
         : null;
+    const reconciliation = payload.reconciliation
+      ? originalRecheckSchedule(payload.reconciliation, row.updatedAt)
+      : null;
     const base = {
       id: row.id,
       jobKey: row.id,
@@ -149,6 +155,14 @@ export class OnlineRechargeTasksRepository {
           providerTaskId: row.providerTaskId,
           paymentStarted: row.paymentStarted,
           confirmedPaid: row.confirmedPaid,
+          reconciliation: reconciliation
+            ? {
+                attempts: reconciliation.attempts,
+                nextAttemptAt: reconciliation.nextAttemptAt,
+                stopped: reconciliation.stopped,
+                ...(reconciliation.reasonCode ? { reasonCode: reconciliation.reasonCode } : {})
+              }
+            : null,
           hasSession: Boolean(row.sessionEncrypted),
           sessionMasked: row.sessionEncrypted ? '已提供（加密保存）' : null,
           subscriptionStatus: subscriptionVerified
@@ -361,6 +375,7 @@ export class OnlineRechargeTasksRepository {
       if (operation === 'recharge' && settings.gptApiEnabled && selectedPlan === 'pro_500')
         throw new BadRequestException('第三方通道尚未核实支持 Pro 500，请使用本地执行通道');
       const payload: Record<string, unknown> = {};
+      if (operation === 'recharge' && !settings.gptApiEnabled) payload.checkoutRecoveryVersion = 1;
       if (integrationSource) payload.integrationSource = integrationSource;
       if (input.paymentLimit !== undefined) {
         if (!operator || operation !== 'recharge' || settings.gptApiEnabled)
@@ -451,6 +466,13 @@ export class OnlineRechargeTasksRepository {
           original.sessionIdentityHash !== this.encryption.hash(sessionData?.identity)
         )
           throw new ConflictException('原任务核对资料已变化，请重新打开原任务');
+        const existing = await this.activeRecheck(tx, original);
+        if (existing)
+          return {
+            row: existing,
+            taskToken: this.encryption.decrypt(existing.publicTokenEncrypted) ?? '',
+            reused: true
+          };
         const originalPayload = original.payload ? object(original.payload) : {};
         const originalRegion = taskPlanRegion(originalPayload, original.plan);
         payload.proxyCountryCode = onlineProxyCountry(originalPayload.proxyCountryCode);
@@ -506,6 +528,146 @@ export class OnlineRechargeTasksRepository {
       taskToken: result.taskToken,
       ...(operation === 'proxy_test' ? { reused: result.reused === true } : {})
     };
+  }
+  private activeRecheck(tx: V2CommandTransaction, original: OnlineRechargeTask) {
+    return tx.onlineRechargeTask.findFirst({
+      where: {
+        operation: 'subscription',
+        deletedAt: null,
+        status: { in: ['queued', 'running'] },
+        AND: [
+          { payload: { path: '$.recheckTaskId', equals: original.id } },
+          { payload: { path: '$.sourceVersion', equals: original.leaseVersion } }
+        ]
+      },
+      orderBy: { createdAt: 'asc' }
+    });
+  }
+  async processDueRechecks(now = new Date()) {
+    const scanned = await this.repository.transaction('tasks-start', async (tx) => {
+      const originals = await tx.onlineRechargeTask.findMany({
+        where: {
+          status: 'awaiting_review',
+          operation: { in: ['recharge', 'renewal'] },
+          deletedAt: null,
+          ...(this.recheckScanCursor ? { id: { gt: this.recheckScanCursor } } : {})
+        },
+        orderBy: { id: 'asc' },
+        take: 100
+      });
+      let enqueued = 0;
+      for (const original of originals) {
+        const payload = original.payload ? object(original.payload) : {};
+        const schedule = originalRecheckSchedule(payload.reconciliation, original.updatedAt);
+        if (schedule.stopped) continue;
+        const missingIdentity =
+          original.operation === 'recharge' &&
+          original.provider === 'local' &&
+          !payload.checkoutRecoveryEncrypted;
+        const missingSession = !original.sessionEncrypted || !original.sessionIdentityHash;
+        const missingSubmission =
+          original.operation === 'renewal'
+            ? !payload.renewalSubmission
+            : !original.paymentStarted &&
+              !original.confirmedPaid &&
+              !original.providerOrderId &&
+              !original.providerTaskId;
+        let route: ReturnType<typeof taskPlanRegion> = null;
+        let missingRoute = false;
+        try {
+          route = taskPlanRegion(payload, original.plan);
+          onlineProxyCountry(payload.proxyCountryCode);
+          if (!route) paymentRegion(payload.region);
+        } catch {
+          missingRoute = true;
+        }
+        if (missingIdentity || missingSession || missingSubmission || missingRoute) {
+          schedule.stopped = true;
+          schedule.nextAttemptAt = null;
+          schedule.reasonCode = missingSubmission
+            ? 'original_submission_missing'
+            : missingIdentity
+              ? 'legacy_original_identity_missing'
+              : missingSession
+                ? 'original_session_missing'
+                : 'original_route_missing';
+          await tx.onlineRechargeTask.update({
+            where: { id: original.id },
+            data: {
+              payload: { ...payload, reconciliation: schedule } as unknown as Prisma.InputJsonValue
+            }
+          });
+          await this.repository.log(tx, 'tasks.recheck.unavailable', undefined, original.id, {
+            reasonCode: schedule.reasonCode
+          });
+          continue;
+        }
+        if (!schedule.nextAttemptAt || Date.parse(schedule.nextAttemptAt) > now.getTime()) continue;
+        if (await this.activeRecheck(tx, original)) continue;
+        const source = original.result ? object(original.result) : {};
+        const recheck = await tx.onlineRechargeTask.create({
+          data: {
+            operation: 'subscription',
+            provider: 'local',
+            plan: original.plan,
+            operatorId: original.operatorId,
+            sessionEncrypted: original.sessionEncrypted,
+            sessionIdentityHash: original.sessionIdentityHash,
+            emailEncrypted: original.emailEncrypted,
+            message: '自动核对原单，仅查询付款与订阅，不再次提交付款',
+            payload: {
+              action: 'recheck',
+              recheckTaskId: original.id,
+              sourceVersion: original.leaseVersion,
+              originalProvider: original.provider,
+              originalOperation: original.operation,
+              targetPlan: original.plan,
+              ...(original.operation === 'renewal' ? { renewalAction: payload.action } : {}),
+              ...(original.providerOrderId ? { providerOrderId: original.providerOrderId } : {}),
+              ...(original.providerTaskId ? { providerTaskId: original.providerTaskId } : {}),
+              ...(payload.proxyCountryCode ? { proxyCountryCode: payload.proxyCountryCode } : {}),
+              ...(payload.proxyId
+                ? { proxyId: payload.proxyId, proxyPoolReference: payload.proxyPoolReference }
+                : {}),
+              ...(route
+                ? { planRegion: route, region: route.paymentRegion }
+                : payload.region
+                  ? { region: payload.region }
+                  : {}),
+              ...(payload.paymentContext ? { paymentContext: payload.paymentContext } : {}),
+              ...(source.paymentEvidence
+                ? { originalPaymentEvidence: source.paymentEvidence }
+                : {}),
+              automaticRecheck: true
+            } as Prisma.InputJsonValue
+          }
+        });
+        schedule.attempts++;
+        schedule.lastTaskId = recheck.id;
+        schedule.stopped = schedule.attempts >= ORIGINAL_RECHECK_DELAYS_MS.length;
+        schedule.nextAttemptAt = schedule.stopped
+          ? null
+          : new Date(
+              Date.parse(schedule.startedAt) + ORIGINAL_RECHECK_DELAYS_MS[schedule.attempts]!
+            ).toISOString();
+        if (schedule.stopped) schedule.reasonCode = 'attempts_exhausted';
+        await tx.onlineRechargeTask.update({
+          where: { id: original.id },
+          data: {
+            payload: { ...payload, reconciliation: schedule } as unknown as Prisma.InputJsonValue
+          }
+        });
+        await this.repository.log(tx, 'tasks.recheck.schedule', undefined, original.id, {
+          recheckTaskId: recheck.id,
+          attempt: schedule.attempts,
+          sourceVersion: original.leaseVersion
+        });
+        enqueued++;
+      }
+      return { enqueued, cursor: originals.length === 100 ? originals[99]!.id : undefined };
+    });
+    this.recheckScanCursor = scanned.cursor;
+    return { enqueued: scanned.enqueued };
   }
   async action(section: string, action: string, raw: unknown, operator: AuthenticatedUser) {
     const input = object(raw);

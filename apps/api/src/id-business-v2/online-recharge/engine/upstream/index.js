@@ -9,7 +9,7 @@ const { connectTaskBrowser, applyCdpEnv, closeTaskBrowser } = require('./browser
 const { preparePlaywrightProxy } = require('./playwright-proxy');
 const fs = require('fs');
 const safeMedia = require('../safe-media.cjs');
-const { wasSubmitted } = require('../rpc.cjs');
+const { wasSubmitted, taskSignal } = require('../rpc.cjs');
 const path = require('path');
 
 /**
@@ -484,12 +484,15 @@ async function run(runOptions = {}) {
         console.log(`[1] 套餐类型: ${planType}, 地区: ${paymentRegion}, 币种: ${billingCurrency}`);
 
         page = await context.newPage();
+        await require('./human-verification').prepareVerificationPage?.(page, { signal: taskSignal?.() });
         safeMedia.attach(page);
         page.on('close', () => {
             console.warn(`⚠️ [系统] 当前页面已关闭，关闭前最后 URL: ${page.url()}`);
         });
 
-        const loginInfo = await bootstrapChatGptSession(page, sessionRaw, { sessionData, cookieVerified });
+        const loginInfo = await bootstrapChatGptSession(page, sessionRaw, {
+            sessionData, cookieVerified, signal: taskSignal?.(), deadlineAt: performance.now() + 180000
+        });
         if (loginInfo.email && !email) {
             console.log(`[Info] 账号邮箱: ${loginInfo.email}`);
         }
@@ -497,7 +500,7 @@ async function run(runOptions = {}) {
         // Account and exact tier are checked before opening a new checkout. An
         // existing subscription must follow the original plan-change UI.
         const accessToken = String(loginInfo.session?.accessToken || CONFIG.chatgptToken).trim();
-        const preflight = await require('../confirmation.cjs').preflightPayment(planType, accessToken, { allowUnverifiedTarget: debugOnly, browserContext: context });
+        const preflight = await require('../confirmation.cjs').preflightPayment(planType, accessToken, { allowUnverifiedTarget: debugOnly, browserContext: context, page, signal: taskSignal?.() });
         if (!preflight.allowed) return { success: false, submitted: false, ...preflight };
         const operation = preflight.kind;
         if (!['initial', 'upgrade'].includes(operation)) throw new Error('无法确定首次开通或升级操作');
@@ -569,7 +572,7 @@ async function run(runOptions = {}) {
             stripeSessionId,
             operation, preflight, expectedCurrency, checkoutKind: checkoutResult?.kind,
             paymentLimit: runOptions.paymentLimit,
-            confirmPayment: () => require('../confirmation.cjs').confirmSubscription(planType, accessToken, { browserContext: context })
+            confirmPayment: (options = {}) => require('../confirmation.cjs').confirmSubscription(planType, accessToken, { browserContext: context, page, signal: taskSignal?.(), deadlineAt: options.deadlineAt })
         });
 
         lastPaymentResult = paymentResult;
@@ -599,6 +602,7 @@ async function run(runOptions = {}) {
         }
 
     } catch (e) {
+        if (e.code === 'LEASE_LOST' || taskSignal?.()?.aborted) throw e;
         console.error("❌ [运行时错误]:", e.message);
         try {
             const errorShot = await captureDebugScreenshot(context, page, 'error');
@@ -612,6 +616,7 @@ async function run(runOptions = {}) {
         return { ...(lastPaymentResult?.paymentEvidence ? { paymentEvidence: lastPaymentResult.paymentEvidence, confirmation: lastPaymentResult.confirmation, cardLast4: lastPaymentResult.cardLast4, confirmedPaid: lastPaymentResult.confirmedPaid === true, subscriptionChangedVerified: lastPaymentResult.subscriptionChangedVerified === true } : {}), success: false, pendingCredentials: e.code === 'PENDING_CREDENTIALS', resultUnknown: wasSubmitted() || require('../rpc.cjs').wasPaymentConfirmed() || paymentSucceeded || e.code === 'RESULT_UNKNOWN', error: e.code === 'LEASE_LOST' ? '任务租约已失效' : '执行未完成，请查看受限诊断' };
     } finally {
         console.log("👋 [系统] 流程结束，正在关闭浏览器...");
+        await Promise.resolve(require('./human-verification').disposeVerificationPage?.(page)).catch(() => {});
         // 先关闭 context 以 flush 录像并取回路径，再关浏览器
         const evidence = await finalizeVideo(context, page, { deleteOnSuccess: paymentSucceeded }).catch(() => []);
         if (typeof process.send === 'function') process.send({ type: 'evidence', paths: evidence });

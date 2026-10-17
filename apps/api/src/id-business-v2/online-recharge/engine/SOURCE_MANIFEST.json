@@ -52,11 +52,25 @@
       "reason": "Frozen source repository/commit and original SHA256 for 34 upstream files."
     },
     {
+      "path": "checkout-form.cjs",
+      "originalSha256": null,
+      "adaptedSha256": "5cae5a9f846a9056ecedd7ae5e040b72717b137c2324257fcbfd86b897e66416",
+      "changed": true,
+      "reason": "Semantic frame-safe checkout form readback and immutable per-task payment cap.; 2026-10-17 controlled checkout form, subscription context and progress repair."
+    },
+    {
+      "path": "checkout-recovery.cjs",
+      "originalSha256": null,
+      "adaptedSha256": "ce586a4a19321523c60fbc440f0603c2ab6b6db4b56fbd9e80bda1ca70293e6a",
+      "changed": true,
+      "reason": "Unattended verification, bounded cancellation and original-checkout read-only reconciliation; synthetic regression coverage."
+    },
+    {
       "path": "confirmation.cjs",
       "originalSha256": null,
-      "adaptedSha256": "b07e4465f4b8170306d42b40fdaee1daceea5413d124ed2dae671d30dcf61423",
+      "adaptedSha256": "02a2b2d12c761bd8f8415efc70cfd7ac52a3b6c038b7a575993972a23ec08323",
       "changed": true,
-      "reason": "Carry verified expiry into subscription classification and require plan snapshot currency; preserve original upgrade and Pro500 identity guards.; 2026-10-17 controlled checkout form, subscription context and progress repair."
+      "reason": "Carry verified expiry into subscription classification and require plan snapshot currency; preserve original upgrade and Pro500 identity guards.; 2026-10-17 controlled checkout form, subscription context and progress repair.; 2026-10-17 unattended verification and original-checkout reconciliation."
     },
     {
       "path": "credential-client.cjs",
@@ -101,6 +115,13 @@
       "reason": "Keep validated project-owned media paths and allocate owned 0700 platform temporary directories for profiles and solver task data; remove only directories created by this process."
     },
     {
+      "path": "payment-limit.cjs",
+      "originalSha256": null,
+      "adaptedSha256": "2b54b1b1d6e3b9e6034b4a896c38e61f00061537d89b077d28e263744ef6f5dd",
+      "changed": true,
+      "reason": "Semantic frame-safe checkout form readback and immutable per-task payment cap."
+    },
+    {
       "path": "plans.cjs",
       "originalSha256": null,
       "adaptedSha256": "6e4ce6f43a0dc20747d13814e62f1d0c89412e89cd39151b8a60ca90f0408527",
@@ -138,9 +159,9 @@
     {
       "path": "rpc.cjs",
       "originalSha256": null,
-      "adaptedSha256": "2286dcf7e7f5844299877a9ca70d51edd5437dd3230f83ff6dface0982d1273b",
+      "adaptedSha256": "438154afff5cf0d2689ede94cd22314ec352c7fde3ad732aa76c0f66e88b4245",
       "changed": true,
-      "reason": "兼容Nest成功空响应及文本标量；仅已核实的可空资源允许空正文，提交授权与其他接口仍严格拒绝空/无效响应。"
+      "reason": "兼容Nest成功空响应及文本标量；仅已核实的可空资源允许空正文，提交授权与其他接口仍严格拒绝空/无效响应。; 2026-10-17 unattended verification and original-checkout reconciliation."
     },
     {
       "path": "safe-media.cjs",
@@ -152,16 +173,23 @@
     {
       "path": "security.cjs",
       "originalSha256": null,
-      "adaptedSha256": "601b90c65a7be22987fb79759ece74db62b0b18d7ebb6e2906bc80243c3375da",
+      "adaptedSha256": "d9804a3da20286cb9d83561b951ffaca611b096dbcd032e8e27411d8738ff38f",
       "changed": true,
-      "reason": "2026-10-15 Pro档位及升级适配：精确目标、官网报价、单次提交、实际付款方式与原单证据保护；不猜Pro500上游ID。保留既有必要适配。 精确保留规范代理资源 UUID，维持检测回执关联；同值已知秘密仍脱敏，代理链接、认证资料和其他敏感字段继续脱敏。 Authorized administrator business visibility: preserve operational data and mask credentials only."
+      "reason": "2026-10-15 Pro档位及升级适配：精确目标、官网报价、单次提交、实际付款方式与原单证据保护；不猜Pro500上游ID。保留既有必要适配。 精确保留规范代理资源 UUID，维持检测回执关联；同值已知秘密仍脱敏，代理链接、认证资料和其他敏感字段继续脱敏。 Authorized administrator business visibility: preserve operational data and mask credentials only.; 2026-10-17 unattended verification and original-checkout reconciliation."
     },
     {
       "path": "task-runner.cjs",
       "originalSha256": null,
-      "adaptedSha256": "4f3a0a222448cc4d634efb7008ce9cf95e92cfacec63aad3352d9afc01c74477",
+      "adaptedSha256": "da0df828be19c636308b5a630c8feeaac2c107745b3601771333c650f60338ac",
       "changed": true,
-      "reason": "Pass task-frozen payment region and plan expected currency into the isolated task subprocess; clear expected currency at exit.; 2026-10-17 controlled checkout form, subscription context and progress repair."
+      "reason": "Pass task-frozen payment region and plan expected currency into the isolated task subprocess; clear expected currency at exit.; 2026-10-17 controlled checkout form, subscription context and progress repair.; 2026-10-17 unattended verification and original-checkout reconciliation."
+    },
+    {
+      "path": "test/checkout-form.test.cjs",
+      "originalSha256": null,
+      "adaptedSha256": "545241f33c459dddedf2fa081addcf907e8854ad70713cfcfba2754f1ea8ea25",
+      "changed": true,
+      "reason": "Real Chromium regression coverage for semantic embedded fields, readback, deadline and payment limits.; 2026-10-17 controlled checkout form, subscription context and progress repair."
     },
     {
       "path": "test/checkout-outcomes.test.cjs",
@@ -169,6 +197,20 @@
       "adaptedSha256": "ce562c3ff76d615ef80fc175bec05ec3e87af9fb7d39ef35572a2a63a6c060b6",
       "changed": true,
       "reason": "离线回归：真实Checkout辅助函数、今日应付与一般错误、同账号Free首次开通预检，不使用真实资料。"
+    },
+    {
+      "path": "test/checkout-recheck.test.cjs",
+      "originalSha256": null,
+      "adaptedSha256": "f0875de784c0e133310bc0f92a428a5b15f1bb41c289d6400317616bcce6df25",
+      "changed": true,
+      "reason": "Unattended verification, bounded cancellation and original-checkout read-only reconciliation; synthetic regression coverage."
+    },
+    {
+      "path": "test/checkout-recovery.test.cjs",
+      "originalSha256": null,
+      "adaptedSha256": "ddea7aa9c491a8e1ac0d1fa99bceeb2d3337b9627cc3da2f2d647f3f320e2281",
+      "changed": true,
+      "reason": "Unattended verification, bounded cancellation and original-checkout read-only reconciliation; synthetic regression coverage."
     },
     {
       "path": "test/credentials-main.test.cjs",
@@ -180,9 +222,9 @@
     {
       "path": "test/debug-checkout.test.cjs",
       "originalSha256": null,
-      "adaptedSha256": "dd967ac85c2e29f50456d05bdca7481a6d78cc078124145eb8f06d15ae772d0f",
+      "adaptedSha256": "bbbf44c6ec50498b4bc946e960f0d3fdb0b84c6e7727c07cd0a6e21d1de89d51",
       "changed": true,
-      "reason": "Allow controlled debug to observe current checkout region without authorizing payment; defer exact tier selection only for a unique empty Pro card, verify tier at checkout and retain all real payment gates.; 2026-10-17 controlled checkout form, subscription context and progress repair."
+      "reason": "Allow controlled debug to observe current checkout region without authorizing payment; defer exact tier selection only for a unique empty Pro card, verify tier at checkout and retain all real payment gates.; 2026-10-17 controlled checkout form, subscription context and progress repair.; 2026-10-17 unattended verification and original-checkout reconciliation."
     },
     {
       "path": "test/dispatch.test.cjs",
@@ -208,9 +250,16 @@
     {
       "path": "test/payment-core.test.cjs",
       "originalSha256": null,
-      "adaptedSha256": "8ee1127f088f32e5321e48478b68e866d0a5edd697cd88a5c7d3717fb8ef470a",
+      "adaptedSha256": "30e0a941869d3f69cd18243e0f4ca2795711b5809eaf971eacdb7704693d5480",
       "changed": true,
-      "reason": "2026-10-15 Pro档位及升级适配：精确目标、官网报价、单次提交、实际付款方式与原单证据保护；不猜Pro500上游ID。保留既有必要适配。"
+      "reason": "2026-10-15 Pro档位及升级适配：精确目标、官网报价、单次提交、实际付款方式与原单证据保护；不猜Pro500上游ID。保留既有必要适配。; 2026-10-17 unattended verification and original-checkout reconciliation."
+    },
+    {
+      "path": "test/payment-observation.test.cjs",
+      "originalSha256": null,
+      "adaptedSha256": "16223656351035245bef19aab12ebd3c166a4ce64086e0641bde249c5c834f88",
+      "changed": true,
+      "reason": "Unattended verification, bounded cancellation and original-checkout read-only reconciliation; synthetic regression coverage."
     },
     {
       "path": "test/plan-regions.test.cjs",
@@ -271,9 +320,9 @@
     {
       "path": "test/renewal-state.test.cjs",
       "originalSha256": null,
-      "adaptedSha256": "d7b40d44e9ec77e534c6ba821dcf0e3e27fccbf93601438522b2e3fac2d150ad",
+      "adaptedSha256": "cd3df850d22eef502cea00f9f3f591a33a877ba11cc7fc34ed83f70e7aa617cd",
       "changed": true,
-      "reason": "2026-10-15 Pro档位及升级适配：精确目标、官网报价、单次提交、实际付款方式与原单证据保护；不猜Pro500上游ID。保留既有必要适配。; 2026-10-17 controlled checkout form, subscription context and progress repair."
+      "reason": "2026-10-15 Pro档位及升级适配：精确目标、官网报价、单次提交、实际付款方式与原单证据保护；不猜Pro500上游ID。保留既有必要适配。; 2026-10-17 controlled checkout form, subscription context and progress repair.; 2026-10-17 unattended verification and original-checkout reconciliation."
     },
     {
       "path": "test/rpc-response.test.cjs",
@@ -297,11 +346,25 @@
       "reason": "Synthetic bounded media finish regression tests; no browser, services or raw media. Authorized administrator business visibility: preserve operational data and mask credentials only."
     },
     {
+      "path": "test/solver-process.test.cjs",
+      "originalSha256": null,
+      "adaptedSha256": "2facfc94499ead9ed01b7f485efcb91159086e065f2e5c4683aaa49d44e3945e",
+      "changed": true,
+      "reason": "Unattended verification, bounded cancellation and original-checkout read-only reconciliation; synthetic regression coverage."
+    },
+    {
+      "path": "test/unattended-task-control.test.cjs",
+      "originalSha256": null,
+      "adaptedSha256": "85304098eb4c51e3dc20813eac0a7a3955184f6f76bf002b3f6d10a4e767990f",
+      "changed": true,
+      "reason": "Unattended verification, bounded cancellation and original-checkout read-only reconciliation; synthetic regression coverage."
+    },
+    {
       "path": "test/upgrade-checkout.test.cjs",
       "originalSha256": null,
-      "adaptedSha256": "fefa603e53e93ddc0f2257840f4c682a9f86c8386361eb1384ec852ccf8ad1af",
+      "adaptedSha256": "2b22e9f9bcbcb81a0526b000a98946a5a6c22242df429c5c79b9df97f4abe9ba",
       "changed": true,
-      "reason": "本模块新增：覆盖准确档位、单次提交、保存卡、报价、凭据完整性及未核实Pro500付款阻止。"
+      "reason": "本模块新增：覆盖准确档位、单次提交、保存卡、报价、凭据完整性及未核实Pro500付款阻止。; 2026-10-17 unattended verification and original-checkout reconciliation."
     },
     {
       "path": "test/upgrade-currency.test.cjs",
@@ -316,6 +379,13 @@
       "adaptedSha256": "a0f8f5146ad9e77d13b1a1b11c80a02240c8fe4fcfdf1e4e7e286cb7123bf9d2",
       "changed": true,
       "reason": "Cover actual free plan parser output, identity and active-state rejection, and prevention of mapping free aliases to paid tiers. Authorized administrator business visibility: preserve operational data and mask credentials only."
+    },
+    {
+      "path": "test/verification-state.test.cjs",
+      "originalSha256": null,
+      "adaptedSha256": "41a76f8b4b51ea570ac669f546d9b48fbbaa47e9f895b14eae148912aa923f1a",
+      "changed": true,
+      "reason": "Unattended verification, bounded cancellation and original-checkout read-only reconciliation; synthetic regression coverage."
     },
     {
       "path": "test/worker-heartbeat.test.cjs",
@@ -376,9 +446,9 @@
     {
       "path": "upstream/captcha-platform.js",
       "originalSha256": "960475605eb8525420b3862d06f9d87df2ea11823bb72bcae5f3a5a10ae0d6df",
-      "adaptedSha256": "960475605eb8525420b3862d06f9d87df2ea11823bb72bcae5f3a5a10ae0d6df",
-      "changed": false,
-      "reason": "冻结原版保持不变。"
+      "adaptedSha256": "5267869b49b22dd309aa837d03575dae51b22466e93687b865e5e03d430f7106",
+      "changed": true,
+      "reason": "冻结原版保持不变。; 2026-10-17 unattended verification and original-checkout reconciliation."
     },
     {
       "path": "upstream/card-supplier-webhook.js",
@@ -425,30 +495,30 @@
     {
       "path": "upstream/hcaptcha-solver.js",
       "originalSha256": "16c85029a4ae4fa7ea97545c9c93675b7751481a3cb87bfb4cb4b585652e39ec",
-      "adaptedSha256": "4df559d6c5624ef7ab96d62a29685eb79551d319cc4e14c6d673b7e41c5976d2",
+      "adaptedSha256": "d4c8d602d9ad8960a3523623918f51161d3b6a523cc65f6164e591b099ec376a",
       "changed": true,
-      "reason": "求解器stdout只内存解析+脱敏任务日志；不写原始日志；独立Python环境与受限子进程环境。"
+      "reason": "求解器stdout只内存解析+脱敏任务日志；不写原始日志；独立Python环境与受限子进程环境。; 2026-10-17 unattended verification and original-checkout reconciliation."
     },
     {
       "path": "upstream/hcaptcha/solver.py",
       "originalSha256": "28bbf0bc2f25a75fafae2d399d05403a0ce4e132764a3c2ab632b441f5ccda42",
-      "adaptedSha256": "0e1224c30771f339bf6c83febc2527ef7d2328ee25190d55baac45bdeabf6057",
+      "adaptedSha256": "d56f4f3f61fe1724351e6ab7d868608af9d1e7b026d7da3c6a1db717e5d378ff",
       "changed": true,
-      "reason": "保留Python求解核心；不写挑战图片/会话元数据/checkcaptcha/verify原始诊断，Node统一脱敏媒体。"
+      "reason": "保留Python求解核心；不写挑战图片/会话元数据/checkcaptcha/verify原始诊断，Node统一脱敏媒体。; 2026-10-17 unattended verification and original-checkout reconciliation."
     },
     {
       "path": "upstream/human-verification.js",
       "originalSha256": "13056c91e1e2a77563ca29206446c783ee33774003555422bb2694d7fb9cd317",
-      "adaptedSha256": "13056c91e1e2a77563ca29206446c783ee33774003555422bb2694d7fb9cd317",
-      "changed": false,
-      "reason": "冻结原版保持不变。"
+      "adaptedSha256": "0cfa8b8fd5e63ddd87485e8eaaca5993253cbbfde727e3c9ec5c4e6bef4b8bed",
+      "changed": true,
+      "reason": "冻结原版保持不变。; 2026-10-17 unattended verification and original-checkout reconciliation."
     },
     {
       "path": "upstream/index.js",
       "originalSha256": "1694958e105ebe962494d3c88bbf2f0c6b22e49028e46cfc77801e2c9f814855",
-      "adaptedSha256": "8f9405544ecaaf9c4688169b8a7a4f4d3595659039542dcce79a7e52dbf1e047",
+      "adaptedSha256": "1c5912b3c26b99cc6c05fc5c59bd62efcd0e62cb1a70f9e2618172d37486605f",
       "changed": true,
-      "reason": "Verify the unique canonical Pro CTA independently of its top-half container; require a visible unique Pro card for deferred debug, exact checkout tier and all real payment guards. Keep debug-only region evidence explicit. Authorized administrator business visibility: preserve operational data and mask credentials only.; 2026-10-17 controlled checkout form, subscription context and progress repair."
+      "reason": "Verify the unique canonical Pro CTA independently of its top-half container; require a visible unique Pro card for deferred debug, exact checkout tier and all real payment guards. Keep debug-only region evidence explicit. Authorized administrator business visibility: preserve operational data and mask credentials only.; 2026-10-17 controlled checkout form, subscription context and progress repair.; 2026-10-17 unattended verification and original-checkout reconciliation."
     },
     {
       "path": "upstream/mysql-store.js",
@@ -474,9 +544,9 @@
     {
       "path": "upstream/payment-retry.js",
       "originalSha256": "41d4f3fad99d2f0b8036fa7da597bd251134361232fe96b4515a1d2b5bd80597",
-      "adaptedSha256": "181d1e22d61dc085333689ab4e49fd04bbe489446abb064544ca47fff0639d8b",
+      "adaptedSha256": "cf1580aa16b6c413d565eed20ad86d174eac3b96ebf732e55f35aa59e5944a42",
       "changed": true,
-      "reason": "2026-10-15 Pro档位及升级适配：精确目标、官网报价、单次提交、实际付款方式与原单证据保护；不猜Pro500上游ID。保留既有必要适配。; 2026-10-17 controlled checkout form, subscription context and progress repair."
+      "reason": "2026-10-15 Pro档位及升级适配：精确目标、官网报价、单次提交、实际付款方式与原单证据保护；不猜Pro500上游ID。保留既有必要适配。; 2026-10-17 controlled checkout form, subscription context and progress repair.; 2026-10-17 unattended verification and original-checkout reconciliation."
     },
     {
       "path": "upstream/playwright-proxy.js",
@@ -516,23 +586,23 @@
     {
       "path": "upstream/session-auth.js",
       "originalSha256": "0c3aeaba4e60f77746e399c2d5c1037b3632f7430b5559c43f81e2c413c2deca",
-      "adaptedSha256": "b2751edead17ea24a80b8214c5b3873ed2ccc5f19433e2beb350efa4c9908bb3",
+      "adaptedSha256": "a298b4892cce160810b4e91e2bb2f0d65919b9d2716dd0f00e9a267f178b442c",
       "changed": true,
-      "reason": "冻结原版保持不变。; 2026-10-17 controlled checkout form, subscription context and progress repair."
+      "reason": "冻结原版保持不变。; 2026-10-17 controlled checkout form, subscription context and progress repair.; 2026-10-17 unattended verification and original-checkout reconciliation."
     },
     {
       "path": "upstream/stripe-payment.js",
       "originalSha256": "007a6ae1abb633fd283e48f4ceac02bf3d2e2fc30aaca87520565b34eb29743e",
-      "adaptedSha256": "30fbfc3663dd24c7d8e17286b288814c493e7bf6256c4c5dad6d3555d685808a",
+      "adaptedSha256": "50ce39cf2ad763594dddcfb5b208addb804a0aafaf45aad46b2d1c44e70d549c",
       "changed": true,
-      "reason": "Read exact whole-peso CLP totals, wait for official Chilean tax total, preserve address country and existing final payment gates.; 2026-10-17 controlled checkout form, subscription context and progress repair."
+      "reason": "Read exact whole-peso CLP totals, wait for official Chilean tax total, preserve address country and existing final payment gates.; 2026-10-17 controlled checkout form, subscription context and progress repair.; 2026-10-17 unattended verification and original-checkout reconciliation."
     },
     {
       "path": "upstream/subscription-check.js",
       "originalSha256": "e1f8f285a318389c055c0438f1c143e01023bdc42c619c6ea9eb7abe7238a11e",
-      "adaptedSha256": "a8311461be409d00bc2deb1d1feae9e8fb79f832ccc8268d4e960996481b7d8c",
+      "adaptedSha256": "103273907e0e56e58710ad543e021a8f4471e48b39d9204667e9283cccda961a",
       "changed": true,
-      "reason": "2026-10-15 Pro档位及升级适配：精确目标、官网报价、单次提交、实际付款方式与原单证据保护；不猜Pro500上游ID。保留既有必要适配。; 2026-10-17 controlled checkout form, subscription context and progress repair."
+      "reason": "2026-10-15 Pro档位及升级适配：精确目标、官网报价、单次提交、实际付款方式与原单证据保护；不猜Pro500上游ID。保留既有必要适配。; 2026-10-17 controlled checkout form, subscription context and progress repair.; 2026-10-17 unattended verification and original-checkout reconciliation."
     },
     {
       "path": "upstream/tax-free-address.js",
@@ -572,9 +642,16 @@
     {
       "path": "upstream/upgrade-checkout.js",
       "originalSha256": null,
-      "adaptedSha256": "4e61471849fb3fab60a1da87220d6c225912a527f148ce25d85e68e5884f7ba6",
+      "adaptedSha256": "9caec6e8bfedf5133a7db5bbfd097f632f932ef3776b7b0d05d5ee1ba39d99b0",
       "changed": true,
-      "reason": "Accept explicit CLP integer upgrade quotes, credits and taxes without relaxing exact-tier, account or card verification."
+      "reason": "Accept explicit CLP integer upgrade quotes, credits and taxes without relaxing exact-tier, account or card verification.; 2026-10-17 unattended verification and original-checkout reconciliation."
+    },
+    {
+      "path": "upstream/verification-runtime.js",
+      "originalSha256": null,
+      "adaptedSha256": "9d853ab21252b00b1c2265ca4d54644c8dc6f0918c8f95379c86ccf24566bb60",
+      "changed": true,
+      "reason": "Unattended verification, bounded cancellation and original-checkout read-only reconciliation; synthetic regression coverage."
     },
     {
       "path": "upstream/vitest.config.js",
@@ -596,27 +673,6 @@
       "adaptedSha256": "5a05d9838f47a4e69cd9fd1f5658a5d58729094ee1e5cf73b1f6c4a9972281f2",
       "changed": true,
       "reason": "Forward the existing private XAUTHORITY file path with DISPLAY to headed task children; retain the restricted environment allowlist.; 2026-10-17 controlled checkout form, subscription context and progress repair."
-    },
-    {
-      "path": "checkout-form.cjs",
-      "originalSha256": null,
-      "adaptedSha256": "5cae5a9f846a9056ecedd7ae5e040b72717b137c2324257fcbfd86b897e66416",
-      "changed": true,
-      "reason": "Semantic frame-safe checkout form readback and immutable per-task payment cap.; 2026-10-17 controlled checkout form, subscription context and progress repair."
-    },
-    {
-      "path": "payment-limit.cjs",
-      "originalSha256": null,
-      "adaptedSha256": "2b54b1b1d6e3b9e6034b4a896c38e61f00061537d89b077d28e263744ef6f5dd",
-      "changed": true,
-      "reason": "Semantic frame-safe checkout form readback and immutable per-task payment cap."
-    },
-    {
-      "path": "test/checkout-form.test.cjs",
-      "originalSha256": null,
-      "adaptedSha256": "545241f33c459dddedf2fa081addcf907e8854ad70713cfcfba2754f1ea8ea25",
-      "changed": true,
-      "reason": "Real Chromium regression coverage for semantic embedded fields, readback, deadline and payment limits.; 2026-10-17 controlled checkout form, subscription context and progress repair."
     }
   ],
   "dependencySecurityPatches": [

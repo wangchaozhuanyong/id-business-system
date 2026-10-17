@@ -77,6 +77,8 @@ test('only checkout debug permits an unverified target through the actual index 
         billingCurrency: 'PHP',
         debugOnly,
         context: {},
+        page: {},
+        taskSignal: () => new AbortController().signal,
         require: (moduleName) => {
           assert.equal(moduleName, '../confirmation.cjs');
           return {

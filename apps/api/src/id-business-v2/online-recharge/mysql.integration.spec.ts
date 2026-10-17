@@ -5,6 +5,7 @@ import {
 } from '../proxy-pool/public-api';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ConfigService } from '@nestjs/config';
+import { Prisma } from '@prisma/client';
 import { ConfigModule } from '@nestjs/config';
 import { Test } from '@nestjs/testing';
 import { APP_GUARD } from '@nestjs/core';
@@ -17,7 +18,7 @@ import { PrismaService } from '../../common/prisma/prisma.service';
 import { FieldEncryptionService } from '../../common/crypto/field-encryption.service';
 import { V2TransactionalAuditService, V2CommandTransactionManager } from '../runtime/public-api';
 import type { AuthenticatedUser } from '../../auth/auth.types';
-import type { OnlineRechargeWorkerRpc } from './contracts';
+import type { OnlineRechargePaymentContext, OnlineRechargeWorkerRpc } from './contracts';
 import { OnlineRechargeRepository } from './persistence/online-recharge.repository';
 import { OnlineRechargeWorkerRepository } from './persistence/worker.repository';
 import { OnlineRechargeSettingsService } from './settings.service';
@@ -72,9 +73,14 @@ suite('线上代充隔离MySQL事务验收', () => {
   const orderSync = new OnlineRechargeOrderSyncService(
     new OnlineRechargeOrderSyncRepository(repository, encryption, {} as never)
   );
-  const tasks = new OnlineRechargeTasksService(
-    new OnlineRechargeTasksRepository(repository, settings, encryption, memory, orderSync)
+  const taskRepository = new OnlineRechargeTasksRepository(
+    repository,
+    settings,
+    encryption,
+    memory,
+    orderSync
   );
+  const tasks = new OnlineRechargeTasksService(taskRepository);
   const admin = new OnlineRechargeAdminRepository(
     repository,
     assets,
@@ -131,6 +137,51 @@ suite('线上代充隔离MySQL事务验收', () => {
     leaseVersion: claim.leaseVersion,
     args
   });
+  const paymentFor = async (
+    claim: NonNullable<Awaited<ReturnType<typeof workers.claim>>>,
+    changes: Partial<OnlineRechargePaymentContext> = {}
+  ) => {
+    const row = await db.onlineRechargeTask.findUniqueOrThrow({ where: { id: claim.id } });
+    const card = await db.onlineRechargeCard.findUniqueOrThrow({ where: { id: row.cardId! } });
+    const checkoutId = `oaics_fixture_${claim.id.replaceAll('-', '')}`;
+    const context: OnlineRechargePaymentContext = {
+      kind: 'initial',
+      sourcePlan: 'free',
+      targetPlan: claim.plan,
+      accountId: sessionAccountId(claim.session),
+      cardId: card.id,
+      cardLast4: card.last4,
+      amount: '20.1000',
+      currency: 'USD',
+      ...changes,
+      quoteId: `quote:${createHash('sha256').update(checkoutId).digest('hex').slice(0, 32)}`
+    };
+    return {
+      context,
+      checkoutRecovery: {
+        ...context,
+        version: 1,
+        checkoutId,
+        processorEntity: 'openai',
+        checkoutUrl: `https://chatgpt.com/checkout/openai/${checkoutId}`
+      },
+      evidence: { ...context, source: 'checkout', verified: true }
+    };
+  };
+  const submitPayment = async (
+    claim: NonNullable<Awaited<ReturnType<typeof workers.claim>>>,
+    args: Record<string, unknown> = {}
+  ) => {
+    const payment = await paymentFor(claim);
+    await workers.beforeSubmit(
+      lease(claim, {
+        ...args,
+        paymentContext: payment.context,
+        checkoutRecovery: payment.checkoutRecovery
+      })
+    );
+    return payment;
+  };
 
   beforeAll(async () => {
     const url = new URL(process.env.DATABASE_URL ?? 'mysql://invalid.invalid/invalid');
@@ -547,18 +598,12 @@ suite('线上代充隔离MySQL事务验收', () => {
     );
     const claim = (await workers.claim('fixture-zero-upgrade'))!;
     const card = await prepareCard(claim);
-    const context = {
+    const { context, checkoutRecovery } = await paymentFor(claim, {
       kind: 'upgrade',
       sourcePlan: 'plus',
-      targetPlan: 'pro_500',
-      accountId: identity,
-      cardId: card.id,
-      cardLast4: '4242',
-      amount: '0.0000',
-      currency: 'USD',
-      quoteId: 'synthetic-zero-quote'
-    };
-    await workers.beforeSubmit(lease(claim, { paymentContext: context }));
+      amount: '0.0000'
+    });
+    await workers.beforeSubmit(lease(claim, { paymentContext: context, checkoutRecovery }));
     await expect(workers.beforeSubmit(lease(claim, { paymentContext: context }))).rejects.toThrow(
       '重复提交'
     );
@@ -676,7 +721,7 @@ suite('线上代充隔离MySQL事务验收', () => {
     await start(randomUUID(), codes.codes[0]);
     const claim = (await workers.claim('fixture-a'))!;
     await prepareCard(claim);
-    await workers.beforeSubmit(lease(claim));
+    await submitPayment(claim);
     await db.onlineRechargeTask.update({
       where: { id: claim.id },
       data: { leaseExpiresAt: new Date(0) }
@@ -694,9 +739,15 @@ suite('线上代充隔离MySQL事务验收', () => {
     await start();
     const claim = (await workers.claim('fixture-a'))!;
     const card = await prepareCard(claim);
-    await workers.beforeSubmit(lease(claim));
-    await workers.cardAction(lease(claim, { cardId: card.id }), 'recordCardUsage');
-    await workers.cardAction(lease(claim, { cardId: card.id }), 'recordCardUsage');
+    const payment = await submitPayment(claim);
+    await workers.cardAction(
+      lease(claim, { cardId: card.id, paymentEvidence: payment.evidence }),
+      'recordCardUsage'
+    );
+    await workers.cardAction(
+      lease(claim, { cardId: card.id, paymentEvidence: payment.evidence }),
+      'recordCardUsage'
+    );
     expect((await db.onlineRechargeCard.findUnique({ where: { id: card.id } }))?.successCount).toBe(
       1
     );
@@ -741,17 +792,19 @@ suite('线上代充隔离MySQL事务验收', () => {
       cardLeaseId: card.leaseId,
       cardLeaseVersion: card.leaseVersion
     };
-    await workers.beforeSubmit(lease(claim, cardArgs));
+    const payment = await submitPayment(claim, cardArgs);
+    const usageArgs = { ...cardArgs, paymentEvidence: payment.evidence };
     await Promise.all([
-      workers.cardAction(lease(claim, cardArgs), 'recordCardUsage'),
-      workers.cardAction(lease(claim, cardArgs), 'recordCardUsage')
+      workers.cardAction(lease(claim, usageArgs), 'recordCardUsage'),
+      workers.cardAction(lease(claim, usageArgs), 'recordCardUsage')
     ]);
     const bill = {
       amount: '20.1000',
       amountSource: 'checkout',
       checkoutId: 'synthetic-confirmed-checkout',
       currency: 'USD',
-      status: 'success'
+      status: 'success',
+      paymentEvidence: payment.evidence
     };
     await Promise.all([workers.billing(lease(claim, bill)), workers.billing(lease(claim, bill))]);
     const confirmation = {
@@ -766,7 +819,10 @@ suite('线上代充隔离MySQL事务验收', () => {
     };
     expect(
       await workers.finish(
-        lease(claim, { status: 'succeeded', result: { confirmedPaid: true, confirmation } }),
+        lease(claim, {
+          status: 'succeeded',
+          result: { confirmedPaid: true, confirmation, paymentEvidence: payment.evidence }
+        }),
         false
       )
     ).toMatchObject({ status: 'succeeded' });
@@ -821,7 +877,7 @@ suite('线上代充隔离MySQL事务验收', () => {
     await start();
     const claim = (await workers.claim('fixture-a'))!;
     const first = (await workers.reserveCard(lease(claim))) as { id: string };
-    await workers.beforeSubmit(lease(claim));
+    await submitPayment(claim);
     await expect(
       workers.cardAction(lease(claim, { cardId: first.id, confirmed: true }), 'releaseCard')
     ).rejects.toThrow('不能释放');
@@ -941,6 +997,316 @@ suite('线上代充隔离MySQL事务验收', () => {
         ?.amount
     ).toBeNull();
   });
+  it('计卡已确认后进程中断，重启只读核对复用原证据补账单订单且不重计卡', async () => {
+    const original = await start();
+    const first = (await workers.claim('fixture-before-crash'))!;
+    const card = await prepareCard(first);
+    const payment = await submitPayment(first);
+    await workers.cardAction(
+      lease(first, { cardId: card.id, paymentEvidence: payment.evidence }),
+      'recordCardUsage'
+    );
+    expect(await db.onlineRechargeTask.findUnique({ where: { id: original.id } })).toMatchObject({
+      status: 'running',
+      confirmedPaid: true,
+      result: { paymentEvidence: payment.evidence }
+    });
+    expect(await db.onlineRechargeBill.count()).toBe(0);
+    await db.onlineRechargeTask.update({
+      where: { id: original.id },
+      data: { leaseExpiresAt: new Date(0) }
+    });
+    expect(await workers.claim('fixture-after-restart')).toBeNull();
+    await tasks.action('jobs', 'recheck', { id: original.id }, operator);
+    const recheck = (await workers.claim('fixture-read-only-recovery'))!;
+    const saved = (recheck.payload as Record<string, unknown>).originalPaymentEvidence;
+    expect(saved).toEqual(payment.evidence);
+    await workers.finish(
+      lease(recheck, {
+        status: 'succeeded',
+        result: {
+          confirmedPaid: true,
+          paymentEvidence: saved,
+          confirmation: {
+            verified: true,
+            source: 'subscription',
+            querySucceeded: true,
+            hasActiveSubscription: true,
+            accountId: payment.context.accountId,
+            expectedAccountId: payment.context.accountId,
+            targetPlan: 'plus',
+            observedPlan: 'plus',
+            observedCanonicalPlan: 'plus',
+            tierVerified: true
+          }
+        }
+      }),
+      false
+    );
+    expect(await db.onlineRechargeTask.findUnique({ where: { id: original.id } })).toMatchObject({
+      status: 'succeeded',
+      confirmedPaid: true
+    });
+    expect(await db.onlineRechargeCard.findUnique({ where: { id: card.id } })).toMatchObject({
+      successCount: 1,
+      leaseOwner: null
+    });
+    expect(
+      await db.onlineRechargeBill.count({ where: { taskId: original.id, status: 'success' } })
+    ).toBe(1);
+    expect(
+      await db.onlineRechargeEvent.count({
+        where: { dedupeKey: `${original.id}:${card.id}:recordCardUsage` }
+      })
+    ).toBe(1);
+    expect(await db.onlineRechargeOrderSync.count({ where: { taskId: original.id } })).toBe(1);
+  }, 30000);
+
+  it('缺恢复身份、错绑或加密失败均回滚付款前事务，不能留下半份提交资料', async () => {
+    await start();
+    const claim = (await workers.claim('fixture-atomic'))!;
+    await prepareCard(claim);
+    const payment = await paymentFor(claim);
+    for (const args of [
+      { paymentContext: payment.context },
+      {
+        paymentContext: payment.context,
+        checkoutRecovery: { ...payment.checkoutRecovery, cardId: randomUUID() }
+      }
+    ]) {
+      await expect(workers.beforeSubmit(lease(claim, args))).rejects.toThrow();
+      const row = await db.onlineRechargeTask.findUniqueOrThrow({ where: { id: claim.id } });
+      expect(row.paymentStarted).toBe(false);
+      expect(row.payload).not.toHaveProperty('checkoutRecoveryEncrypted');
+      expect(row.payload).not.toHaveProperty('paymentContext');
+    }
+    const failedEncryption = vi.spyOn(encryption, 'encrypt').mockImplementationOnce(() => {
+      throw new Error('synthetic encryption failure');
+    });
+    try {
+      await expect(
+        workers.beforeSubmit(
+          lease(claim, {
+            paymentContext: payment.context,
+            checkoutRecovery: payment.checkoutRecovery
+          })
+        )
+      ).rejects.toThrow('synthetic encryption failure');
+    } finally {
+      failedEncryption.mockRestore();
+    }
+    const row = await db.onlineRechargeTask.findUniqueOrThrow({ where: { id: claim.id } });
+    expect(row.paymentStarted).toBe(false);
+    expect(row.payload).not.toHaveProperty('checkoutRecoveryEncrypted');
+    expect(row.payload).not.toHaveProperty('paymentContext');
+    expect(
+      await db.auditLog.count({
+        where: {
+          objectId: claim.id,
+          action: 'id_business_v2.online_recharge.worker.payment_submitted'
+        }
+      })
+    ).toBe(0);
+  }, 30000);
+
+  it('旧待核对任务缺原单身份时只记录明确原因，保留付款及原卡保护', async () => {
+    await start();
+    const claim = (await workers.claim('fixture-legacy'))!;
+    const card = await prepareCard(claim);
+    const original = await db.onlineRechargeTask.findUniqueOrThrow({ where: { id: claim.id } });
+    const legacyPayload = { ...(original.payload as Prisma.InputJsonObject) };
+    delete legacyPayload.checkoutRecoveryVersion;
+    await db.onlineRechargeTask.update({
+      where: { id: claim.id },
+      data: {
+        status: 'awaiting_review',
+        paymentStarted: true,
+        payload: legacyPayload,
+        leaseOwner: null,
+        leaseId: null,
+        leaseExpiresAt: null
+      }
+    });
+    expect(await taskRepository.processDueRechecks(new Date(Date.now() + 600000))).toEqual({
+      enqueued: 0
+    });
+    expect(await db.onlineRechargeTask.findUnique({ where: { id: claim.id } })).toMatchObject({
+      status: 'awaiting_review',
+      paymentStarted: true,
+      payload: { reconciliation: { stopped: true, reasonCode: 'legacy_original_identity_missing' } }
+    });
+    expect(await db.onlineRechargeTask.count({ where: { operation: 'subscription' } })).toBe(0);
+    expect(await db.onlineRechargeCard.findUnique({ where: { id: card.id } })).toMatchObject({
+      leaseOwner: claim.id,
+      successCount: 0
+    });
+  });
+
+  it('自动多实例与手工核对竞争时同原单只排一个只读任务，恢复资料加密保存', async () => {
+    await start();
+    const claim = (await workers.claim('fixture-original'))!;
+    const card = await prepareCard(claim);
+    const payment = await submitPayment(claim);
+    await workers.finish(lease(claim, { status: 'awaiting_review' }), true);
+    const original = await db.onlineRechargeTask.findUniqueOrThrow({ where: { id: claim.id } });
+    const payload = original.payload as Record<string, unknown>;
+    expect(typeof payload.checkoutRecoveryEncrypted).toBe('string');
+    expect(JSON.stringify(payload)).not.toContain(payment.checkoutRecovery.checkoutUrl);
+    expect(JSON.stringify(payload)).not.toContain(payment.checkoutRecovery.checkoutId);
+    expect(JSON.parse(encryption.decrypt(String(payload.checkoutRecoveryEncrypted))!)).toEqual(
+      payment.checkoutRecovery
+    );
+    expect(original.paymentStarted).toBe(true);
+    const schedule = payload.reconciliation as { startedAt: string };
+    const due = new Date(Date.parse(schedule.startedAt) + 60001);
+    const otherInstance = new OnlineRechargeTasksRepository(
+      repository,
+      settings,
+      encryption,
+      memory,
+      orderSync
+    );
+    await Promise.all([
+      taskRepository.processDueRechecks(due),
+      otherInstance.processDueRechecks(due),
+      tasks.action('jobs', 'recheck', { id: original.id }, operator)
+    ]);
+    const queued = await db.onlineRechargeTask.findMany({
+      where: {
+        operation: 'subscription',
+        status: 'queued',
+        payload: { path: '$.recheckTaskId', equals: original.id }
+      }
+    });
+    expect(queued).toHaveLength(1);
+    expect(queued[0]).toMatchObject({
+      paymentStarted: false,
+      cardId: null,
+      payload: { action: 'recheck', sourceVersion: original.leaseVersion }
+    });
+    expect(queued[0]?.payload).not.toHaveProperty('checkoutRecoveryEncrypted');
+    expect(await db.onlineRechargeTask.count({ where: { operation: 'recharge' } })).toBe(1);
+    const recheck = (await workers.claim('fixture-read-only'))!;
+    expect(await workers.getCheckoutRecovery(lease(recheck))).toEqual(payment.checkoutRecovery);
+    await expect(workers.beforeSubmit(lease(recheck))).rejects.toThrow('付款前必须预约');
+    expect(await db.onlineRechargeCard.findUnique({ where: { id: card.id } })).toMatchObject({
+      leaseOwner: original.id,
+      successCount: 0
+    });
+    expect(await db.onlineRechargeBill.count()).toBe(0);
+    expect(await db.onlineRechargeOrderSync.count()).toBe(0);
+  }, 30000);
+
+  it('真实事务保留已付未生效原卡，并发及迟到核对只入一次账单、卡次数和订单同步', async () => {
+    await settings.update({ maxConcurrent: 2 }, operator);
+    const original = await start();
+    const first = (await workers.claim('fixture-payment'))!;
+    const card = await prepareCard(first);
+    const payment = await submitPayment(first);
+    await workers.finish(lease(first, { status: 'awaiting_review' }), true);
+    await tasks.action('jobs', 'recheck', { id: original.id }, operator);
+    const pending = (await workers.claim('fixture-paid-not-active'))!;
+    await workers.finish(
+      lease(pending, {
+        status: 'succeeded',
+        result: {
+          confirmedPaid: true,
+          paymentEvidence: payment.evidence,
+          queryError: { code: 'timeout' },
+          confirmation: {
+            verified: false,
+            source: 'subscription',
+            querySucceeded: false,
+            hasActiveSubscription: false,
+            accountId: payment.context.accountId,
+            expectedAccountId: payment.context.accountId,
+            targetPlan: 'plus'
+          }
+        }
+      }),
+      false
+    );
+    expect(await db.onlineRechargeTask.findUnique({ where: { id: original.id } })).toMatchObject({
+      status: 'awaiting_review',
+      stage: 'paid_pending_activation',
+      confirmedPaid: true,
+      result: { paymentEvidence: payment.evidence }
+    });
+    expect(await db.onlineRechargeCard.findUnique({ where: { id: card.id } })).toMatchObject({
+      successCount: 0,
+      leaseOwner: original.id
+    });
+    expect(await db.onlineRechargeBill.count()).toBe(0);
+    expect(await db.onlineRechargeOrderSync.count()).toBe(0);
+    const scheduled = (await tasks.action('jobs', 'recheck', { id: original.id }, operator)) as {
+      id: string;
+    };
+    const source = await db.onlineRechargeTask.findUniqueOrThrow({ where: { id: scheduled.id } });
+    expect(source.payload).toMatchObject({ originalPaymentEvidence: payment.evidence });
+    // Simulate an already accepted duplicate from an older process; new scheduling itself deduplicates it.
+    await db.onlineRechargeTask.create({
+      data: {
+        operation: 'subscription',
+        provider: 'local',
+        message: '旧进程已经受理的重复只读核对夹具',
+        plan: source.plan,
+        sessionEncrypted: source.sessionEncrypted,
+        sessionIdentityHash: source.sessionIdentityHash,
+        payload: source.payload as Prisma.InputJsonObject
+      }
+    });
+    const second = (await workers.claim('fixture-recheck-a'))!;
+    const late = (await workers.claim('fixture-recheck-b'))!;
+    const result = {
+      confirmedPaid: true,
+      paymentEvidence: payment.evidence,
+      confirmation: {
+        verified: true,
+        source: 'subscription',
+        querySucceeded: true,
+        hasActiveSubscription: true,
+        accountId: payment.context.accountId,
+        expectedAccountId: payment.context.accountId,
+        targetPlan: 'plus',
+        observedPlan: 'plus',
+        observedCanonicalPlan: 'plus',
+        tierVerified: true
+      }
+    };
+    await Promise.all([
+      workers.finish(lease(second, { status: 'succeeded', result }), false),
+      workers.finish(lease(late, { status: 'succeeded', result }), false)
+    ]);
+    expect(await db.onlineRechargeTask.findUnique({ where: { id: original.id } })).toMatchObject({
+      status: 'succeeded',
+      confirmedPaid: true
+    });
+    expect(
+      await db.onlineRechargeBill.count({ where: { taskId: original.id, status: 'success' } })
+    ).toBe(1);
+    expect(
+      (
+        await db.onlineRechargeBill.findFirst({ where: { taskId: original.id, status: 'success' } })
+      )?.amount?.toString()
+    ).toBe('20.1');
+    expect(await db.onlineRechargeCard.findUnique({ where: { id: card.id } })).toMatchObject({
+      successCount: 1,
+      leaseOwner: null
+    });
+    expect(
+      await db.onlineRechargeEvent.count({
+        where: { dedupeKey: `${original.id}:${card.id}:recordCardUsage` }
+      })
+    ).toBe(1);
+    expect(await db.onlineRechargeOrderSync.count({ where: { taskId: original.id } })).toBe(1);
+    await expect(
+      workers.finish(lease(second, { status: 'succeeded', result }), false)
+    ).rejects.toThrow('租约失效');
+    expect(
+      await db.onlineRechargeBill.count({ where: { taskId: original.id, status: 'success' } })
+    ).toBe(1);
+  }, 30000);
+
   it('待核对原任务只读复查同账户同套餐后消费兑换码，旧核对结果不可覆盖', async () => {
     const codes = (await assets.action(
       'cdks',
@@ -951,7 +1317,7 @@ suite('线上代充隔离MySQL事务验收', () => {
     const original = await start(randomUUID(), codes.codes[0]),
       first = (await workers.claim('fixture-a'))!;
     await prepareCard(first);
-    await workers.beforeSubmit(lease(first));
+    const payment = await submitPayment(first);
     await workers.finish(lease(first, { status: 'awaiting_review' }), true);
     const recheck = (await tasks.action('jobs', 'recheck', { id: original.id }, operator)) as {
       id: string;
@@ -970,14 +1336,17 @@ suite('线上代充隔离MySQL事务验收', () => {
       observedPlan: 'chatgptplusplan'
     };
     await workers.finish(
-      lease(second, { status: 'succeeded', result: { confirmedPaid: true, confirmation } }),
+      lease(second, {
+        status: 'succeeded',
+        result: { confirmedPaid: true, confirmation, paymentEvidence: payment.evidence }
+      }),
       false
     );
     expect((await db.onlineRechargeTask.findUnique({ where: { id: original.id } }))?.status).toBe(
       'succeeded'
     );
     expect((await db.onlineRechargeCode.findFirst())?.status).toBe('used');
-    expect((await db.onlineRechargeBill.findFirst())?.amount).toBeNull();
+    expect((await db.onlineRechargeBill.findFirst())?.amount?.toString()).toBe('20.1');
     await expect(
       workers.finish(lease(first, { status: 'failed', definitiveFailure: true }), true)
     ).rejects.toThrow('租约失效');
@@ -992,7 +1361,7 @@ suite('线上代充隔离MySQL事务验收', () => {
     const original = await start(randomUUID(), codes.codes[0]),
       first = (await workers.claim('fixture-a'))!;
     await prepareCard(first);
-    await workers.beforeSubmit(lease(first));
+    await submitPayment(first);
     expect(
       await workers.finish(
         lease(first, { status: 'succeeded', result: { confirmedPaid: true, message: 'success' } }),

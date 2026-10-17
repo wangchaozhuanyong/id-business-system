@@ -11,8 +11,10 @@
  */
 
 const fs = require('fs');
-const { createHash } = require('node:crypto');
-const { beforeExternalSubmit, wasSubmitted, ResultUnknownError } = require('../rpc.cjs');
+const { performance } = require('node:perf_hooks');
+const timers = require('node:timers');
+const { beforeExternalSubmit, wasSubmitted, ResultUnknownError, taskSignal } = require('../rpc.cjs');
+const checkoutRecovery = require('../checkout-recovery.cjs');
 const { isVerifiedPaymentRedirect } = require('../outcomes.cjs');
 const safeMedia = require('../safe-media.cjs');
 const path = require('path');
@@ -617,17 +619,26 @@ async function completeStripeCardPayment(page, cardInfo, address, options = {}) 
         console.log(`[Stripe] 提交前最终应付已稳定: ${finalDue.currency} ${finalDue.amount}`);
         const paymentContext = require('./upgrade-checkout').buildPaymentContext(options, cardInfo, finalDue);
         const originalCheckoutUrl = page.url();
-        const originalCheckoutId = String(originalCheckoutUrl).match(/(?:oaics_[a-f0-9]+|cs_(?:live|test)_[A-Za-z0-9]+)/)?.[0];
-        if (originalCheckoutId) paymentContext.quoteId = 'quote:' + createHash('sha256').update(originalCheckoutId).digest('hex').slice(0, 32);
-        const payResult = await finalizeCheckoutPayment(page, holderName, { paymentContext, paymentLimit: options.paymentLimit });
-        const paymentEvidence = { ...paymentContext, source: 'checkout', quoteVerified: true, verified: payResult.success === true && isVerifiedCheckoutOutcome(originalCheckoutUrl, page.url()) };
-        return { ...payResult, dueAmount: finalDue.amount, dueCurrency: finalDue.currency, paymentEvidence };
+        paymentContext.quoteId = checkoutRecovery.quoteIdForUrl(originalCheckoutUrl);
+        const recovery = checkoutRecovery.buildCheckoutRecovery(originalCheckoutUrl, paymentContext);
+        const observation = checkoutRecovery.observePayment(page, recovery, { signal: options.signal || taskSignal?.() });
+        try {
+            const payResult = await finalizeCheckoutPayment(page, holderName, { paymentContext, paymentLimit: options.paymentLimit,
+                checkoutRecovery: recovery, paymentObservation: observation, signal: options.signal || taskSignal?.() });
+            const receipt = await observation.flush();
+            const paymentEvidence = receipt || { ...paymentContext, source: 'checkout', quoteVerified: true, verified: false };
+            const outcome = receipt ? { ...payResult, success: true, resultUnknown: false, declined: false }
+                : payResult.success ? { ...payResult, success: false, resultUnknown: true, error: '未取得绑定原单的实际付款证据，等待原单核对' } : payResult;
+            return { ...outcome, dueAmount: finalDue.amount, dueCurrency: finalDue.currency, paymentEvidence };
+        } finally { await observation.dispose(); }
 
     } catch (error) {
+        if (taskSignal?.()?.aborted) throw error;
         if (['LEASE_LOST', 'RESULT_UNKNOWN'].includes(error.code) || wasSubmitted()) throw error.code === 'LEASE_LOST' ? error : new ResultUnknownError();
         console.error(`[Stripe] ❌ 支付流程异常: ${error.message}`);
         const screenshotPath = await saveDebugScreenshot(page, 'payment_exception');
-        return { success: false, error: error.message, screenshot: screenshotPath };
+        return { success: false, error: error.message, screenshot: screenshotPath,
+            ...(/^[A-Z][A-Z_]{1,63}$/.test(error.code || '') ? { errorCode: error.code } : {}) };
     }
 }
 
@@ -736,17 +747,65 @@ async function dismissCheckoutPaymentError(page) {
 /**
  * 提交后并行等待：hCaptcha 弹层 vs 直接拒付（避免无验证拒付时空等 45s）
  */
-async function handlePostSubmitPhase(page) {
+async function handlePostSubmitPhase(page, options = {}) {
+    const deadlineAt = Math.min(Number(options.deadlineAt) || Infinity,
+        performance.now() + Math.min(180000, Math.max(1, Number(process.env.CAPTCHA_POST_SUBMIT_TIMEOUT_MS) || 180000)));
+    const signal = options.signal || taskSignal?.();
+    options.paymentObservation?.startDeadline(deadlineAt);
+    const result = await paymentReadWithinDeadline(() => postSubmitLoop(page, options, deadlineAt, signal), deadlineAt, signal)
+        .catch((error) => {
+            if (error.code === 'LEASE_LOST') throw error;
+            if (error.code !== 'PAYMENT_RESULT_TIMEOUT') throw error;
+            return { action: 'unknown', errorCode: error.code };
+        });
+    return { ...result, deadlineAt };
+}
+
+function assertPaymentDeadline(deadlineAt, signal) {
+    if (signal?.aborted) throw Object.assign(new Error('任务已停止'), { code: 'LEASE_LOST' });
+    if (performance.now() >= deadlineAt) throw Object.assign(new Error('原单结果读取超时'), { code: 'PAYMENT_RESULT_TIMEOUT' });
+}
+
+async function paymentReadWithinDeadline(operation, deadlineAt, signal) {
+    assertPaymentDeadline(deadlineAt, signal);
+    let timer, onAbort;
+    try {
+        return await Promise.race([Promise.resolve().then(operation), new Promise((_, reject) => {
+            timer = timers.setTimeout(() => reject(Object.assign(new Error('原单结果读取超时'), { code: 'PAYMENT_RESULT_TIMEOUT' })),
+                Math.max(1, deadlineAt - performance.now()));
+            onAbort = () => reject(Object.assign(new Error('任务已停止'), { code: 'LEASE_LOST' }));
+            signal?.addEventListener('abort', onAbort, { once: true });
+        })]);
+    } finally {
+        timers.clearTimeout(timer);
+        if (onAbort) signal?.removeEventListener('abort', onAbort);
+    }
+}
+
+function paymentVerificationDetails(result) {
+    const diagnostics = {};
+    for (const key of ['state', 'revision', 'solverCode', 'httpStatus', 'providerCode']) {
+        const value = result.diagnostics?.[key];
+        if (typeof value === 'number' && Number.isFinite(value)
+            || typeof value === 'string' && /^[A-Za-z0-9_.:-]{1,80}$/.test(value)) diagnostics[key] = value;
+    }
+    return { errorCode: /^(VERIFICATION_|VLM_)[A-Z_]+$/.test(result.code || '') ? result.code : 'VERIFICATION_RUNTIME_FAILED',
+        verificationDiagnostics: diagnostics };
+}
+
+async function postSubmitLoop(page, options, deadlineAt, signal) {
     const overlayWaitMs = Number(process.env.CAPTCHA_OVERLAY_WAIT_MS || 45000);
     const pollMs = Number(process.env.POST_SUBMIT_POLL_MS || 500);
-    const startedAt = Date.now();
-    const deadline = startedAt + overlayWaitMs;
+    const startedAt = performance.now();
+    const deadline = Math.min(deadlineAt, startedAt + overlayWaitMs);
     let captchaDetected = false;
     let lastLogSec = -1;
 
     console.log(`[Stripe] Step 9.5: 并行等待 hCaptcha 弹层或拒付结果（最长 ${Math.round(overlayWaitMs / 1000)}s）...`);
 
-    while (Date.now() < deadline) {
+    while (performance.now() < deadline) {
+        assertPaymentDeadline(deadlineAt, signal);
+        if (options.paymentObservation?.evidence()) return { action: 'success' };
         const declineMsg = await detectPaymentDeclineOnPage(page);
         if (declineMsg) {
             console.log(`[Stripe] ❌ 提交后快速检测到拒付（未出现验证）: ${declineMsg}`);
@@ -772,13 +831,13 @@ async function handlePostSubmitPhase(page) {
         }
         // Leaving Checkout (including /auth/login) is not proof of payment.
 
-        const elapsedSec = Math.floor((Date.now() - startedAt) / 1000);
+        const elapsedSec = Math.floor((performance.now() - startedAt) / 1000);
         if (elapsedSec >= lastLogSec + 5) {
             lastLogSec = elapsedSec;
             console.log(`[Captcha/overlay-wait][INFO] 仍在等待 hCaptcha 或拒付结果… (${elapsedSec}s)`);
         }
 
-        await page.waitForTimeout(pollMs);
+        await page.waitForTimeout(Math.max(1, Math.min(pollMs, deadline - performance.now())));
     }
 
     if (!captchaDetected) {
@@ -786,9 +845,12 @@ async function handlePostSubmitPhase(page) {
         return { action: 'continue' };
     }
 
+    assertPaymentDeadline(deadlineAt, signal);
     const postCaptcha = await clearHumanVerification(page, {
         phase: 'post_submit',
-        maxWaitMs: Number(process.env.CAPTCHA_POST_SUBMIT_TIMEOUT_MS || 180000),
+        deadlineAt,
+        signal,
+        maxWaitMs: Math.max(0, deadlineAt - performance.now()),
         maxBypassRounds: Number(process.env.CAPTCHA_POST_SUBMIT_MAX_ROUNDS || 8),
         requireCheckoutReady: false,
         useVisualSolver: true,
@@ -796,17 +858,10 @@ async function handlePostSubmitPhase(page) {
     });
 
     if (!postCaptcha.cleared) {
-        const overlayStill = await hasAnyCheckoutCaptchaSignal(page);
-        if (overlayStill) {
-            const screenshotPath = await saveDebugScreenshot(page, 'captcha_post_submit');
-            console.log('[Stripe] ❌ 提交后人机验证未能自动通过');
-            return {
-                action: 'captcha_failed',
-                error: buildCaptchaRequiredError(),
-                screenshot: screenshotPath
-            };
-        }
-        console.log('[Stripe] ⚠️ 提交后验证未能自动清除（无可见弹层）');
+        const screenshotPath = await saveDebugScreenshot(page, 'captcha_post_submit');
+        console.log('[Stripe] ❌ 提交后验证未完成，保留原单待核对');
+        return { action: 'captcha_failed', error: '支付后的验证未完成，原单结果待核对', screenshot: screenshotPath,
+            ...paymentVerificationDetails(postCaptcha) };
     } else if (postCaptcha.via === 'visual-solver') {
         console.log('[Stripe] ✅ 提交后 hCaptcha 已由视觉求解器通过');
     } else if (!postCaptcha.skipped) {
@@ -829,9 +884,9 @@ async function finalizeCheckoutPayment(page, holderName, options = {}) {
         return { success: false, error: '无法找到提交/支付按钮', screenshot: screenshotPath };
     }
 
-    const postResult = await handlePostSubmitPhase(page);
+    const postResult = await handlePostSubmitPhase(page, options);
     if (postResult.action === 'unknown') {
-        return { success: false, resultUnknown: true, error: '支付页面结果不明确，等待原单核对' };
+        return { success: false, resultUnknown: true, error: '支付页面结果不明确，等待原单核对', errorCode: postResult.errorCode };
     }
     if (postResult.action === 'declined') {
         return buildDeclinedPaymentResult(page, postResult.declineMsg, postResult.screenshot);
@@ -840,6 +895,8 @@ async function finalizeCheckoutPayment(page, holderName, options = {}) {
         return {
             success: false, resultUnknown: true,
             error: postResult.error,
+            errorCode: postResult.errorCode,
+            verificationDiagnostics: postResult.verificationDiagnostics,
             screenshot: postResult.screenshot,
             captchaRequired: true
         };
@@ -850,7 +907,7 @@ async function finalizeCheckoutPayment(page, holderName, options = {}) {
         return { success: true, holderName, screenshot: screenshotPath };
     }
 
-    const paymentOutcome = await waitForPaymentResult(page, holderName);
+    const paymentOutcome = await waitForPaymentResult(page, holderName, { ...options, deadlineAt: postResult.deadlineAt });
     if (paymentOutcome.success) {
         console.log('[Stripe] ✅ 支付成功！');
         return {
@@ -878,28 +935,45 @@ async function buildPaymentSuccessResult(page, holderName) {
     return { success: true, holderName, screenshot: screenshotPath };
 }
 
-async function waitForPaymentResult(page, holderName) {
-    const maxSec = Math.round(PAYMENT_RESULT_TIMEOUT_MS / 1000);
-    console.log(`[Stripe] Step 10: 等待支付结果（最长 ${maxSec}s，含 Stripe 处理中）...`);
-    page.setDefaultTimeout(Math.max(PAYMENT_RESULT_TIMEOUT_MS, 120000));
+async function waitForPaymentResult(page, holderName, options = {}) {
+    const deadlineAt = Math.min(Number(options.deadlineAt) || Infinity, performance.now() + Math.min(180000, PAYMENT_RESULT_TIMEOUT_MS));
+    const signal = options.signal || taskSignal?.();
+    try {
+        return await paymentReadWithinDeadline(() => paymentResultLoop(page, holderName, options, deadlineAt, signal), deadlineAt, signal);
+    } catch (error) {
+        if (error.code === 'LEASE_LOST') throw error;
+        if (error.code !== 'PAYMENT_RESULT_TIMEOUT') throw error;
+        return { success: false, resultUnknown: true, errorCode: 'PAYMENT_RESULT_TIMEOUT', error: '支付结果读取超时，保留原单待核对' };
+    }
+}
 
-    const deadline = Date.now() + PAYMENT_RESULT_TIMEOUT_MS;
+async function paymentResultLoop(page, holderName, options, deadlineAt, signal) {
+    const startedAt = performance.now();
+    const maxSec = Math.max(0, Math.round((deadlineAt - startedAt) / 1000));
+    console.log(`[Stripe] Step 10: 等待支付结果（最长 ${maxSec}s，含 Stripe 处理中）...`);
+    page.setDefaultTimeout(Math.max(1, Math.min(10000, deadlineAt - performance.now())));
+
     let lastProgressLog = 0;
     let lastLiveShot = 0;
     let captchaAttempts = 0;
 
-    while (Date.now() < deadline) {
+    while (performance.now() < deadlineAt) {
+        assertPaymentDeadline(deadlineAt, signal);
+        if (options.paymentObservation?.evidence()) return buildPaymentSuccessResult(page, holderName);
         const url = page.url();
 
         const captchaBlocking = await hasAnyCheckoutCaptchaSignal(page)
             || await isHumanVerificationVisible(page);
 
         if (captchaBlocking) {
+            assertPaymentDeadline(deadlineAt, signal);
             captchaAttempts += 1;
             console.log(`[Stripe] 检测到人机验证弹层，开始第 ${captchaAttempts} 次自动处理...`);
             const captchaResult = await clearHumanVerification(page, {
                 phase: `payment-poll-${captchaAttempts}`,
-                maxWaitMs: Number(process.env.CAPTCHA_POST_SUBMIT_TIMEOUT_MS || 180000),
+                deadlineAt,
+                signal,
+                maxWaitMs: Math.max(0, deadlineAt - performance.now()),
                 maxBypassRounds: Number(process.env.CAPTCHA_POST_SUBMIT_MAX_ROUNDS || 8),
                 requireCheckoutReady: false,
                 useVisualSolver: true,
@@ -910,10 +984,12 @@ async function waitForPaymentResult(page, holderName) {
                 continue;
             }
             const screenshotPath = await saveDebugScreenshot(page, 'captcha_challenge_required');
-            console.log('[Stripe] ❌ 人机验证无法自动通过，需人工处理（hCaptcha/Cloudflare）');
+            console.log('[Stripe] ❌ 支付后的验证未完成，保留原单待核对');
             return {
                 success: false,
-                error: buildCaptchaRequiredError(),
+                resultUnknown: true,
+                error: '支付后的验证未完成，原单结果待核对',
+                ...paymentVerificationDetails(captchaResult),
                 screenshot: screenshotPath,
                 captchaRequired: true
             };
@@ -962,12 +1038,12 @@ async function waitForPaymentResult(page, holderName) {
             }
         } catch (_) { /* no alerts */ }
 
-        const now = Date.now();
+        const now = performance.now();
         if (now - lastProgressLog >= 15000) {
             const processing = await page.locator(
                 '[aria-busy="true"], button[disabled]:has-text("Subscribe"), button[disabled]:has-text("订阅")'
             ).first().isVisible({ timeout: 800 }).catch(() => false);
-            const elapsed = Math.round((now - (deadline - PAYMENT_RESULT_TIMEOUT_MS)) / 1000);
+            const elapsed = Math.round((now - startedAt) / 1000);
             console.log(`[Stripe] 等待支付结果 ${elapsed}s/${maxSec}s${processing ? '（Stripe 处理中…）' : ''}`);
             lastProgressLog = now;
         }
@@ -981,7 +1057,7 @@ async function waitForPaymentResult(page, holderName) {
             }
         }
 
-        await page.waitForTimeout(PAYMENT_RESULT_POLL_MS);
+        await page.waitForTimeout(Math.max(1, Math.min(PAYMENT_RESULT_POLL_MS, deadlineAt - performance.now())));
     }
 
     const screenshotPath = await saveDebugScreenshot(page, 'payment_result_timeout');
@@ -997,7 +1073,8 @@ async function waitForPaymentResult(page, holderName) {
     return {
         success: false,
         resultUnknown: true,
-        error: `支付结果等待超时（${maxSec}s），当前 URL: ${page.url()}`,
+        errorCode: 'PAYMENT_RESULT_TIMEOUT',
+        error: `支付结果等待超时（${maxSec}s），保留原单待核对`,
         screenshot: screenshotPath
     };
 }
@@ -2356,7 +2433,9 @@ async function clickCheckoutSubmitButton(page, options = {}) {
                     throw Object.assign(new Error('付款前官网报价已变化，未提交付款'), { code: 'QUOTE_CHANGED' });
                 }
             }
-            await beforeExternalSubmit({ provider: 'local', stage: 'payment_submit', paymentContext: options.paymentContext });
+            await beforeExternalSubmit({ provider: 'local', stage: 'payment_submit', paymentContext: options.paymentContext,
+                checkoutRecovery: options.checkoutRecovery });
+            options.paymentObservation?.arm();
             await target.click({ timeout: 8000, delay: randomBetween(40, 120) });
             console.log(`[Stripe] ✅ 已点击提交按钮 (${label})`);
             return true;

@@ -122,3 +122,11 @@ export const ONLINE_RECHARGE_PERMISSION = {
   manage: 'id_business_v2.online_recharge.manage',
   sensitive: 'id_business_v2.online_recharge.sensitive'
 } as const;
+
+export interface OnlineRechargeCheckoutRecovery extends OnlineRechargePaymentContext {
+  version: 1;
+  checkoutId: string;
+  processorEntity: string | null;
+  checkoutUrl: string;
+  quoteId: string;
+}

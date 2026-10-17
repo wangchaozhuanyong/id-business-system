@@ -1,6 +1,13 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createRenderer, h, nextTick, ref, ssrContextKey, type Component, type VNode } from 'vue';
-import { onlineCell, onlineChangeEntries, onlineLabel, planOptions } from './labels';
+import {
+  onlineCell,
+  onlineChangeEntries,
+  onlineFailureLabel,
+  onlineLabel,
+  onlineResultIssue,
+  planOptions
+} from './labels';
 import { configGroups } from './configFields';
 import { topActions } from './sections';
 import { onlineTableSchemas } from './tableSchemas';
@@ -75,6 +82,31 @@ function resultState(result: unknown) {
 }
 
 describe('线上代充审计发现的结果展示', () => {
+  it('查询失败不会显示为已核对订阅，模型及验证错误使用中文原因', () => {
+    expect(onlineResultIssue({ querySucceeded: false, queryErrorCode: 'NETWORK_TIMEOUT' })).toBe(
+      '订阅查询未成功：官网查询超时'
+    );
+    expect(
+      onlineResultIssue({ data: { querySucceeded: false, queryErrorCode: 'VLM_AUTH_FAILED' } })
+    ).toBe('订阅查询未成功：视觉模型鉴权失败');
+    expect(onlineFailureLabel('VERIFICATION_FRAME_AMBIGUOUS')).toBe('无法唯一确认验证题目');
+    expect(onlineFailureLabel('UNRECOGNIZED_INTERNAL_CODE')).toBe('本次结果未能核实');
+    expect(onlineResultIssue({ querySucceeded: true })).toBe('');
+    expect(
+      onlineResultIssue({
+        confirmation: { querySucceeded: false, queryErrorCode: 'UPSTREAM_FORBIDDEN' }
+      })
+    ).toBe('订阅查询未成功：官网拒绝此次查询');
+  });
+  it('终态与待核对任务不显示正在查询进度', () => {
+    const task = ref({ id: 'original', status: 'failed', operation: 'recharge', result: {} });
+    const state = mount<{ connectionLabel: string }>(OnlineTaskProgress, () => ({
+      task: task.value
+    }));
+    expect(state.connectionLabel).toBe('本次执行已结束');
+    task.value.status = 'awaiting_review';
+    expect(state.connectionLabel).toBe('原单结果待核对');
+  });
   it('未关联任务的兑换码不会被误当作充值任务', () => {
     const state = resultState({ id: 'code-id', status: 'available', plan: 'plus', task: null });
     expect(state.liveTask).toBeUndefined();
