@@ -26,6 +26,8 @@ import {
   onlineCheckoutPreparedFieldsScope,
   isOnlineSessionRefreshOnly,
   onlineSessionRefreshScope,
+  isOnlineLoginVisibilityOnly,
+  onlineLoginVisibilityScope,
   onlineSettingsCommands
 } from './ci-online-settings-scope.mjs';
 
@@ -840,6 +842,116 @@ const sessionRefreshSources = [
 ];
 const sessionRefreshApiFixture =
   'apps/api/src/id-business-v2/online-recharge/local-chain-acceptance.spec.ts';
+const loginVisibilitySources = [
+  ...sessionRefreshSources,
+  'apps/api/src/id-business-v2/online-recharge/engine/confirmation.cjs',
+  'apps/api/src/id-business-v2/online-recharge/engine/upstream/auth-page-detect.js',
+  'apps/api/src/id-business-v2/online-recharge/engine/upstream/index.js',
+  sessionRefreshApiFixture
+];
+
+test('login visibility admits exactly eleven sources and seven optional controls without changing old scopes', () => {
+  assert.equal(onlineLoginVisibilityScope, 'ONLINE_LOGIN_VISIBILITY');
+  assert.equal(loginVisibilitySources.length, 11);
+  assert.equal(new Set(loginVisibilitySources).size, 11);
+  for (let mask = 0; mask < 128; mask++) {
+    const paths = [
+      ...loginVisibilitySources,
+      ...checkoutNavigationReadyControls.filter((_, index) => mask & (1 << index))
+    ];
+    assert.equal(isOnlineLoginVisibilityOnly(paths), true);
+    assert.equal(isOnlineSessionRefreshOnly(paths), false);
+    assert.equal(isOnlineSettingsOnly(paths), true);
+    assert.equal(isOnlineSettingsControlsOnly(paths), false);
+    assert.equal(checkMode(paths, 'unchanged', 'unchanged'), 'recharge');
+    assert.equal(checkMode(paths, 'before', 'after'), 'full');
+    assert.deepEqual(selectedParts(paths), ['guards', 'api', 'online-engine']);
+  }
+  for (const old of [
+    sessionRefreshSources,
+    [...sessionRefreshSources, sessionRefreshApiFixture, ...checkoutNavigationReadyControls],
+    checkoutPreparedFieldsSources,
+    coreParitySources,
+    checkoutNavigationReadySources,
+    checkoutLoadRecoverySources
+  ])
+    assert.equal(isOnlineLoginVisibilityOnly(old), false);
+});
+
+test('login visibility rejects missing proof, duplicates and neighboring runtime or control changes', () => {
+  const complete = [...loginVisibilitySources, ...checkoutNavigationReadyControls];
+  for (const required of loginVisibilitySources)
+    assert.equal(
+      isOnlineLoginVisibilityOnly(complete.filter((path) => path !== required)),
+      false,
+      required
+    );
+  const rejected = (paths) => {
+    assert.equal(isOnlineLoginVisibilityOnly(paths), false);
+    assert.equal(isOnlineSettingsOnly(paths), false);
+    assert.equal(isOnlineSettingsControlsOnly(paths), false);
+    assert.equal(checkMode(paths, '', ''), 'full');
+    assert.throws(() => onlineSettingsCommands('guards', paths));
+  };
+  for (const path of complete) rejected([...complete, path]);
+  for (const extra of [
+    '.github/workflows/online-checkout-load-validation.yml',
+    'scripts/ci-recharge-check.mjs',
+    'scripts/production-release/online-checkout-load-unreviewed.py',
+    'scripts/production-release/online-checkout-cs-release.py',
+    'apps/api/src/id-business-v2/online-recharge/engine/checkout-form.cjs',
+    'apps/api/src/id-business-v2/online-recharge/engine/upstream/payment-retry.js',
+    'apps/api/src/id-business-v2/online-recharge/engine/worker.cjs',
+    'apps/api/src/id-business-v2/online-recharge/persistence/tasks.repository.ts',
+    'apps/api/src/id-business-v2/online-recharge/unreviewed.spec.ts',
+    'apps/admin/src/v2/features/online-recharge/OnlineTaskProgress.vue',
+    'apps/api/src/auth/auth.service.ts',
+    'apps/api/prisma-mysql/schema.prisma',
+    'apps/api/prisma-mysql/migrations/unreviewed/migration.sql',
+    'package.json',
+    'package-lock.json',
+    'apps/api/src/id-business-v2/online-recharge/engine/upstream/package-lock.json'
+  ])
+    rejected([...complete, extra]);
+});
+
+test('login visibility retains serial engine, upstream, API graph, types and all five guards', () => {
+  const paths = [...loginVisibilitySources, ...checkoutNavigationReadyControls];
+  const guards = onlineSettingsCommands('guards', paths);
+  const api = onlineSettingsCommands('api', paths);
+  const engine = onlineSettingsCommands('online-engine', paths);
+  assert.deepEqual(api, onlineSettingsCommands('api', sessionRefreshSources));
+  assert.deepEqual(engine, onlineSettingsCommands('online-engine', sessionRefreshSources));
+  for (const name of [
+    'prettier',
+    'eslint',
+    'scripts/ci-online-settings-scope.test.mjs',
+    'scripts/ci-recharge-scope.test.mjs',
+    'scripts/ci-recharge-check.test.mjs',
+    'scripts/ci-change-scope.test.mjs',
+    'scripts/production-release/online-checkout-load-release.test.py',
+    'check:v2-module-architecture',
+    'check:v2-isolation',
+    'check:v2-prisma-runtime-boundary',
+    'check:v2-concurrency-standard',
+    'check:v2-decimal-standard'
+  ])
+    assert.ok(guards.flat().includes(name), name);
+  assert.ok(api.flat().includes('typecheck'));
+  assert.ok(
+    api.flat().includes('src/id-business-v2/online-recharge/local-chain-acceptance.spec.ts')
+  );
+  assert.ok(engine.flat().includes('test:upstream'));
+  assert.ok(engine.some((command) => command.at(-1).includes?.('--test-concurrency=1')));
+  for (const arg of [...guards, ...api, ...engine].flat())
+    assert.ok(
+      !/@apple-business\/admin|check:admin-ui|check:v2-(?:ui-language|color-contrast|table-standard|loading-standard)|mysql\.integration|migrate|docker|finance|test:online-recharge:controls/.test(
+        arg
+      ),
+      arg
+    );
+  assert.throws(() => onlineSettingsCommands('admin', paths), /Admin/);
+});
 
 test('session refresh admits its exact seven sources with only API fixture and seven optional controls', () => {
   assert.equal(onlineSessionRefreshScope, 'ONLINE_SESSION_REFRESH');
@@ -1482,7 +1594,8 @@ for (const [name, paths] of [
   ['navigation readiness', checkoutNavigationReadySources],
   ['core parity', coreParitySources],
   ['prepared fields', checkoutPreparedFieldsSources],
-  ['session refresh', sessionRefreshSources]
+  ['session refresh', sessionRefreshSources],
+  ['login visibility', loginVisibilitySources]
 ])
   test(`${name} source verification executes every fingerprint and rejects incomplete or tampered manifests`, () => {
     const command = onlineSettingsCommands('guards', paths).find((args) =>
@@ -1585,7 +1698,8 @@ test('load-recovery engine command discovers all current tests once with two wor
 
 for (const [name, paths] of [
   ['prepared fields', checkoutPreparedFieldsSources],
-  ['session refresh', sessionRefreshSources]
+  ['session refresh', sessionRefreshSources],
+  ['login visibility', loginVisibilitySources]
 ])
   test(`${name} execute every discovered engine test once, serially, and preserve failure`, () => {
     const command = onlineSettingsCommands('online-engine', paths).find((args) =>

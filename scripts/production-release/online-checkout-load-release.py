@@ -1,4 +1,4 @@
-"""Finite engine-only session refresh repair. No API/Admin replacement or payment."""
+"""Finite engine-only login visibility repair. No API/Admin replacement or payment."""
 import datetime
 import hashlib
 import importlib.util
@@ -13,8 +13,9 @@ HERE = Path(__file__).resolve().parent
 SCOPE = 'ONLINE_CHECKOUT_LOAD_RECOVERY'
 CONTRACT_FILE = 'online-checkout-load-contract.json'
 ENGINE = 'apps/api/src/id-business-v2/online-recharge/engine'
-SOURCE_BASE = '9ccc464613615f95d54f2adf63bd573b80adaa0e'
-FILES = frozenset(('SOURCE_MANIFEST.json', 'upstream/session-auth.js', 'upstream/subscription-check.js',
+SOURCE_BASE = '1ec294fc5f5835d40af16b915e2d83000c4fd084'
+FILES = frozenset(('SOURCE_MANIFEST.json', 'confirmation.cjs', 'upstream/auth-page-detect.js',
+    'upstream/index.js', 'upstream/session-auth.js', 'upstream/subscription-check.js',
     'test/regressions.test.cjs',
     'test/recharge-flow-acceptance.test.cjs'))
 ADDED = frozenset()

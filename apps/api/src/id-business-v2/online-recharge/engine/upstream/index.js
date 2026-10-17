@@ -624,6 +624,18 @@ async function run(runOptions = {}) {
         }
         // 用 exitCode 而非 process.exit()，确保下方 finally 能完整执行（录像需 context 关闭后才落盘）
         const resultUnknown = wasSubmitted() || require('../rpc.cjs').wasPaymentConfirmed() || paymentSucceeded || e.code === 'RESULT_UNKNOWN';
+        const verificationBootstrapCode = e.bootstrapDiagnostics?.reason === 'verification_failed'
+            ? require('./verification-runtime').controlledVerificationCode(e.code, null) : null;
+        const bootstrapFailure = {
+            SESSION_NOT_CONFIRMED: '官网首页的登录状态尚未确认，已停止后续操作',
+            SESSION_BOOTSTRAP_FAILED: '官网登录初始化未完成，已停止后续操作',
+            SESSION_INVALID: '官网未接受本次账号登录资料，已停止后续操作',
+            ACCOUNT_MISMATCH: '官网会话账号或用户与原任务不一致，已停止后续操作',
+            HUMAN_VERIFICATION_REQUIRED: '官网验证尚未完成，已停止后续操作'
+        }[e.code] || (verificationBootstrapCode && /^(?:VERIFICATION_|VLM_)/.test(verificationBootstrapCode)
+            ? '官网验证尚未完成，已停止后续操作' : undefined);
+        const bootstrapDiagnostics = bootstrapFailure
+            ? require('./session-auth').safeBootstrapDiagnostics(e.bootstrapDiagnostics) : undefined;
         const checkoutFailure = {
             CHECKOUT_RECOVERY_INVALID: '原结账单来源或付款绑定无效，未提交付款',
             CHECKOUT_RECOVERY_UNSUPPORTED: '当前结账单来源尚未通过核验，未提交付款',
@@ -661,7 +673,7 @@ async function run(runOptions = {}) {
         const checkoutFailureMessage = checkoutOpenDiagnostics
             ? `原结账单已创建，${openStageLabels[checkoutOpenDiagnostics.stage]}${openReasonLabels[checkoutOpenDiagnostics.reason]}；已停止后续操作${diagnosticDetails ? `（${diagnosticDetails}）` : ''}`
             : resultUnknown && checkoutFailure ? '结账单检查未完成，付款结果待核对；已停止后续操作' : checkoutFailure;
-        return { ...(lastPaymentResult?.paymentEvidence ? { paymentEvidence: lastPaymentResult.paymentEvidence, confirmation: lastPaymentResult.confirmation, cardLast4: lastPaymentResult.cardLast4, confirmedPaid: lastPaymentResult.confirmedPaid === true, subscriptionChangedVerified: lastPaymentResult.subscriptionChangedVerified === true } : {}), success: false, pendingCredentials: e.code === 'PENDING_CREDENTIALS', resultUnknown, ...(checkoutFailure || checkoutOpenDiagnostics ? { errorCode: checkoutFailure ? e.code : 'CHECKOUT_OPEN_FAILED' } : {}), ...(checkoutOpenDiagnostics ? { checkoutOpenDiagnostics } : {}), error: checkoutFailureMessage || (e.code === 'LEASE_LOST' ? '任务租约已失效' : '执行未完成，请查看受限诊断') };
+        return { ...(lastPaymentResult?.paymentEvidence ? { paymentEvidence: lastPaymentResult.paymentEvidence, confirmation: lastPaymentResult.confirmation, cardLast4: lastPaymentResult.cardLast4, confirmedPaid: lastPaymentResult.confirmedPaid === true, subscriptionChangedVerified: lastPaymentResult.subscriptionChangedVerified === true } : {}), success: false, pendingCredentials: e.code === 'PENDING_CREDENTIALS', resultUnknown, ...(checkoutFailure || checkoutOpenDiagnostics || bootstrapFailure ? { errorCode: checkoutFailure ? e.code : checkoutOpenDiagnostics ? 'CHECKOUT_OPEN_FAILED' : e.code } : {}), ...(checkoutOpenDiagnostics ? { checkoutOpenDiagnostics } : {}), ...(bootstrapDiagnostics ? { bootstrapDiagnostics } : {}), error: checkoutFailureMessage || bootstrapFailure || (e.code === 'LEASE_LOST' ? '任务租约已失效' : '执行未完成，请查看受限诊断') };
     } finally {
         console.log("👋 [系统] 流程结束，正在关闭浏览器...");
         await Promise.resolve(require('./human-verification').disposeVerificationPage?.(page)).catch(() => {});

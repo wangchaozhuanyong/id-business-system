@@ -175,6 +175,13 @@ async function runSyntheticRecharge(scene, options = {}) {
   );
   const sessionRefresh = options.sessionRefresh || null;
   assert.ok(sessionRefresh === null || ['same-account', 'wrong-account'].includes(sessionRefresh));
+  const authUi = options.authUi || null;
+  assert.ok(
+    authUi === null ||
+      ['hidden-login', 'visible-login', 'login-redirect', 'unconfirmed', 'challenge'].includes(
+        authUi
+      )
+  );
   if (options.diagnosticDelay) {
     assert.ok(['verify', 'verifyCard'].includes(options.diagnosticDelay.stage));
     assert.ok(Number.isFinite(options.diagnosticDelay.milliseconds));
@@ -275,7 +282,8 @@ async function runSyntheticRecharge(scene, options = {}) {
     diagnosticDelay: options.diagnosticDelay,
     cardFields,
     billingFields,
-    sessionRefresh
+    sessionRefresh,
+    authUi
   });
   const exit = await new Promise((resolve, reject) => {
     child.once('error', reject);
@@ -286,6 +294,7 @@ async function runSyntheticRecharge(scene, options = {}) {
     cardFields,
     billingFields,
     ...(sessionRefresh ? { sessionRefresh } : {}),
+    ...(authUi ? { authUi } : {}),
     ...(options.diagnosticDelay ? { diagnosticDelay: { ...options.diagnosticDelay } } : {}),
     entry: 'task-runner.runTask → execute → upstream/index.run',
     exit,
@@ -415,7 +424,8 @@ async function fixtureChild(
   diagnosticDelay,
   cardFields = 'standard',
   billingFields = 'standard',
-  sessionRefresh = null
+  sessionRefresh = null,
+  authUi = null
 ) {
   const { chromium, request } = require('../upstream/node_modules/playwright');
   const rpc = require('../rpc.cjs');
@@ -424,6 +434,10 @@ async function fixtureChild(
     refreshedAuthResponses: 0,
     originalBearerRequests: 0,
     refreshedBearerRequests: 0,
+    authUi,
+    authPageDocuments: 0,
+    authRedirectDocuments: 0,
+    authProbeIdentityResponses: 0,
     checkoutCreations: 0,
     checkoutDocuments: 0,
     checkoutDomContentLoaded: 0,
@@ -781,14 +795,43 @@ async function fixtureChild(
         headers: { 'access-control-allow-origin': '*' },
         body: JSON.stringify(value)
       });
-    if (req.method() === 'GET' && url.origin === origin && url.pathname === '/')
+    if (req.method() === 'GET' && url.origin === origin && url.pathname === '/') {
+      metrics.authPageDocuments++;
+      if (authUi === 'login-redirect')
+        return route.fulfill({
+          contentType: 'text/html',
+          body: '<html><body><script>location.replace("https://auth.openai.com/u/login")</script></body></html>'
+        });
+      const chatUi =
+        '<button>New chat</button><textarea id="prompt-textarea" placeholder="Ask anything"></textarea>';
+      const authMarkup =
+        {
+          'hidden-login': `${chatUi}<div hidden>Log in Sign up</div><div style="display:none">Sign in with Google</div><div style="visibility:hidden">Sign in to continue</div><div style="opacity:0"><button>Log in</button><button>Sign up for free</button><h1>Sign in to continue</h1></div><div inert><button>Log in</button><h1>Sign in to continue</h1></div><div aria-hidden="true"><button>Log in</button><h1>Sign in to continue</h1></div><article data-message-author-role="user"><p>Earlier message: Sign in to continue, Log in Sign up, Sign in with Google.</p></article><script type="application/json">{"message":"登录 ChatGPT"}</script><template>使用 Google 登录</template>`,
+          'visible-login': `${chatUi}<h1>Sign in to continue</h1><label>Email<input type="email"></label>`,
+          unconfirmed: `<main>Loading account</main><div style="opacity:0">${chatUi}</div><div inert>${chatUi}</div><div aria-hidden="true">${chatUi}</div>`,
+          challenge: '<h1>Verify you are human</h1>'
+        }[authUi] || chatUi;
       return route.fulfill({
         contentType: 'text/html',
-        body: '<html><body><button>New chat</button><textarea id="prompt-textarea" placeholder="Ask anything"></textarea></body></html>'
+        body: `<html><body>${authMarkup}</body></html>`
       });
+    }
+    if (
+      req.method() === 'GET' &&
+      url.origin === 'https://auth.openai.com' &&
+      url.pathname === '/u/login'
+    ) {
+      metrics.authRedirectDocuments++;
+      return route.fulfill({
+        contentType: 'text/html',
+        body: '<html><body><h1>Sign in to continue</h1></body></html>'
+      });
+    }
     if (url.origin === origin && url.pathname === '/api/auth/session') {
       assert.match(req.headers().cookie || '', /__Secure-next-auth\.session-token/);
       metrics.loginCookieVerified++;
+      if (authUi === 'unconfirmed') return json({ error: 'synthetic_unconfirmed' });
+      metrics.authProbeIdentityResponses++;
       if (sessionRefresh) metrics.refreshedAuthResponses++;
       return json(sessionRefresh ? refreshedSession : session);
     }
@@ -1205,7 +1248,8 @@ if (process.env.RECHARGE_FLOW_FIXTURE_CHILD === '1') {
       message.diagnosticDelay,
       message.cardFields,
       message.billingFields,
-      message.sessionRefresh
+      message.sessionRefresh,
+      message.authUi
     ).then(
       () => process.exit(0),
       (error) => {
@@ -1221,6 +1265,14 @@ if (process.env.RECHARGE_FLOW_FIXTURE_CHILD === '1') {
     ['recover', {}, 'recover'],
     ['unknown', {}, 'unknown'],
     ['readiness', {}, 'readiness'],
+    [
+      'success',
+      {
+        authUi: 'hidden-login',
+        outputDir: path.join(repairOutputRoot, `auth-ui-hidden-${randomUUID().slice(0, 8)}`)
+      },
+      'hidden login content preserves authenticated chat'
+    ],
     [
       'success',
       {
@@ -1278,6 +1330,11 @@ if (process.env.RECHARGE_FLOW_FIXTURE_CHILD === '1') {
         const metrics = actual.metrics;
         assert.equal(actual.failure, '');
         assert.equal(metrics.loginCookieVerified, 1);
+        if (fixtureOptions.authUi) {
+          assert.equal(metrics.authUi, 'hidden-login');
+          assert.equal(metrics.authProbeIdentityResponses, 1);
+          assert.equal(metrics.authRedirectDocuments, 0);
+        }
         if (fixtureOptions.sessionRefresh) {
           assert.equal(metrics.refreshedAuthResponses, 1);
           assert.equal(metrics.originalBearerRequests, 0);
@@ -1426,4 +1483,73 @@ if (process.env.RECHARGE_FLOW_FIXTURE_CHILD === '1') {
       );
     }
   );
+  for (const [authUi, expectedCode] of [
+    ['visible-login', 'SESSION_NOT_CONFIRMED'],
+    ['login-redirect', 'SESSION_NOT_CONFIRMED'],
+    ['unconfirmed', 'SESSION_NOT_CONFIRMED'],
+    ['challenge', 'VERIFICATION_TIMEOUT']
+  ])
+    test(`unconfirmed login never reaches a payment: ${authUi}`, { timeout: 50000 }, async () => {
+      const actual = await runSyntheticRecharge('success', {
+        authUi,
+        outputDir: path.join(repairOutputRoot, `auth-ui-${authUi}-${randomUUID().slice(0, 8)}`)
+      });
+      assert.equal(actual.failure, '');
+      assert.equal(actual.result.status, 'failed');
+      assert.equal(
+        actual.result.result.errorCode ?? actual.result.result.confirmation?.queryErrorCode,
+        expectedCode
+      );
+      const diagnostic =
+        actual.result.result.bootstrapDiagnostics ??
+        actual.result.result.confirmation?.queryBootstrapDiagnostics;
+      assert.equal(
+        diagnostic.reason,
+        {
+          'visible-login': 'visible_login_content',
+          'login-redirect': 'login_redirect',
+          unconfirmed: 'login_not_confirmed',
+          challenge: 'verification_failed'
+        }[authUi]
+      );
+      assert.equal(diagnostic.authApiVerified, authUi !== 'unconfirmed');
+      assert.equal(diagnostic.redirectDetected, authUi === 'login-redirect');
+      assert.equal(diagnostic.pageClosed, false);
+      assert.equal(
+        Object.values(diagnostic).every(
+          (value) => typeof value === 'boolean' || value === diagnostic.reason
+        ),
+        true
+      );
+      assert.equal(actual.metrics.authProbeIdentityResponses, authUi === 'unconfirmed' ? 0 : 1);
+      assert.equal(
+        actual.metrics.authRedirectDocuments,
+        authUi === 'login-redirect' ? actual.metrics.authPageDocuments : 0
+      );
+      if (authUi === 'login-redirect') assert.ok(actual.metrics.authRedirectDocuments > 0);
+      for (const key of [
+        'subscriptionChecksBefore',
+        'subscriptionChecksAfter',
+        'checkoutCreations',
+        'checkoutDocuments',
+        'initializations',
+        'actualPaymentClicks',
+        'paymentRequests',
+        'renewalRequests',
+        'unexpectedNetwork'
+      ])
+        assert.equal(actual.metrics[key], 0, key);
+      assert.equal(
+        actual.actions.some((action) =>
+          [
+            'reserveCard',
+            'beforeExternalSubmit',
+            'recordCardUsage',
+            'recordCardDecline',
+            'createBillingRecord'
+          ].includes(action.method)
+        ),
+        false
+      );
+    });
 }
