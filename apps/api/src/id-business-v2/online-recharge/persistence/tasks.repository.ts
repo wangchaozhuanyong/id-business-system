@@ -509,6 +509,21 @@ export class OnlineRechargeTasksRepository {
   }
   async action(section: string, action: string, raw: unknown, operator: AuthenticatedUser) {
     const input = object(raw);
+    if (action === 'detail') {
+      if (input.includeEvents !== undefined && typeof input.includeEvents !== 'boolean')
+        throw new BadRequestException('日志读取选项无效');
+      const taskId = id(input.id);
+      const task = await this.get(taskId);
+      if (input.includeEvents === false) return task;
+      const events = await this.repository.read((db) =>
+        db.onlineRechargeEvent.findMany({
+          where: { taskId },
+          orderBy: { createdAt: 'asc' },
+          take: 1000
+        })
+      );
+      return { ...task, events };
+    }
     if (section === 'jobs' && action === 'sync-order')
       return this.orderSync.enqueue(id(input.id), operator);
     if (section === 'jobs' && action === 'order-backfill-preview')
@@ -587,16 +602,6 @@ export class OnlineRechargeTasksRepository {
     return this.repository.transaction(`task:${taskId}`, async (tx) => {
       const row = await tx.onlineRechargeTask.findUnique({ where: { id: taskId } });
       if (!row) throw new NotFoundException('任务不存在');
-      if (action === 'detail')
-        return {
-          ...this.map(row),
-          orderSync: await this.orderSync.summary(taskId, tx),
-          events: await tx.onlineRechargeEvent.findMany({
-            where: { taskId },
-            orderBy: { createdAt: 'asc' },
-            take: 1000
-          })
-        };
       if (action === 'checkout-link') {
         assertOnlineSensitive(operator);
         text(input.reason, '查看原因', 500);

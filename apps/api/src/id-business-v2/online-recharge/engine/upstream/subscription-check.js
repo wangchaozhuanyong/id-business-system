@@ -1,6 +1,5 @@
 'use strict';
 
-const axios = require('axios');
 const { request: playwrightRequest } = require('playwright');
 const { extractProfileFromToken } = require('./session-auth');
 const { preparePlaywrightProxy } = require('./playwright-proxy');
@@ -283,70 +282,66 @@ function isCloudflareBlock(status, data) {
     return /cloudflare|cf-ray|attention required|just a moment|cf_chl/i.test(text);
 }
 
-async function fetchAccountCheckWithPlaywright(accessToken, timezoneOffsetMin = 0) {
-    const url = buildCheckUrl(timezoneOffsetMin);
-    const proxyValue = String(process.env.PROXY || '').trim();
-    const { proxyConfig, cleanup } = await preparePlaywrightProxy(proxyValue);
-    const ctx = await playwrightRequest.newContext({
-        userAgent: USER_AGENT,
-        proxy: proxyConfig || undefined,
-        extraHTTPHeaders: buildCheckHeaders(accessToken)
-    });
-
+async function fetchAccountCheckWithPlaywright(accessToken, timezoneOffsetMin = 0, browserContext = null) {
+    let cleanup = async () => {}, ctx = browserContext?.request;
+    const owned = !ctx;
     try {
-        const response = await ctx.get(url, { timeout: 20000 });
+      if (owned) {
+        const prepared = await preparePlaywrightProxy(String(process.env.PROXY || '').trim());
+        cleanup = prepared.cleanup;
+        ctx = await playwrightRequest.newContext({ userAgent: USER_AGENT,
+            proxy: prepared.proxyConfig || undefined, extraHTTPHeaders: buildCheckHeaders(accessToken) });
+      }
+        const response = await ctx.get(buildCheckUrl(timezoneOffsetMin), {
+            timeout: 20000, headers: { Authorization: `Bearer ${accessToken}`, Accept: 'application/json' }
+        });
         const status = response.status();
         let data;
-        try {
-            data = await response.json();
-        } catch (_) {
-            data = await response.text().catch(() => '');
-        }
-        return { status, data, via: 'playwright' };
+        try { data = await response.json(); } catch (_) { data = await response.text().catch(() => ''); }
+        return { status, data, via: owned ? 'proxy-request' : 'browser-context' };
     } finally {
-        await ctx.dispose().catch(() => {});
+        if (owned && ctx) await ctx.dispose().catch(() => {});
         await cleanup().catch(() => {});
     }
 }
 
-async function fetchAccountCheckWithAxios(accessToken, timezoneOffsetMin = 0) {
-    const url = buildCheckUrl(timezoneOffsetMin);
-    const response = await axios.get(url, {
-        headers: buildCheckHeaders(accessToken),
-        timeout: 20000,
-        validateStatus: () => true
-    });
-    return { status: response.status, data: response.data, via: 'axios' };
+async function fetchAccountCheckInBrowser(accessToken, timezoneOffsetMin, sessionRaw) {
+    const runtime = require('./browser-runtime');
+    const sessionAuth = require('./session-auth');
+    const prepared = await preparePlaywrightProxy(String(process.env.PROXY || '').trim());
+    let session, context;
+    try {
+        session = await runtime.connectTaskBrowser({ proxyConfig: prepared.proxyConfig, headful: process.env.HEADFUL === '1' });
+        context = await session.browser.newContext({ proxy: prepared.proxyConfig || undefined,
+            userAgent: session.realUserAgent, locale: 'en-US' });
+        const installed = await sessionAuth.installChatGptSession(context, sessionRaw);
+        const page = await context.newPage();
+        const login = await sessionAuth.bootstrapChatGptSession(page, sessionRaw, {
+            sessionData: installed?.sessionData || installed, cookieVerified: installed?.cookieVerified === true,
+            manualVerification: true
+        });
+        return await fetchAccountCheckWithPlaywright(login.session?.accessToken || accessToken, timezoneOffsetMin, context);
+    } finally {
+        if (context) await context.close().catch(() => {});
+        if (session) await runtime.closeTaskBrowser(session, session.browser);
+        await prepared.cleanup().catch(() => {});
+    }
 }
 
-async function fetchAccountCheck(accessToken, timezoneOffsetMin = 0) {
-    let lastError = null;
-
+async function fetchAccountCheck(accessToken, options = {}) {
     try {
-        const playwrightResult = await fetchAccountCheckWithPlaywright(accessToken, timezoneOffsetMin);
-        if (playwrightResult.status === 200 || playwrightResult.status === 401) {
-            return playwrightResult;
-        }
-        lastError = playwrightResult;
+        const result = await fetchAccountCheckWithPlaywright(accessToken, options.timezoneOffsetMin, options.browserContext);
+        if (result.status === 403 && !options.browserContext && options.sessionRaw && options.allowBrowserFallback === true)
+            return await fetchAccountCheckInBrowser(accessToken, options.timezoneOffsetMin, options.sessionRaw);
+        return result;
     } catch (error) {
-        lastError = { status: 0, data: error.message, via: 'playwright', error };
+        if (error.code === 'LEASE_LOST') throw error;
+        const code = error.code === 'HUMAN_VERIFICATION_REQUIRED' ? 'HUMAN_VERIFICATION_REQUIRED'
+            : /timeout|timed out/i.test(error.message) ? 'NETWORK_TIMEOUT'
+                : /proxy|tunnel|socks|ECONNREFUSED/i.test(error.message) ? 'PROXY_UNAVAILABLE'
+                    : /Session|尚未登录|未登录/.test(error.message) ? 'SESSION_INVALID' : 'NETWORK_UNAVAILABLE';
+        return { status: 0, errorCode: code, data: null };
     }
-
-    try {
-        const axiosResult = await fetchAccountCheckWithAxios(accessToken, timezoneOffsetMin);
-        if (axiosResult.status === 200 || axiosResult.status === 401) {
-            return axiosResult;
-        }
-        if (!lastError || lastError.status !== 200) {
-            lastError = axiosResult;
-        }
-    } catch (error) {
-        if (!lastError) {
-            lastError = { status: 0, data: error.message, via: 'axios', error };
-        }
-    }
-
-    return lastError || { status: 502, data: 'unknown error', via: 'none' };
 }
 
 async function requestOpenAiJson(accessToken, { method = 'GET', url, body = null }) {
@@ -395,30 +390,7 @@ async function requestOpenAiJson(accessToken, { method = 'GET', url, body = null
         lastError = { status: 0, data: error.message, via: 'playwright', error };
     }
 
-    if (method !== 'GET') return lastError || { status: 0, data: 'result_unknown', via: 'playwright' };
-
-    try {
-        const response = await axios({
-            method,
-            url,
-            headers: body != null ? { ...headers, 'Content-Type': 'application/json' } : headers,
-            data: body != null ? body : undefined,
-            timeout: 20000,
-            validateStatus: () => true
-        });
-        if (response.status >= 200 && response.status < 300 || response.status === 401) {
-            return { status: response.status, data: response.data, via: 'axios' };
-        }
-        if (!lastError || (lastError.status !== 200 && lastError.status !== 401)) {
-            lastError = { status: response.status, data: response.data, via: 'axios' };
-        }
-    } catch (error) {
-        if (!lastError) {
-            lastError = { status: 0, data: error.message, via: 'axios', error };
-        }
-    }
-
-    return lastError || { status: 502, data: 'unknown error', via: 'none' };
+    return lastError || { status: 0, data: 'result_unknown', via: 'playwright' };
 }
 
 function isAppStoreOrigin(channelRaw) {
@@ -630,19 +602,19 @@ function mapCheckError(status, data) {
     const body = normalizeResponseBody(data);
 
     if (status === 401) {
-        return { statusCode: 401, error: 'Session 无效或已过期，请重新获取 Session' };
+        return { statusCode: 401, errorCode: 'SESSION_INVALID', error: 'Session 无效或已过期，请重新获取 Session' };
     }
 
     if (status === 403) {
         if (isCloudflareBlock(status, body)) {
             return {
                 statusCode: 403,
-                error: 'OpenAI 风控拦截（Cloudflare），请稍后重试或在后台配置住宅代理 PROXY'
+                errorCode: 'UPSTREAM_BLOCKED', error: '官网风控拦截，订阅状态未能核实，请检查任务代理或人工验证'
             };
         }
         return {
             statusCode: 403,
-            error: 'OpenAI 拒绝访问（403），请确认 Session 来自 chatgpt.com 且 accessToken 未过期'
+            errorCode: 'UPSTREAM_FORBIDDEN', error: '官网拒绝此次查询（403），不能据此确定登录资料已过期'
         };
     }
 
@@ -672,15 +644,30 @@ async function querySubscriptionBySession(accessToken, options = {}) {
 
     let response;
     try {
-        response = await fetchAccountCheck(token, options.timezoneOffsetMin);
+        response = await fetchAccountCheck(token, options);
     } catch (error) {
+        if (error.code === 'LEASE_LOST') throw error;
         return {
             ok: false,
             statusCode: 502,
-            error: `无法连接 OpenAI 订阅接口：${error.message}`
+            errorCode: 'NETWORK_UNAVAILABLE',
+            error: '订阅查询网络不可用，本次未取得账号订阅结果'
         };
     }
 
+    if (response.errorCode) {
+        const messages = {
+            HUMAN_VERIFICATION_REQUIRED: '官网需要人工验证，请完成验证后再查询',
+            NETWORK_TIMEOUT: '订阅查询网络超时，本次未取得账号订阅结果',
+            PROXY_UNAVAILABLE: '任务代理连接失败，请检查代理服务',
+            SESSION_INVALID: '账号尚未登录或 Session 已失效，请更新登录资料',
+            NETWORK_UNAVAILABLE: '订阅查询网络不可用，本次未取得账号订阅结果'
+        };
+        const statuses = { NETWORK_TIMEOUT: 504, SESSION_INVALID: 401, HUMAN_VERIFICATION_REQUIRED: 403 };
+        return { ok: false, errorCode: response.errorCode,
+            statusCode: statuses[response.errorCode] || 502,
+            error: messages[response.errorCode] };
+    }
     const body = normalizeResponseBody(response.data);
     if (response.status !== 200) {
         const mapped = mapCheckError(response.status, body);

@@ -320,6 +320,7 @@ async function executePaymentWithRetry(page, options) {
             return {
                 success: false,
                 error: `需要人工操作：${lastError}`,
+                ...(paymentResult.formDiagnostics ? { formDiagnostics: paymentResult.formDiagnostics } : {}),
                 cardLast4,
                 manualIntervention: true,
                 screenshots

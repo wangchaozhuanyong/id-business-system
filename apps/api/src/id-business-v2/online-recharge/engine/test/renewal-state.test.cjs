@@ -174,3 +174,222 @@ test('GET subscription query uses no external-submit guard', async () => {
   assert.equal(f.posts.length, 0);
   assert.equal(f.prepared.length, 0);
 });
+
+// No real upstream or proxy connections: all transports and browser sessions are isolated fakes.
+function queryFixture({ statuses = [200], failure, loginFailure, contextFailure } = {}) {
+  const effects = {
+    proxies: [],
+    requests: [],
+    contexts: [],
+    closes: 0,
+    disposes: 0,
+    cleanups: 0,
+    logins: 0,
+    browserConnections: []
+  };
+  const browserContexts = [];
+  const response = () => ({
+    status: () => statuses.shift() ?? 403,
+    json: async () => account(true)
+  });
+  const sessionAuth = {
+    extractProfileFromToken: () => ({ accountId }),
+    installChatGptSession: async (context, raw) => {
+      context.installed = raw;
+      return { sessionData: {} };
+    },
+    bootstrapChatGptSession: async (_page, _raw, options) => {
+      effects.logins++;
+      assert.equal(options.manualVerification, true);
+      if (loginFailure) throw loginFailure;
+      return { session: { accessToken: token } };
+    }
+  };
+  const newBrowserContext = () => {
+    const context = {
+      request: {
+        get: async (...args) => {
+          effects.requests.push({ context, args });
+          return response();
+        }
+      },
+      newPage: async () => ({}),
+      close: async () => {
+        effects.closes++;
+      }
+    };
+    browserContexts.push(context);
+    return context;
+  };
+  const module = { exports: {} };
+  runInNewContext(source, {
+    module,
+    Buffer,
+    URL,
+    Date,
+    console,
+    process: { env: { PROXY: 'http://task-proxy.invalid:8123' } },
+    require(name) {
+      if (name === 'playwright')
+        return {
+          request: {
+            newContext: async (options) => {
+              effects.contexts.push(options);
+              if (contextFailure) throw contextFailure;
+              return {
+                get: async (...args) => {
+                  effects.requests.push({ args });
+                  if (failure) throw failure;
+                  return response();
+                },
+                dispose: async () => {
+                  effects.disposes++;
+                }
+              };
+            }
+          }
+        };
+      if (name === './session-auth') return sessionAuth;
+      if (name === './playwright-proxy')
+        return {
+          preparePlaywrightProxy: async (proxy) => {
+            effects.proxies.push(proxy);
+            return {
+              proxyConfig: { server: proxy },
+              cleanup: async () => {
+                effects.cleanups++;
+              }
+            };
+          }
+        };
+      if (name === './browser-runtime')
+        return {
+          connectTaskBrowser: async (options) => {
+            effects.browserConnections.push(options);
+            return {
+              browser: {
+                newContext: async (options) => {
+                  effects.contexts.push(options);
+                  return newBrowserContext();
+                }
+              }
+            };
+          },
+          closeTaskBrowser: async () => {}
+        };
+      if (name === '../plans.cjs') return require('../plans.cjs');
+      throw new Error(`Unexpected transport ${name}`);
+    }
+  });
+  return { api: module.exports, effects, newBrowserContext, browserContexts };
+}
+
+test('logged-in recharge uses the same cookie request context, without recreating or disposing it', async () => {
+  const f = queryFixture();
+  const context = f.newBrowserContext();
+  const result = await f.api.querySubscriptionBySession(token, { browserContext: context });
+  assert.equal(result.ok, true);
+  assert.equal(f.effects.requests[0].context, context);
+  assert.equal(f.effects.contexts.length, 0);
+  assert.equal(f.effects.proxies.length, 0);
+  assert.equal(f.effects.closes + f.effects.disposes, 0);
+});
+
+test('independent 403 enters one normal isolated login using the same resolved task proxy', async () => {
+  const f = queryFixture({ statuses: [403, 200] });
+  assert.equal(
+    (
+      await f.api.querySubscriptionBySession(token, {
+        sessionRaw: 'synthetic-session-A',
+        allowBrowserFallback: true
+      })
+    ).ok,
+    true
+  );
+  assert.equal(f.effects.logins, 1);
+  assert.equal(new Set(f.effects.proxies).size, 1);
+  assert.equal(f.effects.contexts[0].proxy.server, f.effects.contexts[1].proxy.server);
+  assert.equal(
+    f.effects.contexts[1].proxy.server,
+    f.effects.browserConnections[0].proxyConfig.server
+  );
+  assert.equal(f.browserContexts[0].installed, 'synthetic-session-A');
+  assert.equal(f.effects.closes, 1);
+  assert.equal(f.effects.disposes, 1);
+  assert.equal(f.effects.cleanups, 2);
+});
+
+test('repeated 403 stops after one browser check and does not label the session expired', async () => {
+  const f = queryFixture({ statuses: [403, 403] });
+  const result = await f.api.querySubscriptionBySession(token, {
+    sessionRaw: 'synthetic',
+    allowBrowserFallback: true
+  });
+  assert.equal(result.errorCode, 'UPSTREAM_FORBIDDEN');
+  assert.equal(f.effects.requests.length, 2);
+  assert.equal(f.effects.logins, 1);
+  assert.equal(f.effects.closes, 1);
+});
+
+test('401 is login failure and never creates a fallback browser', async () => {
+  const f = queryFixture({ statuses: [401] });
+  assert.equal(
+    (
+      await f.api.querySubscriptionBySession(token, {
+        sessionRaw: 'synthetic',
+        allowBrowserFallback: true
+      })
+    ).errorCode,
+    'SESSION_INVALID'
+  );
+  assert.equal(f.effects.logins, 0);
+});
+
+for (const [message, code] of [
+  ['Timeout 20000ms exceeded', 'NETWORK_TIMEOUT'],
+  ['SOCKS proxy connection refused', 'PROXY_UNAVAILABLE']
+])
+  test(`query classifies ${code} without exposing the raw transport error`, async () => {
+    const f = queryFixture({ failure: new Error(message) });
+    const result = await f.api.querySubscriptionBySession(token);
+    assert.equal(result.errorCode, code);
+    assert.equal(JSON.stringify(result).includes(message), false);
+    assert.equal(f.effects.disposes, 1);
+  });
+
+test('browser manual verification stops and always closes the isolated context', async () => {
+  const f = queryFixture({
+    statuses: [403],
+    loginFailure: Object.assign(new Error('challenge'), { code: 'HUMAN_VERIFICATION_REQUIRED' })
+  });
+  const result = await f.api.querySubscriptionBySession(token, {
+    sessionRaw: 'synthetic',
+    allowBrowserFallback: true
+  });
+  assert.equal(result.errorCode, 'HUMAN_VERIFICATION_REQUIRED');
+  assert.equal(result.statusCode, 403);
+  assert.equal(f.effects.closes, 1);
+  assert.equal(f.effects.requests.length, 1);
+});
+
+test('sequential independent tasks get different contexts and never inherit previous cookies', async () => {
+  const f = queryFixture({ statuses: [403, 200, 403, 200] });
+  for (const sessionRaw of ['synthetic-A', 'synthetic-B'])
+    assert.equal(
+      (await f.api.querySubscriptionBySession(token, { sessionRaw, allowBrowserFallback: true }))
+        .ok,
+      true
+    );
+  assert.notEqual(f.browserContexts[0], f.browserContexts[1]);
+  assert.deepEqual(
+    f.browserContexts.map((c) => c.installed),
+    ['synthetic-A', 'synthetic-B']
+  );
+  assert.equal(f.effects.closes, 2);
+});
+
+test('request context creation failure still cleans the proxy adapter', async () => {
+  const f = queryFixture({ contextFailure: new Error('proxy context failure') });
+  assert.equal((await f.api.querySubscriptionBySession(token)).ok, false);
+  assert.equal(f.effects.cleanups, 1);
+});

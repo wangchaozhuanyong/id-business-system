@@ -107,6 +107,64 @@ test('missing existing billing data fails immediately instead of inventing it', 
   assert.equal((await fillBilling(page, {}, '')).ok, false);
   assert.equal(await page.locator('[autocomplete="billing name"]').inputValue(), '');
 });
+
+test('observed Link name and state auxiliary never compete with explicit billing controls', async (t) => {
+  const page = await pageFor(
+    t,
+    '<input id="payment-linkLegalNameInput" name="linkLegalName" autocomplete="billing name" aria-label="Full name (optional)">' +
+      countryHtml +
+      addressHtml
+        .replace(
+          '<input autocomplete="billing name">',
+          '<input id="billingAddress-nameInput" autocomplete="billing name" required>'
+        )
+        .replace(
+          '<select autocomplete="billing address-level1">',
+          '<input autocomplete="billing address-level1"><select id="billingAddress-administrativeAreaInput" autocomplete="billing address-level1">'
+        )
+  );
+  const result = await fillBilling(page, address, 'Synthetic Person');
+  assert.equal(result.ok, true);
+  assert.equal(await page.locator('#payment-linkLegalNameInput').inputValue(), '');
+  assert.equal(await page.locator('#billingAddress-nameInput').inputValue(), 'Synthetic Person');
+  assert.equal(await page.locator('input[autocomplete="billing address-level1"]').inputValue(), '');
+  assert.equal(await page.locator('#billingAddress-administrativeAreaInput').inputValue(), 'OR');
+});
+test('billing group disambiguates names without relying on input order or unique autocomplete', async (t) => {
+  const page = await pageFor(
+    t,
+    '<section aria-label="Contact"><input autocomplete="billing name"></section>' +
+      '<section aria-label="Billing address">' +
+      countryHtml +
+      addressHtml +
+      '</section>'
+  );
+  assert.equal((await fillBilling(page, address, 'Synthetic Person')).ok, true);
+  assert.equal(await page.locator('[aria-label="Contact"] input').inputValue(), '');
+  assert.equal(
+    await page
+      .locator('[aria-label="Billing address"] input[autocomplete="billing name"]')
+      .inputValue(),
+    'Synthetic Person'
+  );
+});
+test('two actual billing names still fail closed and diagnostics contain no entered values', async (t) => {
+  const page = await pageFor(t, countryHtml + addressHtml + '<input autocomplete="billing name">');
+  const result = await fillBilling(page, address, 'Synthetic Person');
+  assert.equal(result.ok, false);
+  assert.deepEqual(result.missing, ['name']);
+  assert.doesNotMatch(JSON.stringify(result), /Synthetic Person|97201|1 Synthetic Street/);
+});
+test('inert explicit duplicates cannot defeat an active billing field', async (t) => {
+  const page = await pageFor(
+    t,
+    '<div inert><input id="billingAddress-nameInput" autocomplete="billing name"></div>' +
+      countryHtml +
+      addressHtml
+  );
+  assert.equal((await fillBilling(page, address, 'Synthetic Person')).ok, true);
+  assert.equal(await page.locator('[inert] input').inputValue(), '');
+});
 test('payment limit compares exact decimals and rejects missing/conflicting amounts', () => {
   const limit = { currency: 'PHP', maxAmount: '9990.0000' };
   assert.doesNotThrow(() => assertPaymentLimit(limit, { currency: 'PHP', amount: '9990.00' }));

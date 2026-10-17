@@ -39,6 +39,7 @@ function evaluateSubscription(targetPlan, expectedAccountId, result, options = {
   return {
     verified,
     querySucceeded: result?.ok === true,
+    ...(result?.ok === false ? { queryErrorCode: result.errorCode, queryError: result.error } : {}),
     hasActiveSubscription: data.hasActiveSubscription === true,
     source: 'subscription',
     accountId: observedAccountId,
@@ -91,7 +92,11 @@ async function confirmSubscription(targetPlan, token, injected = {}) {
     require('./upstream/session-auth').extractProfileFromToken(token).accountId || '';
   const query =
     injected.query || require('./upstream/subscription-check').querySubscriptionBySession;
-  const result = await query(token, { timezoneOffsetMin: 480 });
+  const result = await query(token, {
+    timezoneOffsetMin: 480,
+    ...(injected.browserContext ? { browserContext: injected.browserContext } : {}),
+    ...(injected.sessionRaw ? { sessionRaw: injected.sessionRaw, allowBrowserFallback: true } : {})
+  });
   return evaluateSubscription(targetPlan, expectedAccountId, result, {
     pro500Name:
       injected.pro500Name || (targetPlan === 'pro_500' ? process.env.PLAN_NAME_OVERRIDE : '')
@@ -146,7 +151,9 @@ async function preflightPayment(targetPlan, token, injected = {}) {
       allowed: false,
       alreadyActive: false,
       confirmation,
-      error: '付款前账号或套餐核验未通过，本次未提交付款'
+      error: confirmation.queryError
+        ? `${confirmation.queryError}；本次未提交付款`
+        : '付款前账号或套餐核验未通过，本次未提交付款'
     };
   }
   if (confirmation.verified) {
@@ -184,7 +191,12 @@ async function recheck(task, cfg, injected = {}) {
       injected.query || require('./upstream/subscription-check').querySubscriptionBySession;
     let result;
     try {
-      result = await query(token, { timezoneOffsetMin: payload.timezoneOffsetMin ?? 480 });
+      result = await query(token, {
+        timezoneOffsetMin: payload.timezoneOffsetMin ?? 480,
+        ...(injected.sessionRaw
+          ? { sessionRaw: injected.sessionRaw, allowBrowserFallback: true }
+          : {})
+      });
     } catch (error) {
       if (error.code === 'LEASE_LOST') throw error;
       return { ...unknown, error: '原续费变更结果仍待核对' };

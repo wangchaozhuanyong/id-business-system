@@ -13,6 +13,8 @@ export function useOnlineTask(
   let timer: ReturnType<typeof setTimeout> | undefined;
   let controller: AbortController | undefined;
   let revision = 0;
+  let requestSequence = 0;
+  let finalizing = false;
   const terminal = (status: string) =>
     ['succeeded', 'success', 'failed', 'cancelled'].includes(status);
   function stop() {
@@ -23,21 +25,48 @@ export function useOnlineTask(
     if (timer) clearTimeout(timer);
     controller?.abort();
   }
-  async function refresh() {
+  async function finish() {
+    if (finalizing) return;
+    finalizing = true;
+    const current = revision;
+    if (timer) clearTimeout(timer);
+    socket?.close();
+    try {
+      if (!customer) await refresh(true);
+    } finally {
+      if (current === revision) stop();
+    }
+  }
+  async function refresh(includeEvents = false) {
     if (!task.value?.id || (customer && !token.value)) return;
     const current = revision;
+    const sequence = ++requestSequence;
     controller?.abort();
-    controller = new AbortController();
+    const requestController = new AbortController();
+    controller = requestController;
     try {
       const value = customer
-        ? await onlineApi.task(task.value.id, token.value, controller.signal)
-        : await onlineApi.action('jobs', 'detail', { id: task.value.id });
-      if (current === revision) {
+        ? await onlineApi.task(task.value.id, token.value, requestController.signal)
+        : await onlineApi.action(
+            'jobs',
+            'detail',
+            { id: task.value.id, includeEvents },
+            requestController.signal
+          );
+      if (
+        current === revision &&
+        sequence === requestSequence &&
+        !requestController.signal.aborted
+      ) {
         task.value = value as unknown as PublicTask;
         error.value = '';
+        if (terminal(task.value.status)) {
+          if (!includeEvents) await finish();
+        }
       }
     } catch (cause) {
-      if (current === revision && !controller.signal.aborted) error.value = onlineError(cause);
+      if (current === revision && sequence === requestSequence && !requestController.signal.aborted)
+        error.value = onlineError(cause);
     }
   }
   function poll() {
@@ -51,7 +80,9 @@ export function useOnlineTask(
   }
   async function start() {
     stop();
+    finalizing = false;
     if (!task.value?.id || (customer && !token.value)) return;
+    if (terminal(task.value.status)) return;
     const current = revision;
     poll();
     try {
@@ -76,7 +107,9 @@ export function useOnlineTask(
           const update = payload.task ?? payload.data ?? payload;
           if (update.id === task.value?.id) {
             task.value = { ...task.value, ...update };
-            if (terminal(update.status)) stop();
+            if (terminal(update.status)) {
+              void finish();
+            }
           }
         } catch {
           /* 由轮询补齐不完整事件。 */
@@ -94,5 +127,5 @@ export function useOnlineTask(
   }
   watch([() => task.value?.id, () => token.value], () => void start(), { immediate: true });
   onScopeDispose(stop);
-  return { error, connected, refresh, stop };
+  return { error, connected, refresh: () => refresh(), stop };
 }

@@ -698,8 +698,10 @@ async function bootstrapChatGptSession(page, sessionRaw, options = {}) {
     });
     await page.waitForTimeout(2500);
 
-    const { clearHumanVerification } = require('./human-verification');
-    const captchaResult = await clearHumanVerification(page, {
+    const { clearHumanVerification, isBlockingHumanVerificationVisible } = require('./human-verification');
+    if (options.manualVerification === true && await isBlockingHumanVerificationVisible(page))
+        throw Object.assign(new Error('官网需要人工验证'), { code: 'HUMAN_VERIFICATION_REQUIRED' });
+    const captchaResult = options.manualVerification === true ? { cleared: true } : await clearHumanVerification(page, {
         phase: 'session-bootstrap',
         maxWaitMs: Number(process.env.CAPTCHA_CLEAR_TIMEOUT_MS || 180000),
         maxBypassRounds: 6

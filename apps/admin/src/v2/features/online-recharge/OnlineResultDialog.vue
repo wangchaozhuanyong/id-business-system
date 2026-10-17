@@ -271,7 +271,12 @@ const entries = computed(() => {
     ? { ...resultRecord.value, ...liveTask.value }
     : resultRecord.value;
   return Object.entries(details)
-    .filter(([key]) => labels[key] && !['cvc', 'taskToken', 'ticket'].includes(key))
+    .filter(
+      ([key]) =>
+        labels[key] &&
+        !['cvc', 'taskToken', 'ticket'].includes(key) &&
+        !(key === 'result' && ['queued', 'running'].includes(liveTask.value?.status ?? ''))
+    )
     .map(([key, value]) => ({
       label: labels[key],
       value: displayValue(key, value)

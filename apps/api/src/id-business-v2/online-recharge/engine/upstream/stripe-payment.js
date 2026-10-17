@@ -542,7 +542,7 @@ async function completeStripeCardPayment(page, cardInfo, address, options = {}) 
         const fillResult = await fillCardFieldsOpenAiCheckout(page, cardInfo, ELEMENT_TIMEOUT, formDeadline);
         if (!fillResult.ok) {
             const screenshotPath = await saveDebugScreenshot(page, 'card_fields_not_found');
-            return { success: false, error: fillResult.error || '无法定位信用卡输入框', screenshot: screenshotPath };
+            return { success: false, error: fillResult.error || '无法定位信用卡输入框', screenshot: screenshotPath, formDiagnostics: { missing: fillResult.missing || [], controls: fillResult.controls || [] } };
         }
 
         holderName = holderName || String(cardInfo.holder || '').trim();
@@ -551,7 +551,7 @@ async function completeStripeCardPayment(page, cardInfo, address, options = {}) 
         if (!billingResult.ok) {
             console.log('[Stripe] 账单控件诊断:', JSON.stringify(billingResult.controls || []));
             const screenshot = await saveDebugScreenshot(page, 'billing_address_not_filled');
-            return { success: false, submitted: false, canRetryCard: false, error: billingResult.error, screenshot };
+            return { success: false, submitted: false, canRetryCard: false, error: billingResult.error, screenshot, formDiagnostics: { missing: billingResult.missing || [], controls: billingResult.controls || [] } };
         }
         const cardAfterBilling = await fillCardFieldsOpenAiCheckout(page, cardInfo, ELEMENT_TIMEOUT, formDeadline);
         if (!cardAfterBilling.ok) {

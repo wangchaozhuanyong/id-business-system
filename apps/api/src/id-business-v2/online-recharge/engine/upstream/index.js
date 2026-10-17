@@ -497,7 +497,7 @@ async function run(runOptions = {}) {
         // Account and exact tier are checked before opening a new checkout. An
         // existing subscription must follow the original plan-change UI.
         const accessToken = String(loginInfo.session?.accessToken || CONFIG.chatgptToken).trim();
-        const preflight = await require('../confirmation.cjs').preflightPayment(planType, accessToken, { allowUnverifiedTarget: debugOnly });
+        const preflight = await require('../confirmation.cjs').preflightPayment(planType, accessToken, { allowUnverifiedTarget: debugOnly, browserContext: context });
         if (!preflight.allowed) return { success: false, submitted: false, ...preflight };
         const operation = preflight.kind;
         if (!['initial', 'upgrade'].includes(operation)) throw new Error('无法确定首次开通或升级操作');
@@ -569,7 +569,7 @@ async function run(runOptions = {}) {
             stripeSessionId,
             operation, preflight, expectedCurrency, checkoutKind: checkoutResult?.kind,
             paymentLimit: runOptions.paymentLimit,
-            confirmPayment: () => require('../confirmation.cjs').confirmSubscription(planType, accessToken)
+            confirmPayment: () => require('../confirmation.cjs').confirmSubscription(planType, accessToken, { browserContext: context })
         });
 
         lastPaymentResult = paymentResult;

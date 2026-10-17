@@ -14,6 +14,16 @@ vi.mock('@/v2/composables/useV2Query', () => ({
 }));
 import { onlineApi } from './api';
 describe('配置检测与执行器请求合同', () => {
+  it('管理端详情传递取消信号且不触发资料失效', async () => {
+    const signal = new AbortController().signal;
+    await onlineApi.action('jobs', 'detail', { id: 'task-1', includeEvents: false }, signal);
+    expect(client.post).toHaveBeenCalledWith(
+      '/id-business-v2/online-recharge/admin/jobs/detail',
+      { id: 'task-1', includeEvents: false },
+      { signal }
+    );
+    expect(client.invalidate).not.toHaveBeenCalled();
+  });
   beforeEach(() => {
     vi.clearAllMocks();
     client.post.mockResolvedValue({ id: 'test-job', status: 'queued', progress: 0 });
