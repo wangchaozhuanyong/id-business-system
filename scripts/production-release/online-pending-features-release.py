@@ -96,7 +96,7 @@ def validate_contract(c, *, require_baseline=True):
     need(c.get('version') == 1 and c.get('scope') == SCOPE and c.get('reviewBase') == SOURCE_BASE
          and c.get('expectedCurrent') == SOURCE_BASE and c.get('engineRoot') == ENGINE,
          'CONTRACT_IDENTITY_INVALID')
-    need(c.get('sourceReviewCommit') == '2bf6d333e4ef28ad9381748cc606315153d83f89', 'REVIEW_COMMIT_CHANGED')
+    need(c.get('sourceReviewCommit') == 'a1e65b996b0c527a562a14c470b5c7650a00bd25', 'REVIEW_COMMIT_CHANGED')
     need(inventory_valid(c.get('sources')) and set(c['sources']) == APPLICATION,
          'SOURCE_SCOPE_CHANGED')
     need(inventory_valid(c.get('controlPins')) and set(c['controlPins']) == CONTROLS

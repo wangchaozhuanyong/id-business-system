@@ -3728,7 +3728,7 @@
     "online-checkout-load-release.py": "50f9608895bf0072c38a2549a8db70c941316339c3a4626b179ca8b016078374",
     "online-checkout-release.py": "a20b33e15d05e7c01ddefd92ebce91c0587c0ccc09a5cd7a4cb019ebee6e0b39",
     "online-pending-features-build.py": "c2a9b8284f150dde7cc998858dc7f78765d9e1e95a40fed1bca747ee51281352",
-    "online-pending-features-release.py": "a3025968d39d8f2c9774f3a10bfb0ea1cad45d9ab126365cc001eca2699b1a76",
+    "online-pending-features-release.py": "9895b3f00f7e9d1d147c0dc7fa0ad57bec22e27e8bd1183238d86a77e1310993",
     "online-pending-features-release.test.py": "f3084834d7e49be20440e39fbd304ec011039bda5d88bdb375b243f0dc62a167",
     "proxy-result-identity-release.py": "97207252c12924dcbbfe3e86ebf397e928cd9545bbf9260337fd94ffd5109d45",
     "recharge-availability-release.py": "d98af117f3d80e705dd4f5eb3375a37cf4c0f058b65f4be77550d909ccbbe66c",
@@ -3774,7 +3774,7 @@
   "requiredQualityParts": ["guards", "api", "admin", "online-engine"],
   "reviewBase": "17591a4e0d02efb55ad2443d586d6b6913895efb",
   "scope": "ONLINE_PENDING_COPY_CVC_VOICE",
-  "sourceReviewCommit": "2bf6d333e4ef28ad9381748cc606315153d83f89",
+  "sourceReviewCommit": "a1e65b996b0c527a562a14c470b5c7650a00bd25",
   "sources": {
     "apps/admin/src/v2/features/online-recharge/OnlineResourceView.vue": "80253b52b6b1bfc0471153bd0255468aba846220c9e7f0d2e4a2b6520583eba7",
     "apps/admin/src/v2/features/online-recharge/api.spec.ts": "073af60b68ba40217d140cbe65c22a388a6bd091ed448dec245839cb25cbb81e",
@@ -3801,7 +3801,7 @@
     "apps/api/src/id-business-v2/online-recharge/persistence/worker.repository.ts": "6f5f0b5489c00072fc5d971da6ac7774aa7d6ee1791c799b82b57e9f70d502a6",
     "docs/ONLINE_RECHARGE.md": "449f70ab195bceac6a4b00c945d6d06f8cd72e79a3d0505f60bccbd81782b388",
     "docs/V2_TASKS.md": "b5f8dc2c2def4f17ed581f35d6e37c5dad1e0e9ded7da669d93656adb2ba44ae",
-    "scripts/acceptance-v2-online-recharge-ui.mjs": "f4771e883b7e1d0088f7b003c6cc60c10179a6d7aa9cbe6fbd941adc31e04113"
+    "scripts/acceptance-v2-online-recharge-ui.mjs": "dc4215980ec8f6b9d0468f637c7aee7533f92056c53223fd49c13a1b28f1df63"
   },
   "version": 1,
   "workflowSha256": "53b91d14750ee56ea96811ea0373bd7dde5d280d4803cbaddbf076be457ce514"
