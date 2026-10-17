@@ -1,4 +1,4 @@
-"""Reproduce published 055b API, then compile only the legacy closure delta."""
+"""Reproduce published online sources, retaining the current API image outside the delta."""
 import hashlib
 import importlib.util
 import json
@@ -46,7 +46,7 @@ def reconstruct(context, contract):
     builder.OUT = OUT
     builder.reconstruct(context, old, None)
     for name, expected in old['sources'].items():
-        raw = git('show', contract['expectedCurrent'] + ':' + name)
+        raw = git('show', contract['publishedSourceCommit'] + ':' + name)
         need(sha(raw) == expected, 'PUBLISHED_SOURCE_CHANGED')
         target = context / name
         target.parent.mkdir(parents=True, exist_ok=True)
@@ -133,6 +133,8 @@ def main():
              'workflowRunAttempt': os.environ['GITHUB_RUN_ATTEMPT'],
              'contractSha256': sha(raw_contract),
              'controlSources': {n: sha((HERE / n).read_bytes()) for n in c['controlFiles']},
+             'runtimeBaselineCommit': c['expectedCurrent'],
+             'publishedSourceCommit': c['publishedSourceCommit'],
              'sources': c['sources'], 'apiModules': modules, 'files': inventory(payload),
              'baselineApiReproduced': True, 'preservedAdminFiles': c['publicFiles'],
              'preservedEngineFiles': c['engineFiles'],
