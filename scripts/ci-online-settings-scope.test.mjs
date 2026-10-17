@@ -16,6 +16,7 @@ import {
   onlineCheckoutCsRecoveryScope,
   isOnlineCheckoutLoadRecoveryOnly,
   isOnlineCheckoutLoadRecoveryControlsOnly,
+  isOnlineCheckoutLoadParentRpcOnly,
   onlineCheckoutLoadRecoveryScope,
   onlineSettingsCommands
 } from './ci-online-settings-scope.mjs';
@@ -717,11 +718,13 @@ const checkoutLoadRecoverySources = [
     'SOURCE_MANIFEST.json',
     'checkout-form.cjs',
     'checkout-recovery.cjs',
+    'rpc.cjs',
     'test/checkout-form.test.cjs',
     'test/checkout-load-recovery.test.cjs',
     'test/checkout-page-loading.test.cjs',
     'test/checkout-recovery.test.cjs',
     'test/recharge-flow-acceptance.test.cjs',
+    'test/rpc-response.test.cjs',
     'test/verification-state.test.cjs',
     'upstream/chatgpt.js',
     'upstream/human-verification.js',
@@ -744,8 +747,9 @@ const checkoutLoadRecoveryOptional = [
   'docs/V2_TASKS.md'
 ];
 
-test('checkout load recovery has an independent exact thirteen-source scope and no Admin check', () => {
+test('checkout load recovery has an independent exact fifteen-source scope and no Admin check', () => {
   assert.equal(onlineCheckoutLoadRecoveryScope, 'ONLINE_CHECKOUT_LOAD_RECOVERY');
+  assert.equal(checkoutLoadRecoverySources.length, 15);
   for (const paths of [
     checkoutLoadRecoverySources,
     [...checkoutLoadRecoverySources, ...checkoutLoadRecoveryOptional],
@@ -768,6 +772,92 @@ test('checkout load recovery has an independent exact thirteen-source scope and 
     )
   ])
     assert.equal(onlineSettingsPaths.includes(path), false, 'older scopes must stay unchanged');
+});
+
+test('the parent lease recovery delta is mandatory without admitting neighboring RPC or worker changes', () => {
+  const delta = ['rpc.cjs', 'test/rpc-response.test.cjs'].map(
+    (name) => 'apps/api/src/id-business-v2/online-recharge/engine/' + name
+  );
+  const original = checkoutLoadRecoverySources.filter((path) => !delta.includes(path));
+  assert.equal(original.length, 13);
+  for (const paths of [original, ...delta.map((path) => [...original, path])]) {
+    assert.equal(isOnlineCheckoutLoadRecoveryOnly(paths), false);
+    assert.equal(isOnlineSettingsOnly(paths), false);
+    assert.equal(checkMode(paths, '', ''), 'full');
+    assert.throws(() => onlineSettingsCommands('guards', paths));
+  }
+  const complete = [...original, ...delta];
+  assert.equal(isOnlineCheckoutLoadRecoveryOnly(complete), true);
+  assert.deepEqual(selectedParts(complete), ['guards', 'api', 'online-engine']);
+  for (const path of [
+    'apps/api/src/id-business-v2/online-recharge/engine/worker.cjs',
+    'apps/api/src/id-business-v2/online-recharge/engine/test/worker-heartbeat.test.cjs',
+    'apps/api/src/id-business-v2/online-recharge/persistence/worker-rpc.repository.ts'
+  ]) {
+    assert.equal(isOnlineCheckoutLoadRecoveryOnly([...complete, path]), false);
+    assert.equal(checkMode([...complete, path], '', ''), 'full');
+  }
+  assert.equal(isOnlineCheckoutCsRecoveryOnly([...checkoutCsRecoverySources, ...delta]), false);
+});
+
+const checkoutLoadParentRpcSources = [
+  'SOURCE_MANIFEST.json',
+  'rpc.cjs',
+  'test/rpc-response.test.cjs'
+].map((name) => 'apps/api/src/id-business-v2/online-recharge/engine/' + name);
+
+test('the parent RPC successor from the published baseline needs exactly its three changed engine sources', () => {
+  for (const paths of [
+    checkoutLoadParentRpcSources,
+    [...checkoutLoadParentRpcSources, ...checkoutLoadRecoveryOptional],
+    [...checkoutLoadParentRpcSources, 'docs/ONLINE_RECHARGE.md', 'docs/V2_TASKS.md']
+  ]) {
+    assert.equal(isOnlineCheckoutLoadParentRpcOnly(paths), true);
+    assert.equal(isOnlineCheckoutLoadRecoveryOnly(paths), true);
+    assert.equal(isOnlineSettingsOnly(paths), true);
+    assert.equal(isOnlineSettingsControlsOnly(paths), false);
+    assert.equal(checkMode(paths, '', ''), 'recharge');
+    assert.equal(checkMode(paths, 'before', 'after'), 'full');
+    assert.deepEqual(selectedParts(paths), ['guards', 'online-engine']);
+    assert.throws(() => onlineSettingsCommands('api', paths), /parent RPC API/);
+    assert.throws(() => onlineSettingsCommands('admin', paths), /Admin/);
+    assert.ok(
+      onlineSettingsCommands('online-engine', paths)
+        .flat()
+        .some((arg) => arg.includes('--test-concurrency=2'))
+    );
+    const guards = onlineSettingsCommands('guards', paths).flat();
+    assert.ok(guards.includes('scripts/production-release/online-checkout-load-release.test.py'));
+    assert.ok(
+      !guards.some((arg) => /@apple-business|mysql\.integration|finance|migrate/.test(arg))
+    );
+  }
+  assert.equal(isOnlineCheckoutLoadParentRpcOnly(checkoutLoadRecoverySources), false);
+});
+
+test('the parent RPC successor rejects missing proof, duplicates and every unrelated partial feature', () => {
+  const exact = [...checkoutLoadParentRpcSources, ...checkoutLoadRecoveryOptional];
+  for (const paths of [
+    ...checkoutLoadParentRpcSources.map((missing) => exact.filter((path) => path !== missing)),
+    ...[
+      exact[0],
+      checkoutLoadRecoveryOptional[0],
+      'apps/api/src/id-business-v2/online-recharge/engine/worker.cjs',
+      'apps/api/src/id-business-v2/online-recharge/engine/checkout-form.cjs',
+      'apps/api/src/id-business-v2/online-recharge/local-chain-acceptance.spec.ts',
+      'apps/api/src/id-business-v2/online-recharge/persistence/worker-rpc.repository.ts',
+      'apps/admin/src/v2/features/online-recharge/OnlineActionDrawer.vue',
+      'apps/api/prisma-mysql/schema.prisma',
+      'package-lock.json',
+      'scripts/production-release/online-checkout-cs-release.py'
+    ].map((path) => [...exact, path])
+  ]) {
+    assert.equal(isOnlineCheckoutLoadParentRpcOnly(paths), false);
+    assert.equal(isOnlineCheckoutLoadRecoveryOnly(paths), false);
+    assert.equal(isOnlineSettingsOnly(paths), false);
+    assert.equal(checkMode(paths, '', ''), 'full');
+    assert.throws(() => onlineSettingsCommands('guards', paths));
+  }
 });
 
 test('every load-recovery source is mandatory and adjacent API, Admin, schema and dependencies fall back', () => {

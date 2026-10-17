@@ -71,11 +71,107 @@ test('JSON envelopes, false and zero keep their existing values', async () => {
     assert.deepEqual(await rpc.rpc('getActiveProxy'), expected);
   }
 });
-test('HTTP lease errors remain fatal even with an empty response', async () => {
-  for (const status of [401, 403, 409, 410]) {
-    global.fetch = async () => new Response('', { status });
-    await assert.rejects(rpc.rpc('getActiveProxy'), { code: 'LEASE_LOST' });
+const leaseResponses = [
+  ...[401, 403, 409, 410].map((status) => ({
+    label: `HTTP ${status}`,
+    response: () => new Response('', { status })
+  })),
+  {
+    label: 'JSON LEASE_LOST',
+    response: () => new Response('{"ok":false,"code":"LEASE_LOST"}', { status: 201 })
   }
+];
+for (const failure of leaseResponses) {
+  test(`parent ${failure.label} rejection permits the next actual config request`, async () => {
+    const calls = [];
+    global.fetch = async (_, options) => {
+      calls.push(JSON.parse(options.body).method);
+      return calls.length === 1
+        ? failure.response()
+        : new Response('{"maxConcurrent":2}', { status: 201 });
+    };
+    await assert.rejects(rpc.rpc('claimJob', { workerId: 'synthetic-parent' }), {
+      code: 'LEASE_LOST'
+    });
+    assert.equal(rpc.taskSignal().aborted, false);
+    assert.deepEqual(await rpc.rpc('getRuntimeConfig'), { maxConcurrent: 2 });
+    assert.deepEqual(calls, ['claimJob', 'getRuntimeConfig']);
+  });
+  test(`configured child ${failure.label} remains cancelled before any later fetch or submit`, async () => {
+    rpc.configureTask({ id: 'synthetic-child', leaseId: 'synthetic-lease', leaseVersion: 1 });
+    let fetches = 0;
+    global.fetch = async () => {
+      fetches++;
+      return failure.response();
+    };
+    await assert.rejects(rpc.rpc('heartbeat'), { code: 'LEASE_LOST' });
+    assert.equal(rpc.taskSignal().aborted, true);
+    await assert.rejects(rpc.rpc('getRuntimeConfig'), { code: 'LEASE_LOST' });
+    await assert.rejects(rpc.beforeExternalSubmit({ stage: 'payment_submit' }), {
+      code: 'LEASE_LOST'
+    });
+    assert.equal(fetches, 1);
+    assert.equal(rpc.wasSubmitted(), false);
+  });
+}
+test('one task heartbeat rejection does not poison another parent lease or config polling', async () => {
+  const calls = [];
+  global.fetch = async (_, options) => {
+    const body = JSON.parse(options.body);
+    calls.push({ method: body.method, taskId: body.args.taskId, args: body.args });
+    if (body.args.taskId === 'synthetic-expired') return new Response('', { status: 409 });
+    return new Response('{"ok":true,"leaseExpiresAt":"2100-01-01T00:00:00Z"}', { status: 201 });
+  };
+  await assert.rejects(
+    rpc.rpc('heartbeat', {
+      taskId: 'synthetic-expired',
+      leaseId: 'expired-lease',
+      leaseVersion: 1
+    }),
+    { code: 'LEASE_LOST' }
+  );
+  const other = { taskId: 'synthetic-active', leaseId: 'active-lease', leaseVersion: 2 };
+  assert.equal((await rpc.rpc('heartbeat', other)).ok, true);
+  assert.equal((await rpc.rpc('getRuntimeConfig')).ok, true);
+  assert.deepEqual(
+    calls.map((call) => call.method),
+    ['heartbeat', 'heartbeat', 'getRuntimeConfig']
+  );
+  assert.deepEqual(calls[1].args, other);
+  assert.equal(rpc.taskSignal().aborted, false);
+});
+test('post-submit transport uncertainty retains the one-submit guard', async () => {
+  rpc.configureTask({ id: 'synthetic-paid-child', leaseId: 'synthetic-lease', leaseVersion: 1 });
+  const calls = [];
+  global.fetch = async (_, options) => {
+    calls.push(JSON.parse(options.body).method);
+    if (calls.length > 1) throw new Error('Synthetic lost response');
+    return new Response('{"ok":true}', { status: 201 });
+  };
+  await rpc.beforeExternalSubmit({ stage: 'payment_submit' });
+  assert.equal(rpc.wasSubmitted(), true);
+  await assert.rejects(rpc.rpc('heartbeat'), { code: 'RESULT_UNKNOWN' });
+  await assert.rejects(rpc.beforeExternalSubmit({ stage: 'payment_submit' }), {
+    code: 'RESULT_UNKNOWN'
+  });
+  assert.equal(rpc.wasSubmitted(), true);
+  assert.deepEqual(calls, ['beforeExternalSubmit', 'heartbeat']);
+});
+test('post-submit lease loss retains submission evidence and permanently stops the child', async () => {
+  rpc.configureTask({ id: 'synthetic-paid-child', leaseId: 'synthetic-lease', leaseVersion: 1 });
+  const calls = [];
+  global.fetch = async (_, options) => {
+    calls.push(JSON.parse(options.body).method);
+    return calls.length === 1 ? new Response('{"ok":true}') : new Response('', { status: 410 });
+  };
+  await rpc.beforeExternalSubmit({ stage: 'payment_submit' });
+  await assert.rejects(rpc.rpc('heartbeat'), { code: 'LEASE_LOST' });
+  await assert.rejects(rpc.beforeExternalSubmit({ stage: 'payment_submit' }), {
+    code: 'LEASE_LOST'
+  });
+  assert.equal(rpc.wasSubmitted(), true);
+  assert.equal(rpc.taskSignal().aborted, true);
+  assert.deepEqual(calls, ['beforeExternalSubmit', 'heartbeat']);
 });
 function taskRunnerScenario(failAt) {
   const code = `

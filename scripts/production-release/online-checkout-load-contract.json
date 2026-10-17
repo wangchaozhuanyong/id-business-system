@@ -5,7 +5,7 @@
     ".gitignore": "ee2666d766b138b1597680a997c7c3f3d1bdf2df69e27c1a6e89850745cb8710",
     "Dockerfile": "35638ed559cad7698ae45706503bdb74d3353f65d871f9285be539addc8da569",
     "README.md": "ed8d0b0f8b85aa8c8fcc506ec20100bdb6f72da2f6e12fcb05a463f7b8cafa48",
-    "SOURCE_MANIFEST.json": "0c1f7970a1a5dde3eae5d20e90a9bfbd66aab69f8fa7e49f7a20a2f3112964d4",
+    "SOURCE_MANIFEST.json": "19d79f4e8b37df9fe5e2104f202abbcd436c96f25c3921fa69a4e6bfbb92bf71",
     "UPSTREAM.json": "2357ff0a121ce916de81aa7cf6303d58ac59666aa530f42083e528b6530f9623",
     "checkout-form.cjs": "69c3ccc95ee84f8c64cc01c89848a1d77720faa2e661c22387e5b3b8b9636531",
     "checkout-recovery.cjs": "bbb1d3b3fe2d3ee9338243fd4e9477a5649f9326fa12e3b3e3c8b7930d388eae",
@@ -22,7 +22,7 @@
     "proxy-resolver.cjs": "28aff967368d96ce1f8615650bfe0c133ef1945acfde089d2628de547492588e",
     "proxy-test.cjs": "5cd5dda88b07478822efb865b482baf35083969fbf6fdae9ffe3538165aeb17f",
     "requirements-hcaptcha.lock.txt": "b28f6a620ffdb5815de2bf1ecebc17336f18f530b55ce56e33f674e7d1786e74",
-    "rpc.cjs": "438154afff5cf0d2689ede94cd22314ec352c7fde3ad732aa76c0f66e88b4245",
+    "rpc.cjs": "f9b13d4707c31efb5a7ce47153365a501542d34b5cb3adf5dec75fcd34beaafa",
     "safe-media.cjs": "0299ff3e553afcec81c297aeccdc0a21e4b3870a5368f8d6fdf7c24ad480bee0",
     "security.cjs": "d9804a3da20286cb9d83561b951ffaca611b096dbcd032e8e27411d8738ff38f",
     "task-runner.cjs": "da0df828be19c636308b5a630c8feeaac2c107745b3601771333c650f60338ac",
@@ -51,7 +51,7 @@
     "test/regressions.test.cjs": "aa060d1c6cc4c31d31c1d4c2cfe50e7a002480d162cfd723da58d9baf028cbfa",
     "test/renewal-recheck.test.cjs": "3930ae388b07243e63f2ed82ee835c1e3e24da420cc79edc18729ec2baa2d2a0",
     "test/renewal-state.test.cjs": "cd3df850d22eef502cea00f9f3f591a33a877ba11cc7fc34ed83f70e7aa617cd",
-    "test/rpc-response.test.cjs": "f9c9cb74bc7a05c61fc2037c696e1b83c386f834d345e703adf015c0b46864f8",
+    "test/rpc-response.test.cjs": "2aedde698346a595cc20ae0cee7341e2ec0914471f51cf9e4a97b8c2dcf97a96",
     "test/runtime-main.test.cjs": "f16785dae472a4065bac6f2dd4b23624d3aeba7708d668e55742b57a84be063b",
     "test/safe-media-finish.test.cjs": "8ca819f3a37fecf43702b031f23d6308155671ba36103cd1b2d3b5a18678b329",
     "test/solver-process.test.cjs": "2facfc94499ead9ed01b7f485efcb91159086e065f2e5c4683aaa49d44e3945e",
@@ -305,7 +305,7 @@
         "health": "healthy",
         "image": "sha256:569733ba30623a02df7c4159630d44f8aae638824ad050a17ed2dfe4517c29f8",
         "reference": "id-business-v2-online-checkout-cs:92aba4034ade09985015f7dfa7592fc7553b743c-39027872983-online-recharge",
-        "startedAtSha256": "2bfdbf9b30684a48148046e53c9fff866408b898784e8149be22236a9ea43347",
+        "startedAtSha256": "2207a9138b571656b4191c35b570607fa48ec0c07b1b2109e4071e3a71e0f72c",
         "status": "running"
       }
     }
@@ -413,8 +413,8 @@
   "controlPins": {
     "api-admin-scope.py": "50446ab528a288ca1c2129c84f1bf4a90f59fa313a92bcff0058a258c8b8e925",
     "online-checkout-load-build.py": "091b5dfa11ba03e4907918afc9c548f6d4b59bd15adef62bac23c10744ec196b",
-    "online-checkout-load-release.py": "eaa77205ce1ac0de7d39fbec9088925bbf9287289f8314539f3c2a63dd5a7ba2",
-    "online-checkout-load-release.test.py": "28b0165f4e2b9349554d144d5bef20c8d5dc89bd89de7d3492bb85b9ada5462d",
+    "online-checkout-load-release.py": "0a5533ef5bfeeba977b410d3b5ef3eca1a8a0cb56fb77ad0eb780645cbe37023",
+    "online-checkout-load-release.test.py": "fdc796387afd637e690e23df3602f2284236f1ab7f354d80e4fa541f6c62c565",
     "online-checkout-release.py": "a20b33e15d05e7c01ddefd92ebce91c0587c0ccc09a5cd7a4cb019ebee6e0b39",
     "proxy-result-identity-release.py": "97207252c12924dcbbfe3e86ebf397e928cd9545bbf9260337fd94ffd5109d45",
     "recharge-availability-release.py": "d98af117f3d80e705dd4f5eb3375a37cf4c0f058b65f4be77550d909ccbbe66c",
@@ -433,14 +433,16 @@
   },
   "engineRoot": "apps/api/src/id-business-v2/online-recharge/engine",
   "runtimeSources": {
-    "apps/api/src/id-business-v2/online-recharge/engine/SOURCE_MANIFEST.json": "0c1f7970a1a5dde3eae5d20e90a9bfbd66aab69f8fa7e49f7a20a2f3112964d4",
+    "apps/api/src/id-business-v2/online-recharge/engine/SOURCE_MANIFEST.json": "19d79f4e8b37df9fe5e2104f202abbcd436c96f25c3921fa69a4e6bfbb92bf71",
     "apps/api/src/id-business-v2/online-recharge/engine/checkout-form.cjs": "69c3ccc95ee84f8c64cc01c89848a1d77720faa2e661c22387e5b3b8b9636531",
     "apps/api/src/id-business-v2/online-recharge/engine/checkout-recovery.cjs": "bbb1d3b3fe2d3ee9338243fd4e9477a5649f9326fa12e3b3e3c8b7930d388eae",
+    "apps/api/src/id-business-v2/online-recharge/engine/rpc.cjs": "f9b13d4707c31efb5a7ce47153365a501542d34b5cb3adf5dec75fcd34beaafa",
     "apps/api/src/id-business-v2/online-recharge/engine/test/checkout-form.test.cjs": "19cd447871d936a3538dd117d296f71e2b6dd9f70a7f7d7467feece09a6897a9",
     "apps/api/src/id-business-v2/online-recharge/engine/test/checkout-load-recovery.test.cjs": "29840320284c325846b52acc87b310b96f948405f080171cc6e5221d3019f794",
     "apps/api/src/id-business-v2/online-recharge/engine/test/checkout-page-loading.test.cjs": "8f2244d5247cc33284e079bb5e32b55a99b7adcf50556c9283b4f0cffbb533ab",
     "apps/api/src/id-business-v2/online-recharge/engine/test/checkout-recovery.test.cjs": "8f4cd48f4c9db14797af3f269cc2fa0f17b41d8841914256deb1193dd783450c",
     "apps/api/src/id-business-v2/online-recharge/engine/test/recharge-flow-acceptance.test.cjs": "0860b7d08f65edf321d2576e66e719a44276951c8587e4dc6ba6eb763eb4cc12",
+    "apps/api/src/id-business-v2/online-recharge/engine/test/rpc-response.test.cjs": "2aedde698346a595cc20ae0cee7341e2ec0914471f51cf9e4a97b8c2dcf97a96",
     "apps/api/src/id-business-v2/online-recharge/engine/test/verification-state.test.cjs": "598c04ff6f46c9cd790678da474c1bc0067f59a9376d789514ee8c04e91e7ac2",
     "apps/api/src/id-business-v2/online-recharge/engine/upstream/chatgpt.js": "15db57189fda8f787a22f0f145465fc879ba8868de8ee73e3be1dd5ae1baf047",
     "apps/api/src/id-business-v2/online-recharge/engine/upstream/human-verification.js": "ac260712be20416cc952da34cddaf28897fc9ababe32cdef153fa84e7cbd7309",
@@ -451,8 +453,8 @@
   "sqlFenceHelperSha256": "50446ab528a288ca1c2129c84f1bf4a90f59fa313a92bcff0058a258c8b8e925",
   "validationSources": {
     "apps/api/src/id-business-v2/online-recharge/local-chain-acceptance.spec.ts": "c8964877b6054cfa6ffe247d17d7db790f25551b8b9e066399dd972e907f3440",
-    "docs/ONLINE_RECHARGE.md": "61ca1afe3aaf4d93b907ad3d0902d4db7116cd873fc6d375b3b579aff8a46967",
-    "docs/V2_TASKS.md": "cffdb53562ed5703365e22ec739573df88f043c9ea7be20fd872fbfb9b681e31"
+    "docs/ONLINE_RECHARGE.md": "57a06e8b7b4928580c690f4b647f5fbfac219ff1eedbd15132a034f2f128d97f",
+    "docs/V2_TASKS.md": "3262d6a8f7567bab5a04c95f9282a2fc84f3bf5d32781aa2518c9c9f734bf251"
   },
   "version": 1,
   "workflowSha256": "ed4df94e3a04a29655881b9c1879263abd36a58e2ce3b2a02dde14adb84315fe"

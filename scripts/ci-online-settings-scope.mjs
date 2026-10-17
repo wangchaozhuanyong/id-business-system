@@ -195,11 +195,13 @@ const checkoutLoadRecoveryEngineRequired = [
   'SOURCE_MANIFEST.json',
   'checkout-form.cjs',
   'checkout-recovery.cjs',
+  'rpc.cjs',
   'test/checkout-form.test.cjs',
   'test/checkout-load-recovery.test.cjs',
   'test/checkout-page-loading.test.cjs',
   'test/checkout-recovery.test.cjs',
   'test/recharge-flow-acceptance.test.cjs',
+  'test/rpc-response.test.cjs',
   'test/verification-state.test.cjs',
   'upstream/chatgpt.js',
   'upstream/human-verification.js',
@@ -225,14 +227,30 @@ const checkoutLoadRecoveryOptional = [
   'docs/ONLINE_RECHARGE.md',
   'docs/V2_TASKS.md'
 ];
-export function isOnlineCheckoutLoadRecoveryOnly(paths) {
+const checkoutLoadParentRpcRequired = [
+  'SOURCE_MANIFEST.json',
+  'rpc.cjs',
+  'test/rpc-response.test.cjs'
+].map((name) => 'apps/api/src/id-business-v2/online-recharge/engine/' + name);
+export function isOnlineCheckoutLoadParentRpcOnly(paths) {
   return (
     new Set(paths).size === paths.length &&
-    checkoutLoadRecoveryRequired.every((path) => paths.includes(path)) &&
+    checkoutLoadParentRpcRequired.every((path) => paths.includes(path)) &&
     paths.every(
       (path) =>
-        checkoutLoadRecoveryRequired.includes(path) || checkoutLoadRecoveryOptional.includes(path)
+        checkoutLoadParentRpcRequired.includes(path) || checkoutLoadRecoveryOptional.includes(path)
     )
+  );
+}
+export function isOnlineCheckoutLoadRecoveryOnly(paths) {
+  return (
+    isOnlineCheckoutLoadParentRpcOnly(paths) ||
+    (new Set(paths).size === paths.length &&
+      checkoutLoadRecoveryRequired.every((path) => paths.includes(path)) &&
+      paths.every(
+        (path) =>
+          checkoutLoadRecoveryRequired.includes(path) || checkoutLoadRecoveryOptional.includes(path)
+      ))
   );
 }
 export function isOnlineCheckoutLoadRecoveryControlsOnly(paths) {
@@ -367,6 +385,7 @@ export function onlineSettingsCommands(part, paths) {
   const checkoutCsRecovery = isOnlineCheckoutCsRecoveryOnly(paths);
   const checkoutCsControls = isOnlineCheckoutCsRecoveryControlsOnly(paths);
   const checkoutLoadRecovery = isOnlineCheckoutLoadRecoveryOnly(paths);
+  const checkoutLoadParentRpc = isOnlineCheckoutLoadParentRpcOnly(paths);
   const checkoutLoadControls = isOnlineCheckoutLoadRecoveryControlsOnly(paths);
   if (!isOnlineSettingsOnly(paths) && !controlsOnly)
     throw new Error('Unsupported online settings scope');
@@ -543,6 +562,8 @@ export function onlineSettingsCommands(part, paths) {
       ['node', upstream + '/node_modules/playwright/cli.js', 'install', '--with-deps', 'chromium']
     ];
     if (part === 'admin') throw new Error('Unsupported checkout load recovery Admin check');
+    if (checkoutLoadParentRpc && part === 'api')
+      throw new Error('Unsupported checkout load parent RPC API check');
     if (part === 'api')
       return [
         npm('run', 'prisma:mysql:generate'),
