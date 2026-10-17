@@ -127,6 +127,7 @@ def validate_plan(plan, c):
              and hash_map(baseline, nullable=True)
              and set(baseline) == {n[:-3] + ext for n in modules for ext in SUFFIXES}
              and all(baseline[n] == old for n, old in modules.items()), 'MODULE_SCOPE_INVALID')
+    need(type(c.get('retiredTerminalLeaseCount')) is int and 0 <= c['retiredTerminalLeaseCount'] <= 8, 'TERMINAL_LEASE_BASELINE_INVALID')
     compiled = c.get('apiCompiledBaselineFiles')
     need(hash_map(compiled, nullable=True) and set(compiled) == set(c['apiBaselineFiles'])
          and all(n.endswith('.d.ts') for n in compiled if compiled[n] != c['apiBaselineFiles'][n]), 'API_COMPILED_BASELINE_INVALID')
@@ -331,14 +332,65 @@ function walk(dir){for(const n of fs.readdirSync(dir).sort()){const f=p.join(dir
     return result
 
 
+RETIREMENT_SQLITE_CODE = r"""import importlib.util,json,sys
+path='/app/apps/api/src/id-business-v2/auto-registration/worker/release_safety.py'
+spec=importlib.util.spec_from_file_location('retired_readonly_safety',path)
+m=importlib.util.module_from_spec(spec);spec.loader.exec_module(m)
+request=json.loads(sys.stdin.read())
+original=m.encrypted_proof
+observed=[]
+def terminal_leases(connection,key):
+    leases=original(connection,key)
+    records=[];bindings={}
+    for name,cipher in connection.execute('SELECT key,value FROM settings'):
+        if name.startswith(m.APPLE_PREFIX):
+            records.append(m.strict_json(m.decrypt_value(cipher,key)))
+        elif name.startswith(m.APPLE_TASK_PREFIX):
+            bindings[name[len(m.APPLE_TASK_PREFIX):]]=m.strict_json(m.decrypt_value(cipher,key))
+    states=dict(connection.execute('SELECT task_uuid,status FROM registration_tasks'))
+    retired=0
+    for record in records:
+        task=record['activeTaskUuid']
+        if task is None:continue
+        binding=bindings.get(task,{})
+        if (record['taskStatus'] not in ('failed','cancelled','awaiting_review')
+            or states.get(task) not in ('failed','cancelled')
+            or binding.get('resultKind')!='failed'
+            or binding.get('creationConfirmed') is True
+            or binding.get('verifiedExistingAccount') is True
+            or (binding.get('rawResult') or {}).get('success') is True):
+            raise m.SafetyError('RETIREMENT_LEASE_NOT_TERMINAL')
+        retired+=1
+    if retired!=leases:raise m.SafetyError('RETIREMENT_LEASE_COUNT_CHANGED')
+    observed.append(retired)
+    return 0
+m.encrypted_proof=terminal_leases
+try:
+    result=m.inspect_database(request)
+    if len(observed)!=1:raise m.SafetyError('RETIREMENT_LEASE_INSPECTION_MISSING')
+    result['retiredTerminalLeaseCount']=observed[0]
+except m.SafetyError:
+    result={'status':'FAIL'}
+print(json.dumps(result,sort_keys=True,separators=(',',':')))
+"""
+
+
 def sqlite_idle(d, directory, c, scope=None):
     scope = scope or load('api-admin-scope')
-    # The already deployed helper reads a read-only volume into memory and emits
-    # only controlled counts/hashes. The encryption key stays on private stdin.
     image = closed_json(d.run('docker', 'image', 'inspect', c['services']['api']['reference']).encode())
     need(type(image) is list and len(image) == 1 and image[0].get('Id') == c['services']['api']['image'], 'SQLITE_READER_IMAGE_CHANGED')
-    value = scope.workspace_private_inspect(d, directory, c['services']['api']['reference'],
-                                            c['registrationVolume'], mode='inspect', timeout=20)
+    key = d.environment_values(directory / '.env.aws.production').get('FIELD_ENCRYPTION_KEY')
+    need(isinstance(key, str) and len(key) >= 32, 'SQLITE_KEY_UNAVAILABLE')
+    request = {'mode': 'inspect', 'databasePath': '/app/.runtime/auto-registration/database.db', 'encryptionKey': key}
+    value = closed_json(d.run('docker', 'run', '--rm', '-i', '--network', 'none', '--read-only',
+        '--security-opt', 'no-new-privileges:true', '--cap-drop', 'ALL',
+        '--mount', 'type=volume,source=' + c['registrationVolume'] + ',target=/app/.runtime/auto-registration,readonly',
+        '--entrypoint', '/opt/id-registration/venv/bin/python', c['services']['api']['reference'],
+        '-B', '-c', RETIREMENT_SQLITE_CODE, timeout=20, input_data=json.dumps(request)).encode())
+    need(type(value.get('retiredTerminalLeaseCount')) is int
+         and value['retiredTerminalLeaseCount'] == c['retiredTerminalLeaseCount'], 'SQLITE_TERMINAL_LEASE_CHANGED')
+    standard = {n: v for n, v in value.items() if n != 'retiredTerminalLeaseCount'}
+    scope.workspace_safety_result(d, standard)
     need(value.get('status') == 'PASS' and type(value.get('taskCounts', {}).get('pending')) is int
          and value['taskCounts']['pending'] == 0 and type(value['taskCounts'].get('running')) is int
          and value['taskCounts']['running'] == 0

@@ -464,8 +464,8 @@
     "scripts/production-release/feature-retirement-build.test.py": "a1547b3429513499aacc006365cb01a2a25ccd744877581d96cae8585ce79ad2",
     "scripts/production-release/feature-retirement-dispatch.py": "fcbfe8b9714a759228e2c4e2ab0667511f9bb05dffddf53ad38f6c9b7006dcfa",
     "scripts/production-release/feature-retirement-dispatch.test.py": "f7c578d0413f3ae73e3574ed20ebae036058693d78c059de81785678057e6ed2",
-    "scripts/production-release/feature-retirement-release.py": "32b1d02d21bdde3d7b3f699d5a602716ee1d6aae95ba5c06d69e80c056d759d4",
-    "scripts/production-release/feature-retirement-release.test.py": "1fc03aa3b0dfb7ac8672b8f9ddaf060c7b66d2be17c266e3244f86cecbcd855c",
+    "scripts/production-release/feature-retirement-release.py": "d4f2316d7594aecf51379b287bf798a9e7cf21e9a29c79e7465d130986d21bba",
+    "scripts/production-release/feature-retirement-release.test.py": "69b9a9386712375f5735f90c0e6a72fdcf7e580f047f730fae539f4791049507",
     "scripts/production-release/online-recharge-ci-build.py": "6e7a2c1cfe5847706e092bd059d78b068cc757b072dde2449fafc78a08f991ab",
     "scripts/production-release/online-recharge-ci-build.test.py": "68f9084848302acbc2617f0f05ebe9d6cef28d725191ae295b85d9051bba643e",
     "scripts/production-release/online-recharge-scope.test.py": "3cfca26242cd53c89a43934dd14136b77af2c08b754741df4f40e647f4a8de4b",
@@ -4452,5 +4452,6 @@
       "baselineSha256": "b0402cabaf0ace0120d69ad76a33010954cd7d81897978557a4c9276e10b3307",
       "compiledSha256": "287f4d83a7b4cdaa0542e1345ba848e30e79f52e1c36afb767b57e464ef6f9b3"
     }
-  }
+  },
+  "retiredTerminalLeaseCount": 1
 }

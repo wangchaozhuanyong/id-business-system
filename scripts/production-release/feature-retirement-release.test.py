@@ -122,7 +122,7 @@ class Fixture(unittest.TestCase):
                   'services': {n: identity(n) for n in m.BEFORE}, 'runtimeConfigurationSha256': {n: OLD for n in m.BEFORE},
                   'configurationSha256': {'.env.aws.production': OLD, 'docker-compose.aws-mysql.yml': OLD,
                                           'compose.release.json': OLD, 'deploy/caddy/Caddyfile.aws': OLD},
-                  'registrationVolume': 'formal-registration', 'onlineVolume': 'formal-online',
+                  'registrationVolume': 'formal-registration', 'onlineVolume': 'formal-online', 'retiredTerminalLeaseCount': 1,
                   'actualCaddyMountSource': str(self.base / 'releases/old/deploy/caddy/Caddyfile.aws'),
                   'actualCaddyMountFileSha256': m.digest(CADDY), 'publicFiles': {'index.html': OLD, 'assets/keep.js': OLD},
                   'retiredHostPaths': ['scripts/setup-auto-registration.mjs'], 'retiredAdminAssets': {},
@@ -627,17 +627,18 @@ class SwitchBarrierTests(Fixture):
 
     def test_historical_failed_tasks_are_allowed_but_pending_running_or_lease_are_not(self):
         d, scope = Mock(), Mock()
-        d.run.return_value = json.dumps([{'Id': self.c['services']['api']['image']}])
+        d.environment_values.return_value = {'FIELD_ENCRYPTION_KEY': 'synthetic-fixture-key-' * 3}
         summary = {'status': 'PASS', 'taskCounts': {'pending': 0, 'running': 0, 'failed': 8, 'completed': 0, 'cancelled': 0},
-                   'activeAppleLeaseCount': 0, 'businessActions': 0}
-        scope.workspace_private_inspect.return_value = summary
+                   'activeAppleLeaseCount': 0, 'businessActions': 0, 'retiredTerminalLeaseCount': 1}
+        d.run.side_effect = [json.dumps([{'Id': self.c['services']['api']['image']}]), json.dumps(summary)]
         self.assertEqual(m.sqlite_idle(d, Path(self.c['current']), self.c, scope), m.fingerprint(summary))
-        self.assertEqual(scope.workspace_private_inspect.call_args.kwargs['mode'], 'inspect')
+        self.assertIn('readonly', d.run.call_args.args[d.run.call_args.args.index('--mount') + 1])
+        self.assertNotIn('synthetic-fixture-key-', str(d.run.call_args.args))
         for state in ('pending', 'running', 'lease'):
             bad = copy.deepcopy(summary)
             if state == 'lease': bad['activeAppleLeaseCount'] = 1
             else: bad['taskCounts'][state] = 1
-            scope.workspace_private_inspect.return_value = bad
+            d.run.side_effect = [json.dumps([{'Id': self.c['services']['api']['image']}]), json.dumps(bad)]
             with self.subTest(state=state), self.assertRaisesRegex(RuntimeError, 'SQLITE_NOT_IDLE'):
                 m.sqlite_idle(d, Path(self.c['current']), self.c, scope)
 
@@ -647,6 +648,50 @@ class SwitchBarrierTests(Fixture):
         with self.assertRaisesRegex(RuntimeError, 'SQLITE_READER_IMAGE_CHANGED'):
             m.sqlite_idle(d, Path(self.c['current']), self.c, scope)
         scope.workspace_private_inspect.assert_not_called()
+
+
+class TerminalLeaseReadOnlyTests(unittest.TestCase):
+    def run_reader(self, *, task_state='failed', record_state='awaiting_review', result='failed', created=False,
+                   verified=False, success=False, observed=1):
+        from contextlib import redirect_stdout
+        rows = [('id.apple-mailbox.fixture', json.dumps({'activeTaskUuid': 'task-fixture', 'taskStatus': record_state})),
+                ('id.apple-task.task-fixture', json.dumps({'resultKind': result, 'creationConfirmed': created,
+                   'verifiedExistingAccount': verified, 'rawResult': {'success': success}}))]
+        connection = Mock()
+        connection.execute.side_effect = lambda sql: rows if sql == 'SELECT key,value FROM settings' else [('task-fixture', task_state)]
+        class SafetyError(Exception):
+            pass
+        fixture = types.SimpleNamespace(APPLE_PREFIX='id.apple-mailbox.', APPLE_TASK_PREFIX='id.apple-task.',
+            encrypted_proof=Mock(return_value=observed), decrypt_value=lambda value,key:value,
+            strict_json=json.loads, SafetyError=SafetyError)
+        original = fixture.encrypted_proof
+        def inspect(request):
+            self.assertEqual(request['mode'], 'inspect')
+            self.assertEqual(fixture.encrypted_proof(connection, request['encryptionKey']), 0)
+            return {'status': 'PASS', 'activeAppleLeaseCount': 0}
+        fixture.inspect_database = inspect
+        output = io.StringIO()
+        spec = types.SimpleNamespace(loader=Mock(exec_module=lambda _:None))
+        with patch.object(m.importlib.util, 'spec_from_file_location', return_value=spec), \
+             patch.object(m.importlib.util, 'module_from_spec', return_value=fixture), \
+             patch('sys.stdin', io.StringIO(json.dumps({'mode':'inspect','encryptionKey':'synthetic-private-key'}))), \
+             redirect_stdout(output):
+            exec(compile(m.RETIREMENT_SQLITE_CODE, '<retirement-reader>', 'exec'), {})
+        original.assert_called_once()
+        self.assertNotIn('task-fixture', output.getvalue())
+        self.assertNotIn('synthetic-private-key', output.getvalue())
+        self.assertTrue(all(call.args[0].startswith('SELECT ') for call in connection.execute.call_args_list))
+        return json.loads(output.getvalue())
+
+    def test_exact_terminal_failure_retains_original_encryption_validation_and_does_not_write(self):
+        self.assertEqual(self.run_reader(), {'status':'PASS','activeAppleLeaseCount':0,'retiredTerminalLeaseCount':1})
+
+    def test_active_missing_successful_or_unmatched_lease_is_never_retired(self):
+        for kwargs in ({'task_state':'pending'}, {'task_state':'running'}, {'task_state':None},
+                       {'record_state':'running'}, {'result':None}, {'created':True},
+                       {'verified':True}, {'success':True}, {'observed':2}):
+            with self.subTest(kwargs=kwargs):
+                self.assertEqual(self.run_reader(**kwargs), {'status':'FAIL'})
 
 
 class AdditionalProofTests(Fixture):
