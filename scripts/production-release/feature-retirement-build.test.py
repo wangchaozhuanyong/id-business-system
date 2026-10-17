@@ -204,6 +204,28 @@ class RetirementBuildTests(unittest.TestCase):
         self.assertNotIn('services:', workflow)
         self.assertNotIn('migrate:deploy', workflow)
 
+    def test_published_successor_is_exact_git_delta_and_content(self):
+        name = 'apps/admin/src/v2/features/online-recharge/rechargeVoice.ts'
+        c = {'publishedAdminRecipe': {'commit': '6da10d2e4bd9de6df145899648e234000f84b72b'},
+             'adminSourceBaseline': 'a' * 40,
+             'adminPublishedSources': {name: b.digest(b'published')}}
+        with patch.object(b, 'git', side_effect=[(name + '\n').encode(), b'published']):
+            self.assertEqual(b.preserved_admin_sources(c), {name: b'published'})
+        with patch.object(b, 'git', return_value=b''):
+            with self.assertRaisesRegex(RuntimeError, 'SUCCESSOR_SCOPE_CHANGED'):
+                b.preserved_admin_sources(c)
+        with patch.object(b, 'git', side_effect=[(name + '\n').encode(), b'other']):
+            with self.assertRaisesRegex(RuntimeError, 'SUCCESSOR_CHANGED'):
+                b.preserved_admin_sources(c)
+
+    def test_successor_cannot_import_dependencies_or_unowned_files(self):
+        for name in ['apps/admin/package.json', '../outside', 'apps/api/src/other.ts']:
+            c = {'publishedAdminRecipe': {'commit': '6da10d2e4bd9de6df145899648e234000f84b72b'},
+                 'adminSourceBaseline': 'a' * 40, 'adminPublishedSources': {name: b.digest(b'published')}}
+            with patch.object(b, 'git', return_value=(name + '\n').encode()):
+                with self.assertRaisesRegex(RuntimeError, 'SUCCESSOR_PATH_INVALID'):
+                    b.preserved_admin_sources(c)
+
 
 if __name__ == '__main__':
     unittest.main()

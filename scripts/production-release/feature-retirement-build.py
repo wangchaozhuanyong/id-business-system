@@ -140,6 +140,7 @@ def verify_sources(c):
             need(safe_name(name), 'BUILD_INPUT_PATH_INVALID')
             raw = git('show', baseline + ':' + name) if git('ls-tree', baseline, '--', name).strip() else None
             need((digest(raw) if raw is not None else None) == expected, 'BUILD_INPUT_CHANGED')
+    preserved_admin_sources(c)
     need(type(c.get('sources')) is dict and c['sources'], 'SOURCES_MISSING')
     for name, expected in c['sources'].items():
         need(safe_name(name) and name.startswith(SOURCE_ROOTS), 'SOURCE_PATH_INVALID')
@@ -180,10 +181,30 @@ def verify_sources(c):
          'productionDatabaseWrites': False, 'isolatedDatabaseStarted': False}, 'DATABASE_SCOPE_CHANGED')
 
 
+def preserved_admin_sources(c):
+    """Verify the exact published successor delta before applying retirement."""
+    pin = c['publishedAdminRecipe']
+    need(pin['commit'] == '6da10d2e4bd9de6df145899648e234000f84b72b', 'ADMIN_RECIPE_INVALID')
+    sources = c.get('adminPublishedSources')
+    need(type(sources) is dict and sources, 'PUBLISHED_ADMIN_SUCCESSOR_MISSING')
+    names = set(git('diff', '--name-only', '--no-renames', pin['commit'], c['adminSourceBaseline'],
+                    '--', 'apps/admin/', 'packages/shared/').decode().splitlines())
+    need(names == sources.keys(), 'PUBLISHED_ADMIN_SUCCESSOR_SCOPE_CHANGED')
+    result = {}
+    for name, expected in sources.items():
+        need(safe_name(name) and name.startswith(('apps/admin/src/', 'packages/shared/src/'))
+             and isinstance(expected, str) and re.fullmatch('[a-f0-9]{64}', expected),
+             'PUBLISHED_ADMIN_SUCCESSOR_PATH_INVALID')
+        raw = git('show', c['adminSourceBaseline'] + ':' + name)
+        need(digest(raw) == expected, 'PUBLISHED_ADMIN_SUCCESSOR_CHANGED')
+        result[name] = raw
+    return result
+
+
 def prepare_published_admin(c):
     """Read the immutable published recipe; never invoke retired command entrypoints."""
     pin = c['publishedAdminRecipe']
-    need(pin['commit'] == c['adminSourceBaseline'] and pin['buildFile'] == 'recharge-checkout-build.py'
+    need(pin['commit'] == '6da10d2e4bd9de6df145899648e234000f84b72b' and pin['buildFile'] == 'recharge-checkout-build.py'
          and pin['contractFile'] == 'recharge-checkout-contract.json', 'ADMIN_RECIPE_INVALID')
     for key, name in [('buildSha256', pin['buildFile']), ('contractSha256', pin['contractFile'])]:
         need(digest(git('show', pin['commit'] + ':scripts/production-release/' + name)) == pin[key], 'ADMIN_RECIPE_CHANGED')
@@ -204,6 +225,10 @@ def prepare_published_admin(c):
             target = context / name
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_bytes(raw)
+    for name, raw in preserved_admin_sources(c).items():
+        target = context / name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(raw)
 
 
 def prepare(c):

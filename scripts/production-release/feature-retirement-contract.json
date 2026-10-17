@@ -3,8 +3,8 @@
   "actualCaddyMountSource": "/opt/id-business-v2/releases/20261009T103426Z-0a03fa28e6b8/deploy/caddy/Caddyfile.aws",
   "adminNodeEnv": "production",
   "adminProofSha256": "62ed7d268d395aefc34aebf53fa1131f89bf32f5b5511d2a0bdbcaa7bf3e4814",
-  "adminSourceBaseline": "6da10d2e4bd9de6df145899648e234000f84b72b",
-  "adminSourceBaselineTree": "afa73ff2e4c258b811e310873daab8c71fc72bba",
+  "adminSourceBaseline": "0d76d6ca0c287750d2d04f16c80e9d63a334b84b",
+  "adminSourceBaselineTree": "528674606a6ca0e29be9a4772402ea373023d715",
   "adminTests": [
     "src/security-headers.spec.ts",
     "src/v2/features/registry.spec.ts",
@@ -453,19 +453,19 @@
     "scripts/auto-registration-retired.mjs": "c14c11ceaa7d1fbec1cf96e72188267ed6b9df13e43631ca639bfca31c00caf0",
     "scripts/auto-registration-retired.test.mjs": "c73cb1118ba04df29ffe7814a56f657033b2c203a7c1d76f6c39f5eea2209949",
     "scripts/check-v2-module-architecture.mjs": "64ce56d071a7573d483a99caee00f11555ff57d7cdffbddd30cf678bb455383e",
-    "scripts/ci-feature-retirement-scope.mjs": "256b29e0d59251ba1be9fdbfd1f251aaf9b7373bee9389a3a47cdc18fbce4f3c",
+    "scripts/ci-feature-retirement-scope.mjs": "25ca29113b8dfab98220b2d961fba609cee486f79edf15158919bd4ac031b619",
     "scripts/ci-feature-retirement-scope.test.mjs": "dc17bf6af55e910a5b295c428b748270afdeb3a6394cfac236081ffbe3743fbe",
     "scripts/ci-recharge-check.mjs": "17c3459e49bc56d4cb39f520851a9dc2d3b541f7c2a0df683e50aeb6dd347de8",
     "scripts/ci-recharge-check.test.mjs": "81e284438d1a82a14ddc490c074939ffb051a72bd05ad82705184c2e55128896",
     "scripts/ci-recharge-release.test.mjs": "b01e67c1241b713f73aa99c86808b35430d544f960d86ca9090bb5189a739b86",
     "scripts/ci-recharge-scope.mjs": "220930a787c77e9d2dbab25f7405152b5a22d9eb06eb3391317f2ad317002702",
-    "scripts/ci-recharge-scope.test.mjs": "9084c480182640a7364b099a8065315bbf38b12a7b5141ca2071bd521fd9e8ad",
+    "scripts/ci-recharge-scope.test.mjs": "7f718d9e7fda7f4bc0cb113e9f221877bcada353f533bd335a2d556f9a342779",
     "scripts/container-hardening.test.mjs": "6f98fd539b43d6c2e4cf7d2fc8cac5d1e4f55d452bb8176182efcabe5e36e970",
     "scripts/production-release/admin-pending-online-release.test.py": "794c46ed43096cb2aed198a161e06302c220cd1891535eb346fa5449e5b2e777",
     "scripts/production-release/api-admin-scope.py": "50446ab528a288ca1c2129c84f1bf4a90f59fa313a92bcff0058a258c8b8e925",
     "scripts/production-release/api-admin-scope.test.py": "f8a87921ab2bfa00ab2bfc748ddb763a201e67df8ddc5d3d90563141a22f52ba",
-    "scripts/production-release/feature-retirement-build.py": "02ae8491ff41d9de2803115c7fe14b487630b2faf6ad2eea6d203e00931ac6bf",
-    "scripts/production-release/feature-retirement-build.test.py": "a1547b3429513499aacc006365cb01a2a25ccd744877581d96cae8585ce79ad2",
+    "scripts/production-release/feature-retirement-build.py": "6bb072dbd08081f090a0d532b07d31760b4c5f5ce2a19fae2323a4420589c5ec",
+    "scripts/production-release/feature-retirement-build.test.py": "8daaaf11c1eae70cef281993cdd88f4c5a674f93021e0c424222b000654c7689",
     "scripts/production-release/feature-retirement-dispatch.py": "fcbfe8b9714a759228e2c4e2ab0667511f9bb05dffddf53ad38f6c9b7006dcfa",
     "scripts/production-release/feature-retirement-dispatch.test.py": "f7c578d0413f3ae73e3574ed20ebae036058693d78c059de81785678057e6ed2",
     "scripts/production-release/feature-retirement-release.py": "d4f2316d7594aecf51379b287bf798a9e7cf21e9a29c79e7465d130986d21bba",
@@ -853,7 +853,7 @@
     "scripts/setup-auto-registration.mjs",
     "scripts/start-auto-registration-local.mjs"
   ],
-  "reviewBase": "17591a4e0d02efb55ad2443d586d6b6913895efb",
+  "reviewBase": "0d76d6ca0c287750d2d04f16c80e9d63a334b84b",
   "runtimeConfigurationSha256": {
     "admin": "cfcae9d11ca4f415955b10f3254186f0d8a4c86f45eca9752d15224b7fec701d",
     "api": "a5297a03690cef9ffb8bbfd3084179635a03c8eacb824076f411913e9a15994b",
@@ -4458,5 +4458,20 @@
       "compiledSha256": "287f4d83a7b4cdaa0542e1345ba848e30e79f52e1c36afb767b57e464ef6f9b3"
     }
   },
-  "retiredTerminalLeaseCount": 1
+  "retiredTerminalLeaseCount": 1,
+  "adminPublishedSources": {
+    "apps/admin/src/v2/features/online-recharge/OnlineResourceView.vue": "80253b52b6b1bfc0471153bd0255468aba846220c9e7f0d2e4a2b6520583eba7",
+    "apps/admin/src/v2/features/online-recharge/api.spec.ts": "073af60b68ba40217d140cbe65c22a388a6bd091ed448dec245839cb25cbb81e",
+    "apps/admin/src/v2/features/online-recharge/api.ts": "8dbaf6fc262566b6b20ac34e122830075ba70106a2efc01326038bd21e17023d",
+    "apps/admin/src/v2/features/online-recharge/auditPresentation.spec.ts": "7e5a13beec42224fb72122e64bf4a0f20a7c5ac9c619997092f0122268529720",
+    "apps/admin/src/v2/features/online-recharge/contracts.ts": "a74ceb2294c39414349de9020e61ef1b83d6b1bcd20820017be45d17dfba6f23",
+    "apps/admin/src/v2/features/online-recharge/labels.ts": "640a139208d1f6072fc9efddc453e3741b7c239ace5db445f53c925a952b6c05",
+    "apps/admin/src/v2/features/online-recharge/public-api.ts": "8cb6ec72600e9803114f077345168d261b8b5fcf427b57c538b3fd80d8dd55dc",
+    "apps/admin/src/v2/features/online-recharge/rechargeVoice.spec.ts": "9369aa123307bab17aa92fb339060af8589cd512519ebbce81c09dbc1bb744fd",
+    "apps/admin/src/v2/features/online-recharge/rechargeVoice.ts": "d773cc81c1408a288b102fae1db6153c3619735e93b4d17d2ae04457ff32d44c",
+    "apps/admin/src/v2/features/online-recharge/sections.ts": "dfa3e2f1847fcd21bea854e78ace39ddb3e823dd8756c677fc5fbfd228b6a73e",
+    "apps/admin/src/v2/features/online-recharge/useOnlineRechargeVoice.ts": "0679bf5820d1a7c18ec564839e671d3ed0e1c8fbe88f073d971177e169411c55",
+    "apps/admin/src/v2/layouts/V2AdminLayout.vue": "def75ebb6fd0ac6901ebb0f7294bee818b7807813fdfc5fa2cd70d7f9d301b26",
+    "apps/admin/src/v2/styles/v2.css": "b93f98c7403649acfd6d48301dddf7e52111d48c5f11d0682d161a56480e6d42"
+  }
 }
