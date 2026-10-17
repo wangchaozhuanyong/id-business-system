@@ -10,6 +10,7 @@ import {
   isOnlineSettingsOnly,
   isOnlineSettingsControlsOnly,
   isOnlineSettingsTestsOnly,
+  isOnlineLegacyCloseOnly,
   onlineSettingsCommands
 } from './ci-online-settings-scope.mjs';
 
@@ -462,4 +463,76 @@ test('the supplemental source command validates all hashes and retains the origi
     change(copy);
     assert.throws(() => verify(copy));
   }
+});
+
+const legacyCloseScope = [
+  ...[
+    'persistence/tasks.repository.ts',
+    'persistence/tasks.manual-closure.spec.ts',
+    'mysql.integration.spec.ts'
+  ].map((name) => 'apps/api/src/id-business-v2/online-recharge/' + name),
+  '.github/workflows/online-legacy-close-validation.yml',
+  ...['build.py', 'contract.json', 'release.py', 'release.test.py'].map(
+    (name) => 'scripts/production-release/online-legacy-close-' + name
+  ),
+  'scripts/ci-online-settings-scope.mjs',
+  'scripts/ci-online-settings-scope.test.mjs',
+  'scripts/ci-recharge-scope.mjs',
+  'docs/ONLINE_RECHARGE.md',
+  'docs/V2_TASKS.md'
+];
+
+test('legacy manual closure uses API and guards while preserving all other runtime roles', () => {
+  assert.equal(isOnlineLegacyCloseOnly(legacyCloseScope), true);
+  assert.equal(checkMode(legacyCloseScope, '', ''), 'recharge');
+  assert.deepEqual(selectedParts(legacyCloseScope), ['guards', 'api']);
+  const guard = onlineSettingsCommands('guards', legacyCloseScope).flat();
+  for (const name of [
+    'module-architecture',
+    'isolation',
+    'prisma-runtime-boundary',
+    'concurrency-standard',
+    'decimal-standard'
+  ])
+    assert.ok(guard.includes('check:v2-' + name));
+  assert.ok(guard.includes('scripts/production-release/online-legacy-close-release.test.py'));
+  assert.ok(!guard.includes('check:admin-ui'));
+  assert.ok(!guard.includes('check:v2-ui-language'));
+  const api = onlineSettingsCommands('api', legacyCloseScope).flat();
+  assert.ok(api.includes('src/id-business-v2/online-recharge'));
+  assert.ok(!api.includes('src/id-business-v2/proxy-pool'));
+  for (const part of ['admin', 'online-engine'])
+    assert.throws(() => onlineSettingsCommands(part, legacyCloseScope));
+});
+
+test('legacy manual closure cannot admit unrelated source, schema, dependencies or missing required tests', () => {
+  for (const extra of [
+    'apps/api/prisma-mysql/schema.prisma',
+    'package-lock.json',
+    'apps/api/src/id-business-v2/online-recharge/persistence/worker.repository.ts',
+    'apps/api/src/id-business-v2/online-recharge/engine/worker.cjs',
+    'apps/admin/src/v2/features/online-recharge/labels.ts',
+    legacyCloseScope[0]
+  ]) {
+    assert.equal(isOnlineLegacyCloseOnly([...legacyCloseScope, extra]), false);
+    assert.equal(checkMode([...legacyCloseScope, extra], '', ''), 'full');
+  }
+  for (const required of legacyCloseScope.slice(0, 3)) {
+    const partial = legacyCloseScope.filter((name) => name !== required);
+    assert.equal(isOnlineLegacyCloseOnly(partial), false);
+    assert.equal(checkMode(partial, '', ''), 'full');
+  }
+  assert.equal(checkMode(legacyCloseScope, 'before', 'after'), 'full');
+});
+
+test('legacy closure release controls alone do not start application or database tests', () => {
+  const controls = legacyCloseScope.filter((name) => !name.startsWith('apps/'));
+  assert.equal(checkMode(controls, '', ''), 'ci-only');
+  assert.deepEqual(selectedParts(controls), ['guards']);
+  assert.ok(
+    onlineSettingsCommands('guards', controls)
+      .flat()
+      .includes('scripts/production-release/online-legacy-close-release.test.py')
+  );
+  assert.throws(() => onlineSettingsCommands('api', controls));
 });
