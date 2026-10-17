@@ -1,6 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { configGroups } from './configFields';
-import { onlineActionAllowedForRow, onlineActionPayload, rowActions } from './sections';
+import {
+  initialFields,
+  onlineActionAllowedForRow,
+  onlineActionPayload,
+  rowActions,
+  topActions
+} from './sections';
 import type { OnlineQuery } from './contracts';
 const client = vi.hoisted(() => ({
   post: vi.fn(),
@@ -36,6 +42,36 @@ describe('配置检测与执行器请求合同', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     client.post.mockResolvedValue({ id: 'test-job', status: 'queued', progress: 0 });
+  });
+  it('新会话订阅查询只使用原订阅动作，会话不进入可恢复草稿或充值参数', async () => {
+    const action = topActions.sessions?.find((item) => item.key === 'subscription');
+    expect(action?.label).toBe('查询订阅');
+    expect(action?.fields).toHaveLength(1);
+    expect(action?.fields?.[0]).toMatchObject({
+      key: 'session',
+      required: true,
+      transient: true,
+      type: 'textarea'
+    });
+    expect(initialFields(action?.fields)).toEqual({});
+    const session = '{"accessToken":"synthetic-session-not-a-real-credential"}';
+    const result = await onlineApi.action('sessions', action!.key, { session });
+    expect(client.post.mock.calls).toEqual([
+      ['/id-business-v2/online-recharge/admin/sessions/subscription', { session }]
+    ]);
+    expect(result).toMatchObject({ id: 'test-job', status: 'queued', progress: 0 });
+  });
+  it('新会话查询失败原样报告，不回退发起充值或其他动作', async () => {
+    client.post.mockRejectedValueOnce(new Error('会话已过期，请重新获取'));
+    await expect(
+      onlineApi.action('sessions', 'subscription', {
+        session: '{"accessToken":"synthetic-session-not-a-real-credential"}'
+      })
+    ).rejects.toThrow('会话已过期，请重新获取');
+    expect(client.post).toHaveBeenCalledTimes(1);
+    expect(client.post.mock.calls[0]?.[0]).toBe(
+      '/id-business-v2/online-recharge/admin/sessions/subscription'
+    );
   });
   it('历史订单预览只读不失效自身查询，实际补录和补同步仍刷新缓存', async () => {
     await onlineApi.action('jobs', 'order-backfill-preview');

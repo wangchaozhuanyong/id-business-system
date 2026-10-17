@@ -90,7 +90,8 @@ export const sectionDescriptions: Record<OnlineSection, string> = {
   cards:
     '比特浏览器充值与线上代充共用，按适用套餐匹配；安全码仅在执行器内存临时保留，最长24小时，任务结束、失去租约或重启后提前清除。',
   cdks: '生成、导入、出库和查询兑换码；已被任务占用的兑换码受保护。',
-  sessions: '查看任务会话资料和订阅情况，查看敏感资料需要填写原因并记录审计。',
+  sessions:
+    '使用最新会话资料单独查询订阅，不提交充值或付款；查看已保存会话需要填写原因并记录审计。',
   renewal: '查询订阅到期和续费状态，按原逻辑取消或恢复自动续费。',
   jobs: '按目标套餐自动识别首次开通或升级，查看进度、官网应付、原单核对及执行文件。',
   automation: '查看实际自动化任务及执行阶段；待核对任务不能重复发起付款。',
@@ -250,6 +251,18 @@ export const topActions: Partial<Record<OnlineSection, readonly OnlineAction[]>>
   ],
   jobs: taskTop,
   automation: taskTop,
+  sessions: [
+    {
+      key: 'subscription',
+      label: '查询订阅',
+      fields: [
+        {
+          ...session,
+          help: '填写最新完整的 Session JSON，仅核验登录和订阅，不提交充值或付款；会话资料不进入页面草稿，关闭或离页后清除。'
+        }
+      ]
+    }
+  ],
   renewal: [
     { key: 'check', label: '批量查询续费', confirm: '确认查询当前筛选范围内的订阅续费状态？' }
   ],
