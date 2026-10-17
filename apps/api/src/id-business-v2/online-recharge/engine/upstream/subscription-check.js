@@ -408,6 +408,48 @@ async function closeQueryPage(page) {
     await Promise.resolve(require('./human-verification').disposeVerificationPage?.(page)).catch(() => {});
     await page.close().catch(() => {});
 }
+async function withRenewalBrowserContext(accessToken, options, operation) {
+    const budget = queryBudget(options);
+    let prepared, session, context, page, finished = false;
+    const runtime = require('./browser-runtime');
+    const acquire = async (create, phase, dispose) => {
+        checkBudget(budget);
+        const pending = Promise.resolve().then(create);
+        pending.then(resource => {
+            if (finished) Promise.resolve(dispose(resource)).catch(() => {});
+        }).catch(() => {});
+        return boundedQuery(() => pending, budget, phase);
+    };
+    try {
+        prepared = await acquire(() => preparePlaywrightProxy(String(process.env.PROXY || '').trim()),
+            'proxy_prepare', resource => resource.cleanup());
+        session = await acquire(() => runtime.connectTaskBrowser({ proxyConfig: prepared.proxyConfig,
+            headful: process.env.HEADFUL === '1' }), 'browser_connect',
+            resource => runtime.closeTaskBrowser(resource, resource.browser));
+        context = await acquire(() => session.browser.newContext({ proxy: prepared.proxyConfig || undefined,
+            userAgent: session.realUserAgent, locale: 'en-US' }), 'context_create', resource => resource.close());
+        page = await acquire(() => prepareQueryPage(context, budget), 'page_create', closeQueryPage);
+        const auth = require('./session-auth');
+        const installed = await boundedQuery(() => auth.installChatGptSession(context, options.sessionRaw), budget, 'session_install');
+        const login = await boundedQuery(() => auth.bootstrapChatGptSession(page, options.sessionRaw, {
+            sessionData: installed?.sessionData || installed, cookieVerified: installed?.cookieVerified === true,
+            deadlineAt: budget.deadlineAt, signal: budget.signal
+        }), budget, 'session_bootstrap');
+        return await operation(login.session?.accessToken || accessToken, { ...options, page,
+            browserContext: context, signal: budget.signal, deadlineAt: budget.deadlineAt });
+    } catch (error) {
+        if (error.code === 'LEASE_LOST') throw error;
+        return { ok: false, resultUnknown: require('../rpc.cjs').wasSubmitted(),
+            statusCode: 502, errorCode: queryErrorCode(error),
+            error: '续费操作未能完成核验，请核对原任务，禁止重复提交' };
+    } finally {
+        finished = true;
+        await closeQueryPage(page);
+        if (context) await context.close().catch(() => {});
+        if (session) await runtime.closeTaskBrowser(session, session.browser).catch(() => {});
+        if (prepared) await prepared.cleanup().catch(() => {});
+    }
+}
 async function fetchAccountCheck(accessToken, options = {}) {
     const budget = queryBudget(options);
     let cleanup = async () => {}, ownedContext, session, ownedPage, requestContext;
@@ -484,50 +526,60 @@ async function fetchAccountCheck(accessToken, options = {}) {
     }
 }
 
-async function requestOpenAiJson(accessToken, { method = 'GET', url, body = null }) {
+async function requestOpenAiJson(accessToken, { method = 'GET', url, body = null }, options = {}) {
     const headers = buildCheckHeaders(accessToken);
     const proxyValue = String(process.env.PROXY || '').trim();
+    const budget = queryBudget(options);
     let lastError = null;
+    let ctx, ownsRequest = false, cleanup = async () => {};
 
     try {
-        const { proxyConfig, cleanup } = await preparePlaywrightProxy(proxyValue);
-        const ctx = await playwrightRequest.newContext({
-            userAgent: USER_AGENT,
-            proxy: proxyConfig || undefined,
-            extraHTTPHeaders: headers
-        });
-        try {
-            if (method !== 'GET') await require('../rpc.cjs').beforeExternalSubmit({
-                provider: 'local',
-                stage: 'renewal_update',
-                renewalAction: url === RESUME_SUBSCRIPTION_URL ? 'enable' : 'disable'
-            });
-            const response = await ctx.fetch(url, {
-                method,
-                timeout: 20000,
-                headers: body != null ? { ...headers, 'Content-Type': 'application/json' } : headers,
-                data: body != null ? body : undefined
-            });
-            const status = response.status();
-            // A successful POST response is not the final subscription state. Clear the
-            // in-flight marker only after a matching account readback, or an auth rejection.
-            if (method !== 'GET' && [401, 403].includes(status)) require('../rpc.cjs').recordKnownOutcome();
-            let data;
-            try {
-                data = await response.json();
-            } catch (_) {
-                data = await response.text().catch(() => '');
-            }
-            if (status >= 200 && status < 300 || status === 401) {
-                return { status, data, via: 'playwright' };
-            }
-            lastError = { status, data, via: 'playwright' };
-        } finally {
-            await ctx.dispose().catch(() => {});
-            await cleanup().catch(() => {});
+        checkBudget(budget);
+        const context = options.browserContext || options.page?.context?.();
+        if (context) {
+            // APIRequestContext belongs to this already authenticated browser;
+            // its Cookie jar and resolved task proxy remain the same for one POST.
+            ctx = context.request;
+            if (typeof ctx?.fetch !== 'function') throw new Error('续费请求上下文不可用');
+        } else {
+            const prepared = await boundedQuery(() => preparePlaywrightProxy(proxyValue), budget, 'proxy_prepare');
+            cleanup = prepared.cleanup;
+            ctx = await boundedQuery(() => playwrightRequest.newContext({
+                userAgent: USER_AGENT, proxy: prepared.proxyConfig || undefined, extraHTTPHeaders: headers
+            }), budget, 'request_create');
+            ownsRequest = true;
         }
+        if (method !== 'GET') await boundedQuery(() => require('../rpc.cjs').beforeExternalSubmit({
+            provider: 'local',
+            stage: 'renewal_update',
+            renewalAction: url === RESUME_SUBSCRIPTION_URL ? 'enable' : 'disable'
+        }), budget, 'renewal_update');
+        const response = await boundedQuery(() => ctx.fetch(url, {
+            method,
+            timeout: Math.min(20000, checkBudget(budget)),
+            headers: body != null ? { ...headers, 'Content-Type': 'application/json' } : headers,
+            data: body != null ? body : undefined
+        }), budget, 'renewal_update');
+        const status = response.status();
+        // A successful POST response is not the final subscription state. Clear the
+        // in-flight marker only after a matching account readback, or an auth rejection.
+        if (method !== 'GET' && [401, 403].includes(status)) require('../rpc.cjs').recordKnownOutcome();
+        const data = await boundedQuery(async () => {
+            try {
+                return await response.json();
+            } catch (_) {
+                return response.text().catch(() => '');
+            }
+        }, budget, 'renewal_update');
+        if (status >= 200 && status < 300 || status === 401)
+            return { status, data, via: 'playwright' };
+        lastError = { status, data, via: 'playwright' };
     } catch (error) {
-        lastError = { status: 0, data: error.message, via: 'playwright', error };
+        if (error.code === 'LEASE_LOST') throw error;
+        lastError = { status: 0, data: 'renewal_request_unavailable', via: 'playwright' };
+    } finally {
+        if (ownsRequest) await ctx?.dispose().catch(() => {});
+        await cleanup().catch(() => {});
     }
 
     return lastError || { status: 0, data: 'result_unknown', via: 'playwright' };
@@ -543,7 +595,7 @@ function isAppStoreOrigin(channelRaw) {
 
 async function verifyRenewalUpdate(accessToken, options, subscription, accountId, enabled) {
     const verify = await querySubscriptionBySession(accessToken, {
-        timezoneOffsetMin: options.timezoneOffsetMin,
+        ...options,
         email: options.email || subscription.email || ''
     });
     if (!verify.ok
@@ -580,8 +632,12 @@ async function cancelAutoRenew(accessToken, options = {}) {
         return { ok: false, statusCode: 400, error: '无法解析 account_id，请确认 Session 完整有效' };
     }
 
+    if (!options.page && !options.browserContext && options.sessionRaw && options.allowBrowserFallback === true)
+        return withRenewalBrowserContext(token, { ...options, accountId }, cancelAutoRenew);
+    options = { ...options, deadlineAt: queryBudget(options).deadlineAt };
+
     const checkResult = await querySubscriptionBySession(token, {
-        timezoneOffsetMin: options.timezoneOffsetMin,
+        ...options,
         email: options.email || profile.email || ''
     });
     if (!checkResult.ok) {
@@ -621,8 +677,9 @@ async function cancelAutoRenew(accessToken, options = {}) {
             method: 'POST',
             url: CANCEL_SUBSCRIPTION_URL,
             body: { account_id: accountId }
-        });
+        }, options);
     } catch (error) {
+        if (error.code === 'LEASE_LOST') throw error;
         return {
             ok: false,
             statusCode: 502,
@@ -665,8 +722,12 @@ async function resumeAutoRenew(accessToken, options = {}) {
         return { ok: false, statusCode: 400, error: '无法解析 account_id，请确认 Session 完整有效' };
     }
 
+    if (!options.page && !options.browserContext && options.sessionRaw && options.allowBrowserFallback === true)
+        return withRenewalBrowserContext(token, { ...options, accountId }, resumeAutoRenew);
+    options = { ...options, deadlineAt: queryBudget(options).deadlineAt };
+
     const checkResult = await querySubscriptionBySession(token, {
-        timezoneOffsetMin: options.timezoneOffsetMin,
+        ...options,
         email: options.email || profile.email || ''
     });
     if (!checkResult.ok) {
@@ -706,8 +767,9 @@ async function resumeAutoRenew(accessToken, options = {}) {
             method: 'POST',
             url: RESUME_SUBSCRIPTION_URL,
             body: { account_id: accountId }
-        });
+        }, options);
     } catch (error) {
+        if (error.code === 'LEASE_LOST') throw error;
         return {
             ok: false,
             statusCode: 502,

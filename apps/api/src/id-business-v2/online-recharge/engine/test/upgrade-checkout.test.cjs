@@ -317,3 +317,28 @@ test('upgrade does not cancel or restore renewal after success; initial activati
   );
   assert.equal(calls, 1);
 });
+
+test('initial post-payment renewal helper forwards the same task browser and cancellation options', async () => {
+  const { applyPostPaymentRenewalPolicy } = require('../upstream/upgrade-checkout');
+  const page = {},
+    browserContext = {},
+    signal = new AbortController().signal;
+  const options = { page, browserContext, signal, deadlineAt: 12345 };
+  let received;
+  const result = await applyPostPaymentRenewalPolicy(
+    'initial',
+    'synthetic-token',
+    'synthetic@example.test',
+    async (_token, value) => {
+      received = value;
+      return { ok: false };
+    },
+    options
+  );
+  assert.equal(result.ok, false);
+  assert.equal(received.page, page);
+  assert.equal(received.browserContext, browserContext);
+  assert.equal(received.signal, signal);
+  assert.equal(received.deadlineAt, options.deadlineAt);
+  assert.equal(received.email, 'synthetic@example.test');
+});

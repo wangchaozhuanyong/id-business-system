@@ -76,12 +76,31 @@ const resolvePlanUpgradeTestId = (planType) => {
     return testId;
 };
 
+const getLegacyProPricingGroup = async (page, plan) => {
+    // Legacy 5x/20x pages need no top-half marker, but their exact stable CTA
+    // and a single explicitly named Pro group must establish the same boundary.
+    if (!['pro_5x', 'pro_20x'].includes(plan)) throw new Error('定价页 Pro 卡片不唯一或不可见，禁止选择档位');
+    const cta = page.getByTestId(resolvePlanUpgradeTestId(plan));
+    if (await cta.count() !== 1 || !(await cta.isVisible({ timeout: 4000 })))
+        throw new Error('定价页 Pro 套餐按钮不唯一或不可见');
+    const name = /^(?:ChatGPT\s+)?Pro(?:\s+(?:usage|plan|用量|档位))?$/i;
+    const radios = page.getByRole('radiogroup', { name });
+    const groups = page.getByRole('group', { name });
+    const radioCount = await radios.count(), groupCount = await groups.count();
+    if (radioCount + groupCount !== 1) throw new Error('定价页明确 Pro 用量分组不唯一');
+    const group = radioCount === 1 ? radios : groups;
+    if (!(await group.isVisible({ timeout: 4000 }))) throw new Error('定价页明确 Pro 用量分组不可见');
+    return group;
+};
+
 const getUniqueVisiblePlanButton = async (page, planType, { requireProCard = false } = {}) => {
     const plan = String(planType).trim().toLowerCase();
     const testId = resolvePlanUpgradeTestId(plan);
     const proCard = page.getByTestId('pro-pricing-modal-column-top-half');
     if (requireProCard) {
-        if (!PRO_VARIANTS[plan] || await proCard.count() !== 1 || !(await proCard.isVisible({ timeout: 4000 }))) {
+        const cards = await proCard.count();
+        if (cards === 0) await getLegacyProPricingGroup(page, plan);
+        else if (!PRO_VARIANTS[plan] || cards !== 1 || !(await proCard.isVisible({ timeout: 4000 }))) {
             throw new Error('定价页 Pro 卡片不唯一或不可见，禁止打开档位选择');
         }
     }
@@ -165,17 +184,18 @@ const selectProVariantOnPricingPage = async (page, planType, { debugOnly = false
     }
 
     try {
-        const card = page.getByTestId('pro-pricing-modal-column-top-half');
-        if (await card.count() !== 1 || !(await card.isVisible({ timeout: 4000 }))) {
+        let card = page.getByTestId('pro-pricing-modal-column-top-half');
+        const cardCount = await card.count();
+        if (cardCount === 0) card = await getLegacyProPricingGroup(page, plan);
+        else if (cardCount !== 1 || !(await card.isVisible({ timeout: 4000 }))) {
             throw new Error('定价页 Pro 卡片不唯一或不可见，禁止选择档位');
         }
         const group = card.getByRole('radiogroup');
         const groupCount = await group.count();
-        const allGroupCount = debugOnly === true
-            ? await card.getByRole('radiogroup', { includeHidden: true }).count() : groupCount;
+        const allGroupCount = await card.getByRole('radiogroup', { includeHidden: true }).count();
         if (groupCount > 1 || allGroupCount > 1) throw new Error('定价页 Pro 用量分组不唯一');
-        if (debugOnly === true && allGroupCount === 0 && await card.getByRole('radio', { includeHidden: true }).count() === 0) {
-            console.log('[调试] 当前 Pro 卡片未提供档位控件，打开后须在 Checkout 核实准确档位');
+        if (allGroupCount === 0 && await card.getByRole('radio', { includeHidden: true }).count() === 0) {
+            console.log(`${debugOnly ? '[调试]' : '[步骤]'} 当前 Pro 定价区未提供档位控件，打开后须在 Checkout 核实准确档位`);
             return { deferredToCheckout: true };
         }
         const scope = groupCount === 1 ? group : card;

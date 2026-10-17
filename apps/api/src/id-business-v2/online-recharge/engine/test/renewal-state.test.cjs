@@ -184,7 +184,15 @@ function queryFixture({
   loginFailure,
   contextFailure,
   verificationResult,
-  responseBody = account(true)
+  responseBody = account(true),
+  renewalTarget,
+  unauthenticatedPostStatus = 200,
+  postThrows = false,
+  postReadbackAccount = accountId,
+  unchangedAfterPost = false,
+  loginAccountId,
+  onPost,
+  connectBrowser
 } = {}) {
   const effects = {
     proxies: [],
@@ -197,15 +205,44 @@ function queryFixture({
     browserConnections: [],
     pageCloses: 0,
     preparedPages: [],
-    disposedPages: []
+    disposedPages: [],
+    posts: [],
+    guards: [],
+    known: 0
+  };
+  let submitted = false;
+  let liveBody = responseBody;
+  const rpc = {
+    beforeExternalSubmit: async (detail) => {
+      assert.equal(submitted, false);
+      effects.guards.push(detail);
+      submitted = true;
+    },
+    wasSubmitted: () => submitted,
+    wasPaymentConfirmed: () => true,
+    recordKnownOutcome: () => {
+      submitted = false;
+      effects.known++;
+    }
+  };
+  const post = async (transport, url, options) => {
+    effects.posts.push({ transport, url, options });
+    onPost?.();
+    if (postThrows) throw new Error('Synthetic response lost');
+    const status = transport === 'browser-context' ? 200 : unauthenticatedPostStatus;
+    if (status === 200 && typeof renewalTarget === 'boolean' && !unchangedAfterPost)
+      liveBody = account(renewalTarget, postReadbackAccount);
+    return { status: () => status, json: async () => ({}) };
   };
   const browserContexts = [];
   const response = () => ({
     status: () => statuses.shift() ?? 403,
-    json: async () => responseBody
+    json: async () => liveBody
   });
   const sessionAuth = {
-    extractProfileFromToken: () => ({ accountId }),
+    extractProfileFromToken: (value) => ({
+      accountId: value === 'synthetic-refreshed-token' ? loginAccountId : accountId
+    }),
     installChatGptSession: async (context, raw) => {
       context.installed = raw;
       return { sessionData: {} };
@@ -216,7 +253,7 @@ function queryFixture({
       assert.notEqual(options.manualVerification, true);
       if (loginFailure) throw loginFailure;
       await page.goto('https://chatgpt.com/');
-      return { session: { accessToken: token } };
+      return { session: { accessToken: loginAccountId ? 'synthetic-refreshed-token' : token } };
     }
   };
   const newBrowserContext = () => {
@@ -224,6 +261,7 @@ function queryFixture({
     const context = {
       pages: () => pages,
       request: {
+        fetch: async (url, options) => post('browser-context', url, options),
         get: async (...args) => {
           effects.requests.push({ context, args });
           return response();
@@ -246,7 +284,7 @@ function queryFixture({
             effects.requests.push({ context, page, args, transport: 'browser-page' });
             const nextFailure = failures.shift() || failure;
             if (nextFailure) throw nextFailure;
-            return { status: statuses.shift() ?? 403, text: JSON.stringify(responseBody) };
+            return { status: statuses.shift() ?? 403, text: JSON.stringify(liveBody) };
           },
           close: async () => {
             effects.pageCloses++;
@@ -275,7 +313,7 @@ function queryFixture({
     process: { env: { PROXY: 'http://task-proxy.invalid:8123' } },
     require(name) {
       if (name.startsWith('node:')) return require(name);
-      if (name === '../rpc.cjs') return {};
+      if (name === '../rpc.cjs') return rpc;
       if (name === './human-verification')
         return {
           prepareVerificationPage: async (page) => {
@@ -294,6 +332,7 @@ function queryFixture({
               effects.contexts.push(options);
               if (contextFailure) throw contextFailure;
               return {
+                fetch: async (url, options) => post('node-context', url, options),
                 get: async (...args) => {
                   effects.requests.push({ args });
                   if (failure) throw failure;
@@ -323,6 +362,7 @@ function queryFixture({
         return {
           connectTaskBrowser: async (options) => {
             effects.browserConnections.push(options);
+            if (connectBrowser) return connectBrowser();
             return {
               browser: {
                 newContext: async (options) => {
@@ -332,14 +372,289 @@ function queryFixture({
               }
             };
           },
-          closeTaskBrowser: async () => {}
+          closeTaskBrowser: async () => {
+            effects.browserCloses = (effects.browserCloses || 0) + 1;
+          }
         };
       if (name === '../plans.cjs') return require('../plans.cjs');
       throw new Error(`Unexpected transport ${name}`);
     }
   });
-  return { api: module.exports, effects, newBrowserContext, browserContexts };
+  return {
+    api: module.exports,
+    effects,
+    newBrowserContext,
+    browserContexts,
+    submitted: () => submitted
+  };
 }
+
+for (const [method, enabled] of [
+  ['cancelAutoRenew', false],
+  ['resumeAutoRenew', true]
+]) {
+  test(`${method} keeps both GETs and its single POST in the supplied logged-in context`, async () => {
+    const f = queryFixture({
+      statuses: [200, 200],
+      responseBody: account(!enabled),
+      renewalTarget: enabled,
+      unauthenticatedPostStatus: 403
+    });
+    const context = f.newBrowserContext();
+    const page = await context.newPage();
+    await page.goto('https://chatgpt.com/');
+    const result = await f.api[method](token, { page, browserContext: context });
+    assert.equal(f.effects.posts[0]?.transport, 'browser-context');
+    assert.equal(result.ok, true);
+    assert.equal(result.data.autoRenewRaw, enabled);
+    assert.equal(f.effects.requests.length, 2);
+    assert.ok(f.effects.requests.every((item) => item.page === page));
+    assert.equal(f.effects.posts.length, 1);
+    assert.equal(f.effects.posts[0].transport, 'browser-context');
+    assert.equal(f.effects.guards.length, 1);
+    assert.equal(f.effects.known, 1);
+    assert.equal(f.submitted(), false);
+    assert.equal(f.effects.contexts.length, 0);
+    assert.equal(f.effects.closes + f.effects.disposes + f.effects.pageCloses, 0);
+  });
+  test(`${method} owns one isolated session context and one task proxy until readback and cleanup`, async () => {
+    const f = queryFixture({
+      statuses: [200, 200],
+      responseBody: account(!enabled),
+      renewalTarget: enabled,
+      unauthenticatedPostStatus: 403
+    });
+    const result = await f.api[method](token, {
+      sessionRaw: 'synthetic-session-A',
+      allowBrowserFallback: true
+    });
+    assert.equal(result.ok, true);
+    assert.equal(f.effects.logins, 1);
+    assert.equal(f.effects.browserConnections.length, 1);
+    assert.equal(f.effects.contexts.length, 1);
+    assert.equal(f.effects.proxies.length, 1);
+    assert.equal(f.effects.posts.length, 1);
+    assert.equal(f.effects.posts[0].transport, 'browser-context');
+    assert.equal(f.effects.requests.length, 2);
+    assert.equal(f.effects.requests[0].page, f.effects.requests[1].page);
+    assert.equal(f.browserContexts[0].installed, 'synthetic-session-A');
+    assert.equal(f.effects.closes, 1);
+    assert.equal(f.effects.pageCloses, 1);
+    assert.equal(f.effects.cleanups, 1);
+    assert.equal(f.effects.disposes, 0);
+  });
+  for (const scenario of ['wrong account', 'unchanged state', 'lost response']) {
+    test(`${method} ${scenario} never repeats a POST and releases its owned resources`, async () => {
+      const f = queryFixture({
+        statuses: [200, 200],
+        responseBody: account(!enabled),
+        renewalTarget: enabled,
+        postReadbackAccount: scenario === 'wrong account' ? 'other-account' : accountId,
+        unchangedAfterPost: scenario === 'unchanged state',
+        postThrows: scenario === 'lost response'
+      });
+      const result = await f.api[method](token, {
+        sessionRaw: 'synthetic-session',
+        allowBrowserFallback: true
+      });
+      assert.equal(result.ok, false);
+      assert.equal(result.resultUnknown, true);
+      assert.equal(f.effects.posts.length, 1);
+      assert.equal(f.effects.guards.length, 1);
+      assert.equal(f.effects.known, 0);
+      assert.equal(f.submitted(), true);
+      assert.equal(f.effects.closes, 1);
+      assert.equal(f.effects.cleanups, 1);
+    });
+  }
+  test(`${method} stops on a foreign precheck account without a POST`, async () => {
+    const f = queryFixture({ statuses: [200], responseBody: account(!enabled, 'other-account') });
+    const result = await f.api[method](token, {
+      sessionRaw: 'synthetic-session',
+      allowBrowserFallback: true
+    });
+    assert.equal(result.ok, false);
+    assert.equal(f.effects.posts.length, 0);
+    assert.equal(f.effects.guards.length, 0);
+    assert.equal(f.effects.closes, 1);
+  });
+  test(`${method} cannot replace the original account with a different login token`, async () => {
+    const f = queryFixture({
+      statuses: [200, 200],
+      responseBody: account(!enabled, 'other-account'),
+      renewalTarget: enabled,
+      postReadbackAccount: 'other-account',
+      loginAccountId: 'other-account'
+    });
+    const result = await f.api[method](token, {
+      sessionRaw: 'synthetic-session',
+      allowBrowserFallback: true
+    });
+    assert.equal(result.ok, false);
+    assert.equal(f.effects.posts.length, 0);
+    assert.equal(f.effects.guards.length, 0);
+    assert.equal(f.effects.closes, 1);
+  });
+  test(`${method} respects the caller cancellation before allocating or submitting`, async () => {
+    const f = queryFixture();
+    const controller = new AbortController();
+    controller.abort();
+    await assert.rejects(
+      () =>
+        f.api[method](token, {
+          sessionRaw: 'synthetic-session',
+          allowBrowserFallback: true,
+          signal: controller.signal
+        }),
+      { code: 'LEASE_LOST' }
+    );
+    assert.equal(f.effects.contexts.length + f.effects.posts.length, 0);
+  });
+  test(`${method} abort after its one POST keeps the submission and cleans only owned resources`, async () => {
+    const controller = new AbortController();
+    const f = queryFixture({
+      statuses: [200, 200],
+      responseBody: account(!enabled),
+      renewalTarget: enabled,
+      onPost: () => controller.abort()
+    });
+    await assert.rejects(
+      () =>
+        f.api[method](token, {
+          sessionRaw: 'synthetic-session',
+          allowBrowserFallback: true,
+          signal: controller.signal
+        }),
+      { code: 'LEASE_LOST' }
+    );
+    assert.equal(f.effects.posts.length, 1);
+    assert.equal(f.effects.guards.length, 1);
+    assert.equal(f.effects.requests.length, 1);
+    assert.equal(f.submitted(), true);
+    assert.equal(f.effects.known, 0);
+    assert.equal(f.effects.closes, 1);
+    assert.equal(f.effects.cleanups, 1);
+  });
+  test(`${method} login failure is controlled and releases its allocated context without mutation`, async () => {
+    const f = queryFixture({ loginFailure: new Error('PRIVATE_SESSION_SENTINEL') });
+    const result = await f.api[method](token, {
+      sessionRaw: 'synthetic-session',
+      allowBrowserFallback: true
+    });
+    assert.equal(result.ok, false);
+    assert.equal(result.resultUnknown, false);
+    assert.equal(f.effects.posts.length + f.effects.guards.length, 0);
+    assert.equal(f.effects.closes, 1);
+    assert.equal(f.effects.pageCloses, 1);
+    assert.equal(f.effects.cleanups, 1);
+    assert.doesNotMatch(JSON.stringify(result), /PRIVATE_SESSION_SENTINEL/);
+  });
+}
+
+test('cancelled renewal closes a late browser connection before it can create a context', async () => {
+  const controller = new AbortController();
+  let connected, started;
+  const connection = new Promise((resolve) => {
+    connected = resolve;
+  });
+  const ready = new Promise((resolve) => {
+    started = resolve;
+  });
+  const f = queryFixture({
+    connectBrowser: async () => {
+      started();
+      return connection;
+    }
+  });
+  const result = f.api.cancelAutoRenew(token, {
+    sessionRaw: 'synthetic-session',
+    allowBrowserFallback: true,
+    signal: controller.signal
+  });
+  await ready;
+  controller.abort();
+  await assert.rejects(result, { code: 'LEASE_LOST' });
+  connected({
+    browser: {
+      newContext: async () => {
+        throw new Error('Late context forbidden');
+      }
+    }
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(f.effects.browserCloses, 1);
+  assert.equal(f.effects.cleanups, 1);
+  assert.equal(f.effects.contexts.length + f.effects.posts.length, 0);
+});
+
+test('a completed payment does not block one separately guarded renewal request', async () => {
+  const actual = require('../rpc.cjs');
+  let submissions = 0;
+  actual.configureTask({
+    id: 'synthetic-renewal',
+    workerId: 'synthetic',
+    leaseId: 'synthetic',
+    leaseVersion: 1
+  });
+  actual.setTransportForTest(async (method, args) => {
+    assert.equal(method, 'beforeExternalSubmit');
+    assert.equal(args.stage, 'renewal_update');
+    submissions++;
+    return { ok: true };
+  });
+  try {
+    actual.recordKnownOutcome('success');
+    assert.equal(actual.wasPaymentConfirmed(), true);
+    await actual.beforeExternalSubmit({ stage: 'renewal_update', renewalAction: 'disable' });
+    await assert.rejects(
+      () => actual.beforeExternalSubmit({ stage: 'renewal_update', renewalAction: 'disable' }),
+      { code: 'RESULT_UNKNOWN' }
+    );
+    assert.equal(actual.wasPaymentConfirmed(), true);
+    assert.equal(submissions, 1);
+  } finally {
+    actual.setTransportForTest(null);
+    actual.clearTask();
+  }
+});
+
+test('renewal task mutation passes its full Session to the existing browser query path', async () => {
+  const runnerSource = fs.readFileSync(path.join(__dirname, '../task-runner.cjs'), 'utf8');
+  const calls = [];
+  const module = { exports: {} };
+  runInNewContext(runnerSource, {
+    module,
+    process: { env: {} },
+    require(name) {
+      if (name === 'node:path') return path;
+      if (name === './rpc.cjs') return { recordKnownOutcome() {} };
+      if (name === './security.cjs' || name === './upstream/mysql-store') return {};
+      if (name === './upstream/session-auth') return { extractAccessTokenFromRaw: () => token };
+      if (name === './upstream/subscription-check')
+        return {
+          cancelAutoRenew: async (_token, options) => {
+            calls.push(options);
+            return { ok: true };
+          },
+          resumeAutoRenew: async (_token, options) => {
+            calls.push(options);
+            return { ok: true };
+          }
+        };
+      throw new Error('Unexpected isolated task import');
+    }
+  });
+  for (const action of ['disable', 'enable'])
+    await module.exports.execute(
+      { operation: 'renewal', session: 'synthetic-session', payload: { action } },
+      {}
+    );
+  assert.equal(calls.length, 2);
+  for (const options of calls) {
+    assert.equal(options.sessionRaw, 'synthetic-session');
+    assert.equal(options.allowBrowserFallback, true);
+  }
+});
 
 test('logged-in recharge reads through its existing Chromium page and never a Node request context', async () => {
   const f = queryFixture();

@@ -54,9 +54,9 @@
     {
       "path": "checkout-form.cjs",
       "originalSha256": null,
-      "adaptedSha256": "92872c0f466bf86c4a15d85c3b9bd7c296fdcf3783947055a209b872938c7bd9",
+      "adaptedSha256": "dbaa08949ea1818faaeb95dfb3051028b1b4ca140be5113587271f25319e33bf",
       "changed": true,
-      "reason": "Semantic frame-safe checkout form readback and immutable per-task payment cap.; 2026-10-17 controlled checkout form, subscription context and progress repair. Reject false form readiness; recover one original load before payment and retain controlled diagnostics. Bound original-checkout opening, distinguish hidden verification residue from rendered challenges, reject incomplete load reads, close interrupted task pages and preserve payment uncertainty."
+      "reason": "Semantic frame-safe checkout form readback and immutable per-task payment cap.; 2026-10-17 controlled checkout form, subscription context and progress repair. Reject false form readiness; recover one original load before payment and retain controlled diagnostics. Bound original-checkout opening, distinguish hidden verification residue from rendered challenges, reject incomplete load reads, close interrupted task pages and preserve payment uncertainty.; 2026-10-18 restore frozen upstream field aliases and preserve controlled checkout diagnostics; isolated browser and service-chain regressions, no payment-policy change.; 2026-10-18 restore reachable frozen-upstream billing/Pro/renewal compatibility, preserve authenticated task context and existing payment protections; isolated complete-flow regressions."
     },
     {
       "path": "checkout-recovery.cjs",
@@ -180,9 +180,9 @@
     {
       "path": "task-runner.cjs",
       "originalSha256": null,
-      "adaptedSha256": "da0df828be19c636308b5a630c8feeaac2c107745b3601771333c650f60338ac",
+      "adaptedSha256": "56e78f1c0c91a8d5270df21e1b2304a019ecf32f65b4ce2f6a26954a8bcc6af2",
       "changed": true,
-      "reason": "Pass task-frozen payment region and plan expected currency into the isolated task subprocess; clear expected currency at exit.; 2026-10-17 controlled checkout form, subscription context and progress repair.; 2026-10-17 unattended verification and original-checkout reconciliation."
+      "reason": "Pass task-frozen payment region and plan expected currency into the isolated task subprocess; clear expected currency at exit.; 2026-10-17 controlled checkout form, subscription context and progress repair.; 2026-10-17 unattended verification and original-checkout reconciliation.; 2026-10-18 restore reachable frozen-upstream billing/Pro/renewal compatibility, preserve authenticated task context and existing payment protections; isolated complete-flow regressions."
     },
     {
       "path": "test/checkout-cs-browser.test.cjs",
@@ -194,9 +194,9 @@
     {
       "path": "test/checkout-form.test.cjs",
       "originalSha256": null,
-      "adaptedSha256": "039c458c2e8adc144b345cac2f7e0254a0cb9438ccc7617dde6c4f6dac6ded3e",
+      "adaptedSha256": "ee13802b6f27805c0a21f900ac675a0daa83afccabcc3bf8acb0655339113c63",
       "changed": true,
-      "reason": "Real Chromium regression coverage for semantic embedded fields, readback, deadline and payment limits.; 2026-10-17 controlled checkout form, subscription context and progress repair. Reject false form readiness; recover one original load before payment and retain controlled diagnostics. Bound original-checkout opening, distinguish hidden verification residue from rendered challenges, reject incomplete load reads, close interrupted task pages and preserve payment uncertainty."
+      "reason": "Real Chromium regression coverage for semantic embedded fields, readback, deadline and payment limits.; 2026-10-17 controlled checkout form, subscription context and progress repair. Reject false form readiness; recover one original load before payment and retain controlled diagnostics. Bound original-checkout opening, distinguish hidden verification residue from rendered challenges, reject incomplete load reads, close interrupted task pages and preserve payment uncertainty.; 2026-10-18 restore frozen upstream field aliases and preserve controlled checkout diagnostics; isolated browser and service-chain regressions, no payment-policy change.; 2026-10-18 restore reachable frozen-upstream billing/Pro/renewal compatibility, preserve authenticated task context and existing payment protections; isolated complete-flow regressions."
     },
     {
       "path": "test/checkout-load-recovery.test.cjs",
@@ -208,9 +208,9 @@
     {
       "path": "test/checkout-navigation.test.cjs",
       "originalSha256": null,
-      "adaptedSha256": "5da22fef1551fd12b34980c1fd67e8479497b0abdc21edfad52d009f8ea9c1a6",
+      "adaptedSha256": "862d5ba52e59def5ab8666644927640c6b80380c3d8c77693b02b921d88cdd42",
       "changed": true,
-      "reason": "Real Chromium coverage for checkout readiness independent of DOM events, one deadline, exact original identity, visible challenges and cancelled late navigation. Bound original-checkout opening, distinguish hidden verification residue from rendered challenges, reject incomplete load reads, close interrupted task pages and preserve payment uncertainty."
+      "reason": "Real Chromium coverage for checkout readiness independent of DOM events, one deadline, exact original identity, visible challenges and cancelled late navigation. Bound original-checkout opening, distinguish hidden verification residue from rendered challenges, reject incomplete load reads, close interrupted task pages and preserve payment uncertainty.; 2026-10-18 restore frozen upstream field aliases and preserve controlled checkout diagnostics; isolated browser and service-chain regressions, no payment-policy change."
     },
     {
       "path": "test/checkout-outcomes.test.cjs",
@@ -243,9 +243,9 @@
     {
       "path": "test/checkout-recovery.test.cjs",
       "originalSha256": null,
-      "adaptedSha256": "6fa5621a130fc33690a37a5ef6802d1ff8138ca36b28b87e357f05b5f93728a3",
+      "adaptedSha256": "cb6b9244987f2a02739f706a3b25d6b926903ab3b3e17720fbe3718ca46e6936",
       "changed": true,
-      "reason": "Unattended verification, bounded cancellation and original-checkout read-only reconciliation; synthetic regression coverage. 2026-10-17 embedded checkout source binding, exact original payment evidence and read-only recovery; stop duplicate checkout creation on accepted or uncertain POST; synthetic regression coverage. Reject false form readiness; recover one original load before payment and retain controlled diagnostics. Bound original-checkout opening, distinguish hidden verification residue from rendered challenges, reject incomplete load reads, close interrupted task pages and preserve payment uncertainty."
+      "reason": "Unattended verification, bounded cancellation and original-checkout read-only reconciliation; synthetic regression coverage. 2026-10-17 embedded checkout source binding, exact original payment evidence and read-only recovery; stop duplicate checkout creation on accepted or uncertain POST; synthetic regression coverage. Reject false form readiness; recover one original load before payment and retain controlled diagnostics. Bound original-checkout opening, distinguish hidden verification residue from rendered challenges, reject incomplete load reads, close interrupted task pages and preserve payment uncertainty.; 2026-10-18 restore frozen upstream field aliases and preserve controlled checkout diagnostics; isolated browser and service-chain regressions, no payment-policy change. Preserve the existing controlled original-checkout reload failure codes through the diagnostic projection."
     },
     {
       "path": "test/credentials-main.test.cjs",
@@ -257,9 +257,9 @@
     {
       "path": "test/debug-checkout.test.cjs",
       "originalSha256": null,
-      "adaptedSha256": "bbbf44c6ec50498b4bc946e960f0d3fdb0b84c6e7727c07cd0a6e21d1de89d51",
+      "adaptedSha256": "3412971dc740db255cf42dced550bd6184b76e7c12cef3196ab55f1441a49380",
       "changed": true,
-      "reason": "Allow controlled debug to observe current checkout region without authorizing payment; defer exact tier selection only for a unique empty Pro card, verify tier at checkout and retain all real payment gates.; 2026-10-17 controlled checkout form, subscription context and progress repair.; 2026-10-17 unattended verification and original-checkout reconciliation."
+      "reason": "Allow controlled debug to observe current checkout region without authorizing payment; defer exact tier selection only for a unique empty Pro card, verify tier at checkout and retain all real payment gates.; 2026-10-17 controlled checkout form, subscription context and progress repair.; 2026-10-17 unattended verification and original-checkout reconciliation.; 2026-10-18 restore reachable frozen-upstream billing/Pro/renewal compatibility, preserve authenticated task context and existing payment protections; isolated complete-flow regressions."
     },
     {
       "path": "test/dispatch.test.cjs",
@@ -341,9 +341,9 @@
     {
       "path": "test/recharge-flow-acceptance.test.cjs",
       "originalSha256": null,
-      "adaptedSha256": "c420237127a55fec5f45c47debc1b4ed01ded102996c0a4ec6738e9b3153e575",
+      "adaptedSha256": "71400fc98015b72ac0cf10ff3aacce3be98fcc00f3e4b2a8620bad79cd284d03",
       "changed": true,
-      "reason": "Synthetic browser coverage for original-checkout loading, bounded recovery, redirects and single-payment protection. Reject false form readiness; recover one original load before payment and retain controlled diagnostics. Bound original-checkout opening, distinguish hidden verification residue from rendered challenges, reject incomplete load reads, close interrupted task pages and preserve payment uncertainty."
+      "reason": "Synthetic browser coverage for original-checkout loading, bounded recovery, redirects and single-payment protection. Reject false form readiness; recover one original load before payment and retain controlled diagnostics. Bound original-checkout opening, distinguish hidden verification residue from rendered challenges, reject incomplete load reads, close interrupted task pages and preserve payment uncertainty.; 2026-10-18 restore frozen upstream field aliases and preserve controlled checkout diagnostics; isolated browser and service-chain regressions, no payment-policy change.; 2026-10-18 restore reachable frozen-upstream billing/Pro/renewal compatibility, preserve authenticated task context and existing payment protections; isolated complete-flow regressions."
     },
     {
       "path": "test/regressions.test.cjs",
@@ -362,9 +362,9 @@
     {
       "path": "test/renewal-state.test.cjs",
       "originalSha256": null,
-      "adaptedSha256": "cd3df850d22eef502cea00f9f3f591a33a877ba11cc7fc34ed83f70e7aa617cd",
+      "adaptedSha256": "dea663877851a2c87203df3502483527e9b3cf5b36b294b0a563897dc177f8ea",
       "changed": true,
-      "reason": "2026-10-15 Pro档位及升级适配：精确目标、官网报价、单次提交、实际付款方式与原单证据保护；不猜Pro500上游ID。保留既有必要适配。; 2026-10-17 controlled checkout form, subscription context and progress repair.; 2026-10-17 unattended verification and original-checkout reconciliation."
+      "reason": "2026-10-15 Pro档位及升级适配：精确目标、官网报价、单次提交、实际付款方式与原单证据保护；不猜Pro500上游ID。保留既有必要适配。; 2026-10-17 controlled checkout form, subscription context and progress repair.; 2026-10-17 unattended verification and original-checkout reconciliation.; 2026-10-18 restore reachable frozen-upstream billing/Pro/renewal compatibility, preserve authenticated task context and existing payment protections; isolated complete-flow regressions."
     },
     {
       "path": "test/rpc-response.test.cjs",
@@ -404,9 +404,9 @@
     {
       "path": "test/upgrade-checkout.test.cjs",
       "originalSha256": null,
-      "adaptedSha256": "2b22e9f9bcbcb81a0526b000a98946a5a6c22242df429c5c79b9df97f4abe9ba",
+      "adaptedSha256": "7aef3941bf52cfd72dfde75b8797d29dc9d5031b10beca60791fc48ca357ba41",
       "changed": true,
-      "reason": "本模块新增：覆盖准确档位、单次提交、保存卡、报价、凭据完整性及未核实Pro500付款阻止。; 2026-10-17 unattended verification and original-checkout reconciliation."
+      "reason": "本模块新增：覆盖准确档位、单次提交、保存卡、报价、凭据完整性及未核实Pro500付款阻止。; 2026-10-17 unattended verification and original-checkout reconciliation.; 2026-10-18 restore reachable frozen-upstream billing/Pro/renewal compatibility, preserve authenticated task context and existing payment protections; isolated complete-flow regressions."
     },
     {
       "path": "test/upgrade-currency.test.cjs",
@@ -432,9 +432,9 @@
     {
       "path": "test/worker-heartbeat.test.cjs",
       "originalSha256": null,
-      "adaptedSha256": "6e1dba962a3631813b0043ecc1736221f960ebe897b951db59fa63710f2fae62",
+      "adaptedSha256": "4e87f3034b84b310cfa4db04f17a08bebe4c93769f1bfa5ab074d71368af3d9e",
       "changed": true,
-      "reason": "Keep transient heartbeat failures within the server-confirmed lease; stop expired ownership before execution or completion, with bounded child shutdown and secret-free diagnostics.; 2026-10-17 controlled checkout form, subscription context and progress repair."
+      "reason": "Keep transient heartbeat failures within the server-confirmed lease; stop expired ownership before execution or completion, with bounded child shutdown and secret-free diagnostics.; 2026-10-17 controlled checkout form, subscription context and progress repair.; 2026-10-18 restore reachable frozen-upstream billing/Pro/renewal compatibility, preserve authenticated task context and existing payment protections; isolated complete-flow regressions."
     },
     {
       "path": "third-party.cjs",
@@ -509,9 +509,9 @@
     {
       "path": "upstream/chatgpt.js",
       "originalSha256": "cc94972036ccc614fe02276328b2ac82090a3893219d6d351772f659de88d550",
-      "adaptedSha256": "58cb0f7d3643a5350f95abf2141d35992d66b0805ff819c5a67175310a09dae0",
+      "adaptedSha256": "b7f3565ff3e86c29a4d79b66a6bd8e0b9ff2963142cfa3094d935f36f4e3ed9c",
       "changed": true,
-      "reason": "Never estimate Chilean checkout amounts from numeric plan names; require official quote. 2026-10-17 embedded checkout source binding, exact original payment evidence and read-only recovery; stop duplicate checkout creation on accepted or uncertain POST; synthetic regression coverage. Reject false form readiness; recover one original load before payment and retain controlled diagnostics. Bound original-checkout opening, distinguish hidden verification residue from rendered challenges, reject incomplete load reads, close interrupted task pages and preserve payment uncertainty."
+      "reason": "Never estimate Chilean checkout amounts from numeric plan names; require official quote. 2026-10-17 embedded checkout source binding, exact original payment evidence and read-only recovery; stop duplicate checkout creation on accepted or uncertain POST; synthetic regression coverage. Reject false form readiness; recover one original load before payment and retain controlled diagnostics. Bound original-checkout opening, distinguish hidden verification residue from rendered challenges, reject incomplete load reads, close interrupted task pages and preserve payment uncertainty.; 2026-10-18 restore frozen upstream field aliases and preserve controlled checkout diagnostics; isolated browser and service-chain regressions, no payment-policy change. Preserve the existing controlled original-checkout reload failure codes through the diagnostic projection."
     },
     {
       "path": "upstream/chile-money.js",
@@ -558,9 +558,9 @@
     {
       "path": "upstream/index.js",
       "originalSha256": "1694958e105ebe962494d3c88bbf2f0c6b22e49028e46cfc77801e2c9f814855",
-      "adaptedSha256": "410b7188a437de7601221edd5a95a8c4f95de3fa094f4acdfe1479fe7e7f5dfe",
+      "adaptedSha256": "e67203672f7ebee9d5f8ffaac4311e0486798719cf76fe3a40760be2d59e175d",
       "changed": true,
-      "reason": "Verify the unique canonical Pro CTA independently of its top-half container; require a visible unique Pro card for deferred debug, exact checkout tier and all real payment guards. Keep debug-only region evidence explicit. Authorized administrator business visibility: preserve operational data and mask credentials only.; 2026-10-17 controlled checkout form, subscription context and progress repair.; 2026-10-17 unattended verification and original-checkout reconciliation. 2026-10-17 embedded checkout source binding, exact original payment evidence and read-only recovery; stop duplicate checkout creation on accepted or uncertain POST; synthetic regression coverage. Bound original-checkout opening, distinguish hidden verification residue from rendered challenges, reject incomplete load reads, close interrupted task pages and preserve payment uncertainty."
+      "reason": "Verify the unique canonical Pro CTA independently of its top-half container; require a visible unique Pro card for deferred debug, exact checkout tier and all real payment guards. Keep debug-only region evidence explicit. Authorized administrator business visibility: preserve operational data and mask credentials only.; 2026-10-17 controlled checkout form, subscription context and progress repair.; 2026-10-17 unattended verification and original-checkout reconciliation. 2026-10-17 embedded checkout source binding, exact original payment evidence and read-only recovery; stop duplicate checkout creation on accepted or uncertain POST; synthetic regression coverage. Bound original-checkout opening, distinguish hidden verification residue from rendered challenges, reject incomplete load reads, close interrupted task pages and preserve payment uncertainty.; 2026-10-18 restore frozen upstream field aliases and preserve controlled checkout diagnostics; isolated browser and service-chain regressions, no payment-policy change.; 2026-10-18 restore reachable frozen-upstream billing/Pro/renewal compatibility, preserve authenticated task context and existing payment protections; isolated complete-flow regressions."
     },
     {
       "path": "upstream/mysql-store.js",
@@ -600,9 +600,9 @@
     {
       "path": "upstream/pricing-checkout.js",
       "originalSha256": "b3f7914013cfbc7b17469396fc51b80f32acc99e940b810d48ba8cea4237f894",
-      "adaptedSha256": "37285cbccd90da1c03a64cc2938e83b6f97abc2b0418add0d76a3fe2c5c39bac",
+      "adaptedSha256": "15f869c1c6c3c585f64c78f30136743f1d7aff79b2d671fbd9489f498f24ffa5",
       "changed": true,
-      "reason": "Support Chile region selection and explicit CLP evidence; reject contradictory currency and bare dollar ambiguity."
+      "reason": "Support Chile region selection and explicit CLP evidence; reject contradictory currency and bare dollar ambiguity.; 2026-10-18 restore reachable frozen-upstream billing/Pro/renewal compatibility, preserve authenticated task context and existing payment protections; isolated complete-flow regressions."
     },
     {
       "path": "upstream/proxy-pool.js",
@@ -642,9 +642,9 @@
     {
       "path": "upstream/subscription-check.js",
       "originalSha256": "e1f8f285a318389c055c0438f1c143e01023bdc42c619c6ea9eb7abe7238a11e",
-      "adaptedSha256": "103273907e0e56e58710ad543e021a8f4471e48b39d9204667e9283cccda961a",
+      "adaptedSha256": "1eae3cc20eaa46066776d5d35c6865678f3eeb622ba306ea228d667ff1985fa2",
       "changed": true,
-      "reason": "2026-10-15 Pro档位及升级适配：精确目标、官网报价、单次提交、实际付款方式与原单证据保护；不猜Pro500上游ID。保留既有必要适配。; 2026-10-17 controlled checkout form, subscription context and progress repair.; 2026-10-17 unattended verification and original-checkout reconciliation."
+      "reason": "2026-10-15 Pro档位及升级适配：精确目标、官网报价、单次提交、实际付款方式与原单证据保护；不猜Pro500上游ID。保留既有必要适配。; 2026-10-17 controlled checkout form, subscription context and progress repair.; 2026-10-17 unattended verification and original-checkout reconciliation.; 2026-10-18 restore reachable frozen-upstream billing/Pro/renewal compatibility, preserve authenticated task context and existing payment protections; isolated complete-flow regressions."
     },
     {
       "path": "upstream/tax-free-address.js",
@@ -677,16 +677,16 @@
     {
       "path": "upstream/test/pricing-checkout.test.js",
       "originalSha256": "d5354791a21258f84f523943d381f25d89d00bf85cb8cfe78ed1c73b9f85c619",
-      "adaptedSha256": "3fb4529f1f9864671ef4dc6d0c84be2ce2d20ea6ec96715ba5e053fca4ea1e24",
+      "adaptedSha256": "580ca9932b28fe40c312887c2dc0f93246108d192c5dee31c57af87c75a5a5bb",
       "changed": true,
-      "reason": "Wait up to ten seconds for the exact official Pro Checkout tile to mount; reject ambiguous or wrong tiers and never infer an account/API plan_name."
+      "reason": "Wait up to ten seconds for the exact official Pro Checkout tile to mount; reject ambiguous or wrong tiers and never infer an account/API plan_name.; 2026-10-18 restore reachable frozen-upstream billing/Pro/renewal compatibility, preserve authenticated task context and existing payment protections; isolated complete-flow regressions."
     },
     {
       "path": "upstream/upgrade-checkout.js",
       "originalSha256": null,
-      "adaptedSha256": "9caec6e8bfedf5133a7db5bbfd097f632f932ef3776b7b0d05d5ee1ba39d99b0",
+      "adaptedSha256": "20765d948b7c6ffc72cea339362577a94f5d6da59831b90f151374d484b50ba3",
       "changed": true,
-      "reason": "Accept explicit CLP integer upgrade quotes, credits and taxes without relaxing exact-tier, account or card verification.; 2026-10-17 unattended verification and original-checkout reconciliation."
+      "reason": "Accept explicit CLP integer upgrade quotes, credits and taxes without relaxing exact-tier, account or card verification.; 2026-10-17 unattended verification and original-checkout reconciliation.; 2026-10-18 restore reachable frozen-upstream billing/Pro/renewal compatibility, preserve authenticated task context and existing payment protections; isolated complete-flow regressions."
     },
     {
       "path": "upstream/verification-runtime.js",
@@ -712,9 +712,9 @@
     {
       "path": "worker.cjs",
       "originalSha256": null,
-      "adaptedSha256": "5a05d9838f47a4e69cd9fd1f5658a5d58729094ee1e5cf73b1f6c4a9972281f2",
+      "adaptedSha256": "fd60766c034e38a5dbcc1ea6c7f7b2b11398a13f6b89f1d6e6844ed0533f33b8",
       "changed": true,
-      "reason": "Forward the existing private XAUTHORITY file path with DISPLAY to headed task children; retain the restricted environment allowlist.; 2026-10-17 controlled checkout form, subscription context and progress repair."
+      "reason": "Forward the existing private XAUTHORITY file path with DISPLAY to headed task children; retain the restricted environment allowlist.; 2026-10-17 controlled checkout form, subscription context and progress repair.; 2026-10-18 restore reachable frozen-upstream billing/Pro/renewal compatibility, preserve authenticated task context and existing payment protections; isolated complete-flow regressions."
     }
   ],
   "dependencySecurityPatches": [

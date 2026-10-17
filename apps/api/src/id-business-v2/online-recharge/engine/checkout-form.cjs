@@ -4,18 +4,24 @@
 // card/billing identity from iframe order or from a previous successful fill.
 const rules = {
   number: [/\bcc-number\b/, /card.?number|numberinput/],
-  expiry: [/\bcc-exp\b(?!-)/, /expir(?:y|ation|ationdate)|expdate/],
+  expiry: [/\bcc-exp\b(?!-)/, /expir(?:y|ation|ationdate)|exp-date|expdate/],
   month: [/\bcc-exp-month\b/, /exp.*month/],
   year: [/\bcc-exp-year\b/, /exp.*year/],
-  cvc: [/\bcc-csc\b/, /\bcvc\b|\bcvv\b|security.?code|securitycode/],
+  cvc: [/\bcc-csc\b/, /\bcvc\b|\bcvv\b|cardcvc|security.?code|securitycode/],
   name: [
     /\bbilling name\b|^name$|\bcc-name\b/,
-    /billing.?name|fullname|full name|nameinput|姓名|全名/
+    /billing.?name|fullname|full name|nameinput|cardholder.?name|\bname on card\b|\byour name\b|姓名|全名/
   ],
   country: [/\bcountry(?:-name)?\b/, /countryinput|country or region|国家/],
-  line1: [/\baddress-line1\b/, /address.?line.?1|addressline1input|\bstreet\b|街道|地址行.?1/],
+  line1: [
+    /\baddress-line1\b/,
+    /address.?line.?1|addressline1input|\bstreet\b|^(?:enter(?: your)? )?address$|街道|地址行.?1/
+  ],
   city: [/\baddress-level2\b/, /\blocality\b|\bcity\b|localityinput|cityinput|城市/],
-  postal: [/\bpostal-code\b/, /postal.?code|\bzip\b|postalcodeinput|邮编|邮政编码/],
+  postal: [
+    /\bpostal-code\b/,
+    /postal.?code|zip.?code|^postal$|\bzip\b|postalcodeinput|邮编|邮政编码/
+  ],
   state: [
     /\baddress-level1\b/,
     /administrative.?area|\bstate\b|\bprovince\b|stateinput|provinceinput|省|州/
@@ -35,13 +41,30 @@ const labels = {
   state: '州/省'
 };
 const billingIds = {
-  name: ['billingAddress-nameInput'],
-  country: ['billingAddress-countryInput'],
+  name: ['billingAddress-nameInput', 'billingName'],
+  country: ['billingAddress-countryInput', 'billingCountry'],
   line1: ['billingAddress-addressLine1Input', 'billingAddressLine1'],
-  city: ['billingAddress-localityInput'],
-  postal: ['billingAddress-postalCodeInput'],
-  state: ['billingAddress-administrativeAreaInput']
+  city: ['billingAddress-localityInput', 'billingLocality'],
+  postal: ['billingAddress-postalCodeInput', 'billingPostalCode'],
+  state: ['billingAddress-administrativeAreaInput', 'billingAdministrativeArea']
 };
+const billingNames = {
+  name: ['name', 'billingName'],
+  country: ['country', 'billingCountry', 'billingAddressCountry'],
+  line1: ['line1', 'addressLine1', 'billingAddressLine1'],
+  city: ['city', 'locality', 'billingLocality', 'billingAddressCity'],
+  postal: ['zip', 'postal_code', 'postalCode', 'billingPostalCode', 'billingAddressZip'],
+  state: ['state', 'administrativeArea', 'billingAdministrativeArea', 'billingAddressState']
+};
+const billingTestFields = {
+  billingName: 'name',
+  billingCountry: 'country',
+  billingAddressLine1: 'line1',
+  billingLocality: 'city',
+  billingPostalCode: 'postal',
+  billingAdministrativeArea: 'state'
+};
+const stableCardFields = { cardNumber: 'number', cardExpiry: 'expiry', cardCvc: 'cvc' };
 const normalize = (v) =>
   String(v ?? '')
     .trim()
@@ -105,7 +128,7 @@ function score(meta, key) {
       ['contact', 'shipping'].includes(meta.scope)
     )
       return 0;
-    if (billingIds[key].includes(meta.id)) return 400;
+    if (billingIds[key].includes(meta.id) || billingTestFields[meta.testId] === key) return 400;
   }
   if (/email|phone|password|address-line2|addressline2|optional.*address/.test(hay)) return 0;
   if (key === 'expiry' && /exp-month|exp-year|month|year/.test(ac || identity)) return 0;
@@ -114,14 +137,40 @@ function score(meta, key) {
     /cc-number|cc-exp|cc-csc|cardnumber|securitycode/.test(hay)
   )
     return 0;
+  if (stableCardFields[meta.stableField])
+    return stableCardFields[meta.stableField] === key ? 110 : 0;
   const patterns = rules[key];
-  const semantic = patterns.some((p) => p.test(ac))
+  let semantic = patterns.some((p) => p.test(ac))
     ? 100
     : patterns.some((p) => p.test(identity))
       ? 80
       : patterns.some((p) => p.test(description))
         ? 60
         : 0;
+  if (billingNames[key]?.includes(meta.name)) semantic = Math.max(80, semantic);
+  if (!semantic && ['number', 'expiry'].includes(key)) {
+    // Keep the upstream number/1234/MM aliases inside the payment locator. Weak
+    // aliases must not turn an explicitly named order, quantity or address field
+    // into a card field; strong cc-* and stable-field identities are unchanged.
+    const descriptionWords = normalize(
+      `${meta.id} ${meta.name} ${meta.ac} ${meta.label} ${meta.placeholder}`
+        .replace(/([a-z])([A-Z])/g, '$1 $2')
+        .replace(/[_-]/g, ' ')
+    );
+    const weakInput = meta.tag === 'input' && ['text', 'tel'].includes(meta.type);
+    const otherCardField = ['number', 'expiry', 'month', 'year', 'cvc'].some(
+      (other) => other !== key && rules[other].some((pattern) => pattern.test(hay))
+    );
+    const nonCard =
+      /\b(?:order|invoice|receipt|quantity|qty|amount|customer|account|postal|zip|phone|email|password|address)\b/.test(
+        descriptionWords
+      );
+    if (weakInput && !nonCard && !otherCardField) {
+      if (key === 'number' && normalize(meta.name) === 'number') semantic = 80;
+      else if (key === 'number' && /1234/.test(meta.placeholder)) semantic = 60;
+      else if (key === 'expiry' && /\bmm\b/i.test(meta.placeholder)) semantic = 60;
+    }
+  }
   if (!semantic) return 0;
   return (
     semantic +
@@ -175,9 +224,10 @@ function elementRendered(element, { control = false } = {}) {
     control &&
     (element.matches(':disabled') ||
       (element.readOnly && element.getAttribute('role') !== 'combobox') ||
+      (element.type === 'button' &&
+        !(element.tagName === 'BUTTON' && element.getAttribute('role') === 'combobox')) ||
       [
         'hidden',
-        'button',
         'checkbox',
         'color',
         'file',
@@ -270,9 +320,10 @@ async function readControlsOnce(page, deadline, state) {
                   n.matches(':disabled') ||
                   n.getAttribute('aria-disabled') === 'true' ||
                   (n.readOnly && n.getAttribute('role') !== 'combobox') ||
+                  (n.type === 'button' &&
+                    !(n.tagName === 'BUTTON' && n.getAttribute('role') === 'combobox')) ||
                   [
                     'hidden',
-                    'button',
                     'checkbox',
                     'color',
                     'file',
@@ -338,6 +389,22 @@ async function readControlsOnce(page, deadline, state) {
                   id: n.id || '',
                   name: n.getAttribute('name') || '',
                   ac: n.getAttribute('autocomplete') || '',
+                  stableField: ['cardNumber', 'cardExpiry', 'cardCvc'].includes(
+                    n.getAttribute('data-elements-stable-field-name')
+                  )
+                    ? n.getAttribute('data-elements-stable-field-name')
+                    : '',
+                  type: n.type || '',
+                  testId: [
+                    'billingName',
+                    'billingCountry',
+                    'billingAddressLine1',
+                    'billingLocality',
+                    'billingPostalCode',
+                    'billingAdministrativeArea'
+                  ].includes(n.getAttribute('data-testid'))
+                    ? n.getAttribute('data-testid')
+                    : '',
                   placeholder: n.getAttribute('placeholder') || '',
                   label: (
                     n.getAttribute('aria-label') ||
@@ -367,13 +434,22 @@ async function readControlsOnce(page, deadline, state) {
       inspection.framesChecked++;
       for (const meta of metas) {
         const root = meta.owner ? frame.locator(meta.owner) : frame;
+        // Shared on/off hints do not identify a field. Prefer the upstream stable
+        // field identity, and use autocomplete only when it names a known field.
+        const semanticAutocomplete = Object.values(rules).some((patterns) =>
+          patterns.some((pattern) => pattern.test(normalize(meta.ac)))
+        );
         const attribute = meta.id
           ? ['id', meta.id]
-          : meta.ac
-            ? ['autocomplete', meta.ac]
-            : meta.name
-              ? ['name', meta.name]
-              : null;
+          : meta.stableField
+            ? ['data-elements-stable-field-name', meta.stableField]
+            : meta.testId
+              ? ['data-testid', meta.testId]
+              : semanticAutocomplete
+                ? ['autocomplete', meta.ac]
+                : meta.name
+                  ? ['name', meta.name]
+                  : null;
         const el = attribute
           ? root.locator(
               `${meta.tag}[${attribute[0]}=${JSON.stringify(attribute[1])}]:visible:not(:disabled,[inert],[inert] *,[aria-hidden="true"],[aria-hidden="true"] *,[readonly]:not([role="combobox"]))`
@@ -534,7 +610,11 @@ async function value(item, deadline, state = {}) {
   return readWithin(
     () =>
       item.el.evaluate((n) => ({
-        value: n.value ?? n.getAttribute('aria-valuetext') ?? n.textContent ?? '',
+        value:
+          n.getAttribute('role') === 'combobox' &&
+          !['INPUT', 'TEXTAREA', 'SELECT'].includes(n.tagName)
+            ? n.getAttribute('aria-valuetext') || n.value || n.textContent || ''
+            : (n.value ?? n.getAttribute('aria-valuetext') ?? n.textContent ?? ''),
         label: n.tagName === 'SELECT' ? n.selectedOptions[0]?.textContent || '' : '',
         valid: n.getAttribute('aria-invalid') !== 'true' && (!n.validity || n.validity.valid)
       })),
@@ -553,6 +633,187 @@ function matches(key, actual, expected) {
   if (key === 'country') return countryCode(actual) === countryCode(expected);
   if (key === 'state') return stateName(actual) === stateName(expected);
   return normalize(actual) === normalize(expected);
+}
+async function expandBilling(page, deadline, state) {
+  const revision = state.countryRevision || 0;
+  if (state.expandedAtCountry === revision) return;
+  const { items } = await freshRead(page, deadline, state, async () => {
+    const snapshot = await readControlsOnce(page, deadline, state);
+    const code = inspectionCode(snapshot.inspection);
+    if (code) throw failure(code, '账单控件读取未完成', ['line1']);
+    return snapshot;
+  });
+  if (items.some(({ meta }) => score(meta, 'line1') > 0)) return;
+  const handles = [],
+    candidates = [];
+  try {
+    for (const frame of page.frames()) {
+      if (!(await frameVisible(frame, deadline, state.signal))) continue;
+      const entries = await readWithin(
+        () => frame.locator('button,[role="button"],a,summary').elementHandles(),
+        deadline,
+        state.signal
+      );
+      handles.push(...entries);
+      for (const handle of entries) {
+        if (!(await readWithin(() => handle.evaluate(elementRendered), deadline, state.signal)))
+          continue;
+        const eligible = await readWithin(
+          () =>
+            handle.evaluate((n) => {
+              if (
+                n.matches(':disabled') ||
+                n.closest('[aria-disabled="true"],[inert]') ||
+                n.getAttribute('aria-expanded') === 'true' ||
+                n.type === 'submit'
+              )
+                return false;
+              if (
+                n.tagName === 'A' &&
+                n.getAttribute('href') &&
+                !n.getAttribute('href').startsWith('#')
+              )
+                return false;
+              if (n.tagName === 'SUMMARY' && n.parentElement?.open) return false;
+              const label = (n.getAttribute('aria-label') || n.innerText || '')
+                .replace(/\s+/g, ' ')
+                .trim();
+              if (
+                !/^(?:Billing address|Add billing address|Enter address manually|Enter billing address manually|账单地址|添加账单地址|手动输入地址|手动填写地址)$/i.test(
+                  label
+                )
+              )
+                return false;
+              const ids = (n.getAttribute('aria-controls') || '')
+                .trim()
+                .split(/\s+/)
+                .filter(Boolean);
+              return !ids.length || ids.every((id) => n.ownerDocument.getElementById(id));
+            }),
+          deadline,
+          state.signal
+        );
+        if (eligible) candidates.push(handle);
+      }
+    }
+    if (candidates.length > 1)
+      throw failure('CHECKOUT_CONTROL_AMBIGUOUS', '账单地址有多个可见展开入口', ['line1']);
+    if (candidates.length === 1) {
+      timeout(deadline, state.signal);
+      state.expandedAtCountry = revision;
+      await within(
+        () => candidates[0].click({ timeout: timeout(deadline, state.signal) }),
+        deadline,
+        state.signal
+      );
+    }
+  } finally {
+    for (const handle of handles) handle.dispose().catch(() => {});
+  }
+}
+async function selectBoundBillingOption(item, key, expected, deadline, state) {
+  const ids = await readWithin(
+    () =>
+      item.el.evaluate((n) => [
+        ...new Set(
+          `${n.getAttribute('aria-controls') || ''} ${n.getAttribute('aria-owns') || ''}`
+            .trim()
+            .split(/\s+/)
+            .filter(Boolean)
+        )
+      ]),
+    deadline,
+    state.signal
+  );
+  if (!ids.length)
+    throw failure('CHECKOUT_CONTROL_AMBIGUOUS', `${labels[key]}下拉框没有明确绑定的选项区域`, [
+      key
+    ]);
+  const roots = ids.map((id) => item.frame.locator(`[id=${JSON.stringify(id)}]`));
+  try {
+    for (const root of roots) {
+      if ((await readWithin(() => root.count(), deadline, state.signal)) !== 1)
+        throw failure('CHECKOUT_CONTROL_AMBIGUOUS', `${labels[key]}选项区域无法唯一定位`, [key]);
+      await within(
+        () => root.waitFor({ state: 'visible', timeout: timeout(deadline, state.signal) }),
+        deadline,
+        state.signal
+      );
+    }
+    while (Date.now() < deadline) {
+      const handles = [],
+        candidates = [];
+      try {
+        for (const root of roots) {
+          handles.push(...(await readWithin(() => root.elementHandles(), deadline, state.signal)));
+          handles.push(
+            ...(await readWithin(() => root.locator('*').elementHandles(), deadline, state.signal))
+          );
+        }
+        for (const handle of handles) {
+          if (!(await readWithin(() => handle.evaluate(elementRendered), deadline, state.signal)))
+            continue;
+          const option = await readWithin(
+            () =>
+              handle.evaluate((n) => {
+                if (
+                  n.matches(':disabled') ||
+                  n.closest('[aria-disabled="true"],[inert]') ||
+                  n.type === 'submit' ||
+                  ['INPUT', 'TEXTAREA', 'SELECT', 'FORM', 'SCRIPT', 'STYLE'].includes(n.tagName)
+                )
+                  return null;
+                const text = (n.innerText || n.textContent || '').replace(/\s+/g, ' ').trim();
+                const explicit = n.matches(
+                  '[role="option"],button,[role="menuitem"],[data-value],option'
+                );
+                const leaf = !Array.from(n.children).some(
+                  (child) => (child.textContent || '').replace(/\s+/g, ' ').trim() === text
+                );
+                return explicit || leaf
+                  ? {
+                      text,
+                      value: n.getAttribute('data-value') || n.getAttribute('value') || '',
+                      explicit
+                    }
+                  : null;
+              }),
+            deadline,
+            state.signal
+          );
+          if (
+            option &&
+            (matches(key, option.text, expected) ||
+              (option.value && matches(key, option.value, expected)))
+          )
+            candidates.push({ handle, explicit: option.explicit });
+        }
+        const explicit = candidates.filter((candidate) => candidate.explicit);
+        const matched = explicit.length ? explicit : candidates;
+        if (matched.length > 1)
+          throw failure('CHECKOUT_CONTROL_AMBIGUOUS', `${labels[key]}有多个匹配选项`, [key]);
+        if (matched.length === 1) {
+          await within(
+            () => matched[0].handle.click({ timeout: timeout(deadline, state.signal) }),
+            deadline,
+            state.signal
+          );
+          return;
+        }
+      } finally {
+        for (const handle of handles) handle.dispose().catch(() => {});
+      }
+      await within(
+        () => item.frame.page().waitForTimeout(Math.min(100, Math.max(1, deadline - Date.now()))),
+        deadline,
+        state.signal
+      );
+    }
+    timeout(deadline, state.signal);
+  } catch (error) {
+    if (error.code) throw error;
+    throw failure('CHECKOUT_CONTROL_AMBIGUOUS', `${labels[key]}绑定的选项未能唯一确认`, [key]);
+  }
 }
 async function write(page, key, expected, deadline, state = {}) {
   const { item, current } = await readField(page, key, deadline, state);
@@ -581,8 +842,17 @@ async function write(page, key, expected, deadline, state = {}) {
     if (!option) throw new Error(`${labels[key]}没有与资料一致的选项`);
     await item.el.selectOption(option.value, { timeout: timeout(deadline, state.signal) });
   } else if (
-    item.meta.role === 'combobox' &&
-    (!['input', 'textarea'].includes(item.meta.tag) || ['country', 'state'].includes(key))
+    (item.meta.role === 'combobox' && !['input', 'textarea'].includes(item.meta.tag)) ||
+    (['country', 'state'].includes(key) &&
+      (item.meta.role === 'combobox' ||
+        (await readWithin(
+          () =>
+            item.el.evaluate((n) =>
+              Boolean(n.getAttribute('aria-controls') || n.getAttribute('aria-owns'))
+            ),
+          deadline,
+          state.signal
+        ))))
   ) {
     if (item.meta.readOnly && item.meta.tag === 'input') {
       await item.el.press('ArrowDown', { timeout: timeout(deadline, state.signal) });
@@ -591,12 +861,7 @@ async function write(page, key, expected, deadline, state = {}) {
       if (item.meta.tag === 'input')
         await item.el.fill(String(expected), { timeout: timeout(deadline, state.signal) });
     }
-    const choices = item.frame.locator('[role="option"]:visible');
-    await choices.first().waitFor({ state: 'visible', timeout: timeout(deadline, state.signal) });
-    const texts = await readWithin(() => choices.allTextContents(), deadline, state.signal);
-    const matched = texts.map((v, i) => (matches(key, v, expected) ? i : -1)).filter((i) => i >= 0);
-    if (matched.length !== 1) throw new Error(`${labels[key]}选项无法唯一匹配`);
-    await choices.nth(matched[0]).click({ timeout: timeout(deadline, state.signal) });
+    await selectBoundBillingOption(item, key, expected, deadline, state);
   } else {
     const maxLength =
       key === 'year'
@@ -616,6 +881,7 @@ async function write(page, key, expected, deadline, state = {}) {
     if (await readWithin(() => item.el.evaluate((n) => n.isConnected), deadline, state.signal))
       await item.el.press('Tab', { timeout: timeout(deadline, state.signal) });
   }
+  if (key === 'country') state.countryRevision = (state.countryRevision || 0) + 1;
   return true;
 }
 async function verify(page, expected, deadline, providedState) {
@@ -649,6 +915,7 @@ async function fill(page, expected, deadline, state) {
   while (Date.now() < deadline) {
     for (const key of missing) {
       try {
+        if (state.billing && key === 'line1') await expandBilling(page, deadline, state);
         await write(page, key, expected[key], deadline, state);
       } catch (e) {
         if (e.code || /多个|选项/.test(e.message)) throw e;
@@ -823,7 +1090,7 @@ async function fillBilling(page, address, name, { deadline = Date.now() + 120000
     'name',
     ...(address?.state ? ['state'] : [])
   ];
-  const state = { signal, fields, pending: new Set(fields) };
+  const state = { signal, fields, pending: new Set(fields), billing: true };
   return guarded(
     page,
     async () => {

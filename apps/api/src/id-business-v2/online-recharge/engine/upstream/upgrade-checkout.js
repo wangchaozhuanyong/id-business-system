@@ -188,10 +188,10 @@ async function completeUpgradePayment(page, cardInfo, options = {}) {
     }
 }
 
-async function applyPostPaymentRenewalPolicy(operation, token, email, cancel) {
+async function applyPostPaymentRenewalPolicy(operation, token, email, cancel, queryOptions = {}) {
     if (operation === 'upgrade') return null;
     if (operation !== 'initial' || typeof cancel !== 'function') throw new Error('未核实开通类型，禁止附加续费变更');
-    return cancel(token, { email });
+    return cancel(token, { ...queryOptions, email });
 }
 
 module.exports = { UPGRADE_DIALOG_TITLE, TARGET_LABELS, FINAL_BUTTON_NAME, parseLabelledMoney, parseUpgradeQuote, findUpgradeDialog, normalizedExpiry, expectedCardBrand, matchSavedCard, readSavedCards, buildPaymentContext, completeUpgradePayment, applyPostPaymentRenewalPolicy };
