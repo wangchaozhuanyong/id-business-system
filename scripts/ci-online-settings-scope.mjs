@@ -227,6 +227,50 @@ const checkoutLoadRecoveryOptional = [
   'docs/ONLINE_RECHARGE.md',
   'docs/V2_TASKS.md'
 ];
+export const onlineCheckoutNavigationReadyScope = 'ONLINE_CHECKOUT_NAVIGATION_READY';
+const checkoutNavigationReadyEngineRequired = [
+  'SOURCE_MANIFEST.json',
+  'checkout-form.cjs',
+  'checkout-recovery.cjs',
+  'safe-media.cjs',
+  'test/checkout-form.test.cjs',
+  'test/checkout-load-recovery.test.cjs',
+  'test/checkout-navigation.test.cjs',
+  'test/checkout-recovery.test.cjs',
+  'test/recharge-flow-acceptance.test.cjs',
+  'test/regressions.test.cjs',
+  'test/safe-media-finish.test.cjs',
+  'test/verification-state.test.cjs',
+  'upstream/chatgpt.js',
+  'upstream/human-verification.js',
+  'upstream/index.js'
+];
+const checkoutNavigationReadyRequired = [
+  ...checkoutNavigationReadyEngineRequired.map(
+    (name) => 'apps/api/src/id-business-v2/online-recharge/engine/' + name
+  ),
+  'apps/api/src/id-business-v2/online-recharge/local-chain-acceptance.spec.ts',
+  'docs/ONLINE_RECHARGE.md'
+];
+const checkoutNavigationReadyControls = [
+  ...['build.py', 'contract.json', 'release.py', 'release.test.py'].map(
+    (name) => 'scripts/production-release/online-checkout-load-' + name
+  ),
+  'scripts/ci-online-settings-scope.mjs',
+  'scripts/ci-online-settings-scope.test.mjs',
+  'scripts/ci-recharge-scope.mjs'
+];
+export function isOnlineCheckoutNavigationReadyOnly(paths) {
+  return (
+    new Set(paths).size === paths.length &&
+    checkoutNavigationReadyRequired.every((path) => paths.includes(path)) &&
+    paths.every(
+      (path) =>
+        checkoutNavigationReadyRequired.includes(path) ||
+        checkoutNavigationReadyControls.includes(path)
+    )
+  );
+}
 const checkoutLoadParentRpcRequired = [
   'SOURCE_MANIFEST.json',
   'rpc.cjs',
@@ -336,7 +380,8 @@ export function isOnlineSettingsOnly(paths) {
     isOnlineSettingsTestsOnly(paths) ||
     isOnlineLegacyCloseOnly(paths) ||
     isOnlineCheckoutCsRecoveryOnly(paths) ||
-    isOnlineCheckoutLoadRecoveryOnly(paths)
+    isOnlineCheckoutLoadRecoveryOnly(paths) ||
+    isOnlineCheckoutNavigationReadyOnly(paths)
   )
     return true;
   const databaseTest = 'apps/api/src/id-business-v2/online-recharge/mysql.integration.spec.ts';
@@ -387,6 +432,11 @@ export function onlineSettingsCommands(part, paths) {
   const checkoutLoadRecovery = isOnlineCheckoutLoadRecoveryOnly(paths);
   const checkoutLoadParentRpc = isOnlineCheckoutLoadParentRpcOnly(paths);
   const checkoutLoadControls = isOnlineCheckoutLoadRecoveryControlsOnly(paths);
+  const checkoutNavigationReady = isOnlineCheckoutNavigationReadyOnly(paths);
+  const checkoutLoadBusiness = checkoutLoadRecovery || checkoutNavigationReady;
+  const checkoutEngineRequired = checkoutNavigationReady
+    ? checkoutNavigationReadyEngineRequired
+    : checkoutLoadRecoveryEngineRequired;
   if (!isOnlineSettingsOnly(paths) && !controlsOnly)
     throw new Error('Unsupported online settings scope');
   const npm = (...args) => ['npm', ...args];
@@ -410,11 +460,11 @@ export function onlineSettingsCommands(part, paths) {
         'scripts/ci-change-scope.test.mjs'
       ]
     ];
-    if (checkoutLoadRecovery || checkoutLoadControls)
+    if (checkoutLoadBusiness || checkoutLoadControls)
       return [
         ...controls,
         ['python3', '-B', 'scripts/production-release/online-checkout-load-release.test.py'],
-        ...(checkoutLoadRecovery
+        ...(checkoutLoadBusiness
           ? [
               ...[
                 'check:v2-module-architecture',
@@ -439,7 +489,7 @@ export function onlineSettingsCommands(part, paths) {
                   'const rows = manifest.files;',
                   'assert.ok(Array.isArray(rows) && rows.length > 0);',
                   'assert.equal(new Set(rows.map(row => row.path)).size, rows.length);',
-                  `for (const required of ${JSON.stringify(checkoutLoadRecoveryEngineRequired.filter((name) => name !== 'SOURCE_MANIFEST.json'))}) assert.ok(rows.some(row => row.path === required), required);`,
+                  `for (const required of ${JSON.stringify(checkoutEngineRequired.filter((name) => name !== 'SOURCE_MANIFEST.json'))}) assert.ok(rows.some(row => row.path === required), required);`,
                   'for (const row of rows) {',
                   "  assert.ok(typeof row.path === 'string' && row.path.length > 0 && !isAbsolute(row.path) && !win32.isAbsolute(row.path));",
                   "  assert.ok(row.path.split(/[\\\\/]/).every(part => part && part !== '.' && part !== '..'));",
@@ -555,7 +605,7 @@ export function onlineSettingsCommands(part, paths) {
   if (controlsOnly) throw new Error('Unsupported controls-only check');
   if (testsOnly && ['api', 'admin'].includes(part)) throw new Error('Unsupported tests-only check');
   const shared = npm('run', 'build', '--workspace', '@apple-business/shared');
-  if (checkoutLoadRecovery) {
+  if (checkoutLoadBusiness) {
     const upstream = 'apps/api/src/id-business-v2/online-recharge/engine/upstream';
     const browser = [
       npm('ci', '--prefix', upstream, '--ignore-scripts', '--no-audit', '--no-fund'),

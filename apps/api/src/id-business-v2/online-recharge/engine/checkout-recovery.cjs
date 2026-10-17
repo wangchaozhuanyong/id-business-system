@@ -417,13 +417,18 @@ async function reloadOriginalCheckout(page, options = {}) {
   let loadFailed;
   try {
     loadFailed = await bounded(
-      () => require('./checkout-form.cjs').checkoutPageLoadFailed?.(page),
+      () =>
+        require('./checkout-form.cjs').checkoutPageLoadFailed?.(page, {
+          deadline: Date.now() + Math.max(0, clock.deadlineAt - performance.now()),
+          signal: clock.signal
+        }),
       clock
     );
   } catch (error) {
-    if (error?.code === 'LEASE_LOST') throw error;
+    if (error?.code === 'LEASE_LOST' || error?.code === 'CHECKOUT_FORM_ABORTED')
+      throw reloadFailure('LEASE_LOST');
     throw reloadFailure(
-      error?.code === 'ORIGINAL_PAYMENT_READ_TIMEOUT'
+      ['ORIGINAL_PAYMENT_READ_TIMEOUT', 'CHECKOUT_FORM_TIMEOUT'].includes(error?.code)
         ? 'CHECKOUT_RELOAD_TIMEOUT'
         : 'CHECKOUT_RELOAD_FAILED'
     );

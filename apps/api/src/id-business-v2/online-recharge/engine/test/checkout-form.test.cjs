@@ -59,6 +59,20 @@ function failFrameRead(t, frame, read) {
     frame.locator = locator;
   });
 }
+function interceptLoadFailureCount(t, frame, read) {
+  const getByText = frame.getByText;
+  frame.getByText = function (text, ...options) {
+    const result = getByText.call(this, text, ...options);
+    if (text === 'Content failed to load') {
+      const count = result.count.bind(result);
+      result.count = (...args) => read(() => count(...args));
+    }
+    return result;
+  };
+  t.after(() => {
+    frame.getByText = getByText;
+  });
+}
 function delayOneNumberRead(t, page, phase, change) {
   const frame = page.mainFrame(),
     locator = frame.locator;
@@ -130,7 +144,16 @@ test('readiness excludes hidden and inert iframe ancestors, including nested fra
 test('hidden iframe duplicates cannot compete with the active card fields', async (t) => {
   const page = await pageFor(t, `<section inert>${iframe(iframe(cardHtml))}</section>` + cardHtml);
   assert.equal((await inspectCardReadiness(page)).ready, true);
-  assert.equal((await fillCard(page, card, { deadline: Date.now() + 2500 })).ok, true);
+  const result = await fillCard(page, card, { deadline: Date.now() + 2500 });
+  assert.equal(
+    result.ok,
+    true,
+    JSON.stringify({
+      errorCode: result.errorCode,
+      missing: result.missing,
+      inspection: result.inspection
+    })
+  );
   assert.equal(await page.frames()[2].locator('[autocomplete="cc-number"]').inputValue(), '');
 });
 test('opacity and aria-disabled duplicates use the same eligibility for scan, fill and readback', async (t) => {
@@ -143,7 +166,16 @@ test('opacity and aria-disabled duplicates use the same eligibility for scan, fi
     );
     const ready = await inspectCardReadiness(page);
     assert.equal(ready.ready, true);
-    assert.equal((await fillCard(page, card, { deadline: Date.now() + 2500 })).ok, true);
+    const result = await fillCard(page, card, { deadline: Date.now() + 2500 });
+    assert.equal(
+      result.ok,
+      true,
+      JSON.stringify({
+        errorCode: result.errorCode,
+        missing: result.missing,
+        inspection: result.inspection
+      })
+    );
     assert.deepEqual(
       await page.locator('[data-inactive] input').evaluateAll((ns) => ns.map((n) => n.value)),
       ['', '', '', '']
@@ -435,6 +467,78 @@ test('page load failure requires visible exact text and excludes hidden template
     await checkoutPageLoadFailed(await pageFor(t, iframe(iframe('<p>Content failed to load</p>')))),
     true
   );
+});
+test('load failure probe retries one 350ms real browser read from a fresh frame snapshot', async (t) => {
+  const page = await pageFor(t, iframe('<p>Content failed to load</p>'));
+  let reads = 0;
+  interceptLoadFailureCount(t, page.frames()[1], async (count) => {
+    const result = await count();
+    if (++reads === 1) await new Promise((resolve) => setTimeout(resolve, 350));
+    return result;
+  });
+  const started = Date.now();
+  assert.equal(await checkoutPageLoadFailed(page, { deadline: started + 3000 }), true);
+  assert.equal(reads, 2);
+  assert.ok(Date.now() - started < 2300);
+});
+test('a persistently hung load failure probe throws after two bounded reads instead of returning false', async (t) => {
+  const page = await pageFor(t, '<p>Content failed to load</p>');
+  let reads = 0;
+  interceptLoadFailureCount(t, page.mainFrame(), () => {
+    reads++;
+    return new Promise(() => {});
+  });
+  const started = Date.now();
+  await assert.rejects(checkoutPageLoadFailed(page, { deadline: started + 3000 }), (error) => {
+    assert.equal(error.code, 'CHECKOUT_CONTROL_READ_FAILED');
+    assert.equal(error.readPhase, 'frame_scan');
+    assert.equal(error.inspection.readAttempts, 2);
+    assert.equal(error.inspection.complete, false);
+    assert.equal(error.inspection.timedOut, false);
+    return true;
+  });
+  assert.equal(reads, 2);
+  assert.ok(Date.now() - started < 2300);
+});
+for (const stop of ['abort', 'closed', 'deadline', 'fractional deadline']) {
+  test(`load failure probe preserves ${stop} without a retry or a false negative`, async (t) => {
+    const page = await pageFor(t, '<p>Content failed to load</p>');
+    const controller = new AbortController();
+    let entered;
+    const reading = new Promise((resolve) => (entered = resolve));
+    let reads = 0;
+    interceptLoadFailureCount(t, page.mainFrame(), () => {
+      reads++;
+      entered();
+      return new Promise(() => {});
+    });
+    const pending = checkoutPageLoadFailed(page, {
+      deadline:
+        Date.now() + (stop === 'deadline' ? 80 : stop === 'fractional deadline' ? 80.75 : 3000),
+      signal: controller.signal
+    });
+    const rejected = assert.rejects(pending, {
+      code:
+        stop === 'abort'
+          ? 'CHECKOUT_FORM_ABORTED'
+          : stop === 'closed'
+            ? 'CHECKOUT_PAGE_CLOSED'
+            : 'CHECKOUT_FORM_TIMEOUT'
+    });
+    await reading;
+    if (stop === 'abort') controller.abort();
+    if (stop === 'closed') await page.close();
+    await rejected;
+    assert.equal(reads, 1);
+  });
+}
+test('an incomplete load failure diagnostic preserves the structured original field failure', async (t) => {
+  const page = await pageFor(t, cardHtml);
+  interceptLoadFailureCount(t, page.mainFrame(), () => new Promise(() => {}));
+  const result = await fillCard(page, { ...card, cvc: '' }, { deadline: Date.now() + 3000 });
+  assert.equal(result.ok, false);
+  assert.equal(result.errorCode, 'CHECKOUT_FORM_DATA_MISSING');
+  assert.deepEqual(result.missing, ['cvc']);
 });
 test('card fields replaced by a load failure stop before the shared form deadline', async (t) => {
   const page = await pageFor(t, '<input autocomplete="cc-number">');

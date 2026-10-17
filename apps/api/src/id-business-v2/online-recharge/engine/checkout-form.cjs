@@ -730,14 +730,22 @@ async function guarded(page, action, deadline, state) {
     return await within(action, deadline, state.signal);
   } catch (e) {
     let observed = e;
-    if (
-      !closed(page) &&
-      !state.signal?.aborted &&
-      Date.now() < deadline &&
-      (await loadFailed(page, deadline, state.signal))
-    ) {
-      state.inspection = { ...state.inspection, contentLoadFailed: true };
-      observed = failure('CHECKOUT_CONTENT_LOAD_FAILED', '结账内容加载失败');
+    if (!closed(page) && !state.signal?.aborted && Date.now() < deadline) {
+      try {
+        if (await loadFailed(page, deadline, state.signal)) {
+          state.inspection = { ...state.inspection, contentLoadFailed: true };
+          observed = failure('CHECKOUT_CONTENT_LOAD_FAILED', '结账内容加载失败');
+        }
+      } catch (probeError) {
+        // An incomplete diagnostic read is not evidence of visible load failure.
+        // Preserve the original field error unless the task itself has stopped.
+        if (
+          ['CHECKOUT_PAGE_CLOSED', 'CHECKOUT_FORM_ABORTED', 'CHECKOUT_FORM_TIMEOUT'].includes(
+            probeError.code
+          )
+        )
+          observed = probeError;
+      }
     }
     return failedResult(page, observed, deadline, state);
   } finally {
@@ -882,31 +890,54 @@ async function inspectCardReadiness(page, { deadline = Date.now() + 120000, sign
   }
 }
 async function loadFailed(page, deadline, signal) {
-  if (closed(page)) return false;
-  let frames;
-  try {
-    frames = page.frames();
-  } catch {
-    return false;
-  }
-  for (const frame of frames) {
-    if (Date.now() >= deadline || closed(page) || signal?.aborted) return false;
-    const frameDeadline = Math.min(deadline, Date.now() + FRAME_READ_MS);
+  const state = { signal };
+  return freshRead(page, deadline, state, async () => {
+    const inspection = inspectionState(page, deadline, signal);
+    state.inspection = inspection;
+    let readDeadline = deadline;
     try {
-      if (!(await frameVisible(frame, frameDeadline, signal))) continue;
-      if (await frameLoadFailed(frame, frameDeadline, signal)) return true;
-    } catch {
-      /* Read-only detection cannot invent a positive observation. */
+      if (closed(page)) throw failure('CHECKOUT_PAGE_CLOSED', '结账页面已关闭');
+      const frames = page.frames();
+      for (const frame of frames) {
+        timeout(deadline, signal);
+        if (closed(page)) throw failure('CHECKOUT_PAGE_CLOSED', '结账页面已关闭');
+        readDeadline = Math.min(deadline, Date.now() + state.readBudgetMs);
+        if (!(await frameVisible(frame, readDeadline, signal))) {
+          inspection.framesSkipped++;
+          continue;
+        }
+        const visibleFailure = await frameLoadFailed(frame, readDeadline, signal);
+        timeout(deadline, signal);
+        if (closed(page)) throw failure('CHECKOUT_PAGE_CLOSED', '结账页面已关闭');
+        inspection.framesChecked++;
+        if (visibleFailure) {
+          inspection.contentLoadFailed = true;
+          inspection.complete = true;
+          return true;
+        }
+      }
+      timeout(deadline, signal);
+      if (closed(page)) throw failure('CHECKOUT_PAGE_CLOSED', '结账页面已关闭');
+      inspection.complete = true;
+      return false;
+    } catch (error) {
+      inspection.pageClosed = closed(page);
+      inspection.aborted = signal?.aborted === true;
+      inspection.timedOut =
+        Date.now() >= deadline ||
+        (error.code === 'CHECKOUT_FORM_TIMEOUT' && readDeadline === deadline);
+      inspection.framesFailed++;
+      inspection.readPhase = 'frame_scan';
+      const code = inspectionCode(inspection);
+      throw Object.assign(failure(code, '结账加载状态读取未完成'), {
+        readPhase: 'frame_scan',
+        inspection
+      });
     }
-  }
-  return false;
+  });
 }
-async function checkoutPageLoadFailed(page) {
-  try {
-    return await loadFailed(page, Date.now() + 2000);
-  } catch {
-    return false;
-  }
+async function checkoutPageLoadFailed(page, { deadline = Date.now() + 2000, signal } = {}) {
+  return loadFailed(page, deadline, signal);
 }
 async function verifyCard(page, card, { deadline = Date.now() + 120000 } = {}) {
   const state = {};

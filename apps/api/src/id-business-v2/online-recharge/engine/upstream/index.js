@@ -606,10 +606,14 @@ async function run(runOptions = {}) {
         }
 
     } catch (e) {
+        if (e.checkoutOpenCleanupFailed === true) {
+            await Promise.resolve(require('./human-verification').disposeVerificationPage?.(page)).catch(() => {});
+            if (context) await context.close().catch(() => {});
+        }
         if (e.code === 'LEASE_LOST' || taskSignal?.()?.aborted) throw e;
         console.error("❌ [运行时错误]:", e.message);
         try {
-            const errorShot = await captureDebugScreenshot(context, page, 'error');
+            const errorShot = e.checkoutOpenCleanupFailed === true ? null : await captureDebugScreenshot(context, page, 'error');
             if (errorShot) {
                 console.log(`FAILURE_SCREENSHOT: ${errorShot}`);
             }
@@ -617,6 +621,7 @@ async function run(runOptions = {}) {
             console.error(`⚠️ [系统] 异常截图保存失败: ${err.message}`);
         }
         // 用 exitCode 而非 process.exit()，确保下方 finally 能完整执行（录像需 context 关闭后才落盘）
+        const resultUnknown = wasSubmitted() || require('../rpc.cjs').wasPaymentConfirmed() || paymentSucceeded || e.code === 'RESULT_UNKNOWN';
         const checkoutFailure = {
             CHECKOUT_RECOVERY_INVALID: '原结账单来源或付款绑定无效，未提交付款',
             CHECKOUT_RECOVERY_UNSUPPORTED: '当前结账单来源尚未通过核验，未提交付款',
@@ -624,7 +629,14 @@ async function run(runOptions = {}) {
             CHECKOUT_CREATION_REJECTED: '官网拒绝创建本次结账单，未提交付款',
             CHECKOUT_OPEN_FAILED: '原结账单已创建，页面验证未完成；未重复建单或提交付款'
         }[e.code];
-        return { ...(lastPaymentResult?.paymentEvidence ? { paymentEvidence: lastPaymentResult.paymentEvidence, confirmation: lastPaymentResult.confirmation, cardLast4: lastPaymentResult.cardLast4, confirmedPaid: lastPaymentResult.confirmedPaid === true, subscriptionChangedVerified: lastPaymentResult.subscriptionChangedVerified === true } : {}), success: false, pendingCredentials: e.code === 'PENDING_CREDENTIALS', resultUnknown: wasSubmitted() || require('../rpc.cjs').wasPaymentConfirmed() || paymentSucceeded || e.code === 'RESULT_UNKNOWN', ...(checkoutFailure ? { errorCode: e.code } : {}), error: checkoutFailure || (e.code === 'LEASE_LOST' ? '任务租约已失效' : '执行未完成，请查看受限诊断') };
+        const checkoutOpenDiagnostics = checkoutFailure || e.checkoutCreationState === 'accepted'
+            ? require('./chatgpt').safeCheckoutOpenDiagnostics(e.checkoutOpenDiagnostics) : undefined;
+        const openStageLabels = { navigation: '支付页面导航', login: '登录核验', readiness: '支付控件检查', final_check: '结账页最终核验' };
+        const openReasonLabels = { timeout: '超过本次期限', http_error: '收到异常响应', original_changed: '发现原结账单页面变化', session_required: '未通过', cancelled: '已取消', network_error: '网络请求未完成', check_failed: '未通过', page_closed: '页面已关闭', not_ready: '尚未就绪' };
+        const checkoutFailureMessage = checkoutOpenDiagnostics
+            ? `原结账单已创建，${openStageLabels[checkoutOpenDiagnostics.stage]}${openReasonLabels[checkoutOpenDiagnostics.reason]}；已停止后续操作`
+            : resultUnknown && checkoutFailure ? '结账单检查未完成，付款结果待核对；已停止后续操作' : checkoutFailure;
+        return { ...(lastPaymentResult?.paymentEvidence ? { paymentEvidence: lastPaymentResult.paymentEvidence, confirmation: lastPaymentResult.confirmation, cardLast4: lastPaymentResult.cardLast4, confirmedPaid: lastPaymentResult.confirmedPaid === true, subscriptionChangedVerified: lastPaymentResult.subscriptionChangedVerified === true } : {}), success: false, pendingCredentials: e.code === 'PENDING_CREDENTIALS', resultUnknown, ...(checkoutFailure || checkoutOpenDiagnostics ? { errorCode: checkoutFailure ? e.code : 'CHECKOUT_OPEN_FAILED' } : {}), ...(checkoutOpenDiagnostics ? { checkoutOpenDiagnostics } : {}), error: checkoutFailureMessage || (e.code === 'LEASE_LOST' ? '任务租约已失效' : '执行未完成，请查看受限诊断') };
     } finally {
         console.log("👋 [系统] 流程结束，正在关闭浏览器...");
         await Promise.resolve(require('./human-verification').disposeVerificationPage?.(page)).catch(() => {});
