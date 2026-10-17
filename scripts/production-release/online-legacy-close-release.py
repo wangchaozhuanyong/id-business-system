@@ -12,12 +12,15 @@ BASE = Path('/opt/id-business-v2')
 HERE = Path(__file__).resolve().parent
 SCOPE = 'ONLINE_LEGACY_UNPAID_CLOSURE'
 CONTRACT_FILE = 'online-legacy-close-contract.json'
-EXPECTED_PREDECESSOR = '055b308bf357d460ee7746c9e60ae46d575f7661'
+EXPECTED_PREDECESSOR = 'a37e775636f25cd405e33e014519f9881c094d9b'
+PUBLISHED_SOURCE_COMMIT = '055b308bf357d460ee7746c9e60ae46d575f7661'
+PUBLISHED_ADMIN_PROOF = ('registration-protocol-repair-20261017-build-proof.json',
+                         '3507bc7c9c00de4893fde083d2033168cc8263b74ced19f8e2bcdedae3b04edf')
 PRESERVED = ('admin', 'mysql', 'caddy', 'media-resolver', 'auto-recharge', 'auto-registration')
 API_MODULE = 'id-business-v2/online-recharge/persistence/tasks.repository.js'
 PUBLISHED_MAPS = {
     'beforeApiOnlineFiles': (126, '81c5173967e0981ceb8d1b8c832d917c700d4d9cfbb85b79848cadf5e9c80eeb'),
-    'publicFiles': (261, '47c78f5127494a702e338d2862ff5f4a2f4591cee0db5c15e929962b024e5369'),
+    'publicFiles': (261, '88f2e4e02dd46722f740943dece93bfcbbed639a2be259c9e5eeb40ee859c176'),
     'engineFiles': (96, '10e16859cb9a5bddb737c04caeeacda90baaf16bdb7846a1031d966381542be6')}
 ALLOWED_SOURCES = frozenset([
     'apps/api/src/id-business-v2/online-recharge/persistence/tasks.repository.ts',
@@ -43,8 +46,11 @@ def load(name):
 
 
 def validate_contract(c):
-    need(c.get('scope') == SCOPE and c.get('expectedCurrent') == EXPECTED_PREDECESSOR,
+    need(c.get('scope') == SCOPE and c.get('expectedCurrent') == EXPECTED_PREDECESSOR
+         and c.get('publishedSourceCommit') == PUBLISHED_SOURCE_COMMIT,
          'PUBLISHED_PREDECESSOR_CHANGED')
+    need((c.get('publishedAdminProofFile'), c.get('publishedAdminProofSha256')) == PUBLISHED_ADMIN_PROOF,
+         'PUBLISHED_ADMIN_PROOF_CHANGED')
     need(set(c.get('sources', {})) == ALLOWED_SOURCES and c.get('apiModules') == [API_MODULE],
          'FINITE_SCOPE_CHANGED')
     need(all(re.fullmatch('[a-f0-9]{64}', value) for value in c['sources'].values())
@@ -67,6 +73,8 @@ def verify_proof(proof, plan, c, files):
          and all(proof.get(k) == plan[k] for k in ('commit', 'tree', 'workflowRunId',
              'workflowRunAttempt', 'contractSha256', 'controlSources'))
          and proof.get('sources') == c['sources'] and set(proof.get('apiModules', {})) == expected_modules
+         and proof.get('runtimeBaselineCommit') == c['expectedCurrent']
+         and proof.get('publishedSourceCommit') == c['publishedSourceCommit']
          and proof.get('baselineApiReproduced') is True
          and proof.get('preservedAdminFiles') == c['publicFiles']
          and proof.get('preservedEngineFiles') == c['engineFiles']
@@ -96,6 +104,13 @@ def preserved_content(d, states, c):
     load('proxy-result-identity-release.py').engine_content(d, states['online-recharge'], c['engineFiles'])
 
 
+def published_proofs(directory, c):
+    for name, expected in [('online-checkout-build-proof.json', c['publishedProofSha256']),
+                           (c['publishedAdminProofFile'], c['publishedAdminProofSha256'])]:
+        path = directory / name
+        need(not path.is_symlink() and sha(path.read_bytes()) == expected, 'PUBLISHED_PROOF_CHANGED')
+
+
 def baseline(d, h, c):
     previous = (BASE / 'current').resolve()
     need(str(previous) == c['current'] and previous.parent == BASE / 'releases', 'CURRENT_CHANGED')
@@ -106,8 +121,7 @@ def baseline(d, h, c):
     need(states == c['services'], 'SERVICES_CHANGED')
     need(all(sha((previous / n).read_bytes()) == value for n, value in c['configurationSha256'].items()),
          'HOST_CONFIGURATION_CHANGED')
-    need(sha((previous / 'online-checkout-build-proof.json').read_bytes()) == c['publishedProofSha256'],
-         'PUBLISHED_PROOF_CHANGED')
+    published_proofs(previous, c)
     need(shutil.disk_usage(BASE).free > 6 * 1024**3, 'DISK_LOW')
     normalizer = Path(c['backupNormalizerPath'])
     need(normalizer.is_relative_to(BASE / 'releases') and normalizer.is_file()
@@ -159,6 +173,7 @@ def release(plan, c):
             manifest = json.loads((target / 'release-manifest.json').read_bytes())
             need(manifest.get('commit') == plan['commit'] and manifest.get('scope') == SCOPE,
                  'READBACK_CURRENT_CHANGED')
+            published_proofs(target, c)
             raw_proof = (target / 'online-legacy-close-build-proof.json').read_bytes()
             receipt = json.loads((target / 'online-legacy-close-preservation.json').read_bytes())
             need(sha(raw_proof) == plan['buildProofSha256'], 'READBACK_PROOF_CHANGED')

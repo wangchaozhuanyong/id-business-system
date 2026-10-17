@@ -38,6 +38,8 @@ class ClosurePublicationTests(unittest.TestCase):
                  **{'api/modules/' + n: value for n, value in modules.items()}}
         proof = {**plan, 'version': 1, 'scope': r.SCOPE, 'sources': c['sources'],
                  'apiModules': modules, 'files': files, 'baselineApiReproduced': True,
+                 'runtimeBaselineCommit': c['expectedCurrent'],
+                 'publishedSourceCommit': c['publishedSourceCommit'],
                  'preservedAdminFiles': c['publicFiles'], 'preservedEngineFiles': c['engineFiles'],
                  'databaseVerification': {'isolated': True, 'suite': 'mysql.integration.spec.ts',
                                           'passed': 49, 'closureTestsPassed': 7},
@@ -57,7 +59,10 @@ class ClosurePublicationTests(unittest.TestCase):
             bad['sources'][source] = 'f' * 64
             with self.subTest(source=source), self.assertRaises(RuntimeError):
                 r.validate_contract(bad)
-        for change in [{'expectedCurrent': 'f' * 40}, {'apiModules': [r.API_MODULE, 'auth/extra.js']},
+        for change in [{'expectedCurrent': r.PUBLISHED_SOURCE_COMMIT},
+                       {'publishedSourceCommit': r.EXPECTED_PREDECESSOR},
+                       {'publishedAdminProofSha256': 'f' * 64},
+                       {'apiModules': [r.API_MODULE, 'auth/extra.js']},
                        {'validationReuse': {'run': '123'}}, {'databaseTestMarker': ''},
                        {'minimumDatabaseTests': 48}, {'minimumClosureDatabaseTests': 6}]:
             with self.subTest(change=change), self.assertRaises(RuntimeError):
@@ -77,6 +82,8 @@ class ClosurePublicationTests(unittest.TestCase):
         c, plan, proof, files = self.fixture()
         r.verify_proof(proof, plan, c, files)
         for change in [{'commit': 'f' * 40}, {'controlSources': {}}, {'baselineApiReproduced': False},
+                       {'runtimeBaselineCommit': r.PUBLISHED_SOURCE_COMMIT},
+                       {'publishedSourceCommit': r.EXPECTED_PREDECESSOR},
                        {'preservedAdminFiles': {}}, {'preservedEngineFiles': {}},
                        {'updatedServices': ['api', 'admin']}, {'dependentServiceRebound': None},
                        {'migrationPerformed': True}, {'businessActions': 1}]:
@@ -105,6 +112,26 @@ class ClosurePublicationTests(unittest.TestCase):
             with self.subTest(change=change), self.assertRaises(RuntimeError):
                 r.verify_proof(damaged, plan, c, files)
 
+    def test_current_registration_and_online_predecessor_proofs_are_both_preserved(self):
+        output = ROOT / '.runtime/online-legacy-close-control-tests'
+        output.mkdir(parents=True, exist_ok=True)
+        c = self.contract()
+        with tempfile.TemporaryDirectory(dir=output) as temporary:
+            directory = Path(temporary)
+            for field, name in [('publishedProofSha256', 'online-checkout-build-proof.json'),
+                                ('publishedAdminProofSha256', c['publishedAdminProofFile'])]:
+                raw = name.encode()
+                (directory / name).write_bytes(raw)
+                c[field] = r.sha(raw)
+            r.published_proofs(directory, c)
+            for name in ('online-checkout-build-proof.json', c['publishedAdminProofFile']):
+                path = directory / name
+                original = path.read_bytes()
+                path.write_bytes(b'changed')
+                with self.subTest(name=name), self.assertRaises(RuntimeError):
+                    r.published_proofs(directory, c)
+                path.write_bytes(original)
+
     def test_compilation_cannot_expand_delete_or_change_other_modules(self):
         delta = load('online-checkout-build.py').module_delta
         before = {r.API_MODULE.removesuffix('.js') + ext: 'a' * 64
@@ -116,7 +143,7 @@ class ClosurePublicationTests(unittest.TestCase):
             with self.subTest(damaged=damaged), self.assertRaises(RuntimeError):
                 delta(before, damaged, [r.API_MODULE])
 
-    def test_published_reconstruction_reads_055b_instead_of_unpublished_main(self):
+    def test_newer_runtime_retains_exact_055b_online_source_reconstruction(self):
         output = ROOT / '.runtime/online-legacy-close-control-tests'
         output.mkdir(parents=True, exist_ok=True)
         with tempfile.TemporaryDirectory(dir=output) as temporary:
@@ -130,6 +157,7 @@ class ClosurePublicationTests(unittest.TestCase):
             context = directory / 'context'
             engine = {'worker.cjs': b'published-engine'}
             c = {'predecessorRecipeSha256': b.sha(raw_old), 'expectedCurrent': r.EXPECTED_PREDECESSOR,
+                 'publishedSourceCommit': r.PUBLISHED_SOURCE_COMMIT,
                  'engineRoot': 'engine', 'engineFiles': {n: b.sha(raw) for n, raw in engine.items()}}
             def reconstruct(target, recipe, _):
                 self.assertEqual(recipe, old)
@@ -149,7 +177,7 @@ class ClosurePublicationTests(unittest.TestCase):
             def git(*args):
                 self.assertEqual(args[0], 'show')
                 commit, name = args[1].split(':', 1)
-                self.assertEqual(commit, r.EXPECTED_PREDECESSOR)
+                self.assertEqual(commit, r.PUBLISHED_SOURCE_COMMIT)
                 return sources[name]
             with patch.object(b, 'HERE', controls), patch.object(b, 'load', side_effect=helper), \
                     patch.object(b, 'git', side_effect=git):
