@@ -249,6 +249,21 @@ async function executePaymentWithRetry(page, options) {
                 progress(`FAILURE_SCREENSHOT: ${paymentResult.screenshot}`);
             }
 
+            if (!require('../rpc.cjs').wasSubmitted() &&
+                ['CHECKOUT_RECOVERY_INVALID', 'CHECKOUT_RECOVERY_UNSUPPORTED'].includes(paymentResult.errorCode)) {
+                return {
+                    success: false,
+                    submitted: false,
+                    canRetryCard: false,
+                    errorCode: paymentResult.errorCode,
+                    error: paymentResult.errorCode === 'CHECKOUT_RECOVERY_INVALID'
+                        ? '原结账单来源或付款绑定无效，未提交付款'
+                        : '原结账单来源或格式尚未核实支持，未提交付款',
+                    cardLast4,
+                    screenshots
+                };
+            }
+
             const declined = operation !== 'upgrade' && paymentResult.declined === true && isPaymentDeclined(lastError);
             if (require('../rpc.cjs').wasSubmitted() && !declined) throw new ResultUnknownError();
             if (declined) {

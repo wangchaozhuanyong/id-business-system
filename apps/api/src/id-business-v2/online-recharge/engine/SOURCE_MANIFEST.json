@@ -61,9 +61,9 @@
     {
       "path": "checkout-recovery.cjs",
       "originalSha256": null,
-      "adaptedSha256": "ce586a4a19321523c60fbc440f0603c2ab6b6db4b56fbd9e80bda1ca70293e6a",
+      "adaptedSha256": "d1f19e1735d15deabd236244ae4776e8a9ae50c23b23dbf08472be703a1ec8cc",
       "changed": true,
-      "reason": "Unattended verification, bounded cancellation and original-checkout read-only reconciliation; synthetic regression coverage."
+      "reason": "Unattended verification, bounded cancellation and original-checkout read-only reconciliation; synthetic regression coverage. 2026-10-17 embedded checkout source binding, exact original payment evidence and read-only recovery; stop duplicate checkout creation on accepted or uncertain POST; synthetic regression coverage."
     },
     {
       "path": "confirmation.cjs",
@@ -185,6 +185,13 @@
       "reason": "Pass task-frozen payment region and plan expected currency into the isolated task subprocess; clear expected currency at exit.; 2026-10-17 controlled checkout form, subscription context and progress repair.; 2026-10-17 unattended verification and original-checkout reconciliation."
     },
     {
+      "path": "test/checkout-cs-browser.test.cjs",
+      "originalSha256": null,
+      "adaptedSha256": "7ae537e5a145f2a7188372502ff875b404926d3d9fbe207c2091b442956af04d",
+      "changed": true,
+      "reason": "2026-10-17 embedded checkout source binding, exact original payment evidence and read-only recovery; stop duplicate checkout creation on accepted or uncertain POST; synthetic regression coverage."
+    },
+    {
       "path": "test/checkout-form.test.cjs",
       "originalSha256": null,
       "adaptedSha256": "545241f33c459dddedf2fa081addcf907e8854ad70713cfcfba2754f1ea8ea25",
@@ -206,11 +213,18 @@
       "reason": "Unattended verification, bounded cancellation and original-checkout read-only reconciliation; synthetic regression coverage."
     },
     {
+      "path": "test/checkout-recovery-evidence.test.cjs",
+      "originalSha256": null,
+      "adaptedSha256": "f6d92c131c4f1e1b3c17d20ff81e4943bfc84897d6e5880b11d5efd89335bb0b",
+      "changed": true,
+      "reason": "2026-10-17 embedded checkout source binding, exact original payment evidence and read-only recovery; stop duplicate checkout creation on accepted or uncertain POST; synthetic regression coverage."
+    },
+    {
       "path": "test/checkout-recovery.test.cjs",
       "originalSha256": null,
-      "adaptedSha256": "ddea7aa9c491a8e1ac0d1fa99bceeb2d3337b9627cc3da2f2d647f3f320e2281",
+      "adaptedSha256": "2a6223def3108d2de2d0fee61d4a3dc3dafad427d0f99a340b15eb01a20dd929",
       "changed": true,
-      "reason": "Unattended verification, bounded cancellation and original-checkout read-only reconciliation; synthetic regression coverage."
+      "reason": "Unattended verification, bounded cancellation and original-checkout read-only reconciliation; synthetic regression coverage. 2026-10-17 embedded checkout source binding, exact original payment evidence and read-only recovery; stop duplicate checkout creation on accepted or uncertain POST; synthetic regression coverage."
     },
     {
       "path": "test/credentials-main.test.cjs",
@@ -250,9 +264,9 @@
     {
       "path": "test/payment-core.test.cjs",
       "originalSha256": null,
-      "adaptedSha256": "30e0a941869d3f69cd18243e0f4ca2795711b5809eaf971eacdb7704693d5480",
+      "adaptedSha256": "d678832c8252878499272b06c778532c3eaa25326a0e98a491ba440810508f89",
       "changed": true,
-      "reason": "2026-10-15 Pro档位及升级适配：精确目标、官网报价、单次提交、实际付款方式与原单证据保护；不猜Pro500上游ID。保留既有必要适配。; 2026-10-17 unattended verification and original-checkout reconciliation."
+      "reason": "2026-10-15 Pro档位及升级适配：精确目标、官网报价、单次提交、实际付款方式与原单证据保护；不猜Pro500上游ID。保留既有必要适配。; 2026-10-17 unattended verification and original-checkout reconciliation. 2026-10-17 embedded checkout source binding, exact original payment evidence and read-only recovery; stop duplicate checkout creation on accepted or uncertain POST; synthetic regression coverage."
     },
     {
       "path": "test/payment-observation.test.cjs",
@@ -467,9 +481,9 @@
     {
       "path": "upstream/chatgpt.js",
       "originalSha256": "cc94972036ccc614fe02276328b2ac82090a3893219d6d351772f659de88d550",
-      "adaptedSha256": "3bc182b365c642247b24e90f7deec45ba8976fca798ddf01b07b939d59fae582",
+      "adaptedSha256": "4c657ed2ca426a0922c153fb9d207e9fe140a4f563de29ceed469192145d658f",
       "changed": true,
-      "reason": "Never estimate Chilean checkout amounts from numeric plan names; require official quote."
+      "reason": "Never estimate Chilean checkout amounts from numeric plan names; require official quote. 2026-10-17 embedded checkout source binding, exact original payment evidence and read-only recovery; stop duplicate checkout creation on accepted or uncertain POST; synthetic regression coverage."
     },
     {
       "path": "upstream/chile-money.js",
@@ -516,9 +530,9 @@
     {
       "path": "upstream/index.js",
       "originalSha256": "1694958e105ebe962494d3c88bbf2f0c6b22e49028e46cfc77801e2c9f814855",
-      "adaptedSha256": "1c5912b3c26b99cc6c05fc5c59bd62efcd0e62cb1a70f9e2618172d37486605f",
+      "adaptedSha256": "5da24a26e5b2ced3970fa3faf79e1983fcab2b715188f31eca7ff74a33c5f995",
       "changed": true,
-      "reason": "Verify the unique canonical Pro CTA independently of its top-half container; require a visible unique Pro card for deferred debug, exact checkout tier and all real payment guards. Keep debug-only region evidence explicit. Authorized administrator business visibility: preserve operational data and mask credentials only.; 2026-10-17 controlled checkout form, subscription context and progress repair.; 2026-10-17 unattended verification and original-checkout reconciliation."
+      "reason": "Verify the unique canonical Pro CTA independently of its top-half container; require a visible unique Pro card for deferred debug, exact checkout tier and all real payment guards. Keep debug-only region evidence explicit. Authorized administrator business visibility: preserve operational data and mask credentials only.; 2026-10-17 controlled checkout form, subscription context and progress repair.; 2026-10-17 unattended verification and original-checkout reconciliation. 2026-10-17 embedded checkout source binding, exact original payment evidence and read-only recovery; stop duplicate checkout creation on accepted or uncertain POST; synthetic regression coverage."
     },
     {
       "path": "upstream/mysql-store.js",
@@ -544,9 +558,9 @@
     {
       "path": "upstream/payment-retry.js",
       "originalSha256": "41d4f3fad99d2f0b8036fa7da597bd251134361232fe96b4515a1d2b5bd80597",
-      "adaptedSha256": "cf1580aa16b6c413d565eed20ad86d174eac3b96ebf732e55f35aa59e5944a42",
+      "adaptedSha256": "dee52ffe1afea52e5102d960293f39afc26fd1a74c6ef3e70d3215e7f1d1b537",
       "changed": true,
-      "reason": "2026-10-15 Pro档位及升级适配：精确目标、官网报价、单次提交、实际付款方式与原单证据保护；不猜Pro500上游ID。保留既有必要适配。; 2026-10-17 controlled checkout form, subscription context and progress repair.; 2026-10-17 unattended verification and original-checkout reconciliation."
+      "reason": "2026-10-15 Pro档位及升级适配：精确目标、官网报价、单次提交、实际付款方式与原单证据保护；不猜Pro500上游ID。保留既有必要适配。; 2026-10-17 controlled checkout form, subscription context and progress repair.; 2026-10-17 unattended verification and original-checkout reconciliation. 2026-10-17 embedded checkout source binding, exact original payment evidence and read-only recovery; stop duplicate checkout creation on accepted or uncertain POST; synthetic regression coverage."
     },
     {
       "path": "upstream/playwright-proxy.js",
@@ -593,9 +607,9 @@
     {
       "path": "upstream/stripe-payment.js",
       "originalSha256": "007a6ae1abb633fd283e48f4ceac02bf3d2e2fc30aaca87520565b34eb29743e",
-      "adaptedSha256": "50ce39cf2ad763594dddcfb5b208addb804a0aafaf45aad46b2d1c44e70d549c",
+      "adaptedSha256": "7274bcf3819f70783995cef3b695303fcb8ebdb30da29c339b8c64575af52993",
       "changed": true,
-      "reason": "Read exact whole-peso CLP totals, wait for official Chilean tax total, preserve address country and existing final payment gates.; 2026-10-17 controlled checkout form, subscription context and progress repair.; 2026-10-17 unattended verification and original-checkout reconciliation."
+      "reason": "Read exact whole-peso CLP totals, wait for official Chilean tax total, preserve address country and existing final payment gates.; 2026-10-17 controlled checkout form, subscription context and progress repair.; 2026-10-17 unattended verification and original-checkout reconciliation. 2026-10-17 embedded checkout source binding, exact original payment evidence and read-only recovery; stop duplicate checkout creation on accepted or uncertain POST; synthetic regression coverage."
     },
     {
       "path": "upstream/subscription-check.js",

@@ -34,6 +34,21 @@ export async function restoreRechargeAccount(input: {
   )
     throw new BadRequestException('账户标识不一致');
   const records = await repository.records(tx, accountKey);
+  const expiredCheckoutIdentifiers = records.flatMap((record) => {
+    if (
+      !record.fileKey.startsWith('history/') ||
+      object(record.document).kind !== 'expired_checkout'
+    )
+      return [];
+    const proof = object(object(record.document).proof);
+    return proof.account_key === accountKey &&
+      proof.target_plan === job.plan &&
+      proof.status === 'expired' &&
+      proof.payment_status === 'unpaid' &&
+      typeof proof.checkout_identifier === 'string'
+      ? [proof.checkout_identifier]
+      : [];
+  });
   if (records.some((record) => record.ownerId !== job.ownerId))
     throw new ForbiddenException('该账户属于另一操作人的原任务');
   if (job.chatgptAccountId && accounts) {
@@ -164,7 +179,10 @@ export async function restoreRechargeAccount(input: {
       job.plan,
       job.id,
       undefined,
-      unidentifiedRecovery ? unidentifiedSource?.id : undefined
+      unidentifiedRecovery ? unidentifiedSource?.id : undefined,
+      ...(expiredCheckoutIdentifiers.length
+        ? ([expiredCheckoutIdentifiers] as const)
+        : ([] as const))
     );
     if (
       persistedIdentifier &&
@@ -178,7 +196,9 @@ export async function restoreRechargeAccount(input: {
         accountKey,
         job.plan,
         job.id,
-        persistedIdentifier
+        persistedIdentifier,
+        undefined,
+        expiredCheckoutIdentifiers
       );
     }
     originalCheckoutIdentifier = repository.restoreCheckoutIdentifier(
@@ -226,7 +246,7 @@ export async function restoreRechargeAccount(input: {
       ? { subscriptionCycleProtocol: 1 as const }
       : {}),
     ...(nextCycleContext ? { nextCycleContext } : {}),
-    records,
+    records: records.filter((record) => !record.fileKey.startsWith('history/')),
     staleProfiles,
     ...(ownedProfile ? { ownedProfile } : {}),
     ...(unidentifiedRecovery ? { unidentifiedCheckoutRecovery: true as const } : {}),

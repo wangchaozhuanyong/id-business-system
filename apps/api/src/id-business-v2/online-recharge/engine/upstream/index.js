@@ -525,6 +525,10 @@ async function run(runOptions = {}) {
                 checkoutOpened = true;
             } catch (apiError) {
                 console.warn(`[Warn] API Checkout 失败: ${apiError.message}`);
+                if (['CHECKOUT_RECOVERY_INVALID', 'CHECKOUT_RECOVERY_UNSUPPORTED'].includes(apiError.code)) throw apiError;
+                // A successful or uncertain POST cannot be replaced with a new UI checkout.
+                // Only a local preparation failure before any POST may use the old fallback.
+                if (apiError.checkoutCreationState !== 'not_sent') throw apiError;
                 if (checkoutMode === 'api') {
                     console.log('[Info] 正在回退到 UI 定价页流程...');
                 } else {
@@ -613,7 +617,14 @@ async function run(runOptions = {}) {
             console.error(`⚠️ [系统] 异常截图保存失败: ${err.message}`);
         }
         // 用 exitCode 而非 process.exit()，确保下方 finally 能完整执行（录像需 context 关闭后才落盘）
-        return { ...(lastPaymentResult?.paymentEvidence ? { paymentEvidence: lastPaymentResult.paymentEvidence, confirmation: lastPaymentResult.confirmation, cardLast4: lastPaymentResult.cardLast4, confirmedPaid: lastPaymentResult.confirmedPaid === true, subscriptionChangedVerified: lastPaymentResult.subscriptionChangedVerified === true } : {}), success: false, pendingCredentials: e.code === 'PENDING_CREDENTIALS', resultUnknown: wasSubmitted() || require('../rpc.cjs').wasPaymentConfirmed() || paymentSucceeded || e.code === 'RESULT_UNKNOWN', error: e.code === 'LEASE_LOST' ? '任务租约已失效' : '执行未完成，请查看受限诊断' };
+        const checkoutFailure = {
+            CHECKOUT_RECOVERY_INVALID: '原结账单来源或付款绑定无效，未提交付款',
+            CHECKOUT_RECOVERY_UNSUPPORTED: '当前结账单来源尚未通过核验，未提交付款',
+            CHECKOUT_CREATION_UNKNOWN: '官网建单结果未确认，已停止；未再次建单或提交付款',
+            CHECKOUT_CREATION_REJECTED: '官网拒绝创建本次结账单，未提交付款',
+            CHECKOUT_OPEN_FAILED: '原结账单已创建，页面验证未完成；未重复建单或提交付款'
+        }[e.code];
+        return { ...(lastPaymentResult?.paymentEvidence ? { paymentEvidence: lastPaymentResult.paymentEvidence, confirmation: lastPaymentResult.confirmation, cardLast4: lastPaymentResult.cardLast4, confirmedPaid: lastPaymentResult.confirmedPaid === true, subscriptionChangedVerified: lastPaymentResult.subscriptionChangedVerified === true } : {}), success: false, pendingCredentials: e.code === 'PENDING_CREDENTIALS', resultUnknown: wasSubmitted() || require('../rpc.cjs').wasPaymentConfirmed() || paymentSucceeded || e.code === 'RESULT_UNKNOWN', ...(checkoutFailure ? { errorCode: e.code } : {}), error: checkoutFailure || (e.code === 'LEASE_LOST' ? '任务租约已失效' : '执行未完成，请查看受限诊断') };
     } finally {
         console.log("👋 [系统] 流程结束，正在关闭浏览器...");
         await Promise.resolve(require('./human-verification').disposeVerificationPage?.(page)).catch(() => {});

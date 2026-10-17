@@ -6,7 +6,7 @@ import { acquireMysqlTransactionLock } from '../../../common/prisma/mysql-transa
 import { toV2JsonDocument, type V2CommandTransaction } from '../../runtime/public-api';
 import type { Prisma } from '@prisma/client';
 import { assertEmployeeBusinessWriter } from '../../../v2-auth/system-super-admin';
-import { hash } from '../recharge-validation';
+import { hash, object } from '../recharge-validation';
 import { isRechargeUpgrade } from '../recharge-upgrade-protocol';
 import { rechargeDocumentDigest } from '../recharge-callback-receipts';
 import { isClosedCycleDocument } from '../recharge-cycle-state';
@@ -162,7 +162,8 @@ export class RechargeRepository {
     plan: string,
     excludeId: string,
     unpaidRecoveryIdentifier?: string,
-    unidentifiedSourceJobId?: string
+    unidentifiedSourceJobId?: string,
+    expiredCheckoutIdentifiers: string[] = []
   ) {
     let cursor: string | undefined;
     for (let page = 0; page < 30; page += 1) {
@@ -183,7 +184,19 @@ export class RechargeRepository {
         assertUnpaidCheckoutRecoverySources(jobs, ownerId, accountKey, plan);
       } else {
         const identifier = findOriginalRechargeCheckout(
-          jobs.filter((job) => !isClosedCycleDocument(job.result, accountKey)),
+          jobs.filter((job) => {
+            if (isClosedCycleDocument(job.result, accountKey)) return false;
+            if (
+              !expiredCheckoutIdentifiers.length ||
+              (job.id === unidentifiedSourceJobId && isUnidentifiedUnpaidCheckout(job.result))
+            )
+              return true;
+            const result =
+              job.result && typeof job.result === 'object' && !Array.isArray(job.result)
+                ? object(job.result)
+                : {};
+            return !expiredCheckoutIdentifiers.includes(String(rechargeCheckoutIdentifier(result)));
+          }),
           ownerId,
           accountKey,
           plan,
@@ -493,6 +506,7 @@ export class RechargeRepository {
       ownerId: string;
       allowCheckoutReplacement?: boolean;
       allowResolvedDeclineReplacement?: boolean;
+      allowExpiredCheckoutReplacement?: boolean;
       allowCycleReplacement?: boolean;
       cycleOrigin?: object;
     }
@@ -574,6 +588,7 @@ export class RechargeRepository {
       throw new ConflictException('升级原单类型不可更换');
     const replacingUnpaidCheckout =
       replacingResolvedDecline ||
+      input.allowExpiredCheckoutReplacement === true ||
       (input.allowCheckoutReplacement === true &&
         input.fileKey.endsWith('.json') &&
         !input.fileKey.startsWith('payments/') &&

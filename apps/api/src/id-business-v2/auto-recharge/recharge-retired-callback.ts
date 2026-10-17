@@ -19,12 +19,14 @@ import { finalizeRechargeCard } from './recharge-card-billing';
 import { completeCancellation } from './recharge-cancellation';
 import { completeRechargeLedgerCallback } from './recharge-ledger-callback';
 import { rechargeDocumentDigest, withRechargeReceipt } from './recharge-callback-receipts';
+import { assertDirectRechargeReport, directRechargeObserved } from './recharge-direct-payment';
 
 export function assertRetiredRechargeFacts(
   job: IdBusinessV2RechargeJob,
   callback: Record<string, unknown>,
   report: Record<string, unknown>
 ) {
+  if (directRechargeObserved(job)) assertDirectRechargeReport(job, report);
   const previous = object(job.result);
   const identifier = rechargeOperationIdentifier(previous);
   const evidence = object(report.payment_evidence ?? {});

@@ -1234,7 +1234,8 @@ async def run_browser(target, *, create=False, inspect_existing=False, retry_rej
                       replace_unpaid_checkout=False, state_dir=ROOT / ".state", wait_seconds=0, review_seconds=0,
                       quote_handler=None, guard_factory=NetworkGuard, target_plan="plus", browser=None,
                       browser_context=None, session_budget=None, session_handler=None, next_cycle_grant=None,
-                      allow_checkout_tier_change=False, recover_unknown_checkout=False):
+                      allow_checkout_tier_change=False, recover_unknown_checkout=False,
+                      expired_checkout_replacement=None):
     # 固定项目自己的浏览器，不依赖开源参考目录或全局浏览器缓存。
     os.environ.setdefault("PLAYWRIGHT_BROWSERS_PATH", str(ROOT / ".browsers"))
     # 不允许环境变量意外启动协议调试日志，避免凭据进入终端/文件。
@@ -1295,7 +1296,8 @@ async def run_browser(target, *, create=False, inspect_existing=False, retry_rej
     manager = AttemptLedger(state_dir, target.account_id, retry_rejected=retry_rejected,
                             replace_unpaid_checkout=replace_unpaid_checkout,
                             target_plan=target_plan, next_cycle_grant=next_cycle_grant,
-                            recover_unknown_checkout=recover_unknown_checkout) if create or recover_unknown_checkout else nullcontext()
+                            recover_unknown_checkout=recover_unknown_checkout,
+                            expired_checkout_replacement=expired_checkout_replacement) if create or recover_unknown_checkout else nullcontext()
 
     async def execute(active_browser=None, active_context=None):
         context = active_context or await active_browser.new_context(

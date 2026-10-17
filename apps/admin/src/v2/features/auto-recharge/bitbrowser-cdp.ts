@@ -9,6 +9,7 @@ export class BrowserCdp {
     { resolve: (result: Document) => void; reject: (reason: Error) => void; cleanup: () => void }
   >();
   private handlers = new Set<EventHandler>();
+  private closeHandlers = new Set<() => void>();
   private constructor(
     private socket: WebSocket,
     private signal: AbortSignal
@@ -37,8 +38,8 @@ export class BrowserCdp {
           );
       }
     });
-    socket.addEventListener('close', () => this.rejectPending());
-    socket.addEventListener('error', () => this.rejectPending());
+    socket.addEventListener('close', () => this.disconnected());
+    socket.addEventListener('error', () => this.disconnected());
     signal.addEventListener('abort', () => this.close(), { once: true });
   }
   static connect(endpoint: string, signal: AbortSignal): Promise<BrowserCdp> {
@@ -114,6 +115,15 @@ export class BrowserCdp {
     this.handlers.add(handler);
     return () => this.handlers.delete(handler);
   }
+  onClose(handler: () => void) {
+    this.closeHandlers.add(handler);
+    return () => this.closeHandlers.delete(handler);
+  }
+  private disconnected() {
+    this.rejectPending();
+    for (const handler of this.closeHandlers) handler();
+    this.closeHandlers.clear();
+  }
   private rejectPending() {
     for (const pending of this.pending.values()) {
       pending.cleanup();
@@ -130,6 +140,7 @@ export class BrowserCdp {
   close() {
     this.rejectPending();
     this.handlers.clear();
+    this.disconnected();
     this.socket.close();
   }
 }

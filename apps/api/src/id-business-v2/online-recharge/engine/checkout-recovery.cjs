@@ -19,6 +19,8 @@ const CONTEXT_FIELDS = [
 ];
 const CHECKOUT_PATH = '/backend-api/payments/checkout';
 const MAX_BODY = 512 * 1024;
+const officialCheckouts = new WeakMap();
+const SOURCE_KEYS = ['kind', 'checkoutId', 'processorEntity'];
 
 function identityFailure() {
   return Object.assign(new Error('原单恢复标识或付款绑定无效'), {
@@ -30,7 +32,34 @@ function unsupportedIdentity() {
     code: 'CHECKOUT_RECOVERY_UNSUPPORTED'
   });
 }
-function checkoutIdentity(raw) {
+function officialSource(value, checkoutId, processorEntity) {
+  return (
+    value &&
+    typeof value === 'object' &&
+    !Array.isArray(value) &&
+    Object.keys(value).length === SOURCE_KEYS.length &&
+    SOURCE_KEYS.every((key) => Object.hasOwn(value, key)) &&
+    value.kind === 'official_checkout_response' &&
+    value.checkoutId === checkoutId &&
+    value.processorEntity === processorEntity
+  );
+}
+function rememberOfficialCheckout(page, source) {
+  officialCheckouts.delete(page);
+  if (source === undefined || source === null) return;
+  if (
+    !/^cs_(?:live|test)_[A-Za-z0-9]{1,200}$/.test(source.checkoutId || '') ||
+    !/^[a-z][a-z0-9_]{0,40}$/.test(source.processorEntity || '') ||
+    !officialSource(source, source.checkoutId, source.processorEntity)
+  )
+    throw identityFailure();
+  officialCheckouts.set(page, Object.freeze({ ...source }));
+}
+function officialCheckoutForPage(page) {
+  const source = officialCheckouts.get(page);
+  return source ? { ...source } : undefined;
+}
+function checkoutIdentity(raw, source) {
   let url;
   try {
     url = new URL(raw);
@@ -45,21 +74,25 @@ function checkoutIdentity(raw) {
     (url.port && url.port !== '443')
   )
     throw identityFailure();
-  if (
-    url.hostname === 'chatgpt.com' &&
-    /^\/checkout\/[^/]+\/cs_(?:live|test)_[^/]+\/?$/.test(url.pathname)
-  )
-    throw unsupportedIdentity();
   const native =
     url.hostname === 'chatgpt.com' &&
-    /^\/checkout\/([a-z][a-z0-9_]{0,40})\/(oaics_[A-Za-z0-9_]{1,200})\/?$/.exec(url.pathname);
+    /^\/checkout\/([a-z][a-z0-9_]{0,40})\/(oaics_[A-Za-z0-9_]{1,200}|cs_(?:live|test)_[A-Za-z0-9]{1,200})\/?$/.exec(
+      url.pathname
+    );
   const hostedIds = ['pay.openai.com', 'checkout.stripe.com'].includes(url.hostname)
     ? url.pathname.split('/').filter((part) => /^cs_(?:live|test)_[A-Za-z0-9]{1,200}$/.test(part))
     : [];
   if (hostedIds.length > 1) throw identityFailure();
   const checkoutId = native?.[2] || hostedIds[0];
   if (!checkoutId) throw identityFailure();
-  return { checkoutId, processorEntity: native?.[1] || null, checkoutUrl: url.href };
+  const embeddedStripe = native && checkoutId.startsWith('cs_');
+  if (embeddedStripe && !officialSource(source, checkoutId, native[1])) throw unsupportedIdentity();
+  return {
+    checkoutId,
+    processorEntity: native?.[1] || null,
+    checkoutUrl: url.href,
+    ...(embeddedStripe ? { source: { ...source } } : {})
+  };
 }
 function minorAmount(amount, currency) {
   const match = /^(\d{1,14})(?:\.(\d{1,4}))?$/.exec(String(amount || ''));
@@ -93,15 +126,15 @@ function minorAmount(amount, currency) {
     BigInt(fraction.slice(0, digits).padEnd(digits, '0') || '0')
   );
 }
-function quoteIdForUrl(url) {
+function quoteIdForUrl(url, source) {
   return (
     'quote:' +
-    createHash('sha256').update(checkoutIdentity(url).checkoutId).digest('hex').slice(0, 32)
+    createHash('sha256').update(checkoutIdentity(url, source).checkoutId).digest('hex').slice(0, 32)
   );
 }
-function buildCheckoutRecovery(url, paymentContext) {
-  const identity = checkoutIdentity(url);
-  const quoteId = quoteIdForUrl(url);
+function buildCheckoutRecovery(url, paymentContext, source) {
+  const identity = checkoutIdentity(url, source);
+  const quoteId = quoteIdForUrl(url, source);
   if (
     !paymentContext ||
     paymentContext.quoteId !== quoteId ||
@@ -126,7 +159,7 @@ function buildCheckoutRecovery(url, paymentContext) {
 }
 function validateRecovery(value) {
   if (!value || value.version !== 1) throw identityFailure();
-  const validated = buildCheckoutRecovery(value.checkoutUrl, value);
+  const validated = buildCheckoutRecovery(value.checkoutUrl, value, value.source);
   if (
     validated.checkoutId !== value.checkoutId ||
     validated.processorEntity !== value.processorEntity
@@ -164,16 +197,53 @@ function boundNativeSession(data, recovery) {
     ? session
     : null;
 }
-function actualEvidence(data, recovery, linkedIntent) {
+function amountConflict(data, recovery) {
+  if (!data || typeof data !== 'object' || Array.isArray(data)) return true;
   const expected = minorAmount(recovery.amount, recovery.currency);
   const matches = (value) => Number.isSafeInteger(value) && BigInt(value) === expected;
-  const sessionId = data?.session_id ?? data?.id;
+  const wrongCurrency = (value) => String(value || '').toUpperCase() !== recovery.currency;
+  const hasFact = (value, field) => Object.hasOwn(value, field) && value[field] !== undefined;
+  if (
+    (hasFact(data, 'amount_total') && !matches(data.amount_total)) ||
+    (data.total_summary &&
+      hasFact(data.total_summary, 'due') &&
+      !matches(data.total_summary.due)) ||
+    (hasFact(data, 'currency') && wrongCurrency(data.currency))
+  )
+    return true;
+  // A nested receipt cannot override contradictory checkout facts, nor can a
+  // valid checkout total override an explicit contradictory linked intent.
+  const checkoutPaid =
+    data.object === 'checkout.session' &&
+    data.status === 'complete' &&
+    data.payment_status === 'paid';
+  return [data, data.payment_intent].some(
+    (intent) =>
+      intent &&
+      intent.object === 'payment_intent' &&
+      (((intent.status === 'succeeded' || checkoutPaid) &&
+        hasFact(intent, 'amount_received') &&
+        !matches(intent.amount_received)) ||
+        (hasFact(intent, 'currency') && wrongCurrency(intent.currency)))
+  );
+}
+function actualEvidence(data, recovery, linkedIntent) {
+  if (amountConflict(data, recovery)) return null;
+  const expected = minorAmount(recovery.amount, recovery.currency);
+  const matches = (value) => Number.isSafeInteger(value) && BigInt(value) === expected;
+  const sessionId = data && Object.hasOwn(data, 'session_id') ? data.session_id : data?.id;
+  const hasAmount = data && Object.hasOwn(data, 'amount_total');
+  const hasSummary = data?.total_summary && Object.hasOwn(data.total_summary, 'due');
+  const exactPaidAmount =
+    (hasAmount || hasSummary) &&
+    (!hasAmount || matches(data.amount_total)) &&
+    (!hasSummary || matches(data.total_summary.due));
   const paidCheckout =
     data?.object === 'checkout.session' &&
     sessionId === recovery.checkoutId &&
     data.status === 'complete' &&
     data.payment_status === 'paid' &&
-    matches(data.amount_total) &&
+    exactPaidAmount &&
     String(data.currency || '').toUpperCase() === recovery.currency;
   const intent = [data, data?.payment_intent].find(
     (value) =>
@@ -191,6 +261,45 @@ function actualEvidence(data, recovery, linkedIntent) {
     quoteVerified: true,
     verified: true
   };
+}
+function readOnlyInitialization(request, recovery) {
+  let url;
+  try {
+    url = new URL(request.url());
+  } catch {
+    return false;
+  }
+  if (
+    request.method() !== 'POST' ||
+    url.origin !== 'https://api.stripe.com' ||
+    url.username ||
+    url.password ||
+    url.pathname !== `/v1/payment_pages/${recovery.checkoutId}/init` ||
+    !recovery.checkoutId.startsWith('cs_')
+  )
+    return false;
+  const body = request.postData?.() || '';
+  if (typeof body !== 'string' || body.length > 16000) return false;
+  const allowed = {
+    key: /^pk_(?:live|test)_[A-Za-z0-9]{1,300}$/,
+    browser_locale: /^[A-Za-z]{2,3}(?:[-_][A-Za-z0-9]{2,8}){0,2}$/,
+    redirect_type: /^(?:url|iframe)$/,
+    eid: /^[A-Za-z0-9_-]{1,300}$/,
+    _stripe_version: /^[A-Za-z0-9_.;-]{1,120}$/
+  };
+  const values = new URLSearchParams(url.search);
+  for (const [key, value] of new URLSearchParams(body)) values.append(key, value);
+  const used = new Set();
+  for (const [key, value] of values) {
+    if (used.has(key) || !Object.hasOwn(allowed, key) || !allowed[key].test(value)) return false;
+    used.add(key);
+  }
+  return true;
+}
+function readOnlyRecoveryRequest(request, recovery) {
+  const method = request.method();
+  if (['GET', 'HEAD', 'OPTIONS'].includes(method)) return true;
+  return readOnlyInitialization(request, recovery);
 }
 function checkLive(options) {
   if (options.signal?.aborted) throw Object.assign(new Error('任务已停止'), { code: 'LEASE_LOST' });
@@ -226,11 +335,17 @@ function observePayment(page, rawRecovery, options = {}) {
     stopped = false,
     linkedIntent = null,
     evidence = null,
+    amountConflictObserved = false,
     phaseStarted = false;
+  let resolveOriginalRead;
+  const originalRead = new Promise((resolve) => {
+    resolveOriginalRead = resolve;
+  });
   let chain = Promise.resolve();
   const accept = async (data, request) => {
     if (stopped || !armed) return;
     checkLive(clock);
+    if (!data || typeof data !== 'object' || Array.isArray(data)) return;
     let url;
     try {
       url = new URL(request.url);
@@ -239,8 +354,9 @@ function observePayment(page, rawRecovery, options = {}) {
     }
     const method = request.method;
     if (
-      (data?.checkout_session_id && data.checkout_session_id !== recovery.checkoutId) ||
-      (data?.session_id && data.session_id !== recovery.checkoutId)
+      (Object.hasOwn(data, 'checkout_session_id') &&
+        data.checkout_session_id !== recovery.checkoutId) ||
+      (Object.hasOwn(data, 'session_id') && data.session_id !== recovery.checkoutId)
     )
       return;
     let bound;
@@ -262,8 +378,8 @@ function observePayment(page, rawRecovery, options = {}) {
     } else if (url.origin === 'https://api.stripe.com') {
       const checkoutPath = `/v1/payment_pages/${recovery.checkoutId}/`;
       bound =
-        url.pathname.startsWith(checkoutPath) &&
-        ['init', 'confirm'].includes(url.pathname.slice(checkoutPath.length));
+        (['GET', 'POST'].includes(method) && url.pathname === `${checkoutPath}init`) ||
+        (method === 'POST' && url.pathname === `${checkoutPath}confirm`);
       if (
         !bound &&
         !(
@@ -274,6 +390,14 @@ function observePayment(page, rawRecovery, options = {}) {
       )
         return;
     } else return;
+    if (
+      data.object === 'checkout.session' &&
+      !Object.hasOwn(data, 'session_id') &&
+      Object.hasOwn(data, 'id') &&
+      data.id !== recovery.checkoutId
+    )
+      return;
+    if (bound) resolveOriginalRead();
     if (bound) {
       const candidate = data?.object === 'payment_intent' ? data : data?.payment_intent;
       const id = typeof candidate === 'string' ? candidate : candidate?.id;
@@ -282,10 +406,34 @@ function observePayment(page, rawRecovery, options = {}) {
         /^(pi_[A-Za-z0-9]{1,180})_secret_[A-Za-z0-9]+$/.exec(data.client_secret)?.[1];
       const candidateId = id || clientSecretId;
       if (candidateId && /^pi_[A-Za-z0-9]{1,180}$/.test(candidateId)) {
-        if (linkedIntent && linkedIntent !== candidateId) return;
+        if (linkedIntent && linkedIntent !== candidateId) {
+          // Ignore the unrelated intent, but retain explicit contradictory
+          // facts returned for this original checkout itself.
+          const checkoutFacts = { ...data };
+          delete checkoutFacts.payment_intent;
+          if (data.object !== 'payment_intent' && amountConflict(checkoutFacts, recovery)) {
+            amountConflictObserved = true;
+            evidence = null;
+          }
+          return;
+        }
+      }
+      if (amountConflict(data, recovery)) {
+        amountConflictObserved = true;
+        evidence = null;
+        return;
+      }
+      if (!amountConflictObserved && candidateId && /^pi_[A-Za-z0-9]{1,180}$/.test(candidateId))
         linkedIntent = candidateId;
+    } else {
+      if (data.object !== 'payment_intent' || data.id !== linkedIntent) return;
+      if (amountConflict(data, recovery)) {
+        amountConflictObserved = true;
+        evidence = null;
+        return;
       }
     }
+    if (amountConflictObserved) return;
     evidence ||= actualEvidence(data, recovery, linkedIntent);
   };
   const response = (value) => {
@@ -330,6 +478,9 @@ function observePayment(page, rawRecovery, options = {}) {
     },
     accept,
     evidence: () => evidence,
+    async waitForOriginalRead() {
+      await bounded(() => originalRead, clock, 10000).catch(() => {});
+    },
     async flush() {
       await bounded(() => chain, clock, 2000).catch(() => {});
       return evidence;
@@ -393,9 +544,10 @@ async function recoverOriginalPayment(rawRecovery, options = {}) {
       () => auth.installChatGptSession(context, options.sessionRaw),
       clock
     );
-    // The recovery page cannot produce a new checkout, confirmation, authentication, or billing mutation.
+    // Stripe's same-session init reads the original state. It cannot carry billing,
+    // card or confirmation fields; every other POST remains blocked.
     await page.route('**/*', (route) =>
-      ['GET', 'HEAD', 'OPTIONS'].includes(route.request().method())
+      readOnlyRecoveryRequest(route.request(), recovery)
         ? route.fallback()
         : route.abort('blockedbyclient')
     );
@@ -466,6 +618,7 @@ async function recoverOriginalPayment(rawRecovery, options = {}) {
           }),
         clock
       );
+      await observer.waitForOriginalRead();
     }
     const paymentEvidence = await observer.flush();
     const confirmation = options.confirmSubscription
@@ -534,6 +687,9 @@ async function recoverOriginalPayment(rawRecovery, options = {}) {
   }
 }
 module.exports = {
+  rememberOfficialCheckout,
+  officialCheckoutForPage,
+  readOnlyRecoveryRequest,
   buildCheckoutRecovery,
   quoteIdForUrl,
   validateRecovery,

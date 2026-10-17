@@ -142,6 +142,54 @@ const documentationPaths = Object.freeze([
   'docs/ONLINE_SETTINGS_RELEASE_20261016.md',
   'docs/V2_TASKS.md'
 ]);
+export const onlineCheckoutCsRecoveryScope = 'ONLINE_CHECKOUT_CS_RECOVERY';
+const checkoutCsRecoveryRequired = [
+  'checkout-recovery.spec.ts',
+  'checkout-recovery.ts',
+  'contracts.ts',
+  'engine/SOURCE_MANIFEST.json',
+  'engine/checkout-recovery.cjs',
+  'engine/test/checkout-cs-browser.test.cjs',
+  'engine/test/checkout-recovery-evidence.test.cjs',
+  'engine/test/checkout-recovery.test.cjs',
+  'engine/test/payment-core.test.cjs',
+  'engine/upstream/chatgpt.js',
+  'engine/upstream/index.js',
+  'engine/upstream/payment-retry.js',
+  'engine/upstream/stripe-payment.js',
+  'persistence/worker.repository.spec.ts'
+].map((name) => 'apps/api/src/id-business-v2/online-recharge/' + name);
+const checkoutCsRecoveryReleaseControls = [
+  '.github/workflows/online-checkout-cs-validation.yml',
+  ...['build.py', 'contract.json', 'release.py', 'release.test.py'].map(
+    (name) => 'scripts/production-release/online-checkout-cs-' + name
+  )
+];
+const checkoutCsRecoveryOptional = [
+  ...checkoutCsRecoveryReleaseControls,
+  'scripts/ci-online-settings-scope.mjs',
+  'scripts/ci-online-settings-scope.test.mjs',
+  'scripts/ci-recharge-scope.mjs',
+  'docs/ONLINE_RECHARGE.md',
+  'docs/V2_TASKS.md'
+];
+export function isOnlineCheckoutCsRecoveryOnly(paths) {
+  return (
+    new Set(paths).size === paths.length &&
+    checkoutCsRecoveryRequired.every((path) => paths.includes(path)) &&
+    paths.every(
+      (path) =>
+        checkoutCsRecoveryRequired.includes(path) || checkoutCsRecoveryOptional.includes(path)
+    )
+  );
+}
+export function isOnlineCheckoutCsRecoveryControlsOnly(paths) {
+  return (
+    new Set(paths).size === paths.length &&
+    paths.some((path) => checkoutCsRecoveryReleaseControls.includes(path)) &&
+    paths.every((path) => checkoutCsRecoveryOptional.includes(path))
+  );
+}
 export const onlineSettingsPaths = Object.freeze([
   ...applicationPaths,
   ...controlPaths,
@@ -214,7 +262,12 @@ export function isOnlineLegacyCloseOnly(paths) {
   );
 }
 export function isOnlineSettingsOnly(paths) {
-  if (isOnlineSettingsTestsOnly(paths) || isOnlineLegacyCloseOnly(paths)) return true;
+  if (
+    isOnlineSettingsTestsOnly(paths) ||
+    isOnlineLegacyCloseOnly(paths) ||
+    isOnlineCheckoutCsRecoveryOnly(paths)
+  )
+    return true;
   const databaseTest = 'apps/api/src/id-business-v2/online-recharge/mysql.integration.spec.ts';
   const fixtureRepair =
     paths.includes(databaseTest) &&
@@ -237,6 +290,7 @@ export function isOnlineSettingsOnly(paths) {
   );
 }
 export function isOnlineSettingsControlsOnly(paths) {
+  if (isOnlineCheckoutCsRecoveryControlsOnly(paths)) return true;
   return (
     paths.some(
       (path) =>
@@ -256,6 +310,8 @@ export function onlineSettingsCommands(part, paths) {
   const controlsOnly = isOnlineSettingsControlsOnly(paths);
   const testsOnly = isOnlineSettingsTestsOnly(paths);
   const legacyClose = isOnlineLegacyCloseOnly(paths);
+  const checkoutCsRecovery = isOnlineCheckoutCsRecoveryOnly(paths);
+  const checkoutCsControls = isOnlineCheckoutCsRecoveryControlsOnly(paths);
   if (!isOnlineSettingsOnly(paths) && !controlsOnly)
     throw new Error('Unsupported online settings scope');
   const npm = (...args) => ['npm', ...args];
@@ -279,6 +335,20 @@ export function onlineSettingsCommands(part, paths) {
         'scripts/ci-change-scope.test.mjs'
       ]
     ];
+    if (checkoutCsRecovery || checkoutCsControls)
+      return [
+        ...controls,
+        ['python3', '-B', 'scripts/production-release/online-checkout-cs-release.test.py'],
+        ...(checkoutCsRecovery
+          ? [
+              'check:v2-module-architecture',
+              'check:v2-isolation',
+              'check:v2-prisma-runtime-boundary',
+              'check:v2-concurrency-standard',
+              'check:v2-decimal-standard'
+            ].map((name) => npm('run', name))
+          : [])
+      ];
     if (legacyClose)
       return [
         ...controls,
@@ -367,6 +437,24 @@ export function onlineSettingsCommands(part, paths) {
   if (controlsOnly) throw new Error('Unsupported controls-only check');
   if (testsOnly && ['api', 'admin'].includes(part)) throw new Error('Unsupported tests-only check');
   const shared = npm('run', 'build', '--workspace', '@apple-business/shared');
+  if (checkoutCsRecovery && part === 'admin')
+    throw new Error('Unsupported checkout CS recovery Admin check');
+  if (checkoutCsRecovery && part === 'api')
+    return [
+      npm('run', 'prisma:mysql:generate'),
+      npm('run', 'prisma:mysql:validate'),
+      shared,
+      npm('run', 'typecheck', '--workspace', '@apple-business/api'),
+      npm(
+        'run',
+        'test',
+        '--workspace',
+        '@apple-business/api',
+        '--',
+        'src/id-business-v2/online-recharge'
+      ),
+      npm('run', 'build', '--workspace', '@apple-business/api')
+    ];
   if (legacyClose) {
     if (part !== 'api') throw new Error('Unsupported legacy closure check');
     return [

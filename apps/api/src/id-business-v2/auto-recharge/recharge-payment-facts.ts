@@ -50,7 +50,10 @@ export function mergeRechargePaymentFacts(
   else if (previous.payment_attempted === true && next.payment_status === 'not_attempted')
     result.payment_status = previous.payment_status;
   if (previous.payment_evidence) result.payment_evidence = previous.payment_evidence;
-  if (previous.recheck_only === true) result.payment_requests_sent = 0;
+  if (previous.recheck_only === true) {
+    result.confirmation_requests_sent = 0;
+    result.payment_requests_sent = 0;
+  }
   return result;
 }
 
@@ -117,7 +120,8 @@ export function projectRechargePaymentRecord(
       : { checkout_identifier: identifier }),
     ...(payment.subscription_period ? { subscription_period: payment.subscription_period } : {}),
     payment_attempted: true,
-    confirmation_requests_sent: count(payment.confirmation_requests_sent),
+    confirmation_requests_sent:
+      previous.recheck_only === true ? 0 : count(payment.confirmation_requests_sent),
     payment_requests_sent:
       previous.recheck_only === true ? 0 : count(payment.confirmation_requests_sent),
     payment_status: payment.payment_status,

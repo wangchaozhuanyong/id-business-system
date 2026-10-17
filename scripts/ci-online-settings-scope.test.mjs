@@ -11,6 +11,9 @@ import {
   isOnlineSettingsControlsOnly,
   isOnlineSettingsTestsOnly,
   isOnlineLegacyCloseOnly,
+  isOnlineCheckoutCsRecoveryOnly,
+  isOnlineCheckoutCsRecoveryControlsOnly,
+  onlineCheckoutCsRecoveryScope,
   onlineSettingsCommands
 } from './ci-online-settings-scope.mjs';
 
@@ -535,4 +538,173 @@ test('legacy closure release controls alone do not start application or database
       .includes('scripts/production-release/online-legacy-close-release.test.py')
   );
   assert.throws(() => onlineSettingsCommands('api', controls));
+});
+
+const checkoutCsRecoverySources = [
+  'checkout-recovery.spec.ts',
+  'checkout-recovery.ts',
+  'contracts.ts',
+  'engine/SOURCE_MANIFEST.json',
+  'engine/checkout-recovery.cjs',
+  'engine/test/checkout-cs-browser.test.cjs',
+  'engine/test/checkout-recovery-evidence.test.cjs',
+  'engine/test/checkout-recovery.test.cjs',
+  'engine/test/payment-core.test.cjs',
+  'engine/upstream/chatgpt.js',
+  'engine/upstream/index.js',
+  'engine/upstream/payment-retry.js',
+  'engine/upstream/stripe-payment.js',
+  'persistence/worker.repository.spec.ts'
+].map((name) => 'apps/api/src/id-business-v2/online-recharge/' + name);
+const checkoutCsRecoveryReleaseControls = [
+  '.github/workflows/online-checkout-cs-validation.yml',
+  ...['build.py', 'contract.json', 'release.py', 'release.test.py'].map(
+    (name) => 'scripts/production-release/online-checkout-cs-' + name
+  )
+];
+const checkoutCsRecoveryOptional = [
+  ...checkoutCsRecoveryReleaseControls,
+  'scripts/ci-online-settings-scope.mjs',
+  'scripts/ci-online-settings-scope.test.mjs',
+  'scripts/ci-recharge-scope.mjs',
+  'docs/ONLINE_RECHARGE.md',
+  'docs/V2_TASKS.md'
+];
+
+test('the complete checkout CS recovery scope selects only guards, API and the real browser engine', () => {
+  assert.equal(onlineCheckoutCsRecoveryScope, 'ONLINE_CHECKOUT_CS_RECOVERY');
+  for (const paths of [
+    checkoutCsRecoverySources,
+    [...checkoutCsRecoverySources, ...checkoutCsRecoveryOptional],
+    [...checkoutCsRecoverySources, 'docs/ONLINE_RECHARGE.md', 'docs/V2_TASKS.md']
+  ]) {
+    assert.equal(isOnlineCheckoutCsRecoveryOnly(paths), true);
+    assert.equal(isOnlineSettingsOnly(paths), true);
+    assert.equal(isOnlineSettingsControlsOnly(paths), false);
+    assert.equal(checkMode(paths, '', ''), 'recharge');
+    assert.deepEqual(selectedParts(paths), ['guards', 'api', 'online-engine']);
+    assert.equal(checkMode(paths, 'before', 'after'), 'full');
+  }
+  for (const path of [
+    checkoutCsRecoverySources.find((name) => name.endsWith('/checkout-cs-browser.test.cjs')),
+    checkoutCsRecoverySources.find((name) => name.endsWith('/checkout-recovery-evidence.test.cjs')),
+    ...checkoutCsRecoveryReleaseControls
+  ])
+    assert.ok(!onlineSettingsPaths.includes(path), 'new paths must not widen older feature scopes');
+});
+
+test('every checkout CS recovery source is mandatory and unrelated changes cannot use this shortcut', () => {
+  const exact = [...checkoutCsRecoverySources, ...checkoutCsRecoveryOptional];
+  for (const required of checkoutCsRecoverySources) {
+    const paths = exact.filter((path) => path !== required);
+    assert.equal(isOnlineCheckoutCsRecoveryOnly(paths), false, required);
+    assert.equal(isOnlineSettingsOnly(paths), false, required);
+    assert.equal(checkMode(paths, '', ''), 'full', required);
+    assert.throws(() => onlineSettingsCommands('guards', paths));
+  }
+  for (const extra of [
+    'apps/api/prisma-mysql/schema.prisma',
+    'apps/api/prisma-mysql/migrations/unreviewed/migration.sql',
+    'package.json',
+    'package-lock.json',
+    'apps/admin/src/v2/features/online-recharge/OnlineActionDrawer.vue',
+    'apps/api/src/auth/auth.service.ts',
+    'apps/api/src/id-business-v2/proxy-pool/proxy-pool.module.ts',
+    'apps/api/src/id-business-v2/online-recharge/persistence/worker.repository.ts',
+    'apps/api/src/id-business-v2/online-recharge/mysql.integration.spec.ts',
+    'apps/api/src/id-business-v2/online-recharge/engine/worker.cjs',
+    'scripts/production-release/online-checkout-release.py',
+    'scripts/ci-recharge-check.mjs',
+    'scripts/ci-online-settings-unreviewed.mjs',
+    'docs/ONLINE_SETTINGS_RELEASE_20261016.md',
+    exact[0]
+  ]) {
+    const paths = [...exact, extra];
+    assert.equal(isOnlineCheckoutCsRecoveryOnly(paths), false, extra);
+    assert.equal(isOnlineSettingsOnly(paths), false, extra);
+    assert.equal(checkMode(paths, '', ''), 'full', extra);
+    assert.throws(() => onlineSettingsCommands('guards', paths));
+  }
+});
+
+test('checkout CS recovery controls alone run the new protected release tests without business work', () => {
+  for (const paths of [
+    ...checkoutCsRecoveryReleaseControls.map((path) => [path]),
+    checkoutCsRecoveryOptional
+  ]) {
+    assert.equal(isOnlineCheckoutCsRecoveryControlsOnly(paths), true);
+    assert.equal(isOnlineSettingsControlsOnly(paths), true);
+    assert.equal(isOnlineSettingsOnly(paths), false);
+    assert.equal(checkMode(paths, '', ''), 'ci-only');
+    assert.deepEqual(selectedParts(paths), ['guards']);
+    assert.equal(checkMode(paths, 'before', 'after'), 'full');
+    const commands = onlineSettingsCommands('guards', paths);
+    assert.deepEqual(
+      commands.filter((command) => command[0] === 'python3'),
+      [['python3', '-B', 'scripts/production-release/online-checkout-cs-release.test.py']]
+    );
+    assert.ok(!commands.flat().some((arg) => /@apple-business|check:v2-|check:admin-ui/.test(arg)));
+    for (const part of ['api', 'admin', 'online-engine'])
+      assert.throws(() => onlineSettingsCommands(part, paths), /controls-only/);
+  }
+  for (const extra of [
+    checkoutCsRecoverySources[0],
+    'scripts/production-release/online-checkout-release.py',
+    'package-lock.json',
+    checkoutCsRecoveryOptional[0]
+  ]) {
+    const paths = [...checkoutCsRecoveryOptional, extra];
+    assert.equal(isOnlineCheckoutCsRecoveryControlsOnly(paths), false);
+    assert.equal(isOnlineSettingsControlsOnly(paths), false);
+    assert.equal(checkMode(paths, '', ''), 'full');
+  }
+});
+
+test('checkout CS recovery commands retain affected API and engine checks without Admin or database setup', () => {
+  const paths = [...checkoutCsRecoverySources, ...checkoutCsRecoveryOptional];
+  const guards = onlineSettingsCommands('guards', paths);
+  const api = onlineSettingsCommands('api', paths);
+  const engine = onlineSettingsCommands('online-engine', paths);
+  for (const name of [
+    'prettier',
+    'eslint',
+    'scripts/ci-online-settings-scope.test.mjs',
+    'scripts/ci-recharge-scope.test.mjs',
+    'scripts/ci-recharge-check.test.mjs',
+    'scripts/ci-change-scope.test.mjs',
+    'check:v2-module-architecture',
+    'check:v2-isolation',
+    'check:v2-prisma-runtime-boundary',
+    'check:v2-concurrency-standard',
+    'check:v2-decimal-standard',
+    'scripts/production-release/online-checkout-cs-release.test.py'
+  ])
+    assert.ok(guards.flat().includes(name), name);
+  assert.deepEqual(
+    guards.filter((command) => command[0] === 'python3'),
+    [['python3', '-B', 'scripts/production-release/online-checkout-cs-release.test.py']]
+  );
+  for (const name of ['prisma:mysql:generate', 'prisma:mysql:validate', 'typecheck', 'build'])
+    assert.ok(api.flat().includes(name), name);
+  assert.ok(api.flat().includes('@apple-business/api'));
+  assert.ok(api.flat().includes('src/id-business-v2/online-recharge'));
+  assert.ok(!api.flat().includes('src/id-business-v2/proxy-pool'));
+  assert.ok(engine.flat().includes('test:online-recharge:engine'));
+  assert.ok(
+    engine.some(
+      (command) =>
+        command[0] === 'node' &&
+        command[1].endsWith('/upstream/node_modules/playwright/cli.js') &&
+        command.slice(2).join(' ') === 'install --with-deps chromium'
+    )
+  );
+  for (const name of ['ffmpeg', 'xvfb', 'xauth']) assert.ok(engine.flat().includes(name));
+  for (const arg of [...guards, ...api, ...engine].flat())
+    assert.ok(
+      !/@apple-business\/admin|check:admin-ui|check:v2-(?:ui-language|color-contrast|table-standard|loading-standard)|test:online-recharge:controls|migrate|docker|acceptance-v2-online-settings/.test(
+        arg
+      ),
+      arg
+    );
+  assert.throws(() => onlineSettingsCommands('admin', paths), /Admin/);
 });

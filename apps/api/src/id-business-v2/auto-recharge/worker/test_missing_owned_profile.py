@@ -38,7 +38,8 @@ class MissingOwnedProfileTests(unittest.IsolatedAsyncioTestCase):
         self.client.list_profile_ids.return_value = set()
         self.client.create_profile.side_effect = self.create
         self.client.open_profile.side_effect = self.open
-        self.context = MagicMock(pages=[], route=AsyncMock(), unroute=AsyncMock())
+        self.context = MagicMock(pages=[], route=AsyncMock(), unroute=AsyncMock(),
+                                 set_extra_http_headers=AsyncMock())
         self.playwright = SimpleNamespace(chromium=SimpleNamespace(connect_over_cdp=AsyncMock(
             return_value=SimpleNamespace(contexts=[self.context], version='152.0.0'))))
 

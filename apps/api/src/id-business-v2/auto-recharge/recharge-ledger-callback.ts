@@ -11,6 +11,15 @@ import { consumeRechargeAddress } from './recharge-address-consumption';
 import { canReplaceCheckout } from './recharge-cancellation';
 import { projectRechargePaymentRecord } from './recharge-payment-facts';
 import { safeDocument, object } from './recharge-validation';
+import {
+  assertDirectRechargeReport,
+  directRechargeAuthorized,
+  isDirectRechargePayment
+} from './recharge-direct-payment';
+import {
+  validateExpiredCheckoutMarker,
+  consumeExpiredCheckoutMarker
+} from './recharge-expired-checkout';
 import { consumeNextCycleMarker } from './recharge-cycle-ledger';
 
 export async function completeRechargeLedgerCallback(input: {
@@ -33,6 +42,10 @@ export async function completeRechargeLedgerCallback(input: {
   )
     throw new BadRequestException('原订单记录无效');
   const document = safeDocument(callback.document);
+  assertDirectRechargeReport(job, document);
+  const expiredReplacement =
+    !input.factsOnly &&
+    (await validateExpiredCheckoutMarker({ tx, job, callback, document, repository }));
   if (!input.factsOnly) {
     const consumed = await consumeNextCycleMarker({
       tx,
@@ -50,7 +63,9 @@ export async function completeRechargeLedgerCallback(input: {
     !(
       (['prepare', 'flow', 'server'].includes(job.action) && job.state === 'confirming') ||
       (job.action === 'bitbrowser' &&
-        ['running', 'awaiting_human_verification'].includes(job.state)) ||
+        (isDirectRechargePayment(job)
+          ? directRechargeAuthorized(job)
+          : ['running', 'awaiting_human_verification'].includes(job.state))) ||
       job.action === 'recheck'
     )
   )
@@ -62,6 +77,7 @@ export async function completeRechargeLedgerCallback(input: {
     revision: Number(callback.revision),
     document,
     allowCheckoutReplacement: canReplaceCheckout(job),
+    allowExpiredCheckoutReplacement: expiredReplacement,
     allowResolvedDeclineReplacement:
       !input.factsOnly &&
       job.action === 'bitbrowser' &&
@@ -75,6 +91,7 @@ export async function completeRechargeLedgerCallback(input: {
       Number(object(job.result).confirmation_requests_sent ?? 0) === 0
   });
   if (saved.replayed) return saved;
+  if (expiredReplacement) await consumeExpiredCheckoutMarker({ tx, job, document, repository });
   const paymentResult = callback.fileKey.startsWith('payments/')
     ? projectRechargePaymentRecord(job, callback.fileKey, document)
     : null;

@@ -91,6 +91,38 @@ test('actual local core never rotates cards after an unknown payment result', as
   assert.equal(calls.decline, 0);
   assert.equal(calls.bills.length, 0);
 });
+for (const errorCode of ['CHECKOUT_RECOVERY_INVALID', 'CHECKOUT_RECOVERY_UNSUPPORTED']) {
+  test(`${errorCode} before submission keeps the exact cause without a failed bill or card rotation`, async () => {
+    responses = [{ success: false, errorCode, error: 'synthetic detail must not be exposed' }];
+    const result = await executePaymentWithRetry({}, { planType: 'pro_20x' });
+    assert.equal(result.errorCode, errorCode);
+    assert.match(result.error, /原结账单.*未提交付款/);
+    assert.doesNotMatch(result.error, /synthetic detail/);
+    assert.equal(result.submitted, false);
+    assert.equal(result.canRetryCard, false);
+    assert.equal(calls.reserve, 1);
+    assert.equal(calls.release, 1);
+    assert.equal(calls.decline, 0);
+    assert.equal(calls.usage, 0);
+    assert.deepEqual(calls.bills, []);
+    assert.equal(rpc.wasSubmitted(), false);
+  });
+  test(`${errorCode} after submission cannot reopen payment or be called an unpaid form failure`, async () => {
+    rpc.setTransportForTest(async () => ({ ok: true }));
+    await rpc.beforeExternalSubmit({});
+    responses = [{ success: false, errorCode }];
+    await assert.rejects(
+      () => executePaymentWithRetry({}, { planType: 'pro_20x' }),
+      (error) => error.code === 'RESULT_UNKNOWN'
+    );
+    assert.equal(calls.reserve, 1);
+    assert.equal(calls.release, 0);
+    assert.equal(calls.decline, 0);
+    assert.equal(calls.usage, 0);
+    assert.deepEqual(calls.bills, []);
+    assert.equal(rpc.wasSubmitted(), true);
+  });
+}
 test('actual local core retains original max-three decline card rotation', async () => {
   responses = [
     { success: false, declined: true, error: 'card_declined' },

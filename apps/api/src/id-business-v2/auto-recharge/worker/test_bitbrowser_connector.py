@@ -308,6 +308,7 @@ class BitBrowserConnectorTests(unittest.TestCase):
     def test_local_api_never_uses_environment_proxy(self):
         class LocalApi(BaseHTTPRequestHandler):
             def do_POST(self):
+                self.rfile.read(int(self.headers.get('Content-Length', '0')))
                 self.send_response(200)
                 self.end_headers()
                 self.wfile.write(b'{"success":true,"data":{"list":[]}}')

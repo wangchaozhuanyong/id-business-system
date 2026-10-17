@@ -13,6 +13,7 @@ ROOT = Path(__file__).resolve().parents[2]
 HERE = Path(__file__).resolve().parent
 OUTPUT = ROOT / '.deploy/recharge-checkout-release'
 CONTRACT = HERE / 'recharge-checkout-contract.json'
+MYSQL_REPORT = ROOT / '.runtime/recharge-web-direct-release/mysql-vitest.json'
 
 
 def need(value, code):
@@ -45,7 +46,7 @@ def inventory(root):
 
 def verify_sources(c):
     need(not git('status', '--porcelain', '--untracked-files=no').strip(), 'SOURCE_DIRTY')
-    need(c['scope'] == 'BIT_RECHARGE_NATIVE_CHECKOUT_20261016', 'SCOPE_CHANGED')
+    need(c['scope'] == 'BIT_RECHARGE_WEB_DIRECT_EXPIRED_CHECKOUT_20261017', 'SCOPE_CHANGED')
     changed = set(git('diff', '--name-only', c['reviewBase'], 'HEAD', '--', 'apps/', 'packages/').decode().splitlines())
     need(changed == set(c['sources']), 'SOURCE_SCOPE_CHANGED')
     for name, expected in c['sources'].items():
@@ -62,8 +63,9 @@ def verify_sources(c):
         for name in ('package.json', 'package-lock.json', 'tsconfig.base.json', '.npmrc',
                      'apps/api/package.json', 'apps/admin/package.json', 'packages/shared/package.json'):
             need(git('ls-tree', 'HEAD', '--', name) == git('ls-tree', c['reviewBase'], '--', name), 'DEPENDENCY_INPUT_CHANGED')
-            need((digest(git('show', before + ':' + name)) if git('ls-tree', before, '--', name).strip() else None)
-                 == c['buildInputs'][role][name], 'PUBLISHED_BUILD_INPUT_CHANGED')
+            if role == 'api':
+                need((digest(git('show', before + ':' + name)) if git('ls-tree', before, '--', name).strip() else None)
+                     == c['buildInputs'][role][name], 'PUBLISHED_BUILD_INPUT_CHANGED')
     need(not git('diff', '--name-only', c['apiSourceBaseline'], 'HEAD', '--', 'apps/api/prisma-mysql/').strip(), 'SCHEMA_CHANGED')
     # Compare the actual Prisma call ASTs; the repository change is post-query qualification only.
     name = 'apps/api/src/id-business-v2/auto-recharge/persistence/recharge.repository.ts'
@@ -88,15 +90,90 @@ def quality(c):
             'path': r['path'], 'conclusion': 'success'}
 
 
+def mysql_verification(c):
+    need(os.environ.get('GITHUB_ACTIONS') == 'true' and MYSQL_REPORT.is_file()
+         and not MYSQL_REPORT.is_symlink(), 'ISOLATED_MYSQL_REPORT_MISSING')
+    raw = MYSQL_REPORT.read_bytes()
+    report = json.loads(raw)
+    expected = c['isolatedMysqlTest']
+    files = report.get('testResults', [])
+    total = report.get('numTotalTests')
+    need(report.get('success') is True and type(total) is int and total == expected['tests']
+         and report.get('numPassedTests') == total
+         and all(report.get(key) == 0 for key in ('numFailedTests', 'numPendingTests', 'numTodoTests',
+                                                 'numFailedTestSuites', 'numPendingTestSuites'))
+         and len(files) == 1 and Path(files[0]['name']).resolve() == (ROOT / expected['testFile']).resolve()
+         and files[0].get('status') == 'passed' and len(files[0].get('assertionResults', [])) == total
+         and all(item.get('status') == 'passed' for item in files[0]['assertionResults']), 'ISOLATED_MYSQL_TESTS_NOT_PASSED')
+    value = {'version': 1, 'scope': 'OWNED_EMPTY_DATABASE', 'runtime': 'github-actions-mysql-service',
+             'commit': os.environ['GITHUB_SHA'], 'tree': git('rev-parse', 'HEAD^{tree}').decode().strip(),
+             'workflowRunId': os.environ['GITHUB_RUN_ID'], 'workflowRunAttempt': os.environ['GITHUB_RUN_ATTEMPT'],
+             'database': expected['database'], 'testFile': expected['testFile'],
+             'testFileSha256': digest((ROOT / expected['testFile']).read_bytes()),
+             'reportSha256': digest(raw), 'testsTotal': total, 'testsPassed': total, 'testsSkipped': 0,
+             'testsTodo': 0, 'productionActions': 0, 'browserRequests': 0}
+    load('recharge-checkout-release.py').verify_mysql_verification(value, value, c)
+    return value
+
+
+def prepare_published_admin(c):
+    pin = c['publishedAdminRecipe']
+    need(pin['buildFile'] in ('registration-protocol-repair-build.py', 'registration-flow-v4-build.py')
+         and pin['contractFile'] == pin['buildFile'].replace('-build.py', '-contract.json')
+         and pin['releaseFile'] == pin['buildFile'].replace('-build.py', '-release.py'), 'ADMIN_RECIPE_SELECTION_INVALID')
+    for name, expected in pin['controlHashes'].items():
+        need(digest(git('show', pin['commit'] + ':scripts/production-release/' + name)) == expected
+             and digest((HERE / name).read_bytes()) == expected, 'PUBLISHED_ADMIN_RECIPE_CHANGED')
+    published = load(pin['buildFile'])
+    contract = json.loads(git('show', pin['commit'] + ':scripts/production-release/' + pin['contractFile']))
+    history = OUTPUT / 'published-admin-history'
+    extract = load('recharge-record-build.py').extract_source
+    extract(git('archive', published.C8, 'scripts/production-release'), history)
+    old_here = history / 'scripts/production-release'
+    reconstruction = contract['reconstruction']
+    need(digest((old_here / 'online-checkout-build.py').read_bytes()) == reconstruction['helperSha256']
+         and digest((old_here / 'online-checkout-contract.json').read_bytes()) == reconstruction['contractSha256'],
+         'PUBLISHED_ADMIN_HISTORY_CHANGED')
+    old_recipe = json.loads((old_here / 'online-checkout-contract.json').read_bytes())
+    successor = published.published_recipe(contract, 'successor', 'online-checkout-retest-contract.json')
+    recharge = published.published_recipe(contract, 'publishedRecharge', 'online-unattended-contract.json')
+    builder = published.load(old_here / 'online-checkout-build.py')
+    builder.OUT = OUTPUT / 'published-admin-merge'
+    builder.OUT.mkdir(mode=0o700)
+    previous_git_dir = os.environ.get('GIT_DIR')
+    os.environ['GIT_DIR'] = git('rev-parse', '--absolute-git-dir').decode().strip()
+    try:
+        context = OUTPUT / 'admin-baseline'
+        builder.reconstruct(context, old_recipe, None)
+        published.overlay_published_sources(context, 'baseline', contract, old_recipe, successor, recharge)
+        published.overlay_runtime_worker(context, contract)
+        published.overlay(context, {**contract['sources'], **contract['validationSources'],
+                                   **contract['validationSupportSources']}, pin['commit'])
+        need(digest((context / published.SCHEMA).read_bytes()) == contract['baseline']['schemaSha256'],
+             'PUBLISHED_ADMIN_SCHEMA_CHANGED')
+    finally:
+        if previous_git_dir is None:
+            os.environ.pop('GIT_DIR', None)
+        else:
+            os.environ['GIT_DIR'] = previous_git_dir
+
+
 def prepare(c):
     need(not OUTPUT.exists(), 'OUTPUT_EXISTS')
     OUTPUT.mkdir(parents=True)
     extract = load('recharge-record-build.py').extract_source
+    prepare_published_admin(c)
     for role in ('api', 'admin'):
-        raw = git('archive', c[role + 'SourceBaseline'])
+        raw = git('archive', c['apiSourceBaseline']) if role == 'api' else None
         for variant in ('baseline', 'candidate'):
             context = OUTPUT / (role + '-' + variant)
-            extract(raw, context)
+            if role == 'api':
+                extract(raw, context)
+            elif variant == 'candidate':
+                shutil.copytree(OUTPUT / 'admin-baseline', context)
+            for name, expected in c['buildInputs'][role].items():
+                path = context / name
+                need((digest(path.read_bytes()) if path.is_file() else None) == expected, 'PUBLISHED_BUILD_INPUT_CHANGED')
             if variant == 'candidate':
                 for name in c['sources']:
                     if name.startswith('apps/' + role + '/') or name.startswith('packages/'):
@@ -109,7 +186,7 @@ def prepare(c):
                 run('npm', 'run', 'prisma:mysql:generate', '--workspace', '@apple-business/api', cwd=context)
 
 
-def build(c, passed):
+def build(c, passed, isolated_mysql):
     for role in ('api', 'admin'):
         for variant in ('baseline', 'candidate'):
             build_id = c['baselineAdminBuildId'] if variant == 'baseline' else 'v2-' + os.environ['GITHUB_SHA']
@@ -117,7 +194,7 @@ def build(c, passed):
                 cwd=OUTPUT / (role + '-' + variant), env={**os.environ, 'NODE_ENV': c['adminNodeEnv'], 'V2_BUILD_ID': build_id})
     before = inventory(OUTPUT / 'api-baseline/apps/api/dist')
     after = inventory(OUTPUT / 'api-candidate/apps/api/dist')
-    need(all(before.get(n) == v for n, v in c['apiModules'].items()), 'BASE_API_NOT_REPRODUCED')
+    need(all(before.get(n) == v for n, v in c['apiBaselineFiles'].items()), 'BASE_API_NOT_REPRODUCED')
     allowed = load('recharge-availability-build.py').verify_api_outputs(before, after, c['apiModules'])
     admin_before = inventory(OUTPUT / 'admin-baseline/apps/admin/dist')
     need(admin_before == c['publicFiles'], 'BASE_ADMIN_NOT_REPRODUCED')
@@ -138,6 +215,7 @@ def build(c, passed):
         'baselineApiReproduced': True, 'baselineAdminReproduced': True,
         'baselinePublishedVerified': {'apiSource': c['apiSourceBaseline'], 'adminSource': c['adminSourceBaseline'], 'verified': True},
         'qualityVerification': passed, 'databaseVerification': c['databaseVerification'],
+        'isolatedMysqlVerification': isolated_mysql,
         'files': inventory(payload), 'apiModules': {n: after[n] for n in sorted(allowed)},
         'adminFiles': inventory(payload / 'admin/html'), 'updatedServices': ['api', 'admin'],
         'migrationPerformed': False, 'businessActions': 0}
@@ -156,5 +234,6 @@ if __name__ == '__main__':
     c = json.loads(CONTRACT.read_bytes())
     verify_sources(c)
     passed = quality(c)
+    isolated_mysql = mysql_verification(c)
     prepare(c)
-    build(c, passed)
+    build(c, passed, isolated_mysql)
