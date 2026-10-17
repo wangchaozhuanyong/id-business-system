@@ -89,10 +89,10 @@
   },
   "configurationSha256": {
     ".env.aws.production": "3f3c22ac671ef185ffc98677ef3a2facce244e476e4583b8e7d16ff1deb00392",
-    "compose.release.json": "0a0c4f865d64578dceb6711c62fb0810f58d814aa74a14059a7ccec43e769905",
+    "compose.release.json": "e486b190c09ff1522f5c11d909616f19cc78c416d8efb1f1872ac6178c4f4987",
     "docker-compose.aws-mysql.yml": "953c6264f157b00218f2a019d5e2c0b6bc4a34f687f2ec42ad782e0009e7672c"
   },
-  "current": "/opt/id-business-v2/releases/20261017T100239Z-a92ea4927547-registration-flow-v4-20261017",
+  "current": "/opt/id-business-v2/releases/20261017T111625Z-92aba4034ade-online-checkout-cs",
   "databaseVerification": {
     "databaseStarted": false,
     "schemaChanged": false,
@@ -105,13 +105,13 @@
     "rpcConnected": true,
     "stopping": false
   },
-  "expectedCurrent": "a92ea492754781f0b84011321a65b684617e7ce2",
+  "expectedCurrent": "92aba4034ade09985015f7dfa7592fc7553b743c",
   "isolatedMysqlTest": {
     "database": "id_business_v2_recharge_direct_fixture",
     "testFile": "apps/api/src/id-business-v2/auto-recharge/recharge-direct-payment.mysql.integration.spec.ts",
     "tests": 8
   },
-  "manifestSha256": "4d963b9283a3bcc3e4505c21b13e1c10b8f703b92b8e8f897111bf8d6feb9bea",
+  "manifestSha256": "9dead9f89429bf597a7aa9c9a5d2ff548d01b4c63903aee25a9ba9211a261237",
   "nginxSha256": "0b73aedbebdc12065d922b35bbf428e8959fe3a3ea9ef9fa5dc7af2f995baa99",
   "preservedAdminInventory": {
     "count": 2719,
@@ -416,12 +416,12 @@
       "status": "running"
     },
     "api": {
-      "containerId": "34c3351a862414d576c000fa585500ef5c249d03f2a9ad3003a84929616ca489",
+      "containerId": "ee85ce4d36bc5e9fec34ce745a0edb2682a9a268eda41ce55f1c2ddf9293e177",
       "environmentSha256": "cc3662b8111310ec210a34ae642b9622da070f4fb94e1ea602ac355044136f5d",
       "health": "healthy",
-      "image": "sha256:79bb6b8bf01726cd531d59062718951dab8a7a3d3299dee1a9588b4089e99683",
-      "reference": "id-business-v2-registration-flow-v4-20261017:a92ea492754781f0b84011321a65b684617e7ce2-39022831680-api",
-      "startedAtSha256": "c36575a7eeb779df76dc6b1f95c6156346b6c32e9e68060f5d124119e41bda59",
+      "image": "sha256:d0f57f4c41da6efd8b435ee7fa65b1d57a01e828b5196ed934d6a6e67dfff013",
+      "reference": "id-business-v2-online-checkout-cs:92aba4034ade09985015f7dfa7592fc7553b743c-39027872983-api",
+      "startedAtSha256": "58fea5ba72e70b90b69612374fb65da774fcc7822427877c904bdfc62d01ae6f",
       "status": "running"
     },
     "auto-recharge": {
@@ -470,12 +470,12 @@
       "status": "running"
     },
     "online-recharge": {
-      "containerId": "b29823d8d23a1c3c29b2e8f7ae91b879392edc340f12f9768d3f111b7c702236",
+      "containerId": "3d345d99b3babc29c5d6dd5421d7405e9f65dd5ff3125a89966cd3695d4186cd",
       "environmentSha256": "60bb48bbd6e03a4ceebe245c8405f248d0c682a27287aabb17c1d3573e50ad37",
       "health": "healthy",
-      "image": "sha256:e283524eeea95ddea36ef45187c003739f18c8009fd12bb8dbfd704aa5317545",
-      "reference": "id-business-v2-online-checkout:055b308bf357d460ee7746c9e60ae46d575f7661-39012826133-online-recharge",
-      "startedAtSha256": "5a7205f4292e456d266b07de3c9374b2cc0b897bb90a2174e454829e5eee6fa0",
+      "image": "sha256:569733ba30623a02df7c4159630d44f8aae638824ad050a17ed2dfe4517c29f8",
+      "reference": "id-business-v2-online-checkout-cs:92aba4034ade09985015f7dfa7592fc7553b743c-39027872983-online-recharge",
+      "startedAtSha256": "810e768ce52ce017e626c573c68e5f76a8c88ad6c818e3a1c7a915d1c05f4d06",
       "status": "running"
     }
   },
