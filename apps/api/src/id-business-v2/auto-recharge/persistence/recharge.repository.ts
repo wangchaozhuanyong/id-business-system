@@ -6,7 +6,7 @@ import { acquireMysqlTransactionLock } from '../../../common/prisma/mysql-transa
 import { toV2JsonDocument, type V2CommandTransaction } from '../../runtime/public-api';
 import type { Prisma } from '@prisma/client';
 import { assertEmployeeBusinessWriter } from '../../../v2-auth/system-super-admin';
-import { hash } from '../recharge-validation';
+import { hash, object } from '../recharge-validation';
 import { isRechargeUpgrade } from '../recharge-upgrade-protocol';
 import { rechargeDocumentDigest } from '../recharge-callback-receipts';
 import { isClosedCycleDocument } from '../recharge-cycle-state';
@@ -184,13 +184,19 @@ export class RechargeRepository {
         assertUnpaidCheckoutRecoverySources(jobs, ownerId, accountKey, plan);
       } else {
         const identifier = findOriginalRechargeCheckout(
-          jobs.filter(
-            (job) =>
-              !isClosedCycleDocument(job.result, accountKey) &&
-              !expiredCheckoutIdentifiers.includes(
-                String(rechargeCheckoutIdentifier(job.result as Record<string, unknown>))
-              )
-          ),
+          jobs.filter((job) => {
+            if (isClosedCycleDocument(job.result, accountKey)) return false;
+            if (
+              !expiredCheckoutIdentifiers.length ||
+              (job.id === unidentifiedSourceJobId && isUnidentifiedUnpaidCheckout(job.result))
+            )
+              return true;
+            const result =
+              job.result && typeof job.result === 'object' && !Array.isArray(job.result)
+                ? object(job.result)
+                : {};
+            return !expiredCheckoutIdentifiers.includes(String(rechargeCheckoutIdentifier(result)));
+          }),
           ownerId,
           accountKey,
           plan,

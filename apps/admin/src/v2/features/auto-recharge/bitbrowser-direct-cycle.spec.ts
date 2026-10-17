@@ -188,7 +188,14 @@ describe('网页次周期后台检查与人工旧账期确认', () => {
     await prepareDirectNextCycle(browser, launch, 'plus', restored, key, hooks);
     expect(hooks.progress).toHaveBeenCalledWith(
       'next_subscription_cycle_review',
-      expect.objectContaining({ user_action_required: true })
+      expect.objectContaining({
+        account_matched: true,
+        current_plan: 'free',
+        user_action_required: true,
+        payment_attempted: false,
+        payment_requests_sent: 0,
+        checkout_requests_sent: 0
+      })
     );
     expect(hooks.callback).toHaveBeenCalledWith(
       expect.objectContaining({ phase: 'status', reviewDigest: digest })

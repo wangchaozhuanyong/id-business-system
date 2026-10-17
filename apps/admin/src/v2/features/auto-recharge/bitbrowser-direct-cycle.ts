@@ -216,6 +216,8 @@ export async function prepareDirectNextCycle(
     const digest = review.reviewDigest;
     const deadline = Math.min(Date.now() + 300000, Date.parse(String(review.expiresAt)));
     await hooks.progress('next_subscription_cycle_review', {
+      account_matched: inspection.account_matched,
+      current_plan: inspection.current_plan,
       cycle_review: review,
       subscription_inspection: inspection,
       user_action_required: review.status === 'awaiting_previous_cycle_confirmation',
