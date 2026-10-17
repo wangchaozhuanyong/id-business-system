@@ -26,10 +26,10 @@ const fixtureAddress = {
   is_active: true
 };
 
-function syntheticTask(scene) {
+function syntheticTask(scene, { sessionRefresh } = {}) {
   const claims = {
     iss: 'https://auth.openai.com',
-    exp: Math.floor(Date.now() / 1000) + 3600,
+    exp: Math.floor(Date.now() / 1000) + (sessionRefresh ? -60 : 3600),
     'https://api.openai.com/auth': {
       chatgpt_account_id: fixtureAccount,
       chatgpt_user_id: 'fixture-user'
@@ -173,6 +173,8 @@ async function runSyntheticRecharge(scene, options = {}) {
   assert.ok(
     ['standard', 'legacy-names', 'legacy-testids', 'legacy-collapsed'].includes(billingFields)
   );
+  const sessionRefresh = options.sessionRefresh || null;
+  assert.ok(sessionRefresh === null || ['same-account', 'wrong-account'].includes(sessionRefresh));
   if (options.diagnosticDelay) {
     assert.ok(['verify', 'verifyCard'].includes(options.diagnosticDelay.stage));
     assert.ok(Number.isFinite(options.diagnosticDelay.milliseconds));
@@ -185,7 +187,7 @@ async function runSyntheticRecharge(scene, options = {}) {
     );
     if (options.diagnosticDelay.kind) assert.equal(options.diagnosticDelay.stage, 'verifyCard');
   }
-  const task = options.task || syntheticTask(scene);
+  const task = options.task || syntheticTask(scene, { sessionRefresh });
   const rpc = options.rpc || strictRpcFixture(task);
   const directory =
     options.outputDir || path.join(outputRoot, `engine-${scene}-${randomUUID().slice(0, 8)}`);
@@ -272,7 +274,8 @@ async function runSyntheticRecharge(scene, options = {}) {
     task,
     diagnosticDelay: options.diagnosticDelay,
     cardFields,
-    billingFields
+    billingFields,
+    sessionRefresh
   });
   const exit = await new Promise((resolve, reject) => {
     child.once('error', reject);
@@ -282,6 +285,7 @@ async function runSyntheticRecharge(scene, options = {}) {
     scene,
     cardFields,
     billingFields,
+    ...(sessionRefresh ? { sessionRefresh } : {}),
     ...(options.diagnosticDelay ? { diagnosticDelay: { ...options.diagnosticDelay } } : {}),
     entry: 'task-runner.runTask → execute → upstream/index.run',
     exit,
@@ -410,12 +414,16 @@ async function fixtureChild(
   task,
   diagnosticDelay,
   cardFields = 'standard',
-  billingFields = 'standard'
+  billingFields = 'standard',
+  sessionRefresh = null
 ) {
   const { chromium, request } = require('../upstream/node_modules/playwright');
   const rpc = require('../rpc.cjs');
   const metrics = {
     loginCookieVerified: 0,
+    refreshedAuthResponses: 0,
+    originalBearerRequests: 0,
+    refreshedBearerRequests: 0,
     checkoutCreations: 0,
     checkoutDocuments: 0,
     checkoutDomContentLoaded: 0,
@@ -448,6 +456,30 @@ async function fixtureChild(
     unexpectedNetwork: 0
   };
   const session = JSON.parse(task.session);
+  const originalClaims = sessionRefresh
+    ? JSON.parse(Buffer.from(session.accessToken.split('.')[1], 'base64url').toString('utf8'))
+    : null;
+  const refreshedAccount =
+    sessionRefresh === 'wrong-account'
+      ? '99999999-9999-4999-8999-999999999999'
+      : originalClaims?.['https://api.openai.com/auth'].chatgpt_account_id;
+  const refreshedClaims = sessionRefresh
+    ? {
+        ...originalClaims,
+        exp: Math.floor(Date.now() / 1000) + 3600,
+        'https://api.openai.com/auth': {
+          ...originalClaims['https://api.openai.com/auth'],
+          chatgpt_account_id: refreshedAccount
+        }
+      }
+    : null;
+  const refreshedSession = sessionRefresh
+    ? {
+        ...session,
+        accessToken: `${session.accessToken.split('.')[0]}.${Buffer.from(JSON.stringify(refreshedClaims)).toString('base64url')}.synthetic-refreshed`,
+        account: { id: refreshedAccount }
+      }
+    : session;
   let willRenew = true;
   const accountId = require('../upstream/session-auth').extractProfileFromToken(
     session.accessToken
@@ -742,8 +774,9 @@ async function fixtureChild(
   const handle = async (route) => {
     const req = route.request(),
       url = new URL(req.url());
-    const json = (value) =>
+    const json = (value, status = 200) =>
       route.fulfill({
+        status,
         contentType: 'application/json',
         headers: { 'access-control-allow-origin': '*' },
         body: JSON.stringify(value)
@@ -756,16 +789,24 @@ async function fixtureChild(
     if (url.origin === origin && url.pathname === '/api/auth/session') {
       assert.match(req.headers().cookie || '', /__Secure-next-auth\.session-token/);
       metrics.loginCookieVerified++;
-      return json(session);
+      if (sessionRefresh) metrics.refreshedAuthResponses++;
+      return json(sessionRefresh ? refreshedSession : session);
     }
     if (req.method() === 'GET' && url.pathname === '/backend-api/accounts/check/v4-2023-04-27') {
-      assert.equal(req.headers().authorization, `Bearer ${session.accessToken}`);
+      if (sessionRefresh) {
+        if (req.headers().authorization === `Bearer ${session.accessToken}`) {
+          metrics.originalBearerRequests++;
+          return json({}, 401);
+        }
+        assert.equal(req.headers().authorization, `Bearer ${refreshedSession.accessToken}`);
+        metrics.refreshedBearerRequests++;
+      } else assert.equal(req.headers().authorization, `Bearer ${session.accessToken}`);
       if (metrics.paymentRequests) metrics.subscriptionChecksAfter++;
       else metrics.subscriptionChecksBefore++;
       return json({
         accounts: {
           default: {
-            account: { account_id: accountId },
+            account: { account_id: sessionRefresh ? refreshedAccount : accountId },
             entitlement: {
               has_active_subscription: subscribed,
               subscription_plan: subscribed ? 'pro_20x' : 'free'
@@ -786,7 +827,10 @@ async function fixtureChild(
     ) {
       assert.equal(subscribed, true);
       assert.equal(req.postDataJSON().account_id, accountId);
-      assert.equal(req.headers().authorization, `Bearer ${session.accessToken}`);
+      assert.equal(
+        req.headers().authorization,
+        `Bearer ${(sessionRefresh ? refreshedSession : session).accessToken}`
+      );
       assert.match(req.headers().cookie || '', /__Secure-next-auth\.session-token/);
       assert.equal(rpc.wasSubmitted(), true);
       metrics.renewalRequests++;
@@ -800,6 +844,8 @@ async function fixtureChild(
       url.pathname === '/backend-api/payments/checkout'
     ) {
       const body = req.postDataJSON();
+      if (sessionRefresh)
+        assert.equal(req.headers().authorization, `Bearer ${refreshedSession.accessToken}`);
       assert.equal(body.plan_name, 'chatgptpro');
       assert.equal(body.billing_details.currency, 'PHP');
       metrics.checkoutCreations++;
@@ -930,6 +976,8 @@ async function fixtureChild(
       url.pathname === '/backend-api/payments/checkout/confirm'
     ) {
       const body = req.postDataJSON();
+      if (sessionRefresh)
+        assert.equal(req.headers().authorization, `Bearer ${refreshedSession.accessToken}`);
       assert.equal(body.checkout_session_id, checkoutId);
       assert.equal(body.actualClicks, 1);
       assert.equal(body.trustedClick, true);
@@ -1156,7 +1204,8 @@ if (process.env.RECHARGE_FLOW_FIXTURE_CHILD === '1') {
       message.task,
       message.diagnosticDelay,
       message.cardFields,
-      message.billingFields
+      message.billingFields,
+      message.sessionRefresh
     ).then(
       () => process.exit(0),
       (error) => {
@@ -1172,6 +1221,14 @@ if (process.env.RECHARGE_FLOW_FIXTURE_CHILD === '1') {
     ['recover', {}, 'recover'],
     ['unknown', {}, 'unknown'],
     ['readiness', {}, 'readiness'],
+    [
+      'success',
+      {
+        sessionRefresh: 'same-account',
+        outputDir: path.join(repairOutputRoot, `session-refresh-same-${randomUUID().slice(0, 8)}`)
+      },
+      'cookie-refreshed session reaches one payment'
+    ],
     [
       'success',
       {
@@ -1221,6 +1278,12 @@ if (process.env.RECHARGE_FLOW_FIXTURE_CHILD === '1') {
         const metrics = actual.metrics;
         assert.equal(actual.failure, '');
         assert.equal(metrics.loginCookieVerified, 1);
+        if (fixtureOptions.sessionRefresh) {
+          assert.equal(metrics.refreshedAuthResponses, 1);
+          assert.equal(metrics.originalBearerRequests, 0);
+          assert.equal(metrics.refreshedBearerRequests >= 2, true);
+          assert.equal(actual.result.result.confirmation.observedCanonicalPlan, 'pro_20x');
+        }
         assert.equal(metrics.checkoutCreations, 1);
         assert.equal(metrics.checkoutDocuments, scene === 'recover' ? 2 : 1);
         assert.equal(metrics.initializations, 1);
@@ -1325,4 +1388,42 @@ if (process.env.RECHARGE_FLOW_FIXTURE_CHILD === '1') {
         }
       }
     );
+  test(
+    'cookie refresh rejects a different account before any subscription or payment request',
+    { timeout: 50000 },
+    async () => {
+      const actual = await runSyntheticRecharge('success', {
+        sessionRefresh: 'wrong-account',
+        outputDir: path.join(repairOutputRoot, `session-refresh-wrong-${randomUUID().slice(0, 8)}`)
+      });
+      assert.equal(actual.failure, '');
+      assert.equal(actual.result.status, 'failed');
+      assert.equal(actual.result.result.code, 'ACCOUNT_MISMATCH');
+      assert.equal(actual.metrics.loginCookieVerified, 1);
+      assert.equal(actual.metrics.refreshedAuthResponses, 1);
+      for (const key of [
+        'originalBearerRequests',
+        'refreshedBearerRequests',
+        'checkoutCreations',
+        'checkoutDocuments',
+        'initializations',
+        'actualPaymentClicks',
+        'paymentRequests',
+        'unexpectedNetwork'
+      ])
+        assert.equal(actual.metrics[key], 0, key);
+      assert.equal(
+        actual.actions.some((action) =>
+          [
+            'reserveCard',
+            'beforeExternalSubmit',
+            'recordCardUsage',
+            'recordCardDecline',
+            'createBillingRecord'
+          ].includes(action.method)
+        ),
+        false
+      );
+    }
+  );
 }

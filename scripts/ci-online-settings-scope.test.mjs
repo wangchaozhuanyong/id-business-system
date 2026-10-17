@@ -24,6 +24,8 @@ import {
   onlineCoreParityScope,
   isOnlineCheckoutPreparedFieldsOnly,
   onlineCheckoutPreparedFieldsScope,
+  isOnlineSessionRefreshOnly,
+  onlineSessionRefreshScope,
   onlineSettingsCommands
 } from './ci-online-settings-scope.mjs';
 
@@ -825,6 +827,138 @@ const checkoutPreparedFieldsSources = [
   'docs/ONLINE_RECHARGE.md',
   'docs/V2_TASKS.md'
 ];
+const sessionRefreshSources = [
+  ...[
+    'SOURCE_MANIFEST.json',
+    'upstream/session-auth.js',
+    'upstream/subscription-check.js',
+    'test/regressions.test.cjs',
+    'test/recharge-flow-acceptance.test.cjs'
+  ].map((name) => 'apps/api/src/id-business-v2/online-recharge/engine/' + name),
+  'docs/ONLINE_RECHARGE.md',
+  'docs/V2_TASKS.md'
+];
+const sessionRefreshApiFixture =
+  'apps/api/src/id-business-v2/online-recharge/local-chain-acceptance.spec.ts';
+
+test('session refresh admits its exact seven sources with only API fixture and seven optional controls', () => {
+  assert.equal(onlineSessionRefreshScope, 'ONLINE_SESSION_REFRESH');
+  assert.equal(sessionRefreshSources.length, 7);
+  assert.equal(new Set(sessionRefreshSources).size, 7);
+  for (const includeApi of [false, true])
+    for (let mask = 0; mask < 128; mask++) {
+      const paths = [
+        ...sessionRefreshSources,
+        ...(includeApi ? [sessionRefreshApiFixture] : []),
+        ...checkoutNavigationReadyControls.filter((_, index) => mask & (1 << index))
+      ];
+      assert.equal(isOnlineSessionRefreshOnly(paths), true);
+      assert.equal(isOnlineSettingsOnly(paths), true);
+      assert.equal(isOnlineSettingsControlsOnly(paths), false);
+      assert.equal(isOnlineCheckoutPreparedFieldsOnly(paths), false);
+      assert.equal(isOnlineCoreParityOnly(paths), false);
+      assert.equal(isOnlineCheckoutNavigationReadyOnly(paths), false);
+      assert.equal(isOnlineCheckoutLoadRecoveryOnly(paths), false);
+      assert.equal(isOnlineCheckoutLoadParentRpcOnly(paths), false);
+      assert.equal(isOnlineCheckoutCsRecoveryOnly(paths), false);
+      assert.equal(checkMode(paths, 'unchanged', 'unchanged'), 'recharge');
+      assert.equal(checkMode(paths, 'before', 'after'), 'full');
+      assert.deepEqual(selectedParts(paths), ['guards', 'api', 'online-engine']);
+    }
+  for (const old of [
+    checkoutPreparedFieldsSources,
+    coreParitySources,
+    checkoutNavigationReadySources,
+    checkoutLoadRecoverySources
+  ])
+    assert.equal(isOnlineSessionRefreshOnly(old), false);
+});
+
+test('session refresh rejects all missing required files, duplicates and neighboring implementation', () => {
+  const complete = [
+    ...sessionRefreshSources,
+    sessionRefreshApiFixture,
+    ...checkoutNavigationReadyControls
+  ];
+  const rejected = (paths) => {
+    assert.equal(isOnlineSessionRefreshOnly(paths), false);
+    assert.equal(isOnlineSettingsOnly(paths), false);
+    assert.equal(isOnlineSettingsControlsOnly(paths), false);
+    assert.equal(checkMode(paths, '', ''), 'full');
+    assert.throws(() => onlineSettingsCommands('guards', paths));
+  };
+  for (const required of sessionRefreshSources)
+    rejected(complete.filter((path) => path !== required));
+  for (const path of complete) rejected([...complete, path]);
+  for (const extra of [
+    '.github/workflows/online-checkout-load-validation.yml',
+    'scripts/ci-recharge-check.mjs',
+    'scripts/ci-recharge-scope.test.mjs',
+    'scripts/production-release/online-checkout-load-unreviewed.py',
+    'scripts/production-release/online-checkout-cs-release.py',
+    'docs/ONLINE_SETTINGS_RELEASE_20261016.md',
+    'apps/api/src/id-business-v2/online-recharge/engine/checkout-form.cjs',
+    'apps/api/src/id-business-v2/online-recharge/engine/checkout-recovery.cjs',
+    'apps/api/src/id-business-v2/online-recharge/engine/upstream/payment-retry.js',
+    'apps/api/src/id-business-v2/online-recharge/engine/worker.cjs',
+    'apps/api/src/id-business-v2/online-recharge/persistence/tasks.repository.ts',
+    'apps/api/src/id-business-v2/online-recharge/unreviewed.spec.ts',
+    'apps/admin/src/v2/features/online-recharge/OnlineTaskProgress.vue',
+    'apps/api/src/auth/auth.service.ts',
+    'apps/api/prisma-mysql/schema.prisma',
+    'apps/api/prisma-mysql/migrations/unreviewed/migration.sql',
+    'package.json',
+    'package-lock.json',
+    'apps/api/src/id-business-v2/online-recharge/engine/upstream/package-lock.json'
+  ])
+    rejected([...complete, extra]);
+});
+
+test('session refresh retains serial engine, upstream, API graph, types and all five guards', () => {
+  for (const paths of [
+    sessionRefreshSources,
+    [...sessionRefreshSources, sessionRefreshApiFixture, ...checkoutNavigationReadyControls]
+  ]) {
+    const guards = onlineSettingsCommands('guards', paths);
+    const api = onlineSettingsCommands('api', paths);
+    const engine = onlineSettingsCommands('online-engine', paths);
+    assert.deepEqual(api, onlineSettingsCommands('api', checkoutLoadRecoverySources));
+    assert.deepEqual(
+      engine,
+      onlineSettingsCommands('online-engine', checkoutPreparedFieldsSources)
+    );
+    for (const name of [
+      'prettier',
+      'eslint',
+      'scripts/ci-online-settings-scope.test.mjs',
+      'scripts/ci-recharge-scope.test.mjs',
+      'scripts/ci-recharge-check.test.mjs',
+      'scripts/ci-change-scope.test.mjs',
+      'scripts/production-release/online-checkout-load-release.test.py',
+      'check:v2-module-architecture',
+      'check:v2-isolation',
+      'check:v2-prisma-runtime-boundary',
+      'check:v2-concurrency-standard',
+      'check:v2-decimal-standard'
+    ])
+      assert.ok(guards.flat().includes(name), name);
+    assert.ok(api.flat().includes('typecheck'));
+    assert.ok(api.flat().includes('@apple-business/api'));
+    assert.ok(
+      api.flat().includes('src/id-business-v2/online-recharge/local-chain-acceptance.spec.ts')
+    );
+    assert.ok(engine.flat().includes('test:upstream'));
+    assert.ok(engine.some((command) => command.at(-1).includes?.('--test-concurrency=1')));
+    for (const arg of [...guards, ...api, ...engine].flat())
+      assert.ok(
+        !/@apple-business\/admin|check:admin-ui|check:v2-(?:ui-language|color-contrast|table-standard|loading-standard)|mysql\.integration|migrate|docker|finance|test:online-recharge:controls/.test(
+          arg
+        ),
+        arg
+      );
+    assert.throws(() => onlineSettingsCommands('admin', paths), /Admin/);
+  }
+});
 
 test('prepared checkout fields admit exactly fifteen sources and only the seven reviewed controls', () => {
   assert.equal(onlineCheckoutPreparedFieldsScope, 'ONLINE_CHECKOUT_PREPARED_FIELDS');
@@ -1347,7 +1481,8 @@ for (const [name, paths] of [
   ['load-recovery', checkoutLoadRecoverySources],
   ['navigation readiness', checkoutNavigationReadySources],
   ['core parity', coreParitySources],
-  ['prepared fields', checkoutPreparedFieldsSources]
+  ['prepared fields', checkoutPreparedFieldsSources],
+  ['session refresh', sessionRefreshSources]
 ])
   test(`${name} source verification executes every fingerprint and rejects incomplete or tampered manifests`, () => {
     const command = onlineSettingsCommands('guards', paths).find((args) =>
@@ -1448,37 +1583,41 @@ test('load-recovery engine command discovers all current tests once with two wor
   assert.throws(() => execute(['README.md']), /Missing online engine regression files/);
 });
 
-test('prepared fields execute every discovered engine test once, serially, and preserve failure', () => {
-  const command = onlineSettingsCommands('online-engine', checkoutPreparedFieldsSources).find(
-    (args) => args.at(-1).includes?.('--test-concurrency=1')
-  );
-  assert.ok(command && command[0] === 'node');
-  const source = command.at(-1).replace(/^import .+;$/gm, '');
-  const root = 'apps/api/src/id-business-v2/online-recharge/engine/test';
-  const execute = (files, status = 0) => {
-    const observed = { calls: [], exits: [] };
-    runInNewContext(source, {
-      readdirSync: (path) => {
-        assert.equal(path, root);
-        return files;
-      },
-      spawnSync: (file, args, options) => {
-        observed.calls.push({ file, args: Array.from(args), inherit: options.stdio });
-        return { status };
-      },
-      process: { execPath: '/synthetic/node', exit: (code) => observed.exits.push(code) }
-    });
-    return observed;
-  };
-  assert.deepEqual(execute(['z.test.cjs', 'README.md', 'a.test.cjs']).calls, [
-    {
-      file: '/synthetic/node',
-      args: ['--test', '--test-concurrency=1', root + '/a.test.cjs', root + '/z.test.cjs'],
-      inherit: 'inherit'
-    }
-  ]);
-  assert.deepEqual(execute(['a.test.cjs']).exits, [0]);
-  assert.deepEqual(execute(['a.test.cjs'], 2).exits, [2]);
-  assert.deepEqual(execute(['a.test.cjs'], null).exits, [1]);
-  assert.throws(() => execute(['README.md']), /Missing online engine regression files/);
-});
+for (const [name, paths] of [
+  ['prepared fields', checkoutPreparedFieldsSources],
+  ['session refresh', sessionRefreshSources]
+])
+  test(`${name} execute every discovered engine test once, serially, and preserve failure`, () => {
+    const command = onlineSettingsCommands('online-engine', paths).find((args) =>
+      args.at(-1).includes?.('--test-concurrency=1')
+    );
+    assert.ok(command && command[0] === 'node');
+    const source = command.at(-1).replace(/^import .+;$/gm, '');
+    const root = 'apps/api/src/id-business-v2/online-recharge/engine/test';
+    const execute = (files, status = 0) => {
+      const observed = { calls: [], exits: [] };
+      runInNewContext(source, {
+        readdirSync: (path) => {
+          assert.equal(path, root);
+          return files;
+        },
+        spawnSync: (file, args, options) => {
+          observed.calls.push({ file, args: Array.from(args), inherit: options.stdio });
+          return { status };
+        },
+        process: { execPath: '/synthetic/node', exit: (code) => observed.exits.push(code) }
+      });
+      return observed;
+    };
+    assert.deepEqual(execute(['z.test.cjs', 'README.md', 'a.test.cjs']).calls, [
+      {
+        file: '/synthetic/node',
+        args: ['--test', '--test-concurrency=1', root + '/a.test.cjs', root + '/z.test.cjs'],
+        inherit: 'inherit'
+      }
+    ]);
+    assert.deepEqual(execute(['a.test.cjs']).exits, [0]);
+    assert.deepEqual(execute(['a.test.cjs'], 2).exits, [2]);
+    assert.deepEqual(execute(['a.test.cjs'], null).exits, [1]);
+    assert.throws(() => execute(['README.md']), /Missing online engine regression files/);
+  });

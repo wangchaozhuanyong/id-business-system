@@ -418,9 +418,6 @@ async function verifyRealSessionApi(context) {
         } catch (_) {
             data = null;
         }
-        if (data?.accessToken || data?.user?.email || data?.user?.id) {
-            return { ok: true, data, status };
-        }
         const isCloudflareChallenge = challengeHeader
             || /just a moment|verify you are human/i.test(bodyText);
         if (isCloudflareChallenge) {
@@ -432,10 +429,18 @@ async function verifyRealSessionApi(context) {
                 error: `官网要求验证（HTTP ${status}），尚未确认登录状态`
             };
         }
+        const sessionObject = data && typeof data === 'object' && !Array.isArray(data);
+        const hasSessionIdentity = sessionObject && data.error == null && data.errors == null
+            && [data.accessToken, data.user?.email, data.user?.id]
+                .some((value) => typeof value === 'string' && value.trim());
+        if (status === 200 && hasSessionIdentity) {
+            return { ok: true, data, status };
+        }
+        const emptySession = status === 200 && sessionObject && Object.keys(data).length === 0;
         return {
             ok: false,
             status,
-            code: status === 401 || (status === 200 && data && typeof data === 'object')
+            code: status === 401 || emptySession
                 ? 'SESSION_INVALID' : status === 403 ? 'UPSTREAM_FORBIDDEN' : 'NETWORK_UNAVAILABLE',
             error: `登录状态尚未核实（HTTP ${status}）`
         };
@@ -445,6 +450,48 @@ async function verifyRealSessionApi(context) {
     } finally {
         await probe.close().catch(() => {});
     }
+}
+
+function verifiedSessionPayload(sessionData, accessToken, data) {
+    const mismatch = () => {
+        throw Object.assign(new Error('官网会话身份与原任务不一致，已停止后续操作'), { code: 'ACCOUNT_MISMATCH' });
+    };
+    const identity = (value) => {
+        if (value == null || value === '') return '';
+        if (typeof value !== 'string') mismatch();
+        return value;
+    };
+    const agreed = (...values) => {
+        const known = [...new Set(values.map(identity).filter(Boolean))];
+        if (known.length > 1) mismatch();
+        return known[0] || '';
+    };
+    const original = extractProfileFromToken(accessToken);
+    const expectedAccount = agreed(original.accountId, sessionData.account?.id);
+    const expectedUser = agreed(original.userId, sessionData.user?.id);
+    const freshToken = typeof data.accessToken === 'string' ? data.accessToken.trim() : '';
+    const refreshed = Boolean(freshToken && freshToken !== accessToken);
+    const observed = extractProfileFromToken(freshToken || accessToken);
+    const observedAccount = agreed(observed.accountId, data.account?.id);
+    const observedUser = agreed(observed.userId, data.user?.id);
+    if ((expectedAccount && observedAccount && expectedAccount !== observedAccount)
+        || (expectedUser && observedUser && expectedUser !== observedUser)) mismatch();
+    if (!refreshed) return sessionData;
+    // Only the original task's known identity may authorize replacing its
+    // bearer. A matching email or an unrelated user_id namespace is not proof.
+    if ((!expectedAccount && !expectedUser)
+        || (expectedAccount && identity(observed.accountId) !== expectedAccount)
+        || (expectedUser && identity(observed.userId) !== expectedUser)) mismatch();
+    const user = data.user && typeof data.user === 'object' && !Array.isArray(data.user)
+        ? data.user : sessionData.user;
+    const expires = typeof data.expires === 'string' && Number.isFinite(Date.parse(data.expires))
+        ? data.expires : sessionData.expires;
+    require('../security.cjs').rememberSecrets({ accessToken: freshToken });
+    console.log('[Session] 已采用官网核实的同账号最新登录凭据');
+    return buildSessionPayload(freshToken, {
+        ...sessionData, user, expires, accessToken: freshToken,
+        ...(Object.hasOwn(sessionData, 'access_token') ? { access_token: freshToken } : {})
+    });
 }
 
 function extractAccessTokenFromRaw(raw) {
@@ -544,8 +591,9 @@ async function installChatGptSession(context, sessionRaw) {
         throw new Error('缺少 Session：请粘贴完整 Session JSON（来自 chatgpt.com/api/auth/session）');
     }
 
-    const { accessToken: token, sessionData, sessionJson } = resolved;
-    const sessionBody = JSON.stringify(sessionData);
+    let token = resolved.accessToken;
+    let sessionData = resolved.sessionData;
+    const { sessionJson } = resolved;
     const cookieSpecs = collectCookieSpecs(sessionData, sessionJson);
 
     const sessionTokenValue = String(
@@ -588,6 +636,8 @@ async function installChatGptSession(context, sessionRaw) {
     if (injectResult.hasSessionToken) {
         const apiCheck = await verifyRealSessionApi(context);
         if (apiCheck.ok) {
+            sessionData = verifiedSessionPayload(sessionData, token, apiCheck.data);
+            token = sessionData.accessToken;
             cookieVerified = true;
             const email = apiCheck.data?.user?.email || '';
             console.log(`[Session] Cookie 校验通过${email ? `: ${email}` : ''}`);
@@ -599,6 +649,8 @@ async function installChatGptSession(context, sessionRaw) {
             console.warn(`[Session] Cookie 在线校验跳过: ${apiCheck.error || 'unknown'}`);
         }
     }
+
+    const sessionBody = JSON.stringify(sessionData);
 
     await context.addInitScript((payload) => {
         const sessionStr = JSON.stringify(payload);
