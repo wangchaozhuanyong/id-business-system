@@ -1138,7 +1138,7 @@ try {
     .getByRole('button', { name: '关闭', exact: true })
     .click();
   await navigate(page, '/v2/online-recharge/cards');
-  assert.equal(await page.getByRole('button', { name: '查看卡号', exact: true }).count(), 0);
+  assert.equal(await page.getByRole('button', { name: '复制卡号', exact: true }).count(), 0);
   assert.equal(await page.getByRole('button', { name: '导入银行卡', exact: true }).count(), 0);
   report.lifecycle.push({
     case: 'reader-details-without-manage-or-sensitive-actions',

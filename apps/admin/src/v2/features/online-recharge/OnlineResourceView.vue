@@ -160,6 +160,8 @@
                 v-if="primaryAction && allowedForRow(primaryAction, row)"
                 size="small"
                 variant="ghost"
+                :disabled="supportsDirectCopy && busy"
+                :loading="supportsDirectCopy && copyingRowId === row.id"
                 @click="openAction(primaryAction, row)"
                 >{{ primaryAction.label }}</AppButton
               ><el-dropdown
@@ -267,6 +269,7 @@ import '@/v2/styles/records.css';
 import './online-recharge.css';
 const props = defineProps<{ descriptor: { section: OnlineSection; moduleKey: V2ModuleKey } }>();
 const section = props.descriptor.section;
+const supportsDirectCopy = section === 'cdks' || section === 'cards';
 const filters = useV2SessionDraft(`online-recharge/${section}/filters`, () =>
   ref<OnlineQuery>({
     page: 1,
@@ -354,6 +357,8 @@ const resultOpen = ref(false);
 const result = ref<Record<string, unknown>>({});
 const feedback = ref('');
 const feedbackError = ref(false);
+const copyingRowId = ref('');
+let active = true;
 watch(resultOpen, (open) => {
   if (!open) result.value = {};
 });
@@ -364,7 +369,10 @@ const stopIdentityWatch = sessionCoordinator.subscribeIdentityChange(() => {
   result.value = {};
   feedback.value = '';
 });
-onBeforeUnmount(stopIdentityWatch);
+onBeforeUnmount(() => {
+  active = false;
+  stopIdentityWatch();
+});
 function changePage(value: number) {
   if (query.data.value?.total === 0 || !query.hasCurrentData.value) return;
   filters.value.page = value;
@@ -388,6 +396,11 @@ function remainingForRow(row: OnlineRow) {
   return remainingActions.value.filter((action) => allowedForRow(action, row));
 }
 function openAction(action: OnlineAction, row?: OnlineRow) {
+  if (supportsDirectCopy && busy.value) return;
+  if (supportsDirectCopy && action.key === 'reveal' && row) {
+    void copyRowValue(row.id);
+    return;
+  }
   selectedAction.value = action;
   selectedRow.value = row;
   feedback.value = '';
@@ -399,6 +412,53 @@ function openAction(action: OnlineAction, row?: OnlineRow) {
   if (action.fields?.length) drawerOpen.value = true;
   else if (action.confirm) confirmOpen.value = true;
   else void runAction();
+}
+async function copyRowValue(id: string) {
+  if (!supportsDirectCopy || busy.value || !canUseOnlineAction(authStore.user, section, 'reveal'))
+    return;
+  const identity = sessionCoordinator.identityEpoch.value;
+  const isCurrent = () => active && identity === sessionCoordinator.identityEpoch.value;
+  busy.value = true;
+  copyingRowId.value = id;
+  feedback.value = '';
+  feedbackError.value = false;
+  let copied = false;
+  let dispatched = false;
+  try {
+    const value = await onlineApi.action(
+      section,
+      'reveal',
+      section === 'cards' ? { id, reason: '复制卡号' } : { id }
+    );
+    if (!isCurrent()) return;
+    const content = section === 'cards' ? value.number : value.code;
+    if (typeof content !== 'string' || !content.trim())
+      throw new Error(section === 'cards' ? '未取得卡号，请重试' : '未取得兑换码，请重试');
+    await copyOnlineText(content);
+    copied = true;
+    if (!isCurrent()) return;
+    if (section === 'cards') {
+      feedback.value = '卡号已复制';
+      return;
+    }
+    await onlineApi.action('cdks', 'dispatch', { ids: [id] });
+    dispatched = true;
+    if (!isCurrent()) return;
+    feedback.value = '已复制并标记出库';
+    await query.refresh();
+  } catch (cause) {
+    if (!isCurrent()) return;
+    feedbackError.value = true;
+    const prefix = dispatched
+      ? '已复制并标记出库，列表刷新失败：'
+      : copied
+        ? '已复制，标记出库失败：'
+        : '复制失败：';
+    feedback.value = prefix + onlineError(cause);
+  } finally {
+    busy.value = false;
+    copyingRowId.value = '';
+  }
 }
 async function markCopied() {
   if (section !== 'cdks') return;

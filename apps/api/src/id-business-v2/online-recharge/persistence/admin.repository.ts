@@ -492,6 +492,7 @@ export class OnlineRechargeAdminRepository {
     const rows: unknown[] = [];
     for (let page = 1; ; page++) {
       const result = await this.repository.list(section, { ...query, page, pageSize: 100 });
+      if (result.total === undefined) throw new BadRequestException('导出查询无效');
       if (result.total > 100000) throw new BadRequestException('导出超过10万条，请缩小查询范围');
       rows.push(...result.items);
       if (rows.length >= result.total || !result.items.length) return rows;

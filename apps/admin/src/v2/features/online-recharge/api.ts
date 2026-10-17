@@ -1,6 +1,13 @@
 import { http, request } from '@/api/client';
 import { withV2QueryInvalidation } from '@/v2/composables/useV2Query';
-import type { OnlineList, OnlineQuery, OnlineSection, PublicConfig, PublicTask } from './contracts';
+import type {
+  OnlineList,
+  OnlineQuery,
+  OnlineRechargeVoicePage,
+  OnlineSection,
+  PublicConfig,
+  PublicTask
+} from './contracts';
 const base = '/id-business-v2/online-recharge';
 // 保留原接口路径；公司内部入口统一使用后台身份及会话失效处理。
 function internalRequest<T>(path: string, body?: object, signal?: AbortSignal): Promise<T> {
@@ -11,6 +18,11 @@ function internalRequest<T>(path: string, body?: object, signal?: AbortSignal): 
   );
 }
 export const onlineApi = {
+  rechargeAnnouncements(cursor: string, signal?: AbortSignal) {
+    return request<OnlineRechargeVoicePage>(
+      http.get(`${base}/admin/runtime-logs`, { params: { voiceCursor: cursor }, signal })
+    );
+  },
   list(section: OnlineSection, params: OnlineQuery, signal?: AbortSignal) {
     return request<OnlineList>(http.get(`${base}/admin/${section}`, { params, signal }));
   },

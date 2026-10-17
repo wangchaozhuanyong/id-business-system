@@ -709,6 +709,7 @@
 .v2-notification__panel > .app-button,
 .v2-notification__section > .app-button {
   width: 100%;
+  margin-inline: 0;
 }
 
 .v2-notification__approval-actions {
@@ -1481,6 +1482,15 @@ html[data-v2-theme] .v2-unified-table .el-scrollbar__wrap {
 
   .v2-topbar {
     padding: 0 12px;
+  }
+
+  .v2-notification {
+    position: static;
+  }
+
+  .v2-notification__panel {
+    right: 12px;
+    width: min(360px, calc(100% - 24px));
   }
 
   .v2-menu-button {

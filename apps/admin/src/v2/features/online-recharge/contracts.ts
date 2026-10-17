@@ -15,6 +15,17 @@ export type OnlineSection =
   | 'runtime-logs'
   | 'login-logs';
 export type OnlinePlan = 'plus' | 'pro_5x' | 'pro_20x' | 'pro_500';
+export interface OnlineRechargeVoiceEvent {
+  id: string;
+  taskId: string;
+  plan: OnlinePlan;
+  createdAt: string;
+}
+export interface OnlineRechargeVoicePage {
+  items: OnlineRechargeVoiceEvent[];
+  cursor: string;
+  hasMore: boolean;
+}
 export interface OnlineSubscriptionChange {
   kind: 'initial' | 'upgrade';
   sourcePlan: OnlinePlan | 'free' | 'unknown';
