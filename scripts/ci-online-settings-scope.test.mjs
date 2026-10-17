@@ -167,3 +167,23 @@ test('display authorization repair is finite and retains real headed browser che
       .includes('scripts/production-release/online-browser-display-auth-release.test.py')
   );
 });
+
+test('billing, subscription context and progress follow-on repair uses all affected checks', () => {
+  const paths = JSON.parse(
+    readFileSync(
+      new URL('./production-release/online-checkout-retest-contract.json', import.meta.url)
+    )
+  ).sources;
+  const scope = [
+    ...Object.keys(paths),
+    'scripts/production-release/online-checkout-retest-build.py',
+    'scripts/production-release/online-checkout-retest-release.py',
+    'scripts/production-release/online-checkout-retest-contract.json',
+    'scripts/production-release/online-checkout-retest-release.test.py',
+    '.github/workflows/online-checkout-retest-validation.yml'
+  ];
+  assert.equal(isOnlineSettingsOnly(scope), true);
+  for (const part of ['guards', 'api', 'admin', 'online-engine'])
+    assert.ok(onlineSettingsCommands(part, scope).length);
+  assert.equal(isOnlineSettingsOnly([...scope, 'apps/api/src/auth/auth.service.ts']), false);
+});

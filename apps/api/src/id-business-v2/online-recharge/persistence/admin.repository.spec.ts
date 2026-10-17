@@ -5,6 +5,75 @@ import type { OnlineRechargeRepository } from './online-recharge.repository';
 import type { OnlineRechargeSettingsService } from '../settings.service';
 import { OnlineRechargeTasksRepository } from './tasks.repository';
 
+describe('任务进度读取不参加写事务', () => {
+  function progressFixture() {
+    const row = {
+      id: '713d0d18-4e01-4a6f-8084-f196a2980843',
+      operation: 'recharge',
+      message: '',
+      status: 'running',
+      payload: {},
+      result: null
+    };
+    const events = [{ id: 'event-read', taskId: row.id }];
+    const db = {
+      onlineRechargeTask: { findUnique: vi.fn(async () => row) },
+      onlineRechargeEvent: { findMany: vi.fn(async () => events) }
+    };
+    const repository = {
+      read: vi.fn(async (read: (db: unknown) => unknown) => read(db)),
+      // A log/screenshot write can retain its lock without holding a status read.
+      transaction: vi.fn(() => new Promise(() => {}))
+    };
+    const tasks = new OnlineRechargeTasksRepository(
+      repository as never,
+      {} as never,
+      { decrypt: () => '' } as never,
+      {} as never,
+      { summary: async () => null } as never
+    );
+    return { tasks, repository, db, events };
+  }
+  it('有日志及截图写入等待时，轻量读取完成且不读取事件或失效缓存', async () => {
+    const f = progressFixture();
+    void f.repository.transaction();
+    const writes = f.repository.transaction.mock.calls.length;
+    const result = await f.tasks.action(
+      'jobs',
+      'detail',
+      { id: '713d0d18-4e01-4a6f-8084-f196a2980843', includeEvents: false },
+      {} as never
+    );
+    expect(result).toMatchObject({ id: '713d0d18-4e01-4a6f-8084-f196a2980843', status: 'running' });
+    expect(result).not.toHaveProperty('events');
+    expect(f.db.onlineRechargeEvent.findMany).not.toHaveBeenCalled();
+    expect(f.repository.transaction).toHaveBeenCalledTimes(writes);
+  });
+  it('默认兼容完整详情，显式 true 同样返回事件', async () => {
+    const f = progressFixture();
+    for (const input of [
+      { id: '713d0d18-4e01-4a6f-8084-f196a2980843' },
+      { id: '713d0d18-4e01-4a6f-8084-f196a2980843', includeEvents: true }
+    ])
+      expect(await f.tasks.action('jobs', 'detail', input, {} as never)).toMatchObject({
+        events: f.events
+      });
+    expect(f.repository.transaction).not.toHaveBeenCalled();
+  });
+  it('非法日志选项在读取前拒绝', async () => {
+    const f = progressFixture();
+    await expect(
+      f.tasks.action(
+        'jobs',
+        'detail',
+        { id: '713d0d18-4e01-4a6f-8084-f196a2980843', includeEvents: 'false' },
+        {} as never
+      )
+    ).rejects.toThrow('日志读取选项无效');
+    expect(f.repository.read).not.toHaveBeenCalled();
+  });
+});
+
 type Code = { status: OnlineRechargeCodeStatus; deletedAt: Date | null };
 
 function fixture(codes: Code[]) {

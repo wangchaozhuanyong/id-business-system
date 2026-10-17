@@ -11,6 +11,7 @@ import tarfile
 ROOT = Path(__file__).resolve().parents[2]
 HERE = Path(__file__).resolve().parent
 OUT = ROOT / '.deploy/online-checkout'
+CONTRACT_FILE = 'online-checkout-contract.json'
 
 
 def need(ok, code):
@@ -109,7 +110,7 @@ def module_delta(before, after, allowed):
 
 
 def main():
-    raw_contract = (HERE / 'online-checkout-contract.json').read_bytes()
+    raw_contract = (HERE / CONTRACT_FILE).read_bytes()
     c = json.loads(raw_contract)
     need(os.environ.get('GITHUB_ACTIONS') == 'true' and not OUT.exists(), 'NATIVE_BUILD_REQUIRED')
     need(not git('status', '--porcelain', '--untracked-files=no').strip(), 'SOURCE_DIRTY')

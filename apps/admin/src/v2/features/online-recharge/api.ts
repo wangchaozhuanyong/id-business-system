@@ -26,9 +26,9 @@ export const onlineApi = {
       'online-recharge'
     );
   },
-  action(section: OnlineSection, action: string, body: object = {}) {
+  action(section: OnlineSection, action: string, body: object = {}, signal?: AbortSignal) {
     const result = request<Record<string, unknown>>(
-      http.post(`${base}/admin/${section}/${action}`, body)
+      http.post(`${base}/admin/${section}/${action}`, body, ...(signal ? [{ signal }] : []))
     );
     return [
       'detail',

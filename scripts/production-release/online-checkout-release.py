@@ -10,6 +10,7 @@ import urllib.request
 
 BASE = Path('/opt/id-business-v2')
 SCOPE = 'ONLINE_CHECKOUT_FORM_AND_VISIBILITY'
+CONTRACT_FILE = 'online-checkout-contract.json'
 UPDATED = ('api', 'admin', 'online-recharge')
 PRESERVED = ('mysql', 'caddy', 'media-resolver', 'auto-recharge', 'auto-registration')
 
@@ -122,7 +123,7 @@ def smoke(d, target, states, proof, contract, h):
 def release(plan, contract):
     need(plan['mode'] in ('preflight', 'release', 'readback') and re.fullmatch('[a-f0-9]{40}', plan['commit'])
          and re.fullmatch('[a-f0-9]{40}', plan['tree']) and re.fullmatch('[1-9][0-9]*', plan['workflowRunId']), 'IDENTITY_INVALID')
-    need(sha(Path(__file__).with_name('online-checkout-contract.json').read_bytes()) == plan['contractSha256'], 'CONTRACT_CHANGED')
+    need(sha(Path(__file__).with_name(CONTRACT_FILE).read_bytes()) == plan['contractSha256'], 'CONTRACT_CHANGED')
     for name, expected in plan['controlSources'].items():
         need(sha(Path(__file__).with_name(name).read_bytes()) == expected, 'CONTROL_SOURCE_CHANGED')
     h = load('recharge-record-release.py')
@@ -194,7 +195,7 @@ def release(plan, contract):
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_bytes((payload / 'source' / name).read_bytes())
             path.chmod(0o644)
-        for name in [*plan['controlSources'], 'online-checkout-contract.json']:
+        for name in [*plan['controlSources'], CONTRACT_FILE]:
             path = target / 'scripts/production-release' / name
             path.write_bytes(Path(__file__).with_name(name).read_bytes())
         override = json.loads((target / 'compose.release.json').read_bytes())

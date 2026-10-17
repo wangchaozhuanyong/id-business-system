@@ -22,7 +22,15 @@ const settle = async () => {
 function fixture({ heartbeat, progress, initialize = async () => {}, claimedExpiry } = {}) {
   let now = 1800000000000;
   const timers = new Set();
-  const effects = { rpc: [], signals: [], forks: 0, sent: 0, diagnostics: [], releases: 0 };
+  const effects = {
+    rpc: [],
+    signals: [],
+    forks: 0,
+    sent: 0,
+    diagnostics: [],
+    releases: 0,
+    acquired: 0
+  };
   const child = new EventEmitter();
   child.connected = true;
   child.exitCode = null;
@@ -45,7 +53,10 @@ function fixture({ heartbeat, progress, initialize = async () => {}, claimedExpi
     setRuntimeProfileRoot() {},
     isEnabled: () => true,
     initBrowserPool: initialize,
-    acquireSlot: async () => ({ slotId: 1, cdpUrl: 'http://127.0.0.1:1', port: 1 }),
+    acquireSlot: async () => {
+      effects.acquired++;
+      return { slotId: 1, cdpUrl: 'http://127.0.0.1:1', port: 1 };
+    },
     clearTaskContexts: async () => {},
     releaseSlot: () => {
       effects.releases++;
@@ -380,3 +391,22 @@ test('child error clears its maximum execution timer as well as heartbeat timers
   assert.equal(f.effects.rpc.filter((item) => item.method === 'failJob').length, 1);
   assert.equal(f.timerCount(), 0);
 });
+
+for (const [operation, payload] of [
+  ['subscription', {}],
+  ['renewal', { action: 'check' }]
+]) {
+  test(`${operation} read-only query reserves and releases one existing browser slot`, async () => {
+    const f = fixture();
+    f.task.operation = operation;
+    f.task.payload = payload;
+    const running = f.run();
+    await settle();
+    assert.equal(f.effects.acquired, 1);
+    assert.equal(f.effects.forks, 1);
+    f.complete({ ok: true });
+    await running;
+    assert.equal(f.effects.releases, 1);
+    assert.equal(f.effects.rpc.filter((r) => r.method === 'completeJob').length, 1);
+  });
+}

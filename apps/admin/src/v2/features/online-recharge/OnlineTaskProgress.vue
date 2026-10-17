@@ -79,7 +79,11 @@ const labels: Record<string, string> = {
   checkoutUrl: '支付链接',
   error: '查询结果说明'
 };
-const details = computed(() => onlineSubscriptionDetails(props.task?.result));
+const details = computed(() =>
+  onlineSubscriptionDetails(
+    ['queued', 'running'].includes(props.task?.status ?? '') ? undefined : props.task?.result
+  )
+);
 const changeEntries = computed(() =>
   onlineChangeEntries({
     subscriptionChange: props.task?.subscriptionChange

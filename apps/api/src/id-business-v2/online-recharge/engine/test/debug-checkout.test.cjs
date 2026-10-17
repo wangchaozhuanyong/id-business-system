@@ -76,6 +76,7 @@ test('only checkout debug permits an unverified target through the actual index 
         accessToken: 'synthetic-token',
         billingCurrency: 'PHP',
         debugOnly,
+        context: {},
         require: (moduleName) => {
           assert.equal(moduleName, '../confirmation.cjs');
           return {

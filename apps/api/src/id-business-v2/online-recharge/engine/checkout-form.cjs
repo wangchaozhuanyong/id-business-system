@@ -34,6 +34,14 @@ const labels = {
   postal: '邮编',
   state: '州/省'
 };
+const billingIds = {
+  name: ['billingAddress-nameInput'],
+  country: ['billingAddress-countryInput'],
+  line1: ['billingAddress-addressLine1Input', 'billingAddressLine1'],
+  city: ['billingAddress-localityInput'],
+  postal: ['billingAddress-postalCodeInput'],
+  state: ['billingAddress-administrativeAreaInput']
+};
 const normalize = (v) =>
   String(v ?? '')
     .trim()
@@ -79,6 +87,14 @@ function score(meta, key) {
     identity = normalize(`${meta.id} ${meta.name}`),
     description = normalize(`${meta.label} ${meta.placeholder}`);
   const hay = `${ac} ${identity} ${description}`;
+  if (billingIds[key]) {
+    if (
+      /linklegalname|payment-link|\bshipping\b/.test(hay) ||
+      ['contact', 'shipping'].includes(meta.scope)
+    )
+      return 0;
+    if (billingIds[key].includes(meta.id)) return 400;
+  }
   if (/email|phone|password|address-line2|addressline2|optional.*address/.test(hay)) return 0;
   if (key === 'expiry' && /exp-month|exp-year|month|year/.test(ac || identity)) return 0;
   if (
@@ -87,13 +103,21 @@ function score(meta, key) {
   )
     return 0;
   const patterns = rules[key];
-  return patterns.some((p) => p.test(ac))
+  const semantic = patterns.some((p) => p.test(ac))
     ? 100
     : patterns.some((p) => p.test(identity))
       ? 80
       : patterns.some((p) => p.test(description))
         ? 60
         : 0;
+  if (!semantic) return 0;
+  return (
+    semantic +
+    (billingIds[key] && meta.scope === 'billing' ? 200 : 0) +
+    (['country', 'state'].includes(key) && (meta.tag === 'select' || meta.role === 'combobox')
+      ? 10
+      : 0)
+  );
 }
 async function controls(page, deadline) {
   timeout(deadline);
@@ -115,9 +139,40 @@ async function controls(page, deadline) {
                 style.visibility === 'hidden' ||
                 n.disabled ||
                 (n.readOnly && n.getAttribute('role') !== 'combobox') ||
-                n.type === 'hidden'
+                n.type === 'hidden' ||
+                n.closest('[aria-hidden="true"],[inert]')
               )
                 return null;
+              let scope = '',
+                owner = '';
+              for (
+                let parent = n.parentElement;
+                parent && parent !== n.ownerDocument.body;
+                parent = parent.parentElement
+              ) {
+                const heading = parent.querySelector(
+                  ':scope > legend,:scope > h2,:scope > h3,:scope > [role="heading"]'
+                );
+                const label = parent.getAttribute('aria-label') || heading?.textContent || '';
+                const identity = `${parent.id} ${parent.getAttribute('data-testid') || ''} ${label}`;
+                const kind = /billing.?address/i.test(identity)
+                  ? 'billing'
+                  : /shipping|delivery.?address/i.test(identity)
+                    ? 'shipping'
+                    : /(?:^|[\s_-])contact(?:$|[\s_-])|payment-link/i.test(identity)
+                      ? 'contact'
+                      : '';
+                if (!kind) continue;
+                scope = kind;
+                owner = parent.id
+                  ? `[id=${JSON.stringify(parent.id)}]`
+                  : parent.getAttribute('aria-label')
+                    ? `[aria-label=${JSON.stringify(label)}]`
+                    : heading
+                      ? `${parent.tagName.toLowerCase()}:has(> ${heading.tagName.toLowerCase()}:text-is(${JSON.stringify(label)}))`
+                      : '';
+                break;
+              }
               return {
                 index,
                 id: n.id || '',
@@ -138,6 +193,8 @@ async function controls(page, deadline) {
                 ).slice(0, 160),
                 tag: n.tagName.toLowerCase(),
                 role: n.getAttribute('role'),
+                scope,
+                owner,
                 readOnly: Boolean(n.readOnly),
                 required: n.required || n.getAttribute('aria-required') === 'true'
               };
@@ -147,6 +204,7 @@ async function controls(page, deadline) {
         deadline
       );
       for (const meta of metas) {
+        const root = meta.owner ? frame.locator(meta.owner) : frame;
         const attribute = meta.id
           ? ['id', meta.id]
           : meta.ac
@@ -155,11 +213,13 @@ async function controls(page, deadline) {
               ? ['name', meta.name]
               : null;
         const el = attribute
-          ? frame.locator(`${meta.tag}[${attribute[0]}=${JSON.stringify(attribute[1])}]:visible`)
+          ? root.locator(
+              `${meta.tag}[${attribute[0]}=${JSON.stringify(attribute[1])}]:visible:not(:disabled,[inert],[inert] *,[aria-hidden="true"],[aria-hidden="true"] *,[readonly]:not([role="combobox"]))`
+            )
           : meta.label
-            ? frame.getByLabel(meta.label, { exact: true })
+            ? root.getByLabel(meta.label, { exact: true })
             : meta.placeholder
-              ? frame.getByPlaceholder(meta.placeholder, { exact: true })
+              ? root.getByPlaceholder(meta.placeholder, { exact: true })
               : null;
         if (el) result.push({ frame, el, meta });
       }
@@ -175,7 +235,10 @@ async function locate(page, key, deadline) {
     .filter((item) => item.score > 0);
   const highest = Math.max(0, ...candidates.map((item) => item.score));
   const matches = candidates.filter((item) => item.score === highest);
-  if (matches.length > 1) throw new Error(`${labels[key]}有多个可见候选，未继续填写`);
+  if (matches.length > 1)
+    throw Object.assign(new Error(`${labels[key]}有多个可见候选，未继续填写`), {
+      failedFields: [key]
+    });
   return matches[0] || null;
 }
 async function value(item, deadline) {
@@ -308,6 +371,7 @@ async function guarded(page, action, deadline) {
     return {
       ok: false,
       error: /多个|选项|总时限|资料/.test(e.message) ? e.message : '控件重载或校验失败，未完成填表',
+      missing: e.failedFields || [],
       controls: await diagnostic(page)
     };
   }

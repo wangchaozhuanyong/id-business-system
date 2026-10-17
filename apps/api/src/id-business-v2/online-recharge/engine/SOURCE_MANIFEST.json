@@ -54,9 +54,9 @@
     {
       "path": "confirmation.cjs",
       "originalSha256": null,
-      "adaptedSha256": "b2679aa7b6c7f1ed189347471ef9ee892153d8ace22c6f2d85db35e97631a6f0",
+      "adaptedSha256": "b07e4465f4b8170306d42b40fdaee1daceea5413d124ed2dae671d30dcf61423",
       "changed": true,
-      "reason": "Carry verified expiry into subscription classification and require plan snapshot currency; preserve original upgrade and Pro500 identity guards."
+      "reason": "Carry verified expiry into subscription classification and require plan snapshot currency; preserve original upgrade and Pro500 identity guards.; 2026-10-17 controlled checkout form, subscription context and progress repair."
     },
     {
       "path": "credential-client.cjs",
@@ -159,9 +159,9 @@
     {
       "path": "task-runner.cjs",
       "originalSha256": null,
-      "adaptedSha256": "315a9bcc23c4d0befdbd5c18aecd978ad1eb90c8a1349916f26fca44ae41ec40",
+      "adaptedSha256": "4f3a0a222448cc4d634efb7008ce9cf95e92cfacec63aad3352d9afc01c74477",
       "changed": true,
-      "reason": "Pass task-frozen payment region and plan expected currency into the isolated task subprocess; clear expected currency at exit."
+      "reason": "Pass task-frozen payment region and plan expected currency into the isolated task subprocess; clear expected currency at exit.; 2026-10-17 controlled checkout form, subscription context and progress repair."
     },
     {
       "path": "test/checkout-outcomes.test.cjs",
@@ -180,9 +180,9 @@
     {
       "path": "test/debug-checkout.test.cjs",
       "originalSha256": null,
-      "adaptedSha256": "02278f50e7421ffeeb8c43fa29addd640952d755cd4c78bdc1397baa82c8db8c",
+      "adaptedSha256": "dd967ac85c2e29f50456d05bdca7481a6d78cc078124145eb8f06d15ae772d0f",
       "changed": true,
-      "reason": "Allow controlled debug to observe current checkout region without authorizing payment; defer exact tier selection only for a unique empty Pro card, verify tier at checkout and retain all real payment gates."
+      "reason": "Allow controlled debug to observe current checkout region without authorizing payment; defer exact tier selection only for a unique empty Pro card, verify tier at checkout and retain all real payment gates.; 2026-10-17 controlled checkout form, subscription context and progress repair."
     },
     {
       "path": "test/dispatch.test.cjs",
@@ -271,9 +271,9 @@
     {
       "path": "test/renewal-state.test.cjs",
       "originalSha256": null,
-      "adaptedSha256": "fb5cb7185027ae1742adf77feacc5e9c4be53f01890f31a776b12db4ecf99efa",
+      "adaptedSha256": "d7b40d44e9ec77e534c6ba821dcf0e3e27fccbf93601438522b2e3fac2d150ad",
       "changed": true,
-      "reason": "2026-10-15 Pro档位及升级适配：精确目标、官网报价、单次提交、实际付款方式与原单证据保护；不猜Pro500上游ID。保留既有必要适配。"
+      "reason": "2026-10-15 Pro档位及升级适配：精确目标、官网报价、单次提交、实际付款方式与原单证据保护；不猜Pro500上游ID。保留既有必要适配。; 2026-10-17 controlled checkout form, subscription context and progress repair."
     },
     {
       "path": "test/rpc-response.test.cjs",
@@ -320,9 +320,9 @@
     {
       "path": "test/worker-heartbeat.test.cjs",
       "originalSha256": null,
-      "adaptedSha256": "8aa96a255496f10cb607ca3ef6537855c78465e6e117e4fb26bea1801d46aeed",
+      "adaptedSha256": "6e1dba962a3631813b0043ecc1736221f960ebe897b951db59fa63710f2fae62",
       "changed": true,
-      "reason": "Keep transient heartbeat failures within the server-confirmed lease; stop expired ownership before execution or completion, with bounded child shutdown and secret-free diagnostics."
+      "reason": "Keep transient heartbeat failures within the server-confirmed lease; stop expired ownership before execution or completion, with bounded child shutdown and secret-free diagnostics.; 2026-10-17 controlled checkout form, subscription context and progress repair."
     },
     {
       "path": "third-party.cjs",
@@ -446,9 +446,9 @@
     {
       "path": "upstream/index.js",
       "originalSha256": "1694958e105ebe962494d3c88bbf2f0c6b22e49028e46cfc77801e2c9f814855",
-      "adaptedSha256": "eaaf4bb6b12b4568939c74f168e30883fa5dc4506228dc64542d837d9931a04f",
+      "adaptedSha256": "8f9405544ecaaf9c4688169b8a7a4f4d3595659039542dcce79a7e52dbf1e047",
       "changed": true,
-      "reason": "Verify the unique canonical Pro CTA independently of its top-half container; require a visible unique Pro card for deferred debug, exact checkout tier and all real payment guards. Keep debug-only region evidence explicit. Authorized administrator business visibility: preserve operational data and mask credentials only."
+      "reason": "Verify the unique canonical Pro CTA independently of its top-half container; require a visible unique Pro card for deferred debug, exact checkout tier and all real payment guards. Keep debug-only region evidence explicit. Authorized administrator business visibility: preserve operational data and mask credentials only.; 2026-10-17 controlled checkout form, subscription context and progress repair."
     },
     {
       "path": "upstream/mysql-store.js",
@@ -474,9 +474,9 @@
     {
       "path": "upstream/payment-retry.js",
       "originalSha256": "41d4f3fad99d2f0b8036fa7da597bd251134361232fe96b4515a1d2b5bd80597",
-      "adaptedSha256": "23c031f0c2ec54dd4be8216c2766b473034ea33beddf2cf2b72348edfda2b92e",
+      "adaptedSha256": "181d1e22d61dc085333689ab4e49fd04bbe489446abb064544ca47fff0639d8b",
       "changed": true,
-      "reason": "2026-10-15 Pro档位及升级适配：精确目标、官网报价、单次提交、实际付款方式与原单证据保护；不猜Pro500上游ID。保留既有必要适配。"
+      "reason": "2026-10-15 Pro档位及升级适配：精确目标、官网报价、单次提交、实际付款方式与原单证据保护；不猜Pro500上游ID。保留既有必要适配。; 2026-10-17 controlled checkout form, subscription context and progress repair."
     },
     {
       "path": "upstream/playwright-proxy.js",
@@ -516,23 +516,23 @@
     {
       "path": "upstream/session-auth.js",
       "originalSha256": "0c3aeaba4e60f77746e399c2d5c1037b3632f7430b5559c43f81e2c413c2deca",
-      "adaptedSha256": "0c3aeaba4e60f77746e399c2d5c1037b3632f7430b5559c43f81e2c413c2deca",
-      "changed": false,
-      "reason": "冻结原版保持不变。"
+      "adaptedSha256": "b2751edead17ea24a80b8214c5b3873ed2ccc5f19433e2beb350efa4c9908bb3",
+      "changed": true,
+      "reason": "冻结原版保持不变。; 2026-10-17 controlled checkout form, subscription context and progress repair."
     },
     {
       "path": "upstream/stripe-payment.js",
       "originalSha256": "007a6ae1abb633fd283e48f4ceac02bf3d2e2fc30aaca87520565b34eb29743e",
-      "adaptedSha256": "f31b714600c81774a91b0dc855a89148a58feccb31d7b8dc3f8de520ab20d7ac",
+      "adaptedSha256": "30fbfc3663dd24c7d8e17286b288814c493e7bf6256c4c5dad6d3555d685808a",
       "changed": true,
-      "reason": "Read exact whole-peso CLP totals, wait for official Chilean tax total, preserve address country and existing final payment gates."
+      "reason": "Read exact whole-peso CLP totals, wait for official Chilean tax total, preserve address country and existing final payment gates.; 2026-10-17 controlled checkout form, subscription context and progress repair."
     },
     {
       "path": "upstream/subscription-check.js",
       "originalSha256": "e1f8f285a318389c055c0438f1c143e01023bdc42c619c6ea9eb7abe7238a11e",
-      "adaptedSha256": "3b3c765bf171286fd639c016106e1b61b8f6fb12dbc6a732496d9e6c036e414b",
+      "adaptedSha256": "a8311461be409d00bc2deb1d1feae9e8fb79f832ccc8268d4e960996481b7d8c",
       "changed": true,
-      "reason": "2026-10-15 Pro档位及升级适配：精确目标、官网报价、单次提交、实际付款方式与原单证据保护；不猜Pro500上游ID。保留既有必要适配。"
+      "reason": "2026-10-15 Pro档位及升级适配：精确目标、官网报价、单次提交、实际付款方式与原单证据保护；不猜Pro500上游ID。保留既有必要适配。; 2026-10-17 controlled checkout form, subscription context and progress repair."
     },
     {
       "path": "upstream/tax-free-address.js",
@@ -593,16 +593,16 @@
     {
       "path": "worker.cjs",
       "originalSha256": null,
-      "adaptedSha256": "0260aabc3444d53b51cd2a56bbc29ea40c33d9968eac73c7d6ce38cb2990a9bc",
+      "adaptedSha256": "5a05d9838f47a4e69cd9fd1f5658a5d58729094ee1e5cf73b1f6c4a9972281f2",
       "changed": true,
-      "reason": "Forward the existing private XAUTHORITY file path with DISPLAY to headed task children; retain the restricted environment allowlist."
+      "reason": "Forward the existing private XAUTHORITY file path with DISPLAY to headed task children; retain the restricted environment allowlist.; 2026-10-17 controlled checkout form, subscription context and progress repair."
     },
     {
       "path": "checkout-form.cjs",
       "originalSha256": null,
-      "adaptedSha256": "76a1469ab8dc1e378ae55bbab756bd96e463d492fb1275d79151510ef234fdaf",
+      "adaptedSha256": "5cae5a9f846a9056ecedd7ae5e040b72717b137c2324257fcbfd86b897e66416",
       "changed": true,
-      "reason": "Semantic frame-safe checkout form readback and immutable per-task payment cap."
+      "reason": "Semantic frame-safe checkout form readback and immutable per-task payment cap.; 2026-10-17 controlled checkout form, subscription context and progress repair."
     },
     {
       "path": "payment-limit.cjs",
@@ -614,9 +614,9 @@
     {
       "path": "test/checkout-form.test.cjs",
       "originalSha256": null,
-      "adaptedSha256": "3d61350e1590753357b3dfe94b1a0ad928ccefe2140fcb3f4bc7f5745e71c0c4",
+      "adaptedSha256": "545241f33c459dddedf2fa081addcf907e8854ad70713cfcfba2754f1ea8ea25",
       "changed": true,
-      "reason": "Real Chromium regression coverage for semantic embedded fields, readback, deadline and payment limits."
+      "reason": "Real Chromium regression coverage for semantic embedded fields, readback, deadline and payment limits.; 2026-10-17 controlled checkout form, subscription context and progress repair."
     }
   ],
   "dependencySecurityPatches": [

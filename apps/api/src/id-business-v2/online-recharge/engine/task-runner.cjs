@@ -26,14 +26,19 @@ async function execute(task, cfg) {
     case 'debug':
       return require('./upstream/index').run({ paymentLimit: payload.paymentLimit });
     case 'subscription':
-      if (payload.recheckTaskId) return require('./confirmation.cjs').recheck(task, cfg);
+      if (payload.recheckTaskId)
+        return require('./confirmation.cjs').recheck(task, cfg, { sessionRaw: task.session });
       return require('./upstream/subscription-check').querySubscriptionBySession(token, {
-        timezoneOffsetMin: payload.timezoneOffsetMin ?? 480
+        timezoneOffsetMin: payload.timezoneOffsetMin ?? 480,
+        sessionRaw: task.session,
+        allowBrowserFallback: true
       });
     case 'renewal': {
       if (payload.action === 'check')
         return require('./upstream/subscription-check').querySubscriptionBySession(token, {
-          timezoneOffsetMin: payload.timezoneOffsetMin ?? 480
+          timezoneOffsetMin: payload.timezoneOffsetMin ?? 480,
+          sessionRaw: task.session,
+          allowBrowserFallback: true
         });
       const method = payload.action === 'enable' ? 'resumeAutoRenew' : 'cancelAutoRenew';
       const result = await require('./upstream/subscription-check')[method](token, {
