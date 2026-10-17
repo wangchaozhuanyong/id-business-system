@@ -16,6 +16,7 @@ const applicationPaths = Object.freeze([
   'apps/api/src/id-business-v2/online-recharge/engine/upstream/verification-runtime.js',
   'apps/api/src/id-business-v2/online-recharge/online-recharge.module.ts',
   'apps/api/src/id-business-v2/online-recharge/persistence/worker-rpc.repository.spec.ts',
+  'apps/api/src/id-business-v2/online-recharge/persistence/tasks.manual-closure.spec.ts',
   'apps/api/src/id-business-v2/online-recharge/proxy-country.spec.ts',
   'apps/api/src/id-business-v2/online-recharge/reconciliation.service.ts',
   'apps/api/src/id-business-v2/online-recharge/reconciliation.spec.ts',
@@ -100,6 +101,11 @@ const applicationPaths = Object.freeze([
   'apps/api/src/id-business-v2/online-recharge/plan-region.ts'
 ]);
 const controlPaths = Object.freeze([
+  '.github/workflows/online-legacy-close-validation.yml',
+  'scripts/production-release/online-legacy-close-build.py',
+  'scripts/production-release/online-legacy-close-contract.json',
+  'scripts/production-release/online-legacy-close-release.py',
+  'scripts/production-release/online-legacy-close-release.test.py',
   '.github/workflows/online-unattended-validation.yml',
   'scripts/production-release/online-unattended-build.py',
   'scripts/production-release/online-unattended-contract.json',
@@ -186,8 +192,29 @@ export function isOnlineSettingsTestsOnly(paths) {
     paths.every((path) => testsOnlyRequired.includes(path) || testsOnlyControls.includes(path))
   );
 }
+const legacyCloseRequired = [
+  'persistence/tasks.repository.ts',
+  'persistence/tasks.manual-closure.spec.ts',
+  'mysql.integration.spec.ts'
+].map((name) => 'apps/api/src/id-business-v2/online-recharge/' + name);
+const legacyCloseControls = [
+  '.github/workflows/online-legacy-close-validation.yml',
+  ...['build.py', 'contract.json', 'release.py', 'release.test.py'].map(
+    (name) => 'scripts/production-release/online-legacy-close-' + name
+  ),
+  ...testsOnlyControls,
+  'docs/ONLINE_RECHARGE.md',
+  'docs/V2_TASKS.md'
+];
+export function isOnlineLegacyCloseOnly(paths) {
+  return (
+    new Set(paths).size === paths.length &&
+    legacyCloseRequired.every((path) => paths.includes(path)) &&
+    paths.every((path) => legacyCloseRequired.includes(path) || legacyCloseControls.includes(path))
+  );
+}
 export function isOnlineSettingsOnly(paths) {
-  if (isOnlineSettingsTestsOnly(paths)) return true;
+  if (isOnlineSettingsTestsOnly(paths) || isOnlineLegacyCloseOnly(paths)) return true;
   const databaseTest = 'apps/api/src/id-business-v2/online-recharge/mysql.integration.spec.ts';
   const fixtureRepair =
     paths.includes(databaseTest) &&
@@ -228,6 +255,7 @@ export const onlineSettingsParts = Object.freeze(['guards', 'api', 'admin', 'onl
 export function onlineSettingsCommands(part, paths) {
   const controlsOnly = isOnlineSettingsControlsOnly(paths);
   const testsOnly = isOnlineSettingsTestsOnly(paths);
+  const legacyClose = isOnlineLegacyCloseOnly(paths);
   if (!isOnlineSettingsOnly(paths) && !controlsOnly)
     throw new Error('Unsupported online settings scope');
   const npm = (...args) => ['npm', ...args];
@@ -251,6 +279,18 @@ export function onlineSettingsCommands(part, paths) {
         'scripts/ci-change-scope.test.mjs'
       ]
     ];
+    if (legacyClose)
+      return [
+        ...controls,
+        ['python3', '-B', 'scripts/production-release/online-legacy-close-release.test.py'],
+        ...[
+          'check:v2-module-architecture',
+          'check:v2-isolation',
+          'check:v2-prisma-runtime-boundary',
+          'check:v2-concurrency-standard',
+          'check:v2-decimal-standard'
+        ].map((name) => npm('run', name))
+      ];
     if (testsOnly)
       return [
         ...controls,
@@ -287,6 +327,9 @@ export function onlineSettingsCommands(part, paths) {
       ...controls,
       ['python3', '-B', 'scripts/production-release/online-settings-release.test.py'],
       ['python3', '-B', 'scripts/production-release/online-unattended-release.test.py'],
+      ...(paths.some((path) => path.includes('online-legacy-close-'))
+        ? [['python3', '-B', 'scripts/production-release/online-legacy-close-release.test.py']]
+        : []),
       ...(paths.some((path) => path.includes('online-checkout-'))
         ? [['python3', '-B', 'scripts/production-release/online-checkout-release.test.py']]
         : []),
@@ -324,6 +367,23 @@ export function onlineSettingsCommands(part, paths) {
   if (controlsOnly) throw new Error('Unsupported controls-only check');
   if (testsOnly && ['api', 'admin'].includes(part)) throw new Error('Unsupported tests-only check');
   const shared = npm('run', 'build', '--workspace', '@apple-business/shared');
+  if (legacyClose) {
+    if (part !== 'api') throw new Error('Unsupported legacy closure check');
+    return [
+      npm('run', 'prisma:mysql:generate'),
+      shared,
+      npm('run', 'typecheck', '--workspace', '@apple-business/api'),
+      npm(
+        'run',
+        'test',
+        '--workspace',
+        '@apple-business/api',
+        '--',
+        'src/id-business-v2/online-recharge'
+      ),
+      npm('run', 'build', '--workspace', '@apple-business/api')
+    ];
+  }
   if (part === 'api')
     return [
       npm('run', 'prisma:mysql:generate'),

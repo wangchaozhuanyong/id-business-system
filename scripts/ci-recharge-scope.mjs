@@ -33,6 +33,7 @@ import {
   isOnlineSettingsOnly,
   isOnlineSettingsControlsOnly,
   isOnlineSettingsTestsOnly,
+  isOnlineLegacyCloseOnly,
   onlineSettingsParts
 } from './ci-online-settings-scope.mjs';
 import { isProxyResultIdentityOnly } from './ci-proxy-result-identity-scope.mjs';
@@ -2154,6 +2155,7 @@ export function selectedParts(paths, grantHelperSnapshot, context) {
   if (isChatgptSalesOnly(paths)) return [...chatgptSalesParts];
   if (isSharedBankCardControlsOnly(paths)) return ['guards'];
   if (isSharedBankCardOnly(paths)) return [...sharedBankCardParts];
+  if (isOnlineLegacyCloseOnly(paths)) return ['guards', 'api'];
   if (isOnlineSettingsTestsOnly(paths)) return ['guards', 'online-engine'];
   if (isOnlineSettingsControlsOnly(paths)) return ['guards'];
   if (isOnlineSettingsOnly(paths)) return [...onlineSettingsParts];

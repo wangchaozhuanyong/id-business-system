@@ -1,0 +1,60 @@
+name: Online Legacy Closure Validation
+
+on:
+  workflow_dispatch:
+    inputs:
+      commit:
+        description: Exact reviewed main commit
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: id-business-v2-production-release
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    if: github.ref == 'refs/heads/main' && inputs.commit == github.sha
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    services:
+      mysql:
+        image: mysql:8.4@sha256:b3b90af2a6552ae30c266fdb7d5dd55f3afb72404bb78d37fe8a23eb857fd3fb
+        env:
+          MYSQL_ROOT_PASSWORD: closure-ci-fixture
+          MYSQL_DATABASE: id_business_v2_online_recharge_fixture
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -pclosure-ci-fixture"
+          --health-interval=5s --health-timeout=5s --health-retries=24
+    env:
+      NODE_ENV: test
+      DATABASE_URL: mysql://root:closure-ci-fixture@127.0.0.1:3306/id_business_v2_online_recharge_fixture
+      FIELD_ENCRYPTION_KEY: synthetic-closure-ci-encryption
+      HASH_SECRET: synthetic-closure-ci-index
+      ONLINE_RECHARGE_WORKER_KEY: synthetic-closure-ci-worker-key-32-characters
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
+        with:
+          node-version: 24
+      - name: Verify finite API-only publication controls
+        run: python3 -B scripts/production-release/online-legacy-close-release.test.py
+      - name: Reproduce published API and verify the isolated closure transaction
+        run: python3 -B scripts/production-release/online-legacy-close-build.py
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: online-legacy-close-${{ github.sha }}-${{ github.run_attempt }}
+          path: |
+            .deploy/online-legacy-close/online-legacy-close-artifact.tar.gz
+            .deploy/online-legacy-close/artifact-sha256.txt
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 30
