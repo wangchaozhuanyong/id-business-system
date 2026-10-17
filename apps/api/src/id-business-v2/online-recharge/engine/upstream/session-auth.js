@@ -14,6 +14,29 @@ const {
     buildSessionNotLoggedInError
 } = require('./auth-page-detect');
 
+const BOOTSTRAP_REASONS = new Set([
+    'input_missing', 'identity_missing', 'login_redirect', 'visible_login_content',
+    'visible_login_controls', 'login_not_confirmed', 'navigation_failed',
+    'verification_failed', 'page_closed', 'runtime_failed'
+]);
+const BOOTSTRAP_FLAGS = [
+    'authApiVerified', 'visibleLogin', 'loggedInUi', 'redirectDetected', 'challengeDetected', 'pageClosed'
+];
+function safeBootstrapDiagnostics(value) {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+    const result = {};
+    if (BOOTSTRAP_REASONS.has(value.reason)) result.reason = value.reason;
+    for (const key of BOOTSTRAP_FLAGS) {
+        if (typeof value[key] === 'boolean') result[key] = value[key];
+    }
+    return Object.keys(result).length ? result : undefined;
+}
+function sessionNotConfirmed(message, reason, diagnostics = {}) {
+    const bootstrapDiagnostics = safeBootstrapDiagnostics({ ...diagnostics, reason });
+    console.warn('[Session] 登录状态尚未确认', { code: 'SESSION_NOT_CONFIRMED', bootstrapDiagnostics });
+    return Object.assign(new Error(message), { code: 'SESSION_NOT_CONFIRMED', bootstrapDiagnostics });
+}
+
 function decodeJwtPayload(token) {
     const parts = String(token || '').split('.');
     if (parts.length !== 3) {
@@ -550,17 +573,23 @@ function resolveSessionInput(raw) {
     };
 }
 
-async function assertChatGptLoggedIn(page, label = '页面') {
+async function assertChatGptLoggedIn(page, label = '页面', diagnostics = {}) {
     const url = page.url();
     if (isLoginRedirectUrl(url)) {
-        throw new Error(`Session 未生效：${label} 跳转到 Google/登录页 (${url.slice(0, 80)})`);
+        throw sessionNotConfirmed(`尚未在${label}确认登录，已停止后续操作`,
+            'login_redirect', { ...diagnostics, redirectDetected: true });
+    }
+    if (await hasVisibleLoginChrome(page)) {
+        throw sessionNotConfirmed(`尚未在${label}确认登录，页面仍显示登录控件`,
+            'visible_login_controls', { ...diagnostics, visibleLogin: true });
     }
     if (await isLoginPageContent(page)) {
-        throw new Error(`Session 未生效：${label} 显示 Google 登录界面，请粘贴完整 Session JSON`);
+        throw sessionNotConfirmed(`尚未在${label}确认登录，页面仍显示登录内容`,
+            'visible_login_content', diagnostics);
     }
 }
 
-function attachLoginRedirectGuard(page) {
+function attachLoginRedirectGuard(page, onLoginRedirect) {
     page.on('framenavigated', async (frame) => {
         if (frame !== page.mainFrame() || page.isClosed()) {
             return;
@@ -570,10 +599,11 @@ function attachLoginRedirectGuard(page) {
         if (isCheckoutPageUrl(current) || isCheckoutPageUrl(url)) {
             return;
         }
+        if (isLoginRedirectUrl(url)) onLoginRedirect?.();
         if (!isHardLoginRedirectUrl(url)) {
             return;
         }
-        console.warn(`[Warn] 检测到登录页跳转，正在拉回 ChatGPT: ${url.slice(0, 80)}`);
+        console.warn('[Warn] 检测到登录页跳转，正在拉回 ChatGPT');
         await page.goto(`${CHATGPT_ORIGIN}/`, {
             waitUntil: 'domcontentloaded',
             timeout: 60000
@@ -733,88 +763,129 @@ function setupChatGptSessionAuth(context, accessToken) {
 async function bootstrapChatGptSession(page, sessionRaw, options = {}) {
     const signal = options.signal;
     const deadlineAt = Number.isFinite(options.deadlineAt) ? options.deadlineAt : performance.now() + 180000;
+    const diagnostics = {
+        reason: 'runtime_failed', authApiVerified: options.cookieVerified === true,
+        visibleLogin: false, loggedInUi: false, redirectDetected: false,
+        challengeDetected: false, pageClosed: false
+    };
     const remaining = (cap) => {
         signal?.throwIfAborted();
         const value = Math.min(cap, Math.floor(deadlineAt - performance.now()));
         if (value <= 0) throw Object.assign(new Error('登录核验超时'), { code: 'NETWORK_TIMEOUT' });
         return value;
     };
-    const resolved = resolveSessionInput(sessionRaw);
-    if (!resolved?.accessToken) {
-        throw new Error('缺少 Session：请粘贴完整 Session JSON');
-    }
+    try {
+        const resolved = resolveSessionInput(sessionRaw);
+        if (!resolved?.accessToken) {
+            throw sessionNotConfirmed('缺少 Session：请提供完整会话资料', 'input_missing', diagnostics);
+        }
 
-    const sessionData = options.sessionData || resolved.sessionData;
-    const email = sessionData?.user?.email || extractProfileFromToken(resolved.accessToken).email || '';
+        const sessionData = options.sessionData || resolved.sessionData;
+        const email = sessionData?.user?.email || extractProfileFromToken(resolved.accessToken).email || '';
 
-    if (!email && !sessionData?.user?.id) {
-        throw new Error('Session 无效：JSON 中缺少 user 信息，请从 chatgpt.com/api/auth/session 复制完整内容');
-    }
+        if (!email && !sessionData?.user?.id) {
+            throw sessionNotConfirmed('会话资料缺少账号信息，尚未确认登录', 'identity_missing', diagnostics);
+        }
 
-    console.log('🔐 [步骤] 正在使用 Session 登录 ChatGPT...');
-    attachLoginRedirectGuard(page);
+        console.log('🔐 [步骤] 正在使用 Session 登录 ChatGPT...');
+        attachLoginRedirectGuard(page, () => { diagnostics.redirectDetected = true; });
 
-    await page.goto(`${CHATGPT_ORIGIN}/`, {
-        waitUntil: 'domcontentloaded',
-        timeout: remaining(90000)
-    });
-    await page.waitForTimeout(remaining(2500));
-
-    const { clearHumanVerification, isBlockingHumanVerificationVisible } = require('./human-verification');
-    if (options.manualVerification === true && await isBlockingHumanVerificationVisible(page))
-        throw Object.assign(new Error('官网需要人工验证'), { code: 'HUMAN_VERIFICATION_REQUIRED' });
-    const captchaResult = options.manualVerification === true ? { cleared: true } : await clearHumanVerification(page, {
-        phase: 'session-bootstrap',
-        maxWaitMs: remaining(Number(process.env.CAPTCHA_CLEAR_TIMEOUT_MS || 180000)),
-        deadlineAt,
-        signal,
-        maxBypassRounds: 6
-    });
-    if (!captchaResult.cleared) {
-        throw Object.assign(new Error('官网验证未通过，登录核验未完成'), {
-            code: captchaResult.code || 'HUMAN_VERIFICATION_REQUIRED',
-            diagnostics: captchaResult.diagnostics
+        diagnostics.reason = 'navigation_failed';
+        await page.goto(`${CHATGPT_ORIGIN}/`, {
+            waitUntil: 'domcontentloaded',
+            timeout: remaining(90000)
         });
-    }
+        await page.waitForTimeout(remaining(2500));
 
-    if (await hasVisibleLoginChrome(page)) {
-        await page.reload({ waitUntil: 'domcontentloaded', timeout: remaining(90000) }).catch(() => {});
-        await page.waitForTimeout(remaining(2000));
-    }
+        diagnostics.reason = 'verification_failed';
+        const { clearHumanVerification, isBlockingHumanVerificationVisible } = require('./human-verification');
+        diagnostics.challengeDetected = await isBlockingHumanVerificationVisible(page);
+        if (options.manualVerification === true && diagnostics.challengeDetected)
+            throw Object.assign(new Error('官网需要人工验证'), { code: 'HUMAN_VERIFICATION_REQUIRED' });
+        const captchaResult = options.manualVerification === true ? { cleared: true } : await clearHumanVerification(page, {
+            phase: 'session-bootstrap',
+            maxWaitMs: remaining(Number(process.env.CAPTCHA_CLEAR_TIMEOUT_MS || 180000)),
+            deadlineAt,
+            signal,
+            maxBypassRounds: 6
+        });
+        if (!captchaResult.cleared) {
+            throw Object.assign(new Error('官网验证未通过，登录核验未完成'), {
+                code: captchaResult.code || 'HUMAN_VERIFICATION_REQUIRED',
+                diagnostics: captchaResult.diagnostics
+            });
+        }
 
-    await assertChatGptLoggedIn(page, '首页');
+        diagnostics.reason = 'login_not_confirmed';
+        diagnostics.visibleLogin = await hasVisibleLoginChrome(page);
+        if (diagnostics.visibleLogin) {
+            await page.reload({ waitUntil: 'domcontentloaded', timeout: remaining(90000) }).catch(() => {});
+            await page.waitForTimeout(remaining(2000));
+        }
 
-    const cookieVerified = options.cookieVerified === true;
-    const uiReady = await waitForLoggedInChatUi(page, remaining(cookieVerified ? 12000 : 8000));
-    const apiReady = cookieVerified ? await hasLoggedInSessionApi(page) : false;
-    remaining(1);
+        diagnostics.visibleLogin = await hasVisibleLoginChrome(page);
+        diagnostics.loggedInUi = await hasLoggedInChatUi(page);
+        await assertChatGptLoggedIn(page, '首页', diagnostics);
 
-    if (await hasVisibleLoginChrome(page)) {
-        throw new Error(buildSessionNotLoggedInError('ChatGPT 首页'));
-    }
-    if (!uiReady && !apiReady) {
-        throw new Error(buildSessionNotLoggedInError('ChatGPT 首页'));
-    }
-    if (!uiReady && apiReady) {
-        console.log('[Session] 首页 UI 探针未命中，但 /api/auth/session 已确认登录，继续流程');
-    }
+        const cookieVerified = options.cookieVerified === true;
+        const uiReady = diagnostics.loggedInUi || await waitForLoggedInChatUi(page, remaining(cookieVerified ? 12000 : 8000));
+        diagnostics.loggedInUi = uiReady;
+        const apiReady = cookieVerified ? await hasLoggedInSessionApi(page) : false;
+        remaining(1);
 
-    const resolvedEmail = sessionData?.user?.email || email || extractProfileFromToken(resolved.accessToken).email;
-    console.log(`✅ [步骤] Session 登录成功: ${resolvedEmail}`);
-    return {
-        email: resolvedEmail,
-        session: sessionData,
-        hasSessionCookie: Boolean(
-            process.env.CHATGPT_SESSION_COOKIE
-            || process.env.CHATGPT_SESSION_TOKEN
-            || sessionData.sessionToken
-            || sessionData.session_token
-            || sessionData['__Secure-next-auth.session-token']
-            || (Array.isArray(sessionData.cookies) && sessionData.cookies.length > 0)
-            || sessionData.cookieHeader
-            || sessionData.cookie_header
-        )
-    };
+        diagnostics.visibleLogin = await hasVisibleLoginChrome(page);
+        if (diagnostics.visibleLogin) {
+            throw sessionNotConfirmed(buildSessionNotLoggedInError('ChatGPT 首页'), 'visible_login_controls', diagnostics);
+        }
+        if (!uiReady && !apiReady) {
+            throw sessionNotConfirmed('尚未取得首页的登录成功证据，已停止后续操作', 'login_not_confirmed', diagnostics);
+        }
+        if (!uiReady && apiReady) {
+            console.log('[Session] 首页 UI 探针未命中，但 /api/auth/session 已确认登录，继续流程');
+        }
+
+        const resolvedEmail = sessionData?.user?.email || email || extractProfileFromToken(resolved.accessToken).email;
+        console.log(`✅ [步骤] Session 登录成功: ${resolvedEmail}`);
+        return {
+            email: resolvedEmail,
+            session: sessionData,
+            hasSessionCookie: Boolean(
+                process.env.CHATGPT_SESSION_COOKIE
+                || process.env.CHATGPT_SESSION_TOKEN
+                || sessionData.sessionToken
+                || sessionData.session_token
+                || sessionData['__Secure-next-auth.session-token']
+                || (Array.isArray(sessionData.cookies) && sessionData.cookies.length > 0)
+                || sessionData.cookieHeader
+                || sessionData.cookie_header
+            )
+        };
+    } catch (error) {
+        diagnostics.pageClosed = page?.isClosed?.() === true;
+        try { diagnostics.redirectDetected ||= isLoginRedirectUrl(page.url()); } catch (_) { /* closed page */ }
+        const known = safeBootstrapDiagnostics(error.bootstrapDiagnostics);
+        const reason = diagnostics.pageClosed ? 'page_closed' : known?.reason || diagnostics.reason;
+        error.bootstrapDiagnostics = safeBootstrapDiagnostics({ ...diagnostics, ...known, reason });
+        const details = String(error.name || '') + ' ' + String(error.message || '');
+        const networkCodes = [error.networkCode, error.code, error.cause?.code];
+        const timeout = networkCodes.includes('ETIMEDOUT') || /timeout|timed out|AbortError/i.test(details);
+        const network = timeout || /net::ERR_[A-Z_]+/.test(details) || networkCodes.some((code) =>
+            ['ECONNRESET', 'ECONNREFUSED', 'ENOTFOUND', 'EAI_AGAIN', 'ECONNABORTED',
+                'CERT_HAS_EXPIRED', 'DEPTH_ZERO_SELF_SIGNED_CERT', 'UNABLE_TO_VERIFY_LEAF_SIGNATURE'].includes(code)
+                || /^net::ERR_[A-Z_]+$/.test(String(code || '')));
+        const preservedCode = ['SESSION_NOT_CONFIRMED', 'SESSION_BOOTSTRAP_FAILED', 'SESSION_INVALID',
+            'ACCOUNT_MISMATCH', 'HUMAN_VERIFICATION_REQUIRED', 'NETWORK_TIMEOUT', 'NETWORK_UNAVAILABLE',
+            'PROXY_UNAVAILABLE', 'UPSTREAM_BLOCKED', 'UPSTREAM_FORBIDDEN', 'LEASE_LOST'].includes(error.code)
+            ? error.code : require('./verification-runtime').controlledVerificationCode(error.code, null);
+        if (!preservedCode && !network) {
+            error = Object.assign(new Error('登录页面核验未完成，已停止后续操作'), {
+                code: 'SESSION_BOOTSTRAP_FAILED', bootstrapDiagnostics: error.bootstrapDiagnostics
+            });
+        }
+        const code = preservedCode || (timeout ? 'NETWORK_TIMEOUT' : network ? 'NETWORK_UNAVAILABLE' : error.code);
+        console.warn('[Session] 登录核验未完成', { code, bootstrapDiagnostics: error.bootstrapDiagnostics });
+        throw error;
+    }
 }
 
 function extractSessionPreview(raw) {
@@ -855,6 +926,7 @@ module.exports = {
     extractSessionPreview,
     extractEmailFromSession,
     buildSessionPayload,
+    safeBootstrapDiagnostics,
     isLoginRedirectUrl,
     isHardLoginRedirectUrl,
     isCheckoutPageUrl,

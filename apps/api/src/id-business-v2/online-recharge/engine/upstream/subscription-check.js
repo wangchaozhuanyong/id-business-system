@@ -12,6 +12,10 @@ const RESUME_SUBSCRIPTION_URL = 'https://chatgpt.com/backend-api/subscriptions/r
 const BILLING_PAGE_URL = 'https://chatgpt.com/account/manage';
 const USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136.0.0.0 Safari/537.36';
 const ACCOUNT_MISMATCH_MESSAGE = '官网会话账号或用户与原任务不一致，已停止后续操作';
+const BOOTSTRAP_FAILURE_MESSAGES = {
+    SESSION_NOT_CONFIRMED: '官网首页的登录状态尚未确认，已停止后续操作',
+    SESSION_BOOTSTRAP_FAILED: '官网登录初始化未完成，本次未取得订阅结果'
+};
 
 const PLAN_LABELS = {
     plus: 'ChatGPT Plus',
@@ -296,7 +300,8 @@ function transportCode(error) {
         ? 'ETIMEDOUT' : 'UNKNOWN';
 }
 function queryErrorCode(error) {
-    if (['HUMAN_VERIFICATION_REQUIRED', 'SESSION_INVALID', 'ACCOUNT_MISMATCH'].includes(error?.code)) return error.code;
+    if (['HUMAN_VERIFICATION_REQUIRED', 'SESSION_INVALID', 'ACCOUNT_MISMATCH', 'NETWORK_TIMEOUT',
+        'SESSION_NOT_CONFIRMED', 'SESSION_BOOTSTRAP_FAILED'].includes(error?.code)) return error.code;
     if (/^(?:VERIFICATION_(?:TIMEOUT|CANCELLED|PAGE_CLOSED|FRAME_AMBIGUOUS|NOT_READY|NETWORK_UNAVAILABLE|PROVIDER_UNAVAILABLE|PROVIDER_REJECTED|RATE_LIMITED|CHALLENGE_REJECTED|CHALLENGE_UNCHANGED|ROUNDS_EXHAUSTED|SOLVER_DISABLED|SOLVER_FAILED|RUNTIME_FAILED|PAGE_BINDING_REQUIRED|PAGE_BINDING_MISMATCH|UNSUPPORTED)|VLM_(?:AUTH_FAILED|RATE_LIMITED|TIMEOUT|NETWORK_UNAVAILABLE|REQUEST_UNSUPPORTED|INVALID_RESPONSE|INVALID_DECISION|PROVIDER_UNAVAILABLE|IMAGE_UNSUPPORTED|NOT_CONFIGURED|API_REJECTED))$/.test(error?.code)) return error.code;
     const network = transportCode(error);
     if (network === 'ETIMEDOUT') return 'NETWORK_TIMEOUT';
@@ -312,6 +317,10 @@ function safeVerificationDiagnostics(value) {
     if (Number.isSafeInteger(value.revision) && value.revision >= 0) result.revision = value.revision;
     if (Number.isSafeInteger(value.httpStatus) && value.httpStatus >= 100 && value.httpStatus <= 599) result.httpStatus = value.httpStatus;
     return Object.keys(result).length ? result : undefined;
+}
+function safeBootstrapDiagnostics(value) {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+    return require('./session-auth').safeBootstrapDiagnostics(value);
 }
 function queryBudget(options) {
     const owned = !options.page && !options.browserContext;
@@ -441,10 +450,12 @@ async function withRenewalBrowserContext(accessToken, options, operation) {
     } catch (error) {
         if (error.code === 'LEASE_LOST') throw error;
         const errorCode = queryErrorCode(error);
+        const bootstrapDiagnostics = safeBootstrapDiagnostics(error.bootstrapDiagnostics);
         return { ok: false, resultUnknown: require('../rpc.cjs').wasSubmitted(),
-            statusCode: errorCode === 'ACCOUNT_MISMATCH' ? 409 : 502, errorCode,
+            statusCode: errorCode === 'ACCOUNT_MISMATCH' ? 409 : errorCode === 'SESSION_NOT_CONFIRMED' ? 503 : 502, errorCode,
+            ...(bootstrapDiagnostics ? { bootstrapDiagnostics } : {}),
             error: errorCode === 'ACCOUNT_MISMATCH' ? ACCOUNT_MISMATCH_MESSAGE
-                : '续费操作未能完成核验，请核对原任务，禁止重复提交' };
+                : BOOTSTRAP_FAILURE_MESSAGES[errorCode] || '续费操作未能完成核验，请核对原任务，禁止重复提交' };
     } finally {
         finished = true;
         await closeQueryPage(page);
@@ -515,7 +526,9 @@ async function fetchAccountCheck(accessToken, options = {}) {
         return { ...result, diagnostics: budget.diagnostics };
     } catch (error) {
         if (error.code === 'LEASE_LOST') throw error;
+        const bootstrapDiagnostics = safeBootstrapDiagnostics(error.bootstrapDiagnostics);
         return { status: 0, errorCode: queryErrorCode(error), data: null, diagnostics: budget.diagnostics,
+            ...(bootstrapDiagnostics ? { bootstrapDiagnostics } : {}),
             verificationDiagnostics: safeVerificationDiagnostics(error.diagnostics),
             failure: { phase: ['account_check', 'session_install', 'session_bootstrap', 'navigation', 'proxy_prepare',
                 'browser_connect', 'context_create', 'page_create', 'request_create', 'verification', 'verification_probe'].includes(error.phase)
@@ -850,11 +863,15 @@ async function querySubscriptionBySession(accessToken, options = {}) {
     } catch (error) {
         if (error.code === 'LEASE_LOST') throw error;
         const mismatch = error.code === 'ACCOUNT_MISMATCH';
+        const bootstrapError = Object.hasOwn(BOOTSTRAP_FAILURE_MESSAGES, error.code || '') ? error.code : null;
+        const bootstrapDiagnostics = safeBootstrapDiagnostics(error.bootstrapDiagnostics);
         return {
             ok: false,
-            statusCode: mismatch ? 409 : 502,
-            errorCode: mismatch ? 'ACCOUNT_MISMATCH' : 'NETWORK_UNAVAILABLE',
-            error: mismatch ? ACCOUNT_MISMATCH_MESSAGE : '订阅查询网络不可用，本次未取得账号订阅结果'
+            statusCode: mismatch ? 409 : bootstrapError === 'SESSION_NOT_CONFIRMED' ? 503 : 502,
+            errorCode: mismatch ? 'ACCOUNT_MISMATCH' : bootstrapError || 'NETWORK_UNAVAILABLE',
+            ...(bootstrapDiagnostics ? { bootstrapDiagnostics } : {}),
+            error: mismatch ? ACCOUNT_MISMATCH_MESSAGE : BOOTSTRAP_FAILURE_MESSAGES[bootstrapError]
+                || '订阅查询网络不可用，本次未取得账号订阅结果'
         };
     }
 
@@ -865,14 +882,18 @@ async function querySubscriptionBySession(accessToken, options = {}) {
             PROXY_UNAVAILABLE: '任务代理连接失败，请检查代理服务',
             SESSION_INVALID: '账号尚未登录或 Session 已失效，请更新登录资料',
             ACCOUNT_MISMATCH: ACCOUNT_MISMATCH_MESSAGE,
+            ...BOOTSTRAP_FAILURE_MESSAGES,
             NETWORK_UNAVAILABLE: '订阅查询网络不可用，本次未取得账号订阅结果'
         };
-        const statuses = { NETWORK_TIMEOUT: 504, SESSION_INVALID: 401, HUMAN_VERIFICATION_REQUIRED: 403, ACCOUNT_MISMATCH: 409 };
+        const statuses = { NETWORK_TIMEOUT: 504, SESSION_INVALID: 401, HUMAN_VERIFICATION_REQUIRED: 403, ACCOUNT_MISMATCH: 409,
+            SESSION_NOT_CONFIRMED: 503, SESSION_BOOTSTRAP_FAILED: 502 };
+        const bootstrapDiagnostics = safeBootstrapDiagnostics(response.bootstrapDiagnostics);
         return { ok: false, errorCode: response.errorCode,
             statusCode: statuses[response.errorCode] || (/TIMEOUT$/.test(response.errorCode) ? 504
                 : /^(?:VERIFICATION_|VLM_)/.test(response.errorCode) ? 503 : 502),
             error: messages[response.errorCode] || '官网验证未完成，本次订阅查询未取得有效结果', diagnostics: response.diagnostics,
-            verificationDiagnostics: response.verificationDiagnostics, failure: response.failure };
+            verificationDiagnostics: response.verificationDiagnostics,
+            ...(bootstrapDiagnostics ? { bootstrapDiagnostics } : {}), failure: response.failure };
     }
     const body = normalizeResponseBody(response.data);
     if (response.status !== 200) {

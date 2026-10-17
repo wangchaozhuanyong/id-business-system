@@ -391,3 +391,27 @@ Card number 标签；透明、禁止交互或辅助隐藏的占位标签排除�
 无新增 HTTP／RPC 接口、表列、迁移、依赖、环境变量或管理端界面。共享卡池、套餐资格、任务代理与
 上下文隔离、原单绑定、不可放宽金额上限及单次付款保护保持。准确来源、检查、发布和真实测试分别归档于
 本工作树 `.runtime/online-session-diagnosis-20261018` 和 `.runtime/online-session-repair-release-20261018`。
+
+### 登录页面可见性与失败原因贯通（2026-10-18）
+
+登录刷新修复 `1ec294fc` 发布并独立回读后，只读查询 `a3e97a18…` 在首页登录核验阶段失败，未建充值单、
+未填卡或付款。核对完整事件 `metadata.logs` 后，确认真实 Cookie 接口已核实登录；不能只凭每批最后一条
+`message` 判为未核实。原结果为 NETWORK_UNAVAILABLE / UNKNOWN，实际尚未进入订阅 GET，不能据此判定网络故障或 Session 失效。
+
+隔离 Chromium 复现两类确定缺陷：已登录页面残留的隐藏登录内容会被全文 textContent 误判；登录判断抛普通异常，
+被独立查询和主充值入口丢失原因。真实任务的 DOM 当时未保存，不能把合成缺陷直接称为唯一线上根因。
+
+本轮集中修复登录与已登录候选的实际显示、重复候选及认证控件语义，排除隐藏、透明、禁止交互和聊天引用，
+保留可见认证页面、登录控件、重定向及验证页阻止。保留原已核实 Cookie 后的 API 兜底及全局期限，不以空 UI 证明登录失效。
+登录未确认和初始化异常使用不同受控原因；真实网络、超时、租约和既有验证原因保留。主充值、独立查询、续费和
+确认摘要沿同一受控资料传递，未知付款与原单保护不变。
+
+现有任务 JSON 可选增加 bootstrapDiagnostics，查询确认摘要可选增加 queryBootstrapDiagnostics。
+只允许受控 reason 与 authApiVerified、visibleLogin、loggedInUi、redirectDetected、challengeDetected、pageClosed 真布尔；
+未知键、字符串布尔和未知原因剔除，不记录正文、选择器、URL、输入值或凭据。沿用现有安全日志和任务结果，无新 HTTP／RPC 动作、
+表列、迁移、依赖、环境变量或管理端界面。
+
+回归覆盖隐藏／透明提示、禁止交互、辅助隐藏、重复首候选、聊天引用和真实认证分组，以及完整子进程和实际 API 服务图。
+真正登录未确认、重定向和验证失败须零建单、零付款、零账单订单及银行卡计数；正常合成链路仍只付款一次。
+集中修复和准确检查见 `.runtime/online-login-visibility-repair-20261018`，有限发布与真实核验另记
+`.runtime/online-login-visibility-release-20261018`；此前单次付款授权和金额上限不因修复或重新发布而重置。
