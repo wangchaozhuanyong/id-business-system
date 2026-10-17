@@ -5,6 +5,7 @@ import {
 } from '../proxy-pool/public-api';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ConfigService } from '@nestjs/config';
+import { ConflictException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { ConfigModule } from '@nestjs/config';
 import { Test } from '@nestjs/testing';
@@ -1108,6 +1109,393 @@ suite('线上代充隔离MySQL事务验收', () => {
       })
     ).toBe(0);
   }, 30000);
+
+  describe('历史付款人工结案', () => {
+    const legacyOriginal = async () => {
+      const identity = randomUUID();
+      await start(identity);
+      const claim = (await workers.claim('fixture-manual-close'))!;
+      const card = await prepareCard(claim);
+      const initial = await db.onlineRechargeTask.findUniqueOrThrow({ where: { id: claim.id } });
+      const payload = { ...(initial.payload as Prisma.InputJsonObject) };
+      delete payload.checkoutRecoveryVersion;
+      await db.onlineRechargeTask.update({ where: { id: claim.id }, data: { payload } });
+      const payment = await paymentFor(claim);
+      await workers.beforeSubmit(lease(claim, { paymentContext: payment.context }));
+      await workers.billing(
+        lease(claim, {
+          status: 'failed',
+          currency: 'USD',
+          error_code: 'form_validation_failed',
+          message: '合成历史失败账单'
+        })
+      );
+      await workers.finish(
+        lease(claim, {
+          status: 'awaiting_review',
+          result: {
+            success: false,
+            resultUnknown: true,
+            error: '合成历史验证失败',
+            errorCode: 'VERIFICATION_UNSUPPORTED'
+          }
+        }),
+        true
+      );
+      const row = await db.onlineRechargeTask.findUniqueOrThrow({ where: { id: claim.id } });
+      const input = {
+        id: row.id,
+        version: row.updatedAt.toISOString(),
+        requestId: randomUUID(),
+        userConfirmedNotCharged: true,
+        confirmationSource: 'user_statement',
+        confirmationReference: '合成用户在会话中明确确认未扣款',
+        reason: '用户要求停用旧卡换新卡'
+      };
+      return { row, claim, card, identity, payment, input };
+    };
+    const close = (input: Record<string, unknown>) =>
+      tasks.action('jobs', 'resolve-not-charged', input, operator);
+    it('人工结案同事务保留原提交、历史账单和审计，停用旧卡后同账号仅能创建一个新任务', async () => {
+      const f = await legacyOriginal();
+      const bills = await db.onlineRechargeBill.findMany({ where: { taskId: f.row.id } });
+      const oldEvents = await db.onlineRechargeEvent.findMany({ where: { taskId: f.row.id } });
+      const oldAudits = await db.auditLog.findMany({ where: { objectId: f.row.id } });
+      const results = await Promise.all([close(f.input), close(f.input)]);
+      expect(results).toEqual([{ success: true }, { success: true }]);
+      const resolved = await db.onlineRechargeTask.findUniqueOrThrow({ where: { id: f.row.id } });
+      const originalPayload = f.row.payload as Record<string, unknown>;
+      expect(resolved).toMatchObject({
+        status: 'failed',
+        paymentStarted: true,
+        confirmedPaid: false,
+        leaseVersion: f.row.leaseVersion + 1,
+        payload: {
+          ...originalPayload,
+          reconciliation: {
+            ...(originalPayload.reconciliation as object),
+            stopped: true,
+            nextAttemptAt: null
+          }
+        },
+        result: {
+          ...(f.row.result as object),
+          manualNotChargedResolution: {
+            confirmationSource: 'user_statement',
+            paymentProviderVerified: false,
+            requestId: f.input.requestId
+          }
+        }
+      });
+      expect(await db.onlineRechargeCard.findUnique({ where: { id: f.card.id } })).toMatchObject({
+        status: 'disabled',
+        leaseOwner: null,
+        successCount: 0,
+        declineCount: 0
+      });
+      expect(await db.onlineRechargeBill.findMany({ where: { taskId: f.row.id } })).toEqual(bills);
+      for (const event of oldEvents)
+        expect(await db.onlineRechargeEvent.findUnique({ where: { id: event.id } })).toEqual(event);
+      for (const audit of oldAudits)
+        expect(await db.auditLog.findUnique({ where: { id: audit.id } })).toEqual(audit);
+      expect(
+        await db.auditLog.count({
+          where: {
+            objectId: f.row.id,
+            action: 'id_business_v2.online_recharge.tasks.resolve_not_charged'
+          }
+        })
+      ).toBe(1);
+      expect(
+        await db.auditLog.count({
+          where: {
+            objectId: f.row.id,
+            action: 'id_business_v2.online_recharge.worker.payment_submitted'
+          }
+        })
+      ).toBe(1);
+      expect(await workers.claim('fixture-must-not-repay-old')).toBeNull();
+      await expect(
+        workers.beforeSubmit(lease(f.claim, { paymentContext: f.payment.context }))
+      ).rejects.toThrow('租约失效');
+      const fresh = await assets.importCards(
+        [{ number: '4000000000000002', expiryMonth: 12, expiryYear: 2030 }],
+        operator
+      );
+      const newCardId = fresh.ids[0]!;
+      const created = await Promise.allSettled(
+        [0, 1].map(() =>
+          tasks.start(
+            {
+              session: fullSession(f.identity),
+              plan: 'plus',
+              cardId: newCardId,
+              paymentLimit: { currency: 'USD', maxAmount: '30' }
+            },
+            operator
+          )
+        )
+      );
+      expect(created.filter((result) => result.status === 'fulfilled')).toHaveLength(1);
+      expect(await db.onlineRechargeTask.count({ where: { operation: 'recharge' } })).toBe(2);
+      expect(
+        await db.onlineRechargeTask.findFirst({
+          where: { status: 'queued', operation: 'recharge' }
+        })
+      ).toMatchObject({
+        paymentStarted: false,
+        confirmedPaid: false,
+        payload: { cardId: newCardId }
+      });
+      expect(
+        await db.idBusinessV2BankRechargeOrder.count({ where: { onlineRechargeTaskId: f.row.id } })
+      ).toBe(0);
+    }, 30000);
+
+    it('人工结案审计失败时真实事务回滚任务、旧卡和新事件', async () => {
+      const f = await legacyOriginal();
+      const card = await db.onlineRechargeCard.findUniqueOrThrow({ where: { id: f.card.id } });
+      const beforeEvents = await db.onlineRechargeEvent.count({ where: { taskId: f.row.id } });
+      const log = vi.spyOn(repository, 'log');
+      const originalLog = log.getMockImplementation();
+      log.mockImplementation((tx, action, actor, objectId, data) => {
+        if (action === 'tasks.resolve_not_charged') throw new Error('synthetic audit failure');
+        return originalLog!(tx, action, actor, objectId, data);
+      });
+      try {
+        await expect(close(f.input)).rejects.toThrow('synthetic audit failure');
+      } finally {
+        log.mockRestore();
+      }
+      expect(await db.onlineRechargeTask.findUnique({ where: { id: f.row.id } })).toEqual(f.row);
+      expect(await db.onlineRechargeCard.findUnique({ where: { id: f.card.id } })).toEqual(card);
+      expect(await db.onlineRechargeEvent.count({ where: { taskId: f.row.id } })).toBe(
+        beforeEvents
+      );
+      expect(
+        await db.auditLog.count({
+          where: {
+            objectId: f.row.id,
+            action: 'id_business_v2.online_recharge.tasks.resolve_not_charged'
+          }
+        })
+      ).toBe(0);
+    }, 30000);
+
+    it('人工结案和原单核对并发只有一方受理，不会放过正在核对的原单', async () => {
+      const f = await legacyOriginal();
+      const outcomes = await Promise.allSettled([
+        close(f.input),
+        tasks.action('jobs', 'recheck', { id: f.row.id }, operator)
+      ]);
+      expect(outcomes.filter((outcome) => outcome.status === 'fulfilled')).toHaveLength(1);
+      const row = await db.onlineRechargeTask.findUniqueOrThrow({ where: { id: f.row.id } });
+      const rechecks = await db.onlineRechargeTask.count({
+        where: { operation: 'subscription', status: 'queued' }
+      });
+      expect(row.paymentStarted).toBe(true);
+      expect(row.confirmedPaid).toBe(false);
+      expect(
+        row.status === 'failed'
+          ? rechecks === 0
+          : row.status === 'awaiting_review' && rechecks === 1
+      ).toBe(true);
+      expect(
+        await db.onlineRechargeBill.count({ where: { taskId: f.row.id, status: 'success' } })
+      ).toBe(0);
+    }, 30000);
+
+    it('人工结案和同账号新建任务并发仍保留唯一任务和旧卡付款保护', async () => {
+      const f = await legacyOriginal();
+      const imported = await assets.importCards(
+        [{ number: '4000000000000002', expiryMonth: 12, expiryYear: 2030 }],
+        operator
+      );
+      const input = { session: fullSession(f.identity), plan: 'plus', cardId: imported.ids[0]! };
+      const outcomes = await Promise.allSettled([close(f.input), tasks.start(input, operator)]);
+      expect(outcomes[0]!.status).toBe('fulfilled');
+      if (outcomes[1]!.status === 'rejected') await tasks.start(input, operator);
+      expect(
+        await db.onlineRechargeTask.count({ where: { status: 'queued', operation: 'recharge' } })
+      ).toBe(1);
+      expect(await db.onlineRechargeTask.findUnique({ where: { id: f.row.id } })).toMatchObject({
+        status: 'failed',
+        paymentStarted: true
+      });
+      expect(await db.onlineRechargeCard.findUnique({ where: { id: f.card.id } })).toMatchObject({
+        status: 'disabled',
+        successCount: 0,
+        declineCount: 0
+      });
+    }, 30000);
+
+    it('人工结案拒绝已有付款证据、成功账单、新恢复任务和活跃核对', async () => {
+      const f = await legacyOriginal();
+      await db.onlineRechargeTask.update({
+        where: { id: f.row.id },
+        data: {
+          result: {
+            ...(f.row.result as object),
+            paymentEvidence: f.payment.evidence
+          }
+        }
+      });
+      let row = await db.onlineRechargeTask.findUniqueOrThrow({ where: { id: f.row.id } });
+      await expect(close({ ...f.input, version: row.updatedAt.toISOString() })).rejects.toThrow(
+        '存在付款或入账证据'
+      );
+      await db.onlineRechargeTask.update({
+        where: { id: f.row.id },
+        data: { result: f.row.result as Prisma.InputJsonValue }
+      });
+      const paidBill = await db.onlineRechargeBill.create({
+        data: {
+          taskId: f.row.id,
+          plan: 'plus',
+          status: 'success',
+          currency: 'USD',
+          amount: '20.1000',
+          idempotencyKey: randomUUID(),
+          message: 'synthetic paid'
+        }
+      });
+      row = await db.onlineRechargeTask.findUniqueOrThrow({ where: { id: f.row.id } });
+      await expect(close({ ...f.input, version: row.updatedAt.toISOString() })).rejects.toThrow(
+        '存在付款或入账证据'
+      );
+      await db.onlineRechargeBill.delete({ where: { id: paidBill.id } });
+      await db.onlineRechargeTask.update({
+        where: { id: f.row.id },
+        data: { payload: { ...(f.row.payload as object), checkoutRecoveryVersion: 1 } }
+      });
+      row = await db.onlineRechargeTask.findUniqueOrThrow({ where: { id: f.row.id } });
+      await expect(close({ ...f.input, version: row.updatedAt.toISOString() })).rejects.toThrow(
+        '已有原单恢复能力'
+      );
+      await db.onlineRechargeTask.update({
+        where: { id: f.row.id },
+        data: { payload: f.row.payload as Prisma.InputJsonValue }
+      });
+      await tasks.action('jobs', 'recheck', { id: f.row.id }, operator);
+      row = await db.onlineRechargeTask.findUniqueOrThrow({ where: { id: f.row.id } });
+      await expect(close({ ...f.input, version: row.updatedAt.toISOString() })).rejects.toThrow(
+        '仍有执行或核对任务'
+      );
+      expect(await db.onlineRechargeTask.findUnique({ where: { id: f.row.id } })).toMatchObject({
+        status: 'awaiting_review',
+        paymentStarted: true
+      });
+    }, 30000);
+
+    it('人工结案与核对完成写入竞争时冲突安全回滚，不清付款标记或部分释放旧卡', async () => {
+      const f = await legacyOriginal();
+      await tasks.action('jobs', 'recheck', { id: f.row.id }, operator);
+      const recheck = (await workers.claim('fixture-concurrent-recheck-finish'))!;
+      const beforeCard = await db.onlineRechargeCard.findUniqueOrThrow({
+        where: { id: f.card.id }
+      });
+      const beforeBills = await db.onlineRechargeBill.findMany({ where: { taskId: f.row.id } });
+      const outcomes = await Promise.allSettled([
+        close(f.input),
+        workers.finish(
+          lease(recheck, { status: 'failed', result: { success: false, resultUnknown: true } }),
+          true
+        )
+      ]);
+      for (const outcome of outcomes)
+        if (outcome.status === 'rejected') expect(outcome.reason).toBeInstanceOf(ConflictException);
+      const row = await db.onlineRechargeTask.findUniqueOrThrow({ where: { id: f.row.id } });
+      const closeAudits = await db.auditLog.count({
+        where: {
+          objectId: f.row.id,
+          action: 'id_business_v2.online_recharge.tasks.resolve_not_charged'
+        }
+      });
+      const closeEvents = await db.onlineRechargeEvent.count({
+        where: { dedupeKey: `${f.row.id}:manual-not-charged` }
+      });
+      expect(row.paymentStarted).toBe(true);
+      expect(row.confirmedPaid).toBe(false);
+      if (outcomes[0]!.status === 'rejected') {
+        expect(row.status).toBe('awaiting_review');
+        expect(row.result).not.toHaveProperty('manualNotChargedResolution');
+        expect(row.leaseVersion).toBe(f.row.leaseVersion);
+        expect(await db.onlineRechargeCard.findUnique({ where: { id: f.card.id } })).toEqual(
+          beforeCard
+        );
+        expect(closeAudits).toBe(0);
+        expect(closeEvents).toBe(0);
+      } else {
+        expect(row.status).toBe('failed');
+        expect(row.result).toHaveProperty(
+          'manualNotChargedResolution.paymentProviderVerified',
+          false
+        );
+        expect(row.leaseVersion).toBe(f.row.leaseVersion + 1);
+        expect(await db.onlineRechargeCard.findUnique({ where: { id: f.card.id } })).toMatchObject({
+          status: 'disabled',
+          leaseOwner: null,
+          successCount: beforeCard.successCount,
+          declineCount: beforeCard.declineCount
+        });
+        expect(closeAudits).toBe(1);
+        expect(closeEvents).toBe(1);
+      }
+      expect(await db.onlineRechargeBill.findMany({ where: { taskId: f.row.id } })).toEqual(
+        beforeBills
+      );
+      expect(await db.onlineRechargeOrderSync.count({ where: { taskId: f.row.id } })).toBe(0);
+      expect(
+        await db.auditLog.count({
+          where: {
+            objectId: f.row.id,
+            action: 'id_business_v2.online_recharge.worker.payment_submitted'
+          }
+        })
+      ).toBe(1);
+    }, 30000);
+
+    it('人工结案后的迟到旧租约和核对回执不能覆盖结案或补出成功账单', async () => {
+      const f = await legacyOriginal();
+      await tasks.action('jobs', 'recheck', { id: f.row.id }, operator);
+      const recheck = (await workers.claim('fixture-before-manual-close'))!;
+      await workers.finish(lease(recheck, { status: 'failed', result: { success: false } }), true);
+      const current = await db.onlineRechargeTask.findUniqueOrThrow({ where: { id: f.row.id } });
+      await close({ ...f.input, version: current.updatedAt.toISOString() });
+      const before = await db.onlineRechargeTask.findUniqueOrThrow({ where: { id: f.row.id } });
+      await expect(
+        workers.finish(
+          lease(recheck, {
+            status: 'succeeded',
+            result: {
+              success: true,
+              confirmedPaid: true,
+              paymentEvidence: f.payment.evidence,
+              confirmation: {
+                verified: true,
+                querySucceeded: true,
+                source: 'subscription',
+                hasActiveSubscription: true,
+                accountId: f.identity,
+                expectedAccountId: f.identity,
+                targetPlan: 'plus',
+                observedPlan: 'chatgptplusplan'
+              }
+            }
+          }),
+          false
+        )
+      ).rejects.toThrow('租约失效');
+      await expect(
+        workers.beforeSubmit(lease(f.claim, { paymentContext: f.payment.context }))
+      ).rejects.toThrow('租约失效');
+      expect(await db.onlineRechargeTask.findUnique({ where: { id: f.row.id } })).toEqual(before);
+      expect(
+        await db.onlineRechargeBill.count({ where: { taskId: f.row.id, status: 'success' } })
+      ).toBe(0);
+      expect(await db.onlineRechargeOrderSync.count({ where: { taskId: f.row.id } })).toBe(0);
+    }, 30000);
+  });
 
   it('旧待核对任务缺原单身份时只记录明确原因，保留付款及原卡保护', async () => {
     await start();
