@@ -13,15 +13,13 @@ HERE = Path(__file__).resolve().parent
 SCOPE = 'ONLINE_CHECKOUT_LOAD_RECOVERY'
 CONTRACT_FILE = 'online-checkout-load-contract.json'
 ENGINE = 'apps/api/src/id-business-v2/online-recharge/engine'
-SOURCE_BASE = '4e0037a458330f58914eebeccd2a2d892c8405b0'
-FILES = frozenset(('SOURCE_MANIFEST.json', 'checkout-form.cjs', 'task-runner.cjs', 'worker.cjs',
-    'upstream/chatgpt.js', 'upstream/index.js', 'upstream/pricing-checkout.js',
-    'upstream/subscription-check.js', 'upstream/upgrade-checkout.js',
+SOURCE_BASE = '3f8f2bb4978e3a839c82d2ecc73857449d4b94d3'
+FILES = frozenset(('SOURCE_MANIFEST.json', 'checkout-form.cjs', 'safe-media.cjs',
+    'upstream/chatgpt.js', 'upstream/human-verification.js', 'upstream/index.js',
+    'upstream/stripe-payment.js',
     'test/checkout-form.test.cjs', 'test/checkout-navigation.test.cjs',
-    'test/checkout-recovery.test.cjs', 'test/debug-checkout.test.cjs',
-    'test/recharge-flow-acceptance.test.cjs', 'test/renewal-state.test.cjs',
-    'test/upgrade-checkout.test.cjs', 'test/worker-heartbeat.test.cjs',
-    'upstream/test/pricing-checkout.test.js'))
+    'test/checkout-recovery.test.cjs', 'test/media-browser.test.cjs',
+    'test/recharge-flow-acceptance.test.cjs'))
 ADDED = frozenset()
 VALIDATION = frozenset(('apps/api/src/id-business-v2/online-recharge/local-chain-acceptance.spec.ts',
     'docs/ONLINE_RECHARGE.md', 'docs/V2_TASKS.md'))

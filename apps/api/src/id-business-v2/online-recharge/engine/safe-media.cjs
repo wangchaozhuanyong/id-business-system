@@ -81,38 +81,50 @@ async function screenshot(page, prefix = 'stage') {
             /(?:password|passwd|access.?token|refresh.?token|session.?token|(?:^|[\s_-])(?:token|session|pan)(?:$|[\s_-])|cookie|authorization|api.?key|secret|cvc|cvv|cc-csc|cc-number|one-time-code|security.?code|card.?number|密码|安全码|卡号|令牌)/i;
           const secretValue =
             /\b(?:\d[ -]?){13,19}\b|eyJ[A-Za-z0-9_-]+\.|\b(?:sk|pk)_(?:live|test)_/;
-          for (const el of document.querySelectorAll('body *')) {
-            const input = el.matches('input,textarea,[contenteditable]');
-            const description = [
-              ...[
-                'id',
-                'name',
-                'type',
-                'autocomplete',
-                'aria-label',
-                'placeholder',
-                'data-testid'
-              ].map((key) => el.getAttribute(key) || ''),
-              ...Array.from(el.labels || []).map((label) => label.textContent || '')
-            ].join(' ');
-            const text = input
-              ? el.value || el.textContent || ''
-              : el.children.length === 0
-                ? el.textContent || ''
-                : '';
-            if (
-              credential.test(description) ||
-              secretValue.test(text) ||
-              (!input && credential.test(text) && /[:：=]/.test(text))
-            )
-              el.setAttribute('data-online-recharge-secret-mask', '1');
+          const roots = [document];
+          for (const tree of roots) {
+            for (const el of tree.querySelectorAll(tree === document ? 'body *' : '*')) {
+              if (el.shadowRoot) roots.push(el.shadowRoot);
+              const input = el.matches('input,textarea,[contenteditable]');
+              const labelRoot = el.getRootNode();
+              const labelledBy = (el.getAttribute('aria-labelledby') || '')
+                .split(/\s+/)
+                .filter(Boolean)
+                .map((id) => labelRoot.getElementById?.(id)?.textContent || '');
+              const description = [
+                ...[
+                  'id',
+                  'name',
+                  'type',
+                  'autocomplete',
+                  'aria-label',
+                  'placeholder',
+                  'data-testid'
+                ].map((key) => el.getAttribute(key) || ''),
+                ...Array.from(el.labels || []).map((label) => label.textContent || ''),
+                ...labelledBy
+              ].join(' ');
+              const text = input
+                ? el.value || el.textContent || ''
+                : el.children.length === 0
+                  ? el.textContent || ''
+                  : '';
+              if (
+                credential.test(description) ||
+                secretValue.test(text) ||
+                (!input && credential.test(text) && /[:：=]/.test(text))
+              )
+                el.setAttribute('data-online-recharge-secret-mask', '1');
+            }
           }
         });
       }
       if (stopped()) return null;
       const buffer = await page.screenshot({
         fullPage: false,
-        animations: 'disabled',
+        // Fast-forwarding or cancelling animations can fire checkout callbacks.
+        // Recording must observe the live page without changing its lifecycle.
+        animations: 'allow',
         timeout: Math.max(1, deadline - Date.now()),
         mask: frames.map((frame) =>
           frame.locator(
@@ -134,9 +146,13 @@ async function screenshot(page, prefix = 'stage') {
         frames.map((frame) =>
           Promise.resolve().then(() =>
             frame.evaluate(() => {
-              document
-                .querySelectorAll('[data-online-recharge-secret-mask]')
-                .forEach((el) => el.removeAttribute('data-online-recharge-secret-mask'));
+              const roots = [document];
+              for (const tree of roots) {
+                for (const el of tree.querySelectorAll('*')) {
+                  if (el.shadowRoot) roots.push(el.shadowRoot);
+                  el.removeAttribute('data-online-recharge-secret-mask');
+                }
+              }
             })
           )
         )

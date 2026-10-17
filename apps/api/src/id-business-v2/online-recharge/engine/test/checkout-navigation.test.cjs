@@ -257,6 +257,61 @@ test('commit and visible plan cannot finish opening until delayed actual card co
   stoppedWithoutPayment(stats);
 });
 
+for (const [labelDelay, hiddenLabels] of [
+  [0, false],
+  [250, false],
+  [0, true]
+]) {
+  test(`native opening prepares the card section before strict readiness, label delay ${labelDelay}ms hidden labels ${hiddenLabels}`, async (t) => {
+    const { page, stats, start } = await fixture(t, {
+      body: `<!doctype html><h1>Configure your plan</h1><p>Due today PHP 9990</p>
+        ${hiddenLabels ? '<p style="opacity:0">Card number</p><p inert>Card number</p><p aria-hidden="true">Card number</p>' : ''}
+        <div style="height:1800px"></div><section id="payment-method"></section>
+        <button onclick="fetch('/fixture-payment-confirm',{method:'POST'})">Subscribe</button>
+        <button onclick="fetch('/fixture-unrelated-write',{method:'POST'})">OR</button>
+        <script>
+          window.mounts=0;
+          setTimeout(()=>{
+            const section=document.getElementById('payment-method');
+            section.innerHTML='<p id="card-label">Card number</p>';
+            const observer=new IntersectionObserver(entries=>{
+              if(entries.some(entry=>entry.isIntersecting)&&!window.mounts){
+                window.mounts++;
+                section.insertAdjacentHTML('beforeend','<input autocomplete="cc-number">');
+                observer.disconnect();
+              }
+            });
+            observer.observe(document.getElementById('card-label'));
+          },${labelDelay});
+        </script>`
+    });
+    await start();
+    assert.equal(await page.evaluate(() => window.mounts), 1);
+    assert.equal(await human.isCheckoutPaymentReady(page), true);
+    assert.equal(stats.documents, 1);
+    assert.equal(stats.otherWrites, 0);
+    assert.equal(stats.unrelatedWrites, 0);
+    stoppedWithoutPayment(stats);
+  });
+}
+
+test('preparation never clicks a separator or submit label to manufacture card readiness', async (t) => {
+  const { stats, start } = await fixture(t, {
+    readyWaitMs: 700,
+    body: `<h1>Configure your plan</h1>
+      <form action="/fixture-payment-confirm" method="POST">
+        <button type="submit">Card number</button>
+        <button type="submit">OR</button><button type="submit">Subscribe</button>
+      </form>`
+  });
+  await assert.rejects(start(), (error) => {
+    assert.equal(error.checkoutOpenDiagnostics.code, 'CHECKOUT_FORM_NOT_READY');
+    return true;
+  });
+  assert.equal(stats.otherWrites, 0);
+  stoppedWithoutPayment(stats);
+});
+
 test('a permanently empty payment region fails strict readiness without an extra checkout or payment', async (t) => {
   const { stats, start } = await fixture(t, {
     fields: '',

@@ -122,6 +122,182 @@ test('readiness rejects an empty page, amount text and ordinary iframe inputs', 
     assert.equal(result.inspection.complete, true);
   }
 });
+test('visible card controls can override an ancestor visibility without admitting hidden copies', async (t) => {
+  const page = await pageFor(
+    t,
+    `<section style="visibility:hidden"><div data-active style="visibility:visible">${cardHtml}</div><input autocomplete="cc-number"></section>`
+  );
+  assert.equal((await inspectCardReadiness(page)).ready, true);
+  assert.equal((await fillCard(page, card, { deadline: Date.now() + 3000 })).ok, true);
+  assert.equal(
+    await page.locator('[data-active] input[autocomplete="cc-number"]').inputValue(),
+    card.number
+  );
+  assert.equal(await page.locator('section > input').inputValue(), '');
+});
+test('visible iframe can override ancestor visibility and retain shared fill eligibility', async (t) => {
+  const page = await pageFor(
+    t,
+    `<section style="visibility:hidden">${iframe(cardHtml).replace('width:900px;', 'visibility:visible;width:900px;')}</section>`
+  );
+  assert.equal((await inspectCardReadiness(page)).ready, true);
+  assert.equal((await fillCard(page, card, { deadline: Date.now() + 4000 })).ok, true);
+  assert.equal(
+    await page.frameLocator('iframe').locator('[autocomplete="cc-number"]').inputValue(),
+    card.number
+  );
+});
+test('visibility override does not relax other card control or iframe exclusions', async (t) => {
+  const cases = [
+    ['hidden', '<section hidden style="display:block">'],
+    ['inert', '<section inert>'],
+    ['aria_hidden', '<section aria-hidden="true">'],
+    ['display_none', '<section style="display:none">'],
+    ['opacity_zero', '<section style="opacity:0">'],
+    ['content_visibility_hidden', '<section style="content-visibility:hidden">']
+  ];
+  for (const [reason, start] of cases) {
+    const page = await pageFor(
+      t,
+      start + '<input autocomplete="cc-number" style="visibility:visible"></section>'
+    );
+    const result = await inspectCardReadiness(page);
+    assert.equal(result.ready, false, reason);
+    assert.ok(result.inspection.controlRejectCounts[reason] > 0, reason);
+    const framed = await pageFor(
+      t,
+      start +
+        iframe(cardHtml).replace('width:900px;', 'visibility:visible;width:900px;') +
+        '</section>'
+    );
+    const frameResult = await inspectCardReadiness(framed);
+    assert.equal(frameResult.ready, false, reason);
+    assert.ok(frameResult.inspection.frameSkipCounts[reason] > 0, reason);
+  }
+});
+test('shadow root labels use the control tree and do not bind document or sibling tree labels', async (t) => {
+  const page = await pageFor(
+    t,
+    '<span id="field-label">Order number</span><div id="payment-root"></div><div id="contact-root"></div>'
+  );
+  await page.evaluate(() => {
+    document.getElementById('payment-root').attachShadow({ mode: 'open' }).innerHTML =
+      '<span id="field-label">Card number</span><input aria-labelledby="field-label"><input autocomplete="cc-exp"><input autocomplete="cc-csc">';
+    document.getElementById('contact-root').attachShadow({ mode: 'open' }).innerHTML =
+      '<span id="field-label">City</span><input aria-labelledby="field-label">';
+  });
+  assert.equal((await inspectCardReadiness(page)).ready, true);
+  assert.equal((await fillCard(page, card, { deadline: Date.now() + 3000 })).ok, true);
+  assert.equal(
+    await page.locator('#payment-root').getByLabel('Card number', { exact: true }).inputValue(),
+    card.number
+  );
+  assert.equal(
+    await page.locator('#contact-root').getByLabel('City', { exact: true }).inputValue(),
+    ''
+  );
+});
+test('shadow root label references cannot fall through to labels in another tree', async (t) => {
+  const page = await pageFor(
+    t,
+    '<span id="field-label">Card number</span><div id="payment-root"></div>'
+  );
+  await page.evaluate(() => {
+    document.getElementById('payment-root').attachShadow({ mode: 'open' }).innerHTML =
+      '<input aria-labelledby="field-label">';
+  });
+  const result = await inspectCardReadiness(page);
+  assert.equal(result.ready, false);
+  assert.equal(result.inspection.controlCounts.recognized, 0);
+  assert.equal(await page.locator('#payment-root input').inputValue(), '');
+});
+test('two visible shadow card labels remain ambiguous and neither is filled', async (t) => {
+  const page = await pageFor(t, '<div id="first-root"></div><div id="second-root"></div>');
+  await page.evaluate(() => {
+    for (const id of ['first-root', 'second-root'])
+      document.getElementById(id).attachShadow({ mode: 'open' }).innerHTML =
+        '<span id="field-label">Card number</span><input aria-labelledby="field-label">';
+  });
+  const result = await fillCard(page, card, { deadline: Date.now() + 1000 });
+  assert.equal(result.ok, false);
+  assert.equal(result.errorCode, 'CHECKOUT_CONTROL_AMBIGUOUS');
+  assert.deepEqual(await page.locator('input').evaluateAll((nodes) => nodes.map((n) => n.value)), [
+    '',
+    ''
+  ]);
+});
+test('control diagnostics distinguish scan eligibility locator and recognition without field data', async (t) => {
+  const page = await pageFor(
+    t,
+    '<input autocomplete="cc-number"><input id="unrelated" value="PRIVATE_VALUE">' +
+      '<input><input readonly autocomplete="cc-number"><input disabled autocomplete="cc-number">' +
+      '<input aria-disabled="true" autocomplete="cc-number"><input type="checkbox">' +
+      '<input style="visibility:hidden" autocomplete="cc-number">'
+  );
+  const result = await inspectCardReadiness(page);
+  assert.equal(result.ready, true);
+  assert.deepEqual(result.inspection.controlCounts, {
+    scanned: 8,
+    eligible: 3,
+    locatable: 2,
+    recognized: 1
+  });
+  assert.deepEqual(result.inspection.controlRejectCounts, {
+    readonly: 1,
+    disabled: 1,
+    aria_disabled: 1,
+    excluded_type: 1,
+    visibility_hidden: 1,
+    no_locator: 1
+  });
+  for (const counts of [
+    result.inspection.frameSkipCounts,
+    result.inspection.controlCounts,
+    result.inspection.controlRejectCounts
+  ])
+    assert.ok(Object.values(counts).every((n) => Number.isSafeInteger(n) && n >= 0));
+  assert.doesNotMatch(
+    JSON.stringify(result),
+    /PRIVATE_VALUE|unrelated|autocomplete|aria-labelledby|field-label/
+  );
+});
+test('frame diagnostics count hidden visibility and zero geometry without identifying frames', async (t) => {
+  const page = await pageFor(
+    t,
+    cardHtml +
+      iframe('<input autocomplete="cc-number">').replace(
+        'width:900px;height:600px',
+        'visibility:hidden;width:900px;height:600px'
+      ) +
+      iframe('<input autocomplete="cc-number">').replace(
+        'width:900px;height:600px',
+        'width:0;height:0;border:0'
+      )
+  );
+  const result = await inspectCardReadiness(page, { deadline: Date.now() + 3000 });
+  assert.equal(result.ready, true);
+  assert.equal(result.inspection.framesSkipped, 2);
+  assert.deepEqual(result.inspection.frameSkipCounts, { visibility_hidden: 1, zero_geometry: 1 });
+  assert.doesNotMatch(JSON.stringify(result.inspection), /srcdoc|iframe|cc-number|http|number/);
+});
+test('diagnostic counters preserve the existing deadline when the renderer read cannot finish', async (t) => {
+  const page = await pageFor(t, cardHtml);
+  failFrameRead(t, page.mainFrame(), () => new Promise(() => {}));
+  const started = Date.now();
+  const result = await inspectCardReadiness(page, { deadline: started + 100 });
+  assert.equal(result.ready, false);
+  assert.equal(result.code, 'CHECKOUT_FORM_TIMEOUT');
+  assert.equal(result.inspection.complete, false);
+  assert.equal(result.inspection.timedOut, true);
+  assert.deepEqual(result.inspection.controlCounts, {
+    scanned: 0,
+    eligible: 0,
+    locatable: 0,
+    recognized: 0
+  });
+  assert.deepEqual(result.inspection.controlRejectCounts, {});
+  assert.ok(Date.now() - started < 1000);
+});
 const legacyCardAliases = [
   ['number', 'autocomplete', '<input autocomplete="cc-number">'],
   ['number', 'cardnumber name', '<input name="cardnumber">'],

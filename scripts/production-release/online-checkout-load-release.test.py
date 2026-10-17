@@ -40,13 +40,20 @@ class ContractTests(unittest.TestCase):
         before, after = self.c['beforeEngineFiles'], self.c['afterEngineFiles']
         self.assertEqual(len(after) - len(before), 0)
         self.assertEqual({name for name in after if before.get(name) != after[name]}, p.FILES)
-        self.assertEqual(len(p.FILES), 18)
+        self.assertEqual(p.FILES, {
+            'SOURCE_MANIFEST.json', 'checkout-form.cjs', 'safe-media.cjs',
+            'upstream/chatgpt.js', 'upstream/human-verification.js', 'upstream/index.js',
+            'upstream/stripe-payment.js', 'test/checkout-form.test.cjs',
+            'test/checkout-navigation.test.cjs', 'test/checkout-recovery.test.cjs',
+            'test/media-browser.test.cjs', 'test/recharge-flow-acceptance.test.cjs'})
+        self.assertEqual(len(p.FILES), 12)
         self.assertEqual(p.ADDED, set())
         self.assertEqual(set(p.PRESERVED), {'api', 'admin', 'mysql', 'caddy', 'media-resolver',
                                           'auto-recharge', 'auto-registration'})
 
-    def test_previous_rpc_payment_and_loading_sources_are_preserved_without_repackaging(self):
-        for name in ('rpc.cjs', 'test/rpc-response.test.cjs', 'upstream/stripe-payment.js',
+    def test_previous_rpc_task_payment_guard_and_loading_sources_are_preserved_without_repackaging(self):
+        for name in ('rpc.cjs', 'test/rpc-response.test.cjs', 'task-runner.cjs', 'worker.cjs',
+                     'upstream/payment-retry.js', 'payment-limit.cjs', 'checkout-recovery.cjs',
                      'test/checkout-page-loading.test.cjs'):
             self.assertNotIn(name, p.FILES)
             self.assertEqual(self.c['beforeEngineFiles'][name], self.c['afterEngineFiles'][name])
@@ -54,8 +61,9 @@ class ContractTests(unittest.TestCase):
         self.assertEqual(len(self.c['afterEngineFiles']), 102)
 
     def test_the_previous_published_source_is_fixed_and_cannot_be_replaced_by_the_old_baseline(self):
-        self.assertEqual(self.c['sourceBaseCommit'], '4e0037a458330f58914eebeccd2a2d892c8405b0')
-        for commit in ('a0e633a610ff67400cc2fa8bd2926148a2479ecd',
+        self.assertEqual(self.c['sourceBaseCommit'], '3f8f2bb4978e3a839c82d2ecc73857449d4b94d3')
+        for commit in ('4e0037a458330f58914eebeccd2a2d892c8405b0',
+                       'a0e633a610ff67400cc2fa8bd2926148a2479ecd',
                        '6da10d2e4bd9de6df145899648e234000f84b72b', 'd' * 40, '', None):
             with self.subTest(commit=commit), self.assertRaisesRegex(RuntimeError, 'SOURCE_BASE_INVALID'):
                 p.validate_contract({**self.c, 'sourceBaseCommit': commit})

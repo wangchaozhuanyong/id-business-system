@@ -466,6 +466,22 @@ function safeCheckoutOpenDiagnostics(value) {
                     inspection[key] = value.inspection[key];
             if ([1, 2].includes(value.inspection.readAttempts)) inspection.readAttempts = value.inspection.readAttempts;
             if (CHECKOUT_FORM_READ_PHASES.has(value.inspection.readPhase)) inspection.readPhase = value.inspection.readPhase;
+            const visibilityReasons = ['zero_geometry', 'hidden', 'inert', 'aria_hidden', 'display_none',
+                'visibility_hidden', 'opacity_zero', 'content_visibility_hidden'];
+            const countGroups = {
+                frameSkipCounts: visibilityReasons,
+                controlCounts: ['scanned', 'eligible', 'locatable', 'recognized'],
+                controlRejectCounts: [...visibilityReasons, 'aria_disabled', 'disabled', 'readonly', 'excluded_type', 'no_locator']
+            };
+            for (const [group, keys] of Object.entries(countGroups)) {
+                const raw = value.inspection[group];
+                if (!raw || typeof raw !== 'object' || Array.isArray(raw)) continue;
+                const clean = {};
+                for (const key of keys)
+                    if (Object.hasOwn(raw, key) && Number.isInteger(raw[key]) && raw[key] >= 0 && raw[key] <= 10000)
+                        clean[key] = raw[key];
+                if (Object.keys(clean).length) inspection[group] = clean;
+            }
             if (Object.keys(inspection).length) result.inspection = inspection;
         }
         return result;
@@ -563,6 +579,7 @@ async function openApiCheckout(page, { accessToken, planType, country, currency,
             signal: ownerSignal,
             maxBypassRounds: 6,
             requireCheckoutReady: !hostedCheckout,
+            prepareCheckout: (preparation) => require('./stripe-payment').prepareCheckoutCardSection(page, preparation),
             checkCheckoutLoad: true,
             allowCheckoutReload: true,
             isSubmitted: () => require('../rpc.cjs').wasSubmitted(),

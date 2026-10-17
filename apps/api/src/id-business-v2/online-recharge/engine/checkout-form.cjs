@@ -190,6 +190,9 @@ function inspectionState(page, deadline, signal) {
     framesSkipped: 0,
     framesFailed: 0,
     readAttempts: 1,
+    frameSkipCounts: {},
+    controlCounts: { scanned: 0, eligible: 0, locatable: 0, recognized: 0 },
+    controlRejectCounts: {},
     contentLoadFailed: false,
     timedOut: Date.now() >= deadline,
     pageClosed: closed(page),
@@ -219,49 +222,150 @@ function safeControls(items) {
     fields: Object.keys(rules).filter((key) => score(meta, key) > 0)
   }));
 }
-function elementRendered(element, { control = false } = {}) {
-  if (
-    control &&
-    (element.matches(':disabled') ||
-      (element.readOnly && element.getAttribute('role') !== 'combobox') ||
-      (element.type === 'button' &&
-        !(element.tagName === 'BUTTON' && element.getAttribute('role') === 'combobox')) ||
-      [
-        'hidden',
-        'checkbox',
-        'color',
-        'file',
-        'image',
-        'radio',
-        'range',
-        'reset',
-        'submit'
-      ].includes(element.type))
-  )
-    return false;
-  for (let n = element; n; n = n.parentElement || n.getRootNode()?.host) {
-    const style = n.ownerDocument.defaultView.getComputedStyle(n);
-    if (
-      n.hidden ||
-      n.inert ||
-      n.getAttribute('aria-hidden') === 'true' ||
-      (control && n.getAttribute('aria-disabled') === 'true') ||
-      style.display === 'none' ||
-      ['hidden', 'collapse'].includes(style.visibility) ||
-      Number(style.opacity) === 0 ||
-      style.contentVisibility === 'hidden'
-    )
-      return false;
+function elementRendered(element, { control = false, reason = false, snapshot = false } = {}) {
+  // Computed visibility on the target already includes inheritance. A visible
+  // child may legally override a hidden ancestor; the other exclusions below
+  // still apply to the whole composed ancestor chain, including shadow hosts.
+  function rejection(target, isControl) {
+    if (isControl) {
+      if (target.matches(':disabled')) return 'disabled';
+      if (target.readOnly && target.getAttribute('role') !== 'combobox') return 'readonly';
+      if (
+        (target.type === 'button' &&
+          !(target.tagName === 'BUTTON' && target.getAttribute('role') === 'combobox')) ||
+        [
+          'hidden',
+          'checkbox',
+          'color',
+          'file',
+          'image',
+          'radio',
+          'range',
+          'reset',
+          'submit'
+        ].includes(target.type)
+      )
+        return 'excluded_type';
+    }
+    for (let node = target; node; node = node.parentElement || node.getRootNode()?.host) {
+      const style = node.ownerDocument.defaultView.getComputedStyle(node);
+      if (node.hidden) return 'hidden';
+      if (node.inert) return 'inert';
+      if (node.getAttribute('aria-hidden') === 'true') return 'aria_hidden';
+      if (isControl && node.getAttribute('aria-disabled') === 'true') return 'aria_disabled';
+      if (style.display === 'none') return 'display_none';
+      if (Number(style.opacity) === 0) return 'opacity_zero';
+      if (style.contentVisibility === 'hidden') return 'content_visibility_hidden';
+    }
+    const style = target.ownerDocument.defaultView.getComputedStyle(target);
+    if (['hidden', 'collapse'].includes(style.visibility)) return 'visibility_hidden';
+    const box = target.getBoundingClientRect();
+    return box.width > 0 && box.height > 0 ? null : 'zero_geometry';
   }
-  const box = element.getBoundingClientRect();
-  return box.width > 0 && box.height > 0;
+  if (!snapshot) {
+    const rejected = rejection(element, control);
+    return reason ? rejected : !rejected;
+  }
+  const rejectCounts = {},
+    metas = [];
+  for (const [index, n] of element.entries()) {
+    const rejected = rejection(n, true);
+    if (rejected) {
+      rejectCounts[rejected] = (rejectCounts[rejected] || 0) + 1;
+      continue;
+    }
+    metas.push(
+      (() => {
+        let scope = '',
+          owner = '';
+        for (
+          let parent = n.parentElement;
+          parent && parent !== n.ownerDocument.body;
+          parent = parent.parentElement
+        ) {
+          const heading = parent.querySelector(
+            ':scope > legend,:scope > h2,:scope > h3,:scope > [role="heading"]'
+          );
+          const label = parent.getAttribute('aria-label') || heading?.textContent || '';
+          const identity = `${parent.id} ${parent.getAttribute('data-testid') || ''} ${label}`;
+          const kind = /billing.?address/i.test(identity)
+            ? 'billing'
+            : /shipping|delivery.?address/i.test(identity)
+              ? 'shipping'
+              : /(?:^|[\s_-])contact(?:$|[\s_-])|payment-link/i.test(identity)
+                ? 'contact'
+                : '';
+          if (!kind) continue;
+          scope = kind;
+          owner = parent.id
+            ? `[id=${JSON.stringify(parent.id)}]`
+            : parent.getAttribute('aria-label')
+              ? `[aria-label=${JSON.stringify(label)}]`
+              : heading
+                ? `${parent.tagName.toLowerCase()}:has(> ${heading.tagName.toLowerCase()}:text-is(${JSON.stringify(label)}))`
+                : '';
+          break;
+        }
+        return {
+          index,
+          id: n.id || '',
+          name: n.getAttribute('name') || '',
+          ac: n.getAttribute('autocomplete') || '',
+          stableField: ['cardNumber', 'cardExpiry', 'cardCvc'].includes(
+            n.getAttribute('data-elements-stable-field-name')
+          )
+            ? n.getAttribute('data-elements-stable-field-name')
+            : '',
+          type: n.type || '',
+          testId: [
+            'billingName',
+            'billingCountry',
+            'billingAddressLine1',
+            'billingLocality',
+            'billingPostalCode',
+            'billingAdministrativeArea'
+          ].includes(n.getAttribute('data-testid'))
+            ? n.getAttribute('data-testid')
+            : '',
+          placeholder: n.getAttribute('placeholder') || '',
+          label: (
+            n.getAttribute('aria-label') ||
+            (n.getAttribute('aria-labelledby') || '')
+              .split(/\s+/)
+              .map((id) => n.getRootNode().getElementById?.(id)?.textContent || '')
+              .join(' ')
+              .trim() ||
+            Array.from(n.labels || [])
+              .map((l) => l.textContent)
+              .join(' ') ||
+            ''
+          ).slice(0, 160),
+          tag: n.tagName.toLowerCase(),
+          role: n.getAttribute('role'),
+          scope,
+          owner,
+          readOnly: Boolean(n.readOnly),
+          required: n.required || n.getAttribute('aria-required') === 'true'
+        };
+      })()
+    );
+  }
+  return { metas, scanned: element.length, rejectCounts };
 }
-async function frameVisible(frame, deadline, signal) {
+async function frameVisible(frame, deadline, signal, inspection) {
   for (let current = frame; current.parentFrame(); current = current.parentFrame()) {
     const owner = await within(() => current.frameElement(), deadline, signal);
     try {
-      const visible = await within(() => owner.evaluate(elementRendered), deadline, signal);
-      if (!visible) return false;
+      const reason = await within(
+        () => owner.evaluate(elementRendered, { reason: true }),
+        deadline,
+        signal
+      );
+      if (reason) {
+        if (inspection)
+          inspection.frameSkipCounts[reason] = (inspection.frameSkipCounts[reason] || 0) + 1;
+        return false;
+      }
     } finally {
       // Releasing a handle must not extend a failed frame's read budget.
       owner.dispose().catch(() => {});
@@ -296,7 +400,7 @@ async function readControlsOnce(page, deadline, state) {
     if (inspection.timedOut || inspection.pageClosed || inspection.aborted) break;
     const frameDeadline = Math.min(deadline, Date.now() + (state.readBudgetMs || FRAME_READ_MS));
     try {
-      if (!(await frameVisible(frame, frameDeadline, state.signal))) {
+      if (!(await frameVisible(frame, frameDeadline, state.signal, inspection))) {
         inspection.framesSkipped++;
         continue;
       }
@@ -305,132 +409,17 @@ async function readControlsOnce(page, deadline, state) {
         break;
       }
       const all = frame.locator('input,select,textarea,[role="combobox"]');
-      const metas = await within(
-        () =>
-          all.evaluateAll((nodes) =>
-            nodes
-              .map((n, index) => {
-                const style = n.ownerDocument.defaultView.getComputedStyle(n),
-                  box = n.getBoundingClientRect();
-                if (
-                  !box.width ||
-                  !box.height ||
-                  style.display === 'none' ||
-                  style.visibility === 'hidden' ||
-                  n.matches(':disabled') ||
-                  n.getAttribute('aria-disabled') === 'true' ||
-                  (n.readOnly && n.getAttribute('role') !== 'combobox') ||
-                  (n.type === 'button' &&
-                    !(n.tagName === 'BUTTON' && n.getAttribute('role') === 'combobox')) ||
-                  [
-                    'hidden',
-                    'checkbox',
-                    'color',
-                    'file',
-                    'image',
-                    'radio',
-                    'range',
-                    'reset',
-                    'submit'
-                  ].includes(n.type) ||
-                  n.closest('[aria-hidden="true"],[inert]')
-                )
-                  return null;
-                for (
-                  let parent = n;
-                  parent;
-                  parent = parent.parentElement || parent.getRootNode()?.host
-                ) {
-                  const parentStyle = parent.ownerDocument.defaultView.getComputedStyle(parent);
-                  if (
-                    parent.hidden ||
-                    parent.inert ||
-                    parent.getAttribute('aria-hidden') === 'true' ||
-                    parent.getAttribute('aria-disabled') === 'true' ||
-                    parentStyle.display === 'none' ||
-                    ['hidden', 'collapse'].includes(parentStyle.visibility) ||
-                    Number(parentStyle.opacity) === 0 ||
-                    parentStyle.contentVisibility === 'hidden'
-                  )
-                    return null;
-                }
-                let scope = '',
-                  owner = '';
-                for (
-                  let parent = n.parentElement;
-                  parent && parent !== n.ownerDocument.body;
-                  parent = parent.parentElement
-                ) {
-                  const heading = parent.querySelector(
-                    ':scope > legend,:scope > h2,:scope > h3,:scope > [role="heading"]'
-                  );
-                  const label = parent.getAttribute('aria-label') || heading?.textContent || '';
-                  const identity = `${parent.id} ${parent.getAttribute('data-testid') || ''} ${label}`;
-                  const kind = /billing.?address/i.test(identity)
-                    ? 'billing'
-                    : /shipping|delivery.?address/i.test(identity)
-                      ? 'shipping'
-                      : /(?:^|[\s_-])contact(?:$|[\s_-])|payment-link/i.test(identity)
-                        ? 'contact'
-                        : '';
-                  if (!kind) continue;
-                  scope = kind;
-                  owner = parent.id
-                    ? `[id=${JSON.stringify(parent.id)}]`
-                    : parent.getAttribute('aria-label')
-                      ? `[aria-label=${JSON.stringify(label)}]`
-                      : heading
-                        ? `${parent.tagName.toLowerCase()}:has(> ${heading.tagName.toLowerCase()}:text-is(${JSON.stringify(label)}))`
-                        : '';
-                  break;
-                }
-                return {
-                  index,
-                  id: n.id || '',
-                  name: n.getAttribute('name') || '',
-                  ac: n.getAttribute('autocomplete') || '',
-                  stableField: ['cardNumber', 'cardExpiry', 'cardCvc'].includes(
-                    n.getAttribute('data-elements-stable-field-name')
-                  )
-                    ? n.getAttribute('data-elements-stable-field-name')
-                    : '',
-                  type: n.type || '',
-                  testId: [
-                    'billingName',
-                    'billingCountry',
-                    'billingAddressLine1',
-                    'billingLocality',
-                    'billingPostalCode',
-                    'billingAdministrativeArea'
-                  ].includes(n.getAttribute('data-testid'))
-                    ? n.getAttribute('data-testid')
-                    : '',
-                  placeholder: n.getAttribute('placeholder') || '',
-                  label: (
-                    n.getAttribute('aria-label') ||
-                    (n.getAttribute('aria-labelledby') || '')
-                      .split(/\s+/)
-                      .map((id) => n.ownerDocument.getElementById(id)?.textContent || '')
-                      .join(' ')
-                      .trim() ||
-                    Array.from(n.labels || [])
-                      .map((l) => l.textContent)
-                      .join(' ') ||
-                    ''
-                  ).slice(0, 160),
-                  tag: n.tagName.toLowerCase(),
-                  role: n.getAttribute('role'),
-                  scope,
-                  owner,
-                  readOnly: Boolean(n.readOnly),
-                  required: n.required || n.getAttribute('aria-required') === 'true'
-                };
-              })
-              .filter(Boolean)
-          ),
+      const snapshot = await within(
+        () => all.evaluateAll(elementRendered, { snapshot: true }),
         frameDeadline,
         state.signal
       );
+      const { metas, scanned, rejectCounts } = snapshot;
+      inspection.controlCounts.scanned += scanned;
+      inspection.controlCounts.eligible += metas.length;
+      for (const [reason, count] of Object.entries(rejectCounts))
+        inspection.controlRejectCounts[reason] =
+          (inspection.controlRejectCounts[reason] || 0) + count;
       inspection.framesChecked++;
       for (const meta of metas) {
         const root = meta.owner ? frame.locator(meta.owner) : frame;
@@ -459,7 +448,14 @@ async function readControlsOnce(page, deadline, state) {
             : meta.placeholder
               ? root.getByPlaceholder(meta.placeholder, { exact: true })
               : null;
-        if (el) result.push({ frame, el, meta });
+        if (el) {
+          inspection.controlCounts.locatable++;
+          if (Object.keys(rules).some((key) => score(meta, key) > 0))
+            inspection.controlCounts.recognized++;
+          result.push({ frame, el, meta });
+        } else
+          inspection.controlRejectCounts.no_locator =
+            (inspection.controlRejectCounts.no_locator || 0) + 1;
       }
     } catch {
       inspection.framesFailed++;
@@ -1169,7 +1165,7 @@ async function loadFailed(page, deadline, signal) {
         timeout(deadline, signal);
         if (closed(page)) throw failure('CHECKOUT_PAGE_CLOSED', '结账页面已关闭');
         readDeadline = Math.min(deadline, Date.now() + state.readBudgetMs);
-        if (!(await frameVisible(frame, readDeadline, signal))) {
+        if (!(await frameVisible(frame, readDeadline, signal, inspection))) {
           inspection.framesSkipped++;
           continue;
         }
@@ -1237,6 +1233,7 @@ async function stableDue(page, read, deadline) {
   return null;
 }
 module.exports = {
+  elementRendered,
   fillCard,
   fillBilling,
   diagnostic,

@@ -991,6 +991,67 @@ const diagnosticInspection = (complete = true) => ({
   pageClosed: false,
   aborted: false
 });
+
+test('safe exclusion counts survive the original opening result and show Chinese failure reasons', () => {
+  const Service = checkoutServiceFixture();
+  const inspection = {
+    ...diagnosticInspection(),
+    framesSkipped: 2,
+    frameSkipCounts: { visibility_hidden: 1, inert: 1 },
+    controlCounts: { scanned: 5, eligible: 2, locatable: 1, recognized: 0 },
+    controlRejectCounts: { readonly: 1, disabled: 2, no_locator: 1 }
+  };
+  const diagnostic = Service.safeCheckoutOpenDiagnostics({
+    stage: 'readiness',
+    reason: 'not_ready',
+    code: 'CHECKOUT_FORM_NOT_READY',
+    missing: ['number'],
+    controls: [],
+    inspection
+  });
+  assert.deepEqual(JSON.parse(JSON.stringify(diagnostic.inspection)), inspection);
+  const result = publicCheckoutFailure({
+    code: 'CHECKOUT_FORM_NOT_READY',
+    checkoutCreationState: 'accepted',
+    checkoutOpenDiagnostics: diagnostic
+  });
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(result.checkoutOpenDiagnostics.inspection)),
+    inspection
+  );
+  assert.match(result.error, /跳过页面数：2/);
+  assert.match(result.error, /可见性隐藏1/);
+  assert.match(result.error, /扫描控件数：5/);
+  assert.match(result.error, /只读控件1/);
+  assert.match(result.error, /缺少定位标识1/);
+  assert.doesNotMatch(result.error, /no_locator|readonly|visibility_hidden/);
+});
+
+test('exclusion diagnostics reject unknown keys, raw data and unbounded or noninteger counts', () => {
+  const Service = checkoutServiceFixture();
+  const result = Service.safeCheckoutOpenDiagnostics({
+    stage: 'readiness',
+    reason: 'not_ready',
+    code: 'CHECKOUT_FORM_NOT_READY',
+    inspection: {
+      frameSkipCounts: { inert: 2, visibility_hidden: -1, hidden: 'PRIVATE', url: 'PRIVATE' },
+      controlCounts: {
+        scanned: 10000,
+        eligible: 1.5,
+        locatable: 10001,
+        recognized: true,
+        token: 'PRIVATE'
+      },
+      controlRejectCounts: { no_locator: 3, readonly: null, disabled: Infinity, value: 'PRIVATE' }
+    }
+  });
+  assert.deepEqual(JSON.parse(JSON.stringify(result.inspection)), {
+    frameSkipCounts: { inert: 2 },
+    controlCounts: { scanned: 10000 },
+    controlRejectCounts: { no_locator: 3 }
+  });
+  assert.doesNotMatch(JSON.stringify(result), /PRIVATE|token|url|value/);
+});
 for (const [name, code, controls, inspection, count] of [
   ['unmatched', 'CHECKOUT_FORM_NOT_READY', [diagnosticControl([])], diagnosticInspection(), 0],
   [

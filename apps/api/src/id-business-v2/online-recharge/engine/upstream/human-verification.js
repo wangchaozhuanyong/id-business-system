@@ -901,6 +901,15 @@ async function clearHumanVerification(page, options = {}) {
                 checkoutWaiting = true;
                 if (readiness && Date.now() >= checkoutDeadline)
                     return checkoutFailure(pendingCheckoutCode());
+                if (typeof options.prepareCheckout === 'function') {
+                    await budget.run(options.prepareCheckout({
+                        maxWaitMs: Math.max(1, Math.min(budget.remaining(), checkoutDeadline - Date.now())),
+                        deadlineAt: budget.deadlineAt,
+                        signal: budget.signal
+                    }));
+                    budget.assert();
+                    if (Date.now() >= checkoutDeadline) return checkoutFailure(pendingCheckoutCode());
+                }
                 readiness = await budget.run(form.inspectCardReadiness(page, {
                     deadline: Math.min(checkoutDeadline, Date.now() + 2000), signal: budget.signal
                 }));
