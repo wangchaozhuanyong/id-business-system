@@ -4,6 +4,7 @@ import importlib.util
 import json
 import os
 from pathlib import Path
+import re
 import shutil
 import subprocess
 import sys
@@ -44,11 +45,36 @@ def inventory(root):
     return load('recharge-record-release.py').file_inventory(root)
 
 
+def verify_review_source_scope(c):
+    pin = c.get('inheritedReview')
+    need(type(pin) is dict and set(pin) == {'commit', 'tree', 'sources'}
+         and all(isinstance(pin.get(key), str) and re.fullmatch('[a-f0-9]{40}', pin[key])
+                 for key in ('commit', 'tree')) and type(pin.get('sources')) is dict,
+         'INHERITED_REVIEW_INVALID')
+    inherited, owned = pin['sources'], set(c['sources'])
+    need(not owned.intersection(inherited)
+         and all(name.startswith('apps/api/src/id-business-v2/online-recharge/')
+                 and '..' not in Path(name).parts
+                 and isinstance(expected, str) and re.fullmatch('[a-f0-9]{64}', expected)
+                 for name, expected in inherited.items()), 'INHERITED_SOURCE_SCOPE_CHANGED')
+    need(git('rev-parse', pin['commit'] + '^{tree}').decode().strip() == pin['tree']
+         and git('merge-base', pin['commit'], 'HEAD').decode().strip() == pin['commit'],
+         'INHERITED_SOURCE_PROVENANCE_CHANGED')
+    inherited_delta = set(git('diff', '--name-only', c['reviewBase'], pin['commit'], '--', 'apps/', 'packages/').decode().splitlines())
+    need(inherited_delta - owned == set(inherited), 'INHERITED_SOURCE_SCOPE_CHANGED')
+    for name, expected in inherited.items():
+        path = ROOT / name
+        need(path.is_file() and not path.is_symlink() and path.resolve().is_relative_to(ROOT)
+             and digest(path.read_bytes()) == expected == digest(git('show', pin['commit'] + ':' + name)),
+             'INHERITED_SOURCE_CHANGED')
+    changed = set(git('diff', '--name-only', c['reviewBase'], 'HEAD', '--', 'apps/', 'packages/').decode().splitlines())
+    need(changed == owned | set(inherited), 'SOURCE_SCOPE_CHANGED')
+
+
 def verify_sources(c):
     need(not git('status', '--porcelain', '--untracked-files=no').strip(), 'SOURCE_DIRTY')
     need(c['scope'] == 'BIT_RECHARGE_WEB_DIRECT_EXPIRED_CHECKOUT_20261017', 'SCOPE_CHANGED')
-    changed = set(git('diff', '--name-only', c['reviewBase'], 'HEAD', '--', 'apps/', 'packages/').decode().splitlines())
-    need(changed == set(c['sources']), 'SOURCE_SCOPE_CHANGED')
+    verify_review_source_scope(c)
     for name, expected in c['sources'].items():
         need(name.startswith(('apps/admin/src/v2/features/auto-recharge/',
                               'apps/api/src/id-business-v2/auto-recharge/'))

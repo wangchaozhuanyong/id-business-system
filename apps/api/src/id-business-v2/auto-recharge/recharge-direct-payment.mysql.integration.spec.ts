@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { V2CommandTransactionManager, V2TransactionalAuditService } from '../runtime/public-api';
 import { RechargeRepository } from './persistence/recharge.repository';
@@ -216,6 +216,13 @@ suite('网页直连付款真实MySQL事务与一次性授权', () => {
       }
     });
   });
+  afterEach(async () => {
+    // Release only this suite's tasks between cases; each case still exercises the real owner lock.
+    if (prisma && taskIds.size)
+      await prisma.idBusinessV2RechargeJob.deleteMany({
+        where: { ownerId, id: { in: [...taskIds] } }
+      });
+  });
   afterAll(async () => {
     if (!prisma) return;
     try {
@@ -324,7 +331,11 @@ suite('网页直连付款真实MySQL事务与一次性授权', () => {
   it('expired并发授权只有一份不可变归档，重复授权复用原revision和摘要', async () => {
     const f = await fixture();
     const before = await records(f.accountKey);
-    const [first, second] = await Promise.all([f.authorize(), f.authorize()]);
+    const authorized = await Promise.allSettled([f.authorize(), f.authorize()]);
+    expect(authorized).toMatchObject([{ status: 'fulfilled' }, { status: 'fulfilled' }]);
+    const [first, second] = authorized.map((result) =>
+      result.status === 'fulfilled' ? result.value : undefined
+    );
     expect(first).toEqual(second);
     expect(first).toMatchObject({
       replacementAuthorized: true,
@@ -357,9 +368,9 @@ suite('网页直连付款真实MySQL事务与一次性授权', () => {
     const f = await fixture();
     const marker = f.marker(await f.authorize());
     const history = await archives(f.accountKey);
-    expect(await Promise.all([f.callback(marker), f.callback(marker)])).toEqual([
-      { revision: 6 },
-      { revision: 6 }
+    expect(await Promise.allSettled([f.callback(marker), f.callback(marker)])).toEqual([
+      { status: 'fulfilled', value: { revision: 6 } },
+      { status: 'fulfilled', value: { revision: 6 } }
     ]);
     const consumed = await repository.byId(f.id);
     const currentRecords = await records(f.accountKey);

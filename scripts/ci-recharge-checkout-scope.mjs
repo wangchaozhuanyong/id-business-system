@@ -16,6 +16,7 @@ const support = new Set([
   'scripts/acceptance-v2-auto-recharge.mjs',
   'packages/shared/src/v2/auto-recharge.ts',
   'docs/V2_TASKS.md',
+  'docs/AUTO_RECHARGE.md',
   'docs/AUTO_RECHARGE_NATIVE_CHECKOUT_20261016.md'
 ]);
 export const checkoutSourceRecoveryControls = Object.freeze([
