@@ -219,11 +219,9 @@ suite('网页直连付款真实MySQL事务与一次性授权', () => {
   afterAll(async () => {
     if (!prisma) return;
     try {
+      // Immutable audit rows and their synthetic owner stay until CI destroys the dedicated DB.
       // Never truncate or clean by shared state: delete only this suite's exact synthetic IDs.
       if (taskIds.size) {
-        await prisma.auditLog.deleteMany({
-          where: { userId: ownerId, objectType: 'recharge_job', objectId: { in: [...taskIds] } }
-        });
         await prisma.idBusinessV2RechargeJob.deleteMany({
           where: { ownerId, id: { in: [...taskIds] } }
         });
@@ -232,7 +230,6 @@ suite('网页直连付款真实MySQL事务与一次性授权', () => {
         await prisma.idBusinessV2RechargeRecord.deleteMany({
           where: { ownerId, accountKey: { in: [...accountKeys] } }
         });
-      await prisma.user.deleteMany({ where: { id: ownerId, username: operator.username } });
     } finally {
       await prisma.$disconnect();
     }
