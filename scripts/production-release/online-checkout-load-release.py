@@ -1,4 +1,4 @@
-"""Finite engine-only checkout loading repair. No API/Admin replacement or payment."""
+"""Finite engine-only core compatibility repair. No API/Admin replacement or payment."""
 import datetime
 import hashlib
 import importlib.util
@@ -13,14 +13,16 @@ HERE = Path(__file__).resolve().parent
 SCOPE = 'ONLINE_CHECKOUT_LOAD_RECOVERY'
 CONTRACT_FILE = 'online-checkout-load-contract.json'
 ENGINE = 'apps/api/src/id-business-v2/online-recharge/engine'
-SOURCE_BASE = 'a0e633a610ff67400cc2fa8bd2926148a2479ecd'
-FILES = frozenset(('SOURCE_MANIFEST.json', 'checkout-form.cjs', 'checkout-recovery.cjs',
-    'safe-media.cjs', 'upstream/chatgpt.js', 'upstream/human-verification.js', 'upstream/index.js',
-    'test/checkout-form.test.cjs', 'test/checkout-recovery.test.cjs', 'test/verification-state.test.cjs',
-    'test/checkout-load-recovery.test.cjs', 'test/checkout-navigation.test.cjs',
-    'test/recharge-flow-acceptance.test.cjs', 'test/regressions.test.cjs',
-    'test/safe-media-finish.test.cjs'))
-ADDED = frozenset(('test/checkout-navigation.test.cjs',))
+SOURCE_BASE = '4e0037a458330f58914eebeccd2a2d892c8405b0'
+FILES = frozenset(('SOURCE_MANIFEST.json', 'checkout-form.cjs', 'task-runner.cjs', 'worker.cjs',
+    'upstream/chatgpt.js', 'upstream/index.js', 'upstream/pricing-checkout.js',
+    'upstream/subscription-check.js', 'upstream/upgrade-checkout.js',
+    'test/checkout-form.test.cjs', 'test/checkout-navigation.test.cjs',
+    'test/checkout-recovery.test.cjs', 'test/debug-checkout.test.cjs',
+    'test/recharge-flow-acceptance.test.cjs', 'test/renewal-state.test.cjs',
+    'test/upgrade-checkout.test.cjs', 'test/worker-heartbeat.test.cjs',
+    'upstream/test/pricing-checkout.test.js'))
+ADDED = frozenset()
 VALIDATION = frozenset(('apps/api/src/id-business-v2/online-recharge/local-chain-acceptance.spec.ts',
     'docs/ONLINE_RECHARGE.md', 'docs/V2_TASKS.md'))
 PRESERVED = ('api', 'admin', 'mysql', 'caddy', 'media-resolver', 'auto-recharge', 'auto-registration')

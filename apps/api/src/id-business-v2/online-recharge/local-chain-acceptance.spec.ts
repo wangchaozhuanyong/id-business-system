@@ -504,7 +504,7 @@ describe('本地后端链路验收（隔离存储，无官网、银行或数据�
         result: { status: string; result: Row; message: string };
         failure: string;
         metrics: Row;
-        actions: { method: string; taskScoped: boolean }[];
+        actions: { method: string; taskScoped: boolean; stage?: string }[];
       };
       const harness = createRequire(resolve(process.cwd(), 'package.json'))(
         resolve(
@@ -516,6 +516,8 @@ describe('本地后端链路验收（隔离存储，无官网、银行或数据�
           scene: string,
           options: {
             task: Row;
+            cardFields: string;
+            billingFields: string;
             diagnosticDelay?: { stage: 'verify'; milliseconds: number };
             rpc: (method: string, args: Row) => Promise<unknown>;
           }
@@ -523,8 +525,22 @@ describe('本地后端链路验收（隔离存储，无官网、银行或数据�
       };
       const f = fixture(),
         claim = await f.start(false);
+      const cardFields = {
+        success: 'legacy-names',
+        recover: 'legacy-placeholders',
+        unknown: 'legacy-stable-nested',
+        readiness: 'standard'
+      }[scene];
+      const billingFields = {
+        success: 'legacy-names',
+        recover: 'legacy-collapsed',
+        unknown: 'legacy-testids',
+        readiness: 'standard'
+      }[scene];
       const actual = await harness.runSyntheticRecharge(scene, {
         task: claim,
+        cardFields,
+        billingFields,
         ...(scene === 'recover'
           ? { diagnosticDelay: { stage: 'verify' as const, milliseconds: 350 } }
           : {}),
@@ -560,6 +576,13 @@ describe('本地后端链路验收（隔离存储，无官网、银行或数据�
         paymentRequests: 1,
         cardReadBack: true,
         billingReadBack: true,
+        cardFields,
+        billingFields,
+        billingOpens: billingFields === 'legacy-collapsed' ? 1 : 0,
+        countryChoices: billingFields === 'legacy-collapsed' ? 1 : 0,
+        renewalRequests: scene === 'unknown' ? 0 : 1,
+        cookieLessRequests: 0,
+        cardFrameDocuments: cardFields === 'legacy-stable-nested' ? 2 : 1,
         unexpectedNetwork: 0
       });
       expect(actual.metrics.formReadFailures).toEqual([]);
@@ -591,8 +614,15 @@ describe('本地后端链路验收（隔离存储，无官网、银行或数据�
           milliseconds: 350
         });
       expect(
-        actual.actions.filter((action) => action.method === 'beforeExternalSubmit')
+        actual.actions.filter(
+          (action) => action.method === 'beforeExternalSubmit' && action.stage === 'payment_submit'
+        )
       ).toHaveLength(1);
+      expect(
+        actual.actions.filter(
+          (action) => action.method === 'beforeExternalSubmit' && action.stage === 'renewal_update'
+        )
+      ).toHaveLength(scene === 'unknown' ? 0 : 1);
       expect(actual.actions.every((action) => action.taskScoped)).toBe(true);
       // Exact production parent-worker projection (worker.cjs completeJob):
       // only the actual child's result supplies payment and subscription proof.
@@ -616,6 +646,7 @@ describe('本地后端链路验收（隔离存储，无官网、银行或数据�
         await expect(f.start(false)).rejects.toThrow('先核对原任务');
       } else {
         expect(actual.result.status).toBe('succeeded');
+        expect(actual.result.result.autoRenewCancellation).toEqual({ ok: true });
         expect(f.row(claim)).toMatchObject({ status: 'succeeded', confirmedPaid: true });
         expect(f.storage.rows('onlineRechargeBill')).toHaveLength(1);
         expect(f.storage.rows('idBusinessV2BankRechargeOrder')).toHaveLength(1);
@@ -653,6 +684,8 @@ describe('本地后端链路验收（隔离存储，无官网、银行或数据�
         JSON.stringify(
           {
             scene,
+            cardFields,
+            billingFields,
             taskId: claim.id,
             backendEntry:
               'TasksService → WorkerService/RpcRepository → WorkerRepository → OrderSyncService/Repository → BankRechargeOnlineOrderService/Repository',

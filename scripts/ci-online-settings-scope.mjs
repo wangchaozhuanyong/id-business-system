@@ -271,6 +271,44 @@ export function isOnlineCheckoutNavigationReadyOnly(paths) {
     )
   );
 }
+export const onlineCoreParityScope = 'ONLINE_CORE_PARITY';
+const coreParityEngineRequired = [
+  'SOURCE_MANIFEST.json',
+  'checkout-form.cjs',
+  'task-runner.cjs',
+  'test/checkout-form.test.cjs',
+  'test/checkout-navigation.test.cjs',
+  'test/checkout-recovery.test.cjs',
+  'test/debug-checkout.test.cjs',
+  'test/recharge-flow-acceptance.test.cjs',
+  'test/renewal-state.test.cjs',
+  'test/upgrade-checkout.test.cjs',
+  'test/worker-heartbeat.test.cjs',
+  'upstream/chatgpt.js',
+  'upstream/index.js',
+  'upstream/pricing-checkout.js',
+  'upstream/subscription-check.js',
+  'upstream/test/pricing-checkout.test.js',
+  'upstream/upgrade-checkout.js',
+  'worker.cjs'
+];
+const coreParityRequired = [
+  ...coreParityEngineRequired.map(
+    (name) => 'apps/api/src/id-business-v2/online-recharge/engine/' + name
+  ),
+  'apps/api/src/id-business-v2/online-recharge/local-chain-acceptance.spec.ts',
+  'docs/ONLINE_RECHARGE.md',
+  'docs/V2_TASKS.md'
+];
+export function isOnlineCoreParityOnly(paths) {
+  return (
+    new Set(paths).size === paths.length &&
+    coreParityRequired.every((path) => paths.includes(path)) &&
+    paths.every(
+      (path) => coreParityRequired.includes(path) || checkoutNavigationReadyControls.includes(path)
+    )
+  );
+}
 const checkoutLoadParentRpcRequired = [
   'SOURCE_MANIFEST.json',
   'rpc.cjs',
@@ -381,7 +419,8 @@ export function isOnlineSettingsOnly(paths) {
     isOnlineLegacyCloseOnly(paths) ||
     isOnlineCheckoutCsRecoveryOnly(paths) ||
     isOnlineCheckoutLoadRecoveryOnly(paths) ||
-    isOnlineCheckoutNavigationReadyOnly(paths)
+    isOnlineCheckoutNavigationReadyOnly(paths) ||
+    isOnlineCoreParityOnly(paths)
   )
     return true;
   const databaseTest = 'apps/api/src/id-business-v2/online-recharge/mysql.integration.spec.ts';
@@ -433,10 +472,13 @@ export function onlineSettingsCommands(part, paths) {
   const checkoutLoadParentRpc = isOnlineCheckoutLoadParentRpcOnly(paths);
   const checkoutLoadControls = isOnlineCheckoutLoadRecoveryControlsOnly(paths);
   const checkoutNavigationReady = isOnlineCheckoutNavigationReadyOnly(paths);
-  const checkoutLoadBusiness = checkoutLoadRecovery || checkoutNavigationReady;
-  const checkoutEngineRequired = checkoutNavigationReady
-    ? checkoutNavigationReadyEngineRequired
-    : checkoutLoadRecoveryEngineRequired;
+  const coreParity = isOnlineCoreParityOnly(paths);
+  const checkoutLoadBusiness = checkoutLoadRecovery || checkoutNavigationReady || coreParity;
+  const checkoutEngineRequired = coreParity
+    ? coreParityEngineRequired
+    : checkoutNavigationReady
+      ? checkoutNavigationReadyEngineRequired
+      : checkoutLoadRecoveryEngineRequired;
   if (!isOnlineSettingsOnly(paths) && !controlsOnly)
     throw new Error('Unsupported online settings scope');
   const npm = (...args) => ['npm', ...args];

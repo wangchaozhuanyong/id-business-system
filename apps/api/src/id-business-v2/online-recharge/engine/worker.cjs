@@ -279,7 +279,7 @@ async function runJob(task, config) {
       const requiresBrowser =
         task.operation === 'debug' ||
         task.operation === 'subscription' ||
-        (task.operation === 'renewal' && task.payload?.action === 'check') ||
+        task.operation === 'renewal' ||
         (task.operation === 'recharge' && task.provider !== 'third_party');
       await configurePool(config);
       requireLease();

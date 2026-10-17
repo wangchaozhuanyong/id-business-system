@@ -122,6 +122,608 @@ test('readiness rejects an empty page, amount text and ordinary iframe inputs', 
     assert.equal(result.inspection.complete, true);
   }
 });
+const legacyCardAliases = [
+  ['number', 'autocomplete', '<input autocomplete="cc-number">'],
+  ['number', 'cardnumber name', '<input name="cardnumber">'],
+  ['number', 'number name', '<input name="number">'],
+  ['number', 'numeric placeholder', '<input placeholder="1234 1234 1234 1234">'],
+  ['number', 'stable field', '<input data-elements-stable-field-name="cardNumber">'],
+  ['number', 'accessible label', '<input aria-label="Card number">'],
+  ['expiry', 'autocomplete', '<input autocomplete="cc-exp">'],
+  ['expiry', 'exp-date name', '<input name="exp-date">'],
+  ['expiry', 'MM placeholder', '<input placeholder="MM / YY">'],
+  ['expiry', 'stable field', '<input data-elements-stable-field-name="cardExpiry">'],
+  ['cvc', 'autocomplete', '<input autocomplete="cc-csc">'],
+  ['cvc', 'cardCvc name', '<input name="cardCvc">'],
+  ['cvc', 'stable field', '<input data-elements-stable-field-name="cardCvc">']
+];
+for (const [field, alias, html] of legacyCardAliases) {
+  test(`legacy card alias ${field}: ${alias} shares readiness, fill and readback`, async (t) => {
+    const fields = {
+      number: '<input autocomplete="cc-number">',
+      expiry: '<input autocomplete="cc-exp">',
+      cvc: '<input autocomplete="cc-csc">',
+      [field]: html
+    };
+    const page = await pageFor(t, Object.values(fields).join(''));
+    assert.equal((await inspectCardReadiness(page)).ready, true);
+    const result = await fillCard(page, card, { deadline: Date.now() + 3000 });
+    assert.equal(
+      result.ok,
+      true,
+      JSON.stringify({ code: result.errorCode, missing: result.missing })
+    );
+    assert.deepEqual(await page.locator('input').evaluateAll((ns) => ns.map((n) => n.value)), [
+      card.number,
+      card.expiry,
+      card.cvc
+    ]);
+  });
+}
+test('legacy number aliases retain number-first readiness without companion fields', async (t) => {
+  for (const html of [
+    '<input name="number">',
+    '<input placeholder="1234 1234 1234 1234">',
+    '<input data-elements-stable-field-name="cardNumber">'
+  ]) {
+    const page = await pageFor(t, '<h2>Configure your plan</h2>' + html);
+    assert.equal((await inspectCardReadiness(page)).ready, true);
+    assert.deepEqual(await page.locator('input').evaluateAll((ns) => ns.map((n) => n.value)), ['']);
+  }
+});
+test('legacy weak number aliases reject explicit non-card controls without writing', async (t) => {
+  for (const html of [
+    '<input name="number" type="number">',
+    '<input name="number" aria-label="Order number">',
+    '<input name="number" aria-label="Quantity">',
+    '<input placeholder="Order number 1234">',
+    '<input placeholder="1234" aria-label="Postal code">',
+    '<input name="phoneNumber" placeholder="1234">'
+  ]) {
+    const page = await pageFor(t, '<h2>Configure your plan</h2>' + html);
+    const result = await inspectCardReadiness(page);
+    assert.equal(result.ready, false);
+    assert.equal(result.code, 'CHECKOUT_CARD_NOT_READY');
+    assert.deepEqual(await page.locator('input').evaluateAll((ns) => ns.map((n) => n.value)), ['']);
+  }
+});
+test('strong card semantics are not excluded by weak-alias non-card words', async (t) => {
+  for (const html of [
+    '<input autocomplete="cc-number" aria-label="Order reference">',
+    '<input data-elements-stable-field-name="cardNumber" aria-label="Order reference">'
+  ]) {
+    const page = await pageFor(t, html);
+    assert.equal((await inspectCardReadiness(page)).ready, true);
+  }
+});
+test('legacy aliases support separate nested frames and ignore hidden duplicates', async (t) => {
+  const page = await pageFor(
+    t,
+    `<section hidden>${iframe('<input name="number">')}</section>` +
+      iframe(iframe('<input data-elements-stable-field-name="cardNumber">')) +
+      iframe('<input placeholder="MM / YY">') +
+      '<input name="cardCvc">'
+  );
+  assert.equal((await inspectCardReadiness(page)).ready, true);
+  const result = await fillCard(page, card, { deadline: Date.now() + 5000 });
+  assert.equal(
+    result.ok,
+    true,
+    JSON.stringify({ code: result.errorCode, missing: result.missing })
+  );
+  assert.equal(await page.frameLocator('iframe').nth(0).locator('input').inputValue(), '');
+  assert.equal(
+    await page.frameLocator('iframe').nth(1).frameLocator('iframe').locator('input').inputValue(),
+    card.number
+  );
+  assert.equal(await page.frameLocator('iframe').nth(2).locator('input').inputValue(), card.expiry);
+  assert.equal(await page.locator('input').inputValue(), card.cvc);
+});
+test('stable card fields outrank shared autocomplete off without merging controls', async (t) => {
+  const stableFields =
+    '<input data-elements-stable-field-name="cardNumber" autocomplete="off">' +
+    '<input data-elements-stable-field-name="cardExpiry" autocomplete="off">' +
+    '<input data-elements-stable-field-name="cardCvc" autocomplete="off">';
+  const page = await pageFor(
+    t,
+    `<section hidden>${stableFields}</section><section data-active>${stableFields}</section>`
+  );
+  assert.equal((await inspectCardReadiness(page)).ready, true);
+  const result = await fillCard(page, card, { deadline: Date.now() + 3000 });
+  assert.equal(
+    result.ok,
+    true,
+    JSON.stringify({ code: result.errorCode, missing: result.missing })
+  );
+  assert.deepEqual(
+    await page.locator('[data-active] input').evaluateAll((ns) => ns.map((n) => n.value)),
+    [card.number, card.expiry, card.cvc]
+  );
+  assert.deepEqual(
+    await page.locator('[hidden] input').evaluateAll((ns) => ns.map((n) => n.value)),
+    ['', '', '']
+  );
+});
+for (const [kind, fields] of [
+  ['names', '<input name="number"><input name="exp-date"><input name="cardCvc">'],
+  [
+    'placeholders',
+    '<input placeholder="1234 1234 1234 1234"><input placeholder="MM / YY"><input placeholder="CVC">'
+  ]
+]) {
+  test(`legacy ${kind} remain distinct with shared non-semantic autocomplete`, async (t) => {
+    for (const autocomplete of ['off', 'on']) {
+      const html = fields.replaceAll('<input ', `<input autocomplete="${autocomplete}" `);
+      const page = await pageFor(t, html);
+      assert.equal((await inspectCardReadiness(page)).ready, true);
+      const result = await fillCard(page, card, { deadline: Date.now() + 3000 });
+      assert.equal(
+        result.ok,
+        true,
+        JSON.stringify({ code: result.errorCode, missing: result.missing })
+      );
+      assert.deepEqual(await page.locator('input').evaluateAll((ns) => ns.map((n) => n.value)), [
+        card.number,
+        card.expiry,
+        card.cvc
+      ]);
+    }
+  });
+}
+test('visible stable card-number duplicates with shared autocomplete off remain ambiguous', async (t) => {
+  const page = await pageFor(
+    t,
+    '<input data-elements-stable-field-name="cardNumber" autocomplete="off">' +
+      '<input data-elements-stable-field-name="cardNumber" autocomplete="off">' +
+      '<input data-elements-stable-field-name="cardExpiry" autocomplete="off">' +
+      '<input data-elements-stable-field-name="cardCvc" autocomplete="off">'
+  );
+  assert.equal((await inspectCardReadiness(page)).code, 'CHECKOUT_CONTROL_AMBIGUOUS');
+  const result = await fillCard(page, card, { deadline: Date.now() + 3000 });
+  assert.equal(result.errorCode, 'CHECKOUT_CONTROL_AMBIGUOUS');
+  assert.deepEqual(await page.locator('input').evaluateAll((ns) => ns.map((n) => n.value)), [
+    '',
+    '',
+    '',
+    ''
+  ]);
+});
+test('legacy number aliases cannot compete with another visible card candidate', async (t) => {
+  for (const other of ['<input autocomplete="cc-number">', '<input placeholder="1234">']) {
+    const page = await pageFor(
+      t,
+      '<input name="number">' + other + '<input name="exp-date"><input name="cardCvc">'
+    );
+    assert.equal((await inspectCardReadiness(page)).code, 'CHECKOUT_CONTROL_AMBIGUOUS');
+    const result = await fillCard(page, card, { deadline: Date.now() + 3000 });
+    assert.equal(result.errorCode, 'CHECKOUT_CONTROL_AMBIGUOUS');
+    assert.deepEqual(await page.locator('input').evaluateAll((ns) => ns.map((n) => n.value)), [
+      '',
+      '',
+      '',
+      ''
+    ]);
+  }
+});
+test('legacy weak placeholders cannot override another strong card-field meaning', async (t) => {
+  const page = await pageFor(
+    t,
+    '<input name="number"><input name="exp-date"><input aria-label="Security code" placeholder="1234">'
+  );
+  assert.equal((await inspectCardReadiness(page)).ready, true);
+  const result = await fillCard(page, card, { deadline: Date.now() + 3000 });
+  assert.equal(
+    result.ok,
+    true,
+    JSON.stringify({ code: result.errorCode, missing: result.missing })
+  );
+  assert.equal(await page.getByLabel('Security code').inputValue(), card.cvc);
+});
+const legacyBillingAliases = [
+  ['line1', 'line1 name', '<input name="line1">'],
+  ['city', 'billingLocality id', '<input id="billingLocality">'],
+  ['city', 'billingLocality name', '<input name="billingLocality">'],
+  ['city', 'billingAddressCity name', '<input name="billingAddressCity">'],
+  ['state', 'billingAddressState name', '<input name="billingAddressState">'],
+  [
+    'country',
+    'billingCountry id',
+    '<select id="billingCountry"><option value="PH">Philippines</option><option value="US">United States</option></select>'
+  ],
+  [
+    'country',
+    'billingCountry name',
+    '<select name="billingCountry"><option value="PH">Philippines</option><option value="US">United States</option></select>'
+  ],
+  [
+    'country',
+    'billingAddressCountry name',
+    '<select name="billingAddressCountry"><option value="PH">Philippines</option><option value="US">United States</option></select>'
+  ],
+  ['name', 'generic id and name', '<input id="opaque" name="name">'],
+  ['name', 'Your name placeholder', '<input placeholder="Your name">'],
+  ['name', 'Cardholder name placeholder', '<input placeholder="Cardholder name">'],
+  ['name', 'Name on card placeholder', '<input placeholder="Name on card">'],
+  ['line1', 'Address placeholder', '<input placeholder="Address">'],
+  ['line1', 'Enter address placeholder', '<input placeholder="Enter address">'],
+  ['postal', 'Postal placeholder', '<input placeholder="Postal">'],
+  ['postal', 'Zipcode placeholder', '<input placeholder="Zipcode">'],
+  ['postal', 'billingAddressZip name', '<input name="billingAddressZip">'],
+  ...[
+    ['name', 'billingName'],
+    ['line1', 'billingAddressLine1'],
+    ['city', 'billingLocality'],
+    ['state', 'billingAdministrativeArea'],
+    ['postal', 'billingPostalCode'],
+    ['country', 'billingCountry']
+  ].map(([field, id]) => [
+    field,
+    `test id ${id}`,
+    field === 'country'
+      ? `<select data-testid="${id}"><option value="PH">Philippines</option><option value="US">United States</option></select>`
+      : `<input data-testid="${id}">`
+  ])
+];
+for (const [field, alias, html] of legacyBillingAliases) {
+  test(`legacy billing alias ${field}: ${alias} supports writing and readback`, async (t) => {
+    const fields = {
+      country: countryHtml,
+      line1: '<input autocomplete="billing address-line1">',
+      city: '<input autocomplete="billing address-level2">',
+      postal: '<input autocomplete="billing postal-code">',
+      name: '<input autocomplete="billing name">',
+      state: '<input autocomplete="billing address-level1">',
+      [field]: html.replace(/<(input|select) /g, '<$1 autocomplete="off" ')
+    };
+    const page = await pageFor(
+      t,
+      `<fieldset aria-label="Billing address">${Object.values(fields).join('')}</fieldset>`
+    );
+    assert.equal(
+      (await diagnostic(page)).some((control) => control.fields.includes(field)),
+      true
+    );
+    const result = await fillBilling(page, address, 'Synthetic Person', {
+      deadline: Date.now() + 3000
+    });
+    assert.equal(
+      result.ok,
+      true,
+      JSON.stringify({ code: result.errorCode, missing: result.missing })
+    );
+    assert.deepEqual(
+      await page.locator('input,select').evaluateAll((ns) => ns.map((n) => n.value)),
+      ['US', address.line1, address.city, address.postal_code, 'Synthetic Person', address.state]
+    );
+  });
+}
+test('collapsed billing controls expand once through their unique interactive entry', async (t) => {
+  const page = await pageFor(
+    t,
+    '<button type="button" aria-expanded="false" aria-controls="billing-fields">Billing address</button>' +
+      `<section id="billing-fields" hidden>${countryHtml + addressHtml}</section>`
+  );
+  await page.locator('button').evaluate((n) =>
+    n.addEventListener('click', () => {
+      window.syntheticExpands = (window.syntheticExpands || 0) + 1;
+      n.setAttribute('aria-expanded', 'true');
+      document.getElementById('billing-fields').hidden = false;
+    })
+  );
+  const result = await fillBilling(page, address, 'Synthetic Person', {
+    deadline: Date.now() + 1500
+  });
+  assert.equal(
+    result.ok,
+    true,
+    JSON.stringify({ code: result.errorCode, missing: result.missing })
+  );
+  assert.equal(await page.evaluate(() => window.syntheticExpands), 1);
+  assert.equal((await fillBilling(page, address, 'Synthetic Person')).ok, true);
+  assert.equal(await page.evaluate(() => window.syntheticExpands), 1);
+});
+test('billing expansion readiness keeps the existing one fresh read after a transient scan delay', async (t) => {
+  const page = await pageFor(t, countryHtml + addressHtml);
+  const frame = page.mainFrame(),
+    locator = frame.locator;
+  let delayed = false;
+  frame.locator = function (selector, ...options) {
+    const result = locator.call(this, selector, ...options);
+    if (selector === 'input,select,textarea,[role="combobox"]') {
+      const read = result.evaluateAll.bind(result);
+      result.evaluateAll = async (...args) => {
+        if (
+          !delayed &&
+          (await page.locator('select[autocomplete="billing country"]').inputValue()) === 'US'
+        ) {
+          delayed = true;
+          await new Promise((resolve) => setTimeout(resolve, 350));
+        }
+        return read(...args);
+      };
+    }
+    return result;
+  };
+  t.after(() => {
+    frame.locator = locator;
+  });
+  const result = await fillBilling(page, address, 'Synthetic Person', {
+    deadline: Date.now() + 3000
+  });
+  assert.equal(delayed, true);
+  assert.equal(
+    result.ok,
+    true,
+    JSON.stringify({ code: result.errorCode, missing: result.missing })
+  );
+});
+test('manual billing entry ignores hidden and disabled duplicates and never submits a form', async (t) => {
+  const page = await pageFor(
+    t,
+    countryHtml +
+      '<button type="button" hidden>Enter address manually</button>' +
+      '<button type="button" disabled>Enter address manually</button>' +
+      '<form><button type="submit">Enter address manually</button></form>' +
+      '<button type="button" aria-controls="manual-fields">Enter address manually</button>' +
+      `<section id="manual-fields" hidden>${addressHtml}</section>`
+  );
+  await page.locator('button[aria-controls]').evaluate((n) =>
+    n.addEventListener('click', () => {
+      window.syntheticExpands = (window.syntheticExpands || 0) + 1;
+      document.getElementById('manual-fields').hidden = false;
+    })
+  );
+  await page.locator('form').evaluate((n) =>
+    n.addEventListener('submit', (e) => {
+      e.preventDefault();
+      window.syntheticSubmits = (window.syntheticSubmits || 0) + 1;
+    })
+  );
+  const result = await fillBilling(page, address, 'Synthetic Person', {
+    deadline: Date.now() + 1500
+  });
+  assert.equal(
+    result.ok,
+    true,
+    JSON.stringify({ code: result.errorCode, missing: result.missing })
+  );
+  assert.equal(await page.evaluate(() => window.syntheticExpands), 1);
+  assert.equal(await page.evaluate(() => window.syntheticSubmits || 0), 0);
+});
+test('multiple real billing expansion entries stop without clicking either', async (t) => {
+  const page = await pageFor(
+    t,
+    '<button type="button">Billing address</button><button type="button">Billing address</button>'
+  );
+  await page.locator('button').evaluateAll((ns) =>
+    ns.forEach((n) =>
+      n.addEventListener('click', () => {
+        window.syntheticExpands = (window.syntheticExpands || 0) + 1;
+      })
+    )
+  );
+  const result = await fillBilling(page, address, 'Synthetic Person', {
+    deadline: Date.now() + 400
+  });
+  assert.equal(result.errorCode, 'CHECKOUT_CONTROL_AMBIGUOUS');
+  assert.equal(await page.evaluate(() => window.syntheticExpands || 0), 0);
+});
+for (const role of ['role="combobox"', '']) {
+  test(`bound billing dropdown supports precise non-role options ${role || 'plain input'}`, async (t) => {
+    const page = await pageFor(
+      t,
+      `<input ${role} aria-label="Country" aria-controls="country-popup" value="PH">` +
+        addressHtml +
+        '<div id="country-popup" hidden><button type="button" data-value="US">United States</button></div>'
+    );
+    await page.getByLabel('Country', { exact: true }).evaluate((n) => {
+      n.addEventListener('focus', () => {
+        document.getElementById('country-popup').hidden = false;
+      });
+    });
+    await page.locator('#country-popup button').evaluate((n) =>
+      n.addEventListener('click', () => {
+        window.syntheticSelections = (window.syntheticSelections || 0) + 1;
+        document.querySelector('input[aria-controls]').value = 'US';
+        document.getElementById('country-popup').hidden = true;
+      })
+    );
+    const result = await fillBilling(page, address, 'Synthetic Person', {
+      deadline: Date.now() + 2000
+    });
+    assert.equal(
+      result.ok,
+      true,
+      JSON.stringify({ code: result.errorCode, missing: result.missing })
+    );
+    assert.equal(await page.evaluate(() => window.syntheticSelections), 1);
+  });
+}
+test('billing dropdown never selects matching text from an unbound popup', async (t) => {
+  for (const binding of ['', 'aria-controls="wrong-popup"']) {
+    const page = await pageFor(
+      t,
+      `<input role="combobox" aria-label="Country" ${binding} value="PH">` +
+        addressHtml +
+        '<div id="wrong-popup"><div role="option">Canada</div></div>' +
+        '<div id="other-popup"><div role="option">United States</div></div>'
+    );
+    await page.locator('#other-popup [role="option"]').evaluate((n) =>
+      n.addEventListener('click', () => {
+        window.syntheticSelections = (window.syntheticSelections || 0) + 1;
+      })
+    );
+    const result = await fillBilling(page, address, 'Synthetic Person', {
+      deadline: Date.now() + 700
+    });
+    assert.equal(result.ok, false);
+    assert.equal(await page.evaluate(() => window.syntheticSelections || 0), 0);
+  }
+});
+test('duplicate exact dropdown choices remain ambiguous without a click', async (t) => {
+  const page = await pageFor(
+    t,
+    '<input role="combobox" aria-label="Country" aria-controls="country-popup" value="PH">' +
+      addressHtml +
+      '<div id="country-popup"><button type="button">United States</button><button type="button">US</button></div>'
+  );
+  await page.locator('#country-popup button').evaluateAll((ns) =>
+    ns.forEach((n) =>
+      n.addEventListener('click', () => {
+        window.syntheticSelections = (window.syntheticSelections || 0) + 1;
+      })
+    )
+  );
+  const result = await fillBilling(page, address, 'Synthetic Person', {
+    deadline: Date.now() + 700
+  });
+  assert.equal(result.errorCode, 'CHECKOUT_CONTROL_AMBIGUOUS');
+  assert.equal(await page.evaluate(() => window.syntheticSelections || 0), 0);
+});
+test('billing dropdown options appearing after its original deadline cannot be clicked', async (t) => {
+  const page = await pageFor(
+    t,
+    '<input role="combobox" aria-label="Country" aria-controls="country-popup" value="PH">' +
+      addressHtml +
+      '<div id="country-popup" hidden><button type="button">United States</button></div>'
+  );
+  await page.locator('button').evaluate((n) =>
+    n.addEventListener('click', () => {
+      window.syntheticSelections = (window.syntheticSelections || 0) + 1;
+    })
+  );
+  const result = await fillBilling(page, address, 'Synthetic Person', {
+    deadline: Date.now() + 200
+  });
+  assert.equal(result.ok, false);
+  await page.locator('#country-popup').evaluate((n) => {
+    n.hidden = false;
+  });
+  await page.waitForTimeout(60);
+  assert.equal(await page.evaluate(() => window.syntheticSelections || 0), 0);
+});
+test('button billing combobox selects from its bound popup and reads the selected text', async (t) => {
+  const page = await pageFor(
+    t,
+    '<button type="button" role="combobox" aria-label="Country" aria-controls="country-popup">PH</button>' +
+      '<input readonly aria-label="Country" value="PH"><input hidden role="combobox" aria-label="Country">' +
+      addressHtml +
+      '<div id="country-popup" hidden><div>United States</div></div>'
+  );
+  await page.getByRole('combobox', { name: 'Country' }).evaluate((n) =>
+    n.addEventListener('click', () => {
+      document.getElementById('country-popup').hidden = false;
+    })
+  );
+  await page.locator('#country-popup div').evaluate((n) =>
+    n.addEventListener('click', () => {
+      window.syntheticSelections = (window.syntheticSelections || 0) + 1;
+      document.querySelector('button[role="combobox"]').textContent = 'United States';
+      document.getElementById('country-popup').hidden = true;
+    })
+  );
+  const result = await fillBilling(page, address, 'Synthetic Person', {
+    deadline: Date.now() + 1000
+  });
+  assert.equal(
+    result.ok,
+    true,
+    JSON.stringify({ code: result.errorCode, missing: result.missing })
+  );
+  assert.equal(await page.evaluate(() => window.syntheticSelections), 1);
+});
+test('bound dropdown candidates cannot submit a form', async (t) => {
+  const page = await pageFor(
+    t,
+    '<input role="combobox" aria-label="Country" aria-controls="country-popup" value="PH">' +
+      addressHtml +
+      '<form id="country-popup"><button type="submit">United States</button></form>'
+  );
+  await page.locator('form').evaluate((n) =>
+    n.addEventListener('submit', (e) => {
+      e.preventDefault();
+      window.syntheticSubmits = (window.syntheticSubmits || 0) + 1;
+    })
+  );
+  const result = await fillBilling(page, address, 'Synthetic Person', {
+    deadline: Date.now() + 400
+  });
+  assert.equal(result.ok, false);
+  assert.equal(await page.evaluate(() => window.syntheticSubmits || 0), 0);
+});
+test('delayed bound dropdown choices share the existing deadline and actual selection is verified', async (t) => {
+  const page = await pageFor(
+    t,
+    '<input role="combobox" aria-label="Country" aria-controls="country-popup" value="PH">' +
+      addressHtml +
+      '<div id="country-popup"></div>'
+  );
+  await page.getByLabel('Country', { exact: true }).evaluate((n) =>
+    n.addEventListener('focus', () => {
+      if (window.syntheticOptionScheduled) return;
+      window.syntheticOptionScheduled = true;
+      window.setTimeout(() => {
+        const option = document.createElement('div');
+        option.textContent = 'United States';
+        option.addEventListener('click', () => {
+          window.syntheticSelections = (window.syntheticSelections || 0) + 1;
+          n.value = 'US';
+        });
+        document.getElementById('country-popup').append(option);
+      }, 100);
+    })
+  );
+  const result = await fillBilling(page, address, 'Synthetic Person', {
+    deadline: Date.now() + 2000
+  });
+  assert.equal(
+    result.ok,
+    true,
+    JSON.stringify({ code: result.errorCode, missing: result.missing })
+  );
+  assert.equal(await page.evaluate(() => window.syntheticSelections), 1);
+});
+test('bound dropdown selection with wrong actual readback cannot complete billing', async (t) => {
+  const page = await pageFor(
+    t,
+    '<button type="button" role="combobox" aria-label="Country" aria-controls="country-popup">PH</button>' +
+      addressHtml +
+      '<div id="country-popup"><div>United States</div></div>'
+  );
+  await page.locator('#country-popup div').evaluate((n) =>
+    n.addEventListener('click', () => {
+      window.syntheticSelections = (window.syntheticSelections || 0) + 1;
+      document.querySelector('button[role="combobox"]').textContent = 'Canada';
+    })
+  );
+  const result = await fillBilling(page, address, 'Synthetic Person', {
+    deadline: Date.now() + 600
+  });
+  assert.equal(result.ok, false);
+  assert.ok((await page.evaluate(() => window.syntheticSelections || 0)) > 0);
+});
+test('cancelled billing cannot click an expansion entry that appears later', async (t) => {
+  const page = await pageFor(t, countryHtml);
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 60);
+  t.after(() => clearTimeout(timer));
+  const result = await fillBilling(page, address, 'Synthetic Person', {
+    deadline: Date.now() + 2000,
+    signal: controller.signal
+  });
+  assert.equal(result.errorCode, 'CHECKOUT_FORM_ABORTED');
+  await page.evaluate(() => {
+    const entry = document.createElement('button');
+    entry.type = 'button';
+    entry.textContent = 'Billing address';
+    entry.addEventListener('click', () => {
+      window.syntheticExpands = (window.syntheticExpands || 0) + 1;
+    });
+    document.body.append(entry);
+  });
+  await page.waitForTimeout(80);
+  assert.equal(await page.evaluate(() => window.syntheticExpands || 0), 0);
+});
 test('readiness excludes hidden and inert iframe ancestors, including nested frames', async (t) => {
   for (const html of [
     iframe(cardHtml).replace('<iframe', '<iframe hidden'),
@@ -753,11 +1355,13 @@ test('stable quote requires consecutive identical official totals after recalcul
 test('readonly country combobox uses its options and verifies the selection', async (t) => {
   const page = await pageFor(
     t,
-    '<input role="combobox" readonly aria-label="Country" value="PH">' + addressHtml
+    '<input role="combobox" readonly aria-label="Country" aria-controls="country-choice" value="PH">' +
+      addressHtml
   );
   await page.locator('[role="combobox"]').evaluate((n) =>
     n.addEventListener('keydown', () => {
       const choice = document.createElement('div');
+      choice.id = 'country-choice';
       choice.setAttribute('role', 'option');
       choice.textContent = 'United States';
       choice.addEventListener('click', () => {

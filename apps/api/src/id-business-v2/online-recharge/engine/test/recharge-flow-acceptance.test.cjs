@@ -60,6 +60,7 @@ function syntheticTask(scene) {
 
 function strictRpcFixture(task) {
   let admitted = false,
+    renewalAdmitted = false,
     usage = 0,
     bills = 0;
   return async (method, args) => {
@@ -96,6 +97,15 @@ function strictRpcFixture(task) {
           leaseVersion: 1
         };
       case 'beforeExternalSubmit': {
+        if (args.stage === 'renewal_update') {
+          assert.equal(admitted, true);
+          assert.equal(usage, 1);
+          assert.equal(bills, 1);
+          assert.equal(renewalAdmitted, false);
+          assert.equal(args.renewalAction, 'disable');
+          renewalAdmitted = true;
+          return { ok: true };
+        }
         assert.equal(admitted, false);
         assert.equal(args.stage, 'payment_submit');
         assert.equal(args.cardId, fixtureCard);
@@ -147,6 +157,14 @@ function strictRpcFixture(task) {
 // over this child IPC boundary into the supplied handler and are never logged.
 async function runSyntheticRecharge(scene, options = {}) {
   assert.ok(['success', 'recover', 'unknown', 'readiness'].includes(scene));
+  const cardFields = options.cardFields || 'standard';
+  assert.ok(
+    ['standard', 'legacy-names', 'legacy-placeholders', 'legacy-stable-nested'].includes(cardFields)
+  );
+  const billingFields = options.billingFields || 'standard';
+  assert.ok(
+    ['standard', 'legacy-names', 'legacy-testids', 'legacy-collapsed'].includes(billingFields)
+  );
   if (options.diagnosticDelay) {
     assert.ok(['verify', 'verifyCard'].includes(options.diagnosticDelay.stage));
     assert.ok(Number.isFinite(options.diagnosticDelay.milliseconds));
@@ -237,13 +255,21 @@ async function runSyntheticRecharge(scene, options = {}) {
     else if (message.type === 'fixture_progress') progress.push(message.projection);
     else if (message.type === 'fixture_error') failure = message.code;
   });
-  child.send({ type: 'fixture_start', task, diagnosticDelay: options.diagnosticDelay });
+  child.send({
+    type: 'fixture_start',
+    task,
+    diagnosticDelay: options.diagnosticDelay,
+    cardFields,
+    billingFields
+  });
   const exit = await new Promise((resolve, reject) => {
     child.once('error', reject);
     child.once('exit', (code, signal) => resolve({ code, signal }));
   }).finally(() => clearTimeout(timeout));
   const evidence = {
     scene,
+    cardFields,
+    billingFields,
     ...(options.diagnosticDelay ? { diagnosticDelay: { ...options.diagnosticDelay } } : {}),
     entry: 'task-runner.runTask → execute → upstream/index.run',
     exit,
@@ -278,7 +304,23 @@ async function runSyntheticRecharge(scene, options = {}) {
   return { ...evidence, directory };
 }
 
-function checkoutHtml(checkoutId, scene) {
+function billingHtml(mode) {
+  const controls =
+    mode === 'legacy-names'
+      ? '<input autocomplete="off" name="billingName"><select autocomplete="off" name="billingAddressCountry"><option value="PH">Philippines</option><option value="US">United States</option></select><input autocomplete="off" name="line1"><input autocomplete="off" name="billingAddressCity"><select autocomplete="off" name="billingAddressState"><option value="">Choose</option><option value="OR">Oregon</option></select><input autocomplete="off" name="billingAddressZip">'
+      : ['legacy-testids', 'legacy-collapsed'].includes(mode)
+        ? '<input autocomplete="off" data-testid="billingName"><select autocomplete="off" data-testid="billingCountry"><option value="PH">Philippines</option><option value="US">United States</option></select><input autocomplete="off" data-testid="billingAddressLine1"><input autocomplete="off" data-testid="billingLocality"><select autocomplete="off" data-testid="billingAdministrativeArea"><option value="">Choose</option><option value="OR">Oregon</option></select><input autocomplete="off" data-testid="billingPostalCode">'
+        : '<input id="billingName" autocomplete="billing name" name="billingName"><select autocomplete="billing country"><option value="PH">Philippines</option><option value="US">United States</option></select><input autocomplete="billing address-line1"><input autocomplete="billing address-level2"><select autocomplete="billing address-level1"><option value="">Choose</option><option value="OR">Oregon</option></select><input autocomplete="billing postal-code">';
+  const collapsedControls = controls.replace(
+    '<select autocomplete="off" data-testid="billingCountry"><option value="PH">Philippines</option><option value="US">United States</option></select>',
+    '<button type="button" role="combobox" data-testid="billingCountry" id="fixture-country" aria-controls="fixture-country-options" aria-expanded="false">Philippines</button><div id="fixture-country-options" hidden><div tabindex="0" data-value="US">United States</div></div>'
+  );
+  return mode === 'legacy-collapsed'
+    ? `<button type="button" id="fixture-billing-toggle" aria-expanded="false" aria-controls="fixture-billing-fields">Billing address</button><div id="fixture-billing-fields" hidden>${collapsedControls}</div>`
+    : controls;
+}
+
+function checkoutHtml(checkoutId, scene, billingFields) {
   return `<!doctype html><html><head>${scene === 'readiness' ? '<script type="module" src="/fixture-checkout-pending-module.js"></script>' : ''}</head><body><h1>Configure your plan</h1><p>Due today PHP 8919.64</p>
     ${scene === 'readiness' ? '<section hidden><iframe src="https://challenges.cloudflare.com/fixture-hidden-residue" style="width:300px;height:90px"></iframe></section>' : ''}
     <div id="fixture-verification-overlay">One more step before you are done. Select the checkbox below.</div>
@@ -286,28 +328,35 @@ function checkoutHtml(checkoutId, scene) {
     <iframe style="width:900px;height:190px" src="https://js.stripe.com/fixture-card?session=${checkoutId}"></iframe>
     <section aria-label="Link"><input autocomplete="billing name" name="linkName" placeholder="Optional Link name"></section>
     <section aria-label="Billing address"><h2>Billing address</h2>
-      <input id="billingName" autocomplete="billing name" name="billingName">
-      <select autocomplete="billing country"><option value="PH">Philippines</option><option value="US">United States</option></select>
-      <input autocomplete="billing address-line1"><input autocomplete="billing address-level2">
-      <select autocomplete="billing address-level1"><option value="">Choose</option><option value="OR">Oregon</option></select>
-      <input autocomplete="billing postal-code">
+      ${billingHtml(billingFields)}
     </section><label><input name="terms" type="checkbox">I agree</label><button type="submit">Subscribe</button>
     <div id="outcome"></div><script>
-      window.actualClicks=0; window.cardReady=false; window.fixtureCheckoutDomContentLoaded=0;
+      window.actualClicks=0; window.cardReady=false; window.fixtureCheckoutDomContentLoaded=0; window.billingOpens=0; window.countryChoices=0;
+      document.querySelector('#fixture-billing-toggle')?.addEventListener('click',event=>{
+        if(!event.isTrusted)throw Error('Synthetic billing toggle must be a real click');
+        window.billingOpens++;event.currentTarget.setAttribute('aria-expanded','true');document.querySelector('#fixture-billing-fields').hidden=false;
+      });
+      document.querySelector('#fixture-country')?.addEventListener('click',()=>{
+        document.querySelector('#fixture-country').setAttribute('aria-expanded','true');document.querySelector('#fixture-country-options').hidden=false;
+      });
+      document.querySelector('#fixture-country-options [data-value="US"]')?.addEventListener('click',event=>{
+        if(!event.isTrusted)throw Error('Synthetic country choice must be a real click');
+        window.countryChoices++;document.querySelector('#fixture-country').textContent='United States';document.querySelector('#fixture-country').setAttribute('aria-expanded','false');document.querySelector('#fixture-country-options').hidden=true;
+      });
       addEventListener('DOMContentLoaded',()=>window.fixtureCheckoutDomContentLoaded++);
       addEventListener('message',event=>{if(event.origin==='https://js.stripe.com'&&event.data?.type==='fixture-card-ready')window.cardReady=event.data.ready;});
       addEventListener('message',event=>{if(event.origin==='https://newassets.hcaptcha.com'&&event.data==='fixture-verified'){
         document.querySelector('#fixture-verification').hidden=true;
         document.querySelector('#fixture-verification-overlay').remove();
       }});
-      document.querySelector('button').addEventListener('click',async event=>{
+      document.querySelector('button[type="submit"]').addEventListener('click',async event=>{
         event.preventDefault(); window.actualClicks++;
         const controls=Array.from(document.querySelectorAll('section[aria-label="Billing address"] input,section[aria-label="Billing address"] select'));
-        const billingReady=controls.every(input=>Boolean(input.value));
+        const billingReady=controls.every(input=>Boolean(input.value))&&(!document.querySelector('#fixture-country')||document.querySelector('#fixture-country').textContent==='United States');
         const response=await fetch('/backend-api/payments/checkout/confirm',{method:'POST',
           headers:{'Content-Type':'application/json',Authorization:'Bearer '+window.__CHATGPT_BOOTSTRAP_SESSION__.accessToken},
           body:JSON.stringify({checkout_session_id:'${checkoutId}',actualClicks:window.actualClicks,
-            trustedClick:event.isTrusted,cardReady:window.cardReady,billingReady,terms:document.querySelector('[name=terms]').checked,
+            trustedClick:event.isTrusted,cardReady:window.cardReady,billingReady,billingOpens:window.billingOpens,countryChoices:window.countryChoices,terms:document.querySelector('[name=terms]').checked,
             domContentLoaded:window.fixtureCheckoutDomContentLoaded,documentReadyState:document.readyState,
             hiddenCloudflareResidue:Boolean(document.querySelector('section[hidden] iframe[src*="challenges.cloudflare.com"]'))})});
         await response.json();
@@ -320,7 +369,13 @@ function checkoutHtml(checkoutId, scene) {
     </script></body></html>`;
 }
 
-async function fixtureChild(scene, task, diagnosticDelay) {
+async function fixtureChild(
+  scene,
+  task,
+  diagnosticDelay,
+  cardFields = 'standard',
+  billingFields = 'standard'
+) {
   const { chromium, request } = require('../upstream/node_modules/playwright');
   const rpc = require('../rpc.cjs');
   const metrics = {
@@ -335,6 +390,13 @@ async function fixtureChild(scene, task, diagnosticDelay) {
     paymentRequests: 0,
     cardReadBack: false,
     billingReadBack: false,
+    billingFields,
+    billingOpens: 0,
+    countryChoices: 0,
+    renewalRequests: 0,
+    cookieLessRequests: 0,
+    cardFields,
+    cardFrameDocuments: 0,
     subscriptionChecksBefore: 0,
     subscriptionChecksAfter: 0,
     duplicateAdmissionBlocked: false,
@@ -344,6 +406,7 @@ async function fixtureChild(scene, task, diagnosticDelay) {
     unexpectedNetwork: 0
   };
   const session = JSON.parse(task.session);
+  let willRenew = true;
   const accountId = require('../upstream/session-auth').extractProfileFromToken(
     session.accessToken
   ).accountId;
@@ -668,11 +731,26 @@ async function fixtureChild(scene, task, diagnosticDelay) {
             last_active_subscription: {
               purchase_origin_platform: 'chatgpt_web',
               currency: 'PHP',
-              will_renew: false
+              will_renew: willRenew
             }
           }
         }
       });
+    }
+    if (
+      req.method() === 'POST' &&
+      url.origin === origin &&
+      url.pathname === '/backend-api/subscriptions/cancel'
+    ) {
+      assert.equal(subscribed, true);
+      assert.equal(req.postDataJSON().account_id, accountId);
+      assert.equal(req.headers().authorization, `Bearer ${session.accessToken}`);
+      assert.match(req.headers().cookie || '', /__Secure-next-auth\.session-token/);
+      assert.equal(rpc.wasSubmitted(), true);
+      metrics.renewalRequests++;
+      assert.equal(metrics.renewalRequests, 1);
+      willRenew = false;
+      return json({ ok: true });
     }
     if (
       req.method() === 'POST' &&
@@ -697,7 +775,7 @@ async function fixtureChild(scene, task, diagnosticDelay) {
         body:
           scene === 'recover' && metrics.checkoutDocuments === 1
             ? '<html><body><h1>Content failed to load</h1><button>Try again</button></body></html>'
-            : checkoutHtml(checkoutId, scene)
+            : checkoutHtml(checkoutId, scene, billingFields)
       });
     }
     if (
@@ -747,15 +825,44 @@ async function fixtureChild(scene, task, diagnosticDelay) {
       req.method() === 'GET' &&
       url.origin === 'https://js.stripe.com' &&
       url.pathname === '/fixture-card'
-    )
+    ) {
+      metrics.cardFrameDocuments++;
+      if (cardFields === 'legacy-stable-nested')
+        return route.fulfill({
+          contentType: 'text/html',
+          body: `<html><body><iframe style="width:850px;height:150px" src="https://elements.stripe.com/fixture-nested-card?session=${checkoutId}"></iframe><script>
+          addEventListener('message',event=>{if(event.origin==='https://elements.stripe.com'&&event.data?.type==='fixture-card-ready')parent.postMessage(event.data,'https://chatgpt.com');});
+          </script></body></html>`
+        });
+    }
+    if (
+      req.method() === 'GET' &&
+      ((url.origin === 'https://js.stripe.com' && url.pathname === '/fixture-card') ||
+        (cardFields === 'legacy-stable-nested' &&
+          url.origin === 'https://elements.stripe.com' &&
+          url.pathname === '/fixture-nested-card'))
+    ) {
+      const fields = {
+        standard:
+          '<input autocomplete="cc-csc"><input autocomplete="cc-number"><input autocomplete="cc-exp">',
+        'legacy-names':
+          '<input autocomplete="off" name="cardCvc"><input autocomplete="off" name="number"><input autocomplete="off" name="exp-date">',
+        'legacy-placeholders':
+          '<input autocomplete="off" placeholder="CVC"><input autocomplete="off" placeholder="1234 1234 1234 1234"><input autocomplete="off" placeholder="MM / YY">',
+        'legacy-stable-nested':
+          '<input autocomplete="off" data-elements-stable-field-name="cardCvc"><input autocomplete="off" data-elements-stable-field-name="cardNumber"><input autocomplete="off" data-elements-stable-field-name="cardExpiry">'
+      }[cardFields];
+      const parentOrigin = cardFields === 'legacy-stable-nested' ? 'https://js.stripe.com' : origin;
+      if (cardFields === 'legacy-stable-nested') metrics.cardFrameDocuments++;
       return route.fulfill({
         contentType: 'text/html',
-        body: `<html><body><input autocomplete="cc-csc"><input autocomplete="cc-number"><input autocomplete="cc-exp"><script>
-        const publish=()=>parent.postMessage({type:'fixture-card-ready',ready:Array.from(document.querySelectorAll('input')).every(input=>Boolean(input.value))},'https://chatgpt.com');
+        body: `<html><body>${fields}<script>
+        const publish=()=>parent.postMessage({type:'fixture-card-ready',ready:Array.from(document.querySelectorAll('input')).every(input=>Boolean(input.value))},'${parentOrigin}');
         addEventListener('input',publish);addEventListener('change',publish);
         fetch('https://api.stripe.com/v1/payment_pages/${checkoutId}/init',{method:'POST',body:'key=pk_test_fixture'}).catch(()=>{});
         </script></body></html>`
       });
+    }
     if (
       req.method() === 'POST' &&
       url.origin === 'https://api.stripe.com' &&
@@ -782,6 +889,8 @@ async function fixtureChild(scene, task, diagnosticDelay) {
       assert.equal(body.trustedClick, true);
       assert.equal(body.cardReady, true);
       assert.equal(body.billingReady, true);
+      assert.equal(body.billingOpens, billingFields === 'legacy-collapsed' ? 1 : 0);
+      assert.equal(body.countryChoices, billingFields === 'legacy-collapsed' ? 1 : 0);
       assert.equal(body.terms, true);
       assert.equal(rpc.wasSubmitted(), true);
       if (scene === 'readiness') {
@@ -801,6 +910,8 @@ async function fixtureChild(scene, task, diagnosticDelay) {
       metrics.actualPaymentClicks = body.actualClicks;
       metrics.trustedPaymentClicks++;
       metrics.cardReadBack = body.cardReady;
+      metrics.billingOpens = body.billingOpens;
+      metrics.countryChoices = body.countryChoices;
       metrics.billingReadBack = body.billingReady;
       assert.equal(metrics.paymentRequests, 1);
       progress('actual-payment-request');
@@ -832,8 +943,17 @@ async function fixtureChild(scene, task, diagnosticDelay) {
     metrics.unexpectedNetwork++;
     return route.abort('blockedbyclient');
   };
-  const transport = (extraHeaders) => ({
+  const transport = (extraHeaders, sharesCookies = true) => ({
     async fetch(url, options = {}) {
+      if (!sharesCookies) {
+        metrics.cookieLessRequests++;
+        return {
+          status: () => 403,
+          ok: () => false,
+          text: async () => '{}',
+          json: async () => ({})
+        };
+      }
       const page = activeContext
         .pages()
         .find((page) => page.url().startsWith(origin) && !page.isClosed());
@@ -870,7 +990,7 @@ async function fixtureChild(scene, task, diagnosticDelay) {
     },
     async dispose() {}
   });
-  request.newContext = async (options) => transport(options?.extraHTTPHeaders);
+  request.newContext = async (options) => transport(options?.extraHTTPHeaders, false);
   const runtime = require('../upstream/browser-runtime');
   runtime.connectTaskBrowser = async () => {
     browser = await chromium.launch({
@@ -962,7 +1082,9 @@ if (process.env.RECHARGE_FLOW_FIXTURE_CHILD === '1') {
     fixtureChild(
       process.env.RECHARGE_FLOW_FIXTURE_SCENE,
       message.task,
-      message.diagnosticDelay
+      message.diagnosticDelay,
+      message.cardFields,
+      message.billingFields
     ).then(
       () => process.exit(0),
       (error) => {
@@ -978,6 +1100,21 @@ if (process.env.RECHARGE_FLOW_FIXTURE_CHILD === '1') {
     ['recover', {}, 'recover'],
     ['unknown', {}, 'unknown'],
     ['readiness', {}, 'readiness'],
+    [
+      'success',
+      { cardFields: 'legacy-names', billingFields: 'legacy-names' },
+      'original field names'
+    ],
+    [
+      'recover',
+      { cardFields: 'legacy-placeholders', billingFields: 'legacy-collapsed' },
+      'original placeholders after recovery'
+    ],
+    [
+      'unknown',
+      { cardFields: 'legacy-stable-nested', billingFields: 'legacy-testids' },
+      'original stable fields in nested frames'
+    ],
     [
       'success',
       { diagnosticDelay: { stage: 'verify', milliseconds: 350 } },
@@ -1007,6 +1144,20 @@ if (process.env.RECHARGE_FLOW_FIXTURE_CHILD === '1') {
         assert.equal(metrics.checkoutCreations, 1);
         assert.equal(metrics.checkoutDocuments, scene === 'recover' ? 2 : 1);
         assert.equal(metrics.initializations, 1);
+        assert.equal(metrics.cardFields, fixtureOptions.cardFields || 'standard');
+        assert.equal(metrics.billingFields, fixtureOptions.billingFields || 'standard');
+        assert.equal(
+          metrics.billingOpens,
+          fixtureOptions.billingFields === 'legacy-collapsed' ? 1 : 0
+        );
+        assert.equal(
+          metrics.countryChoices,
+          fixtureOptions.billingFields === 'legacy-collapsed' ? 1 : 0
+        );
+        assert.equal(
+          metrics.cardFrameDocuments,
+          fixtureOptions.cardFields === 'legacy-stable-nested' ? 2 : 1
+        );
         assert.equal(metrics.actualPaymentClicks, 1);
         assert.equal(metrics.trustedPaymentClicks, 1);
         assert.equal(metrics.paymentRequests, 1);
@@ -1015,6 +1166,8 @@ if (process.env.RECHARGE_FLOW_FIXTURE_CHILD === '1') {
         assert.equal(metrics.subscriptionChecksBefore >= 1, true);
         assert.equal(metrics.subscriptionChecksAfter >= 1, true);
         assert.equal(metrics.unexpectedNetwork, 0);
+        assert.equal(metrics.cookieLessRequests, 0);
+        assert.equal(metrics.renewalRequests, scene === 'unknown' ? 0 : 1);
         assert.equal(metrics.checkboxClicks, 1);
         assert.equal(metrics.checkboxCleared, true);
         assert.deepEqual(metrics.formReadFailures, []);
@@ -1042,8 +1195,16 @@ if (process.env.RECHARGE_FLOW_FIXTURE_CHILD === '1') {
           });
         }
         assert.equal(
-          actual.actions.filter((item) => item.method === 'beforeExternalSubmit').length,
+          actual.actions.filter(
+            (item) => item.method === 'beforeExternalSubmit' && item.stage === 'payment_submit'
+          ).length,
           1
+        );
+        assert.equal(
+          actual.actions.filter(
+            (item) => item.method === 'beforeExternalSubmit' && item.stage === 'renewal_update'
+          ).length,
+          scene === 'unknown' ? 0 : 1
         );
         assert.equal(actual.actions.filter((item) => item.method === 'reserveCard').length, 1);
         if (scene === 'unknown') {
@@ -1059,6 +1220,7 @@ if (process.env.RECHARGE_FLOW_FIXTURE_CHILD === '1') {
         } else {
           assert.equal(actual.result.status, 'succeeded');
           assert.equal(actual.result.result.success, true);
+          assert.equal(actual.result.result.autoRenewCancellation.ok, true);
           assert.equal(actual.result.result.paymentEvidence.verified, true);
           assert.equal(actual.result.result.confirmation.verified, true);
           assert.equal(

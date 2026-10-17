@@ -210,6 +210,7 @@
     "scripts/ci-recharge-scope.test.mjs",
     "scripts/container-hardening.test.mjs",
     "scripts/fixtures/registration-closed-loop-worker.py",
+    "scripts/production-release/admin-pending-online-release.test.py",
     "scripts/production-release/api-admin-scope.test.py",
     "scripts/production-release/feature-retirement-build.py",
     "scripts/production-release/feature-retirement-build.test.py",
@@ -434,9 +435,9 @@
   "cleanupDataInRelease": false,
   "configurationSha256": {
     ".env.aws.production": "3f3c22ac671ef185ffc98677ef3a2facce244e476e4583b8e7d16ff1deb00392",
-    "compose.release.json": "8b918d129b8017c9e7efb888b329a6d7905b9ee368522ee9f97aca30481e2f0b",
-    "deploy/caddy/Caddyfile.aws": "f3d253904be6acbe24184b6a317eb3c9ded71636d9622dc9636c196dd7a56674",
-    "docker-compose.aws-mysql.yml": "953c6264f157b00218f2a019d5e2c0b6bc4a34f687f2ec42ad782e0009e7672c"
+    "compose.release.json": "07adaeebafde2137615acf00cdc3cfa4c8c3cbe65f3e01622f36c3d94fb3c99a",
+    "docker-compose.aws-mysql.yml": "953c6264f157b00218f2a019d5e2c0b6bc4a34f687f2ec42ad782e0009e7672c",
+    "deploy/caddy/Caddyfile.aws": "f3d253904be6acbe24184b6a317eb3c9ded71636d9622dc9636c196dd7a56674"
   },
   "controlSources": {
     ".github/workflows/feature-retirement-validation.yml": "7c5fb7c5f845ef94a9ddd117f5002b8d33bc0f3155c254c1acf6a340e5308c64",
@@ -452,9 +453,10 @@
     "scripts/ci-recharge-check.mjs": "ed8ed9a63e32194efaf4c8a795782ef2a5cbeff3f69bde4c51a276fa86584efc",
     "scripts/ci-recharge-check.test.mjs": "81e284438d1a82a14ddc490c074939ffb051a72bd05ad82705184c2e55128896",
     "scripts/ci-recharge-release.test.mjs": "b01e67c1241b713f73aa99c86808b35430d544f960d86ca9090bb5189a739b86",
-    "scripts/ci-recharge-scope.mjs": "8e20e63ddfb8c65f7175bb86d113b51df57d440b9407a7a0bfde109b6de126a2",
+    "scripts/ci-recharge-scope.mjs": "0c60927abb530157bb999c06c3350742966808ee7efcc6484991c0708aa68196",
     "scripts/ci-recharge-scope.test.mjs": "9084c480182640a7364b099a8065315bbf38b12a7b5141ca2071bd521fd9e8ad",
     "scripts/container-hardening.test.mjs": "6f98fd539b43d6c2e4cf7d2fc8cac5d1e4f55d452bb8176182efcabe5e36e970",
+    "scripts/production-release/admin-pending-online-release.test.py": "794c46ed43096cb2aed198a161e06302c220cd1891535eb346fa5449e5b2e777",
     "scripts/production-release/api-admin-scope.py": "50446ab528a288ca1c2129c84f1bf4a90f59fa313a92bcff0058a258c8b8e925",
     "scripts/production-release/api-admin-scope.test.py": "f8a87921ab2bfa00ab2bfc748ddb763a201e67df8ddc5d3d90563141a22f52ba",
     "scripts/production-release/feature-retirement-build.py": "02ae8491ff41d9de2803115c7fe14b487630b2faf6ad2eea6d203e00931ac6bf",
@@ -473,7 +475,7 @@
     "scripts/production-release/remote-deploy.py": "889aedb75bbcb53863a55dc2a4c40a84e06dea1d64d493f6a4fca6dc233f855c",
     "scripts/production-release/remote-deploy.test.py": "5ba677ecd14b1921795486b38eb59aa8329026f8217b0a4a41e493cdcf31241f"
   },
-  "current": "/opt/id-business-v2/releases/20261017T152153Z-4e0037a45833-online-checkout-load",
+  "current": "/opt/id-business-v2/releases/20261017T171359Z-3f8f2bb4978e-online-checkout-load",
   "currentCaddyFileSha256": "f3d253904be6acbe24184b6a317eb3c9ded71636d9622dc9636c196dd7a56674",
   "databaseVerification": {
     "isolatedDatabaseStarted": false,
@@ -488,8 +490,8 @@
     "rpcConnected": true,
     "stopping": false
   },
-  "expectedCurrent": "4e0037a458330f58914eebeccd2a2d892c8405b0",
-  "manifestSha256": "ec8cac748281ce80898862c157559bf678e3e28fd0c9f5b9a356b64e3022038e",
+  "expectedCurrent": "3f8f2bb4978e3a839c82d2ecc73857449d4b94d3",
+  "manifestSha256": "0a1fcef992330a92576fcb60f7be5216e40b58773f370dbea953f29b21019e8d",
   "migrationPerformed": false,
   "onlineVolume": "id-business-v2-formal-20261015-online",
   "publicFiles": {
@@ -844,7 +846,7 @@
     "scripts/setup-auto-registration.mjs",
     "scripts/start-auto-registration-local.mjs"
   ],
-  "reviewBase": "4e0037a458330f58914eebeccd2a2d892c8405b0",
+  "reviewBase": "3f8f2bb4978e3a839c82d2ecc73857449d4b94d3",
   "runtimeConfigurationSha256": {
     "admin": "cfcae9d11ca4f415955b10f3254186f0d8a4c86f45eca9752d15224b7fec701d",
     "api": "a5297a03690cef9ffb8bbfd3084179635a03c8eacb824076f411913e9a15994b",
@@ -921,12 +923,12 @@
       "status": "running"
     },
     "online-recharge": {
-      "containerId": "c37b2d5a9490815d58a94aad2ce61eecfb6e18f3d33690d958cef3801f4cef4a",
+      "containerId": "1ccae3174a5b8fd8f0acfcc9a487a79f07b6ee4c19f86f9993d83c23769560bd",
       "environmentSha256": "60bb48bbd6e03a4ceebe245c8405f248d0c682a27287aabb17c1d3573e50ad37",
       "health": "healthy",
-      "image": "sha256:7985a8c8f340a687d5ac6f4f04eac8eec60b104a77b1f4a0456b19e54f7c91ef",
-      "reference": "id-business-v2-online-checkout-load:4e0037a458330f58914eebeccd2a2d892c8405b0-39044216885",
-      "startedAtSha256": "225a0fd5c56f837dc3dd2164e2354a3dfd883402266f315e76cc1acaeb3d8ed4",
+      "image": "sha256:27817322703ae5023c67fab8c4b19ffd772ca975d69ad74d4d68701ef30f15c4",
+      "reference": "id-business-v2-online-checkout-load:3f8f2bb4978e3a839c82d2ecc73857449d4b94d3-39052316314",
+      "startedAtSha256": "dfb8ba63e873731683d26933d256ae275fc155aeb7a3f7c0e336ae850180dcaa",
       "status": "running"
     }
   },
