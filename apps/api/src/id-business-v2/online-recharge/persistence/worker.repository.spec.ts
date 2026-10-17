@@ -124,9 +124,9 @@ function fixture(overrides: Partial<OnlineRechargeTask> = {}, original?: OnlineR
 }
 
 describe('原结账单的受保护恢复资料', () => {
-  function paymentFixture() {
+  function paymentFixture(embeddedStripe = false) {
     const cardId = randomUUID(),
-      checkoutId = 'oaics_synthetic_original';
+      checkoutId = embeddedStripe ? 'cs_live_syntheticOriginal' : 'oaics_synthetic_original';
     const context = {
       kind: 'initial',
       sourcePlan: 'free',
@@ -143,7 +143,16 @@ describe('原结账单的受保护恢复资料', () => {
       version: 1,
       checkoutId,
       processorEntity: 'openai',
-      checkoutUrl: `https://chatgpt.com/checkout/openai/${checkoutId}`
+      checkoutUrl: `https://chatgpt.com/checkout/openai/${checkoutId}`,
+      ...(embeddedStripe
+        ? {
+            source: {
+              kind: 'official_checkout_response' as const,
+              checkoutId,
+              processorEntity: 'openai'
+            }
+          }
+        : {})
     };
     const f = fixture({
       operation: 'recharge',
@@ -174,6 +183,45 @@ describe('原结账单的受保护恢复资料', () => {
       })
     );
     expect(JSON.stringify(f.repository.log.mock.calls)).not.toContain(f.recovery.checkoutUrl);
+  });
+  it('内嵌 cs 原单来源与付款标记一起加密保存，重复提交不增加审计或写入', async () => {
+    const f = paymentFixture(true);
+    await f.worker.beforeSubmit(f.submit());
+    const encryptedInput = JSON.parse(f.encryption.encrypt.mock.calls[0]![0]);
+    expect(encryptedInput).toEqual(f.recovery);
+    expect(f.row).toMatchObject({
+      paymentStarted: true,
+      payload: { checkoutRecoveryEncrypted: 'synthetic-encrypted-recovery' }
+    });
+    await expect(f.worker.beforeSubmit(f.submit())).rejects.toThrow('重复提交');
+    expect(f.encryption.encrypt).toHaveBeenCalledTimes(1);
+    expect(f.tx.onlineRechargeTask.update).toHaveBeenCalledTimes(1);
+    expect(f.repository.log).toHaveBeenCalledTimes(1);
+    expect(JSON.stringify(f.repository.log.mock.calls)).not.toContain(f.recovery.checkoutId);
+    expect(JSON.stringify(f.row.payload)).not.toContain(f.recovery.checkoutUrl);
+  });
+  it.each([
+    undefined,
+    { kind: 'guessed_url', checkoutId: 'cs_live_syntheticOriginal', processorEntity: 'openai' },
+    {
+      kind: 'official_checkout_response',
+      checkoutId: 'cs_live_differentOriginal',
+      processorEntity: 'openai'
+    },
+    {
+      kind: 'official_checkout_response',
+      checkoutId: 'cs_live_syntheticOriginal',
+      processorEntity: 'different'
+    }
+  ])('内嵌 cs 来源缺失或错绑不得写入付款标记或付款审计 %j', async (source) => {
+    const f = paymentFixture(true);
+    await expect(
+      f.worker.beforeSubmit(f.submit({ checkoutRecovery: { ...f.recovery, source } }))
+    ).rejects.toThrow();
+    expect(f.row.paymentStarted).toBe(false);
+    expect(f.encryption.encrypt).not.toHaveBeenCalled();
+    expect(f.tx.onlineRechargeTask.update).not.toHaveBeenCalled();
+    expect(f.repository.log).not.toHaveBeenCalled();
   });
   it('恢复资料缺失、账号或报价错绑、加密失败及超额时，均不写付款开始标记', async () => {
     for (const change of [

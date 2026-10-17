@@ -619,8 +619,9 @@ async function completeStripeCardPayment(page, cardInfo, address, options = {}) 
         console.log(`[Stripe] 提交前最终应付已稳定: ${finalDue.currency} ${finalDue.amount}`);
         const paymentContext = require('./upgrade-checkout').buildPaymentContext(options, cardInfo, finalDue);
         const originalCheckoutUrl = page.url();
-        paymentContext.quoteId = checkoutRecovery.quoteIdForUrl(originalCheckoutUrl);
-        const recovery = checkoutRecovery.buildCheckoutRecovery(originalCheckoutUrl, paymentContext);
+        const checkoutSource = checkoutRecovery.officialCheckoutForPage(page);
+        paymentContext.quoteId = checkoutRecovery.quoteIdForUrl(originalCheckoutUrl, checkoutSource);
+        const recovery = checkoutRecovery.buildCheckoutRecovery(originalCheckoutUrl, paymentContext, checkoutSource);
         const observation = checkoutRecovery.observePayment(page, recovery, { signal: options.signal || taskSignal?.() });
         try {
             const payResult = await finalizeCheckoutPayment(page, holderName, { paymentContext, paymentLimit: options.paymentLimit,
