@@ -60,6 +60,10 @@ import {
   registrationFlowV4Base,
   registrationTerminalStopBase,
   registrationTerminalStopTree,
+  registrationTerminalStopRepairBase,
+  registrationTerminalStopRepairTree,
+  registrationTerminalStopRepairPaths,
+  registrationTerminalStopRepairParts,
   registrationTerminalStopContract,
   registrationTerminalStopApplications,
   registrationTerminalStopPaths,
@@ -1301,6 +1305,7 @@ function recordGuardCommands(
     childProcess.execFileSync = (file, args) => {
       if (file === 'git') {
         if (args.join(' ') === ${JSON.stringify('rev-parse ' + registrationTerminalStopBase + '^{tree}')}) return ${JSON.stringify(registrationTerminalStopTree + '\n')};
+        if (args.join(' ') === ${JSON.stringify('rev-parse ' + registrationTerminalStopRepairBase + '^{tree}')}) return ${JSON.stringify(registrationTerminalStopRepairTree + '\n')};
         if (args.join(' ') === ${JSON.stringify('rev-parse ' + registrationFlowV4Base + '^{tree}')}) return ${JSON.stringify(registrationFlowV4Tree + '\n')};
         if (args.join(' ') === ${JSON.stringify('rev-parse ' + registrationProtocolRepairPreservationBase + '^{tree}')}) return ${JSON.stringify(registrationProtocolRepairPreservationTree + '\n')};
         if (args.join(' ') === ${JSON.stringify('rev-parse ' + registrationProtocolRepairControlBase + '^{tree}')}) return ${JSON.stringify(registrationProtocolRepairControlTree + '\n')};
@@ -3083,4 +3088,22 @@ test('byte-bound proxy identity patch runs publisher/selectors and real engine s
       }),
     /SYNTHETIC_COMMAND_FAILURE/
   );
+});
+
+test('terminal contract entry repair dispatches controls without rerunning unchanged persistence', () => {
+  const options = {
+    base: registrationTerminalStopRepairBase,
+    terminalStopFixture: true,
+    cloud: true
+  };
+  for (const part of registrationTerminalStopRepairParts)
+    assert.deepEqual(
+      recordGuardCommands('recharge', registrationTerminalStopRepairPaths, part, options),
+      [...registrationTerminalStopCommands[part], ['process-exit', 0]]
+    );
+  for (const part of ['api', 'admin', 'connector'])
+    assert.throws(
+      () => recordGuardCommands('recharge', registrationTerminalStopRepairPaths, part, options),
+      /Unsupported registration terminal stop control repair/
+    );
 });

@@ -146,6 +146,8 @@ import {
   registrationFlowV4Commands,
   isRegistrationTerminalStopOnly,
   registrationTerminalStopBase,
+  registrationTerminalStopRepairBase,
+  registrationTerminalStopRepairParts,
   registrationTerminalStopCommands
 } from './ci-recharge-scope.mjs';
 
@@ -185,12 +187,17 @@ if (
 }
 if (
   mode === 'recharge' &&
-  base === registrationTerminalStopBase &&
+  [registrationTerminalStopBase, registrationTerminalStopRepairBase].includes(base) &&
   isRegistrationTerminalStopOnly(changed, {
     base,
     baseTree: execFileSync('git', ['rev-parse', base + '^{tree}'], { encoding: 'utf8' }).trim()
   })
 ) {
+  if (
+    base === registrationTerminalStopRepairBase &&
+    !registrationTerminalStopRepairParts.includes(part)
+  )
+    throw new Error('Unsupported registration terminal stop control repair check part');
   if (!Object.hasOwn(registrationTerminalStopCommands, part))
     throw new Error('Unsupported registration terminal stop check part');
   if (part === 'api' && process.env.GITHUB_ACTIONS !== 'true')
