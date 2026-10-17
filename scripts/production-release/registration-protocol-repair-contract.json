@@ -405,7 +405,7 @@
     ".github/workflows/registration-protocol-repair-validation.yml": "d9d0878f94076d8a62298eb6d00e787091a495fa5f62e1cc2e8a87a9e8d56494",
     "docs/V2_TASKS.md": "b9db869dc1f5a822d40f4aa93aac381fc43ebdfb28932de79c203c31257d79fc",
     "docs/AUTO_REGISTRATION_PROTOCOL_REPAIR_20261017.md": "5e97598b05c480362e1e7b0f1b2298f4b2b4f3e455263786b4b7d6b8e32727aa",
-    "scripts/ci-recharge-scope.mjs": "937b66698319f6141df1c1364806136cfa2b72a43ebbe754149f0c01dd71c64c",
+    "scripts/ci-recharge-scope.mjs": "52937738dcd8a7686a648156cf71bf2c238047e291411567b5945281e3f3975e",
     "scripts/ci-recharge-scope.test.mjs": "892da96875916e0cb77702832e1711560815cd7fefe2d770e3f9630d010c6d5b",
     "scripts/ci-recharge-check.mjs": "d696302582a712c2e945116bdad056b4057dada57c64709a7d96d2f7d7ffb9fc",
     "scripts/ci-recharge-check.test.mjs": "ab632a370f849813269f31675beaa76f250daa4fca1cecd80efd29bdd490c2ae",
@@ -431,8 +431,8 @@
   },
   "schemaSha256": "51a4d25b1302458145f560acc32f25b89a7bd65fea64dc72b254dc56da430100",
   "scope": "REGISTRATION_PROTOCOL_REPAIR_20261017",
-  "sourceBaseline": "c71568852416fd62a41557e926b3d47df3acef89",
-  "sourceBaselineTree": "eb74d8e0d64ec9909a9fd971cec70bff3d27216a",
+  "sourceBaseline": "0222adf9d5225669b73e8e8f9ec711564eb6163a",
+  "sourceBaselineTree": "0d8319bcfc032b8f4e38a99642be0819cbfa7c85",
   "sourceProjectionSha256": {
     "adminSourceProjection": "61205317a75fa87fba8d266d66209d831b5e65591feeff0aa98d5f915bcc6fe2",
     "roleSourceProjections": "c9392f13179ea12f0a41b491a21ef3987bdb378e3b5def51e676ec959cdedb9c"

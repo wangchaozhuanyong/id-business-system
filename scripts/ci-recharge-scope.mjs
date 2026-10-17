@@ -79,8 +79,8 @@ import { createHash } from 'node:crypto';
 import { pathToFileURL } from 'node:url';
 import { matchesSourceEvidence, recordedPullRequestBase } from './ci-recharge-evidence.mjs';
 
-export const registrationProtocolRepairBase = 'c71568852416fd62a41557e926b3d47df3acef89';
-export const registrationProtocolRepairTree = 'eb74d8e0d64ec9909a9fd971cec70bff3d27216a';
+export const registrationProtocolRepairBase = '0222adf9d5225669b73e8e8f9ec711564eb6163a';
+export const registrationProtocolRepairTree = '0d8319bcfc032b8f4e38a99642be0819cbfa7c85';
 export const registrationProtocolRepairContract =
   'scripts/production-release/registration-protocol-repair-contract.json';
 export const registrationProtocolRepairApplications = Object.freeze([
