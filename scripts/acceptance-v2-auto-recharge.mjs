@@ -134,6 +134,21 @@ const report = {
 };
 let browser;
 let lastPage;
+const diagnosticText = (value) =>
+  String(value)
+    .replace(/Bearer\s+\S+/gi, 'Bearer [redacted]')
+    .replace(
+      /((?:password|token|secret|nonce|cvc|securityCode)["'\s:=]+)[^\s,"'}]+/gi,
+      '$1[redacted]'
+    )
+    .replace(/\b\d{12,19}\b/g, '[redacted-number]')
+    .replace(/[\w.+-]+@[\w.-]+\.[a-z]{2,}/gi, '[redacted-email]')
+    .slice(0, 1800);
+const diagnosticUrl = (value) => {
+  const url = new URL(value);
+  return url.origin + url.pathname;
+};
+let lastDiagnostics;
 try {
   browser = await chromium.launch({ headless: true });
   for (const width of [1440, 768, 390]) {
@@ -152,6 +167,8 @@ try {
       forbidden = [],
       jobs = [],
       local = new Map();
+    const diagnostics = { width, phase: 'initial', console: [], pageErrors: [], unmatchedApi: [] };
+    lastDiagnostics = diagnostics;
     const profileA = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
     const profileB = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
     const profiles = [
@@ -178,7 +195,15 @@ try {
       slowRefresh = false,
       refreshSeen = false;
     let activeEntry, fingerprint;
-    page.on('pageerror', (error) => errors.push(error.message));
+    page.on('pageerror', (error) => {
+      errors.push(diagnosticText(error.message));
+      diagnostics.pageErrors.push(diagnosticText(error.stack ?? error.message));
+    });
+    page.on('console', (message) => {
+      if (message.type() === 'error' || message.type() === 'warning') {
+        diagnostics.console.push({ type: message.type(), text: diagnosticText(message.text()) });
+      }
+    });
     const success = (route, data) =>
       route.fulfill({
         contentType: 'application/json',
@@ -453,7 +478,7 @@ try {
                     };
               else throw new Error('未预期的官网只读路径');
               value = { ok: true, status: 200, data };
-            } else throw new Error('未预期的合成窗口表达式 ' + expression.slice(0, 240));
+            } else throw new Error('未预期的合成窗口表达式');
             result = { result: { value } };
           } else
             assert.ok(
@@ -470,8 +495,8 @@ try {
             );
           socket.send(JSON.stringify({ id: command.id, result }));
         } catch (error) {
-          console.error(error.message);
-          errors.push(error.message);
+          console.error(diagnosticText(error.message));
+          errors.push(diagnosticText(error.message));
           socket.send(
             JSON.stringify({ id: command.id, error: { message: 'synthetic protocol rejected' } })
           );
@@ -909,6 +934,7 @@ try {
           forbidden.push(path);
           return route.abort();
         }
+        diagnostics.unmatchedApi.push({ method: request.method(), path });
         return success(route, {});
       }
       if (url.origin === localApi) {
@@ -953,6 +979,28 @@ try {
     await page.goto(origin + '/v2/auto-recharge');
     const form = page.locator('.recharge-entry-panel');
     await form.waitFor();
+    // Preserve Vue's production error handler and record only bounded diagnostics.
+    await page.evaluate(() => {
+      window.__rechargeAcceptanceVueErrors = [];
+      const app = document.querySelector('#app')?.__vue_app__;
+      const original = app?.config.errorHandler;
+      if (original) {
+        app.config.errorHandler = (error, ...args) => {
+          window.__rechargeAcceptanceVueErrors.push(String(error?.stack ?? error));
+          return original(error, ...args);
+        };
+      }
+    });
+    const assertPageHealthy = async (phase) => {
+      diagnostics.phase = phase;
+      const runtime = await page.evaluate(() => ({
+        vueErrors: window.__rechargeAcceptanceVueErrors ?? [],
+        hasOverlay: Boolean(document.querySelector('.app-route-error'))
+      }));
+      assert.equal(runtime.hasOverlay, false, `${phase} 不得产生运行时错误遮罩`);
+      assert.deepEqual(runtime.vueErrors.map(diagnosticText), [], `${phase} 不得产生 Vue 异常`);
+      assert.deepEqual(errors, [], `${phase} 不得产生页面或合成协议异常`);
+    };
     assert.equal(await page.getByRole('radio', { name: '服务器充值', exact: true }).count(), 0);
     assert.equal(await page.getByRole('radio', { name: '已保存账号', exact: true }).count(), 0);
     await page.getByText('账号自动登录', { exact: true }).click();
@@ -1345,6 +1393,7 @@ try {
       }
     }
     // A real route transition must retain the non-sensitive draft but clear one-time secrets.
+    diagnostics.phase = 'draft-route-away';
     await page.getByRole('button', { name: /继续.*账号.*升级/ }).click();
     await page
       .getByRole('radio', { name: '账号自动登录', exact: true })
@@ -1353,11 +1402,19 @@ try {
     await form.getByLabel('窗口名称', { exact: true }).fill('升级草稿保留验收');
     await fillPayment();
     if (width < 900) await page.setViewportSize({ width: 1440, height: 1100 });
-    await page.getByRole('button', { name: '总览', exact: true }).click();
-    await page.locator('.v2-navigation a[href="/v2/dashboard"]').click();
-    await page.waitForURL('**/v2/dashboard');
+    // Use a real, fixture-backed sibling route and wait for its content before going back.
+    await page.locator('.v2-navigation a[href="/v2/auto-recharge/addresses"]').click();
+    await page.waitForURL('**/v2/auto-recharge/addresses');
+    await page
+      .locator('.recharge-address-page [data-v2-query-phase="ready"]')
+      .getByText(address.line1, { exact: true })
+      .waitFor();
+    await assertPageHealthy('draft-route-destination-ready');
+    diagnostics.phase = 'draft-route-back';
     await page.goBack();
+    await page.waitForURL('**/v2/auto-recharge');
     await form.waitFor();
+    await assertPageHealthy('draft-route-return-ready');
     await page.setViewportSize({ width, height: 1100 });
     assert.equal(
       await form.getByLabel('窗口名称', { exact: true }).inputValue(),
@@ -1434,6 +1491,7 @@ try {
       }
     }
     const beforeLoginPayments = confirmations;
+    diagnostics.phase = 'login-and-cancel';
     await page
       .getByRole('radio', { name: '仅登录账号', exact: true })
       .locator('xpath=ancestor::label')
@@ -1453,6 +1511,7 @@ try {
     assert.equal(confirmations, beforeLoginPayments, '登录与取消不能发送任何付款');
     assert.equal(onlyLoginStarts, 2);
     assert.equal(jobs[0].result.payment_requests_sent, 0);
+    await assertPageHealthy('login-and-cancel-complete');
     assert.deepEqual(errors, []);
     assert.deepEqual(forbidden, []);
     report.cases.push({
@@ -1480,6 +1539,22 @@ try {
   console.log(JSON.stringify(report));
 } catch (error) {
   if (lastPage && !lastPage.isClosed()) {
+    const runtime = await lastPage.evaluate(() => ({
+      vueErrors: window.__rechargeAcceptanceVueErrors ?? [],
+      overlay: document.querySelector('.app-route-error')?.textContent ?? null
+    }));
+    const diagnostics = {
+      ...lastDiagnostics,
+      route: diagnosticUrl(lastPage.url()),
+      failure: diagnosticText(error.message),
+      vueErrors: runtime.vueErrors.map(diagnosticText),
+      overlay: runtime.overlay ? diagnosticText(runtime.overlay) : null
+    };
+    writeFileSync(
+      resolve(evidence, 'failure-diagnostics.json'),
+      JSON.stringify(diagnostics, null, 2)
+    );
+    console.error('[AUTO_RECHARGE_ACCEPTANCE_FAILURE] ' + JSON.stringify(diagnostics));
     await lastPage.screenshot({ path: resolve(evidence, 'failure.png'), fullPage: true });
     writeFileSync(resolve(evidence, 'failure.txt'), await lastPage.locator('body').innerText());
   }
