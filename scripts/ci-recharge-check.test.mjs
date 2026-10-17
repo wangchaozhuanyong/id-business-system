@@ -92,234 +92,267 @@ import {
 } from './ci-recharge-scope.mjs';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
+function assertRetiredRegistration(action) {
+  assert.throws(action, (failure) =>
+    /Automatic registration has been removed/.test(
+      String(failure.stderr ?? failure.actual ?? failure.message)
+    )
+  );
+}
 test('registration published-baseline preservation runs only PR controls and propagates failure', () => {
-  const options = {
-    base: registrationProtocolRepairPreservationBase,
-    protocolRepairFixture: true,
-    cloud: false
-  };
-  assert.deepEqual(
-    recordGuardCommands('ci-only', registrationProtocolRepairPreservationPaths, 'guards', options),
-    [...registrationProtocolRepairControlCommands.guards, ['process-exit', 0]]
-  );
-  assert.throws(
-    () =>
-      recordGuardCommands('ci-only', registrationProtocolRepairPreservationPaths, 'guards', {
-        ...options,
-        failCommand: registrationProtocolRepairControlCommands.guards[0].join(' ')
-      }),
-    /SYNTHETIC_COMMAND_FAILURE/
-  );
-  for (const part of ['api', 'admin', 'release-controls', 'migration'])
+  assertRetiredRegistration(() => {
+    const options = {
+      base: registrationProtocolRepairPreservationBase,
+      protocolRepairFixture: true,
+      cloud: false
+    };
+    assert.deepEqual(
+      recordGuardCommands(
+        'ci-only',
+        registrationProtocolRepairPreservationPaths,
+        'guards',
+        options
+      ),
+      [...registrationProtocolRepairControlCommands.guards, ['process-exit', 0]]
+    );
     assert.throws(
       () =>
-        recordGuardCommands('ci-only', registrationProtocolRepairPreservationPaths, part, options),
-      /Unsupported registration published-baseline preservation/
+        recordGuardCommands('ci-only', registrationProtocolRepairPreservationPaths, 'guards', {
+          ...options,
+          failCommand: registrationProtocolRepairControlCommands.guards[0].join(' ')
+        }),
+      /SYNTHETIC_COMMAND_FAILURE/
     );
+    for (const part of ['api', 'admin', 'release-controls', 'migration'])
+      assert.throws(
+        () =>
+          recordGuardCommands(
+            'ci-only',
+            registrationProtocolRepairPreservationPaths,
+            part,
+            options
+          ),
+        /Unsupported registration published-baseline preservation/
+      );
+  });
 });
 
 test('registration protocol preflight control repair runs only the finite controller checks and propagates failure', () => {
-  const options = { base: registrationProtocolRepairControlBase, protocolRepairFixture: true };
-  assert.deepEqual(
-    recordGuardCommands('ci-only', registrationProtocolRepairControlPaths, 'guards', options),
-    [...registrationProtocolRepairControlCommands.guards, ['process-exit', 0]]
-  );
-  for (const part of ['api', 'admin', 'migration', 'release-controls']) {
-    assert.throws(
-      () => recordGuardCommands('ci-only', registrationProtocolRepairControlPaths, part, options),
-      /Unsupported registration protocol preflight control repair/
+  assertRetiredRegistration(() => {
+    const options = { base: registrationProtocolRepairControlBase, protocolRepairFixture: true };
+    assert.deepEqual(
+      recordGuardCommands('ci-only', registrationProtocolRepairControlPaths, 'guards', options),
+      [...registrationProtocolRepairControlCommands.guards, ['process-exit', 0]]
     );
-  }
-  assert.throws(
-    () =>
-      recordGuardCommands('ci-only', registrationProtocolRepairControlPaths, 'guards', {
-        ...options,
-        failCommand: registrationProtocolRepairControlCommands.guards[0].join(' ')
-      }),
-    /SYNTHETIC_COMMAND_FAILURE/
-  );
+    for (const part of ['api', 'admin', 'migration', 'release-controls']) {
+      assert.throws(
+        () => recordGuardCommands('ci-only', registrationProtocolRepairControlPaths, part, options),
+        /Unsupported registration protocol preflight control repair/
+      );
+    }
+    assert.throws(
+      () =>
+        recordGuardCommands('ci-only', registrationProtocolRepairControlPaths, 'guards', {
+          ...options,
+          failCommand: registrationProtocolRepairControlCommands.guards[0].join(' ')
+        }),
+      /SYNTHETIC_COMMAND_FAILURE/
+    );
+  });
 });
 
 test('registration flow v4 dispatches its four finite parts and blocks local candidate checks', () => {
-  const options = {
-    base: registrationFlowV4Base,
-    flowV4Fixture: true,
-    cloud: true
-  };
-  for (const part of ['guards', 'api', 'admin', 'release-controls']) {
-    assert.deepEqual(recordGuardCommands('recharge', registrationFlowV4Paths, part, options), [
-      ...registrationFlowV4Commands[part],
-      ['process-exit', 0]
-    ]);
-  }
-  for (const part of ['api', 'admin']) {
+  assertRetiredRegistration(() => {
+    const options = {
+      base: registrationFlowV4Base,
+      flowV4Fixture: true,
+      cloud: true
+    };
+    for (const part of ['guards', 'api', 'admin', 'release-controls']) {
+      assert.deepEqual(recordGuardCommands('recharge', registrationFlowV4Paths, part, options), [
+        ...registrationFlowV4Commands[part],
+        ['process-exit', 0]
+      ]);
+    }
+    for (const part of ['api', 'admin']) {
+      assert.throws(
+        () =>
+          recordGuardCommands('recharge', registrationFlowV4Paths, part, {
+            ...options,
+            cloud: false
+          }),
+        /require isolated CI/
+      );
+    }
+    assert.throws(
+      () => recordGuardCommands('recharge', registrationFlowV4Paths, 'migration', options),
+      /Unsupported registration flow v4/
+    );
+    const failCommand = registrationFlowV4Commands.guards[0].join(' ');
     assert.throws(
       () =>
-        recordGuardCommands('recharge', registrationFlowV4Paths, part, {
+        recordGuardCommands('recharge', registrationFlowV4Paths, 'guards', {
           ...options,
-          cloud: false
+          failCommand
         }),
-      /require isolated CI/
+      /SYNTHETIC_COMMAND_FAILURE/
     );
-  }
-  assert.throws(
-    () => recordGuardCommands('recharge', registrationFlowV4Paths, 'migration', options),
-    /Unsupported registration flow v4/
-  );
-  const failCommand = registrationFlowV4Commands.guards[0].join(' ');
-  assert.throws(
-    () =>
-      recordGuardCommands('recharge', registrationFlowV4Paths, 'guards', {
-        ...options,
-        failCommand
-      }),
-    /SYNTHETIC_COMMAND_FAILURE/
-  );
+  });
 });
 
 test('registration protocol repair dispatches its four finite parts and blocks local candidate checks', () => {
-  const options = {
-    base: registrationProtocolRepairBase,
-    protocolRepairFixture: true,
-    cloud: true
-  };
-  for (const part of ['guards', 'api', 'admin', 'release-controls']) {
-    assert.deepEqual(
-      recordGuardCommands('recharge', registrationProtocolRepairPaths, part, options),
-      [...registrationProtocolRepairCommands[part], ['process-exit', 0]]
+  assertRetiredRegistration(() => {
+    const options = {
+      base: registrationProtocolRepairBase,
+      protocolRepairFixture: true,
+      cloud: true
+    };
+    for (const part of ['guards', 'api', 'admin', 'release-controls']) {
+      assert.deepEqual(
+        recordGuardCommands('recharge', registrationProtocolRepairPaths, part, options),
+        [...registrationProtocolRepairCommands[part], ['process-exit', 0]]
+      );
+    }
+    for (const part of ['api', 'admin']) {
+      assert.throws(
+        () =>
+          recordGuardCommands('recharge', registrationProtocolRepairPaths, part, {
+            ...options,
+            cloud: false
+          }),
+        /require isolated CI/
+      );
+    }
+    assert.throws(
+      () => recordGuardCommands('recharge', registrationProtocolRepairPaths, 'migration', options),
+      /Unsupported registration protocol repair/
     );
-  }
-  for (const part of ['api', 'admin']) {
+    const failCommand = registrationProtocolRepairCommands.guards[0].join(' ');
     assert.throws(
       () =>
-        recordGuardCommands('recharge', registrationProtocolRepairPaths, part, {
+        recordGuardCommands('recharge', registrationProtocolRepairPaths, 'guards', {
           ...options,
-          cloud: false
+          failCommand
         }),
-      /require isolated CI/
+      /SYNTHETIC_COMMAND_FAILURE/
     );
-  }
-  assert.throws(
-    () => recordGuardCommands('recharge', registrationProtocolRepairPaths, 'migration', options),
-    /Unsupported registration protocol repair/
-  );
-  const failCommand = registrationProtocolRepairCommands.guards[0].join(' ');
-  assert.throws(
-    () =>
-      recordGuardCommands('recharge', registrationProtocolRepairPaths, 'guards', {
-        ...options,
-        failCommand
-      }),
-    /SYNTHETIC_COMMAND_FAILURE/
-  );
+  });
 });
 
 test('registration protocol image-user repair stops on its pure gate and refuses API Admin or migration', () => {
-  const options = { base: registrationProtocolRestoreRepairBase, restoreFixture: true };
-  const calls = recordGuardCommands(
-    'ci-only',
-    registrationProtocolRestoreRepairPaths,
-    'guards',
-    options
-  );
-  assert.deepEqual(calls, [
-    ...registrationProtocolRestoreRepairCommands.guards,
-    ['process-exit', 0]
-  ]);
-  assert.equal(
-    calls.some((row) =>
-      row.some(
-        (arg) =>
-          typeof arg === 'string' &&
-          /check-api|check-admin|unittest|prisma|acceptance|check:v2-/.test(arg)
-      )
-    ),
-    false
-  );
-  for (const part of ['api', 'admin', 'migration', 'release-controls'])
-    assert.throws(
-      () => recordGuardCommands('ci-only', registrationProtocolRestoreRepairPaths, part, options),
-      /Unsupported registration protocol restore control repair/
+  assertRetiredRegistration(() => {
+    const options = { base: registrationProtocolRestoreRepairBase, restoreFixture: true };
+    const calls = recordGuardCommands(
+      'ci-only',
+      registrationProtocolRestoreRepairPaths,
+      'guards',
+      options
     );
-  assert.deepEqual(registrationProtocolRestoreRepairCommands.guards[0], [
-    'python3',
-    '-B',
-    'scripts/production-release/registration-protocol-restore-release.test.py'
-  ]);
-  const failed = registrationProtocolRestoreRepairCommands.guards[0].join(' ');
-  assert.throws(
-    () =>
-      recordGuardCommands('ci-only', registrationProtocolRestoreRepairPaths, 'guards', {
-        ...options,
-        failCommand: failed
-      }),
-    /SYNTHETIC_COMMAND_FAILURE/
-  );
+    assert.deepEqual(calls, [
+      ...registrationProtocolRestoreRepairCommands.guards,
+      ['process-exit', 0]
+    ]);
+    assert.equal(
+      calls.some((row) =>
+        row.some(
+          (arg) =>
+            typeof arg === 'string' &&
+            /check-api|check-admin|unittest|prisma|acceptance|check:v2-/.test(arg)
+        )
+      ),
+      false
+    );
+    for (const part of ['api', 'admin', 'migration', 'release-controls'])
+      assert.throws(
+        () => recordGuardCommands('ci-only', registrationProtocolRestoreRepairPaths, part, options),
+        /Unsupported registration protocol restore control repair/
+      );
+    assert.deepEqual(registrationProtocolRestoreRepairCommands.guards[0], [
+      'python3',
+      '-B',
+      'scripts/production-release/registration-protocol-restore-release.test.py'
+    ]);
+    const failed = registrationProtocolRestoreRepairCommands.guards[0].join(' ');
+    assert.throws(
+      () =>
+        recordGuardCommands('ci-only', registrationProtocolRestoreRepairPaths, 'guards', {
+          ...options,
+          failCommand: failed
+        }),
+      /SYNTHETIC_COMMAND_FAILURE/
+    );
+  });
 });
 
 test('registration protocol restore dispatches only scoped checks and requires isolated candidate verification', () => {
-  for (const part of ['guards', 'api', 'admin']) {
-    assert.deepEqual(
-      recordGuardCommands('recharge', registrationProtocolRestorePaths, part, {
-        base: registrationProtocolRestoreBase,
-        restoreFixture: true,
-        cloud: true
-      }),
-      [...registrationProtocolRestoreCommands[part], ['process-exit', 0]]
-    );
-  }
-  for (const part of ['api', 'admin'])
-    assert.throws(
-      () =>
+  assertRetiredRegistration(() => {
+    for (const part of ['guards', 'api', 'admin']) {
+      assert.deepEqual(
         recordGuardCommands('recharge', registrationProtocolRestorePaths, part, {
           base: registrationProtocolRestoreBase,
-          restoreFixture: true
+          restoreFixture: true,
+          cloud: true
         }),
-      /require isolated CI/
+        [...registrationProtocolRestoreCommands[part], ['process-exit', 0]]
+      );
+    }
+    for (const part of ['api', 'admin'])
+      assert.throws(
+        () =>
+          recordGuardCommands('recharge', registrationProtocolRestorePaths, part, {
+            base: registrationProtocolRestoreBase,
+            restoreFixture: true
+          }),
+        /require isolated CI/
+      );
+    assert.throws(
+      () =>
+        recordGuardCommands('recharge', registrationProtocolRestorePaths, 'migration', {
+          base: registrationProtocolRestoreBase,
+          restoreFixture: true,
+          cloud: true
+        }),
+      /Unsupported registration protocol restore/
     );
-  assert.throws(
-    () =>
-      recordGuardCommands('recharge', registrationProtocolRestorePaths, 'migration', {
-        base: registrationProtocolRestoreBase,
-        restoreFixture: true,
-        cloud: true
-      }),
-    /Unsupported registration protocol restore/
-  );
+  });
 });
 
 test('registration browser dispatcher runs every finite command and exits before historical publishers', () => {
-  for (const part of ['guards', 'release-controls', 'api', 'admin']) {
-    const calls = recordGuardCommands('recharge', registrationBrowserPaths, part, {
-      base: registrationBrowserBase,
-      browserFixture: true,
-      cloud: true
-    });
-    assert.deepEqual(calls, [
-      ...registrationBrowserCommands(part, registrationBrowserPaths),
-      ['process-exit', 0]
-    ]);
-  }
-  assert.throws(
-    () =>
-      recordGuardCommands('recharge', registrationBrowserPaths, 'migration', {
+  assertRetiredRegistration(() => {
+    for (const part of ['guards', 'release-controls', 'api', 'admin']) {
+      const calls = recordGuardCommands('recharge', registrationBrowserPaths, part, {
         base: registrationBrowserBase,
         browserFixture: true,
         cloud: true
-      }),
-    /Unsupported registration browser/
-  );
+      });
+      assert.deepEqual(calls, [
+        ...registrationBrowserCommands(part, registrationBrowserPaths),
+        ['process-exit', 0]
+      ]);
+    }
+    assert.throws(
+      () =>
+        recordGuardCommands('recharge', registrationBrowserPaths, 'migration', {
+          base: registrationBrowserBase,
+          browserFixture: true,
+          cloud: true
+        }),
+      /Unsupported registration browser/
+    );
+  });
 });
 
 test('registration browser SQLite suites cannot run through this finite dispatcher on the local Mac', () => {
-  assert.throws(
-    () =>
-      recordGuardCommands('recharge', registrationBrowserPaths, 'api', {
-        base: registrationBrowserBase,
-        browserFixture: true
-      }),
-    /require isolated CI/
-  );
+  assertRetiredRegistration(() => {
+    assert.throws(
+      () =>
+        recordGuardCommands('recharge', registrationBrowserPaths, 'api', {
+          base: registrationBrowserBase,
+          browserFixture: true
+        }),
+      /require isolated CI/
+    );
+  });
 });
 test('checkout source recovery runs its native controls and the API suite without historical registration publishers', () => {
   const paths = [
@@ -422,103 +455,112 @@ const readonlyMetadataPrevious = readonlyMetadataCurrent
 const readonlyMetadataFixture = { readonlyBaseSource: readonlyMetadataPrevious };
 
 test('registration parity dispatcher runs both interfaces all persistence modules and UI rules then closes its finite branch', () => {
-  for (const part of ['guards', 'release-controls', 'api', 'admin']) {
-    const calls = recordGuardCommands('recharge', registrationParityDiagnosticsPaths, part, {
-      base: registrationParityDiagnosticsBase,
-      parityFixture: true
-    });
-    assert.deepEqual(calls.at(-1), ['process-exit', 0]);
-    if (part === 'guards' || part === 'release-controls') {
-      const install = calls.findIndex(
-        (c) => c.join(' ') === 'npm ci --ignore-scripts --no-audit --no-fund'
-      );
-      const format = calls.findIndex((c) => c.includes('prettier'));
-      if (part === 'release-controls') assert.ok(install >= 0 && format > install);
-      else assert.equal(install, -1);
-      assert.ok(
-        calls.some((c) =>
-          c.includes('scripts/production-release/registration-parity-diagnostics-release.test.py')
-        )
-      );
-      for (const name of [
-        'check:admin-ui',
-        'check:v2-ui-language',
-        'check:v2-color-contrast',
-        'check:v2-table-standard',
-        'check:v2-loading-standard',
-        'check:v2-module-architecture',
-        'check:v2-isolation'
-      ])
-        assert.ok(
-          calls.some((c) => c.join(' ') === 'npm run ' + name),
-          name
-        );
-    } else if (part === 'api') {
-      for (const name of [
-        'test_registration_parity_unit.py',
-        'test_flow_evidence.py',
-        'test_workspace.py',
-        'test_apple_mailboxes.py',
-        'test_release_safety.py',
-        'test_registration_closed_loop_unit.py',
-        'test_upload_compat.py'
-      ])
-        assert.ok(
-          calls.some((c) => c.includes(registrationParityDiagnosticsWorker) && c.includes(name)),
-          name
-        );
-    } else assert.ok(calls.some((c) => c.includes(registrationParityDiagnosticsAcceptance)));
-    assert.ok(
-      !calls.some((c) =>
-        c.some(
-          (arg) =>
-            typeof arg === 'string' &&
-            /ci-recharge-migration|prisma:migrate|online-recharge.*engine\/test/.test(arg)
-        )
-      )
-    );
-  }
-  assert.throws(
-    () =>
-      recordGuardCommands('recharge', registrationParityDiagnosticsPaths, 'migration', {
+  assertRetiredRegistration(() => {
+    for (const part of ['guards', 'release-controls', 'api', 'admin']) {
+      const calls = recordGuardCommands('recharge', registrationParityDiagnosticsPaths, part, {
         base: registrationParityDiagnosticsBase,
         parityFixture: true
-      }),
-    /Unsupported registration parity diagnostics check part/
-  );
+      });
+      assert.deepEqual(calls.at(-1), ['process-exit', 0]);
+      if (part === 'guards' || part === 'release-controls') {
+        const install = calls.findIndex(
+          (c) => c.join(' ') === 'npm ci --ignore-scripts --no-audit --no-fund'
+        );
+        const format = calls.findIndex((c) => c.includes('prettier'));
+        if (part === 'release-controls') assert.ok(install >= 0 && format > install);
+        else assert.equal(install, -1);
+        assert.ok(
+          calls.some((c) =>
+            c.includes('scripts/production-release/registration-parity-diagnostics-release.test.py')
+          )
+        );
+        for (const name of [
+          'check:admin-ui',
+          'check:v2-ui-language',
+          'check:v2-color-contrast',
+          'check:v2-table-standard',
+          'check:v2-loading-standard',
+          'check:v2-module-architecture',
+          'check:v2-isolation'
+        ])
+          assert.ok(
+            calls.some((c) => c.join(' ') === 'npm run ' + name),
+            name
+          );
+      } else if (part === 'api') {
+        for (const name of [
+          'test_registration_parity_unit.py',
+          'test_flow_evidence.py',
+          'test_workspace.py',
+          'test_apple_mailboxes.py',
+          'test_release_safety.py',
+          'test_registration_closed_loop_unit.py',
+          'test_upload_compat.py'
+        ])
+          assert.ok(
+            calls.some((c) => c.includes(registrationParityDiagnosticsWorker) && c.includes(name)),
+            name
+          );
+      } else assert.ok(calls.some((c) => c.includes(registrationParityDiagnosticsAcceptance)));
+      assert.ok(
+        !calls.some((c) =>
+          c.some(
+            (arg) =>
+              typeof arg === 'string' &&
+              /ci-recharge-migration|prisma:migrate|online-recharge.*engine\/test/.test(arg)
+          )
+        )
+      );
+    }
+    assert.throws(
+      () =>
+        recordGuardCommands('recharge', registrationParityDiagnosticsPaths, 'migration', {
+          base: registrationParityDiagnosticsBase,
+          parityFixture: true
+        }),
+      /Unsupported registration parity diagnostics check part/
+    );
+  });
 });
 
 test('registration client successor control repair runs guards without repeating application or database suites', () => {
-  const calls = recordGuardCommands('ci-only', registrationParityDiagnosticsRepairPaths, 'guards', {
-    base: registrationParityDiagnosticsRepairBase,
-    parityFixture: true
-  });
-  assert.deepEqual(calls.at(-1), ['process-exit', 0]);
-  assert.ok(
-    calls.some((c) => c.includes('--test-name-pattern=registration parity|registration client'))
-  );
-  assert.ok(
-    calls.some((c) =>
-      c.includes('scripts/production-release/registration-parity-diagnostics-release.test.py')
-    )
-  );
-  assert.ok(
-    !calls.some(
-      (c) =>
-        c.includes('prisma:mysql:generate') ||
-        c.includes('auto-registration:setup') ||
-        c.includes('build') ||
-        c.includes('test')
-    )
-  );
-  assert.throws(
-    () =>
-      recordGuardCommands('ci-only', registrationParityDiagnosticsRepairPaths, 'api', {
+  assertRetiredRegistration(() => {
+    const calls = recordGuardCommands(
+      'ci-only',
+      registrationParityDiagnosticsRepairPaths,
+      'guards',
+      {
         base: registrationParityDiagnosticsRepairBase,
         parityFixture: true
-      }),
-    /Unsupported registration parity control repair check part/
-  );
+      }
+    );
+    assert.deepEqual(calls.at(-1), ['process-exit', 0]);
+    assert.ok(
+      calls.some((c) => c.includes('--test-name-pattern=registration parity|registration client'))
+    );
+    assert.ok(
+      calls.some((c) =>
+        c.includes('scripts/production-release/registration-parity-diagnostics-release.test.py')
+      )
+    );
+    assert.ok(
+      !calls.some(
+        (c) =>
+          c.includes('prisma:mysql:generate') ||
+          c.includes('auto-registration:setup') ||
+          c.includes('build') ||
+          c.includes('test')
+      )
+    );
+    assert.throws(
+      () =>
+        recordGuardCommands('ci-only', registrationParityDiagnosticsRepairPaths, 'api', {
+          base: registrationParityDiagnosticsRepairBase,
+          parityFixture: true
+        }),
+      /Unsupported registration parity control repair check part/
+    );
+  });
 });
 
 test('proxy country dispatcher executes each affected part and closes before historical publishers', () => {
@@ -536,139 +578,118 @@ test('proxy country dispatcher executes each affected part and closes before his
 });
 
 test('exact migration query repair retains fresh release tests and selector gates without the historical prefix', () => {
-  const paths = [
-    'scripts/production-release/registration-closure-release.py',
-    'scripts/production-release/registration-closure-release.test.py',
-    'scripts/ci-registration-closure-scope.mjs',
-    'scripts/ci-recharge-check.mjs',
-    'scripts/ci-recharge-check.test.mjs',
-    'scripts/ci-recharge-scope.test.mjs'
-  ];
-  const options = { base: 'd38c243b5727953aa96c0fa83e706fee253c9624' };
-  const calls = recordGuardCommands('ci-only', paths, 'guards', options);
-  assert.equal(
-    calls.filter(
-      (row) =>
-        row.join(' ') ===
-        'python3 -B scripts/production-release/registration-closure-release.test.py'
-    ).length,
-    1
-  );
-  for (const command of ['prettier', 'eslint'])
-    assert.ok(calls.some((row) => row.includes(command)));
-  const tests = calls.find((row) => row[0] === 'node' && row[1] === '--test');
-  assert.ok(tests.includes('scripts/ci-registration-closure-native-reuse.test.mjs'));
-  assert.equal(tests.length, 6);
-  assert.deepEqual(calls.at(-1), ['process-exit', 0]);
-  assert.equal(
-    calls.some((row) =>
-      row.includes('scripts/production-release/api-admin-pending-online.test.py')
-    ),
-    false
-  );
-  const wider = recordGuardCommands(
+  const calls = recordGuardCommands(
     'ci-only',
-    [...paths, 'scripts/production-release/registration-closure-contract.json'],
-    'guards',
-    options
+    ['scripts/production-release/registration-closure-release.py'],
+    'guards'
   );
   assert.ok(
-    wider.some((row) => row.includes('scripts/production-release/api-admin-pending-online.test.py'))
+    calls.every(
+      (row) => !row.some((value) => /production-release\/registration-.*\.py$/.test(value))
+    )
   );
 });
 
 test('exact declaration proof repair runs its publisher tests and selectors without unrelated historical prefix', () => {
-  const paths = [
-    'scripts/production-release/registration-closure-contract.json',
-    'scripts/production-release/registration-closure-release.test.py',
-    'scripts/ci-registration-closure-scope.mjs',
-    'scripts/ci-recharge-check.mjs',
-    'scripts/ci-recharge-check.test.mjs',
-    'scripts/ci-recharge-scope.test.mjs'
-  ];
-  const options = { base: 'cd7bba03bec1742328e0829c215823bda1fd3fae' };
-  const calls = recordGuardCommands('ci-only', paths, 'guards', options);
-  assert.equal(
-    calls.filter(
-      (row) =>
-        row.join(' ') ===
-        'python3 -B scripts/production-release/registration-closure-release.test.py'
-    ).length,
-    1
-  );
-  for (const command of ['prettier', 'eslint'])
-    assert.ok(calls.some((row) => row.includes(command)));
-  const tests = calls.find((row) => row[0] === 'node' && row[1] === '--test');
-  assert.ok(tests.includes('scripts/ci-registration-closure-native-reuse.test.mjs'));
-  assert.equal(tests.length, 6);
-  assert.deepEqual(calls.at(-1), ['process-exit', 0]);
-  assert.equal(
-    calls.some((row) =>
-      row.includes('scripts/production-release/api-admin-pending-online.test.py')
-    ),
-    false
-  );
-  const wider = recordGuardCommands(
-    'ci-only',
-    [...paths, '.github/workflows/registration-closure-validation.yml'],
-    'guards',
-    options
-  );
-  assert.ok(
-    wider.some((row) => row.includes('scripts/production-release/api-admin-pending-online.test.py'))
-  );
+  assertRetiredRegistration(() => {
+    const paths = [
+      'scripts/production-release/registration-closure-contract.json',
+      'scripts/production-release/registration-closure-release.test.py',
+      'scripts/ci-registration-closure-scope.mjs',
+      'scripts/ci-recharge-check.mjs',
+      'scripts/ci-recharge-check.test.mjs',
+      'scripts/ci-recharge-scope.test.mjs'
+    ];
+    const options = { base: 'cd7bba03bec1742328e0829c215823bda1fd3fae' };
+    const calls = recordGuardCommands('ci-only', paths, 'guards', options);
+    assert.equal(
+      calls.filter(
+        (row) =>
+          row.join(' ') ===
+          'python3 -B scripts/production-release/registration-closure-release.test.py'
+      ).length,
+      1
+    );
+    for (const command of ['prettier', 'eslint'])
+      assert.ok(calls.some((row) => row.includes(command)));
+    const tests = calls.find((row) => row[0] === 'node' && row[1] === '--test');
+    assert.ok(tests.includes('scripts/ci-registration-closure-native-reuse.test.mjs'));
+    assert.equal(tests.length, 6);
+    assert.deepEqual(calls.at(-1), ['process-exit', 0]);
+    assert.equal(
+      calls.some((row) =>
+        row.includes('scripts/production-release/api-admin-pending-online.test.py')
+      ),
+      false
+    );
+    const wider = recordGuardCommands(
+      'ci-only',
+      [...paths, '.github/workflows/registration-closure-validation.yml'],
+      'guards',
+      options
+    );
+    assert.ok(
+      wider.some((row) =>
+        row.includes('scripts/production-release/api-admin-pending-online.test.py')
+      )
+    );
+  });
 });
 
 test('exact registration dependency controls retain own tests and formatting before ending ahead of historical suites', () => {
-  const paths = [
-    '.github/workflows/registration-closure-validation.yml',
-    'scripts/production-release/registration-closure-release.test.py',
-    'scripts/ci-registration-closure-native-reuse.test.mjs',
-    'scripts/ci-registration-closure-scope.mjs',
-    'scripts/ci-recharge-check.mjs',
-    'scripts/ci-recharge-check.test.mjs',
-    'scripts/ci-recharge-scope.test.mjs'
-  ];
-  const options = { base: '7d1c3822c8f8c8c6a970067580443a3b75e88bf0' };
-  const calls = recordGuardCommands('ci-only', paths, 'guards', options);
-  assert.equal(
-    calls.filter(
-      (row) =>
-        row.join(' ') ===
-        'python3 -B scripts/production-release/registration-closure-release.test.py'
-    ).length,
-    1
-  );
-  assert.ok(calls.some((row) => row.slice(0, 5).join(' ') === 'npm exec -- prettier --check'));
-  assert.ok(calls.some((row) => row.slice(0, 4).join(' ') === 'npm exec -- eslint'));
-  const tests = calls.find((row) => row[0] === 'node' && row[1] === '--test');
-  for (const name of [
-    'ci-recharge-scope',
-    'ci-recharge-check',
-    'ci-recharge-checkout-scope',
-    'ci-registration-closure-native-reuse'
-  ])
-    assert.ok(tests.includes(`scripts/${name}.test.mjs`));
-  assert.deepEqual(calls.at(-1), ['process-exit', 0]);
-  assert.equal(
-    calls.some((row) =>
-      row.some(
-        (arg) =>
-          typeof arg === 'string' &&
-          /api-admin-pending-online.test.py|remote-deploy.test.py/.test(arg)
+  assertRetiredRegistration(() => {
+    const paths = [
+      '.github/workflows/registration-closure-validation.yml',
+      'scripts/production-release/registration-closure-release.test.py',
+      'scripts/ci-registration-closure-native-reuse.test.mjs',
+      'scripts/ci-registration-closure-scope.mjs',
+      'scripts/ci-recharge-check.mjs',
+      'scripts/ci-recharge-check.test.mjs',
+      'scripts/ci-recharge-scope.test.mjs'
+    ];
+    const options = { base: '7d1c3822c8f8c8c6a970067580443a3b75e88bf0' };
+    const calls = recordGuardCommands('ci-only', paths, 'guards', options);
+    assert.equal(
+      calls.filter(
+        (row) =>
+          row.join(' ') ===
+          'python3 -B scripts/production-release/registration-closure-release.test.py'
+      ).length,
+      1
+    );
+    assert.ok(calls.some((row) => row.slice(0, 5).join(' ') === 'npm exec -- prettier --check'));
+    assert.ok(calls.some((row) => row.slice(0, 4).join(' ') === 'npm exec -- eslint'));
+    const tests = calls.find((row) => row[0] === 'node' && row[1] === '--test');
+    for (const name of [
+      'ci-recharge-scope',
+      'ci-recharge-check',
+      'ci-recharge-checkout-scope',
+      'ci-registration-closure-native-reuse'
+    ])
+      assert.ok(tests.includes(`scripts/${name}.test.mjs`));
+    assert.deepEqual(calls.at(-1), ['process-exit', 0]);
+    assert.equal(
+      calls.some((row) =>
+        row.some(
+          (arg) =>
+            typeof arg === 'string' &&
+            /api-admin-pending-online.test.py|remote-deploy.test.py/.test(arg)
+        )
+      ),
+      false
+    );
+    const wider = recordGuardCommands(
+      'ci-only',
+      [...paths, 'apps/api/src/id-business-v2/online-recharge/public.controller.ts'],
+      'guards',
+      options
+    );
+    assert.ok(
+      wider.some((row) =>
+        row.includes('scripts/production-release/api-admin-pending-online.test.py')
       )
-    ),
-    false
-  );
-  const wider = recordGuardCommands(
-    'ci-only',
-    [...paths, 'apps/api/src/id-business-v2/online-recharge/public.controller.ts'],
-    'guards',
-    options
-  );
-  assert.ok(
-    wider.some((row) => row.includes('scripts/production-release/api-admin-pending-online.test.py'))
-  );
+    );
+  });
 });
 
 test('new ONLINE controls retain pure diagnostics lifecycle and CI build tests without invoking Docker', () => {
@@ -1022,34 +1043,36 @@ test('Admin successor diagnostics always retain their offline controls', () => {
 });
 
 test('registration terminal stop dispatches only reviewed parts and isolates persistence', () => {
-  const options = { base: registrationTerminalStopBase, terminalStopFixture: true, cloud: true };
-  for (const part of ['guards', 'api', 'release-controls']) {
-    assert.deepEqual(
-      recordGuardCommands('recharge', registrationTerminalStopPaths, part, options),
-      [...registrationTerminalStopCommands[part], ['process-exit', 0]]
+  assertRetiredRegistration(() => {
+    const options = { base: registrationTerminalStopBase, terminalStopFixture: true, cloud: true };
+    for (const part of ['guards', 'api', 'release-controls']) {
+      assert.deepEqual(
+        recordGuardCommands('recharge', registrationTerminalStopPaths, part, options),
+        [...registrationTerminalStopCommands[part], ['process-exit', 0]]
+      );
+    }
+    assert.throws(
+      () => recordGuardCommands('recharge', registrationTerminalStopPaths, 'admin', options),
+      /Unsupported registration terminal stop/
     );
-  }
-  assert.throws(
-    () => recordGuardCommands('recharge', registrationTerminalStopPaths, 'admin', options),
-    /Unsupported registration terminal stop/
-  );
-  assert.throws(
-    () =>
-      recordGuardCommands('recharge', registrationTerminalStopPaths, 'api', {
-        ...options,
-        cloud: false
-      }),
-    /require isolated CI/
-  );
-  const failCommand = registrationTerminalStopCommands.guards[0].join(' ');
-  assert.throws(
-    () =>
-      recordGuardCommands('recharge', registrationTerminalStopPaths, 'guards', {
-        ...options,
-        failCommand
-      }),
-    /SYNTHETIC_COMMAND_FAILURE/
-  );
+    assert.throws(
+      () =>
+        recordGuardCommands('recharge', registrationTerminalStopPaths, 'api', {
+          ...options,
+          cloud: false
+        }),
+      /require isolated CI/
+    );
+    const failCommand = registrationTerminalStopCommands.guards[0].join(' ');
+    assert.throws(
+      () =>
+        recordGuardCommands('recharge', registrationTerminalStopPaths, 'guards', {
+          ...options,
+          failCommand
+        }),
+      /SYNTHETIC_COMMAND_FAILURE/
+    );
+  });
 });
 
 function recordGuardCommands(
@@ -1370,76 +1393,78 @@ function recordGuardCommands(
 }
 
 test('finite prepare-fix guard keeps the first Node controls and runs every fresh dependency exactly once without business or database parts', () => {
-  assert.deepEqual(
-    onlinePrepareFixGuardCommands.map((command) => command.at(-1)),
-    [
-      'scripts/production-release/online-recharge-component-consumer.test.py',
-      'scripts/production-release/online-recharge-component-runtime.test.py',
-      'scripts/production-release/online-recharge-component-readonly.test.py',
-      'scripts/production-release/api-admin-scope.test.py',
-      'scripts/production-release/api-admin-pending-online.test.py',
-      'scripts/production-release/admin-pending-online-release.test.py',
-      'scripts/production-release/online-recharge-scope.test.py',
-      'scripts/production-release/unpublished-component-successor.test.py',
-      'scripts/production-release/unpublished-component-successor-readonly.test.py',
-      'scripts/production-release/prepared-images.test.py',
-      'scripts/production-release/recharge-flow-entry.test.mjs',
-      'scripts/production-release/online-recharge-entry.test.mjs',
-      'scripts/production-release/unified-component-source.test.py',
-      'scripts/v2-order-archive-release-policy.test.mjs',
-      'scripts/production-release/registration-onboarding-96.test.py'
-    ]
-  );
-  const paths = [...onlinePrepareFixGuardPaths];
-  const context = {
-    cloud: true,
-    prepareResume: true,
-    repository: onlinePrepareFixGuardBinding.repository,
-    event: 'pull_request',
-    base: onlinePrepareFixGuardBinding.base
-  };
-  const commands = (calls) => calls.filter((call) => !call[0].endsWith('resume-helper'));
-  const original = recordGuardCommands('ci-only', paths);
-  const index = original.findIndex(
-    (call) =>
-      call[0] === 'node' &&
-      call[1] === '--test' &&
-      call.includes('scripts/ci-recharge-scope.test.mjs')
-  );
-  assert.ok(index >= 0);
-  const resumed = commands(recordGuardCommands('ci-only', paths, 'guards', context));
-  assert.deepEqual(resumed, [
-    ...original.slice(0, index + 1),
-    ...onlinePrepareFixGuardCommands,
-    ['process-exit', 0]
-  ]);
-  for (const command of onlinePrepareFixGuardCommands)
-    assert.equal(
-      resumed.filter((row) => JSON.stringify(row) === JSON.stringify(command)).length,
-      1
+  assertRetiredRegistration(() => {
+    assert.deepEqual(
+      onlinePrepareFixGuardCommands.map((command) => command.at(-1)),
+      [
+        'scripts/production-release/online-recharge-component-consumer.test.py',
+        'scripts/production-release/online-recharge-component-runtime.test.py',
+        'scripts/production-release/online-recharge-component-readonly.test.py',
+        'scripts/production-release/api-admin-scope.test.py',
+        'scripts/production-release/api-admin-pending-online.test.py',
+        'scripts/production-release/admin-pending-online-release.test.py',
+        'scripts/production-release/online-recharge-scope.test.py',
+        'scripts/production-release/unpublished-component-successor.test.py',
+        'scripts/production-release/unpublished-component-successor-readonly.test.py',
+        'scripts/production-release/prepared-images.test.py',
+        'scripts/production-release/recharge-flow-entry.test.mjs',
+        'scripts/production-release/online-recharge-entry.test.mjs',
+        'scripts/production-release/unified-component-source.test.py',
+        'scripts/v2-order-archive-release-policy.test.mjs',
+        'scripts/production-release/registration-onboarding-96.test.py'
+      ]
     );
-  assert.ok(resumed.some((row) => row.includes('scripts/ci-recharge-release.test.mjs')));
-  assert.ok(
-    !resumed.some((row) =>
-      row.some(
-        (arg) =>
-          typeof arg === 'string' &&
-          (arg === 'docker' || arg.includes('acceptance-v2') || arg === '--workspace')
+    const paths = [...onlinePrepareFixGuardPaths];
+    const context = {
+      cloud: true,
+      prepareResume: true,
+      repository: onlinePrepareFixGuardBinding.repository,
+      event: 'pull_request',
+      base: onlinePrepareFixGuardBinding.base
+    };
+    const commands = (calls) => calls.filter((call) => !call[0].endsWith('resume-helper'));
+    const original = recordGuardCommands('ci-only', paths);
+    const index = original.findIndex(
+      (call) =>
+        call[0] === 'node' &&
+        call[1] === '--test' &&
+        call.includes('scripts/ci-recharge-scope.test.mjs')
+    );
+    assert.ok(index >= 0);
+    const resumed = commands(recordGuardCommands('ci-only', paths, 'guards', context));
+    assert.deepEqual(resumed, [
+      ...original.slice(0, index + 1),
+      ...onlinePrepareFixGuardCommands,
+      ['process-exit', 0]
+    ]);
+    for (const command of onlinePrepareFixGuardCommands)
+      assert.equal(
+        resumed.filter((row) => JSON.stringify(row) === JSON.stringify(command)).length,
+        1
+      );
+    assert.ok(resumed.some((row) => row.includes('scripts/ci-recharge-release.test.mjs')));
+    assert.ok(
+      !resumed.some((row) =>
+        row.some(
+          (arg) =>
+            typeof arg === 'string' &&
+            (arg === 'docker' || arg.includes('acceptance-v2') || arg === '--workspace')
+        )
       )
-    )
-  );
-  for (const reject of [
-    { ...context, prepareResume: false },
-    { ...context, cloud: false },
-    { ...context, repository: 'foreign/project' },
-    { ...context, event: 'push' },
-    { ...context, base: '0'.repeat(40) }
-  ])
-    assert.deepEqual(commands(recordGuardCommands('ci-only', paths, 'guards', reject)), original);
-  assert.deepEqual(
-    recordGuardCommands('ci-only', paths, 'release-controls', context),
-    recordGuardCommands('ci-only', paths, 'release-controls')
-  );
+    );
+    for (const reject of [
+      { ...context, prepareResume: false },
+      { ...context, cloud: false },
+      { ...context, repository: 'foreign/project' },
+      { ...context, event: 'push' },
+      { ...context, base: '0'.repeat(40) }
+    ])
+      assert.deepEqual(commands(recordGuardCommands('ci-only', paths, 'guards', reject)), original);
+    assert.deepEqual(
+      recordGuardCommands('ci-only', paths, 'release-controls', context),
+      recordGuardCommands('ci-only', paths, 'release-controls')
+    );
+  });
 });
 
 test('verified ONLINE guard continuation reruns first controls and unified source once and preserves the exact suffix', () => {
@@ -1862,72 +1887,16 @@ test('owned MySQL helper edits run boundary tests without starting any database'
 });
 
 test('connection migration and registration mirror use only their disposable Docker acceptances', () => {
-  const mirror =
-    'apps/api/src/id-business-v2/auto-recharge/bank-recharge-registration-mirror.service.ts';
-  for (const paths of [
-    [rechargeConnectionProfileMigration],
-    [mirror],
-    [rechargeConnectionProfileMigration, mirror]
-  ]) {
-    const calls = recordGuardCommands('recharge', paths, 'migration');
-    const employeeCommand = [
-      'node',
-      'scripts/acceptance-v2-recharge-employee-concurrency.mjs',
-      '--runtime=docker'
-    ];
-    const mirrorCommand = [
-      'node',
-      'scripts/acceptance-v2-registration-mirror-mysql.mjs',
-      '--runtime=docker',
-      '--python=' + resolve(root, '.runtime/auto-registration/venv/bin/python')
-    ];
-    assert.equal(
-      calls.filter((call) => JSON.stringify(call) === JSON.stringify(employeeCommand)).length,
-      paths.includes(rechargeConnectionProfileMigration) ? 1 : 0
-    );
-    assert.equal(
-      calls.filter((call) => JSON.stringify(call) === JSON.stringify(mirrorCommand)).length,
-      paths.includes(mirror) ? 1 : 0
-    );
-    for (const expected of [
-      ['npm', 'run', 'prisma:mysql:generate'],
-      ['npm', 'run', 'prisma:mysql:validate'],
-      ['npm', 'run', 'build', '--workspace', '@apple-business/shared'],
-      ['npm', 'run', 'build', '--workspace', '@apple-business/api']
-    ])
-      assert.equal(
-        calls.filter((call) => JSON.stringify(call) === JSON.stringify(expected)).length,
-        1
-      );
-    assert.equal(
-      calls.filter((call) => call.join(' ') === 'npm run auto-registration:setup').length,
-      paths.includes(mirror) ? 1 : 0
-    );
-    assert.ok(
-      calls.every(
-        (call) =>
-          !call.some((arg) =>
-            /financial-integrity|rollback-integrity|ci-recharge-migration|mysql-bin/.test(arg)
-          )
-      )
-    );
-  }
-  assert.deepEqual(
-    recordGuardCommands(
-      'recharge',
-      [
-        'apps/api/prisma-mysql/migrations/20260913100000_auto_recharge_browser_options/migration.sql'
-      ],
-      'migration'
-    ),
-    [['python3', 'scripts/ci-recharge-migration.py']]
-  );
-  const workflow = readFileSync(
-    new URL('../.github/workflows/quality.yml', import.meta.url),
-    'utf8'
+  const calls = recordGuardCommands('recharge', [rechargeConnectionProfileMigration], 'migration');
+  assert.equal(
+    calls.filter((row) => row.includes('scripts/acceptance-v2-recharge-employee-concurrency.mjs'))
+      .length,
+    1
   );
   assert.ok(
-    workflow.includes(`contains(fromJSON('["guards","admin","api","migration"]'), matrix.part)`)
+    calls.every(
+      (row) => !row.some((value) => /auto-registration|acceptance-v2-registration/.test(value))
+    )
   );
 });
 
@@ -2354,82 +2323,19 @@ test('API deletion and connector checks retain recharge suites without retired r
 });
 
 test('combined API dispatcher verifies actual Apple adapter and worker suites after setup exactly once', () => {
-  const worker = 'apps/api/src/id-business-v2/auto-registration/worker';
-  const python = '.runtime/auto-registration/venv/bin/python';
   for (const paths of [
-    [`${worker}/release_safety.py`],
+    ['apps/api/src/id-business-v2/auto-registration/worker/workspace.py'],
     [
-      'apps/api/src/id-business-v2/auto-recharge/bank-recharge-finance.service.ts',
       'apps/api/src/id-business-v2/auto-registration/apple-mailboxes.service.ts',
-      `${worker}/workspace.py`,
-      `${worker}/apple_mailboxes.py`
+      'apps/api/src/id-business-v2/auto-recharge/bank-recharge-finance.service.ts'
     ]
   ]) {
     const calls = recordGuardCommands('recharge', paths, 'api');
-    const api = calls.find((call) => call.includes('@apple-business/api') && call.includes('test'));
-    assert.ok(api.includes('src/id-business-v2/auto-recharge'));
-    assert.ok(api.includes('src/id-business-v2/auto-registration'));
-    assert.ok(!api.includes('src/id-business-v2/orders'));
-    const setup = calls.findIndex((call) => call.join(' ') === 'npm run auto-registration:setup');
-    assert.ok(setup >= 0);
-    assert.equal(
-      calls.filter((call) => call.join(' ') === 'npm run auto-registration:setup').length,
-      1
-    );
-    for (const name of [
-      'test_workspace.py',
-      'test_apple_mailboxes.py',
-      'test_release_safety.py',
-      'test_upload_compat.py'
-    ]) {
-      const expected = [python, '-B', '-m', 'unittest', 'discover', '-s', worker, '-p', name];
-      assert.equal(
-        calls.filter((call) => JSON.stringify(call) === JSON.stringify(expected)).length,
-        1
-      );
-      assert.ok(
-        calls.findIndex((call) => JSON.stringify(call) === JSON.stringify(expected)) > setup
-      );
-    }
-    assert.equal(
-      calls.filter((call) => call.join(' ') === `${python} -B ${worker}/acceptance_runtime.py`)
-        .length,
-      1
-    );
-    const browser = `node --test ${worker}/test_payment_browser.mjs`;
-    assert.equal(calls.filter((call) => call.join(' ') === browser).length, 1);
-    assert.ok(calls.findIndex((call) => call.join(' ') === browser) > setup);
+    assert.ok(calls.some((row) => row.includes('src/id-business-v2/auto-recharge')));
     assert.ok(
-      calls.findIndex((call) => call.join(' ') === browser) <
-        calls.findIndex((call) => call.join(' ') === `${python} -B ${worker}/acceptance_runtime.py`)
-    );
-    assert.ok(
-      calls.every((call) => !call.some((arg) => /financial-integrity|rollback-integrity/.test(arg)))
+      calls.every((row) => !row.some((value) => /auto-registration|registration.*\.py/.test(value)))
     );
   }
-  const workflow = readFileSync(
-    new URL('../.github/workflows/quality.yml', import.meta.url),
-    'utf8'
-  );
-  const full = workflow.slice(workflow.indexOf('  full-quality:'), workflow.indexOf('  recharge:'));
-  const setup = full.indexOf('npm run auto-registration:setup');
-  const acceptance = full.indexOf(`${python} -B ${worker}/acceptance_runtime.py`);
-  assert.ok(setup >= 0);
-  for (const name of [
-    'test_workspace.py',
-    'test_apple_mailboxes.py',
-    'test_release_safety.py',
-    'test_upload_compat.py'
-  ]) {
-    const command = `${python} -B -m unittest discover -s ${worker} -p '${name}'`;
-    assert.equal(full.split('\n').filter((line) => line.trim() === command).length, 1, name);
-    assert.ok(full.indexOf(command) > setup, name);
-    assert.ok(acceptance > full.indexOf(command), name);
-  }
-  const browser = `node --test ${worker}/test_payment_browser.mjs`;
-  assert.equal(full.split('\n').filter((line) => line.trim() === browser).length, 1);
-  assert.ok(full.indexOf(browser) > setup);
-  assert.ok(acceptance > full.indexOf(browser));
 });
 
 test('unreviewed registration paths do not receive the Apple scoped worker runner', () => {
@@ -2453,38 +2359,14 @@ test('unreviewed registration paths do not receive the Apple scoped worker runne
 });
 
 test('payment browser check failure stops the actual Apple dispatcher before runtime acceptance', () => {
-  const worker = 'apps/api/src/id-business-v2/auto-registration/worker';
-  const script = `
-    import childProcess from 'node:child_process';
-    import { syncBuiltinESMExports } from 'node:module';
-    const calls = [];
-    childProcess.execFileSync = (file, args) => {
-      if (file === 'git') return '${worker}/workspace.py';
-      calls.push([file, ...args]);
-      if (file === 'node' && args.includes('${worker}/test_payment_browser.mjs'))
-        throw new Error('synthetic-payment-browser-check-failed');
-      return '';
-    };
-    syncBuiltinESMExports();
-    process.argv = ['node', 'scripts/ci-recharge-check.mjs', 'api', 'a'.repeat(40)];
-    let error = null;
-    try { await import('./scripts/ci-recharge-check.mjs'); }
-    catch (failure) { error = failure.message; }
-    process.stdout.write(JSON.stringify({ calls, error }));
-  `;
-  const { calls, error } = JSON.parse(
-    execFileSync(process.execPath, ['--input-type=module', '-e', script], {
-      cwd: root,
-      encoding: 'utf8',
-      env: { ...process.env, CHECK_MODE: 'recharge' }
-    })
+  const calls = recordGuardCommands(
+    'recharge',
+    ['apps/api/src/id-business-v2/auto-registration/worker/workspace.py'],
+    'api'
   );
-  assert.equal(error, 'synthetic-payment-browser-check-failed');
-  assert.equal(
-    calls.filter((call) => call.includes(`${worker}/test_payment_browser.mjs`)).length,
-    1
+  assert.ok(
+    calls.every((row) => !row.some((value) => /auto-registration|test_payment_browser/.test(value)))
   );
-  assert.ok(calls.every((call) => !call.includes(`${worker}/acceptance_runtime.py`)));
 });
 
 test('exact Vite runner classification keeps joint UI and backend guards without business execution', () => {
@@ -2552,179 +2434,188 @@ test('removed registration transport paths select retirement checks without exec
 });
 
 test('finite failure-receipt integration keeps Node controls then fifteen source suites and four storage suites once without business or database parts', () => {
-  assert.deepEqual(
-    onlinePreflightReceiptFixGuardCommands.map((command) => command.at(-1)),
-    [
-      'scripts/production-release/online-recharge-component-consumer.test.py',
-      'scripts/production-release/online-recharge-component-runtime.test.py',
-      'scripts/production-release/online-recharge-component-readonly.test.py',
-      'scripts/production-release/api-admin-scope.test.py',
-      'scripts/production-release/api-admin-pending-online.test.py',
-      'scripts/production-release/admin-pending-online-release.test.py',
-      'scripts/production-release/online-recharge-scope.test.py',
-      'scripts/production-release/unpublished-component-successor.test.py',
-      'scripts/production-release/unpublished-component-successor-readonly.test.py',
-      'scripts/production-release/prepared-images.test.py',
-      'scripts/production-release/recharge-flow-entry.test.mjs',
-      'scripts/production-release/online-recharge-entry.test.mjs',
-      'scripts/production-release/unified-component-source.test.py',
-      'scripts/v2-order-archive-release-policy.test.mjs',
-      'scripts/production-release/registration-onboarding-96.test.py',
-      'scripts/production-release/release-artifact-retention.test.py',
-      'scripts/production-release/release-artifact-retention-transport.test.py',
-      'scripts/production-release/disk-retention-transport.test.py',
-      'scripts/production-release/release-storage.test.py'
-    ]
-  );
-  const paths = [...onlinePreflightReceiptFixGuardPaths];
-  const context = {
-    cloud: true,
-    receiptResume: true,
-    repository: onlinePreflightReceiptFixGuardBinding.repository,
-    event: 'pull_request',
-    base: onlinePreflightReceiptFixGuardBinding.integrationBase
-  };
-  const commands = (calls) => calls.filter((call) => !call[0].endsWith('resume-helper'));
-  const original = recordGuardCommands('ci-only', paths);
-  const index = original.findIndex(
-    (call) =>
-      call[0] === 'node' &&
-      call[1] === '--test' &&
-      call.includes('scripts/ci-recharge-scope.test.mjs')
-  );
-  assert.ok(index >= 0);
-  const resumed = commands(recordGuardCommands('ci-only', paths, 'guards', context));
-  assert.deepEqual(resumed, [
-    ...original.slice(0, index + 1),
-    ...onlinePreflightReceiptFixGuardCommands,
-    ['process-exit', 0]
-  ]);
-  for (const command of onlinePreflightReceiptFixGuardCommands)
-    assert.equal(
-      resumed.filter((row) => JSON.stringify(row) === JSON.stringify(command)).length,
-      1
+  assertRetiredRegistration(() => {
+    assert.deepEqual(
+      onlinePreflightReceiptFixGuardCommands.map((command) => command.at(-1)),
+      [
+        'scripts/production-release/online-recharge-component-consumer.test.py',
+        'scripts/production-release/online-recharge-component-runtime.test.py',
+        'scripts/production-release/online-recharge-component-readonly.test.py',
+        'scripts/production-release/api-admin-scope.test.py',
+        'scripts/production-release/api-admin-pending-online.test.py',
+        'scripts/production-release/admin-pending-online-release.test.py',
+        'scripts/production-release/online-recharge-scope.test.py',
+        'scripts/production-release/unpublished-component-successor.test.py',
+        'scripts/production-release/unpublished-component-successor-readonly.test.py',
+        'scripts/production-release/prepared-images.test.py',
+        'scripts/production-release/recharge-flow-entry.test.mjs',
+        'scripts/production-release/online-recharge-entry.test.mjs',
+        'scripts/production-release/unified-component-source.test.py',
+        'scripts/v2-order-archive-release-policy.test.mjs',
+        'scripts/production-release/registration-onboarding-96.test.py',
+        'scripts/production-release/release-artifact-retention.test.py',
+        'scripts/production-release/release-artifact-retention-transport.test.py',
+        'scripts/production-release/disk-retention-transport.test.py',
+        'scripts/production-release/release-storage.test.py'
+      ]
     );
-  assert.ok(resumed.some((row) => row.includes('scripts/ci-recharge-release.test.mjs')));
-  assert.ok(
-    !resumed.some((row) =>
-      row.some(
-        (arg) =>
-          typeof arg === 'string' &&
-          (arg === 'docker' || arg.includes('acceptance-v2') || arg === '--workspace')
+    const paths = [...onlinePreflightReceiptFixGuardPaths];
+    const context = {
+      cloud: true,
+      receiptResume: true,
+      repository: onlinePreflightReceiptFixGuardBinding.repository,
+      event: 'pull_request',
+      base: onlinePreflightReceiptFixGuardBinding.integrationBase
+    };
+    const commands = (calls) => calls.filter((call) => !call[0].endsWith('resume-helper'));
+    const original = recordGuardCommands('ci-only', paths);
+    const index = original.findIndex(
+      (call) =>
+        call[0] === 'node' &&
+        call[1] === '--test' &&
+        call.includes('scripts/ci-recharge-scope.test.mjs')
+    );
+    assert.ok(index >= 0);
+    const resumed = commands(recordGuardCommands('ci-only', paths, 'guards', context));
+    assert.deepEqual(resumed, [
+      ...original.slice(0, index + 1),
+      ...onlinePreflightReceiptFixGuardCommands,
+      ['process-exit', 0]
+    ]);
+    for (const command of onlinePreflightReceiptFixGuardCommands)
+      assert.equal(
+        resumed.filter((row) => JSON.stringify(row) === JSON.stringify(command)).length,
+        1
+      );
+    assert.ok(resumed.some((row) => row.includes('scripts/ci-recharge-release.test.mjs')));
+    assert.ok(
+      !resumed.some((row) =>
+        row.some(
+          (arg) =>
+            typeof arg === 'string' &&
+            (arg === 'docker' || arg.includes('acceptance-v2') || arg === '--workspace')
+        )
       )
-    )
-  );
-  for (const reject of [
-    { ...context, receiptResume: false },
-    { ...context, cloud: false },
-    { ...context, repository: 'foreign/project' },
-    { ...context, event: 'push' },
-    { ...context, base: '0'.repeat(40) }
-  ])
-    assert.deepEqual(commands(recordGuardCommands('ci-only', paths, 'guards', reject)), original);
-  assert.deepEqual(
-    recordGuardCommands('ci-only', paths, 'release-controls', context),
-    recordGuardCommands('ci-only', paths, 'release-controls')
-  );
+    );
+    for (const reject of [
+      { ...context, receiptResume: false },
+      { ...context, cloud: false },
+      { ...context, repository: 'foreign/project' },
+      { ...context, event: 'push' },
+      { ...context, base: '0'.repeat(40) }
+    ])
+      assert.deepEqual(commands(recordGuardCommands('ci-only', paths, 'guards', reject)), original);
+    assert.deepEqual(
+      recordGuardCommands('ci-only', paths, 'release-controls', context),
+      recordGuardCommands('ci-only', paths, 'release-controls')
+    );
+  });
 });
 
 test('finite build-proof reuse keeps Node controls then helper tests, real CI build and all twenty-two controls once', () => {
-  assert.equal(onlineBuildProofReuseCommands.length, 22);
-  assert.deepEqual(onlineBuildProofReuseCommands, [
-    ...onlinePreflightReceiptFixGuardCommands,
-    ['python3', '-B', 'scripts/production-release/online-recharge-component-diagnostic.test.py'],
-    ['python3', '-B', 'scripts/production-release/online-recharge-component-lifecycle.test.py'],
-    [
-      'node',
-      '--test',
-      'scripts/production-release/online-recharge-component-diagnostic-entry.test.mjs'
-    ]
-  ]);
-  const paths = [
-    'scripts/ci-recharge-check.mjs',
-    'scripts/production-release/online-recharge-ci-build.py',
-    'scripts/production-release/online-recharge-ci-build.test.py'
-  ];
-  const context = {
-    cloud: true,
-    buildResume: true,
-    repository: 'wangchaozhuanyong/id-business-system',
-    event: 'pull_request',
-    base: '5f458e7ac7cd0dfab0f99d2a6d07c20baa8b6e53'
-  };
-  const commands = (calls) => calls.filter((call) => !call[0].endsWith('resume-helper'));
-  const original = recordGuardCommands('ci-only', paths);
-  const index = original.findIndex(
-    (call) =>
-      call[0] === 'node' &&
-      call[1] === '--test' &&
-      call.includes('scripts/ci-recharge-scope.test.mjs')
-  );
-  assert.ok(index >= 0);
-  const helperTest = [
-    'python3',
-    '-B',
-    'scripts/production-release/online-recharge-ci-build.test.py'
-  ];
-  const realBuild = [
-    'python3',
-    '-B',
-    'scripts/production-release/online-recharge-ci-build.py',
-    '--ci-real-build-not-for-release',
-    '--admitted-source-tree',
-    'a'.repeat(40)
-  ];
-  const resumed = commands(recordGuardCommands('ci-only', paths, 'guards', context));
-  assert.deepEqual(resumed, [
-    ...original.slice(0, index + 1),
-    helperTest,
-    realBuild,
-    ...onlineBuildProofReuseCommands,
-    ['process-exit', 0]
-  ]);
-  for (const command of [helperTest, realBuild, ...onlineBuildProofReuseCommands])
-    assert.equal(
-      resumed.filter((row) => JSON.stringify(row) === JSON.stringify(command)).length,
-      1
+  assertRetiredRegistration(() => {
+    assert.equal(onlineBuildProofReuseCommands.length, 22);
+    assert.deepEqual(onlineBuildProofReuseCommands, [
+      ...onlinePreflightReceiptFixGuardCommands,
+      ['python3', '-B', 'scripts/production-release/online-recharge-component-diagnostic.test.py'],
+      ['python3', '-B', 'scripts/production-release/online-recharge-component-lifecycle.test.py'],
+      [
+        'node',
+        '--test',
+        'scripts/production-release/online-recharge-component-diagnostic-entry.test.mjs'
+      ]
+    ]);
+    const paths = [
+      'scripts/ci-recharge-check.mjs',
+      'scripts/production-release/online-recharge-ci-build.py',
+      'scripts/production-release/online-recharge-ci-build.test.py'
+    ];
+    const context = {
+      cloud: true,
+      buildResume: true,
+      repository: 'wangchaozhuanyong/id-business-system',
+      event: 'pull_request',
+      base: '5f458e7ac7cd0dfab0f99d2a6d07c20baa8b6e53'
+    };
+    const commands = (calls) => calls.filter((call) => !call[0].endsWith('resume-helper'));
+    const original = recordGuardCommands('ci-only', paths);
+    const index = original.findIndex(
+      (call) =>
+        call[0] === 'node' &&
+        call[1] === '--test' &&
+        call.includes('scripts/ci-recharge-scope.test.mjs')
     );
-  assert.ok(resumed.some((row) => row.includes('prettier')));
-  assert.ok(resumed.some((row) => row.includes('eslint')));
-  assert.ok(resumed.some((row) => row.includes('scripts/ci-recharge-release.test.mjs')));
-  assert.ok(
-    !resumed.some((row) =>
-      row.some(
-        (arg) =>
-          typeof arg === 'string' &&
-          (arg === 'docker' || arg.includes('acceptance-v2') || arg === '--workspace')
+    assert.ok(index >= 0);
+    const helperTest = [
+      'python3',
+      '-B',
+      'scripts/production-release/online-recharge-ci-build.test.py'
+    ];
+    const realBuild = [
+      'python3',
+      '-B',
+      'scripts/production-release/online-recharge-ci-build.py',
+      '--ci-real-build-not-for-release',
+      '--admitted-source-tree',
+      'a'.repeat(40)
+    ];
+    const resumed = commands(recordGuardCommands('ci-only', paths, 'guards', context));
+    assert.deepEqual(resumed, [
+      ...original.slice(0, index + 1),
+      helperTest,
+      realBuild,
+      ...onlineBuildProofReuseCommands,
+      ['process-exit', 0]
+    ]);
+    for (const command of [helperTest, realBuild, ...onlineBuildProofReuseCommands])
+      assert.equal(
+        resumed.filter((row) => JSON.stringify(row) === JSON.stringify(command)).length,
+        1
+      );
+    assert.ok(resumed.some((row) => row.includes('prettier')));
+    assert.ok(resumed.some((row) => row.includes('eslint')));
+    assert.ok(resumed.some((row) => row.includes('scripts/ci-recharge-release.test.mjs')));
+    assert.ok(
+      !resumed.some((row) =>
+        row.some(
+          (arg) =>
+            typeof arg === 'string' &&
+            (arg === 'docker' || arg.includes('acceptance-v2') || arg === '--workspace')
+        )
       )
-    )
-  );
-  for (const reject of [
-    { ...context, buildResume: false },
-    { ...context, cloud: false },
-    { ...context, repository: 'foreign/project' },
-    { ...context, event: 'push' },
-    { ...context, base: '0'.repeat(40) }
-  ])
-    assert.deepEqual(commands(recordGuardCommands('ci-only', paths, 'guards', reject)), original);
-  for (const mode of ['admin', 'recharge'])
+    );
+    for (const reject of [
+      { ...context, buildResume: false },
+      { ...context, cloud: false },
+      { ...context, repository: 'foreign/project' },
+      { ...context, event: 'push' },
+      { ...context, base: '0'.repeat(40) }
+    ])
+      assert.deepEqual(commands(recordGuardCommands('ci-only', paths, 'guards', reject)), original);
+    for (const mode of ['admin', 'recharge'])
+      assert.deepEqual(
+        commands(recordGuardCommands(mode, paths, 'guards', context)),
+        recordGuardCommands(mode, paths)
+      );
     assert.deepEqual(
-      commands(recordGuardCommands(mode, paths, 'guards', context)),
-      recordGuardCommands(mode, paths)
+      recordGuardCommands('ci-only', paths, 'release-controls', context),
+      recordGuardCommands('ci-only', paths, 'release-controls')
     );
-  assert.deepEqual(
-    recordGuardCommands('ci-only', paths, 'release-controls', context),
-    recordGuardCommands('ci-only', paths, 'release-controls')
-  );
-  for (const command of [original[index], helperTest, realBuild, ...onlineBuildProofReuseCommands])
-    assert.throws(
-      () =>
-        recordGuardCommands('ci-only', paths, 'guards', {
-          ...context,
-          failCommand: command.join(' ')
-        }),
-      /SYNTHETIC_COMMAND_FAILURE/
-    );
+    for (const command of [
+      original[index],
+      helperTest,
+      realBuild,
+      ...onlineBuildProofReuseCommands
+    ])
+      assert.throws(
+        () =>
+          recordGuardCommands('ci-only', paths, 'guards', {
+            ...context,
+            failCommand: command.join(' ')
+          }),
+        /SYNTHETIC_COMMAND_FAILURE/
+      );
+  });
 });
 
 test('artifact-only controls keep the shared prefix and verify actual dependencies without unchanged website controllers', () => {
@@ -2945,75 +2836,65 @@ test('mixed source Docker dependency arbitrary Nginx and other modes keep origin
 });
 
 test('registration closure dispatches both owned database suites without running databases in these control tests', () => {
-  const paths = [
-    'apps/api/src/id-business-v2/auto-recharge/bank-recharge-registration-mirror.service.ts',
-    'apps/api/src/id-business-v2/proxy-pool/proxy-test.ts',
-    'scripts/acceptance-v2-registration-mirror-mysql.mjs',
-    'scripts/acceptance-v2-shared-proxy-mysql.mjs'
-  ];
-  const calls = recordGuardCommands('recharge', paths, 'migration', { cloud: true });
-  for (const suite of [
-    'scripts/acceptance-v2-registration-mirror-mysql.mjs',
-    'scripts/acceptance-v2-shared-proxy-mysql.mjs'
-  ])
-    assert.equal(calls.filter((call) => call.includes(suite)).length, 1, suite);
-  assert.ok(
-    calls.findIndex((call) => call.includes(paths[2])) <
-      calls.findIndex((call) => call.includes(paths[3]))
+  const calls = recordGuardCommands(
+    'recharge',
+    [
+      'apps/api/src/id-business-v2/auto-recharge/bank-recharge-registration-mirror.service.ts',
+      'apps/api/src/id-business-v2/proxy-pool/proxy-test.ts',
+      'scripts/acceptance-v2-registration-mirror-mysql.mjs',
+      'scripts/acceptance-v2-shared-proxy-mysql.mjs'
+    ],
+    'migration',
+    { cloud: true }
   );
-  assert.equal(calls.filter((call) => call.includes('prisma:mysql:generate')).length, 1);
+  assert.equal(
+    calls.filter((row) => row.includes('scripts/acceptance-v2-shared-proxy-mysql.mjs')).length,
+    1
+  );
+  assert.ok(
+    calls.every((row) => !row.includes('scripts/acceptance-v2-registration-mirror-mysql.mjs'))
+  );
 });
 
 test('registration closure retains its pure worker regression in the API check', () => {
-  const paths = ['apps/api/src/id-business-v2/auto-registration/worker/apple_mailboxes.py'];
-  const calls = recordGuardCommands('recharge', paths, 'api');
-  assert.equal(
-    calls.filter((call) => call.includes('test_registration_closed_loop_unit.py')).length,
-    1
+  const calls = recordGuardCommands(
+    'recharge',
+    ['apps/api/src/id-business-v2/auto-registration/worker/apple_mailboxes.py'],
+    'api'
   );
-  assert.ok(calls.some((call) => call.includes('test_release_safety.py')));
-  assert.ok(calls.some((call) => call.includes('test_workspace.py')));
   assert.ok(
-    !calls.some((call) => call.includes('scripts/acceptance-v2-registration-native-ui.mjs'))
+    calls.every((row) => !row.some((value) => /auto-registration|registration.*\.py/.test(value)))
   );
 });
 
 test('registration native browser runs with its Python setup in the browser-equipped Admin job', () => {
-  const paths = ['scripts/acceptance-v2-registration-native-ui.mjs'];
-  const calls = recordGuardCommands('recharge', paths, 'admin');
-  const setup = calls.findIndex((call) => call.includes('auto-registration:setup'));
-  const browser = calls.findIndex((call) => call.includes(paths[0]));
-  assert.ok(setup >= 0 && browser > setup);
-  assert.equal(calls.filter((call) => call.includes(paths[0])).length, 1);
+  const calls = recordGuardCommands(
+    'recharge',
+    ['scripts/acceptance-v2-registration-native-ui.mjs'],
+    'admin'
+  );
+  assert.ok(
+    calls.every(
+      (row) => !row.some((value) => /auto-registration|acceptance-v2-registration/.test(value))
+    )
+  );
 });
 
 test('registration publication controls run their own pure test once and keep every UI rule', () => {
-  const paths = [
-    'scripts/production-release/registration-closure-release.py',
-    'apps/admin/src/v2/features/auto-registration/V2AppleMailboxes.vue'
-  ];
   for (const part of ['guards', 'release-controls']) {
-    const calls = recordGuardCommands('recharge', paths, part);
-    assert.equal(
-      calls.filter((call) =>
-        call.includes('scripts/production-release/registration-closure-release.test.py')
-      ).length,
-      1
+    const calls = recordGuardCommands(
+      'recharge',
+      [
+        'scripts/production-release/registration-closure-release.py',
+        'apps/admin/src/v2/features/auto-registration/V2AppleMailboxes.vue'
+      ],
+      part
     );
-    if (part === 'guards')
-      for (const name of [
-        'check:admin-ui',
-        'check:v2-ui-language',
-        'check:v2-color-contrast',
-        'check:v2-table-standard',
-        'check:v2-loading-standard',
-        'check:v2-module-architecture',
-        'check:v2-isolation'
-      ])
-        assert.ok(
-          calls.some((call) => call.includes(name)),
-          name
-        );
+    assert.ok(
+      calls.every(
+        (row) => !row.some((value) => /production-release\/registration-.*\.py$/.test(value))
+      )
+    );
   }
 });
 
@@ -3091,19 +2972,21 @@ test('byte-bound proxy identity patch runs publisher/selectors and real engine s
 });
 
 test('terminal contract entry repair dispatches controls without rerunning unchanged persistence', () => {
-  const options = {
-    base: registrationTerminalStopRepairBase,
-    terminalStopFixture: true,
-    cloud: true
-  };
-  for (const part of registrationTerminalStopRepairParts)
-    assert.deepEqual(
-      recordGuardCommands('recharge', registrationTerminalStopRepairPaths, part, options),
-      [...registrationTerminalStopCommands[part], ['process-exit', 0]]
-    );
-  for (const part of ['api', 'admin', 'connector'])
-    assert.throws(
-      () => recordGuardCommands('recharge', registrationTerminalStopRepairPaths, part, options),
-      /Unsupported registration terminal stop control repair/
-    );
+  assertRetiredRegistration(() => {
+    const options = {
+      base: registrationTerminalStopRepairBase,
+      terminalStopFixture: true,
+      cloud: true
+    };
+    for (const part of registrationTerminalStopRepairParts)
+      assert.deepEqual(
+        recordGuardCommands('recharge', registrationTerminalStopRepairPaths, part, options),
+        [...registrationTerminalStopCommands[part], ['process-exit', 0]]
+      );
+    for (const part of ['api', 'admin', 'connector'])
+      assert.throws(
+        () => recordGuardCommands('recharge', registrationTerminalStopRepairPaths, part, options),
+        /Unsupported registration terminal stop control repair/
+      );
+  });
 });

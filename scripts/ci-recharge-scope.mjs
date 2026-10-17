@@ -2177,19 +2177,6 @@ export function adminCheckCommands(mode, paths) {
   if (
     paths.some(
       (path) =>
-        path.startsWith('apps/admin/src/v2/features/auto-registration/') ||
-        path === 'apps/admin/src/v2/features/auto-recharge/V2ChatgptAccountsView.vue' ||
-        path === 'scripts/acceptance-v2-registration-inventory-ui.mjs'
-    )
-  )
-    commands.push(['exec', '--', 'node', 'scripts/acceptance-v2-registration-inventory-ui.mjs']);
-  if (paths.includes('scripts/acceptance-v2-registration-native-ui.mjs')) {
-    commands.push(['run', 'auto-registration:setup']);
-    commands.push(['exec', '--', 'node', 'scripts/acceptance-v2-registration-native-ui.mjs']);
-  }
-  if (
-    paths.some(
-      (path) =>
         path === workspaceDockAcceptance ||
         path.startsWith('apps/admin/src/v2/components/workspace/') ||
         /^apps\/admin\/src\/v2\/(?:layouts\/V2AdminLayout\.vue|styles\/(?:base|layout|records|v2)\.css|testing\/(?:V2WorkspaceDesignFixture\.vue|workspace-design-fixture\.ts))$/.test(

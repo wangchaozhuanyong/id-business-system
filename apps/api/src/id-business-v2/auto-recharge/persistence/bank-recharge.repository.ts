@@ -227,34 +227,8 @@ export class BankRechargeRepository {
       })) > 0
     );
   }
-  accountEmailHashes(emailHashes: string[]) {
-    return this.prisma.idBusinessV2ChatgptAccount.findMany({
-      where: { emailHash: { in: emailHashes } },
-      select: { emailHash: true }
-    });
-  }
-  registrationMirrorAccounts(tx: V2CommandTransaction, accountId: string, emailHash: string) {
-    return tx.idBusinessV2ChatgptAccount.findMany({
-      where: { OR: [{ id: accountId }, { emailHash }] },
-      select: {
-        id: true,
-        emailHash: true,
-        deletedAt: true,
-        passwordEncrypted: true,
-        registrationCountryCode: true,
-        registrationIpEncrypted: true,
-        registeredAt: true,
-        updatedAt: true
-      }
-    });
-  }
-  registrationMirrorPreview(accountId: string, emailHash: string) {
-    return this.prisma.idBusinessV2ChatgptAccount.findMany({
-      where: { OR: [{ id: accountId }, { emailHash }] },
-      select: { id: true, emailHash: true, deletedAt: true }
-    });
-  }
   registrationSourceAudits(accountIds: string[]) {
+    // Historical account provenance remains readable after registration is retired.
     return this.prisma.auditLog.findMany({
       where: {
         module: 'id_business_v2',
@@ -269,28 +243,6 @@ export class BankRechargeRepository {
       },
       select: { objectId: true, action: true, afterData: true },
       orderBy: { createdAt: 'desc' }
-    });
-  }
-  registrationMirrorAudit(tx: V2CommandTransaction, input: { accountId: string; action: string }) {
-    return tx.auditLog.findMany({
-      where: {
-        module: 'id_business_v2',
-        action: input.action,
-        objectType: 'chatgpt_account',
-        objectId: input.accountId
-      },
-      select: { afterData: true }
-    });
-  }
-  registrationCountryEdits(tx: V2CommandTransaction, accountId: string) {
-    return tx.auditLog.findMany({
-      where: {
-        module: 'id_business_v2',
-        objectType: 'chatgpt_account',
-        objectId: accountId,
-        action: 'id_business_v2.auto_recharge.chatgpt_account.update'
-      },
-      select: { beforeData: true, afterData: true }
     });
   }
   findAccountByEmailHash(tx: V2CommandTransaction, emailHash: string) {

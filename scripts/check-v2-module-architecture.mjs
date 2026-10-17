@@ -11,7 +11,6 @@ const issues = [];
 const expectedFeatures = [
   'proxy-pool',
   'online-recharge',
-  'auto-registration',
   'auto-recharge',
   'account-losses',
   'accounts',
@@ -43,7 +42,6 @@ const expectedBackendDomains = [
   'bank-card-pool',
   'proxy-pool',
   'online-recharge',
-  'auto-registration',
   'auto-recharge',
   'accounts',
   'activations',

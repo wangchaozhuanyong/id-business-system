@@ -1,4 +1,8 @@
 import {
+  rejectRetiredRegistrationCommand,
+  rejectRetiredRegistrationExecution
+} from './auto-registration-retired.mjs';
+import {
   isMailboxVersionOnly,
   isMailboxVersionControlsOnly,
   mailboxVersionCommands
@@ -112,9 +116,6 @@ import {
   unpublishedComponentSuccessorEntryPaths,
   rechargeFlowSuccessorControlPaths,
   ownedMysqlTestControlPaths,
-  hasRegistrationOnboardingScope,
-  hasAppleMailboxScope,
-  hasRegistrationMirrorScope,
   hasRechargeConnectionMigrationScope,
   hasCombinedComponentScope,
   onlineRechargeRecoveryPolicy,
@@ -153,7 +154,10 @@ import {
 
 const [part, base] = process.argv.slice(2);
 const mode = process.env.CHECK_MODE || 'recharge';
-const run = (file, args) => execFileSync(file, args, { stdio: 'inherit' });
+const run = (file, args) => {
+  rejectRetiredRegistrationCommand(file, args);
+  return execFileSync(file, args, { stdio: 'inherit' });
+};
 const npm = (...args) => run('npm', args);
 const changed = execFileSync('git', ['diff', '--name-only', base, 'HEAD'], { encoding: 'utf8' })
   .trim()
@@ -167,6 +171,7 @@ if (
     baseTree: execFileSync('git', ['rev-parse', base + '^{tree}'], { encoding: 'utf8' }).trim()
   })
 ) {
+  rejectRetiredRegistrationExecution();
   if (!Object.hasOwn(registrationProtocolRepairControlCommands, part))
     throw new Error('Unsupported registration published-baseline preservation check part');
   for (const [file, ...args] of registrationProtocolRepairControlCommands[part]) run(file, args);
@@ -180,6 +185,7 @@ if (
     baseTree: execFileSync('git', ['rev-parse', base + '^{tree}'], { encoding: 'utf8' }).trim()
   })
 ) {
+  rejectRetiredRegistrationExecution();
   if (!Object.hasOwn(registrationProtocolRepairControlCommands, part))
     throw new Error('Unsupported registration protocol preflight control repair check part');
   for (const [file, ...args] of registrationProtocolRepairControlCommands[part]) run(file, args);
@@ -193,6 +199,7 @@ if (
     baseTree: execFileSync('git', ['rev-parse', base + '^{tree}'], { encoding: 'utf8' }).trim()
   })
 ) {
+  rejectRetiredRegistrationExecution();
   if (
     base === registrationTerminalStopRepairBase &&
     !registrationTerminalStopRepairParts.includes(part)
@@ -213,6 +220,7 @@ if (
     baseTree: execFileSync('git', ['rev-parse', base + '^{tree}'], { encoding: 'utf8' }).trim()
   })
 ) {
+  rejectRetiredRegistrationExecution();
   if (!Object.hasOwn(registrationFlowV4Commands, part))
     throw new Error('Unsupported registration flow v4 check part');
   if ((part === 'api' || part === 'admin') && process.env.GITHUB_ACTIONS !== 'true')
@@ -228,6 +236,7 @@ if (
     baseTree: execFileSync('git', ['rev-parse', base + '^{tree}'], { encoding: 'utf8' }).trim()
   })
 ) {
+  rejectRetiredRegistrationExecution();
   if (!Object.hasOwn(registrationProtocolRepairCommands, part))
     throw new Error('Unsupported registration protocol repair check part');
   if ((part === 'api' || part === 'admin') && process.env.GITHUB_ACTIONS !== 'true')
@@ -281,6 +290,7 @@ if (
     baseTree: execFileSync('git', ['rev-parse', base + '^{tree}'], { encoding: 'utf8' }).trim()
   })
 ) {
+  rejectRetiredRegistrationExecution();
   if (part !== 'guards')
     throw new Error('Unsupported registration protocol restore control repair check part');
   for (const [file, ...args] of registrationProtocolRestoreRepairCommands.guards) run(file, args);
@@ -294,6 +304,7 @@ if (
     baseTree: execFileSync('git', ['rev-parse', base + '^{tree}'], { encoding: 'utf8' }).trim()
   })
 ) {
+  rejectRetiredRegistrationExecution();
   if (!Object.hasOwn(registrationProtocolRestoreCommands, part))
     throw new Error('Unsupported registration protocol restore check part');
   if ((part === 'api' || part === 'admin') && process.env.GITHUB_ACTIONS !== 'true')
@@ -309,6 +320,7 @@ if (
     baseTree: execFileSync('git', ['rev-parse', base + '^{tree}'], { encoding: 'utf8' }).trim()
   })
 ) {
+  rejectRetiredRegistrationExecution();
   if (part === 'api' && process.env.GITHUB_ACTIONS !== 'true')
     throw new Error('Registration browser database checks require isolated CI');
   for (const [file, ...args] of registrationBrowserCommands(part, changed)) run(file, args);
@@ -392,6 +404,7 @@ const registrationParityDiagnosticsOnly =
     baseTree: execFileSync('git', ['rev-parse', base + '^{tree}'], { encoding: 'utf8' }).trim()
   });
 if (registrationParityDiagnosticsOnly || registrationParityDiagnosticsControlRepair) {
+  rejectRetiredRegistrationExecution();
   if (registrationParityDiagnosticsControlRepair && part !== 'guards')
     throw new Error('Unsupported registration parity control repair check part');
   if (!registrationParityDiagnosticsParts.includes(part))
@@ -526,6 +539,7 @@ if (
   (registrationFlowEvidenceOnly && ['guards', 'api', 'admin', 'release-controls'].includes(part)) ||
   (registrationFlowEvidenceControlRepair && part === 'guards')
 ) {
+  rejectRetiredRegistrationExecution();
   if (part === 'guards' || part === 'release-controls') {
     run('python3', ['-B', 'scripts/production-release/registration-flow-evidence-release.test.py']);
     run('node', [
@@ -741,6 +755,7 @@ if (
     currentTree: execFileSync('git', ['rev-parse', 'HEAD^{tree}'], { encoding: 'utf8' }).trim()
   });
   if (registrationNativeEvidence) {
+    rejectRetiredRegistrationExecution();
     run('node', [
       '--test',
       'scripts/ci-registration-closure-native-reuse.test.mjs',
@@ -854,8 +869,7 @@ const unpublishedComponentSuccessorControls = () => {
 const ownedMysqlTestControls = () => {
   if (
     changed.some((path) => ownedMysqlTestControlPaths.includes(path)) ||
-    hasRechargeConnectionMigrationScope(changed) ||
-    hasRegistrationMirrorScope(changed)
+    hasRechargeConnectionMigrationScope(changed)
   )
     run('node', ['--test', 'scripts/lib/owned-mysql-test-instance.test.mjs']);
   if (
@@ -1099,16 +1113,6 @@ const adminPendingReleaseControls = () => {
 
 if (
   ['guards', 'release-controls'].includes(part) &&
-  changed.some(
-    (path) =>
-      path.startsWith('scripts/production-release/registration-closure-') ||
-      path === '.github/workflows/registration-closure-validation.yml'
-  )
-)
-  run('python3', ['-B', 'scripts/production-release/registration-closure-release.test.py']);
-
-if (
-  ['guards', 'release-controls'].includes(part) &&
   changed.some((path) =>
     [
       'scripts/check-v2-table-standard.mjs',
@@ -1166,6 +1170,7 @@ if (part === 'guards') {
   run('node', ['--test', ...commonControlTests]);
 }
 if (registrationOwnControlRepair) {
+  rejectRetiredRegistrationExecution();
   process.exit(0);
 }
 // The shared pool changes business source and an additive migration. Keep all
@@ -1466,8 +1471,6 @@ if (releaseArtifactOnly && ['guards', 'release-controls'].includes(part)) {
     run('node', ['--test', 'scripts/v2-registration-finance-audit.test.mjs']);
     run('python3', ['-B', 'scripts/production-release/remote-deploy.test.py', 'ReleaseScopeTests']);
   }
-  if (hasRegistrationOnboardingScope(changed))
-    run('python3', ['-B', 'scripts/production-release/registration-onboarding-96.test.py']);
   if (changed.some((path) => path.startsWith('scripts/production-release/storage-maintenance')))
     run('python3', ['-B', 'scripts/production-release/storage-maintenance.test.py']);
   if (
@@ -1524,8 +1527,6 @@ if (releaseArtifactOnly && ['guards', 'release-controls'].includes(part)) {
     run('node', ['--test', 'scripts/v2-registration-finance-audit.test.mjs']);
     run('python3', ['-B', 'scripts/production-release/remote-deploy.test.py', 'ReleaseScopeTests']);
   }
-  if (hasRegistrationOnboardingScope(changed))
-    run('python3', ['-B', 'scripts/production-release/registration-onboarding-96.test.py']);
   // Full npm test already runs backup, finite history and its nested remote
   // deployment suite. Add only the missing preparation/retirement controls.
   if (
@@ -1607,7 +1608,6 @@ if (releaseArtifactOnly && ['guards', 'release-controls'].includes(part)) {
       '@apple-business/api',
       '--',
       'src/id-business-v2/auto-recharge',
-      ...(hasAppleMailboxScope(changed) ? ['src/id-business-v2/auto-registration'] : []),
       ...(changed.some((p) => p.includes('/proxy-pool/')) ? ['src/id-business-v2/proxy-pool'] : []),
       ...(changed.some((p) => p.startsWith('apps/api/src/id-business-v2/online-recharge/'))
         ? ['src/id-business-v2/online-recharge']
@@ -1627,21 +1627,6 @@ if (releaseArtifactOnly && ['guards', 'release-controls'].includes(part)) {
         : [])
     );
   npm('run', 'build', '--workspace', '@apple-business/api');
-  if (hasAppleMailboxScope(changed)) {
-    npm('run', 'auto-registration:setup');
-    const python = '.runtime/auto-registration/venv/bin/python';
-    const worker = 'apps/api/src/id-business-v2/auto-registration/worker';
-    for (const name of [
-      'test_workspace.py',
-      'test_apple_mailboxes.py',
-      'test_release_safety.py',
-      'test_registration_closed_loop_unit.py',
-      'test_upload_compat.py'
-    ])
-      run(python, ['-B', '-m', 'unittest', 'discover', '-s', worker, '-p', name]);
-    run('node', ['--test', worker + '/test_payment_browser.mjs']);
-    run(python, ['-B', worker + '/acceptance_runtime.py']);
-  }
   if (changed.some((p) => p.startsWith('apps/api/src/id-business-v2/online-recharge/')))
     onlineEngine();
 } else if (part === 'online-engine') {
@@ -1652,8 +1637,7 @@ if (releaseArtifactOnly && ['guards', 'release-controls'].includes(part)) {
   if (combined && process.env.GITHUB_ACTIONS !== 'true')
     throw new Error('组合发布数据库验收只能在 GitHub Actions 隔离环境执行');
   const connections = hasRechargeConnectionMigrationScope(changed);
-  const mirror = hasRegistrationMirrorScope(changed);
-  if (connections || mirror) {
+  if (connections) {
     npm('run', 'prisma:mysql:generate');
     npm('run', 'prisma:mysql:validate');
     shared();
@@ -1664,24 +1648,15 @@ if (releaseArtifactOnly && ['guards', 'release-controls'].includes(part)) {
         '--runtime=docker',
         ...(combined ? ['--combined-release'] : [])
       ]);
-    if (mirror) {
-      npm('run', 'auto-registration:setup');
-      run('node', [
-        'scripts/acceptance-v2-registration-mirror-mysql.mjs',
-        '--runtime=docker',
-        '--python=' + resolve('.runtime/auto-registration/venv/bin/python')
-      ]);
-    }
   } else {
     run('python3', ['scripts/ci-recharge-migration.py']);
   }
-  // Shared-pool and registration changes can be in the same candidate. Keep
-  // both real database suites; the mirror branch must not hide proxy coverage.
+  // Keep shared proxy coverage independent of the recharge connection migration.
   if (
     changed.some((path) => path.includes('/proxy-pool/')) ||
     changed.includes('scripts/acceptance-v2-shared-proxy-mysql.mjs')
   ) {
-    if (!connections && !mirror) {
+    if (!connections) {
       npm('run', 'prisma:mysql:generate');
       shared();
     }

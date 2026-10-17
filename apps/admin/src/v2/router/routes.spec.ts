@@ -28,7 +28,7 @@ describe('V2 route navigation state', () => {
       permissions: ['audit_log.view']
     };
     const admin: CurrentUser = { ...employee, roles: ['admin'], permissions: [] };
-    for (const key of ['audit-logs', 'data-governance', 'auto-registration']) {
+    for (const key of ['audit-logs', 'data-governance']) {
       const feature = v2ModuleDefinitions.find((module) => module.key === key)!;
       expect(hasUserFeatureAccess(employee, feature)).toBe(false);
       expect(hasUserFeatureAccess(admin, feature)).toBe(true);
@@ -55,6 +55,13 @@ describe('V2 route navigation state', () => {
   beforeEach(() => {
     vi.mocked(markV2RoutePrefetch).mockClear();
     resetV2RouteNavigationState();
+  });
+
+  it('does not expose or prefetch the retired automatic registration route', async () => {
+    const children = v2Routes[0]!.children!;
+    expect(children.some((route) => route.path.startsWith('auto-registration'))).toBe(false);
+    await prefetchV2Route('/v2/auto-registration');
+    expect(markV2RoutePrefetch).not.toHaveBeenCalled();
   });
 
   it('marks route prefetch ready only after the route modules finish loading', async () => {

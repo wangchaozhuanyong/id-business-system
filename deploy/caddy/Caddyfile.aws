@@ -2,14 +2,6 @@
 	encode zstd gzip
 	# Caddy is the public edge. Its reverse proxy ignores caller-supplied
 	# X-Forwarded-* values by default and emits the direct client address.
-	@registrationWorkspace path /api/id-business-v2/auto-registration/workspace /api/id-business-v2/auto-registration/workspace/*
-	handle @registrationWorkspace {
-		# Preserve the authenticated workspace's own frame and inline-script policy.
-		reverse_proxy api:3000 {
-			flush_interval -1
-		}
-	}
-
 	handle {
 	  reverse_proxy admin:80
 	  header {

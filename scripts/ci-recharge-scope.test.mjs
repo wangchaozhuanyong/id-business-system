@@ -1229,9 +1229,15 @@ const registrationAdvancedPaths = [
   'apps/api/src/id-business-v2/online-recharge/online-recharge.module.ts',
   'apps/api/src/id-business-v2/online-recharge/persistence/online-recharge.repository.ts'
 ];
+const registrationHistoricalBinding = JSON.parse(fs.readFileSync(registrationPublishedBindingPath));
 const registrationSourceFixtures = Object.fromEntries(
   [
     registrationManifestPath,
+    ...Object.keys(registrationHistoricalBinding.sources),
+    ...Object.keys(registrationHistoricalBinding.combinedSources),
+    ...Object.keys(registrationHistoricalBinding.validationSources),
+    'scripts/production-release/registration-closure-release.py',
+    'scripts/production-release/registration-closure-release.test.py',
     // The GPT successor advances this historical module without changing its receipt.
     'apps/api/src/id-business-v2/online-recharge/online-recharge.module.ts',
     // Table container wording advances independently of the immutable recovery receipt.
@@ -6703,7 +6709,7 @@ test('registration closure selects independent browser, API and both database re
     'run auto-registration:setup',
     'exec -- node scripts/acceptance-v2-registration-native-ui.mjs'
   ])
-    assert.equal(commands.filter((command) => command === expected).length, 1, expected);
+    assert.equal(commands.filter((command) => command === expected).length, 0, expected);
   assert.deepEqual(selectedParts(['scripts/acceptance-v2-shared-proxy-mysql.mjs']), [
     'guards',
     'migration'

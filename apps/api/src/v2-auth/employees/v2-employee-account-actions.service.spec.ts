@@ -45,6 +45,12 @@ function fixture() {
         >
       }
     ],
+    registrationJobs: [] as {
+      id: string;
+      ownerId: string;
+      state: string;
+      document: Record<string, unknown>;
+    }[],
     settings: new Map<string, unknown>([[SYSTEM_SUPER_ADMIN_KEY, { userId: ownerId }]]),
     audits: [] as unknown[],
     revoked: 0
@@ -108,8 +114,11 @@ function fixture() {
         })
       },
       idBusinessV2RegistrationJob: {
-        count: vi.fn().mockResolvedValue(0),
-        updateMany: vi.fn().mockResolvedValue({ count: 0 })
+        updateMany: vi.fn(async ({ where, data }) => {
+          const jobs = draft.registrationJobs.filter((job) => job.ownerId === where.ownerId);
+          jobs.forEach((job) => Object.assign(job, data));
+          return { count: jobs.length };
+        })
       },
       idBusinessV2RechargeJob: {
         findMany: vi.fn(async () => draft.jobs),
@@ -260,6 +269,23 @@ describe('employee password reset and business takeover', () => {
     });
     expect(f.transferCalls).toBe(1);
     expect(f.state.audits).toHaveLength(1);
+  });
+
+  it('retired registration tasks do not block deletion and remain intact when ownership transfers', async () => {
+    const f = fixture();
+    f.state.registrationJobs.push(
+      { id: 'historical-queued', ownerId: employeeId, state: 'queued', document: { receipt: 1 } },
+      { id: 'historical-failed', ownerId: employeeId, state: 'failed', document: { receipt: 2 } }
+    );
+    const historical = structuredClone(f.state.registrationJobs);
+    const preview = await f.service.deletePreview(employeeId, operator);
+    expect(preview.canDelete).toBe(true);
+    expect(preview.blockers).toEqual([]);
+    await expect(f.service.remove(employeeId, preview, operator)).resolves.toEqual({
+      deleted: true,
+      alreadyDeleted: false
+    });
+    expect(f.state.registrationJobs).toEqual(historical.map((job) => ({ ...job, ownerId })));
   });
 
   it('rejects changed impacts and keeps the account and business untouched', async () => {

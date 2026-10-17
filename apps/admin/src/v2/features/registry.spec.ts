@@ -43,7 +43,7 @@ describe('V2 feature registry', () => {
     });
     try {
       const runtime = await import('./runtimeRegistry');
-      expect(runtime.v2RuntimeFeatureRegistry).toHaveLength(48);
+      expect(runtime.v2RuntimeFeatureRegistry).toHaveLength(47);
       expect(runtime.getV2RuntimeModuleDefinition('accounts')?.loadView).toBeTypeOf('function');
     } finally {
       vi.doUnmock('@/v2/features/tableSchemas');
@@ -58,7 +58,7 @@ describe('V2 feature registry', () => {
 
     expect(new Set(keys).size).toBe(keys.length);
     expect(new Set(routes).size).toBe(routes.length);
-    expect(v2FeatureRegistry).toHaveLength(48);
+    expect(v2FeatureRegistry).toHaveLength(47);
   });
 
   it('keeps the removed registration names module retired', () => {
@@ -68,21 +68,22 @@ describe('V2 feature registry', () => {
     ).toBe(false);
   });
 
-  it('registers the new registration workspace as an administrator-only main navigation', () => {
-    expect(getV2RuntimeModuleDefinition('auto-registration')).toMatchObject({
-      route: '/v2/auto-registration',
-      title: '自动注册',
-      group: '自动注册',
-      kind: 'form',
-      requiredRoles: ['admin']
-    });
-    const section = v2NavigationSections.find((item) => item.key === 'auto-registration');
-    expect(section?.items.map((item) => item.key)).toEqual(['auto-registration']);
+  it('retires the registration workspace while preserving account and mailbox management', () => {
+    expect(getV2RuntimeModuleDefinition('auto-registration')).toBeUndefined();
     expect(
-      tablesFor(v2FeatureRegistry.find((item) => item.key === 'auto-registration'))?.map(
-        (item) => item.id
-      )
-    ).toEqual(['auto-registration.apple-mailboxes']);
+      v2FeatureRegistry.some((feature) => feature.route.startsWith('/v2/auto-registration'))
+    ).toBe(false);
+    expect(v2NavigationSections.some((section) => section.key === 'auto-registration')).toBe(false);
+    expect(
+      [...loadedTables.values()].flat().some((schema) => schema.id.startsWith('auto-registration.'))
+    ).toBe(false);
+    expect(getV2RuntimeModuleDefinition('chatgpt-accounts')?.route).toBe(
+      '/v2/account-settings/chatgpt-accounts'
+    );
+    expect(getV2RuntimeModuleDefinition('vendure-mailbox')?.route).toBe(
+      '/v2/account-settings/mailbox'
+    );
+    expect(getV2RuntimeModuleDefinition('auto-recharge')?.loadView).toBeTypeOf('function');
   });
 
   it('registers online recharge pages without a duplicate proxy pool immediately after automatic recharge', () => {

@@ -442,7 +442,6 @@ try {
     assert.equal((await inspect('network', network.id)).Internal, true));
   const mysqlVolume = await createVolume(`${prefix}-mysql`);
   dataVolume = await createVolume(`${prefix}-data`);
-  const registrationVolume = await createVolume(`${prefix}-auto-registration`);
   mysql = await startContainer(
     'mysql',
     [
@@ -561,8 +560,6 @@ try {
     network.id,
     '--mount',
     `type=volume,src=${dataVolume.id},dst=/app/.runtime/online-recharge`,
-    '--mount',
-    `type=volume,src=${registrationVolume.id},dst=/app/.runtime/auto-registration`,
     ...envArgs({
       NODE_ENV: 'production',
       APP_PORT: '3000',
@@ -584,7 +581,6 @@ try {
       ID_BUSINESS_V2_MEDIA_RESOLVER_URL: 'http://media-resolver:8787',
       AUTO_RECHARGE_WORKER_TOKEN: secret(),
       AUTO_RECHARGE_WORKER_URL: 'http://127.0.0.1:1',
-      AUTO_REGISTRATION_WORKER_URL: 'http://127.0.0.1:1',
       VENDURE_MAILBOX_ADMIN_API_URL: 'https://synthetic-fixture.internal/admin-api',
       VENDURE_MAILBOX_SHOP_API_URL: 'https://synthetic-fixture.internal/shop-api',
       VENDURE_MAILBOX_API_KEY: secret(),

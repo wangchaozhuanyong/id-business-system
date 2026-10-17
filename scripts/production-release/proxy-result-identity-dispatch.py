@@ -172,4 +172,5 @@ def publish():
 
 
 if __name__ == '__main__':
+    raise SystemExit('Automatic registration has been removed; this historical joint publisher is disabled')
     publish()
