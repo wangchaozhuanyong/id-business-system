@@ -33,6 +33,10 @@ import {
 } from './ci-registration-closure-scope.mjs';
 import { imageInputsChanged } from './ci-recharge-python-image.mjs';
 import {
+  onlineSessionPreflightPaths,
+  onlineSessionPreflightControls
+} from './ci-online-settings-scope.mjs';
+import {
   adminHtmlCachePaths,
   isRegistrationTerminalStopOnly,
   registrationTerminalStopBase,
@@ -7098,4 +7102,22 @@ test('terminal entry contract repair stays on its exact published tree and contr
     assert.equal(isRegistrationTerminalStopOnly(paths, { ...context, ...override }), false);
   }
   assert.equal(checkMode(paths, 'old', 'new', undefined, context), 'full');
+});
+
+test('fresh Session subscription preflight selects only Admin and cannot hide payment source edits', () => {
+  const schema = 'unchanged';
+  const paths = [...onlineSessionPreflightPaths, ...onlineSessionPreflightControls];
+  assert.equal(checkMode(paths, schema, schema), 'recharge');
+  assert.deepEqual(selectedParts(paths), ['guards', 'admin']);
+  assert.equal(checkMode(paths, 'before', 'after'), 'full');
+  const controls = onlineSessionPreflightControls.filter((name) => !name.startsWith('scripts/ci-'));
+  assert.equal(checkMode(controls, schema, schema), 'ci-only');
+  assert.deepEqual(selectedParts(controls), ['guards']);
+  for (const extra of [
+    'apps/api/src/id-business-v2/online-recharge/persistence/tasks.repository.ts',
+    'apps/api/src/id-business-v2/online-recharge/engine/confirmation.cjs',
+    'apps/admin/src/v2/features/online-recharge/api.ts',
+    'scripts/production-release/online-session-preflight-arbitrary.py'
+  ])
+    assert.equal(checkMode([...paths, extra], schema, schema), 'full', extra);
 });

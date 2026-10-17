@@ -494,6 +494,47 @@ export function isOnlinePendingFeaturesControlsOnly(paths) {
     )
   );
 }
+export const onlineSessionPreflightScope = 'ONLINE_SESSION_SUBSCRIPTION_PREFLIGHT';
+export const onlineSessionPreflightPaths = Object.freeze([
+  'apps/admin/src/v2/features/online-recharge/sections.ts',
+  'apps/admin/src/v2/features/online-recharge/api.spec.ts',
+  'docs/ONLINE_RECHARGE.md',
+  'docs/V2_TASKS.md'
+]);
+const sessionPreflightReleaseControls = [
+  '.github/workflows/online-session-preflight-validation.yml',
+  ...['build.py', 'release.py', 'release.test.py', 'contract.json'].map(
+    (name) => 'scripts/production-release/online-session-preflight-' + name
+  )
+];
+export const onlineSessionPreflightControls = Object.freeze([
+  ...sessionPreflightReleaseControls,
+  'scripts/ci-online-settings-scope.mjs',
+  'scripts/ci-online-settings-scope.test.mjs',
+  'scripts/ci-recharge-scope.mjs',
+  'scripts/ci-recharge-scope.test.mjs'
+]);
+export function isOnlineSessionPreflightOnly(paths) {
+  return (
+    new Set(paths).size === paths.length &&
+    onlineSessionPreflightPaths.every((path) => paths.includes(path)) &&
+    paths.every(
+      (path) =>
+        onlineSessionPreflightPaths.includes(path) || onlineSessionPreflightControls.includes(path)
+    )
+  );
+}
+export function isOnlineSessionPreflightControlsOnly(paths) {
+  return (
+    new Set(paths).size === paths.length &&
+    paths.some((path) => sessionPreflightReleaseControls.includes(path)) &&
+    paths.every(
+      (path) =>
+        onlineSessionPreflightControls.includes(path) ||
+        ['docs/ONLINE_RECHARGE.md', 'docs/V2_TASKS.md'].includes(path)
+    )
+  );
+}
 const checkoutLoadParentRpcRequired = [
   'SOURCE_MANIFEST.json',
   'rpc.cjs',
@@ -610,7 +651,8 @@ export function isOnlineSettingsOnly(paths) {
     isOnlineSessionRefreshOnly(paths) ||
     isOnlineLoginVisibilityOnly(paths) ||
     isOnlineAuthStabilityOnly(paths) ||
-    isOnlinePendingFeaturesOnly(paths)
+    isOnlinePendingFeaturesOnly(paths) ||
+    isOnlineSessionPreflightOnly(paths)
   )
     return true;
   const databaseTest = 'apps/api/src/id-business-v2/online-recharge/mysql.integration.spec.ts';
@@ -635,6 +677,7 @@ export function isOnlineSettingsOnly(paths) {
   );
 }
 export function isOnlineSettingsControlsOnly(paths) {
+  if (isOnlineSessionPreflightControlsOnly(paths)) return true;
   if (isOnlinePendingFeaturesControlsOnly(paths)) return true;
   if (isOnlineCheckoutLoadRecoveryControlsOnly(paths)) return true;
   if (isOnlineCheckoutCsRecoveryControlsOnly(paths)) return true;
@@ -655,6 +698,8 @@ export function isOnlineSettingsControlsOnly(paths) {
 export const onlineSettingsParts = Object.freeze(['guards', 'api', 'admin', 'online-engine']);
 export function onlineSettingsCommands(part, paths) {
   const controlsOnly = isOnlineSettingsControlsOnly(paths);
+  const sessionPreflight = isOnlineSessionPreflightOnly(paths);
+  const sessionPreflightControls = isOnlineSessionPreflightControlsOnly(paths);
   const pendingFeatures = isOnlinePendingFeaturesOnly(paths);
   const pendingFeatureControls = isOnlinePendingFeaturesControlsOnly(paths);
   const testsOnly = isOnlineSettingsTestsOnly(paths);
@@ -714,6 +759,24 @@ export function onlineSettingsCommands(part, paths) {
         'scripts/ci-change-scope.test.mjs'
       ]
     ];
+    if (sessionPreflight || sessionPreflightControls)
+      return [
+        ...controls,
+        ['python3', '-B', 'scripts/production-release/online-session-preflight-release.test.py'],
+        ...(sessionPreflight
+          ? [
+              ...[
+                'check:admin-ui',
+                'check:v2-ui-language',
+                'check:v2-color-contrast',
+                'check:v2-table-standard',
+                'check:v2-loading-standard',
+                'check:v2-module-architecture',
+                'check:v2-isolation'
+              ].map((name) => npm('run', name))
+            ]
+          : [])
+      ];
     if (pendingFeatures || pendingFeatureControls)
       return [
         ...controls,
@@ -909,6 +972,22 @@ export function onlineSettingsCommands(part, paths) {
   if (controlsOnly) throw new Error('Unsupported controls-only check');
   if (testsOnly && ['api', 'admin'].includes(part)) throw new Error('Unsupported tests-only check');
   const shared = npm('run', 'build', '--workspace', '@apple-business/shared');
+  if (sessionPreflight) {
+    if (part !== 'admin') throw new Error('Unsupported Session preflight check part');
+    return [
+      shared,
+      npm(
+        'run',
+        'test',
+        '--workspace',
+        '@apple-business/admin',
+        '--',
+        'src/v2/features/online-recharge/api.spec.ts'
+      ),
+      npm('run', 'typecheck', '--workspace', '@apple-business/admin'),
+      npm('run', 'build', '--workspace', '@apple-business/admin')
+    ];
+  }
   if (pendingFeatures) {
     const upstream = 'apps/api/src/id-business-v2/online-recharge/engine/upstream';
     const browser = [

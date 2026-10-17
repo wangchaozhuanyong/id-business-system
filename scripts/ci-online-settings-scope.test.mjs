@@ -35,8 +35,124 @@ import {
   onlinePendingFeaturesScope,
   onlinePendingFeaturesPaths,
   onlinePendingFeaturesControls,
-  onlineSettingsCommands
+  onlineSettingsCommands,
+  isOnlineSessionPreflightOnly,
+  isOnlineSessionPreflightControlsOnly,
+  onlineSessionPreflightScope,
+  onlineSessionPreflightPaths,
+  onlineSessionPreflightControls
 } from './ci-online-settings-scope.mjs';
+
+test('Session preflight admits only its four reviewed sources and nine finite controls', () => {
+  assert.equal(onlineSessionPreflightScope, 'ONLINE_SESSION_SUBSCRIPTION_PREFLIGHT');
+  assert.equal(onlineSessionPreflightPaths.length, 4);
+  assert.equal(new Set(onlineSessionPreflightPaths).size, 4);
+  assert.equal(onlineSessionPreflightControls.length, 9);
+  assert.equal(new Set(onlineSessionPreflightControls).size, 9);
+  for (let mask = 0; mask < 512; mask++) {
+    const paths = [
+      ...onlineSessionPreflightPaths,
+      ...onlineSessionPreflightControls.filter((_, index) => mask & (1 << index))
+    ];
+    assert.equal(isOnlineSessionPreflightOnly(paths), true);
+    assert.equal(isOnlineSettingsOnly(paths), true);
+    assert.equal(isOnlineSettingsControlsOnly(paths), false);
+    assert.equal(checkMode(paths, 'unchanged', 'unchanged'), 'recharge');
+    assert.equal(checkMode(paths, 'before', 'after'), 'full');
+    assert.deepEqual(selectedParts(paths), ['guards', 'admin']);
+  }
+});
+
+test('Session preflight rejects partial sources, duplicate paths and neighboring changes', () => {
+  const complete = [...onlineSessionPreflightPaths, ...onlineSessionPreflightControls];
+  const reject = (paths) => {
+    assert.equal(isOnlineSessionPreflightOnly(paths), false);
+    assert.equal(isOnlineSettingsOnly(paths), false);
+    assert.equal(isOnlineSettingsControlsOnly(paths), false);
+    assert.equal(checkMode(paths, '', ''), 'full');
+    assert.throws(() => onlineSettingsCommands('guards', paths), /Unsupported online settings/);
+  };
+  for (const path of onlineSessionPreflightPaths) reject(complete.filter((name) => name !== path));
+  for (const path of complete) reject([...complete, path]);
+  for (const path of [
+    'apps/admin/src/v2/features/online-recharge/api.ts',
+    'apps/admin/src/v2/features/online-recharge/OnlineActionDrawer.vue',
+    'apps/admin/src/v2/styles/base.css',
+    'apps/api/src/id-business-v2/online-recharge/persistence/tasks.repository.ts',
+    'apps/api/src/id-business-v2/online-recharge/engine/task-runner.cjs',
+    'apps/api/prisma-mysql/schema.prisma',
+    'apps/api/prisma-mysql/migrations/unreviewed/migration.sql',
+    'package.json',
+    'package-lock.json',
+    '.github/workflows/quality.yml',
+    'scripts/ci-recharge-check.mjs',
+    'scripts/production-release/online-session-preflight-unreviewed.py',
+    'scripts/production-release/online-session-preflight-release.py.backup',
+    'scripts/production-release/online-pending-features-release.py'
+  ])
+    reject([...complete, path]);
+});
+
+test('Session preflight controls run only their own guards and publisher tests', () => {
+  const releaseControls = onlineSessionPreflightControls.filter(
+    (name) => !name.startsWith('scripts/ci-')
+  );
+  for (const paths of [
+    ...releaseControls.map((name) => [name]),
+    [...onlineSessionPreflightControls, 'docs/ONLINE_RECHARGE.md', 'docs/V2_TASKS.md']
+  ]) {
+    assert.equal(isOnlineSessionPreflightControlsOnly(paths), true);
+    assert.equal(isOnlineSettingsControlsOnly(paths), true);
+    assert.equal(isOnlineSettingsOnly(paths), false);
+    assert.equal(checkMode(paths, '', ''), 'ci-only');
+    assert.deepEqual(selectedParts(paths), ['guards']);
+    const commands = onlineSettingsCommands('guards', paths);
+    assert.deepEqual(
+      commands.filter((command) => command[0] === 'python3'),
+      [['python3', '-B', 'scripts/production-release/online-session-preflight-release.test.py']]
+    );
+    assert.ok(!commands.flat().some((arg) => /@apple-business|check:v2-|check:admin-ui/.test(arg)));
+    for (const part of ['api', 'admin', 'online-engine'])
+      assert.throws(() => onlineSettingsCommands(part, paths), /controls-only/);
+  }
+  for (const paths of [
+    [],
+    ['docs/ONLINE_RECHARGE.md'],
+    ['scripts/ci-online-settings-scope.mjs'],
+    [...onlineSessionPreflightControls, onlineSessionPreflightPaths[0]]
+  ])
+    assert.equal(isOnlineSessionPreflightControlsOnly(paths), false);
+});
+
+test('Session preflight retains seven UI rules and Admin checks without API or engine work', () => {
+  const paths = [...onlineSessionPreflightPaths, ...onlineSessionPreflightControls];
+  const guards = onlineSettingsCommands('guards', paths);
+  for (const name of [
+    'check:admin-ui',
+    'check:v2-ui-language',
+    'check:v2-color-contrast',
+    'check:v2-table-standard',
+    'check:v2-loading-standard',
+    'check:v2-module-architecture',
+    'check:v2-isolation'
+  ])
+    assert.ok(guards.flat().includes(name), name);
+  const admin = onlineSettingsCommands('admin', paths);
+  for (const name of ['typecheck', 'test', 'build']) assert.ok(admin.flat().includes(name), name);
+  assert.ok(admin.flat().includes('src/v2/features/online-recharge/api.spec.ts'));
+  assert.ok(admin.flat().includes('@apple-business/admin'));
+  assert.ok(
+    ![...guards, ...admin]
+      .flat()
+      .some((arg) =>
+        /@apple-business\/api|prisma|mysql|migrate|docker|finance|test:online-recharge:engine|upstream|engine\/test/.test(
+          arg
+        )
+      )
+  );
+  for (const part of ['api', 'online-engine'])
+    assert.throws(() => onlineSettingsCommands(part, paths), /Unsupported Session preflight/);
+});
 
 test('the four pending features admit exactly 26 mandatory paths and eight finite controls', () => {
   assert.equal(onlinePendingFeaturesScope, 'ONLINE_PENDING_COPY_CVC_VOICE');
