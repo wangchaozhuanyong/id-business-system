@@ -14,8 +14,9 @@ SCOPE = 'ONLINE_CHECKOUT_LOAD_RECOVERY'
 CONTRACT_FILE = 'online-checkout-load-contract.json'
 ENGINE = 'apps/api/src/id-business-v2/online-recharge/engine'
 FILES = frozenset(('SOURCE_MANIFEST.json', 'checkout-form.cjs', 'checkout-recovery.cjs',
-    'upstream/chatgpt.js', 'upstream/human-verification.js', 'upstream/stripe-payment.js',
+    'rpc.cjs', 'upstream/chatgpt.js', 'upstream/human-verification.js', 'upstream/stripe-payment.js',
     'test/checkout-form.test.cjs', 'test/checkout-recovery.test.cjs', 'test/verification-state.test.cjs',
+    'test/rpc-response.test.cjs',
     'test/checkout-load-recovery.test.cjs', 'test/checkout-page-loading.test.cjs',
     'test/recharge-flow-acceptance.test.cjs'))
 ADDED = frozenset(('test/checkout-load-recovery.test.cjs', 'test/checkout-page-loading.test.cjs',

@@ -21,9 +21,19 @@ class ContractTests(unittest.TestCase):
         before, after = self.c['beforeEngineFiles'], self.c['afterEngineFiles']
         self.assertEqual(len(after) - len(before), 3)
         self.assertEqual({name for name in after if before.get(name) != after[name]}, p.FILES)
-        self.assertEqual(len(p.FILES), 12)
+        self.assertEqual(len(p.FILES), 14)
         self.assertEqual(set(p.PRESERVED), {'api', 'admin', 'mysql', 'caddy', 'media-resolver',
                                           'auto-recharge', 'auto-registration'})
+
+    def test_rpc_recovery_changes_existing_files_without_expanding_the_engine_inventory(self):
+        rpc = {'rpc.cjs', 'test/rpc-response.test.cjs'}
+        self.assertTrue(rpc <= p.FILES)
+        self.assertTrue(rpc <= self.c['beforeEngineFiles'].keys())
+        self.assertTrue(rpc <= self.c['afterEngineFiles'].keys())
+        self.assertFalse(rpc & p.ADDED)
+        self.assertEqual(len(p.ADDED), 3)
+        self.assertEqual(len(self.c['beforeEngineFiles']), 98)
+        self.assertEqual(len(self.c['afterEngineFiles']), 101)
 
     def test_unbound_baseline_never_authorizes_preflight_or_publication(self):
         self.c['baseline'] = None
@@ -105,6 +115,17 @@ class ArtifactTests(unittest.TestCase):
 
     def test_exact_native_proof_and_runtime_payload(self):
         p.verify_proof(self.proof, self.plan, self.c, self.files)
+
+    def test_both_rpc_sources_are_required_and_digest_bound_in_the_native_payload(self):
+        for name in ('engine/rpc.cjs', 'engine/test/rpc-response.test.cjs'):
+            for change in ('missing', 'changed'):
+                files = {**self.files}
+                if change == 'missing':
+                    files.pop(name)
+                else:
+                    files[name] = 'a' * 64
+                with self.subTest(name=name, change=change), self.assertRaisesRegex(RuntimeError, 'NATIVE_PROOF_CHANGED'):
+                    p.verify_proof({**self.proof, 'files': files}, self.plan, self.c, files)
 
     def test_payload_cannot_include_validation_sources_or_other_runtime_modules(self):
         for extra in ('source/docs/ONLINE_RECHARGE.md', 'api/modules/worker.repository.js',

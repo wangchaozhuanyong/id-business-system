@@ -87,7 +87,9 @@ async function rpc(method, args = {}) {
   }
   if ([401, 403, 409, 410].includes(response.status)) {
     const error = new LeaseLostError();
-    abortTask(error);
+    // The parent multiplexes independent leases and has no task context. A
+    // rejected parent request must not cancel every later polling/heartbeat RPC.
+    if (taskContext) abortTask(error);
     throw error;
   }
   if (!response.ok) throw new Error(`内部执行接口失败 ${response.status}`);
@@ -114,7 +116,7 @@ async function rpc(method, args = {}) {
   if (body.ok === false || body.success === false) {
     if (body.code === 'LEASE_LOST') {
       const error = new LeaseLostError();
-      abortTask(error);
+      if (taskContext) abortTask(error);
       throw error;
     }
     throw new Error('内部执行操作未完成');

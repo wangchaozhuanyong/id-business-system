@@ -159,9 +159,9 @@
     {
       "path": "rpc.cjs",
       "originalSha256": null,
-      "adaptedSha256": "438154afff5cf0d2689ede94cd22314ec352c7fde3ad732aa76c0f66e88b4245",
+      "adaptedSha256": "f9b13d4707c31efb5a7ce47153365a501542d34b5cb3adf5dec75fcd34beaafa",
       "changed": true,
-      "reason": "兼容Nest成功空响应及文本标量；仅已核实的可空资源允许空正文，提交授权与其他接口仍严格拒绝空/无效响应。; 2026-10-17 unattended verification and original-checkout reconciliation."
+      "reason": "兼容Nest成功空响应及文本标量；仅已核实的可空资源允许空正文，提交授权与其他接口仍严格拒绝空/无效响应。; 2026-10-17 unattended verification and original-checkout reconciliation. Scope lease-loss cancellation to the child task context so parent polling and unrelated leases recover."
     },
     {
       "path": "safe-media.cjs",
@@ -362,9 +362,9 @@
     {
       "path": "test/rpc-response.test.cjs",
       "originalSha256": null,
-      "adaptedSha256": "f9c9cb74bc7a05c61fc2037c696e1b83c386f834d345e703adf015c0b46864f8",
+      "adaptedSha256": "2aedde698346a595cc20ae0cee7341e2ec0914471f51cf9e4a97b8c2dcf97a96",
       "changed": true,
-      "reason": "Use explicit synthetic proxy, reject empty pool, verify frozen server region takes precedence and expected currency is cleared. Authorized administrator business visibility: preserve operational data and mask credentials only."
+      "reason": "Use explicit synthetic proxy, reject empty pool, verify frozen server region takes precedence and expected currency is cleared. Authorized administrator business visibility: preserve operational data and mask credentials only. Scope lease-loss cancellation to the child task context so parent polling and unrelated leases recover."
     },
     {
       "path": "test/runtime-main.test.cjs",
