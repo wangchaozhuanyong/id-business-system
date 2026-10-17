@@ -1,7 +1,5 @@
 {
-  "apiModules": [
-    "id-business-v2/online-recharge/persistence/tasks.repository.js"
-  ],
+  "apiModules": ["id-business-v2/online-recharge/persistence/tasks.repository.js"],
   "backupNormalizerPath": "/opt/id-business-v2/releases/20261015T091200Z-e197218c8b38-recharge-record/scripts/mysql-dump-restore-normalizer.sed",
   "backupNormalizerSha256": "ca9b05f832e9ed73bb36b7e76c083c99a40b13e067850166f8715bae469e5202",
   "beforeApiOnlineFiles": {
