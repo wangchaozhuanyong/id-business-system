@@ -173,8 +173,10 @@ def verify_sources(c):
          and {name for name in api_changed if not name.startswith(online)} == api_owned, 'API_SOURCE_SCOPE_CHANGED')
     for name in c['omittedApiDeclarations']:
         source = 'apps/api/src/' + name.removesuffix('.d.ts') + '.ts'
+        # Compiler-only sidecars are not deployed. Their owners may have a
+        # published successor; retirement must leave that reviewed source intact.
         need(safe_name(name) and name.endswith('.d.ts') and source not in c['sources']
-             and git('ls-tree', c['apiSourceBaseline'], '--', source).strip()
+             and git('ls-tree', c['reviewBase'], '--', source).strip()
              == git('ls-tree', 'HEAD', '--', source).strip()
              and git('ls-tree', 'HEAD', '--', source).strip(), 'OMITTED_DECLARATION_SOURCE_CHANGED')
     need(c.get('databaseVerification') == {'schemaChanged': False, 'migrationPerformed': False,

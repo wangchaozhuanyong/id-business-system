@@ -8,7 +8,7 @@ const contractPath = 'scripts/production-release/feature-retirement-contract.jso
 const verifierPath = 'scripts/production-release/feature-retirement-build.py';
 const workflowPath = '.github/workflows/feature-retirement-validation.yml';
 const sourceHash = '1c91563df6fbdabb7c7724292fe9c637681c237560d9fbddee043eb87af30cf5';
-const verifierHash = '6bb072dbd08081f090a0d532b07d31760b4c5f5ce2a19fae2323a4420589c5ec';
+const verifierHash = '82293f9bbb3c4341f75ac9eb2075ffac52c4855862a55500b82e700ef3f0c489';
 const workflowHash = '7c5fb7c5f845ef94a9ddd117f5002b8d33bc0f3155c254c1acf6a340e5308c64';
 const digest = (value) => createHash('sha256').update(value).digest('hex');
 const samePaths = (left, right) =>
@@ -46,6 +46,7 @@ export function isFeatureRetirementOnly(paths, context = {}) {
       c.apiMainBase !== c.apiSourceBaseline ||
       typeof c.reviewBase !== 'string' ||
       !/^[a-f0-9]{40}$/.test(c.reviewBase) ||
+      c.reviewBase !== c.adminSourceBaseline ||
       c.adminSourceBaseline !== '0d76d6ca0c287750d2d04f16c80e9d63a334b84b' ||
       c.backupCreated !== false ||
       c.cleanupDataInRelease !== false ||
