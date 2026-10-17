@@ -89,6 +89,24 @@ describe('苹果隐藏邮箱注册边界与中文展示', () => {
     expect(text).toContain('当前：ChatGPT 账号同步');
     expect(text).not.toContain('account_creation_failed');
   });
+  it('旧任务保留排队阶段但已有首次失败时不再显示当前等待执行', () => {
+    const text = appleMailboxDiagnostic({
+      stage: 'queued',
+      firstFailure: {
+        stage: 'queued',
+        errorKind: 'network_error',
+        httpStatus: null,
+        elapsedMs: 649,
+        observedAt: '2026-10-17T00:00:00Z'
+      }
+    });
+    expect(text).toContain('首次失败：注册初始化');
+    expect(text).not.toContain('等待执行');
+    expect(text).not.toContain('当前：');
+  });
+  it('真正排队且没有首次失败的新任务仍显示等待执行', () => {
+    expect(appleMailboxDiagnostic({ stage: 'queued' })).toBe('等待执行');
+  });
   it('授权网络异常明确没有响应状态，工作区步骤中文显示', () => {
     const text = appleMailboxDiagnostic({
       firstFailure: {

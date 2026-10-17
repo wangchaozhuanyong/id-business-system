@@ -582,8 +582,8 @@
     }
   },
   "reviewedFileHashes": {
-    "apps/admin/src/v2/features/auto-registration/apple-mailbox-presentation.spec.ts": "98ca4888c12e3ddc620bbefeb817dac9abe5c428796f365bcc3935b86d3b345a",
-    "apps/admin/src/v2/features/auto-registration/apple-mailbox-presentation.ts": "a873a498433a177dbabe892ea078eb600cef75c105c206d400043a2d7b5ba024",
+    "apps/admin/src/v2/features/auto-registration/apple-mailbox-presentation.spec.ts": "5b321445b24c560fa27911540a7f7923c851cdbcdb4dd5783a97bb15bbf08fd6",
+    "apps/admin/src/v2/features/auto-registration/apple-mailbox-presentation.ts": "aa6d3ea1d8ea1561c8e67a2d0b986f085421d3e37eb2489e71cda92840b26002",
     "apps/admin/src/v2/features/auto-registration/contracts.ts": "59ba20226589a0615b2337b511fe8422a9915caa13dc072a9608a8d058200cda",
     "apps/admin/src/v2/features/auto-registration/V2AppleMailboxes.vue": "66a9dc4a2b7b37216c9d2b86e4bf0838bfb1f4ed8a9c4961d63548bb2aaf7692",
     "apps/api/src/id-business-v2/auto-registration/apple-mailboxes.types.ts": "0f22eff5cc9ebc9f25d10810527733828ddb375d0ae719a797d0137f1cd87934",
@@ -637,8 +637,8 @@
     "adminSourceProjection": "61205317a75fa87fba8d266d66209d831b5e65591feeff0aa98d5f915bcc6fe2"
   },
   "sources": {
-    "apps/admin/src/v2/features/auto-registration/apple-mailbox-presentation.spec.ts": "98ca4888c12e3ddc620bbefeb817dac9abe5c428796f365bcc3935b86d3b345a",
-    "apps/admin/src/v2/features/auto-registration/apple-mailbox-presentation.ts": "a873a498433a177dbabe892ea078eb600cef75c105c206d400043a2d7b5ba024",
+    "apps/admin/src/v2/features/auto-registration/apple-mailbox-presentation.spec.ts": "5b321445b24c560fa27911540a7f7923c851cdbcdb4dd5783a97bb15bbf08fd6",
+    "apps/admin/src/v2/features/auto-registration/apple-mailbox-presentation.ts": "aa6d3ea1d8ea1561c8e67a2d0b986f085421d3e37eb2489e71cda92840b26002",
     "apps/admin/src/v2/features/auto-registration/contracts.ts": "59ba20226589a0615b2337b511fe8422a9915caa13dc072a9608a8d058200cda",
     "apps/admin/src/v2/features/auto-registration/V2AppleMailboxes.vue": "66a9dc4a2b7b37216c9d2b86e4bf0838bfb1f4ed8a9c4961d63548bb2aaf7692",
     "apps/api/src/id-business-v2/auto-registration/apple-mailboxes.types.ts": "0f22eff5cc9ebc9f25d10810527733828ddb375d0ae719a797d0137f1cd87934",

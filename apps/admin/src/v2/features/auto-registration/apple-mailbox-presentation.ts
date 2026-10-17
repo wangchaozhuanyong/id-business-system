@@ -154,13 +154,15 @@ export function appleMailboxDiagnostic(
     existing_account_suspected: '官网提示可能已有账号，等待身份核验'
   };
   const reason = record.reason || record.syncErrorKind;
+  const failure = record.firstFailure;
   const current = [
-    record.stage ? stages[record.stage] || '注册后处理' : '',
+    record.stage && !(failure && record.stage === 'queued')
+      ? stages[record.stage] || '注册后处理'
+      : '',
     reason ? reasons[reason] || '执行结果需核对，请查看任务记录' : ''
   ]
     .filter(Boolean)
     .join(' · ');
-  const failure = record.firstFailure;
   if (!failure) return current;
   const errors = {
     http_rejected: '服务返回失败',
