@@ -437,9 +437,8 @@
   "cleanupDataInRelease": false,
   "configurationSha256": {
     ".env.aws.production": "3f3c22ac671ef185ffc98677ef3a2facce244e476e4583b8e7d16ff1deb00392",
-    "compose.release.json": "07adaeebafde2137615acf00cdc3cfa4c8c3cbe65f3e01622f36c3d94fb3c99a",
-    "docker-compose.aws-mysql.yml": "953c6264f157b00218f2a019d5e2c0b6bc4a34f687f2ec42ad782e0009e7672c",
-    "deploy/caddy/Caddyfile.aws": "f3d253904be6acbe24184b6a317eb3c9ded71636d9622dc9636c196dd7a56674"
+    "compose.release.json": "d6c065cc12805fc8cea92dd661003976ab1a11353d6283fb33bb379178e65362",
+    "docker-compose.aws-mysql.yml": "953c6264f157b00218f2a019d5e2c0b6bc4a34f687f2ec42ad782e0009e7672c"
   },
   "controlSources": {
     ".github/workflows/feature-retirement-validation.yml": "7c5fb7c5f845ef94a9ddd117f5002b8d33bc0f3155c254c1acf6a340e5308c64",
@@ -455,7 +454,7 @@
     "scripts/ci-recharge-check.mjs": "ed8ed9a63e32194efaf4c8a795782ef2a5cbeff3f69bde4c51a276fa86584efc",
     "scripts/ci-recharge-check.test.mjs": "81e284438d1a82a14ddc490c074939ffb051a72bd05ad82705184c2e55128896",
     "scripts/ci-recharge-release.test.mjs": "b01e67c1241b713f73aa99c86808b35430d544f960d86ca9090bb5189a739b86",
-    "scripts/ci-recharge-scope.mjs": "0c60927abb530157bb999c06c3350742966808ee7efcc6484991c0708aa68196",
+    "scripts/ci-recharge-scope.mjs": "2b68c574f87cf790a97fe5cd06de7d8373157d6885d5f1659dfa23df18a4fdfb",
     "scripts/ci-recharge-scope.test.mjs": "9084c480182640a7364b099a8065315bbf38b12a7b5141ca2071bd521fd9e8ad",
     "scripts/container-hardening.test.mjs": "6f98fd539b43d6c2e4cf7d2fc8cac5d1e4f55d452bb8176182efcabe5e36e970",
     "scripts/production-release/admin-pending-online-release.test.py": "794c46ed43096cb2aed198a161e06302c220cd1891535eb346fa5449e5b2e777",
@@ -479,7 +478,7 @@
     "scripts/production-release/remote-deploy.py": "889aedb75bbcb53863a55dc2a4c40a84e06dea1d64d493f6a4fca6dc233f855c",
     "scripts/production-release/remote-deploy.test.py": "5ba677ecd14b1921795486b38eb59aa8329026f8217b0a4a41e493cdcf31241f"
   },
-  "current": "/opt/id-business-v2/releases/20261017T171359Z-3f8f2bb4978e-online-checkout-load",
+  "current": "/opt/id-business-v2/releases/20261017T192542Z-9ccc46461361-online-checkout-load",
   "currentCaddyFileSha256": "f3d253904be6acbe24184b6a317eb3c9ded71636d9622dc9636c196dd7a56674",
   "databaseVerification": {
     "isolatedDatabaseStarted": false,
@@ -494,8 +493,8 @@
     "rpcConnected": true,
     "stopping": false
   },
-  "expectedCurrent": "3f8f2bb4978e3a839c82d2ecc73857449d4b94d3",
-  "manifestSha256": "0a1fcef992330a92576fcb60f7be5216e40b58773f370dbea953f29b21019e8d",
+  "expectedCurrent": "9ccc464613615f95d54f2adf63bd573b80adaa0e",
+  "manifestSha256": "9611fc60765410db0a17130c1636a672709206604eb35617e8ccb56f4d1d48d1",
   "migrationPerformed": false,
   "onlineVolume": "id-business-v2-formal-20261015-online",
   "publicFiles": {
@@ -850,7 +849,7 @@
     "scripts/setup-auto-registration.mjs",
     "scripts/start-auto-registration-local.mjs"
   ],
-  "reviewBase": "3f8f2bb4978e3a839c82d2ecc73857449d4b94d3",
+  "reviewBase": "1ec294fc5f5835d40af16b915e2d83000c4fd084",
   "runtimeConfigurationSha256": {
     "admin": "cfcae9d11ca4f415955b10f3254186f0d8a4c86f45eca9752d15224b7fec701d",
     "api": "a5297a03690cef9ffb8bbfd3084179635a03c8eacb824076f411913e9a15994b",
@@ -927,12 +926,12 @@
       "status": "running"
     },
     "online-recharge": {
-      "containerId": "1ccae3174a5b8fd8f0acfcc9a487a79f07b6ee4c19f86f9993d83c23769560bd",
+      "containerId": "d5ae9ee3ad86dd25f02497f144889975c3678365347ae3930128545ae7e021ee",
       "environmentSha256": "60bb48bbd6e03a4ceebe245c8405f248d0c682a27287aabb17c1d3573e50ad37",
       "health": "healthy",
-      "image": "sha256:27817322703ae5023c67fab8c4b19ffd772ca975d69ad74d4d68701ef30f15c4",
-      "reference": "id-business-v2-online-checkout-load:3f8f2bb4978e3a839c82d2ecc73857449d4b94d3-39052316314",
-      "startedAtSha256": "dfb8ba63e873731683d26933d256ae275fc155aeb7a3f7c0e336ae850180dcaa",
+      "image": "sha256:023fac4c81a678375290de76fafbe9727673fde52ff54965dc37dc608f17c981",
+      "reference": "id-business-v2-online-checkout-load:9ccc464613615f95d54f2adf63bd573b80adaa0e-39062253578",
+      "startedAtSha256": "21e664e6faa9f6005a733827fbd394adbc86cb86b016b16f00ed508df35e7bee",
       "status": "running"
     }
   },
