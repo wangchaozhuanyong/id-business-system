@@ -19,6 +19,7 @@ import {
   type inspectLoggedInPage
 } from './bitbrowser-login-page';
 import type { V2RechargeOwnedBrowserProfile } from '@apple-business/shared';
+import type { VerifiedPaymentBrowser } from './bitbrowser-payment-session';
 import { isV2TotpCodeCurrent } from '@/v2/components/workspace/totp';
 
 import { parseDirectCredential, type DirectLoginCredential } from './bitbrowser-direct-credential';
@@ -31,6 +32,8 @@ export interface DirectLoginHooks {
   restore?: (accountKey: string) => Promise<{ ownedProfile?: V2RechargeOwnedBrowserProfile }>;
   accountKey?: string;
   ownedProfile?: V2RechargeOwnedBrowserProfile;
+  /** Payment execution keeps this verified owned connection until its result is recorded. */
+  ready?: (browser: VerifiedPaymentBrowser) => Promise<Record<string, unknown>>;
 }
 export function isLoginPaymentWrite(method: string, rawUrl: string) {
   // Kept for callers using the existing helper; browser requests are never blocked.
@@ -470,6 +473,7 @@ export async function runDirectLogin(
       const navigation =
         page &&
         /^https:\/\/chatgpt\.com(?:\/|$)/.test(page.url) &&
+        !(hooks.ready && /^https:\/\/chatgpt\.com\/checkout\//.test(page.url)) &&
         !(expected.token && !ownedProfile && attempts === 1)
           ? {}
           : await cdp.command(
@@ -850,6 +854,17 @@ export async function runDirectLogin(
           }
         }
         remaining();
+        if (hooks.ready) {
+          // Login automation's timer must not cancel a later human quote confirmation.
+          clearTimeout(automaticTimer);
+          return await hooks.ready({
+            cdp: activeCdp,
+            sessionId,
+            signal: callerSignal,
+            identity: state,
+            profileId: String(profileId)
+          });
+        }
         return {
           status: 'session_ready',
           stage: 'session_ready',

@@ -118,14 +118,14 @@ def unknown_checkout_recoverable(record):
             'manual_confirmation_accepted', 'upgrade_identifier', 'operation')))
 
 
-async def read_original_native_checkout(page, credential, target_plan):
-    """只读取唯一原窗口当前编号；不刷新页面，不发送正文，不提交订阅。"""
+async def read_recorded_native_checkout(page, credential, target_plan, sid, entity):
+    """从已核实的同源会话后台读取原单；不导航、计税或提交付款。"""
     p = urlsplit(page.url)
-    match = re.fullmatch(r'/checkout/([a-z][a-z0-9_]{0,40})/(oaics_[A-Za-z0-9_]{1,200})/?', p.path)
     if (p.scheme != 'https' or p.hostname != 'chatgpt.com' or p.port not in (None, 443)
-            or p.username or p.password or not match):
+            or p.username or p.password or not isinstance(sid, str)
+            or not re.fullmatch(r'oaics_[A-Za-z0-9_]{1,200}', sid)
+            or not isinstance(entity, str) or not re.fullmatch(r'[a-z][a-z0-9_]{0,40}', entity)):
         raise Stop('existing_checkout_unknown')
-    entity, sid = match.groups()
     # 复用刚刚由官网会话/账户核对取得的凭据，只用于同源原单 GET，绝不写入诊断。
     result = await page.evaluate("""async ({path, token, account}) => {
         const c = new AbortController(), timer = setTimeout(() => c.abort(), 15000);
@@ -140,10 +140,23 @@ async def read_original_native_checkout(page, credential, target_plan):
             'token': credential.token if hasattr(credential, 'token') else credential.old_token,
             'account': credential.account_id})
     session = native_session(result, sid, entity, target_plan)
-    if not session or session.get('status') != 'open' or session.get('payment_status') != 'unpaid':
+    if not session:
         raise Stop('existing_checkout_unverified')
     if page.url != p.geturl():
         raise Stop('checkout_page_identifier_unverified')
+    return session
+
+
+async def read_original_native_checkout(page, credential, target_plan):
+    """只读取唯一原窗口当前编号；不刷新页面，不发送正文，不提交订阅。"""
+    p = urlsplit(page.url)
+    match = re.fullmatch(r'/checkout/([a-z][a-z0-9_]{0,40})/(oaics_[A-Za-z0-9_]{1,200})/?', p.path)
+    if not match:
+        raise Stop('existing_checkout_unknown')
+    entity, sid = match.groups()
+    session = await read_recorded_native_checkout(page, credential, target_plan, sid, entity)
+    if session.get('status') != 'open' or session.get('payment_status') != 'unpaid':
+        raise Stop('existing_checkout_unverified')
     return session
 
 

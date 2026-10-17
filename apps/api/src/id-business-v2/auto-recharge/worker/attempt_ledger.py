@@ -195,7 +195,7 @@ def atomic_json(path: Path, data: dict):
 class AttemptLedger:
     def __init__(self, state_dir: Path, account_id: str, *, retry_rejected=False,
                  replace_unpaid_checkout=False, target_plan="plus", next_cycle_grant=None,
-                 recover_unknown_checkout=False):
+                 recover_unknown_checkout=False, expired_checkout_replacement=None):
         self.root = state_dir
         self.account_id = account_id
         self.target_plan = target_plan
@@ -209,6 +209,7 @@ class AttemptLedger:
         self.record = None
         self.next_cycle_grant = next_cycle_grant
         self.recover_unknown_checkout = recover_unknown_checkout
+        self.expired_checkout_replacement = expired_checkout_replacement
 
     def __enter__(self):
         if self.root.is_symlink():
@@ -243,6 +244,15 @@ class AttemptLedger:
                 allowed_retry = self.retry_rejected and rejected_retry_allowed(self.previous)
                 allowed_replacement = (self.replace_unpaid_checkout
                                        and unpaid_checkout_replacement_allowed(self.previous))
+                if self.expired_checkout_replacement is not None:
+                    from expired_checkout import unattempted_checkout
+                    expected = {'checkout_identifier': self.previous.get('checkout_identifier'),
+                                'processor_entity': self.previous.get('processor_entity'),
+                                'target_plan': self.target_plan, 'account_key': self.key,
+                                'status': 'expired', 'payment_status': 'unpaid'}
+                    if (not allowed_replacement or not unattempted_checkout(self.previous)
+                            or self.expired_checkout_replacement != expected):
+                        raise Stop('existing_checkout_unverified')
                 from subscription_cycle import cycle_resolution_matches
                 allowed_cycle = (self.next_cycle_grant is not None
                                  and cycle_resolution_matches(self.previous, self.next_cycle_grant))
@@ -292,6 +302,8 @@ class AttemptLedger:
                 raise Stop('invalid_subscription_cycle_state')
             record['next_cycle_grant'] = {key: self.next_cycle_grant[key]
                 for key in ('protocol', 'jobId', 'accountKey', 'targetPlan', 'reviewDigest')}
+        if self.expired_checkout_replacement is not None:
+            record['expired_checkout_replacement'] = dict(self.expired_checkout_replacement)
         atomic_json(self.path, record)
         if self.next_cycle_grant is not None:
             self.next_cycle_grant['status'] = 'consumed'

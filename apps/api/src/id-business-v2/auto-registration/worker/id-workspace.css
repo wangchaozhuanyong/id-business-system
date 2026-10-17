@@ -52,11 +52,19 @@ html[data-v2-registration-workspace] .form-row {
   grid-template-columns: minmax(0, 1fr);
 }
 
-/* The original mode toggles use display:block. Keep the added service's
-   visible form groups in the shared left-label layout. */
-html[data-v2-registration-workspace][data-apple-registration='true']
-  .form-group[style*='display: block'] {
+/* Original mode toggles use display:block for every service. */
+html[data-v2-registration-workspace] .form-group[style*='display: block'] {
   display: grid !important;
+}
+
+html[data-v2-registration-workspace] .card-header {
+  flex-wrap: wrap;
+  gap: var(--spacing-sm);
+}
+
+html[data-v2-registration-workspace] .status-badge {
+  flex-shrink: 0;
+  white-space: nowrap;
 }
 
 html[data-v2-registration-workspace] #id-apple-targets {

@@ -88,7 +88,17 @@ describe('持久付款事实与原任务摘要', () => {
     job.result.recheck_only = true;
     expect(projectRechargePaymentRecord(job, record.fileKey, record.document)).toMatchObject({
       payment_attempted: true,
-      confirmation_requests_sent: 1,
+      confirmation_requests_sent: 0,
+      payment_requests_sent: 0
+    });
+    expect(record.document.confirmation_requests_sent).toBe(1);
+    expect(
+      mergeRechargePaymentFacts(
+        { ...job.result, confirmation_requests_sent: 1, payment_requests_sent: 1 },
+        { confirmation_requests_sent: 1, payment_requests_sent: 1 }
+      )
+    ).toMatchObject({
+      confirmation_requests_sent: 0,
       payment_requests_sent: 0
     });
   });

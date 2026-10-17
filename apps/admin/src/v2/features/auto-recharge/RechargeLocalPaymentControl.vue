@@ -22,7 +22,9 @@
       :loading="confirmation.loading.value"
       :disabled="confirmation.busy.value"
       @click="confirmation.readConfirmation"
-      >刷新本机确认状态</AppButton
+      >{{
+        job?.result.transport === 'web_direct' ? '刷新本页确认状态' : '刷新本机确认状态'
+      }}</AppButton
     >
   </section>
 </template>

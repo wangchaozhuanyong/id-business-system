@@ -2,6 +2,7 @@ import { computed, onScopeDispose, ref, watch, type Ref } from 'vue';
 import { sessionCoordinator } from '@/auth/sessionCoordinator';
 import { rechargeApi, rechargeConnectorApi } from './api';
 import type { V2RechargeJob } from './contracts';
+import { directPaymentControls } from './direct-payment-task';
 
 export function useRechargeLocalConfirmation(
   job: Ref<V2RechargeJob | undefined>,
@@ -24,8 +25,30 @@ export function useRechargeLocalConfirmation(
   const eligible = computed(
     () => job.value?.action === 'bitbrowser' && job.value.state === 'awaiting_confirmation'
   );
-  const confirmationEnabled = computed(
-    () =>
+  const confirmationEnabled = computed(() => {
+    if (job.value?.result.transport === 'web_direct') {
+      const control = directPaymentControls.get(job.value.id);
+      return Boolean(
+        !disposed &&
+        identityEpoch === sessionCoordinator.identityEpoch.value &&
+        eligible.value &&
+        control?.pending &&
+        !control.confirming &&
+        control.digest === job.value.result.quote_digest &&
+        Date.parse(control.expiresAt) > Date.now() &&
+        job.value.result.account_matched === true &&
+        job.value.result.quote?.plan === job.value.plan &&
+        ['official_checkout_response', 'official_upgrade_preview'].includes(
+          job.value.result.quote_authority ?? ''
+        ) &&
+        job.value.result.payment_attempted !== true &&
+        Number(job.value.result.payment_requests_sent ?? 0) === 0 &&
+        Number(job.value.result.confirmation_requests_sent ?? 0) === 0 &&
+        Boolean(job.value.result.quote?.today) &&
+        !busy.value
+      );
+    }
+    return (
       eligible.value &&
       job.value?.result.account_matched === true &&
       ['official_checkout_response', 'official_upgrade_preview'].includes(
@@ -41,7 +64,8 @@ export function useRechargeLocalConfirmation(
       !busy.value &&
       !uncertain.value &&
       !sentJobs.has(job.value?.id ?? '')
-  );
+    );
+  });
 
   function clearExpiryTimer() {
     expiryTimerVersion++;
@@ -107,6 +131,13 @@ export function useRechargeLocalConfirmation(
   }
 
   async function readConfirmation() {
+    if (job.value?.result.transport === 'web_direct') {
+      const control = directPaymentControls.get(job.value.id);
+      digest.value = control?.digest ?? '';
+      expiresAt.value = control?.expiresAt ?? '';
+      message.value = control?.message ?? '请在启动本次充值的原网页确认；刷新或关闭后需重新核价。';
+      return;
+    }
     if (
       disposed ||
       !eligible.value ||
@@ -172,6 +203,19 @@ export function useRechargeLocalConfirmation(
   }
 
   async function confirm() {
+    if (job.value?.result.transport === 'web_direct') {
+      const control = directPaymentControls.get(job.value.id);
+      if (!confirmationEnabled.value || !control) return;
+      busy.value = true;
+      try {
+        await control.confirm();
+        message.value = directPaymentControls.get(job.value.id)?.message ?? '';
+      } finally {
+        busy.value = false;
+        refresh();
+      }
+      return;
+    }
     if (!confirmationEnabled.value || !job.value) return;
     if (!(Date.parse(expiresAt.value) > Date.now())) {
       expireConfirmation('本次报价确认已过期，请刷新原任务；本次未重新授权付款。');

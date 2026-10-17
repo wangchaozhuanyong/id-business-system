@@ -132,6 +132,15 @@ export const rechargeApi = {
   abandonUnreceivedBitBrowser(id: string) {
     return request<{ id: string }>(http.post(`${base}/${id}/bitbrowser-unreceived`, {}));
   },
+  confirmDirectPayment(
+    id: string,
+    input: { nonce: string; quoteDigest: string; checkoutIdentifier: string },
+    options: ApiRequestOptions = {}
+  ) {
+    return request<{ id: string; paymentAllowed: true; paymentRecordRevision: number }>(
+      http.post(`${base}/${id}/confirm`, input, { signal: options.signal })
+    );
+  },
   confirmNextCycle(
     id: string,
     input: V2RechargeNextCycleConfirmation,

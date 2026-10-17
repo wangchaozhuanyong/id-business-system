@@ -2,7 +2,8 @@ import { onScopeDispose, watch, type Ref } from 'vue';
 import { V2_RECHARGE_SUBSCRIPTION_CYCLE_CAPABILITY } from '@apple-business/shared';
 import { sessionCoordinator } from '@/auth/sessionCoordinator';
 import { getApiErrorMessage } from '@/api/client';
-import { rechargeApi, rechargeCallbackUrl, rechargeConnectorApi } from './api';
+import { rechargeApi } from './api';
+import { startDirectPayment } from './direct-payment-task';
 import { bankRechargeApi } from './bank-recharge-api';
 import type { DirectLoginCredential } from './bitbrowser-direct-credential';
 import type { ConnectorStatus } from './useRechargeBrowserSettings';
@@ -44,10 +45,12 @@ export function useRechargePaymentStart(context: PaymentStartContext) {
   let disposed = false;
   let pending = false;
   let clearPending: (() => void) | undefined;
+  let activeController: AbortController | undefined;
   watch(
     sessionCoordinator.identityEpoch,
     () => {
       generation++;
+      activeController?.abort();
       clearPending?.();
       clearPending = undefined;
       if (pending) context.busy.value = false;
@@ -57,6 +60,7 @@ export function useRechargePaymentStart(context: PaymentStartContext) {
   );
   onScopeDispose(() => {
     disposed = true;
+    activeController?.abort();
     generation++;
     clearPending?.();
     clearPending = undefined;
@@ -92,6 +96,7 @@ export function useRechargePaymentStart(context: PaymentStartContext) {
     pending = true;
     let launch: V2RechargeBitBrowserLaunch | null = null;
     let dispatched = false;
+    let directOwned = false;
     async function releaseUnreceived() {
       if (!launch) return;
       if (epoch === sessionCoordinator.identityEpoch.value)
@@ -133,8 +138,6 @@ export function useRechargePaymentStart(context: PaymentStartContext) {
       checkConnectionSnapshot();
       const capabilities = await context.checkSavedConnection(current);
       if (!current()) return;
-      if (input.useSavedCredentials && !capabilities.includes('account-auto-login-v1'))
-        throw new Error('请更新本机充值助手后使用账号自动登录');
       checkConnectionSnapshot();
       const paymentCard = await bankRechargeApi.preparePaymentCard({
         number: payment.number,
@@ -150,6 +153,7 @@ export function useRechargePaymentStart(context: PaymentStartContext) {
         capabilities.includes(V2_RECHARGE_SUBSCRIPTION_CYCLE_CAPABILITY);
       launch = await rechargeApi.startBitBrowser({
         ...input,
+        directMode: true,
         id,
         cardId: paymentCard.cardId,
         ...(negotiated ? { subscriptionCycleProtocol: 1 as const } : {})
@@ -161,9 +165,11 @@ export function useRechargePaymentStart(context: PaymentStartContext) {
       checkConnectionSnapshot();
       context.currentId.value = id;
       rememberPaymentSave();
-      context.localAccess.value = {
-        connectorUrl: launch.connectorUrl,
-        connectorToken: launch.connectorToken
+      context.localAccess.value = null;
+      launch.safety = {
+        lockedCurrency: input.lockedCurrency,
+        authorizeSinglePayment: true,
+        manualPaymentConfirmation: true
       };
       if (input.useSavedCredentials && input.chatgptAccountId) {
         const saved =
@@ -176,32 +182,40 @@ export function useRechargePaymentStart(context: PaymentStartContext) {
       }
       checkConnectionSnapshot();
       dispatched = true;
-      await rechargeConnectorApi.start(launch.connectorUrl, launch.connectorToken, {
-        id,
-        mode: launch.mode,
+      activeController = new AbortController();
+      directOwned = true;
+      await startDirectPayment({
+        launch,
         plan: input.plan,
-        windowName: input.windowName,
-        ...resolvedCredential,
-        details: { ...payment },
-        address: launch.address,
-        bitBrowser: launch.bitBrowser,
-        safety: {
-          lockedCurrency: launch.safety.lockedCurrency,
-          authorizeSinglePayment: launch.safety.authorizeSinglePayment,
-          manualPaymentConfirmation: launch.safety.manualPaymentConfirmation
+        credential: resolvedCredential,
+        payment: {
+          ...payment,
+          country: launch.address.country,
+          line1: launch.address.line1,
+          line2: launch.address.line2 ?? '',
+          city: launch.address.city,
+          state: launch.address.state ?? '',
+          postal_code: launch.address.postalCode
         },
-        ...(launch.ownedProfile ? { ownedProfile: launch.ownedProfile } : {}),
-        ...(negotiated && launch.subscriptionCycleProtocol === 1
-          ? { subscriptionCycleProtocol: 1 }
-          : {}),
-        callbackUrl: rechargeCallbackUrl(id),
-        agentToken: launch.agentToken,
-        authorizeSinglePayment: true
+        windowName: input.windowName,
+        accountId: input.chatgptAccountId,
+        signal: activeController.signal,
+        refresh: context.refresh,
+        reportError: (message) => {
+          if (current()) context.error.value = message;
+        }
       });
       if (!current()) return;
       context.connectorStatus.value = 'online';
-      context.connectorMessage.value = '本机连接器已接收任务';
+      context.connectorMessage.value = '网页已直连比特浏览器，充值过程中请保留当前页面';
     } catch (cause) {
+      if (directOwned) {
+        // startDirectPayment rejects only before its first acknowledged progress receipt.
+        // A received task owns its terminal callback and never rejects this handoff.
+        await releaseUnreceived().catch(() => undefined);
+        if (current()) context.error.value = getApiErrorMessage(cause);
+        return;
+      }
       if (!current()) {
         if (launch && !dispatched) await releaseUnreceived().catch(() => undefined);
         return;
@@ -217,32 +231,16 @@ export function useRechargePaymentStart(context: PaymentStartContext) {
           }
           return;
         }
-        try {
-          await rechargeConnectorApi.status(launch.connectorUrl, launch.connectorToken, id);
-          if (!current()) return;
-          context.connectorStatus.value = 'online';
-          context.connectorMessage.value = '本机连接器已接收，本次不会重发';
-          context.error.value = '';
-        } catch {
-          if (!current()) return;
-          try {
-            await rechargeApi.abandonUnreceivedBitBrowser(id);
-            if (!current()) return;
-            context.connectorStatus.value = 'offline';
-            context.connectorMessage.value = '本机连接器未接收';
-            context.error.value = '本机连接器未接收任务，本次已安全结束；卡资料已保留。';
-          } catch {
-            if (!current()) return;
-            context.connectorStatus.value = 'offline';
-            context.connectorMessage.value = '本机连接器接收结果待核验';
-            context.error.value = '本机连接器接收结果不明确，本次不会自动重发。请刷新原任务。';
-          }
-        }
+        context.error.value = '网页充值接收结果待核实，请刷新原任务；本次不会自动重发。';
       } else context.error.value = getApiErrorMessage(cause);
     } finally {
-      clear();
+      if (!directOwned) clear();
+      else {
+        payment.number = '';
+        payment.cvc = '';
+      }
       if (clearPending === clear) clearPending = undefined;
-      if (launch) {
+      if (launch && !directOwned) {
         launch.agentToken = '';
         launch.connectorToken = '';
         launch.bitBrowser.localApiToken = '';

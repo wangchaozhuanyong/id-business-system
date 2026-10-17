@@ -140,7 +140,10 @@ import {
   registrationProtocolRepairControlBase,
   registrationProtocolRepairControlCommands,
   isRegistrationProtocolRepairPreservationOnly,
-  registrationProtocolRepairPreservationBase
+  registrationProtocolRepairPreservationBase,
+  isRegistrationFlowV4Only,
+  registrationFlowV4Base,
+  registrationFlowV4Commands
 } from './ci-recharge-scope.mjs';
 
 const [part, base] = process.argv.slice(2);
@@ -175,6 +178,21 @@ if (
   if (!Object.hasOwn(registrationProtocolRepairControlCommands, part))
     throw new Error('Unsupported registration protocol preflight control repair check part');
   for (const [file, ...args] of registrationProtocolRepairControlCommands[part]) run(file, args);
+  process.exit(0);
+}
+if (
+  mode === 'recharge' &&
+  base === registrationFlowV4Base &&
+  isRegistrationFlowV4Only(changed, {
+    base,
+    baseTree: execFileSync('git', ['rev-parse', base + '^{tree}'], { encoding: 'utf8' }).trim()
+  })
+) {
+  if (!Object.hasOwn(registrationFlowV4Commands, part))
+    throw new Error('Unsupported registration flow v4 check part');
+  if ((part === 'api' || part === 'admin') && process.env.GITHUB_ACTIONS !== 'true')
+    throw new Error('Registration flow v4 candidate checks require isolated CI');
+  for (const [file, ...args] of registrationFlowV4Commands[part]) run(file, args);
   process.exit(0);
 }
 if (
@@ -1656,6 +1674,8 @@ if (releaseArtifactOnly && ['guards', 'release-controls'].includes(part)) {
       'bitbrowser_retry.py',
       'browser_checkout.py',
       'native_checkout.py',
+      'expired_checkout.py',
+      'test_expired_checkout.py',
       'callback_observation.py',
       'pay.py',
       'payment_form.py',
@@ -1711,7 +1731,9 @@ if (releaseArtifactOnly && ['guards', 'release-controls'].includes(part)) {
       'test_fingerprint_runtime',
       'test_password_login',
       'test_subscribe',
-      ...(rechargeFlowRegression ? ['test_native_checkout', 'test_native_pro_checkout'] : []),
+      ...(rechargeFlowRegression
+        ? ['test_native_checkout', 'test_native_pro_checkout', 'test_expired_checkout']
+        : []),
       rechargeFlowRegression ? 'test_payment' : 'test_payment.StateTests',
       ...(rechargeFlowRegression
         ? ['test_callback_observation', 'test_response_settlement', 'test_subscription_cycle']

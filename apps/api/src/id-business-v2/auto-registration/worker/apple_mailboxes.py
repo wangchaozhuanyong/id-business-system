@@ -31,9 +31,11 @@ from sqlalchemy import func, null, text
 from src.services.base import BaseEmailService, EmailServiceFactory, EmailServiceType
 from apple_closed_loop import (BATCH_PREFIX, ClosedLoopFacts, RESULT_FIELDS, SYNC_ERRORS, PUBLIC_FIELDS as CLOSED_LOOP_PUBLIC_FIELDS,
                                resolve_system_proxy, verify_identity)
-from apple_registration_diagnostics import (RegistrationDiagnostics, STAGES, ERROR_KINDS,
+from apple_registration_diagnostics import (EvidenceStorageError, RegistrationDiagnostics, STAGES, ERROR_KINDS,
                                              PUBLIC_FIELDS as DIAGNOSTIC_PUBLIC_FIELDS)
-from flow_evidence import observation, observation_for_version, validate_flow_evidence, validate_observation
+from flow_evidence import (append_attempt, attempt_evidence, configuration_summary, device_cookie_presence,
+                           new_flow_evidence, observation, response_admitted, response_classification,
+                           validate_configuration_summary, validate_flow_evidence, validate_observation)
 
 PUBLIC_FIELDS = CLOSED_LOOP_PUBLIC_FIELDS | DIAGNOSTIC_PUBLIC_FIELDS
 
@@ -402,7 +404,7 @@ class RegistrationFacts(ClosedLoopFacts):
                                            "localSaveStatus": "not_started", "syncStatus": "not_started",
                                            "stage": "queued", "sideEffectPossible": False, "batchId": batch_id,
                                            "startedAt": now_iso(), "schemaVersion": 2,
-                                           "provider": "apple_hidden", **diagnostics})))
+                                           "provider": "apple_hidden", "flowEvidence": new_flow_evidence(), **diagnostics})))
         return self.write(db, record)
 
     def manual_sync_prepare(self, request):
@@ -483,30 +485,45 @@ class RegistrationFacts(ClosedLoopFacts):
                 self.write(db, record)
             row.value = json.dumps(data, ensure_ascii=False)
 
-    def record_flow_evidence(self, task_uuid, slot, evidence):
-        validate_observation(slot, evidence)
+    def record_configuration_summary(self, task_uuid, summary):
+        validate_configuration_summary(summary)
         with self.transaction() as db:
             row, data = self.task_data(db, task_uuid)
             if self.current(db, task_uuid, data) is None:
                 return False
-            flow = data.get("flowEvidence", {"version": 3})
+            flow = data.get("flowEvidence", new_flow_evidence())
             validate_flow_evidence(flow)
-            projected = observation_for_version(slot, evidence, flow["version"])
-            if projected is None:
-                # Historical formats have no Sentinel slot. The live guard
-                # still uses the full observation, never this projection.
+            if flow["version"] < 4:
                 return True
-            if flow["version"] == 1:
-                # Retained/active old tasks keep their existing observations
-                # and format. Only missing stages receive the v1 projection.
-                if slot not in flow:
-                    flow = {**flow, slot: projected}
-            else:
-                flow = {**flow, slot: projected}
+            if flow["configurationSummary"] is None:
+                flow = {**flow, "configurationSummary": {**summary, "proxySource": data.get("proxySource") or summary["proxySource"]}}
+                validate_flow_evidence(flow)
+                data["flowEvidence"] = flow
+                row.value = json.dumps(data, ensure_ascii=False)
+        return True
+
+    def record_flow_evidence(self, task_uuid, slot, evidence, *, outcome="response", response_class="unclassified",
+                             device_cookie_before="not_observed", device_cookie_after="not_observed", observed_transport=False):
+        if type(observed_transport) is not bool:
+            raise ValueError("注册证据来源无效")
+        attempt = attempt_evidence(slot, evidence, outcome=outcome, response_class=response_class,
+                                   device_cookie_before=device_cookie_before, device_cookie_after=device_cookie_after)
+        with self.transaction() as db:
+            row, data = self.task_data(db, task_uuid)
+            record = self.current(db, task_uuid, data)
+            if record is None:
+                return False
+            flow = data.get("flowEvidence", new_flow_evidence())
             validate_flow_evidence(flow)
-            # This is task evidence only. Never advance the mailbox revision,
-            # account identity, first failure or immutable sync payload.
-            data["flowEvidence"] = flow
+            if flow["version"] < 4:
+                # Historical flow records are immutable. Live admission always
+                # uses the fresh v3 observation outside this storage function.
+                return True
+            data["flowEvidence"] = append_attempt(flow, attempt)
+            if observed_transport:
+                status = evidence["httpStatus"] if evidence is not None else None
+                data["lastHttpStatus"] = record["lastHttpStatus"] = status
+                self.write(db, record)
             row.value = json.dumps(data, ensure_ascii=False)
         return True
 
@@ -916,27 +933,97 @@ class AppleMailboxIntegration:
                 time.sleep(min(0.1, max(0, until - time.monotonic())))
         return None
 
+    def observe_flow_request(self, engine, task_uuid, session, slot, original, *args, **kwargs):
+        """Observe one original transport call without changing its arguments."""
+        if getattr(engine, "_apple_evidence_storage_failed", False):
+            raise EvidenceStorageError()
+        diagnostics = getattr(engine, "_apple_diagnostics", None)
+        before = device_cookie_presence(session)
+        evidence, response_class = None, "not_applicable"
+        try:
+            response = (diagnostics.capture(original, *args, **kwargs)
+                        if diagnostics is not None else original(*args, **kwargs))
+        except EvidenceStorageError:
+            raise
+        except Exception:
+            try:
+                if not self.store.record_flow_evidence(task_uuid, slot, None, outcome="network_error",
+                        response_class="not_applicable", device_cookie_before=before,
+                        device_cookie_after=device_cookie_presence(session), observed_transport=True):
+                    raise EvidenceStorageError()
+            except Exception:
+                engine._apple_evidence_storage_failed = True
+                if diagnostics is not None and diagnostics.active is not None:
+                    diagnostics.active["errorKind"] = "evidence_storage_error"
+                try:
+                    self.store.record_flow_evidence(task_uuid, slot, None, outcome="evidence_storage_error",
+                        response_class="not_applicable", device_cookie_before=before,
+                        device_cookie_after=device_cookie_presence(session), observed_transport=True)
+                except Exception:
+                    pass
+                raise EvidenceStorageError() from None
+            raise
+        evidence = observation(response, slot)
+        response_class = response_classification(response, slot, evidence)
+        after = device_cookie_presence(session)
+        try:
+            if not self.store.record_flow_evidence(task_uuid, slot, evidence, response_class=response_class,
+                    device_cookie_before=before, device_cookie_after=after, observed_transport=True):
+                raise EvidenceStorageError(evidence["httpStatus"])
+        except Exception:
+            engine._apple_evidence_storage_failed = True
+            if diagnostics is not None and diagnostics.active is not None:
+                diagnostics.active.update(errorKind="evidence_storage_error", httpStatus=evidence["httpStatus"])
+            try:
+                self.store.record_flow_evidence(task_uuid, slot, evidence, outcome="evidence_storage_error",
+                    response_class=response_class, device_cookie_before=before, device_cookie_after=after, observed_transport=True)
+            except Exception:
+                pass
+            raise EvidenceStorageError(evidence["httpStatus"]) from None
+        return response, evidence, response_class
+
     def guard_session(self, engine, task_uuid, session):
         if getattr(session, "_id_apple_post", False):
             return
         original_post = session.post
         original_get = session.get
+        original_request = getattr(session, "request", None)
         endpoints = importlib.import_module("src.core.register").OPENAI_API_ENDPOINTS
 
+        if callable(original_request):
+            def request(method, url, *args, **kwargs):
+                if getattr(engine, "_apple_evidence_storage_failed", False):
+                    raise EvidenceStorageError()
+                if url != endpoints["sentinel"] or not isinstance(method, str) or method.upper() != "POST":
+                    return original_request(method, url, *args, **kwargs)
+                engine._apple_sentinel_evidence = None
+                engine._apple_sentinel_session = None
+                engine._apple_sentinel_admitted = False
+                response, evidence, classification = self.observe_flow_request(engine, task_uuid, session, "sentinel",
+                                                               original_request, method, url, *args, **kwargs)
+                engine._apple_sentinel_evidence = evidence
+                engine._apple_sentinel_session = session
+                engine._apple_sentinel_admitted = response_admitted(response, "sentinel", evidence, response_class=classification)
+                return response
+
+            session.request = request
+
         def get(url, *args, **kwargs):
+            if getattr(engine, "_apple_evidence_storage_failed", False):
+                raise EvidenceStorageError()
             diagnostics = getattr(engine, "_apple_diagnostics", None)
-            response = (diagnostics.request(original_get, url, *args, **kwargs)
-                        if diagnostics is not None else original_get(url, *args, **kwargs))
             start = getattr(engine, "oauth_start", None)
             if start is not None and url == getattr(start, "auth_url", None):
-                evidence = observation(response, "authorize")
-                if not self.store.record_flow_evidence(task_uuid, "authorize", evidence):
-                    raise ValueError("原任务占用已变化，不能继续授权")
-                if evidence["decision"] != "accepted":
+                response, evidence, classification = self.observe_flow_request(engine, task_uuid, session, "authorize", original_get, url, *args, **kwargs)
+                if not response_admitted(response, "authorize", evidence, response_class=classification):
                     raise ValueError("授权入口响应未通过校验，已停止后续注册")
-            return response
+                return response
+            return (diagnostics.request(original_get, url, *args, **kwargs)
+                    if diagnostics is not None else original_get(url, *args, **kwargs))
 
         def post(url, *args, **kwargs):
+            if getattr(engine, "_apple_evidence_storage_failed", False):
+                raise EvidenceStorageError()
             # Every replacement session keeps the same pre-submission durable
             # guard. Request bodies and response text never enter diagnostics.
             if url == endpoints["register"]:
@@ -957,26 +1044,24 @@ class AppleMailboxIntegration:
                 kwargs["data"] = json.dumps(body)
                 kwargs["headers"] = {**kwargs.get("headers", {}), "referer": "https://auth.openai.com/log-in"}
             diagnostics = getattr(engine, "_apple_diagnostics", None)
-            if diagnostics is not None:
-                response = diagnostics.request(original_post, url, *args, **kwargs)
-            else:
-                response = original_post(url, *args, **kwargs)
             slot = "signup" if url == endpoints["signup"] else "password" if url == endpoints["register"] else None
             if slot is not None:
-                evidence = observation(response, slot)
-                if not self.store.record_flow_evidence(task_uuid, slot, evidence):
-                    raise ValueError("原任务占用已变化，不能继续注册")
+                response, evidence, classification = self.observe_flow_request(engine, task_uuid, session, slot, original_post, url, *args, **kwargs)
                 if slot == "signup":
                     # The wrapper below validates the response before the
                     # original algorithm can enter its password/login branch.
                     engine._apple_signup_evidence = evidence
+                    engine._apple_signup_admitted = response_admitted(response, slot, evidence, response_class=classification)
                 if (evidence.get("reason") == "upstream_error" and diagnostics is not None
                         and diagnostics.active is not None):
                     error_kind = evidence["responseDetails"]["errorKind"]
                     if error_kind in {"account_creation_failed", "user_exists"}:
                         diagnostics.active["errorKind"] = error_kind
-                if slot == "password" and evidence["decision"] != "accepted":
+                if slot == "password" and not response_admitted(response, slot, evidence, response_class=classification):
                     raise ValueError("密码响应未通过校验，已停止验证码和账号创建；请核对原任务")
+            else:
+                response = (diagnostics.request(original_post, url, *args, **kwargs)
+                            if diagnostics is not None else original_post(url, *args, **kwargs))
             if (url == endpoints.get("create_account") and getattr(response, "status_code", None) == 200
                     and not confirms_account_creation(url, response)):
                 # The official side effect may already have happened. Raising
@@ -994,6 +1079,11 @@ class AppleMailboxIntegration:
         task_uuid = context["taskUuid"]
         if hasattr(engine, "oauth_manager") and context.get("email"):
             self.store.configuration_checkpoint(task_uuid, engine.oauth_manager.client_id, engine.proxy_url)
+            try:
+                if not self.store.record_configuration_summary(task_uuid, configuration_summary(engine)):
+                    raise EvidenceStorageError()
+            except Exception:
+                raise EvidenceStorageError() from None
         if context.get("generic"):
             original_email = engine._create_email
 
@@ -1002,6 +1092,11 @@ class AppleMailboxIntegration:
                 if result and not context.get("authorizationOnly"):
                     self.store.bind_provider(task_uuid, context, engine)
                     self.store.configuration_checkpoint(task_uuid, engine.oauth_manager.client_id, engine.proxy_url)
+                    try:
+                        if not self.store.record_configuration_summary(task_uuid, configuration_summary(engine)):
+                            raise EvidenceStorageError()
+                    except Exception:
+                        raise EvidenceStorageError() from None
                 return result
 
             engine._create_email = create_email
@@ -1033,17 +1128,13 @@ class AppleMailboxIntegration:
                 return original_client_post(url, *args, **kwargs)
             engine._apple_sentinel_evidence = None
             engine._apple_sentinel_session = None
+            engine._apple_sentinel_admitted = False
             diagnostics = getattr(engine, "_apple_diagnostics", None)
-            # Frozen HTTPClient.post uses Session.request, not Session.post.
-            # Keep its retries/config intact and observe its final response.
-            response = (diagnostics.request(original_client_post, url, *args, **kwargs)
-                        if diagnostics is not None else original_client_post(url, *args, **kwargs))
-            evidence = observation(response, "sentinel")
-            if not self.store.record_flow_evidence(task_uuid, "sentinel", evidence):
-                raise ValueError("原任务占用已变化，不能继续前置校验")
-            engine._apple_sentinel_evidence = evidence
-            engine._apple_sentinel_session = engine.http_client.session
-            return response
+            # Force the existing observer to guard this exact session before
+            # frozen HTTPClient.request makes any of its physical attempts.
+            engine.http_client.session
+            return (diagnostics.capture(original_client_post, url, *args, **kwargs)
+                    if diagnostics is not None else original_client_post(url, *args, **kwargs))
 
         engine.http_client.post = client_post
         original_signup, original_send = engine._submit_signup_form, engine._send_verification_code
@@ -1057,9 +1148,11 @@ class AppleMailboxIntegration:
                 # Enforce this decision outside that catch, on the same session.
                 engine._apple_sentinel_evidence = None
                 engine._apple_sentinel_session = None
+                engine._apple_sentinel_admitted = False
                 result = original_sentinel(*args, **kwargs)
                 evidence = engine._apple_sentinel_evidence
                 if (not isinstance(evidence, dict) or evidence.get("decision") != "accepted"
+                        or not getattr(engine, "_apple_sentinel_admitted", False)
                         or engine._apple_sentinel_session is not engine.session
                         or not isinstance(result, str) or not result.strip()):
                     raise ValueError("官网前置安全校验未通过，已停止提交邮箱和密码；请查看任务诊断")
@@ -1070,15 +1163,18 @@ class AppleMailboxIntegration:
         def signup(*args, **kwargs):
             evidence = getattr(engine, "_apple_sentinel_evidence", None)
             if (not isinstance(evidence, dict) or evidence.get("decision") != "accepted"
+                    or not getattr(engine, "_apple_sentinel_admitted", False)
                     or getattr(engine, "_apple_sentinel_session", None) is not engine.session):
                 raise ValueError("官网前置安全校验未通过，不能提交邮箱或密码")
             provider.otp_lower_bound = time.time()
             if not self.store.update_task(task_uuid, stage="signup"):
                 raise ValueError("邮箱占用已变化，不能继续注册")
             engine._apple_signup_evidence = None
+            engine._apple_signup_admitted = False
             result = original_signup(*args, **kwargs)
             evidence = engine._apple_signup_evidence
             if (result.success and (not isinstance(evidence, dict) or evidence.get("decision") != "accepted"
+                    or not getattr(engine, "_apple_signup_admitted", False)
                     or evidence.get("pageKind") != ("existing_account" if result.is_existing_account else "new_account")
                     or result.page_type != ("email_otp_verification" if result.is_existing_account else "password"))):
                 result.success = False

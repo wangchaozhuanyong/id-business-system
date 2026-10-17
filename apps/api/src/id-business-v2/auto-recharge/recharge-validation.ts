@@ -7,6 +7,7 @@ import {
 } from '@apple-business/shared';
 import { createHash, createHmac, timingSafeEqual } from 'node:crypto';
 import { hasOfficialRechargeQuote } from './recharge-upgrade-protocol';
+import { expiredCheckoutProof } from './recharge-expired-checkout';
 
 export const uuidPattern = /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/;
 export const hash = (value: string) => createHash('sha256').update(value).digest('hex');
@@ -312,7 +313,7 @@ export function assertFinalQuote(
 
 // 不保存任意服务端正文；只有执行协议中的已脱敏字段能够进入数据库。
 const scalarKeys = new Set(
-  'login_code_type login_challenge_id status reason stage session_status account_matched current_plan current_tier target_plan recheck_plan checkout_status checkout_identifier subscription_status inspection_only recheck_only payment_status payment_outcome payment_attempted payment_failure_reason confirmation_requests_sent checkout_requests_sent payment_requests_sent payment_requests_blocked repeated_payment http_status browser_error_code card_last4 checkout_outcome payment_record_write_failed last_reason updated_at schema_version run_id created_at plan current_plan_before retry_of transport returned_currency processor_entity credential_refreshed checkout_link_available error_type browser_profile_id locked_currency user_action_required stale_cleanup_job_id checkout_replacement_performed'.split(
+  'login_code_type login_challenge_id status reason stage session_status account_matched current_plan current_tier target_plan recheck_plan checkout_status checkout_identifier subscription_status inspection_only recheck_only payment_status payment_outcome payment_attempted payment_failure_reason confirmation_requests_sent checkout_requests_sent payment_requests_sent payment_requests_blocked card_tokenization_requests_sent repeated_payment http_status browser_error_code card_last4 checkout_outcome payment_record_write_failed last_reason updated_at schema_version run_id created_at plan current_plan_before retry_of transport returned_currency processor_entity credential_refreshed checkout_link_available error_type browser_profile_id locked_currency user_action_required stale_cleanup_job_id checkout_replacement_performed'.split(
     ' '
   )
 );
@@ -611,7 +612,8 @@ export function safeDocument(value: unknown): Record<string, unknown> {
   for (const [key, pattern] of [
     ['upgrade_identifier', /^upg_[a-f0-9]{32}$/],
     ['upgrade_invoice_identifier', /^in_[A-Za-z0-9]{1,180}$/],
-    ['upgrade_payment_intent_identifier', /^pi_[A-Za-z0-9]{1,180}$/]
+    ['upgrade_payment_intent_identifier', /^pi_[A-Za-z0-9]{1,180}$/],
+    ['payment_intent_identifier', /^pi_[A-Za-z0-9]{1,180}$/]
   ] as const) {
     if (typeof input[key] === 'string' && pattern.test(input[key])) result[key] = input[key];
   }
@@ -654,7 +656,9 @@ export function safeDocument(value: unknown): Record<string, unknown> {
       clean.available_plans = V2_RECHARGE_PLANS.filter((plan) => availablePlans.includes(plan));
     result.diagnostics = clean;
   }
-  for (const key of ['account_key', 'quote_digest']) {
+  if (input.expired_checkout_replacement !== undefined)
+    result.expired_checkout_replacement = expiredCheckoutProof(input.expired_checkout_replacement);
+  for (const key of ['account_key', 'quote_digest', 'billing_fingerprint']) {
     if (typeof input[key] === 'string' && /^[a-f0-9]{64}$/.test(input[key]))
       result[key] = input[key];
   }

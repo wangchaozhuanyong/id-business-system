@@ -159,7 +159,27 @@
         this.readyState = 1;
         this.onopen?.({});
       });
-      this.events.onmessage = (event) => this.onmessage?.({ data: JSON.parse(event.data) });
+      this.events.onmessage = (event) => {
+        const raw = JSON.parse(event.data);
+        let message = raw;
+        if (typeof raw === 'string') {
+          try {
+            message = JSON.parse(raw);
+          } catch {
+            /* Preserve the upstream frame. */
+          }
+        }
+        if (message?.type === 'status') {
+          const notice = new CustomEvent('id-registration:task-progress', {
+            cancelable: true,
+            detail: { path: this.path, status: message.status }
+          });
+          const forward = window.dispatchEvent(notice);
+          // Upstream treats cancelling as terminal; only a final task readback may close the task.
+          if (!forward || message.status === 'cancelling') return;
+        }
+        this.onmessage?.({ data: raw });
+      };
       this.events.onerror = (event) => {
         this.events.close();
         this.readyState = 3;
@@ -210,12 +230,143 @@
       typeof value !== 'object' ||
       Array.isArray(value) ||
       !('version' in value) ||
-      (value.version !== 1 && value.version !== 2 && value.version !== 3)
+      (value.version !== 1 && value.version !== 2 && value.version !== 3 && value.version !== 4)
     )
       return [];
     const evidence = value;
     const label = (labels, item, fallback) =>
       typeof item === 'string' && Object.hasOwn(labels, item) ? labels[item] : fallback;
+
+    if (evidence.version === 4) {
+      const rows = [];
+      const summary = evidence.configurationSummary;
+      const config =
+        summary && typeof summary === 'object' && !Array.isArray(summary) ? summary : {};
+      const matches = (item) =>
+        item === true ? '与原版一致' : item === false ? '与原版不同' : '未记录';
+      rows.push({
+        stage: 'configuration',
+        title: '本次配置核对',
+        status: '仅显示核对结果，不显示配置值',
+        detail: [
+          `客户端标识：${matches(config.clientIdMatchesFrozenDefault)}`,
+          `授权入口：${matches(config.authUrlMatchesFrozenDefault)}`,
+          `授权凭据入口：${matches(config.tokenUrlMatchesFrozenDefault)}`,
+          `回调地址：${matches(config.redirectUriMatchesFrozenDefault)}`,
+          `授权范围：${matches(config.scopeMatchesFrozenDefault)}`,
+          config.proxyPresent === true
+            ? '注册代理：已配置'
+            : config.proxyPresent === false
+              ? '注册代理：未配置'
+              : '注册代理：未记录',
+          label(
+            {
+              default: '代理来源：系统默认',
+              system: '代理来源：代理目录',
+              explicit: '代理来源：手工配置',
+              not_recorded: '代理来源：未记录'
+            },
+            config.proxySource,
+            '代理来源：待核对'
+          )
+        ].join(' · ')
+      });
+      const attempts = Array.isArray(evidence.attempts) ? evidence.attempts.slice(-32) : [];
+      if (
+        evidence.attemptsTruncated === true ||
+        (Array.isArray(evidence.attempts) && evidence.attempts.length > 32)
+      )
+        rows.push({
+          stage: 'truncated',
+          title: '较早请求已省略',
+          status: '仅保留最近 32 次请求',
+          detail: '以下保留原请求序号；首次失败仍以上方任务记录为准。'
+        });
+      for (const [index, candidate] of attempts.entries()) {
+        const attempt =
+          candidate && typeof candidate === 'object' && !Array.isArray(candidate) ? candidate : {};
+        const stage =
+          typeof attempt.stage === 'string' &&
+          ['authorize', 'sentinel', 'signup', 'password'].includes(attempt.stage)
+            ? attempt.stage
+            : '';
+        const sequence =
+          Number.isSafeInteger(attempt.sequence) && attempt.sequence > 0
+            ? `第 ${attempt.sequence} 次`
+            : '请求序号待核对';
+        const observation =
+          attempt.outcome === 'response' && stage
+            ? registrationFlowEvidenceRows({ version: 3, [stage]: attempt.observation }).find(
+                (row) => row.stage === stage
+              )
+            : null;
+        const presence = (item) =>
+          label({ present: '存在', absent: '不存在', not_observed: '未检查' }, item, '待核对');
+        rows.push({
+          stage: 'attempt-' + index,
+          title:
+            sequence +
+            ' · ' +
+            label(
+              {
+                authorize: '授权入口',
+                sentinel: '注册前置校验',
+                signup: '提交注册邮箱',
+                password: '提交注册密码'
+              },
+              stage,
+              '请求阶段待核对'
+            ),
+          status:
+            attempt.outcome === 'response'
+              ? attempt.responseClass === 'verification_required' ||
+                attempt.responseClass === 'structured_rejection' ||
+                attempt.responseClass === 'rate_limited'
+                ? '已停止，等待核对'
+                : attempt.responseClass === 'unclassified'
+                  ? observation?.status || '响应待核对'
+                  : '响应判断待核对'
+              : label(
+                  { network_error: '网络请求失败', evidence_storage_error: '流程证据保存失败' },
+                  attempt.outcome,
+                  '执行结果待核对'
+                ),
+          detail: [
+            attempt.outcome === 'response'
+              ? observation?.detail || '未取得可核对的响应证据'
+              : label(
+                  {
+                    network_error: '本次未取得响应，不能沿用上一次响应判断结果',
+                    evidence_storage_error: '本次流程证据未能保存，执行已停止'
+                  },
+                  attempt.outcome,
+                  '本次执行资料待核对'
+                ),
+            label(
+              {
+                verification_required: '响应判断：官网要求额外验证',
+                structured_rejection: '响应判断：官网明确拒绝',
+                rate_limited: '响应判断：请求受到限制',
+                unclassified: '响应判断：尚未归类',
+                not_applicable: '响应判断：无响应可供判断'
+              },
+              attempt.responseClass,
+              '响应判断：待核对'
+            ),
+            `设备标记：请求前${presence(attempt.deviceCookieBefore)}，请求后${presence(attempt.deviceCookieAfter)}`
+          ].join(' · ')
+        });
+      }
+      if (!attempts.length)
+        rows.push({
+          stage: 'attempts-empty',
+          title: '请求过程尚未记录',
+          status: '暂无请求观察',
+          detail: '请以上方实际失败步骤为准，不推断已进入授权入口或提交密码。'
+        });
+      return rows;
+    }
+
     return [
       ['authorize', '授权入口'],
       ...(evidence.version === 3 ? [['sentinel', '注册前置校验']] : []),
@@ -419,6 +570,13 @@
     let progressGeneration = 0;
     let disposed = false;
     let optionsReady = false;
+    let fieldEnter = false;
+    let enterTimer;
+    let genericCancellation = null;
+    let genericTimer;
+    let genericGeneration = 0;
+    let genericEvidenceGeneration = 0;
+    let genericEvidenceRequest = 0;
     const group = document.createElement('div');
     group.id = 'id-apple-console';
     group.hidden = true;
@@ -449,7 +607,8 @@
         if (!rows.length) continue;
         const title = document.createElement('strong');
         title.textContent =
-          tasks.length > 1 ? '注册流程观察 · 任务 ' + (index + 1) : '注册流程观察';
+          (task.flowEvidence?.version === 4 ? '注册请求过程与配置核对' : '注册流程观察') +
+          (tasks.length > 1 ? ' · 任务 ' + (index + 1) : '');
         flowPanel.appendChild(title);
         const note = document.createElement('p');
         note.textContent =
@@ -510,6 +669,10 @@
         if (optionsReady && available === 0)
           hint.textContent = '没有可注册的未注册邮箱，请添加邮箱或核对状态；不会改用其他邮箱服务。';
         cancel.disabled = !active || active.uncertain === true;
+      }
+      if (genericCancellation) {
+        start.disabled = true;
+        cancel.disabled = genericCancellation.accepted || genericCancellation.submitting;
       }
     }
     async function loadOptions() {
@@ -617,6 +780,268 @@
       failed: '账号同步失败',
       conflict: '账号冲突，等待核对'
     };
+    function logTaskFailure(task) {
+      const failure = task.record?.firstFailure;
+      if (failure) {
+        const stages = {
+          queued: '注册初始化',
+          ip_check: '注册出口检查',
+          mailbox: '准备注册邮箱',
+          initialization: '注册初始化',
+          authorize: '授权入口',
+          sentinel: '注册前置校验',
+          signup: '提交注册表单',
+          password: '注册密码提交',
+          verification_code: '邮箱验证码',
+          verification_validate: '验证邮箱验证码',
+          create_account: '创建官网账号',
+          workspace: '读取账号工作区',
+          select_workspace: '选择账号工作区',
+          redirect: '授权跳转',
+          oauth: '注册后授权',
+          identity: '账号身份核验',
+          account_save: '自动注册账号保存',
+          sync: 'ChatGPT 账号同步'
+        };
+        const errors = {
+          http_rejected: '服务返回失败',
+          network_error: '网络请求异常',
+          evidence_storage_error: '流程证据保存失败',
+          unknown: '执行结果待核对',
+          account_creation_failed: '官网返回账号创建失败',
+          user_exists: '官网提示已有账号，需核验身份'
+        };
+        const status = Number.isInteger(failure.httpStatus)
+          ? `响应状态 ${failure.httpStatus}`
+          : '未取得响应状态';
+        const elapsed =
+          Number.isSafeInteger(failure.elapsedMs) && failure.elapsedMs >= 0
+            ? ` · 耗时 ${failure.elapsedMs / 1000} 秒`
+            : '';
+        log(
+          `首次失败：${stages[failure.stage] || '执行步骤待核对'} · ${errors[failure.errorKind] || '执行结果待核对'} · ${status}${elapsed}`,
+          'error'
+        );
+      }
+    }
+    function genericTaskState() {
+      try {
+        const stored = JSON.parse(storage.get('activeTask') || 'null');
+        if (!stored || !['single', 'batch', 'outlook_batch'].includes(stored.mode)) return null;
+        const id = stored.mode === 'single' ? stored.task_uuid : stored.batch_id;
+        if (typeof id !== 'string' || !/^[a-zA-Z0-9_-]{1,100}$/.test(id)) return null;
+        return {
+          ...stored,
+          id,
+          endpoint:
+            stored.mode === 'single'
+              ? '/api/registration/tasks/' + id
+              : '/api/registration/' +
+                (stored.mode === 'outlook_batch' ? 'outlook-batch/' : 'batch/') +
+                id
+        };
+      } catch {
+        return null;
+      }
+    }
+    function showCancellationPending() {
+      for (const id of ['task-status', 'task-status-badge']) {
+        const node = document.getElementById(id);
+        if (node)
+          node.textContent =
+            id === 'task-status-badge' ? '等待停止' : '取消请求已受理，等待任务停止';
+      }
+      start.disabled = true;
+      cancel.disabled = true;
+    }
+    function refreshGenericEvidence(state) {
+      if (state.mode !== 'single') return;
+      const generation = genericEvidenceGeneration;
+      const request = ++genericEvidenceRequest;
+      void appleRequest('task', { taskUuid: state.id })
+        .then((task) => {
+          const current = genericTaskState();
+          if (
+            disposed ||
+            generation !== genericEvidenceGeneration ||
+            request !== genericEvidenceRequest ||
+            (current && current.id !== state.id) ||
+            task?.taskUuid !== state.id
+          )
+            return;
+          renderFlowEvidence([task]);
+          logTaskFailure(task);
+        })
+        .catch(() => {
+          // Unbound or unavailable facts cannot replace the original task's actual terminal status.
+        });
+    }
+    async function pollGenericCancellation() {
+      if (disposed || !genericCancellation) return;
+      clearTimeout(genericTimer);
+      const snapshot = genericCancellation;
+      const generation = ++genericGeneration;
+      try {
+        const response = await window.fetch(snapshot.endpoint);
+        if (!response.ok) throw new Error('task readback failed');
+        const data = await response.json();
+        if (disposed || genericCancellation !== snapshot || generation !== genericGeneration)
+          return;
+        const status = Object.hasOwn(taskLabels, data.status) ? data.status : null;
+        const final = status && !['pending', 'running'].includes(status);
+        refreshGenericEvidence(snapshot);
+        const finishedBatch = snapshot.mode !== 'single' && data.finished === true;
+        if (final || finishedBatch) {
+          genericCancellation = null;
+          genericGeneration++;
+          if (typeof window.resetButtons === 'function') window.resetButtons();
+          else {
+            start.disabled = false;
+            cancel.disabled = true;
+            memoryStorage.removeItem('activeTask');
+          }
+          if (
+            final &&
+            ['completed', 'failed', 'cancelled'].includes(status) &&
+            typeof window.updateTaskStatus === 'function'
+          )
+            window.updateTaskStatus(status);
+          for (const id of ['task-status', 'task-status-badge']) {
+            const node = document.getElementById(id);
+            if (node)
+              node.textContent =
+                id === 'task-status-badge'
+                  ? final
+                    ? {
+                        completed: '已结束',
+                        failed: '失败',
+                        cancelled: '已取消',
+                        interrupted: '待核对',
+                        awaiting_review: '待核对'
+                      }[status]
+                    : '待核对'
+                  : final
+                    ? taskLabels[status]
+                    : '批量任务已结束，取消结果需核对';
+          }
+          log(`任务实际结果：${final ? taskLabels[status] : '批量任务已结束，取消结果需核对'}`);
+          if (typeof window.loadRecentAccounts === 'function') void window.loadRecentAccounts();
+          return;
+        }
+        // A batch's finished flag without a controlled terminal status never claims cancellation.
+        if (snapshot.accepted) showCancellationPending();
+        else {
+          start.disabled = true;
+          cancel.disabled = snapshot.submitting === true;
+        }
+      } catch {
+        if (disposed || genericCancellation !== snapshot || generation !== genericGeneration)
+          return;
+        error.textContent = '任务状态尚未核对，不能确认已取消；正在继续读取原任务。';
+        log(error.textContent, 'error');
+        start.disabled = true;
+      }
+      if (!disposed && genericCancellation === snapshot)
+        genericTimer = setTimeout(pollGenericCancellation, 2500);
+    }
+    async function cancelGenericTask(state) {
+      if (genericCancellation?.accepted || genericCancellation?.submitting) return;
+      const snapshot = { ...state, submitting: true, accepted: false };
+      genericCancellation = snapshot;
+      if (typeof window.stopLogPolling === 'function') window.stopLogPolling();
+      if (typeof window.stopBatchPolling === 'function') window.stopBatchPolling();
+      start.disabled = true;
+      cancel.disabled = true;
+      error.textContent = '';
+      try {
+        const response = await window.fetch(state.endpoint + '/cancel', { method: 'POST' });
+        if (!response.ok) throw new Error('cancel not acknowledged');
+        if (disposed || genericCancellation !== snapshot) return;
+        snapshot.accepted = true;
+        memoryStorage.setItem(
+          'activeTask',
+          JSON.stringify({ ...state, cancellationRequested: true })
+        );
+        log('取消请求已受理，等待原任务停止；尚未确认已取消。');
+        showCancellationPending();
+      } catch {
+        if (disposed || genericCancellation !== snapshot) return;
+        error.textContent = '取消请求未确认，正在核对原任务；请勿重新注册。';
+        log(error.textContent, 'error');
+        cancel.disabled = false;
+      } finally {
+        snapshot.submitting = false;
+      }
+      if (!disposed && genericCancellation === snapshot) void pollGenericCancellation();
+    }
+    window.addEventListener('id-registration:task-progress', (event) => {
+      const state = genericCancellation || genericTaskState();
+      if (!state || active) return;
+      const expected = state.mode === 'single' ? '/api/ws/task/' : '/api/ws/batch/';
+      if (event.detail?.path !== expected + state.id) return;
+      if (event.detail.status === 'cancelling' && !genericCancellation) {
+        genericCancellation = { ...state, accepted: true };
+        showCancellationPending();
+      }
+      if (genericCancellation) {
+        event.preventDefault();
+        void pollGenericCancellation();
+      } else if (
+        state.mode === 'single' &&
+        [
+          'pending',
+          'running',
+          'completed',
+          'failed',
+          'cancelled',
+          'interrupted',
+          'awaiting_review'
+        ].includes(event.detail.status)
+      ) {
+        refreshGenericEvidence(state);
+      }
+    });
+    form.addEventListener(
+      'keydown',
+      (event) => {
+        if (event.key !== 'Enter' || event.isComposing) return;
+        if (event.target === start) {
+          fieldEnter = false;
+          clearTimeout(enterTimer);
+          return;
+        }
+        if (event.target?.closest?.('textarea,[contenteditable="true"]')) return;
+        fieldEnter = true;
+        clearTimeout(enterTimer);
+        enterTimer = setTimeout(() => {
+          fieldEnter = false;
+        }, 0);
+      },
+      true
+    );
+    start.addEventListener(
+      'click',
+      (event) => {
+        if (event.detail > 0 || document.activeElement === start) {
+          fieldEnter = false;
+          clearTimeout(enterTimer);
+        }
+      },
+      true
+    );
+    form.addEventListener(
+      'submit',
+      (event) => {
+        if (fieldEnter || event.submitter !== start || genericCancellation || active) {
+          event.preventDefault();
+          event.stopImmediatePropagation();
+        } else if (!selected()) {
+          genericEvidenceGeneration++;
+          renderFlowEvidence([]);
+        }
+      },
+      true
+    );
     async function poll() {
       if (disposed || !active || active.uncertain) return;
       clearTimeout(progressTimer);
@@ -657,43 +1082,7 @@
           log(
             `${taskLabels[task.status] || '等待核对'}${syncStatus ? ` · ${syncLabels[syncStatus] || '同步状态待核对'}` : ''}`
           );
-          const failure = task.record?.firstFailure;
-          if (failure) {
-            const stages = {
-              queued: '注册初始化',
-              sentinel: '注册前置校验',
-              signup: '提交注册表单',
-              password: '注册密码提交',
-              verification_code: '邮箱验证码',
-              verification_validate: '验证邮箱验证码',
-              create_account: '创建官网账号',
-              workspace: '读取账号工作区',
-              select_workspace: '选择账号工作区',
-              redirect: '授权跳转',
-              oauth: '注册后授权',
-              identity: '账号身份核验',
-              account_save: '自动注册账号保存',
-              sync: 'ChatGPT 账号同步'
-            };
-            const errors = {
-              http_rejected: '服务返回失败',
-              network_error: '网络请求异常',
-              unknown: '执行结果待核对',
-              account_creation_failed: '官网返回账号创建失败',
-              user_exists: '官网提示已有账号，需核验身份'
-            };
-            const status = Number.isInteger(failure.httpStatus)
-              ? `响应状态 ${failure.httpStatus}`
-              : '未取得响应状态';
-            const elapsed =
-              Number.isSafeInteger(failure.elapsedMs) && failure.elapsedMs >= 0
-                ? ` · 耗时 ${failure.elapsedMs / 1000} 秒`
-                : '';
-            log(
-              `首次失败：${stages[failure.stage] || '执行步骤待核对'} · ${errors[failure.errorKind] || '执行结果待核对'} · ${status}${elapsed}`,
-              'error'
-            );
-          }
+          logTaskFailure(task);
           if (!active.batchId && typeof window.updateTaskStatus === 'function') {
             if (['interrupted', 'awaiting_review'].includes(task.status)) {
               document.getElementById('task-status').textContent = taskLabels[task.status];
@@ -826,7 +1215,14 @@
     cancel.addEventListener(
       'click',
       async (event) => {
-        if (!active) return;
+        if (!active) {
+          const state = genericCancellation || genericTaskState();
+          if (!state) return;
+          event.preventDefault();
+          event.stopImmediatePropagation();
+          void cancelGenericTask(state);
+          return;
+        }
         event.preventDefault();
         event.stopImmediatePropagation();
         if (active.uncertain) return;
@@ -858,6 +1254,7 @@
     refresh.addEventListener('click', () => {
       void loadOptions();
       if (active) void poll();
+      if (genericCancellation) void pollGenericCancellation();
     });
     window.addEventListener('pagehide', () => {
       disposed = true;
@@ -865,6 +1262,10 @@
       generation++;
       progressGeneration++;
       clearTimeout(progressTimer);
+      genericGeneration++;
+      genericEvidenceGeneration++;
+      clearTimeout(genericTimer);
+      clearTimeout(enterTimer);
     });
     window.addEventListener('message', (event) => {
       if (
@@ -888,6 +1289,12 @@
       }
       updateAvailability();
       if (selected() && !optionsReady) void loadOptions();
+      const generic = genericTaskState();
+      if (!active && !genericCancellation && generic?.cancellationRequested) {
+        genericCancellation = { ...generic, accepted: true };
+        showCancellationPending();
+        void pollGenericCancellation();
+      }
     });
     updateAvailability();
   }

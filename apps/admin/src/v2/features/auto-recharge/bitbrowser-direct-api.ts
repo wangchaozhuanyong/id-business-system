@@ -4,6 +4,8 @@ import type { V2RechargeBitBrowserOpenLaunch, V2RechargeBrowserCatalog } from '.
 
 export type DirectBrowserSettings = V2RechargeBitBrowserOpenLaunch['bitBrowser'];
 const messages = {
+  bitbrowser_secure_context_required:
+    '请通过 HTTPS 安全地址打开管理网站，再连接比特浏览器；当前 HTTP 公网地址无法执行网页直连。',
   bitbrowser_direct_unreachable:
     '网页无法访问比特浏览器。请启动比特浏览器、开启本地接口，并允许当前网站访问本机网络。',
   bitbrowser_direct_token_invalid:
@@ -207,6 +209,8 @@ export function localBrowserUrl(value: string, websocket = false) {
   return websocket ? url.href : url.origin;
 }
 export function directBrowserApi(url: string, token: string, signal: AbortSignal) {
+  if (globalThis.isSecureContext === false)
+    throw new DirectBrowserError('bitbrowser_secure_context_required');
   const origin = localBrowserUrl(url);
   async function post(
     path: string,

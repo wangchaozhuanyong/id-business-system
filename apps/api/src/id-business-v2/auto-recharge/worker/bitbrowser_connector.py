@@ -584,6 +584,7 @@ class LocalJob:
         self.stale_profiles = []
         self.stale_profiles_cleaned = 0
         self.checkout_replacement_performed = False
+        self.expired_checkout_replacement_authorized = False
         self.original_checkout_identifier = None
         self.unidentified_checkout_recovery = False
         self.next_cycle_context = None
@@ -715,6 +716,24 @@ class LocalJob:
             raise Stop("operation_cancelled")
         if not completed:
             raise Stop(reason, user_action_required=True, wait_expired=True)
+
+    async def authorize_expired_checkout(self, proof):
+        self.check_cancelled()
+        if (self.payload.get('mode') != 'payment' or self.payment_request_sent
+                or self.confirmation_consumed or self.unidentified_checkout_recovery
+                or self.checkout_replacement_performed or self.expired_checkout_replacement_authorized):
+            raise Stop('existing_checkout_unverified')
+        self.progress('subscription_check', account_matched=True, current_plan='free',
+                      checkout_identifier=proof['checkout_identifier'])
+        result = await asyncio.to_thread(self.callback.send, {
+            'type': 'replace_expired_checkout', 'accountKey': self.account_key,
+            'checkoutIdentifier': proof['checkout_identifier'], 'proof': proof,
+        })
+        self.check_cancelled()
+        if (result.get('ok') is not True or result.get('replacementAuthorized') is not True
+                or result.get('checkoutIdentifier') != proof['checkout_identifier']):
+            raise Stop('durable_state_unavailable')
+        self.expired_checkout_replacement_authorized = True
 
     def persist(self, path, document):
         name = str(path.relative_to(self.root))

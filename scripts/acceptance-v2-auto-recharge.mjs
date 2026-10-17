@@ -1,42 +1,53 @@
 /* global document, window, getComputedStyle */
 // Synthetic fixtures only. Every business/connector/BitBrowser request is intercepted.
 import assert from 'node:assert/strict';
-import { spawn } from 'node:child_process';
-import { mkdirSync, writeFileSync } from 'node:fs';
-import { resolve } from 'node:path';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { resolve, extname, sep } from 'node:path';
+import { createHash } from 'node:crypto';
+import { V2_RECHARGE_BROWSER_DEFAULTS } from '@apple-business/shared';
 import { chromium } from 'playwright';
-import { resolveViteCli } from './lib/vite-cli.mjs';
 
-const port = Number(
-  process.argv.find((arg) => arg.startsWith('--port='))?.slice('--port='.length) ?? '5397'
+const origin = 'https://recharge-acceptance.example.invalid';
+const localApi = 'http://127.0.0.1:54345';
+const debugEndpoint = 'ws://127.0.0.1:54346/devtools/browser/synthetic';
+const adminDirectory = resolve(
+  process.argv.find((arg) => arg.startsWith('--admin-dir='))?.slice(12) ?? 'apps/admin'
 );
-assert.ok(Number.isInteger(port) && port > 0 && port <= 65535, '验收端口必须有效');
-const origin = `http://127.0.0.1:${port}`,
-  connector = 'http://127.0.0.1:55322';
 const evidence = resolve(
-  process.argv.find((arg) => arg.startsWith('--evidence-dir='))?.slice('--evidence-dir='.length) ??
+  process.argv.find((arg) => arg.startsWith('--evidence-dir='))?.slice(15) ??
     '.runtime/bitbrowser-recharge-rebuild-20261009/browser'
 );
 mkdirSync(evidence, { recursive: true });
-const server = spawn(
-  process.execPath,
-  [
-    resolveViteCli(),
-    ...(process.argv.includes('--built') ? ['preview'] : []),
-    '--host',
-    '127.0.0.1',
-    '--port',
-    String(port),
-    '--strictPort'
-  ],
-  {
-    cwd: resolve(
-      process.argv.find((arg) => arg.startsWith('--admin-dir='))?.slice('--admin-dir='.length) ??
-        'apps/admin'
-    ),
-    stdio: 'ignore'
-  }
-);
+let assets = resolve(adminDirectory, 'dist');
+if (!process.argv.includes('--built')) {
+  assets = resolve(evidence, 'compiled-admin');
+  const { build } = await import('vite');
+  await build({ root: adminDirectory, build: { outDir: assets, emptyOutDir: true } });
+}
+const staticAsset = (route) => {
+  const path = decodeURIComponent(new URL(route.request().url()).pathname);
+  const target = resolve(
+    assets,
+    path.startsWith('/v2/') || path === '/' ? 'index.html' : path.slice(1)
+  );
+  assert.ok(target.startsWith(assets + sep), '离线资产不得越过构建目录');
+  const mime = {
+    '.js': 'text/javascript',
+    '.css': 'text/css',
+    '.html': 'text/html',
+    '.svg': 'image/svg+xml',
+    '.png': 'image/png',
+    '.woff2': 'font/woff2',
+    '.json': 'application/json'
+  };
+  return route.fulfill({
+    body: readFileSync(target),
+    contentType: mime[extname(target)] ?? 'application/octet-stream'
+  });
+};
+const hash = (value) => createHash('sha256').update(value).digest('hex');
+const officialAccount = 'fixture-account';
+const accountKey = hash(officialAccount);
 const waitFor = async (check) => {
   const deadline = Date.now() + 20_000;
   while (Date.now() < deadline) {
@@ -72,12 +83,12 @@ const address = {
   updatedAt: timestamp
 };
 const settings = {
-  connectorUrl: connector,
+  connectorUrl: '',
   localApiUrl: 'http://127.0.0.1:54345',
   localApiTokenConfigured: true,
   localApiTokenMask: '已配置',
-  connectorTokenConfigured: true,
-  connectorTokenMask: '已配置',
+  connectorTokenConfigured: false,
+  connectorTokenMask: null,
   groupName: '充值验收',
   tagName: '充值',
   proxyType: 'http',
@@ -114,17 +125,37 @@ const cycleAcceptance = process.argv.includes('--cycles');
 const startupDiagnosticsAcceptance = process.argv.includes('--startup-diagnostics');
 const report = {
   scope: 'OFFLINE_SYNTHETIC_ONLY',
+  assetTransport: 'route.fulfill',
+  executionTransport: 'web_direct',
+  realNetworkRequests: 0,
   builtPreview: process.argv.includes('--built'),
   realPayment: 'NOT_MEASURED',
   cases: []
 };
 let browser;
 let lastPage;
+const diagnosticText = (value) =>
+  String(value)
+    .replace(/Bearer\s+\S+/gi, 'Bearer [redacted]')
+    .replace(
+      /((?:password|token|secret|nonce|cvc|securityCode)["'\s:=]+)[^\s,"'}]+/gi,
+      '$1[redacted]'
+    )
+    .replace(/\b\d{12,19}\b/g, '[redacted-number]')
+    .replace(/[\w.+-]+@[\w.-]+\.[a-z]{2,}/gi, '[redacted-email]')
+    .slice(0, 1800);
+const diagnosticUrl = (value) => {
+  const url = new URL(value);
+  return url.origin + url.pathname;
+};
+let lastDiagnostics;
 try {
-  await waitFor(async () => (await fetch(origin).catch(() => null))?.ok);
   browser = await chromium.launch({ headless: true });
   for (const width of [1440, 768, 390]) {
-    const context = await browser.newContext({ viewport: { width, height: 1100 } });
+    const context = await browser.newContext({
+      serviceWorkers: 'block',
+      viewport: { width, height: 1100 }
+    });
     await context.addInitScript((fixture) => {
       localStorage.setItem('apple_business_access_token', 'browser-fixture');
       localStorage.setItem('apple_business_current_user', JSON.stringify(fixture));
@@ -136,6 +167,8 @@ try {
       forbidden = [],
       jobs = [],
       local = new Map();
+    const diagnostics = { width, phase: 'initial', console: [], pageErrors: [], unmatchedApi: [] };
+    lastDiagnostics = diagnostics;
     const profileA = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
     const profileB = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
     const profiles = [
@@ -154,23 +187,327 @@ try {
       ])
     );
     let profileSaves = 0;
-    let version = 4,
+    let localReachable = true,
       apiStarts = 0,
+      onlyLoginStarts = 0,
       starts = 0,
       confirmations = 0,
       slowRefresh = false,
       refreshSeen = false;
-    page.on('pageerror', (error) => errors.push(error.message));
+    let activeEntry, fingerprint;
+    page.on('pageerror', (error) => {
+      errors.push(diagnosticText(error.message));
+      diagnostics.pageErrors.push(diagnosticText(error.stack ?? error.message));
+    });
+    page.on('console', (message) => {
+      if (message.type() === 'error' || message.type() === 'warning') {
+        diagnostics.console.push({ type: message.type(), text: diagnosticText(message.text()) });
+      }
+    });
     const success = (route, data) =>
       route.fulfill({
         contentType: 'application/json',
         body: JSON.stringify({ success: true, data })
       });
+    const officialPlan = (plan) => (plan === 'go' ? 'chatgptgoplan' : 'chatgptplusplan');
+    const nativeOrder = (entry) => ({
+      checkout_session_id: entry.sid,
+      processor_entity: 'openai_llc',
+      plan_name: officialPlan(entry.job.plan),
+      status: 'open',
+      payment_status: 'unpaid',
+      checkout_state: {
+        id: entry.sid,
+        currency: 'php',
+        lineItems: [{ quantity: 1, recurring: { interval: 'month', intervalCount: 1 } }],
+        taxAmounts: [],
+        total: { total: { minorUnitsAmount: 110000 } },
+        billingAddress: {
+          name: entry.fields.name,
+          address: {
+            country: entry.fields.country,
+            line1: entry.fields.line1,
+            line2: entry.fields.line2 ?? '',
+            city: entry.fields.city,
+            state: entry.fields.state,
+            postal_code: entry.fields.postal_code
+          }
+        }
+      }
+    });
+    const argumentsOf = (expression) =>
+      JSON.parse(
+        '[' +
+          expression
+            .slice(expression.lastIndexOf(')(') + 2, -1)
+            .replace(/,undefined(?=,|$)/g, ',null') +
+          ']'
+      );
+    await context.routeWebSocket('**/*', (socket) => {
+      assert.equal(socket.url(), debugEndpoint, '只允许合成窗口调试通道');
+      const entry = activeEntry;
+      const event = (method, params) =>
+        socket.send(JSON.stringify({ method, params, sessionId: 'owned-session' }));
+      const observe = (path, data, body) => {
+        const requestId = 'synthetic-' + ++entry.requests;
+        const claims = {
+          'https://api.openai.com/auth': { chatgpt_account_id: officialAccount },
+          exp: Math.floor(Date.now() / 1000) + 3600
+        };
+        entry.body.set(requestId, JSON.stringify(body));
+        event('Network.requestWillBeSent', {
+          requestId,
+          request: {
+            url: 'https://chatgpt.com' + path,
+            method: 'POST',
+            headers: {
+              authorization:
+                'Bearer synthetic.' +
+                Buffer.from(JSON.stringify(claims)).toString('base64url') +
+                '.synthetic',
+              'chatgpt-account-id': officialAccount
+            },
+            postData: JSON.stringify(data)
+          }
+        });
+        event('Network.responseReceived', { requestId, response: { status: 200 } });
+        event('Network.loadingFinished', { requestId });
+      };
+      socket.onMessage(async (raw) => {
+        const command = JSON.parse(String(raw));
+        let result = {};
+        try {
+          const { method, params = {} } = command;
+          if (method === 'Target.getTargets')
+            result = {
+              targetInfos: [{ targetId: 'synthetic-target', type: 'page', url: entry.url }]
+            };
+          else if (method === 'Target.createTarget') result = { targetId: 'synthetic-target' };
+          else if (method === 'Target.attachToTarget') result = { sessionId: 'owned-session' };
+          else if (method === 'Browser.getVersion') result = { product: 'Chrome/124.0.0.0' };
+          else if (method === 'Network.getCookies') result = { cookies: entry.cookies ?? [] };
+          else if (method === 'Network.setCookies') {
+            entry.cookies = params.cookies;
+            entry.authenticated = true;
+          } else if (method === 'Page.navigate') entry.url = params.url;
+          else if (method === 'Page.getFrameTree')
+            result = { frameTree: { frame: { id: 'synthetic-frame', url: entry.url } } };
+          else if (method === 'Page.createIsolatedWorld') result = { executionContextId: 1 };
+          else if (method === 'Network.getResponseBody')
+            result = { body: entry.body.get(params.requestId), base64Encoded: false };
+          else if (method === 'Runtime.evaluate') {
+            const expression = params.expression;
+            let value;
+            if (expression.includes('/cdn-cgi/trace')) value = { kind: 'proxy_ready' };
+            else if (
+              expression.includes('page_ready') &&
+              expression.includes('accounts-profile-button')
+            )
+              value = { kind: entry.manual ? 'manual' : 'page_ready' };
+            else if (expression.includes('session_error') && expression.includes('email_login')) {
+              const [action] = argumentsOf(expression);
+              if (action === 'clear') value = { kind: 'cleared' };
+              else if (entry.manual) value = { kind: 'manual' };
+              else if (entry.authenticated)
+                value = {
+                  kind: 'identity',
+                  email: 'fixture@example.test',
+                  userId: 'fixture-user',
+                  accountId: officialAccount,
+                  plan: entry.current
+                };
+              else if (action === 'submit') {
+                entry.loginStep = entry.loginStep === 'password' ? 'identity' : 'password';
+                entry.authenticated = entry.loginStep === 'identity';
+                value = { kind: 'submitted' };
+              } else if (['email', 'password'].includes(action))
+                value = { kind: 'filled', valueMatches: true };
+              else value = { kind: entry.loginStep ?? 'email' };
+            } else if (expression.includes('cc-number') && expression.includes('expectedCount')) {
+              const [operation] = argumentsOf(expression);
+              if (operation.mode === 'fill') {
+                if (!entry.allowBilling)
+                  await new Promise((resolve) => {
+                    entry.releaseBilling = resolve;
+                  });
+                entry.fields[operation.field] = operation.value;
+                value = { ok: true, nodes: [] };
+              } else if (operation.mode === 'preferences') value = { ok: true, nodes: [] };
+              else
+                value = {
+                  ok: true,
+                  nodes: [
+                    {
+                      index: 0,
+                      count: 1,
+                      editable: true,
+                      populated: !!entry.fields[operation.field],
+                      matches: (entry.fields[operation.field] ?? '') === operation.value,
+                      select: operation.field === 'country',
+                      optionMatches: 1
+                    }
+                  ]
+                };
+            } else if (expression.includes('checkout_mismatch')) {
+              const [, action, expected] = argumentsOf(expression);
+              if (action === 'prepare') value = { kind: 'plan_ready' };
+              else if (action === 'create') {
+                if (!entry.upgrading) {
+                  entry.url = 'https://chatgpt.com/checkout/openai_llc/' + entry.sid;
+                  observe(
+                    '/backend-api/payments/checkout',
+                    { plan_name: officialPlan(entry.job.plan) },
+                    nativeOrder(entry)
+                  );
+                }
+                value = { kind: 'submitted' };
+              } else if (action === 'confirm') {
+                assert.equal(expected, entry.sid);
+                assert.equal(entry.used, true, '必须先受理单次授权再点击官网');
+                assert.equal(entry.clicked ?? 0, 0);
+                entry.clicked = 1;
+                observe(
+                  '/backend-api/payments/checkout/confirm',
+                  { checkout_session_id: entry.sid },
+                  {
+                    checkout_session_id: entry.sid,
+                    payment_intent: {
+                      object: 'payment_intent',
+                      id: 'pi_Synthetic' + width,
+                      status: 'succeeded',
+                      amount_received: 110000,
+                      currency: 'php'
+                    }
+                  }
+                );
+                entry.current = entry.job.plan;
+                value = { kind: 'submitted' };
+              } else
+                value = {
+                  kind: 'page',
+                  checkoutId: entry.sid,
+                  entity: 'openai_llc',
+                  text: 'Total due today PHP 1100.00\nTax PHP 0.00\nThen PHP 1100.00 / month'
+                };
+            } else if (expression.includes('plan-upgrade-payment-method')) {
+              const [action] = argumentsOf(expression);
+              if (action === 'confirm') {
+                assert.equal(entry.used, true);
+                assert.equal(entry.clicked ?? 0, 0);
+                entry.clicked = 1;
+                observe(
+                  '/backend-api/subscriptions/update',
+                  {
+                    account_id: officialAccount,
+                    updated_plan: officialPlan(entry.job.plan),
+                    payment_method_id: 'pm_Synthetic'
+                  },
+                  {
+                    payment_intent: {
+                      object: 'payment_intent',
+                      id: 'pi_Synthetic' + width,
+                      status: 'succeeded',
+                      amount_received: 110000,
+                      currency: 'php'
+                    }
+                  }
+                );
+                entry.current = entry.job.plan;
+                value = { kind: 'submitted' };
+              } else
+                value = {
+                  kind:
+                    action === 'inspect'
+                      ? 'ready'
+                      : ['select', 'selected'].includes(action)
+                        ? 'selected'
+                        : 'submitted',
+                  text: 'ChatGPT Plus\nPHP 1100.00\nBilled monthly\nTotal due today PHP 1100.00\nTax PHP 0.00'
+                };
+            } else if (expression.includes('/api/auth/session')) {
+              const [, path] = argumentsOf(expression);
+              let data;
+              if (path.includes('/accounts/check/'))
+                data = {
+                  accounts: {
+                    [officialAccount]: {
+                      account: { account_id: officialAccount, plan_type: entry.current },
+                      entitlement: { has_active_subscription: entry.current !== 'free' }
+                    }
+                  }
+                };
+              else if (path.includes('/payments/checkout/')) data = nativeOrder(entry);
+              else if (path.includes('payment_methods'))
+                data = {
+                  account_id: officialAccount,
+                  payment_methods: [
+                    {
+                      id: 'pm_Synthetic',
+                      type: 'card',
+                      card: { last4: '4444', exp_month: 12, exp_year: 2030 },
+                      billing_details: {
+                        name: 'Fixture Person',
+                        address: {
+                          country: address.country,
+                          line1: address.line1,
+                          line2: '',
+                          city: address.city,
+                          state: address.state,
+                          postal_code: address.postalCode
+                        }
+                      }
+                    }
+                  ]
+                };
+              else if (path.includes('/update/preview'))
+                data = {
+                  currency: 'php',
+                  positive_line_item_total: 110000,
+                  negative_line_item_total: 0,
+                  amount_due: { amount: 110000, amount_excluding_tax: 110000, tax_amount: 0 }
+                };
+              else if (path.includes('/subscriptions'))
+                data = entry.cycle
+                  ? {}
+                  : {
+                      account_id: officialAccount,
+                      plan_type: entry.current,
+                      is_processor_stripe: true,
+                      is_delinquent: false,
+                      will_renew: true
+                    };
+              else throw new Error('未预期的官网只读路径');
+              value = { ok: true, status: 200, data };
+            } else throw new Error('未预期的合成窗口表达式');
+            result = { result: { value } };
+          } else
+            assert.ok(
+              [
+                'Network.enable',
+                'Page.enable',
+                'Runtime.enable',
+                'Target.setAutoAttach',
+                'Network.setExtraHTTPHeaders',
+                'Page.reload',
+                'Network.deleteCookies'
+              ].includes(method),
+              '未预期的窗口命令 ' + method
+            );
+          socket.send(JSON.stringify({ id: command.id, result }));
+        } catch (error) {
+          console.error(diagnosticText(error.message));
+          errors.push(diagnosticText(error.message));
+          socket.send(
+            JSON.stringify({ id: command.id, error: { message: 'synthetic protocol rejected' } })
+          );
+        }
+      });
+    });
     await context.route('**/*', async (route) => {
       const request = route.request(),
         url = new URL(request.url()),
         path = url.pathname;
-      if (url.origin === origin && !path.startsWith('/api/')) return route.continue();
+      if (url.origin === origin && !path.startsWith('/api/')) return staticAsset(route);
       if (url.origin === origin) {
         if (path === '/api/auth/me') return success(route, user);
         if (path === '/api/auth/session')
@@ -283,14 +620,14 @@ try {
         }
         if (path.endsWith('/auto-recharge/bitbrowser-catalog-access'))
           return success(route, {
-            connectorUrl: connector,
-            connectorToken: 'c'.repeat(64),
+            connectorUrl: '',
+            connectorToken: '',
             localApiUrl: settings.localApiUrl,
             localApiToken: 'b'.repeat(32)
           });
         if (path.endsWith('/bitbrowser-access'))
           return success(route, {
-            connectorUrl: connector,
+            connectorUrl: '',
             connectorToken: 'c'.repeat(64)
           });
         if (path.endsWith('/next-cycle-confirm') && request.method() === 'POST') {
@@ -308,9 +645,72 @@ try {
             status: 'ready',
             manualPreviousCycleEnded: true
           };
-          entry.job.state = 'awaiting_confirmation';
-          entry.job.result = { ...entry.quoteResult, cycle_review: cycleReview };
+          entry.job.result = { ...entry.job.result, cycle_review: cycleReview };
           return success(route, { cycleReview });
+        }
+        if (path.endsWith('/auto-recharge/jobs/bitbrowser-open') && request.method() === 'POST') {
+          const input = request.postDataJSON();
+          assert.equal(input.directMode, true);
+          assert.equal(Object.hasOwn(input, 'details'), false);
+          const job = {
+            id: input.id,
+            chatgptAccountId: id.account,
+            plan: 'plus',
+            action: 'bitbrowser',
+            state: 'running',
+            createdAt: timestamp,
+            updatedAt: timestamp,
+            result: {
+              mode: 'open_browser',
+              transport: 'web_direct',
+              status: 'waiting_browser',
+              payment_attempted: false,
+              payment_requests_sent: 0
+            }
+          };
+          const entry = {
+            job,
+            used: false,
+            current: 'free',
+            authenticated: false,
+            manual: ++onlyLoginStarts === 2,
+            fields: {},
+            requests: 0,
+            body: new Map(),
+            url: 'https://chatgpt.com/'
+          };
+          jobs.unshift(job);
+          local.set(job.id, entry);
+          activeEntry = entry;
+          return success(route, {
+            id: job.id,
+            mode: 'open_browser',
+            connectorUrl: '',
+            connectorToken: '',
+            agentToken: 'a'.repeat(64),
+            bitBrowser: {
+              localApiUrl: localApi,
+              localApiToken: 'b'.repeat(32),
+              groupName: settings.groupName,
+              tagName: settings.tagName,
+              proxyType: 'http',
+              dynamicProxyUrl: 'https://proxy.example.invalid/never-called',
+              browserOptions: { ...V2_RECHARGE_BROWSER_DEFAULTS, coreVersion: '124' }
+            }
+          });
+        }
+        if (path.endsWith('/bitbrowser-cancel')) {
+          const entry = local.get(path.split('/').at(-2));
+          assert.equal(entry.job.result.mode, 'open_browser');
+          entry.job.state = 'finished';
+          entry.job.result = {
+            ...entry.job.result,
+            status: 'cancelled',
+            cancellation_confirmed: true,
+            payment_attempted: false,
+            payment_requests_sent: 0
+          };
+          return success(route, { id: entry.job.id });
         }
         if (path.endsWith('/auto-recharge/jobs/bitbrowser') && request.method() === 'POST') {
           const input = request.postDataJSON();
@@ -319,6 +719,7 @@ try {
           assert.equal(input.authorizeSinglePayment, true);
           assert.equal(Object.hasOwn(input, 'maxAmount'), false);
           assert.equal(input.addressId, id.address);
+          assert.equal(input.directMode, true);
           const ordinal = ++apiStarts;
           const upgrading = ordinal === 2;
           const cycle = cycleAcceptance && ordinal === 3;
@@ -332,26 +733,40 @@ try {
             createdAt: timestamp,
             updatedAt: timestamp,
             result: {
-              status: 'waiting_local_connector',
+              status: 'waiting_browser',
+              transport: 'web_direct',
+              mode: 'payment',
               locked_currency: 'PHP'
             }
           };
           jobs.unshift(job);
-          local.set(job.id, {
+          const entry = {
             job,
             nonce: 'n'.repeat(64),
             digest: 'd'.repeat(64),
             used: false,
             upgrading,
             cycle,
-            cycleConfirmed: false
-          });
+            cycleConfirmed: false,
+            current: upgrading ? 'go' : 'free',
+            authenticated: false,
+            fields: { country: 'US' },
+            revision: 0,
+            sid: `oaics_fixture_${ordinal}_${width}`,
+            body: new Map(),
+            requests: 0,
+            allowBilling: !(process.argv.includes('--quote-stages') && ordinal === 1),
+            url: 'https://chatgpt.com/'
+          };
+          local.set(job.id, entry);
+          activeEntry = entry;
           return success(route, {
             id: input.id,
             mode: 'payment',
+            transport: 'web_direct',
             ...(cycleAcceptance ? { subscriptionCycleProtocol: 1 } : {}),
-            connectorUrl: connector,
-            connectorToken: 'c'.repeat(64),
+            connectorUrl: '',
+            connectorToken: '',
             agentToken: 'a'.repeat(64),
             ...(input.useSavedCredentials
               ? {
@@ -367,7 +782,8 @@ try {
               groupName: settings.groupName,
               tagName: settings.tagName,
               proxyType: 'http',
-              dynamicProxyUrl: 'https://proxy.example.invalid/never-called'
+              dynamicProxyUrl: 'https://proxy.example.invalid/never-called',
+              browserOptions: { ...V2_RECHARGE_BROWSER_DEFAULTS, coreVersion: '124' }
             },
             address,
             safety: {
@@ -377,171 +793,185 @@ try {
             }
           });
         }
+        if (/\/auto-recharge\/local\//.test(path)) {
+          const entry = local.get(path.split('/').at(-1));
+          assert.ok(entry);
+          assert.equal(request.headers()['x-recharge-local'], 'a'.repeat(64));
+          const input = request.postDataJSON();
+          assert.ok(
+            !JSON.stringify(input).includes('5555555555554444'),
+            '银行卡不得进入服务端回调'
+          );
+          const cycleReview = () => ({
+            protocol: 1,
+            status: entry.cycleConfirmed ? 'ready' : 'awaiting_previous_cycle_confirmation',
+            reviewDigest: 'f'.repeat(64),
+            expiresAt: new Date(Date.now() + 300000).toISOString(),
+            reason: 'previous_period_unavailable'
+          });
+          if (input.type === 'restore')
+            return success(route, {
+              records: [],
+              staleProfiles: [],
+              ...(entry.cycle
+                ? {
+                    nextCycleContext: {
+                      protocol: 1,
+                      jobId: entry.job.id,
+                      accountKey,
+                      targetPlan: entry.job.plan,
+                      sources: [
+                        {
+                          fileKey: 'payments/' + hash('old-cycle') + '.json',
+                          revision: 1,
+                          operationIdentifier: 'oaics_old_cycle',
+                          documentDigest: 'e'.repeat(64),
+                          targetPlan: 'plus'
+                        }
+                      ]
+                    }
+                  }
+                : {})
+            });
+          if (input.type === 'prepare_next_subscription_cycle') {
+            assert.equal(input.accountKey, accountKey);
+            assert.equal(input.subscriptionCycleProtocol, 1);
+            if (input.phase === 'commit') assert.equal(entry.cycleConfirmed, true);
+            return success(route, {
+              cycleReview: cycleReview(),
+              ...(input.phase === 'commit'
+                ? {
+                    nextCycleContext: {
+                      grant: {
+                        protocol: 1,
+                        jobId: entry.job.id,
+                        accountKey,
+                        targetPlan: entry.job.plan,
+                        status: 'granted',
+                        reviewDigest: 'f'.repeat(64),
+                        expiresAt: new Date(Date.now() + 300000).toISOString(),
+                        checkoutFileKey: accountKey + '.json',
+                        checkoutRevision: 0
+                      }
+                    }
+                  }
+                : {})
+            });
+          }
+          if (input.type === 'ledger') {
+            assert.equal(input.revision, entry.revision);
+            return success(route, { revision: ++entry.revision });
+          }
+          if (input.type === 'direct_quote') {
+            assert.match(input.result.billing_fingerprint, /^[a-f0-9]{64}$/);
+            assert.deepEqual(input.result.quote, quoted(entry.job.plan));
+            if (!entry.upgrading)
+              for (const field of [
+                'number',
+                'expiry',
+                'cvc',
+                'name',
+                'line1',
+                'city',
+                'state',
+                'postal_code'
+              ])
+                assert.ok(entry.fields[field], '填完整资料后才能核价 ' + field);
+            entry.job.state = 'awaiting_confirmation';
+            entry.job.result = {
+              ...entry.job.result,
+              ...input.result,
+              status: 'awaiting_confirmation',
+              quote_digest: entry.digest
+            };
+            return success(route, {
+              ok: true,
+              nonce: entry.nonce,
+              quote_digest: entry.digest,
+              confirmation_expires_at: new Date(Date.now() + 300000).toISOString()
+            });
+          }
+          assert.ok(['progress', 'finished'].includes(input.type), '非预期网页回调 ' + input.type);
+          entry.job.result = { ...entry.job.result, ...input.result };
+          if (input.type === 'finished') entry.job.state = 'finished';
+          else if (input.result.user_action_required)
+            entry.job.state = 'awaiting_human_verification';
+          if (input.result.stage === 'payment_preparation' && !entry.allowBilling)
+            entry.job.result = {
+              ...entry.job.result,
+              initial_quote: {
+                ...quoted(entry.job.plan),
+                today: { currency: 'PHP', amount: '9999.00', amount_minor: 999900 }
+              },
+              quote: {
+                ...quoted(entry.job.plan),
+                today: { currency: 'PHP', amount: '9999.00', amount_minor: 999900 }
+              }
+            };
+          return success(route, { ok: true });
+        }
+        if (path.endsWith('/confirm') && request.method() === 'POST') {
+          const entry = local.get(path.split('/').at(-2));
+          const input = request.postDataJSON();
+          assert.deepEqual(Object.keys(input).sort(), [
+            'checkoutIdentifier',
+            'nonce',
+            'quoteDigest'
+          ]);
+          assert.equal(input.nonce, entry.nonce);
+          assert.equal(input.quoteDigest, entry.digest);
+          assert.equal(input.checkoutIdentifier, entry.job.result.upgrade_identifier ?? entry.sid);
+          assert.equal(entry.used, false, '同一报价只允许一次授权');
+          entry.used = true;
+          confirmations++;
+          return success(route, {
+            id: entry.job.id,
+            paymentAllowed: true,
+            paymentRecordRevision: 1
+          });
+        }
         if (request.method() !== 'GET') {
           forbidden.push(path);
           return route.abort();
         }
+        diagnostics.unmatchedApi.push({ method: request.method(), path });
         return success(route, {});
       }
-      if (url.origin === connector) {
-        const headers = {
-          'Access-Control-Allow-Origin': origin,
-          'Access-Control-Allow-Private-Network': 'true'
-        };
-        const reply = (data, status = 200) =>
+      if (url.origin === localApi) {
+        if (!localReachable) return route.abort('connectionrefused');
+        const input = request.postDataJSON() ?? {};
+        const reply = (data) =>
           route.fulfill({
-            status,
-            headers,
-            contentType: 'application/json',
-            body: JSON.stringify({ ok: true, ...data })
+            headers: { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Headers': '*' },
+            json: { success: true, data }
           });
-        if (request.method() === 'OPTIONS')
-          return route.fulfill({
-            status: 204,
-            headers: {
-              ...headers,
-              'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
-              'Access-Control-Allow-Headers': 'Content-Type, X-Auto-Recharge-Connector'
-            }
-          });
-        if (path === '/health')
-          return reply({
-            service: 'id-business-v2-auto-recharge-connector',
-            version,
-            role: 'recharge',
-            originAllowed: true,
-            busy:
-              cycleAcceptance && [...local.values()].some((entry) => entry.cycle && !entry.used),
-            capabilities: [
-              'browser-catalog',
-              'browser-options',
-              'browser-profile-v2',
-              'session-load-retry',
-              'same-window-page-refresh',
-              'payment-unknown-resolution',
-              'prepayment-page-recovery',
-              'stale-owned-profile-cleanup',
-              'same-profile-proxy-recovery',
-              'json-page-ready',
-              'password-login',
-              'login-code',
-              'manual-payment-confirmation',
-              'recharge-process-isolation',
-              ...(cycleAcceptance ? ['next-subscription-cycle-v1'] : [])
-            ]
-          });
-        if (path === '/browser/catalog')
-          return reply({
-            groups: [{ id: '1', name: settings.groupName }],
-            tags: [{ id: '2', name: settings.tagName }],
-            coreVersions: ['124']
-          });
-        if (path === '/jobs' && request.method() === 'POST') {
-          const input = request.postDataJSON(),
-            entry = local.get(input.id);
-          assert.equal(input.details.number, '5555555555554444');
-          assert.equal(input.details.cvc, '123');
-          assert.equal(input.safety.manualPaymentConfirmation, true);
-          assert.equal(Object.hasOwn(input.safety, 'maxAmount'), false);
-          assert.equal(Object.hasOwn(input.safety, 'maxAmountMinor'), false);
-          starts++;
-          assert.equal(input.subscriptionCycleProtocol, cycleAcceptance ? 1 : undefined);
-          entry.quoteResult = {
-            status: 'awaiting_confirmation',
-            stage: 'payment_confirmation',
-            account_matched: true,
-            current_plan: entry.upgrading ? 'go' : 'free',
-            quote: quoted(input.plan),
-            quote_digest: entry.digest,
-            quote_authority: entry.upgrading
-              ? 'official_upgrade_preview'
-              : 'official_checkout_response',
-            ...(entry.upgrading
-              ? {
-                  operation: 'subscription_upgrade',
-                  current_plan_before: 'go',
-                  target_plan: 'plus',
-                  upgrade_identifier: 'upg_' + 'e'.repeat(32)
-                }
-              : {}),
-            confirmation_expires_at: new Date(Date.now() + 300000).toISOString(),
-            manual_payment_confirmation: true,
-            payment_requests_sent: 0,
-            payment_attempted: false,
-            locked_currency: 'PHP',
-            window_name: input.windowName
-          };
-          entry.job.state = entry.cycle ? 'awaiting_human_verification' : 'awaiting_confirmation';
-          entry.job.result = entry.cycle
-            ? {
-                status: 'awaiting_previous_cycle_confirmation',
-                stage: 'next_subscription_cycle_review',
-                account_matched: true,
-                current_plan: 'free',
-                payment_attempted: false,
-                payment_requests_sent: 0,
-                user_action_required: true,
-                window_name: input.windowName,
-                cycle_review: {
-                  protocol: 1,
-                  status: 'awaiting_previous_cycle_confirmation',
-                  reviewDigest: 'f'.repeat(64),
-                  expiresAt: new Date(Date.now() + 300000).toISOString(),
-                  reason: 'previous_period_unavailable'
-                }
-              }
-            : entry.quoteResult;
-          if (process.argv.includes('--quote-stages') && starts === 1) {
-            entry.quoteResult.initial_quote = {
-              ...quoted(input.plan),
-              today: { currency: 'PHP', amount: '9999.00', amount_minor: 999900 }
-            };
-            entry.job.state = 'running';
-            entry.job.result = {
-              status: 'running',
-              stage: 'payment_preparation',
-              payment_requests_sent: 0,
-              initial_quote: entry.quoteResult.initial_quote,
-              quote: entry.quoteResult.initial_quote
-            };
-          }
-          return reply({ id: input.id, accepted: true }, 202);
+        if (request.method() === 'OPTIONS') return reply({});
+        if (path === '/health') return reply({});
+        if (path === '/group/list')
+          return reply({ list: [{ id: 'group-fixture', groupName: settings.groupName }] });
+        if (path === '/browserTag/list')
+          return reply([{ id: 'b'.repeat(32), tagName: settings.tagName }]);
+        if (path === '/browser/list') return reply({ list: [] });
+        if (path === '/browser/update') {
+          fingerprint = input.browserFingerPrint;
+          return reply({ id: 'c'.repeat(32) });
         }
-        const match = path.match(/^\/jobs\/([^/]+)(?:\/(confirm))?$/);
-        if (match) {
-          const entry = local.get(match[1]);
-          assert.ok(entry);
-          if (!match[2])
-            return reply({
-              done: entry.used,
-              waitingForUser: false,
-              status: entry.used ? 'finished' : entry.job.result.status,
-              waitingForConfirmation: !entry.used && (!entry.cycle || entry.cycleConfirmed),
-              result: {
-                ...entry.job.result,
-                nonce:
-                  entry.used || (entry.cycle && !entry.cycleConfirmed) ? undefined : entry.nonce
-              }
-            });
-          const input = request.postDataJSON();
-          assert.equal(input.nonce, entry.nonce);
-          assert.equal(input.quoteDigest, entry.digest);
-          assert.equal(entry.used, false, '同一报价只能确认一次');
-          entry.used = true;
-          confirmations++;
-          entry.job.state = 'finished';
-          entry.job.result = {
-            ...entry.job.result,
-            status: 'subscription_activated',
-            payment_status: 'paid',
-            payment_outcome: 'subscription_activated',
-            subscription_status: 'active',
-            current_plan: entry.job.plan,
-            payment_requests_sent: 1,
-            payment_attempted: true
-          };
-          return reply({ accepted: true });
+        if (path === '/browserTag/updateRelation' || path === '/browser/close') return reply({});
+        if (path === '/browser/detail')
+          return reply({
+            id: 'c'.repeat(32),
+            browserFingerPrint: fingerprint,
+            syncTabs: false,
+            syncCookies: false,
+            syncLocalStorage: false,
+            syncIndexedDb: false,
+            syncAuthorization: false
+          });
+        if (path === '/browser/open') {
+          if (activeEntry.job.result.mode !== 'open_browser') starts++;
+          return reply({ ws: debugEndpoint, coreVersion: '124' });
         }
+        throw new Error('未预期的合成本地接口 ' + path);
       }
       forbidden.push(url.origin + path);
       return route.abort();
@@ -549,9 +979,31 @@ try {
     await page.goto(origin + '/v2/auto-recharge');
     const form = page.locator('.recharge-entry-panel');
     await form.waitFor();
+    // Preserve Vue's production error handler and record only bounded diagnostics.
+    await page.evaluate(() => {
+      window.__rechargeAcceptanceVueErrors = [];
+      const app = document.querySelector('#app')?.__vue_app__;
+      const original = app?.config.errorHandler;
+      if (original) {
+        app.config.errorHandler = (error, ...args) => {
+          window.__rechargeAcceptanceVueErrors.push(String(error?.stack ?? error));
+          return original(error, ...args);
+        };
+      }
+    });
+    const assertPageHealthy = async (phase) => {
+      diagnostics.phase = phase;
+      const runtime = await page.evaluate(() => ({
+        vueErrors: window.__rechargeAcceptanceVueErrors ?? [],
+        hasOverlay: Boolean(document.querySelector('.app-route-error'))
+      }));
+      assert.equal(runtime.hasOverlay, false, `${phase} 不得产生运行时错误遮罩`);
+      assert.deepEqual(runtime.vueErrors.map(diagnosticText), [], `${phase} 不得产生 Vue 异常`);
+      assert.deepEqual(errors, [], `${phase} 不得产生页面或合成协议异常`);
+    };
     assert.equal(await page.getByRole('radio', { name: '服务器充值', exact: true }).count(), 0);
     assert.equal(await page.getByRole('radio', { name: '已保存账号', exact: true }).count(), 0);
-    await page.getByText('账号密码', { exact: true }).click();
+    await page.getByText('账号自动登录', { exact: true }).click();
     await page
       .getByRole('combobox', { name: /ChatGPT 账号/ })
       .locator('xpath=ancestor::div[contains(@class,"el-select__wrapper")]')
@@ -564,7 +1016,13 @@ try {
         .getByRole('radio', { name: '授权 JSON', exact: true })
         .locator('xpath=ancestor::label')
         .click();
-      await jsonInput.fill(JSON.stringify({ sessionToken: token, user: { email } }));
+      await jsonInput.fill(
+        JSON.stringify({
+          sessionToken: token,
+          user: { id: 'fixture-user', email },
+          account: { id: officialAccount }
+        })
+      );
       await page.getByText('授权已自动载入', { exact: false }).waitFor();
     };
     await loadJson();
@@ -660,15 +1118,15 @@ try {
     });
     const start = page.getByRole('button', { name: '在比特浏览器执行', exact: true });
     assert.equal(await start.isEnabled(), true);
-    version = 3;
+    localReachable = false;
     await start.click();
     await page
-      .getByText(/版本过旧/)
+      .getByText(/网页无法访问比特浏览器/)
       .first()
       .waitFor();
     assert.equal(apiStarts, 0);
     assert.equal(starts, 0);
-    version = 4;
+    localReachable = true;
     await start.click();
     const confirm = page.getByRole('button', { name: /确认.*付款|确认.*扣款/ });
     if (process.argv.includes('--quote-stages')) {
@@ -687,8 +1145,8 @@ try {
         fullPage: true
       });
       const entry = local.get(jobs[0].id);
-      entry.job.state = 'awaiting_confirmation';
-      entry.job.result = entry.quoteResult;
+      entry.allowBilling = true;
+      entry.releaseBilling?.();
       await page.getByRole('button', { name: '刷新原任务状态', exact: true }).click();
       await confirm.waitFor();
       assert.ok((await finalAmounts.innerText()).includes(quoted(jobs[0].plan).today.amount));
@@ -860,7 +1318,7 @@ try {
           }, theme)
       );
       if (connectionAcceptance) {
-        await page.getByRole('button', { name: '本机充值助手设置', exact: true }).click();
+        await page.getByRole('button', { name: '比特浏览器直连设置', exact: true }).click();
         const drawer = page
           .getByRole('dialog')
           .filter({ has: page.getByRole('combobox', { name: '选择本人的连接配置' }) });
@@ -897,7 +1355,7 @@ try {
         }
         await drawer.getByText('本人的连接配置', { exact: true }).click();
         await drawer.getByRole('button', { name: '检测完整连接', exact: true }).click();
-        await drawer.getByText('连接器、比特接口和分组／标签检测通过', { exact: true }).waitFor();
+        await drawer.getByText('比特浏览器直连、分组／标签检测通过', { exact: true }).waitFor();
         assert.equal(
           await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth + 1),
           false
@@ -935,17 +1393,29 @@ try {
       }
     }
     // A real route transition must retain the non-sensitive draft but clear one-time secrets.
+    diagnostics.phase = 'draft-route-away';
     await page.getByRole('button', { name: /继续.*账号.*升级/ }).click();
     await page
-      .getByRole('radio', { name: '账号密码', exact: true })
+      .getByRole('radio', { name: '账号自动登录', exact: true })
       .locator('xpath=ancestor::label')
       .click();
     await form.getByLabel('窗口名称', { exact: true }).fill('升级草稿保留验收');
     await fillPayment();
-    await form.getByRole('link', { name: 'ChatGPT 账号', exact: true }).click();
-    await page.waitForURL('**/v2/account-settings/chatgpt-accounts');
+    if (width < 900) await page.setViewportSize({ width: 1440, height: 1100 });
+    // Use a real, fixture-backed sibling route and wait for its content before going back.
+    await page.locator('.v2-navigation a[href="/v2/auto-recharge/addresses"]').click();
+    await page.waitForURL('**/v2/auto-recharge/addresses');
+    await page
+      .locator('.recharge-address-page [data-v2-query-phase="ready"]')
+      .getByText(address.line1, { exact: true })
+      .waitFor();
+    await assertPageHealthy('draft-route-destination-ready');
+    diagnostics.phase = 'draft-route-back';
     await page.goBack();
+    await page.waitForURL('**/v2/auto-recharge');
     await form.waitFor();
+    await assertPageHealthy('draft-route-return-ready');
+    await page.setViewportSize({ width, height: 1100 });
     assert.equal(
       await form.getByLabel('窗口名称', { exact: true }).inputValue(),
       '升级草稿保留验收'
@@ -1020,6 +1490,28 @@ try {
         });
       }
     }
+    const beforeLoginPayments = confirmations;
+    diagnostics.phase = 'login-and-cancel';
+    await page
+      .getByRole('radio', { name: '仅登录账号', exact: true })
+      .locator('xpath=ancestor::label')
+      .click();
+    const openLogin = page.getByRole('button', { name: '打开比特浏览器并登录', exact: true });
+    await waitFor(() => openLogin.isEnabled());
+    await openLogin.click();
+    await waitFor(() => jobs[0].result.status === 'session_ready');
+    assert.equal(jobs[0].result.payment_requests_sent, 0, '仅登录不得付款');
+    await page.getByRole('button', { name: '刷新原任务状态', exact: true }).click();
+    await waitFor(() => openLogin.isEnabled());
+    await openLogin.click();
+    await waitFor(() => jobs[0].state === 'awaiting_human_verification');
+    await page.getByRole('button', { name: '停止本次任务', exact: true }).waitFor();
+    await page.getByRole('button', { name: '停止本次任务', exact: true }).click();
+    await waitFor(() => jobs[0].result.cancellation_confirmed === true);
+    assert.equal(confirmations, beforeLoginPayments, '登录与取消不能发送任何付款');
+    assert.equal(onlyLoginStarts, 2);
+    assert.equal(jobs[0].result.payment_requests_sent, 0);
+    await assertPageHealthy('login-and-cancel-complete');
     assert.deepEqual(errors, []);
     assert.deepEqual(forbidden, []);
     report.cases.push({
@@ -1035,6 +1527,7 @@ try {
       invalidJsonClearsOldSession: 'PASS',
       sensitiveInputMaskAndReveal: 'PASS',
       countrySelectionReadonly: 'PASS',
+      directLoginAndCancellation: 'PASS',
       finalQuoteAfterBilling: process.argv.includes('--quote-stages') ? 'PASS' : 'NOT_RUN',
       connectionProfileDraftIsolation: connectionAcceptance ? 'PASS' : 'NOT_RUN',
       startupCallbackDiagnostics: startupDiagnosticsAcceptance ? 'PASS' : 'NOT_RUN',
@@ -1046,11 +1539,26 @@ try {
   console.log(JSON.stringify(report));
 } catch (error) {
   if (lastPage && !lastPage.isClosed()) {
+    const runtime = await lastPage.evaluate(() => ({
+      vueErrors: window.__rechargeAcceptanceVueErrors ?? [],
+      overlay: document.querySelector('.app-route-error')?.textContent ?? null
+    }));
+    const diagnostics = {
+      ...lastDiagnostics,
+      route: diagnosticUrl(lastPage.url()),
+      failure: diagnosticText(error.message),
+      vueErrors: runtime.vueErrors.map(diagnosticText),
+      overlay: runtime.overlay ? diagnosticText(runtime.overlay) : null
+    };
+    writeFileSync(
+      resolve(evidence, 'failure-diagnostics.json'),
+      JSON.stringify(diagnostics, null, 2)
+    );
+    console.error('[AUTO_RECHARGE_ACCEPTANCE_FAILURE] ' + JSON.stringify(diagnostics));
     await lastPage.screenshot({ path: resolve(evidence, 'failure.png'), fullPage: true });
     writeFileSync(resolve(evidence, 'failure.txt'), await lastPage.locator('body').innerText());
   }
   throw error;
 } finally {
   await browser?.close();
-  server.kill('SIGTERM');
 }

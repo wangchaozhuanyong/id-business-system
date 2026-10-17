@@ -34,6 +34,16 @@ import {
 import { imageInputsChanged } from './ci-recharge-python-image.mjs';
 import {
   adminHtmlCachePaths,
+  isRegistrationFlowV4Only,
+  registrationFlowV4Base,
+  registrationFlowV4Tree,
+  registrationFlowV4Contract,
+  registrationFlowV4Applications,
+  registrationFlowV4Acceptance,
+  registrationFlowV4Paths,
+  registrationFlowV4Parts,
+  registrationFlowV4Commands,
+  registrationFlowV4SupportSources,
   isAdminHtmlCacheOnly,
   isRegistrationProtocolRepairOnly,
   registrationProtocolRepairBase,
@@ -88,6 +98,41 @@ import {
   registrationBrowserAcceptance,
   registrationBrowserParts
 } from './ci-registration-browser-scope.mjs';
+
+function flowV4Fixture() {
+  const hashes = Object.fromEntries(
+    registrationFlowV4Paths
+      .filter((name) => name !== registrationFlowV4Contract)
+      .map((name) => [name, 'a'.repeat(64)])
+  );
+  return {
+    base: registrationFlowV4Base,
+    baseTree: registrationFlowV4Tree,
+    sourceDigest: (name) => hashes[name] ?? registrationFlowV4SupportSources[name] ?? null,
+    contract: {
+      version: 1,
+      scope: 'REGISTRATION_FLOW_V4_20261017',
+      name: 'registration-flow-v4-20261017',
+      frozen: true,
+      admission: 'VERIFIED',
+      migration: null,
+      businessActions: 0,
+      pendingEvidence: [],
+      sourceBaseline: registrationFlowV4Base,
+      sourceBaselineTree: registrationFlowV4Tree,
+      expectedGitChanges: [...registrationFlowV4Paths],
+      applicationPaths: [...registrationFlowV4Applications],
+      sources: Object.fromEntries(
+        registrationFlowV4Applications.map((name) => [name, hashes[name]])
+      ),
+      validationSources: {
+        [registrationFlowV4Acceptance]: hashes[registrationFlowV4Acceptance]
+      },
+      validationSupportSources: { ...registrationFlowV4SupportSources },
+      reviewedFileHashes: hashes
+    }
+  };
+}
 
 function protocolRepairFixture() {
   const hashes = Object.fromEntries(
@@ -512,6 +557,127 @@ test('registration protocol preflight control repair cannot rehash application b
     assert.equal(isRegistrationProtocolRepairControlRepair(paths, context), false);
     assert.equal(checkMode(paths, 'same', 'same', undefined, context), 'full');
   }
+});
+
+test('registration flow v4 admits only its exact verified unchanged-schema source', () => {
+  const context = flowV4Fixture(),
+    paths = [...registrationFlowV4Paths];
+  assert.equal(new Set(paths).size, paths.length);
+  assert.equal(isRegistrationFlowV4Only(paths, context), true);
+  assert.equal(checkMode(paths, 'same', 'same', undefined, context), 'recharge');
+  assert.deepEqual(selectedParts(paths, undefined, context), [...registrationFlowV4Parts]);
+  assert.equal(needsOnlineRechargeCiBuild(paths, context), false);
+  assert.equal(checkMode(paths, 'old', 'new', undefined, context), 'full');
+  for (const override of [
+    { base: '0'.repeat(40) },
+    { baseTree: '0'.repeat(40) },
+    { sourceDigest: () => 'b'.repeat(64) },
+    { sourceDigest: null },
+    {
+      sourceDigest: () => {
+        throw new Error('SYNTHETIC_READ_FAILURE');
+      }
+    }
+  ]) {
+    const changed = { ...context, ...override };
+    assert.equal(isRegistrationFlowV4Only(paths, changed), false);
+    assert.equal(checkMode(paths, 'same', 'same', undefined, changed), 'full');
+    assert.equal(needsOnlineRechargeCiBuild(paths, changed), true);
+  }
+  for (const name of paths.filter((name) => name !== registrationFlowV4Contract)) {
+    assert.equal(
+      isRegistrationFlowV4Only(paths, {
+        ...context,
+        sourceDigest: (candidate) =>
+          candidate === name ? 'b'.repeat(64) : context.sourceDigest(candidate)
+      }),
+      false,
+      name
+    );
+  }
+  for (const changed of [
+    paths.slice(1),
+    [...paths, paths[0]],
+    [...paths, 'apps/api/prisma-mysql/schema.prisma'],
+    [...paths, 'package-lock.json'],
+    [...paths, '.github/workflows/quality.yml'],
+    [...paths, 'apps/api/src/id-business-v2/auto-registration/upstream/src/core/register.py']
+  ]) {
+    assert.equal(isRegistrationFlowV4Only(changed, context), false);
+    assert.equal(checkMode(changed, 'same', 'same', undefined, context), 'full');
+  }
+});
+
+test('registration flow v4 rejects contract widening draft admission or detached hashes', () => {
+  const context = flowV4Fixture(),
+    paths = [...registrationFlowV4Paths];
+  for (const override of [
+    { version: 2 },
+    { frozen: false },
+    { admission: 'DRAFT' },
+    { admission: { status: 'VERIFIED' } },
+    { scope: 'REGISTRATION_PROTOCOL_RESTORE' },
+    { name: 'other' },
+    { migration: 'new.sql' },
+    { businessActions: 1 },
+    { pendingEvidence: ['unverified production baseline'] },
+    { pendingEvidence: undefined },
+    { pendingEvidence: {} },
+    { pendingEvidence: '' },
+    { sourceBaseline: '0'.repeat(40) },
+    { sourceBaselineTree: '0'.repeat(40) },
+    { applicationPaths: [...context.contract.applicationPaths, 'apps/api/src/main.ts'] },
+    { expectedGitChanges: paths.slice(1) },
+    {
+      sources: {
+        ...context.contract.sources,
+        [registrationFlowV4Applications[0]]: 'b'.repeat(64)
+      }
+    },
+    {
+      validationSources: {
+        ...context.contract.validationSources,
+        'scripts/other.mjs': 'a'.repeat(64)
+      }
+    },
+    {
+      reviewedFileHashes: {
+        ...context.contract.reviewedFileHashes,
+        [registrationFlowV4Contract]: 'a'.repeat(64)
+      }
+    },
+    { reviewedFileHashes: { ...context.contract.reviewedFileHashes, [paths[0]]: 'NOT_A_HASH' } }
+  ])
+    assert.equal(
+      isRegistrationFlowV4Only(paths, {
+        ...context,
+        contract: { ...context.contract, ...override }
+      }),
+      false,
+      JSON.stringify(override)
+    );
+  const controls = registrationFlowV4Commands.guards;
+  for (const name of [
+    'admin-ui',
+    'v2-ui-language',
+    'v2-color-contrast',
+    'v2-table-standard',
+    'v2-loading-standard',
+    'v2-module-architecture',
+    'v2-isolation'
+  ]) {
+    assert.ok(controls.some((command) => command.join(' ') === 'npm run check:' + name));
+  }
+  assert.deepEqual(registrationFlowV4Commands['release-controls'], [controls[0]]);
+  assert.ok(
+    controls.some(
+      (command) =>
+        command.includes('scripts/ci-recharge-scope.test.mjs') &&
+        command.includes('scripts/ci-recharge-check.test.mjs')
+    )
+  );
+  assert.ok(controls.some((command) => command.includes('prettier')));
+  assert.ok(controls.some((command) => command.includes('eslint')));
 });
 
 test('registration protocol repair admits only its exact verified unchanged-schema source', () => {

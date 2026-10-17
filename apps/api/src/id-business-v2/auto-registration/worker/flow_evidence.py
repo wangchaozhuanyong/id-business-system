@@ -14,6 +14,22 @@ from urllib.parse import urlsplit
 LEGACY_SLOTS = {"authorize", "signup", "password"}
 SLOTS = LEGACY_SLOTS | {"sentinel"}
 CURRENT_VERSION = 3
+CURRENT_FLOW_VERSION = 4
+MAX_ATTEMPTS = 32
+MAX_SEQUENCE = 9007199254740991
+COOKIE_PRESENCE = {"present", "absent", "not_observed"}
+ATTEMPT_OUTCOMES = {"response", "network_error", "evidence_storage_error"}
+RESPONSE_CLASSES = {"verification_required", "structured_rejection", "rate_limited", "unclassified", "not_applicable"}
+ATTEMPT_FIELDS = {"sequence", "stage", "outcome", "observedAt", "observation", "responseClass",
+                  "deviceCookieBefore", "deviceCookieAfter"}
+CONFIGURATION_FIELDS = {"clientIdMatchesFrozenDefault", "authUrlMatchesFrozenDefault", "tokenUrlMatchesFrozenDefault",
+                        "redirectUriMatchesFrozenDefault", "scopeMatchesFrozenDefault", "proxyPresent", "proxySource"}
+PROXY_SOURCES = {"default", "system", "explicit", "not_recorded"}
+# Public constants from the frozen upstream, checked against its AST in tests.
+# Only equality booleans leave configuration_summary; never the configured values.
+OAUTH_DEFAULTS = {"client_id": "app_EMoamEEZ73f0CkXaXp7hrann", "auth_url": "https://auth.openai.com/oauth/authorize",
+                  "token_url": "https://auth.openai.com/oauth/token", "redirect_uri": "http://localhost:1455/auth/callback",
+                  "scope": "openid email profile offline_access"}
 CONTENT_TYPES = {"json", "html", "other", "missing"}
 JSON_KINDS = {"object", "other", "invalid", "not_checked"}
 PAGE_KINDS = {"new_account", "existing_account", "missing", "unknown", "not_checked"}
@@ -66,6 +82,143 @@ def header(response: Any, name: str) -> str | None:
         if isinstance(value, str):
             return value
     return None
+
+
+def device_cookie_presence(session: Any) -> str:
+    """Observe existence only; do not retain a cookie value or its digest."""
+    try:
+        cookies = getattr(session, "cookies", None)
+        if not callable(getattr(cookies, "get", None)):
+            return "not_observed"
+        value = cookies.get("oai-did")
+        return "present" if isinstance(value, str) and bool(value) else "absent"
+    except Exception:
+        return "not_observed"
+
+
+def configuration_summary(engine: Any, proxy_source: str = "not_recorded") -> dict[str, Any]:
+    manager = getattr(engine, "oauth_manager", None)
+    summary = {}
+    for attribute, field in (("client_id", "clientId"), ("auth_url", "authUrl"), ("token_url", "tokenUrl"),
+                             ("redirect_uri", "redirectUri"), ("scope", "scope")):
+        value = getattr(manager, attribute, None)
+        summary[field + "MatchesFrozenDefault"] = value == OAUTH_DEFAULTS[attribute] if isinstance(value, str) else None
+    proxy = getattr(engine, "proxy_url", ...)
+    summary["proxyPresent"] = bool(proxy) if isinstance(proxy, str) or proxy is None else None
+    summary["proxySource"] = proxy_source if isinstance(proxy_source, str) and proxy_source in PROXY_SOURCES else "not_recorded"
+    validate_configuration_summary(summary)
+    return summary
+
+
+def validate_configuration_summary(value: Any) -> None:
+    if (not isinstance(value, dict) or set(value) != CONFIGURATION_FIELDS
+            or any(value[key] is not None and type(value[key]) is not bool for key in CONFIGURATION_FIELDS - {"proxySource"})
+            or not isinstance(value["proxySource"], str) or value["proxySource"] not in PROXY_SOURCES):
+        raise ValueError("注册配置证据格式无效")
+
+
+def response_classification(response: Any, slot: str, evidence: dict[str, Any] | None = None) -> str:
+    """Classify only explicit safe signals; an unexplained 403 stays unknown."""
+    if response is None:
+        return "not_applicable"
+    value = observation(response, slot) if evidence is None else evidence
+    validate_observation(slot, value, 3)
+    if value["httpStatus"] == 429:
+        return "rate_limited"
+    mitigated = header(response, "cf-mitigated") or ""
+    if (value["officialOrigin"] and ((len(mitigated) <= 64 and mitigated.lower().strip() == "challenge")
+            or slot == "sentinel" and value.get("reason") == "challenge_required")):
+        return "verification_required"
+    if value.get("responseDetails", {}).get("errorSignal", "none") != "none":
+        return "structured_rejection"
+    if (slot == "sentinel" and value["jsonKind"] == "object"
+            or slot == "authorize" and value["httpStatus"] is not None and value["httpStatus"] >= 400 and value["contentType"] == "json"):
+        try:
+            body = response.json()
+            if isinstance(body, dict) and (body.get("error") or body.get("errors")):
+                return "structured_rejection"
+        except Exception:
+            pass
+    return "unclassified"
+
+
+def response_admitted(response: Any, slot: str, evidence: dict[str, Any] | None = None, *, response_class: str | None = None) -> bool:
+    """Live admission includes v4 classes without changing historical v3 data."""
+    value = observation(response, slot) if evidence is None else evidence
+    validate_observation(slot, value, 3)
+    classification = response_classification(response, slot, value) if response_class is None else response_class
+    if not isinstance(classification, str) or classification not in RESPONSE_CLASSES:
+        raise ValueError("注册响应分类无效")
+    return value["decision"] == "accepted" and classification not in {"verification_required", "structured_rejection", "rate_limited", "not_applicable"}
+
+
+def new_flow_evidence() -> dict[str, Any]:
+    return {"version": 4, "attempts": [], "attemptsTruncated": False, "configurationSummary": None}
+
+
+def attempt_evidence(slot: str, evidence: dict[str, Any] | None, *, outcome: str = "response",
+                     response_class: str = "unclassified", device_cookie_before: str = "not_observed",
+                     device_cookie_after: str = "not_observed") -> dict[str, Any]:
+    value = {"sequence": 1, "stage": slot, "outcome": outcome,
+             "observedAt": evidence["observedAt"] if evidence is not None else datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+             "observation": evidence, "responseClass": response_class,
+             "deviceCookieBefore": device_cookie_before, "deviceCookieAfter": device_cookie_after}
+    validate_attempt(value)
+    return value
+
+
+def validate_attempt(value: Any) -> None:
+    if (not isinstance(value, dict) or set(value) != ATTEMPT_FIELDS
+            or type(value["sequence"]) is not int or not 1 <= value["sequence"] <= MAX_SEQUENCE
+            or not isinstance(value["stage"], str) or value["stage"] not in SLOTS
+            or not isinstance(value["outcome"], str) or value["outcome"] not in ATTEMPT_OUTCOMES
+            or not isinstance(value["responseClass"], str) or value["responseClass"] not in RESPONSE_CLASSES
+            or any(not isinstance(value[key], str) or value[key] not in COOKIE_PRESENCE
+                   for key in ("deviceCookieBefore", "deviceCookieAfter"))):
+        raise ValueError("注册逐次证据格式无效")
+    stamp = value["observedAt"]
+    try:
+        valid = (isinstance(stamp, str) and len(stamp) <= 32
+                 and re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?Z", stamp)
+                 and datetime.fromisoformat(stamp.replace("Z", "+00:00")))
+    except ValueError:
+        valid = False
+    evidence = value["observation"]
+    if not valid or (value["outcome"] == "response" and evidence is None) or (value["outcome"] == "network_error" and evidence is not None):
+        raise ValueError("注册逐次证据格式无效")
+    if evidence is not None:
+        validate_observation(value["stage"], evidence, 3)
+        if (value["responseClass"] == "not_applicable"
+                or value["responseClass"] == "rate_limited" and evidence["httpStatus"] != 429
+                or value["responseClass"] == "structured_rejection" and value["stage"] not in {"authorize", "sentinel"}
+                   and evidence.get("responseDetails", {}).get("errorSignal", "none") == "none"):
+            raise ValueError("注册逐次证据格式无效")
+    elif value["responseClass"] != "not_applicable":
+        raise ValueError("注册逐次证据格式无效")
+
+
+def append_attempt(flow: dict[str, Any], attempt: dict[str, Any]) -> dict[str, Any]:
+    validate_flow_evidence(flow)
+    validate_attempt(attempt)
+    if flow["version"] != 4:
+        return flow
+    previous = flow["attempts"][-1] if flow["attempts"] else None
+    replace = (previous is not None and attempt["outcome"] == "evidence_storage_error"
+               and attempt["observation"] is not None and previous["stage"] == attempt["stage"]
+               and previous["observedAt"] == attempt["observedAt"] and previous["observation"] == attempt["observation"])
+    sequence = previous["sequence"] if replace else previous["sequence"] + 1 if previous else 1
+    if sequence > MAX_SEQUENCE:
+        raise ValueError("注册逐次证据数量超出范围")
+    rows = [*(flow["attempts"][:-1] if replace else flow["attempts"]), {**attempt, "sequence": sequence}]
+    updated = {**flow, "attempts": rows[-MAX_ATTEMPTS:],
+               "attemptsTruncated": flow["attemptsTruncated"] or len(rows) > MAX_ATTEMPTS}
+    slot, evidence = attempt["stage"], attempt["observation"]
+    if evidence is None:
+        updated.pop(slot, None)
+    else:
+        updated[slot] = evidence
+    validate_flow_evidence(updated)
+    return updated
 
 
 def decision(slot: str, value: dict[str, Any], version: int = CURRENT_VERSION) -> tuple[str, str | None]:
@@ -300,9 +453,9 @@ def observation_for_version(slot: str, value: dict[str, Any], version: int) -> d
     projection must never be used to decide whether a live flow may continue.
     """
     validate_observation(slot, value)
-    if type(version) is not int or version not in {1, 2, 3}:
+    if type(version) is not int or version not in {1, 2, 3, 4}:
         raise ValueError("注册响应证据格式无效")
-    if version == 3:
+    if version in {3, 4}:
         return {**value, "redirectHosts": list(value["redirectHosts"]),
                 **({"responseDetails": dict(value["responseDetails"])} if "responseDetails" in value else {}),
                 **({"sentinelDetails": dict(value["sentinelDetails"])} if "sentinelDetails" in value else {})}
@@ -330,8 +483,30 @@ def observation_v1(slot: str, value: dict[str, Any]) -> dict[str, Any]:
 
 
 def validate_flow_evidence(value: Any) -> None:
-    if (not isinstance(value, dict) or type(value.get("version")) is not int or value["version"] not in {1, 2, 3}
-            or not set(value) <= {"version"} | (SLOTS if value["version"] == 3 else LEGACY_SLOTS)):
+    if not isinstance(value, dict) or type(value.get("version")) is not int or value["version"] not in {1, 2, 3, 4}:
+        raise ValueError("注册响应证据格式无效")
+    version = value["version"]
+    if version == 4:
+        required = {"version", "attempts", "attemptsTruncated", "configurationSummary"}
+        if (not required <= set(value) <= required | SLOTS or not isinstance(value["attempts"], list)
+                or len(value["attempts"]) > MAX_ATTEMPTS or type(value["attemptsTruncated"]) is not bool):
+            raise ValueError("注册响应证据格式无效")
+        if value["configurationSummary"] is not None:
+            validate_configuration_summary(value["configurationSummary"])
+        rows = value["attempts"]
+        for index, row in enumerate(rows):
+            validate_attempt(row)
+            if index and row["sequence"] != rows[index - 1]["sequence"] + 1:
+                raise ValueError("注册逐次证据顺序无效")
+        if (value["attemptsTruncated"] != bool(rows and rows[0]["sequence"] > 1)
+                or value["attemptsTruncated"] and len(rows) != MAX_ATTEMPTS):
+            raise ValueError("注册逐次证据截断标记无效")
+        for slot in SLOTS:
+            latest = next((row for row in reversed(rows) if row["stage"] == slot), None)
+            if latest is not None and ((latest["observation"] is None and slot in value)
+                    or latest["observation"] is not None and value.get(slot) != latest["observation"]):
+                raise ValueError("注册阶段摘要与逐次证据不一致")
+    elif not set(value) <= {"version"} | (SLOTS if version == 3 else LEGACY_SLOTS):
         raise ValueError("注册响应证据格式无效")
     for slot in SLOTS & set(value):
-        validate_observation(slot, value[slot], value["version"])
+        validate_observation(slot, value[slot], min(version, 3))
