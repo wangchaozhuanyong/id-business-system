@@ -1,4 +1,5 @@
 'use strict';
+/* global window, document */
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs/promises');
@@ -49,7 +50,8 @@ async function sessionInstallFixture({
   body,
   headers = {},
   original = {},
-  failure
+  failure,
+  dependencies = {}
 } = {}) {
   const filename = path.resolve(__dirname, '../upstream/session-auth.js');
   const source = await fs.readFile(filename, 'utf8');
@@ -61,13 +63,14 @@ async function sessionInstallFixture({
       module,
       exports: module.exports,
       Buffer,
+      URL,
       process: { env: {} },
       performance,
       console: {
         log: (...items) => logs.push(items.join(' ')),
         warn: (...items) => logs.push(items.join(' '))
       },
-      require: (name) => require(path.resolve(path.dirname(filename), name))
+      require: (name) => dependencies[name] || require(path.resolve(path.dirname(filename), name))
     },
     { filename }
   );
@@ -106,7 +109,7 @@ async function sessionInstallFixture({
     install: () => module.exports.installChatGptSession(context, JSON.stringify(session))
   };
 }
-test('verified Cookie refresh replaces the stale bearer in session, fetch and routed requests', async () => {
+test('verified Cookie refresh supplies the fresh bearer without generic route injection', async () => {
   const refreshed = sessionBearer('fixture-account', 'fixture-user', 'refreshed');
   const body = {
     accessToken: refreshed,
@@ -123,26 +126,37 @@ test('verified Cookie refresh replaces the stale bearer in session, fetch and ro
   assert.equal(installed.sessionData.sessionToken, f.session.sessionToken);
   assert.equal(f.calls.realSessionRequests, 1);
   assert.equal(f.calls.scripts[0].payload.accessToken, refreshed);
-  let routedHeaders;
+  const callerHeaders = Object.freeze({
+    Authorization: `Bearer ${refreshed}`,
+    accept: 'application/json'
+  });
+  let continuation;
   await f.calls.routes.at(-1).handler({
     request: () => ({
       url: () => 'https://chatgpt.com/backend-api/accounts/check/v4-2023-04-27',
       resourceType: () => 'fetch',
-      headers: () => ({})
+      headers: () => callerHeaders
     }),
     continue: async (options) => {
-      routedHeaders = options?.headers;
+      continuation = options;
     }
   });
-  assert.equal(routedHeaders.Authorization, `Bearer ${refreshed}`);
+  assert.equal(continuation, undefined, 'Session routing must preserve native request headers');
+  assert.equal(callerHeaders.Authorization, `Bearer ${refreshed}`);
   let routedSession;
   await f.calls.routes[0].handler({
+    request: () => ({ url: () => 'https://chatgpt.com/api/auth/session' }),
     fulfill: async (options) => {
       routedSession = JSON.parse(options.body);
     }
   });
   assert.equal(routedSession.accessToken, refreshed);
   const window = {
+    location: {
+      origin: 'https://chatgpt.com',
+      href: 'https://chatgpt.com/',
+      hostname: 'chatgpt.com'
+    },
     fetch: async () => {
       throw new Error('Synthetic fixture forbids network');
     }
@@ -151,6 +165,8 @@ test('verified Cookie refresh replaces the stale bearer in session, fetch and ro
     `(${f.calls.scripts[0].script.toString()})(${JSON.stringify(f.calls.scripts[0].payload)})`,
     {
       window,
+      location: window.location,
+      URL,
       localStorage: { setItem() {} },
       Response
     }
@@ -158,6 +174,251 @@ test('verified Cookie refresh replaces the stale bearer in session, fetch and ro
   assert.equal((await (await window.fetch('/api/auth/session')).json()).accessToken, refreshed);
   assert.equal(f.logs.join('\n').includes(refreshed), false);
   assert.equal(security.redactText(refreshed).includes(refreshed), false);
+});
+test('synthetic session bootstrap is isolated from third-party frames and fetch destinations', async () => {
+  const { chromium } = require('../upstream/node_modules/playwright');
+  const f = await sessionInstallFixture({ body: { accessToken: sessionBearer() } });
+  await f.install();
+  const browser = await chromium.launch({
+    headless: true,
+    args: [
+      '--disable-background-networking',
+      '--host-resolver-rules=MAP * ~NOTFOUND, EXCLUDE localhost'
+    ]
+  });
+  try {
+    const context = await browser.newContext();
+    let thirdPartyFetches = 0;
+    await context.route('**/*', async (route) => {
+      const url = new URL(route.request().url());
+      if (url.origin === 'https://chatgpt.com' && url.pathname === '/') {
+        await route.fulfill({
+          contentType: 'text/html',
+          body: '<main><button>New chat</button><textarea id="prompt-textarea"></textarea></main><iframe src="https://third-party.invalid/frame"></iframe>'
+        });
+      } else if (url.origin === 'https://third-party.invalid') {
+        if (url.pathname === '/api/auth/session') thirdPartyFetches++;
+        await route.fulfill({
+          contentType: url.pathname === '/frame' ? 'text/html' : 'application/json',
+          headers: { 'Access-Control-Allow-Origin': '*' },
+          body: url.pathname === '/frame' ? '<main>Third party synthetic frame</main>' : '{}'
+        });
+      } else {
+        await route.abort();
+      }
+    });
+    await context.addInitScript(f.calls.scripts[0].script, f.calls.scripts[0].payload);
+    const page = await context.newPage();
+    await page.goto('https://chatgpt.com/');
+    assert.equal(
+      await page.evaluate(() => window.__CHATGPT_BOOTSTRAP_SESSION__?.user?.id),
+      'fixture-user'
+    );
+    assert.equal(
+      await page.evaluate(() => Boolean(localStorage.getItem('oai/apps/chat/bootstrap-session'))),
+      true
+    );
+    assert.equal(
+      await page.evaluate(async () =>
+        Boolean((await (await fetch('/api/auth/session')).json()).accessToken)
+      ),
+      true
+    );
+    const frame = page
+      .frames()
+      .find((candidate) => candidate.url() === 'https://third-party.invalid/frame');
+    assert.ok(frame);
+    assert.deepEqual(
+      await frame.evaluate(() => ({
+        injectedSession: Boolean(window.__CHATGPT_BOOTSTRAP_SESSION__),
+        persistedSession: Boolean(localStorage.getItem('oai/apps/chat/bootstrap-session'))
+      })),
+      { injectedSession: false, persistedSession: false }
+    );
+    assert.equal(
+      await page.evaluate(async () =>
+        Boolean(
+          (await (await fetch('https://third-party.invalid/api/auth/session')).json()).accessToken
+        )
+      ),
+      false
+    );
+    assert.equal(
+      thirdPartyFetches,
+      1,
+      'Cross-origin auth paths must reach the synthetic remote response'
+    );
+  } finally {
+    await browser.close();
+  }
+});
+test('session routing never manufactures authorization or overrides caller headers', async () => {
+  const f = await sessionInstallFixture({ body: { accessToken: sessionBearer() } });
+  await f.install();
+  for (const origin of [
+    'https://chatgpt.com',
+    'https://openai.com',
+    'https://auth.openai.com',
+    'https://pay.openai.com',
+    'https://api.chatgpt.com',
+    'https://api.openai.com'
+  ]) {
+    for (const headers of [
+      Object.freeze({ accept: 'application/json' }),
+      Object.freeze({
+        Authorization: `Bearer ${f.session.accessToken}`,
+        accept: 'application/json'
+      })
+    ]) {
+      let continuation;
+      const before = { ...headers };
+      await f.calls.routes.at(-1).handler({
+        request: () => ({
+          url: () => `${origin}/fixed-path`,
+          resourceType: () => 'fetch',
+          headers: () => headers
+        }),
+        continue: async (options) => {
+          continuation = options;
+        }
+      });
+      assert.equal(continuation, undefined, 'Native caller headers cannot become a route override');
+      assert.deepEqual(headers, before);
+    }
+  }
+  for (const url of [
+    'https://third-party.invalid/?redirect=https://chatgpt.com/backend-api/accounts/check',
+    'https://chatgpt.com.third-party.invalid/api/auth/session',
+    'https://third-party.invalid/?host=pay.openai.com',
+    'https://third-party.invalid/?host=auth.openai.com',
+    'https://chatgpt.com:444/fixed-path',
+    'http://chatgpt.com/fixed-path'
+  ]) {
+    let sent;
+    await f.calls.routes.at(-1).handler({
+      request: () => ({ url: () => url, resourceType: () => 'fetch', headers: () => ({}) }),
+      continue: async (options) => {
+        sent = options?.headers;
+      }
+    });
+    assert.equal(sent?.Authorization, undefined, 'A third party cannot inherit the session bearer');
+  }
+  for (const registered of f.calls.routes.slice(0, -1)) {
+    let continued = 0;
+    let fulfilled = 0;
+    await registered.handler({
+      request: () => ({ url: () => 'https://third-party.invalid/api/auth/session' }),
+      continue: async () => {
+        continued++;
+      },
+      fulfill: async () => {
+        fulfilled++;
+      }
+    });
+    assert.equal(continued, 1);
+    assert.equal(
+      fulfilled,
+      0,
+      'Third-party auth paths cannot receive the synthetic official session'
+    );
+  }
+});
+test('native cross-origin 302 strips caller authorization and session routing adds none', async () => {
+  const http = require('node:http');
+  const { chromium } = require('../upstream/node_modules/playwright');
+  const f = await sessionInstallFixture({ body: { accessToken: sessionBearer() } });
+  await f.install();
+  const expected = `Bearer ${f.session.accessToken}`;
+  const observed = [];
+  let originA;
+  const serverB = http.createServer((request, response) => {
+    observed.push({ path: request.url, authorization: request.headers.authorization });
+    response.writeHead(200, {
+      'content-type': 'text/plain',
+      'access-control-allow-origin': originA || '*'
+    });
+    response.end('synthetic-destination');
+  });
+  const listen = async (server) => {
+    await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+    return `http://127.0.0.1:${server.address().port}`;
+  };
+  const originB = await listen(serverB);
+  const serverA = http.createServer((request, response) => {
+    observed.push({ path: request.url, authorization: request.headers.authorization });
+    if (request.url === '/route-start' || request.url === '/native-start') {
+      response.writeHead(302, {
+        location: `${originB}${request.url.replace('-start', '-finish')}`
+      });
+      response.end();
+    } else {
+      response.writeHead(200, { 'content-type': 'text/html' });
+      response.end('<main>Synthetic redirect seed</main>');
+    }
+  });
+  let browser;
+  try {
+    originA = await listen(serverA);
+    browser = await chromium.launch({
+      headless: true,
+      args: [
+        '--disable-background-networking',
+        '--host-resolver-rules=MAP * ~NOTFOUND, EXCLUDE 127.0.0.1'
+      ]
+    });
+    const context = await browser.newContext();
+    const continuations = [];
+    let externalRequests = 0;
+    context.on('request', (request) => {
+      if (![originA, originB].includes(new URL(request.url()).origin)) externalRequests++;
+    });
+    for (const pathname of ['/route-start', '/native-start']) {
+      await context.route(`${originA}${pathname}`, async (route) => {
+        const request = route.request();
+        // Only the initial URL is represented as official. Native networking,
+        // both loopback origins, actual 302 handling and request headers remain real.
+        await f.calls.routes.at(-1).handler({
+          request: () => ({
+            url: () => `https://chatgpt.com${pathname}`,
+            resourceType: () => request.resourceType(),
+            headers: () => request.headers()
+          }),
+          abort: () => route.abort(),
+          continue: async (options) => {
+            continuations.push(options);
+            await route.continue(options);
+          }
+        });
+      });
+    }
+    const page = await context.newPage();
+    await page.goto(`${originA}/route-start`);
+    assert.equal(observed.find((item) => item.path === '/route-start')?.authorization, undefined);
+    assert.equal(observed.find((item) => item.path === '/route-finish')?.authorization, undefined);
+    await page.goto(`${originA}/seed`);
+    assert.equal(
+      await page.evaluate(
+        async ({ start, authorization }) =>
+          (await fetch(start, { headers: { Authorization: authorization } })).status,
+        { start: `${originA}/native-start`, authorization: expected }
+      ),
+      200
+    );
+    assert.equal(observed.find((item) => item.path === '/native-start')?.authorization, expected);
+    assert.equal(observed.find((item) => item.path === '/native-finish')?.authorization, undefined);
+    assert.deepEqual(continuations, [undefined, undefined]);
+    assert.equal(externalRequests, 0);
+  } finally {
+    await browser?.close();
+    await Promise.all(
+      [serverA, serverB].map(
+        (server) =>
+          new Promise((resolve, reject) => {
+            server.close((error) => (error ? reject(error) : resolve()));
+          })
+      )
+    );
+  }
 });
 test('refreshed Cookie credentials cannot switch account, user or discard identity binding', async () => {
   const good = {
@@ -386,6 +647,245 @@ test('rendered authentication ignores hidden login text and preserves visible lo
     await browser.close();
   }
 });
+test('authentication readiness waits for stable recovery and respects cancellation and one deadline', async (t) => {
+  const { chromium } = require('../upstream/node_modules/playwright');
+  const { waitForLoggedInChatUi } = require('../upstream/auth-page-detect');
+  const browser = await chromium.launch({
+    headless: true,
+    args: [
+      '--disable-background-networking',
+      '--host-resolver-rules=MAP * ~NOTFOUND, EXCLUDE localhost'
+    ]
+  });
+  try {
+    const page = await browser.newPage();
+    const chat =
+      '<button>New chat</button><textarea id="prompt-textarea" placeholder="Ask anything"></textarea>';
+    const guest = `${chat}<button>Log in</button>`;
+    const timeline = async (initial, changes = []) => {
+      await page.setContent(`<html><body data-auth-phase="${initial}"><main id="auth-fixture">${initial === 'guest' ? guest : chat}</main><script>
+        for (const timer of window.syntheticAuthTimers || []) clearTimeout(timer);
+        window.syntheticAuthTimers = ${JSON.stringify(changes)}.map(step => setTimeout(() => {
+          document.getElementById('auth-fixture').innerHTML = step.state === 'guest' ? ${JSON.stringify(guest)} : ${JSON.stringify(chat)};
+          document.body.dataset.authPhase = step.state;
+        }, step.after));
+      </script></body></html>`);
+    };
+    await t.test('one transient login control can recover before readiness', async () => {
+      await timeline('guest', [{ after: 600, state: 'recovered' }]);
+      assert.equal(
+        await waitForLoggedInChatUi(page, 2500, { deadlineAt: performance.now() + 2500 }),
+        true
+      );
+      assert.equal(await page.getAttribute('body', 'data-auth-phase'), 'recovered');
+    });
+    await t.test('initial chat cannot skip a later guest transition before recovery', async () => {
+      await timeline('initial', [
+        { after: 100, state: 'guest' },
+        { after: 750, state: 'recovered' }
+      ]);
+      assert.equal(
+        await waitForLoggedInChatUi(page, 2500, { deadlineAt: performance.now() + 2500 }),
+        true
+      );
+      assert.equal(await page.getAttribute('body', 'data-auth-phase'), 'recovered');
+    });
+    await t.test('a permanent guest remains unready', async () => {
+      await timeline('guest');
+      assert.equal(
+        await waitForLoggedInChatUi(page, 700, { deadlineAt: performance.now() + 700 }),
+        false
+      );
+    });
+    await t.test('a late guest invalidates the first chat observation', async () => {
+      await timeline('initial', [{ after: 100, state: 'guest' }]);
+      assert.equal(
+        await waitForLoggedInChatUi(page, 1300, { deadlineAt: performance.now() + 1300 }),
+        false
+      );
+      assert.equal(await page.getAttribute('body', 'data-auth-phase'), 'guest');
+    });
+    await t.test(
+      'lease cancellation interrupts readiness without another UI observation',
+      async () => {
+        await timeline('guest');
+        const controller = new AbortController();
+        const reason = Object.assign(new Error('Synthetic lease cancellation'), {
+          code: 'LEASE_LOST'
+        });
+        const timer = setTimeout(() => controller.abort(reason), 80);
+        try {
+          await assert.rejects(
+            waitForLoggedInChatUi(page, 1500, {
+              deadlineAt: performance.now() + 1500,
+              signal: controller.signal
+            }),
+            (error) => error === reason
+          );
+        } finally {
+          clearTimeout(timer);
+        }
+      }
+    );
+    await t.test('the shared deadline is not extended by a longer local wait', async () => {
+      await timeline('guest');
+      const started = performance.now();
+      assert.equal(await waitForLoggedInChatUi(page, 5000, { deadlineAt: started + 650 }), false);
+      assert.ok(
+        performance.now() - started < 1500,
+        'Readiness must stop at the original shared deadline'
+      );
+    });
+  } finally {
+    await browser.close();
+  }
+});
+test('late verification preserves the authentication wait boundary without restarting verification', async (t) => {
+  const { chromium } = require('../upstream/node_modules/playwright');
+  const { waitForLoggedInChatUi } = require('../upstream/auth-page-detect');
+  const human = require('../upstream/human-verification');
+  const browser = await chromium.launch({
+    headless: true,
+    args: [
+      '--disable-background-networking',
+      '--host-resolver-rules=MAP * ~NOTFOUND, EXCLUDE localhost'
+    ]
+  });
+  const chat =
+    '<button>New chat</button><textarea id="prompt-textarea" placeholder="Ask anything"></textarea>';
+  const guest = `${chat}<button>Log in</button>`;
+  try {
+    await t.test('stopWhen exits readiness within the original deadline', async () => {
+      const page = await browser.newPage();
+      try {
+        await page.setContent(`<main>${guest}</main>`);
+        let calls = 0;
+        const started = performance.now();
+        assert.equal(
+          await waitForLoggedInChatUi(page, 5000, {
+            deadlineAt: started + 1500,
+            stopWhen: async () => {
+              calls++;
+              return true;
+            }
+          }),
+          false
+        );
+        assert.equal(calls, 1);
+        assert.ok(performance.now() - started < 1000);
+      } finally {
+        await page.close();
+      }
+    });
+    for (const phase of ['during-prewait', 'after-verification']) {
+      await t.test(`a challenge ${phase} never bypasses or restarts verification`, async () => {
+        const page = await browser.newPage();
+        let clears = 0;
+        const f = await sessionInstallFixture({
+          dependencies: {
+            './human-verification': {
+              isBlockingHumanVerificationVisible: async (target) =>
+                target.locator('#synthetic-challenge').isVisible(),
+              clearHumanVerification: async () => {
+                clears++;
+                return phase === 'during-prewait'
+                  ? { cleared: false, code: 'VERIFICATION_SOLVER_DISABLED' }
+                  : { cleared: true };
+              }
+            }
+          }
+        });
+        page.goto = async () => {
+          await page.setContent(`<main>${phase === 'during-prewait' ? guest : chat}</main><script>
+            setTimeout(() => {
+              const challenge = document.createElement('section');
+              challenge.id = 'synthetic-challenge';
+              challenge.textContent = 'Synthetic verification';
+              document.body.appendChild(challenge);
+            }, 2800);
+          </script>`);
+        };
+        try {
+          await assert.rejects(
+            f.api.bootstrapChatGptSession(page, JSON.stringify(f.session), {
+              cookieVerified: true,
+              deadlineAt: performance.now() + 10000
+            }),
+            (error) =>
+              error.code ===
+                (phase === 'during-prewait'
+                  ? 'VERIFICATION_SOLVER_DISABLED'
+                  : 'HUMAN_VERIFICATION_REQUIRED') &&
+              error.bootstrapDiagnostics?.reason === 'verification_failed' &&
+              error.bootstrapDiagnostics?.challengeDetected === true
+          );
+          assert.equal(clears, 1);
+        } finally {
+          await page.close();
+        }
+      });
+    }
+    for (const recover of [true, false]) {
+      await t.test(
+        `a guest appearing at verification entry ${recover ? 'recovers once' : 'remains blocked'}`,
+        async () => {
+          const page = await browser.newPage();
+          let clears = 0;
+          let entryResult;
+          const f = await sessionInstallFixture({
+            dependencies: {
+              './human-verification': {
+                ...human,
+                clearHumanVerification: async (target, options) => {
+                  clears++;
+                  await target.setContent(`<main>${guest}</main>`);
+                  entryResult = await human.clearHumanVerification(target, options);
+                  if (recover) {
+                    await target.evaluate((html) => {
+                      setTimeout(() => {
+                        document.querySelector('main').innerHTML = html;
+                      }, 600);
+                    }, chat);
+                  }
+                  return entryResult;
+                }
+              }
+            }
+          });
+          page.goto = async () => page.setContent(`<main>${chat}</main>`);
+          try {
+            const bootstrap = f.api.bootstrapChatGptSession(page, JSON.stringify(f.session), {
+              cookieVerified: true,
+              deadlineAt: performance.now() + 18000
+            });
+            if (recover) {
+              const result = await bootstrap;
+              assert.equal(result.email, f.session.user.email);
+              assert.equal(
+                await page.getByRole('button', { name: 'Log in', exact: true }).count(),
+                0
+              );
+            } else {
+              await assert.rejects(
+                bootstrap,
+                (error) =>
+                  error.code === 'SESSION_NOT_CONFIRMED' &&
+                  error.bootstrapDiagnostics?.reason === 'visible_login_controls'
+              );
+            }
+            assert.equal(entryResult?.code, 'SESSION_INVALID');
+            assert.equal(entryResult?.sessionRequired, true);
+            assert.equal(clears, 1);
+          } finally {
+            await page.close();
+          }
+        }
+      );
+    }
+  } finally {
+    await browser.close();
+  }
+});
 async function authenticationQueryFixture(authError, phase = 'session_install') {
   const filename = path.resolve(__dirname, '../upstream/subscription-check.js');
   const module = { exports: {} };
@@ -476,7 +976,10 @@ test('bootstrap diagnostics keep controlled reasons and real booleans without cr
     loggedInUi: true,
     redirectDetected: false,
     challengeDetected: false,
-    pageClosed: false
+    pageClosed: false,
+    accountCheckHttpStatus: 200,
+    accountCheckHasAccountFacts: true,
+    accountCheckIdentityMatches: false
   };
   assert.deepEqual(
     safeBootstrapDiagnostics({
@@ -498,6 +1001,9 @@ test('bootstrap diagnostics keep controlled reasons and real booleans without cr
     redirectDetected: null,
     challengeDetected: {},
     pageClosed: false,
+    accountCheckHttpStatus: '200',
+    accountCheckHasAccountFacts: 1,
+    accountCheckIdentityMatches: 'true',
     unknown: true
   });
   assert.deepEqual(filtered, { pageClosed: false });
@@ -509,6 +1015,12 @@ test('bootstrap diagnostics keep controlled reasons and real booleans without cr
     { reason: 'PRIVATE_AUTH_VALUE', visibleLogin: 'true' }
   ])
     assert.equal(safeBootstrapDiagnostics(input), undefined);
+  for (const status of [100, 200, 401, 599])
+    assert.deepEqual(safeBootstrapDiagnostics({ accountCheckHttpStatus: status }), {
+      accountCheckHttpStatus: status
+    });
+  for (const status of [0, 99, 600, 200.5, NaN, Infinity, '200'])
+    assert.equal(safeBootstrapDiagnostics({ accountCheckHttpStatus: status }), undefined);
 });
 test('bootstrap failure keeps its code and safe diagnostics through subscription and final confirmation', async () => {
   for (const code of ['SESSION_NOT_CONFIRMED', 'SESSION_BOOTSTRAP_FAILED']) {
@@ -519,7 +1031,10 @@ test('bootstrap failure keeps its code and safe diagnostics through subscription
       loggedInUi: false,
       redirectDetected: false,
       challengeDetected: false,
-      pageClosed: false
+      pageClosed: false,
+      accountCheckHttpStatus: 401,
+      accountCheckHasAccountFacts: false,
+      accountCheckIdentityMatches: false
     };
     const f = await authenticationQueryFixture(
       Object.assign(new Error('PRIVATE_AUTH_VALUE'), {

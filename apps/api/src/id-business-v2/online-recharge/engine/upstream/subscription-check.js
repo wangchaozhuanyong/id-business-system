@@ -350,7 +350,8 @@ async function boundedQuery(operation, budget, phase) {
     finally { clearTimeout(timer); budget.signal?.removeEventListener('abort', onAbort); }
 }
 async function queryGet(read, budget, transport) {
-    while (budget.attempts < 2) {
+    const maximum = budget.maxAttempts === 1 ? 1 : 2;
+    while (budget.attempts < maximum) {
         const started = performance.now(), attempt = ++budget.attempts;
         try {
             const timeoutMs = Math.min(10000, checkBudget(budget));
@@ -364,7 +365,7 @@ async function queryGet(read, budget, transport) {
             const code = transportCode(error);
             budget.diagnostics.push({ transport, phase: 'account_check', networkCode: code,
                 attempt, elapsedMs: Math.round(performance.now() - started) });
-            if (attempt >= 2 || !['ECONNRESET', 'ETIMEDOUT', 'EAI_AGAIN',
+            if (attempt >= maximum || !['ECONNRESET', 'ETIMEDOUT', 'EAI_AGAIN',
                 'net::ERR_CONNECTION_RESET', 'net::ERR_TIMED_OUT', 'net::ERR_NETWORK_CHANGED'].includes(code)) throw error;
             await boundedQuery(() => new Promise((resolve) => setTimeout(resolve, Math.min(500, checkBudget(budget)))), budget, 'retry_wait');
         }
@@ -466,7 +467,7 @@ async function withRenewalBrowserContext(accessToken, options, operation) {
 }
 async function fetchAccountCheck(accessToken, options = {}) {
     const budget = queryBudget(options);
-    let cleanup = async () => {}, ownedContext, session, ownedPage, requestContext;
+    let cleanup = async () => {}, ownedContext, session, ownedPage, requestContext, verifiedCookie = false;
     try {
         let page = options.page;
         const context = options.browserContext || page?.context?.();
@@ -490,6 +491,8 @@ async function fetchAccountCheck(accessToken, options = {}) {
             ownedPage = page = await prepareQueryPage(ownedContext, budget);
             const auth = require('./session-auth');
             const installed = await boundedQuery(() => auth.installChatGptSession(ownedContext, options.sessionRaw), budget, 'session_install');
+            verifiedCookie = installed?.cookieVerified === true;
+            accessToken = installed?.sessionData?.accessToken || accessToken;
             const login = await boundedQuery(() => auth.bootstrapChatGptSession(page, options.sessionRaw, {
                 sessionData: installed?.sessionData || installed, cookieVerified: installed?.cookieVerified === true,
                 deadlineAt: budget.deadlineAt, signal: budget.signal
@@ -526,6 +529,37 @@ async function fetchAccountCheck(accessToken, options = {}) {
         return { ...result, diagnostics: budget.diagnostics };
     } catch (error) {
         if (error.code === 'LEASE_LOST') throw error;
+        // A stopped login may still expose why the official read-only endpoint disagrees
+        // with the UI. This observation cannot turn the failed bootstrap into success.
+        if (error.code === 'SESSION_NOT_CONFIRMED' && verifiedCookie && ownedContext
+            && officialPage(ownedPage) && error.phase === 'session_bootstrap'
+            && ['visible_login_controls', 'visible_login_content', 'login_not_confirmed'].includes(error.bootstrapDiagnostics?.reason)
+            && error.bootstrapDiagnostics?.challengeDetected !== true
+            && error.bootstrapDiagnostics?.redirectDetected !== true
+            && !budget.signal?.aborted && budget.deadlineAt > performance.now()) {
+            try {
+                const probeBudget = { ...budget, attempts: 0, maxAttempts: 1,
+                    deadlineAt: Math.min(budget.deadlineAt, performance.now() + 5000) };
+                const blocked = await boundedQuery(() => require('./human-verification')
+                    .isBlockingHumanVerificationVisible(ownedPage), probeBudget, 'verification_probe');
+                if (!blocked) {
+                    const probe = await readCheckInPage(ownedPage, accessToken, options.timezoneOffsetMin, probeBudget);
+                    const body = normalizeResponseBody(probe.data);
+                    const observed = body?.accounts?.default?.account?.account_id;
+                    const hasFacts = probe.status === 200 && typeof observed === 'string'
+                        && observed.length > 0 && typeof body?.accounts?.default?.entitlement?.has_active_subscription === 'boolean';
+                    const expected = require('./session-auth').extractProfileFromToken(accessToken).accountId;
+                    const facts = { accountCheckHttpStatus: probe.status,
+                        accountCheckHasAccountFacts: hasFacts,
+                        accountCheckIdentityMatches: hasFacts && Boolean(expected) && observed === expected };
+                    error.bootstrapDiagnostics = { ...error.bootstrapDiagnostics, ...facts };
+                    console.warn('[Session] 首页未确认，已完成只读订阅诊断', facts);
+                }
+            } catch (probeError) {
+                if (probeError.code === 'LEASE_LOST') throw probeError;
+                // queryGet already retained only bounded transport diagnostics.
+            }
+        }
         const bootstrapDiagnostics = safeBootstrapDiagnostics(error.bootstrapDiagnostics);
         return { status: 0, errorCode: queryErrorCode(error), data: null, diagnostics: budget.diagnostics,
             ...(bootstrapDiagnostics ? { bootstrapDiagnostics } : {}),
