@@ -482,7 +482,9 @@ class AppleMailboxTests(unittest.TestCase):
         context, provider, _ = self.reservation()
         response = SimpleNamespace(text="ip=198.51.100.12\nloc=US\n")
         get = Mock(return_value=response)
-        engine = SimpleNamespace(http_client=SimpleNamespace(get=get),
+        client = self.offline_http_client()
+        client.get = get
+        engine = SimpleNamespace(http_client=client,
             _submit_signup_form=Mock(return_value=SimpleNamespace(is_existing_account=False)),
             _send_verification_code=Mock(return_value=True), _create_user_account=Mock(return_value=True),
             _mark_email_as_registered=Mock(return_value=None), email_service=provider,
@@ -506,7 +508,8 @@ class AppleMailboxTests(unittest.TestCase):
             _create_user_account=Mock(return_value=True), _mark_email_as_registered=Mock())
         self.observed_signup_fixture(engine, provider, result)
         self.integration.observe_engine(engine, provider)
-        self.assertIs(engine._submit_signup_form("device", "fixture"), result)
+        token = engine._check_sentinel("device")
+        self.assertIs(engine._submit_signup_form("device", token), result)
         self.assertGreaterEqual(provider.otp_lower_bound, provider.context["startedAt"])
         self.assertIsNone(self.read()["lastResultKind"])
         self.assertEqual(self.read()["reason"], "existing_account_suspected")
@@ -649,11 +652,11 @@ class AppleMailboxTests(unittest.TestCase):
                 stack.enter_context(patch.object(self.integration, "persist_result", side_effect=unavailable))
             stack.enter_context(patch.object(engine_class, "_submit_signup_form", signup))
             def initialize_session(engine):
-                engine.session = self.official_session(malformed=not verified_identity)
+                engine.http_client._session = self.official_session(malformed=not verified_identity)
+                engine.session = engine.http_client.session
                 def post(url, *_args, **_kwargs):
-                    response = self.diagnostic_response(200, {"token": "offline-sentinel-token"} if
-                        url == registration.OPENAI_API_ENDPOINTS["sentinel"] else {
-                            "page": {"type": "email_otp_verification" if existing else "password"}})
+                    response = self.diagnostic_response(200, {
+                        "page": {"type": "email_otp_verification" if existing else "password"}})
                     response.url = url
                     return response
                 engine.session.post.side_effect = post
@@ -671,14 +674,6 @@ class AppleMailboxTests(unittest.TestCase):
 
             stack.enter_context(patch.object(engine_class, "_register_password", password))
             methods["_register_password"] = password_calls
-            client_class = importlib.import_module("src.core.http_client").HTTPClient
-            def client_request(_client, method, url, **_kwargs):
-                if method == "POST" and url == registration.OPENAI_API_ENDPOINTS["sentinel"]:
-                    response = self.diagnostic_response(200, {"token": "offline-sentinel-token"})
-                    response.url = url
-                    return response
-                raise AssertionError("禁止离线测试访问网络")
-            stack.enter_context(patch.object(client_class, "request", new=client_request))
             response = self.post("start", {"aliasId": self.alias, "email": self.email,
                 "revision": self.read()["revision"], "operatorId": "offline-admin"})
             self.assertEqual(response.status_code, 200)
@@ -691,6 +686,7 @@ class AppleMailboxTests(unittest.TestCase):
             else:
                 self.assertIsNone(self.read()["activeTaskUuid"])
             task = self.integration.task(task_uuid)
+            self.assertEqual(task["flowEvidence"]["sentinel"]["decision"], "accepted")
             if existing:
                 methods["_register_password"].assert_not_called()
                 methods["_send_verification_code"].assert_not_called()
@@ -736,14 +732,45 @@ class AppleMailboxTests(unittest.TestCase):
         payload = {"user": user, "accessToken": "offline-session-access"} if cookie else user
         response = SimpleNamespace(status_code=status, url="https://example.invalid/redirect" if redirected else endpoint,
                                    json=Mock(return_value={} if malformed else payload))
-        return SimpleNamespace(cookies={"__Secure-next-auth.session-token": "offline-cookie"} if cookie else {},
-                               get=Mock(return_value=response), post=Mock(), close=Mock())
+        session = SimpleNamespace(cookies={"__Secure-next-auth.session-token": "offline-cookie"} if cookie else {},
+                                  get=Mock(return_value=response), post=Mock(), close=Mock())
+        get, post = session.get, session.post
+        session._offline_get_transport, session._offline_post_transport = get, post
+        sentinel = importlib.import_module("src.core.register").OPENAI_API_ENDPOINTS["sentinel"]
+
+        def request(method, url, **kwargs):
+            # Frozen HTTPClient.post delegates to request, using this exact
+            # transport session. Keep Sentinel separate from Session.post so
+            # signup/create response sequences retain their original meaning.
+            if method == "POST" and url == sentinel:
+                result = self.diagnostic_response(200, {"token": "offline-sentinel-token",
+                    "proofofwork": {"required": False}, "turnstile": {"required": False}})
+                result.url = url
+                return result
+            if method == "GET":
+                return get(url, **kwargs)
+            if method == "POST":
+                return post(url, **kwargs)
+            raise AssertionError("禁止离线测试访问真实网络")
+
+        session.request = Mock(side_effect=request)
+        return session
+
+    def offline_http_client(self, session=None):
+        """Use the frozen post/request implementation with only a fake transport."""
+        client_class = importlib.import_module("src.core.http_client").HTTPClient
+        return client_class(session=session if session is not None else self.official_session())
 
     def observed_signup_fixture(self, engine, provider, result):
         """A mocked signup method still supplies a real guarded fake response."""
         registration = importlib.import_module("src.core.register")
         response = self.diagnostic_response(200, {"page": {"type": result.page_type}})
-        session = SimpleNamespace(get=Mock(), post=Mock(return_value=response))
+        session = self.official_session()
+        session.post.return_value = response
+        engine.session = session
+        engine.http_client = self.offline_http_client(session)
+        engine._log = Mock()
+        engine._check_sentinel = registration.RegistrationEngine._check_sentinel.__get__(engine)
         self.integration.guard_session(engine, provider.context["taskUuid"], session)
         def signup(*_args, **_kwargs):
             session.post(registration.OPENAI_API_ENDPOINTS["signup"])
@@ -1047,7 +1074,7 @@ class AppleMailboxTests(unittest.TestCase):
 
     def test_account_creation_failure_and_loose_existing_hint_hold_review_lease(self):
         context, provider, _ = self.reservation()
-        engine = SimpleNamespace(http_client=SimpleNamespace(get=Mock()),
+        engine = SimpleNamespace(http_client=self.offline_http_client(),
             _submit_signup_form=Mock(return_value=SimpleNamespace(is_existing_account=False)),
             _send_verification_code=Mock(return_value=True), _create_user_account=Mock(return_value=False),
             _mark_email_as_registered=Mock())
@@ -1284,7 +1311,8 @@ class AppleMailboxTests(unittest.TestCase):
         self.observed_signup_fixture(engine, provider,
             SimpleNamespace(success=True, is_existing_account=True, page_type="email_otp_verification"))
         self.integration.observe_engine(engine, provider)
-        engine._submit_signup_form()
+        token = engine._check_sentinel("offline-device")
+        engine._submit_signup_form("offline-device", token)
         self.store.finish(self.email, context["taskUuid"], False)
         self.integration.jobs.pop(context["taskUuid"], None)
         recovery = self.post("recover", {"aliasId": self.alias, "email": self.email,
@@ -1387,7 +1415,8 @@ class AppleMailboxTests(unittest.TestCase):
         context, engine, session = self.diagnostic_engine()
         session._offline_post_transport.side_effect = [self.diagnostic_response(200), self.diagnostic_response(400,
             {"error": {"code": "account_creation_failed", "message": "offline-secret-message"}})]
-        self.assertTrue(engine._submit_signup_form("offline-device", None).success)
+        token = engine._check_sentinel("offline-device")
+        self.assertTrue(engine._submit_signup_form("offline-device", token).success)
         self.assertIsNone(self.read()["firstFailure"])
         self.assertFalse(engine._create_user_account())
         failure = self.read()["firstFailure"]
@@ -1401,7 +1430,8 @@ class AppleMailboxTests(unittest.TestCase):
     def test_create_network_failure_does_not_reuse_previous_signup_200(self):
         _, engine, session = self.diagnostic_engine()
         session._offline_post_transport.side_effect = [self.diagnostic_response(200), TimeoutError("offline-secret-url-token")]
-        self.assertTrue(engine._submit_signup_form("offline-device", None).success)
+        token = engine._check_sentinel("offline-device")
+        self.assertTrue(engine._submit_signup_form("offline-device", token).success)
         self.assertFalse(engine._create_user_account())
         failure = self.read()["firstFailure"]
         self.assertEqual((failure["stage"], failure["errorKind"], failure["httpStatus"]),
