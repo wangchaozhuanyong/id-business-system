@@ -1125,6 +1125,8 @@ if (
 
 if (part === 'guards') {
   if (!/^[a-f0-9]{40}$/.test(base)) throw new Error('Missing diff base');
+  if (changed.some((path) => path.startsWith('scripts/ci-feature-retirement-scope')))
+    run('node', ['--test', 'scripts/ci-feature-retirement-scope.test.mjs']);
   const existing = changed.filter((p) => existsSync(p));
   const formatted = existing.filter((p) => /\.(?:[cm]?js|ts|vue|css|json|md|yml)$/.test(p));
   const linted = existing.filter((p) => /\.(?:mjs|ts|vue)$/.test(p));

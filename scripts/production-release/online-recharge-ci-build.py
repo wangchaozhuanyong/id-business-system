@@ -25,7 +25,7 @@ KIND = 'ONLINE_RECHARGE_CI_BUILD_ONLY'
 LABEL = 'id-business-v2.ci-online-source-sha256'
 IMAGES = ('api', 'admin', 'migrate', 'online-recharge')
 ENGINE = 'apps/api/src/id-business-v2/online-recharge/engine'
-BUILD_TARGETS = (*IMAGES, 'api-build', 'admin-build')
+BUILD_TARGETS = (*IMAGES, 'api-build', 'admin-build', 'registration-dependencies')
 STATE = {'stage': 'SOURCE_PROJECTION', 'image': None}
 RUNTIME_LABEL = 'id-business-v2.online-component-source-sha256'
 BRANCH = 'codex/online-storage-proof-integration-20261014'
@@ -38,7 +38,10 @@ ADMITTED_TREE = None
 CONTENT_ROOTS = {
     'api-build': ('/app/apps/api/dist', '/app/packages/shared/dist'),
     'admin-build': ('/app/apps/admin/dist',),
-    'api': ('/app/apps/api/dist', '/app/packages/shared/dist'),
+    'registration-dependencies': ('/opt/id-registration/venv', '/opt/id-registration/dependency-audit.json'),
+    'api': ('/app/apps/api/dist', '/app/packages/shared/dist',
+        '/app/apps/api/src/id-business-v2/auto-registration', '/opt/id-registration/venv',
+        '/opt/id-registration/dependency-audit.json', '/app/apps/admin/src/v2/styles/base.css'),
     'admin': ('/usr/share/nginx/html',), 'migrate': ('/app/apps/api/prisma-mysql',),
     'online-recharge': ()}
 # Read-only OCI verification of this exact index and amd64 manifest proves the
@@ -263,11 +266,16 @@ def build_and_verify(context, files, record):
     # Compare packaged compiled bytes with the actual Docker compilation stage.
     api_build = build('api-build', api_file, 'build', context, record)
     admin_build = build('admin-build', admin_file, 'build', context, record)
+    registration = build('registration-dependencies', api_file, 'registration-dependencies', context, record)
     api_compiled = content(api_build, ('/app/apps/api/dist', '/app/packages/shared/dist'))
+    api_deps = content(registration, ('/opt/id-registration/venv', '/opt/id-registration/dependency-audit.json'))
     admin_compiled = {name.replace('/app/apps/admin/dist/', '/usr/share/nginx/html/', 1): sha
         for name, sha in content(admin_build, ('/app/apps/admin/dist',)).items()}
     need('/usr/share/nginx/html/index.html' in admin_compiled, 'ADMIN_COMPILED_INDEX_MISSING')
-    expected = {'api': api_compiled, 'admin': admin_compiled,
+    api_sources = {'/app/' + name: c.digest(raw) for name, (raw, _mode) in files.items()
+        if name.startswith('apps/api/src/id-business-v2/auto-registration/') or
+        name == 'apps/admin/src/v2/styles/base.css'}
+    expected = {'api': {**api_compiled, **api_deps, **api_sources}, 'admin': admin_compiled,
         'migrate': {'/app/' + name: c.digest(raw) for name, (raw, _mode) in files.items()
             if name.startswith(c.MIGRATION_ROOT + '/') or name in (c.SCHEMA, 'apps/api/prisma-mysql/seed.ts')},
         'online-recharge': {'./' + name[len(ENGINE) + 1:]: c.digest(raw)
@@ -333,6 +341,7 @@ def execution_allowlist(context, record, producer=None):
             'build' if name == 'admin-build' else 'runtime', context) if name.startswith('admin') else (
             context / ENGINE / 'Dockerfile', '', context / ENGINE) if name == 'online-recharge' else (
             context / 'apps/api/Dockerfile.mysql', 'build' if name == 'api-build' else
+            'registration-dependencies' if name == 'registration-dependencies' else
             'migration' if name == 'migrate' else 'runtime', context)
         commands.add(build_arguments(name, dockerfile, target, selected, record))
         reference = 'id-online-ci:' + record['candidateTree'] + '-' + name

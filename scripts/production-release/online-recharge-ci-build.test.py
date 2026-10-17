@@ -229,16 +229,20 @@ class ImageTests(unittest.TestCase):
     def test_four_packaged_images_match_compilation_and_frozen_source(self):
         files = {
             'apps/admin/Dockerfile': (('FROM ' + ci.ADMIN_RUNTIME_BASE + ' AS runtime\n').encode(), '100644'),
+            'apps/api/src/id-business-v2/auto-registration/worker/tool.py': (b'worker', '100644'),
             'apps/admin/src/v2/styles/base.css': (b'css', '100644'),
             ci.c.SCHEMA: (b'schema', '100644'),
             ci.c.MIGRATION_ROOT + '/one/migration.sql': (b'migration', '100644'),
             'apps/api/prisma-mysql/seed.ts': (b'seed', '100644'),
             ci.ENGINE + '/worker.cjs': (b'engine', '100644')}
         compiled = {'/app/apps/api/dist/main.js': '1' * 64, '/app/packages/shared/dist/index.js': '2' * 64}
+        dependencies = {'/opt/id-registration/venv/bin/python': '3' * 64,
+                        '/opt/id-registration/dependency-audit.json': '4' * 64}
         compiled_admin = {'/app/apps/admin/dist/index.html': '5' * 64}
-        snapshots = {'api-build': compiled,
+        snapshots = {'api-build': compiled, 'registration-dependencies': dependencies,
             'admin-build': compiled_admin,
-            'api': dict(compiled),
+            'api': {**compiled, **dependencies, **{'/app/' + name: ci.c.digest(raw)
+                for name, (raw, _mode) in files.items() if name.endswith(('tool.py', 'base.css'))}},
             'admin': {**ci.ADMIN_BASE_HTML, '/usr/share/nginx/html/index.html': '5' * 64},
             ci.ADMIN_RUNTIME_BASE: dict(ci.ADMIN_BASE_HTML),
             'migrate': {'/app/' + name: ci.c.digest(raw) for name, (raw, _mode) in files.items()
@@ -278,8 +282,6 @@ class ImageTests(unittest.TestCase):
             snapshots['admin-build'] = {'/app/apps/admin/dist/assets/app.js': '8' * 64}
             with self.assertRaisesRegex(RuntimeError, 'ADMIN_COMPILED_INDEX_MISSING'):
                 ci.build_and_verify(Path('/project/context'), files, self.record)
-        self.assertNotIn('registration-dependencies', [call[0] for call in calls])
-        self.assertNotIn('registration-dependencies', ci.BUILD_TARGETS)
         selected = {name: (dockerfile.name, target, str(context)) for name, dockerfile, target, context in calls}
         self.assertEqual(selected['api'][:2], ('Dockerfile.mysql', 'runtime'))
         self.assertEqual(selected['admin'][:2], ('Dockerfile', 'runtime'))
@@ -376,21 +378,21 @@ class AllowlistTests(unittest.TestCase):
             ACTIVE_REFERENCES=self.references)
         execution.start(); self.addCleanup(execution.stop)
 
-    def test_only_exact_six_builds_one_pull_and_four_runtime_aliases_are_registered(self):
+    def test_only_exact_seven_builds_one_pull_and_four_runtime_aliases_are_registered(self):
         self.assertIsInstance(self.commands, frozenset)
-        self.assertEqual(len(self.commands), 33)
-        self.assertEqual(len(self.references), 11)
+        self.assertEqual(len(self.commands), 36)
+        self.assertEqual(len(self.references), 12)
         self.assertEqual({name: sum(command[0] == name for command in self.commands)
             for name in ('build', 'pull', 'image', 'run', 'tag')},
-            {'build': 6, 'pull': 1, 'image': 11, 'run': 11, 'tag': 4})
+            {'build': 7, 'pull': 1, 'image': 12, 'run': 12, 'tag': 4})
         self.assertEqual({command for command in self.commands if command[0] == 'pull'}, {
             ('pull', '--platform', 'linux/amd64', ci.ADMIN_RUNTIME_BASE)})
         for name in ci.IMAGES:
             alias = ci.SYNTHETIC_REPOSITORY + ':' + 'a' * 40 + '-31-2-' + name
             self.assertIn(('tag', 'id-online-ci:' + 'b' * 40 + '-' + name, alias), self.commands)
         default, references = ci.execution_allowlist(self.context, self.record)
-        self.assertEqual(len(default), 21)
-        self.assertEqual(len(references), 7)
+        self.assertEqual(len(default), 24)
+        self.assertEqual(len(references), 8)
         self.assertFalse(any(command[0] == 'tag' for command in default))
 
     def test_exact_commands_execute_with_only_explicit_public_environment(self):
@@ -401,7 +403,7 @@ class AllowlistTests(unittest.TestCase):
              patch.object(ci.subprocess, 'run', return_value=SimpleNamespace(returncode=0, stdout=b'public')) as external:
             for command in self.commands:
                 self.assertEqual(ci.approved_docker(*command), 'public')
-            self.assertEqual(external.call_count, 33)
+            self.assertEqual(external.call_count, 36)
             for call in external.call_args_list:
                 self.assertEqual(call.kwargs['env'], self.environment)
                 self.assertFalse(set(private) & set(call.kwargs['env']))

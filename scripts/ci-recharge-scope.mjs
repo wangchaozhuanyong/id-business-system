@@ -45,6 +45,7 @@ import {
   onlineSettingsParts
 } from './ci-online-settings-scope.mjs';
 import { isProxyResultIdentityOnly } from './ci-proxy-result-identity-scope.mjs';
+import { isFeatureRetirementOnly } from './ci-feature-retirement-scope.mjs';
 import {
   isOnlineProxyCountryOnly,
   isOnlineProxyCountryValidationOnly,
@@ -1128,6 +1129,7 @@ const onlineCiBuildTestInputs = new Set([
   'scripts/production-release/online-recharge-component-lifecycle.test.py'
 ]);
 export function needsOnlineRechargeCiBuild(paths, context) {
+  if (isFeatureRetirementOnly(paths, context)) return false;
   if (isRegistrationTerminalStopOnly(paths, context)) return false;
   if (isRegistrationFlowV4Only(paths, context)) return false;
   if (isRegistrationProtocolRepairPreservationOnly(paths, context)) return false;
