@@ -1,6 +1,6 @@
 """v4 contract and real AST adapter tests: no application, database or network."""
 import copy
-from contextlib import ExitStack
+from contextlib import ExitStack, nullcontext
 import json
 from pathlib import Path
 import socket
@@ -111,6 +111,233 @@ class FlowV4Tests(unittest.TestCase):
         self.assertTrue(all(row["deviceCookieBefore"] == row["deviceCookieAfter"] == "present" for row in rows))
         self.assertTrue(all(row["responseClass"] == "unclassified" for row in rows))
         self.assertEqual(run.generated.call_count, 0)
+
+    def test_explicit_authorize_refusals_stop_after_first_response(self):
+        challenge = self.response(403)
+        challenge.headers["cf-mitigated"] = "challenge"
+        cases = ((challenge, "verification_required"), (self.response(429), "rate_limited"),
+                 (self.response(403, body={"error": {"code": "fixture-private"}}), "structured_rejection"))
+        for response, classification in cases:
+            with self.subTest(classification=classification):
+                run = parity.execute(True, {"authorize": response})
+                self.assertFalse(run.result.success)
+                self.assertEqual([item[1] for item in run.requests], [parity.AUTHORIZE])
+                self.assertEqual(len(run.client.sessions), 1)
+                rows = run.facts.data["flowEvidence"]["attempts"]
+                self.assertEqual(len(rows), 1)
+                self.assertEqual((rows[0]["outcome"], rows[0]["responseClass"]), ("response", classification))
+                self.assertEqual(run.facts.data["firstFailure"]["stage"], "authorize")
+                self.assertEqual(run.facts.data["firstFailure"]["httpStatus"], response.status_code)
+                self.assertEqual(run.facts.data["firstFailure"]["errorKind"], "http_rejected")
+                self.assertEqual(run.generated.call_count, 0)
+
+    def test_sentinel_explicit_500_refusal_skips_original_http_retry(self):
+        target = parity.ENDPOINTS["sentinel"]
+        challenge = self.response(500, url=target)
+        challenge.headers["cf-mitigated"] = "challenge"
+        for response in (challenge, self.response(500, body={"error": "fixture-private"}, url=target)):
+            with self.subTest(headers=response.headers):
+                run = parity.execute(True, {"sentinel": response})
+                self.assertFalse(run.result.success)
+                self.assertEqual([item[1] for item in run.requests], [parity.AUTHORIZE, target])
+                rows = run.facts.data["flowEvidence"]["attempts"]
+                self.assertEqual(len(rows), 2)
+                self.assertEqual(rows[-1]["outcome"], "response")
+                self.assertEqual(run.facts.data["firstFailure"]["errorKind"], "http_rejected")
+                self.assertEqual(run.facts.data["firstFailure"]["httpStatus"], 500)
+                self.assertFalse(getattr(run.engine, "_apple_evidence_storage_failed", False))
+
+    def test_normal_transport_errors_keep_original_network_retry(self):
+        for target, response in ((parity.AUTHORIZE, self.response()),
+                                 (parity.ENDPOINTS["sentinel"], self.response(body={"token": "fixture-private"}, url=parity.ENDPOINTS["sentinel"]))):
+            for error in (TimeoutError("fixture-private"), ConnectionError("fixture-private"),
+                          parity.NAMESPACE["cffi_requests"].RequestsError("fixture-private")):
+                with self.subTest(target=target, error=type(error).__name__):
+                    run = self.sequence(target, [error, response])
+                    rows = [item for item in run.facts.data["flowEvidence"]["attempts"]
+                            if item["stage"] == ("authorize" if target == parity.AUTHORIZE else "sentinel")]
+                    self.assertEqual([item["outcome"] for item in rows], ["network_error", "response"])
+                    self.assertEqual(sum(item[1] == target for item in run.requests), 2)
+                    self.assertTrue(any(item[1] == parity.ENDPOINTS["create_account"] for item in run.requests))
+                    # The harness deliberately ends at the original workspace
+                    # lookup; a recovered transport error is not its failure.
+                    self.assertEqual(run.facts.data["firstFailure"]["stage"], "workspace")
+                    self.assertIsNone(getattr(run.engine, "_apple_transport_stop_state", None))
+
+    def test_all_four_evidence_storage_failures_stop_without_new_session(self):
+        original = parity.MemoryFacts.record_flow_evidence
+        expected = {"authorize": 1, "sentinel": 2, "signup": 3, "password": 4}
+        for slot, count in expected.items():
+            failed = []
+            def record(store, task, observed_slot, evidence, **kwargs):
+                if observed_slot == slot and not failed:
+                    failed.append(True)
+                    raise RuntimeError("fixture-private-storage")
+                return original(store, task, observed_slot, evidence, **kwargs)
+            with self.subTest(slot=slot), patch.object(parity.MemoryFacts, "record_flow_evidence", record):
+                run = parity.execute(True)
+            self.assertFalse(run.result.success)
+            self.assertEqual(len(run.requests), count)
+            self.assertEqual(len(run.client.sessions), 1)
+            self.assertEqual(run.facts.data["firstFailure"]["stage"], slot)
+            self.assertEqual(run.facts.data["firstFailure"]["httpStatus"], 200)
+            self.assertEqual(run.facts.data["firstFailure"]["errorKind"], "evidence_storage_error")
+            self.assertEqual(run.facts.data["flowEvidence"]["attempts"][-1]["outcome"], "evidence_storage_error")
+            self.assertNotIn("fixture-private-storage", run.result.error_message)
+
+    def test_storage_failure_on_sentinel_500_does_not_become_network_retry(self):
+        original = parity.MemoryFacts.record_flow_evidence
+        failed = []
+        def record(store, task, slot, evidence, **kwargs):
+            if slot == "sentinel" and not failed:
+                failed.append(True)
+                raise RuntimeError("fixture-private-storage")
+            return original(store, task, slot, evidence, **kwargs)
+        with patch.object(parity.MemoryFacts, "record_flow_evidence", record):
+            run = parity.execute(True, {"sentinel": self.response(500, url=parity.ENDPOINTS["sentinel"])})
+        self.assertFalse(run.result.success)
+        self.assertEqual([item[1] for item in run.requests], [parity.AUTHORIZE, parity.ENDPOINTS["sentinel"]])
+        self.assertEqual(run.facts.data["firstFailure"]["errorKind"], "evidence_storage_error")
+        self.assertEqual(run.facts.data["firstFailure"]["httpStatus"], 500)
+        self.assertEqual(run.facts.data["lastHttpStatus"], 500)
+
+    def test_persistent_evidence_storage_failure_still_stops_transport(self):
+        with patch.object(parity.MemoryFacts, "record_flow_evidence", side_effect=RuntimeError("fixture-private-storage")):
+            run = parity.execute(True)
+        self.assertFalse(run.result.success)
+        self.assertEqual([item[1] for item in run.requests], [parity.AUTHORIZE])
+        self.assertEqual(len(run.client.sessions), 1)
+        self.assertEqual(run.facts.data["firstFailure"]["errorKind"], "evidence_storage_error")
+        self.assertEqual(run.facts.data["firstFailure"]["httpStatus"], 200)
+        self.assertNotIn("fixture-private-storage", run.result.error_message)
+
+    def test_terminal_stop_keeps_first_failure_and_blocks_late_steps_per_engine(self):
+        response = self.response(403)
+        response.headers["cf-mitigated"] = "challenge"
+        original = parity.MemoryFacts.record_failure
+        calls = []
+        def failure(store, *args):
+            calls.append(args)
+            return original(store, *args)
+        with patch.object(parity.MemoryFacts, "record_failure", failure):
+            run = parity.execute(True, {"authorize": response})
+        self.assertFalse(run.result.success)
+        self.assertEqual(len(calls), 1)
+        first = copy.deepcopy(run.facts.data["firstFailure"])
+        count = len(run.requests)
+        for action in (run.engine._get_device_id,
+                       lambda: run.engine._check_sentinel("fixture-private"),
+                       lambda: run.engine._submit_signup_form("fixture-private", "fixture-private")):
+            with self.assertRaises(Exception):
+                action()
+            self.assertEqual(len(run.requests), count)
+            self.assertEqual(run.facts.data["firstFailure"], first)
+        self.assertEqual(run.engine._register_password(), (False, None))
+        self.assertEqual(len(run.requests), count)
+        self.assertEqual(run.facts.data["firstFailure"], first)
+        self.assertEqual(run.generated.call_count, 0)
+        rerun = run.engine.run()
+        self.assertFalse(rerun.success)
+        self.assertEqual(len(run.requests), count)
+        self.assertEqual(run.facts.data["firstFailure"], first)
+        clean = parity.execute(True)
+        self.assertTrue(any(item[1] == parity.ENDPOINTS["create_account"] for item in clean.requests))
+        self.assertEqual(clean.facts.data["firstFailure"]["stage"], "workspace")
+        self.assertIsNone(getattr(clean.engine, "_apple_transport_stop_state", None))
+
+    def test_password_terminal_rejection_preserves_tuple_failure_and_lease(self):
+        original_step = diagnostics.RegistrationDiagnostics.step
+        namespace = {"json": json, "TASK_STATUSES": {"pending", "running", "failed", "cancelled", "completed"}}
+        parity.source_definitions(HERE / "apple_mailboxes.py", {"RegistrationFacts": {"finish"}}, set(), namespace)
+        for status, code in ((409, "user_exists"), (400, "account_creation_failed")):
+            returned = []
+            def capture_step(recorder, engine, original, stage, failed, owns_stage=False):
+                wrapped = original_step(recorder, engine, original, stage, failed, owns_stage)
+                if stage != "password":
+                    return wrapped
+                def call(*args, **kwargs):
+                    result = wrapped(*args, **kwargs)
+                    returned.append(result)
+                    return result
+                return call
+            response = self.response(status, body={"error": {"code": code, "message": "fixture-private"}})
+            with self.subTest(code=code), patch.object(diagnostics.RegistrationDiagnostics, "step", capture_step):
+                run = parity.execute(True, {"password": response})
+            self.assertEqual(returned, [(False, None)])
+            self.assertFalse(run.result.success)
+            self.assertEqual(run.result.error_message, "注册密码失败")
+            self.assertEqual([item[1] for item in run.requests], [parity.AUTHORIZE,
+                parity.ENDPOINTS["sentinel"], parity.ENDPOINTS["signup"], parity.ENDPOINTS["register"]])
+            first = run.facts.data["firstFailure"]
+            self.assertEqual((first["stage"], first["errorKind"], first["httpStatus"]), ("password", code, status))
+            self.assertTrue(run.facts.data["sideEffectPossible"])
+            self.assertEqual(run.facts.record["activeTaskUuid"], parity.TASK)
+            self.assertNotIn("creationConfirmed", run.facts.data)
+            self.assertEqual(run.facts.data["syncStatus"], "not_started")
+            self.assertEqual(run.engine._register_password(), (False, None))
+            self.assertFalse(run.engine.run().success)
+            self.assertEqual(len(run.requests), 4)
+            self.assertEqual(run.facts.data["firstFailure"], first)
+            # Execute the real finalizer with a fake query, never SQLite.
+            task = SimpleNamespace(status="failed")
+            query = SimpleNamespace(filter_by=lambda **_: SimpleNamespace(first=lambda: task))
+            database = SimpleNamespace(query=lambda _: query)
+            run.facts.record.update(registrationStatus="unregistered", lastResultKind=None)
+            store = SimpleNamespace(transaction=lambda: nullcontext(database),
+                read=lambda _db, _email: run.facts.record, task_data=run.facts.task_data,
+                write=run.facts.write, models=SimpleNamespace(RegistrationTask=object()))
+            namespace["RegistrationFacts"].finish(store, parity.EMAIL, parity.TASK, False)
+            self.assertEqual(run.facts.record["registrationStatus"], "unknown")
+            self.assertEqual(run.facts.record["activeTaskUuid"], parity.TASK)
+            self.assertEqual(run.facts.record["taskStatus"], "awaiting_review")
+            self.assertTrue(run.facts.data["needsReview"])
+            self.assertEqual((task.status, run.facts.data["resultKind"]), ("failed", "failed"))
+
+    def test_password_critical_storage_stop_remains_an_error(self):
+        original = parity.MemoryFacts.record_flow_evidence
+        def record(store, task, slot, evidence, **kwargs):
+            if slot == "password":
+                raise RuntimeError("fixture-private-storage")
+            return original(store, task, slot, evidence, **kwargs)
+        with patch.object(parity.MemoryFacts, "record_flow_evidence", record):
+            run = parity.execute(True)
+        self.assertFalse(run.result.success)
+        self.assertEqual(len(run.requests), 4)
+        self.assertEqual(run.facts.data["firstFailure"]["errorKind"], "evidence_storage_error")
+        with self.assertRaises(diagnostics.EvidenceStorageError):
+            run.engine._register_password()
+        self.assertEqual(len(run.requests), 4)
+
+    def test_original_task_runner_finishes_terminal_engine_as_failed(self):
+        response = self.response(403)
+        response.headers["cf-mitigated"] = "challenge"
+        run = parity.execute(True, {"authorize": response})
+        requests = len(run.requests)
+        database_statuses, public_statuses = [], []
+        def update_task(_db, _task, **updates):
+            if "status" in updates:
+                database_statuses.append(updates["status"])
+            return SimpleNamespace()
+        class ProviderType(str):
+            TEMPMAIL, CUSTOM_DOMAIN, OUTLOOK = "tempmail", "custom_domain", "outlook"
+        namespace = {"Optional": parity.NAMESPACE["Optional"], "List": list,
+            "datetime": SimpleNamespace(utcnow=lambda: parity.NAMESPACE["datetime"](2026, 10, 17)),
+            "get_db": lambda: nullcontext(object()),
+            "crud": SimpleNamespace(update_registration_task=update_task),
+            "task_manager": SimpleNamespace(is_cancelled=lambda _: False,
+                update_status=lambda _task, status, **_: public_statuses.append(status),
+                create_log_callback=lambda *_args, **_kwargs: Mock()),
+            "get_proxy_for_registration": lambda _: (None, None), "get_settings": lambda: SimpleNamespace(),
+            "EmailServiceType": ProviderType, "EmailServiceFactory": SimpleNamespace(create=lambda *_: object()),
+            "RegistrationEngine": lambda **_: run.engine,
+            "logger": SimpleNamespace(info=Mock(), warning=Mock(), error=Mock())}
+        parity.source_definitions(HERE.parent / "upstream/src/web/routes/registration.py", {},
+                                  {"_run_sync_registration_task"}, namespace)
+        namespace["_run_sync_registration_task"](parity.TASK, "fixture", None, {})
+        self.assertEqual(database_statuses, ["running", "failed"])
+        self.assertEqual(public_statuses, ["running", "failed"])
+        self.assertEqual(len(run.requests), requests)
+        self.assertEqual(run.facts.data["firstFailure"]["stage"], "authorize")
 
     def test_storage_error_retains_http_fact_and_blocks_further_transport(self):
         original = parity.MemoryFacts.record_flow_evidence

@@ -143,7 +143,10 @@ import {
   registrationProtocolRepairPreservationBase,
   isRegistrationFlowV4Only,
   registrationFlowV4Base,
-  registrationFlowV4Commands
+  registrationFlowV4Commands,
+  isRegistrationTerminalStopOnly,
+  registrationTerminalStopBase,
+  registrationTerminalStopCommands
 } from './ci-recharge-scope.mjs';
 
 const [part, base] = process.argv.slice(2);
@@ -178,6 +181,21 @@ if (
   if (!Object.hasOwn(registrationProtocolRepairControlCommands, part))
     throw new Error('Unsupported registration protocol preflight control repair check part');
   for (const [file, ...args] of registrationProtocolRepairControlCommands[part]) run(file, args);
+  process.exit(0);
+}
+if (
+  mode === 'recharge' &&
+  base === registrationTerminalStopBase &&
+  isRegistrationTerminalStopOnly(changed, {
+    base,
+    baseTree: execFileSync('git', ['rev-parse', base + '^{tree}'], { encoding: 'utf8' }).trim()
+  })
+) {
+  if (!Object.hasOwn(registrationTerminalStopCommands, part))
+    throw new Error('Unsupported registration terminal stop check part');
+  if (part === 'api' && process.env.GITHUB_ACTIONS !== 'true')
+    throw new Error('Registration terminal stop persistence checks require isolated CI');
+  for (const [file, ...args] of registrationTerminalStopCommands[part]) run(file, args);
   process.exit(0);
 }
 if (

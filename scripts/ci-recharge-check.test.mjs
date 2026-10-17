@@ -58,6 +58,12 @@ import {
   onlineBuildProofReuseCommands,
   onlinePreflightReceiptFixGuardPaths,
   registrationFlowV4Base,
+  registrationTerminalStopBase,
+  registrationTerminalStopTree,
+  registrationTerminalStopContract,
+  registrationTerminalStopApplications,
+  registrationTerminalStopPaths,
+  registrationTerminalStopCommands,
   registrationFlowV4Tree,
   registrationFlowV4Contract,
   registrationFlowV4Applications,
@@ -1011,6 +1017,37 @@ test('Admin successor diagnostics always retain their offline controls', () => {
   }
 });
 
+test('registration terminal stop dispatches only reviewed parts and isolates persistence', () => {
+  const options = { base: registrationTerminalStopBase, terminalStopFixture: true, cloud: true };
+  for (const part of ['guards', 'api', 'release-controls']) {
+    assert.deepEqual(
+      recordGuardCommands('recharge', registrationTerminalStopPaths, part, options),
+      [...registrationTerminalStopCommands[part], ['process-exit', 0]]
+    );
+  }
+  assert.throws(
+    () => recordGuardCommands('recharge', registrationTerminalStopPaths, 'admin', options),
+    /Unsupported registration terminal stop/
+  );
+  assert.throws(
+    () =>
+      recordGuardCommands('recharge', registrationTerminalStopPaths, 'api', {
+        ...options,
+        cloud: false
+      }),
+    /require isolated CI/
+  );
+  const failCommand = registrationTerminalStopCommands.guards[0].join(' ');
+  assert.throws(
+    () =>
+      recordGuardCommands('recharge', registrationTerminalStopPaths, 'guards', {
+        ...options,
+        failCommand
+      }),
+    /SYNTHETIC_COMMAND_FAILURE/
+  );
+});
+
 function recordGuardCommands(
   mode,
   paths,
@@ -1034,7 +1071,8 @@ function recordGuardCommands(
     browserFixture = false,
     restoreFixture = false,
     protocolRepairFixture = false,
-    flowV4Fixture = false
+    flowV4Fixture = false,
+    terminalStopFixture = false
   } = {}
 ) {
   // Run the real dispatcher with process execution replaced before its named import resolves.
@@ -1120,6 +1158,34 @@ function recordGuardCommands(
     validationSources: { [registrationFlowV4Acceptance]: v4Hashes[registrationFlowV4Acceptance] },
     validationSupportSources: registrationFlowV4SupportSources,
     reviewedFileHashes: v4Hashes
+  };
+  const terminalHashes = Object.fromEntries(
+    registrationTerminalStopPaths
+      .filter((name) => name !== registrationTerminalStopContract)
+      .map((name) => [name, 'a'.repeat(64)])
+  );
+  const terminalContract = {
+    version: 1,
+    scope: 'REGISTRATION_TERMINAL_STOP_20261017',
+    name: 'registration-terminal-stop-20261017',
+    frozen: true,
+    admission: 'VERIFIED',
+    migration: null,
+    businessActions: 0,
+    pendingEvidence: [],
+    sourceBaseline: registrationTerminalStopBase,
+    sourceBaselineTree: registrationTerminalStopTree,
+    expectedGitChanges: [...registrationTerminalStopPaths],
+    applicationPaths: [...registrationTerminalStopApplications],
+    sources: Object.fromEntries(
+      registrationTerminalStopApplications.map((name) => [name, terminalHashes[name]])
+    ),
+    workerFiles: { 'apple_mailboxes.py': terminalHashes[registrationTerminalStopApplications[0]] },
+    validationSources: {},
+    apiRuntimeDelta: [],
+    apiJavascriptDelta: [],
+    adminDelta: [],
+    reviewedFileHashes: terminalHashes
   };
   const script = `
     import childProcess from 'node:child_process';
@@ -1210,7 +1276,9 @@ function recordGuardCommands(
           : '';
         const v4FixtureSource = ${JSON.stringify(flowV4Fixture)}
           ? 'export function isRegistrationFlowV4Only(paths,options){const contract=' + ${JSON.stringify(JSON.stringify(v4Contract))} + ';return realScope.isRegistrationFlowV4Only(paths,{...options,contract,sourceDigest:name=>contract.reviewedFileHashes[name]??contract.validationSupportSources[name]??null});}' : '';
-        const source = (repairFixtureSource ? '' : 'import * as realScope from ' + JSON.stringify(scopeUrl) + ';') + 'export * from ' + JSON.stringify(scopeUrl) + ';' + repairFixtureSource + v4FixtureSource +
+        const terminalFixtureSource = ${JSON.stringify(terminalStopFixture)}
+          ? 'export function isRegistrationTerminalStopOnly(paths,options){const contract=' + ${JSON.stringify(JSON.stringify(terminalContract))} + ';return realScope.isRegistrationTerminalStopOnly(paths,{...options,contract,sourceDigest:name=>contract.reviewedFileHashes[name]??null});}' : '';
+        const source = (repairFixtureSource ? '' : 'import * as realScope from ' + JSON.stringify(scopeUrl) + ';') + 'export * from ' + JSON.stringify(scopeUrl) + ';' + repairFixtureSource + v4FixtureSource + terminalFixtureSource +
           'export function canResumeCombinedGuard(base) {' +
           'globalThis.guardTestCalls.push(["resume-helper", base]);' +
           'return process.env.GUARD_TEST_RESUME === "true"; }' +
@@ -1232,6 +1300,7 @@ function recordGuardCommands(
     }});
     childProcess.execFileSync = (file, args) => {
       if (file === 'git') {
+        if (args.join(' ') === ${JSON.stringify('rev-parse ' + registrationTerminalStopBase + '^{tree}')}) return ${JSON.stringify(registrationTerminalStopTree + '\n')};
         if (args.join(' ') === ${JSON.stringify('rev-parse ' + registrationFlowV4Base + '^{tree}')}) return ${JSON.stringify(registrationFlowV4Tree + '\n')};
         if (args.join(' ') === ${JSON.stringify('rev-parse ' + registrationProtocolRepairPreservationBase + '^{tree}')}) return ${JSON.stringify(registrationProtocolRepairPreservationTree + '\n')};
         if (args.join(' ') === ${JSON.stringify('rev-parse ' + registrationProtocolRepairControlBase + '^{tree}')}) return ${JSON.stringify(registrationProtocolRepairControlTree + '\n')};
