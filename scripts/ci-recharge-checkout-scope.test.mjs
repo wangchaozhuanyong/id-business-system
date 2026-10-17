@@ -57,6 +57,38 @@ test('native checkout selects UI/API/connector and retains filled-details accept
   assert.equal(needsOnlineRechargeCiBuild(paths), false);
   assert.ok(adminCheckCommands('recharge', paths).some((row) => row.includes('--quote-stages')));
 });
+test('auto recharge documentation with checkout controls and fixture retains guards and API', () => {
+  const controls = [...checkoutControlPaths, 'docs/AUTO_RECHARGE.md'];
+  const fixture = [
+    ...controls,
+    'apps/api/src/id-business-v2/auto-recharge/recharge-direct-payment.mysql.integration.spec.ts'
+  ];
+  for (const scoped of [controls, fixture]) {
+    assert.equal(isRechargeCheckoutOnly(scoped), true);
+    assert.equal(isRechargeOnly(scoped, 'same', 'same'), true);
+    assert.equal(isRechargeOnly(scoped, 'before', 'after'), false);
+    assert.equal(needsOnlineRechargeCiBuild(scoped), false);
+  }
+  assert.deepEqual(selectedParts(controls), ['guards']);
+  assert.deepEqual(selectedParts(fixture), ['guards', 'api']);
+  assert.equal(isRechargeCheckoutOnly(['docs/AUTO_RECHARGE.md']), false);
+});
+test('auto recharge documentation support is exact and preserves excluded change boundaries', () => {
+  const controls = [...checkoutControlPaths, 'docs/AUTO_RECHARGE.md'];
+  for (const extra of [
+    'docs/AUTO_RECHARGE_EXTRA.md',
+    'docs/AUTO_RECHARGE.md/other.md',
+    'docs/ONLINE_RECHARGE.md',
+    'package-lock.json',
+    'apps/api/package.json',
+    'apps/api/prisma-mysql/schema.prisma',
+    'apps/api/prisma-mysql/migrations/new/migration.sql',
+    'apps/api/src/id-business-v2/online-recharge/checkout-recovery.ts',
+    'apps/api/src/auth/auth.service.ts'
+  ]) {
+    assert.equal(isRechargeCheckoutOnly([...controls, extra]), false, extra);
+  }
+});
 test('scope rejects dependency, schema, ONLINE, auth and unrelated UI changes', () => {
   for (const extra of [
     'package-lock.json',
