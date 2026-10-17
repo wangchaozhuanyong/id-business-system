@@ -9,6 +9,7 @@ import re
 import shutil
 import subprocess
 import tarfile
+import types
 import zipfile
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -45,8 +46,7 @@ def admitted():
     return c
 
 
-def verify_previous_bundle(raw, c):
-    binding = r.PUBLISHED_PREVIOUS
+def bundle_contents(raw, binding):
     need(digest(raw) == binding['artifactSha256'], 'PUBLISHED_ARTIFACT_CHANGED')
     files, members, proof_raw = {}, set(), None
     with tarfile.open(fileobj=io.BytesIO(raw), mode='r:gz') as archive:
@@ -64,7 +64,13 @@ def verify_previous_bundle(raw, c):
                 if item.name == 'payload/build-proof.json':
                     proof_raw = data
     need(proof_raw is not None and digest(proof_raw) == binding['proofSha256'], 'PUBLISHED_PROOF_CHANGED')
-    proof = json.loads(proof_raw)
+    files.pop('build-proof.json')
+    return files, json.loads(proof_raw)
+
+
+def verify_previous_bundle(raw, c):
+    binding = r.PUBLISHED_PREVIOUS
+    files, proof = bundle_contents(raw, binding)
     need(all(proof.get(k) == binding[n] for k, n in (
         ('commit', 'commit'), ('tree', 'tree'), ('workflowRunId', 'runId'), ('contractSha256', 'contractSha256')))
         and proof.get('workflowRunAttempt') == str(binding['attempt'])
@@ -73,21 +79,72 @@ def verify_previous_bundle(raw, c):
                                       'offlineBrowser': True, 'isolatedPersistence': True}
         and proof.get('migrationPerformed') is False and type(proof.get('businessActions')) is int
         and proof['businessActions'] == 0, 'PUBLISHED_IDENTITY_CHANGED')
-    files.pop('build-proof.json')
     old = r.prior_contract()
     need(files == proof['files'] and proof['sources'] == old['sources']
-         and proof['afterInventory'] == c['baseline']['inventory'] == c['publishedInventory']
-         and proof['adminFiles']['index.html'] == c['publicIndexSha256'], 'PUBLISHED_CONTENT_CHANGED')
+         and proof['controlSources'] == old['controlHashes']
+         and proof['afterInventory'] == c['registrationInventory']
+         and all(c['baseline']['inventory'][slot] == proof['afterInventory'][slot]
+                 for slot in ('worker', 'prisma')), 'PUBLISHED_CONTENT_CHANGED')
+    verify_published_git_sources(proof, binding)
+    return proof
+
+
+def verify_published_git_sources(proof, binding):
     for name, expected in proof['sources'].items():
         need(digest(git('show', binding['commit'] + ':' + name)) == expected, 'PUBLISHED_SOURCE_CHANGED')
     for name, expected in proof['controlSources'].items():
         need(digest(git('show', binding['commit'] + ':scripts/production-release/' + name)) == expected,
              'PUBLISHED_CONTROL_CHANGED')
+
+
+def verify_successor_bundle(raw, c):
+    binding = r.PUBLISHED_SUCCESSOR
+    files, proof = bundle_contents(raw, binding)
+    need(all(proof.get(k) == binding[n] for k, n in (
+        ('commit', 'commit'), ('tree', 'tree'), ('workflowRunId', 'runId'), ('contractSha256', 'contractSha256')))
+        and proof.get('workflowRunAttempt') == str(binding['attempt'])
+        and proof.get('scope') == binding['scope'], 'SUCCESSOR_PROOF_IDENTITY_CHANGED')
+    recipe = r.successor_contract()
+    need(set(proof['controlSources']) == set(recipe['controlFiles']), 'SUCCESSOR_CONTROL_SCOPE_CHANGED')
+    r.helper('online-checkout-cs-release.py').verify_proof(proof, proof, recipe, files)
+    cs_paths, _ = r.inherited_api_paths()
+    before_admin = {'count': len(proof['preservedAdminFiles']),
+                    'sha256': digest(r.canonical(proof['preservedAdminFiles']))}
+    need(proof['apiModules'] == {n: c['baseline']['successorApiModules'][n] for n in cs_paths}
+         and r.signature(proof['afterEngineFiles']) == c['baseline']['inventory']['engine']
+         and before_admin == r.recharge_contract()['preservedAdminInventory'],
+         'SUCCESSOR_RUNTIME_CHANGED')
+    verify_published_git_sources(proof, binding)
     return proof
 
 
-def previous_artifact(c):
-    binding = r.PUBLISHED_PREVIOUS
+def verify_recharge_bundle(raw, c):
+    binding = r.PUBLISHED_RECHARGE
+    files, proof = bundle_contents(raw, binding)
+    need(all(proof.get(k) == binding[n] for k, n in (
+        ('commit', 'commit'), ('tree', 'tree'), ('workflowRunId', 'runId'), ('contractSha256', 'contractSha256')))
+        and proof.get('workflowRunAttempt') == str(binding['attempt'])
+        and proof.get('scope') == binding['scope'], 'RECHARGE_PROOF_IDENTITY_CHANGED')
+    recipe = r.recharge_contract()
+    # This historical artifact has three explicit controller digests rather than
+    # sources/controlSources. Its frozen verifier checks its actual proof shape.
+    inventory = types.SimpleNamespace(file_inventory=lambda _: {**files, 'build-proof.json': binding['proofSha256']})
+    r.helper('recharge-checkout-release.py').validate_proof(proof, proof, recipe, None, inventory)
+    for name, expected in recipe['sources'].items():
+        need(digest(git('show', binding['commit'] + ':' + name)) == expected, 'RECHARGE_SOURCE_CHANGED')
+    for field, name in (('controllerSha256', 'recharge-checkout-release.py'),
+                        ('helperSha256', 'recharge-record-release.py'), ('releaseUtilitySha256', 'remote-deploy.py')):
+        need(digest(git('show', binding['commit'] + ':scripts/production-release/' + name)) == proof[field],
+             'RECHARGE_CONTROL_CHANGED')
+    _, checkout_paths = r.inherited_api_paths()
+    admin = {**r.successor_contract()['publicFiles'], **proof['adminFiles']}
+    need(proof['apiModules'] == {n: c['baseline']['successorApiModules'][n] for n in checkout_paths}
+         and r.signature(admin) == c['baseline']['inventory']['admin']
+         and proof['adminFiles']['index.html'] == c['publicIndexSha256'], 'RECHARGE_RUNTIME_CHANGED')
+    return proof
+
+
+def native_artifact(binding, filename, validate, c):
     prefix = 'repos/wangchaozhuanyong/id-business-system/'
     request = lambda path: subprocess.check_output(['gh', 'api', prefix + path], cwd=ROOT)
     run_value = json.loads(request('actions/runs/' + binding['runId']))
@@ -105,18 +162,34 @@ def previous_artifact(c):
          'PUBLISHED_NATIVE_DIGEST_CHANGED')
     with zipfile.ZipFile(io.BytesIO(zipped)) as archive:
         names = archive.namelist()
-        name = 'registration-flow-v4-20261017-artifact.tar.gz'
+        name = filename
         need(len(names) == 2 and set(names) == {name, 'artifact-sha256.txt'}
              and all(archive.getinfo(n).file_size <= 16 * 1024**2 for n in names), 'PUBLISHED_ZIP_INVALID')
         raw = archive.read(name)
         need(archive.read('artifact-sha256.txt').decode().strip() == digest(raw), 'PUBLISHED_BUNDLE_CHANGED')
-    return verify_previous_bundle(raw, c)
+    return validate(raw, c)
+
+
+def previous_artifact(c):
+    return native_artifact(r.PUBLISHED_PREVIOUS, 'registration-flow-v4-20261017-artifact.tar.gz',
+                           verify_previous_bundle, c)
+
+
+def successor_artifact(c):
+    return native_artifact(r.PUBLISHED_SUCCESSOR, 'online-checkout-cs-artifact.tar.gz',
+                           verify_successor_bundle, c)
+
+
+def recharge_artifact(c):
+    return native_artifact(r.PUBLISHED_RECHARGE, 'recharge-checkout-artifact.tar.gz', verify_recharge_bundle, c)
 
 
 def prepare():
     c = admitted()
     need(not OUT.exists(), 'OUTPUT_EXISTS')
     previous_artifact(c)
+    successor_artifact(c)
+    recharge_artifact(c)
     OUT.mkdir(parents=True, mode=0o700)
     candidate = OUT / 'candidate'
     with tarfile.open(fileobj=io.BytesIO(git('archive', r.SOURCE_BASE))) as archive:
@@ -131,14 +204,14 @@ def prepare():
         path.write_bytes((ROOT / name).read_bytes())
     (OUT / 'prepared.json').write_bytes(r.canonical({'contractSha256': digest(
         (HERE / 'registration-terminal-stop-contract.json').read_bytes()), 'sources': c['sources'],
-        'inheritedValidation': r.PUBLISHED_PREVIOUS}))
+        'inheritedValidation': r.inherited_validation()}))
 
 
 def prepared():
     c = admitted()
     value = json.loads((OUT / 'prepared.json').read_bytes())
     need(value == {'contractSha256': digest((HERE / 'registration-terminal-stop-contract.json').read_bytes()),
-                   'sources': c['sources'], 'inheritedValidation': r.PUBLISHED_PREVIOUS}, 'PREPARED_INPUT_CHANGED')
+                   'sources': c['sources'], 'inheritedValidation': r.inherited_validation()}, 'PREPARED_INPUT_CHANGED')
     for name, expected in c['sources'].items():
         need(digest((OUT / 'candidate' / name).read_bytes()) == expected, 'PREPARED_SOURCE_CHANGED')
     return c
@@ -185,7 +258,7 @@ def package():
              'controlSources': c['controlHashes'], 'sources': c['sources'], 'validationSources': {},
              'workerFiles': c['workerFiles'], 'apiModules': {}, 'apiJavascriptDelta': [], 'adminFiles': {},
              'baselineInventory': c['baseline']['inventory'], 'afterInventory': after, 'validation': validation,
-             'inheritedValidation': r.PUBLISHED_PREVIOUS, 'files': h.file_inventory(payload),
+             'inheritedValidation': r.inherited_validation(), 'files': h.file_inventory(payload),
              'migrationPerformed': False, 'businessActions': 0}
     r.verify_proof(proof, proof, c, payload, h)
     (payload / 'build-proof.json').write_text(json.dumps(proof, sort_keys=True, indent=2) + '\n')

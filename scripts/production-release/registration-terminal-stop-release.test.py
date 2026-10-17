@@ -37,14 +37,33 @@ class TerminalControls(unittest.TestCase):
 
     def ready(self):
         old = r.prior_contract()
+        successor = r.successor_contract()
         rows = {**old['baselineWorkerFiles'], **old['workerFiles']}
         baseline = copy.deepcopy(old['baseline'])
         baseline.update(commit=r.CURRENT, current='/opt/id-business-v2/releases/approved-a92',
                         manifestSha256='e' * 64, adminBuildId='v2-' + r.CURRENT, publicIndexSha256='f' * 64)
+        for role in ('api', 'admin'):
+            image = r.PUBLISHED_RECHARGE['native']['readback']['result']['images'][role]['imageId']
+            baseline['services'][role]['image'] = image
+            baseline['images'][role].update(image=image, revision=r.CURRENT)
+        baseline['images']['online-recharge']['revision'] = r.PUBLISHED_SUCCESSOR['commit']
         baseline['inventory']['worker'] = r.signature(rows)
+        baseline['inventory']['admin'] = r.signature(successor['publicFiles'])
+        registration_inventory = copy.deepcopy(baseline['inventory'])
+        baseline['inventory']['api'] = {**baseline['inventory']['api'], 'sha256': 'd' * 64}
+        baseline['inventory']['apiJavascript'] = {**baseline['inventory']['apiJavascript'], 'sha256': 'c' * 64}
+        baseline['inventory']['admin'] = {**baseline['inventory']['admin'], 'sha256': 'e' * 64}
+        baseline['inventory']['engine'] = r.signature(successor['afterEngineFiles'])
+        baseline['successorApiModules'] = {**{'id-business-v2/online-recharge/checkout-recovery' + ext: 'a' * 64
+            for ext in ('.js', '.js.map', '.d.ts')}, 'id-business-v2/online-recharge/contracts.d.ts': 'b' * 64}
+        baseline['successorApiModules'].update({n: 'c' * 64 for n in r.inherited_api_paths()[1]})
+        baseline['publishedProofs']['online-checkout-cs-build-proof.json'] = {'sha256': r.PUBLISHED_SUCCESSOR['proofSha256']}
+        baseline['publishedProofs']['recharge-checkout-build-proof.json'] = {'sha256': r.PUBLISHED_RECHARGE['proofSha256']}
         c = {'version': 1, 'name': r.NAME, 'scope': r.SCOPE, 'frozen': True, 'admission': 'VERIFIED',
              'pendingEvidence': [], 'migration': None, 'businessActions': 0, 'expectedCurrent': r.CURRENT,
              'sourceBaseline': r.SOURCE_BASE, 'sourceBaselineTree': r.SOURCE_TREE, 'publishedPrevious': r.PUBLISHED_PREVIOUS,
+             'publishedSuccessor': r.PUBLISHED_SUCCESSOR,
+             'publishedRecharge': r.PUBLISHED_RECHARGE,
              'applicationPaths': list(r.APPLICATION_PATHS), 'expectedGitChanges': list(r.TASK_PATHS),
              'sources': {n: r.digest((r.ROOT / n).read_bytes()) for n in r.APPLICATION_PATHS},
              'validationSources': {}, 'pythonTests': list(r.PYTHON_TESTS), 'apiJavascriptDelta': [],
@@ -53,8 +72,8 @@ class TerminalControls(unittest.TestCase):
              'manifestSha256': baseline['manifestSha256'], 'baselineWorkerFiles': rows,
              'schemaSha256': baseline['schemaSha256'], 'publicIndexSha256': baseline['publicIndexSha256'],
              'roleSourceCommits': {'api': r.CURRENT, 'admin': r.CURRENT,
-                                  'online-recharge': old['roleSourceCommits']['online-recharge']},
-             'publishedInventory': copy.deepcopy(baseline['inventory']),
+                                  'online-recharge': r.PUBLISHED_SUCCESSOR['commit']},
+             'registrationInventory': registration_inventory,
              'configurationSha256': baseline['configurationSha256'],
              'runtimeConfigurationSha256': baseline['runtimeConfigurationSha256'],
              'sourceProjectionSha256': {'roleSourceProjections': baseline['roleSourceProjectionsSha256'],
@@ -78,7 +97,7 @@ class TerminalControls(unittest.TestCase):
                       workerFiles=c['workerFiles'], apiModules={}, apiJavascriptDelta=[], adminFiles={},
                       baselineInventory=c['baseline']['inventory'], afterInventory=after,
                       validation={'status': 'PASS', 'worker': True, 'isolatedPersistence': True,
-                                  'pythonTests': list(r.PYTHON_TESTS)}, inheritedValidation=r.PUBLISHED_PREVIOUS,
+                                  'pythonTests': list(r.PYTHON_TESTS)}, inheritedValidation=r.inherited_validation(),
                       migrationPerformed=False, businessActions=0)
         result['files'] = {**{'source/' + n: v for n, v in c['sources'].items()},
                            **{'api/worker/' + n: v for n, v in c['workerFiles'].items()}}
@@ -122,6 +141,72 @@ class TerminalControls(unittest.TestCase):
                 with self.subTest(mutate=mutate), self.assertRaises(RuntimeError):
                     r.verify_contract(candidate)
 
+    def test_latest_recharge_is_current_with_cs_engine_and_a92_worker_preserved(self):
+        c = self.ready()
+        self.assertNotEqual(c['baseline']['inventory']['engine'], c['registrationInventory']['engine'])
+        self.assertNotEqual(c['baseline']['inventory']['apiJavascript'], c['registrationInventory']['apiJavascript'])
+        self.assertEqual(c['baseline']['inventory']['worker'], c['registrationInventory']['worker'])
+        with patch.object(r, 'BASELINE_PROJECTION_SHA256', r.digest(r.canonical(c['baseline']))):
+            r.verify_contract(c)
+            for mutate in (
+                    lambda x: x.update(expectedCurrent=r.REGISTRATION_ORIGIN),
+                    lambda x: x['baseline']['inventory'].update(api=x['registrationInventory']['api']),
+                    lambda x: x['baseline']['inventory'].update(engine=x['registrationInventory']['engine']),
+                    lambda x: x['publishedSuccessor'].update(commit=r.REGISTRATION_ORIGIN),
+                    lambda x: x.update(expectedCurrent=r.PUBLISHED_SUCCESSOR['commit']),
+                    lambda x: x['publishedRecharge']['native']['readback']['result'].update(commit=r.PUBLISHED_SUCCESSOR['commit']),
+                    lambda x: x['publishedSuccessor']['native']['readback']['result'].update(commit=r.REGISTRATION_ORIGIN),
+                    lambda x: x['baseline'].pop('successorApiModules'),
+                    lambda x: x['roleSourceCommits'].update({'online-recharge': '055b308bf357d460ee7746c9e60ae46d575f7661'})):
+                changed = copy.deepcopy(c)
+                mutate(changed)
+                with self.subTest(mutate=mutate), self.assertRaises(RuntimeError):
+                    r.verify_contract(changed)
+
+    def test_cs_proof_uses_frozen_successor_verifier_and_live_four_module_hashes(self):
+        c = self.ready()
+        recipe = r.successor_contract()
+        binding = r.PUBLISHED_SUCCESSOR
+        publisher = r.helper('online-checkout-cs-release.py')
+        modules = {**{'id-business-v2/online-recharge/checkout-recovery' + ext: 'a' * 64
+            for ext in ('.js', '.js.map', '.d.ts')}, **recipe['apiDeclarationOnly']}
+        c['baseline']['successorApiModules'].update(modules)
+        proof = {'version': 1, 'scope': binding['scope'], 'commit': binding['commit'], 'tree': binding['tree'],
+                 'workflowRunId': binding['runId'], 'workflowRunAttempt': str(binding['attempt']),
+                 'contractSha256': binding['contractSha256'], 'controlSources': {
+                     n: r.digest(b.git('show', binding['commit'] + ':scripts/production-release/' + n))
+                     for n in recipe['controlFiles']}, 'sources': recipe['sources'],
+                 'validationOnlySources': recipe['validationOnlySources'], 'apiModules': modules,
+                 'runtimeBaselineCommit': r.REGISTRATION_ORIGIN, 'publishedSourceCommit': recipe['publishedSourceCommit'],
+                 'predecessorContractSha256': recipe['predecessorContractSha256'],
+                 'beforeEngineFiles': recipe['beforeEngineFiles'], 'afterEngineFiles': recipe['afterEngineFiles'],
+                 'baselineApiReproduced': True, 'preservedAdminFiles': recipe['publicFiles'],
+                 'updatedServices': list(publisher.UPDATED), 'preservedServices': list(publisher.PRESERVED),
+                 'migrationPerformed': False, 'businessActions': 0}
+        proof['files'] = {**{'source/' + n: v for n, v in recipe['sources'].items()},
+                          **{'api/modules/' + n: v for n, v in modules.items()},
+                          **{'engine/' + n: recipe['afterEngineFiles'][n] for n in publisher.ENGINE_DELTA}}
+        with patch.object(b, 'bundle_contents', return_value=(proof['files'], proof)):
+            self.assertIs(b.verify_successor_bundle(b'synthetic parser seam', c), proof)
+        for mutate in (
+                lambda x: x.update(commit=r.REGISTRATION_ORIGIN),
+                lambda x: x['controlSources'].pop('online-checkout-cs-release.py'),
+                lambda x: x['apiModules'].pop('id-business-v2/online-recharge/contracts.d.ts'),
+                lambda x: x['afterEngineFiles'].update({'checkout-recovery.cjs': '0' * 64}),
+                lambda x: x['preservedAdminFiles'].update({'index.html': '0' * 64}),
+                lambda x: x.update(runtimeBaselineCommit='0' * 40)):
+            changed = copy.deepcopy(proof)
+            mutate(changed)
+            with self.subTest(mutate=mutate), patch.object(b, 'bundle_contents', return_value=(proof['files'], changed)):
+                with self.assertRaises(RuntimeError):
+                    b.verify_successor_bundle(b'synthetic parser seam', c)
+        changed = copy.deepcopy(c)
+        changed['baseline']['successorApiModules'] = {**modules,
+            'id-business-v2/online-recharge/checkout-recovery.js': '0' * 64}
+        with patch.object(b, 'bundle_contents', return_value=(proof['files'], proof)):
+            with self.assertRaisesRegex(RuntimeError, 'SUCCESSOR_RUNTIME_CHANGED'):
+                b.verify_successor_bundle(b'synthetic parser seam', changed)
+
     def test_worker_proof_preserves_all_other_components_and_truthful_inheritance(self):
         c = self.ready()
         plan = {'commit': 'a' * 40, 'tree': 'b' * 40, 'workflowRunId': '123', 'workflowRunAttempt': '1',
@@ -146,17 +231,69 @@ class TerminalControls(unittest.TestCase):
             with self.subTest(mutate=mutate), self.assertRaises(RuntimeError):
                 r.verify_proof(candidate, plan, c, Path('unused'), h)
 
+    def test_recharge_legacy_proof_shape_preserves_latest_admin_and_42_api_files(self):
+        c = self.ready()
+        recipe, binding = r.recharge_contract(), r.PUBLISHED_RECHARGE
+        modules = {name: 'a' * 64 for name in r.inherited_api_paths()[1]}
+        admin = {**{f'assets/synthetic-{i}.js': 'b' * 64 for i in range(250)}, 'index.html': 'c' * 64}
+        c['baseline']['successorApiModules'].update(modules)
+        c['baseline']['inventory']['admin'] = r.signature({**r.successor_contract()['publicFiles'], **admin})
+        c['publicIndexSha256'] = admin['index.html']
+        mysql = {'version': 1, 'scope': 'OWNED_EMPTY_DATABASE', 'runtime': 'github-actions-mysql-service',
+                 'database': recipe['isolatedMysqlTest']['database'], 'commit': binding['commit'],
+                 'tree': binding['tree'], 'workflowRunId': binding['runId'], 'workflowRunAttempt': str(binding['attempt']),
+                 'testFile': recipe['isolatedMysqlTest']['testFile'],
+                 'testFileSha256': recipe['sources'][recipe['isolatedMysqlTest']['testFile']],
+                 'reportSha256': 'd' * 64, 'testsTotal': 8, 'testsPassed': 8, 'testsSkipped': 0, 'testsTodo': 0,
+                 'productionActions': 0, 'browserRequests': 0}
+        proof = {'version': 1, 'scope': binding['scope'], 'commit': binding['commit'], 'tree': binding['tree'],
+                 'workflowRunId': binding['runId'], 'workflowRunAttempt': str(binding['attempt']),
+                 'contractSha256': binding['contractSha256'], 'baselineApiReproduced': True,
+                 'baselineAdminReproduced': True, 'baselinePublishedVerified': {
+                     'apiSource': recipe['apiSourceBaseline'], 'adminSource': recipe['adminSourceBaseline'], 'verified': True},
+                 'qualityVerification': {'commit': binding['commit'], 'sourceTree': binding['tree'],
+                                         'path': '.github/workflows/quality.yml', 'conclusion': 'success'},
+                 'databaseVerification': recipe['databaseVerification'], 'isolatedMysqlVerification': mysql,
+                 'apiModules': modules, 'adminFiles': admin, 'updatedServices': ['api', 'admin'],
+                 'migrationPerformed': False, 'businessActions': 0}
+        for field, name in (('controllerSha256', 'recharge-checkout-release.py'),
+                            ('helperSha256', 'recharge-record-release.py'), ('releaseUtilitySha256', 'remote-deploy.py')):
+            proof[field] = r.digest(b.git('show', binding['commit'] + ':scripts/production-release/' + name))
+        proof['files'] = {**{'source/' + n: v for n, v in recipe['sources'].items()},
+                          **{'api/modules/' + n: v for n, v in modules.items()},
+                          **{'admin/html/' + n: v for n, v in admin.items()}}
+        self.assertNotIn('sources', proof)
+        self.assertNotIn('controlSources', proof)
+        with patch.object(b, 'bundle_contents', return_value=(proof['files'], proof)):
+            self.assertIs(b.verify_recharge_bundle(b'synthetic parser seam', c), proof)
+        for mutate in (
+                lambda x: x.update(commit=r.PUBLISHED_SUCCESSOR['commit']),
+                lambda x: x.update(controllerSha256='0' * 64),
+                lambda x: x['isolatedMysqlVerification'].update(testsPassed=0),
+                lambda x: x['apiModules'].pop(next(iter(modules))),
+                lambda x: x['adminFiles'].update({'index.html': '0' * 64})):
+            changed = copy.deepcopy(proof)
+            mutate(changed)
+            with self.subTest(mutate=mutate), patch.object(b, 'bundle_contents', return_value=(proof['files'], changed)):
+                with self.assertRaises(RuntimeError):
+                    b.verify_recharge_bundle(b'synthetic parser seam', c)
+        changed = copy.deepcopy(c)
+        changed['baseline']['inventory']['admin'] = r.signature(r.successor_contract()['publicFiles'])
+        with patch.object(b, 'bundle_contents', return_value=(proof['files'], proof)):
+            with self.assertRaisesRegex(RuntimeError, 'RECHARGE_RUNTIME_CHANGED'):
+                b.verify_recharge_bundle(b'synthetic parser seam', changed)
+
     def test_native_artifact_rejection_happens_before_extraction(self):
         with self.assertRaisesRegex(RuntimeError, 'PUBLISHED_ARTIFACT_CHANGED'):
             b.verify_previous_bundle(b'unreviewed bytes', {})
 
     def test_native_prior_run_or_artifact_mismatch_never_downloads_another_bundle(self):
         binding = r.PUBLISHED_PREVIOUS
-        run = {'head_sha': r.CURRENT, 'head_branch': 'main', 'event': 'workflow_dispatch',
+        run = {'head_sha': binding['commit'], 'head_branch': 'main', 'event': 'workflow_dispatch',
                'path': binding['workflowPath'], 'status': 'completed', 'conclusion': 'success', 'run_attempt': 1}
         artifact = {'id': binding['artifactId'], 'name': binding['artifactName'],
                     'digest': binding['artifactDigest'], 'size_in_bytes': binding['artifactSize'],
-                    'expired': False, 'workflow_run': {'id': int(binding['runId']), 'head_sha': r.CURRENT}}
+                    'expired': False, 'workflow_run': {'id': int(binding['runId']), 'head_sha': binding['commit']}}
         for field, value in (('head_sha', '0' * 40), ('path', 'wrong.yml'), ('run_attempt', 2),
                              ('conclusion', 'failure')):
             changed = {**run, field: value}
