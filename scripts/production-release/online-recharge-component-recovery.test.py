@@ -25,6 +25,13 @@ spec = importlib.util.spec_from_file_location('online_protected_recovery_tests',
 m = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(m)
 REAL_PROCESS_RUN = subprocess.run
+# Historical recovery proofs use the original published workspace helper, even
+# after the registration feature has been removed from the current source tree.
+LEGACY_WORKSPACE_SAFETY = subprocess.check_output([
+    'git', 'show',
+    '31d2c6885a45817cd40d23fce8d6145bc9f18af2:'
+    'apps/api/src/id-business-v2/auto-registration/worker/release_safety.py',
+], cwd=HERE.parents[1])
 
 
 def raw(value):
@@ -524,7 +531,7 @@ class RecoveryTests(unittest.TestCase):
             setattr(workspace, name, Mock(return_value=result))
         safety_file = HERE.parents[1] / workspace.WORKSPACE_SAFETY
         safety_namespace = {'__name__': 'verified_fixture_logical_reader'}
-        exec(compile(safety_file.read_bytes(), str(safety_file), 'exec', dont_inherit=True), safety_namespace)
+        exec(compile(LEGACY_WORKSPACE_SAFETY, str(safety_file), 'exec', dont_inherit=True), safety_namespace)
         summary = safety_namespace['logical_summary'](SqliteTransport())
         inspection = {'version': 1, 'status': 'PASS', **summary, 'activeAppleLeaseCount': 0,
             'corruptEncryptedValueCount': 0, 'businessActions': 0}
@@ -568,7 +575,7 @@ class RecoveryTests(unittest.TestCase):
         def audit_run(directory, receipt, **kwargs):
             receipt.write_text(json.dumps(report)); receipt.chmod(0o600)
         controller.audit = audit_run
-        safety_raw = (HERE.parents[1] / workspace.WORKSPACE_SAFETY).read_bytes()
+        safety_raw = LEGACY_WORKSPACE_SAFETY
         safety_path = target / workspace.WORKSPACE_SAFETY
         safety_path.parent.mkdir(parents=True, mode=0o700); safety_path.write_bytes(safety_raw)
         source_output = {workspace.WORKSPACE_SAFETY: (safety_raw, '100644')}
