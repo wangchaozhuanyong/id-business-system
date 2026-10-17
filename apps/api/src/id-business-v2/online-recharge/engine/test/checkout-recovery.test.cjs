@@ -19,7 +19,13 @@ const jwt =
   '.unused';
 const nativeUrl = 'https://chatgpt.com/checkout/openai_llc/oaics_fixtureOriginalCheckout';
 const hostedUrl = 'https://checkout.stripe.com/c/pay/cs_test_fixtureOriginalCheckout';
-function context(url = nativeUrl) {
+const embeddedUrl = 'https://chatgpt.com/checkout/openai_ie/cs_live_fixtureOriginalCheckout';
+const embeddedSource = {
+  kind: 'official_checkout_response',
+  checkoutId: 'cs_live_fixtureOriginalCheckout',
+  processorEntity: 'openai_ie'
+};
+function context(url = nativeUrl, source) {
   return {
     kind: 'initial',
     sourcePlan: 'free',
@@ -29,11 +35,11 @@ function context(url = nativeUrl) {
     cardLast4: '4242',
     currency: 'PHP',
     amount: '8919.64',
-    quoteId: recovery.quoteIdForUrl(url)
+    quoteId: recovery.quoteIdForUrl(url, source)
   };
 }
-function identity(url = nativeUrl) {
-  return recovery.buildCheckoutRecovery(url, context(url));
+function identity(url = nativeUrl, source) {
+  return recovery.buildCheckoutRecovery(url, context(url, source), source);
 }
 function request(url, method = 'GET', body) {
   return {
@@ -80,6 +86,129 @@ test('recovery identity binds the exact original quote, account, card and truste
   assert.throws(() =>
     recovery.buildCheckoutRecovery(nativeUrl, { ...context(), quoteId: 'quote:wrong' })
   );
+});
+
+test('embedded Stripe checkout requires the exact official response source retained on the same page', () => {
+  const page = {},
+    otherPage = {};
+  recovery.rememberOfficialCheckout(page, embeddedSource);
+  const source = recovery.officialCheckoutForPage(page);
+  const value = identity(embeddedUrl, source);
+  assert.deepEqual(value.source, embeddedSource);
+  assert.equal(value.processorEntity, 'openai_ie');
+  assert.deepEqual(recovery.validateRecovery(value), value);
+  assert.equal(recovery.officialCheckoutForPage(otherPage), undefined);
+  source.processorEntity = 'changed';
+  assert.equal(recovery.officialCheckoutForPage(page).processorEntity, 'openai_ie');
+  for (const changed of [
+    undefined,
+    { ...embeddedSource, checkoutId: 'cs_live_other' },
+    { ...embeddedSource, processorEntity: 'openai_llc' },
+    { ...embeddedSource, kind: 'guessed' },
+    { ...embeddedSource, extra: true }
+  ]) {
+    assert.throws(() => recovery.quoteIdForUrl(embeddedUrl, changed), {
+      code: 'CHECKOUT_RECOVERY_UNSUPPORTED'
+    });
+  }
+  assert.throws(() =>
+    recovery.quoteIdForUrl(
+      embeddedUrl.replace('fixtureOriginalCheckout', 'anotherCheckout'),
+      embeddedSource
+    )
+  );
+  assert.throws(() => recovery.validateRecovery({ ...value, source: undefined }));
+  recovery.rememberOfficialCheckout(page, null);
+  assert.equal(recovery.officialCheckoutForPage(page), undefined);
+});
+
+test('read-only recovery permits only the same Stripe initialization with bounded read parameters', () => {
+  const value = identity(embeddedUrl, embeddedSource);
+  const req = (url, body = '', method = 'POST') => ({
+    url: () => url,
+    method: () => method,
+    postData: () => body
+  });
+  const url = `https://api.stripe.com/v1/payment_pages/${value.checkoutId}/init`;
+  const allowed = (request) => recovery.readOnlyRecoveryRequest(request, value);
+  assert.equal(allowed(req(url)), true);
+  assert.equal(
+    allowed(
+      req(url, 'key=pk_test_synthetic&browser_locale=en-US&redirect_type=url&eid=fixture_123')
+    ),
+    true
+  );
+  for (const body of [
+    'billing=changed',
+    'payment_method=pm_fixture',
+    'confirm=true',
+    'unknown=1',
+    'key=sk_test_secret',
+    'browser_locale=en-US&browser_locale=fr',
+    'x'.repeat(16001)
+  ])
+    assert.equal(allowed(req(url, body)), false);
+  for (const changed of [
+    url.replace(value.checkoutId, 'cs_live_other'),
+    url.replace('/init', '/confirm'),
+    url.replace('api.stripe.com', 'evil.invalid'),
+    url + '?key=pk_test_first'
+  ]) {
+    assert.equal(allowed(req(changed, 'key=pk_test_second')), false);
+  }
+  for (const target of [
+    'https://chatgpt.com/backend-api/payments/checkout',
+    'https://chatgpt.com/backend-api/payments/checkout/confirm',
+    'https://api.stripe.com/v1/payment_methods'
+  ])
+    assert.equal(allowed(req(target)), false);
+  assert.equal(allowed(req(url, '', 'DELETE')), false);
+});
+
+test('Stripe total_summary due is actual payment evidence only when every returned amount agrees', async () => {
+  const value = identity(embeddedUrl, embeddedSource);
+  const receipt = {
+    object: 'checkout.session',
+    id: 'internal-object-id',
+    session_id: value.checkoutId,
+    status: 'complete',
+    payment_status: 'paid',
+    total_summary: { due: 891964 },
+    currency: 'php'
+  };
+  for (const changed of [
+    { total_summary: { due: 0 } },
+    { total_summary: { due: '891964' } },
+    { amount_total: 891965 },
+    { status: 'open' },
+    { payment_status: 'unpaid' },
+    { currency: 'usd' },
+    { session_id: 'cs_live_other' },
+    { session_id: null, id: value.checkoutId },
+    { session_id: '', id: value.checkoutId },
+    { session_id: 'cs_live_other', id: value.checkoutId }
+  ]) {
+    const observer = recovery.observePayment(new EventEmitter(), value, { alreadySubmitted: true });
+    await observer.accept(
+      { ...receipt, ...changed },
+      request(`https://api.stripe.com/v1/payment_pages/${value.checkoutId}/init`, 'POST')
+    );
+    assert.equal(observer.evidence(), null);
+    await observer.dispose();
+  }
+  const observer = recovery.observePayment(new EventEmitter(), value, { alreadySubmitted: true });
+  await observer.accept(
+    receipt,
+    request(`https://api.stripe.com/v1/payment_pages/${value.checkoutId}/init`, 'POST')
+  );
+  const first = observer.evidence();
+  assert.equal(first.verified, true);
+  await observer.accept(
+    { ...receipt, amount_total: 891964 },
+    request(`https://api.stripe.com/v1/payment_pages/${value.checkoutId}/init`, 'POST')
+  );
+  assert.equal(observer.evidence(), first);
+  await observer.dispose();
 });
 
 test('payment amounts use exact integer minor units without floating-point conversion', () => {
@@ -369,4 +498,354 @@ test('real Chromium recovery only reads the same original checkout and blocks pa
   } finally {
     await browser.close();
   }
+});
+
+function checkoutServiceFixture(options = {}) {
+  const module = { exports: {} };
+  runInNewContext(fs.readFileSync(path.join(__dirname, '../upstream/chatgpt.js'), 'utf8'), {
+    module,
+    URL,
+    process: { env: {} },
+    console: { log() {}, warn() {}, error() {} },
+    require(name) {
+      if (name === 'axios' || name === './payment-retry') return {};
+      if (name === './mysql-store')
+        return { resolvePlanName: () => options.planName ?? 'chatgptpro' };
+      if (name === './region-config') return { getRegionConfig: () => ({ currency: 'PHP' }) };
+      if (name === './session-auth') return {};
+      if (name === './auth-page-detect')
+        return {
+          isCheckoutLoginGate: async () => options.loginGate === true,
+          hasVisibleLoginChrome: async () => false,
+          buildSessionNotLoggedInError: () => 'Synthetic login required'
+        };
+      if (name === './human-verification')
+        return {
+          clearHumanVerification: async () => ({ cleared: false, checkoutNotReady: true }),
+          buildCaptchaRequiredError: () => 'Synthetic verification not ready'
+        };
+      if (name === '../checkout-recovery.cjs') return recovery;
+      throw new Error('Unexpected fixture import ' + name);
+    }
+  });
+  return module.exports;
+}
+test('Checkout API resolver never guesses an entity, scans unrelated JSON, or changes the explicit session', () => {
+  const Service = checkoutServiceFixture();
+  const resolver = new Service(null, 'synthetic-only');
+  assert.equal(
+    resolver.resolveCheckoutUrl({ checkout_session_id: embeddedSource.checkoutId }).checkoutUrl,
+    null
+  );
+  assert.equal(
+    resolver.resolveCheckoutUrl({
+      nested: { any: embeddedSource.checkoutId },
+      processor_entity: 'openai_ie'
+    }).checkoutUrl,
+    null
+  );
+  const resolved = resolver.resolveCheckoutUrl({
+    checkout_session_id: embeddedSource.checkoutId,
+    processor_entity: 'openai_ie'
+  });
+  assert.equal(resolved.checkoutUrl, embeddedUrl);
+  assert.equal(JSON.stringify(resolved.checkoutSource), JSON.stringify(embeddedSource));
+  for (const data of [
+    {
+      checkout_session_id: embeddedSource.checkoutId,
+      processor_entity: 'openai_llc',
+      url: embeddedUrl
+    },
+    {
+      checkout_session_id: embeddedSource.checkoutId,
+      session_id: 'cs_live_other',
+      processor_entity: 'openai_ie'
+    },
+    {
+      checkout_session_id: embeddedSource.checkoutId,
+      processor_entity: 'openai_ie',
+      url: 'https://evil.invalid/'
+    },
+    { checkout_session_id: 'cs_test_explicit', url: hostedUrl },
+    { url: 'https://checkout.stripe.com/not-a-checkout' },
+    { url: hostedUrl + '/cs_test_other' },
+    { checkout_session_id: 'not-a-session', url: hostedUrl }
+  ])
+    assert.equal(resolver.resolveCheckoutUrl(data).checkoutUrl, null);
+  assert.equal(
+    resolver.resolveCheckoutUrl({ url: hostedUrl }).sessionId,
+    'cs_test_fixtureOriginalCheckout'
+  );
+  const hostedWithoutEntity = resolver.resolveCheckoutUrl({
+    url: hostedUrl,
+    processor_entity: null
+  });
+  assert.equal(hostedWithoutEntity.checkoutUrl, hostedUrl);
+  assert.equal(hostedWithoutEntity.processorEntity, null);
+  assert.equal(
+    resolver.resolveCheckoutUrl({
+      checkout_session_id: 'oaics_fixture',
+      processor_entity: 'openai_ie'
+    }).checkoutUrl,
+    'https://chatgpt.com/checkout/openai_ie/oaics_fixture'
+  );
+});
+
+for (const [label, data] of [
+  ['URL only', { url: embeddedUrl }],
+  ['explicit id and URL', { checkout_session_id: embeddedSource.checkoutId, url: embeddedUrl }],
+  [
+    'matching explicit fields and URL',
+    {
+      checkout_session_id: embeddedSource.checkoutId,
+      session_id: embeddedSource.checkoutId,
+      processor_entity: embeddedSource.processorEntity,
+      url: embeddedUrl
+    }
+  ]
+]) {
+  test(`an official complete Checkout response (${label}) supplies its exact path identity and source`, async () => {
+    const Service = checkoutServiceFixture();
+    let postCalls = 0;
+    const page = {
+      context: () => ({
+        request: {
+          post: async () => {
+            postCalls++;
+            return { status: () => 200, text: async () => JSON.stringify(data) };
+          }
+        }
+      })
+    };
+    const opened = await Service.openApiCheckout(page, {
+      accessToken: 'synthetic-only',
+      planType: 'pro_20x',
+      country: 'PH',
+      currency: 'PHP',
+      verifyPage: false
+    });
+    assert.equal(opened.checkoutUrl, embeddedUrl);
+    assert.equal(opened.sessionId, embeddedSource.checkoutId);
+    assert.deepEqual(recovery.officialCheckoutForPage(page), embeddedSource);
+    assert.equal(postCalls, 1);
+  });
+}
+
+test('an official URL cannot conceal conflicting, null, empty or invalid explicit identity fields', () => {
+  const Service = checkoutServiceFixture();
+  const resolver = new Service(null, 'synthetic-only');
+  for (const fields of [
+    { checkout_session_id: null },
+    { checkout_session_id: undefined },
+    { checkout_session_id: '' },
+    { checkout_session_id: 'not-a-session' },
+    { checkout_session_id: 'cs_live_other' },
+    { session_id: null },
+    { session_id: '' },
+    { session_id: 'cs_live_other' },
+    { checkout_session_id: embeddedSource.checkoutId, session_id: 'cs_live_other' },
+    { processor_entity: null },
+    { processor_entity: undefined },
+    { processor_entity: '' },
+    { processor_entity: 'invalid-entity' },
+    { processor_entity: 'openai_llc' }
+  ])
+    assert.equal(resolver.resolveCheckoutUrl({ url: embeddedUrl, ...fields }).checkoutUrl, null);
+});
+
+test('URL-only identity extraction rejects foreign origins and noncanonical checkout paths', () => {
+  const Service = checkoutServiceFixture();
+  const resolver = new Service(null, 'synthetic-only');
+  for (const url of [
+    embeddedUrl.replace('https:', 'http:'),
+    embeddedUrl.replace('chatgpt.com', 'chatgpt.com.evil.invalid'),
+    embeddedUrl.replace('chatgpt.com', 'user:password@chatgpt.com'),
+    embeddedUrl.replace('chatgpt.com', 'chatgpt.com:9443'),
+    embeddedUrl.replace('/checkout/', '/other/'),
+    embeddedUrl + '/confirm',
+    embeddedUrl.replace('openai_ie', 'OpenAI_IE'),
+    embeddedUrl + '%2fconfirm',
+    embeddedUrl + '/cs_test_anotherCheckout'
+  ])
+    assert.equal(resolver.resolveCheckoutUrl({ url }).checkoutUrl, null);
+});
+
+test('the actual API checkout opener records only its returned official source and rejects incomplete 200 replies', async () => {
+  const Service = checkoutServiceFixture();
+  const page = (data) => ({
+    context: () => ({
+      request: { post: async () => ({ status: () => 200, text: async () => JSON.stringify(data) }) }
+    })
+  });
+  const original = page({
+    checkout_session_id: embeddedSource.checkoutId,
+    processor_entity: 'openai_ie'
+  });
+  const options = {
+    accessToken: 'synthetic-only',
+    planType: 'pro_20x',
+    country: 'PH',
+    currency: 'PHP',
+    verifyPage: false
+  };
+  const opened = await Service.openApiCheckout(original, options);
+  assert.equal(opened.checkoutUrl, embeddedUrl);
+  assert.deepEqual(recovery.officialCheckoutForPage(original), embeddedSource);
+  const incomplete = page({ checkout_session_id: 'cs_test_noEntity' });
+  await assert.rejects(Service.openApiCheckout(incomplete, options), {
+    code: 'CHECKOUT_RECOVERY_INVALID'
+  });
+  assert.equal(recovery.officialCheckoutForPage(incomplete), undefined);
+});
+
+test('an invalid successful creation response cannot fall back to a second UI checkout', async () => {
+  const source = fs.readFileSync(path.join(__dirname, '../upstream/index.js'), 'utf8');
+  const start = source.indexOf('        // --- Phase 2: API 创建 Checkout');
+  const end = source.indexOf('\n        if (debugOnly)', start);
+  assert.ok(start > 0 && end > start);
+  for (const code of ['CHECKOUT_RECOVERY_INVALID', 'CHECKOUT_RECOVERY_UNSUPPORTED']) {
+    let apiCalls = 0,
+      uiCalls = 0;
+    const promise = runInNewContext('(async()=>{' + source.slice(start, end) + '})()', {
+      process: { env: { CHECKOUT_MODE: 'api' } },
+      page: {},
+      operation: 'initial',
+      planType: 'pro_20x',
+      billingCountry: 'PH',
+      billingCurrency: 'PHP',
+      CONFIG: {},
+      loginInfo: { session: {} },
+      debugOnly: false,
+      console: { warn() {}, log() {} },
+      openApiCheckout: async () => {
+        apiCalls++;
+        throw Object.assign(new Error('synthetic-only'), { code });
+      },
+      openPricingCheckout: async () => {
+        uiCalls++;
+        return {};
+      }
+    });
+    await assert.rejects(promise, { code });
+    assert.equal(apiCalls, 1);
+    assert.equal(uiCalls, 0);
+  }
+});
+
+function checkoutPhaseFixture(page, Service) {
+  const source = fs.readFileSync(path.join(__dirname, '../upstream/index.js'), 'utf8');
+  const start = source.indexOf('        // --- Phase 2: API 创建 Checkout');
+  const end = source.indexOf('\n        if (debugOnly)', start);
+  let uiCalls = 0;
+  const pending = runInNewContext('(async()=>{' + source.slice(start, end) + '})()', {
+    process: { env: { CHECKOUT_MODE: 'api' } },
+    page,
+    operation: 'initial',
+    planType: 'pro_20x',
+    billingCountry: 'PH',
+    billingCurrency: 'PHP',
+    CONFIG: {},
+    loginInfo: { session: { accessToken: 'synthetic-only' } },
+    debugOnly: false,
+    console: { warn() {}, log() {} },
+    openApiCheckout: (...args) => Service.openApiCheckout(...args),
+    openPricingCheckout: async () => {
+      uiCalls++;
+      return {};
+    }
+  });
+  return { pending, uiCalls: () => uiCalls };
+}
+
+for (const failure of ['navigation timeout', 'login gate', 'page verification']) {
+  test(`an accepted API checkout followed by ${failure} never creates another UI checkout`, async () => {
+    const Service = checkoutServiceFixture({ loginGate: failure === 'login gate' });
+    let apiCalls = 0,
+      openedUrl;
+    const page = {
+      context: () => ({
+        request: {
+          post: async () => {
+            apiCalls++;
+            return {
+              status: () => 200,
+              text: async () =>
+                JSON.stringify({
+                  checkout_session_id: embeddedSource.checkoutId,
+                  processor_entity: embeddedSource.processorEntity
+                })
+            };
+          }
+        }
+      }),
+      goto: async (url) => {
+        openedUrl = url;
+        if (failure === 'navigation timeout')
+          throw Object.assign(new Error('Synthetic navigation timeout'), { name: 'TimeoutError' });
+      },
+      waitForLoadState: async () => {},
+      waitForTimeout: async () => {},
+      title: async () => 'Synthetic page',
+      url: () => embeddedUrl
+    };
+    const phase = checkoutPhaseFixture(page, Service);
+    await assert.rejects(phase.pending, {
+      code: 'CHECKOUT_OPEN_FAILED',
+      checkoutCreationState: 'accepted'
+    });
+    assert.equal(apiCalls, 1);
+    assert.equal(phase.uiCalls(), 0);
+    assert.equal(openedUrl, embeddedUrl);
+    assert.deepEqual(recovery.officialCheckoutForPage(page), embeddedSource);
+  });
+}
+
+for (const status of ['network unknown', 400, 500]) {
+  test(`a sent checkout POST with ${status} does not trigger another UI creation`, async () => {
+    const Service = checkoutServiceFixture();
+    let apiCalls = 0,
+      navigations = 0;
+    const page = {
+      context: () => ({
+        request: {
+          post: async () => {
+            apiCalls++;
+            if (status === 'network unknown')
+              throw Object.assign(new Error('Synthetic reset after POST'), { code: 'ECONNRESET' });
+            return { status: () => status, text: async () => '{"detail":"Synthetic rejection"}' };
+          }
+        }
+      }),
+      goto: async () => {
+        navigations++;
+      }
+    };
+    const phase = checkoutPhaseFixture(page, Service);
+    await assert.rejects(phase.pending, {
+      code: status === 400 ? 'CHECKOUT_CREATION_REJECTED' : 'CHECKOUT_CREATION_UNKNOWN',
+      checkoutCreationState: status === 400 ? 'rejected' : 'unknown'
+    });
+    assert.equal(apiCalls, 1);
+    assert.equal(phase.uiCalls(), 0);
+    assert.equal(navigations, 0);
+  });
+}
+
+test('only a local preparation failure proven before POST retains the existing UI fallback', async () => {
+  const Service = checkoutServiceFixture({ planName: '' });
+  let apiCalls = 0;
+  const page = {
+    context: () => ({
+      request: {
+        post: async () => {
+          apiCalls++;
+          throw new Error('No POST should be sent');
+        }
+      }
+    })
+  };
+  const phase = checkoutPhaseFixture(page, Service);
+  await phase.pending;
+  assert.equal(apiCalls, 0);
+  assert.equal(phase.uiCalls(), 1);
 });

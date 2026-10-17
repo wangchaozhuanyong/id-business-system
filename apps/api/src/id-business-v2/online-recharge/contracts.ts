@@ -129,4 +129,10 @@ export interface OnlineRechargeCheckoutRecovery extends OnlineRechargePaymentCon
   processorEntity: string | null;
   checkoutUrl: string;
   quoteId: string;
+  /** A bounded projection of the actual checkout response, never payment evidence. */
+  source?: {
+    kind: 'official_checkout_response';
+    checkoutId: string;
+    processorEntity: string;
+  };
 }
