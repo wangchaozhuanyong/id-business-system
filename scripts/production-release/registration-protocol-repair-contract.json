@@ -305,9 +305,9 @@
   ],
   "controlHashes": {
     "registration-protocol-repair-build.py": "c0fed521549174839443f68b01640eee50593929dc6522ef1db34fce11d727da",
-    "registration-protocol-repair-release.py": "613e0d4275e0d81454666b4368da54e02686d20d88a099b54fb70413cd4a5cd6",
+    "registration-protocol-repair-release.py": "7738cb209a43ae5082fcd473de17fb045e3baf8f0fee125b4386975dc6fe8295",
     "registration-protocol-repair-dispatch.py": "ec663618df477ef92663ae83809a87519292e2ca63a83a15e81bbd8f12587bac",
-    "registration-protocol-repair-release.test.py": "0198396eea02834c02b17a9d41ea677a0fefa43fe60f589ef874c24e96d71052",
+    "registration-protocol-repair-release.test.py": "d31b94646e6c0399b73f712365339c3ac5408e0317d0eef7e3b7b04f371d9098",
     "registration-parity-diagnostics-release.py": "f5d3d6e3d5ee539a965cbbfa4401beee3e209c2258886ea7239ae667a13e3eb8",
     "registration-parity-diagnostics-dispatch.py": "c16f8a09a7a08771faa1071910a05a077d3c4e368f6a4938d3c8cec8cca74a8c",
     "registration-closure-release.py": "0d2daaeff0a35e1e11666ace39560273fdc83ff9e5718cb244337c8b0f851274",
@@ -411,8 +411,8 @@
     "scripts/ci-recharge-check.test.mjs": "ab632a370f849813269f31675beaa76f250daa4fca1cecd80efd29bdd490c2ae",
     "scripts/production-release/registration-protocol-repair-build.py": "c0fed521549174839443f68b01640eee50593929dc6522ef1db34fce11d727da",
     "scripts/production-release/registration-protocol-repair-dispatch.py": "ec663618df477ef92663ae83809a87519292e2ca63a83a15e81bbd8f12587bac",
-    "scripts/production-release/registration-protocol-repair-release.py": "613e0d4275e0d81454666b4368da54e02686d20d88a099b54fb70413cd4a5cd6",
-    "scripts/production-release/registration-protocol-repair-release.test.py": "0198396eea02834c02b17a9d41ea677a0fefa43fe60f589ef874c24e96d71052"
+    "scripts/production-release/registration-protocol-repair-release.py": "7738cb209a43ae5082fcd473de17fb045e3baf8f0fee125b4386975dc6fe8295",
+    "scripts/production-release/registration-protocol-repair-release.test.py": "d31b94646e6c0399b73f712365339c3ac5408e0317d0eef7e3b7b04f371d9098"
   },
   "roleSourceCommits": {
     "admin": "c8ce1a01a1a1e61bcc8de778dad331191319d645",

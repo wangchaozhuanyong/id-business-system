@@ -5,6 +5,7 @@ write fence and switch code in a private namespace, with this task's admission,
 inventory, proof and preservation checks. No migration or signup is performed.
 """
 import copy
+import inspect
 import hashlib
 import importlib.util
 import json
@@ -289,6 +290,17 @@ def rename_code(code):
     return code.replace(co_consts=values)
 
 
+def worker_only_release_code(original):
+    source = inspect.getsource(original)
+    old = "('api', " + repr('COPY modules/ /app/apps/api/dist/\nCOPY worker/ /app/') + " + WORKER + " + repr('\n') + ", 2)"
+    new = "('api', " + repr('COPY worker/ /app/') + " + WORKER + " + repr('\n') + ", 1)"
+    need(source.count(old) == 1, 'OVERLAY_RECIPE_CHANGED')
+    compiled = compile(source.replace(old, new), original.__code__.co_filename, 'exec')
+    functions = [value for value in compiled.co_consts if isinstance(value, types.CodeType)]
+    need(len(functions) == 1 and functions[0].co_name == 'release', 'OVERLAY_FUNCTION_CHANGED')
+    return rename_code(functions[0])
+
+
 def release(plan, c, d=None, h=None):
     verify_contract(c)
     c = {**c, 'reviewedApplicationCommit': plan['commit']}
@@ -303,7 +315,7 @@ def release(plan, c, d=None, h=None):
                  'verify_contract': verify_contract, 'verify_proof': verify_proof, 'baseline': baseline,
                  'smoke': smoke, 'sqlite_receipt': sqlite_receipt, 'inherited_host_source': inherited_host_source}
     namespace['backup_sqlite'] = types.FunctionType(old.backup_sqlite.__code__, namespace)
-    adapted = types.FunctionType(rename_code(old.release.__code__), namespace)
+    adapted = types.FunctionType(worker_only_release_code(old.release), namespace)
     h = h or helper('recharge-record-release.py')
     d = d or h.load_utilities(HERE / 'remote-deploy.py', c['controlHashes']['remote-deploy.py'])
     return adapted(plan, c, d, h)
