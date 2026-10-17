@@ -92,6 +92,7 @@ const states: Record<string, string> = {
   local: '本地浏览器',
   third_party: '第三方代充',
   recharge: '充值',
+  recharge_started: '充值开始执行',
   recheck: '原单核对',
   subscription: '查询订阅',
   renewal: '处理续费',

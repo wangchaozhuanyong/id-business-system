@@ -87,7 +87,8 @@ function fixture(overrides: Partial<OnlineRechargeTask> = {}, original?: OnlineR
     },
     onlineRechargeEvent: {
       findUnique: vi.fn(async () => null),
-      create: vi.fn(async () => null)
+      create: vi.fn(async () => null),
+      upsert: vi.fn(async () => null)
     },
     onlineRechargeConfig: { findUnique: vi.fn(async () => null) }
   };
@@ -122,6 +123,79 @@ function fixture(overrides: Partial<OnlineRechargeTask> = {}, original?: OnlineR
   });
   return { row, tx, repository, worker, rpc, available, orderSync, encryption };
 }
+
+describe('首次充值开始的持久化语音事件', () => {
+  function queued(operation: OnlineRechargeTask['operation'] = 'recharge', leaseVersion = 0) {
+    const f = fixture({ operation, status: 'queued', leaseVersion, payload: {} });
+    f.tx.onlineRechargeTask.findFirst.mockResolvedValue(f.row as never);
+    return f;
+  }
+
+  it('首次 queued→running 在同一事务写入唯一事件，不含会话及卡资料', async () => {
+    const f = queued();
+    expect((await f.worker.claim('new-worker'))?.id).toBe(f.row.id);
+    expect(f.repository.transaction).toHaveBeenCalledWith('workers-claim', expect.any(Function));
+    expect(f.tx.onlineRechargeTask.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ status: 'running', stage: 'started', leaseVersion: 1 })
+      })
+    );
+    expect(f.tx.onlineRechargeEvent.upsert).toHaveBeenCalledExactlyOnceWith({
+      where: { dedupeKey: `recharge-start:${f.row.id}` },
+      update: {},
+      create: {
+        taskId: f.row.id,
+        stage: 'recharge_started',
+        dedupeKey: `recharge-start:${f.row.id}`,
+        message: '充值任务开始执行',
+        metadata: { plan: 'plus' },
+        createdAt: expect.any(Date)
+      }
+    });
+    const event = f.tx.onlineRechargeEvent.upsert.mock.calls[0];
+    expect(JSON.stringify(event)).not.toContain('synthetic-encrypted-session');
+    expect(JSON.stringify(event)).not.toContain('accessToken');
+  });
+
+  it('同一任务重新领取不新增开始事件', async () => {
+    const f = queued('recharge', 1);
+    await f.worker.claim('replacement-worker');
+    expect(f.tx.onlineRechargeEvent.upsert).not.toHaveBeenCalled();
+  });
+
+  for (const operation of [
+    'subscription',
+    'debug',
+    'renewal',
+    'proxy_test',
+    'config_test',
+    'browser_manage',
+    'notification'
+  ] as const)
+    it(`${operation} 不触发新充值语音`, async () => {
+      const f = queued(operation);
+      await f.worker.claim('other-operation-worker');
+      expect(f.tx.onlineRechargeEvent.upsert).not.toHaveBeenCalled();
+    });
+
+  it('没有任务或并发已满不产生事件', async () => {
+    const empty = fixture();
+    expect(await empty.worker.claim('empty-worker')).toBeNull();
+    expect(empty.tx.onlineRechargeEvent.upsert).not.toHaveBeenCalled();
+    const full = queued();
+    full.tx.onlineRechargeTask.count.mockResolvedValue(1);
+    expect(await full.worker.claim('full-worker')).toBeNull();
+    expect(full.tx.onlineRechargeEvent.upsert).not.toHaveBeenCalled();
+  });
+
+  it('事件持久化失败时领取失败，不吞掉事务错误后返回任务', async () => {
+    const f = queued();
+    f.tx.onlineRechargeEvent.upsert.mockRejectedValue(new Error('synthetic-storage-error'));
+    await expect(f.worker.claim('failed-worker')).rejects.toThrow('synthetic-storage-error');
+    expect(f.repository.log).not.toHaveBeenCalled();
+    expect(f.encryption.decrypt).not.toHaveBeenCalled();
+  });
+});
 
 describe('原结账单的受保护恢复资料', () => {
   function paymentFixture(embeddedStripe = false) {

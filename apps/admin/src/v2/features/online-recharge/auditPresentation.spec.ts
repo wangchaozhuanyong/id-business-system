@@ -82,6 +82,11 @@ function resultState(result: unknown) {
 }
 
 describe('线上代充审计发现的结果展示', () => {
+  it('充值开始语音事件在运行日志展示准确的中文阶段', () => {
+    expect(onlineCell({ id: 'start-event', stage: 'recharge_started' }, 'stage')).toBe(
+      '充值开始执行'
+    );
+  });
   it('查询失败不会显示为已核对订阅，模型及验证错误使用中文原因', () => {
     expect(onlineResultIssue({ querySucceeded: false, queryErrorCode: 'NETWORK_TIMEOUT' })).toBe(
       '订阅查询未成功：官网查询超时'

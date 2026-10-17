@@ -428,6 +428,72 @@ export function isOnlineAuthStabilityOnly(paths) {
     )
   );
 }
+export const onlinePendingFeaturesScope = 'ONLINE_PENDING_COPY_CVC_VOICE';
+export const onlinePendingFeaturesPaths = Object.freeze([
+  ...[
+    'OnlineResourceView.vue',
+    'api.spec.ts',
+    'api.ts',
+    'auditPresentation.spec.ts',
+    'contracts.ts',
+    'labels.ts',
+    'public-api.ts',
+    'rechargeVoice.spec.ts',
+    'rechargeVoice.ts',
+    'sections.ts',
+    'useOnlineRechargeVoice.ts'
+  ].map((name) => 'apps/admin/src/v2/features/online-recharge/' + name),
+  'apps/admin/src/v2/layouts/V2AdminLayout.vue',
+  'apps/admin/src/v2/styles/v2.css',
+  ...[
+    'engine/README.md',
+    'engine/SOURCE_MANIFEST.json',
+    'engine/credentials.cjs',
+    'engine/test/regressions.test.cjs',
+    'persistence/admin.repository.ts',
+    'persistence/online-recharge.repository.ts',
+    'persistence/recharge-voice-events.spec.ts',
+    'persistence/recharge-voice-events.ts',
+    'persistence/worker.repository.spec.ts',
+    'persistence/worker.repository.ts'
+  ].map((name) => 'apps/api/src/id-business-v2/online-recharge/' + name),
+  'docs/ONLINE_RECHARGE.md',
+  'docs/V2_TASKS.md',
+  'scripts/acceptance-v2-online-recharge-ui.mjs'
+]);
+const pendingFeaturesReleaseControls = [
+  '.github/workflows/online-pending-features-validation.yml',
+  ...['build.py', 'release.py', 'release.test.py', 'contract.json'].map(
+    (name) => 'scripts/production-release/online-pending-features-' + name
+  )
+];
+export const onlinePendingFeaturesControls = Object.freeze([
+  ...pendingFeaturesReleaseControls,
+  'scripts/ci-online-settings-scope.mjs',
+  'scripts/ci-online-settings-scope.test.mjs',
+  'scripts/ci-recharge-scope.test.mjs'
+]);
+export function isOnlinePendingFeaturesOnly(paths) {
+  return (
+    new Set(paths).size === paths.length &&
+    onlinePendingFeaturesPaths.every((path) => paths.includes(path)) &&
+    paths.every(
+      (path) =>
+        onlinePendingFeaturesPaths.includes(path) || onlinePendingFeaturesControls.includes(path)
+    )
+  );
+}
+export function isOnlinePendingFeaturesControlsOnly(paths) {
+  return (
+    new Set(paths).size === paths.length &&
+    paths.some((path) => pendingFeaturesReleaseControls.includes(path)) &&
+    paths.every(
+      (path) =>
+        onlinePendingFeaturesControls.includes(path) ||
+        ['docs/ONLINE_RECHARGE.md', 'docs/V2_TASKS.md'].includes(path)
+    )
+  );
+}
 const checkoutLoadParentRpcRequired = [
   'SOURCE_MANIFEST.json',
   'rpc.cjs',
@@ -543,7 +609,8 @@ export function isOnlineSettingsOnly(paths) {
     isOnlineCheckoutPreparedFieldsOnly(paths) ||
     isOnlineSessionRefreshOnly(paths) ||
     isOnlineLoginVisibilityOnly(paths) ||
-    isOnlineAuthStabilityOnly(paths)
+    isOnlineAuthStabilityOnly(paths) ||
+    isOnlinePendingFeaturesOnly(paths)
   )
     return true;
   const databaseTest = 'apps/api/src/id-business-v2/online-recharge/mysql.integration.spec.ts';
@@ -568,6 +635,7 @@ export function isOnlineSettingsOnly(paths) {
   );
 }
 export function isOnlineSettingsControlsOnly(paths) {
+  if (isOnlinePendingFeaturesControlsOnly(paths)) return true;
   if (isOnlineCheckoutLoadRecoveryControlsOnly(paths)) return true;
   if (isOnlineCheckoutCsRecoveryControlsOnly(paths)) return true;
   return (
@@ -587,6 +655,8 @@ export function isOnlineSettingsControlsOnly(paths) {
 export const onlineSettingsParts = Object.freeze(['guards', 'api', 'admin', 'online-engine']);
 export function onlineSettingsCommands(part, paths) {
   const controlsOnly = isOnlineSettingsControlsOnly(paths);
+  const pendingFeatures = isOnlinePendingFeaturesOnly(paths);
+  const pendingFeatureControls = isOnlinePendingFeaturesControlsOnly(paths);
   const testsOnly = isOnlineSettingsTestsOnly(paths);
   const legacyClose = isOnlineLegacyCloseOnly(paths);
   const checkoutCsRecovery = isOnlineCheckoutCsRecoveryOnly(paths);
@@ -627,7 +697,7 @@ export function onlineSettingsCommands(part, paths) {
   if (part === 'guards') {
     const formatted = paths.filter(
       (path) =>
-        /\.(?:mjs|cjs|ts|vue|json|md|yml)$/.test(path) && !path.includes('/engine/upstream/')
+        /\.(?:mjs|cjs|ts|vue|css|json|md|yml)$/.test(path) && !path.includes('/engine/upstream/')
     );
     const linted = paths.filter(
       (path) => /\.(?:mjs|cjs|ts|vue)$/.test(path) && !path.includes('/engine/upstream/')
@@ -644,6 +714,56 @@ export function onlineSettingsCommands(part, paths) {
         'scripts/ci-change-scope.test.mjs'
       ]
     ];
+    if (pendingFeatures || pendingFeatureControls)
+      return [
+        ...controls,
+        ['python3', '-B', 'scripts/production-release/online-pending-features-release.test.py'],
+        ...(pendingFeatures
+          ? [
+              npm('run', 'test:online-recharge:controls'),
+              ...[
+                'check:admin-ui',
+                'check:v2-ui-language',
+                'check:v2-color-contrast',
+                'check:v2-table-standard',
+                'check:v2-loading-standard',
+                'check:v2-module-architecture',
+                'check:v2-isolation',
+                'check:v2-prisma-runtime-boundary',
+                'check:v2-concurrency-standard',
+                'check:v2-decimal-standard'
+              ].map((name) => npm('run', name)),
+              [
+                'node',
+                '--input-type=module',
+                '-e',
+                [
+                  "import assert from 'node:assert/strict';",
+                  "import { readFileSync, lstatSync } from 'node:fs';",
+                  "import { createHash } from 'node:crypto';",
+                  "import { resolve, sep, isAbsolute, win32 } from 'node:path';",
+                  "const root = resolve('apps/api/src/id-business-v2/online-recharge/engine');",
+                  "const manifest = JSON.parse(readFileSync(resolve(root, 'SOURCE_MANIFEST.json'), 'utf8'));",
+                  "assert.equal(manifest.repository, 'https://github.com/nowtostudeyday/PAY-GPT-UPGRADE.git');",
+                  "assert.equal(manifest.commit, 'ba6cf96312a6953e62edb9d74299d438d12549df');",
+                  'const rows = manifest.files;',
+                  'assert.ok(Array.isArray(rows) && rows.length > 0);',
+                  'assert.equal(new Set(rows.map(row => row.path)).size, rows.length);',
+                  "for (const required of ['credentials.cjs', 'test/regressions.test.cjs']) assert.ok(rows.some(row => row.path === required), required);",
+                  'for (const row of rows) {',
+                  "  assert.ok(typeof row.path === 'string' && row.path.length > 0 && !isAbsolute(row.path) && !win32.isAbsolute(row.path));",
+                  "  assert.ok(row.path.split(/[\\\\/]/).every(part => part && part !== '.' && part !== '..'));",
+                  '  const file = resolve(root, row.path);',
+                  '  assert.ok(file.startsWith(root + sep) && /^[a-f0-9]{64}$/.test(row.adaptedSha256));',
+                  '  assert.ok(lstatSync(file).isFile() && !lstatSync(file).isSymbolicLink());',
+                  "  assert.equal(createHash('sha256').update(readFileSync(file)).digest('hex'), row.adaptedSha256, row.path);",
+                  '}',
+                  "console.log('Online pending features engine source fingerprints passed.');"
+                ].join('\n')
+              ]
+            ]
+          : [])
+      ];
     if (checkoutLoadBusiness || checkoutLoadControls)
       return [
         ...controls,
@@ -789,6 +909,70 @@ export function onlineSettingsCommands(part, paths) {
   if (controlsOnly) throw new Error('Unsupported controls-only check');
   if (testsOnly && ['api', 'admin'].includes(part)) throw new Error('Unsupported tests-only check');
   const shared = npm('run', 'build', '--workspace', '@apple-business/shared');
+  if (pendingFeatures) {
+    const upstream = 'apps/api/src/id-business-v2/online-recharge/engine/upstream';
+    const browser = [
+      npm('ci', '--prefix', upstream, '--ignore-scripts', '--no-audit', '--no-fund'),
+      ['node', upstream + '/node_modules/playwright/cli.js', 'install', '--with-deps', 'chromium']
+    ];
+    if (part === 'api')
+      return [
+        npm('run', 'prisma:mysql:generate'),
+        shared,
+        npm('run', 'typecheck', '--workspace', '@apple-business/api'),
+        ...browser,
+        npm(
+          'run',
+          'test',
+          '--workspace',
+          '@apple-business/api',
+          '--',
+          ...[
+            'persistence/recharge-voice-events.spec.ts',
+            'persistence/worker.repository.spec.ts',
+            'persistence/admin.repository.spec.ts',
+            'persistence/worker-rpc.repository.spec.ts',
+            'validation.spec.ts',
+            'local-chain-acceptance.spec.ts'
+          ].map((name) => 'src/id-business-v2/online-recharge/' + name)
+        ),
+        npm('run', 'build', '--workspace', '@apple-business/api')
+      ];
+    if (part === 'admin')
+      return [
+        shared,
+        npm(
+          'run',
+          'test',
+          '--workspace',
+          '@apple-business/admin',
+          '--',
+          'src/v2/features/online-recharge'
+        ),
+        npm('run', 'typecheck', '--workspace', '@apple-business/admin'),
+        npm('run', 'build', '--workspace', '@apple-business/admin'),
+        npm('exec', '--', 'playwright', 'install', 'chromium'),
+        ['node', 'scripts/acceptance-v2-online-recharge-ui.mjs', '--lifecycle']
+      ];
+    if (part === 'online-engine')
+      return [
+        npm('ci', '--ignore-scripts', '--no-audit', '--no-fund'),
+        ...browser,
+        [
+          'node',
+          '--test',
+          '--test-concurrency=1',
+          'apps/api/src/id-business-v2/online-recharge/engine/test/regressions.test.cjs'
+        ],
+        [
+          'node',
+          '--test',
+          '--test-name-pattern=credentials-only worker has private health and exits cleanly on SIGINT without RPC',
+          'apps/api/src/id-business-v2/online-recharge/engine/test/runtime-main.test.cjs'
+        ]
+      ];
+    throw new Error('Unsupported pending features check part');
+  }
   if (checkoutLoadBusiness) {
     const upstream = 'apps/api/src/id-business-v2/online-recharge/engine/upstream';
     const browser = [

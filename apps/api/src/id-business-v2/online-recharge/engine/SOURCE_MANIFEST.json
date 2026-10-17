@@ -40,9 +40,9 @@
     {
       "path": "README.md",
       "originalSha256": null,
-      "adaptedSha256": "ed8d0b0f8b85aa8c8fcc506ec20100bdb6f72da2f6e12fcb05a463f7b8cafa48",
+      "adaptedSha256": "cd84a0602c8e2c7b4b34dae9db404cf6bb81a2f8cf2921e111b83a87176a2dc5",
       "changed": true,
-      "reason": "Document targeted ws8.21.0 security exception, separate root/upstream audits and regression evidence, and require a new patched image proof; retain existing runtime guidance. Authorized administrator business visibility: preserve operational data and mask credentials only."
+      "reason": "Document targeted ws8.21.0 security exception, separate root/upstream audits and regression evidence, and require a new patched image proof; retain existing runtime guidance. Authorized administrator business visibility: preserve operational data and mask credentials only. Document the authorized 24-hour transient CVC expiry and earlier lifecycle cleanup."
     },
     {
       "path": "UPSTREAM.json",
@@ -82,9 +82,9 @@
     {
       "path": "credentials.cjs",
       "originalSha256": null,
-      "adaptedSha256": "9aaa73b82db49bf04976691c176a5de9001995a1899b6cc6130b8aee9169d410",
+      "adaptedSha256": "adcc52680c73b2ed7dfacdaac11e2e2a99612e9df6aa7d6548b523e8b9de6c55",
       "changed": true,
-      "reason": "Authenticated loopback CVC memory service with secret-free private health and task/TTL/exit cleanup; no API-side cache or persisted credentials."
+      "reason": "Authenticated loopback CVC memory service with secret-free private health and task/TTL/exit cleanup; no API-side cache or persisted credentials. User-requested 24-hour in-memory expiry from last save; preserve task, ownership and exit cleanup."
     },
     {
       "path": "healthcheck.cjs",
@@ -348,9 +348,9 @@
     {
       "path": "test/regressions.test.cjs",
       "originalSha256": null,
-      "adaptedSha256": "2fbe08b37d8ae83ccdcc209267f794ef6cce9e084b8664fe46f82cf2e95b6edb",
+      "adaptedSha256": "909315a61d46c8e097563c93c0929c0b4a15a37bb8c9ac5dee6e45fdbc4e9897",
       "changed": true,
-      "reason": "Exercise trusted session refresh, strict account and user binding, HTTP/challenge and malformed response classification, route/fetch propagation and refreshed credential redaction. 2026-10-18 Distinguish rendered authentication gates from hidden or conversational text; preserve controlled session-bootstrap diagnostics and prepayment stop conditions, with isolated browser and service-chain coverage."
+      "reason": "Exercise trusted session refresh, strict account and user binding, HTTP/challenge and malformed response classification, route/fetch propagation and refreshed credential redaction. 2026-10-18 Distinguish rendered authentication gates from hidden or conversational text; preserve controlled session-bootstrap diagnostics and prepayment stop conditions, with isolated browser and service-chain coverage. Cover real memory-service availability at 30 minutes and the 24-hour boundary, save renewal, ownership and early cleanup using an isolated clock."
     },
     {
       "path": "test/renewal-recheck.test.cjs",

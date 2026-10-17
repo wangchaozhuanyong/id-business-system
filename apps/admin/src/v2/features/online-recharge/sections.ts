@@ -88,7 +88,7 @@ export const sectionDescriptions: Record<OnlineSection, string> = {
   addresses: '管理银行卡关联的免税地址，生成美国地址并清理未绑定记录。',
   'checkout-debug': '使用原套餐和地区生成支付链接，执行在付款前停止。',
   cards:
-    '比特浏览器充值与线上代充共用，按适用套餐匹配；安全码仅在执行器内存临时保留，任务结束、失去租约或重启后清除。',
+    '比特浏览器充值与线上代充共用，按适用套餐匹配；安全码仅在执行器内存临时保留，最长24小时，任务结束、失去租约或重启后提前清除。',
   cdks: '生成、导入、出库和查询兑换码；已被任务占用的兑换码受保护。',
   sessions: '查看任务会话资料和订阅情况，查看敏感资料需要填写原因并记录审计。',
   renewal: '查询订阅到期和续费状态，按原逻辑取消或恢复自动续费。',
@@ -169,7 +169,7 @@ export const topActions: Partial<Record<OnlineSection, readonly OnlineAction[]>>
           label: '临时安全码',
           type: 'secret',
           transient: true,
-          help: '仅线上代充执行器临时使用；比特浏览器充值仍逐笔输入。'
+          help: '仅线上代充执行器内存临时使用，最长24小时；任务结束、失去租约或重启后提前清除。比特浏览器充值仍逐笔输入。'
         },
         allowedPlans
       ]
@@ -299,11 +299,20 @@ export const topActions: Partial<Record<OnlineSection, readonly OnlineAction[]>>
 };
 export const rowActions: Partial<Record<OnlineSection, readonly OnlineAction[]>> = {
   cards: [
-    { key: 'reveal', label: '查看卡号', fields: [reason] },
+    { key: 'reveal', label: '复制卡号' },
     {
       key: 'cvc',
       label: '补充安全码',
-      fields: [{ key: 'cvc', label: '安全码', type: 'secret', required: true, transient: true }]
+      fields: [
+        {
+          key: 'cvc',
+          label: '安全码',
+          type: 'secret',
+          required: true,
+          transient: true,
+          help: '仅在执行器内存保留，最长24小时；任务结束、失去租约或重启后提前清除。'
+        }
+      ]
     },
     {
       key: 'update',
@@ -327,7 +336,7 @@ export const rowActions: Partial<Record<OnlineSection, readonly OnlineAction[]>>
   ],
   addresses: [{ key: 'update', label: '编辑地址', fields: addressFields }, remove],
   cdks: [
-    { key: 'reveal', label: '查看／复制', fields: [reason] },
+    { key: 'reveal', label: '复制兑换码' },
     { key: 'dispatch', label: '标记出库', confirm: '确认将此兑换码标记为已出库？' },
     detail,
     remove
