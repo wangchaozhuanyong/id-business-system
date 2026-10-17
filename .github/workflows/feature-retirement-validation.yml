@@ -1,0 +1,133 @@
+name: Automatic Registration Feature Retirement
+
+on:
+  workflow_dispatch:
+    inputs:
+      commit:
+        description: Exact reviewed main commit
+        required: true
+        type: string
+      expected_current:
+        description: Exact deployed predecessor commit
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: id-business-v2-production-release
+  cancel-in-progress: false
+
+jobs:
+  quality-gate:
+    if: github.ref == 'refs/heads/main' && inputs.commit == github.sha
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          fetch-depth: 0
+      - name: Require successful Quality Gate for this exact main commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 -B scripts/production-release/feature-retirement-build.py quality
+
+  validate:
+    if: github.ref == 'refs/heads/main' && inputs.commit == github.sha
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      NODE_ENV: test
+      JWT_SECRET: ci-feature-retirement-jwt
+      FIELD_ENCRYPTION_KEY: ci-feature-retirement-encryption
+      HASH_SECRET: ci-feature-retirement-hash
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
+        with:
+          node-version: 24
+          cache: npm
+      - name: Install pinned workspace dependencies
+        run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Verify publication and bounded build controls without production access
+        run: |
+          python3 -B scripts/production-release/feature-retirement-build.test.py
+          python3 -B scripts/production-release/feature-retirement-release.test.py
+          python3 -B scripts/production-release/feature-retirement-dispatch.test.py
+      - name: Prepare shared test runtime and generated Prisma types without a database
+        run: |
+          npm run build --workspace @apple-business/shared
+          npm run prisma:mysql:generate --workspace @apple-business/api
+      - name: Reproduce published role inputs and compile only the retirement delta
+        run: python3 -B scripts/production-release/feature-retirement-build.py prepare
+      - name: Install Chromium for offline static artifact acceptance
+        run: npx playwright install --with-deps chromium
+      - name: Verify types, affected tests, lint, seven UI boundaries and offline pages
+        run: python3 -B scripts/production-release/feature-retirement-build.py validate
+      - name: Bind successful exact-commit Quality Gate and package the validated artifact
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 -B scripts/production-release/feature-retirement-build.py package
+      - name: Preserve immutable bounded artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: feature-retirement-${{ github.sha }}-${{ github.run_attempt }}
+          path: |
+            .deploy/feature-retirement-release/feature-retirement-artifact.tar.gz
+            .deploy/feature-retirement-release/artifact-sha256.txt
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 30
+      - name: Preserve validation evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: feature-retirement-validation-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            .deploy/feature-retirement-release/prepared-build-proof.json
+            .deploy/feature-retirement-release/validation-receipt.json
+            .deploy/feature-retirement-release/browser-acceptance/
+          include-hidden-files: true
+          if-no-files-found: warn
+          retention-days: 30
+
+  publish:
+    needs: [validate, quality-gate]
+    if: github.ref == 'refs/heads/main' && inputs.commit == github.sha
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: write
+      actions: read
+      id-token: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      AWS_REGION: ap-northeast-1
+      RELEASE_COMMIT: ${{ inputs.commit }}
+      EXPECTED_CURRENT: ${{ inputs.expected_current }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          fetch-depth: 0
+      - name: Configure existing production OIDC role
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd
+        with:
+          role-to-assume: arn:aws:iam::079740175286:role/id-business-v2-github-release
+          role-session-name: id-business-v2-retirement-${{ github.run_id }}
+          aws-region: ap-northeast-1
+          role-duration-seconds: 3600
+      - name: Publish once and independently read back
+        run: python3 -B scripts/production-release/feature-retirement-dispatch.py
+      - name: Preserve native publication evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: feature-retirement-publication-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .deploy/feature-retirement-release/
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 30
