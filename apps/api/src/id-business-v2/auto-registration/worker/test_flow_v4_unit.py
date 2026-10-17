@@ -227,12 +227,14 @@ class FlowV4Tests(unittest.TestCase):
         count = len(run.requests)
         for action in (run.engine._get_device_id,
                        lambda: run.engine._check_sentinel("fixture-private"),
-                       lambda: run.engine._submit_signup_form("fixture-private", "fixture-private"),
-                       run.engine._register_password):
+                       lambda: run.engine._submit_signup_form("fixture-private", "fixture-private")):
             with self.assertRaises(Exception):
                 action()
             self.assertEqual(len(run.requests), count)
             self.assertEqual(run.facts.data["firstFailure"], first)
+        self.assertEqual(run.engine._register_password(), (False, None))
+        self.assertEqual(len(run.requests), count)
+        self.assertEqual(run.facts.data["firstFailure"], first)
         self.assertEqual(run.generated.call_count, 0)
         rerun = run.engine.run()
         self.assertFalse(rerun.success)
@@ -242,6 +244,69 @@ class FlowV4Tests(unittest.TestCase):
         self.assertTrue(any(item[1] == parity.ENDPOINTS["create_account"] for item in clean.requests))
         self.assertEqual(clean.facts.data["firstFailure"]["stage"], "workspace")
         self.assertIsNone(getattr(clean.engine, "_apple_transport_stop_state", None))
+
+    def test_password_terminal_rejection_preserves_tuple_failure_and_lease(self):
+        original_step = diagnostics.RegistrationDiagnostics.step
+        namespace = {"json": json, "TASK_STATUSES": {"pending", "running", "failed", "cancelled", "completed"}}
+        parity.source_definitions(HERE / "apple_mailboxes.py", {"RegistrationFacts": {"finish"}}, set(), namespace)
+        for status, code in ((409, "user_exists"), (400, "account_creation_failed")):
+            returned = []
+            def capture_step(recorder, engine, original, stage, failed, owns_stage=False):
+                wrapped = original_step(recorder, engine, original, stage, failed, owns_stage)
+                if stage != "password":
+                    return wrapped
+                def call(*args, **kwargs):
+                    result = wrapped(*args, **kwargs)
+                    returned.append(result)
+                    return result
+                return call
+            response = self.response(status, body={"error": {"code": code, "message": "fixture-private"}})
+            with self.subTest(code=code), patch.object(diagnostics.RegistrationDiagnostics, "step", capture_step):
+                run = parity.execute(True, {"password": response})
+            self.assertEqual(returned, [(False, None)])
+            self.assertFalse(run.result.success)
+            self.assertEqual(run.result.error_message, "注册密码失败")
+            self.assertEqual([item[1] for item in run.requests], [parity.AUTHORIZE,
+                parity.ENDPOINTS["sentinel"], parity.ENDPOINTS["signup"], parity.ENDPOINTS["register"]])
+            first = run.facts.data["firstFailure"]
+            self.assertEqual((first["stage"], first["errorKind"], first["httpStatus"]), ("password", code, status))
+            self.assertTrue(run.facts.data["sideEffectPossible"])
+            self.assertEqual(run.facts.record["activeTaskUuid"], parity.TASK)
+            self.assertNotIn("creationConfirmed", run.facts.data)
+            self.assertEqual(run.facts.data["syncStatus"], "not_started")
+            self.assertEqual(run.engine._register_password(), (False, None))
+            self.assertFalse(run.engine.run().success)
+            self.assertEqual(len(run.requests), 4)
+            self.assertEqual(run.facts.data["firstFailure"], first)
+            # Execute the real finalizer with a fake query, never SQLite.
+            task = SimpleNamespace(status="failed")
+            query = SimpleNamespace(filter_by=lambda **_: SimpleNamespace(first=lambda: task))
+            database = SimpleNamespace(query=lambda _: query)
+            run.facts.record.update(registrationStatus="unregistered", lastResultKind=None)
+            store = SimpleNamespace(transaction=lambda: nullcontext(database),
+                read=lambda _db, _email: run.facts.record, task_data=run.facts.task_data,
+                write=run.facts.write, models=SimpleNamespace(RegistrationTask=object()))
+            namespace["RegistrationFacts"].finish(store, parity.EMAIL, parity.TASK, False)
+            self.assertEqual(run.facts.record["registrationStatus"], "unknown")
+            self.assertEqual(run.facts.record["activeTaskUuid"], parity.TASK)
+            self.assertEqual(run.facts.record["taskStatus"], "awaiting_review")
+            self.assertTrue(run.facts.data["needsReview"])
+            self.assertEqual((task.status, run.facts.data["resultKind"]), ("failed", "failed"))
+
+    def test_password_critical_storage_stop_remains_an_error(self):
+        original = parity.MemoryFacts.record_flow_evidence
+        def record(store, task, slot, evidence, **kwargs):
+            if slot == "password":
+                raise RuntimeError("fixture-private-storage")
+            return original(store, task, slot, evidence, **kwargs)
+        with patch.object(parity.MemoryFacts, "record_flow_evidence", record):
+            run = parity.execute(True)
+        self.assertFalse(run.result.success)
+        self.assertEqual(len(run.requests), 4)
+        self.assertEqual(run.facts.data["firstFailure"]["errorKind"], "evidence_storage_error")
+        with self.assertRaises(diagnostics.EvidenceStorageError):
+            run.engine._register_password()
+        self.assertEqual(len(run.requests), 4)
 
     def test_original_task_runner_finishes_terminal_engine_as_failed(self):
         response = self.response(403)

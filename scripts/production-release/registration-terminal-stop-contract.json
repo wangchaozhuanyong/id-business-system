@@ -453,9 +453,9 @@
   "reboundServices": ["online-recharge"],
   "reviewedFileHashes": {
     ".github/workflows/registration-terminal-stop-validation.yml": "f21aec3b795c7184b2807e4579978deb296b9fefaaa060ed9b8f5bb580247c55",
-    "apps/api/src/id-business-v2/auto-registration/worker/apple_mailboxes.py": "b3cbc536735bafdf95f378364e13eaa45032aefa6412dda2cf8f9a24e183ea15",
-    "apps/api/src/id-business-v2/auto-registration/worker/test_flow_v4_unit.py": "81a5a5abbc9c8fd034e293bb69142ea067d31b3ef52b670942b2907846172b4e",
-    "docs/AUTO_REGISTRATION_TERMINAL_STOP_20261017.md": "dcf085f6b964eee6bc9f105232bf2ddd5214f7a47d31f42c0ebea389379d4b2d",
+    "apps/api/src/id-business-v2/auto-registration/worker/apple_mailboxes.py": "04fca54cb1ad305944da2918450aa4a3a54f5502899e3ff3ec3739c98c6e8a2d",
+    "apps/api/src/id-business-v2/auto-registration/worker/test_flow_v4_unit.py": "3b11f5822b5567deebf8a7953abee026a9edfa487ed4d1692461184ec48efae8",
+    "docs/AUTO_REGISTRATION_TERMINAL_STOP_20261017.md": "4cb9e54d62c8f61e210a5d964a9ec4f504c2259155e3ae2367464bd821f8a852",
     "docs/V2_TASKS.md": "231e6e5b1a026501b233edb0017515585bac52431b03e94fad73e660f42d7a43",
     "scripts/ci-recharge-check.mjs": "fc5e6f4898f28709afde79ff85364a14b13ed44641c0b336b857f3c5216ebab4",
     "scripts/ci-recharge-check.test.mjs": "46766128b166d045bbd12f84709e72be6d75087079f7b37c5971bb345bb25a68",
@@ -490,14 +490,14 @@
     "roleSourceProjections": "23f747e399b4728e23a429287eeddafcccf38d4d57632a05fb8e1b765552079c"
   },
   "sources": {
-    "apps/api/src/id-business-v2/auto-registration/worker/apple_mailboxes.py": "b3cbc536735bafdf95f378364e13eaa45032aefa6412dda2cf8f9a24e183ea15",
-    "apps/api/src/id-business-v2/auto-registration/worker/test_flow_v4_unit.py": "81a5a5abbc9c8fd034e293bb69142ea067d31b3ef52b670942b2907846172b4e"
+    "apps/api/src/id-business-v2/auto-registration/worker/apple_mailboxes.py": "04fca54cb1ad305944da2918450aa4a3a54f5502899e3ff3ec3739c98c6e8a2d",
+    "apps/api/src/id-business-v2/auto-registration/worker/test_flow_v4_unit.py": "3b11f5822b5567deebf8a7953abee026a9edfa487ed4d1692461184ec48efae8"
   },
   "sqlFenceHelperSha256": "50446ab528a288ca1c2129c84f1bf4a90f59fa313a92bcff0058a258c8b8e925",
   "updatedServices": ["api"],
   "validationSources": {},
   "version": 1,
   "workerFiles": {
-    "apple_mailboxes.py": "b3cbc536735bafdf95f378364e13eaa45032aefa6412dda2cf8f9a24e183ea15"
+    "apple_mailboxes.py": "04fca54cb1ad305944da2918450aa4a3a54f5502899e3ff3ec3739c98c6e8a2d"
   }
 }

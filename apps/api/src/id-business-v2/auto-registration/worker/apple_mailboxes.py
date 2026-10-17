@@ -1130,7 +1130,7 @@ class AppleMailboxIntegration:
                     diagnostics.active["errorKind"] = "http_rejected" if state[1] is not None and state[1] >= 400 else "unknown"
             raise TransportStopped(*state)
 
-        def normalize_transport_stop(original, check_stopped=True):
+        def normalize_transport_stop(original, check_stopped=True, password_step=False):
             def call(*args, **kwargs):
                 try:
                     state = getattr(engine, "_apple_transport_stop_state", None)
@@ -1140,6 +1140,10 @@ class AppleMailboxIntegration:
                 except TransportStopped as error:
                     if error.kind == "evidence_storage_error":
                         raise EvidenceStorageError(error.http_status) from None
+                    if password_step:
+                        # Keep the original password step's failure contract;
+                        # the stop state still blocks every later transport.
+                        return False, None
                     raise ValueError("官网明确拒绝本次流程，已停止后续请求；请核对任务诊断") from None
             return call
 
@@ -1364,7 +1368,8 @@ class AppleMailboxIntegration:
         for name in ("_check_ip_location", "_get_device_id", "_check_sentinel", "_submit_signup_form", "_register_password", "run"):
             original = getattr(engine, name, None)
             if callable(original):
-                setattr(engine, name, normalize_transport_stop(original, check_stopped=name != "run"))
+                setattr(engine, name, normalize_transport_stop(original, check_stopped=name != "run",
+                                                               password_step=name == "_register_password"))
         diagnostic_store = DeferredDiagnosticsStore(self.store, context) if context.get("generic") else self.store
         engine._apple_diagnostics = RegistrationDiagnostics(diagnostic_store, task_uuid)
         engine._apple_diagnostics.install(engine)
